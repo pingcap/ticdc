@@ -30,31 +30,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestNewBlockEventInitialWriterProgress(t *testing.T) {
-	testutil.SetUpTestServices()
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
-	tableTriggerEventDispatcherID := common.NewDispatcherID()
-	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
-		common.DDLSpanSchemaID,
-		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
-			ID:              tableTriggerEventDispatcherID.ToPB(),
-			ComponentStatus: heartbeatpb.ComponentState_Working,
-			CheckpointTs:    1,
-		}, "node1", false)
-	spanController := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
-	operatorController := operator.NewOperatorController(cfID, spanController, 1000, common.DefaultMode)
-
-	event := NewBlockEvent(cfID, tableTriggerEventDispatcherID, spanController, operatorController, &heartbeatpb.State{
-		IsBlocked: true,
-		BlockTs:   10,
-		BlockTables: &heartbeatpb.InfluencedTables{
-			InfluenceType: heartbeatpb.InfluenceType_Normal,
-			TableIDs:      []int64{0},
-		},
-	}, false)
-	require.False(t, event.writerDispatcherAdvanced)
-}
-
 func TestScheduleEvent(t *testing.T) {
 	testutil.SetUpTestServices()
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
@@ -155,10 +130,6 @@ func TestResendAction(t *testing.T) {
 	event.writerDispatcher = dispatcherIDs[0]
 	msgs = event.resend(common.DefaultMode)
 	require.Len(t, msgs, 1)
-	writeResp := msgs[0].Message[0].(*heartbeatpb.HeartBeatResponse)
-	require.Len(t, writeResp.DispatcherStatuses, 1)
-	require.Equal(t, heartbeatpb.Action_Write, writeResp.DispatcherStatuses[0].Action.Action)
-	require.Equal(t, uint64(10), writeResp.DispatcherStatuses[0].Action.CommitTs)
 
 	event = NewBlockEvent(cfID, tableTriggerEventDispatcherID, spanController, operatorController, &heartbeatpb.State{
 		IsBlocked: true,

@@ -68,7 +68,6 @@ import (
 // Parameters:
 //   - allNodesResp: Bootstrap responses from all nodes containing their current state
 //   - isMysqlCompatible: Flag indicating if using MySQL-compatible backend
-//   - isStorageSinkBackend: Flag indicating if downstream sink is storage backend
 //
 // Returns:
 //   - *MaintainerPostBootstrapRequest: Configuration for post-bootstrap setup
@@ -76,7 +75,6 @@ import (
 func (c *Controller) FinishBootstrap(
 	allNodesResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse,
 	isMysqlCompatibleBackend bool,
-	isStorageSinkBackend bool,
 ) (*heartbeatpb.MaintainerPostBootstrapRequest, error) {
 	if c.bootstrapped {
 		log.Info("maintainer already bootstrapped, may a new node join the cluster",
@@ -133,7 +131,7 @@ func (c *Controller) FinishBootstrap(
 	c.handleRemainingWorkingTasks(workingTaskMap, redoWorkingTaskMap)
 
 	// Step 5: Initialize and start sub components
-	c.initializeComponents(allNodesResp, isStorageSinkBackend)
+	c.initializeComponents(allNodesResp)
 
 	// Step 6: Mark the controller as bootstrapped
 	c.bootstrapped = true
@@ -354,12 +352,12 @@ func (c *Controller) handleRemainingWorkingTasks(
 
 func (c *Controller) initializeComponents(
 	allNodesResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse,
-	isStorageSinkBackend bool,
 ) {
+	// Initialize barrier
 	if c.enableRedo {
-		c.redoBarrier = NewBarrier(c.redoSpanController, c.redoOperatorController, c.enableTableAcrossNodes, allNodesResp, common.RedoMode)
+		c.redoBarrier = NewBarrier(c.redoSpanController, c.redoOperatorController, util.GetOrZero(c.replicaConfig.Scheduler.EnableTableAcrossNodes), allNodesResp, common.RedoMode)
 	}
-	c.barrier = NewBarrier(c.spanController, c.operatorController, c.enableTableAcrossNodes, allNodesResp, common.DefaultMode)
+	c.barrier = NewBarrier(c.spanController, c.operatorController, util.GetOrZero(c.replicaConfig.Scheduler.EnableTableAcrossNodes), allNodesResp, common.DefaultMode)
 
 	// Start scheduler
 	c.taskHandlesMu.Lock()

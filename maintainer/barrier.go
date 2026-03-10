@@ -298,40 +298,29 @@ func (b *Barrier) handleEventDone(changefeedID common.ChangeFeedID, dispatcherID
 		return nil
 	}
 
-	// We should only see DONE after the event has been selected.
-	if !event.selected.Load() {
-		return event
-	}
-
-	if !event.writerDispatcherAdvanced {
-		// Phase 1 (Write): only writerDispatcher executes Action_Write.
-		if event.writerDispatcher != dispatcherID {
-			// Ignore stale DONE from non-writer dispatchers while waiting writer Action_Write.
-			return event
-		}
-
+	// there is a block event and the dispatcher write or pass action already
+	// which means we have sent pass or write action to it
+	// the writer already synced ddl to downstream
+	if event.writerDispatcher == dispatcherID {
 		if event.needSchedule {
-			// We should schedule only after writer finished Action_Write.
-			// Otherwise truncate/create like ddl may expose new table dml before old table cleanup.
+			// we need do schedule when writerDispatcherAdvanced
+			// Otherwise, if we do schedule when just selected = true, then ask dispatcher execute ddl
+			// when meeting truncate table,
+			// there is possible that dml for the new table will arrive before truncate ddl executed.
+			// that will lead to data loss
 			scheduled := b.tryScheduleEvent(event)
 			if !scheduled {
-				// Not scheduled yet, keep waiting and resend later.
+				// not scheduled yet, just return, wait for next resend
 				return event
 			}
 		} else {
+			// the pass action will be sent periodically in resend logic if not acked
 			event.writerDispatcherAdvanced = true
 			event.lastResendTime = time.Now().Add(-20 * time.Second)
 		}
-
-		// Start pass coverage from a clean window.
-		event.rangeChecker.Reset()
-		event.reportedDispatchers = make(map[common.DispatcherID]struct{})
-		event.lastResendTime = time.Now().Add(-20 * time.Second)
-		return event
 	}
 
-	// Phase 2 (Pass): all influenced dispatchers report DONE for Action_Pass,
-	// then checkEventFinish removes the barrier from blockedEvents.
+	// checkpoint ts is advanced, clear the map, so do not need to resend message anymore
 	event.markDispatcherEventDone(dispatcherID)
 	b.checkEventFinish(event)
 	return event
@@ -393,9 +382,8 @@ func (b *Barrier) handleBlockState(changefeedID common.ChangeFeedID,
 		// the block event, and check whether we need to send write action
 		event.markDispatcherEventDone(dispatcherID)
 		status, targetID := event.checkEventAction(dispatcherID)
-		if event.selected.Load() && event.needSchedule {
-			// scheduling is only required for ddl that changes tables. enqueue once the
-			// barrier is selected, regardless of whether the action is sent immediately.
+		if status != nil && event.needSchedule {
+			// scheduling is only required for ddl that changes tables, enqueue the event
 			b.pendingEvents.add(event)
 		}
 		return event, status, targetID, true
@@ -442,20 +430,16 @@ func (b *Barrier) getOrInsertNewEvent(changefeedID common.ChangeFeedID, dispatch
 // check whether the event is get all the done message from dispatchers
 // if so, remove the event from blockedTs, not need to resend message anymore
 func (b *Barrier) checkEventFinish(be *BarrierEvent) {
-	if !be.selected.Load() {
-		return
-	}
-	if !be.writerDispatcherAdvanced {
-		return
-	}
 	if !be.allDispatcherReported() {
 		return
 	}
-
-	log.Info("all dispatchers reported event done, remove event",
-		zap.String("changefeed", be.cfID.Name()),
-		zap.Uint64("committs", be.commitTs))
-	b.blockedEvents.Delete(getEventKey(be.commitTs, be.isSyncPoint))
+	if be.selected.Load() {
+		log.Info("all dispatchers reported event done, remove event",
+			zap.String("changefeed", be.cfID.Name()),
+			zap.Uint64("committs", be.commitTs))
+		// already selected a dispatcher to write, now all dispatchers reported the block event
+		b.blockedEvents.Delete(getEventKey(be.commitTs, be.isSyncPoint))
+	}
 }
 
 func (b *Barrier) tryScheduleEvent(event *BarrierEvent) bool {

@@ -40,17 +40,12 @@ type BarrierEvent struct {
 	spanController     *span.Controller
 	operatorController *operator.Controller
 	nodeManager        *watcher.NodeManager
-	// selected becomes true after all influenced dispatchers reach this barrier
-	// and maintainer chooses the writer dispatcher.
-	selected    atomic.Bool
-	hasNewTable bool
+	selected           atomic.Bool
+	hasNewTable        bool
 	// table trigger dispatcher reported the block event, we should use it as the writer
 	tableTriggerDispatcherRelated bool
-	// writerDispatcher is the only dispatcher that executes Action_Write for this barrier.
-	writerDispatcher common.DispatcherID
-	// writerDispatcherAdvanced marks whether the writer has already finished Action_Write.
-	// false means the barrier is still waiting for the writer; true means the barrier is in pass stage.
-	writerDispatcherAdvanced bool
+	writerDispatcher              common.DispatcherID
+	writerDispatcherAdvanced      bool
 
 	blockedDispatchers *heartbeatpb.InfluencedTables
 	dropDispatchers    *heartbeatpb.InfluencedTables
@@ -210,15 +205,20 @@ func (be *BarrierEvent) onAllDispatcherReportedBlockEvent(dispatcherID common.Di
 
 	be.selected.Store(true)
 	be.writerDispatcher = dispatcher
-	be.writerDispatcherAdvanced = false
-	// Trigger resend immediately so maintainer can send the next action in this round.
-	be.lastResendTime = time.Now().Add(-20 * time.Second)
-	log.Info("all dispatcher reported heartbeat, schedule it, and select one writer",
+	be.lastResendTime = time.Now()
+	log.Info("all dispatcher reported heartbeat, schedule it, and select one to write",
 		zap.String("changefeed", be.cfID.Name()),
 		zap.String("dispatcher", be.writerDispatcher.String()),
 		zap.Uint64("commitTs", be.commitTs),
 		zap.String("barrierType", be.blockedDispatchers.InfluenceType.String()))
-	return nil, ""
+	stm := be.spanController.GetTaskByID(be.writerDispatcher)
+	return &heartbeatpb.DispatcherStatus{
+		InfluencedDispatchers: &heartbeatpb.InfluencedDispatchers{
+			InfluenceType: heartbeatpb.InfluenceType_Normal,
+			DispatcherIDs: []*heartbeatpb.DispatcherID{be.writerDispatcher.ToPB()},
+		},
+		Action: be.action(heartbeatpb.Action_Write),
+	}, stm.GetNodeID()
 }
 
 func (be *BarrierEvent) scheduleBlockEvent() {
@@ -398,12 +398,6 @@ func (be *BarrierEvent) allDispatcherReported() bool {
 // send pass action to the related dispatchers, if find the related dispatchers are all removed, mark rangeCheck done
 // else return pass action messages
 func (be *BarrierEvent) sendPassAction(mode int64) []*messaging.TargetMessage {
-	return be.sendActionToInfluencedDispatchers(mode, heartbeatpb.Action_Pass, true)
-}
-
-func (be *BarrierEvent) sendActionToInfluencedDispatchers(
-	mode int64, action heartbeatpb.Action, markRemovedDone bool,
-) []*messaging.TargetMessage {
 	if be.blockedDispatchers == nil {
 		return []*messaging.TargetMessage{}
 	}
@@ -412,10 +406,8 @@ func (be *BarrierEvent) sendActionToInfluencedDispatchers(
 	case heartbeatpb.InfluenceType_DB:
 		spans := be.spanController.GetTasksBySchemaID(be.blockedDispatchers.SchemaID)
 		if len(spans) == 0 {
-			if markRemovedDone {
-				// means tables are removed, mark the event done
-				be.rangeChecker.MarkCovered()
-			}
+			// means tables are removed, mark the event done
+			be.rangeChecker.MarkCovered()
 			return nil
 		} else {
 			// writerDispatcher for DB Type is always table trigger dispatcher, so we need to add it too
@@ -431,29 +423,27 @@ func (be *BarrierEvent) sendActionToInfluencedDispatchers(
 				}
 				_, ok := msgMap[nodeID]
 				if !ok {
-					msgMap[nodeID] = be.newActionMessage(nodeID, mode, action)
+					msgMap[nodeID] = be.newPassActionMessage(nodeID, mode)
 				}
 			}
 		}
 	case heartbeatpb.InfluenceType_All:
 		// all type will not have drop-type ddl.
 		for _, n := range getAllNodes(be.nodeManager) {
-			msgMap[n] = be.newActionMessage(n, mode, action)
+			msgMap[n] = be.newPassActionMessage(n, mode)
 		}
 	case heartbeatpb.InfluenceType_Normal:
 		for _, tableID := range be.blockedDispatchers.TableIDs {
 			spans := be.spanController.GetTasksByTableID(tableID)
 			if len(spans) == 0 {
-				if markRemovedDone {
-					be.markTableDone(tableID)
-				}
+				be.markTableDone(tableID)
 			} else {
 				for _, stm := range spans {
 					nodeID := stm.GetNodeID()
 					dispatcherID := stm.ID
 					msg, ok := msgMap[nodeID]
 					if !ok {
-						msg = be.newActionMessage(nodeID, mode, action)
+						msg = be.newPassActionMessage(nodeID, mode)
 						msgMap[nodeID] = msg
 					}
 					influencedDispatchers := msg.Message[0].(*heartbeatpb.HeartBeatResponse).DispatcherStatuses[0].InfluencedDispatchers
@@ -656,10 +646,11 @@ func (be *BarrierEvent) resend(mode int64) []*messaging.TargetMessage {
 		}
 
 		msgs = []*messaging.TargetMessage{be.newWriterActionMessage(stm.GetNodeID(), mode)}
-		return msgs
+	} else {
+		// the writer dispatcher is advanced, resend pass action
+		return be.sendPassAction(mode)
 	}
-	// the writer dispatcher is advanced, resend pass action
-	return be.sendPassAction(mode)
+	return msgs
 }
 
 func (be *BarrierEvent) newWriterActionMessage(capture node.ID, mode int64) *messaging.TargetMessage {
@@ -682,9 +673,7 @@ func (be *BarrierEvent) newWriterActionMessage(capture node.ID, mode int64) *mes
 	return msg
 }
 
-func (be *BarrierEvent) newActionMessage(
-	capture node.ID, mode int64, action heartbeatpb.Action,
-) *messaging.TargetMessage {
+func (be *BarrierEvent) newPassActionMessage(capture node.ID, mode int64) *messaging.TargetMessage {
 	influenced := &heartbeatpb.InfluencedDispatchers{
 		InfluenceType: be.blockedDispatchers.InfluenceType,
 		SchemaID:      be.blockedDispatchers.SchemaID,
@@ -700,7 +689,7 @@ func (be *BarrierEvent) newActionMessage(
 			ChangefeedID: be.cfID.ToPB(),
 			DispatcherStatuses: []*heartbeatpb.DispatcherStatus{
 				{
-					Action:                be.action(action),
+					Action:                be.action(heartbeatpb.Action_Pass),
 					InfluencedDispatchers: influenced,
 				},
 			},
@@ -724,4 +713,9 @@ func getAllNodes(nodeManager *watcher.NodeManager) []node.ID {
 		nodes = append(nodes, id)
 	}
 	return nodes
+}
+
+// for test
+func (be *BarrierEvent) setLastResendTime(time time.Time) {
+	be.lastResendTime = time
 }
