@@ -250,7 +250,7 @@ func (h *SchedulerDispatcherRequestHandler) Handle(dispatcherManager *Dispatcher
 }
 
 func isRedoDispatcherManagerReady(dispatcherManager *DispatcherManager) bool {
-	return dispatcherManager.RedoEnable &&
+	return dispatcherManager.IsRedoEnabled() &&
 		dispatcherManager.redoReady.Load() &&
 		dispatcherManager.redoSink != nil &&
 		dispatcherManager.redoDispatcherMap != nil &&

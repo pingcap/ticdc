@@ -34,7 +34,7 @@ import (
 	"go.uber.org/zap"
 )
 
-func redoEnabled(cfConfig *config.ChangefeedConfig) bool {
+func isRedoConfigEnabled(cfConfig *config.ChangefeedConfig) bool {
 	if cfConfig == nil {
 		return false
 	}
@@ -49,7 +49,7 @@ func initRedoComponet(
 	startTs uint64,
 	newChangefeed bool,
 ) error {
-	if !manager.RedoEnable {
+	if !manager.redoEnabled {
 		return nil
 	}
 	manager.redoDispatcherMap = newDispatcherMap[*dispatcher.RedoDispatcher]()

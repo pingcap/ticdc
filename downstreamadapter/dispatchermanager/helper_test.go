@@ -209,7 +209,7 @@ func TestIsRedoDispatcherManagerReadySkipsComponentChecksUntilPublished(t *testi
 	t.Parallel()
 
 	dm := &DispatcherManager{
-		RedoEnable: true,
+		redoEnabled: true,
 	}
 
 	start := make(chan struct{})
@@ -245,7 +245,7 @@ func TestIsRedoDispatcherManagerReadyReturnsTrueAfterPublication(t *testing.T) {
 	t.Parallel()
 
 	dm := &DispatcherManager{
-		RedoEnable:                true,
+		redoEnabled:               true,
 		redoDispatcherMap:         newDispatcherMap[*dispatcher.RedoDispatcher](),
 		redoSink:                  &redo.Sink{},
 		redoSchemaIDToDispatchers: dispatcher.NewSchemaIDToDispatchers(),
@@ -259,12 +259,13 @@ func TestDispatcherManagerIsRedoReadyRequiresPublication(t *testing.T) {
 	t.Parallel()
 
 	dm := &DispatcherManager{
-		RedoEnable:                true,
+		redoEnabled:               true,
 		redoDispatcherMap:         newDispatcherMap[*dispatcher.RedoDispatcher](),
 		redoSink:                  &redo.Sink{},
 		redoSchemaIDToDispatchers: dispatcher.NewSchemaIDToDispatchers(),
 	}
 
+	require.True(t, dm.IsRedoEnabled())
 	require.False(t, dm.IsRedoReady())
 
 	dm.redoReady.Store(true)

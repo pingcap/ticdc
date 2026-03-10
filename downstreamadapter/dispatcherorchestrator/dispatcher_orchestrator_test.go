@@ -229,7 +229,7 @@ func TestCreateBootstrapResponseSkipsRedoUntilReady(t *testing.T) {
 
 	t.Run("nil redo map", func(t *testing.T) {
 		manager := newBootstrapTestManager(t)
-		manager.RedoEnable = true
+		setDispatcherManagerField(t, manager, "redoEnabled", true)
 
 		require.NotPanics(t, func() {
 			response := createBootstrapResponse(changefeedID, manager, 0, 123)
@@ -240,7 +240,7 @@ func TestCreateBootstrapResponseSkipsRedoUntilReady(t *testing.T) {
 
 	t.Run("partial redo state", func(t *testing.T) {
 		manager := newBootstrapTestManager(t)
-		manager.RedoEnable = true
+		setDispatcherManagerField(t, manager, "redoEnabled", true)
 		setDispatcherManagerField(t, manager, "redoDispatcherMap", redoDispatcherMap)
 		manager.SetTableTriggerRedoDispatcher(redoDispatcher)
 
@@ -251,7 +251,7 @@ func TestCreateBootstrapResponseSkipsRedoUntilReady(t *testing.T) {
 
 	t.Run("published redo state", func(t *testing.T) {
 		manager := newBootstrapTestManager(t)
-		manager.RedoEnable = true
+		setDispatcherManagerField(t, manager, "redoEnabled", true)
 		setDispatcherManagerField(t, manager, "redoDispatcherMap", redoDispatcherMap)
 		setDispatcherManagerField(t, manager, "redoSchemaIDToDispatchers", dispatcher.NewSchemaIDToDispatchers())
 		setDispatcherManagerField(t, manager, "redoSink", &redo.Sink{})
