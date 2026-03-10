@@ -23,7 +23,7 @@ import (
 )
 
 func TestBalanceSchedulerSkipsWhenDrainActive(t *testing.T) {
-	cfID, nodeManager, oc, sc, self := newDrainSchedulerTestHarness(t)
+	cfID, nodeManager, oc, sc, drainState, self := newDrainSchedulerTestHarness(t)
 	target := node.ID("target")
 	dest := node.ID("dest")
 
@@ -34,6 +34,8 @@ func TestBalanceSchedulerSkipsWhenDrainActive(t *testing.T) {
 	for i := 1; i <= 20; i++ {
 		addReplicatingSpan(t, cfID, sc, int64(i), target)
 	}
+	drainState.SetSelfNodeID(self)
+	drainState.SetDispatcherDrainTarget(target, 1)
 
 	s := NewBalanceScheduler(
 		cfID,
@@ -43,7 +45,7 @@ func TestBalanceSchedulerSkipsWhenDrainActive(t *testing.T) {
 		sc,
 		0,
 		common.DefaultMode,
-		func() (node.ID, uint64) { return target, 1 },
+		drainState,
 	)
 	_ = s.Execute()
 
@@ -51,7 +53,7 @@ func TestBalanceSchedulerSkipsWhenDrainActive(t *testing.T) {
 }
 
 func TestBalanceSchedulerCapsMoveOperatorsPerRound(t *testing.T) {
-	cfID, nodeManager, oc, sc, self := newDrainSchedulerTestHarness(t)
+	cfID, nodeManager, oc, sc, drainState, self := newDrainSchedulerTestHarness(t)
 	target := node.ID("target")
 	dest := node.ID("dest")
 
@@ -62,6 +64,7 @@ func TestBalanceSchedulerCapsMoveOperatorsPerRound(t *testing.T) {
 	for i := 1; i <= 20; i++ {
 		addReplicatingSpan(t, cfID, sc, int64(i), target)
 	}
+	drainState.SetSelfNodeID(self)
 
 	s := NewBalanceScheduler(
 		cfID,
@@ -71,7 +74,7 @@ func TestBalanceSchedulerCapsMoveOperatorsPerRound(t *testing.T) {
 		sc,
 		0,
 		common.DefaultMode,
-		func() (node.ID, uint64) { return "", 0 },
+		drainState,
 	)
 	_ = s.Execute()
 
@@ -79,7 +82,7 @@ func TestBalanceSchedulerCapsMoveOperatorsPerRound(t *testing.T) {
 }
 
 func TestBalanceSchedulerSkipsDuringDrainCooldown(t *testing.T) {
-	cfID, nodeManager, oc, sc, self := newDrainSchedulerTestHarness(t)
+	cfID, nodeManager, oc, sc, drainState, self := newDrainSchedulerTestHarness(t)
 	target := node.ID("target")
 	dest := node.ID("dest")
 
@@ -90,8 +93,9 @@ func TestBalanceSchedulerSkipsDuringDrainCooldown(t *testing.T) {
 	for i := 1; i <= 20; i++ {
 		addReplicatingSpan(t, cfID, sc, int64(i), target)
 	}
+	drainState.SetSelfNodeID(self)
+	drainState.SetDispatcherDrainTarget(target, 1)
 
-	drainTarget := target
 	s := NewBalanceScheduler(
 		cfID,
 		100,
@@ -100,7 +104,7 @@ func TestBalanceSchedulerSkipsDuringDrainCooldown(t *testing.T) {
 		sc,
 		0,
 		common.DefaultMode,
-		func() (node.ID, uint64) { return drainTarget, 1 },
+		drainState,
 	)
 	s.drainBalanceBlockedUntil = time.Time{}
 
@@ -109,7 +113,7 @@ func TestBalanceSchedulerSkipsDuringDrainCooldown(t *testing.T) {
 	require.Equal(t, 0, oc.OperatorSize())
 
 	// Drain is cleared but scheduler should still be blocked by cooldown.
-	drainTarget = ""
+	drainState.SetDispatcherDrainTarget("", 1)
 	_ = s.Execute()
 	require.Equal(t, 0, oc.OperatorSize())
 

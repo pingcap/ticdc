@@ -50,7 +50,7 @@ type balanceScheduler struct {
 	random *rand.Rand
 	mode   int64
 
-	getDrainTarget drainTargetGetter
+	drainState *DrainState
 
 	drainBalanceBlockedUntil time.Time
 }
@@ -63,7 +63,7 @@ func NewBalanceScheduler(
 	sc *span.Controller,
 	_ time.Duration,
 	mode int64,
-	getDrainTarget drainTargetGetter,
+	drainState *DrainState,
 ) *balanceScheduler {
 	return &balanceScheduler{
 		changefeedID:       changefeedID,
@@ -74,7 +74,7 @@ func NewBalanceScheduler(
 		nodeManager:        appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
 		splitter:           splitter,
 		mode:               mode,
-		getDrainTarget:     getDrainTarget,
+		drainState:         drainState,
 	}
 }
 
@@ -83,7 +83,8 @@ func (s *balanceScheduler) Execute() time.Time {
 		failpoint.Return(time.Now().Add(time.Second * 5))
 	})
 	now := time.Now()
-	if shouldPauseBalanceForDrain(s.getDrainTarget, now, &s.drainBalanceBlockedUntil) {
+	state := s.drainState.snapshot()
+	if shouldPauseBalanceForDrain(state, now, &s.drainBalanceBlockedUntil) {
 		// Pause regular balance scheduling while dispatcher drain is active
 		// and keep a cooldown window after drain completion to avoid churn.
 		return time.Now().Add(time.Second * 5)
@@ -112,7 +113,7 @@ func (s *balanceScheduler) Execute() time.Time {
 	}
 
 	// 2. do balance for the spans in defaultGroupID
-	s.schedulerDefaultGroup(moveBudget)
+	s.schedulerDefaultGroup(moveBudget, state)
 
 	return time.Now().Add(time.Second * 5)
 }
@@ -124,9 +125,12 @@ func (s *balanceScheduler) Name() string {
 	return pkgScheduler.BalanceScheduler
 }
 
-func (s *balanceScheduler) schedulerDefaultGroup(maxSize int) int {
+func (s *balanceScheduler) schedulerDefaultGroup(
+	maxSize int,
+	state drainStateSnapshot,
+) int {
 	nodes := s.nodeManager.GetAliveNodes()
-	nodes = filterAliveNodesByDrainTarget(nodes, s.getDrainTarget)
+	nodes = filterAliveNodesByDrainTarget(nodes, state)
 	if len(nodes) == 0 {
 		return 0
 	}

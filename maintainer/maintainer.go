@@ -750,7 +750,7 @@ func (m *Maintainer) calculateNewCheckpointTs() (*heartbeatpb.Watermark, bool) {
 	newWatermark.UpdateMin(heartbeatpb.Watermark{CheckpointTs: minCheckpointTsForBarrier, ResolvedTs: minCheckpointTsForBarrier})
 	newWatermark.UpdateMin(heartbeatpb.Watermark{CheckpointTs: minCheckpointTsForScheduler, ResolvedTs: minCheckpointTsForScheduler})
 
-	log.Info("can advance checkpointTs",
+	log.Debug("can advance checkpointTs",
 		zap.Stringer("changefeedID", m.changefeedID),
 		zap.Uint64("newCheckpointTs", newWatermark.CheckpointTs),
 		zap.Uint64("newResolvedTs", newWatermark.ResolvedTs),

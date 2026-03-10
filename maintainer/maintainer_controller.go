@@ -21,6 +21,7 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/operator"
 	"github.com/pingcap/ticdc/maintainer/replica"
+	"github.com/pingcap/ticdc/maintainer/scheduler"
 	"github.com/pingcap/ticdc/maintainer/span"
 	"github.com/pingcap/ticdc/maintainer/split"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -28,7 +29,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
-	"github.com/pingcap/ticdc/pkg/scheduler"
+	pkgscheduler "github.com/pingcap/ticdc/pkg/scheduler"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/threadpool"
@@ -43,7 +44,7 @@ type Controller struct {
 	bootstrapped bool
 	startTs      uint64
 
-	schedulerController    *scheduler.Controller
+	schedulerController    *pkgscheduler.Controller
 	operatorController     *operator.Controller
 	redoOperatorController *operator.Controller
 	spanController         *span.Controller
@@ -71,19 +72,9 @@ type Controller struct {
 	keyspaceMeta common.KeyspaceMeta
 	enableRedo   bool
 
-	// selfNodeID tracks the hosting node of this maintainer instance.
-	// Drain scheduling uses it to defer dispatcher moves until the
-	// maintainer itself is no longer colocated with the drain target.
-	selfNodeIDMu sync.RWMutex
-	selfNodeID   node.ID
-
-	// dispatcherDrainTarget stores the latest drain target observed by this
-	// changefeed-level controller. The epoch makes stale drain updates a no-op.
-	dispatcherDrainTarget struct {
-		sync.RWMutex
-		target node.ID
-		epoch  uint64
-	}
+	// drainState is shared with all scheduler instances so each scheduling tick
+	// can read a consistent snapshot of the maintainer host and drain target.
+	drainState *scheduler.DrainState
 }
 
 func NewController(changefeedID common.ChangeFeedID,
@@ -144,9 +135,10 @@ func NewController(changefeedID common.ChangeFeedID,
 		splitter:               splitter,
 		keyspaceMeta:           keyspaceMeta,
 		enableRedo:             enableRedo,
+		drainState:             scheduler.NewDrainState(),
 	}
-	// Scheduler instances consume changefeed-local drain state through getters
-	// so they can observe updates without owning the mutable state themselves.
+	// Scheduler instances share a dedicated drain state object so each tick can
+	// read a consistent snapshot without depending on the whole controller.
 	controller.schedulerController = NewScheduleController(
 		changefeedID,
 		batchSize,
@@ -157,8 +149,7 @@ func NewController(changefeedID common.ChangeFeedID,
 		balanceInterval,
 		splitter,
 		schedulerCfg,
-		controller.getDispatcherDrainTarget,
-		controller.getSelfNodeID,
+		controller.drainState,
 	)
 	return controller
 }
@@ -289,34 +280,17 @@ func (c *Controller) GetMinRedoCheckpointTs(minCheckpointTs uint64) uint64 {
 
 // SetSelfNodeID records the node currently hosting this maintainer.
 func (c *Controller) SetSelfNodeID(selfNodeID node.ID) {
-	c.selfNodeIDMu.Lock()
-	defer c.selfNodeIDMu.Unlock()
-	c.selfNodeID = selfNodeID
-}
-
-// getSelfNodeID returns a consistent snapshot of the maintainer host node.
-func (c *Controller) getSelfNodeID() node.ID {
-	c.selfNodeIDMu.RLock()
-	defer c.selfNodeIDMu.RUnlock()
-	return c.selfNodeID
+	c.drainState.SetSelfNodeID(selfNodeID)
 }
 
 // SetDispatcherDrainTarget applies the newest drain target visible to this
 // changefeed. Older epochs are ignored so scheduler state does not regress.
 func (c *Controller) SetDispatcherDrainTarget(target node.ID, epoch uint64) {
-	c.dispatcherDrainTarget.Lock()
-	defer c.dispatcherDrainTarget.Unlock()
-	if epoch < c.dispatcherDrainTarget.epoch {
-		return
-	}
-	c.dispatcherDrainTarget.target = target
-	c.dispatcherDrainTarget.epoch = epoch
+	c.drainState.SetDispatcherDrainTarget(target, epoch)
 }
 
 // getDispatcherDrainTarget returns the current drain target and epoch snapshot
 // used by schedulers and status reporting.
 func (c *Controller) getDispatcherDrainTarget() (node.ID, uint64) {
-	c.dispatcherDrainTarget.RLock()
-	defer c.dispatcherDrainTarget.RUnlock()
-	return c.dispatcherDrainTarget.target, c.dispatcherDrainTarget.epoch
+	return c.drainState.DispatcherDrainTarget()
 }

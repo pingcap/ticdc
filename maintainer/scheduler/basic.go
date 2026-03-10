@@ -56,7 +56,7 @@ type basicScheduler struct {
 	spanController     *span.Controller
 	nodeManager        *watcher.NodeManager
 	mode               int64
-	getDrainTarget     drainTargetGetter
+	drainState         *DrainState
 }
 
 func NewBasicScheduler(
@@ -65,7 +65,7 @@ func NewBasicScheduler(
 	spanController *span.Controller,
 	schedulerCfg *config.ChangefeedSchedulerConfig,
 	mode int64,
-	getDrainTarget drainTargetGetter,
+	drainState *DrainState,
 ) *basicScheduler {
 	scheduler := &basicScheduler{
 		changefeedID:               changefeedID,
@@ -75,7 +75,7 @@ func NewBasicScheduler(
 		nodeManager:                appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
 		schedulingTaskCountPerNode: 1,
 		mode:                       mode,
-		getDrainTarget:             getDrainTarget,
+		drainState:                 drainState,
 	}
 
 	if schedulerCfg != nil && util.GetOrZero(schedulerCfg.SchedulingTaskCountPerNode) > 0 {
@@ -103,12 +103,14 @@ func (s *basicScheduler) Execute() time.Time {
 		return time.Now().Add(time.Millisecond * 100)
 	}
 
+	state := s.drainState.snapshot()
+
 	// deal with the split table spans first
 	for _, id := range s.spanController.GetGroups() {
 		if id == pkgreplica.DefaultGroupID {
 			continue
 		}
-		availableSize -= s.schedule(id, availableSize)
+		availableSize -= s.schedule(id, availableSize, state)
 		if availableSize <= 0 {
 			break
 		}
@@ -116,12 +118,16 @@ func (s *basicScheduler) Execute() time.Time {
 
 	if availableSize > 0 {
 		// still have available size, deal with the normal spans
-		s.schedule(pkgreplica.DefaultGroupID, availableSize)
+		s.schedule(pkgreplica.DefaultGroupID, availableSize, state)
 	}
 	return time.Now().Add(time.Millisecond * 500)
 }
 
-func (s *basicScheduler) schedule(groupID pkgreplica.GroupID, availableSize int) int {
+func (s *basicScheduler) schedule(
+	groupID pkgreplica.GroupID,
+	availableSize int,
+	state drainStateSnapshot,
+) int {
 	scheduleNodeSize := s.spanController.GetScheduleTaskSizePerNodeByGroup(groupID)
 	// for each group, we try to make each node have the same scheduling task count,
 	// to make the usage of each node as balanced as possible.
@@ -129,7 +135,7 @@ func (s *basicScheduler) schedule(groupID pkgreplica.GroupID, availableSize int)
 	// for the split table spans, each time each node can at most have s.schedulingTaskCountPerNode scheduling tasks.
 	// for the normal spans, we don't have the upper limit.
 	size := 0
-	nodeIDs := filterNodeIDsByDrainTarget(s.nodeManager.GetAliveNodeIDs(), s.getDrainTarget)
+	nodeIDs := filterNodeIDsByDrainTarget(s.nodeManager.GetAliveNodeIDs(), state)
 	if len(nodeIDs) == 0 {
 		return 0
 	}

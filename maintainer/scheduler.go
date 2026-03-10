@@ -22,7 +22,6 @@ import (
 	"github.com/pingcap/ticdc/maintainer/split"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/ticdc/pkg/node"
 	pkgscheduler "github.com/pingcap/ticdc/pkg/scheduler"
 )
 
@@ -33,8 +32,7 @@ func NewScheduleController(changefeedID common.ChangeFeedID,
 	balanceInterval time.Duration,
 	splitter *split.Splitter,
 	schedulerCfg *config.ChangefeedSchedulerConfig,
-	drainTargetGetter func() (node.ID, uint64),
-	selfNodeGetter func() node.ID,
+	drainState *scheduler.DrainState,
 ) *pkgscheduler.Controller {
 	schedulers := map[string]pkgscheduler.Scheduler{
 		pkgscheduler.BasicScheduler: scheduler.NewBasicScheduler(
@@ -44,7 +42,7 @@ func NewScheduleController(changefeedID common.ChangeFeedID,
 			spanController,
 			schedulerCfg,
 			common.DefaultMode,
-			drainTargetGetter,
+			drainState,
 		),
 		pkgscheduler.DrainScheduler: scheduler.NewDrainScheduler(
 			changefeedID,
@@ -52,8 +50,7 @@ func NewScheduleController(changefeedID common.ChangeFeedID,
 			oc,
 			spanController,
 			common.DefaultMode,
-			drainTargetGetter,
-			selfNodeGetter,
+			drainState,
 		),
 		pkgscheduler.BalanceScheduler: scheduler.NewBalanceScheduler(
 			changefeedID,
@@ -63,7 +60,7 @@ func NewScheduleController(changefeedID common.ChangeFeedID,
 			spanController,
 			balanceInterval,
 			common.DefaultMode,
-			drainTargetGetter,
+			drainState,
 		),
 	}
 	if splitter != nil {
@@ -74,7 +71,7 @@ func NewScheduleController(changefeedID common.ChangeFeedID,
 			oc,
 			spanController,
 			common.DefaultMode,
-			drainTargetGetter,
+			drainState,
 		)
 	}
 	if redoOC != nil {
@@ -85,7 +82,7 @@ func NewScheduleController(changefeedID common.ChangeFeedID,
 			redoSpanController,
 			schedulerCfg,
 			common.RedoMode,
-			drainTargetGetter,
+			drainState,
 		)
 		schedulers[pkgscheduler.RedoDrainScheduler] = scheduler.NewDrainScheduler(
 			changefeedID,
@@ -93,8 +90,7 @@ func NewScheduleController(changefeedID common.ChangeFeedID,
 			redoOC,
 			redoSpanController,
 			common.RedoMode,
-			drainTargetGetter,
-			selfNodeGetter,
+			drainState,
 		)
 		schedulers[pkgscheduler.RedoBalanceScheduler] = scheduler.NewBalanceScheduler(
 			changefeedID,
@@ -104,7 +100,7 @@ func NewScheduleController(changefeedID common.ChangeFeedID,
 			redoSpanController,
 			balanceInterval,
 			common.RedoMode,
-			drainTargetGetter,
+			drainState,
 		)
 		if splitter != nil {
 			schedulers[pkgscheduler.RedoBalanceSplitScheduler] = scheduler.NewBalanceSplitsScheduler(
@@ -114,7 +110,7 @@ func NewScheduleController(changefeedID common.ChangeFeedID,
 				redoOC,
 				redoSpanController,
 				common.RedoMode,
-				drainTargetGetter,
+				drainState,
 			)
 		}
 	}

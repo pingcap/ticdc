@@ -29,7 +29,7 @@ import (
 )
 
 func TestDrainSchedulerMovesOnlyDispatchersOnTarget(t *testing.T) {
-	cfID, nodeManager, oc, sc, self := newDrainSchedulerTestHarness(t)
+	cfID, nodeManager, oc, sc, drainState, self := newDrainSchedulerTestHarness(t)
 	target := node.ID("target")
 	dest := node.ID("dest")
 	nodeManager.GetAliveNodes()[target] = &node.Info{ID: target}
@@ -38,6 +38,8 @@ func TestDrainSchedulerMovesOnlyDispatchersOnTarget(t *testing.T) {
 	onTarget1 := addReplicatingSpan(t, cfID, sc, 1, target)
 	onTarget2 := addReplicatingSpan(t, cfID, sc, 2, target)
 	offTarget := addReplicatingSpan(t, cfID, sc, 3, dest)
+	drainState.SetSelfNodeID(self)
+	drainState.SetDispatcherDrainTarget(target, 1)
 
 	s := NewDrainScheduler(
 		cfID,
@@ -45,8 +47,7 @@ func TestDrainSchedulerMovesOnlyDispatchersOnTarget(t *testing.T) {
 		oc,
 		sc,
 		common.DefaultMode,
-		func() (node.ID, uint64) { return target, 1 },
-		func() node.ID { return self },
+		drainState,
 	)
 	_ = s.Execute()
 
@@ -57,7 +58,7 @@ func TestDrainSchedulerMovesOnlyDispatchersOnTarget(t *testing.T) {
 }
 
 func TestDrainSchedulerCapsInflightDrainMoves(t *testing.T) {
-	cfID, nodeManager, oc, sc, self := newDrainSchedulerTestHarness(t)
+	cfID, nodeManager, oc, sc, drainState, self := newDrainSchedulerTestHarness(t)
 	target := node.ID("target")
 	dest1 := node.ID("dest1")
 	dest2 := node.ID("dest2")
@@ -68,6 +69,8 @@ func TestDrainSchedulerCapsInflightDrainMoves(t *testing.T) {
 	for i := 1; i <= 25; i++ {
 		addReplicatingSpan(t, cfID, sc, int64(i), target)
 	}
+	drainState.SetSelfNodeID(self)
+	drainState.SetDispatcherDrainTarget(target, 1)
 
 	s := NewDrainScheduler(
 		cfID,
@@ -75,8 +78,7 @@ func TestDrainSchedulerCapsInflightDrainMoves(t *testing.T) {
 		oc,
 		sc,
 		common.DefaultMode,
-		func() (node.ID, uint64) { return target, 1 },
-		func() node.ID { return self },
+		drainState,
 	)
 	_ = s.Execute()
 	require.Equal(t, maxDrainMovePerRound, oc.OperatorSize())
@@ -95,12 +97,14 @@ func TestDrainSchedulerCapsInflightDrainMoves(t *testing.T) {
 }
 
 func TestDrainSchedulerSkipsWhenSelfIsTarget(t *testing.T) {
-	cfID, nodeManager, oc, sc, self := newDrainSchedulerTestHarness(t)
+	cfID, nodeManager, oc, sc, drainState, self := newDrainSchedulerTestHarness(t)
 	target := self
 	dest := node.ID("dest")
 	nodeManager.GetAliveNodes()[target] = &node.Info{ID: target}
 	nodeManager.GetAliveNodes()[dest] = &node.Info{ID: dest}
 	addReplicatingSpan(t, cfID, sc, 1, target)
+	drainState.SetSelfNodeID(self)
+	drainState.SetDispatcherDrainTarget(target, 1)
 
 	s := NewDrainScheduler(
 		cfID,
@@ -108,8 +112,7 @@ func TestDrainSchedulerSkipsWhenSelfIsTarget(t *testing.T) {
 		oc,
 		sc,
 		common.DefaultMode,
-		func() (node.ID, uint64) { return target, 1 },
-		func() node.ID { return self },
+		drainState,
 	)
 	_ = s.Execute()
 
@@ -118,7 +121,7 @@ func TestDrainSchedulerSkipsWhenSelfIsTarget(t *testing.T) {
 
 func newDrainSchedulerTestHarness(
 	t *testing.T,
-) (common.ChangeFeedID, *watcher.NodeManager, *operator.Controller, *span.Controller, node.ID) {
+) (common.ChangeFeedID, *watcher.NodeManager, *operator.Controller, *span.Controller, *DrainState, node.ID) {
 	t.Helper()
 
 	mc := messaging.NewMockMessageCenter()
@@ -146,7 +149,7 @@ func newDrainSchedulerTestHarness(
 	)
 	sc := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
 	oc := operator.NewOperatorController(cfID, sc, 100, common.DefaultMode)
-	return cfID, nodeManager, oc, sc, self
+	return cfID, nodeManager, oc, sc, NewDrainState(), self
 }
 
 func addReplicatingSpan(
