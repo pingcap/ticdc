@@ -407,7 +407,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		buildDDLEventFunc:          buildDDLEventForCreateTables,
 	},
 	model.ActionMultiSchemaChange: {
-		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
+		buildPersistedDDLEventFunc: buildPersistedDDLEventForMultiSchemaChange,
 		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
 		updateFullTableInfoFunc:    updateFullTableInfoForSingleTableDDL,
 		updateSchemaMetadataFunc:   updateSchemaMetadataIgnore,
@@ -673,12 +673,17 @@ func buildPersistedDDLEventForNormalDDLOnSingleTable(args buildPersistedDDLEvent
 	return event
 }
 
+func buildPersistedDDLEventForMultiSchemaChange(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
+	event := buildPersistedDDLEventForNormalDDLOnSingleTable(args)
+	event.IndexIDs = getIndexIDs(args.job)
+	return event
+}
+
 func buildPersistedDDLEventForAddIndex(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
 	event := buildPersistedDDLEventCommon(args)
 	event.SchemaName = getSchemaName(args.databaseMap, event.SchemaID)
 	event.TableName = getTableName(args.tableMap, event.TableID)
-	indexIDs := getIndexIDs(args.job)
-	event.IndexIDs = indexIDs
+	event.IndexIDs = getIndexIDs(args.job)
 	return event
 }
 

@@ -89,8 +89,8 @@ type PersistedDDLEvent struct {
 	BDRRole        string `msg:"bdr_role"`
 	CDCWriteSource uint64 `msg:"cdc_write_source"`
 
-	// IndexIDs store the index ids that are related to the ddl job, only used for add index.
-	// use these id to recover the index name for the anonymous add index
+	// IndexIDs store the add index ids in SQL order for add index and multi schema change DDLs.
+	// MySQL sink uses them to recover anonymous index names.
 	IndexIDs []int64 `msg:"index_ids"`
 }
 

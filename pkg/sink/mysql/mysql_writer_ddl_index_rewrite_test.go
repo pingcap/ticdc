@@ -155,7 +155,7 @@ func TestRestoreAnonymousIndexToNamedIndexMultipleAnonymousIndexes(t *testing.T)
 	require.Equal(t, expectedNames, parseAddIndexConstraintNames(t, restoredQuery))
 }
 
-func TestRestoreAnonymousIndexToNamedIndexOnlyConsumesAnonymousIDs(t *testing.T) {
+func TestRestoreAnonymousIndexToNamedIndexWithNamedAndAnonymousIndexes(t *testing.T) {
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
 
@@ -166,24 +166,23 @@ func TestRestoreAnonymousIndexToNamedIndexOnlyConsumesAnonymousIDs(t *testing.T)
 
 	tableInfo := helper.GetTableInfo(job)
 	require.NotNil(t, tableInfo)
+	indexIDs := getIndexIDsFromJob(t, job)
+	require.Len(t, indexIDs, 2)
 
-	anonymousIndexID := int64(0)
 	expectedAnonymousName := ""
 	for _, index := range tableInfo.GetIndices() {
 		if index == nil || len(index.Columns) != 1 {
 			continue
 		}
 		if index.Columns[0].Name.L == "age" {
-			anonymousIndexID = index.ID
 			expectedAnonymousName = index.Name.O
 			break
 		}
 	}
-	require.NotZero(t, anonymousIndexID)
 	require.NotEmpty(t, expectedAnonymousName)
 
 	mixedQuery := "ALTER TABLE `t` ADD INDEX `idx_name` (`name`), ADD INDEX (`age`)"
-	restoredQuery, changed, err := restoreAnonymousIndexToNamedIndex(mixedQuery, tableInfo, []int64{anonymousIndexID})
+	restoredQuery, changed, err := restoreAnonymousIndexToNamedIndex(mixedQuery, tableInfo, indexIDs)
 	require.NoError(t, err)
 	require.True(t, changed)
 	require.Equal(t, []string{"idx_name", expectedAnonymousName}, parseAddIndexConstraintNames(t, restoredQuery))
@@ -192,4 +191,50 @@ func TestRestoreAnonymousIndexToNamedIndexOnlyConsumesAnonymousIDs(t *testing.T)
 	require.NoError(t, err)
 	require.False(t, unchanged)
 	require.Equal(t, mixedQuery, unchangedQuery)
+}
+
+func TestExecDDL_RestoreAnonymousIndexToNamedIndexForMultiSchemaChange(t *testing.T) {
+	writer, db, mock := newTestMysqlWriter(t)
+	defer db.Close()
+
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	helper.DDL2Event("create table t (id int primary key, name varchar(32))")
+
+	job := helper.DDL2Job("alter table t add column age int, add index (name)")
+	require.Equal(t, timodel.ActionMultiSchemaChange, job.Type)
+
+	tableInfo := helper.GetTableInfo(job)
+	require.NotNil(t, tableInfo)
+
+	indexIDs := getIndexIDsFromJob(t, job)
+	require.Len(t, indexIDs, 1)
+	expectedIndexName := getIndexNameByID(t, tableInfo, indexIDs[0])
+
+	anonymousQuery := "ALTER TABLE `t` ADD COLUMN `age` INT, ADD INDEX (`name`)"
+	restoredQuery, changed, err := restoreAnonymousIndexToNamedIndex(anonymousQuery, tableInfo, indexIDs)
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.Equal(t, []string{expectedIndexName}, parseAddIndexConstraintNames(t, restoredQuery))
+
+	ddlEvent := &commonEvent.DDLEvent{
+		Type:       byte(job.Type),
+		Query:      anonymousQuery,
+		SchemaName: job.SchemaName,
+		TableName:  job.TableName,
+		TableInfo:  tableInfo,
+		IndexIDs:   indexIDs,
+	}
+
+	mock.ExpectBegin()
+	mock.ExpectExec("USE `test`;").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("SET TIMESTAMP = DEFAULT").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec(restoredQuery).WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	err = writer.execDDL(ddlEvent)
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
 }

@@ -106,8 +106,8 @@ type DDLEvent struct {
 	// The multiple table DDL event will be handled by filtering querys and table infos.
 	NotSync bool `json:"not_sync"`
 
-	// IndexIDs store the index ids that are related to the ddl job, only used for add index.
-	// use these id to recover the index name for the anonymous add index
+	// IndexIDs store the add index ids in SQL order for add index and multi schema change DDLs.
+	// MySQL sink uses them to recover anonymous index names.
 	IndexIDs []int64 `json:"index_ids"`
 }
 

@@ -42,25 +42,30 @@ func restoreAnonymousIndexToNamedIndex(query string, tableInfo *common.TableInfo
 		return query, false, nil
 	}
 
-	changed := false
-	indexIDPos := 0
+	indexConstraints := make([]*ast.Constraint, 0)
 	for _, spec := range alterStmt.Specs {
 		if spec == nil || spec.Tp != ast.AlterTableAddConstraint || spec.Constraint == nil {
 			continue
 		}
 		constraint := spec.Constraint
-		if constraint.Name != "" {
-			continue
-		}
 		if !isIndexConstraint(constraint) {
 			continue
 		}
-		if indexIDPos >= len(indexIDs) {
+		indexConstraints = append(indexConstraints, constraint)
+	}
+	if len(indexConstraints) == 0 {
+		return query, false, nil
+	}
+
+	changed := false
+	for i, constraint := range indexConstraints {
+		if i >= len(indexIDs) {
+			break
+		}
+		if constraint.Name != "" {
 			continue
 		}
-
-		indexName, ok := indexNameByID[indexIDs[indexIDPos]]
-		indexIDPos++
+		indexName, ok := indexNameByID[indexIDs[i]]
 		if !ok {
 			continue
 		}
