@@ -29,8 +29,8 @@ import (
 // Forced heartbeats bypass this throttle to acknowledge state changes immediately.
 const nodeHeartbeatInterval = 5 * time.Second
 
-// managerNodePart owns node-scoped state shared by all local maintainers.
-type managerNodePart struct {
+// managerNodeState owns node-scoped state shared by all local maintainers.
+type managerNodeState struct {
 	// liveness points to the server-wide node liveness state shared with other
 	// modules such as the elector and coordinator command handlers.
 	liveness *api.Liveness
@@ -52,9 +52,9 @@ type managerNodePart struct {
 	lastNodeHeartbeatSentAt time.Time
 }
 
-// newManagerNodePart initializes the node-scoped state owned by a manager.
-func newManagerNodePart(liveness *api.Liveness) *managerNodePart {
-	return &managerNodePart{
+// newManagerNodeState initializes the node-scoped state owned by a manager.
+func newManagerNodeState(liveness *api.Liveness) *managerNodeState {
+	return &managerNodeState{
 		liveness:  liveness,
 		nodeEpoch: newNodeEpoch(),
 	}
@@ -179,7 +179,7 @@ func (m *Manager) getDispatcherDrainTarget() (node.ID, uint64) {
 // tryUpdateDispatcherDrainTarget applies only monotonic target updates.
 // A higher epoch always wins, while the same epoch may only perform the
 // one-way transition from a non-empty target to an empty target.
-func (n *managerNodePart) tryUpdateDispatcherDrainTarget(target node.ID, epoch uint64) bool {
+func (n *managerNodeState) tryUpdateDispatcherDrainTarget(target node.ID, epoch uint64) bool {
 	n.dispatcherDrainTarget.Lock()
 	defer n.dispatcherDrainTarget.Unlock()
 

@@ -44,9 +44,9 @@ type Manager struct {
 	// msgCh is used to cache messages from coordinator.
 	msgCh chan *messaging.TargetMessage
 	// node holds node-scoped liveness and drain state that applies to the whole capture.
-	node *managerNodePart
+	node *managerNodeState
 	// maintainers holds changefeed-scoped state and lifecycle operations.
-	maintainers *managerMaintainersPart
+	maintainers *managerMaintainerSet
 }
 
 // NewMaintainerManager create a changefeed maintainer manager instance
@@ -64,8 +64,8 @@ func NewMaintainerManager(
 		mc:          mc,
 		nodeInfo:    nodeInfo,
 		msgCh:       make(chan *messaging.TargetMessage, 1024),
-		node:        newManagerNodePart(liveness),
-		maintainers: newManagerMaintainersPart(conf, nodeInfo),
+		node:        newManagerNodeState(liveness),
+		maintainers: newManagerMaintainerSet(conf, nodeInfo),
 	}
 
 	mc.RegisterHandler(messaging.MaintainerManagerTopic, m.recvMessages)

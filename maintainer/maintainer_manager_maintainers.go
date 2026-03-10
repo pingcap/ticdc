@@ -30,7 +30,7 @@ import (
 	"go.uber.org/zap"
 )
 
-type managerMaintainersPart struct {
+type managerMaintainerSet struct {
 	// conf is shared scheduler configuration for newly created maintainers.
 	conf *config.SchedulerConfig
 
@@ -43,9 +43,9 @@ type managerMaintainersPart struct {
 	registry sync.Map
 }
 
-// newManagerMaintainersPart initializes the changefeed-scoped state owned by a manager.
-func newManagerMaintainersPart(conf *config.SchedulerConfig, nodeInfo *node.Info) *managerMaintainersPart {
-	return &managerMaintainersPart{
+// newManagerMaintainerSet initializes the changefeed-scoped state owned by a manager.
+func newManagerMaintainerSet(conf *config.SchedulerConfig, nodeInfo *node.Info) *managerMaintainerSet {
+	return &managerMaintainerSet{
 		conf:          conf,
 		nodeInfo:      nodeInfo,
 		taskScheduler: threadpool.NewThreadPoolDefault(),
@@ -127,7 +127,7 @@ func (m *Manager) dispatcherMaintainerMessage(
 }
 
 // closeAll stops every local maintainer during manager shutdown.
-func (p *managerMaintainersPart) closeAll() {
+func (p *managerMaintainerSet) closeAll() {
 	p.registry.Range(func(_, value interface{}) bool {
 		value.(*Maintainer).Close()
 		return true
@@ -135,7 +135,7 @@ func (p *managerMaintainersPart) closeAll() {
 }
 
 // buildBootstrapResponse snapshots all local maintainer states for coordinator bootstrap.
-func (p *managerMaintainersPart) buildBootstrapResponse() *heartbeatpb.CoordinatorBootstrapResponse {
+func (p *managerMaintainerSet) buildBootstrapResponse() *heartbeatpb.CoordinatorBootstrapResponse {
 	response := &heartbeatpb.CoordinatorBootstrapResponse{}
 	p.registry.Range(func(_, value interface{}) bool {
 		maintainer := value.(*Maintainer)
@@ -150,7 +150,7 @@ func (p *managerMaintainersPart) buildBootstrapResponse() *heartbeatpb.Coordinat
 
 // handleAddMaintainer decodes the request, creates the maintainer, and seeds it
 // with the latest node-scoped dispatcher drain target.
-func (p *managerMaintainersPart) handleAddMaintainer(
+func (p *managerMaintainerSet) handleAddMaintainer(
 	req *heartbeatpb.AddMaintainerRequest,
 	target node.ID,
 	epoch uint64,
@@ -181,7 +181,7 @@ func (p *managerMaintainersPart) handleAddMaintainer(
 }
 
 // handleRemoveMaintainer handles both normal remove and cascade-remove flows.
-func (p *managerMaintainersPart) handleRemoveMaintainer(msg *messaging.TargetMessage) *heartbeatpb.MaintainerStatus {
+func (p *managerMaintainerSet) handleRemoveMaintainer(msg *messaging.TargetMessage) *heartbeatpb.MaintainerStatus {
 	req := msg.Message[0].(*heartbeatpb.RemoveMaintainerRequest)
 	changefeedID := common.NewChangefeedIDFromPB(req.GetId())
 	maintainer, ok := p.registry.Load(changefeedID)
@@ -213,7 +213,7 @@ func (p *managerMaintainersPart) handleRemoveMaintainer(msg *messaging.TargetMes
 }
 
 // buildHeartbeat collects status changes and periodic reports from local maintainers.
-func (p *managerMaintainersPart) buildHeartbeat() *heartbeatpb.MaintainerHeartbeat {
+func (p *managerMaintainerSet) buildHeartbeat() *heartbeatpb.MaintainerHeartbeat {
 	response := &heartbeatpb.MaintainerHeartbeat{}
 	p.registry.Range(func(_, value interface{}) bool {
 		cfMaintainer := value.(*Maintainer)
@@ -233,7 +233,7 @@ func (p *managerMaintainersPart) buildHeartbeat() *heartbeatpb.MaintainerHeartbe
 }
 
 // cleanupRemovedMaintainers closes maintainers after their remove flow has finished.
-func (p *managerMaintainersPart) cleanupRemovedMaintainers() {
+func (p *managerMaintainerSet) cleanupRemovedMaintainers() {
 	p.registry.Range(func(key, value interface{}) bool {
 		cf := value.(*Maintainer)
 		if cf.removed.Load() {
@@ -250,7 +250,7 @@ func (p *managerMaintainersPart) cleanupRemovedMaintainers() {
 
 // applyDispatcherDrainTarget fans out the latest node-scoped drain target to
 // every currently active maintainer.
-func (p *managerMaintainersPart) applyDispatcherDrainTarget(target node.ID, epoch uint64) {
+func (p *managerMaintainerSet) applyDispatcherDrainTarget(target node.ID, epoch uint64) {
 	p.registry.Range(func(_, value interface{}) bool {
 		value.(*Maintainer).SetDispatcherDrainTarget(target, epoch)
 		return true
@@ -259,7 +259,7 @@ func (p *managerMaintainersPart) applyDispatcherDrainTarget(target node.ID, epoc
 
 // dispatchMaintainerMessage pushes a dispatcher-originated message into the
 // target maintainer event loop.
-func (p *managerMaintainersPart) dispatchMaintainerMessage(
+func (p *managerMaintainerSet) dispatchMaintainerMessage(
 	ctx context.Context, changefeed common.ChangeFeedID, msg *messaging.TargetMessage,
 ) error {
 	c, ok := p.registry.Load(changefeed)
@@ -284,7 +284,7 @@ func (p *managerMaintainersPart) dispatchMaintainerMessage(
 }
 
 // getMaintainer returns the local maintainer for the given changefeed, if any.
-func (p *managerMaintainersPart) getMaintainer(changefeedID common.ChangeFeedID) (*Maintainer, bool) {
+func (p *managerMaintainerSet) getMaintainer(changefeedID common.ChangeFeedID) (*Maintainer, bool) {
 	c, ok := p.registry.Load(changefeedID)
 	if !ok {
 		return nil, false
@@ -293,7 +293,7 @@ func (p *managerMaintainersPart) getMaintainer(changefeedID common.ChangeFeedID)
 }
 
 // listMaintainers returns a snapshot of all currently registered maintainers.
-func (p *managerMaintainersPart) listMaintainers() []*Maintainer {
+func (p *managerMaintainerSet) listMaintainers() []*Maintainer {
 	maintainers := make([]*Maintainer, 0)
 	p.registry.Range(func(_, value interface{}) bool {
 		maintainers = append(maintainers, value.(*Maintainer))
