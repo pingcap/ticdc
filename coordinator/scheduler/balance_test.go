@@ -41,7 +41,7 @@ func TestBalanceSchedulerCreatesMoveOperators(t *testing.T) {
 	nodeManager.GetAliveNodes()[nodeA] = &node.Info{ID: nodeA}
 	nodeManager.GetAliveNodes()[nodeB] = &node.Info{ID: nodeB}
 
-	drainController := drain.NewControllerWithTTL(mc, 30*time.Second)
+	drainController := drain.NewController(mc)
 	db := changefeed.NewChangefeedDB(1)
 	addReplicatingMaintainer(t, db, "cf-a-1", nodeA)
 	addReplicatingMaintainer(t, db, "cf-a-2", nodeA)
@@ -66,7 +66,7 @@ func TestBalanceSchedulerSkipsWhenDrainActive(t *testing.T) {
 	nodeManager.GetAliveNodes()[nodeA] = &node.Info{ID: nodeA}
 	nodeManager.GetAliveNodes()[nodeB] = &node.Info{ID: nodeB}
 
-	drainController := drain.NewControllerWithTTL(mc, 30*time.Second)
+	drainController := drain.NewController(mc)
 	drainController.ObserveHeartbeat(drainingNode, &heartbeatpb.NodeHeartbeat{
 		Liveness:  heartbeatpb.NodeLiveness_DRAINING,
 		NodeEpoch: 1,
@@ -101,7 +101,7 @@ func TestBalanceSchedulerSkipsUntilAllDrainCompleteAndCooldownExpires(t *testing
 	nodeManager.GetAliveNodes()[nodeA] = &node.Info{ID: nodeA}
 	nodeManager.GetAliveNodes()[nodeB] = &node.Info{ID: nodeB}
 
-	drainController := drain.NewControllerWithTTL(mc, 30*time.Second)
+	drainController := drain.NewController(mc)
 	drainController.ObserveHeartbeat(drainingA, &heartbeatpb.NodeHeartbeat{
 		Liveness:  heartbeatpb.NodeLiveness_DRAINING,
 		NodeEpoch: 1,

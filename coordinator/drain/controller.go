@@ -74,16 +74,20 @@ type Controller struct {
 
 // NewController creates a drain controller with in-memory state only.
 func NewController(mc messaging.MessageCenter) *Controller {
-	return NewControllerWithTTL(mc, defaultLivenessTTL)
-}
-
-// NewControllerWithTTL creates a drain controller with customized liveness TTL.
-func NewControllerWithTTL(mc messaging.MessageCenter, ttl time.Duration) *Controller {
 	return &Controller{
 		mc:    mc,
-		ttl:   ttl,
+		ttl:   defaultLivenessTTL,
 		nodes: make(map[node.ID]*nodeState),
 	}
+}
+
+// RemoveNode drops all in-memory drain state for a node that has been removed
+// from cluster membership. This cleanup must be tied to membership removal
+// rather than heartbeat TTL so stale nodes can still remain Unknown.
+func (c *Controller) RemoveNode(nodeID node.ID) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.nodes, nodeID)
 }
 
 // ensureNodeStateLocked returns existing node state or creates one.

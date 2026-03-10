@@ -865,6 +865,7 @@ func (c *Controller) RemoveNode(id node.ID) {
 		c.clearDispatcherDrainTarget(id, epoch)
 	}
 	c.observeDispatcherDrainTargetClearNodeRemoved(id)
+	c.drainController.RemoveNode(id)
 }
 
 func (c *Controller) submitPeriodTask() {

@@ -24,7 +24,7 @@ import (
 
 func TestDrainControllerResendAndPromoteToStopping(t *testing.T) {
 	mc := messaging.NewMockMessageCenter()
-	c := NewControllerWithTTL(mc, 30*time.Second)
+	c := NewController(mc)
 
 	target := node.ID("n1")
 	c.ObserveHeartbeat(target, &heartbeatpb.NodeHeartbeat{
@@ -68,4 +68,23 @@ func TestDrainControllerResendAndPromoteToStopping(t *testing.T) {
 	msg = <-mc.GetMessageChannel()
 	req = msg.Message[0].(*heartbeatpb.SetNodeLivenessRequest)
 	require.Equal(t, heartbeatpb.NodeLiveness_STOPPING, req.Target)
+}
+
+func TestDrainControllerRemoveNodeClearsState(t *testing.T) {
+	mc := messaging.NewMockMessageCenter()
+	c := NewController(mc)
+
+	target := node.ID("n1")
+	c.ObserveHeartbeat(target, &heartbeatpb.NodeHeartbeat{
+		Liveness:  heartbeatpb.NodeLiveness_DRAINING,
+		NodeEpoch: 42,
+	})
+	c.RequestDrain(target)
+
+	c.RemoveNode(target)
+
+	c.mu.Lock()
+	_, ok := c.nodes[target]
+	c.mu.Unlock()
+	require.False(t, ok)
 }

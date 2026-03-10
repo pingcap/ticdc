@@ -40,7 +40,7 @@ func newDrainTestController(t *testing.T) (*Controller, *drain.Controller, node.
 	nodeManager := watcher.NewNodeManager(nil, nil)
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)
 
-	drainController := drain.NewControllerWithTTL(mc, 30*time.Second)
+	drainController := drain.NewController(mc)
 	db := changefeed.NewChangefeedDB(1)
 	selfNode := &node.Info{ID: node.ID("coordinator")}
 	oc := operator.NewOperatorController(selfNode, db, nil, 10)

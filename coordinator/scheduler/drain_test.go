@@ -14,7 +14,6 @@ package scheduler
 
 import (
 	"testing"
-	"time"
 
 	"github.com/pingcap/ticdc/coordinator/changefeed"
 	"github.com/pingcap/ticdc/coordinator/drain"
@@ -43,7 +42,7 @@ func TestDrainSchedulerCreatesMoveOperators(t *testing.T) {
 	nodeManager.GetAliveNodes()[destHot] = &node.Info{ID: destHot}
 	nodeManager.GetAliveNodes()[destCold] = &node.Info{ID: destCold}
 
-	drainController := drain.NewControllerWithTTL(mc, 30*time.Second)
+	drainController := drain.NewController(mc)
 	drainController.ObserveHeartbeat(origin, &heartbeatpb.NodeHeartbeat{
 		Liveness:  heartbeatpb.NodeLiveness_DRAINING,
 		NodeEpoch: 1,
@@ -97,7 +96,7 @@ func TestDrainSchedulerSkipsChangefeedWithInflightOperator(t *testing.T) {
 	nodeManager.GetAliveNodes()[origin] = &node.Info{ID: origin}
 	nodeManager.GetAliveNodes()[dest] = &node.Info{ID: dest}
 
-	drainController := drain.NewControllerWithTTL(mc, 30*time.Second)
+	drainController := drain.NewController(mc)
 	drainController.ObserveHeartbeat(origin, &heartbeatpb.NodeHeartbeat{
 		Liveness:  heartbeatpb.NodeLiveness_DRAINING,
 		NodeEpoch: 1,
