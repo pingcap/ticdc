@@ -49,7 +49,7 @@ func initRedoComponet(
 	startTs uint64,
 	newChangefeed bool,
 ) error {
-	if !manager.redoEnabled {
+	if !manager.IsRedoEnabled() {
 		return nil
 	}
 	manager.redoDispatcherMap = newDispatcherMap[*dispatcher.RedoDispatcher]()

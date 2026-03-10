@@ -119,8 +119,9 @@ type DispatcherManager struct {
 
 	// sink is used to send all the events to the downstream.
 	sink sink.Sink
+
 	// redo related
-	// redoEnabled is immutable after construction and records whether redo is configured for the changefeed.
+	// redoEnabled is immutable and set to true if enabled.
 	redoEnabled bool
 	// redoReady set to true after the redo components are fully initialized and safe for concurrent access.
 	redoReady atomic.Bool
@@ -315,7 +316,7 @@ func NewDispatcherManager(
 		zap.Uint64("startTs", startTs),
 		zap.Uint64("sinkQuota", manager.sinkQuota),
 		zap.Uint64("redoQuota", manager.redoQuota),
-		zap.Bool("redoEnable", manager.redoEnabled),
+		zap.Bool("redoEnable", manager.IsRedoEnabled()),
 		zap.Bool("outputRawChangeEvent", manager.sharedInfo.IsOutputRawChangeEvent()),
 		zap.String("filterConfig", filterCfg.String()),
 	)
@@ -462,7 +463,7 @@ func (e *DispatcherManager) newEventDispatchers(infos map[common.DispatcherID]di
 			currentPdTs,
 			e.sink,
 			e.sharedInfo,
-			e.redoEnabled,
+			e.IsRedoEnabled(),
 			&e.redoGlobalTs,
 		)
 		if e.heartBeatTask == nil {
@@ -732,7 +733,7 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 	toCleanMap := make([]*cleanMap, 0)
 	dispatcherCount := 0
 
-	if e.redoEnabled {
+	if e.IsRedoEnabled() {
 		redoSeq := e.redoDispatcherMap.ForEach(func(id common.DispatcherID, dispatcherItem *dispatcher.RedoDispatcher) {
 			dispatcherCount++
 			status, cleanMap, watermark := getDispatcherStatus(id, dispatcherItem, needCompleteStatus)
@@ -866,7 +867,7 @@ func (e *DispatcherManager) mergeEventDispatcher(dispatcherIDs []common.Dispatch
 		0,     // currentPDTs will be calculated later.
 		e.sink,
 		e.sharedInfo,
-		e.redoEnabled,
+		e.IsRedoEnabled(),
 		&e.redoGlobalTs,
 	)
 
@@ -899,7 +900,7 @@ func (e *DispatcherManager) close(removeChangefeed bool) {
 		zap.Stringer("changefeedID", e.changefeedID))
 
 	defer e.closing.Store(false)
-	if e.redoEnabled {
+	if e.IsRedoEnabled() {
 		closeAllDispatchers(e.changefeedID, e.redoDispatcherMap, e.redoSink.SinkType())
 		log.Info("closed all redo dispatchers",
 			zap.Stringer("changefeedID", e.changefeedID))
@@ -945,7 +946,7 @@ func (e *DispatcherManager) close(removeChangefeed bool) {
 
 	log.Info("shared info closed", zap.Stringer("changefeedID", e.changefeedID))
 
-	if e.redoEnabled {
+	if e.IsRedoEnabled() {
 		e.redoSink.Close(removeChangefeed)
 		// FIXME: cleanup redo log when remove the changefeed
 		e.closeRedoMeta(removeChangefeed)
