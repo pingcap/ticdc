@@ -3132,6 +3132,8 @@ func TestRenameTable(t *testing.T) {
 }
 
 func TestBuildPersistedDDLEventForRenameTablesFallbackOldTableName(t *testing.T) {
+	// This test covers the builder fallback itself: the decoded rename args already
+	// contain empty old table names, and the builder should recover them from query.
 	job := buildRenameTablesJobForTest(
 		[]int64{100, 100},
 		[]int64{105, 105},
@@ -3642,6 +3644,9 @@ func TestExtractTableInfoFuncForSingleTableDDL_CreateTableLikeReferTableIgnored(
 }
 
 func TestBuildPersistedDDLEventForRenameTablesTiDB81Compat(t *testing.T) {
+	// This test is not redundant with TestBuildPersistedDDLEventForRenameTablesFallbackOldTableName.
+	// It specifically simulates TiDB <= 8.1 JobVersion1 RawArgs, where oldTableNames
+	// is truncated during encoding and must first be tolerated by GetRenameTablesArgs.
 	rawArgs, err := json.Marshal([]any{
 		[]int64{100},
 		[]int64{105},
@@ -3679,8 +3684,9 @@ func TestBuildPersistedDDLEventForRenameTablesTiDB81Compat(t *testing.T) {
 
 	require.Equal(t, []int64{100}, event.ExtraSchemaIDs)
 	require.Equal(t, []string{"test"}, event.ExtraSchemaNames)
-	require.Equal(t, []string{""}, event.ExtraTableNames)
+	require.Equal(t, []string{"t2"}, event.ExtraTableNames)
 	require.Equal(t, []int64{105}, event.SchemaIDs)
 	require.Equal(t, []string{"test2"}, event.SchemaNames)
+	require.Equal(t, "RENAME TABLE `test`.`t2` TO `test2`.`t102`;", event.Query)
 	require.Len(t, event.MultipleTableInfos, 1)
 }
