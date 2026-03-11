@@ -88,7 +88,7 @@ func initRedoComponet(
 
 func (e *DispatcherManager) NewTableTriggerRedoDispatcher(id *heartbeatpb.DispatcherID, startTs uint64, newChangefeed bool) error {
 	if e.GetTableTriggerRedoDispatcher() != nil {
-		log.Error("table trigger redo dispatcher existed!")
+		return errors.ErrChangefeedInitTableTriggerDispatcherFailed.FastGenByArgs("table trigger redo dispatcher existed!")
 	}
 	infos := map[common.DispatcherID]dispatcherCreateInfo{}
 	dispatcherID := common.NewDispatcherIDFromPB(id)
@@ -288,7 +288,7 @@ func (e *DispatcherManager) SetRedoResolvedTs(resolvedTs uint64) bool {
 }
 
 func (e *DispatcherManager) collectRedoMeta(ctx context.Context) error {
-	ticker := time.NewTicker(time.Duration(*e.config.Consistent.FlushIntervalInMs))
+	ticker := time.NewTicker(time.Duration(*e.config.Consistent.FlushIntervalInMs) * time.Millisecond)
 	defer ticker.Stop()
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 	var preResolvedTs uint64
