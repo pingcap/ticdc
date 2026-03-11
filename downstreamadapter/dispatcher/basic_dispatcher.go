@@ -1262,7 +1262,7 @@ func (d *BasicDispatcher) removeDispatcher() {
 			zap.Error(err))
 	}
 
-	// remove unfinished resend task
+	// remove unfinished resend task test
 	identifiers := d.resendTaskMap.Keys()
 	for _, identifier := range identifiers {
 		d.cancelResendTask(identifier)
