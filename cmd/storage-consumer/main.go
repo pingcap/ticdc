@@ -15,6 +15,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"net/http"
 	"net/url"
@@ -56,33 +57,38 @@ func init() {
 		config.DefaultFileIndexWidth, "file index width")
 	flag.BoolVar(&enableProfiling, "enable-profiling", false, "whether to enable profiling")
 	flag.StringVar(&timezone, "tz", "System", "Specify time zone of storage consumer")
-	flag.Parse()
+}
 
+func initialize() error {
 	err := logger.InitLogger(&logger.Config{
 		Level: logLevel,
 		File:  logFile,
 	})
 	if err != nil {
-		log.Error("init logger failed", zap.Error(err))
-		os.Exit(1)
+		return err
 	}
 
 	uri, err := url.Parse(upstreamURIStr)
 	if err != nil {
-		log.Error("invalid upstream-uri", zap.Error(err))
-		os.Exit(1)
+		return err
 	}
 	upstreamURI = uri
 	scheme := strings.ToLower(upstreamURI.Scheme)
 	if !config.IsStorageScheme(scheme) {
-		log.Error("invalid storage scheme, the scheme of upstream-uri must be file/s3/azblob/gcs")
-		os.Exit(1)
+		return errors.New("invalid storage scheme, the scheme of upstream-uri must be file/s3/azblob/gcs")
 	}
+	return nil
 }
 
 func main() {
 	var consumer *consumer
 	var err error
+
+	flag.Parse()
+	if err = initialize(); err != nil {
+		log.Error("failed to initialize storage consumer", zap.Error(err))
+		os.Exit(1)
+	}
 
 	if enableProfiling {
 		go func() {
