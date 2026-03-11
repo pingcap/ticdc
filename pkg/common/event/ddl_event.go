@@ -92,7 +92,7 @@ type DDLEvent struct {
 	eventSize int64 `json:"-"`
 
 	// for simple protocol
-	IsBootstrap bool `msg:"-"`
+	IsBootstrap bool `json:"-"`
 	// NotSync is used to indicate whether the event should be synced to downstream.
 	// If it is true, sink should not sync this event to downstream.
 	// It is used for some special DDL events that do not need to be synced,
@@ -104,7 +104,11 @@ type DDLEvent struct {
 	// to ensure the new truncated table can be handled correctly.
 	// If the DDL involves multiple tables, this field is not effective.
 	// The multiple table DDL event will be handled by filtering querys and table infos.
-	NotSync bool `msg:"not_sync"`
+	NotSync bool `json:"not_sync"`
+
+	// IndexIDs store the add index ids in SQL order for add index and multi schema change DDLs.
+	// MySQL sink uses them to recover anonymous index names.
+	IndexIDs []int64 `json:"index_ids"`
 }
 
 func (d *DDLEvent) String() string {
@@ -338,7 +342,6 @@ func (t DDLEvent) encodeV1() ([]byte, error) {
 	multipleTableInfosDataSize := make([]byte, 8)
 	binary.BigEndian.PutUint64(multipleTableInfosDataSize, uint64(len(t.MultipleTableInfos)))
 	data = append(data, multipleTableInfosDataSize...)
-
 	return data, nil
 }
 
@@ -348,6 +351,7 @@ func (t *DDLEvent) decodeV1(data []byte) error {
 
 	end := len(data)
 	multipleTableInfosDataSize := binary.BigEndian.Uint64(data[end-8 : end])
+	end -= 8
 	for i := 0; i < int(multipleTableInfosDataSize); i++ {
 		tableInfoDataSize := binary.BigEndian.Uint64(data[end-8 : end])
 		tableInfoData := data[end-8-int(tableInfoDataSize) : end-8]
@@ -358,7 +362,7 @@ func (t *DDLEvent) decodeV1(data []byte) error {
 		t.MultipleTableInfos = append(t.MultipleTableInfos, info)
 		end -= 8 + int(tableInfoDataSize)
 	}
-	end -= 8 + int(multipleTableInfosDataSize)
+
 	tableInfoDataSize := binary.BigEndian.Uint64(data[end-8 : end])
 	var err error
 	if tableInfoDataSize > 0 {
