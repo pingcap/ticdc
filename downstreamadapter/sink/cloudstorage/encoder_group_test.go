@@ -136,8 +136,8 @@ func TestEncodingGroupRouteByDispatcher(t *testing.T) {
 	})
 
 	for i := uint64(1); i <= 5; i++ {
-		require.NoError(t, group.add(ctx, newDrainTask(dispatcherA, i)))
-		require.NoError(t, group.add(ctx, newDrainTask(dispatcherB, i)))
+		require.NoError(t, group.add(ctx, newFlushTask(dispatcherA, i)))
+		require.NoError(t, group.add(ctx, newFlushTask(dispatcherB, i)))
 	}
 
 	var resultA []uint64
@@ -225,7 +225,7 @@ func TestEncoderGroupAddReturnsContextCause(t *testing.T) {
 	cancel(cause)
 
 	group := newEncoderGroup(newTestTxnEncoderConfig(t), 1, 1)
-	err := group.add(ctx, newDrainTask(commonType.NewDispatcherID(), 1))
+	err := group.add(ctx, newFlushTask(commonType.NewDispatcherID(), 1))
 	require.ErrorIs(t, err, cause)
 }
 

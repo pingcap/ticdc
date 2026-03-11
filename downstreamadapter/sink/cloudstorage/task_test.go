@@ -19,15 +19,14 @@ import (
 	"testing"
 	"time"
 
-	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/stretchr/testify/require"
 )
 
-func TestDrainMarkerWaitCanBeCalledMultipleTimes(t *testing.T) {
+func TestFlushMarkerWaitCanBeCalledMultipleTimes(t *testing.T) {
 	t.Parallel()
 
-	marker := newDrainMarker(commonType.NewDispatcherID(), 100)
-	marker.finish(nil)
+	marker := newFlushMarker(100)
+	marker.finish()
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -38,14 +37,14 @@ func TestDrainMarkerWaitCanBeCalledMultipleTimes(t *testing.T) {
 	require.NoError(t, marker.wait(ctx))
 }
 
-func TestDrainMarkerWaitReturnsContextCause(t *testing.T) {
+func TestFlushMarkerWaitReturnsContextCause(t *testing.T) {
 	t.Parallel()
 
 	ctx, cancel := context.WithCancelCause(context.Background())
-	cause := errors.New("drain marker canceled")
+	cause := errors.New("flush marker canceled")
 	cancel(cause)
 
-	marker := newDrainMarker(commonType.NewDispatcherID(), 100)
+	marker := newFlushMarker(100)
 	err := marker.wait(ctx)
 	require.ErrorIs(t, err, cause)
 }

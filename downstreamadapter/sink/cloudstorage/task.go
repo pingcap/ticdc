@@ -15,7 +15,6 @@ package cloudstorage
 
 import (
 	"context"
-	"sync"
 
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -28,17 +27,22 @@ type taskKind uint8
 
 const (
 	taskKindDML taskKind = iota
-	taskKindDrain
+	taskKindFlush
 )
 
 type task struct {
-	kind           taskKind
-	event          *commonEvent.DMLEvent
-	versionedTable cloudstorage.VersionedTableName
-	dispatcherID   commonType.DispatcherID
+	kind taskKind
 
-	encodedMsgs []*common.Message
-	marker      *drainMarker
+	// Shared by DML and flush tasks for stable per-dispatcher routing.
+	dispatcherID commonType.DispatcherID
+
+	// DML-only fields.
+	event          *commonEvent.DMLEvent           // Original DML event to encode and flush.
+	versionedTable cloudstorage.VersionedTableName // Versioned output identity for the DML event.
+	encodedMsgs    []*common.Message               // Encoded result built from event.
+
+	// Flush-only field.
+	marker *flushMarker // Barrier marker used by FlushDMLBeforeBlock.
 }
 
 func newDMLTask(
@@ -53,65 +57,51 @@ func newDMLTask(
 	}
 }
 
-func newDrainTask(
+func newFlushTask(
 	dispatcherID commonType.DispatcherID,
 	commitTs uint64,
 ) *task {
 	return &task{
-		kind:         taskKindDrain,
+		kind:         taskKindFlush,
 		dispatcherID: dispatcherID,
-		marker:       newDrainMarker(dispatcherID, commitTs),
+		marker:       newFlushMarker(commitTs),
 	}
 }
 
-func (t *task) isDrainTask() bool {
-	return t != nil && t.kind == taskKindDrain
+func (t *task) isFlushTask() bool {
+	return t != nil && t.kind == taskKindFlush
 }
 
 func (t *task) wait(ctx context.Context) error {
-	if !t.isDrainTask() {
+	if !t.isFlushTask() {
 		return nil
 	}
 	return t.marker.wait(ctx)
 }
 
-type drainMarker struct {
-	dispatcherID commonType.DispatcherID
-	commitTs     uint64
-	done         chan struct{}
-	mu           sync.Mutex
-	doneClosed   bool
-	err          error
+type flushMarker struct {
+	commitTs uint64
+	done     chan struct{}
 }
 
-func newDrainMarker(dispatcherID commonType.DispatcherID, commitTs uint64) *drainMarker {
-	return &drainMarker{
-		dispatcherID: dispatcherID,
-		commitTs:     commitTs,
-		done:         make(chan struct{}),
+func newFlushMarker(commitTs uint64) *flushMarker {
+	return &flushMarker{
+		commitTs: commitTs,
+		done:     make(chan struct{}),
 	}
 }
 
-// finish is the only owner that may close done.
-// done must be closed to broadcast the result to all waiters.
-func (m *drainMarker) finish(err error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.doneClosed {
-		return
-	}
-	m.err = err
-	m.doneClosed = true
+// finish closes done to broadcast flush completion to all waiters.
+// Writer is the only owner that may call finish.
+func (m *flushMarker) finish() {
 	close(m.done)
 }
 
-func (m *drainMarker) wait(ctx context.Context) error {
+func (m *flushMarker) wait(ctx context.Context) error {
 	select {
 	case <-ctx.Done():
 		return errors.Trace(context.Cause(ctx))
 	case <-m.done:
-		m.mu.Lock()
-		defer m.mu.Unlock()
-		return m.err
+		return nil
 	}
 }

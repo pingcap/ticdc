@@ -58,7 +58,7 @@ type writer struct {
 // marker task and data batch are mutually exclusive in normal flow.
 type writerTask struct {
 	batch  batchedTask
-	marker *drainMarker
+	marker *flushMarker
 }
 
 func newWriter(
@@ -122,9 +122,9 @@ func (d *writer) flushMessages(ctx context.Context) error {
 				return nil
 			}
 			if task.marker != nil {
-				// Drain marker ack point:
+				// Flush marker ack point:
 				// marker is emitted only after pending batch is flushed in genAndDispatchTask.
-				task.marker.finish(nil)
+				task.marker.finish()
 				continue
 			}
 			if len(task.batch.batch) == 0 {
@@ -333,7 +333,7 @@ func (d *writer) genAndDispatchTask(ctx context.Context) error {
 				}
 			}
 
-			if task.isDrainTask() {
+			if task.isFlushTask() {
 				if len(batchedTask.batch) > 0 {
 					select {
 					case <-ctx.Done():
@@ -372,7 +372,7 @@ func (d *writer) enqueueTask(ctx context.Context, t *task) error {
 	case <-ctx.Done():
 		return errors.Trace(ctx.Err())
 	case d.inputCh.In() <- t:
-		if !t.isDrainTask() {
+		if !t.isFlushTask() {
 			t.event.PostEnqueue()
 		}
 		return nil

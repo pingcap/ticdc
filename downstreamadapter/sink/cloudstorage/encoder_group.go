@@ -103,7 +103,7 @@ func (eg *encoderGroup) runEncoder(ctx context.Context, index int) error {
 				return nil
 			}
 			task := future.task
-			if task.isDrainTask() {
+			if task.isFlushTask() {
 				future.Done()
 				continue
 			}
@@ -151,7 +151,7 @@ func (eg *encoderGroup) Outputs() []<-chan *future {
 
 type future struct {
 	task *task
-	// done is closed on successful encode or drain fast path.
+	// done is closed on successful encode or flush-marker fast path.
 	// Fatal encoder errors are propagated by the shared errgroup ctx instead.
 	done chan struct{}
 }

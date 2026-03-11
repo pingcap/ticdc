@@ -126,7 +126,7 @@ func TestWriterRun(t *testing.T) {
 	wg.Wait()
 }
 
-func TestWriterDrainMarker(t *testing.T) {
+func TestWriterFlushMarker(t *testing.T) {
 	t.Parallel()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -169,8 +169,8 @@ func TestWriterDrainMarker(t *testing.T) {
 	tableTask.encodedMsgs = []*common.Message{msg}
 	require.NoError(t, d.enqueueTask(ctx, tableTask))
 
-	drainTask := newDrainTask(dispatcherID, 100)
-	require.NoError(t, d.enqueueTask(ctx, drainTask))
+	flushTask := newFlushTask(dispatcherID, 100)
+	require.NoError(t, d.enqueueTask(ctx, flushTask))
 
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -181,7 +181,7 @@ func TestWriterDrainMarker(t *testing.T) {
 
 	waitCtx, waitCancel := context.WithTimeout(ctx, 10*time.Second)
 	defer waitCancel()
-	require.NoError(t, drainTask.wait(waitCtx))
+	require.NoError(t, flushTask.wait(waitCtx))
 	require.Eventually(t, func() bool {
 		return callbackCnt.Load() == 1
 	}, 5*time.Second, 100*time.Millisecond)

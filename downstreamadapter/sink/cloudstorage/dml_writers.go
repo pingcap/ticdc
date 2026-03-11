@@ -154,7 +154,7 @@ func (d *dmlWriters) flushDMLBeforeBlock(ctx context.Context, event commonEvent.
 
 	start := time.Now()
 	defer func() {
-		sinkmetrics.CloudStorageDDLDrainDurationHistogram.WithLabelValues(
+		sinkmetrics.CloudStorageDDLFlushDurationHistogram.WithLabelValues(
 			d.changefeedID.Keyspace(),
 			d.changefeedID.ID().String(),
 		).Observe(time.Since(start).Seconds())
@@ -162,10 +162,10 @@ func (d *dmlWriters) flushDMLBeforeBlock(ctx context.Context, event commonEvent.
 
 	// Invariant for DDL ordering:
 	// marker follows the same dispatcher route and is acked only after prior tasks
-	// in that route are fully drained by writer.
-	drainTask := newDrainTask(event.GetDispatcherID(), event.GetCommitTs())
-	d.msgCh.Push(drainTask)
-	return drainTask.wait(ctx)
+	// in that route are fully flushed by writer.
+	flushTask := newFlushTask(event.GetDispatcherID(), event.GetCommitTs())
+	d.msgCh.Push(flushTask)
+	return flushTask.wait(ctx)
 }
 
 func (d *dmlWriters) close() {
