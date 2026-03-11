@@ -191,6 +191,164 @@ func TestWriterFlushMarker(t *testing.T) {
 	wg.Wait()
 }
 
+func TestWriterFlushMarkerOnlyFlushesTargetDispatcher(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	parentDir := t.TempDir()
+	d := testWriter(ctx, t, parentDir)
+	d.config.FlushInterval = time.Hour
+
+	tidbTableInfo := &timodel.TableInfo{
+		ID:   100,
+		Name: ast.NewCIStr("table1"),
+		Columns: []*timodel.ColumnInfo{
+			{ID: 1, Name: ast.NewCIStr("c1"), FieldType: *types.NewFieldType(mysql.TypeLong)},
+		},
+	}
+	tableInfo := commonType.WrapTableInfo("test", tidbTableInfo)
+
+	dispatcherA := commonType.NewDispatcherID()
+	dispatcherB := commonType.NewDispatcherID()
+
+	var callbackA atomic.Int64
+	var callbackB atomic.Int64
+
+	taskA := newDMLTask(
+		cloudstorage.VersionedTableName{
+			TableNameWithPhysicTableID: commonType.TableName{
+				Schema:  "test",
+				Table:   "table1",
+				TableID: 100,
+			},
+			TableInfoVersion: 99,
+			DispatcherID:     dispatcherA,
+		},
+		&commonEvent.DMLEvent{
+			PhysicalTableID: 100,
+			TableInfo:       tableInfo,
+		},
+	)
+	msgA := common.NewMsg(nil, []byte(`{"id":"a"}`))
+	msgA.SetRowsCount(1)
+	msgA.Callback = func() {
+		callbackA.Add(1)
+	}
+	taskA.encodedMsgs = []*common.Message{msgA}
+
+	taskB := newDMLTask(
+		cloudstorage.VersionedTableName{
+			TableNameWithPhysicTableID: commonType.TableName{
+				Schema:  "test",
+				Table:   "table2",
+				TableID: 101,
+			},
+			TableInfoVersion: 99,
+			DispatcherID:     dispatcherB,
+		},
+		&commonEvent.DMLEvent{
+			PhysicalTableID: 101,
+			TableInfo:       commonType.WrapTableInfo("test", &timodel.TableInfo{
+				ID:   101,
+				Name: ast.NewCIStr("table2"),
+				Columns: []*timodel.ColumnInfo{
+					{ID: 1, Name: ast.NewCIStr("c1"), FieldType: *types.NewFieldType(mysql.TypeLong)},
+				},
+			}),
+		},
+	)
+	msgB := common.NewMsg(nil, []byte(`{"id":"b"}`))
+	msgB.SetRowsCount(1)
+	msgB.Callback = func() {
+		callbackB.Add(1)
+	}
+	taskB.encodedMsgs = []*common.Message{msgB}
+
+	require.NoError(t, d.enqueueTask(ctx, taskA))
+	require.NoError(t, d.enqueueTask(ctx, taskB))
+
+	flushTask := newFlushTask(dispatcherA, 100)
+	require.NoError(t, d.enqueueTask(ctx, flushTask))
+
+	done := make(chan error, 1)
+	go func() {
+		done <- d.run(ctx)
+	}()
+
+	waitCtx, waitCancel := context.WithTimeout(ctx, 5*time.Second)
+	defer waitCancel()
+	require.NoError(t, flushTask.wait(waitCtx))
+	require.Eventually(t, func() bool {
+		return callbackA.Load() == 1
+	}, time.Second, 50*time.Millisecond)
+	require.Equal(t, int64(0), callbackB.Load())
+
+	cancel()
+	require.ErrorIs(t, <-done, context.Canceled)
+}
+
+func TestWriterPostEnqueueAfterConsume(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	parentDir := t.TempDir()
+	d := testWriter(ctx, t, parentDir)
+
+	tidbTableInfo := &timodel.TableInfo{
+		ID:   100,
+		Name: ast.NewCIStr("table1"),
+		Columns: []*timodel.ColumnInfo{
+			{ID: 1, Name: ast.NewCIStr("c1"), FieldType: *types.NewFieldType(mysql.TypeLong)},
+		},
+	}
+	tableInfo := commonType.WrapTableInfo("test", tidbTableInfo)
+	dispatcherID := commonType.NewDispatcherID()
+
+	dmlEvent := &commonEvent.DMLEvent{
+		PhysicalTableID: 100,
+		TableInfo:       tableInfo,
+	}
+	var enqueueCnt atomic.Int64
+	dmlEvent.AddPostEnqueueFunc(func() {
+		enqueueCnt.Add(1)
+	})
+
+	tableTask := newDMLTask(
+		cloudstorage.VersionedTableName{
+			TableNameWithPhysicTableID: commonType.TableName{
+				Schema:  "test",
+				Table:   "table1",
+				TableID: 100,
+			},
+			TableInfoVersion: 99,
+			DispatcherID:     dispatcherID,
+		},
+		dmlEvent,
+	)
+	tableTask.encodedMsgs = []*common.Message{
+		{
+			Value: []byte(`{"id":1}`),
+		},
+	}
+
+	require.NoError(t, d.enqueueTask(ctx, tableTask))
+	require.Equal(t, int64(0), enqueueCnt.Load())
+
+	done := make(chan error, 1)
+	go func() {
+		done <- d.run(ctx)
+	}()
+
+	require.Eventually(t, func() bool {
+		return enqueueCnt.Load() == 1
+	}, 5*time.Second, 100*time.Millisecond)
+
+	cancel()
+	require.ErrorIs(t, <-done, context.Canceled)
+}
+
 func TestWriterRunExitAfterContextCancel(t *testing.T) {
 	t.Parallel()
 

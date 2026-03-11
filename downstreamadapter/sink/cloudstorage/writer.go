@@ -334,12 +334,12 @@ func (d *writer) genAndDispatchTask(ctx context.Context) error {
 			}
 
 			if task.isFlushTask() {
-				if len(batchedTask.batch) > 0 {
+				dispatcherBatch := batchedTask.generateTaskByDispatcher(task.dispatcherID)
+				if len(dispatcherBatch.batch) > 0 {
 					select {
 					case <-ctx.Done():
 						return errors.Trace(context.Cause(ctx))
-					case d.toBeFlushedCh <- writerTask{batch: batchedTask}:
-						batchedTask = newBatchedTask()
+					case d.toBeFlushedCh <- writerTask{batch: dispatcherBatch}:
 					}
 				}
 				select {
@@ -350,6 +350,7 @@ func (d *writer) genAndDispatchTask(ctx context.Context) error {
 				continue
 			}
 
+			task.event.PostEnqueue()
 			batchedTask.handleSingleTableEvent(task)
 			table := task.versionedTable
 			if batchedTask.batch[table].size >= uint64(d.config.FileSize) {
@@ -372,9 +373,6 @@ func (d *writer) enqueueTask(ctx context.Context, t *task) error {
 	case <-ctx.Done():
 		return errors.Trace(context.Cause(ctx))
 	case d.inputCh.In() <- t:
-		if !t.isFlushTask() {
-			t.event.PostEnqueue()
-		}
 		return nil
 	}
 }
@@ -421,4 +419,16 @@ func (t *batchedTask) generateTaskByTable(table cloudstorage.VersionedTableName)
 	return batchedTask{
 		batch: map[cloudstorage.VersionedTableName]*singleTableTask{table: tableTask},
 	}
+}
+
+func (t *batchedTask) generateTaskByDispatcher(dispatcherID commonType.DispatcherID) batchedTask {
+	batchByDispatcher := newBatchedTask()
+	for table, tableTask := range t.batch {
+		if table.DispatcherID != dispatcherID {
+			continue
+		}
+		batchByDispatcher.batch[table] = tableTask
+		delete(t.batch, table)
+	}
+	return batchByDispatcher
 }
