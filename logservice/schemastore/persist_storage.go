@@ -31,6 +31,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
+	"github.com/pingcap/ticdc/pkg/retry"
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
 	"github.com/pingcap/tidb/pkg/kv"
 	"github.com/pingcap/tidb/pkg/meta/model"
@@ -169,48 +170,87 @@ func (p *persistentStorage) getGcSafePoint(ctx context.Context) (uint64, error) 
 	return gc.UnifyGetServiceGCSafepoint(ctx, p.pdCli, p.keyspaceID, defaultSchemaStoreGcServiceID)
 }
 
-func (p *persistentStorage) getAndEnsureGcSafePoint(ctx context.Context, fakeChangefeedID common.ChangeFeedID) (uint64, error) {
-	for {
-		gcSafePoint, err := p.getGcSafePoint(ctx)
-		if err == nil {
-			log.Info("get gc safepoint success", zap.Uint32("keyspaceID", p.keyspaceID), zap.Any("gcSafePoint", gcSafePoint))
-			// Ensure the start ts is valid during the gc service ttl.
-			err = gc.EnsureChangefeedStartTsSafety(
-				ctx,
-				p.pdCli,
-				defaultSchemaStoreGcServiceID,
-				p.keyspaceID,
-				fakeChangefeedID,
-				defaultGcServiceTTL,
-				gcSafePoint+1,
-			)
-			if err == nil {
-				return gcSafePoint, nil
-			}
+// ensuredGcSafePoint describes one bootstrap attempt:
+// ts is the gc safepoint observed before reading schema metadata, and cleanup
+// removes the temporary GC protection created for ts+1 by EnsureChangefeedStartTsSafety.
+// It only protects the next restart point during bootstrap. The current
+// bootstrap still reads metadata at ts, so a GC race can still force us to
+// discard it and acquire a newer one.
+type ensuredGcSafePoint struct {
+	ts      uint64
+	cleanup func()
+}
+
+func (g *ensuredGcSafePoint) close() {
+	if g != nil && g.cleanup != nil {
+		g.cleanup()
+	}
+}
+
+func (p *persistentStorage) acquireEnsuredGcSafePoint(ctx context.Context) (*ensuredGcSafePoint, error) {
+	fakeChangefeedID := common.NewChangefeedID(defaultSchemaStoreGcServiceID)
+	var gcSafePoint uint64
+	err := retry.Do(ctx, func() error {
+		var err error
+		gcSafePoint, err = p.getGcSafePoint(ctx)
+		if err != nil {
+			log.Warn("get ts failed, will retry in 1s", zap.Error(err))
+			return err
+		}
+		log.Info("get gc safepoint success", zap.Uint32("keyspaceID", p.keyspaceID), zap.Any("gcSafePoint", gcSafePoint))
+		// Protect gcSafePoint+1 from future GC before bootstrap proceeds so the next
+		// restart point does not become invalid while schema store is initializing.
+		err = gc.EnsureChangefeedStartTsSafety(
+			ctx,
+			p.pdCli,
+			defaultSchemaStoreGcServiceID,
+			p.keyspaceID,
+			fakeChangefeedID,
+			defaultGcServiceTTL,
+			gcSafePoint+1,
+		)
+		if err != nil {
 			log.Warn("ensure gc start ts safety failed, will retry in 1s",
 				zap.Uint32("keyspaceID", p.keyspaceID),
 				zap.Uint64("startTs", gcSafePoint+1),
 				zap.Error(err))
-		} else {
-			log.Warn("get ts failed, will retry in 1s", zap.Error(err))
 		}
-
-		select {
-		case <-ctx.Done():
-			return 0, errors.Trace(ctx.Err())
-		case <-time.After(time.Second):
+		return err
+	},
+		retry.WithBackoffBaseDelay(1000),
+		retry.WithBackoffMaxDelay(1000),
+		retry.WithIsRetryableErr(errors.IsRetryableError),
+	)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	cleanup := func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := gc.UndoEnsureChangefeedStartTsSafety(
+			cleanupCtx,
+			p.pdCli,
+			p.keyspaceID,
+			defaultSchemaStoreGcServiceID,
+			fakeChangefeedID,
+		); err != nil {
+			log.Warn("undo ensure gc start ts safety failed",
+				zap.Uint32("keyspaceID", p.keyspaceID),
+				zap.Error(err))
 		}
 	}
+	return &ensuredGcSafePoint{
+		ts:      gcSafePoint,
+		cleanup: cleanup,
+	}, nil
 }
 
 func (p *persistentStorage) initialize(ctx context.Context) error {
-	fakeChangefeedID := common.NewChangefeedID(defaultSchemaStoreGcServiceID)
-	gcSafePoint, err := p.getAndEnsureGcSafePoint(ctx, fakeChangefeedID)
+	ensuredGcTs, err := p.acquireEnsuredGcSafePoint(ctx)
 	if err != nil {
 		return err
 	}
-
-	defer gc.UndoEnsureChangefeedStartTsSafety(ctx, p.pdCli, p.keyspaceID, defaultSchemaStoreGcServiceID, fakeChangefeedID)
+	defer ensuredGcTs.close()
 
 	dbPath := fmt.Sprintf("%s/%s/%d", p.rootDir, dataDir, p.keyspaceID)
 
@@ -228,14 +268,14 @@ func (p *persistentStorage) initialize(ctx context.Context) error {
 		if err != nil {
 			isDataReusable = false
 		}
-		if gcSafePoint < gcTs {
-			return errors.New(fmt.Sprintf("gc safe point %d is smaller than gcTs %d on disk", gcSafePoint, gcTs))
+		if ensuredGcTs.ts < gcTs {
+			return errors.New(fmt.Sprintf("gc safe point %d is smaller than gcTs %d on disk", ensuredGcTs.ts, gcTs))
 		}
 		upperBound, err := readUpperBoundMeta(db)
 		if err != nil {
 			isDataReusable = false
 		}
-		if gcSafePoint >= upperBound.ResolvedTs {
+		if ensuredGcTs.ts >= upperBound.ResolvedTs {
 			isDataReusable = false
 		}
 
@@ -255,22 +295,32 @@ func (p *persistentStorage) initialize(ctx context.Context) error {
 		// while reading metadata, TiDB can return "GC life time is shorter than
 		// transaction duration". In that case, refresh gcSafePoint and retry bootstrap
 		// instead of crashing the process.
-		for {
-			err := p.initializeFromKVStorage(dbPath, gcSafePoint)
+		err := retry.Do(ctx, func() error {
+			err := p.initializeFromKVStorage(dbPath, ensuredGcTs.ts)
 			if err == nil {
-				break
+				return nil
 			}
 			if !isRetryableInitializeFromKVStorageError(err) {
-				return errors.Trace(err)
+				return err
 			}
 			log.Warn("initialize from kv snapshot failed due to stale snapshot, will retry with latest gc safepoint",
 				zap.Uint32("keyspaceID", p.keyspaceID),
-				zap.Uint64("snapTs", gcSafePoint),
+				zap.Uint64("snapTs", ensuredGcTs.ts),
 				zap.Error(err))
-			gcSafePoint, err = p.getAndEnsureGcSafePoint(ctx, fakeChangefeedID)
-			if err != nil {
-				return err
+			newEnsuredGcTs, refreshErr := p.acquireEnsuredGcSafePoint(ctx)
+			if refreshErr != nil {
+				return refreshErr
 			}
+			ensuredGcTs.close()
+			ensuredGcTs = newEnsuredGcTs
+			return err
+		},
+			retry.WithBackoffBaseDelay(1000),
+			retry.WithBackoffMaxDelay(1000),
+			retry.WithIsRetryableErr(isRetryableInitializeFromKVStorageError),
+		)
+		if err != nil {
+			return errors.Trace(err)
 		}
 	}
 	return nil
