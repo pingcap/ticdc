@@ -134,8 +134,10 @@ func (c *Config) Apply(
 	if err != nil {
 		return err
 	}
+	if err = getUseTableIDAsPath(urlParameter, &c.UseTableIDAsPath); err != nil {
+		return err
+	}
 
-	c.UseTableIDAsPath = util.GetOrZero(urlParameter.UseTableIDAsPath)
 	c.DateSeparator = util.GetOrZero(sinkConfig.DateSeparator)
 	c.EnablePartitionSeparator = util.GetOrZero(sinkConfig.EnablePartitionSeparator)
 	c.FileIndexWidth = util.GetOrZero(sinkConfig.FileIndexWidth)
@@ -167,13 +169,6 @@ func mergeConfig(
 ) (*urlConfig, error) {
 	dest := &urlConfig{}
 	if sinkConfig != nil && sinkConfig.CloudStorageConfig != nil {
-		if urlParameters != nil {
-			if err := config.CheckUseTableIDAsPathCompatibility(
-				sinkConfig, urlParameters.UseTableIDAsPath,
-			); err != nil {
-				return nil, err
-			}
-		}
 		dest.WorkerCount = sinkConfig.CloudStorageConfig.WorkerCount
 		dest.FlushInterval = sinkConfig.CloudStorageConfig.FlushInterval
 		dest.FileSize = sinkConfig.CloudStorageConfig.FileSize
@@ -227,6 +222,15 @@ func getFlushInterval(values *urlConfig, flushInterval *time.Duration) error {
 	}
 
 	*flushInterval = d
+	return nil
+}
+
+func getUseTableIDAsPath(values *urlConfig, useTableIDAsPath *bool) error {
+	if values.UseTableIDAsPath == nil {
+		return nil
+	}
+
+	*useTableIDAsPath = *values.UseTableIDAsPath
 	return nil
 }
 
