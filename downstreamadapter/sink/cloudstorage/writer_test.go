@@ -15,6 +15,7 @@ package cloudstorage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"path"
@@ -193,7 +194,7 @@ func TestWriterFlushMarker(t *testing.T) {
 func TestWriterRunExitAfterContextCancel(t *testing.T) {
 	t.Parallel()
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancelCause(context.Background())
 	parentDir := t.TempDir()
 	d := testWriter(ctx, t, parentDir)
 
@@ -202,11 +203,12 @@ func TestWriterRunExitAfterContextCancel(t *testing.T) {
 		done <- d.run(ctx)
 	}()
 
-	cancel()
+	cause := errors.New("writer canceled")
+	cancel(cause)
 
 	select {
 	case err := <-done:
-		require.ErrorIs(t, err, context.Canceled)
+		require.ErrorIs(t, err, cause)
 	case <-time.After(5 * time.Second):
 		t.Fatal("writer.run did not exit after context cancel")
 	}

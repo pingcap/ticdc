@@ -16,7 +16,7 @@ package cloudstorage
 import (
 	"sync/atomic"
 
-	commonType "github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/common"
 )
 
 type indexer struct {
@@ -45,7 +45,7 @@ func newIndexer(inputShards, outputShards int) *indexer {
 	}
 }
 
-func (r *indexer) next(dispatcherID commonType.DispatcherID) (int, int) {
+func (r *indexer) next(dispatcherID common.DispatcherID) (int, int) {
 	return r.nextInputIndex(), r.routeOutputIndex(dispatcherID)
 }
 
@@ -54,13 +54,14 @@ func (r *indexer) nextInputIndex() int {
 	if r.inputShards <= 1 {
 		return 0
 	}
+	// AddUint64 returns the incremented value, so subtract 1 to get a zero-based sequence.
 	next := atomic.AddUint64(&r.nextInput, 1)
 	return int((next - 1) % uint64(r.inputShards))
 }
 
-func (r *indexer) routeOutputIndex(dispatcherID commonType.DispatcherID) int {
+func (r *indexer) routeOutputIndex(dispatcherID common.DispatcherID) int {
 	if r.outputShards <= 1 {
 		return 0
 	}
-	return commonType.GID(dispatcherID).Hash(uint64(r.outputShards))
+	return common.GID(dispatcherID).Hash(uint64(r.outputShards))
 }

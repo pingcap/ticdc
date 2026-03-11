@@ -113,7 +113,7 @@ func (d *writer) flushMessages(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			return errors.Trace(ctx.Err())
+			return errors.Trace(context.Cause(ctx))
 		case <-overseerTicker.C:
 			d.metricsWorkerBusyRatio.Add(flushTimeSlice.Seconds())
 			flushTimeSlice = 0
@@ -306,14 +306,14 @@ func (d *writer) genAndDispatchTask(ctx context.Context) error {
 
 		select {
 		case <-ctx.Done():
-			return errors.Trace(ctx.Err())
+			return errors.Trace(context.Cause(ctx))
 		case <-ticker.C:
 			if len(batchedTask.batch) == 0 {
 				continue
 			}
 			select {
 			case <-ctx.Done():
-				return errors.Trace(ctx.Err())
+				return errors.Trace(context.Cause(ctx))
 			case d.toBeFlushedCh <- writerTask{batch: batchedTask}:
 				log.Debug("flush task is emitted successfully when flush interval exceeds",
 					zap.Int("tablesLength", len(batchedTask.batch)))
@@ -327,7 +327,7 @@ func (d *writer) genAndDispatchTask(ctx context.Context) error {
 				}
 				select {
 				case <-ctx.Done():
-					return errors.Trace(ctx.Err())
+					return errors.Trace(context.Cause(ctx))
 				case d.toBeFlushedCh <- writerTask{batch: batchedTask}:
 					return nil
 				}
@@ -337,14 +337,14 @@ func (d *writer) genAndDispatchTask(ctx context.Context) error {
 				if len(batchedTask.batch) > 0 {
 					select {
 					case <-ctx.Done():
-						return errors.Trace(ctx.Err())
+						return errors.Trace(context.Cause(ctx))
 					case d.toBeFlushedCh <- writerTask{batch: batchedTask}:
 						batchedTask = newBatchedTask()
 					}
 				}
 				select {
 				case <-ctx.Done():
-					return errors.Trace(ctx.Err())
+					return errors.Trace(context.Cause(ctx))
 				case d.toBeFlushedCh <- writerTask{marker: task.marker}:
 				}
 				continue
@@ -356,7 +356,7 @@ func (d *writer) genAndDispatchTask(ctx context.Context) error {
 				taskByTable := batchedTask.generateTaskByTable(table)
 				select {
 				case <-ctx.Done():
-					return errors.Trace(ctx.Err())
+					return errors.Trace(context.Cause(ctx))
 				case d.toBeFlushedCh <- writerTask{batch: taskByTable}:
 					log.Debug("flush task is emitted successfully when file size exceeds",
 						zap.Any("table", table),
@@ -370,7 +370,7 @@ func (d *writer) genAndDispatchTask(ctx context.Context) error {
 func (d *writer) enqueueTask(ctx context.Context, t *task) error {
 	select {
 	case <-ctx.Done():
-		return errors.Trace(ctx.Err())
+		return errors.Trace(context.Cause(ctx))
 	case d.inputCh.In() <- t:
 		if !t.isFlushTask() {
 			t.event.PostEnqueue()

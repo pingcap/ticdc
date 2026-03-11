@@ -121,11 +121,6 @@ func (eg *encoderGroup) runEncoder(ctx context.Context, index int) error {
 func (eg *encoderGroup) add(ctx context.Context, task *task) error {
 	future := newFuture(task)
 	inputIndex, outputIndex := eg.indexer.next(task.dispatcherID)
-	// Principle: encoder parallelism and writer ordering are decoupled.
-	// Input shard can be round-robin; output shard must be dispatcher-stable.
-	if err := context.Cause(ctx); err != nil {
-		return errors.Trace(err)
-	}
 	select {
 	case <-ctx.Done():
 		return errors.Trace(context.Cause(ctx))

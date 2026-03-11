@@ -272,7 +272,7 @@ func (s *sink) sendCheckpointTs(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			return errors.Trace(ctx.Err())
+			return errors.Trace(context.Cause(ctx))
 		case checkpoint, ok = <-s.checkpointChan:
 			if !ok {
 				log.Warn("cloud storage sink checkpoint channel closed",
