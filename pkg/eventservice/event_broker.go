@@ -52,6 +52,7 @@ const (
 	// defaultSendResolvedTsInterval use to control whether to send a resolvedTs event to the dispatcher when its scan is skipped.
 	defaultSendResolvedTsInterval           = time.Second * 2
 	defaultRefreshMinSentResolvedTsInterval = time.Second * 1
+	defaultLogSyncPointStageInterval        = time.Minute
 )
 
 // eventBroker get event from the eventStore, and send the event to the dispatchers.
@@ -185,8 +186,157 @@ func newEventBroker(
 		return c.refreshMinSentResolvedTs(ctx)
 	})
 
+	g.Go(func() error {
+		return c.logSyncPointStage(ctx, defaultLogSyncPointStageInterval)
+	})
+
 	log.Info("new event broker created", zap.Uint64("id", id), zap.Uint64("scanLimitInBytes", c.scanLimitInBytes))
 	return c
+}
+
+func (c *eventBroker) logSyncPointStage(ctx context.Context, interval time.Duration) error {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		case <-ticker.C:
+			c.changefeedMap.Range(func(_, value interface{}) bool {
+				status := value.(*changefeedStatus)
+				if !status.isSyncpointEnabled() {
+					return true
+				}
+
+				preparingTs := status.getSyncPointPreparingTs()
+				commitReady := status.syncPointCommitReady.Load()
+				inFlightTs := status.syncPointInFlightTs.Load()
+				stage := "idle"
+				switch {
+				case preparingTs == 0 && inFlightTs == 0:
+					stage = "idle"
+				case preparingTs > 0 && !commitReady:
+					stage = "prepare"
+				case preparingTs > 0 && commitReady:
+					stage = "commit"
+				default:
+					stage = "unknown"
+				}
+
+				var (
+					totalDispatcherCount  int
+					activeDispatcherCount int
+					prepareReadyCount     int
+					prepareWaitingCount   int
+					commitDoneCount       int
+					commitWaitingCount    int
+					minSentResolvedTs     = ^uint64(0)
+					minCheckpointTs       = ^uint64(0)
+					minNextSyncPointTs    = ^uint64(0)
+					prepareBlockingFound  bool
+					commitBlockingFound   bool
+					prepareBlockingDispID common.DispatcherID
+					prepareBlockingSentTs uint64
+					commitBlockingDispID  common.DispatcherID
+					commitBlockingCkptTs  uint64
+				)
+
+				status.dispatchers.Range(func(_, dispatcherValue any) bool {
+					dispatcher := dispatcherValue.(*atomic.Pointer[dispatcherStat]).Load()
+					if dispatcher == nil || dispatcher.isRemoved.Load() {
+						return true
+					}
+
+					totalDispatcherCount++
+					if dispatcher.seq.Load() == 0 {
+						return true
+					}
+
+					activeDispatcherCount++
+					sentResolvedTs := dispatcher.sentResolvedTs.Load()
+					checkpointTs := dispatcher.checkpointTs.Load()
+					nextSyncPointTs := dispatcher.nextSyncPoint.Load()
+					if sentResolvedTs < minSentResolvedTs {
+						minSentResolvedTs = sentResolvedTs
+					}
+					if checkpointTs < minCheckpointTs {
+						minCheckpointTs = checkpointTs
+					}
+					if nextSyncPointTs > 0 && nextSyncPointTs < minNextSyncPointTs {
+						minNextSyncPointTs = nextSyncPointTs
+					}
+
+					if preparingTs > 0 {
+						if sentResolvedTs >= preparingTs {
+							prepareReadyCount++
+						} else {
+							prepareWaitingCount++
+							if !prepareBlockingFound {
+								prepareBlockingFound = true
+								prepareBlockingDispID = dispatcher.id
+								prepareBlockingSentTs = sentResolvedTs
+							}
+						}
+					}
+					if inFlightTs > 0 {
+						if checkpointTs > inFlightTs {
+							commitDoneCount++
+						} else {
+							commitWaitingCount++
+							if !commitBlockingFound {
+								commitBlockingFound = true
+								commitBlockingDispID = dispatcher.id
+								commitBlockingCkptTs = checkpointTs
+							}
+						}
+					}
+					return true
+				})
+
+				if minSentResolvedTs == ^uint64(0) {
+					minSentResolvedTs = 0
+				}
+				if minCheckpointTs == ^uint64(0) {
+					minCheckpointTs = 0
+				}
+				if minNextSyncPointTs == ^uint64(0) {
+					minNextSyncPointTs = 0
+				}
+
+				fields := []zap.Field{
+					zap.Stringer("changefeedID", status.changefeedID),
+					zap.String("stage", stage),
+					zap.Uint64("preparingTs", preparingTs),
+					zap.Bool("commitReady", commitReady),
+					zap.Uint64("inFlightTs", inFlightTs),
+					zap.Int("dispatchersTotal", totalDispatcherCount),
+					zap.Int("dispatchersActive", activeDispatcherCount),
+					zap.Int("prepareReadyCount", prepareReadyCount),
+					zap.Int("prepareWaitingCount", prepareWaitingCount),
+					zap.Int("commitDoneCount", commitDoneCount),
+					zap.Int("commitWaitingCount", commitWaitingCount),
+					zap.Uint64("minSentResolvedTs", minSentResolvedTs),
+					zap.Uint64("minCheckpointTs", minCheckpointTs),
+					zap.Uint64("minNextSyncPointTs", minNextSyncPointTs),
+				}
+				if prepareBlockingFound {
+					fields = append(fields,
+						zap.Stringer("prepareBlockingDispatcher", prepareBlockingDispID),
+						zap.Uint64("prepareBlockingSentResolvedTs", prepareBlockingSentTs),
+					)
+				}
+				if commitBlockingFound {
+					fields = append(fields,
+						zap.Stringer("commitBlockingDispatcher", commitBlockingDispID),
+						zap.Uint64("commitBlockingCheckpointTs", commitBlockingCkptTs),
+					)
+				}
+				log.Info("syncpoint stage snapshot", fields...)
+				return true
+			})
+		}
+	}
 }
 
 func (c *eventBroker) sendDML(remoteID node.ID, batchEvent *event.BatchDMLEvent, d *dispatcherStat) {
@@ -213,7 +363,7 @@ func (c *eventBroker) sendDML(remoteID node.ID, batchEvent *event.BatchDMLEvent,
 			doSendDML(events)
 			// Reset the index to 1 to process the next event after `dml` in next loop
 			idx = 1
-			// Emit sync point event if needed
+			// Emit sync point event if needed.
 			c.emitSyncPointEventIfNeeded(dml.GetCommitTs(), d, remoteID)
 		} else {
 			idx++
@@ -357,7 +507,19 @@ func (c *eventBroker) tickTableTriggerDispatchers(ctx context.Context) error {
 					return true
 				}
 				stat.receivedResolvedTs.Store(endTs)
+				if stat.enableSyncPoint {
+					c.fastForwardSyncPointIfNeeded(stat)
+					nextSyncPoint := stat.nextSyncPoint.Load()
+					if nextSyncPoint > 0 && endTs > nextSyncPoint {
+						stat.changefeedStat.tryStartSyncPointPrepare(nextSyncPoint)
+						endTs = nextSyncPoint
+					}
+				}
+
 				for _, e := range ddlEvents {
+					if e.FinishedTs > endTs {
+						break
+					}
 					ep := &e
 					c.sendDDL(ctx, remoteID, ep, stat)
 				}
@@ -445,14 +607,17 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 		}
 	}
 	// Two-stage syncpoint:
-	// 1. Prepare stage: once any dispatcher detects crossing its next syncpoint, select a
+	// 1. Always cap scan range by next syncpoint, so one scan will not cross multiple
+	//    syncpoint boundaries.
+	// 2. Prepare stage: once any dispatcher detects crossing its next syncpoint, select a
 	//    global preparing ts and cap all dispatchers at that ts.
-	// 2. Commit stage: only after all active dispatchers have sent resolved-ts >= preparing ts.
+	// 3. Commit stage: only after all active dispatchers have sent resolved-ts >= preparing ts.
 	if task.enableSyncPoint {
 		c.fastForwardSyncPointIfNeeded(task)
 		nextSyncPoint := task.nextSyncPoint.Load()
 		if nextSyncPoint > 0 && dataRange.CommitTsEnd > nextSyncPoint {
 			task.changefeedStat.tryStartSyncPointPrepare(nextSyncPoint)
+			dataRange.CommitTsEnd = nextSyncPoint
 		}
 		preparingTs := task.changefeedStat.getSyncPointPreparingTs()
 		if preparingTs > 0 && !task.changefeedStat.isSyncPointCommitReady(preparingTs) {

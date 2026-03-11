@@ -200,6 +200,44 @@ func TestScanRangeCappedByScanWindow(t *testing.T) {
 	require.Equal(t, oracle.GoTimeToTS(baseTime.Add(defaultScanInterval)), dataRange.CommitTsEnd)
 }
 
+func TestScanRangeCappedByNextSyncPoint(t *testing.T) {
+	broker, _, _, _ := newEventBrokerForTest()
+	// Close the broker, so we can catch all message in the test.
+	broker.close()
+
+	info := newMockDispatcherInfoForTest(t)
+	info.epoch = 1
+	info.enableSyncPoint = true
+	info.syncPointInterval = 10 * time.Second
+	info.startTs = oracle.GoTimeToTS(time.Unix(0, 0).Add(5 * time.Second))
+	info.nextSyncPoint = oracle.GoTimeToTS(time.Unix(0, 0).Add(10 * time.Second))
+
+	changefeedStatus := broker.getOrSetChangefeedStatus(info.GetChangefeedID(), info.GetSyncPointInterval())
+	disp := newDispatcherStat(info, 1, 1, nil, changefeedStatus)
+	disp.seq.Store(1)
+
+	dispPtr := &atomic.Pointer[dispatcherStat]{}
+	dispPtr.Store(disp)
+	changefeedStatus.addDispatcher(disp.id, dispPtr)
+
+	// Make scan window wide enough so capping is determined by syncpoint boundary.
+	changefeedStatus.minSentTs.Store(info.startTs)
+	changefeedStatus.scanInterval.Store(int64(time.Hour))
+
+	// Current syncpoint is already in commit stage.
+	changefeedStatus.syncPointPreparingTs.Store(info.nextSyncPoint)
+	changefeedStatus.syncPointCommitReady.Store(true)
+	changefeedStatus.syncPointInFlightTs.Store(info.nextSyncPoint)
+
+	disp.sentResolvedTs.Store(info.startTs)
+	disp.receivedResolvedTs.Store(oracle.GoTimeToTS(time.Unix(0, 0).Add(40 * time.Second)))
+	disp.eventStoreCommitTs.Store(oracle.GoTimeToTS(time.Unix(0, 0).Add(40 * time.Second)))
+
+	needScan, dataRange := broker.getScanTaskDataRange(disp)
+	require.True(t, needScan)
+	require.Equal(t, info.nextSyncPoint, dataRange.CommitTsEnd)
+}
+
 func TestGetScanTaskDataRangeEmptyAfterCappingDoesNotResetScanRange(t *testing.T) {
 	broker, _, _, _ := newEventBrokerForTest()
 	// Close the broker, so we can catch all message in the test.
