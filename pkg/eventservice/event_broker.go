@@ -225,21 +225,22 @@ func (c *eventBroker) logSyncPointStage(ctx context.Context, interval time.Durat
 				}
 
 				var (
-					totalDispatcherCount  int
-					activeDispatcherCount int
-					prepareReadyCount     int
-					prepareWaitingCount   int
-					commitDoneCount       int
-					commitWaitingCount    int
-					minSentResolvedTs     = ^uint64(0)
-					minCheckpointTs       = ^uint64(0)
-					minNextSyncPointTs    = ^uint64(0)
-					prepareBlockingFound  bool
-					commitBlockingFound   bool
-					prepareBlockingDispID common.DispatcherID
-					prepareBlockingSentTs uint64
-					commitBlockingDispID  common.DispatcherID
-					commitBlockingCkptTs  uint64
+					totalDispatcherCount   int
+					activeDispatcherCount  int
+					prepareReadyCount      int
+					prepareWaitingCount    int
+					commitDoneCount        int
+					commitWaitingCount     int
+					commitEmitPendingCount int
+					minSentResolvedTs      = ^uint64(0)
+					minCheckpointTs        = ^uint64(0)
+					minNextSyncPointTs     = ^uint64(0)
+					prepareBlockingFound   bool
+					commitBlockingFound    bool
+					prepareBlockingDispID  common.DispatcherID
+					prepareBlockingSentTs  uint64
+					commitBlockingDispID   common.DispatcherID
+					commitBlockingCkptTs   uint64
 				)
 
 				status.dispatchers.Range(func(_, dispatcherValue any) bool {
@@ -280,6 +281,9 @@ func (c *eventBroker) logSyncPointStage(ctx context.Context, interval time.Durat
 						}
 					}
 					if inFlightTs > 0 {
+						if nextSyncPointTs == inFlightTs && sentResolvedTs >= inFlightTs {
+							commitEmitPendingCount++
+						}
 						if checkpointTs > inFlightTs {
 							commitDoneCount++
 						} else {
@@ -316,6 +320,7 @@ func (c *eventBroker) logSyncPointStage(ctx context.Context, interval time.Durat
 					zap.Int("prepareWaitingCount", prepareWaitingCount),
 					zap.Int("commitDoneCount", commitDoneCount),
 					zap.Int("commitWaitingCount", commitWaitingCount),
+					zap.Int("commitEmitPendingCount", commitEmitPendingCount),
 					zap.Uint64("minSentResolvedTs", minSentResolvedTs),
 					zap.Uint64("minCheckpointTs", minCheckpointTs),
 					zap.Uint64("minNextSyncPointTs", minNextSyncPointTs),
@@ -422,10 +427,53 @@ func (c *eventBroker) refreshMinSentResolvedTs(ctx context.Context) error {
 				status.refreshMinSentResolvedTs()
 				status.tryPromoteSyncPointPrepare()
 				status.tryAdvanceSyncPointInFlight()
+				c.nudgeSyncPointCommitDispatchers(status)
 				return true
 			})
 		}
 	}
+}
+
+func (c *eventBroker) nudgeSyncPointCommitDispatchers(status *changefeedStatus) {
+	inFlightTs := status.syncPointInFlightTs.Load()
+	if inFlightTs == 0 {
+		return
+	}
+
+	c.dispatchers.Range(func(_, value interface{}) bool {
+		dispatcher := value.(*atomic.Pointer[dispatcherStat]).Load()
+		if dispatcher == nil || dispatcher.changefeedStat != status {
+			return true
+		}
+		if !c.shouldNudgeSyncPointCommit(dispatcher) {
+			return true
+		}
+		c.pushTask(dispatcher, false)
+		return true
+	})
+}
+
+func (c *eventBroker) shouldNudgeSyncPointCommit(d *dispatcherStat) bool {
+	if d == nil || d.isRemoved.Load() || !d.enableSyncPoint || d.seq.Load() == 0 {
+		return false
+	}
+
+	commitTs := d.nextSyncPoint.Load()
+	if commitTs == 0 || d.sentResolvedTs.Load() < commitTs {
+		return false
+	}
+
+	return d.changefeedStat.isSyncPointCommitReady(commitTs)
+}
+
+func (c *eventBroker) nudgeSyncPointCommitIfNeeded(d *dispatcherStat) bool {
+	if !c.shouldNudgeSyncPointCommit(d) {
+		return false
+	}
+	// Resend resolved-ts at current watermark to trigger syncpoint emission in commit stage,
+	// even when there is no fresh upstream event to drive a new scan.
+	c.sendResolvedTs(d, d.sentResolvedTs.Load())
+	return true
 }
 
 func (c *eventBroker) sendSignalResolvedTs(d *dispatcherStat) {
@@ -526,6 +574,8 @@ func (c *eventBroker) tickTableTriggerDispatchers(ctx context.Context) error {
 				if endTs > startTs {
 					// After all the events are sent, we send the watermark to the dispatcher.
 					c.sendResolvedTs(stat, endTs)
+				} else {
+					c.nudgeSyncPointCommitIfNeeded(stat)
 				}
 				return true
 			})
@@ -574,6 +624,7 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 	// 1. Get the data range of the dispatcher.
 	dataRange, needScan := task.getDataRange()
 	if !needScan {
+		c.nudgeSyncPointCommitIfNeeded(task)
 		updateMetricEventServiceSkipResolvedTsCount(task.info.GetMode())
 		return false, common.DataRange{}
 	}
@@ -627,6 +678,9 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 
 	if dataRange.CommitTsEnd <= dataRange.CommitTsStart {
 		updateMetricEventServiceSkipResolvedTsCount(task.info.GetMode())
+		if c.nudgeSyncPointCommitIfNeeded(task) {
+			return false, common.DataRange{}
+		}
 		// Scan range can become empty after applying capping (for example, scan window).
 		// Send a signal resolved-ts event (rate limited) to keep downstream responsive,
 		// but do not advance the watermark here.
