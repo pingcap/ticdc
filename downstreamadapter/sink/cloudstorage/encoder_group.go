@@ -140,8 +140,13 @@ func (eg *encoderGroup) add(ctx context.Context, task *task) error {
 	return nil
 }
 
-func (eg *encoderGroup) Outputs() []chan *future {
-	return eg.outputCh
+// Outputs returns read only channels to prevent misusage.
+func (eg *encoderGroup) Outputs() []<-chan *future {
+	outputs := make([]<-chan *future, 0, len(eg.outputCh))
+	for _, ch := range eg.outputCh {
+		outputs = append(outputs, ch)
+	}
+	return outputs
 }
 
 type future struct {

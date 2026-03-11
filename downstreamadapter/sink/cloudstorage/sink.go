@@ -28,7 +28,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
-	putil "github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/robfig/cron"
@@ -74,7 +74,7 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.
 	if err != nil {
 		return err
 	}
-	protocol, err := helper.GetProtocol(putil.GetOrZero(sinkConfig.Protocol))
+	protocol, err := helper.GetProtocol(util.GetOrZero(sinkConfig.Protocol))
 	if err != nil {
 		return err
 	}
@@ -82,7 +82,7 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.
 	if err != nil {
 		return err
 	}
-	storage, err := putil.GetExternalStorageWithDefaultTimeout(ctx, sinkURI.String())
+	storage, err := util.GetExternalStorageWithDefaultTimeout(ctx, sinkURI.String())
 	if err != nil {
 		return err
 	}
@@ -101,9 +101,7 @@ func New(
 		return nil, err
 	}
 	// fetch protocol from replicaConfig defined by changefeed config file.
-	protocol, err := helper.GetProtocol(
-		putil.GetOrZero(sinkConfig.Protocol),
-	)
+	protocol, err := helper.GetProtocol(util.GetOrZero(sinkConfig.Protocol))
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
@@ -115,7 +113,7 @@ func New(
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
-	storage, err := putil.GetExternalStorageWithDefaultTimeout(ctx, sinkURI.String())
+	storage, err := util.GetExternalStorageWithDefaultTimeout(ctx, sinkURI.String())
 	if err != nil {
 		return nil, err
 	}

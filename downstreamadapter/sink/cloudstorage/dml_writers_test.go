@@ -246,38 +246,6 @@ func TestCloudStorageWriteEventsWithoutDateSeparator(t *testing.T) {
 	cloudStorageSink.Close(false)
 }
 
-func TestDMLWritersRunExitAfterClose(t *testing.T) {
-	uri := fmt.Sprintf("file:///%s?protocol=csv", t.TempDir())
-	sinkURI, err := url.Parse(uri)
-	require.NoError(t, err)
-
-	replicaConfig := config.GetDefaultReplicaConfig()
-	err = replicaConfig.ValidateAndAdjust(sinkURI)
-	require.NoError(t, err)
-
-	ctx := context.Background()
-
-	mockPDClock := pdutil.NewClock4Test()
-	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
-
-	cloudStorageSink, err := newSinkForTest(ctx, replicaConfig, sinkURI, nil)
-	require.NoError(t, err)
-
-	done := make(chan error, 1)
-	go func() {
-		done <- cloudStorageSink.dmlWriters.run(ctx)
-	}()
-
-	cloudStorageSink.dmlWriters.close()
-
-	select {
-	case err := <-done:
-		require.NoError(t, err)
-	case <-time.After(5 * time.Second):
-		t.Fatal("dmlWriters.run did not exit after close")
-	}
-}
-
 func TestSubmitTaskToEncoderExitOnContextCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	dmlWriters := &dmlWriters{

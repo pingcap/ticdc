@@ -79,11 +79,11 @@ func (d *dmlWriters) run(ctx context.Context) error {
 	g, ctx := errgroup.WithContext(ctx)
 
 	g.Go(func() error {
-		return d.addTasks(ctx)
+		return d.encodeGroup.run(ctx)
 	})
 
 	g.Go(func() error {
-		return d.encodeGroup.run(ctx)
+		return d.addTasks(ctx)
 	})
 
 	outputs := d.encodeGroup.Outputs()
