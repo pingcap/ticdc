@@ -123,7 +123,8 @@ func (d *writer) flushMessages(ctx context.Context) error {
 			}
 			if task.marker != nil {
 				// Flush marker ack point:
-				// marker is emitted only after pending batch is flushed in genAndDispatchTask.
+				// marker is emitted only after the pending batch of the same dispatcher
+				// is emitted in genAndDispatchTask.
 				task.marker.finish()
 				continue
 			}
@@ -334,7 +335,7 @@ func (d *writer) genAndDispatchTask(ctx context.Context) error {
 			}
 
 			if task.isFlushTask() {
-				dispatcherBatch := batchedTask.generateTaskByDispatcher(task.dispatcherID)
+				dispatcherBatch := batchedTask.detachTaskByDispatcher(task.dispatcherID)
 				if len(dispatcherBatch.batch) > 0 {
 					select {
 					case <-ctx.Done():
@@ -354,7 +355,7 @@ func (d *writer) genAndDispatchTask(ctx context.Context) error {
 			batchedTask.handleSingleTableEvent(task)
 			table := task.versionedTable
 			if batchedTask.batch[table].size >= uint64(d.config.FileSize) {
-				taskByTable := batchedTask.generateTaskByTable(table)
+				taskByTable := batchedTask.detachTaskByTable(table)
 				select {
 				case <-ctx.Done():
 					return errors.Trace(context.Cause(ctx))
@@ -409,7 +410,7 @@ func (t *batchedTask) handleSingleTableEvent(event *task) {
 	tableTask.msgs = append(tableTask.msgs, event.encodedMsgs...)
 }
 
-func (t *batchedTask) generateTaskByTable(table cloudstorage.VersionedTableName) batchedTask {
+func (t *batchedTask) detachTaskByTable(table cloudstorage.VersionedTableName) batchedTask {
 	tableTask := t.batch[table]
 	if tableTask == nil {
 		log.Panic("table not found in dml task", zap.Any("table", table), zap.Any("task", t))
@@ -421,7 +422,7 @@ func (t *batchedTask) generateTaskByTable(table cloudstorage.VersionedTableName)
 	}
 }
 
-func (t *batchedTask) generateTaskByDispatcher(dispatcherID commonType.DispatcherID) batchedTask {
+func (t *batchedTask) detachTaskByDispatcher(dispatcherID commonType.DispatcherID) batchedTask {
 	batchByDispatcher := newBatchedTask()
 	for table, tableTask := range t.batch {
 		if table.DispatcherID != dispatcherID {

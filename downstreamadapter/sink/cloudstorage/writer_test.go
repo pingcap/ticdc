@@ -249,7 +249,7 @@ func TestWriterFlushMarkerOnlyFlushesTargetDispatcher(t *testing.T) {
 		},
 		&commonEvent.DMLEvent{
 			PhysicalTableID: 101,
-			TableInfo:       commonType.WrapTableInfo("test", &timodel.TableInfo{
+			TableInfo: commonType.WrapTableInfo("test", &timodel.TableInfo{
 				ID:   101,
 				Name: ast.NewCIStr("table2"),
 				Columns: []*timodel.ColumnInfo{
