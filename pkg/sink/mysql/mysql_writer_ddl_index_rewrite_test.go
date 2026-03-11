@@ -26,6 +26,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func disableDistTaskForTest(helper *commonEvent.EventTestHelper) {
+	helper.Tk().MustExec("set @@global.tidb_enable_dist_task = off")
+}
+
 func getIndexIDsFromJob(t *testing.T, job *timodel.Job) []int64 {
 	idxArgs, err := timodel.GetModifyIndexArgs(job)
 	if idxArgs != nil && err == nil {
@@ -156,6 +160,7 @@ func TestExecDDL_RestoreAnonymousIndexToNamedIndex(t *testing.T) {
 
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
+	disableDistTaskForTest(helper)
 
 	helper.Tk().MustExec("use test")
 	helper.DDL2Event("create table t (id int primary key, name varchar(32), index name(id))")
@@ -200,6 +205,7 @@ func TestExecDDL_RestoreAnonymousIndexToNamedIndex(t *testing.T) {
 func TestRestoreAnonymousIndexToNamedIndexMultipleAnonymousIndexes(t *testing.T) {
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
+	disableDistTaskForTest(helper)
 
 	helper.Tk().MustExec("use test")
 	helper.DDL2Event("create table t (id int primary key, name varchar(32), age int)")
@@ -227,6 +233,7 @@ func TestRestoreAnonymousIndexToNamedIndexMultipleAnonymousIndexes(t *testing.T)
 func TestRestoreAnonymousIndexToNamedIndexWithNamedAndAnonymousIndexes(t *testing.T) {
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
+	disableDistTaskForTest(helper)
 
 	helper.Tk().MustExec("use test")
 	helper.DDL2Event("create table t (id int primary key, name varchar(32), age int)")
@@ -268,6 +275,7 @@ func TestExecDDL_RestoreAnonymousIndexToNamedIndexForMultiSchemaChange(t *testin
 
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
+	disableDistTaskForTest(helper)
 
 	helper.Tk().MustExec("use test")
 	helper.DDL2Event("create table t (id int primary key, name varchar(32))")
@@ -311,6 +319,7 @@ func TestExecDDL_RestoreAnonymousIndexToNamedIndexForMultiSchemaChange(t *testin
 func TestRestoreAnonymousIndexToNamedIndexDDLWaitCases(t *testing.T) {
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
+	disableDistTaskForTest(helper)
 
 	helper.Tk().MustExec("use test")
 	helper.DDL2Event("create table t_anon_idx (id int primary key, a int, b int, c int)")
@@ -404,6 +413,7 @@ func TestRestoreAnonymousIndexToNamedIndexDDLWaitCases(t *testing.T) {
 func TestCreateTableLikeKeepsAnonymousIndexNamesAfterDDLWaitCases(t *testing.T) {
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
+	disableDistTaskForTest(helper)
 
 	helper.Tk().MustExec("use test")
 	helper.DDL2Event("create table t_anon_idx (id int primary key, a int, b int, c int)")
