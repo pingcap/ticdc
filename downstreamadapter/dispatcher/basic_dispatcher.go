@@ -333,55 +333,26 @@ func (d *BasicDispatcher) InitializeTableSchemaStore(schemaInfo []*heartbeatpb.S
 	return true, nil
 }
 
-// AddBlockEventToSink writes the block event to the sink.
 func (d *BasicDispatcher) AddBlockEventToSink(event commonEvent.BlockEvent) error {
 	// For ddl event, we need to check whether it should be sent to downstream.
 	// It may be marked as not sync by filter when building the event.
 	if event.GetType() == commonEvent.TypeDDLEvent {
 		ddl := event.(*commonEvent.DDLEvent)
 		// If NotSync is true, it means the DDL should not be sent to downstream.
-		// So we just call PassBlockEventToSink to finish local bookkeeping:
-		// mark it passed in tableProgress and trigger flush callbacks to unblock
-		// dispatcher progress, without sending this DDL to sink.
+		// So we just call PassBlockEventToSink to update the table progress and call the postFlush func.
 		if ddl.NotSync {
 			log.Info("ignore DDL by NotSync", zap.Stringer("dispatcher", d.id), zap.Any("ddl", ddl))
-			return d.PassBlockEventToSink(event)
+			d.PassBlockEventToSink(event)
+			return nil
 		}
 	}
-	if d.shouldFlushBlockEvent(event) {
-		// Keep block-event write order with prior DML.
-		// For storage sink this wait all previous enqueued DML events flushed.
-		// For non-storage sinks it is usually a no-op.
-		if err := d.sink.FlushDMLBeforeBlock(event); err != nil {
-			return err
-		}
-	}
-
 	d.tableProgress.Add(event)
 	return d.sink.WriteBlockEvent(event)
 }
 
-// PassBlockEventToSink handles the local pass path for a block event.
-func (d *BasicDispatcher) PassBlockEventToSink(event commonEvent.BlockEvent) error {
-	if d.shouldFlushBlockEvent(event) {
-		if err := d.sink.FlushDMLBeforeBlock(event); err != nil {
-			return err
-		}
-	}
+func (d *BasicDispatcher) PassBlockEventToSink(event commonEvent.BlockEvent) {
 	d.tableProgress.Pass(event)
 	event.PostFlush()
-	return nil
-}
-
-// shouldFlushBlockEvent returns false only when executing the already-pending block event
-// after maintainer has accepted it and moved the local stage to WRITING. That path already
-// drained prior DML before reporting WAITING, so Write/Pass must not flush again.
-func (d *BasicDispatcher) shouldFlushBlockEvent(event commonEvent.BlockEvent) bool {
-	pendingEvent, blockStage := d.blockEventStatus.getEventAndStage()
-	if pendingEvent == nil {
-		return true
-	}
-	return pendingEvent != event || blockStage != heartbeatpb.BlockStage_WRITING
 }
 
 // ensureActiveActiveTableInfo validates the table schema requirements for active-active mode.
@@ -968,6 +939,16 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 				// If this is a table trigger dispatcher, and the DDL leads to add/drop tables,
 				// we track it as a pending schedule-related event until the maintainer ACKs it.
 				d.pendingACKCount.Add(1)
+			}
+			// Keep block-event write/pass order with prior DML.
+			// For storage sink this waits all previous enqueued DML events flushed.
+			// For non-storage sinks it is usually a no-op.
+			if err := d.sink.FlushDMLBeforeBlock(event); err != nil {
+				if needsScheduleACKTracking {
+					d.pendingACKCount.Add(-1)
+				}
+				d.HandleError(err)
+				return
 			}
 			err := d.AddBlockEventToSink(event)
 			if err != nil {
