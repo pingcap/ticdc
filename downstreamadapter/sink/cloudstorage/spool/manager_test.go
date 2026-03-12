@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	commonType "github.com/pingcap/ticdc/pkg/common"
+	cerror "github.com/pingcap/ticdc/pkg/errors"
 	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/stretchr/testify/require"
 )
@@ -97,4 +98,29 @@ func TestSpillAndReadBack(t *testing.T) {
 	require.Equal(t, 3, msgs[0].GetRowsCount())
 
 	manager.Release(entry)
+}
+
+func TestNewInvalidConfigError(t *testing.T) {
+	t.Parallel()
+
+	changefeedID := commonType.NewChangefeedID4Test("test", "spool")
+	manager, err := New(changefeedID, 0, &Options{RootDir: t.TempDir()})
+	require.Nil(t, manager)
+	require.Error(t, err)
+	require.True(t, cerror.ErrStorageSinkInvalidConfig.Equal(err))
+}
+
+func TestEnqueueOnClosedManager(t *testing.T) {
+	t.Parallel()
+
+	changefeedID := commonType.NewChangefeedID4Test("test", "spool")
+	manager, err := New(changefeedID, 1024, &Options{RootDir: t.TempDir()})
+	require.NoError(t, err)
+
+	manager.Close()
+
+	entry, err := manager.Enqueue([]*codeccommon.Message{newTestMessage("v", 1)}, nil)
+	require.Nil(t, entry)
+	require.Error(t, err)
+	require.True(t, cerror.ErrInternalCheckFailed.Equal(err))
 }

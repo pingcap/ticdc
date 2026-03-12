@@ -440,6 +440,7 @@ func (f *FilePathGenerator) generateDataFileName(
 	state.lastAccess = now
 	return generateDataFileName(f.config.EnableTableAcrossNodes, tbl.DispatcherID.String(), state.fileIndex.index, f.extension, f.config.FileIndexWidth), nil
 }
+
 func (f *FilePathGenerator) getFileIdxFromIndexFile(
 	ctx context.Context, tbl VersionedTableName, date string,
 ) (uint64, error) {

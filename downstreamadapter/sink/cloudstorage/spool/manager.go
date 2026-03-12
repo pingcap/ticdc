@@ -135,23 +135,38 @@ func New(
 ) (*Manager, error) {
 	options := withDefaultOptions(opts)
 	if quotaBytes <= 0 {
-		return nil, errors.Errorf("invalid spool quota %d", quotaBytes)
+		return nil, errors.ErrStorageSinkInvalidConfig.GenWithStack(
+			"spool disk quota must be greater than 0, but got %d",
+			quotaBytes,
+		)
 	}
 	if options.SegmentBytes <= 0 {
-		return nil, errors.Errorf("invalid spool segment size %d", options.SegmentBytes)
+		return nil, errors.ErrStorageSinkInvalidConfig.GenWithStack(
+			"spool segment size must be greater than 0, but got %d",
+			options.SegmentBytes,
+		)
 	}
 	if options.MemoryRatio <= 0 || options.MemoryRatio >= 1 {
-		return nil, errors.Errorf("invalid spool memory ratio %f", options.MemoryRatio)
+		return nil, errors.ErrStorageSinkInvalidConfig.GenWithStack(
+			"spool memory ratio must be in (0, 1), but got %f",
+			options.MemoryRatio,
+		)
 	}
 	if options.LowWatermarkRatio <= 0 || options.LowWatermarkRatio >= 1 {
-		return nil, errors.Errorf("invalid spool low watermark ratio %f", options.LowWatermarkRatio)
+		return nil, errors.ErrStorageSinkInvalidConfig.GenWithStack(
+			"spool low watermark ratio must be in (0, 1), but got %f",
+			options.LowWatermarkRatio,
+		)
 	}
 	if options.HighWatermarkRatio <= 0 || options.HighWatermarkRatio >= 1 {
-		return nil, errors.Errorf("invalid spool high watermark ratio %f", options.HighWatermarkRatio)
+		return nil, errors.ErrStorageSinkInvalidConfig.GenWithStack(
+			"spool high watermark ratio must be in (0, 1), but got %f",
+			options.HighWatermarkRatio,
+		)
 	}
 	if options.LowWatermarkRatio >= options.HighWatermarkRatio {
-		return nil, errors.Errorf(
-			"invalid spool watermark ratio, low: %f high: %f",
+		return nil, errors.ErrStorageSinkInvalidConfig.GenWithStack(
+			"spool low watermark ratio must be less than high watermark ratio, low: %f high: %f",
 			options.LowWatermarkRatio,
 			options.HighWatermarkRatio,
 		)
@@ -172,10 +187,10 @@ func New(
 	}
 
 	if err := os.RemoveAll(rootDir); err != nil {
-		return nil, errors.Trace(err)
+		return nil, errors.WrapError(errors.ErrCheckDirValid, err)
 	}
 	if err := os.MkdirAll(rootDir, 0o755); err != nil {
-		return nil, errors.Trace(err)
+		return nil, errors.WrapError(errors.ErrCheckDirValid, err)
 	}
 
 	changefeedLabel := changefeedID.ID().String()
@@ -270,14 +285,14 @@ func (s *Manager) Enqueue(
 	}()
 
 	if s.closed {
-		return nil, errors.New("spool is closed")
+		return nil, errors.ErrInternalCheckFailed.GenWithStackByArgs("spool manager is closed")
 	}
 
 	shouldSpill := s.memoryBytes+entry.accountingBytes > s.memoryQuotaBytes
 	if shouldSpill {
 		blob, err := serializeMessages(msgs)
 		if err != nil {
-			return nil, errors.Trace(err)
+			return nil, err
 		}
 		pointerValue, err := s.appendBlobLocked(blob)
 		if err != nil {
@@ -285,7 +300,8 @@ func (s *Manager) Enqueue(
 		}
 		entry.pointer = pointerValue
 		s.diskBytes += entry.accountingBytes
-	} else {
+	}
+	if !shouldSpill {
 		entry.memoryMsgs = msgs
 		s.memoryBytes += entry.accountingBytes
 	}
@@ -299,7 +315,8 @@ func (s *Manager) Enqueue(
 			s.pendingWake = append(s.pendingWake, onEnqueued)
 			needSuppressedMetric = true
 		}
-	} else if onEnqueued != nil {
+	}
+	if !s.wakeSuppressed && onEnqueued != nil {
 		callbacksToRun = append(callbacksToRun, onEnqueued)
 	}
 	s.updateMetricsLocked()
@@ -323,7 +340,10 @@ func (s *Manager) Load(entry *Entry) ([]*codeccommon.Message, []func(), error) {
 	spoolSegment := s.segments[entry.pointer.segmentID]
 	if spoolSegment == nil {
 		s.mu.Unlock()
-		return nil, nil, errors.Errorf("spool segment %d not found", entry.pointer.segmentID)
+		return nil, nil, errors.ErrInternalCheckFailed.GenWithStack(
+			"spool segment %d not found",
+			entry.pointer.segmentID,
+		)
 	}
 	file := spoolSegment.file
 	offset := entry.pointer.offset
@@ -332,11 +352,11 @@ func (s *Manager) Load(entry *Entry) ([]*codeccommon.Message, []func(), error) {
 
 	buf := make([]byte, length)
 	if _, err := file.ReadAt(buf, offset); err != nil {
-		return nil, nil, errors.Trace(err)
+		return nil, nil, errors.WrapError(errors.ErrUnexpected, err, "read spool segment file")
 	}
 	msgs, err := deserializeMessages(buf)
 	if err != nil {
-		return nil, nil, errors.Trace(err)
+		return nil, nil, err
 	}
 	return msgs, entry.callbacks, nil
 }
@@ -354,6 +374,9 @@ func (s *Manager) Release(entry *Entry) {
 		return
 	}
 
+	if entry.pointer == nil {
+		s.memoryBytes -= entry.accountingBytes
+	}
 	if entry.pointer != nil {
 		spoolSegment := s.segments[entry.pointer.segmentID]
 		if spoolSegment != nil {
@@ -373,8 +396,6 @@ func (s *Manager) Release(entry *Entry) {
 			}
 		}
 		s.diskBytes -= entry.accountingBytes
-	} else {
-		s.memoryBytes -= entry.accountingBytes
 	}
 	if s.memoryBytes < 0 {
 		s.memoryBytes = 0
@@ -442,10 +463,14 @@ func (s *Manager) appendBlobLocked(blob []byte) (*pointer, error) {
 	offset := spoolSegment.size
 	n, err := spoolSegment.file.Write(blob)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, errors.WrapError(errors.ErrUnexpected, err, "write spool segment file")
 	}
 	if n != len(blob) {
-		return nil, errors.Errorf("short write to spool segment, expected %d got %d", len(blob), n)
+		return nil, errors.ErrUnexpected.GenWithStack(
+			"short write to spool segment, expected %d got %d",
+			len(blob),
+			n,
+		)
 	}
 	spoolSegment.size += int64(n)
 	spoolSegment.written += int64(n)
@@ -473,7 +498,7 @@ func (s *Manager) rotateLocked() error {
 	path := filepath.Join(s.rootDir, fmt.Sprintf("segment-%06d.log", segmentID))
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o644)
 	if err != nil {
-		return errors.Trace(err)
+		return errors.WrapError(errors.ErrUnexpected, err, "open spool segment file")
 	}
 	spoolSegment := &segment{
 		id:   segmentID,
