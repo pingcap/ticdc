@@ -3434,7 +3434,7 @@ func TestBuildPersistedDDLEventEscapesIdentifiers(t *testing.T) {
 
 	t.Run("exchange partition", func(t *testing.T) {
 		job := buildExchangePartitionJobForTest(100, 200, 300, "pt`x", []int64{301}, 1000)
-		job.Query = "ALTER TABLE `ignored`.`ignored` EXCHANGE PARTITION `p0` WITH TABLE `ignored2`.`ignored2` WITHOUT VALIDATION"
+		job.Query = "ALTER TABLE `ignored`.`ignored` EXCHANGE PARTITION `p``0` WITH TABLE `ignored2`.`ignored2` WITHOUT VALIDATION"
 
 		ddl := buildPersistedDDLEventForExchangePartition(buildPersistedDDLEventFuncArgs{
 			job: job,
@@ -3454,7 +3454,7 @@ func TestBuildPersistedDDLEventEscapesIdentifiers(t *testing.T) {
 		})
 
 		assert.Equal(t,
-			"ALTER TABLE `part``db`.`pt``x` EXCHANGE PARTITION `p0` WITH TABLE `normal``db`.`normal``t` WITHOUT VALIDATION",
+			"ALTER TABLE `part``db`.`pt``x` EXCHANGE PARTITION `p``0` WITH TABLE `normal``db`.`normal``t` WITHOUT VALIDATION",
 			ddl.Query)
 	})
 }
