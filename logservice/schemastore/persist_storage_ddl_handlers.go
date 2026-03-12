@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -2985,7 +2986,7 @@ func rebuildCreateTablesQueries(query string, tableInfos []*model.TableInfo, sto
 			return nil, cerror.WrapError(cerror.ErrTiDBUnexpectedJobMeta, err)
 		}
 
-		query := queryBuilder.String()
+		query := strings.TrimRightFunc(queryBuilder.String(), unicode.IsSpace)
 		if !strings.HasSuffix(query, ";") {
 			query += ";"
 		}
