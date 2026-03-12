@@ -785,11 +785,19 @@ func (h *MergeDispatcherRequestHandler) Handle(dispatcherManager *DispatcherMana
 	}
 
 	mergeDispatcherRequest := reqs[0]
+	dispatcherManager.TrackMergeOperator(mergeDispatcherRequest.MergeDispatcherRequest)
 	dispatcherIDs := make([]common.DispatcherID, 0, len(mergeDispatcherRequest.DispatcherIDs))
 	for _, id := range mergeDispatcherRequest.DispatcherIDs {
 		dispatcherIDs = append(dispatcherIDs, common.NewDispatcherIDFromPB(id))
 	}
-	dispatcherManager.MergeDispatcher(dispatcherIDs, common.NewDispatcherIDFromPB(mergeDispatcherRequest.MergedDispatcherID), mergeDispatcherRequest.Mode)
+	task := dispatcherManager.MergeDispatcher(
+		dispatcherIDs,
+		common.NewDispatcherIDFromPB(mergeDispatcherRequest.MergedDispatcherID),
+		mergeDispatcherRequest.Mode,
+	)
+	if task == nil {
+		dispatcherManager.MaybeCleanupMergeOperator(mergeDispatcherRequest.MergeDispatcherRequest)
+	}
 	return false
 }
 

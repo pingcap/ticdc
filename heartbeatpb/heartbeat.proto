@@ -205,6 +205,8 @@ message MaintainerBootstrapResponse {
     // It will be used when redo enable.
     uint64 redo_checkpoint_ts = 5;
     repeated ScheduleDispatcherRequest operators = 6;
+    // merge_operators contains in-flight merge dispatcher requests for bootstrap recovery.
+    repeated MergeDispatcherRequest merge_operators = 7;
 }
 
 message MaintainerPostBootstrapRequest {
@@ -366,7 +368,7 @@ enum ChecksumState {
 
 message ChecksumMeta {
     ChecksumState state = 1;
-    // checksumStateSeq is a monotonic version for checksumState, 
+    // checksumStateSeq is a monotonic version for checksumState,
     // used to discard out-of-order meta info.
     uint64 checksumStateSeq = 2;
 }
