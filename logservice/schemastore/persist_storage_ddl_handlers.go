@@ -2692,8 +2692,8 @@ func buildDDLEventForRenameTables(rawEvent *PersistedDDLEvent, tableFilter filte
 			continue
 		}
 		allFiltered = false
-		if isPartitionTable(rawEvent.TableInfo) {
-			allPhysicalIDs := getAllPartitionIDs(rawEvent.TableInfo)
+		if isPartitionTable(tableInfo) {
+			allPhysicalIDs := getAllPartitionIDs(tableInfo)
 			if !ignorePrevTable {
 				if !notSyncPrevTable {
 					// only when the previous table is not filtered and not NotSync, we add the query and table info

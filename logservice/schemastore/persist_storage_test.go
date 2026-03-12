@@ -3459,6 +3459,122 @@ func TestBuildPersistedDDLEventEscapesIdentifiers(t *testing.T) {
 	})
 }
 
+func TestBuildDDLEventForRenameTablesForPartitionTable(t *testing.T) {
+	normalInfo := newEligibleTableInfoForTest(200, "normal_new")
+	partitionInfo := newEligiblePartitionTableInfoForTest(300, "partition_new", []model.PartitionDefinition{
+		{ID: 301},
+		{ID: 302},
+	})
+	partitionInfo2 := newEligiblePartitionTableInfoForTest(400, "partition_new_2", []model.PartitionDefinition{
+		{ID: 401},
+		{ID: 402},
+	})
+
+	t.Run("normal table then partition table", func(t *testing.T) {
+		rawEvent := &PersistedDDLEvent{
+			Type:       byte(model.ActionRenameTables),
+			SchemaID:   110,
+			SchemaName: "target_normal",
+			TableName:  normalInfo.Name.O,
+			TableInfo:  normalInfo,
+			Query: "RENAME TABLE `source_normal`.`normal_old` TO `target_normal`.`normal_new`;" +
+				"RENAME TABLE `source_partition`.`partition_old` TO `target_partition`.`partition_new`;",
+			FinishedTs:       1010,
+			SchemaIDs:        []int64{100, 111},
+			SchemaNames:      []string{"target_normal", "target_partition"},
+			ExtraSchemaIDs:   []int64{100, 101},
+			ExtraSchemaNames: []string{"source_normal", "source_partition"},
+			ExtraTableNames:  []string{"normal_old", "partition_old"},
+			MultipleTableInfos: []*model.TableInfo{
+				normalInfo,
+				partitionInfo,
+			},
+		}
+
+		ddlEvent, ok, err := buildDDLEventForRenameTables(rawEvent, nil, 301)
+		require.NoError(t, err)
+		require.True(t, ok)
+		require.Equal(t, []int64{common.DDLSpanTableID, 200, 301, 302}, ddlEvent.BlockedTables.TableIDs)
+		require.Equal(t, []commonEvent.SchemaIDChange{
+			{TableID: 301, OldSchemaID: 101, NewSchemaID: 111},
+			{TableID: 302, OldSchemaID: 101, NewSchemaID: 111},
+		}, ddlEvent.UpdatedSchemas)
+		require.NotNil(t, ddlEvent.TableInfo)
+		require.Equal(t, int64(300), ddlEvent.GetTableID())
+		require.Equal(t, "target_partition", ddlEvent.TableInfo.GetSchemaName())
+		require.Equal(t, "partition_new", ddlEvent.TableInfo.GetTableName())
+	})
+
+	t.Run("partition table then normal table", func(t *testing.T) {
+		rawEvent := &PersistedDDLEvent{
+			Type:       byte(model.ActionRenameTables),
+			SchemaID:   111,
+			SchemaName: "target_partition",
+			TableName:  partitionInfo.Name.O,
+			TableInfo:  partitionInfo,
+			Query: "RENAME TABLE `source_partition`.`partition_old` TO `target_partition`.`partition_new`;" +
+				"RENAME TABLE `source_normal`.`normal_old` TO `target_normal`.`normal_new`;",
+			FinishedTs:       1010,
+			SchemaIDs:        []int64{111, 110},
+			SchemaNames:      []string{"target_partition", "target_normal"},
+			ExtraSchemaIDs:   []int64{111, 100},
+			ExtraSchemaNames: []string{"source_partition", "source_normal"},
+			ExtraTableNames:  []string{"partition_old", "normal_old"},
+			MultipleTableInfos: []*model.TableInfo{
+				partitionInfo,
+				normalInfo,
+			},
+		}
+
+		ddlEvent, ok, err := buildDDLEventForRenameTables(rawEvent, nil, 200)
+		require.NoError(t, err)
+		require.True(t, ok)
+		require.Equal(t, []int64{common.DDLSpanTableID, 301, 302, 200}, ddlEvent.BlockedTables.TableIDs)
+		require.Equal(t, []commonEvent.SchemaIDChange{
+			{TableID: 200, OldSchemaID: 100, NewSchemaID: 110},
+		}, ddlEvent.UpdatedSchemas)
+		require.NotNil(t, ddlEvent.TableInfo)
+		require.Equal(t, int64(200), ddlEvent.GetTableID())
+		require.Equal(t, "target_normal", ddlEvent.TableInfo.GetSchemaName())
+		require.Equal(t, "normal_new", ddlEvent.TableInfo.GetTableName())
+	})
+
+	t.Run("multiple partition tables", func(t *testing.T) {
+		rawEvent := &PersistedDDLEvent{
+			Type:       byte(model.ActionRenameTables),
+			SchemaID:   111,
+			SchemaName: "target_partition",
+			TableName:  partitionInfo.Name.O,
+			TableInfo:  partitionInfo,
+			Query: "RENAME TABLE `source_partition`.`partition_old` TO `target_partition`.`partition_new`;" +
+				"RENAME TABLE `source_partition_2`.`partition_old_2` TO `target_partition_2`.`partition_new_2`;",
+			FinishedTs:       1010,
+			SchemaIDs:        []int64{111, 121},
+			SchemaNames:      []string{"target_partition", "target_partition_2"},
+			ExtraSchemaIDs:   []int64{111, 120},
+			ExtraSchemaNames: []string{"source_partition", "source_partition_2"},
+			ExtraTableNames:  []string{"partition_old", "partition_old_2"},
+			MultipleTableInfos: []*model.TableInfo{
+				partitionInfo,
+				partitionInfo2,
+			},
+		}
+
+		ddlEvent, ok, err := buildDDLEventForRenameTables(rawEvent, nil, 402)
+		require.NoError(t, err)
+		require.True(t, ok)
+		require.Equal(t, []int64{common.DDLSpanTableID, 301, 302, 401, 402}, ddlEvent.BlockedTables.TableIDs)
+		require.Equal(t, []commonEvent.SchemaIDChange{
+			{TableID: 401, OldSchemaID: 120, NewSchemaID: 121},
+			{TableID: 402, OldSchemaID: 120, NewSchemaID: 121},
+		}, ddlEvent.UpdatedSchemas)
+		require.NotNil(t, ddlEvent.TableInfo)
+		require.Equal(t, int64(400), ddlEvent.GetTableID())
+		require.Equal(t, "target_partition_2", ddlEvent.TableInfo.GetSchemaName())
+		require.Equal(t, "partition_new_2", ddlEvent.TableInfo.GetTableName())
+	})
+}
+
 func TestParseRenameTablesQueryInfos(t *testing.T) {
 	cases := []struct {
 		name     string
