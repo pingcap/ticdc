@@ -940,9 +940,22 @@ func (d *BasicDispatcher) shouldHoldBlockEvent(event commonEvent.BlockEvent) boo
 		blockedTables.InfluenceType != commonEvent.InfluenceTypeNormal
 }
 
-// 1.If the event is a single table DDL, it will be added to the sink for writing to downstream.
-// If the ddl leads to add new tables or drop tables, it should send heartbeat to maintainer
-// 2. If the event is a multi-table DDL / sync point Event, it will generate a TableSpanBlockStatus message with ddl info to send to maintainer.
+// DealWithBlockEvent handles DDL and sync-point events.
+//
+// The event goes through one of three paths:
+//
+//  1. Held blocking path.
+//     Some DB/All blocking events on the table-trigger dispatcher are held first
+//     and will be released later by tryDealWithHeldBlockEvent.
+//
+//  2. Non-blocking path.
+//     The dispatcher flushes prior DMLs, then handles the event locally.
+//     If the DDL adds or drops tables, the table-trigger dispatcher also reports
+//     it to the maintainer for scheduling and checkpoint tracking.
+//
+//  3. Blocking path.
+//     The dispatcher flushes prior DMLs, then reports WAITING to the
+//     maintainer. The maintainer will later coordinate Write/Pass for this event.
 func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 	shouldBlock := d.shouldBlock(event)
 	shouldHoldBlocked := d.shouldHoldBlockEvent(event)
