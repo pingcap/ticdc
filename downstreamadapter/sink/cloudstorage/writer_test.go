@@ -18,12 +18,14 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
 	"path"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/pingcap/ticdc/downstreamadapter/sink/cloudstorage/spool"
 	pclock "github.com/pingcap/ticdc/pkg/clock"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
@@ -61,9 +63,38 @@ func testWriter(ctx context.Context, t *testing.T, dir string) *writer {
 	appcontext.SetService(appcontext.DefaultPDClock, pdlock)
 	mockPDClock := pdutil.NewClock4Test()
 	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+	spoolManager := newTestSpoolManager(t, changefeedID, cfg)
 	d := newWriter(1, changefeedID, storage,
-		cfg, ".json", statistics)
+		cfg, ".json", statistics, spoolManager)
 	return d
+}
+
+func newTestSpoolManager(
+	t *testing.T,
+	changefeedID commonType.ChangeFeedID,
+	cfg *cloudstorage.Config,
+) *spool.Manager {
+	spoolManager, err := spool.New(changefeedID, cfg.SpoolDiskQuota, nil)
+	require.NoError(t, err)
+	t.Cleanup(spoolManager.Close)
+	return spoolManager
+}
+
+func hasSpoolLogFile(spoolDir string) bool {
+	entries, err := os.ReadDir(spoolDir)
+	if err != nil {
+		return false
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		if path.Ext(entry.Name()) == ".log" {
+			return true
+		}
+	}
+	return false
 }
 
 func TestWriterRun(t *testing.T) {
@@ -344,6 +375,99 @@ func TestWriterPostEnqueueAfterConsume(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return enqueueCnt.Load() == 1
 	}, 5*time.Second, 100*time.Millisecond)
+
+	cancel()
+	require.ErrorIs(t, <-done, context.Canceled)
+}
+
+func TestWriterStoresPendingMessagesInSpoolBeforeFlush(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	parentDir := t.TempDir()
+	dataDir := t.TempDir()
+
+	oldServerCfg := *config.GetGlobalServerConfig()
+	serverCfg := oldServerCfg
+	serverCfg.DataDir = dataDir
+	config.StoreGlobalServerConfig(&serverCfg)
+	t.Cleanup(func() {
+		config.StoreGlobalServerConfig(&oldServerCfg)
+	})
+
+	uri := fmt.Sprintf("file:///%s?flush-interval=1h", parentDir)
+	storage, err := util.GetExternalStorageWithDefaultTimeout(ctx, uri)
+	require.NoError(t, err)
+	sinkURI, err := url.Parse(uri)
+	require.NoError(t, err)
+
+	cfg := cloudstorage.NewConfig()
+	replicaConfig := config.GetDefaultReplicaConfig()
+	replicaConfig.Sink.DateSeparator = util.AddressOf(config.DateSeparatorNone.String())
+	replicaConfig.Sink.CloudStorageConfig = &config.CloudStorageConfig{
+		SpoolDiskQuota: util.AddressOf(int64(1)),
+	}
+	err = cfg.Apply(context.Background(), sinkURI, replicaConfig.Sink, true)
+	require.NoError(t, err)
+	cfg.FileIndexWidth = 6
+	cfg.FlushInterval = time.Hour
+
+	changefeedID := commonType.NewChangefeedID4Test("test", "spool-pending")
+	statistics := metrics.NewStatistics(changefeedID, t.Name())
+	pdlock := pdutil.NewMonotonicClock(pclock.New())
+	appcontext.SetService(appcontext.DefaultPDClock, pdlock)
+	mockPDClock := pdutil.NewClock4Test()
+	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+
+	spoolManager := newTestSpoolManager(t, changefeedID, cfg)
+	d := newWriter(1, changefeedID, storage, cfg, ".json", statistics, spoolManager)
+
+	tidbTableInfo := &timodel.TableInfo{
+		ID:   100,
+		Name: ast.NewCIStr("table1"),
+		Columns: []*timodel.ColumnInfo{
+			{ID: 1, Name: ast.NewCIStr("c1"), FieldType: *types.NewFieldType(mysql.TypeLong)},
+		},
+	}
+	tableInfo := commonType.WrapTableInfo("test", tidbTableInfo)
+	dispatcherID := commonType.NewDispatcherID()
+
+	tableTask := newDMLTask(
+		cloudstorage.VersionedTableName{
+			TableNameWithPhysicTableID: commonType.TableName{
+				Schema:  "test",
+				Table:   "table1",
+				TableID: 100,
+			},
+			TableInfoVersion: 99,
+			DispatcherID:     dispatcherID,
+		},
+		&commonEvent.DMLEvent{
+			PhysicalTableID: 100,
+			TableInfo:       tableInfo,
+		},
+	)
+	msg := common.NewMsg(nil, []byte(`{"id":1}`))
+	msg.SetRowsCount(1)
+	tableTask.encodedMsgs = []*common.Message{msg}
+	require.NoError(t, d.enqueueTask(ctx, tableTask))
+
+	done := make(chan error, 1)
+	go func() {
+		done <- d.run(ctx)
+	}()
+
+	spoolDir := path.Join(
+		dataDir,
+		"cloudstorage-sink-spool",
+		changefeedID.Keyspace(),
+		fmt.Sprintf("%s-%s", changefeedID.Name(), changefeedID.ID().String()),
+	)
+	require.Eventually(t, func() bool {
+		return hasSpoolLogFile(spoolDir)
+	}, 5*time.Second, 50*time.Millisecond)
 
 	cancel()
 	require.ErrorIs(t, <-done, context.Canceled)

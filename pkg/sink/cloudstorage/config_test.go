@@ -34,7 +34,6 @@ func TestConfigApply(t *testing.T) {
 	expected.EnablePartitionSeparator = true
 	expected.FlushConcurrency = 1
 	expected.SpoolDiskQuota = 10 * 1024 * 1024 * 1024
-	expected.EnableTableAcrossNodes = true
 	uri := "s3://bucket/prefix?worker-count=32&flush-interval=10s&file-size=16777216&protocol=csv"
 	sinkURI, err := url.Parse(uri)
 	require.Nil(t, err)
