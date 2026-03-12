@@ -541,6 +541,9 @@ func (c *eventBroker) sendHandshakeIfNeed(task scanTask) {
 		zap.Stringer("changefeedID", task.changefeedStat.changefeedID),
 		zap.Stringer("dispatcherID", task.id),
 		zap.Int64("tableID", task.info.GetTableSpan().GetTableID()),
+		zap.Uint64("startTs", task.startTs),
+		zap.Uint64("checkpointTs", task.checkpointTs.Load()),
+		zap.Uint64("lastScannedCommitTs", task.lastScannedCommitTs.Load()),
 		zap.Uint64("commitTs", event.GetCommitTs()),
 		zap.Uint64("epoch", event.GetEpoch()),
 		zap.Uint64("seq", event.GetSeq()))
@@ -1164,7 +1167,27 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 	status := c.getOrSetChangefeedStatus(changefeedID, dispatcherInfo.GetSyncPointInterval())
 
 	newStat := newDispatcherStat(dispatcherInfo, uint64(len(c.taskChan)), uint64(len(c.messageCh)), tableInfo, status)
+	log.Info("before copy statistics when reset dispatcher",
+		zap.Stringer("changefeedID", changefeedID),
+		zap.Stringer("dispatcherID", dispatcherID),
+		zap.Uint64("requestStartTs", dispatcherInfo.GetStartTs()),
+		zap.Uint64("oldCheckpointTs", oldStat.checkpointTs.Load()),
+		zap.Uint64("oldLastScannedCommitTs", oldStat.lastScannedCommitTs.Load()),
+		zap.Uint64("newCheckpointTs", newStat.checkpointTs.Load()),
+		zap.Uint64("newLastScannedCommitTs", newStat.lastScannedCommitTs.Load()),
+		zap.Uint64("oldEpoch", oldStat.epoch),
+		zap.Uint64("newEpoch", newStat.epoch))
 	newStat.copyStatistics(oldStat)
+	log.Info("after copy statistics when reset dispatcher",
+		zap.Stringer("changefeedID", changefeedID),
+		zap.Stringer("dispatcherID", dispatcherID),
+		zap.Uint64("requestStartTs", dispatcherInfo.GetStartTs()),
+		zap.Uint64("oldCheckpointTs", oldStat.checkpointTs.Load()),
+		zap.Uint64("oldLastScannedCommitTs", oldStat.lastScannedCommitTs.Load()),
+		zap.Uint64("newCheckpointTs", newStat.checkpointTs.Load()),
+		zap.Uint64("newLastScannedCommitTs", newStat.lastScannedCommitTs.Load()),
+		zap.Uint64("oldEpoch", oldStat.epoch),
+		zap.Uint64("newEpoch", newStat.epoch))
 
 	for {
 		if statPtr.CompareAndSwap(oldStat, newStat) {
@@ -1232,6 +1255,14 @@ func (c *eventBroker) handleDispatcherHeartbeat(heartbeat *DispatcherHeartBeatWi
 		dispatcher := dispatcherPtr.Load()
 		// TODO: Should we check if the dispatcher's serverID is the same as the heartbeat's serverID?
 		if dispatcher.checkpointTs.Load() < dp.CheckpointTs {
+			log.Info("update dispatcher checkpoint by the heartbeat",
+				zap.Stringer("serverID", node.ID(heartbeat.serverID)),
+				zap.Any("dispatcherID", dispatcher.id),
+				zap.Uint64("oldCheckpointTs", dispatcher.checkpointTs.Load()),
+				zap.Uint64("newCheckpointTs", dp.CheckpointTs),
+				zap.Uint64("sentResolvedTs", dispatcher.sentResolvedTs.Load()),
+				zap.Uint64("lastScannedCommitTs", dispatcher.lastScannedCommitTs.Load()),
+				zap.Uint64("dispatcherEpoch", dispatcher.epoch))
 			dispatcher.checkpointTs.Store(dp.CheckpointTs)
 		}
 		// Update the last received heartbeat time to the current time.

@@ -651,6 +651,15 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 			block = true
 			dml.ReplicatingTs = d.creationPDTs
 			dmlEvents = append(dmlEvents, dml)
+			commitTs := event.GetCommitTs()
+			checkpointTs := d.GetCheckpointTs()
+			if commitTs <= checkpointTs {
+				log.Warn("add dml event whose commitTs less than or equal the checkpointTs",
+					zap.Any("dispatcherID", d.GetId()),
+					zap.Uint64("eventEpoch", event.GetEpoch()),
+					zap.Uint64("commitTs", commitTs),
+					zap.Uint64("checkpointTs", checkpointTs))
+			}
 		case commonEvent.TypeDDLEvent:
 			if len(dispatcherEvents) != 1 {
 				log.Panic("ddl event should only be singly handled",
