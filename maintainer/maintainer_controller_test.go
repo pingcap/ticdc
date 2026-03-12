@@ -1435,6 +1435,64 @@ func TestFinishBootstrap(t *testing.T) {
 	require.Nil(t, postBootstrapRequest)
 }
 
+// TestFinishBootstrapSkipsStaleCreateOperatorForDroppedTable covers a failover where dispatcher manager
+// still reports an in-flight Create request after the table has already disappeared from the bootstrap
+// schema-store snapshot. Bootstrap must skip that request instead of recreating a ghost task/operator.
+func TestFinishBootstrapSkipsStaleCreateOperatorForDroppedTable(t *testing.T) {
+	testutil.SetUpTestServices()
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
+
+	tableTriggerEventDispatcherID := common.NewDispatcherID()
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
+		common.DDLSpanSchemaID,
+		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
+			ID:              tableTriggerEventDispatcherID.ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    1,
+		}, "node1", false)
+	refresher := replica.NewRegionCountRefresher(cfID, time.Minute)
+	s := NewController(cfID, 1, &mockThreadPool{},
+		config.GetDefaultReplicaConfig(), ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false)
+
+	// The schema-store snapshot is empty at bootstrap startTs, which models a table that has already been dropped.
+	schemaStore := eventservice.NewMockSchemaStore()
+	schemaStore.SetTables(nil)
+	appcontext.SetService(appcontext.SchemaStore, schemaStore)
+
+	droppedDispatcherID := common.NewDispatcherID()
+	droppedSpan := common.TableIDToComparableSpan(common.DefaultKeyspaceID, 2)
+
+	_, err := s.FinishBootstrap(map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{
+		"node1": {
+			ChangefeedID: cfID.ToPB(),
+			Operators: []*heartbeatpb.ScheduleDispatcherRequest{
+				{
+					ChangefeedID: cfID.ToPB(),
+					Config: &heartbeatpb.DispatcherConfig{
+						DispatcherID: droppedDispatcherID.ToPB(),
+						SchemaID:     2,
+						Span:         &droppedSpan,
+						StartTs:      10,
+						Mode:         common.DefaultMode,
+					},
+					ScheduleAction: heartbeatpb.ScheduleAction_Create,
+					OperatorType:   heartbeatpb.OperatorType_O_Add,
+				},
+			},
+			CheckpointTs: 10,
+		},
+	}, false, false)
+	require.NoError(t, err)
+	require.True(t, s.bootstrapped)
+	require.Nil(t, s.spanController.GetTaskByID(droppedDispatcherID))
+	require.Nil(t, s.operatorController.GetOperator(droppedDispatcherID))
+	require.Equal(t, 0, s.operatorController.OperatorSize())
+	require.Equal(t, 0, s.spanController.GetAbsentSize())
+	require.Empty(t, s.spanController.GetTasksByTableID(droppedSpan.TableID))
+}
+
 func TestFinishBootstrapStorageSinkWithoutTableAcrossNodesEnableFlush(t *testing.T) {
 	testutil.SetUpTestServices()
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
