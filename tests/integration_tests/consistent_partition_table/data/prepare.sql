@@ -32,4 +32,14 @@ ALTER TABLE t1 REORGANIZE PARTITION p0,p2 INTO (PARTITION p0 VALUES LESS THAN (5
 -- update t1 set a=a-16 where a=12;
 -- delete from t1 where a = 29;
 
+/* mixed rename tables: normal table + partition table */
+RENAME TABLE t2 TO t2_mix_1, t TO t_mix_1;
+insert into t2_mix_1 values (106),(107);
+insert into t_mix_1 values (30),(31);
+
+/* reverse rename order to cover both job level table info shapes */
+RENAME TABLE t_mix_1 TO t_final, t2_mix_1 TO t2_final;
+insert into t_final values (32),(33);
+insert into t2_final values (108),(109);
+
 -- create table finish_mark (a int primary key);
