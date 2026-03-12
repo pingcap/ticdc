@@ -1434,6 +1434,7 @@ func TestFinishBootstrap(t *testing.T) {
 	require.Nil(t, postBootstrapRequest)
 }
 
+<<<<<<< HEAD
 // TestFinishBootstrapSkipsStaleCreateOperatorForDroppedTable covers stale bootstrap Create requests
 // for dropped tables across add/move/split operator types. Each subtest boots from an empty schema
 // snapshot and verifies bootstrap skips the stale create phase instead of recreating ghost tasks or
@@ -1537,6 +1538,8 @@ func TestFinishBootstrapSkipsStaleCreateOperatorForDroppedTable(t *testing.T) {
 	}
 }
 
+=======
+>>>>>>> 579ef2ed6 (maintainer,dispatcher: remove flush from the action and flush all enqueued dml events before report to maintainer (#4389))
 func TestSplitTableWhenBootstrapFinished(t *testing.T) {
 	testutil.SetUpTestServices()
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
