@@ -1407,11 +1407,10 @@ func TestFinishBootstrap(t *testing.T) {
 			},
 			CheckpointTs: 10,
 		},
-	}, false, false)
+	}, false)
 	_ = msg
 	require.Nil(t, err)
 	require.NotNil(t, s.barrier)
-	require.False(t, s.barrier.flushEnabled)
 	require.True(t, s.bootstrapped)
 	require.Equal(t, msg.GetSchemas(), []*heartbeatpb.SchemaInfo{
 		{
@@ -1430,63 +1429,9 @@ func TestFinishBootstrap(t *testing.T) {
 	require.Equal(t, 0, s.spanController.GetSchedulingSize())
 	require.NotNil(t, s.spanController.GetTaskByID(dispatcherID2))
 
-	postBootstrapRequest, err := s.FinishBootstrap(map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{}, false, false)
+	postBootstrapRequest, err := s.FinishBootstrap(map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{}, false)
 	require.NoError(t, err)
 	require.Nil(t, postBootstrapRequest)
-}
-
-func TestFinishBootstrapStorageSinkWithoutTableAcrossNodesEnableFlush(t *testing.T) {
-	testutil.SetUpTestServices()
-	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
-	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
-	tableTriggerEventDispatcherID := common.NewDispatcherID()
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
-	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
-		common.DDLSpanSchemaID,
-		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
-			ID:              tableTriggerEventDispatcherID.ToPB(),
-			ComponentStatus: heartbeatpb.ComponentState_Working,
-			CheckpointTs:    1,
-		}, "node1", false)
-	refresher := replica.NewRegionCountRefresher(cfID, time.Minute)
-	defaultConfig := config.GetDefaultReplicaConfig().Clone()
-	defaultConfig.Scheduler.EnableTableAcrossNodes = util.AddressOf(false)
-	s := NewController(cfID, 1, &mockThreadPool{},
-		defaultConfig, ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false)
-
-	totalSpan := common.TableIDToComparableSpan(common.DefaultKeyspaceID, 1)
-	span := &heartbeatpb.TableSpan{TableID: int64(1), StartKey: totalSpan.StartKey, EndKey: totalSpan.EndKey}
-	schemaStore := eventservice.NewMockSchemaStore()
-	schemaStore.SetTables(
-		[]commonEvent.Table{
-			{
-				TableID:         1,
-				SchemaID:        1,
-				SchemaTableName: &commonEvent.SchemaTableName{SchemaName: "test", TableName: "t"},
-			},
-		},
-	)
-	appcontext.SetService(appcontext.SchemaStore, schemaStore)
-
-	dispatcherID := common.NewDispatcherID()
-	_, err := s.FinishBootstrap(map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{
-		"node1": {
-			ChangefeedID: cfID.ToPB(),
-			Spans: []*heartbeatpb.BootstrapTableSpan{
-				{
-					ID:              dispatcherID.ToPB(),
-					SchemaID:        1,
-					Span:            span,
-					ComponentStatus: heartbeatpb.ComponentState_Working,
-					CheckpointTs:    10,
-				},
-			},
-			CheckpointTs: 10,
-		},
-	}, false, true)
-	require.NoError(t, err)
-	require.NotNil(t, s.barrier)
-	require.True(t, s.barrier.flushEnabled)
 }
 
 func TestSplitTableWhenBootstrapFinished(t *testing.T) {
@@ -1560,10 +1505,9 @@ func TestSplitTableWhenBootstrapFinished(t *testing.T) {
 			Spans:        reportedSpans,
 			CheckpointTs: 10,
 		},
-	}, false, false)
+	}, false)
 	require.Nil(t, err)
 	require.NotNil(t, s.barrier)
-	require.False(t, s.barrier.flushEnabled)
 	// total 8 regions,
 	// table 1: 2 holes will be inserted to absent
 	// table 2: split to 2 spans, will be inserted to absent
@@ -1571,20 +1515,6 @@ func TestSplitTableWhenBootstrapFinished(t *testing.T) {
 	// table 1 has two working span
 	require.Equal(t, 2, s.spanController.GetReplicatingSize())
 	require.True(t, s.bootstrapped)
-	// storage sink + split-table should enable flush phase
-	s2 := NewController(cfID, 1, nil, defaultConfig, ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false)
-	s2.taskPool = &mockThreadPool{}
-	require.False(t, s2.bootstrapped)
-	_, err = s2.FinishBootstrap(map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{
-		"node1": {
-			ChangefeedID: cfID.ToPB(),
-			Spans:        reportedSpans,
-			CheckpointTs: 10,
-		},
-	}, false, true)
-	require.Nil(t, err)
-	require.NotNil(t, s2.barrier)
-	require.True(t, s2.barrier.flushEnabled)
 }
 
 func TestMapFindHole(t *testing.T) {
