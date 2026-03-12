@@ -28,7 +28,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
-	putil "github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/robfig/cron"
@@ -62,6 +62,8 @@ type sink struct {
 	isNormal    *atomic.Bool
 	cleanupJobs []func() /* only for test */
 
+	// some method lack of the context parameter,
+	// we have to use the context from the struct to perceive the context done from the upper layer
 	// To perceive the context done from the upper layer
 	ctx context.Context
 }
@@ -72,7 +74,7 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.
 	if err != nil {
 		return err
 	}
-	protocol, err := helper.GetProtocol(putil.GetOrZero(sinkConfig.Protocol))
+	protocol, err := helper.GetProtocol(util.GetOrZero(sinkConfig.Protocol))
 	if err != nil {
 		return err
 	}
@@ -80,7 +82,7 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.
 	if err != nil {
 		return err
 	}
-	storage, err := putil.GetExternalStorageWithDefaultTimeout(ctx, sinkURI.String())
+	storage, err := util.GetExternalStorageWithDefaultTimeout(ctx, sinkURI.String())
 	if err != nil {
 		return err
 	}
@@ -99,9 +101,7 @@ func New(
 		return nil, err
 	}
 	// fetch protocol from replicaConfig defined by changefeed config file.
-	protocol, err := helper.GetProtocol(
-		putil.GetOrZero(sinkConfig.Protocol),
-	)
+	protocol, err := helper.GetProtocol(util.GetOrZero(sinkConfig.Protocol))
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
@@ -113,15 +113,12 @@ func New(
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
-	storage, err := putil.GetExternalStorageWithDefaultTimeout(ctx, sinkURI.String())
+	storage, err := util.GetExternalStorageWithDefaultTimeout(ctx, sinkURI.String())
 	if err != nil {
 		return nil, err
 	}
 	statistics := metrics.NewStatistics(changefeedID, "cloudstorage")
-	dmlWriters, err := newDMLWriters(ctx, changefeedID, storage, cfg, encoderConfig, ext, statistics)
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
+	dmlWriters := newDMLWriters(changefeedID, storage, cfg, encoderConfig, ext, statistics)
 	return &sink{
 		changefeedID:             changefeedID,
 		sinkURI:                  sinkURI,
@@ -143,11 +140,12 @@ func (s *sink) SinkType() common.SinkType {
 	return common.CloudStorageSinkType
 }
 
+// Run the sink, the ctx is the same as the ctx in the New function.
 func (s *sink) Run(ctx context.Context) error {
 	g, ctx := errgroup.WithContext(ctx)
 
 	g.Go(func() error {
-		return s.dmlWriters.Run(ctx)
+		return s.dmlWriters.run(ctx)
 	})
 
 	g.Go(func() error {
@@ -169,18 +167,15 @@ func (s *sink) IsNormal() bool {
 }
 
 func (s *sink) AddDMLEvent(event *commonEvent.DMLEvent) {
-	s.dmlWriters.AddDMLEvent(event)
-}
-
-func (s *sink) PassBlockEvent(event commonEvent.BlockEvent) error {
-	if event == nil {
-		return nil
-	}
-	return s.dmlWriters.FlushDMLBeforeBlock(event)
+	s.dmlWriters.addDMLEvent(event)
 }
 
 func (s *sink) FlushDMLBeforeBlock(event commonEvent.BlockEvent) error {
-	return s.dmlWriters.FlushDMLBeforeBlock(event)
+	if err := s.dmlWriters.flushDMLBeforeBlock(s.ctx, event); err != nil {
+		s.isNormal.Store(false)
+		return err
+	}
+	return nil
 }
 
 func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
@@ -228,15 +223,14 @@ func (s *sink) writeDDLEvent(event *commonEvent.DDLEvent) error {
 			}
 		}
 	}
-
 	log.Info("storage sink executed ddl event",
 		zap.String("keyspace", s.changefeedID.Keyspace()),
 		zap.String("changefeed", s.changefeedID.ID().String()),
-		zap.String("schema", event.SchemaName),
-		zap.String("table", event.TableName),
+		zap.String("schema", event.GetSchemaName()),
+		zap.String("table", event.GetTableName()),
 		zap.String("dispatcher", event.GetDispatcherID().String()),
-		zap.String("query", event.Query),
-		zap.Uint64("finishedTs", event.FinishedTs),
+		zap.String("query", event.GetDDLQuery()),
+		zap.Uint64("finishedTs", event.GetCommitTs()),
 		zap.Stringer("ddlType", event.GetDDLType()))
 	return nil
 }
@@ -287,7 +281,7 @@ func (s *sink) sendCheckpointTs(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			return errors.Trace(ctx.Err())
+			return errors.Trace(context.Cause(ctx))
 		case checkpoint, ok = <-s.checkpointChan:
 			if !ok {
 				log.Warn("cloud storage sink checkpoint channel closed",
@@ -308,7 +302,7 @@ func (s *sink) sendCheckpointTs(ctx context.Context) error {
 		start := time.Now()
 		message, err := json.Marshal(map[string]uint64{"checkpoint-ts": checkpoint})
 		if err != nil {
-			log.Panic("cloud storage marshal checkpoint failed, this should never happen",
+			log.Panic("cloud storage sink marshal checkpoint failed, this should never happen",
 				zap.String("keyspace", s.changefeedID.Keyspace()),
 				zap.String("changefeed", s.changefeedID.Name()),
 				zap.Uint64("checkpoint", checkpoint),
@@ -317,7 +311,7 @@ func (s *sink) sendCheckpointTs(ctx context.Context) error {
 		}
 		err = s.storage.WriteFile(ctx, "metadata", message)
 		if err != nil {
-			log.Error("cloud storage write file failed",
+			log.Error("cloud storage sink write file failed",
 				zap.String("keyspace", s.changefeedID.Keyspace()),
 				zap.String("changefeed", s.changefeedID.Name()),
 				zap.Duration("duration", time.Since(start)),

@@ -1,4 +1,4 @@
-// Copyright 2025 PingCAP, Inc.
+// Copyright 2026 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,6 +15,7 @@ package cloudstorage
 
 import (
 	"context"
+	"errors"
 	"net/url"
 	"testing"
 	"time"
@@ -23,7 +24,7 @@ import (
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
-	pkgcloudstorage "github.com/pingcap/ticdc/pkg/sink/cloudstorage"
+	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
@@ -34,25 +35,24 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-func TestTaskIndexerRouteOutputShardCached(t *testing.T) {
+func TestTaskIndexerRouteOutputShardStable(t *testing.T) {
 	t.Parallel()
 
-	indexer := newTaskIndexer(2, 4)
+	indexer := newIndexer(2, 4)
 	dispatcherID := commonType.NewDispatcherID()
 	first := indexer.routeOutputIndex(dispatcherID)
 	for i := 0; i < 32; i++ {
 		require.Equal(t, first, indexer.routeOutputIndex(dispatcherID))
 	}
-	require.Equal(t, 1, indexer.cachedOutputCount())
 }
 
-func TestTaskIndexerRouteOutputShardStable(t *testing.T) {
+func TestTaskIndexerRouteOutputShardDistributed(t *testing.T) {
 	t.Parallel()
 
 	dispatcherA := commonType.NewDispatcherID()
 	dispatcherB := commonType.NewDispatcherID()
 
-	indexer := newTaskIndexer(2, 4)
+	indexer := newIndexer(2, 4)
 	shardA := indexer.routeOutputIndex(dispatcherA)
 	shardB := indexer.routeOutputIndex(dispatcherB)
 	for shardA == shardB {
@@ -70,9 +70,11 @@ func TestEncodingGroupRouteByDispatcher(t *testing.T) {
 	eg, egCtx := errgroup.WithContext(ctx)
 
 	encoderConfig := newTestTxnEncoderConfig(t)
-	group := newEncodingGroup(commonType.NewChangefeedID4Test("test", "encoder-group"), encoderConfig, 2, 4)
+	group := newEncoderGroup(encoderConfig, 2, 4)
+	outputs := group.Outputs()
+	require.Len(t, outputs, 4)
 	eg.Go(func() error {
-		return group.Run(egCtx)
+		return group.run(egCtx)
 	})
 
 	dispatcherA := commonType.NewDispatcherID()
@@ -88,42 +90,54 @@ func TestEncodingGroupRouteByDispatcher(t *testing.T) {
 	receivedB := make(chan []uint64, 1)
 	eg.Go(func() error {
 		values := make([]uint64, 0, 5)
-		err := group.ConsumeOutputShard(ctx, shardA, func(future *taskFuture) error {
-			if err := future.Ready(ctx); err != nil {
-				return err
+		for {
+			select {
+			case <-egCtx.Done():
+				return egCtx.Err()
+			case future := <-outputs[shardA]:
+				err := future.Ready(egCtx)
+				if err != nil {
+					return err
+				}
+				task := future.task
+				if task.dispatcherID != dispatcherA {
+					continue
+				}
+				values = append(values, task.marker.commitTs)
+				if len(values) == 5 {
+					receivedA <- values
+					return nil
+				}
 			}
-			if future.task.dispatcherID != dispatcherA {
-				return nil
-			}
-			values = append(values, future.task.marker.commitTs)
-			if len(values) == 5 {
-				receivedA <- values
-			}
-			return nil
-		})
-		return err
+		}
 	})
 	eg.Go(func() error {
 		values := make([]uint64, 0, 5)
-		err := group.ConsumeOutputShard(ctx, shardB, func(future *taskFuture) error {
-			if err := future.Ready(ctx); err != nil {
-				return err
+		for {
+			select {
+			case <-egCtx.Done():
+				return egCtx.Err()
+			case future := <-outputs[shardB]:
+				err := future.Ready(egCtx)
+				if err != nil {
+					return err
+				}
+				task := future.task
+				if task.dispatcherID != dispatcherB {
+					continue
+				}
+				values = append(values, task.marker.commitTs)
+				if len(values) == 5 {
+					receivedB <- values
+					return nil
+				}
 			}
-			if future.task.dispatcherID != dispatcherB {
-				return nil
-			}
-			values = append(values, future.task.marker.commitTs)
-			if len(values) == 5 {
-				receivedB <- values
-			}
-			return nil
-		})
-		return err
+		}
 	})
 
 	for i := uint64(1); i <= 5; i++ {
-		require.NoError(t, group.Add(ctx, newDrainTask(dispatcherA, i, nil)))
-		require.NoError(t, group.Add(ctx, newDrainTask(dispatcherB, i, nil)))
+		require.NoError(t, group.add(ctx, newFlushTask(dispatcherA, i)))
+		require.NoError(t, group.add(ctx, newFlushTask(dispatcherB, i)))
 	}
 
 	var resultA []uint64
@@ -153,15 +167,16 @@ func TestEncodingGroupEncodeDMLTask(t *testing.T) {
 	eg, egCtx := errgroup.WithContext(ctx)
 
 	encoderConfig := newTestTxnEncoderConfig(t)
-	changefeedID := commonType.NewChangefeedID4Test("test", "encoder-group")
-	group := newEncodingGroup(changefeedID, encoderConfig, 2, 1)
+	group := newEncoderGroup(encoderConfig, 2, 1)
+	outputs := group.Outputs()
+	require.Len(t, outputs, 1)
 	eg.Go(func() error {
-		return group.Run(egCtx)
+		return group.run(egCtx)
 	})
 
 	dispatcherID := commonType.NewDispatcherID()
 	taskValue := newDMLTask(
-		pkgcloudstorage.VersionedTableName{
+		cloudstorage.VersionedTableName{
 			TableNameWithPhysicTableID: commonType.TableName{
 				Schema:  "test",
 				Table:   "table1",
@@ -172,18 +187,25 @@ func TestEncodingGroupEncodeDMLTask(t *testing.T) {
 		},
 		newTestDMLEvent(dispatcherID, 100),
 	)
-	require.NoError(t, group.Add(ctx, taskValue))
+	require.NoError(t, group.add(ctx, taskValue))
 
 	done := make(chan struct{}, 1)
 	eg.Go(func() error {
-		return group.ConsumeOutputShard(ctx, 0, func(future *taskFuture) error {
-			if err := future.Ready(ctx); err != nil {
-				return err
+		for {
+			select {
+			case <-egCtx.Done():
+				return egCtx.Err()
+			case future := <-outputs[0]:
+				err := future.Ready(egCtx)
+				if err != nil {
+					return err
+				}
+				task := future.task
+				require.Equal(t, taskValue, task)
+				done <- struct{}{}
+				return nil
 			}
-			require.Equal(t, taskValue, future.task)
-			done <- struct{}{}
-			return nil
-		})
+		}
 	})
 	select {
 	case <-done:
@@ -193,6 +215,18 @@ func TestEncodingGroupEncodeDMLTask(t *testing.T) {
 
 	cancel()
 	require.ErrorIs(t, eg.Wait(), context.Canceled)
+}
+
+func TestEncoderGroupAddReturnsContextCause(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancelCause(context.Background())
+	cause := errors.New("encoder group canceled")
+	cancel(cause)
+
+	group := newEncoderGroup(newTestTxnEncoderConfig(t), 1, 1)
+	err := group.add(ctx, newFlushTask(commonType.NewDispatcherID(), 1))
+	require.ErrorIs(t, err, cause)
 }
 
 func newTestTxnEncoderConfig(t *testing.T) *common.Config {

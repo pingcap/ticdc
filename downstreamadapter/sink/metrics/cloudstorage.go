@@ -84,6 +84,7 @@ var (
 		Help:      "DDL drain duration for cloud storage sink",
 		Buckets:   prometheus.ExponentialBuckets(0.001, 2.0, 13),
 	}, []string{"namespace", "changefeed"})
+	CloudStorageDDLFlushDurationHistogram = CloudStorageDDLDrainDurationHistogram
 
 	// CloudStorageShardBusySeconds records the busy seconds of each cloud storage output shard.
 	CloudStorageShardBusySeconds = prometheus.NewCounterVec(

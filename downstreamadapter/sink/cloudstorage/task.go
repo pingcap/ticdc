@@ -1,4 +1,4 @@
-// Copyright 2025 PingCAP, Inc.
+// Copyright 2026 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,10 +14,12 @@
 package cloudstorage
 
 import (
-	"github.com/pingcap/ticdc/downstreamadapter/sink/cloudstorage/spool"
+	"context"
+
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	pkgcloudstorage "github.com/pingcap/ticdc/pkg/sink/cloudstorage"
+	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 )
 
@@ -25,22 +27,26 @@ type taskKind uint8
 
 const (
 	taskKindDML taskKind = iota
-	taskKindDrain
+	taskKindFlush
 )
 
 type task struct {
-	kind           taskKind
-	event          *commonEvent.DMLEvent
-	versionedTable pkgcloudstorage.VersionedTableName
-	dispatcherID   commonType.DispatcherID
+	kind taskKind
 
-	encodedMsgs []*common.Message
-	spoolEntry  *spool.Entry
-	marker      *drainMarker
+	// Shared by DML and flush tasks for stable per-dispatcher routing.
+	dispatcherID commonType.DispatcherID
+
+	// DML-only fields.
+	event          *commonEvent.DMLEvent           // Original DML event to encode and flush.
+	versionedTable cloudstorage.VersionedTableName // Versioned output identity for the DML event.
+	encodedMsgs    []*common.Message               // Encoded result built from event.
+
+	// Flush-only field.
+	marker *flushMarker // Barrier marker used by FlushDMLBeforeBlock.
 }
 
 func newDMLTask(
-	version pkgcloudstorage.VersionedTableName,
+	version cloudstorage.VersionedTableName,
 	event *commonEvent.DMLEvent,
 ) *task {
 	return &task{
@@ -51,35 +57,51 @@ func newDMLTask(
 	}
 }
 
-func newDrainTask(
+func newFlushTask(
 	dispatcherID commonType.DispatcherID,
 	commitTs uint64,
-	doneCh chan error,
 ) *task {
 	return &task{
-		kind:         taskKindDrain,
+		kind:         taskKindFlush,
 		dispatcherID: dispatcherID,
-		marker: &drainMarker{
-			dispatcherID: dispatcherID,
-			commitTs:     commitTs,
-			doneCh:       doneCh,
-		},
+		marker:       newFlushMarker(commitTs),
 	}
 }
 
-func (t *task) isDrainTask() bool {
-	return t != nil && t.kind == taskKindDrain
+func (t *task) isFlushTask() bool {
+	return t != nil && t.kind == taskKindFlush
 }
 
-type drainMarker struct {
-	dispatcherID commonType.DispatcherID
-	commitTs     uint64
-	doneCh       chan error
+func (t *task) wait(ctx context.Context) error {
+	if !t.isFlushTask() {
+		return nil
+	}
+	return t.marker.wait(ctx)
 }
 
-func (m *drainMarker) done(err error) {
+type flushMarker struct {
+	commitTs uint64
+	done     chan struct{}
+}
+
+func newFlushMarker(commitTs uint64) *flushMarker {
+	return &flushMarker{
+		commitTs: commitTs,
+		done:     make(chan struct{}),
+	}
+}
+
+// finish closes done to broadcast flush completion to all waiters.
+// Writer is the only owner that may call finish.
+func (m *flushMarker) finish() {
+	close(m.done)
+}
+
+func (m *flushMarker) wait(ctx context.Context) error {
 	select {
-	case m.doneCh <- err:
-	default:
+	case <-ctx.Done():
+		return errors.Trace(context.Cause(ctx))
+	case <-m.done:
+		return nil
 	}
 }

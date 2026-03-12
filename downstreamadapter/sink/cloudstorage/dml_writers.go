@@ -17,22 +17,21 @@ import (
 	"context"
 	"time"
 
-	"github.com/pingcap/ticdc/downstreamadapter/sink/cloudstorage/spool"
 	sinkmetrics "github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
-	pkgcloudstorage "github.com/pingcap/ticdc/pkg/sink/cloudstorage"
+	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/tidb/br/pkg/storage"
+	"go.uber.org/atomic"
 	"golang.org/x/sync/errgroup"
 )
 
 // dmlWriters coordinates encoding and output shard writers.
 type dmlWriters struct {
-	ctx          context.Context
 	changefeedID commonType.ChangeFeedID
 	statistics   *metrics.Statistics
 
@@ -41,29 +40,22 @@ type dmlWriters struct {
 	// encoding pipelines will read tasks from msgCh to encode events.
 	msgCh *chann.UnlimitedChannel[*task, any]
 
-	encodeGroup *encodingGroup
+	encodeGroup *encoderGroup
 
 	writers []*writer
-	spool   *spool.Manager
+	closed  atomic.Bool
 }
 
 func newDMLWriters(
-	ctx context.Context,
 	changefeedID commonType.ChangeFeedID,
 	storage storage.ExternalStorage,
-	config *pkgcloudstorage.Config,
+	config *cloudstorage.Config,
 	encoderConfig *common.Config,
 	extension string,
 	statistics *metrics.Statistics,
-) (*dmlWriters, error) {
-	spoolManager, err := spool.New(changefeedID, config.SpoolDiskQuota, nil)
-	if err != nil {
-		return nil, errors.Trace(err)
-	}
-
+) *dmlWriters {
 	messageCh := chann.NewUnlimitedChannelDefault[*task]()
-	encoderGroup := newEncodingGroup(
-		changefeedID,
+	encoderGroup := newEncoderGroup(
 		encoderConfig,
 		defaultEncodingConcurrency,
 		config.WorkerCount,
@@ -71,95 +63,78 @@ func newDMLWriters(
 
 	writers := make([]*writer, config.WorkerCount)
 	for i := 0; i < config.WorkerCount; i++ {
-		writers[i] = newWriter(i, changefeedID, storage, config, extension, statistics, spoolManager)
+		writers[i] = newWriter(i, changefeedID, storage, config, extension, statistics)
 	}
 
 	return &dmlWriters{
-		ctx:          ctx,
 		changefeedID: changefeedID,
 		statistics:   statistics,
 		msgCh:        messageCh,
 		encodeGroup:  encoderGroup,
 		writers:      writers,
-		spool:        spoolManager,
-	}, nil
+	}
 }
 
-func (d *dmlWriters) Run(ctx context.Context) error {
-	eg, ctx := errgroup.WithContext(ctx)
+func (d *dmlWriters) run(ctx context.Context) error {
+	g, ctx := errgroup.WithContext(ctx)
 
-	eg.Go(func() error {
-		<-ctx.Done()
-		d.msgCh.Close()
-		return nil
+	g.Go(func() error {
+		return d.encodeGroup.run(ctx)
 	})
 
-	eg.Go(func() error {
-		return d.submitTaskToEncoder(ctx)
+	g.Go(func() error {
+		return d.addTasks(ctx)
 	})
 
-	eg.Go(func() error {
-		return d.encodeGroup.Run(ctx)
-	})
-
-	// One dispatcher goroutine per output shard.
-	// Invariant: each output shard has a single consumer to keep shard ordering.
-	for i := range d.writers {
-		index := i
-		eg.Go(func() error {
-			return d.dispatchTaskToWriter(ctx, index)
+	outputs := d.encodeGroup.Outputs()
+	for idx := range d.writers {
+		writer := d.writers[idx]
+		g.Go(func() error {
+			return writer.run(ctx)
+		})
+		g.Go(func() error {
+			outputCh := outputs[idx]
+			for {
+				select {
+				case <-ctx.Done():
+					return context.Cause(ctx)
+				case future := <-outputCh:
+					if err := future.Ready(ctx); err != nil {
+						return err
+					}
+					if err := writer.enqueueTask(ctx, future.task); err != nil {
+						return err
+					}
+				}
+			}
 		})
 	}
-
-	for i := range d.writers {
-		writer := d.writers[i]
-		eg.Go(func() error {
-			return writer.Run(ctx)
-		})
-	}
-	return eg.Wait()
+	return g.Wait()
 }
 
-func (d *dmlWriters) submitTaskToEncoder(ctx context.Context) error {
+func (d *dmlWriters) addTasks(ctx context.Context) error {
 	for {
-		taskValue, ok := d.msgCh.Get()
+		select {
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		default:
+		}
+
+		task, ok, err := d.msgCh.GetWithContext(ctx)
+		if err != nil {
+			return errors.Trace(err)
+		}
 		if !ok {
 			return nil
 		}
-		if err := d.encodeGroup.Add(ctx, taskValue); err != nil {
+		if err := d.encodeGroup.add(ctx, task); err != nil {
 			return err
 		}
 	}
 }
 
-func (d *dmlWriters) dispatchTaskToWriter(ctx context.Context, outputIndex int) error {
-	writerShard := d.writers[outputIndex]
-	defer writerShard.closeInput()
-
-	return d.encodeGroup.ConsumeOutputShard(ctx, outputIndex, func(future *taskFuture) error {
-		// Principle: downstream must observe encode completion before consuming task payload.
-		if err := future.Ready(ctx); err != nil {
-			return err
-		}
-
-		taskValue := future.task
-		if d.spool != nil && !taskValue.isDrainTask() {
-			// Invariant: after task is materialized in spool, encodedMsgs can be released
-			// to cap memory footprint in writer path.
-			entry, err := d.spool.Enqueue(taskValue.encodedMsgs, taskValue.event.PostEnqueue)
-			if err != nil {
-				return err
-			}
-			taskValue.spoolEntry = entry
-			taskValue.encodedMsgs = nil
-		}
-
-		return writerShard.enqueueTask(ctx, taskValue)
-	})
-}
-
-func (d *dmlWriters) AddDMLEvent(event *commonEvent.DMLEvent) {
-	table := pkgcloudstorage.VersionedTableName{
+func (d *dmlWriters) addDMLEvent(event *commonEvent.DMLEvent) {
+	table := cloudstorage.VersionedTableName{
 		TableNameWithPhysicTableID: commonType.TableName{
 			Schema:      event.TableInfo.GetSchemaName(),
 			Table:       event.TableInfo.GetTableName(),
@@ -169,48 +144,33 @@ func (d *dmlWriters) AddDMLEvent(event *commonEvent.DMLEvent) {
 		TableInfoVersion: event.TableInfoVersion,
 		DispatcherID:     event.GetDispatcherID(),
 	}
-
-	_ = d.statistics.RecordBatchExecution(func() (int, int64, error) {
-		d.msgCh.Push(newDMLTask(table, event))
-		return int(event.Len()), event.GetSize(), nil
-	})
+	d.msgCh.Push(newDMLTask(table, event))
 }
 
-func (d *dmlWriters) PassBlockEvent(event commonEvent.BlockEvent) error {
-	return d.FlushDMLBeforeBlock(event)
-}
-
-func (d *dmlWriters) FlushDMLBeforeBlock(event commonEvent.BlockEvent) error {
+func (d *dmlWriters) flushDMLBeforeBlock(ctx context.Context, event commonEvent.BlockEvent) error {
 	if event == nil {
 		return nil
 	}
 
 	start := time.Now()
-	defer sinkmetrics.CloudStorageDDLDrainDurationHistogram.WithLabelValues(
-		d.changefeedID.Keyspace(),
-		d.changefeedID.ID().String(),
-	).Observe(time.Since(start).Seconds())
+	defer func() {
+		sinkmetrics.CloudStorageDDLFlushDurationHistogram.WithLabelValues(
+			d.changefeedID.Keyspace(),
+			d.changefeedID.ID().String(),
+		).Observe(time.Since(start).Seconds())
+	}()
 
-	doneCh := make(chan error, 1)
 	// Invariant for DDL ordering:
 	// marker follows the same dispatcher route and is acked only after prior tasks
-	// in that route are fully drained by writer.
-	d.msgCh.Push(newDrainTask(event.GetDispatcherID(), event.GetCommitTs(), doneCh))
-
-	select {
-	case err := <-doneCh:
-		return err
-	case <-d.ctx.Done():
-		return errors.Trace(d.ctx.Err())
-	}
+	// in that route are fully flushed by writer.
+	flushTask := newFlushTask(event.GetDispatcherID(), event.GetCommitTs())
+	d.msgCh.Push(flushTask)
+	return flushTask.wait(ctx)
 }
 
 func (d *dmlWriters) close() {
+	if !d.closed.CompareAndSwap(false, true) {
+		return
+	}
 	d.msgCh.Close()
-	for _, w := range d.writers {
-		w.close()
-	}
-	if d.spool != nil {
-		d.spool.Close()
-	}
 }
