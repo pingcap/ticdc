@@ -119,7 +119,10 @@ func generateDataFileName(enableTableAcrossNodes bool, dispatcherID string, inde
 }
 
 type indexWithDate struct {
-	index              uint64
+	// index is the current max data file sequence in one date bucket.
+	index uint64
+	// currDate is the latest date bucket requested by GenerateDataFilePath.
+	// prevDate is the previously used bucket to detect rollover and reset index.
 	currDate, prevDate string
 }
 
@@ -129,11 +132,20 @@ type VersionedTableName struct {
 	// tables, we need to use the physical table ID instead of the
 	// logical table ID.(Especially when the table is a partitioned table).
 	TableNameWithPhysicTableID commonType.TableName
-	// TableInfoVersion is consistent with the version of TableInfo recorded in
-	// schema storage. It can either be finished ts of a DDL event,
-	// or be the checkpoint ts when processor is restarted.
+	// TableInfoVersion is the table schema version carried with incoming DML.
+	// Source:
+	// 1. DDL finishedTs for schema-changing DDLs.
+	// 2. Checkpoint/startTs during dispatcher recover/move.
+	// Usage:
+	// 1. CheckOrWriteSchema uses it to detect whether incoming DML is older than
+	//    the latest schema version already stored.
+	// 2. If no exact schema file exists but an equivalent schema checksum exists,
+	//    storage sink may reuse an older/newer existing schema version as the
+	//    output directory version via versionMap.
 	TableInfoVersion uint64
-	DispatcherID     commonType.DispatcherID
+	// DispatcherID identifies the dispatcher producing this table stream.
+	// It participates in index/data file names when table-across-nodes is enabled.
+	DispatcherID commonType.DispatcherID
 }
 
 // FilePathGenerator is used to generate data file path and index file path.
@@ -143,9 +155,16 @@ type FilePathGenerator struct {
 	config       *Config
 	pdClock      pdutil.Clock
 	storage      storage.ExternalStorage
-	fileIndex    map[VersionedTableName]*indexWithDate
+	// fileIndex caches the last emitted data file index for one
+	// VersionedTableName and date bucket.
+	fileIndex map[VersionedTableName]*indexWithDate
 
-	hasher     *hash.PositionInertia
+	hasher *hash.PositionInertia
+	// versionMap maps an input VersionedTableName to the effective table version
+	// used in output directory:
+	// <schema>/<table>/<effectiveTableVersion>/...
+	// This can differ from TableInfoVersion when reusing an existing schema file
+	// with the same checksum.
 	versionMap map[VersionedTableName]uint64
 }
 
@@ -247,24 +266,18 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 		return true, nil
 	}
 
-	// Case 2: the table meta path is not empty and an equivalent schema already exists.
-	// Even if checksum is the same, we still write schema_{currentVersion}_{checksum}.json.
-	// Otherwise DML files may be written under an old table version directory and be
-	// treated as stale by downstream consumers.
+	// Case 2: the table meta path is not empty.
 	if schemaFileCnt != 0 && lastVersion != 0 {
-		log.Info("table schema file with exact version not found, write current version schema file",
+		log.Info("table schema file with exact version not found, using latest available",
 			zap.String("keyspace", f.changefeedID.Keyspace()),
 			zap.Stringer("changefeedID", f.changefeedID.ID()),
 			zap.Any("versionedTableName", table),
-			zap.Uint64("existingTableVersion", lastVersion),
-			zap.Uint64("tableVersion", table.TableInfoVersion),
+			zap.Uint64("tableVersion", lastVersion),
 			zap.Uint32("checksum", checksum))
-		encodedDetail, err := def.MarshalWithQuery()
-		if err != nil {
-			return false, err
-		}
-		f.versionMap[table] = table.TableInfoVersion
-		return false, f.storage.WriteFile(ctx, tblSchemaFile, encodedDetail)
+		// record the last version of the table schema file.
+		// we don't need to write schema file to external storage again.
+		f.versionMap[table] = lastVersion
+		return false, nil
 	}
 
 	// Case 3: the table meta path is empty, which happens when:

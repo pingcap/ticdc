@@ -33,12 +33,6 @@ enum Action {
     // Pass means influenced dispatchers mark this barrier as passed after the
     // writer has finished Write for the same (commitTs, isSyncPoint).
     Pass = 1;
-    // Flush means influenced dispatchers flush all DML before this barrier and
-    // keep the pending barrier event for the later Write/Pass steps.
-    // It is required for storage sink when split-table is enabled: one table may have multiple
-    // dispatchers on different nodes, and every dispatcher must flush pre-barrier
-    // DML first to prevent it from being reordered after the writer executes DDL.
-    Flush = 2;
 }
 
 message DispatcherAction {
