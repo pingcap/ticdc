@@ -274,3 +274,141 @@ func TestWriterWrite_handlesOutOfOrderDDLsByCommitTs(t *testing.T) {
 	require.Len(t, w.ddlList, 1)
 	require.Equal(t, "CREATE TABLE `common_1`.`a` (`a` BIGINT PRIMARY KEY,`b` INT)", w.ddlList[0].Query)
 }
+
+func TestWriterAppendDDL_keepsCrossObjectDDLSpanOnlyDDLs(t *testing.T) {
+	// Scenario: DDLSpanTableID is a shared barrier, not a logical object identity. Cross-object DDLs
+	// that only carry the DDL span must not suppress each other before ddlList sorting executes.
+	//
+	// Steps:
+	// 1) Append a newer CREATE SCHEMA DDL that only blocks the DDL span.
+	// 2) Append an older independent CREATE TABLE DDL for another object that also only blocks the DDL span.
+	// 3) Verify both DDLs stay queued, then call writer.Write and expect commit-ts order is preserved.
+	ctx := context.Background()
+	s := &recordingSink{}
+	p := &partitionProgress{partition: 0, watermark: 300}
+	w := &writer{
+		progresses:                 []*partitionProgress{p},
+		ddlList:                    make([]*commonEvent.DDLEvent, 0),
+		ddlOrderKeyWithMaxCommitTs: make(map[ddlOrderKey]uint64),
+		mysqlSink:                  s,
+	}
+
+	w.appendDDL(&commonEvent.DDLEvent{
+		Query:      "CREATE DATABASE `db_newer`",
+		SchemaID:   101,
+		SchemaName: "db_newer",
+		Type:       byte(timodel.ActionCreateSchema),
+		FinishedTs: 200,
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{common.DDLSpanTableID},
+		},
+	})
+	w.appendDDL(&commonEvent.DDLEvent{
+		Query:      "CREATE TABLE `db_existing`.`t_old` (`id` INT PRIMARY KEY)",
+		SchemaName: "db_existing",
+		TableName:  "t_old",
+		Type:       byte(timodel.ActionCreateTable),
+		FinishedTs: 100,
+		TableInfo: &common.TableInfo{
+			TableName: common.TableName{
+				Schema:  "db_existing",
+				Table:   "t_old",
+				TableID: 202,
+			},
+		},
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{common.DDLSpanTableID},
+		},
+	})
+
+	require.Len(t, w.ddlList, 2)
+
+	w.Write(ctx, codeccommon.MessageTypeDDL)
+	require.Equal(t, []string{
+		"CREATE TABLE `db_existing`.`t_old` (`id` INT PRIMARY KEY)",
+		"CREATE DATABASE `db_newer`",
+	}, s.ddls)
+	require.Empty(t, w.ddlList)
+}
+
+func TestWriterAppendDDL_dropsStaleDDLForSameDDLSpanOnlyObject(t *testing.T) {
+	// Scenario: The stale-drop protection from #1781 must still reject truly stale DDLs for the same
+	// DDLSpan-only object after we stop using DDLSpanTableID as the shared key.
+	//
+	// Steps:
+	// 1) Append a newer CREATE SCHEMA DDL for one schema.
+	// 2) Append an older CREATE SCHEMA DDL for the same schema.
+	// 3) Verify the older DDL is ignored while the newer one remains queued.
+	w := &writer{
+		ddlList:                    make([]*commonEvent.DDLEvent, 0),
+		ddlOrderKeyWithMaxCommitTs: make(map[ddlOrderKey]uint64),
+	}
+
+	w.appendDDL(&commonEvent.DDLEvent{
+		Query:      "CREATE DATABASE `db_same`",
+		SchemaID:   301,
+		SchemaName: "db_same",
+		Type:       byte(timodel.ActionCreateSchema),
+		FinishedTs: 200,
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{common.DDLSpanTableID},
+		},
+	})
+	w.appendDDL(&commonEvent.DDLEvent{
+		Query:      "CREATE DATABASE `db_same`",
+		SchemaID:   301,
+		SchemaName: "db_same",
+		Type:       byte(timodel.ActionCreateSchema),
+		FinishedTs: 100,
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{common.DDLSpanTableID},
+		},
+	})
+
+	require.Len(t, w.ddlList, 1)
+	require.Equal(t, "CREATE DATABASE `db_same`", w.ddlList[0].Query)
+}
+
+func TestWriterAppendDDL_dropsStaleDDLForSameBlockedTable(t *testing.T) {
+	// Scenario: The #1781 stale-drop protection must still work for DDLs that block a real table, even
+	// after we stop using the shared DDL span as the ordering key.
+	//
+	// Steps:
+	// 1) Append a newer ALTER TABLE DDL that blocks a specific table ID.
+	// 2) Append an older ALTER TABLE DDL for the same blocked table.
+	// 3) Verify the older DDL is ignored while the newer one remains queued.
+	w := &writer{
+		ddlList:                    make([]*commonEvent.DDLEvent, 0),
+		ddlOrderKeyWithMaxCommitTs: make(map[ddlOrderKey]uint64),
+	}
+
+	w.appendDDL(&commonEvent.DDLEvent{
+		Query:      "ALTER TABLE `test`.`t` ADD COLUMN `c1` INT",
+		SchemaName: "test",
+		TableName:  "t",
+		Type:       byte(timodel.ActionAddColumn),
+		FinishedTs: 200,
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{common.DDLSpanTableID, 401},
+		},
+	})
+	w.appendDDL(&commonEvent.DDLEvent{
+		Query:      "ALTER TABLE `test`.`t` ADD COLUMN `c0` INT",
+		SchemaName: "test",
+		TableName:  "t",
+		Type:       byte(timodel.ActionAddColumn),
+		FinishedTs: 100,
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{common.DDLSpanTableID, 401},
+		},
+	})
+
+	require.Len(t, w.ddlList, 1)
+	require.Equal(t, "ALTER TABLE `test`.`t` ADD COLUMN `c1` INT", w.ddlList[0].Query)
+}
