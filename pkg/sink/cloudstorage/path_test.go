@@ -369,6 +369,7 @@ func TestIsSchemaFile(t *testing.T) {
 // 	require.True(t, hasNewerSchemaVersion)
 // 	require.Equal(t, 1, len(f.versionMap))
 
+<<<<<<< HEAD
 // 	// test only table version changed, schema file should be reused
 // 	table.TableInfoVersion = 101
 // 	hasNewerSchemaVersion, err = f.CheckOrWriteSchema(ctx, table, tableInfo)
@@ -380,6 +381,19 @@ func TestIsSchemaFile(t *testing.T) {
 // 	files, err := os.ReadDir(dir)
 // 	require.NoError(t, err)
 // 	require.Equal(t, 1, len(files))
+=======
+	// test only table version changed, schema file should be reused
+	table.TableInfoVersion = 101
+	hasNewerSchemaVersion, err = f.CheckOrWriteSchema(ctx, table, tableInfo)
+	require.NoError(t, err)
+	require.False(t, hasNewerSchemaVersion)
+	require.Equal(t, uint64(tidbInfo.Version), f.versionMap[table])
+
+	dir = filepath.Join(dir, "test/table1/meta")
+	files, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	require.Equal(t, 1, len(files))
+>>>>>>> a0b4566e2 (storage: introduce new encoder group and remove the fragment and defragmenter (#4364))
 
 // 	// test schema file is invalid
 // 	err = os.WriteFile(filepath.Join(dir,

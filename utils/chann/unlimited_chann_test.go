@@ -14,6 +14,8 @@
 package chann
 
 import (
+	"context"
+	stdErrors "errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -165,4 +167,35 @@ func TestUnlimitedChannelGroup(t *testing.T) {
 	assert.Equal(t, resultCount.Load(), sent.Load())
 	assert.Equal(t, resultBytes.Load(), bytes.Load())
 	fmt.Printf("incCap: %d\n", incCap.Load())
+}
+
+func TestUnlimitedChannelGetWithContext(t *testing.T) {
+	t.Run("value available", func(t *testing.T) {
+		ch := NewUnlimitedChannelDefault[int]()
+		ch.Push(42)
+
+		v, ok, err := ch.GetWithContext(context.Background())
+		assert.Equal(t, ok, true)
+		assert.Equal(t, err, nil)
+		assert.Equal(t, v, 42)
+	})
+
+	t.Run("channel closed", func(t *testing.T) {
+		ch := NewUnlimitedChannelDefault[int]()
+		ch.Close()
+
+		_, ok, err := ch.GetWithContext(context.Background())
+		assert.Equal(t, ok, false)
+		assert.Equal(t, err, nil)
+	})
+
+	t.Run("context canceled", func(t *testing.T) {
+		ch := NewUnlimitedChannelDefault[int]()
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		_, ok, err := ch.GetWithContext(ctx)
+		assert.Equal(t, ok, false)
+		assert.Equal(t, stdErrors.Is(err, context.Canceled), true)
+	})
 }
