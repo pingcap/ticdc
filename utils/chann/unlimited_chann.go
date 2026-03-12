@@ -86,6 +86,8 @@ func (c *UnlimitedChannel[T, G]) Push(values ...T) {
 func (c *UnlimitedChannel[T, G]) Get() (T, bool) {
 	v, ok, err := c.getWithContext(context.Background())
 	if err != nil {
+		// Get uses context.Background(), so getWithContext cannot observe
+		// cancellation here. The error path is only for GetWithContext.
 		panic("unreachable")
 	}
 	return v, ok

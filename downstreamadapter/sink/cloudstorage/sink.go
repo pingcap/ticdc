@@ -223,6 +223,15 @@ func (s *sink) writeDDLEvent(event *commonEvent.DDLEvent) error {
 			}
 		}
 	}
+	log.Info("storage sink executed ddl event",
+		zap.String("keyspace", s.changefeedID.Keyspace()),
+		zap.String("changefeed", s.changefeedID.ID().String()),
+		zap.String("schema", event.GetSchemaName()),
+		zap.String("table", event.GetTableName()),
+		zap.String("dispatcher", event.GetDispatcherID().String()),
+		zap.String("query", event.GetDDLQuery()),
+		zap.Uint64("finishedTs", event.GetCommitTs()),
+		zap.Stringer("ddlType", event.GetDDLType()))
 	return nil
 }
 
