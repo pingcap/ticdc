@@ -351,35 +351,72 @@ func (t *DDLEvent) decodeV1(data []byte) error {
 	t.eventSize = int64(len(data))
 
 	end := len(data)
-	multipleTableInfosDataSize := binary.BigEndian.Uint64(data[end-8 : end])
-	for i := 0; i < int(multipleTableInfosDataSize); i++ {
-		tableInfoDataSize := binary.BigEndian.Uint64(data[end-8 : end])
+	if end < 8 {
+		return fmt.Errorf("invalid DDLEvent data: length %d is too short", len(data))
+	}
+
+	multipleTableInfoCount := binary.BigEndian.Uint64(data[end-8 : end])
+	if multipleTableInfoCount > uint64((end-8)/8) {
+		return fmt.Errorf("invalid DDLEvent data: too many multiple table infos, count=%d", multipleTableInfoCount)
+	}
+	end -= 8
+
+	t.MultipleTableInfos = t.MultipleTableInfos[:0]
+	if multipleTableInfoCount > 0 {
+		multipleTableInfos := make([]*common.TableInfo, int(multipleTableInfoCount))
+		for i := int(multipleTableInfoCount) - 1; i >= 0; i-- {
+			if end < 8 {
+				return fmt.Errorf("invalid DDLEvent data: missing table info size for multiple table infos")
+			}
+			tableInfoDataSize := binary.BigEndian.Uint64(data[end-8 : end])
+			if tableInfoDataSize > uint64(end-8) {
+				return fmt.Errorf("invalid DDLEvent data: invalid multiple table info size=%d", tableInfoDataSize)
+			}
+			tableInfoData := data[end-8-int(tableInfoDataSize) : end-8]
+			info, err := common.UnmarshalJSONToTableInfo(tableInfoData)
+			if err != nil {
+				return err
+			}
+			multipleTableInfos[i] = info
+			end -= 8 + int(tableInfoDataSize)
+		}
+		t.MultipleTableInfos = append(t.MultipleTableInfos, multipleTableInfos...)
+	}
+
+	if end < 8 {
+		return fmt.Errorf("invalid DDLEvent data: missing tableInfoDataSize")
+	}
+	tableInfoDataSize := binary.BigEndian.Uint64(data[end-8 : end])
+	if tableInfoDataSize > uint64(end-8) {
+		return fmt.Errorf("invalid DDLEvent data: invalid table info size=%d", tableInfoDataSize)
+	}
+	var err error
+	t.TableInfo = nil
+	if tableInfoDataSize > 0 {
 		tableInfoData := data[end-8-int(tableInfoDataSize) : end-8]
 		info, err := common.UnmarshalJSONToTableInfo(tableInfoData)
 		if err != nil {
 			return err
 		}
-		t.MultipleTableInfos = append(t.MultipleTableInfos, info)
-		end -= 8 + int(tableInfoDataSize)
-	}
-	end -= 8 + int(multipleTableInfosDataSize)
-	tableInfoDataSize := binary.BigEndian.Uint64(data[end-8 : end])
-	var err error
-	if tableInfoDataSize > 0 {
-		tableInfoData := data[end-8-int(tableInfoDataSize) : end-8]
-		t.TableInfo, err = common.UnmarshalJSONToTableInfo(tableInfoData)
-		if err != nil {
-			return err
-		}
+		t.TableInfo = info
 	}
 	end -= 8 + int(tableInfoDataSize)
+
+	if end < 8 {
+		return fmt.Errorf("invalid DDLEvent data: missing dispatcherIDDataSize")
+	}
 	dispatcherIDDatSize := binary.BigEndian.Uint64(data[end-8 : end])
+	if dispatcherIDDatSize > uint64(end-8) {
+		return fmt.Errorf("invalid DDLEvent data: invalid dispatcher ID size=%d", dispatcherIDDatSize)
+	}
 	dispatcherIDData := data[end-8-int(dispatcherIDDatSize) : end-8]
 	err = t.DispatcherID.Unmarshal(dispatcherIDData)
 	if err != nil {
 		return err
 	}
-	err = json.Unmarshal(data[:end-8-int(dispatcherIDDatSize)], t)
+
+	restDataEnd := end - 8 - int(dispatcherIDDatSize)
+	err = json.Unmarshal(data[:restDataEnd], t)
 	if err != nil {
 		return err
 	}
