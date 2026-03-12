@@ -241,6 +241,7 @@ func (c *eventBroker) logSyncPointStage(ctx context.Context, interval time.Durat
 					prepareBlockingSentTs  uint64
 					commitBlockingDispID   common.DispatcherID
 					commitBlockingCkptTs   uint64
+					commitBlockingNextSPTs uint64
 				)
 
 				status.dispatchers.Range(func(_, dispatcherValue any) bool {
@@ -284,7 +285,7 @@ func (c *eventBroker) logSyncPointStage(ctx context.Context, interval time.Durat
 						if nextSyncPointTs == inFlightTs && sentResolvedTs >= inFlightTs {
 							commitEmitPendingCount++
 						}
-						if checkpointTs > inFlightTs {
+						if nextSyncPointTs > inFlightTs {
 							commitDoneCount++
 						} else {
 							commitWaitingCount++
@@ -292,6 +293,7 @@ func (c *eventBroker) logSyncPointStage(ctx context.Context, interval time.Durat
 								commitBlockingFound = true
 								commitBlockingDispID = dispatcher.id
 								commitBlockingCkptTs = checkpointTs
+								commitBlockingNextSPTs = nextSyncPointTs
 							}
 						}
 					}
@@ -335,6 +337,7 @@ func (c *eventBroker) logSyncPointStage(ctx context.Context, interval time.Durat
 					fields = append(fields,
 						zap.Stringer("commitBlockingDispatcher", commitBlockingDispID),
 						zap.Uint64("commitBlockingCheckpointTs", commitBlockingCkptTs),
+						zap.Uint64("commitBlockingNextSyncPointTs", commitBlockingNextSPTs),
 					)
 				}
 				log.Info("syncpoint stage snapshot", fields...)

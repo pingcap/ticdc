@@ -571,7 +571,8 @@ func (c *changefeedStatus) tryPromoteSyncPointPrepare() {
 }
 
 // tryAdvanceSyncPointInFlight finishes current commit stage when all active dispatchers
-// have checkpointTs > inFlightTs. It then clears prepare/commit state.
+// have advanced nextSyncPoint beyond inFlightTs (meaning syncpoint has been emitted from
+// event broker side). It then clears prepare/commit state.
 func (c *changefeedStatus) tryAdvanceSyncPointInFlight() {
 	inFlightTs := c.syncPointInFlightTs.Load()
 	if inFlightTs == 0 {
@@ -584,7 +585,7 @@ func (c *changefeedStatus) tryAdvanceSyncPointInFlight() {
 		if dispatcher == nil || dispatcher.isRemoved.Load() || dispatcher.seq.Load() == 0 {
 			return true
 		}
-		if dispatcher.checkpointTs.Load() <= inFlightTs {
+		if dispatcher.nextSyncPoint.Load() <= inFlightTs {
 			canAdvance = false
 			return false
 		}
