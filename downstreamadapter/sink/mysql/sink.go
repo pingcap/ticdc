@@ -311,10 +311,6 @@ func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	return nil
 }
 
-func (s *Sink) PassBlockEvent(_ commonEvent.BlockEvent) error {
-	return nil
-}
-
 // AddCheckpointTs is invoked by dispatcher manager whenever Maintainer broadcasts a
 // new changefeed-level checkpoint. It updates the active-active progress table on a
 // best-effort basis. ProgressTableWriter throttles updates internally to avoid

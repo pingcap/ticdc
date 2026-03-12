@@ -132,10 +132,6 @@ func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	return nil
 }
 
-func (s *Sink) PassBlockEvent(_ commonEvent.BlockEvent) error {
-	return nil
-}
-
 func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	rowsCount := event.Len()
 	events := make([]writer.RedoEvent, 0, rowsCount)
