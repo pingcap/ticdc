@@ -32,6 +32,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/keyspace"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/pingcap/ticdc/pkg/txnutil/gc"
 	"github.com/tikv/client-go/v2/oracle"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
@@ -69,7 +70,9 @@ type DDLEventState struct {
 }
 
 type keyspaceSchemaStore struct {
+	cancel        context.CancelFunc
 	ddlJobFetcher *ddlJobFetcher
+	gcKeeper      *schemaStoreGCKeeper
 	pdClock       pdutil.Clock
 
 	// store unresolved ddl event in memory, it is thread safe
@@ -299,11 +302,24 @@ func (s *schemaStore) Run(ctx context.Context) error {
 	return nil
 }
 
-func (s *schemaStore) Close(_ context.Context) error {
+func (s *schemaStore) Close(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	s.keyspaceLocker.Lock()
 	defer s.keyspaceLocker.Unlock()
 
 	for keyspaceID, store := range s.keyspaceSchemaStoreMap {
+		if store.cancel != nil {
+			store.cancel()
+		}
+		if store.gcKeeper != nil {
+			err := store.gcKeeper.close(ctx)
+			if err != nil {
+				log.Error("gc keeper close failed", zap.Uint32("keyspaceID", keyspaceID), zap.Error(err))
+			}
+		}
 		err := store.dataStorage.close()
 		if err != nil {
 			log.Error("dataStorage close failed", zap.Uint32("keyspaceID", keyspaceID), zap.Error(err))
@@ -463,11 +479,26 @@ func (s *schemaStore) RegisterKeyspace(
 		return err
 	}
 
-	storage, err := newPersistentStorage(ctx, s.root, keyspaceMeta.ID, s.pdCli, kvStorage)
+	storeCtx, cancel := context.WithCancel(ctx)
+	gcKeeper := newSchemaStoreGCKeeper(s.pdCli, keyspaceMeta)
+	gcSafePoint, err := s.acquireInitialGCSafePoint(storeCtx, keyspaceMeta, gcKeeper)
 	if err != nil {
+		cancel()
+		return err
+	}
+
+	storage, err := newPersistentStorage(storeCtx, s.root, keyspaceMeta.ID, s.pdCli, kvStorage, gcSafePoint)
+	if err != nil {
+		cancel()
+		if closeErr := gcKeeper.close(ctx); closeErr != nil {
+			log.Warn("cleanup schema store gc keeper failed after storage init error",
+				zap.Any("keyspace", keyspaceMeta), zap.Error(closeErr))
+		}
 		return err
 	}
 	store := &keyspaceSchemaStore{
+		cancel:        cancel,
+		gcKeeper:      gcKeeper,
 		pdClock:       s.pdClock,
 		unsortedCache: newDDLCache(),
 		dataStorage:   storage,
@@ -487,7 +518,7 @@ func (s *schemaStore) RegisterKeyspace(
 
 	subClient := appcontext.GetService[logpuller.SubscriptionClient](appcontext.SubscriptionClient)
 	fetcher := newDDLJobFetcher(
-		ctx,
+		storeCtx,
 		subClient,
 		kvStorage,
 		keyspaceMeta.ID,
@@ -498,12 +529,22 @@ func (s *schemaStore) RegisterKeyspace(
 
 	err = fetcher.run(upperBound.ResolvedTs)
 	if err != nil {
+		cancel()
+		_ = store.dataStorage.close()
+		if closeErr := gcKeeper.close(ctx); closeErr != nil {
+			log.Warn("cleanup schema store gc keeper failed after fetcher init error",
+				zap.Any("keyspace", keyspaceMeta), zap.Error(closeErr))
+		}
 		return err
 	}
 	store.dataStorage.run()
+	store.gcKeeper.run(storeCtx, func() uint64 {
+		return store.resolvedTs.Load()
+	})
 
 	go func(ctx context.Context, schemaStore *keyspaceSchemaStore) {
 		ticker := time.NewTicker(50 * time.Millisecond)
+		defer ticker.Stop()
 		for {
 			select {
 			case <-ctx.Done():
@@ -514,9 +555,37 @@ func (s *schemaStore) RegisterKeyspace(
 				schemaStore.tryUpdateResolvedTs()
 			}
 		}
-	}(ctx, store)
+	}(storeCtx, store)
 
 	s.keyspaceSchemaStoreMap[keyspaceMeta.ID] = store
 
 	return nil
+}
+
+func (s *schemaStore) acquireInitialGCSafePoint(
+	ctx context.Context,
+	keyspaceMeta common.KeyspaceMeta,
+	gcKeeper *schemaStoreGCKeeper,
+) (uint64, error) {
+	for {
+		gcSafePoint, err := gc.UnifyGetServiceGCSafepoint(ctx, s.pdCli, keyspaceMeta.ID, defaultSchemaStoreGcServiceID)
+		if err == nil {
+			log.Info("get gc safepoint success",
+				zap.Uint32("keyspaceID", keyspaceMeta.ID),
+				zap.Uint64("gcSafePoint", gcSafePoint),
+				zap.String("serviceID", gcKeeper.serviceID()))
+			err = gcKeeper.initialize(ctx, gcSafePoint)
+			if err == nil {
+				return gcSafePoint, nil
+			}
+		}
+
+		log.Warn("prepare schema store gc safepoint failed, will retry in 1s",
+			zap.Any("keyspace", keyspaceMeta), zap.Error(err))
+		select {
+		case <-ctx.Done():
+			return 0, errors.Trace(err)
+		case <-time.After(time.Second):
+		}
+	}
 }
