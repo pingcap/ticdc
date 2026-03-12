@@ -333,6 +333,101 @@ func TestWriterAppendDDL_keepsCrossObjectDDLSpanOnlyDDLs(t *testing.T) {
 	require.Empty(t, w.ddlList)
 }
 
+func TestWriterAppendDDL_keepsCrossObjectCreateDDLsWithEmptyBlockedTableIDs(t *testing.T) {
+	// Scenario: Some producer paths decode CREATE SCHEMA / CREATE TABLE with empty blocked table IDs
+	// instead of an explicit DDLSpanTableID entry. The consumer must still derive logical ordering keys
+	// from schema/table identity so unrelated create DDLs do not suppress each other.
+	//
+	// Steps:
+	// 1) Append a newer CREATE SCHEMA DDL with empty blocked table IDs.
+	// 2) Append an older independent CREATE TABLE DDL for another object with empty blocked table IDs.
+	// 3) Verify both DDLs stay queued, then call writer.Write and expect commit-ts order is preserved.
+	ctx := context.Background()
+	s := &recordingSink{}
+	p := &partitionProgress{partition: 0, watermark: 300}
+	w := &writer{
+		progresses:                 []*partitionProgress{p},
+		ddlList:                    make([]*commonEvent.DDLEvent, 0),
+		ddlOrderKeyWithMaxCommitTs: make(map[ddlOrderKey]uint64),
+		mysqlSink:                  s,
+	}
+
+	w.appendDDL(&commonEvent.DDLEvent{
+		Query:      "CREATE DATABASE `db_newer_empty`",
+		SchemaID:   102,
+		SchemaName: "db_newer_empty",
+		Type:       byte(timodel.ActionCreateSchema),
+		FinishedTs: 200,
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+		},
+	})
+	w.appendDDL(&commonEvent.DDLEvent{
+		Query:      "CREATE TABLE `db_existing`.`t_old_empty` (`id` INT PRIMARY KEY)",
+		SchemaName: "db_existing",
+		TableName:  "t_old_empty",
+		Type:       byte(timodel.ActionCreateTable),
+		FinishedTs: 100,
+		TableInfo: &common.TableInfo{
+			TableName: common.TableName{
+				Schema:  "db_existing",
+				Table:   "t_old_empty",
+				TableID: 203,
+			},
+		},
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+		},
+	})
+
+	require.Len(t, w.ddlList, 2)
+
+	w.Write(ctx, codeccommon.MessageTypeDDL)
+	require.Equal(t, []string{
+		"CREATE TABLE `db_existing`.`t_old_empty` (`id` INT PRIMARY KEY)",
+		"CREATE DATABASE `db_newer_empty`",
+	}, s.ddls)
+	require.Empty(t, w.ddlList)
+}
+
+func TestWriterAppendDDL_dropsStaleCreateSchemaWithEmptyBlockedTableIDs(t *testing.T) {
+	// Scenario: The empty blocked-table-ID path must still reject truly stale DDLs for the same logical
+	// schema after the consumer falls back to schema-scoped ordering keys.
+	//
+	// Steps:
+	// 1) Append a newer CREATE SCHEMA DDL with empty blocked table IDs.
+	// 2) Append an older CREATE SCHEMA DDL for the same schema with empty blocked table IDs.
+	// 3) Verify the older DDL is ignored while the newer one remains queued.
+	w := &writer{
+		ddlList:                    make([]*commonEvent.DDLEvent, 0),
+		ddlOrderKeyWithMaxCommitTs: make(map[ddlOrderKey]uint64),
+	}
+
+	w.appendDDL(&commonEvent.DDLEvent{
+		Query:      "CREATE DATABASE `db_same_empty`",
+		SchemaID:   302,
+		SchemaName: "db_same_empty",
+		Type:       byte(timodel.ActionCreateSchema),
+		FinishedTs: 200,
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+		},
+	})
+	w.appendDDL(&commonEvent.DDLEvent{
+		Query:      "CREATE DATABASE `db_same_empty`",
+		SchemaID:   302,
+		SchemaName: "db_same_empty",
+		Type:       byte(timodel.ActionCreateSchema),
+		FinishedTs: 100,
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+		},
+	})
+
+	require.Len(t, w.ddlList, 1)
+	require.Equal(t, "CREATE DATABASE `db_same_empty`", w.ddlList[0].Query)
+}
+
 func TestWriterAppendDDL_dropsStaleDDLForSameDDLSpanOnlyObject(t *testing.T) {
 	// Scenario: The stale-drop protection from #1781 must still reject truly stale DDLs for the same
 	// DDLSpan-only object after we stop using DDLSpanTableID as the shared key.
