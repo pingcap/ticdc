@@ -277,7 +277,7 @@ func preCheckForSchedulerHandler(req SchedulerDispatcherRequest, dispatcherManag
 	}
 
 	isRedo := common.IsRedoMode(req.Config.Mode)
-	if isRedo && (!dispatcherManager.RedoEnable || dispatcherManager.redoDispatcherMap == nil) {
+	if isRedo && !dispatcherManager.IsRedoReady() {
 		return common.DispatcherID{}, false
 	}
 	if _, operatorExists := dispatcherManager.currentOperatorMap.Load(operatorKey); operatorExists {

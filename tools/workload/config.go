@@ -16,10 +16,12 @@ package main
 import (
 	"flag"
 	"fmt"
+	"strings"
 	"sync"
+	"time"
 )
 
-// WorkloadConfig saves all the configurations for the workload
+// WorkloadConfig saves all the configurations for the workload.
 type WorkloadConfig struct {
 	// Database related
 	DBHost     string
@@ -44,6 +46,12 @@ type WorkloadConfig struct {
 	Action          string
 	SkipCreateTable bool
 	OnlyDDL         bool
+	OnlyDML         bool
+
+	// DDL related
+	DDLConfigPath string
+	DDLWorker     int
+	DDLTimeout    time.Duration
 
 	// Special workload config
 	RowSize       int
@@ -54,12 +62,15 @@ type WorkloadConfig struct {
 	// For sysbench workload
 	RangeNum int
 
+	// Partition related
+	Partitioned bool
+
 	// Log related
 	LogFile  string
 	LogLevel string
 }
 
-// NewWorkloadConfig creates a new config with default values
+// NewWorkloadConfig creates a new config with default values.
 func NewWorkloadConfig() *WorkloadConfig {
 	return &WorkloadConfig{
 		// Default database config
@@ -85,6 +96,12 @@ func NewWorkloadConfig() *WorkloadConfig {
 		Action:          "prepare",
 		SkipCreateTable: false,
 		OnlyDDL:         false,
+		OnlyDML:         false,
+
+		// Default ddl config
+		DDLConfigPath: "",
+		DDLWorker:     1,
+		DDLTimeout:    2 * time.Minute,
 
 		// For large row workload
 		RowSize:       10240,
@@ -97,13 +114,16 @@ func NewWorkloadConfig() *WorkloadConfig {
 		// For sysbench workload
 		RangeNum: 5,
 
+		// Partition related
+		Partitioned: true,
+
 		// Log related
 		LogFile:  "workload.log",
 		LogLevel: "info",
 	}
 }
 
-// ParseFlags parses command line flags and updates config
+// ParseFlags parses command line flags and updates config.
 func (c *WorkloadConfig) ParseFlags() error {
 	flag.StringVar(&c.DBPrefix, "db-prefix", c.DBPrefix, "the prefix of the database name")
 	flag.IntVar(&c.DBNum, "db-num", c.DBNum, "the number of databases")
@@ -115,14 +135,18 @@ func (c *WorkloadConfig) ParseFlags() error {
 	flag.Float64Var(&c.PercentageForUpdate, "percentage-for-update", c.PercentageForUpdate, "percentage for update: [0, 1.0]")
 	flag.Float64Var(&c.PercentageForDelete, "percentage-for-delete", c.PercentageForDelete, "percentage for delete: [0, 1.0]")
 	flag.BoolVar(&c.SkipCreateTable, "skip-create-table", c.SkipCreateTable, "do not create tables")
-	flag.StringVar(&c.Action, "action", c.Action, "action of the workload: [prepare, insert, update, delete, write, cleanup]")
-	flag.StringVar(&c.WorkloadType, "workload-type", c.WorkloadType, "workload type: [bank, sysbench, large_row, shop_item, uuu, bank2, bank_update, crawler, dc]")
+	flag.StringVar(&c.Action, "action", c.Action, "action of the workload: [prepare, insert, update, delete, write, ddl, cleanup]")
+	flag.StringVar(&c.WorkloadType, "workload-type", c.WorkloadType, "workload type: [bank, sysbench, large_row, shop_item, uuu, bank2, bank3, bank_update, crawler, dc]")
 	flag.StringVar(&c.DBHost, "database-host", c.DBHost, "database host")
 	flag.StringVar(&c.DBUser, "database-user", c.DBUser, "database user")
 	flag.StringVar(&c.DBPassword, "database-password", c.DBPassword, "database password")
 	flag.StringVar(&c.DBName, "database-db-name", c.DBName, "database db name")
 	flag.IntVar(&c.DBPort, "database-port", c.DBPort, "database port")
-	flag.BoolVar(&c.OnlyDDL, "only-ddl", c.OnlyDDL, "only generate ddl")
+	flag.BoolVar(&c.OnlyDDL, "only-ddl", c.OnlyDDL, "run only ddl workload (skip dml workers)")
+	flag.BoolVar(&c.OnlyDML, "only-dml", c.OnlyDML, "run only dml workload (skip ddl workers)")
+	flag.StringVar(&c.DDLConfigPath, "ddl-config", c.DDLConfigPath, "ddl config file path, must be .toml")
+	flag.IntVar(&c.DDLWorker, "ddl-worker", c.DDLWorker, "ddl worker concurrency")
+	flag.DurationVar(&c.DDLTimeout, "ddl-timeout", c.DDLTimeout, "timeout for each ddl statement")
 	flag.StringVar(&c.LogFile, "log-file", c.LogFile, "log file path")
 	flag.StringVar(&c.LogLevel, "log-level", c.LogLevel, "log file path")
 	// For large row workload
@@ -132,6 +156,9 @@ func (c *WorkloadConfig) ParseFlags() error {
 	flag.IntVar(&c.UpdateLargeColumnSize, "update-large-column-size", c.UpdateLargeColumnSize, "the size of the large column to update")
 	// For sysbench workload
 	flag.IntVar(&c.RangeNum, "range-num", c.RangeNum, "the number of ranges for sysbench workload")
+	// Partition related
+	flag.BoolVar(&c.Partitioned, "partitioned", c.Partitioned, "whether to create tables as partitioned tables when the workload supports it")
+	flag.BoolVar(&c.Partitioned, "bank3-partitioned", c.Partitioned, "deprecated: use -partitioned")
 
 	flag.Parse()
 
@@ -146,10 +173,37 @@ func (c *WorkloadConfig) ParseFlags() error {
 			c.PercentageForUpdate, c.PercentageForDelete)
 	}
 
+	if c.OnlyDDL && c.OnlyDML {
+		return fmt.Errorf("only-ddl and only-dml cannot both be true")
+	}
+	if c.OnlyDML && c.Action == "ddl" {
+		return fmt.Errorf("only-dml cannot be used with -action=ddl")
+	}
+
+	// Convenience mode:
+	// - only-ddl: force action=ddl.
+	if c.OnlyDDL {
+		c.Action = "ddl"
+	}
+
+	dDLConfigPath := strings.TrimSpace(c.DDLConfigPath)
+	dDLEnabled := !c.OnlyDML && (c.Action == "ddl" || dDLConfigPath != "")
+	if dDLEnabled {
+		if dDLConfigPath == "" {
+			return fmt.Errorf("ddl requires -ddl-config")
+		}
+		if c.DDLWorker <= 0 {
+			return fmt.Errorf("ddl-worker must be > 0")
+		}
+		if c.DDLTimeout <= 0 {
+			return fmt.Errorf("ddl-timeout must be > 0")
+		}
+	}
+
 	return nil
 }
 
-// NewDBManager creates a new database manager
+// NewDBManager creates a new database manager.
 func NewDBManager(config *WorkloadConfig) (*DBManager, error) {
 	manager := &DBManager{
 		Config:    config,

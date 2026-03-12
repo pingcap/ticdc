@@ -11,21 +11,32 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package eventstore
+package helper
 
 import (
 	"testing"
 
-	"github.com/cockroachdb/pebble"
+	"github.com/pingcap/ticdc/pkg/common"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/stretchr/testify/require"
 )
 
-func TestDiskSpaceUsageClampsNegativeInProgressBytes(t *testing.T) {
-	m := &pebble.Metrics{}
-	m.WAL.PhysicalSize = 100
-	m.Table.ObsoleteSize = 50
-	m.Table.ZombieSize = 200
-	m.Compact.InProgressBytes = -1024
+func TestTxnPostFlushRowCallback(t *testing.T) {
+	event := commonEvent.NewDMLEvent(common.NewDispatcherID(), 1, 1, 1, nil)
 
-	require.Equal(t, uint64(350), diskSpaceUsage(m))
+	flushCount := 0
+	event.AddPostFlushFunc(func() {
+		flushCount++
+	})
+
+	rowCallback := NewTxnPostFlushRowCallback(event, 3)
+	rowCallback()
+	rowCallback()
+	require.Equal(t, 0, flushCount)
+
+	rowCallback()
+	require.Equal(t, 1, flushCount)
+
+	rowCallback()
+	require.Equal(t, 1, flushCount)
 }

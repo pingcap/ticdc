@@ -27,7 +27,11 @@ message Watermark {
 }
 
 enum Action {
+    // Write means the selected writer dispatcher executes the barrier event
+    // (DDL/syncpoint) to downstream.
     Write = 0;
+    // Pass means influenced dispatchers mark this barrier as passed after the
+    // writer has finished Write for the same (commitTs, isSyncPoint).
     Pass = 1;
 }
 
