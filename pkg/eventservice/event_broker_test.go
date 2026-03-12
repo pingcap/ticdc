@@ -413,6 +413,38 @@ func TestResetDispatcher(t *testing.T) {
 	require.Equal(t, dispInfo.GetID(), newStat.id)
 }
 
+func TestResetDispatcherUsesCheckpointAsNewLowerBound(t *testing.T) {
+	broker, _, _, _ := newEventBrokerForTest()
+	defer broker.close()
+
+	dispInfo := newMockDispatcherInfoForTest(t)
+	err := broker.addDispatcher(dispInfo)
+	require.NoError(t, err)
+
+	dispPtr := broker.getDispatcher(dispInfo.GetID())
+	require.NotNil(t, dispPtr)
+
+	oldStat := dispPtr.Load()
+	oldStat.checkpointTs.Store(620)
+	oldStat.receivedResolvedTs.Store(680)
+	oldStat.sentResolvedTs.Store(640)
+	oldStat.lastScannedCommitTs.Store(630)
+	oldStat.hasReceivedFirstResolvedTs.Store(true)
+
+	resetDispInfo := newMockDispatcherInfo(t, 500, dispInfo.GetID(), 100, eventpb.ActionType_ACTION_TYPE_RESET)
+	resetDispInfo.epoch = 1
+
+	err = broker.resetDispatcher(resetDispInfo)
+	require.NoError(t, err)
+
+	newStat := dispPtr.Load()
+	require.NotSame(t, oldStat, newStat)
+	require.Equal(t, uint64(620), newStat.startTs)
+	require.Equal(t, uint64(620), newStat.checkpointTs.Load())
+	require.Equal(t, uint64(620), newStat.sentResolvedTs.Load())
+	require.Equal(t, uint64(620), newStat.lastScannedCommitTs.Load())
+}
+
 func TestResetDispatcherConcurrently(t *testing.T) {
 	broker, _, _, _ := newEventBrokerForTest()
 	defer broker.close()

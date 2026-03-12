@@ -1135,6 +1135,8 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 	if oldStat.epoch >= dispatcherInfo.GetEpoch() {
 		return nil
 	}
+	oldCheckpointTs := oldStat.checkpointTs.Load()
+	newCheckpointTs := max(dispatcherInfo.GetStartTs(), oldCheckpointTs)
 
 	// Mark the old dispatcher as removed.
 	// No need to worry that the old dispatcher is still scanning,
@@ -1152,13 +1154,13 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 			ID:   span.KeyspaceID,
 			Name: changefeedID.Keyspace(),
 		}
-		tableInfo, err = c.schemaStore.GetTableInfo(keyspaceMeta, span.GetTableID(), dispatcherInfo.GetStartTs())
+		tableInfo, err = c.schemaStore.GetTableInfo(keyspaceMeta, span.GetTableID(), newCheckpointTs)
 		if err != nil {
 			log.Error("get table info from schemaStore failed",
 				zap.Stringer("changefeedID", changefeedID),
 				zap.Stringer("dispatcherID", dispatcherID),
 				zap.Int64("tableID", span.GetTableID()),
-				zap.Uint64("startTs", dispatcherInfo.GetStartTs()),
+				zap.Uint64("checkpointTs", newCheckpointTs),
 				zap.String("span", common.FormatTableSpan(span)),
 				zap.Error(err))
 			return err
@@ -1167,11 +1169,16 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 	status := c.getOrSetChangefeedStatus(changefeedID, dispatcherInfo.GetSyncPointInterval())
 
 	newStat := newDispatcherStat(dispatcherInfo, uint64(len(c.taskChan)), uint64(len(c.messageCh)), tableInfo, status)
+	newStat.startTs = newCheckpointTs
+	newStat.receivedResolvedTs.Store(newCheckpointTs)
+	newStat.checkpointTs.Store(newCheckpointTs)
+	newStat.sentResolvedTs.Store(newCheckpointTs)
+	newStat.lastScannedCommitTs.Store(newCheckpointTs)
 	log.Info("before copy statistics when reset dispatcher",
 		zap.Stringer("changefeedID", changefeedID),
 		zap.Stringer("dispatcherID", dispatcherID),
 		zap.Uint64("requestStartTs", dispatcherInfo.GetStartTs()),
-		zap.Uint64("oldCheckpointTs", oldStat.checkpointTs.Load()),
+		zap.Uint64("oldCheckpointTs", oldCheckpointTs),
 		zap.Uint64("oldLastScannedCommitTs", oldStat.lastScannedCommitTs.Load()),
 		zap.Uint64("newCheckpointTs", newStat.checkpointTs.Load()),
 		zap.Uint64("newLastScannedCommitTs", newStat.lastScannedCommitTs.Load()),
@@ -1182,7 +1189,7 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 		zap.Stringer("changefeedID", changefeedID),
 		zap.Stringer("dispatcherID", dispatcherID),
 		zap.Uint64("requestStartTs", dispatcherInfo.GetStartTs()),
-		zap.Uint64("oldCheckpointTs", oldStat.checkpointTs.Load()),
+		zap.Uint64("oldCheckpointTs", oldCheckpointTs),
 		zap.Uint64("oldLastScannedCommitTs", oldStat.lastScannedCommitTs.Load()),
 		zap.Uint64("newCheckpointTs", newStat.checkpointTs.Load()),
 		zap.Uint64("newLastScannedCommitTs", newStat.lastScannedCommitTs.Load()),
@@ -1199,8 +1206,8 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 			zap.Stringer("dispatcherID", dispatcherID),
 			zap.Int64("tableID", span.GetTableID()),
 			zap.String("span", common.FormatTableSpan(span)),
-			zap.Uint64("oldStartTs", oldStat.info.GetStartTs()),
-			zap.Uint64("newStartTs", dispatcherInfo.GetStartTs()),
+			zap.Uint64("oldCheckpointTs", oldCheckpointTs),
+			zap.Uint64("newCheckpointTs", newCheckpointTs),
 			zap.Uint64("oldEpoch", oldStat.epoch),
 			zap.Uint64("newEpoch", newStat.epoch))
 		// The dispatcher is changed concurrently, retry it.
@@ -1216,8 +1223,9 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 		zap.Stringer("changefeedID", newStat.changefeedStat.changefeedID),
 		zap.Stringer("dispatcherID", newStat.id), zap.Int64("tableID", newStat.info.GetTableSpan().GetTableID()),
 		zap.String("span", common.FormatTableSpan(newStat.info.GetTableSpan())),
-		zap.Uint64("originStartTs", oldStat.info.GetStartTs()),
-		zap.Uint64("newStartTs", dispatcherInfo.GetStartTs()),
+		zap.Uint64("requestStartTs", dispatcherInfo.GetStartTs()),
+		zap.Uint64("oldCheckpointTs", oldCheckpointTs),
+		zap.Uint64("newCheckpointTs", newStat.checkpointTs.Load()),
 		zap.Uint64("newEpoch", newStat.epoch),
 		zap.Duration("resetTime", time.Since(start)))
 

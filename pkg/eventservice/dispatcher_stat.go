@@ -184,7 +184,6 @@ func newDispatcherStat(
 func (a *dispatcherStat) copyStatistics(src *dispatcherStat) {
 	a.receivedResolvedTs.Store(src.receivedResolvedTs.Load())
 	a.eventStoreCommitTs.Store(src.eventStoreCommitTs.Load())
-	a.checkpointTs.Store(src.checkpointTs.Load())
 	a.hasReceivedFirstResolvedTs.Store(src.hasReceivedFirstResolvedTs.Load())
 
 	a.currentScanLimitInBytes.Store(src.currentScanLimitInBytes.Load())
