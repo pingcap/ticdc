@@ -5,7 +5,6 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
     branches:
       - master
-      - "release-[0-9].[0-9]*"
     paths:
       - '**'
       - '!**/*.md'
@@ -48,7 +47,7 @@ jobs:
     name: ${{ matrix.task.name }}
     steps:
       - name: Check out code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Setup Go environment
         uses: actions/setup-go@v6
@@ -57,7 +56,7 @@ jobs:
 
       - name: Cache Tools
         id: cache-tools
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: tools/bin
           key: ubuntu-latest-ticdc-tools-${{ hashFiles('tools/check/go.sum') }}

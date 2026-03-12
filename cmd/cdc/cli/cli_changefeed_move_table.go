@@ -29,6 +29,7 @@ type moveTableChangefeedOptions struct {
 	tableId      int64
 	targetNodeID string
 	mode         int64
+	wait         bool
 }
 
 // newCreateChangefeedOptions creates new options for the `cli changefeed create` command.
@@ -44,6 +45,7 @@ func (o *moveTableChangefeedOptions) addFlags(cmd *cobra.Command) {
 	cmd.PersistentFlags().Int64VarP(&o.tableId, "table-id", "t", 0, "the id of table to move")
 	cmd.PersistentFlags().StringVarP(&o.targetNodeID, "target-node-id", "d", "", "the dest for the table to move")
 	cmd.PersistentFlags().Int64Var(&o.mode, "mode", 0, "enable redo when mode is 1")
+	cmd.PersistentFlags().BoolVar(&o.wait, "wait", true, "wait for the move operator to finish")
 	_ = cmd.MarkPersistentFlagRequired("changefeed-id")
 	_ = cmd.MarkPersistentFlagRequired("table-id")
 	_ = cmd.MarkPersistentFlagRequired("target-node-id")
@@ -69,7 +71,7 @@ type response struct {
 func (o *moveTableChangefeedOptions) run(cmd *cobra.Command) error {
 	ctx := cmd.Context()
 
-	err := o.apiClientV2.Changefeeds().MoveTable(ctx, o.keyspace, o.changefeedID, o.tableId, o.targetNodeID, o.mode)
+	err := o.apiClientV2.Changefeeds().MoveTable(ctx, o.keyspace, o.changefeedID, o.tableId, o.targetNodeID, o.mode, o.wait)
 	var errStr string
 	if err != nil {
 		errStr = err.Error()

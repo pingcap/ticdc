@@ -83,6 +83,7 @@ type changefeedStat struct {
 	metricMemoryUsageMaxRedo  prometheus.Gauge
 	metricMemoryUsageUsedRedo prometheus.Gauge
 	dispatcherCount           atomic.Int32
+	memoryReleaseCount        atomic.Uint32
 }
 
 func newChangefeedStat(changefeedID common.ChangeFeedID) *changefeedStat {
@@ -421,11 +422,17 @@ func (c *EventCollector) processDSFeedback(ctx context.Context) error {
 			return context.Cause(ctx)
 		case feedback := <-c.ds.Feedback():
 			if feedback.FeedbackType == dynstream.ReleasePath {
+				if v, ok := c.changefeedMap.Load(feedback.Area); ok {
+					v.(*changefeedStat).memoryReleaseCount.Add(1)
+				}
 				log.Info("release dispatcher memory in DS", zap.Any("dispatcherID", feedback.Path))
 				c.ds.Release(feedback.Path)
 			}
 		case feedback := <-c.redoDs.Feedback():
 			if feedback.FeedbackType == dynstream.ReleasePath {
+				if v, ok := c.changefeedMap.Load(feedback.Area); ok {
+					v.(*changefeedStat).memoryReleaseCount.Add(1)
+				}
 				log.Info("release dispatcher memory in redo DS", zap.Any("dispatcherID", feedback.Path))
 				c.redoDs.Release(feedback.Path)
 			}
@@ -492,7 +499,7 @@ func (c *EventCollector) handleDispatcherHeartbeatResponse(targetMessage *messag
 }
 
 // MessageCenterHandler is the handler for the events message from EventService.
-func (c *EventCollector) MessageCenterHandler(_ context.Context, targetMessage *messaging.TargetMessage) error {
+func (c *EventCollector) MessageCenterHandler(ctx context.Context, targetMessage *messaging.TargetMessage) error {
 	inflightDuration := time.Since(time.UnixMilli(targetMessage.CreateAt)).Seconds()
 	c.metricReceiveEventLagDuration.Observe(inflightDuration)
 
@@ -504,7 +511,11 @@ func (c *EventCollector) MessageCenterHandler(_ context.Context, targetMessage *
 	// If the message is a log service event, we need to forward it to the
 	// corresponding channel to handle it in multi-thread.
 	if targetMessage.Type.IsLogServiceEvent() {
-		c.receiveChannels[targetMessage.GetGroup()%uint64(len(c.receiveChannels))] <- targetMessage
+		select {
+		case <-ctx.Done():
+			return errors.Trace(ctx.Err())
+		case c.receiveChannels[targetMessage.GetGroup()%uint64(len(c.receiveChannels))] <- targetMessage:
+		}
 		return nil
 	}
 
@@ -522,11 +533,15 @@ func (c *EventCollector) MessageCenterHandler(_ context.Context, targetMessage *
 }
 
 // RedoMessageCenterHandler is the handler for the redo events message from EventService.
-func (c *EventCollector) RedoMessageCenterHandler(_ context.Context, targetMessage *messaging.TargetMessage) error {
+func (c *EventCollector) RedoMessageCenterHandler(ctx context.Context, targetMessage *messaging.TargetMessage) error {
 	// If the message is a log service event, we need to forward it to the
 	// corresponding channel to handle it in multi-thread.
 	if targetMessage.Type.IsLogServiceEvent() {
-		c.redoReceiveChannels[targetMessage.GetGroup()%uint64(len(c.redoReceiveChannels))] <- targetMessage
+		select {
+		case <-ctx.Done():
+			return errors.Trace(ctx.Err())
+		case c.redoReceiveChannels[targetMessage.GetGroup()%uint64(len(c.redoReceiveChannels))] <- targetMessage:
+		}
 		return nil
 	}
 	log.Warn("unknown message type, ignore it",
@@ -597,9 +612,24 @@ func (c *EventCollector) controlCongestion(ctx context.Context) error {
 }
 
 func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.CongestionControl {
+	changefeedMemoryReleaseCount := make(map[common.ChangeFeedID]uint32)
+	getAndResetMemoryReleaseCount := func(changefeedID common.ChangeFeedID) uint32 {
+		if count, ok := changefeedMemoryReleaseCount[changefeedID]; ok {
+			return count
+		}
+		v, ok := c.changefeedMap.Load(changefeedID.ID())
+		if !ok {
+			return 0
+		}
+		count := v.(*changefeedStat).memoryReleaseCount.Swap(0)
+		changefeedMemoryReleaseCount[changefeedID] = count
+		return count
+	}
+
 	// collect path-level available memory and total available memory for each changefeed
 	changefeedPathMemory := make(map[common.ChangeFeedID]map[common.DispatcherID]uint64)
 	changefeedTotalMemory := make(map[common.ChangeFeedID]uint64)
+	changefeedUsageRatio := make(map[common.ChangeFeedID]float64)
 
 	// collect from main dynamic stream
 	for _, quota := range c.ds.GetMetrics().MemoryControl.AreaMemoryMetrics {
@@ -617,6 +647,7 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 		}
 		// store total available memory from AreaMemoryMetric
 		changefeedTotalMemory[cfID] = uint64(quota.AvailableMemory())
+		changefeedUsageRatio[cfID] = calcUsageRatio(quota.MemoryUsage(), quota.MaxMemory())
 	}
 
 	// collect from redo dynamic stream and take minimum
@@ -638,11 +669,9 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 			}
 		}
 		// take minimum total available memory between main and redo streams
-		if existing, exists := changefeedTotalMemory[cfID]; exists {
-			changefeedTotalMemory[cfID] = min(existing, uint64(quota.AvailableMemory()))
-		} else {
-			changefeedTotalMemory[cfID] = uint64(quota.AvailableMemory())
-		}
+		updateMinUint64MapValue(changefeedTotalMemory, cfID, uint64(quota.AvailableMemory()))
+		// take maximum usage ratio between main and redo streams
+		changefeedUsageRatio[cfID] = max(changefeedUsageRatio[cfID], calcUsageRatio(quota.MemoryUsage(), quota.MaxMemory()))
 	}
 
 	if len(changefeedPathMemory) == 0 {
@@ -679,7 +708,7 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 	// build congestion control messages for each node
 	result := make(map[node.ID]*event.CongestionControl)
 	for nodeID, changefeedDispatchers := range nodeDispatcherMemory {
-		congestionControl := event.NewCongestionControl()
+		congestionControl := event.NewCongestionControlWithVersion(event.CongestionControlVersion2)
 
 		for changefeedID, dispatcherMemory := range changefeedDispatchers {
 			if len(dispatcherMemory) == 0 {
@@ -687,22 +716,54 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 			}
 
 			// get total available memory directly from AreaMemoryMetric
-			totalAvailable := uint64(changefeedTotalMemory[changefeedID])
-			if totalAvailable > 0 {
-				congestionControl.AddAvailableMemoryWithDispatchers(
-					changefeedID.ID(),
-					totalAvailable,
-					dispatcherMemory,
-				)
+			totalAvailable, ok := changefeedTotalMemory[changefeedID]
+			if !ok {
+				continue
 			}
+			congestionControl.AddAvailableMemoryWithDispatchersAndUsageAndReleaseCount(
+				changefeedID.ID(),
+				totalAvailable,
+				changefeedUsageRatio[changefeedID],
+				dispatcherMemory,
+				getAndResetMemoryReleaseCount(changefeedID),
+			)
 		}
 
 		if len(congestionControl.GetAvailables()) > 0 {
 			result[nodeID] = congestionControl
 		}
 	}
-
 	return result
+}
+
+func updateMinUint64MapValue(m map[common.ChangeFeedID]uint64, key common.ChangeFeedID, value uint64) {
+	if existing, exists := m[key]; exists {
+		m[key] = min(existing, value)
+	} else {
+		m[key] = value
+	}
+}
+
+func updateMaxUint64MapValue(m map[common.ChangeFeedID]uint64, key common.ChangeFeedID, value uint64) {
+	if existing, exists := m[key]; exists {
+		m[key] = max(existing, value)
+	} else {
+		m[key] = value
+	}
+}
+
+func calcUsageRatio(usedMemory int64, maxMemory int64) float64 {
+	if maxMemory <= 0 {
+		return 0
+	}
+	ratio := float64(usedMemory) / float64(maxMemory)
+	if ratio < 0 {
+		return 0
+	}
+	if ratio > 1 {
+		return 1
+	}
+	return ratio
 }
 
 func (c *EventCollector) updateMetrics(ctx context.Context) error {

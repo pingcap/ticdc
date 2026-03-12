@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/spanz"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/dynstream"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
@@ -85,6 +86,25 @@ func (h *regionEventHandler) Path(event regionEvent) SubscriptionID {
 }
 
 func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent) bool {
+	startTime := time.Now()
+	hasEntries := false
+	hasResolved := false
+	hasError := false
+	defer func() {
+		eventType := "error"
+		switch {
+		case hasEntries && hasResolved:
+			eventType = "mixed"
+		case hasEntries:
+			eventType = "entries"
+		case hasResolved:
+			eventType = "resolved"
+		case hasError:
+			eventType = "error"
+		}
+		metrics.SubscriptionClientRegionEventHandleDuration.WithLabelValues(eventType).Observe(time.Since(startTime).Seconds())
+	}()
+
 	if len(span.kvEventsCache) != 0 {
 		log.Panic("kvEventsCache is not empty",
 			zap.Int("kvEventsCacheLen", len(span.kvEventsCache)),
@@ -94,12 +114,15 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 	newResolvedTs := uint64(0)
 	for _, event := range events {
 		if len(event.states) == 1 && event.states[0].isStale() {
+			hasError = true
 			h.handleRegionError(event.states[0])
 			continue
 		}
 		if event.entries != nil {
+			hasEntries = true
 			handleEventEntries(span, event.mustFirstState(), event.entries)
 		} else if event.resolvedTs != 0 {
+			hasResolved = true
 			for _, state := range event.states {
 				resolvedTs := handleResolvedTs(span, state, event.resolvedTs)
 				if resolvedTs > newResolvedTs {
@@ -118,9 +141,17 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 	if len(span.kvEventsCache) > 0 {
 		metricsEventCount.Add(float64(len(span.kvEventsCache)))
 		await := span.consumeKVEvents(span.kvEventsCache, func() {
+			start := time.Now()
 			span.clearKVEventsCache()
+			metrics.SubscriptionClientConsumeKVEventsCallbackDuration.WithLabelValues("clearCache").Observe(time.Since(start).Seconds())
+
+			start = time.Now()
 			tryAdvanceResolvedTs()
+			metrics.SubscriptionClientConsumeKVEventsCallbackDuration.WithLabelValues("advanceResolvedTs").Observe(time.Since(start).Seconds())
+
+			start = time.Now()
 			h.subClient.wakeSubscription(span.subID)
+			metrics.SubscriptionClientConsumeKVEventsCallbackDuration.WithLabelValues("wakeSubscription").Observe(time.Since(start).Seconds())
 		})
 		// if not await, the wake callback will not be called, we need clear the cache manually.
 		if !await {
@@ -266,7 +297,7 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 					zap.String("EventType", "COMMITTED"),
 					zap.Uint64("CommitTs", entry.CommitTs),
 					zap.Uint64("resolvedTs", resolvedTs),
-					zap.String("key", spanz.HexKey(entry.GetKey())))
+					zap.String("key", util.RedactKey(entry.GetKey())))
 			}
 			span.kvEventsCache = append(span.kvEventsCache, assembleRowEvent(regionID, entry))
 		case cdcpb.Event_PREWRITE:
@@ -284,7 +315,7 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 					zap.Uint64("requestID", state.requestID),
 					zap.Uint64("startTs", entry.GetStartTs()),
 					zap.Uint64("commitTs", entry.GetCommitTs()),
-					zap.String("key", spanz.HexKey(entry.GetKey())))
+					zap.String("key", util.RedactKey(entry.GetKey())))
 			}
 
 			// TiKV can send events with StartTs/CommitTs less than startTs.
@@ -303,7 +334,7 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 					zap.String("EventType", "COMMIT"),
 					zap.Uint64("CommitTs", entry.CommitTs),
 					zap.Uint64("resolvedTs", resolvedTs),
-					zap.String("key", spanz.HexKey(entry.GetKey())))
+					zap.String("key", util.RedactKey(entry.GetKey())))
 			}
 			span.kvEventsCache = append(span.kvEventsCache, assembleRowEvent(regionID, entry))
 		case cdcpb.Event_ROLLBACK:
@@ -331,13 +362,27 @@ func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs u
 			zap.Uint64("lastResolvedTs", lastResolvedTs))
 		return 0
 	}
-	state.updateResolvedTs(resolvedTs)
-	span.rangeLock.UpdateLockedRangeStateHeap(state.region.lockedRangeState)
 
-	now := time.Now().UnixMilli()
-	lastAdvance := span.lastAdvanceTime.Load()
-	if now-lastAdvance >= span.advanceInterval && span.lastAdvanceTime.CompareAndSwap(lastAdvance, now) {
-		ts := span.rangeLock.GetHeapMinTs()
+	state.updateResolvedTs(resolvedTs)
+
+	ts := uint64(0)
+	shouldAdvance := false
+	// advanceInterval defaults to 100ms; setting it to 0 means resolving the timestamp as soon as possible.
+	// Note: If a single span contains an extremely large number of regions (e.g., 500k), advanceInterval = 0 may cause performance issues.
+	if span.advanceInterval == 0 {
+		span.rangeLock.UpdateLockedRangeStateHeap(state.region.lockedRangeState)
+		ts = span.rangeLock.GetHeapMinTs()
+		shouldAdvance = true
+	} else {
+		now := time.Now().UnixMilli()
+		lastAdvance := span.lastAdvanceTime.Load()
+		if now-lastAdvance >= span.advanceInterval && span.lastAdvanceTime.CompareAndSwap(lastAdvance, now) {
+			ts = span.rangeLock.ResolvedTs()
+			shouldAdvance = true
+		}
+	}
+
+	if shouldAdvance {
 		if ts > 0 && span.initialized.CompareAndSwap(false, true) {
 			log.Info("subscription client is initialized",
 				zap.Uint64("subscriptionID", uint64(span.subID)),
@@ -369,5 +414,6 @@ func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs u
 			return ts
 		}
 	}
+
 	return 0
 }

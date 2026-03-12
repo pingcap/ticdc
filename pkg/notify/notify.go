@@ -14,6 +14,7 @@
 package notify
 
 import (
+	"slices"
 	"sync"
 	"time"
 
@@ -80,7 +81,7 @@ func (n *Notifier) remove(index int) {
 	defer n.mu.Unlock()
 	for i, receiver := range n.receivers {
 		if receiver.index == index {
-			n.receivers = append(n.receivers[:i], n.receivers[i+1:]...)
+			n.receivers = slices.Delete(n.receivers, i, i+1)
 			close(receiver.rec.closeCh)
 			if receiver.rec.ticker != nil {
 				receiver.rec.ticker.Stop()

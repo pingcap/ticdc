@@ -18,7 +18,9 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -132,11 +134,11 @@ func (d *decoder) AddKeyValue(_, value []byte) {
 	if err != nil {
 		log.Panic("decompress data failed",
 			zap.String("compression", d.config.LargeMessageHandle.LargeMessageHandleCompression),
-			zap.Any("value", value),
+			zap.Any("value", util.RedactAny(value)),
 			zap.Error(err))
 	}
 	if _, err = d.decoder.Write(value); err != nil {
-		log.Panic("add value to the decoder failed", zap.Any("value", value), zap.Error(err))
+		log.Panic("add value to the decoder failed", zap.Any("value", util.RedactAny(value)), zap.Error(err))
 	}
 }
 
@@ -175,7 +177,7 @@ func (d *decoder) assembleClaimCheckDMLEvent(
 	if !d.config.LargeMessageHandle.ClaimCheckRawValue {
 		claimCheckM, err := common.UnmarshalClaimCheckMessage(data)
 		if err != nil {
-			log.Panic("unmarshal claim check message failed", zap.Any("data", data), zap.Error(err))
+			log.Panic("unmarshal claim check message failed", zap.String("data", util.RedactAny(data)), zap.Error(err))
 		}
 		data = claimCheckM.Value
 	}
@@ -184,12 +186,12 @@ func (d *decoder) assembleClaimCheckDMLEvent(
 	if err != nil {
 		log.Panic("decompress data failed",
 			zap.String("compression", d.config.LargeMessageHandle.LargeMessageHandleCompression),
-			zap.Any("data", data), zap.Error(err))
+			zap.String("data", util.RedactAny(data)), zap.Error(err))
 	}
 	message := &canalJSONMessageWithTiDBExtension{}
 	err = json.Unmarshal(value, message)
 	if err != nil {
-		log.Panic("unmarshal claim check message failed", zap.Any("value", value), zap.Error(err))
+		log.Panic("unmarshal claim check message failed", zap.Any("value", util.RedactAny(value)), zap.Error(err))
 	}
 
 	d.msg = message
@@ -203,22 +205,38 @@ func buildData(holder *common.ColumnsHolder) (map[string]interface{}, map[string
 
 	for i := 0; i < columnsCount; i++ {
 		t := holder.Types[i]
-		name := holder.Types[i].Name()
+		name := t.Name()
 		mysqlType := strings.ToLower(t.DatabaseTypeName())
+		// Snapshot query returns enum/set as their string representations, while canal-json format
+		// uses integer/bitset values for these types. Downgrade enum/set to varchar to keep the
+		// assembled handle-key-only events decodable.
+		if strings.HasPrefix(mysqlType, "enum") || strings.HasPrefix(mysqlType, "set") {
+			mysqlType = "varchar"
+		}
 
-		var value string
-		rawValue := holder.Values[i].([]uint8)
-		if common.IsBinaryMySQLType(mysqlType) {
-			rawValue, err := bytesDecoder.Bytes(rawValue)
-			if err != nil {
-				log.Panic("decode binary value failed", zap.Any("value", rawValue), zap.Error(err))
+		var value any
+		switch rawValue := holder.Values[i].(type) {
+		case nil:
+			value = nil
+		case []byte:
+			if common.IsBinaryMySQLType(mysqlType) {
+				rawValue, err := bytesDecoder.Bytes(rawValue)
+				if err != nil {
+					log.Panic("decode binary value failed", zap.String("value", util.RedactAny(rawValue)), zap.Error(err))
+				}
+				value = string(rawValue)
+			} else if strings.Contains(mysqlType, "bit") {
+				bitValue := common.MustBinaryLiteralToInt(rawValue)
+				value = strconv.FormatUint(bitValue, 10)
+			} else {
+				value = string(rawValue)
 			}
-			value = string(rawValue)
-		} else if strings.Contains(mysqlType, "bit") || strings.Contains(mysqlType, "set") {
-			bitValue := common.MustBinaryLiteralToInt(rawValue)
-			value = strconv.FormatUint(bitValue, 10)
-		} else {
-			value = string(rawValue)
+		case string:
+			value = rawValue
+		case int64, uint64, float32, float64:
+			value = fmt.Sprintf("%v", rawValue)
+		default:
+			log.Panic("unexpected column value type", zap.Any("type", reflect.TypeOf(rawValue)), zap.Any("rawValue", util.RedactAny(rawValue)), zap.Any("mysqlType", mysqlType))
 		}
 		mysqlTypeMap[name] = mysqlType
 		data[name] = value
@@ -360,12 +378,9 @@ func (d *decoder) NextDDLEvent() *commonEvent.DDLEvent {
 	tableIDAllocator.AddBlockTableID(result.SchemaName, result.TableName, tableIDAllocator.Allocate(result.SchemaName, result.TableName))
 
 	result.BlockedTables = common.GetBlockedTables(tableIDAllocator, result)
-	cacheKey := tableKey{
-		schema: result.SchemaName,
-		table:  result.TableName,
-	}
 	// if receive a table level DDL, just remove the table info to trigger create a new one.
-	delete(d.tableInfoCache, cacheKey)
+	delete(d.tableInfoCache, tableKey{schema: result.SchemaName, table: result.TableName})
+	delete(d.tableInfoCache, tableKey{schema: result.SchemaName, table: result.TableName})
 	return result
 }
 
@@ -407,7 +422,7 @@ func formatValue(value any, ft types.FieldType) any {
 		// when encoding the `JavaSQLTypeBLOB`, use `ISO8859_1` decoder, now reverse it back.
 		result, err := charmap.ISO8859_1.NewEncoder().String(rawValue)
 		if err != nil {
-			log.Panic("invalid column value, please report a bug", zap.Any("rawValue", rawValue), zap.Error(err))
+			log.Panic("invalid column value, please report a bug", zap.String("rawValue", util.RedactValue(rawValue)), zap.Error(err))
 		}
 		return []byte(result)
 	}
@@ -416,31 +431,31 @@ func formatValue(value any, ft types.FieldType) any {
 		if mysql.HasUnsignedFlag(ft.GetFlag()) {
 			data, err := strconv.ParseUint(rawValue, 10, 64)
 			if err != nil {
-				log.Panic("invalid column value for unsigned integer", zap.Any("rawValue", rawValue), zap.Error(err))
+				log.Panic("invalid column value for unsigned integer", zap.String("rawValue", util.RedactValue(rawValue)), zap.Error(err))
 			}
 			return data
 		}
 		data, err := strconv.ParseInt(rawValue, 10, 64)
 		if err != nil {
-			log.Panic("invalid column value for integer", zap.Any("rawValue", rawValue), zap.Error(err))
+			log.Panic("invalid column value for integer", zap.String("rawValue", util.RedactValue(rawValue)), zap.Error(err))
 		}
 		return data
 	case mysql.TypeYear:
 		result, err := strconv.ParseInt(rawValue, 10, 64)
 		if err != nil {
-			log.Panic("invalid column value for year", zap.Any("rawValue", rawValue), zap.Error(err))
+			log.Panic("invalid column value for year", zap.String("rawValue", util.RedactValue(rawValue)), zap.Error(err))
 		}
 		return result
 	case mysql.TypeFloat:
 		result, err := strconv.ParseFloat(rawValue, 32)
 		if err != nil {
-			log.Panic("invalid column value for float", zap.Any("rawValue", rawValue), zap.Error(err))
+			log.Panic("invalid column value for float", zap.String("rawValue", util.RedactValue(rawValue)), zap.Error(err))
 		}
 		return float32(result)
 	case mysql.TypeDouble:
 		result, err := strconv.ParseFloat(rawValue, 64)
 		if err != nil {
-			log.Panic("invalid column value for double", zap.Any("rawValue", rawValue), zap.Error(err))
+			log.Panic("invalid column value for double", zap.String("rawValue", util.RedactValue(rawValue)), zap.Error(err))
 		}
 		return result
 	case mysql.TypeVarString, mysql.TypeVarchar, mysql.TypeString,
@@ -450,13 +465,13 @@ func formatValue(value any, ft types.FieldType) any {
 		result := new(tiTypes.MyDecimal)
 		err := result.FromString([]byte(rawValue))
 		if err != nil {
-			log.Panic("invalid column value for decimal", zap.Any("rawValue", rawValue), zap.Error(err))
+			log.Panic("invalid column value for decimal", zap.String("rawValue", util.RedactValue(rawValue)), zap.Error(err))
 		}
 		return result
 	case mysql.TypeDate, mysql.TypeDatetime, mysql.TypeTimestamp:
 		result, err := tiTypes.ParseTime(tiTypes.DefaultStmtNoWarningContext, rawValue, ft.GetType(), ft.GetDecimal())
 		if err != nil {
-			log.Panic("invalid column value for time", zap.Any("rawValue", rawValue),
+			log.Panic("invalid column value for time", zap.String("rawValue", util.RedactValue(rawValue)),
 				zap.Int("flen", ft.GetFlen()), zap.Int("decimal", ft.GetDecimal()),
 				zap.Error(err))
 		}
@@ -471,13 +486,13 @@ func formatValue(value any, ft types.FieldType) any {
 	case mysql.TypeDuration:
 		result, _, err := tiTypes.ParseDuration(tiTypes.DefaultStmtNoWarningContext, rawValue, ft.GetDecimal())
 		if err != nil {
-			log.Panic("invalid column value for duration", zap.Any("rawValue", rawValue), zap.Error(err))
+			log.Panic("invalid column value for duration", zap.String("rawValue", util.RedactValue(rawValue)), zap.Error(err))
 		}
 		return result
 	case mysql.TypeEnum:
 		enumValue, err := strconv.ParseUint(rawValue, 10, 64)
 		if err != nil {
-			log.Panic("invalid column value for enum", zap.Any("rawValue", rawValue), zap.Error(err))
+			log.Panic("invalid column value for enum", zap.String("rawValue", util.RedactValue(rawValue)), zap.Error(err))
 		}
 		return tiTypes.Enum{
 			Name:  "",
@@ -486,7 +501,7 @@ func formatValue(value any, ft types.FieldType) any {
 	case mysql.TypeSet:
 		setValue, err := strconv.ParseUint(rawValue, 10, 64)
 		if err != nil {
-			log.Panic("invalid column value for set", zap.Any("rawValue", rawValue), zap.Error(err))
+			log.Panic("invalid column value for set", zap.String("rawValue", util.RedactValue(rawValue)), zap.Error(err))
 		}
 		return tiTypes.Set{
 			Name:  "",
@@ -495,25 +510,25 @@ func formatValue(value any, ft types.FieldType) any {
 	case mysql.TypeBit:
 		data, err := strconv.ParseUint(rawValue, 10, 64)
 		if err != nil {
-			log.Panic("invalid column value for bit", zap.Any("rawValue", rawValue), zap.Error(err))
+			log.Panic("invalid column value for bit", zap.String("rawValue", util.RedactValue(rawValue)), zap.Error(err))
 		}
 		byteSize := (ft.GetFlen() + 7) >> 3
 		return tiTypes.NewBinaryLiteralFromUint(data, byteSize)
 	case mysql.TypeJSON:
 		result, err := tiTypes.ParseBinaryJSONFromString(rawValue)
 		if err != nil {
-			log.Panic("invalid column value for json", zap.Any("rawValue", rawValue), zap.Error(err))
+			log.Panic("invalid column value for json", zap.String("rawValue", util.RedactValue(rawValue)), zap.Error(err))
 		}
 		return result
 	case mysql.TypeTiDBVectorFloat32:
 		result, err := tiTypes.ParseVectorFloat32(rawValue)
 		if err != nil {
-			log.Panic("cannot parse vector32 value from string", zap.Any("rawValue", rawValue), zap.Error(err))
+			log.Panic("cannot parse vector32 value from string", zap.String("rawValue", util.RedactValue(rawValue)), zap.Error(err))
 		}
 		return result
 	default:
 	}
-	log.Panic("unknown column type", zap.Any("type", ft.GetType()), zap.Any("rawValue", rawValue))
+	log.Panic("unknown column type", zap.Any("type", ft.GetType()), zap.String("rawValue", util.RedactValue(rawValue)))
 	return nil
 }
 

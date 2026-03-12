@@ -207,30 +207,33 @@ func (o *resumeChangefeedOptions) run(cmd *cobra.Command) error {
 	if err := o.confirmResumeChangefeedCheck(cmd); err != nil {
 		return err
 	}
-	tables := &v2.Tables{}
-	if o.checkpointTs != 0 {
+	var (
+		tables = &v2.Tables{}
+		err1   error
+	)
+	overwrite := o.checkpointTs != 0
+	if overwrite {
 		cf, err := o.apiClient.Changefeeds().Get(ctx, o.keyspace, o.changefeedID)
 		if err != nil {
 			return err
 		}
-		tables, err = o.apiClient.Changefeeds().GetAllTables(ctx, &v2.VerifyTableConfig{
+		tables, err1 = o.apiClient.Changefeeds().GetAllTables(ctx, &v2.VerifyTableConfig{
 			ReplicaConfig: cf.Config,
 			StartTs:       cf.CheckpointTs,
 		}, o.keyspace)
-		if err != nil {
-			return err
-		}
-		if len(tables.IneligibleTables) != 0 {
-			if putil.GetOrZero(cf.Config.ForceReplicate) {
-				cmd.Printf("[WARN] Force to replicate some ineligible tables, "+
-					"these tables do not have a primary key or a not-null unique key: %#v\n"+
-					"[WARN] This may cause data redundancy, "+
-					"please refer to the official documentation for details.\n",
-					tables.IneligibleTables)
-			} else {
-				cmd.Printf("[WARN] Some tables are not eligible to replicate, "+
-					"because they do not have a primary key or a not-null unique key: %#v\n",
-					tables.IneligibleTables)
+		if err1 == nil {
+			if len(tables.IneligibleTables) != 0 {
+				if putil.GetOrZero(cf.Config.ForceReplicate) {
+					cmd.Printf("[WARN] Force to replicate some ineligible tables, "+
+						"these tables do not have a primary key or a not-null unique key: %#v\n"+
+						"[WARN] This may cause data redundancy, "+
+						"please refer to the official documentation for details.\n",
+						tables.IneligibleTables)
+				} else {
+					cmd.Printf("[WARN] Some tables are not eligible to replicate, "+
+						"because they do not have a primary key or a not-null unique key: %#v\n",
+						tables.IneligibleTables)
+				}
 			}
 		}
 	}
@@ -238,13 +241,14 @@ func (o *resumeChangefeedOptions) run(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
-	// o.checkpointTs != 0
-	cmd.Printf("Resume changefeed successfully! "+
-		"\nID: %s\nOverwriteCheckpointTs: %t\nIneligibleTablesCount: %d\nEligibleTablesCount: %d\nAllTablesCount: %d\n", o.changefeedID, o.checkpointTs != 0, len(tables.IneligibleTables), len(tables.EligibleTables), len(tables.AllTables))
-	if o.verbose {
-		cmd.Printf("EligibleTables: %s\n", formatTableNames(tables.EligibleTables))
-		cmd.Printf("IneligibleTables: %s\n", formatTableNames(tables.IneligibleTables))
-		cmd.Printf("AllTables: %s\n", formatTableNames(tables.AllTables))
+	cmd.Printf("Resume changefeed successfully! \nID: %s\n", o.changefeedID)
+	if overwrite {
+		cmd.Printf("IneligibleTablesCount: %d\nEligibleTablesCount: %d\nAllTablesCount: %d\nWarning: %s\n", len(tables.IneligibleTables), len(tables.EligibleTables), len(tables.AllTables), err1)
+		if o.verbose {
+			cmd.Printf("EligibleTables: %s\n", formatTableNames(tables.EligibleTables))
+			cmd.Printf("IneligibleTables: %s\n", formatTableNames(tables.IneligibleTables))
+			cmd.Printf("AllTables: %s\n", formatTableNames(tables.AllTables))
+		}
 	}
 	return err
 }

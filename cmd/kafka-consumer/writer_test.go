@@ -17,11 +17,16 @@ import (
 	"context"
 	"testing"
 
+	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
+	"github.com/pingcap/ticdc/cmd/util"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
 	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
 )
 
@@ -37,6 +42,10 @@ var _ sink.Sink = (*recordingSink)(nil)
 func (s *recordingSink) SinkType() common.SinkType { return common.MysqlSinkType }
 func (s *recordingSink) IsNormal() bool            { return true }
 func (s *recordingSink) AddDMLEvent(_ *commonEvent.DMLEvent) {
+}
+
+func (s *recordingSink) FlushDMLBeforeBlock(_ commonEvent.BlockEvent) error {
+	return nil
 }
 
 func (s *recordingSink) WriteBlockEvent(event commonEvent.BlockEvent) error {
@@ -506,4 +515,53 @@ func TestWriterAppendDDL_dropsStaleDDLForSameBlockedTable(t *testing.T) {
 
 	require.Len(t, w.ddlList, 1)
 	require.Equal(t, "ALTER TABLE `test`.`t` ADD COLUMN `c1` INT", w.ddlList[0].Query)
+}
+
+func TestAppendRow2GroupDoesNotDropCommitTsFallbackBeforeApplied(t *testing.T) {
+	// Scenario: TiCDC can replay older commitTs after restart or network recovery, so the Kafka consumer
+	// must keep fallback commitTs DMLs until the same table's events are already flushed downstream.
+	//
+	// Steps:
+	// 1) Append a newer DML and then an older replayed DML for the same table.
+	// 2) Verify the replayed DML is still resolvable before AppliedWatermark advances.
+	// 3) Advance AppliedWatermark beyond the replayed commitTs and verify the same replay is ignored.
+	replicaCfg := config.GetDefaultReplicaConfig()
+	eventRouter, err := eventrouter.NewEventRouter(replicaCfg.Sink, "test-topic", false, false)
+	require.NoError(t, err)
+
+	w := &writer{
+		progresses:             []*partitionProgress{{partition: 0, eventsGroup: make(map[int64]*util.EventsGroup)}},
+		eventRouter:            eventRouter,
+		protocol:               config.ProtocolCanalJSON,
+		partitionTableAccessor: codeccommon.NewPartitionTableAccessor(),
+	}
+
+	newDMLEvent := func(tableID int64, commitTs uint64) *commonEvent.DMLEvent {
+		return &commonEvent.DMLEvent{
+			PhysicalTableID: tableID,
+			CommitTs:        commitTs,
+			RowTypes:        []common.RowType{common.RowTypeUpdate},
+			Rows:            chunk.NewChunkWithCapacity(nil, 0),
+			TableInfo: &common.TableInfo{
+				TableName: common.TableName{Schema: "test", Table: "t"},
+			},
+		}
+	}
+
+	progress := w.progresses[0]
+
+	w.appendRow2Group(newDMLEvent(1, 200), progress, kafka.Offset(10))
+	w.appendRow2Group(newDMLEvent(1, 100), progress, kafka.Offset(11))
+
+	group := progress.eventsGroup[1]
+	require.NotNil(t, group)
+
+	resolved := group.ResolveInto(150, nil)
+	require.Len(t, resolved, 1)
+	require.Equal(t, uint64(100), resolved[0].CommitTs)
+
+	group.AppliedWatermark = 200
+	w.appendRow2Group(newDMLEvent(1, 100), progress, kafka.Offset(12))
+	resolved = group.ResolveInto(150, nil)
+	require.Empty(t, resolved)
 }

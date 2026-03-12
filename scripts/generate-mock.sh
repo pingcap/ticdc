@@ -35,3 +35,6 @@ fi
 "$MOCKGEN" -source pkg/api/v2/api_client.go -destination pkg/api/v2/mock/api_client_mock.go -package mock
 "$MOCKGEN" -source pkg/sink/codec/simple/marshaller.go -destination pkg/sink/codec/simple/mock/marshaller.go
 "$MOCKGEN" -source pkg/keyspace/keyspace_manager.go -destination pkg/keyspace/keyspace_manager_mock.go -package keyspace
+"$MOCKGEN" -source pkg/txnutil/gc/gc_manager.go -destination pkg/txnutil/gc/gc_manager_mock.go -package gc
+"$MOCKGEN" -source pkg/redo/writer/writer.go -destination pkg/redo/writer/writer_mock.go -package writer
+"$MOCKGEN" -source downstreamadapter/sink/sink.go -destination downstreamadapter/sink/mock/sink_mock.go -package mock

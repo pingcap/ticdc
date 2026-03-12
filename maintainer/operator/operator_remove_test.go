@@ -28,7 +28,7 @@ import (
 func TestRemoveOperator_NodeRemovedBeforeStopped(t *testing.T) {
 	spanController, _, replicaSet, nodeA, _ := setupTestEnvironment(t)
 
-	op := newRemoveDispatcherOperator(spanController, replicaSet)
+	op := newRemoveDispatcherOperator(spanController, replicaSet, heartbeatpb.OperatorType_O_Remove)
 	require.NotNil(t, op)
 
 	op.Start()
@@ -53,7 +53,7 @@ func TestRemoveOperator_SnapshotNodeIDAfterMarkAbsent(t *testing.T) {
 	spanController, _, replicaSet, nodeA, _ := setupTestEnvironment(t)
 	spanController.AddReplicatingSpan(replicaSet)
 
-	op := newRemoveDispatcherOperator(spanController, replicaSet)
+	op := newRemoveDispatcherOperator(spanController, replicaSet, heartbeatpb.OperatorType_O_Remove)
 	require.NotNil(t, op)
 
 	spanController.MarkSpanAbsent(replicaSet)
@@ -75,7 +75,7 @@ func TestRemoveOperator_SnapshotNodeIDAfterMarkAbsent(t *testing.T) {
 func TestRemoveOperator_NotFinishedOnWaitingMerge(t *testing.T) {
 	spanController, _, replicaSet, nodeA, _ := setupTestEnvironment(t)
 
-	op := newRemoveDispatcherOperator(spanController, replicaSet)
+	op := newRemoveDispatcherOperator(spanController, replicaSet, heartbeatpb.OperatorType_O_Remove)
 	require.NotNil(t, op)
 
 	waitingMergeStatus := &heartbeatpb.TableSpanStatus{
@@ -98,7 +98,7 @@ func TestRemoveOperator_NotFinishedOnWaitingMerge(t *testing.T) {
 func TestRemoveOperator_FinishedOnRemovedStatus(t *testing.T) {
 	spanController, _, replicaSet, nodeA, _ := setupTestEnvironment(t)
 
-	op := newRemoveDispatcherOperator(spanController, replicaSet)
+	op := newRemoveDispatcherOperator(spanController, replicaSet, heartbeatpb.OperatorType_O_Remove)
 	require.NotNil(t, op)
 
 	removedStatus := &heartbeatpb.TableSpanStatus{

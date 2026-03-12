@@ -104,6 +104,10 @@ type DDLEvent struct {
 	// to ensure the new truncated table can be handled correctly.
 	// If the DDL involves multiple tables, this field is not effective.
 	// The multiple table DDL event will be handled by filtering querys and table infos.
+	// NOTE: The `msg` tag is a legacy tag kept for backward compatibility.
+	// DDLEventVersion1 still marshals the struct with encoding/json, so changing this
+	// field to `json:"not_sync"` would change the wire key from `NotSync` to
+	// `not_sync` and break mixed-version DDLEvent interoperability.
 	NotSync bool `msg:"not_sync"`
 }
 
@@ -400,11 +404,6 @@ func (t *DDLEvent) IsPaused() bool {
 
 func (t *DDLEvent) Len() int32 {
 	return 1
-}
-
-type SchemaTableName struct {
-	SchemaName string
-	TableName  string
 }
 
 type DB struct {
