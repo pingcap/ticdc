@@ -43,6 +43,7 @@ const (
 
 type buildPersistedDDLEventFuncArgs struct {
 	job          *model.Job
+	kvStorage    kv.Storage
 	databaseMap  map[int64]*BasicDatabaseInfo
 	tableMap     map[int64]*BasicTableInfo
 	partitionMap map[int64]BasicPartitionInfo
@@ -120,8 +121,6 @@ type persistStorageDDLHandler struct {
 	// see the details in buildDDLEventForExchangeTablePartition and buildDDLEventForRenameTables.
 	// For other DDLs, tableID is not used and can be set to 0.
 	buildDDLEventFunc func(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error)
-	// buildDDLEventWithStorageFunc is used by DDLs whose event construction needs access to kv storage.
-	buildDDLEventWithStorageFunc func(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64, storage kv.Storage) (commonEvent.DDLEvent, bool, error)
 }
 
 var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
@@ -405,14 +404,13 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		buildDDLEventFunc:          buildDDLEventForRenameTables,
 	},
 	model.ActionCreateTables: {
-		buildPersistedDDLEventFunc:   buildPersistedDDLEventForCreateTables,
-		updateDDLHistoryFunc:         updateDDLHistoryForCreateTables,
-		updateFullTableInfoFunc:      updateFullTableInfoForMultiTablesDDL,
-		updateSchemaMetadataFunc:     updateSchemaMetadataForCreateTables,
-		iterateEventTablesFunc:       iterateEventTablesForCreateTables,
-		extractTableInfoFunc:         extractTableInfoFuncForCreateTables,
-		buildDDLEventFunc:            buildDDLEventForCreateTables,
-		buildDDLEventWithStorageFunc: buildDDLEventForCreateTablesWithStorage,
+		buildPersistedDDLEventFunc: buildPersistedDDLEventForCreateTables,
+		updateDDLHistoryFunc:       updateDDLHistoryForCreateTables,
+		updateFullTableInfoFunc:    updateFullTableInfoForMultiTablesDDL,
+		updateSchemaMetadataFunc:   updateSchemaMetadataForCreateTables,
+		iterateEventTablesFunc:     iterateEventTablesForCreateTables,
+		extractTableInfoFunc:       extractTableInfoFuncForCreateTables,
+		buildDDLEventFunc:          buildDDLEventForCreateTables,
 	},
 	model.ActionMultiSchemaChange: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForNormalDDLOnSingleTable,
@@ -1002,6 +1000,14 @@ func buildPersistedDDLEventForCreateTables(args buildPersistedDDLEventFuncArgs) 
 	event := buildPersistedDDLEventCommon(args)
 	event.SchemaName = getSchemaName(args.databaseMap, event.SchemaID)
 	event.MultipleTableInfos = args.job.BinlogInfo.MultipleTableInfos
+	querys, err := commonEvent.SplitQueries(event.Query)
+	if err != nil || len(querys) != len(event.MultipleTableInfos) {
+		rebuiltQuerys, rebuildErr := rebuildCreateTablesQueries(event.Query, event.MultipleTableInfos, args.kvStorage)
+		if rebuildErr != nil {
+			log.Panic("rebuild create tables queries failed", zap.Error(rebuildErr), zap.String("query", event.Query))
+		}
+		event.Query = strings.Join(rebuiltQuerys, "")
+	}
 	return event
 }
 
@@ -2851,12 +2857,6 @@ func buildDDLEventForRenameTables(rawEvent *PersistedDDLEvent, tableFilter filte
 }
 
 func buildDDLEventForCreateTables(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error) {
-	return buildDDLEventForCreateTablesWithStorage(rawEvent, tableFilter, tableID, nil)
-}
-
-func buildDDLEventForCreateTablesWithStorage(
-	rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64, storage kv.Storage,
-) (commonEvent.DDLEvent, bool, error) {
 	ddlEvent, _, err := buildDDLEventCommon(rawEvent, tableFilter, WithoutTiDBOnly)
 	if err != nil {
 		return commonEvent.DDLEvent{}, false, err
@@ -2884,7 +2884,7 @@ func buildDDLEventForCreateTablesWithStorage(
 	if allFiltered {
 		return commonEvent.DDLEvent{}, false, err
 	}
-	querys, err := splitCreateTablesQueries(rawEvent, storage)
+	querys, err := splitCreateTablesQueries(rawEvent)
 	if err != nil {
 		return commonEvent.DDLEvent{}, false, err
 	}
@@ -2946,22 +2946,25 @@ func buildDDLEventForCreateTablesWithStorage(
 	return ddlEvent, true, err
 }
 
-func splitCreateTablesQueries(rawEvent *PersistedDDLEvent, storage kv.Storage) ([]string, error) {
+func splitCreateTablesQueries(rawEvent *PersistedDDLEvent) ([]string, error) {
 	querys, err := commonEvent.SplitQueries(rawEvent.Query)
 	if err == nil && len(querys) == len(rawEvent.MultipleTableInfos) {
 		return querys, nil
 	}
+	return nil, cerror.WrapError(cerror.ErrTiDBUnexpectedJobMeta, errors.New("create tables query count not match table count"))
+}
 
+func rebuildCreateTablesQueries(query string, tableInfos []*model.TableInfo, storage kv.Storage) ([]string, error) {
 	fields := []zap.Field{
-		zap.Int("queryCount", len(querys)),
-		zap.Int("tableCount", len(rawEvent.MultipleTableInfos)),
-		zap.String("query", rawEvent.Query),
+		zap.Int("tableCount", len(tableInfos)),
+		zap.String("query", query),
 	}
-	if err != nil {
+	if splitQueries, err := commonEvent.SplitQueries(query); err != nil {
 		fields = append(fields, zap.Error(err))
+	} else {
+		fields = append(fields, zap.Int("queryCount", len(splitQueries)))
 	}
 	log.Warn("create tables query count not match table count rebuild queries by table info", fields...)
-
 	if storage == nil {
 		return nil, cerror.WrapError(cerror.ErrTiDBUnexpectedJobMeta, errors.New("nil kv storage when rebuilding create tables queries"))
 	}
@@ -2971,8 +2974,8 @@ func splitCreateTablesQueries(rawEvent *PersistedDDLEvent, storage kv.Storage) (
 	}
 	defer se.Close()
 
-	rebuiltQuerys := make([]string, 0, len(rawEvent.MultipleTableInfos))
-	for _, tableInfo := range rawEvent.MultipleTableInfos {
+	rebuiltQuerys := make([]string, 0, len(tableInfos))
+	for _, tableInfo := range tableInfos {
 		if tableInfo == nil {
 			return nil, cerror.WrapError(cerror.ErrTiDBUnexpectedJobMeta, errors.New("nil table info in create tables ddl"))
 		}

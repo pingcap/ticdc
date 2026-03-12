@@ -3673,17 +3673,18 @@ func TestBuildDDLEventForCreateTablesQueryCountMismatch(t *testing.T) {
 		column.State = model.StatePublic
 	}
 
-	rawEvent := &PersistedDDLEvent{
-		Type:       byte(model.ActionCreateTables),
-		SchemaID:   100,
-		SchemaName: "test",
-		Query:      "CREATE TABLE `t_26` (`a` INT PRIMARY KEY,`b` INT)",
-		MultipleTableInfos: []*model.TableInfo{
-			tableInfo1,
-			tableInfo2,
+	job := &model.Job{
+		Type:     model.ActionCreateTables,
+		SchemaID: 100,
+		Query:    "CREATE TABLE `t_26` (`a` INT PRIMARY KEY,`b` INT)",
+		BinlogInfo: &model.HistoryInfo{
+			MultipleTableInfos: []*model.TableInfo{
+				tableInfo1,
+				tableInfo2,
+			},
 		},
 	}
-	originalQueries, err := commonEvent.SplitQueries(rawEvent.Query)
+	originalQueries, err := commonEvent.SplitQueries(job.Query)
 	require.NoError(t, err)
 	require.Len(t, originalQueries, 1)
 
@@ -3696,7 +3697,13 @@ func TestBuildDDLEventForCreateTablesQueryCountMismatch(t *testing.T) {
 	require.NoError(t, err)
 	defer dom.Close()
 
-	ddlEvent, ok, err := buildDDLEventForCreateTablesWithStorage(rawEvent, nil, 0, store)
+	rawEvent := buildPersistedDDLEventForCreateTables(buildPersistedDDLEventFuncArgs{
+		job:         job,
+		kvStorage:   store,
+		databaseMap: map[int64]*BasicDatabaseInfo{100: {Name: "test"}},
+	})
+
+	ddlEvent, ok, err := buildDDLEventForCreateTables(&rawEvent, nil, 0)
 	require.NoError(t, err)
 	require.True(t, ok)
 
