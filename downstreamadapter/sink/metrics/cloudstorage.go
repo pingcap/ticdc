@@ -77,7 +77,6 @@ var (
 		Help:      "Flushed payload bytes per task by reason",
 		Buckets:   prometheus.ExponentialBuckets(1024, 2.0, 16),
 	}, []string{"namespace", "changefeed", "reason"})
-
 	CloudStorageDDLDrainDurationHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: namespace,
 		Subsystem: subsystem,

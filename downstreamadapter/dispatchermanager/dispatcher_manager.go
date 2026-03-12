@@ -33,6 +33,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/common/event"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
@@ -87,6 +88,16 @@ type DispatcherManager struct {
 	dispatcherMap *DispatcherMap[*dispatcher.EventDispatcher]
 	// redoDispatcherMap restore all the redo dispatchers in the DispatcherManager, including table trigger redo dispatcher
 	redoDispatcherMap *DispatcherMap[*dispatcher.RedoDispatcher]
+	// currentOperatorMap stores at most one in-flight scheduling request per dispatcherID (event and redo).
+	//
+	// It is used for:
+	//   - suppressing duplicate maintainer requests for the same dispatcher,
+	//   - reporting unfinished requests during bootstrap so a new maintainer can restore operators,
+	//   - cleaning up remove requests when a dispatcher is fully removed.
+	//
+	// Entries must be deleted on completion (create -> after creation; remove -> on cleanup), otherwise
+	// future maintainer requests for the same dispatcherID will be ignored.
+	currentOperatorMap sync.Map // map[common.DispatcherID]SchedulerDispatcherRequest (in dispatcher manager, not heartbeatpb)
 	// schemaIDToDispatchers is shared in the DispatcherManager,
 	// it store all the infos about schemaID->Dispatchers
 	// Dispatchers may change the schemaID when meets some special events, such as rename ddl
@@ -108,9 +119,13 @@ type DispatcherManager struct {
 
 	// sink is used to send all the events to the downstream.
 	sink sink.Sink
+
 	// redo related
-	RedoEnable bool
-	redoSink   *redo.Sink
+	// redoEnabled is immutable and set to true if enabled.
+	redoEnabled bool
+	// redoReady set to true after the redo components are fully initialized and safe for concurrent access.
+	redoReady atomic.Bool
+	redoSink  *redo.Sink
 	// redoGlobalTs stores the resolved-ts of the redo metadata and blocks events in the common dispatcher where the commit-ts is greater than the resolved-ts.
 	redoGlobalTs atomic.Uint64
 
@@ -176,6 +191,7 @@ func NewDispatcherManager(
 	manager := &DispatcherManager{
 		ctx:                   ctx,
 		dispatcherMap:         newDispatcherMap[*dispatcher.EventDispatcher](),
+		currentOperatorMap:    sync.Map{},
 		changefeedID:          changefeedID,
 		keyspaceID:            keyspaceID,
 		pdClock:               pdClock,
@@ -185,6 +201,7 @@ func NewDispatcherManager(
 		latestRedoWatermark:   NewWatermark(0),
 		schemaIDToDispatchers: dispatcher.NewSchemaIDToDispatchers(),
 		sinkQuota:             cfConfig.MemoryQuota,
+		redoEnabled:           isRedoConfigEnabled(cfConfig),
 
 		metricTableTriggerEventDispatcherCount: metrics.TableTriggerEventDispatcherGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "eventDispatcher"),
 		metricEventDispatcherCount:             metrics.EventDispatcherGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "eventDispatcher"),
@@ -234,6 +251,7 @@ func NewDispatcherManager(
 		manager.changefeedID,
 		manager.config.TimeZone,
 		manager.config.BDRMode,
+		manager.config.EnableActiveActive,
 		outputRawChangeEvent,
 		integrityCfg,
 		filterCfg,
@@ -298,7 +316,7 @@ func NewDispatcherManager(
 		zap.Uint64("startTs", startTs),
 		zap.Uint64("sinkQuota", manager.sinkQuota),
 		zap.Uint64("redoQuota", manager.redoQuota),
-		zap.Bool("redoEnable", manager.RedoEnable),
+		zap.Bool("redoEnable", manager.IsRedoEnabled()),
 		zap.Bool("outputRawChangeEvent", manager.sharedInfo.IsOutputRawChangeEvent()),
 		zap.String("filterConfig", filterCfg.String()),
 	)
@@ -349,8 +367,11 @@ func (e *DispatcherManager) InitalizeTableTriggerEventDispatcher(schemaInfo []*h
 	// table trigger event dispatcher can register to event collector to receive events after finish the initial table schema store from the maintainer.
 	appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).AddDispatcher(e.GetTableTriggerEventDispatcher(), e.sinkQuota)
 
-	// when sink is not mysql-class, table trigger event dispatcher need to receive the checkpointTs message from maintainer.
-	if e.sink.SinkType() != common.MysqlSinkType {
+	// The table trigger event dispatcher needs changefeed-level checkpoint updates only
+	// when downstream components must maintain table names (for non-MySQL sinks), or
+	// when MySQL/TiDB sink runs in enable-active-active mode to update the progress table.
+	needCheckpointUpdates := commonEvent.NeedTableNameStoreAndCheckpointTs(e.sink.SinkType() == common.MysqlSinkType, e.sharedInfo.EnableActiveActive())
+	if needCheckpointUpdates {
 		appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RegisterCheckpointTsMessageDs(e)
 	}
 	return nil
@@ -442,7 +463,7 @@ func (e *DispatcherManager) newEventDispatchers(infos map[common.DispatcherID]di
 			currentPdTs,
 			e.sink,
 			e.sharedInfo,
-			e.RedoEnable,
+			e.IsRedoEnabled(),
 			&e.redoGlobalTs,
 		)
 		if e.heartBeatTask == nil {
@@ -712,7 +733,7 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 	toCleanMap := make([]*cleanMap, 0)
 	dispatcherCount := 0
 
-	if e.RedoEnable {
+	if e.IsRedoReady() {
 		redoSeq := e.redoDispatcherMap.ForEach(func(id common.DispatcherID, dispatcherItem *dispatcher.RedoDispatcher) {
 			dispatcherCount++
 			status, cleanMap, watermark := getDispatcherStatus(id, dispatcherItem, needCompleteStatus)
@@ -846,7 +867,7 @@ func (e *DispatcherManager) mergeEventDispatcher(dispatcherIDs []common.Dispatch
 		0,     // currentPDTs will be calculated later.
 		e.sink,
 		e.sharedInfo,
-		e.RedoEnable,
+		e.IsRedoEnabled(),
 		&e.redoGlobalTs,
 	)
 
@@ -879,7 +900,7 @@ func (e *DispatcherManager) close(removeChangefeed bool) {
 		zap.Stringer("changefeedID", e.changefeedID))
 
 	defer e.closing.Store(false)
-	if e.RedoEnable {
+	if e.IsRedoEnabled() {
 		closeAllDispatchers(e.changefeedID, e.redoDispatcherMap, e.redoSink.SinkType())
 		log.Info("closed all redo dispatchers",
 			zap.Stringer("changefeedID", e.changefeedID))
@@ -925,7 +946,7 @@ func (e *DispatcherManager) close(removeChangefeed bool) {
 
 	log.Info("shared info closed", zap.Stringer("changefeedID", e.changefeedID))
 
-	if e.RedoEnable {
+	if e.IsRedoEnabled() {
 		e.redoSink.Close(removeChangefeed)
 		// FIXME: cleanup redo log when remove the changefeed
 		e.closeRedoMeta(removeChangefeed)
@@ -952,6 +973,11 @@ func (e *DispatcherManager) close(removeChangefeed bool) {
 func (e *DispatcherManager) cleanEventDispatcher(id common.DispatcherID, schemaID int64) {
 	e.dispatcherMap.Delete(id)
 	e.schemaIDToDispatchers.Delete(schemaID, id)
+	e.currentOperatorMap.Delete(id)
+	log.Debug("delete current working remove operator",
+		zap.String("changefeedID", e.changefeedID.String()),
+		zap.String("dispatcherID", id.String()),
+	)
 	tableTriggerEventDispatcher := e.GetTableTriggerEventDispatcher()
 	if tableTriggerEventDispatcher != nil && tableTriggerEventDispatcher.GetId() == id {
 		e.SetTableTriggerEventDispatcher(nil)

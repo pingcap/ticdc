@@ -177,6 +177,10 @@ func (d *dmlWriters) AddDMLEvent(event *commonEvent.DMLEvent) {
 }
 
 func (d *dmlWriters) PassBlockEvent(event commonEvent.BlockEvent) error {
+	return d.FlushDMLBeforeBlock(event)
+}
+
+func (d *dmlWriters) FlushDMLBeforeBlock(event commonEvent.BlockEvent) error {
 	if event == nil {
 		return nil
 	}

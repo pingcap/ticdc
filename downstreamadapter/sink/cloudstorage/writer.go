@@ -49,9 +49,8 @@ type writer struct {
 	inputCh       *chann.DrainableChann[*task]
 	isClosed      uint64
 
-	statistics        *pmetrics.Statistics
-	filePathGenerator *cloudstorage.FilePathGenerator
-
+	statistics             *pmetrics.Statistics
+	filePathGenerator      *cloudstorage.FilePathGenerator
 	metricWriteBytes       prometheus.Gauge
 	metricFileCount        prometheus.Gauge
 	metricWriteDuration    prometheus.Observer
@@ -157,13 +156,25 @@ func (d *writer) flushMessages(ctx context.Context) error {
 				if len(singleTask.msgs) == 0 && len(singleTask.entries) == 0 {
 					continue
 				}
+				log.Info("storage sink writer flush table task",
+					zap.String("keyspace", d.changeFeedID.Keyspace()),
+					zap.String("changefeed", d.changeFeedID.ID().String()),
+					zap.Int("workerID", d.shardID),
+					zap.String("flushReason", string(task.reason)),
+					zap.String("schema", table.TableNameWithPhysicTableID.Schema),
+					zap.String("table", table.TableNameWithPhysicTableID.Table),
+					zap.Int64("tableID", table.TableNameWithPhysicTableID.TableID),
+					zap.Uint64("tableVersion", table.TableInfoVersion),
+					zap.Int("messageCount", len(singleTask.msgs)),
+					zap.Uint64("taskBytes", singleTask.size))
 
 				hasNewerSchemaVersion, err := d.filePathGenerator.CheckOrWriteSchema(ctx, table, singleTask.tableInfo)
 				if err != nil {
 					log.Error("failed to write schema file to external storage",
 						zap.Int("shardID", d.shardID),
 						zap.String("keyspace", d.changeFeedID.Keyspace()),
-						zap.Stringer("changefeed", d.changeFeedID.ID()),
+						zap.String("changefeed", d.changeFeedID.ID().String()),
+						zap.Int("workerID", d.shardID),
 						zap.Error(err))
 					return err
 				}
@@ -172,7 +183,9 @@ func (d *writer) flushMessages(ctx context.Context) error {
 					log.Warn("ignore messages belonging to an old schema version",
 						zap.Int("shardID", d.shardID),
 						zap.String("keyspace", d.changeFeedID.Keyspace()),
-						zap.Stringer("changefeed", d.changeFeedID.ID()),
+						zap.String("changefeed", d.changeFeedID.ID().String()),
+						zap.Int("workerID", d.shardID),
+						zap.String("flushReason", string(task.reason)),
 						zap.String("schema", table.TableNameWithPhysicTableID.Schema),
 						zap.String("table", table.TableNameWithPhysicTableID.Table),
 						zap.Uint64("version", table.TableInfoVersion))
@@ -185,7 +198,8 @@ func (d *writer) flushMessages(ctx context.Context) error {
 					log.Error("failed to generate data file path",
 						zap.Int("shardID", d.shardID),
 						zap.String("keyspace", d.changeFeedID.Keyspace()),
-						zap.Stringer("changefeed", d.changeFeedID.ID()),
+						zap.String("changefeed", d.changeFeedID.ID().String()),
+						zap.Int("workerID", d.shardID),
 						zap.Error(err))
 					return err
 				}
@@ -195,19 +209,12 @@ func (d *writer) flushMessages(ctx context.Context) error {
 					log.Error("failed to write data file to external storage",
 						zap.Int("shardID", d.shardID),
 						zap.String("keyspace", d.changeFeedID.Keyspace()),
-						zap.Stringer("changefeed", d.changeFeedID.ID()),
+						zap.String("changefeed", d.changeFeedID.ID().String()),
+						zap.Int("workerID", d.shardID),
 						zap.String("path", dataFilePath),
 						zap.Error(err))
 					return err
 				}
-
-				log.Debug("write file to storage success",
-					zap.Int("shardID", d.shardID),
-					zap.String("keyspace", d.changeFeedID.Keyspace()),
-					zap.Stringer("changefeed", d.changeFeedID.ID()),
-					zap.String("schema", table.TableNameWithPhysicTableID.Schema),
-					zap.String("table", table.TableNameWithPhysicTableID.Table),
-					zap.String("path", dataFilePath))
 			}
 
 			flushDuration := time.Since(start)
@@ -275,7 +282,11 @@ func (d *writer) ignoreTableTask(task *singleTableTask) {
 	}
 }
 
-func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath string, task *singleTableTask) error {
+func (d *writer) writeDataFile(
+	ctx context.Context,
+	dataFilePath, indexFilePath string,
+	task *singleTableTask,
+) error {
 	var callbacks []func()
 	buf := bytes.NewBuffer(make([]byte, 0, task.size))
 	rowsCnt := 0
@@ -348,11 +359,11 @@ func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath 
 		}
 		if inErr = writer.Close(ctx); inErr != nil {
 			log.Error("failed to close writer",
-				zap.Error(inErr),
-				zap.Int("shardID", d.shardID),
-				zap.Any("table", task.tableInfo.TableName),
 				zap.String("keyspace", d.changeFeedID.Keyspace()),
-				zap.Stringer("changefeed", d.changeFeedID.ID()))
+				zap.String("changefeed", d.changeFeedID.ID().String()),
+				zap.Int("workerID", d.shardID),
+				zap.Any("table", task.tableInfo.TableName),
+				zap.Error(inErr))
 			return 0, 0, errors.Trace(inErr)
 		}
 
@@ -369,7 +380,8 @@ func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath 
 		log.Error("failed to write index file to external storage",
 			zap.Int("shardID", d.shardID),
 			zap.String("keyspace", d.changeFeedID.Keyspace()),
-			zap.Stringer("changefeed", d.changeFeedID.ID()),
+			zap.String("changefeed", d.changeFeedID.ID().String()),
+			zap.Int("workerID", d.shardID),
 			zap.String("path", indexFilePath),
 			zap.Error(err))
 		return err

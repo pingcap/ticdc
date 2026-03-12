@@ -22,6 +22,8 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 // SharedInfo contains all the shared configuration and resources
@@ -32,6 +34,7 @@ type SharedInfo struct {
 	changefeedID         common.ChangeFeedID
 	timezone             string
 	bdrMode              bool
+	enableActiveActive   bool
 	outputRawChangeEvent bool
 
 	// Configuration objects
@@ -66,6 +69,10 @@ type SharedInfo struct {
 	// errCh is used to collect the errors that need to report to maintainer
 	// such as error of flush ddl events
 	errCh chan error
+
+	// metricHandleDDLHis records each DDL handling time duration,
+	// which includes the time of executing the DDL and waiting for the DDL to be resolved.
+	metricHandleDDLHis prometheus.Observer
 }
 
 // NewSharedInfo creates a new SharedInfo with the given parameters
@@ -73,6 +80,7 @@ func NewSharedInfo(
 	changefeedID common.ChangeFeedID,
 	timezone string,
 	bdrMode bool,
+	enableActiveActive bool,
 	outputRawChangeEvent bool,
 	integrityConfig *eventpb.IntegrityConfig,
 	filterConfig *eventpb.FilterConfig,
@@ -87,6 +95,7 @@ func NewSharedInfo(
 		changefeedID:          changefeedID,
 		timezone:              timezone,
 		bdrMode:               bdrMode,
+		enableActiveActive:    enableActiveActive,
 		outputRawChangeEvent:  outputRawChangeEvent,
 		integrityConfig:       integrityConfig,
 		filterConfig:          filterConfig,
@@ -96,6 +105,7 @@ func NewSharedInfo(
 		blockStatusesChan:     blockStatusesChan,
 		blockExecutor:         newBlockEventExecutor(),
 		errCh:                 errCh,
+		metricHandleDDLHis:    metrics.HandleDDLHistogram.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
 	}
 
 	if txnAtomicity != nil {
@@ -152,6 +162,10 @@ func (d *BasicDispatcher) SetSeq(seq uint64) {
 
 func (d *BasicDispatcher) GetBDRMode() bool {
 	return d.sharedInfo.bdrMode
+}
+
+func (d *BasicDispatcher) EnableActiveActive() bool {
+	return d.sharedInfo.EnableActiveActive()
 }
 
 func (d *BasicDispatcher) GetTimezone() string {
@@ -220,7 +234,7 @@ func (d *BasicDispatcher) IsTableTriggerDispatcher() bool {
 // SetStartTs only be called after the dispatcher is created
 func (d *BasicDispatcher) SetStartTs(startTs uint64) {
 	atomic.StoreUint64(&d.startTs, startTs)
-	atomic.StoreUint64(&d.resolvedTs, startTs)
+	d.resolvedTs.Store(startTs)
 }
 
 func (d *BasicDispatcher) SetCurrentPDTs(currentPDTs uint64) {
@@ -234,6 +248,10 @@ func (s *SharedInfo) IsOutputRawChangeEvent() bool {
 
 func (s *SharedInfo) GetStatusesChan() chan TableSpanStatusWithSeq {
 	return s.statusesChan
+}
+
+func (s *SharedInfo) EnableActiveActive() bool {
+	return s.enableActiveActive
 }
 
 func (s *SharedInfo) GetBlockStatusesChan() chan *heartbeatpb.TableSpanBlockStatus {
@@ -252,4 +270,7 @@ func (s *SharedInfo) Close() {
 	if s.blockExecutor != nil {
 		s.blockExecutor.Close()
 	}
+	keyspace := s.changefeedID.Keyspace()
+	changefeedID := s.changefeedID.Name()
+	metrics.HandleDDLHistogram.DeleteLabelValues(keyspace, changefeedID)
 }

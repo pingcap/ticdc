@@ -49,7 +49,7 @@ func TestScheduleEvent(t *testing.T) {
 		BlockTs:           10,
 		NeedDroppedTables: &heartbeatpb.InfluencedTables{InfluenceType: heartbeatpb.InfluenceType_Normal, TableIDs: []int64{1}},
 		NeedAddedTables:   []*heartbeatpb.Table{{TableID: 2, SchemaID: 1, Splitable: true}, {TableID: 3, SchemaID: 1, Splitable: true}},
-	}, true)
+	}, true, common.DefaultMode)
 	event.scheduleBlockEvent()
 	// drop table will be executed first
 	require.Equal(t, 2, spanController.GetAbsentSize())
@@ -62,7 +62,7 @@ func TestScheduleEvent(t *testing.T) {
 			SchemaID:      1,
 		},
 		NeedAddedTables: []*heartbeatpb.Table{{TableID: 4, SchemaID: 1, Splitable: true}},
-	}, false)
+	}, false, common.DefaultMode)
 	event.scheduleBlockEvent()
 	// drop table will be executed first, then add the new table
 	require.Equal(t, 1, spanController.GetAbsentSize())
@@ -75,7 +75,7 @@ func TestScheduleEvent(t *testing.T) {
 			TableIDs:      []int64{4},
 		},
 		NeedAddedTables: []*heartbeatpb.Table{{TableID: 5, SchemaID: 1, Splitable: true}},
-	}, false)
+	}, false, common.DefaultMode)
 	event.scheduleBlockEvent()
 	// drop table will be executed first, then add the new table
 	require.Equal(t, 1, spanController.GetAbsentSize())
@@ -111,7 +111,7 @@ func TestResendAction(t *testing.T) {
 		BlockTables: &heartbeatpb.InfluencedTables{
 			InfluenceType: heartbeatpb.InfluenceType_All,
 		},
-	}, false)
+	}, false, common.DefaultMode)
 	// time is not reached
 	event.lastResendTime = time.Now()
 	event.selected.Store(true)
@@ -124,12 +124,29 @@ func TestResendAction(t *testing.T) {
 	msgs = event.resend(common.DefaultMode)
 	require.Len(t, msgs, 0)
 
-	// resend write action
+	// resend flush action
 	event.selected.Store(true)
 	event.writerDispatcherAdvanced = false
 	event.writerDispatcher = dispatcherIDs[0]
 	msgs = event.resend(common.DefaultMode)
 	require.Len(t, msgs, 1)
+	flushResp := msgs[0].Message[0].(*heartbeatpb.HeartBeatResponse)
+	require.Len(t, flushResp.DispatcherStatuses, 1)
+	require.Equal(t, heartbeatpb.Action_Flush, flushResp.DispatcherStatuses[0].Action.Action)
+	require.Equal(t, uint64(10), flushResp.DispatcherStatuses[0].Action.CommitTs)
+
+	// flush phase disabled: resend write action directly
+	event.lastResendTime = time.Time{}
+	event.flushEnabled = false
+	event.flushDispatcherAdvanced = true
+	event.writerDispatcherAdvanced = false
+	event.writerDispatcher = dispatcherIDs[0]
+	msgs = event.resend(common.DefaultMode)
+	require.Len(t, msgs, 1)
+	writeResp := msgs[0].Message[0].(*heartbeatpb.HeartBeatResponse)
+	require.Len(t, writeResp.DispatcherStatuses, 1)
+	require.Equal(t, heartbeatpb.Action_Write, writeResp.DispatcherStatuses[0].Action.Action)
+	require.Equal(t, uint64(10), writeResp.DispatcherStatuses[0].Action.CommitTs)
 
 	event = NewBlockEvent(cfID, tableTriggerEventDispatcherID, spanController, operatorController, &heartbeatpb.State{
 		IsBlocked: true,
@@ -138,8 +155,9 @@ func TestResendAction(t *testing.T) {
 			InfluenceType: heartbeatpb.InfluenceType_DB,
 			SchemaID:      1,
 		},
-	}, false)
+	}, false, common.DefaultMode)
 	event.selected.Store(true)
+	event.flushDispatcherAdvanced = true
 	event.writerDispatcherAdvanced = true
 	msgs = event.resend(common.DefaultMode)
 	require.Len(t, msgs, 1)
@@ -156,8 +174,9 @@ func TestResendAction(t *testing.T) {
 			InfluenceType: heartbeatpb.InfluenceType_All,
 			SchemaID:      1,
 		},
-	}, false)
+	}, false, common.DefaultMode)
 	event.selected.Store(true)
+	event.flushDispatcherAdvanced = true
 	event.writerDispatcherAdvanced = true
 	msgs = event.resend(common.DefaultMode)
 	require.Len(t, msgs, 1)
@@ -175,8 +194,9 @@ func TestResendAction(t *testing.T) {
 			TableIDs:      []int64{1, 2},
 			SchemaID:      1,
 		},
-	}, false)
+	}, false, common.DefaultMode)
 	event.selected.Store(true)
+	event.flushDispatcherAdvanced = true
 	event.writerDispatcherAdvanced = true
 	msgs = event.resend(common.DefaultMode)
 	require.Len(t, msgs, 1)
@@ -221,7 +241,7 @@ func TestSendPassActionTypeDBIncludesWriterNode(t *testing.T) {
 			InfluenceType: heartbeatpb.InfluenceType_DB,
 			SchemaID:      1,
 		},
-	}, false)
+	}, false, common.DefaultMode)
 	event.selected.Store(true)
 	event.writerDispatcher = tableTriggerEventDispatcherID
 	event.writerDispatcherAdvanced = true
@@ -264,7 +284,7 @@ func TestUpdateSchemaID(t *testing.T) {
 				NewSchemaID: 2,
 			},
 		},
-	}, true)
+	}, true, common.DefaultMode)
 	event.scheduleBlockEvent()
 	require.Equal(t, 1, spanController.GetAbsentSize())
 	// check the schema id and map is updated

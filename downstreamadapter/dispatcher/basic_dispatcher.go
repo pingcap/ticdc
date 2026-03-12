@@ -17,7 +17,6 @@ import (
 	"fmt"
 	"math/rand"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/pingcap/failpoint"
@@ -29,6 +28,9 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
+	tidbTypes "github.com/pingcap/tidb/pkg/types"
+	"go.uber.org/atomic"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
@@ -78,6 +80,7 @@ type Dispatcher interface {
 	GetEventSizePerSecond() float32
 	IsTableTriggerDispatcher() bool
 	DealWithBlockEvent(event commonEvent.BlockEvent)
+	EnableActiveActive() bool
 	TryClose() (w heartbeatpb.Watermark, ok bool)
 	Remove()
 }
@@ -141,9 +144,9 @@ type BasicDispatcher struct {
 	//    to avoid duplicate writes while ensuring the DDL is replayed.
 	// Note: When is_syncpoint=true AND finished=0 (DDL finished but syncpoint not finished),
 	// skipDMLAsStartTs is false because the DDL is already completed and DML should be processed normally.
-	// 2. maintainer ask dispatcher to make a move operator, while the dispatcher just dealing with a ddl event.
-	//    and the block state for ddl event is still waiting.
-	//    In this case, we also return startTs = ddlTs-1 to replay the DDL but skip the dmls.
+	// 2. maintainer asks dispatcher manager to move/recreate a dispatcher while this dispatcher is still
+	//    in the WAITING stage of a DDL barrier.
+	//    In this case, we also return startTs = ddlTs-1 to replay the DDL but skip the DMLs at ddlTs.
 	skipDMLAsStartTs bool
 	// The ts from pdClock when the dispatcher is created.
 	// when downstream is mysql-class, for dml event we need to compare the commitTs with this ts
@@ -165,7 +168,7 @@ type BasicDispatcher struct {
 	sink sink.Sink
 
 	// the max resolvedTs received by the dispatcher
-	resolvedTs uint64
+	resolvedTs atomic.Uint64
 
 	// blockEventStatus is used to store the current pending ddl/sync point event and its block status.
 	blockEventStatus BlockEventStatus
@@ -213,6 +216,11 @@ type BasicDispatcher struct {
 	mode int64
 
 	BootstrapState bootstrapState
+
+	// tableModeCompatibilityChecked indicates whether we have already validated the newest
+	// table schema is compatible with the current replication mode configuration.
+	// Only when the initial case or a ddl event is received, we will reset tableModeCompatibilityChecked to check the compatibility.
+	tableModeCompatibilityChecked bool
 }
 
 func NewBasicDispatcher(
@@ -238,7 +246,6 @@ func NewBasicDispatcher(
 		sharedInfo:             sharedInfo,
 		sink:                   sink,
 		componentStatus:        newComponentStateWithMutex(heartbeatpb.ComponentState_Initializing),
-		resolvedTs:             startTs,
 		isRemoving:             atomic.Bool{},
 		duringHandleEvents:     atomic.Bool{},
 		blockEventStatus:       BlockEventStatus{blockPendingEvent: nil},
@@ -250,8 +257,58 @@ func NewBasicDispatcher(
 		mode:                   mode,
 		BootstrapState:         BootstrapFinished,
 	}
+	dispatcher.resolvedTs.Store(startTs)
 
 	return dispatcher
+}
+
+// AddDMLEventsToSink filters events for special tables, registers batch wake
+// callbacks, and returns true when at least one event remains to be written to
+// the downstream sink.
+func (d *BasicDispatcher) AddDMLEventsToSink(events []*commonEvent.DMLEvent, wakeCallback func()) bool {
+	// Normal DML dispatch: most tables just pass through this function unchanged.
+	// Active-active or soft-delete tables are processed by FilterDMLEvent before
+	// being handed over to the sink (delete rows dropped; soft-delete transitions may
+	// be rewritten into deletes when enable-active-active is disabled).
+	filteredEvents := make([]*commonEvent.DMLEvent, 0, len(events))
+	for _, event := range events {
+		// FilterDMLEvent returns the original event for normal tables and only
+		// allocates a new event when the table needs active-active or soft-delete
+		// processing. Skip is true when every row in the event is dropped, or when
+		// the event contains unexpected schema issues that have been reported via
+		// HandleError.
+		filtered, skip := commonEvent.FilterDMLEvent(event, d.sharedInfo.enableActiveActive, d.HandleError)
+		if skip || filtered == nil {
+			continue
+		}
+		filteredEvents = append(filteredEvents, filtered)
+	}
+	if len(filteredEvents) == 0 {
+		log.Debug("all events filtered")
+		// Nothing left to flush. Caller will treat this batch as non-blocking.
+		return false
+	}
+
+	var remaining atomic.Int64
+	remaining.Store(int64(len(filteredEvents)))
+	for _, event := range filteredEvents {
+		event.AddPostEnqueueFunc(func() {
+			if remaining.Dec() == 0 {
+				wakeCallback()
+			}
+		})
+	}
+
+	// for one batch events, we need to add all them in table progress first, then add them to sink
+	// to avoid checkpoint jumping while events are being enqueued/flushed.
+	for _, event := range filteredEvents {
+		d.tableProgress.Add(event)
+	}
+	for _, event := range filteredEvents {
+		d.sink.AddDMLEvent(event)
+		failpoint.Inject("BlockAddDMLEvents", nil)
+	}
+	return true
 }
 
 // InitializeTableSchemaStore initializes the tableSchemaStore for the table trigger event dispatcher.
@@ -271,22 +328,9 @@ func (d *BasicDispatcher) InitializeTableSchemaStore(schemaInfo []*heartbeatpb.S
 		return false, nil
 	}
 
-	d.tableSchemaStore = commonEvent.NewTableSchemaStore(schemaInfo, d.sink.SinkType())
+	d.tableSchemaStore = commonEvent.NewTableSchemaStore(schemaInfo, d.sink.SinkType(), d.EnableActiveActive())
 	d.sink.SetTableSchemaStore(d.tableSchemaStore)
 	return true, nil
-}
-
-func (d *BasicDispatcher) AddDMLEventsToSink(events []*commonEvent.DMLEvent) {
-	// for one batch events, we need to add all them in table progress first, then add them to sink
-	// because we need to ensure the wakeCallback only will be called when
-	// all these events are flushed to downstream successfully
-	for _, event := range events {
-		d.tableProgress.Add(event)
-	}
-	for _, event := range events {
-		d.sink.AddDMLEvent(event)
-		failpoint.Inject("BlockAddDMLEvents", nil)
-	}
 }
 
 func (d *BasicDispatcher) AddBlockEventToSink(event commonEvent.BlockEvent) error {
@@ -295,20 +339,139 @@ func (d *BasicDispatcher) AddBlockEventToSink(event commonEvent.BlockEvent) erro
 	if event.GetType() == commonEvent.TypeDDLEvent {
 		ddl := event.(*commonEvent.DDLEvent)
 		// If NotSync is true, it means the DDL should not be sent to downstream.
-		// So we just call PassBlockEventToSink to update the table progress and call the postFlush func.
+		// So we just call PassBlockEventToSink to finish local bookkeeping:
+		// mark it passed in tableProgress and trigger flush callbacks to unblock
+		// dispatcher progress, without sending this DDL to sink.
 		if ddl.NotSync {
 			log.Info("ignore DDL by NotSync", zap.Stringer("dispatcher", d.id), zap.Any("ddl", ddl))
-			d.PassBlockEventToSink(event)
-			return nil
+			return d.PassBlockEventToSink(event)
 		}
 	}
+	// Keep block-event write order with prior DML. For storage sink this may wait
+	// until prior DML are enqueued/flushed to the sink pipeline; for non-storage
+	// sinks it is usually a no-op.
+	if err := d.sink.FlushDMLBeforeBlock(event); err != nil {
+		return err
+	}
+
 	d.tableProgress.Add(event)
 	return d.sink.WriteBlockEvent(event)
 }
 
-func (d *BasicDispatcher) PassBlockEventToSink(event commonEvent.BlockEvent) {
+// PassBlockEventToSink is used when block event handling result is "pass"
+// (for example maintainer action=Pass or DDL NotSync).
+//
+// It intentionally does not call sink.WriteBlockEvent. Instead, it updates
+// local progress as if the event had been handled, then fires PostFlush
+// callbacks so wake/checkpoint logic can continue with consistent ordering.
+func (d *BasicDispatcher) PassBlockEventToSink(event commonEvent.BlockEvent) error {
+	if err := d.sink.FlushDMLBeforeBlock(event); err != nil {
+		return err
+	}
 	d.tableProgress.Pass(event)
 	event.PostFlush()
+	return nil
+}
+
+// ensureActiveActiveTableInfo validates the table schema requirements for active-active mode.
+//
+// When enable-active-active is enabled, TiCDC relies on `_tidb_origin_ts` and
+// `_tidb_softdelete_time` to implement last-write-wins replication and to prevent
+// replication loops. Delete rows for active-active tables are filtered out by
+// FilterDMLEvent, and hard deletes are expected to keep `_tidb_softdelete_time`
+// as NULL for observability and safety checks.
+func (d *BasicDispatcher) ensureActiveActiveTableInfo(tableInfo *common.TableInfo) error {
+	if !d.sharedInfo.enableActiveActive {
+		return nil
+	}
+	if tableInfo == nil {
+		return errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
+			fmt.Sprintf("table info is nil for dispatcher %s in active-active mode", d.id.String()))
+	}
+	if !tableInfo.IsActiveActiveTable() {
+		return errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
+			fmt.Sprintf("table %s.%s(id=%d) in dispatcher %s is not active-active but enable-active-active is true",
+				tableInfo.GetSchemaName(), tableInfo.GetTableName(), tableInfo.TableName.TableID, d.id.String()))
+	}
+
+	if _, ok := tableInfo.GetColumnInfoByName(commonEvent.OriginTsColumn); !ok {
+		return errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
+			fmt.Sprintf("table %s.%s(id=%d) in dispatcher %s missing required column %s for enable-active-active",
+				tableInfo.GetSchemaName(), tableInfo.GetTableName(), tableInfo.TableName.TableID, d.id.String(), commonEvent.OriginTsColumn))
+	}
+
+	if _, ok := tableInfo.GetColumnOffsetByName(commonEvent.SoftDeleteTimeColumn); !ok {
+		return errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
+			fmt.Sprintf("table %s.%s(id=%d) in dispatcher %s missing required column offset %s for enable-active-active",
+				tableInfo.GetSchemaName(), tableInfo.GetTableName(), tableInfo.TableName.TableID, d.id.String(), commonEvent.SoftDeleteTimeColumn))
+	}
+
+	softDeleteCol, ok := tableInfo.GetColumnInfoByName(commonEvent.SoftDeleteTimeColumn)
+	if !ok {
+		return errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
+			fmt.Sprintf("table %s.%s(id=%d) in dispatcher %s missing required column %s for enable-active-active",
+				tableInfo.GetSchemaName(), tableInfo.GetTableName(), tableInfo.TableName.TableID, d.id.String(), commonEvent.SoftDeleteTimeColumn))
+	}
+	notNull := mysql.HasNotNullFlag(softDeleteCol.GetFlag())
+	if softDeleteCol.GetType() != mysql.TypeTimestamp || softDeleteCol.FieldType.GetDecimal() != tidbTypes.MaxFsp || notNull {
+		return errors.ErrInvalidReplicaConfig.GenWithStackByArgs(fmt.Sprintf(
+			"table %s.%s(id=%d) in dispatcher %s invalid column %s, expect TIMESTAMP(6) NULL, got type %d fsp %d notNull %t",
+			tableInfo.GetSchemaName(),
+			tableInfo.GetTableName(),
+			tableInfo.TableName.TableID,
+			d.id.String(),
+			commonEvent.SoftDeleteTimeColumn,
+			softDeleteCol.GetType(),
+			softDeleteCol.FieldType.GetDecimal(),
+			notNull,
+		))
+	}
+	return nil
+}
+
+// checkTableModeCompatibility validates that the newest table schema matches the current replication mode configuration.
+// It prevents misconfigurations where a special table (active-active / soft-delete) is replicated with
+// incompatible settings.
+func (d *BasicDispatcher) checkTableModeCompatibility(event commonEvent.Event) error {
+	defer func() {
+		d.tableModeCompatibilityChecked = true
+	}()
+
+	switch ev := event.(type) {
+	case *commonEvent.DMLEvent:
+		return d.ensureTableModeCompatibility(ev.TableInfo)
+	default:
+		log.Error("unexpected event type for table mode compatibility check", zap.Int("eventType", event.GetType()))
+	}
+	return nil
+}
+
+func (d *BasicDispatcher) ensureTableModeCompatibility(tableInfo *common.TableInfo) error {
+	if tableInfo == nil {
+		return nil
+	}
+
+	if d.sharedInfo.enableActiveActive {
+		return d.ensureActiveActiveTableInfo(tableInfo)
+	}
+
+	// If downstream is non-tidb mysql class, and enableActiveActive is false,
+	// then the table must not be active-active or soft delete.
+	if d.sink.SinkType() != common.MysqlSinkType {
+		return nil
+	}
+
+	if tableInfo.IsActiveActiveTable() {
+		return errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
+			fmt.Sprintf("table %s.%s(id=%d) in dispatcher %s is active-active but enable-active-active is false",
+				tableInfo.GetSchemaName(), tableInfo.GetTableName(), tableInfo.TableName.TableID, d.id.String()))
+	}
+	if tableInfo.IsSoftDeleteTable() {
+		return errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
+			fmt.Sprintf("table %s.%s(id=%d) in dispatcher %s is soft delete but enable-active-active is false",
+				tableInfo.GetSchemaName(), tableInfo.GetTableName(), tableInfo.TableName.TableID, d.id.String()))
+	}
+	return nil
 }
 
 func (d *BasicDispatcher) isFirstEvent(event commonEvent.Event) bool {
@@ -338,7 +501,7 @@ func (d *BasicDispatcher) GetHeartBeatInfo(h *HeartBeatInfo) {
 }
 
 func (d *BasicDispatcher) GetResolvedTs() uint64 {
-	return atomic.LoadUint64(&d.resolvedTs)
+	return d.resolvedTs.Load()
 }
 
 func (d *BasicDispatcher) GetLastSyncedTs() uint64 {
@@ -384,6 +547,8 @@ func (d *BasicDispatcher) updateDispatcherStatusToWorking() {
 	}
 }
 
+// HandleError will report the error to the error channel in sharedInfo
+// to report the error to maintainer, leading to the reconstruction of the dispatcher manager.
 func (d *BasicDispatcher) HandleError(err error) {
 	select {
 	case d.sharedInfo.errCh <- err:
@@ -400,15 +565,16 @@ func (d *BasicDispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeC
 	return false
 }
 
-// handleEvents can batch handle events about resolvedTs Event and DML Event.
-// While for DDLEvent and SyncPointEvent, they should be handled separately,
-// because they are block events.
-// We ensure we only will receive one event when it's ddl event or sync point event
-// by setting them with different event types in DispatcherEventsHandler.GetType
-// When we handle events, we don't have any previous events still in sink.
+// handleEvents processes one batch for one dispatcher.
+// the next batch of events can only be handled after the current batch is enqueued or flushed.
+// A batch may mix DML and resolved-ts events; Block events are expected to be handled one by one.
+//   - Block events, such as DDL / Syncpoint, is sent to the sink synchronously,
+//     the dispatcher is blocked until the block event is flushed.
+//   - DML events is sent to the sink asynchronously.
+//   - Storage sink, the dispatcher wake up after all DML events is guaranteed enqueued.
+//   - Non-storage sink, the dispatche wake up after all DML events is guaranteed flushed.
 //
-// wakeCallback is used to wake the dynamic stream to handle the next batch events.
-// It will be called when all the events are flushed to downstream successfully.
+// Return true if should block the dispatcher.
 func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeCallback func()) bool {
 	if d.GetRemovingStatus() {
 		log.Warn("dispatcher is removing", zap.Any("id", d.id))
@@ -420,7 +586,6 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 
 	// Only return false when all events are resolvedTs Event.
 	block := false
-	dmlWakeOnce := &sync.Once{}
 	dmlEvents := make([]*commonEvent.DMLEvent, 0, len(dispatcherEvents))
 	latestResolvedTs := uint64(0)
 	// Dispatcher is ready, handle the events
@@ -460,6 +625,12 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 		case commonEvent.TypeResolvedEvent:
 			latestResolvedTs = event.(commonEvent.ResolvedEvent).ResolvedTs
 		case commonEvent.TypeDMLEvent:
+			if !d.tableModeCompatibilityChecked {
+				if err := d.checkTableModeCompatibility(event); err != nil {
+					d.HandleError(err)
+					return block
+				}
+			}
 			dml := event.(*commonEvent.DMLEvent)
 			if dml.Len() == 0 {
 				continue
@@ -479,15 +650,17 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 
 			block = true
 			dml.ReplicatingTs = d.creationPDTs
-			dml.AddPostEnqueueFunc(func() {
-				dmlWakeOnce.Do(wakeCallback)
-			})
 			dmlEvents = append(dmlEvents, dml)
 		case commonEvent.TypeDDLEvent:
 			if len(dispatcherEvents) != 1 {
 				log.Panic("ddl event should only be singly handled",
 					zap.Stringer("dispatcherID", d.id))
 			}
+			// reset the tableModeCompatibilityChecked when receive a ddl event,
+			// because ddl event may change the table schema,
+			// which may cause the table not compatible with current replication mode anymore.
+			d.tableModeCompatibilityChecked = false
+
 			failpoint.Inject("BlockOrWaitBeforeDealWithDDL", nil)
 			block = true
 			ddl := event.(*commonEvent.DDLEvent)
@@ -516,11 +689,16 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 				zap.Int64("table", ddl.GetTableID()),
 				zap.Uint64("commitTs", event.GetCommitTs()),
 				zap.Uint64("seq", event.GetSeq()))
+			now := time.Now()
 			ddl.AddPostFlushFunc(func() {
 				if d.tableSchemaStore != nil {
 					d.tableSchemaStore.AddEvent(ddl)
 				}
 				wakeCallback()
+				cost := time.Since(now)
+				d.sharedInfo.metricHandleDDLHis.Observe(cost.Seconds())
+				log.Debug("dispatcher handle ddl event finish",
+					zap.Duration("cost", cost), zap.Any("ddl", ddl))
 			})
 			d.DealWithBlockEvent(ddl)
 		case commonEvent.TypeSyncPointEvent:
@@ -560,10 +738,14 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 	// the checkpointTs may be incorrect set as the new resolvedTs,
 	// due to the tableProgress is empty before dml events add into sink.
 	if len(dmlEvents) > 0 {
-		d.AddDMLEventsToSink(dmlEvents)
+		hasDMLToFlush := d.AddDMLEventsToSink(dmlEvents, wakeCallback)
+		if !hasDMLToFlush {
+			// All DML events were filtered out, so they no longer block dispatcher progress.
+			block = false
+		}
 	}
 	if latestResolvedTs > 0 {
-		atomic.StoreUint64(&d.resolvedTs, latestResolvedTs)
+		d.resolvedTs.Store(latestResolvedTs)
 	}
 	return block
 }
@@ -575,9 +757,10 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 // 1. If the action is a write, we need to add the ddl event to the sink for writing to downstream.
 // 2. If the action is a pass, we just need to pass the event
 //
-// For Action_Write, writing the block event may involve IO (e.g. executing DDL). To avoid blocking the
-// dispatcher status dynamic stream handler, we execute the write asynchronously and return await=true.
-// The status path will be waked up after the write finishes.
+// For block actions (write/pass), execution may involve downstream IO because we flush prior DML first.
+// To avoid blocking the dispatcher status dynamic stream handler, we execute the action asynchronously
+// and return await=true.
+// The status path will be waked up after the action finishes.
 func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.DispatcherStatus) (await bool) {
 	log.Debug("dispatcher handle dispatcher status",
 		zap.Any("dispatcherStatus", dispatcherStatus),
@@ -615,26 +798,49 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 				zap.Any("action", action),
 				zap.Any("innerAction", int(action.Action)),
 				zap.Uint64("pendingEventCommitTs", pendingEvent.GetCommitTs()))
+			actionCommitTs := action.CommitTs
+			actionIsSyncPoint := action.IsSyncPoint
 			d.blockEventStatus.updateBlockStage(heartbeatpb.BlockStage_WRITING)
-			pendingEvent.PushFrontFlushFunc(func() {
-				// clear blockEventStatus should be before wake ds.
-				// otherwise, there may happen:
-				// 1. wake ds
-				// 2. get new ds and set new pending event
-				// 3. clear blockEventStatus(should be the old pending event, but clear the new one)
-				d.blockEventStatus.clear()
-			})
-			if action.Action == heartbeatpb.Action_Write {
-				actionCommitTs := action.CommitTs
-				actionIsSyncPoint := action.IsSyncPoint
+			switch action.Action {
+			case heartbeatpb.Action_Write:
+				pendingEvent.PushFrontFlushFunc(func() {
+					// clear blockEventStatus should be before wake ds.
+					// otherwise, there may happen:
+					// 1. wake ds
+					// 2. get new ds and set new pending event
+					// 3. clear blockEventStatus(should be the old pending event, but clear the new one)
+					d.blockEventStatus.clear()
+				})
 				d.sharedInfo.GetBlockEventExecutor().Submit(d, func() {
 					d.ExecuteBlockEventDDL(pendingEvent, actionCommitTs, actionIsSyncPoint)
 				})
 				return true
-			} else {
-				failpoint.Inject("BlockOrWaitBeforePass", nil)
-				d.PassBlockEventToSink(pendingEvent)
-				failpoint.Inject("BlockAfterPass", nil)
+			case heartbeatpb.Action_Pass:
+				pendingEvent.PushFrontFlushFunc(func() {
+					// clear blockEventStatus should be before wake ds.
+					// otherwise, there may happen:
+					// 1. wake ds
+					// 2. get new ds and set new pending event
+					// 3. clear blockEventStatus(should be the old pending event, but clear the new one)
+					d.blockEventStatus.clear()
+				})
+				d.sharedInfo.GetBlockEventExecutor().Submit(d, func() {
+					d.PassBlockEvent(pendingEvent, actionCommitTs, actionIsSyncPoint)
+				})
+				return true
+			case heartbeatpb.Action_Flush:
+				d.sharedInfo.GetBlockEventExecutor().Submit(d, func() {
+					d.FlushBlockEvent(pendingEvent, actionCommitTs, actionIsSyncPoint)
+				})
+				return true
+			default:
+				log.Error("unsupported action type",
+					zap.Stringer("dispatcher", d.id),
+					zap.Int("action", int(action.Action)),
+					zap.Uint64("commitTs", action.CommitTs),
+					zap.Bool("isSyncPoint", action.IsSyncPoint))
+				d.blockEventStatus.updateBlockStage(heartbeatpb.BlockStage_WAITING)
+				return false
 			}
 		} else {
 			ts, ok := d.blockEventStatus.getEventCommitTs()
@@ -662,6 +868,11 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 	return false
 }
 
+// ExecuteBlockEventDDL writes the block event to the sink and then reports DONE to the maintainer.
+//
+// It is invoked via the block-event executor to avoid blocking the dynamic stream goroutine on downstream IO
+// (DDL execution / syncpoint flush). Keeping the write-report-wake sequence in a dedicated method also makes it
+// easier for tests and failpoints to control interleavings around block events.
 func (d *BasicDispatcher) ExecuteBlockEventDDL(pendingEvent commonEvent.BlockEvent, actionCommitTs uint64, actionIsSyncPoint bool) {
 	failpoint.Inject("BlockOrWaitBeforeWrite", nil)
 	err := d.AddBlockEventToSink(pendingEvent)
@@ -670,7 +881,40 @@ func (d *BasicDispatcher) ExecuteBlockEventDDL(pendingEvent commonEvent.BlockEve
 		return
 	}
 	failpoint.Inject("BlockOrWaitReportAfterWrite", nil)
+	d.reportBlockedEventDone(actionCommitTs, actionIsSyncPoint)
+}
 
+// PassBlockEvent executes maintainer Action_Pass:
+// It relies on PassBlockEventToSink to preserve ordering and mark the event passed.
+func (d *BasicDispatcher) PassBlockEvent(pendingEvent commonEvent.BlockEvent, actionCommitTs uint64, actionIsSyncPoint bool) {
+	failpoint.Inject("BlockOrWaitBeforePass", nil)
+	err := d.PassBlockEventToSink(pendingEvent)
+	if err != nil {
+		d.HandleError(err)
+		return
+	}
+	failpoint.Inject("BlockAfterPass", nil)
+	d.reportBlockedEventDone(actionCommitTs, actionIsSyncPoint)
+}
+
+// FlushBlockEvent executes maintainer Action_Flush:
+// It only flushes prior DML before the pending block event and keeps the pending
+// event for subsequent Write/Pass action.
+func (d *BasicDispatcher) FlushBlockEvent(pendingEvent commonEvent.BlockEvent, actionCommitTs uint64, actionIsSyncPoint bool) {
+	failpoint.Inject("BlockOrWaitBeforeFlush", nil)
+	err := d.sink.FlushDMLBeforeBlock(pendingEvent)
+	if err != nil {
+		d.HandleError(err)
+		return
+	}
+	d.blockEventStatus.updateBlockStage(heartbeatpb.BlockStage_WAITING)
+	failpoint.Inject("BlockAfterFlush", nil)
+	d.reportBlockedEventDone(actionCommitTs, actionIsSyncPoint)
+}
+
+// reportBlockedEventDone sends DONE status and wakes dispatcher-status stream path
+// so the next status for this dispatcher can be handled.
+func (d *BasicDispatcher) reportBlockedEventDone(actionCommitTs uint64, actionIsSyncPoint bool) {
 	d.sharedInfo.blockStatusesChan <- &heartbeatpb.TableSpanBlockStatus{
 		ID: d.id.ToPB(),
 		State: &heartbeatpb.State{
@@ -731,15 +975,7 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 				// we track it as a pending schedule-related event until the maintainer ACKs it.
 				d.pendingACKCount.Add(1)
 			}
-			err := d.sink.PassBlockEvent(event)
-			if err != nil {
-				if needsScheduleACKTracking {
-					d.pendingACKCount.Add(-1)
-				}
-				d.HandleError(err)
-				return
-			}
-			err = d.AddBlockEventToSink(event)
+			err := d.AddBlockEventToSink(event)
 			if err != nil {
 				if needsScheduleACKTracking {
 					d.pendingACKCount.Add(-1)
@@ -807,14 +1043,7 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 			d.holdBlockEvent(event)
 			return
 		}
-		d.sharedInfo.GetBlockEventExecutor().Submit(d, func() {
-			err := d.sink.PassBlockEvent(event)
-			if err != nil {
-				d.HandleError(err)
-				return
-			}
-			d.reportBlockedEventToMaintainer(event)
-		})
+		d.reportBlockedEventToMaintainer(event)
 	}
 
 	// dealing with events which update schema ids
@@ -868,8 +1097,9 @@ func (d *BasicDispatcher) cancelResendTask(identifier BlockEventIdentifier) {
 func (d *BasicDispatcher) tryDealWithHeldBlockEvent() {
 	// If there is a held DB/All block event, report it as soon as all resend tasks are ACKed.
 	// For schedule-related non-blocking DDLs, the maintainer only ACKs after scheduling is done.
-	// For schedule-related blocking DDLs, the maintainer will only begin deal with after no pending scheduling tasks.
-	// Thus, we ensure DB/All block events can genereate correct range checkers.
+	// For schedule-related blocking DDLs, the maintainer will only begin dealing with them after there are
+	// no pending scheduling tasks.
+	// Thus, we ensure DB/All block events can generate correct range checkers.
 	if d.pendingACKCount.Load() == 0 {
 		if holding := d.popHoldingBlockEvent(); holding != nil {
 			d.reportBlockedEventToMaintainer(holding)
@@ -940,6 +1170,11 @@ func (d *BasicDispatcher) reportBlockedEventToMaintainer(event commonEvent.Block
 	d.sharedInfo.blockStatusesChan <- message
 }
 
+// GetBlockEventStatus returns the current in-flight *blocking* barrier state for bootstrap.
+//
+// We only report statuses for events that actually block the event stream (multi-table DDLs, split-span DDLs,
+// and syncpoints). Non-blocking DDLs that only add/drop tables are reported separately and can be recovered by
+// the maintainer from the table trigger dispatcher's startTs, so they don't need to be restored here.
 func (d *BasicDispatcher) GetBlockEventStatus() *heartbeatpb.State {
 	pendingEvent, blockStage := d.blockEventStatus.getEventAndStage()
 
@@ -975,6 +1210,9 @@ func (d *BasicDispatcher) Remove() {
 // TryClose will return the watermark of current dispatcher, and return true when the dispatcher finished sending events to sink.
 // DispatcherManager will clean the dispatcher info after Remove() is called.
 func (d *BasicDispatcher) TryClose() (w heartbeatpb.Watermark, ok bool) {
+	failpoint.Inject("NotReadyToCloseDispatcher", func() {
+		failpoint.Return(w, false)
+	})
 	// If sink is normal(not meet error), we need to wait all the events in sink to flushed downstream successfully
 	// If sink is not normal, we can close the dispatcher immediately.
 	if !d.sink.IsNormal() || (d.tableProgress.Empty() && !d.duringHandleEvents.Load()) {

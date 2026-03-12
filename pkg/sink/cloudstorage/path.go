@@ -271,17 +271,26 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 		return true, nil
 	}
 
-	// Case 2: the table meta path is not empty.
+	// Case 2: the table meta path is not empty and an equivalent schema already exists.
+	// Even if checksum is the same, we still write schema_{currentVersion}_{checksum}.json.
+	// Otherwise DML files may be written under an old table version directory and be
+	// treated as stale by downstream consumers.
 	if schemaFileCnt != 0 && lastVersion != 0 {
-		log.Info("table schema file with exact version not found, using latest available",
+		log.Info("table schema file with exact version not found, write current version schema file",
 			zap.String("keyspace", f.changefeedID.Keyspace()),
 			zap.Stringer("changefeedID", f.changefeedID.ID()),
 			zap.Any("versionedTableName", table),
-			zap.Uint64("tableVersion", lastVersion),
+			zap.Uint64("existingTableVersion", lastVersion),
+			zap.Uint64("tableVersion", table.TableInfoVersion),
 			zap.Uint32("checksum", checksum))
-		// record the last version of the table schema file.
-		// we don't need to write schema file to external storage again.
-		f.updateSchemaVersion(state, lastVersion, now)
+		encodedDetail, err := def.MarshalWithQuery()
+		if err != nil {
+			return false, errors.Trace(err)
+		}
+		if err := f.storage.WriteFile(ctx, tblSchemaFile, encodedDetail); err != nil {
+			return false, errors.Trace(err)
+		}
+		f.updateSchemaVersion(state, table.TableInfoVersion, now)
 		return false, nil
 	}
 
@@ -346,11 +355,33 @@ func (f *FilePathGenerator) GenerateDataFilePath(
 	ctx context.Context, tbl VersionedTableName, date string,
 ) (string, error) {
 	dir := f.generateDataDirPath(tbl, date)
+	state := f.pathState[f.pathStateKey(tbl)]
+	newIndexFile := state == nil || !state.indexReady
 	name, err := f.generateDataFileName(ctx, tbl, date)
 	if err != nil {
 		return "", err
 	}
-	return path.Join(dir, name), nil
+	dataFile := path.Join(dir, name)
+	exist, err := f.storage.FileExists(ctx, dataFile)
+	if err != nil {
+		return "", err
+	}
+	if !exist {
+		return dataFile, nil
+	}
+	if newIndexFile {
+		log.Warn("the data file exists and the index file is stale",
+			zap.String("keyspace", f.changefeedID.Keyspace()),
+			zap.Stringer("changefeedID", f.changefeedID.ID()),
+			zap.Any("versionedTableName", tbl),
+			zap.String("dataFile", dataFile))
+	}
+	// if the file already exists, which means the fileIndex is stale,
+	// we need to delete the file index in memory and re-generate the file path with the updated file index until we find a non-existing file path.
+	if state := f.pathState[f.pathStateKey(tbl)]; state != nil {
+		state.indexReady = false
+	}
+	return f.GenerateDataFilePath(ctx, tbl, date)
 }
 
 func (f *FilePathGenerator) generateDataDirPath(tbl VersionedTableName, date string) string {
@@ -409,7 +440,6 @@ func (f *FilePathGenerator) generateDataFileName(
 	state.lastAccess = now
 	return generateDataFileName(f.config.EnableTableAcrossNodes, tbl.DispatcherID.String(), state.fileIndex.index, f.extension, f.config.FileIndexWidth), nil
 }
-
 func (f *FilePathGenerator) getFileIdxFromIndexFile(
 	ctx context.Context, tbl VersionedTableName, date string,
 ) (uint64, error) {

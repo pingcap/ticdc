@@ -39,7 +39,7 @@ func getMysqlSink() (context.Context, *Sink, sqlmock.Sqlmock) {
 	cfg.MaxAllowedPacket = int64(vardef.DefMaxAllowedPacket)
 	cfg.CachePrepStmts = false
 
-	sink := NewMySQLSink(ctx, changefeedID, cfg, db, false)
+	sink := NewMySQLSink(ctx, changefeedID, cfg, db, false, false, time.Minute)
 	return ctx, sink, mock
 }
 
@@ -55,7 +55,7 @@ func getMysqlSinkWithDDLTs() (context.Context, *Sink, sqlmock.Sqlmock) {
 	cfg.CachePrepStmts = false
 	cfg.EnableDDLTs = true // Enable DDL-ts feature for testing
 
-	sink := NewMySQLSink(ctx, changefeedID, cfg, db, false)
+	sink := NewMySQLSink(ctx, changefeedID, cfg, db, false, false, time.Minute)
 	return ctx, sink, mock
 }
 
