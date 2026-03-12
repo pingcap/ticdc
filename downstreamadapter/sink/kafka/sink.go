@@ -168,10 +168,6 @@ func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	return nil
 }
 
-func (s *sink) PassBlockEvent(_ commonEvent.BlockEvent) error {
-	return nil
-}
-
 func (s *sink) close() {
 	s.eventChan.Close()
 	s.rowChan.Close()
