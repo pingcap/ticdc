@@ -14,24 +14,18 @@
 package schemastore
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"strings"
-	"unicode"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
-	"github.com/pingcap/tidb/pkg/executor"
-	"github.com/pingcap/tidb/pkg/kv"
-	"github.com/pingcap/tidb/pkg/meta/autoid"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/ast"
-	"github.com/pingcap/tidb/pkg/session"
 	"go.uber.org/zap"
 )
 
@@ -44,7 +38,6 @@ const (
 
 type buildPersistedDDLEventFuncArgs struct {
 	job          *model.Job
-	kvStorage    kv.Storage
 	databaseMap  map[int64]*BasicDatabaseInfo
 	tableMap     map[int64]*BasicTableInfo
 	partitionMap map[int64]BasicPartitionInfo
@@ -1001,14 +994,6 @@ func buildPersistedDDLEventForCreateTables(args buildPersistedDDLEventFuncArgs) 
 	event := buildPersistedDDLEventCommon(args)
 	event.SchemaName = getSchemaName(args.databaseMap, event.SchemaID)
 	event.MultipleTableInfos = args.job.BinlogInfo.MultipleTableInfos
-	querys, err := commonEvent.SplitQueries(event.Query)
-	if err != nil || len(querys) != len(event.MultipleTableInfos) {
-		rebuiltQuerys, rebuildErr := rebuildCreateTablesQueries(event.Query, event.MultipleTableInfos, args.kvStorage)
-		if rebuildErr != nil {
-			log.Panic("rebuild create tables queries failed", zap.Error(rebuildErr), zap.String("query", event.Query))
-		}
-		event.Query = strings.Join(rebuiltQuerys, "")
-	}
 	return event
 }
 
@@ -2952,47 +2937,17 @@ func splitCreateTablesQueries(rawEvent *PersistedDDLEvent) ([]string, error) {
 	if err == nil && len(querys) == len(rawEvent.MultipleTableInfos) {
 		return querys, nil
 	}
-	return nil, cerror.WrapError(cerror.ErrTiDBUnexpectedJobMeta, errors.New("create tables query count not match table count"))
-}
-
-func rebuildCreateTablesQueries(query string, tableInfos []*model.TableInfo, storage kv.Storage) ([]string, error) {
 	fields := []zap.Field{
-		zap.Int("tableCount", len(tableInfos)),
-		zap.String("query", query),
+		zap.Int("tableCount", len(rawEvent.MultipleTableInfos)),
+		zap.String("query", rawEvent.Query),
 	}
-	if splitQueries, err := commonEvent.SplitQueries(query); err != nil {
+	if err != nil {
 		fields = append(fields, zap.Error(err))
 	} else {
-		fields = append(fields, zap.Int("queryCount", len(splitQueries)))
+		fields = append(fields, zap.Int("queryCount", len(querys)))
 	}
-	log.Warn("create tables query count not match table count rebuild queries by table info", fields...)
-	if storage == nil {
-		return nil, cerror.WrapError(cerror.ErrTiDBUnexpectedJobMeta, errors.New("nil kv storage when rebuilding create tables queries"))
-	}
-	se, err := session.CreateSession(storage)
-	if err != nil {
-		return nil, cerror.WrapError(cerror.ErrTiDBUnexpectedJobMeta, err)
-	}
-	defer se.Close()
-
-	rebuiltQuerys := make([]string, 0, len(tableInfos))
-	for _, tableInfo := range tableInfos {
-		if tableInfo == nil {
-			return nil, cerror.WrapError(cerror.ErrTiDBUnexpectedJobMeta, errors.New("nil table info in create tables ddl"))
-		}
-
-		var queryBuilder bytes.Buffer
-		if err := executor.ConstructResultOfShowCreateTable(se, tableInfo, autoid.Allocators{}, &queryBuilder); err != nil {
-			return nil, cerror.WrapError(cerror.ErrTiDBUnexpectedJobMeta, err)
-		}
-
-		query := strings.TrimRightFunc(queryBuilder.String(), unicode.IsSpace)
-		if !strings.HasSuffix(query, ";") {
-			query += ";"
-		}
-		rebuiltQuerys = append(rebuiltQuerys, query)
-	}
-	return rebuiltQuerys, nil
+	log.Warn("create tables query count not match table count", fields...)
+	return nil, cerror.WrapError(cerror.ErrTiDBUnexpectedJobMeta, errors.New("create tables query count not match table count"))
 }
 
 func buildDDLEventForAlterTablePartitioning(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error) {

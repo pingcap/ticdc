@@ -747,7 +747,6 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 
 	ddlEvent := handler.buildPersistedDDLEventFunc(buildPersistedDDLEventFuncArgs{
 		job:          job,
-		kvStorage:    p.kvStorage,
 		databaseMap:  p.databaseMap,
 		tableMap:     p.tableMap,
 		partitionMap: p.partitionMap,

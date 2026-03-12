@@ -27,13 +27,9 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/tidb/pkg/meta/model"
-	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/charset"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
-	"github.com/pingcap/tidb/pkg/session"
-	"github.com/pingcap/tidb/pkg/store/mockstore"
-	"github.com/pingcap/tidb/pkg/util/dbutil/dbutiltest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -3688,45 +3684,16 @@ func TestBuildDDLEventForCreateTablesQueryCountMismatch(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, originalQueries, 1)
 
-	store, err := mockstore.NewMockStore()
-	require.NoError(t, err)
-	defer func() {
-		require.NoError(t, store.Close())
-	}()
-	dom, err := session.BootstrapSession(store)
-	require.NoError(t, err)
-	defer dom.Close()
-
 	rawEvent := buildPersistedDDLEventForCreateTables(buildPersistedDDLEventFuncArgs{
 		job:         job,
-		kvStorage:   store,
 		databaseMap: map[int64]*BasicDatabaseInfo{100: {Name: "test"}},
 	})
+	require.Equal(t, job.Query, rawEvent.Query)
 
 	ddlEvent, ok, err := buildDDLEventForCreateTables(&rawEvent, nil, 0)
-	require.NoError(t, err)
-	require.True(t, ok)
-
-	querys, err := commonEvent.SplitQueries(ddlEvent.Query)
-	require.NoError(t, err)
-	require.Len(t, querys, 2)
-	require.Contains(t, querys[0], "CREATE TABLE `t_26`")
-	require.Contains(t, querys[1], "CREATE TABLE `t_27`")
-
-	require.Len(t, ddlEvent.NeedAddedTables, 2)
-	require.Equal(t, int64(201), ddlEvent.NeedAddedTables[0].TableID)
-	require.Equal(t, int64(202), ddlEvent.NeedAddedTables[1].TableID)
-	parser := parser.New()
-	for i, query := range querys {
-		tableInfo, err := dbutiltest.GetTableInfoBySQL(query, parser)
-		require.NoError(t, err)
-		require.Equal(t, rawEvent.MultipleTableInfos[i].Name.O, tableInfo.Name.O)
-		require.Len(t, tableInfo.Columns, 2)
-		require.Equal(t, "a", tableInfo.Columns[0].Name.O)
-		require.Equal(t, "b", tableInfo.Columns[1].Name.O)
-		require.NotNil(t, tableInfo.GetPkColInfo())
-		require.Equal(t, "a", tableInfo.GetPkColInfo().Name.O)
-	}
+	require.Error(t, err)
+	require.False(t, ok)
+	require.Equal(t, commonEvent.DDLEvent{}, ddlEvent)
 }
 
 func TestUpdateDDLHistoryForAddDropTable_CreateTableLikeAddsReferTable(t *testing.T) {

@@ -8,6 +8,16 @@ WORK_DIR=$OUT_DIR/$TEST_NAME
 CDC_BINARY=cdc.test
 SINK_TYPE=$1
 
+function get_tidb_release_version() {
+	mysql -uroot -h${UP_TIDB_HOST} -P${UP_TIDB_PORT} -e "select tidb_version()\G" | grep "Release Version:" | awk -F': ' '{print $2}' | tr -d '[:space:]'
+}
+
+function version_lt() {
+	local lhs=$(echo "$1" | sed -E 's/^v//; s/[^0-9.].*$//')
+	local rhs=$(echo "$2" | sed -E 's/^v//; s/[^0-9.].*$//')
+	[[ "$lhs" != "$rhs" && "$(printf '%s\n%s\n' "$lhs" "$rhs" | sort -V | head -n1)" == "$lhs" ]]
+}
+
 function run_with_fast_create_table() {
 	rm -rf $WORK_DIR && mkdir -p $WORK_DIR
 
@@ -65,6 +75,12 @@ function run_without_fast_create_table() {
 	rm -rf $WORK_DIR && mkdir -p $WORK_DIR
 
 	start_tidb_cluster --workdir $WORK_DIR
+
+	local tidb_release_version=$(get_tidb_release_version)
+	if version_lt "$tidb_release_version" "v8.5.0"; then
+		echo "[$(date)] skip $TEST_NAME because TiDB release version $tidb_release_version is smaller than v8.5.0"
+		exit 0
+	fi
 
 	run_sql "set global tidb_enable_fast_create_table=off" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 

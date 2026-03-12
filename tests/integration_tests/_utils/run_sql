@@ -25,7 +25,7 @@ if [ $# -gt 1 ]; then
 	other=${*}
 fi
 
-prepare="set global tidb_enable_clustered_index = 'int_only';"
+prepare="set global tidb_enable_clustered_index = 'int_only'; set global tidb_enable_fast_create_table = OFF;"
 
 # Check if OUT_DIR contains TEST_NAME, if so, truncate OUT_DIR to the parent directory
 ADJUSTED_OUT_DIR="$OUT_DIR"
