@@ -699,56 +699,77 @@ func buildPersistedDDLEventForRenameTable(args buildPersistedDDLEventFuncArgs) P
 	event.SchemaName = getSchemaName(args.databaseMap, event.SchemaID)
 	// get the table's current table name from the ddl job
 	event.TableName = event.TableInfo.Name.O
+
+	// The old schema/table names cannot rely on ExtraSchemaName/ExtraTableName,
+	// because the snapshot used by schema store may already reflect the post-rename state.
+	// Example (after https://github.com/pingcap/tidb/pull/43341):
+	//   table `test.t`, DDL `rename table t to test2.t;`, commit ts = 100
+	//   snapshot at ts = 99 already shows `t` under `test2`
+	//   => event.ExtraSchemaName becomes `test2`, which is wrong for the old name
+	// SchemaStore can still use ExtraSchemaID to update internal state,
+	// but the emitted event.Query must carry the correct old names.
+	// Rebuild them with the following precedence:
+	// 1. InvolvingSchemaInfo provides a fallback old schema/table pair, but names may be normalized.
+	// 2. RenameTableArgs.OldSchemaName overrides the fallback when available.
+	//    It is reliable in TiDB >= v8.5, but can be missing in older versions.
+	// 3. The original query (if it specifies old schema) has the highest priority for identifier case.
+	// 4. If the query omits old schema and ExtraSchemaID differs from SchemaID, use ExtraSchemaID to
+	//    recover the old schema name from the schema store.
+	oldSchemaName := ""
+	oldTableName := ""
+	oldSchemaSource := "unknown"
 	if len(args.job.InvolvingSchemaInfo) > 0 {
-		log.Info("buildPersistedDDLEvent for rename table",
+		oldSchemaName = args.job.InvolvingSchemaInfo[0].Database
+		oldTableName = args.job.InvolvingSchemaInfo[0].Table
+		if oldSchemaName != "" {
+			oldSchemaSource = "involving_schema_info"
+		}
+	}
+	if args.job.Version == model.JobVersion1 || args.job.Version == model.JobVersion2 {
+		if renameArgs, err := model.GetRenameTableArgs(args.job); err == nil {
+			if renameArgs.OldSchemaName.O != "" {
+				oldSchemaName = renameArgs.OldSchemaName.O
+				oldSchemaSource = "rename_table_args"
+			}
+		} else {
+			log.Warn("failed to get rename table args from ddl job",
+				zap.Int64("jobID", args.job.ID),
+				zap.String("query", event.Query),
+				zap.Error(err))
+		}
+	}
+	queryProvidedOldSchema := false
+	if queryInfo, parsed := parseRenameTableQueryInfo(args.job.Query); parsed {
+		if queryInfo.oldTableName != "" {
+			oldTableName = queryInfo.oldTableName
+		}
+		if queryInfo.oldSchemaName != "" {
+			oldSchemaName = queryInfo.oldSchemaName
+			queryProvidedOldSchema = true
+			oldSchemaSource = "query"
+		}
+	}
+	// ExtraSchemaID can be incorrect due to snapshot timing, so only use it if the query
+	// does not specify the old schema.
+	if !queryProvidedOldSchema && event.ExtraSchemaID != 0 && event.ExtraSchemaID != event.SchemaID {
+		if extraName := getSchemaName(args.databaseMap, event.ExtraSchemaID); extraName != "" {
+			oldSchemaName = extraName
+			oldSchemaSource = "extra_schema_id"
+		}
+	}
+	if oldSchemaName != "" && oldTableName != "" {
+		log.Info("rebuild rename table query",
+			zap.Int64("jobID", event.ID),
 			zap.String("query", event.Query),
 			zap.Int64("schemaID", event.SchemaID),
-			zap.String("SchemaName", event.SchemaName),
+			zap.String("schemaName", event.SchemaName),
 			zap.String("tableName", event.TableName),
-			zap.Int64("ExtraSchemaID", event.ExtraSchemaID),
-			zap.String("ExtraSchemaName", event.ExtraSchemaName),
-			zap.String("ExtraTableName", event.ExtraTableName),
-			zap.Any("involvingSchemaInfo", args.job.InvolvingSchemaInfo))
-		// The query in job maybe "RENAME TABLE table1 to test2.table2", we need rebuild it here.
-		//
-		// Note: Why use args.job.InvolvingSchemaInfo to build query?
-		// because event.ExtraSchemaID may not be accurate for rename table in some case.
-		// after pr: https://github.com/pingcap/tidb/pull/43341,
-		// assume there is a table `test.t` and a ddl: `rename table t to test2.t;`, and its commit ts is `100`.
-		// if you get a ddl snapshot at ts `99`, table `t` is already in `test2`.
-		// so event.ExtraSchemaName will also be `test2`.
-		// And because SchemaStore is the source of truth inside cdc,
-		// we can use event.ExtraSchemaID(even it is wrong) to update the internal state of the cdc.
-		// But event.Query will be emit to downstream(out of cdc), we must make it correct.
-		//
-		// InvolvingSchemaInfo returns the schema info involved in the job.
-		// The value should be stored in lower case.
-		//
-		// InvolvingSchemaInfo may store normalized lower-case names,
-		// while the original query can keep user-provided identifier case.
-		// Prefer names parsed from the original query whenever possible.
-		// See https://github.com/pingcap/ticdc/pull/2218 for background.
-		oldSchemaName := args.job.InvolvingSchemaInfo[0].Database
-		oldTableName := args.job.InvolvingSchemaInfo[0].Table
-		stmt, err := parser.New().ParseOneStmt(args.job.Query, "", "")
-		if err != nil {
-			log.Error("parse statement failed for build persisted DDL event", zap.Any("DDL", args.job.Query), zap.Error(err))
-		} else {
-			switch s := stmt.(type) {
-			case *ast.AlterTableStmt:
-				oldTableName = s.Table.Name.O
-				if schemaName := s.Table.Schema.O; schemaName != "" {
-					oldSchemaName = schemaName
-				}
-			case *ast.RenameTableStmt:
-				oldTableName = s.TableToTables[0].OldTable.Name.O
-				if schemaName := s.TableToTables[0].OldTable.Schema.O; schemaName != "" {
-					oldSchemaName = schemaName
-				}
-			default:
-				log.Error("unknown stmt type", zap.String("query", args.job.Query), zap.Any("stmt", stmt))
-			}
-		}
+			zap.Int64("extraSchemaID", event.ExtraSchemaID),
+			zap.String("extraSchemaName", event.ExtraSchemaName),
+			zap.String("extraTableName", event.ExtraTableName),
+			zap.String("oldSchemaName", oldSchemaName),
+			zap.String("oldTableName", oldTableName),
+			zap.String("oldSchemaSource", oldSchemaSource))
 		event.Query = fmt.Sprintf("RENAME TABLE %s TO %s",
 			common.QuoteSchema(oldSchemaName, oldTableName),
 			common.QuoteSchema(event.SchemaName, event.TableName))
@@ -812,6 +833,39 @@ type renameTableQueryInfo struct {
 	oldTableName  string
 	newSchemaName string
 	newTableName  string
+}
+
+func parseRenameTableQueryInfo(query string) (renameTableQueryInfo, bool) {
+	if query == "" {
+		return renameTableQueryInfo{}, false
+	}
+	stmt, err := parser.New().ParseOneStmt(query, "", "")
+	if err != nil {
+		log.Warn("parse rename table query failed",
+			zap.String("query", query),
+			zap.Error(err))
+		return renameTableQueryInfo{}, false
+	}
+
+	switch s := stmt.(type) {
+	case *ast.AlterTableStmt:
+		return renameTableQueryInfo{
+			oldSchemaName: s.Table.Schema.O,
+			oldTableName:  s.Table.Name.O,
+		}, true
+	case *ast.RenameTableStmt:
+		if len(s.TableToTables) == 0 {
+			return renameTableQueryInfo{}, false
+		}
+		return renameTableQueryInfo{
+			oldSchemaName: s.TableToTables[0].OldTable.Schema.O,
+			oldTableName:  s.TableToTables[0].OldTable.Name.O,
+			newSchemaName: s.TableToTables[0].NewTable.Schema.O,
+			newTableName:  s.TableToTables[0].NewTable.Name.O,
+		}, true
+	default:
+		return renameTableQueryInfo{}, false
+	}
 }
 
 func parseRenameTablesQueryInfos(query string) ([]renameTableQueryInfo, bool) {
@@ -2638,8 +2692,8 @@ func buildDDLEventForRenameTables(rawEvent *PersistedDDLEvent, tableFilter filte
 			continue
 		}
 		allFiltered = false
-		if isPartitionTable(rawEvent.TableInfo) {
-			allPhysicalIDs := getAllPartitionIDs(rawEvent.TableInfo)
+		if isPartitionTable(tableInfo) {
+			allPhysicalIDs := getAllPartitionIDs(tableInfo)
 			if !ignorePrevTable {
 				if !notSyncPrevTable {
 					// only when the previous table is not filtered and not NotSync, we add the query and table info
