@@ -14,17 +14,19 @@
 package spool
 
 import (
+	"os"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
-	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/stretchr/testify/require"
 )
 
-func newTestMessage(value string, rows int) *codeccommon.Message {
-	msg := codeccommon.NewMsg(nil, []byte(value))
+func newTestMessage(value string, rows int) *common.Message {
+	msg := common.NewMsg(nil, []byte(value))
 	msg.SetRowsCount(rows)
 	return msg
 }
@@ -34,13 +36,14 @@ func TestSuppressAndResumeWake(t *testing.T) {
 
 	changefeedID := commonType.NewChangefeedID4Test("test", "spool")
 	options := &Options{
+		QuotaBytes:         1000,
 		RootDir:            t.TempDir(),
 		SegmentBytes:       1 << 20,
 		MemoryRatio:        0.99,
 		HighWatermarkRatio: 0.6,
 		LowWatermarkRatio:  0.3,
 	}
-	manager, err := New(changefeedID, 1000, options)
+	manager, err := New(changefeedID, options)
 	require.NoError(t, err)
 	defer manager.Close()
 
@@ -49,13 +52,13 @@ func TestSuppressAndResumeWake(t *testing.T) {
 		atomic.AddInt64(&wakeCount, 1)
 	}
 
-	entry1, err := manager.Enqueue([]*codeccommon.Message{
+	entry1, err := manager.Enqueue([]*common.Message{
 		newTestMessage(string(make([]byte, 350)), 1),
 	}, incWake)
 	require.NoError(t, err)
 	require.Equal(t, int64(1), atomic.LoadInt64(&wakeCount))
 
-	entry2, err := manager.Enqueue([]*codeccommon.Message{
+	entry2, err := manager.Enqueue([]*common.Message{
 		newTestMessage(string(make([]byte, 450)), 1),
 	}, incWake)
 	require.NoError(t, err)
@@ -73,18 +76,19 @@ func TestSpillAndReadBack(t *testing.T) {
 
 	changefeedID := commonType.NewChangefeedID4Test("test", "spool")
 	options := &Options{
+		QuotaBytes:         64,
 		RootDir:            t.TempDir(),
 		SegmentBytes:       1 << 20,
 		MemoryRatio:        0.01,
 		HighWatermarkRatio: 0.95,
 		LowWatermarkRatio:  0.7,
 	}
-	manager, err := New(changefeedID, 64, options)
+	manager, err := New(changefeedID, options)
 	require.NoError(t, err)
 	defer manager.Close()
 
 	msg := newTestMessage("hello-spool", 3)
-	entry, err := manager.Enqueue([]*codeccommon.Message{msg}, nil)
+	entry, err := manager.Enqueue([]*common.Message{msg}, nil)
 	require.NoError(t, err)
 	require.True(t, entry.IsSpilled())
 	require.False(t, entry.InMemory())
@@ -104,7 +108,7 @@ func TestNewInvalidConfigError(t *testing.T) {
 	t.Parallel()
 
 	changefeedID := commonType.NewChangefeedID4Test("test", "spool")
-	manager, err := New(changefeedID, 0, &Options{RootDir: t.TempDir()})
+	manager, err := New(changefeedID, &Options{RootDir: t.TempDir()})
 	require.Nil(t, manager)
 	require.Error(t, err)
 	require.True(t, cerror.ErrStorageSinkInvalidConfig.Equal(err))
@@ -114,13 +118,86 @@ func TestEnqueueOnClosedManager(t *testing.T) {
 	t.Parallel()
 
 	changefeedID := commonType.NewChangefeedID4Test("test", "spool")
-	manager, err := New(changefeedID, 1024, &Options{RootDir: t.TempDir()})
+	manager, err := New(changefeedID, &Options{
+		QuotaBytes: 1024,
+		RootDir:    t.TempDir(),
+	})
 	require.NoError(t, err)
 
 	manager.Close()
 
-	entry, err := manager.Enqueue([]*codeccommon.Message{newTestMessage("v", 1)}, nil)
+	entry, err := manager.Enqueue([]*common.Message{newTestMessage("v", 1)}, nil)
 	require.Nil(t, entry)
 	require.Error(t, err)
 	require.True(t, cerror.ErrInternalCheckFailed.Equal(err))
+}
+
+func TestNewRejectsNegativeMemoryRatio(t *testing.T) {
+	t.Parallel()
+
+	changefeedID := commonType.NewChangefeedID4Test("test", "spool")
+	manager, err := New(changefeedID, &Options{
+		QuotaBytes:  1024,
+		RootDir:     t.TempDir(),
+		MemoryRatio: -1,
+	})
+	require.Nil(t, manager)
+	require.Error(t, err)
+	require.True(t, cerror.ErrStorageSinkInvalidConfig.Equal(err))
+}
+
+func TestPrepareRootDirOnlyRemovesSegmentLogs(t *testing.T) {
+	t.Parallel()
+
+	rootDir := t.TempDir()
+	segmentPath := filepath.Join(rootDir, "segment-000001.log")
+	keepPath := filepath.Join(rootDir, "keep.txt")
+
+	require.NoError(t, os.WriteFile(segmentPath, []byte("stale"), 0o644))
+	require.NoError(t, os.WriteFile(keepPath, []byte("keep"), 0o644))
+
+	changefeedID := commonType.NewChangefeedID4Test("test", "spool")
+	manager, err := New(changefeedID, &Options{
+		QuotaBytes: 1024,
+		RootDir:    rootDir,
+	})
+	require.NoError(t, err)
+	t.Cleanup(manager.Close)
+
+	_, err = os.Stat(segmentPath)
+	require.ErrorIs(t, err, os.ErrNotExist)
+	_, err = os.Stat(keepPath)
+	require.NoError(t, err)
+}
+
+func TestCloseOnlyRemovesSegmentLogs(t *testing.T) {
+	t.Parallel()
+
+	rootDir := t.TempDir()
+	keepPath := filepath.Join(rootDir, "keep.txt")
+	require.NoError(t, os.WriteFile(keepPath, []byte("keep"), 0o644))
+
+	changefeedID := commonType.NewChangefeedID4Test("test", "spool")
+	manager, err := New(changefeedID, &Options{
+		QuotaBytes: 32,
+		RootDir:    rootDir,
+	})
+	require.NoError(t, err)
+
+	entry, err := manager.Enqueue([]*common.Message{
+		newTestMessage("spill-me", 1),
+	}, nil)
+	require.NoError(t, err)
+	require.True(t, entry.IsSpilled())
+
+	segmentPath := filepath.Join(rootDir, "segment-000001.log")
+	_, err = os.Stat(segmentPath)
+	require.NoError(t, err)
+
+	manager.Close()
+
+	_, err = os.Stat(segmentPath)
+	require.ErrorIs(t, err, os.ErrNotExist)
+	_, err = os.Stat(keepPath)
+	require.NoError(t, err)
 }

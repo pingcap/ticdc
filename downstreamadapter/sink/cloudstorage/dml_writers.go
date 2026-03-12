@@ -62,7 +62,9 @@ func newDMLWriters(
 		defaultEncodingConcurrency,
 		config.WorkerCount,
 	)
-	spoolManager, err := spool.New(changefeedID, config.SpoolDiskQuota, nil)
+	spoolManager, err := spool.New(changefeedID, &spool.Options{
+		QuotaBytes: config.SpoolDiskQuota,
+	})
 	if err != nil {
 		return nil, err
 	}
