@@ -80,6 +80,7 @@ func newDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) *Eve
 			SyncPointInterval:  time.Duration(5 * time.Second),
 			SyncPointRetention: time.Duration(10 * time.Minute),
 		}, // syncPointConfig
+		0, // syncPointGuardTs
 		&defaultAtomicity,
 		false, // enableSplittableCheck
 		make(chan TableSpanStatusWithSeq, 128),
@@ -1001,6 +1002,7 @@ func TestDispatcherSplittableCheck(t *testing.T) {
 			SyncPointInterval:  time.Duration(5 * time.Second),
 			SyncPointRetention: time.Duration(10 * time.Minute),
 		},
+		0,
 		&defaultAtomicity,
 		true, // enableSplittableCheck = true
 		make(chan TableSpanStatusWithSeq, 128),
@@ -1111,6 +1113,7 @@ func TestDispatcher_SkipDMLAsStartTs_FilterCorrectly(t *testing.T) {
 			SyncPointInterval:  time.Duration(5 * time.Second),
 			SyncPointRetention: time.Duration(10 * time.Minute),
 		},
+		0,
 		&defaultAtomicity,
 		false,
 		make(chan TableSpanStatusWithSeq, 128),
@@ -1191,6 +1194,7 @@ func TestDispatcher_SkipDMLAsStartTs_Disabled(t *testing.T) {
 			SyncPointInterval:  time.Duration(5 * time.Second),
 			SyncPointRetention: time.Duration(10 * time.Minute),
 		},
+		0,
 		&defaultAtomicity,
 		false,
 		make(chan TableSpanStatusWithSeq, 128),

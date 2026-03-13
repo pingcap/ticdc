@@ -88,6 +88,13 @@ type Controller struct {
 	apiLock            sync.RWMutex
 }
 
+func (c *Controller) currentPDTs() uint64 {
+	if c.pdClock == nil {
+		return oracle.GoTimeToTS(time.Now())
+	}
+	return oracle.GoTimeToTS(c.pdClock.CurrentTime())
+}
+
 type changefeedChange struct {
 	changefeedID common.ChangeFeedID
 	changefeed   *changefeed.Changefeed
@@ -635,6 +642,7 @@ func (c *Controller) CreateChangefeed(ctx context.Context, info *config.ChangeFe
 
 	// generate a unique changefeed epoch
 	info.Epoch = pdutil.GenerateChangefeedEpoch(ctx, c.pdClient)
+	info.SyncPointGuardTs = c.currentPDTs()
 	err := c.backend.CreateChangefeed(ctx, info)
 	if err != nil {
 		return errors.Trace(err)
@@ -742,7 +750,8 @@ func (c *Controller) ResumeChangefeed(
 		return nil
 	}
 
-	if err := c.backend.ResumeChangefeed(ctx, id, newCheckpointTs); err != nil {
+	syncPointGuardTs := c.currentPDTs()
+	if err := c.backend.ResumeChangefeed(ctx, id, newCheckpointTs, syncPointGuardTs); err != nil {
 		return err
 	}
 
@@ -753,6 +762,7 @@ func (c *Controller) ResumeChangefeed(
 
 	clone.State = config.StateNormal
 	clone.Epoch = pdutil.GenerateChangefeedEpoch(ctx, c.pdClient)
+	clone.SyncPointGuardTs = syncPointGuardTs
 	cf.SetInfo(clone)
 
 	status := cf.GetStatusForResume()

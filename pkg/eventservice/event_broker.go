@@ -52,6 +52,7 @@ const (
 	// defaultSendResolvedTsInterval use to control whether to send a resolvedTs event to the dispatcher when its scan is skipped.
 	defaultSendResolvedTsInterval           = time.Second * 2
 	defaultRefreshMinSentResolvedTsInterval = time.Second * 1
+	defaultLogSyncPointStageInterval        = time.Minute
 )
 
 // eventBroker get event from the eventStore, and send the event to the dispatchers.
@@ -185,8 +186,162 @@ func newEventBroker(
 		return c.refreshMinSentResolvedTs(ctx)
 	})
 
+	g.Go(func() error {
+		return c.logSyncPointStage(ctx, defaultLogSyncPointStageInterval)
+	})
+
 	log.Info("new event broker created", zap.Uint64("id", id), zap.Uint64("scanLimitInBytes", c.scanLimitInBytes))
 	return c
+}
+
+func (c *eventBroker) logSyncPointStage(ctx context.Context, interval time.Duration) error {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		case <-ticker.C:
+			c.changefeedMap.Range(func(_, value interface{}) bool {
+				status := value.(*changefeedStatus)
+				if !status.isSyncpointEnabled() {
+					return true
+				}
+
+				preparingTs := status.getSyncPointPreparingTs()
+				commitReady := status.syncPointCommitReady.Load()
+				inFlightTs := status.syncPointInFlightTs.Load()
+				stage := "idle"
+				switch {
+				case preparingTs == 0 && inFlightTs == 0:
+					stage = "idle"
+				case preparingTs > 0 && !commitReady:
+					stage = "prepare"
+				case preparingTs > 0 && commitReady:
+					stage = "commit"
+				default:
+					stage = "unknown"
+				}
+
+				var (
+					totalDispatcherCount   int
+					activeDispatcherCount  int
+					prepareReadyCount      int
+					prepareWaitingCount    int
+					commitDoneCount        int
+					commitWaitingCount     int
+					commitEmitPendingCount int
+					minSentResolvedTs      = ^uint64(0)
+					minCheckpointTs        = ^uint64(0)
+					minNextSyncPointTs     = ^uint64(0)
+					prepareBlockingFound   bool
+					commitBlockingFound    bool
+					prepareBlockingDispID  common.DispatcherID
+					prepareBlockingSentTs  uint64
+					commitBlockingDispID   common.DispatcherID
+					commitBlockingCkptTs   uint64
+				)
+
+				status.dispatchers.Range(func(_, dispatcherValue any) bool {
+					dispatcher := dispatcherValue.(*atomic.Pointer[dispatcherStat]).Load()
+					if dispatcher == nil || dispatcher.isRemoved.Load() {
+						return true
+					}
+
+					totalDispatcherCount++
+					if dispatcher.seq.Load() == 0 {
+						return true
+					}
+
+					activeDispatcherCount++
+					sentResolvedTs := dispatcher.sentResolvedTs.Load()
+					checkpointTs := dispatcher.checkpointTs.Load()
+					nextSyncPointTs := dispatcher.nextSyncPoint.Load()
+					if sentResolvedTs < minSentResolvedTs {
+						minSentResolvedTs = sentResolvedTs
+					}
+					if checkpointTs < minCheckpointTs {
+						minCheckpointTs = checkpointTs
+					}
+					if nextSyncPointTs > 0 && nextSyncPointTs < minNextSyncPointTs {
+						minNextSyncPointTs = nextSyncPointTs
+					}
+
+					if preparingTs > 0 {
+						if sentResolvedTs >= preparingTs {
+							prepareReadyCount++
+						} else {
+							prepareWaitingCount++
+							if !prepareBlockingFound {
+								prepareBlockingFound = true
+								prepareBlockingDispID = dispatcher.id
+								prepareBlockingSentTs = sentResolvedTs
+							}
+						}
+					}
+					if inFlightTs > 0 {
+						if nextSyncPointTs == inFlightTs && sentResolvedTs >= inFlightTs {
+							commitEmitPendingCount++
+						}
+						if checkpointTs > inFlightTs {
+							commitDoneCount++
+						} else {
+							commitWaitingCount++
+							if !commitBlockingFound {
+								commitBlockingFound = true
+								commitBlockingDispID = dispatcher.id
+								commitBlockingCkptTs = checkpointTs
+							}
+						}
+					}
+					return true
+				})
+
+				if minSentResolvedTs == ^uint64(0) {
+					minSentResolvedTs = 0
+				}
+				if minCheckpointTs == ^uint64(0) {
+					minCheckpointTs = 0
+				}
+				if minNextSyncPointTs == ^uint64(0) {
+					minNextSyncPointTs = 0
+				}
+
+				fields := []zap.Field{
+					zap.Stringer("changefeedID", status.changefeedID),
+					zap.String("stage", stage),
+					zap.Uint64("preparingTs", preparingTs),
+					zap.Bool("commitReady", commitReady),
+					zap.Uint64("inFlightTs", inFlightTs),
+					zap.Int("dispatchersTotal", totalDispatcherCount),
+					zap.Int("dispatchersActive", activeDispatcherCount),
+					zap.Int("prepareReadyCount", prepareReadyCount),
+					zap.Int("prepareWaitingCount", prepareWaitingCount),
+					zap.Int("commitDoneCount", commitDoneCount),
+					zap.Int("commitWaitingCount", commitWaitingCount),
+					zap.Int("commitEmitPendingCount", commitEmitPendingCount),
+					zap.Uint64("minSentResolvedTs", minSentResolvedTs),
+					zap.Uint64("minCheckpointTs", minCheckpointTs),
+					zap.Uint64("minNextSyncPointTs", minNextSyncPointTs),
+				}
+				if prepareBlockingFound {
+					fields = append(fields,
+						zap.Stringer("prepareBlockingDispatcher", prepareBlockingDispID),
+						zap.Uint64("prepareBlockingSentResolvedTs", prepareBlockingSentTs),
+					)
+				}
+				if commitBlockingFound {
+					fields = append(fields,
+						zap.Stringer("commitBlockingDispatcher", commitBlockingDispID),
+						zap.Uint64("commitBlockingCheckpointTs", commitBlockingCkptTs),
+					)
+				}
+				log.Info("syncpoint stage snapshot", fields...)
+				return true
+			})
+		}
+	}
 }
 
 func (c *eventBroker) sendDML(remoteID node.ID, batchEvent *event.BatchDMLEvent, d *dispatcherStat) {
@@ -213,7 +368,7 @@ func (c *eventBroker) sendDML(remoteID node.ID, batchEvent *event.BatchDMLEvent,
 			doSendDML(events)
 			// Reset the index to 1 to process the next event after `dml` in next loop
 			idx = 1
-			// Emit sync point event if needed
+			// Emit sync point event if needed.
 			c.emitSyncPointEventIfNeeded(dml.GetCommitTs(), d, remoteID)
 		} else {
 			idx++
@@ -270,10 +425,55 @@ func (c *eventBroker) refreshMinSentResolvedTs(ctx context.Context) error {
 			c.changefeedMap.Range(func(key, value interface{}) bool {
 				status := value.(*changefeedStatus)
 				status.refreshMinSentResolvedTs()
+				status.tryPromoteSyncPointPrepare()
+				status.tryAdvanceSyncPointInFlight()
+				c.nudgeSyncPointCommitDispatchers(status)
 				return true
 			})
 		}
 	}
+}
+
+func (c *eventBroker) nudgeSyncPointCommitDispatchers(status *changefeedStatus) {
+	inFlightTs := status.syncPointInFlightTs.Load()
+	if inFlightTs == 0 {
+		return
+	}
+
+	c.dispatchers.Range(func(_, value interface{}) bool {
+		dispatcher := value.(*atomic.Pointer[dispatcherStat]).Load()
+		if dispatcher == nil || dispatcher.changefeedStat != status {
+			return true
+		}
+		if !c.shouldNudgeSyncPointCommit(dispatcher) {
+			return true
+		}
+		c.pushTask(dispatcher, false)
+		return true
+	})
+}
+
+func (c *eventBroker) shouldNudgeSyncPointCommit(d *dispatcherStat) bool {
+	if d == nil || d.isRemoved.Load() || !d.enableSyncPoint || d.seq.Load() == 0 {
+		return false
+	}
+
+	commitTs := d.nextSyncPoint.Load()
+	if commitTs == 0 || d.sentResolvedTs.Load() < commitTs {
+		return false
+	}
+
+	return d.changefeedStat.isSyncPointCommitReady(commitTs)
+}
+
+func (c *eventBroker) nudgeSyncPointCommitIfNeeded(d *dispatcherStat) bool {
+	if !c.shouldNudgeSyncPointCommit(d) {
+		return false
+	}
+	// Resend resolved-ts at current watermark to trigger syncpoint emission in commit stage,
+	// even when there is no fresh upstream event to drive a new scan.
+	c.sendResolvedTs(d, d.sentResolvedTs.Load())
+	return true
 }
 
 func (c *eventBroker) sendSignalResolvedTs(d *dispatcherStat) {
@@ -355,13 +555,27 @@ func (c *eventBroker) tickTableTriggerDispatchers(ctx context.Context) error {
 					return true
 				}
 				stat.receivedResolvedTs.Store(endTs)
+				if stat.enableSyncPoint {
+					c.fastForwardSyncPointIfNeeded(stat)
+					nextSyncPoint := stat.nextSyncPoint.Load()
+					if nextSyncPoint > 0 && endTs > nextSyncPoint {
+						stat.changefeedStat.tryStartSyncPointPrepare(nextSyncPoint)
+						endTs = nextSyncPoint
+					}
+				}
+
 				for _, e := range ddlEvents {
+					if e.FinishedTs > endTs {
+						break
+					}
 					ep := &e
 					c.sendDDL(ctx, remoteID, ep, stat)
 				}
 				if endTs > startTs {
 					// After all the events are sent, we send the watermark to the dispatcher.
 					c.sendResolvedTs(stat, endTs)
+				} else {
+					c.nudgeSyncPointCommitIfNeeded(stat)
 				}
 				return true
 			})
@@ -410,6 +624,7 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 	// 1. Get the data range of the dispatcher.
 	dataRange, needScan := task.getDataRange()
 	if !needScan {
+		c.nudgeSyncPointCommitIfNeeded(task)
 		updateMetricEventServiceSkipResolvedTsCount(task.info.GetMode())
 		return false, common.DataRange{}
 	}
@@ -442,9 +657,30 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 			)
 		}
 	}
+	// Two-stage syncpoint:
+	// 1. Always cap scan range by next syncpoint, so one scan will not cross multiple
+	//    syncpoint boundaries.
+	// 2. Prepare stage: once any dispatcher detects crossing its next syncpoint, select a
+	//    global preparing ts and cap all dispatchers at that ts.
+	// 3. Commit stage: only after all active dispatchers have sent resolved-ts >= preparing ts.
+	if task.enableSyncPoint {
+		c.fastForwardSyncPointIfNeeded(task)
+		nextSyncPoint := task.nextSyncPoint.Load()
+		if nextSyncPoint > 0 && dataRange.CommitTsEnd > nextSyncPoint {
+			task.changefeedStat.tryStartSyncPointPrepare(nextSyncPoint)
+			dataRange.CommitTsEnd = nextSyncPoint
+		}
+		preparingTs := task.changefeedStat.getSyncPointPreparingTs()
+		if preparingTs > 0 && !task.changefeedStat.isSyncPointCommitReady(preparingTs) {
+			dataRange.CommitTsEnd = min(dataRange.CommitTsEnd, preparingTs)
+		}
+	}
 
 	if dataRange.CommitTsEnd <= dataRange.CommitTsStart {
 		updateMetricEventServiceSkipResolvedTsCount(task.info.GetMode())
+		if c.nudgeSyncPointCommitIfNeeded(task) {
+			return false, common.DataRange{}
+		}
 		// Scan range can become empty after applying capping (for example, scan window).
 		// Send a signal resolved-ts event (rate limited) to keep downstream responsive,
 		// but do not advance the watermark here.
@@ -554,15 +790,41 @@ func (c *eventBroker) sendHandshakeIfNeed(task scanTask) {
 
 // hasSyncPointEventBeforeTs checks if there is any sync point events before the given ts.
 func (c *eventBroker) hasSyncPointEventsBeforeTs(ts uint64, d *dispatcherStat) bool {
-	return d.enableSyncPoint && ts > d.nextSyncPoint.Load()
+	c.fastForwardSyncPointIfNeeded(d)
+	if !d.enableSyncPoint {
+		return false
+	}
+	nextSyncPoint := d.nextSyncPoint.Load()
+	if ts <= nextSyncPoint {
+		return false
+	}
+	d.changefeedStat.tryStartSyncPointPrepare(nextSyncPoint)
+	return d.changefeedStat.isSyncPointCommitReady(nextSyncPoint)
 }
 
 // emitSyncPointEventIfNeeded emits a sync point event if the current ts is greater than the next sync point, and updates the next sync point.
 // We need call this function every time we send a event(whether dml/ddl/resolvedTs),
 // thus to ensure the sync point event is in correct order for each dispatcher.
 func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, remoteID node.ID) {
-	for d.enableSyncPoint && ts > d.nextSyncPoint.Load() {
+	c.fastForwardSyncPointIfNeeded(d)
+	for d.enableSyncPoint {
 		commitTs := d.nextSyncPoint.Load()
+		if !d.changefeedStat.isSyncPointCommitReady(commitTs) {
+			if ts <= commitTs {
+				return
+			}
+			d.changefeedStat.tryStartSyncPointPrepare(commitTs)
+			if !d.changefeedStat.isSyncPointCommitReady(commitTs) {
+				return
+			}
+		} else if ts < commitTs {
+			return
+		}
+
+		if !d.changefeedStat.tryStartOrJoinSyncPoint(commitTs) {
+			return
+		}
+
 		d.nextSyncPoint.Store(oracle.GoTimeToTS(oracle.GetTimeFromTS(commitTs).Add(d.syncPointInterval)))
 
 		e := event.NewSyncPointEvent(d.id, commitTs, d.seq.Add(1), d.epoch)
@@ -574,6 +836,21 @@ func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, r
 		syncPointEvent := newWrapSyncPointEvent(remoteID, e)
 		c.getMessageCh(d.messageWorkerIndex, common.IsRedoMode(d.info.GetMode())) <- syncPointEvent
 	}
+}
+
+func (c *eventBroker) fastForwardSyncPointIfNeeded(d *dispatcherStat) {
+	if !d.enableSyncPoint || d.syncPointGuardTs == 0 || d.syncPointInterval <= 0 {
+		return
+	}
+	nextSyncPoint := d.nextSyncPoint.Load()
+	if nextSyncPoint > d.syncPointGuardTs {
+		return
+	}
+	nextSyncPointTime := oracle.GetTimeFromTS(nextSyncPoint)
+	guardTsTime := oracle.GetTimeFromTS(d.syncPointGuardTs)
+	steps := guardTsTime.Sub(nextSyncPointTime)/d.syncPointInterval + 1
+	nextSyncPoint = oracle.GoTimeToTS(nextSyncPointTime.Add(steps * d.syncPointInterval))
+	d.nextSyncPoint.Store(nextSyncPoint)
 }
 
 func (c *eventBroker) calculateScanLimit(task scanTask) scanLimit {
@@ -1103,6 +1380,8 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 		Name: changefeedID.Keyspace(),
 	}
 	c.schemaStore.UnregisterTable(keyspaceMeta, span.TableID)
+	stat.changefeedStat.tryPromoteSyncPointPrepare()
+	stat.changefeedStat.tryAdvanceSyncPointInFlight()
 
 	log.Info("remove dispatcher",
 		zap.Uint64("clusterID", c.tidbClusterID), zap.Stringer("changefeedID", changefeedID),
@@ -1239,6 +1518,10 @@ func (c *eventBroker) handleDispatcherHeartbeat(heartbeat *DispatcherHeartBeatWi
 		changedChangefeeds[dispatcher.changefeedStat] = struct{}{}
 	}
 	c.sendDispatcherResponse(responseMap)
+	for changefeed := range changedChangefeeds {
+		changefeed.tryPromoteSyncPointPrepare()
+		changefeed.tryAdvanceSyncPointInFlight()
+	}
 }
 
 func (c *eventBroker) handleCongestionControl(from node.ID, m *event.CongestionControl) {

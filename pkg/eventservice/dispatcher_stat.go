@@ -69,6 +69,7 @@ type dispatcherStat struct {
 	// syncpoint related
 	enableSyncPoint   bool
 	nextSyncPoint     atomic.Uint64
+	syncPointGuardTs  uint64
 	syncPointInterval time.Duration
 	txnAtomicity      config.AtomicityLevel
 
@@ -159,6 +160,7 @@ func newDispatcherStat(
 	if info.SyncPointEnabled() {
 		dispStat.enableSyncPoint = true
 		dispStat.nextSyncPoint.Store(info.GetSyncPointTs())
+		dispStat.syncPointGuardTs = info.GetSyncPointGuardTs()
 		dispStat.syncPointInterval = info.GetSyncPointInterval()
 	}
 	startTs := info.GetStartTs()
@@ -434,6 +436,16 @@ type changefeedStatus struct {
 	lastTrendAdjustTime atomic.Time
 	usageWindow         *memoryUsageWindow
 	syncPointInterval   time.Duration
+	// syncPointPreparingTs is the globally selected syncpoint ts in prepare stage.
+	// 0 means there is no pending syncpoint preparation.
+	syncPointPreparingTs atomic.Uint64
+	// syncPointCommitReady indicates the selected syncpoint ts has reached commit stage.
+	// In commit stage, dispatchers are allowed to emit syncpoint events for syncPointPreparingTs.
+	syncPointCommitReady atomic.Bool
+	// syncPointInFlightTs tracks the commit-stage syncpoint ts that is waiting for all
+	// active dispatchers to report checkpoint > ts.
+	// 0 means there is no in-flight syncpoint in commit stage.
+	syncPointInFlightTs atomic.Uint64
 }
 
 func newChangefeedStatus(changefeedID common.ChangeFeedID, syncPointInterval time.Duration) *changefeedStatus {
@@ -468,4 +480,119 @@ func (c *changefeedStatus) isEmpty() bool {
 
 func (c *changefeedStatus) isSyncpointEnabled() bool {
 	return c.syncPointInterval > 0
+}
+
+func (c *changefeedStatus) getSyncPointPreparingTs() uint64 {
+	return c.syncPointPreparingTs.Load()
+}
+
+// tryStartSyncPointPrepare tries to start syncpoint prepare stage for candidateTs.
+// If a prepare ts already exists, only the same ts is accepted.
+func (c *changefeedStatus) tryStartSyncPointPrepare(candidateTs uint64) bool {
+	if candidateTs == 0 {
+		return false
+	}
+	for {
+		preparingTs := c.syncPointPreparingTs.Load()
+		switch {
+		case preparingTs == 0:
+			if c.syncPointPreparingTs.CompareAndSwap(0, candidateTs) {
+				c.syncPointCommitReady.Store(false)
+				return true
+			}
+		case preparingTs == candidateTs:
+			return true
+		case c.syncPointCommitReady.Load() || c.syncPointInFlightTs.Load() != 0:
+			return false
+		case candidateTs < preparingTs:
+			if c.syncPointPreparingTs.CompareAndSwap(preparingTs, candidateTs) {
+				return true
+			}
+		default:
+			return false
+		}
+	}
+}
+
+// isSyncPointCommitReady returns whether commitTs is in commit stage and can be emitted now.
+func (c *changefeedStatus) isSyncPointCommitReady(commitTs uint64) bool {
+	return commitTs > 0 &&
+		c.syncPointCommitReady.Load() &&
+		c.syncPointPreparingTs.Load() == commitTs &&
+		c.syncPointInFlightTs.Load() == commitTs
+}
+
+// tryStartOrJoinSyncPoint joins current in-flight syncpoint at commitTs.
+// It can only succeed for the commit-stage ts.
+func (c *changefeedStatus) tryStartOrJoinSyncPoint(commitTs uint64) bool {
+	for {
+		inFlightTs := c.syncPointInFlightTs.Load()
+		if inFlightTs == commitTs {
+			return true
+		}
+		if inFlightTs != 0 || !c.syncPointCommitReady.Load() || c.syncPointPreparingTs.Load() != commitTs {
+			return false
+		}
+		if c.syncPointInFlightTs.CompareAndSwap(0, commitTs) {
+			return true
+		}
+	}
+}
+
+// tryPromoteSyncPointPrepare promotes prepare stage to commit stage when all active
+// dispatchers have sentResolvedTs >= preparingTs.
+func (c *changefeedStatus) tryPromoteSyncPointPrepare() {
+	preparingTs := c.syncPointPreparingTs.Load()
+	if preparingTs == 0 || c.syncPointCommitReady.Load() {
+		return
+	}
+
+	hasEligible := false
+	ready := true
+	c.dispatchers.Range(func(_ any, value any) bool {
+		dispatcher := value.(*atomic.Pointer[dispatcherStat]).Load()
+		if dispatcher == nil || dispatcher.isRemoved.Load() || dispatcher.seq.Load() == 0 {
+			return true
+		}
+		hasEligible = true
+		if dispatcher.sentResolvedTs.Load() < preparingTs {
+			ready = false
+			return false
+		}
+		return true
+	})
+	if !hasEligible || !ready {
+		return
+	}
+
+	if c.syncPointCommitReady.CompareAndSwap(false, true) {
+		c.syncPointInFlightTs.CompareAndSwap(0, preparingTs)
+	}
+}
+
+// tryAdvanceSyncPointInFlight finishes current commit stage when all active dispatchers
+// have checkpointTs > inFlightTs. It then clears prepare/commit state.
+func (c *changefeedStatus) tryAdvanceSyncPointInFlight() {
+	inFlightTs := c.syncPointInFlightTs.Load()
+	if inFlightTs == 0 {
+		return
+	}
+
+	canAdvance := true
+	c.dispatchers.Range(func(_ any, value any) bool {
+		dispatcher := value.(*atomic.Pointer[dispatcherStat]).Load()
+		if dispatcher == nil || dispatcher.isRemoved.Load() || dispatcher.seq.Load() == 0 {
+			return true
+		}
+		if dispatcher.checkpointTs.Load() <= inFlightTs {
+			canAdvance = false
+			return false
+		}
+		return true
+	})
+
+	if canAdvance && c.syncPointInFlightTs.CompareAndSwap(inFlightTs, 0) {
+		c.syncPointCommitReady.Store(false)
+		c.syncPointPreparingTs.CompareAndSwap(inFlightTs, 0)
+	}
 }

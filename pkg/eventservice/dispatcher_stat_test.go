@@ -41,6 +41,7 @@ func TestNewDispatcherStat(t *testing.T) {
 	info.enableSyncPoint = true
 	info.nextSyncPoint = syncpoint.CalculateStartSyncPointTs(startTs, syncPointInterval, false)
 	info.syncPointInterval = syncPointInterval
+	info.syncPointGuardTs = startTs + 100
 
 	workerCount := uint64(1)
 	status := newChangefeedStatus(info.GetChangefeedID(), info.GetSyncPointInterval())
@@ -53,6 +54,7 @@ func TestNewDispatcherStat(t *testing.T) {
 	require.Equal(t, uint64(0), stat.epoch)
 	require.True(t, stat.enableSyncPoint)
 	require.Equal(t, info.nextSyncPoint, stat.nextSyncPoint.Load())
+	require.Equal(t, info.syncPointGuardTs, stat.syncPointGuardTs)
 	require.Equal(t, syncPointInterval, stat.syncPointInterval)
 	require.Equal(t, startTs, stat.receivedResolvedTs.Load())
 	require.Equal(t, startTs, stat.checkpointTs.Load())

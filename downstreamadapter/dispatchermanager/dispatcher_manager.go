@@ -256,6 +256,7 @@ func NewDispatcherManager(
 		integrityCfg,
 		filterCfg,
 		syncPointConfig,
+		cfConfig.SyncPointGuardTs,
 		manager.config.SinkConfig.TxnAtomicity,
 		manager.config.EnableSplittableCheck,
 		make(chan dispatcher.TableSpanStatusWithSeq, 8192),
