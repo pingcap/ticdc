@@ -35,7 +35,7 @@ func TestSchemaStoreGCKeeperLifecycle(t *testing.T) {
 	config.StoreGlobalServerConfig(cfg)
 	defer config.StoreGlobalServerConfig(originalConfig)
 
-	pdCli := &mockPdClientForSchemaStoreGC{
+	pdCli := &mockPDClientForSchemaStoreGC{
 		serviceSafePoint: make(map[string]uint64),
 		gcBarriers:       make(map[string]uint64),
 		txnSafePoint:     100,
@@ -61,7 +61,52 @@ func TestSchemaStoreGCKeeperLifecycle(t *testing.T) {
 	require.False(t, ok)
 }
 
-func assertSchemaStoreBarrierTS(t *testing.T, pdCli *mockPdClientForSchemaStoreGC, serviceID string, expected uint64) {
+func TestSanitizeSchemaStoreNodeID(t *testing.T) {
+	testCases := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "empty string",
+			input:    "",
+			expected: "unknown",
+		},
+		{
+			name:     "whitespace only",
+			input:    "   ",
+			expected: "unknown",
+		},
+		{
+			name:     "advertise address",
+			input:    "127.0.0.1:8300",
+			expected: "127_0_0_1_8300",
+		},
+		{
+			name:     "path like value",
+			input:    "node/a:b",
+			expected: "node_a_b",
+		},
+		{
+			name:     "keep allowed characters",
+			input:    "node-1_abcXYZ",
+			expected: "node-1_abcXYZ",
+		},
+		{
+			name:     "trim surrounding spaces",
+			input:    "  node-1  ",
+			expected: "node-1",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.expected, sanitizeSchemaStoreNodeID(tc.input))
+		})
+	}
+}
+
+func assertSchemaStoreBarrierTS(t *testing.T, pdCli *mockPDClientForSchemaStoreGC, serviceID string, expected uint64) {
 	t.Helper()
 	if kerneltype.IsClassic() {
 		require.Equal(t, expected, pdCli.serviceSafePoint[serviceID])
@@ -70,14 +115,14 @@ func assertSchemaStoreBarrierTS(t *testing.T, pdCli *mockPdClientForSchemaStoreG
 	require.Equal(t, expected, pdCli.gcBarriers[serviceID])
 }
 
-type mockPdClientForSchemaStoreGC struct {
+type mockPDClientForSchemaStoreGC struct {
 	pd.Client
 	serviceSafePoint map[string]uint64
 	gcBarriers       map[string]uint64
 	txnSafePoint     uint64
 }
 
-func (m *mockPdClientForSchemaStoreGC) UpdateServiceGCSafePoint(
+func (m *mockPDClientForSchemaStoreGC) UpdateServiceGCSafePoint(
 	ctx context.Context, serviceID string, ttl int64, safePoint uint64,
 ) (uint64, error) {
 	minSafePoint := uint64(math.MaxUint64)
@@ -93,7 +138,7 @@ func (m *mockPdClientForSchemaStoreGC) UpdateServiceGCSafePoint(
 	return minSafePoint, nil
 }
 
-func (m *mockPdClientForSchemaStoreGC) GetGCStatesClient(keyspaceID uint32) pdgc.GCStatesClient {
+func (m *mockPDClientForSchemaStoreGC) GetGCStatesClient(keyspaceID uint32) pdgc.GCStatesClient {
 	return &mockSchemaStoreGCStatesClient{
 		keyspaceID: keyspaceID,
 		parent:     m,
@@ -102,7 +147,7 @@ func (m *mockPdClientForSchemaStoreGC) GetGCStatesClient(keyspaceID uint32) pdgc
 
 type mockSchemaStoreGCStatesClient struct {
 	keyspaceID uint32
-	parent     *mockPdClientForSchemaStoreGC
+	parent     *mockPDClientForSchemaStoreGC
 }
 
 func (m *mockSchemaStoreGCStatesClient) SetGCBarrier(

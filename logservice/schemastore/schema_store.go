@@ -306,13 +306,13 @@ func (s *schemaStore) Close(ctx context.Context) error {
 	s.keyspaceLocker.Lock()
 	defer s.keyspaceLocker.Unlock()
 
+	keyspaceIDs := make([]uint32, 0, len(s.keyspaceSchemaStoreMap))
 	for keyspaceID, store := range s.keyspaceSchemaStoreMap {
+		keyspaceIDs = append(keyspaceIDs, keyspaceID)
 		if store.cancel != nil {
 			store.cancel()
 		}
 		if store.gcKeeper != nil {
-			// The GC keeper must be closed before the local storage is dropped,
-			// otherwise PD may keep protecting a stale lower bound for longer than needed.
 			err := store.gcKeeper.close(ctx)
 			if err != nil {
 				log.Error("gc keeper close failed", zap.Uint32("keyspaceID", keyspaceID), zap.Error(err))
@@ -323,7 +323,7 @@ func (s *schemaStore) Close(ctx context.Context) error {
 			log.Error("dataStorage close failed", zap.Uint32("keyspaceID", keyspaceID), zap.Error(err))
 		}
 	}
-	log.Info("schema store closed")
+	log.Info("schema store closed", zap.Uint32s("keyspaceIDs", keyspaceIDs))
 	return nil
 }
 
