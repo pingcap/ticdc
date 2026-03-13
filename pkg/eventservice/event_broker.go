@@ -45,6 +45,10 @@ const (
 
 	defaultMaxBatchSize            = 128
 	defaultFlushResolvedTsInterval = 25 * time.Millisecond
+	// defaultBootstrapResolvedTsInterval controls the synthetic resolvedTs tick
+	// before upstream resolvedTs catches up.
+	defaultBootstrapResolvedTsInterval = time.Second
+	bootstrapResolvedTsStep            = time.Second
 
 	defaultReportDispatcherStatToStoreInterval = time.Second * 10
 
@@ -174,6 +178,10 @@ func newEventBroker(
 	})
 
 	g.Go(func() error {
+		return c.tickBootstrapResolvedTs(ctx)
+	})
+
+	g.Go(func() error {
 		return c.reportDispatcherStatToStore(ctx, defaultReportDispatcherStatToStoreInterval)
 	})
 
@@ -297,6 +305,25 @@ func (c *eventBroker) sendResolvedTs(d *dispatcherStat, watermark uint64) {
 	updateMetricEventServiceSendResolvedTsCount(d.info.GetMode())
 }
 
+func (c *eventBroker) sendBootstrapResolvedTs(d *dispatcherStat, watermark uint64) bool {
+	remoteID := node.ID(d.info.GetServerID())
+	c.emitSyncPointEventIfNeeded(watermark, d, remoteID)
+	re := event.NewResolvedEvent(watermark, d.id, d.epoch)
+	re.Seq = d.seq.Load()
+	resolvedEvent := newWrapResolvedEvent(remoteID, re)
+	ch := c.getMessageCh(d.messageWorkerIndex, common.IsRedoMode(d.info.GetMode()))
+	select {
+	case ch <- resolvedEvent:
+		d.updateSentResolvedTs(watermark)
+		updateMetricEventServiceSendResolvedTsCount(d.info.GetMode())
+		return true
+	default:
+		// Avoid blocking broker tick path. The next ticker round will retry.
+		resolvedEvent.reset()
+		return false
+	}
+}
+
 func (c *eventBroker) sendNotReusableEvent(
 	server node.ID,
 	d *dispatcherStat,
@@ -400,6 +427,48 @@ func (c *eventBroker) logUninitializedDispatchers(ctx context.Context) error {
 			})
 		}
 	}
+}
+
+func (c *eventBroker) tickBootstrapResolvedTs(ctx context.Context) error {
+	ticker := time.NewTicker(defaultBootstrapResolvedTsInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		case <-ticker.C:
+			c.dispatchers.Range(func(_, value interface{}) bool {
+				dispatcher := value.(*atomic.Pointer[dispatcherStat]).Load()
+				c.sendBootstrapResolvedTsIfNeeded(dispatcher)
+				return true
+			})
+		}
+	}
+}
+
+func (c *eventBroker) sendBootstrapResolvedTsIfNeeded(dispatcher *dispatcherStat) {
+	if dispatcher == nil || dispatcher.isRemoved.Load() {
+		return
+	}
+
+	// For epoch 0 dispatchers, drive the ready/reset handshake first.
+	if dispatcher.epoch == 0 {
+		c.checkAndSendReady(dispatcher)
+		return
+	}
+
+	sentResolvedTs := dispatcher.sentResolvedTs.Load()
+	receivedResolvedTs := dispatcher.receivedResolvedTs.Load()
+	// Stop synthetic advancement once upstream resolved-ts catches up.
+	if dispatcher.hasReceivedFirstResolvedTs.Load() && receivedResolvedTs >= sentResolvedTs {
+		return
+	}
+
+	c.sendHandshakeIfNeed(dispatcher)
+	nextResolvedTs := oracle.GoTimeToTS(oracle.GetTimeFromTS(sentResolvedTs).Add(bootstrapResolvedTsStep))
+	c.sendBootstrapResolvedTs(dispatcher, nextResolvedTs)
+	log.Debug("fizz send resolvedTs", zap.Any("dispatcherID", dispatcher.id), zap.Any("resolvedTs", nextResolvedTs))
 }
 
 // getScanTaskDataRange determines the valid data range for scanning a given task.
@@ -1046,6 +1115,10 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 	}
 	c.dispatchers.Store(id, dispatcherPtr)
 	c.metricsCollector.metricDispatcherCount.Inc()
+	if dispatcher.epoch > 0 {
+		c.sendHandshakeIfNeed(dispatcher)
+		c.sendBootstrapResolvedTs(dispatcher, dispatcher.startTs)
+	}
 	log.Info("register dispatcher",
 		zap.Uint64("clusterID", c.tidbClusterID),
 		zap.Stringer("changefeedID", changefeedID),
