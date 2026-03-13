@@ -119,7 +119,7 @@ func (d *EventDispatcher) cache(dispatcherEvents []DispatcherEvent, wakeCallback
 	}
 	select {
 	case d.cacheEvents.events <- cacheEvents:
-		log.Debug("cache events",
+		log.Info("cache events",
 			zap.Stringer("dispatcher", d.id),
 			zap.Uint64("dispatcherResolvedTs", d.GetResolvedTs()),
 			zap.Int("length", len(dispatcherEvents)),

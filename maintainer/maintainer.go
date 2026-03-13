@@ -532,6 +532,7 @@ func (m *Maintainer) onRedoPersisted(req *heartbeatpb.RedoResolvedTsProgressMess
 			}))
 		}
 		m.sendMessages(msgs)
+		log.Info("send redo resolved ts progress message", zap.Any("changefeedID", req.ChangefeedID), zap.Any("redoResolvedTs", m.redoResolvedTs))
 	}
 }
 
@@ -609,7 +610,7 @@ func (m *Maintainer) handleRedoMetaTsMessage(ctx context.Context) {
 				m.redoMetaTs.CheckpointTs = m.getWatermark().CheckpointTs
 				needUpdate = true
 			}
-			log.Debug("handle redo message",
+			log.Info("handle redo message",
 				zap.Any("needUpdate", needUpdate),
 				zap.Any("redoMetaTs", m.redoMetaTs),
 				zap.Any("checkpointTs", m.getWatermark().CheckpointTs),
