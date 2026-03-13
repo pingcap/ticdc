@@ -683,6 +683,12 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	}
 
 	if err != nil {
+		if errors.Is(err, &schemastore.TableDeletedError{}) {
+			log.Warn("table deleted, send signal resolved ts", zap.Stringer("dispatcherID", task.id), zap.Int64("tableID", task.info.GetTableSpan().GetTableID()))
+			c.sendSignalResolvedTs(task)
+			return
+		}
+
 		log.Error("scan events failed",
 			zap.Stringer("changefeedID", task.changefeedStat.changefeedID),
 			zap.Stringer("dispatcherID", task.id), zap.Int64("tableID", task.info.GetTableSpan().GetTableID()),
