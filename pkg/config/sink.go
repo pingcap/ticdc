@@ -1103,63 +1103,86 @@ func (o *OutboxConfig) validate() error {
 	if o == nil {
 		return cerror.ErrSinkInvalidConfig.GenWithStack("outbox config is required for outbox-json protocol")
 	}
-	// Normalize and validate required columns.
-	o.IDColumn = strings.TrimSpace(o.IDColumn)
-	o.KeyColumn = strings.TrimSpace(o.KeyColumn)
-	o.ValueColumn = strings.TrimSpace(o.ValueColumn)
-	if o.IDColumn == "" {
-		return cerror.ErrSinkInvalidConfig.GenWithStack("outbox.id-column is required")
+	idColumn, keyColumn, valueColumn, seenColumns, err := o.normalizeRequiredColumns()
+	if err != nil {
+		return err
 	}
-	if o.KeyColumn == "" {
-		return cerror.ErrSinkInvalidConfig.GenWithStack("outbox.key-column is required")
+	headerColumns, err := o.normalizeHeaderColumns(seenColumns)
+	if err != nil {
+		return err
 	}
-	if o.ValueColumn == "" {
-		return cerror.ErrSinkInvalidConfig.GenWithStack("outbox.value-column is required")
+	o.IDColumn = idColumn
+	o.KeyColumn = keyColumn
+	o.ValueColumn = valueColumn
+	o.HeaderColumns = headerColumns
+
+	return nil
+}
+
+// normalizeRequiredColumns validates outbox id/key/value columns and returns their
+// normalized values together with the set used for duplicate detection.
+func (o *OutboxConfig) normalizeRequiredColumns() (string, string, string, map[string]struct{}, error) {
+	idColumn := strings.TrimSpace(o.IDColumn)
+	keyColumn := strings.TrimSpace(o.KeyColumn)
+	valueColumn := strings.TrimSpace(o.ValueColumn)
+	if idColumn == "" {
+		return "", "", "", nil, cerror.ErrSinkInvalidConfig.GenWithStack("outbox.id-column is required")
+	}
+	if keyColumn == "" {
+		return "", "", "", nil, cerror.ErrSinkInvalidConfig.GenWithStack("outbox.key-column is required")
+	}
+	if valueColumn == "" {
+		return "", "", "", nil, cerror.ErrSinkInvalidConfig.GenWithStack("outbox.value-column is required")
 	}
 
 	seenColumns := make(map[string]struct{}, 3+len(o.HeaderColumns))
-	requiredCols := []string{o.IDColumn, o.KeyColumn, o.ValueColumn}
+	requiredCols := []string{idColumn, keyColumn, valueColumn}
 	for _, col := range requiredCols {
 		lowerCol := strings.ToLower(col)
 		if _, ok := seenColumns[lowerCol]; ok {
-			return cerror.ErrSinkInvalidConfig.GenWithStack(
+			return "", "", "", nil, cerror.ErrSinkInvalidConfig.GenWithStack(
 				"outbox columns must be unique, duplicate column: %s", col)
 		}
 		seenColumns[lowerCol] = struct{}{}
 	}
+	return idColumn, keyColumn, valueColumn, seenColumns, nil
+}
 
+// normalizeHeaderColumns validates outbox header columns and returns a normalized
+// header map after checking for reserved names and duplicate source columns.
+func (o *OutboxConfig) normalizeHeaderColumns(seenColumns map[string]struct{}) (map[string]string, error) {
 	seenHeaders := make(map[string]struct{}, len(o.HeaderColumns))
 	normalizedHeaders := make(map[string]string, len(o.HeaderColumns))
 	for header, col := range o.HeaderColumns {
 		headerTrimmed := strings.TrimSpace(header)
 		if headerTrimmed == "" {
-			return cerror.ErrSinkInvalidConfig.GenWithStack("outbox.header-columns must not contain empty header name")
+			return nil, cerror.ErrSinkInvalidConfig.GenWithStack(
+				"outbox.header-columns must not contain empty header name")
 		}
 		lowerHeader := strings.ToLower(headerTrimmed)
 		if lowerHeader == "id" {
-			return cerror.ErrSinkInvalidConfig.GenWithStack(
+			return nil, cerror.ErrSinkInvalidConfig.GenWithStack(
 				"outbox header name Id is reserved")
 		}
 		if _, ok := seenHeaders[lowerHeader]; ok {
-			return cerror.ErrSinkInvalidConfig.GenWithStack(
+			return nil, cerror.ErrSinkInvalidConfig.GenWithStack(
 				"outbox header names must be unique, duplicate header name: %s", headerTrimmed)
 		}
 		seenHeaders[lowerHeader] = struct{}{}
 
 		colTrimmed := strings.TrimSpace(col)
 		if colTrimmed == "" {
-			return cerror.ErrSinkInvalidConfig.GenWithStack("outbox.header-columns must not contain empty column value")
+			return nil, cerror.ErrSinkInvalidConfig.GenWithStack(
+				"outbox.header-columns must not contain empty column value")
 		}
 
 		lowerCol := strings.ToLower(colTrimmed)
 		if _, ok := seenColumns[lowerCol]; ok {
-			return cerror.ErrSinkInvalidConfig.GenWithStack(
+			return nil, cerror.ErrSinkInvalidConfig.GenWithStack(
 				"outbox header source columns must be unique and not overlap required columns, duplicate column: %s", colTrimmed)
 		}
 		seenColumns[lowerCol] = struct{}{}
 		normalizedHeaders[headerTrimmed] = colTrimmed
 	}
-	o.HeaderColumns = normalizedHeaders
-
-	return nil
+	return normalizedHeaders, nil
 }
