@@ -24,7 +24,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
-	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
 )
 
@@ -34,7 +33,7 @@ const (
 )
 
 type schemaStoreGCKeeper struct {
-	pdCli        pd.Client
+	pdCli        gc.GCServiceClient
 	keyspaceMeta common.KeyspaceMeta
 	// gcServiceIDTag separates schema store GC services from user changefeeds.
 	gcServiceIDTag string
@@ -43,7 +42,7 @@ type schemaStoreGCKeeper struct {
 	gcServiceIDParts common.ChangeFeedID
 }
 
-func newSchemaStoreGCKeeper(pdCli pd.Client, keyspaceMeta common.KeyspaceMeta) *schemaStoreGCKeeper {
+func newSchemaStoreGCKeeper(pdCli gc.GCServiceClient, keyspaceMeta common.KeyspaceMeta) *schemaStoreGCKeeper {
 	return &schemaStoreGCKeeper{
 		pdCli:          pdCli,
 		keyspaceMeta:   keyspaceMeta,
