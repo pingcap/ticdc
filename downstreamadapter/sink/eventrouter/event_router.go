@@ -38,9 +38,10 @@ type Rule struct {
 // EventRouter is a router, it determines which topic and which partition
 // an event should be dispatched to.
 type EventRouter struct {
-	defaultTopic          string
-	rules                 []Rule
-	outboxRequiredColumns []string
+	defaultTopic                 string
+	rules                        []Rule
+	outboxRequiredColumns        []string
+	hasRowDependentTopicDispatch bool
 }
 
 // NewEventRouter creates a new EventRouter.
@@ -57,6 +58,7 @@ func NewEventRouter(
 	})
 
 	rules := make([]Rule, 0, len(ruleConfigs))
+	hasRowDependentTopicDispatch := false
 	for _, ruleConfig := range ruleConfigs {
 		f, err := tableFilter.Parse(ruleConfig.Matcher)
 		if err != nil {
@@ -70,6 +72,9 @@ func NewEventRouter(
 		if err != nil {
 			return nil, err
 		}
+		if topicGenerator.UsesColumnPlaceholders() {
+			hasRowDependentTopicDispatch = true
+		}
 		rules = append(rules, Rule{
 			partitionDispatcher: d,
 			topicGenerator:      topicGenerator,
@@ -78,9 +83,10 @@ func NewEventRouter(
 	}
 
 	return &EventRouter{
-		defaultTopic:          defaultTopic,
-		rules:                 rules,
-		outboxRequiredColumns: sinkConfig.OutboxRequiredColumns(),
+		defaultTopic:                 defaultTopic,
+		rules:                        rules,
+		outboxRequiredColumns:        sinkConfig.OutboxRequiredColumns(),
+		hasRowDependentTopicDispatch: hasRowDependentTopicDispatch,
 	}, nil
 }
 
@@ -170,6 +176,12 @@ func (s *EventRouter) GetPartitionGenerator(schema, table string) partition.Gene
 // GetDefaultTopic returns the default topic name.
 func (s *EventRouter) GetDefaultTopic() string {
 	return s.defaultTopic
+}
+
+// HasRowDependentTopicDispatch indicates whether any topic rule uses column-based
+// placeholders and therefore requires runtime topic discovery.
+func (s *EventRouter) HasRowDependentTopicDispatch() bool {
+	return s.hasRowDependentTopicDispatch
 }
 
 // GetTopicDispatchColumns returns all row column names referenced by topic

@@ -158,6 +158,37 @@ func TestGetActiveTopics(t *testing.T) {
 	require.Equal(t, []string{"test", "hello_test_table_world", "test_index_value_world", "hello_test", "sbs_table"}, topics)
 }
 
+func TestHasRowDependentTopicDispatchStaticOnly(t *testing.T) {
+	t.Parallel()
+
+	sinkConfig := &config.SinkConfig{}
+	d, err := NewEventRouter(sinkConfig, "test", false, false)
+	require.NoError(t, err)
+	require.False(t, d.HasRowDependentTopicDispatch())
+}
+
+func TestHasRowDependentTopicDispatchMixed(t *testing.T) {
+	t.Parallel()
+
+	sinkConfig := &config.SinkConfig{
+		DispatchRules: []*config.DispatchRule{
+			{
+				Matcher:       []string{"row_topic.*"},
+				PartitionRule: "table",
+				TopicRule:     "topic_{column:topic_key}",
+			},
+			{
+				Matcher:       []string{"static_topic.*"},
+				PartitionRule: "table",
+				TopicRule:     "topic_{schema}_{table}",
+			},
+		},
+	}
+	d, err := NewEventRouter(sinkConfig, "test", false, false)
+	require.NoError(t, err)
+	require.True(t, d.HasRowDependentTopicDispatch())
+}
+
 func TestGetTopicForRowChange(t *testing.T) {
 	t.Parallel()
 

@@ -139,44 +139,93 @@ func TestPulsarSinkBasicFunctionality(t *testing.T) {
 func TestGetCheckpointTopics(t *testing.T) {
 	t.Parallel()
 
-	sinkConfig := &config.SinkConfig{
-		DispatchRules: []*config.DispatchRule{
-			{
-				Matcher:   []string{"row_topic.*"},
-				TopicRule: "topic_{column:topic_key}",
+	testStaticOnly := func(t *testing.T, discoveredTs time.Time) []string {
+		t.Helper()
+		sinkConfig := &config.SinkConfig{
+			DispatchRules: []*config.DispatchRule{
+				{
+					Matcher:       []string{"static_topic.*"},
+					PartitionRule: "default",
+					TopicRule:     "topic_{schema}_{table}",
+				},
 			},
-			{
-				Matcher:   []string{"static_topic.*"},
-				TopicRule: "topic_{schema}_{table}",
-			},
-		},
-	}
-	router, err := eventrouter.NewEventRouter(sinkConfig, "default_topic", true, false)
-	require.NoError(t, err)
+		}
+		router, err := eventrouter.NewEventRouter(sinkConfig, "default_topic", true, false)
+		require.NoError(t, err)
 
-	tableSchemaStore := commonEvent.NewTableSchemaStore([]*heartbeatpb.SchemaInfo{
-		{
-			SchemaName: "row_topic",
-			Tables: []*heartbeatpb.TableInfo{
-				{TableName: "t1"},
+		tableSchemaStore := commonEvent.NewTableSchemaStore([]*heartbeatpb.SchemaInfo{
+			{
+				SchemaName: "static_topic",
+				Tables: []*heartbeatpb.TableInfo{
+					{TableName: "t2"},
+				},
 			},
-		},
-		{
-			SchemaName: "static_topic",
-			Tables: []*heartbeatpb.TableInfo{
-				{TableName: "t2"},
-			},
-		},
-	}, common.PulsarSinkType, false)
+		}, common.PulsarSinkType, false)
 
-	s := &sink{
-		comp: component{
-			eventRouter: router,
-		},
-		tableSchemaStore:    tableSchemaStore,
-		discoveredRowTopics: map[string]time.Time{"runtime_topic": time.Now()},
+		s := &sink{
+			comp: component{
+				eventRouter: router,
+			},
+			tableSchemaStore:    tableSchemaStore,
+			discoveredRowTopics: map[string]time.Time{"runtime_topic": discoveredTs},
+		}
+		return s.getCheckpointTopics(1)
 	}
 
-	topics := s.getCheckpointTopics(1)
-	require.Equal(t, []string{"default_topic", "runtime_topic", "topic_static_topic_t2"}, topics)
+	testMixed := func(t *testing.T) []string {
+		t.Helper()
+		sinkConfig := &config.SinkConfig{
+			DispatchRules: []*config.DispatchRule{
+				{
+					Matcher:   []string{"row_topic.*"},
+					TopicRule: "topic_{column:topic_key}",
+				},
+				{
+					Matcher:   []string{"static_topic.*"},
+					TopicRule: "topic_{schema}_{table}",
+				},
+			},
+		}
+		router, err := eventrouter.NewEventRouter(sinkConfig, "default_topic", true, false)
+		require.NoError(t, err)
+
+		tableSchemaStore := commonEvent.NewTableSchemaStore([]*heartbeatpb.SchemaInfo{
+			{
+				SchemaName: "row_topic",
+				Tables: []*heartbeatpb.TableInfo{
+					{TableName: "t1"},
+				},
+			},
+			{
+				SchemaName: "static_topic",
+				Tables: []*heartbeatpb.TableInfo{
+					{TableName: "t2"},
+				},
+			},
+		}, common.PulsarSinkType, false)
+
+		s := &sink{
+			comp: component{
+				eventRouter: router,
+			},
+			tableSchemaStore:    tableSchemaStore,
+			discoveredRowTopics: map[string]time.Time{"runtime_topic": time.Now()},
+		}
+		return s.getCheckpointTopics(1)
+	}
+
+	t.Run("static only ignores discovered topics", func(t *testing.T) {
+		topics := testStaticOnly(t, time.Now())
+		require.Equal(t, []string{"default_topic", "topic_static_topic_t2"}, topics)
+	})
+
+	t.Run("static only ignores stale discovered topics", func(t *testing.T) {
+		topics := testStaticOnly(t, time.Now().Add(-discoveredTopicRetention*2))
+		require.Equal(t, []string{"default_topic", "topic_static_topic_t2"}, topics)
+	})
+
+	t.Run("mixed config includes discovered dynamic topics", func(t *testing.T) {
+		topics := testMixed(t)
+		require.Equal(t, []string{"default_topic", "runtime_topic", "topic_static_topic_t2"}, topics)
+	})
 }
