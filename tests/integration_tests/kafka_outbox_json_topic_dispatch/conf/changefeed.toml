@@ -1,0 +1,9 @@
+[sink]
+dispatchers = [
+    {matcher = ["outbox_test.tenant_events"], topic = "{column:tenant_id}"},
+]
+
+[sink.outbox]
+id-column    = "id"
+key-column   = "event_key"
+value-column = "payload"

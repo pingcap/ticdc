@@ -16,6 +16,9 @@ package columnselector
 import (
 	"testing"
 
+	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter"
+	"github.com/pingcap/ticdc/pkg/common"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
@@ -181,4 +184,130 @@ func TestColumnSelectorGetSelector(t *testing.T) {
 			require.True(t, selector.Select(col))
 		}
 	}
+}
+
+func TestVerifyTablesRejectFilteredTopicDispatchColumn(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("create database column_selector_topic")
+	helper.Tk().MustExec("use column_selector_topic")
+	helper.DDL2Job("create table t (id int primary key, topic_key varchar(64), payload varchar(64))")
+
+	dmlEvent := helper.DML2Event("column_selector_topic", "t",
+		"insert into t values (1, 'topic-a', 'payload')")
+	tableInfo := dmlEvent.TableInfo
+
+	sinkConfig := &config.SinkConfig{
+		DispatchRules: []*config.DispatchRule{
+			{
+				Matcher:   []string{"column_selector_topic.*"},
+				TopicRule: "topic_{column:topic_key}",
+			},
+		},
+		ColumnSelectors: []*config.ColumnSelector{
+			{
+				Matcher: []string{"column_selector_topic.*"},
+				Columns: []string{"id", "payload"},
+			},
+		},
+	}
+
+	selectors, err := New(sinkConfig)
+	require.NoError(t, err)
+	router, err := eventrouter.NewEventRouter(sinkConfig, "default_topic", false, false)
+	require.NoError(t, err)
+
+	err = selectors.VerifyTables([]*common.TableInfo{tableInfo}, router)
+	require.ErrorContains(t, err, "used in the topic dispatcher")
+}
+
+func TestVerifyTablesRejectFilteredOutboxColumn(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("create database column_selector_outbox")
+	helper.Tk().MustExec("use column_selector_outbox")
+	helper.DDL2Job("create table t (" +
+		"id int primary key, " +
+		"aggregate_id varchar(64), " +
+		"payload varchar(64), " +
+		"event_type varchar(64))")
+
+	dmlEvent := helper.DML2Event("column_selector_outbox", "t",
+		"insert into t values (1, 'agg-1', 'payload', 'created')")
+	tableInfo := dmlEvent.TableInfo
+
+	protocol := "outbox-json"
+	sinkConfig := &config.SinkConfig{
+		Protocol: &protocol,
+		Outbox: &config.OutboxConfig{
+			IDColumn:      "id",
+			KeyColumn:     "aggregate_id",
+			ValueColumn:   "payload",
+			HeaderColumns: map[string]string{"event_type": "event_type"},
+		},
+		ColumnSelectors: []*config.ColumnSelector{
+			{
+				Matcher: []string{"column_selector_outbox.*"},
+				Columns: []string{"id", "aggregate_id"},
+			},
+		},
+	}
+
+	selectors, err := New(sinkConfig)
+	require.NoError(t, err)
+	router, err := eventrouter.NewEventRouter(sinkConfig, "default_topic", false, false)
+	require.NoError(t, err)
+
+	err = selectors.VerifyTables([]*common.TableInfo{tableInfo}, router)
+	require.ErrorContains(t, err, "required by outbox config")
+}
+
+func TestVerifyTablesAllowsRetainedTopicAndOutboxColumns(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("create database column_selector_allow")
+	helper.Tk().MustExec("use column_selector_allow")
+	helper.DDL2Job("create table t (" +
+		"id int primary key, " +
+		"aggregate_id varchar(64), " +
+		"payload varchar(64), " +
+		"event_type varchar(64), " +
+		"topic_key varchar(64))")
+
+	dmlEvent := helper.DML2Event("column_selector_allow", "t",
+		"insert into t values (1, 'agg-1', 'payload', 'created', 'route-a')")
+	tableInfo := dmlEvent.TableInfo
+
+	protocol := "outbox-json"
+	sinkConfig := &config.SinkConfig{
+		Protocol: &protocol,
+		Outbox: &config.OutboxConfig{
+			IDColumn:      "id",
+			KeyColumn:     "aggregate_id",
+			ValueColumn:   "payload",
+			HeaderColumns: map[string]string{"event_type": "event_type"},
+		},
+		DispatchRules: []*config.DispatchRule{
+			{
+				Matcher:   []string{"column_selector_allow.*"},
+				TopicRule: "topic_{column:topic_key}",
+			},
+		},
+		ColumnSelectors: []*config.ColumnSelector{
+			{
+				Matcher: []string{"column_selector_allow.*"},
+				Columns: []string{"id", "aggregate_id", "payload", "event_type", "topic_key"},
+			},
+		},
+	}
+
+	selectors, err := New(sinkConfig)
+	require.NoError(t, err)
+	router, err := eventrouter.NewEventRouter(sinkConfig, "default_topic", false, false)
+	require.NoError(t, err)
+
+	require.NoError(t, selectors.VerifyTables([]*common.TableInfo{tableInfo}, router))
 }

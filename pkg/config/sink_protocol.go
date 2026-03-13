@@ -41,11 +41,19 @@ const (
 	ProtocolCsv
 	ProtocolDebezium
 	ProtocolSimple
+	ProtocolOutboxJSON
 )
 
 // IsBatchEncode returns whether the protocol is a batch encoder.
 func (p Protocol) IsBatchEncode() bool {
-	return p == ProtocolOpen || p == ProtocolCanal || p == ProtocolMaxwell || p == ProtocolCraft
+	switch p {
+	case ProtocolOpen, ProtocolCanal, ProtocolMaxwell, ProtocolCraft:
+		return true
+	case ProtocolOutboxJSON:
+		return false
+	default:
+		return false
+	}
 }
 
 // ParseSinkProtocolFromString converts the protocol from string to Protocol enum type.
@@ -73,6 +81,8 @@ func ParseSinkProtocolFromString(protocol string) (Protocol, error) {
 		return ProtocolDebezium, nil
 	case "simple":
 		return ProtocolSimple, nil
+	case "outbox-json":
+		return ProtocolOutboxJSON, nil
 	default:
 		return ProtocolUnknown, errors.ErrSinkUnknownProtocol.GenWithStackByArgs(protocol)
 	}
@@ -101,6 +111,8 @@ func (p Protocol) String() string {
 		return "debezium"
 	case ProtocolSimple:
 		return "simple"
+	case ProtocolOutboxJSON:
+		return "outbox-json"
 	default:
 		panic("unreachable")
 	}

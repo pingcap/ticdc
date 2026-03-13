@@ -1,0 +1,11 @@
+# Column selector explicitly excludes `payload`, which is configured as the
+# outbox value-column. VerifyTables must reject this with ErrColumnSelectorFailed.
+[sink]
+column-selectors = [
+    {matcher = ["outbox_test.*"], columns = ["*", "!payload"]},
+]
+
+[sink.outbox]
+id-column    = "id"
+key-column   = "event_key"
+value-column = "payload"

@@ -84,6 +84,7 @@ func (m *MockSaramaSyncProducer) SendMessage(topic string, partitionNum int32, m
 		Key:       sarama.ByteEncoder(message.Key),
 		Value:     sarama.ByteEncoder(message.Value),
 		Partition: partitionNum,
+		Headers:   toSaramaHeaders(message.Headers),
 	})
 	return err
 }
@@ -97,6 +98,7 @@ func (m *MockSaramaSyncProducer) SendMessages(topic string, partitionNum int32, 
 			Key:       sarama.ByteEncoder(message.Key),
 			Value:     sarama.ByteEncoder(message.Value),
 			Partition: int32(i),
+			Headers:   toSaramaHeaders(message.Headers),
 		}
 	}
 	return m.SyncProducer.SendMessages(msgs)
@@ -166,6 +168,7 @@ func (p *MockSaramaAsyncProducer) AsyncSend(ctx context.Context, topic string, p
 		Partition: partition,
 		Key:       sarama.StringEncoder(message.Key),
 		Value:     sarama.ByteEncoder(message.Value),
+		Headers:   toSaramaHeaders(message.Headers),
 		Metadata:  meta,
 	}
 	select {
