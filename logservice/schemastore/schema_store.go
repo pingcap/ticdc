@@ -534,7 +534,10 @@ func (s *schemaStore) RegisterKeyspace(
 	err = fetcher.run(upperBound.ResolvedTs)
 	if err != nil {
 		cancel()
-		_ = store.dataStorage.close()
+		if closeErr := store.dataStorage.close(); closeErr != nil {
+			log.Warn("cleanup schema store data storage failed after fetcher init error",
+				zap.Any("keyspace", keyspaceMeta), zap.Error(closeErr))
+		}
 		if closeErr := gcKeeper.close(ctx); closeErr != nil {
 			log.Warn("cleanup schema store gc keeper failed after fetcher init error",
 				zap.Any("keyspace", keyspaceMeta), zap.Error(closeErr))
