@@ -14,8 +14,8 @@
 package spool
 
 import (
-	"bytes"
 	"encoding/binary"
+	"io"
 
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
@@ -39,67 +39,71 @@ func serializedMessagesSize(msgs []*common.Message) int {
 	return size
 }
 
-func serializeMessages(msgs []*common.Message) ([]byte, error) {
-	buf := bytes.NewBuffer(make([]byte, 0, serializedMessagesSize(msgs)))
-	if err := binary.Write(buf, binary.LittleEndian, uint32(len(msgs))); err != nil {
-		return nil, errors.WrapError(errors.ErrEncodeFailed, err)
-	}
+func serializeMessages(msgs []*common.Message) []byte {
+	data := make([]byte, serializedMessagesSize(msgs))
+	offset := 0
+	binary.LittleEndian.PutUint32(data[offset:], uint32(len(msgs)))
+	offset += serializedMessageCountBytes
+
 	for _, msg := range msgs {
 		keyLen := uint32(len(msg.Key))
 		valueLen := uint32(len(msg.Value))
 		rows := uint32(msg.GetRowsCount())
-		if err := binary.Write(buf, binary.LittleEndian, keyLen); err != nil {
-			return nil, errors.WrapError(errors.ErrEncodeFailed, err)
-		}
-		if err := binary.Write(buf, binary.LittleEndian, valueLen); err != nil {
-			return nil, errors.WrapError(errors.ErrEncodeFailed, err)
-		}
-		if err := binary.Write(buf, binary.LittleEndian, rows); err != nil {
-			return nil, errors.WrapError(errors.ErrEncodeFailed, err)
-		}
-		if _, err := buf.Write(msg.Key); err != nil {
-			return nil, errors.WrapError(errors.ErrEncodeFailed, err)
-		}
-		if _, err := buf.Write(msg.Value); err != nil {
-			return nil, errors.WrapError(errors.ErrEncodeFailed, err)
-		}
+
+		binary.LittleEndian.PutUint32(data[offset:], keyLen)
+		offset += 4
+		binary.LittleEndian.PutUint32(data[offset:], valueLen)
+		offset += 4
+		binary.LittleEndian.PutUint32(data[offset:], rows)
+		offset += 4
+
+		offset += copy(data[offset:], msg.Key)
+		offset += copy(data[offset:], msg.Value)
 	}
-	return buf.Bytes(), nil
+	return data
 }
 
 func deserializeMessages(data []byte) ([]*common.Message, error) {
-	reader := bytes.NewReader(data)
-	var count uint32
-	if err := binary.Read(reader, binary.LittleEndian, &count); err != nil {
-		return nil, errors.WrapError(errors.ErrDecodeFailed, err)
+	if len(data) < serializedMessageCountBytes {
+		return nil, errors.WrapError(errors.ErrDecodeFailed, io.ErrUnexpectedEOF)
 	}
 
+	offset := 0
+	count := binary.LittleEndian.Uint32(data[offset:])
+	offset += serializedMessageCountBytes
+
 	var (
-		keyLen   uint32
-		valueLen uint32
-		rowCount uint32
-		result   = make([]*common.Message, 0, count)
+		result = make([]*common.Message, 0, count)
 	)
 	for i := uint32(0); i < count; i++ {
-		if err := binary.Read(reader, binary.LittleEndian, &keyLen); err != nil {
-			return nil, errors.WrapError(errors.ErrDecodeFailed, err)
-		}
-		if err := binary.Read(reader, binary.LittleEndian, &valueLen); err != nil {
-			return nil, errors.WrapError(errors.ErrDecodeFailed, err)
-		}
-		if err := binary.Read(reader, binary.LittleEndian, &rowCount); err != nil {
-			return nil, errors.WrapError(errors.ErrDecodeFailed, err)
+		if len(data[offset:]) < serializedMessageHeaderBytes {
+			return nil, errors.WrapError(errors.ErrDecodeFailed, io.ErrUnexpectedEOF)
 		}
 
-		key := make([]byte, keyLen)
-		if _, err := reader.Read(key); err != nil {
-			return nil, errors.WrapError(errors.ErrDecodeFailed, err)
+		keyLen := int(binary.LittleEndian.Uint32(data[offset:]))
+		offset += 4
+		valueLen := int(binary.LittleEndian.Uint32(data[offset:]))
+		offset += 4
+		rowCount := binary.LittleEndian.Uint32(data[offset:])
+		offset += 4
+
+		totalLen := keyLen + valueLen
+		if len(data[offset:]) < totalLen {
+			return nil, errors.WrapError(errors.ErrDecodeFailed, io.ErrUnexpectedEOF)
 		}
-		value := make([]byte, valueLen)
-		if _, err := reader.Read(value); err != nil {
-			return nil, errors.WrapError(errors.ErrDecodeFailed, err)
+
+		key := data[offset : offset+keyLen]
+		offset += keyLen
+		value := data[offset : offset+valueLen]
+		offset += valueLen
+
+		if keyLen == 0 {
+			key = nil
 		}
-		msg := common.NewMsg(key, value)
+		msg := &common.Message{
+			Key:   key,
+			Value: value,
+		}
 		msg.SetRowsCount(int(rowCount))
 		result = append(result, msg)
 	}

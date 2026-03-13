@@ -151,9 +151,7 @@ func (d *writer) flushMessages(ctx context.Context) error {
 					return err
 				}
 				if hasNewerSchemaVersion {
-					if err := d.ignoreTableTask(singleTask); err != nil {
-						return err
-					}
+					d.ignoreTableTask(singleTask)
 					log.Warn("ignore messages belonging to an old schema version",
 						zap.Int("shardID", d.shardID),
 						zap.String("keyspace", d.changeFeedID.Keyspace()),
@@ -226,17 +224,6 @@ func (d *writer) releaseEntries(entries []*spool.Entry) {
 	}
 }
 
-func (d *writer) runEntryCallbacks(entry *spool.Entry) error {
-	_, callbacks, err := d.spool.Load(entry)
-	if err != nil {
-		return err
-	}
-
-	runCallbacks(callbacks)
-	d.spool.Release(entry)
-	return nil
-}
-
 func (d *writer) appendEntryToBuffer(
 	buf *bytes.Buffer,
 	entry *spool.Entry,
@@ -260,13 +247,10 @@ func (d *writer) appendEntryToBuffer(
 	return callbacks, nil
 }
 
-func (d *writer) ignoreTableTask(task *singleTableTask) error {
+func (d *writer) ignoreTableTask(task *singleTableTask) {
 	for _, entry := range task.entries {
-		if err := d.runEntryCallbacks(entry); err != nil {
-			return err
-		}
+		d.spool.Discard(entry)
 	}
-	return nil
 }
 
 func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath string, task *singleTableTask) error {

@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -62,8 +63,6 @@ type Options struct {
 
 // Manager keeps encoded messages in local spool storage until the writer flushes them to object storage.
 type Manager struct {
-	// changefeedID identifies which changefeed owns this spool instance.
-	changefeedID commonType.ChangeFeedID
 	// rootDir is where this spool instance keeps its temporary segment files.
 	rootDir string
 
@@ -98,8 +97,6 @@ type segment struct {
 	size int64
 	// refCnt counts how many entries still point to this segment.
 	refCnt int64
-	// written tracks how many bytes have been appended through this handle.
-	written int64
 }
 
 // segmentLocation tells Load and Release where one spilled batch lives inside a segment file.
@@ -162,7 +159,6 @@ func New(
 	}
 
 	manager := &Manager{
-		changefeedID: changefeedID,
 		rootDir:      rootDir,
 		quota:        newQuotaController(changefeedID, options),
 		segmentBytes: options.SegmentBytes,
@@ -235,6 +231,9 @@ func prepareRootDir(rootDir string) error {
 func removeSpoolFiles(rootDir string) error {
 	entries, err := os.ReadDir(rootDir)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
 		return errors.WrapError(errors.ErrCheckDirValid, err)
 	}
 	for _, entry := range entries {
@@ -254,10 +253,21 @@ func isSegmentFile(entry os.DirEntry) bool {
 	if entry.IsDir() {
 		return false
 	}
-	if !strings.HasPrefix(entry.Name(), segmentFilePrefix) {
+	name := entry.Name()
+	if !strings.HasPrefix(name, segmentFilePrefix) {
 		return false
 	}
-	return filepath.Ext(entry.Name()) == segmentFileExt
+	if filepath.Ext(name) != segmentFileExt {
+		return false
+	}
+
+	segmentID := strings.TrimPrefix(name, segmentFilePrefix)
+	segmentID = strings.TrimSuffix(segmentID, segmentFileExt)
+	if segmentID == "" {
+		return false
+	}
+	_, err := strconv.ParseUint(segmentID, 10, 64)
+	return err == nil
 }
 
 // Enqueue appends encoded messages to spool.
@@ -270,16 +280,14 @@ func (s *Manager) Enqueue(
 	}
 
 	entry := &Entry{
-		callbacks: make([]func(), 0, len(msgs)),
+		accountingBytes: serializedMessageCountBytes,
 	}
 	for _, msg := range msgs {
-		entry.accountingBytes += int64(len(msg.Key) + len(msg.Value))
+		entry.accountingBytes += int64(serializedMessageHeaderBytes + len(msg.Key) + len(msg.Value))
 		entry.fileBytes += uint64(len(msg.Value))
-		entry.callbacks = append(entry.callbacks, msg.Callback)
-		msg.Callback = nil
 	}
 
-	callbacksToRun := make([]func(), 0, 1)
+	var callbacksToRun []func()
 
 	s.mu.Lock()
 	defer func() {
@@ -297,10 +305,7 @@ func (s *Manager) Enqueue(
 
 	shouldSpill := s.quota.shouldSpill(entry.accountingBytes)
 	if shouldSpill {
-		blob, err := serializeMessages(msgs)
-		if err != nil {
-			return nil, err
-		}
+		blob := serializeMessages(msgs)
 		location, err := s.appendBlobLocked(blob)
 		if err != nil {
 			return nil, err
@@ -310,9 +315,29 @@ func (s *Manager) Enqueue(
 	if !shouldSpill {
 		entry.memoryMsgs = msgs
 	}
+	entry.callbacks = detachCallbacks(msgs)
 	callbacksToRun = s.quota.reserve(entry.accountingBytes, shouldSpill, onEnqueued)
 
 	return entry, nil
+}
+
+func detachCallbacks(msgs []*common.Message) []func() {
+	var callbacks []func()
+	for _, msg := range msgs {
+		if msg.Callback != nil {
+			callbacks = append(callbacks, msg.Callback)
+			msg.Callback = nil
+		}
+	}
+	return callbacks
+}
+
+func runCallbacks(callbacks []func()) {
+	for _, callback := range callbacks {
+		if callback != nil {
+			callback()
+		}
+	}
 }
 
 // Load fetches messages from memory or spilled segments.
@@ -354,9 +379,11 @@ func (s *Manager) Load(entry *Entry) ([]*common.Message, []func(), error) {
 
 // Release releases memory or spilled bytes held by an entry.
 func (s *Manager) Release(entry *Entry) {
-	if entry == nil {
+	if entry == nil || entryConsumed(entry) {
 		return
 	}
+
+	location, accountingBytes, spilled := consumeEntry(entry)
 
 	s.mu.Lock()
 	if s.closed {
@@ -364,8 +391,8 @@ func (s *Manager) Release(entry *Entry) {
 		return
 	}
 
-	if entry.location != nil {
-		spoolSegment := s.segments[entry.location.segmentID]
+	if spilled {
+		spoolSegment := s.segments[location.segmentID]
 		if spoolSegment != nil {
 			spoolSegment.refCnt--
 			if spoolSegment.refCnt == 0 && s.activeSegment != spoolSegment {
@@ -383,7 +410,7 @@ func (s *Manager) Release(entry *Entry) {
 			}
 		}
 	}
-	callbacksToRun := s.quota.release(entry.accountingBytes, entry.location != nil)
+	callbacksToRun := s.quota.release(accountingBytes, spilled)
 	s.mu.Unlock()
 
 	for _, callback := range callbacksToRun {
@@ -391,6 +418,16 @@ func (s *Manager) Release(entry *Entry) {
 			callback()
 		}
 	}
+}
+
+// Discard runs the entry callbacks and then releases its local spool resources.
+func (s *Manager) Discard(entry *Entry) {
+	if entry == nil {
+		return
+	}
+
+	runCallbacks(takeCallbacks(entry))
+	s.Release(entry)
 }
 
 // Close closes spool and removes the segment files created by this spool instance.
@@ -439,7 +476,6 @@ func (s *Manager) appendBlobLocked(blob []byte) (*segmentLocation, error) {
 		)
 	}
 	spoolSegment.size += int64(n)
-	spoolSegment.written += int64(n)
 	spoolSegment.refCnt++
 
 	return &segmentLocation{
@@ -477,4 +513,31 @@ func (s *Manager) rotateLocked() error {
 	s.segments[segmentID] = spoolSegment
 	s.activeSegment = spoolSegment
 	return nil
+}
+
+func takeCallbacks(entry *Entry) []func() {
+	callbacks := entry.callbacks
+	entry.callbacks = nil
+	return callbacks
+}
+
+func entryConsumed(entry *Entry) bool {
+	return entry.location == nil &&
+		entry.memoryMsgs == nil &&
+		entry.accountingBytes == 0 &&
+		entry.fileBytes == 0 &&
+		entry.callbacks == nil
+}
+
+func consumeEntry(entry *Entry) (*segmentLocation, int64, bool) {
+	location := entry.location
+	accountingBytes := entry.accountingBytes
+	spilled := location != nil
+
+	entry.memoryMsgs = nil
+	entry.location = nil
+	entry.callbacks = nil
+	entry.accountingBytes = 0
+	entry.fileBytes = 0
+	return location, accountingBytes, spilled
 }

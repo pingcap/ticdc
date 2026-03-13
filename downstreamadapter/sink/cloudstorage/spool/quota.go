@@ -125,22 +125,22 @@ func (q *quotaController) reserve(
 		q.wakeSuppressed = true
 	}
 
-	callbacks := make([]func(), 0, 1)
 	if q.wakeSuppressed {
 		if onEnqueued == nil {
 			q.updateMetrics()
-			return callbacks
+			return nil
 		}
 		q.pendingWake = append(q.pendingWake, onEnqueued)
 		q.metricWakeSuppressed.Inc()
 		q.updateMetrics()
-		return callbacks
+		return nil
 	}
 	if onEnqueued != nil {
-		callbacks = append(callbacks, onEnqueued)
+		q.updateMetrics()
+		return []func(){onEnqueued}
 	}
 	q.updateMetrics()
-	return callbacks
+	return nil
 }
 
 func (q *quotaController) release(entryBytes int64, spilled bool) []func() {

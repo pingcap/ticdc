@@ -30,7 +30,29 @@ func TestSerializedMessagesSize(t *testing.T) {
 	msgs[0].SetRowsCount(1)
 	msgs[1].SetRowsCount(2)
 
-	data, err := serializeMessages(msgs)
-	require.NoError(t, err)
+	data := serializeMessages(msgs)
 	require.Equal(t, serializedMessagesSize(msgs), len(data))
+}
+
+func TestSerializeDeserializeMessagesRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	msgs := []*common.Message{
+		common.NewMsg([]byte("header"), []byte("value-1")),
+		common.NewMsg(nil, []byte("value-2")),
+	}
+	msgs[0].SetRowsCount(1)
+	msgs[1].SetRowsCount(2)
+
+	data := serializeMessages(msgs)
+
+	decoded, err := deserializeMessages(data)
+	require.NoError(t, err)
+	require.Len(t, decoded, 2)
+	require.Equal(t, []byte("header"), decoded[0].Key)
+	require.Equal(t, []byte("value-1"), decoded[0].Value)
+	require.Equal(t, 1, decoded[0].GetRowsCount())
+	require.Nil(t, decoded[1].Key)
+	require.Equal(t, []byte("value-2"), decoded[1].Value)
+	require.Equal(t, 2, decoded[1].GetRowsCount())
 }

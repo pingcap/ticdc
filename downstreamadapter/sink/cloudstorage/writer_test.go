@@ -475,6 +475,45 @@ func TestWriterStoresPendingMessagesInSpoolBeforeFlush(t *testing.T) {
 	require.ErrorIs(t, <-done, context.Canceled)
 }
 
+func TestIgnoreTableTaskDoesNotLoadSpilledPayload(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	dataDir := t.TempDir()
+
+	oldServerCfg := *config.GetGlobalServerConfig()
+	serverCfg := oldServerCfg
+	serverCfg.DataDir = dataDir
+	config.StoreGlobalServerConfig(&serverCfg)
+	t.Cleanup(func() {
+		config.StoreGlobalServerConfig(&oldServerCfg)
+	})
+
+	parentDir := t.TempDir()
+	d := testWriter(ctx, t, parentDir)
+	d.spool = newTestSpoolManager(t, d.changeFeedID, &cloudstorage.Config{
+		SpoolDiskQuota: 1,
+	})
+
+	callbackCount := atomic.Int64{}
+	msg := common.NewMsg(nil, []byte(`{"id":1}`))
+	msg.SetRowsCount(1)
+	msg.Callback = func() {
+		callbackCount.Add(1)
+	}
+
+	entry, err := d.spool.Enqueue([]*common.Message{msg}, nil)
+	require.NoError(t, err)
+	require.True(t, entry.IsSpilled())
+
+	d.spool.Close()
+
+	d.ignoreTableTask(&singleTableTask{
+		entries: []*spool.Entry{entry},
+	})
+	require.Equal(t, int64(1), callbackCount.Load())
+}
+
 func TestWriterRunExitAfterContextCancel(t *testing.T) {
 	t.Parallel()
 

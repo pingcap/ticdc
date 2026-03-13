@@ -96,7 +96,7 @@ func TestSpillAndReadBack(t *testing.T) {
 
 	msgs, callbacks, err := manager.Load(entry)
 	require.NoError(t, err)
-	require.Len(t, callbacks, 1)
+	require.Len(t, callbacks, 0)
 	require.Len(t, msgs, 1)
 	require.Equal(t, []byte("hello-spool"), msgs[0].Value)
 	require.Equal(t, 3, msgs[0].GetRowsCount())
@@ -132,6 +132,34 @@ func TestEnqueueOnClosedManager(t *testing.T) {
 	require.True(t, cerror.ErrInternalCheckFailed.Equal(err))
 }
 
+func TestEnqueueErrorDoesNotMutateInputMessage(t *testing.T) {
+	t.Parallel()
+
+	changefeedID := commonType.NewChangefeedID4Test("test", "spool")
+	manager, err := New(changefeedID, &Options{
+		QuotaBytes: 1024,
+		RootDir:    t.TempDir(),
+	})
+	require.NoError(t, err)
+
+	manager.Close()
+
+	callbackCalled := atomic.Bool{}
+	msg := newTestMessage("v", 1)
+	msg.Callback = func() {
+		callbackCalled.Store(true)
+	}
+
+	entry, err := manager.Enqueue([]*common.Message{msg}, nil)
+	require.Nil(t, entry)
+	require.Error(t, err)
+	require.True(t, cerror.ErrInternalCheckFailed.Equal(err))
+	require.NotNil(t, msg.Callback)
+
+	msg.Callback()
+	require.True(t, callbackCalled.Load())
+}
+
 func TestNewRejectsNegativeMemoryRatio(t *testing.T) {
 	t.Parallel()
 
@@ -151,9 +179,11 @@ func TestPrepareRootDirOnlyRemovesSegmentLogs(t *testing.T) {
 
 	rootDir := t.TempDir()
 	segmentPath := filepath.Join(rootDir, "segment-000001.log")
+	segmentBackupPath := filepath.Join(rootDir, "segment-backup.log")
 	keepPath := filepath.Join(rootDir, "keep.txt")
 
 	require.NoError(t, os.WriteFile(segmentPath, []byte("stale"), 0o644))
+	require.NoError(t, os.WriteFile(segmentBackupPath, []byte("keep"), 0o644))
 	require.NoError(t, os.WriteFile(keepPath, []byte("keep"), 0o644))
 
 	changefeedID := commonType.NewChangefeedID4Test("test", "spool")
@@ -166,6 +196,8 @@ func TestPrepareRootDirOnlyRemovesSegmentLogs(t *testing.T) {
 
 	_, err = os.Stat(segmentPath)
 	require.ErrorIs(t, err, os.ErrNotExist)
+	_, err = os.Stat(segmentBackupPath)
+	require.NoError(t, err)
 	_, err = os.Stat(keepPath)
 	require.NoError(t, err)
 }
@@ -200,4 +232,62 @@ func TestCloseOnlyRemovesSegmentLogs(t *testing.T) {
 	require.ErrorIs(t, err, os.ErrNotExist)
 	_, err = os.Stat(keepPath)
 	require.NoError(t, err)
+}
+
+func TestRemoveSpoolFilesIgnoresMissingDir(t *testing.T) {
+	t.Parallel()
+
+	rootDir := filepath.Join(t.TempDir(), "missing")
+	err := removeSpoolFiles(rootDir)
+	require.NoError(t, err)
+}
+
+func TestEnqueueSpillsWhenSerializedBatchExceedsMemoryQuota(t *testing.T) {
+	t.Parallel()
+
+	changefeedID := commonType.NewChangefeedID4Test("test", "spool")
+	manager, err := New(changefeedID, &Options{
+		QuotaBytes:         64,
+		RootDir:            t.TempDir(),
+		SegmentBytes:       1 << 20,
+		MemoryRatio:        0.2,
+		HighWatermarkRatio: 0.9,
+		LowWatermarkRatio:  0.6,
+	})
+	require.NoError(t, err)
+	defer manager.Close()
+
+	msg := newTestMessage("a", 1)
+	entry, err := manager.Enqueue([]*common.Message{msg}, nil)
+	require.NoError(t, err)
+	require.True(t, entry.IsSpilled())
+}
+
+func TestDiscardRunsCallbacksOnce(t *testing.T) {
+	t.Parallel()
+
+	changefeedID := commonType.NewChangefeedID4Test("test", "spool")
+	manager, err := New(changefeedID, &Options{
+		QuotaBytes: 1024,
+		RootDir:    t.TempDir(),
+	})
+	require.NoError(t, err)
+	defer manager.Close()
+
+	var callbackCount atomic.Int64
+	msg := newTestMessage("v", 1)
+	msg.Callback = func() {
+		callbackCount.Add(1)
+	}
+
+	entry, err := manager.Enqueue([]*common.Message{msg}, nil)
+	require.NoError(t, err)
+
+	manager.Discard(entry)
+	manager.Discard(entry)
+
+	require.Equal(t, int64(1), callbackCount.Load())
+	require.False(t, entry.InMemory())
+	require.False(t, entry.IsSpilled())
+	require.Zero(t, entry.FileBytes())
 }
