@@ -160,7 +160,7 @@ func removeServiceGCSafepoint(ctx context.Context, pdCli GCServiceClient, servic
 }
 
 // SetGCBarrier Set a GC Barrier of a keyspace
-func SetGCBarrier(ctx context.Context, gcCli GCStatesClient, serviceID string, ts uint64, ttl time.Duration) (barrierTS uint64, err error) {
+func SetGCBarrier(ctx context.Context, gcCli pdgc.GCStatesClient, serviceID string, ts uint64, ttl time.Duration) (barrierTS uint64, err error) {
 	err = retry.Do(ctx, func() error {
 		barrierInfo, err1 := gcCli.SetGCBarrier(ctx, serviceID, ts, ttl)
 		if err1 != nil {
@@ -175,12 +175,12 @@ func SetGCBarrier(ctx context.Context, gcCli GCStatesClient, serviceID string, t
 	return barrierTS, err
 }
 
-func getGCState(ctx context.Context, gcCli GCStatesClient) (pdgc.GCState, error) {
+func getGCState(ctx context.Context, gcCli pdgc.GCStatesClient) (pdgc.GCState, error) {
 	return gcCli.GetGCState(ctx)
 }
 
 // DeleteGCBarrier Delete a GC barrier of a keyspace
-func DeleteGCBarrier(ctx context.Context, gcCli GCStatesClient, serviceID string) (barrierInfo *pdgc.GCBarrierInfo, err error) {
+func DeleteGCBarrier(ctx context.Context, gcCli pdgc.GCStatesClient, serviceID string) (barrierInfo *pdgc.GCBarrierInfo, err error) {
 	err = retry.Do(ctx, func() error {
 		info, err1 := gcCli.DeleteGCBarrier(ctx, serviceID)
 		if err1 != nil {

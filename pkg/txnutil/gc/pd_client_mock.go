@@ -7,7 +7,6 @@ package gc
 import (
 	context "context"
 	reflect "reflect"
-	time "time"
 
 	gomock "github.com/golang/mock/gomock"
 	gc "github.com/tikv/pd/client/clients/gc"
@@ -63,72 +62,4 @@ func (m *MockGCServiceClient) UpdateServiceGCSafePoint(ctx context.Context, serv
 func (mr *MockGCServiceClientMockRecorder) UpdateServiceGCSafePoint(ctx, serviceID, ttl, safePoint interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateServiceGCSafePoint", reflect.TypeOf((*MockGCServiceClient)(nil).UpdateServiceGCSafePoint), ctx, serviceID, ttl, safePoint)
-}
-
-// MockGCStatesClient is a mock of GCStatesClient interface.
-type MockGCStatesClient struct {
-	ctrl     *gomock.Controller
-	recorder *MockGCStatesClientMockRecorder
-}
-
-// MockGCStatesClientMockRecorder is the mock recorder for MockGCStatesClient.
-type MockGCStatesClientMockRecorder struct {
-	mock *MockGCStatesClient
-}
-
-// NewMockGCStatesClient creates a new mock instance.
-func NewMockGCStatesClient(ctrl *gomock.Controller) *MockGCStatesClient {
-	mock := &MockGCStatesClient{ctrl: ctrl}
-	mock.recorder = &MockGCStatesClientMockRecorder{mock}
-	return mock
-}
-
-// EXPECT returns an object that allows the caller to indicate expected use.
-func (m *MockGCStatesClient) EXPECT() *MockGCStatesClientMockRecorder {
-	return m.recorder
-}
-
-// DeleteGCBarrier mocks base method.
-func (m *MockGCStatesClient) DeleteGCBarrier(ctx context.Context, barrierID string) (*gc.GCBarrierInfo, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "DeleteGCBarrier", ctx, barrierID)
-	ret0, _ := ret[0].(*gc.GCBarrierInfo)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// DeleteGCBarrier indicates an expected call of DeleteGCBarrier.
-func (mr *MockGCStatesClientMockRecorder) DeleteGCBarrier(ctx, barrierID interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteGCBarrier", reflect.TypeOf((*MockGCStatesClient)(nil).DeleteGCBarrier), ctx, barrierID)
-}
-
-// GetGCState mocks base method.
-func (m *MockGCStatesClient) GetGCState(ctx context.Context) (gc.GCState, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetGCState", ctx)
-	ret0, _ := ret[0].(gc.GCState)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// GetGCState indicates an expected call of GetGCState.
-func (mr *MockGCStatesClientMockRecorder) GetGCState(ctx interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetGCState", reflect.TypeOf((*MockGCStatesClient)(nil).GetGCState), ctx)
-}
-
-// SetGCBarrier mocks base method.
-func (m *MockGCStatesClient) SetGCBarrier(ctx context.Context, barrierID string, barrierTS uint64, ttl time.Duration) (*gc.GCBarrierInfo, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "SetGCBarrier", ctx, barrierID, barrierTS, ttl)
-	ret0, _ := ret[0].(*gc.GCBarrierInfo)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// SetGCBarrier indicates an expected call of SetGCBarrier.
-func (mr *MockGCStatesClientMockRecorder) SetGCBarrier(ctx, barrierID, barrierTS, ttl interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetGCBarrier", reflect.TypeOf((*MockGCStatesClient)(nil).SetGCBarrier), ctx, barrierID, barrierTS, ttl)
 }

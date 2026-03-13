@@ -15,7 +15,6 @@ package gc
 
 import (
 	"context"
-	"time"
 
 	pdgc "github.com/tikv/pd/client/clients/gc"
 )
@@ -25,11 +24,4 @@ import (
 type GCServiceClient interface {
 	UpdateServiceGCSafePoint(ctx context.Context, serviceID string, ttl int64, safePoint uint64) (uint64, error)
 	GetGCStatesClient(keyspaceID uint32) pdgc.GCStatesClient
-}
-
-// GCStatesClient is the subset of keyspace GC barrier APIs TiCDC uses.
-type GCStatesClient interface {
-	SetGCBarrier(ctx context.Context, barrierID string, barrierTS uint64, ttl time.Duration) (*pdgc.GCBarrierInfo, error)
-	DeleteGCBarrier(ctx context.Context, barrierID string) (*pdgc.GCBarrierInfo, error)
-	GetGCState(ctx context.Context) (pdgc.GCState, error)
 }
