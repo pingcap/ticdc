@@ -42,7 +42,7 @@ type Sink struct {
 	ddlWriter writer.RedoLogWriter
 	dmlWriter writer.RedoLogWriter
 
-	tasks *chann.UnlimitedChannel[*sinkTask, any]
+	tasks *chann.UnlimitedChannel[*task, any]
 	flush *flushTracker
 
 	// isNormal indicate whether the sink is in the normal state.
@@ -52,46 +52,45 @@ type Sink struct {
 	metric *redoSinkMetrics
 }
 
-type sinkTask struct {
+type task struct {
 	dispatcherID common.DispatcherID
 	seq          uint64
 	event        writer.RedoEvent
-	barrier      *barrierTask
+	barrier      *barrier
 }
 
-func newRowTask(dispatcherID common.DispatcherID, seq uint64, event writer.RedoEvent) *sinkTask {
-	return &sinkTask{
+func newRowTask(dispatcherID common.DispatcherID, seq uint64, event writer.RedoEvent) *task {
+	return &task{
 		dispatcherID: dispatcherID,
 		seq:          seq,
 		event:        event,
 	}
 }
 
-func newBarrierTask(dispatcherID common.DispatcherID) *sinkTask {
-	return &sinkTask{
+func newBarrierTask(dispatcherID common.DispatcherID) *task {
+	return &task{
 		dispatcherID: dispatcherID,
-		barrier:      newBarrier(dispatcherID),
+		barrier:      newBarrier(),
 	}
 }
 
-func (t *sinkTask) isBarrier() bool {
+func (t *task) isBarrier() bool {
 	return t != nil && t.barrier != nil
 }
 
-type barrierTask struct {
-	dispatcherID common.DispatcherID
-	target       uint64
-	done         chan struct{}
+type barrier struct {
+	target uint64
+	done   chan struct{}
 }
 
 type flushTracker struct {
 	mu     sync.Mutex
-	states map[common.DispatcherID]*dispatcherState
+	states map[common.DispatcherID]*flushState
 	err    error
 	errCh  chan struct{}
 }
 
-type dispatcherState struct {
+type flushState struct {
 	mu         sync.Mutex
 	nextSeq    uint64
 	flushedSeq uint64
@@ -99,27 +98,26 @@ type dispatcherState struct {
 	changed    chan struct{}
 }
 
-func newBarrier(dispatcherID common.DispatcherID) *barrierTask {
-	return &barrierTask{
-		dispatcherID: dispatcherID,
-		done:         make(chan struct{}),
+func newBarrier() *barrier {
+	return &barrier{
+		done: make(chan struct{}),
 	}
 }
 
 func newFlushTracker() *flushTracker {
 	return &flushTracker{
-		states: make(map[common.DispatcherID]*dispatcherState),
+		states: make(map[common.DispatcherID]*flushState),
 		errCh:  make(chan struct{}),
 	}
 }
 
-func newDispatcherState() *dispatcherState {
-	return &dispatcherState{
+func newFlushState() *flushState {
+	return &flushState{
 		changed: make(chan struct{}),
 	}
 }
 
-func (t *flushTracker) state(dispatcherID common.DispatcherID) *dispatcherState {
+func (t *flushTracker) state(dispatcherID common.DispatcherID) *flushState {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -127,12 +125,17 @@ func (t *flushTracker) state(dispatcherID common.DispatcherID) *dispatcherState 
 		return state
 	}
 
-	state := newDispatcherState()
+	state := newFlushState()
 	t.states[dispatcherID] = state
 	return state
 }
 
-func (s *dispatcherState) nextRow() uint64 {
+func (t *flushTracker) alloc(dispatcherID common.DispatcherID) uint64 {
+	state := t.state(dispatcherID)
+	return state.next()
+}
+
+func (s *flushState) next() uint64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -140,7 +143,11 @@ func (s *dispatcherState) nextRow() uint64 {
 	return s.nextSeq
 }
 
-func (s *dispatcherState) markFlushed(seq uint64) {
+func (t *flushTracker) ack(dispatcherID common.DispatcherID, seq uint64) {
+	t.state(dispatcherID).ack(seq)
+}
+
+func (s *flushState) ack(seq uint64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -167,7 +174,15 @@ func (s *dispatcherState) markFlushed(seq uint64) {
 	s.pending[seq] = struct{}{}
 }
 
-func (s *dispatcherState) wait(
+func (t *flushTracker) wait(
+	ctx context.Context,
+	dispatcherID common.DispatcherID,
+	target uint64,
+) error {
+	return t.state(dispatcherID).wait(ctx, t.errCh, t.loadErr, target)
+}
+
+func (s *flushState) wait(
 	ctx context.Context,
 	errCh <-chan struct{},
 	loadErr func() error,
@@ -203,7 +218,7 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, cfg *config.C
 	return nil
 }
 
-func (b *barrierTask) finish(target uint64) {
+func (b *barrier) finish(target uint64) {
 	b.target = target
 	close(b.done)
 }
@@ -235,8 +250,8 @@ func (t *flushTracker) loadErr() error {
 
 func (t *flushTracker) waitBarrier(
 	ctx context.Context,
-	state *dispatcherState,
-	barrier *barrierTask,
+	dispatcherID common.DispatcherID,
+	barrier *barrier,
 ) error {
 	select {
 	case <-ctx.Done():
@@ -246,7 +261,7 @@ func (t *flushTracker) waitBarrier(
 	case <-barrier.done:
 	}
 
-	return state.wait(ctx, t.errCh, t.loadErr, barrier.target)
+	return t.wait(ctx, dispatcherID, barrier.target)
 }
 
 // New creates a new redo sink.
@@ -261,7 +276,7 @@ func New(ctx context.Context, changefeedID common.ChangeFeedID,
 			ChangeFeedID:      changefeedID,
 			MaxLogSizeInBytes: util.GetOrZero(cfg.MaxLogSize) * redo.Megabyte,
 		},
-		tasks:    chann.NewUnlimitedChannelDefault[*sinkTask](),
+		tasks:    chann.NewUnlimitedChannelDefault[*task](),
 		flush:    newFlushTracker(),
 		isNormal: atomic.NewBool(true),
 		isClosed: atomic.NewBool(false),
@@ -314,10 +329,9 @@ func (s *Sink) FlushDMLBeforeBlock(event commonEvent.BlockEvent) error {
 		return nil
 	}
 	dispatcherID := event.GetDispatcherID()
-	state := s.flush.state(dispatcherID)
 	task := newBarrierTask(dispatcherID)
 	s.tasks.Push(task)
-	return s.flush.waitBarrier(s.ctx, state, task.barrier)
+	return s.flush.waitBarrier(s.ctx, dispatcherID, task.barrier)
 }
 
 func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
@@ -345,8 +359,7 @@ func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	}
 
 	dispatcherID := event.GetDispatcherID()
-	state := s.flush.state(dispatcherID)
-	tasks := make([]*sinkTask, 0, rowsCount)
+	tasks := make([]*task, 0, rowsCount)
 	rowCallback := helper.NewTxnPostFlushRowCallback(event, uint64(rowsCount))
 
 	for {
@@ -355,7 +368,7 @@ func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 			event.Rewind()
 			break
 		}
-		rowSeq := state.nextRow()
+		rowSeq := s.flush.alloc(dispatcherID)
 		tasks = append(tasks, newRowTask(dispatcherID, rowSeq, &commonEvent.RedoRowEvent{
 			StartTs:         event.StartTs,
 			CommitTs:        event.CommitTs,
@@ -363,7 +376,7 @@ func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 			PhysicalTableID: event.PhysicalTableID,
 			TableInfo:       event.TableInfo,
 			Callback: func() {
-				state.markFlushed(rowSeq)
+				s.flush.ack(dispatcherID, rowSeq)
 				rowCallback()
 			},
 		}))
@@ -415,10 +428,10 @@ func (s *Sink) Close(_ bool) {
 }
 
 func (s *Sink) sendMessages(ctx context.Context) error {
-	taskBuffer := make([]*sinkTask, 0, redo.DefaultFlushBatchSize)
-	pendingTasks := make([]*sinkTask, 0, redo.DefaultFlushBatchSize)
+	taskBuffer := make([]*task, 0, redo.DefaultFlushBatchSize)
+	pendingTasks := make([]*task, 0, redo.DefaultFlushBatchSize)
 	eventBuffer := make([]writer.RedoEvent, 0, redo.DefaultFlushBatchSize)
-	deferredTasks := make([]*sinkTask, 0, redo.DefaultFlushBatchSize)
+	deferredTasks := make([]*task, 0, redo.DefaultFlushBatchSize)
 	lastSeenSeq := make(map[common.DispatcherID]uint64)
 	writeRows := func(events []writer.RedoEvent) error {
 		if len(events) == 0 {
@@ -447,7 +460,7 @@ func (s *Sink) sendMessages(ctx context.Context) error {
 		default:
 		}
 		var (
-			tasks []*sinkTask
+			tasks []*task
 			ok    bool
 		)
 		if len(pendingTasks) > 0 {

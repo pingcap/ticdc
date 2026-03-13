@@ -366,7 +366,7 @@ func TestRedoSinkSendMessagesInBatch(t *testing.T) {
 
 	s := &Sink{
 		dmlWriter: mockWriter,
-		tasks:     chann.NewUnlimitedChannelDefault[*sinkTask](),
+		tasks:     chann.NewUnlimitedChannelDefault[*task](),
 		flush:     newFlushTracker(),
 	}
 
@@ -376,7 +376,7 @@ func TestRedoSinkSendMessagesInBatch(t *testing.T) {
 	}()
 
 	totalEvents := redo.DefaultFlushBatchSize*2 + 17
-	events := make([]*sinkTask, 0, totalEvents)
+	events := make([]*task, 0, totalEvents)
 	for i := 0; i < totalEvents; i++ {
 		events = append(events, newRowTask(common.NewDispatcherID(), uint64(i+1), &commonEvent.RedoRowEvent{}))
 	}
@@ -435,7 +435,7 @@ func TestRedoSinkFlushDMLBeforeBlockWaitsForSameDispatcherFlush(t *testing.T) {
 	s := &Sink{
 		ctx:       ctx,
 		dmlWriter: mockWriter,
-		tasks:     chann.NewUnlimitedChannelDefault[*sinkTask](),
+		tasks:     chann.NewUnlimitedChannelDefault[*task](),
 		flush:     newFlushTracker(),
 	}
 
@@ -533,7 +533,7 @@ func TestRedoSinkFlushDMLBeforeBlockDoesNotWaitForOtherDispatcher(t *testing.T) 
 	s := &Sink{
 		ctx:       ctx,
 		dmlWriter: mockWriter,
-		tasks:     chann.NewUnlimitedChannelDefault[*sinkTask](),
+		tasks:     chann.NewUnlimitedChannelDefault[*task](),
 		flush:     newFlushTracker(),
 	}
 
@@ -627,7 +627,7 @@ func TestRedoSinkPostEnqueueBeforeFlush(t *testing.T) {
 	s := &Sink{
 		ctx:       ctx,
 		dmlWriter: mockWriter,
-		tasks:     chann.NewUnlimitedChannelDefault[*sinkTask](),
+		tasks:     chann.NewUnlimitedChannelDefault[*task](),
 		flush:     newFlushTracker(),
 	}
 
@@ -733,7 +733,7 @@ func TestRedoSinkFlushDMLBeforeBlockWaitsOnlyForEarlierEnqueuedDML(t *testing.T)
 	s := &Sink{
 		ctx:       ctx,
 		dmlWriter: mockWriter,
-		tasks:     chann.NewUnlimitedChannelDefault[*sinkTask](),
+		tasks:     chann.NewUnlimitedChannelDefault[*task](),
 		flush:     newFlushTracker(),
 	}
 
@@ -816,7 +816,7 @@ func TestRedoSinkFlushDMLBeforeBlockWaitsForActualRowFlush(t *testing.T) {
 	s := &Sink{
 		ctx:       ctx,
 		dmlWriter: mockWriter,
-		tasks:     chann.NewUnlimitedChannelDefault[*sinkTask](),
+		tasks:     chann.NewUnlimitedChannelDefault[*task](),
 		flush:     newFlushTracker(),
 	}
 
@@ -883,7 +883,7 @@ func TestRedoSinkFlushDMLBeforeBlockReturnsWriterError(t *testing.T) {
 	s := &Sink{
 		ctx:       ctx,
 		dmlWriter: mockWriter,
-		tasks:     chann.NewUnlimitedChannelDefault[*sinkTask](),
+		tasks:     chann.NewUnlimitedChannelDefault[*task](),
 		flush:     newFlushTracker(),
 	}
 
