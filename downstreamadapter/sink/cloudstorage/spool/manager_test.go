@@ -263,6 +263,45 @@ func TestEnqueueSpillsWhenSerializedBatchExceedsMemoryQuota(t *testing.T) {
 	require.True(t, entry.IsSpilled())
 }
 
+func TestExternalRootDirDeletionReturnsErrorOnNextRotate(t *testing.T) {
+	t.Parallel()
+
+	rootDir := t.TempDir()
+	changefeedID := commonType.NewChangefeedID4Test("test", "spool")
+	manager, err := New(changefeedID, &Options{
+		QuotaBytes:         64,
+		RootDir:            rootDir,
+		SegmentBytes:       40,
+		MemoryRatio:        0.01,
+		HighWatermarkRatio: 0.95,
+		LowWatermarkRatio:  0.7,
+	})
+	require.NoError(t, err)
+	defer manager.Close()
+
+	firstEntry, err := manager.Enqueue([]*common.Message{
+		newTestMessage("first-spilled-entry", 1),
+	}, nil)
+	require.NoError(t, err)
+	require.True(t, firstEntry.IsSpilled())
+
+	require.NoError(t, os.RemoveAll(rootDir))
+
+	firstMsgs, _, err := manager.Load(firstEntry)
+	require.NoError(t, err)
+	require.Len(t, firstMsgs, 1)
+	require.Equal(t, []byte("first-spilled-entry"), firstMsgs[0].Value)
+
+	secondEntry, err := manager.Enqueue([]*common.Message{
+		newTestMessage("second-spilled-entry", 1),
+	}, nil)
+	require.Nil(t, secondEntry)
+	require.Error(t, err)
+	rfcCode, ok := errors.RFCCode(err)
+	require.True(t, ok)
+	require.Equal(t, errors.ErrUnexpected.RFCCode(), rfcCode)
+}
+
 func TestDiscardRunsCallbacksOnce(t *testing.T) {
 	t.Parallel()
 
