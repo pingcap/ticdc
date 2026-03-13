@@ -15,6 +15,7 @@ package redo
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/pingcap/log"
@@ -41,13 +42,115 @@ type Sink struct {
 	ddlWriter writer.RedoLogWriter
 	dmlWriter writer.RedoLogWriter
 
-	logBuffer *chann.UnlimitedChannel[writer.RedoEvent, any]
+	logBuffer *chann.UnlimitedChannel[*redoLogTask, any]
+	inflight  *inflightRowTracker
 
 	// isNormal indicate whether the sink is in the normal state.
 	isNormal *atomic.Bool
 	isClosed *atomic.Bool
 
 	metric *redoSinkMetrics
+}
+
+type redoLogTask struct {
+	event   writer.RedoEvent
+	barrier *flushBarrier
+}
+
+func newRedoEventTask(event writer.RedoEvent) *redoLogTask {
+	return &redoLogTask{event: event}
+}
+
+func newFlushBarrierTask() *redoLogTask {
+	return &redoLogTask{barrier: newFlushBarrier()}
+}
+
+func (t *redoLogTask) isBarrier() bool {
+	return t != nil && t.barrier != nil
+}
+
+type flushBarrier struct {
+	done chan struct{}
+}
+
+type inflightRowTracker struct {
+	mu      sync.Mutex
+	rows    int
+	drained chan struct{}
+}
+
+func newFlushBarrier() *flushBarrier {
+	return &flushBarrier{
+		done: make(chan struct{}),
+	}
+}
+
+func newInflightRowTracker() *inflightRowTracker {
+	drained := make(chan struct{})
+	close(drained)
+	return &inflightRowTracker{
+		drained: drained,
+	}
+}
+
+func (b *flushBarrier) finish() {
+	close(b.done)
+}
+
+func (b *flushBarrier) wait(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return errors.Trace(context.Cause(ctx))
+	case <-b.done:
+		return nil
+	}
+}
+
+func (t *inflightRowTracker) add(count int) {
+	if count <= 0 {
+		return
+	}
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if t.rows == 0 {
+		t.drained = make(chan struct{})
+	}
+	t.rows += count
+}
+
+func (t *inflightRowTracker) done() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	t.rows--
+	if t.rows > 0 {
+		return
+	}
+	if t.rows < 0 {
+		t.rows = 0
+		log.Warn("redo sink inflight rows regressed")
+	}
+	close(t.drained)
+}
+
+func (t *inflightRowTracker) waitZero(ctx context.Context) error {
+	for {
+		t.mu.Lock()
+		if t.rows == 0 {
+			t.mu.Unlock()
+			return nil
+		}
+		drained := t.drained
+		t.mu.Unlock()
+
+		select {
+		case <-ctx.Done():
+			return errors.Trace(context.Cause(ctx))
+		case <-drained:
+		}
+	}
 }
 
 func Verify(ctx context.Context, changefeedID common.ChangeFeedID, cfg *config.ConsistentConfig) error {
@@ -69,7 +172,8 @@ func New(ctx context.Context, changefeedID common.ChangeFeedID,
 			ChangeFeedID:      changefeedID,
 			MaxLogSizeInBytes: util.GetOrZero(cfg.MaxLogSize) * redo.Megabyte,
 		},
-		logBuffer: chann.NewUnlimitedChannelDefault[writer.RedoEvent](),
+		logBuffer: chann.NewUnlimitedChannelDefault[*redoLogTask](),
+		inflight:  newInflightRowTracker(),
 		isNormal:  atomic.NewBool(true),
 		isClosed:  atomic.NewBool(false),
 	}
@@ -112,8 +216,13 @@ func (s *Sink) Run(ctx context.Context) error {
 	return err
 }
 
-func (s *Sink) FlushDMLBeforeBlock(_ commonEvent.BlockEvent) error {
-	return nil
+func (s *Sink) FlushDMLBeforeBlock(event commonEvent.BlockEvent) error {
+	if event == nil {
+		return nil
+	}
+	barrierTask := newFlushBarrierTask()
+	s.logBuffer.Push(barrierTask)
+	return barrierTask.barrier.wait(s.ctx)
 }
 
 func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
@@ -134,7 +243,13 @@ func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 
 func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	rowsCount := event.Len()
-	events := make([]writer.RedoEvent, 0, rowsCount)
+	if rowsCount == 0 {
+		event.PostEnqueue()
+		event.PostFlush()
+		return
+	}
+
+	tasks := make([]*redoLogTask, 0, rowsCount)
 	rowCallback := helper.NewTxnPostFlushRowCallback(event, uint64(rowsCount))
 
 	for {
@@ -143,16 +258,20 @@ func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 			event.Rewind()
 			break
 		}
-		events = append(events, &commonEvent.RedoRowEvent{
+		tasks = append(tasks, newRedoEventTask(&commonEvent.RedoRowEvent{
 			StartTs:         event.StartTs,
 			CommitTs:        event.CommitTs,
 			Event:           row,
 			PhysicalTableID: event.PhysicalTableID,
 			TableInfo:       event.TableInfo,
-			Callback:        rowCallback,
-		})
+			Callback: func() {
+				s.inflight.done()
+				rowCallback()
+			},
+		}))
 	}
-	s.logBuffer.Push(events...)
+	s.logBuffer.Push(tasks...)
+	event.PostEnqueue()
 }
 
 func (s *Sink) IsNormal() bool {
@@ -197,30 +316,78 @@ func (s *Sink) Close(_ bool) {
 }
 
 func (s *Sink) sendMessages(ctx context.Context) error {
-	buffer := make([]writer.RedoEvent, 0, redo.DefaultFlushBatchSize)
+	taskBuffer := make([]*redoLogTask, 0, redo.DefaultFlushBatchSize)
+	pendingTasks := make([]*redoLogTask, 0, redo.DefaultFlushBatchSize)
+	eventBuffer := make([]writer.RedoEvent, 0, redo.DefaultFlushBatchSize)
+	flushBufferedEvents := func() error {
+		if len(eventBuffer) == 0 {
+			return nil
+		}
+
+		s.inflight.add(len(eventBuffer))
+		start := time.Now()
+		err := s.dmlWriter.WriteEvents(ctx, eventBuffer...)
+		if err != nil {
+			return err
+		}
+
+		if s.metric != nil {
+			s.metric.observeRowWrite(len(eventBuffer), time.Since(start))
+		}
+		eventBuffer = eventBuffer[:0]
+		return nil
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
 			return errors.Trace(ctx.Err())
 		default:
 		}
-		events, ok := s.logBuffer.GetMultipleNoGroup(buffer)
-		if !ok {
-			return nil
+		var (
+			tasks []*redoLogTask
+			ok    bool
+		)
+		if len(pendingTasks) > 0 {
+			tasks = pendingTasks
+			pendingTasks = pendingTasks[:0]
+			ok = true
+		} else {
+			tasks, ok = s.logBuffer.GetMultipleNoGroup(taskBuffer)
 		}
-		if len(events) == 0 {
+		if !ok {
+			return flushBufferedEvents()
+		}
+		if len(tasks) == 0 {
 			continue
 		}
-		buffer = events[:0]
 
-		start := time.Now()
-		err := s.dmlWriter.WriteEvents(ctx, events...)
-		if err != nil {
-			return err
+		barrierIndex := -1
+		for i, task := range tasks {
+			if task.isBarrier() {
+				barrierIndex = i
+				break
+			}
+			eventBuffer = append(eventBuffer, task.event)
+		}
+		taskBuffer = tasks[:0]
+
+		if barrierIndex >= 0 {
+			if barrierIndex+1 < len(tasks) {
+				pendingTasks = append(pendingTasks, tasks[barrierIndex+1:]...)
+			}
+			if err := flushBufferedEvents(); err != nil {
+				return err
+			}
+			if err := s.inflight.waitZero(s.ctx); err != nil {
+				return err
+			}
+			tasks[barrierIndex].barrier.finish()
+			continue
 		}
 
-		if s.metric != nil {
-			s.metric.observeRowWrite(len(events), time.Since(start))
+		if err := flushBufferedEvents(); err != nil {
+			return err
 		}
 	}
 }
