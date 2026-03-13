@@ -160,7 +160,6 @@ type Config struct {
 // New returns the default mysql backend config.
 func New() *Config {
 	return &Config{
-<<<<<<< HEAD
 		WorkerCount:            DefaultTiDBWorkerCount,
 		workerCountSpecified:   false,
 		MaxTxnRow:              DefaultMaxTxnRow,
@@ -178,29 +177,8 @@ func New() *Config {
 		DMLMaxRetry:            8,
 		HasVectorType:          defaultHasVectorType,
 		EnableDDLTs:            defaultEnableDDLTs,
-		SlowQuery:              slowQuery,
-=======
-		WorkerCount:                   DefaultTiDBWorkerCount,
-		workerCountSpecified:          false,
-		MaxTxnRow:                     DefaultMaxTxnRow,
-		MaxMultiUpdateRowCount:        defaultMaxMultiUpdateRowCount,
-		MaxMultiUpdateRowSize:         defaultMaxMultiUpdateRowSize,
-		TidbTxnMode:                   defaultTiDBTxnMode,
-		ReadTimeout:                   defaultReadTimeout,
-		WriteTimeout:                  defaultWriteTimeout,
-		DialTimeout:                   defaultDialTimeout,
-		SafeMode:                      defaultSafeMode,
-		BatchDMLEnable:                defaultBatchDMLEnable,
-		MultiStmtEnable:               defaultMultiStmtEnable,
-		CachePrepStmts:                defaultCachePrepStmts,
-		SourceID:                      config.DefaultTiDBSourceID,
-		DMLMaxRetry:                   8,
-		HasVectorType:                 defaultHasVectorType,
-		EnableDDLTs:                   defaultEnableDDLTs,
-		SlowQuery:                     slowQuery,
-		ActiveActiveSyncStatsInterval: time.Minute,
+		SlowQuery:              slowQuery
 		whereClause:                   sqlmodel.DefaultWhereClause,
->>>>>>> 85cc827e8 (sink: use where in operator in delete or update statement (#3788))
 	}
 }
 
