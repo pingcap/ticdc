@@ -31,10 +31,13 @@ import (
 const schemaStoreGCRefreshInterval = 10 * time.Second
 
 type schemaStoreGCKeeper struct {
-	pdCli          pd.Client
-	keyspaceMeta   common.KeyspaceMeta
+	pdCli        pd.Client
+	keyspaceMeta common.KeyspaceMeta
+	// gcServiceIDTag separates schema store GC services from user changefeeds.
 	gcServiceIDTag string
-	changefeedID   common.ChangeFeedID
+	// gcServiceIDParts carries the keyspace/name pair used by the existing GC
+	// helper API to build a stable internal service ID.
+	gcServiceIDParts common.ChangeFeedID
 }
 
 func newSchemaStoreGCKeeper(pdCli pd.Client, keyspaceMeta common.KeyspaceMeta) *schemaStoreGCKeeper {
@@ -42,7 +45,7 @@ func newSchemaStoreGCKeeper(pdCli pd.Client, keyspaceMeta common.KeyspaceMeta) *
 		pdCli:          pdCli,
 		keyspaceMeta:   keyspaceMeta,
 		gcServiceIDTag: defaultSchemaStoreGcServiceID + gc.EnsureGCServiceInitializing,
-		changefeedID: common.NewChangeFeedIDWithName(
+		gcServiceIDParts: common.NewChangeFeedIDWithName(
 			fmt.Sprintf("node_%s_keyspace_%d", sanitizeSchemaStoreNodeID(config.GetGlobalServerConfig().AdvertiseAddr), keyspaceMeta.ID),
 			keyspaceMeta.Name,
 		),
@@ -58,12 +61,14 @@ func (k *schemaStoreGCKeeper) refresh(ctx context.Context, resolvedTs uint64) er
 }
 
 func (k *schemaStoreGCKeeper) refreshWithProtectedTs(ctx context.Context, ts uint64) error {
+	// EnsureChangefeedStartTsSafety protects "startTs - 1". The schema store needs
+	// ts itself to remain readable, so the helper must be called with ts + 1.
 	return gc.EnsureChangefeedStartTsSafety(
 		ctx,
 		k.pdCli,
 		k.gcServiceIDTag,
 		k.keyspaceMeta.ID,
-		k.changefeedID,
+		k.gcServiceIDParts,
 		defaultGcServiceTTL,
 		nextProtectedTs(ts),
 	)
@@ -75,7 +80,7 @@ func (k *schemaStoreGCKeeper) close(ctx context.Context) error {
 		k.pdCli,
 		k.keyspaceMeta.ID,
 		k.gcServiceIDTag,
-		k.changefeedID,
+		k.gcServiceIDParts,
 	)
 }
 
@@ -99,10 +104,13 @@ func (k *schemaStoreGCKeeper) run(ctx context.Context, resolvedTsGetter func() u
 	}()
 }
 
+// serviceID returns the exact PD GC service ID used by this schema store keeper.
 func (k *schemaStoreGCKeeper) serviceID() string {
-	return k.gcServiceIDTag + k.changefeedID.Keyspace() + "_" + k.changefeedID.Name()
+	return k.gcServiceIDTag + k.gcServiceIDParts.Keyspace() + "_" + k.gcServiceIDParts.Name()
 }
 
+// nextProtectedTs converts "the ts that must stay readable" into the
+// EnsureChangefeedStartTsSafety helper's "startTs" semantics.
 func nextProtectedTs(ts uint64) uint64 {
 	if ts == math.MaxUint64 {
 		return math.MaxUint64
@@ -110,6 +118,9 @@ func nextProtectedTs(ts uint64) uint64 {
 	return ts + 1
 }
 
+// sanitizeSchemaStoreNodeID normalizes the node identity before embedding it in
+// the GC service ID, so addresses like "127.0.0.1:8300" become a stable
+// identifier without characters such as ':' or '/'.
 func sanitizeSchemaStoreNodeID(nodeID string) string {
 	nodeID = strings.TrimSpace(nodeID)
 	if nodeID == "" {

@@ -303,10 +303,6 @@ func (s *schemaStore) Run(ctx context.Context) error {
 }
 
 func (s *schemaStore) Close(ctx context.Context) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-
 	s.keyspaceLocker.Lock()
 	defer s.keyspaceLocker.Unlock()
 
@@ -315,6 +311,8 @@ func (s *schemaStore) Close(ctx context.Context) error {
 			store.cancel()
 		}
 		if store.gcKeeper != nil {
+			// The GC keeper must be closed before the local storage is dropped,
+			// otherwise PD may keep protecting a stale lower bound for longer than needed.
 			err := store.gcKeeper.close(ctx)
 			if err != nil {
 				log.Error("gc keeper close failed", zap.Uint32("keyspaceID", keyspaceID), zap.Error(err))
@@ -480,6 +478,12 @@ func (s *schemaStore) RegisterKeyspace(
 	}
 
 	storeCtx, cancel := context.WithCancel(ctx)
+	// The schema store initialization needs two guarantees:
+	// 1. the snapshot at gcSafePoint is still readable;
+	// 2. the DDL history after that snapshot is not GC'ed before the local
+	//    resolvedTs catches up.
+	// The keeper is created before the initial snapshot and stays alive for the
+	// whole schema store lifetime so both guarantees share the same GC barrier.
 	gcKeeper := newSchemaStoreGCKeeper(s.pdCli, keyspaceMeta)
 	gcSafePoint, err := s.acquireInitialGCSafePoint(storeCtx, keyspaceMeta, gcKeeper)
 	if err != nil {
@@ -538,6 +542,8 @@ func (s *schemaStore) RegisterKeyspace(
 		return err
 	}
 	store.dataStorage.run()
+	// After initialization, keep advancing the GC barrier with the schema store's
+	// durable resolvedTs so the retained DDL history always covers local reads.
 	store.gcKeeper.run(storeCtx, func() uint64 {
 		return store.resolvedTs.Load()
 	})
@@ -568,6 +574,8 @@ func (s *schemaStore) acquireInitialGCSafePoint(
 	gcKeeper *schemaStoreGCKeeper,
 ) (uint64, error) {
 	for {
+		// Read the current lower bound first, then install a dedicated GC barrier
+		// for this schema store instance before any snapshot or incremental pull starts.
 		gcSafePoint, err := gc.UnifyGetServiceGCSafepoint(ctx, s.pdCli, keyspaceMeta.ID, defaultSchemaStoreGcServiceID)
 		if err == nil {
 			log.Info("get gc safepoint success",
