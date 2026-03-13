@@ -56,16 +56,25 @@ func newSchemaStoreGCKeeper(pdCli pd.Client, keyspaceMeta common.KeyspaceMeta) *
 }
 
 func (k *schemaStoreGCKeeper) initialize(ctx context.Context, gcSafePoint uint64) error {
-	return k.refreshWithProtectedTs(ctx, gcSafePoint)
+	return k.refreshWithTs(ctx, gcSafePoint)
 }
 
 func (k *schemaStoreGCKeeper) refresh(ctx context.Context, resolvedTs uint64) error {
-	return k.refreshWithProtectedTs(ctx, resolvedTs)
+	return k.refreshWithTs(ctx, resolvedTs)
 }
 
-func (k *schemaStoreGCKeeper) refreshWithProtectedTs(ctx context.Context, ts uint64) error {
-	// EnsureChangefeedStartTsSafety protects "startTs - 1". The schema store needs
-	// ts itself to remain readable, so the helper must be called with ts + 1.
+func (k *schemaStoreGCKeeper) refreshWithTs(ctx context.Context, ts uint64) error {
+	// EnsureChangefeedStartTsSafety is defined in terms of changefeed startTs: it
+	// keeps "startTs - 1" readable, not startTs itself.
+	//
+	// Schema store needs the snapshot at ts to stay readable, and it pulls
+	// incremental DDLs starting from ts. So ts itself must not be
+	// collected yet. To express that requirement with the helper's startTs
+	// convention, schema store passes ts + 1 here.
+	startTs := ts
+	if startTs != math.MaxUint64 {
+		startTs++
+	}
 	return gc.EnsureChangefeedStartTsSafety(
 		ctx,
 		k.pdCli,
@@ -73,7 +82,7 @@ func (k *schemaStoreGCKeeper) refreshWithProtectedTs(ctx context.Context, ts uin
 		k.keyspaceMeta.ID,
 		k.gcServiceIDParts,
 		defaultGcServiceTTL,
-		nextProtectedTs(ts),
+		startTs,
 	)
 }
 
@@ -110,15 +119,6 @@ func (k *schemaStoreGCKeeper) run(ctx context.Context, resolvedTsGetter func() u
 // serviceID returns the exact PD GC service ID used by this schema store keeper.
 func (k *schemaStoreGCKeeper) serviceID() string {
 	return k.gcServiceIDTag + k.gcServiceIDParts.Keyspace() + "_" + k.gcServiceIDParts.Name()
-}
-
-// nextProtectedTs converts "the ts that must stay readable" into the
-// EnsureChangefeedStartTsSafety helper's "startTs" semantics.
-func nextProtectedTs(ts uint64) uint64 {
-	if ts == math.MaxUint64 {
-		return math.MaxUint64
-	}
-	return ts + 1
 }
 
 // sanitizeSchemaStoreNodeID normalizes the node identity before embedding it in
