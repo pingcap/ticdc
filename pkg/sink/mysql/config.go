@@ -177,7 +177,7 @@ func New() *Config {
 		DMLMaxRetry:            8,
 		HasVectorType:          defaultHasVectorType,
 		EnableDDLTs:            defaultEnableDDLTs,
-		SlowQuery:              slowQuery
+		SlowQuery:              slowQuery,
 		whereClause:            sqlmodel.DefaultWhereClause,
 	}
 }
