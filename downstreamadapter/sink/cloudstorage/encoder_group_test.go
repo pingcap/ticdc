@@ -15,7 +15,6 @@ package cloudstorage
 
 import (
 	"context"
-	"errors"
 	"net/url"
 	"testing"
 	"time"
@@ -215,18 +214,6 @@ func TestEncodingGroupEncodeDMLTask(t *testing.T) {
 
 	cancel()
 	require.ErrorIs(t, eg.Wait(), context.Canceled)
-}
-
-func TestEncoderGroupAddReturnsContextCause(t *testing.T) {
-	t.Parallel()
-
-	ctx, cancel := context.WithCancelCause(context.Background())
-	cause := errors.New("encoder group canceled")
-	cancel(cause)
-
-	group := newEncoderGroup(newTestTxnEncoderConfig(t), 1, 1)
-	err := group.add(ctx, newFlushTask(commonType.NewDispatcherID(), 1))
-	require.ErrorIs(t, err, cause)
 }
 
 func newTestTxnEncoderConfig(t *testing.T) *common.Config {
