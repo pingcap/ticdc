@@ -803,7 +803,6 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 			log.Panic("dataRange startTs is smaller than subscriptionStat checkpointTs, it should not happen",
 				zap.Stringer("dispatcherID", dispatcherID),
 				zap.Int64("tableID", dataRange.Span.GetTableID()),
-				zap.Uint64("dispatcherCheckpointTs", stat.checkpointTs),
 				zap.Uint64("commitTsStart", dataRange.CommitTsStart),
 				zap.Uint64("commitTsEnd", dataRange.CommitTsEnd),
 				zap.Uint64("lastScannedTxnStartTs", dataRange.LastScannedTxnStartTs),
