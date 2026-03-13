@@ -317,12 +317,12 @@ func (s *schemaStore) Close(ctx context.Context) error {
 		if store.gcKeeper != nil {
 			err := closeSchemaStoreGCKeeper(keyspaceID, store.gcKeeper)
 			if err != nil {
-				log.Error("gc keeper close failed", zap.Uint32("keyspaceID", keyspaceID), zap.Error(err))
+				log.Warn("gc keeper close failed", zap.Uint32("keyspaceID", keyspaceID), zap.Error(err))
 			}
 		}
 		err := store.dataStorage.close()
 		if err != nil {
-			log.Error("dataStorage close failed", zap.Uint32("keyspaceID", keyspaceID), zap.Error(err))
+			log.Warn("dataStorage close failed", zap.Uint32("keyspaceID", keyspaceID), zap.Error(err))
 		}
 	}
 	log.Info("schema store closed", zap.Uint32s("keyspaceIDs", keyspaceIDs))
