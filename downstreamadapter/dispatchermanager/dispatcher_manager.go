@@ -748,6 +748,9 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 			}
 
 			if needCompleteStatus {
+				if dispatcherItem.GetTryRemoving() {
+					return
+				}
 				if watermark != nil {
 					eventServiceDispatcherHeartbeat.Append(event.NewDispatcherProgress(id, watermark.CheckpointTs))
 				} else {
