@@ -26,6 +26,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/testutil"
+	"github.com/pingcap/ticdc/pkg/api"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -114,7 +115,8 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 		AddTableBatchSize:    1000,
 		CheckBalanceInterval: 0,
 	}
-	manager := NewMaintainerManager(selfNode, schedulerConf)
+	var liveness api.Liveness
+	manager := NewMaintainerManager(selfNode, schedulerConf, &liveness)
 	msg := messaging.NewSingleTargetMessage(selfNode.ID,
 		messaging.MaintainerManagerTopic,
 		&heartbeatpb.CoordinatorBootstrapRequest{Version: 1})
@@ -150,15 +152,14 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 			KeyspaceId:   keyspaceMeta.ID,
 		}))
 
-	value, ok := manager.maintainers.Load(cfID)
+	maintainer, ok := manager.GetMaintainerForChangefeed(cfID)
 	if !ok {
 		require.Eventually(t, func() bool {
-			value, ok = manager.maintainers.Load(cfID)
+			maintainer, ok = manager.GetMaintainerForChangefeed(cfID)
 			return ok
 		}, 20*time.Second, 200*time.Millisecond)
 	}
 	require.True(t, ok)
-	maintainer := value.(*Maintainer)
 
 	require.Eventually(t, func() bool {
 		return maintainer.controller.spanController.GetSchedulingSize() == 4
@@ -291,10 +292,10 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 		return maintainer.scheduleState.Load() == int32(heartbeatpb.ComponentState_Stopped)
 	}, 20*time.Second, 200*time.Millisecond)
 
-	_, ok = manager.maintainers.Load(cfID)
+	_, ok = manager.GetMaintainerForChangefeed(cfID)
 	if ok {
 		require.Eventually(t, func() bool {
-			_, ok = manager.maintainers.Load(cfID)
+			_, ok = manager.GetMaintainerForChangefeed(cfID)
 			return ok == false
 		}, 20*time.Second, 200*time.Millisecond)
 	}
@@ -342,7 +343,8 @@ func TestMaintainerBootstrapWithTablesReported(t *testing.T) {
 	mc.RegisterHandler(messaging.CoordinatorTopic, func(ctx context.Context, msg *messaging.TargetMessage) error {
 		return nil
 	})
-	manager := NewMaintainerManager(selfNode, config.GetGlobalServerConfig().Debug.Scheduler)
+	var liveness api.Liveness
+	manager := NewMaintainerManager(selfNode, config.GetGlobalServerConfig().Debug.Scheduler, &liveness)
 	msg := messaging.NewSingleTargetMessage(selfNode.ID,
 		messaging.MaintainerManagerTopic,
 		&heartbeatpb.CoordinatorBootstrapRequest{Version: 1})
@@ -394,15 +396,14 @@ func TestMaintainerBootstrapWithTablesReported(t *testing.T) {
 			CheckpointTs: 10,
 		}))
 
-	value, ok := manager.maintainers.Load(cfID)
+	maintainer, ok := manager.GetMaintainerForChangefeed(cfID)
 	if !ok {
 		require.Eventually(t, func() bool {
-			value, ok = manager.maintainers.Load(cfID)
+			maintainer, ok = manager.GetMaintainerForChangefeed(cfID)
 			return ok
 		}, 20*time.Second, 200*time.Millisecond)
 	}
 	require.True(t, ok)
-	maintainer := value.(*Maintainer)
 
 	require.Eventually(t, func() bool {
 		return maintainer.controller.spanController.GetReplicatingSize() == 4
@@ -486,7 +487,8 @@ func TestStopNotExistsMaintainer(t *testing.T) {
 		return nil
 	})
 	schedulerConf := &config.SchedulerConfig{AddTableBatchSize: 1000}
-	manager := NewMaintainerManager(selfNode, schedulerConf)
+	var liveness api.Liveness
+	manager := NewMaintainerManager(selfNode, schedulerConf, &liveness)
 	msg := messaging.NewSingleTargetMessage(selfNode.ID,
 		messaging.MaintainerManagerTopic,
 		&heartbeatpb.CoordinatorBootstrapRequest{Version: 1})
@@ -502,10 +504,10 @@ func TestStopNotExistsMaintainer(t *testing.T) {
 		Removed: true,
 	}))
 
-	_, ok := manager.maintainers.Load(cfID)
+	_, ok := manager.GetMaintainerForChangefeed(cfID)
 	if ok {
 		require.Eventually(t, func() bool {
-			_, ok = manager.maintainers.Load(cfID)
+			_, ok = manager.GetMaintainerForChangefeed(cfID)
 			return !ok
 		}, 20*time.Second, 200*time.Millisecond)
 	}

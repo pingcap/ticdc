@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/pingcap/ticdc/coordinator/changefeed"
+	"github.com/pingcap/ticdc/coordinator/drain"
 	"github.com/pingcap/ticdc/coordinator/operator"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -33,6 +34,7 @@ type balanceScheduler struct {
 	operatorController *operator.Controller
 	changefeedDB       *changefeed.ChangefeedDB
 	nodeManager        *watcher.NodeManager
+	liveness           *drain.Controller
 
 	random               *rand.Rand
 	lastRebalanceTime    time.Time
@@ -44,13 +46,18 @@ type balanceScheduler struct {
 	// `Schedule`.
 	// It speeds up rebalance.
 	forceBalance bool
+
+	drainBalanceBlockedUntil time.Time
 }
+
+const drainBalanceCooldown = 120 * time.Second
 
 func NewBalanceScheduler(
 	id string, batchSize int,
 	oc *operator.Controller,
 	changefeedDB *changefeed.ChangefeedDB,
 	balanceInterval time.Duration,
+	liveness *drain.Controller,
 ) *balanceScheduler {
 	return &balanceScheduler{
 		id:                   id,
@@ -61,14 +68,25 @@ func NewBalanceScheduler(
 		nodeManager:          appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
 		checkBalanceInterval: balanceInterval,
 		lastRebalanceTime:    time.Now(),
+		liveness:             liveness,
 	}
 }
 
 func (s *balanceScheduler) Execute() time.Time {
+	now := time.Now()
+	if hasDrainingOrStoppingNode(s.liveness) {
+		// Pause regular balance scheduling while any node is draining/stopping.
+		s.drainBalanceBlockedUntil = now.Add(drainBalanceCooldown)
+		return now.Add(s.checkBalanceInterval)
+	}
+	if now.Before(s.drainBalanceBlockedUntil) {
+		// Keep a cooldown window after all draining/stopping nodes are gone
+		// to avoid immediate rebalance churn.
+		return now.Add(s.checkBalanceInterval)
+	}
 	if !s.forceBalance && time.Since(s.lastRebalanceTime) < s.checkBalanceInterval {
 		return s.lastRebalanceTime.Add(s.checkBalanceInterval)
 	}
-	now := time.Now()
 
 	if s.operatorController.OperatorSize() > 0 || s.changefeedDB.GetAbsentSize() > 0 {
 		// not in stable schedule state, skip balance
@@ -76,13 +94,15 @@ func (s *balanceScheduler) Execute() time.Time {
 	}
 
 	// check the balance status
-	moveSize := pkgScheduler.CheckBalanceStatus(s.changefeedDB.GetTaskSizePerNode(), s.nodeManager.GetAliveNodes())
+	activeNodes := s.nodeManager.GetAliveNodes()
+	activeNodes = filterSchedulableAliveNodes(activeNodes, s.liveness)
+	moveSize := pkgScheduler.CheckBalanceStatus(s.changefeedDB.GetTaskSizePerNode(), activeNodes)
 	if moveSize <= 0 {
 		// fast check the balance status, no need to do the balance,skip
 		return now.Add(s.checkBalanceInterval)
 	}
 	// balance changefeeds among the active nodes
-	movedSize := pkgScheduler.Balance(s.batchSize, s.random, s.nodeManager.GetAliveNodes(), s.changefeedDB.GetReplicating(),
+	movedSize := pkgScheduler.Balance(s.batchSize, s.random, activeNodes, s.changefeedDB.GetReplicating(),
 		func(cf *changefeed.Changefeed, nodeID node.ID) bool {
 			return s.operatorController.AddOperator(operator.NewMoveMaintainerOperator(s.changefeedDB, cf, cf.GetNodeID(), nodeID))
 		})

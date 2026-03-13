@@ -20,6 +20,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/coordinator/changefeed"
+	"github.com/pingcap/ticdc/coordinator/drain"
 	"github.com/pingcap/ticdc/coordinator/operator"
 	coscheduler "github.com/pingcap/ticdc/coordinator/scheduler"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -86,6 +87,19 @@ type Controller struct {
 
 	changefeedChangeCh chan []*changefeedChange
 	apiLock            sync.RWMutex
+
+	drainController *drain.Controller
+
+	// drainSession is the in-memory drain state machine for v1 drain API.
+	// Only one drain session is allowed at a time.
+	drainSessionMu sync.Mutex
+	drainSession   *drainSession
+	// drainClearState keeps a clearing tombstone after the active drain session
+	// is closed. It lets coordinator resend the clear request until all nodes
+	// confirm they have dropped the stale drain target for that epoch.
+	drainClearState *drainClearState
+
+	dispatcherDrainEpoch uint64
 }
 
 type changefeedChange struct {
@@ -119,6 +133,8 @@ func NewController(
 	changefeedDB := changefeed.NewChangefeedDB(version)
 
 	oc := operator.NewOperatorController(selfNode, changefeedDB, backend, batchSize)
+	messageCenter := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
+	drainController := drain.NewController(messageCenter)
 	c := &Controller{
 		version:     version,
 		selfNode:    selfNode,
@@ -129,6 +145,14 @@ func NewController(
 				batchSize,
 				oc,
 				changefeedDB,
+				drainController,
+			),
+			scheduler.DrainScheduler: coscheduler.NewDrainScheduler(
+				selfNode.ID.String(),
+				batchSize,
+				oc,
+				changefeedDB,
+				drainController,
 			),
 			scheduler.BalanceScheduler: coscheduler.NewBalanceScheduler(
 				selfNode.ID.String(),
@@ -136,18 +160,21 @@ func NewController(
 				oc,
 				changefeedDB,
 				balanceInterval,
+				drainController,
 			),
 		}),
-		eventCh:            eventCh,
-		operatorController: oc,
-		messageCenter:      appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
-		changefeedDB:       changefeedDB,
-		nodeManager:        appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
-		taskScheduler:      threadpool.NewThreadPoolDefault(),
-		backend:            backend,
-		changefeedChangeCh: changefeedChangeCh,
-		pdClient:           pdClient,
-		pdClock:            appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
+		eventCh:              eventCh,
+		operatorController:   oc,
+		messageCenter:        messageCenter,
+		changefeedDB:         changefeedDB,
+		nodeManager:          appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
+		taskScheduler:        threadpool.NewThreadPoolDefault(),
+		backend:              backend,
+		changefeedChangeCh:   changefeedChangeCh,
+		pdClient:             pdClient,
+		pdClock:              appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
+		drainController:      drainController,
+		dispatcherDrainEpoch: newDispatcherDrainEpochSeed(),
 	}
 	c.nodeChanged.changed = false
 
@@ -262,6 +289,14 @@ func (c *Controller) onPeriodTask() {
 	for _, req := range requests {
 		_ = c.messageCenter.SendCommand(req)
 	}
+
+	// Drain liveness transitions and drain-target broadcasts are retry-based
+	// control loops. Drive them from the periodic task so they keep progressing
+	// even when no fresh heartbeat or node-change event arrives.
+	c.drainController.AdvanceLiveness(func(id node.ID) bool {
+		return len(c.changefeedDB.GetByNodeID(id)) == 0 && c.operatorController.CountOperatorsInvolvingNode(id) == 0
+	})
+	c.maybeBroadcastDispatcherDrainTarget(false)
 }
 
 func (c *Controller) onMessage(ctx context.Context, msg *messaging.TargetMessage) {
@@ -273,6 +308,13 @@ func (c *Controller) onMessage(ctx context.Context, msg *messaging.TargetMessage
 			req := msg.Message[0].(*heartbeatpb.MaintainerHeartbeat)
 			c.handleMaintainerStatus(msg.From, req.Statuses)
 		}
+	case messaging.TypeNodeHeartbeatRequest:
+		req := msg.Message[0].(*heartbeatpb.NodeHeartbeat)
+		c.drainController.ObserveHeartbeat(msg.From, req)
+		c.observeDispatcherDrainTargetHeartbeat(msg.From, req)
+	case messaging.TypeSetNodeLivenessResponse:
+		req := msg.Message[0].(*heartbeatpb.SetNodeLivenessResponse)
+		c.drainController.ObserveSetNodeLivenessResponse(msg.From, req)
 	case messaging.TypeLogCoordinatorResolvedTsResponse:
 		c.onLogCoordinatorReportResolvedTs(msg)
 	default:
@@ -345,6 +387,7 @@ func (c *Controller) onNodeChanged(ctx context.Context) {
 				zap.Any("targetNode", req.To), zap.Error(err))
 		}
 	}
+	c.maybeBroadcastDispatcherDrainTarget(true)
 	c.handleBootstrapResponses(ctx, responses)
 }
 
@@ -837,6 +880,15 @@ func (c *Controller) getChangefeed(id common.ChangeFeedID) *changefeed.Changefee
 // RemoveNode is called when a node is removed
 func (c *Controller) RemoveNode(id node.ID) {
 	c.operatorController.OnNodeRemoved(id)
+	// Membership removal is the only authoritative signal that this node will
+	// never acknowledge the current drain epoch again. Clear every drain-side
+	// in-memory reference immediately to avoid leaking a stuck drain session.
+	target, epoch, ok := c.getDispatcherDrainTarget()
+	if ok && target == id {
+		c.clearDispatcherDrainTarget(id, epoch)
+	}
+	c.observeDispatcherDrainTargetClearNodeRemoved(id)
+	c.drainController.RemoveNode(id)
 }
 
 func (c *Controller) submitPeriodTask() {
