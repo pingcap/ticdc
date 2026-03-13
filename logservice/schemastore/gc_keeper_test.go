@@ -61,6 +61,38 @@ func TestSchemaStoreGCKeeperLifecycle(t *testing.T) {
 	require.False(t, ok)
 }
 
+func TestCloseSchemaStoreGCKeeperUsesFreshContext(t *testing.T) {
+	originalConfig := config.GetGlobalServerConfig()
+	cfg := originalConfig.Clone()
+	cfg.AdvertiseAddr = "127.0.0.1:8300"
+	config.StoreGlobalServerConfig(cfg)
+	defer config.StoreGlobalServerConfig(originalConfig)
+
+	pdCli := &mockPDClientForSchemaStoreGC{
+		serviceSafePoint: make(map[string]uint64),
+		gcBarriers:       make(map[string]uint64),
+		txnSafePoint:     100,
+	}
+	keeper := newSchemaStoreGCKeeper(pdCli, common.DefaultKeyspace)
+	serviceID := keeper.serviceID()
+
+	ctx := context.Background()
+	require.NoError(t, keeper.initialize(ctx, 100))
+	assertSchemaStoreBarrierTS(t, pdCli, serviceID, 101)
+
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.ErrorIs(t, keeper.close(canceledCtx), context.Canceled)
+
+	require.NoError(t, closeSchemaStoreGCKeeper(common.DefaultKeyspace.ID, keeper))
+	if kerneltype.IsClassic() {
+		require.Equal(t, uint64(math.MaxUint64), pdCli.serviceSafePoint[serviceID])
+		return
+	}
+	_, ok := pdCli.gcBarriers[serviceID]
+	require.False(t, ok)
+}
+
 func TestSanitizeSchemaStoreNodeID(t *testing.T) {
 	testCases := []struct {
 		name     string
@@ -125,6 +157,9 @@ type mockPDClientForSchemaStoreGC struct {
 func (m *mockPDClientForSchemaStoreGC) UpdateServiceGCSafePoint(
 	ctx context.Context, serviceID string, ttl int64, safePoint uint64,
 ) (uint64, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
 	minSafePoint := uint64(math.MaxUint64)
 	for _, ts := range m.serviceSafePoint {
 		if ts < minSafePoint {
@@ -153,6 +188,9 @@ type mockSchemaStoreGCStatesClient struct {
 func (m *mockSchemaStoreGCStatesClient) SetGCBarrier(
 	ctx context.Context, barrierID string, barrierTS uint64, ttl time.Duration,
 ) (*pdgc.GCBarrierInfo, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if barrierTS < m.parent.txnSafePoint {
 		return nil, errors.New("ErrGCBarrierTSBehindTxnSafePoint")
 	}
@@ -163,6 +201,9 @@ func (m *mockSchemaStoreGCStatesClient) SetGCBarrier(
 func (m *mockSchemaStoreGCStatesClient) DeleteGCBarrier(
 	ctx context.Context, barrierID string,
 ) (*pdgc.GCBarrierInfo, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	barrierTS, ok := m.parent.gcBarriers[barrierID]
 	if !ok {
 		return nil, nil
@@ -172,6 +213,9 @@ func (m *mockSchemaStoreGCStatesClient) DeleteGCBarrier(
 }
 
 func (m *mockSchemaStoreGCStatesClient) GetGCState(ctx context.Context) (pdgc.GCState, error) {
+	if err := ctx.Err(); err != nil {
+		return pdgc.GCState{}, err
+	}
 	gcBarriers := make([]*pdgc.GCBarrierInfo, 0, len(m.parent.gcBarriers))
 	for id, ts := range m.parent.gcBarriers {
 		gcBarriers = append(gcBarriers, pdgc.NewGCBarrierInfo(id, ts, 0, time.Now()))
