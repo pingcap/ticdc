@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	misc "github.com/pingcap/ticdc/pkg/redo/common"
 	"go.uber.org/zap"
 )
@@ -97,11 +98,18 @@ func (rd *RedoDispatcher) SetRedoMeta(ctx context.Context, cfg *config.Consisten
 	go func() {
 		err := rd.redoMeta.PreStart(ctx)
 		if err != nil {
-			rd.HandleError(err)
+			log.Error("redo meta preStart failed",
+				zap.Stringer("changefeed", rd.sharedInfo.changefeedID),
+				zap.Error(err))
+			rd.HandleError(errors.ErrRedoMetaInitialize)
+			return
 		}
 		err = rd.redoMeta.Run(ctx)
 		if err != nil {
-			rd.HandleError(err)
+			log.Error("redo meta run failed",
+				zap.Stringer("changefeed", rd.sharedInfo.changefeedID),
+				zap.Error(err))
+			rd.HandleError(errors.ErrRedoMetaInitialize)
 		}
 	}()
 }
