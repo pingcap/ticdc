@@ -1,4 +1,4 @@
-// Copyright 2025 PingCAP, Inc.
+// Copyright 2026 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -72,9 +72,7 @@ func deserializeMessages(data []byte) ([]*common.Message, error) {
 	count := binary.LittleEndian.Uint32(data[offset:])
 	offset += serializedMessageCountBytes
 
-	var (
-		result = make([]*common.Message, 0, count)
-	)
+	result := make([]*common.Message, 0, count)
 	for i := uint32(0); i < count; i++ {
 		if len(data[offset:]) < serializedMessageHeaderBytes {
 			return nil, errors.WrapError(errors.ErrDecodeFailed, io.ErrUnexpectedEOF)

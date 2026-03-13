@@ -26,7 +26,7 @@ import (
 	"time"
 
 	"github.com/pingcap/ticdc/downstreamadapter/sink/cloudstorage/spool"
-	pclock "github.com/pingcap/ticdc/pkg/clock"
+	"github.com/pingcap/ticdc/pkg/clock"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -36,7 +36,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/util"
-	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/parser/types"
@@ -47,19 +47,19 @@ import (
 func testWriter(ctx context.Context, t *testing.T, dir string) *writer {
 	uri := fmt.Sprintf("file:///%s?flush-interval=2s", dir)
 	storage, err := util.GetExternalStorageWithDefaultTimeout(ctx, uri)
-	require.Nil(t, err)
+	require.NoError(t, err)
 	sinkURI, err := url.Parse(uri)
-	require.Nil(t, err)
+	require.NoError(t, err)
 	cfg := cloudstorage.NewConfig()
 	replicaConfig := config.GetDefaultReplicaConfig()
 	replicaConfig.Sink.DateSeparator = util.AddressOf(config.DateSeparatorNone.String())
 	err = cfg.Apply(context.TODO(), sinkURI, replicaConfig.Sink, true)
 	cfg.FileIndexWidth = 6
-	require.Nil(t, err)
+	require.NoError(t, err)
 
 	changefeedID := commonType.NewChangefeedID4Test("test", t.Name())
 	statistics := metrics.NewStatistics(changefeedID, t.Name())
-	pdlock := pdutil.NewMonotonicClock(pclock.New())
+	pdlock := pdutil.NewMonotonicClock(clock.New())
 	appcontext.SetService(appcontext.DefaultPDClock, pdlock)
 	mockPDClock := pdutil.NewClock4Test()
 	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
@@ -107,10 +107,10 @@ func TestWriterRun(t *testing.T) {
 	d := testWriter(ctx, t, parentDir)
 	table1Dir := path.Join(parentDir, "test/table1/99")
 
-	tidbTableInfo := &timodel.TableInfo{
+	tidbTableInfo := &model.TableInfo{
 		ID:   100,
 		Name: ast.NewCIStr("table1"),
-		Columns: []*timodel.ColumnInfo{
+		Columns: []*model.ColumnInfo{
 			{ID: 1, Name: ast.NewCIStr("c1"), FieldType: *types.NewFieldType(mysql.TypeLong)},
 			{ID: 2, Name: ast.NewCIStr("c2"), FieldType: *types.NewFieldType(mysql.TypeVarchar)},
 		},
@@ -151,7 +151,11 @@ func TestWriterRun(t *testing.T) {
 		_ = d.run(ctx)
 	}()
 
-	time.Sleep(4 * time.Second)
+	require.Eventually(t, func() bool {
+		files, err := os.ReadDir(table1Dir)
+		return err == nil && len(files) == 2
+	}, 10*time.Second, 100*time.Millisecond)
+
 	// check whether files for table1 has been generated
 	fileNames := getTableFiles(t, table1Dir)
 	require.Len(t, fileNames, 2)
@@ -168,10 +172,10 @@ func TestWriterFlushMarker(t *testing.T) {
 	parentDir := t.TempDir()
 	d := testWriter(ctx, t, parentDir)
 
-	tidbTableInfo := &timodel.TableInfo{
+	tidbTableInfo := &model.TableInfo{
 		ID:   100,
 		Name: ast.NewCIStr("table1"),
-		Columns: []*timodel.ColumnInfo{
+		Columns: []*model.ColumnInfo{
 			{ID: 1, Name: ast.NewCIStr("c1"), FieldType: *types.NewFieldType(mysql.TypeLong)},
 		},
 	}
@@ -233,10 +237,10 @@ func TestWriterFlushMarkerOnlyFlushesTargetDispatcher(t *testing.T) {
 	d := testWriter(ctx, t, parentDir)
 	d.config.FlushInterval = time.Hour
 
-	tidbTableInfo := &timodel.TableInfo{
+	tidbTableInfo := &model.TableInfo{
 		ID:   100,
 		Name: ast.NewCIStr("table1"),
-		Columns: []*timodel.ColumnInfo{
+		Columns: []*model.ColumnInfo{
 			{ID: 1, Name: ast.NewCIStr("c1"), FieldType: *types.NewFieldType(mysql.TypeLong)},
 		},
 	}
@@ -282,10 +286,10 @@ func TestWriterFlushMarkerOnlyFlushesTargetDispatcher(t *testing.T) {
 		},
 		&commonEvent.DMLEvent{
 			PhysicalTableID: 101,
-			TableInfo: commonType.WrapTableInfo("test", &timodel.TableInfo{
+			TableInfo: commonType.WrapTableInfo("test", &model.TableInfo{
 				ID:   101,
 				Name: ast.NewCIStr("table2"),
-				Columns: []*timodel.ColumnInfo{
+				Columns: []*model.ColumnInfo{
 					{ID: 1, Name: ast.NewCIStr("c1"), FieldType: *types.NewFieldType(mysql.TypeLong)},
 				},
 			}),
@@ -329,10 +333,10 @@ func TestWriterPostEnqueueAfterConsume(t *testing.T) {
 	parentDir := t.TempDir()
 	d := testWriter(ctx, t, parentDir)
 
-	tidbTableInfo := &timodel.TableInfo{
+	tidbTableInfo := &model.TableInfo{
 		ID:   100,
 		Name: ast.NewCIStr("table1"),
-		Columns: []*timodel.ColumnInfo{
+		Columns: []*model.ColumnInfo{
 			{ID: 1, Name: ast.NewCIStr("c1"), FieldType: *types.NewFieldType(mysql.TypeLong)},
 		},
 	}
@@ -418,7 +422,7 @@ func TestWriterStoresPendingMessagesInSpoolBeforeFlush(t *testing.T) {
 
 	changefeedID := commonType.NewChangefeedID4Test("test", "spool-pending")
 	statistics := metrics.NewStatistics(changefeedID, t.Name())
-	pdlock := pdutil.NewMonotonicClock(pclock.New())
+	pdlock := pdutil.NewMonotonicClock(clock.New())
 	appcontext.SetService(appcontext.DefaultPDClock, pdlock)
 	mockPDClock := pdutil.NewClock4Test()
 	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
@@ -426,10 +430,10 @@ func TestWriterStoresPendingMessagesInSpoolBeforeFlush(t *testing.T) {
 	spoolManager := newTestSpoolManager(t, changefeedID, cfg)
 	d := newWriter(1, changefeedID, storage, cfg, ".json", statistics, spoolManager)
 
-	tidbTableInfo := &timodel.TableInfo{
+	tidbTableInfo := &model.TableInfo{
 		ID:   100,
 		Name: ast.NewCIStr("table1"),
-		Columns: []*timodel.ColumnInfo{
+		Columns: []*model.ColumnInfo{
 			{ID: 1, Name: ast.NewCIStr("c1"), FieldType: *types.NewFieldType(mysql.TypeLong)},
 		},
 	}

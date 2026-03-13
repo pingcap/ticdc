@@ -36,14 +36,14 @@ func TestConfigApply(t *testing.T) {
 	expected.SpoolDiskQuota = 10 * 1024 * 1024 * 1024
 	uri := "s3://bucket/prefix?worker-count=32&flush-interval=10s&file-size=16777216&protocol=csv"
 	sinkURI, err := url.Parse(uri)
-	require.Nil(t, err)
+	require.NoError(t, err)
 
 	replicaConfig := config.GetDefaultReplicaConfig()
 	err = replicaConfig.ValidateAndAdjust(sinkURI)
 	require.NoError(t, err)
 	cfg := NewConfig()
 	err = cfg.Apply(context.TODO(), sinkURI, replicaConfig.Sink, false)
-	require.Nil(t, err)
+	require.NoError(t, err)
 	require.Equal(t, expected, cfg)
 }
 
@@ -117,11 +117,11 @@ func TestVerifySinkURIParams(t *testing.T) {
 
 	for _, tc := range testCases {
 		sinkURI, err := url.Parse(tc.uri)
-		require.Nil(t, err)
+		require.NoError(t, err)
 		cfg := NewConfig()
 		err = cfg.Apply(context.TODO(), sinkURI, config.GetDefaultReplicaConfig().Sink, true)
 		if tc.expectedErr == "" {
-			require.Nil(t, err)
+			require.NoError(t, err)
 			require.LessOrEqual(t, cfg.WorkerCount, maxWorkerCount)
 			require.LessOrEqual(t, cfg.FlushInterval, maxFlushInterval)
 			require.LessOrEqual(t, cfg.FileSize, maxFileSize)

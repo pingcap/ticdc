@@ -1,4 +1,4 @@
-// Copyright 2025 PingCAP, Inc.
+// Copyright 2026 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,7 +15,7 @@ package spool
 
 import (
 	"github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
-	commonType "github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -41,7 +41,7 @@ type quotaController struct {
 }
 
 func newQuotaController(
-	changefeedID commonType.ChangeFeedID,
+	changefeedID common.ChangeFeedID,
 	options *Options,
 ) *quotaController {
 	changefeedLabel := changefeedID.ID().String()

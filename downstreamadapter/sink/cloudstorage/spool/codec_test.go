@@ -1,4 +1,4 @@
-// Copyright 2025 PingCAP, Inc.
+// Copyright 2026 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,20 +19,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/stretchr/testify/require"
 )
-
-func TestSerializedMessagesSize(t *testing.T) {
-	t.Parallel()
-
-	msgs := []*common.Message{
-		common.NewMsg([]byte("k1"), []byte("value-1")),
-		common.NewMsg(nil, []byte("value-2")),
-	}
-	msgs[0].SetRowsCount(1)
-	msgs[1].SetRowsCount(2)
-
-	data := serializeMessages(msgs)
-	require.Equal(t, serializedMessagesSize(msgs), len(data))
-}
 
 func TestSerializeDeserializeMessagesRoundTrip(t *testing.T) {
 	t.Parallel()

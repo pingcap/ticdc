@@ -24,7 +24,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/cloudstorage/spool"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
-	commonType "github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	pmetrics "github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
@@ -37,7 +37,7 @@ import (
 
 type writer struct {
 	shardID      int
-	changeFeedID commonType.ChangeFeedID
+	changeFeedID common.ChangeFeedID
 	storage      storage.ExternalStorage
 	config       *cloudstorage.Config
 	spool        *spool.Manager
@@ -64,7 +64,7 @@ type writerTask struct {
 
 func newWriter(
 	id int,
-	changefeedID commonType.ChangeFeedID,
+	changefeedID common.ChangeFeedID,
 	storage storage.ExternalStorage,
 	config *cloudstorage.Config,
 	extension string,
@@ -424,7 +424,7 @@ type batchedTask struct {
 
 type singleTableTask struct {
 	size      uint64
-	tableInfo *commonType.TableInfo
+	tableInfo *common.TableInfo
 	entries   []*spool.Entry
 }
 
@@ -460,7 +460,7 @@ func (t *batchedTask) detachTaskByTable(table cloudstorage.VersionedTableName) b
 	}
 }
 
-func (t *batchedTask) detachTaskByDispatcher(dispatcherID commonType.DispatcherID) batchedTask {
+func (t *batchedTask) detachTaskByDispatcher(dispatcherID common.DispatcherID) batchedTask {
 	batchByDispatcher := newBatchedTask()
 	for table, tableTask := range t.batch {
 		if table.DispatcherID != dispatcherID {

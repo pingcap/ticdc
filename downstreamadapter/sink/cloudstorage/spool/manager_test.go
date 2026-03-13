@@ -1,4 +1,4 @@
-// Copyright 2025 PingCAP, Inc.
+// Copyright 2026 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,7 +20,7 @@ import (
 	"testing"
 
 	commonType "github.com/pingcap/ticdc/pkg/common"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/stretchr/testify/require"
 )
@@ -111,7 +111,7 @@ func TestNewInvalidConfigError(t *testing.T) {
 	manager, err := New(changefeedID, &Options{RootDir: t.TempDir()})
 	require.Nil(t, manager)
 	require.Error(t, err)
-	require.True(t, cerror.ErrStorageSinkInvalidConfig.Equal(err))
+	require.True(t, errors.ErrStorageSinkInvalidConfig.Equal(err))
 }
 
 func TestEnqueueOnClosedManager(t *testing.T) {
@@ -129,7 +129,7 @@ func TestEnqueueOnClosedManager(t *testing.T) {
 	entry, err := manager.Enqueue([]*common.Message{newTestMessage("v", 1)}, nil)
 	require.Nil(t, entry)
 	require.Error(t, err)
-	require.True(t, cerror.ErrInternalCheckFailed.Equal(err))
+	require.True(t, errors.ErrInternalCheckFailed.Equal(err))
 }
 
 func TestEnqueueErrorDoesNotMutateInputMessage(t *testing.T) {
@@ -153,7 +153,7 @@ func TestEnqueueErrorDoesNotMutateInputMessage(t *testing.T) {
 	entry, err := manager.Enqueue([]*common.Message{msg}, nil)
 	require.Nil(t, entry)
 	require.Error(t, err)
-	require.True(t, cerror.ErrInternalCheckFailed.Equal(err))
+	require.True(t, errors.ErrInternalCheckFailed.Equal(err))
 	require.NotNil(t, msg.Callback)
 
 	msg.Callback()
@@ -171,7 +171,7 @@ func TestNewRejectsNegativeMemoryRatio(t *testing.T) {
 	})
 	require.Nil(t, manager)
 	require.Error(t, err)
-	require.True(t, cerror.ErrStorageSinkInvalidConfig.Equal(err))
+	require.True(t, errors.ErrStorageSinkInvalidConfig.Equal(err))
 }
 
 func TestPrepareRootDirOnlyRemovesSegmentLogs(t *testing.T) {

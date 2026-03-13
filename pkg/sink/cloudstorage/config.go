@@ -15,7 +15,6 @@ package cloudstorage
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -25,7 +24,7 @@ import (
 	"github.com/imdario/mergo"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/config"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
 )
@@ -109,19 +108,19 @@ func (c *Config) Apply(
 	enableTableAcrossNodes bool,
 ) (err error) {
 	if sinkURI == nil {
-		return cerror.ErrStorageSinkInvalidConfig.GenWithStack(
+		return errors.ErrStorageSinkInvalidConfig.GenWithStack(
 			"failed to open cloud storage sink, empty SinkURI")
 	}
 
 	scheme := strings.ToLower(sinkURI.Scheme)
 	if !config.IsStorageScheme(scheme) {
-		return cerror.ErrStorageSinkInvalidConfig.GenWithStack(
+		return errors.ErrStorageSinkInvalidConfig.GenWithStack(
 			"can't create cloud storage sink with unsupported scheme: %s", scheme)
 	}
 	req := &http.Request{URL: sinkURI}
 	urlParameter := &urlConfig{}
 	if err := binding.Query.Bind(req, urlParameter); err != nil {
-		return cerror.WrapError(cerror.ErrStorageSinkInvalidConfig, err)
+		return errors.WrapError(errors.ErrStorageSinkInvalidConfig, err)
 	}
 	if urlParameter, err = mergeConfig(sinkConfig, urlParameter); err != nil {
 		return err
@@ -191,7 +190,7 @@ func mergeConfig(
 		}
 	}
 	if err := mergo.Merge(dest, urlParameters, mergo.WithOverride); err != nil {
-		return nil, cerror.WrapError(cerror.ErrStorageSinkInvalidConfig, err)
+		return nil, errors.WrapError(errors.ErrStorageSinkInvalidConfig, err)
 	}
 	return dest, nil
 }
@@ -203,8 +202,8 @@ func getWorkerCount(values *urlConfig, workerCount *int) error {
 
 	c := *values.WorkerCount
 	if c <= 0 {
-		return cerror.WrapError(cerror.ErrStorageSinkInvalidConfig,
-			fmt.Errorf("invalid worker-count %d, it must be greater than 0", c))
+		return errors.ErrStorageSinkInvalidConfig.GenWithStack(
+			"invalid worker-count %d, it must be greater than 0", c)
 	}
 	if c > maxWorkerCount {
 		log.Warn("worker-count is too large",
@@ -223,7 +222,7 @@ func getFlushInterval(values *urlConfig, flushInterval *time.Duration) error {
 
 	d, err := time.ParseDuration(*values.FlushInterval)
 	if err != nil {
-		return cerror.WrapError(cerror.ErrStorageSinkInvalidConfig, err)
+		return errors.WrapError(errors.ErrStorageSinkInvalidConfig, err)
 	}
 
 	if d > maxFlushInterval {
@@ -268,8 +267,8 @@ func getSpoolDiskQuota(values *urlConfig, spoolDiskQuota *int64) error {
 
 	quota := *values.SpoolDiskQuota
 	if quota <= 0 {
-		return cerror.WrapError(cerror.ErrStorageSinkInvalidConfig,
-			fmt.Errorf("invalid spool-disk-quota %d, it must be greater than 0", quota))
+		return errors.ErrStorageSinkInvalidConfig.GenWithStack(
+			"invalid spool-disk-quota %d, it must be greater than 0", quota)
 	}
 
 	*spoolDiskQuota = quota
