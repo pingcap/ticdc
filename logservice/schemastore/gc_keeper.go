@@ -28,7 +28,10 @@ import (
 	"go.uber.org/zap"
 )
 
-const schemaStoreGCRefreshInterval = 10 * time.Second
+const (
+	schemaStoreGCRefreshInterval  = 10 * time.Second
+	schemaStoreGCServiceKeeperTag = "-keeper-"
+)
 
 type schemaStoreGCKeeper struct {
 	pdCli        pd.Client
@@ -44,7 +47,7 @@ func newSchemaStoreGCKeeper(pdCli pd.Client, keyspaceMeta common.KeyspaceMeta) *
 	return &schemaStoreGCKeeper{
 		pdCli:          pdCli,
 		keyspaceMeta:   keyspaceMeta,
-		gcServiceIDTag: defaultSchemaStoreGcServiceID + gc.EnsureGCServiceInitializing,
+		gcServiceIDTag: defaultSchemaStoreGcServiceID + schemaStoreGCServiceKeeperTag,
 		gcServiceIDParts: common.NewChangeFeedIDWithName(
 			fmt.Sprintf("node_%s_keyspace_%d", sanitizeSchemaStoreNodeID(config.GetGlobalServerConfig().AdvertiseAddr), keyspaceMeta.ID),
 			keyspaceMeta.Name,
