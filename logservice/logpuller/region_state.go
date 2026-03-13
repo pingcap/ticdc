@@ -78,8 +78,8 @@ type regionErrorInfo struct {
 	err error
 }
 
-func newRegionErrorInfo(info regionInfo, err error) regionErrorInfo {
-	return regionErrorInfo{
+func newRegionErrorInfo(info regionInfo, err error) *regionErrorInfo {
+	return &regionErrorInfo{
 		regionInfo: info,
 		err:        err,
 	}
