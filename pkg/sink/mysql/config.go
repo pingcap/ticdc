@@ -178,7 +178,7 @@ func New() *Config {
 		HasVectorType:          defaultHasVectorType,
 		EnableDDLTs:            defaultEnableDDLTs,
 		SlowQuery:              slowQuery
-		whereClause:                   sqlmodel.DefaultWhereClause,
+		whereClause:            sqlmodel.DefaultWhereClause,
 	}
 }
 
