@@ -22,12 +22,12 @@ import (
 
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/cloudstorage/spool"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
-	commonType "github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	pmetrics "github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
-	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	"github.com/prometheus/client_golang/prometheus"
@@ -37,9 +37,10 @@ import (
 
 type writer struct {
 	shardID      int
-	changeFeedID commonType.ChangeFeedID
+	changeFeedID common.ChangeFeedID
 	storage      storage.ExternalStorage
 	config       *cloudstorage.Config
+	spool        *spool.Manager
 
 	toBeFlushedCh chan writerTask
 	inputCh       *chann.DrainableChann[*task]
@@ -63,17 +64,19 @@ type writerTask struct {
 
 func newWriter(
 	id int,
-	changefeedID commonType.ChangeFeedID,
+	changefeedID common.ChangeFeedID,
 	storage storage.ExternalStorage,
 	config *cloudstorage.Config,
 	extension string,
 	statistics *pmetrics.Statistics,
+	spoolManager *spool.Manager,
 ) *writer {
 	return &writer{
 		shardID:       id,
 		changeFeedID:  changefeedID,
 		storage:       storage,
 		config:        config,
+		spool:         spoolManager,
 		inputCh:       chann.NewAutoDrainChann[*task](),
 		toBeFlushedCh: make(chan writerTask, 64),
 		statistics:    statistics,
@@ -134,7 +137,7 @@ func (d *writer) flushMessages(ctx context.Context) error {
 
 			start := time.Now()
 			for table, singleTask := range task.batch.batch {
-				if len(singleTask.msgs) == 0 {
+				if len(singleTask.entries) == 0 {
 					continue
 				}
 
@@ -206,11 +209,47 @@ func (d *writer) writeIndexFile(ctx context.Context, path, content string) error
 	return nil
 }
 
-func (d *writer) ignoreTableTask(task *singleTableTask) {
-	for _, msg := range task.msgs {
-		if msg.Callback != nil {
-			msg.Callback()
+func runCallbacks(callbacks []func()) {
+	for _, callback := range callbacks {
+		if callback == nil {
+			continue
 		}
+		callback()
+	}
+}
+
+func (d *writer) releaseEntries(entries []*spool.Entry) {
+	for _, entry := range entries {
+		d.spool.Release(entry)
+	}
+}
+
+func (d *writer) appendEntryToBuffer(
+	buf *bytes.Buffer,
+	entry *spool.Entry,
+	rowsCnt *int,
+	bytesCnt *int64,
+) ([]func(), error) {
+	msgs, callbacks, err := d.spool.Load(entry)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, msg := range msgs {
+		if msg.Key != nil && *rowsCnt == 0 {
+			buf.Write(msg.Key)
+			*bytesCnt += int64(len(msg.Key))
+		}
+		*bytesCnt += int64(len(msg.Value))
+		*rowsCnt += msg.GetRowsCount()
+		buf.Write(msg.Value)
+	}
+	return callbacks, nil
+}
+
+func (d *writer) ignoreTableTask(task *singleTableTask) {
+	for _, entry := range task.entries {
+		d.spool.Discard(entry)
 	}
 }
 
@@ -220,15 +259,12 @@ func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath 
 	rowsCnt := 0
 	bytesCnt := int64(0)
 
-	for _, msg := range task.msgs {
-		if msg.Key != nil && rowsCnt == 0 {
-			buf.Write(msg.Key)
-			bytesCnt += int64(len(msg.Key))
+	for _, entry := range task.entries {
+		entryCallbacks, err := d.appendEntryToBuffer(buf, entry, &rowsCnt, &bytesCnt)
+		if err != nil {
+			return err
 		}
-		bytesCnt += int64(len(msg.Value))
-		rowsCnt += msg.GetRowsCount()
-		buf.Write(msg.Value)
-		callbacks = append(callbacks, msg.Callback)
+		callbacks = append(callbacks, entryCallbacks...)
 	}
 
 	if err := d.statistics.RecordBatchExecution(func() (int, int64, error) {
@@ -281,11 +317,8 @@ func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath 
 		return err
 	}
 
-	for _, cb := range callbacks {
-		if cb != nil {
-			cb()
-		}
-	}
+	runCallbacks(callbacks)
+	d.releaseEntries(task.entries)
 	return nil
 }
 
@@ -350,9 +383,16 @@ func (d *writer) genAndDispatchTask(ctx context.Context) error {
 				}
 				continue
 			}
+			if len(task.encodedMsgs) == 0 {
+				task.event.PostEnqueue()
+				continue
+			}
 
-			task.event.PostEnqueue()
-			batchedTask.handleSingleTableEvent(task)
+			spoolEntry, err := d.spool.Enqueue(task.encodedMsgs, task.event.PostEnqueue)
+			if err != nil {
+				return err
+			}
+			batchedTask.handleSingleTableEvent(task, spoolEntry)
 			table := task.versionedTable
 			if batchedTask.batch[table].size >= uint64(d.config.FileSize) {
 				taskByTable := batchedTask.detachTaskByTable(table)
@@ -362,7 +402,7 @@ func (d *writer) genAndDispatchTask(ctx context.Context) error {
 				case d.toBeFlushedCh <- writerTask{batch: taskByTable}:
 					log.Debug("flush task is emitted successfully when file size exceeds",
 						zap.Any("table", table),
-						zap.Int("eventsLength", len(taskByTable.batch[table].msgs)))
+						zap.Int("eventsLength", len(taskByTable.batch[table].entries)))
 				}
 			}
 		}
@@ -384,8 +424,8 @@ type batchedTask struct {
 
 type singleTableTask struct {
 	size      uint64
-	tableInfo *commonType.TableInfo
-	msgs      []*common.Message
+	tableInfo *common.TableInfo
+	entries   []*spool.Entry
 }
 
 func newBatchedTask() batchedTask {
@@ -394,7 +434,7 @@ func newBatchedTask() batchedTask {
 	}
 }
 
-func (t *batchedTask) handleSingleTableEvent(event *task) {
+func (t *batchedTask) handleSingleTableEvent(event *task, entry *spool.Entry) {
 	table := event.versionedTable
 	if _, ok := t.batch[table]; !ok {
 		t.batch[table] = &singleTableTask{
@@ -404,10 +444,8 @@ func (t *batchedTask) handleSingleTableEvent(event *task) {
 	}
 
 	tableTask := t.batch[table]
-	for _, msg := range event.encodedMsgs {
-		tableTask.size += uint64(len(msg.Value))
-	}
-	tableTask.msgs = append(tableTask.msgs, event.encodedMsgs...)
+	tableTask.size += entry.FileBytes()
+	tableTask.entries = append(tableTask.entries, entry)
 }
 
 func (t *batchedTask) detachTaskByTable(table cloudstorage.VersionedTableName) batchedTask {
@@ -422,7 +460,7 @@ func (t *batchedTask) detachTaskByTable(table cloudstorage.VersionedTableName) b
 	}
 }
 
-func (t *batchedTask) detachTaskByDispatcher(dispatcherID commonType.DispatcherID) batchedTask {
+func (t *batchedTask) detachTaskByDispatcher(dispatcherID common.DispatcherID) batchedTask {
 	batchByDispatcher := newBatchedTask()
 	for table, tableTask := range t.batch {
 		if table.DispatcherID != dispatcherID {

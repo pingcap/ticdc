@@ -17,6 +17,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/pingcap/ticdc/downstreamadapter/sink/cloudstorage/spool"
 	sinkmetrics "github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -41,6 +42,7 @@ type dmlWriters struct {
 	msgCh *chann.UnlimitedChannel[*task, any]
 
 	encodeGroup *encoderGroup
+	spool       *spool.Manager
 
 	writers []*writer
 	closed  atomic.Bool
@@ -53,17 +55,23 @@ func newDMLWriters(
 	encoderConfig *common.Config,
 	extension string,
 	statistics *metrics.Statistics,
-) *dmlWriters {
+) (*dmlWriters, error) {
 	messageCh := chann.NewUnlimitedChannelDefault[*task]()
 	encoderGroup := newEncoderGroup(
 		encoderConfig,
 		defaultEncodingConcurrency,
 		config.WorkerCount,
 	)
+	spoolManager, err := spool.New(changefeedID, &spool.Options{
+		QuotaBytes: config.SpoolDiskQuota,
+	})
+	if err != nil {
+		return nil, err
+	}
 
 	writers := make([]*writer, config.WorkerCount)
 	for i := 0; i < config.WorkerCount; i++ {
-		writers[i] = newWriter(i, changefeedID, storage, config, extension, statistics)
+		writers[i] = newWriter(i, changefeedID, storage, config, extension, statistics, spoolManager)
 	}
 
 	return &dmlWriters{
@@ -71,11 +79,15 @@ func newDMLWriters(
 		statistics:   statistics,
 		msgCh:        messageCh,
 		encodeGroup:  encoderGroup,
+		spool:        spoolManager,
 		writers:      writers,
-	}
+	}, nil
 }
 
 func (d *dmlWriters) run(ctx context.Context) error {
+	if d.spool != nil {
+		defer d.spool.Close()
+	}
 	g, ctx := errgroup.WithContext(ctx)
 
 	g.Go(func() error {

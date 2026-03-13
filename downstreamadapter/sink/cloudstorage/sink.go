@@ -118,7 +118,10 @@ func New(
 		return nil, err
 	}
 	statistics := metrics.NewStatistics(changefeedID, "cloudstorage")
-	dmlWriters := newDMLWriters(changefeedID, storage, cfg, encoderConfig, ext, statistics)
+	dmlWriters, err := newDMLWriters(changefeedID, storage, cfg, encoderConfig, ext, statistics)
+	if err != nil {
+		return nil, err
+	}
 	return &sink{
 		changefeedID:             changefeedID,
 		sinkURI:                  sinkURI,

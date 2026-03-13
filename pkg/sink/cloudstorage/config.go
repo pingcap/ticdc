@@ -15,7 +15,6 @@ package cloudstorage
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -25,7 +24,7 @@ import (
 	"github.com/imdario/mergo"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/config"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
 )
@@ -49,6 +48,8 @@ const (
 	maxFlushConcurrency = 512
 	// defaultFileSize is the default value of file-size.
 	defaultFileSize = 64 * 1024 * 1024
+	// defaultSpoolDiskQuota is the default value of spool-disk-quota.
+	defaultSpoolDiskQuota = int64(10 * 1024 * 1024 * 1024)
 	// the lower limit of file size
 	minFileSize = 1 * 1024
 	// the upper limit of file size
@@ -64,9 +65,10 @@ const (
 )
 
 type urlConfig struct {
-	WorkerCount   *int    `form:"worker-count"`
-	FlushInterval *string `form:"flush-interval"`
-	FileSize      *int    `form:"file-size"`
+	WorkerCount    *int    `form:"worker-count"`
+	FlushInterval  *string `form:"flush-interval"`
+	FileSize       *int    `form:"file-size"`
+	SpoolDiskQuota *int64  `form:"spool-disk-quota"`
 }
 
 // Config is the configuration for cloud storage sink.
@@ -82,6 +84,7 @@ type Config struct {
 	OutputColumnID           bool
 	FlushConcurrency         int
 	EnableTableAcrossNodes   bool
+	SpoolDiskQuota           int64
 }
 
 // NewConfig returns the default cloud storage sink config.
@@ -93,6 +96,7 @@ func NewConfig() *Config {
 		FileExpirationDays:     defaultFileExpirationDays,
 		FileCleanupCronSpec:    defaultFileCleanupCronSpec,
 		EnableTableAcrossNodes: defaultEnableTableAcrossNodes,
+		SpoolDiskQuota:         defaultSpoolDiskQuota,
 	}
 }
 
@@ -104,19 +108,19 @@ func (c *Config) Apply(
 	enableTableAcrossNodes bool,
 ) (err error) {
 	if sinkURI == nil {
-		return cerror.ErrStorageSinkInvalidConfig.GenWithStack(
+		return errors.ErrStorageSinkInvalidConfig.GenWithStack(
 			"failed to open cloud storage sink, empty SinkURI")
 	}
 
 	scheme := strings.ToLower(sinkURI.Scheme)
 	if !config.IsStorageScheme(scheme) {
-		return cerror.ErrStorageSinkInvalidConfig.GenWithStack(
+		return errors.ErrStorageSinkInvalidConfig.GenWithStack(
 			"can't create cloud storage sink with unsupported scheme: %s", scheme)
 	}
 	req := &http.Request{URL: sinkURI}
 	urlParameter := &urlConfig{}
 	if err := binding.Query.Bind(req, urlParameter); err != nil {
-		return cerror.WrapError(cerror.ErrStorageSinkInvalidConfig, err)
+		return errors.WrapError(errors.ErrStorageSinkInvalidConfig, err)
 	}
 	if urlParameter, err = mergeConfig(sinkConfig, urlParameter); err != nil {
 		return err
@@ -129,6 +133,10 @@ func (c *Config) Apply(
 		return err
 	}
 	err = getFileSize(urlParameter, &c.FileSize)
+	if err != nil {
+		return err
+	}
+	err = getSpoolDiskQuota(urlParameter, &c.SpoolDiskQuota)
 	if err != nil {
 		return err
 	}
@@ -164,12 +172,25 @@ func mergeConfig(
 ) (*urlConfig, error) {
 	dest := &urlConfig{}
 	if sinkConfig != nil && sinkConfig.CloudStorageConfig != nil {
-		dest.WorkerCount = sinkConfig.CloudStorageConfig.WorkerCount
-		dest.FlushInterval = sinkConfig.CloudStorageConfig.FlushInterval
-		dest.FileSize = sinkConfig.CloudStorageConfig.FileSize
+		if sinkConfig.CloudStorageConfig.WorkerCount != nil {
+			workerCount := *sinkConfig.CloudStorageConfig.WorkerCount
+			dest.WorkerCount = &workerCount
+		}
+		if sinkConfig.CloudStorageConfig.FlushInterval != nil {
+			flushInterval := *sinkConfig.CloudStorageConfig.FlushInterval
+			dest.FlushInterval = &flushInterval
+		}
+		if sinkConfig.CloudStorageConfig.FileSize != nil {
+			fileSize := *sinkConfig.CloudStorageConfig.FileSize
+			dest.FileSize = &fileSize
+		}
+		if sinkConfig.CloudStorageConfig.SpoolDiskQuota != nil {
+			spoolDiskQuota := *sinkConfig.CloudStorageConfig.SpoolDiskQuota
+			dest.SpoolDiskQuota = &spoolDiskQuota
+		}
 	}
 	if err := mergo.Merge(dest, urlParameters, mergo.WithOverride); err != nil {
-		return nil, cerror.WrapError(cerror.ErrStorageSinkInvalidConfig, err)
+		return nil, errors.WrapError(errors.ErrStorageSinkInvalidConfig, err)
 	}
 	return dest, nil
 }
@@ -181,8 +202,8 @@ func getWorkerCount(values *urlConfig, workerCount *int) error {
 
 	c := *values.WorkerCount
 	if c <= 0 {
-		return cerror.WrapError(cerror.ErrStorageSinkInvalidConfig,
-			fmt.Errorf("invalid worker-count %d, it must be greater than 0", c))
+		return errors.ErrStorageSinkInvalidConfig.GenWithStack(
+			"invalid worker-count %d, it must be greater than 0", c)
 	}
 	if c > maxWorkerCount {
 		log.Warn("worker-count is too large",
@@ -201,7 +222,7 @@ func getFlushInterval(values *urlConfig, flushInterval *time.Duration) error {
 
 	d, err := time.ParseDuration(*values.FlushInterval)
 	if err != nil {
-		return cerror.WrapError(cerror.ErrStorageSinkInvalidConfig, err)
+		return errors.WrapError(errors.ErrStorageSinkInvalidConfig, err)
 	}
 
 	if d > maxFlushInterval {
@@ -236,5 +257,20 @@ func getFileSize(values *urlConfig, fileSize *int) error {
 		sz = minFileSize
 	}
 	*fileSize = sz
+	return nil
+}
+
+func getSpoolDiskQuota(values *urlConfig, spoolDiskQuota *int64) error {
+	if values.SpoolDiskQuota == nil {
+		return nil
+	}
+
+	quota := *values.SpoolDiskQuota
+	if quota <= 0 {
+		return errors.ErrStorageSinkInvalidConfig.GenWithStack(
+			"invalid spool-disk-quota %d, it must be greater than 0", quota)
+	}
+
+	*spoolDiskQuota = quota
 	return nil
 }
