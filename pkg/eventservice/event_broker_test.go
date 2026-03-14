@@ -353,7 +353,7 @@ func TestCURDDispatcher(t *testing.T) {
 	cfStatus, ok = broker.changefeedMap.Load(dispInfo.GetChangefeedID())
 	require.True(t, ok, "changefeedStatus should still exist after resetting")
 	require.False(t, cfStatus.(*changefeedStatus).isEmpty(), "changefeedStatus should not be empty after resetting")
-	require.Equal(t, disp.startTs, dispInfo.GetStartTs())
+	require.Equal(t, disp.checkpointTs.Load(), dispInfo.GetStartTs())
 
 	// Case 3: Remove a dispatcher.
 	broker.removeDispatcher(dispInfo)
@@ -382,7 +382,7 @@ func TestResetDispatcher(t *testing.T) {
 	require.NotNil(t, dispPtr)
 	oldStat := dispPtr.Load()
 	require.Equal(t, uint64(0), oldStat.epoch)
-	require.Equal(t, dispInfo.startTs, oldStat.startTs)
+	require.Equal(t, dispInfo.startTs, oldStat.checkpointTs.Load())
 
 	// 3. Reset with a stale epoch.
 	staleDispInfo := newMockDispatcherInfo(t, 400, dispInfo.GetID(), 100, eventpb.ActionType_ACTION_TYPE_RESET)
@@ -409,7 +409,7 @@ func TestResetDispatcher(t *testing.T) {
 	require.True(t, oldStat.isRemoved.Load(), "old dispatcherStat should be marked as removed")
 
 	require.Equal(t, uint64(1), newStat.epoch)
-	require.Equal(t, uint64(500), newStat.startTs)
+	require.Equal(t, uint64(500), newStat.checkpointTs.Load())
 	require.Equal(t, dispInfo.GetID(), newStat.id)
 }
 
@@ -439,7 +439,6 @@ func TestResetDispatcherUsesCheckpointAsNewLowerBound(t *testing.T) {
 
 	newStat := dispPtr.Load()
 	require.NotSame(t, oldStat, newStat)
-	require.Equal(t, uint64(620), newStat.startTs)
 	require.Equal(t, uint64(620), newStat.checkpointTs.Load())
 	require.Equal(t, uint64(620), newStat.sentResolvedTs.Load())
 	require.Equal(t, uint64(620), newStat.lastScannedCommitTs.Load())
@@ -483,7 +482,7 @@ func TestResetDispatcherConcurrently(t *testing.T) {
 	// 5. Verify the final state has the max epoch.
 	finalStat := dispPtr.Load()
 	require.Equal(t, maxEpoch, finalStat.epoch, "the final epoch should be the maximum one")
-	require.Equal(t, 500+maxEpoch, finalStat.startTs, "the final startTs should correspond to the max epoch")
+	require.Equal(t, 500+maxEpoch, finalStat.checkpointTs.Load(), "the final checkpointTs should correspond to the max epoch")
 }
 
 func TestHandleResolvedTs(t *testing.T) {
@@ -714,6 +713,102 @@ func TestSendHandshakeIfNeedConcurrency(t *testing.T) {
 		require.Equal(t, 1, handshakeCount, "Expected exactly 1 handshake event")
 		require.True(t, disp.isHandshaked(), "Dispatcher should be marked as handshaked")
 	})
+}
+
+func TestSendHandshakeIfNeedUsesCheckpointTs(t *testing.T) {
+	broker, _, _, outputCh := newEventBrokerForTest()
+	defer broker.close()
+
+	info := newMockDispatcherInfoForTest(t)
+	changefeedStatus := broker.getOrSetChangefeedStatus(info.GetChangefeedID(), info.GetSyncPointInterval())
+	disp := newDispatcherStat(info, 1, 1, nil, changefeedStatus)
+	disp.epoch = 1
+	disp.checkpointTs.Store(180)
+
+	broker.sendHandshakeIfNeed(disp)
+
+	select {
+	case msg := <-outputCh:
+		handshake, ok := msg.Message[0].(*event.HandshakeEvent)
+		require.True(t, ok)
+		require.Equal(t, uint64(180), handshake.GetStartTs())
+	case <-time.After(time.Second):
+		require.Fail(t, "expected handshake event")
+	}
+}
+
+func TestResetAfterCheckpointAdvanceUsesCheckpointForHandshakeAndScan(t *testing.T) {
+	broker, _, _, outputCh := newEventBrokerForTest()
+	defer broker.close()
+
+	dispInfo := newMockDispatcherInfoForTest(t)
+	err := broker.addDispatcher(dispInfo)
+	require.NoError(t, err)
+
+	dispPtr := broker.getDispatcher(dispInfo.GetID())
+	require.NotNil(t, dispPtr)
+
+	firstResetTs := uint64(464848549221499060)
+	firstResetInfo := newMockDispatcherInfo(t, firstResetTs, dispInfo.GetID(), 100, eventpb.ActionType_ACTION_TYPE_RESET)
+	firstResetInfo.epoch = 1
+	err = broker.resetDispatcher(firstResetInfo)
+	require.NoError(t, err)
+
+	statAfterFirstReset := dispPtr.Load()
+	require.Equal(t, firstResetTs, statAfterFirstReset.checkpointTs.Load())
+
+	advancedCheckpointTs := uint64(464848549247713353)
+	broker.handleDispatcherHeartbeat(&DispatcherHeartBeatWithServerID{
+		serverID: "test-server",
+		heartbeat: &event.DispatcherHeartbeat{
+			Version:         event.DispatcherHeartbeatVersion1,
+			ClusterID:       0,
+			DispatcherCount: 1,
+			DispatcherProgresses: []event.DispatcherProgress{
+				{
+					DispatcherID: dispInfo.GetID(),
+					CheckpointTs: advancedCheckpointTs,
+				},
+			},
+		},
+	})
+
+	statAfterHeartbeat := dispPtr.Load()
+	require.Equal(t, advancedCheckpointTs, statAfterHeartbeat.checkpointTs.Load())
+
+	secondResetTs := advancedCheckpointTs - 1
+	secondResetInfo := newMockDispatcherInfo(t, secondResetTs, dispInfo.GetID(), 100, eventpb.ActionType_ACTION_TYPE_RESET)
+	secondResetInfo.epoch = 2
+	err = broker.resetDispatcher(secondResetInfo)
+	require.NoError(t, err)
+
+	statAfterSecondReset := dispPtr.Load()
+	require.Equal(t, advancedCheckpointTs, statAfterSecondReset.checkpointTs.Load())
+	require.Equal(t, advancedCheckpointTs, statAfterSecondReset.sentResolvedTs.Load())
+	require.Equal(t, advancedCheckpointTs, statAfterSecondReset.lastScannedCommitTs.Load())
+
+	for len(outputCh) > 0 {
+		<-outputCh
+	}
+
+	broker.sendHandshakeIfNeed(statAfterSecondReset)
+
+	select {
+	case msg := <-outputCh:
+		handshake, ok := msg.Message[0].(*event.HandshakeEvent)
+		require.True(t, ok)
+		require.Equal(t, advancedCheckpointTs, handshake.GetStartTs())
+	case <-time.After(time.Second):
+		require.Fail(t, "expected handshake event")
+	}
+
+	updated := statAfterSecondReset.onResolvedTs(advancedCheckpointTs + 100)
+	require.True(t, updated)
+
+	dataRange, ok := statAfterSecondReset.getDataRange()
+	require.True(t, ok)
+	require.Equal(t, advancedCheckpointTs, dataRange.CommitTsStart)
+	require.Equal(t, advancedCheckpointTs+100, dataRange.CommitTsEnd)
 }
 
 func TestAddDispatcherFailure(t *testing.T) {

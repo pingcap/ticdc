@@ -49,7 +49,6 @@ func TestNewDispatcherStat(t *testing.T) {
 	require.Equal(t, info.GetID(), stat.id)
 	require.Equal(t, 0, stat.scanWorkerIndex)
 	require.Equal(t, 0, stat.messageWorkerIndex)
-	require.Equal(t, startTs, stat.startTs)
 	require.Equal(t, uint64(0), stat.epoch)
 	require.True(t, stat.enableSyncPoint)
 	require.Equal(t, info.nextSyncPoint, stat.nextSyncPoint.Load())
@@ -57,6 +56,7 @@ func TestNewDispatcherStat(t *testing.T) {
 	require.Equal(t, startTs, stat.receivedResolvedTs.Load())
 	require.Equal(t, startTs, stat.checkpointTs.Load())
 	require.Equal(t, startTs, stat.sentResolvedTs.Load())
+	require.Equal(t, startTs, stat.lastScannedCommitTs.Load())
 }
 
 func TestDispatcherStatResolvedTs(t *testing.T) {

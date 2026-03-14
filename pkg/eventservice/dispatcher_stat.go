@@ -51,8 +51,7 @@ type dispatcherStat struct {
 	messageWorkerIndex int
 	info               DispatcherInfo
 	filter             filter.Filter
-	// the start ts of the dispatcher
-	startTs uint64
+
 	// startTableInfo is the table info at the `startTs` of the dispatcher
 	startTableInfo *common.TableInfo
 	// The epoch of the dispatcher.
@@ -146,7 +145,6 @@ func newDispatcherStat(
 		messageWorkerIndex: (common.GID)(id).Hash(messageWorkerCount),
 		info:               info,
 		filter:             info.GetFilter(),
-		startTs:            info.GetStartTs(),
 		epoch:              info.GetEpoch(),
 		startTableInfo:     startTableInfo,
 		txnAtomicity:       info.GetTxnAtomicity(),
@@ -163,12 +161,7 @@ func newDispatcherStat(
 	}
 	startTs := info.GetStartTs()
 	dispStat.receivedResolvedTs.Store(startTs)
-	dispStat.checkpointTs.Store(startTs)
-
-	dispStat.sentResolvedTs.Store(startTs)
-
-	dispStat.lastScannedCommitTs.Store(startTs)
-	dispStat.lastScannedStartTs.Store(0)
+	dispStat.resetLowerBound(startTs)
 	dispStat.lastReadySendTime.Store(0)
 	dispStat.readyInterval.Store(1)
 	dispStat.resetScanLimit()
@@ -212,6 +205,13 @@ func (a *dispatcherStat) updateSentResolvedTs(resolvedTs uint64) {
 func (a *dispatcherStat) updateScanRange(txnCommitTs, txnStartTs uint64) {
 	a.lastScannedCommitTs.Store(txnCommitTs)
 	a.lastScannedStartTs.Store(txnStartTs)
+}
+
+func (a *dispatcherStat) resetLowerBound(checkpointTs uint64) {
+	a.checkpointTs.Store(checkpointTs)
+	a.sentResolvedTs.Store(checkpointTs)
+	a.lastScannedCommitTs.Store(checkpointTs)
+	a.lastScannedStartTs.Store(0)
 }
 
 // onResolvedTs try to update the resolved ts of the dispatcher.
