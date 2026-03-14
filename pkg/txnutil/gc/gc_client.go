@@ -15,13 +15,11 @@ package gc
 
 import (
 	"context"
-
-	pdgc "github.com/tikv/pd/client/clients/gc"
 )
 
 // GCServiceClient is the subset of PD GC APIs TiCDC needs to maintain
-// service safepoints / keyspace barriers.
+// service safepoints on both classic and next-gen kernels.
 type GCServiceClient interface {
 	UpdateServiceGCSafePoint(ctx context.Context, serviceID string, ttl int64, safePoint uint64) (uint64, error)
-	GetGCStatesClient(keyspaceID uint32) pdgc.GCStatesClient
+	UpdateServiceSafePointV2(ctx context.Context, keyspaceID uint32, serviceID string, ttl int64, safePoint uint64) (uint64, error)
 }

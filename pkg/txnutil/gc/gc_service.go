@@ -19,13 +19,9 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/retry"
-<<<<<<< HEAD
-	pd "github.com/tikv/pd/client"
-=======
-	pdgc "github.com/tikv/pd/client/clients/gc"
->>>>>>> 1154cb310 (schemastore: maintain GC barrier for schema store (#4456))
 	"go.uber.org/zap"
 )
 
@@ -48,7 +44,10 @@ func EnsureChangefeedStartTsSafety(
 	TTL int64, startTs uint64,
 ) error {
 	gcServiceID := gcServiceIDPrefix + changefeedID.Keyspace() + "_" + changefeedID.Name()
-	return ensureChangefeedStartTsSafetyClassic(ctx, pdCli, gcServiceID, TTL, startTs)
+	if kerneltype.IsClassic() {
+		return ensureChangefeedStartTsSafetyClassic(ctx, pdCli, gcServiceID, TTL, startTs)
+	}
+	return ensureChangefeedStartTsSafetyNextGen(ctx, pdCli, gcServiceID, keyspaceID, TTL, startTs)
 }
 
 func ensureChangefeedStartTsSafetyClassic(ctx context.Context, pdCli GCServiceClient, gcServiceID string, ttl int64, startTs uint64) error {
@@ -72,18 +71,25 @@ func ensureChangefeedStartTsSafetyClassic(ctx context.Context, pdCli GCServiceCl
 	return nil
 }
 
-<<<<<<< HEAD
-=======
-func ensureChangefeedStartTsSafetyNextGen(ctx context.Context, pdCli GCServiceClient, gcServiceID string, keyspaceID uint32, ttl int64, startTs uint64) error {
-	gcCli := pdCli.GetGCStatesClient(keyspaceID)
-	_, err := SetGCBarrier(ctx, gcCli, gcServiceID, startTs, time.Duration(ttl)*time.Second)
+func ensureChangefeedStartTsSafetyNextGen(
+	ctx context.Context, pdCli GCServiceClient, gcServiceID string, keyspaceID uint32, ttl int64, startTs uint64,
+) error {
+	minServiceGCTs, err := setServiceGCSafepointV2(ctx, pdCli, keyspaceID, gcServiceID, ttl, startTs)
 	if err != nil {
-		return errors.ErrStartTsBeforeGC.GenWithStackByArgs(startTs)
+		return errors.Trace(err)
+	}
+	log.Info("set gc safepoint for changefeed",
+		zap.String("gcServiceID", gcServiceID),
+		zap.Uint64("expectedGCSafepoint", startTs),
+		zap.Uint64("actualGCSafepoint", minServiceGCTs),
+		zap.Int64("ttl", ttl))
+
+	if startTs > 0 && startTs < minServiceGCTs+1 {
+		return errors.ErrStartTsBeforeGC.GenWithStackByArgs(startTs, minServiceGCTs)
 	}
 	return nil
 }
 
->>>>>>> 1154cb310 (schemastore: maintain GC barrier for schema store (#4456))
 // UndoEnsureChangefeedStartTsSafety cleans the service GC safepoint of a changefeed
 // if something goes wrong after successfully calling EnsureChangefeedStartTsSafety().
 func UndoEnsureChangefeedStartTsSafety(
@@ -129,24 +135,31 @@ func SetServiceGCSafepoint(
 	return minServiceGCTs, err
 }
 
+func setServiceGCSafepointV2(
+	ctx context.Context, pdCli GCServiceClient, keyspaceID uint32, serviceID string, ttl int64, safePoint uint64,
+) (minServiceGCTs uint64, err error) {
+	err = retry.Do(ctx,
+		func() error {
+			var err1 error
+			minServiceGCTs, err1 = pdCli.UpdateServiceSafePointV2(ctx, keyspaceID, serviceID, ttl, safePoint)
+			if err1 != nil {
+				log.Warn("Set GC safepoint v2 failed, retry later", zap.Error(err1))
+			}
+			return err1
+		},
+		retry.WithBackoffBaseDelay(gcServiceBackoffDelay),
+		retry.WithMaxTries(gcServiceMaxRetries),
+		retry.WithIsRetryableErr(errors.IsRetryableError))
+	return minServiceGCTs, err
+}
+
 // UnifyGetServiceGCSafepoint returns a service gc safepoint on classic mode or
 // a gc barrier on next-gen mode
-<<<<<<< HEAD
-func UnifyGetServiceGCSafepoint(ctx context.Context, pdCli pd.Client, keyspaceID uint32, serviceID string) (uint64, error) {
-	return SetServiceGCSafepoint(ctx, pdCli, serviceID, 0, 0)
-=======
 func UnifyGetServiceGCSafepoint(ctx context.Context, pdCli GCServiceClient, keyspaceID uint32, serviceID string) (uint64, error) {
 	if kerneltype.IsClassic() {
 		return SetServiceGCSafepoint(ctx, pdCli, serviceID, 0, 0)
 	}
-
-	gcCli := pdCli.GetGCStatesClient(keyspaceID)
-	gcState, err := getGCState(ctx, gcCli)
-	if err != nil {
-		return 0, errors.WrapError(errors.ErrGetGCBarrierFailed, err)
-	}
-	return gcState.TxnSafePoint, nil
->>>>>>> 1154cb310 (schemastore: maintain GC barrier for schema store (#4456))
+	return setServiceGCSafepointV2(ctx, pdCli, keyspaceID, serviceID, 0, 0)
 }
 
 // removeServiceGCSafepoint removes a service safepoint from PD.
@@ -166,46 +179,19 @@ func removeServiceGCSafepoint(ctx context.Context, pdCli GCServiceClient, servic
 		retry.WithIsRetryableErr(errors.IsRetryableError))
 }
 
-<<<<<<< HEAD
-// UnifyDeleteGcSafepoint delete a gc safepoint on classic mode or delete a gc
-// barrier on next-gen mode
-func UnifyDeleteGcSafepoint(ctx context.Context, pdCli pd.Client, keyspaceID uint32, serviceID string) error {
-	return removeServiceGCSafepoint(ctx, pdCli, serviceID)
-=======
-// SetGCBarrier Set a GC Barrier of a keyspace
-func SetGCBarrier(ctx context.Context, gcCli pdgc.GCStatesClient, serviceID string, ts uint64, ttl time.Duration) (barrierTS uint64, err error) {
-	err = retry.Do(ctx, func() error {
-		barrierInfo, err1 := gcCli.SetGCBarrier(ctx, serviceID, ts, ttl)
-		if err1 != nil {
-			log.Warn("Set GC barrier failed, retry later", zap.Any("barrierInfo", barrierInfo), zap.Error(err1))
-			return err1
-		}
-		barrierTS = barrierInfo.BarrierTS
-		return nil
-	}, retry.WithBackoffBaseDelay(gcServiceBackoffDelay),
+func removeServiceGCSafepointV2(ctx context.Context, pdCli GCServiceClient, keyspaceID uint32, serviceID string) error {
+	ttl := int64(0)
+	return retry.Do(ctx,
+		func() error {
+			_, err := pdCli.UpdateServiceSafePointV2(ctx, keyspaceID, serviceID, ttl, math.MaxUint64)
+			if err != nil {
+				log.Warn("Remove GC safepoint v2 failed, retry later", zap.Error(err))
+			}
+			return err
+		},
+		retry.WithBackoffBaseDelay(gcServiceBackoffDelay),
 		retry.WithMaxTries(gcServiceMaxRetries),
 		retry.WithIsRetryableErr(errors.IsRetryableError))
-	return barrierTS, err
-}
-
-func getGCState(ctx context.Context, gcCli pdgc.GCStatesClient) (pdgc.GCState, error) {
-	return gcCli.GetGCState(ctx)
-}
-
-// DeleteGCBarrier Delete a GC barrier of a keyspace
-func DeleteGCBarrier(ctx context.Context, gcCli pdgc.GCStatesClient, serviceID string) (barrierInfo *pdgc.GCBarrierInfo, err error) {
-	err = retry.Do(ctx, func() error {
-		info, err1 := gcCli.DeleteGCBarrier(ctx, serviceID)
-		if err1 != nil {
-			log.Warn("Delete GC barrier failed, retry later", zap.String("serviceID", serviceID))
-			return err1
-		}
-		barrierInfo = info
-		return nil
-	}, retry.WithBackoffBaseDelay(gcServiceBackoffDelay),
-		retry.WithMaxTries(gcServiceMaxRetries),
-		retry.WithIsRetryableErr(errors.IsRetryableError))
-	return barrierInfo, err
 }
 
 // UnifyDeleteGcSafepoint delete a gc safepoint on classic mode or delete a gc
@@ -214,9 +200,5 @@ func UnifyDeleteGcSafepoint(ctx context.Context, pdCli GCServiceClient, keyspace
 	if kerneltype.IsClassic() {
 		return removeServiceGCSafepoint(ctx, pdCli, serviceID)
 	}
-
-	gcClient := pdCli.GetGCStatesClient(keyspaceID)
-	_, err := DeleteGCBarrier(ctx, gcClient, serviceID)
-	return err
->>>>>>> 1154cb310 (schemastore: maintain GC barrier for schema store (#4456))
+	return removeServiceGCSafepointV2(ctx, pdCli, keyspaceID, serviceID)
 }

@@ -17,16 +17,13 @@ import (
 	"context"
 	"math"
 	"testing"
-	"time"
 
 	"github.com/golang/mock/gomock"
-	"github.com/pingcap/errors"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
 	"github.com/stretchr/testify/require"
-	pdgc "github.com/tikv/pd/client/clients/gc"
 )
 
 func TestSchemaStoreGCKeeperLifecycle(t *testing.T) {
@@ -54,7 +51,7 @@ func TestSchemaStoreGCKeeperLifecycle(t *testing.T) {
 		require.Equal(t, uint64(math.MaxUint64), state.serviceSafePoint[serviceID])
 		return
 	}
-	_, ok := state.gcBarriers[serviceID]
+	_, ok := state.serviceSafePointV2[serviceID]
 	require.False(t, ok)
 }
 
@@ -82,7 +79,7 @@ func TestCloseSchemaStoreGCKeeperUsesFreshContext(t *testing.T) {
 		require.Equal(t, uint64(math.MaxUint64), state.serviceSafePoint[serviceID])
 		return
 	}
-	_, ok := state.gcBarriers[serviceID]
+	_, ok := state.serviceSafePointV2[serviceID]
 	require.False(t, ok)
 }
 
@@ -137,13 +134,12 @@ func assertSchemaStoreBarrierTS(t *testing.T, state *schemaStoreGCMockState, ser
 		require.Equal(t, expected, state.serviceSafePoint[serviceID])
 		return
 	}
-	require.Equal(t, expected, state.gcBarriers[serviceID])
+	require.Equal(t, expected, state.serviceSafePointV2[serviceID])
 }
 
 type schemaStoreGCMockState struct {
-	serviceSafePoint map[string]uint64
-	gcBarriers       map[string]uint64
-	txnSafePoint     uint64
+	serviceSafePoint   map[string]uint64
+	serviceSafePointV2 map[string]uint64
 }
 
 func newMockGCServiceClientForSchemaStoreGC(t *testing.T) (*gc.MockGCServiceClient, *schemaStoreGCMockState) {
@@ -151,12 +147,10 @@ func newMockGCServiceClientForSchemaStoreGC(t *testing.T) (*gc.MockGCServiceClie
 
 	ctrl := gomock.NewController(t)
 	state := &schemaStoreGCMockState{
-		serviceSafePoint: make(map[string]uint64),
-		gcBarriers:       make(map[string]uint64),
-		txnSafePoint:     100,
+		serviceSafePoint:   make(map[string]uint64),
+		serviceSafePointV2: make(map[string]uint64),
 	}
 	pdCli := gc.NewMockGCServiceClient(ctrl)
-	gcStatesCli := &mockSchemaStoreGCStatesClient{state: state}
 
 	pdCli.EXPECT().
 		UpdateServiceGCSafePoint(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
@@ -179,54 +173,34 @@ func newMockGCServiceClientForSchemaStoreGC(t *testing.T) (*gc.MockGCServiceClie
 		AnyTimes()
 
 	pdCli.EXPECT().
-		GetGCStatesClient(gomock.Any()).
-		Return(gcStatesCli).
+		UpdateServiceSafePointV2(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		DoAndReturn(func(ctx context.Context, keyspaceID uint32, serviceID string, ttl int64, safePoint uint64) (uint64, error) {
+			if err := ctx.Err(); err != nil {
+				return 0, err
+			}
+			if ttl == 0 {
+				delete(state.serviceSafePointV2, serviceID)
+				minSafePoint := uint64(math.MaxUint64)
+				for _, ts := range state.serviceSafePointV2 {
+					if ts < minSafePoint {
+						minSafePoint = ts
+					}
+				}
+				return minSafePoint, nil
+			}
+			minSafePoint := uint64(math.MaxUint64)
+			for _, ts := range state.serviceSafePointV2 {
+				if ts < minSafePoint {
+					minSafePoint = ts
+				}
+			}
+			if len(state.serviceSafePointV2) != 0 && safePoint < minSafePoint {
+				return minSafePoint, nil
+			}
+			state.serviceSafePointV2[serviceID] = safePoint
+			return minSafePoint, nil
+		}).
 		AnyTimes()
 
 	return pdCli, state
-}
-
-type mockSchemaStoreGCStatesClient struct {
-	state *schemaStoreGCMockState
-}
-
-func (m *mockSchemaStoreGCStatesClient) SetGCBarrier(
-	ctx context.Context, barrierID string, barrierTS uint64, ttl time.Duration,
-) (*pdgc.GCBarrierInfo, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	if barrierTS < m.state.txnSafePoint {
-		return nil, errors.New("ErrGCBarrierTSBehindTxnSafePoint")
-	}
-	m.state.gcBarriers[barrierID] = barrierTS
-	return pdgc.NewGCBarrierInfo(barrierID, barrierTS, ttl, time.Now()), nil
-}
-
-func (m *mockSchemaStoreGCStatesClient) DeleteGCBarrier(
-	ctx context.Context, barrierID string,
-) (*pdgc.GCBarrierInfo, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	barrierTS, ok := m.state.gcBarriers[barrierID]
-	if !ok {
-		return nil, nil
-	}
-	delete(m.state.gcBarriers, barrierID)
-	return pdgc.NewGCBarrierInfo(barrierID, barrierTS, 0, time.Now()), nil
-}
-
-func (m *mockSchemaStoreGCStatesClient) GetGCState(ctx context.Context) (pdgc.GCState, error) {
-	if err := ctx.Err(); err != nil {
-		return pdgc.GCState{}, err
-	}
-	gcBarriers := make([]*pdgc.GCBarrierInfo, 0, len(m.state.gcBarriers))
-	for id, ts := range m.state.gcBarriers {
-		gcBarriers = append(gcBarriers, pdgc.NewGCBarrierInfo(id, ts, 0, time.Now()))
-	}
-	return pdgc.GCState{
-		TxnSafePoint: m.state.txnSafePoint,
-		GCBarriers:   gcBarriers,
-	}, nil
 }

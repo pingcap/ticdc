@@ -9,7 +9,6 @@ import (
 	reflect "reflect"
 
 	gomock "github.com/golang/mock/gomock"
-	gc "github.com/tikv/pd/client/clients/gc"
 )
 
 // MockGCServiceClient is a mock of GCServiceClient interface.
@@ -35,20 +34,6 @@ func (m *MockGCServiceClient) EXPECT() *MockGCServiceClientMockRecorder {
 	return m.recorder
 }
 
-// GetGCStatesClient mocks base method.
-func (m *MockGCServiceClient) GetGCStatesClient(keyspaceID uint32) gc.GCStatesClient {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetGCStatesClient", keyspaceID)
-	ret0, _ := ret[0].(gc.GCStatesClient)
-	return ret0
-}
-
-// GetGCStatesClient indicates an expected call of GetGCStatesClient.
-func (mr *MockGCServiceClientMockRecorder) GetGCStatesClient(keyspaceID interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetGCStatesClient", reflect.TypeOf((*MockGCServiceClient)(nil).GetGCStatesClient), keyspaceID)
-}
-
 // UpdateServiceGCSafePoint mocks base method.
 func (m *MockGCServiceClient) UpdateServiceGCSafePoint(ctx context.Context, serviceID string, ttl int64, safePoint uint64) (uint64, error) {
 	m.ctrl.T.Helper()
@@ -62,4 +47,19 @@ func (m *MockGCServiceClient) UpdateServiceGCSafePoint(ctx context.Context, serv
 func (mr *MockGCServiceClientMockRecorder) UpdateServiceGCSafePoint(ctx, serviceID, ttl, safePoint interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateServiceGCSafePoint", reflect.TypeOf((*MockGCServiceClient)(nil).UpdateServiceGCSafePoint), ctx, serviceID, ttl, safePoint)
+}
+
+// UpdateServiceSafePointV2 mocks base method.
+func (m *MockGCServiceClient) UpdateServiceSafePointV2(ctx context.Context, keyspaceID uint32, serviceID string, ttl int64, safePoint uint64) (uint64, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "UpdateServiceSafePointV2", ctx, keyspaceID, serviceID, ttl, safePoint)
+	ret0, _ := ret[0].(uint64)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// UpdateServiceSafePointV2 indicates an expected call of UpdateServiceSafePointV2.
+func (mr *MockGCServiceClientMockRecorder) UpdateServiceSafePointV2(ctx, keyspaceID, serviceID, ttl, safePoint interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateServiceSafePointV2", reflect.TypeOf((*MockGCServiceClient)(nil).UpdateServiceSafePointV2), ctx, keyspaceID, serviceID, ttl, safePoint)
 }
