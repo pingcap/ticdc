@@ -233,3 +233,43 @@ func TestRemoveLastDispatcher(t *testing.T) {
 	_, ok = c.changefeedMap.Load(cfID2.ID())
 	require.True(t, ok, "changefeedStat for cfID2 should not be affected")
 }
+
+func TestHeartbeatRemovedTriggersReregisterAndReset(t *testing.T) {
+	localServerID := node.ID("local-server")
+	c := newTestEventCollector(localServerID)
+
+	dispatcherID := common.NewDispatcherID()
+	mockDisp := newMockDispatcher(dispatcherID, 100)
+	stat := newDispatcherStat(mockDisp, c, nil)
+	stat.connState.setReady(localServerID)
+	c.dispatcherMap.Store(dispatcherID, stat)
+
+	response := commonEvent.NewDispatcherHeartbeatResponse()
+	response.Append(commonEvent.NewDispatcherState(dispatcherID, commonEvent.DSStateRemoved))
+	c.handleDispatcherHeartbeatResponse(&messaging.TargetMessage{
+		From:    localServerID,
+		Type:    messaging.TypeDispatcherHeartbeatResponse,
+		Message: []messaging.IOTypeT{response},
+	})
+
+	msg := <-c.dispatcherMessageChan.Out()
+	req, ok := msg.Message.Message[0].(*messaging.DispatcherRequest)
+	require.True(t, ok)
+	require.Equal(t, eventpb.ActionType_ACTION_TYPE_REGISTER, req.ActionType)
+	require.Equal(t, localServerID, msg.Message.To)
+	require.False(t, stat.connState.readyEventReceived.Load())
+
+	stat.handleSignalEvent(dispatcher.DispatcherEvent{
+		From: &localServerID,
+		Event: &mockEvent{
+			eventType: commonEvent.TypeReadyEvent,
+		},
+	})
+
+	msg = <-c.dispatcherMessageChan.Out()
+	req, ok = msg.Message.Message[0].(*messaging.DispatcherRequest)
+	require.True(t, ok)
+	require.Equal(t, eventpb.ActionType_ACTION_TYPE_RESET, req.ActionType)
+	require.Equal(t, localServerID, msg.Message.To)
+	require.True(t, stat.connState.readyEventReceived.Load())
+}

@@ -518,10 +518,10 @@ func TestHandleSignalEvent(t *testing.T) {
 				},
 			},
 			initialState: func(stat *dispatcherStat) {
-				stat.connState.setEventServiceID(localServerID)
+				stat.connState.setReady(localServerID)
 			},
 			expectedEventServiceID: localServerID,
-			expectedReadyReceived:  false,
+			expectedReadyReceived:  true,
 		},
 		{
 			name: "ignore signal event from unknown server",
@@ -566,6 +566,20 @@ func TestHandleSignalEvent(t *testing.T) {
 			expectedReadyReceived:  true,
 		},
 		{
+			name: "handle ready event from local server while waiting re-register",
+			event: dispatcher.DispatcherEvent{
+				From: &localServerID,
+				Event: &mockEvent{
+					eventType: commonEvent.TypeReadyEvent,
+				},
+			},
+			initialState: func(stat *dispatcherStat) {
+				stat.connState.setWaitingReady(localServerID)
+			},
+			expectedEventServiceID: localServerID,
+			expectedReadyReceived:  true,
+		},
+		{
 			name: "handle ready event from remote server",
 			event: dispatcher.DispatcherEvent{
 				From: &remoteServerID,
@@ -588,8 +602,8 @@ func TestHandleSignalEvent(t *testing.T) {
 				},
 			},
 			initialState: func(stat *dispatcherStat) {
-				stat.connState.setEventServiceID(remoteServerID)
-				stat.connState.readyEventReceived.Store(true)
+				stat.connState.setReady(remoteServerID)
+				stat.lastEventSeq.Store(1)
 			},
 			expectedEventServiceID: remoteServerID,
 			expectedReadyReceived:  true,
@@ -603,7 +617,7 @@ func TestHandleSignalEvent(t *testing.T) {
 				},
 			},
 			initialState: func(stat *dispatcherStat) {
-				stat.connState.setEventServiceID(remoteServerID)
+				stat.connState.setWaitingReady(remoteServerID)
 				stat.connState.remoteCandidates = []string{anotherRemoteServerID.String()}
 			},
 			expectedEventServiceID: anotherRemoteServerID,
@@ -659,6 +673,30 @@ func TestHandleSignalEvent(t *testing.T) {
 			require.Equal(t, tt.expectedReadyReceived, stat.connState.readyEventReceived.Load())
 		})
 	}
+}
+
+func TestRepeatedReadyResendsResetBeforeHandshake(t *testing.T) {
+	localServerID := node.ID("local-server")
+	remoteServerID := node.ID("remote-server")
+
+	mockDisp := newMockDispatcher(common.NewDispatcherID(), 123)
+	mockEventCollector := newTestEventCollector(localServerID)
+	stat := newDispatcherStat(mockDisp, mockEventCollector, nil)
+	stat.connState.setReady(remoteServerID)
+
+	stat.handleSignalEvent(dispatcher.DispatcherEvent{
+		From: &remoteServerID,
+		Event: &mockEvent{
+			eventType: commonEvent.TypeReadyEvent,
+		},
+	})
+
+	msg := <-mockEventCollector.dispatcherMessageChan.Out()
+	req, ok := msg.Message.Message[0].(*messaging.DispatcherRequest)
+	require.True(t, ok)
+	require.Equal(t, eventpb.ActionType_ACTION_TYPE_RESET, req.ActionType)
+	require.Equal(t, remoteServerID, msg.Message.To)
+	require.Equal(t, uint64(1), req.Epoch)
 }
 
 func TestIsFromCurrentEpoch(t *testing.T) {
