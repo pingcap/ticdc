@@ -536,7 +536,7 @@ func (c *eventBroker) sendHandshakeIfNeed(task scanTask) {
 	}
 
 	remoteID := node.ID(task.info.GetServerID())
-	event := event.NewHandshakeEvent(task.id, task.startTs, task.epoch, task.startTableInfo)
+	event := event.NewHandshakeEvent(task.id, task.checkpointTs.Load(), task.epoch, task.startTableInfo)
 	log.Info("send handshake event to dispatcher",
 		zap.Stringer("changefeedID", task.changefeedStat.changefeedID),
 		zap.Stringer("dispatcherID", task.id),
@@ -1132,6 +1132,8 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 	if oldStat.epoch >= dispatcherInfo.GetEpoch() {
 		return nil
 	}
+	oldCheckpointTs := oldStat.checkpointTs.Load()
+	newCheckpointTs := max(dispatcherInfo.GetStartTs(), oldCheckpointTs)
 
 	// Mark the old dispatcher as removed.
 	// No need to worry that the old dispatcher is still scanning,
@@ -1149,13 +1151,13 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 			ID:   span.KeyspaceID,
 			Name: changefeedID.Keyspace(),
 		}
-		tableInfo, err = c.schemaStore.GetTableInfo(keyspaceMeta, span.GetTableID(), dispatcherInfo.GetStartTs())
+		tableInfo, err = c.schemaStore.GetTableInfo(keyspaceMeta, span.GetTableID(), newCheckpointTs)
 		if err != nil {
 			log.Error("get table info from schemaStore failed",
 				zap.Stringer("changefeedID", changefeedID),
 				zap.Stringer("dispatcherID", dispatcherID),
 				zap.Int64("tableID", span.GetTableID()),
-				zap.Uint64("startTs", dispatcherInfo.GetStartTs()),
+				zap.Uint64("checkpointTs", newCheckpointTs),
 				zap.String("span", common.FormatTableSpan(span)),
 				zap.Error(err))
 			return err
@@ -1165,6 +1167,7 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 
 	newStat := newDispatcherStat(dispatcherInfo, uint64(len(c.taskChan)), uint64(len(c.messageCh)), tableInfo, status)
 	newStat.copyStatistics(oldStat)
+	newStat.resetLowerBound(newCheckpointTs)
 
 	for {
 		if statPtr.CompareAndSwap(oldStat, newStat) {
@@ -1176,8 +1179,8 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 			zap.Stringer("dispatcherID", dispatcherID),
 			zap.Int64("tableID", span.GetTableID()),
 			zap.String("span", common.FormatTableSpan(span)),
-			zap.Uint64("oldStartTs", oldStat.info.GetStartTs()),
-			zap.Uint64("newStartTs", dispatcherInfo.GetStartTs()),
+			zap.Uint64("oldCheckpointTs", oldCheckpointTs),
+			zap.Uint64("newCheckpointTs", newCheckpointTs),
 			zap.Uint64("oldEpoch", oldStat.epoch),
 			zap.Uint64("newEpoch", newStat.epoch))
 		// The dispatcher is changed concurrently, retry it.
@@ -1193,8 +1196,9 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 		zap.Stringer("changefeedID", newStat.changefeedStat.changefeedID),
 		zap.Stringer("dispatcherID", newStat.id), zap.Int64("tableID", newStat.info.GetTableSpan().GetTableID()),
 		zap.String("span", common.FormatTableSpan(newStat.info.GetTableSpan())),
-		zap.Uint64("originStartTs", oldStat.info.GetStartTs()),
-		zap.Uint64("newStartTs", dispatcherInfo.GetStartTs()),
+		zap.Uint64("requestStartTs", dispatcherInfo.GetStartTs()),
+		zap.Uint64("oldCheckpointTs", oldCheckpointTs),
+		zap.Uint64("newCheckpointTs", newStat.checkpointTs.Load()),
 		zap.Uint64("newEpoch", newStat.epoch),
 		zap.Duration("resetTime", time.Since(start)))
 
