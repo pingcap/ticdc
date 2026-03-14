@@ -31,14 +31,12 @@ import (
 
 type dispatcherConnState struct {
 	sync.RWMutex
-	// 1) if eventServiceID is set to a remote event service,
-	//   it means the dispatcher is trying to register to the remote event service,
-	//   but eventServiceID may be changed if registration failed.
-	// 2) if eventServiceID is set to local event service,
-	//   it means the dispatcher has received ready signal from local event service,
-	//   and eventServiceID will never change.
+	// eventServiceID is the selected event service for this dispatcher.
+	// When readyEventReceived is false, the dispatcher is still waiting for the
+	// selected event service to send ReadyEvent before it can start/reset the stream.
 	eventServiceID node.ID
-	// whether has received ready signal from `serverID`
+	// readyEventReceived indicates whether the selected event service is already
+	// streaming data to this dispatcher.
 	readyEventReceived atomic.Bool
 	// the remote event services which may contain data this dispatcher needed
 	remoteCandidates []string
@@ -57,6 +55,20 @@ func (d *dispatcherConnState) setEventServiceID(serverID node.ID) {
 	d.eventServiceID = serverID
 }
 
+func (d *dispatcherConnState) setWaitingReady(serverID node.ID) {
+	d.Lock()
+	defer d.Unlock()
+	d.eventServiceID = serverID
+	d.readyEventReceived.Store(false)
+}
+
+func (d *dispatcherConnState) setReady(serverID node.ID) {
+	d.Lock()
+	defer d.Unlock()
+	d.eventServiceID = serverID
+	d.readyEventReceived.Store(true)
+}
+
 func (d *dispatcherConnState) getEventServiceID() node.ID {
 	d.RLock()
 	defer d.RUnlock()
@@ -67,6 +79,12 @@ func (d *dispatcherConnState) isCurrentEventService(serverID node.ID) bool {
 	d.RLock()
 	defer d.RUnlock()
 	return d.eventServiceID == serverID
+}
+
+func (d *dispatcherConnState) isStreamingFrom(serverID node.ID) bool {
+	d.RLock()
+	defer d.RUnlock()
+	return d.eventServiceID == serverID && d.readyEventReceived.Load()
 }
 
 func (d *dispatcherConnState) isReceivingDataEvent() bool {
@@ -167,6 +185,11 @@ func (d *dispatcherStat) registerTo(serverID node.ID) {
 	onlyReuse := serverID != d.eventCollector.getLocalServerID()
 	msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, d.newDispatcherRegisterRequest(d.eventCollector.getLocalServerID().String(), onlyReuse))
 	d.eventCollector.enqueueMessageForSend(msg)
+}
+
+func (d *dispatcherStat) reregisterTo(serverID node.ID) {
+	d.connState.setWaitingReady(serverID)
+	d.registerTo(serverID)
 }
 
 // commitReady is used to notify the event service to start sending events.
@@ -508,6 +531,24 @@ func (d *dispatcherStat) handleDataEvents(events ...dispatcher.DispatcherEvent) 
 	return false
 }
 
+func (d *dispatcherStat) shouldResendResetOnRepeatedReady(from node.ID) bool {
+	// Merge/preparing dispatchers must wait for CommitAddDispatcher to decide the start ts.
+	if d.readyCallback != nil {
+		return false
+	}
+	// If handshake has not arrived yet, repeated ReadyEvent means the event service is
+	// still waiting for a reset/start signal. Resend reset to converge the state.
+	if d.lastEventSeq.Load() != 0 {
+		return false
+	}
+	log.Info("received repeated ready signal before handshake, resend reset",
+		zap.Stringer("changefeedID", d.target.GetChangefeedID()),
+		zap.Stringer("dispatcher", d.getDispatcherID()),
+		zap.Stringer("eventServiceID", from))
+	d.commitReady(from)
+	return true
+}
+
 // "signalEvent" refers to the types of events that may modify the event service with which this dispatcher communicates.
 // "signalEvent" includes TypeReadyEvent/TypeNotReusableEvent
 func (d *dispatcherStat) handleSignalEvent(event dispatcher.DispatcherEvent) {
@@ -515,9 +556,13 @@ func (d *dispatcherStat) handleSignalEvent(event dispatcher.DispatcherEvent) {
 
 	switch event.GetType() {
 	case commonEvent.TypeReadyEvent:
-		// if the dispatcher has received ready signal from local event service,
+		// Once the dispatcher is already streaming from the local event service,
+		// local is the final owner and all later signal events are stale.
 		// ignore all types of signal events.
-		if d.connState.isCurrentEventService(localServerID) {
+		if d.connState.isStreamingFrom(localServerID) {
+			if event.From != nil && *event.From == localServerID {
+				d.shouldResendResetOnRepeatedReady(localServerID)
+			}
 			// If we receive a ready event from a remote service while connected to the local
 			// service, it implies a stale registration. Send a remove request to clean it up.
 			if event.From != nil && *event.From != localServerID {
@@ -536,28 +581,27 @@ func (d *dispatcherStat) handleSignalEvent(event dispatcher.DispatcherEvent) {
 				// If readyCallback is set, this dispatcher is performing its initial
 				// registration with the local event service. Therefore, no deregistration
 				// from a previous service is necessary.
-				d.connState.setEventServiceID(localServerID)
-				d.connState.readyEventReceived.Store(true)
+				d.connState.setReady(localServerID)
 				d.readyCallback()
 				return
 			}
-			// note: this must be the first ready event from local event service
 			oldEventServiceID := d.connState.getEventServiceID()
-			if oldEventServiceID != "" {
+			if oldEventServiceID != "" && oldEventServiceID != localServerID {
 				d.removeFrom(oldEventServiceID)
 			}
 			log.Info("received ready signal from local event service, prepare to reset the dispatcher",
 				zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 				zap.Stringer("dispatcher", d.getDispatcherID()))
 
-			d.connState.setEventServiceID(localServerID)
-			d.connState.readyEventReceived.Store(true)
+			d.connState.setReady(localServerID)
 			d.connState.clearRemoteCandidates()
 			d.commitReady(localServerID)
 		} else {
 			// note: this ready event must be from a remote event service which the dispatcher is trying to register to.
-			// TODO: if receive too much redudant ready events from remote service, we may need reset again?
-			if d.connState.readyEventReceived.Load() {
+			if d.connState.isStreamingFrom(*event.From) {
+				if d.shouldResendResetOnRepeatedReady(*event.From) {
+					return
+				}
 				log.Info("received ready signal from the same server again, ignore it",
 					zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 					zap.Stringer("dispatcher", d.getDispatcherID()),
@@ -568,7 +612,7 @@ func (d *dispatcherStat) handleSignalEvent(event dispatcher.DispatcherEvent) {
 				zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 				zap.Stringer("dispatcher", d.getDispatcherID()),
 				zap.Stringer("eventServiceID", *event.From))
-			d.connState.readyEventReceived.Store(true)
+			d.connState.setReady(*event.From)
 			d.commitReady(*event.From)
 		}
 	case commonEvent.TypeNotReusableEvent:

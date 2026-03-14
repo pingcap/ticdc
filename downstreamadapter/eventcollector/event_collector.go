@@ -491,8 +491,10 @@ func (c *EventCollector) handleDispatcherHeartbeatResponse(targetMessage *messag
 				log.Info("dispatcher removed in event service",
 					zap.Stringer("dispatcherID", ds.DispatcherID),
 					zap.Stringer("eventServiceID", targetMessage.From))
-				// register the dispatcher again
-				stat.registerTo(targetMessage.From)
+				// Move back to waiting-ready state before registering again.
+				// Otherwise the next ReadyEvent from the restarted event service
+				// would be treated as stale and ignored.
+				stat.reregisterTo(targetMessage.From)
 			}
 		}
 	}
