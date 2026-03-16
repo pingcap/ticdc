@@ -245,6 +245,8 @@ func (c *Controller) collectMetrics(ctx context.Context) error {
 			metrics.ChangefeedStateGauge.WithLabelValues("Absent").Set(float64(c.changefeedDB.GetAbsentSize()))
 			metrics.ChangefeedStateGauge.WithLabelValues("Stopped").Set(float64(c.changefeedDB.GetStoppedSize()))
 
+			currentChangefeeds := make(map[common.ChangeFeedID]struct{})
+
 			c.changefeedDB.Foreach(func(cf *changefeed.Changefeed) {
 				info := cf.GetInfo()
 				keyspace := info.ChangefeedID.Keyspace()
@@ -261,41 +263,36 @@ func (c *Controller) collectMetrics(ctx context.Context) error {
 				lag := float64(pdPhysicalTime-phyCkpTs) / 1e3
 				metrics.ChangefeedCheckpointTsGauge.WithLabelValues(keyspace, name).Set(float64(phyCkpTs))
 				metrics.ChangefeedCheckpointTsLagGauge.WithLabelValues(keyspace, name).Set(lag)
+
+				// sync changefeed error metrics
+				currentChangefeeds[cf.ID] = struct{}{}
+				oldLabels, exists := errorMetricLabels[cf.ID]
+				newLabels, hasError := getChangefeedErrorMetricLabels(cf.GetInfo())
+				// If the error state has not changed, do nothing.
+				if exists && hasError && oldLabels == newLabels {
+					return
+				}
+				// If there was an old metric, delete it, as the state has changed.
+				if exists {
+					metrics.ChangefeedErrorInfoGauge.DeleteLabelValues(oldLabels.labelValues()...)
+				}
+				if hasError {
+					// An error exists (either new or changed). Set the new metric and update cache.
+					metrics.ChangefeedErrorInfoGauge.WithLabelValues(newLabels.labelValues()...).Set(1)
+					errorMetricLabels[cf.ID] = newLabels
+				} else {
+					// The error has disappeared, remove from cache.
+					delete(errorMetricLabels, cf.ID)
+				}
 			})
-			c.syncChangefeedErrorMetrics(errorMetricLabels)
-		}
-	}
-}
-
-func (c *Controller) syncChangefeedErrorMetrics(cache map[common.ChangeFeedID]changefeedErrorMetricLabels) {
-	currentChangefeeds := make(map[common.ChangeFeedID]struct{})
-
-	c.changefeedDB.Foreach(func(cf *changefeed.Changefeed) {
-		currentChangefeeds[cf.ID] = struct{}{}
-
-		labels, ok := getChangefeedErrorMetricLabels(cf.GetInfo())
-		if !ok {
-			if oldLabels, exists := cache[cf.ID]; exists {
-				metrics.ChangefeedErrorInfoGauge.DeleteLabelValues(oldLabels.labelValues()...)
-				delete(cache, cf.ID)
+			for changefeedID, labels := range errorMetricLabels {
+				if _, ok := currentChangefeeds[changefeedID]; ok {
+					continue
+				}
+				metrics.ChangefeedErrorInfoGauge.DeleteLabelValues(labels.labelValues()...)
+				delete(errorMetricLabels, changefeedID)
 			}
-			return
 		}
-
-		if oldLabels, exists := cache[cf.ID]; exists && oldLabels != labels {
-			metrics.ChangefeedErrorInfoGauge.DeleteLabelValues(oldLabels.labelValues()...)
-		}
-
-		metrics.ChangefeedErrorInfoGauge.WithLabelValues(labels.labelValues()...).Set(1)
-		cache[cf.ID] = labels
-	})
-
-	for changefeedID, labels := range cache {
-		if _, ok := currentChangefeeds[changefeedID]; ok {
-			continue
-		}
-		metrics.ChangefeedErrorInfoGauge.DeleteLabelValues(labels.labelValues()...)
-		delete(cache, changefeedID)
 	}
 }
 
