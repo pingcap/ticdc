@@ -12,7 +12,7 @@ This tool helps generate and manipulate test data for database performance testi
 
 ```bash
 cd tools/workload
-make 
+make
 ```
 
 ## Common Usage Scenarios
@@ -78,6 +78,9 @@ Insert test data using sysbench-compatible schema:
     -batch-size 64
 ```
 
+Notes:
+- This example runs **DML only**. DDL is disabled by default unless `-ddl-config` is provided.
+
 ### 2. Large Row Update Workload
 
 Update existing data with large row operations:
@@ -89,7 +92,7 @@ Update existing data with large row operations:
     -database-db-name large \
     -total-row-count 100000000 \
     -table-count 1 \
-    -large-ratio 0.1 \ 
+    -large-ratio 0.1 \
     -workload-type large_row \
     -thread 16 \
     -batch-size 64 \
@@ -101,7 +104,79 @@ Additional parameters for update:
 - large-ratio: Ratio of large rows in the dataset
 - percentage-for-update: Percentage of rows to update
 
-### 3. JSON Zstd Workload
+### 3. DML Only (Explicit)
+
+Run DML only (no DDL) while using `write` mode:
+
+```bash
+./workload -action write \
+    -database-host 127.0.0.1 \
+    -database-port 4000 \
+    -database-db-name db1 \
+    -table-count 1000 \
+    -workload-type sysbench \
+    -thread 32 \
+    -batch-size 64 \
+    -only-dml
+```
+
+### 4. DML + DDL Together
+
+Run DDL concurrently with DML by providing a DDL config:
+
+```bash
+./bin/workload -action write \
+    -database-host 127.0.0.1 \
+    -database-port 4000 \
+    -database-db-name db1 \
+    -table-count 1000 \
+    -workload-type sysbench \
+    -thread 32 \
+    -batch-size 64 \
+    -ddl-config ./ddl.toml \
+    -ddl-worker 1 \
+    -ddl-timeout 2m
+```
+
+### 5. DDL Only
+
+Run only DDL (useful for testing DDL concurrency/replication without DML):
+
+```bash
+./bin/workload -only-ddl \
+    -database-host 127.0.0.1 \
+    -database-port 4000 \
+    -database-db-name db1 \
+    -table-count 1000 \
+    -workload-type sysbench \
+    -ddl-config ./ddl.toml \
+    -ddl-worker 1 \
+    -ddl-timeout 2m
+```
+
+(Equivalent: `-action ddl`.)
+
+### 6. Insert + Update + DDL Together (No Delete)
+
+Run insert and update concurrently, and execute DDL in parallel:
+
+```bash
+./bin/workload -action write \
+    -database-host 127.0.0.1 \
+    -database-port 4000 \
+    -database-db-name db1 \
+    -table-count 1000 \
+    -workload-type sysbench \
+    -thread 32 \
+    -batch-size 64 \
+    -percentage-for-update 0.5 \
+    -percentage-for-delete 0 \
+    -ddl-config ./ddl.toml \
+    -ddl-worker 1 \
+    -ddl-timeout 2m
+```
+
+### 7. JSON Zstd Workload
 
 Generate writes for `wide_table_with_json_entity_metadata` and `wide_table_with_json_batch_metadata` (two tables per shard). Use `-row-size` to control payload width and `-table-count` to control shard count.
 
@@ -114,6 +189,7 @@ Generate writes for `wide_table_with_json_entity_metadata` and `wide_table_with_
     -table-count 16 \
     -workload-type wide_table_with_json \
     -row-size $((16 * 1024)) \
+    -json-payload-mode zstd \
     -thread 32 \
     -batch-size 32 \
     -percentage-for-update 0.5 \
@@ -126,3 +202,5 @@ Generate writes for `wide_table_with_json_entity_metadata` and `wide_table_with_
 - Adjust the thread and batch-size parameters based on your needs.
 - Use `-batch-in-txn` to wrap each batch in a single explicit transaction (BEGIN/COMMIT).
 - For `wide_table_with_json`, use `-json-payload-mode zstd` to generate a zstd friendly JSON-like payload, or `-json-payload-mode random` for incompressible payloads.
+- For workloads that support partitioned tables (e.g. bank3), set `-partitioned=false` to create non-partitioned tables.
+- `-bank3-partitioned` is deprecated; use `-partitioned`.

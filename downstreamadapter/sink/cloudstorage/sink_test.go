@@ -233,12 +233,12 @@ func verifyWriteDDLEventFlushDMLBeforeBlock(t *testing.T) {
 	defer helper.Close()
 
 	helper.Tk().MustExec("use test")
-	job := helper.DDL2Job("create table t_drain_before_ddl (id int primary key, v int)")
+	job := helper.DDL2Job("create table t_flush_before_ddl (id int primary key, v int)")
 	require.NotNil(t, job)
 	helper.ApplyJob(job)
 
 	dispatcherID := common.NewDispatcherID()
-	dmlEvent := helper.DML2Event(job.SchemaName, job.TableName, "insert into t_drain_before_ddl values (1, 1)")
+	dmlEvent := helper.DML2Event(job.SchemaName, job.TableName, "insert into t_flush_before_ddl values (1, 1)")
 	dmlEvent.TableInfoVersion = job.BinlogInfo.FinishedTS
 	dmlEvent.DispatcherID = dispatcherID
 
@@ -250,7 +250,7 @@ func verifyWriteDDLEventFlushDMLBeforeBlock(t *testing.T) {
 	cloudStorageSink.AddDMLEvent(dmlEvent)
 
 	ddlEvent := &commonEvent.DDLEvent{
-		Query:        "alter table t_drain_before_ddl add column c2 int",
+		Query:        "alter table t_flush_before_ddl add column c2 int",
 		Type:         byte(timodel.ActionAddColumn),
 		SchemaName:   job.SchemaName,
 		TableName:    job.TableName,
