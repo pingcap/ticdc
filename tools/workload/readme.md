@@ -176,7 +176,7 @@ Run insert and update concurrently, and execute DDL in parallel:
     -ddl-timeout 2m
 ```
 
-### 7. JSON Zstd Workload
+### 7. Wide Table With JSON Workload
 
 Generate writes for `wide_table_with_json_primary` and `wide_table_with_json_secondary` (two tables per shard). Use `-row-size` to control payload width and `-table-count` to control shard count.
 
@@ -189,7 +189,6 @@ Generate writes for `wide_table_with_json_primary` and `wide_table_with_json_sec
     -table-count 16 \
     -workload-type wide_table_with_json \
     -row-size $((16 * 1024)) \
-    -json-payload-mode zstd \
     -thread 32 \
     -batch-size 32 \
     -percentage-for-update 0.5 \
@@ -201,6 +200,6 @@ Generate writes for `wide_table_with_json_primary` and `wide_table_with_json_sec
 - Ensure the database is properly configured and has the necessary permissions.
 - Adjust the thread and batch-size parameters based on your needs.
 - Use `-batch-in-txn` to wrap each batch in a single explicit transaction (BEGIN/COMMIT).
-- For `wide_table_with_json`, use `-json-payload-mode zstd` to simulate JSON-like payloads with higher zstd compression cost, or `-json-payload-mode random` as a contrasting random-byte baseline.
+- `wide_table_with_json` always generates JSON-like payload data.
 - For workloads that support partitioned tables (e.g. bank3), set `-partitioned=false` to create non-partitioned tables.
 - `-bank3-partitioned` is deprecated; use `-partitioned`.

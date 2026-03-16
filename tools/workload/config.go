@@ -63,8 +63,6 @@ type WorkloadConfig struct {
 	UpdateLargeColumnSize int
 	// For sysbench workload
 	RangeNum int
-	// Only for wide_table_with_json workload
-	JSONPayloadMode string
 
 	// Partition related
 	Partitioned bool
@@ -121,8 +119,6 @@ func NewWorkloadConfig() *WorkloadConfig {
 
 		// Partition related
 		Partitioned: true,
-		// For wide_table_with_json workload
-		JSONPayloadMode: "const",
 
 		// Log related
 		LogFile:  "workload.log",
@@ -167,8 +163,6 @@ func (c *WorkloadConfig) ParseFlags() error {
 	// Partition related
 	flag.BoolVar(&c.Partitioned, "partitioned", c.Partitioned, "whether to create tables as partitioned tables when the workload supports it")
 	flag.BoolVar(&c.Partitioned, "bank3-partitioned", c.Partitioned, "deprecated: use -partitioned")
-	// For wide_table_with_json workload
-	flag.StringVar(&c.JSONPayloadMode, "json-payload-mode", c.JSONPayloadMode, "payload mode for wide_table_with_json: [const, zstd, random]")
 
 	flag.Parse()
 

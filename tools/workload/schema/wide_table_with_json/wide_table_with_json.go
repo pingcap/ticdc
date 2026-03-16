@@ -106,10 +106,7 @@ type WideTableWithJSONWorkload struct {
 	batchCbSize     int
 	batchMetaSize   int
 
-	payloadMode jsonPayloadMode
-
 	entityMediaInsert string
-	entityMediaUpdate string
 	batchAuxData      string
 	batchCbData       string
 	batchMetaInsert   []byte
@@ -128,29 +125,7 @@ type WideTableWithJSONWorkload struct {
 	randPool sync.Pool
 }
 
-type jsonPayloadMode uint8
-
-const (
-	jsonPayloadModeConst jsonPayloadMode = iota
-	jsonPayloadModeZstd
-	jsonPayloadModeRandom
-)
-
-func parseJSONPayloadMode(mode string) jsonPayloadMode {
-	switch strings.ToLower(strings.TrimSpace(mode)) {
-	case "", "const", "constant":
-		return jsonPayloadModeConst
-	case "zstd", "zstd-heavy", "zstd_slow", "json":
-		return jsonPayloadModeZstd
-	case "random", "rand", "incompressible":
-		return jsonPayloadModeRandom
-	default:
-		plog.Warn("unsupported json payload mode, use const", zap.String("payloadMode", mode))
-		return jsonPayloadModeConst
-	}
-}
-
-func NewWideTableWithJSONWorkload(rowSize int, tableCount int, tableStartIndex int, totalRowCount uint64, payloadMode string) schema.Workload {
+func NewWideTableWithJSONWorkload(rowSize int, tableCount int, tableStartIndex int, totalRowCount uint64) schema.Workload {
 	if rowSize < 0 {
 		rowSize = 0
 	}
@@ -183,27 +158,15 @@ func NewWideTableWithJSONWorkload(rowSize int, tableCount int, tableStartIndex i
 		perTableUpdateKeySpace = maxUint64(1, totalRowCount/uint64(tableCount))
 	}
 
-	mode := parseJSONPayloadMode(payloadMode)
-
 	w := &WideTableWithJSONWorkload{
 		entityMediaSize:        entityMediaSize,
 		batchAuxSize:           auxSize,
 		batchCbSize:            cbSize,
 		batchMetaSize:          metaSize,
-		payloadMode:            mode,
 		tableStartIndex:        tableStartIndex,
 		entitySeq:              make([]atomic.Uint64, tableCount),
 		batchSeq:               make([]atomic.Uint64, tableCount),
 		perTableUpdateKeySpace: perTableUpdateKeySpace,
-	}
-
-	if mode == jsonPayloadModeConst {
-		w.entityMediaInsert = strings.Repeat("a", entityMediaSize)
-		w.entityMediaUpdate = strings.Repeat("b", entityMediaSize)
-		w.batchAuxData = strings.Repeat("c", auxSize)
-		w.batchCbData = strings.Repeat("d", cbSize)
-		w.batchMetaInsert = newConstBytes(metaSize, 'e')
-		w.batchMetaUpdate = newConstBytes(metaSize, 'f')
 	}
 
 	w.seed.Store(time.Now().UnixNano())
@@ -213,6 +176,11 @@ func NewWideTableWithJSONWorkload(rowSize int, tableCount int, tableStartIndex i
 
 	r := w.getRand()
 	binary.BigEndian.PutUint32(w.idSuffix[:], r.Uint32())
+	w.entityMediaInsert = newJSONPayloadString(entityMediaSize, r)
+	w.batchAuxData = newJSONPayloadString(auxSize, r)
+	w.batchCbData = newJSONPayloadString(cbSize, r)
+	w.batchMetaInsert = newJSONPayloadBytes(metaSize, r)
+	w.batchMetaUpdate = newJSONPayloadBytes(metaSize, r)
 	w.putRand(r)
 
 	plog.Info("wide table with json workload initialized",
@@ -221,7 +189,6 @@ func NewWideTableWithJSONWorkload(rowSize int, tableCount int, tableStartIndex i
 		zap.Int("batchAuxDataSize", w.batchAuxSize),
 		zap.Int("batchCallbackMetadataSize", w.batchCbSize),
 		zap.Int("batchMetadataSize", w.batchMetaSize),
-		zap.String("payloadMode", payloadMode),
 		zap.Uint64("perTableUpdateKeySpace", w.perTableUpdateKeySpace),
 		zap.Int("tableStartIndex", w.tableStartIndex),
 		zap.Int("tableSlots", len(w.entitySeq)))
@@ -300,79 +267,22 @@ func fillZstdHeavyPayload(dst []byte, r *rand.Rand) {
 	}
 }
 
-func (w *WideTableWithJSONWorkload) entityMediaInsertPayload(r *rand.Rand) string {
-	switch w.payloadMode {
-	case jsonPayloadModeZstd:
-		buf := make([]byte, w.entityMediaSize)
-		fillZstdHeavyPayload(buf, r)
-		return string(buf)
-	case jsonPayloadModeRandom:
-		buf := make([]byte, w.entityMediaSize)
-		fillRandomFromAlphabet(buf, r, jsonPayloadAlphaNum)
-		return string(buf)
-	default:
-		return w.entityMediaInsert
+func newJSONPayloadString(size int, r *rand.Rand) string {
+	if size <= 0 {
+		return ""
 	}
+	buf := make([]byte, size)
+	fillZstdHeavyPayload(buf, r)
+	return string(buf)
 }
 
-func (w *WideTableWithJSONWorkload) batchAuxPayload(r *rand.Rand) string {
-	switch w.payloadMode {
-	case jsonPayloadModeZstd:
-		buf := make([]byte, w.batchAuxSize)
-		fillZstdHeavyPayload(buf, r)
-		return string(buf)
-	case jsonPayloadModeRandom:
-		buf := make([]byte, w.batchAuxSize)
-		fillRandomFromAlphabet(buf, r, jsonPayloadAlphaNum)
-		return string(buf)
-	default:
-		return w.batchAuxData
+func newJSONPayloadBytes(size int, r *rand.Rand) []byte {
+	if size <= 0 {
+		return nil
 	}
-}
-
-func (w *WideTableWithJSONWorkload) batchCallbackPayload(r *rand.Rand) string {
-	switch w.payloadMode {
-	case jsonPayloadModeZstd:
-		buf := make([]byte, w.batchCbSize)
-		fillZstdHeavyPayload(buf, r)
-		return string(buf)
-	case jsonPayloadModeRandom:
-		buf := make([]byte, w.batchCbSize)
-		fillRandomFromAlphabet(buf, r, jsonPayloadAlphaNum)
-		return string(buf)
-	default:
-		return w.batchCbData
-	}
-}
-
-func (w *WideTableWithJSONWorkload) batchMetaInsertPayload(r *rand.Rand) []byte {
-	switch w.payloadMode {
-	case jsonPayloadModeZstd:
-		buf := make([]byte, w.batchMetaSize)
-		fillZstdHeavyPayload(buf, r)
-		return buf
-	case jsonPayloadModeRandom:
-		buf := make([]byte, w.batchMetaSize)
-		_, _ = r.Read(buf)
-		return buf
-	default:
-		return w.batchMetaInsert
-	}
-}
-
-func (w *WideTableWithJSONWorkload) batchMetaUpdatePayload(r *rand.Rand) []byte {
-	switch w.payloadMode {
-	case jsonPayloadModeZstd:
-		buf := make([]byte, w.batchMetaSize)
-		fillZstdHeavyPayload(buf, r)
-		return buf
-	case jsonPayloadModeRandom:
-		buf := make([]byte, w.batchMetaSize)
-		_, _ = r.Read(buf)
-		return buf
-	default:
-		return w.batchMetaUpdate
-	}
+	buf := make([]byte, size)
+	fillZstdHeavyPayload(buf, r)
+	return buf
 }
 
 func (w *WideTableWithJSONWorkload) getRand() *rand.Rand {
@@ -498,11 +408,11 @@ func (w *WideTableWithJSONWorkload) buildPrimaryInsertWithValues(tableIndex int,
 		if includeMigrated {
 			placeholders = append(placeholders, "(?,?,?,?,?,?,?,?,?,?,?)")
 			values = append(values,
-				now, now, id, ownerKey, attrKey1, attrKey2, groupKey, hashValue, lookupKey, w.entityMediaInsertPayload(r), now)
+				now, now, id, ownerKey, attrKey1, attrKey2, groupKey, hashValue, lookupKey, w.entityMediaInsert, now)
 		} else {
 			placeholders = append(placeholders, "(?,?,?,?,?,?,?,?,?,?)")
 			values = append(values,
-				now, now, id, ownerKey, attrKey1, attrKey2, groupKey, hashValue, lookupKey, w.entityMediaInsertPayload(r))
+				now, now, id, ownerKey, attrKey1, attrKey2, groupKey, hashValue, lookupKey, w.entityMediaInsert)
 		}
 	}
 
@@ -545,12 +455,12 @@ func (w *WideTableWithJSONWorkload) buildSecondaryInsertWithValues(tableIndex in
 		if includeAux {
 			placeholders = append(placeholders, "(?,?,?,?,?,?,?,?,?,?,?,?)")
 			values = append(values,
-				now, now, id, ownerKey, attrKey1, state, w.batchMetaInsertPayload(r), tag1,
-				w.batchAuxPayload(r), w.batchCallbackPayload(r), fmt.Sprintf("tag2_%d", seq%100), fmt.Sprintf("tag3_%d", seq%100))
+				now, now, id, ownerKey, attrKey1, state, w.batchMetaInsert, tag1,
+				w.batchAuxData, w.batchCbData, fmt.Sprintf("tag2_%d", seq%100), fmt.Sprintf("tag3_%d", seq%100))
 		} else {
 			placeholders = append(placeholders, "(?,?,?,?,?,?,?,?,?)")
 			values = append(values,
-				now, now, id, ownerKey, attrKey1, state, w.batchMetaInsertPayload(r), tag1, w.batchCallbackPayload(r))
+				now, now, id, ownerKey, attrKey1, state, w.batchMetaInsert, tag1, w.batchCbData)
 		}
 	}
 
@@ -618,19 +528,19 @@ func (w *WideTableWithJSONWorkload) buildSecondaryUpdateWithValues(tableIndex in
 		return sql, []interface{}{now, state, id}
 	case p < batchUpdateStatusOnlyWeight+batchUpdateMetadataWeight:
 		sql := fmt.Sprintf("UPDATE %s SET `payload_blob` = ?, `updated_at` = ?, `state` = ? WHERE (`id` = ?)", tableName)
-		return sql, []interface{}{w.batchMetaUpdatePayload(r), now, state, id}
+		return sql, []interface{}{w.batchMetaUpdate, now, state, id}
 	case p < batchUpdateStatusOnlyWeight+batchUpdateMetadataWeight+batchUpdateMetadataAndKeysWeight:
 		ownerKey := w.ownerKey(tableIndex, uint64(now.UnixNano()))
 		attrKey1 := w.attrKey1(uint64(now.UnixNano()))
 		sql := fmt.Sprintf("UPDATE %s SET `payload_blob` = ?, `updated_at` = ?, `owner_key` = ?, `attr_key_1` = ?, `state` = ? WHERE (`id` = ?)", tableName)
-		return sql, []interface{}{w.batchMetaUpdatePayload(r), now, ownerKey, attrKey1, state, id}
+		return sql, []interface{}{w.batchMetaUpdate, now, ownerKey, attrKey1, state, id}
 	default:
 		ownerKey := w.ownerKey(tableIndex, uint64(now.UnixNano()))
 		attrKey1 := w.attrKey1(uint64(now.UnixNano()))
 		start := now.Add(-time.Minute)
 		end := now
 		sql := fmt.Sprintf("UPDATE %s SET `event_time_2` = ?, `payload_blob` = ?, `updated_at` = ?, `owner_key` = ?, `event_time_1` = ?, `attr_key_1` = ?, `state` = ? WHERE (`id` = ?)", tableName)
-		return sql, []interface{}{end, w.batchMetaUpdatePayload(r), now, ownerKey, start, attrKey1, state, id}
+		return sql, []interface{}{end, w.batchMetaUpdate, now, ownerKey, start, attrKey1, state, id}
 	}
 }
 
@@ -672,17 +582,6 @@ func randSeq(r *rand.Rand, upper uint64) uint64 {
 		return uint64(r.Int63n(int64(upper))) + 1
 	}
 	return (r.Uint64() % upper) + 1
-}
-
-func newConstBytes(size int, value byte) []byte {
-	if size <= 0 {
-		return nil
-	}
-	buf := make([]byte, size)
-	for i := range buf {
-		buf[i] = value
-	}
-	return buf
 }
 
 func min(a, b int) int {

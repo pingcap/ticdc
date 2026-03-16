@@ -145,7 +145,7 @@ func (app *WorkloadApp) createWorkload() schema.Workload {
 	case dc:
 		workload = pdc.NewDCWorkload()
 	case wideTableWithJSON:
-		workload = pwidetablewithjson.NewWideTableWithJSONWorkload(app.Config.RowSize, app.Config.TableCount, app.Config.TableStartIndex, app.Config.TotalRowCount, app.Config.JSONPayloadMode)
+		workload = pwidetablewithjson.NewWideTableWithJSONWorkload(app.Config.RowSize, app.Config.TableCount, app.Config.TableStartIndex, app.Config.TotalRowCount)
 	default:
 		plog.Panic("unsupported workload type", zap.String("workload", app.Config.WorkloadType))
 	}
