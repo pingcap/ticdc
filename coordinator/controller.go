@@ -15,6 +15,7 @@ package coordinator
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"time"
 
@@ -48,7 +49,53 @@ const (
 	nodeChangeHandlerID           = "coordinator-controller"
 	createChangefeedMaxRetry      = 10
 	createChangefeedRetryInterval = 5 * time.Second
+	changefeedErrorMetricMsgLimit = 256
 )
+
+type changefeedErrorMetricLabels struct {
+	keyspace   string
+	changefeed string
+	state      string
+	code       string
+	message    string
+}
+
+func (l changefeedErrorMetricLabels) labelValues() []string {
+	return []string{l.keyspace, l.changefeed, l.state, l.code, l.message}
+}
+
+func normalizeChangefeedErrorMetricMessage(message string) string {
+	message = strings.Join(strings.Fields(message), " ")
+	if len(message) <= changefeedErrorMetricMsgLimit {
+		return message
+	}
+	return message[:changefeedErrorMetricMsgLimit-3] + "..."
+}
+
+func getChangefeedErrorMetricLabels(info *config.ChangeFeedInfo) (changefeedErrorMetricLabels, bool) {
+	if info == nil {
+		return changefeedErrorMetricLabels{}, false
+	}
+	if info.State != config.StateFailed && info.State != config.StateWarning {
+		return changefeedErrorMetricLabels{}, false
+	}
+
+	runningErr := info.Error
+	if runningErr == nil {
+		runningErr = info.Warning
+	}
+	if runningErr == nil {
+		return changefeedErrorMetricLabels{}, false
+	}
+
+	return changefeedErrorMetricLabels{
+		keyspace:   info.ChangefeedID.Keyspace(),
+		changefeed: info.ChangefeedID.Name(),
+		state:      string(info.State),
+		code:       runningErr.Code,
+		message:    normalizeChangefeedErrorMetricMessage(runningErr.Message),
+	}, true
+}
 
 // Controller schedules and balance changefeeds, there are 3 main components:
 //  1. scheduler: generate operators for handling different scheduling tasks.
@@ -186,6 +233,7 @@ func NewController(
 func (c *Controller) collectMetrics(ctx context.Context) error {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
+	errorMetricLabels := make(map[common.ChangeFeedID]changefeedErrorMetricLabels)
 	for {
 		select {
 		case <-ctx.Done():
@@ -214,7 +262,40 @@ func (c *Controller) collectMetrics(ctx context.Context) error {
 				metrics.ChangefeedCheckpointTsGauge.WithLabelValues(keyspace, name).Set(float64(phyCkpTs))
 				metrics.ChangefeedCheckpointTsLagGauge.WithLabelValues(keyspace, name).Set(lag)
 			})
+			c.syncChangefeedErrorMetrics(errorMetricLabels)
 		}
+	}
+}
+
+func (c *Controller) syncChangefeedErrorMetrics(cache map[common.ChangeFeedID]changefeedErrorMetricLabels) {
+	currentChangefeeds := make(map[common.ChangeFeedID]struct{})
+
+	c.changefeedDB.Foreach(func(cf *changefeed.Changefeed) {
+		currentChangefeeds[cf.ID] = struct{}{}
+
+		labels, ok := getChangefeedErrorMetricLabels(cf.GetInfo())
+		if !ok {
+			if oldLabels, exists := cache[cf.ID]; exists {
+				metrics.ChangefeedErrorInfoGauge.DeleteLabelValues(oldLabels.labelValues()...)
+				delete(cache, cf.ID)
+			}
+			return
+		}
+
+		if oldLabels, exists := cache[cf.ID]; exists && oldLabels != labels {
+			metrics.ChangefeedErrorInfoGauge.DeleteLabelValues(oldLabels.labelValues()...)
+		}
+
+		metrics.ChangefeedErrorInfoGauge.WithLabelValues(labels.labelValues()...).Set(1)
+		cache[cf.ID] = labels
+	})
+
+	for changefeedID, labels := range cache {
+		if _, ok := currentChangefeeds[changefeedID]; ok {
+			continue
+		}
+		metrics.ChangefeedErrorInfoGauge.DeleteLabelValues(labels.labelValues()...)
+		delete(cache, changefeedID)
 	}
 }
 

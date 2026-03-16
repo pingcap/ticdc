@@ -15,6 +15,8 @@ package coordinator
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -26,13 +28,121 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/messaging"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/server/watcher"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/atomic"
 )
+
+func getChangefeedErrorMetricLabelName() string {
+	if kerneltype.IsNextGen() {
+		return "keyspace_name"
+	}
+	return "namespace"
+}
+
+func TestSyncChangefeedErrorMetrics(t *testing.T) {
+	metrics.ChangefeedErrorInfoGauge.Reset()
+	t.Cleanup(metrics.ChangefeedErrorInfoGauge.Reset)
+
+	changefeedDB := changefeed.NewChangefeedDB(1216)
+	controller := &Controller{changefeedDB: changefeedDB}
+
+	cfID := common.NewChangeFeedIDWithName("test-error", common.DefaultKeyspaceName)
+	longMessage := "first line\nsecond line " + strings.Repeat("x", 300)
+	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		Config:       config.GetDefaultReplicaConfig(),
+		State:        config.StateFailed,
+		SinkURI:      "mysql://127.0.0.1:3306",
+		Error: &config.RunningError{
+			Addr:    "node-1",
+			Code:    "CDC:ErrSinkURIInvalid",
+			Message: longMessage,
+		},
+	}, 1, true)
+	changefeedDB.AddStoppedChangefeed(cf)
+
+	controller.syncChangefeedErrorMetrics(make(map[common.ChangeFeedID]changefeedErrorMetricLabels))
+
+	expectedMessage := normalizeChangefeedErrorMetricMessage(longMessage)
+	expected := fmt.Sprintf(`# HELP ticdc_owner_changefeed_error_info The current warning or failed reason of changefeeds
+# TYPE ticdc_owner_changefeed_error_info gauge
+ticdc_owner_changefeed_error_info{changefeed="test-error",code="CDC:ErrSinkURIInvalid",message="%s",%s="%s",state="failed"} 1
+`, expectedMessage, getChangefeedErrorMetricLabelName(), common.DefaultKeyspaceName)
+	require.NoError(t, testutil.CollectAndCompare(
+		metrics.ChangefeedErrorInfoGauge,
+		strings.NewReader(expected),
+		"ticdc_owner_changefeed_error_info",
+	))
+}
+
+func TestSyncChangefeedErrorMetricsUpdateAndClear(t *testing.T) {
+	metrics.ChangefeedErrorInfoGauge.Reset()
+	t.Cleanup(metrics.ChangefeedErrorInfoGauge.Reset)
+
+	changefeedDB := changefeed.NewChangefeedDB(1216)
+	controller := &Controller{changefeedDB: changefeedDB}
+	cache := make(map[common.ChangeFeedID]changefeedErrorMetricLabels)
+
+	cfID := common.NewChangeFeedIDWithName("test-update", common.DefaultKeyspaceName)
+	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		Config:       config.GetDefaultReplicaConfig(),
+		State:        config.StateFailed,
+		SinkURI:      "mysql://127.0.0.1:3306",
+		Error: &config.RunningError{
+			Addr:    "node-1",
+			Code:    "CDC:ErrOld",
+			Message: "old reason",
+		},
+	}, 1, true)
+	changefeedDB.AddStoppedChangefeed(cf)
+
+	controller.syncChangefeedErrorMetrics(cache)
+
+	updatedInfo, err := cf.GetInfo().Clone()
+	require.NoError(t, err)
+	updatedInfo.Error = &config.RunningError{
+		Addr:    "node-2",
+		Code:    "CDC:ErrNew",
+		Message: "new reason",
+	}
+	cf.SetInfo(updatedInfo)
+
+	controller.syncChangefeedErrorMetrics(cache)
+
+	expected := fmt.Sprintf(`# HELP ticdc_owner_changefeed_error_info The current warning or failed reason of changefeeds
+# TYPE ticdc_owner_changefeed_error_info gauge
+ticdc_owner_changefeed_error_info{changefeed="test-update",code="CDC:ErrNew",message="new reason",%s="%s",state="failed"} 1
+`, getChangefeedErrorMetricLabelName(), common.DefaultKeyspaceName)
+	require.NoError(t, testutil.CollectAndCompare(
+		metrics.ChangefeedErrorInfoGauge,
+		strings.NewReader(expected),
+		"ticdc_owner_changefeed_error_info",
+	))
+
+	recoveredInfo, err := cf.GetInfo().Clone()
+	require.NoError(t, err)
+	recoveredInfo.State = config.StateNormal
+	cf.SetInfo(recoveredInfo)
+
+	controller.syncChangefeedErrorMetrics(cache)
+
+	empty := `# HELP ticdc_owner_changefeed_error_info The current warning or failed reason of changefeeds
+# TYPE ticdc_owner_changefeed_error_info gauge
+`
+	require.NoError(t, testutil.CollectAndCompare(
+		metrics.ChangefeedErrorInfoGauge,
+		strings.NewReader(empty),
+		"ticdc_owner_changefeed_error_info",
+	))
+}
 
 func TestResumeChangefeed(t *testing.T) {
 	ctrl := gomock.NewController(t)
