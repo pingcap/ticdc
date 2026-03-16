@@ -11,7 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package jsonzstd
+package widetablewithjson
 
 import (
 	"encoding/binary"
@@ -52,55 +52,55 @@ const (
 	entityMigratedInsertWeight = 0.01
 	batchInsertWithAuxWeight   = 0.46
 
-	entitySetSpace = 10_000
+	attrKeySpace = 10_000
 )
 
-const createEntityMetadataTableFormat = `
+const createPrimaryTableFormat = `
 CREATE TABLE IF NOT EXISTS %s (
   ` + "`id`" + ` varchar(36) NOT NULL,
-  ` + "`user_id`" + ` bigint(20) NOT NULL,
-  ` + "`entity_set_id`" + ` varchar(255) NOT NULL,
-  ` + "`entity_id`" + ` varchar(255) NOT NULL,
-  ` + "`group_id`" + ` bigint(20) DEFAULT NULL,
-  ` + "`content_hash`" + ` char(32) DEFAULT NULL,
-  ` + "`secondary_id`" + ` bigint(20) DEFAULT NULL,
-  ` + "`media_metadata`" + ` varchar(6144) DEFAULT NULL,
-  ` + "`delete_after`" + ` timestamp NULL DEFAULT NULL,
+  ` + "`owner_key`" + ` bigint(20) NOT NULL,
+  ` + "`attr_key_1`" + ` varchar(255) NOT NULL,
+  ` + "`attr_key_2`" + ` varchar(255) NOT NULL,
+  ` + "`group_key`" + ` bigint(20) DEFAULT NULL,
+  ` + "`hash_value`" + ` char(32) DEFAULT NULL,
+  ` + "`lookup_key`" + ` bigint(20) DEFAULT NULL,
+  ` + "`payload_text`" + ` varchar(6144) DEFAULT NULL,
+  ` + "`expire_at`" + ` timestamp NULL DEFAULT NULL,
   ` + "`created_at`" + ` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
   ` + "`updated_at`" + ` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  ` + "`migrated_at`" + ` timestamp NULL DEFAULT NULL,
-  KEY ` + "`idx_uid_esetid_eid`" + ` (` + "`user_id`" + `,` + "`entity_set_id`" + `,` + "`entity_id`" + `),
-  KEY ` + "`idx_delafter`" + ` (` + "`delete_after`" + `),
+  ` + "`sync_at`" + ` timestamp NULL DEFAULT NULL,
+  KEY ` + "`idx_owner_attr_keys`" + ` (` + "`owner_key`" + `,` + "`attr_key_1`" + `,` + "`attr_key_2`" + `),
+  KEY ` + "`idx_expire_at`" + ` (` + "`expire_at`" + `),
   PRIMARY KEY (` + "`id`" + `) /*T![clustered_index] NONCLUSTERED */,
-  KEY ` + "`idx_secondary_id`" + ` (` + "`secondary_id`" + `)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin /*T! SHARD_ROW_ID_BITS=4 */ /*T![ttl] TTL=` + "`delete_after`" + ` + INTERVAL 1 DAY */ /*T![ttl] TTL_ENABLE='ON' */ /*T![ttl] TTL_JOB_INTERVAL='24h' */
+  KEY ` + "`idx_lookup_key`" + ` (` + "`lookup_key`" + `)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin /*T! SHARD_ROW_ID_BITS=4 */ /*T![ttl] TTL=` + "`expire_at`" + ` + INTERVAL 1 DAY */ /*T![ttl] TTL_ENABLE='ON' */ /*T![ttl] TTL_JOB_INTERVAL='24h' */
 `
 
-const createBatchMetadataTableFormat = `
+const createSecondaryTableFormat = `
 CREATE TABLE IF NOT EXISTS %s (
   ` + "`id`" + ` varchar(36) NOT NULL,
-  ` + "`user_id`" + ` bigint(20) NOT NULL,
-  ` + "`entity_set_id`" + ` varchar(255) NOT NULL,
-  ` + "`status`" + ` smallint(6) DEFAULT NULL,
-  ` + "`metadata`" + ` mediumblob DEFAULT NULL,
+  ` + "`owner_key`" + ` bigint(20) NOT NULL,
+  ` + "`attr_key_1`" + ` varchar(255) NOT NULL,
+  ` + "`state`" + ` smallint(6) DEFAULT NULL,
+  ` + "`payload_blob`" + ` mediumblob DEFAULT NULL,
   ` + "`created_at`" + ` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
   ` + "`updated_at`" + ` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  ` + "`client_id`" + ` varchar(255) DEFAULT NULL,
-  ` + "`aux_data`" + ` varchar(3072) DEFAULT NULL,
-  ` + "`callback_metadata`" + ` varchar(3072) DEFAULT NULL,
-  ` + "`pipeline_id`" + ` varchar(255) DEFAULT NULL,
-  ` + "`client_name`" + ` varchar(255) DEFAULT NULL,
-  ` + "`skip_related_ops`" + ` tinyint(1) DEFAULT NULL,
-  ` + "`job_start_timestamp`" + ` timestamp NULL DEFAULT NULL,
-  ` + "`job_end_timestamp`" + ` timestamp NULL DEFAULT NULL,
-  ` + "`snapshot_start_timestamp`" + ` timestamp NULL DEFAULT NULL,
-  ` + "`snapshot_end_timestamp`" + ` timestamp NULL DEFAULT NULL,
-  KEY ` + "`idx_uid_esetid`" + ` (` + "`user_id`" + `,` + "`entity_set_id`" + `),
+  ` + "`tag_1`" + ` varchar(255) DEFAULT NULL,
+  ` + "`payload_aux`" + ` varchar(3072) DEFAULT NULL,
+  ` + "`payload_aux_2`" + ` varchar(3072) DEFAULT NULL,
+  ` + "`tag_2`" + ` varchar(255) DEFAULT NULL,
+  ` + "`tag_3`" + ` varchar(255) DEFAULT NULL,
+  ` + "`flag_1`" + ` tinyint(1) DEFAULT NULL,
+  ` + "`event_time_1`" + ` timestamp NULL DEFAULT NULL,
+  ` + "`event_time_2`" + ` timestamp NULL DEFAULT NULL,
+  ` + "`event_time_3`" + ` timestamp NULL DEFAULT NULL,
+  ` + "`event_time_4`" + ` timestamp NULL DEFAULT NULL,
+  KEY ` + "`idx_owner_attr_key_1`" + ` (` + "`owner_key`" + `,` + "`attr_key_1`" + `),
   PRIMARY KEY (` + "`id`" + `) /*T![clustered_index] NONCLUSTERED */
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin /*T! SHARD_ROW_ID_BITS=4 */ /*T![ttl] TTL=` + "`updated_at`" + ` + INTERVAL 30 DAY */ /*T![ttl] TTL_ENABLE='ON' */ /*T![ttl] TTL_JOB_INTERVAL='24h' */
 `
 
-type JSONZstdWorkload struct {
+type WideTableWithJSONWorkload struct {
 	entityMediaSize int
 	batchAuxSize    int
 	batchCbSize     int
@@ -150,7 +150,7 @@ func parseJSONPayloadMode(mode string) jsonPayloadMode {
 	}
 }
 
-func NewJSONZstdWorkload(rowSize int, tableCount int, tableStartIndex int, totalRowCount uint64, payloadMode string) schema.Workload {
+func NewWideTableWithJSONWorkload(rowSize int, tableCount int, tableStartIndex int, totalRowCount uint64, payloadMode string) schema.Workload {
 	if rowSize < 0 {
 		rowSize = 0
 	}
@@ -185,7 +185,7 @@ func NewJSONZstdWorkload(rowSize int, tableCount int, tableStartIndex int, total
 
 	mode := parseJSONPayloadMode(payloadMode)
 
-	w := &JSONZstdWorkload{
+	w := &WideTableWithJSONWorkload{
 		entityMediaSize:        entityMediaSize,
 		batchAuxSize:           auxSize,
 		batchCbSize:            cbSize,
@@ -215,7 +215,7 @@ func NewJSONZstdWorkload(rowSize int, tableCount int, tableStartIndex int, total
 	binary.BigEndian.PutUint32(w.idSuffix[:], r.Uint32())
 	w.putRand(r)
 
-	plog.Info("json zstd workload initialized",
+	plog.Info("wide table with json workload initialized",
 		zap.Int("rowSize", rowSize),
 		zap.Int("entityMediaSize", w.entityMediaSize),
 		zap.Int("batchAuxDataSize", w.batchAuxSize),
@@ -300,7 +300,7 @@ func fillZstdHeavyPayload(dst []byte, r *rand.Rand) {
 	}
 }
 
-func (w *JSONZstdWorkload) entityMediaInsertPayload(r *rand.Rand) string {
+func (w *WideTableWithJSONWorkload) entityMediaInsertPayload(r *rand.Rand) string {
 	switch w.payloadMode {
 	case jsonPayloadModeZstd:
 		buf := make([]byte, w.entityMediaSize)
@@ -315,7 +315,7 @@ func (w *JSONZstdWorkload) entityMediaInsertPayload(r *rand.Rand) string {
 	}
 }
 
-func (w *JSONZstdWorkload) batchAuxPayload(r *rand.Rand) string {
+func (w *WideTableWithJSONWorkload) batchAuxPayload(r *rand.Rand) string {
 	switch w.payloadMode {
 	case jsonPayloadModeZstd:
 		buf := make([]byte, w.batchAuxSize)
@@ -330,7 +330,7 @@ func (w *JSONZstdWorkload) batchAuxPayload(r *rand.Rand) string {
 	}
 }
 
-func (w *JSONZstdWorkload) batchCallbackPayload(r *rand.Rand) string {
+func (w *WideTableWithJSONWorkload) batchCallbackPayload(r *rand.Rand) string {
 	switch w.payloadMode {
 	case jsonPayloadModeZstd:
 		buf := make([]byte, w.batchCbSize)
@@ -345,7 +345,7 @@ func (w *JSONZstdWorkload) batchCallbackPayload(r *rand.Rand) string {
 	}
 }
 
-func (w *JSONZstdWorkload) batchMetaInsertPayload(r *rand.Rand) []byte {
+func (w *WideTableWithJSONWorkload) batchMetaInsertPayload(r *rand.Rand) []byte {
 	switch w.payloadMode {
 	case jsonPayloadModeZstd:
 		buf := make([]byte, w.batchMetaSize)
@@ -360,7 +360,7 @@ func (w *JSONZstdWorkload) batchMetaInsertPayload(r *rand.Rand) []byte {
 	}
 }
 
-func (w *JSONZstdWorkload) batchMetaUpdatePayload(r *rand.Rand) []byte {
+func (w *WideTableWithJSONWorkload) batchMetaUpdatePayload(r *rand.Rand) []byte {
 	switch w.payloadMode {
 	case jsonPayloadModeZstd:
 		buf := make([]byte, w.batchMetaSize)
@@ -375,29 +375,29 @@ func (w *JSONZstdWorkload) batchMetaUpdatePayload(r *rand.Rand) []byte {
 	}
 }
 
-func (w *JSONZstdWorkload) getRand() *rand.Rand {
+func (w *WideTableWithJSONWorkload) getRand() *rand.Rand {
 	return w.randPool.Get().(*rand.Rand)
 }
 
-func (w *JSONZstdWorkload) putRand(r *rand.Rand) {
+func (w *WideTableWithJSONWorkload) putRand(r *rand.Rand) {
 	w.randPool.Put(r)
 }
 
-func getEntityTableName(n int) string {
+func getPrimaryTableName(n int) string {
 	if n == 0 {
-		return "`wide_table_with_json_entity_metadata`"
+		return "`wide_table_with_json_primary`"
 	}
-	return fmt.Sprintf("`wide_table_with_json_entity_metadata_%d`", n)
+	return fmt.Sprintf("`wide_table_with_json_primary_%d`", n)
 }
 
-func getBatchTableName(n int) string {
+func getSecondaryTableName(n int) string {
 	if n == 0 {
-		return "`wide_table_with_json_batch_metadata`"
+		return "`wide_table_with_json_secondary`"
 	}
-	return fmt.Sprintf("`wide_table_with_json_batch_metadata_%d`", n)
+	return fmt.Sprintf("`wide_table_with_json_secondary_%d`", n)
 }
 
-func (w *JSONZstdWorkload) slot(tableIndex int) int {
+func (w *WideTableWithJSONWorkload) slot(tableIndex int) int {
 	if len(w.entitySeq) == 0 {
 		return 0
 	}
@@ -408,7 +408,7 @@ func (w *JSONZstdWorkload) slot(tableIndex int) int {
 	return slot % len(w.entitySeq)
 }
 
-func (w *JSONZstdWorkload) newID(kind byte, tableIndex int, seq uint64) string {
+func (w *WideTableWithJSONWorkload) newID(kind byte, tableIndex int, seq uint64) string {
 	var id uuid.UUID
 	id[0] = kind
 	binary.BigEndian.PutUint32(id[1:5], uint32(tableIndex))
@@ -419,59 +419,59 @@ func (w *JSONZstdWorkload) newID(kind byte, tableIndex int, seq uint64) string {
 	return id.String()
 }
 
-func (w *JSONZstdWorkload) userID(tableIndex int, seq uint64) int64 {
+func (w *WideTableWithJSONWorkload) ownerKey(tableIndex int, seq uint64) int64 {
 	return int64(uint64(tableIndex)*1_000_000 + (seq % 1_000_000))
 }
 
-func (w *JSONZstdWorkload) entitySetID(seq uint64) string {
-	return fmt.Sprintf("eset_%d", seq%entitySetSpace)
+func (w *WideTableWithJSONWorkload) attrKey1(seq uint64) string {
+	return fmt.Sprintf("key1_%d", seq%attrKeySpace)
 }
 
-func (w *JSONZstdWorkload) entityID(seq uint64) string {
-	return fmt.Sprintf("eid_%d", seq)
+func (w *WideTableWithJSONWorkload) attrKey2(seq uint64) string {
+	return fmt.Sprintf("key2_%d", seq)
 }
 
-func (w *JSONZstdWorkload) contentHash(tableIndex int, seq uint64) string {
+func (w *WideTableWithJSONWorkload) hashValue(tableIndex int, seq uint64) string {
 	return fmt.Sprintf("%016x%016x", uint64(tableIndex), seq)
 }
 
-func (w *JSONZstdWorkload) secondaryID(tableIndex int, seq uint64) int64 {
+func (w *WideTableWithJSONWorkload) lookupKey(tableIndex int, seq uint64) int64 {
 	return int64(uint64(tableIndex)*1_000_000 + seq)
 }
 
-func (w *JSONZstdWorkload) BuildCreateTableStatement(n int) string {
-	entityName := getEntityTableName(n)
-	batchName := getBatchTableName(n)
-	return fmt.Sprintf(createEntityMetadataTableFormat, entityName) + ";" + fmt.Sprintf(createBatchMetadataTableFormat, batchName)
+func (w *WideTableWithJSONWorkload) BuildCreateTableStatement(n int) string {
+	primaryName := getPrimaryTableName(n)
+	secondaryName := getSecondaryTableName(n)
+	return fmt.Sprintf(createPrimaryTableFormat, primaryName) + ";" + fmt.Sprintf(createSecondaryTableFormat, secondaryName)
 }
 
-func (w *JSONZstdWorkload) BuildInsertSql(tableIndex int, batchSize int) string {
-	entityName := getEntityTableName(tableIndex)
+func (w *WideTableWithJSONWorkload) BuildInsertSql(tableIndex int, batchSize int) string {
+	primaryName := getPrimaryTableName(tableIndex)
 	mediaExpr := fmt.Sprintf("REPEAT('a',%d)", w.entityMediaSize)
-	return fmt.Sprintf("INSERT INTO %s (`updated_at`, `created_at`, `id`, `user_id`, `entity_set_id`, `entity_id`, `group_id`, `content_hash`, `secondary_id`, `media_metadata`) VALUES (NOW(), NOW(), UUID(), 1, 'eset_0', 'eid_0', 1, '00000000000000000000000000000000', 1, %s)", entityName, mediaExpr)
+	return fmt.Sprintf("INSERT INTO %s (`updated_at`, `created_at`, `id`, `owner_key`, `attr_key_1`, `attr_key_2`, `group_key`, `hash_value`, `lookup_key`, `payload_text`) VALUES (NOW(), NOW(), UUID(), 1, 'key1_0', 'key2_0', 1, '00000000000000000000000000000000', 1, %s)", primaryName, mediaExpr)
 }
 
-func (w *JSONZstdWorkload) BuildInsertSqlWithValues(tableIndex int, batchSize int) (string, []interface{}) {
+func (w *WideTableWithJSONWorkload) BuildInsertSqlWithValues(tableIndex int, batchSize int) (string, []interface{}) {
 	r := w.getRand()
 	defer w.putRand(r)
 
 	if r.Float64() < entityInsertRatio {
-		return w.buildEntityInsertWithValues(tableIndex, batchSize, r)
+		return w.buildPrimaryInsertWithValues(tableIndex, batchSize, r)
 	}
-	return w.buildBatchInsertWithValues(tableIndex, batchSize, r)
+	return w.buildSecondaryInsertWithValues(tableIndex, batchSize, r)
 }
 
-func (w *JSONZstdWorkload) buildEntityInsertWithValues(tableIndex int, batchSize int, r *rand.Rand) (string, []interface{}) {
-	tableName := getEntityTableName(tableIndex)
+func (w *WideTableWithJSONWorkload) buildPrimaryInsertWithValues(tableIndex int, batchSize int, r *rand.Rand) (string, []interface{}) {
+	tableName := getPrimaryTableName(tableIndex)
 	now := time.Now()
 	slot := w.slot(tableIndex)
 
 	includeMigrated := r.Float64() < entityMigratedInsertWeight
 
-	columns := "`updated_at`, `created_at`, `id`, `user_id`, `entity_set_id`, `entity_id`, `group_id`, `content_hash`, `secondary_id`, `media_metadata`"
+	columns := "`updated_at`, `created_at`, `id`, `owner_key`, `attr_key_1`, `attr_key_2`, `group_key`, `hash_value`, `lookup_key`, `payload_text`"
 	colCount := 10
 	if includeMigrated {
-		columns += ", `migrated_at`"
+		columns += ", `sync_at`"
 		colCount = 11
 	}
 
@@ -488,21 +488,21 @@ func (w *JSONZstdWorkload) buildEntityInsertWithValues(tableIndex int, batchSize
 	for range batchSize {
 		seq := w.entitySeq[slot].Add(1)
 		id := w.newID('e', tableIndex, seq)
-		userID := w.userID(tableIndex, seq)
-		entitySetID := w.entitySetID(seq)
-		entityID := w.entityID(seq)
-		groupID := int64(seq % 100_000)
-		contentHash := w.contentHash(tableIndex, seq)
-		secondaryID := w.secondaryID(tableIndex, seq)
+		ownerKey := w.ownerKey(tableIndex, seq)
+		attrKey1 := w.attrKey1(seq)
+		attrKey2 := w.attrKey2(seq)
+		groupKey := int64(seq % 100_000)
+		hashValue := w.hashValue(tableIndex, seq)
+		lookupKey := w.lookupKey(tableIndex, seq)
 
 		if includeMigrated {
 			placeholders = append(placeholders, "(?,?,?,?,?,?,?,?,?,?,?)")
 			values = append(values,
-				now, now, id, userID, entitySetID, entityID, groupID, contentHash, secondaryID, w.entityMediaInsertPayload(r), now)
+				now, now, id, ownerKey, attrKey1, attrKey2, groupKey, hashValue, lookupKey, w.entityMediaInsertPayload(r), now)
 		} else {
 			placeholders = append(placeholders, "(?,?,?,?,?,?,?,?,?,?)")
 			values = append(values,
-				now, now, id, userID, entitySetID, entityID, groupID, contentHash, secondaryID, w.entityMediaInsertPayload(r))
+				now, now, id, ownerKey, attrKey1, attrKey2, groupKey, hashValue, lookupKey, w.entityMediaInsertPayload(r))
 		}
 	}
 
@@ -510,17 +510,17 @@ func (w *JSONZstdWorkload) buildEntityInsertWithValues(tableIndex int, batchSize
 	return sb.String(), values
 }
 
-func (w *JSONZstdWorkload) buildBatchInsertWithValues(tableIndex int, batchSize int, r *rand.Rand) (string, []interface{}) {
-	tableName := getBatchTableName(tableIndex)
+func (w *WideTableWithJSONWorkload) buildSecondaryInsertWithValues(tableIndex int, batchSize int, r *rand.Rand) (string, []interface{}) {
+	tableName := getSecondaryTableName(tableIndex)
 	now := time.Now()
 	slot := w.slot(tableIndex)
 
 	includeAux := r.Float64() < batchInsertWithAuxWeight
 
-	columns := "`created_at`, `updated_at`, `id`, `user_id`, `entity_set_id`, `status`, `metadata`, `client_id`, `callback_metadata`"
+	columns := "`created_at`, `updated_at`, `id`, `owner_key`, `attr_key_1`, `state`, `payload_blob`, `tag_1`, `payload_aux_2`"
 	colCount := 9
 	if includeAux {
-		columns = "`created_at`, `updated_at`, `id`, `user_id`, `entity_set_id`, `status`, `metadata`, `client_id`, `aux_data`, `callback_metadata`, `pipeline_id`, `client_name`"
+		columns = "`created_at`, `updated_at`, `id`, `owner_key`, `attr_key_1`, `state`, `payload_blob`, `tag_1`, `payload_aux`, `payload_aux_2`, `tag_2`, `tag_3`"
 		colCount = 12
 	}
 
@@ -537,20 +537,20 @@ func (w *JSONZstdWorkload) buildBatchInsertWithValues(tableIndex int, batchSize 
 	for range batchSize {
 		seq := w.batchSeq[slot].Add(1)
 		id := w.newID('b', tableIndex, seq)
-		userID := w.userID(tableIndex, seq)
-		entitySetID := w.entitySetID(seq)
-		status := int16(r.Intn(16))
-		clientID := fmt.Sprintf("client_%d", seq%100)
+		ownerKey := w.ownerKey(tableIndex, seq)
+		attrKey1 := w.attrKey1(seq)
+		state := int16(r.Intn(16))
+		tag1 := fmt.Sprintf("tag1_%d", seq%100)
 
 		if includeAux {
 			placeholders = append(placeholders, "(?,?,?,?,?,?,?,?,?,?,?,?)")
 			values = append(values,
-				now, now, id, userID, entitySetID, status, w.batchMetaInsertPayload(r), clientID,
-				w.batchAuxPayload(r), w.batchCallbackPayload(r), fmt.Sprintf("pipe_%d", seq%100), fmt.Sprintf("client_%d", seq%100))
+				now, now, id, ownerKey, attrKey1, state, w.batchMetaInsertPayload(r), tag1,
+				w.batchAuxPayload(r), w.batchCallbackPayload(r), fmt.Sprintf("tag2_%d", seq%100), fmt.Sprintf("tag3_%d", seq%100))
 		} else {
 			placeholders = append(placeholders, "(?,?,?,?,?,?,?,?,?)")
 			values = append(values,
-				now, now, id, userID, entitySetID, status, w.batchMetaInsertPayload(r), clientID, w.batchCallbackPayload(r))
+				now, now, id, ownerKey, attrKey1, state, w.batchMetaInsertPayload(r), tag1, w.batchCallbackPayload(r))
 		}
 	}
 
@@ -558,23 +558,23 @@ func (w *JSONZstdWorkload) buildBatchInsertWithValues(tableIndex int, batchSize 
 	return sb.String(), values
 }
 
-func (w *JSONZstdWorkload) BuildUpdateSql(opt schema.UpdateOption) string {
-	entityName := getEntityTableName(opt.TableIndex)
-	return fmt.Sprintf("UPDATE %s SET `updated_at` = NOW() WHERE `delete_after` IS NULL LIMIT %d", entityName, max(1, opt.Batch))
+func (w *WideTableWithJSONWorkload) BuildUpdateSql(opt schema.UpdateOption) string {
+	primaryName := getPrimaryTableName(opt.TableIndex)
+	return fmt.Sprintf("UPDATE %s SET `updated_at` = NOW() WHERE `expire_at` IS NULL LIMIT %d", primaryName, max(1, opt.Batch))
 }
 
-func (w *JSONZstdWorkload) BuildUpdateSqlWithValues(opt schema.UpdateOption) (string, []interface{}) {
+func (w *WideTableWithJSONWorkload) BuildUpdateSqlWithValues(opt schema.UpdateOption) (string, []interface{}) {
 	r := w.getRand()
 	defer w.putRand(r)
 
 	if r.Float64() < entityUpdateRatio {
-		return w.buildEntityUpdateWithValues(opt.TableIndex, r)
+		return w.buildPrimaryUpdateWithValues(opt.TableIndex, r)
 	}
-	return w.buildBatchUpdateWithValues(opt.TableIndex, r)
+	return w.buildSecondaryUpdateWithValues(opt.TableIndex, r)
 }
 
-func (w *JSONZstdWorkload) buildEntityUpdateWithValues(tableIndex int, r *rand.Rand) (string, []interface{}) {
-	tableName := getEntityTableName(tableIndex)
+func (w *WideTableWithJSONWorkload) buildPrimaryUpdateWithValues(tableIndex int, r *rand.Rand) (string, []interface{}) {
+	tableName := getPrimaryTableName(tableIndex)
 	now := time.Now()
 	slot := w.slot(tableIndex)
 
@@ -583,25 +583,25 @@ func (w *JSONZstdWorkload) buildEntityUpdateWithValues(tableIndex int, r *rand.R
 
 	switch {
 	case r.Float64() < entityUpdateBySecondaryIDWeight:
-		secondaryID := w.secondaryID(tableIndex, seq)
-		sql := fmt.Sprintf("UPDATE %s SET `delete_after` = ?, `updated_at` = ?, `secondary_id` = ? WHERE (`secondary_id` = ?) AND `delete_after` IS NULL", tableName)
-		return sql, []interface{}{nil, now, secondaryID, secondaryID}
+		lookupKey := w.lookupKey(tableIndex, seq)
+		sql := fmt.Sprintf("UPDATE %s SET `expire_at` = ?, `updated_at` = ?, `lookup_key` = ? WHERE (`lookup_key` = ?) AND `expire_at` IS NULL", tableName)
+		return sql, []interface{}{nil, now, lookupKey, lookupKey}
 	case r.Float64() < entityUpdateBySecondaryIDWeight+entityUpdateByCompositeKeyWeight:
-		userID := w.userID(tableIndex, seq)
-		entitySetID := w.entitySetID(seq)
-		entityID := w.entityID(seq)
-		sql := fmt.Sprintf("UPDATE %s SET `updated_at` = ?, `user_id` = ?, `content_hash` = ?, `entity_id` = ?, `entity_set_id` = ? WHERE (`entity_id` = ?) AND (`entity_set_id` = ?) AND (`user_id` = ?) AND `delete_after` IS NULL", tableName)
-		contentHash := w.contentHash(tableIndex, uint64(now.UnixNano()))
-		return sql, []interface{}{now, userID, contentHash, entityID, entitySetID, entityID, entitySetID, userID}
+		ownerKey := w.ownerKey(tableIndex, seq)
+		attrKey1 := w.attrKey1(seq)
+		attrKey2 := w.attrKey2(seq)
+		sql := fmt.Sprintf("UPDATE %s SET `updated_at` = ?, `owner_key` = ?, `hash_value` = ?, `attr_key_2` = ?, `attr_key_1` = ? WHERE (`attr_key_2` = ?) AND (`attr_key_1` = ?) AND (`owner_key` = ?) AND `expire_at` IS NULL", tableName)
+		hashValue := w.hashValue(tableIndex, uint64(now.UnixNano()))
+		return sql, []interface{}{now, ownerKey, hashValue, attrKey2, attrKey1, attrKey2, attrKey1, ownerKey}
 	default:
 		id := w.newID('e', tableIndex, seq)
-		sql := fmt.Sprintf("UPDATE %s SET `id` = ?, `delete_after` = ?, `updated_at` = ? WHERE (`id` = ?) AND `delete_after` IS NULL", tableName)
+		sql := fmt.Sprintf("UPDATE %s SET `id` = ?, `expire_at` = ?, `updated_at` = ? WHERE (`id` = ?) AND `expire_at` IS NULL", tableName)
 		return sql, []interface{}{id, nil, now, id}
 	}
 }
 
-func (w *JSONZstdWorkload) buildBatchUpdateWithValues(tableIndex int, r *rand.Rand) (string, []interface{}) {
-	tableName := getBatchTableName(tableIndex)
+func (w *WideTableWithJSONWorkload) buildSecondaryUpdateWithValues(tableIndex int, r *rand.Rand) (string, []interface{}) {
+	tableName := getSecondaryTableName(tableIndex)
 	now := time.Now()
 	slot := w.slot(tableIndex)
 
@@ -609,36 +609,36 @@ func (w *JSONZstdWorkload) buildBatchUpdateWithValues(tableIndex int, r *rand.Ra
 	seq := randSeq(r, upper)
 
 	id := w.newID('b', tableIndex, seq)
-	status := int16(r.Intn(16))
+	state := int16(r.Intn(16))
 
 	p := r.Float64()
 	switch {
 	case p < batchUpdateStatusOnlyWeight:
-		sql := fmt.Sprintf("UPDATE %s SET `updated_at` = ?, `status` = ? WHERE (`id` = ?)", tableName)
-		return sql, []interface{}{now, status, id}
+		sql := fmt.Sprintf("UPDATE %s SET `updated_at` = ?, `state` = ? WHERE (`id` = ?)", tableName)
+		return sql, []interface{}{now, state, id}
 	case p < batchUpdateStatusOnlyWeight+batchUpdateMetadataWeight:
-		sql := fmt.Sprintf("UPDATE %s SET `metadata` = ?, `updated_at` = ?, `status` = ? WHERE (`id` = ?)", tableName)
-		return sql, []interface{}{w.batchMetaUpdatePayload(r), now, status, id}
+		sql := fmt.Sprintf("UPDATE %s SET `payload_blob` = ?, `updated_at` = ?, `state` = ? WHERE (`id` = ?)", tableName)
+		return sql, []interface{}{w.batchMetaUpdatePayload(r), now, state, id}
 	case p < batchUpdateStatusOnlyWeight+batchUpdateMetadataWeight+batchUpdateMetadataAndKeysWeight:
-		userID := w.userID(tableIndex, uint64(now.UnixNano()))
-		entitySetID := w.entitySetID(uint64(now.UnixNano()))
-		sql := fmt.Sprintf("UPDATE %s SET `metadata` = ?, `updated_at` = ?, `user_id` = ?, `entity_set_id` = ?, `status` = ? WHERE (`id` = ?)", tableName)
-		return sql, []interface{}{w.batchMetaUpdatePayload(r), now, userID, entitySetID, status, id}
+		ownerKey := w.ownerKey(tableIndex, uint64(now.UnixNano()))
+		attrKey1 := w.attrKey1(uint64(now.UnixNano()))
+		sql := fmt.Sprintf("UPDATE %s SET `payload_blob` = ?, `updated_at` = ?, `owner_key` = ?, `attr_key_1` = ?, `state` = ? WHERE (`id` = ?)", tableName)
+		return sql, []interface{}{w.batchMetaUpdatePayload(r), now, ownerKey, attrKey1, state, id}
 	default:
-		userID := w.userID(tableIndex, uint64(now.UnixNano()))
-		entitySetID := w.entitySetID(uint64(now.UnixNano()))
+		ownerKey := w.ownerKey(tableIndex, uint64(now.UnixNano()))
+		attrKey1 := w.attrKey1(uint64(now.UnixNano()))
 		start := now.Add(-time.Minute)
 		end := now
-		sql := fmt.Sprintf("UPDATE %s SET `job_end_timestamp` = ?, `metadata` = ?, `updated_at` = ?, `user_id` = ?, `job_start_timestamp` = ?, `entity_set_id` = ?, `status` = ? WHERE (`id` = ?)", tableName)
-		return sql, []interface{}{end, w.batchMetaUpdatePayload(r), now, userID, start, entitySetID, status, id}
+		sql := fmt.Sprintf("UPDATE %s SET `event_time_2` = ?, `payload_blob` = ?, `updated_at` = ?, `owner_key` = ?, `event_time_1` = ?, `attr_key_1` = ?, `state` = ? WHERE (`id` = ?)", tableName)
+		return sql, []interface{}{end, w.batchMetaUpdatePayload(r), now, ownerKey, start, attrKey1, state, id}
 	}
 }
 
-func (w *JSONZstdWorkload) BuildDeleteSql(opt schema.DeleteOption) string {
+func (w *WideTableWithJSONWorkload) BuildDeleteSql(opt schema.DeleteOption) string {
 	r := w.getRand()
 	defer w.putRand(r)
 
-	tableName := getEntityTableName(opt.TableIndex)
+	tableName := getPrimaryTableName(opt.TableIndex)
 	slot := w.slot(opt.TableIndex)
 	upper := minUint64(w.perTableUpdateKeySpace, w.entitySeq[slot].Load())
 
@@ -655,11 +655,11 @@ func (w *JSONZstdWorkload) BuildDeleteSql(opt schema.DeleteOption) string {
 			sb.WriteString(fmt.Sprintf("DELETE FROM %s WHERE (`id` = '%s')", tableName, id))
 			continue
 		}
-		userID := w.userID(opt.TableIndex, seq)
-		entitySetID := w.entitySetID(seq)
-		entityID := w.entityID(seq)
-		sb.WriteString(fmt.Sprintf("DELETE FROM %s WHERE (`entity_id` = '%s') AND (`entity_set_id` = '%s') AND (`user_id` = %d)",
-			tableName, entityID, entitySetID, userID))
+		ownerKey := w.ownerKey(opt.TableIndex, seq)
+		attrKey1 := w.attrKey1(seq)
+		attrKey2 := w.attrKey2(seq)
+		sb.WriteString(fmt.Sprintf("DELETE FROM %s WHERE (`attr_key_2` = '%s') AND (`attr_key_1` = '%s') AND (`owner_key` = %d)",
+			tableName, attrKey2, attrKey1, ownerKey))
 	}
 	return sb.String()
 }

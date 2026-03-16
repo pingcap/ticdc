@@ -33,11 +33,11 @@ import (
 	"workload/schema/bankupdate"
 	pcrawler "workload/schema/crawler"
 	pdc "workload/schema/dc"
-	pjsonzstd "workload/schema/jsonzstd"
 	"workload/schema/largerow"
 	"workload/schema/shop"
 	psysbench "workload/schema/sysbench"
 	puuu "workload/schema/uuu"
+	pwidetablewithjson "workload/schema/wide_table_with_json"
 )
 
 // WorkloadExecutor executes the workload and collects statistics
@@ -145,7 +145,7 @@ func (app *WorkloadApp) createWorkload() schema.Workload {
 	case dc:
 		workload = pdc.NewDCWorkload()
 	case wideTableWithJSON:
-		workload = pjsonzstd.NewJSONZstdWorkload(app.Config.RowSize, app.Config.TableCount, app.Config.TableStartIndex, app.Config.TotalRowCount, app.Config.JSONPayloadMode)
+		workload = pwidetablewithjson.NewWideTableWithJSONWorkload(app.Config.RowSize, app.Config.TableCount, app.Config.TableStartIndex, app.Config.TotalRowCount, app.Config.JSONPayloadMode)
 	default:
 		plog.Panic("unsupported workload type", zap.String("workload", app.Config.WorkloadType))
 	}
@@ -362,7 +362,7 @@ func (app *WorkloadApp) doInsertOnce(conn *sql.Conn) (uint64, error) {
 		insertSQL, values := app.Workload.(*pbank2.Bank2Workload).BuildInsertSqlWithValues(tableIndex, app.Config.BatchSize)
 		res, err = app.executeWithValues(conn, insertSQL, tableIndex, values)
 	case wideTableWithJSON:
-		insertSQL, values := app.Workload.(*pjsonzstd.JSONZstdWorkload).BuildInsertSqlWithValues(tableIndex, app.Config.BatchSize)
+		insertSQL, values := app.Workload.(*pwidetablewithjson.WideTableWithJSONWorkload).BuildInsertSqlWithValues(tableIndex, app.Config.BatchSize)
 		res, err = app.executeWithValues(conn, insertSQL, tableIndex, values)
 	default:
 		insertSQL := app.Workload.BuildInsertSql(tableIndex, app.Config.BatchSize)

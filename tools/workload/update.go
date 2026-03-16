@@ -25,8 +25,8 @@ import (
 	"go.uber.org/zap"
 	"workload/schema"
 	pbank2 "workload/schema/bank2"
-	pjsonzstd "workload/schema/jsonzstd"
 	psysbench "workload/schema/sysbench"
+	pwidetablewithjson "workload/schema/wide_table_with_json"
 )
 
 // updateTask defines a task for updating data
@@ -164,7 +164,7 @@ func (app *WorkloadApp) executeUpdate(conn *sql.Conn, task *updateTask) (sql.Res
 	case sysbench:
 		return app.executeSysbenchUpdate(conn, task)
 	case wideTableWithJSON:
-		return app.executeJSONZstdUpdate(conn, task)
+		return app.executeWideTableWithJSONUpdate(conn, task)
 	default:
 		return app.executeRegularUpdate(conn, task)
 	}
@@ -178,8 +178,8 @@ func (app *WorkloadApp) executeBank2Update(conn *sql.Conn, task *updateTask) (sq
 	return app.executeWithValues(conn, updateSQL, task.UpdateOption.TableIndex, values)
 }
 
-func (app *WorkloadApp) executeJSONZstdUpdate(conn *sql.Conn, task *updateTask) (sql.Result, error) {
-	updateSQL, values := app.Workload.(*pjsonzstd.JSONZstdWorkload).BuildUpdateSqlWithValues(task.UpdateOption)
+func (app *WorkloadApp) executeWideTableWithJSONUpdate(conn *sql.Conn, task *updateTask) (sql.Result, error) {
+	updateSQL, values := app.Workload.(*pwidetablewithjson.WideTableWithJSONWorkload).BuildUpdateSqlWithValues(task.UpdateOption)
 	task.generatedSQL = updateSQL
 	return app.executeWithValues(conn, updateSQL, task.UpdateOption.TableIndex, values)
 }

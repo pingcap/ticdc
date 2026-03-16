@@ -178,7 +178,7 @@ Run insert and update concurrently, and execute DDL in parallel:
 
 ### 7. JSON Zstd Workload
 
-Generate writes for `wide_table_with_json_entity_metadata` and `wide_table_with_json_batch_metadata` (two tables per shard). Use `-row-size` to control payload width and `-table-count` to control shard count.
+Generate writes for `wide_table_with_json_primary` and `wide_table_with_json_secondary` (two tables per shard). Use `-row-size` to control payload width and `-table-count` to control shard count.
 
 ```bash
 ./workload -action write \
