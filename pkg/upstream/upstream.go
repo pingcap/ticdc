@@ -129,16 +129,22 @@ func CreateTiStore(ctx context.Context, urls string, credential *security.Creden
 		retry.WithBackoffBaseDelay(200),
 		retry.WithBackoffMaxDelay(4000),
 		retry.WithIsRetryableErr(func(err error) bool {
-			switch errors.Cause(err) {
-			case context.Canceled:
-				return false
-			}
-			return true
+			return isCreateTiStoreRetryable(ctx, err)
 		}))
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrNewStore, err)
 	}
 	return tiStore, nil
+}
+
+func isCreateTiStoreRetryable(ctx context.Context, err error) bool {
+	switch errors.Cause(err) {
+	case context.Canceled:
+		// Only stop retrying if the caller's context is canceled.
+		// Otherwise treat it as transient (e.g. internal client cancellation).
+		return ctx.Err() == nil
+	}
+	return true
 }
 
 // init initializes the upstream

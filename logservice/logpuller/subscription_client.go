@@ -411,7 +411,13 @@ func (s *subscriptionClient) pushRegionEventToDS(subID SubscriptionID, event reg
 	// slow path: wait until paused is false
 	s.mu.Lock()
 	for s.paused.Load() {
-		s.cond.Wait()
+		select {
+		case <-s.ctx.Done():
+			s.mu.Unlock()
+			return
+		default:
+			s.cond.Wait()
+		}
 	}
 	s.mu.Unlock()
 	s.ds.Push(subID, event)
@@ -425,11 +431,15 @@ func (s *subscriptionClient) handleDSFeedBack(ctx context.Context) error {
 		case feedback := <-s.ds.Feedback():
 			switch feedback.FeedbackType {
 			case dynstream.PauseArea:
+				s.mu.Lock()
 				s.paused.Store(true)
+				s.mu.Unlock()
 				log.Info("subscription client pause push region event")
 			case dynstream.ResumeArea:
+				s.mu.Lock()
 				s.paused.Store(false)
 				s.cond.Broadcast()
+				s.mu.Unlock()
 				log.Info("subscription client resume push region event")
 			case dynstream.ReleasePath, dynstream.ResumePath:
 				// Ignore it, because it is no need to pause and resume a path in puller.
@@ -466,6 +476,10 @@ func (s *subscriptionClient) Run(ctx context.Context) error {
 // Close closes the client. Must be called after `Run` returns.
 func (s *subscriptionClient) Close(ctx context.Context) error {
 	s.cancel()
+	s.mu.Lock()
+	s.paused.Store(false)
+	s.cond.Broadcast()
+	s.mu.Unlock()
 	s.ds.Close()
 	s.regionTaskQueue.Close()
 	return nil
@@ -590,15 +604,15 @@ func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 
 		region := regionTask.GetRegionInfo()
 		if region.isStopped() {
-			s.stores.Range(func(key, value any) bool {
-				rs := value.(*requestedStore)
-				rs.requestWorkers.RLock()
-				for _, worker := range rs.requestWorkers.s {
-					worker.add(ctx, region, true)
-				}
-				rs.requestWorkers.RUnlock()
-				return true
-			})
+			enqueued, err := s.enqueueRegionToAllStores(ctx, region)
+			if err != nil {
+				return err
+			}
+			if !enqueued {
+				log.Debug("enqueue stop request failed, retry later",
+					zap.Uint64("subscriptionID", uint64(region.subscribedSpan.subID)))
+				s.regionTaskQueue.Push(regionTask)
+			}
 			continue
 		}
 
@@ -632,6 +646,32 @@ func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 			zap.Uint64("regionID", region.verID.GetID()),
 			zap.String("addr", store.storeAddr))
 	}
+}
+
+func (s *subscriptionClient) enqueueRegionToAllStores(ctx context.Context, region regionInfo) (bool, error) {
+	enqueued := true
+	var firstErr error
+	s.stores.Range(func(_ any, value any) bool {
+		rs := value.(*requestedStore)
+		rs.requestWorkers.RLock()
+		workers := rs.requestWorkers.s
+		rs.requestWorkers.RUnlock()
+		for _, worker := range workers {
+			ok, err := worker.add(ctx, region, true)
+			if err != nil {
+				firstErr = err
+				enqueued = false
+				return false
+			}
+			if !ok {
+				enqueued = false
+				// It is likely the store is busy, no need to try other workers in this store now.
+				break
+			}
+		}
+		return true
+	})
+	return enqueued, firstErr
 }
 
 func (s *subscriptionClient) attachRPCContextForRegion(ctx context.Context, region regionInfo) (regionInfo, bool) {

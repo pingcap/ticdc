@@ -32,6 +32,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/keyspace"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/pingcap/ticdc/pkg/txnutil/gc"
 	"github.com/tikv/client-go/v2/oracle"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
@@ -69,7 +70,9 @@ type DDLEventState struct {
 }
 
 type keyspaceSchemaStore struct {
+	cancel        context.CancelFunc
 	ddlJobFetcher *ddlJobFetcher
+	gcKeeper      *schemaStoreGCKeeper
 	pdClock       pdutil.Clock
 
 	// store unresolved ddl event in memory, it is thread safe
@@ -94,6 +97,8 @@ type keyspaceSchemaStore struct {
 	// max schemaVersion of all applied ddl events
 	schemaVersion int64
 }
+
+const schemaStoreGCDeleteTimeout = 10 * time.Second
 
 func (s *keyspaceSchemaStore) tryUpdateResolvedTs() {
 	pendingTs := s.pendingResolvedTs.Load()
@@ -329,18 +334,44 @@ func (s *schemaStore) Run(ctx context.Context) error {
 	return nil
 }
 
-func (s *schemaStore) Close(_ context.Context) error {
+func (s *schemaStore) Close(ctx context.Context) error {
 	s.keyspaceLocker.Lock()
 	defer s.keyspaceLocker.Unlock()
 
+	keyspaceIDs := make([]uint32, 0, len(s.keyspaceSchemaStoreMap))
 	for keyspaceID, store := range s.keyspaceSchemaStoreMap {
+		keyspaceIDs = append(keyspaceIDs, keyspaceID)
+		if store.cancel != nil {
+			store.cancel()
+		}
+		if store.gcKeeper != nil {
+			err := closeSchemaStoreGCKeeper(keyspaceID, store.gcKeeper)
+			if err != nil {
+				log.Warn("gc keeper close failed", zap.Uint32("keyspaceID", keyspaceID), zap.Error(err))
+			}
+		}
 		err := store.dataStorage.close()
 		if err != nil {
-			log.Error("dataStorage close failed", zap.Uint32("keyspaceID", keyspaceID), zap.Error(err))
+			log.Warn("dataStorage close failed", zap.Uint32("keyspaceID", keyspaceID), zap.Error(err))
 		}
 	}
-	log.Info("schema store closed")
+	log.Info("schema store closed", zap.Uint32s("keyspaceIDs", keyspaceIDs))
 	return nil
+}
+
+// closeSchemaStoreGCKeeper uses a fresh bounded context so GC cleanup still
+// runs during shutdown even if the caller's context has already been canceled.
+func closeSchemaStoreGCKeeper(keyspaceID uint32, gcKeeper *schemaStoreGCKeeper) error {
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), schemaStoreGCDeleteTimeout)
+	defer cancel()
+	err := gcKeeper.close(cleanupCtx)
+	if err != nil {
+		log.Warn("close schema store gc keeper failed",
+			zap.Uint32("keyspaceID", keyspaceID),
+			zap.String("serviceID", gcKeeper.serviceID()),
+			zap.Error(err))
+	}
+	return err
 }
 
 func (s *schemaStore) GetAllPhysicalTables(keyspaceMeta common.KeyspaceMeta, snapTs uint64, filter filter.Filter) ([]commonEvent.Table, error) {
@@ -493,11 +524,32 @@ func (s *schemaStore) RegisterKeyspace(
 		return err
 	}
 
-	storage, err := newPersistentStorage(ctx, s.root, keyspaceMeta.ID, s.pdCli, kvStorage)
+	storeCtx, cancel := context.WithCancel(ctx)
+	// The schema store initialization needs two guarantees:
+	// 1. the snapshot at gcSafePoint is still readable;
+	// 2. the DDL history after that snapshot is not GC'ed before the local
+	//    resolvedTs catches up.
+	// The keeper is created before the initial snapshot and stays alive for the
+	// whole schema store lifetime so both guarantees share the same GC barrier.
+	gcKeeper := newSchemaStoreGCKeeper(s.pdCli, keyspaceMeta)
+	gcSafePoint, err := s.acquireInitialGCSafePoint(storeCtx, keyspaceMeta, gcKeeper)
 	if err != nil {
+		cancel()
+		return err
+	}
+
+	storage, err := newPersistentStorage(storeCtx, s.root, keyspaceMeta.ID, s.pdCli, kvStorage, gcSafePoint)
+	if err != nil {
+		cancel()
+		if closeErr := closeSchemaStoreGCKeeper(keyspaceMeta.ID, gcKeeper); closeErr != nil {
+			log.Warn("cleanup schema store gc keeper failed after storage init error",
+				zap.Any("keyspace", keyspaceMeta), zap.Error(closeErr))
+		}
 		return err
 	}
 	store := &keyspaceSchemaStore{
+		cancel:        cancel,
+		gcKeeper:      gcKeeper,
 		pdClock:       s.pdClock,
 		unsortedCache: newDDLCache(),
 		dataStorage:   storage,
@@ -517,7 +569,7 @@ func (s *schemaStore) RegisterKeyspace(
 
 	subClient := appcontext.GetService[logpuller.SubscriptionClient](appcontext.SubscriptionClient)
 	fetcher := newDDLJobFetcher(
-		ctx,
+		storeCtx,
 		subClient,
 		kvStorage,
 		keyspaceMeta.ID,
@@ -528,12 +580,27 @@ func (s *schemaStore) RegisterKeyspace(
 
 	err = fetcher.run(upperBound.ResolvedTs)
 	if err != nil {
+		cancel()
+		if closeErr := store.dataStorage.close(); closeErr != nil {
+			log.Warn("cleanup schema store data storage failed after fetcher init error",
+				zap.Any("keyspace", keyspaceMeta), zap.Error(closeErr))
+		}
+		if closeErr := closeSchemaStoreGCKeeper(keyspaceMeta.ID, gcKeeper); closeErr != nil {
+			log.Warn("cleanup schema store gc keeper failed after fetcher init error",
+				zap.Any("keyspace", keyspaceMeta), zap.Error(closeErr))
+		}
 		return err
 	}
 	store.dataStorage.run()
+	// After initialization, keep advancing the GC barrier with the schema store's
+	// durable resolvedTs so the retained DDL history always covers local reads.
+	store.gcKeeper.run(storeCtx, func() uint64 {
+		return store.resolvedTs.Load()
+	})
 
 	go func(ctx context.Context, schemaStore *keyspaceSchemaStore) {
 		ticker := time.NewTicker(50 * time.Millisecond)
+		defer ticker.Stop()
 		for {
 			select {
 			case <-ctx.Done():
@@ -544,9 +611,39 @@ func (s *schemaStore) RegisterKeyspace(
 				schemaStore.tryUpdateResolvedTs()
 			}
 		}
-	}(ctx, store)
+	}(storeCtx, store)
 
 	s.keyspaceSchemaStoreMap[keyspaceMeta.ID] = store
 
 	return nil
+}
+
+func (s *schemaStore) acquireInitialGCSafePoint(
+	ctx context.Context,
+	keyspaceMeta common.KeyspaceMeta,
+	gcKeeper *schemaStoreGCKeeper,
+) (uint64, error) {
+	for {
+		// Read the current lower bound first, then install a dedicated GC barrier
+		// for this schema store instance before any snapshot or incremental pull starts.
+		gcSafePoint, err := gc.UnifyGetServiceGCSafepoint(ctx, s.pdCli, keyspaceMeta.ID, defaultSchemaStoreGcServiceID)
+		if err == nil {
+			log.Info("get gc safepoint success",
+				zap.Uint32("keyspaceID", keyspaceMeta.ID),
+				zap.Uint64("gcSafePoint", gcSafePoint),
+				zap.String("serviceID", gcKeeper.serviceID()))
+			err = gcKeeper.initialize(ctx, gcSafePoint)
+			if err == nil {
+				return gcSafePoint, nil
+			}
+		}
+
+		log.Warn("prepare schema store gc safepoint failed, will retry in 1s",
+			zap.Any("keyspace", keyspaceMeta), zap.Error(err))
+		select {
+		case <-ctx.Done():
+			return 0, errors.Trace(err)
+		case <-time.After(time.Second):
+		}
+	}
 }

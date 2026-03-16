@@ -1037,6 +1037,9 @@ func TestWriteToEventStoreZstdCompressionDisabled(t *testing.T) {
 }
 
 func TestEventStoreCompressionAndIterDecodeBufferReuse(t *testing.T) {
+	restoreCfg := setZstdCompressionForTest(t, true)
+	defer restoreCfg()
+
 	dir := t.TempDir()
 	_, storeInt := newEventStoreForTest(dir)
 	store := storeInt.(*eventStore)

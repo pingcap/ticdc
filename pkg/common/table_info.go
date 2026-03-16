@@ -48,6 +48,14 @@ func QuoteName(name string) string {
 	return "`" + EscapeName(name) + "`"
 }
 
+// UnquoteName removes one layer of MySQL identifier quoting and unescapes doubled backticks.
+func UnquoteName(name string) string {
+	if len(name) < 2 || name[0] != '`' || name[len(name)-1] != '`' {
+		return name
+	}
+	return strings.ReplaceAll(name[1:len(name)-1], "``", "`")
+}
+
 // EscapeName replaces all "`" in name with double "`"
 func EscapeName(name string) string {
 	return strings.Replace(name, "`", "``", -1)
@@ -622,7 +630,7 @@ func WrapTableInfo(schemaName string, info *model.TableInfo) *TableInfo {
 // NewTableInfo4Decoder is only used by the codec decoder for the test purpose,
 // do not call this method on the production code.
 func NewTableInfo4Decoder(schema string, tableInfo *model.TableInfo) *TableInfo {
-	cs := newColumnSchema4Decoder(tableInfo)
+	cs := NewColumnSchema4Decoder(tableInfo)
 	result := newTableInfo(schema, tableInfo.Name.O, tableInfo.ID, tableInfo.GetPartitionInfo() != nil, cs, tableInfo)
 	result.InitPrivateFields()
 	return result

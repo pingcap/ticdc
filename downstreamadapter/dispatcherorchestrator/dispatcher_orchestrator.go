@@ -262,7 +262,7 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 	if tableTriggerDispatcher := manager.GetTableTriggerEventDispatcher(); tableTriggerDispatcher != nil {
 		startTs = tableTriggerDispatcher.GetStartTs()
 	}
-	if manager.RedoEnable {
+	if manager.IsRedoReady() {
 		if tableTriggerRedoDispatcher := manager.GetTableTriggerRedoDispatcher(); tableTriggerRedoDispatcher != nil {
 			redoStartTs = tableTriggerRedoDispatcher.GetStartTs()
 		}
@@ -322,7 +322,7 @@ func (m *DispatcherOrchestrator) handlePostBootstrapRequest(
 			zap.Any("changefeedID", cfId.Name()), zap.Error(err))
 		return m.handleDispatcherError(from, req.ChangefeedID, err)
 	}
-	if manager.RedoEnable {
+	if manager.IsRedoReady() {
 		err := manager.InitalizeTableTriggerRedoDispatcher(req.RedoSchemas)
 		if err != nil {
 			log.Error("failed to initialize table trigger redo dispatcher",
@@ -381,7 +381,7 @@ func createBootstrapResponse(
 	}
 
 	retrieveDispatcherSpanForBootstrapResponse(manager, response)
-	if manager.RedoEnable {
+	if manager.IsRedoReady() {
 		// table trigger redo dispatcher startTs
 		if redoStartTs != 0 {
 			response.RedoCheckpointTs = redoStartTs
@@ -452,6 +452,9 @@ func retrieveRedoDispatcherSpanForBootstrapResponse(
 	manager *dispatchermanager.DispatcherManager,
 	response *heartbeatpb.MaintainerBootstrapResponse,
 ) {
+	if !manager.IsRedoReady() {
+		return
+	}
 	manager.GetRedoDispatcherMap().ForEach(func(id common.DispatcherID, d *dispatcher.RedoDispatcher) {
 		response.Spans = append(response.Spans, &heartbeatpb.BootstrapTableSpan{
 			ID:              id.ToPB(),
@@ -491,7 +494,7 @@ func retrieveOperatorsForBootstrapResponse(
 		req := value.(dispatchermanager.SchedulerDispatcherRequest)
 		dispatcherID := common.NewDispatcherIDFromPB(req.Config.DispatcherID)
 		if common.IsRedoMode(req.Config.Mode) {
-			if manager.RedoEnable && manager.GetRedoDispatcherMap() != nil {
+			if manager.IsRedoReady() {
 				_, ok := manager.GetRedoDispatcherMap().Get(dispatcherID)
 				// Log error if dispatcher not found and action is not create
 				// It's possible that the dispatcher is not found when the action is create

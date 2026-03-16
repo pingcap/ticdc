@@ -463,6 +463,13 @@ if [ "${manual_keyspace_create}" = "true" ]; then
 fi
 
 ####################start TiDB####################
+# TODO: replace this fixed delay with an explicit keyspace readiness check.
+# PD health only guarantees the service is up. In next-gen bootstrap we also
+# rely on PD finishing keyspace pre-allocation before the SYSTEM TiDB starts.
+# Giving PD a short quiet window here reduces flaky startup failures in CI.
+echo "Waiting for next-gen keyspace pre-allocation to settle..."
+sleep 30
+
 touch "$OUT_DIR/upstream-tidb-system.toml"
 if [ -f "$tidb_config" ]; then
 	cat "$tidb_config" >>"$OUT_DIR/upstream-tidb-system.toml"

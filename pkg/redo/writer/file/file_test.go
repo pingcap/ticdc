@@ -19,9 +19,12 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	backuppb "github.com/pingcap/kvproto/pkg/brpb"
 	"github.com/pingcap/ticdc/pkg/common"
+	pevent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/fsutil"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/redo"
@@ -400,4 +403,66 @@ func TestRotateFileWithoutFileAllocator(t *testing.T) {
 	require.Nil(t, err)
 
 	w.Close()
+}
+
+func TestRunFlushesOnBatchBoundaryAndExecutesPostFlush(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	flushIntervalInMs := int64(60 * 1000)
+	flushWorkerNum := 9
+	w, err := NewFileWriter(context.Background(), &writer.LogWriterConfig{
+		ConsistentConfig: config.ConsistentConfig{
+			FlushIntervalInMs: &flushIntervalInMs,
+			FlushWorkerNum:    &flushWorkerNum,
+		},
+		Dir:               dir,
+		CaptureID:         "cp",
+		ChangeFeedID:      common.NewChangeFeedIDWithName("test-run-batch", common.DefaultKeyspaceName),
+		MaxLogSizeInBytes: redo.DefaultMaxLogSize * redo.Megabyte,
+	}, redo.RedoRowLogFileType)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runErrCh := make(chan error, 1)
+	go func() {
+		runErrCh <- w.Run(ctx)
+	}()
+
+	postFlushCnt := atomic.NewInt64(0)
+	for i := 0; i < redo.DefaultFlushBatchSize-1; i++ {
+		ts := uint64(i + 1)
+		w.GetInputCh() <- &pevent.RedoRowEvent{
+			StartTs:  ts,
+			CommitTs: ts,
+			Callback: func() {
+				postFlushCnt.Inc()
+			},
+		}
+	}
+
+	// The callback should not be executed before the batch reaches the boundary.
+	require.Equal(t, int64(0), postFlushCnt.Load())
+	select {
+	case err := <-runErrCh:
+		require.Failf(t, "run exited unexpectedly", "run returned before cancel: %v", err)
+	default:
+	}
+
+	ts := uint64(redo.DefaultFlushBatchSize)
+	w.GetInputCh() <- &pevent.RedoRowEvent{
+		StartTs:  ts,
+		CommitTs: ts,
+		Callback: func() {
+			postFlushCnt.Inc()
+		},
+	}
+
+	require.Eventually(t, func() bool {
+		return postFlushCnt.Load() == int64(redo.DefaultFlushBatchSize)
+	}, 10*time.Second, 20*time.Millisecond)
+
+	cancel()
+	require.ErrorIs(t, <-runErrCh, context.Canceled)
+	require.NoError(t, w.Close())
 }
