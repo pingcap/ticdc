@@ -73,16 +73,16 @@ type WorkloadApp struct {
 }
 
 const (
-	bank       = "bank"
-	sysbench   = "sysbench"
-	largeRow   = "large_row"
-	shopItem   = "shop_item"
-	uuu        = "uuu"
-	crawler    = "crawler"
-	bank2      = "bank2"
-	bank3      = "bank3"
-	bankUpdate = "bank_update"
-	dc         = "dc"
+	bank              = "bank"
+	sysbench          = "sysbench"
+	largeRow          = "large_row"
+	shopItem          = "shop_item"
+	uuu               = "uuu"
+	crawler           = "crawler"
+	bank2             = "bank2"
+	bank3             = "bank3"
+	bankUpdate        = "bank_update"
+	dc                = "dc"
 	wideTableWithJSON = "wide_table_with_json"
 )
 
