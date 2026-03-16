@@ -201,6 +201,6 @@ Generate writes for `wide_table_with_json_primary` and `wide_table_with_json_sec
 - Ensure the database is properly configured and has the necessary permissions.
 - Adjust the thread and batch-size parameters based on your needs.
 - Use `-batch-in-txn` to wrap each batch in a single explicit transaction (BEGIN/COMMIT).
-- For `wide_table_with_json`, use `-json-payload-mode zstd` to generate a zstd friendly JSON-like payload, or `-json-payload-mode random` for incompressible payloads.
+- For `wide_table_with_json`, use `-json-payload-mode zstd` to simulate JSON-like payloads with higher zstd compression cost, or `-json-payload-mode random` as a contrasting random-byte baseline.
 - For workloads that support partitioned tables (e.g. bank3), set `-partitioned=false` to create non-partitioned tables.
 - `-bank3-partitioned` is deprecated; use `-partitioned`.

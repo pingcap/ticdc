@@ -1,11 +1,11 @@
 # `wide_table_with_json` workload
 
-This workload generates **write/update/delete** traffic against a pair of anonymized wide tables, with a focus on **large JSON-like payloads** and **compression behavior**.
+This workload generates **write/update/delete** traffic against a pair of anonymized wide tables, with a focus on **large JSON-like payloads** and **compression cost behavior**.
 
 It is useful for testing:
 
 - Replication / CDC throughput with wide rows.
-- Compression friendliness (highly compressible vs incompressible payloads).
+- Compression-heavy workloads, especially cases where zstd processing is expensive.
 - Mixed update patterns (status-only, metadata updates, key updates, timestamp updates).
 
 ## Tables
@@ -31,8 +31,8 @@ When `-row-size` is large, each column is clamped to its maximum.
 Use `-json-payload-mode` to control how payload bytes are generated:
 
 - `const`: deterministic repeated bytes (fast, stable baseline).
-- `zstd`: fills payload with repeated JSON-like records to be **zstd-friendly**.
-- `random`: random bytes to be **incompressible**.
+- `zstd`: fills payload with repeated JSON-like records to simulate workloads where **zstd compression itself is relatively expensive**.
+- `random`: fills payload with random bytes as a contrasting baseline pattern.
 
 ## Workload behavior (high level)
 
@@ -44,7 +44,7 @@ Use `-json-payload-mode` to control how payload bytes are generated:
 
 ## Example
 
-Create tables + run mixed writes with zstd-friendly payloads:
+Create tables + run mixed writes with a zstd-heavy payload pattern:
 
 ```bash
 ./workload -action write \
