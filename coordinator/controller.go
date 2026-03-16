@@ -15,7 +15,6 @@ package coordinator
 
 import (
 	"context"
-	"strings"
 	"sync"
 	"time"
 
@@ -49,53 +48,7 @@ const (
 	nodeChangeHandlerID           = "coordinator-controller"
 	createChangefeedMaxRetry      = 10
 	createChangefeedRetryInterval = 5 * time.Second
-	changefeedErrorMetricMsgLimit = 256
 )
-
-type changefeedErrorMetricLabels struct {
-	keyspace   string
-	changefeed string
-	state      string
-	code       string
-	message    string
-}
-
-func (l changefeedErrorMetricLabels) labelValues() []string {
-	return []string{l.keyspace, l.changefeed, l.state, l.code, l.message}
-}
-
-func normalizeChangefeedErrorMetricMessage(message string) string {
-	message = strings.Join(strings.Fields(message), " ")
-	if len(message) <= changefeedErrorMetricMsgLimit {
-		return message
-	}
-	return message[:changefeedErrorMetricMsgLimit-3] + "..."
-}
-
-func getChangefeedErrorMetricLabels(info *config.ChangeFeedInfo) (changefeedErrorMetricLabels, bool) {
-	if info == nil {
-		return changefeedErrorMetricLabels{}, false
-	}
-	if info.State != config.StateFailed && info.State != config.StateWarning {
-		return changefeedErrorMetricLabels{}, false
-	}
-
-	runningErr := info.Error
-	if runningErr == nil {
-		runningErr = info.Warning
-	}
-	if runningErr == nil {
-		return changefeedErrorMetricLabels{}, false
-	}
-
-	return changefeedErrorMetricLabels{
-		keyspace:   info.ChangefeedID.Keyspace(),
-		changefeed: info.ChangefeedID.Name(),
-		state:      string(info.State),
-		code:       runningErr.Code,
-		message:    normalizeChangefeedErrorMetricMessage(runningErr.Message),
-	}, true
-}
 
 // Controller schedules and balance changefeeds, there are 3 main components:
 //  1. scheduler: generate operators for handling different scheduling tasks.
