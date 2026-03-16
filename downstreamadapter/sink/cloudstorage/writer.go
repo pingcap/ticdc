@@ -18,7 +18,6 @@ import (
 	"context"
 	"path"
 	"strconv"
-	"sync/atomic"
 	"time"
 
 	"github.com/pingcap/failpoint"
@@ -27,7 +26,6 @@ import (
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	pmetrics "github.com/pingcap/ticdc/pkg/metrics"
-	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/utils/chann"
@@ -37,24 +35,30 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// writer denotes a worker responsible for writing messages to cloud storage.
 type writer struct {
-	// worker id
-	id           int
+	shardID      int
 	changeFeedID commonType.ChangeFeedID
 	storage      storage.ExternalStorage
 	config       *cloudstorage.Config
-	// toBeFlushedCh contains a set of batchedTask waiting to be flushed to cloud storage.
-	toBeFlushedCh          chan batchedTask
-	inputCh                *chann.DrainableChann[eventFragment]
-	isClosed               uint64
-	statistics             *pmetrics.Statistics
-	filePathGenerator      *cloudstorage.FilePathGenerator
+
+	toBeFlushedCh chan writerTask
+	inputCh       *chann.DrainableChann[*task]
+
+	statistics        *pmetrics.Statistics
+	filePathGenerator *cloudstorage.FilePathGenerator
+
 	metricWriteBytes       prometheus.Gauge
 	metricFileCount        prometheus.Gauge
 	metricWriteDuration    prometheus.Observer
 	metricFlushDuration    prometheus.Observer
 	metricsWorkerBusyRatio prometheus.Counter
+}
+
+// writerTask is internal and never crosses component boundary.
+// marker task and data batch are mutually exclusive in normal flow.
+type writerTask struct {
+	batch  batchedTask
+	marker *flushMarker
 }
 
 func newWriter(
@@ -63,18 +67,19 @@ func newWriter(
 	storage storage.ExternalStorage,
 	config *cloudstorage.Config,
 	extension string,
-	inputCh *chann.DrainableChann[eventFragment],
 	statistics *pmetrics.Statistics,
 ) *writer {
-	d := &writer{
-		id:                id,
-		changeFeedID:      changefeedID,
-		storage:           storage,
-		config:            config,
-		inputCh:           inputCh,
-		toBeFlushedCh:     make(chan batchedTask, 64),
-		statistics:        statistics,
-		filePathGenerator: cloudstorage.NewFilePathGenerator(changefeedID, config, storage, extension),
+	return &writer{
+		shardID:       id,
+		changeFeedID:  changefeedID,
+		storage:       storage,
+		config:        config,
+		inputCh:       chann.NewAutoDrainChann[*task](),
+		toBeFlushedCh: make(chan writerTask, 64),
+		statistics:    statistics,
+		filePathGenerator: cloudstorage.NewFilePathGenerator(
+			changefeedID, config, storage, extension,
+		),
 		metricWriteBytes: metrics.CloudStorageWriteBytesGauge.
 			WithLabelValues(changefeedID.Keyspace(), changefeedID.ID().String()),
 		metricFileCount: metrics.CloudStorageFileCountGauge.
@@ -86,69 +91,66 @@ func newWriter(
 		metricsWorkerBusyRatio: metrics.CloudStorageWorkerBusyRatio.
 			WithLabelValues(changefeedID.Keyspace(), changefeedID.ID().String(), strconv.Itoa(id)),
 	}
-
-	return d
 }
 
-// Run creates a set of background goroutines.
-func (d *writer) Run(ctx context.Context) error {
-	eg, ctx := errgroup.WithContext(ctx)
-	eg.Go(func() error {
+func (d *writer) run(ctx context.Context) error {
+	g, ctx := errgroup.WithContext(ctx)
+	g.Go(func() error {
 		return d.flushMessages(ctx)
 	})
-
-	eg.Go(func() error {
-		return d.genAndDispatchTask(ctx, d.inputCh)
+	g.Go(func() error {
+		return d.genAndDispatchTask(ctx)
 	})
-
-	return eg.Wait()
+	return g.Wait()
 }
 
-// SetClock is used for unit test
-func (d *writer) SetClock(pdClock pdutil.Clock) {
-	d.filePathGenerator.SetClock(pdClock)
-}
-
-// flushMessages flushed messages of active tables to cloud storage.
-// active tables are those tables that have received events after the last flush.
 func (d *writer) flushMessages(ctx context.Context) error {
 	var flushTimeSlice time.Duration
 	overseerDuration := d.config.FlushInterval * 2
 	overseerTicker := time.NewTicker(overseerDuration)
 	defer overseerTicker.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
-			return errors.Trace(ctx.Err())
+			return errors.Trace(context.Cause(ctx))
 		case <-overseerTicker.C:
 			d.metricsWorkerBusyRatio.Add(flushTimeSlice.Seconds())
 			flushTimeSlice = 0
-		case batchedTask := <-d.toBeFlushedCh:
-			if atomic.LoadUint64(&d.isClosed) == 1 {
+		case task, ok := <-d.toBeFlushedCh:
+			if !ok {
 				return nil
 			}
+			if task.marker != nil {
+				// Flush marker ack point:
+				// marker is emitted only after the pending batch of the same dispatcher
+				// is emitted in genAndDispatchTask.
+				task.marker.finish()
+				continue
+			}
+			if len(task.batch.batch) == 0 {
+				continue
+			}
+
 			start := time.Now()
-			for table, task := range batchedTask.batch {
-				if len(task.msgs) == 0 {
+			for table, singleTask := range task.batch.batch {
+				if len(singleTask.msgs) == 0 {
 					continue
 				}
 
-				// generate scheme.json file before generating the first data file if necessary
-				hasNewerSchemaVersion, err := d.filePathGenerator.CheckOrWriteSchema(ctx, table, task.tableInfo)
+				hasNewerSchemaVersion, err := d.filePathGenerator.CheckOrWriteSchema(ctx, table, singleTask.tableInfo)
 				if err != nil {
 					log.Error("failed to write schema file to external storage",
-						zap.Int("workerID", d.id),
+						zap.Int("shardID", d.shardID),
 						zap.String("keyspace", d.changeFeedID.Keyspace()),
 						zap.Stringer("changefeed", d.changeFeedID.ID()),
 						zap.Error(err))
-					return errors.Trace(err)
+					return err
 				}
-				// It is possible that a DML event is sent after a DDL event during dispatcher scheduling.
-				// We need to ignore such DML events, as they belong to a stale schema version.
 				if hasNewerSchemaVersion {
-					d.ignoreTableTask(task)
+					d.ignoreTableTask(singleTask)
 					log.Warn("ignore messages belonging to an old schema version",
-						zap.Int("workerID", d.id),
+						zap.Int("shardID", d.shardID),
 						zap.String("keyspace", d.changeFeedID.Keyspace()),
 						zap.Stringer("changefeed", d.changeFeedID.ID()),
 						zap.String("schema", table.TableNameWithPhysicTableID.Schema),
@@ -157,19 +159,15 @@ func (d *writer) flushMessages(ctx context.Context) error {
 					continue
 				}
 
-				// make sure that `generateDateStr()` is invoked ONLY once before
-				// generating data file path and index file path. Because we don't expect the index
-				// file is written to a different dir if date change happens between
-				// generating data and index file.
 				date := d.filePathGenerator.GenerateDateStr()
 				dataFilePath, err := d.filePathGenerator.GenerateDataFilePath(ctx, table, date)
 				if err != nil {
 					log.Error("failed to generate data file path",
-						zap.Int("workerID", d.id),
+						zap.Int("shardID", d.shardID),
 						zap.String("keyspace", d.changeFeedID.Keyspace()),
 						zap.Stringer("changefeed", d.changeFeedID.ID()),
 						zap.Error(err))
-					return errors.Trace(err)
+					return err
 				}
 				indexFilePath, err := d.filePathGenerator.GenerateIndexFilePath(table, date)
 				if err != nil {
@@ -181,27 +179,27 @@ func (d *writer) flushMessages(ctx context.Context) error {
 					return errors.Trace(err)
 				}
 
-				// first write the data file to external storage.
-				err = d.writeDataFile(ctx, dataFilePath, indexFilePath, task)
-				if err != nil {
+				if err := d.writeDataFile(ctx, dataFilePath, indexFilePath, singleTask); err != nil {
 					log.Error("failed to write data file to external storage",
-						zap.Int("workerID", d.id),
+						zap.Int("shardID", d.shardID),
 						zap.String("keyspace", d.changeFeedID.Keyspace()),
 						zap.Stringer("changefeed", d.changeFeedID.ID()),
 						zap.String("path", dataFilePath),
 						zap.Error(err))
-					return errors.Trace(err)
+					return err
 				}
 
-				log.Debug("write file to storage success", zap.Int("workerID", d.id),
+				log.Debug("write file to storage success",
+					zap.Int("shardID", d.shardID),
 					zap.String("keyspace", d.changeFeedID.Keyspace()),
 					zap.Stringer("changefeed", d.changeFeedID.ID()),
 					zap.String("schema", table.TableNameWithPhysicTableID.Schema),
 					zap.String("table", table.TableNameWithPhysicTableID.Table),
-					zap.String("path", dataFilePath),
-				)
+					zap.String("path", dataFilePath))
 			}
-			flushTimeSlice += time.Since(start)
+
+			flushDuration := time.Since(start)
+			flushTimeSlice += flushDuration
 		}
 	}
 }
@@ -210,7 +208,10 @@ func (d *writer) writeIndexFile(ctx context.Context, path, content string) error
 	start := time.Now()
 	err := d.storage.WriteFile(ctx, path, []byte(content))
 	d.metricFlushDuration.Observe(time.Since(start).Seconds())
-	return err
+	if err != nil {
+		return errors.Trace(err)
+	}
+	return nil
 }
 
 func (d *writer) ignoreTableTask(task *singleTableTask) {
@@ -226,7 +227,7 @@ func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath 
 	buf := bytes.NewBuffer(make([]byte, 0, task.size))
 	rowsCnt := 0
 	bytesCnt := int64(0)
-	// There is always only one message here in task.msgs
+
 	for _, msg := range task.msgs {
 		if msg.Key != nil && rowsCnt == 0 {
 			buf.Write(msg.Key)
@@ -241,28 +242,32 @@ func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath 
 	if err := d.statistics.RecordBatchExecution(func() (int, int64, error) {
 		start := time.Now()
 		if d.config.FlushConcurrency <= 1 {
-			return rowsCnt, bytesCnt, d.storage.WriteFile(ctx, dataFilePath, buf.Bytes())
+			err := d.storage.WriteFile(ctx, dataFilePath, buf.Bytes())
+			if err != nil {
+				return 0, 0, errors.Trace(err)
+			}
+			d.metricWriteDuration.Observe(time.Since(start).Seconds())
+			return rowsCnt, bytesCnt, nil
 		}
 
 		writer, inErr := d.storage.Create(ctx, dataFilePath, &storage.WriterOption{
 			Concurrency: d.config.FlushConcurrency,
 		})
 		if inErr != nil {
-			return 0, 0, inErr
+			return 0, 0, errors.Trace(inErr)
 		}
 
 		if _, inErr = writer.Write(ctx, buf.Bytes()); inErr != nil {
-			return 0, 0, inErr
+			return 0, 0, errors.Trace(inErr)
 		}
-		// We have to wait the writer to close to complete the upload
-		// If failed to close writer, some DMLs may not be upload successfully
 		if inErr = writer.Close(ctx); inErr != nil {
-			log.Error("failed to close writer", zap.Error(inErr),
-				zap.Int("workerID", d.id),
+			log.Error("failed to close writer",
+				zap.Error(inErr),
+				zap.Int("shardID", d.shardID),
 				zap.Any("table", task.tableInfo.TableName),
 				zap.String("keyspace", d.changeFeedID.Keyspace()),
 				zap.Stringer("changefeed", d.changeFeedID.ID()))
-			return 0, 0, inErr
+			return 0, 0, errors.Trace(inErr)
 		}
 
 		d.metricFlushDuration.Observe(time.Since(start).Seconds())
@@ -274,17 +279,14 @@ func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath 
 	d.metricWriteBytes.Add(float64(bytesCnt))
 	d.metricFileCount.Add(1)
 
-	// then write the index file to external storage in the end.
-	// the file content is simply the last data file path
-	err := d.writeIndexFile(ctx, indexFilePath, path.Base(dataFilePath)+"\n")
-	if err != nil {
+	if err := d.writeIndexFile(ctx, indexFilePath, path.Base(dataFilePath)+"\n"); err != nil {
 		log.Error("failed to write index file to external storage",
-			zap.Int("workerID", d.id),
+			zap.Int("shardID", d.shardID),
 			zap.String("keyspace", d.changeFeedID.Keyspace()),
 			zap.Stringer("changefeed", d.changeFeedID.ID()),
 			zap.String("path", indexFilePath),
 			zap.Error(err))
-		return errors.Trace(err)
+		return err
 	}
 
 	for _, cb := range callbacks {
@@ -292,78 +294,102 @@ func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath 
 			cb()
 		}
 	}
-
 	return nil
 }
 
-// genAndDispatchTask dispatches flush tasks in two conditions:
-// 1. the flush interval exceeds the upper limit.
-// 2. the file size exceeds the upper limit.
-func (d *writer) genAndDispatchTask(ctx context.Context,
-	ch *chann.DrainableChann[eventFragment],
-) error {
+// genAndDispatchTask builds table batches and emits flush tasks.
+// Invariants:
+//  1. DDL marker will flush current batch first, then emit marker task.
+//  2. Context cancellation stops batching immediately.
+//  3. Size-triggered flush only flushes the target table shard batch.
+func (d *writer) genAndDispatchTask(ctx context.Context) error {
 	batchedTask := newBatchedTask()
 	ticker := time.NewTicker(d.config.FlushInterval)
 	defer ticker.Stop()
+	defer close(d.toBeFlushedCh)
+
 	for {
-		// this failpoint is use to pass this ticker once
-		// to make writeEvent in the test case can write into the same file
 		failpoint.Inject("passTickerOnce", func() {
 			<-ticker.C
 		})
 
 		select {
 		case <-ctx.Done():
-			return errors.Trace(ctx.Err())
+			return errors.Trace(context.Cause(ctx))
 		case <-ticker.C:
-			if atomic.LoadUint64(&d.isClosed) == 1 {
-				return nil
+			if len(batchedTask.batch) == 0 {
+				continue
 			}
 			select {
 			case <-ctx.Done():
-				return errors.Trace(ctx.Err())
-			case d.toBeFlushedCh <- batchedTask:
+				return errors.Trace(context.Cause(ctx))
+			case d.toBeFlushedCh <- writerTask{batch: batchedTask}:
 				log.Debug("flush task is emitted successfully when flush interval exceeds",
 					zap.Int("tablesLength", len(batchedTask.batch)))
 				batchedTask = newBatchedTask()
 			default:
 			}
-		case frag, ok := <-ch.Out():
-			if !ok || atomic.LoadUint64(&d.isClosed) == 1 {
-				return nil
-			}
-			batchedTask.handleSingleTableEvent(frag)
-			// if the file size exceeds the upper limit, emit the flush task containing the table
-			// as soon as possible.
-			table := frag.versionedTable
-			if batchedTask.batch[table].size >= uint64(d.config.FileSize) {
-				task := batchedTask.generateTaskByTable(table)
+		case task, ok := <-d.inputCh.Out():
+			if !ok {
+				if len(batchedTask.batch) == 0 {
+					return nil
+				}
 				select {
 				case <-ctx.Done():
-					return errors.Trace(ctx.Err())
-				case d.toBeFlushedCh <- task:
+					return errors.Trace(context.Cause(ctx))
+				case d.toBeFlushedCh <- writerTask{batch: batchedTask}:
+					return nil
+				}
+			}
+
+			if task.isFlushTask() {
+				dispatcherBatch := batchedTask.detachTaskByDispatcher(task.dispatcherID)
+				if len(dispatcherBatch.batch) > 0 {
+					select {
+					case <-ctx.Done():
+						return errors.Trace(context.Cause(ctx))
+					case d.toBeFlushedCh <- writerTask{batch: dispatcherBatch}:
+					}
+				}
+				select {
+				case <-ctx.Done():
+					return errors.Trace(context.Cause(ctx))
+				case d.toBeFlushedCh <- writerTask{marker: task.marker}:
+				}
+				continue
+			}
+
+			task.event.PostEnqueue()
+			batchedTask.handleSingleTableEvent(task)
+			table := task.versionedTable
+			if batchedTask.batch[table].size >= uint64(d.config.FileSize) {
+				taskByTable := batchedTask.detachTaskByTable(table)
+				select {
+				case <-ctx.Done():
+					return errors.Trace(context.Cause(ctx))
+				case d.toBeFlushedCh <- writerTask{batch: taskByTable}:
 					log.Debug("flush task is emitted successfully when file size exceeds",
 						zap.Any("table", table),
-						zap.Int("eventsLenth", len(task.batch[table].msgs)))
+						zap.Int("eventsLength", len(taskByTable.batch[table].msgs)))
 				}
 			}
 		}
 	}
 }
 
-func (d *writer) close() {
-	if !atomic.CompareAndSwapUint64(&d.isClosed, 0, 1) {
-		return
+func (d *writer) enqueueTask(ctx context.Context, t *task) error {
+	select {
+	case <-ctx.Done():
+		return errors.Trace(context.Cause(ctx))
+	case d.inputCh.In() <- t:
+		return nil
 	}
 }
 
-// batchedTask contains a set of singleTableTask.
-// We batch message of different tables together to reduce the overhead of calling external storage API.
 type batchedTask struct {
 	batch map[cloudstorage.VersionedTableName]*singleTableTask
 }
 
-// singleTableTask contains a set of messages belonging to the same table.
 type singleTableTask struct {
 	size      uint64
 	tableInfo *commonType.TableInfo
@@ -376,7 +402,7 @@ func newBatchedTask() batchedTask {
 	}
 }
 
-func (t *batchedTask) handleSingleTableEvent(event eventFragment) {
+func (t *batchedTask) handleSingleTableEvent(event *task) {
 	table := event.versionedTable
 	if _, ok := t.batch[table]; !ok {
 		t.batch[table] = &singleTableTask{
@@ -385,21 +411,33 @@ func (t *batchedTask) handleSingleTableEvent(event eventFragment) {
 		}
 	}
 
-	v := t.batch[table]
+	tableTask := t.batch[table]
 	for _, msg := range event.encodedMsgs {
-		v.size += uint64(len(msg.Value))
+		tableTask.size += uint64(len(msg.Value))
 	}
-	v.msgs = append(v.msgs, event.encodedMsgs...)
+	tableTask.msgs = append(tableTask.msgs, event.encodedMsgs...)
 }
 
-func (t *batchedTask) generateTaskByTable(table cloudstorage.VersionedTableName) batchedTask {
-	v := t.batch[table]
-	if v == nil {
+func (t *batchedTask) detachTaskByTable(table cloudstorage.VersionedTableName) batchedTask {
+	tableTask := t.batch[table]
+	if tableTask == nil {
 		log.Panic("table not found in dml task", zap.Any("table", table), zap.Any("task", t))
 	}
 	delete(t.batch, table)
 
 	return batchedTask{
-		batch: map[cloudstorage.VersionedTableName]*singleTableTask{table: v},
+		batch: map[cloudstorage.VersionedTableName]*singleTableTask{table: tableTask},
 	}
+}
+
+func (t *batchedTask) detachTaskByDispatcher(dispatcherID commonType.DispatcherID) batchedTask {
+	batchByDispatcher := newBatchedTask()
+	for table, tableTask := range t.batch {
+		if table.DispatcherID != dispatcherID {
+			continue
+		}
+		batchByDispatcher.batch[table] = tableTask
+		delete(t.batch, table)
+	}
+	return batchByDispatcher
 }

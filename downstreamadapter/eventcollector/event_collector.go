@@ -499,7 +499,7 @@ func (c *EventCollector) handleDispatcherHeartbeatResponse(targetMessage *messag
 }
 
 // MessageCenterHandler is the handler for the events message from EventService.
-func (c *EventCollector) MessageCenterHandler(_ context.Context, targetMessage *messaging.TargetMessage) error {
+func (c *EventCollector) MessageCenterHandler(ctx context.Context, targetMessage *messaging.TargetMessage) error {
 	inflightDuration := time.Since(time.UnixMilli(targetMessage.CreateAt)).Seconds()
 	c.metricReceiveEventLagDuration.Observe(inflightDuration)
 
@@ -511,7 +511,11 @@ func (c *EventCollector) MessageCenterHandler(_ context.Context, targetMessage *
 	// If the message is a log service event, we need to forward it to the
 	// corresponding channel to handle it in multi-thread.
 	if targetMessage.Type.IsLogServiceEvent() {
-		c.receiveChannels[targetMessage.GetGroup()%uint64(len(c.receiveChannels))] <- targetMessage
+		select {
+		case <-ctx.Done():
+			return errors.Trace(ctx.Err())
+		case c.receiveChannels[targetMessage.GetGroup()%uint64(len(c.receiveChannels))] <- targetMessage:
+		}
 		return nil
 	}
 
@@ -529,11 +533,15 @@ func (c *EventCollector) MessageCenterHandler(_ context.Context, targetMessage *
 }
 
 // RedoMessageCenterHandler is the handler for the redo events message from EventService.
-func (c *EventCollector) RedoMessageCenterHandler(_ context.Context, targetMessage *messaging.TargetMessage) error {
+func (c *EventCollector) RedoMessageCenterHandler(ctx context.Context, targetMessage *messaging.TargetMessage) error {
 	// If the message is a log service event, we need to forward it to the
 	// corresponding channel to handle it in multi-thread.
 	if targetMessage.Type.IsLogServiceEvent() {
-		c.redoReceiveChannels[targetMessage.GetGroup()%uint64(len(c.redoReceiveChannels))] <- targetMessage
+		select {
+		case <-ctx.Done():
+			return errors.Trace(ctx.Err())
+		case c.redoReceiveChannels[targetMessage.GetGroup()%uint64(len(c.redoReceiveChannels))] <- targetMessage:
+		}
 		return nil
 	}
 	log.Warn("unknown message type, ignore it",

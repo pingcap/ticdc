@@ -55,6 +55,14 @@ var (
 		Buckets:   prometheus.ExponentialBuckets(0.001, 2.0, 13),
 	}, []string{"namespace", "changefeed"})
 
+	CloudStorageDDLFlushDurationHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: namespace,
+		Subsystem: subsystem,
+		Name:      "cloud_storage_ddl_flush_duration_seconds",
+		Help:      "DDL flush duration for cloud storage sink",
+		Buckets:   prometheus.ExponentialBuckets(0.001, 2.0, 13),
+	}, []string{"namespace", "changefeed"})
+
 	// CloudStorageWorkerBusyRatio records the busy ratio of CloudStorage bgUpdateLog worker.
 	CloudStorageWorkerBusyRatio = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -71,5 +79,6 @@ func InitCloudStorageMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(CloudStorageFileCountGauge)
 	registry.MustRegister(CloudStorageWriteDurationHistogram)
 	registry.MustRegister(CloudStorageFlushDurationHistogram)
+	registry.MustRegister(CloudStorageDDLFlushDurationHistogram)
 	registry.MustRegister(CloudStorageWorkerBusyRatio)
 }

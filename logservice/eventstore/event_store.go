@@ -1287,6 +1287,7 @@ func (e *eventStore) writeEvents(
 	metrics.EventStoreWriteRequestsCount.Inc()
 	prepareStart := time.Now()
 	batch := db.NewBatch()
+	defer batch.Close()
 	kvCount := 0
 	var totalValueBytesBefore int64
 	var totalValueBytesAfter int64

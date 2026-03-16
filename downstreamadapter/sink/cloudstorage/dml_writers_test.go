@@ -31,6 +31,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	putil "github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/stretchr/testify/require"
 )
 
@@ -52,7 +53,104 @@ func getTableFiles(t *testing.T, tableDir string) []string {
 	return fileNames
 }
 
+func verifyAddDMLEventDoesNotCallPostEnqueueBeforePipelineRun(t *testing.T) {
+	uri := fmt.Sprintf("file:///%s?protocol=csv", t.TempDir())
+	sinkURI, err := url.Parse(uri)
+	require.NoError(t, err)
+
+	replicaConfig := config.GetDefaultReplicaConfig()
+	err = replicaConfig.ValidateAndAdjust(sinkURI)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	mockPDClock := pdutil.NewClock4Test()
+	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+
+	cloudStorageSink, err := newSinkForTest(ctx, replicaConfig, sinkURI, nil)
+	require.NoError(t, err)
+
+	tableInfo := &common.TableInfo{
+		TableName: common.TableName{
+			Schema:  "test",
+			Table:   "t_enqueue",
+			TableID: 100,
+		},
+	}
+	event := commonEvent.NewDMLEvent(common.NewDispatcherID(), tableInfo.TableName.TableID, 1, 1, tableInfo)
+	event.TableInfoVersion = 1
+	event.Length = 1
+	event.ApproximateSize = 1
+
+	var enqueueCalled int64
+	event.AddPostEnqueueFunc(func() {
+		atomic.AddInt64(&enqueueCalled, 1)
+	})
+
+	// Without starting sink.Run, the event should only be accepted by AddDMLEvent
+	// and should not be considered enqueued into downstream write pipeline yet.
+	cloudStorageSink.AddDMLEvent(event)
+	require.Equal(t, int64(0), atomic.LoadInt64(&enqueueCalled))
+}
+
+func TestCloudStoragePostEnqueueBeforeFlush(t *testing.T) {
+	uri := fmt.Sprintf("file:///%s?protocol=csv&flush-interval=3600s", t.TempDir())
+	sinkURI, err := url.Parse(uri)
+	require.NoError(t, err)
+
+	replicaConfig := config.GetDefaultReplicaConfig()
+	err = replicaConfig.ValidateAndAdjust(sinkURI)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	mockPDClock := pdutil.NewClock4Test()
+	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+
+	cloudStorageSink, err := newSinkForTest(ctx, replicaConfig, sinkURI, nil)
+	require.NoError(t, err)
+
+	runDone := make(chan error, 1)
+	go func() {
+		runDone <- cloudStorageSink.Run(ctx)
+	}()
+
+	tableInfo := &common.TableInfo{
+		TableName: common.TableName{
+			Schema:  "test",
+			Table:   "t_enqueue_stage",
+			TableID: 101,
+		},
+	}
+	event := commonEvent.NewDMLEvent(common.NewDispatcherID(), tableInfo.TableName.TableID, 1, 1, tableInfo)
+	event.TableInfoVersion = 1
+	event.Length = 1
+	event.ApproximateSize = 1
+
+	var enqueueCalled atomic.Int64
+	var flushCalled atomic.Int64
+	event.AddPostEnqueueFunc(func() {
+		enqueueCalled.Add(1)
+	})
+	event.AddPostFlushFunc(func() {
+		flushCalled.Add(1)
+	})
+
+	cloudStorageSink.AddDMLEvent(event)
+
+	require.Eventually(t, func() bool {
+		return enqueueCalled.Load() == 1
+	}, 5*time.Second, 10*time.Millisecond)
+	require.Equal(t, int64(0), flushCalled.Load())
+
+	cancel()
+	require.ErrorIs(t, <-runDone, context.Canceled)
+}
+
 func TestCloudStorageWriteEventsWithoutDateSeparator(t *testing.T) {
+	t.Run("add dml does not call post enqueue before run", verifyAddDMLEventDoesNotCallPostEnqueueBeforePipelineRun)
 	parentDir := t.TempDir()
 
 	uri := fmt.Sprintf("file:///%s?protocol=csv&flush-interval=%ds", parentDir, 2)
@@ -146,6 +244,28 @@ func TestCloudStorageWriteEventsWithoutDateSeparator(t *testing.T) {
 	require.Equal(t, uint64(200), atomic.LoadUint64(&cnt))
 
 	cloudStorageSink.Close(false)
+}
+
+func TestSubmitTaskToEncoderExitOnContextCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	dmlWriters := &dmlWriters{
+		msgCh:       chann.NewUnlimitedChannelDefault[*task](),
+		encodeGroup: newEncoderGroup(newTestTxnEncoderConfig(t), 1, 1),
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- dmlWriters.addTasks(ctx)
+	}()
+
+	cancel()
+
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(5 * time.Second):
+		t.Fatal("submitTaskToEncoder did not exit after context cancel")
+	}
 }
 
 func TestCloudStorageWriteEventsWithDateSeparator(t *testing.T) {

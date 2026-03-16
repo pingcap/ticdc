@@ -75,6 +75,7 @@ type consumer struct {
 	errCh            chan error
 
 	dmlCount atomic.Int64
+	readSeq  atomic.Uint64
 }
 
 func newConsumer(ctx context.Context) (*consumer, error) {
@@ -325,9 +326,6 @@ func (c *consumer) appendDMLEvents(
 			c.dmlCount.Add(1)
 
 			row := decoder.NextDMLEvent()
-
-			log.Debug("next dml event", zap.Any("commitTs", row.CommitTs), zap.Any("tableName", tableInfo.TableName.String()), zap.Any("tableID", tableID))
-
 			row.PhysicalTableID = tableID
 			c.appendRow2Group(row, fileIdx.EnableTableAcrossNodes)
 			filteredCnt++
@@ -352,6 +350,14 @@ func (c *consumer) flushDMLEvents(ctx context.Context, tableID int64) error {
 	if total == 0 {
 		return nil
 	}
+	var (
+		schema string
+		table  string
+	)
+	if events[0].TableInfo != nil {
+		schema = events[0].TableInfo.GetSchemaName()
+		table = events[0].TableInfo.GetTableName()
+	}
 	var flushed atomic.Int64
 	done := make(chan struct{})
 	for _, e := range events {
@@ -373,6 +379,7 @@ func (c *consumer) flushDMLEvents(ctx context.Context, tableID int64) error {
 			return context.Cause(ctx)
 		case <-done:
 			log.Info("flush DML events done",
+				zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
 				zap.Int("total", total), zap.Duration("duration", time.Since(start)))
 			return nil
 		case <-ticker.C:
@@ -506,14 +513,15 @@ func (c *consumer) mustGetTableDef(key cloudstorage.SchemaPathKey) cloudstorage.
 func (c *consumer) handleNewFiles(
 	ctx context.Context,
 	dmlFileMap map[cloudstorage.DmlPathKey]fileIndexRange,
+	round uint64,
 ) error {
+	if len(dmlFileMap) == 0 {
+		log.Info("no new dml files found since last round", zap.Uint64("round", round))
+		return nil
+	}
 	keys := make([]cloudstorage.DmlPathKey, 0, len(dmlFileMap))
 	for k := range dmlFileMap {
 		keys = append(keys, k)
-	}
-	if len(keys) == 0 {
-		log.Info("no new dml files found since last round")
-		return nil
 	}
 	sort.Slice(keys, func(i, j int) bool {
 		if keys[i].TableVersion != keys[j].TableVersion {
@@ -531,10 +539,19 @@ func (c *consumer) handleNewFiles(
 		return keys[i].Table < keys[j].Table
 	})
 
-	for _, key := range keys {
+	for order, key := range keys {
 		tableDef := c.mustGetTableDef(key.SchemaPathKey)
 		tableKey := key.GetKey()
 		ddlWatermark := c.tableDDLWatermark[tableKey]
+		log.Info("storage consumer handle file key",
+			zap.Uint64("round", round),
+			zap.Int("order", order),
+			zap.String("schema", key.Schema),
+			zap.String("table", key.Table),
+			zap.Uint64("tableVersion", key.TableVersion),
+			zap.Int64("partition", key.PartitionNum),
+			zap.String("date", key.Date),
+			zap.Int("rangeCount", len(dmlFileMap[key])))
 
 		// if the key is a fake dml path key which is mainly used for
 		// sorting schema.json file before the dml files, then execute the ddl query.
@@ -546,6 +563,17 @@ func (c *consumer) handleNewFiles(
 					zap.String("query", tableDef.Query))
 				continue
 			}
+
+			seq := c.readSeq.Inc()
+			log.Info("storage consumer read ddl event",
+				zap.Uint64("seq", seq),
+				zap.Uint64("round", round),
+				zap.Int("order", order),
+				zap.String("schema", key.Schema),
+				zap.String("table", key.Table),
+				zap.Uint64("tableVersion", key.TableVersion),
+				zap.Uint64("ddlWatermark", ddlWatermark),
+				zap.String("query", tableDef.Query))
 
 			ddlEvent, err := tableDef.ToDDLEvent()
 			if err != nil {
@@ -578,10 +606,26 @@ func (c *consumer) handleNewFiles(
 		fileRange := dmlFileMap[key]
 		for indexKey, indexRange := range fileRange {
 			for i := indexRange.start; i <= indexRange.end; i++ {
-				if err := c.appendDMLEvents(ctx, tableID, tableDef, key, &cloudstorage.FileIndex{
+				fileIndex := &cloudstorage.FileIndex{
 					FileIndexKey: indexKey,
 					Idx:          i,
-				}); err != nil {
+				}
+				filePath := key.GenerateDMLFilePath(fileIndex, c.fileExtension, fileIndexWidth)
+				seq := c.readSeq.Inc()
+				log.Info("storage consumer read dml file",
+					zap.Uint64("seq", seq),
+					zap.Uint64("round", round),
+					zap.Int("order", order),
+					zap.String("schema", key.Schema),
+					zap.String("table", key.Table),
+					zap.Uint64("tableVersion", key.TableVersion),
+					zap.Int64("partition", key.PartitionNum),
+					zap.String("date", key.Date),
+					zap.String("dispatcher", indexKey.DispatcherID),
+					zap.Bool("enableTableAcrossNodes", indexKey.EnableTableAcrossNodes),
+					zap.Uint64("fileIndex", i),
+					zap.String("path", filePath))
+				if err := c.appendDMLEvents(ctx, tableID, tableDef, key, fileIndex); err != nil {
 					return err
 				}
 			}
@@ -595,7 +639,15 @@ func (c *consumer) handleNewFiles(
 func (c *consumer) handle(ctx context.Context) error {
 	ticker := time.NewTicker(flushInterval)
 	logTicker := time.NewTicker(defaultLogInterval)
-	lastDMLCount := int64(0)
+	defer func() {
+		ticker.Stop()
+		logTicker.Stop()
+	}()
+
+	var (
+		lastDMLCount int64
+		round        uint64
+	)
 	for {
 		select {
 		case <-ctx.Done():
@@ -612,12 +664,16 @@ func (c *consumer) handle(ctx context.Context) error {
 		case <-ticker.C:
 		}
 
+		round++
 		dmlFileMap, err := c.getNewFiles(ctx)
 		if err != nil {
 			return errors.Trace(err)
 		}
+		log.Info("storage consumer scan done",
+			zap.Uint64("round", round),
+			zap.Int("dmlPathKeyCount", len(dmlFileMap)))
 
-		err = c.handleNewFiles(ctx, dmlFileMap)
+		err = c.handleNewFiles(ctx, dmlFileMap, round)
 		if err != nil {
 			return errors.Trace(err)
 		}

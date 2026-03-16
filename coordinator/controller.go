@@ -613,15 +613,22 @@ func (c *Controller) CreateChangefeed(ctx context.Context, info *config.ChangeFe
 	// remove changefeed is async action, so when we create the same changefeed just when we remove the changefeed
 	// the remove changefeed may not finished, so we need to wait a moment
 	count := 0
+	ticker := time.NewTicker(createChangefeedRetryInterval)
+	defer ticker.Stop()
 	for count < createChangefeedMaxRetry {
 		ok := c.operatorController.HasOperator(info.ChangefeedID.DisplayName)
 		if !ok {
 			break
 		}
-		log.Warn("changefeed is in scheduling, wait a moment", zap.String("changefeed", info.ChangefeedID.DisplayName.String()))
-		time.Sleep(createChangefeedRetryInterval)
-		count += 1
+		select {
+		case <-ctx.Done():
+			return errors.Trace(ctx.Err())
+		case <-ticker.C:
+			log.Warn("changefeed is in scheduling, wait a moment", zap.String("changefeed", info.ChangefeedID.DisplayName.String()))
+			count += 1
+		}
 	}
+
 	if count >= createChangefeedMaxRetry {
 		return errors.New("changefeed is still in scheduling, please try again later")
 	}
@@ -653,14 +660,19 @@ func (c *Controller) RemoveChangefeed(ctx context.Context, id common.ChangeFeedI
 	c.apiLock.Unlock()
 
 	count := 0
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
 	for {
 		if op.IsFinished() {
 			break
 		}
-
-		time.Sleep(1 * time.Second)
-		count += 1
-		log.Info("wait for stop changefeed operator finished", zap.Int("count", count), zap.Any("id", id))
+		select {
+		case <-ctx.Done():
+			return 0, errors.Trace(ctx.Err())
+		case <-ticker.C:
+			count += 1
+			log.Info("wait for stop changefeed operator finished", zap.Int("count", count), zap.Any("id", id))
+		}
 	}
 	return cf.GetStatus().CheckpointTs, nil
 }
@@ -689,14 +701,19 @@ func (c *Controller) PauseChangefeed(ctx context.Context, id common.ChangeFeedID
 	c.apiLock.Unlock()
 
 	count := 0
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
 	for {
 		if op.IsFinished() {
 			break
 		}
-
-		time.Sleep(1 * time.Second)
-		count += 1
-		log.Info("wait for stop changefeed operator finished", zap.Int("count", count), zap.Any("id", id))
+		select {
+		case <-ctx.Done():
+			return errors.Trace(ctx.Err())
+		case <-ticker.C:
+			count += 1
+			log.Info("wait for stop changefeed operator finished", zap.Int("count", count), zap.Any("id", id))
+		}
 	}
 	return nil
 }
