@@ -116,6 +116,7 @@ func (l *memoryLogWriter) writeEvents(ctx context.Context, events ...writer.Redo
 		if err != nil {
 			return err
 		}
+		// todo: this should be simplified to a single writer.
 		if err := l.fileWorkers.syncWrite(ctx, redoLogEvent); err != nil {
 			return err
 		}

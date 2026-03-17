@@ -47,7 +47,7 @@ type Sink struct {
 	isNormal *atomic.Bool
 	isClosed *atomic.Bool
 
-	metric *redoSinkMetrics
+	mericCollector *metricCollector
 }
 
 func Verify(ctx context.Context, changefeedID common.ChangeFeedID, cfg *config.ConsistentConfig) error {
@@ -94,7 +94,7 @@ func New(ctx context.Context, changefeedID common.ChangeFeedID,
 	}
 	s.ddlWriter = ddlWriter
 	s.dmlWriter = dmlWriter
-	s.metric = newRedoSinkMetrics(changefeedID)
+	s.mericCollector = newMetricCollector(changefeedID)
 	return s, nil
 }
 
@@ -123,11 +123,9 @@ func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 		err := s.ddlWriter.WriteEvents(s.ctx, e)
 		if err != nil {
 			s.isNormal.Store(false)
-			return errors.Trace(err)
+			return err
 		}
-		if s.metric != nil {
-			s.metric.observeDDLWrite(time.Since(start))
-		}
+		s.mericCollector.observeDDLWrite(time.Since(start))
 	}
 	return nil
 }
@@ -188,9 +186,7 @@ func (s *Sink) Close(_ bool) {
 				zap.Error(err))
 		}
 	}
-	if s.metric != nil {
-		s.metric.close()
-	}
+	s.mericCollector.close()
 	log.Info("redo sink closed",
 		zap.String("keyspace", s.cfg.ChangeFeedID.Keyspace()),
 		zap.String("changefeed", s.cfg.ChangeFeedID.Name()))
@@ -218,10 +214,7 @@ func (s *Sink) sendMessages(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-
-		if s.metric != nil {
-			s.metric.observeRowWrite(len(events), time.Since(start))
-		}
+		s.mericCollector.observeRowWrite(len(events), time.Since(start))
 	}
 }
 

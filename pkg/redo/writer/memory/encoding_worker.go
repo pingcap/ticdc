@@ -48,9 +48,6 @@ func toPolymorphicRedoEvent(
 	tableSchemaStore *commonEvent.TableSchemaStore,
 ) (*polymorphicRedoEvent, error) {
 	rl := event.ToRedoLog()
-	if rl == nil {
-		return nil, errors.ErrUnexpected.FastGenByArgs("redo event to log conversion failed")
-	}
 	if rl.Type == commonEvent.RedoLogTypeDDL {
 		rl.RedoDDL.SetTableSchemaStore(tableSchemaStore)
 	}

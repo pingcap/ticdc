@@ -33,7 +33,7 @@ func NewRedoLogWriter(
 ) (writer.RedoLogWriter, error) {
 	uri, err := storage.ParseRawURL(util.GetOrZero(lwCfg.Storage))
 	if err != nil {
-		return nil, err
+		return nil, errors.WrapError(errors.ErrStorageInitialize, err)
 	}
 
 	if !redo.IsValidConsistentStorage(uri.Scheme) {
