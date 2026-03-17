@@ -47,7 +47,7 @@ type Sink struct {
 	isNormal *atomic.Bool
 	isClosed *atomic.Bool
 
-	mericCollector *metricCollector
+ metricCollector *metricCollector
 }
 
 func Verify(ctx context.Context, changefeedID common.ChangeFeedID, cfg *config.ConsistentConfig) error {
