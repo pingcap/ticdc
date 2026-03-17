@@ -36,10 +36,11 @@ import (
 // Sink manages redo log writer, buffers un-persistent redo logs, calculates
 // redo log resolved ts. It implements Sink interface.
 type Sink struct {
-	ctx       context.Context
-	cfg       *writer.LogWriterConfig
-	ddlWriter writer.RedoLogWriter
-	dmlWriter writer.RedoLogWriter
+	ctx          context.Context
+	changefeedID common.ChangeFeedID
+	cfg          *writer.Config
+	ddlWriter    writer.RedoLogWriter
+	dmlWriter    writer.RedoLogWriter
 
 	logBuffer *chann.UnlimitedChannel[writer.RedoEvent, any]
 
@@ -61,24 +62,24 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, cfg *config.C
 func New(ctx context.Context, changefeedID common.ChangeFeedID,
 	cfg *config.ConsistentConfig,
 ) (*Sink, error) {
+	config, err := writer.NewConfig(changefeedID, cfg)
+	if err != nil {
+		return nil, err
+	}
 	s := &Sink{
-		ctx: ctx,
-		cfg: &writer.LogWriterConfig{
-			ConsistentConfig:  *cfg,
-			CaptureID:         config.GetGlobalServerConfig().AdvertiseAddr,
-			ChangeFeedID:      changefeedID,
-			MaxLogSizeInBytes: util.GetOrZero(cfg.MaxLogSize) * redo.Megabyte,
-		},
-		logBuffer: chann.NewUnlimitedChannelDefault[writer.RedoEvent](),
-		isNormal:  atomic.NewBool(true),
-		isClosed:  atomic.NewBool(false),
+		ctx:          ctx,
+		changefeedID: changefeedID,
+		cfg:          config,
+		logBuffer:    chann.NewUnlimitedChannelDefault[writer.RedoEvent](),
+		isNormal:     atomic.NewBool(true),
+		isClosed:     atomic.NewBool(false),
 	}
 	start := time.Now()
 	ddlWriter, err := factory.NewRedoLogWriter(s.ctx, s.cfg, redo.RedoDDLLogFileType)
 	if err != nil {
 		log.Error("redo: failed to create redo log writer",
-			zap.String("keyspace", s.cfg.ChangeFeedID.Keyspace()),
-			zap.String("changefeed", s.cfg.ChangeFeedID.Name()),
+			zap.String("keyspace", changefeedID.Keyspace()),
+			zap.String("changefeed", changefeedID.Name()),
 			zap.Duration("duration", time.Since(start)),
 			zap.Error(err))
 		return nil, err
@@ -86,8 +87,8 @@ func New(ctx context.Context, changefeedID common.ChangeFeedID,
 	dmlWriter, err := factory.NewRedoLogWriter(s.ctx, s.cfg, redo.RedoRowLogFileType)
 	if err != nil {
 		log.Error("redo: failed to create redo log writer",
-			zap.String("keyspace", s.cfg.ChangeFeedID.Keyspace()),
-			zap.String("changefeed", s.cfg.ChangeFeedID.Name()),
+			zap.String("keyspace", changefeedID.Keyspace()),
+			zap.String("changefeed", changefeedID.Name()),
 			zap.Duration("duration", time.Since(start)),
 			zap.Error(err))
 		return nil, err
@@ -174,8 +175,8 @@ func (s *Sink) Close(_ bool) {
 	if s.ddlWriter != nil {
 		if err := s.ddlWriter.Close(); err != nil && errors.Cause(err) != context.Canceled {
 			log.Error("redo sink fails to close ddl writer",
-				zap.String("keyspace", s.cfg.ChangeFeedID.Keyspace()),
-				zap.String("changefeed", s.cfg.ChangeFeedID.Name()),
+				zap.String("keyspace", s.changefeedID.Keyspace()),
+				zap.String("changefeed", s.changefeedID.Name()),
 				zap.Error(err))
 		}
 	}
@@ -183,8 +184,8 @@ func (s *Sink) Close(_ bool) {
 	if s.dmlWriter != nil {
 		if err := s.dmlWriter.Close(); err != nil && errors.Cause(err) != context.Canceled {
 			log.Error("redo sink fails to close dml writer",
-				zap.String("keyspace", s.cfg.ChangeFeedID.Keyspace()),
-				zap.String("changefeed", s.cfg.ChangeFeedID.Name()),
+				zap.String("keyspace", s.changefeedID.Keyspace()),
+				zap.String("changefeed", s.changefeedID.Name()),
 				zap.Error(err))
 		}
 	}
@@ -192,8 +193,8 @@ func (s *Sink) Close(_ bool) {
 		s.metricCollector.close()
 	}
 	log.Info("redo sink closed",
-		zap.String("keyspace", s.cfg.ChangeFeedID.Keyspace()),
-		zap.String("changefeed", s.cfg.ChangeFeedID.Name()),
+		zap.String("keyspace", s.changefeedID.Keyspace()),
+		zap.String("changefeed", s.changefeedID.Name()),
 		zap.Duration("duration", time.Since(start)))
 }
 

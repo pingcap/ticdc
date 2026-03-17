@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/util"
@@ -69,7 +70,7 @@ type ConfigOption func(*Config)
 
 func NewConfig(changefeedID common.ChangeFeedID, consistentCfg *config.ConsistentConfig, opts ...ConfigOption) (*Config, error) {
 	if consistentCfg == nil {
-		consistentCfg = &config.ConsistentConfig{}
+		return nil, errors.ErrRedoConfigInvalid.GenWithStack("consisten config is nil")
 	}
 
 	cfg := &Config{
@@ -93,7 +94,7 @@ func NewConfig(changefeedID common.ChangeFeedID, consistentCfg *config.Consisten
 func initStorageConfig(cfg *Config) error {
 	storageURI := util.GetOrZero(cfg.Storage)
 	if len(storageURI) == 0 {
-		return nil
+		return errors.ErrRedoConfigInvalid.GenWithStack("storage uri is not set")
 	}
 
 	uri, err := storage.ParseRawURL(storageURI)
