@@ -60,7 +60,7 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, cfg *config.C
 // New creates a new redo sink.
 func New(ctx context.Context, changefeedID common.ChangeFeedID,
 	cfg *config.ConsistentConfig,
-) *Sink {
+) (*Sink, error) {
 	s := &Sink{
 		ctx: ctx,
 		cfg: &writer.LogWriterConfig{
@@ -81,7 +81,7 @@ func New(ctx context.Context, changefeedID common.ChangeFeedID,
 			zap.String("changefeed", s.cfg.ChangeFeedID.Name()),
 			zap.Duration("duration", time.Since(start)),
 			zap.Error(err))
-		return nil
+		return nil, err
 	}
 	dmlWriter, err := factory.NewRedoLogWriter(s.ctx, s.cfg, redo.RedoRowLogFileType)
 	if err != nil {
@@ -90,12 +90,12 @@ func New(ctx context.Context, changefeedID common.ChangeFeedID,
 			zap.String("changefeed", s.cfg.ChangeFeedID.Name()),
 			zap.Duration("duration", time.Since(start)),
 			zap.Error(err))
-		return nil
+		return nil, err
 	}
 	s.ddlWriter = ddlWriter
 	s.dmlWriter = dmlWriter
 	s.metric = newRedoSinkMetrics(changefeedID)
-	return s
+	return s, nil
 }
 
 func (s *Sink) Run(ctx context.Context) error {
