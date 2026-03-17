@@ -182,7 +182,9 @@ func TestLogReaderClose(t *testing.T) {
 		return r.Run(egCtx)
 	})
 
-	time.Sleep(2 * time.Second)
+	require.Eventually(t, func() bool {
+		return len(r.rowCh) > 0 && len(r.ddlCh) > 0
+	}, time.Second, 10*time.Millisecond)
 	cancel()
 	require.ErrorIs(t, eg.Wait(), context.Canceled)
 }

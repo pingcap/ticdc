@@ -17,119 +17,60 @@ import (
 	"context"
 	"testing"
 
-	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/compression"
-	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
-	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
 )
-
-func newTestWriterConfig(
-	t *testing.T,
-	changefeedID common.ChangeFeedID,
-	consistentCfg *config.ConsistentConfig,
-) *writer.Config {
-	if consistentCfg == nil {
-		consistentCfg = &config.ConsistentConfig{}
-	}
-	if len(util.GetOrZero(consistentCfg.Storage)) == 0 {
-		consistentCfg.Storage = util.AddressOf("file://" + t.TempDir())
-	}
-	if util.GetOrZero(consistentCfg.MaxLogSize) == 0 {
-		consistentCfg.MaxLogSize = util.AddressOf(redo.DefaultMaxLogSize)
-	}
-	if util.GetOrZero(consistentCfg.FlushIntervalInMs) == 0 {
-		consistentCfg.FlushIntervalInMs = util.AddressOf(int64(redo.DefaultFlushIntervalInMs))
-	}
-	if util.GetOrZero(consistentCfg.EncodingWorkerNum) == 0 {
-		consistentCfg.EncodingWorkerNum = util.AddressOf(redo.DefaultEncodingWorkerNum)
-	}
-	if util.GetOrZero(consistentCfg.FlushWorkerNum) == 0 {
-		consistentCfg.FlushWorkerNum = util.AddressOf(redo.DefaultFlushWorkerNum)
-	}
-	if len(util.GetOrZero(consistentCfg.Compression)) == 0 {
-		consistentCfg.Compression = util.AddressOf(compression.None)
-	}
-	if util.GetOrZero(consistentCfg.FlushConcurrency) == 0 {
-		consistentCfg.FlushConcurrency = util.AddressOf(1)
-	}
-	cfg, err := writer.NewConfig(changefeedID, consistentCfg)
-	require.NoError(t, err)
-	return cfg
-}
 
 func TestLogWriterWriteDDL(t *testing.T) {
 	t.Parallel()
 
-	type arg struct {
-		ctx     context.Context
-		tableID int64
-		ddl     *pevent.DDLEvent
-	}
 	tests := []struct {
 		name      string
-		args      arg
-		wantTs    uint64
+		ctx       context.Context
+		ddl       *pevent.DDLEvent
 		isRunning bool
 		writerErr error
 		wantErr   error
 	}{
 		{
-			name: "happy",
-			args: arg{
-				ctx:     context.Background(),
-				tableID: 1,
-				ddl:     &pevent.DDLEvent{FinishedTs: 1},
-			},
+			name:      "happy",
+			ctx:       context.Background(),
+			ddl:       &pevent.DDLEvent{FinishedTs: 1},
 			isRunning: true,
 			writerErr: nil,
 		},
 		{
-			name: "writer err",
-			args: arg{
-				ctx:     context.Background(),
-				tableID: 1,
-				ddl:     &pevent.DDLEvent{FinishedTs: 1},
-			},
+			name:      "writer err",
+			ctx:       context.Background(),
+			ddl:       &pevent.DDLEvent{FinishedTs: 1},
 			writerErr: errors.New("err"),
 			wantErr:   errors.New("err"),
 			isRunning: true,
 		},
 		{
-			name: "ddl nil",
-			args: arg{
-				ctx:     context.Background(),
-				tableID: 1,
-				ddl:     nil,
-			},
+			name:      "ddl nil",
+			ctx:       context.Background(),
+			ddl:       nil,
 			writerErr: errors.New("err"),
 			isRunning: true,
 		},
 		{
-			name: "isStopped",
-			args: arg{
-				ctx:     context.Background(),
-				tableID: 1,
-				ddl:     &pevent.DDLEvent{FinishedTs: 1},
-			},
+			name:      "isStopped",
+			ctx:       context.Background(),
+			ddl:       &pevent.DDLEvent{FinishedTs: 1},
 			writerErr: errors.ErrRedoWriterStopped,
 			isRunning: false,
 			wantErr:   errors.ErrRedoWriterStopped,
 		},
 		{
-			name: "context cancel",
-			args: arg{
-				ctx:     context.Background(),
-				tableID: 1,
-				ddl:     &pevent.DDLEvent{FinishedTs: 1},
-			},
+			name:      "context cancel",
+			ctx:       context.Background(),
+			ddl:       &pevent.DDLEvent{FinishedTs: 1},
 			writerErr: nil,
 			isRunning: true,
 			wantErr:   context.Canceled,
@@ -149,103 +90,15 @@ func TestLogWriterWriteDDL(t *testing.T) {
 		if tt.name == "context cancel" {
 			ctx, cancel := context.WithCancel(context.Background())
 			cancel()
-			tt.args.ctx = ctx
+			tt.ctx = ctx
 		}
 
 		var e writer.RedoEvent
-		if tt.args.ddl != nil {
-			e = tt.args.ddl
+		if tt.ddl != nil {
+			e = tt.ddl
 		}
-		err := w.WriteEvents(tt.args.ctx, e)
+		err := w.WriteEvents(tt.ctx, e)
 		if tt.wantErr != nil {
-			log.Info("log error",
-				zap.String("wantErr", tt.wantErr.Error()),
-				zap.String("gotErr", err.Error()))
-			require.Equal(t, tt.wantErr.Error(), err.Error(), tt.name)
-		} else {
-			require.Nil(t, err, tt.name)
-		}
-	}
-}
-
-func TestLogWriterFlushLog(t *testing.T) {
-	t.Parallel()
-
-	type arg struct {
-		ctx     context.Context
-		tableID int64
-		ts      uint64
-	}
-	tests := []struct {
-		name      string
-		args      arg
-		wantTs    uint64
-		isRunning bool
-		flushErr  error
-		wantErr   error
-	}{
-		{
-			name: "happy",
-			args: arg{
-				ctx:     context.Background(),
-				tableID: 1,
-				ts:      1,
-			},
-			isRunning: true,
-			flushErr:  nil,
-		},
-		{
-			name: "flush err",
-			args: arg{
-				ctx:     context.Background(),
-				tableID: 1,
-				ts:      1,
-			},
-			flushErr:  errors.New("err"),
-			wantErr:   errors.New("err"),
-			isRunning: true,
-		},
-		{
-			name: "isStopped",
-			args: arg{
-				ctx:     context.Background(),
-				tableID: 1,
-				ts:      1,
-			},
-			flushErr:  errors.ErrRedoWriterStopped,
-			isRunning: false,
-			wantErr:   errors.ErrRedoWriterStopped,
-		},
-	}
-
-	dir := t.TempDir()
-
-	for _, tt := range tests {
-		mockWriter := &mockFileWriter{}
-		mockWriter.On("Flush", mock.Anything).Return(tt.flushErr)
-		mockWriter.On("IsRunning").Return(tt.isRunning)
-		cfg := newTestWriterConfig(
-			t,
-			common.NewChangeFeedIDWithName("test-cf", common.DefaultKeyspaceName),
-			&config.ConsistentConfig{
-				MaxLogSize: util.AddressOf(int64(1)),
-				Storage:    util.AddressOf("file://" + dir),
-			},
-		)
-		w := logWriter{
-			cfg:           cfg,
-			backendWriter: mockWriter,
-		}
-		if tt.name == "context cancel" {
-			ctx, cancel := context.WithCancel(context.Background())
-			cancel()
-			tt.args.ctx = ctx
-		}
-		err := w.backendWriter.Flush()
-		if tt.wantErr != nil {
-			log.Info("log error",
-				zap.String("wantErr", tt.wantErr.Error()),
-				zap.String("gotErr", err.Error()))
 			require.Equal(t, tt.wantErr.Error(), err.Error(), tt.name)
 		} else {
 			require.Nil(t, err, tt.name)

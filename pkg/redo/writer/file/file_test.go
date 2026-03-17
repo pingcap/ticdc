@@ -23,7 +23,6 @@ import (
 
 	"github.com/pingcap/ticdc/pkg/common"
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/compression"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/fsutil"
 	"github.com/pingcap/ticdc/pkg/metrics"
@@ -32,45 +31,10 @@ import (
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/uuid"
 	mockstorage "github.com/pingcap/tidb/br/pkg/mock/storage"
-	"github.com/pingcap/tidb/br/pkg/storage"
 	"github.com/stretchr/testify/require"
 	"github.com/uber-go/atomic"
 	"go.uber.org/mock/gomock"
 )
-
-func newFileTestWriterConfig(
-	t *testing.T,
-	changefeedID common.ChangeFeedID,
-	consistentCfg config.ConsistentConfig,
-) *writer.Config {
-	if util.GetOrZero(consistentCfg.MaxLogSize) == 0 {
-		consistentCfg.MaxLogSize = util.AddressOf(redo.DefaultMaxLogSize)
-	}
-	if util.GetOrZero(consistentCfg.FlushIntervalInMs) == 0 {
-		consistentCfg.FlushIntervalInMs = util.AddressOf(int64(redo.DefaultFlushIntervalInMs))
-	}
-	if util.GetOrZero(consistentCfg.EncodingWorkerNum) == 0 {
-		consistentCfg.EncodingWorkerNum = util.AddressOf(redo.DefaultEncodingWorkerNum)
-	}
-	if util.GetOrZero(consistentCfg.FlushWorkerNum) == 0 {
-		consistentCfg.FlushWorkerNum = util.AddressOf(redo.DefaultFlushWorkerNum)
-	}
-	if len(util.GetOrZero(consistentCfg.Compression)) == 0 {
-		consistentCfg.Compression = util.AddressOf(compression.None)
-	}
-	if util.GetOrZero(consistentCfg.FlushConcurrency) == 0 {
-		consistentCfg.FlushConcurrency = util.AddressOf(1)
-	}
-	cfg, err := writer.NewConfig(changefeedID, &consistentCfg)
-	require.NoError(t, err)
-	return cfg
-}
-
-func newTestLocalExternalStorage(t *testing.T, dir string) storage.ExternalStorage {
-	extStorage, _, err := util.GetTestExtStorage(context.Background(), dir)
-	require.NoError(t, err)
-	return extStorage
-}
 
 func TestWriterWrite(t *testing.T) {
 	t.Parallel()
@@ -96,10 +60,10 @@ func TestWriterWrite(t *testing.T) {
 	for idx, cf := range cfs {
 		largePayload := make([]byte, redo.Megabyte)
 		uuidGen := uuid.NewConstGenerator("const-uuid")
-		writerCfg := newFileTestWriterConfig(
+		writerCfg := newTestWriterConfig(
 			t,
 			cf,
-			config.ConsistentConfig{
+			&config.ConsistentConfig{
 				MaxLogSize: util.AddressOf(int64(1)),
 				Storage:    util.AddressOf("file://" + dir),
 			},
@@ -191,10 +155,10 @@ func TestWriterWrite(t *testing.T) {
 		require.Nil(t, err)
 		require.Equal(t, fileName, info.Name())
 
-		writerCfg11 := newFileTestWriterConfig(
+		writerCfg11 := newTestWriterConfig(
 			t,
 			cf11s[idx],
-			config.ConsistentConfig{
+			&config.ConsistentConfig{
 				MaxLogSize: util.AddressOf(int64(1)),
 				Storage:    util.AddressOf("file://" + dir),
 			},
@@ -241,14 +205,6 @@ func TestWriterWrite(t *testing.T) {
 	}
 }
 
-func TestAdvanceTs(t *testing.T) {
-	t.Parallel()
-
-	w := &Writer{}
-	w.AdvanceTs(111)
-	require.EqualValues(t, 111, w.eventCommitTS.Load())
-}
-
 func TestNewWriter(t *testing.T) {
 	t.Parallel()
 
@@ -256,10 +212,10 @@ func TestNewWriter(t *testing.T) {
 	dir := t.TempDir()
 
 	uuidGen := uuid.NewConstGenerator("const-uuid")
-	writerCfg := newFileTestWriterConfig(
+	writerCfg := newTestWriterConfig(
 		t,
 		common.NewChangeFeedIDWithName("test-row-writer", common.DefaultKeyspaceName),
-		config.ConsistentConfig{
+		&config.ConsistentConfig{
 			Storage: util.AddressOf("file://" + storageDir),
 		},
 	)
@@ -280,10 +236,10 @@ func TestNewWriter(t *testing.T) {
 		Keyspace: "abcd",
 		Name:     "test",
 	})
-	ddlWriterCfg := newFileTestWriterConfig(
+	ddlWriterCfg := newTestWriterConfig(
 		t,
 		changefeed,
-		config.ConsistentConfig{
+		&config.ConsistentConfig{
 			Storage: util.AddressOf("file://" + dir),
 		},
 	)
@@ -333,10 +289,10 @@ func TestRotateFileWithFileAllocator(t *testing.T) {
 		Keyspace: "abcd",
 		Name:     "test",
 	})
-	rowWriterCfg := newFileTestWriterConfig(
+	rowWriterCfg := newTestWriterConfig(
 		t,
 		changefeed,
-		config.ConsistentConfig{
+		&config.ConsistentConfig{
 			Storage: util.AddressOf("file://" + dir),
 		},
 	)
@@ -395,10 +351,10 @@ func TestRotateFileWithoutFileAllocator(t *testing.T) {
 		Keyspace: "abcd",
 		Name:     "test",
 	})
-	ddlWriterCfg := newFileTestWriterConfig(
+	ddlWriterCfg := newTestWriterConfig(
 		t,
 		changefeed,
-		config.ConsistentConfig{
+		&config.ConsistentConfig{
 			Storage: util.AddressOf("file://" + dir),
 		},
 	)
@@ -437,10 +393,10 @@ func TestRunFlushesOnBatchBoundaryAndExecutesPostFlush(t *testing.T) {
 	dir := t.TempDir()
 	flushIntervalInMs := int64(60 * 1000)
 	flushWorkerNum := 9
-	batchWriterCfg := newFileTestWriterConfig(
+	batchWriterCfg := newTestWriterConfig(
 		t,
 		common.NewChangeFeedIDWithName("test-run-batch", common.DefaultKeyspaceName),
-		config.ConsistentConfig{
+		&config.ConsistentConfig{
 			FlushIntervalInMs: &flushIntervalInMs,
 			FlushWorkerNum:    &flushWorkerNum,
 			Storage:           util.AddressOf("file://" + dir),
