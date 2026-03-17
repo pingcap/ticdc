@@ -29,7 +29,8 @@ fi
 
 if command -v python3 &>/dev/null; then
 	overlap_output=""
-	if ! overlap_output=$(python3 - "$dashboard_file" <<'PY'
+	if ! overlap_output=$(
+		python3 - "$dashboard_file" <<'PY'
 import json
 import sys
 
