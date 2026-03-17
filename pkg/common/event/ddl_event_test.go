@@ -26,21 +26,21 @@ import (
 )
 
 type legacyDDLEventJSON struct {
-	Version      int    `json:"version"`
-	Type         byte   `json:"type"`
-	SchemaID     int64  `json:"schema_id"`
-	SchemaName   string `json:"schema_name"`
-	TableName    string `json:"table_name"`
-	Query        string `json:"query"`
-	StartTs      uint64 `json:"start_ts"`
-	FinishedTs   uint64 `json:"finished_ts"`
-	Seq          uint64 `json:"seq"`
-	Epoch        uint64 `json:"epoch"`
-	TiDBOnly     bool   `json:"tidb_only"`
-	BDRMode      string `json:"bdr_mode"`
-	Err          string `json:"err"`
-	NotSync      bool   `msg:"not_sync"`
-	IsBootstrap  bool   `json:"-"`
+	Version     int    `json:"version"`
+	Type        byte   `json:"type"`
+	SchemaID    int64  `json:"schema_id"`
+	SchemaName  string `json:"schema_name"`
+	TableName   string `json:"table_name"`
+	Query       string `json:"query"`
+	StartTs     uint64 `json:"start_ts"`
+	FinishedTs  uint64 `json:"finished_ts"`
+	Seq         uint64 `json:"seq"`
+	Epoch       uint64 `json:"epoch"`
+	TiDBOnly    bool   `json:"tidb_only"`
+	BDRMode     string `json:"bdr_mode"`
+	Err         string `json:"err"`
+	NotSync     bool   `msg:"not_sync"`
+	IsBootstrap bool   `json:"-"`
 }
 
 func buildDDLEventV1Payload(
