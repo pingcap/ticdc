@@ -14,93 +14,25 @@
 set -euo pipefail
 
 dashboard_file="metrics/grafana/ticdc_new_arch.json"
+python_checker="scripts/check-ticdc-dashboard.py"
 has_error=0
 
 if command -v python3 &>/dev/null; then
-	overlap_output=""
-	if ! overlap_output=$(
-		python3 - "$dashboard_file" <<'PY'
-import json
-from collections import defaultdict
-import sys
-
-path = sys.argv[1]
-with open(path, "r", encoding="utf-8") as f:
-    data = json.load(f)
-
-def overlaps(a, b):
-    return (
-        a["x"] < b["x"] + b["w"]
-        and a["x"] + a["w"] > b["x"]
-        and a["y"] < b["y"] + b["h"]
-        and a["y"] + a["h"] > b["y"]
-    )
-
-def collect(items, parents=()):
-    result = []
-    for item in items:
-        title = item.get("title", "<untitled>")
-        path = " / ".join(parents + (title,))
-        grid_pos = item.get("gridPos")
-        if grid_pos:
-            result.append(
-                {
-                    "path": path,
-                    "x": grid_pos["x"],
-                    "y": grid_pos["y"],
-                    "w": grid_pos["w"],
-                    "h": grid_pos["h"],
-                }
-            )
-    return result
-
-def collect_ids(items, parents=()):
-    result = []
-    for item in items:
-        title = item.get("title", "<untitled>")
-        path = " / ".join(parents + (title,))
-        if "id" in item:
-            result.append({"id": item["id"], "path": path})
-        nested = item.get("panels", [])
-        if nested:
-            result.extend(collect_ids(nested, parents + (title,)))
-    return result
-
-def check_container(items, parents=()):
-    messages = []
-    panels = collect(items, parents)
-    for i, left in enumerate(panels):
-        for right in panels[i + 1 :]:
-            if overlaps(left, right):
-                messages.append(f"Overlap: {left['path']} <-> {right['path']}")
-
-    for item in items:
-        nested = item.get("panels", [])
-        if nested:
-            title = item.get("title", "<untitled>")
-            messages.extend(check_container(nested, parents + (title,)))
-    return messages
-
-messages = []
-id_groups = defaultdict(list)
-for item in collect_ids(data.get("panels", [])):
-    id_groups[item["id"]].append(item["path"])
-
-for panel_id, paths in sorted(id_groups.items()):
-    if len(paths) > 1:
-        messages.append(
-            f"Duplicate ID {panel_id}: " + " <-> ".join(paths)
-        )
-
-messages.extend(check_container(data.get("panels", [])))
-
-if messages:
-    print("\n".join(messages))
-    sys.exit(1)
-PY
-	); then
-		echo "Find overlapped panels in $dashboard_file"
-		echo "$overlap_output"
+	check_output=""
+	if ! check_output=$(python3 "$python_checker" "$dashboard_file"); then
+		echo "Find dashboard issues in $dashboard_file"
+		echo "$check_output"
+		has_error=1
+	fi
+elif command -v jq &>/dev/null; then
+	# Fallback for environments without python3. This keeps the previous
+	# duplicate ID check so CI still catches obvious dashboard regressions.
+	dup=$(jq '[.panels[] | .panels[]?] | group_by(.id) | .[] | select(length > 1) | .[] | { id: .id, title: .title }' "$dashboard_file")
+	if [[ -n $dup ]]; then
+		echo "Find panels with duplicated ID in $dashboard_file"
+		echo "$dup"
+		echo "Please choose a new ID that is larger than the max ID:"
+		jq '[.panels[] | .panels[]? | .id] | max' "$dashboard_file"
 		has_error=1
 	fi
 fi
