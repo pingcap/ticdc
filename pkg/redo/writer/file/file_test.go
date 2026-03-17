@@ -223,6 +223,7 @@ func TestNewWriter(t *testing.T) {
 		writer.WithUUIDGenerator(func() uuid.Generator { return uuidGen }),
 	)
 	require.Nil(t, err)
+	require.NotNil(t, w.allocator)
 	err = w.Close()
 	require.Nil(t, err)
 	require.False(t, w.IsRunning())

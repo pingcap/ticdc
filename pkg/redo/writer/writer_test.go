@@ -18,30 +18,12 @@ import (
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/ticdc/pkg/compression"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/redo"
+	writertest "github.com/pingcap/ticdc/pkg/redo/writer/testutil"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
 )
-
-func newTestConsistentConfig(storage string) *config.ConsistentConfig {
-	maxLogSize := int64(64)
-	flushIntervalInMs := int64(redo.DefaultFlushIntervalInMs)
-	encodingWorkerNum := redo.DefaultEncodingWorkerNum
-	flushWorkerNum := redo.DefaultFlushWorkerNum
-	compressionType := compression.None
-	flushConcurrency := 1
-	return &config.ConsistentConfig{
-		MaxLogSize:        util.AddressOf(maxLogSize),
-		FlushIntervalInMs: util.AddressOf(flushIntervalInMs),
-		EncodingWorkerNum: util.AddressOf(encodingWorkerNum),
-		FlushWorkerNum:    util.AddressOf(flushWorkerNum),
-		Storage:           util.AddressOf(storage),
-		Compression:       util.AddressOf(compressionType),
-		FlushConcurrency:  util.AddressOf(flushConcurrency),
-	}
-}
 
 func TestNewConfigUsesConsistentConfigValues(t *testing.T) {
 	t.Parallel()
@@ -51,17 +33,16 @@ func TestNewConfigUsesConsistentConfigValues(t *testing.T) {
 	flushIntervalInMs := int64(1234)
 	encodingWorkerNum := 5
 	flushWorkerNum := 6
-	compressionType := compression.LZ4
+	compressionType := "lz4"
 	flushConcurrency := 7
-	cfg, err := NewConfig(changefeedID, &config.ConsistentConfig{
-		MaxLogSize:        util.AddressOf(maxLogSize),
-		FlushIntervalInMs: util.AddressOf(flushIntervalInMs),
-		EncodingWorkerNum: util.AddressOf(encodingWorkerNum),
-		FlushWorkerNum:    util.AddressOf(flushWorkerNum),
-		Storage:           util.AddressOf("nfs:///tmp/redo"),
-		Compression:       util.AddressOf(compressionType),
-		FlushConcurrency:  util.AddressOf(flushConcurrency),
-	})
+	consistentCfg := writertest.NewConsistentConfig("nfs:///tmp/redo")
+	consistentCfg.MaxLogSize = util.AddressOf(maxLogSize)
+	consistentCfg.FlushIntervalInMs = util.AddressOf(flushIntervalInMs)
+	consistentCfg.EncodingWorkerNum = util.AddressOf(encodingWorkerNum)
+	consistentCfg.FlushWorkerNum = util.AddressOf(flushWorkerNum)
+	consistentCfg.Compression = util.AddressOf(compressionType)
+	consistentCfg.FlushConcurrency = util.AddressOf(flushConcurrency)
+	cfg, err := NewConfig(changefeedID, consistentCfg)
 	require.NoError(t, err)
 
 	require.Equal(t, changefeedID, cfg.ChangeFeedID())
@@ -83,7 +64,7 @@ func TestNewConfigInitializesFileBackendDirForExternalStorage(t *testing.T) {
 	t.Parallel()
 
 	changefeedID := common.NewChangeFeedIDWithName("test-cf", common.DefaultKeyspaceName)
-	consistentCfg := newTestConsistentConfig("s3://bucket/prefix")
+	consistentCfg := writertest.NewConsistentConfig("s3://bucket/prefix")
 	consistentCfg.UseFileBackend = util.AddressOf(true)
 	cfg, err := NewConfig(changefeedID, consistentCfg)
 	require.NoError(t, err)
@@ -102,7 +83,7 @@ func TestNewConfigReturnsErrorForInvalidStorageURI(t *testing.T) {
 
 	_, err := NewConfig(
 		common.NewChangeFeedIDWithName("test-cf", common.DefaultKeyspaceName),
-		newTestConsistentConfig("://bad-uri"),
+		writertest.NewConsistentConfig("://bad-uri"),
 	)
 	require.Error(t, err)
 }
@@ -112,7 +93,7 @@ func TestNewConfigReturnsErrorForUnsupportedStorageScheme(t *testing.T) {
 
 	_, err := NewConfig(
 		common.NewChangeFeedIDWithName("test-cf", common.DefaultKeyspaceName),
-		newTestConsistentConfig("mysql://127.0.0.1:3306/test"),
+		writertest.NewConsistentConfig("mysql://127.0.0.1:3306/test"),
 	)
 	require.Error(t, err)
 }

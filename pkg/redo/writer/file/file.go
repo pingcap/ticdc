@@ -130,10 +130,7 @@ func NewFileWriter(
 			errors.Annotatef(err, "can't make dir: %s for redo writing", cfg.Dir()))
 	}
 
-	// Use the file allocator only for remote external storage. The local file
-	// backend is also modeled as external storage for testing, but it does not
-	// need pre-allocated tmp files.
-	if w.cfg.UseExternalStorage() && w.cfg.URI().Scheme != "file" {
+	if w.cfg.UseExternalStorage() {
 		w.allocator = fsutil.NewFileAllocator(cfg.Dir(), logType, cfg.MaxLogSizeInBytes())
 	}
 

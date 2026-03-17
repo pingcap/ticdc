@@ -18,10 +18,9 @@ import (
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/ticdc/pkg/compression"
 	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
+	writertest "github.com/pingcap/ticdc/pkg/redo/writer/testutil"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	"github.com/stretchr/testify/require"
@@ -32,29 +31,30 @@ func newTestWriterConfig(
 	changefeedID common.ChangeFeedID,
 	consistentCfg *config.ConsistentConfig,
 ) *writer.Config {
+	defaultCfg := writertest.NewConsistentConfig("file://" + t.TempDir())
 	if consistentCfg == nil {
-		consistentCfg = &config.ConsistentConfig{}
+		consistentCfg = defaultCfg
 	}
 	if len(util.GetOrZero(consistentCfg.Storage)) == 0 {
-		consistentCfg.Storage = util.AddressOf("file://" + t.TempDir())
+		consistentCfg.Storage = defaultCfg.Storage
 	}
 	if util.GetOrZero(consistentCfg.MaxLogSize) == 0 {
-		consistentCfg.MaxLogSize = util.AddressOf(redo.DefaultMaxLogSize)
+		consistentCfg.MaxLogSize = defaultCfg.MaxLogSize
 	}
 	if util.GetOrZero(consistentCfg.FlushIntervalInMs) == 0 {
-		consistentCfg.FlushIntervalInMs = util.AddressOf(int64(redo.DefaultFlushIntervalInMs))
+		consistentCfg.FlushIntervalInMs = defaultCfg.FlushIntervalInMs
 	}
 	if util.GetOrZero(consistentCfg.EncodingWorkerNum) == 0 {
-		consistentCfg.EncodingWorkerNum = util.AddressOf(redo.DefaultEncodingWorkerNum)
+		consistentCfg.EncodingWorkerNum = defaultCfg.EncodingWorkerNum
 	}
 	if util.GetOrZero(consistentCfg.FlushWorkerNum) == 0 {
-		consistentCfg.FlushWorkerNum = util.AddressOf(redo.DefaultFlushWorkerNum)
+		consistentCfg.FlushWorkerNum = defaultCfg.FlushWorkerNum
 	}
 	if len(util.GetOrZero(consistentCfg.Compression)) == 0 {
-		consistentCfg.Compression = util.AddressOf(compression.None)
+		consistentCfg.Compression = defaultCfg.Compression
 	}
 	if util.GetOrZero(consistentCfg.FlushConcurrency) == 0 {
-		consistentCfg.FlushConcurrency = util.AddressOf(1)
+		consistentCfg.FlushConcurrency = defaultCfg.FlushConcurrency
 	}
 	cfg, err := writer.NewConfig(changefeedID, consistentCfg)
 	require.NoError(t, err)

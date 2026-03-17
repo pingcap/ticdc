@@ -28,6 +28,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
+	writertest "github.com/pingcap/ticdc/pkg/redo/writer/testutil"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/stretchr/testify/require"
@@ -36,6 +37,15 @@ import (
 
 // Use a smaller worker number for test to speed up the test.
 var workerNumberForTest = 2
+
+func newTestConsistentConfig(storage string) *config.ConsistentConfig {
+	cfg := writertest.NewConsistentConfig(storage)
+	cfg.FlushIntervalInMs = util.AddressOf(int64(redo.MinFlushIntervalInMs))
+	cfg.MetaFlushIntervalInMs = util.AddressOf(int64(redo.MinFlushIntervalInMs))
+	cfg.EncodingWorkerNum = util.AddressOf(workerNumberForTest)
+	cfg.FlushWorkerNum = util.AddressOf(workerNumberForTest)
+	return cfg
+}
 
 func TestConsistentConfig(t *testing.T) {
 	t.Parallel()
@@ -116,16 +126,8 @@ func TestRedoSinkInProcessor(t *testing.T) {
 
 	testWriteDMLs := func(storage string, useFileBackend bool) {
 		ctx, cancel := context.WithCancel(ctx)
-		cfg := &config.ConsistentConfig{
-			Level:                 util.AddressOf(string(redo.ConsistentLevelEventual)),
-			MaxLogSize:            util.AddressOf(redo.DefaultMaxLogSize),
-			Storage:               util.AddressOf(storage),
-			FlushIntervalInMs:     util.AddressOf(int64(redo.MinFlushIntervalInMs)),
-			MetaFlushIntervalInMs: util.AddressOf(int64(redo.MinFlushIntervalInMs)),
-			EncodingWorkerNum:     util.AddressOf(workerNumberForTest),
-			FlushWorkerNum:        util.AddressOf(workerNumberForTest),
-			UseFileBackend:        util.AddressOf(useFileBackend),
-		}
+		cfg := newTestConsistentConfig(storage)
+		cfg.UseFileBackend = util.AddressOf(useFileBackend)
 		dmlMgr, err := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), cfg)
 		require.NoError(t, err)
 		defer dmlMgr.Close(false)
@@ -208,15 +210,7 @@ func TestRedoSinkError(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 	defer cancel()
 
-	cfg := &config.ConsistentConfig{
-		Level:                 util.AddressOf(string(redo.ConsistentLevelEventual)),
-		MaxLogSize:            util.AddressOf(redo.DefaultMaxLogSize),
-		Storage:               util.AddressOf("blackhole-invalid://"),
-		FlushIntervalInMs:     util.AddressOf(int64(redo.MinFlushIntervalInMs)),
-		MetaFlushIntervalInMs: util.AddressOf(int64(redo.MinFlushIntervalInMs)),
-		EncodingWorkerNum:     util.AddressOf(workerNumberForTest),
-		FlushWorkerNum:        util.AddressOf(workerNumberForTest),
-	}
+	cfg := newTestConsistentConfig("blackhole-invalid://")
 	logMgr, err := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), cfg)
 	require.NoError(t, err)
 	defer logMgr.Close(false)
@@ -267,16 +261,10 @@ func BenchmarkFileWriter(b *testing.B) {
 
 func runBenchTest(b *testing.B, storage string, useFileBackend bool) {
 	ctx, cancel := context.WithCancel(context.Background())
-	cfg := &config.ConsistentConfig{
-		Level:                 util.AddressOf(string(redo.ConsistentLevelEventual)),
-		MaxLogSize:            util.AddressOf(redo.DefaultMaxLogSize),
-		Storage:               util.AddressOf(storage),
-		FlushIntervalInMs:     util.AddressOf(int64(redo.MinFlushIntervalInMs)),
-		MetaFlushIntervalInMs: util.AddressOf(int64(redo.MinFlushIntervalInMs)),
-		EncodingWorkerNum:     util.AddressOf(redo.DefaultEncodingWorkerNum),
-		FlushWorkerNum:        util.AddressOf(redo.DefaultFlushWorkerNum),
-		UseFileBackend:        util.AddressOf(useFileBackend),
-	}
+	cfg := newTestConsistentConfig(storage)
+	cfg.EncodingWorkerNum = util.AddressOf(redo.DefaultEncodingWorkerNum)
+	cfg.FlushWorkerNum = util.AddressOf(redo.DefaultFlushWorkerNum)
+	cfg.UseFileBackend = util.AddressOf(useFileBackend)
 	dmlMgr, err := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), cfg)
 	require.NoError(b, err)
 	defer dmlMgr.Close(false)
@@ -349,7 +337,7 @@ func TestRedoSinkSendMessagesInBatch(t *testing.T) {
 	expectWriteBatch := func(batchSize int) *gomock.Call {
 		args := make([]interface{}, 0, batchSize+1)
 		args = append(args, gomock.Any()) // context
-		for i := 0; i < batchSize; i++ {
+		for range batchSize {
 			args = append(args, gomock.Any())
 		}
 		return mockWriter.EXPECT().

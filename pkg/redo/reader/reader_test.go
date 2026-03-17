@@ -25,13 +25,12 @@ import (
 	"github.com/google/uuid"
 	"github.com/pingcap/ticdc/pkg/common"
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/compression"
-	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/codec"
 	misc "github.com/pingcap/ticdc/pkg/redo/common"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/redo/writer/file"
+	writertest "github.com/pingcap/ticdc/pkg/redo/writer/testutil"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
@@ -44,17 +43,11 @@ func genLogFile(
 	dir string, logType string,
 	minCommitTs, maxCommitTs uint64,
 ) {
+	consistentCfg := writertest.NewConsistentConfig("file://" + dir)
+	consistentCfg.MaxLogSize = util.AddressOf(int64(1))
 	cfg, err := writer.NewConfig(
 		common.NewChangeFeedIDWithName("reader-test", common.DefaultKeyspaceName),
-		&config.ConsistentConfig{
-			MaxLogSize:        util.AddressOf(int64(1)),
-			FlushIntervalInMs: util.AddressOf(int64(redo.DefaultFlushIntervalInMs)),
-			EncodingWorkerNum: util.AddressOf(redo.DefaultEncodingWorkerNum),
-			FlushWorkerNum:    util.AddressOf(redo.DefaultFlushWorkerNum),
-			Storage:           util.AddressOf("file://" + dir),
-			Compression:       util.AddressOf(compression.None),
-			FlushConcurrency:  util.AddressOf(1),
-		},
+		consistentCfg,
 	)
 	require.NoError(t, err)
 	fileName := fmt.Sprintf(redo.RedoLogFileFormatV2, "capture", "default",

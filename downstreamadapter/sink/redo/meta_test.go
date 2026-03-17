@@ -24,12 +24,20 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/redo"
+	writertest "github.com/pingcap/ticdc/pkg/redo/writer/testutil"
 	misc "github.com/pingcap/ticdc/pkg/redo/common"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/uuid"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 )
+
+func newTestMetaConsistentConfig(storage string) *config.ConsistentConfig {
+	cfg := writertest.NewConsistentConfig(storage)
+	cfg.FlushIntervalInMs = util.AddressOf(int64(redo.MinFlushIntervalInMs))
+	cfg.MetaFlushIntervalInMs = util.AddressOf(int64(redo.MinFlushIntervalInMs))
+	return cfg
+}
 
 func TestInitAndWriteMeta(t *testing.T) {
 	t.Parallel()
@@ -71,15 +79,7 @@ func TestInitAndWriteMeta(t *testing.T) {
 	}
 
 	startTs := uint64(10)
-	cfg := &config.ConsistentConfig{
-		Level:                 util.AddressOf(string(redo.ConsistentLevelEventual)),
-		MaxLogSize:            util.AddressOf(redo.DefaultMaxLogSize),
-		Storage:               util.AddressOf(uri.String()),
-		FlushIntervalInMs:     util.AddressOf(int64(redo.MinFlushIntervalInMs)),
-		MetaFlushIntervalInMs: util.AddressOf(int64(redo.MinFlushIntervalInMs)),
-		EncodingWorkerNum:     util.AddressOf(redo.DefaultEncodingWorkerNum),
-		FlushWorkerNum:        util.AddressOf(redo.DefaultFlushWorkerNum),
-	}
+	cfg := newTestMetaConsistentConfig(uri.String())
 	m := NewRedoMeta(changefeedID, startTs, cfg)
 
 	var eg errgroup.Group
@@ -155,15 +155,7 @@ func TestPreCleanupAndWriteMeta(t *testing.T) {
 	}
 
 	startTs := uint64(10)
-	cfg := &config.ConsistentConfig{
-		Level:                 util.AddressOf(string(redo.ConsistentLevelEventual)),
-		MaxLogSize:            util.AddressOf(redo.DefaultMaxLogSize),
-		Storage:               util.AddressOf(uri.String()),
-		FlushIntervalInMs:     util.AddressOf(int64(redo.MinFlushIntervalInMs)),
-		MetaFlushIntervalInMs: util.AddressOf(int64(redo.MinFlushIntervalInMs)),
-		EncodingWorkerNum:     util.AddressOf(redo.DefaultEncodingWorkerNum),
-		FlushWorkerNum:        util.AddressOf(redo.DefaultFlushWorkerNum),
-	}
+	cfg := newTestMetaConsistentConfig(uri.String())
 	m := NewRedoMeta(changefeedID, startTs, cfg)
 
 	var eg errgroup.Group
@@ -292,15 +284,7 @@ func TestGCAndCleanup(t *testing.T) {
 	}
 
 	startTs := uint64(3)
-	cfg := &config.ConsistentConfig{
-		Level:                 util.AddressOf(string(redo.ConsistentLevelEventual)),
-		MaxLogSize:            util.AddressOf(redo.DefaultMaxLogSize),
-		Storage:               util.AddressOf(uri.String()),
-		FlushIntervalInMs:     util.AddressOf(int64(redo.MinFlushIntervalInMs)),
-		MetaFlushIntervalInMs: util.AddressOf(int64(redo.MinFlushIntervalInMs)),
-		EncodingWorkerNum:     util.AddressOf(redo.DefaultEncodingWorkerNum),
-		FlushWorkerNum:        util.AddressOf(redo.DefaultFlushWorkerNum),
-	}
+	cfg := newTestMetaConsistentConfig(uri.String())
 
 	m := NewRedoMeta(changefeedID, startTs, cfg)
 

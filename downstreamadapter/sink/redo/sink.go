@@ -218,7 +218,9 @@ func (s *Sink) sendMessages(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		s.metricCollector.observeRowWrite(len(events), time.Since(start))
+		if s.metricCollector != nil {
+			s.metricCollector.observeRowWrite(len(events), time.Since(start))
+		}
 	}
 }
 
