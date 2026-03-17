@@ -28,18 +28,28 @@ import (
 
 // Config is the config for redo log writer.
 type Config struct {
-	captureID         config.CaptureID
-	changefeedID      common.ChangeFeedID
+	captureID    config.CaptureID
+	changefeedID common.ChangeFeedID
+
 	uri               *url.URL
-	dir               string
 	maxLogSizeInBytes int64
 
-	useFileBackend    bool
+	useFileBackend bool
+
 	flushIntervalInMs int64
+
+	// the number of encoding concurrency.
 	encodingWorkerNum int
-	flushWorkerNum    int
-	compression       string
-	flushConcurrency  int
+
+	// Shared by file and memory backends for worker fanout sizing.
+	flushWorkerNum int
+	// Used only by the memory backend for file compression.
+	compression string
+	// Used only by the memory backend for flush concurrency.
+	flushConcurrency int
+
+	// Used only by the file backend as the local writer directory.
+	dir string
 }
 
 // NewConfig builds the runtime writer config from an adjusted ConsistentConfig.
@@ -66,29 +76,29 @@ func NewConfig(changefeedID common.ChangeFeedID, consistentCfg *config.Consisten
 		compression:       util.GetOrZero(consistentCfg.Compression),
 		flushConcurrency:  util.GetOrZero(consistentCfg.FlushConcurrency),
 	}
-	initStorageConfig(cfg)
+	cfg.dir = newWriterDir(cfg)
 	return cfg, nil
 }
 
-func initStorageConfig(cfg *Config) {
-	if cfg.UseExternalStorage() {
-		if cfg.uri.Scheme == "file" {
-			cfg.dir = cfg.uri.Path
-			return
-		}
-		if cfg.useFileBackend {
-			cfg.dir = filepath.Join(
-				config.GetGlobalServerConfig().DataDir,
-				config.DefaultRedoDir,
-				cfg.changefeedID.Keyspace(),
-				cfg.changefeedID.Name(),
-			)
-		}
-		return
+func newWriterDir(cfg *Config) string {
+	if cfg == nil || cfg.uri == nil {
+		return ""
 	}
-	if cfg.uri != nil {
-		cfg.dir = cfg.uri.Path
+	if !cfg.UseExternalStorage() {
+		return cfg.uri.Path
 	}
+	if cfg.uri.Scheme == "file" {
+		return cfg.uri.Path
+	}
+	if !cfg.useFileBackend {
+		return ""
+	}
+	return filepath.Join(
+		config.GetGlobalServerConfig().DataDir,
+		config.DefaultRedoDir,
+		cfg.changefeedID.Keyspace(),
+		cfg.changefeedID.Name(),
+	)
 }
 
 func (cfg Config) String() string {
