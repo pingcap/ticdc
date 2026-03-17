@@ -169,6 +169,7 @@ func (s *Sink) Close(_ bool) {
 	if !s.isClosed.CompareAndSwap(false, true) {
 		return
 	}
+	start := time.Now()
 	s.logBuffer.Close()
 	if err := s.ddlWriter.Close(); err != nil && errors.Cause(err) != context.Canceled {
 		log.Error("redo sink fails to close ddl writer",
@@ -185,7 +186,8 @@ func (s *Sink) Close(_ bool) {
 	s.mericCollector.close()
 	log.Info("redo sink closed",
 		zap.String("keyspace", s.cfg.ChangeFeedID.Keyspace()),
-		zap.String("changefeed", s.cfg.ChangeFeedID.Name()))
+		zap.String("changefeed", s.cfg.ChangeFeedID.Name()),
+		zap.Duration("duration", time.Since(start)))
 }
 
 func (s *Sink) sendMessages(ctx context.Context) error {
