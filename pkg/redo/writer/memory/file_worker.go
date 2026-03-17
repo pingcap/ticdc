@@ -85,7 +85,7 @@ func (f *fileCache) markFlushed() {
 }
 
 type fileWorkerGroup struct {
-	cfg           *writer.LogWriterConfig
+	cfg           *writer.Config
 	logType       string
 	op            *writer.LogWriterOptions
 	workerNum     int
@@ -105,7 +105,7 @@ type fileWorkerGroup struct {
 // fileWorkerGroup receives encoded redo events and writes them to cache, with
 // background goroutines handling file flush.
 func newFileWorkerGroup(
-	cfg *writer.LogWriterConfig, workerNum int,
+	cfg *writer.Config, workerNum int,
 	logType string,
 	inputCh chan *polymorphicRedoEvent,
 	extStorage storage.ExternalStorage,

@@ -29,6 +29,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/uuid"
 	mockstorage "github.com/pingcap/tidb/br/pkg/mock/storage"
 	"github.com/pingcap/tidb/br/pkg/storage"
@@ -36,6 +37,18 @@ import (
 	"github.com/uber-go/atomic"
 	"go.uber.org/mock/gomock"
 )
+
+func newFileTestWriterConfig(
+	t *testing.T,
+	changefeedID common.ChangeFeedID,
+	consistentCfg config.ConsistentConfig,
+	opts ...writer.ConfigOption,
+) *writer.Config {
+	baseOpts := append([]writer.ConfigOption{writer.WithCaptureID("cp")}, opts...)
+	cfg, err := writer.NewConfig(changefeedID, &consistentCfg, baseOpts...)
+	require.NoError(t, err)
+	return cfg
+}
 
 func TestWriterWrite(t *testing.T) {
 	t.Parallel()
@@ -59,14 +72,16 @@ func TestWriterWrite(t *testing.T) {
 
 	for idx, cf := range cfs {
 		uuidGen := uuid.NewConstGenerator("const-uuid")
+		writerCfg := newFileTestWriterConfig(
+			t,
+			cf,
+			config.ConsistentConfig{},
+			writer.WithDir(dir),
+			writer.WithMaxLogSizeInBytes(10),
+		)
 		w := &Writer{
-			logType: redo.RedoRowLogFileType,
-			cfg: &writer.LogWriterConfig{
-				MaxLogSizeInBytes: 10,
-				Dir:               dir,
-				ChangeFeedID:      cf,
-				CaptureID:         "cp",
-			},
+			logType:   redo.RedoRowLogFileType,
+			cfg:       writerCfg,
 			uint64buf: make([]byte, 8),
 			running:   *atomic.NewBool(true),
 			metricWriteBytes: metrics.RedoWriteBytesGauge.
@@ -150,14 +165,16 @@ func TestWriterWrite(t *testing.T) {
 		require.Nil(t, err)
 		require.Equal(t, fileName, info.Name())
 
+		writerCfg11 := newFileTestWriterConfig(
+			t,
+			cf11s[idx],
+			config.ConsistentConfig{},
+			writer.WithDir(dir),
+			writer.WithMaxLogSizeInBytes(10),
+		)
 		w1 := &Writer{
-			logType: redo.RedoRowLogFileType,
-			cfg: &writer.LogWriterConfig{
-				MaxLogSizeInBytes: 10,
-				Dir:               dir,
-				ChangeFeedID:      cf11s[idx],
-				CaptureID:         "cp",
-			},
+			logType:   redo.RedoRowLogFileType,
+			cfg:       writerCfg11,
 			uint64buf: make([]byte, 8),
 			running:   *atomic.NewBool(true),
 			metricWriteBytes: metrics.RedoWriteBytesGauge.
@@ -214,11 +231,13 @@ func TestNewWriter(t *testing.T) {
 	dir := t.TempDir()
 
 	uuidGen := uuid.NewConstGenerator("const-uuid")
-	w, err := NewFileWriter(context.Background(), &writer.LogWriterConfig{
-		Dir:                "sdfsf",
-		UseExternalStorage: false,
-	},
-		redo.RedoRowLogFileType,
+	writerCfg := newFileTestWriterConfig(
+		t,
+		common.NewChangeFeedIDWithName("test-row-writer", common.DefaultKeyspaceName),
+		config.ConsistentConfig{},
+		writer.WithDir("sdfsf"),
+	)
+	w, err := NewFileWriter(context.Background(), writerCfg, redo.RedoRowLogFileType,
 		writer.WithUUIDGenerator(func() uuid.Generator { return uuidGen }),
 	)
 	require.Nil(t, err)
@@ -244,16 +263,18 @@ func TestNewWriter(t *testing.T) {
 		Keyspace: "abcd",
 		Name:     "test",
 	})
-	w = &Writer{
-		logType: redo.RedoDDLLogFileType,
-		cfg: &writer.LogWriterConfig{
-			Dir:          dir,
-			CaptureID:    "cp",
-			ChangeFeedID: changefeed,
-
-			UseExternalStorage: true,
-			MaxLogSizeInBytes:  redo.DefaultMaxLogSize * redo.Megabyte,
+	ddlWriterCfg := newFileTestWriterConfig(
+		t,
+		changefeed,
+		config.ConsistentConfig{
+			Storage: util.AddressOf("s3://bucket/prefix"),
 		},
+		writer.WithDir(dir),
+		writer.WithMaxLogSizeInBytes(redo.DefaultMaxLogSize*redo.Megabyte),
+	)
+	w = &Writer{
+		logType:   redo.RedoDDLLogFileType,
+		cfg:       ddlWriterCfg,
 		uint64buf: make([]byte, 8),
 		storage:   mockStorage,
 		metricWriteBytes: metrics.RedoWriteBytesGauge.
@@ -302,16 +323,18 @@ func TestRotateFileWithFileAllocator(t *testing.T) {
 		Keyspace: "abcd",
 		Name:     "test",
 	})
-	w := &Writer{
-		logType: redo.RedoRowLogFileType,
-		cfg: &writer.LogWriterConfig{
-			Dir:          dir,
-			CaptureID:    "cp",
-			ChangeFeedID: changefeed,
-
-			UseExternalStorage: true,
-			MaxLogSizeInBytes:  redo.DefaultMaxLogSize * redo.Megabyte,
+	rowWriterCfg := newFileTestWriterConfig(
+		t,
+		changefeed,
+		config.ConsistentConfig{
+			Storage: util.AddressOf("s3://bucket/prefix"),
 		},
+		writer.WithDir(dir),
+		writer.WithMaxLogSizeInBytes(redo.DefaultMaxLogSize*redo.Megabyte),
+	)
+	w := &Writer{
+		logType:   redo.RedoRowLogFileType,
+		cfg:       rowWriterCfg,
 		uint64buf: make([]byte, 8),
 		metricWriteBytes: metrics.RedoWriteBytesGauge.
 			WithLabelValues("default", "test", redo.RedoRowLogFileType),
@@ -369,16 +392,18 @@ func TestRotateFileWithoutFileAllocator(t *testing.T) {
 		Keyspace: "abcd",
 		Name:     "test",
 	})
-	w := &Writer{
-		logType: redo.RedoDDLLogFileType,
-		cfg: &writer.LogWriterConfig{
-			Dir:          dir,
-			CaptureID:    "cp",
-			ChangeFeedID: changefeed,
-
-			UseExternalStorage: true,
-			MaxLogSizeInBytes:  redo.DefaultMaxLogSize * redo.Megabyte,
+	ddlWriterCfg := newFileTestWriterConfig(
+		t,
+		changefeed,
+		config.ConsistentConfig{
+			Storage: util.AddressOf("s3://bucket/prefix"),
 		},
+		writer.WithDir(dir),
+		writer.WithMaxLogSizeInBytes(redo.DefaultMaxLogSize*redo.Megabyte),
+	)
+	w := &Writer{
+		logType:   redo.RedoDDLLogFileType,
+		cfg:       ddlWriterCfg,
 		uint64buf: make([]byte, 8),
 		metricWriteBytes: metrics.RedoWriteBytesGauge.
 			WithLabelValues("default", "test", redo.RedoDDLLogFileType),
@@ -411,16 +436,17 @@ func TestRunFlushesOnBatchBoundaryAndExecutesPostFlush(t *testing.T) {
 	dir := t.TempDir()
 	flushIntervalInMs := int64(60 * 1000)
 	flushWorkerNum := 9
-	w, err := NewFileWriter(context.Background(), &writer.LogWriterConfig{
-		ConsistentConfig: config.ConsistentConfig{
+	batchWriterCfg := newFileTestWriterConfig(
+		t,
+		common.NewChangeFeedIDWithName("test-run-batch", common.DefaultKeyspaceName),
+		config.ConsistentConfig{
 			FlushIntervalInMs: &flushIntervalInMs,
 			FlushWorkerNum:    &flushWorkerNum,
 		},
-		Dir:               dir,
-		CaptureID:         "cp",
-		ChangeFeedID:      common.NewChangeFeedIDWithName("test-run-batch", common.DefaultKeyspaceName),
-		MaxLogSizeInBytes: redo.DefaultMaxLogSize * redo.Megabyte,
-	}, redo.RedoRowLogFileType)
+		writer.WithDir(dir),
+		writer.WithMaxLogSizeInBytes(redo.DefaultMaxLogSize*redo.Megabyte),
+	)
+	w, err := NewFileWriter(context.Background(), batchWriterCfg, redo.RedoRowLogFileType)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())

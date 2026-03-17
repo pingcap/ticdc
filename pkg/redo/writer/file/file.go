@@ -54,7 +54,7 @@ type fileWriter interface {
 
 // fileWriter is a redo log event fileWriter which writes redo log events to a file.
 type Writer struct {
-	cfg     *writer.LogWriterConfig
+	cfg     *writer.Config
 	logType string
 	op      *writer.LogWriterOptions
 	inputCh chan writer.RedoEvent
@@ -84,7 +84,7 @@ type Writer struct {
 
 // NewFileWriter return a file rotated writer, TODO: extract to a common rotate Writer
 func NewFileWriter(
-	ctx context.Context, cfg *writer.LogWriterConfig, logType string, opts ...writer.Option,
+	ctx context.Context, cfg *writer.Config, logType string, opts ...writer.Option,
 ) (*Writer, error) {
 	if cfg == nil {
 		err := errors.New("FileWriterConfig can not be nil")

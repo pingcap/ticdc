@@ -20,13 +20,30 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
+
+func newTestWriterConfig(
+	t *testing.T,
+	changefeedID common.ChangeFeedID,
+	consistentCfg *config.ConsistentConfig,
+	opts ...writer.ConfigOption,
+) *writer.Config {
+	if consistentCfg == nil {
+		consistentCfg = &config.ConsistentConfig{}
+	}
+	baseOpts := append([]writer.ConfigOption{writer.WithCaptureID("cp")}, opts...)
+	cfg, err := writer.NewConfig(changefeedID, consistentCfg, baseOpts...)
+	require.NoError(t, err)
+	return cfg
+}
 
 func TestLogWriterWriteDDL(t *testing.T) {
 	t.Parallel()
@@ -104,7 +121,7 @@ func TestLogWriterWriteDDL(t *testing.T) {
 		mockWriter.On("IsRunning").Return(tt.isRunning)
 		mockWriter.On("SyncWrite", mock.Anything).Return(tt.writerErr)
 		w := logWriter{
-			cfg:           &writer.LogWriterConfig{},
+			cfg:           newTestWriterConfig(t, common.ChangeFeedID{}, nil),
 			backendWriter: mockWriter,
 			fileType:      redo.RedoDDLLogFileType,
 		}
@@ -187,13 +204,15 @@ func TestLogWriterFlushLog(t *testing.T) {
 		mockWriter := &mockFileWriter{}
 		mockWriter.On("Flush", mock.Anything).Return(tt.flushErr)
 		mockWriter.On("IsRunning").Return(tt.isRunning)
-		cfg := &writer.LogWriterConfig{
-			Dir:                dir,
-			ChangeFeedID:       common.NewChangeFeedIDWithName("test-cf", common.DefaultKeyspaceName),
-			CaptureID:          "cp",
-			MaxLogSizeInBytes:  10,
-			UseExternalStorage: true,
-		}
+		cfg := newTestWriterConfig(
+			t,
+			common.NewChangeFeedIDWithName("test-cf", common.DefaultKeyspaceName),
+			&config.ConsistentConfig{
+				Storage: util.AddressOf("s3://bucket/prefix"),
+			},
+			writer.WithDir(dir),
+			writer.WithMaxLogSizeInBytes(10),
+		)
 		w := logWriter{
 			cfg:           cfg,
 			backendWriter: mockWriter,

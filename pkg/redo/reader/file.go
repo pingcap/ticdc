@@ -31,8 +31,10 @@ import (
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/common"
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/compression"
+	"github.com/pingcap/ticdc/pkg/config"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/codec"
@@ -243,9 +245,14 @@ func sortAndWriteFile(
 	fileName string, cfg *readerConfig,
 ) error {
 	sortedName := getSortedFileName(fileName)
-	writerCfg := &writer.LogWriterConfig{
-		Dir:               cfg.dir,
-		MaxLogSizeInBytes: math.MaxInt32,
+	writerCfg, err := writer.NewConfig(
+		common.ChangeFeedID{},
+		&config.ConsistentConfig{},
+		writer.WithDir(cfg.dir),
+		writer.WithMaxLogSizeInBytes(math.MaxInt32),
+	)
+	if err != nil {
+		return err
 	}
 	w, err := file.NewFileWriter(egCtx, writerCfg, cfg.fileType, writer.WithLogFileName(func() string {
 		return sortedName

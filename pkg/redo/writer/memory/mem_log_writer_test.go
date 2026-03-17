@@ -19,6 +19,7 @@ import (
 
 	"github.com/pingcap/ticdc/pkg/common"
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/util"
@@ -66,13 +67,15 @@ func testWriteEvents(t *testing.T, events []writer.RedoEvent) {
 
 	extStorage, uri, err := util.GetTestExtStorage(ctx, t.TempDir())
 	require.NoError(t, err)
-	lwcfg := &writer.LogWriterConfig{
-		CaptureID:          "test-capture",
-		ChangeFeedID:       common.NewChangeFeedIDWithName("test-changefeed", common.DefaultKeyspaceName),
-		URI:                uri,
-		UseExternalStorage: true,
-		MaxLogSizeInBytes:  10 * redo.Megabyte,
-	}
+	lwcfg, err := writer.NewConfig(
+		common.NewChangeFeedIDWithName("test-changefeed", common.DefaultKeyspaceName),
+		&config.ConsistentConfig{
+			Storage: util.AddressOf(uri.String()),
+		},
+		writer.WithCaptureID("test-capture"),
+		writer.WithMaxLogSizeInBytes(10*redo.Megabyte),
+	)
+	require.NoError(t, err)
 	filename := t.Name()
 	lw, err := NewLogWriter(ctx, lwcfg, redo.RedoDDLLogFileType, writer.WithLogFileName(func() string {
 		return filename

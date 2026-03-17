@@ -25,6 +25,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/pingcap/ticdc/pkg/common"
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/codec"
 	misc "github.com/pingcap/ticdc/pkg/redo/common"
@@ -41,10 +42,13 @@ func genLogFile(
 	dir string, logType string,
 	minCommitTs, maxCommitTs uint64,
 ) {
-	cfg := &writer.LogWriterConfig{
-		MaxLogSizeInBytes: 100000,
-		Dir:               dir,
-	}
+	cfg, err := writer.NewConfig(
+		common.NewChangeFeedIDWithName("reader-test", common.DefaultKeyspaceName),
+		&config.ConsistentConfig{},
+		writer.WithMaxLogSizeInBytes(100000),
+		writer.WithDir(dir),
+	)
+	require.NoError(t, err)
 	fileName := fmt.Sprintf(redo.RedoLogFileFormatV2, "capture", "default",
 		"changefeed", logType, maxCommitTs, uuid.NewString(), redo.LogEXT)
 	w, err := file.NewFileWriter(ctx, cfg, logType, writer.WithLogFileName(func() string {

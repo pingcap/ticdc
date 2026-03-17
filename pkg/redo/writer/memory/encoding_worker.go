@@ -80,7 +80,7 @@ type encodingWorkerGroup struct {
 	tableSchemaStore *commonEvent.TableSchemaStore
 }
 
-func newEncodingWorkerGroup(cfg *writer.LogWriterConfig) *encodingWorkerGroup {
+func newEncodingWorkerGroup(cfg *writer.Config) *encodingWorkerGroup {
 	workerNum := util.GetOrZero(cfg.EncodingWorkerNum)
 	if workerNum <= 0 {
 		workerNum = redo.DefaultEncodingWorkerNum

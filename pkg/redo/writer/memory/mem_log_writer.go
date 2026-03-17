@@ -29,7 +29,7 @@ import (
 var _ writer.RedoLogWriter = (*memoryLogWriter)(nil)
 
 type memoryLogWriter struct {
-	cfg           *writer.LogWriterConfig
+	cfg           *writer.Config
 	encodeWorkers *encodingWorkerGroup
 	fileWorkers   *fileWorkerGroup
 	fileType      string
@@ -40,11 +40,11 @@ type memoryLogWriter struct {
 
 // NewLogWriter creates a new memoryLogWriter.
 func NewLogWriter(
-	ctx context.Context, cfg *writer.LogWriterConfig, fileType string, opts ...writer.Option,
+	ctx context.Context, cfg *writer.Config, fileType string, opts ...writer.Option,
 ) (*memoryLogWriter, error) {
 	if cfg == nil {
 		return nil, errors.WrapError(errors.ErrRedoConfigInvalid,
-			errors.New("invalid LogWriterConfig"))
+			errors.New("invalid redo writer config"))
 	}
 
 	// "nfs" and "local" scheme are converted to "file" scheme

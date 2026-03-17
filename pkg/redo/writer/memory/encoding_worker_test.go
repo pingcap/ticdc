@@ -28,12 +28,10 @@ func TestNewEncodingWorkerGroup(t *testing.T) {
 	t.Parallel()
 
 	changefeed := common.NewChangeFeedIDWithName("test-cf", common.DefaultKeyspaceName)
-	cfg := &writer.LogWriterConfig{
-		ConsistentConfig: config.ConsistentConfig{
-			EncodingWorkerNum: util.AddressOf(3),
-		},
-		ChangeFeedID: changefeed,
-	}
+	cfg, err := writer.NewConfig(changefeed, &config.ConsistentConfig{
+		EncodingWorkerNum: util.AddressOf(3),
+	})
+	require.NoError(t, err)
 	g := newEncodingWorkerGroup(cfg)
 	require.Equal(t, 3, g.workerNum)
 	require.Len(t, g.inputChs, 3)
