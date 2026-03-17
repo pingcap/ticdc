@@ -188,8 +188,9 @@ func (a *saramaAdminClient) Heartbeat() {
 }
 
 func (a *saramaAdminClient) Close() {
-	// Close admin first (may send RPCs), then close the underlying client to stop
-	// sarama background goroutines and release related caches/metrics.
+	// For admins created via sarama.NewClusterAdminFromClient, admin.Close() takes care
+	// of closing the underlying client as well. Fall back to closing the client directly
+	// only when admin is unexpectedly nil.
 	if a.admin != nil {
 		if err := a.admin.Close(); err != nil {
 			log.Warn("close admin client meet error",
@@ -197,6 +198,7 @@ func (a *saramaAdminClient) Close() {
 				zap.String("changefeed", a.changefeed.Name()),
 				zap.Error(err))
 		}
+		return
 	}
 	if a.client != nil {
 		if err := a.client.Close(); err != nil {

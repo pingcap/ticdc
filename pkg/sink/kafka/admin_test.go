@@ -39,7 +39,8 @@ func (c *testSaramaClient) Close() error {
 }
 
 type testSaramaClusterAdmin struct {
-	closed bool
+	closed      bool
+	closeClient *testSaramaClient
 }
 
 func (a *testSaramaClusterAdmin) DescribeCluster() ([]*sarama.Broker, int32, error) {
@@ -60,20 +61,15 @@ func (a *testSaramaClusterAdmin) CreateTopic(string, *sarama.TopicDetail, bool) 
 
 func (a *testSaramaClusterAdmin) Close() error {
 	a.closed = true
+	if a.closeClient != nil {
+		return a.closeClient.Close()
+	}
 	return nil
 }
 
-func TestSaramaAdminClientCloseClosesAdminAndClient(t *testing.T) {
-	// Scenario: Closing the admin wrapper must close both the sarama admin and the
-	// underlying sarama client, otherwise sarama background goroutines (metadata updater)
-	// and their in-memory caches/metrics can be leaked across changefeed restarts.
-	//
-	// Steps:
-	// 1. Create a wrapper with a fake admin and fake client.
-	// 2. Call Close().
-	// 3. Verify both Close calls are executed.
+func TestSaramaAdminClientCloseDelegatesClientCleanupToAdmin(t *testing.T) {
 	client := &testSaramaClient{}
-	admin := &testSaramaClusterAdmin{}
+	admin := &testSaramaClusterAdmin{closeClient: client}
 	a := &saramaAdminClient{
 		changefeed: common.NewChangeFeedIDWithName("test", "default"),
 		client:     client,
@@ -84,27 +80,12 @@ func TestSaramaAdminClientCloseClosesAdminAndClient(t *testing.T) {
 	require.True(t, client.closed)
 }
 
-func TestSaramaAdminClientCloseToleratesNilFields(t *testing.T) {
-	// Scenario: Close should be safe even if admin/client has already been cleared.
-	//
-	// Steps:
-	// 1. Call Close() on wrappers with nil admin or nil client.
-	// 2. Ensure Close does not panic and still closes the non-nil field.
+func TestSaramaAdminClientCloseFallsBackToClientWhenAdminIsNil(t *testing.T) {
 	client := &testSaramaClient{}
 	a := &saramaAdminClient{
 		changefeed: common.NewChangeFeedIDWithName("test", "default"),
 		client:     client,
-		admin:      nil,
 	}
 	require.NotPanics(t, func() { a.Close() })
 	require.True(t, client.closed)
-
-	admin := &testSaramaClusterAdmin{}
-	b := &saramaAdminClient{
-		changefeed: common.NewChangeFeedIDWithName("test", "default"),
-		client:     nil,
-		admin:      admin,
-	}
-	require.NotPanics(t, func() { b.Close() })
-	require.True(t, admin.closed)
 }
