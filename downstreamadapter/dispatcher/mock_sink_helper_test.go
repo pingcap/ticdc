@@ -33,6 +33,9 @@ type dispatcherTestSink struct {
 	mu       sync.Mutex
 	dmls     []*commonEvent.DMLEvent
 	isNormal atomic.Bool
+
+	flushMu              sync.Mutex
+	flushBeforeBlockHook func(commonEvent.BlockEvent) error
 }
 
 func newDispatcherTestSink(t *testing.T, sinkType common.SinkType) *dispatcherTestSink {
@@ -58,7 +61,15 @@ func newDispatcherTestSink(t *testing.T, sinkType common.SinkType) *dispatcherTe
 		event.PostFlush()
 		return nil
 	}).AnyTimes()
-	testSink.sink.EXPECT().FlushDMLBeforeBlock(gomock.Any()).Return(nil).AnyTimes()
+	testSink.sink.EXPECT().FlushDMLBeforeBlock(gomock.Any()).DoAndReturn(func(event commonEvent.BlockEvent) error {
+		testSink.flushMu.Lock()
+		hook := testSink.flushBeforeBlockHook
+		testSink.flushMu.Unlock()
+		if hook != nil {
+			return hook(event)
+		}
+		return nil
+	}).AnyTimes()
 	testSink.sink.EXPECT().AddCheckpointTs(gomock.Any()).AnyTimes()
 	testSink.sink.EXPECT().SetTableSchemaStore(gomock.Any()).AnyTimes()
 	testSink.sink.EXPECT().Close(gomock.Any()).AnyTimes()
@@ -72,6 +83,12 @@ func (s *dispatcherTestSink) Sink() sink.Sink {
 
 func (s *dispatcherTestSink) SetIsNormal(isNormal bool) {
 	s.isNormal.Store(isNormal)
+}
+
+func (s *dispatcherTestSink) SetFlushBeforeBlockHook(hook func(commonEvent.BlockEvent) error) {
+	s.flushMu.Lock()
+	defer s.flushMu.Unlock()
+	s.flushBeforeBlockHook = hook
 }
 
 func (s *dispatcherTestSink) GetDMLs() []*commonEvent.DMLEvent {

@@ -104,7 +104,11 @@ type DDLEvent struct {
 	// to ensure the new truncated table can be handled correctly.
 	// If the DDL involves multiple tables, this field is not effective.
 	// The multiple table DDL event will be handled by filtering querys and table infos.
-	NotSync bool `json:"not_sync"`
+	// NOTE: The `msg` tag is a legacy tag kept for backward compatibility.
+	// DDLEventVersion1 still marshals the struct with encoding/json, so changing this
+	// field to `json:"not_sync"` would change the wire key from `NotSync` to
+	// `not_sync` and break mixed-version DDLEvent interoperability.
+	NotSync bool `msg:"not_sync"`
 
 	// IndexIDs store the add index ids in SQL order for add index and multi schema change DDLs.
 	// MySQL sink uses them to recover anonymous index names.

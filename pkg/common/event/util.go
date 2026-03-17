@@ -153,7 +153,7 @@ func (s *EventTestHelper) DDL2Job(ddl string) *timodel.Job {
 
 		// Note that partition name should be parsed from original query, not the upperQuery.
 		partName := strings.TrimSpace(res.Query[idx1:idx2])
-		partName = strings.Replace(partName, "`", "", -1)
+		partName = common.UnquoteName(partName)
 		res.Query = fmt.Sprintf("ALTER TABLE `%s`.`%s` EXCHANGE PARTITION `%s` WITH TABLE `%s`.`%s`",
 			res.InvolvingSchemaInfo[0].Database, res.InvolvingSchemaInfo[0].Table, partName, res.SchemaName, res.TableName)
 
