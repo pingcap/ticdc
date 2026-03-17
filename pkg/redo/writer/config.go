@@ -19,7 +19,6 @@ import (
 	"path/filepath"
 
 	"github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/ticdc/pkg/compression"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/redo"
@@ -55,12 +54,6 @@ func NewConfig(changefeedID common.ChangeFeedID, consistentCfg *config.Consisten
 	}
 	redo.FixLocalScheme(uri)
 
-	// todo: this looks redundant, should have be set in the consistency config.
-	compressionType := util.GetOrZero(consistentCfg.Compression)
-	if len(compressionType) == 0 {
-		compressionType = compression.None
-	}
-
 	cfg := &Config{
 		captureID:         config.GetGlobalServerConfig().AdvertiseAddr,
 		changefeedID:      changefeedID,
@@ -70,7 +63,7 @@ func NewConfig(changefeedID common.ChangeFeedID, consistentCfg *config.Consisten
 		flushIntervalInMs: util.GetOrZero(consistentCfg.FlushIntervalInMs),
 		encodingWorkerNum: util.GetOrZero(consistentCfg.EncodingWorkerNum),
 		flushWorkerNum:    util.GetOrZero(consistentCfg.FlushWorkerNum),
-		compression:       compressionType,
+		compression:       util.GetOrZero(consistentCfg.Compression),
 		flushConcurrency:  util.GetOrZero(consistentCfg.FlushConcurrency),
 	}
 	initStorageConfig(cfg)
