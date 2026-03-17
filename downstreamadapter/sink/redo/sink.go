@@ -125,7 +125,7 @@ func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 			s.isNormal.Store(false)
 			return err
 		}
-		s.mericCollector.observeDDLWrite(time.Since(start))
+		s.metricCollector.observeDDLWrite(time.Since(start))
 	}
 	return nil
 }
