@@ -17,7 +17,7 @@ import (
 	"fmt"
 
 	"github.com/pingcap/ticdc/pkg/compression"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/br/pkg/storage"
@@ -93,7 +93,7 @@ func (c *ConsistentConfig) validateAndAdjust(enableIOCheck bool) error {
 		c.FlushIntervalInMs = util.AddressOf(int64(redo.DefaultFlushIntervalInMs))
 	}
 	if util.GetOrZero(c.FlushIntervalInMs) < redo.MinFlushIntervalInMs {
-		return cerror.ErrInvalidReplicaConfig.FastGenByArgs(
+		return errors.ErrInvalidReplicaConfig.FastGenByArgs(
 			fmt.Sprintf("The consistent.flush-interval:%d must be equal or greater than %d",
 				util.GetOrZero(c.FlushIntervalInMs), redo.MinFlushIntervalInMs))
 	}
@@ -102,7 +102,7 @@ func (c *ConsistentConfig) validateAndAdjust(enableIOCheck bool) error {
 		c.MetaFlushIntervalInMs = util.AddressOf(int64(redo.DefaultMetaFlushIntervalInMs))
 	}
 	if util.GetOrZero(c.MetaFlushIntervalInMs) < redo.MinFlushIntervalInMs {
-		return cerror.ErrInvalidReplicaConfig.FastGenByArgs(
+		return errors.ErrInvalidReplicaConfig.FastGenByArgs(
 			fmt.Sprintf("The consistent.meta-flush-interval:%d must be equal or greater than %d",
 				util.GetOrZero(c.MetaFlushIntervalInMs), redo.MinFlushIntervalInMs))
 	}
@@ -114,7 +114,7 @@ func (c *ConsistentConfig) validateAndAdjust(enableIOCheck bool) error {
 	}
 
 	if compressionType != compression.None && compressionType != compression.LZ4 {
-		return cerror.ErrInvalidReplicaConfig.FastGenByArgs(
+		return errors.ErrInvalidReplicaConfig.FastGenByArgs(
 			fmt.Sprintf("The consistent.compression:%s must be 'none' or 'lz4'", compressionType))
 	}
 
@@ -127,7 +127,7 @@ func (c *ConsistentConfig) validateAndAdjust(enableIOCheck bool) error {
 
 	uri, err := storage.ParseRawURL(util.GetOrZero(c.Storage))
 	if err != nil {
-		return cerror.ErrInvalidReplicaConfig.GenWithStackByArgs(
+		return errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
 			fmt.Sprintf("invalid storage uri: %s", util.GetOrZero(c.Storage)))
 	}
 	return redo.ValidateStorageWithOptions(uri, redo.StorageValidationOptions{EnableIOCheck: enableIOCheck})
