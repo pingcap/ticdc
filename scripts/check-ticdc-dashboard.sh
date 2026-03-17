@@ -16,22 +16,12 @@ set -euo pipefail
 dashboard_file="metrics/grafana/ticdc_new_arch.json"
 has_error=0
 
-if command -v jq &>/dev/null; then
-	dup=$(jq '[.panels[] | .panels[]?] | group_by(.id) | .[] | select(length > 1) | .[] | { id: .id, title: .title }' "$dashboard_file")
-	if [[ -n $dup ]]; then
-		echo "Find panels with duplicated ID in $dashboard_file"
-		echo "$dup"
-		echo "Please choose a new ID that is larger than the max ID:"
-		jq '[.panels[] | .panels[]? | .id] | max' "$dashboard_file"
-		has_error=1
-	fi
-fi
-
 if command -v python3 &>/dev/null; then
 	overlap_output=""
 	if ! overlap_output=$(
 		python3 - "$dashboard_file" <<'PY'
 import json
+from collections import defaultdict
 import sys
 
 path = sys.argv[1]
@@ -46,43 +36,63 @@ def overlaps(a, b):
         and a["y"] + a["h"] > b["y"]
     )
 
-def collect(items):
+def collect(items, parents=()):
     result = []
     for item in items:
+        title = item.get("title", "<untitled>")
+        path = " / ".join(parents + (title,))
         grid_pos = item.get("gridPos")
-        if not grid_pos:
-            continue
-        result.append(
-            {
-                "title": item.get("title", "<untitled>"),
-                "x": grid_pos["x"],
-                "y": grid_pos["y"],
-                "w": grid_pos["w"],
-                "h": grid_pos["h"],
-            }
-        )
+        if grid_pos:
+            result.append(
+                {
+                    "path": path,
+                    "x": grid_pos["x"],
+                    "y": grid_pos["y"],
+                    "w": grid_pos["w"],
+                    "h": grid_pos["h"],
+                }
+            )
     return result
 
-messages = []
-top_level = collect(data.get("panels", []))
-for i, left in enumerate(top_level):
-    for right in top_level[i + 1 :]:
-        if overlaps(left, right):
-            messages.append(
-                f"Top level overlap: {left['title']} <-> {right['title']}"
-            )
+def collect_ids(items, parents=()):
+    result = []
+    for item in items:
+        title = item.get("title", "<untitled>")
+        path = " / ".join(parents + (title,))
+        if "id" in item:
+            result.append({"id": item["id"], "path": path})
+        nested = item.get("panels", [])
+        if nested:
+            result.extend(collect_ids(nested, parents + (title,)))
+    return result
 
-for row in data.get("panels", []):
-    if row.get("type") != "row":
-        continue
-    nested = collect(row.get("panels", []))
-    for i, left in enumerate(nested):
-        for right in nested[i + 1 :]:
+def check_container(items, parents=()):
+    messages = []
+    panels = collect(items, parents)
+    for i, left in enumerate(panels):
+        for right in panels[i + 1 :]:
             if overlaps(left, right):
-                messages.append(
-                    f"Row '{row.get('title', '<untitled>')}' overlap: "
-                    f"{left['title']} <-> {right['title']}"
-                )
+                messages.append(f"Overlap: {left['path']} <-> {right['path']}")
+
+    for item in items:
+        nested = item.get("panels", [])
+        if nested:
+            title = item.get("title", "<untitled>")
+            messages.extend(check_container(nested, parents + (title,)))
+    return messages
+
+messages = []
+id_groups = defaultdict(list)
+for item in collect_ids(data.get("panels", [])):
+    id_groups[item["id"]].append(item["path"])
+
+for panel_id, paths in sorted(id_groups.items()):
+    if len(paths) > 1:
+        messages.append(
+            f"Duplicate ID {panel_id}: " + " <-> ".join(paths)
+        )
+
+messages.extend(check_container(data.get("panels", [])))
 
 if messages:
     print("\n".join(messages))
