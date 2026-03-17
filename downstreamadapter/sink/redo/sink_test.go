@@ -126,7 +126,8 @@ func TestRedoSinkInProcessor(t *testing.T) {
 			FlushWorkerNum:        util.AddressOf(workerNumberForTest),
 			UseFileBackend:        util.AddressOf(useFileBackend),
 		}
-		dmlMgr := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), cfg)
+		dmlMgr, err := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), cfg)
+		require.NoError(t, err)
 		defer dmlMgr.Close(false)
 
 		var eg errgroup.Group
@@ -216,7 +217,8 @@ func TestRedoSinkError(t *testing.T) {
 		EncodingWorkerNum:     util.AddressOf(workerNumberForTest),
 		FlushWorkerNum:        util.AddressOf(workerNumberForTest),
 	}
-	logMgr := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), cfg)
+	logMgr, err := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), cfg)
+	require.NoError(t, err)
 	defer logMgr.Close(false)
 
 	var eg errgroup.Group
@@ -244,7 +246,7 @@ func TestRedoSinkError(t *testing.T) {
 		}
 	}
 
-	err := eg.Wait()
+	err = eg.Wait()
 	require.Regexp(t, ".*invalid black hole writer.*", err)
 	require.Regexp(t, ".*WriteLog.*", err)
 }
@@ -275,7 +277,8 @@ func runBenchTest(b *testing.B, storage string, useFileBackend bool) {
 		FlushWorkerNum:        util.AddressOf(redo.DefaultFlushWorkerNum),
 		UseFileBackend:        util.AddressOf(useFileBackend),
 	}
-	dmlMgr := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), cfg)
+	dmlMgr, err := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), cfg)
+	require.NoError(b, err)
 	defer dmlMgr.Close(false)
 
 	var eg errgroup.Group
@@ -288,7 +291,7 @@ func runBenchTest(b *testing.B, storage string, useFileBackend bool) {
 	tables := make([]common.TableID, 0, numOfTables)
 	maxTsMap := common.NewSpanHashMap[*common.Ts]()
 	startTs := uint64(100)
-	for i := 0; i < numOfTables; i++ {
+	for i := range numOfTables {
 		tableID := common.TableID(i)
 		tables = append(tables, tableID)
 		span := common.TableIDToComparableSpan(common.DefaultKeyspaceID, tableID)
@@ -307,7 +310,7 @@ func runBenchTest(b *testing.B, storage string, useFileBackend bool) {
 			defer wg.Done()
 			maxCommitTs := maxTsMap.GetV(span)
 			var rows []*commonEvent.DMLEvent
-			for i := 0; i < maxRowCount; i++ {
+			for i := range maxRowCount {
 				if i%100 == 0 {
 					// prepare new row change events
 					b.StopTimer()
@@ -375,7 +378,7 @@ func TestRedoSinkSendMessagesInBatch(t *testing.T) {
 
 	totalEvents := redo.DefaultFlushBatchSize*2 + 17
 	events := make([]writer.RedoEvent, 0, totalEvents)
-	for i := 0; i < totalEvents; i++ {
+	for range totalEvents {
 		events = append(events, &commonEvent.RedoRowEvent{})
 	}
 	s.logBuffer.Push(events...)
