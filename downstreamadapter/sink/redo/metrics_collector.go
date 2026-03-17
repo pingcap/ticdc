@@ -56,6 +56,7 @@ func (m *metricCollector) observeRowWrite(rows int, duration time.Duration) {
 	if rows > 0 {
 		m.rowTotalCount.Add(float64(rows))
 	}
+	// todo: it looks this metric only record the cost on send events to the channel, not fully consumed, it's not accurate.
 	m.rowWriteLogDuration.Observe(duration.Seconds())
 	m.rowWorkerBusyRatio.Add(duration.Seconds())
 }

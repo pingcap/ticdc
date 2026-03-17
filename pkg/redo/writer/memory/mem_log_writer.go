@@ -108,8 +108,7 @@ func (l *memoryLogWriter) writeEvents(ctx context.Context, events ...writer.Redo
 		if e == nil {
 			log.Warn("writing nil event to redo log, ignore this",
 				zap.String("keyspace", l.cfg.ChangeFeedID.Keyspace()),
-				zap.String("changefeed", l.cfg.ChangeFeedID.Name()),
-				zap.String("capture", l.cfg.CaptureID))
+				zap.String("changefeed", l.cfg.ChangeFeedID.Name()))
 			continue
 		}
 		redoLogEvent, err := toPolymorphicRedoEvent(e, l.tableSchema)
@@ -129,8 +128,7 @@ func (l *memoryLogWriter) asyncWriteEvents(ctx context.Context, events ...writer
 		if e == nil {
 			log.Warn("writing nil event to redo log, ignore this",
 				zap.String("keyspace", l.cfg.ChangeFeedID.Keyspace()),
-				zap.String("changefeed", l.cfg.ChangeFeedID.Name()),
-				zap.String("capture", l.cfg.CaptureID))
+				zap.String("changefeed", l.cfg.ChangeFeedID.Name()))
 			continue
 		}
 		if l.encodeWorkers == nil {
