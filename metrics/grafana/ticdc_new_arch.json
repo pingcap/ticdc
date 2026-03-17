@@ -1111,7 +1111,7 @@
             "y": 26
           },
           "hiddenSeries": false,
-          "id": 22271,
+          "id": 62002,
           "legend": {
             "alignAsTable": false,
             "avg": false,
@@ -10673,7 +10673,7 @@
             "y": 130
           },
           "hiddenSeries": false,
-          "id": 60009,
+          "id": 62003,
           "legend": {
             "alignAsTable": true,
             "avg": false,
@@ -13643,7 +13643,7 @@
             "h": 11,
             "w": 12,
             "x": 12,
-            "y": 74
+            "y": 80
           },
           "hiddenSeries": false,
           "id": 22476,
@@ -16821,7 +16821,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 32
+            "y": 33
           },
           "hiddenSeries": false,
           "id": 636,
@@ -18468,7 +18468,7 @@
         "x": 0,
         "y": 18
       },
-      "id": 60007,
+      "id": 62007,
       "panels": [
         {
           "aliasColors": {},
@@ -18585,7 +18585,7 @@
             "y": 19
           },
           "hiddenSeries": false,
-          "id": 60011,
+          "id": 62004,
           "legend": {
             "avg": false,
             "current": false,
@@ -18691,7 +18691,7 @@
           "heatmap": {},
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 60013,
+          "id": 62005,
           "legend": {
             "show": true
           },
@@ -20275,8 +20275,163 @@
         "h": 1,
         "w": 24,
         "x": 0,
+        "y": 21
+      },
+<<<<<<< HEAD
+=======
+      "id": 62006,
+      "panels": [
+        {
+          "aliasColors": {},
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "Rows skipped due to last-write-wins conflict resolution during TiDB active-active replication.",
+          "fieldConfig": {
+            "defaults": {
+              "links": []
+            },
+            "overrides": []
+          },
+          "fill": 1,
+          "fillGradient": 0,
+          "gridPos": {
+            "h": 6,
+            "w": 12,
+            "x": 0,
+            "y": 20
+          },
+          "hiddenSeries": false,
+          "id": 22477,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "max": true,
+            "min": false,
+            "rightSide": false,
+            "show": true,
+            "sort": "current",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "nullPointMode": "null",
+          "options": {
+            "alertThreshold": true
+          },
+          "percentage": false,
+          "pluginVersion": "7.5.17",
+          "pointradius": 2,
+          "points": false,
+          "renderer": "flot",
+          "seriesOverrides": [
+            {
+              "$$hashKey": "object:354",
+              "alias": "/.*-sum/",
+              "lines": true,
+              "linewidth": 3,
+              "points": false,
+              "yaxis": 2
+            },
+            {
+              "$$hashKey": "object:355",
+              "alias": "/.*-rate/",
+              "lines": true,
+              "linewidth": 3,
+              "points": false,
+              "yaxis": 1
+            }
+          ],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "expr": "sum(rate(ticdc_sink_active_active_conflict_skip_rows_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\", changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (namespace, changefeed)",
+              "legendFormat": "{{namespace}}-{{changefeed}}-rate",
+              "interval": "",
+              "exemplar": true,
+              "format": "time_series",
+              "hide": false,
+              "intervalFactor": 2,
+              "refId": "B",
+              "step": 10
+            },
+            {
+              "expr": "sum(ticdc_sink_active_active_conflict_skip_rows_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\", changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}) by (namespace, changefeed)",
+              "legendFormat": "{{namespace}}-{{changefeed}}-sum",
+              "interval": "",
+              "exemplar": true,
+              "format": "time_series",
+              "hide": true,
+              "intervalFactor": 2,
+              "refId": "C",
+              "step": 10
+            }
+          ],
+          "thresholds": [],
+          "timeRegions": [],
+          "title": "Conflict Skip Rows / s",
+          "tooltip": {
+            "msResolution": false,
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "$$hashKey": "object:298",
+              "format": "none",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": "0",
+              "show": true,
+              "decimals": null
+            },
+            {
+              "$$hashKey": "object:299",
+              "format": "none",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": "0",
+              "show": true,
+              "decimals": 0
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
+          }
+        }
+      ],
+      "title": "Active Active",
+      "type": "row"
+    },
+    {
+      "collapsed": true,
+      "datasource": null,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
         "y": 20
       },
+>>>>>>> 21ce9d741 (metrics: fix ticdc grafana dashboard layout conflicts (#4507))
       "id": 58,
       "panels": [
         {
@@ -22557,7 +22712,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 21
+        "y": 22
       },
       "id": 10021,
       "panels": [
@@ -23262,7 +23417,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 22
+        "y": 23
       },
       "id": 155,
       "panels": [
@@ -23863,7 +24018,11 @@
         "h": 1,
         "w": 24,
         "x": 0,
+<<<<<<< HEAD
         "y": 23
+=======
+        "y": 25
+>>>>>>> 21ce9d741 (metrics: fix ticdc grafana dashboard layout conflicts (#4507))
       },
       "id": 10000,
       "panels": [
@@ -25645,7 +25804,7 @@
       "type": "row"
     }
   ],
-  "refresh": "5s",
+  "refresh": "10s",
   "schemaVersion": 27,
   "style": "dark",
   "tags": [],
