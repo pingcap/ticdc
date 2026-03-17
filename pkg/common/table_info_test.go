@@ -1,4 +1,4 @@
-// Copyright 2025 PingCAP, Inc.
+// Copyright 2026 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -104,4 +104,38 @@ func TestUnmarshalJSONToTableInfoRoundTrip(t *testing.T) {
 	require.Equal(t, len(source.GetColumns()), len(decoded.GetColumns()))
 	require.Equal(t, source.GetColumns()[0].Name.O, decoded.GetColumns()[0].Name.O)
 	require.Equal(t, source.GetColumns()[1].Name.O, decoded.GetColumns()[1].Name.O)
+}
+
+func TestUnquoteName(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "unquoted",
+			input:    "p0",
+			expected: "p0",
+		},
+		{
+			name:     "quoted",
+			input:    "`p0`",
+			expected: "p0",
+		},
+		{
+			name:     "quoted with escaped backtick",
+			input:    "`p``0`",
+			expected: "p`0",
+		},
+	}
+
+	for _, tc := range testCases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			require.Equal(t, tc.expected, UnquoteName(tc.input))
+		})
+	}
 }

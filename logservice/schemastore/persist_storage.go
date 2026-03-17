@@ -142,6 +142,7 @@ func newPersistentStorage(
 	keyspaceID uint32,
 	pdCli pd.Client,
 	storage kv.Storage,
+	gcSafePoint uint64,
 ) (*persistentStorage, error) {
 	dataStorage := &persistentStorage{
 		rootDir:                root,
@@ -157,7 +158,7 @@ func newPersistentStorage(
 		tableRegisteredCount:   make(map[int64]int),
 	}
 	dataStorage.ctx, dataStorage.cancel = context.WithCancel(ctx)
-	err := dataStorage.initialize(ctx)
+	err := dataStorage.initialize(gcSafePoint)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
@@ -169,37 +170,7 @@ func (p *persistentStorage) getGcSafePoint(ctx context.Context) (uint64, error) 
 	return gc.UnifyGetServiceGCSafepoint(ctx, p.pdCli, p.keyspaceID, defaultSchemaStoreGcServiceID)
 }
 
-func (p *persistentStorage) initialize(ctx context.Context) error {
-	var gcSafePoint uint64
-	fakeChangefeedID := common.NewChangefeedID(defaultSchemaStoreGcServiceID)
-	for {
-		var err error
-		gcSafePoint, err = p.getGcSafePoint(ctx)
-		if err == nil {
-			log.Info("get gc safepoint success", zap.Uint32("keyspaceID", p.keyspaceID), zap.Any("gcSafePoint", gcSafePoint))
-			// Ensure the start ts is valid during the gc service ttl
-			err = gc.EnsureChangefeedStartTsSafety(
-				ctx,
-				p.pdCli,
-				defaultSchemaStoreGcServiceID,
-				p.keyspaceID,
-				fakeChangefeedID,
-				defaultGcServiceTTL, gcSafePoint+1)
-			if err == nil {
-				break
-			}
-		}
-
-		log.Warn("get ts failed, will retry in 1s", zap.Error(err))
-		select {
-		case <-ctx.Done():
-			return errors.Trace(err)
-		case <-time.After(time.Second):
-		}
-	}
-
-	defer gc.UndoEnsureChangefeedStartTsSafety(ctx, p.pdCli, p.keyspaceID, defaultSchemaStoreGcServiceID, fakeChangefeedID)
-
+func (p *persistentStorage) initialize(gcSafePoint uint64) error {
 	dbPath := fmt.Sprintf("%s/%s/%d", p.rootDir, dataDir, p.keyspaceID)
 
 	// FIXME: currently we don't try to reuse data at restart, when we need, just remove the following line
