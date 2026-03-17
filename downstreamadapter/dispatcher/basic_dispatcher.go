@@ -750,7 +750,7 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 // The status path will be waked up after the action finishes.
 func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.DispatcherStatus) (await bool) {
 	log.Debug("dispatcher handle dispatcher status",
-		zap.Any("dispatcherStatus", dispatcherStatus),
+		zap.String("dispatcherStatus", common.FormatDispatcherStatus(dispatcherStatus)),
 		zap.Stringer("dispatcher", d.id),
 		zap.Any("action", dispatcherStatus.GetAction()),
 		zap.Any("ack", dispatcherStatus.GetAck()))
