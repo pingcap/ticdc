@@ -33,11 +33,13 @@ type WorkloadConfig struct {
 	DBNum      int
 
 	// Workload related
-	WorkloadType        string
-	TableCount          int
-	TableStartIndex     int
-	Thread              int
-	BatchSize           int
+	WorkloadType    string
+	TableCount      int
+	TableStartIndex int
+	Thread          int
+	BatchSize       int
+	// BatchInTxn wraps each batch in one explicit transaction (BEGIN/COMMIT).
+	BatchInTxn          bool
 	TotalRowCount       uint64
 	PercentageForUpdate float64
 	PercentageForDelete float64
@@ -88,6 +90,7 @@ func NewWorkloadConfig() *WorkloadConfig {
 		TableStartIndex:     0,
 		Thread:              16,
 		BatchSize:           10,
+		BatchInTxn:          false,
 		TotalRowCount:       1000000000,
 		PercentageForUpdate: 0,
 		PercentageForDelete: 0,
@@ -131,12 +134,13 @@ func (c *WorkloadConfig) ParseFlags() error {
 	flag.IntVar(&c.TableStartIndex, "table-start-index", c.TableStartIndex, "table start index, sbtest<index>")
 	flag.IntVar(&c.Thread, "thread", c.Thread, "total thread of the workload")
 	flag.IntVar(&c.BatchSize, "batch-size", c.BatchSize, "batch size of each insert/update/delete")
+	flag.BoolVar(&c.BatchInTxn, "batch-in-txn", c.BatchInTxn, "wrap each batch in one explicit transaction")
 	flag.Uint64Var(&c.TotalRowCount, "total-row-count", c.TotalRowCount, "the total row count of the workload, default is 1 billion")
 	flag.Float64Var(&c.PercentageForUpdate, "percentage-for-update", c.PercentageForUpdate, "percentage for update: [0, 1.0]")
 	flag.Float64Var(&c.PercentageForDelete, "percentage-for-delete", c.PercentageForDelete, "percentage for delete: [0, 1.0]")
 	flag.BoolVar(&c.SkipCreateTable, "skip-create-table", c.SkipCreateTable, "do not create tables")
 	flag.StringVar(&c.Action, "action", c.Action, "action of the workload: [prepare, insert, update, delete, write, ddl, cleanup]")
-	flag.StringVar(&c.WorkloadType, "workload-type", c.WorkloadType, "workload type: [bank, sysbench, large_row, shop_item, uuu, bank2, bank3, bank_update, crawler, dc]")
+	flag.StringVar(&c.WorkloadType, "workload-type", c.WorkloadType, "workload type: [bank, sysbench, large_row, shop_item, uuu, bank2, bank3, bank_update, crawler, dc, wide_table_with_json]")
 	flag.StringVar(&c.DBHost, "database-host", c.DBHost, "database host")
 	flag.StringVar(&c.DBUser, "database-user", c.DBUser, "database user")
 	flag.StringVar(&c.DBPassword, "database-password", c.DBPassword, "database password")
