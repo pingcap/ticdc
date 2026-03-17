@@ -47,7 +47,7 @@ type Sink struct {
 	isNormal *atomic.Bool
 	isClosed *atomic.Bool
 
- metricCollector *metricCollector
+	metricCollector *metricCollector
 }
 
 func Verify(ctx context.Context, changefeedID common.ChangeFeedID, cfg *config.ConsistentConfig) error {
@@ -94,7 +94,7 @@ func New(ctx context.Context, changefeedID common.ChangeFeedID,
 	}
 	s.ddlWriter = ddlWriter
 	s.dmlWriter = dmlWriter
-	s.mericCollector = newMetricCollector(changefeedID)
+	s.metricCollector = newMetricCollector(changefeedID)
 	return s, nil
 }
 
@@ -171,19 +171,26 @@ func (s *Sink) Close(_ bool) {
 	}
 	start := time.Now()
 	s.logBuffer.Close()
-	if err := s.ddlWriter.Close(); err != nil && errors.Cause(err) != context.Canceled {
-		log.Error("redo sink fails to close ddl writer",
-			zap.String("keyspace", s.cfg.ChangeFeedID.Keyspace()),
-			zap.String("changefeed", s.cfg.ChangeFeedID.Name()),
-			zap.Error(err))
+	if s.ddlWriter != nil {
+		if err := s.ddlWriter.Close(); err != nil && errors.Cause(err) != context.Canceled {
+			log.Error("redo sink fails to close ddl writer",
+				zap.String("keyspace", s.cfg.ChangeFeedID.Keyspace()),
+				zap.String("changefeed", s.cfg.ChangeFeedID.Name()),
+				zap.Error(err))
+		}
 	}
-	if err := s.dmlWriter.Close(); err != nil && errors.Cause(err) != context.Canceled {
-		log.Error("redo sink fails to close dml writer",
-			zap.String("keyspace", s.cfg.ChangeFeedID.Keyspace()),
-			zap.String("changefeed", s.cfg.ChangeFeedID.Name()),
-			zap.Error(err))
+
+	if s.dmlWriter != nil {
+		if err := s.dmlWriter.Close(); err != nil && errors.Cause(err) != context.Canceled {
+			log.Error("redo sink fails to close dml writer",
+				zap.String("keyspace", s.cfg.ChangeFeedID.Keyspace()),
+				zap.String("changefeed", s.cfg.ChangeFeedID.Name()),
+				zap.Error(err))
+		}
 	}
-	s.mericCollector.close()
+	if s.metricCollector != nil {
+		s.metricCollector.close()
+	}
 	log.Info("redo sink closed",
 		zap.String("keyspace", s.cfg.ChangeFeedID.Keyspace()),
 		zap.String("changefeed", s.cfg.ChangeFeedID.Name()),
@@ -212,7 +219,7 @@ func (s *Sink) sendMessages(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		s.mericCollector.observeRowWrite(len(events), time.Since(start))
+		s.metricCollector.observeRowWrite(len(events), time.Since(start))
 	}
 }
 

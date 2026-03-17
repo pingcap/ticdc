@@ -156,7 +156,7 @@ func (e *encodingWorkerGroup) runWorker(ctx context.Context, idx int) error {
 			}
 			select {
 			case <-ctx.Done():
-				return ctx.Err()
+				return errors.Trace(context.Cause(ctx))
 			case err := <-e.closed:
 				return errors.ErrRedoWriterStopped.FastGenByArgs(err)
 			case e.outputCh <- redoLogEvent:
