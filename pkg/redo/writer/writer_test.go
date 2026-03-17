@@ -18,74 +18,83 @@ import (
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/compression"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
 )
 
-func TestNewConfigInitializesDefaultsFromConsistentConfig(t *testing.T) {
+func newTestConsistentConfig(storage string) *config.ConsistentConfig {
+	maxLogSize := int64(64)
+	flushIntervalInMs := int64(redo.DefaultFlushIntervalInMs)
+	encodingWorkerNum := redo.DefaultEncodingWorkerNum
+	flushWorkerNum := redo.DefaultFlushWorkerNum
+	compressionType := compression.None
+	flushConcurrency := 1
+	return &config.ConsistentConfig{
+		MaxLogSize:        util.AddressOf(maxLogSize),
+		FlushIntervalInMs: util.AddressOf(flushIntervalInMs),
+		EncodingWorkerNum: util.AddressOf(encodingWorkerNum),
+		FlushWorkerNum:    util.AddressOf(flushWorkerNum),
+		Storage:           util.AddressOf(storage),
+		Compression:       util.AddressOf(compressionType),
+		FlushConcurrency:  util.AddressOf(flushConcurrency),
+	}
+}
+
+func TestNewConfigUsesConsistentConfigValues(t *testing.T) {
 	t.Parallel()
 
 	changefeedID := common.NewChangeFeedIDWithName("test-cf", common.DefaultKeyspaceName)
-	maxLogSize := int64(64)
-	storageURI := "nfs:///tmp/redo"
+	maxLogSize := int64(128)
+	flushIntervalInMs := int64(1234)
+	encodingWorkerNum := 5
+	flushWorkerNum := 6
+	compressionType := compression.LZ4
+	flushConcurrency := 7
 	cfg, err := NewConfig(changefeedID, &config.ConsistentConfig{
-		Storage:    util.AddressOf(storageURI),
-		MaxLogSize: util.AddressOf(maxLogSize),
+		MaxLogSize:        util.AddressOf(maxLogSize),
+		FlushIntervalInMs: util.AddressOf(flushIntervalInMs),
+		EncodingWorkerNum: util.AddressOf(encodingWorkerNum),
+		FlushWorkerNum:    util.AddressOf(flushWorkerNum),
+		Storage:           util.AddressOf("nfs:///tmp/redo"),
+		Compression:       util.AddressOf(compressionType),
+		FlushConcurrency:  util.AddressOf(flushConcurrency),
 	})
 	require.NoError(t, err)
 
-	require.Equal(t, changefeedID, cfg.ChangeFeedID)
-	require.Equal(t, config.GetGlobalServerConfig().AdvertiseAddr, cfg.CaptureID)
-	require.NotNil(t, cfg.URI)
-	require.Equal(t, "file", cfg.URI.Scheme)
-	require.Equal(t, "/tmp/redo", cfg.Dir)
-	require.True(t, cfg.UseExternalStorage)
-	require.Equal(t, maxLogSize*redo.Megabyte, cfg.MaxLogSizeInBytes)
+	require.Equal(t, changefeedID, cfg.ChangeFeedID())
+	require.Equal(t, config.GetGlobalServerConfig().AdvertiseAddr, cfg.CaptureID())
+	require.NotNil(t, cfg.URI())
+	require.Equal(t, "file", cfg.URI().Scheme)
+	require.Equal(t, "/tmp/redo", cfg.Dir())
+	require.True(t, cfg.UseExternalStorage())
+	require.Equal(t, maxLogSize*redo.Megabyte, cfg.MaxLogSizeInBytes())
+	require.Equal(t, flushIntervalInMs, cfg.FlushIntervalInMs())
+	require.Equal(t, encodingWorkerNum, cfg.EncodingWorkerNum())
+	require.Equal(t, flushWorkerNum, cfg.FlushWorkerNum())
+	require.Equal(t, flushConcurrency, cfg.FlushConcurrency())
+	require.Equal(t, compressionType, cfg.Compression())
+	require.False(t, cfg.UseFileBackend())
 }
 
 func TestNewConfigInitializesFileBackendDirForExternalStorage(t *testing.T) {
 	t.Parallel()
 
 	changefeedID := common.NewChangeFeedIDWithName("test-cf", common.DefaultKeyspaceName)
-	storageURI := "s3://bucket/prefix"
-	cfg, err := NewConfig(changefeedID, &config.ConsistentConfig{
-		Storage:        util.AddressOf(storageURI),
-		UseFileBackend: util.AddressOf(true),
-		MaxLogSize:     util.AddressOf(int64(1)),
-	})
+	consistentCfg := newTestConsistentConfig("s3://bucket/prefix")
+	consistentCfg.UseFileBackend = util.AddressOf(true)
+	cfg, err := NewConfig(changefeedID, consistentCfg)
 	require.NoError(t, err)
 
-	require.NotNil(t, cfg.URI)
-	require.Equal(t, "s3", cfg.URI.Scheme)
-	require.True(t, cfg.UseExternalStorage)
+	require.NotNil(t, cfg.URI())
+	require.Equal(t, "s3", cfg.URI().Scheme)
+	require.True(t, cfg.UseExternalStorage())
+	require.True(t, cfg.UseFileBackend())
 	require.Equal(t,
 		filepath.Join(config.GetGlobalServerConfig().DataDir, config.DefaultRedoDir, changefeedID.Keyspace(), changefeedID.Name()),
-		cfg.Dir)
-}
-
-func TestNewConfigAppliesOptions(t *testing.T) {
-	t.Parallel()
-
-	changefeedID := common.NewChangeFeedIDWithName("test-cf", common.DefaultKeyspaceName)
-	cfg, err := NewConfig(
-		changefeedID,
-		&config.ConsistentConfig{
-			Storage: util.AddressOf("s3://bucket/path"),
-		},
-		WithCaptureID("capture-1"),
-		WithDir("/tmp/custom-redo"),
-		WithMaxLogSizeInBytes(123),
-	)
-	require.NoError(t, err)
-
-	require.Equal(t, "capture-1", cfg.CaptureID)
-	require.NotNil(t, cfg.URI)
-	require.Equal(t, "s3", cfg.URI.Scheme)
-	require.True(t, cfg.UseExternalStorage)
-	require.Equal(t, "/tmp/custom-redo", cfg.Dir)
-	require.EqualValues(t, 123, cfg.MaxLogSizeInBytes)
+		cfg.Dir())
 }
 
 func TestNewConfigReturnsErrorForInvalidStorageURI(t *testing.T) {
@@ -93,7 +102,7 @@ func TestNewConfigReturnsErrorForInvalidStorageURI(t *testing.T) {
 
 	_, err := NewConfig(
 		common.NewChangeFeedIDWithName("test-cf", common.DefaultKeyspaceName),
-		&config.ConsistentConfig{Storage: util.AddressOf("://bad-uri")},
+		newTestConsistentConfig("://bad-uri"),
 	)
 	require.Error(t, err)
 }
@@ -103,7 +112,7 @@ func TestNewConfigReturnsErrorForUnsupportedStorageScheme(t *testing.T) {
 
 	_, err := NewConfig(
 		common.NewChangeFeedIDWithName("test-cf", common.DefaultKeyspaceName),
-		&config.ConsistentConfig{Storage: util.AddressOf("mysql://127.0.0.1:3306/test")},
+		newTestConsistentConfig("mysql://127.0.0.1:3306/test"),
 	)
 	require.Error(t, err)
 }

@@ -61,6 +61,35 @@ func TestWriteDML(t *testing.T) {
 	testWriteEvents(t, ddls)
 }
 
+func TestNewLogWriterUsesNormalizedStorageConfig(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	_, uri, err := util.GetTestExtStorage(ctx, t.TempDir())
+	require.NoError(t, err)
+
+	cfg, err := writer.NewConfig(
+		common.NewChangeFeedIDWithName("test-changefeed", common.DefaultKeyspaceName),
+		&config.ConsistentConfig{
+			MaxLogSize:        util.AddressOf(int64(10)),
+			FlushIntervalInMs: util.AddressOf(int64(redo.DefaultFlushIntervalInMs)),
+			EncodingWorkerNum: util.AddressOf(redo.DefaultEncodingWorkerNum),
+			FlushWorkerNum:    util.AddressOf(redo.DefaultFlushWorkerNum),
+			Storage:           util.AddressOf(uri.String()),
+			FlushConcurrency:  util.AddressOf(1),
+		},
+	)
+	require.NoError(t, err)
+
+	lw, err := NewLogWriter(ctx, cfg, redo.RedoDDLLogFileType)
+	require.NoError(t, err)
+	require.True(t, cfg.UseExternalStorage())
+	require.Equal(t, uri.String(), cfg.URI().String())
+	require.NoError(t, lw.Close())
+}
+
 func testWriteEvents(t *testing.T, events []writer.RedoEvent) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -70,10 +99,13 @@ func testWriteEvents(t *testing.T, events []writer.RedoEvent) {
 	lwcfg, err := writer.NewConfig(
 		common.NewChangeFeedIDWithName("test-changefeed", common.DefaultKeyspaceName),
 		&config.ConsistentConfig{
-			Storage: util.AddressOf(uri.String()),
+			MaxLogSize:        util.AddressOf(int64(10)),
+			FlushIntervalInMs: util.AddressOf(int64(redo.DefaultFlushIntervalInMs)),
+			EncodingWorkerNum: util.AddressOf(redo.DefaultEncodingWorkerNum),
+			FlushWorkerNum:    util.AddressOf(redo.DefaultFlushWorkerNum),
+			Storage:           util.AddressOf(uri.String()),
+			FlushConcurrency:  util.AddressOf(1),
 		},
-		writer.WithCaptureID("test-capture"),
-		writer.WithMaxLogSizeInBytes(10*redo.Megabyte),
 	)
 	require.NoError(t, err)
 	filename := t.Name()

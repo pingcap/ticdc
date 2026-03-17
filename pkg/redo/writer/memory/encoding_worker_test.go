@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/compression"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
@@ -24,20 +25,37 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func newEncodingWorkerTestConfig(storage string, workerNum int) *config.ConsistentConfig {
+	maxLogSize := int64(redo.DefaultMaxLogSize)
+	flushIntervalInMs := int64(redo.DefaultFlushIntervalInMs)
+	flushWorkerNum := redo.DefaultFlushWorkerNum
+	compressionType := compression.None
+	flushConcurrency := 1
+	return &config.ConsistentConfig{
+		MaxLogSize:        util.AddressOf(maxLogSize),
+		FlushIntervalInMs: util.AddressOf(flushIntervalInMs),
+		EncodingWorkerNum: util.AddressOf(workerNum),
+		FlushWorkerNum:    util.AddressOf(flushWorkerNum),
+		Storage:           util.AddressOf(storage),
+		Compression:       util.AddressOf(compressionType),
+		FlushConcurrency:  util.AddressOf(flushConcurrency),
+	}
+}
+
 func TestNewEncodingWorkerGroup(t *testing.T) {
 	t.Parallel()
 
 	changefeed := common.NewChangeFeedIDWithName("test-cf", common.DefaultKeyspaceName)
-	cfg, err := writer.NewConfig(changefeed, &config.ConsistentConfig{
-		EncodingWorkerNum: util.AddressOf(3),
-	})
+	cfg, err := writer.NewConfig(changefeed, newEncodingWorkerTestConfig("nfs:///tmp/redo", 3))
 	require.NoError(t, err)
 	g := newEncodingWorkerGroup(cfg)
 	require.Equal(t, 3, g.workerNum)
 	require.Len(t, g.inputChs, 3)
 
-	cfg.EncodingWorkerNum = util.AddressOf(0)
-	g = newEncodingWorkerGroup(cfg)
+	defaultCfg, err := writer.NewConfig(changefeed,
+		newEncodingWorkerTestConfig("nfs:///tmp/redo", redo.DefaultEncodingWorkerNum))
+	require.NoError(t, err)
+	g = newEncodingWorkerGroup(defaultCfg)
 	require.Equal(t, redo.DefaultEncodingWorkerNum, g.workerNum)
 	require.Len(t, g.inputChs, redo.DefaultEncodingWorkerNum)
 }

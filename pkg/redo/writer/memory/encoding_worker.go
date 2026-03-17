@@ -24,7 +24,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/codec"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
-	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -81,7 +80,7 @@ type encodingWorkerGroup struct {
 }
 
 func newEncodingWorkerGroup(cfg *writer.Config) *encodingWorkerGroup {
-	workerNum := util.GetOrZero(cfg.EncodingWorkerNum)
+	workerNum := cfg.EncodingWorkerNum()
 	if workerNum <= 0 {
 		workerNum = redo.DefaultEncodingWorkerNum
 	}
@@ -90,7 +89,7 @@ func newEncodingWorkerGroup(cfg *writer.Config) *encodingWorkerGroup {
 		inputChs[i] = make(chan writer.RedoEvent, redo.DefaultEncodingInputChanSize)
 	}
 	return &encodingWorkerGroup{
-		changefeed: cfg.ChangeFeedID,
+		changefeed: cfg.ChangeFeedID(),
 		inputChs:   inputChs,
 		outputCh:   make(chan *polymorphicRedoEvent, redo.DefaultEncodingOutputChanSize),
 		workerNum:  workerNum,

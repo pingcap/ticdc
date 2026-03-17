@@ -20,6 +20,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/compression"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/redo"
@@ -34,13 +35,32 @@ func newTestWriterConfig(
 	t *testing.T,
 	changefeedID common.ChangeFeedID,
 	consistentCfg *config.ConsistentConfig,
-	opts ...writer.ConfigOption,
 ) *writer.Config {
 	if consistentCfg == nil {
 		consistentCfg = &config.ConsistentConfig{}
 	}
-	baseOpts := append([]writer.ConfigOption{writer.WithCaptureID("cp")}, opts...)
-	cfg, err := writer.NewConfig(changefeedID, consistentCfg, baseOpts...)
+	if len(util.GetOrZero(consistentCfg.Storage)) == 0 {
+		consistentCfg.Storage = util.AddressOf("file://" + t.TempDir())
+	}
+	if util.GetOrZero(consistentCfg.MaxLogSize) == 0 {
+		consistentCfg.MaxLogSize = util.AddressOf(redo.DefaultMaxLogSize)
+	}
+	if util.GetOrZero(consistentCfg.FlushIntervalInMs) == 0 {
+		consistentCfg.FlushIntervalInMs = util.AddressOf(int64(redo.DefaultFlushIntervalInMs))
+	}
+	if util.GetOrZero(consistentCfg.EncodingWorkerNum) == 0 {
+		consistentCfg.EncodingWorkerNum = util.AddressOf(redo.DefaultEncodingWorkerNum)
+	}
+	if util.GetOrZero(consistentCfg.FlushWorkerNum) == 0 {
+		consistentCfg.FlushWorkerNum = util.AddressOf(redo.DefaultFlushWorkerNum)
+	}
+	if len(util.GetOrZero(consistentCfg.Compression)) == 0 {
+		consistentCfg.Compression = util.AddressOf(compression.None)
+	}
+	if util.GetOrZero(consistentCfg.FlushConcurrency) == 0 {
+		consistentCfg.FlushConcurrency = util.AddressOf(1)
+	}
+	cfg, err := writer.NewConfig(changefeedID, consistentCfg)
 	require.NoError(t, err)
 	return cfg
 }
@@ -208,10 +228,9 @@ func TestLogWriterFlushLog(t *testing.T) {
 			t,
 			common.NewChangeFeedIDWithName("test-cf", common.DefaultKeyspaceName),
 			&config.ConsistentConfig{
-				Storage: util.AddressOf("s3://bucket/prefix"),
+				MaxLogSize: util.AddressOf(int64(1)),
+				Storage:    util.AddressOf("file://" + dir),
 			},
-			writer.WithDir(dir),
-			writer.WithMaxLogSizeInBytes(10),
 		)
 		w := logWriter{
 			cfg:           cfg,

@@ -15,19 +15,9 @@ package writer
 
 import (
 	"context"
-	"fmt"
-	"net/url"
-	"path/filepath"
 
-	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/ticdc/pkg/errors"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/redo"
-	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/uuid"
-	"github.com/pingcap/tidb/br/pkg/storage"
 )
 
 var (
@@ -53,86 +43,6 @@ type RedoLogWriter interface {
 	SetTableSchemaStore(*commonEvent.TableSchemaStore)
 }
 
-// Config is the config for redo log writer.
-type Config struct {
-	config.ConsistentConfig
-	CaptureID    config.CaptureID
-	ChangeFeedID common.ChangeFeedID
-
-	URI                *url.URL
-	UseExternalStorage bool
-	Dir                string
-	MaxLogSizeInBytes  int64
-}
-
-// ConfigOption applies optional overrides to redo writer config.
-type ConfigOption func(*Config)
-
-func NewConfig(changefeedID common.ChangeFeedID, consistentCfg *config.ConsistentConfig, opts ...ConfigOption) (*Config, error) {
-	if consistentCfg == nil {
-		return nil, errors.ErrRedoConfigInvalid.GenWithStack("consisten config is nil")
-	}
-
-	cfg := &Config{
-		ChangeFeedID:      changefeedID,
-		CaptureID:         config.GetGlobalServerConfig().AdvertiseAddr,
-		ConsistentConfig:  *consistentCfg,
-		MaxLogSizeInBytes: util.GetOrZero(consistentCfg.MaxLogSize) * redo.Megabyte,
-	}
-
-	if err := initStorageConfig(cfg); err != nil {
-		return nil, err
-	}
-	for _, opt := range opts {
-		if opt != nil {
-			opt(cfg)
-		}
-	}
-	return cfg, nil
-}
-
-func initStorageConfig(cfg *Config) error {
-	storageURI := util.GetOrZero(cfg.Storage)
-	if len(storageURI) == 0 {
-		return errors.ErrRedoConfigInvalid.GenWithStack("storage uri is not set")
-	}
-
-	uri, err := storage.ParseRawURL(storageURI)
-	if err != nil {
-		return cerror.WrapError(cerror.ErrStorageInitialize, err)
-	}
-	if !redo.IsValidConsistentStorage(uri.Scheme) {
-		return cerror.ErrConsistentStorage.GenWithStackByArgs(uri.Scheme)
-	}
-	redo.FixLocalScheme(uri)
-
-	cfg.URI = uri
-	cfg.UseExternalStorage = redo.IsExternalStorage(uri.Scheme)
-	if cfg.UseExternalStorage {
-		if uri.Scheme == "file" {
-			cfg.Dir = uri.Path
-			return nil
-		}
-		if util.GetOrZero(cfg.UseFileBackend) {
-			cfg.Dir = filepath.Join(
-				config.GetGlobalServerConfig().DataDir,
-				config.DefaultRedoDir,
-				cfg.ChangeFeedID.Keyspace(),
-				cfg.ChangeFeedID.Name(),
-			)
-		}
-		return nil
-	}
-	cfg.Dir = uri.Path
-	return nil
-}
-
-func (cfg Config) String() string {
-	return fmt.Sprintf("%s:%s:%s:%s:%d:%s:%t",
-		cfg.ChangeFeedID.Keyspace(), cfg.ChangeFeedID.Name(), cfg.CaptureID,
-		cfg.Dir, cfg.MaxLogSize, cfg.URI.String(), cfg.UseExternalStorage)
-}
-
 // Option define the writerOptions
 type Option func(writer *LogWriterOptions)
 
@@ -148,24 +58,6 @@ func WithLogFileName(f func() string) Option {
 		if f != nil {
 			o.GetLogFileName = f
 		}
-	}
-}
-
-func WithCaptureID(captureID config.CaptureID) ConfigOption {
-	return func(cfg *Config) {
-		cfg.CaptureID = captureID
-	}
-}
-
-func WithDir(dir string) ConfigOption {
-	return func(cfg *Config) {
-		cfg.Dir = dir
-	}
-}
-
-func WithMaxLogSizeInBytes(maxLogSizeInBytes int64) ConfigOption {
-	return func(cfg *Config) {
-		cfg.MaxLogSizeInBytes = maxLogSizeInBytes
 	}
 }
 

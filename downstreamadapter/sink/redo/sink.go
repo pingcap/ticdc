@@ -38,7 +38,6 @@ import (
 type Sink struct {
 	ctx          context.Context
 	changefeedID common.ChangeFeedID
-	cfg          *writer.Config
 	ddlWriter    writer.RedoLogWriter
 	dmlWriter    writer.RedoLogWriter
 
@@ -69,13 +68,12 @@ func New(ctx context.Context, changefeedID common.ChangeFeedID,
 	s := &Sink{
 		ctx:          ctx,
 		changefeedID: changefeedID,
-		cfg:          config,
 		logBuffer:    chann.NewUnlimitedChannelDefault[writer.RedoEvent](),
 		isNormal:     atomic.NewBool(true),
 		isClosed:     atomic.NewBool(false),
 	}
 	start := time.Now()
-	ddlWriter, err := factory.NewRedoLogWriter(s.ctx, s.cfg, redo.RedoDDLLogFileType)
+	ddlWriter, err := factory.NewRedoLogWriter(ctx, config, redo.RedoDDLLogFileType)
 	if err != nil {
 		log.Error("redo: failed to create redo log writer",
 			zap.String("keyspace", changefeedID.Keyspace()),
@@ -84,7 +82,7 @@ func New(ctx context.Context, changefeedID common.ChangeFeedID,
 			zap.Error(err))
 		return nil, err
 	}
-	dmlWriter, err := factory.NewRedoLogWriter(s.ctx, s.cfg, redo.RedoRowLogFileType)
+	dmlWriter, err := factory.NewRedoLogWriter(ctx, config, redo.RedoRowLogFileType)
 	if err != nil {
 		log.Error("redo: failed to create redo log writer",
 			zap.String("keyspace", changefeedID.Keyspace()),

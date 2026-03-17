@@ -15,32 +15,26 @@ package factory
 
 import (
 	"context"
-
 	"strings"
 
-	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/redo/writer/blackhole"
 	"github.com/pingcap/ticdc/pkg/redo/writer/file"
 	"github.com/pingcap/ticdc/pkg/redo/writer/memory"
-	"github.com/pingcap/ticdc/pkg/util"
 )
 
 // NewRedoLogWriter creates a new RedoLogWriter.
 func NewRedoLogWriter(
 	ctx context.Context, cfg *writer.Config, fileType string,
 ) (writer.RedoLogWriter, error) {
-	if cfg == nil || cfg.URI == nil {
-		return nil, errors.ErrRedoConfigInvalid.GenWithStack("writer config is nil")
-	}
-
-	if redo.IsBlackholeStorage(cfg.URI.Scheme) {
-		invalid := strings.HasSuffix(cfg.URI.Scheme, "invalid")
+	uri := cfg.URI()
+	if redo.IsBlackholeStorage(uri.Scheme) {
+		invalid := strings.HasSuffix(uri.Scheme, "invalid")
 		return blackhole.NewLogWriter(invalid), nil
 	}
 
-	if util.GetOrZero(cfg.UseFileBackend) {
+	if cfg.UseFileBackend() {
 		return file.NewLogWriter(ctx, cfg, fileType)
 	}
 	return memory.NewLogWriter(ctx, cfg, fileType)
