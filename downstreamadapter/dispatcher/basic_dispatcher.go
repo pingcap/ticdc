@@ -674,7 +674,8 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 			log.Info("dispatcher receive ddl event",
 				zap.Stringer("dispatcher", d.id),
 				zap.String("query", ddl.Query),
-				zap.Int64("table", ddl.GetTableID()),
+				zap.Int64("oldTableID", d.tableSpan.GetTableID()),
+				zap.Int64("currentTableID", ddl.GetTableID()),
 				zap.Uint64("commitTs", event.GetCommitTs()),
 				zap.Uint64("seq", event.GetSeq()))
 			now := time.Now()
@@ -751,7 +752,7 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 // The status path will be waked up after the action finishes.
 func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.DispatcherStatus) (await bool) {
 	log.Debug("dispatcher handle dispatcher status",
-		zap.Any("dispatcherStatus", dispatcherStatus),
+		zap.String("dispatcherStatus", common.FormatDispatcherStatus(dispatcherStatus)),
 		zap.Stringer("dispatcher", d.id),
 		zap.Any("action", dispatcherStatus.GetAction()),
 		zap.Any("ack", dispatcherStatus.GetAck()))
