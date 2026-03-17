@@ -326,7 +326,7 @@ func NewDispatcherManager(
 func (e *DispatcherManager) NewTableTriggerEventDispatcher(id *heartbeatpb.DispatcherID, startTs uint64, newChangefeed bool) error {
 	if e.GetTableTriggerEventDispatcher() != nil {
 		log.Error("table trigger event dispatcher existed!")
-		e.GetTableTriggerEventDispatcher().Remove()
+		return nil
 	}
 	infos := map[common.DispatcherID]dispatcherCreateInfo{}
 	dispatcherID := common.NewDispatcherIDFromPB(id)

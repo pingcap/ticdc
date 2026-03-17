@@ -96,7 +96,7 @@ func initRedoComponet(
 func (e *DispatcherManager) NewTableTriggerRedoDispatcher(id *heartbeatpb.DispatcherID, startTs uint64, newChangefeed bool) error {
 	if e.GetTableTriggerRedoDispatcher() != nil {
 		e.GetTableTriggerRedoDispatcher().Remove()
-		log.Error("table trigger redo dispatcher existed!")
+		return nil
 	}
 	infos := map[common.DispatcherID]dispatcherCreateInfo{}
 	dispatcherID := common.NewDispatcherIDFromPB(id)
