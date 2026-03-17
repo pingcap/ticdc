@@ -92,7 +92,7 @@ type DDLEvent struct {
 	eventSize int64 `json:"-"`
 
 	// for simple protocol
-	IsBootstrap bool `msg:"-"`
+	IsBootstrap bool `json:"-"`
 	// NotSync is used to indicate whether the event should be synced to downstream.
 	// If it is true, sink should not sync this event to downstream.
 	// It is used for some special DDL events that do not need to be synced,
@@ -104,11 +104,51 @@ type DDLEvent struct {
 	// to ensure the new truncated table can be handled correctly.
 	// If the DDL involves multiple tables, this field is not effective.
 	// The multiple table DDL event will be handled by filtering querys and table infos.
-	// NOTE: The `msg` tag is a legacy tag kept for backward compatibility.
-	// DDLEventVersion1 still marshals the struct with encoding/json, so changing this
-	// field to `json:"not_sync"` would change the wire key from `NotSync` to
-	// `not_sync` and break mixed-version DDLEvent interoperability.
-	NotSync bool `msg:"not_sync"`
+	// NOTE: DDLEventVersion1 still marshals the struct with encoding/json.
+	// We use json:"not_sync" as the canonical key and keep custom MarshalJSON/
+	// UnmarshalJSON compatibility so both `not_sync` and legacy `NotSync`
+	// are interoperable in mixed-version deployment.
+	NotSync bool `json:"not_sync"`
+}
+
+type ddlEventJSONAlias DDLEvent
+
+type ddlEventJSONCompat struct {
+	ddlEventJSONAlias
+	NotSyncLegacy bool `json:"NotSync"`
+}
+
+type ddlEventJSONDecodeCompat struct {
+	*ddlEventJSONAlias
+	NotSyncLegacy *bool `json:"NotSync"`
+	NotSyncNew    *bool `json:"not_sync"`
+}
+
+// MarshalJSON encodes both new and legacy NotSync keys for mixed-version compatibility.
+func (d DDLEvent) MarshalJSON() ([]byte, error) {
+	return json.Marshal(ddlEventJSONCompat{
+		ddlEventJSONAlias: ddlEventJSONAlias(d),
+		NotSyncLegacy:     d.NotSync,
+	})
+}
+
+// UnmarshalJSON accepts both `not_sync` and legacy `NotSync` keys.
+// If both keys are present, `not_sync` takes precedence.
+func (d *DDLEvent) UnmarshalJSON(data []byte) error {
+	compat := ddlEventJSONDecodeCompat{
+		ddlEventJSONAlias: (*ddlEventJSONAlias)(d),
+	}
+	if err := json.Unmarshal(data, &compat); err != nil {
+		return err
+	}
+	if compat.NotSyncNew != nil {
+		d.NotSync = *compat.NotSyncNew
+		return nil
+	}
+	if compat.NotSyncLegacy != nil {
+		d.NotSync = *compat.NotSyncLegacy
+	}
+	return nil
 }
 
 func (d *DDLEvent) String() string {
