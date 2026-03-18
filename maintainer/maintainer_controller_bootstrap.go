@@ -90,6 +90,8 @@ func (c *Controller) FinishBootstrap(
 	// Step 1: Determine start timestamp and update DDL dispatcher
 	startTs, redoStartTs, err := c.determineStartTs(allNodesResp)
 	if err != nil {
+		log.Panic("cant not found the startTs from the bootstrap response",
+			zap.String("changefeed", c.changefeedID.Name()))
 		return nil, errors.Trace(err)
 	}
 
