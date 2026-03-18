@@ -88,6 +88,7 @@ This command:
 - `-table-count`: Number of tables to create (default: 1)
 - `-thread`: Number of concurrent worker threads (default: 16)
 - `-batch-size`: Number of rows to insert in each statement (default: 10)
+- `-batch-in-txn`: Wrap each batch in a single explicit transaction (default: false)
 - `-total-row-count`: Total number of rows to insert (default: 1 billion)
 - `-percentage-for-update`: Portion of threads dedicated to updates (1.0 = all threads)
 - `-range-num`: Number of ranges for dividing update operations (default: 5)

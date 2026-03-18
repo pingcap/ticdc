@@ -26,8 +26,12 @@ const _ = proto.GoGoProtoPackageIsVersion3 // please upgrade the proto package
 type Action int32
 
 const (
+	// Write means the selected writer dispatcher executes the barrier event
+	// (DDL/syncpoint) to downstream.
 	Action_Write Action = 0
-	Action_Pass  Action = 1
+	// Pass means influenced dispatchers mark this barrier as passed after the
+	// writer has finished Write for the same (commitTs, isSyncPoint).
+	Action_Pass Action = 1
 )
 
 var Action_name = map[int32]string{

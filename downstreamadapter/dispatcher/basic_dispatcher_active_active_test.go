@@ -15,7 +15,6 @@ package dispatcher
 import (
 	"testing"
 
-	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -148,7 +147,7 @@ func newTestBasicDispatcher(t *testing.T, sinkType common.SinkType, enableActive
 		blockStatuses,
 		errCh,
 	)
-	dispatcherSink := sink.NewMockSink(sinkType)
+	dispatcherSink := newDispatcherTestSink(t, sinkType)
 	tableSpan := &heartbeatpb.TableSpan{TableID: 1, StartKey: []byte{0}, EndKey: []byte{1}}
 	dispatcher := NewBasicDispatcher(
 		common.NewDispatcherID(),
@@ -160,7 +159,7 @@ func newTestBasicDispatcher(t *testing.T, sinkType common.SinkType, enableActive
 		false,
 		200,
 		common.DefaultMode,
-		dispatcherSink,
+		dispatcherSink.Sink(),
 		sharedInfo,
 	)
 	return dispatcher
