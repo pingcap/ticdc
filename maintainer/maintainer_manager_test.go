@@ -17,6 +17,7 @@ import (
 	"context"
 	"encoding/json"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
@@ -57,11 +58,25 @@ func newTestNodeWithListener(t *testing.T) (*node.Info, net.Listener) {
 	return n, lis
 }
 
+func runCancelable(t *testing.T, ctx context.Context, run func(context.Context) error) {
+	t.Helper()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- run(ctx)
+	}()
+
+	t.Cleanup(func() {
+		require.ErrorIs(t, <-errCh, context.Canceled)
+	})
+}
+
 // This is a integration test for maintainer manager, it may consume a lot of time.
 // scale out/in close, add/remove tables
 func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 	ctx := context.Background()
 	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	selfNode, selfLis := newTestNodeWithListener(t)
 	etcdClient := newMockEtcdClient(string(selfNode.ID))
 	nodeManager := watcher.NewNodeManager(nil, etcdClient)
@@ -107,13 +122,9 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 		&heartbeatpb.CoordinatorBootstrapRequest{Version: 1})
 	msg.From = msg.To
 	manager.onCoordinatorBootstrapRequest(msg)
-	go func() {
-		_ = manager.Run(ctx)
-	}()
+	runCancelable(t, ctx, manager.Run)
 	dispManager := MockDispatcherManager(mc, selfNode.ID)
-	go func() {
-		_ = dispManager.Run(ctx)
-	}()
+	runCancelable(t, ctx, dispManager.Run)
 
 	keyspaceMeta := common.DefaultKeyspace
 	if kerneltype.IsNextGen() {
@@ -296,6 +307,7 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 func TestMaintainerBootstrapWithTablesReported(t *testing.T) {
 	ctx := context.Background()
 	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	selfNode, selfLis := newTestNodeWithListener(t)
 	etcdClient := newMockEtcdClient(string(selfNode.ID))
 	nodeManager := watcher.NewNodeManager(nil, etcdClient)
@@ -338,9 +350,7 @@ func TestMaintainerBootstrapWithTablesReported(t *testing.T) {
 		&heartbeatpb.CoordinatorBootstrapRequest{Version: 1})
 	msg.From = msg.To
 	manager.onCoordinatorBootstrapRequest(msg)
-	go func() {
-		_ = manager.Run(ctx)
-	}()
+	runCancelable(t, ctx, manager.Run)
 	dispManager := MockDispatcherManager(mc, selfNode.ID)
 	// table1 and table 2 will be reported by remote
 	var remotedIds []common.DispatcherID
@@ -371,9 +381,7 @@ func TestMaintainerBootstrapWithTablesReported(t *testing.T) {
 		})
 	}
 
-	go func() {
-		_ = dispManager.Run(ctx)
-	}()
+	runCancelable(t, ctx, dispManager.Run)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	cfConfig := &config.ChangeFeedInfo{
 		ChangefeedID: cfID,
@@ -427,6 +435,7 @@ func TestMaintainerBootstrapWithTablesReported(t *testing.T) {
 func TestStopNotExistsMaintainer(t *testing.T) {
 	ctx := context.Background()
 	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	selfNode, selfLis := newTestNodeWithListener(t)
 	etcdClient := newMockEtcdClient(string(selfNode.ID))
 	nodeManager := watcher.NewNodeManager(nil, etcdClient)
@@ -485,13 +494,9 @@ func TestStopNotExistsMaintainer(t *testing.T) {
 		&heartbeatpb.CoordinatorBootstrapRequest{Version: 1})
 	msg.From = msg.To
 	manager.onCoordinatorBootstrapRequest(msg)
-	go func() {
-		_ = manager.Run(ctx)
-	}()
+	runCancelable(t, ctx, manager.Run)
 	dispManager := MockDispatcherManager(mc, selfNode.ID)
-	go func() {
-		_ = dispManager.Run(ctx)
-	}()
+	runCancelable(t, ctx, dispManager.Run)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	_ = mc.SendCommand(messaging.NewSingleTargetMessage(selfNode.ID, messaging.MaintainerManagerTopic, &heartbeatpb.RemoveMaintainerRequest{
 		Id:      cfID.ToPB(),
@@ -511,14 +516,16 @@ func TestStopNotExistsMaintainer(t *testing.T) {
 }
 
 type dispatcherNode struct {
-	cancel            context.CancelFunc
-	mc                messaging.MessageCenter
-	dispatcherManager *mockDispatcherManager
+	cancel   context.CancelFunc
+	done     chan struct{}
+	stopOnce sync.Once
 }
 
 func (d *dispatcherNode) stop() {
-	d.mc.Close()
-	d.cancel()
+	d.stopOnce.Do(func() {
+		d.cancel()
+		<-d.done
+	})
 }
 
 func startDispatcherNode(
@@ -534,7 +541,9 @@ func startDispatcherNode(
 	nodeManager.RegisterNodeChangeHandler(node.ID, mc.OnNodeChanges)
 	ctx, cancel := context.WithCancel(ctx)
 	dispManager := MockDispatcherManager(mc, node.ID)
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		var opts []grpc.ServerOption
 		grpcServer := grpc.NewServer(opts...)
 		mcs := messaging.NewMessageCenterServer(mc)
@@ -545,11 +554,9 @@ func startDispatcherNode(
 		_ = dispManager.Run(ctx)
 		grpcServer.Stop()
 	}()
-	return &dispatcherNode{
-		cancel:            cancel,
-		mc:                mc,
-		dispatcherManager: dispManager,
-	}
+	dn := &dispatcherNode{cancel: cancel, done: done}
+	t.Cleanup(dn.stop)
+	return dn
 }
 
 type mockEtcdClient struct {

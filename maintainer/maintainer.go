@@ -928,15 +928,6 @@ func isMysqlCompatible(sinkURIStr string) (bool, error) {
 	return config.IsMySQLCompatibleScheme(scheme), nil
 }
 
-func isStorageSink(sinkURIStr string) (bool, error) {
-	sinkURI, err := url.Parse(sinkURIStr)
-	if err != nil {
-		return false, errors.WrapError(errors.ErrSinkURIInvalid, err)
-	}
-	scheme := config.GetScheme(sinkURI)
-	return config.IsStorageScheme(scheme), nil
-}
-
 func newDDLSpan(keyspaceID uint32, cfID common.ChangeFeedID, checkpointTs uint64, selfNode *node.Info, mode int64) (common.DispatcherID, *replica.SpanReplication) {
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
@@ -963,12 +954,7 @@ func (m *Maintainer) onBootstrapResponses(responses map[node.ID]*heartbeatpb.Mai
 		m.handleError(err)
 		return
 	}
-	isStorageSinkBackend, err := isStorageSink(m.info.SinkURI)
-	if err != nil {
-		m.handleError(err)
-		return
-	}
-	postBootstrapRequest, err := m.controller.FinishBootstrap(responses, isMySQLSinkCompatible, isStorageSinkBackend)
+	postBootstrapRequest, err := m.controller.FinishBootstrap(responses, isMySQLSinkCompatible)
 	if err != nil {
 		m.handleError(err)
 		return

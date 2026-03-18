@@ -102,6 +102,10 @@ function run() {
 	check_table_exists multi_tables_ddl_test.t66 ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 	check_table_exists multi_tables_ddl_test.t7 ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 	check_table_exists multi_tables_ddl_test.t88 ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+	check_table_exists multi_tables_ddl_test.rename_mix_normal_1_done ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+	check_table_exists multi_tables_ddl_test.rename_mix_part_1_done ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+	check_table_exists multi_tables_ddl_test.rename_mix_normal_2_done ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+	check_table_exists multi_tables_ddl_test.rename_mix_part_2_done ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 	# sync_diff can't check non-exist table, so we check expected tables are created in downstream first
 	check_table_exists multi_tables_ddl_test.finish_mark ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 	echo "check table exists success"
