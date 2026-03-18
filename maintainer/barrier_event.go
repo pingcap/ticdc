@@ -554,14 +554,24 @@ func (be *BarrierEvent) checkBlockedDispatchers() {
 
 // forwardBarrierEvent returns true if `replication` is known to have passed `event`.
 //
-// We intentionally avoid `checkpointTs >= commitTs`: a dispatcher may be recreated with
-// `startTs == commitTs` and not skip the syncpoint at that ts, so it may report
-// `checkpointTs == commitTs` before the syncpoint is actually flushed. We only forward when the
-// replication is strictly beyond the barrier, or when ordering guarantees it (replication is in a
-// syncpoint barrier at the same ts while `event` is a DDL barrier).
+// For syncpoint barriers, `checkpointTs == commitTs` is not sufficient: a recreated
+// dispatcher may start at commitTs and still need to flush that syncpoint. So we require
+// strict `checkpointTs > commitTs`.
+//
+// For non-syncpoint barriers (DDL), `checkpointTs >= commitTs` is acceptable and helps
+// recover cases where a replication is recreated exactly at the DDL commit ts.
+//
+// We still keep the block-state based ordering fallback below.
 func forwardBarrierEvent(replication *replica.SpanReplication, event *BarrierEvent) bool {
-	if replication.GetStatus().CheckpointTs > event.commitTs {
-		return true
+	checkpointTs := replication.GetStatus().CheckpointTs
+	if event.isSyncPoint {
+		if checkpointTs > event.commitTs {
+			return true
+		}
+	} else {
+		if checkpointTs >= event.commitTs {
+			return true
+		}
 	}
 
 	blockState := replication.GetBlockState()

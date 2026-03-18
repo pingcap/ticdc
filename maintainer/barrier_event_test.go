@@ -272,3 +272,66 @@ func TestUpdateSchemaID(t *testing.T) {
 	require.Len(t, spanController.GetTasksBySchemaID(2), 1)
 	require.Equal(t, spanController.GetTasksByTableID(1)[0].GetSchemaID(), int64(2))
 }
+
+func TestForwardBarrierEventForDDLAllowsEqualCheckpointTs(t *testing.T) {
+	replication := replica.NewSpanReplication(
+		common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName),
+		common.NewDispatcherID(),
+		1,
+		common.KeyspaceDDLSpan(common.DefaultKeyspaceID),
+		10,
+		common.DefaultMode,
+		false,
+	)
+
+	event := &BarrierEvent{
+		commitTs:    10,
+		isSyncPoint: false,
+	}
+
+	require.True(t, forwardBarrierEvent(replication, event))
+}
+
+func TestForwardBarrierEventForSyncPointRequiresStrictlyGreaterCheckpointTs(t *testing.T) {
+	replication := replica.NewSpanReplication(
+		common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName),
+		common.NewDispatcherID(),
+		1,
+		common.KeyspaceDDLSpan(common.DefaultKeyspaceID),
+		10,
+		common.DefaultMode,
+		false,
+	)
+
+	event := &BarrierEvent{
+		commitTs:    10,
+		isSyncPoint: true,
+	}
+
+	require.False(t, forwardBarrierEvent(replication, event))
+}
+
+func TestForwardBarrierEventForDDLWithSyncPointBlockStateSameTs(t *testing.T) {
+	replication := replica.NewSpanReplication(
+		common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName),
+		common.NewDispatcherID(),
+		1,
+		common.KeyspaceDDLSpan(common.DefaultKeyspaceID),
+		9,
+		common.DefaultMode,
+		false,
+	)
+	replication.UpdateBlockState(heartbeatpb.State{
+		IsBlocked:   true,
+		BlockTs:     10,
+		IsSyncPoint: true,
+		Stage:       heartbeatpb.BlockStage_WAITING,
+	})
+
+	event := &BarrierEvent{
+		commitTs:    10,
+		isSyncPoint: false,
+	}
+
+	require.True(t, forwardBarrierEvent(replication, event))
+}

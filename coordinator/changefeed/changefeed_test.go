@@ -14,6 +14,7 @@
 package changefeed
 
 import (
+	"sync"
 	"testing"
 
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -63,6 +64,53 @@ func TestChangefeed_GetSetInfo(t *testing.T) {
 	var marshaledInfo config.ChangeFeedInfo
 	require.NoError(t, marshaledInfo.Unmarshal(req.Config))
 	require.Equal(t, newInfo.SinkURI, marshaledInfo.SinkURI)
+}
+
+func TestChangefeed_SetInfoConcurrent(t *testing.T) {
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	info := &config.ChangeFeedInfo{
+		SinkURI: "kafka://127.0.0.1:9092",
+		State:   config.StateNormal,
+		Config:  config.GetDefaultReplicaConfig(),
+	}
+	cf := NewChangefeed(cfID, info, 100, true)
+
+	info1 := &config.ChangeFeedInfo{
+		SinkURI: "kafka://127.0.0.1:9092",
+		State:   config.StateNormal,
+		Config:  config.GetDefaultReplicaConfig(),
+	}
+	info2 := &config.ChangeFeedInfo{
+		SinkURI: "kafka://127.0.0.1:9093",
+		State:   config.StateStopped,
+		Config:  config.GetDefaultReplicaConfig(),
+	}
+
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func(worker int) {
+			defer wg.Done()
+			<-start
+			for j := 0; j < 200; j++ {
+				if (worker+j)%2 == 0 {
+					cf.SetInfo(info1)
+				} else {
+					cf.SetInfo(info2)
+				}
+				msg := cf.NewAddMaintainerMessage(node.ID("server-1"))
+				req := msg.Message[0].(*heartbeatpb.AddMaintainerRequest)
+				var marshaledInfo config.ChangeFeedInfo
+				if err := marshaledInfo.Unmarshal(req.Config); err != nil {
+					t.Errorf("unmarshal config failed: %v", err)
+					return
+				}
+			}
+		}(i)
+	}
+	close(start)
+	wg.Wait()
 }
 
 func TestChangefeed_GetSetNodeID(t *testing.T) {

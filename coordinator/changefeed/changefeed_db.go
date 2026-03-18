@@ -268,7 +268,7 @@ func (db *ChangefeedDB) MoveToSchedulingQueue(
 			cf.backoff.StartFinished()
 		}
 		delete(db.stopped, id)
-		cf.isNew = overwriteCheckpointTs
+		cf.SetIsNew(overwriteCheckpointTs)
 		db.AddAbsentWithoutLock(cf)
 		log.Info("move a changefeed to scheduling queue, it will be scheduled later",
 			zap.Stringer("changefeed", id),
