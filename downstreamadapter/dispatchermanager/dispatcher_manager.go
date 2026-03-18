@@ -246,6 +246,7 @@ func NewDispatcherManager(
 		outputRawChangeEvent = manager.config.SinkConfig.KafkaConfig.GetOutputRawChangeEvent()
 	}
 
+	// Create shared info for all dispatchers
 	manager.sharedInfo = dispatcher.NewSharedInfo(
 		manager.changefeedID,
 		manager.config.TimeZone,

@@ -283,7 +283,6 @@ func (b *BatchDMLEvent) encodeV1() ([]byte, error) {
 func (b *BatchDMLEvent) AssembleRows(tableInfo *common.TableInfo) {
 	if tableInfo == nil {
 		log.Panic("DMLEvent: TableInfo is nil")
-		return
 	}
 
 	defer func() {
