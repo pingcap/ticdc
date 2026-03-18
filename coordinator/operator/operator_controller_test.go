@@ -123,6 +123,8 @@ func TestController_HasOperatorInvolvingNode(t *testing.T) {
 
 	require.True(t, oc.AddOperator(NewAddMaintainerOperator(changefeedDB, cf, target.ID)))
 
+	require.Equal(t, 1, oc.CountOperatorsInvolvingNode(target.ID))
+	require.Equal(t, 0, oc.CountOperatorsInvolvingNode("n3"))
 	require.True(t, oc.HasOperatorInvolvingNode(target.ID))
 	require.False(t, oc.HasOperatorInvolvingNode("n3"))
 }
