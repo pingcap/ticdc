@@ -88,7 +88,10 @@ func (c *Controller) FinishBootstrap(
 		zap.Int("nodeCount", len(allNodesResp)))
 
 	// Step 1: Determine start timestamp and update DDL dispatcher
-	startTs, redoStartTs := c.determineStartTs(allNodesResp)
+	startTs, redoStartTs, err := c.determineStartTs(allNodesResp)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
 
 	// Step 2: Load tables from schema store
 	tables, err := c.loadTables(startTs)
@@ -144,7 +147,7 @@ func (c *Controller) FinishBootstrap(
 	}, nil
 }
 
-func (c *Controller) determineStartTs(allNodesResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse) (uint64, uint64) {
+func (c *Controller) determineStartTs(allNodesResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse) (uint64, uint64, error) {
 	var (
 		startTs     uint64
 		redoStartTs uint64
@@ -170,14 +173,18 @@ func (c *Controller) determineStartTs(allNodesResp map[node.ID]*heartbeatpb.Main
 		}
 	}
 	if startTs == 0 {
-		log.Panic("cant not found the startTs from the bootstrap response",
-			zap.String("changefeed", c.changefeedID.Name()))
+		return 0, 0, errors.WrapError(
+			errors.ErrChangefeedInitTableTriggerDispatcherFailed,
+			errors.New("all bootstrap responses reported empty checkpointTs"),
+		)
 	}
 	if c.enableRedo && redoStartTs == 0 {
-		log.Panic("cant not found the redoStartTs from the bootstrap response",
-			zap.String("changefeed", c.changefeedID.Name()))
+		return 0, 0, errors.WrapError(
+			errors.ErrChangefeedInitTableTriggerDispatcherFailed,
+			errors.New("all bootstrap responses reported empty redoCheckpointTs"),
+		)
 	}
-	return startTs, redoStartTs
+	return startTs, redoStartTs, nil
 }
 
 func (c *Controller) buildWorkingTaskMap(
