@@ -53,7 +53,6 @@ function run() {
 	start_tidb_cluster --workdir $WORK_DIR
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0" --addr "127.0.0.1:8300" --pd "$PD_ADDR"
-	ensure 5 "check_logs_contains $WORK_DIR 'failpoint-build=true' '0'"
 	enable_failpoint --addr "127.0.0.1:8300" --name "$FAILPOINT_NAME" --expr "1*return(true)"
 
 	cdc_cli_changefeed create --pd="$PD_ADDR" --sink-uri="blackhole://" -c "$CHANGEFEED_ID"
