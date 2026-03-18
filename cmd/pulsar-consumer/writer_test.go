@@ -17,12 +17,15 @@ import (
 	"context"
 	"testing"
 
+	"github.com/pingcap/ticdc/cmd/util"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
 	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	sinkutil "github.com/pingcap/ticdc/pkg/sink/util"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
 )
 
@@ -38,6 +41,10 @@ var _ sink.Sink = (*recordingSink)(nil)
 func (s *recordingSink) SinkType() common.SinkType { return common.MysqlSinkType }
 func (s *recordingSink) IsNormal() bool            { return true }
 func (s *recordingSink) AddDMLEvent(_ *commonEvent.DMLEvent) {
+}
+
+func (s *recordingSink) FlushDMLBeforeBlock(_ commonEvent.BlockEvent) error {
+	return nil
 }
 
 func (s *recordingSink) WriteBlockEvent(event commonEvent.BlockEvent) error {
@@ -275,4 +282,59 @@ func TestWriterWrite_handlesOutOfOrderDDLsByCommitTs(t *testing.T) {
 	}, s.ddls)
 	require.Len(t, w.ddlList, 1)
 	require.Equal(t, "CREATE TABLE `common_1`.`a` (`a` BIGINT PRIMARY KEY,`b` INT)", w.ddlList[0].Query)
+}
+
+func TestAppendRow2Group_DoesNotDropCommitTsFallbackBeforeApplied(t *testing.T) {
+	// Scenario:
+	// 1) TiCDC writes DML messages to Pulsar in commitTs order.
+	// 2) Under network partition / changefeed restart, TiCDC may replay older commitTs
+	//    at a later time (commitTs appears to go backwards).
+	//
+	// The pulsar-consumer must not drop these "fallback commitTs" events unless they
+	// have already been flushed to downstream (AppliedWatermark), otherwise replayed
+	// messages cannot heal missing windows.
+	w := &writer{
+		progresses: []*partitionProgress{
+			{
+				partition:   0,
+				eventsGroup: make(map[int64]*util.EventsGroup),
+			},
+		},
+		protocol:               config.ProtocolCanalJSON,
+		partitionTableAccessor: codeccommon.NewPartitionTableAccessor(),
+	}
+
+	newDMLEvent := func(tableID int64, commitTs uint64) *commonEvent.DMLEvent {
+		return &commonEvent.DMLEvent{
+			PhysicalTableID: tableID,
+			CommitTs:        commitTs,
+			RowTypes:        []common.RowType{common.RowTypeUpdate},
+			Rows:            chunk.NewChunkWithCapacity(nil, 0),
+			TableInfo: &common.TableInfo{
+				TableName: common.TableName{Schema: "test", Table: "t"},
+			},
+		}
+	}
+
+	progress := w.progresses[0]
+
+	// Step 1: observe a larger commitTs first (e.g. produced before restart).
+	w.appendRow2Group(newDMLEvent(1, 200), progress)
+
+	// Step 2: observe a smaller commitTs later (e.g. replayed after restart).
+	w.appendRow2Group(newDMLEvent(1, 100), progress)
+
+	group := progress.eventsGroup[1]
+	require.NotNil(t, group)
+
+	// Expect: commitTs=100 is still kept and can be resolved.
+	resolved := group.ResolveInto(150, nil)
+	require.Len(t, resolved, 1)
+	require.Equal(t, uint64(100), resolved[0].CommitTs)
+
+	// Step 3: once downstream has flushed beyond commitTs=100, replay is safe to ignore.
+	group.AppliedWatermark = 200
+	w.appendRow2Group(newDMLEvent(1, 100), progress)
+	resolved = group.ResolveInto(150, nil)
+	require.Empty(t, resolved)
 }

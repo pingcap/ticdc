@@ -18,6 +18,7 @@ import (
 	"sort"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"go.uber.org/zap"
 )
@@ -89,7 +90,19 @@ func (g *EventsGroup) Append(row *commonEvent.DMLEvent, force bool) {
 			return g.events[i].CommitTs > row.CommitTs
 		})
 		if i > 0 && g.events[i-1].CommitTs == row.CommitTs {
-			mergeDMLEvent(g.events[i-1], row)
+			previous := g.events[i-1]
+			// If the table info version is incompatible, we cannot merge the events,
+			//  and the event may be replayed again after the table info is updated.
+			// So we just skip this event to avoid potential panic in the downstream.
+			if !compareTableInfo(previous, row) {
+				log.Warn("skip replayed DML event due to incompatible table info, the event may be replayed again after the table info is updated",
+					zap.Int32("partition", g.Partition), zap.Int64("tableID", g.tableID),
+					zap.Uint64("commitTs", row.CommitTs),
+					zap.Any("previous", previous),
+					zap.Any("now", row))
+				return
+			}
+			mergeDMLEvent(previous, row)
 			return
 		}
 		g.events = slices.Insert(g.events, i, row)
@@ -100,28 +113,19 @@ func (g *EventsGroup) Append(row *commonEvent.DMLEvent, force bool) {
 		zap.Uint64("lastCommitTs", lastDMLEvent.GetCommitTs()), zap.Uint64("commitTs", row.GetCommitTs()))
 }
 
-// Resolve will get events where CommitTs is less than resolveTs.
-func (g *EventsGroup) Resolve(resolve uint64) []*commonEvent.DMLEvent {
-	i := sort.Search(len(g.events), func(i int) bool {
-		return g.events[i].CommitTs > resolve
-	})
-
-	result := g.events[:i]
-	g.events = g.events[i:]
-	if len(result) != 0 && len(g.events) != 0 {
-		log.Debug("not all events resolved",
-			zap.Int32("partition", g.Partition), zap.Int64("tableID", g.tableID),
-			zap.Int("resolved", len(result)), zap.Int("remained", len(g.events)),
-			zap.Uint64("resolveTs", resolve), zap.Uint64("firstCommitTs", g.events[0].CommitTs))
+func compareTableInfo(previous, now *commonEvent.DMLEvent) bool {
+	previousInfo := previous.TableInfo.ToTiDBTableInfo()
+	nowInfo := now.TableInfo.ToTiDBTableInfo()
+	if previousInfo.UpdateTS > nowInfo.UpdateTS {
+		log.Panic("previous dml event has bigger table info version",
+			zap.Any("previous", previous),
+			zap.Any("now", now))
 	}
-	return result
+	return common.NewColumnSchema4Decoder(previousInfo).SameWithTableInfo(nowInfo)
 }
 
 // ResolveInto appends all events with CommitTs <= resolve into dst and removes them from the group.
-//
-// Why this exists: Resolve() returns a slice that aliases the group's backing array. If the group
-// is kept alive, stale pointers in that backing array can retain resolved events and cause memory
-// growth in long-running consumers. ResolveInto copies pointers into dst first, then clears the
+// ResolveInto copies pointers into dst first, then clears the
 // resolved prefix so Go GC can reclaim resolved events once downstream is done with them.
 func (g *EventsGroup) ResolveInto(resolve uint64, dst []*commonEvent.DMLEvent) []*commonEvent.DMLEvent {
 	i := sort.Search(len(g.events), func(i int) bool {

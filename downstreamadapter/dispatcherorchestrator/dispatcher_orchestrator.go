@@ -170,18 +170,17 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 	var err error
 	if !exists {
 		start := time.Now()
-		manager, err = dispatchermanager.
-			NewDispatcherManager(
-				req.KeyspaceId,
-				cfId,
-				cfConfig,
-				req.TableTriggerEventDispatcherId,
-				req.TableTriggerRedoDispatcherId,
-				req.StartTs,
-				from,
-				req.IsNewChangefeed,
-			)
-			// Fast return the error to maintainer.
+		manager, err = dispatchermanager.NewDispatcherManager(
+			req.KeyspaceId,
+			cfId,
+			cfConfig,
+			req.TableTriggerEventDispatcherId,
+			req.TableTriggerRedoDispatcherId,
+			req.StartTs,
+			from,
+			req.IsNewChangefeed,
+		)
+		// Fast return the error to maintainer.
 		if err != nil {
 			log.Error("failed to create new dispatcher manager",
 				zap.Any("changefeedID", cfId.Name()), zap.Duration("duration", time.Since(start)), zap.Error(err))
@@ -263,7 +262,7 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 	if tableTriggerDispatcher := manager.GetTableTriggerEventDispatcher(); tableTriggerDispatcher != nil {
 		startTs = tableTriggerDispatcher.GetStartTs()
 	}
-	if manager.RedoEnable {
+	if manager.IsRedoReady() {
 		if tableTriggerRedoDispatcher := manager.GetTableTriggerRedoDispatcher(); tableTriggerRedoDispatcher != nil {
 			redoStartTs = tableTriggerRedoDispatcher.GetStartTs()
 		}
@@ -323,7 +322,7 @@ func (m *DispatcherOrchestrator) handlePostBootstrapRequest(
 			zap.Any("changefeedID", cfId.Name()), zap.Error(err))
 		return m.handleDispatcherError(from, req.ChangefeedID, err)
 	}
-	if manager.RedoEnable {
+	if manager.IsRedoReady() {
 		err := manager.InitalizeTableTriggerRedoDispatcher(req.RedoSchemas)
 		if err != nil {
 			log.Error("failed to initialize table trigger redo dispatcher",
@@ -381,34 +380,15 @@ func createBootstrapResponse(
 		response.CheckpointTs = startTs
 	}
 
-	manager.GetDispatcherMap().ForEach(func(id common.DispatcherID, d *dispatcher.EventDispatcher) {
-		response.Spans = append(response.Spans, &heartbeatpb.BootstrapTableSpan{
-			ID:              id.ToPB(),
-			SchemaID:        d.GetSchemaID(),
-			Span:            d.GetTableSpan(),
-			ComponentStatus: d.GetComponentStatus(),
-			CheckpointTs:    d.GetCheckpointTs(),
-			BlockState:      d.GetBlockEventStatus(),
-			Mode:            d.GetMode(),
-		})
-	})
-	if manager.RedoEnable {
+	retrieveDispatcherSpanForBootstrapResponse(manager, response)
+	if manager.IsRedoReady() {
 		// table trigger redo dispatcher startTs
 		if redoStartTs != 0 {
 			response.RedoCheckpointTs = redoStartTs
 		}
-		manager.GetRedoDispatcherMap().ForEach(func(id common.DispatcherID, d *dispatcher.RedoDispatcher) {
-			response.Spans = append(response.Spans, &heartbeatpb.BootstrapTableSpan{
-				ID:              id.ToPB(),
-				SchemaID:        d.GetSchemaID(),
-				Span:            d.GetTableSpan(),
-				ComponentStatus: d.GetComponentStatus(),
-				CheckpointTs:    d.GetCheckpointTs(),
-				BlockState:      d.GetBlockEventStatus(),
-				Mode:            d.GetMode(),
-			})
-		})
+		retrieveRedoDispatcherSpanForBootstrapResponse(manager, response)
 	}
+	retrieveOperatorsForBootstrapResponse(changefeedID, manager, response)
 
 	return response
 }
@@ -466,4 +446,84 @@ func (m *DispatcherOrchestrator) handleDispatcherError(
 		},
 	}
 	return m.sendResponse(from, messaging.MaintainerManagerTopic, response)
+}
+
+func retrieveRedoDispatcherSpanForBootstrapResponse(
+	manager *dispatchermanager.DispatcherManager,
+	response *heartbeatpb.MaintainerBootstrapResponse,
+) {
+	if !manager.IsRedoReady() {
+		return
+	}
+	manager.GetRedoDispatcherMap().ForEach(func(id common.DispatcherID, d *dispatcher.RedoDispatcher) {
+		response.Spans = append(response.Spans, &heartbeatpb.BootstrapTableSpan{
+			ID:              id.ToPB(),
+			SchemaID:        d.GetSchemaID(),
+			Span:            d.GetTableSpan(),
+			ComponentStatus: d.GetComponentStatus(),
+			CheckpointTs:    d.GetCheckpointTs(),
+			BlockState:      d.GetBlockEventStatus(),
+			Mode:            d.GetMode(),
+		})
+	})
+}
+
+func retrieveDispatcherSpanForBootstrapResponse(
+	manager *dispatchermanager.DispatcherManager,
+	response *heartbeatpb.MaintainerBootstrapResponse,
+) {
+	manager.GetDispatcherMap().ForEach(func(id common.DispatcherID, d *dispatcher.EventDispatcher) {
+		response.Spans = append(response.Spans, &heartbeatpb.BootstrapTableSpan{
+			ID:              id.ToPB(),
+			SchemaID:        d.GetSchemaID(),
+			Span:            d.GetTableSpan(),
+			ComponentStatus: d.GetComponentStatus(),
+			CheckpointTs:    d.GetCheckpointTs(),
+			BlockState:      d.GetBlockEventStatus(),
+			Mode:            d.GetMode(),
+		})
+	})
+}
+
+func retrieveOperatorsForBootstrapResponse(
+	changefeedID *heartbeatpb.ChangefeedID,
+	manager *dispatchermanager.DispatcherManager,
+	response *heartbeatpb.MaintainerBootstrapResponse,
+) {
+	manager.GetCurrentOperatorMap().Range(func(key, value any) bool {
+		req := value.(dispatchermanager.SchedulerDispatcherRequest)
+		dispatcherID := common.NewDispatcherIDFromPB(req.Config.DispatcherID)
+		if common.IsRedoMode(req.Config.Mode) {
+			if manager.IsRedoReady() {
+				_, ok := manager.GetRedoDispatcherMap().Get(dispatcherID)
+				// Log error if dispatcher not found and action is not create
+				// It's possible that the dispatcher is not found when the action is create
+				// because the dispatcher may be created after the operator is stored
+				if !ok && req.ScheduleAction != heartbeatpb.ScheduleAction_Create {
+					log.Error("Redo dispatcher not found, this should not happen",
+						zap.String("changefeed", changefeedID.String()),
+						zap.String("dispatcherID", req.Config.DispatcherID.String()),
+					)
+				}
+			}
+		} else {
+			_, ok := manager.GetDispatcherMap().Get(dispatcherID)
+			// Log error if dispatcher not found and action is not create
+			// It's possible that the dispatcher is not found when the action is create
+			// because the dispatcher may be created after the operator is stored
+			if !ok && req.ScheduleAction != heartbeatpb.ScheduleAction_Create {
+				log.Error("Dispatcher not found, this should not happen",
+					zap.String("changefeed", changefeedID.String()),
+					zap.String("dispatcherID", req.Config.DispatcherID.String()),
+				)
+			}
+		}
+		response.Operators = append(response.Operators, &heartbeatpb.ScheduleDispatcherRequest{
+			ChangefeedID:   req.ChangefeedID,
+			Config:         req.Config,
+			ScheduleAction: req.ScheduleAction,
+			OperatorType:   req.OperatorType,
+		})
+		return true
+	})
 }

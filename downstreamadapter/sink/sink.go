@@ -34,6 +34,12 @@ type Sink interface {
 	IsNormal() bool
 
 	AddDMLEvent(event *commonEvent.DMLEvent)
+	// FlushDMLBeforeBlock is a pre-block hook before reporting or writing a block
+	// event (DDL/syncpoint). Sinks can use it as a barrier to flush/serialize
+	// prior DML events for ordering guarantees. Most non-storage sinks no-op.
+	FlushDMLBeforeBlock(event commonEvent.BlockEvent) error
+	// WriteBlockEvent writes the block event to downstream. On success, sink
+	// implementations are expected to call event.PostFlush().
 	WriteBlockEvent(event commonEvent.BlockEvent) error
 	AddCheckpointTs(ts uint64)
 

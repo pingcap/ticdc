@@ -23,14 +23,17 @@ import (
 	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
 )
 
 var _ writer.RedoLogWriter = (*memoryLogWriter)(nil)
 
 type memoryLogWriter struct {
-	cfg         *writer.LogWriterConfig
-	fileWorkers *fileWorkerGroup
-	fileType    string
+	cfg           *writer.LogWriterConfig
+	encodeWorkers *encodingWorkerGroup
+	fileWorkers   *fileWorkerGroup
+	fileType      string
+	tableSchema   *event.TableSchemaStore
 
 	cancel context.CancelFunc
 }
@@ -59,19 +62,38 @@ func NewLogWriter(
 		cfg:      cfg,
 		fileType: fileType,
 	}
-	lw.fileWorkers = newFileWorkerGroup(cfg, util.GetOrZero(cfg.FlushWorkerNum), fileType, extStorage, opts...)
+	var fileInputCh chan *polymorphicRedoEvent
+	if fileType == redo.RedoRowLogFileType {
+		lw.encodeWorkers = newEncodingWorkerGroup(cfg)
+		fileInputCh = lw.encodeWorkers.outputCh
+	}
+	lw.fileWorkers = newFileWorkerGroup(
+		cfg, util.GetOrZero(cfg.FlushWorkerNum), fileType, fileInputCh, extStorage, opts...)
 
 	return lw, nil
 }
 
 func (l *memoryLogWriter) SetTableSchemaStore(tableSchemaStore *event.TableSchemaStore) {
-	l.fileWorkers.tableSchemaStore = tableSchemaStore
+	l.tableSchema = tableSchemaStore
+	if l.encodeWorkers != nil {
+		l.encodeWorkers.tableSchemaStore = tableSchemaStore
+	}
 }
 
 func (l *memoryLogWriter) Run(ctx context.Context) error {
 	newCtx, cancel := context.WithCancel(ctx)
 	l.cancel = cancel
-	return l.fileWorkers.Run(newCtx)
+	if l.encodeWorkers == nil {
+		return l.fileWorkers.Run(newCtx)
+	}
+	eg, egCtx := errgroup.WithContext(newCtx)
+	eg.Go(func() error {
+		return l.encodeWorkers.Run(egCtx)
+	})
+	eg.Go(func() error {
+		return l.fileWorkers.Run(egCtx)
+	})
+	return eg.Wait()
 }
 
 func (l *memoryLogWriter) WriteEvents(ctx context.Context, events ...writer.RedoEvent) error {
@@ -90,7 +112,11 @@ func (l *memoryLogWriter) writeEvents(ctx context.Context, events ...writer.Redo
 				zap.String("capture", l.cfg.CaptureID))
 			continue
 		}
-		if err := l.fileWorkers.syncWrite(ctx, e); err != nil {
+		redoLogEvent, err := toPolymorphicRedoEvent(e, l.tableSchema)
+		if err != nil {
+			return err
+		}
+		if err := l.fileWorkers.syncWrite(ctx, redoLogEvent); err != nil {
 			return err
 		}
 	}
@@ -106,7 +132,10 @@ func (l *memoryLogWriter) asyncWriteEvents(ctx context.Context, events ...writer
 				zap.String("capture", l.cfg.CaptureID))
 			continue
 		}
-		if err := l.fileWorkers.input(ctx, e); err != nil {
+		if l.encodeWorkers == nil {
+			return errors.ErrRedoWriterStopped.GenWithStackByArgs()
+		}
+		if err := l.encodeWorkers.AddEvent(ctx, e); err != nil {
 			return err
 		}
 	}

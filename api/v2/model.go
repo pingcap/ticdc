@@ -507,6 +507,7 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 				FileCleanupCronSpec:  c.Sink.CloudStorageConfig.FileCleanupCronSpec,
 				FlushConcurrency:     c.Sink.CloudStorageConfig.FlushConcurrency,
 				OutputRawChangeEvent: c.Sink.CloudStorageConfig.OutputRawChangeEvent,
+				UseTableIDAsPath:     c.Sink.CloudStorageConfig.UseTableIDAsPath,
 			}
 		}
 		var debeziumConfig *config.DebeziumConfig
@@ -865,6 +866,7 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 				FileCleanupCronSpec:  cloned.Sink.CloudStorageConfig.FileCleanupCronSpec,
 				FlushConcurrency:     cloned.Sink.CloudStorageConfig.FlushConcurrency,
 				OutputRawChangeEvent: cloned.Sink.CloudStorageConfig.OutputRawChangeEvent,
+				UseTableIDAsPath:     cloned.Sink.CloudStorageConfig.UseTableIDAsPath,
 			}
 		}
 		var debeziumConfig *DebeziumConfig
@@ -1505,6 +1507,7 @@ type CloudStorageConfig struct {
 	FileCleanupCronSpec  *string `json:"file_cleanup_cron_spec,omitempty"`
 	FlushConcurrency     *int    `json:"flush_concurrency,omitempty"`
 	OutputRawChangeEvent *bool   `json:"output_raw_change_event,omitempty"`
+	UseTableIDAsPath     *bool   `json:"use_table_id_as_path,omitempty"`
 }
 
 // ChangefeedStatus holds common information of a changefeed in cdc

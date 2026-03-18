@@ -114,6 +114,10 @@ var (
 		"upstream and downstream are the same, %s",
 		errors.RFCCodeText("CDC:ErrSameUpstreamDownstream"),
 	)
+	ErrActiveActiveTSOIndexIncompatible = errors.Normalize(
+		"active active tso index is incompatible, %s",
+		errors.RFCCodeText("CDC:ErrActiveActiveTSOIndexIncompatible"),
+	)
 	ErrMultipleCDCClustersExist = errors.Normalize(
 		"multiple TiCDC clusters exist while using --pd",
 		errors.RFCCodeText("CDC:ErrMultipleCDCClustersExist"),

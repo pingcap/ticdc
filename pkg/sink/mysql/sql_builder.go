@@ -35,6 +35,7 @@ type tsPair struct {
 type preparedDMLs struct {
 	sqls            []string
 	values          [][]interface{}
+	rowTypes        []common.RowType
 	rowCount        int
 	approximateSize int64
 	tsPairs         []tsPair
@@ -116,6 +117,20 @@ func (d *preparedDMLs) fmtSqls() string {
 	return builder.String()
 }
 
+func (d *preparedDMLs) RowsAffected() int64 {
+	var count int64
+	for _, rowType := range d.rowTypes {
+		switch rowType {
+		case common.RowTypeInsert, common.RowTypeDelete:
+			count += 1
+		case common.RowTypeUpdate:
+			count += 2
+		default:
+		}
+	}
+	return count
+}
+
 var dmlsPool = sync.Pool{
 	New: func() interface{} {
 		return &preparedDMLs{
@@ -129,6 +144,7 @@ var dmlsPool = sync.Pool{
 func (d *preparedDMLs) reset() {
 	d.sqls = d.sqls[:0]
 	d.values = d.values[:0]
+	d.rowTypes = d.rowTypes[:0]
 	d.tsPairs = d.tsPairs[:0]
 	d.rowCount = 0
 	d.approximateSize = 0
@@ -243,9 +259,9 @@ func buildActiveActiveUpsertSQL(
 	tableInfo *common.TableInfo,
 	rows []*commonEvent.RowChange,
 	commitTs []uint64,
-) (string, []interface{}) {
+) (string, []interface{}, common.RowType) {
 	if tableInfo == nil || len(rows) == 0 {
-		return "", nil
+		return "", nil, common.RowTypeInsert
 	}
 	if len(commitTs) != len(rows) {
 		log.Panic("mismatched commitTs and rows length",
@@ -265,7 +281,7 @@ func buildActiveActiveUpsertSQL(
 		insertColumns = append(insertColumns, col.Name.O)
 	}
 	if len(insertColumns) == 0 {
-		return "", nil
+		return "", nil, common.RowTypeInsert
 	}
 
 	valueOffsets := make([]int, len(insertColumns))
@@ -342,7 +358,7 @@ func buildActiveActiveUpsertSQL(
 		builder.WriteString(fmt.Sprintf("%s = IF((%s), VALUES(%s), %s)", quoted, cond, quoted, quoted))
 	}
 
-	return builder.String(), args
+	return builder.String(), args, common.RowTypeInsert
 }
 
 func getArgs(row *chunk.Row, tableInfo *common.TableInfo) []interface{} {
@@ -375,7 +391,7 @@ func whereSlice(row *chunk.Row, tableInfo *common.TableInfo) ([]string, []interf
 	colNames := make([]string, 0, len(tableInfo.GetColumns()))
 	// Try to use unique key values when available
 	for i, col := range tableInfo.GetColumns() {
-		if col == nil || !tableInfo.IsHandleKey(col.ID) {
+		if col == nil || !tableInfo.IsHandleKey(col.ID) || col.IsVirtualGenerated() {
 			continue
 		}
 		colNames = append(colNames, col.Name.O)
@@ -386,9 +402,11 @@ func whereSlice(row *chunk.Row, tableInfo *common.TableInfo) ([]string, []interf
 	// if no explicit row id, use all key-values in where condition
 	if len(colNames) == 0 {
 		for i, col := range tableInfo.GetColumns() {
-			colNames = append(colNames, col.Name.O)
-			v := common.ExtractColVal(row, col, i)
-			args = append(args, v)
+			if col != nil && !col.IsVirtualGenerated() {
+				colNames = append(colNames, col.Name.O)
+				v := common.ExtractColVal(row, col, i)
+				args = append(args, v)
+			}
 		}
 	}
 	return colNames, args

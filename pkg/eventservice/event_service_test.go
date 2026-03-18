@@ -17,6 +17,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -163,6 +164,7 @@ type mockEventStore struct {
 	resolvedTsUpdateInterval time.Duration
 	dispatcherMap            sync.Map // key is common.DispatcherID, value is span
 	spansMap                 sync.Map // key is *heartbeatpb.TableSpan
+	unregisterCount          atomic.Uint64
 }
 
 func newMockEventStore(resolvedTsUpdateInterval int) *mockEventStore {
@@ -245,7 +247,9 @@ func (m *mockEventStore) UnregisterDispatcher(changefeedID common.ChangeFeedID, 
 	span, ok := m.dispatcherMap.Load(dispatcherID)
 	if ok {
 		m.spansMap.Delete(span)
+		m.dispatcherMap.Delete(dispatcherID)
 	}
+	m.unregisterCount.Add(1)
 }
 
 func (m *mockEventStore) GetIterator(dispatcherID common.DispatcherID, dataRange common.DataRange) eventstore.EventIterator {

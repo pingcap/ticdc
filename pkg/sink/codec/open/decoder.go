@@ -19,6 +19,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -237,6 +238,12 @@ func buildColumns(
 		var flag uint64
 		// todo: we can extract more detailed type information here.
 		dataType := strings.ToLower(columnType.DatabaseTypeName())
+		// Snapshot query returns enum/set as their string representations, while open protocol uses
+		// integer/bitset values for these types. Downgrade enum/set to varchar to keep the
+		// assembled handle-key-only events decodable.
+		if strings.HasPrefix(dataType, "enum") || strings.HasPrefix(dataType, "set") {
+			dataType = "varchar"
+		}
 		if common.IsUnsignedMySQLType(dataType) {
 			flag |= unsignedFlag
 		}
@@ -415,9 +422,7 @@ func newTiColumns(rawColumns map[string]column) []*timodel.ColumnInfo {
 				col.SetCollate("utf8mb4_bin")
 			}
 		case mysql.TypeDuration:
-			// todo: how to find the correct decimal for the duration type ?
-			_, defaultDecimal := mysql.GetDefaultFieldLengthAndDecimal(col.GetType())
-			col.SetDecimal(defaultDecimal)
+			col.SetDecimal(tiTypes.MaxFsp)
 		case mysql.TypeEnum, mysql.TypeSet:
 			col.SetCharset("utf8mb4")
 			col.SetCollate("utf8mb4_bin")
@@ -588,6 +593,10 @@ func formatColumn(c column, ft types.FieldType) column {
 			data, err = strconv.ParseFloat(string(v), 64)
 		case json.Number:
 			data, err = v.Float64()
+		case float64:
+			data = v
+		case float32:
+			data = float64(v)
 		default:
 			log.Panic("invalid column value, please report a bug", zap.String("col", util.RedactAny(c)), zap.Any("type", v))
 		}
@@ -605,6 +614,8 @@ func formatColumn(c column, ft types.FieldType) column {
 			data = string(v)
 		case []uint8:
 			data = string(v)
+		case int64, uint64:
+			data = fmt.Sprintf("%v", v)
 		default:
 			log.Panic("invalid column value, please report a bug", zap.String("col", util.RedactAny(c)), zap.Any("type", v))
 		}
@@ -621,8 +632,10 @@ func formatColumn(c column, ft types.FieldType) column {
 		switch v := c.Value.(type) {
 		case json.Number:
 			value, err = v.Int64()
-		case []uint8:
-			value, err = strconv.ParseInt(string(v), 10, 64)
+		case int64:
+			value = v
+		case uint64:
+			value = int64(v)
 		default:
 			log.Panic("invalid column value for year", zap.String("value", util.RedactAny(c.Value)), zap.Any("type", v))
 		}
@@ -640,7 +653,7 @@ func formatColumn(c column, ft types.FieldType) column {
 		default:
 			log.Panic("invalid column value for date / datetime / timestamp", zap.String("value", util.RedactAny(c.Value)), zap.Any("type", v))
 		}
-		c.Value, err = tiTypes.ParseTime(tiTypes.DefaultStmtNoWarningContext, data, ft.GetType(), ft.GetDecimal())
+		c.Value, err = tiTypes.ParseTime(tiTypes.DefaultStmtNoWarningContext, data, ft.GetType(), tiTypes.MaxFsp)
 		if err != nil {
 			log.Panic("invalid column value for date / datetime / timestamp", zap.String("value", util.RedactAny(c.Value)), zap.Error(err))
 		}
@@ -661,7 +674,7 @@ func formatColumn(c column, ft types.FieldType) column {
 		default:
 			log.Panic("invalid column value for duration", zap.String("value", util.RedactAny(c.Value)), zap.Any("type", v))
 		}
-		c.Value, _, err = tiTypes.ParseDuration(tiTypes.DefaultStmtNoWarningContext, data, ft.GetDecimal())
+		c.Value, _, err = tiTypes.ParseDuration(tiTypes.DefaultStmtNoWarningContext, data, tiTypes.MaxFsp)
 		if err != nil {
 			log.Panic("invalid column value for duration", zap.String("value", util.RedactAny(c.Value)), zap.Error(err))
 		}

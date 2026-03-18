@@ -262,6 +262,7 @@ func TestMaintainerSchedule(t *testing.T) {
 	// The test intentionally avoids binding any fixed TCP ports so it can run
 	// reliably in sandboxed CI environments (and in parallel with other packages).
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	const tableSize = 100
 	tables := make([]commonEvent.Table, 0, tableSize)
@@ -330,7 +331,8 @@ func TestMaintainerSchedule(t *testing.T) {
 	maintainer.pushEvent(&Event{changefeedID: cfID, eventType: EventInit})
 
 	require.Eventually(t, func() bool {
-		return maintainer.ddlSpan.IsWorking() && maintainer.postBootstrapMsg == nil
+		// Avoid reading non-atomic internal fields from the test goroutine.
+		return maintainer.ddlSpan.IsWorking() && maintainer.initialized.Load()
 	}, 20*time.Second, 100*time.Millisecond)
 
 	require.Eventually(t, func() bool {
@@ -341,9 +343,15 @@ func TestMaintainerSchedule(t *testing.T) {
 		return maintainer.controller.spanController.GetTaskSizeByNodeID(n.ID) == tableSize
 	}, 20*time.Second, 100*time.Millisecond)
 
-	maintainer.onRemoveMaintainer(false, false)
 	require.Eventually(t, func() bool {
-		return maintainer.tryCloseChangefeed()
+		err := mc.SendCommand(messaging.NewSingleTargetMessage(
+			n.ID,
+			messaging.MaintainerManagerTopic,
+			&heartbeatpb.RemoveMaintainerRequest{Id: cfID.ToPB()},
+		))
+		require.NoError(t, err)
+		return maintainer.removed.Load() &&
+			maintainer.scheduleState.Load() == int32(heartbeatpb.ComponentState_Stopped)
 	}, 20*time.Second, 100*time.Millisecond)
 
 	cancel()
