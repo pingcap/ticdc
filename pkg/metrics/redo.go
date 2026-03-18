@@ -23,6 +23,22 @@ const (
 )
 
 var (
+	// RedoResolvedTsGauge records the resolved ts persisted by redo meta.
+	RedoResolvedTsGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: namespace,
+		Subsystem: subsystem,
+		Name:      "resolved_ts",
+		Help:      "Resolved ts persisted by redo meta",
+	}, []string{getKeyspaceLabel(), "changefeed"})
+
+	// RedoCheckpointTsGauge records the checkpoint ts persisted by redo meta.
+	RedoCheckpointTsGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: namespace,
+		Subsystem: subsystem,
+		Name:      "checkpoint_ts",
+		Help:      "Checkpoint ts persisted by redo meta",
+	}, []string{getKeyspaceLabel(), "changefeed"})
+
 	// RedoWriteBytesGauge records the total number of bytes written to redo log.
 	RedoWriteBytesGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: namespace,
@@ -87,6 +103,8 @@ var (
 )
 
 func initRedoMetrics(registry *prometheus.Registry) {
+	registry.MustRegister(RedoResolvedTsGauge)
+	registry.MustRegister(RedoCheckpointTsGauge)
 	registry.MustRegister(RedoFsyncDurationHistogram)
 	registry.MustRegister(RedoTotalRowsCountGauge)
 	registry.MustRegister(RedoWriteBytesGauge)
