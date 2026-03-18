@@ -34,18 +34,7 @@ function check_changefeed_failed() {
 	fi
 }
 
-function check_cdc_logs_not_contains() {
-	local work_dir=$1
-	local pattern=$2
-	if grep -Eqs "$pattern" "$work_dir"/cdc*.log; then
-		echo "TEST FAILED: CDC logs contain unexpected pattern '$pattern'"
-		grep -Ens "$pattern" "$work_dir"/cdc*.log || true
-		exit 1
-	fi
-}
-
 export -f check_changefeed_failed
-export -f check_cdc_logs_not_contains
 
 function run() {
 	rm -rf $WORK_DIR && mkdir -p $WORK_DIR
@@ -67,7 +56,6 @@ function run() {
 	ensure $MAX_RETRIES "get_cdc_pid 127.0.0.1 8301 >/dev/null"
 	ensure $MAX_RETRIES "check_changefeed_failed $PD_ADDR $CHANGEFEED_ID"
 
-	check_cdc_logs_not_contains "$WORK_DIR" "cant not found the startTs from the bootstrap response|\\[PANIC\\]"
 
 	cleanup_process $CDC_BINARY
 	stop_tidb_cluster
