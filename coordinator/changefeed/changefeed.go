@@ -37,8 +37,6 @@ type Changefeed struct {
 	sinkType common.SinkType
 	isNew    bool // only true when the changefeed is newly created or resumed by overwriteCheckpointTs
 
-	// infoConfigMu protects update/read snapshots of info/configBytes/isNew for add-maintainer messages.
-	infoConfigMu sync.RWMutex
 	// nodeIDMu protects nodeID
 	nodeIDMu sync.Mutex
 	nodeID   node.ID
@@ -105,14 +103,11 @@ func (c *Changefeed) GetInfo() *config.ChangeFeedInfo {
 }
 
 func (c *Changefeed) SetInfo(info *config.ChangeFeedInfo) {
+	c.info.Store(info)
 	bytes, err := json.Marshal(info)
 	if err != nil {
 		log.Panic("unable to marshal changefeed config", zap.Error(err))
 	}
-
-	c.infoConfigMu.Lock()
-	defer c.infoConfigMu.Unlock()
-	c.info.Store(info)
 	c.configBytes = bytes
 }
 
@@ -211,8 +206,6 @@ func (c *Changefeed) NeedCheckpointTsMessage() bool {
 }
 
 func (c *Changefeed) SetIsNew(isNew bool) {
-	c.infoConfigMu.Lock()
-	defer c.infoConfigMu.Unlock()
 	c.isNew = isNew
 }
 
@@ -259,25 +252,14 @@ func (c *Changefeed) GetLastSavedCheckPointTs() uint64 {
 }
 
 func (c *Changefeed) NewAddMaintainerMessage(server node.ID) *messaging.TargetMessage {
-	c.infoConfigMu.RLock()
-	configBytes := c.configBytes
-	isNew := c.isNew
-	info := c.info.Load()
-	c.infoConfigMu.RUnlock()
-
-	var keyspaceID uint32
-	if info != nil {
-		keyspaceID = info.KeyspaceID
-	}
-
 	return messaging.NewSingleTargetMessage(server,
 		messaging.MaintainerManagerTopic,
 		&heartbeatpb.AddMaintainerRequest{
 			Id:              c.ID.ToPB(),
 			CheckpointTs:    c.GetStatus().CheckpointTs,
-			Config:          configBytes,
-			IsNewChangefeed: isNew,
-			KeyspaceId:      keyspaceID,
+			Config:          c.configBytes,
+			IsNewChangefeed: c.isNew,
+			KeyspaceId:      c.GetKeyspaceID(),
 		})
 }
 

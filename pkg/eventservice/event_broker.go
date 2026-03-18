@@ -569,13 +569,27 @@ func (c *eventBroker) tickTableTriggerDispatchers(ctx context.Context) error {
 					return true
 				}
 				stat.receivedResolvedTs.Store(endTs)
+				if stat.enableSyncPoint {
+					c.fastForwardSyncPointIfNeeded(stat)
+					nextSyncPoint := stat.nextSyncPoint.Load()
+					if nextSyncPoint > 0 && endTs > nextSyncPoint {
+						stat.changefeedStat.tryEnterSyncPointPrepare(nextSyncPoint)
+						endTs = nextSyncPoint
+					}
+				}
+
 				for _, e := range ddlEvents {
+					if e.FinishedTs > endTs {
+						break
+					}
 					ep := &e
 					c.sendDDL(ctx, remoteID, ep, stat)
 				}
 				if endTs > startTs {
 					// After all the events are sent, we send the watermark to the dispatcher.
 					c.sendResolvedTs(stat, endTs)
+				} else {
+					c.nudgeSyncPointCommitIfNeeded(stat)
 				}
 				return true
 			})
