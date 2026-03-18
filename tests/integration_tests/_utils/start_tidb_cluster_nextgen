@@ -52,6 +52,8 @@ pd_config=
 tikv_config=
 retry_times=3
 multiple_upstream_pd="false"
+manual_keyspace_create="${KEYSPACE_MANUAL_CREATE:-false}"
+keyspace_create_id="${KEYSPACE_CREATE_ID:-1}"
 while [[ ${1} ]]; do
 	case "${1}" in
 	--workdir)
@@ -95,6 +97,69 @@ if [ -z "$OUT_DIR" ]; then
 	exit 1
 fi
 
+create_keyspace_by_id() {
+	local pd_host="$1"
+	local pd_port="$2"
+	local keyspace_name="$3"
+	local keyspace_id="$4"
+	local keyspace_config_json="$5"
+	local payload
+	local i=0
+	local meta
+	local state
+	local current_id
+
+	if ! payload=$(jq -nc \
+		--argjson id "${keyspace_id}" \
+		--arg name "${keyspace_name}" \
+		--arg config_json "${keyspace_config_json}" \
+		'{id:$id, name:$name, config:($config_json|fromjson)}'); then
+		echo "invalid keyspace config json: ${keyspace_config_json}" >&2
+		exit 1
+	fi
+
+	while [ "$i" -lt 60 ]; do
+		if curl --fail -sS -H "Content-Type: application/json" \
+			-X POST -d "${payload}" \
+			"http://${pd_host}:${pd_port}/pd/api/v2/keyspaces/id" >/dev/null; then
+			break
+		fi
+
+		meta=$(curl -sS "http://${pd_host}:${pd_port}/pd/api/v2/keyspaces/${keyspace_name}" || true)
+		if [ -n "${meta}" ]; then
+			current_id=$(echo "${meta}" | jq -r '.id // empty')
+			if [ "${current_id}" = "${keyspace_id}" ]; then
+				break
+			fi
+		fi
+
+		i=$((i + 1))
+		sleep 2
+	done
+
+	if [ "$i" -ge 60 ]; then
+		echo "failed to create keyspace ${keyspace_name} by id ${keyspace_id} on ${pd_host}:${pd_port}" >&2
+		exit 1
+	fi
+
+	i=0
+	while [ "$i" -lt 60 ]; do
+		meta=$(curl --fail -sS "http://${pd_host}:${pd_port}/pd/api/v2/keyspaces/${keyspace_name}" || true)
+		if [ -n "${meta}" ]; then
+			state=$(echo "${meta}" | jq -r '.state // empty')
+			if [ "${state}" = "ENABLED" ]; then
+				echo "keyspace created: $(echo "${meta}" | jq -c '{name:.name,id:.id,state:.state,encryption:.config.encryption}')"
+				return 0
+			fi
+		fi
+		i=$((i + 1))
+		sleep 2
+	done
+
+	echo "keyspace ${keyspace_name} is not enabled in time on ${pd_host}:${pd_port}" >&2
+	exit 1
+}
+
 # start minio
 echo "Starting MinIO server..."
 mkdir -p "$TEST_DATA_DIR/minio"
@@ -125,8 +190,29 @@ if [ -f "$pd_config" ]; then
 fi
 cat >>"$OUT_DIR/upstream-pd.toml" <<EOF
 [keyspace]
-pre-alloc = ["$KEYSPACE_NAME"]
+pre-alloc = [$(
+	if [ "${manual_keyspace_create}" = "true" ]; then
+		echo ""
+	else
+		echo "\"$KEYSPACE_NAME\""
+	fi
+)]
 EOF
+if [ -n "${KEYSPACE_WAIT_REGION_SPLIT:-}" ]; then
+	echo "wait-region-split = ${KEYSPACE_WAIT_REGION_SPLIT}" >>"$OUT_DIR/upstream-pd.toml"
+fi
+if [ -n "${KEYSPACE_WAIT_REGION_SPLIT_TIMEOUT:-}" ]; then
+	echo "wait-region-split-timeout = \"${KEYSPACE_WAIT_REGION_SPLIT_TIMEOUT}\"" >>"$OUT_DIR/upstream-pd.toml"
+fi
+if [ -n "${KEYSPACE_CHECK_REGION_SPLIT_INTERVAL:-}" ]; then
+	echo "check-region-split-interval = \"${KEYSPACE_CHECK_REGION_SPLIT_INTERVAL}\"" >>"$OUT_DIR/upstream-pd.toml"
+fi
+if [ -n "${KEYSPACE_DISABLE_RAW_KV_REGION_SPLIT:-}" ]; then
+	echo "disable-raw-kv-region-split = ${KEYSPACE_DISABLE_RAW_KV_REGION_SPLIT}" >>"$OUT_DIR/upstream-pd.toml"
+fi
+if [ -n "${KEYSPACE_ENABLE_GLOBAL_SAFE_POINT_V2:-}" ]; then
+	echo "enable-global-safe-point-v2 = ${KEYSPACE_ENABLE_GLOBAL_SAFE_POINT_V2}" >>"$OUT_DIR/upstream-pd.toml"
+fi
 
 touch "$OUT_DIR/downstream-pd.toml"
 if [ -f "$pd_config" ]; then
@@ -134,8 +220,29 @@ if [ -f "$pd_config" ]; then
 fi
 cat >>"$OUT_DIR/downstream-pd.toml" <<EOF
 [keyspace]
-pre-alloc = ["$KEYSPACE_NAME"]
+pre-alloc = [$(
+	if [ "${manual_keyspace_create}" = "true" ]; then
+		echo ""
+	else
+		echo "\"$KEYSPACE_NAME\""
+	fi
+)]
 EOF
+if [ -n "${KEYSPACE_WAIT_REGION_SPLIT:-}" ]; then
+	echo "wait-region-split = ${KEYSPACE_WAIT_REGION_SPLIT}" >>"$OUT_DIR/downstream-pd.toml"
+fi
+if [ -n "${KEYSPACE_WAIT_REGION_SPLIT_TIMEOUT:-}" ]; then
+	echo "wait-region-split-timeout = \"${KEYSPACE_WAIT_REGION_SPLIT_TIMEOUT}\"" >>"$OUT_DIR/downstream-pd.toml"
+fi
+if [ -n "${KEYSPACE_CHECK_REGION_SPLIT_INTERVAL:-}" ]; then
+	echo "check-region-split-interval = \"${KEYSPACE_CHECK_REGION_SPLIT_INTERVAL}\"" >>"$OUT_DIR/downstream-pd.toml"
+fi
+if [ -n "${KEYSPACE_DISABLE_RAW_KV_REGION_SPLIT:-}" ]; then
+	echo "disable-raw-kv-region-split = ${KEYSPACE_DISABLE_RAW_KV_REGION_SPLIT}" >>"$OUT_DIR/downstream-pd.toml"
+fi
+if [ -n "${KEYSPACE_ENABLE_GLOBAL_SAFE_POINT_V2:-}" ]; then
+	echo "enable-global-safe-point-v2 = ${KEYSPACE_ENABLE_GLOBAL_SAFE_POINT_V2}" >>"$OUT_DIR/downstream-pd.toml"
+fi
 
 echo "Starting upstream pd..."
 pd-server --version
@@ -341,6 +448,19 @@ tikv-worker --addr "$DOWN_TIKV_WORKER_HOST:$DOWN_TIKV_WORKER_PORT" \
 
 check_port_available "$UP_TIKV_WORKER_HOST" "$UP_TIKV_WORKER_PORT" "Upstream TiKV-Worker is not ready yet"
 check_port_available "$DOWN_TIKV_WORKER_HOST" "$DOWN_TIKV_WORKER_PORT" "Downstream TiKV-Worker is not ready yet"
+
+if [ "${manual_keyspace_create}" = "true" ]; then
+	upstream_keyspace_config_json="${UPSTREAM_KEYSPACE_CREATE_CONFIG_JSON:-}"
+	downstream_keyspace_config_json="${DOWNSTREAM_KEYSPACE_CREATE_CONFIG_JSON:-}"
+	if [ -z "${upstream_keyspace_config_json}" ]; then
+		upstream_keyspace_config_json='{}'
+	fi
+	if [ -z "${downstream_keyspace_config_json}" ]; then
+		downstream_keyspace_config_json='{}'
+	fi
+	create_keyspace_by_id "$UP_PD_HOST_1" "$UP_PD_PORT_1" "$KEYSPACE_NAME" "$keyspace_create_id" "$upstream_keyspace_config_json"
+	create_keyspace_by_id "$DOWN_PD_HOST" "$DOWN_PD_PORT" "$KEYSPACE_NAME" "$keyspace_create_id" "$downstream_keyspace_config_json"
+fi
 
 ####################start TiDB####################
 # TODO: replace this fixed delay with an explicit keyspace readiness check.

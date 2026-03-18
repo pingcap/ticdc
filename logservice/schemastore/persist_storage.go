@@ -27,8 +27,10 @@ import (
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/encryption"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
@@ -99,6 +101,9 @@ type persistentStorage struct {
 
 	// tableID -> total registered count
 	tableRegisteredCount map[int64]int
+
+	// encryptionManager for encrypting/decrypting data (optional)
+	encryptionManager encryption.EncryptionManager
 }
 
 func exists(path string) bool {
@@ -144,6 +149,9 @@ func newPersistentStorage(
 	storage kv.Storage,
 	gcSafePoint uint64,
 ) (*persistentStorage, error) {
+	// Try to get encryption manager from appcontext (optional)
+	encMgr, _ := appcontext.TryGetService[encryption.EncryptionManager]("EncryptionManager")
+
 	dataStorage := &persistentStorage{
 		rootDir:                root,
 		keyspaceID:             keyspaceID,
@@ -156,6 +164,7 @@ func newPersistentStorage(
 		tableTriggerDDLHistory: make([]uint64, 0),
 		tableInfoStoreMap:      make(map[int64]*versionedTableInfoStore),
 		tableRegisteredCount:   make(map[int64]int),
+		encryptionManager:      encMgr,
 	}
 	dataStorage.ctx, dataStorage.cancel = context.WithCancel(ctx)
 	err := dataStorage.initialize(gcSafePoint)
@@ -263,7 +272,9 @@ func (p *persistentStorage) initializeFromDisk() {
 		p.upperBound.FinishedDDLTs,
 		p.databaseMap,
 		p.tableMap,
-		p.partitionMap); err != nil {
+		p.partitionMap,
+		p.encryptionManager,
+		p.keyspaceID); err != nil {
 		log.Fatal("fail to initialize from disk")
 	}
 }
@@ -304,7 +315,7 @@ func (p *persistentStorage) getAllPhysicalTables(snapTs uint64, tableFilter filt
 		log.Debug("getAllPhysicalTables finish",
 			zap.Any("duration(s)", time.Since(start).Seconds()))
 	}()
-	return loadAllPhysicalTablesAtTs(storageSnap, gcTs, snapTs, tableFilter)
+	return loadAllPhysicalTablesAtTs(storageSnap, gcTs, snapTs, tableFilter, p.encryptionManager, p.keyspaceID)
 }
 
 // only return when table info is initialized
@@ -429,7 +440,7 @@ func (p *persistentStorage) fetchTableDDLEvents(dispatcherID common.DispatcherID
 	// TODO: if the first event is a create table ddl, return error?
 	events := make([]commonEvent.DDLEvent, 0, len(allTargetTs))
 	for _, ts := range allTargetTs {
-		rawEvent := readPersistedDDLEvent(storageSnap, ts)
+		rawEvent := readPersistedDDLEventWithEncryption(storageSnap, ts, p.encryptionManager, p.keyspaceID)
 		ddlEvent, ok, err := buildDDLEvent(&rawEvent, tableFilter, tableID)
 		if err != nil {
 			return nil, errors.Trace(err)
@@ -499,7 +510,7 @@ func (p *persistentStorage) fetchTableTriggerDDLEvents(tableFilter filter.Filter
 		}
 		p.mu.RUnlock()
 		for _, ts := range allTargetTs {
-			rawEvent := readPersistedDDLEvent(storageSnap, ts)
+			rawEvent := readPersistedDDLEventWithEncryption(storageSnap, ts, p.encryptionManager, p.keyspaceID)
 			// the tableID of buildDDLEvent is not used in this function, set it to 0
 			ddlEvent, ok, err := buildDDLEvent(&rawEvent, tableFilter, 0)
 			if err != nil {
@@ -534,7 +545,7 @@ func (p *persistentStorage) buildVersionedTableInfoStore(store *versionedTableIn
 	}
 
 	for _, version := range allDDLFinishedTs {
-		ddlEvent := readPersistedDDLEvent(storageSnap, version)
+		ddlEvent := readPersistedDDLEventWithEncryption(storageSnap, version, p.encryptionManager, p.keyspaceID)
 		store.applyDDLFromPersistStorage(&ddlEvent)
 	}
 	store.setTableInfoInitialized()
@@ -733,7 +744,10 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 
 	// Note: need write ddl event to disk before update ddl history,
 	// because other goroutines may read ddl events from disk according to ddl history
-	writePersistedDDLEvent(p.db, &ddlEvent)
+	err := writePersistedDDLEventWithEncryption(p.db, &ddlEvent, p.encryptionManager, p.keyspaceID)
+	if err != nil {
+		return errors.Trace(err)
+	}
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
