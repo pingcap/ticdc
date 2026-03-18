@@ -78,6 +78,20 @@ func TestNewConfigInitializesFileBackendDirForExternalStorage(t *testing.T) {
 		cfg.Dir())
 }
 
+func TestNewConfigLeavesDirEmptyForRemoteMemoryBackend(t *testing.T) {
+	t.Parallel()
+
+	changefeedID := common.NewChangeFeedIDWithName("test-cf", common.DefaultKeyspaceName)
+	cfg, err := NewConfig(changefeedID, writertest.NewConsistentConfig("s3://bucket/prefix"))
+	require.NoError(t, err)
+
+	require.NotNil(t, cfg.URI())
+	require.Equal(t, "s3", cfg.URI().Scheme)
+	require.True(t, cfg.UseExternalStorage())
+	require.False(t, cfg.UseFileBackend())
+	require.Empty(t, cfg.Dir())
+}
+
 func TestNewConfigReturnsErrorForInvalidStorageURI(t *testing.T) {
 	t.Parallel()
 

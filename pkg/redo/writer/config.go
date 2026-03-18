@@ -28,17 +28,23 @@ import (
 
 // Config is the config for redo log writer.
 type Config struct {
-	captureID    config.CaptureID
+	// Shared by file and memory backends for log file naming.
+	captureID config.CaptureID
+	// Shared by file and memory backends for metrics and log file naming.
 	changefeedID common.ChangeFeedID
 
-	uri               *url.URL
+	// Shared by factory and both backends to initialize storage.
+	uri *url.URL
+	// Shared by file and memory backends as the rotate threshold.
 	maxLogSizeInBytes int64
 
+	// Used by the factory to choose the file backend.
 	useFileBackend bool
 
+	// Shared by file and memory backends as the flush ticker interval.
 	flushIntervalInMs int64
 
-	// the number of encoding concurrency.
+	// Used only by the memory backend for encoding workers.
 	encodingWorkerNum int
 
 	// Shared by file and memory backends for worker fanout sizing.
@@ -80,6 +86,10 @@ func NewConfig(changefeedID common.ChangeFeedID, consistentCfg *config.Consisten
 	return cfg, nil
 }
 
+// newWriterDir returns the local working directory only when a file writer will
+// actually use it. Remote memory backend writes do not need a local directory.
+// The file:// case still returns uri.Path because reader-side sortAndWriteFile
+// constructs a file writer directly from NewConfig.
 func newWriterDir(cfg *Config) string {
 	if cfg == nil || cfg.uri == nil {
 		return ""
