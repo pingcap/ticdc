@@ -226,6 +226,10 @@ func (m *Manager) onCoordinatorBootstrapRequest(msg *messaging.TargetMessage) {
 }
 
 func (m *Manager) onAddMaintainerRequest(req *heartbeatpb.AddMaintainerRequest) *heartbeatpb.MaintainerStatus {
+	// Note: We intentionally allow maintainer placement while the node is draining.
+	// Draining is used to stop NEW scheduling decisions targeting this node, but in-flight
+	// scheduling requests decided before draining should still be able to complete.
+	// We only hard-block new maintainers when the node is stopping.
 	if m.node.liveness != nil && m.node.liveness.Load() == api.LivenessCaptureStopping {
 		log.Info("ignore add maintainer request, node is stopping",
 			zap.Stringer("changefeedID", common.NewChangefeedIDFromPB(req.Id)),

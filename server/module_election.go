@@ -112,10 +112,13 @@ func (e *elector) campaignCoordinator(ctx context.Context) error {
 			return errors.ErrCaptureSuicide.GenWithStackByArgs()
 		}
 		// After campaign check liveness again.
-		// It is possible it becomes the coordinator right after receiving SIGTERM.
-		if e.svr.liveness.Load() == api.LivenessCaptureStopping {
-			// If the server is stopping, resign actively.
-			log.Info("resign coordinator actively, liveness is stopping")
+		// It is possible it becomes the coordinator right after receiving SIGTERM,
+		// or after entering the draining phase.
+		if liveness := e.svr.liveness.Load(); liveness != api.LivenessCaptureAlive {
+			// If the server is not alive, resign actively.
+			log.Info("resign coordinator actively, node is not alive",
+				zap.String("nodeID", nodeID),
+				zap.String("liveness", liveness.String()))
 			if resignErr := e.resign(ctx); resignErr != nil {
 				log.Warn("resign coordinator actively failed", zap.String("nodeID", nodeID), zap.Error(resignErr))
 				return errors.Trace(err)
@@ -229,10 +232,13 @@ func (e *elector) campaignLogCoordinator(ctx context.Context) error {
 			return errors.ErrCaptureSuicide.GenWithStackByArgs()
 		}
 		// After campaign check liveness again.
-		// It is possible it becomes the coordinator right after receiving SIGTERM.
-		if e.svr.liveness.Load() == api.LivenessCaptureStopping {
-			// If the server is stopping, resign actively.
-			log.Info("resign log coordinator actively, liveness is stopping")
+		// It is possible it becomes the coordinator right after receiving SIGTERM,
+		// or after entering the draining phase.
+		if liveness := e.svr.liveness.Load(); liveness != api.LivenessCaptureAlive {
+			// If the server is not alive, resign actively.
+			log.Info("resign log coordinator actively, node is not alive",
+				zap.String("nodeID", nodeID),
+				zap.String("liveness", liveness.String()))
 			if resignErr := e.resignLogCoordinator(); resignErr != nil {
 				log.Warn("resign log coordinator actively failed",
 					zap.String("nodeID", nodeID), zap.Error(resignErr))

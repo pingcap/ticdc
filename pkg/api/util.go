@@ -167,8 +167,16 @@ const (
 // Only step-by-step upgrades are allowed:
 // Alive -> Draining -> Stopping.
 func (l *Liveness) Store(v Liveness) bool {
+	if v < LivenessCaptureAlive || v > LivenessCaptureStopping {
+		return false
+	}
 	for {
 		old := l.Load()
+		if old < LivenessCaptureAlive || old > LivenessCaptureStopping {
+			// Defensive: if the stored value is out of the expected enum range,
+			// reject transitions to avoid breaking the monotonic state machine.
+			return false
+		}
 		if v <= old {
 			return false
 		}
@@ -191,7 +199,7 @@ func (l *Liveness) Load() Liveness {
 }
 
 func (l *Liveness) String() string {
-	switch *l {
+	switch l.Load() {
 	case LivenessCaptureAlive:
 		return "Alive"
 	case LivenessCaptureDraining:

@@ -44,3 +44,15 @@ func TestLivenessStoreDisallowSkip(t *testing.T) {
 	require.False(t, l.Store(LivenessCaptureStopping))
 	require.Equal(t, LivenessCaptureAlive, l.Load())
 }
+
+func TestLivenessStoreRejectInvalidValue(t *testing.T) {
+	var l Liveness
+	require.False(t, l.Store(Liveness(3)))
+
+	require.True(t, l.Store(LivenessCaptureDraining))
+	require.True(t, l.Store(LivenessCaptureStopping))
+
+	// Reject values outside the defined enum range.
+	require.False(t, l.Store(Liveness(3)))
+	require.Equal(t, LivenessCaptureStopping, l.Load())
+}
