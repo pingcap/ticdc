@@ -64,7 +64,7 @@ func New(ctx context.Context, cfg *config.ChangefeedConfig, changefeedID common.
 	if cfg.SinkConfig != nil && len(cfg.SinkConfig.DispatchRules) > 0 {
 		router, err = util.NewRouterFromDispatchRules(cfg.CaseSensitive, cfg.SinkConfig.DispatchRules)
 		if err != nil {
-			return nil, errors.Trace(err)
+			return nil, err
 		}
 	}
 

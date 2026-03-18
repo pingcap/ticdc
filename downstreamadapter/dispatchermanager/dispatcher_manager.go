@@ -231,7 +231,6 @@ func NewDispatcherManager(
 		}
 	}
 
-	// Create sink (router is built internally from config)
 	var err error
 	manager.sink, err = sink.New(ctx, manager.config, manager.changefeedID)
 	if err != nil {
@@ -247,8 +246,6 @@ func NewDispatcherManager(
 		outputRawChangeEvent = manager.config.SinkConfig.KafkaConfig.GetOutputRawChangeEvent()
 	}
 
-	// Create shared info for all dispatchers.
-	// Get router from sink to share with dispatchers for DML routing.
 	manager.sharedInfo = dispatcher.NewSharedInfo(
 		manager.changefeedID,
 		manager.config.TimeZone,

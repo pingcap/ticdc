@@ -1,8 +1,4 @@
-<<<<<<< HEAD
-// Copyright 2025 PingCAP, Inc.
-=======
 // Copyright 2026 PingCAP, Inc.
->>>>>>> master
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,9 +14,13 @@
 package common
 
 import (
-<<<<<<< HEAD
+	"encoding/binary"
 	"testing"
 
+	"github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser/ast"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
+	"github.com/pingcap/tidb/pkg/types"
 	"github.com/stretchr/testify/require"
 )
 
@@ -94,16 +94,7 @@ func TestCloneWithRouting(t *testing.T) {
 		// Clones should be independent
 		require.NotSame(t, cloned1, cloned2)
 	})
-=======
-	"encoding/binary"
-	"testing"
-
-	"github.com/pingcap/tidb/pkg/meta/model"
-	"github.com/pingcap/tidb/pkg/parser/ast"
-	"github.com/pingcap/tidb/pkg/parser/mysql"
-	"github.com/pingcap/tidb/pkg/types"
-	"github.com/stretchr/testify/require"
-)
+}
 
 func TestUnmarshalJSONToTableInfoInvalidData(t *testing.T) {
 	t.Parallel()
@@ -219,5 +210,4 @@ func TestUnquoteName(t *testing.T) {
 			require.Equal(t, tc.expected, UnquoteName(tc.input))
 		})
 	}
->>>>>>> master
 }
