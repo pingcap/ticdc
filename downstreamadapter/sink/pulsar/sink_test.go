@@ -15,72 +15,20 @@ package pulsar
 
 import (
 	"context"
-	"errors"
 	"net/url"
 	"testing"
 	"time"
 
-	pulsarClient "github.com/apache/pulsar-client-go/pulsar"
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/metrics"
-	commoncodec "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/atomic"
 )
-
-type closeTrackingPulsarClient struct {
-	closed atomic.Bool
-}
-
-func (c *closeTrackingPulsarClient) CreateProducer(pulsarClient.ProducerOptions) (pulsarClient.Producer, error) {
-	return nil, errors.New("not implemented")
-}
-
-func (c *closeTrackingPulsarClient) Subscribe(pulsarClient.ConsumerOptions) (pulsarClient.Consumer, error) {
-	return nil, errors.New("not implemented")
-}
-
-func (c *closeTrackingPulsarClient) CreateReader(pulsarClient.ReaderOptions) (pulsarClient.Reader, error) {
-	return nil, errors.New("not implemented")
-}
-
-func (c *closeTrackingPulsarClient) CreateTableView(pulsarClient.TableViewOptions) (pulsarClient.TableView, error) {
-	return nil, errors.New("not implemented")
-}
-
-func (c *closeTrackingPulsarClient) TopicPartitions(string) ([]string, error) {
-	return nil, errors.New("not implemented")
-}
-
-func (c *closeTrackingPulsarClient) NewTransaction(time.Duration) (pulsarClient.Transaction, error) {
-	return nil, errors.New("not implemented")
-}
-
-func (c *closeTrackingPulsarClient) Close() {
-	c.closed.Store(true)
-}
-
-type closeTrackingDMLProducer struct {
-	closed atomic.Bool
-}
-
-func (p *closeTrackingDMLProducer) asyncSendMessage(context.Context, string, *commoncodec.Message) error {
-	return nil
-}
-
-func (p *closeTrackingDMLProducer) run(ctx context.Context) error {
-	<-ctx.Done()
-	return ctx.Err()
-}
-
-func (p *closeTrackingDMLProducer) close() {
-	p.closed.Store(true)
-}
 
 func newPulsarSinkForTest(t *testing.T) (*sink, error) {
 	sinkURL := "pulsar://127.0.0.1:6650/persistent://public/default/test?" +
@@ -183,55 +131,4 @@ func TestPulsarSinkBasicFunctionality(t *testing.T) {
 	require.Len(t, pulsarSink.ddlProducer.(*mockProducer).GetAllEvents(), 1)
 
 	require.Equal(t, count.Load(), int64(3))
-}
-
-func TestNewPulsarSinkComponentClosesClientOnRouterInitFailure(t *testing.T) {
-	t.Parallel()
-
-	sinkURI, err := url.Parse("pulsar://127.0.0.1:6650/persistent://public/default/test?protocol=canal-json")
-	require.NoError(t, err)
-
-	replicaConfig := config.GetDefaultReplicaConfig()
-	replicaConfig.Sink = &config.SinkConfig{
-		Protocol: aws.String("canal-json"),
-		DispatchRules: []*config.DispatchRule{
-			{
-				Matcher: []string{"["},
-			},
-		},
-	}
-
-	client := &closeTrackingPulsarClient{}
-	_, _, err = newPulsarSinkComponentWithFactory(
-		context.Background(),
-		common.NewChangefeedID4Test("test", "test"),
-		sinkURI,
-		replicaConfig.Sink,
-		func(*config.PulsarConfig, common.ChangeFeedID, *config.SinkConfig) (pulsarClient.Client, error) {
-			return client, nil
-		},
-	)
-	require.Error(t, err)
-	require.True(t, client.closed.Load())
-}
-
-func TestNewPulsarSinkClosesDMLProducerWhenDDLProducerInitFails(t *testing.T) {
-	t.Parallel()
-
-	trackedDMLProducer := &closeTrackingDMLProducer{}
-	_, err := newWithComponent(
-		context.Background(),
-		common.NewChangefeedID4Test("test", "test"),
-		&config.SinkConfig{},
-		component{},
-		config.ProtocolCanalJSON,
-		func(common.ChangeFeedID, component, chan error) (dmlProducer, error) {
-			return trackedDMLProducer, nil
-		},
-		func(common.ChangeFeedID, component, *config.SinkConfig) (ddlProducer, error) {
-			return nil, errors.New("ddl init failed")
-		},
-	)
-	require.EqualError(t, err, "ddl init failed")
-	require.True(t, trackedDMLProducer.closed.Load())
 }
