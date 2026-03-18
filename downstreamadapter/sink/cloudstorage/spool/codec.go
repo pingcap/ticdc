@@ -73,7 +73,7 @@ func deserializeMessages(data []byte) ([]*common.Message, error) {
 	offset += serializedMessageCountBytes
 
 	result := make([]*common.Message, 0, count)
-	for i := uint32(0); i < count; i++ {
+	for range count {
 		if len(data[offset:]) < serializedMessageHeaderBytes {
 			return nil, errors.WrapError(errors.ErrDecodeFailed, io.ErrUnexpectedEOF)
 		}

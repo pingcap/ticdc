@@ -355,6 +355,8 @@ func (d *writer) genAndDispatchTask(ctx context.Context) error {
 			default:
 			}
 		case task, ok := <-d.inputCh.Out():
+			// todo: send those tasks to the to be flushed, is it necessary,
+			// will they be flushed ?
 			if !ok {
 				if len(batchedTask.batch) == 0 {
 					return nil

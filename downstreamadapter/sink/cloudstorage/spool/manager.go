@@ -273,7 +273,7 @@ func isSegmentFile(entry os.DirEntry) bool {
 // Enqueue appends encoded messages to spool.
 func (s *Manager) Enqueue(
 	msgs []*common.Message,
-	onEnqueued func(),
+	postEnqueue func(),
 ) (*Entry, error) {
 	if len(msgs) == 0 {
 		return &Entry{}, nil
@@ -284,6 +284,7 @@ func (s *Manager) Enqueue(
 	}
 	for _, msg := range msgs {
 		entry.accountingBytes += int64(serializedMessageHeaderBytes + len(msg.Key) + len(msg.Value))
+		// todo: why only counter the value part ?
 		entry.fileBytes += uint64(len(msg.Value))
 	}
 
@@ -316,7 +317,7 @@ func (s *Manager) Enqueue(
 		entry.memoryMsgs = msgs
 	}
 	entry.callbacks = detachCallbacks(msgs)
-	callbacksToRun = s.quota.reserve(entry.accountingBytes, shouldSpill, onEnqueued)
+	callbacksToRun = s.quota.reserve(entry.accountingBytes, shouldSpill, postEnqueue)
 
 	return entry, nil
 }

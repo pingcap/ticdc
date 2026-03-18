@@ -21,16 +21,27 @@ import (
 )
 
 type quotaController struct {
+	// These thresholds are all derived from one total budget.
+	// The current design uses them as soft-control signals:
+	// memoryQuotaBytes decides when new entries spill to disk, while the
+	// high/low watermarks decide when to suppress or resume wake callbacks.
 	memoryQuotaBytes   int64
 	highWatermarkBytes int64
 	lowWatermarkBytes  int64
 
+	// memoryBytes and diskBytes track current staged bytes held by spool.
+	// They are accounting values for tiering and wake control, not hard limits.
 	memoryBytes int64
 	diskBytes   int64
 
+	// wakeSuppressed and pendingWake implement hysteresis for onEnqueued:
+	// above the high watermark, new callbacks are delayed; once usage drops
+	// below the low watermark, the delayed callbacks are released in batch.
 	wakeSuppressed bool
 	pendingWake    []func()
 
+	// These metrics expose the current soft-control state so operators can see
+	// where buffered bytes live and whether wake suppression is happening.
 	metricMemoryBytes    prometheus.Gauge
 	metricDiskBytes      prometheus.Gauge
 	metricTotalBytes     prometheus.Gauge
@@ -65,6 +76,9 @@ func newQuotaController(
 	return controller
 }
 
+// validateOptions checks the ratios needed by quotaController's soft-control
+// model. The controller assumes one total budget that is split into a memory
+// tier plus high/low watermarks for wake suppression.
 func validateOptions(options *Options) error {
 	if options.SegmentBytes <= 0 {
 		return errors.ErrStorageSinkInvalidConfig.GenWithStack(
@@ -106,10 +120,17 @@ func validateOptions(options *Options) error {
 	return nil
 }
 
+// shouldSpill decides whether a new entry still fits in the in-memory tier.
+// This is intentionally a memory-tier decision only; it does not enforce a
+// hard total quota and does not reject new writes.
 func (q *quotaController) shouldSpill(entryBytes int64) bool {
 	return q.memoryBytes+entryBytes > q.memoryQuotaBytes
 }
 
+// reserve records a newly accepted entry and returns callbacks that may run
+// immediately. If total staged bytes cross the high watermark, reserve enters
+// wake suppression and queues later onEnqueued callbacks instead of running
+// them inline.
 func (q *quotaController) reserve(
 	entryBytes int64,
 	spilled bool,
@@ -125,24 +146,21 @@ func (q *quotaController) reserve(
 		q.wakeSuppressed = true
 	}
 
-	if q.wakeSuppressed {
-		if onEnqueued == nil {
-			q.updateMetrics()
-			return nil
-		}
+	defer q.updateMetrics()
+	if q.wakeSuppressed && onEnqueued != nil {
 		q.pendingWake = append(q.pendingWake, onEnqueued)
 		q.metricWakeSuppressed.Inc()
-		q.updateMetrics()
 		return nil
 	}
 	if onEnqueued != nil {
-		q.updateMetrics()
 		return []func(){onEnqueued}
 	}
-	q.updateMetrics()
 	return nil
 }
 
+// release records that an entry has been fully consumed or discarded. If the
+// controller was suppressing wake callbacks, release only resumes them after
+// total staged bytes fall back to the low watermark or below.
 func (q *quotaController) release(entryBytes int64, spilled bool) []func() {
 	if spilled {
 		q.diskBytes -= entryBytes
@@ -172,6 +190,7 @@ func (q *quotaController) release(entryBytes int64, spilled bool) []func() {
 	return callbacks
 }
 
+// reset clears runtime accounting when the spool is shutting down.
 func (q *quotaController) reset() {
 	q.memoryBytes = 0
 	q.diskBytes = 0
@@ -180,6 +199,7 @@ func (q *quotaController) reset() {
 	q.updateMetrics()
 }
 
+// deleteMetrics removes per-changefeed label values owned by this controller.
 func (q *quotaController) deleteMetrics() {
 	metrics.CloudStorageSpoolMemoryBytesGauge.DeleteLabelValues(q.metricKeyspace, q.metricChangefeedLabel)
 	metrics.CloudStorageSpoolDiskBytesGauge.DeleteLabelValues(q.metricKeyspace, q.metricChangefeedLabel)
@@ -187,6 +207,7 @@ func (q *quotaController) deleteMetrics() {
 	metrics.CloudStorageWakeSuppressedCounter.DeleteLabelValues(q.metricKeyspace, q.metricChangefeedLabel)
 }
 
+// updateMetrics publishes the controller's current accounting state.
 func (q *quotaController) updateMetrics() {
 	q.metricMemoryBytes.Set(float64(q.memoryBytes))
 	q.metricDiskBytes.Set(float64(q.diskBytes))
