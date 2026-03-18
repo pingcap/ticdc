@@ -17,7 +17,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/pingcap/errors"
@@ -142,63 +141,5 @@ func WriteData(w http.ResponseWriter, data interface{}) {
 	_, err = w.Write(js)
 	if err != nil {
 		log.Error("fail to write data", zap.Error(err))
-	}
-}
-
-// Liveness represents the lifecycle state of a node in the cluster.
-//
-// It is designed to be monotonic and only allows the following transitions:
-// Alive -> Draining -> Stopping.
-type Liveness int32
-
-const (
-	// LivenessCaptureAlive means the capture is alive, and ready to serve.
-	LivenessCaptureAlive Liveness = 0
-	// LivenessCaptureDraining means the capture is in a pre-stop phase where it should
-	// not accept new scheduling destinations, but may still finish in-flight work.
-	LivenessCaptureDraining Liveness = 1
-	// LivenessCaptureStopping means the capture is in the process of graceful shutdown.
-	LivenessCaptureStopping Liveness = 2
-)
-
-// Store upgrades the liveness to the given state.
-// It returns true only when the underlying state is changed.
-//
-// Only step-by-step upgrades are allowed:
-// Alive -> Draining -> Stopping.
-func (l *Liveness) Store(v Liveness) bool {
-	for {
-		old := l.Load()
-		if v <= old {
-			return false
-		}
-		if old == LivenessCaptureAlive && v != LivenessCaptureDraining {
-			return false
-		}
-		if old == LivenessCaptureDraining && v != LivenessCaptureStopping {
-			return false
-		}
-
-		if atomic.CompareAndSwapInt32((*int32)(l), int32(old), int32(v)) {
-			return true
-		}
-	}
-}
-
-// Load the liveness.
-func (l *Liveness) Load() Liveness {
-	return Liveness(atomic.LoadInt32((*int32)(l)))
-}
-
-func (l *Liveness) String() string {
-	switch *l {
-	case LivenessCaptureAlive:
-		return "Alive"
-	case LivenessCaptureDraining:
-		return "Draining"
-	case LivenessCaptureStopping:
-		return "Stopping"
-	default:
-		return "Unknown"
 	}
 }

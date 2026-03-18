@@ -88,3 +88,40 @@ func TestDrainControllerRemoveNodeClearsState(t *testing.T) {
 	c.mu.Unlock()
 	require.False(t, ok)
 }
+
+func TestDrainControllerResetObservedStateForNewEpoch(t *testing.T) {
+	mc := messaging.NewMockMessageCenter()
+	c := NewController(mc)
+
+	target := node.ID("n1")
+	c.ObserveHeartbeat(target, &heartbeatpb.NodeHeartbeat{
+		Liveness:  heartbeatpb.NodeLiveness_DRAINING,
+		NodeEpoch: 42,
+	})
+
+	c.mu.Lock()
+	st := c.ensureNodeStateLocked(target)
+	st.lastDrainCmdSentAt = time.Now()
+	st.lastStopCmdSentAt = time.Now()
+	c.mu.Unlock()
+
+	c.ObserveHeartbeat(target, &heartbeatpb.NodeHeartbeat{
+		Liveness:  heartbeatpb.NodeLiveness_ALIVE,
+		NodeEpoch: 43,
+	})
+
+	drainRequested, drainingObserved, stoppingObserved := c.GetStatus(target)
+	require.True(t, drainRequested)
+	require.False(t, drainingObserved)
+	require.False(t, stoppingObserved)
+
+	epoch, ok := c.GetNodeEpoch(target)
+	require.True(t, ok)
+	require.Equal(t, uint64(43), epoch)
+
+	c.mu.Lock()
+	st = c.ensureNodeStateLocked(target)
+	require.True(t, st.lastDrainCmdSentAt.IsZero())
+	require.True(t, st.lastStopCmdSentAt.IsZero())
+	c.mu.Unlock()
+}

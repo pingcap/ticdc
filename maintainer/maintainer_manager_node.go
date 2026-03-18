@@ -19,7 +19,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
-	"github.com/pingcap/ticdc/pkg/api"
+	"github.com/pingcap/ticdc/pkg/liveness"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"go.uber.org/zap"
@@ -33,7 +33,7 @@ const nodeHeartbeatInterval = 5 * time.Second
 type managerNodeState struct {
 	// liveness points to the server-wide node liveness state shared with other
 	// modules such as the elector and coordinator command handlers.
-	liveness *api.Liveness
+	liveness *liveness.Liveness
 	// nodeEpoch identifies the current process lifetime. Coordinator commands
 	// must match it so stale requests from a previous process instance are ignored.
 	nodeEpoch uint64
@@ -53,9 +53,9 @@ type managerNodeState struct {
 }
 
 // newManagerNodeState initializes the node-scoped state owned by a manager.
-func newManagerNodeState(liveness *api.Liveness) *managerNodeState {
+func newManagerNodeState(nodeLiveness *liveness.Liveness) *managerNodeState {
 	return &managerNodeState{
-		liveness:  liveness,
+		liveness:  nodeLiveness,
 		nodeEpoch: newNodeEpoch(),
 	}
 }
@@ -82,10 +82,17 @@ func (m *Manager) sendNodeHeartbeat(force bool) {
 	if !force && now.Sub(m.node.lastNodeHeartbeatSentAt) < nodeHeartbeatInterval {
 		return
 	}
+	// Update before sending so a transient send failure will not cause
+	// frequent retries and log spam on the 200ms tick.
+	m.node.lastNodeHeartbeatSentAt = now
 
 	drainTarget, drainEpoch := m.getDispatcherDrainTarget()
+	currentLiveness := liveness.CaptureAlive
+	if m.node.liveness != nil {
+		currentLiveness = m.node.liveness.Load()
+	}
 	hb := &heartbeatpb.NodeHeartbeat{
-		Liveness:  m.toNodeLivenessPB(m.node.liveness.Load()),
+		Liveness:  m.toNodeLivenessPB(currentLiveness),
 		NodeEpoch: m.node.nodeEpoch,
 		// Report the manager-level dispatcher drain target so coordinator can
 		// confirm both activation and clearing even when no maintainers exist.
@@ -100,7 +107,6 @@ func (m *Manager) sendNodeHeartbeat(force bool) {
 			zap.Error(err))
 		return
 	}
-	m.node.lastNodeHeartbeatSentAt = now
 }
 
 // onSetNodeLivenessRequest applies a coordinator-driven liveness transition if
@@ -115,17 +121,20 @@ func (m *Manager) onSetNodeLivenessRequest(msg *messaging.TargetMessage) {
 	}
 
 	req := msg.Message[0].(*heartbeatpb.SetNodeLivenessRequest)
+	current := liveness.CaptureAlive
+	if m.node.liveness != nil {
+		current = m.node.liveness.Load()
+	}
 	if req.NodeEpoch != m.node.nodeEpoch {
 		log.Info("reject set node liveness request due to epoch mismatch",
 			zap.Stringer("nodeID", m.nodeInfo.ID),
 			zap.Uint64("localEpoch", m.node.nodeEpoch),
 			zap.Uint64("requestEpoch", req.NodeEpoch))
-		m.sendSetNodeLivenessResponse(m.node.liveness.Load())
+		m.sendSetNodeLivenessResponse(current)
 		return
 	}
 
 	target := m.fromNodeLivenessPB(req.Target)
-	current := m.node.liveness.Load()
 	if target > current {
 		if m.node.liveness.Store(target) {
 			log.Info("node liveness transition applied",
@@ -206,7 +215,7 @@ func (n *managerNodeState) tryUpdateDispatcherDrainTarget(target node.ID, epoch 
 
 // sendSetNodeLivenessResponse returns the liveness currently applied by this
 // process together with the local process epoch.
-func (m *Manager) sendSetNodeLivenessResponse(applied api.Liveness) {
+func (m *Manager) sendSetNodeLivenessResponse(applied liveness.Liveness) {
 	resp := &heartbeatpb.SetNodeLivenessResponse{
 		Applied:   m.toNodeLivenessPB(applied),
 		NodeEpoch: m.node.nodeEpoch,
@@ -221,27 +230,23 @@ func (m *Manager) sendSetNodeLivenessResponse(applied api.Liveness) {
 }
 
 // fromNodeLivenessPB converts the protocol enum into the server-local liveness enum.
-func (m *Manager) fromNodeLivenessPB(l heartbeatpb.NodeLiveness) api.Liveness {
-	switch l {
-	case heartbeatpb.NodeLiveness_ALIVE:
-		return api.LivenessCaptureAlive
+func (m *Manager) fromNodeLivenessPB(pbLiveness heartbeatpb.NodeLiveness) liveness.Liveness {
+	switch pbLiveness {
 	case heartbeatpb.NodeLiveness_DRAINING:
-		return api.LivenessCaptureDraining
+		return liveness.CaptureDraining
 	case heartbeatpb.NodeLiveness_STOPPING:
-		return api.LivenessCaptureStopping
+		return liveness.CaptureStopping
 	default:
-		return api.LivenessCaptureAlive
+		return liveness.CaptureAlive
 	}
 }
 
 // toNodeLivenessPB converts the server-local liveness enum into the protocol enum.
-func (m *Manager) toNodeLivenessPB(l api.Liveness) heartbeatpb.NodeLiveness {
-	switch l {
-	case api.LivenessCaptureAlive:
-		return heartbeatpb.NodeLiveness_ALIVE
-	case api.LivenessCaptureDraining:
+func (m *Manager) toNodeLivenessPB(nodeLiveness liveness.Liveness) heartbeatpb.NodeLiveness {
+	switch nodeLiveness {
+	case liveness.CaptureDraining:
 		return heartbeatpb.NodeLiveness_DRAINING
-	case api.LivenessCaptureStopping:
+	case liveness.CaptureStopping:
 		return heartbeatpb.NodeLiveness_STOPPING
 	default:
 		return heartbeatpb.NodeLiveness_ALIVE
