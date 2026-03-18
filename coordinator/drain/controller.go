@@ -140,6 +140,9 @@ func (c *Controller) observeLiveness(nodeID node.ID, nodeEpoch uint64, liveness 
 		if nodeEpoch < st.nodeEpoch {
 			return
 		}
+		if nodeEpoch > st.nodeEpoch {
+			resetObservedStateForNewEpoch(st)
+		}
 		if nodeEpoch == st.nodeEpoch && liveness < st.liveness {
 			return
 		}
@@ -151,6 +154,17 @@ func (c *Controller) observeLiveness(nodeID node.ID, nodeEpoch uint64, liveness 
 	st.liveness = liveness
 
 	applyObservedLiveness(st, liveness)
+}
+
+// resetObservedStateForNewEpoch clears per-epoch observations when the node
+// restarts with a newer epoch, while preserving the drain request so the
+// coordinator can continue driving the drain workflow for the replacement
+// process.
+func resetObservedStateForNewEpoch(st *nodeState) {
+	drainRequested := st.drainRequested
+	*st = nodeState{
+		drainRequested: drainRequested,
+	}
 }
 
 // applyObservedLiveness applies monotonic progression from observed node liveness.

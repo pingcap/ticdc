@@ -21,10 +21,10 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
-	"github.com/pingcap/ticdc/pkg/api"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/liveness"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/utils/threadpool"
@@ -61,13 +61,13 @@ type Manager struct {
 func NewMaintainerManager(
 	nodeInfo *node.Info,
 	conf *config.SchedulerConfig,
-	liveness *api.Liveness,
+	nodeLiveness *liveness.Liveness,
 ) *Manager {
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 	m := &Manager{
 		mc:            mc,
 		conf:          conf,
-		node:          newManagerNodeState(liveness),
+		node:          newManagerNodeState(nodeLiveness),
 		maintainers:   sync.Map{},
 		nodeInfo:      nodeInfo,
 		msgCh:         make(chan *messaging.TargetMessage, 1024),
@@ -230,7 +230,7 @@ func (m *Manager) onAddMaintainerRequest(req *heartbeatpb.AddMaintainerRequest) 
 	// Draining is used to stop NEW scheduling decisions targeting this node, but in-flight
 	// scheduling requests decided before draining should still be able to complete.
 	// We only hard-block new maintainers when the node is stopping.
-	if m.node.liveness != nil && m.node.liveness.Load() == api.LivenessCaptureStopping {
+	if m.node.liveness != nil && m.node.liveness.Load() == liveness.CaptureStopping {
 		log.Info("ignore add maintainer request, node is stopping",
 			zap.Stringer("changefeedID", common.NewChangefeedIDFromPB(req.Id)),
 			zap.Stringer("nodeID", m.nodeInfo.ID))

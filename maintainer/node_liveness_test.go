@@ -17,9 +17,9 @@ import (
 	"testing"
 
 	"github.com/pingcap/ticdc/heartbeatpb"
-	"github.com/pingcap/ticdc/pkg/api"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/liveness"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/stretchr/testify/require"
@@ -29,8 +29,8 @@ func TestSetNodeLivenessRejectEpochMismatch(t *testing.T) {
 	mc := messaging.NewMockMessageCenter()
 	appcontext.SetService(appcontext.MessageCenter, mc)
 
-	var liveness api.Liveness
-	manager := NewMaintainerManager(&node.Info{ID: node.ID("n1")}, &config.SchedulerConfig{}, &liveness)
+	var nodeLiveness liveness.Liveness
+	manager := NewMaintainerManager(&node.Info{ID: node.ID("n1")}, &config.SchedulerConfig{}, &nodeLiveness)
 	manager.coordinatorID = node.ID("coordinator")
 	manager.coordinatorVersion = 1
 
@@ -48,15 +48,15 @@ func TestSetNodeLivenessRejectEpochMismatch(t *testing.T) {
 	resp := out.Message[0].(*heartbeatpb.SetNodeLivenessResponse)
 	require.Equal(t, heartbeatpb.NodeLiveness_ALIVE, resp.Applied)
 	require.Equal(t, manager.node.nodeEpoch, resp.NodeEpoch)
-	require.Equal(t, api.LivenessCaptureAlive, liveness.Load())
+	require.Equal(t, liveness.CaptureAlive, nodeLiveness.Load())
 }
 
 func TestSetNodeLivenessApplyTransition(t *testing.T) {
 	mc := messaging.NewMockMessageCenter()
 	appcontext.SetService(appcontext.MessageCenter, mc)
 
-	var liveness api.Liveness
-	manager := NewMaintainerManager(&node.Info{ID: node.ID("n1")}, &config.SchedulerConfig{}, &liveness)
+	var nodeLiveness liveness.Liveness
+	manager := NewMaintainerManager(&node.Info{ID: node.ID("n1")}, &config.SchedulerConfig{}, &nodeLiveness)
 	manager.coordinatorID = node.ID("coordinator")
 	manager.coordinatorVersion = 1
 
@@ -75,5 +75,5 @@ func TestSetNodeLivenessApplyTransition(t *testing.T) {
 		[]messaging.IOType{messaging.TypeNodeHeartbeatRequest, messaging.TypeSetNodeLivenessResponse},
 		[]messaging.IOType{first.Type, second.Type},
 	)
-	require.Equal(t, api.LivenessCaptureDraining, liveness.Load())
+	require.Equal(t, liveness.CaptureDraining, nodeLiveness.Load())
 }

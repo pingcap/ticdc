@@ -18,7 +18,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
-	"github.com/pingcap/ticdc/pkg/api"
+	"github.com/pingcap/ticdc/pkg/liveness"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"go.uber.org/zap"
 )
@@ -27,7 +27,7 @@ const nodeHeartbeatInterval = 5 * time.Second
 
 // managerNodeState owns node-scoped state shared by all local maintainers.
 type managerNodeState struct {
-	liveness  *api.Liveness
+	liveness  *liveness.Liveness
 	nodeEpoch uint64
 
 	// lastNodeHeartbeatSentAt throttles periodic node heartbeats while still
@@ -35,9 +35,9 @@ type managerNodeState struct {
 	lastNodeHeartbeatSentAt time.Time
 }
 
-func newManagerNodeState(liveness *api.Liveness) *managerNodeState {
+func newManagerNodeState(nodeLiveness *liveness.Liveness) *managerNodeState {
 	return &managerNodeState{
-		liveness:  liveness,
+		liveness:  nodeLiveness,
 		nodeEpoch: newNodeEpoch(),
 	}
 }
@@ -59,13 +59,16 @@ func (m *Manager) sendNodeHeartbeat(force bool) {
 	if !force && now.Sub(m.node.lastNodeHeartbeatSentAt) < nodeHeartbeatInterval {
 		return
 	}
+	// Update before sending so a transient send failure will not cause
+	// frequent retries and log spam on the 200ms tick.
+	m.node.lastNodeHeartbeatSentAt = now
 
-	liveness := api.LivenessCaptureAlive
+	currentLiveness := liveness.CaptureAlive
 	if m.node.liveness != nil {
-		liveness = m.node.liveness.Load()
+		currentLiveness = m.node.liveness.Load()
 	}
 	target := m.newCoordinatorTopicMessage(&heartbeatpb.NodeHeartbeat{
-		Liveness:  m.toNodeLivenessPB(liveness),
+		Liveness:  m.toNodeLivenessPB(currentLiveness),
 		NodeEpoch: m.node.nodeEpoch,
 	})
 	if err := m.mc.SendCommand(target); err != nil {
@@ -75,7 +78,6 @@ func (m *Manager) sendNodeHeartbeat(force bool) {
 			zap.Error(err))
 		return
 	}
-	m.node.lastNodeHeartbeatSentAt = now
 }
 
 func (m *Manager) onSetNodeLivenessRequest(msg *messaging.TargetMessage) {
@@ -87,7 +89,7 @@ func (m *Manager) onSetNodeLivenessRequest(msg *messaging.TargetMessage) {
 	}
 
 	req := msg.Message[0].(*heartbeatpb.SetNodeLivenessRequest)
-	current := api.LivenessCaptureAlive
+	current := liveness.CaptureAlive
 	if m.node.liveness != nil {
 		current = m.node.liveness.Load()
 	}
@@ -115,7 +117,7 @@ func (m *Manager) onSetNodeLivenessRequest(msg *messaging.TargetMessage) {
 	m.sendSetNodeLivenessResponse(current)
 }
 
-func (m *Manager) sendSetNodeLivenessResponse(applied api.Liveness) {
+func (m *Manager) sendSetNodeLivenessResponse(applied liveness.Liveness) {
 	target := m.newCoordinatorTopicMessage(&heartbeatpb.SetNodeLivenessResponse{
 		Applied:   m.toNodeLivenessPB(applied),
 		NodeEpoch: m.node.nodeEpoch,
@@ -128,22 +130,22 @@ func (m *Manager) sendSetNodeLivenessResponse(applied api.Liveness) {
 	}
 }
 
-func (m *Manager) fromNodeLivenessPB(liveness heartbeatpb.NodeLiveness) api.Liveness {
-	switch liveness {
+func (m *Manager) fromNodeLivenessPB(pbLiveness heartbeatpb.NodeLiveness) liveness.Liveness {
+	switch pbLiveness {
 	case heartbeatpb.NodeLiveness_DRAINING:
-		return api.LivenessCaptureDraining
+		return liveness.CaptureDraining
 	case heartbeatpb.NodeLiveness_STOPPING:
-		return api.LivenessCaptureStopping
+		return liveness.CaptureStopping
 	default:
-		return api.LivenessCaptureAlive
+		return liveness.CaptureAlive
 	}
 }
 
-func (m *Manager) toNodeLivenessPB(liveness api.Liveness) heartbeatpb.NodeLiveness {
-	switch liveness {
-	case api.LivenessCaptureDraining:
+func (m *Manager) toNodeLivenessPB(nodeLiveness liveness.Liveness) heartbeatpb.NodeLiveness {
+	switch nodeLiveness {
+	case liveness.CaptureDraining:
 		return heartbeatpb.NodeLiveness_DRAINING
-	case api.LivenessCaptureStopping:
+	case liveness.CaptureStopping:
 		return heartbeatpb.NodeLiveness_STOPPING
 	default:
 		return heartbeatpb.NodeLiveness_ALIVE
