@@ -427,11 +427,7 @@ func (c *server) Close(ctx context.Context) {
 	o, _ := c.GetCoordinator()
 	if o != nil {
 		o.Stop()
-		if c.info != nil {
-			log.Info("coordinator closed", zap.String("captureID", string(c.info.ID)))
-		} else {
-			log.Info("coordinator closed")
-		}
+		log.Info("coordinator closed", zap.String("captureID", string(c.info.ID)))
 	}
 
 	var closeGroup sync.WaitGroup
@@ -477,7 +473,7 @@ func (c *server) Close(ctx context.Context) {
 	}
 
 	// delete server info from etcd
-	if c.EtcdClient != nil && c.info != nil {
+	if c.EtcdClient != nil {
 		timeoutCtx, cancel := context.WithTimeout(context.Background(), cleanMetaDuration)
 		defer cancel()
 		if err := c.EtcdClient.DeleteCaptureInfo(timeoutCtx, string(c.info.ID)); err != nil {
