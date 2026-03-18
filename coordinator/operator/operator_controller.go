@@ -232,19 +232,27 @@ func (oc *Controller) OperatorSize() int {
 	return len(oc.operators)
 }
 
-// HasOperatorInvolvingNode returns true if any in-flight operator affects n.
-func (oc *Controller) HasOperatorInvolvingNode(n node.ID) bool {
+// CountOperatorsInvolvingNode returns the number of in-flight operators whose
+// affected nodes include n.
+func (oc *Controller) CountOperatorsInvolvingNode(n node.ID) int {
 	oc.mu.RLock()
 	defer oc.mu.RUnlock()
 
+	count := 0
 	for _, op := range oc.operators {
 		for _, affected := range op.OP.AffectedNodes() {
 			if affected == n {
-				return true
+				count++
+				break
 			}
 		}
 	}
-	return false
+	return count
+}
+
+// HasOperatorInvolvingNode returns true if any in-flight operator affects n.
+func (oc *Controller) HasOperatorInvolvingNode(n node.ID) bool {
+	return oc.CountOperatorsInvolvingNode(n) > 0
 }
 
 // pollQueueingOperator returns the operator need to be executed,
