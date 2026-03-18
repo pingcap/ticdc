@@ -20,8 +20,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/redo"
+	"github.com/pingcap/ticdc/pkg/redo/testutil"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
-	writertest "github.com/pingcap/ticdc/pkg/redo/writer/testutil"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
@@ -69,7 +69,7 @@ func testWriteEvents(t *testing.T, events []writer.RedoEvent) {
 	require.NoError(t, err)
 	lwcfg, err := writer.NewConfig(
 		common.NewChangeFeedIDWithName("test-changefeed", common.DefaultKeyspaceName),
-		writertest.NewConsistentConfig(uri.String()),
+		testutil.NewConsistentConfig(uri.String()),
 	)
 	require.NoError(t, err)
 	filename := t.Name()

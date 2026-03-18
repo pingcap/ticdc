@@ -20,7 +20,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/redo"
-	writertest "github.com/pingcap/ticdc/pkg/redo/writer/testutil"
+	"github.com/pingcap/ticdc/pkg/redo/testutil"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
 )
@@ -35,7 +35,7 @@ func TestNewConfigUsesConsistentConfigValues(t *testing.T) {
 	flushWorkerNum := 6
 	compressionType := "lz4"
 	flushConcurrency := 7
-	consistentCfg := writertest.NewConsistentConfig("nfs:///tmp/redo")
+	consistentCfg := testutil.NewConsistentConfig("nfs:///tmp/redo")
 	consistentCfg.MaxLogSize = util.AddressOf(maxLogSize)
 	consistentCfg.FlushIntervalInMs = util.AddressOf(flushIntervalInMs)
 	consistentCfg.EncodingWorkerNum = util.AddressOf(encodingWorkerNum)
@@ -64,7 +64,7 @@ func TestNewConfigInitializesFileBackendDirForExternalStorage(t *testing.T) {
 	t.Parallel()
 
 	changefeedID := common.NewChangeFeedIDWithName("test-cf", common.DefaultKeyspaceName)
-	consistentCfg := writertest.NewConsistentConfig("s3://bucket/prefix")
+	consistentCfg := testutil.NewConsistentConfig("s3://bucket/prefix")
 	consistentCfg.UseFileBackend = util.AddressOf(true)
 	cfg, err := NewConfig(changefeedID, consistentCfg)
 	require.NoError(t, err)
@@ -82,7 +82,7 @@ func TestNewConfigLeavesDirEmptyForRemoteMemoryBackend(t *testing.T) {
 	t.Parallel()
 
 	changefeedID := common.NewChangeFeedIDWithName("test-cf", common.DefaultKeyspaceName)
-	cfg, err := NewConfig(changefeedID, writertest.NewConsistentConfig("s3://bucket/prefix"))
+	cfg, err := NewConfig(changefeedID, testutil.NewConsistentConfig("s3://bucket/prefix"))
 	require.NoError(t, err)
 
 	require.NotNil(t, cfg.URI())
@@ -97,7 +97,7 @@ func TestNewConfigReturnsErrorForInvalidStorageURI(t *testing.T) {
 
 	_, err := NewConfig(
 		common.NewChangeFeedIDWithName("test-cf", common.DefaultKeyspaceName),
-		writertest.NewConsistentConfig("://bad-uri"),
+		testutil.NewConsistentConfig("://bad-uri"),
 	)
 	require.Error(t, err)
 }
@@ -107,7 +107,7 @@ func TestNewConfigReturnsErrorForUnsupportedStorageScheme(t *testing.T) {
 
 	_, err := NewConfig(
 		common.NewChangeFeedIDWithName("test-cf", common.DefaultKeyspaceName),
-		writertest.NewConsistentConfig("mysql://127.0.0.1:3306/test"),
+		testutil.NewConsistentConfig("mysql://127.0.0.1:3306/test"),
 	)
 	require.Error(t, err)
 }

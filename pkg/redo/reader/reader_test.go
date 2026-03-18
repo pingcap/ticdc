@@ -28,9 +28,9 @@ import (
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/codec"
 	misc "github.com/pingcap/ticdc/pkg/redo/common"
+	"github.com/pingcap/ticdc/pkg/redo/testutil"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/redo/writer/file"
-	writertest "github.com/pingcap/ticdc/pkg/redo/writer/testutil"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
@@ -43,7 +43,7 @@ func genLogFile(
 	dir string, logType string,
 	minCommitTs, maxCommitTs uint64,
 ) {
-	consistentCfg := writertest.NewConsistentConfig("file://" + dir)
+	consistentCfg := testutil.NewConsistentConfig("file://" + dir)
 	consistentCfg.MaxLogSize = util.AddressOf(int64(1))
 	cfg, err := writer.NewConfig(
 		common.NewChangeFeedIDWithName("reader-test", common.DefaultKeyspaceName),

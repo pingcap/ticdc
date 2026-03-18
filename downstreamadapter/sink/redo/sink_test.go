@@ -27,8 +27,8 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/redo"
+	"github.com/pingcap/ticdc/pkg/redo/testutil"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
-	writertest "github.com/pingcap/ticdc/pkg/redo/writer/testutil"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/stretchr/testify/require"
@@ -39,7 +39,7 @@ import (
 var workerNumberForTest = 2
 
 func newTestConsistentConfig(storage string) *config.ConsistentConfig {
-	cfg := writertest.NewConsistentConfig(storage)
+	cfg := testutil.NewConsistentConfig(storage)
 	cfg.FlushIntervalInMs = util.AddressOf(int64(redo.MinFlushIntervalInMs))
 	cfg.MetaFlushIntervalInMs = util.AddressOf(int64(redo.MinFlushIntervalInMs))
 	cfg.EncodingWorkerNum = util.AddressOf(workerNumberForTest)

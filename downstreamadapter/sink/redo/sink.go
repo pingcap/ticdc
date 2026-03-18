@@ -124,10 +124,13 @@ func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 			s.isNormal.Store(false)
 			return err
 		}
-		s.metricCollector.observeDDLWrite(time.Since(start))
-		log.Info("redo sink send DDL event", zap.Any("startTs", event.GetStartTs()), zap.Any("commitTs", event.GetCommitTs()),
-			zap.Any("event", e.GetDDLQuery()), zap.String("schema", e.GetSchemaName()), zap.String("table", e.GetTableName()),
-			zap.Int64("tableID", e.GetTableID()))
+		if s.metricCollector != nil {
+			s.metricCollector.observeDDLWrite(time.Since(start))
+		}
+		log.Info("redo sink send DDL event",
+			zap.String("keyspace", s.changefeedID.Keyspace()), zap.String("changefeed", s.changefeedID.Name()),
+			zap.Any("event", e.GetDDLQuery()), zap.Any("startTs", event.GetStartTs()), zap.Any("commitTs", event.GetCommitTs()),
+			zap.String("schema", e.GetSchemaName()), zap.String("table", e.GetTableName()), zap.Int64("tableID", e.GetTableID()))
 	}
 	return nil
 }
@@ -181,7 +184,6 @@ func (s *Sink) Close(_ bool) {
 				zap.Error(err))
 		}
 	}
-
 	if s.dmlWriter != nil {
 		if err := s.dmlWriter.Close(); err != nil && errors.Cause(err) != context.Canceled {
 			log.Error("redo sink fails to close dml writer",

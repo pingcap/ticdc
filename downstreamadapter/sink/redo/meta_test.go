@@ -25,18 +25,18 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/redo"
-	writertest "github.com/pingcap/ticdc/pkg/redo/writer/testutil"
 	misc "github.com/pingcap/ticdc/pkg/redo/common"
+	"github.com/pingcap/ticdc/pkg/redo/testutil"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/uuid"
-	"github.com/prometheus/client_golang/prometheus/testutil"
+	promtestutil "github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
 	"golang.org/x/sync/errgroup"
 )
 
 func newTestMetaConsistentConfig(storage string) *config.ConsistentConfig {
-	cfg := writertest.NewConsistentConfig(storage)
+	cfg := testutil.NewConsistentConfig(storage)
 	cfg.FlushIntervalInMs = util.AddressOf(int64(redo.MinFlushIntervalInMs))
 	cfg.MetaFlushIntervalInMs = util.AddressOf(int64(redo.MinFlushIntervalInMs))
 	return cfg
@@ -366,15 +366,15 @@ func TestRedoMetaMetrics(t *testing.T) {
 	})
 
 	require.Eventually(t, func() bool {
-		checkpointTs := testutil.ToFloat64(metrics.RedoCheckpointTsGauge.WithLabelValues(keyspace, changefeed))
-		resolvedTs := testutil.ToFloat64(metrics.RedoResolvedTsGauge.WithLabelValues(keyspace, changefeed))
+		checkpointTs := promtestutil.ToFloat64(metrics.RedoCheckpointTsGauge.WithLabelValues(keyspace, changefeed))
+		resolvedTs := promtestutil.ToFloat64(metrics.RedoResolvedTsGauge.WithLabelValues(keyspace, changefeed))
 		return checkpointTs == float64(10_000) && resolvedTs == float64(10_000)
 	}, time.Second, 50*time.Millisecond)
 
 	m.UpdateMeta(oracle.ComposeTS(20_000, 0), oracle.ComposeTS(21_000, 0))
 	require.Eventually(t, func() bool {
-		checkpointTs := testutil.ToFloat64(metrics.RedoCheckpointTsGauge.WithLabelValues(keyspace, changefeed))
-		resolvedTs := testutil.ToFloat64(metrics.RedoResolvedTsGauge.WithLabelValues(keyspace, changefeed))
+		checkpointTs := promtestutil.ToFloat64(metrics.RedoCheckpointTsGauge.WithLabelValues(keyspace, changefeed))
+		resolvedTs := promtestutil.ToFloat64(metrics.RedoResolvedTsGauge.WithLabelValues(keyspace, changefeed))
 		return checkpointTs == 20_000 && resolvedTs == 21_000
 	}, time.Second, 50*time.Millisecond)
 

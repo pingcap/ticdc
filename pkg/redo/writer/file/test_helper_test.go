@@ -19,8 +19,8 @@ import (
 
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/redo/testutil"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
-	writertest "github.com/pingcap/ticdc/pkg/redo/writer/testutil"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	"github.com/stretchr/testify/require"
@@ -31,7 +31,7 @@ func newTestWriterConfig(
 	changefeedID common.ChangeFeedID,
 	consistentCfg *config.ConsistentConfig,
 ) *writer.Config {
-	defaultCfg := writertest.NewConsistentConfig("file://" + t.TempDir())
+	defaultCfg := testutil.NewConsistentConfig("file://" + t.TempDir())
 	if consistentCfg == nil {
 		consistentCfg = defaultCfg
 	}
