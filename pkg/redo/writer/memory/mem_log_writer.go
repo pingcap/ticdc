@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/tidb/br/pkg/storage"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
@@ -34,8 +35,10 @@ type memoryLogWriter struct {
 	fileWorkers   *fileWorkerGroup
 	fileType      string
 	tableSchema   *event.TableSchemaStore
+	storage       storage.ExternalStorage
 
 	cancel context.CancelFunc
+	done   chan struct{}
 }
 
 // NewLogWriter creates a new memoryLogWriter.
@@ -61,6 +64,8 @@ func NewLogWriter(
 	lw := &memoryLogWriter{
 		cfg:      cfg,
 		fileType: fileType,
+		storage:  extStorage,
+		done:     make(chan struct{}),
 	}
 	var fileInputCh chan *polymorphicRedoEvent
 	if fileType == redo.RedoRowLogFileType {
@@ -83,6 +88,13 @@ func (l *memoryLogWriter) SetTableSchemaStore(tableSchemaStore *event.TableSchem
 func (l *memoryLogWriter) Run(ctx context.Context) error {
 	newCtx, cancel := context.WithCancel(ctx)
 	l.cancel = cancel
+	defer close(l.done)
+	defer func() {
+		if l.storage != nil {
+			l.storage.Close()
+			l.storage = nil
+		}
+	}()
 	if l.encodeWorkers == nil {
 		return l.fileWorkers.Run(newCtx)
 	}
@@ -145,6 +157,12 @@ func (l *memoryLogWriter) asyncWriteEvents(ctx context.Context, events ...writer
 func (l *memoryLogWriter) Close() error {
 	if l.cancel != nil {
 		l.cancel()
+		<-l.done
+		return nil
+	}
+	if l.storage != nil {
+		l.storage.Close()
+		l.storage = nil
 	}
 	return nil
 }

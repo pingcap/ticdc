@@ -45,6 +45,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/tcpserver"
 	"github.com/pingcap/ticdc/pkg/upstream"
 	"github.com/pingcap/ticdc/server/watcher"
+	"github.com/tikv/client-go/v2/tikv"
 	pd "github.com/tikv/pd/client"
 	"go.etcd.io/etcd/client/v3/concurrency"
 	"go.uber.org/zap"
@@ -90,6 +91,7 @@ type server struct {
 	pdClient      pd.Client
 	pdAPIClient   pdutil.PDAPIClient
 	pdEndpoints   []string
+	regionCache   *tikv.RegionCache
 	coordinatorMu sync.Mutex
 
 	coordinator tiserver.Coordinator
@@ -425,7 +427,11 @@ func (c *server) Close(ctx context.Context) {
 	o, _ := c.GetCoordinator()
 	if o != nil {
 		o.Stop()
-		log.Info("coordinator closed", zap.String("captureID", string(c.info.ID)))
+		if c.info != nil {
+			log.Info("coordinator closed", zap.String("captureID", string(c.info.ID)))
+		} else {
+			log.Info("coordinator closed")
+		}
 	}
 
 	var closeGroup sync.WaitGroup
@@ -465,18 +471,43 @@ func (c *server) Close(ctx context.Context) {
 		log.Info("sub base module closed", zap.String("module", nm.Name()))
 	}
 
-	// delete server info from etcd
-	timeoutCtx, cancel := context.WithTimeout(context.Background(), cleanMetaDuration)
-	defer cancel()
-	if err := c.EtcdClient.DeleteCaptureInfo(timeoutCtx, string(c.info.ID)); err != nil {
-		log.Warn("failed to delete server info when server exited",
-			zap.String("captureID", string(c.info.ID)),
-			zap.Error(err))
-	} else {
-		log.Info("server info deleted from etcd", zap.String("captureID", string(c.info.ID)))
+	closeGroup.Wait()
+	if c.upstreamManager != nil {
+		c.upstreamManager.Close()
 	}
 
-	closeGroup.Wait()
+	// delete server info from etcd
+	if c.EtcdClient != nil && c.info != nil {
+		timeoutCtx, cancel := context.WithTimeout(context.Background(), cleanMetaDuration)
+		defer cancel()
+		if err := c.EtcdClient.DeleteCaptureInfo(timeoutCtx, string(c.info.ID)); err != nil {
+			log.Warn("failed to delete server info when server exited",
+				zap.String("captureID", string(c.info.ID)),
+				zap.Error(err))
+		} else {
+			log.Info("server info deleted from etcd", zap.String("captureID", string(c.info.ID)))
+		}
+	}
+
+	if c.session != nil {
+		if err := c.session.Close(); err != nil {
+			log.Warn("failed to close server session", zap.Error(err))
+		}
+	}
+	if c.regionCache != nil {
+		c.regionCache.Close()
+	}
+	if c.pdAPIClient != nil {
+		c.pdAPIClient.Close()
+	}
+	if c.EtcdClient != nil {
+		if err := c.EtcdClient.GetEtcdClient().Close(); err != nil {
+			log.Warn("failed to close etcd client", zap.Error(err))
+		}
+	}
+	if c.pdClient != nil {
+		c.pdClient.Close()
+	}
 	log.Info("server closed", zap.Any("ServerInfo", c.info))
 }
 

@@ -46,7 +46,7 @@ const (
 	dataDirThreshold = 500
 )
 
-func (c *server) prepare(ctx context.Context) error {
+func (c *server) prepare(ctx context.Context) (err error) {
 	conf := config.GetGlobalServerConfig()
 	grpcTLSOption, err := conf.Security.ToGRPCDialOption()
 	if err != nil {
@@ -94,12 +94,18 @@ func (c *server) prepare(ctx context.Context) error {
 	if err != nil {
 		return errors.Trace(err)
 	}
+	defer func() {
+		if err != nil && etcdCli != nil {
+			_ = etcdCli.Close()
+		}
+	}()
 
 	cdcEtcdClient, err := etcd.NewCDCEtcdClient(ctx, etcdCli, conf.ClusterID)
 	if err != nil {
 		return errors.Trace(err)
 	}
 	c.EtcdClient = cdcEtcdClient
+	etcdCli = nil
 
 	// Collect all endpoints from pd here to make the server more robust.
 	// Because in some scenarios, the deployer may only provide one pd endpoint,
@@ -119,7 +125,8 @@ func (c *server) prepare(ctx context.Context) error {
 			zap.Strings("upstreamEndpoints", c.pdEndpoints))
 	}
 
-	appctx.SetService(appctx.RegionCache, tikv.NewRegionCache(c.pdClient))
+	c.regionCache = tikv.NewRegionCache(c.pdClient)
+	appctx.SetService(appctx.RegionCache, c.regionCache)
 
 	if err = c.initDir(); err != nil {
 		return errors.Trace(err)

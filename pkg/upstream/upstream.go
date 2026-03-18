@@ -148,11 +148,16 @@ func isCreateTiStoreRetryable(ctx context.Context, err error) bool {
 }
 
 // init initializes the upstream
-func initUpstream(ctx context.Context, up *Upstream, cfg *NodeTopologyCfg) error {
+func initUpstream(ctx context.Context, up *Upstream, cfg *NodeTopologyCfg) (err error) {
 	ctx, up.cancel = context.WithCancel(ctx)
+	defer func() {
+		if err != nil {
+			up.err.Store(err)
+			up.Close()
+		}
+	}()
 	grpcTLSOption, err := up.SecurityConfig.ToGRPCDialOption()
 	if err != nil {
-		up.err.Store(err)
 		return errors.Trace(err)
 	}
 	// init the tikv client tls global config
@@ -177,7 +182,6 @@ func initUpstream(ctx context.Context, up *Upstream, cfg *NodeTopologyCfg) error
 				}),
 			))
 		if err != nil {
-			up.err.Store(err)
 			return errors.Trace(err)
 		}
 
@@ -191,14 +195,12 @@ func initUpstream(ctx context.Context, up *Upstream, cfg *NodeTopologyCfg) error
 	if up.ID != 0 && up.ID != clusterID {
 		err := fmt.Errorf("upstream id missmatch expected %d, actual: %d",
 			up.ID, clusterID)
-		up.err.Store(err)
 		return errors.Trace(err)
 	}
 	up.ID = clusterID
 
 	up.KVStorage, err = CreateTiStore(ctx, strings.Join(up.PdEndpoints, ","), up.SecurityConfig, "")
 	if err != nil {
-		up.err.Store(err)
 		return errors.Trace(err)
 	}
 
@@ -206,7 +208,6 @@ func initUpstream(ctx context.Context, up *Upstream, cfg *NodeTopologyCfg) error
 
 	up.PDClock, err = pdutil.NewClock(ctx, up.PDClient)
 	if err != nil {
-		up.err.Store(err)
 		return errors.Trace(err)
 	}
 
@@ -260,7 +261,9 @@ func initGlobalConfig(secCfg *security.Credential) {
 func (up *Upstream) Close() {
 	up.mu.Lock()
 	defer up.mu.Unlock()
-	up.cancel()
+	if up.cancel != nil {
+		up.cancel()
+	}
 	if atomic.LoadInt32(&up.status) == closed ||
 		atomic.LoadInt32(&up.status) == closing {
 		return

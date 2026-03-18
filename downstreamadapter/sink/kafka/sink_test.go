@@ -28,6 +28,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/stretchr/testify/require"
@@ -103,6 +104,50 @@ func newKafkaSinkForTestWithProducers(ctx context.Context,
 func newKafkaSinkForTest(ctx context.Context) (*sink, error) {
 	return newKafkaSinkForTestWithProducers(ctx, nil, nil)
 }
+
+type closeTrackingAsyncProducer struct {
+	closeCalls int
+}
+
+func (p *closeTrackingAsyncProducer) Close() {
+	p.closeCalls++
+}
+
+func (p *closeTrackingAsyncProducer) AsyncSend(context.Context, string, int32, *codeccommon.Message) error {
+	return nil
+}
+
+func (p *closeTrackingAsyncProducer) Heartbeat() {}
+
+func (p *closeTrackingAsyncProducer) AsyncRunCallback(ctx context.Context) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+type closeTrackingFactory struct {
+	asyncProducer   kafka.AsyncProducer
+	syncProducerErr error
+}
+
+func (f *closeTrackingFactory) AdminClient(context.Context) (kafka.ClusterAdminClient, error) {
+	return kafka.NewClusterAdminClientMockImpl(), nil
+}
+
+func (f *closeTrackingFactory) SyncProducer(context.Context) (kafka.SyncProducer, error) {
+	return nil, f.syncProducerErr
+}
+
+func (f *closeTrackingFactory) AsyncProducer(context.Context) (kafka.AsyncProducer, error) {
+	return f.asyncProducer, nil
+}
+
+func (f *closeTrackingFactory) MetricsCollector(kafka.ClusterAdminClient) kafka.MetricsCollector {
+	return noopMetricsCollector{}
+}
+
+type noopMetricsCollector struct{}
+
+func (noopMetricsCollector) Run(context.Context) {}
 
 // mockSyncProducer is used to count the calls to Heartbeat.
 type mockSyncProducer struct {
@@ -265,4 +310,30 @@ func TestKafkaSinkBasicFunctionality(t *testing.T) {
 	kafkaSink.Close(false)
 	cancel()
 	kafkaSink.AddCheckpointTs(12345)
+}
+
+func TestNewKafkaSinkClosesAsyncProducerWhenSyncProducerInitFails(t *testing.T) {
+	t.Parallel()
+
+	changefeedID := common.NewChangefeedID4Test("test", "test")
+	openProtocol := "open-protocol"
+	sinkConfig := &config.SinkConfig{Protocol: &openProtocol}
+	uriTemplate := "kafka://%s/%s?kafka-version=0.9.0.0&max-batch-size=1" +
+		"&max-message-bytes=1048576&partition-num=1" +
+		"&kafka-client-id=unit-test&auto-create-topic=false&compression=gzip&protocol=open-protocol"
+	sinkURI, err := url.Parse(fmt.Sprintf(uriTemplate, "127.0.0.1:9092", kafka.DefaultMockTopicName))
+	require.NoError(t, err)
+
+	asyncProducer := &closeTrackingAsyncProducer{}
+	comp, protocol, err := newKafkaSinkComponentForTest(context.Background(), changefeedID, sinkURI, sinkConfig)
+	require.NoError(t, err)
+	comp.factory = &closeTrackingFactory{
+		asyncProducer:   asyncProducer,
+		syncProducerErr: errors.New("sync producer init failed"),
+	}
+
+	sink, err := newWithComponents(context.Background(), changefeedID, protocol, comp)
+	require.Error(t, err)
+	require.Nil(t, sink)
+	require.Equal(t, 1, asyncProducer.closeCalls)
 }

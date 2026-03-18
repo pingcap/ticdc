@@ -85,7 +85,7 @@ type Writer struct {
 // NewFileWriter return a file rotated writer, TODO: extract to a common rotate Writer
 func NewFileWriter(
 	ctx context.Context, cfg *writer.LogWriterConfig, logType string, opts ...writer.Option,
-) (*Writer, error) {
+) (_ *Writer, err error) {
 	if cfg == nil {
 		err := errors.New("FileWriterConfig can not be nil")
 		return nil, errors.WrapError(errors.ErrRedoConfigInvalid, err)
@@ -93,12 +93,16 @@ func NewFileWriter(
 
 	var extStorage storage.ExternalStorage
 	if cfg.UseExternalStorage {
-		var err error
 		extStorage, err = redo.InitExternalStorage(ctx, *cfg.URI)
 		if err != nil {
 			return nil, err
 		}
 	}
+	defer func() {
+		if err != nil && extStorage != nil {
+			extStorage.Close()
+		}
+	}()
 
 	op := &writer.LogWriterOptions{}
 	for _, opt := range opts {
@@ -130,7 +134,7 @@ func NewFileWriter(
 		return nil, errors.WrapError(errors.ErrRedoFileOp, errors.New("invalid redo dir path"))
 	}
 
-	err := os.MkdirAll(cfg.Dir, redo.DefaultDirMode)
+	err = os.MkdirAll(cfg.Dir, redo.DefaultDirMode)
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrRedoFileOp,
 			errors.Annotatef(err, "can't make dir: %s for redo writing", cfg.Dir))
@@ -224,6 +228,12 @@ func (w *Writer) Close() error {
 	defer w.Unlock()
 	// always set to false when closed, since if having err may not get fixed just by retry
 	defer w.running.Store(false)
+	defer func() {
+		if w.storage != nil {
+			w.storage.Close()
+			w.storage = nil
+		}
+	}()
 
 	if w.allocator != nil {
 		w.allocator.Close()

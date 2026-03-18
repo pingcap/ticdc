@@ -100,7 +100,7 @@ func (m *RedoMeta) Running() bool {
 	return m.running.Load()
 }
 
-func (m *RedoMeta) PreStart(ctx context.Context) error {
+func (m *RedoMeta) PreStart(ctx context.Context) (err error) {
 	uri, err := storage.ParseRawURL(util.GetOrZero(m.cfg.Storage))
 	if err != nil {
 		return err
@@ -117,6 +117,11 @@ func (m *RedoMeta) PreStart(ctx context.Context) error {
 		return err
 	}
 	m.extStorage = extStorage
+	defer func() {
+		if err != nil {
+			m.closeExtStorage()
+		}
+	}()
 
 	m.metricFlushLogDuration = metrics.RedoFlushLogDurationHistogram.
 		WithLabelValues(m.changeFeedID.Keyspace(), m.changeFeedID.Name(), redo.RedoMetaFileType)
@@ -142,6 +147,10 @@ func (m *RedoMeta) PreStart(ctx context.Context) error {
 
 // Run runs bgFlushMeta and bgGC.
 func (m *RedoMeta) Run(ctx context.Context) error {
+	defer func() {
+		m.running.Store(false)
+		m.closeExtStorage()
+	}()
 	eg, egCtx := errgroup.WithContext(ctx)
 	eg.Go(func() error {
 		return m.bgFlushMeta(egCtx)
@@ -331,6 +340,7 @@ func (m *RedoMeta) deleteAllLogs(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		defer m.closeExtStorage()
 	}
 	// Write deleted mark before clean any files.
 	deleteMarker := getDeletedChangefeedMarker(m.changeFeedID)
@@ -449,9 +459,22 @@ func (m *RedoMeta) CleanupMetrics() {
 		DeleteLabelValues(m.changeFeedID.Keyspace(), m.changeFeedID.Name(), redo.RedoMetaFileType)
 }
 
+func (m *RedoMeta) closeExtStorage() {
+	if m.extStorage == nil {
+		return
+	}
+	m.extStorage.Close()
+	m.extStorage = nil
+}
+
 // Cleanup removes all redo logs of this manager, it is called when changefeed is removed
 // only owner should call this method.
 func (m *RedoMeta) Cleanup(ctx context.Context) error {
+	defer func() {
+		if !m.running.Load() {
+			m.closeExtStorage()
+		}
+	}()
 	return m.deleteAllLogs(ctx)
 }
 

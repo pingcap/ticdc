@@ -15,6 +15,7 @@ package memory
 
 import (
 	"context"
+	"net/url"
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common"
@@ -22,9 +23,12 @@ import (
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/util"
+	mockstorage "github.com/pingcap/tidb/br/pkg/mock/storage"
+	"github.com/pingcap/tidb/br/pkg/storage"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/mock/gomock"
 )
 
 func TestWriteDDL(t *testing.T) {
@@ -91,4 +95,32 @@ func testWriteEvents(t *testing.T, events []writer.RedoEvent) {
 	require.ErrorIs(t, lw.Close(), nil)
 	// duplicate close should return the same error
 	require.ErrorIs(t, lw.Close(), nil)
+}
+
+func TestCloseClosesExternalStorage(t *testing.T) {
+	controller := gomock.NewController(t)
+	mockStorage := mockstorage.NewMockExternalStorage(controller)
+	mockStorage.EXPECT().Close().Times(1)
+
+	oldInitExternalStorage := redo.InitExternalStorage
+	defer func() {
+		redo.InitExternalStorage = oldInitExternalStorage
+	}()
+	redo.InitExternalStorage = func(context.Context, url.URL) (storage.ExternalStorage, error) {
+		return mockStorage, nil
+	}
+
+	uri, err := url.Parse("file:///tmp/redo-test")
+	require.NoError(t, err)
+	lw, err := NewLogWriter(context.Background(), &writer.LogWriterConfig{
+		CaptureID:          "test-capture",
+		ChangeFeedID:       common.NewChangeFeedIDWithName("test-changefeed", common.DefaultKeyspaceName),
+		URI:                uri,
+		UseExternalStorage: true,
+		MaxLogSizeInBytes:  10 * redo.Megabyte,
+	}, redo.RedoDDLLogFileType)
+	require.NoError(t, err)
+
+	require.NoError(t, lw.Close())
+	require.NoError(t, lw.Close())
 }

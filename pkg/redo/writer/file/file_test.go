@@ -16,6 +16,7 @@ package file
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"testing"
@@ -273,6 +274,44 @@ func TestNewWriter(t *testing.T) {
 	err = w.Close()
 	require.Nil(t, err)
 	require.Equal(t, w.running.Load(), false)
+}
+
+func TestNewFileWriterClosesExternalStorageOnInitFailure(t *testing.T) {
+	controller := gomock.NewController(t)
+	mockStorage := mockstorage.NewMockExternalStorage(controller)
+	mockStorage.EXPECT().Close().Times(1)
+
+	oldInitExternalStorage := redo.InitExternalStorage
+	defer func() {
+		redo.InitExternalStorage = oldInitExternalStorage
+	}()
+	redo.InitExternalStorage = func(context.Context, url.URL) (storage.ExternalStorage, error) {
+		return mockStorage, nil
+	}
+
+	uri, err := url.Parse("file:///tmp/redo-test")
+	require.NoError(t, err)
+
+	_, err = NewFileWriter(context.Background(), &writer.LogWriterConfig{
+		Dir:                "",
+		URI:                uri,
+		UseExternalStorage: true,
+		ChangeFeedID:       common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName),
+	}, redo.RedoRowLogFileType)
+	require.Error(t, err)
+}
+
+func TestWriterCloseClosesExternalStorage(t *testing.T) {
+	controller := gomock.NewController(t)
+	mockStorage := mockstorage.NewMockExternalStorage(controller)
+	mockStorage.EXPECT().Close().Times(1)
+
+	w := &Writer{
+		storage: mockStorage,
+	}
+
+	require.NoError(t, w.Close())
+	require.NoError(t, w.Close())
 }
 
 func TestRotateFileWithFileAllocator(t *testing.T) {
