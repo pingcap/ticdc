@@ -74,8 +74,24 @@ func New(ctx context.Context, changefeedID common.ChangeFeedID,
 		isClosed:     atomic.NewBool(false),
 	}
 
-	start := time.Now()
-	ddlWriter, err := factory.NewRedoLogWriter(ctx, config, redo.RedoDDLLogFileType)
+	var (
+		start     = time.Now()
+		ddlWriter writer.RedoLogWriter
+		dmlWriter writer.RedoLogWriter
+	)
+	defer func() {
+		if err == nil {
+			return
+		}
+		if ddlWriter != nil {
+			ddlWriter.Close()
+		}
+		if dmlWriter != nil {
+			dmlWriter.Close()
+		}
+	}()
+
+	ddlWriter, err = factory.NewRedoLogWriter(ctx, config, redo.RedoDDLLogFileType)
 	if err != nil {
 		log.Error("redo: failed to create redo log writer",
 			zap.String("keyspace", changefeedID.Keyspace()),
@@ -84,13 +100,7 @@ func New(ctx context.Context, changefeedID common.ChangeFeedID,
 			zap.Error(err))
 		return nil, err
 	}
-	defer func() {
-		if err != nil {
-			ddlWriter.Close()
-		}
-	}()
-
-	dmlWriter, err := factory.NewRedoLogWriter(ctx, config, redo.RedoRowLogFileType)
+	dmlWriter, err = factory.NewRedoLogWriter(ctx, config, redo.RedoRowLogFileType)
 	if err != nil {
 		log.Error("redo: failed to create redo log writer",
 			zap.String("keyspace", changefeedID.Keyspace()),
