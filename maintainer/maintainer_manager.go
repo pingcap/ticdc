@@ -19,10 +19,10 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
-	"github.com/pingcap/ticdc/pkg/api"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/liveness"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"go.uber.org/zap"
@@ -57,14 +57,14 @@ type Manager struct {
 func NewMaintainerManager(
 	nodeInfo *node.Info,
 	conf *config.SchedulerConfig,
-	liveness *api.Liveness,
+	nodeLiveness *liveness.Liveness,
 ) *Manager {
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 	m := &Manager{
 		mc:          mc,
 		nodeInfo:    nodeInfo,
 		msgCh:       make(chan *messaging.TargetMessage, 1024),
-		node:        newManagerNodeState(liveness),
+		node:        newManagerNodeState(nodeLiveness),
 		maintainers: newManagerMaintainerSet(conf, nodeInfo),
 	}
 

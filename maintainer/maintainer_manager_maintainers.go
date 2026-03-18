@@ -21,9 +21,9 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
-	"github.com/pingcap/ticdc/pkg/api"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/liveness"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/utils/threadpool"
@@ -60,7 +60,7 @@ func (m *Manager) onAddMaintainerRequest(req *heartbeatpb.AddMaintainerRequest) 
 	// issue add requests to this node; rejecting them here may break drain convergence.
 	// Only STOPPING performs a hard reject for new maintainer creation.
 	currentLiveness := m.node.liveness.Load()
-	if currentLiveness == api.LivenessCaptureStopping {
+	if currentLiveness == liveness.CaptureStopping {
 		changefeedID := common.NewChangefeedIDFromPB(req.Id)
 		log.Info("reject add maintainer request because node is stopping",
 			zap.Stringer("nodeID", m.nodeInfo.ID),
