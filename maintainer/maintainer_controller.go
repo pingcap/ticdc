@@ -86,6 +86,7 @@ func NewController(changefeedID common.ChangeFeedID,
 	refresher *replica.RegionCountRefresher,
 	keyspaceMeta common.KeyspaceMeta,
 	enableRedo bool,
+	balanceMoveBatchSize int,
 ) *Controller {
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 
@@ -150,6 +151,7 @@ func NewController(changefeedID common.ChangeFeedID,
 		splitter,
 		schedulerCfg,
 		controller.drainState,
+		balanceMoveBatchSize,
 	)
 	return controller
 }

@@ -22,6 +22,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const testDefaultBalanceMoveBatchSize = 1024
+
 func TestBalanceSchedulerSkipsWhenDrainActive(t *testing.T) {
 	cfID, nodeManager, oc, sc, drainState, self := newDrainSchedulerTestHarness(t)
 	target := node.ID("target")
@@ -39,20 +41,20 @@ func TestBalanceSchedulerSkipsWhenDrainActive(t *testing.T) {
 
 	s := NewBalanceScheduler(
 		cfID,
-		100,
 		nil,
 		oc,
 		sc,
 		0,
 		common.DefaultMode,
 		drainState,
+		testDefaultBalanceMoveBatchSize,
 	)
 	_ = s.Execute()
 
 	require.Equal(t, 0, oc.OperatorSize())
 }
 
-func TestBalanceSchedulerCapsMoveOperatorsPerRound(t *testing.T) {
+func TestBalanceSchedulerUsesConfiguredMoveBatchSize(t *testing.T) {
 	cfID, nodeManager, oc, sc, drainState, self := newDrainSchedulerTestHarness(t)
 	target := node.ID("target")
 	dest := node.ID("dest")
@@ -68,17 +70,17 @@ func TestBalanceSchedulerCapsMoveOperatorsPerRound(t *testing.T) {
 
 	s := NewBalanceScheduler(
 		cfID,
-		100,
 		nil,
 		oc,
 		sc,
 		0,
 		common.DefaultMode,
 		drainState,
+		5,
 	)
 	_ = s.Execute()
 
-	require.Equal(t, maxBalanceMovePerRound, oc.OperatorSize())
+	require.Equal(t, 5, oc.OperatorSize())
 }
 
 func TestBalanceSchedulerSkipsDuringDrainCooldown(t *testing.T) {
@@ -98,13 +100,13 @@ func TestBalanceSchedulerSkipsDuringDrainCooldown(t *testing.T) {
 
 	s := NewBalanceScheduler(
 		cfID,
-		100,
 		nil,
 		oc,
 		sc,
 		0,
 		common.DefaultMode,
 		drainState,
+		testDefaultBalanceMoveBatchSize,
 	)
 	s.drainBalanceBlockedUntil = time.Time{}
 

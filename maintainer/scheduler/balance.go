@@ -32,14 +32,12 @@ import (
 	"github.com/pingcap/ticdc/server/watcher"
 )
 
-const maxBalanceMovePerRound = 5
-
 // balanceScheduler mainly focus on two types of operations:
 // 1. Split operations: splits the one large span for the whole table into smaller ones.
 // 2. Move operations: distributes spans across nodes for balance the span count in each node.
 type balanceScheduler struct {
-	changefeedID common.ChangeFeedID
-	batchSize    int
+	changefeedID  common.ChangeFeedID
+	moveBatchSize int
 
 	operatorController *operator.Controller
 	spanController     *span.Controller
@@ -57,17 +55,17 @@ type balanceScheduler struct {
 
 func NewBalanceScheduler(
 	changefeedID common.ChangeFeedID,
-	batchSize int,
 	splitter *split.Splitter,
 	oc *operator.Controller,
 	sc *span.Controller,
 	_ time.Duration,
 	mode int64,
 	drainState *DrainState,
+	moveBatchSize int,
 ) *balanceScheduler {
 	return &balanceScheduler{
 		changefeedID:       changefeedID,
-		batchSize:          batchSize,
+		moveBatchSize:      moveBatchSize,
 		random:             rand.New(rand.NewSource(time.Now().UnixNano())),
 		operatorController: oc,
 		spanController:     sc,
@@ -98,19 +96,15 @@ func (s *balanceScheduler) Execute() time.Time {
 
 	// 1. check whether we have spans in defaultGroupID need to be splitted.
 	//    we only consider the not splitted span here.
-	checkResults := s.spanController.CheckByGroup(pkgReplica.DefaultGroupID, s.batchSize)
+	checkResults := s.spanController.CheckByGroup(pkgReplica.DefaultGroupID, s.moveBatchSize)
 	count := s.doSplit(checkResults)
 
 	// to many split operators, do move operator later
-	if count >= s.batchSize {
+	if count >= s.moveBatchSize {
 		return time.Now().Add(time.Second * 5)
 	}
 
-	moveBudget := s.batchSize - count
-	if moveBudget > maxBalanceMovePerRound {
-		// Bound balance churn in one maintainer tick to reduce checkpoint lag spikes.
-		moveBudget = maxBalanceMovePerRound
-	}
+	moveBudget := s.moveBatchSize - count
 
 	// 2. do balance for the spans in defaultGroupID
 	s.schedulerDefaultGroup(moveBudget, state)

@@ -96,6 +96,105 @@ func TestDrainSchedulerCapsInflightDrainMoves(t *testing.T) {
 	require.Equal(t, maxDrainMovePerRound, oc.OperatorSize())
 }
 
+func TestDrainSchedulerKeepsFixedLimitWithinDrainEpoch(t *testing.T) {
+	cfID, nodeManager, oc, sc, drainState, self := newDrainSchedulerTestHarness(t)
+	target := node.ID("target")
+	dest1 := node.ID("dest1")
+	dest2 := node.ID("dest2")
+	nodeManager.GetAliveNodes()[target] = &node.Info{ID: target}
+	nodeManager.GetAliveNodes()[dest1] = &node.Info{ID: dest1}
+	nodeManager.GetAliveNodes()[dest2] = &node.Info{ID: dest2}
+
+	for i := 1; i <= 1100; i++ {
+		addReplicatingSpan(t, cfID, sc, int64(i), target)
+	}
+	drainState.SetSelfNodeID(self)
+	drainState.SetDispatcherDrainTarget(target, 1)
+
+	s := NewDrainScheduler(
+		cfID,
+		100,
+		oc,
+		sc,
+		common.DefaultMode,
+		drainState,
+	)
+
+	_ = s.Execute()
+	require.Equal(t, 11, oc.OperatorSize())
+
+	operators := oc.GetAllOperators()
+	require.NotEmpty(t, operators)
+	oc.RemoveOp(operators[0].ID())
+	require.Equal(t, 10, oc.OperatorSize())
+
+	removed := 0
+	for _, replication := range sc.GetTaskByNodeID(target) {
+		if oc.GetOperator(replication.ID) != nil {
+			continue
+		}
+		sc.RemoveReplicatingSpan(replication)
+		removed++
+		if removed == 200 {
+			break
+		}
+	}
+	require.Equal(t, 200, removed)
+
+	_ = s.Execute()
+	require.Equal(t, 11, oc.OperatorSize())
+}
+
+func TestDrainSchedulerRecomputesLimitForNewDrainEpoch(t *testing.T) {
+	cfID, nodeManager, oc, sc, drainState, self := newDrainSchedulerTestHarness(t)
+	target := node.ID("target")
+	dest1 := node.ID("dest1")
+	dest2 := node.ID("dest2")
+	nodeManager.GetAliveNodes()[target] = &node.Info{ID: target}
+	nodeManager.GetAliveNodes()[dest1] = &node.Info{ID: dest1}
+	nodeManager.GetAliveNodes()[dest2] = &node.Info{ID: dest2}
+
+	for i := 1; i <= 1100; i++ {
+		addReplicatingSpan(t, cfID, sc, int64(i), target)
+	}
+	drainState.SetSelfNodeID(self)
+	drainState.SetDispatcherDrainTarget(target, 1)
+
+	s := NewDrainScheduler(
+		cfID,
+		100,
+		oc,
+		sc,
+		common.DefaultMode,
+		drainState,
+	)
+
+	_ = s.Execute()
+	require.Equal(t, 11, oc.OperatorSize())
+
+	for _, op := range oc.GetAllOperators() {
+		oc.RemoveOp(op.ID())
+	}
+	require.Equal(t, 0, oc.OperatorSize())
+
+	drainState.SetDispatcherDrainTarget("", 1)
+	_ = s.Execute()
+
+	removed := 0
+	for _, replication := range sc.GetTaskByNodeID(target) {
+		sc.RemoveReplicatingSpan(replication)
+		removed++
+		if removed == 200 {
+			break
+		}
+	}
+	require.Equal(t, 200, removed)
+
+	drainState.SetDispatcherDrainTarget(target, 2)
+	_ = s.Execute()
+	require.Equal(t, 9, oc.OperatorSize())
+}
+
 func TestDrainSchedulerSkipsWhenSelfIsTarget(t *testing.T) {
 	cfID, nodeManager, oc, sc, drainState, self := newDrainSchedulerTestHarness(t)
 	target := self
