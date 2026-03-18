@@ -231,6 +231,52 @@ func (c *Controller) GetMinCheckpointTs(minCheckpointTs uint64) uint64 {
 	return min(minCheckpointTsForOperator, minCheckpointTsForSpan)
 }
 
+// AdvanceSpansCheckpointByNodeWatermark raises maintainer-side span checkpoints for a removed node
+// before failover reschedules those spans.
+//
+// Why this is needed:
+// Dispatcher status and node-level watermarks are reported at different cadences. A span may have
+// last reported checkpoint=10 while the dispatcher manager has already advanced the node watermark
+// to 20. If that node is removed at this moment and maintainer only uses the stale span checkpoint,
+// the recreated dispatcher starts from 10.
+//
+// A problematic sequence is:
+//  1. removed node last complete span report is 10, but maintainer already knows node watermark=20.
+//  2. failover recreates the span from 10 instead of 20.
+//  3. the recreated dispatcher replays from 10 and only reaches 15 before the whole cluster restarts.
+//  4. the next bootstrap uses etcd/global checkpoint=20 and recreates the span from 20.
+//
+// The same removed span is then recovered with two different baselines (10 first, 20 later). The
+// failover replay path only covers [10,15) before switching to 20, so [15,20) is skipped by that
+// path entirely, which may cause data loss.
+//
+// Using the removed node watermark as a floor keeps the recreated dispatcher startTs aligned with the
+// freshest node-level progress already known to maintainer, without changing barrier semantics.
+func (c *Controller) AdvanceSpansCheckpointByNodeWatermark(id node.ID, checkpointTs uint64, mode int64) {
+	if checkpointTs == 0 {
+		return
+	}
+
+	spanController := c.getSpanController(mode)
+	if spanController == nil {
+		return
+	}
+
+	for _, span := range spanController.GetTaskByNodeID(id) {
+		status := span.GetStatus()
+		if status == nil || status.CheckpointTs >= checkpointTs {
+			continue
+		}
+		spanController.UpdateStatus(span, &heartbeatpb.TableSpanStatus{
+			ID:                 status.ID,
+			ComponentStatus:    status.ComponentStatus,
+			CheckpointTs:       checkpointTs,
+			EventSizePerSecond: status.EventSizePerSecond,
+			Mode:               status.Mode,
+		})
+	}
+}
+
 func (c *Controller) Stop() {
 	c.taskHandlesMu.RLock()
 	for _, handler := range c.taskHandles {

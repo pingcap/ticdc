@@ -57,6 +57,39 @@ func init() {
 	replica.SetEasyThresholdForTest()
 }
 
+func newControllerForRemovedNodeWatermarkTest(t *testing.T, checkpointTs uint64) (*Controller, *replica.SpanReplication) {
+	t.Helper()
+
+	testutil.SetUpTestServices()
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
+	nodeManager.GetAliveNodes()["node2"] = &node.Info{ID: "node2"}
+
+	tableTriggerEventDispatcherID := common.NewDispatcherID()
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
+		common.DDLSpanSchemaID,
+		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
+			ID:              tableTriggerEventDispatcherID.ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    1,
+		}, "node1", false)
+	refresher := replica.NewRegionCountRefresher(cfID, time.Minute)
+	controller := NewController(cfID, 1, nil, replicaConfig, ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false)
+
+	totalSpan := common.TableIDToComparableSpan(common.DefaultKeyspaceID, 1)
+	dispatcherID := common.NewDispatcherID()
+	spanReplica := replica.NewSpanReplication(cfID, dispatcherID, 1, &heartbeatpb.TableSpan{
+		TableID:  totalSpan.TableID,
+		StartKey: totalSpan.StartKey,
+		EndKey:   totalSpan.EndKey,
+	}, checkpointTs, common.DefaultMode, false)
+	spanReplica.SetNodeID("node2")
+	controller.spanController.AddReplicatingSpan(spanReplica)
+
+	return controller, spanReplica
+}
+
 func TestSchedule(t *testing.T) {
 	testutil.SetUpTestServices()
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
@@ -1153,6 +1186,28 @@ func TestBalance(t *testing.T) {
 	// changed to working status
 	require.Equal(t, 100, s.spanController.GetReplicatingSize())
 	require.Equal(t, 100, s.spanController.GetTaskSizeByNodeID("node1"))
+}
+
+func TestControllerAdvanceSpansCheckpointByNodeWatermark(t *testing.T) {
+	controller, spanReplica := newControllerForRemovedNodeWatermarkTest(t, 10)
+
+	controller.AdvanceSpansCheckpointByNodeWatermark("node2", 20, common.DefaultMode)
+	require.Equal(t, uint64(20), spanReplica.GetStatus().CheckpointTs)
+
+	controller.RemoveNode("node2")
+	require.Equal(t, 1, controller.spanController.GetAbsentSize())
+
+	msg := spanReplica.NewAddDispatcherMessage("node1", heartbeatpb.OperatorType_O_Add)
+	req := msg.Message[0].(*heartbeatpb.ScheduleDispatcherRequest)
+	require.Equal(t, uint64(20), req.Config.StartTs)
+}
+
+func TestControllerAdvanceSpansCheckpointByNodeWatermarkDoesNotRegress(t *testing.T) {
+	controller, spanReplica := newControllerForRemovedNodeWatermarkTest(t, 25)
+
+	controller.AdvanceSpansCheckpointByNodeWatermark("node2", 20, common.DefaultMode)
+	require.Equal(t, uint64(25), spanReplica.GetStatus().CheckpointTs)
+	require.Equal(t, 1, controller.spanController.GetTaskSizeByNodeID("node2"))
 }
 
 func TestDefaultSpanIntoSplit(t *testing.T) {

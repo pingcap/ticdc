@@ -544,6 +544,14 @@ func (m *Maintainer) onNodeChanged() {
 		zap.Any("removedNodes", removedNodes))
 
 	for _, id := range removedNodes {
+		if watermark, ok := m.checkpointTsByCapture.Get(id); ok {
+			m.controller.AdvanceSpansCheckpointByNodeWatermark(id, watermark.CheckpointTs, common.DefaultMode)
+		}
+		if m.enableRedo {
+			if watermark, ok := m.redoTsByCapture.Get(id); ok {
+				m.controller.AdvanceSpansCheckpointByNodeWatermark(id, watermark.CheckpointTs, common.RedoMode)
+			}
+		}
 		m.controller.RemoveNode(id)
 		m.checkpointTsByCapture.Delete(id)
 		m.redoTsByCapture.Delete(id)
