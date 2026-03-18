@@ -139,6 +139,14 @@ message MaintainerHeartbeat {
     repeated MaintainerStatus statuses = 1;
 }
 
+// DrainProgress is maintainer-observed progress for dispatcher drain on one target.
+message DrainProgress {
+    string target_node_id = 1;
+    uint64 target_epoch = 2;
+    uint32 target_dispatcher_count = 3;
+    uint32 target_inflight_drain_move_count = 4;
+}
+
 message MaintainerStatus {
     ChangefeedID changefeedID = 1;
     string feed_state = 2;
@@ -147,6 +155,9 @@ message MaintainerStatus {
     repeated RunningError err = 5;
     bool bootstrap_done = 6;
     uint64 lastSyncedTs = 7;  // last synced ts of all tables in the changefeed, used in /:changefeed_id/synced API
+    // drain_progress reports the active dispatcher drain target observed by this maintainer.
+    // Nil means no active dispatcher drain target.
+    DrainProgress drain_progress = 8;
 }
 
 // NodeLiveness is node-reported liveness.
@@ -168,6 +179,10 @@ enum NodeLiveness {
 message NodeHeartbeat {
     NodeLiveness liveness = 1;
     uint64 node_epoch = 2;
+    // dispatcher_drain_target_* reports the manager-level dispatcher drain target
+    // currently applied on this node. Empty target means the drain target is clear.
+    string dispatcher_drain_target_node_id = 3;
+    uint64 dispatcher_drain_target_epoch = 4;
 }
 
 // SetNodeLivenessRequest asks a node to transition its local liveness.
@@ -180,6 +195,13 @@ message SetNodeLivenessRequest {
 message SetNodeLivenessResponse {
     NodeLiveness applied = 1;
     uint64 node_epoch = 2;
+}
+
+// SetDispatcherDrainTargetRequest asks a maintainer manager to apply the dispatcher drain target.
+// target_node_id can be empty to clear the current target.
+message SetDispatcherDrainTargetRequest {
+    string target_node_id = 1;
+    uint64 target_epoch = 2;
 }
 
 message CoordinatorBootstrapRequest {
