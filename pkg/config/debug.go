@@ -117,6 +117,8 @@ func NewDefaultSchemaStoreConfig() *SchemaStoreConfig {
 type EventServiceConfig struct {
 	ScanTaskQueueSize int `toml:"scan-task-queue-size" json:"scan_task_queue_size"`
 	ScanLimitInBytes  int `toml:"scan-limit-in-bytes" json:"scan_limit_in_bytes"`
+	// IgnoreSyncPointGuardTs controls whether event service ignores sync-point guard ts based fast-forward.
+	IgnoreSyncPointGuardTs bool `toml:"ignore-sync-point-guard-ts" json:"ignore_sync_point_guard_ts"`
 
 	// DMLEventMaxRows is the maximum number of rows in a DML event when split txn is enabled.
 	DMLEventMaxRows int32 `toml:"dml-event-max-rows" json:"dml_event_max_rows"`
@@ -135,6 +137,7 @@ func NewDefaultEventServiceConfig() *EventServiceConfig {
 	return &EventServiceConfig{
 		ScanTaskQueueSize:        1024 * 8,
 		ScanLimitInBytes:         1024 * 1024 * 256, // 256MB
+		IgnoreSyncPointGuardTs:   true,
 		DMLEventMaxRows:          256,
 		DMLEventMaxBytes:         1024 * 1024 * 1, // 1MB
 		EnableRemoteEventService: true,

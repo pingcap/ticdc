@@ -95,6 +95,8 @@ type eventBroker struct {
 
 	scanRateLimiter  *rate.Limiter
 	scanLimitInBytes uint64
+
+	ignoreSyncPointGuardTs bool
 }
 
 func newEventBroker(
@@ -114,10 +116,11 @@ func newEventBroker(
 	sendMessageWorkerCount := config.DefaultBasicEventHandlerConcurrency
 	scanWorkerCount := config.DefaultBasicEventHandlerConcurrency * 4
 
-	scanTaskQueueSize := config.GetGlobalServerConfig().Debug.EventService.ScanTaskQueueSize / scanWorkerCount
+	eventServiceConfig := config.GetGlobalServerConfig().Debug.EventService
+	scanTaskQueueSize := eventServiceConfig.ScanTaskQueueSize / scanWorkerCount
 	sendMessageQueueSize := basicChannelSize * 4
 
-	scanLimitInBytes := config.GetGlobalServerConfig().Debug.EventService.ScanLimitInBytes
+	scanLimitInBytes := eventServiceConfig.ScanLimitInBytes
 
 	g, ctx := errgroup.WithContext(ctx)
 	ctx, cancel := context.WithCancel(ctx)
@@ -142,6 +145,7 @@ func newEventBroker(
 		g:                       g,
 		scanRateLimiter:         rate.NewLimiter(rate.Limit(scanLimitInBytes), scanLimitInBytes),
 		scanLimitInBytes:        uint64(scanLimitInBytes),
+		ignoreSyncPointGuardTs:  eventServiceConfig.IgnoreSyncPointGuardTs,
 	}
 
 	// Initialize metrics collector
@@ -190,7 +194,10 @@ func newEventBroker(
 		return c.logSyncPointStage(ctx, defaultLogSyncPointStageInterval)
 	})
 
-	log.Info("new event broker created", zap.Uint64("id", id), zap.Uint64("scanLimitInBytes", c.scanLimitInBytes))
+	log.Info("new event broker created",
+		zap.Uint64("id", id),
+		zap.Uint64("scanLimitInBytes", c.scanLimitInBytes),
+		zap.Bool("ignoreSyncPointGuardTs", c.ignoreSyncPointGuardTs))
 	return c
 }
 
@@ -868,7 +875,7 @@ func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, r
 }
 
 func (c *eventBroker) fastForwardSyncPointIfNeeded(d *dispatcherStat) {
-	if !d.enableSyncPoint || d.syncPointGuardTs == 0 || d.syncPointInterval <= 0 {
+	if c.ignoreSyncPointGuardTs || !d.enableSyncPoint || d.syncPointGuardTs == 0 || d.syncPointInterval <= 0 {
 		return
 	}
 	nextSyncPoint := d.nextSyncPoint.Load()
