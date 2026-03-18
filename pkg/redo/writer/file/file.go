@@ -26,6 +26,7 @@ import (
 
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/fsutil"
 	"github.com/pingcap/ticdc/pkg/metrics"
@@ -51,9 +52,54 @@ type fileWriter interface {
 	SetTableSchemaStore(*commonEvent.TableSchemaStore)
 }
 
+type fileWriterConfig interface {
+	CaptureID() config.CaptureID
+	ChangeFeedID() common.ChangeFeedID
+	Dir() string
+	MaxLogSizeInBytes() int64
+	FlushIntervalInMs() int64
+	FlushWorkerNum() int
+	UseExternalStorage() bool
+}
+
+type localFileConfig struct {
+	dir               string
+	maxLogSizeInBytes int64
+	flushIntervalInMs int64
+	flushWorkerNum    int
+}
+
+func (cfg *localFileConfig) CaptureID() config.CaptureID {
+	return ""
+}
+
+func (cfg *localFileConfig) ChangeFeedID() common.ChangeFeedID {
+	return common.ChangeFeedID{}
+}
+
+func (cfg *localFileConfig) Dir() string {
+	return cfg.dir
+}
+
+func (cfg *localFileConfig) MaxLogSizeInBytes() int64 {
+	return cfg.maxLogSizeInBytes
+}
+
+func (cfg *localFileConfig) FlushIntervalInMs() int64 {
+	return cfg.flushIntervalInMs
+}
+
+func (cfg *localFileConfig) FlushWorkerNum() int {
+	return cfg.flushWorkerNum
+}
+
+func (cfg *localFileConfig) UseExternalStorage() bool {
+	return false
+}
+
 // fileWriter is a redo log event fileWriter which writes redo log events to a file.
 type Writer struct {
-	cfg     *writer.Config
+	cfg     fileWriterConfig
 	logType string
 	op      *writer.LogWriterOptions
 	inputCh chan writer.RedoEvent
@@ -81,19 +127,12 @@ type Writer struct {
 	tableSchemaStore       *commonEvent.TableSchemaStore
 }
 
-// NewFileWriter return a file rotated writer, TODO: extract to a common rotate Writer
-func NewFileWriter(
-	ctx context.Context, cfg *writer.Config, logType string, opts ...writer.Option,
+func newWriter(
+	cfg fileWriterConfig,
+	logType string,
+	extStorage storage.ExternalStorage,
+	opts ...writer.Option,
 ) (*Writer, error) {
-	var extStorage storage.ExternalStorage
-	if cfg.UseExternalStorage() {
-		var err error
-		extStorage, err = redo.InitExternalStorage(ctx, *cfg.URI())
-		if err != nil {
-			return nil, err
-		}
-	}
-
 	op := &writer.LogWriterOptions{}
 	for _, opt := range opts {
 		opt(op)
@@ -136,6 +175,37 @@ func NewFileWriter(
 
 	w.running.Store(true)
 	return w, nil
+}
+
+// NewFileWriter returns a file rotated writer for the normal redo writer path.
+func NewFileWriter(
+	ctx context.Context, cfg *writer.Config, logType string, opts ...writer.Option,
+) (*Writer, error) {
+	var extStorage storage.ExternalStorage
+	if cfg.UseExternalStorage() {
+		var err error
+		extStorage, err = redo.InitExternalStorage(ctx, *cfg.URI())
+		if err != nil {
+			return nil, err
+		}
+	}
+	return newWriter(cfg, logType, extStorage, opts...)
+}
+
+// NewLocalFileWriter is used by reader-side local sorting. It keeps the
+// temporary sorted-file path local and avoids the external-storage write path.
+func NewLocalFileWriter(
+	dir string,
+	maxLogSizeInBytes int64,
+	logType string,
+	opts ...writer.Option,
+) (*Writer, error) {
+	return newWriter(&localFileConfig{
+		dir:               dir,
+		maxLogSizeInBytes: maxLogSizeInBytes,
+		flushIntervalInMs: redo.DefaultFlushIntervalInMs,
+		flushWorkerNum:    redo.DefaultFlushWorkerNum,
+	}, logType, nil, opts...)
 }
 
 func (w *Writer) SetTableSchemaStore(tableSchemaStore *commonEvent.TableSchemaStore) {

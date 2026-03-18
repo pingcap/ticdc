@@ -88,8 +88,8 @@ func NewConfig(changefeedID common.ChangeFeedID, consistentCfg *config.Consisten
 
 // newWriterDir returns the local working directory only when a file writer will
 // actually use it. Remote memory backend writes do not need a local directory.
-// The file:// case still returns uri.Path because reader-side sortAndWriteFile
-// constructs a file writer directly from NewConfig.
+// file:// uses the configured path directly, while remote file backend writes
+// stage local files under the server data dir before uploading them.
 func newWriterDir(cfg *Config) string {
 	if cfg == nil || cfg.uri == nil {
 		return ""

@@ -16,6 +16,7 @@ package file
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -266,6 +267,27 @@ func TestNewWriter(t *testing.T) {
 	err = w.Close()
 	require.Nil(t, err)
 	require.Equal(t, w.running.Load(), false)
+}
+
+func TestNewLocalFileWriterKeepsLocalOnlySemantics(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	fileName := "reader-sort.log"
+
+	w, err := NewLocalFileWriter(dir, math.MaxInt32, redo.RedoRowLogFileType, writer.WithLogFileName(func() string {
+		return fileName
+	}))
+	require.NoError(t, err)
+	require.Nil(t, w.storage)
+	require.Nil(t, w.allocator)
+	require.Equal(t, dir, w.cfg.Dir())
+	require.False(t, w.cfg.UseExternalStorage())
+	_, err = w.Write([]byte("test"))
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+	_, err = os.Stat(filepath.Join(dir, fileName))
+	require.NoError(t, err)
 }
 
 func TestRotateFileWithFileAllocator(t *testing.T) {

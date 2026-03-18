@@ -35,13 +35,6 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-func newTestMetaConsistentConfig(storage string) *config.ConsistentConfig {
-	cfg := testutil.NewConsistentConfig(storage)
-	cfg.FlushIntervalInMs = util.AddressOf(int64(redo.MinFlushIntervalInMs))
-	cfg.MetaFlushIntervalInMs = util.AddressOf(int64(redo.MinFlushIntervalInMs))
-	return cfg
-}
-
 func TestInitAndWriteMeta(t *testing.T) {
 	t.Parallel()
 
@@ -82,7 +75,7 @@ func TestInitAndWriteMeta(t *testing.T) {
 	}
 
 	startTs := uint64(10)
-	cfg := newTestMetaConsistentConfig(uri.String())
+	cfg := testutil.NewConsistentConfig(uri.String())
 	m := NewRedoMeta(changefeedID, startTs, cfg)
 
 	var eg errgroup.Group
@@ -158,7 +151,7 @@ func TestPreCleanupAndWriteMeta(t *testing.T) {
 	}
 
 	startTs := uint64(10)
-	cfg := newTestMetaConsistentConfig(uri.String())
+	cfg := testutil.NewConsistentConfig(uri.String())
 	m := NewRedoMeta(changefeedID, startTs, cfg)
 
 	var eg errgroup.Group
@@ -287,7 +280,7 @@ func TestGCAndCleanup(t *testing.T) {
 	}
 
 	startTs := uint64(3)
-	cfg := newTestMetaConsistentConfig(uri.String())
+	cfg := testutil.NewConsistentConfig(uri.String())
 
 	m := NewRedoMeta(changefeedID, startTs, cfg)
 
@@ -347,15 +340,7 @@ func TestRedoMetaMetrics(t *testing.T) {
 	require.NoError(t, err)
 
 	startTs := oracle.ComposeTS(10_000, 0)
-	cfg := &config.ConsistentConfig{
-		Level:                 util.AddressOf(string(redo.ConsistentLevelEventual)),
-		MaxLogSize:            util.AddressOf(redo.DefaultMaxLogSize),
-		Storage:               util.AddressOf(uri.String()),
-		FlushIntervalInMs:     util.AddressOf(int64(redo.MinFlushIntervalInMs)),
-		MetaFlushIntervalInMs: util.AddressOf(int64(redo.MinFlushIntervalInMs)),
-		EncodingWorkerNum:     util.AddressOf(redo.DefaultEncodingWorkerNum),
-		FlushWorkerNum:        util.AddressOf(redo.DefaultFlushWorkerNum),
-	}
+	cfg := testutil.NewConsistentConfig(uri.String())
 
 	m := NewRedoMeta(changefeedID, startTs, cfg)
 	require.NoError(t, m.PreStart(ctx))

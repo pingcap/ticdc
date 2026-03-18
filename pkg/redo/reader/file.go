@@ -31,16 +31,13 @@ import (
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/pkg/common"
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/compression"
-	"github.com/pingcap/ticdc/pkg/config"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/codec"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/redo/writer/file"
-	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -246,20 +243,7 @@ func sortAndWriteFile(
 	fileName string, cfg *readerConfig,
 ) error {
 	sortedName := getSortedFileName(fileName)
-	maxLogSize := int64(math.MaxInt32/redo.Megabyte + 1)
-	writerCfg, err := writer.NewConfig(common.ChangeFeedID{}, &config.ConsistentConfig{
-		MaxLogSize:        util.AddressOf(maxLogSize),
-		FlushIntervalInMs: util.AddressOf(int64(redo.DefaultFlushIntervalInMs)),
-		EncodingWorkerNum: util.AddressOf(redo.DefaultEncodingWorkerNum),
-		FlushWorkerNum:    util.AddressOf(redo.DefaultFlushWorkerNum),
-		Storage:           util.AddressOf("file://" + cfg.dir),
-		Compression:       util.AddressOf(compression.None),
-		FlushConcurrency:  util.AddressOf(1),
-	})
-	if err != nil {
-		return err
-	}
-	w, err := file.NewFileWriter(egCtx, writerCfg, cfg.fileType, writer.WithLogFileName(func() string {
+	w, err := file.NewLocalFileWriter(cfg.dir, math.MaxInt32, cfg.fileType, writer.WithLogFileName(func() string {
 		return sortedName
 	}))
 	if err != nil {
