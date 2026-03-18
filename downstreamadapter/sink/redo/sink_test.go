@@ -15,6 +15,7 @@ package redo
 
 import (
 	"context"
+	stderrors "errors"
 	"fmt"
 	"math/rand"
 	"sync"
@@ -365,7 +366,8 @@ func TestRedoSinkSendMessagesInBatch(t *testing.T) {
 
 	s := &Sink{
 		dmlWriter: mockWriter,
-		logBuffer: chann.NewUnlimitedChannelDefault[writer.RedoEvent](),
+		tasks:     chann.NewUnlimitedChannelDefault[*task](),
+		flush:     newFlushTracker(),
 	}
 
 	doneCh := make(chan error, 1)
@@ -374,13 +376,536 @@ func TestRedoSinkSendMessagesInBatch(t *testing.T) {
 	}()
 
 	totalEvents := redo.DefaultFlushBatchSize*2 + 17
-	events := make([]writer.RedoEvent, 0, totalEvents)
+	events := make([]*task, 0, totalEvents)
 	for i := 0; i < totalEvents; i++ {
-		events = append(events, &commonEvent.RedoRowEvent{})
+		events = append(events, newRowTask(common.NewDispatcherID(), uint64(i+1), &commonEvent.RedoRowEvent{}))
 	}
-	s.logBuffer.Push(events...)
-	s.logBuffer.Close()
+	s.tasks.Push(events...)
+	s.tasks.Close()
 
 	err := <-doneCh
 	require.NoError(t, err)
+}
+
+func TestRedoSinkFlushDMLBeforeBlockWaitsForSameDispatcherFlush(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	job := helper.DDL2Job("create table t_flush_before_block (id int primary key, v int)")
+	require.NotNil(t, job)
+
+	dispatcherID := common.NewDispatcherID()
+	dmlEvent := helper.DML2Event("test", "t_flush_before_block", "insert into t_flush_before_block values (1, 1)")
+	dmlEvent.DispatcherID = dispatcherID
+
+	flushedCh := make(chan struct{}, 1)
+	dmlEvent.AddPostFlushFunc(func() {
+		flushedCh <- struct{}{}
+	})
+
+	writeStarted := make(chan struct{})
+	allowFlush := make(chan struct{})
+
+	mockWriter := writer.NewMockRedoLogWriter(ctrl)
+	mockWriter.EXPECT().
+		WriteEvents(gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, events ...writer.RedoEvent) error {
+			require.Len(t, events, 1)
+			select {
+			case <-writeStarted:
+			default:
+				close(writeStarted)
+			}
+			<-allowFlush
+			for _, event := range events {
+				event.PostFlush()
+			}
+			return nil
+		})
+
+	s := &Sink{
+		ctx:       ctx,
+		dmlWriter: mockWriter,
+		tasks:     chann.NewUnlimitedChannelDefault[*task](),
+		flush:     newFlushTracker(),
+	}
+
+	sendDone := make(chan error, 1)
+	go func() {
+		sendDone <- s.sendMessages(ctx)
+	}()
+
+	s.AddDMLEvent(dmlEvent)
+	<-writeStarted
+
+	ddlEvent := &commonEvent.DDLEvent{DispatcherID: dispatcherID}
+	flushDone := make(chan error, 1)
+	go func() {
+		flushDone <- s.FlushDMLBeforeBlock(ddlEvent)
+	}()
+
+	select {
+	case err := <-flushDone:
+		t.Fatalf("FlushDMLBeforeBlock returned before DML flush completed: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(allowFlush)
+	require.NoError(t, <-flushDone)
+
+	select {
+	case <-flushedCh:
+	case <-time.After(time.Second):
+		t.Fatal("dml event was not flushed")
+	}
+
+	s.tasks.Close()
+	require.NoError(t, <-sendDone)
+}
+
+func TestRedoSinkFlushDMLBeforeBlockDoesNotWaitForOtherDispatcher(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	job := helper.DDL2Job("create table t_flush_other_dispatcher (id int primary key, v int)")
+	require.NotNil(t, job)
+
+	firstDispatcherID := common.NewDispatcherID()
+	secondDispatcherID := common.NewDispatcherID()
+
+	firstEvent := helper.DML2Event("test", "t_flush_other_dispatcher", "insert into t_flush_other_dispatcher values (1, 1)")
+	firstEvent.DispatcherID = firstDispatcherID
+	firstEvent.CommitTs = 101
+
+	secondEvent := helper.DML2Event("test", "t_flush_other_dispatcher", "insert into t_flush_other_dispatcher values (2, 2)")
+	secondEvent.DispatcherID = secondDispatcherID
+	secondEvent.CommitTs = 202
+
+	secondFlushedCh := make(chan struct{}, 1)
+	secondEvent.AddPostFlushFunc(func() {
+		secondFlushedCh <- struct{}{}
+	})
+
+	allowSecondFlush := make(chan struct{})
+
+	mockWriter := writer.NewMockRedoLogWriter(ctrl)
+	mockWriter.EXPECT().
+		WriteEvents(gomock.Any(), gomock.Any()).
+		MinTimes(1).
+		DoAndReturn(func(_ context.Context, events ...writer.RedoEvent) error {
+			for _, event := range events {
+				rowEvent, ok := event.(*commonEvent.RedoRowEvent)
+				require.True(t, ok)
+
+				switch rowEvent.CommitTs {
+				case 101:
+					event.PostFlush()
+				case 202:
+					go func(event writer.RedoEvent) {
+						<-allowSecondFlush
+						event.PostFlush()
+					}(event)
+				default:
+					t.Fatalf("unexpected redo row commit ts %d", rowEvent.CommitTs)
+				}
+			}
+			return nil
+		})
+
+	s := &Sink{
+		ctx:       ctx,
+		dmlWriter: mockWriter,
+		tasks:     chann.NewUnlimitedChannelDefault[*task](),
+		flush:     newFlushTracker(),
+	}
+
+	sendDone := make(chan error, 1)
+	go func() {
+		sendDone <- s.sendMessages(ctx)
+	}()
+
+	s.AddDMLEvent(firstEvent)
+	s.AddDMLEvent(secondEvent)
+
+	flushDone := make(chan error, 1)
+	go func() {
+		flushDone <- s.FlushDMLBeforeBlock(&commonEvent.DDLEvent{DispatcherID: firstDispatcherID})
+	}()
+
+	select {
+	case err := <-flushDone:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("FlushDMLBeforeBlock waited for unrelated dispatcher")
+	}
+
+	select {
+	case <-secondFlushedCh:
+		t.Fatal("FlushDMLBeforeBlock forced unrelated dispatcher to flush")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(allowSecondFlush)
+
+	select {
+	case <-secondFlushedCh:
+	case <-time.After(time.Second):
+		t.Fatal("unrelated dispatcher was not flushed")
+	}
+
+	s.tasks.Close()
+	require.NoError(t, <-sendDone)
+}
+
+func TestRedoSinkPostEnqueueBeforeFlush(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	job := helper.DDL2Job("create table t_post_enqueue_before_flush (id int primary key, v int)")
+	require.NotNil(t, job)
+
+	dispatcherID := common.NewDispatcherID()
+	dmlEvent := helper.DML2Event("test", "t_post_enqueue_before_flush", "insert into t_post_enqueue_before_flush values (1, 1)")
+	dmlEvent.DispatcherID = dispatcherID
+
+	enqueuedCh := make(chan struct{}, 1)
+	flushedCh := make(chan struct{}, 1)
+	dmlEvent.AddPostEnqueueFunc(func() {
+		enqueuedCh <- struct{}{}
+	})
+	dmlEvent.AddPostFlushFunc(func() {
+		flushedCh <- struct{}{}
+	})
+
+	writeStarted := make(chan struct{})
+	allowFlush := make(chan struct{})
+
+	mockWriter := writer.NewMockRedoLogWriter(ctrl)
+	mockWriter.EXPECT().
+		WriteEvents(gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, events ...writer.RedoEvent) error {
+			require.Len(t, events, 1)
+			select {
+			case <-writeStarted:
+			default:
+				close(writeStarted)
+			}
+			<-allowFlush
+			for _, event := range events {
+				event.PostFlush()
+			}
+			return nil
+		})
+
+	s := &Sink{
+		ctx:       ctx,
+		dmlWriter: mockWriter,
+		tasks:     chann.NewUnlimitedChannelDefault[*task](),
+		flush:     newFlushTracker(),
+	}
+
+	sendDone := make(chan error, 1)
+	go func() {
+		sendDone <- s.sendMessages(ctx)
+	}()
+
+	s.AddDMLEvent(dmlEvent)
+
+	select {
+	case <-enqueuedCh:
+	case <-time.After(time.Second):
+		t.Fatal("dml event was not marked enqueued before flush")
+	}
+
+	<-writeStarted
+
+	select {
+	case <-flushedCh:
+		t.Fatal("dml event was flushed before redo writer completed")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(allowFlush)
+
+	select {
+	case <-flushedCh:
+	case <-time.After(time.Second):
+		t.Fatal("dml event was not flushed after redo writer completed")
+	}
+
+	s.tasks.Close()
+	require.NoError(t, <-sendDone)
+}
+
+func TestRedoSinkFlushDMLBeforeBlockWaitsOnlyForEarlierEnqueuedDML(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	job := helper.DDL2Job("create table t_flush_barrier_scope (id int primary key, v int)")
+	require.NotNil(t, job)
+
+	dispatcherID := common.NewDispatcherID()
+	firstEvent := helper.DML2Event("test", "t_flush_barrier_scope", "insert into t_flush_barrier_scope values (1, 1)")
+	firstEvent.DispatcherID = dispatcherID
+	secondEvent := helper.DML2Event("test", "t_flush_barrier_scope", "insert into t_flush_barrier_scope values (2, 2)")
+	secondEvent.DispatcherID = dispatcherID
+
+	secondFlushedCh := make(chan struct{}, 1)
+	secondEvent.AddPostFlushFunc(func() {
+		secondFlushedCh <- struct{}{}
+	})
+
+	firstWriteStarted := make(chan struct{})
+	secondWriteStarted := make(chan struct{})
+	allowFirstFlush := make(chan struct{})
+	allowSecondFlush := make(chan struct{})
+
+	mockWriter := writer.NewMockRedoLogWriter(ctrl)
+	gomock.InOrder(
+		mockWriter.EXPECT().
+			WriteEvents(gomock.Any(), gomock.Any()).
+			DoAndReturn(func(_ context.Context, events ...writer.RedoEvent) error {
+				require.Len(t, events, 1)
+				select {
+				case <-firstWriteStarted:
+				default:
+					close(firstWriteStarted)
+				}
+				<-allowFirstFlush
+				for _, event := range events {
+					event.PostFlush()
+				}
+				return nil
+			}),
+		mockWriter.EXPECT().
+			WriteEvents(gomock.Any(), gomock.Any()).
+			DoAndReturn(func(_ context.Context, events ...writer.RedoEvent) error {
+				require.Len(t, events, 1)
+				select {
+				case <-secondWriteStarted:
+				default:
+					close(secondWriteStarted)
+				}
+				<-allowSecondFlush
+				for _, event := range events {
+					event.PostFlush()
+				}
+				return nil
+			}),
+	)
+
+	s := &Sink{
+		ctx:       ctx,
+		dmlWriter: mockWriter,
+		tasks:     chann.NewUnlimitedChannelDefault[*task](),
+		flush:     newFlushTracker(),
+	}
+
+	sendDone := make(chan error, 1)
+	go func() {
+		sendDone <- s.sendMessages(ctx)
+	}()
+
+	s.AddDMLEvent(firstEvent)
+	<-firstWriteStarted
+
+	flushDone := make(chan error, 1)
+	go func() {
+		flushDone <- s.FlushDMLBeforeBlock(&commonEvent.DDLEvent{DispatcherID: dispatcherID})
+	}()
+
+	require.Eventually(t, func() bool {
+		return s.tasks.Len() == 1
+	}, time.Second, 10*time.Millisecond)
+
+	s.AddDMLEvent(secondEvent)
+
+	select {
+	case err := <-flushDone:
+		t.Fatalf("FlushDMLBeforeBlock returned before earlier DML flushed: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(allowFirstFlush)
+
+	select {
+	case err := <-flushDone:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("FlushDMLBeforeBlock waited for DML enqueued after the barrier")
+	}
+
+	select {
+	case <-secondFlushedCh:
+		t.Fatal("later dml was flushed before the second writer call completed")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	<-secondWriteStarted
+	close(allowSecondFlush)
+	s.tasks.Close()
+	require.NoError(t, <-sendDone)
+}
+
+func TestRedoSinkFlushDMLBeforeBlockWaitsForActualRowFlush(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	job := helper.DDL2Job("create table t_flush_actual_row_flush (id int primary key, v int)")
+	require.NotNil(t, job)
+
+	dispatcherID := common.NewDispatcherID()
+	dmlEvent := helper.DML2Event("test", "t_flush_actual_row_flush", "insert into t_flush_actual_row_flush values (1, 1)")
+	dmlEvent.DispatcherID = dispatcherID
+
+	rowWrittenCh := make(chan []writer.RedoEvent, 1)
+	mockWriter := writer.NewMockRedoLogWriter(ctrl)
+	mockWriter.EXPECT().
+		WriteEvents(gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, events ...writer.RedoEvent) error {
+			require.Len(t, events, 1)
+			rowWrittenCh <- events
+			return nil
+		})
+
+	s := &Sink{
+		ctx:       ctx,
+		dmlWriter: mockWriter,
+		tasks:     chann.NewUnlimitedChannelDefault[*task](),
+		flush:     newFlushTracker(),
+	}
+
+	sendDone := make(chan error, 1)
+	go func() {
+		sendDone <- s.sendMessages(ctx)
+	}()
+
+	s.AddDMLEvent(dmlEvent)
+	writtenEvents := <-rowWrittenCh
+
+	flushDone := make(chan error, 1)
+	go func() {
+		flushDone <- s.FlushDMLBeforeBlock(&commonEvent.DDLEvent{DispatcherID: dispatcherID})
+	}()
+
+	select {
+	case err := <-flushDone:
+		t.Fatalf("FlushDMLBeforeBlock returned before row event PostFlush: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	for _, event := range writtenEvents {
+		event.PostFlush()
+	}
+
+	select {
+	case err := <-flushDone:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("FlushDMLBeforeBlock did not wait for actual row flush")
+	}
+
+	s.tasks.Close()
+	require.NoError(t, <-sendDone)
+}
+
+func TestRedoSinkFlushDMLBeforeBlockReturnsWriterError(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	job := helper.DDL2Job("create table t_flush_writer_error (id int primary key, v int)")
+	require.NotNil(t, job)
+
+	dispatcherID := common.NewDispatcherID()
+	dmlEvent := helper.DML2Event("test", "t_flush_writer_error", "insert into t_flush_writer_error values (1, 1)")
+	dmlEvent.DispatcherID = dispatcherID
+
+	writerErr := stderrors.New("redo writer failed")
+	mockWriter := writer.NewMockRedoLogWriter(ctrl)
+	mockWriter.EXPECT().
+		WriteEvents(gomock.Any(), gomock.Any()).
+		Return(writerErr)
+
+	s := &Sink{
+		ctx:       ctx,
+		dmlWriter: mockWriter,
+		tasks:     chann.NewUnlimitedChannelDefault[*task](),
+		flush:     newFlushTracker(),
+	}
+
+	sendDone := make(chan error, 1)
+	go func() {
+		sendDone <- s.sendMessages(ctx)
+	}()
+
+	s.AddDMLEvent(dmlEvent)
+	require.ErrorIs(t, <-sendDone, writerErr)
+
+	flushDone := make(chan error, 1)
+	go func() {
+		flushDone <- s.FlushDMLBeforeBlock(&commonEvent.DDLEvent{DispatcherID: dispatcherID})
+	}()
+
+	select {
+	case err := <-flushDone:
+		require.ErrorIs(t, err, writerErr)
+	case <-time.After(time.Second):
+		t.Fatal("FlushDMLBeforeBlock did not return after writer failure")
+	}
+
+	s.tasks.Close()
 }

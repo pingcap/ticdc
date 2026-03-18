@@ -15,6 +15,7 @@ package redo
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/pingcap/log"
@@ -41,7 +42,8 @@ type Sink struct {
 	ddlWriter writer.RedoLogWriter
 	dmlWriter writer.RedoLogWriter
 
-	logBuffer *chann.UnlimitedChannel[writer.RedoEvent, any]
+	tasks *chann.UnlimitedChannel[*task, any]
+	flush *flushTracker
 
 	// isNormal indicate whether the sink is in the normal state.
 	isNormal *atomic.Bool
@@ -50,11 +52,216 @@ type Sink struct {
 	metric *redoSinkMetrics
 }
 
+type task struct {
+	dispatcherID common.DispatcherID
+	seq          uint64
+	event        writer.RedoEvent
+	barrier      *barrier
+}
+
+func newRowTask(dispatcherID common.DispatcherID, seq uint64, event writer.RedoEvent) *task {
+	return &task{
+		dispatcherID: dispatcherID,
+		seq:          seq,
+		event:        event,
+	}
+}
+
+func newBarrierTask(dispatcherID common.DispatcherID) *task {
+	return &task{
+		dispatcherID: dispatcherID,
+		barrier:      newBarrier(),
+	}
+}
+
+func (t *task) isBarrier() bool {
+	return t != nil && t.barrier != nil
+}
+
+type barrier struct {
+	target uint64
+	done   chan struct{}
+}
+
+type flushTracker struct {
+	mu     sync.Mutex
+	states map[common.DispatcherID]*flushState
+	err    error
+	errCh  chan struct{}
+}
+
+type flushState struct {
+	mu         sync.Mutex
+	nextSeq    uint64
+	flushedSeq uint64
+	pending    map[uint64]struct{}
+	changed    chan struct{}
+}
+
+func newBarrier() *barrier {
+	return &barrier{
+		done: make(chan struct{}),
+	}
+}
+
+func newFlushTracker() *flushTracker {
+	return &flushTracker{
+		states: make(map[common.DispatcherID]*flushState),
+		errCh:  make(chan struct{}),
+	}
+}
+
+func newFlushState() *flushState {
+	return &flushState{
+		changed: make(chan struct{}),
+	}
+}
+
+func (t *flushTracker) state(dispatcherID common.DispatcherID) *flushState {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if state, ok := t.states[dispatcherID]; ok {
+		return state
+	}
+
+	state := newFlushState()
+	t.states[dispatcherID] = state
+	return state
+}
+
+func (t *flushTracker) alloc(dispatcherID common.DispatcherID) uint64 {
+	state := t.state(dispatcherID)
+	return state.next()
+}
+
+func (s *flushState) next() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.nextSeq++
+	return s.nextSeq
+}
+
+func (t *flushTracker) ack(dispatcherID common.DispatcherID, seq uint64) {
+	t.state(dispatcherID).ack(seq)
+}
+
+func (s *flushState) ack(seq uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if seq <= s.flushedSeq {
+		return
+	}
+	if seq == s.flushedSeq+1 {
+		s.flushedSeq = seq
+		for {
+			nextSeq := s.flushedSeq + 1
+			if _, ok := s.pending[nextSeq]; !ok {
+				break
+			}
+			delete(s.pending, nextSeq)
+			s.flushedSeq = nextSeq
+		}
+		close(s.changed)
+		s.changed = make(chan struct{})
+		return
+	}
+	if s.pending == nil {
+		s.pending = make(map[uint64]struct{})
+	}
+	s.pending[seq] = struct{}{}
+}
+
+func (t *flushTracker) wait(
+	ctx context.Context,
+	dispatcherID common.DispatcherID,
+	target uint64,
+) error {
+	return t.state(dispatcherID).wait(ctx, t.errCh, t.loadErr, target)
+}
+
+func (s *flushState) wait(
+	ctx context.Context,
+	errCh <-chan struct{},
+	loadErr func() error,
+	target uint64,
+) error {
+	if target == 0 {
+		return nil
+	}
+
+	for {
+		s.mu.Lock()
+		if s.flushedSeq >= target {
+			s.mu.Unlock()
+			return nil
+		}
+		changed := s.changed
+		s.mu.Unlock()
+
+		select {
+		case <-ctx.Done():
+			return errors.Trace(context.Cause(ctx))
+		case <-errCh:
+			return errors.Trace(loadErr())
+		case <-changed:
+		}
+	}
+}
+
 func Verify(ctx context.Context, changefeedID common.ChangeFeedID, cfg *config.ConsistentConfig) error {
 	if cfg == nil || !redo.IsConsistentEnabled(util.GetOrZero(cfg.Level)) {
 		return nil
 	}
 	return nil
+}
+
+func (b *barrier) finish(target uint64) {
+	b.target = target
+	close(b.done)
+}
+
+func (t *flushTracker) fail(err error) {
+	if err == nil {
+		err = context.Canceled
+	}
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if t.err != nil {
+		return
+	}
+	t.err = err
+	close(t.errCh)
+}
+
+func (t *flushTracker) loadErr() error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if t.err == nil {
+		return context.Canceled
+	}
+	return t.err
+}
+
+func (t *flushTracker) waitBarrier(
+	ctx context.Context,
+	dispatcherID common.DispatcherID,
+	barrier *barrier,
+) error {
+	select {
+	case <-ctx.Done():
+		return errors.Trace(context.Cause(ctx))
+	case <-t.errCh:
+		return errors.Trace(t.loadErr())
+	case <-barrier.done:
+	}
+
+	return t.wait(ctx, dispatcherID, barrier.target)
 }
 
 // New creates a new redo sink.
@@ -69,9 +276,10 @@ func New(ctx context.Context, changefeedID common.ChangeFeedID,
 			ChangeFeedID:      changefeedID,
 			MaxLogSizeInBytes: util.GetOrZero(cfg.MaxLogSize) * redo.Megabyte,
 		},
-		logBuffer: chann.NewUnlimitedChannelDefault[writer.RedoEvent](),
-		isNormal:  atomic.NewBool(true),
-		isClosed:  atomic.NewBool(false),
+		tasks:    chann.NewUnlimitedChannelDefault[*task](),
+		flush:    newFlushTracker(),
+		isNormal: atomic.NewBool(true),
+		isClosed: atomic.NewBool(false),
 	}
 	start := time.Now()
 	ddlWriter, err := factory.NewRedoLogWriter(s.ctx, s.cfg, redo.RedoDDLLogFileType)
@@ -101,8 +309,12 @@ func New(ctx context.Context, changefeedID common.ChangeFeedID,
 func (s *Sink) Run(ctx context.Context) error {
 	g, ctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
-		defer s.logBuffer.Close()
-		return s.dmlWriter.Run(ctx)
+		defer s.tasks.Close()
+		err := s.dmlWriter.Run(ctx)
+		if err != nil && errors.Cause(err) != context.Canceled && errors.Cause(err) != context.DeadlineExceeded {
+			s.flush.fail(err)
+		}
+		return err
 	})
 	g.Go(func() error {
 		return s.sendMessages(ctx)
@@ -112,8 +324,14 @@ func (s *Sink) Run(ctx context.Context) error {
 	return err
 }
 
-func (s *Sink) FlushDMLBeforeBlock(_ commonEvent.BlockEvent) error {
-	return nil
+func (s *Sink) FlushDMLBeforeBlock(event commonEvent.BlockEvent) error {
+	if event == nil {
+		return nil
+	}
+	dispatcherID := event.GetDispatcherID()
+	task := newBarrierTask(dispatcherID)
+	s.tasks.Push(task)
+	return s.flush.waitBarrier(s.ctx, dispatcherID, task.barrier)
 }
 
 func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
@@ -138,7 +356,14 @@ func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 
 func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	rowsCount := event.Len()
-	events := make([]writer.RedoEvent, 0, rowsCount)
+	if rowsCount == 0 {
+		event.PostEnqueue()
+		event.PostFlush()
+		return
+	}
+
+	dispatcherID := event.GetDispatcherID()
+	tasks := make([]*task, 0, rowsCount)
 	rowCallback := helper.NewTxnPostFlushRowCallback(event, uint64(rowsCount))
 
 	for {
@@ -147,16 +372,21 @@ func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 			event.Rewind()
 			break
 		}
-		events = append(events, &commonEvent.RedoRowEvent{
+		rowSeq := s.flush.alloc(dispatcherID)
+		tasks = append(tasks, newRowTask(dispatcherID, rowSeq, &commonEvent.RedoRowEvent{
 			StartTs:         event.StartTs,
 			CommitTs:        event.CommitTs,
 			Event:           row,
 			PhysicalTableID: event.PhysicalTableID,
 			TableInfo:       event.TableInfo,
-			Callback:        rowCallback,
-		})
+			Callback: func() {
+				s.flush.ack(dispatcherID, rowSeq)
+				rowCallback()
+			},
+		}))
 	}
-	s.logBuffer.Push(events...)
+	s.tasks.Push(tasks...)
+	event.PostEnqueue()
 }
 
 func (s *Sink) IsNormal() bool {
@@ -175,7 +405,8 @@ func (s *Sink) Close(_ bool) {
 	if !s.isClosed.CompareAndSwap(false, true) {
 		return
 	}
-	s.logBuffer.Close()
+	s.flush.fail(context.Canceled)
+	s.tasks.Close()
 	if s.ddlWriter != nil {
 		if err := s.ddlWriter.Close(); err != nil && errors.Cause(err) != context.Canceled {
 			log.Error("redo sink fails to close ddl writer",
@@ -201,30 +432,93 @@ func (s *Sink) Close(_ bool) {
 }
 
 func (s *Sink) sendMessages(ctx context.Context) error {
-	buffer := make([]writer.RedoEvent, 0, redo.DefaultFlushBatchSize)
+	taskBuffer := make([]*task, 0, redo.DefaultFlushBatchSize)
+	pendingTasks := make([]*task, 0, redo.DefaultFlushBatchSize)
+	eventBuffer := make([]writer.RedoEvent, 0, redo.DefaultFlushBatchSize)
+	deferredTasks := make([]*task, 0, redo.DefaultFlushBatchSize)
+	lastSeenSeq := make(map[common.DispatcherID]uint64)
+	writeRows := func(events []writer.RedoEvent) error {
+		if len(events) == 0 {
+			return nil
+		}
+
+		start := time.Now()
+		err := s.dmlWriter.WriteEvents(ctx, events...)
+		if err != nil {
+			if errors.Cause(err) != context.Canceled && errors.Cause(err) != context.DeadlineExceeded {
+				s.flush.fail(err)
+			}
+			return err
+		}
+
+		if s.metric != nil {
+			s.metric.observeRowWrite(len(events), time.Since(start))
+		}
+		return nil
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
 			return errors.Trace(ctx.Err())
 		default:
 		}
-		events, ok := s.logBuffer.GetMultipleNoGroup(buffer)
+		var (
+			tasks []*task
+			ok    bool
+		)
+		if len(pendingTasks) > 0 {
+			tasks = pendingTasks
+			pendingTasks = pendingTasks[:0]
+			ok = true
+		} else {
+			tasks, ok = s.tasks.GetMultipleNoGroup(taskBuffer)
+		}
 		if !ok {
 			return nil
 		}
-		if len(events) == 0 {
+		if len(tasks) == 0 {
 			continue
 		}
-		buffer = events[:0]
 
-		start := time.Now()
-		err := s.dmlWriter.WriteEvents(ctx, events...)
-		if err != nil {
-			return err
+		barrierIndex := -1
+		barrierDispatcherID := common.DispatcherID{}
+		eventBuffer = eventBuffer[:0]
+		deferredTasks = deferredTasks[:0]
+		for i, task := range tasks {
+			if task.isBarrier() {
+				barrierIndex = i
+				barrierDispatcherID = task.dispatcherID
+				break
+			}
+			lastSeenSeq[task.dispatcherID] = task.seq
+			eventBuffer = append(eventBuffer, task.event)
+		}
+		taskBuffer = tasks[:0]
+
+		if barrierIndex >= 0 {
+			eventBuffer = eventBuffer[:0]
+			for _, task := range tasks[:barrierIndex] {
+				if task.dispatcherID == barrierDispatcherID {
+					eventBuffer = append(eventBuffer, task.event)
+					continue
+				}
+				deferredTasks = append(deferredTasks, task)
+			}
+			if barrierIndex+1 < len(tasks) {
+				deferredTasks = append(deferredTasks, tasks[barrierIndex+1:]...)
+			}
+
+			if err := writeRows(eventBuffer); err != nil {
+				return err
+			}
+			pendingTasks = append(pendingTasks[:0], deferredTasks...)
+			tasks[barrierIndex].barrier.finish(lastSeenSeq[barrierDispatcherID])
+			continue
 		}
 
-		if s.metric != nil {
-			s.metric.observeRowWrite(len(events), time.Since(start))
+		if err := writeRows(eventBuffer); err != nil {
+			return err
 		}
 	}
 }
