@@ -21,12 +21,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/redo"
+	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 )
@@ -123,8 +126,7 @@ func TestRedoSinkInProcessor(t *testing.T) {
 			FlushWorkerNum:        util.AddressOf(workerNumberForTest),
 			UseFileBackend:        util.AddressOf(useFileBackend),
 		}
-		startTs := uint64(100)
-		dmlMgr := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme), startTs, cfg)
+		dmlMgr := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), cfg)
 		defer dmlMgr.Close(false)
 
 		var eg errgroup.Group
@@ -214,7 +216,7 @@ func TestRedoSinkError(t *testing.T) {
 		EncodingWorkerNum:     util.AddressOf(workerNumberForTest),
 		FlushWorkerNum:        util.AddressOf(workerNumberForTest),
 	}
-	logMgr := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme), 0, cfg)
+	logMgr := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), cfg)
 	defer logMgr.Close(false)
 
 	var eg errgroup.Group
@@ -273,7 +275,7 @@ func runBenchTest(b *testing.B, storage string, useFileBackend bool) {
 		FlushWorkerNum:        util.AddressOf(redo.DefaultFlushWorkerNum),
 		UseFileBackend:        util.AddressOf(useFileBackend),
 	}
-	dmlMgr := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme), 0, cfg)
+	dmlMgr := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), cfg)
 	defer dmlMgr.Close(false)
 
 	var eg errgroup.Group
@@ -329,4 +331,56 @@ func runBenchTest(b *testing.B, storage string, useFileBackend bool) {
 	cancel()
 
 	require.ErrorIs(b, eg.Wait(), context.Canceled)
+}
+
+func TestRedoSinkSendMessagesInBatch(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockWriter := writer.NewMockRedoLogWriter(ctrl)
+	expectWriteBatch := func(batchSize int) *gomock.Call {
+		args := make([]interface{}, 0, batchSize+1)
+		args = append(args, gomock.Any()) // context
+		for i := 0; i < batchSize; i++ {
+			args = append(args, gomock.Any())
+		}
+		return mockWriter.EXPECT().
+			WriteEvents(args[0], args[1:]...).
+			DoAndReturn(func(_ context.Context, events ...writer.RedoEvent) error {
+				require.Len(t, events, batchSize)
+				return nil
+			})
+	}
+
+	gomock.InOrder(
+		expectWriteBatch(redo.DefaultFlushBatchSize),
+		expectWriteBatch(redo.DefaultFlushBatchSize),
+		expectWriteBatch(17),
+	)
+
+	s := &Sink{
+		dmlWriter: mockWriter,
+		logBuffer: chann.NewUnlimitedChannelDefault[writer.RedoEvent](),
+	}
+
+	doneCh := make(chan error, 1)
+	go func() {
+		doneCh <- s.sendMessages(ctx)
+	}()
+
+	totalEvents := redo.DefaultFlushBatchSize*2 + 17
+	events := make([]writer.RedoEvent, 0, totalEvents)
+	for i := 0; i < totalEvents; i++ {
+		events = append(events, &commonEvent.RedoRowEvent{})
+	}
+	s.logBuffer.Push(events...)
+	s.logBuffer.Close()
+
+	err := <-doneCh
+	require.NoError(t, err)
 }

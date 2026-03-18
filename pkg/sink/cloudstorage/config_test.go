@@ -33,7 +33,8 @@ func TestConfigApply(t *testing.T) {
 	expected.DateSeparator = config.DateSeparatorDay.String()
 	expected.EnablePartitionSeparator = true
 	expected.FlushConcurrency = 1
-	uri := "s3://bucket/prefix?worker-count=32&flush-interval=10s&file-size=16777216&protocol=csv"
+	expected.UseTableIDAsPath = true
+	uri := "s3://bucket/prefix?worker-count=32&flush-interval=10s&file-size=16777216&protocol=csv&use-table-id-as-path=true"
 	sinkURI, err := url.Parse(uri)
 	require.Nil(t, err)
 
@@ -41,7 +42,7 @@ func TestConfigApply(t *testing.T) {
 	err = replicaConfig.ValidateAndAdjust(sinkURI)
 	require.NoError(t, err)
 	cfg := NewConfig()
-	err = cfg.Apply(context.TODO(), sinkURI, replicaConfig.Sink, true)
+	err = cfg.Apply(context.TODO(), sinkURI, replicaConfig.Sink, false)
 	require.Nil(t, err)
 	require.Equal(t, expected, cfg)
 }
@@ -75,6 +76,11 @@ func TestVerifySinkURIParams(t *testing.T) {
 		{
 			name:        "sink uri with valid scheme, worker-count, flush-interval and file-size",
 			uri:         "s3://bucket/prefix?worker-count=64&flush-interval=1m30s&file-size=33554432",
+			expectedErr: "",
+		},
+		{
+			name:        "sink uri with use-table-id-as-path",
+			uri:         "s3://bucket/prefix?use-table-id-as-path=true",
 			expectedErr: "",
 		},
 		{

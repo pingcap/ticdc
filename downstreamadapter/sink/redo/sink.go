@@ -18,11 +18,11 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/redo/writer/factory"
@@ -44,9 +44,10 @@ type Sink struct {
 	logBuffer *chann.UnlimitedChannel[writer.RedoEvent, any]
 
 	// isNormal indicate whether the sink is in the normal state.
-	isNormal   *atomic.Bool
-	isClosed   *atomic.Bool
-	statistics *metrics.Statistics
+	isNormal *atomic.Bool
+	isClosed *atomic.Bool
+
+	metric *redoSinkMetrics
 }
 
 func Verify(ctx context.Context, changefeedID common.ChangeFeedID, cfg *config.ConsistentConfig) error {
@@ -58,7 +59,6 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, cfg *config.C
 
 // New creates a new redo sink.
 func New(ctx context.Context, changefeedID common.ChangeFeedID,
-	startTs common.Ts,
 	cfg *config.ConsistentConfig,
 ) *Sink {
 	s := &Sink{
@@ -69,10 +69,9 @@ func New(ctx context.Context, changefeedID common.ChangeFeedID,
 			ChangeFeedID:      changefeedID,
 			MaxLogSizeInBytes: util.GetOrZero(cfg.MaxLogSize) * redo.Megabyte,
 		},
-		logBuffer:  chann.NewUnlimitedChannelDefault[writer.RedoEvent](),
-		isNormal:   atomic.NewBool(true),
-		isClosed:   atomic.NewBool(false),
-		statistics: metrics.NewStatistics(changefeedID, "redo"),
+		logBuffer: chann.NewUnlimitedChannelDefault[writer.RedoEvent](),
+		isNormal:  atomic.NewBool(true),
+		isClosed:  atomic.NewBool(false),
 	}
 	start := time.Now()
 	ddlWriter, err := factory.NewRedoLogWriter(s.ctx, s.cfg, redo.RedoDDLLogFileType)
@@ -95,6 +94,7 @@ func New(ctx context.Context, changefeedID common.ChangeFeedID,
 	}
 	s.ddlWriter = ddlWriter
 	s.dmlWriter = dmlWriter
+	s.metric = newRedoSinkMetrics(changefeedID)
 	return s
 }
 
@@ -112,53 +112,51 @@ func (s *Sink) Run(ctx context.Context) error {
 	return err
 }
 
+func (s *Sink) FlushDMLBeforeBlock(_ commonEvent.BlockEvent) error {
+	return nil
+}
+
 func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	switch e := event.(type) {
 	case *commonEvent.DDLEvent:
-		err := s.statistics.RecordDDLExecution(func() error {
-			return s.ddlWriter.WriteEvents(s.ctx, e)
-		})
+		start := time.Now()
+		err := s.ddlWriter.WriteEvents(s.ctx, e)
 		if err != nil {
 			s.isNormal.Store(false)
 			return errors.Trace(err)
 		}
+		if s.metric != nil {
+			s.metric.observeDDLWrite(time.Since(start))
+		}
+		log.Info("redo sink send DDL event", zap.Any("startTs", event.GetStartTs()), zap.Any("commitTs", event.GetCommitTs()),
+			zap.Any("event", e.GetDDLQuery()), zap.String("schema", e.GetSchemaName()), zap.String("table", e.GetTableName()),
+			zap.Int64("tableID", e.GetTableID()))
+		return nil
 	}
 	return nil
 }
 
 func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
-	_ = s.statistics.RecordBatchExecution(func() (int, int64, error) {
-		toRowCallback := func(postTxnFlushed []func(), totalCount uint64) func() {
-			var calledCount atomic.Uint64
-			// The callback of the last row will trigger the callback of the txn.
-			return func() {
-				if calledCount.Inc() == totalCount {
-					for _, callback := range postTxnFlushed {
-						callback()
-					}
-				}
-			}
-		}
-		rowsCount := uint64(event.Len())
-		rowCallback := toRowCallback(event.PostTxnFlushed, rowsCount)
+	rowsCount := event.Len()
+	events := make([]writer.RedoEvent, 0, rowsCount)
+	rowCallback := helper.NewTxnPostFlushRowCallback(event, uint64(rowsCount))
 
-		for {
-			row, ok := event.GetNextRow()
-			if !ok {
-				event.Rewind()
-				break
-			}
-			s.logBuffer.Push(&commonEvent.RedoRowEvent{
-				StartTs:         event.StartTs,
-				CommitTs:        event.CommitTs,
-				Event:           row,
-				PhysicalTableID: event.PhysicalTableID,
-				TableInfo:       event.TableInfo,
-				Callback:        rowCallback,
-			})
+	for {
+		row, ok := event.GetNextRow()
+		if !ok {
+			event.Rewind()
+			break
 		}
-		return int(event.Len()), event.GetSize(), nil
-	})
+		events = append(events, &commonEvent.RedoRowEvent{
+			StartTs:         event.StartTs,
+			CommitTs:        event.CommitTs,
+			Event:           row,
+			PhysicalTableID: event.PhysicalTableID,
+			TableInfo:       event.TableInfo,
+			Callback:        rowCallback,
+		})
+	}
+	s.logBuffer.Push(events...)
 }
 
 func (s *Sink) IsNormal() bool {
@@ -194,8 +192,8 @@ func (s *Sink) Close(_ bool) {
 				zap.Error(err))
 		}
 	}
-	if s.statistics != nil {
-		s.statistics.Close()
+	if s.metric != nil {
+		s.metric.close()
 	}
 	log.Info("redo sink closed",
 		zap.String("keyspace", s.cfg.ChangeFeedID.Keyspace()),
@@ -203,17 +201,30 @@ func (s *Sink) Close(_ bool) {
 }
 
 func (s *Sink) sendMessages(ctx context.Context) error {
+	buffer := make([]writer.RedoEvent, 0, redo.DefaultFlushBatchSize)
 	for {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return errors.Trace(ctx.Err())
 		default:
-			if e, ok := s.logBuffer.Get(); ok {
-				err := s.dmlWriter.WriteEvents(ctx, e)
-				if err != nil {
-					return err
-				}
-			}
+		}
+		events, ok := s.logBuffer.GetMultipleNoGroup(buffer)
+		if !ok {
+			return nil
+		}
+		if len(events) == 0 {
+			continue
+		}
+		buffer = events[:0]
+
+		start := time.Now()
+		err := s.dmlWriter.WriteEvents(ctx, events...)
+		if err != nil {
+			return err
+		}
+
+		if s.metric != nil {
+			s.metric.observeRowWrite(len(events), time.Since(start))
 		}
 	}
 }

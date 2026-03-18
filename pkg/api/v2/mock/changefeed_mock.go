@@ -117,6 +117,21 @@ func (mr *MockChangefeedInterfaceMockRecorder) Get(ctx, keyspace, name interface
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Get", reflect.TypeOf((*MockChangefeedInterface)(nil).Get), ctx, keyspace, name)
 }
 
+// GetAllTables mocks base method.
+func (m *MockChangefeedInterface) GetAllTables(ctx context.Context, cfg *v2.VerifyTableConfig, keyspace string) (*v2.Tables, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetAllTables", ctx, cfg, keyspace)
+	ret0, _ := ret[0].(*v2.Tables)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetAllTables indicates an expected call of GetAllTables.
+func (mr *MockChangefeedInterfaceMockRecorder) GetAllTables(ctx, cfg, keyspace interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetAllTables", reflect.TypeOf((*MockChangefeedInterface)(nil).GetAllTables), ctx, cfg, keyspace)
+}
+
 // List mocks base method.
 func (m *MockChangefeedInterface) List(ctx context.Context, keyspace, state string) ([]v2.ChangefeedCommonInfo, error) {
 	m.ctrl.T.Helper()
@@ -161,17 +176,17 @@ func (mr *MockChangefeedInterfaceMockRecorder) MoveSplitTable(ctx, keyspace, nam
 }
 
 // MoveTable mocks base method.
-func (m *MockChangefeedInterface) MoveTable(ctx context.Context, keyspace, name string, tableID int64, targetNode string, mode int64) error {
+func (m *MockChangefeedInterface) MoveTable(ctx context.Context, keyspace, name string, tableID int64, targetNode string, mode int64, wait bool) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "MoveTable", ctx, keyspace, name, tableID, targetNode, mode)
+	ret := m.ctrl.Call(m, "MoveTable", ctx, keyspace, name, tableID, targetNode, mode, wait)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // MoveTable indicates an expected call of MoveTable.
-func (mr *MockChangefeedInterfaceMockRecorder) MoveTable(ctx, keyspace, name, tableID, targetNode, mode interface{}) *gomock.Call {
+func (mr *MockChangefeedInterfaceMockRecorder) MoveTable(ctx, keyspace, name, tableID, targetNode, mode, wait interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MoveTable", reflect.TypeOf((*MockChangefeedInterface)(nil).MoveTable), ctx, keyspace, name, tableID, targetNode, mode)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MoveTable", reflect.TypeOf((*MockChangefeedInterface)(nil).MoveTable), ctx, keyspace, name, tableID, targetNode, mode, wait)
 }
 
 // Pause mocks base method.

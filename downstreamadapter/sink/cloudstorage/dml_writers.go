@@ -15,37 +15,35 @@ package cloudstorage
 
 import (
 	"context"
-	"sync/atomic"
+	"time"
 
+	sinkmetrics "github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/tidb/br/pkg/storage"
+	"go.uber.org/atomic"
 	"golang.org/x/sync/errgroup"
 )
 
-// dmlWriters denotes a worker responsible for writing messages to cloud storage.
+// dmlWriters coordinates encoding and output shard writers.
 type dmlWriters struct {
 	changefeedID commonType.ChangeFeedID
 	statistics   *metrics.Statistics
 
-	// msgCh is a channel to hold eventFragment.
-	// The caller of WriteEvents will write eventFragment to msgCh and
-	// the encodingWorkers will read eventFragment from msgCh to encode events.
-	msgCh       *chann.UnlimitedChannel[eventFragment, any]
-	encodeGroup *encodingGroup
+	// msgCh is a channel to hold task.
+	// The caller of WriteEvents will write tasks to msgCh and
+	// encoding pipelines will read tasks from msgCh to encode events.
+	msgCh *chann.UnlimitedChannel[*task, any]
 
-	// defragmenter is used to defragment the out-of-order encoded messages and
-	// sends encoded messages to individual dmlWorkers.
-	defragmenter *defragmenter
+	encodeGroup *encoderGroup
 
 	writers []*writer
-
-	// last sequence number
-	lastSeqNum uint64
+	closed  atomic.Bool
 }
 
 func newDMLWriters(
@@ -56,53 +54,87 @@ func newDMLWriters(
 	extension string,
 	statistics *metrics.Statistics,
 ) *dmlWriters {
-	messageCh := chann.NewUnlimitedChannelDefault[eventFragment]()
-	encodedOutCh := make(chan eventFragment, defaultChannelSize)
-	encoderGroup := newEncodingGroup(changefeedID, encoderConfig, defaultEncodingConcurrency, messageCh, encodedOutCh)
+	messageCh := chann.NewUnlimitedChannelDefault[*task]()
+	encoderGroup := newEncoderGroup(
+		encoderConfig,
+		defaultEncodingConcurrency,
+		config.WorkerCount,
+	)
 
 	writers := make([]*writer, config.WorkerCount)
-	writerInputChs := make([]*chann.DrainableChann[eventFragment], config.WorkerCount)
 	for i := 0; i < config.WorkerCount; i++ {
-		inputCh := chann.NewAutoDrainChann[eventFragment]()
-		writerInputChs[i] = inputCh
-		writers[i] = newWriter(i, changefeedID, storage, config, extension, inputCh, statistics)
+		writers[i] = newWriter(i, changefeedID, storage, config, extension, statistics)
 	}
 
 	return &dmlWriters{
 		changefeedID: changefeedID,
 		statistics:   statistics,
 		msgCh:        messageCh,
-
 		encodeGroup:  encoderGroup,
-		defragmenter: newDefragmenter(encodedOutCh, writerInputChs),
 		writers:      writers,
 	}
 }
 
-func (d *dmlWriters) Run(ctx context.Context) error {
-	eg, ctx := errgroup.WithContext(ctx)
+func (d *dmlWriters) run(ctx context.Context) error {
+	g, ctx := errgroup.WithContext(ctx)
 
-	eg.Go(func() error {
-		return d.encodeGroup.Run(ctx)
+	g.Go(func() error {
+		return d.encodeGroup.run(ctx)
 	})
 
-	eg.Go(func() error {
-		return d.defragmenter.Run(ctx)
+	g.Go(func() error {
+		return d.addTasks(ctx)
 	})
 
-	for i := 0; i < len(d.writers); i++ {
-		eg.Go(func() error {
-			// UnlimitedChannel will block when there is no event, they cannot dirrectly find ctx.Done()
-			// Thus, we need to close the channel when the context is done
-			defer d.encodeGroup.inputCh.Close()
-			return d.writers[i].Run(ctx)
+	outputs := d.encodeGroup.Outputs()
+	for idx := range d.writers {
+		writer := d.writers[idx]
+		g.Go(func() error {
+			return writer.run(ctx)
+		})
+		g.Go(func() error {
+			outputCh := outputs[idx]
+			for {
+				select {
+				case <-ctx.Done():
+					return context.Cause(ctx)
+				case future := <-outputCh:
+					if err := future.Ready(ctx); err != nil {
+						return err
+					}
+					if err := writer.enqueueTask(ctx, future.task); err != nil {
+						return err
+					}
+				}
+			}
 		})
 	}
-	return eg.Wait()
+	return g.Wait()
 }
 
-func (d *dmlWriters) AddDMLEvent(event *commonEvent.DMLEvent) {
-	tbl := cloudstorage.VersionedTableName{
+func (d *dmlWriters) addTasks(ctx context.Context) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		default:
+		}
+
+		task, ok, err := d.msgCh.GetWithContext(ctx)
+		if err != nil {
+			return errors.Trace(err)
+		}
+		if !ok {
+			return nil
+		}
+		if err := d.encodeGroup.add(ctx, task); err != nil {
+			return err
+		}
+	}
+}
+
+func (d *dmlWriters) addDMLEvent(event *commonEvent.DMLEvent) {
+	table := cloudstorage.VersionedTableName{
 		TableNameWithPhysicTableID: commonType.TableName{
 			Schema:      event.TableInfo.GetSchemaName(),
 			Table:       event.TableInfo.GetTableName(),
@@ -112,18 +144,33 @@ func (d *dmlWriters) AddDMLEvent(event *commonEvent.DMLEvent) {
 		TableInfoVersion: event.TableInfoVersion,
 		DispatcherID:     event.GetDispatcherID(),
 	}
-	seq := atomic.AddUint64(&d.lastSeqNum, 1)
-	_ = d.statistics.RecordBatchExecution(func() (int, int64, error) {
-		// emit a TxnCallbackableEvent encoupled with a sequence number starting from one.
-		d.msgCh.Push(newEventFragment(seq, tbl, event))
-		return int(event.Len()), event.GetSize(), nil
-	})
+	d.msgCh.Push(newDMLTask(table, event))
+}
+
+func (d *dmlWriters) flushDMLBeforeBlock(ctx context.Context, event commonEvent.BlockEvent) error {
+	if event == nil {
+		return nil
+	}
+
+	start := time.Now()
+	defer func() {
+		sinkmetrics.CloudStorageDDLFlushDurationHistogram.WithLabelValues(
+			d.changefeedID.Keyspace(),
+			d.changefeedID.ID().String(),
+		).Observe(time.Since(start).Seconds())
+	}()
+
+	// Invariant for DDL ordering:
+	// marker follows the same dispatcher route and is acked only after prior tasks
+	// in that route are fully flushed by writer.
+	flushTask := newFlushTask(event.GetDispatcherID(), event.GetCommitTs())
+	d.msgCh.Push(flushTask)
+	return flushTask.wait(ctx)
 }
 
 func (d *dmlWriters) close() {
-	d.msgCh.Close()
-	d.encodeGroup.close()
-	for _, w := range d.writers {
-		w.close()
+	if !d.closed.CompareAndSwap(false, true) {
+		return
 	}
+	d.msgCh.Close()
 }

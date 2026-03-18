@@ -85,7 +85,6 @@ var (
 			Name:      "resolve_lock_task_drop_count",
 			Help:      "The number of resolve lock tasks dropped before being processed",
 		})
-
 	LogPullerSpanPipelineInflightBytes = prometheus.NewGauge(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
@@ -136,6 +135,23 @@ var (
 			Name:      "resolved_barrier_compaction_total",
 			Help:      "Number of times the span pipeline compacts the pending resolved-ts barrier queue.",
 		})
+	SubscriptionClientRegionEventHandleDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "ticdc",
+			Subsystem: "subscription_client",
+			Name:      "region_event_handle_duration",
+			Help:      "duration (s) for subscription client to handle region events and build KV cache",
+			Buckets:   prometheus.ExponentialBuckets(0.00004, 2.0, 28), // 40us to 1.5h
+		}, []string{"type"}) // types: entries, resolved, mixed, error.
+
+	SubscriptionClientConsumeKVEventsCallbackDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "ticdc",
+			Subsystem: "subscription_client",
+			Name:      "consume_kv_events_callback_duration",
+			Help:      "duration (s) from calling consumeKVEvents to wake callback execution",
+			Buckets:   prometheus.ExponentialBuckets(0.00004, 2.0, 28), // 40us to 1.5h
+		}, []string{"type"})
 )
 
 func initLogPullerMetrics(registry *prometheus.Registry) {
@@ -154,4 +170,6 @@ func initLogPullerMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(LogPullerSpanPipelineQuotaAcquireDuration)
 	registry.MustRegister(LogPullerSpanPipelineResolvedBarrierDroppedCounter)
 	registry.MustRegister(LogPullerSpanPipelineResolvedBarrierCompactionCounter)
+	registry.MustRegister(SubscriptionClientRegionEventHandleDuration)
+	registry.MustRegister(SubscriptionClientConsumeKVEventsCallbackDuration)
 }

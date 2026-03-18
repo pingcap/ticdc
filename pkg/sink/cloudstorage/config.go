@@ -60,13 +60,14 @@ const (
 	// `0 0 2 * * ?` means 2:00:00 AM every day
 	defaultFileCleanupCronSpec = "0 0 2 * * *"
 
-	defaultEnableTableAcrossNodes = true
+	defaultEnableTableAcrossNodes = false
 )
 
 type urlConfig struct {
-	WorkerCount   *int    `form:"worker-count"`
-	FlushInterval *string `form:"flush-interval"`
-	FileSize      *int    `form:"file-size"`
+	WorkerCount      *int    `form:"worker-count"`
+	FlushInterval    *string `form:"flush-interval"`
+	FileSize         *int    `form:"file-size"`
+	UseTableIDAsPath *bool   `form:"use-table-id-as-path"`
 }
 
 // Config is the configuration for cloud storage sink.
@@ -82,6 +83,7 @@ type Config struct {
 	OutputColumnID           bool
 	FlushConcurrency         int
 	EnableTableAcrossNodes   bool
+	UseTableIDAsPath         bool
 }
 
 // NewConfig returns the default cloud storage sink config.
@@ -132,6 +134,9 @@ func (c *Config) Apply(
 	if err != nil {
 		return err
 	}
+	if err = getUseTableIDAsPath(urlParameter, &c.UseTableIDAsPath); err != nil {
+		return err
+	}
 
 	c.DateSeparator = util.GetOrZero(sinkConfig.DateSeparator)
 	c.EnablePartitionSeparator = util.GetOrZero(sinkConfig.EnablePartitionSeparator)
@@ -167,6 +172,7 @@ func mergeConfig(
 		dest.WorkerCount = sinkConfig.CloudStorageConfig.WorkerCount
 		dest.FlushInterval = sinkConfig.CloudStorageConfig.FlushInterval
 		dest.FileSize = sinkConfig.CloudStorageConfig.FileSize
+		dest.UseTableIDAsPath = sinkConfig.CloudStorageConfig.UseTableIDAsPath
 	}
 	if err := mergo.Merge(dest, urlParameters, mergo.WithOverride); err != nil {
 		return nil, cerror.WrapError(cerror.ErrStorageSinkInvalidConfig, err)
@@ -216,6 +222,15 @@ func getFlushInterval(values *urlConfig, flushInterval *time.Duration) error {
 	}
 
 	*flushInterval = d
+	return nil
+}
+
+func getUseTableIDAsPath(values *urlConfig, useTableIDAsPath *bool) error {
+	if values.UseTableIDAsPath == nil {
+		return nil
+	}
+
+	*useTableIDAsPath = *values.UseTableIDAsPath
 	return nil
 }
 

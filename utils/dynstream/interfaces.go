@@ -119,6 +119,10 @@ type Handler[A Area, P Path, T Event, D Dest] interface {
 	// Used in deciding the handle priority of the events from different areas.
 	GetArea(path P, dest D) A
 
+	// GetMetricLabel returns the prometheus "module" label value for dynamic stream batch metrics.
+	// Returning an empty string uses the default label (fmt.Sprint(area)).
+	GetMetricLabel(dest D) string
+
 	// GetTimestamp Get the timestamp of the event. This method is called once for each event.
 	// Events are processed in the order of the timestamps.
 	// Return zero by default implementation. In this case, the events are processed
@@ -307,12 +311,15 @@ func (f *Feedback[A, P, D]) String() string {
 	return fmt.Sprintf("DynamicStream Feedback{Area: %v, Path: %v, FeedbackType: %s}", f.Area, f.Path, f.FeedbackType.String())
 }
 
-func NewParallelDynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](handler H, option ...Option) DynamicStream[A, P, T, D, H] {
+func NewParallelDynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
+	component string,
+	handler H, option ...Option,
+) DynamicStream[A, P, T, D, H] {
 	opt := NewOption()
 	if len(option) > 0 {
 		opt = option[0]
 	}
-	return newParallelDynamicStream(handler, opt)
+	return newParallelDynamicStream(component, handler, opt)
 }
 
 type Metrics[A Area, P Path] struct {

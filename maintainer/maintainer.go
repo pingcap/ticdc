@@ -153,6 +153,7 @@ type Maintainer struct {
 
 	resolvedTsGauge    prometheus.Gauge
 	resolvedTsLagGauge prometheus.Gauge
+	eventChLenGauge    prometheus.Gauge
 
 	scheduledTaskGauge  prometheus.Gauge
 	spanCountGauge      prometheus.Gauge
@@ -219,6 +220,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		checkpointTsLagGauge: metrics.MaintainerCheckpointTsLagGauge.WithLabelValues(keyspaceName, name),
 		resolvedTsGauge:      metrics.MaintainerResolvedTsGauge.WithLabelValues(keyspaceName, name),
 		resolvedTsLagGauge:   metrics.MaintainerResolvedTsLagGauge.WithLabelValues(keyspaceName, name),
+		eventChLenGauge:      metrics.MaintainerEventChLenGauge.WithLabelValues(keyspaceName, name),
 
 		scheduledTaskGauge:  metrics.ScheduleTaskGauge.WithLabelValues(keyspaceName, name, "default"),
 		spanCountGauge:      metrics.SpanCountGauge.WithLabelValues(keyspaceName, name, "default"),
@@ -422,6 +424,7 @@ func (m *Maintainer) cleanupMetrics() {
 	metrics.MaintainerCheckpointTsGauge.DeleteLabelValues(keyspace, name)
 	metrics.MaintainerCheckpointTsLagGauge.DeleteLabelValues(keyspace, name)
 	metrics.MaintainerHandleEventDuration.DeleteLabelValues(keyspace, name)
+	metrics.MaintainerEventChLenGauge.DeleteLabelValues(keyspace, name)
 	metrics.MaintainerResolvedTsGauge.DeleteLabelValues(keyspace, name)
 	metrics.MaintainerResolvedTsLagGauge.DeleteLabelValues(keyspace, name)
 
@@ -488,6 +491,14 @@ func (m *Maintainer) onMessage(msg *messaging.TargetMessage) {
 }
 
 func (m *Maintainer) onRemoveMaintainer(cascade, changefeedRemoved bool) {
+	if !m.initialized.Load() && !cascade && !changefeedRemoved {
+		// A non-cascade remove can arrive before bootstrap finishes in move/restart scenarios.
+		// If we mark the maintainer as removing here, later bootstrap responses may be dropped,
+		// leaving the maintainer permanently not bootstrapped and the coordinator stuck retrying.
+		log.Info("ignore non-cascade remove request before bootstrap",
+			zap.Stringer("changefeedID", m.changefeedID))
+		return
+	}
 	m.removing.Store(true)
 	m.cascadeRemoving.Store(cascade)
 	m.changefeedRemoved.Store(changefeedRemoved)
@@ -501,7 +512,7 @@ func (m *Maintainer) onRemoveMaintainer(cascade, changefeedRemoved bool) {
 	}
 }
 
-// onCheckpointTsPersisted forwards the checkpoint message to the table trigger dispatcher,
+// onCheckpointTsPersisted forwards the checkpoint message to the table trigger event dispatcher,
 // which is co-located on the same node as the maintainer. The dispatcher will propagate
 // the watermark information to downstream sinks.
 func (m *Maintainer) onCheckpointTsPersisted(msg *heartbeatpb.CheckpointTsMessage) {
@@ -569,9 +580,9 @@ func (m *Maintainer) handleRedoMetaTsMessage(ctx context.Context) {
 			minRedoCheckpointTsForScheduler := m.controller.GetMinRedoCheckpointTs(newWatermark.CheckpointTs)
 			minRedoCheckpointTsForBarrier := m.controller.redoBarrier.GetMinBlockedCheckpointTsForNewTables(newWatermark.CheckpointTs)
 
-			// if there is no tables, there must be a table trigger dispatcher
+			// if there is no tables, there must be a table trigger redo dispatcher
 			for _, id := range m.bootstrapper.GetAllNodeIDs() {
-				// maintainer node has the table trigger dispatcher
+				// maintainer node has the table trigger redo dispatcher
 				if id != m.selfNode.ID && m.controller.redoSpanController.GetTaskSizeByNodeID(id) <= 0 {
 					continue
 				}
@@ -684,7 +695,7 @@ func (m *Maintainer) calculateNewCheckpointTs() (*heartbeatpb.Watermark, bool) {
 	// Step 2: Apply heartbeat constraints from all nodes
 	updateCheckpointTs := true
 	for _, id := range m.bootstrapper.GetAllNodeIDs() {
-		// maintainer node has the table trigger dispatcher
+		// maintainer node has the table trigger event dispatcher
 		if id != m.selfNode.ID && m.controller.spanController.GetTaskSizeByNodeID(id) <= 0 {
 			continue
 		}
@@ -1043,29 +1054,31 @@ func (m *Maintainer) createBootstrapMessageFactory() bootstrap.NewBootstrapReque
 	}
 	return func(targetNodeID node.ID, targetAddr string) *messaging.TargetMessage {
 		msg := &heartbeatpb.MaintainerBootstrapRequest{
-			ChangefeedID:                      m.changefeedID.ToPB(),
-			Config:                            cfgBytes,
-			StartTs:                           m.startCheckpointTs,
-			TableTriggerEventDispatcherId:     nil,
-			RedoTableTriggerEventDispatcherId: nil,
-			IsNewChangefeed:                   false,
-			KeyspaceId:                        m.info.KeyspaceID,
+			ChangefeedID:                  m.changefeedID.ToPB(),
+			Config:                        cfgBytes,
+			StartTs:                       m.startCheckpointTs,
+			TableTriggerEventDispatcherId: nil,
+			TableTriggerRedoDispatcherId:  nil,
+			IsNewChangefeed:               false,
+			KeyspaceId:                    m.info.KeyspaceID,
 		}
 
 		// only send dispatcher targetNodeID to dispatcher manager on the same node
 		if targetNodeID == m.selfNode.ID {
+			msg.TableTriggerEventDispatcherId = m.ddlSpan.ID.ToPB()
+			if m.enableRedo {
+				msg.TableTriggerRedoDispatcherId = m.redoDDLSpan.ID.ToPB()
+			}
+			msg.IsNewChangefeed = m.newChangefeed
 			log.Info("create table event trigger dispatcher bootstrap message",
 				zap.Stringer("changefeedID", m.changefeedID),
 				zap.String("nodeAddr", targetAddr),
 				zap.Any("nodeID", targetNodeID),
 				zap.String("dispatcherID", m.ddlSpan.ID.String()),
+				zap.Bool("enableRedo", m.enableRedo),
+				zap.Bool("newChangefeed", m.newChangefeed),
 				zap.Uint64("startTs", m.startCheckpointTs),
 			)
-			msg.TableTriggerEventDispatcherId = m.ddlSpan.ID.ToPB()
-			if m.enableRedo {
-				msg.RedoTableTriggerEventDispatcherId = m.redoDDLSpan.ID.ToPB()
-			}
-			msg.IsNewChangefeed = m.newChangefeed
 		}
 
 		log.Info("maintainer new bootstrap message to dispatcher orchestrator",
@@ -1103,19 +1116,24 @@ func (m *Maintainer) collectMetrics() {
 		working := spanController.GetReplicatingSize()
 		absent := spanController.GetAbsentSize()
 
+		var blockingLen int
 		if common.IsDefaultMode(mode) {
 			m.spanCountGauge.Set(float64(totalSpanCount))
 			m.tableCountGauge.Set(float64(totalTableCount))
 			m.scheduledTaskGauge.Set(float64(scheduling))
+			blockingLen = m.controller.barrier.blockedEvents.Len()
 		} else {
 			m.redoSpanCountGauge.Set(float64(totalSpanCount))
 			m.redoTableCountGauge.Set(float64(totalTableCount))
 			m.redoScheduledTaskGauge.Set(float64(scheduling))
+			blockingLen = m.controller.redoBarrier.blockedEvents.Len()
 		}
+		metrics.ExecDDLBlockingGauge.WithLabelValues(m.changefeedID.Keyspace(), m.changefeedID.Name(), common.StringMode(mode)).Set(float64(blockingLen))
 		metrics.TableStateGauge.WithLabelValues(m.changefeedID.Keyspace(), m.changefeedID.Name(), "Absent", common.StringMode(mode)).Set(float64(absent))
 		metrics.TableStateGauge.WithLabelValues(m.changefeedID.Keyspace(), m.changefeedID.Name(), "Working", common.StringMode(mode)).Set(float64(working))
 	}
 	if time.Since(m.lastPrintStatusTime) > time.Second*20 {
+		m.eventChLenGauge.Set(float64(m.eventCh.Len()))
 		updateMetric(common.DefaultMode)
 		if m.enableRedo {
 			updateMetric(common.RedoMode)

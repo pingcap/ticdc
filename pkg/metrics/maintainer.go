@@ -25,6 +25,14 @@ var (
 			Buckets:   prometheus.ExponentialBuckets(0.01 /* 10 ms */, 2, 18),
 		}, []string{getKeyspaceLabel(), "changefeed"})
 
+	MaintainerEventChLenGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "maintainer",
+			Name:      "event_ch_len",
+			Help:      "length of maintainer event channel",
+		}, []string{getKeyspaceLabel(), "changefeed"})
+
 	OperatorCount = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
@@ -53,6 +61,7 @@ var (
 
 func initMaintainerMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(MaintainerHandleEventDuration)
+	registry.MustRegister(MaintainerEventChLenGauge)
 	registry.MustRegister(OperatorCount)
 	registry.MustRegister(OperatorDuration)
 	registry.MustRegister(TotalOperatorCount)

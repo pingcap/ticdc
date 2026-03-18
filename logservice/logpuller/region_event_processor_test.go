@@ -15,6 +15,7 @@ package logpuller
 
 import (
 	"context"
+	"math"
 	"testing"
 
 	"github.com/pingcap/kvproto/pkg/cdcpb"
@@ -189,4 +190,49 @@ func TestRegionEventProcessor_ResolvedTsBatchCleansStaleRegionState(t *testing.T
 	// appears in batch resolved-ts events.
 	require.Equal(t, 1, subSpan.rangeLock.Len())
 	require.Nil(t, worker.getRegionState(subSpan.subID, state1.getRegionID()))
+}
+
+func TestMaybeAdvanceSpanResolvedTsThrottled(t *testing.T) {
+	ctx := context.Background()
+	l := regionlock.NewRangeLock(1, []byte("a"), []byte("z"), math.MaxUint64)
+	res1 := l.LockRange(ctx, []byte("a"), []byte("m"), 1, 1)
+	require.Equal(t, regionlock.LockRangeStatusSuccess, res1.Status)
+	res2 := l.LockRange(ctx, []byte("m"), []byte("z"), 2, 1)
+	require.Equal(t, regionlock.LockRangeStatusSuccess, res2.Status)
+
+	res1.LockedRangeState.Initialized.Store(true)
+	res2.LockedRangeState.Initialized.Store(true)
+
+	res1.LockedRangeState.ResolvedTs.Store(1)
+	l.UpdateLockedRangeStateHeap(res1.LockedRangeState)
+	res2.LockedRangeState.ResolvedTs.Store(2)
+	l.UpdateLockedRangeStateHeap(res2.LockedRangeState)
+	require.Equal(t, uint64(1), l.GetHeapMinTs())
+
+	res1.LockedRangeState.ResolvedTs.Store(300)
+	res2.LockedRangeState.ResolvedTs.Store(200)
+	require.Equal(t, uint64(200), l.ResolvedTs())
+	require.Equal(t, uint64(300), l.GetHeapMinTs())
+
+	subSpan := &subscribedSpan{
+		subID:           SubscriptionID(1),
+		rangeLock:       l,
+		advanceInterval: 100,
+	}
+	subSpan.lastAdvanceTime.Store(0)
+	worker := &regionRequestWorker{requestCache: &requestCache{}}
+	state := newRegionFeedState(
+		regionInfo{
+			verID:            tikv.NewRegionVerID(1, 1, 1),
+			subscribedSpan:   subSpan,
+			lockedRangeState: res1.LockedRangeState,
+		},
+		1,
+		worker,
+	)
+	state.start()
+	state.setInitialized()
+
+	updateRegionResolvedTs(subSpan, state, 300)
+	require.Equal(t, uint64(200), maybeAdvanceSpanResolvedTs(subSpan, state.getRegionID()))
 }

@@ -48,6 +48,14 @@ func QuoteName(name string) string {
 	return "`" + EscapeName(name) + "`"
 }
 
+// UnquoteName removes one layer of MySQL identifier quoting and unescapes doubled backticks.
+func UnquoteName(name string) string {
+	if len(name) < 2 || name[0] != '`' || name[len(name)-1] != '`' {
+		return name
+	}
+	return strings.ReplaceAll(name[1:len(name)-1], "``", "`")
+}
+
 // EscapeName replaces all "`" in name with double "`"
 func EscapeName(name string) string {
 	return strings.Replace(name, "`", "``", -1)
@@ -92,6 +100,9 @@ type TableInfo struct {
 	View *model.ViewInfo `json:"view"`
 
 	Sequence *model.SequenceInfo `json:"sequence"`
+
+	ActiveActiveTable bool `json:"active-active-table"`
+	SoftDeleteTable   bool `json:"soft-delete-table"`
 
 	// UpdateTS is used to record the timestamp of updating the table's schema information.
 	// These changing schema operations don't include 'truncate table', 'rename table',
@@ -149,11 +160,22 @@ func (ti *TableInfo) Marshal() ([]byte, error) {
 
 func UnmarshalJSONToTableInfo(data []byte) (*TableInfo, error) {
 	// otherField | columnSchemaData | columnSchemaDataSize
+	if len(data) < 8 {
+		return nil, fmt.Errorf("invalid table info data: length %d is too short", len(data))
+	}
+
 	ti := &TableInfo{}
 	var err error
 	var columnSchemaDataSize uint64
 	columnSchemaDataSizeValue := data[len(data)-8:]
 	columnSchemaDataSize = binary.BigEndian.Uint64(columnSchemaDataSizeValue)
+	if columnSchemaDataSize > uint64(len(data)-8) {
+		return nil, fmt.Errorf(
+			"invalid table info data: column schema size %d exceeds payload length %d",
+			columnSchemaDataSize,
+			len(data)-8,
+		)
+	}
 
 	columnSchemaData := data[len(data)-8-int(columnSchemaDataSize) : len(data)-8]
 	restData := data[:len(data)-8-int(columnSchemaDataSize)]
@@ -186,6 +208,16 @@ func (ti *TableInfo) GetColumns() []*model.ColumnInfo {
 
 func (ti *TableInfo) GetIndices() []*model.IndexInfo {
 	return ti.columnSchema.Indices
+}
+
+// IsActiveActiveTable indicates whether the table participates in active-active replication.
+func (ti *TableInfo) IsActiveActiveTable() bool {
+	return ti.ActiveActiveTable
+}
+
+// IsSoftDeleteTable indicates whether the table relies on TiDB soft-delete semantics.
+func (ti *TableInfo) IsSoftDeleteTable() bool {
+	return ti.SoftDeleteTable
 }
 
 // GetRowColumnsOffset return offset with visible column
@@ -242,6 +274,19 @@ func (ti *TableInfo) GetColumnInfo(colID int64) (info *model.ColumnInfo, exist b
 	return ti.columnSchema.Columns[colOffset], true
 }
 
+// GetColumnInfoByName returns column info by name if it exists.
+func (ti *TableInfo) GetColumnInfoByName(name string) (*model.ColumnInfo, bool) {
+	colID, ok := ti.columnSchema.NameToColID[name]
+	if !ok {
+		return nil, false
+	}
+	offset, ok := ti.columnSchema.ColumnsOffset[colID]
+	if !ok {
+		return nil, false
+	}
+	return ti.columnSchema.Columns[offset], true
+}
+
 // ForceGetColumnInfo return the column info by ID
 // Caller must ensure `colID` exists
 func (ti *TableInfo) ForceGetColumnInfo(colID int64) *model.ColumnInfo {
@@ -276,6 +321,16 @@ func (ti *TableInfo) ForceGetColumnIDByName(name string) int64 {
 		log.Panic("invalid column name", zap.String("column", name))
 	}
 	return colID
+}
+
+// GetColumnOffsetByName returns the offset of the specified column if it exists.
+func (ti *TableInfo) GetColumnOffsetByName(name string) (int, bool) {
+	colID, ok := ti.columnSchema.NameToColID[name]
+	if !ok {
+		return 0, false
+	}
+	offset, ok := ti.columnSchema.ColumnsOffset[colID]
+	return offset, ok
 }
 
 func (ti *TableInfo) MustGetColumnOffsetByID(id int64) int {
@@ -520,18 +575,23 @@ func (ti *TableInfo) GetOrderedHandleKeyColumnIDs() []int64 {
 }
 
 func (ti *TableInfo) ToTiDBTableInfo() *model.TableInfo {
-	return &model.TableInfo{
-		ID:         ti.TableName.TableID,
-		Name:       ast.NewCIStr(ti.TableName.Table),
-		Charset:    ti.Charset,
-		Collate:    ti.Collate,
-		Comment:    ti.Comment,
-		View:       ti.View,
-		Sequence:   ti.Sequence,
-		Columns:    ti.columnSchema.Columns,
-		Indices:    ti.columnSchema.Indices,
-		PKIsHandle: ti.columnSchema.PKIsHandle,
+	result := &model.TableInfo{
+		ID:             ti.TableName.TableID,
+		Name:           ast.NewCIStr(ti.TableName.Table),
+		Charset:        ti.Charset,
+		Collate:        ti.Collate,
+		Comment:        ti.Comment,
+		View:           ti.View,
+		Sequence:       ti.Sequence,
+		Columns:        ti.columnSchema.Columns,
+		Indices:        ti.columnSchema.Indices,
+		PKIsHandle:     ti.columnSchema.PKIsHandle,
+		IsActiveActive: ti.ActiveActiveTable,
 	}
+	if ti.SoftDeleteTable {
+		result.SoftdeleteInfo = &model.SoftdeleteInfo{}
+	}
+	return result
 }
 
 func newTableInfo(schema string, table string, tableID int64, isPartition bool, columnSchema *columnSchema, tableInfo *model.TableInfo) *TableInfo {
@@ -542,14 +602,16 @@ func newTableInfo(schema string, table string, tableID int64, isPartition bool, 
 			TableID:     tableID,
 			IsPartition: isPartition,
 		},
-		columnSchema:     columnSchema,
-		HasPKOrNotNullUK: OriginalHasPKOrNotNullUK(tableInfo),
-		View:             tableInfo.View,
-		Sequence:         tableInfo.Sequence,
-		Charset:          tableInfo.Charset,
-		Collate:          tableInfo.Collate,
-		Comment:          tableInfo.Comment,
-		UpdateTS:         tableInfo.UpdateTS,
+		columnSchema:      columnSchema,
+		HasPKOrNotNullUK:  OriginalHasPKOrNotNullUK(tableInfo),
+		View:              tableInfo.View,
+		Sequence:          tableInfo.Sequence,
+		Charset:           tableInfo.Charset,
+		Collate:           tableInfo.Collate,
+		Comment:           tableInfo.Comment,
+		UpdateTS:          tableInfo.UpdateTS,
+		ActiveActiveTable: tableInfo.IsActiveActive,
+		SoftDeleteTable:   tableInfo.SoftdeleteInfo != nil,
 	}
 }
 
@@ -579,7 +641,7 @@ func WrapTableInfo(schemaName string, info *model.TableInfo) *TableInfo {
 // NewTableInfo4Decoder is only used by the codec decoder for the test purpose,
 // do not call this method on the production code.
 func NewTableInfo4Decoder(schema string, tableInfo *model.TableInfo) *TableInfo {
-	cs := newColumnSchema4Decoder(tableInfo)
+	cs := NewColumnSchema4Decoder(tableInfo)
 	result := newTableInfo(schema, tableInfo.Name.O, tableInfo.ID, tableInfo.GetPartitionInfo() != nil, cs, tableInfo)
 	result.InitPrivateFields()
 	return result

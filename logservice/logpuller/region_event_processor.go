@@ -23,6 +23,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/spanz"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
 )
@@ -283,7 +284,7 @@ func appendKVEntriesFromRegionEntries(
 					zap.String("EventType", "COMMITTED"),
 					zap.Uint64("CommitTs", entry.CommitTs),
 					zap.Uint64("resolvedTs", resolvedTs),
-					zap.String("key", spanz.HexKey(entry.GetKey())))
+					zap.String("key", util.RedactKey(entry.GetKey())))
 			}
 			dst = append(dst, assembleRowEvent(regionID, entry))
 		case cdcpb.Event_PREWRITE:
@@ -300,7 +301,7 @@ func appendKVEntriesFromRegionEntries(
 					zap.Uint64("requestID", state.requestID),
 					zap.Uint64("startTs", entry.GetStartTs()),
 					zap.Uint64("commitTs", entry.GetCommitTs()),
-					zap.String("key", spanz.HexKey(entry.GetKey())))
+					zap.String("key", util.RedactKey(entry.GetKey())))
 			}
 
 			isStaleEvent := entry.CommitTs <= span.startTs
@@ -317,7 +318,7 @@ func appendKVEntriesFromRegionEntries(
 					zap.String("EventType", "COMMIT"),
 					zap.Uint64("CommitTs", entry.CommitTs),
 					zap.Uint64("resolvedTs", resolvedTs),
-					zap.String("key", spanz.HexKey(entry.GetKey())))
+					zap.String("key", util.RedactKey(entry.GetKey())))
 			}
 			dst = append(dst, assembleRowEvent(regionID, entry))
 		case cdcpb.Event_ROLLBACK:
@@ -336,19 +337,20 @@ func updateRegionResolvedTs(span *subscribedSpan, state *regionFeedState, resolv
 		return
 	}
 	state.matcher.tryCleanUnmatchedValue()
-	// regionID := state.getRegionID()
 	lastResolvedTs := state.getLastResolvedTs()
 	if resolvedTs < lastResolvedTs {
-		// log.Info("The resolvedTs is fallen back in subscription client",
-		// 	zap.Uint64("subscriptionID", uint64(state.region.subscribedSpan.subID)),
-		// 	zap.Uint64("regionID", regionID),
-		// 	zap.Uint64("resolvedTs", resolvedTs),
-		// 	zap.Uint64("lastResolvedTs", lastResolvedTs))
+		log.Debug("The resolvedTs is fallen back in subscription client",
+			zap.Uint64("subscriptionID", uint64(state.region.subscribedSpan.subID)),
+			zap.Uint64("regionID", state.getRegionID()),
+			zap.Uint64("resolvedTs", resolvedTs),
+			zap.Uint64("lastResolvedTs", lastResolvedTs))
 		return
 	}
 
 	state.updateResolvedTs(resolvedTs)
-	span.rangeLock.UpdateLockedRangeStateHeap(state.region.lockedRangeState)
+	if span.advanceInterval == 0 {
+		span.rangeLock.UpdateLockedRangeStateHeap(state.region.lockedRangeState)
+	}
 }
 
 func maybeAdvanceSpanResolvedTs(span *subscribedSpan, triggerRegionID uint64) uint64 {
@@ -358,7 +360,12 @@ func maybeAdvanceSpanResolvedTs(span *subscribedSpan, triggerRegionID uint64) ui
 		return 0
 	}
 
-	ts := span.rangeLock.GetHeapMinTs()
+	ts := uint64(0)
+	if span.advanceInterval == 0 {
+		ts = span.rangeLock.GetHeapMinTs()
+	} else {
+		ts = span.rangeLock.ResolvedTs()
+	}
 	log.Info("maybe advance span resolved ts",
 		zap.Uint64("subscriptionID", uint64(span.subID)),
 		zap.Int64("tableID", span.span.TableID),

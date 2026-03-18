@@ -17,28 +17,52 @@ import (
 	"testing"
 
 	"github.com/pingcap/ticdc/coordinator/changefeed"
+	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/stretchr/testify/require"
 )
 
+// TestAddMaintainerOperator_OnNodeRemove verifies that removing a non-destination node
+// does not affect scheduling, while removing the destination node cancels the operator
+// and stops it from scheduling further commands.
 func TestAddMaintainerOperator_OnNodeRemove(t *testing.T) {
 	op := NewAddMaintainerOperator(nil, &changefeed.Changefeed{}, "n1")
 	op.OnNodeRemove("n2")
-	require.Equal(t, op.canceled, None)
+	require.Equal(t, None, op.canceled.Load())
 	require.False(t, op.finished.Load())
 
 	op.OnNodeRemove("n1")
-	require.Equal(t, op.canceled, NodeRemoved)
+	require.Equal(t, NodeRemoved, op.canceled.Load())
 	require.True(t, op.finished.Load())
 
 	require.Nil(t, op.Schedule())
 }
 
+// TestAddMaintainerOperator_OnTaskRemoved verifies that removing the changefeed task
+// cancels the operator and prevents any further scheduling.
 func TestAddMaintainerOperator_OnTaskRemoved(t *testing.T) {
 	op := NewAddMaintainerOperator(nil, &changefeed.Changefeed{}, "n1")
 
 	op.OnTaskRemoved()
-	require.Equal(t, op.canceled, TaskRemoved)
+	require.Equal(t, TaskRemoved, op.canceled.Load())
 	require.True(t, op.finished.Load())
 
 	require.Nil(t, op.Schedule())
+}
+
+// TestAddMaintainerOperator_CheckRequiresBootstrapDone verifies that the operator only
+// completes after it observes a Working status with BootstrapDone from the destination node.
+func TestAddMaintainerOperator_CheckRequiresBootstrapDone(t *testing.T) {
+	op := NewAddMaintainerOperator(nil, &changefeed.Changefeed{}, "n1")
+
+	op.Check("n1", &heartbeatpb.MaintainerStatus{
+		State:         heartbeatpb.ComponentState_Working,
+		BootstrapDone: false,
+	})
+	require.False(t, op.finished.Load())
+
+	op.Check("n1", &heartbeatpb.MaintainerStatus{
+		State:         heartbeatpb.ComponentState_Working,
+		BootstrapDone: true,
+	})
+	require.True(t, op.finished.Load())
 }
