@@ -252,7 +252,6 @@ func TestScanRangeCappedByNextSyncPoint(t *testing.T) {
 
 	// Current syncpoint is already in commit stage.
 	changefeedStatus.syncPointPreparingTs.Store(info.nextSyncPoint)
-	changefeedStatus.syncPointCommitReady.Store(true)
 	changefeedStatus.syncPointInFlightTs.Store(info.nextSyncPoint)
 
 	disp.sentResolvedTs.Store(info.startTs)
@@ -290,7 +289,6 @@ func TestGetScanTaskDataRangeNudgesSyncPointInCommitStageWithoutNewData(t *testi
 	disp.eventStoreCommitTs.Store(syncTs)
 
 	changefeedStatus.syncPointPreparingTs.Store(syncTs)
-	changefeedStatus.syncPointCommitReady.Store(true)
 	changefeedStatus.syncPointInFlightTs.Store(syncTs)
 
 	needScan, _ := broker.getScanTaskDataRange(disp)
@@ -326,7 +324,6 @@ func TestNudgeSyncPointCommitDispatchersPushesTask(t *testing.T) {
 	broker.dispatchers.Store(disp.id, dispPtr)
 
 	changefeedStatus.syncPointPreparingTs.Store(info.nextSyncPoint)
-	changefeedStatus.syncPointCommitReady.Store(true)
 	changefeedStatus.syncPointInFlightTs.Store(info.nextSyncPoint)
 
 	broker.nudgeSyncPointCommitDispatchers(changefeedStatus)
@@ -571,7 +568,7 @@ func TestSyncPointGuardFastForwardAndResume(t *testing.T) {
 	require.Equal(t, oracle.GoTimeToTS(time.Unix(0, 0).Add(40*time.Second)), disp.nextSyncPoint.Load())
 	require.False(t, broker.hasSyncPointEventsBeforeTs(oracle.GoTimeToTS(time.Unix(0, 0).Add(41*time.Second)), disp))
 	disp.sentResolvedTs.Store(oracle.GoTimeToTS(time.Unix(0, 0).Add(40 * time.Second)))
-	changefeedStatus.tryPromoteSyncPointPrepare()
+	changefeedStatus.tryPromoteSyncPointToCommitIfReady()
 	require.True(t, broker.hasSyncPointEventsBeforeTs(oracle.GoTimeToTS(time.Unix(0, 0).Add(41*time.Second)), disp))
 
 	broker.emitSyncPointEventIfNeeded(oracle.GoTimeToTS(time.Unix(0, 0).Add(41*time.Second)), disp, node.ID("server1"))
@@ -638,19 +635,19 @@ func TestSyncPointTwoStagePrepareThenCommit(t *testing.T) {
 	// Crossing the syncpoint starts prepare stage, but no dispatcher can emit syncpoint yet.
 	require.False(t, broker.hasSyncPointEventsBeforeTs(oracle.GoTimeToTS(time.Unix(0, 0).Add(11*time.Second)), disp1))
 	require.Equal(t, oracle.GoTimeToTS(time.Unix(0, 0).Add(10*time.Second)), changefeedStatus.getSyncPointPreparingTs())
-	require.False(t, changefeedStatus.syncPointCommitReady.Load())
+	require.Equal(t, uint64(0), changefeedStatus.syncPointInFlightTs.Load())
 	broker.emitSyncPointEventIfNeeded(oracle.GoTimeToTS(time.Unix(0, 0).Add(11*time.Second)), disp1, node.ID("server1"))
 	require.Len(t, broker.messageCh[disp1.messageWorkerIndex], 0)
 
 	// Commit stage is reached only after all active dispatchers sent resolved-ts >= preparing ts.
 	disp1.sentResolvedTs.Store(oracle.GoTimeToTS(time.Unix(0, 0).Add(10 * time.Second)))
 	disp2.sentResolvedTs.Store(oracle.GoTimeToTS(time.Unix(0, 0).Add(9 * time.Second)))
-	changefeedStatus.tryPromoteSyncPointPrepare()
-	require.False(t, changefeedStatus.syncPointCommitReady.Load())
+	changefeedStatus.tryPromoteSyncPointToCommitIfReady()
+	require.Equal(t, uint64(0), changefeedStatus.syncPointInFlightTs.Load())
 
 	disp2.sentResolvedTs.Store(oracle.GoTimeToTS(time.Unix(0, 0).Add(10 * time.Second)))
-	changefeedStatus.tryPromoteSyncPointPrepare()
-	require.True(t, changefeedStatus.syncPointCommitReady.Load())
+	changefeedStatus.tryPromoteSyncPointToCommitIfReady()
+	require.True(t, changefeedStatus.isSyncPointInCommitStage(oracle.GoTimeToTS(time.Unix(0, 0).Add(10*time.Second))))
 	require.Equal(t, oracle.GoTimeToTS(time.Unix(0, 0).Add(10*time.Second)), changefeedStatus.syncPointInFlightTs.Load())
 	require.True(t, broker.hasSyncPointEventsBeforeTs(oracle.GoTimeToTS(time.Unix(0, 0).Add(11*time.Second)), disp1))
 
@@ -670,10 +667,10 @@ func TestSyncPointTwoStagePrepareThenCommit(t *testing.T) {
 	// in-flight syncpoint and advanced nextSyncPoint beyond in-flight ts.
 	disp1.checkpointTs.Store(oracle.GoTimeToTS(time.Unix(0, 0).Add(9 * time.Second)))
 	disp2.checkpointTs.Store(oracle.GoTimeToTS(time.Unix(0, 0).Add(9 * time.Second)))
-	changefeedStatus.tryAdvanceSyncPointInFlight()
+	changefeedStatus.tryFinishSyncPointCommitIfAllEmitted()
 	require.Equal(t, uint64(0), changefeedStatus.syncPointInFlightTs.Load())
 	require.Equal(t, uint64(0), changefeedStatus.getSyncPointPreparingTs())
-	require.False(t, changefeedStatus.syncPointCommitReady.Load())
+	require.False(t, changefeedStatus.isSyncPointInCommitStage(oracle.GoTimeToTS(time.Unix(0, 0).Add(10*time.Second))))
 }
 
 func TestCURDDispatcher(t *testing.T) {

@@ -217,8 +217,8 @@ func (c *eventBroker) logSyncPointStage(ctx context.Context, interval time.Durat
 				}
 
 				preparingTs := status.getSyncPointPreparingTs()
-				commitReady := status.syncPointCommitReady.Load()
 				inFlightTs := status.syncPointInFlightTs.Load()
+				commitReady := preparingTs > 0 && inFlightTs == preparingTs
 				stage := "idle"
 				switch {
 				case preparingTs == 0 && inFlightTs == 0:
@@ -435,13 +435,17 @@ func (c *eventBroker) refreshMinSentResolvedTs(ctx context.Context) error {
 			c.changefeedMap.Range(func(key, value interface{}) bool {
 				status := value.(*changefeedStatus)
 				status.refreshMinSentResolvedTs()
-				status.tryPromoteSyncPointPrepare()
-				status.tryAdvanceSyncPointInFlight()
+				c.advanceSyncPointState(status)
 				c.nudgeSyncPointCommitDispatchers(status)
 				return true
 			})
 		}
 	}
+}
+
+func (c *eventBroker) advanceSyncPointState(status *changefeedStatus) {
+	status.tryPromoteSyncPointToCommitIfReady()
+	status.tryFinishSyncPointCommitIfAllEmitted()
 }
 
 func (c *eventBroker) nudgeSyncPointCommitDispatchers(status *changefeedStatus) {
@@ -473,7 +477,7 @@ func (c *eventBroker) shouldNudgeSyncPointCommit(d *dispatcherStat) bool {
 		return false
 	}
 
-	return d.changefeedStat.isSyncPointCommitReady(commitTs)
+	return d.changefeedStat.isSyncPointInCommitStage(commitTs)
 }
 
 func (c *eventBroker) nudgeSyncPointCommitIfNeeded(d *dispatcherStat) bool {
@@ -569,7 +573,7 @@ func (c *eventBroker) tickTableTriggerDispatchers(ctx context.Context) error {
 					c.fastForwardSyncPointIfNeeded(stat)
 					nextSyncPoint := stat.nextSyncPoint.Load()
 					if nextSyncPoint > 0 && endTs > nextSyncPoint {
-						stat.changefeedStat.tryStartSyncPointPrepare(nextSyncPoint)
+						stat.changefeedStat.tryEnterSyncPointPrepare(nextSyncPoint)
 						endTs = nextSyncPoint
 					}
 				}
@@ -681,11 +685,11 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 		c.fastForwardSyncPointIfNeeded(task)
 		nextSyncPoint := task.nextSyncPoint.Load()
 		if nextSyncPoint > 0 && dataRange.CommitTsEnd > nextSyncPoint {
-			task.changefeedStat.tryStartSyncPointPrepare(nextSyncPoint)
+			task.changefeedStat.tryEnterSyncPointPrepare(nextSyncPoint)
 			dataRange.CommitTsEnd = nextSyncPoint
 		}
 		preparingTs := task.changefeedStat.getSyncPointPreparingTs()
-		if preparingTs > 0 && !task.changefeedStat.isSyncPointCommitReady(preparingTs) {
+		if preparingTs > 0 && !task.changefeedStat.isSyncPointInCommitStage(preparingTs) {
 			dataRange.CommitTsEnd = min(dataRange.CommitTsEnd, preparingTs)
 		}
 	}
@@ -834,8 +838,8 @@ func (c *eventBroker) hasSyncPointEventsBeforeTs(ts uint64, d *dispatcherStat) b
 	if ts <= nextSyncPoint {
 		return false
 	}
-	d.changefeedStat.tryStartSyncPointPrepare(nextSyncPoint)
-	return d.changefeedStat.isSyncPointCommitReady(nextSyncPoint)
+	d.changefeedStat.tryEnterSyncPointPrepare(nextSyncPoint)
+	return d.changefeedStat.isSyncPointInCommitStage(nextSyncPoint)
 }
 
 // emitSyncPointEventIfNeeded emits a sync point event if the current ts is greater than the next sync point, and updates the next sync point.
@@ -845,19 +849,15 @@ func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, r
 	c.fastForwardSyncPointIfNeeded(d)
 	for d.enableSyncPoint {
 		commitTs := d.nextSyncPoint.Load()
-		if !d.changefeedStat.isSyncPointCommitReady(commitTs) {
+		if !d.changefeedStat.isSyncPointInCommitStage(commitTs) {
 			if ts <= commitTs {
 				return
 			}
-			d.changefeedStat.tryStartSyncPointPrepare(commitTs)
-			if !d.changefeedStat.isSyncPointCommitReady(commitTs) {
+			d.changefeedStat.tryEnterSyncPointPrepare(commitTs)
+			if !d.changefeedStat.isSyncPointInCommitStage(commitTs) {
 				return
 			}
 		} else if ts < commitTs {
-			return
-		}
-
-		if !d.changefeedStat.tryStartOrJoinSyncPoint(commitTs) {
 			return
 		}
 
@@ -1417,8 +1417,7 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 		Name: changefeedID.Keyspace(),
 	}
 	c.schemaStore.UnregisterTable(keyspaceMeta, span.TableID)
-	stat.changefeedStat.tryPromoteSyncPointPrepare()
-	stat.changefeedStat.tryAdvanceSyncPointInFlight()
+	c.advanceSyncPointState(stat.changefeedStat)
 
 	log.Info("remove dispatcher",
 		zap.Uint64("clusterID", c.tidbClusterID), zap.Stringer("changefeedID", changefeedID),
@@ -1556,8 +1555,7 @@ func (c *eventBroker) handleDispatcherHeartbeat(heartbeat *DispatcherHeartBeatWi
 	}
 	c.sendDispatcherResponse(responseMap)
 	for changefeed := range changedChangefeeds {
-		changefeed.tryPromoteSyncPointPrepare()
-		changefeed.tryAdvanceSyncPointInFlight()
+		c.advanceSyncPointState(changefeed)
 	}
 }
 
