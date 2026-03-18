@@ -30,9 +30,10 @@ import (
 	"go.uber.org/zap"
 )
 
-// maxDrainMovePerRound bounds drain churn in a single maintainer tick so
-// checkpoint progress is not dominated by bulk dispatcher migration.
-const maxDrainMovePerRound = 2
+// maxDrainMovePerRound is the minimum drain move limit for one drain session.
+// Larger targets may use a higher fixed limit derived from the dispatcher
+// count observed when the current drain epoch first becomes schedulable.
+const maxDrainMovePerRound = 10
 
 // drainScheduler evacuates dispatchers from the active drain target node.
 // It only creates move operators after the changefeed maintainer itself is no
@@ -47,6 +48,10 @@ type drainScheduler struct {
 	mode               int64
 
 	drainState *DrainState
+
+	lastDrainTarget     node.ID
+	lastDrainEpoch      uint64
+	fixedDrainMoveLimit int
 }
 
 // NewDrainScheduler creates a scheduler that drains one target node at a time
@@ -77,18 +82,20 @@ func (s *drainScheduler) Execute() time.Time {
 	state := s.drainState.snapshot()
 	target, targetEpoch, active := activeDrainTarget(state)
 	if !active {
+		s.resetDrainSessionLimit()
 		return time.Now().Add(time.Millisecond * 500)
 	}
 	if state.selfNodeID == target {
 		// Keep per-changefeed order by moving maintainer first.
 		return time.Now().Add(time.Millisecond * 500)
 	}
+	s.ensureDrainSessionLimit(target, targetEpoch)
 
 	availableSize := s.batchSize - s.operatorController.OperatorSize()
 	if availableSize <= 0 {
 		return time.Now().Add(time.Millisecond * 200)
 	}
-	drainSlots := maxDrainMovePerRound - s.countInflightDrainMoves(target)
+	drainSlots := s.fixedDrainMoveLimit - s.countInflightDrainMoves(target)
 	if drainSlots <= 0 {
 		return time.Now().Add(time.Millisecond * 200)
 	}
@@ -156,6 +163,42 @@ func (s *drainScheduler) Execute() time.Time {
 			zap.String("mode", common.StringMode(s.mode)))
 	}
 	return time.Now().Add(time.Millisecond * 200)
+}
+
+func (s *drainScheduler) resetDrainSessionLimit() {
+	s.lastDrainTarget = ""
+	s.lastDrainEpoch = 0
+	s.fixedDrainMoveLimit = 0
+}
+
+func (s *drainScheduler) ensureDrainSessionLimit(target node.ID, epoch uint64) {
+	if s.lastDrainTarget == target && s.lastDrainEpoch == epoch && s.fixedDrainMoveLimit > 0 {
+		return
+	}
+
+	initialTargetDispatcherCount := s.spanController.GetTaskSizeByNodeID(target)
+	s.lastDrainTarget = target
+	s.lastDrainEpoch = epoch
+	s.fixedDrainMoveLimit = calculateDrainMoveLimit(initialTargetDispatcherCount)
+
+	log.Info("drain scheduler initialized fixed move limit",
+		zap.Stringer("changefeedID", s.changefeedID),
+		zap.String("targetNodeID", target.String()),
+		zap.Uint64("targetEpoch", epoch),
+		zap.Int("initialTargetDispatcherCount", initialTargetDispatcherCount),
+		zap.Int("fixedDrainMoveLimit", s.fixedDrainMoveLimit),
+		zap.String("mode", common.StringMode(s.mode)))
+}
+
+func calculateDrainMoveLimit(initialTargetDispatcherCount int) int {
+	if initialTargetDispatcherCount <= 0 {
+		return maxDrainMovePerRound
+	}
+	limit := (initialTargetDispatcherCount + 99) / 100
+	if limit < maxDrainMovePerRound {
+		return maxDrainMovePerRound
+	}
+	return limit
 }
 
 // countInflightDrainMoves returns unfinished move operators whose origin is the

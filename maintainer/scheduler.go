@@ -37,6 +37,7 @@ func NewScheduleController(changefeedID common.ChangeFeedID,
 	splitter *split.Splitter,
 	schedulerCfg *config.ChangefeedSchedulerConfig,
 	drainState *scheduler.DrainState,
+	balanceMoveBatchSize int,
 ) *pkgscheduler.Controller {
 	schedulers := map[string]pkgscheduler.Scheduler{
 		pkgscheduler.BasicScheduler: scheduler.NewBasicScheduler(
@@ -58,13 +59,13 @@ func NewScheduleController(changefeedID common.ChangeFeedID,
 		),
 		pkgscheduler.BalanceScheduler: scheduler.NewBalanceScheduler(
 			changefeedID,
-			batchSize,
 			splitter,
 			oc,
 			spanController,
 			balanceInterval,
 			common.DefaultMode,
 			drainState,
+			balanceMoveBatchSize,
 		),
 	}
 	if splitter != nil {
@@ -98,13 +99,13 @@ func NewScheduleController(changefeedID common.ChangeFeedID,
 		)
 		schedulers[pkgscheduler.RedoBalanceScheduler] = scheduler.NewBalanceScheduler(
 			changefeedID,
-			batchSize,
 			splitter,
 			redoOC,
 			redoSpanController,
 			balanceInterval,
 			common.RedoMode,
 			drainState,
+			balanceMoveBatchSize,
 		)
 		if splitter != nil {
 			schedulers[pkgscheduler.RedoBalanceSplitScheduler] = scheduler.NewBalanceSplitsScheduler(
