@@ -124,7 +124,7 @@ const (
 	// In-flight operations may still complete, but no new leader campaign is allowed.
 	NodeLiveness_DRAINING NodeLiveness = 1
 	// STOPPING keeps destination exclusion and enforces shutdown safety.
-	// It rejects new maintainer creation, allows cleanup/remove, and must resign if leader.
+	// It rejects new maintainer creation, allows cleanup/remove
 	NodeLiveness_STOPPING NodeLiveness = 2
 )
 

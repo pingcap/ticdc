@@ -160,7 +160,7 @@ enum NodeLiveness {
     // In-flight operations may still complete, but no new leader campaign is allowed.
     DRAINING = 1;
     // STOPPING keeps destination exclusion and enforces shutdown safety.
-    // It rejects new maintainer creation, allows cleanup/remove, and must resign if leader.
+    // It rejects new maintainer creation, allows cleanup/remove
     STOPPING = 2;
 }
 
