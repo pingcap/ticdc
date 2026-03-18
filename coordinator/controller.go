@@ -20,6 +20,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/coordinator/changefeed"
+	"github.com/pingcap/ticdc/coordinator/drain"
 	"github.com/pingcap/ticdc/coordinator/operator"
 	coscheduler "github.com/pingcap/ticdc/coordinator/scheduler"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -86,6 +87,8 @@ type Controller struct {
 
 	changefeedChangeCh chan []*changefeedChange
 	apiLock            sync.RWMutex
+
+	drainController *drain.Controller
 }
 
 type changefeedChange struct {
@@ -117,8 +120,10 @@ func NewController(
 	pdClient pd.Client,
 ) *Controller {
 	changefeedDB := changefeed.NewChangefeedDB(version)
+	messageCenter := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 
 	oc := operator.NewOperatorController(selfNode, changefeedDB, backend, batchSize)
+	drainController := drain.NewController(messageCenter)
 	c := &Controller{
 		version:     version,
 		selfNode:    selfNode,
@@ -140,7 +145,7 @@ func NewController(
 		}),
 		eventCh:            eventCh,
 		operatorController: oc,
-		messageCenter:      appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
+		messageCenter:      messageCenter,
 		changefeedDB:       changefeedDB,
 		nodeManager:        appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
 		taskScheduler:      threadpool.NewThreadPoolDefault(),
@@ -148,6 +153,7 @@ func NewController(
 		changefeedChangeCh: changefeedChangeCh,
 		pdClient:           pdClient,
 		pdClock:            appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
+		drainController:    drainController,
 	}
 	c.nodeChanged.changed = false
 
@@ -262,6 +268,10 @@ func (c *Controller) onPeriodTask() {
 	for _, req := range requests {
 		_ = c.messageCenter.SendCommand(req)
 	}
+
+	c.drainController.AdvanceLiveness(func(id node.ID) bool {
+		return len(c.changefeedDB.GetByNodeID(id)) == 0 && c.operatorController.CountOperatorsInvolvingNode(id) == 0
+	})
 }
 
 func (c *Controller) onMessage(ctx context.Context, msg *messaging.TargetMessage) {
@@ -273,6 +283,12 @@ func (c *Controller) onMessage(ctx context.Context, msg *messaging.TargetMessage
 			req := msg.Message[0].(*heartbeatpb.MaintainerHeartbeat)
 			c.handleMaintainerStatus(msg.From, req.Statuses)
 		}
+	case messaging.TypeNodeHeartbeatRequest:
+		req := msg.Message[0].(*heartbeatpb.NodeHeartbeat)
+		c.drainController.ObserveHeartbeat(msg.From, req)
+	case messaging.TypeSetNodeLivenessResponse:
+		req := msg.Message[0].(*heartbeatpb.SetNodeLivenessResponse)
+		c.drainController.ObserveSetNodeLivenessResponse(msg.From, req)
 	case messaging.TypeLogCoordinatorResolvedTsResponse:
 		c.onLogCoordinatorReportResolvedTs(msg)
 	default:
@@ -837,6 +853,7 @@ func (c *Controller) getChangefeed(id common.ChangeFeedID) *changefeed.Changefee
 // RemoveNode is called when a node is removed
 func (c *Controller) RemoveNode(id node.ID) {
 	c.operatorController.OnNodeRemoved(id)
+	c.drainController.RemoveNode(id)
 }
 
 func (c *Controller) submitPeriodTask() {
