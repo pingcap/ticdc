@@ -40,27 +40,27 @@ func (l *Liveness) Store(v Liveness) bool {
 	if v < CaptureAlive || v > CaptureStopping {
 		return false
 	}
-	for {
-		old := l.Load()
-		if old < CaptureAlive || old > CaptureStopping {
-			// Defensive: if the stored value is out of the expected enum range,
-			// reject transitions to avoid breaking the monotonic state machine.
+	old := l.Load()
+	switch old {
+	case CaptureAlive:
+		if v != CaptureDraining {
 			return false
 		}
-		if v <= old {
+	case CaptureDraining:
+		if v != CaptureStopping {
 			return false
 		}
-		if old == CaptureAlive && v != CaptureDraining {
-			return false
-		}
-		if old == CaptureDraining && v != CaptureStopping {
-			return false
-		}
-
-		if atomic.CompareAndSwapInt32((*int32)(l), int32(old), int32(v)) {
-			return true
-		}
+	case CaptureStopping:
+		return false
+	default:
+		// Defensive: if the stored value is out of the expected enum range,
+		// reject transitions to avoid breaking the monotonic state machine.
+		return false
 	}
+
+	// A single CAS is enough here. If another writer wins the race, the state can
+	// only move forward, so retrying cannot make this transition valid again.
+	return atomic.CompareAndSwapInt32((*int32)(l), int32(old), int32(v))
 }
 
 // Load returns the current liveness.
