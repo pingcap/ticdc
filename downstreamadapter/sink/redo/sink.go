@@ -61,6 +61,7 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, cfg *config.C
 func New(ctx context.Context, changefeedID common.ChangeFeedID,
 	cfg *config.ConsistentConfig,
 ) (*Sink, error) {
+	var err error
 	config, err := writer.NewConfig(changefeedID, cfg)
 	if err != nil {
 		return nil, err
@@ -72,6 +73,7 @@ func New(ctx context.Context, changefeedID common.ChangeFeedID,
 		isNormal:     atomic.NewBool(true),
 		isClosed:     atomic.NewBool(false),
 	}
+
 	start := time.Now()
 	ddlWriter, err := factory.NewRedoLogWriter(ctx, config, redo.RedoDDLLogFileType)
 	if err != nil {
@@ -82,6 +84,12 @@ func New(ctx context.Context, changefeedID common.ChangeFeedID,
 			zap.Error(err))
 		return nil, err
 	}
+	defer func() {
+		if err != nil {
+			ddlWriter.Close()
+		}
+	}()
+
 	dmlWriter, err := factory.NewRedoLogWriter(ctx, config, redo.RedoRowLogFileType)
 	if err != nil {
 		log.Error("redo: failed to create redo log writer",
