@@ -192,7 +192,9 @@ func TestDrainSchedulerRecomputesLimitForNewDrainEpoch(t *testing.T) {
 
 	drainState.SetDispatcherDrainTarget(target, 2)
 	_ = s.Execute()
-	require.Equal(t, 9, oc.OperatorSize())
+	// A new drain epoch recomputes the session limit from the latest target size,
+	// but the per-round minimum still keeps the limit at maxDrainMovePerRound.
+	require.Equal(t, maxDrainMovePerRound, oc.OperatorSize())
 }
 
 func TestDrainSchedulerSkipsWhenSelfIsTarget(t *testing.T) {

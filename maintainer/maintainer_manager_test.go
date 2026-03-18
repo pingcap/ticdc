@@ -111,10 +111,11 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 	mc.RegisterHandler(messaging.CoordinatorTopic, func(ctx context.Context, msg *messaging.TargetMessage) error {
 		return nil
 	})
-	schedulerConf := &config.SchedulerConfig{
-		AddTableBatchSize:    1000,
-		CheckBalanceInterval: 0,
-	}
+	// Start from the default scheduler config so rebalance-related defaults stay
+	// enabled when new scheduler fields are added.
+	schedulerConf := config.NewDefaultSchedulerConfig()
+	schedulerConf.AddTableBatchSize = 1000
+	schedulerConf.CheckBalanceInterval = 0
 	var liveness api.Liveness
 	manager := NewMaintainerManager(selfNode, schedulerConf, &liveness)
 	msg := messaging.NewSingleTargetMessage(selfNode.ID,
@@ -486,7 +487,9 @@ func TestStopNotExistsMaintainer(t *testing.T) {
 	mc.RegisterHandler(messaging.CoordinatorTopic, func(ctx context.Context, msg *messaging.TargetMessage) error {
 		return nil
 	})
-	schedulerConf := &config.SchedulerConfig{AddTableBatchSize: 1000}
+	// Keep future scheduler defaults in this integration-style manager test.
+	schedulerConf := config.NewDefaultSchedulerConfig()
+	schedulerConf.AddTableBatchSize = 1000
 	var liveness api.Liveness
 	manager := NewMaintainerManager(selfNode, schedulerConf, &liveness)
 	msg := messaging.NewSingleTargetMessage(selfNode.ID,
