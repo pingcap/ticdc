@@ -239,7 +239,7 @@ func derivePayloadSizes(rowSize int) payloadSizes {
 		redirectLinkData:        clampSize(maxInt(384, rowSize/12), 128, 8192),
 		bodyData:                clampSize(maxInt(2048, rowSize/3), 1024, 64*1024),
 		mobileIconURL:           clampSize(maxInt(96, rowSize/48), 32, 768),
-		summaryLanguageVector:   clampSize(maxInt(64, rowSize/32), 32, 1024),
+		summaryLanguageVector:   clampSize(maxInt(64, rowSize/32), 32, 760),
 		siteLabel:               clampSize(maxInt(48, rowSize/64), 16, 256),
 		headlineText:            clampSize(maxInt(192, rowSize/24), 64, 4096),
 		headlineLanguageVectors: clampSize(maxInt(1536, rowSize/4), 512, 32*1024),
