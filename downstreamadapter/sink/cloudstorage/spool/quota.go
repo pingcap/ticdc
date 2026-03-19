@@ -16,23 +16,16 @@ package spool
 import (
 	"github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
 	"github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-type quotaController struct {
-	// These thresholds are all derived from one total budget.
-	// The current design uses them as soft-control signals:
-	// memoryQuotaBytes decides when new entries spill to disk, while the
-	// high/low watermarks decide when to suppress or resume wake callbacks.
-	memoryQuotaBytes   int64
-	highWatermarkBytes int64
-	lowWatermarkBytes  int64
-
-	// memoryBytes and diskBytes track current staged bytes held by spool.
-	// They are accounting values for tiering and wake control, not hard limits.
-	memoryBytes int64
-	diskBytes   int64
+// quotaAdapter adds spool-specific behavior on top of budgetCore.
+// budgetCore only answers "how many bytes are staged" and "which watermark
+// state are we in"; this adapter decides how spool reacts to that state.
+type quotaAdapter struct {
+	// budget owns threshold math and byte accounting. quotaAdapter builds
+	// spool-specific behavior on top of it.
+	budget *budgetCore
 
 	// wakeSuppressed and pendingWake implement hysteresis for onEnqueued:
 	// above the high watermark, new callbacks are delayed; once usage drops
@@ -51,16 +44,13 @@ type quotaController struct {
 	metricChangefeedLabel string
 }
 
-func newQuotaController(
+func newQuotaAdapter(
 	changefeedID common.ChangeFeedID,
 	options *Options,
-) *quotaController {
+) *quotaAdapter {
 	changefeedLabel := changefeedID.ID().String()
-	controller := &quotaController{
-		memoryQuotaBytes:   int64(float64(options.QuotaBytes) * options.MemoryRatio),
-		highWatermarkBytes: int64(float64(options.QuotaBytes) * options.HighWatermarkRatio),
-		lowWatermarkBytes:  int64(float64(options.QuotaBytes) * options.LowWatermarkRatio),
-
+	controller := &quotaAdapter{
+		budget: newBudgetCore(options),
 		metricMemoryBytes: metrics.CloudStorageSpoolMemoryBytesGauge.WithLabelValues(
 			changefeedID.Keyspace(), changefeedLabel),
 		metricDiskBytes: metrics.CloudStorageSpoolDiskBytesGauge.WithLabelValues(
@@ -76,73 +66,24 @@ func newQuotaController(
 	return controller
 }
 
-// validateOptions checks the ratios needed by quotaController's soft-control
-// model. The controller assumes one total budget that is split into a memory
-// tier plus high/low watermarks for wake suppression.
-func validateOptions(options *Options) error {
-	if options.SegmentBytes <= 0 {
-		return errors.ErrStorageSinkInvalidConfig.GenWithStack(
-			"spool segment size must be greater than 0, but got %d",
-			options.SegmentBytes,
-		)
-	}
-	if options.QuotaBytes <= 0 {
-		return errors.ErrStorageSinkInvalidConfig.GenWithStack(
-			"spool disk quota must be greater than 0, but got %d",
-			options.QuotaBytes,
-		)
-	}
-	if options.MemoryRatio <= 0 || options.MemoryRatio >= 1 {
-		return errors.ErrStorageSinkInvalidConfig.GenWithStack(
-			"spool memory ratio must be in (0, 1), but got %f",
-			options.MemoryRatio,
-		)
-	}
-	if options.LowWatermarkRatio <= 0 || options.LowWatermarkRatio >= 1 {
-		return errors.ErrStorageSinkInvalidConfig.GenWithStack(
-			"spool low watermark ratio must be in (0, 1), but got %f",
-			options.LowWatermarkRatio,
-		)
-	}
-	if options.HighWatermarkRatio <= 0 || options.HighWatermarkRatio >= 1 {
-		return errors.ErrStorageSinkInvalidConfig.GenWithStack(
-			"spool high watermark ratio must be in (0, 1), but got %f",
-			options.HighWatermarkRatio,
-		)
-	}
-	if options.LowWatermarkRatio >= options.HighWatermarkRatio {
-		return errors.ErrStorageSinkInvalidConfig.GenWithStack(
-			"spool low watermark ratio must be less than high watermark ratio, low: %f high: %f",
-			options.LowWatermarkRatio,
-			options.HighWatermarkRatio,
-		)
-	}
-	return nil
-}
-
 // shouldSpill decides whether a new entry still fits in the in-memory tier.
 // This is intentionally a memory-tier decision only; it does not enforce a
 // hard total quota and does not reject new writes.
-func (q *quotaController) shouldSpill(entryBytes int64) bool {
-	return q.memoryBytes+entryBytes > q.memoryQuotaBytes
+func (q *quotaAdapter) shouldSpill(entryBytes int64) bool {
+	return q.budget.shouldSpill(entryBytes)
 }
 
 // reserve records a newly accepted entry and returns callbacks that may run
 // immediately. If total staged bytes cross the high watermark, reserve enters
 // wake suppression and queues later onEnqueued callbacks instead of running
 // them inline.
-func (q *quotaController) reserve(
+func (q *quotaAdapter) reserve(
 	entryBytes int64,
 	spilled bool,
 	onEnqueued func(),
 ) []func() {
-	if spilled {
-		q.diskBytes += entryBytes
-	}
-	if !spilled {
-		q.memoryBytes += entryBytes
-	}
-	if q.memoryBytes+q.diskBytes > q.highWatermarkBytes {
+	q.budget.reserve(entryBytes, spilled)
+	if q.budget.overHighWatermark() {
 		q.wakeSuppressed = true
 	}
 
@@ -159,26 +100,15 @@ func (q *quotaController) reserve(
 }
 
 // release records that an entry has been fully consumed or discarded. If the
-// controller was suppressing wake callbacks, release only resumes them after
+// adapter was suppressing wake callbacks, release only resumes them after
 // total staged bytes fall back to the low watermark or below.
-func (q *quotaController) release(entryBytes int64, spilled bool) []func() {
-	if spilled {
-		q.diskBytes -= entryBytes
-	}
-	if !spilled {
-		q.memoryBytes -= entryBytes
-	}
-	if q.memoryBytes < 0 {
-		q.memoryBytes = 0
-	}
-	if q.diskBytes < 0 {
-		q.diskBytes = 0
-	}
+func (q *quotaAdapter) release(entryBytes int64, spilled bool) []func() {
+	q.budget.release(entryBytes, spilled)
 	if !q.wakeSuppressed {
 		q.updateMetrics()
 		return nil
 	}
-	if q.memoryBytes+q.diskBytes > q.lowWatermarkBytes {
+	if !q.budget.atOrBelowLowWatermark() {
 		q.updateMetrics()
 		return nil
 	}
@@ -191,25 +121,25 @@ func (q *quotaController) release(entryBytes int64, spilled bool) []func() {
 }
 
 // reset clears runtime accounting when the spool is shutting down.
-func (q *quotaController) reset() {
-	q.memoryBytes = 0
-	q.diskBytes = 0
+func (q *quotaAdapter) reset() {
+	q.budget.reset()
 	q.pendingWake = nil
 	q.wakeSuppressed = false
 	q.updateMetrics()
 }
 
-// deleteMetrics removes per-changefeed label values owned by this controller.
-func (q *quotaController) deleteMetrics() {
+// deleteMetrics removes per-changefeed label values owned by this adapter.
+func (q *quotaAdapter) deleteMetrics() {
 	metrics.CloudStorageSpoolMemoryBytesGauge.DeleteLabelValues(q.metricKeyspace, q.metricChangefeedLabel)
 	metrics.CloudStorageSpoolDiskBytesGauge.DeleteLabelValues(q.metricKeyspace, q.metricChangefeedLabel)
 	metrics.CloudStorageSpoolTotalBytesGauge.DeleteLabelValues(q.metricKeyspace, q.metricChangefeedLabel)
 	metrics.CloudStorageWakeSuppressedCounter.DeleteLabelValues(q.metricKeyspace, q.metricChangefeedLabel)
 }
 
-// updateMetrics publishes the controller's current accounting state.
-func (q *quotaController) updateMetrics() {
-	q.metricMemoryBytes.Set(float64(q.memoryBytes))
-	q.metricDiskBytes.Set(float64(q.diskBytes))
-	q.metricTotalBytes.Set(float64(q.memoryBytes + q.diskBytes))
+// updateMetrics publishes the adapter's current accounting state.
+func (q *quotaAdapter) updateMetrics() {
+	snapshot := q.budget.snapshot()
+	q.metricMemoryBytes.Set(float64(snapshot.memoryBytes))
+	q.metricDiskBytes.Set(float64(snapshot.diskBytes))
+	q.metricTotalBytes.Set(float64(snapshot.totalBytes()))
 }

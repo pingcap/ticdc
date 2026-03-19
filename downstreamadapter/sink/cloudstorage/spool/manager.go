@@ -72,8 +72,8 @@ type Manager struct {
 	// closed makes Close idempotent and blocks new writes after shutdown starts.
 	closed bool
 
-	// quota tracks how many bytes are in memory or on disk, plus wake suppression.
-	quota *quotaController
+	// quota tracks bytes through budgetCore and applies spool-specific wake and metrics policy.
+	quota *quotaAdapter
 	// segmentBytes is the size limit for a single segment file.
 	segmentBytes int64
 
@@ -160,11 +160,21 @@ func New(
 
 	manager := &Manager{
 		rootDir:      rootDir,
-		quota:        newQuotaController(changefeedID, options),
+		quota:        newQuotaAdapter(changefeedID, options),
 		segmentBytes: options.SegmentBytes,
 		segments:     make(map[uint64]*segment),
 	}
 	return manager, nil
+}
+
+func validateOptions(options *Options) error {
+	if options.SegmentBytes <= 0 {
+		return errors.ErrStorageSinkInvalidConfig.GenWithStack(
+			"spool segment size must be greater than 0, but got %d",
+			options.SegmentBytes,
+		)
+	}
+	return validateBudgetOptions(options)
 }
 
 func withDefaultOptions(opts *Options) *Options {
