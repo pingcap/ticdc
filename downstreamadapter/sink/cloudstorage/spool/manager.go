@@ -110,8 +110,18 @@ func WithLowWatermarkRatio(lowWatermarkRatio float64) option {
 	}
 }
 
-// Manager keeps encoded messages in local spool storage until the writer flushes them to object storage.
-type Manager struct {
+// Spool keeps encoded DML messages after a writer shard has accepted them and
+// before that writer shard has flushed them to external storage.
+//
+// The producer is the cloud storage writer path: after encoderGroup has
+// produced encoded messages for a task, writer.Enqueue calls Spool.Enqueue to
+// hand those messages to local spool storage.
+//
+// The consumer is also the cloud storage writer path: when the writer flushes a
+// batch, it calls Spool.Load to read the queued messages back, then calls
+// Spool.Release after a successful flush or Spool.Discard when the batch is
+// ignored.
+type Spool struct {
 	// rootDir is where this spool instance keeps its temporary segment files.
 	rootDir string
 
@@ -192,11 +202,11 @@ func (e *Entry) InMemory() bool {
 	return e != nil && e.memoryMsgs != nil
 }
 
-// New creates a per-changefeed spool manager.
+// New creates a per-changefeed spool.
 func New(
 	changefeedID commonType.ChangeFeedID,
 	opts ...option,
-) (*Manager, error) {
+) (*Spool, error) {
 	rawOptions := &options{}
 	for _, opt := range opts {
 		if opt == nil {
@@ -210,13 +220,13 @@ func New(
 		return nil, err
 	}
 
-	manager := &Manager{
+	spool := &Spool{
 		rootDir:      rootDir,
 		quota:        newQuotaController(changefeedID, options),
 		segmentBytes: options.segmentBytes,
 		segments:     make(map[uint64]*segment),
 	}
-	return manager, nil
+	return spool, nil
 }
 
 func withDefaultOptions(opts *options) *options {
@@ -382,7 +392,7 @@ func isSegmentFile(entry os.DirEntry) bool {
 }
 
 // Enqueue appends encoded messages to spool.
-func (s *Manager) Enqueue(
+func (s *Spool) Enqueue(
 	msgs []*common.Message,
 	postEnqueue func(),
 ) (*Entry, error) {
@@ -412,7 +422,7 @@ func (s *Manager) Enqueue(
 	}()
 
 	if s.closed {
-		return nil, errors.ErrInternalCheckFailed.GenWithStackByArgs("spool manager is closed")
+		return nil, errors.ErrInternalCheckFailed.GenWithStackByArgs("spool is closed")
 	}
 
 	shouldSpill := s.quota.shouldSpill(entry.accountingBytes)
@@ -453,7 +463,7 @@ func runCallbacks(callbacks []func()) {
 }
 
 // Load fetches messages from memory or spilled segments.
-func (s *Manager) Load(entry *Entry) ([]*common.Message, []func(), error) {
+func (s *Spool) Load(entry *Entry) ([]*common.Message, []func(), error) {
 	if entry == nil {
 		return nil, nil, nil
 	}
@@ -490,7 +500,7 @@ func (s *Manager) Load(entry *Entry) ([]*common.Message, []func(), error) {
 }
 
 // Release releases memory or spilled bytes held by an entry.
-func (s *Manager) Release(entry *Entry) {
+func (s *Spool) Release(entry *Entry) {
 	if entry == nil || entryConsumed(entry) {
 		return
 	}
@@ -533,7 +543,7 @@ func (s *Manager) Release(entry *Entry) {
 }
 
 // Discard runs the entry callbacks and then releases its local spool resources.
-func (s *Manager) Discard(entry *Entry) {
+func (s *Spool) Discard(entry *Entry) {
 	if entry == nil {
 		return
 	}
@@ -543,7 +553,7 @@ func (s *Manager) Discard(entry *Entry) {
 }
 
 // Close closes spool and removes the segment files created by this spool instance.
-func (s *Manager) Close() {
+func (s *Spool) Close() {
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -570,7 +580,7 @@ func (s *Manager) Close() {
 	s.quota.deleteMetrics()
 }
 
-func (s *Manager) appendBlobLocked(blob []byte) (*segmentLocation, error) {
+func (s *Spool) appendBlobLocked(blob []byte) (*segmentLocation, error) {
 	spoolSegment, err := s.getWritableSegmentLocked(int64(len(blob)))
 	if err != nil {
 		return nil, err
@@ -597,7 +607,7 @@ func (s *Manager) appendBlobLocked(blob []byte) (*segmentLocation, error) {
 	}, nil
 }
 
-func (s *Manager) getWritableSegmentLocked(needBytes int64) (*segment, error) {
+func (s *Spool) getWritableSegmentLocked(needBytes int64) (*segment, error) {
 	if s.activeSegment == nil || s.activeSegment.size+needBytes > s.segmentBytes {
 		if err := s.rotateLocked(); err != nil {
 			return nil, err
@@ -606,7 +616,7 @@ func (s *Manager) getWritableSegmentLocked(needBytes int64) (*segment, error) {
 	return s.activeSegment, nil
 }
 
-func (s *Manager) rotateLocked() error {
+func (s *Spool) rotateLocked() error {
 	s.nextSegmentID++
 	segmentID := s.nextSegmentID
 	path := filepath.Join(

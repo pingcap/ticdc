@@ -40,7 +40,7 @@ type writer struct {
 	changeFeedID common.ChangeFeedID
 	storage      storage.ExternalStorage
 	config       *cloudstorage.Config
-	spool        *spool.Manager
+	spool        *spool.Spool
 
 	toBeFlushedCh chan writerTask
 	inputCh       *chann.DrainableChann[*task]
@@ -69,14 +69,14 @@ func newWriter(
 	config *cloudstorage.Config,
 	extension string,
 	statistics *pmetrics.Statistics,
-	spoolManager *spool.Manager,
+	spoolBuffer *spool.Spool,
 ) *writer {
 	return &writer{
 		shardID:       id,
 		changeFeedID:  changefeedID,
 		storage:       storage,
 		config:        config,
-		spool:         spoolManager,
+		spool:         spoolBuffer,
 		inputCh:       chann.NewAutoDrainChann[*task](),
 		toBeFlushedCh: make(chan writerTask, 64),
 		statistics:    statistics,

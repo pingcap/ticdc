@@ -37,10 +37,16 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// It will send the events to cloud storage systems.
-// Messages are encoded in the specific protocol and routed by dispatcher to shard pipelines.
-// The data flow is as follows: **data** -> encoding pipeline -> dispatcher routers -> writer shards -> external storage.
-// The writer shards write encoded messages to external storage in parallel between different tables.
+// sink is the top-level runtime object of the cloud storage sink.
+// It coordinates three paths that run at the same time:
+//  1. DML events enter through AddDMLEvent, it's encoded into messages, and buffered
+//     in the spool before it's flushed to external storage as data and index files.
+//  2. Block events is only DDL event. FlushDMLBeforeBlock is called first, it make sure
+//     all dml events belongs to the specified dispatcher is flushed to the downstream.
+//     After that, WriteBlockEvent is called, it writes the DDL events directly to external storage.
+//  3. Checkpoint ts updates periodically.
+//  4. Background cleanup runs periodically, cleanup only removes expired files according
+//     to persisted storage state.
 type sink struct {
 	changefeedID common.ChangeFeedID
 	cfg          *cloudstorage.Config

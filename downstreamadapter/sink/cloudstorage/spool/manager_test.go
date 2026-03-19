@@ -135,7 +135,7 @@ func TestNewUsesDefaultOptionsWhenValuesAreMissing(t *testing.T) {
 	manager.Close()
 }
 
-func TestEnqueueOnClosedManager(t *testing.T) {
+func TestEnqueueOnClosedSpool(t *testing.T) {
 	t.Parallel()
 
 	changefeedID := commonType.NewChangefeedID4Test("test", "spool")

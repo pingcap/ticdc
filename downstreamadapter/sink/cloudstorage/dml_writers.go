@@ -42,7 +42,7 @@ type dmlWriters struct {
 	msgCh *chann.UnlimitedChannel[*task, any]
 
 	encodeGroup *encoderGroup
-	spool       *spool.Manager
+	spool       *spool.Spool
 
 	writers []*writer
 	closed  atomic.Bool
@@ -62,14 +62,14 @@ func newDMLWriters(
 		defaultEncodingConcurrency,
 		config.WorkerCount,
 	)
-	spoolManager, err := spool.New(changefeedID, spool.WithQuotaBytes(config.SpoolDiskQuota))
+	spoolBuffer, err := spool.New(changefeedID, spool.WithQuotaBytes(config.SpoolDiskQuota))
 	if err != nil {
 		return nil, err
 	}
 
 	writers := make([]*writer, config.WorkerCount)
 	for i := 0; i < config.WorkerCount; i++ {
-		writers[i] = newWriter(i, changefeedID, storage, config, extension, statistics, spoolManager)
+		writers[i] = newWriter(i, changefeedID, storage, config, extension, statistics, spoolBuffer)
 	}
 
 	return &dmlWriters{
@@ -77,7 +77,7 @@ func newDMLWriters(
 		statistics:   statistics,
 		msgCh:        messageCh,
 		encodeGroup:  encoderGroup,
-		spool:        spoolManager,
+		spool:        spoolBuffer,
 		writers:      writers,
 	}, nil
 }

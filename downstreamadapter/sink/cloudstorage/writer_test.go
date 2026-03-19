@@ -63,21 +63,21 @@ func testWriter(ctx context.Context, t *testing.T, dir string) *writer {
 	appcontext.SetService(appcontext.DefaultPDClock, pdlock)
 	mockPDClock := pdutil.NewClock4Test()
 	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
-	spoolManager := newTestSpoolManager(t, changefeedID, cfg)
+	spoolBuffer := newTestSpool(t, changefeedID, cfg)
 	d := newWriter(1, changefeedID, storage,
-		cfg, ".json", statistics, spoolManager)
+		cfg, ".json", statistics, spoolBuffer)
 	return d
 }
 
-func newTestSpoolManager(
+func newTestSpool(
 	t *testing.T,
 	changefeedID commonType.ChangeFeedID,
 	cfg *cloudstorage.Config,
-) *spool.Manager {
-	spoolManager, err := spool.New(changefeedID, spool.WithQuotaBytes(cfg.SpoolDiskQuota))
+) *spool.Spool {
+	spoolBuffer, err := spool.New(changefeedID, spool.WithQuotaBytes(cfg.SpoolDiskQuota))
 	require.NoError(t, err)
-	t.Cleanup(spoolManager.Close)
-	return spoolManager
+	t.Cleanup(spoolBuffer.Close)
+	return spoolBuffer
 }
 
 func hasSpoolLogFile(spoolDir string) bool {
@@ -425,8 +425,8 @@ func TestWriterStoresPendingMessagesInSpoolBeforeFlush(t *testing.T) {
 	mockPDClock := pdutil.NewClock4Test()
 	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
 
-	spoolManager := newTestSpoolManager(t, changefeedID, cfg)
-	d := newWriter(1, changefeedID, storage, cfg, ".json", statistics, spoolManager)
+	spoolBuffer := newTestSpool(t, changefeedID, cfg)
+	d := newWriter(1, changefeedID, storage, cfg, ".json", statistics, spoolBuffer)
 
 	tidbTableInfo := &model.TableInfo{
 		ID:   100,
@@ -493,7 +493,7 @@ func TestIgnoreTableTaskDoesNotLoadSpilledPayload(t *testing.T) {
 
 	parentDir := t.TempDir()
 	d := testWriter(ctx, t, parentDir)
-	d.spool = newTestSpoolManager(t, d.changeFeedID, &cloudstorage.Config{
+	d.spool = newTestSpool(t, d.changeFeedID, &cloudstorage.Config{
 		SpoolDiskQuota: 1,
 	})
 
