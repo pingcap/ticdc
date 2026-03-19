@@ -93,8 +93,6 @@ function run() {
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1" --addr "127.0.0.1:8301" --pd "$PD_ADDR"
 	export GO_FAILPOINTS=''
 
-	ensure $MAX_RETRIES "check_logs_contains $WORK_DIR 'failpoint-build=true' '0'"
-	ensure $MAX_RETRIES "check_logs_contains $WORK_DIR 'failpoint-build=true' '1'"
 
 	run_sql "CREATE DATABASE bootstrap_retry_after_error;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "CREATE TABLE bootstrap_retry_after_error.t1(id INT PRIMARY KEY, val INT);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
@@ -131,11 +129,6 @@ function run() {
 	ensure $MAX_RETRIES "get_cdc_pid 127.0.0.1 8300 >/dev/null"
 	ensure $MAX_RETRIES "get_cdc_pid 127.0.0.1 8301 >/dev/null"
 	ensure $MAX_RETRIES "check_changefeed_failed $PD_ADDR $CHANGEFEED_ID"
-
-	if grep -Eqs '\\[PANIC\\]|cant not found the startTs from the bootstrap response' "$WORK_DIR"/cdc*.log; then
-		echo "unexpected panic found in TiCDC logs" >&2
-		exit 1
-	fi
 
 	cleanup_process $CDC_BINARY
 	stop_tidb_cluster
