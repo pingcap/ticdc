@@ -211,6 +211,12 @@ func (s *sink) writeDDLEvent(event *commonEvent.DDLEvent) error {
 	// For exchange partition, we need to write the schema of the source table.
 	// write the previous table first
 	if event.GetDDLType() == model.ActionExchangeTablePartition {
+		if len(event.MultipleTableInfos) < 2 || event.MultipleTableInfos[1] == nil {
+			return errors.ErrInternalCheckFailed.GenWithStackByArgs(
+				"invalid exchange partition ddl event, source table info is missing")
+		}
+		sourceTableInfo := event.MultipleTableInfos[1]
+
 		var def cloudstorage.TableDefinition
 		def.FromTableInfo(event.ExtraSchemaName, event.ExtraTableName, event.TableInfo, event.FinishedTs, s.cfg.OutputColumnID)
 		def.Query = event.Query
@@ -219,8 +225,10 @@ func (s *sink) writeDDLEvent(event *commonEvent.DDLEvent) error {
 			return err
 		}
 		var sourceTableDef cloudstorage.TableDefinition
-		sourceTableDef.FromTableInfo(event.SchemaName, event.TableName, event.MultipleTableInfos[1], event.FinishedTs, s.cfg.OutputColumnID)
-		if err := s.writeFile(event, sourceTableDef); err != nil {
+		sourceTableDef.FromTableInfo(event.SchemaName, event.TableName, sourceTableInfo, event.FinishedTs, s.cfg.OutputColumnID)
+		sourceEvent := *event
+		sourceEvent.TableInfo = sourceTableInfo
+		if err := s.writeFile(&sourceEvent, sourceTableDef); err != nil {
 			return err
 		}
 	} else {
@@ -245,12 +253,19 @@ func (s *sink) writeDDLEvent(event *commonEvent.DDLEvent) error {
 }
 
 func (s *sink) writeFile(v *commonEvent.DDLEvent, def cloudstorage.TableDefinition) error {
+	// skip write database-level event for 'use-table-id-as-path' mode
+	if s.cfg.UseTableIDAsPath && def.Table == "" {
+		log.Debug("skip database schema for table id path",
+			zap.String("schema", def.Schema),
+			zap.String("query", def.Query))
+		return nil
+	}
 	encodedDef, err := def.MarshalWithQuery()
 	if err != nil {
 		return errors.Trace(err)
 	}
 
-	path, err := def.GenerateSchemaFilePath()
+	path, err := def.GenerateSchemaFilePath(s.cfg.UseTableIDAsPath, v.GetTableID())
 	if err != nil {
 		return errors.Trace(err)
 	}

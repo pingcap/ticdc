@@ -17,39 +17,25 @@ import (
 	"context"
 	"strings"
 
-	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/redo/writer/blackhole"
 	"github.com/pingcap/ticdc/pkg/redo/writer/file"
 	"github.com/pingcap/ticdc/pkg/redo/writer/memory"
-	"github.com/pingcap/ticdc/pkg/util"
-	"github.com/pingcap/tidb/br/pkg/storage"
 )
 
 // NewRedoLogWriter creates a new RedoLogWriter.
 func NewRedoLogWriter(
-	ctx context.Context, lwCfg *writer.LogWriterConfig, fileType string,
+	ctx context.Context, cfg *writer.Config, fileType string,
 ) (writer.RedoLogWriter, error) {
-	uri, err := storage.ParseRawURL(util.GetOrZero(lwCfg.Storage))
-	if err != nil {
-		return nil, err
-	}
-
-	if !redo.IsValidConsistentStorage(uri.Scheme) {
-		return nil, errors.ErrConsistentStorage.GenWithStackByArgs(uri.Scheme)
-	}
-
-	lwCfg.URI = uri
-	lwCfg.UseExternalStorage = redo.IsExternalStorage(uri.Scheme)
-
+	uri := cfg.URI()
 	if redo.IsBlackholeStorage(uri.Scheme) {
 		invalid := strings.HasSuffix(uri.Scheme, "invalid")
 		return blackhole.NewLogWriter(invalid), nil
 	}
 
-	if util.GetOrZero(lwCfg.UseFileBackend) {
-		return file.NewLogWriter(ctx, lwCfg, fileType)
+	if cfg.UseFileBackend() {
+		return file.NewLogWriter(ctx, cfg, fileType)
 	}
-	return memory.NewLogWriter(ctx, lwCfg, fileType)
+	return memory.NewLogWriter(ctx, cfg, fileType)
 }

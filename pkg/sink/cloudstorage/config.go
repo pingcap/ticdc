@@ -65,10 +65,11 @@ const (
 )
 
 type urlConfig struct {
-	WorkerCount    *int    `form:"worker-count"`
-	FlushInterval  *string `form:"flush-interval"`
-	FileSize       *int    `form:"file-size"`
-	SpoolDiskQuota *int64  `form:"spool-disk-quota"`
+	WorkerCount      *int    `form:"worker-count"`
+	FlushInterval    *string `form:"flush-interval"`
+	FileSize         *int    `form:"file-size"`
+	UseTableIDAsPath *bool   `form:"use-table-id-as-path"`
+	SpoolDiskQuota   *int64  `form:"spool-disk-quota"`
 }
 
 // Config is the configuration for cloud storage sink.
@@ -84,6 +85,7 @@ type Config struct {
 	OutputColumnID           bool
 	FlushConcurrency         int
 	EnableTableAcrossNodes   bool
+	UseTableIDAsPath         bool
 	SpoolDiskQuota           int64
 }
 
@@ -136,8 +138,10 @@ func (c *Config) Apply(
 	if err != nil {
 		return err
 	}
-	err = getSpoolDiskQuota(urlParameter, &c.SpoolDiskQuota)
-	if err != nil {
+	if err = getUseTableIDAsPath(urlParameter, &c.UseTableIDAsPath); err != nil {
+		return err
+	}
+	if err = getSpoolDiskQuota(urlParameter, &c.SpoolDiskQuota); err != nil {
 		return err
 	}
 
@@ -172,22 +176,11 @@ func mergeConfig(
 ) (*urlConfig, error) {
 	dest := &urlConfig{}
 	if sinkConfig != nil && sinkConfig.CloudStorageConfig != nil {
-		if sinkConfig.CloudStorageConfig.WorkerCount != nil {
-			workerCount := *sinkConfig.CloudStorageConfig.WorkerCount
-			dest.WorkerCount = &workerCount
-		}
-		if sinkConfig.CloudStorageConfig.FlushInterval != nil {
-			flushInterval := *sinkConfig.CloudStorageConfig.FlushInterval
-			dest.FlushInterval = &flushInterval
-		}
-		if sinkConfig.CloudStorageConfig.FileSize != nil {
-			fileSize := *sinkConfig.CloudStorageConfig.FileSize
-			dest.FileSize = &fileSize
-		}
-		if sinkConfig.CloudStorageConfig.SpoolDiskQuota != nil {
-			spoolDiskQuota := *sinkConfig.CloudStorageConfig.SpoolDiskQuota
-			dest.SpoolDiskQuota = &spoolDiskQuota
-		}
+		dest.WorkerCount = sinkConfig.CloudStorageConfig.WorkerCount
+		dest.FlushInterval = sinkConfig.CloudStorageConfig.FlushInterval
+		dest.FileSize = sinkConfig.CloudStorageConfig.FileSize
+		dest.UseTableIDAsPath = sinkConfig.CloudStorageConfig.UseTableIDAsPath
+		dest.SpoolDiskQuota = sinkConfig.CloudStorageConfig.SpoolDiskQuota
 	}
 	if err := mergo.Merge(dest, urlParameters, mergo.WithOverride); err != nil {
 		return nil, errors.WrapError(errors.ErrStorageSinkInvalidConfig, err)
@@ -237,6 +230,15 @@ func getFlushInterval(values *urlConfig, flushInterval *time.Duration) error {
 	}
 
 	*flushInterval = d
+	return nil
+}
+
+func getUseTableIDAsPath(values *urlConfig, useTableIDAsPath *bool) error {
+	if values.UseTableIDAsPath == nil {
+		return nil
+	}
+
+	*useTableIDAsPath = *values.UseTableIDAsPath
 	return nil
 }
 

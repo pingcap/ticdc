@@ -161,7 +161,7 @@ func (s *eventScanner) fetchDDLEvents(stat *dispatcherStat, dataRange common.Dat
 	)
 	if err != nil {
 		log.Error("get ddl events failed", zap.Stringer("dispatcherID", dispatcherID),
-			zap.Int64("tableID", dataRange.Span.TableID), zap.Error(err))
+			zap.Int64("tableID", dataRange.Span.TableID), zap.Error(err), zap.Int64("mode", s.mode))
 		return nil, err
 	}
 
@@ -240,7 +240,8 @@ func (s *eventScanner) scanAndMergeEvents(
 				zap.Stringer("dispatcherID", session.dispatcherStat.id),
 				zap.Int64("tableID", tableID),
 				zap.Uint64("startTs", rawEvent.StartTs),
-				zap.Uint64("commitTs", rawEvent.CRTs))
+				zap.Uint64("commitTs", rawEvent.CRTs),
+				zap.Int64("mode", s.mode))
 			return false, err
 		}
 	}
@@ -269,20 +270,20 @@ func (s *eventScanner) getTableInfo4Txn(dispatcher *dispatcherStat, tableID int6
 	if dispatcher.isRemoved.Load() {
 		log.Warn("get table info failed, but the dispatcher is removed from the event service",
 			zap.Stringer("dispatcherID", dispatcher.id), zap.Int64("tableID", tableID),
-			zap.Uint64("ts", ts), zap.Error(err))
+			zap.Uint64("ts", ts), zap.Error(err), zap.Int64("mode", s.mode))
 		return nil, nil
 	}
 
 	if errors.Is(err, &schemastore.TableDeletedError{}) {
 		log.Warn("get table info failed, since the table is deleted",
 			zap.Stringer("dispatcherID", dispatcher.id), zap.Int64("tableID", tableID),
-			zap.Uint64("ts", ts))
+			zap.Uint64("ts", ts), zap.Int64("mode", s.mode))
 		return nil, nil
 	}
 
 	log.Error("get table info failed, unknown reason",
 		zap.Stringer("dispatcherID", dispatcher.id), zap.Int64("tableID", tableID),
-		zap.Uint64("ts", ts), zap.Error(err))
+		zap.Uint64("ts", ts), zap.Error(err), zap.Int64("mode", s.mode))
 	return nil, err
 }
 

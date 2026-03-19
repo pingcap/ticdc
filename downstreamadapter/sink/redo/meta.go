@@ -31,6 +31,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/uuid"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -57,6 +58,8 @@ type RedoMeta struct {
 	lastFlushTime          time.Time
 	cfg                    *config.ConsistentConfig
 	metricFlushLogDuration prometheus.Observer
+	metricCheckpointTs     prometheus.Gauge
+	metricResolvedTs       prometheus.Gauge
 
 	flushIntervalInMs int64
 }
@@ -75,6 +78,10 @@ func NewRedoMeta(
 		cfg:               cfg,
 		startTs:           checkpoint,
 		flushIntervalInMs: util.GetOrZero(cfg.MetaFlushIntervalInMs),
+		metricCheckpointTs: metrics.RedoCheckpointTsGauge.
+			WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
+		metricResolvedTs: metrics.RedoResolvedTsGauge.
+			WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
 	}
 
 	if m.flushIntervalInMs < redo.MinFlushIntervalInMs {
@@ -391,6 +398,8 @@ func (m *RedoMeta) prepareForFlushMeta() (bool, misc.LogMeta) {
 func (m *RedoMeta) postFlushMeta(meta misc.LogMeta) {
 	m.metaResolvedTs.checkAndSetFlushed(meta.ResolvedTs)
 	m.metaCheckpointTs.checkAndSetFlushed(meta.CheckpointTs)
+	m.metricResolvedTs.Set(float64(oracle.ExtractPhysical(meta.ResolvedTs)))
+	m.metricCheckpointTs.Set(float64(oracle.ExtractPhysical(meta.CheckpointTs)))
 }
 
 func (m *RedoMeta) flush(ctx context.Context, meta misc.LogMeta) error {
@@ -433,15 +442,16 @@ func (m *RedoMeta) flush(ctx context.Context, meta misc.LogMeta) error {
 	return nil
 }
 
-func (m *RedoMeta) cleanup(logType string) {
+func (m *RedoMeta) CleanupMetrics() {
+	metrics.RedoCheckpointTsGauge.DeleteLabelValues(m.changeFeedID.Keyspace(), m.changeFeedID.Name())
+	metrics.RedoResolvedTsGauge.DeleteLabelValues(m.changeFeedID.Keyspace(), m.changeFeedID.Name())
 	metrics.RedoFlushLogDurationHistogram.
-		DeleteLabelValues(m.changeFeedID.Keyspace(), m.changeFeedID.Name(), logType)
+		DeleteLabelValues(m.changeFeedID.Keyspace(), m.changeFeedID.Name(), redo.RedoMetaFileType)
 }
 
 // Cleanup removes all redo logs of this manager, it is called when changefeed is removed
 // only owner should call this method.
 func (m *RedoMeta) Cleanup(ctx context.Context) error {
-	m.cleanup(redo.RedoMetaFileType)
 	return m.deleteAllLogs(ctx)
 }
 

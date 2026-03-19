@@ -37,6 +37,8 @@ const (
 
 	// TxnAtomicityKey specifies the key of the transaction-atomicity in the SinkURI.
 	TxnAtomicityKey = "transaction-atomicity"
+	// UseTableIDAsPathKey specifies the key of the use-table-id-as-path in the SinkURI.
+	UseTableIDAsPathKey = "use-table-id-as-path"
 	// defaultTxnAtomicity is the default atomicity level.
 	defaultTxnAtomicity = noneTxnAtomicity
 	// unknownTxnAtomicity is an invalid atomicity level and will be treated as
@@ -699,6 +701,8 @@ type CloudStorageConfig struct {
 	FileExpirationDays  *int    `toml:"file-expiration-days" json:"file-expiration-days,omitempty"`
 	FileCleanupCronSpec *string `toml:"file-cleanup-cron-spec" json:"file-cleanup-cron-spec,omitempty"`
 	FlushConcurrency    *int    `toml:"flush-concurrency" json:"flush-concurrency,omitempty"`
+	// UseTableIDAsPath is only available when the downstream is Storage (TiCI only).
+	UseTableIDAsPath *bool `toml:"use-table-id-as-path" json:"use-table-id-as-path,omitempty"`
 
 	// OutputRawChangeEvent controls whether to split the update pk/uk events.
 	OutputRawChangeEvent *bool `toml:"output-raw-change-event" json:"output-raw-change-event,omitempty"`
@@ -710,6 +714,27 @@ func (c *CloudStorageConfig) GetOutputRawChangeEvent() bool {
 		return false
 	}
 	return *c.OutputRawChangeEvent
+}
+
+// CheckUseTableIDAsPathCompatibility checks the compatibility between sink config and sink URI.
+func CheckUseTableIDAsPathCompatibility(
+	sinkConfig *SinkConfig,
+	useTableIDAsPathFromURI *bool,
+) error {
+	if sinkConfig == nil ||
+		sinkConfig.CloudStorageConfig == nil ||
+		sinkConfig.CloudStorageConfig.UseTableIDAsPath == nil ||
+		useTableIDAsPathFromURI == nil {
+		return nil
+	}
+	useTableIDAsPathFromConfig := sinkConfig.CloudStorageConfig.UseTableIDAsPath
+	if util.GetOrZero(useTableIDAsPathFromConfig) == util.GetOrZero(useTableIDAsPathFromURI) {
+		return nil
+	}
+	return cerror.ErrIncompatibleSinkConfig.GenWithStackByArgs(
+		fmt.Sprintf("%s=%t", UseTableIDAsPathKey, util.GetOrZero(useTableIDAsPathFromURI)),
+		fmt.Sprintf("%s=%t", UseTableIDAsPathKey, util.GetOrZero(useTableIDAsPathFromConfig)),
+	)
 }
 
 func (s *SinkConfig) validateAndAdjust(sinkURI *url.URL) error {
@@ -978,14 +1003,58 @@ func (s *SinkConfig) CheckCompatibilityWithSinkURI(
 		return cerror.WrapError(cerror.ErrSinkURIInvalid, err)
 	}
 
+	var useTableIDAsPathFromURI *bool
+	if IsStorageScheme(sinkURI.Scheme) {
+		useTableIDAsPathValue := sinkURI.Query().Get(UseTableIDAsPathKey)
+		if useTableIDAsPathValue != "" {
+			enabled, parseErr := strconv.ParseBool(useTableIDAsPathValue)
+			if parseErr != nil {
+				return cerror.WrapError(cerror.ErrSinkURIInvalid, parseErr)
+			}
+			useTableIDAsPathFromURI = util.AddressOf(enabled)
+		}
+	}
+
+	getUseTableIDAsPath := func(cfg *SinkConfig) *bool {
+		if cfg == nil || cfg.CloudStorageConfig == nil {
+			return nil
+		}
+		return cfg.CloudStorageConfig.UseTableIDAsPath
+	}
+
+	useTableIDAsPathChanged := func() bool {
+		newVal := getUseTableIDAsPath(s)
+		oldVal := getUseTableIDAsPath(oldSinkConfig)
+		if newVal == nil && oldVal == nil {
+			return false
+		}
+		if newVal == nil || oldVal == nil {
+			return true
+		}
+		return *newVal != *oldVal
+	}
+
 	cfgParamsChanged := s.Protocol != oldSinkConfig.Protocol ||
-		s.TxnAtomicity != oldSinkConfig.TxnAtomicity
+		s.TxnAtomicity != oldSinkConfig.TxnAtomicity ||
+		useTableIDAsPathChanged()
 
 	isURIParamsChanged := func(oldCfg SinkConfig) bool {
 		err := oldCfg.applyParameterBySinkURI(sinkURI)
-		return cerror.ErrIncompatibleSinkConfig.Equal(err)
+		if cerror.ErrIncompatibleSinkConfig.Equal(err) {
+			return true
+		}
+		if useTableIDAsPathFromURI == nil {
+			return false
+		}
+		return CheckUseTableIDAsPathCompatibility(&oldCfg, useTableIDAsPathFromURI) != nil
 	}
 	uriParamsChanged := isURIParamsChanged(*oldSinkConfig)
+
+	if !uriParamsChanged && IsStorageScheme(sinkURI.Scheme) {
+		if err := CheckUseTableIDAsPathCompatibility(s, useTableIDAsPathFromURI); err != nil {
+			return err
+		}
+	}
 
 	if !uriParamsChanged && !cfgParamsChanged {
 		return nil

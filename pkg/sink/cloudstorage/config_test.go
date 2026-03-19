@@ -34,7 +34,8 @@ func TestConfigApply(t *testing.T) {
 	expected.EnablePartitionSeparator = true
 	expected.FlushConcurrency = 1
 	expected.SpoolDiskQuota = 10 * 1024 * 1024 * 1024
-	uri := "s3://bucket/prefix?worker-count=32&flush-interval=10s&file-size=16777216&protocol=csv"
+	expected.UseTableIDAsPath = true
+	uri := "s3://bucket/prefix?worker-count=32&flush-interval=10s&file-size=16777216&protocol=csv&use-table-id-as-path=true"
 	sinkURI, err := url.Parse(uri)
 	require.NoError(t, err)
 
@@ -76,6 +77,11 @@ func TestVerifySinkURIParams(t *testing.T) {
 		{
 			name:        "sink uri with valid scheme, worker-count, flush-interval and file-size",
 			uri:         "s3://bucket/prefix?worker-count=64&flush-interval=1m30s&file-size=33554432",
+			expectedErr: "",
+		},
+		{
+			name:        "sink uri with use-table-id-as-path",
+			uri:         "s3://bucket/prefix?use-table-id-as-path=true",
 			expectedErr: "",
 		},
 		{

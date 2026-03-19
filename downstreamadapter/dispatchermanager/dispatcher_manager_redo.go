@@ -52,10 +52,11 @@ func initRedoComponet(
 	if !manager.IsRedoEnabled() {
 		return nil
 	}
+	var err error
 	manager.redoDispatcherMap = newDispatcherMap[*dispatcher.RedoDispatcher]()
-	manager.redoSink = redo.New(ctx, changefeedID, manager.config.Consistent)
-	if manager.redoSink == nil {
-		return errors.WrapError(errors.ErrStorageInitialize, errors.New("redo sink initialization returned nil"))
+	manager.redoSink, err = redo.New(ctx, changefeedID, manager.config.Consistent)
+	if err != nil {
+		return err
 	}
 	manager.redoSchemaIDToDispatchers = dispatcher.NewSchemaIDToDispatchers()
 
@@ -112,7 +113,7 @@ func (e *DispatcherManager) NewTableTriggerRedoDispatcher(id *heartbeatpb.Dispat
 	// redo meta should keep the same node with table trigger event dispatcher
 	// table trigger event dispatcher and table trigger redo dispatcher must exist on the same node
 	redoDispatcher := e.GetTableTriggerRedoDispatcher()
-	redoDispatcher.SetRedoMeta(e.config.Consistent)
+	redoDispatcher.SetRedoMeta(e.ctx, e.config.Consistent)
 	e.wg.Add(1)
 	go func() {
 		defer e.wg.Done()
@@ -257,10 +258,13 @@ func (e *DispatcherManager) cleanRedoDispatcher(id common.DispatcherID, schemaID
 }
 
 func (e *DispatcherManager) closeRedoMeta(removeChangefeed bool) {
-	if removeChangefeed && e.GetTableTriggerRedoDispatcher() != nil {
-		redoMeta := e.GetTableTriggerRedoDispatcher().GetRedoMeta()
+	if d := e.GetTableTriggerRedoDispatcher(); d != nil {
+		redoMeta := d.GetRedoMeta()
 		if redoMeta != nil {
-			redoMeta.Cleanup(context.Background())
+			redoMeta.CleanupMetrics()
+			if removeChangefeed {
+				redoMeta.Cleanup(context.Background())
+			}
 		}
 	}
 }
