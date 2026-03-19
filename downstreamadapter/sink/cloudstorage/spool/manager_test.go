@@ -321,7 +321,7 @@ func TestEnqueueSpillsWhenSerializedBatchExceedsMemoryQuota(t *testing.T) {
 	require.True(t, entry.IsSpilled())
 }
 
-func TestExternalRootDirDeletionReturnsErrorOnNextRotate(t *testing.T) {
+func TestExternalRootDirDeletionReturnsErrorWhenNewSegmentIsNeeded(t *testing.T) {
 	t.Parallel()
 
 	rootDir := t.TempDir()
@@ -346,15 +346,54 @@ func TestExternalRootDirDeletionReturnsErrorOnNextRotate(t *testing.T) {
 
 	require.NoError(t, os.RemoveAll(rootDir))
 
+	// Removing the directory is not immediately fatal if the existing spilled
+	// entry is still readable through the open segment file handle.
 	firstMsgs, _, err := manager.Load(firstEntry)
 	require.NoError(t, err)
 	require.Len(t, firstMsgs, 1)
 	require.Equal(t, []byte("first-spilled-entry"), firstMsgs[0].Value)
 
+	// The error surfaces when spool next needs the damaged path to persist a new
+	// pending entry in another segment.
 	secondEntry, err := manager.Enqueue([]*common.Message{
 		newTestMessage("second-spilled-entry", 1),
 	}, nil)
 	require.Nil(t, secondEntry)
+	require.Error(t, err)
+	rfcCode, ok := errors.RFCCode(err)
+	require.True(t, ok)
+	require.Equal(t, errors.ErrUnexpected.RFCCode(), rfcCode)
+}
+
+func TestExternalSegmentDamageReturnsErrorOnLoad(t *testing.T) {
+	t.Parallel()
+
+	rootDir := t.TempDir()
+	changefeedID := commonType.NewChangefeedID4Test("test", "spool")
+	manager, err := New(
+		changefeedID,
+		WithQuotaBytes(64),
+		WithRootDir(rootDir),
+		WithSegmentBytes(1<<20),
+		WithMemoryRatio(0.01),
+		WithHighWatermarkRatio(0.95),
+		WithLowWatermarkRatio(0.7),
+	)
+	require.NoError(t, err)
+	defer manager.Close()
+
+	entry, err := manager.Enqueue([]*common.Message{
+		newTestMessage("spilled-entry", 1),
+	}, nil)
+	require.NoError(t, err)
+	require.True(t, entry.IsSpilled())
+
+	segmentPath := filepath.Join(rootDir, "segment-000001.log")
+	require.NoError(t, os.Truncate(segmentPath, 0))
+
+	msgs, callbacks, err := manager.Load(entry)
+	require.Nil(t, msgs)
+	require.Nil(t, callbacks)
 	require.Error(t, err)
 	rfcCode, ok := errors.RFCCode(err)
 	require.True(t, ok)

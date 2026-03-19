@@ -463,6 +463,9 @@ func runCallbacks(callbacks []func()) {
 }
 
 // Load fetches messages from memory or spilled segments.
+// If external damage has already made spilled bytes unreadable, Load returns
+// an error immediately because spool can no longer guarantee those pending
+// bytes are still recoverable for flush.
 func (s *Spool) Load(entry *Entry) ([]*common.Message, []func(), error) {
 	if entry == nil {
 		return nil, nil, nil
@@ -623,6 +626,9 @@ func (s *Spool) rotateLocked() error {
 		s.rootDir,
 		fmt.Sprintf("%s%06d%s", segmentFilePrefix, segmentID, segmentFileExt),
 	)
+	// External damage to the spool directory becomes fatal here. Once spool
+	// needs a new segment and cannot create it, it can no longer promise that
+	// new pending data will stay locally readable until flush.
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o644)
 	if err != nil {
 		return errors.WrapError(errors.ErrUnexpected, err, "open spool segment file")
