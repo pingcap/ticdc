@@ -71,6 +71,7 @@ type sink struct {
 	// some method lack of the context parameter,
 	// we have to use the context from the struct to perceive the context done from the upper layer
 	// To perceive the context done from the upper layer
+	// it's the same as the context passed into the Run method.
 	ctx context.Context
 }
 
@@ -151,6 +152,10 @@ func (s *sink) SinkType() common.SinkType {
 
 // Run the sink, the ctx is the same as the ctx in the New function.
 func (s *sink) Run(ctx context.Context) error {
+	defer func() {
+		s.isNormal.Store(false)
+	}()
+
 	g, ctx := errgroup.WithContext(ctx)
 
 	g.Go(func() error {
@@ -176,10 +181,20 @@ func (s *sink) IsNormal() bool {
 }
 
 func (s *sink) AddDMLEvent(event *commonEvent.DMLEvent) {
+	if !s.IsNormal() {
+		log.Warn("ignore dml event because sink is not normal",
+			zap.String("keyspace", s.changefeedID.Keyspace()),
+			zap.Stringer("changefeed", s.changefeedID.ID()),
+			zap.String("dispatcher", event.GetDispatcherID().String()))
+		return
+	}
 	s.dmlWriters.addDMLEvent(event)
 }
 
 func (s *sink) FlushDMLBeforeBlock(event commonEvent.BlockEvent) error {
+	if !s.IsNormal() {
+		return errors.ErrInternalCheckFailed.GenWithStack("cloudstorage sink is not normal")
+	}
 	if err := s.dmlWriters.flushDMLBeforeBlock(s.ctx, event); err != nil {
 		s.isNormal.Store(false)
 		return err
@@ -188,6 +203,9 @@ func (s *sink) FlushDMLBeforeBlock(event commonEvent.BlockEvent) error {
 }
 
 func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
+	if !s.IsNormal() {
+		return errors.ErrInternalCheckFailed.GenWithStack("cloudstorage sink is not normal")
+	}
 	var err error
 	switch e := event.(type) {
 	case *commonEvent.DDLEvent:
@@ -281,6 +299,9 @@ func (s *sink) writeFile(v *commonEvent.DDLEvent, def cloudstorage.TableDefiniti
 }
 
 func (s *sink) AddCheckpointTs(ts uint64) {
+	if !s.IsNormal() {
+		return
+	}
 	select {
 	case s.checkpointChan <- ts:
 	case <-s.ctx.Done():

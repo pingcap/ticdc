@@ -134,6 +134,67 @@ func TestBasicFunctionality(t *testing.T) {
 	require.Equal(t, count.Load(), int64(3))
 }
 
+func TestIgnoreCallsAfterRunError(t *testing.T) {
+	uri := fmt.Sprintf("file:///%s?protocol=csv", t.TempDir())
+	sinkURI, err := url.Parse(uri)
+	require.NoError(t, err)
+
+	replicaConfig := config.GetDefaultReplicaConfig()
+	err = replicaConfig.ValidateAndAdjust(sinkURI)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	mockPDClock := pdutil.NewClock4Test()
+	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+
+	cloudStorageSink, err := newSinkForTest(ctx, replicaConfig, sinkURI, nil)
+	require.NoError(t, err)
+	cloudStorageSink.cfg.FileCleanupCronSpec = "invalid cron spec"
+
+	runDone := make(chan error, 1)
+	go func() {
+		runDone <- cloudStorageSink.Run(ctx)
+	}()
+
+	require.Eventually(t, func() bool {
+		return !cloudStorageSink.IsNormal()
+	}, 5*time.Second, 10*time.Millisecond)
+
+	select {
+	case err = <-runDone:
+		require.Error(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("sink.Run did not return after fatal error")
+	}
+
+	tableInfo := &common.TableInfo{
+		TableName: common.TableName{
+			Schema:  "test",
+			Table:   "t_ignore_after_error",
+			TableID: 100,
+		},
+	}
+	event := commonEvent.NewDMLEvent(common.NewDispatcherID(), tableInfo.TableName.TableID, 1, 1, tableInfo)
+	event.TableInfoVersion = 1
+	event.Length = 1
+	event.ApproximateSize = 1
+
+	require.Zero(t, cloudStorageSink.dmlWriters.msgCh.Len())
+	cloudStorageSink.AddDMLEvent(event)
+	require.Zero(t, cloudStorageSink.dmlWriters.msgCh.Len())
+
+	ddlEvent := &commonEvent.DDLEvent{
+		DispatcherID: common.NewDispatcherID(),
+		FinishedTs:   1,
+	}
+	err = cloudStorageSink.FlushDMLBeforeBlock(ddlEvent)
+	require.Error(t, err)
+	err = cloudStorageSink.WriteBlockEvent(ddlEvent)
+	require.Error(t, err)
+}
+
 func TestWriteDDLEvent(t *testing.T) {
 	parentDir := t.TempDir()
 	uri := fmt.Sprintf("file:///%s?protocol=csv", parentDir)
