@@ -34,31 +34,80 @@ const (
 	segmentFilePrefix    = "segment-"
 	segmentFileExt       = ".log"
 
+	// Use the same order of magnitude as the storage sink's default file size.
+	// One segment is large enough for sequential local writes, but still small
+	// enough to roll over and reclaim files without waiting too long.
 	defaultSegmentBytes = int64(64 * 1024 * 1024)
+	// Keep enough local buffer for temporary downstream slowdowns by default,
+	// while still requiring operators to size the disk budget explicitly for
+	// larger workloads.
+	defaultQuotaBytes = int64(10 * 1024 * 1024 * 1024)
 
-	defaultMemoryRatio        = 0.2
+	// Keep only a small hot working set in memory. Most queued data can move to
+	// local files so the writer is less likely to keep growing memory usage.
+	defaultMemoryRatio = 0.2
+	// Pause onEnqueued callbacks only after local usage is already fairly high.
 	defaultHighWatermarkRatio = 0.8
-	defaultLowWatermarkRatio  = 0.6
+	// Resume pending PostEnqueue callbacks only after usage has dropped enough
+	// to avoid bouncing immediately back into the paused state.
+	defaultLowWatermarkRatio = 0.6
 )
 
-// Options tells spool where to keep temporary files and how much local space it may use.
-type Options struct {
-	// RootDir is the local directory used by spool. If empty, use a
+type options struct {
+	// rootDir is the local directory used by spool. If empty, use a
 	// changefeed-specific directory under TiCDC's data dir.
-	RootDir string
+	rootDir string
 
-	// QuotaBytes is the total local budget shared by in-memory data and spilled files.
-	QuotaBytes int64
+	// quotaBytes is the total local budget shared by in-memory data and spilled files.
+	quotaBytes int64
 
-	// SegmentBytes is the largest size of one segment file before spool rolls to the next file.
-	SegmentBytes int64
+	// segmentBytes is the largest size of one segment file before spool rolls to the next file.
+	segmentBytes int64
 
-	// MemoryRatio is the fraction of QuotaBytes kept in memory before spilling to disk.
-	MemoryRatio float64
-	// HighWatermarkRatio is the ratio that starts suppressing wake callbacks.
-	HighWatermarkRatio float64
-	// LowWatermarkRatio is the ratio that resumes suppressed wake callbacks.
-	LowWatermarkRatio float64
+	// memoryRatio is the fraction of quotaBytes kept in memory before spilling to disk.
+	memoryRatio float64
+	// highWatermarkRatio is the ratio that starts suppressing wake callbacks.
+	highWatermarkRatio float64
+	// lowWatermarkRatio is the ratio that resumes pending PostEnqueue callbacks.
+	lowWatermarkRatio float64
+}
+
+type option func(*options)
+
+func WithRootDir(rootDir string) option {
+	return func(options *options) {
+		options.rootDir = rootDir
+	}
+}
+
+func WithQuotaBytes(quotaBytes int64) option {
+	return func(options *options) {
+		options.quotaBytes = quotaBytes
+	}
+}
+
+func WithSegmentBytes(segmentBytes int64) option {
+	return func(options *options) {
+		options.segmentBytes = segmentBytes
+	}
+}
+
+func WithMemoryRatio(memoryRatio float64) option {
+	return func(options *options) {
+		options.memoryRatio = memoryRatio
+	}
+}
+
+func WithHighWatermarkRatio(highWatermarkRatio float64) option {
+	return func(options *options) {
+		options.highWatermarkRatio = highWatermarkRatio
+	}
+}
+
+func WithLowWatermarkRatio(lowWatermarkRatio float64) option {
+	return func(options *options) {
+		options.lowWatermarkRatio = lowWatermarkRatio
+	}
 }
 
 // Manager keeps encoded messages in local spool storage until the writer flushes them to object storage.
@@ -72,8 +121,8 @@ type Manager struct {
 	// closed makes Close idempotent and blocks new writes after shutdown starts.
 	closed bool
 
-	// quota tracks bytes through budgetCore and applies spool-specific wake and metrics policy.
-	quota *quotaAdapter
+	// quota tracks bytes through budget and applies spool-specific wake and metrics policy.
+	quota *quotaController
 	// segmentBytes is the size limit for a single segment file.
 	segmentBytes int64
 
@@ -146,62 +195,114 @@ func (e *Entry) InMemory() bool {
 // New creates a per-changefeed spool manager.
 func New(
 	changefeedID commonType.ChangeFeedID,
-	opts *Options,
+	opts ...option,
 ) (*Manager, error) {
-	options := withDefaultOptions(opts)
-	if err := validateOptions(options); err != nil {
-		return nil, err
+	rawOptions := &options{}
+	for _, opt := range opts {
+		if opt == nil {
+			continue
+		}
+		opt(rawOptions)
 	}
-
-	rootDir := resolveRootDir(changefeedID, options.RootDir)
+	options := withDefaultOptions(rawOptions)
+	rootDir := resolveRootDir(changefeedID, options.rootDir)
 	if err := prepareRootDir(rootDir); err != nil {
 		return nil, err
 	}
 
 	manager := &Manager{
 		rootDir:      rootDir,
-		quota:        newQuotaAdapter(changefeedID, options),
-		segmentBytes: options.SegmentBytes,
+		quota:        newQuotaController(changefeedID, options),
+		segmentBytes: options.segmentBytes,
 		segments:     make(map[uint64]*segment),
 	}
 	return manager, nil
 }
 
-func validateOptions(options *Options) error {
-	if options.SegmentBytes <= 0 {
-		return errors.ErrStorageSinkInvalidConfig.GenWithStack(
-			"spool segment size must be greater than 0, but got %d",
-			options.SegmentBytes,
-		)
-	}
-	return validateBudgetOptions(options)
-}
-
-func withDefaultOptions(opts *Options) *Options {
-	result := &Options{
-		SegmentBytes:       defaultSegmentBytes,
-		MemoryRatio:        defaultMemoryRatio,
-		HighWatermarkRatio: defaultHighWatermarkRatio,
-		LowWatermarkRatio:  defaultLowWatermarkRatio,
+func withDefaultOptions(opts *options) *options {
+	result := &options{
+		quotaBytes:         defaultQuotaBytes,
+		segmentBytes:       defaultSegmentBytes,
+		memoryRatio:        defaultMemoryRatio,
+		highWatermarkRatio: defaultHighWatermarkRatio,
+		lowWatermarkRatio:  defaultLowWatermarkRatio,
 	}
 	if opts == nil {
 		return result
 	}
-	if opts.RootDir != "" {
-		result.RootDir = opts.RootDir
+	if opts.rootDir != "" {
+		result.rootDir = opts.rootDir
 	}
-	result.QuotaBytes = opts.QuotaBytes
-	if opts.SegmentBytes != 0 {
-		result.SegmentBytes = opts.SegmentBytes
+	if opts.quotaBytes > 0 {
+		result.quotaBytes = opts.quotaBytes
 	}
-	if opts.MemoryRatio != 0 {
-		result.MemoryRatio = opts.MemoryRatio
+	if opts.quotaBytes < 0 {
+		log.Warn(
+			"spool option is invalid, use default",
+			zap.String("field", "quota-bytes"),
+			zap.Int64("original", opts.quotaBytes),
+			zap.Int64("default", defaultQuotaBytes),
+		)
 	}
-	if opts.HighWatermarkRatio != 0 {
-		result.HighWatermarkRatio = opts.HighWatermarkRatio
+
+	if opts.segmentBytes > 0 {
+		result.segmentBytes = opts.segmentBytes
 	}
-	if opts.LowWatermarkRatio != 0 {
-		result.LowWatermarkRatio = opts.LowWatermarkRatio
+	if opts.segmentBytes < 0 {
+		log.Warn(
+			"spool option is invalid, use default",
+			zap.String("field", "segment-bytes"),
+			zap.Int64("original", opts.segmentBytes),
+			zap.Int64("default", defaultSegmentBytes),
+		)
+	}
+
+	if opts.memoryRatio > 0 && opts.memoryRatio < 1 {
+		result.memoryRatio = opts.memoryRatio
+	}
+	if opts.memoryRatio < 0 || opts.memoryRatio >= 1 {
+		log.Warn(
+			"spool option is invalid, use default",
+			zap.String("field", "memory-ratio"),
+			zap.Float64("original", opts.memoryRatio),
+			zap.Float64("default", defaultMemoryRatio),
+		)
+	}
+
+	if opts.highWatermarkRatio > 0 && opts.highWatermarkRatio < 1 {
+		result.highWatermarkRatio = opts.highWatermarkRatio
+	}
+	if opts.highWatermarkRatio < 0 || opts.highWatermarkRatio >= 1 {
+		log.Warn(
+			"spool option is invalid, use default",
+			zap.String("field", "high-watermark-ratio"),
+			zap.Float64("original", opts.highWatermarkRatio),
+			zap.Float64("default", defaultHighWatermarkRatio),
+		)
+	}
+
+	if opts.lowWatermarkRatio > 0 && opts.lowWatermarkRatio < 1 {
+		result.lowWatermarkRatio = opts.lowWatermarkRatio
+	}
+	if opts.lowWatermarkRatio < 0 || opts.lowWatermarkRatio >= 1 {
+		log.Warn(
+			"spool option is invalid, use default",
+			zap.String("field", "low-watermark-ratio"),
+			zap.Float64("original", opts.lowWatermarkRatio),
+			zap.Float64("default", defaultLowWatermarkRatio),
+		)
+	}
+
+	if result.lowWatermarkRatio >= result.highWatermarkRatio {
+		log.Warn(
+			"spool watermark ratio is invalid, use default",
+			zap.Float64("low", result.lowWatermarkRatio),
+			zap.Float64("high", result.highWatermarkRatio),
+			zap.Float64("defaultLow", defaultLowWatermarkRatio),
+			zap.Float64("defaultHigh", defaultHighWatermarkRatio),
+		)
+		result.lowWatermarkRatio = defaultLowWatermarkRatio
+		result.highWatermarkRatio = defaultHighWatermarkRatio
 	}
 	return result
 }
@@ -225,7 +326,7 @@ func resolveRootDir(changefeedID commonType.ChangeFeedID, rootDir string) string
 
 // prepareRootDir starts each spool instance from a clean set of spool-owned
 // segment files. The intent is to avoid appending to stale segment logs from a
-// previous run, while leaving any unrelated files under Options.RootDir intact.
+// previous run, while leaving any unrelated files under the configured spool root directory intact.
 func prepareRootDir(rootDir string) error {
 	if err := os.MkdirAll(rootDir, 0o755); err != nil {
 		return errors.WrapError(errors.ErrCheckDirValid, err)

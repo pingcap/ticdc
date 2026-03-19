@@ -13,95 +13,55 @@
 
 package spool
 
-import "github.com/pingcap/ticdc/pkg/errors"
-
-// budgetSnapshot is the current staged-byte view maintained by budgetCore.
-type budgetSnapshot struct {
-	memoryBytes int64
-	diskBytes   int64
-}
-
-func (s budgetSnapshot) totalBytes() int64 {
-	return s.memoryBytes + s.diskBytes
-}
-
-// budgetCore only owns threshold math and byte accounting.
-// It does not know anything about callbacks, metrics, or spool lifecycle policy.
-type budgetCore struct {
-	memoryQuotaBytes   int64
+// budget stores the current queued byte counts and the byte limits derived from spool config.
+type budget struct {
+	// memoryQuotaBytes is the largest byte count we still keep in memory.
+	// If adding a new entry would cross this value, spool writes that entry
+	// to local spool files instead of keeping it in memory.
+	memoryQuotaBytes int64
+	// highWatermarkBytes is the byte count that makes spool stop running the
+	// new onEnqueued callback immediately. The callback is saved in memory and
+	// will be run later.
 	highWatermarkBytes int64
-	lowWatermarkBytes  int64
+	// lowWatermarkBytes is the byte count that lets spool run the saved
+	// onEnqueued callbacks again after some queued data has been flushed to the
+	// downstream storage or discarded locally.
+	lowWatermarkBytes int64
 
+	// memoryBytes is the number of queued bytes that are still kept in memory.
 	memoryBytes int64
-	diskBytes   int64
+	// diskBytes is the number of queued bytes that have already been written to local spool files.
+	diskBytes int64
 }
 
-func newBudgetCore(options *Options) *budgetCore {
-	return &budgetCore{
-		memoryQuotaBytes:   int64(float64(options.QuotaBytes) * options.MemoryRatio),
-		highWatermarkBytes: int64(float64(options.QuotaBytes) * options.HighWatermarkRatio),
-		lowWatermarkBytes:  int64(float64(options.QuotaBytes) * options.LowWatermarkRatio),
+func newBudget(options *options) *budget {
+	return &budget{
+		memoryQuotaBytes:   int64(float64(options.quotaBytes) * options.memoryRatio),
+		highWatermarkBytes: int64(float64(options.quotaBytes) * options.highWatermarkRatio),
+		lowWatermarkBytes:  int64(float64(options.quotaBytes) * options.lowWatermarkRatio),
 	}
 }
 
-// validateBudgetOptions checks the ratios needed by budgetCore's soft-control
-// model. The model assumes one total budget that is split into a memory tier
-// plus high/low watermarks for wake suppression.
-func validateBudgetOptions(options *Options) error {
-	if options.QuotaBytes <= 0 {
-		return errors.ErrStorageSinkInvalidConfig.GenWithStack(
-			"spool disk quota must be greater than 0, but got %d",
-			options.QuotaBytes,
-		)
-	}
-	if options.MemoryRatio <= 0 || options.MemoryRatio >= 1 {
-		return errors.ErrStorageSinkInvalidConfig.GenWithStack(
-			"spool memory ratio must be in (0, 1), but got %f",
-			options.MemoryRatio,
-		)
-	}
-	if options.LowWatermarkRatio <= 0 || options.LowWatermarkRatio >= 1 {
-		return errors.ErrStorageSinkInvalidConfig.GenWithStack(
-			"spool low watermark ratio must be in (0, 1), but got %f",
-			options.LowWatermarkRatio,
-		)
-	}
-	if options.HighWatermarkRatio <= 0 || options.HighWatermarkRatio >= 1 {
-		return errors.ErrStorageSinkInvalidConfig.GenWithStack(
-			"spool high watermark ratio must be in (0, 1), but got %f",
-			options.HighWatermarkRatio,
-		)
-	}
-	if options.LowWatermarkRatio >= options.HighWatermarkRatio {
-		return errors.ErrStorageSinkInvalidConfig.GenWithStack(
-			"spool low watermark ratio must be less than high watermark ratio, low: %f high: %f",
-			options.LowWatermarkRatio,
-			options.HighWatermarkRatio,
-		)
-	}
-	return nil
-}
-
-// shouldSpill decides whether a new entry still fits in the in-memory tier.
-// This is intentionally a memory-tier decision only; it does not enforce a
-// hard total quota and does not reject new writes.
-func (b *budgetCore) shouldSpill(entryBytes int64) bool {
+// shouldSpill decides whether a new entry should stay in memory or be written
+// to local spool files. It only looks at the memory limit. It does not reject
+// new writes.
+func (b *budget) shouldSpill(entryBytes int64) bool {
 	return b.memoryBytes+entryBytes > b.memoryQuotaBytes
 }
 
-// reserve records a newly accepted entry in either the memory tier or the disk tier.
-func (b *budgetCore) reserve(entryBytes int64, spilled bool) budgetSnapshot {
+// reserve adds a newly accepted entry to the current byte counters.
+func (b *budget) reserve(entryBytes int64, spilled bool) {
 	if spilled {
 		b.diskBytes += entryBytes
 	}
 	if !spilled {
 		b.memoryBytes += entryBytes
 	}
-	return b.snapshot()
 }
 
-// release records that an entry has been fully consumed or discarded.
-func (b *budgetCore) release(entryBytes int64, spilled bool) budgetSnapshot {
+// release removes an entry from the current byte counters after the entry has
+// been flushed or discarded.
+func (b *budget) release(entryBytes int64, spilled bool) {
 	if spilled {
 		b.diskBytes -= entryBytes
 	}
@@ -114,26 +74,21 @@ func (b *budgetCore) release(entryBytes int64, spilled bool) budgetSnapshot {
 	if b.diskBytes < 0 {
 		b.diskBytes = 0
 	}
-	return b.snapshot()
 }
 
-func (b *budgetCore) overHighWatermark() bool {
-	return b.snapshot().totalBytes() > b.highWatermarkBytes
+func (b *budget) overHighWatermark() bool {
+	return b.totalBytes() > b.highWatermarkBytes
 }
 
-func (b *budgetCore) atOrBelowLowWatermark() bool {
-	return b.snapshot().totalBytes() <= b.lowWatermarkBytes
+func (b *budget) atOrBelowLowWatermark() bool {
+	return b.totalBytes() <= b.lowWatermarkBytes
 }
 
-func (b *budgetCore) reset() budgetSnapshot {
+func (b *budget) reset() {
 	b.memoryBytes = 0
 	b.diskBytes = 0
-	return b.snapshot()
 }
 
-func (b *budgetCore) snapshot() budgetSnapshot {
-	return budgetSnapshot{
-		memoryBytes: b.memoryBytes,
-		diskBytes:   b.diskBytes,
-	}
+func (b *budget) totalBytes() int64 {
+	return b.memoryBytes + b.diskBytes
 }

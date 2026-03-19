@@ -19,48 +19,51 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-// quotaAdapter adds spool-specific behavior on top of budgetCore.
-// budgetCore only answers "how many bytes are staged" and "which watermark
+// quotaController adds spool-specific behavior on top of budget.
+// budget only answers "how many bytes are staged" and "which watermark
 // state are we in"; this adapter decides how spool reacts to that state.
-type quotaAdapter struct {
+type quotaController struct {
 	// budget owns threshold math and byte accounting. quotaAdapter builds
 	// spool-specific behavior on top of it.
-	budget *budgetCore
+	budget *budget
 
-	// wakeSuppressed and pendingWake implement hysteresis for onEnqueued:
-	// above the high watermark, new callbacks are delayed; once usage drops
-	// below the low watermark, the delayed callbacks are released in batch.
-	wakeSuppressed bool
-	pendingWake    []func()
+	// postEnqueuePaused becomes true after local buffered bytes cross
+	// the high watermark. While it is true, new PostEnqueue callbacks are kept
+	// in memory instead of being executed immediately.
+	postEnqueuePaused bool
+	// pendingPostEnqueue stores the PostEnqueue callbacks that were
+	// held back while local buffered bytes stayed above the high watermark.
+	// They are run together after usage drops to the low watermark or below.
+	pendingPostEnqueue []func()
 
-	// These metrics expose the current soft-control state so operators can see
-	// where buffered bytes live and whether wake suppression is happening.
-	metricMemoryBytes    prometheus.Gauge
-	metricDiskBytes      prometheus.Gauge
-	metricTotalBytes     prometheus.Gauge
-	metricWakeSuppressed prometheus.Counter
+	// These metrics expose the current local buffer state so operators can see
+	// where buffered bytes live and how often PostEnqueue callbacks were moved
+	// into the pending queue.
+	metricMemoryBytes        prometheus.Gauge
+	metricDiskBytes          prometheus.Gauge
+	metricTotalBytes         prometheus.Gauge
+	metricPendingPostEnqueue prometheus.Counter
 
-	metricKeyspace        string
-	metricChangefeedLabel string
+	keyspace   string
+	changefeed string
 }
 
-func newQuotaAdapter(
+func newQuotaController(
 	changefeedID common.ChangeFeedID,
-	options *Options,
-) *quotaAdapter {
-	changefeedLabel := changefeedID.ID().String()
-	controller := &quotaAdapter{
-		budget: newBudgetCore(options),
-		metricMemoryBytes: metrics.CloudStorageSpoolMemoryBytesGauge.WithLabelValues(
-			changefeedID.Keyspace(), changefeedLabel),
-		metricDiskBytes: metrics.CloudStorageSpoolDiskBytesGauge.WithLabelValues(
-			changefeedID.Keyspace(), changefeedLabel),
-		metricTotalBytes: metrics.CloudStorageSpoolTotalBytesGauge.WithLabelValues(
-			changefeedID.Keyspace(), changefeedLabel),
-		metricWakeSuppressed: metrics.CloudStorageWakeSuppressedCounter.WithLabelValues(
-			changefeedID.Keyspace(), changefeedLabel),
-		metricKeyspace:        changefeedID.Keyspace(),
-		metricChangefeedLabel: changefeedLabel,
+	options *options,
+) *quotaController {
+	keyspace := changefeedID.Keyspace()
+	changefeed := changefeedID.Name()
+	controller := &quotaController{
+		keyspace:   keyspace,
+		changefeed: changefeed,
+
+		budget: newBudget(options),
+
+		metricMemoryBytes:        metrics.CloudStorageSpoolMemoryBytesGauge.WithLabelValues(keyspace, changefeed),
+		metricDiskBytes:          metrics.CloudStorageSpoolDiskBytesGauge.WithLabelValues(keyspace, changefeed),
+		metricTotalBytes:         metrics.CloudStorageSpoolTotalBytesGauge.WithLabelValues(keyspace, changefeed),
+		metricPendingPostEnqueue: metrics.CloudStoragePendingPostEnqueueCounter.WithLabelValues(keyspace, changefeed),
 	}
 	controller.updateMetrics()
 	return controller
@@ -69,77 +72,74 @@ func newQuotaAdapter(
 // shouldSpill decides whether a new entry still fits in the in-memory tier.
 // This is intentionally a memory-tier decision only; it does not enforce a
 // hard total quota and does not reject new writes.
-func (q *quotaAdapter) shouldSpill(entryBytes int64) bool {
+func (q *quotaController) shouldSpill(entryBytes int64) bool {
 	return q.budget.shouldSpill(entryBytes)
 }
 
 // reserve records a newly accepted entry and returns callbacks that may run
-// immediately. If total staged bytes cross the high watermark, reserve enters
-// wake suppression and queues later onEnqueued callbacks instead of running
-// them inline.
-func (q *quotaAdapter) reserve(
+// immediately. If total staged bytes cross the high watermark, reserve puts
+// new PostEnqueue callbacks into the pending queue instead of running them inline.
+func (q *quotaController) reserve(
 	entryBytes int64,
 	spilled bool,
-	onEnqueued func(),
+	postEnqueue func(),
 ) []func() {
 	q.budget.reserve(entryBytes, spilled)
 	if q.budget.overHighWatermark() {
-		q.wakeSuppressed = true
+		q.postEnqueuePaused = true
 	}
 
 	defer q.updateMetrics()
-	if q.wakeSuppressed && onEnqueued != nil {
-		q.pendingWake = append(q.pendingWake, onEnqueued)
-		q.metricWakeSuppressed.Inc()
+	if q.postEnqueuePaused && postEnqueue != nil {
+		q.pendingPostEnqueue = append(q.pendingPostEnqueue, postEnqueue)
+		q.metricPendingPostEnqueue.Inc()
 		return nil
 	}
-	if onEnqueued != nil {
-		return []func(){onEnqueued}
+	if postEnqueue != nil {
+		return []func(){postEnqueue}
 	}
 	return nil
 }
 
 // release records that an entry has been fully consumed or discarded. If the
-// adapter was suppressing wake callbacks, release only resumes them after
-// total staged bytes fall back to the low watermark or below.
-func (q *quotaAdapter) release(entryBytes int64, spilled bool) []func() {
+// adapter was holding PostEnqueue callbacks in the pending queue, release only
+// runs them after total staged bytes fall back to the low watermark or below.
+func (q *quotaController) release(entryBytes int64, spilled bool) []func() {
 	q.budget.release(entryBytes, spilled)
-	if !q.wakeSuppressed {
-		q.updateMetrics()
+	defer q.updateMetrics()
+
+	if !q.postEnqueuePaused {
 		return nil
 	}
 	if !q.budget.atOrBelowLowWatermark() {
-		q.updateMetrics()
 		return nil
 	}
 
-	q.wakeSuppressed = false
-	callbacks := append([]func(){}, q.pendingWake...)
-	q.pendingWake = nil
-	q.updateMetrics()
+	q.postEnqueuePaused = false
+	callbacks := append([]func(){}, q.pendingPostEnqueue...)
+	q.pendingPostEnqueue = nil
 	return callbacks
 }
 
 // reset clears runtime accounting when the spool is shutting down.
-func (q *quotaAdapter) reset() {
+func (q *quotaController) reset() {
 	q.budget.reset()
-	q.pendingWake = nil
-	q.wakeSuppressed = false
+	q.pendingPostEnqueue = nil
+	q.postEnqueuePaused = false
 	q.updateMetrics()
 }
 
 // deleteMetrics removes per-changefeed label values owned by this adapter.
-func (q *quotaAdapter) deleteMetrics() {
-	metrics.CloudStorageSpoolMemoryBytesGauge.DeleteLabelValues(q.metricKeyspace, q.metricChangefeedLabel)
-	metrics.CloudStorageSpoolDiskBytesGauge.DeleteLabelValues(q.metricKeyspace, q.metricChangefeedLabel)
-	metrics.CloudStorageSpoolTotalBytesGauge.DeleteLabelValues(q.metricKeyspace, q.metricChangefeedLabel)
-	metrics.CloudStorageWakeSuppressedCounter.DeleteLabelValues(q.metricKeyspace, q.metricChangefeedLabel)
+func (q *quotaController) deleteMetrics() {
+	metrics.CloudStorageSpoolMemoryBytesGauge.DeleteLabelValues(q.keyspace, q.changefeed)
+	metrics.CloudStorageSpoolDiskBytesGauge.DeleteLabelValues(q.keyspace, q.changefeed)
+	metrics.CloudStorageSpoolTotalBytesGauge.DeleteLabelValues(q.keyspace, q.changefeed)
+	metrics.CloudStoragePendingPostEnqueueCounter.DeleteLabelValues(q.keyspace, q.changefeed)
 }
 
 // updateMetrics publishes the adapter's current accounting state.
-func (q *quotaAdapter) updateMetrics() {
-	snapshot := q.budget.snapshot()
-	q.metricMemoryBytes.Set(float64(snapshot.memoryBytes))
-	q.metricDiskBytes.Set(float64(snapshot.diskBytes))
-	q.metricTotalBytes.Set(float64(snapshot.totalBytes()))
+func (q *quotaController) updateMetrics() {
+	q.metricMemoryBytes.Set(float64(q.budget.memoryBytes))
+	q.metricDiskBytes.Set(float64(q.budget.diskBytes))
+	q.metricTotalBytes.Set(float64(q.budget.totalBytes()))
 }

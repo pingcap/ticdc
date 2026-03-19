@@ -93,11 +93,11 @@ var (
 		Help:      "Current total bytes used by cloud storage spool",
 	}, []string{"namespace", "changefeed"})
 
-	CloudStorageWakeSuppressedCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
+	CloudStoragePendingPostEnqueueCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: namespace,
 		Subsystem: subsystem,
-		Name:      "cloud_storage_wake_suppressed_total",
-		Help:      "Total number of suppressed wake callbacks in cloud storage sink",
+		Name:      "cloud_storage_pending_post_enqueue_total",
+		Help:      "Total number of PostEnqueue callbacks moved into the pending queue in cloud storage sink",
 	}, []string{"namespace", "changefeed"})
 )
 
@@ -112,5 +112,5 @@ func InitCloudStorageMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(CloudStorageSpoolMemoryBytesGauge)
 	registry.MustRegister(CloudStorageSpoolDiskBytesGauge)
 	registry.MustRegister(CloudStorageSpoolTotalBytesGauge)
-	registry.MustRegister(CloudStorageWakeSuppressedCounter)
+	registry.MustRegister(CloudStoragePendingPostEnqueueCounter)
 }

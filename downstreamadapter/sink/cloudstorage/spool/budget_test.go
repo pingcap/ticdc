@@ -19,45 +19,49 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestBudgetCoreTracksMemoryAndDiskBytes(t *testing.T) {
+func TestBudgetTracksMemoryAndDiskBytes(t *testing.T) {
 	t.Parallel()
 
-	core := newBudgetCore(&Options{
-		QuotaBytes:         100,
-		MemoryRatio:        0.2,
-		HighWatermarkRatio: 0.8,
-		LowWatermarkRatio:  0.6,
+	core := newBudget(&options{
+		quotaBytes:         100,
+		memoryRatio:        0.2,
+		highWatermarkRatio: 0.8,
+		lowWatermarkRatio:  0.6,
 	})
 
 	require.False(t, core.shouldSpill(10))
 
-	snapshot := core.reserve(10, false)
-	require.Equal(t, int64(10), snapshot.memoryBytes)
-	require.Equal(t, int64(0), snapshot.diskBytes)
+	core.reserve(10, false)
+	require.Equal(t, int64(10), core.memoryBytes)
+	require.Equal(t, int64(0), core.diskBytes)
+	require.Equal(t, int64(10), core.totalBytes())
 
 	require.True(t, core.shouldSpill(11))
 
-	snapshot = core.reserve(11, true)
-	require.Equal(t, int64(10), snapshot.memoryBytes)
-	require.Equal(t, int64(11), snapshot.diskBytes)
+	core.reserve(11, true)
+	require.Equal(t, int64(10), core.memoryBytes)
+	require.Equal(t, int64(11), core.diskBytes)
+	require.Equal(t, int64(21), core.totalBytes())
 
-	snapshot = core.release(50, false)
-	require.Equal(t, int64(0), snapshot.memoryBytes)
-	require.Equal(t, int64(11), snapshot.diskBytes)
+	core.release(50, false)
+	require.Equal(t, int64(0), core.memoryBytes)
+	require.Equal(t, int64(11), core.diskBytes)
+	require.Equal(t, int64(11), core.totalBytes())
 
-	snapshot = core.release(50, true)
-	require.Equal(t, int64(0), snapshot.memoryBytes)
-	require.Equal(t, int64(0), snapshot.diskBytes)
+	core.release(50, true)
+	require.Equal(t, int64(0), core.memoryBytes)
+	require.Equal(t, int64(0), core.diskBytes)
+	require.Equal(t, int64(0), core.totalBytes())
 }
 
-func TestBudgetCoreTracksWatermarkState(t *testing.T) {
+func TestBudgetTracksWatermarkState(t *testing.T) {
 	t.Parallel()
 
-	core := newBudgetCore(&Options{
-		QuotaBytes:         100,
-		MemoryRatio:        0.2,
-		HighWatermarkRatio: 0.8,
-		LowWatermarkRatio:  0.6,
+	core := newBudget(&options{
+		quotaBytes:         100,
+		memoryRatio:        0.2,
+		highWatermarkRatio: 0.8,
+		lowWatermarkRatio:  0.6,
 	})
 
 	require.False(t, core.overHighWatermark())
@@ -71,8 +75,9 @@ func TestBudgetCoreTracksWatermarkState(t *testing.T) {
 	require.False(t, core.overHighWatermark())
 	require.True(t, core.atOrBelowLowWatermark())
 
-	snapshot := core.reset()
-	require.Equal(t, int64(0), snapshot.memoryBytes)
-	require.Equal(t, int64(0), snapshot.diskBytes)
+	core.reset()
+	require.Equal(t, int64(0), core.memoryBytes)
+	require.Equal(t, int64(0), core.diskBytes)
+	require.Equal(t, int64(0), core.totalBytes())
 	require.True(t, core.atOrBelowLowWatermark())
 }

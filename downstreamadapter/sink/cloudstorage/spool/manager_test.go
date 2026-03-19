@@ -35,15 +35,23 @@ func TestSuppressAndResumeWake(t *testing.T) {
 	t.Parallel()
 
 	changefeedID := commonType.NewChangefeedID4Test("test", "spool")
-	options := &Options{
-		QuotaBytes:         1000,
-		RootDir:            t.TempDir(),
-		SegmentBytes:       1 << 20,
-		MemoryRatio:        0.99,
-		HighWatermarkRatio: 0.6,
-		LowWatermarkRatio:  0.3,
+	options := &options{
+		quotaBytes:         1000,
+		rootDir:            t.TempDir(),
+		segmentBytes:       1 << 20,
+		memoryRatio:        0.99,
+		highWatermarkRatio: 0.6,
+		lowWatermarkRatio:  0.3,
 	}
-	manager, err := New(changefeedID, options)
+	manager, err := New(
+		changefeedID,
+		WithQuotaBytes(options.quotaBytes),
+		WithRootDir(options.rootDir),
+		WithSegmentBytes(options.segmentBytes),
+		WithMemoryRatio(options.memoryRatio),
+		WithHighWatermarkRatio(options.highWatermarkRatio),
+		WithLowWatermarkRatio(options.lowWatermarkRatio),
+	)
 	require.NoError(t, err)
 	defer manager.Close()
 
@@ -75,15 +83,23 @@ func TestSpillAndReadBack(t *testing.T) {
 	t.Parallel()
 
 	changefeedID := commonType.NewChangefeedID4Test("test", "spool")
-	options := &Options{
-		QuotaBytes:         64,
-		RootDir:            t.TempDir(),
-		SegmentBytes:       1 << 20,
-		MemoryRatio:        0.01,
-		HighWatermarkRatio: 0.95,
-		LowWatermarkRatio:  0.7,
+	options := &options{
+		quotaBytes:         64,
+		rootDir:            t.TempDir(),
+		segmentBytes:       1 << 20,
+		memoryRatio:        0.01,
+		highWatermarkRatio: 0.95,
+		lowWatermarkRatio:  0.7,
 	}
-	manager, err := New(changefeedID, options)
+	manager, err := New(
+		changefeedID,
+		WithQuotaBytes(options.quotaBytes),
+		WithRootDir(options.rootDir),
+		WithSegmentBytes(options.segmentBytes),
+		WithMemoryRatio(options.memoryRatio),
+		WithHighWatermarkRatio(options.highWatermarkRatio),
+		WithLowWatermarkRatio(options.lowWatermarkRatio),
+	)
 	require.NoError(t, err)
 	defer manager.Close()
 
@@ -104,24 +120,30 @@ func TestSpillAndReadBack(t *testing.T) {
 	manager.Release(entry)
 }
 
-func TestNewInvalidConfigError(t *testing.T) {
+func TestNewUsesDefaultOptionsWhenValuesAreMissing(t *testing.T) {
 	t.Parallel()
 
+	expectedQuotaBytes := int64(10 * 1024 * 1024 * 1024)
 	changefeedID := commonType.NewChangefeedID4Test("test", "spool")
-	manager, err := New(changefeedID, &Options{RootDir: t.TempDir()})
-	require.Nil(t, manager)
-	require.Error(t, err)
-	require.True(t, errors.ErrStorageSinkInvalidConfig.Equal(err))
+	manager, err := New(changefeedID, WithRootDir(t.TempDir()))
+	require.NoError(t, err)
+	require.NotNil(t, manager)
+	require.Equal(t, defaultSegmentBytes, manager.segmentBytes)
+	require.Equal(t, int64(float64(expectedQuotaBytes)*defaultMemoryRatio), manager.quota.budget.memoryQuotaBytes)
+	require.Equal(t, int64(float64(expectedQuotaBytes)*defaultHighWatermarkRatio), manager.quota.budget.highWatermarkBytes)
+	require.Equal(t, int64(float64(expectedQuotaBytes)*defaultLowWatermarkRatio), manager.quota.budget.lowWatermarkBytes)
+	manager.Close()
 }
 
 func TestEnqueueOnClosedManager(t *testing.T) {
 	t.Parallel()
 
 	changefeedID := commonType.NewChangefeedID4Test("test", "spool")
-	manager, err := New(changefeedID, &Options{
-		QuotaBytes: 1024,
-		RootDir:    t.TempDir(),
-	})
+	manager, err := New(
+		changefeedID,
+		WithQuotaBytes(1024),
+		WithRootDir(t.TempDir()),
+	)
 	require.NoError(t, err)
 
 	manager.Close()
@@ -136,10 +158,11 @@ func TestEnqueueErrorDoesNotMutateInputMessage(t *testing.T) {
 	t.Parallel()
 
 	changefeedID := commonType.NewChangefeedID4Test("test", "spool")
-	manager, err := New(changefeedID, &Options{
-		QuotaBytes: 1024,
-		RootDir:    t.TempDir(),
-	})
+	manager, err := New(
+		changefeedID,
+		WithQuotaBytes(1024),
+		WithRootDir(t.TempDir()),
+	)
 	require.NoError(t, err)
 
 	manager.Close()
@@ -160,18 +183,50 @@ func TestEnqueueErrorDoesNotMutateInputMessage(t *testing.T) {
 	require.True(t, callbackCalled.Load())
 }
 
-func TestNewRejectsNegativeMemoryRatio(t *testing.T) {
+func TestNewSanitizesInvalidOptions(t *testing.T) {
 	t.Parallel()
 
+	expectedQuotaBytes := int64(10 * 1024 * 1024 * 1024)
 	changefeedID := commonType.NewChangefeedID4Test("test", "spool")
-	manager, err := New(changefeedID, &Options{
-		QuotaBytes:  1024,
-		RootDir:     t.TempDir(),
-		MemoryRatio: -1,
-	})
-	require.Nil(t, manager)
-	require.Error(t, err)
-	require.True(t, errors.ErrStorageSinkInvalidConfig.Equal(err))
+	manager, err := New(
+		changefeedID,
+		WithQuotaBytes(-1),
+		WithRootDir(t.TempDir()),
+		WithSegmentBytes(-1),
+		WithMemoryRatio(-1),
+		WithHighWatermarkRatio(0.6),
+		WithLowWatermarkRatio(0.9),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, manager)
+	require.Equal(t, defaultSegmentBytes, manager.segmentBytes)
+	require.Equal(t, int64(float64(expectedQuotaBytes)*defaultMemoryRatio), manager.quota.budget.memoryQuotaBytes)
+	require.Equal(t, int64(float64(expectedQuotaBytes)*defaultHighWatermarkRatio), manager.quota.budget.highWatermarkBytes)
+	require.Equal(t, int64(float64(expectedQuotaBytes)*defaultLowWatermarkRatio), manager.quota.budget.lowWatermarkBytes)
+	manager.Close()
+}
+
+func TestNewAppliesFunctionalOptions(t *testing.T) {
+	t.Parallel()
+
+	rootDir := t.TempDir()
+	changefeedID := commonType.NewChangefeedID4Test("test", "spool")
+	manager, err := New(
+		changefeedID,
+		WithRootDir(rootDir),
+		WithQuotaBytes(2048),
+		WithSegmentBytes(4096),
+		WithMemoryRatio(0.25),
+		WithHighWatermarkRatio(0.75),
+		WithLowWatermarkRatio(0.5),
+	)
+	require.NoError(t, err)
+	require.Equal(t, rootDir, manager.rootDir)
+	require.Equal(t, int64(4096), manager.segmentBytes)
+	require.Equal(t, int64(512), manager.quota.budget.memoryQuotaBytes)
+	require.Equal(t, int64(1536), manager.quota.budget.highWatermarkBytes)
+	require.Equal(t, int64(1024), manager.quota.budget.lowWatermarkBytes)
+	manager.Close()
 }
 
 func TestPrepareRootDirOnlyRemovesSegmentLogs(t *testing.T) {
@@ -187,10 +242,11 @@ func TestPrepareRootDirOnlyRemovesSegmentLogs(t *testing.T) {
 	require.NoError(t, os.WriteFile(keepPath, []byte("keep"), 0o644))
 
 	changefeedID := commonType.NewChangefeedID4Test("test", "spool")
-	manager, err := New(changefeedID, &Options{
-		QuotaBytes: 1024,
-		RootDir:    rootDir,
-	})
+	manager, err := New(
+		changefeedID,
+		WithQuotaBytes(1024),
+		WithRootDir(rootDir),
+	)
 	require.NoError(t, err)
 	t.Cleanup(manager.Close)
 
@@ -210,10 +266,11 @@ func TestCloseOnlyRemovesSegmentLogs(t *testing.T) {
 	require.NoError(t, os.WriteFile(keepPath, []byte("keep"), 0o644))
 
 	changefeedID := commonType.NewChangefeedID4Test("test", "spool")
-	manager, err := New(changefeedID, &Options{
-		QuotaBytes: 32,
-		RootDir:    rootDir,
-	})
+	manager, err := New(
+		changefeedID,
+		WithQuotaBytes(32),
+		WithRootDir(rootDir),
+	)
 	require.NoError(t, err)
 
 	entry, err := manager.Enqueue([]*common.Message{
@@ -246,14 +303,15 @@ func TestEnqueueSpillsWhenSerializedBatchExceedsMemoryQuota(t *testing.T) {
 	t.Parallel()
 
 	changefeedID := commonType.NewChangefeedID4Test("test", "spool")
-	manager, err := New(changefeedID, &Options{
-		QuotaBytes:         64,
-		RootDir:            t.TempDir(),
-		SegmentBytes:       1 << 20,
-		MemoryRatio:        0.2,
-		HighWatermarkRatio: 0.9,
-		LowWatermarkRatio:  0.6,
-	})
+	manager, err := New(
+		changefeedID,
+		WithQuotaBytes(64),
+		WithRootDir(t.TempDir()),
+		WithSegmentBytes(1<<20),
+		WithMemoryRatio(0.2),
+		WithHighWatermarkRatio(0.9),
+		WithLowWatermarkRatio(0.6),
+	)
 	require.NoError(t, err)
 	defer manager.Close()
 
@@ -268,14 +326,15 @@ func TestExternalRootDirDeletionReturnsErrorOnNextRotate(t *testing.T) {
 
 	rootDir := t.TempDir()
 	changefeedID := commonType.NewChangefeedID4Test("test", "spool")
-	manager, err := New(changefeedID, &Options{
-		QuotaBytes:         64,
-		RootDir:            rootDir,
-		SegmentBytes:       40,
-		MemoryRatio:        0.01,
-		HighWatermarkRatio: 0.95,
-		LowWatermarkRatio:  0.7,
-	})
+	manager, err := New(
+		changefeedID,
+		WithQuotaBytes(64),
+		WithRootDir(rootDir),
+		WithSegmentBytes(40),
+		WithMemoryRatio(0.01),
+		WithHighWatermarkRatio(0.95),
+		WithLowWatermarkRatio(0.7),
+	)
 	require.NoError(t, err)
 	defer manager.Close()
 
@@ -306,10 +365,11 @@ func TestDiscardRunsCallbacksOnce(t *testing.T) {
 	t.Parallel()
 
 	changefeedID := commonType.NewChangefeedID4Test("test", "spool")
-	manager, err := New(changefeedID, &Options{
-		QuotaBytes: 1024,
-		RootDir:    t.TempDir(),
-	})
+	manager, err := New(
+		changefeedID,
+		WithQuotaBytes(1024),
+		WithRootDir(t.TempDir()),
+	)
 	require.NoError(t, err)
 	defer manager.Close()
 
