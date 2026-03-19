@@ -71,6 +71,19 @@ func deserializeMessages(data []byte) ([]*common.Message, error) {
 	offset := 0
 	count := binary.LittleEndian.Uint32(data[offset:])
 	offset += serializedMessageCountBytes
+	// Every serialized message must consume at least one fixed-size header.
+	// If count is already larger than the remaining payload could possibly hold,
+	// treat the blob as corrupted and stop before make(..., count) allocates an
+	// unreasonable amount of memory.
+	maxCount := (len(data) - serializedMessageCountBytes) / serializedMessageHeaderBytes
+	if uint64(count) > uint64(maxCount) {
+		return nil, errors.ErrDecodeFailed.GenWithStack(
+			"message count %d exceeds maximum %d for %d-byte payload",
+			count,
+			maxCount,
+			len(data),
+		)
+	}
 
 	result := make([]*common.Message, 0, count)
 	for range count {

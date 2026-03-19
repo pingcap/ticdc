@@ -14,8 +14,10 @@
 package spool
 
 import (
+	"encoding/binary"
 	"testing"
 
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/stretchr/testify/require"
 )
@@ -41,4 +43,20 @@ func TestSerializeDeserializeMessagesRoundTrip(t *testing.T) {
 	require.Nil(t, decoded[1].Key)
 	require.Equal(t, []byte("value-2"), decoded[1].Value)
 	require.Equal(t, 2, decoded[1].GetRowsCount())
+}
+
+func TestDeserializeMessagesRejectsImpossibleCount(t *testing.T) {
+	t.Parallel()
+
+	// A payload that only contains the batch count cannot possibly hold one full
+	// serialized message header, so deserializeMessages should reject it before
+	// trying to allocate based on the claimed count.
+	data := make([]byte, serializedMessageCountBytes)
+	binary.LittleEndian.PutUint32(data, 1)
+
+	decoded, err := deserializeMessages(data)
+	require.Nil(t, decoded)
+	require.Error(t, err)
+	require.True(t, errors.ErrDecodeFailed.Equal(err))
+	require.ErrorContains(t, err, "message count")
 }
