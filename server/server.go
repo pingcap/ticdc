@@ -466,20 +466,17 @@ func (c *server) Close(ctx context.Context) {
 	}
 
 	// delete server info from etcd
-	if c.EtcdClient != nil {
-		timeoutCtx, cancel := context.WithTimeout(context.Background(), cleanMetaDuration)
-		defer cancel()
-		if err := c.EtcdClient.DeleteCaptureInfo(timeoutCtx, string(c.info.ID)); err != nil {
-			log.Warn("failed to delete server info when server exited",
-				zap.String("captureID", string(c.info.ID)),
-				zap.Error(err))
-		} else {
-			log.Info("server info deleted from etcd", zap.String("captureID", string(c.info.ID)))
-		}
+	timeoutCtx, cancel := context.WithTimeout(context.Background(), cleanMetaDuration)
+	defer cancel()
+	if err := c.EtcdClient.DeleteCaptureInfo(timeoutCtx, string(c.info.ID)); err != nil {
+		log.Warn("failed to delete server info when server exited",
+			zap.String("captureID", string(c.info.ID)),
+			zap.Error(err))
+	} else {
+		log.Info("server info deleted from etcd", zap.String("captureID", string(c.info.ID)))
 	}
 
 	closeGroup.Wait()
-
 	log.Info("server closed", zap.Any("ServerInfo", c.info))
 }
 
