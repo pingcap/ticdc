@@ -45,7 +45,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/tcpserver"
 	"github.com/pingcap/ticdc/pkg/upstream"
 	"github.com/pingcap/ticdc/server/watcher"
-	"github.com/tikv/client-go/v2/tikv"
 	pd "github.com/tikv/pd/client"
 	"go.etcd.io/etcd/client/v3/concurrency"
 	"go.uber.org/zap"
@@ -91,7 +90,6 @@ type server struct {
 	pdClient      pd.Client
 	pdAPIClient   pdutil.PDAPIClient
 	pdEndpoints   []string
-	regionCache   *tikv.RegionCache
 	coordinatorMu sync.Mutex
 
 	coordinator tiserver.Coordinator
@@ -467,11 +465,6 @@ func (c *server) Close(ctx context.Context) {
 		log.Info("sub base module closed", zap.String("module", nm.Name()))
 	}
 
-	closeGroup.Wait()
-	if c.upstreamManager != nil {
-		c.upstreamManager.Close()
-	}
-
 	// delete server info from etcd
 	if c.EtcdClient != nil {
 		timeoutCtx, cancel := context.WithTimeout(context.Background(), cleanMetaDuration)
@@ -485,25 +478,8 @@ func (c *server) Close(ctx context.Context) {
 		}
 	}
 
-	if c.session != nil {
-		if err := c.session.Close(); err != nil {
-			log.Warn("failed to close server session", zap.Error(err))
-		}
-	}
-	if c.regionCache != nil {
-		c.regionCache.Close()
-	}
-	if c.pdAPIClient != nil {
-		c.pdAPIClient.Close()
-	}
-	if c.EtcdClient != nil {
-		if err := c.EtcdClient.GetEtcdClient().Close(); err != nil {
-			log.Warn("failed to close etcd client", zap.Error(err))
-		}
-	}
-	if c.pdClient != nil {
-		c.pdClient.Close()
-	}
+	closeGroup.Wait()
+
 	log.Info("server closed", zap.Any("ServerInfo", c.info))
 }
 

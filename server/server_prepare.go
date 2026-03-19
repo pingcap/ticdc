@@ -105,7 +105,6 @@ func (c *server) prepare(ctx context.Context) (err error) {
 		return errors.Trace(err)
 	}
 	c.EtcdClient = cdcEtcdClient
-	etcdCli = nil
 
 	// Collect all endpoints from pd here to make the server more robust.
 	// Because in some scenarios, the deployer may only provide one pd endpoint,
@@ -125,8 +124,7 @@ func (c *server) prepare(ctx context.Context) (err error) {
 			zap.Strings("upstreamEndpoints", c.pdEndpoints))
 	}
 
-	c.regionCache = tikv.NewRegionCache(c.pdClient)
-	appctx.SetService(appctx.RegionCache, c.regionCache)
+	appctx.SetService(appctx.RegionCache, tikv.NewRegionCache(c.pdClient))
 
 	if err = c.initDir(); err != nil {
 		return errors.Trace(err)
