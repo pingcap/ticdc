@@ -464,12 +464,12 @@ func (d *BasicDispatcher) ensureTableModeCompatibility(tableInfo *common.TableIn
 func (d *BasicDispatcher) isFirstEvent(event commonEvent.Event) bool {
 	if d.componentStatus.Get() == heartbeatpb.ComponentState_Initializing {
 		switch event.GetType() {
-		case commonEvent.TypeResolvedEvent, commonEvent.TypeDMLEvent, commonEvent.TypeDDLEvent:
+		case commonEvent.TypeDMLEvent, commonEvent.TypeDDLEvent:
 			if event.GetCommitTs() > d.startTs {
 				return true
 			}
 		// the first syncpoint event can be same as startTs
-		case commonEvent.TypeSyncPointEvent:
+		case commonEvent.TypeResolvedEvent, commonEvent.TypeSyncPointEvent:
 			if event.GetCommitTs() >= d.startTs {
 				return true
 			}
