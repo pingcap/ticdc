@@ -88,17 +88,17 @@ func (rd *RedoDispatcher) GetRedoMeta() *redo.RedoMeta {
 
 // SetRedoMeta used to init redo meta
 // only for table trigger redo dispatcher
-func (rd *RedoDispatcher) SetRedoMeta(cfg *config.ConsistentConfig) {
+func (rd *RedoDispatcher) SetRedoMeta(ctx context.Context, cfg *config.ConsistentConfig) {
 	if !rd.IsTableTriggerDispatcher() {
 		log.Error("SetRedoMeta should be called by table trigger redo dispatcher", zap.Any("id", rd.GetId()))
 	}
-	ctx := context.Background()
 	ctx, rd.cancel = context.WithCancel(ctx)
 	rd.redoMeta = redo.NewRedoMeta(rd.sharedInfo.changefeedID, rd.startTs, cfg)
 	go func() {
 		err := rd.redoMeta.PreStart(ctx)
 		if err != nil {
 			rd.HandleError(err)
+			return
 		}
 		err = rd.redoMeta.Run(ctx)
 		if err != nil {

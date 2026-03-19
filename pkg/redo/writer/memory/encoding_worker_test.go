@@ -17,8 +17,8 @@ import (
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/redo"
+	"github.com/pingcap/ticdc/pkg/redo/testutil"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
@@ -28,18 +28,17 @@ func TestNewEncodingWorkerGroup(t *testing.T) {
 	t.Parallel()
 
 	changefeed := common.NewChangeFeedIDWithName("test-cf", common.DefaultKeyspaceName)
-	cfg := &writer.LogWriterConfig{
-		ConsistentConfig: config.ConsistentConfig{
-			EncodingWorkerNum: util.AddressOf(3),
-		},
-		ChangeFeedID: changefeed,
-	}
-	g := newEncodingWorkerGroup(cfg)
+	cfg := testutil.NewConsistentConfig("nfs:///tmp/redo")
+	cfg.EncodingWorkerNum = util.AddressOf(3)
+	writerCfg, err := writer.NewConfig(changefeed, cfg)
+	require.NoError(t, err)
+	g := newEncodingWorkerGroup(writerCfg)
 	require.Equal(t, 3, g.workerNum)
 	require.Len(t, g.inputChs, 3)
 
-	cfg.EncodingWorkerNum = util.AddressOf(0)
-	g = newEncodingWorkerGroup(cfg)
+	defaultCfg, err := writer.NewConfig(changefeed, testutil.NewConsistentConfig("nfs:///tmp/redo"))
+	require.NoError(t, err)
+	g = newEncodingWorkerGroup(defaultCfg)
 	require.Equal(t, redo.DefaultEncodingWorkerNum, g.workerNum)
 	require.Len(t, g.inputChs, redo.DefaultEncodingWorkerNum)
 }
