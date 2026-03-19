@@ -447,15 +447,6 @@ func TestWriteDDLEventWithInvalidExchangePartitionEvent(t *testing.T) {
 	err = replicaConfig.ValidateAndAdjust(sinkURI)
 	require.NoError(t, err)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	mockPDClock := pdutil.NewClock4Test()
-	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
-
-	cloudStorageSink, err := newSinkForTest(ctx, replicaConfig, sinkURI, nil)
-	require.NoError(t, err)
-
 	tableInfo := common.WrapTableInfo("test", &timodel.TableInfo{
 		ID:   20,
 		Name: ast.NewCIStr("table1"),
@@ -469,6 +460,15 @@ func TestWriteDDLEventWithInvalidExchangePartitionEvent(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			mockPDClock := pdutil.NewClock4Test()
+			appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+
+			cloudStorageSink, err := newSinkForTest(ctx, replicaConfig, sinkURI, nil)
+			require.NoError(t, err)
+
 			ddlEvent := &commonEvent.DDLEvent{
 				Query:           "alter table test.table1 exchange partition p0 with table test.table2",
 				Type:            byte(timodel.ActionExchangeTablePartition),

@@ -176,11 +176,23 @@ func mergeConfig(
 ) (*urlConfig, error) {
 	dest := &urlConfig{}
 	if sinkConfig != nil && sinkConfig.CloudStorageConfig != nil {
-		dest.WorkerCount = sinkConfig.CloudStorageConfig.WorkerCount
-		dest.FlushInterval = sinkConfig.CloudStorageConfig.FlushInterval
-		dest.FileSize = sinkConfig.CloudStorageConfig.FileSize
-		dest.UseTableIDAsPath = sinkConfig.CloudStorageConfig.UseTableIDAsPath
-		dest.SpoolDiskQuota = sinkConfig.CloudStorageConfig.SpoolDiskQuota
+		// Copy pointed values into urlConfig so URI overrides do not mutate the
+		// caller's ReplicaConfig through shared pointers.
+		if sinkConfig.CloudStorageConfig.WorkerCount != nil {
+			dest.WorkerCount = util.AddressOf(*sinkConfig.CloudStorageConfig.WorkerCount)
+		}
+		if sinkConfig.CloudStorageConfig.FlushInterval != nil {
+			dest.FlushInterval = util.AddressOf(*sinkConfig.CloudStorageConfig.FlushInterval)
+		}
+		if sinkConfig.CloudStorageConfig.FileSize != nil {
+			dest.FileSize = util.AddressOf(*sinkConfig.CloudStorageConfig.FileSize)
+		}
+		if sinkConfig.CloudStorageConfig.UseTableIDAsPath != nil {
+			dest.UseTableIDAsPath = util.AddressOf(*sinkConfig.CloudStorageConfig.UseTableIDAsPath)
+		}
+		if sinkConfig.CloudStorageConfig.SpoolDiskQuota != nil {
+			dest.SpoolDiskQuota = util.AddressOf(*sinkConfig.CloudStorageConfig.SpoolDiskQuota)
+		}
 	}
 	if err := mergo.Merge(dest, urlParameters, mergo.WithOverride); err != nil {
 		return nil, errors.WrapError(errors.ErrStorageSinkInvalidConfig, err)
