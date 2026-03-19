@@ -471,6 +471,7 @@ func (c *eventBroker) shouldNudgeSyncPointCommit(d *dispatcherStat) bool {
 	if d == nil || d.isRemoved.Load() || !d.enableSyncPoint || d.seq.Load() == 0 {
 		return false
 	}
+	c.fastForwardSyncPointIfNeeded(d)
 
 	commitTs := d.nextSyncPoint.Load()
 	if commitTs == 0 || d.sentResolvedTs.Load() < commitTs {
@@ -862,6 +863,11 @@ func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, r
 }
 
 func (c *eventBroker) fastForwardSyncPointIfNeeded(d *dispatcherStat) {
+	c.fastForwardSyncPointByGuardTsIfNeeded(d)
+	c.fastForwardSyncPointToInFlightIfNeeded(d)
+}
+
+func (c *eventBroker) fastForwardSyncPointByGuardTsIfNeeded(d *dispatcherStat) {
 	if c.ignoreSyncPointGuardTs || !d.enableSyncPoint || d.syncPointGuardTs == 0 || d.syncPointInterval <= 0 {
 		return
 	}
@@ -874,6 +880,27 @@ func (c *eventBroker) fastForwardSyncPointIfNeeded(d *dispatcherStat) {
 	steps := guardTsTime.Sub(nextSyncPointTime)/d.syncPointInterval + 1
 	nextSyncPoint = oracle.GoTimeToTS(nextSyncPointTime.Add(steps * d.syncPointInterval))
 	d.nextSyncPoint.Store(nextSyncPoint)
+}
+
+func (c *eventBroker) fastForwardSyncPointToInFlightIfNeeded(d *dispatcherStat) {
+	if d == nil || !d.enableSyncPoint {
+		return
+	}
+	inFlightTs := d.changefeedStat.syncPointInFlightTs.Load()
+	if inFlightTs == 0 {
+		return
+	}
+	nextSyncPoint := d.nextSyncPoint.Load()
+	if nextSyncPoint == 0 || nextSyncPoint >= inFlightTs {
+		return
+	}
+	d.nextSyncPoint.Store(inFlightTs)
+	log.Info("fast forward stale syncpoint to in flight syncpoint",
+		zap.Stringer("changefeedID", d.changefeedStat.changefeedID),
+		zap.Stringer("dispatcherID", d.id),
+		zap.Int64("tableID", d.info.GetTableSpan().GetTableID()),
+		zap.Uint64("oldSyncPointTs", nextSyncPoint),
+		zap.Uint64("inFlightSyncPointTs", inFlightTs))
 }
 
 func (c *eventBroker) calculateScanLimit(task scanTask) scanLimit {

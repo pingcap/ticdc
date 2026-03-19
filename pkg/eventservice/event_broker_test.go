@@ -263,6 +263,47 @@ func TestScanRangeCappedByNextSyncPoint(t *testing.T) {
 	require.Equal(t, info.nextSyncPoint, dataRange.CommitTsEnd)
 }
 
+func TestGetScanTaskDataRangeCommitStageFastForwardsStaleSyncPoint(t *testing.T) {
+	broker, _, _, _ := newEventBrokerForTest()
+	// Close the broker, so we can catch all message in the test.
+	broker.close()
+
+	info := newMockDispatcherInfoForTest(t)
+	info.epoch = 1
+	info.enableSyncPoint = true
+	info.syncPointInterval = 10 * time.Second
+
+	ts5 := oracle.GoTimeToTS(time.Unix(0, 0).Add(5 * time.Second))
+	ts10 := oracle.GoTimeToTS(time.Unix(0, 0).Add(10 * time.Second))
+	ts20 := oracle.GoTimeToTS(time.Unix(0, 0).Add(20 * time.Second))
+	ts40 := oracle.GoTimeToTS(time.Unix(0, 0).Add(40 * time.Second))
+
+	info.startTs = ts5
+	info.nextSyncPoint = ts10
+
+	changefeedStatus := broker.getOrSetChangefeedStatus(info.GetChangefeedID(), info.GetSyncPointInterval())
+	disp := newDispatcherStat(info, 1, 1, nil, changefeedStatus)
+	disp.setHandshaked()
+
+	dispPtr := &atomic.Pointer[dispatcherStat]{}
+	dispPtr.Store(disp)
+	changefeedStatus.addDispatcher(disp.id, dispPtr)
+
+	changefeedStatus.minSentTs.Store(ts5)
+	changefeedStatus.scanInterval.Store(int64(time.Hour))
+	changefeedStatus.syncPointPreparingTs.Store(ts20)
+	changefeedStatus.syncPointInFlightTs.Store(ts20)
+
+	disp.sentResolvedTs.Store(ts5)
+	disp.receivedResolvedTs.Store(ts40)
+	disp.eventStoreCommitTs.Store(ts40)
+
+	needScan, dataRange := broker.getScanTaskDataRange(disp)
+	require.True(t, needScan)
+	require.Equal(t, ts20, dataRange.CommitTsEnd)
+	require.Equal(t, ts20, disp.nextSyncPoint.Load())
+}
+
 func TestGetScanTaskDataRangeNudgesSyncPointInCommitStageWithoutNewData(t *testing.T) {
 	broker, _, _, _ := newEventBrokerForTest()
 	// Close the broker, so we can catch all message in the test.
@@ -299,6 +340,49 @@ func TestGetScanTaskDataRangeNudgesSyncPointInCommitStageWithoutNewData(t *testi
 	second := <-broker.messageCh[disp.messageWorkerIndex]
 	require.Equal(t, event.TypeResolvedEvent, second.msgType)
 	require.Equal(t, oracle.GoTimeToTS(time.Unix(0, 0).Add(20*time.Second)), disp.nextSyncPoint.Load())
+}
+
+func TestNudgeSyncPointCommitIfNeededFastForwardsStaleSyncPoint(t *testing.T) {
+	broker, _, _, _ := newEventBrokerForTest()
+	// Close the broker, so we can catch all message in the test.
+	broker.close()
+
+	info := newMockDispatcherInfoForTest(t)
+	info.epoch = 1
+	info.enableSyncPoint = true
+	info.syncPointInterval = 10 * time.Second
+
+	ts5 := oracle.GoTimeToTS(time.Unix(0, 0).Add(5 * time.Second))
+	ts10 := oracle.GoTimeToTS(time.Unix(0, 0).Add(10 * time.Second))
+	ts20 := oracle.GoTimeToTS(time.Unix(0, 0).Add(20 * time.Second))
+	ts30 := oracle.GoTimeToTS(time.Unix(0, 0).Add(30 * time.Second))
+
+	info.startTs = ts5
+	info.nextSyncPoint = ts10
+
+	changefeedStatus := broker.getOrSetChangefeedStatus(info.GetChangefeedID(), info.GetSyncPointInterval())
+	disp := newDispatcherStat(info, 1, 1, nil, changefeedStatus)
+	disp.setHandshaked()
+
+	changefeedStatus.syncPointPreparingTs.Store(ts20)
+	changefeedStatus.syncPointInFlightTs.Store(ts20)
+
+	disp.sentResolvedTs.Store(ts20)
+	disp.receivedResolvedTs.Store(ts20)
+	disp.eventStoreCommitTs.Store(ts20)
+
+	needNudge := broker.nudgeSyncPointCommitIfNeeded(disp)
+	require.True(t, needNudge)
+
+	first := <-broker.messageCh[disp.messageWorkerIndex]
+	require.Equal(t, event.TypeSyncPointEvent, first.msgType)
+	syncPointEvent, ok := first.e.(*event.SyncPointEvent)
+	require.True(t, ok)
+	require.Equal(t, ts20, syncPointEvent.GetCommitTs())
+
+	second := <-broker.messageCh[disp.messageWorkerIndex]
+	require.Equal(t, event.TypeResolvedEvent, second.msgType)
+	require.Equal(t, ts30, disp.nextSyncPoint.Load())
 }
 
 func TestNudgeSyncPointCommitDispatchersPushesTask(t *testing.T) {
