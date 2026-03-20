@@ -21,7 +21,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
-	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -30,7 +29,7 @@ import (
 var _ writer.RedoLogWriter = (*memoryLogWriter)(nil)
 
 type memoryLogWriter struct {
-	cfg           *writer.LogWriterConfig
+	cfg           *writer.Config
 	encodeWorkers *encodingWorkerGroup
 	fileWorkers   *fileWorkerGroup
 	fileType      string
@@ -43,20 +42,9 @@ type memoryLogWriter struct {
 
 // NewLogWriter creates a new memoryLogWriter.
 func NewLogWriter(
-	ctx context.Context, cfg *writer.LogWriterConfig, fileType string, opts ...writer.Option,
+	ctx context.Context, cfg *writer.Config, fileType string, opts ...writer.Option,
 ) (*memoryLogWriter, error) {
-	if cfg == nil {
-		return nil, errors.WrapError(errors.ErrRedoConfigInvalid,
-			errors.New("invalid LogWriterConfig"))
-	}
-
-	// "nfs" and "local" scheme are converted to "file" scheme
-	if !cfg.UseExternalStorage {
-		redo.FixLocalScheme(cfg.URI)
-		cfg.UseExternalStorage = redo.IsExternalStorage(cfg.URI.Scheme)
-	}
-
-	extStorage, err := redo.InitExternalStorage(ctx, *cfg.URI)
+	extStorage, err := redo.InitExternalStorage(ctx, *cfg.URI())
 	if err != nil {
 		return nil, err
 	}
@@ -73,7 +61,7 @@ func NewLogWriter(
 		fileInputCh = lw.encodeWorkers.outputCh
 	}
 	lw.fileWorkers = newFileWorkerGroup(
-		cfg, util.GetOrZero(cfg.FlushWorkerNum), fileType, fileInputCh, extStorage, opts...)
+		cfg, cfg.FlushWorkerNum(), fileType, fileInputCh, extStorage, opts...)
 
 	return lw, nil
 }
@@ -119,15 +107,15 @@ func (l *memoryLogWriter) writeEvents(ctx context.Context, events ...writer.Redo
 	for _, e := range events {
 		if e == nil {
 			log.Warn("writing nil event to redo log, ignore this",
-				zap.String("keyspace", l.cfg.ChangeFeedID.Keyspace()),
-				zap.String("changefeed", l.cfg.ChangeFeedID.Name()),
-				zap.String("capture", l.cfg.CaptureID))
+				zap.String("keyspace", l.cfg.ChangeFeedID().Keyspace()),
+				zap.String("changefeed", l.cfg.ChangeFeedID().Name()))
 			continue
 		}
 		redoLogEvent, err := toPolymorphicRedoEvent(e, l.tableSchema)
 		if err != nil {
 			return err
 		}
+		// todo: this should be simplified to a single writer.
 		if err := l.fileWorkers.syncWrite(ctx, redoLogEvent); err != nil {
 			return err
 		}
@@ -139,9 +127,8 @@ func (l *memoryLogWriter) asyncWriteEvents(ctx context.Context, events ...writer
 	for _, e := range events {
 		if e == nil {
 			log.Warn("writing nil event to redo log, ignore this",
-				zap.String("keyspace", l.cfg.ChangeFeedID.Keyspace()),
-				zap.String("changefeed", l.cfg.ChangeFeedID.Name()),
-				zap.String("capture", l.cfg.CaptureID))
+				zap.String("keyspace", l.cfg.ChangeFeedID().Keyspace()),
+				zap.String("changefeed", l.cfg.ChangeFeedID().Name()))
 			continue
 		}
 		if l.encodeWorkers == nil {
