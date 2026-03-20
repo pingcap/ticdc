@@ -3,12 +3,7 @@ module workload
 go 1.25.8
 
 require (
-<<<<<<< HEAD
-	github.com/go-sql-driver/mysql v1.8.1
-=======
-	github.com/BurntSushi/toml v1.5.0
 	github.com/go-sql-driver/mysql v1.9.3
->>>>>>> d71174375 (*: update third-party dependencies (#4467))
 	github.com/google/uuid v1.6.0
 	github.com/pingcap/errors v0.11.5-0.20240318064555-6bd07397691f
 	github.com/pingcap/log v1.1.1-0.20240314023424-862ccc32f18d
