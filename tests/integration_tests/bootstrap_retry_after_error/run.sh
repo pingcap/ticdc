@@ -23,7 +23,7 @@ MAX_RETRIES=20
 CHECK_RETRIES=60
 
 PD_ADDR="http://${UP_PD_HOST_1}:${UP_PD_PORT_1}"
-CHANGEFEED_ID="bootstrap-retry-after-error"
+CHANGEFEED_ID="bootstrap-retry-after-error-$RANDOM"
 CDC_ADDRS=("127.0.0.1:8300" "127.0.0.1:8301")
 FAILPOINT_NAME="github.com/pingcap/ticdc/logservice/schemastore/getAllPhysicalTablesGCFastFail"
 
@@ -92,7 +92,6 @@ function run() {
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0" --addr "127.0.0.1:8300" --pd "$PD_ADDR"
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1" --addr "127.0.0.1:8301" --pd "$PD_ADDR"
 	export GO_FAILPOINTS=''
-
 
 	run_sql "CREATE DATABASE bootstrap_retry_after_error;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "CREATE TABLE bootstrap_retry_after_error.t1(id INT PRIMARY KEY, val INT);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
