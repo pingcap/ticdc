@@ -135,6 +135,23 @@ func TestNewUsesDefaultOptionsWhenValuesAreMissing(t *testing.T) {
 	manager.Close()
 }
 
+func TestInvalidWithOptionsKeepDefaults(t *testing.T) {
+	t.Parallel()
+
+	cfg := defaultOptions()
+	WithQuotaBytes(-1)(cfg)
+	WithSegmentBytes(-1)(cfg)
+	WithMemoryRatio(-1)(cfg)
+	WithHighWatermarkRatio(2)(cfg)
+	WithLowWatermarkRatio(-1)(cfg)
+
+	require.Equal(t, defaultQuotaBytes, cfg.quotaBytes)
+	require.Equal(t, defaultSegmentBytes, cfg.segmentBytes)
+	require.Equal(t, defaultMemoryRatio, cfg.memoryRatio)
+	require.Equal(t, defaultHighWatermarkRatio, cfg.highWatermarkRatio)
+	require.Equal(t, defaultLowWatermarkRatio, cfg.lowWatermarkRatio)
+}
+
 func TestEnqueueOnClosedSpool(t *testing.T) {
 	t.Parallel()
 

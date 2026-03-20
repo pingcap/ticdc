@@ -82,30 +82,90 @@ func WithRootDir(rootDir string) option {
 
 func WithQuotaBytes(quotaBytes int64) option {
 	return func(options *options) {
+		if quotaBytes == 0 {
+			return
+		}
+		if quotaBytes < 0 {
+			log.Warn(
+				"spool option is invalid, use default",
+				zap.String("field", "quota-bytes"),
+				zap.Int64("original", quotaBytes),
+				zap.Int64("default", defaultQuotaBytes),
+			)
+			return
+		}
 		options.quotaBytes = quotaBytes
 	}
 }
 
 func WithSegmentBytes(segmentBytes int64) option {
 	return func(options *options) {
+		if segmentBytes == 0 {
+			return
+		}
+		if segmentBytes < 0 {
+			log.Warn(
+				"spool option is invalid, use default",
+				zap.String("field", "segment-bytes"),
+				zap.Int64("original", segmentBytes),
+				zap.Int64("default", defaultSegmentBytes),
+			)
+			return
+		}
 		options.segmentBytes = segmentBytes
 	}
 }
 
 func WithMemoryRatio(memoryRatio float64) option {
 	return func(options *options) {
+		if memoryRatio == 0 {
+			return
+		}
+		if memoryRatio < 0 || memoryRatio >= 1 {
+			log.Warn(
+				"spool option is invalid, use default",
+				zap.String("field", "memory-ratio"),
+				zap.Float64("original", memoryRatio),
+				zap.Float64("default", defaultMemoryRatio),
+			)
+			return
+		}
 		options.memoryRatio = memoryRatio
 	}
 }
 
 func WithHighWatermarkRatio(highWatermarkRatio float64) option {
 	return func(options *options) {
+		if highWatermarkRatio == 0 {
+			return
+		}
+		if highWatermarkRatio < 0 || highWatermarkRatio >= 1 {
+			log.Warn(
+				"spool option is invalid, use default",
+				zap.String("field", "high-watermark-ratio"),
+				zap.Float64("original", highWatermarkRatio),
+				zap.Float64("default", defaultHighWatermarkRatio),
+			)
+			return
+		}
 		options.highWatermarkRatio = highWatermarkRatio
 	}
 }
 
 func WithLowWatermarkRatio(lowWatermarkRatio float64) option {
 	return func(options *options) {
+		if lowWatermarkRatio == 0 {
+			return
+		}
+		if lowWatermarkRatio < 0 || lowWatermarkRatio >= 1 {
+			log.Warn(
+				"spool option is invalid, use default",
+				zap.String("field", "low-watermark-ratio"),
+				zap.Float64("original", lowWatermarkRatio),
+				zap.Float64("default", defaultLowWatermarkRatio),
+			)
+			return
+		}
 		options.lowWatermarkRatio = lowWatermarkRatio
 	}
 }
@@ -207,114 +267,50 @@ func New(
 	changefeedID commonType.ChangeFeedID,
 	opts ...option,
 ) (*Spool, error) {
-	rawOptions := &options{}
+	cfg := defaultOptions()
 	for _, opt := range opts {
-		if opt == nil {
-			continue
+		if opt != nil {
+			opt(cfg)
 		}
-		opt(rawOptions)
 	}
-	options := withDefaultOptions(rawOptions)
-	rootDir := resolveRootDir(changefeedID, options.rootDir)
+	normalizeOptions(cfg)
+	rootDir := resolveRootDir(changefeedID, cfg.rootDir)
 	if err := prepareRootDir(rootDir); err != nil {
 		return nil, err
 	}
 
 	spool := &Spool{
 		rootDir:      rootDir,
-		quota:        newQuotaController(changefeedID, options),
-		segmentBytes: options.segmentBytes,
+		quota:        newQuotaController(changefeedID, cfg),
+		segmentBytes: cfg.segmentBytes,
 		segments:     make(map[uint64]*segment),
 	}
 	return spool, nil
 }
 
-func withDefaultOptions(opts *options) *options {
-	result := &options{
+func defaultOptions() *options {
+	return &options{
 		quotaBytes:         defaultQuotaBytes,
 		segmentBytes:       defaultSegmentBytes,
 		memoryRatio:        defaultMemoryRatio,
 		highWatermarkRatio: defaultHighWatermarkRatio,
 		lowWatermarkRatio:  defaultLowWatermarkRatio,
 	}
-	if opts == nil {
-		return result
-	}
-	if opts.rootDir != "" {
-		result.rootDir = opts.rootDir
-	}
-	if opts.quotaBytes > 0 {
-		result.quotaBytes = opts.quotaBytes
-	}
-	if opts.quotaBytes < 0 {
-		log.Warn(
-			"spool option is invalid, use default",
-			zap.String("field", "quota-bytes"),
-			zap.Int64("original", opts.quotaBytes),
-			zap.Int64("default", defaultQuotaBytes),
-		)
-	}
+}
 
-	if opts.segmentBytes > 0 {
-		result.segmentBytes = opts.segmentBytes
+func normalizeOptions(cfg *options) {
+	if cfg.lowWatermarkRatio < cfg.highWatermarkRatio {
+		return
 	}
-	if opts.segmentBytes < 0 {
-		log.Warn(
-			"spool option is invalid, use default",
-			zap.String("field", "segment-bytes"),
-			zap.Int64("original", opts.segmentBytes),
-			zap.Int64("default", defaultSegmentBytes),
-		)
-	}
-
-	if opts.memoryRatio > 0 && opts.memoryRatio < 1 {
-		result.memoryRatio = opts.memoryRatio
-	}
-	if opts.memoryRatio < 0 || opts.memoryRatio >= 1 {
-		log.Warn(
-			"spool option is invalid, use default",
-			zap.String("field", "memory-ratio"),
-			zap.Float64("original", opts.memoryRatio),
-			zap.Float64("default", defaultMemoryRatio),
-		)
-	}
-
-	if opts.highWatermarkRatio > 0 && opts.highWatermarkRatio < 1 {
-		result.highWatermarkRatio = opts.highWatermarkRatio
-	}
-	if opts.highWatermarkRatio < 0 || opts.highWatermarkRatio >= 1 {
-		log.Warn(
-			"spool option is invalid, use default",
-			zap.String("field", "high-watermark-ratio"),
-			zap.Float64("original", opts.highWatermarkRatio),
-			zap.Float64("default", defaultHighWatermarkRatio),
-		)
-	}
-
-	if opts.lowWatermarkRatio > 0 && opts.lowWatermarkRatio < 1 {
-		result.lowWatermarkRatio = opts.lowWatermarkRatio
-	}
-	if opts.lowWatermarkRatio < 0 || opts.lowWatermarkRatio >= 1 {
-		log.Warn(
-			"spool option is invalid, use default",
-			zap.String("field", "low-watermark-ratio"),
-			zap.Float64("original", opts.lowWatermarkRatio),
-			zap.Float64("default", defaultLowWatermarkRatio),
-		)
-	}
-
-	if result.lowWatermarkRatio >= result.highWatermarkRatio {
-		log.Warn(
-			"spool watermark ratio is invalid, use default",
-			zap.Float64("low", result.lowWatermarkRatio),
-			zap.Float64("high", result.highWatermarkRatio),
-			zap.Float64("defaultLow", defaultLowWatermarkRatio),
-			zap.Float64("defaultHigh", defaultHighWatermarkRatio),
-		)
-		result.lowWatermarkRatio = defaultLowWatermarkRatio
-		result.highWatermarkRatio = defaultHighWatermarkRatio
-	}
-	return result
+	log.Warn(
+		"spool watermark ratio is invalid, use default",
+		zap.Float64("low", cfg.lowWatermarkRatio),
+		zap.Float64("high", cfg.highWatermarkRatio),
+		zap.Float64("defaultLow", defaultLowWatermarkRatio),
+		zap.Float64("defaultHigh", defaultHighWatermarkRatio),
+	)
+	cfg.lowWatermarkRatio = defaultLowWatermarkRatio
+	cfg.highWatermarkRatio = defaultHighWatermarkRatio
 }
 
 func resolveRootDir(changefeedID commonType.ChangeFeedID, rootDir string) string {
