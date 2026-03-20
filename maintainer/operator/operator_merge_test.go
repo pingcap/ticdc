@@ -283,16 +283,21 @@ func TestMergeOperator_PostFinishReleasesOccupyAfterRemovingOldReplicas(t *testi
 	observerReadyCh := make(chan struct{})
 	go func() {
 		close(observerReadyCh)
-		require.Eventually(t, func() bool {
-			return occupyOperators[0].IsFinished()
-		}, 5*time.Second, 10*time.Millisecond)
+		for !occupyOperators[0].IsFinished() {
+			runtime.Gosched()
+		}
 		windowObservedCh <- spanController.GetTaskByID(lastReplicaID) != nil
 	}()
 	<-observerReadyCh
 
 	op.PostFinish()
 
-	require.False(t, <-windowObservedCh)
+	select {
+	case observedOldReplica := <-windowObservedCh:
+		require.False(t, observedOldReplica)
+	case <-time.After(5 * time.Second):
+		t.Fatal("observer did not observe occupy operator completion")
+	}
 	require.Nil(t, spanController.GetTaskByID(lastReplicaID))
 	for _, occupyOp := range occupyOperators {
 		require.True(t, occupyOp.IsFinished())
