@@ -27,6 +27,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/atomic"
 )
 
 func setupTestEnvironment(t *testing.T) (*span.Controller, common.ChangeFeedID, *replica.SpanReplication, node.ID, node.ID) {
@@ -77,6 +78,7 @@ func setupTestEnvironment(t *testing.T) (*span.Controller, common.ChangeFeedID, 
 		false,
 	)
 
+	replicaSet.BindCommittedCheckpointTs(atomic.NewUint64(0))
 	return spanController, changefeedID, replicaSet, nodeA, nodeB
 }
 
