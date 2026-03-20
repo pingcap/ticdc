@@ -15,7 +15,10 @@ package coordinator
 
 import (
 	"strings"
+<<<<<<< HEAD
 	"time"
+=======
+>>>>>>> e8de3a63c (metrics: add changefeed error info info (#4499))
 
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging"
@@ -50,13 +53,20 @@ type changefeedErrorMetricLabels struct {
 	keyspace   string
 	changefeed string
 	state      string
+<<<<<<< HEAD
 	errorTime  string
+=======
+>>>>>>> e8de3a63c (metrics: add changefeed error info info (#4499))
 	code       string
 	message    string
 }
 
 func (l changefeedErrorMetricLabels) labelValues() []string {
+<<<<<<< HEAD
 	return []string{l.keyspace, l.changefeed, l.state, l.errorTime, l.code, l.message}
+=======
+	return []string{l.keyspace, l.changefeed, l.state, l.code, l.message}
+>>>>>>> e8de3a63c (metrics: add changefeed error info info (#4499))
 }
 
 func normalizeChangefeedErrorMetricMessage(message string) string {
@@ -67,6 +77,7 @@ func normalizeChangefeedErrorMetricMessage(message string) string {
 	return message[:changefeedErrorMetricMsgLimit-3] + "..."
 }
 
+<<<<<<< HEAD
 func normalizeChangefeedErrorMetricTime(errorTime time.Time) string {
 	// Keep the label stable across nodes with different local time zones while remaining
 	// directly readable in Grafana's table view.
@@ -76,6 +87,8 @@ func normalizeChangefeedErrorMetricTime(errorTime time.Time) string {
 	return errorTime.UTC().Format(time.RFC3339)
 }
 
+=======
+>>>>>>> e8de3a63c (metrics: add changefeed error info info (#4499))
 func getChangefeedErrorMetricLabels(info *config.ChangeFeedInfo) (changefeedErrorMetricLabels, bool) {
 	if info == nil {
 		return changefeedErrorMetricLabels{}, false
@@ -96,7 +109,10 @@ func getChangefeedErrorMetricLabels(info *config.ChangeFeedInfo) (changefeedErro
 		keyspace:   info.ChangefeedID.Keyspace(),
 		changefeed: info.ChangefeedID.Name(),
 		state:      string(info.State),
+<<<<<<< HEAD
 		errorTime:  normalizeChangefeedErrorMetricTime(runningErr.Time),
+=======
+>>>>>>> e8de3a63c (metrics: add changefeed error info info (#4499))
 		code:       runningErr.Code,
 		message:    normalizeChangefeedErrorMetricMessage(runningErr.Message),
 	}, true
