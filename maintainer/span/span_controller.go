@@ -164,15 +164,14 @@ func (c *Controller) AdvanceMaintainerCommittedCheckpointTs(ts uint64) {
 	if ts == 0 {
 		return
 	}
-	for {
-		oldTs := c.maintainerCommittedCheckpointTs.Load()
-		if oldTs >= ts {
-			return
-		}
-		if c.maintainerCommittedCheckpointTs.CompareAndSwap(oldTs, ts) {
-			return
-		}
+	// The committed checkpoint for one controller is only advanced by the dedicated
+	// calCheckpointTs goroutine of its owning maintainer. Readers may observe it
+	// concurrently, but there is no competing writer for the same controller state.
+	oldTs := c.maintainerCommittedCheckpointTs.Load()
+	if oldTs >= ts {
+		return
 	}
+	c.maintainerCommittedCheckpointTs.Store(ts)
 }
 
 // AddNewTable adds a new table to the span controller
