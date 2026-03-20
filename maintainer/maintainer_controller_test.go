@@ -1210,6 +1210,16 @@ func TestControllerAdvanceSpansCheckpointByNodeWatermarkDoesNotRegress(t *testin
 	require.Equal(t, 1, controller.spanController.GetTaskSizeByNodeID("node2"))
 }
 
+func TestControllerAdvanceSpansCheckpointByNodeWatermarkSkipsNonReplicatingSpans(t *testing.T) {
+	controller, spanReplica := newControllerForRemovedNodeWatermarkTest(t, 10)
+
+	// A scheduling span can be bound to a node without a running dispatcher (for example, the add-dest
+	// phase of a move). Node watermark does not include such spans, so we must not advance them.
+	controller.spanController.MarkSpanScheduling(spanReplica)
+	controller.AdvanceSpansCheckpointByNodeWatermark("node2", 20, common.DefaultMode)
+	require.Equal(t, uint64(10), spanReplica.GetStatus().CheckpointTs)
+}
+
 func TestDefaultSpanIntoSplit(t *testing.T) {
 	testutil.SetUpTestServices()
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)

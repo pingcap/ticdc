@@ -254,6 +254,13 @@ func (c *Controller) GetMinCheckpointTs(minCheckpointTs uint64) uint64 {
 //
 // Using the removed node watermark as a floor keeps the recreated dispatcher startTs aligned with the
 // freshest node-level progress already known to maintainer, without changing barrier semantics.
+//
+// IMPORTANT:
+// Only spans that are currently in replicating state on the removed node are eligible.
+// Scheduling spans can be bound to a node (for example, the add-dest phase of a Move operator)
+// even if the dispatcher has not been created on that node yet. Node-level watermark does not
+// include those non-existing dispatchers, so advancing their checkpoints would be unsafe and can
+// skip data.
 func (c *Controller) AdvanceSpansCheckpointByNodeWatermark(id node.ID, checkpointTs uint64, mode int64) {
 	if checkpointTs == 0 {
 		return
@@ -265,6 +272,11 @@ func (c *Controller) AdvanceSpansCheckpointByNodeWatermark(id node.ID, checkpoin
 	}
 
 	for _, span := range spanController.GetTaskByNodeID(id) {
+		// Only spans that were replicating on the removed node contributed to that node watermark.
+		// A scheduling/absent span must not be advanced here.
+		if !spanController.IsReplicating(span) {
+			continue
+		}
 		status := span.GetStatus()
 		if status == nil || status.CheckpointTs >= checkpointTs {
 			continue
