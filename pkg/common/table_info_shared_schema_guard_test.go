@@ -63,7 +63,8 @@ type goSourceFile struct {
 }
 
 // TestLatestTiDBTableInfoSharedSchemaGuard verifies the upstream struct fields
-// that TiCDC shared-schema logic depends on.
+// whose shared-schema compatibility has been reviewed and recorded here.
+// New upstream fields should be reviewed and then added here intentionally.
 func TestLatestTiDBTableInfoSharedSchemaGuard(t *testing.T) {
 	// This guard intentionally checks the latest TiDB master to detect
 	// upstream struct-field changes before TiCDC upgrades its pinned TiDB version.
@@ -78,7 +79,7 @@ func TestLatestTiDBTableInfoSharedSchemaGuard(t *testing.T) {
 				"PKIsHandle", "IsCommonHandle", "CommonHandleVersion",
 				"Comment", "AutoIncID", "AutoIncIDExtra", "AutoIDCache", "AutoRandID",
 				"MaxColumnID", "MaxIndexID", "MaxForeignKeyID", "MaxConstraintID", "UpdateTS", "AutoIDSchemaID",
-				"ShardRowIDBits", "MaxShardRowIDBits", "AutoRandomBits", "AutoRandomRangeBits", "PreSplitRegions",
+				"ShardRowIDBits", "MaxShardRowIDBits", "AutoRandomBits", "AutoRandomRangeBits", "PreSplitRegions", "TableSplitPolicy",
 				"Partition", "Compression", "View", "Sequence", "Lock", "Version", "TiFlashReplica", "IsColumnar",
 				"TempTableType", "TableCacheStatusType", "PlacementPolicyRef", "StatsOptions",
 				"ExchangePartitionInfo", "TTLInfo", "IsActiveActive", "SoftdeleteInfo", "Affinity",
@@ -104,7 +105,7 @@ func TestLatestTiDBTableInfoSharedSchemaGuard(t *testing.T) {
 			expectedFields: []string{
 				"ID", "Name", "Table", "Columns", "State", "BackfillState", "Comment", "Tp", "Unique", "Primary",
 				"Invisible", "Global", "MVIndex", "VectorInfo", "InvertedInfo", "FullTextInfo",
-				"ConditionExprString", "AffectColumn", "GlobalIndexVersion",
+				"ConditionExprString", "AffectColumn", "RegionSplitPolicy", "GlobalIndexVersion",
 			},
 		},
 		{

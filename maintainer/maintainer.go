@@ -1065,18 +1065,20 @@ func (m *Maintainer) createBootstrapMessageFactory() bootstrap.NewBootstrapReque
 
 		// only send dispatcher targetNodeID to dispatcher manager on the same node
 		if targetNodeID == m.selfNode.ID {
-			log.Info("create table event trigger dispatcher bootstrap message",
-				zap.Stringer("changefeedID", m.changefeedID),
-				zap.String("nodeAddr", targetAddr),
-				zap.Any("nodeID", targetNodeID),
-				zap.String("dispatcherID", m.ddlSpan.ID.String()),
-				zap.Uint64("startTs", m.startCheckpointTs),
-			)
 			msg.TableTriggerEventDispatcherId = m.ddlSpan.ID.ToPB()
 			if m.enableRedo {
 				msg.TableTriggerRedoDispatcherId = m.redoDDLSpan.ID.ToPB()
 			}
 			msg.IsNewChangefeed = m.newChangefeed
+			log.Info("create table event trigger dispatcher bootstrap message",
+				zap.Stringer("changefeedID", m.changefeedID),
+				zap.String("nodeAddr", targetAddr),
+				zap.Any("nodeID", targetNodeID),
+				zap.String("dispatcherID", m.ddlSpan.ID.String()),
+				zap.Bool("enableRedo", m.enableRedo),
+				zap.Bool("newChangefeed", m.newChangefeed),
+				zap.Uint64("startTs", m.startCheckpointTs),
+			)
 		}
 
 		log.Info("maintainer new bootstrap message to dispatcher orchestrator",

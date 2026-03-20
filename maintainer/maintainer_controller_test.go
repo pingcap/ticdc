@@ -1434,6 +1434,109 @@ func TestFinishBootstrap(t *testing.T) {
 	require.Nil(t, postBootstrapRequest)
 }
 
+// TestFinishBootstrapSkipsStaleCreateOperatorForDroppedTable covers stale bootstrap Create requests
+// for dropped tables across add/move/split operator types. Each subtest boots from an empty schema
+// snapshot and verifies bootstrap skips the stale create phase instead of recreating ghost tasks or
+// operators, even if dispatcher manager still reports a stale runtime span snapshot.
+func TestFinishBootstrapSkipsStaleCreateOperatorForDroppedTable(t *testing.T) {
+	testCases := []struct {
+		name                string
+		operatorType        heartbeatpb.OperatorType
+		includeReportedSpan bool
+	}{
+		{
+			name:         "stale add create",
+			operatorType: heartbeatpb.OperatorType_O_Add,
+		},
+		{
+			name:         "stale move create phase",
+			operatorType: heartbeatpb.OperatorType_O_Move,
+		},
+		{
+			name:         "stale split create phase",
+			operatorType: heartbeatpb.OperatorType_O_Split,
+		},
+		{
+			name:                "stale add create with reported runtime span",
+			operatorType:        heartbeatpb.OperatorType_O_Add,
+			includeReportedSpan: true,
+		},
+	}
+
+	for _, tc := range testCases {
+		// Each subtest restores bootstrap state from a dropped-table snapshot and checks that
+		// no maintainer task/operator is recreated for the stale create request.
+		t.Run(tc.name, func(t *testing.T) {
+			testutil.SetUpTestServices()
+			nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+			nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
+
+			tableTriggerEventDispatcherID := common.NewDispatcherID()
+			cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+			ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
+				common.DDLSpanSchemaID,
+				common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
+					ID:              tableTriggerEventDispatcherID.ToPB(),
+					ComponentStatus: heartbeatpb.ComponentState_Working,
+					CheckpointTs:    1,
+				}, "node1", false)
+			refresher := replica.NewRegionCountRefresher(cfID, time.Minute)
+			s := NewController(cfID, 1, &mockThreadPool{},
+				config.GetDefaultReplicaConfig(), ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false)
+
+			// The schema-store snapshot is empty at bootstrap startTs, which models a table
+			// that has already been dropped before failover recovery starts.
+			schemaStore := eventservice.NewMockSchemaStore()
+			schemaStore.SetTables(nil)
+			appcontext.SetService(appcontext.SchemaStore, schemaStore)
+
+			droppedDispatcherID := common.NewDispatcherID()
+			droppedSpan := common.TableIDToComparableSpan(common.DefaultKeyspaceID, 2)
+			resp := &heartbeatpb.MaintainerBootstrapResponse{
+				ChangefeedID: cfID.ToPB(),
+				Operators: []*heartbeatpb.ScheduleDispatcherRequest{
+					{
+						ChangefeedID: cfID.ToPB(),
+						Config: &heartbeatpb.DispatcherConfig{
+							DispatcherID: droppedDispatcherID.ToPB(),
+							SchemaID:     2,
+							Span:         &droppedSpan,
+							StartTs:      10,
+							Mode:         common.DefaultMode,
+						},
+						ScheduleAction: heartbeatpb.ScheduleAction_Create,
+						OperatorType:   tc.operatorType,
+					},
+				},
+				CheckpointTs: 10,
+			}
+			if tc.includeReportedSpan {
+				resp.Spans = []*heartbeatpb.BootstrapTableSpan{
+					{
+						ID:              droppedDispatcherID.ToPB(),
+						SchemaID:        2,
+						Span:            &droppedSpan,
+						ComponentStatus: heartbeatpb.ComponentState_Working,
+						CheckpointTs:    10,
+						Mode:            common.DefaultMode,
+					},
+				}
+			}
+
+			_, err := s.FinishBootstrap(map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{
+				"node1": resp,
+			}, false)
+			require.NoError(t, err)
+			require.True(t, s.bootstrapped)
+			require.Nil(t, s.spanController.GetTaskByID(droppedDispatcherID))
+			require.Nil(t, s.operatorController.GetOperator(droppedDispatcherID))
+			require.Zero(t, s.operatorController.OperatorSize())
+			require.Zero(t, s.spanController.GetAbsentSize())
+			require.Empty(t, s.spanController.GetTasksByTableID(droppedSpan.TableID))
+		})
+	}
+}
+
 func TestSplitTableWhenBootstrapFinished(t *testing.T) {
 	testutil.SetUpTestServices()
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
