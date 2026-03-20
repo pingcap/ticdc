@@ -16,6 +16,7 @@ package operator
 import (
 	"fmt"
 	"runtime"
+	"time"
 	"testing"
 
 	"github.com/pingcap/ticdc/heartbeatpb"
