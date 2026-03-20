@@ -111,13 +111,14 @@ func TestCloseClosesExternalStorage(t *testing.T) {
 
 	uri, err := url.Parse("file:///tmp/redo-test")
 	require.NoError(t, err)
-	lw, err := NewLogWriter(context.Background(), &writer.LogWriterConfig{
-		CaptureID:          "test-capture",
-		ChangeFeedID:       common.NewChangeFeedIDWithName("test-changefeed", common.DefaultKeyspaceName),
-		URI:                uri,
-		UseExternalStorage: true,
-		MaxLogSizeInBytes:  10 * redo.Megabyte,
-	}, redo.RedoDDLLogFileType)
+	cfg := testutil.NewConsistentConfig(uri.String())
+	lwcfg, err := writer.NewConfig(
+		common.NewChangeFeedIDWithName("test-changefeed", common.DefaultKeyspaceName),
+		cfg,
+	)
+	require.NoError(t, err)
+
+	lw, err := NewLogWriter(context.Background(), lwcfg, redo.RedoDDLLogFileType)
 	require.NoError(t, err)
 
 	require.NoError(t, lw.Close())
