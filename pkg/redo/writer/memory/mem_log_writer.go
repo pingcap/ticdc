@@ -37,7 +37,6 @@ type memoryLogWriter struct {
 	storage       storage.ExternalStorage
 
 	cancel context.CancelFunc
-	done   chan struct{}
 }
 
 // NewLogWriter creates a new memoryLogWriter.
@@ -53,7 +52,6 @@ func NewLogWriter(
 		cfg:      cfg,
 		fileType: fileType,
 		storage:  extStorage,
-		done:     make(chan struct{}),
 	}
 	var fileInputCh chan *polymorphicRedoEvent
 	if fileType == redo.RedoRowLogFileType {
@@ -76,13 +74,6 @@ func (l *memoryLogWriter) SetTableSchemaStore(tableSchemaStore *event.TableSchem
 func (l *memoryLogWriter) Run(ctx context.Context) error {
 	newCtx, cancel := context.WithCancel(ctx)
 	l.cancel = cancel
-	defer close(l.done)
-	defer func() {
-		if l.storage != nil {
-			l.storage.Close()
-			l.storage = nil
-		}
-	}()
 	if l.encodeWorkers == nil {
 		return l.fileWorkers.Run(newCtx)
 	}
@@ -144,12 +135,9 @@ func (l *memoryLogWriter) asyncWriteEvents(ctx context.Context, events ...writer
 func (l *memoryLogWriter) Close() error {
 	if l.cancel != nil {
 		l.cancel()
-		<-l.done
-		return nil
 	}
 	if l.storage != nil {
 		l.storage.Close()
-		l.storage = nil
 	}
 	return nil
 }

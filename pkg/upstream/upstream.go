@@ -150,12 +150,6 @@ func isCreateTiStoreRetryable(ctx context.Context, err error) bool {
 // init initializes the upstream
 func initUpstream(ctx context.Context, up *Upstream, cfg *NodeTopologyCfg) (err error) {
 	ctx, up.cancel = context.WithCancel(ctx)
-	defer func() {
-		if err != nil {
-			up.err.Store(err)
-			up.Close()
-		}
-	}()
 	grpcTLSOption, err := up.SecurityConfig.ToGRPCDialOption()
 	if err != nil {
 		return errors.Trace(err)

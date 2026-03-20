@@ -87,6 +87,7 @@ func (m *Manager) AddDefaultUpstream(
 		clock:             clock.New(),
 	}
 	if err := m.initUpstreamFunc(m.ctx, up, &m.nodeCfg); err != nil {
+		up.err.Store(err)
 		up.Close()
 		return nil, cerror.Trace(err)
 	}
@@ -128,8 +129,8 @@ func (m *Manager) add(upstreamID uint64,
 	m.ups.Store(upstreamID, up)
 	go func() {
 		err := m.initUpstreamFunc(m.ctx, up, &m.nodeCfg)
-		up.err.Store(err)
 		if err != nil {
+			up.err.Store(err)
 			up.Close()
 			m.ups.CompareAndDelete(upstreamID, up)
 		}
