@@ -375,7 +375,7 @@ func (m *Maintainer) GetMaintainerStatus() *heartbeatpb.MaintainerStatus {
 	status := &heartbeatpb.MaintainerStatus{
 		ChangefeedID:  m.changefeedID.ToPB(),
 		State:         heartbeatpb.ComponentState(m.scheduleState.Load()),
-		CheckpointTs:  m.getWatermark().CheckpointTs,
+		CheckpointTs:  m.controller.spanController.GetMaintainerCommittedCheckpointTs(),
 		Err:           runningErrors,
 		BootstrapDone: m.initialized.Load(),
 		LastSyncedTs:  m.getWatermark().LastSyncedTs,
@@ -665,6 +665,12 @@ func (m *Maintainer) calCheckpointTs(ctx context.Context) {
 			// CRITICAL SECTION: Calculate checkpointTs with proper ordering to prevent race condition
 			newWatermark, canUpdate := m.calculateNewCheckpointTs()
 			if canUpdate {
+				m.controller.spanController.AdvanceMaintainerCommittedCheckpointTs(newWatermark.CheckpointTs)
+				if m.enableRedo && m.controller.redoSpanController != nil {
+					m.controller.redoSpanController.AdvanceMaintainerCommittedCheckpointTs(
+						m.controller.spanController.GetMaintainerCommittedCheckpointTs(),
+					)
+				}
 				m.setWatermark(*newWatermark)
 				m.updateMetrics()
 			}
@@ -743,7 +749,8 @@ func (m *Maintainer) updateMetrics() {
 	watermark := m.getWatermark()
 
 	pdPhysicalTime := oracle.GetPhysical(m.pdClock.CurrentTime())
-	phyCkpTs := oracle.ExtractPhysical(watermark.CheckpointTs)
+	committedCheckpointTs := m.controller.spanController.GetMaintainerCommittedCheckpointTs()
+	phyCkpTs := oracle.ExtractPhysical(committedCheckpointTs)
 	m.checkpointTsGauge.Set(float64(phyCkpTs))
 	lag := float64(pdPhysicalTime-phyCkpTs) / 1e3
 	m.checkpointTsLagGauge.Set(lag)

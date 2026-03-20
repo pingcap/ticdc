@@ -101,6 +101,7 @@ func NewController(changefeedID common.ChangeFeedID,
 		schedulerCfg = replicaConfig.Scheduler
 	}
 	spanController := span.NewController(changefeedID, ddlSpan, splitter, schedulerCfg, refresher, keyspaceMeta.ID, common.DefaultMode)
+	spanController.AdvanceMaintainerCommittedCheckpointTs(checkpointTs)
 
 	var (
 		redoSpanController *span.Controller
@@ -108,6 +109,7 @@ func NewController(changefeedID common.ChangeFeedID,
 	)
 	if enableRedo {
 		redoSpanController = span.NewController(changefeedID, redoDDLSpan, splitter, schedulerCfg, refresher, keyspaceMeta.ID, common.RedoMode)
+		redoSpanController.AdvanceMaintainerCommittedCheckpointTs(checkpointTs)
 		redoOC = operator.NewOperatorController(changefeedID, redoSpanController, batchSize, common.RedoMode)
 	}
 	// Create operator controller using spanController

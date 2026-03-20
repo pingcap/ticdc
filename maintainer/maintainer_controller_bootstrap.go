@@ -16,6 +16,7 @@ package maintainer
 import (
 	"bytes"
 	"context"
+	"math"
 	"time"
 
 	"github.com/pingcap/log"
@@ -389,7 +390,7 @@ func (c *Controller) createSpanReplication(spanInfo *heartbeatpb.BootstrapTableS
 		Mode:            spanInfo.Mode,
 	}
 
-	return replica.NewWorkingSpanReplication(
+	replicaSet := replica.NewWorkingSpanReplication(
 		c.changefeedID,
 		common.NewDispatcherIDFromPB(spanInfo.ID),
 		spanInfo.SchemaID,
@@ -398,6 +399,38 @@ func (c *Controller) createSpanReplication(spanInfo *heartbeatpb.BootstrapTableS
 		node,
 		splitEnabled,
 	)
+	if spanInfo.BlockState != nil {
+		replicaSet.UpdateBlockState(*spanInfo.BlockState)
+	}
+	return replicaSet
+}
+
+func restoreBootstrapCreateBlockState(
+	req *heartbeatpb.ScheduleDispatcherRequest,
+	spanInfo *heartbeatpb.BootstrapTableSpan,
+	replicaSet *replica.SpanReplication,
+) {
+	if spanInfo != nil && spanInfo.BlockState != nil {
+		replicaSet.UpdateBlockState(*spanInfo.BlockState)
+		return
+	}
+	if req.Config == nil || !req.Config.SkipDMLAsStartTs {
+		return
+	}
+	if req.Config.StartTs == math.MaxUint64 {
+		log.Panic("bootstrap create request has invalid start ts for ddl replay",
+			zap.String("dispatcherID", common.NewDispatcherIDFromPB(req.Config.DispatcherID).String()),
+			zap.Uint64("startTs", req.Config.StartTs))
+	}
+	// Bootstrap can restore an in-flight create request before the runtime snapshot reports
+	// any dispatcher state. Reconstruct the minimal DDL replay state so the recreated add
+	// request preserves both StartTs=blockTs-1 and SkipDMLAsStartTs=true semantics.
+	replicaSet.UpdateBlockState(heartbeatpb.State{
+		IsBlocked:   true,
+		BlockTs:     req.Config.StartTs + 1,
+		IsSyncPoint: false,
+		Stage:       heartbeatpb.BlockStage_WAITING,
+	})
 }
 
 func (c *Controller) loadTables(startTs uint64) ([]commonEvent.Table, error) {
@@ -746,6 +779,7 @@ func (c *Controller) restoreCurrentWorkingCreateAction(
 		)
 		spanController.AddAbsentReplicaSet(replicaSet)
 	}
+	restoreBootstrapCreateBlockState(req, spanInfo, replicaSet)
 	return c.handleCurrentWorkingAdd(req, spanController, replicaSet, nodeID, resp)
 }
 

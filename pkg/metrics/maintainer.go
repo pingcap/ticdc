@@ -57,6 +57,14 @@ var (
 			Help:      "Bucketed histogram of processing time (s) of finished operator.",
 			Buckets:   []float64{0.5, 1, 2, 4, 8, 16, 20, 40, 60, 90, 120, 180, 240, 300, 480, 600, 720, 900, 1200, 1800, 3600},
 		}, []string{getKeyspaceLabel(), "changefeed", "type", "mode"})
+
+	DispatcherStartTsClampCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "maintainer",
+			Name:      "dispatcher_start_ts_clamp_counter",
+			Help:      "The counter of dispatcher create StartTs clamped to maintainer committed checkpoint.",
+		}, []string{getKeyspaceLabel(), "changefeed", "mode", "operator_type"})
 )
 
 func initMaintainerMetrics(registry *prometheus.Registry) {
@@ -65,4 +73,5 @@ func initMaintainerMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(OperatorCount)
 	registry.MustRegister(OperatorDuration)
 	registry.MustRegister(TotalOperatorCount)
+	registry.MustRegister(DispatcherStartTsClampCounter)
 }

@@ -21,6 +21,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/maintainer/testutil"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
@@ -356,4 +357,47 @@ func TestMaintainerSchedule(t *testing.T) {
 
 	cancel()
 	wg.Wait()
+}
+
+func TestGetMaintainerStatusUsesCommittedCheckpoint(t *testing.T) {
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	ddlDispatcherID := common.NewDispatcherID()
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, ddlDispatcherID,
+		common.DDLSpanSchemaID,
+		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
+			ID:              ddlDispatcherID.ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    10,
+			Mode:            common.DefaultMode,
+		}, "node1", false)
+	appcontext.SetService(watcher.NodeManagerName, watcher.NewNodeManager(nil, nil))
+	controller := NewController(
+		cfID,
+		10,
+		threadpool.NewThreadPoolDefault(),
+		config.GetDefaultReplicaConfig(),
+		ddlSpan,
+		nil,
+		1,
+		time.Minute,
+		nil,
+		common.KeyspaceMeta{ID: common.DefaultKeyspaceID},
+		false,
+	)
+	controller.spanController.AdvanceMaintainerCommittedCheckpointTs(20)
+
+	m := &Maintainer{
+		changefeedID: cfID,
+		controller:   controller,
+	}
+	m.runningErrors.m = make(map[node.ID]*heartbeatpb.RunningError)
+	m.watermark.Watermark = &heartbeatpb.Watermark{
+		CheckpointTs: 15,
+		ResolvedTs:   15,
+		LastSyncedTs: 30,
+	}
+
+	status := m.GetMaintainerStatus()
+	require.Equal(t, uint64(20), status.CheckpointTs)
+	require.Equal(t, uint64(30), status.LastSyncedTs)
 }

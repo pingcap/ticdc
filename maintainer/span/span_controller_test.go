@@ -219,6 +219,57 @@ func TestController_GetTasksBySchemaID(t *testing.T) {
 	require.Len(t, tasks, 0)
 }
 
+func TestController_MaintainerCommittedCheckpointMonotonic(t *testing.T) {
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	ddlDispatcherID := common.NewDispatcherID()
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, ddlDispatcherID,
+		common.DDLSpanSchemaID,
+		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
+			ID:              ddlDispatcherID.ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    1,
+		}, "node1", false)
+	appcontext.SetService(watcher.NodeManagerName, watcher.NewNodeManager(nil, nil))
+	controller := NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
+
+	require.Equal(t, uint64(0), controller.GetMaintainerCommittedCheckpointTs())
+	controller.AdvanceMaintainerCommittedCheckpointTs(10)
+	controller.AdvanceMaintainerCommittedCheckpointTs(8)
+	require.Equal(t, uint64(10), controller.GetMaintainerCommittedCheckpointTs())
+}
+
+func TestController_MaintainerCommittedCheckpointIndependentByMode(t *testing.T) {
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	appcontext.SetService(watcher.NodeManagerName, watcher.NewNodeManager(nil, nil))
+
+	defaultDDLDispatcherID := common.NewDispatcherID()
+	defaultDDLSpan := replica.NewWorkingSpanReplication(cfID, defaultDDLDispatcherID,
+		common.DDLSpanSchemaID,
+		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
+			ID:              defaultDDLDispatcherID.ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    1,
+			Mode:            common.DefaultMode,
+		}, "node1", false)
+	defaultController := NewController(cfID, defaultDDLSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
+	defaultController.AdvanceMaintainerCommittedCheckpointTs(11)
+
+	redoDDLDispatcherID := common.NewDispatcherID()
+	redoDDLSpan := replica.NewWorkingSpanReplication(cfID, redoDDLDispatcherID,
+		common.DDLSpanSchemaID,
+		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
+			ID:              redoDDLDispatcherID.ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    1,
+			Mode:            common.RedoMode,
+		}, "node1", false)
+	redoController := NewController(cfID, redoDDLSpan, nil, nil, nil, common.DefaultKeyspaceID, common.RedoMode)
+	redoController.AdvanceMaintainerCommittedCheckpointTs(21)
+
+	require.Equal(t, uint64(11), defaultController.GetMaintainerCommittedCheckpointTs())
+	require.Equal(t, uint64(21), redoController.GetMaintainerCommittedCheckpointTs())
+}
+
 func TestController_UpdateSchemaID(t *testing.T) {
 	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	ddlDispatcherID := common.NewDispatcherID()

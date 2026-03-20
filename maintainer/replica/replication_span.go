@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/messaging"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/scheduler/replica"
 	"go.uber.org/atomic"
@@ -47,6 +48,9 @@ type SpanReplication struct {
 	groupID     replica.GroupID
 	status      *atomic.Pointer[heartbeatpb.TableSpanStatus]
 	blockState  *atomic.Pointer[heartbeatpb.State]
+	// committedCheckpointTs is owned by the span controller and provides the monotonic
+	// lower bound that every create request must respect.
+	committedCheckpointTs *atomic.Uint64
 }
 
 func NewSpanReplication(cfID common.ChangeFeedID,
@@ -166,6 +170,17 @@ func (r *SpanReplication) GetMode() int64 {
 	return r.status.Load().Mode
 }
 
+// BindCommittedCheckpointTs binds the controller-owned committed checkpoint to the span.
+// The pointer must remain shared so all create requests observe the same monotonic floor.
+func (r *SpanReplication) BindCommittedCheckpointTs(committedCheckpointTs *atomic.Uint64) {
+	if committedCheckpointTs == nil {
+		log.Panic("bind nil committed checkpoint",
+			zap.Stringer("changefeedID", r.ChangefeedID),
+			zap.String("dispatcherID", r.ID.String()))
+	}
+	r.committedCheckpointTs = committedCheckpointTs
+}
+
 // UpdateStatus updates the replication status with the following rules:
 //
 //	The new status is only stored if its checkpointTs is greater than or equal to
@@ -243,7 +258,8 @@ func (r *SpanReplication) GetGroupID() replica.GroupID {
 func (r *SpanReplication) NewAddDispatcherMessage(server node.ID, operatorType heartbeatpb.OperatorType) *messaging.TargetMessage {
 	startTs := r.status.Load().CheckpointTs
 	skipDMLAsStartTs := false
-	if state := r.blockState.Load(); state != nil && state.IsBlocked &&
+	state := r.blockState.Load()
+	if state != nil && state.IsBlocked &&
 		(state.Stage == heartbeatpb.BlockStage_WAITING || state.Stage == heartbeatpb.BlockStage_WRITING) && state.BlockTs > 0 {
 		if state.IsSyncPoint {
 			// When a syncpoint is in-flight (WAITING/WRITING), the maintainer will force the span checkpoint to BlockTs-1
@@ -267,6 +283,44 @@ func (r *SpanReplication) NewAddDispatcherMessage(server node.ID, operatorType h
 				skipDMLAsStartTs = true
 			}
 		}
+	}
+	if r.committedCheckpointTs == nil {
+		// The committed checkpoint is owned by span controller and must be bound before the span
+		// can be scheduled to any node. Panic here to avoid silently creating dispatchers below
+		// the persisted checkpoint baseline.
+		log.Panic("committed checkpoint is not bound",
+			zap.Stringer("changefeedID", r.ChangefeedID),
+			zap.String("dispatcherID", r.ID.String()),
+			zap.String("operatorType", operatorType.String()),
+			zap.Int64("tableID", r.Span.TableID))
+	}
+	committedCheckpointTs := r.committedCheckpointTs.Load()
+	if committedCheckpointTs > startTs {
+		if state != nil && state.IsBlocked && !state.IsSyncPoint &&
+			(state.Stage == heartbeatpb.BlockStage_WAITING || state.Stage == heartbeatpb.BlockStage_WRITING) && state.BlockTs > 0 {
+			log.Panic("ddl barrier start ts is below maintainer committed checkpoint",
+				zap.Stringer("changefeedID", r.ChangefeedID),
+				zap.String("dispatcherID", r.ID.String()),
+				zap.String("operatorType", operatorType.String()),
+				zap.Uint64("checkpointTs", r.status.Load().CheckpointTs),
+				zap.Uint64("blockTs", state.BlockTs),
+				zap.Uint64("startTs", startTs),
+				zap.Uint64("committedCheckpointTs", committedCheckpointTs))
+		}
+		log.Debug("clamp dispatcher start ts to maintainer committed checkpoint",
+			zap.Stringer("changefeedID", r.ChangefeedID),
+			zap.String("dispatcherID", r.ID.String()),
+			zap.String("operatorType", operatorType.String()),
+			zap.Int64("tableID", r.Span.TableID),
+			zap.Uint64("originalStartTs", startTs),
+			zap.Uint64("committedCheckpointTs", committedCheckpointTs))
+		metrics.DispatcherStartTsClampCounter.WithLabelValues(
+			r.ChangefeedID.Keyspace(),
+			r.ChangefeedID.Name(),
+			common.StringMode(r.GetMode()),
+			operatorType.String(),
+		).Inc()
+		startTs = committedCheckpointTs
 	}
 	return messaging.NewSingleTargetMessage(server,
 		messaging.HeartbeatCollectorTopic,

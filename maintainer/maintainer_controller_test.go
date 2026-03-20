@@ -1592,6 +1592,104 @@ func TestFinishBootstrapSkipsStaleCreateOperatorForDroppedTable(t *testing.T) {
 	}
 }
 
+func TestCreateSpanReplicationRestoresBlockState(t *testing.T) {
+	testutil.SetUpTestServices()
+	tableTriggerEventDispatcherID := common.NewDispatcherID()
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
+		common.DDLSpanSchemaID,
+		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
+			ID:              tableTriggerEventDispatcherID.ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    1,
+		}, "node1", false)
+	refresher := replica.NewRegionCountRefresher(cfID, time.Minute)
+	controller := NewController(cfID, 1, &mockThreadPool{},
+		config.GetDefaultReplicaConfig(), ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false)
+
+	dispatcherID := common.NewDispatcherID()
+	tableSpan := common.TableIDToComparableSpan(common.DefaultKeyspaceID, 100)
+	replicaSet := controller.createSpanReplication(&heartbeatpb.BootstrapTableSpan{
+		ID:              dispatcherID.ToPB(),
+		SchemaID:        2,
+		Span:            &tableSpan,
+		ComponentStatus: heartbeatpb.ComponentState_Working,
+		CheckpointTs:    20,
+		Mode:            common.DefaultMode,
+		BlockState: &heartbeatpb.State{
+			IsBlocked:   true,
+			BlockTs:     21,
+			IsSyncPoint: false,
+			Stage:       heartbeatpb.BlockStage_WAITING,
+		},
+	}, "node1", false)
+
+	require.NotNil(t, replicaSet.GetBlockState())
+	require.Equal(t, uint64(21), replicaSet.GetBlockState().BlockTs)
+	require.False(t, replicaSet.GetBlockState().IsSyncPoint)
+	require.Equal(t, heartbeatpb.BlockStage_WAITING, replicaSet.GetBlockState().Stage)
+}
+
+func TestFinishBootstrapRestoreCurrentWorkingCreatePreservesSkipDMLAsStartTs(t *testing.T) {
+	testutil.SetUpTestServices()
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
+
+	tableTriggerEventDispatcherID := common.NewDispatcherID()
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
+		common.DDLSpanSchemaID,
+		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
+			ID:              tableTriggerEventDispatcherID.ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    1,
+		}, "node1", false)
+	refresher := replica.NewRegionCountRefresher(cfID, time.Minute)
+	controller := NewController(cfID, 1, &mockThreadPool{},
+		config.GetDefaultReplicaConfig(), ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false)
+
+	schemaStore := eventservice.NewMockSchemaStore()
+	schemaStore.SetTables([]commonEvent.Table{{
+		SchemaID:        2,
+		TableID:         200,
+		SchemaTableName: &commonEvent.SchemaTableName{},
+	}})
+	appcontext.SetService(appcontext.SchemaStore, schemaStore)
+
+	dispatcherID := common.NewDispatcherID()
+	tableSpan := common.TableIDToComparableSpan(common.DefaultKeyspaceID, 200)
+	_, err := controller.FinishBootstrap(map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{
+		"node1": {
+			ChangefeedID: cfID.ToPB(),
+			Operators: []*heartbeatpb.ScheduleDispatcherRequest{{
+				ChangefeedID: cfID.ToPB(),
+				Config: &heartbeatpb.DispatcherConfig{
+					DispatcherID:     dispatcherID.ToPB(),
+					SchemaID:         2,
+					Span:             &tableSpan,
+					StartTs:          10,
+					Mode:             common.DefaultMode,
+					SkipDMLAsStartTs: true,
+				},
+				ScheduleAction: heartbeatpb.ScheduleAction_Create,
+				OperatorType:   heartbeatpb.OperatorType_O_Add,
+			}},
+			CheckpointTs: 10,
+		},
+	}, false)
+	require.NoError(t, err)
+
+	replicaSet := controller.spanController.GetTaskByID(dispatcherID)
+	require.NotNil(t, replicaSet)
+	require.NotNil(t, replicaSet.GetBlockState())
+	require.Equal(t, uint64(11), replicaSet.GetBlockState().BlockTs)
+
+	msg := replicaSet.NewAddDispatcherMessage("node1", heartbeatpb.OperatorType_O_Add)
+	req := msg.Message[0].(*heartbeatpb.ScheduleDispatcherRequest)
+	require.Equal(t, uint64(10), req.Config.StartTs)
+	require.True(t, req.Config.SkipDMLAsStartTs)
+}
+
 func TestSplitTableWhenBootstrapFinished(t *testing.T) {
 	testutil.SetUpTestServices()
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
