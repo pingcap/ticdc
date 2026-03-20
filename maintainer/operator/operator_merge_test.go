@@ -16,8 +16,8 @@ package operator
 import (
 	"fmt"
 	"runtime"
-	"time"
 	"testing"
+	"time"
 
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/replica"
