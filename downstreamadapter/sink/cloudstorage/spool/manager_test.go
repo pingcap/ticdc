@@ -14,14 +14,18 @@
 package spool
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	promtestutil "github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -71,12 +75,16 @@ func TestSuppressAndResumeWake(t *testing.T) {
 	}, incWake)
 	require.NoError(t, err)
 	require.Equal(t, int64(1), atomic.LoadInt64(&wakeCount))
+	require.Equal(t, float64(1), promtestutil.ToFloat64(metrics.CloudStoragePendingPostEnqueueGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.ID().String())))
+	require.Equal(t, float64(1), promtestutil.ToFloat64(metrics.CloudStoragePostEnqueuePausedGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.ID().String())))
 
 	manager.Release(entry1)
 	require.Equal(t, int64(1), atomic.LoadInt64(&wakeCount))
 
 	manager.Release(entry2)
 	require.Equal(t, int64(2), atomic.LoadInt64(&wakeCount))
+	require.Equal(t, float64(0), promtestutil.ToFloat64(metrics.CloudStoragePendingPostEnqueueGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.ID().String())))
+	require.Equal(t, float64(0), promtestutil.ToFloat64(metrics.CloudStoragePostEnqueuePausedGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.ID().String())))
 }
 
 func TestSpillAndReadBack(t *testing.T) {
@@ -445,4 +453,80 @@ func TestDiscardRunsCallbacksOnce(t *testing.T) {
 	require.False(t, entry.InMemory())
 	require.False(t, entry.IsSpilled())
 	require.Zero(t, entry.FileBytes())
+}
+
+func TestWaitForDiskQuotaReturnsAfterRelease(t *testing.T) {
+	t.Parallel()
+
+	changefeedID := commonType.NewChangefeedID4Test("test", "spool")
+	manager, err := New(
+		changefeedID,
+		WithQuotaBytes(40),
+		WithRootDir(t.TempDir()),
+		WithSegmentBytes(1<<20),
+		WithMemoryRatio(0.01),
+		WithHighWatermarkRatio(0.95),
+		WithLowWatermarkRatio(0.7),
+	)
+	require.NoError(t, err)
+	defer manager.Close()
+
+	entry, err := manager.Enqueue([]*common.Message{newTestMessage("first-entry", 1)}, nil)
+	require.NoError(t, err)
+	require.True(t, entry.IsSpilled())
+
+	waitDone := make(chan error, 1)
+	go func() {
+		waitDone <- manager.WaitForDiskQuota(context.Background(), []*common.Message{newTestMessage("second-entry", 1)})
+	}()
+
+	select {
+	case err := <-waitDone:
+		t.Fatalf("wait returned too early: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	manager.Release(entry)
+
+	select {
+	case err := <-waitDone:
+		require.NoError(t, err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("wait for disk quota did not return after release")
+	}
+}
+
+func TestSpoolMetricsAndCleanup(t *testing.T) {
+	changefeedID := commonType.NewChangefeedID4Test("test", "spool-metrics")
+	manager, err := New(
+		changefeedID,
+		WithQuotaBytes(64),
+		WithRootDir(t.TempDir()),
+		WithSegmentBytes(40),
+		WithMemoryRatio(0.01),
+	)
+	require.NoError(t, err)
+
+	entry, err := manager.Enqueue([]*common.Message{newTestMessage("first-entry", 1)}, nil)
+	require.NoError(t, err)
+	require.True(t, entry.IsSpilled())
+	require.Equal(t, float64(1), promtestutil.ToFloat64(metrics.CloudStorageSpillCountCounter.WithLabelValues(changefeedID.Keyspace(), changefeedID.ID().String())))
+	require.Equal(t, float64(1), promtestutil.ToFloat64(metrics.CloudStorageSpoolSegmentGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.ID().String())))
+	require.Greater(t, promtestutil.ToFloat64(metrics.CloudStorageSpillBytesCounter.WithLabelValues(changefeedID.Keyspace(), changefeedID.ID().String())), float64(0))
+
+	msgs, _, err := manager.Load(entry)
+	require.NoError(t, err)
+	require.Len(t, msgs, 1)
+	require.Equal(t, float64(1), promtestutil.ToFloat64(metrics.CloudStorageLoadCountCounter.WithLabelValues(changefeedID.Keyspace(), changefeedID.ID().String())))
+	require.Greater(t, promtestutil.ToFloat64(metrics.CloudStorageLoadBytesCounter.WithLabelValues(changefeedID.Keyspace(), changefeedID.ID().String())), float64(0))
+
+	manager.Close()
+
+	require.False(t, metrics.CloudStorageSpillCountCounter.DeleteLabelValues(changefeedID.Keyspace(), changefeedID.ID().String()))
+	require.False(t, metrics.CloudStorageSpillBytesCounter.DeleteLabelValues(changefeedID.Keyspace(), changefeedID.ID().String()))
+	require.False(t, metrics.CloudStorageLoadCountCounter.DeleteLabelValues(changefeedID.Keyspace(), changefeedID.ID().String()))
+	require.False(t, metrics.CloudStorageLoadBytesCounter.DeleteLabelValues(changefeedID.Keyspace(), changefeedID.ID().String()))
+	require.False(t, metrics.CloudStorageSpoolSegmentGauge.DeleteLabelValues(changefeedID.Keyspace(), changefeedID.ID().String()))
+	require.False(t, metrics.CloudStoragePendingPostEnqueueGauge.DeleteLabelValues(changefeedID.Keyspace(), changefeedID.ID().String()))
+	require.False(t, metrics.CloudStoragePostEnqueuePausedGauge.DeleteLabelValues(changefeedID.Keyspace(), changefeedID.ID().String()))
 }

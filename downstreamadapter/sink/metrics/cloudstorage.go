@@ -99,6 +99,104 @@ var (
 		Name:      "cloud_storage_pending_post_enqueue_total",
 		Help:      "Total number of PostEnqueue callbacks moved into the pending queue in cloud storage sink",
 	}, []string{"namespace", "changefeed"})
+
+	CloudStoragePendingPostEnqueueGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: namespace,
+		Subsystem: subsystem,
+		Name:      "cloud_storage_pending_post_enqueue",
+		Help:      "Current number of PostEnqueue callbacks waiting in cloud storage spool",
+	}, []string{"namespace", "changefeed"})
+
+	CloudStoragePostEnqueuePausedGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: namespace,
+		Subsystem: subsystem,
+		Name:      "cloud_storage_post_enqueue_paused",
+		Help:      "Whether cloud storage spool is currently pausing PostEnqueue callbacks",
+	}, []string{"namespace", "changefeed"})
+
+	CloudStorageSpillCountCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: namespace,
+		Subsystem: subsystem,
+		Name:      "cloud_storage_spill_total",
+		Help:      "Total number of encoded batches spilled into cloud storage spool files",
+	}, []string{"namespace", "changefeed"})
+
+	CloudStorageSpillBytesCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: namespace,
+		Subsystem: subsystem,
+		Name:      "cloud_storage_spill_bytes_total",
+		Help:      "Total bytes spilled into cloud storage spool files",
+	}, []string{"namespace", "changefeed"})
+
+	CloudStorageLoadCountCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: namespace,
+		Subsystem: subsystem,
+		Name:      "cloud_storage_load_total",
+		Help:      "Total number of encoded batches loaded from cloud storage spool",
+	}, []string{"namespace", "changefeed"})
+
+	CloudStorageLoadBytesCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: namespace,
+		Subsystem: subsystem,
+		Name:      "cloud_storage_load_bytes_total",
+		Help:      "Total bytes loaded from cloud storage spool",
+	}, []string{"namespace", "changefeed"})
+
+	CloudStorageRotateCountCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: namespace,
+		Subsystem: subsystem,
+		Name:      "cloud_storage_rotate_total",
+		Help:      "Total number of local spool segment rotations in cloud storage sink",
+	}, []string{"namespace", "changefeed"})
+
+	CloudStorageSpoolSegmentGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: namespace,
+		Subsystem: subsystem,
+		Name:      "cloud_storage_spool_segments",
+		Help:      "Current number of live cloud storage spool segments",
+	}, []string{"namespace", "changefeed"})
+
+	CloudStorageSpoolErrorCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: namespace,
+		Subsystem: subsystem,
+		Name:      "cloud_storage_spool_error_total",
+		Help:      "Total number of cloud storage spool errors by stage",
+	}, []string{"namespace", "changefeed", "stage"})
+
+	CloudStoragePendingTablesGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: namespace,
+		Subsystem: subsystem,
+		Name:      "cloud_storage_pending_tables",
+		Help:      "Current number of tables buffered in one cloud storage writer shard",
+	}, []string{"namespace", "changefeed", "writer"})
+
+	CloudStoragePendingEntriesGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: namespace,
+		Subsystem: subsystem,
+		Name:      "cloud_storage_pending_entries",
+		Help:      "Current number of buffered entries in one cloud storage writer shard",
+	}, []string{"namespace", "changefeed", "writer"})
+
+	CloudStoragePendingBytesGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: namespace,
+		Subsystem: subsystem,
+		Name:      "cloud_storage_pending_bytes",
+		Help:      "Current buffered bytes in one cloud storage writer shard before flush",
+	}, []string{"namespace", "changefeed", "writer"})
+
+	CloudStorageFlushCountCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: namespace,
+		Subsystem: subsystem,
+		Name:      "cloud_storage_flush_total",
+		Help:      "Total number of flush batches emitted by one cloud storage writer shard",
+	}, []string{"namespace", "changefeed", "writer", "reason"})
+
+	CloudStorageWriterErrorCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: namespace,
+		Subsystem: subsystem,
+		Name:      "cloud_storage_writer_error_total",
+		Help:      "Total number of cloud storage writer errors by stage",
+	}, []string{"namespace", "changefeed", "writer", "stage"})
 )
 
 // InitCloudStorageMetrics registers all metrics in this file.
@@ -113,4 +211,18 @@ func InitCloudStorageMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(CloudStorageSpoolDiskBytesGauge)
 	registry.MustRegister(CloudStorageSpoolTotalBytesGauge)
 	registry.MustRegister(CloudStoragePendingPostEnqueueCounter)
+	registry.MustRegister(CloudStoragePendingPostEnqueueGauge)
+	registry.MustRegister(CloudStoragePostEnqueuePausedGauge)
+	registry.MustRegister(CloudStorageSpillCountCounter)
+	registry.MustRegister(CloudStorageSpillBytesCounter)
+	registry.MustRegister(CloudStorageLoadCountCounter)
+	registry.MustRegister(CloudStorageLoadBytesCounter)
+	registry.MustRegister(CloudStorageRotateCountCounter)
+	registry.MustRegister(CloudStorageSpoolSegmentGauge)
+	registry.MustRegister(CloudStorageSpoolErrorCounter)
+	registry.MustRegister(CloudStoragePendingTablesGauge)
+	registry.MustRegister(CloudStoragePendingEntriesGauge)
+	registry.MustRegister(CloudStoragePendingBytesGauge)
+	registry.MustRegister(CloudStorageFlushCountCounter)
+	registry.MustRegister(CloudStorageWriterErrorCounter)
 }

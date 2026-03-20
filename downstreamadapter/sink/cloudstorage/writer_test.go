@@ -20,12 +20,14 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/pingcap/ticdc/downstreamadapter/sink/cloudstorage/spool"
+	sinkmetrics "github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
 	"github.com/pingcap/ticdc/pkg/clock"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
@@ -36,11 +38,13 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/util"
+	brstorage "github.com/pingcap/tidb/br/pkg/storage"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/parser/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
+	promtestutil "github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -385,8 +389,6 @@ func TestWriterPostEnqueueAfterConsume(t *testing.T) {
 }
 
 func TestWriterStoresPendingMessagesInSpoolBeforeFlush(t *testing.T) {
-	t.Parallel()
-
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -411,7 +413,9 @@ func TestWriterStoresPendingMessagesInSpoolBeforeFlush(t *testing.T) {
 	replicaConfig := config.GetDefaultReplicaConfig()
 	replicaConfig.Sink.DateSeparator = util.AddressOf(config.DateSeparatorNone.String())
 	replicaConfig.Sink.CloudStorageConfig = &config.CloudStorageConfig{
-		SpoolDiskQuota: util.AddressOf(int64(1)),
+		// Keep the quota larger than this encoded batch so the controller still
+		// spills it to local spool files instead of taking the oversized in-memory fast path.
+		SpoolDiskQuota: util.AddressOf(int64(32)),
 	}
 	err = cfg.Apply(context.Background(), sinkURI, replicaConfig.Sink, true)
 	require.NoError(t, err)
@@ -478,8 +482,6 @@ func TestWriterStoresPendingMessagesInSpoolBeforeFlush(t *testing.T) {
 }
 
 func TestIgnoreTableTaskDoesNotLoadSpilledPayload(t *testing.T) {
-	t.Parallel()
-
 	ctx := context.Background()
 	dataDir := t.TempDir()
 
@@ -537,4 +539,94 @@ func TestWriterRunExitAfterContextCancel(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("writer.run did not exit after context cancel")
 	}
+}
+
+type failOnIndexStorage struct {
+	brstorage.ExternalStorage
+}
+
+func (s *failOnIndexStorage) WriteFile(ctx context.Context, name string, data []byte) error {
+	if strings.HasSuffix(name, ".index") {
+		return errors.New("index write failed")
+	}
+	return s.ExternalStorage.WriteFile(ctx, name, data)
+}
+
+func TestWriterIndexWriteErrorMetricAndCleanup(t *testing.T) {
+	ctx := context.Background()
+	parentDir := t.TempDir()
+	uri := fmt.Sprintf("file:///%s?flush-interval=2s", parentDir)
+	baseStorage, err := util.GetExternalStorageWithDefaultTimeout(ctx, uri)
+	require.NoError(t, err)
+	storage := &failOnIndexStorage{ExternalStorage: baseStorage}
+
+	sinkURI, err := url.Parse(uri)
+	require.NoError(t, err)
+	cfg := cloudstorage.NewConfig()
+	replicaConfig := config.GetDefaultReplicaConfig()
+	replicaConfig.Sink.DateSeparator = util.AddressOf(config.DateSeparatorNone.String())
+	err = cfg.Apply(context.TODO(), sinkURI, replicaConfig.Sink, true)
+	require.NoError(t, err)
+	cfg.FileIndexWidth = 6
+	cfg.FlushInterval = time.Hour
+
+	changefeedID := commonType.NewChangefeedID4Test("test", "writer-error-metric")
+	statistics := metrics.NewStatistics(changefeedID, t.Name())
+	pdlock := pdutil.NewMonotonicClock(clock.New())
+	appcontext.SetService(appcontext.DefaultPDClock, pdlock)
+	mockPDClock := pdutil.NewClock4Test()
+	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+	spoolBuffer := newTestSpool(t, changefeedID, cfg)
+	d := newWriter(1, changefeedID, storage, cfg, ".json", statistics, spoolBuffer)
+
+	tableInfo := commonType.WrapTableInfo("test", &model.TableInfo{
+		ID:   100,
+		Name: ast.NewCIStr("table1"),
+		Columns: []*model.ColumnInfo{
+			{ID: 1, Name: ast.NewCIStr("c1"), FieldType: *types.NewFieldType(mysql.TypeLong)},
+		},
+	})
+	dispatcherID := commonType.NewDispatcherID()
+	task := newDMLTask(
+		cloudstorage.VersionedTableName{
+			TableNameWithPhysicTableID: commonType.TableName{
+				Schema:  "test",
+				Table:   "table1",
+				TableID: 100,
+			},
+			TableInfoVersion: 99,
+			DispatcherID:     dispatcherID,
+		},
+		&commonEvent.DMLEvent{
+			PhysicalTableID: 100,
+			TableInfo:       tableInfo,
+		},
+	)
+	msg := common.NewMsg(nil, []byte(`{"id":1}`))
+	msg.SetRowsCount(1)
+	task.encodedMsgs = []*common.Message{msg}
+	require.NoError(t, d.enqueueTask(ctx, task))
+	require.NoError(t, d.enqueueTask(ctx, newFlushTask(dispatcherID, 100)))
+
+	indexWriteMetric := sinkmetrics.CloudStorageWriterErrorCounter.WithLabelValues(
+		changefeedID.Keyspace(),
+		changefeedID.ID().String(),
+		"1",
+		"index_write",
+	)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- d.run(ctx)
+	}()
+
+	err = <-done
+	require.ErrorContains(t, err, "index write failed")
+	require.Equal(t, float64(1), promtestutil.ToFloat64(indexWriteMetric))
+	require.False(t, sinkmetrics.CloudStorageWriterErrorCounter.DeleteLabelValues(
+		changefeedID.Keyspace(),
+		changefeedID.ID().String(),
+		"1",
+		"index_write",
+	))
 }

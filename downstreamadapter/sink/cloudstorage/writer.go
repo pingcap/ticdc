@@ -20,7 +20,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/cloudstorage/spool"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
@@ -28,7 +27,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	pmetrics "github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
-	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
@@ -36,14 +34,14 @@ import (
 )
 
 type writer struct {
-	shardID      int
-	changeFeedID common.ChangeFeedID
-	storage      storage.ExternalStorage
-	config       *cloudstorage.Config
-	spool        *spool.Spool
+	shardID       int
+	changeFeedID  common.ChangeFeedID
+	storage       storage.ExternalStorage
+	config        *cloudstorage.Config
+	spool         *spool.Spool
+	bufferManager *bufferManager
 
 	toBeFlushedCh chan writerTask
-	inputCh       *chann.DrainableChann[*task]
 
 	statistics        *pmetrics.Statistics
 	filePathGenerator *cloudstorage.FilePathGenerator
@@ -53,6 +51,7 @@ type writer struct {
 	metricWriteDuration    prometheus.Observer
 	metricFlushDuration    prometheus.Observer
 	metricsWorkerBusyRatio prometheus.Counter
+	writerLabel            string
 }
 
 // writerTask is internal and never crosses component boundary.
@@ -71,14 +70,14 @@ func newWriter(
 	statistics *pmetrics.Statistics,
 	spoolBuffer *spool.Spool,
 ) *writer {
-	return &writer{
+	flushCh := make(chan writerTask, 64)
+	d := &writer{
 		shardID:       id,
 		changeFeedID:  changefeedID,
 		storage:       storage,
 		config:        config,
 		spool:         spoolBuffer,
-		inputCh:       chann.NewAutoDrainChann[*task](),
-		toBeFlushedCh: make(chan writerTask, 64),
+		toBeFlushedCh: flushCh,
 		statistics:    statistics,
 		filePathGenerator: cloudstorage.NewFilePathGenerator(
 			changefeedID, config, storage, extension,
@@ -93,16 +92,26 @@ func newWriter(
 			WithLabelValues(changefeedID.Keyspace(), changefeedID.ID().String()),
 		metricsWorkerBusyRatio: metrics.CloudStorageWorkerBusyRatio.
 			WithLabelValues(changefeedID.Keyspace(), changefeedID.ID().String(), strconv.Itoa(id)),
+		writerLabel: strconv.Itoa(id),
 	}
+	d.bufferManager = newBufferManager(
+		d.shardID,
+		d.changeFeedID,
+		d.config,
+		d.spool,
+		d.toBeFlushedCh,
+	)
+	return d
 }
 
 func (d *writer) run(ctx context.Context) error {
+	defer d.deleteMetrics()
 	g, ctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
 		return d.flushMessages(ctx)
 	})
 	g.Go(func() error {
-		return d.genAndDispatchTask(ctx)
+		return d.bufferManager.run(ctx)
 	})
 	return g.Wait()
 }
@@ -143,6 +152,7 @@ func (d *writer) flushMessages(ctx context.Context) error {
 
 				hasNewerSchemaVersion, err := d.filePathGenerator.CheckOrWriteSchema(ctx, table, singleTask.tableInfo)
 				if err != nil {
+					d.recordStageError("schema")
 					log.Error("failed to write schema file to external storage",
 						zap.Int("shardID", d.shardID),
 						zap.String("keyspace", d.changeFeedID.Keyspace()),
@@ -165,6 +175,7 @@ func (d *writer) flushMessages(ctx context.Context) error {
 				date := d.filePathGenerator.GenerateDateStr()
 				dataFilePath, err := d.filePathGenerator.GenerateDataFilePath(ctx, table, date)
 				if err != nil {
+					d.recordStageError("data_path")
 					log.Error("failed to generate data file path",
 						zap.Int("shardID", d.shardID),
 						zap.String("keyspace", d.changeFeedID.Keyspace()),
@@ -174,6 +185,7 @@ func (d *writer) flushMessages(ctx context.Context) error {
 				}
 				indexFilePath, err := d.filePathGenerator.GenerateIndexFilePath(table, date)
 				if err != nil {
+					d.recordStageError("index_path")
 					log.Error("failed to generate index file path",
 						zap.Int("shardID", d.shardID),
 						zap.String("keyspace", d.changeFeedID.Keyspace()),
@@ -212,6 +224,7 @@ func (d *writer) writeIndexFile(ctx context.Context, path, content string) error
 	err := d.storage.WriteFile(ctx, path, []byte(content))
 	d.metricFlushDuration.Observe(time.Since(start).Seconds())
 	if err != nil {
+		d.recordStageError("index_write")
 		return errors.Trace(err)
 	}
 	return nil
@@ -240,6 +253,7 @@ func (d *writer) appendEntryToBuffer(
 ) ([]func(), error) {
 	msgs, callbacks, err := d.spool.Load(entry)
 	if err != nil {
+		d.recordStageError("load")
 		return nil, err
 	}
 
@@ -280,6 +294,7 @@ func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath 
 		if d.config.FlushConcurrency <= 1 {
 			err := d.storage.WriteFile(ctx, dataFilePath, buf.Bytes())
 			if err != nil {
+				d.recordStageError("data_write")
 				return 0, 0, errors.Trace(err)
 			}
 			d.metricWriteDuration.Observe(time.Since(start).Seconds())
@@ -290,13 +305,16 @@ func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath 
 			Concurrency: d.config.FlushConcurrency,
 		})
 		if inErr != nil {
+			d.recordStageError("data_write")
 			return 0, 0, errors.Trace(inErr)
 		}
 
 		if _, inErr = writer.Write(ctx, buf.Bytes()); inErr != nil {
+			d.recordStageError("data_write")
 			return 0, 0, errors.Trace(inErr)
 		}
 		if inErr = writer.Close(ctx); inErr != nil {
+			d.recordStageError("data_write")
 			log.Error("failed to close writer",
 				zap.Error(inErr),
 				zap.Int("shardID", d.shardID),
@@ -330,154 +348,25 @@ func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath 
 	return nil
 }
 
-// genAndDispatchTask builds table batches and emits flush tasks.
-// Invariants:
-//  1. DDL marker will flush current batch first, then emit marker task.
-//  2. Context cancellation stops batching immediately.
-//  3. Size-triggered flush only flushes the target table shard batch.
-func (d *writer) genAndDispatchTask(ctx context.Context) error {
-	batchedTask := newBatchedTask()
-	ticker := time.NewTicker(d.config.FlushInterval)
-	defer ticker.Stop()
-	defer close(d.toBeFlushedCh)
-
-	for {
-		failpoint.Inject("passTickerOnce", func() {
-			<-ticker.C
-		})
-
-		select {
-		case <-ctx.Done():
-			return errors.Trace(context.Cause(ctx))
-		case <-ticker.C:
-			if len(batchedTask.batch) == 0 {
-				continue
-			}
-			select {
-			case <-ctx.Done():
-				return errors.Trace(context.Cause(ctx))
-			case d.toBeFlushedCh <- writerTask{batch: batchedTask}:
-				log.Debug("flush task is emitted successfully when flush interval exceeds",
-					zap.Int("tablesLength", len(batchedTask.batch)))
-				batchedTask = newBatchedTask()
-			default:
-			}
-		case task, ok := <-d.inputCh.Out():
-			// todo: send those tasks to the to be flushed, is it necessary,
-			// will they be flushed ?
-			if !ok {
-				if len(batchedTask.batch) == 0 {
-					return nil
-				}
-				select {
-				case <-ctx.Done():
-					return errors.Trace(context.Cause(ctx))
-				case d.toBeFlushedCh <- writerTask{batch: batchedTask}:
-					return nil
-				}
-			}
-
-			if task.isFlushTask() {
-				dispatcherBatch := batchedTask.detachTaskByDispatcher(task.dispatcherID)
-				if len(dispatcherBatch.batch) > 0 {
-					select {
-					case <-ctx.Done():
-						return errors.Trace(context.Cause(ctx))
-					case d.toBeFlushedCh <- writerTask{batch: dispatcherBatch}:
-					}
-				}
-				select {
-				case <-ctx.Done():
-					return errors.Trace(context.Cause(ctx))
-				case d.toBeFlushedCh <- writerTask{marker: task.marker}:
-				}
-				continue
-			}
-			if len(task.encodedMsgs) == 0 {
-				task.event.PostEnqueue()
-				continue
-			}
-
-			spoolEntry, err := d.spool.Enqueue(task.encodedMsgs, task.event.PostEnqueue)
-			if err != nil {
-				return err
-			}
-			batchedTask.handleSingleTableEvent(task, spoolEntry)
-			table := task.versionedTable
-			if batchedTask.batch[table].size >= uint64(d.config.FileSize) {
-				taskByTable := batchedTask.detachTaskByTable(table)
-				select {
-				case <-ctx.Done():
-					return errors.Trace(context.Cause(ctx))
-				case d.toBeFlushedCh <- writerTask{batch: taskByTable}:
-					log.Debug("flush task is emitted successfully when file size exceeds",
-						zap.Any("table", table),
-						zap.Int("eventsLength", len(taskByTable.batch[table].entries)))
-				}
-			}
-		}
-	}
-}
-
 func (d *writer) enqueueTask(ctx context.Context, t *task) error {
-	select {
-	case <-ctx.Done():
-		return errors.Trace(context.Cause(ctx))
-	case d.inputCh.In() <- t:
-		return nil
-	}
+	return d.bufferManager.enqueueTask(ctx, t)
 }
 
-type batchedTask struct {
-	batch map[cloudstorage.VersionedTableName]*singleTableTask
+func (d *writer) recordStageError(stage string) {
+	metrics.CloudStorageWriterErrorCounter.WithLabelValues(
+		d.changeFeedID.Keyspace(),
+		d.changeFeedID.ID().String(),
+		d.writerLabel,
+		stage,
+	).Inc()
 }
 
-type singleTableTask struct {
-	size      uint64
-	tableInfo *common.TableInfo
-	entries   []*spool.Entry
-}
-
-func newBatchedTask() batchedTask {
-	return batchedTask{
-		batch: make(map[cloudstorage.VersionedTableName]*singleTableTask),
-	}
-}
-
-func (t *batchedTask) handleSingleTableEvent(event *task, entry *spool.Entry) {
-	table := event.versionedTable
-	if _, ok := t.batch[table]; !ok {
-		t.batch[table] = &singleTableTask{
-			size:      0,
-			tableInfo: event.event.TableInfo,
-		}
-	}
-
-	tableTask := t.batch[table]
-	tableTask.size += entry.FileBytes()
-	tableTask.entries = append(tableTask.entries, entry)
-}
-
-func (t *batchedTask) detachTaskByTable(table cloudstorage.VersionedTableName) batchedTask {
-	tableTask := t.batch[table]
-	if tableTask == nil {
-		log.Panic("table not found in dml task", zap.Any("table", table), zap.Any("task", t))
-	}
-	delete(t.batch, table)
-
-	return batchedTask{
-		batch: map[cloudstorage.VersionedTableName]*singleTableTask{table: tableTask},
-	}
-}
-
-func (t *batchedTask) detachTaskByDispatcher(dispatcherID common.DispatcherID) batchedTask {
-	batchByDispatcher := newBatchedTask()
-	for table, tableTask := range t.batch {
-		if table.DispatcherID != dispatcherID {
-			continue
-		}
-		batchByDispatcher.batch[table] = tableTask
-		delete(t.batch, table)
-	}
-	return batchByDispatcher
+func (d *writer) deleteMetrics() {
+	metrics.CloudStorageWorkerBusyRatio.DeleteLabelValues(d.changeFeedID.Keyspace(), d.changeFeedID.ID().String(), d.writerLabel)
+	metrics.CloudStorageWriterErrorCounter.DeleteLabelValues(d.changeFeedID.Keyspace(), d.changeFeedID.ID().String(), d.writerLabel, "schema")
+	metrics.CloudStorageWriterErrorCounter.DeleteLabelValues(d.changeFeedID.Keyspace(), d.changeFeedID.ID().String(), d.writerLabel, "data_path")
+	metrics.CloudStorageWriterErrorCounter.DeleteLabelValues(d.changeFeedID.Keyspace(), d.changeFeedID.ID().String(), d.writerLabel, "index_path")
+	metrics.CloudStorageWriterErrorCounter.DeleteLabelValues(d.changeFeedID.Keyspace(), d.changeFeedID.ID().String(), d.writerLabel, "load")
+	metrics.CloudStorageWriterErrorCounter.DeleteLabelValues(d.changeFeedID.Keyspace(), d.changeFeedID.ID().String(), d.writerLabel, "data_write")
+	metrics.CloudStorageWriterErrorCounter.DeleteLabelValues(d.changeFeedID.Keyspace(), d.changeFeedID.ID().String(), d.writerLabel, "index_write")
 }

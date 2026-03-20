@@ -86,6 +86,7 @@ func (d *dmlWriters) run(ctx context.Context) error {
 	if d.spool != nil {
 		defer d.spool.Close()
 	}
+	defer d.deleteMetrics()
 	g, ctx := errgroup.WithContext(ctx)
 
 	g.Go(func() error {
@@ -120,6 +121,14 @@ func (d *dmlWriters) run(ctx context.Context) error {
 		})
 	}
 	return g.Wait()
+}
+
+func (d *dmlWriters) deleteMetrics() {
+	sinkmetrics.CloudStorageWriteBytesGauge.DeleteLabelValues(d.changefeedID.Keyspace(), d.changefeedID.ID().String())
+	sinkmetrics.CloudStorageFileCountGauge.DeleteLabelValues(d.changefeedID.Keyspace(), d.changefeedID.ID().String())
+	sinkmetrics.CloudStorageWriteDurationHistogram.DeleteLabelValues(d.changefeedID.Keyspace(), d.changefeedID.ID().String())
+	sinkmetrics.CloudStorageFlushDurationHistogram.DeleteLabelValues(d.changefeedID.Keyspace(), d.changefeedID.ID().String())
+	sinkmetrics.CloudStorageDDLFlushDurationHistogram.DeleteLabelValues(d.changefeedID.Keyspace(), d.changefeedID.ID().String())
 }
 
 func (d *dmlWriters) addTasks(ctx context.Context) error {

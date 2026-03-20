@@ -15,6 +15,8 @@ package spool
 
 // budget stores the current queued byte counts and the byte limits derived from spool config.
 type budget struct {
+	// diskQuotaBytes is the largest byte count allowed in local spool files.
+	diskQuotaBytes int64
 	// memoryQuotaBytes is the largest byte count we still keep in memory.
 	// If adding a new entry would cross this value, spool writes that entry
 	// to local spool files instead of keeping it in memory.
@@ -36,6 +38,7 @@ type budget struct {
 
 func newBudget(options *options) *budget {
 	return &budget{
+		diskQuotaBytes:     options.quotaBytes,
 		memoryQuotaBytes:   int64(float64(options.quotaBytes) * options.memoryRatio),
 		highWatermarkBytes: int64(float64(options.quotaBytes) * options.highWatermarkRatio),
 		lowWatermarkBytes:  int64(float64(options.quotaBytes) * options.lowWatermarkRatio),
@@ -47,6 +50,14 @@ func newBudget(options *options) *budget {
 // new writes.
 func (b *budget) shouldSpill(entryBytes int64) bool {
 	return b.memoryBytes+entryBytes > b.memoryQuotaBytes
+}
+
+func (b *budget) exceedsDiskQuota(entryBytes int64) bool {
+	return entryBytes > b.diskQuotaBytes
+}
+
+func (b *budget) wouldExceedDiskQuota(entryBytes int64) bool {
+	return b.diskBytes+entryBytes > b.diskQuotaBytes
 }
 
 // reserve adds a newly accepted entry to the current byte counters.

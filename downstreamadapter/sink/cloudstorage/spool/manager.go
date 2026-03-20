@@ -14,6 +14,7 @@
 package spool
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -51,6 +52,12 @@ const (
 	// Resume pending PostEnqueue callbacks only after usage has dropped enough
 	// to avoid bouncing immediately back into the paused state.
 	defaultLowWatermarkRatio = 0.6
+)
+
+const (
+	spoolErrorStageLoad   = "load"
+	spoolErrorStageWrite  = "write"
+	spoolErrorStageRotate = "rotate"
 )
 
 type options struct {
@@ -244,6 +251,11 @@ type Entry struct {
 	fileBytes uint64
 }
 
+type entrySize struct {
+	accountingBytes int64
+	fileBytes       uint64
+}
+
 // FileBytes returns the payload bytes counted towards writer task sizing.
 func (e *Entry) FileBytes() uint64 {
 	if e == nil {
@@ -387,24 +399,101 @@ func isSegmentFile(entry os.DirEntry) bool {
 	return err == nil
 }
 
+func (s *Spool) ShouldSpill(msgs []*common.Message) bool {
+	size := calculateEntrySize(msgs)
+	if size.accountingBytes == 0 {
+		return false
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.quota.shouldSpill(size.accountingBytes)
+}
+
+func (s *Spool) ExceedsDiskQuota(msgs []*common.Message) bool {
+	size := calculateEntrySize(msgs)
+	if size.accountingBytes == 0 {
+		return false
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.quota.exceedsDiskQuota(size.accountingBytes)
+}
+
+func (s *Spool) WouldExceedDiskQuota(msgs []*common.Message) bool {
+	size := calculateEntrySize(msgs)
+	if size.accountingBytes == 0 {
+		return false
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.quota.wouldExceedDiskQuota(size.accountingBytes)
+}
+
+// WaitForDiskQuota waits until the next spilled entry of the same size would
+// fit into the configured local spool disk budget.
+func (s *Spool) WaitForDiskQuota(ctx context.Context, msgs []*common.Message) error {
+	size := calculateEntrySize(msgs)
+	if size.accountingBytes == 0 {
+		return nil
+	}
+
+	for {
+		s.mu.Lock()
+		if s.closed {
+			s.mu.Unlock()
+			return errors.ErrInternalCheckFailed.GenWithStackByArgs("spool is closed")
+		}
+		if !s.quota.wouldExceedDiskQuota(size.accountingBytes) {
+			s.mu.Unlock()
+			return nil
+		}
+		waitCh := s.quota.diskQuotaWaitCh()
+		s.mu.Unlock()
+
+		select {
+		case <-ctx.Done():
+			return errors.Trace(context.Cause(ctx))
+		case <-waitCh:
+		}
+	}
+}
+
 // Enqueue appends encoded messages to spool.
 func (s *Spool) Enqueue(
 	msgs []*common.Message,
 	postEnqueue func(),
 ) (*Entry, error) {
-	if len(msgs) == 0 {
+	return s.enqueue(msgs, postEnqueue, false)
+}
+
+// EnqueueInMemory keeps the accepted entry in memory even if the usual memory
+// budget would prefer to spill it to disk. The caller uses this for one-off
+// oversized batches that should be flushed immediately instead of waiting on
+// disk quota.
+func (s *Spool) EnqueueInMemory(
+	msgs []*common.Message,
+	postEnqueue func(),
+) (*Entry, error) {
+	return s.enqueue(msgs, postEnqueue, true)
+}
+
+func (s *Spool) enqueue(
+	msgs []*common.Message,
+	postEnqueue func(),
+	forceInMemory bool,
+) (*Entry, error) {
+	size := calculateEntrySize(msgs)
+	if size.accountingBytes == 0 {
 		return &Entry{}, nil
 	}
 
 	entry := &Entry{
-		accountingBytes: serializedMessageCountBytes,
+		accountingBytes: size.accountingBytes,
+		fileBytes:       size.fileBytes,
 	}
-	for _, msg := range msgs {
-		entry.accountingBytes += int64(serializedMessageHeaderBytes + len(msg.Key) + len(msg.Value))
-		// todo: why only counter the value part ?
-		entry.fileBytes += uint64(len(msg.Value))
-	}
-
 	var callbacksToRun []func()
 
 	s.mu.Lock()
@@ -421,7 +510,7 @@ func (s *Spool) Enqueue(
 		return nil, errors.ErrInternalCheckFailed.GenWithStackByArgs("spool is closed")
 	}
 
-	shouldSpill := s.quota.shouldSpill(entry.accountingBytes)
+	shouldSpill := !forceInMemory && s.quota.shouldSpill(entry.accountingBytes)
 	if shouldSpill {
 		blob := serializeMessages(msgs)
 		location, err := s.appendBlobLocked(blob)
@@ -435,7 +524,6 @@ func (s *Spool) Enqueue(
 	}
 	entry.callbacks = detachCallbacks(msgs)
 	callbacksToRun = s.quota.reserve(entry.accountingBytes, shouldSpill, postEnqueue)
-
 	return entry, nil
 }
 
@@ -489,12 +577,21 @@ func (s *Spool) Load(entry *Entry) ([]*common.Message, []func(), error) {
 
 	buf := make([]byte, length)
 	if _, err := file.ReadAt(buf, offset); err != nil {
+		s.mu.Lock()
+		s.quota.recordStageError(spoolErrorStageLoad)
+		s.mu.Unlock()
 		return nil, nil, errors.WrapError(errors.ErrUnexpected, err, "read spool segment file")
 	}
 	msgs, err := deserializeMessages(buf)
 	if err != nil {
+		s.mu.Lock()
+		s.quota.recordStageError(spoolErrorStageLoad)
+		s.mu.Unlock()
 		return nil, nil, err
 	}
+	s.mu.Lock()
+	s.quota.recordLoad(length)
+	s.mu.Unlock()
 	return msgs, entry.callbacks, nil
 }
 
@@ -528,6 +625,7 @@ func (s *Spool) Release(entry *Entry) {
 					)
 				}
 				delete(s.segments, spoolSegment.id)
+				s.quota.setSegmentCount(len(s.segments))
 			}
 		}
 	}
@@ -587,9 +685,11 @@ func (s *Spool) appendBlobLocked(blob []byte) (*segmentLocation, error) {
 	offset := spoolSegment.size
 	n, err := spoolSegment.file.Write(blob)
 	if err != nil {
+		s.quota.recordStageError(spoolErrorStageWrite)
 		return nil, errors.WrapError(errors.ErrUnexpected, err, "write spool segment file")
 	}
 	if n != len(blob) {
+		s.quota.recordStageError(spoolErrorStageWrite)
 		return nil, errors.ErrUnexpected.GenWithStack(
 			"short write to spool segment, expected %d got %d",
 			len(blob),
@@ -627,6 +727,7 @@ func (s *Spool) rotateLocked() error {
 	// new pending data will stay locally readable until flush.
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o644)
 	if err != nil {
+		s.quota.recordStageError(spoolErrorStageRotate)
 		return errors.WrapError(errors.ErrUnexpected, err, "open spool segment file")
 	}
 	spoolSegment := &segment{
@@ -636,6 +737,7 @@ func (s *Spool) rotateLocked() error {
 	}
 	s.segments[segmentID] = spoolSegment
 	s.activeSegment = spoolSegment
+	s.quota.recordRotate(len(s.segments))
 	return nil
 }
 
@@ -664,4 +766,18 @@ func consumeEntry(entry *Entry) (*segmentLocation, int64, bool) {
 	entry.accountingBytes = 0
 	entry.fileBytes = 0
 	return location, accountingBytes, spilled
+}
+
+func calculateEntrySize(msgs []*common.Message) entrySize {
+	size := entrySize{}
+	if len(msgs) == 0 {
+		return size
+	}
+
+	size.accountingBytes = serializedMessageCountBytes
+	for _, msg := range msgs {
+		size.accountingBytes += int64(serializedMessageHeaderBytes + len(msg.Key) + len(msg.Value))
+		size.fileBytes += uint64(len(msg.Value))
+	}
+	return size
 }
