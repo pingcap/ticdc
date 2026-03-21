@@ -17,6 +17,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/pingcap/errors"
 	"github.com/stretchr/testify/require"
 )
 
@@ -63,4 +64,37 @@ func TestClearPendingRegionsReleaseSlotForPreFetchedRegion(t *testing.T) {
 	require.Len(t, regions, 1)
 	require.Nil(t, worker.preFetchForConnecting)
 	require.Equal(t, 0, worker.requestCache.getPendingCount())
+}
+
+func TestClearPendingRegionsDoesNotReturnStoppedSentRegion(t *testing.T) {
+	worker := &regionRequestWorker{
+		requestCache: newRequestCache(10),
+	}
+	worker.requestedRegions.subscriptions = make(map[SubscriptionID]regionFeedStates)
+
+	ctx := context.Background()
+	region := createTestRegionInfo(1, 1)
+
+	ok, err := worker.requestCache.add(ctx, region, false)
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	req, err := worker.requestCache.pop(ctx)
+	require.NoError(t, err)
+
+	state := newRegionFeedState(req.regionInfo, uint64(req.regionInfo.subscribedSpan.subID), worker)
+	state.start()
+	worker.addRegionState(req.regionInfo.subscribedSpan.subID, req.regionInfo.verID.GetID(), state)
+
+	// Simulate the race we are fixing in processRegionSendTask:
+	// once a request is visible in sentRequests, a fast region error may mark the
+	// region stopped before worker cleanup runs. In that case, markStopped should
+	// remove the sent request immediately, so clearPendingRegions must not return
+	// the stale region again during worker shutdown.
+	worker.requestCache.markSent(req)
+	state.markStopped(errors.New("send request to store error"))
+	worker.takeRegionState(req.regionInfo.subscribedSpan.subID, req.regionInfo.verID.GetID())
+
+	require.Equal(t, 0, worker.requestCache.getPendingCount())
+	require.Empty(t, worker.clearPendingRegions())
 }
