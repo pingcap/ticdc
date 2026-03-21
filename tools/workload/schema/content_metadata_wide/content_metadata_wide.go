@@ -32,6 +32,9 @@ const (
 	defaultContentMetadataWideRowSize        = 10 * 1024
 	defaultContentMetadataWideUpdateKeySpace = 1_000_000
 	recordIDBase                             = int64(-9_000_000_000_000_000_000)
+	perTableRecordSpace                      = int64(1_000_000_000_000_000)
+	perRunRecordSpace                        = int64(1_000_000_000)
+	runSaltModulo                            = uint64(1_000_000)
 
 	updateImagesWithExistenceWeight = 0.49
 	updateStatusOnlyWeight          = 0.29
@@ -182,6 +185,7 @@ type ContentMetadataWideWorkload struct {
 
 	perTableUpdateKeySpace uint64
 	sizes                  payloadSizes
+	runSalt                uint64
 
 	seed     atomic.Int64
 	randPool sync.Pool
@@ -210,12 +214,16 @@ func NewContentMetadataWideWorkload(rowSize int, tableCount int, tableStartIndex
 	w.randPool.New = func() any {
 		return rand.New(rand.NewSource(w.seed.Add(1)))
 	}
+	r := w.getRand()
+	w.runSalt = (r.Uint64() % runSaltModulo) + 1
+	w.putRand(r)
 
 	plog.Info("content_metadata_wide workload initialized",
 		zap.Int("rowSize", rowSize),
 		zap.Int("tableSlots", len(w.insertedSeq)),
 		zap.Int("tableStartIndex", w.tableStartIndex),
 		zap.Uint64("perTableUpdateKeySpace", w.perTableUpdateKeySpace),
+		zap.Uint64("runSalt", w.runSalt),
 		zap.Int("pageImagesSize", w.sizes.pageImages),
 		zap.Int("rawImageDataSize", w.sizes.rawImageData),
 		zap.Int("imageProbeResultSize", w.sizes.imageProbeResult),
@@ -291,21 +299,21 @@ func (w *ContentMetadataWideWorkload) BuildInsertSqlWithValues(tableIndex int, b
 			w.maybeVarysImages(r, tableIndex, seq),
 			fetchStatusCodeValue(seq),
 			quotedDateTimeValue(now),
-			sourceURLValue("node", tableIndex, seq, 320),
-			sourceURLValue("canonical", tableIndex, seq, w.sizes.canonicalLink),
-			sourceURLValue("landing", tableIndex, seq, w.sizes.landingLink),
-			buildQuotedText(w.sizes.siteLabel, fmt.Sprintf("source-%d.example", tableIndex), seq),
+			w.sourceURLValue("node", tableIndex, seq, 320),
+			w.sourceURLValue("canonical", tableIndex, seq, w.sizes.canonicalLink),
+			w.sourceURLValue("landing", tableIndex, seq, w.sizes.landingLink),
+			buildQuotedText(w.sizes.siteLabel, fmt.Sprintf("source-%d-%d.example", tableIndex, w.runSalt), seq),
 			buildQuotedText(w.sizes.titleText, "Synthetic content title", seq),
 			buildQuotedText(w.sizes.summaryText, "Synthetic content summary payload", seq),
 			buildBodyPayload(w.sizes.bodyData, tableIndex, seq),
 			buildSourceTokenPayload(w.sizes.sourceTokenData, tableIndex, seq),
 			buildRedirectLinkPayload(w.sizes.redirectLinkData, tableIndex, seq),
-			sourceURLValue("mobile-icon", tableIndex, seq, w.sizes.mobileIconURL),
+			w.sourceURLValue("mobile-icon", tableIndex, seq, w.sizes.mobileIconURL),
 			buildLanguageVectorDataPayload(w.sizes.summaryLanguageVector, seq),
 			buildHeadlinePayload(w.sizes.headlineText, seq),
 			buildHeadlineLanguageVectorPayload(w.sizes.headlineLanguageVectors, seq),
 			[]byte(`"en"`),
-			sourceURLHashValue(tableIndex, seq),
+			w.sourceURLHashValue(tableIndex, seq),
 		)
 	}
 
@@ -360,7 +368,7 @@ func (w *ContentMetadataWideWorkload) BuildUpdateSqlWithValues(opt schema.Update
 		return sql, []interface{}{
 			scoreValue(r, 4),
 			scoreValue(r, 5),
-			sourceURLValue("site-icon", opt.TableIndex, seq, w.sizes.siteIconURL),
+			w.sourceURLValue("site-icon", opt.TableIndex, seq, w.sizes.siteIconURL),
 			buildQuotedText(w.sizes.summaryText, "Synthetic content summary", seq),
 			linkStateValue(seq),
 			qualityScoreValue(r),
@@ -378,13 +386,13 @@ func (w *ContentMetadataWideWorkload) BuildUpdateSqlWithValues(opt schema.Update
 			quotedDateTimeValue(now),
 			buildBodyPayload(w.sizes.bodyData, opt.TableIndex, seq),
 			fetchStatusCodeValue(seq + 7),
-			sourceURLValue("mobile-page", opt.TableIndex, seq, w.sizes.mobilePageURL),
-			sourceURLValue("mobile-icon", opt.TableIndex, seq, w.sizes.mobileIconURL),
+			w.sourceURLValue("mobile-page", opt.TableIndex, seq, w.sizes.mobilePageURL),
+			w.sourceURLValue("mobile-icon", opt.TableIndex, seq, w.sizes.mobileIconURL),
 			buildLanguageVectorDataPayload(w.sizes.summaryLanguageVector, seq),
-			sourceURLValue("canonical", opt.TableIndex, seq, w.sizes.canonicalLink),
-			sourceURLValue("landing", opt.TableIndex, seq, w.sizes.landingLink),
+			w.sourceURLValue("canonical", opt.TableIndex, seq, w.sizes.canonicalLink),
+			w.sourceURLValue("landing", opt.TableIndex, seq, w.sizes.landingLink),
 			buildAlternateLinkPayload(160, opt.TableIndex, seq),
-			buildQuotedText(w.sizes.siteLabel, fmt.Sprintf("source-%d.example", opt.TableIndex), seq),
+			buildQuotedText(w.sizes.siteLabel, fmt.Sprintf("source-%d-%d.example", opt.TableIndex, w.runSalt), seq),
 			boolValue(seq%2 == 0),
 			inventorySignalValue(seq),
 			buildHeadlinePayload(w.sizes.headlineText, seq),
@@ -440,7 +448,10 @@ func (w *ContentMetadataWideWorkload) slot(tableIndex int) int {
 }
 
 func (w *ContentMetadataWideWorkload) recordID(tableIndex int, seq uint64) int64 {
-	return recordIDBase + int64(tableIndex)*1_000_000_000 + int64(seq)
+	return recordIDBase +
+		int64(tableIndex)*perTableRecordSpace +
+		int64(w.runSalt)*perRunRecordSpace +
+		int64(seq)
 }
 
 func (w *ContentMetadataWideWorkload) getRand() *rand.Rand {
@@ -458,10 +469,11 @@ func tableName(index int) string {
 	return fmt.Sprintf("`content_metadata_wide_%d`", index)
 }
 
-func sourceURLHashValue(tableIndex int, seq uint64) []byte {
+func (w *ContentMetadataWideWorkload) sourceURLHashValue(tableIndex int, seq uint64) []byte {
 	buf := make([]byte, 16)
 	binary.BigEndian.PutUint64(buf[:8], uint64(tableIndex))
-	binary.BigEndian.PutUint64(buf[8:], seq)
+	binary.BigEndian.PutUint32(buf[8:12], uint32(w.runSalt))
+	binary.BigEndian.PutUint32(buf[12:], uint32(seq))
 	return buf
 }
 
@@ -515,8 +527,8 @@ func softErrorFlagValue(seq uint64) []byte {
 	return []byte(fmt.Sprintf(`{"v":%d,"w":0.%d}`, value, seq%10))
 }
 
-func sourceURLValue(kind string, tableIndex int, seq uint64, target int) []byte {
-	base := fmt.Sprintf("https://%s-%d.content.example.invalid/%d/%d/index.html", kind, tableIndex, seq%1024, seq)
+func (w *ContentMetadataWideWorkload) sourceURLValue(kind string, tableIndex int, seq uint64, target int) []byte {
+	base := fmt.Sprintf("https://%s-%d-%d.content.example.invalid/%d/%d/index.html", kind, tableIndex, w.runSalt, seq%1024, seq)
 	return buildQuotedText(target, base, seq)
 }
 
