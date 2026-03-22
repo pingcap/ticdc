@@ -562,9 +562,7 @@ func (c *eventBroker) sendHandshakeIfNeed(task scanTask) {
 	}
 
 	remoteID := node.ID(task.info.GetServerID())
-	handshakeTs := task.startTs
-	tableInfo := task.startTableInfo
-	event := event.NewHandshakeEvent(task.id, handshakeTs, task.epoch, tableInfo)
+	event := event.NewHandshakeEvent(task.id, task.startTs, task.epoch, task.startTableInfo)
 	log.Info("send handshake event to dispatcher",
 		zap.Stringer("changefeedID", task.changefeedStat.changefeedID),
 		zap.Stringer("dispatcherID", task.id),
@@ -578,7 +576,6 @@ func (c *eventBroker) sendHandshakeIfNeed(task scanTask) {
 	// Send handshake event to channel before calling `setHandshaked`
 	// This ensures the handshake event precedes any subsequent data events.
 	task.setHandshaked()
-	task.updateSentResolvedTs(handshakeTs)
 }
 
 // hasSyncPointEventBeforeTs checks if there is any sync point events before the given ts.
