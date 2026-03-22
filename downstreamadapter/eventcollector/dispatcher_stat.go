@@ -125,6 +125,11 @@ type dispatcherStat struct {
 	// has safely accepted in the current epoch. Event service checkpoint
 	// heartbeats must not exceed it, otherwise a sink-side checkpoint jump could
 	// make event service skip data that has not reached the collector yet.
+	// Such checkpoint jumps are possible because reset only changes the upstream
+	// epoch. Old in-flight events that were already forwarded to the sink before
+	// reset may still finish asynchronously and advance target.GetCheckpointTs()
+	// after reset/handshake, even though the collector has not received the same
+	// progress from the new epoch yet.
 	currentEpochMaxReceivedTs atomic.Uint64
 	// lastEventCommitTs is the commitTs of the last received DDL/DML/SyncPoint events.
 	lastEventCommitTs atomic.Uint64
@@ -367,12 +372,12 @@ func (d *dispatcherStat) filterAndUpdateEventByCommitTs(event dispatcher.Dispatc
 		commonEvent.TypeSyncPointEvent:
 		d.lastEventCommitTs.Store(event.GetCommitTs())
 	}
-	d.observeCurrentEpochTs(event.GetCommitTs())
+	d.observeCurrentEpochMaxEventTs(event.GetCommitTs())
 
 	return true
 }
 
-func (d *dispatcherStat) observeCurrentEpochTs(ts uint64) {
+func (d *dispatcherStat) observeCurrentEpochMaxEventTs(ts uint64) {
 	util.MustCompareAndMonotonicIncrease(&d.currentEpochMaxReceivedTs, ts)
 }
 
@@ -414,7 +419,7 @@ func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEve
 			return false
 		}
 		if event.GetType() == commonEvent.TypeResolvedEvent {
-			d.observeCurrentEpochTs(event.GetCommitTs())
+			d.observeCurrentEpochMaxEventTs(event.GetCommitTs())
 			validEvents = append(validEvents, event)
 		} else if event.GetType() == commonEvent.TypeDMLEvent {
 			if d.filterAndUpdateEventByCommitTs(event) {
@@ -654,7 +659,7 @@ func (d *dispatcherStat) handleHandshakeEvent(event dispatcher.DispatcherEvent) 
 		d.tableInfo.Store(tableInfo)
 	}
 	d.lastEventSeq.Store(handshakeEvent.Seq)
-	d.observeCurrentEpochTs(handshakeEvent.GetCommitTs())
+	d.observeCurrentEpochMaxEventTs(handshakeEvent.GetCommitTs())
 }
 
 func (d *dispatcherStat) getCheckpointTsForEventService() uint64 {

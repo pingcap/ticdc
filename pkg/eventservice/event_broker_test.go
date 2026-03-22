@@ -603,7 +603,7 @@ func TestHandleDispatcherHeartbeat_InactiveDispatcherCleanup(t *testing.T) {
 			Version:         event.DispatcherHeartbeatVersion1,
 			ClusterID:       0,
 			DispatcherCount: 1,
-			DispatcherProgresses: []event.DispatcherProgress{
+			DispatcherProgressesLegacy: []event.DispatcherProgressLegacy{
 				{
 					DispatcherID: dispInfo.GetID(),
 					CheckpointTs: 100,
@@ -635,7 +635,7 @@ func TestHandleDispatcherHeartbeat_InactiveDispatcherCleanup(t *testing.T) {
 			Version:         event.DispatcherHeartbeatVersion1,
 			ClusterID:       0,
 			DispatcherCount: 1,
-			DispatcherProgresses: []event.DispatcherProgress{
+			DispatcherProgressesLegacy: []event.DispatcherProgressLegacy{
 				{
 					DispatcherID: dispInfo.GetID(), // Same dispatcher ID but it's removed
 					CheckpointTs: 200,
@@ -693,6 +693,7 @@ func TestHandleDispatcherHeartbeatEpochFilter(t *testing.T) {
 			ClusterID:       0,
 			DispatcherCount: 1,
 			DispatcherProgresses: []event.DispatcherProgress{{
+				Version:      event.DispatcherProgressVersion1,
 				DispatcherID: dispInfo.GetID(),
 				CheckpointTs: 200,
 				Epoch:        2,
@@ -709,7 +710,7 @@ func TestHandleDispatcherHeartbeatEpochFilter(t *testing.T) {
 			Version:         event.DispatcherHeartbeatVersion1,
 			ClusterID:       0,
 			DispatcherCount: 1,
-			DispatcherProgresses: []event.DispatcherProgress{{
+			DispatcherProgressesLegacy: []event.DispatcherProgressLegacy{{
 				DispatcherID: dispInfo.GetID(),
 				CheckpointTs: 180,
 			}},
@@ -727,6 +728,7 @@ func TestHandleDispatcherHeartbeatEpochFilter(t *testing.T) {
 			ClusterID:       0,
 			DispatcherCount: 1,
 			DispatcherProgresses: []event.DispatcherProgress{{
+				Version:      event.DispatcherProgressVersion1,
 				DispatcherID: dispInfo.GetID(),
 				CheckpointTs: 220,
 				Epoch:        3,

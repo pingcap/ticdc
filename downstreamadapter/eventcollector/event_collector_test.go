@@ -283,6 +283,7 @@ func TestGroupHeartbeatUsesEpochAndClamp(t *testing.T) {
 	require.NotNil(t, localHeartbeat)
 	require.Equal(t, commonEvent.DispatcherHeartbeatVersion2, localHeartbeat.Version)
 	require.Len(t, localHeartbeat.DispatcherProgresses, 1)
+	require.Equal(t, uint8(commonEvent.DispatcherProgressVersion1), localHeartbeat.DispatcherProgresses[0].Version)
 	require.Equal(t, localDispatcher.id, localHeartbeat.DispatcherProgresses[0].DispatcherID)
 	require.Equal(t, uint64(150), localHeartbeat.DispatcherProgresses[0].CheckpointTs)
 	require.Equal(t, uint64(3), localHeartbeat.DispatcherProgresses[0].Epoch)
@@ -291,6 +292,7 @@ func TestGroupHeartbeatUsesEpochAndClamp(t *testing.T) {
 	require.NotNil(t, remoteHeartbeat)
 	require.Equal(t, commonEvent.DispatcherHeartbeatVersion2, remoteHeartbeat.Version)
 	require.Len(t, remoteHeartbeat.DispatcherProgresses, 1)
+	require.Equal(t, uint8(commonEvent.DispatcherProgressVersion1), remoteHeartbeat.DispatcherProgresses[0].Version)
 	require.Equal(t, remoteDispatcher.id, remoteHeartbeat.DispatcherProgresses[0].DispatcherID)
 	require.Equal(t, uint64(210), remoteHeartbeat.DispatcherProgresses[0].CheckpointTs)
 	require.Equal(t, uint64(5), remoteHeartbeat.DispatcherProgresses[0].Epoch)
@@ -327,6 +329,7 @@ func TestGroupHeartbeatResetThenHandshake(t *testing.T) {
 	heartbeat := grouped[serverInfo.ID]
 	require.NotNil(t, heartbeat)
 	require.Len(t, heartbeat.DispatcherProgresses, 1)
+	require.Equal(t, uint8(commonEvent.DispatcherProgressVersion1), heartbeat.DispatcherProgresses[0].Version)
 	require.Equal(t, uint64(150), heartbeat.DispatcherProgresses[0].CheckpointTs)
 	require.Equal(t, uint64(1), heartbeat.DispatcherProgresses[0].Epoch)
 
@@ -342,6 +345,7 @@ func TestGroupHeartbeatResetThenHandshake(t *testing.T) {
 	heartbeat = grouped[serverInfo.ID]
 	require.NotNil(t, heartbeat)
 	require.Len(t, heartbeat.DispatcherProgresses, 1)
+	require.Equal(t, uint8(commonEvent.DispatcherProgressVersion1), heartbeat.DispatcherProgresses[0].Version)
 	require.Equal(t, uint64(180), heartbeat.DispatcherProgresses[0].CheckpointTs)
 	require.Equal(t, uint64(1), heartbeat.DispatcherProgresses[0].Epoch)
 
@@ -350,6 +354,7 @@ func TestGroupHeartbeatResetThenHandshake(t *testing.T) {
 	heartbeat = grouped[serverInfo.ID]
 	require.NotNil(t, heartbeat)
 	require.Len(t, heartbeat.DispatcherProgresses, 1)
+	require.Equal(t, uint8(commonEvent.DispatcherProgressVersion1), heartbeat.DispatcherProgresses[0].Version)
 	require.Equal(t, uint64(210), heartbeat.DispatcherProgresses[0].CheckpointTs)
 	require.Equal(t, uint64(1), heartbeat.DispatcherProgresses[0].Epoch)
 }
