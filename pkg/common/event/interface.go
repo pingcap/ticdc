@@ -83,6 +83,8 @@ const (
 	TypeDispatcherHeartbeat = 11
 	// TypeDispatcherHeartbeatResponse is the event type for dispatcher heartbeat response messages.
 	TypeDispatcherHeartbeatResponse = 12
+	// TypeDispatcherControlEvent is the event type for dispatcher control plane acknowledgements.
+	TypeDispatcherControlEvent = 13
 )
 
 func TypeToString(t int) string {
@@ -113,6 +115,8 @@ func TypeToString(t int) string {
 		return "DispatcherHeartbeat"
 	case TypeDispatcherHeartbeatResponse:
 		return "DispatcherHeartbeatResponse"
+	case TypeDispatcherControlEvent:
+		return "DispatcherControlEvent"
 	default:
 		return "unknown"
 	}

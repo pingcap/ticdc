@@ -73,6 +73,7 @@ type eventService struct {
 	mc          messaging.MessageCenter
 	eventStore  eventstore.EventStore
 	schemaStore schemastore.SchemaStore
+	incarnation uint64
 	// clusterID -> eventBroker
 	brokers map[uint64]*eventBroker
 
@@ -87,6 +88,7 @@ func New(eventStore eventstore.EventStore, schemaStore schemastore.SchemaStore) 
 		mc:                  mc,
 		eventStore:          eventStore,
 		schemaStore:         schemaStore,
+		incarnation:         uint64(time.Now().UnixNano()),
 		brokers:             make(map[uint64]*eventBroker),
 		dispatcherInfoChan:  make(chan DispatcherInfo, 32),
 		dispatcherHeartbeat: make(chan *DispatcherHeartBeatWithServerID, 32),
@@ -182,7 +184,7 @@ func (s *eventService) registerDispatcher(ctx context.Context, info DispatcherIn
 	clusterID := info.GetClusterID()
 	c, ok := s.brokers[clusterID]
 	if !ok {
-		c = newEventBroker(ctx, clusterID, s.eventStore, s.schemaStore, s.mc, info.GetTimezone(), info.GetIntegrity())
+		c = newEventBroker(ctx, clusterID, s.incarnation, s.eventStore, s.schemaStore, s.mc, info.GetTimezone(), info.GetIntegrity())
 		s.brokers[clusterID] = c
 	}
 

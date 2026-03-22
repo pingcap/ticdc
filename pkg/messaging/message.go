@@ -104,6 +104,7 @@ const (
 	TypeRedoResolvedTsForwardMessage       IOType = 39
 	TypeDispatcherSetChecksumUpdateRequest IOType = 40
 	TypeDispatcherSetChecksumAckResponse   IOType = 41
+	TypeDispatcherControlEvent            IOType = 42
 )
 
 func (t IOType) String() string {
@@ -182,6 +183,8 @@ func (t IOType) String() string {
 		return "DispatcherSetChecksumUpdateRequest"
 	case TypeDispatcherSetChecksumAckResponse:
 		return "DispatcherSetChecksumAckResponse"
+	case TypeDispatcherControlEvent:
+		return "DispatcherControlEvent"
 	case TypeDispatcherHeartbeatResponse:
 		return "DispatcherHeartbeatResponse"
 	case TypeCongestionControl:
@@ -379,6 +382,8 @@ func decodeIOType(ioType IOType, value []byte) (IOTypeT, error) {
 		m = &heartbeatpb.DispatcherSetChecksumUpdateRequest{}
 	case TypeDispatcherSetChecksumAckResponse:
 		m = &heartbeatpb.DispatcherSetChecksumAckResponse{}
+	case TypeDispatcherControlEvent:
+		m = &commonEvent.DispatcherControlEvent{}
 	case TypeCongestionControl:
 		m = &commonEvent.CongestionControl{}
 	case TypeMergeDispatcherRequest:
@@ -491,6 +496,8 @@ func NewSingleTargetMessage(To node.ID, Topic string, Message IOTypeT, Group ...
 		ioType = TypeDispatcherSetChecksumUpdateRequest
 	case *heartbeatpb.DispatcherSetChecksumAckResponse:
 		ioType = TypeDispatcherSetChecksumAckResponse
+	case *commonEvent.DispatcherControlEvent:
+		ioType = TypeDispatcherControlEvent
 	case *commonEvent.CongestionControl:
 		ioType = TypeCongestionControl
 	case *heartbeatpb.MergeDispatcherRequest:

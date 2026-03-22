@@ -151,8 +151,8 @@ func TestProcessMessage(t *testing.T) {
 	)
 	require.NotNil(t, dmls)
 
-	readyEvent := commonEvent.NewReadyEvent(did)
-	handshakeEvent := commonEvent.NewHandshakeEvent(did, ddl.GetStartTs()-1, 1, ddl.TableInfo)
+	readyEvent := commonEvent.NewReadyEvent(did, 1)
+	handshakeEvent := commonEvent.NewHandshakeEvent(did, ddl.GetStartTs()-1, 1, 1, ddl.TableInfo)
 	events := make(map[uint64]commonEvent.Event)
 	ddl.DispatcherID = did
 	ddl.Seq = seq.Add(1)
@@ -232,4 +232,45 @@ func TestRemoveLastDispatcher(t *testing.T) {
 	require.False(t, ok, "changefeedStat for cfID1 should be removed after removing the last dispatcher")
 	_, ok = c.changefeedMap.Load(cfID2.ID())
 	require.True(t, ok, "changefeedStat for cfID2 should not be affected")
+}
+
+func TestHeartbeatRemovedTriggersReregisterAndReset(t *testing.T) {
+	localServerID := node.ID("local-server")
+	c := newTestEventCollector(localServerID)
+
+	dispatcherID := common.NewDispatcherID()
+	mockDisp := newMockDispatcher(dispatcherID, 100)
+	stat := newDispatcherStat(mockDisp, c, nil)
+	stat.connState.setReady(localServerID, 1)
+	c.dispatcherMap.Store(dispatcherID, stat)
+
+	response := commonEvent.NewDispatcherHeartbeatResponse()
+	response.Append(commonEvent.NewDispatcherState(dispatcherID, commonEvent.DSStateRemoved))
+	c.handleDispatcherHeartbeatResponse(&messaging.TargetMessage{
+		From:    localServerID,
+		Type:    messaging.TypeDispatcherHeartbeatResponse,
+		Message: []messaging.IOTypeT{response},
+	})
+
+	msg := <-c.dispatcherMessageChan.Out()
+	req, ok := msg.Message.Message[0].(*messaging.DispatcherRequest)
+	require.True(t, ok)
+	require.Equal(t, eventpb.ActionType_ACTION_TYPE_REGISTER, req.ActionType)
+	require.Equal(t, localServerID, msg.Message.To)
+	require.False(t, stat.connState.readyEventReceived.Load())
+
+	stat.handleSignalEvent(dispatcher.DispatcherEvent{
+		From: &localServerID,
+		Event: &commonEvent.ReadyEvent{
+			Version:     commonEvent.ReadyEventVersion1,
+			Incarnation: 1,
+		},
+	})
+
+	msg = <-c.dispatcherMessageChan.Out()
+	req, ok = msg.Message.Message[0].(*messaging.DispatcherRequest)
+	require.True(t, ok)
+	require.Equal(t, eventpb.ActionType_ACTION_TYPE_RESET, req.ActionType)
+	require.Equal(t, localServerID, msg.Message.To)
+	require.True(t, stat.connState.readyEventReceived.Load())
 }

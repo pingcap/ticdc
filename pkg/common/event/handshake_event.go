@@ -32,6 +32,7 @@ type HandshakeEvent struct {
 	ResolvedTs   uint64              `json:"resolved_ts"`
 	Seq          uint64              `json:"seq"`
 	Epoch        uint64              `json:"epoch"`
+	Incarnation  uint64              `json:"incarnation"`
 	DispatcherID common.DispatcherID `json:"-"`
 	TableInfo    *common.TableInfo   `json:"table_info"`
 }
@@ -40,6 +41,7 @@ func NewHandshakeEvent(
 	dispatcherID common.DispatcherID,
 	resolvedTs common.Ts,
 	epoch uint64,
+	incarnation uint64,
 	tableInfo *common.TableInfo,
 ) HandshakeEvent {
 	return HandshakeEvent{
@@ -48,14 +50,15 @@ func NewHandshakeEvent(
 		// handshake event always have seq 1
 		Seq:          1,
 		Epoch:        epoch,
+		Incarnation:  incarnation,
 		DispatcherID: dispatcherID,
 		TableInfo:    tableInfo,
 	}
 }
 
 func (e *HandshakeEvent) String() string {
-	return fmt.Sprintf("HandshakeEvent{Version: %d, ResolvedTs: %d, Seq: %d, DispatcherID: %s, TableInfo: %v}",
-		e.Version, e.ResolvedTs, e.Seq, e.DispatcherID, e.TableInfo)
+	return fmt.Sprintf("HandshakeEvent{Version: %d, ResolvedTs: %d, Seq: %d, Epoch: %d, Incarnation: %d, DispatcherID: %s, TableInfo: %v}",
+		e.Version, e.ResolvedTs, e.Seq, e.Epoch, e.Incarnation, e.DispatcherID, e.TableInfo)
 }
 
 // GetType returns the event type
@@ -92,7 +95,7 @@ func (e *HandshakeEvent) GetSize() int64 {
 	// header size + payload size (version is now in header, not payload)
 	// payload: resolvedTs + seq + epoch + dispatcherID + tableInfo (variable)
 	// Note: TableInfo size is not included in this calculation as it's variable
-	payloadSize := int64(8 + 8 + 8 + e.DispatcherID.GetSize())
+	payloadSize := int64(8 + 8 + 8 + 8 + e.DispatcherID.GetSize())
 	return payloadSize
 }
 
@@ -143,14 +146,14 @@ func (e *HandshakeEvent) Unmarshal(data []byte) error {
 
 func (e HandshakeEvent) encodeV1() ([]byte, error) {
 	// Note: version is now handled in the header by Marshal(), not here
-	// payload: resolvedTs + seq + epoch + dispatcherID + tableInfo
+	// payload: resolvedTs + seq + epoch + incarnation + dispatcherID + tableInfo
 	tableInfoData, err := e.TableInfo.Marshal()
 	if err != nil {
 		return nil, err
 	}
 
 	// payload size: resolvedTs + seq + epoch + dispatcherID + tableInfo
-	payloadSize := 8 + 8 + 8 + e.DispatcherID.GetSize() + len(tableInfoData)
+	payloadSize := 8 + 8 + 8 + 8 + e.DispatcherID.GetSize() + len(tableInfoData)
 	data := make([]byte, payloadSize)
 	offset := 0
 
@@ -164,6 +167,10 @@ func (e HandshakeEvent) encodeV1() ([]byte, error) {
 
 	// Epoch
 	binary.BigEndian.PutUint64(data[offset:], e.Epoch)
+	offset += 8
+
+	// Incarnation
+	binary.BigEndian.PutUint64(data[offset:], e.Incarnation)
 	offset += 8
 
 	// DispatcherID
@@ -190,6 +197,10 @@ func (e *HandshakeEvent) decodeV1(data []byte) error {
 
 	// Epoch
 	e.Epoch = binary.BigEndian.Uint64(data[offset:])
+	offset += 8
+
+	// Incarnation
+	e.Incarnation = binary.BigEndian.Uint64(data[offset:])
 	offset += 8
 
 	// DispatcherID

@@ -343,6 +343,14 @@ func newWrapHandshakeEvent(serverID node.ID, e pevent.HandshakeEvent) *wrapEvent
 	return w
 }
 
+func newWrapDispatcherControlEvent(serverID node.ID, e pevent.DispatcherControlEvent) *wrapEvent {
+	w := getWrapEvent()
+	w.serverID = serverID
+	w.e = &e
+	w.msgType = pevent.TypeDispatcherControlEvent
+	return w
+}
+
 func newWrapReadyEvent(serverID node.ID, e pevent.ReadyEvent) *wrapEvent {
 	w := getWrapEvent()
 	w.serverID = serverID

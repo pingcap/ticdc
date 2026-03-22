@@ -29,16 +29,28 @@ import (
 	"go.uber.org/zap"
 )
 
+type pendingRegisterState struct {
+	serverID  node.ID
+	onlyReuse bool
+}
+
+type pendingResetState struct {
+	serverID node.ID
+	resetTs  uint64
+	epoch    uint64
+}
+
 type dispatcherConnState struct {
 	sync.RWMutex
-	// 1) if eventServiceID is set to a remote event service,
-	//   it means the dispatcher is trying to register to the remote event service,
-	//   but eventServiceID may be changed if registration failed.
-	// 2) if eventServiceID is set to local event service,
-	//   it means the dispatcher has received ready signal from local event service,
-	//   and eventServiceID will never change.
+	// eventServiceID is the selected event service for this dispatcher.
+	// When readyEventReceived is false, the dispatcher is still waiting for the
+	// selected event service to send ReadyEvent before it can start/reset the stream.
 	eventServiceID node.ID
-	// whether has received ready signal from `serverID`
+	// eventServiceIncarnation identifies the selected event service process.
+	// It is used to ignore stale control/data signals after rolling restart.
+	eventServiceIncarnation uint64
+	// readyEventReceived indicates whether the selected event service is already
+	// streaming data to this dispatcher.
 	readyEventReceived atomic.Bool
 	// the remote event services which may contain data this dispatcher needed
 	remoteCandidates []string
@@ -48,6 +60,7 @@ func (d *dispatcherConnState) clear() {
 	d.Lock()
 	defer d.Unlock()
 	d.eventServiceID = ""
+	d.eventServiceIncarnation = 0
 	d.readyEventReceived.Store(false)
 }
 
@@ -57,16 +70,58 @@ func (d *dispatcherConnState) setEventServiceID(serverID node.ID) {
 	d.eventServiceID = serverID
 }
 
+func (d *dispatcherConnState) setWaitingReady(serverID node.ID) {
+	d.Lock()
+	defer d.Unlock()
+	d.eventServiceID = serverID
+	d.eventServiceIncarnation = 0
+	d.readyEventReceived.Store(false)
+}
+
+func (d *dispatcherConnState) setWaitingReadyWithIncarnation(serverID node.ID, incarnation uint64) {
+	d.Lock()
+	defer d.Unlock()
+	d.eventServiceID = serverID
+	d.eventServiceIncarnation = incarnation
+	d.readyEventReceived.Store(false)
+}
+
+func (d *dispatcherConnState) setReady(serverID node.ID, incarnation uint64) {
+	d.Lock()
+	defer d.Unlock()
+	d.eventServiceID = serverID
+	d.eventServiceIncarnation = incarnation
+	d.readyEventReceived.Store(true)
+}
+
 func (d *dispatcherConnState) getEventServiceID() node.ID {
 	d.RLock()
 	defer d.RUnlock()
 	return d.eventServiceID
 }
 
+func (d *dispatcherConnState) getEventServiceIncarnation() uint64 {
+	d.RLock()
+	defer d.RUnlock()
+	return d.eventServiceIncarnation
+}
+
+func (d *dispatcherConnState) getBinding() (node.ID, uint64, bool) {
+	d.RLock()
+	defer d.RUnlock()
+	return d.eventServiceID, d.eventServiceIncarnation, d.readyEventReceived.Load()
+}
+
 func (d *dispatcherConnState) isCurrentEventService(serverID node.ID) bool {
 	d.RLock()
 	defer d.RUnlock()
 	return d.eventServiceID == serverID
+}
+
+func (d *dispatcherConnState) isStreamingFrom(serverID node.ID) bool {
+	d.RLock()
+	defer d.RUnlock()
+	return d.eventServiceID == serverID && d.readyEventReceived.Load()
 }
 
 func (d *dispatcherConnState) isReceivingDataEvent() bool {
@@ -106,6 +161,16 @@ func (d *dispatcherConnState) clearRemoteCandidates() {
 	d.remoteCandidates = nil
 }
 
+func (d *dispatcherConnState) clearIfCurrentEventService(serverID node.ID) {
+	d.Lock()
+	defer d.Unlock()
+	if d.eventServiceID == serverID {
+		d.eventServiceID = ""
+		d.eventServiceIncarnation = 0
+		d.readyEventReceived.Store(false)
+	}
+}
+
 // dispatcherStat is a helper struct to manage the state of a dispatcher.
 type dispatcherStat struct {
 	target         dispatcher.DispatcherService
@@ -113,6 +178,12 @@ type dispatcherStat struct {
 	readyCallback  func()
 
 	connState dispatcherConnState
+	controlMu sync.Mutex
+	// pendingRegisters are register requests that still need reconcile.
+	pendingRegisters map[node.ID]*pendingRegisterState
+	// pendingReset tracks the current epoch rebuild request. It is kept until
+	// reset is acknowledged or the first handshake of that epoch arrives.
+	pendingReset *pendingResetState
 
 	// epoch is used to filter invalid events.
 	// It is incremented when the dispatcher is reset.
@@ -139,9 +210,10 @@ func newDispatcherStat(
 	readyCallback func(),
 ) *dispatcherStat {
 	stat := &dispatcherStat{
-		target:         target,
-		eventCollector: eventCollector,
-		readyCallback:  readyCallback,
+		target:           target,
+		eventCollector:   eventCollector,
+		readyCallback:    readyCallback,
+		pendingRegisters: make(map[node.ID]*pendingRegisterState),
 	}
 	stat.lastEventSeq.Store(0)
 	stat.lastEventCommitTs.Store(target.GetStartTs())
@@ -161,38 +233,107 @@ func (d *dispatcherStat) clear() {
 
 // registerTo register the dispatcher to the specified event service.
 func (d *dispatcherStat) registerTo(serverID node.ID) {
+	if serverID == "" {
+		return
+	}
 	// `onlyReuse` is used to control the register behavior at logservice side
 	// it should be set to `false` when register to a local event service,
 	// and set to `true` when register to a remote event service.
 	onlyReuse := serverID != d.eventCollector.getLocalServerID()
+	d.controlMu.Lock()
+	if d.pendingRegisters == nil {
+		d.pendingRegisters = make(map[node.ID]*pendingRegisterState)
+	}
+	d.pendingRegisters[serverID] = &pendingRegisterState{
+		serverID:  serverID,
+		onlyReuse: onlyReuse,
+	}
+	d.controlMu.Unlock()
 	msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, d.newDispatcherRegisterRequest(d.eventCollector.getLocalServerID().String(), onlyReuse))
 	d.eventCollector.enqueueMessageForSend(msg)
 }
 
+func (d *dispatcherStat) reregisterTo(serverID node.ID, incarnation uint64) {
+	d.connState.setWaitingReadyWithIncarnation(serverID, incarnation)
+	d.registerTo(serverID)
+}
+
 // commitReady is used to notify the event service to start sending events.
 func (d *dispatcherStat) commitReady(serverID node.ID) {
-	d.doReset(serverID, d.getResetTs())
+	if d.tryResendPendingReset(serverID) {
+		return
+	}
+	d.doReset(serverID, d.getResetTs(), false)
 }
 
 // reset is used to reset the dispatcher to the specified commitTs,
 // it will remove the dispatcher from the dynamic stream and add it back.
 func (d *dispatcherStat) reset(serverID node.ID) {
-	d.doReset(serverID, d.getResetTs())
+	d.doReset(serverID, d.getResetTs(), d.lastEventSeq.Load() == 0)
 }
 
-func (d *dispatcherStat) doReset(serverID node.ID, resetTs uint64) {
+func (d *dispatcherStat) preparePendingReset(serverID node.ID, resetTs uint64, reuseExisting bool) pendingResetState {
+	d.controlMu.Lock()
+	defer d.controlMu.Unlock()
+	if reuseExisting && d.pendingReset != nil {
+		d.pendingReset.serverID = serverID
+		d.pendingReset.resetTs = resetTs
+		return *d.pendingReset
+	}
 	epoch := d.epoch.Add(1)
 	d.lastEventSeq.Store(0)
+	d.pendingReset = &pendingResetState{
+		serverID: serverID,
+		resetTs:  resetTs,
+		epoch:    epoch,
+	}
+	return *d.pendingReset
+}
+
+func (d *dispatcherStat) getPendingReset() *pendingResetState {
+	d.controlMu.Lock()
+	defer d.controlMu.Unlock()
+	if d.pendingReset == nil {
+		return nil
+	}
+	pending := *d.pendingReset
+	return &pending
+}
+
+func (d *dispatcherStat) clearPendingReset(epoch uint64) {
+	d.controlMu.Lock()
+	defer d.controlMu.Unlock()
+	if d.pendingReset != nil && (epoch == 0 || d.pendingReset.epoch == epoch) {
+		d.pendingReset = nil
+	}
+}
+
+func (d *dispatcherStat) doReset(serverID node.ID, resetTs uint64, reuseExisting bool) {
+	pendingReset := d.preparePendingReset(serverID, resetTs, reuseExisting)
 	// remove the dispatcher from the dynamic stream
-	resetRequest := d.newDispatcherResetRequest(d.eventCollector.getLocalServerID().String(), resetTs, epoch)
+	resetRequest := d.newDispatcherResetRequest(d.eventCollector.getLocalServerID().String(), pendingReset.resetTs, pendingReset.epoch)
 	msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, resetRequest)
 	d.eventCollector.enqueueMessageForSend(msg)
 	log.Info("send reset dispatcher request to event service",
 		zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 		zap.Stringer("dispatcher", d.getDispatcherID()),
 		zap.Stringer("eventServiceID", serverID),
-		zap.Uint64("epoch", epoch),
-		zap.Uint64("resetTs", resetTs))
+		zap.Uint64("epoch", pendingReset.epoch),
+		zap.Uint64("resetTs", pendingReset.resetTs))
+}
+
+func (d *dispatcherStat) tryResendPendingReset(serverID node.ID) bool {
+	pendingReset := d.getPendingReset()
+	if pendingReset == nil || pendingReset.serverID != serverID {
+		return false
+	}
+	d.doReset(serverID, pendingReset.resetTs, true)
+	return true
+}
+
+func (d *dispatcherStat) prepareRebuild(serverID node.ID, incarnation uint64) {
+	d.preparePendingReset(serverID, d.getResetTs(), true)
+	d.reregisterTo(serverID, incarnation)
 }
 
 // getResetTs is used to get the resetTs of the dispatcher.
@@ -214,11 +355,15 @@ func (d *dispatcherStat) remove() {
 
 // removeFrom is used to remove the dispatcher from the specified event service.
 func (d *dispatcherStat) removeFrom(serverID node.ID) {
+	if serverID == "" {
+		return
+	}
 	log.Info("send remove dispatcher request to event service",
 		zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 		zap.Stringer("dispatcher", d.getDispatcherID()),
 		zap.Stringer("eventServiceID", serverID))
 	msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, d.newDispatcherRemoveRequest(d.eventCollector.getLocalServerID().String()))
+	d.eventCollector.addRemoveTombstone(d.getDispatcherID(), serverID, msg)
 	d.eventCollector.enqueueMessageForSend(msg)
 }
 
@@ -508,77 +653,221 @@ func (d *dispatcherStat) handleDataEvents(events ...dispatcher.DispatcherEvent) 
 	return false
 }
 
+func (d *dispatcherStat) shouldResendResetOnRepeatedReady(from node.ID) bool {
+	// Merge/preparing dispatchers must wait for CommitAddDispatcher to decide the start ts.
+	if d.readyCallback != nil {
+		return false
+	}
+	// If handshake has not arrived yet, repeated ReadyEvent means the event service is
+	// still waiting for a reset/start signal. Resend reset to converge the state.
+	if d.lastEventSeq.Load() != 0 {
+		return false
+	}
+	log.Info("received repeated ready signal before handshake, resend reset",
+		zap.Stringer("changefeedID", d.target.GetChangefeedID()),
+		zap.Stringer("dispatcher", d.getDispatcherID()),
+		zap.Stringer("eventServiceID", from))
+	d.commitReady(from)
+	return true
+}
+
+func (d *dispatcherStat) clearPendingRegister(serverID node.ID) {
+	d.controlMu.Lock()
+	defer d.controlMu.Unlock()
+	if d.pendingRegisters == nil {
+		return
+	}
+	delete(d.pendingRegisters, serverID)
+}
+
+func (d *dispatcherStat) reconcileControlRequests() {
+	d.controlMu.Lock()
+	registers := make([]pendingRegisterState, 0, len(d.pendingRegisters))
+	for _, pending := range d.pendingRegisters {
+		registers = append(registers, *pending)
+	}
+	var pendingReset *pendingResetState
+	if d.pendingReset != nil {
+		tmp := *d.pendingReset
+		pendingReset = &tmp
+	}
+	d.controlMu.Unlock()
+
+	for _, pending := range registers {
+		msg := messaging.NewSingleTargetMessage(
+			pending.serverID,
+			messaging.EventServiceTopic,
+			d.newDispatcherRegisterRequest(d.eventCollector.getLocalServerID().String(), pending.onlyReuse),
+		)
+		d.eventCollector.enqueueMessageForSend(msg)
+	}
+
+	if pendingReset == nil {
+		return
+	}
+	if !d.connState.isStreamingFrom(pendingReset.serverID) {
+		return
+	}
+	msg := messaging.NewSingleTargetMessage(
+		pendingReset.serverID,
+		messaging.EventServiceTopic,
+		d.newDispatcherResetRequest(d.eventCollector.getLocalServerID().String(), pendingReset.resetTs, pendingReset.epoch),
+	)
+	d.eventCollector.enqueueMessageForSend(msg)
+}
+
+func isIncarnationStale(current uint64, incoming uint64) bool {
+	return current != 0 && incoming != 0 && incoming < current
+}
+
+func (d *dispatcherStat) handleDispatcherControlEvent(from node.ID, controlEvent *commonEvent.DispatcherControlEvent) {
+	currentServerID, currentIncarnation, ready := d.connState.getBinding()
+	if currentServerID == from && isIncarnationStale(currentIncarnation, controlEvent.Incarnation) {
+		return
+	}
+
+	switch controlEvent.Action {
+	case commonEvent.DispatcherControlActionRegister:
+		d.clearPendingRegister(from)
+		if !ready && currentServerID == from && controlEvent.Incarnation != 0 &&
+			(currentIncarnation == 0 || currentIncarnation <= controlEvent.Incarnation) {
+			d.connState.setWaitingReadyWithIncarnation(from, controlEvent.Incarnation)
+		}
+		if controlEvent.Status != commonEvent.DispatcherControlStatusRejected {
+			return
+		}
+		if controlEvent.ReasonCode == commonEvent.DispatcherControlReasonNotReusable {
+			candidate := d.connState.getNextRemoteCandidate()
+			if candidate != "" {
+				d.registerTo(candidate)
+				return
+			}
+			d.connState.clearIfCurrentEventService(from)
+			return
+		}
+		log.Warn("dispatcher register request was rejected",
+			zap.Stringer("changefeedID", d.target.GetChangefeedID()),
+			zap.Stringer("dispatcher", d.getDispatcherID()),
+			zap.Stringer("eventServiceID", from),
+			zap.Uint64("reasonCode", controlEvent.ReasonCode))
+	case commonEvent.DispatcherControlActionReset:
+		switch controlEvent.Status {
+		case commonEvent.DispatcherControlStatusAccepted,
+			commonEvent.DispatcherControlStatusStale:
+			d.clearPendingReset(controlEvent.Epoch)
+		case commonEvent.DispatcherControlStatusNotFound:
+			d.connState.setWaitingReadyWithIncarnation(from, controlEvent.Incarnation)
+			d.registerTo(from)
+		case commonEvent.DispatcherControlStatusRejected:
+			log.Warn("dispatcher reset request was rejected",
+				zap.Stringer("changefeedID", d.target.GetChangefeedID()),
+				zap.Stringer("dispatcher", d.getDispatcherID()),
+				zap.Stringer("eventServiceID", from),
+				zap.Uint64("epoch", controlEvent.Epoch),
+				zap.Uint64("reasonCode", controlEvent.ReasonCode))
+		}
+	default:
+		log.Panic("unexpected control action for dispatcher stat",
+			zap.Stringer("dispatcher", d.getDispatcherID()),
+			zap.Uint64("action", uint64(controlEvent.Action)))
+	}
+}
+
 // "signalEvent" refers to the types of events that may modify the event service with which this dispatcher communicates.
 // "signalEvent" includes TypeReadyEvent/TypeNotReusableEvent
 func (d *dispatcherStat) handleSignalEvent(event dispatcher.DispatcherEvent) {
 	localServerID := d.eventCollector.getLocalServerID()
+	from := *event.From
 
 	switch event.GetType() {
 	case commonEvent.TypeReadyEvent:
-		// if the dispatcher has received ready signal from local event service,
+		readyEvent, ok := event.Event.(*commonEvent.ReadyEvent)
+		if !ok {
+			log.Panic("ready event is not a ready event", zap.Any("event", event))
+		}
+		currentServerID, currentIncarnation, _ := d.connState.getBinding()
+		if currentServerID == from && isIncarnationStale(currentIncarnation, readyEvent.Incarnation) {
+			return
+		}
+		d.clearPendingRegister(from)
+		// Once the dispatcher is already streaming from the local event service,
+		// local is the final owner and all later signal events are stale.
 		// ignore all types of signal events.
-		if d.connState.isCurrentEventService(localServerID) {
+		if d.connState.isStreamingFrom(localServerID) {
+			if from == localServerID {
+				d.shouldResendResetOnRepeatedReady(localServerID)
+			}
 			// If we receive a ready event from a remote service while connected to the local
 			// service, it implies a stale registration. Send a remove request to clean it up.
-			if event.From != nil && *event.From != localServerID {
-				d.removeFrom(*event.From)
+			if from != localServerID {
+				d.removeFrom(from)
 			}
 			return
 		}
 
 		// if the event is neither from local event service nor from the current event service, ignore it.
-		if *event.From != localServerID && !d.connState.isCurrentEventService(*event.From) {
+		if from != localServerID && !d.connState.isCurrentEventService(from) {
 			return
 		}
 
-		if *event.From == localServerID {
+		if from == localServerID {
 			if d.readyCallback != nil {
 				// If readyCallback is set, this dispatcher is performing its initial
 				// registration with the local event service. Therefore, no deregistration
 				// from a previous service is necessary.
-				d.connState.setEventServiceID(localServerID)
-				d.connState.readyEventReceived.Store(true)
+				d.connState.setReady(localServerID, readyEvent.Incarnation)
 				d.readyCallback()
 				return
 			}
-			// note: this must be the first ready event from local event service
 			oldEventServiceID := d.connState.getEventServiceID()
-			if oldEventServiceID != "" {
+			if oldEventServiceID != "" && oldEventServiceID != localServerID {
 				d.removeFrom(oldEventServiceID)
 			}
 			log.Info("received ready signal from local event service, prepare to reset the dispatcher",
 				zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 				zap.Stringer("dispatcher", d.getDispatcherID()))
 
-			d.connState.setEventServiceID(localServerID)
-			d.connState.readyEventReceived.Store(true)
+			d.connState.setReady(localServerID, readyEvent.Incarnation)
 			d.connState.clearRemoteCandidates()
 			d.commitReady(localServerID)
 		} else {
 			// note: this ready event must be from a remote event service which the dispatcher is trying to register to.
-			// TODO: if receive too much redudant ready events from remote service, we may need reset again?
-			if d.connState.readyEventReceived.Load() {
+			if d.connState.isStreamingFrom(from) {
+				if d.shouldResendResetOnRepeatedReady(from) {
+					return
+				}
 				log.Info("received ready signal from the same server again, ignore it",
 					zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 					zap.Stringer("dispatcher", d.getDispatcherID()),
-					zap.Stringer("eventServiceID", *event.From))
+					zap.Stringer("eventServiceID", from))
 				return
 			}
 			log.Info("received ready signal from remote event service, prepare to reset the dispatcher",
 				zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 				zap.Stringer("dispatcher", d.getDispatcherID()),
-				zap.Stringer("eventServiceID", *event.From))
-			d.connState.readyEventReceived.Store(true)
-			d.commitReady(*event.From)
+				zap.Stringer("eventServiceID", from))
+			d.connState.setReady(from, readyEvent.Incarnation)
+			d.commitReady(from)
 		}
 	case commonEvent.TypeNotReusableEvent:
-		if *event.From == localServerID {
+		notReusableEvent, ok := event.Event.(*commonEvent.NotReusableEvent)
+		if !ok {
+			log.Panic("not reusable event is not a not reusable event", zap.Any("event", event))
+		}
+		currentServerID, currentIncarnation, _ := d.connState.getBinding()
+		if currentServerID == from && isIncarnationStale(currentIncarnation, notReusableEvent.Incarnation) {
+			return
+		}
+		d.clearPendingRegister(from)
+		if from == localServerID {
 			log.Panic("should not happen: local event service should not send not reusable event")
 		}
 		candidate := d.connState.getNextRemoteCandidate()
 		if candidate != "" {
 			d.registerTo(candidate)
+			return
 		}
+		d.connState.clearIfCurrentEventService(from)
 	default:
 		log.Panic("should not happen: unknown signal event type", zap.Int("eventType", event.GetType()))
 	}
@@ -621,6 +910,13 @@ func (d *dispatcherStat) handleHandshakeEvent(event dispatcher.DispatcherEvent) 
 	if !ok {
 		log.Panic("handshake event is not a handshake event", zap.Any("event", event))
 	}
+	currentServerID, currentIncarnation, _ := d.connState.getBinding()
+	if currentServerID != "" && *event.From == currentServerID && isIncarnationStale(currentIncarnation, handshakeEvent.Incarnation) {
+		return
+	}
+	if currentServerID != "" && *event.From != currentServerID {
+		return
+	}
 	if !d.isFromCurrentEpoch(event) {
 		log.Info("receive a handshake event from a stale epoch, ignore it",
 			zap.Stringer("changefeedID", d.target.GetChangefeedID()),
@@ -639,7 +935,9 @@ func (d *dispatcherStat) handleHandshakeEvent(event dispatcher.DispatcherEvent) 
 	if tableInfo != nil {
 		d.tableInfo.Store(tableInfo)
 	}
+	d.connState.setReady(*event.From, handshakeEvent.Incarnation)
 	d.lastEventSeq.Store(handshakeEvent.Seq)
+	d.clearPendingReset(handshakeEvent.Epoch)
 }
 
 func (d *dispatcherStat) setRemoteCandidates(nodes []string) {
@@ -726,6 +1024,7 @@ func (d *dispatcherStat) newDispatcherRemoveRequest(serverId string) *messaging.
 			// ServerId is the id of the request sender.
 			ServerId:   serverId,
 			ActionType: eventpb.ActionType_ACTION_TYPE_REMOVE,
+			Epoch:      d.epoch.Load(),
 			Mode:       d.target.GetMode(),
 		},
 	}
