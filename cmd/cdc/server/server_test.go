@@ -123,10 +123,10 @@ func TestNewOptionsDefaultSecurity(t *testing.T) {
 
 func TestIsNormalServerShutdown(t *testing.T) {
 	testCases := []struct {
-		name        string
-		err         error
-		cancelCtx   bool
-		expected    bool
+		name      string
+		err       error
+		cancelCtx bool
+		expected  bool
 	}{
 		{
 			name:     "nil error",
