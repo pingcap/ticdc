@@ -329,12 +329,10 @@ func TestVerifyEventSequence(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			stat := &dispatcherStat{
-				target: newMockDispatcher(common.NewDispatcherID(), 0),
-			}
+			stat := newDispatcherStat(newMockDispatcher(common.NewDispatcherID(), 0), nil, nil)
 			state := stat.loadCurrentEpochState()
 			state.lastEventSeq.Store(tt.lastEventSeq)
-			result := stat.verifyEventSequenceWithState(tt.event, state)
+			result := stat.verifyEventSequence(tt.event, state)
 			require.Equal(t, tt.expectedResult, result)
 		})
 	}
@@ -481,14 +479,12 @@ func TestFilterAndUpdateEventByCommitTs(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			stat := &dispatcherStat{
-				target: newMockDispatcher(common.NewDispatcherID(), 0),
-			}
+			stat := newDispatcherStat(newMockDispatcher(common.NewDispatcherID(), 0), nil, nil)
 			stat.lastEventCommitTs.Store(tt.lastEventCommitTs)
 			stat.gotDDLOnTs.Store(tt.gotDDLOnTs)
 			stat.gotSyncpointOnTS.Store(tt.gotSyncpointOnTS)
 
-			result := stat.filterAndUpdateEventByCommitTsWithState(tt.event, stat.loadCurrentEpochState())
+			result := stat.filterAndUpdateEventByCommitTs(tt.event, stat.loadCurrentEpochState())
 			require.Equal(t, tt.expectedResult, result)
 			require.Equal(t, tt.expectedDDLOnTs, stat.gotDDLOnTs.Load())
 			require.Equal(t, tt.expectedSyncOnTs, stat.gotSyncpointOnTS.Load())
@@ -640,10 +636,7 @@ func TestHandleSignalEvent(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			stat := &dispatcherStat{
-				target:         newMockDispatcher(common.NewDispatcherID(), 0),
-				eventCollector: newTestEventCollector(localServerID),
-			}
+			stat := newDispatcherStat(newMockDispatcher(common.NewDispatcherID(), 0), newTestEventCollector(localServerID), nil)
 			if tt.initialState != nil {
 				tt.initialState(stat)
 			}
@@ -738,12 +731,10 @@ func TestIsFromCurrentEpoch(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			stat := &dispatcherStat{
-				target: newMockDispatcher(common.NewDispatcherID(), 0),
-			}
+			stat := newDispatcherStat(newMockDispatcher(common.NewDispatcherID(), 0), nil, nil)
 			state := newDispatcherEpochState(tt.epoch, tt.lastEventSeq, stat.target.GetStartTs())
 			stat.currentEpoch.Store(state)
-			result := stat.isFromCurrentEpochWithState(tt.event, state)
+			result := stat.isFromCurrentEpoch(tt.event, state)
 			require.Equal(t, tt.expectedResult, result)
 		})
 	}
@@ -926,10 +917,7 @@ func TestHandleDataEvents(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			stat := &dispatcherStat{
-				target:         newMockDispatcher(common.NewDispatcherID(), 0),
-				eventCollector: newTestEventCollector(localServerID),
-			}
+			stat := newDispatcherStat(newMockDispatcher(common.NewDispatcherID(), 0), newTestEventCollector(localServerID), nil)
 			stat.target.(*mockDispatcher).handleEvents = tt.handleEvents
 
 			if tt.initialState != nil {

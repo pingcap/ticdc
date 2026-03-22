@@ -173,11 +173,9 @@ func newDispatcherStat(
 func (d *dispatcherStat) loadCurrentEpochState() *dispatcherEpochState {
 	state := d.currentEpoch.Load()
 	if state == nil {
-		state = newDispatcherEpochState(0, 0, d.target.GetStartTs())
-		if d.currentEpoch.CompareAndSwap(nil, state) {
-			return state
-		}
-		return d.currentEpoch.Load()
+		log.Panic("dispatcher epoch state is not initialized",
+			zap.Stringer("changefeedID", d.target.GetChangefeedID()),
+			zap.Stringer("dispatcher", d.getDispatcherID()))
 	}
 	return state
 }
@@ -275,7 +273,7 @@ func (d *dispatcherStat) getDispatcherID() common.DispatcherID {
 	return d.target.GetId()
 }
 
-func (d *dispatcherStat) verifyEventSequenceWithState(event dispatcher.DispatcherEvent, state *dispatcherEpochState) bool {
+func (d *dispatcherStat) verifyEventSequence(event dispatcher.DispatcherEvent, state *dispatcherEpochState) bool {
 	// check the invariant that handshake event is the first event of every epoch
 	if event.GetType() != commonEvent.TypeHandshakeEvent && state.lastEventSeq.Load() == 0 {
 		log.Warn("receive non-handshake event before handshake event, reset the dispatcher",
@@ -349,7 +347,7 @@ func (d *dispatcherStat) verifyEventSequenceWithState(event dispatcher.Dispatche
 	return true
 }
 
-func (d *dispatcherStat) filterAndUpdateEventByCommitTsWithState(event dispatcher.DispatcherEvent, state *dispatcherEpochState) bool {
+func (d *dispatcherStat) filterAndUpdateEventByCommitTs(event dispatcher.DispatcherEvent, state *dispatcherEpochState) bool {
 	shouldIgnore := false
 	if event.GetCommitTs() < d.lastEventCommitTs.Load() {
 		shouldIgnore = true
@@ -405,7 +403,7 @@ func (d *dispatcherStat) observeCurrentEpochMaxEventTs(state *dispatcherEpochSta
 	util.MustCompareAndMonotonicIncrease(&state.maxEventTs, ts)
 }
 
-func (d *dispatcherStat) isFromCurrentEpochWithState(event dispatcher.DispatcherEvent, state *dispatcherEpochState) bool {
+func (d *dispatcherStat) isFromCurrentEpoch(event dispatcher.DispatcherEvent, state *dispatcherEpochState) bool {
 	if event.GetType() == commonEvent.TypeBatchDMLEvent {
 		batchDML := event.Event.(*commonEvent.BatchDMLEvent)
 		for _, dml := range batchDML.DMLEvents {
@@ -431,7 +429,7 @@ func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEve
 	var validEvents []dispatcher.DispatcherEvent
 	state := d.loadCurrentEpochState()
 	for _, event := range events {
-		if !d.isFromCurrentEpochWithState(event, state) {
+		if !d.isFromCurrentEpoch(event, state) {
 			log.Debug("receive DML/Resolved event from a stale epoch, ignore it",
 				zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 				zap.Stringer("dispatcher", d.getDispatcherID()),
@@ -439,7 +437,7 @@ func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEve
 				zap.Any("event", event.Event))
 			continue
 		}
-		if !d.verifyEventSequenceWithState(event, state) {
+		if !d.verifyEventSequence(event, state) {
 			d.reset(d.connState.getEventServiceID())
 			return false
 		}
@@ -447,7 +445,7 @@ func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEve
 			d.observeCurrentEpochMaxEventTs(state, event.GetCommitTs())
 			validEvents = append(validEvents, event)
 		} else if event.GetType() == commonEvent.TypeDMLEvent {
-			if d.filterAndUpdateEventByCommitTsWithState(event, state) {
+			if d.filterAndUpdateEventByCommitTs(event, state) {
 				validEvents = append(validEvents, event)
 			}
 		} else if event.GetType() == commonEvent.TypeBatchDMLEvent {
@@ -471,7 +469,7 @@ func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEve
 				dml.TableInfo.InitPrivateFields()
 				dml.TableInfoVersion = tableInfoVersion
 				dmlEvent := dispatcher.NewDispatcherEvent(event.From, dml)
-				if d.filterAndUpdateEventByCommitTsWithState(dmlEvent, state) {
+				if d.filterAndUpdateEventByCommitTs(dmlEvent, state) {
 					validEvents = append(validEvents, dmlEvent)
 				}
 			}
@@ -504,7 +502,7 @@ func (d *dispatcherStat) handleSingleDataEvents(events []dispatcher.DispatcherEv
 	}
 	from := events[0].From
 	state := d.loadCurrentEpochState()
-	if !d.isFromCurrentEpochWithState(events[0], state) {
+	if !d.isFromCurrentEpoch(events[0], state) {
 		log.Info("receive DDL/SyncPoint/Handshake event from a stale epoch, ignore it",
 			zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 			zap.Stringer("dispatcher", d.getDispatcherID()),
@@ -516,12 +514,12 @@ func (d *dispatcherStat) handleSingleDataEvents(events []dispatcher.DispatcherEv
 			zap.Stringer("currentEventService", d.connState.getEventServiceID()))
 		return false
 	}
-	if !d.verifyEventSequenceWithState(events[0], state) {
+	if !d.verifyEventSequence(events[0], state) {
 		d.reset(d.connState.getEventServiceID())
 		return false
 	}
 	if events[0].GetType() == commonEvent.TypeDDLEvent {
-		if !d.filterAndUpdateEventByCommitTsWithState(events[0], state) {
+		if !d.filterAndUpdateEventByCommitTs(events[0], state) {
 			return false
 		}
 		ddl := events[0].Event.(*commonEvent.DDLEvent)
@@ -531,7 +529,7 @@ func (d *dispatcherStat) handleSingleDataEvents(events []dispatcher.DispatcherEv
 		}
 		return d.target.HandleEvents(events, func() { d.wake() })
 	} else {
-		if !d.filterAndUpdateEventByCommitTsWithState(events[0], state) {
+		if !d.filterAndUpdateEventByCommitTs(events[0], state) {
 			return false
 		}
 		return d.target.HandleEvents(events, func() { d.wake() })
@@ -639,7 +637,7 @@ func (d *dispatcherStat) handleDropEvent(event dispatcher.DispatcherEvent) {
 	}
 
 	state := d.loadCurrentEpochState()
-	if !d.isFromCurrentEpochWithState(event, state) {
+	if !d.isFromCurrentEpoch(event, state) {
 		log.Debug("receive a drop event from a stale epoch, ignore it",
 			zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 			zap.Stringer("dispatcher", d.getDispatcherID()),
@@ -668,7 +666,7 @@ func (d *dispatcherStat) handleHandshakeEvent(event dispatcher.DispatcherEvent) 
 		log.Panic("handshake event is not a handshake event", zap.Any("event", event))
 	}
 	state := d.loadCurrentEpochState()
-	if !d.isFromCurrentEpochWithState(event, state) {
+	if !d.isFromCurrentEpoch(event, state) {
 		log.Info("receive a handshake event from a stale epoch, ignore it",
 			zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 			zap.Stringer("dispatcher", d.getDispatcherID()),
