@@ -732,7 +732,6 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 			if watermark != nil {
 				message.RedoWatermark.UpdateMin(*watermark)
 			}
-
 		})
 		message.RedoWatermark.Seq = redoSeq
 		e.latestRedoWatermark.Set(message.RedoWatermark)
