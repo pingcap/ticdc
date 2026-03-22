@@ -26,6 +26,7 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -486,6 +487,55 @@ func TestGetScanTaskDataRangeEmptyAfterCappingWithPendingDDLEventUsesLocalWindow
 	require.True(t, needScan)
 	require.Equal(t, commitStart, dataRange.CommitTsStart)
 	require.Equal(t, oracle.GoTimeToTS(oracle.GetTimeFromTS(commitStart).Add(defaultScanInterval)), dataRange.CommitTsEnd)
+}
+
+func TestGetScanTaskDataRangePendingDDLLocalAdvanceRespectsSyncPointBoundary(t *testing.T) {
+	broker, _, ss, _ := newEventBrokerForTest()
+	// Close the broker, so we can catch all message in the test.
+	broker.close()
+
+	info := newMockDispatcherInfoForTest(t)
+	info.epoch = 1
+	info.enableSyncPoint = true
+	info.syncPointInterval = 10 * time.Second
+
+	baseTime := time.Now()
+	baseTs := oracle.GoTimeToTS(baseTime)
+	commitStart := oracle.GoTimeToTS(baseTime.Add(20 * time.Second))
+	nextSyncPoint := oracle.GoTimeToTS(baseTime.Add(22 * time.Second))
+	ddlCommitTs := oracle.GoTimeToTS(baseTime.Add(23 * time.Second))
+	resolvedTs := oracle.GoTimeToTS(baseTime.Add(40 * time.Second))
+
+	info.startTs = baseTs
+	info.nextSyncPoint = nextSyncPoint
+
+	changefeedStatus := broker.getOrSetChangefeedStatus(info.GetChangefeedID(), info.GetSyncPointInterval())
+	disp := newDispatcherStat(info, 1, 1, nil, changefeedStatus)
+	disp.seq.Store(1)
+
+	dispPtr := &atomic.Pointer[dispatcherStat]{}
+	dispPtr.Store(disp)
+	changefeedStatus.addDispatcher(disp.id, dispPtr)
+
+	disp.sentResolvedTs.Store(baseTs)
+	disp.receivedResolvedTs.Store(resolvedTs)
+	disp.eventStoreCommitTs.Store(commitStart)
+	disp.lastScannedCommitTs.Store(commitStart)
+	disp.lastScannedStartTs.Store(commitStart - 1)
+
+	// Keep global scan window capped at commitStart so pending-DDL local advance path is triggered.
+	changefeedStatus.minSentTs.Store(oracle.GoTimeToTS(baseTime.Add(15 * time.Second)))
+	changefeedStatus.scanInterval.Store(int64(defaultScanInterval))
+
+	ss.resolvedTs = resolvedTs
+	ss.maxDDLCommitTs = ddlCommitTs
+
+	needScan, dataRange := broker.getScanTaskDataRange(disp)
+	require.True(t, needScan)
+	require.Equal(t, commitStart, dataRange.CommitTsStart)
+	require.Equal(t, nextSyncPoint, dataRange.CommitTsEnd)
+	require.Equal(t, nextSyncPoint, changefeedStatus.getSyncPointPreparingTs())
+	require.False(t, changefeedStatus.isSyncPointInCommitStage(nextSyncPoint))
 }
 
 func TestGetScanTaskDataRangeRingWaitWithThreeDispatchersCanAdvancePendingDDL(t *testing.T) {
@@ -1131,4 +1181,174 @@ func TestAddDispatcherFailure(t *testing.T) {
 
 	_, ok := broker.changefeedMap.Load(dispInfo.GetChangefeedID())
 	require.False(t, ok, "changefeedStatus should be removed after failed registration")
+}
+
+type tableTriggerSchemaStore struct {
+	*mockSchemaStore
+	events []event.DDLEvent
+	endTs  uint64
+	once   atomic.Bool
+}
+
+func (s *tableTriggerSchemaStore) FetchTableTriggerDDLEvents(keyspaceMeta common.KeyspaceMeta, dispatcherID common.DispatcherID, tableFilter filter.Filter, start uint64, limit int) ([]event.DDLEvent, uint64, error) {
+	if s.once.CompareAndSwap(false, true) {
+		return s.events, s.endTs, nil
+	}
+	return nil, start, nil
+}
+
+func TestGetScanTaskDataRangeLocalAdvanceForPendingDDL(t *testing.T) {
+	broker, _, schemaStore, _ := newEventBrokerForTest()
+	defer broker.close()
+
+	info := newMockDispatcherInfoForTest(t)
+	info.epoch = 1
+	changefeed := broker.getOrSetChangefeedStatus(info.GetChangefeedID(), info.GetSyncPointInterval())
+
+	dispatcher := newDispatcherStat(info, 1, 1, nil, changefeed)
+	dispatcher.seq.Store(1)
+
+	base := time.Unix(0, 0)
+	ts9 := oracle.GoTimeToTS(base.Add(9 * time.Second))
+	ts10 := oracle.GoTimeToTS(base.Add(10 * time.Second))
+	ts11 := oracle.GoTimeToTS(base.Add(11 * time.Second))
+	ts12 := oracle.GoTimeToTS(base.Add(12 * time.Second))
+	ts40 := oracle.GoTimeToTS(base.Add(40 * time.Second))
+
+	dispatcher.sentResolvedTs.Store(ts10)
+	dispatcher.receivedResolvedTs.Store(ts40)
+	dispatcher.eventStoreCommitTs.Store(ts40)
+	dispatcher.lastScannedCommitTs.Store(ts10)
+	dispatcher.lastScannedStartTs.Store(0)
+
+	dispatcherPtr := &atomic.Pointer[dispatcherStat]{}
+	dispatcherPtr.Store(dispatcher)
+	changefeed.addDispatcher(dispatcher.id, dispatcherPtr)
+	changefeed.minSentTs.Store(ts9)
+	changefeed.scanInterval.Store(int64(time.Second))
+
+	schemaStore.resolvedTs = ts40
+	schemaStore.maxDDLCommitTs = ts12
+
+	needScan, dataRange := broker.getScanTaskDataRange(dispatcher)
+	require.True(t, needScan)
+	require.Equal(t, ts10, dataRange.CommitTsStart)
+	require.Equal(t, ts11, dataRange.CommitTsEnd)
+}
+
+func TestGetScanTaskDataRangeNudgesSyncPointCommitWhenNoNewRange(t *testing.T) {
+	broker, _, _, _ := newEventBrokerForTest()
+	// Stop background workers so we can deterministically inspect broker.messageCh.
+	broker.close()
+
+	info := newMockDispatcherInfoForTest(t)
+	info.epoch = 1
+	info.enableSyncPoint = true
+	info.syncPointInterval = 10 * time.Second
+	info.startTs = oracle.GoTimeToTS(time.Unix(0, 0).Add(10 * time.Second))
+	info.nextSyncPoint = oracle.GoTimeToTS(time.Unix(0, 0).Add(20 * time.Second))
+
+	changefeed := broker.getOrSetChangefeedStatus(info.GetChangefeedID(), info.GetSyncPointInterval())
+	dispatcher := newDispatcherStat(info, 1, 1, nil, changefeed)
+	dispatcher.seq.Store(1)
+	dispatcher.sentResolvedTs.Store(info.nextSyncPoint)
+	dispatcher.receivedResolvedTs.Store(info.nextSyncPoint)
+	dispatcher.lastScannedCommitTs.Store(info.nextSyncPoint)
+	dispatcher.lastScannedStartTs.Store(0)
+	changefeed.syncPointPreparingTs.Store(info.nextSyncPoint)
+	changefeed.syncPointInFlightTs.Store(info.nextSyncPoint)
+
+	needScan, dataRange := broker.getScanTaskDataRange(dispatcher)
+	require.False(t, needScan)
+	require.Equal(t, common.DataRange{}, dataRange)
+
+	first := <-broker.messageCh[dispatcher.messageWorkerIndex]
+	second := <-broker.messageCh[dispatcher.messageWorkerIndex]
+	require.Equal(t, event.TypeSyncPointEvent, first.msgType)
+	require.Equal(t, event.TypeResolvedEvent, second.msgType)
+}
+
+func TestTickTableTriggerDispatchersSendsDDLEventAndResolved(t *testing.T) {
+	mockPDClock := pdutil.NewClock4Test()
+	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+	eventStore := newMockEventStore(100)
+	baseSchemaStore := NewMockSchemaStore()
+
+	nextTs := uint64(310)
+	tableTriggerDDL := event.DDLEvent{FinishedTs: nextTs, Query: "alter table t add column c int"}
+	schemaStore := &tableTriggerSchemaStore{
+		mockSchemaStore: baseSchemaStore,
+		events:          []event.DDLEvent{tableTriggerDDL},
+		endTs:           nextTs,
+	}
+	messageCenter := messaging.NewMockMessageCenter()
+	messageCh := messageCenter.GetMessageChannel()
+
+	broker := newEventBroker(context.Background(), 1, eventStore, schemaStore, messageCenter, time.UTC, &integrity.Config{
+		IntegrityCheckLevel:   util.AddressOf(integrity.CheckLevelNone),
+		CorruptionHandleLevel: util.AddressOf(integrity.CorruptionHandleLevelWarn),
+	})
+	defer broker.close()
+
+	info := newMockDispatcherInfo(t, 300, common.NewDispatcherID(), 0, eventpb.ActionType_ACTION_TYPE_REGISTER)
+	info.span = common.KeyspaceDDLSpan(common.DefaultKeyspaceID)
+	err := broker.addDispatcher(info)
+	require.NoError(t, err)
+
+	resetInfo := newMockDispatcherInfo(t, 300, info.GetID(), 0, eventpb.ActionType_ACTION_TYPE_RESET)
+	resetInfo.span = common.KeyspaceDDLSpan(common.DefaultKeyspaceID)
+	resetInfo.epoch = 1
+	err = broker.resetDispatcher(resetInfo)
+	require.NoError(t, err)
+
+	foundDDL := false
+	foundResolved := false
+	require.Eventually(t, func() bool {
+		for i := 0; i < len(messageCh); i++ {
+			msg := <-messageCh
+			if msg.Type == messaging.TypeDDLEvent {
+				foundDDL = true
+			}
+			if msg.Type == messaging.TypeBatchResolvedTs {
+				foundResolved = true
+			}
+		}
+		return foundDDL && foundResolved
+	}, 5*time.Second, 20*time.Millisecond)
+}
+
+func TestResetDispatcherCopiesRuntimeStatistics(t *testing.T) {
+	broker, _, _, _ := newEventBrokerForTest()
+	defer broker.close()
+
+	info := newMockDispatcherInfoForTest(t)
+	err := broker.addDispatcher(info)
+	require.NoError(t, err)
+
+	statPtr := broker.getDispatcher(info.GetID())
+	require.NotNil(t, statPtr)
+	oldStat := statPtr.Load()
+
+	oldStat.receivedResolvedTs.Store(180)
+	oldStat.eventStoreCommitTs.Store(170)
+	oldStat.checkpointTs.Store(160)
+	oldStat.currentScanLimitInBytes.Store(4096)
+	oldStat.maxScanLimitInBytes.Store(8192)
+	oldStat.lastScanBytes.Store(2048)
+
+	resetInfo := newMockDispatcherInfo(t, 150, info.GetID(), info.GetTableSpan().TableID, eventpb.ActionType_ACTION_TYPE_RESET)
+	resetInfo.epoch = 2
+	err = broker.resetDispatcher(resetInfo)
+	require.NoError(t, err)
+
+	newStat := statPtr.Load()
+	require.NotEqual(t, oldStat, newStat)
+	require.True(t, oldStat.isRemoved.Load())
+	require.Equal(t, uint64(2), newStat.epoch)
+	require.Equal(t, uint64(180), newStat.receivedResolvedTs.Load())
+	require.Equal(t, uint64(170), newStat.eventStoreCommitTs.Load())
+	require.Equal(t, uint64(160), newStat.checkpointTs.Load())
+	require.Equal(t, int64(4096), newStat.currentScanLimitInBytes.Load())
+	require.Equal(t, int64(8192), newStat.maxScanLimitInBytes.Load())
+	require.Equal(t, int64(2048), newStat.lastScanBytes.Load())
 }

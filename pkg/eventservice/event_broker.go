@@ -663,24 +663,7 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 			)
 		}
 	}
-	// Two-stage syncpoint:
-	// 1. Always cap scan range by next syncpoint, so one scan will not cross multiple
-	//    syncpoint boundaries.
-	// 2. Prepare stage: once any dispatcher detects crossing its next syncpoint, select a
-	//    global preparing ts and cap all dispatchers at that ts.
-	// 3. Commit stage: only after all active dispatchers have sent resolved-ts >= preparing ts.
-	if task.enableSyncPoint {
-		c.fastForwardSyncPointIfNeeded(task)
-		nextSyncPoint := task.nextSyncPoint.Load()
-		if nextSyncPoint > 0 && dataRange.CommitTsEnd > nextSyncPoint {
-			task.changefeedStat.tryEnterSyncPointPrepare(nextSyncPoint)
-			dataRange.CommitTsEnd = nextSyncPoint
-		}
-		preparingTs := task.changefeedStat.getSyncPointPreparingTs()
-		if preparingTs > 0 && !task.changefeedStat.isSyncPointInCommitStage(preparingTs) {
-			dataRange.CommitTsEnd = min(dataRange.CommitTsEnd, preparingTs)
-		}
-	}
+	dataRange.CommitTsEnd = c.capCommitTsEndBySyncPoint(task, dataRange.CommitTsEnd)
 
 	if dataRange.CommitTsEnd <= dataRange.CommitTsStart && hasPendingDDLEventInCurrentRange {
 		// Global scan window base can be pinned by other lagging dispatchers.
@@ -692,6 +675,9 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 		}
 		localScanMaxTs := oracle.GoTimeToTS(oracle.GetTimeFromTS(dataRange.CommitTsStart).Add(interval))
 		dataRange.CommitTsEnd = min(commitTsEndBeforeWindow, localScanMaxTs)
+		// Local pending-DDL advance is allowed to bypass scan window, but must still obey
+		// syncpoint prepare/commit boundary.
+		dataRange.CommitTsEnd = c.capCommitTsEndBySyncPoint(task, dataRange.CommitTsEnd)
 		if dataRange.CommitTsEnd > dataRange.CommitTsStart {
 			log.Info("scan window local advance due to pending ddl",
 				zap.Stringer("changefeedID", task.changefeedStat.changefeedID),
@@ -731,6 +717,26 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 		return false, common.DataRange{}
 	}
 	return true, dataRange
+}
+
+// capCommitTsEndBySyncPoint enforces two-stage syncpoint boundary on scan range:
+// 1. Always cap by next syncpoint boundary.
+// 2. In prepare stage, cap by global preparing ts until commit stage is ready.
+func (c *eventBroker) capCommitTsEndBySyncPoint(task scanTask, commitTsEnd uint64) uint64 {
+	if !task.enableSyncPoint {
+		return commitTsEnd
+	}
+	c.fastForwardSyncPointIfNeeded(task)
+	nextSyncPoint := task.nextSyncPoint.Load()
+	if nextSyncPoint > 0 && commitTsEnd > nextSyncPoint {
+		task.changefeedStat.tryEnterSyncPointPrepare(nextSyncPoint)
+		commitTsEnd = nextSyncPoint
+	}
+	preparingTs := task.changefeedStat.getSyncPointPreparingTs()
+	if preparingTs > 0 && !task.changefeedStat.isSyncPointInCommitStage(preparingTs) {
+		commitTsEnd = min(commitTsEnd, preparingTs)
+	}
+	return commitTsEnd
 }
 
 // scanReady checks if the dispatcher needs to scan the event store/schema store.
