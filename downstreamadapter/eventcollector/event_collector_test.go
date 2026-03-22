@@ -151,8 +151,8 @@ func TestProcessMessage(t *testing.T) {
 	)
 	require.NotNil(t, dmls)
 
-	readyEvent := commonEvent.NewReadyEvent(did)
-	handshakeEvent := commonEvent.NewHandshakeEvent(did, ddl.GetStartTs()-1, 1, ddl.TableInfo)
+	readyEvent := commonEvent.NewReadyEvent(did, 1)
+	handshakeEvent := commonEvent.NewHandshakeEvent(did, ddl.GetStartTs()-1, 1, 1, ddl.TableInfo)
 	events := make(map[uint64]commonEvent.Event)
 	ddl.DispatcherID = did
 	ddl.Seq = seq.Add(1)
@@ -241,7 +241,7 @@ func TestHeartbeatRemovedTriggersReregisterAndReset(t *testing.T) {
 	dispatcherID := common.NewDispatcherID()
 	mockDisp := newMockDispatcher(dispatcherID, 100)
 	stat := newDispatcherStat(mockDisp, c, nil)
-	stat.connState.setReady(localServerID)
+	stat.connState.setReady(localServerID, 1)
 	c.dispatcherMap.Store(dispatcherID, stat)
 
 	response := commonEvent.NewDispatcherHeartbeatResponse()
@@ -261,8 +261,9 @@ func TestHeartbeatRemovedTriggersReregisterAndReset(t *testing.T) {
 
 	stat.handleSignalEvent(dispatcher.DispatcherEvent{
 		From: &localServerID,
-		Event: &mockEvent{
-			eventType: commonEvent.TypeReadyEvent,
+		Event: &commonEvent.ReadyEvent{
+			Version:     commonEvent.ReadyEventVersion1,
+			Incarnation: 1,
 		},
 	})
 

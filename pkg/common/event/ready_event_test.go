@@ -23,7 +23,7 @@ import (
 
 func TestReadyEvent(t *testing.T) {
 	did := common.NewDispatcherID()
-	e := NewReadyEvent(did)
+	e := NewReadyEvent(did, 1)
 	data, err := e.Marshal()
 	require.NoError(t, err)
 	require.Len(t, data, int(e.GetSize())+int(GetEventHeaderSize()))
@@ -33,11 +33,12 @@ func TestReadyEvent(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, e.Version, e2.Version)
 	require.Equal(t, e.DispatcherID, e2.DispatcherID)
+	require.Equal(t, e.Incarnation, e2.Incarnation)
 }
 
 func TestReadyEventMethods(t *testing.T) {
 	did := common.NewDispatcherID()
-	e := NewReadyEvent(did)
+	e := NewReadyEvent(did, 1)
 
 	// Test GetType
 	require.Equal(t, TypeReadyEvent, e.GetType())
@@ -65,7 +66,7 @@ func TestReadyEventMethods(t *testing.T) {
 }
 
 func TestReadyEventMarshalUnmarshal(t *testing.T) {
-	normalEvent := NewReadyEvent(common.NewDispatcherID())
+	normalEvent := NewReadyEvent(common.NewDispatcherID(), 1)
 	testCases := []struct {
 		name      string
 		event     *ReadyEvent
@@ -108,6 +109,7 @@ func TestReadyEventMarshalUnmarshal(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, tc.event.Version, e2.Version)
 			require.Equal(t, tc.event.DispatcherID, e2.DispatcherID)
+			require.Equal(t, tc.event.Incarnation, e2.Incarnation)
 		})
 	}
 }
@@ -115,7 +117,7 @@ func TestReadyEventMarshalUnmarshal(t *testing.T) {
 // TestReadyEventHeader verifies the unified header format
 func TestReadyEventHeader(t *testing.T) {
 	did := common.NewDispatcherID()
-	e := NewReadyEvent(did)
+	e := NewReadyEvent(did, 1)
 
 	data, err := e.Marshal()
 	require.NoError(t, err)
@@ -198,10 +200,10 @@ func TestReadyEventUnmarshalErrors(t *testing.T) {
 // TestReadyEventSize verifies GetSize calculation
 func TestReadyEventSize(t *testing.T) {
 	did := common.NewDispatcherID()
-	e := NewReadyEvent(did)
+	e := NewReadyEvent(did, 1)
 
 	// GetSize should only return business data size, not including header
-	expectedSize := int64(did.GetSize())
+	expectedSize := int64(did.GetSize() + 8)
 	require.Equal(t, expectedSize, e.GetSize())
 
 	// Marshaled data should include header

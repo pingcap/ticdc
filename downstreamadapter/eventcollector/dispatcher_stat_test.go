@@ -513,12 +513,13 @@ func TestHandleSignalEvent(t *testing.T) {
 			name: "ignore signal event when already connected to local server",
 			event: dispatcher.DispatcherEvent{
 				From: &localServerID,
-				Event: &mockEvent{
-					eventType: commonEvent.TypeReadyEvent,
+				Event: &commonEvent.ReadyEvent{
+					Version:     commonEvent.ReadyEventVersion1,
+					Incarnation: 1,
 				},
 			},
 			initialState: func(stat *dispatcherStat) {
-				stat.connState.setReady(localServerID)
+				stat.connState.setReady(localServerID, 1)
 			},
 			expectedEventServiceID: localServerID,
 			expectedReadyReceived:  true,
@@ -527,8 +528,9 @@ func TestHandleSignalEvent(t *testing.T) {
 			name: "ignore signal event from unknown server",
 			event: dispatcher.DispatcherEvent{
 				From: &anotherRemoteServerID,
-				Event: &mockEvent{
-					eventType: commonEvent.TypeReadyEvent,
+				Event: &commonEvent.ReadyEvent{
+					Version:     commonEvent.ReadyEventVersion1,
+					Incarnation: 1,
 				},
 			},
 			initialState: func(stat *dispatcherStat) {
@@ -541,8 +543,9 @@ func TestHandleSignalEvent(t *testing.T) {
 			name: "handle ready event from local server with callback",
 			event: dispatcher.DispatcherEvent{
 				From: &localServerID,
-				Event: &mockEvent{
-					eventType: commonEvent.TypeReadyEvent,
+				Event: &commonEvent.ReadyEvent{
+					Version:     commonEvent.ReadyEventVersion1,
+					Incarnation: 1,
 				},
 			},
 			initialState: func(stat *dispatcherStat) {
@@ -555,8 +558,9 @@ func TestHandleSignalEvent(t *testing.T) {
 			name: "handle ready event from local server without callback",
 			event: dispatcher.DispatcherEvent{
 				From: &localServerID,
-				Event: &mockEvent{
-					eventType: commonEvent.TypeReadyEvent,
+				Event: &commonEvent.ReadyEvent{
+					Version:     commonEvent.ReadyEventVersion1,
+					Incarnation: 1,
 				},
 			},
 			initialState: func(stat *dispatcherStat) {
@@ -569,8 +573,9 @@ func TestHandleSignalEvent(t *testing.T) {
 			name: "handle ready event from local server while waiting re-register",
 			event: dispatcher.DispatcherEvent{
 				From: &localServerID,
-				Event: &mockEvent{
-					eventType: commonEvent.TypeReadyEvent,
+				Event: &commonEvent.ReadyEvent{
+					Version:     commonEvent.ReadyEventVersion1,
+					Incarnation: 1,
 				},
 			},
 			initialState: func(stat *dispatcherStat) {
@@ -583,8 +588,9 @@ func TestHandleSignalEvent(t *testing.T) {
 			name: "handle ready event from remote server",
 			event: dispatcher.DispatcherEvent{
 				From: &remoteServerID,
-				Event: &mockEvent{
-					eventType: commonEvent.TypeReadyEvent,
+				Event: &commonEvent.ReadyEvent{
+					Version:     commonEvent.ReadyEventVersion1,
+					Incarnation: 1,
 				},
 			},
 			initialState: func(stat *dispatcherStat) {
@@ -597,12 +603,13 @@ func TestHandleSignalEvent(t *testing.T) {
 			name: "ignore duplicate ready event from remote server",
 			event: dispatcher.DispatcherEvent{
 				From: &remoteServerID,
-				Event: &mockEvent{
-					eventType: commonEvent.TypeReadyEvent,
+				Event: &commonEvent.ReadyEvent{
+					Version:     commonEvent.ReadyEventVersion1,
+					Incarnation: 1,
 				},
 			},
 			initialState: func(stat *dispatcherStat) {
-				stat.connState.setReady(remoteServerID)
+				stat.connState.setReady(remoteServerID, 1)
 				stat.lastEventSeq.Store(1)
 			},
 			expectedEventServiceID: remoteServerID,
@@ -612,8 +619,9 @@ func TestHandleSignalEvent(t *testing.T) {
 			name: "handle not reusable event from remote server",
 			event: dispatcher.DispatcherEvent{
 				From: &remoteServerID,
-				Event: &mockEvent{
-					eventType: commonEvent.TypeNotReusableEvent,
+				Event: &commonEvent.NotReusableEvent{
+					Version:     commonEvent.NotReusableEventVersion,
+					Incarnation: 1,
 				},
 			},
 			initialState: func(stat *dispatcherStat) {
@@ -627,8 +635,9 @@ func TestHandleSignalEvent(t *testing.T) {
 			name: "panic on not reusable event from local server",
 			event: dispatcher.DispatcherEvent{
 				From: &localServerID,
-				Event: &mockEvent{
-					eventType: commonEvent.TypeNotReusableEvent,
+				Event: &commonEvent.NotReusableEvent{
+					Version:     commonEvent.NotReusableEventVersion,
+					Incarnation: 1,
 				},
 			},
 			initialState: func(stat *dispatcherStat) {
@@ -682,12 +691,13 @@ func TestRepeatedReadyResendsResetBeforeHandshake(t *testing.T) {
 	mockDisp := newMockDispatcher(common.NewDispatcherID(), 123)
 	mockEventCollector := newTestEventCollector(localServerID)
 	stat := newDispatcherStat(mockDisp, mockEventCollector, nil)
-	stat.connState.setReady(remoteServerID)
+	stat.connState.setReady(remoteServerID, 1)
 
 	stat.handleSignalEvent(dispatcher.DispatcherEvent{
 		From: &remoteServerID,
-		Event: &mockEvent{
-			eventType: commonEvent.TypeReadyEvent,
+		Event: &commonEvent.ReadyEvent{
+			Version:     commonEvent.ReadyEventVersion1,
+			Incarnation: 1,
 		},
 	})
 

@@ -60,6 +60,7 @@ const (
 type eventBroker struct {
 	// tidbClusterID is the ID of the TiDB cluster this eventStore belongs to.
 	tidbClusterID uint64
+	incarnation   uint64
 	// eventStore is the source of the events, eventBroker get the events from the eventStore.
 	eventStore  eventstore.EventStore
 	schemaStore schemastore.SchemaStore
@@ -99,6 +100,7 @@ type eventBroker struct {
 func newEventBroker(
 	ctx context.Context,
 	id uint64,
+	incarnation uint64,
 	eventStore eventstore.EventStore,
 	schemaStore schemastore.SchemaStore,
 	mc messaging.MessageSender,
@@ -126,6 +128,7 @@ func newEventBroker(
 	pdClock := appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock)
 	c := &eventBroker{
 		tidbClusterID:           id,
+		incarnation:             incarnation,
 		eventStore:              eventStore,
 		pdClock:                 pdClock,
 		mounter:                 event.NewMounter(tz, integrity),
@@ -301,12 +304,34 @@ func (c *eventBroker) sendNotReusableEvent(
 	server node.ID,
 	d *dispatcherStat,
 ) {
-	event := event.NewNotReusableEvent(d.info.GetID())
+	event := event.NewNotReusableEvent(d.info.GetID(), c.incarnation)
 	wrapEvent := newWrapNotReusableEvent(server, event)
 
 	// must success unless we can do retry later
 	c.getMessageCh(d.messageWorkerIndex, common.IsRedoMode(d.info.GetMode())) <- wrapEvent
 	updateMetricEventServiceSendCommandCount(d.info.GetMode())
+}
+
+func (c *eventBroker) sendDispatcherControlEvent(
+	server node.ID,
+	dispatcherID common.DispatcherID,
+	epoch uint64,
+	action event.DispatcherControlAction,
+	status event.DispatcherControlStatus,
+	reasonCode uint64,
+) {
+	e := event.NewDispatcherControlEvent(dispatcherID, epoch, c.incarnation, action, status, reasonCode)
+	msg := messaging.NewSingleTargetMessage(server, messaging.EventCollectorTopic, &e)
+	if err := c.msgSender.SendCommand(msg); err != nil {
+		log.Warn("send dispatcher control event failed",
+			zap.Stringer("dispatcherID", dispatcherID),
+			zap.Uint64("epoch", epoch),
+			zap.Uint64("incarnation", c.incarnation),
+			zap.Uint64("reasonCode", reasonCode),
+			zap.Uint8("action", uint8(action)),
+			zap.Uint8("status", uint8(status)),
+			zap.Error(err))
+	}
 }
 
 func (c *eventBroker) getMessageCh(workerIndex int, isRedo bool) chan *wrapEvent {
@@ -505,7 +530,7 @@ func (c *eventBroker) checkAndSendReady(task scanTask) bool {
 			return false
 		}
 		remoteID := node.ID(task.info.GetServerID())
-		event := event.NewReadyEvent(task.info.GetID())
+		event := event.NewReadyEvent(task.info.GetID(), c.incarnation)
 		wrapEvent := newWrapReadyEvent(remoteID, event)
 		c.getMessageCh(task.messageWorkerIndex, common.IsRedoMode(task.info.GetMode())) <- wrapEvent
 		log.Debug("send ready event to dispatcher",
@@ -536,7 +561,7 @@ func (c *eventBroker) sendHandshakeIfNeed(task scanTask) {
 	}
 
 	remoteID := node.ID(task.info.GetServerID())
-	event := event.NewHandshakeEvent(task.id, task.startTs, task.epoch, task.startTableInfo)
+	event := event.NewHandshakeEvent(task.id, task.startTs, task.epoch, c.incarnation, task.startTableInfo)
 	log.Info("send handshake event to dispatcher",
 		zap.Stringer("changefeedID", task.changefeedStat.changefeedID),
 		zap.Stringer("dispatcherID", task.id),
@@ -967,6 +992,18 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 	id := info.GetID()
 	span := info.GetTableSpan()
 	changefeedID := info.GetChangefeedID()
+	target := node.ID(info.GetServerID())
+	if statPtr := c.getDispatcher(id); statPtr != nil {
+		current := statPtr.Load()
+		switch {
+		case current.epoch > info.GetEpoch():
+			c.sendDispatcherControlEvent(target, id, info.GetEpoch(), event.DispatcherControlActionRegister, event.DispatcherControlStatusStale, 0)
+			return nil
+		case current.epoch == info.GetEpoch():
+			c.sendDispatcherControlEvent(target, id, info.GetEpoch(), event.DispatcherControlActionRegister, event.DispatcherControlStatusAccepted, 0)
+			return nil
+		}
+	}
 
 	status := c.getOrSetChangefeedStatus(changefeedID, info.GetSyncPointInterval())
 	dispatcher := newDispatcherStat(info, uint64(len(c.taskChan)), uint64(len(c.messageCh)), nil, status)
@@ -975,6 +1012,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 	status.addDispatcher(id, dispatcherPtr)
 	if span.Equal(common.KeyspaceDDLSpan(span.KeyspaceID)) {
 		c.tableTriggerDispatchers.Store(id, dispatcherPtr)
+		c.sendDispatcherControlEvent(target, id, info.GetEpoch(), event.DispatcherControlActionRegister, event.DispatcherControlStatusAccepted, 0)
 		log.Info("table trigger dispatcher register dispatcher",
 			zap.Uint64("clusterID", c.tidbClusterID),
 			zap.Stringer("changefeedID", changefeedID),
@@ -1016,6 +1054,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 			metrics.EventServiceScanWindowBaseTsGaugeVec.DeleteLabelValues(changefeedID.String())
 			metrics.EventServiceScanWindowIntervalGaugeVec.DeleteLabelValues(changefeedID.String())
 		}
+		c.sendDispatcherControlEvent(target, id, info.GetEpoch(), event.DispatcherControlActionRegister, event.DispatcherControlStatusRejected, 1)
 		c.sendNotReusableEvent(node.ID(info.GetServerID()), dispatcher)
 		return nil
 	}
@@ -1042,10 +1081,12 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 			metrics.EventServiceScanWindowBaseTsGaugeVec.DeleteLabelValues(changefeedID.String())
 			metrics.EventServiceScanWindowIntervalGaugeVec.DeleteLabelValues(changefeedID.String())
 		}
+		c.sendDispatcherControlEvent(target, id, info.GetEpoch(), event.DispatcherControlActionRegister, event.DispatcherControlStatusRejected, 2)
 		return err
 	}
 	c.dispatchers.Store(id, dispatcherPtr)
 	c.metricsCollector.metricDispatcherCount.Inc()
+	c.sendDispatcherControlEvent(target, id, info.GetEpoch(), event.DispatcherControlActionRegister, event.DispatcherControlStatusAccepted, 0)
 	log.Info("register dispatcher",
 		zap.Uint64("clusterID", c.tidbClusterID),
 		zap.Stringer("changefeedID", changefeedID),
@@ -1061,18 +1102,24 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 
 func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 	id := dispatcherInfo.GetID()
+	target := node.ID(dispatcherInfo.GetServerID())
 
 	var isTableTriggerDispatcher bool
 	statPtr, ok := c.dispatchers.Load(id)
 	if !ok {
 		statPtr, ok = c.tableTriggerDispatchers.Load(id)
 		if !ok {
+			c.sendDispatcherControlEvent(target, id, dispatcherInfo.GetEpoch(), event.DispatcherControlActionRemove, event.DispatcherControlStatusNotFound, 0)
 			return
 		}
 		isTableTriggerDispatcher = true
 	}
 
 	stat := statPtr.(*atomic.Pointer[dispatcherStat]).Load()
+	if dispatcherInfo.GetEpoch() != 0 && stat.epoch > dispatcherInfo.GetEpoch() {
+		c.sendDispatcherControlEvent(target, id, dispatcherInfo.GetEpoch(), event.DispatcherControlActionRemove, event.DispatcherControlStatusStale, 0)
+		return
+	}
 	stat.isRemoved.Store(true)
 
 	if isTableTriggerDispatcher {
@@ -1109,11 +1156,13 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 		zap.Stringer("dispatcherID", id), zap.Int64("tableID", dispatcherInfo.GetTableSpan().GetTableID()),
 		zap.String("span", common.FormatTableSpan(dispatcherInfo.GetTableSpan())),
 	)
+	c.sendDispatcherControlEvent(target, id, dispatcherInfo.GetEpoch(), event.DispatcherControlActionRemove, event.DispatcherControlStatusAccepted, 0)
 }
 
 func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 	dispatcherID := dispatcherInfo.GetID()
 	start := time.Now()
+	target := node.ID(dispatcherInfo.GetServerID())
 	statPtr := c.getDispatcher(dispatcherID)
 	if statPtr == nil {
 		// The dispatcher is not registered, ignore it.
@@ -1123,13 +1172,19 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 			zap.Int64("tableID", dispatcherInfo.GetTableSpan().GetTableID()),
 			zap.String("span", common.FormatTableSpan(dispatcherInfo.GetTableSpan())),
 			zap.Uint64("startTs", dispatcherInfo.GetStartTs()))
+		c.sendDispatcherControlEvent(target, dispatcherID, dispatcherInfo.GetEpoch(), event.DispatcherControlActionReset, event.DispatcherControlStatusNotFound, 0)
 		return nil
 	}
 	metrics.EventServiceResetDispatcherCount.Inc()
 
 	oldStat := statPtr.Load()
 	// stale reset request, ignore it.
-	if oldStat.epoch >= dispatcherInfo.GetEpoch() {
+	if oldStat.epoch > dispatcherInfo.GetEpoch() {
+		c.sendDispatcherControlEvent(target, dispatcherID, dispatcherInfo.GetEpoch(), event.DispatcherControlActionReset, event.DispatcherControlStatusStale, 0)
+		return nil
+	}
+	if oldStat.epoch == dispatcherInfo.GetEpoch() {
+		c.sendDispatcherControlEvent(target, dispatcherID, dispatcherInfo.GetEpoch(), event.DispatcherControlActionReset, event.DispatcherControlStatusAccepted, 0)
 		return nil
 	}
 
@@ -1158,6 +1213,7 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 				zap.Uint64("startTs", dispatcherInfo.GetStartTs()),
 				zap.String("span", common.FormatTableSpan(span)),
 				zap.Error(err))
+			c.sendDispatcherControlEvent(target, dispatcherID, dispatcherInfo.GetEpoch(), event.DispatcherControlActionReset, event.DispatcherControlStatusRejected, 3)
 			return err
 		}
 	}
@@ -1197,6 +1253,7 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 		zap.Uint64("newStartTs", dispatcherInfo.GetStartTs()),
 		zap.Uint64("newEpoch", newStat.epoch),
 		zap.Duration("resetTime", time.Since(start)))
+	c.sendDispatcherControlEvent(target, dispatcherID, dispatcherInfo.GetEpoch(), event.DispatcherControlActionReset, event.DispatcherControlStatusAccepted, 0)
 
 	return nil
 }
@@ -1224,6 +1281,7 @@ func (c *eventBroker) handleDispatcherHeartbeat(heartbeat *DispatcherHeartBeatWi
 			response, ok := responseMap[heartbeat.serverID]
 			if !ok {
 				response = event.NewDispatcherHeartbeatResponse()
+				response.Incarnation = c.incarnation
 				responseMap[heartbeat.serverID] = response
 			}
 			response.Append(event.NewDispatcherState(dp.DispatcherID, event.DSStateRemoved))

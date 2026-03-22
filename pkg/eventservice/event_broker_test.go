@@ -43,7 +43,7 @@ func newEventBrokerForTest() (*eventBroker, *mockEventStore, *mockSchemaStore, c
 	ss := NewMockSchemaStore()
 	mc := messaging.NewMockMessageCenter()
 	outputCh := mc.GetMessageChannel()
-	return newEventBroker(context.Background(), 1, es, ss, mc, time.UTC, &integrity.Config{
+	return newEventBroker(context.Background(), 1, 1, es, ss, mc, time.UTC, &integrity.Config{
 		IntegrityCheckLevel:   util.AddressOf(integrity.CheckLevelNone),
 		CorruptionHandleLevel: util.AddressOf(integrity.CorruptionHandleLevelWarn),
 	}), es, ss, outputCh
@@ -476,8 +476,14 @@ func TestHandleResolvedTs(t *testing.T) {
 		broker.handleResolvedTs(ctx, cacheMap, wrapEvent, disp.messageWorkerIndex, messaging.EventCollectorTopic)
 	}
 
-	msg := <-outputCh
-	require.Equal(t, msg.Type, messaging.TypeBatchResolvedTs)
+	for {
+		msg := <-outputCh
+		if msg.Type != messaging.TypeBatchResolvedTs {
+			continue
+		}
+		require.Equal(t, msg.Type, messaging.TypeBatchResolvedTs)
+		break
+	}
 }
 
 func TestHandleDispatcherHeartbeat_InactiveDispatcherCleanup(t *testing.T) {
@@ -556,18 +562,31 @@ func TestHandleDispatcherHeartbeat_InactiveDispatcherCleanup(t *testing.T) {
 	defer cancel()
 	// Verify that a response was sent indicating the dispatcher is removed
 	select {
-	case msg := <-outputCh:
-		require.Equal(t, messaging.TypeDispatcherHeartbeatResponse, msg.Type)
-		// The response should contain a dispatcher state indicating removal
-		require.Len(t, msg.Message, 1)
-		response := msg.Message[0].(*event.DispatcherHeartbeatResponse)
-		require.NotNil(t, response)
-		states := response.DispatcherStates
-		require.Len(t, states, 1)
-		require.Equal(t, dispInfo.GetID(), states[0].DispatcherID)
-		require.Equal(t, event.DSStateRemoved, states[0].State)
 	case <-ctx.Done():
 		require.Fail(t, "Expected to receive a dispatcher heartbeat response")
+	default:
+	}
+
+	for {
+		select {
+		case msg := <-outputCh:
+			if msg.Type != messaging.TypeDispatcherHeartbeatResponse {
+				continue
+			}
+			require.Equal(t, messaging.TypeDispatcherHeartbeatResponse, msg.Type)
+			// The response should contain a dispatcher state indicating removal
+			require.Len(t, msg.Message, 1)
+			response := msg.Message[0].(*event.DispatcherHeartbeatResponse)
+			require.NotNil(t, response)
+			states := response.DispatcherStates
+			require.Len(t, states, 1)
+			require.Equal(t, dispInfo.GetID(), states[0].DispatcherID)
+			require.Equal(t, event.DSStateRemoved, states[0].State)
+			return
+		case <-ctx.Done():
+			require.Fail(t, "Expected to receive a dispatcher heartbeat response")
+			return
+		}
 	}
 }
 

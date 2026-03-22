@@ -14,6 +14,7 @@
 package event
 
 import (
+	"encoding/binary"
 	"fmt"
 
 	"github.com/pingcap/ticdc/pkg/common"
@@ -28,17 +29,19 @@ var _ Event = &ReadyEvent{}
 type ReadyEvent struct {
 	Version      int
 	DispatcherID common.DispatcherID
+	Incarnation  uint64
 }
 
-func NewReadyEvent(dispatcherID common.DispatcherID) ReadyEvent {
+func NewReadyEvent(dispatcherID common.DispatcherID, incarnation uint64) ReadyEvent {
 	return ReadyEvent{
 		Version:      ReadyEventVersion1,
 		DispatcherID: dispatcherID,
+		Incarnation:  incarnation,
 	}
 }
 
 func (e *ReadyEvent) String() string {
-	return fmt.Sprintf("ReadyEvent{Version: %d, DispatcherID: %s}", e.Version, e.DispatcherID)
+	return fmt.Sprintf("ReadyEvent{Version: %d, DispatcherID: %s, Incarnation: %d}", e.Version, e.DispatcherID, e.Incarnation)
 }
 
 // GetType returns the event type
@@ -76,9 +79,8 @@ func (e *ReadyEvent) GetStartTs() common.Ts {
 
 // GetSize returns the approximate size of the event in bytes
 func (e *ReadyEvent) GetSize() int64 {
-	// Size does not include header or version (those are only for serialization)
-	// Only business data: dispatcherID
-	return int64(e.DispatcherID.GetSize())
+	// Size does not include header or version.
+	return int64(e.DispatcherID.GetSize() + 8)
 }
 
 func (e *ReadyEvent) IsPaused() bool {
@@ -129,13 +131,15 @@ func (e *ReadyEvent) Unmarshal(data []byte) error {
 
 func (e ReadyEvent) encodeV1() ([]byte, error) {
 	// Note: version is now handled in the header by Marshal(), not here
-	// payload: dispatcherID
-	payloadSize := e.DispatcherID.GetSize()
+	// payload: dispatcherID + incarnation
+	payloadSize := e.DispatcherID.GetSize() + 8
 	data := make([]byte, payloadSize)
 	offset := 0
 
 	// DispatcherID
 	copy(data[offset:], e.DispatcherID.Marshal())
+	offset += e.DispatcherID.GetSize()
+	binary.BigEndian.PutUint64(data[offset:], e.Incarnation)
 
 	return data, nil
 }
@@ -145,10 +149,12 @@ func (e *ReadyEvent) decodeV1(data []byte) error {
 	offset := 0
 
 	// DispatcherID
-	err := e.DispatcherID.Unmarshal(data[offset:])
+	err := e.DispatcherID.Unmarshal(data[offset : offset+e.DispatcherID.GetSize()])
 	if err != nil {
 		return err
 	}
+	offset += e.DispatcherID.GetSize()
+	e.Incarnation = binary.BigEndian.Uint64(data[offset:])
 
 	return nil
 }

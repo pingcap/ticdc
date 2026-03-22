@@ -37,8 +37,9 @@ import (
 )
 
 const (
-	receiveChanSize     = 1024 * 8
-	commonMsgRetryQuota = 3 // The number of retries for most droppable dispatcher requests.
+	receiveChanSize          = 1024 * 8
+	commonMsgRetryQuota      = 3 // The number of retries for most droppable dispatcher requests.
+	controlReconcileInterval = time.Second
 )
 
 // DispatcherMessage is the message send to EventService.
@@ -57,6 +58,15 @@ type DispatcherMessage struct {
 	// TODO: Implement application-level retry logic for better architectural flexibility.
 	Droppable  bool
 	RetryQuota int
+}
+
+type dispatcherRemoveKey struct {
+	dispatcherID common.DispatcherID
+	serverID     node.ID
+}
+
+type dispatcherRemoveTombstone struct {
+	message *messaging.TargetMessage
 }
 
 func newDispatcherMessage(msg *messaging.TargetMessage, droppable bool, retryQuota int) DispatcherMessage {
@@ -110,9 +120,10 @@ EventCollector is the relay between EventService and DispatcherManager, responsi
 EventCollector is an instance-level component.
 */
 type EventCollector struct {
-	serverId      node.ID
-	dispatcherMap sync.Map // key: dispatcherID, value: dispatcherStat
-	changefeedMap sync.Map // key: changefeedID.GID, value: *changefeedStat
+	serverId         node.ID
+	dispatcherMap    sync.Map // key: dispatcherID, value: dispatcherStat
+	changefeedMap    sync.Map // key: changefeedID.GID, value: *changefeedStat
+	removeTombstones sync.Map // key: dispatcherRemoveKey, value: *dispatcherRemoveTombstone
 
 	mc messaging.MessageCenter
 
@@ -215,6 +226,10 @@ func (c *EventCollector) Run(ctx context.Context) {
 
 	g.Go(func() error {
 		return c.sendDispatcherRequests(ctx)
+	})
+
+	g.Go(func() error {
+		return c.reconcileDispatcherControl(ctx)
 	})
 
 	g.Go(func() error {
@@ -376,6 +391,20 @@ func (c *EventCollector) getDispatcherStatByID(dispatcherID common.DispatcherID)
 	return value.(*dispatcherStat)
 }
 
+func (c *EventCollector) addRemoveTombstone(dispatcherID common.DispatcherID, serverID node.ID, message *messaging.TargetMessage) {
+	c.removeTombstones.Store(dispatcherRemoveKey{
+		dispatcherID: dispatcherID,
+		serverID:     serverID,
+	}, &dispatcherRemoveTombstone{message: message})
+}
+
+func (c *EventCollector) clearRemoveTombstone(dispatcherID common.DispatcherID, serverID node.ID) {
+	c.removeTombstones.Delete(dispatcherRemoveKey{
+		dispatcherID: dispatcherID,
+		serverID:     serverID,
+	})
+}
+
 func (c *EventCollector) SendDispatcherHeartbeat(heartbeat *event.DispatcherHeartbeat) {
 	groupedHeartbeats := c.groupHeartbeat(heartbeat)
 	for serverID, heartbeat := range groupedHeartbeats {
@@ -488,15 +517,39 @@ func (c *EventCollector) handleDispatcherHeartbeatResponse(targetMessage *messag
 			stat := v.(*dispatcherStat)
 			// If the serverID not match, it means the dispatcher is not registered on this server now, just ignore it the response.
 			if stat.connState.isCurrentEventService(targetMessage.From) {
+				currentIncarnation := stat.connState.getEventServiceIncarnation()
+				if isIncarnationStale(currentIncarnation, response.Incarnation) {
+					continue
+				}
 				log.Info("dispatcher removed in event service",
 					zap.Stringer("dispatcherID", ds.DispatcherID),
-					zap.Stringer("eventServiceID", targetMessage.From))
-				// Move back to waiting-ready state before registering again.
-				// Otherwise the next ReadyEvent from the restarted event service
-				// would be treated as stale and ignored.
-				stat.reregisterTo(targetMessage.From)
+					zap.Stringer("eventServiceID", targetMessage.From),
+					zap.Uint64("incarnation", response.Incarnation))
+				stat.prepareRebuild(targetMessage.From, response.Incarnation)
 			}
 		}
+	}
+}
+
+func (c *EventCollector) handleDispatcherControlEvent(targetMessage *messaging.TargetMessage) {
+	if len(targetMessage.Message) != 1 {
+		log.Panic("invalid dispatcher control event message", zap.Any("msg", targetMessage))
+	}
+	controlEvent := targetMessage.Message[0].(*event.DispatcherControlEvent)
+	switch controlEvent.Action {
+	case event.DispatcherControlActionRemove:
+		switch controlEvent.Status {
+		case event.DispatcherControlStatusAccepted,
+			event.DispatcherControlStatusNotFound,
+			event.DispatcherControlStatusStale:
+			c.clearRemoveTombstone(controlEvent.DispatcherID, targetMessage.From)
+		}
+	default:
+		stat := c.getDispatcherStatByID(controlEvent.DispatcherID)
+		if stat == nil {
+			return
+		}
+		stat.handleDispatcherControlEvent(targetMessage.From, controlEvent)
 	}
 }
 
@@ -525,6 +578,8 @@ func (c *EventCollector) MessageCenterHandler(ctx context.Context, targetMessage
 		switch msg.(type) {
 		case *event.DispatcherHeartbeatResponse:
 			c.handleDispatcherHeartbeatResponse(targetMessage)
+		case *event.DispatcherControlEvent:
+			c.handleDispatcherControlEvent(targetMessage)
 		default:
 			log.Warn("unknown message type, ignore it",
 				zap.String("type", targetMessage.Type.String()),
@@ -532,6 +587,27 @@ func (c *EventCollector) MessageCenterHandler(ctx context.Context, targetMessage
 		}
 	}
 	return nil
+}
+
+func (c *EventCollector) reconcileDispatcherControl(ctx context.Context) error {
+	ticker := time.NewTicker(controlReconcileInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		case <-ticker.C:
+			c.dispatcherMap.Range(func(_, value interface{}) bool {
+				value.(*dispatcherStat).reconcileControlRequests()
+				return true
+			})
+			c.removeTombstones.Range(func(_, value interface{}) bool {
+				c.enqueueMessageForSend(value.(*dispatcherRemoveTombstone).message)
+				return true
+			})
+		}
+	}
 }
 
 // RedoMessageCenterHandler is the handler for the redo events message from EventService.

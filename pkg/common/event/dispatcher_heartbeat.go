@@ -220,6 +220,7 @@ func (d *DispatcherState) encodeV1() ([]byte, error) {
 
 type DispatcherHeartbeatResponse struct {
 	Version   int
+	Incarnation uint64
 	ClusterID uint64
 	// DispatcherCount is use for decoding of the response.
 	DispatcherCount  uint32
@@ -242,7 +243,8 @@ func (d *DispatcherHeartbeatResponse) Append(ds DispatcherState) {
 }
 
 func (d *DispatcherHeartbeatResponse) GetSize() int {
-	size := 8 // clusterID
+	size := 8 // incarnation
+	size += 8 // clusterID
 	size += 4 // dispatcher count
 	for _, ds := range d.DispatcherStates {
 		size += ds.GetSize()
@@ -305,6 +307,7 @@ func (d *DispatcherHeartbeatResponse) Unmarshal(data []byte) error {
 
 func (d *DispatcherHeartbeatResponse) encodeV1() ([]byte, error) {
 	buf := bytes.NewBuffer(make([]byte, 0))
+	binary.Write(buf, binary.BigEndian, d.Incarnation)
 	binary.Write(buf, binary.BigEndian, d.ClusterID)
 	binary.Write(buf, binary.BigEndian, d.DispatcherCount)
 	for _, ds := range d.DispatcherStates {
@@ -319,6 +322,7 @@ func (d *DispatcherHeartbeatResponse) encodeV1() ([]byte, error) {
 
 func (d *DispatcherHeartbeatResponse) decodeV1(data []byte) error {
 	buf := bytes.NewBuffer(data)
+	d.Incarnation = binary.BigEndian.Uint64(buf.Next(8))
 	d.ClusterID = binary.BigEndian.Uint64(buf.Next(8))
 	d.DispatcherCount = binary.BigEndian.Uint32(buf.Next(4))
 	d.DispatcherStates = make([]DispatcherState, 0, d.DispatcherCount)

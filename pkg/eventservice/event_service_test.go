@@ -111,9 +111,11 @@ func TestEventServiceBasic(t *testing.T) {
 		msg := <-msgCh
 		log.Info("receive message", zap.Any("message", msg))
 		for _, m := range msg.Message {
-			msgCnt++
 			switch e := m.(type) {
+			case *commonEvent.DispatcherControlEvent:
+				log.Info("receive dispatcher control event", zap.Any("event", e))
 			case *commonEvent.ReadyEvent:
+				msgCnt++
 				require.Equal(t, "event-collector", msg.Topic)
 				require.Equal(t, dispatcherInfo.id, e.DispatcherID)
 				require.Equal(t, uint64(0), e.GetSeq())
@@ -126,6 +128,7 @@ func TestEventServiceBasic(t *testing.T) {
 				esImpl.resetDispatcher(dispatcherInfo)
 				_ = mockStore.AppendEvents(dispatcherInfo.id, resolvedTs+1)
 			case *commonEvent.HandshakeEvent:
+				msgCnt++
 				require.Equal(t, "event-collector", msg.Topic)
 				require.Equal(t, dispatcherInfo.id, e.DispatcherID)
 				require.Equal(t, dispatcherInfo.startTs, e.GetStartTs())
@@ -135,6 +138,7 @@ func TestEventServiceBasic(t *testing.T) {
 				_ = mockStore.AppendEvents(dispatcherInfo.id, kvEvents[1].CRTs+1, kvEvents[1])
 				_ = mockStore.AppendEvents(dispatcherInfo.id, kvEvents[2].CRTs+1, kvEvents[2])
 			case *commonEvent.BatchDMLEvent:
+				msgCnt++
 				require.Equal(t, "event-collector", msg.Topic)
 				// first dml has one event
 				if dmlCount == 0 {
@@ -144,10 +148,12 @@ func TestEventServiceBasic(t *testing.T) {
 				require.Equal(t, kvEvents[dmlCount-1].CRTs, e.GetCommitTs())
 				require.Equal(t, uint64(dmlCount+2), e.GetSeq())
 			case *commonEvent.DDLEvent:
+				msgCnt++
 				require.Equal(t, "event-collector", msg.Topic)
 				require.Equal(t, ddlEvent.FinishedTs, e.FinishedTs)
 				require.Equal(t, uint64(2), e.Seq)
 			case *commonEvent.BatchResolvedEvent:
+				msgCnt++
 				log.Info("receive watermark", zap.Uint64("ts", e.Events[0].ResolvedTs))
 			}
 		}
