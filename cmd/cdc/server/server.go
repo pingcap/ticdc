@@ -172,7 +172,7 @@ func (o *options) run(cmd *cobra.Command) error {
 }
 
 func isNormalServerShutdown(err error) bool {
-	return err == nil || errors.Is(errors.Cause(err), context.Canceled)
+	return err == nil || errors.Is(err, context.Canceled)
 }
 
 // complete adapts from the command line args and config file to the data required.
