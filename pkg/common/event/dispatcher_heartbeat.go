@@ -39,30 +39,20 @@ func (dp DispatcherProgressLegacy) GetSize() int {
 }
 
 func (dp DispatcherProgressLegacy) Marshal() ([]byte, error) {
-	return dp.encodeV1()
-}
-
-func (dp *DispatcherProgressLegacy) Unmarshal(data []byte) error {
-	return dp.decodeV1(data)
-}
-
-func (dp DispatcherProgressLegacy) encodeV1() ([]byte, error) {
 	buf := bytes.NewBuffer(make([]byte, 0))
 	buf.Write(dp.DispatcherID.Marshal())
 	binary.Write(buf, binary.BigEndian, dp.CheckpointTs)
 	return buf.Bytes(), nil
 }
 
-func (dp *DispatcherProgressLegacy) decodeV1(data []byte) error {
+func (dp *DispatcherProgressLegacy) Unmarshal(data []byte) error {
 	buf := bytes.NewBuffer(data)
 	dp.DispatcherID.Unmarshal(buf.Next(dp.DispatcherID.GetSize()))
 	dp.CheckpointTs = binary.BigEndian.Uint64(buf.Next(8))
 	return nil
 }
 
-// DispatcherProgress is the current wire format used by heartbeat v2.
-// The embedded version allows this structure to evolve without introducing
-// DispatcherProgressV3, DispatcherProgressV4, etc.
+// DispatcherProgress is the current wire format used by heartbeat v2+.
 type DispatcherProgress struct {
 	Version      byte
 	DispatcherID common.DispatcherID
@@ -75,14 +65,14 @@ func (dp DispatcherProgress) GetSize() int {
 }
 
 func (dp DispatcherProgress) Marshal() ([]byte, error) {
-	return dp.encode()
+	return dp.encodeV1()
 }
 
 func (dp *DispatcherProgress) Unmarshal(data []byte) error {
-	return dp.decode(data)
+	return dp.decodeV1(data)
 }
 
-func (dp DispatcherProgress) encode() ([]byte, error) {
+func (dp DispatcherProgress) encodeV1() ([]byte, error) {
 	buf := bytes.NewBuffer(make([]byte, 0))
 	buf.WriteByte(dp.Version)
 	buf.Write(dp.DispatcherID.Marshal())
@@ -91,7 +81,7 @@ func (dp DispatcherProgress) encode() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func (dp *DispatcherProgress) decode(data []byte) error {
+func (dp *DispatcherProgress) decodeV1(data []byte) error {
 	buf := bytes.NewBuffer(data)
 	version, err := buf.ReadByte()
 	if err != nil {
@@ -126,25 +116,13 @@ func NewDispatcherHeartbeat() *DispatcherHeartbeat {
 	}
 }
 
-func (d *DispatcherHeartbeat) AppendLegacy(dp DispatcherProgressLegacy) {
-	d.DispatcherCount++
-	d.DispatcherProgressesLegacy = append(d.DispatcherProgressesLegacy, dp)
-}
-
 func (d *DispatcherHeartbeat) AddDispatcherProgress(dispatcherID common.DispatcherID, checkpointTs uint64, epoch uint64) {
 	d.DispatcherCount++
-	if d.Version >= DispatcherHeartbeatVersion2 {
-		d.DispatcherProgresses = append(d.DispatcherProgresses, DispatcherProgress{
-			Version:      DispatcherProgressVersion1,
-			DispatcherID: dispatcherID,
-			CheckpointTs: checkpointTs,
-			Epoch:        epoch,
-		})
-		return
-	}
-	d.DispatcherProgressesLegacy = append(d.DispatcherProgressesLegacy, DispatcherProgressLegacy{
+	d.DispatcherProgresses = append(d.DispatcherProgresses, DispatcherProgress{
+		Version:      DispatcherProgressVersion1,
 		DispatcherID: dispatcherID,
 		CheckpointTs: checkpointTs,
+		Epoch:        epoch,
 	})
 }
 
@@ -212,7 +190,7 @@ func (d *DispatcherHeartbeat) encodeV1() ([]byte, error) {
 	binary.Write(buf, binary.BigEndian, d.ClusterID)
 	binary.Write(buf, binary.BigEndian, d.DispatcherCount)
 	for _, dp := range d.DispatcherProgressesLegacy {
-		dpData, err := dp.encodeV1()
+		dpData, err := dp.Marshal()
 		if err != nil {
 			return nil, err
 		}
@@ -230,7 +208,7 @@ func (d *DispatcherHeartbeat) decodeV1(data []byte) error {
 	for range d.DispatcherCount {
 		var dp DispatcherProgressLegacy
 		dpData := buf.Next(dp.GetSize())
-		if err := dp.decodeV1(dpData); err != nil {
+		if err := dp.Unmarshal(dpData); err != nil {
 			return err
 		}
 		d.DispatcherProgressesLegacy = append(d.DispatcherProgressesLegacy, dp)
@@ -243,7 +221,7 @@ func (d *DispatcherHeartbeat) encodeV2() ([]byte, error) {
 	binary.Write(buf, binary.BigEndian, d.ClusterID)
 	binary.Write(buf, binary.BigEndian, d.DispatcherCount)
 	for _, dp := range d.DispatcherProgresses {
-		dpData, err := dp.encode()
+		dpData, err := dp.encodeV1()
 		if err != nil {
 			return nil, err
 		}
@@ -261,7 +239,7 @@ func (d *DispatcherHeartbeat) decodeV2(data []byte) error {
 	for range d.DispatcherCount {
 		var dp DispatcherProgress
 		dpData := buf.Next(dp.GetSize())
-		if err := dp.decode(dpData); err != nil {
+		if err := dp.decodeV1(dpData); err != nil {
 			return err
 		}
 		d.DispatcherProgresses = append(d.DispatcherProgresses, dp)
