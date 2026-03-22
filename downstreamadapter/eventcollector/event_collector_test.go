@@ -178,8 +178,8 @@ func TestProcessMessage(t *testing.T) {
 	}
 	c.AddDispatcher(d, util.GetOrZero(config.GetDefaultReplicaConfig().MemoryQuota))
 
-	ch <- newMessage(node.ID, &readyEvent)
-	ch <- newMessage(node.ID, &handshakeEvent)
+	require.NoError(t, c.handleBootstrapMessage(newMessage(node.ID, &readyEvent)))
+	require.NoError(t, c.handleBootstrapMessage(newMessage(node.ID, &handshakeEvent)))
 	ch <- newMessage(node.ID, ddl)
 	ch <- newMessage(node.ID, dmls)
 

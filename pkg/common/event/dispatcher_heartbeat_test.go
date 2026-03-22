@@ -193,7 +193,7 @@ func TestDispatcherHeartbeatResponse(t *testing.T) {
 	require.Equal(t, state2, response.DispatcherStates[1])
 
 	// Test GetSize
-	expectedSize := 4 + 8 + state1.GetSize() + state2.GetSize() // dispatcher count(uint32) + clusterID(uint64) + state sizes
+	expectedSize := 8 + 8 + 4 + state1.GetSize() + state2.GetSize() // incarnation(uint64) + clusterID(uint64) + dispatcher count(uint32) + state sizes
 	require.Equal(t, expectedSize, response.GetSize())
 
 	// Test Marshal and Unmarshal

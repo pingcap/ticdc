@@ -45,23 +45,8 @@ func NewEventDynamicStream(isRedo bool) dynstream.DynamicStream[common.GID, comm
 	return stream
 }
 
-// EventsHandler is used to dispatch the received events.
-// If the event is a DML event, it will be added to the sink for writing to downstream.
-// If the event is a resolved TS event, it will be update the resolvedTs of the dispatcher.
-// If the event is a DDL event,
-//  1. If it is a single table DDL, it will be added to the sink for writing to downstream(async).
-//  2. If it is a multi-table DDL, We will generate a TableSpanBlockStatus message with ddl info to send to maintainer.
-//     for the multi-table DDL, we will also generate a ResendTask to resend the TableSpanBlockStatus message with ddl info
-//     to maintainer each 200ms to avoid message is missing.
-//
-// If the event is a Sync Point event, we deal it as a multi-table DDL event.
-//
-// We can handle multi events in batch if there only dml events and resovledTs events.
-// For DDL event and Sync Point Event, we should handle them singlely.
-// Thus, if a event is DDL event or Sync Point Event, we will only get one event at once.
-// Otherwise, we can get a batch events.
-// We always return block = true for Handle() except we only receive the resolvedTs events.
-// So we only will reach next Handle() when previous events are all push downstream successfully.
+// EventsHandler is the pure data-plane handler.
+// Control/bootstrap events are handled outside dynstream.
 type EventsHandler struct{}
 
 func (h *EventsHandler) Path(event dispatcher.DispatcherEvent) common.DispatcherID {
@@ -83,27 +68,12 @@ func (h *EventsHandler) Handle(stat *dispatcherStat, events ...dispatcher.Dispat
 		commonEvent.TypeSyncPointEvent,
 		commonEvent.TypeBatchDMLEvent:
 		return stat.handleDataEvents(events...)
-	case commonEvent.TypeReadyEvent,
-		commonEvent.TypeNotReusableEvent:
-		if len(events) > 1 {
-			log.Panic("unexpected multiple events for TypeReadyEvent or TypeNotReusableEvent",
-				zap.Int("count", len(events)))
-		}
-		stat.handleSignalEvent(events[0])
-		return false
 	case commonEvent.TypeDropEvent:
 		if len(events) > 1 {
 			log.Panic("unexpected multiple events for TypeDropEvent",
 				zap.Int("count", len(events)))
 		}
 		stat.handleDropEvent(events[0])
-		return false
-	case commonEvent.TypeHandshakeEvent:
-		if len(events) > 1 {
-			log.Panic("unexpected multiple events for TypeHandshakeEvent",
-				zap.Int("count", len(events)))
-		}
-		stat.handleHandshakeEvent(events[0])
 		return false
 	default:
 		log.Panic("unknown event type", zap.Int("type", int(events[0].GetType())))
@@ -118,9 +88,6 @@ const (
 	DataGroupResolvedTsOrDML = iota + 1
 	DataGroupDDL
 	DataGroupSyncPoint
-	DataGroupHandshake
-	DataGroupReady
-	DataGroupNotReusable
 	DataGroupDrop
 )
 
@@ -136,12 +103,6 @@ func (h *EventsHandler) GetType(event dispatcher.DispatcherEvent) dynstream.Even
 		return dynstream.EventType{DataGroup: DataGroupDDL, Property: dynstream.NonBatchable, Droppable: true}
 	case commonEvent.TypeSyncPointEvent:
 		return dynstream.EventType{DataGroup: DataGroupSyncPoint, Property: dynstream.NonBatchable, Droppable: true}
-	case commonEvent.TypeHandshakeEvent:
-		return dynstream.EventType{DataGroup: DataGroupHandshake, Property: dynstream.NonBatchable, Droppable: false}
-	case commonEvent.TypeReadyEvent:
-		return dynstream.EventType{DataGroup: DataGroupReady, Property: dynstream.NonBatchable, Droppable: false}
-	case commonEvent.TypeNotReusableEvent:
-		return dynstream.EventType{DataGroup: DataGroupNotReusable, Property: dynstream.NonBatchable, Droppable: false}
 	case commonEvent.TypeDropEvent:
 		return dynstream.EventType{DataGroup: DataGroupDrop, Property: dynstream.NonBatchable, Droppable: false}
 	default:
