@@ -221,7 +221,7 @@ func (d *DispatcherHeartbeat) encodeV2() ([]byte, error) {
 	binary.Write(buf, binary.BigEndian, d.ClusterID)
 	binary.Write(buf, binary.BigEndian, d.DispatcherCount)
 	for _, dp := range d.DispatcherProgresses {
-		dpData, err := dp.encodeV1()
+		dpData, err := dp.Marshal()
 		if err != nil {
 			return nil, err
 		}
@@ -239,7 +239,7 @@ func (d *DispatcherHeartbeat) decodeV2(data []byte) error {
 	for range d.DispatcherCount {
 		var dp DispatcherProgress
 		dpData := buf.Next(dp.GetSize())
-		if err := dp.decodeV1(dpData); err != nil {
+		if err := dp.Unmarshal(dpData); err != nil {
 			return err
 		}
 		d.DispatcherProgresses = append(d.DispatcherProgresses, dp)
