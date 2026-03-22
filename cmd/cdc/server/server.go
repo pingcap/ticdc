@@ -147,7 +147,7 @@ func (o *options) run(cmd *cobra.Command) error {
 	util.InitSignalHandling(shutdown, cancel)
 
 	err = svr.Run(ctx)
-	if err != nil && !errors.Is(errors.Cause(err), context.Canceled) {
+	if !isNormalServerShutdown(err) {
 		log.Error("cdc server exits with error", zap.Error(err))
 	} else {
 		log.Info("cdc server exits normally")
@@ -165,7 +165,14 @@ func (o *options) run(cmd *cobra.Command) error {
 	case <-ticker.C:
 		log.Warn("graceful shutdown timeout, exit server")
 	}
+	if isNormalServerShutdown(err) {
+		return nil
+	}
 	return err
+}
+
+func isNormalServerShutdown(err error) bool {
+	return err == nil || errors.Is(errors.Cause(err), context.Canceled)
 }
 
 // complete adapts from the command line args and config file to the data required.
