@@ -141,8 +141,7 @@ type dispatcherStat struct {
 
 	connState dispatcherConnState
 
-	currentEpoch   atomic.Pointer[dispatcherEpochState]
-	epochGenerator atomic.Uint64
+	currentEpoch atomic.Pointer[dispatcherEpochState]
 	// lastEventCommitTs is the commitTs of the last received DDL/DML/SyncPoint events.
 	lastEventCommitTs atomic.Uint64
 	// gotDDLOnTS indicates whether a DDL event was received at the sentCommitTs.
@@ -183,10 +182,6 @@ func (d *dispatcherStat) loadCurrentEpochState() *dispatcherEpochState {
 	return state
 }
 
-func (d *dispatcherStat) addLastEventSeq(delta uint64) uint64 {
-	return d.loadCurrentEpochState().lastEventSeq.Add(delta)
-}
-
 func (d *dispatcherStat) run() {
 	d.registerTo(d.eventCollector.getLocalServerID())
 }
@@ -220,8 +215,15 @@ func (d *dispatcherStat) reset(serverID node.ID) {
 }
 
 func (d *dispatcherStat) doReset(serverID node.ID, resetTs uint64) {
-	epoch := d.epochGenerator.Add(1)
-	d.currentEpoch.Store(newDispatcherEpochState(epoch, 0, resetTs))
+	var epoch uint64
+	for {
+		currentState := d.loadCurrentEpochState()
+		nextState := newDispatcherEpochState(currentState.epoch+1, 0, resetTs)
+		if d.currentEpoch.CompareAndSwap(currentState, nextState) {
+			epoch = nextState.epoch
+			break
+		}
+	}
 	// remove the dispatcher from the dynamic stream
 	resetRequest := d.newDispatcherResetRequest(d.eventCollector.getLocalServerID().String(), resetTs, epoch)
 	msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, resetRequest)
@@ -273,12 +275,6 @@ func (d *dispatcherStat) getDispatcherID() common.DispatcherID {
 	return d.target.GetId()
 }
 
-// verifyEventSequence verifies if the event's sequence number is continuous with previous events.
-// Returns false if sequence is discontinuous (indicating dropped events), which requires dispatcher reset.
-func (d *dispatcherStat) verifyEventSequence(event dispatcher.DispatcherEvent) bool {
-	return d.verifyEventSequenceWithState(event, d.loadCurrentEpochState())
-}
-
 func (d *dispatcherStat) verifyEventSequenceWithState(event dispatcher.DispatcherEvent, state *dispatcherEpochState) bool {
 	// check the invariant that handshake event is the first event of every epoch
 	if event.GetType() != commonEvent.TypeHandshakeEvent && state.lastEventSeq.Load() == 0 {
@@ -311,7 +307,7 @@ func (d *dispatcherStat) verifyEventSequenceWithState(event dispatcher.Dispatche
 			expectedSeq = lastEventSeq
 		} else {
 			// Other events' seq is the next sequence number.
-			expectedSeq = d.addLastEventSeq(1)
+			expectedSeq = state.lastEventSeq.Add(1)
 		}
 
 		if event.GetSeq() != expectedSeq {
@@ -335,7 +331,7 @@ func (d *dispatcherStat) verifyEventSequenceWithState(event dispatcher.Dispatche
 				zap.Uint64("lastEventSeq", state.lastEventSeq.Load()),
 				zap.Uint64("commitTs", e.CommitTs))
 
-			expectedSeq := d.addLastEventSeq(1)
+			expectedSeq := state.lastEventSeq.Add(1)
 			if e.Seq != expectedSeq {
 				log.Warn("receive an out-of-order batch DML event, reset the dispatcher",
 					zap.Stringer("changefeedID", d.target.GetChangefeedID()),
@@ -351,12 +347,6 @@ func (d *dispatcherStat) verifyEventSequenceWithState(event dispatcher.Dispatche
 		}
 	}
 	return true
-}
-
-// filterAndUpdateEventByCommitTs verifies if the event's commit timestamp is valid.
-// Note: this function must be called on every event received.
-func (d *dispatcherStat) filterAndUpdateEventByCommitTs(event dispatcher.DispatcherEvent) bool {
-	return d.filterAndUpdateEventByCommitTsWithState(event, d.loadCurrentEpochState())
 }
 
 func (d *dispatcherStat) filterAndUpdateEventByCommitTsWithState(event dispatcher.DispatcherEvent, state *dispatcherEpochState) bool {
@@ -413,10 +403,6 @@ func (d *dispatcherStat) filterAndUpdateEventByCommitTsWithState(event dispatche
 
 func (d *dispatcherStat) observeCurrentEpochMaxEventTs(state *dispatcherEpochState, ts uint64) {
 	util.MustCompareAndMonotonicIncrease(&state.maxEventTs, ts)
-}
-
-func (d *dispatcherStat) isFromCurrentEpoch(event dispatcher.DispatcherEvent) bool {
-	return d.isFromCurrentEpochWithState(event, d.loadCurrentEpochState())
 }
 
 func (d *dispatcherStat) isFromCurrentEpochWithState(event dispatcher.DispatcherEvent, state *dispatcherEpochState) bool {
@@ -702,16 +688,6 @@ func (d *dispatcherStat) handleHandshakeEvent(event dispatcher.DispatcherEvent) 
 	}
 	state.lastEventSeq.Store(handshakeEvent.Seq)
 	d.observeCurrentEpochMaxEventTs(state, handshakeEvent.GetCommitTs())
-}
-
-func (d *dispatcherStat) getCheckpointTsForEventService() uint64 {
-	state := d.loadCurrentEpochState()
-	checkpointTs := d.target.GetCheckpointTs()
-	// Event service checkpoint must stay behind collector-observed progress in
-	// the current epoch. Handshake only proves the reset ts is visible; later
-	// heartbeats can advance only after collector receives newer handshake/data/
-	// resolved events from the same epoch.
-	return min(checkpointTs, state.maxEventTs.Load())
 }
 
 func (d *dispatcherStat) getHeartbeatProgressForEventService() (uint64, uint64) {

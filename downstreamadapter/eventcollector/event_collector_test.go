@@ -257,7 +257,6 @@ func TestGroupHeartbeatUsesEpochAndClamp(t *testing.T) {
 	localStat.connState.setEventServiceID(serverInfo.ID)
 	localStat.connState.readyEventReceived.Store(true)
 	localStat.currentEpoch.Store(newDispatcherEpochState(3, 0, 150))
-	localStat.epochGenerator.Store(3)
 
 	remoteID := node.ID("remote-server")
 	remoteDispatcher := &mockEventDispatcher{
@@ -272,7 +271,6 @@ func TestGroupHeartbeatUsesEpochAndClamp(t *testing.T) {
 	remoteStat.connState.setEventServiceID(remoteID)
 	remoteStat.connState.readyEventReceived.Store(true)
 	remoteStat.currentEpoch.Store(newDispatcherEpochState(5, 1, 210))
-	remoteStat.epochGenerator.Store(5)
 
 	grouped := c.groupHeartbeat()
 	require.Len(t, grouped, 2)
