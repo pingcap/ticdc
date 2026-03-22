@@ -16,7 +16,6 @@ package eventservice
 import (
 	"context"
 	"errors"
-	"math"
 	"sync"
 	"testing"
 	"time"
@@ -853,8 +852,8 @@ func TestSendHandshakeIfNeedConcurrency(t *testing.T) {
 	})
 }
 
-func TestSendHandshakeUsesCheckpointTs(t *testing.T) {
-	broker, _, ss, outputCh := newEventBrokerForTest()
+func TestSendHandshakeUsesStartTs(t *testing.T) {
+	broker, _, _, outputCh := newEventBrokerForTest()
 	defer broker.close()
 
 	info := newMockDispatcherInfoForTest(t)
@@ -864,14 +863,6 @@ func TestSendHandshakeUsesCheckpointTs(t *testing.T) {
 	initialTableInfo := &common.TableInfo{
 		TableName: common.TableName{Schema: "test", Table: "t1", TableID: info.GetTableSpan().GetTableID()},
 		UpdateTS:  100,
-	}
-	checkpointTableInfo := &common.TableInfo{
-		TableName: common.TableName{Schema: "test", Table: "t1", TableID: info.GetTableSpan().GetTableID()},
-		UpdateTS:  200,
-	}
-	ss.TableInfo[info.GetTableSpan().GetTableID()] = &mockVersionTableInfo{
-		tableInfos:    []*common.TableInfo{initialTableInfo, checkpointTableInfo},
-		deleteVersion: math.MaxUint64,
 	}
 
 	changefeedStatus := broker.getOrSetChangefeedStatus(info.GetChangefeedID(), info.GetSyncPointInterval())
@@ -885,15 +876,15 @@ func TestSendHandshakeUsesCheckpointTs(t *testing.T) {
 		require.Len(t, msg.Message, 1)
 		handshake, ok := msg.Message[0].(*event.HandshakeEvent)
 		require.True(t, ok)
-		require.Equal(t, uint64(200), handshake.ResolvedTs)
+		require.Equal(t, uint64(100), handshake.ResolvedTs)
 		require.NotNil(t, handshake.TableInfo)
-		require.Equal(t, uint64(200), handshake.TableInfo.GetUpdateTS())
+		require.Equal(t, uint64(100), handshake.TableInfo.GetUpdateTS())
 	case <-time.After(5 * time.Second):
 		require.Fail(t, "expected handshake event")
 	}
 
-	require.Equal(t, uint64(200), disp.sentResolvedTs.Load())
-	require.Equal(t, uint64(200), disp.lastScannedCommitTs.Load())
+	require.Equal(t, uint64(100), disp.sentResolvedTs.Load())
+	require.Equal(t, uint64(100), disp.lastScannedCommitTs.Load())
 	require.Equal(t, uint64(0), disp.lastScannedStartTs.Load())
 }
 
