@@ -39,6 +39,7 @@ type mockEventDispatcher struct {
 	tableSpan    *heartbeatpb.TableSpan
 	handle       func(commonEvent.Event)
 	changefeedID common.ChangeFeedID
+	checkpointTs uint64
 }
 
 func (m *mockEventDispatcher) GetId() common.DispatcherID {
@@ -98,7 +99,7 @@ func (m *mockEventDispatcher) GetResolvedTs() uint64 {
 }
 
 func (m *mockEventDispatcher) GetCheckpointTs() uint64 {
-	return 0
+	return m.checkpointTs
 }
 
 func (m *mockEventDispatcher) HandleEvents(dispatcherEvents []dispatcher.DispatcherEvent, wakeCallback func()) (block bool) {
@@ -232,4 +233,114 @@ func TestRemoveLastDispatcher(t *testing.T) {
 	require.False(t, ok, "changefeedStat for cfID1 should be removed after removing the last dispatcher")
 	_, ok = c.changefeedMap.Load(cfID2.ID())
 	require.True(t, ok, "changefeedStat for cfID2 should not be affected")
+}
+
+func TestGroupHeartbeatUsesEpochAndClamp(t *testing.T) {
+	ctx := context.Background()
+	serverInfo := node.NewInfo("127.0.0.1:18300", "")
+	mc := messaging.NewMessageCenter(ctx, serverInfo.ID, config.NewDefaultMessageCenterConfig(serverInfo.AdvertiseAddr), nil)
+	mc.Run(ctx)
+	defer mc.Close()
+	appcontext.SetService(appcontext.MessageCenter, mc)
+
+	c := New(serverInfo.ID)
+
+	localDispatcher := &mockEventDispatcher{
+		id:           common.NewDispatcherID(),
+		tableSpan:    &heartbeatpb.TableSpan{TableID: 1},
+		changefeedID: common.NewChangefeedID4Test("default", "cf"),
+		checkpointTs: 200,
+	}
+	c.AddDispatcher(localDispatcher, 1024)
+	localStat := c.getDispatcherStatByID(localDispatcher.id)
+	require.NotNil(t, localStat)
+	localStat.connState.setEventServiceID(serverInfo.ID)
+	localStat.connState.readyEventReceived.Store(true)
+	localStat.epoch.Store(3)
+	localStat.currentEpochResetTs.Store(150)
+	localStat.lastEventSeq.Store(0)
+
+	remoteID := node.ID("remote-server")
+	remoteDispatcher := &mockEventDispatcher{
+		id:           common.NewDispatcherID(),
+		tableSpan:    &heartbeatpb.TableSpan{TableID: 2},
+		changefeedID: common.NewChangefeedID4Test("default", "cf"),
+		checkpointTs: 220,
+	}
+	c.AddDispatcher(remoteDispatcher, 1024)
+	remoteStat := c.getDispatcherStatByID(remoteDispatcher.id)
+	require.NotNil(t, remoteStat)
+	remoteStat.connState.setEventServiceID(remoteID)
+	remoteStat.connState.readyEventReceived.Store(true)
+	remoteStat.epoch.Store(5)
+	remoteStat.currentEpochResetTs.Store(180)
+	remoteStat.lastEventSeq.Store(1)
+
+	grouped := c.groupHeartbeat()
+	require.Len(t, grouped, 2)
+
+	localHeartbeat := grouped[serverInfo.ID]
+	require.NotNil(t, localHeartbeat)
+	require.Equal(t, commonEvent.DispatcherHeartbeatVersion2, localHeartbeat.Version)
+	require.Len(t, localHeartbeat.DispatcherProgresses, 1)
+	require.Equal(t, localDispatcher.id, localHeartbeat.DispatcherProgresses[0].DispatcherID)
+	require.Equal(t, uint64(150), localHeartbeat.DispatcherProgresses[0].CheckpointTs)
+	require.Equal(t, uint64(3), localHeartbeat.DispatcherProgresses[0].Epoch)
+
+	remoteHeartbeat := grouped[remoteID]
+	require.NotNil(t, remoteHeartbeat)
+	require.Equal(t, commonEvent.DispatcherHeartbeatVersion2, remoteHeartbeat.Version)
+	require.Len(t, remoteHeartbeat.DispatcherProgresses, 1)
+	require.Equal(t, remoteDispatcher.id, remoteHeartbeat.DispatcherProgresses[0].DispatcherID)
+	require.Equal(t, uint64(220), remoteHeartbeat.DispatcherProgresses[0].CheckpointTs)
+	require.Equal(t, uint64(5), remoteHeartbeat.DispatcherProgresses[0].Epoch)
+}
+
+func TestGroupHeartbeatResetThenHandshake(t *testing.T) {
+	ctx := context.Background()
+	serverInfo := node.NewInfo("127.0.0.1:18300", "")
+	mc := messaging.NewMessageCenter(ctx, serverInfo.ID, config.NewDefaultMessageCenterConfig(serverInfo.AdvertiseAddr), nil)
+	mc.Run(ctx)
+	defer mc.Close()
+	appcontext.SetService(appcontext.MessageCenter, mc)
+
+	c := New(serverInfo.ID)
+
+	dispatcherID := common.NewDispatcherID()
+	mockDisp := &mockEventDispatcher{
+		id:           dispatcherID,
+		tableSpan:    &heartbeatpb.TableSpan{TableID: 1},
+		changefeedID: common.NewChangefeedID4Test("default", "cf"),
+		checkpointTs: 220,
+	}
+	c.AddDispatcher(mockDisp, 1024)
+	stat := c.getDispatcherStatByID(dispatcherID)
+	require.NotNil(t, stat)
+	stat.connState.setEventServiceID(serverInfo.ID)
+	stat.connState.readyEventReceived.Store(true)
+
+	// Simulate a reset to a smaller ts while old in-flight flushes have already
+	// advanced sink checkpoint to a larger value.
+	stat.doReset(serverInfo.ID, 150)
+
+	grouped := c.groupHeartbeat()
+	heartbeat := grouped[serverInfo.ID]
+	require.NotNil(t, heartbeat)
+	require.Len(t, heartbeat.DispatcherProgresses, 1)
+	require.Equal(t, uint64(150), heartbeat.DispatcherProgresses[0].CheckpointTs)
+	require.Equal(t, uint64(1), heartbeat.DispatcherProgresses[0].Epoch)
+
+	// After handshake in the same epoch, collector should stop clamping and
+	// report the real sink checkpoint.
+	handshake := commonEvent.NewHandshakeEvent(dispatcherID, 180, 1, &common.TableInfo{})
+	stat.handleHandshakeEvent(dispatcher.DispatcherEvent{
+		Event: &handshake,
+	})
+
+	grouped = c.groupHeartbeat()
+	heartbeat = grouped[serverInfo.ID]
+	require.NotNil(t, heartbeat)
+	require.Len(t, heartbeat.DispatcherProgresses, 1)
+	require.Equal(t, uint64(220), heartbeat.DispatcherProgresses[0].CheckpointTs)
+	require.Equal(t, uint64(1), heartbeat.DispatcherProgresses[0].Epoch)
 }

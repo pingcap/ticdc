@@ -120,6 +120,10 @@ type dispatcherStat struct {
 	// lastEventSeq is the sequence number of the last received DML/DDL/Handshake event.
 	// It is used to ensure the order of events.
 	lastEventSeq atomic.Uint64
+	// currentEpochResetTs tracks the reset ts of current epoch.
+	// It is updated on reset and is used to clamp checkpoint heartbeats before
+	// the current epoch is fully handshaked.
+	currentEpochResetTs atomic.Uint64
 	// lastEventCommitTs is the commitTs of the last received DDL/DML/SyncPoint events.
 	lastEventCommitTs atomic.Uint64
 	// gotDDLOnTS indicates whether a DDL event was received at the sentCommitTs.
@@ -144,6 +148,7 @@ func newDispatcherStat(
 		readyCallback:  readyCallback,
 	}
 	stat.lastEventSeq.Store(0)
+	stat.currentEpochResetTs.Store(target.GetStartTs())
 	stat.lastEventCommitTs.Store(target.GetStartTs())
 	return stat
 }
@@ -183,6 +188,7 @@ func (d *dispatcherStat) reset(serverID node.ID) {
 func (d *dispatcherStat) doReset(serverID node.ID, resetTs uint64) {
 	epoch := d.epoch.Add(1)
 	d.lastEventSeq.Store(0)
+	d.currentEpochResetTs.Store(resetTs)
 	// remove the dispatcher from the dynamic stream
 	resetRequest := d.newDispatcherResetRequest(d.eventCollector.getLocalServerID().String(), resetTs, epoch)
 	msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, resetRequest)
@@ -640,6 +646,14 @@ func (d *dispatcherStat) handleHandshakeEvent(event dispatcher.DispatcherEvent) 
 		d.tableInfo.Store(tableInfo)
 	}
 	d.lastEventSeq.Store(handshakeEvent.Seq)
+}
+
+func (d *dispatcherStat) getCheckpointTsForEventService() uint64 {
+	checkpointTs := d.target.GetCheckpointTs()
+	if d.lastEventSeq.Load() == 0 {
+		return min(checkpointTs, d.currentEpochResetTs.Load())
+	}
+	return checkpointTs
 }
 
 func (d *dispatcherStat) setRemoteCandidates(nodes []string) {

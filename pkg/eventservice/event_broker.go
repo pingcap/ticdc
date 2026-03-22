@@ -562,7 +562,8 @@ func (c *eventBroker) sendHandshakeIfNeed(task scanTask) {
 	}
 
 	remoteID := node.ID(task.info.GetServerID())
-	event := event.NewHandshakeEvent(task.id, task.startTs, task.epoch, task.startTableInfo)
+	handshakeTs, tableInfo := c.getHandshakeStart(task)
+	event := event.NewHandshakeEvent(task.id, handshakeTs, task.epoch, tableInfo)
 	log.Info("send handshake event to dispatcher",
 		zap.Stringer("changefeedID", task.changefeedStat.changefeedID),
 		zap.Stringer("dispatcherID", task.id),
@@ -576,6 +577,37 @@ func (c *eventBroker) sendHandshakeIfNeed(task scanTask) {
 	// Send handshake event to channel before calling `setHandshaked`
 	// This ensures the handshake event precedes any subsequent data events.
 	task.setHandshaked()
+	task.updateSentResolvedTs(handshakeTs)
+}
+
+func (c *eventBroker) getHandshakeStart(task scanTask) (uint64, *common.TableInfo) {
+	handshakeTs := max(task.startTs, task.checkpointTs.Load())
+	if handshakeTs == task.startTs {
+		return handshakeTs, task.startTableInfo
+	}
+
+	span := task.info.GetTableSpan()
+	if span.Equal(common.KeyspaceDDLSpan(span.KeyspaceID)) {
+		return handshakeTs, task.startTableInfo
+	}
+
+	keyspaceMeta := common.KeyspaceMeta{
+		ID:   span.KeyspaceID,
+		Name: task.changefeedStat.changefeedID.Keyspace(),
+	}
+	tableInfo, err := c.schemaStore.GetTableInfo(keyspaceMeta, span.GetTableID(), handshakeTs)
+	if err != nil {
+		log.Warn("get handshake table info failed, fallback to reset start table info",
+			zap.Stringer("changefeedID", task.changefeedStat.changefeedID),
+			zap.Stringer("dispatcherID", task.id),
+			zap.Int64("tableID", span.GetTableID()),
+			zap.Uint64("startTs", task.startTs),
+			zap.Uint64("checkpointTs", task.checkpointTs.Load()),
+			zap.Uint64("handshakeTs", handshakeTs),
+			zap.Error(err))
+		return handshakeTs, task.startTableInfo
+	}
+	return handshakeTs, tableInfo
 }
 
 // hasSyncPointEventBeforeTs checks if there is any sync point events before the given ts.
@@ -1257,6 +1289,15 @@ func (c *eventBroker) handleDispatcherHeartbeat(heartbeat *DispatcherHeartBeatWi
 			continue
 		}
 		dispatcher := dispatcherPtr.Load()
+		if heartbeat.heartbeat.Version >= event.DispatcherHeartbeatVersion2 && dp.Epoch != dispatcher.epoch {
+			log.Warn("ignore dispatcher heartbeat from stale epoch",
+				zap.Stringer("changefeedID", dispatcher.changefeedStat.changefeedID),
+				zap.Stringer("dispatcherID", dispatcher.id),
+				zap.Uint64("heartbeatEpoch", dp.Epoch),
+				zap.Uint64("dispatcherEpoch", dispatcher.epoch),
+				zap.Uint64("checkpointTs", dp.CheckpointTs))
+			continue
+		}
 		// TODO: Should we check if the dispatcher's serverID is the same as the heartbeat's serverID?
 		if dispatcher.checkpointTs.Load() < dp.CheckpointTs {
 			dispatcher.checkpointTs.Store(dp.CheckpointTs)

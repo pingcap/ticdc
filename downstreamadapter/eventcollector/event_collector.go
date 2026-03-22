@@ -37,8 +37,9 @@ import (
 )
 
 const (
-	receiveChanSize     = 1024 * 8
-	commonMsgRetryQuota = 3 // The number of retries for most droppable dispatcher requests.
+	receiveChanSize               = 1024 * 8
+	commonMsgRetryQuota           = 3 // The number of retries for most droppable dispatcher requests.
+	eventServiceHeartbeatInterval = time.Second
 )
 
 // DispatcherMessage is the message send to EventService.
@@ -218,6 +219,10 @@ func (c *EventCollector) Run(ctx context.Context) {
 	})
 
 	g.Go(func() error {
+		return c.sendEventServiceHeartbeats(ctx)
+	})
+
+	g.Go(func() error {
 		return c.updateMetrics(ctx)
 	})
 
@@ -376,8 +381,21 @@ func (c *EventCollector) getDispatcherStatByID(dispatcherID common.DispatcherID)
 	return value.(*dispatcherStat)
 }
 
-func (c *EventCollector) SendDispatcherHeartbeat(heartbeat *event.DispatcherHeartbeat) {
-	groupedHeartbeats := c.groupHeartbeat(heartbeat)
+func (c *EventCollector) sendEventServiceHeartbeats(ctx context.Context) error {
+	ticker := time.NewTicker(eventServiceHeartbeatInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		case <-ticker.C:
+			c.sendDispatcherHeartbeat()
+		}
+	}
+}
+
+func (c *EventCollector) sendDispatcherHeartbeat() {
+	groupedHeartbeats := c.groupHeartbeat()
 	for serverID, heartbeat := range groupedHeartbeats {
 		msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, heartbeat)
 		c.enqueueMessageForSend(msg)
@@ -386,29 +404,32 @@ func (c *EventCollector) SendDispatcherHeartbeat(heartbeat *event.DispatcherHear
 
 // TODO(dongmen): add unit test for this function.
 // groupHeartbeat groups the heartbeat by the dispatcherStat's serverID.
-func (c *EventCollector) groupHeartbeat(heartbeat *event.DispatcherHeartbeat) map[node.ID]*event.DispatcherHeartbeat {
+func (c *EventCollector) groupHeartbeat() map[node.ID]*event.DispatcherHeartbeat {
 	groupedHeartbeats := make(map[node.ID]*event.DispatcherHeartbeat)
 	group := func(target node.ID, dp event.DispatcherProgress) {
 		heartbeat, ok := groupedHeartbeats[target]
 		if !ok {
-			heartbeat = &event.DispatcherHeartbeat{
-				Version:              event.DispatcherHeartbeatVersion1,
-				DispatcherProgresses: make([]event.DispatcherProgress, 0, 32),
-			}
+			heartbeat = event.NewDispatcherHeartbeat(32)
 			groupedHeartbeats[target] = heartbeat
 		}
 		heartbeat.Append(dp)
 	}
 
-	for _, dp := range heartbeat.DispatcherProgresses {
-		stat, ok := c.dispatcherMap.Load(dp.DispatcherID)
-		if !ok {
-			continue
+	c.dispatcherMap.Range(func(_, value interface{}) bool {
+		stat := value.(*dispatcherStat)
+		if !stat.connState.isReceivingDataEvent() {
+			return true
 		}
-		if stat.(*dispatcherStat).connState.isReceivingDataEvent() {
-			group(stat.(*dispatcherStat).connState.getEventServiceID(), dp)
-		}
-	}
+		group(
+			stat.connState.getEventServiceID(),
+			event.NewDispatcherProgress(
+				stat.getDispatcherID(),
+				stat.getCheckpointTsForEventService(),
+				stat.epoch.Load(),
+			),
+		)
+		return true
+	})
 
 	return groupedHeartbeats
 }

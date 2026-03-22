@@ -1296,6 +1296,29 @@ func TestNewDispatcherResetRequest(t *testing.T) {
 	}
 }
 
+func TestCheckpointTsForEventServiceUsesCurrentEpochResetTs(t *testing.T) {
+	t.Parallel()
+
+	dispatcherID := common.NewDispatcherID()
+	mockDisp := newMockDispatcher(dispatcherID, 100)
+	mockDisp.checkPointTs = 220
+	stat := newDispatcherStat(mockDisp, newTestEventCollector(node.ID("local")), nil)
+
+	require.Equal(t, uint64(100), stat.currentEpochResetTs.Load())
+	require.Equal(t, uint64(100), stat.getCheckpointTsForEventService())
+
+	stat.doReset(node.ID("event-service-1"), 150)
+	require.Equal(t, uint64(150), stat.currentEpochResetTs.Load())
+	require.Equal(t, uint64(150), stat.getCheckpointTsForEventService())
+
+	handshake := commonEvent.NewHandshakeEvent(dispatcherID, 180, 1, &common.TableInfo{})
+	stat.handleHandshakeEvent(dispatcher.DispatcherEvent{
+		Event: &handshake,
+	})
+	require.Equal(t, uint64(150), stat.currentEpochResetTs.Load())
+	require.Equal(t, uint64(220), stat.getCheckpointTsForEventService())
+}
+
 func TestRegisterTo(t *testing.T) {
 	localServerID := node.ID("local-server")
 	remoteServerID := node.ID("remote-server")
