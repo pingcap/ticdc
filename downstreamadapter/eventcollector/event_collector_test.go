@@ -256,9 +256,8 @@ func TestGroupHeartbeatUsesEpochAndClamp(t *testing.T) {
 	require.NotNil(t, localStat)
 	localStat.connState.setEventServiceID(serverInfo.ID)
 	localStat.connState.readyEventReceived.Store(true)
-	localStat.epoch.Store(3)
-	localStat.currentEpochMaxReceivedTs.Store(150)
-	localStat.lastEventSeq.Store(0)
+	localStat.currentEpoch.Store(newDispatcherEpochState(3, 0, 150))
+	localStat.epochGenerator.Store(3)
 
 	remoteID := node.ID("remote-server")
 	remoteDispatcher := &mockEventDispatcher{
@@ -272,9 +271,8 @@ func TestGroupHeartbeatUsesEpochAndClamp(t *testing.T) {
 	require.NotNil(t, remoteStat)
 	remoteStat.connState.setEventServiceID(remoteID)
 	remoteStat.connState.readyEventReceived.Store(true)
-	remoteStat.epoch.Store(5)
-	remoteStat.currentEpochMaxReceivedTs.Store(210)
-	remoteStat.lastEventSeq.Store(1)
+	remoteStat.currentEpoch.Store(newDispatcherEpochState(5, 1, 210))
+	remoteStat.epochGenerator.Store(5)
 
 	grouped := c.groupHeartbeat()
 	require.Len(t, grouped, 2)
@@ -349,7 +347,7 @@ func TestGroupHeartbeatResetThenHandshake(t *testing.T) {
 	require.Equal(t, uint64(180), heartbeat.DispatcherProgresses[0].CheckpointTs)
 	require.Equal(t, uint64(1), heartbeat.DispatcherProgresses[0].Epoch)
 
-	stat.currentEpochMaxReceivedTs.Store(210)
+	stat.loadCurrentEpochState().maxEventTs.Store(210)
 	grouped = c.groupHeartbeat()
 	heartbeat = grouped[serverInfo.ID]
 	require.NotNil(t, heartbeat)

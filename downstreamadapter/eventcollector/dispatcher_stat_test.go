@@ -332,7 +332,7 @@ func TestVerifyEventSequence(t *testing.T) {
 			stat := &dispatcherStat{
 				target: newMockDispatcher(common.NewDispatcherID(), 0),
 			}
-			stat.lastEventSeq.Store(tt.lastEventSeq)
+			stat.loadCurrentEpochState().lastEventSeq.Store(tt.lastEventSeq)
 			result := stat.verifyEventSequence(tt.event)
 			require.Equal(t, tt.expectedResult, result)
 		})
@@ -740,8 +740,8 @@ func TestIsFromCurrentEpoch(t *testing.T) {
 			stat := &dispatcherStat{
 				target: newMockDispatcher(common.NewDispatcherID(), 0),
 			}
-			stat.epoch.Store(tt.epoch)
-			stat.lastEventSeq.Store(tt.lastEventSeq)
+			stat.currentEpoch.Store(newDispatcherEpochState(tt.epoch, tt.lastEventSeq, stat.target.GetStartTs()))
+			stat.epochGenerator.Store(tt.epoch)
 			result := stat.isFromCurrentEpoch(tt.event)
 			require.Equal(t, tt.expectedResult, result)
 		})
@@ -778,8 +778,8 @@ func TestHandleDataEvents(t *testing.T) {
 			},
 			initialState: func(stat *dispatcherStat) {
 				stat.connState.setEventServiceID(remoteServerID)
-				stat.lastEventSeq.Store(1)
-				stat.epoch.Store(2)
+				stat.currentEpoch.Store(newDispatcherEpochState(2, 1, stat.target.GetStartTs()))
+				stat.epochGenerator.Store(2)
 			},
 			handleEvents:   normalHandleEvents,
 			expectedResult: false,
@@ -799,8 +799,8 @@ func TestHandleDataEvents(t *testing.T) {
 			},
 			initialState: func(stat *dispatcherStat) {
 				stat.connState.setEventServiceID(remoteServerID)
-				stat.epoch.Store(2)
-				stat.lastEventSeq.Store(1)
+				stat.currentEpoch.Store(newDispatcherEpochState(2, 1, stat.target.GetStartTs()))
+				stat.epochGenerator.Store(2)
 				stat.lastEventCommitTs.Store(50)
 			},
 			handleEvents:   normalHandleEvents,
@@ -821,8 +821,8 @@ func TestHandleDataEvents(t *testing.T) {
 			},
 			initialState: func(stat *dispatcherStat) {
 				stat.connState.setEventServiceID(remoteServerID)
-				stat.lastEventSeq.Store(1)
-				stat.epoch.Store(10)
+				stat.currentEpoch.Store(newDispatcherEpochState(10, 1, stat.target.GetStartTs()))
+				stat.epochGenerator.Store(10)
 				stat.lastEventCommitTs.Store(50)
 			},
 			handleEvents:   normalHandleEvents,
@@ -844,8 +844,8 @@ func TestHandleDataEvents(t *testing.T) {
 			},
 			initialState: func(stat *dispatcherStat) {
 				stat.connState.setEventServiceID(remoteServerID)
-				stat.epoch.Store(10)
-				stat.lastEventSeq.Store(1)
+				stat.currentEpoch.Store(newDispatcherEpochState(10, 1, stat.target.GetStartTs()))
+				stat.epochGenerator.Store(10)
 				stat.lastEventCommitTs.Store(50)
 			},
 			handleEvents:   normalHandleEvents,
@@ -876,8 +876,8 @@ func TestHandleDataEvents(t *testing.T) {
 			},
 			initialState: func(stat *dispatcherStat) {
 				stat.connState.setEventServiceID(remoteServerID)
-				stat.epoch.Store(10)
-				stat.lastEventSeq.Store(1)
+				stat.currentEpoch.Store(newDispatcherEpochState(10, 1, stat.target.GetStartTs()))
+				stat.epochGenerator.Store(10)
 				stat.lastEventCommitTs.Store(50)
 				stat.tableInfo.Store(&common.TableInfo{})
 			},
@@ -899,8 +899,8 @@ func TestHandleDataEvents(t *testing.T) {
 			},
 			initialState: func(stat *dispatcherStat) {
 				stat.connState.setEventServiceID(remoteServerID)
-				stat.epoch.Store(10)
-				stat.lastEventSeq.Store(1)
+				stat.currentEpoch.Store(newDispatcherEpochState(10, 1, stat.target.GetStartTs()))
+				stat.epochGenerator.Store(10)
 				stat.lastEventCommitTs.Store(50)
 			},
 			handleEvents:   normalHandleEvents,
@@ -921,8 +921,8 @@ func TestHandleDataEvents(t *testing.T) {
 			},
 			initialState: func(stat *dispatcherStat) {
 				stat.connState.setEventServiceID(remoteServerID)
-				stat.epoch.Store(20)
-				stat.lastEventSeq.Store(1)
+				stat.currentEpoch.Store(newDispatcherEpochState(20, 1, stat.target.GetStartTs()))
+				stat.epochGenerator.Store(20)
 				stat.lastEventCommitTs.Store(50)
 			},
 			handleEvents:   normalHandleEvents,
@@ -1029,9 +1029,11 @@ func TestHandleBatchDataEvents(t *testing.T) {
 			mockDisp.handleEvents = normalHandleEvents
 			mockEventCollector := newTestEventCollector(tt.currentService)
 			stat := newDispatcherStat(mockDisp, mockEventCollector, nil)
-			stat.lastEventSeq.Store(tt.lastSeq)
+			stat.loadCurrentEpochState().lastEventSeq.Store(tt.lastSeq)
 			stat.lastEventCommitTs.Store(tt.lastCommitTs)
-			stat.epoch.Store(tt.epoch)
+			state := stat.loadCurrentEpochState()
+			stat.currentEpoch.Store(newDispatcherEpochState(tt.epoch, state.lastEventSeq.Load(), state.maxEventTs.Load()))
+			stat.epochGenerator.Store(tt.epoch)
 			stat.connState.setEventServiceID(tt.currentService)
 			stat.connState.readyEventReceived.Store(true)
 
@@ -1117,9 +1119,11 @@ func TestHandleSingleDataEvents(t *testing.T) {
 			mockDisp.handleEvents = normalHandleEvents
 			mockEventCollector := newTestEventCollector(tt.currentService)
 			stat := newDispatcherStat(mockDisp, mockEventCollector, nil)
-			stat.lastEventSeq.Store(tt.lastSeq)
+			stat.loadCurrentEpochState().lastEventSeq.Store(tt.lastSeq)
 			stat.lastEventCommitTs.Store(tt.lastCommitTs)
-			stat.epoch.Store(tt.epoch)
+			state := stat.loadCurrentEpochState()
+			stat.currentEpoch.Store(newDispatcherEpochState(tt.epoch, state.lastEventSeq.Load(), state.maxEventTs.Load()))
+			stat.epochGenerator.Store(tt.epoch)
 			stat.connState.setEventServiceID(tt.currentService)
 			stat.connState.readyEventReceived.Store(true)
 
@@ -1231,8 +1235,8 @@ func TestHandleBatchDMLEvent(t *testing.T) {
 			mockDisp.handleEvents = normalHandleEvents
 			stat := newDispatcherStat(mockDisp, nil, nil)
 			stat.lastEventCommitTs.Store(tt.lastCommitTs)
-			stat.epoch.Store(tt.epoch)
-			stat.lastEventSeq.Store(tt.lastSeq)
+			stat.currentEpoch.Store(newDispatcherEpochState(tt.epoch, tt.lastSeq, stat.target.GetStartTs()))
+			stat.epochGenerator.Store(tt.epoch)
 			if tt.tableInfo != nil {
 				stat.tableInfo.Store(tt.tableInfo)
 			}
@@ -1304,18 +1308,18 @@ func TestCheckpointTsForEventServiceUsesCollectorObservedMaxTs(t *testing.T) {
 	mockDisp.checkPointTs = 220
 	stat := newDispatcherStat(mockDisp, newTestEventCollector(node.ID("local")), nil)
 
-	require.Equal(t, uint64(100), stat.currentEpochMaxReceivedTs.Load())
+	require.Equal(t, uint64(100), stat.loadCurrentEpochState().maxEventTs.Load())
 	require.Equal(t, uint64(100), stat.getCheckpointTsForEventService())
 
 	stat.doReset(node.ID("event-service-1"), 150)
-	require.Equal(t, uint64(150), stat.currentEpochMaxReceivedTs.Load())
+	require.Equal(t, uint64(150), stat.loadCurrentEpochState().maxEventTs.Load())
 	require.Equal(t, uint64(150), stat.getCheckpointTsForEventService())
 
 	handshake := commonEvent.NewHandshakeEvent(dispatcherID, 180, 1, &common.TableInfo{})
 	stat.handleHandshakeEvent(dispatcher.DispatcherEvent{
 		Event: &handshake,
 	})
-	require.Equal(t, uint64(180), stat.currentEpochMaxReceivedTs.Load())
+	require.Equal(t, uint64(180), stat.loadCurrentEpochState().maxEventTs.Load())
 	require.Equal(t, uint64(180), stat.getCheckpointTsForEventService())
 
 	mockDisp.checkPointTs = 170
@@ -1325,7 +1329,7 @@ func TestCheckpointTsForEventServiceUsesCollectorObservedMaxTs(t *testing.T) {
 	resolved := commonEvent.NewResolvedEvent(200, dispatcherID, 1)
 	resolved.Seq = 1
 	stat.handleDataEvents(dispatcher.DispatcherEvent{Event: resolved})
-	require.Equal(t, uint64(200), stat.currentEpochMaxReceivedTs.Load())
+	require.Equal(t, uint64(200), stat.loadCurrentEpochState().maxEventTs.Load())
 	require.Equal(t, uint64(200), stat.getCheckpointTsForEventService())
 
 	dml := &mockEvent{
@@ -1335,7 +1339,7 @@ func TestCheckpointTsForEventServiceUsesCollectorObservedMaxTs(t *testing.T) {
 		commitTs:  210,
 	}
 	stat.handleDataEvents(dispatcher.DispatcherEvent{Event: dml})
-	require.Equal(t, uint64(210), stat.currentEpochMaxReceivedTs.Load())
+	require.Equal(t, uint64(210), stat.loadCurrentEpochState().maxEventTs.Load())
 	require.Equal(t, uint64(210), stat.getCheckpointTsForEventService())
 }
 

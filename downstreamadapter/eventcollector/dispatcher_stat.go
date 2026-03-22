@@ -133,75 +133,6 @@ func newDispatcherEpochState(epoch uint64, lastEventSeq uint64, maxEventTs uint6
 	return state
 }
 
-type dispatcherEpochAccessor struct {
-	owner    *dispatcherStat
-	fallback atomic.Uint64
-}
-
-func (a *dispatcherEpochAccessor) Load() uint64 {
-	if a.owner == nil {
-		return a.fallback.Load()
-	}
-	return a.owner.loadCurrentEpochState().epoch
-}
-
-func (a *dispatcherEpochAccessor) Store(epoch uint64) {
-	if a.owner == nil {
-		a.fallback.Store(epoch)
-		return
-	}
-	state := a.owner.loadCurrentEpochState()
-	a.owner.currentEpoch.Store(newDispatcherEpochState(epoch, state.lastEventSeq.Load(), state.maxEventTs.Load()))
-	a.owner.epochGenerator.Store(epoch)
-}
-
-type dispatcherLastEventSeqAccessor struct {
-	owner    *dispatcherStat
-	fallback atomic.Uint64
-}
-
-func (a *dispatcherLastEventSeqAccessor) Load() uint64 {
-	if a.owner == nil {
-		return a.fallback.Load()
-	}
-	return a.owner.loadCurrentEpochState().lastEventSeq.Load()
-}
-
-func (a *dispatcherLastEventSeqAccessor) Store(seq uint64) {
-	if a.owner == nil {
-		a.fallback.Store(seq)
-		return
-	}
-	a.owner.loadCurrentEpochState().lastEventSeq.Store(seq)
-}
-
-func (a *dispatcherLastEventSeqAccessor) Add(delta uint64) uint64 {
-	if a.owner == nil {
-		return a.fallback.Add(delta)
-	}
-	return a.owner.loadCurrentEpochState().lastEventSeq.Add(delta)
-}
-
-type dispatcherMaxEventTsAccessor struct {
-	owner    *dispatcherStat
-	fallback atomic.Uint64
-}
-
-func (a *dispatcherMaxEventTsAccessor) Load() uint64 {
-	if a.owner == nil {
-		return a.fallback.Load()
-	}
-	return a.owner.loadCurrentEpochState().maxEventTs.Load()
-}
-
-func (a *dispatcherMaxEventTsAccessor) Store(ts uint64) {
-	if a.owner == nil {
-		a.fallback.Store(ts)
-		return
-	}
-	a.owner.loadCurrentEpochState().maxEventTs.Store(ts)
-}
-
 // dispatcherStat is a helper struct to manage the state of a dispatcher.
 type dispatcherStat struct {
 	target         dispatcher.DispatcherService
@@ -212,12 +143,6 @@ type dispatcherStat struct {
 
 	currentEpoch   atomic.Pointer[dispatcherEpochState]
 	epochGenerator atomic.Uint64
-	// Accessors kept on dispatcherStat so tests and simple reads do not have to
-	// reach into currentEpoch directly. Production code that needs a consistent
-	// snapshot should load currentEpoch once and operate on that state.
-	epoch                     dispatcherEpochAccessor
-	lastEventSeq              dispatcherLastEventSeqAccessor
-	currentEpochMaxReceivedTs dispatcherMaxEventTsAccessor
 	// lastEventCommitTs is the commitTs of the last received DDL/DML/SyncPoint events.
 	lastEventCommitTs atomic.Uint64
 	// gotDDLOnTS indicates whether a DDL event was received at the sentCommitTs.
@@ -241,9 +166,6 @@ func newDispatcherStat(
 		eventCollector: eventCollector,
 		readyCallback:  readyCallback,
 	}
-	stat.epoch.owner = stat
-	stat.lastEventSeq.owner = stat
-	stat.currentEpochMaxReceivedTs.owner = stat
 	stat.currentEpoch.Store(newDispatcherEpochState(0, 0, target.GetStartTs()))
 	stat.lastEventCommitTs.Store(target.GetStartTs())
 	return stat
@@ -251,27 +173,18 @@ func newDispatcherStat(
 
 func (d *dispatcherStat) loadCurrentEpochState() *dispatcherEpochState {
 	state := d.currentEpoch.Load()
-	if state != nil {
-		return state
+	if state == nil {
+		state = newDispatcherEpochState(0, 0, d.target.GetStartTs())
+		if d.currentEpoch.CompareAndSwap(nil, state) {
+			return state
+		}
+		return d.currentEpoch.Load()
 	}
-	if d.epoch.owner == nil {
-		d.epoch.owner = d
-	}
-	if d.lastEventSeq.owner == nil {
-		d.lastEventSeq.owner = d
-	}
-	if d.currentEpochMaxReceivedTs.owner == nil {
-		d.currentEpochMaxReceivedTs.owner = d
-	}
-	state = newDispatcherEpochState(
-		d.epoch.fallback.Load(),
-		d.lastEventSeq.fallback.Load(),
-		d.currentEpochMaxReceivedTs.fallback.Load(),
-	)
-	if d.currentEpoch.CompareAndSwap(nil, state) {
-		return state
-	}
-	return d.currentEpoch.Load()
+	return state
+}
+
+func (d *dispatcherStat) addLastEventSeq(delta uint64) uint64 {
+	return d.loadCurrentEpochState().lastEventSeq.Add(delta)
 }
 
 func (d *dispatcherStat) run() {
@@ -398,7 +311,7 @@ func (d *dispatcherStat) verifyEventSequenceWithState(event dispatcher.Dispatche
 			expectedSeq = lastEventSeq
 		} else {
 			// Other events' seq is the next sequence number.
-			expectedSeq = state.lastEventSeq.Add(1)
+			expectedSeq = d.addLastEventSeq(1)
 		}
 
 		if event.GetSeq() != expectedSeq {
@@ -422,7 +335,7 @@ func (d *dispatcherStat) verifyEventSequenceWithState(event dispatcher.Dispatche
 				zap.Uint64("lastEventSeq", state.lastEventSeq.Load()),
 				zap.Uint64("commitTs", e.CommitTs))
 
-			expectedSeq := state.lastEventSeq.Add(1)
+			expectedSeq := d.addLastEventSeq(1)
 			if e.Seq != expectedSeq {
 				log.Warn("receive an out-of-order batch DML event, reset the dispatcher",
 					zap.Stringer("changefeedID", d.target.GetChangefeedID()),
