@@ -406,13 +406,13 @@ func (c *EventCollector) sendDispatcherHeartbeat() {
 // groupHeartbeat groups the heartbeat by the dispatcherStat's serverID.
 func (c *EventCollector) groupHeartbeat() map[node.ID]*event.DispatcherHeartbeat {
 	groupedHeartbeats := make(map[node.ID]*event.DispatcherHeartbeat)
-	group := func(target node.ID, dp event.DispatcherProgress) {
+	group := func(target node.ID, dispatcherID common.DispatcherID, checkpointTs uint64, epoch uint64) {
 		heartbeat, ok := groupedHeartbeats[target]
 		if !ok {
-			heartbeat = event.NewDispatcherHeartbeat(32)
+			heartbeat = event.NewDispatcherHeartbeat()
 			groupedHeartbeats[target] = heartbeat
 		}
-		heartbeat.Append(dp)
+		heartbeat.AddDispatcherProgress(dispatcherID, checkpointTs, epoch)
 	}
 
 	c.dispatcherMap.Range(func(_, value interface{}) bool {
@@ -422,11 +422,9 @@ func (c *EventCollector) groupHeartbeat() map[node.ID]*event.DispatcherHeartbeat
 		}
 		group(
 			stat.connState.getEventServiceID(),
-			event.NewDispatcherProgress(
-				stat.getDispatcherID(),
-				stat.getCheckpointTsForEventService(),
-				stat.epoch.Load(),
-			),
+			stat.getDispatcherID(),
+			stat.getCheckpointTsForEventService(),
+			stat.epoch.Load(),
 		)
 		return true
 	})

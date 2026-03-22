@@ -50,20 +50,18 @@ func TestDispatcherProgress(t *testing.T) {
 func TestDispatcherHeartbeat(t *testing.T) {
 	t.Parallel()
 	// Test NewDispatcherHeartbeat
-	dispatcherCount := 3
-	heartbeat := NewDispatcherHeartbeat(dispatcherCount)
+	heartbeat := NewDispatcherHeartbeat()
 	require.Equal(t, DispatcherHeartbeatVersion2, heartbeat.Version)
 	require.Empty(t, heartbeat.DispatcherProgresses)
-	require.Equal(t, dispatcherCount, cap(heartbeat.DispatcherProgresses))
 
-	// Test Append
+	// Test AddDispatcherProgress
 	dispatcherID1 := common.NewDispatcherID()
 	progress1 := DispatcherProgress{
 		DispatcherID: dispatcherID1,
 		CheckpointTs: 100,
 		Epoch:        1,
 	}
-	heartbeat.Append(progress1)
+	heartbeat.AddDispatcherProgress(progress1.DispatcherID, progress1.CheckpointTs, progress1.Epoch)
 	require.Len(t, heartbeat.DispatcherProgresses, 1)
 	require.Equal(t, progress1, heartbeat.DispatcherProgresses[0])
 
@@ -73,7 +71,7 @@ func TestDispatcherHeartbeat(t *testing.T) {
 		CheckpointTs: 200,
 		Epoch:        2,
 	}
-	heartbeat.Append(progress2)
+	heartbeat.AddDispatcherProgress(progress2.DispatcherID, progress2.CheckpointTs, progress2.Epoch)
 	require.Len(t, heartbeat.DispatcherProgresses, 2)
 	require.Equal(t, progress2, heartbeat.DispatcherProgresses[1])
 
@@ -115,7 +113,7 @@ func TestDispatcherHeartbeatWithMultipleDispatchers(t *testing.T) {
 	t.Parallel()
 	// Create multiple dispatchers
 	dispatcherCount := 5
-	heartbeat := NewDispatcherHeartbeat(dispatcherCount)
+	heartbeat := NewDispatcherHeartbeat()
 
 	// Add progress for each dispatcher
 	for i := 0; i < dispatcherCount; i++ {
@@ -124,7 +122,7 @@ func TestDispatcherHeartbeatWithMultipleDispatchers(t *testing.T) {
 			CheckpointTs: uint64(i * 100),
 			Epoch:        uint64(i),
 		}
-		heartbeat.Append(progress)
+		heartbeat.AddDispatcherProgress(progress.DispatcherID, progress.CheckpointTs, progress.Epoch)
 	}
 
 	require.Len(t, heartbeat.DispatcherProgresses, dispatcherCount)
@@ -302,8 +300,8 @@ func TestDispatcherHeartbeatResponseWithMultipleStates(t *testing.T) {
 func TestDispatcherHeartbeatHeaderValidation(t *testing.T) {
 	t.Parallel()
 
-	heartbeat := NewDispatcherHeartbeat(1)
-	heartbeat.Append(NewDispatcherProgress(common.NewDispatcherID(), 100, 1))
+	heartbeat := NewDispatcherHeartbeat()
+	heartbeat.AddDispatcherProgress(common.NewDispatcherID(), 100, 1)
 
 	data, err := heartbeat.Marshal()
 	require.NoError(t, err)

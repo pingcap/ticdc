@@ -35,14 +35,6 @@ type DispatcherProgress struct {
 	Epoch        uint64 // 8 bytes, available since heartbeat version 2
 }
 
-func NewDispatcherProgress(dispatcherID common.DispatcherID, checkpointTs uint64, epoch uint64) DispatcherProgress {
-	return DispatcherProgress{
-		DispatcherID: dispatcherID,
-		CheckpointTs: checkpointTs,
-		Epoch:        epoch,
-	}
-}
-
 func (dp DispatcherProgress) GetSize() int {
 	return dp.DispatcherID.GetSize() + 8 // dispatcherID size + checkpointTs size
 }
@@ -98,18 +90,26 @@ type DispatcherHeartbeat struct {
 	DispatcherProgresses []DispatcherProgress
 }
 
-func NewDispatcherHeartbeat(dispatcherCount int) *DispatcherHeartbeat {
+func NewDispatcherHeartbeat() *DispatcherHeartbeat {
 	return &DispatcherHeartbeat{
 		Version: DispatcherHeartbeatVersion2,
 		// TODO: Pass a real clusterID when we support 1 TiCDC cluster subscribe multiple TiDB clusters
 		ClusterID:            0,
-		DispatcherProgresses: make([]DispatcherProgress, 0, dispatcherCount),
+		DispatcherProgresses: make([]DispatcherProgress, 0),
 	}
 }
 
 func (d *DispatcherHeartbeat) Append(dp DispatcherProgress) {
 	d.DispatcherCount++
 	d.DispatcherProgresses = append(d.DispatcherProgresses, dp)
+}
+
+func (d *DispatcherHeartbeat) AddDispatcherProgress(dispatcherID common.DispatcherID, checkpointTs uint64, epoch uint64) {
+	d.Append(DispatcherProgress{
+		DispatcherID: dispatcherID,
+		CheckpointTs: checkpointTs,
+		Epoch:        epoch,
+	})
 }
 
 func (d *DispatcherHeartbeat) GetSize() int {
