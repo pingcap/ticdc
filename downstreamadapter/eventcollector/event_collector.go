@@ -402,7 +402,6 @@ func (c *EventCollector) sendDispatcherHeartbeat() {
 	}
 }
 
-// TODO(dongmen): add unit test for this function.
 // groupHeartbeat groups the heartbeat by the dispatcherStat's serverID.
 func (c *EventCollector) groupHeartbeat() map[node.ID]*event.DispatcherHeartbeat {
 	groupedHeartbeats := make(map[node.ID]*event.DispatcherHeartbeat)
@@ -420,11 +419,12 @@ func (c *EventCollector) groupHeartbeat() map[node.ID]*event.DispatcherHeartbeat
 		if !stat.connState.isReceivingDataEvent() {
 			return true
 		}
+		checkpointTs, epoch := stat.getHeartbeatProgressForEventService()
 		group(
 			stat.connState.getEventServiceID(),
 			stat.getDispatcherID(),
-			stat.getCheckpointTsForEventService(),
-			stat.epoch.Load(),
+			checkpointTs,
+			epoch,
 		)
 		return true
 	})
