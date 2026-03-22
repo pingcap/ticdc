@@ -257,7 +257,7 @@ func TestGroupHeartbeatUsesEpochAndClamp(t *testing.T) {
 	localStat.connState.setEventServiceID(serverInfo.ID)
 	localStat.connState.readyEventReceived.Store(true)
 	localStat.epoch.Store(3)
-	localStat.currentEpochResetTs.Store(150)
+	localStat.currentEpochMaxReceivedTs.Store(150)
 	localStat.lastEventSeq.Store(0)
 
 	remoteID := node.ID("remote-server")
@@ -273,7 +273,7 @@ func TestGroupHeartbeatUsesEpochAndClamp(t *testing.T) {
 	remoteStat.connState.setEventServiceID(remoteID)
 	remoteStat.connState.readyEventReceived.Store(true)
 	remoteStat.epoch.Store(5)
-	remoteStat.currentEpochResetTs.Store(180)
+	remoteStat.currentEpochMaxReceivedTs.Store(210)
 	remoteStat.lastEventSeq.Store(1)
 
 	grouped := c.groupHeartbeat()
@@ -292,7 +292,7 @@ func TestGroupHeartbeatUsesEpochAndClamp(t *testing.T) {
 	require.Equal(t, commonEvent.DispatcherHeartbeatVersion2, remoteHeartbeat.Version)
 	require.Len(t, remoteHeartbeat.DispatcherProgresses, 1)
 	require.Equal(t, remoteDispatcher.id, remoteHeartbeat.DispatcherProgresses[0].DispatcherID)
-	require.Equal(t, uint64(220), remoteHeartbeat.DispatcherProgresses[0].CheckpointTs)
+	require.Equal(t, uint64(210), remoteHeartbeat.DispatcherProgresses[0].CheckpointTs)
 	require.Equal(t, uint64(5), remoteHeartbeat.DispatcherProgresses[0].Epoch)
 }
 
@@ -330,8 +330,9 @@ func TestGroupHeartbeatResetThenHandshake(t *testing.T) {
 	require.Equal(t, uint64(150), heartbeat.DispatcherProgresses[0].CheckpointTs)
 	require.Equal(t, uint64(1), heartbeat.DispatcherProgresses[0].Epoch)
 
-	// After handshake in the same epoch, collector should stop clamping and
-	// report the real sink checkpoint.
+	// Handshake only proves collector has observed the handshake ts. Even if sink
+	// checkpoint has already jumped ahead, heartbeat must stay bounded by
+	// collector-observed progress.
 	handshake := commonEvent.NewHandshakeEvent(dispatcherID, 180, 1, &common.TableInfo{})
 	stat.handleHandshakeEvent(dispatcher.DispatcherEvent{
 		Event: &handshake,
@@ -341,6 +342,14 @@ func TestGroupHeartbeatResetThenHandshake(t *testing.T) {
 	heartbeat = grouped[serverInfo.ID]
 	require.NotNil(t, heartbeat)
 	require.Len(t, heartbeat.DispatcherProgresses, 1)
-	require.Equal(t, uint64(220), heartbeat.DispatcherProgresses[0].CheckpointTs)
+	require.Equal(t, uint64(180), heartbeat.DispatcherProgresses[0].CheckpointTs)
+	require.Equal(t, uint64(1), heartbeat.DispatcherProgresses[0].Epoch)
+
+	stat.currentEpochMaxReceivedTs.Store(210)
+	grouped = c.groupHeartbeat()
+	heartbeat = grouped[serverInfo.ID]
+	require.NotNil(t, heartbeat)
+	require.Len(t, heartbeat.DispatcherProgresses, 1)
+	require.Equal(t, uint64(210), heartbeat.DispatcherProgresses[0].CheckpointTs)
 	require.Equal(t, uint64(1), heartbeat.DispatcherProgresses[0].Epoch)
 }

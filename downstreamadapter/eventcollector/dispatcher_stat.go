@@ -26,6 +26,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
 )
 
@@ -120,10 +121,11 @@ type dispatcherStat struct {
 	// lastEventSeq is the sequence number of the last received DML/DDL/Handshake event.
 	// It is used to ensure the order of events.
 	lastEventSeq atomic.Uint64
-	// currentEpochResetTs tracks the reset ts of current epoch.
-	// It is updated on reset and is used to clamp checkpoint heartbeats before
-	// the current epoch is fully handshaked.
-	currentEpochResetTs atomic.Uint64
+	// currentEpochMaxReceivedTs tracks the largest ts that the event collector
+	// has safely accepted in the current epoch. Event service checkpoint
+	// heartbeats must not exceed it, otherwise a sink-side checkpoint jump could
+	// make event service skip data that has not reached the collector yet.
+	currentEpochMaxReceivedTs atomic.Uint64
 	// lastEventCommitTs is the commitTs of the last received DDL/DML/SyncPoint events.
 	lastEventCommitTs atomic.Uint64
 	// gotDDLOnTS indicates whether a DDL event was received at the sentCommitTs.
@@ -148,7 +150,7 @@ func newDispatcherStat(
 		readyCallback:  readyCallback,
 	}
 	stat.lastEventSeq.Store(0)
-	stat.currentEpochResetTs.Store(target.GetStartTs())
+	stat.currentEpochMaxReceivedTs.Store(target.GetStartTs())
 	stat.lastEventCommitTs.Store(target.GetStartTs())
 	return stat
 }
@@ -188,7 +190,7 @@ func (d *dispatcherStat) reset(serverID node.ID) {
 func (d *dispatcherStat) doReset(serverID node.ID, resetTs uint64) {
 	epoch := d.epoch.Add(1)
 	d.lastEventSeq.Store(0)
-	d.currentEpochResetTs.Store(resetTs)
+	d.currentEpochMaxReceivedTs.Store(resetTs)
 	// remove the dispatcher from the dynamic stream
 	resetRequest := d.newDispatcherResetRequest(d.eventCollector.getLocalServerID().String(), resetTs, epoch)
 	msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, resetRequest)
@@ -365,8 +367,13 @@ func (d *dispatcherStat) filterAndUpdateEventByCommitTs(event dispatcher.Dispatc
 		commonEvent.TypeSyncPointEvent:
 		d.lastEventCommitTs.Store(event.GetCommitTs())
 	}
+	d.observeCurrentEpochTs(event.GetCommitTs())
 
 	return true
+}
+
+func (d *dispatcherStat) observeCurrentEpochTs(ts uint64) {
+	util.MustCompareAndMonotonicIncrease(&d.currentEpochMaxReceivedTs, ts)
 }
 
 func (d *dispatcherStat) isFromCurrentEpoch(event dispatcher.DispatcherEvent) bool {
@@ -407,6 +414,7 @@ func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEve
 			return false
 		}
 		if event.GetType() == commonEvent.TypeResolvedEvent {
+			d.observeCurrentEpochTs(event.GetCommitTs())
 			validEvents = append(validEvents, event)
 		} else if event.GetType() == commonEvent.TypeDMLEvent {
 			if d.filterAndUpdateEventByCommitTs(event) {
@@ -646,14 +654,16 @@ func (d *dispatcherStat) handleHandshakeEvent(event dispatcher.DispatcherEvent) 
 		d.tableInfo.Store(tableInfo)
 	}
 	d.lastEventSeq.Store(handshakeEvent.Seq)
+	d.observeCurrentEpochTs(handshakeEvent.GetCommitTs())
 }
 
 func (d *dispatcherStat) getCheckpointTsForEventService() uint64 {
 	checkpointTs := d.target.GetCheckpointTs()
-	if d.lastEventSeq.Load() == 0 {
-		return min(checkpointTs, d.currentEpochResetTs.Load())
-	}
-	return checkpointTs
+	// Event service checkpoint must stay behind collector-observed progress in
+	// the current epoch. Handshake only proves the reset ts is visible; later
+	// heartbeats can advance only after collector receives newer handshake/data/
+	// resolved events from the same epoch.
+	return min(checkpointTs, d.currentEpochMaxReceivedTs.Load())
 }
 
 func (d *dispatcherStat) setRemoteCandidates(nodes []string) {

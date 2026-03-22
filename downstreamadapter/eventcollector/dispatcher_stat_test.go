@@ -1296,7 +1296,7 @@ func TestNewDispatcherResetRequest(t *testing.T) {
 	}
 }
 
-func TestCheckpointTsForEventServiceUsesCurrentEpochResetTs(t *testing.T) {
+func TestCheckpointTsForEventServiceUsesCollectorObservedMaxTs(t *testing.T) {
 	t.Parallel()
 
 	dispatcherID := common.NewDispatcherID()
@@ -1304,19 +1304,39 @@ func TestCheckpointTsForEventServiceUsesCurrentEpochResetTs(t *testing.T) {
 	mockDisp.checkPointTs = 220
 	stat := newDispatcherStat(mockDisp, newTestEventCollector(node.ID("local")), nil)
 
-	require.Equal(t, uint64(100), stat.currentEpochResetTs.Load())
+	require.Equal(t, uint64(100), stat.currentEpochMaxReceivedTs.Load())
 	require.Equal(t, uint64(100), stat.getCheckpointTsForEventService())
 
 	stat.doReset(node.ID("event-service-1"), 150)
-	require.Equal(t, uint64(150), stat.currentEpochResetTs.Load())
+	require.Equal(t, uint64(150), stat.currentEpochMaxReceivedTs.Load())
 	require.Equal(t, uint64(150), stat.getCheckpointTsForEventService())
 
 	handshake := commonEvent.NewHandshakeEvent(dispatcherID, 180, 1, &common.TableInfo{})
 	stat.handleHandshakeEvent(dispatcher.DispatcherEvent{
 		Event: &handshake,
 	})
-	require.Equal(t, uint64(150), stat.currentEpochResetTs.Load())
-	require.Equal(t, uint64(220), stat.getCheckpointTsForEventService())
+	require.Equal(t, uint64(180), stat.currentEpochMaxReceivedTs.Load())
+	require.Equal(t, uint64(180), stat.getCheckpointTsForEventService())
+
+	mockDisp.checkPointTs = 170
+	require.Equal(t, uint64(170), stat.getCheckpointTsForEventService())
+
+	mockDisp.checkPointTs = 220
+	resolved := commonEvent.NewResolvedEvent(200, dispatcherID, 1)
+	resolved.Seq = 1
+	stat.handleDataEvents(dispatcher.DispatcherEvent{Event: resolved})
+	require.Equal(t, uint64(200), stat.currentEpochMaxReceivedTs.Load())
+	require.Equal(t, uint64(200), stat.getCheckpointTsForEventService())
+
+	dml := &mockEvent{
+		eventType: commonEvent.TypeDMLEvent,
+		seq:       2,
+		epoch:     1,
+		commitTs:  210,
+	}
+	stat.handleDataEvents(dispatcher.DispatcherEvent{Event: dml})
+	require.Equal(t, uint64(210), stat.currentEpochMaxReceivedTs.Load())
+	require.Equal(t, uint64(210), stat.getCheckpointTsForEventService())
 }
 
 func TestRegisterTo(t *testing.T) {
