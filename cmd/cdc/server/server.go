@@ -147,7 +147,8 @@ func (o *options) run(cmd *cobra.Command) error {
 	util.InitSignalHandling(shutdown, cancel)
 
 	err = svr.Run(ctx)
-	if !isNormalServerShutdown(err) {
+	isNormalExit := isNormalServerShutdown(err, ctx)
+	if !isNormalExit {
 		log.Error("cdc server exits with error", zap.Error(err))
 	} else {
 		log.Info("cdc server exits normally")
@@ -157,22 +158,31 @@ func (o *options) run(cmd *cobra.Command) error {
 	ticker := time.NewTicker(server.GracefulShutdownTimeout)
 	defer ticker.Stop()
 	go func() {
-		svr.Close(ctx)
+		svr.Close(context.Background())
 		close(ch)
 	}()
 	select {
 	case <-ch:
 	case <-ticker.C:
 		log.Warn("graceful shutdown timeout, exit server")
+		if isNormalExit {
+			return errors.New("graceful shutdown timeout")
+		}
 	}
-	if isNormalServerShutdown(err) {
+	if isNormalExit {
 		return nil
 	}
 	return err
 }
 
-func isNormalServerShutdown(err error) bool {
-	return err == nil || errors.Is(err, context.Canceled)
+func isNormalServerShutdown(err error, ctx context.Context) bool {
+	if err == nil {
+		return true
+	}
+	// Treat cancellation as a normal exit only when the top-level context was
+	// explicitly canceled by shutdown/signal. This avoids masking internal module
+	// failures that also surface as context.Canceled via errgroup cancellation.
+	return errors.Is(err, context.Canceled) && ctx.Err() == context.Canceled
 }
 
 // complete adapts from the command line args and config file to the data required.
