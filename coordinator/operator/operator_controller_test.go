@@ -97,6 +97,29 @@ func TestController_AddOperator(t *testing.T) {
 	require.False(t, oc.HasOperator(cf2ID.DisplayName))
 }
 
+func TestController_HasOperatorInvolvingNode(t *testing.T) {
+	changefeedDB := changefeed.NewChangefeedDB(1216)
+	ctrl := gomock.NewController(t)
+	backend := mock_changefeed.NewMockBackend(ctrl)
+	self := node.NewInfo("localhost:8300", "")
+	nodeManager := watcher.NewNodeManager(nil, nil)
+	nodeManager.GetAliveNodes()[self.ID] = self
+	oc := NewOperatorController(self, changefeedDB, backend, 10)
+
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		Config:       config.GetDefaultReplicaConfig(),
+		SinkURI:      "mysql://127.0.0.1:3306",
+	}, 1, true)
+	changefeedDB.AddReplicatingMaintainer(cf, "n1")
+
+	require.True(t, oc.AddOperator(NewAddMaintainerOperator(changefeedDB, cf, "n2")))
+
+	require.True(t, oc.HasOperatorInvolvingNode("n2"))
+	require.False(t, oc.HasOperatorInvolvingNode("n3"))
+}
+
 func TestController_StopChangefeedDuringAddOperator(t *testing.T) {
 	// Setup test environment
 	changefeedDB := changefeed.NewChangefeedDB(1216)

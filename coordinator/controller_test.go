@@ -21,8 +21,10 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/coordinator/changefeed"
 	mock_changefeed "github.com/pingcap/ticdc/coordinator/changefeed/mock"
+	"github.com/pingcap/ticdc/coordinator/drain"
 	"github.com/pingcap/ticdc/coordinator/operator"
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/pkg/bootstrap"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -33,6 +35,88 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/atomic"
 )
+
+func TestOnPeriodTaskAdvanceLiveness(t *testing.T) {
+	newController := func(t *testing.T) (*Controller, chan *messaging.TargetMessage, *changefeed.ChangefeedDB, node.ID) {
+		t.Helper()
+
+		ctrl := gomock.NewController(t)
+		t.Cleanup(ctrl.Finish)
+
+		backend := mock_changefeed.NewMockBackend(ctrl)
+		changefeedDB := changefeed.NewChangefeedDB(1216)
+		self := node.NewInfo("localhost:8300", "")
+		target := node.NewInfo("localhost:8301", "")
+		nodeManager := watcher.NewNodeManager(nil, nil)
+		nodeManager.GetAliveNodes()[self.ID] = self
+		nodeManager.GetAliveNodes()[target.ID] = target
+
+		mc := messaging.NewMockMessageCenter()
+		appcontext.SetService(appcontext.MessageCenter, mc)
+		appcontext.SetService(watcher.NodeManagerName, nodeManager)
+
+		return &Controller{
+			changefeedDB: changefeedDB,
+			operatorController: operator.NewOperatorController(
+				self, changefeedDB, backend, 10,
+			),
+			drainController: drain.NewController(mc),
+			bootstrapper: bootstrap.NewBootstrapper[heartbeatpb.CoordinatorBootstrapResponse](
+				"test",
+				func(node.ID, string) *messaging.TargetMessage { return nil },
+			),
+			messageCenter: mc,
+		}, mc.GetMessageChannel(), changefeedDB, target.ID
+	}
+
+	t.Run("send stopping when node is ready", func(t *testing.T) {
+		controller, messageCh, _, targetNodeID := newController(t)
+		controller.drainController.ObserveHeartbeat(targetNodeID, &heartbeatpb.NodeHeartbeat{
+			NodeEpoch: 1,
+			Liveness:  heartbeatpb.NodeLiveness_DRAINING,
+		})
+
+		controller.onPeriodTask()
+
+		select {
+		case msg := <-messageCh:
+			require.Equal(t, messaging.TypeSetNodeLivenessRequest, msg.Type)
+			require.Equal(t, targetNodeID, msg.To)
+			req := msg.Message[0].(*heartbeatpb.SetNodeLivenessRequest)
+			require.Equal(t, heartbeatpb.NodeLiveness_STOPPING, req.Target)
+			require.Equal(t, uint64(1), req.NodeEpoch)
+		default:
+			t.Fatal("expected a stop liveness command")
+		}
+	})
+
+	t.Run("skip stopping when operator is still in flight", func(t *testing.T) {
+		controller, messageCh, changefeedDB, targetNodeID := newController(t)
+		controller.drainController.ObserveHeartbeat(targetNodeID, &heartbeatpb.NodeHeartbeat{
+			NodeEpoch: 1,
+			Liveness:  heartbeatpb.NodeLiveness_DRAINING,
+		})
+
+		cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+		cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
+			ChangefeedID: cfID,
+			Config:       config.GetDefaultReplicaConfig(),
+			SinkURI:      "mysql://127.0.0.1:3306",
+		}, 1, true)
+		changefeedDB.AddAbsentChangefeed(cf)
+		require.True(t, controller.operatorController.AddOperator(
+			operator.NewAddMaintainerOperator(changefeedDB, cf, targetNodeID),
+		))
+
+		controller.onPeriodTask()
+
+		select {
+		case msg := <-messageCh:
+			t.Fatalf("unexpected liveness command sent: %v", msg.Type)
+		default:
+		}
+	})
+}
 
 func TestResumeChangefeed(t *testing.T) {
 	ctrl := gomock.NewController(t)

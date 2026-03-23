@@ -270,7 +270,7 @@ func (c *Controller) onPeriodTask() {
 	}
 
 	c.drainController.AdvanceLiveness(func(id node.ID) bool {
-		return len(c.changefeedDB.GetByNodeID(id)) == 0 && c.operatorController.CountOperatorsInvolvingNode(id) == 0
+		return len(c.changefeedDB.GetByNodeID(id)) == 0 && !c.operatorController.HasOperatorInvolvingNode(id)
 	})
 }
 
