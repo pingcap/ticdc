@@ -397,6 +397,8 @@ func TestCreateChangefeed(t *testing.T) {
 	backend.EXPECT().CreateChangefeed(gomock.Any(), gomock.Any()).Return(errors.New("failed")).Times(1)
 	require.NotNil(t, controller.CreateChangefeed(context.Background(), cfConfig))
 	require.Equal(t, 0, changefeedDB.GetSize())
+
+	backend.EXPECT().CreateChangefeed(gomock.Any(), gomock.Any()).Return(nil).Times(1)
 	require.Nil(t, controller.CreateChangefeed(context.Background(), cfConfig))
 
 	// add it again
