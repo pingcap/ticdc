@@ -441,6 +441,9 @@ type changefeedStatus struct {
 	// active dispatchers to advance nextSyncPoint beyond it.
 	// 0 means there is no in-flight syncpoint in commit stage.
 	syncPointInFlightTs atomic.Uint64
+	// syncPointStateMu serializes transitions between prepare/commit stages so
+	// syncPointPreparingTs and syncPointInFlightTs stay consistent.
+	syncPointStateMu sync.Mutex
 }
 
 func newChangefeedStatus(changefeedID common.ChangeFeedID, syncPointInterval time.Duration) *changefeedStatus {
@@ -482,29 +485,29 @@ func (c *changefeedStatus) getSyncPointPreparingTs() uint64 {
 }
 
 // tryEnterSyncPointPrepare tries to enter syncpoint prepare stage for candidateTs.
-// If a prepare ts already exists, only the same ts is accepted.
+// If a prepare ts already exists, the same ts is accepted, and a smaller ts can
+// replace it before commit stage starts.
 func (c *changefeedStatus) tryEnterSyncPointPrepare(candidateTs uint64) bool {
 	if candidateTs == 0 {
 		return false
 	}
-	for {
-		preparingTs := c.syncPointPreparingTs.Load()
-		switch {
-		case preparingTs == 0:
-			if c.syncPointPreparingTs.CompareAndSwap(0, candidateTs) {
-				return true
-			}
-		case preparingTs == candidateTs:
-			return true
-		case c.syncPointInFlightTs.Load() != 0:
-			return false
-		case candidateTs < preparingTs:
-			if c.syncPointPreparingTs.CompareAndSwap(preparingTs, candidateTs) {
-				return true
-			}
-		default:
-			return false
-		}
+	c.syncPointStateMu.Lock()
+	defer c.syncPointStateMu.Unlock()
+
+	preparingTs := c.syncPointPreparingTs.Load()
+	switch {
+	case preparingTs == 0:
+		c.syncPointPreparingTs.Store(candidateTs)
+		return true
+	case preparingTs == candidateTs:
+		return true
+	case c.syncPointInFlightTs.Load() != 0:
+		return false
+	case candidateTs < preparingTs:
+		c.syncPointPreparingTs.Store(candidateTs)
+		return true
+	default:
+		return false
 	}
 }
 
@@ -518,6 +521,9 @@ func (c *changefeedStatus) isSyncPointInCommitStage(commitTs uint64) bool {
 // tryPromoteSyncPointToCommitIfReady promotes prepare stage to commit stage when all active
 // dispatchers have sentResolvedTs >= preparingTs.
 func (c *changefeedStatus) tryPromoteSyncPointToCommitIfReady() {
+	c.syncPointStateMu.Lock()
+	defer c.syncPointStateMu.Unlock()
+
 	preparingTs := c.syncPointPreparingTs.Load()
 	if preparingTs == 0 || c.syncPointInFlightTs.Load() != 0 {
 		return
@@ -541,13 +547,16 @@ func (c *changefeedStatus) tryPromoteSyncPointToCommitIfReady() {
 		return
 	}
 
-	c.syncPointInFlightTs.CompareAndSwap(0, preparingTs)
+	c.syncPointInFlightTs.Store(preparingTs)
 }
 
 // tryFinishSyncPointCommitIfAllEmitted finishes current commit stage when all active dispatchers
 // have advanced nextSyncPoint beyond inFlightTs (meaning syncpoint has been emitted from
 // event broker side). It then clears prepare/commit state.
 func (c *changefeedStatus) tryFinishSyncPointCommitIfAllEmitted() {
+	c.syncPointStateMu.Lock()
+	defer c.syncPointStateMu.Unlock()
+
 	inFlightTs := c.syncPointInFlightTs.Load()
 	if inFlightTs == 0 {
 		return
@@ -566,7 +575,10 @@ func (c *changefeedStatus) tryFinishSyncPointCommitIfAllEmitted() {
 		return true
 	})
 
-	if canAdvance && c.syncPointInFlightTs.CompareAndSwap(inFlightTs, 0) {
-		c.syncPointPreparingTs.CompareAndSwap(inFlightTs, 0)
+	if canAdvance {
+		c.syncPointInFlightTs.Store(0)
+		if c.syncPointPreparingTs.Load() == inFlightTs {
+			c.syncPointPreparingTs.Store(0)
+		}
 	}
 }
