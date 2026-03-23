@@ -36,7 +36,7 @@ func TestBufferManagerFlushesPendingBatchBeforeWaitingForDiskQuota(t *testing.T)
 	spoolBuffer, err := spool.New(
 		changefeedID,
 		spool.WithRootDir(t.TempDir()),
-		spool.WithQuotaBytes(40),
+		spool.WithDiskQuotaBytes(40),
 		spool.WithMemoryRatio(0.01),
 	)
 	require.NoError(t, err)
@@ -88,7 +88,7 @@ func TestBufferManagerOversizedBatchFlushesImmediatelyFromMemory(t *testing.T) {
 	spoolBuffer, err := spool.New(
 		changefeedID,
 		spool.WithRootDir(t.TempDir()),
-		spool.WithQuotaBytes(1),
+		spool.WithDiskQuotaBytes(1),
 		spool.WithMemoryRatio(0.01),
 	)
 	require.NoError(t, err)

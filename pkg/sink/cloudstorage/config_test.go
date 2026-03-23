@@ -21,6 +21,7 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/pingcap/ticdc/pkg/config"
+	configerrors "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
 
@@ -195,4 +196,56 @@ func TestSpoolDiskQuotaConfig(t *testing.T) {
 	err = cfg.Apply(context.Background(), sinkURI, replicaConfig.Sink, true)
 	require.NoError(t, err)
 	require.Equal(t, int64(3221225472), cfg.SpoolDiskQuota)
+}
+
+func TestSpoolDirConfig(t *testing.T) {
+	uriSpoolDir := t.TempDir()
+	configSpoolDir := t.TempDir()
+
+	uri := "s3://bucket/prefix?spool-dir=" + url.QueryEscape(uriSpoolDir)
+	sinkURI, err := url.Parse(uri)
+	require.NoError(t, err)
+
+	replicaConfig := config.GetDefaultReplicaConfig()
+	replicaConfig.Sink.CloudStorageConfig = &config.CloudStorageConfig{
+		SpoolDir: aws.String(configSpoolDir),
+	}
+
+	cfg := NewConfig()
+	err = cfg.Apply(context.Background(), sinkURI, replicaConfig.Sink, true)
+	require.NoError(t, err)
+	require.Equal(t, uriSpoolDir, cfg.SpoolDir)
+
+	uri = "s3://bucket/prefix"
+	sinkURI, err = url.Parse(uri)
+	require.NoError(t, err)
+
+	cfg = NewConfig()
+	err = cfg.Apply(context.Background(), sinkURI, replicaConfig.Sink, true)
+	require.NoError(t, err)
+	require.Equal(t, configSpoolDir, cfg.SpoolDir)
+}
+
+func TestInvalidSpoolDirConfig(t *testing.T) {
+	uri := "s3://bucket/prefix?spool-dir=relative/path"
+	sinkURI, err := url.Parse(uri)
+	require.NoError(t, err)
+
+	cfg := NewConfig()
+	err = cfg.Apply(context.Background(), sinkURI, config.GetDefaultReplicaConfig().Sink, true)
+	require.Error(t, err)
+	require.True(t, configerrors.ErrStorageSinkInvalidConfig.Equal(err))
+
+	sinkURI, err = url.Parse("s3://bucket/prefix")
+	require.NoError(t, err)
+
+	replicaConfig := config.GetDefaultReplicaConfig()
+	replicaConfig.Sink.CloudStorageConfig = &config.CloudStorageConfig{
+		SpoolDir: aws.String("relative/path"),
+	}
+
+	cfg = NewConfig()
+	err = cfg.Apply(context.Background(), sinkURI, replicaConfig.Sink, true)
+	require.Error(t, err)
+	require.True(t, configerrors.ErrStorageSinkInvalidConfig.Equal(err))
 }

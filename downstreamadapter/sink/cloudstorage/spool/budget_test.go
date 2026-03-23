@@ -23,7 +23,7 @@ func TestBudgetTracksMemoryAndDiskBytes(t *testing.T) {
 	t.Parallel()
 
 	core := newBudget(&options{
-		quotaBytes:         100,
+		diskQuotaBytes:     100,
 		memoryRatio:        0.2,
 		highWatermarkRatio: 0.8,
 		lowWatermarkRatio:  0.6,
@@ -31,24 +31,28 @@ func TestBudgetTracksMemoryAndDiskBytes(t *testing.T) {
 
 	require.False(t, core.shouldSpill(10))
 
-	core.reserve(10, false)
+	overHighWatermark := core.acquire(10, false)
+	require.False(t, overHighWatermark)
 	require.Equal(t, int64(10), core.memoryBytes)
 	require.Equal(t, int64(0), core.diskBytes)
 	require.Equal(t, int64(10), core.totalBytes())
 
 	require.True(t, core.shouldSpill(11))
 
-	core.reserve(11, true)
+	overHighWatermark = core.acquire(11, true)
+	require.False(t, overHighWatermark)
 	require.Equal(t, int64(10), core.memoryBytes)
 	require.Equal(t, int64(11), core.diskBytes)
 	require.Equal(t, int64(21), core.totalBytes())
 
-	core.release(50, false)
+	atOrBelowLowWatermark := core.release(50, false)
+	require.True(t, atOrBelowLowWatermark)
 	require.Equal(t, int64(0), core.memoryBytes)
 	require.Equal(t, int64(11), core.diskBytes)
 	require.Equal(t, int64(11), core.totalBytes())
 
-	core.release(50, true)
+	atOrBelowLowWatermark = core.release(50, true)
+	require.True(t, atOrBelowLowWatermark)
 	require.Equal(t, int64(0), core.memoryBytes)
 	require.Equal(t, int64(0), core.diskBytes)
 	require.Equal(t, int64(0), core.totalBytes())
@@ -58,26 +62,26 @@ func TestBudgetTracksWatermarkState(t *testing.T) {
 	t.Parallel()
 
 	core := newBudget(&options{
-		quotaBytes:         100,
+		diskQuotaBytes:     100,
 		memoryRatio:        0.2,
 		highWatermarkRatio: 0.8,
 		lowWatermarkRatio:  0.6,
 	})
 
-	require.False(t, core.overHighWatermark())
-	require.True(t, core.atOrBelowLowWatermark())
+	require.LessOrEqual(t, core.totalBytes(), core.lowWatermarkBytes)
+	require.LessOrEqual(t, core.totalBytes(), core.highWatermarkBytes)
 
-	core.reserve(81, true)
-	require.True(t, core.overHighWatermark())
-	require.False(t, core.atOrBelowLowWatermark())
+	overHighWatermark := core.acquire(81, true)
+	require.True(t, overHighWatermark)
+	require.Greater(t, core.totalBytes(), core.lowWatermarkBytes)
 
-	core.release(21, true)
-	require.False(t, core.overHighWatermark())
-	require.True(t, core.atOrBelowLowWatermark())
+	atOrBelowLowWatermark := core.release(21, true)
+	require.True(t, atOrBelowLowWatermark)
+	require.LessOrEqual(t, core.totalBytes(), core.highWatermarkBytes)
 
 	core.reset()
 	require.Equal(t, int64(0), core.memoryBytes)
 	require.Equal(t, int64(0), core.diskBytes)
 	require.Equal(t, int64(0), core.totalBytes())
-	require.True(t, core.atOrBelowLowWatermark())
+	require.LessOrEqual(t, core.totalBytes(), core.lowWatermarkBytes)
 }

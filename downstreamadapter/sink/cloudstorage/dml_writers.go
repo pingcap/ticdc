@@ -62,14 +62,18 @@ func newDMLWriters(
 		defaultEncodingConcurrency,
 		config.WorkerCount,
 	)
-	spoolBuffer, err := spool.New(changefeedID, spool.WithQuotaBytes(config.SpoolDiskQuota))
+	spool, err := spool.New(
+		changefeedID,
+		spool.WithRootDir(config.SpoolDir),
+		spool.WithDiskQuotaBytes(config.SpoolDiskQuota),
+	)
 	if err != nil {
 		return nil, err
 	}
 
 	writers := make([]*writer, config.WorkerCount)
 	for i := 0; i < config.WorkerCount; i++ {
-		writers[i] = newWriter(i, changefeedID, storage, config, extension, statistics, spoolBuffer)
+		writers[i] = newWriter(i, changefeedID, storage, config, extension, statistics, spool)
 	}
 
 	return &dmlWriters{
@@ -77,7 +81,7 @@ func newDMLWriters(
 		statistics:   statistics,
 		msgCh:        messageCh,
 		encodeGroup:  encoderGroup,
-		spool:        spoolBuffer,
+		spool:        spool,
 		writers:      writers,
 	}, nil
 }

@@ -78,7 +78,7 @@ func newTestSpool(
 	changefeedID commonType.ChangeFeedID,
 	cfg *cloudstorage.Config,
 ) *spool.Spool {
-	spoolBuffer, err := spool.New(changefeedID, spool.WithQuotaBytes(cfg.SpoolDiskQuota))
+	spoolBuffer, err := spool.New(changefeedID, spool.WithDiskQuotaBytes(cfg.SpoolDiskQuota))
 	require.NoError(t, err)
 	t.Cleanup(spoolBuffer.Close)
 	return spoolBuffer

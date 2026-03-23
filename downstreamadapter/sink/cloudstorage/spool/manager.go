@@ -39,16 +39,20 @@ const (
 	// One segment is large enough for sequential local writes, but still small
 	// enough to roll over and reclaim files without waiting too long.
 	defaultSegmentBytes = int64(64 * 1024 * 1024)
-	// Keep enough local buffer for temporary downstream slowdowns by default,
-	// while still requiring operators to size the disk budget explicitly for
-	// larger workloads.
-	defaultQuotaBytes = int64(10 * 1024 * 1024 * 1024)
+
+	// Keep enough local disk space for temporary downstream slowdowns by
+	// default, while still requiring operators to size the quota explicitly
+	// for larger workloads.
+	defaultDiskQuotaBytes = int64(10 * 1024 * 1024 * 1024)
 
 	// Keep only a small hot working set in memory. Most queued data can move to
 	// local files so the writer is less likely to keep growing memory usage.
 	defaultMemoryRatio = 0.2
-	// Pause onEnqueued callbacks only after local usage is already fairly high.
+
+	// Pause PostEnqueue callbacks only after local usage is already fairly high,
+	// so the upstream side is not slowed down too early.
 	defaultHighWatermarkRatio = 0.8
+
 	// Resume pending PostEnqueue callbacks only after usage has dropped enough
 	// to avoid bouncing immediately back into the paused state.
 	defaultLowWatermarkRatio = 0.6
@@ -65,15 +69,15 @@ type options struct {
 	// changefeed-specific directory under TiCDC's data dir.
 	rootDir string
 
-	// quotaBytes is the disk budget for local spool files.
+	// diskQuotaBytes is the disk budget for local spool files.
 	// spool still derives in-memory and watermark thresholds from it, but the
 	// runtime contract exposed by spool-disk-quota only constrains spilled bytes.
-	quotaBytes int64
+	diskQuotaBytes int64
 
 	// segmentBytes is the largest size of one segment file before spool rolls to the next file.
 	segmentBytes int64
 
-	// memoryRatio is the fraction of quotaBytes kept in memory before spilling to disk.
+	// memoryRatio is the fraction of diskQuotaBytes kept in memory before spilling to disk.
 	memoryRatio float64
 	// highWatermarkRatio is the ratio that starts suppressing wake callbacks.
 	highWatermarkRatio float64
@@ -89,7 +93,7 @@ func WithRootDir(rootDir string) option {
 	}
 }
 
-func WithQuotaBytes(quotaBytes int64) option {
+func WithDiskQuotaBytes(quotaBytes int64) option {
 	return func(options *options) {
 		if quotaBytes == 0 {
 			return
@@ -99,11 +103,11 @@ func WithQuotaBytes(quotaBytes int64) option {
 				"spool option is invalid, use default",
 				zap.String("field", "quota-bytes"),
 				zap.Int64("original", quotaBytes),
-				zap.Int64("default", defaultQuotaBytes),
+				zap.Int64("default", defaultDiskQuotaBytes),
 			)
 			return
 		}
-		options.quotaBytes = quotaBytes
+		options.diskQuotaBytes = quotaBytes
 	}
 }
 
@@ -258,6 +262,21 @@ type entrySize struct {
 	fileBytes       uint64
 }
 
+// EnqueueAction tells the caller how spool wants the next encoded batch to proceed.
+type EnqueueAction int
+
+const (
+	// EnqueueActionAccepted means spool has accepted the batch and returned an entry.
+	EnqueueActionAccepted EnqueueAction = iota
+	// EnqueueActionAcceptedOversized means spool accepted the batch in memory
+	// because the batch itself is larger than the configured disk quota and
+	// should be flushed immediately.
+	EnqueueActionAcceptedOversized
+	// EnqueueActionWaitDiskQuota means the caller should flush what it already has,
+	// wait for disk quota to be released, and then retry the enqueue.
+	EnqueueActionWaitDiskQuota
+)
+
 // FileBytes returns the payload bytes counted towards writer task sizing.
 func (e *Entry) FileBytes() uint64 {
 	if e == nil {
@@ -304,7 +323,7 @@ func New(
 
 func defaultOptions() *options {
 	return &options{
-		quotaBytes:         defaultQuotaBytes,
+		diskQuotaBytes:     defaultDiskQuotaBytes,
 		segmentBytes:       defaultSegmentBytes,
 		memoryRatio:        defaultMemoryRatio,
 		highWatermarkRatio: defaultHighWatermarkRatio,
@@ -401,37 +420,42 @@ func isSegmentFile(entry os.DirEntry) bool {
 	return err == nil
 }
 
-func (s *Spool) ShouldSpill(msgs []*common.Message) bool {
+// TryEnqueue decides how spool should handle the next batch under one lock.
+// It either accepts the batch normally, accepts it as an oversized in-memory
+// batch that should be flushed immediately, or asks the caller to wait for disk
+// quota and retry.
+func (s *Spool) TryEnqueue(
+	msgs []*common.Message,
+	postEnqueue func(),
+) (EnqueueAction, *Entry, error) {
 	size := calculateEntrySize(msgs)
 	if size.accountingBytes == 0 {
-		return false
+		return EnqueueActionAccepted, &Entry{}, nil
 	}
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.quota.shouldSpill(size.accountingBytes)
-}
 
-func (s *Spool) ExceedsDiskQuota(msgs []*common.Message) bool {
-	size := calculateEntrySize(msgs)
-	if size.accountingBytes == 0 {
-		return false
+	if s.closed {
+		s.mu.Unlock()
+		return EnqueueActionAccepted, nil, errors.ErrInternalCheckFailed.GenWithStackByArgs("spool is closed")
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.quota.exceedsDiskQuota(size.accountingBytes)
-}
-
-func (s *Spool) WouldExceedDiskQuota(msgs []*common.Message) bool {
-	size := calculateEntrySize(msgs)
-	if size.accountingBytes == 0 {
-		return false
+	shouldSpill := s.quota.shouldSpill(size.accountingBytes)
+	if shouldSpill && s.quota.exceedsDiskQuota(size.accountingBytes) {
+		entry, callbacksToRun, err := s.acceptEntryLocked(msgs, postEnqueue, size, true)
+		s.mu.Unlock()
+		runCallbacks(callbacksToRun)
+		return EnqueueActionAcceptedOversized, entry, err
+	}
+	if shouldSpill && s.quota.wouldExceedDiskQuota(size.accountingBytes) {
+		s.mu.Unlock()
+		return EnqueueActionWaitDiskQuota, nil, nil
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.quota.wouldExceedDiskQuota(size.accountingBytes)
+	entry, callbacksToRun, err := s.acceptEntryLocked(msgs, postEnqueue, size, false)
+	s.mu.Unlock()
+	runCallbacks(callbacksToRun)
+	return EnqueueActionAccepted, entry, err
 }
 
 // WaitForDiskQuota waits until the next spilled entry of the same size would
@@ -468,56 +492,38 @@ func (s *Spool) Enqueue(
 	msgs []*common.Message,
 	postEnqueue func(),
 ) (*Entry, error) {
-	return s.enqueue(msgs, postEnqueue, false)
-}
-
-// EnqueueInMemory keeps the accepted entry in memory even if the usual memory
-// budget would prefer to spill it to disk. The caller uses this for one-off
-// oversized batches that should be flushed immediately instead of waiting on
-// disk quota.
-func (s *Spool) EnqueueInMemory(
-	msgs []*common.Message,
-	postEnqueue func(),
-) (*Entry, error) {
-	return s.enqueue(msgs, postEnqueue, true)
-}
-
-func (s *Spool) enqueue(
-	msgs []*common.Message,
-	postEnqueue func(),
-	forceInMemory bool,
-) (*Entry, error) {
 	size := calculateEntrySize(msgs)
 	if size.accountingBytes == 0 {
 		return &Entry{}, nil
 	}
 
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil, errors.ErrInternalCheckFailed.GenWithStackByArgs("spool is closed")
+	}
+	entry, callbacksToRun, err := s.acceptEntryLocked(msgs, postEnqueue, size, false)
+	s.mu.Unlock()
+	runCallbacks(callbacksToRun)
+	return entry, err
+}
+
+func (s *Spool) acceptEntryLocked(
+	msgs []*common.Message,
+	postEnqueue func(),
+	size entrySize,
+	forceInMemory bool,
+) (*Entry, []func(), error) {
 	entry := &Entry{
 		accountingBytes: size.accountingBytes,
 		fileBytes:       size.fileBytes,
 	}
-	var callbacksToRun []func()
-
-	s.mu.Lock()
-	defer func() {
-		s.mu.Unlock()
-		for _, callback := range callbacksToRun {
-			if callback != nil {
-				callback()
-			}
-		}
-	}()
-
-	if s.closed {
-		return nil, errors.ErrInternalCheckFailed.GenWithStackByArgs("spool is closed")
-	}
-
 	shouldSpill := !forceInMemory && s.quota.shouldSpill(entry.accountingBytes)
 	if shouldSpill {
 		blob := serializeMessages(msgs)
 		location, err := s.appendBlobLocked(blob)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		entry.location = location
 	}
@@ -525,8 +531,8 @@ func (s *Spool) enqueue(
 		entry.memoryMsgs = msgs
 	}
 	entry.callbacks = detachCallbacks(msgs)
-	callbacksToRun = s.quota.reserve(entry.accountingBytes, shouldSpill, postEnqueue)
-	return entry, nil
+	callbacksToRun := s.quota.acquire(entry.accountingBytes, shouldSpill, postEnqueue)
+	return entry, callbacksToRun, nil
 }
 
 func detachCallbacks(msgs []*common.Message) []func() {

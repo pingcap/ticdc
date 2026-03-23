@@ -17,14 +17,17 @@ package spool
 type budget struct {
 	// diskQuotaBytes is the largest byte count allowed in local spool files.
 	diskQuotaBytes int64
+
 	// memoryQuotaBytes is the largest byte count we still keep in memory.
 	// If adding a new entry would cross this value, spool writes that entry
 	// to local spool files instead of keeping it in memory.
 	memoryQuotaBytes int64
+
 	// highWatermarkBytes is the byte count that makes spool stop running the
 	// new onEnqueued callback immediately. The callback is saved in memory and
 	// will be run later.
 	highWatermarkBytes int64
+
 	// lowWatermarkBytes is the byte count that lets spool run the saved
 	// onEnqueued callbacks again after some queued data has been flushed to the
 	// downstream storage or discarded locally.
@@ -38,41 +41,43 @@ type budget struct {
 
 func newBudget(options *options) *budget {
 	return &budget{
-		diskQuotaBytes:     options.quotaBytes,
-		memoryQuotaBytes:   int64(float64(options.quotaBytes) * options.memoryRatio),
-		highWatermarkBytes: int64(float64(options.quotaBytes) * options.highWatermarkRatio),
-		lowWatermarkBytes:  int64(float64(options.quotaBytes) * options.lowWatermarkRatio),
+		diskQuotaBytes:     options.diskQuotaBytes,
+		memoryQuotaBytes:   int64(float64(options.diskQuotaBytes) * options.memoryRatio),
+		highWatermarkBytes: int64(float64(options.diskQuotaBytes) * options.highWatermarkRatio),
+		lowWatermarkBytes:  int64(float64(options.diskQuotaBytes) * options.lowWatermarkRatio),
 	}
 }
 
-// shouldSpill decides whether a new entry should stay in memory or be written
-// to local spool files. It only looks at the memory limit. It does not reject
-// new writes.
+// shouldSpill decides whether a new entry should stay in memory or be written to local spool files.
 func (b *budget) shouldSpill(entryBytes int64) bool {
 	return b.memoryBytes+entryBytes > b.memoryQuotaBytes
 }
 
+// exceedsDiskQuota return true if incoming entry size is too large that exceed the diska quota bytes
 func (b *budget) exceedsDiskQuota(entryBytes int64) bool {
 	return entryBytes > b.diskQuotaBytes
 }
 
+// wouldExceedDiskQuota return true if add the incomming entry size would exceed the disk quota.
 func (b *budget) wouldExceedDiskQuota(entryBytes int64) bool {
 	return b.diskBytes+entryBytes > b.diskQuotaBytes
 }
 
-// reserve adds a newly accepted entry to the current byte counters.
-func (b *budget) reserve(entryBytes int64, spilled bool) {
+// acquire adds a newly accepted entry to the current byte counters and returns
+// whether total queued bytes are now above the high watermark.
+func (b *budget) acquire(entryBytes int64, spilled bool) bool {
 	if spilled {
 		b.diskBytes += entryBytes
+		return b.totalBytes() > b.highWatermarkBytes
 	}
-	if !spilled {
-		b.memoryBytes += entryBytes
-	}
+	b.memoryBytes += entryBytes
+	return b.totalBytes() > b.highWatermarkBytes
 }
 
 // release removes an entry from the current byte counters after the entry has
-// been flushed or discarded.
-func (b *budget) release(entryBytes int64, spilled bool) {
+// been flushed or discarded, and returns whether total queued bytes are now at
+// or below the low watermark.
+func (b *budget) release(entryBytes int64, spilled bool) bool {
 	if spilled {
 		b.diskBytes -= entryBytes
 	}
@@ -85,13 +90,6 @@ func (b *budget) release(entryBytes int64, spilled bool) {
 	if b.diskBytes < 0 {
 		b.diskBytes = 0
 	}
-}
-
-func (b *budget) overHighWatermark() bool {
-	return b.totalBytes() > b.highWatermarkBytes
-}
-
-func (b *budget) atOrBelowLowWatermark() bool {
 	return b.totalBytes() <= b.lowWatermarkBytes
 }
 

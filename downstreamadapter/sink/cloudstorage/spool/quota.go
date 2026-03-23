@@ -112,16 +112,15 @@ func (q *quotaController) diskQuotaWaitCh() <-chan struct{} {
 	return q.diskQuotaChanged
 }
 
-// reserve records a newly accepted entry and returns callbacks that may run
-// immediately. If total staged bytes cross the high watermark, reserve puts
+// acquire records a newly accepted entry and returns callbacks that may run
+// immediately. If total staged bytes cross the high watermark, acquire puts
 // new PostEnqueue callbacks into the pending queue instead of running them inline.
-func (q *quotaController) reserve(
+func (q *quotaController) acquire(
 	entryBytes int64,
 	spilled bool,
 	postEnqueue func(),
 ) []func() {
-	q.budget.reserve(entryBytes, spilled)
-	if q.budget.overHighWatermark() {
+	if q.budget.acquire(entryBytes, spilled) {
 		q.postEnqueuePaused = true
 	}
 	if spilled {
@@ -145,7 +144,7 @@ func (q *quotaController) reserve(
 // adapter was holding PostEnqueue callbacks in the pending queue, release only
 // runs them after total staged bytes fall back to the low watermark or below.
 func (q *quotaController) release(entryBytes int64, spilled bool) []func() {
-	q.budget.release(entryBytes, spilled)
+	atOrBelowLowWatermark := q.budget.release(entryBytes, spilled)
 	if spilled {
 		q.notifyDiskQuotaChanged()
 	}
@@ -154,7 +153,7 @@ func (q *quotaController) release(entryBytes int64, spilled bool) []func() {
 	if !q.postEnqueuePaused {
 		return nil
 	}
-	if !q.budget.atOrBelowLowWatermark() {
+	if !atOrBelowLowWatermark {
 		return nil
 	}
 

@@ -150,18 +150,16 @@ func (c *bufferManager) handleDMLEvent(ctx context.Context, batch batchedTask, t
 	}
 
 	for {
-		shouldSpill := c.spool.ShouldSpill(task.encodedMsgs)
-		if shouldSpill && c.spool.ExceedsDiskQuota(task.encodedMsgs) {
-			entry, err := c.spool.EnqueueInMemory(task.encodedMsgs, task.event.PostEnqueue)
-			if err != nil {
-				return batch, err
-			}
+		action, entry, err := c.spool.TryEnqueue(task.encodedMsgs, task.event.PostEnqueue)
+		if err != nil {
+			return batch, err
+		}
+		if action == spool.EnqueueActionAcceptedOversized {
 			batch.handleSingleTableEvent(task, entry)
 			return c.emitTableBatch(ctx, batch, task.versionedTable, flushReasonOversize)
 		}
 
-		if shouldSpill && c.spool.WouldExceedDiskQuota(task.encodedMsgs) {
-			var err error
+		if action == spool.EnqueueActionWaitDiskQuota {
 			batch, err = c.emitBatch(ctx, batch, flushReasonQuota)
 			if err != nil {
 				return batch, err
@@ -172,10 +170,6 @@ func (c *bufferManager) handleDMLEvent(ctx context.Context, batch batchedTask, t
 			continue
 		}
 
-		entry, err := c.spool.Enqueue(task.encodedMsgs, task.event.PostEnqueue)
-		if err != nil {
-			return batch, err
-		}
 		batch.handleSingleTableEvent(task, entry)
 
 		table := task.versionedTable

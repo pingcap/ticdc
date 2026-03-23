@@ -17,6 +17,7 @@ import (
 	"context"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -70,6 +71,7 @@ type urlConfig struct {
 	FileSize         *int    `form:"file-size"`
 	UseTableIDAsPath *bool   `form:"use-table-id-as-path"`
 	SpoolDiskQuota   *int64  `form:"spool-disk-quota"`
+	SpoolDir         *string `form:"spool-dir"`
 }
 
 // Config is the configuration for cloud storage sink.
@@ -87,6 +89,7 @@ type Config struct {
 	EnableTableAcrossNodes   bool
 	UseTableIDAsPath         bool
 	SpoolDiskQuota           int64
+	SpoolDir                 string
 }
 
 // NewConfig returns the default cloud storage sink config.
@@ -144,6 +147,9 @@ func (c *Config) Apply(
 	if err = getSpoolDiskQuota(urlParameter, &c.SpoolDiskQuota); err != nil {
 		return err
 	}
+	if err = getSpoolDir(urlParameter, &c.SpoolDir); err != nil {
+		return err
+	}
 
 	c.DateSeparator = util.GetOrZero(sinkConfig.DateSeparator)
 	c.EnablePartitionSeparator = util.GetOrZero(sinkConfig.EnablePartitionSeparator)
@@ -192,6 +198,9 @@ func mergeConfig(
 		}
 		if sinkConfig.CloudStorageConfig.SpoolDiskQuota != nil {
 			dest.SpoolDiskQuota = util.AddressOf(*sinkConfig.CloudStorageConfig.SpoolDiskQuota)
+		}
+		if sinkConfig.CloudStorageConfig.SpoolDir != nil {
+			dest.SpoolDir = util.AddressOf(*sinkConfig.CloudStorageConfig.SpoolDir)
 		}
 	}
 	if err := mergo.Merge(dest, urlParameters, mergo.WithOverride); err != nil {
@@ -286,5 +295,20 @@ func getSpoolDiskQuota(values *urlConfig, spoolDiskQuota *int64) error {
 	}
 
 	*spoolDiskQuota = quota
+	return nil
+}
+
+func getSpoolDir(values *urlConfig, spoolDir *string) error {
+	if values.SpoolDir == nil || len(*values.SpoolDir) == 0 {
+		return nil
+	}
+
+	dir := *values.SpoolDir
+	if !filepath.IsAbs(dir) {
+		return errors.ErrStorageSinkInvalidConfig.GenWithStack(
+			"invalid spool-dir %q, it must be an absolute path", dir)
+	}
+
+	*spoolDir = dir
 	return nil
 }

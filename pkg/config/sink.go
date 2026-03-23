@@ -696,6 +696,7 @@ type CloudStorageConfig struct {
 	FlushInterval  *string `toml:"flush-interval" json:"flush-interval,omitempty"`
 	FileSize       *int    `toml:"file-size" json:"file-size,omitempty"`
 	SpoolDiskQuota *int64  `toml:"spool-disk-quota" json:"spool-disk-quota,omitempty"`
+	SpoolDir       *string `toml:"spool-dir" json:"spool-dir,omitempty"`
 
 	OutputColumnID      *bool   `toml:"output-column-id" json:"output-column-id,omitempty"`
 	FileExpirationDays  *int    `toml:"file-expiration-days" json:"file-expiration-days,omitempty"`
