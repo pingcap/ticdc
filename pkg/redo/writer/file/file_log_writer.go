@@ -32,7 +32,6 @@ var (
 type logWriter struct {
 	cfg           *writer.Config
 	backendWriter fileWriter
-	fileType      string
 }
 
 type dmlWriter struct {
@@ -46,7 +45,7 @@ type ddlWriter struct {
 func newLogWriter(
 	ctx context.Context, cfg *writer.Config, fileType string, opts ...writer.Option,
 ) (l *logWriter, err error) {
-	l = &logWriter{cfg: cfg, fileType: fileType}
+	l = &logWriter{cfg: cfg}
 	if l.backendWriter, err = NewFileWriter(ctx, cfg, fileType, opts...); err != nil {
 		return nil, err
 	}

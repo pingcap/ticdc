@@ -20,7 +20,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
@@ -83,7 +82,6 @@ func TestLogWriterWriteDDL(t *testing.T) {
 		w := ddlWriter{logWriter: &logWriter{
 			cfg:           newTestWriterConfig(t, common.ChangeFeedID{}, nil),
 			backendWriter: mockWriter,
-			fileType:      redo.RedoDDLLogFileType,
 		}}
 
 		if tt.name == "context cancel" {

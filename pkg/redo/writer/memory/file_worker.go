@@ -260,20 +260,6 @@ func (f *fileWorkerGroup) bgWriteLogs(
 	}
 }
 
-func (f *fileWorkerGroup) syncWrite(egCtx context.Context, event *polymorphicRedoEvent) error {
-	data := event.data
-	file := f.newFileCache(data, event.commitTs)
-	if file == nil {
-		return errors.ErrRedoWriterStopped.FastGenByArgs("failed to create file cache")
-	}
-	if err := f.syncWriteFile(egCtx, file); err != nil {
-		return err
-	}
-	// flush
-	event.PostFlush()
-	return nil
-}
-
 func (f *fileWorkerGroup) syncWriteFile(egCtx context.Context, file *fileCache) error {
 	var err error
 	start := time.Now()

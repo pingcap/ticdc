@@ -66,9 +66,14 @@ func (bs *blackHoleDMLWriter) AppendDMLEvents(_ context.Context, events ...*even
 	if len(events) == 0 {
 		return nil
 	}
-	current := events[len(events)-1].CommitTs
-	log.Debug("write redo events", zap.Int("count", len(events)),
-		zap.Uint64("current", current))
+	fields := []zap.Field{zap.Int("count", len(events))}
+	for i := len(events) - 1; i >= 0; i-- {
+		if events[i] != nil {
+			fields = append(fields, zap.Uint64("current", events[i].CommitTs))
+			break
+		}
+	}
+	log.Debug("write redo events", fields...)
 	for _, e := range events {
 		if e != nil {
 			e.PostFlush()
@@ -92,7 +97,7 @@ func (bs *blackHoleDDLWriter) WriteDDLEvent(_ context.Context, event *event.DDLE
 	return nil
 }
 
-func (bs *blackHoleDDLWriter) SetTableSchemaStore(tableSchemaStore *event.TableSchemaStore) {
+func (bs *blackHoleDDLWriter) SetTableSchemaStore(_ *event.TableSchemaStore) {
 }
 
 func (bs *blackHoleDDLWriter) Close() error {

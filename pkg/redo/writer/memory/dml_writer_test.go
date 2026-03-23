@@ -4,14 +4,14 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//      http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package factory
+package memory
 
 import (
 	"context"
@@ -20,23 +20,25 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/redo/testutil"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
 )
 
-func TestNewRedoWriters(t *testing.T) {
+func TestNewDMLWriter(t *testing.T) {
 	t.Parallel()
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	_, uri, err := util.GetTestExtStorage(ctx, t.TempDir())
+	require.NoError(t, err)
 	cfg, err := writer.NewConfig(
 		common.NewChangeFeedIDWithName("test-changefeed", common.DefaultKeyspaceName),
-		testutil.NewConsistentConfig("blackhole://"),
+		testutil.NewConsistentConfig(uri.String()),
 	)
 	require.NoError(t, err)
 
-	dmlWriter, err := NewRedoDMLWriter(context.Background(), cfg)
+	lw, err := NewDMLWriter(ctx, cfg)
 	require.NoError(t, err)
-	require.Implements(t, (*writer.RedoDMLWriter)(nil), dmlWriter)
-
-	ddlWriter, err := NewRedoDDLWriter(context.Background(), cfg)
-	require.NoError(t, err)
-	require.Implements(t, (*writer.RedoDDLWriter)(nil), ddlWriter)
+	require.NoError(t, lw.Close())
 }
