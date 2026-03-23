@@ -469,7 +469,7 @@ func TestShouldForwardEventByCommitTs(t *testing.T) {
 	}
 }
 
-func TestApplyCommitTsState(t *testing.T) {
+func TestUpdateCommitTsStateByEvents(t *testing.T) {
 	t.Parallel()
 
 	stat := &dispatcherStat{
@@ -479,7 +479,7 @@ func TestApplyCommitTsState(t *testing.T) {
 	stat.gotDDLOnTs.Store(true)
 	stat.gotSyncpointOnTS.Store(true)
 
-	state := stat.buildCommitTsState([]dispatcher.DispatcherEvent{
+	stat.updateCommitTsStateByEvents([]dispatcher.DispatcherEvent{
 		{
 			Event: &mockEvent{
 				eventType: commonEvent.TypeResolvedEvent,
@@ -493,7 +493,6 @@ func TestApplyCommitTsState(t *testing.T) {
 			},
 		},
 	})
-	stat.applyCommitTsState(state)
 
 	require.Equal(t, uint64(110), stat.lastEventCommitTs.Load())
 	require.False(t, stat.gotDDLOnTs.Load())
