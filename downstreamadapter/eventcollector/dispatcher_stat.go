@@ -341,58 +341,43 @@ func (d *dispatcherStat) shouldForwardEventByCommitTs(event dispatcher.Dispatche
 	return true
 }
 
-type commitTsState struct {
-	lastEventCommitTs uint64
-	gotDDLOnTs        bool
-	gotSyncpointOnTS  bool
-	hasStateUpdate    bool
-}
+func (d *dispatcherStat) updateCommitTsStateByEvents(events []dispatcher.DispatcherEvent) {
+	lastEventCommitTs := d.lastEventCommitTs.Load()
+	gotDDLOnTs := d.gotDDLOnTs.Load()
+	gotSyncpointOnTS := d.gotSyncpointOnTS.Load()
+	hasStateUpdate := false
 
-func advanceCommitTsState(state commitTsState, event dispatcher.DispatcherEvent) commitTsState {
-	if event.GetCommitTs() > state.lastEventCommitTs {
-		// if the commit ts is larger than the last sent commit ts,
-		// we need to reset the DDL and SyncPoint flags.
-		state.gotDDLOnTs = false
-		state.gotSyncpointOnTS = false
-	}
-
-	switch event.GetType() {
-	case commonEvent.TypeDDLEvent:
-		state.gotDDLOnTs = true
-	case commonEvent.TypeSyncPointEvent:
-		state.gotSyncpointOnTS = true
-	}
-
-	switch event.GetType() {
-	case commonEvent.TypeDDLEvent,
-		commonEvent.TypeDMLEvent,
-		commonEvent.TypeBatchDMLEvent,
-		commonEvent.TypeSyncPointEvent:
-		state.lastEventCommitTs = event.GetCommitTs()
-		state.hasStateUpdate = true
-	}
-	return state
-}
-
-func (d *dispatcherStat) buildCommitTsState(events []dispatcher.DispatcherEvent) commitTsState {
-	state := commitTsState{
-		lastEventCommitTs: d.lastEventCommitTs.Load(),
-		gotDDLOnTs:        d.gotDDLOnTs.Load(),
-		gotSyncpointOnTS:  d.gotSyncpointOnTS.Load(),
-	}
 	for _, event := range events {
-		state = advanceCommitTsState(state, event)
-	}
-	return state
-}
+		if event.GetCommitTs() > lastEventCommitTs {
+			// if the commit ts is larger than the last sent commit ts,
+			// we need to reset the DDL and SyncPoint flags.
+			gotDDLOnTs = false
+			gotSyncpointOnTS = false
+		}
 
-func (d *dispatcherStat) applyCommitTsState(state commitTsState) {
-	if !state.hasStateUpdate {
+		switch event.GetType() {
+		case commonEvent.TypeDDLEvent:
+			gotDDLOnTs = true
+		case commonEvent.TypeSyncPointEvent:
+			gotSyncpointOnTS = true
+		}
+
+		switch event.GetType() {
+		case commonEvent.TypeDDLEvent,
+			commonEvent.TypeDMLEvent,
+			commonEvent.TypeBatchDMLEvent,
+			commonEvent.TypeSyncPointEvent:
+			lastEventCommitTs = event.GetCommitTs()
+			hasStateUpdate = true
+		}
+	}
+
+	if !hasStateUpdate {
 		return
 	}
-	d.lastEventCommitTs.Store(state.lastEventCommitTs)
-	d.gotDDLOnTs.Store(state.gotDDLOnTs)
-	d.gotSyncpointOnTS.Store(state.gotSyncpointOnTS)
+	d.lastEventCommitTs.Store(lastEventCommitTs)
+	d.gotDDLOnTs.Store(gotDDLOnTs)
+	d.gotSyncpointOnTS.Store(gotSyncpointOnTS)
 }
 
 func (d *dispatcherStat) isFromCurrentEpoch(event dispatcher.DispatcherEvent) bool {
@@ -473,8 +458,7 @@ func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEve
 	if len(validEvents) == 0 {
 		return false
 	}
-	state := d.buildCommitTsState(validEvents)
-	d.applyCommitTsState(state)
+	d.updateCommitTsStateByEvents(validEvents)
 	return d.target.HandleEvents(validEvents, func() { d.wake() })
 }
 
@@ -518,15 +502,13 @@ func (d *dispatcherStat) handleSingleDataEvents(events []dispatcher.DispatcherEv
 		if ddl.TableInfo != nil {
 			d.tableInfo.Store(ddl.TableInfo)
 		}
-		state := d.buildCommitTsState(events)
-		d.applyCommitTsState(state)
+		d.updateCommitTsStateByEvents(events)
 		return d.target.HandleEvents(events, func() { d.wake() })
 	} else {
 		if !d.shouldForwardEventByCommitTs(events[0]) {
 			return false
 		}
-		state := d.buildCommitTsState(events)
-		d.applyCommitTsState(state)
+		d.updateCommitTsStateByEvents(events)
 		return d.target.HandleEvents(events, func() { d.wake() })
 	}
 }
