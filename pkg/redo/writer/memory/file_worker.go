@@ -85,7 +85,6 @@ func (f *fileCache) markFlushed() {
 
 type fileWorkerGroup struct {
 	cfg           *writer.Config
-	logType       string
 	op            *writer.LogWriterOptions
 	workerNum     int
 	inputCh       chan *polymorphicRedoEvent
@@ -100,16 +99,16 @@ type fileWorkerGroup struct {
 	metricFlushAllDuration prometheus.Observer
 }
 
-// newFileWorkerGroup create a fileWorkerGroup
+// newFileWorkerGroup creates a DML fileWorkerGroup.
 // fileWorkerGroup receives encoded redo events and writes them to cache, with
 // background goroutines handling file flush.
 func newFileWorkerGroup(
-	cfg *writer.Config, workerNum int,
-	logType string,
+	cfg *writer.Config,
 	inputCh chan *polymorphicRedoEvent,
 	extStorage storage.ExternalStorage,
 	opts ...writer.Option,
 ) *fileWorkerGroup {
+	workerNum := cfg.FlushWorkerNum()
 	if workerNum <= 0 {
 		workerNum = redo.DefaultFlushWorkerNum
 	}
@@ -125,7 +124,6 @@ func newFileWorkerGroup(
 
 	return &fileWorkerGroup{
 		cfg:           cfg,
-		logType:       logType,
 		op:            op,
 		workerNum:     workerNum,
 		inputCh:       inputCh,
@@ -141,9 +139,9 @@ func newFileWorkerGroup(
 		},
 		flushCh: make(chan *fileCache, 32),
 		metricWriteBytes: metrics.RedoWriteBytesGauge.
-			WithLabelValues(cfg.ChangeFeedID().Keyspace(), cfg.ChangeFeedID().Name(), logType),
+			WithLabelValues(cfg.ChangeFeedID().Keyspace(), cfg.ChangeFeedID().Name(), redo.RedoRowLogFileType),
 		metricFlushAllDuration: metrics.RedoFlushAllDurationHistogram.
-			WithLabelValues(cfg.ChangeFeedID().Keyspace(), cfg.ChangeFeedID().Name(), logType),
+			WithLabelValues(cfg.ChangeFeedID().Keyspace(), cfg.ChangeFeedID().Name(), redo.RedoRowLogFileType),
 	}
 }
 
@@ -176,9 +174,9 @@ func (f *fileWorkerGroup) Run(
 
 func (f *fileWorkerGroup) close() {
 	metrics.RedoFlushAllDurationHistogram.
-		DeleteLabelValues(f.cfg.ChangeFeedID().Keyspace(), f.cfg.ChangeFeedID().Name(), f.logType)
+		DeleteLabelValues(f.cfg.ChangeFeedID().Keyspace(), f.cfg.ChangeFeedID().Name(), redo.RedoRowLogFileType)
 	metrics.RedoWriteBytesGauge.
-		DeleteLabelValues(f.cfg.ChangeFeedID().Keyspace(), f.cfg.ChangeFeedID().Name(), f.logType)
+		DeleteLabelValues(f.cfg.ChangeFeedID().Keyspace(), f.cfg.ChangeFeedID().Name(), redo.RedoRowLogFileType)
 }
 
 func (f *fileWorkerGroup) bgFlushFileCache(egCtx context.Context) error {
@@ -404,10 +402,10 @@ func (f *fileWorkerGroup) getLogFileName(maxCommitTS common.Ts) string {
 	uid := f.uuidGenerator.NewString()
 	if common.DefaultKeyspaceName == f.cfg.ChangeFeedID().Keyspace() {
 		return fmt.Sprintf(redo.RedoLogFileFormatV1,
-			f.cfg.CaptureID(), f.cfg.ChangeFeedID().Name(), f.logType,
+			f.cfg.CaptureID(), f.cfg.ChangeFeedID().Name(), redo.RedoRowLogFileType,
 			maxCommitTS, uid, redo.LogEXT)
 	}
 	return fmt.Sprintf(redo.RedoLogFileFormatV2,
 		f.cfg.CaptureID(), f.cfg.ChangeFeedID().Keyspace(), f.cfg.ChangeFeedID().Name(),
-		f.logType, maxCommitTS, uid, redo.LogEXT)
+		redo.RedoRowLogFileType, maxCommitTS, uid, redo.LogEXT)
 }

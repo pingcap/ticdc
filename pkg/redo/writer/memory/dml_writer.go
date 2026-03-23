@@ -1,4 +1,4 @@
-// Copyright 2023 PingCAP, Inc.
+// Copyright 2026 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,7 +18,6 @@ import (
 
 	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"go.uber.org/zap"
@@ -46,7 +45,7 @@ func NewDMLWriter(
 
 	encodeWorkers := newEncodingWorkerGroup(cfg)
 	fileWorkers := newFileWorkerGroup(
-		cfg, cfg.FlushWorkerNum(), redo.RedoRowLogFileType, encodeWorkers.outputCh, extStorage, opts...)
+		cfg, encodeWorkers.outputCh, extStorage, opts...)
 
 	return &dmlWriter{
 		cfg:           cfg,
@@ -76,9 +75,6 @@ func (l *dmlWriter) AppendDMLEvents(ctx context.Context, events ...*commonEvent.
 				zap.String("keyspace", l.cfg.ChangeFeedID().Keyspace()),
 				zap.String("changefeed", l.cfg.ChangeFeedID().Name()))
 			continue
-		}
-		if l.encodeWorkers == nil {
-			return errors.ErrRedoWriterStopped.GenWithStackByArgs()
 		}
 		if err := l.encodeWorkers.AddEvent(ctx, event); err != nil {
 			return err
