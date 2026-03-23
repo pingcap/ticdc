@@ -395,15 +395,6 @@ func (d *dispatcherStat) applyCommitTsState(state commitTsState) {
 	d.gotSyncpointOnTS.Store(state.gotSyncpointOnTS)
 }
 
-func (d *dispatcherStat) newCommitTsStateCallback(epoch uint64, state commitTsState) func() {
-	return func() {
-		if d.epoch.Load() == epoch {
-			d.applyCommitTsState(state)
-		}
-		d.wake()
-	}
-}
-
 func (d *dispatcherStat) isFromCurrentEpoch(event dispatcher.DispatcherEvent) bool {
 	if event.GetType() == commonEvent.TypeBatchDMLEvent {
 		batchDML := event.Event.(*commonEvent.BatchDMLEvent)
@@ -482,9 +473,9 @@ func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEve
 	if len(validEvents) == 0 {
 		return false
 	}
-	epoch := d.epoch.Load()
 	state := d.buildCommitTsState(validEvents)
-	return d.target.HandleEvents(validEvents, d.newCommitTsStateCallback(epoch, state))
+	d.applyCommitTsState(state)
+	return d.target.HandleEvents(validEvents, func() { d.wake() })
 }
 
 // handleSingleDataEvents processes single DDL, SyncPoint or BatchDML events with the following algorithm:
@@ -527,16 +518,16 @@ func (d *dispatcherStat) handleSingleDataEvents(events []dispatcher.DispatcherEv
 		if ddl.TableInfo != nil {
 			d.tableInfo.Store(ddl.TableInfo)
 		}
-		epoch := d.epoch.Load()
 		state := d.buildCommitTsState(events)
-		return d.target.HandleEvents(events, d.newCommitTsStateCallback(epoch, state))
+		d.applyCommitTsState(state)
+		return d.target.HandleEvents(events, func() { d.wake() })
 	} else {
 		if !d.shouldForwardEventByCommitTs(events[0]) {
 			return false
 		}
-		epoch := d.epoch.Load()
 		state := d.buildCommitTsState(events)
-		return d.target.HandleEvents(events, d.newCommitTsStateCallback(epoch, state))
+		d.applyCommitTsState(state)
+		return d.target.HandleEvents(events, func() { d.wake() })
 	}
 }
 

@@ -1252,7 +1252,7 @@ func TestHandleBatchDMLEvent(t *testing.T) {
 	}
 }
 
-func TestHandleBatchDataEventsDoesNotAdvanceCommitTsWhenDispatcherFiltersAll(t *testing.T) {
+func TestHandleBatchDataEventsDoesNotAdvanceCommitTsWhenNoValidEvents(t *testing.T) {
 	t.Parallel()
 
 	mockDisp := newMockDispatcher(common.NewDispatcherID(), 0)
@@ -1271,7 +1271,7 @@ func TestHandleBatchDataEventsDoesNotAdvanceCommitTsWhenDispatcherFiltersAll(t *
 				eventType: commonEvent.TypeDMLEvent,
 				seq:       2,
 				epoch:     10,
-				commitTs:  100,
+				commitTs:  40,
 			},
 			From: createNodeID("service1"),
 		},
