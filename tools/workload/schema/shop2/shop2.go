@@ -29,7 +29,7 @@ const (
 
 const createShop2ItemTable = `
 CREATE TABLE IF NOT EXISTS shop2_item_%d (
-  c001 bigint(20) NOT NULL,
+  c001 bigint(20) NOT NULL AUTO_INCREMENT,
   c002 bigint(20) NOT NULL,
   c003 bigint(20) NOT NULL,
   c004 varchar(127) NOT NULL,
@@ -195,7 +195,7 @@ type Shop2Workload struct {
 	tableSeq         []atomic.Uint64
 }
 
-const shop2UpdateSQL = "c057 = CURRENT_TIMESTAMP, c011 = VALUES(c011), c012 = VALUES(c012), c026 = VALUES(c026), c031 = VALUES(c031), c047 = VALUES(c047), c061 = VALUES(c061), c115 = VALUES(c115), c152 = VALUES(c152)"
+var shop2InsertColumnList = buildInsertColumnList()
 
 func NewShop2Workload(totalRowCount uint64, rowSize int, tableCount int, tableStartIndex int) schema.Workload {
 	if rowSize <= 0 {
@@ -230,16 +230,35 @@ func (w *Shop2Workload) BuildCreateTableStatement(tableIndex int) string {
 }
 
 func (w *Shop2Workload) BuildInsertSql(tableIndex int, batchSize int) string {
-	rowIDs := make([]int64, 0, batchSize)
+	seeds := make([]int64, 0, batchSize)
 	for range batchSize {
-		rowIDs = append(rowIDs, w.nextRowID(tableIndex))
+		seeds = append(seeds, w.nextSeed(tableIndex))
 	}
-	return w.buildInsertLikeSQL(tableIndex, rowIDs, false)
+	return w.buildInsertSQL(tableIndex, seeds)
 }
 
 func (w *Shop2Workload) BuildUpdateSql(opt schema.UpdateOption) string {
-	rowIDs := w.sampleRowIDs(opt.TableIndex, opt.Batch)
-	return w.buildInsertLikeSQL(opt.TableIndex, rowIDs, true)
+	if opt.Batch <= 0 {
+		return ""
+	}
+
+	seed := w.sampleSeed()
+	table := tableName(opt.TableIndex)
+	setText := quoteLiteral(w.textValue(511, "c026", opt.TableIndex, seed))
+	setJSON := quoteLiteral(w.jsonValue("c031", opt.TableIndex, seed))
+	setBlob := quoteLiteral(w.blobValue("c061", opt.TableIndex, seed, false))
+	setMediumBlob := quoteLiteral(w.blobValue("c115", opt.TableIndex, seed, true))
+	setTail := quoteLiteral(w.textValue(32, "c152", opt.TableIndex, seed))
+
+	if rand.Intn(2) == 0 {
+		return fmt.Sprintf(
+			"UPDATE %s SET c057 = CURRENT_TIMESTAMP, c011 = c011 + 0.0100, c012 = c012 + 0.0200, c026 = %s, c031 = %s, c047 = c047 + 1, c061 = %s, c115 = %s, c152 = %s WHERE c003 = %d LIMIT %d",
+			table, setText, setJSON, setBlob, setMediumBlob, setTail, w.merchantID(seed), opt.Batch)
+	}
+
+	return fmt.Sprintf(
+		"UPDATE %s SET c057 = CURRENT_TIMESTAMP, c011 = c011 + 0.0100, c012 = c012 + 0.0200, c026 = %s, c031 = %s, c047 = c047 + 1, c061 = %s, c115 = %s, c152 = %s WHERE c002 = %d LIMIT %d",
+		table, setText, setJSON, setBlob, setMediumBlob, setTail, w.catalogID(seed), opt.Batch)
 }
 
 func (w *Shop2Workload) BuildDeleteSql(opt schema.DeleteOption) string {
@@ -248,81 +267,75 @@ func (w *Shop2Workload) BuildDeleteSql(opt schema.DeleteOption) string {
 	}
 
 	table := tableName(opt.TableIndex)
-	switch rand.Intn(3) {
-	case 0:
-		rowIDs := w.sampleRowIDs(opt.TableIndex, opt.Batch)
-		idValues := make([]string, 0, len(rowIDs))
-		for _, rowID := range rowIDs {
-			idValues = append(idValues, strconv.FormatInt(rowID, 10))
-		}
-		return fmt.Sprintf("DELETE FROM %s WHERE c001 IN (%s)", table, strings.Join(idValues, ","))
-	case 1:
-		rowID := w.sampleRowID(opt.TableIndex)
-		return fmt.Sprintf("DELETE FROM %s WHERE c003 = %d LIMIT %d", table, w.merchantID(rowID), opt.Batch)
-	default:
-		rowID := w.sampleRowID(opt.TableIndex)
-		return fmt.Sprintf("DELETE FROM %s WHERE c002 = %d LIMIT %d", table, w.catalogID(rowID), opt.Batch)
+	seed := w.sampleSeed()
+	if rand.Intn(2) == 0 {
+		return fmt.Sprintf("DELETE FROM %s WHERE c003 = %d LIMIT %d", table, w.merchantID(seed), opt.Batch)
 	}
+	return fmt.Sprintf("DELETE FROM %s WHERE c002 = %d LIMIT %d", table, w.catalogID(seed), opt.Batch)
 }
 
-func (w *Shop2Workload) buildInsertLikeSQL(tableIndex int, rowIDs []int64, forUpdate bool) string {
-	if len(rowIDs) == 0 {
+func buildInsertColumnList() string {
+	columns := make([]string, 0, 151)
+	for idx := 2; idx <= 152; idx++ {
+		columns = append(columns, columnName(idx))
+	}
+	return strings.Join(columns, ",")
+}
+
+func (w *Shop2Workload) buildInsertSQL(tableIndex int, seeds []int64) string {
+	if len(seeds) == 0 {
 		return ""
 	}
 
 	var sb strings.Builder
-	sb.Grow(len(rowIDs) * 2048)
+	sb.Grow(len(seeds) * 2048)
 	sb.WriteString("INSERT INTO ")
 	sb.WriteString(tableName(tableIndex))
-	sb.WriteString(" VALUES ")
+	sb.WriteString(" (")
+	sb.WriteString(shop2InsertColumnList)
+	sb.WriteString(") VALUES ")
 
-	for idx, rowID := range rowIDs {
+	for idx, seed := range seeds {
 		if idx > 0 {
 			sb.WriteString(",")
 		}
 		sb.WriteString("(")
-		sb.WriteString(w.generateRow(tableIndex, rowID))
+		sb.WriteString(w.generateInsertRow(tableIndex, seed))
 		sb.WriteString(")")
-	}
-
-	if forUpdate {
-		sb.WriteString(" ON DUPLICATE KEY UPDATE ")
-		sb.WriteString(shop2UpdateSQL)
 	}
 	return sb.String()
 }
 
-func (w *Shop2Workload) generateRow(tableIndex int, rowID int64) string {
-	values := make([]string, 0, 152)
+func (w *Shop2Workload) generateInsertRow(tableIndex int, seed int64) string {
+	values := make([]string, 0, 151)
 
-	addBigInt := func(seed int64) {
-		values = append(values, strconv.FormatInt(w.bigIntValue(seed, rowID), 10))
+	addBigInt := func(columnSeed int64) {
+		values = append(values, strconv.FormatInt(w.bigIntValue(columnSeed, seed), 10))
 	}
-	addInt := func(seed int64) {
-		values = append(values, strconv.FormatInt(w.intValue(seed, rowID), 10))
+	addInt := func(columnSeed int64) {
+		values = append(values, strconv.FormatInt(w.intValue(columnSeed, seed), 10))
 	}
-	addTinyInt := func(seed int64) {
-		values = append(values, strconv.FormatInt((rowID+seed)%2, 10))
+	addTinyInt := func(columnSeed int64) {
+		values = append(values, strconv.FormatInt((seed+columnSeed)%2, 10))
 	}
-	addDouble := func(seed int64) {
-		values = append(values, strconv.FormatFloat(w.doubleValue(seed, rowID), 'f', 4, 64))
+	addDouble := func(columnSeed int64) {
+		values = append(values, strconv.FormatFloat(w.doubleValue(columnSeed, seed), 'f', 4, 64))
 	}
 	addText := func(limit int, label string) {
-		values = append(values, quoteLiteral(w.textValue(limit, label, tableIndex, rowID)))
+		values = append(values, quoteLiteral(w.textValue(limit, label, tableIndex, seed)))
 	}
 	addJSON := func(label string) {
-		values = append(values, quoteLiteral(w.jsonValue(label, tableIndex, rowID)))
+		values = append(values, quoteLiteral(w.jsonValue(label, tableIndex, seed)))
 	}
 	addBlob := func(label string, medium bool) {
-		values = append(values, quoteLiteral(w.blobValue(label, tableIndex, rowID, medium)))
+		values = append(values, quoteLiteral(w.blobValue(label, tableIndex, seed, medium)))
 	}
-	addTimestamp := func(seed int64) {
-		values = append(values, quoteLiteral(w.timestampValue(seed, rowID)))
+	addTimestamp := func(columnSeed int64) {
+		values = append(values, quoteLiteral(w.timestampValue(columnSeed, seed)))
 	}
 
-	values = append(values, strconv.FormatInt(rowID, 10))
-	values = append(values, strconv.FormatInt(w.catalogID(rowID), 10))
-	values = append(values, strconv.FormatInt(w.merchantID(rowID), 10))
+	values = append(values, strconv.FormatInt(w.catalogID(seed), 10))
+	values = append(values, strconv.FormatInt(w.merchantID(seed), 10))
 	addText(127, "c004")
 	addText(127, "c005")
 	addText(255, "c006")
@@ -431,7 +444,7 @@ func (w *Shop2Workload) generateRow(tableIndex int, rowID int64) string {
 	addJSON("c151")
 	addText(32, "c152")
 
-	if len(values) != 152 {
+	if len(values) != 151 {
 		panic(fmt.Sprintf("unexpected shop2 values count: %d", len(values)))
 	}
 	return strings.Join(values, ",")
@@ -545,46 +558,16 @@ func (w *Shop2Workload) tableSlot(tableIndex int) int {
 	return slot
 }
 
-func (w *Shop2Workload) nextRowID(tableIndex int) int64 {
+func (w *Shop2Workload) nextSeed(tableIndex int) int64 {
 	slot := w.tableSlot(tableIndex)
 	seq := w.tableSeq[slot].Add(1)
-	return w.rowIDForSlot(slot, seq)
+	return w.seedForSlot(slot, seq)
 }
 
-func (w *Shop2Workload) sampleRowID(tableIndex int) int64 {
-	slot := w.tableSlot(tableIndex)
-	upper := w.currentUpperBound(slot)
-	offset := uint64(rand.Int63n(int64(upper))) + 1
-	return w.rowIDForSlot(slot, offset)
+func (w *Shop2Workload) sampleSeed() int64 {
+	return int64(rand.Int63n(int64(shop2DefaultKeySpace))) + 1
 }
 
-func (w *Shop2Workload) sampleRowIDs(tableIndex int, batchSize int) []int64 {
-	if batchSize <= 0 {
-		return nil
-	}
-
-	slot := w.tableSlot(tableIndex)
-	upper := w.currentUpperBound(slot)
-	start := uint64(rand.Int63n(int64(upper)))
-	rowIDs := make([]int64, 0, batchSize)
-	for idx := range batchSize {
-		offset := (start + uint64(idx)) % upper
-		rowIDs = append(rowIDs, w.rowIDForSlot(slot, offset+1))
-	}
-	return rowIDs
-}
-
-func (w *Shop2Workload) currentUpperBound(slot int) uint64 {
-	if len(w.tableSeq) == 0 {
-		return 1
-	}
-	upper := w.tableSeq[slot].Load()
-	if upper == 0 {
-		return 1
-	}
-	return upper
-}
-
-func (w *Shop2Workload) rowIDForSlot(slot int, offset uint64) int64 {
+func (w *Shop2Workload) seedForSlot(slot int, offset uint64) int64 {
 	return int64(uint64(slot)*w.perTableKeySpace + offset)
 }
