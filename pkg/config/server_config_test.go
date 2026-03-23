@@ -155,9 +155,3 @@ func TestIsValidClusterID(t *testing.T) {
 		require.Equal(t, c.valid, isValidClusterID(c.id))
 	}
 }
-
-func TestEventServiceDefaultIgnoreSyncPointGuardTs(t *testing.T) {
-	t.Parallel()
-	conf := GetDefaultServerConfig()
-	require.True(t, conf.Debug.EventService.IgnoreSyncPointGuardTs)
-}

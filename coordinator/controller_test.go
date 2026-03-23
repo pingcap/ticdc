@@ -44,32 +44,23 @@ func TestResumeChangefeed(t *testing.T) {
 	}
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
-		ChangefeedID:     cfID,
-		Config:           config.GetDefaultReplicaConfig(),
-		State:            config.StateFailed,
-		SinkURI:          "mysql://127.0.0.1:3306",
-		SyncPointGuardTs: 1,
+		ChangefeedID: cfID,
+		Config:       config.GetDefaultReplicaConfig(),
+		State:        config.StateFailed,
+		SinkURI:      "mysql://127.0.0.1:3306",
 	}, 1, true)
 	changefeedDB.AddStoppedChangefeed(cf)
 
 	// no changefeed
 	require.NotNil(t, controller.ResumeChangefeed(context.Background(), common.NewChangeFeedIDWithName("test2", common.DefaultKeyspaceName), 12, true))
 
-	backend.EXPECT().ResumeChangefeed(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(errors.New("failed")).Times(1)
+	backend.EXPECT().ResumeChangefeed(gomock.Any(), gomock.Any(), gomock.Any()).Return(errors.New("failed")).Times(1)
 	require.NotNil(t, controller.ResumeChangefeed(context.Background(), cfID, 12, true))
 	require.Equal(t, config.StateFailed, changefeedDB.GetByID(cfID).GetInfo().State)
 
-	var resumedGuardTs uint64
-	backend.EXPECT().ResumeChangefeed(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
-		DoAndReturn(func(_ context.Context, _ common.ChangeFeedID, _ uint64, syncPointGuardTs uint64) error {
-			resumedGuardTs = syncPointGuardTs
-			return nil
-		}).Times(1)
+	backend.EXPECT().ResumeChangefeed(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).Times(1)
 	require.Nil(t, controller.ResumeChangefeed(context.Background(), cfID, 12, false))
 	require.Equal(t, config.StateNormal, changefeedDB.GetByID(cfID).GetInfo().State)
-	require.NotZero(t, resumedGuardTs)
-	require.Equal(t, resumedGuardTs, changefeedDB.GetByID(cfID).GetInfo().SyncPointGuardTs)
-	require.NotEqual(t, uint64(1), resumedGuardTs)
 }
 
 func TestResumeChangefeedNormalState(t *testing.T) {
@@ -117,7 +108,7 @@ func TestResumeChangefeedOverwriteUpdatesLastSavedCheckpointTs(t *testing.T) {
 	changefeedDB.AddStoppedChangefeed(cf)
 
 	newCheckpointTs := uint64(120)
-	backend.EXPECT().ResumeChangefeed(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).Times(1)
+	backend.EXPECT().ResumeChangefeed(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).Times(1)
 	require.Nil(t, controller.ResumeChangefeed(context.Background(), cfID, newCheckpointTs, true))
 	require.Equal(t, newCheckpointTs, changefeedDB.GetByID(cfID).GetLastSavedCheckPointTs())
 }
@@ -151,7 +142,7 @@ func TestResumeChangefeedIgnoresStaleMaintainerErrorAndSchedules(t *testing.T) {
 	_, _, err := cf.ForceUpdateStatus(stale)
 	require.NotNil(t, err)
 
-	backend.EXPECT().ResumeChangefeed(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).Times(1)
+	backend.EXPECT().ResumeChangefeed(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).Times(1)
 	require.NoError(t, controller.ResumeChangefeed(context.Background(), cfID, 100, false))
 
 	// The changefeed should be enqueued for scheduling and should not be blocked by the stale error.
@@ -413,15 +404,11 @@ func TestCreateChangefeed(t *testing.T) {
 	require.NotNil(t, controller.CreateChangefeed(context.Background(), cfConfig))
 	require.Equal(t, 0, changefeedDB.GetSize())
 
-	var createGuardTs uint64
 	backend.EXPECT().CreateChangefeed(gomock.Any(), gomock.Any()).
 		DoAndReturn(func(_ context.Context, info *config.ChangeFeedInfo) error {
-			createGuardTs = info.SyncPointGuardTs
-			require.NotZero(t, info.SyncPointGuardTs)
 			return nil
 		}).Times(1)
 	require.Nil(t, controller.CreateChangefeed(context.Background(), cfConfig))
-	require.Equal(t, createGuardTs, changefeedDB.GetByID(cfID).GetInfo().SyncPointGuardTs)
 
 	// add it again
 	require.Equal(t, 1, changefeedDB.GetAbsentSize())

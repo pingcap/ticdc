@@ -94,10 +94,6 @@ func (m *mockDispatcher) GetSyncPointInterval() time.Duration {
 	return time.Second * 10
 }
 
-func (m *mockDispatcher) GetSyncPointGuardTs() uint64 {
-	return 0
-}
-
 func (m *mockDispatcher) GetSkipSyncpointAtStartTs() bool {
 	return m.skipSyncpointAtStartTs
 }

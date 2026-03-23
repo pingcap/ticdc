@@ -95,8 +95,6 @@ type eventBroker struct {
 
 	scanRateLimiter  *rate.Limiter
 	scanLimitInBytes uint64
-
-	ignoreSyncPointGuardTs bool
 }
 
 func newEventBroker(
@@ -145,7 +143,6 @@ func newEventBroker(
 		g:                       g,
 		scanRateLimiter:         rate.NewLimiter(rate.Limit(scanLimitInBytes), scanLimitInBytes),
 		scanLimitInBytes:        uint64(scanLimitInBytes),
-		ignoreSyncPointGuardTs:  eventServiceConfig.IgnoreSyncPointGuardTs,
 	}
 
 	// Initialize metrics collector
@@ -196,8 +193,7 @@ func newEventBroker(
 
 	log.Info("new event broker created",
 		zap.Uint64("id", id),
-		zap.Uint64("scanLimitInBytes", c.scanLimitInBytes),
-		zap.Bool("ignoreSyncPointGuardTs", c.ignoreSyncPointGuardTs))
+		zap.Uint64("scanLimitInBytes", c.scanLimitInBytes))
 	return c
 }
 
@@ -869,23 +865,7 @@ func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, r
 }
 
 func (c *eventBroker) fastForwardSyncPointIfNeeded(d *dispatcherStat) {
-	c.fastForwardSyncPointByGuardTsIfNeeded(d)
 	c.fastForwardSyncPointToInFlightIfNeeded(d)
-}
-
-func (c *eventBroker) fastForwardSyncPointByGuardTsIfNeeded(d *dispatcherStat) {
-	if c.ignoreSyncPointGuardTs || !d.enableSyncPoint || d.syncPointGuardTs == 0 || d.syncPointInterval <= 0 {
-		return
-	}
-	nextSyncPoint := d.nextSyncPoint.Load()
-	if nextSyncPoint > d.syncPointGuardTs {
-		return
-	}
-	nextSyncPointTime := oracle.GetTimeFromTS(nextSyncPoint)
-	guardTsTime := oracle.GetTimeFromTS(d.syncPointGuardTs)
-	steps := guardTsTime.Sub(nextSyncPointTime)/d.syncPointInterval + 1
-	nextSyncPoint = oracle.GoTimeToTS(nextSyncPointTime.Add(steps * d.syncPointInterval))
-	d.nextSyncPoint.Store(nextSyncPoint)
 }
 
 func (c *eventBroker) fastForwardSyncPointToInFlightIfNeeded(d *dispatcherStat) {

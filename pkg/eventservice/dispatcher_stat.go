@@ -69,7 +69,6 @@ type dispatcherStat struct {
 	// syncpoint related
 	enableSyncPoint   bool
 	nextSyncPoint     atomic.Uint64
-	syncPointGuardTs  uint64
 	syncPointInterval time.Duration
 	txnAtomicity      config.AtomicityLevel
 
@@ -160,7 +159,6 @@ func newDispatcherStat(
 	if info.SyncPointEnabled() {
 		dispStat.enableSyncPoint = true
 		dispStat.nextSyncPoint.Store(info.GetSyncPointTs())
-		dispStat.syncPointGuardTs = info.GetSyncPointGuardTs()
 		dispStat.syncPointInterval = info.GetSyncPointInterval()
 	}
 	startTs := info.GetStartTs()

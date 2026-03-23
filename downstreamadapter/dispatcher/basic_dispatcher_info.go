@@ -42,8 +42,7 @@ type SharedInfo struct {
 	// the config of filter
 	filterConfig *eventpb.FilterConfig
 	// if syncPointInfo is not nil, means enable Sync Point feature,
-	syncPointConfig  *syncpoint.SyncPointConfig
-	syncPointGuardTs uint64
+	syncPointConfig *syncpoint.SyncPointConfig
 
 	// The atomicity level of a transaction.
 	txnAtomicity config.AtomicityLevel
@@ -86,7 +85,6 @@ func NewSharedInfo(
 	integrityConfig *eventpb.IntegrityConfig,
 	filterConfig *eventpb.FilterConfig,
 	syncPointConfig *syncpoint.SyncPointConfig,
-	syncPointGuardTs uint64,
 	txnAtomicity *config.AtomicityLevel,
 	enableSplittableCheck bool,
 	statusesChan chan TableSpanStatusWithSeq,
@@ -102,7 +100,6 @@ func NewSharedInfo(
 		integrityConfig:       integrityConfig,
 		filterConfig:          filterConfig,
 		syncPointConfig:       syncPointConfig,
-		syncPointGuardTs:      syncPointGuardTs,
 		enableSplittableCheck: enableSplittableCheck,
 		statusesChan:          statusesChan,
 		blockStatusesChan:     blockStatusesChan,
@@ -212,10 +209,6 @@ func (d *BasicDispatcher) GetSyncPointInterval() time.Duration {
 		return d.sharedInfo.syncPointConfig.SyncPointInterval
 	}
 	return time.Duration(0)
-}
-
-func (d *BasicDispatcher) GetSyncPointGuardTs() uint64 {
-	return d.sharedInfo.syncPointGuardTs
 }
 
 func (d *BasicDispatcher) GetTableSpan() *heartbeatpb.TableSpan {

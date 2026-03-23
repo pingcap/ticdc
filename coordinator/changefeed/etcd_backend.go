@@ -249,14 +249,13 @@ func (b *EtcdBackend) DeleteChangefeed(ctx context.Context,
 }
 
 func (b *EtcdBackend) ResumeChangefeed(ctx context.Context,
-	id common.ChangeFeedID, newCheckpointTs uint64, syncPointGuardTs uint64,
+	id common.ChangeFeedID, newCheckpointTs uint64,
 ) error {
 	info, err := b.etcdClient.GetChangeFeedInfo(ctx, id.DisplayName)
 	if err != nil {
 		return errors.Trace(err)
 	}
 	info.State = config.StateNormal
-	info.SyncPointGuardTs = syncPointGuardTs
 	newStr, err := info.Marshal()
 	if err != nil {
 		return errors.Trace(err)

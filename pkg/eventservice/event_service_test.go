@@ -397,7 +397,6 @@ type mockDispatcherInfo struct {
 	epoch             uint64
 	enableSyncPoint   bool
 	nextSyncPoint     uint64
-	syncPointGuardTs  uint64
 	syncPointInterval time.Duration
 }
 
@@ -473,10 +472,6 @@ func (m *mockDispatcherInfo) GetSyncPointTs() uint64 {
 
 func (m *mockDispatcherInfo) GetSyncPointInterval() time.Duration {
 	return m.syncPointInterval
-}
-
-func (m *mockDispatcherInfo) GetSyncPointGuardTs() uint64 {
-	return m.syncPointGuardTs
 }
 
 func (m *mockDispatcherInfo) GetFilter() filter.Filter {

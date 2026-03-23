@@ -100,5 +100,4 @@ message DispatcherRequest {
     bool output_raw_change_event = 17;
     int64 mode = 18;
     string txn_atomicity = 19;
-    uint64 sync_point_guard_ts = 20;
 }

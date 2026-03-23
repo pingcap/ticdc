@@ -25,7 +25,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/messaging"
@@ -54,16 +53,6 @@ func newEventBrokerForTest() (*eventBroker, *mockEventStore, *mockSchemaStore, c
 func newMockDispatcherInfoForTest(t *testing.T) *mockDispatcherInfo {
 	did := common.NewDispatcherID()
 	return newMockDispatcherInfo(t, 300, did, 100, eventpb.ActionType_ACTION_TYPE_REGISTER)
-}
-
-func withIgnoreSyncPointGuardTsForTest(t *testing.T, ignore bool) {
-	originConfig := config.GetGlobalServerConfig()
-	cfg := originConfig.Clone()
-	cfg.Debug.EventService.IgnoreSyncPointGuardTs = ignore
-	config.StoreGlobalServerConfig(cfg)
-	t.Cleanup(func() {
-		config.StoreGlobalServerConfig(originConfig)
-	})
 }
 
 type notifyMsg struct {
@@ -676,66 +665,6 @@ func TestDoScanSkipWhenChangefeedStatusNotFound(t *testing.T) {
 		broker.doScan(context.Background(), task)
 	})
 	require.False(t, disp.isTaskScanning.Load())
-}
-
-func TestSyncPointGuardFastForwardAndResume(t *testing.T) {
-	withIgnoreSyncPointGuardTsForTest(t, false)
-
-	broker, _, _, _ := newEventBrokerForTest()
-	broker.close()
-
-	info := newMockDispatcherInfoForTest(t)
-	info.enableSyncPoint = true
-	info.syncPointInterval = 10 * time.Second
-	info.nextSyncPoint = oracle.GoTimeToTS(time.Unix(0, 0).Add(10 * time.Second))
-	info.syncPointGuardTs = oracle.GoTimeToTS(time.Unix(0, 0).Add(35 * time.Second))
-
-	changefeedStatus := broker.getOrSetChangefeedStatus(info.GetChangefeedID(), info.GetSyncPointInterval())
-	disp := newDispatcherStat(info, 1, 1, nil, changefeedStatus)
-	disp.setHandshaked()
-	dispPtr := &atomic.Pointer[dispatcherStat]{}
-	dispPtr.Store(disp)
-	changefeedStatus.addDispatcher(info.GetID(), dispPtr)
-	require.Equal(t, info.nextSyncPoint, disp.nextSyncPoint.Load())
-
-	require.False(t, broker.hasSyncPointEventsBeforeTs(oracle.GoTimeToTS(time.Unix(0, 0).Add(39*time.Second)), disp))
-	require.Equal(t, oracle.GoTimeToTS(time.Unix(0, 0).Add(40*time.Second)), disp.nextSyncPoint.Load())
-	require.False(t, broker.hasSyncPointEventsBeforeTs(oracle.GoTimeToTS(time.Unix(0, 0).Add(41*time.Second)), disp))
-	disp.sentResolvedTs.Store(oracle.GoTimeToTS(time.Unix(0, 0).Add(40 * time.Second)))
-	changefeedStatus.tryPromoteSyncPointToCommitIfReady()
-	require.True(t, broker.hasSyncPointEventsBeforeTs(oracle.GoTimeToTS(time.Unix(0, 0).Add(41*time.Second)), disp))
-
-	broker.emitSyncPointEventIfNeeded(oracle.GoTimeToTS(time.Unix(0, 0).Add(41*time.Second)), disp, node.ID("server1"))
-	msg := <-broker.messageCh[0]
-	require.Equal(t, event.TypeSyncPointEvent, msg.msgType)
-
-	syncPointEvent, ok := msg.e.(*event.SyncPointEvent)
-	require.True(t, ok)
-	require.Equal(t, oracle.GoTimeToTS(time.Unix(0, 0).Add(40*time.Second)), syncPointEvent.GetCommitTs())
-	require.Equal(t, oracle.GoTimeToTS(time.Unix(0, 0).Add(50*time.Second)), disp.nextSyncPoint.Load())
-}
-
-func TestSyncPointGuardIgnored(t *testing.T) {
-	withIgnoreSyncPointGuardTsForTest(t, true)
-
-	broker, _, _, _ := newEventBrokerForTest()
-	broker.close()
-
-	info := newMockDispatcherInfoForTest(t)
-	info.enableSyncPoint = true
-	info.syncPointInterval = 10 * time.Second
-	info.nextSyncPoint = oracle.GoTimeToTS(time.Unix(0, 0).Add(10 * time.Second))
-	info.syncPointGuardTs = oracle.GoTimeToTS(time.Unix(0, 0).Add(35 * time.Second))
-
-	changefeedStatus := broker.getOrSetChangefeedStatus(info.GetChangefeedID(), info.GetSyncPointInterval())
-	disp := newDispatcherStat(info, 1, 1, nil, changefeedStatus)
-	disp.setHandshaked()
-	dispPtr := &atomic.Pointer[dispatcherStat]{}
-	dispPtr.Store(disp)
-	changefeedStatus.addDispatcher(info.GetID(), dispPtr)
-
-	require.False(t, broker.hasSyncPointEventsBeforeTs(oracle.GoTimeToTS(time.Unix(0, 0).Add(39*time.Second)), disp))
-	require.Equal(t, oracle.GoTimeToTS(time.Unix(0, 0).Add(10*time.Second)), disp.nextSyncPoint.Load())
 }
 
 func TestSyncPointTwoStagePrepareThenCommit(t *testing.T) {

@@ -196,7 +196,6 @@ type ChangefeedConfig struct {
 	EnableSyncPoint       bool          `json:"enable_sync_point" default:"false"`
 	SyncPointInterval     time.Duration `json:"sync_point_interval" default:"1m"`
 	SyncPointRetention    time.Duration `json:"sync_point_retention" default:"24h"`
-	SyncPointGuardTs      uint64        `json:"sync_point_guard_ts" default:"0"`
 	SinkConfig            *SinkConfig   `json:"sink_config"`
 	EnableSplittableCheck bool          `json:"enable_splittable_check" default:"false"`
 	// Epoch is the epoch of a changefeed, changes on every restart.
@@ -259,9 +258,6 @@ type ChangeFeedInfo struct {
 	CreatorVersion string `json:"creator-version"`
 	// Epoch is the epoch of a changefeed, changes on every restart.
 	Epoch uint64 `json:"epoch"`
-	// SyncPointGuardTs suppresses syncpoint emission before this ts.
-	// 0 means disabled, for compatibility with existing metadata.
-	SyncPointGuardTs uint64 `json:"sync-point-guard-ts"`
 
 	// The changefeed belongs to the keyspace.  In classic mode, it will always be 0.
 	KeyspaceID uint32 `json:"keyspace-id"`
@@ -280,7 +276,6 @@ func (info *ChangeFeedInfo) ToChangefeedConfig() *ChangefeedConfig {
 		EnableSyncPoint:               util.GetOrZero(info.Config.EnableSyncPoint),
 		SyncPointInterval:             util.GetOrZero(info.Config.SyncPointInterval),
 		SyncPointRetention:            util.GetOrZero(info.Config.SyncPointRetention),
-		SyncPointGuardTs:              info.SyncPointGuardTs,
 		EnableSplittableCheck:         util.GetOrZero(info.Config.Scheduler.EnableSplittableCheck),
 		MemoryQuota:                   util.GetOrZero(info.Config.MemoryQuota),
 		Epoch:                         info.Epoch,

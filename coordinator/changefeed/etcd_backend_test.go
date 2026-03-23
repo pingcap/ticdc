@@ -210,9 +210,8 @@ func TestResumeChangefeed(t *testing.T) {
 	cdcClient.EXPECT().GetChangeFeedStatus(gomock.Any(), changefeedID).Return(status, int64(0), nil).Times(1)
 	etcdClient.EXPECT().Txn(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(&clientv3.TxnResponse{Succeeded: true}, nil).Times(1)
 
-	err := backend.ResumeChangefeed(context.Background(), changefeedID, 200, 321)
+	err := backend.ResumeChangefeed(context.Background(), changefeedID, 200)
 	require.Nil(t, err)
-	require.Equal(t, uint64(321), info.SyncPointGuardTs)
 }
 
 func TestSetChangefeedProgress(t *testing.T) {

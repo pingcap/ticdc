@@ -258,10 +258,6 @@ func (r DispatcherRequest) GetSyncPointInterval() time.Duration {
 	return time.Duration(r.SyncPointInterval) * time.Second
 }
 
-func (r DispatcherRequest) GetSyncPointGuardTs() uint64 {
-	return r.SyncPointGuardTs
-}
-
 func (r DispatcherRequest) IsOnlyReuse() bool {
 	return r.OnlyReuse
 }

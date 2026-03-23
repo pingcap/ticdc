@@ -52,7 +52,6 @@ type DispatcherInfo interface {
 	SyncPointEnabled() bool
 	GetSyncPointTs() uint64
 	GetSyncPointInterval() time.Duration
-	GetSyncPointGuardTs() uint64
 
 	IsOnlyReuse() bool
 	GetBdrMode() bool
