@@ -26,7 +26,7 @@ func (id DataKeyID) ToString() string {
 // DataKeyIDFromString creates DataKeyID from string (must be 3 bytes).
 func DataKeyIDFromString(s string) (DataKeyID, error) {
 	if len(s) != 3 {
-		return DataKeyID{}, errors.New("data key ID must be exactly 3 bytes")
+		return DataKeyID{}, cerrors.ErrInvalidDataKeyID.GenWithStackByArgs("data key ID must be exactly 3 bytes")
 	}
 	var id DataKeyID
 	copy(id[:], s)
