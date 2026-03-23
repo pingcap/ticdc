@@ -84,6 +84,25 @@ func (m *MockRedoDMLWriter) EXPECT() *MockRedoDMLWriterMockRecorder {
 	return m.recorder
 }
 
+// AppendDMLEvents mocks base method.
+func (m *MockRedoDMLWriter) AppendDMLEvents(ctx context.Context, events ...*event.RedoRowEvent) error {
+	m.ctrl.T.Helper()
+	varargs := []interface{}{ctx}
+	for _, a := range events {
+		varargs = append(varargs, a)
+	}
+	ret := m.ctrl.Call(m, "AppendDMLEvents", varargs...)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// AppendDMLEvents indicates an expected call of AppendDMLEvents.
+func (mr *MockRedoDMLWriterMockRecorder) AppendDMLEvents(ctx interface{}, events ...interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	varargs := append([]interface{}{ctx}, events...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AppendDMLEvents", reflect.TypeOf((*MockRedoDMLWriter)(nil).AppendDMLEvents), varargs...)
+}
+
 // Close mocks base method.
 func (m *MockRedoDMLWriter) Close() error {
 	m.ctrl.T.Helper()
@@ -110,25 +129,6 @@ func (m *MockRedoDMLWriter) Run(ctx context.Context) error {
 func (mr *MockRedoDMLWriterMockRecorder) Run(ctx interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Run", reflect.TypeOf((*MockRedoDMLWriter)(nil).Run), ctx)
-}
-
-// AppendDMLEvents mocks base method.
-func (m *MockRedoDMLWriter) AppendDMLEvents(ctx context.Context, events ...*event.RedoRowEvent) error {
-	m.ctrl.T.Helper()
-	varargs := []interface{}{ctx}
-	for _, a := range events {
-		varargs = append(varargs, a)
-	}
-	ret := m.ctrl.Call(m, "AppendDMLEvents", varargs...)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// AppendDMLEvents indicates an expected call of AppendDMLEvents.
-func (mr *MockRedoDMLWriterMockRecorder) AppendDMLEvents(ctx interface{}, events ...interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	varargs := append([]interface{}{ctx}, events...)
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AppendDMLEvents", reflect.TypeOf((*MockRedoDMLWriter)(nil).AppendDMLEvents), varargs...)
 }
 
 // MockRedoDDLWriter is a mock of RedoDDLWriter interface.
