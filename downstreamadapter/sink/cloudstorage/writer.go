@@ -136,7 +136,7 @@ func (d *writer) flushMessages(ctx context.Context) error {
 			if task.marker != nil {
 				// Flush marker ack point:
 				// marker is emitted only after the pending batch of the same dispatcher
-				// is emitted in genAndDispatchTask.
+				// is emitted by bufferManager.
 				task.marker.finish()
 				continue
 			}

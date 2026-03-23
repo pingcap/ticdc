@@ -108,10 +108,6 @@ func (q *quotaController) wouldExceedDiskQuota(entryBytes int64) bool {
 	return q.budget.wouldExceedDiskQuota(entryBytes)
 }
 
-func (q *quotaController) currentDiskBytes() int64 {
-	return q.budget.diskBytes
-}
-
 func (q *quotaController) diskQuotaWaitCh() <-chan struct{} {
 	return q.diskQuotaChanged
 }

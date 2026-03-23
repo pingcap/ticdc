@@ -65,7 +65,9 @@ type options struct {
 	// changefeed-specific directory under TiCDC's data dir.
 	rootDir string
 
-	// quotaBytes is the total local budget shared by in-memory data and spilled files.
+	// quotaBytes is the disk budget for local spool files.
+	// spool still derives in-memory and watermark thresholds from it, but the
+	// runtime contract exposed by spool-disk-quota only constrains spilled bytes.
 	quotaBytes int64
 
 	// segmentBytes is the largest size of one segment file before spool rolls to the next file.
