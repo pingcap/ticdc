@@ -125,3 +125,31 @@ func TestDrainControllerResetObservedStateForNewEpoch(t *testing.T) {
 	require.True(t, st.lastStopCmdSentAt.IsZero())
 	c.mu.Unlock()
 }
+
+func TestDrainControllerSkipStoppingForNewEpochWithoutDraining(t *testing.T) {
+	mc := messaging.NewMockMessageCenter()
+	c := NewController(mc)
+
+	target := node.ID("n1")
+	c.ObserveHeartbeat(target, &heartbeatpb.NodeHeartbeat{
+		Liveness:  heartbeatpb.NodeLiveness_DRAINING,
+		NodeEpoch: 42,
+	})
+
+	// Simulate a node restart after AdvanceLiveness snapshots the old draining
+	// observation but before it tries to send STOPPING.
+	c.AdvanceLiveness(func(node.ID) bool {
+		c.ObserveHeartbeat(target, &heartbeatpb.NodeHeartbeat{
+			Liveness:  heartbeatpb.NodeLiveness_ALIVE,
+			NodeEpoch: 43,
+		})
+		return true
+	})
+
+	select {
+	case msg := <-mc.GetMessageChannel():
+		req := msg.Message[0].(*heartbeatpb.SetNodeLivenessRequest)
+		t.Fatalf("unexpected liveness command sent for new epoch: target=%s epoch=%d", req.Target.String(), req.NodeEpoch)
+	default:
+	}
+}

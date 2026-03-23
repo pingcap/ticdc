@@ -300,7 +300,7 @@ func (c *Controller) listDrainRequestedNodeIDs() []node.ID {
 
 // trySendDrainCommand sends DRAINING when it is not yet observed and resend is not throttled.
 func (c *Controller) trySendDrainCommand(nodeID node.ID) {
-	if !c.checkAndMarkCommandSend(nodeID, heartbeatpb.NodeLiveness_DRAINING) {
+	if !c.checkAndMarkDrainCommandSend(nodeID) {
 		return
 	}
 	c.sendSetNodeLiveness(nodeID, heartbeatpb.NodeLiveness_DRAINING)
@@ -308,33 +308,47 @@ func (c *Controller) trySendDrainCommand(nodeID node.ID) {
 
 // trySendStopCommand sends STOPPING when it is not yet observed and resend is not throttled.
 func (c *Controller) trySendStopCommand(nodeID node.ID) {
-	if !c.checkAndMarkCommandSend(nodeID, heartbeatpb.NodeLiveness_STOPPING) {
+	epoch, ok := c.checkAndMarkStopCommandSend(nodeID)
+	if !ok {
 		return
 	}
-	c.sendSetNodeLiveness(nodeID, heartbeatpb.NodeLiveness_STOPPING)
+	c.sendSetNodeLivenessWithEpoch(nodeID, heartbeatpb.NodeLiveness_STOPPING, epoch)
 }
 
-// checkAndMarkCommandSend checks observed/throttle conditions and records command send time.
-func (c *Controller) checkAndMarkCommandSend(nodeID node.ID, target heartbeatpb.NodeLiveness) bool {
+// checkAndMarkDrainCommandSend checks whether a DRAINING command should be sent
+// and records the send timestamp for resend throttling.
+func (c *Controller) checkAndMarkDrainCommandSend(nodeID node.ID) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	st := c.ensureNodeStateLocked(nodeID)
-	switch target {
-	case heartbeatpb.NodeLiveness_DRAINING:
-		if st.drainingObserved || isResendThrottled(st.lastDrainCmdSentAt) {
-			return false
-		}
-		st.lastDrainCmdSentAt = time.Now()
-	case heartbeatpb.NodeLiveness_STOPPING:
-		if st.stoppingObserved || isResendThrottled(st.lastStopCmdSentAt) {
-			return false
-		}
-		st.lastStopCmdSentAt = time.Now()
-	default:
+	if st.drainingObserved || isResendThrottled(st.lastDrainCmdSentAt) {
 		return false
 	}
+	st.lastDrainCmdSentAt = time.Now()
 	return true
+}
+
+// checkAndMarkStopCommandSend captures the epoch that observed DRAINING while it
+// still holds c.mu. This keeps the STOPPING eligibility check and the command
+// epoch consistent, so a fresh ALIVE heartbeat from a restarted node cannot
+// reuse an old draining observation to advance a newer epoch directly to
+// STOPPING.
+func (c *Controller) checkAndMarkStopCommandSend(nodeID node.ID) (uint64, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	st := c.ensureNodeStateLocked(nodeID)
+	if !st.observedSet ||
+		!st.drainRequested ||
+		!st.drainingObserved ||
+		st.stoppingObserved ||
+		isResendThrottled(st.lastStopCmdSentAt) {
+		return 0, false
+	}
+
+	st.lastStopCmdSentAt = time.Now()
+	return st.nodeEpoch, true
 }
 
 // isResendThrottled returns whether a resend should be skipped in the current interval.
@@ -348,7 +362,12 @@ func (c *Controller) sendSetNodeLiveness(nodeID node.ID, target heartbeatpb.Node
 	if e, ok := c.GetNodeEpoch(nodeID); ok {
 		epoch = e
 	}
+	c.sendSetNodeLivenessWithEpoch(nodeID, target, epoch)
+}
 
+// sendSetNodeLivenessWithEpoch sends a liveness command using a caller-provided
+// epoch that was already validated against the controller state.
+func (c *Controller) sendSetNodeLivenessWithEpoch(nodeID node.ID, target heartbeatpb.NodeLiveness, epoch uint64) {
 	msg := messaging.NewSingleTargetMessage(nodeID, messaging.MaintainerManagerTopic, &heartbeatpb.SetNodeLivenessRequest{
 		Target:    target,
 		NodeEpoch: epoch,
