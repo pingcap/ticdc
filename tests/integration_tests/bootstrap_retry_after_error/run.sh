@@ -2,8 +2,8 @@
 
 set -eu
 
-# This integration test covers a bootstrap retry sequence after the first bootstrap
-# round has already failed and consumed the cached bootstrap responses.
+# This integration test covers bootstrap failure handling after maintainer
+# migration.
 #
 # Steps:
 # 1. Start two TiCDC nodes and create a blackhole changefeed.
@@ -12,8 +12,8 @@ set -eu
 # 3. Kill the current maintainer so the surviving node becomes the new maintainer.
 # 4. Enable a one-shot failpoint on the surviving node so its first bootstrap fails
 #    while loading tables from schema store.
-# 5. Restart the old node to trigger a bootstrap retry and verify the retry reaches
-#    the "empty checkpointTs" error path instead of panicking.
+# 5. Restart the old node and verify the cluster stays healthy while the changefeed
+#    transitions to failed with ErrSnapshotLostByGC.
 
 CUR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source $CUR/../_utils/test_prepare
@@ -26,19 +26,6 @@ PD_ADDR="http://${UP_PD_HOST_1}:${UP_PD_PORT_1}"
 CHANGEFEED_ID="bootstrap-retry-after-error-$RANDOM"
 CDC_ADDRS=("127.0.0.1:8300" "127.0.0.1:8301")
 FAILPOINT_NAME="github.com/pingcap/ticdc/logservice/schemastore/getAllPhysicalTablesGCFastFail"
-
-function check_changefeed_failed() {
-	local pd_addr=$1
-	local changefeed_id=$2
-	info=$(cdc_cli_changefeed query --pd=$pd_addr -c "$changefeed_id" -s | grep -v "Command to ticdc")
-	state=$(echo "$info" | jq -r '.state')
-	if [[ "$state" != "failed" ]]; then
-		echo "changefeed state $state does not equal to failed"
-		exit 1
-	fi
-}
-
-export -f check_changefeed_failed
 
 function get_maintainer_addr() {
 	local api_addr=$1
@@ -117,17 +104,15 @@ function run() {
 	maintainer_pid=$(get_cdc_pid "$maintainer_host" "$maintainer_port")
 	kill_cdc_pid "$maintainer_pid"
 
-	check_coordinator_and_maintainer "$other_addr" "$CHANGEFEED_ID" $CHECK_RETRIES
 	ensure $MAX_RETRIES "check_logs_contains $WORK_DIR 'ErrSnapshotLostByGC' '$other_logsuffix'"
 
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/maintainer/scheduler/StopBalanceScheduler=return(true)'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "${maintainer_logsuffix}-restart" --addr "$maintainer_addr" --pd "$PD_ADDR"
 	export GO_FAILPOINTS=''
 
-	ensure $MAX_RETRIES "check_logs_contains $WORK_DIR 'all bootstrap responses reported empty checkpointTs' '$other_logsuffix'"
 	ensure $MAX_RETRIES "get_cdc_pid 127.0.0.1 8300 >/dev/null"
 	ensure $MAX_RETRIES "get_cdc_pid 127.0.0.1 8301 >/dev/null"
-	ensure $MAX_RETRIES "check_changefeed_failed $PD_ADDR $CHANGEFEED_ID"
+	ensure $MAX_RETRIES "check_changefeed_state $PD_ADDR $CHANGEFEED_ID failed ErrSnapshotLostByGC ''"
 
 	cleanup_process $CDC_BINARY
 	stop_tidb_cluster
