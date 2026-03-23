@@ -1718,6 +1718,8 @@ github.com/pingcap/tidb/pkg/parser v0.0.0-20251212033720-f5289a74240a h1:5xr2ZGJ
 github.com/pingcap/tidb/pkg/parser v0.0.0-20251212033720-f5289a74240a/go.mod h1:Hju1TEWZvrctQKbztTRwXH7rd41Yq0Pgmq4PrEKcq7o=
 github.com/pingcap/tiflow v0.0.0-20251226072601-0cb0aaf25061 h1:bzqYZY2vxn6kpOWCGWyXMwM8DcBwLqaNLw/UnZp2dGM=
 github.com/pingcap/tiflow v0.0.0-20251226072601-0cb0aaf25061/go.mod h1:IkKs8qcuqIfxCPFrtYvUx5YmraaLTsIIoD5D5p+xkaE=
+github.com/pingcap/tiflow v0.0.0-20260323082129-d6d53adbe1a0 h1:TquPGvURCe732h0rDF0tybttGwdI6rmX3oJau6SYmWc=
+github.com/pingcap/tiflow v0.0.0-20260323082129-d6d53adbe1a0/go.mod h1:wGnaJNffnzxJmZEbQ8iBXwhrcKuhJNtaEhu4T9TFhQE=
 github.com/pingcap/tipb v0.0.0-20251125085256-097db0b2c02a h1:ya+ghNkfGgXYpgi0L7109vzy3tAQn3a+zneOK7C3BQ8=
 github.com/pingcap/tipb v0.0.0-20251125085256-097db0b2c02a/go.mod h1:A7mrd7WHBl1o63LE2bIBGEJMTNWXqhgmYiOvMLxozfs=
 github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c h1:+mdjkGKdHQG3305AYmdv1U2eRNDiU2ErMBj1gwrq8eQ=
