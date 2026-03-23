@@ -41,6 +41,12 @@ type tikvEncryptionHTTPClient struct {
 	httpTimeout time.Duration
 }
 
+// TiKVEncryptionClient fetches keyspace-level encryption metadata from TiKV.
+// It is consumed by the encryption meta manager in follow-up PRs.
+type TiKVEncryptionClient interface {
+	GetKeyspaceEncryptionMeta(ctx context.Context, keyspaceID uint32) (*EncryptionMeta, error)
+}
+
 func NewTiKVEncryptionHTTPClient(pdClient pd.Client, credential *security.Credential) (TiKVEncryptionClient, error) {
 	httpClient, err := httputil.NewClient(credential)
 	if err != nil {
@@ -419,4 +425,18 @@ func truncateBytesForLog(b []byte, max int) string {
 		return string(b)
 	}
 	return fmt.Sprintf("%s...(truncated, %d bytes total)", string(b[:max]), len(b))
+}
+
+func safeKMSVendor(masterKey *MasterKey) string {
+	if masterKey == nil {
+		return ""
+	}
+	return masterKey.Vendor
+}
+
+func safeCMEKID(masterKey *MasterKey) string {
+	if masterKey == nil {
+		return ""
+	}
+	return masterKey.CmekId
 }
