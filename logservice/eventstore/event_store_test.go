@@ -16,6 +16,7 @@ package eventstore
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"sync"
@@ -30,6 +31,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/encryption"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/pdutil"
@@ -46,6 +48,31 @@ type mockSubscriptionClient struct {
 	nextID        atomic.Uint64
 	mu            sync.Mutex
 	subscriptions map[logpuller.SubscriptionID]*mockSubscriptionStat
+}
+
+type spyEncryptionManager struct {
+	encryptKeyspaceID uint32
+	decryptKeyspaceID uint32
+	encryptCalls      int
+	decryptCalls      int
+}
+
+func (m *spyEncryptionManager) EncryptData(ctx context.Context, keyspaceID uint32, data []byte) ([]byte, error) {
+	m.encryptKeyspaceID = keyspaceID
+	m.encryptCalls++
+	encrypted := make([]byte, encryption.EncryptionHeaderSize+len(data))
+	encrypted[0] = 0x01
+	copy(encrypted[encryption.EncryptionHeaderSize:], data)
+	return encrypted, nil
+}
+
+func (m *spyEncryptionManager) DecryptData(ctx context.Context, keyspaceID uint32, encryptedData []byte) ([]byte, error) {
+	m.decryptKeyspaceID = keyspaceID
+	m.decryptCalls++
+	if len(encryptedData) < encryption.EncryptionHeaderSize {
+		return nil, errors.New("encrypted data too short")
+	}
+	return encryptedData[encryption.EncryptionHeaderSize:], nil
 }
 
 func NewMockSubscriptionClient() logpuller.SubscriptionClient {
@@ -179,6 +206,97 @@ func TestEventStoreInteractionWithSubClient(t *testing.T) {
 		require.Equal(t, 2, len(mockSubClient.subscriptions))
 		mockSubClient.mu.Unlock()
 	}
+}
+
+func TestEventStoreUsesKeyspaceIDForEncryption(t *testing.T) {
+	subClient, store := newEventStoreForTest(fmt.Sprintf("/tmp/%s", t.Name()))
+	es := store.(*eventStore)
+	defer es.Close(context.Background())
+
+	spy := &spyEncryptionManager{}
+	es.encryptionManager = spy
+
+	dispatcherID := common.NewDispatcherID()
+	cfID := common.NewChangefeedID4Test("default", "test-cf")
+	span := &heartbeatpb.TableSpan{
+		TableID:    1,
+		StartKey:   []byte("a"),
+		EndKey:     []byte("z"),
+		KeyspaceID: 42,
+	}
+	ok := store.RegisterDispatcher(cfID, dispatcherID, span, 0, func(uint64, uint64) {}, false, false)
+	require.True(t, ok)
+
+	es.dispatcherMeta.RLock()
+	stat := es.dispatcherMeta.dispatcherStats[dispatcherID]
+	subStat := stat.subStat
+	if subStat == nil {
+		subStat = stat.pendingSubStat
+	}
+	es.dispatcherMeta.RUnlock()
+	require.NotNil(t, subStat)
+
+	smallKV := common.RawKVEntry{
+		OpType:  common.OpTypePut,
+		CRTs:    10,
+		StartTs: 5,
+		Key:     []byte("k-small"),
+		Value:   []byte("v"),
+	}
+	largeKV := common.RawKVEntry{
+		OpType:  common.OpTypePut,
+		CRTs:    11,
+		StartTs: 6,
+		Key:     []byte("k-large"),
+		Value:   bytes.Repeat([]byte("v"), es.compressionThreshold+1),
+	}
+	encoder, err := zstd.NewWriter(nil)
+	require.NoError(t, err)
+	defer encoder.Close()
+
+	events := []eventWithCallback{
+		{
+			subID:             subStat.subID,
+			tableID:           subStat.tableSpan.TableID,
+			keyspaceID:        subStat.tableSpan.KeyspaceID,
+			kvs:               []common.RawKVEntry{smallKV, largeKV},
+			currentResolvedTs: 0,
+			callback:          func() {},
+		},
+	}
+	var compressionBuf []byte
+	var rawValueBuf []byte
+	err = es.writeEvents(es.dbs[subStat.dbIndex], events, encoder, &compressionBuf, &rawValueBuf)
+	require.NoError(t, err)
+	require.Equal(t, uint32(42), spy.encryptKeyspaceID)
+	require.Equal(t, 2, spy.encryptCalls)
+
+	subStat.resolvedTs.Store(largeKV.CRTs)
+	dataRange := common.DataRange{
+		Span:          span,
+		CommitTsStart: 0,
+		CommitTsEnd:   largeKV.CRTs,
+	}
+	iter := es.GetIterator(dispatcherID, dataRange)
+	require.NotNil(t, iter)
+
+	readValues := make(map[string][]byte)
+	for {
+		entry, ok := iter.Next()
+		if !ok {
+			break
+		}
+		readValues[string(entry.Key)] = entry.Value
+	}
+	require.Len(t, readValues, 2)
+	require.Equal(t, smallKV.Value, readValues[string(smallKV.Key)])
+	require.Equal(t, largeKV.Value, readValues[string(largeKV.Key)])
+	require.Equal(t, uint32(42), spy.decryptKeyspaceID)
+	require.Equal(t, 2, spy.decryptCalls)
+
+	_, err = iter.Close()
+	require.NoError(t, err)
+	subClient.(*mockSubscriptionClient).Unsubscribe(subStat.subID)
 }
 
 func markSubStatsInitializedForTest(store EventStore, tableID int64) {
