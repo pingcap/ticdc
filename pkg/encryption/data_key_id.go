@@ -13,7 +13,7 @@
 
 package encryption
 
-import "github.com/pingcap/errors"
+import cerrors "github.com/pingcap/ticdc/pkg/errors"
 
 // DataKeyID represents a 3-byte data key identifier in the encryption header.
 type DataKeyID [3]byte
