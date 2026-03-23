@@ -15,14 +15,13 @@ package encryption
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
 	"time"
 
-	oldproto "github.com/gogo/protobuf/proto"
+	"github.com/gogo/protobuf/proto"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	cerrors "github.com/pingcap/ticdc/pkg/errors"
@@ -154,33 +153,19 @@ func (c *tikvEncryptionHTTPClient) getEncryptionMetaFromStore(ctx context.Contex
 		return nil, errors.Errorf("[%d] %s", resp.StatusCode, body)
 	}
 
-	metaResp := &encryptionMetaResponse{}
-	responseFormat := "json"
-	if jsonErr := json.Unmarshal(body, metaResp); jsonErr != nil {
-		log.Debug("failed to decode encryption meta response as json, fallback to protobuf",
+	metaResp, err := decodeEncryptionMetaResponseFromProtobuf(body)
+	if err != nil {
+		decodeErr := errors.Annotatef(err, "json decode failed: %v", err)
+		log.Warn("failed to decode encryption meta response",
 			zap.Uint64("storeID", storeID),
 			zap.String("statusAddr", statusAddr),
 			zap.Uint32("keyspaceID", keyspaceID),
 			zap.String("url", storeURL),
 			zap.String("contentType", contentType),
 			zap.Int("bodySize", len(body)),
-			zap.Error(jsonErr))
-
-		metaResp, err = decodeEncryptionMetaResponseFromProtobuf(body)
-		if err != nil {
-			decodeErr := errors.Annotatef(err, "json decode failed: %v", jsonErr)
-			log.Warn("failed to decode encryption meta response",
-				zap.Uint64("storeID", storeID),
-				zap.String("statusAddr", statusAddr),
-				zap.Uint32("keyspaceID", keyspaceID),
-				zap.String("url", storeURL),
-				zap.String("contentType", contentType),
-				zap.Int("bodySize", len(body)),
-				zap.String("body", truncateBytesForLog(body, 256)),
-				zap.Error(decodeErr))
-			return nil, errors.Trace(decodeErr)
-		}
-		responseFormat = "protobuf"
+			zap.String("body", truncateBytesForLog(body, 256)),
+			zap.Error(decodeErr))
+		return nil, errors.Trace(decodeErr)
 	}
 
 	meta, err := metaResp.toEncryptionMeta()
@@ -211,7 +196,6 @@ func (c *tikvEncryptionHTTPClient) getEncryptionMetaFromStore(ctx context.Contex
 	log.Info("fetched valid encryption meta from TiKV store",
 		zap.Uint64("storeID", storeID),
 		zap.String("statusAddr", statusAddr),
-		zap.String("responseFormat", responseFormat),
 		zap.String("contentType", contentType),
 		zap.Uint32("requestedKeyspaceID", keyspaceID),
 		zap.Uint32("metaKeyspaceID", meta.KeyspaceId),
@@ -303,7 +287,7 @@ func (*keyspaceDataKeyPB) ProtoMessage()    {}
 
 func decodeEncryptionMetaResponseFromProtobuf(body []byte) (*encryptionMetaResponse, error) {
 	metaPB := &keyspaceEncryptionMetaPB{}
-	if err := oldproto.Unmarshal(body, metaPB); err != nil {
+	if err := proto.Unmarshal(body, metaPB); err != nil {
 		return nil, errors.Trace(err)
 	}
 	if metaPB.Current == nil && metaPB.MasterKey == nil && len(metaPB.DataKeys) == 0 && len(metaPB.History) == 0 && metaPB.KeyspaceId == 0 {
