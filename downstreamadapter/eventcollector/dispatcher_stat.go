@@ -488,24 +488,18 @@ func (d *dispatcherStat) handleSingleDataEvents(events []dispatcher.DispatcherEv
 		d.reset(d.connState.getEventServiceID())
 		return false
 	}
+	if !d.shouldForwardEventByCommitTs(events[0]) {
+		return false
+	}
 	if events[0].GetType() == commonEvent.TypeDDLEvent {
-		if !d.shouldForwardEventByCommitTs(events[0]) {
-			return false
-		}
 		ddl := events[0].Event.(*commonEvent.DDLEvent)
 		d.tableInfoVersion.Store(ddl.FinishedTs)
 		if ddl.TableInfo != nil {
 			d.tableInfo.Store(ddl.TableInfo)
 		}
-		d.updateCommitTsStateByEvents(events)
-		return d.target.HandleEvents(events, func() { d.wake() })
-	} else {
-		if !d.shouldForwardEventByCommitTs(events[0]) {
-			return false
-		}
-		d.updateCommitTsStateByEvents(events)
-		return d.target.HandleEvents(events, func() { d.wake() })
 	}
+	d.updateCommitTsStateByEvents(events)
+	return d.target.HandleEvents(events, func() { d.wake() })
 }
 
 func (d *dispatcherStat) handleDataEvents(events ...dispatcher.DispatcherEvent) bool {
