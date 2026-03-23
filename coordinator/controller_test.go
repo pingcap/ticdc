@@ -60,6 +60,7 @@ func TestOnPeriodTaskAdvanceLiveness(t *testing.T) {
 			operatorController: operator.NewOperatorController(
 				self, changefeedDB, backend, 10,
 			),
+			initialized:     atomic.NewBool(true),
 			drainController: drain.NewController(mc),
 			bootstrapper: bootstrap.NewBootstrapper[heartbeatpb.CoordinatorBootstrapResponse](
 				"test",

@@ -269,6 +269,10 @@ func (c *Controller) onPeriodTask() {
 		_ = c.messageCenter.SendCommand(req)
 	}
 
+	if !c.initialized.Load() {
+		return
+	}
+
 	c.drainController.AdvanceLiveness(func(id node.ID) bool {
 		return len(c.changefeedDB.GetByNodeID(id)) == 0 && !c.operatorController.HasOperatorInvolvingNode(id)
 	})
