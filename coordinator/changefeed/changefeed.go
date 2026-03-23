@@ -104,11 +104,6 @@ func (c *Changefeed) GetInfo() *config.ChangeFeedInfo {
 
 func (c *Changefeed) SetInfo(info *config.ChangeFeedInfo) {
 	c.info.Store(info)
-	bytes, err := json.Marshal(info)
-	if err != nil {
-		log.Panic("unable to marshal changefeed config", zap.Error(err))
-	}
-	c.configBytes = bytes
 }
 
 func (c *Changefeed) StartFinished() {

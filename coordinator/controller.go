@@ -88,13 +88,6 @@ type Controller struct {
 	apiLock            sync.RWMutex
 }
 
-func (c *Controller) currentPDTs() uint64 {
-	if c.pdClock == nil {
-		return oracle.GoTimeToTS(time.Now())
-	}
-	return oracle.GoTimeToTS(c.pdClock.CurrentTime())
-}
-
 type changefeedChange struct {
 	changefeedID common.ChangeFeedID
 	changefeed   *changefeed.Changefeed

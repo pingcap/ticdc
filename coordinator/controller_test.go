@@ -329,9 +329,6 @@ func TestListChangefeed(t *testing.T) {
 	self := node.NewInfo("localhost:8300", "")
 	nodeManager := watcher.NewNodeManager(nil, nil)
 	nodeManager.GetAliveNodes()[self.ID] = self
-	mc := messaging.NewMockMessageCenter()
-	appcontext.SetService(appcontext.MessageCenter, mc)
-	appcontext.SetService(watcher.NodeManagerName, nodeManager)
 	controller := &Controller{
 		backend:      backend,
 		changefeedDB: changefeedDB,
@@ -379,9 +376,6 @@ func TestCreateChangefeed(t *testing.T) {
 	self := node.NewInfo("localhost:8300", "")
 	nodeManager := watcher.NewNodeManager(nil, nil)
 	nodeManager.GetAliveNodes()[self.ID] = self
-	mc := messaging.NewMockMessageCenter()
-	appcontext.SetService(appcontext.MessageCenter, mc)
-	appcontext.SetService(watcher.NodeManagerName, nodeManager)
 	controller := &Controller{
 		backend:      backend,
 		changefeedDB: changefeedDB,
@@ -403,11 +397,6 @@ func TestCreateChangefeed(t *testing.T) {
 	backend.EXPECT().CreateChangefeed(gomock.Any(), gomock.Any()).Return(errors.New("failed")).Times(1)
 	require.NotNil(t, controller.CreateChangefeed(context.Background(), cfConfig))
 	require.Equal(t, 0, changefeedDB.GetSize())
-
-	backend.EXPECT().CreateChangefeed(gomock.Any(), gomock.Any()).
-		DoAndReturn(func(_ context.Context, info *config.ChangeFeedInfo) error {
-			return nil
-		}).Times(1)
 	require.Nil(t, controller.CreateChangefeed(context.Background(), cfConfig))
 
 	// add it again
