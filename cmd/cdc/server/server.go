@@ -158,7 +158,7 @@ func (o *options) run(cmd *cobra.Command) error {
 	ticker := time.NewTicker(server.GracefulShutdownTimeout)
 	defer ticker.Stop()
 	go func() {
-		svr.Close(context.Background())
+		svr.Close()
 		close(ch)
 	}()
 	select {
