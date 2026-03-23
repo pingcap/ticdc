@@ -507,6 +507,8 @@ func TestHandleSignalEvent(t *testing.T) {
 		initialState           func(*dispatcherStat)
 		expectedEventServiceID node.ID
 		expectedReadyReceived  bool
+		expectedResetTarget    node.ID
+		expectedResetEpoch     uint64
 		expectedPanic          bool
 	}{
 		{
@@ -522,6 +524,24 @@ func TestHandleSignalEvent(t *testing.T) {
 			},
 			expectedEventServiceID: localServerID,
 			expectedReadyReceived:  false,
+		},
+		{
+			name: "resend pending reset when local ready repeats before handshake",
+			event: dispatcher.DispatcherEvent{
+				From: &localServerID,
+				Event: &mockEvent{
+					eventType: commonEvent.TypeReadyEvent,
+				},
+			},
+			initialState: func(stat *dispatcherStat) {
+				stat.connState.setEventServiceID(localServerID)
+				stat.connState.readyEventReceived.Store(true)
+				stat.epoch.Store(1)
+			},
+			expectedEventServiceID: localServerID,
+			expectedReadyReceived:  true,
+			expectedResetTarget:    localServerID,
+			expectedResetEpoch:     1,
 		},
 		{
 			name: "ignore signal event from unknown server",
@@ -564,6 +584,8 @@ func TestHandleSignalEvent(t *testing.T) {
 			},
 			expectedEventServiceID: localServerID,
 			expectedReadyReceived:  true,
+			expectedResetTarget:    localServerID,
+			expectedResetEpoch:     1,
 		},
 		{
 			name: "handle ready event from remote server",
@@ -578,9 +600,11 @@ func TestHandleSignalEvent(t *testing.T) {
 			},
 			expectedEventServiceID: remoteServerID,
 			expectedReadyReceived:  true,
+			expectedResetTarget:    remoteServerID,
+			expectedResetEpoch:     1,
 		},
 		{
-			name: "ignore duplicate ready event from remote server",
+			name: "resend pending reset on duplicate ready event from remote server",
 			event: dispatcher.DispatcherEvent{
 				From: &remoteServerID,
 				Event: &mockEvent{
@@ -590,9 +614,12 @@ func TestHandleSignalEvent(t *testing.T) {
 			initialState: func(stat *dispatcherStat) {
 				stat.connState.setEventServiceID(remoteServerID)
 				stat.connState.readyEventReceived.Store(true)
+				stat.epoch.Store(1)
 			},
 			expectedEventServiceID: remoteServerID,
 			expectedReadyReceived:  true,
+			expectedResetTarget:    remoteServerID,
+			expectedResetEpoch:     1,
 		},
 		{
 			name: "handle not reusable event from remote server",
@@ -657,6 +684,33 @@ func TestHandleSignalEvent(t *testing.T) {
 			stat.handleSignalEvent(tt.event)
 			require.Equal(t, tt.expectedEventServiceID, stat.connState.getEventServiceID())
 			require.Equal(t, tt.expectedReadyReceived, stat.connState.readyEventReceived.Load())
+
+			if tt.expectedResetEpoch == 0 {
+				select {
+				case <-stat.eventCollector.dispatcherMessageChan.Out():
+					require.Fail(t, "unexpected dispatcher request queued")
+				default:
+				}
+				return
+			}
+
+			timeout := time.After(100 * time.Millisecond)
+			for {
+				select {
+				case msg := <-stat.eventCollector.dispatcherMessageChan.Out():
+					require.Len(t, msg.Message.Message, 1)
+					req, ok := msg.Message.Message[0].(*messaging.DispatcherRequest)
+					require.True(t, ok)
+					if req.GetActionType() != eventpb.ActionType_ACTION_TYPE_RESET {
+						continue
+					}
+					require.Equal(t, tt.expectedResetTarget, msg.Message.To)
+					require.Equal(t, tt.expectedResetEpoch, req.GetEpoch())
+					return
+				case <-timeout:
+					require.Fail(t, "expected reset dispatcher request was not queued")
+				}
+			}
 		})
 	}
 }

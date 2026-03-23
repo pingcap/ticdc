@@ -41,38 +41,63 @@ const (
 	commonMsgRetryQuota = 3 // The number of retries for most droppable dispatcher requests.
 )
 
+type dispatcherMessageRetryMode uint8
+
+const (
+	dispatcherMessageRetryUntilSuccess dispatcherMessageRetryMode = iota
+	dispatcherMessageRetryWithQuota
+)
+
 // DispatcherMessage is the message send to EventService.
 type DispatcherMessage struct {
 	Message *messaging.TargetMessage
-	// Droppable indicates whether the message can be dropped after repeated delivery failures.
-	//
-	// This is based on the assumption that:
-	// - Most dispatcher requests target local event services (safe to retry indefinitely)
-	// - Remote requests can be dropped (system can progress without them, may cause temporary delays)
-	//
-	// Why not retry all messages indefinitely?
-	// Permanently unavailable remote targets would cause messages
-	// to accumulate in the queue permanently.
-	//
-	// TODO: Implement application-level retry logic for better architectural flexibility.
-	Droppable  bool
-	RetryQuota int
+	// retryMode controls whether a failed send should be retried forever or with a fixed quota.
+	// Dispatcher control-plane requests must be retried until success. Otherwise the data plane
+	// may wait for a state transition that never happens.
+	retryMode dispatcherMessageRetryMode
+	// remainingRetries is only used when retryMode is dispatcherMessageRetryWithQuota.
+	remainingRetries int
 }
 
-func newDispatcherMessage(msg *messaging.TargetMessage, droppable bool, retryQuota int) DispatcherMessage {
-	return DispatcherMessage{
-		Message:    msg,
-		Droppable:  droppable,
-		RetryQuota: retryQuota,
+func newDispatcherMessage(localServerID node.ID, msg *messaging.TargetMessage) DispatcherMessage {
+	dispatcherMsg := DispatcherMessage{
+		Message:   msg,
+		retryMode: dispatcherMessageRetryUntilSuccess,
 	}
+
+	// Heartbeats are periodic snapshots. Dropping one is acceptable because a newer one
+	// will be sent soon and it supersedes older progress.
+	if isRepeatedMsgType(msg) {
+		dispatcherMsg.retryMode = dispatcherMessageRetryWithQuota
+		dispatcherMsg.remainingRetries = 1
+		return dispatcherMsg
+	}
+
+	// Requests to the local event service are part of the authoritative data path and must
+	// eventually succeed. Requests to remote event services are only an opportunistic reuse
+	// path and can be dropped after bounded retries.
+	if msg.Type == messaging.TypeDispatcherRequest {
+		if msg.To != localServerID {
+			dispatcherMsg.retryMode = dispatcherMessageRetryWithQuota
+			dispatcherMsg.remainingRetries = commonMsgRetryQuota
+		}
+		return dispatcherMsg
+	}
+
+	// Keep legacy bounded retries for other best-effort messages.
+	if msg.To != localServerID {
+		dispatcherMsg.retryMode = dispatcherMessageRetryWithQuota
+		dispatcherMsg.remainingRetries = commonMsgRetryQuota
+	}
+	return dispatcherMsg
 }
 
-func (d *DispatcherMessage) decrAndCheckRetry() bool {
-	if !d.Droppable {
+func (d *DispatcherMessage) shouldRetry() bool {
+	if d.retryMode == dispatcherMessageRetryUntilSuccess {
 		return true
 	}
-	d.RetryQuota--
-	return d.RetryQuota > 0
+	d.remainingRetries--
+	return d.remainingRetries > 0
 }
 
 type changefeedStat struct {
@@ -352,15 +377,7 @@ func isRepeatedMsgType(msg *messaging.TargetMessage) bool {
 // Messages may be dropped if errors occur. For reliable delivery, implement retry/ack logic at caller side
 func (c *EventCollector) enqueueMessageForSend(msg *messaging.TargetMessage) {
 	if msg != nil {
-		if isRepeatedMsgType(msg) {
-			c.dispatcherMessageChan.In() <- newDispatcherMessage(msg, true, 1)
-		} else {
-			if msg.To == c.serverId {
-				c.dispatcherMessageChan.In() <- newDispatcherMessage(msg, false, 0)
-			} else {
-				c.dispatcherMessageChan.In() <- newDispatcherMessage(msg, true, commonMsgRetryQuota)
-			}
-		}
+		c.dispatcherMessageChan.In() <- newDispatcherMessage(c.serverId, msg)
 	}
 }
 
@@ -457,7 +474,7 @@ func (c *EventCollector) sendDispatcherRequests(ctx context.Context) error {
 					zap.String("message", req.Message.String()),
 					zap.Duration("sleepInterval", sleepInterval),
 					zap.Error(err))
-				if !req.decrAndCheckRetry() {
+				if !req.shouldRetry() {
 					log.Warn("dispatcher request retry limit exceeded, dropping request",
 						zap.String("message", req.Message.String()))
 					continue

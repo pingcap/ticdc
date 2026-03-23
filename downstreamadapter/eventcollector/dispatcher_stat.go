@@ -177,6 +177,10 @@ func (d *dispatcherStat) commitReady(serverID node.ID) {
 // reset is used to reset the dispatcher to the specified commitTs,
 // it will remove the dispatcher from the dynamic stream and add it back.
 func (d *dispatcherStat) reset(serverID node.ID) {
+	if d.hasPendingReset() {
+		d.resendPendingReset(serverID)
+		return
+	}
 	d.doReset(serverID, d.getResetTs())
 }
 
@@ -188,6 +192,24 @@ func (d *dispatcherStat) doReset(serverID node.ID, resetTs uint64) {
 	msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, resetRequest)
 	d.eventCollector.enqueueMessageForSend(msg)
 	log.Info("send reset dispatcher request to event service",
+		zap.Stringer("changefeedID", d.target.GetChangefeedID()),
+		zap.Stringer("dispatcher", d.getDispatcherID()),
+		zap.Stringer("eventServiceID", serverID),
+		zap.Uint64("epoch", epoch),
+		zap.Uint64("resetTs", resetTs))
+}
+
+func (d *dispatcherStat) hasPendingReset() bool {
+	return d.readyCallback == nil && d.epoch.Load() > 0 && d.lastEventSeq.Load() == 0
+}
+
+func (d *dispatcherStat) resendPendingReset(serverID node.ID) {
+	epoch := d.epoch.Load()
+	resetTs := d.getResetTs()
+	resetRequest := d.newDispatcherResetRequest(d.eventCollector.getLocalServerID().String(), resetTs, epoch)
+	msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, resetRequest)
+	d.eventCollector.enqueueMessageForSend(msg)
+	log.Info("resend reset dispatcher request to event service",
 		zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 		zap.Stringer("dispatcher", d.getDispatcherID()),
 		zap.Stringer("eventServiceID", serverID),
@@ -522,6 +544,8 @@ func (d *dispatcherStat) handleSignalEvent(event dispatcher.DispatcherEvent) {
 			// service, it implies a stale registration. Send a remove request to clean it up.
 			if event.From != nil && *event.From != localServerID {
 				d.removeFrom(*event.From)
+			} else if d.hasPendingReset() {
+				d.resendPendingReset(localServerID)
 			}
 			return
 		}
@@ -556,12 +580,15 @@ func (d *dispatcherStat) handleSignalEvent(event dispatcher.DispatcherEvent) {
 			d.commitReady(localServerID)
 		} else {
 			// note: this ready event must be from a remote event service which the dispatcher is trying to register to.
-			// TODO: if receive too much redudant ready events from remote service, we may need reset again?
 			if d.connState.readyEventReceived.Load() {
-				log.Info("received ready signal from the same server again, ignore it",
-					zap.Stringer("changefeedID", d.target.GetChangefeedID()),
-					zap.Stringer("dispatcher", d.getDispatcherID()),
-					zap.Stringer("eventServiceID", *event.From))
+				if d.hasPendingReset() {
+					d.resendPendingReset(*event.From)
+				} else {
+					log.Info("received ready signal from the same server again, ignore it",
+						zap.Stringer("changefeedID", d.target.GetChangefeedID()),
+						zap.Stringer("dispatcher", d.getDispatcherID()),
+						zap.Stringer("eventServiceID", *event.From))
+				}
 				return
 			}
 			log.Info("received ready signal from remote event service, prepare to reset the dispatcher",

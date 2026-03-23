@@ -1152,13 +1152,13 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 			zap.Uint64("startTs", dispatcherInfo.GetStartTs()))
 		return nil
 	}
-	metrics.EventServiceResetDispatcherCount.Inc()
 
 	oldStat := statPtr.Load()
 	// stale reset request, ignore it.
 	if oldStat.epoch >= dispatcherInfo.GetEpoch() {
 		return nil
 	}
+	metrics.EventServiceResetDispatcherCount.Inc()
 
 	// Mark the old dispatcher as removed.
 	// No need to worry that the old dispatcher is still scanning,
