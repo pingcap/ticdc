@@ -17,7 +17,7 @@ import (
 	"testing"
 
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
-	pmodel "github.com/pingcap/tidb/pkg/parser/ast"
+	parser_model "github.com/pingcap/tidb/pkg/parser/model"
 	"github.com/stretchr/testify/require"
 )
 
@@ -34,18 +34,18 @@ func TestGeneratedColumnsNameSet(t *testing.T) {
 
 	cols := []*timodel.ColumnInfo{
 		{
-			Name:                pmodel.CIStr{O: "A", L: "a"},
+			Name:                parser_model.CIStr{O: "A", L: "a"},
 			GeneratedExprString: "generated_expr",
 		},
 		{
-			Name: pmodel.CIStr{O: "B", L: "b"},
+			Name: parser_model.CIStr{O: "B", L: "b"},
 		},
 		{
-			Name:                pmodel.CIStr{O: "C", L: "c"},
+			Name:                parser_model.CIStr{O: "C", L: "c"},
 			GeneratedExprString: "generated_expr",
 		},
 		{
-			Name:                pmodel.CIStr{O: "D", L: "d"},
+			Name:                parser_model.CIStr{O: "D", L: "d"},
 			GeneratedExprString: "generated_expr",
 		},
 	}
