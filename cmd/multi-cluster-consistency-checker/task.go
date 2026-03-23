@@ -123,13 +123,14 @@ func initClients(ctx context.Context, cfg *config.Config) (
 		}
 		checkpointWatchers[clusterID] = clusterCheckpointWatchers
 
-		// Validate s3 changefeed sink config from etcd
-		if err := validateS3ChangefeedSinkConfig(ctx, etcdClient, clusterID, clusterConfig.S3ChangefeedID, clusterConfig.S3SinkURI); err != nil {
+		// When s3-sink-uri is set, validate it matches etcd; when empty, use SinkURI from changefeed info in etcd.
+		effectiveS3SinkURI, err := validateS3ChangefeedSinkConfig(ctx, etcdClient, clusterID, clusterConfig.S3ChangefeedID, clusterConfig.S3SinkURI)
+		if err != nil {
 			cleanupClients(pdClients, etcdClients, checkpointWatchers, s3Watchers)
 			return nil, nil, nil, nil, errors.Trace(err)
 		}
 
-		s3Storage, err := util.GetExternalStorageWithDefaultTimeout(ctx, clusterConfig.S3SinkURI)
+		s3Storage, err := util.GetExternalStorageWithDefaultTimeout(ctx, effectiveS3SinkURI)
 		if err != nil {
 			// Clean up already created clients before returning error
 			cleanupClients(pdClients, etcdClients, checkpointWatchers, s3Watchers)
@@ -148,25 +149,25 @@ func initClients(ctx context.Context, cfg *config.Config) (
 }
 
 // validateS3ChangefeedSinkConfig fetches the changefeed info from etcd and validates that:
-// 1. The changefeed SinkURI bucket/prefix matches the configured s3SinkURI
+// 1. If s3SinkURI is non-empty: the changefeed SinkURI bucket/prefix matches the configured s3SinkURI
 // 2. The protocol must be canal-json
 // 3. The date separator must be "day"
 // 4. The file index width must be DefaultFileIndexWidth
-func validateS3ChangefeedSinkConfig(ctx context.Context, etcdClient *etcd.CDCEtcdClientImpl, clusterID string, s3ChangefeedID string, s3SinkURI string) error {
+//
+// It returns the changefeed's SinkURI from etcd (used for storage when s3SinkURI was empty).
+func validateS3ChangefeedSinkConfig(ctx context.Context, etcdClient *etcd.CDCEtcdClientImpl, clusterID string, s3ChangefeedID string, s3SinkURI string) (string, error) {
 	displayName := common.NewChangeFeedDisplayName(s3ChangefeedID, "default")
 	cfInfo, err := etcdClient.GetChangeFeedInfo(ctx, displayName)
 	if err != nil {
-		return errors.Annotate(err, fmt.Sprintf("failed to get changefeed info for s3 changefeed %s in cluster %s", s3ChangefeedID, clusterID))
+		return "", errors.Annotate(err, fmt.Sprintf("failed to get changefeed info for s3 changefeed %s in cluster %s", s3ChangefeedID, clusterID))
 	}
-
-	// 1. Validate that the changefeed's SinkURI bucket/prefix matches the configured s3SinkURI.
-	// This prevents the checker from reading data that was written by a different changefeed.
-	if err := validateS3BucketPrefix(cfInfo.SinkURI, s3SinkURI, clusterID, s3ChangefeedID); err != nil {
-		return err
+	effectiveS3SinkURI, err := resolveEffectiveS3SinkURI(cfInfo.SinkURI, s3SinkURI, clusterID, s3ChangefeedID)
+	if err != nil {
+		return "", err
 	}
 
 	if cfInfo.Config == nil || cfInfo.Config.Sink == nil {
-		return fmt.Errorf("cluster %s: s3 changefeed %s has no sink configuration", clusterID, s3ChangefeedID)
+		return "", fmt.Errorf("cluster %s: s3 changefeed %s has no sink configuration", clusterID, s3ChangefeedID)
 	}
 
 	sinkConfig := cfInfo.Config.Sink
@@ -174,14 +175,14 @@ func validateS3ChangefeedSinkConfig(ctx context.Context, etcdClient *etcd.CDCEtc
 	// 2. Validate protocol must be canal-json
 	protocolStr := strings.ToLower(util.GetOrZero(sinkConfig.Protocol))
 	if protocolStr == "" {
-		return fmt.Errorf("cluster %s: s3 changefeed %s has no protocol configured in sink config", clusterID, s3ChangefeedID)
+		return "", fmt.Errorf("cluster %s: s3 changefeed %s has no protocol configured in sink config", clusterID, s3ChangefeedID)
 	}
 	protocol, err := cdcconfig.ParseSinkProtocolFromString(protocolStr)
 	if err != nil {
-		return errors.Annotate(err, fmt.Sprintf("cluster %s: s3 changefeed %s has invalid protocol", clusterID, s3ChangefeedID))
+		return "", errors.Annotate(err, fmt.Sprintf("cluster %s: s3 changefeed %s has invalid protocol", clusterID, s3ChangefeedID))
 	}
 	if protocol != cdcconfig.ProtocolCanalJSON {
-		return fmt.Errorf("cluster %s: s3 changefeed %s protocol is %q, but only %q is supported",
+		return "", fmt.Errorf("cluster %s: s3 changefeed %s protocol is %q, but only %q is supported",
 			clusterID, s3ChangefeedID, protocolStr, cdcconfig.ProtocolCanalJSON.String())
 	}
 
@@ -192,17 +193,17 @@ func validateS3ChangefeedSinkConfig(ctx context.Context, etcdClient *etcd.CDCEtc
 	}
 	var dateSep cdcconfig.DateSeparator
 	if err := dateSep.FromString(dateSeparatorStr); err != nil {
-		return errors.Annotate(err, fmt.Sprintf("cluster %s: s3 changefeed %s has invalid date-separator %q", clusterID, s3ChangefeedID, dateSeparatorStr))
+		return "", errors.Annotate(err, fmt.Sprintf("cluster %s: s3 changefeed %s has invalid date-separator %q", clusterID, s3ChangefeedID, dateSeparatorStr))
 	}
 	if dateSep != cdcconfig.DateSeparatorDay {
-		return fmt.Errorf("cluster %s: s3 changefeed %s date-separator is %q, but only %q is supported",
+		return "", fmt.Errorf("cluster %s: s3 changefeed %s date-separator is %q, but only %q is supported",
 			clusterID, s3ChangefeedID, dateSep.String(), cdcconfig.DateSeparatorDay.String())
 	}
 
 	// 4. Validate file index width must be DefaultFileIndexWidth
 	fileIndexWidth := util.GetOrZero(sinkConfig.FileIndexWidth)
 	if fileIndexWidth != cdcconfig.DefaultFileIndexWidth {
-		return fmt.Errorf("cluster %s: s3 changefeed %s file-index-width is %d, but only %d is supported",
+		return "", fmt.Errorf("cluster %s: s3 changefeed %s file-index-width is %d, but only %d is supported",
 			clusterID, s3ChangefeedID, fileIndexWidth, cdcconfig.DefaultFileIndexWidth)
 	}
 
@@ -214,7 +215,23 @@ func validateS3ChangefeedSinkConfig(ctx context.Context, etcdClient *etcd.CDCEtc
 		zap.Int("fileIndexWidth", fileIndexWidth),
 	)
 
-	return nil
+	return effectiveS3SinkURI, nil
+}
+
+// resolveEffectiveS3SinkURI returns the sink URI that should be used for reading data.
+// If configuredS3SinkURI is empty, it falls back to the sink URI from changefeed info in etcd.
+// If configuredS3SinkURI is non-empty, it validates bucket/prefix consistency and returns the configured value.
+func resolveEffectiveS3SinkURI(changefeedSinkURI, configuredS3SinkURI, clusterID, s3ChangefeedID string) (string, error) {
+	if strings.TrimSpace(changefeedSinkURI) == "" {
+		return "", fmt.Errorf("cluster %s: s3 changefeed %s has empty sink URI in etcd", clusterID, s3ChangefeedID)
+	}
+	if strings.TrimSpace(configuredS3SinkURI) == "" {
+		return changefeedSinkURI, nil
+	}
+	if err := validateS3BucketPrefix(changefeedSinkURI, configuredS3SinkURI, clusterID, s3ChangefeedID); err != nil {
+		return "", err
+	}
+	return configuredS3SinkURI, nil
 }
 
 // validateS3BucketPrefix checks that the changefeed's SinkURI and the

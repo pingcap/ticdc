@@ -50,7 +50,7 @@ type ClusterConfig struct {
 	// PDAddrs is the addresses of the PD (Placement Driver) servers
 	PDAddrs []string `toml:"pd-addrs" json:"pd-addrs"`
 
-	// S3SinkURI is the S3 sink URI for this cluster
+	// S3SinkURI is the S3 sink URI for this cluster. If empty, it is read from the changefeed info in PD etcd.
 	S3SinkURI string `toml:"s3-sink-uri" json:"s3-sink-uri"`
 
 	// S3ChangefeedID is the changefeed ID for the S3 changefeed
@@ -110,9 +110,6 @@ func LoadConfig(path string) (*Config, error) {
 	for name, cluster := range cfg.Clusters {
 		if len(cluster.PDAddrs) == 0 {
 			return nil, fmt.Errorf("cluster '%s': pd-addrs is required", name)
-		}
-		if cluster.S3SinkURI == "" {
-			return nil, fmt.Errorf("cluster '%s': s3-sink-uri is required", name)
 		}
 		if cluster.S3ChangefeedID == "" {
 			return nil, fmt.Errorf("cluster '%s': s3-changefeed-id is required", name)

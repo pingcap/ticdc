@@ -123,6 +123,66 @@ func TestValidateS3BucketPrefix(t *testing.T) {
 	}
 }
 
+func TestResolveEffectiveS3SinkURI(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		changefeedURI string
+		configURI     string
+		wantURI       string
+		wantErr       bool
+		errContains   string
+	}{
+		{
+			name:          "fallback to changefeed sink when config is empty",
+			changefeedURI: "s3://bucket/cf/",
+			configURI:     "",
+			wantURI:       "s3://bucket/cf/",
+		},
+		{
+			name:          "fallback when config is whitespace only",
+			changefeedURI: "s3://bucket/cf/",
+			configURI:     "   ",
+			wantURI:       "s3://bucket/cf/",
+		},
+		{
+			name:          "use configured sink when non-empty and matches",
+			changefeedURI: "s3://bucket/cf/?protocol=canal-json&date-separator=day",
+			configURI:     "s3://bucket/cf/",
+			wantURI:       "s3://bucket/cf/",
+		},
+		{
+			name:          "error when changefeed sink empty",
+			changefeedURI: "",
+			configURI:     "",
+			wantErr:       true,
+			errContains:   "empty sink URI in etcd",
+		},
+		{
+			name:          "error when configured sink mismatches",
+			changefeedURI: "s3://bucket-a/cf/",
+			configURI:     "s3://bucket-b/cf/",
+			wantErr:       true,
+			errContains:   "bucket/prefix mismatch",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			uri, err := resolveEffectiveS3SinkURI(tt.changefeedURI, tt.configURI, "test-cluster", "cf-1")
+			if tt.wantErr {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), tt.errContains)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tt.wantURI, uri)
+		})
+	}
+}
+
 func TestExitCodeFromError(t *testing.T) {
 	t.Parallel()
 
