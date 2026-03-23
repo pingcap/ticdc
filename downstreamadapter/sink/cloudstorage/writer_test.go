@@ -27,7 +27,6 @@ import (
 	"time"
 
 	"github.com/pingcap/ticdc/downstreamadapter/sink/cloudstorage/spool"
-	sinkmetrics "github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
 	"github.com/pingcap/ticdc/pkg/clock"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
@@ -44,7 +43,6 @@ import (
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/parser/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
-	promtestutil "github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -608,13 +606,6 @@ func TestWriterIndexWriteErrorMetricAndCleanup(t *testing.T) {
 	require.NoError(t, d.enqueueTask(ctx, task))
 	require.NoError(t, d.enqueueTask(ctx, newFlushTask(dispatcherID, 100)))
 
-	indexWriteMetric := sinkmetrics.CloudStorageWriterErrorCounter.WithLabelValues(
-		changefeedID.Keyspace(),
-		changefeedID.ID().String(),
-		"1",
-		"index_write",
-	)
-
 	done := make(chan error, 1)
 	go func() {
 		done <- d.run(ctx)
@@ -622,11 +613,4 @@ func TestWriterIndexWriteErrorMetricAndCleanup(t *testing.T) {
 
 	err = <-done
 	require.ErrorContains(t, err, "index write failed")
-	require.Equal(t, float64(1), promtestutil.ToFloat64(indexWriteMetric))
-	require.False(t, sinkmetrics.CloudStorageWriterErrorCounter.DeleteLabelValues(
-		changefeedID.Keyspace(),
-		changefeedID.ID().String(),
-		"1",
-		"index_write",
-	))
 }

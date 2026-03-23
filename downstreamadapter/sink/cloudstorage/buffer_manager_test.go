@@ -19,12 +19,10 @@ import (
 	"time"
 
 	"github.com/pingcap/ticdc/downstreamadapter/sink/cloudstorage/spool"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
-	promtestutil "github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -68,16 +66,12 @@ func TestBufferManagerFlushesPendingBatchBeforeWaitingForDiskQuota(t *testing.T)
 	case flushed := <-flushCh:
 		require.Nil(t, flushed.marker)
 		require.Len(t, flushed.batch.batch, 1)
-		require.Equal(t, float64(1), promtestutil.ToFloat64(metrics.CloudStorageFlushCountCounter.WithLabelValues(changefeedID.Keyspace(), changefeedID.ID().String(), "1", flushReasonQuota)))
-		require.Equal(t, float64(0), promtestutil.ToFloat64(metrics.CloudStoragePendingEntriesGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.ID().String(), "1")))
 	case <-time.After(3 * time.Second):
 		t.Fatal("buffer controller did not flush pending batch before waiting for disk quota")
 	}
 
 	cancel()
 	require.ErrorIs(t, <-done, context.Canceled)
-	require.False(t, metrics.CloudStoragePendingEntriesGauge.DeleteLabelValues(changefeedID.Keyspace(), changefeedID.ID().String(), "1"))
-	require.False(t, metrics.CloudStorageFlushCountCounter.DeleteLabelValues(changefeedID.Keyspace(), changefeedID.ID().String(), "1", flushReasonQuota))
 }
 
 func TestBufferManagerOversizedBatchFlushesImmediatelyFromMemory(t *testing.T) {
@@ -121,15 +115,12 @@ func TestBufferManagerOversizedBatchFlushesImmediatelyFromMemory(t *testing.T) {
 			require.True(t, tableTask.entries[0].InMemory())
 			require.False(t, tableTask.entries[0].IsSpilled())
 		}
-		require.Equal(t, float64(1), promtestutil.ToFloat64(metrics.CloudStorageFlushCountCounter.WithLabelValues(changefeedID.Keyspace(), changefeedID.ID().String(), "1", flushReasonOversize)))
 	case <-time.After(3 * time.Second):
 		t.Fatal("buffer controller did not flush oversized batch immediately")
 	}
 
 	cancel()
 	require.ErrorIs(t, <-done, context.Canceled)
-	require.False(t, metrics.CloudStoragePendingEntriesGauge.DeleteLabelValues(changefeedID.Keyspace(), changefeedID.ID().String(), "1"))
-	require.False(t, metrics.CloudStorageFlushCountCounter.DeleteLabelValues(changefeedID.Keyspace(), changefeedID.ID().String(), "1", flushReasonOversize))
 }
 
 func newBufferedTask(table string, dispatcherID commonType.DispatcherID, payload string) *task {

@@ -86,13 +86,6 @@ var (
 		Help:      "Current disk bytes used by cloud storage spool",
 	}, []string{"namespace", "changefeed"})
 
-	CloudStorageSpoolTotalBytesGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Namespace: namespace,
-		Subsystem: subsystem,
-		Name:      "cloud_storage_spool_total_bytes",
-		Help:      "Current total bytes used by cloud storage spool",
-	}, []string{"namespace", "changefeed"})
-
 	CloudStoragePendingPostEnqueueCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: namespace,
 		Subsystem: subsystem,
@@ -114,32 +107,20 @@ var (
 		Help:      "Whether cloud storage spool is currently pausing PostEnqueue callbacks",
 	}, []string{"namespace", "changefeed"})
 
-	CloudStorageSpillCountCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
+	CloudStorageSpillBytesHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: namespace,
 		Subsystem: subsystem,
-		Name:      "cloud_storage_spill_total",
-		Help:      "Total number of encoded batches spilled into cloud storage spool files",
+		Name:      "cloud_storage_spill_bytes",
+		Help:      "Byte distribution of encoded batches spilled into cloud storage spool files",
+		Buckets:   prometheus.ExponentialBuckets(1024, 2.0, 20),
 	}, []string{"namespace", "changefeed"})
 
-	CloudStorageSpillBytesCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
+	CloudStorageLoadBytesHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: namespace,
 		Subsystem: subsystem,
-		Name:      "cloud_storage_spill_bytes_total",
-		Help:      "Total bytes spilled into cloud storage spool files",
-	}, []string{"namespace", "changefeed"})
-
-	CloudStorageLoadCountCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace: namespace,
-		Subsystem: subsystem,
-		Name:      "cloud_storage_load_total",
-		Help:      "Total number of encoded batches loaded from cloud storage spool",
-	}, []string{"namespace", "changefeed"})
-
-	CloudStorageLoadBytesCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace: namespace,
-		Subsystem: subsystem,
-		Name:      "cloud_storage_load_bytes_total",
-		Help:      "Total bytes loaded from cloud storage spool",
+		Name:      "cloud_storage_load_bytes",
+		Help:      "Byte distribution of encoded batches loaded from cloud storage spool",
+		Buckets:   prometheus.ExponentialBuckets(1024, 2.0, 20),
 	}, []string{"namespace", "changefeed"})
 
 	CloudStorageRotateCountCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -149,17 +130,17 @@ var (
 		Help:      "Total number of local spool segment rotations in cloud storage sink",
 	}, []string{"namespace", "changefeed"})
 
-	CloudStorageSpoolSegmentGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+	CloudStorageSpoolSegmentCountGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: namespace,
 		Subsystem: subsystem,
-		Name:      "cloud_storage_spool_segments",
+		Name:      "cloud_storage_spool_segment_count",
 		Help:      "Current number of live cloud storage spool segments",
 	}, []string{"namespace", "changefeed"})
 
-	CloudStorageSpoolErrorCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
+	CloudStorageSpoolStageErrorCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: namespace,
 		Subsystem: subsystem,
-		Name:      "cloud_storage_spool_error_total",
+		Name:      "cloud_storage_spool_stage_error_total",
 		Help:      "Total number of cloud storage spool errors by stage",
 	}, []string{"namespace", "changefeed", "stage"})
 
@@ -209,17 +190,14 @@ func InitCloudStorageMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(CloudStorageWorkerBusyRatio)
 	registry.MustRegister(CloudStorageSpoolMemoryBytesGauge)
 	registry.MustRegister(CloudStorageSpoolDiskBytesGauge)
-	registry.MustRegister(CloudStorageSpoolTotalBytesGauge)
 	registry.MustRegister(CloudStoragePendingPostEnqueueCounter)
 	registry.MustRegister(CloudStoragePendingPostEnqueueGauge)
 	registry.MustRegister(CloudStoragePostEnqueuePausedGauge)
-	registry.MustRegister(CloudStorageSpillCountCounter)
-	registry.MustRegister(CloudStorageSpillBytesCounter)
-	registry.MustRegister(CloudStorageLoadCountCounter)
-	registry.MustRegister(CloudStorageLoadBytesCounter)
+	registry.MustRegister(CloudStorageSpillBytesHistogram)
+	registry.MustRegister(CloudStorageLoadBytesHistogram)
 	registry.MustRegister(CloudStorageRotateCountCounter)
-	registry.MustRegister(CloudStorageSpoolSegmentGauge)
-	registry.MustRegister(CloudStorageSpoolErrorCounter)
+	registry.MustRegister(CloudStorageSpoolSegmentCountGauge)
+	registry.MustRegister(CloudStorageSpoolStageErrorCounter)
 	registry.MustRegister(CloudStoragePendingTablesGauge)
 	registry.MustRegister(CloudStoragePendingEntriesGauge)
 	registry.MustRegister(CloudStoragePendingBytesGauge)

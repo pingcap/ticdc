@@ -25,35 +25,25 @@ import (
 // budget only answers "how many bytes are staged" and "which watermark
 // state are we in"; this adapter decides how spool reacts to that state.
 type quotaController struct {
-	// budget owns threshold math and byte accounting. quotaAdapter builds
-	// spool-specific behavior on top of it.
+	// budget owns threshold math and byte accounting.
 	budget *budget
 
-	// postEnqueuePaused becomes true after local buffered bytes cross
-	// the high watermark. While it is true, new PostEnqueue callbacks are kept
-	// in memory instead of being executed immediately.
+	// postEnqueuePaused is true will hold PostEnqueue callbacks in memory
 	postEnqueuePaused bool
-	// pendingPostEnqueue stores the PostEnqueue callbacks that were
-	// held back while local buffered bytes stayed above the high watermark.
-	// They are run together after usage drops to the low watermark or below.
+	// pendingPostEnqueue stores the held PostEnqueue callbacks,
+	// they will be executed after the budget drop below the low watermark.
 	pendingPostEnqueue []func()
 
-	// These metrics expose the current local buffer state so operators can see
-	// where buffered bytes live and how often PostEnqueue callbacks were moved
-	// into the pending queue.
 	metricMemoryBytes        prometheus.Gauge
 	metricDiskBytes          prometheus.Gauge
-	metricTotalBytes         prometheus.Gauge
 	metricPendingPostEnqueue prometheus.Counter
 	metricPendingCallbacks   prometheus.Gauge
 	metricPostEnqueuePaused  prometheus.Gauge
-	metricSpillCount         prometheus.Counter
-	metricSpillBytes         prometheus.Counter
-	metricLoadCount          prometheus.Counter
-	metricLoadBytes          prometheus.Counter
-	metricRotateCount        prometheus.Counter
-	metricSegments           prometheus.Gauge
-	metricStageErrors        *prometheus.CounterVec
+	metricSpilledBytes       prometheus.Observer
+	metricLoadedBytes        prometheus.Observer
+	metricRotatedCount       prometheus.Counter
+	metricSegmentCount       prometheus.Gauge
+	metricStageErrorCount    *prometheus.CounterVec
 
 	keyspace   string
 	changefeed string
@@ -76,17 +66,14 @@ func newQuotaController(
 
 		metricMemoryBytes:        metrics.CloudStorageSpoolMemoryBytesGauge.WithLabelValues(keyspace, changefeed),
 		metricDiskBytes:          metrics.CloudStorageSpoolDiskBytesGauge.WithLabelValues(keyspace, changefeed),
-		metricTotalBytes:         metrics.CloudStorageSpoolTotalBytesGauge.WithLabelValues(keyspace, changefeed),
 		metricPendingPostEnqueue: metrics.CloudStoragePendingPostEnqueueCounter.WithLabelValues(keyspace, changefeed),
 		metricPendingCallbacks:   metrics.CloudStoragePendingPostEnqueueGauge.WithLabelValues(keyspace, changefeed),
 		metricPostEnqueuePaused:  metrics.CloudStoragePostEnqueuePausedGauge.WithLabelValues(keyspace, changefeed),
-		metricSpillCount:         metrics.CloudStorageSpillCountCounter.WithLabelValues(keyspace, changefeed),
-		metricSpillBytes:         metrics.CloudStorageSpillBytesCounter.WithLabelValues(keyspace, changefeed),
-		metricLoadCount:          metrics.CloudStorageLoadCountCounter.WithLabelValues(keyspace, changefeed),
-		metricLoadBytes:          metrics.CloudStorageLoadBytesCounter.WithLabelValues(keyspace, changefeed),
-		metricRotateCount:        metrics.CloudStorageRotateCountCounter.WithLabelValues(keyspace, changefeed),
-		metricSegments:           metrics.CloudStorageSpoolSegmentGauge.WithLabelValues(keyspace, changefeed),
-		metricStageErrors:        metrics.CloudStorageSpoolErrorCounter,
+		metricSpilledBytes:       metrics.CloudStorageSpillBytesHistogram.WithLabelValues(keyspace, changefeed),
+		metricLoadedBytes:        metrics.CloudStorageLoadBytesHistogram.WithLabelValues(keyspace, changefeed),
+		metricRotatedCount:       metrics.CloudStorageRotateCountCounter.WithLabelValues(keyspace, changefeed),
+		metricSegmentCount:       metrics.CloudStorageSpoolSegmentCountGauge.WithLabelValues(keyspace, changefeed),
+		metricStageErrorCount:    metrics.CloudStorageSpoolStageErrorCounter,
 		diskQuotaChanged:         make(chan struct{}),
 	}
 	controller.updateMetrics()
@@ -124,8 +111,7 @@ func (q *quotaController) acquire(
 		q.postEnqueuePaused = true
 	}
 	if spilled {
-		q.metricSpillCount.Inc()
-		q.metricSpillBytes.Add(float64(entryBytes))
+		q.metricSpilledBytes.Observe(float64(entryBytes))
 	}
 
 	defer q.updateMetrics()
@@ -176,26 +162,22 @@ func (q *quotaController) reset() {
 func (q *quotaController) deleteMetrics() {
 	metrics.CloudStorageSpoolMemoryBytesGauge.DeleteLabelValues(q.keyspace, q.changefeed)
 	metrics.CloudStorageSpoolDiskBytesGauge.DeleteLabelValues(q.keyspace, q.changefeed)
-	metrics.CloudStorageSpoolTotalBytesGauge.DeleteLabelValues(q.keyspace, q.changefeed)
 	metrics.CloudStoragePendingPostEnqueueCounter.DeleteLabelValues(q.keyspace, q.changefeed)
 	metrics.CloudStoragePendingPostEnqueueGauge.DeleteLabelValues(q.keyspace, q.changefeed)
 	metrics.CloudStoragePostEnqueuePausedGauge.DeleteLabelValues(q.keyspace, q.changefeed)
-	metrics.CloudStorageSpillCountCounter.DeleteLabelValues(q.keyspace, q.changefeed)
-	metrics.CloudStorageSpillBytesCounter.DeleteLabelValues(q.keyspace, q.changefeed)
-	metrics.CloudStorageLoadCountCounter.DeleteLabelValues(q.keyspace, q.changefeed)
-	metrics.CloudStorageLoadBytesCounter.DeleteLabelValues(q.keyspace, q.changefeed)
+	metrics.CloudStorageSpillBytesHistogram.DeleteLabelValues(q.keyspace, q.changefeed)
+	metrics.CloudStorageLoadBytesHistogram.DeleteLabelValues(q.keyspace, q.changefeed)
 	metrics.CloudStorageRotateCountCounter.DeleteLabelValues(q.keyspace, q.changefeed)
-	metrics.CloudStorageSpoolSegmentGauge.DeleteLabelValues(q.keyspace, q.changefeed)
-	metrics.CloudStorageSpoolErrorCounter.DeleteLabelValues(q.keyspace, q.changefeed, spoolErrorStageLoad)
-	metrics.CloudStorageSpoolErrorCounter.DeleteLabelValues(q.keyspace, q.changefeed, spoolErrorStageWrite)
-	metrics.CloudStorageSpoolErrorCounter.DeleteLabelValues(q.keyspace, q.changefeed, spoolErrorStageRotate)
+	metrics.CloudStorageSpoolSegmentCountGauge.DeleteLabelValues(q.keyspace, q.changefeed)
+	metrics.CloudStorageSpoolStageErrorCounter.DeleteLabelValues(q.keyspace, q.changefeed, spoolErrorStageLoad)
+	metrics.CloudStorageSpoolStageErrorCounter.DeleteLabelValues(q.keyspace, q.changefeed, spoolErrorStageWrite)
+	metrics.CloudStorageSpoolStageErrorCounter.DeleteLabelValues(q.keyspace, q.changefeed, spoolErrorStageRotate)
 }
 
 // updateMetrics publishes the adapter's current accounting state.
 func (q *quotaController) updateMetrics() {
 	q.metricMemoryBytes.Set(float64(q.budget.memoryBytes))
 	q.metricDiskBytes.Set(float64(q.budget.diskBytes))
-	q.metricTotalBytes.Set(float64(q.budget.totalBytes()))
 	q.metricPendingCallbacks.Set(float64(len(q.pendingPostEnqueue)))
 	if q.postEnqueuePaused {
 		q.metricPostEnqueuePaused.Set(1)
@@ -212,19 +194,18 @@ func (q *quotaController) notifyDiskQuotaChanged() {
 }
 
 func (q *quotaController) recordLoad(bytes int64) {
-	q.metricLoadCount.Inc()
-	q.metricLoadBytes.Add(float64(bytes))
+	q.metricLoadedBytes.Observe(float64(bytes))
 }
 
 func (q *quotaController) recordRotate(segmentCount int) {
-	q.metricRotateCount.Inc()
-	q.metricSegments.Set(float64(segmentCount))
+	q.metricRotatedCount.Inc()
+	q.metricSegmentCount.Set(float64(segmentCount))
 }
 
 func (q *quotaController) setSegmentCount(segmentCount int) {
-	q.metricSegments.Set(float64(segmentCount))
+	q.metricSegmentCount.Set(float64(segmentCount))
 }
 
 func (q *quotaController) recordStageError(stage string) {
-	q.metricStageErrors.WithLabelValues(q.keyspace, q.changefeed, stage).Inc()
+	q.metricStageErrorCount.WithLabelValues(q.keyspace, q.changefeed, stage).Inc()
 }
