@@ -23,45 +23,78 @@ import (
 	"go.uber.org/zap"
 )
 
-var _ writer.RedoLogWriter = (*blackHoleWriter)(nil)
+var (
+	_ writer.RedoDMLWriter = (*blackHoleDMLWriter)(nil)
+	_ writer.RedoDDLWriter = (*blackHoleDDLWriter)(nil)
+)
 
 // blackHoleSink defines a blackHole storage, it receives events and persists
 // without any latency
-type blackHoleWriter struct {
+type blackHoleDMLWriter struct {
 	invalid bool
 }
 
-// NewLogWriter creates a blackHole writer
-func NewLogWriter(invalid bool) *blackHoleWriter {
-	return &blackHoleWriter{
+type blackHoleDDLWriter struct {
+	invalid bool
+}
+
+// NewDMLWriter creates a blackHole DML writer.
+func NewDMLWriter(invalid bool) *blackHoleDMLWriter {
+	return &blackHoleDMLWriter{
 		invalid: invalid,
 	}
 }
 
-func (bs *blackHoleWriter) SetTableSchemaStore(tableSchemaStore *event.TableSchemaStore) {
+// NewDDLWriter creates a blackHole DDL writer.
+func NewDDLWriter(invalid bool) *blackHoleDDLWriter {
+	return &blackHoleDDLWriter{
+		invalid: invalid,
+	}
 }
 
-func (bs *blackHoleWriter) Run(ctx context.Context) error {
+func (bs *blackHoleDMLWriter) Run(ctx context.Context) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
 }
 
-func (bs *blackHoleWriter) WriteEvents(_ context.Context, events ...writer.RedoEvent) (err error) {
+func (bs *blackHoleDMLWriter) AppendDMLEvents(_ context.Context, events ...*event.RedoRowEvent) (err error) {
 	if bs.invalid {
 		return errors.New("[WriteLog] invalid black hole writer")
 	}
-	rl := events[len(events)-1].ToRedoLog()
-	current := rl.GetCommitTs()
+	if len(events) == 0 {
+		return nil
+	}
+	current := events[len(events)-1].CommitTs
 	log.Debug("write redo events", zap.Int("count", len(events)),
 		zap.Uint64("current", current))
-	for _, rl := range events {
-		rl.PostFlush()
+	for _, e := range events {
+		if e != nil {
+			e.PostFlush()
+		}
 	}
 	return
 }
 
-func (bs *blackHoleWriter) Close() error {
+func (bs *blackHoleDMLWriter) Close() error {
+	return nil
+}
+
+func (bs *blackHoleDDLWriter) WriteDDLEvent(_ context.Context, event *event.DDLEvent) error {
+	if bs.invalid {
+		return errors.New("[WriteLog] invalid black hole writer")
+	}
+	if event != nil {
+		log.Debug("write redo ddl", zap.Uint64("commitTs", event.GetCommitTs()))
+		event.PostFlush()
+	}
+	return nil
+}
+
+func (bs *blackHoleDDLWriter) SetTableSchemaStore(tableSchemaStore *event.TableSchemaStore) {
+}
+
+func (bs *blackHoleDDLWriter) Close() error {
 	return nil
 }

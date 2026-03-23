@@ -61,31 +61,31 @@ func (mr *MockRedoEventMockRecorder) ToRedoLog() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ToRedoLog", reflect.TypeOf((*MockRedoEvent)(nil).ToRedoLog))
 }
 
-// MockRedoLogWriter is a mock of RedoLogWriter interface.
-type MockRedoLogWriter struct {
+// MockRedoDMLWriter is a mock of RedoDMLWriter interface.
+type MockRedoDMLWriter struct {
 	ctrl     *gomock.Controller
-	recorder *MockRedoLogWriterMockRecorder
+	recorder *MockRedoDMLWriterMockRecorder
 }
 
-// MockRedoLogWriterMockRecorder is the mock recorder for MockRedoLogWriter.
-type MockRedoLogWriterMockRecorder struct {
-	mock *MockRedoLogWriter
+// MockRedoDMLWriterMockRecorder is the mock recorder for MockRedoDMLWriter.
+type MockRedoDMLWriterMockRecorder struct {
+	mock *MockRedoDMLWriter
 }
 
-// NewMockRedoLogWriter creates a new mock instance.
-func NewMockRedoLogWriter(ctrl *gomock.Controller) *MockRedoLogWriter {
-	mock := &MockRedoLogWriter{ctrl: ctrl}
-	mock.recorder = &MockRedoLogWriterMockRecorder{mock}
+// NewMockRedoDMLWriter creates a new mock instance.
+func NewMockRedoDMLWriter(ctrl *gomock.Controller) *MockRedoDMLWriter {
+	mock := &MockRedoDMLWriter{ctrl: ctrl}
+	mock.recorder = &MockRedoDMLWriterMockRecorder{mock}
 	return mock
 }
 
 // EXPECT returns an object that allows the caller to indicate expected use.
-func (m *MockRedoLogWriter) EXPECT() *MockRedoLogWriterMockRecorder {
+func (m *MockRedoDMLWriter) EXPECT() *MockRedoDMLWriterMockRecorder {
 	return m.recorder
 }
 
 // Close mocks base method.
-func (m *MockRedoLogWriter) Close() error {
+func (m *MockRedoDMLWriter) Close() error {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Close")
 	ret0, _ := ret[0].(error)
@@ -93,13 +93,13 @@ func (m *MockRedoLogWriter) Close() error {
 }
 
 // Close indicates an expected call of Close.
-func (mr *MockRedoLogWriterMockRecorder) Close() *gomock.Call {
+func (mr *MockRedoDMLWriterMockRecorder) Close() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Close", reflect.TypeOf((*MockRedoLogWriter)(nil).Close))
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Close", reflect.TypeOf((*MockRedoDMLWriter)(nil).Close))
 }
 
 // Run mocks base method.
-func (m *MockRedoLogWriter) Run(ctx context.Context) error {
+func (m *MockRedoDMLWriter) Run(ctx context.Context) error {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Run", ctx)
 	ret0, _ := ret[0].(error)
@@ -107,38 +107,89 @@ func (m *MockRedoLogWriter) Run(ctx context.Context) error {
 }
 
 // Run indicates an expected call of Run.
-func (mr *MockRedoLogWriterMockRecorder) Run(ctx interface{}) *gomock.Call {
+func (mr *MockRedoDMLWriterMockRecorder) Run(ctx interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Run", reflect.TypeOf((*MockRedoLogWriter)(nil).Run), ctx)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Run", reflect.TypeOf((*MockRedoDMLWriter)(nil).Run), ctx)
 }
 
-// SetTableSchemaStore mocks base method.
-func (m *MockRedoLogWriter) SetTableSchemaStore(arg0 *event.TableSchemaStore) {
-	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "SetTableSchemaStore", arg0)
-}
-
-// SetTableSchemaStore indicates an expected call of SetTableSchemaStore.
-func (mr *MockRedoLogWriterMockRecorder) SetTableSchemaStore(arg0 interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetTableSchemaStore", reflect.TypeOf((*MockRedoLogWriter)(nil).SetTableSchemaStore), arg0)
-}
-
-// WriteEvents mocks base method.
-func (m *MockRedoLogWriter) WriteEvents(ctx context.Context, events ...RedoEvent) error {
+// AppendDMLEvents mocks base method.
+func (m *MockRedoDMLWriter) AppendDMLEvents(ctx context.Context, events ...*event.RedoRowEvent) error {
 	m.ctrl.T.Helper()
 	varargs := []interface{}{ctx}
 	for _, a := range events {
 		varargs = append(varargs, a)
 	}
-	ret := m.ctrl.Call(m, "WriteEvents", varargs...)
+	ret := m.ctrl.Call(m, "AppendDMLEvents", varargs...)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
-// WriteEvents indicates an expected call of WriteEvents.
-func (mr *MockRedoLogWriterMockRecorder) WriteEvents(ctx interface{}, events ...interface{}) *gomock.Call {
+// AppendDMLEvents indicates an expected call of AppendDMLEvents.
+func (mr *MockRedoDMLWriterMockRecorder) AppendDMLEvents(ctx interface{}, events ...interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	varargs := append([]interface{}{ctx}, events...)
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "WriteEvents", reflect.TypeOf((*MockRedoLogWriter)(nil).WriteEvents), varargs...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AppendDMLEvents", reflect.TypeOf((*MockRedoDMLWriter)(nil).AppendDMLEvents), varargs...)
+}
+
+// MockRedoDDLWriter is a mock of RedoDDLWriter interface.
+type MockRedoDDLWriter struct {
+	ctrl     *gomock.Controller
+	recorder *MockRedoDDLWriterMockRecorder
+}
+
+// MockRedoDDLWriterMockRecorder is the mock recorder for MockRedoDDLWriter.
+type MockRedoDDLWriterMockRecorder struct {
+	mock *MockRedoDDLWriter
+}
+
+// NewMockRedoDDLWriter creates a new mock instance.
+func NewMockRedoDDLWriter(ctrl *gomock.Controller) *MockRedoDDLWriter {
+	mock := &MockRedoDDLWriter{ctrl: ctrl}
+	mock.recorder = &MockRedoDDLWriterMockRecorder{mock}
+	return mock
+}
+
+// EXPECT returns an object that allows the caller to indicate expected use.
+func (m *MockRedoDDLWriter) EXPECT() *MockRedoDDLWriterMockRecorder {
+	return m.recorder
+}
+
+// Close mocks base method.
+func (m *MockRedoDDLWriter) Close() error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Close")
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// Close indicates an expected call of Close.
+func (mr *MockRedoDDLWriterMockRecorder) Close() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Close", reflect.TypeOf((*MockRedoDDLWriter)(nil).Close))
+}
+
+// SetTableSchemaStore mocks base method.
+func (m *MockRedoDDLWriter) SetTableSchemaStore(arg0 *event.TableSchemaStore) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "SetTableSchemaStore", arg0)
+}
+
+// SetTableSchemaStore indicates an expected call of SetTableSchemaStore.
+func (mr *MockRedoDDLWriterMockRecorder) SetTableSchemaStore(arg0 interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetTableSchemaStore", reflect.TypeOf((*MockRedoDDLWriter)(nil).SetTableSchemaStore), arg0)
+}
+
+// WriteDDLEvent mocks base method.
+func (m *MockRedoDDLWriter) WriteDDLEvent(ctx context.Context, event *event.DDLEvent) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "WriteDDLEvent", ctx, event)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// WriteDDLEvent indicates an expected call of WriteDDLEvent.
+func (mr *MockRedoDDLWriterMockRecorder) WriteDDLEvent(ctx, event interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "WriteDDLEvent", reflect.TypeOf((*MockRedoDDLWriter)(nil).WriteDDLEvent), ctx, event)
 }

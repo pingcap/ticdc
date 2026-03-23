@@ -31,15 +31,17 @@ type RedoEvent interface {
 	ToRedoLog() *commonEvent.RedoLog
 }
 
-// RedoLogWriter defines the interfaces used to write redo log, all operations are thread-safe.
-type RedoLogWriter interface {
-	// WriteEvents writes DDL/DML events to the redo log.
-	WriteEvents(ctx context.Context, events ...RedoEvent) error
-
+// RedoDMLWriter writes row redo events, all operations are thread-safe.
+type RedoDMLWriter interface {
+	AppendDMLEvents(ctx context.Context, events ...*commonEvent.RedoRowEvent) error
 	Run(ctx context.Context) error
-	// Close is used to close the writer.
 	Close() error
+}
 
+// RedoDDLWriter writes DDL redo events, all operations are thread-safe.
+type RedoDDLWriter interface {
+	WriteDDLEvent(ctx context.Context, event *commonEvent.DDLEvent) error
+	Close() error
 	SetTableSchemaStore(*commonEvent.TableSchemaStore)
 }
 

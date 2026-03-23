@@ -21,7 +21,6 @@ import (
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/redo"
-	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
@@ -81,11 +80,11 @@ func TestLogWriterWriteDDL(t *testing.T) {
 		mockWriter := &mockFileWriter{}
 		mockWriter.On("IsRunning").Return(tt.isRunning)
 		mockWriter.On("SyncWrite", mock.Anything).Return(tt.writerErr)
-		w := logWriter{
+		w := ddlWriter{logWriter: &logWriter{
 			cfg:           newTestWriterConfig(t, common.ChangeFeedID{}, nil),
 			backendWriter: mockWriter,
 			fileType:      redo.RedoDDLLogFileType,
-		}
+		}}
 
 		if tt.name == "context cancel" {
 			ctx, cancel := context.WithCancel(context.Background())
@@ -93,11 +92,7 @@ func TestLogWriterWriteDDL(t *testing.T) {
 			tt.ctx = ctx
 		}
 
-		var e writer.RedoEvent
-		if tt.ddl != nil {
-			e = tt.ddl
-		}
-		err := w.WriteEvents(tt.ctx, e)
+		err := w.WriteDDLEvent(tt.ctx, tt.ddl)
 		if tt.wantErr != nil {
 			require.Equal(t, tt.wantErr.Error(), err.Error(), tt.name)
 		} else {

@@ -17,7 +17,7 @@ import (
 	"context"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/pkg/common/event"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
@@ -25,20 +25,30 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-var _ writer.RedoLogWriter = (*memoryLogWriter)(nil)
+var (
+	_ writer.RedoDMLWriter = (*dmlWriter)(nil)
+	_ writer.RedoDDLWriter = (*ddlWriter)(nil)
+)
 
 type memoryLogWriter struct {
 	cfg           *writer.Config
 	encodeWorkers *encodingWorkerGroup
 	fileWorkers   *fileWorkerGroup
 	fileType      string
-	tableSchema   *event.TableSchemaStore
+	tableSchema   *commonEvent.TableSchemaStore
 
 	cancel context.CancelFunc
 }
 
-// NewLogWriter creates a new memoryLogWriter.
-func NewLogWriter(
+type dmlWriter struct {
+	*memoryLogWriter
+}
+
+type ddlWriter struct {
+	*memoryLogWriter
+}
+
+func newLogWriter(
 	ctx context.Context, cfg *writer.Config, fileType string, opts ...writer.Option,
 ) (*memoryLogWriter, error) {
 	extStorage, err := redo.InitExternalStorage(ctx, *cfg.URI())
@@ -61,7 +71,29 @@ func NewLogWriter(
 	return lw, nil
 }
 
-func (l *memoryLogWriter) SetTableSchemaStore(tableSchemaStore *event.TableSchemaStore) {
+// NewDMLWriter creates a new memory DML writer.
+func NewDMLWriter(
+	ctx context.Context, cfg *writer.Config, opts ...writer.Option,
+) (writer.RedoDMLWriter, error) {
+	lw, err := newLogWriter(ctx, cfg, redo.RedoRowLogFileType, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return &dmlWriter{memoryLogWriter: lw}, nil
+}
+
+// NewDDLWriter creates a new memory DDL writer.
+func NewDDLWriter(
+	ctx context.Context, cfg *writer.Config, opts ...writer.Option,
+) (writer.RedoDDLWriter, error) {
+	lw, err := newLogWriter(ctx, cfg, redo.RedoDDLLogFileType, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return &ddlWriter{memoryLogWriter: lw}, nil
+}
+
+func (l *memoryLogWriter) SetTableSchemaStore(tableSchemaStore *commonEvent.TableSchemaStore) {
 	l.tableSchema = tableSchemaStore
 	if l.encodeWorkers != nil {
 		l.encodeWorkers.tableSchemaStore = tableSchemaStore
@@ -84,34 +116,7 @@ func (l *memoryLogWriter) Run(ctx context.Context) error {
 	return eg.Wait()
 }
 
-func (l *memoryLogWriter) WriteEvents(ctx context.Context, events ...writer.RedoEvent) error {
-	if l.fileType == redo.RedoDDLLogFileType {
-		return l.writeEvents(ctx, events...)
-	}
-	return l.asyncWriteEvents(ctx, events...)
-}
-
-func (l *memoryLogWriter) writeEvents(ctx context.Context, events ...writer.RedoEvent) error {
-	for _, e := range events {
-		if e == nil {
-			log.Warn("writing nil event to redo log, ignore this",
-				zap.String("keyspace", l.cfg.ChangeFeedID().Keyspace()),
-				zap.String("changefeed", l.cfg.ChangeFeedID().Name()))
-			continue
-		}
-		redoLogEvent, err := toPolymorphicRedoEvent(e, l.tableSchema)
-		if err != nil {
-			return err
-		}
-		// todo: this should be simplified to a single writer.
-		if err := l.fileWorkers.syncWrite(ctx, redoLogEvent); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (l *memoryLogWriter) asyncWriteEvents(ctx context.Context, events ...writer.RedoEvent) error {
+func (l *dmlWriter) AppendDMLEvents(ctx context.Context, events ...*commonEvent.RedoRowEvent) error {
 	for _, e := range events {
 		if e == nil {
 			log.Warn("writing nil event to redo log, ignore this",
@@ -127,6 +132,21 @@ func (l *memoryLogWriter) asyncWriteEvents(ctx context.Context, events ...writer
 		}
 	}
 	return nil
+}
+
+func (l *ddlWriter) WriteDDLEvent(ctx context.Context, event *commonEvent.DDLEvent) error {
+	if event == nil {
+		log.Warn("writing nil event to redo log, ignore this",
+			zap.String("keyspace", l.cfg.ChangeFeedID().Keyspace()),
+			zap.String("changefeed", l.cfg.ChangeFeedID().Name()))
+		return nil
+	}
+	redoLogEvent, err := toPolymorphicRedoEvent(event, l.tableSchema)
+	if err != nil {
+		return err
+	}
+	// todo: this should be simplified to a single writer.
+	return l.fileWorkers.syncWrite(ctx, redoLogEvent)
 }
 
 func (l *memoryLogWriter) Close() error {

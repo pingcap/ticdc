@@ -24,18 +24,34 @@ import (
 	"github.com/pingcap/ticdc/pkg/redo/writer/memory"
 )
 
-// NewRedoLogWriter creates a new RedoLogWriter.
-func NewRedoLogWriter(
-	ctx context.Context, cfg *writer.Config, fileType string,
-) (writer.RedoLogWriter, error) {
+// NewRedoDMLWriter creates a new RedoDMLWriter.
+func NewRedoDMLWriter(
+	ctx context.Context, cfg *writer.Config,
+) (writer.RedoDMLWriter, error) {
 	uri := cfg.URI()
 	if redo.IsBlackholeStorage(uri.Scheme) {
 		invalid := strings.HasSuffix(uri.Scheme, "invalid")
-		return blackhole.NewLogWriter(invalid), nil
+		return blackhole.NewDMLWriter(invalid), nil
 	}
 
 	if cfg.UseFileBackend() {
-		return file.NewLogWriter(ctx, cfg, fileType)
+		return file.NewDMLWriter(ctx, cfg)
 	}
-	return memory.NewLogWriter(ctx, cfg, fileType)
+	return memory.NewDMLWriter(ctx, cfg)
+}
+
+// NewRedoDDLWriter creates a new RedoDDLWriter.
+func NewRedoDDLWriter(
+	ctx context.Context, cfg *writer.Config,
+) (writer.RedoDDLWriter, error) {
+	uri := cfg.URI()
+	if redo.IsBlackholeStorage(uri.Scheme) {
+		invalid := strings.HasSuffix(uri.Scheme, "invalid")
+		return blackhole.NewDDLWriter(invalid), nil
+	}
+
+	if cfg.UseFileBackend() {
+		return file.NewDDLWriter(ctx, cfg)
+	}
+	return memory.NewDDLWriter(ctx, cfg)
 }

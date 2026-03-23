@@ -19,49 +19,15 @@ import (
 
 	"github.com/pingcap/ticdc/pkg/common"
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/testutil"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/util"
-	"github.com/pingcap/tidb/pkg/meta/model"
-	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/stretchr/testify/require"
 )
 
 func TestWriteDDL(t *testing.T) {
 	t.Parallel()
 
-	rows := []writer.RedoEvent{
-		nil,
-		&pevent.RedoRowEvent{
-			CommitTs:  11,
-			TableInfo: common.NewTableInfo4Decoder("test", &model.TableInfo{Name: ast.NewCIStr("t1")}),
-		},
-		&pevent.RedoRowEvent{
-			CommitTs:  15,
-			TableInfo: common.NewTableInfo4Decoder("test", &model.TableInfo{Name: ast.NewCIStr("t2")}),
-		},
-		&pevent.RedoRowEvent{
-			CommitTs:  8,
-			TableInfo: common.NewTableInfo4Decoder("test", &model.TableInfo{Name: ast.NewCIStr("t2")}),
-		},
-	}
-	testWriteEvents(t, rows)
-}
-
-func TestWriteDML(t *testing.T) {
-	t.Parallel()
-
-	ddls := []writer.RedoEvent{
-		nil,
-		&pevent.DDLEvent{FinishedTs: 1},
-		&pevent.DDLEvent{FinishedTs: 10},
-		&pevent.DDLEvent{FinishedTs: 8},
-	}
-	testWriteEvents(t, ddls)
-}
-
-func testWriteEvents(t *testing.T, events []writer.RedoEvent) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -72,22 +38,48 @@ func testWriteEvents(t *testing.T, events []writer.RedoEvent) {
 		testutil.NewConsistentConfig(uri.String()),
 	)
 	require.NoError(t, err)
+
 	filename := t.Name()
-	lw, err := NewLogWriter(ctx, lwcfg, redo.RedoDDLLogFileType, writer.WithLogFileName(func() string {
+	lw, err := NewDDLWriter(ctx, lwcfg, writer.WithLogFileName(func() string {
 		return filename
 	}))
 	require.NoError(t, err)
 
-	require.NoError(t, lw.WriteEvents(ctx, events...))
+	ddls := []*pevent.DDLEvent{
+		nil,
+		{FinishedTs: 1},
+		{FinishedTs: 10},
+		{FinishedTs: 8},
+	}
+	for _, ddl := range ddls {
+		require.NoError(t, lw.WriteDDLEvent(ctx, ddl))
+	}
 
-	// test flush
 	err = extStorage.WalkDir(ctx, nil, func(path string, size int64) error {
 		require.Equal(t, filename, path)
 		return nil
 	})
 	require.NoError(t, err)
 
-	require.ErrorIs(t, lw.Close(), nil)
-	// duplicate close should return the same error
-	require.ErrorIs(t, lw.Close(), nil)
+	require.NoError(t, lw.Close())
+	require.NoError(t, lw.Close())
+}
+
+func TestNewDMLWriter(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	_, uri, err := util.GetTestExtStorage(ctx, t.TempDir())
+	require.NoError(t, err)
+	lwcfg, err := writer.NewConfig(
+		common.NewChangeFeedIDWithName("test-changefeed", common.DefaultKeyspaceName),
+		testutil.NewConsistentConfig(uri.String()),
+	)
+	require.NoError(t, err)
+
+	lw, err := NewDMLWriter(ctx, lwcfg)
+	require.NoError(t, err)
+	require.NoError(t, lw.Close())
 }
