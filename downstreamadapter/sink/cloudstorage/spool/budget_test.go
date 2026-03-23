@@ -78,10 +78,4 @@ func TestBudgetTracksWatermarkState(t *testing.T) {
 	atOrBelowLowWatermark := core.release(21, true)
 	require.True(t, atOrBelowLowWatermark)
 	require.LessOrEqual(t, core.totalBytes(), core.highWatermarkBytes)
-
-	core.reset()
-	require.Equal(t, int64(0), core.memoryBytes)
-	require.Equal(t, int64(0), core.diskBytes)
-	require.Equal(t, int64(0), core.totalBytes())
-	require.LessOrEqual(t, core.totalBytes(), core.lowWatermarkBytes)
 }

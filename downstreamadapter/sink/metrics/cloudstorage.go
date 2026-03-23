@@ -86,25 +86,11 @@ var (
 		Help:      "Current disk bytes used by cloud storage spool",
 	}, []string{"namespace", "changefeed"})
 
-	CloudStoragePendingPostEnqueueCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace: namespace,
-		Subsystem: subsystem,
-		Name:      "cloud_storage_pending_post_enqueue_total",
-		Help:      "Total number of PostEnqueue callbacks moved into the pending queue in cloud storage sink",
-	}, []string{"namespace", "changefeed"})
-
 	CloudStoragePendingPostEnqueueGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: namespace,
 		Subsystem: subsystem,
 		Name:      "cloud_storage_pending_post_enqueue",
 		Help:      "Current number of PostEnqueue callbacks waiting in cloud storage spool",
-	}, []string{"namespace", "changefeed"})
-
-	CloudStoragePostEnqueuePausedGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Namespace: namespace,
-		Subsystem: subsystem,
-		Name:      "cloud_storage_post_enqueue_paused",
-		Help:      "Whether cloud storage spool is currently pausing PostEnqueue callbacks",
 	}, []string{"namespace", "changefeed"})
 
 	CloudStorageSpillBytesHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
@@ -136,13 +122,6 @@ var (
 		Name:      "cloud_storage_spool_segment_count",
 		Help:      "Current number of live cloud storage spool segments",
 	}, []string{"namespace", "changefeed"})
-
-	CloudStorageSpoolStageErrorCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace: namespace,
-		Subsystem: subsystem,
-		Name:      "cloud_storage_spool_stage_error_total",
-		Help:      "Total number of cloud storage spool errors by stage",
-	}, []string{"namespace", "changefeed", "stage"})
 
 	CloudStoragePendingTablesGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: namespace,
@@ -190,14 +169,11 @@ func InitCloudStorageMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(CloudStorageWorkerBusyRatio)
 	registry.MustRegister(CloudStorageSpoolMemoryBytesGauge)
 	registry.MustRegister(CloudStorageSpoolDiskBytesGauge)
-	registry.MustRegister(CloudStoragePendingPostEnqueueCounter)
 	registry.MustRegister(CloudStoragePendingPostEnqueueGauge)
-	registry.MustRegister(CloudStoragePostEnqueuePausedGauge)
 	registry.MustRegister(CloudStorageSpillBytesHistogram)
 	registry.MustRegister(CloudStorageLoadBytesHistogram)
 	registry.MustRegister(CloudStorageRotateCountCounter)
 	registry.MustRegister(CloudStorageSpoolSegmentCountGauge)
-	registry.MustRegister(CloudStorageSpoolStageErrorCounter)
 	registry.MustRegister(CloudStoragePendingTablesGauge)
 	registry.MustRegister(CloudStoragePendingEntriesGauge)
 	registry.MustRegister(CloudStoragePendingBytesGauge)

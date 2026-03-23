@@ -23,10 +23,12 @@ import (
 	"sync"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 )
 
@@ -56,12 +58,6 @@ const (
 	// Resume pending PostEnqueue callbacks only after usage has dropped enough
 	// to avoid bouncing immediately back into the paused state.
 	defaultLowWatermarkRatio = 0.6
-)
-
-const (
-	spoolErrorStageLoad   = "load"
-	spoolErrorStageWrite  = "write"
-	spoolErrorStageRotate = "rotate"
 )
 
 type options struct {
@@ -195,6 +191,9 @@ func WithLowWatermarkRatio(lowWatermarkRatio float64) option {
 // Spool.Release after a successful flush or Spool.Discard when the batch is
 // ignored.
 type Spool struct {
+	keyspace   string
+	changefeed string
+
 	// rootDir is where this spool instance keeps its temporary segment files.
 	rootDir string
 
@@ -208,6 +207,12 @@ type Spool struct {
 	quota *quotaController
 	// segmentBytes is the size limit for a single segment file.
 	segmentBytes int64
+	// metricLoadedBytes records the byte distribution of loads from spilled files.
+	metricLoadedBytes prometheus.Observer
+	// metricRotatedCount records how many times spool rolls to a new segment.
+	metricRotatedCount prometheus.Counter
+	// metricSegmentCount records how many live segment files this spool currently owns.
+	metricSegmentCount prometheus.Gauge
 
 	// nextSegmentID is the next local file sequence number to allocate.
 	nextSegmentID uint64
@@ -313,11 +318,26 @@ func New(
 	}
 
 	spool := &Spool{
+		keyspace:     changefeedID.Keyspace(),
+		changefeed:   changefeedID.ID().String(),
 		rootDir:      rootDir,
 		quota:        newQuotaController(changefeedID, cfg),
 		segmentBytes: cfg.segmentBytes,
-		segments:     make(map[uint64]*segment),
+		metricLoadedBytes: metrics.CloudStorageLoadBytesHistogram.WithLabelValues(
+			changefeedID.Keyspace(),
+			changefeedID.ID().String(),
+		),
+		metricRotatedCount: metrics.CloudStorageRotateCountCounter.WithLabelValues(
+			changefeedID.Keyspace(),
+			changefeedID.ID().String(),
+		),
+		metricSegmentCount: metrics.CloudStorageSpoolSegmentCountGauge.WithLabelValues(
+			changefeedID.Keyspace(),
+			changefeedID.ID().String(),
+		),
+		segments: make(map[uint64]*segment),
 	}
+	spool.metricSegmentCount.Set(0)
 	return spool, nil
 }
 
@@ -442,9 +462,11 @@ func (s *Spool) TryEnqueue(
 
 	shouldSpill := s.quota.shouldSpill(size.accountingBytes)
 	if shouldSpill && s.quota.exceedsDiskQuota(size.accountingBytes) {
-		entry, callbacksToRun, err := s.acceptEntryLocked(msgs, postEnqueue, size, true)
+		entry, callbackToRun, err := s.acceptEntryLocked(msgs, postEnqueue, size, true)
 		s.mu.Unlock()
-		runCallbacks(callbacksToRun)
+		if callbackToRun != nil {
+			callbackToRun()
+		}
 		return EnqueueActionAcceptedOversized, entry, err
 	}
 	if shouldSpill && s.quota.wouldExceedDiskQuota(size.accountingBytes) {
@@ -452,9 +474,11 @@ func (s *Spool) TryEnqueue(
 		return EnqueueActionWaitDiskQuota, nil, nil
 	}
 
-	entry, callbacksToRun, err := s.acceptEntryLocked(msgs, postEnqueue, size, false)
+	entry, callbackToRun, err := s.acceptEntryLocked(msgs, postEnqueue, size, false)
 	s.mu.Unlock()
-	runCallbacks(callbacksToRun)
+	if callbackToRun != nil {
+		callbackToRun()
+	}
 	return EnqueueActionAccepted, entry, err
 }
 
@@ -476,11 +500,12 @@ func (s *Spool) WaitForDiskQuota(ctx context.Context, msgs []*common.Message) er
 			s.mu.Unlock()
 			return nil
 		}
-		waitCh := s.quota.diskQuotaWaitCh()
+		waiterID, waitCh := s.quota.addDiskQuotaWaiter()
 		s.mu.Unlock()
 
 		select {
 		case <-ctx.Done():
+			s.quota.removeDiskQuotaWaiter(waiterID)
 			return errors.Trace(context.Cause(ctx))
 		case <-waitCh:
 		}
@@ -502,9 +527,11 @@ func (s *Spool) Enqueue(
 		s.mu.Unlock()
 		return nil, errors.ErrInternalCheckFailed.GenWithStackByArgs("spool is closed")
 	}
-	entry, callbacksToRun, err := s.acceptEntryLocked(msgs, postEnqueue, size, false)
+	entry, callbackToRun, err := s.acceptEntryLocked(msgs, postEnqueue, size, false)
 	s.mu.Unlock()
-	runCallbacks(callbacksToRun)
+	if callbackToRun != nil {
+		callbackToRun()
+	}
 	return entry, err
 }
 
@@ -513,7 +540,7 @@ func (s *Spool) acceptEntryLocked(
 	postEnqueue func(),
 	size entrySize,
 	forceInMemory bool,
-) (*Entry, []func(), error) {
+) (*Entry, func(), error) {
 	entry := &Entry{
 		accountingBytes: size.accountingBytes,
 		fileBytes:       size.fileBytes,
@@ -531,8 +558,8 @@ func (s *Spool) acceptEntryLocked(
 		entry.memoryMsgs = msgs
 	}
 	entry.callbacks = detachCallbacks(msgs)
-	callbacksToRun := s.quota.acquire(entry.accountingBytes, shouldSpill, postEnqueue)
-	return entry, callbacksToRun, nil
+	callbackToRun := s.quota.acquire(entry.accountingBytes, shouldSpill, postEnqueue)
+	return entry, callbackToRun, nil
 }
 
 func detachCallbacks(msgs []*common.Message) []func() {
@@ -544,14 +571,6 @@ func detachCallbacks(msgs []*common.Message) []func() {
 		}
 	}
 	return callbacks
-}
-
-func runCallbacks(callbacks []func()) {
-	for _, callback := range callbacks {
-		if callback != nil {
-			callback()
-		}
-	}
 }
 
 // Load fetches messages from memory or spilled segments.
@@ -585,21 +604,13 @@ func (s *Spool) Load(entry *Entry) ([]*common.Message, []func(), error) {
 
 	buf := make([]byte, length)
 	if _, err := file.ReadAt(buf, offset); err != nil {
-		s.mu.Lock()
-		s.quota.recordStageError(spoolErrorStageLoad)
-		s.mu.Unlock()
 		return nil, nil, errors.WrapError(errors.ErrUnexpected, err, "read spool segment file")
 	}
 	msgs, err := deserializeMessages(buf)
 	if err != nil {
-		s.mu.Lock()
-		s.quota.recordStageError(spoolErrorStageLoad)
-		s.mu.Unlock()
 		return nil, nil, err
 	}
-	s.mu.Lock()
-	s.quota.recordLoad(length)
-	s.mu.Unlock()
+	s.metricLoadedBytes.Observe(float64(length))
 	return msgs, entry.callbacks, nil
 }
 
@@ -633,7 +644,7 @@ func (s *Spool) Release(entry *Entry) {
 					)
 				}
 				delete(s.segments, spoolSegment.id)
-				s.quota.setSegmentCount(len(s.segments))
+				s.metricSegmentCount.Set(float64(len(s.segments)))
 			}
 		}
 	}
@@ -653,7 +664,11 @@ func (s *Spool) Discard(entry *Entry) {
 		return
 	}
 
-	runCallbacks(takeCallbacks(entry))
+	for _, callback := range takeCallbacks(entry) {
+		if callback != nil {
+			callback()
+		}
+	}
 	s.Release(entry)
 }
 
@@ -674,7 +689,6 @@ func (s *Spool) Close() {
 			}
 		}
 	}
-	s.quota.reset()
 	s.mu.Unlock()
 
 	if err := removeSpoolFiles(s.rootDir); err != nil {
@@ -682,6 +696,9 @@ func (s *Spool) Close() {
 			zap.String("path", s.rootDir),
 			zap.Error(err))
 	}
+	metrics.CloudStorageLoadBytesHistogram.DeleteLabelValues(s.keyspace, s.changefeed)
+	metrics.CloudStorageRotateCountCounter.DeleteLabelValues(s.keyspace, s.changefeed)
+	metrics.CloudStorageSpoolSegmentCountGauge.DeleteLabelValues(s.keyspace, s.changefeed)
 	s.quota.deleteMetrics()
 }
 
@@ -693,11 +710,9 @@ func (s *Spool) appendBlobLocked(blob []byte) (*segmentLocation, error) {
 	offset := spoolSegment.size
 	n, err := spoolSegment.file.Write(blob)
 	if err != nil {
-		s.quota.recordStageError(spoolErrorStageWrite)
 		return nil, errors.WrapError(errors.ErrUnexpected, err, "write spool segment file")
 	}
 	if n != len(blob) {
-		s.quota.recordStageError(spoolErrorStageWrite)
 		return nil, errors.ErrUnexpected.GenWithStack(
 			"short write to spool segment, expected %d got %d",
 			len(blob),
@@ -735,7 +750,6 @@ func (s *Spool) rotateLocked() error {
 	// new pending data will stay locally readable until flush.
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o644)
 	if err != nil {
-		s.quota.recordStageError(spoolErrorStageRotate)
 		return errors.WrapError(errors.ErrUnexpected, err, "open spool segment file")
 	}
 	spoolSegment := &segment{
@@ -745,7 +759,8 @@ func (s *Spool) rotateLocked() error {
 	}
 	s.segments[segmentID] = spoolSegment
 	s.activeSegment = spoolSegment
-	s.quota.recordRotate(len(s.segments))
+	s.metricRotatedCount.Inc()
+	s.metricSegmentCount.Set(float64(len(s.segments)))
 	return nil
 }
 

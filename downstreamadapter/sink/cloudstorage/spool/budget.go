@@ -93,11 +93,6 @@ func (b *budget) release(entryBytes int64, spilled bool) bool {
 	return b.totalBytes() <= b.lowWatermarkBytes
 }
 
-func (b *budget) reset() {
-	b.memoryBytes = 0
-	b.diskBytes = 0
-}
-
 func (b *budget) totalBytes() int64 {
 	return b.memoryBytes + b.diskBytes
 }

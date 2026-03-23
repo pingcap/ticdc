@@ -490,6 +490,48 @@ func TestWaitForDiskQuotaReturnsAfterRelease(t *testing.T) {
 	}
 }
 
+func TestWaitForDiskQuotaRemovesCanceledWaiter(t *testing.T) {
+	t.Parallel()
+
+	changefeedID := commonType.NewChangefeedID4Test("test", "spool-wait-cancel")
+	manager, err := New(
+		changefeedID,
+		WithDiskQuotaBytes(40),
+		WithRootDir(t.TempDir()),
+		WithSegmentBytes(1<<20),
+		WithMemoryRatio(0.01),
+		WithHighWatermarkRatio(0.95),
+		WithLowWatermarkRatio(0.7),
+	)
+	require.NoError(t, err)
+	defer manager.Close()
+
+	entry, err := manager.Enqueue([]*common.Message{newTestMessage("first-entry", 1)}, nil)
+	require.NoError(t, err)
+	require.True(t, entry.IsSpilled())
+
+	waitCtx, cancel := context.WithCancel(context.Background())
+	waitDone := make(chan error, 1)
+	go func() {
+		waitDone <- manager.WaitForDiskQuota(waitCtx, []*common.Message{newTestMessage("second-entry", 1)})
+	}()
+
+	require.Eventually(t, func() bool {
+		manager.quota.waitersMu.Lock()
+		defer manager.quota.waitersMu.Unlock()
+		return len(manager.quota.waiters) == 1
+	}, time.Second, 10*time.Millisecond)
+
+	cancel()
+	require.ErrorIs(t, <-waitDone, context.Canceled)
+
+	require.Eventually(t, func() bool {
+		manager.quota.waitersMu.Lock()
+		defer manager.quota.waitersMu.Unlock()
+		return len(manager.quota.waiters) == 0
+	}, time.Second, 10*time.Millisecond)
+}
+
 func TestTryEnqueueReturnsWaitActionWithoutMutatingMessage(t *testing.T) {
 	t.Parallel()
 
