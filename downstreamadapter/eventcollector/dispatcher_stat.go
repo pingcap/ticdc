@@ -345,7 +345,6 @@ func (d *dispatcherStat) updateCommitTsStateByEvents(events []dispatcher.Dispatc
 	lastEventCommitTs := d.lastEventCommitTs.Load()
 	gotDDLOnTs := d.gotDDLOnTs.Load()
 	gotSyncpointOnTS := d.gotSyncpointOnTS.Load()
-	hasStateUpdate := false
 
 	for _, event := range events {
 		if event.GetCommitTs() > lastEventCommitTs {
@@ -368,13 +367,9 @@ func (d *dispatcherStat) updateCommitTsStateByEvents(events []dispatcher.Dispatc
 			commonEvent.TypeBatchDMLEvent,
 			commonEvent.TypeSyncPointEvent:
 			lastEventCommitTs = event.GetCommitTs()
-			hasStateUpdate = true
 		}
 	}
 
-	if !hasStateUpdate {
-		return
-	}
 	d.lastEventCommitTs.Store(lastEventCommitTs)
 	d.gotDDLOnTs.Store(gotDDLOnTs)
 	d.gotSyncpointOnTS.Store(gotSyncpointOnTS)
