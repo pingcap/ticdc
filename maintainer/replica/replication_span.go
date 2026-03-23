@@ -258,7 +258,7 @@ func (r *SpanReplication) getCommittedCheckpointTs() uint64 {
 func (r *SpanReplication) NewAddDispatcherMessage(server node.ID, operatorType heartbeatpb.OperatorType) *messaging.TargetMessage {
 	startTs := r.status.Load().CheckpointTs
 	skipDMLAsStartTs := false
-	ddlBarrierInFlight := false
+	ddlBarrierBlockTs := uint64(0)
 	if state := r.blockState.Load(); state != nil && state.IsBlocked &&
 		(state.Stage == heartbeatpb.BlockStage_WAITING || state.Stage == heartbeatpb.BlockStage_WRITING) && state.BlockTs > 0 {
 		if state.IsSyncPoint {
@@ -272,7 +272,7 @@ func (r *SpanReplication) NewAddDispatcherMessage(server node.ID, operatorType h
 				startTs = state.BlockTs
 			}
 		} else {
-			ddlBarrierInFlight = true
+			ddlBarrierBlockTs = state.BlockTs
 			// For an in-flight DDL barrier, a recreated dispatcher must start from (blockTs-1) so that it can
 			// replay the DDL at blockTs. At the same time, it should skip DML events at blockTs to avoid potential
 			// duplicate DML writes when the dispatcher is moved/recreated during the barrier.
@@ -286,13 +286,20 @@ func (r *SpanReplication) NewAddDispatcherMessage(server node.ID, operatorType h
 		}
 	}
 	committedCheckpointTs := r.getCommittedCheckpointTs()
-	if ddlBarrierInFlight && committedCheckpointTs > startTs {
-		log.Panic("committed checkpoint exceeds ddl barrier replay point",
+	if ddlBarrierBlockTs > 0 && committedCheckpointTs > startTs {
+		// A stale DDL barrier state may survive maintainer failover or dispatcher recreation.
+		// Once the controller committed checkpoint has advanced beyond the replay point, replaying the
+		// DDL is no longer correct. Recreate the dispatcher from the committed checkpoint instead.
+		log.Debug("use committed checkpoint for stale ddl barrier",
 			zap.Stringer("changefeedID", r.ChangefeedID),
 			zap.String("dispatcherID", r.ID.String()),
 			zap.Int64("tableID", r.Span.TableID),
-			zap.Uint64("startTs", startTs),
+			zap.String("operatorType", operatorType.String()),
+			zap.Uint64("ddlBarrierBlockTs", ddlBarrierBlockTs),
+			zap.Uint64("originalStartTs", startTs),
 			zap.Uint64("committedCheckpointTs", committedCheckpointTs))
+		startTs = committedCheckpointTs
+		skipDMLAsStartTs = false
 	}
 	if committedCheckpointTs > startTs {
 		log.Debug("clamp dispatcher start ts to committed checkpoint",
