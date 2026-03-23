@@ -544,6 +544,25 @@ func TestHandleSignalEvent(t *testing.T) {
 			expectedResetEpoch:     1,
 		},
 		{
+			name: "resend pending reset even if dispatcher was created by prepare commit flow",
+			event: dispatcher.DispatcherEvent{
+				From: &localServerID,
+				Event: &mockEvent{
+					eventType: commonEvent.TypeReadyEvent,
+				},
+			},
+			initialState: func(stat *dispatcherStat) {
+				stat.readyCallback = func() {}
+				stat.connState.setEventServiceID(localServerID)
+				stat.connState.readyEventReceived.Store(true)
+				stat.epoch.Store(1)
+			},
+			expectedEventServiceID: localServerID,
+			expectedReadyReceived:  true,
+			expectedResetTarget:    localServerID,
+			expectedResetEpoch:     1,
+		},
+		{
 			name: "ignore signal event from unknown server",
 			event: dispatcher.DispatcherEvent{
 				From: &anotherRemoteServerID,

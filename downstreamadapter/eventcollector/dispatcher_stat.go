@@ -200,7 +200,7 @@ func (d *dispatcherStat) doReset(serverID node.ID, resetTs uint64) {
 }
 
 func (d *dispatcherStat) hasPendingReset() bool {
-	return d.readyCallback == nil && d.epoch.Load() > 0 && d.lastEventSeq.Load() == 0
+	return d.epoch.Load() > 0 && d.lastEventSeq.Load() == 0
 }
 
 func (d *dispatcherStat) resendPendingReset(serverID node.ID) {
