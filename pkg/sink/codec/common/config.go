@@ -69,6 +69,11 @@ type Config struct {
 	// canal-json only
 	ContentCompatible bool
 
+	// OnlyOutputPKColumns controls whether canal-json only outputs primary key columns
+	// in sqlType/mysqlType/data/old fields. It is only supported in active-active mode and
+	// requires enable-tidb-extension so originTs/checksum can be emitted in _tidb.
+	OnlyOutputPKColumns bool
+
 	// for sinking to cloud storage
 	Delimiter            string
 	Quote                string
@@ -176,6 +181,7 @@ type urlConfig struct {
 	AvroSchemaRegistry       string `form:"schema-registry"`
 	OnlyOutputUpdatedColumns *bool  `form:"only-output-updated-columns"`
 	ContentCompatible        *bool  `form:"content-compatible"`
+	OnlyOutputPKColumns      *bool  `form:"only-output-pk-columns"`
 
 	DebeziumDisableSchema *bool `form:"debezium-disable-schema"`
 	// EncodingFormatType is only works for the simple protocol,
@@ -279,6 +285,7 @@ func (c *Config) Apply(sinkURI *url.URL, sinkConfig *config.SinkConfig) error {
 
 	if c.Protocol == config.ProtocolCanalJSON {
 		c.ContentCompatible = util.GetOrZero(urlParameter.ContentCompatible)
+		c.OnlyOutputPKColumns = util.GetOrZero(urlParameter.OnlyOutputPKColumns)
 		if c.ContentCompatible {
 			c.OnlyOutputUpdatedColumns = true
 		}
@@ -313,6 +320,7 @@ func mergeConfig(
 		dest.AvroSchemaRegistry = util.GetOrZero(sinkConfig.SchemaRegistry)
 		dest.OnlyOutputUpdatedColumns = sinkConfig.OnlyOutputUpdatedColumns
 		dest.ContentCompatible = sinkConfig.ContentCompatible
+		dest.OnlyOutputPKColumns = sinkConfig.OnlyOutputPKColumns
 		if util.GetOrZero(dest.ContentCompatible) {
 			dest.OnlyOutputUpdatedColumns = util.AddressOf(true)
 		}

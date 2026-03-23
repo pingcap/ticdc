@@ -193,3 +193,50 @@ func TestReplicaConfig_EnableSplittableCheck_DefaultValue(t *testing.T) {
 	require.NotNil(t, config.Scheduler)
 	require.False(t, util.GetOrZero(config.Scheduler.EnableSplittableCheck))
 }
+
+func TestReplicaConfig_OnlyOutputPKColumnsValidation(t *testing.T) {
+	t.Parallel()
+
+	t.Run("requires active active", func(t *testing.T) {
+		cfg := GetDefaultReplicaConfig()
+		cfg.EnableActiveActive = util.AddressOf(false)
+		cfg.Sink.OnlyOutputPKColumns = util.AddressOf(true)
+
+		sinkURI, err := url.Parse("file:///tmp/test?protocol=canal-json")
+		require.NoError(t, err)
+		err = cfg.ValidateAndAdjust(sinkURI)
+		require.ErrorContains(t, err, "only-output-pk-columns requires enable-active-active to be true")
+	})
+
+	t.Run("requires canal json protocol", func(t *testing.T) {
+		cfg := GetDefaultReplicaConfig()
+		cfg.EnableActiveActive = util.AddressOf(true)
+		cfg.Sink.OnlyOutputPKColumns = util.AddressOf(true)
+
+		sinkURI, err := url.Parse("file:///tmp/test?protocol=open-protocol")
+		require.NoError(t, err)
+		err = cfg.ValidateAndAdjust(sinkURI)
+		require.ErrorContains(t, err, "only-output-pk-columns only supports canal-json protocol")
+	})
+
+	t.Run("requires enable tidb extension", func(t *testing.T) {
+		cfg := GetDefaultReplicaConfig()
+		cfg.EnableActiveActive = util.AddressOf(true)
+		cfg.Sink.OnlyOutputPKColumns = util.AddressOf(true)
+
+		sinkURI, err := url.Parse("file:///tmp/test?protocol=canal-json")
+		require.NoError(t, err)
+		err = cfg.ValidateAndAdjust(sinkURI)
+		require.ErrorContains(t, err, "only-output-pk-columns requires enable-tidb-extension to be true")
+	})
+
+	t.Run("valid with active active canal json and tidb extension", func(t *testing.T) {
+		cfg := GetDefaultReplicaConfig()
+		cfg.EnableActiveActive = util.AddressOf(true)
+		cfg.Sink.OnlyOutputPKColumns = util.AddressOf(true)
+
+		sinkURI, err := url.Parse("file:///tmp/test?protocol=canal-json&enable-tidb-extension=true")
+		require.NoError(t, err)
+		require.NoError(t, cfg.ValidateAndAdjust(sinkURI))
+	})
+}

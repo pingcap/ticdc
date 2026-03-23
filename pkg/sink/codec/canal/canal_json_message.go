@@ -129,6 +129,12 @@ type tidbExtension struct {
 	OnlyHandleKey      bool   `json:"onlyHandleKey,omitempty"`
 	ClaimCheckLocation string `json:"claimCheckLocation,omitempty"`
 	RowKey             string `json:"rowkey,omitempty"`
+	// OriginTs is the upstream TSO from the _tidb_origin_ts column (new row for UPDATE).
+	// It is 0 when that column is null or not present in the encoded row (common for UPDATE
+	// if the column was not written); checksum still reflects non-PK column values.
+	OriginTs uint64 `json:"originTs,omitempty"`
+	// Checksum is a SHA-256 of a deterministic JSON payload of non-PK, non-origin-ts columns.
+	Checksum []byte `json:"checksum,omitempty"`
 }
 
 type canalJSONMessageWithTiDBExtension struct {

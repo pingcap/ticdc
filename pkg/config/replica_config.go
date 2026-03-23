@@ -71,6 +71,7 @@ var defaultReplicaConfig = &ReplicaConfig{
 		OnlyOutputUpdatedColumns:         util.AddressOf(false),
 		DeleteOnlyOutputHandleKeyColumns: util.AddressOf(false),
 		ContentCompatible:                util.AddressOf(false),
+		OnlyOutputPKColumns:              util.AddressOf(false),
 		TiDBSourceID:                     DefaultTiDBSourceID,
 		AdvanceTimeoutInSec:              util.AddressOf(DefaultAdvanceTimeoutInSec),
 		SendBootstrapIntervalInSec:       util.AddressOf(DefaultSendBootstrapIntervalInSec),
@@ -379,6 +380,26 @@ func (c *ReplicaConfig) ValidateAndAdjust(sinkURI *url.URL) error { // check sin
 		if c.Consistent != nil && redo.IsConsistentEnabled(util.GetOrZero(c.Consistent.Level)) {
 			return cerror.ErrInvalidReplicaConfig.
 				FastGenByArgs("enable-active-active is incompatible with redo log/consistency feature, please disable redo")
+		}
+	}
+
+	if c.Sink != nil && util.GetOrZero(c.Sink.OnlyOutputPKColumns) {
+		if !util.GetOrZero(c.EnableActiveActive) {
+			return cerror.ErrInvalidReplicaConfig.
+				FastGenByArgs("only-output-pk-columns requires enable-active-active to be true")
+		}
+		if util.GetOrZero(c.Sink.Protocol) != ProtocolCanalJSON.String() {
+			return cerror.ErrInvalidReplicaConfig.
+				FastGenByArgs("only-output-pk-columns only supports canal-json protocol")
+		}
+		tidbExtEnabled, err := c.Sink.ResolvedEnableTiDBExtension(sinkURI)
+		if err != nil {
+			return cerror.ErrInvalidReplicaConfig.
+				FastGenByArgs(fmt.Sprintf("invalid enable-tidb-extension in sink-uri: %v", err))
+		}
+		if !tidbExtEnabled {
+			return cerror.ErrInvalidReplicaConfig.
+				FastGenByArgs("only-output-pk-columns requires enable-tidb-extension to be true")
 		}
 	}
 

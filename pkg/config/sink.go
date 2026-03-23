@@ -166,6 +166,12 @@ type SinkConfig struct {
 	// ContentCompatible is only available when the downstream is MQ.
 	ContentCompatible *bool `toml:"content-compatible" json:"content-compatible,omitempty"`
 
+	// OnlyOutputPKColumns is only available when protocol is canal-json, enable-active-active is true,
+	// and enable-tidb-extension is true.
+	// For UPDATE events, originTs in _tidb is taken from the _tidb_origin_ts column in the new row;
+	// if that column is null or omitted after the update, originTs is 0 while checksum still covers non-PK columns.
+	OnlyOutputPKColumns *bool `toml:"only-output-pk-columns" json:"only-output-pk-columns,omitempty"`
+
 	// TiDBSourceID is the source ID of the upstream TiDB,
 	// which is used to set the `tidb_cdc_write_source` session variable.
 	// Note: This field is only used internally and only used in the MySQL sink.
@@ -686,6 +692,21 @@ type MySQLConfig struct {
 	EnableBatchDML               *bool   `toml:"enable-batch-dml" json:"enable-batch-dml,omitempty"`
 	EnableMultiStatement         *bool   `toml:"enable-multi-statement" json:"enable-multi-statement,omitempty"`
 	EnableCachePreparedStatement *bool   `toml:"enable-cache-prepared-statement" json:"enable-cache-prepared-statement,omitempty"`
+}
+
+// ResolvedEnableTiDBExtension reports whether the TiDB extension is enabled for the codec.
+// Note: enable-active-active with only-output-pk-columns only allows storage sinks today,
+// so in that case enable-tidb-extension is expected on the sink-uri.
+func (s *SinkConfig) ResolvedEnableTiDBExtension(sinkURI *url.URL) (bool, error) {
+	if sinkURI != nil {
+		if v := sinkURI.Query().Get("enable-tidb-extension"); v != "" {
+			return strconv.ParseBool(v)
+		}
+	}
+	if s != nil && s.KafkaConfig != nil && s.KafkaConfig.CodecConfig != nil {
+		return util.GetOrZero(s.KafkaConfig.CodecConfig.EnableTiDBExtension), nil
+	}
+	return false, nil
 }
 
 // CloudStorageConfig represents a cloud storage sink configuration
