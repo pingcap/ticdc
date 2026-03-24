@@ -182,7 +182,7 @@ func (l *ddlWriter) prepareWriteData(data []byte) ([]byte, error) {
 	buf := bytes.NewBuffer(make([]byte, 0, len(data)))
 	compressor := lz4.NewWriter(buf)
 	if _, err := compressor.Write(data); err != nil {
-		log.Error("write to new file failed", zap.Error(err))
+		log.Warn("write data to the compressor failed", zap.Error(err))
 		return nil, errors.Trace(err)
 	}
 	if err := compressor.Close(); err != nil {
