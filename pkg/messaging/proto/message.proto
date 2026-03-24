@@ -14,9 +14,9 @@ message Message {
     // payload is the payload of the message.
     repeated bytes payload = 5;
     // create_at is the sender timestamp in unix milliseconds.
-    int64 create_at = 8;
+    int64 create_at = 6;
     // group is used by the receiver to shard handling work.
-    uint64 group = 9;
+    uint64 group = 7;
 }
 
 service MessageService {

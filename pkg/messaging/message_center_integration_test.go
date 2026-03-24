@@ -80,7 +80,7 @@ func waitForTargetsReady(mc *messageCenter) {
 	}
 }
 
-func waitForTargetStreamReady(t *testing.T, mc *messageCenter, targetID node.ID, streamType string) {
+func waitForTargetStreamReady(t *testing.T, mc *messageCenter, targetID node.ID, streamType StreamType) {
 	require.Eventually(t, func() bool {
 		mc.remoteTargets.RLock()
 		target, ok := mc.remoteTargets.m[targetID]
@@ -127,7 +127,7 @@ func TestRemoteMessageEnvelopeMetadata(t *testing.T) {
 	mc1, mc2, _, cleanup := setupMessageCenters(t)
 	defer cleanup()
 
-	waitForTargetStreamReady(t, mc1, mc2.id, streamTypeCommand)
+	waitForTargetStreamReady(t, mc1, mc2.id, CommandStreamType)
 
 	topic := "metadata-topic"
 	receivedCh := make(chan *TargetMessage, 1)

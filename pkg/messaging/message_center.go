@@ -38,6 +38,13 @@ const (
 	messageCenterCheckInterval = time.Second * 1
 )
 
+type StreamType string
+
+const (
+	EventStreamType   StreamType = "event"
+	CommandStreamType StreamType = "command"
+)
+
 // MessageCenter is the interface to send and receive messages to/from other targets.
 // Note: Methods of MessageCenter and MessageSender are thread-safe.
 // OnNodeChanges is not thread-safe, and should be called in the main thread of a server.
@@ -55,7 +62,6 @@ type MessageCenter interface {
 type MessageSender interface {
 	SendEvent(msg *TargetMessage) error
 	SendCommand(cmd *TargetMessage) error
-	// IsReadyToSend reports whether the target event stream is ready.
 	IsReadyToSend(target node.ID) bool
 }
 
@@ -173,6 +179,9 @@ func (mc *messageCenter) checkRemoteTarget(ctx context.Context) {
 			mc.remoteTargets.RLock()
 			for _, target := range mc.remoteTargets.m {
 				if err := target.getErr(); err != nil {
+					if ctx.Err() != nil || target.ctx.Err() != nil {
+						continue
+					}
 					log.Warn("remote target error, reset the connection",
 						zap.Stringer("localID", mc.id),
 						zap.String("localAddr", mc.addr),
@@ -269,7 +278,7 @@ func (mc *messageCenter) IsReadyToSend(targetID node.ID) bool {
 	if !ok {
 		return false
 	}
-	return target.isReadyToSendByStream(streamTypeEvent)
+	return target.isReadyToSend()
 }
 
 func (mc *messageCenter) SendEvent(msg *TargetMessage) error {

@@ -15,6 +15,7 @@ package messaging
 
 import (
 	"context"
+	goerrors "errors"
 	"fmt"
 	"sync"
 	"time"
@@ -33,12 +34,12 @@ import (
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 const (
 	reconnectInterval = 2 * time.Second
-	streamTypeEvent   = "event"
-	streamTypeCommand = "command"
 
 	eventRecvCh   = "eventRecvCh"
 	commandRecvCh = "commandRecvCh"
@@ -61,7 +62,7 @@ type remoteMessageTarget struct {
 	targetAddr      string
 	security        *security.Credential
 
-	streams sync.Map // string(streamType) -> *streamSession
+	streams sync.Map // StreamType -> *streamSession
 
 	// GRPC client connection to the remote target
 	conn struct {
@@ -113,14 +114,40 @@ func (s *remoteMessageTarget) isReadyToSend() bool {
 	return ready
 }
 
-func (s *remoteMessageTarget) isReadyToSendByStream(streamType string) bool {
+func (s *remoteMessageTarget) isReadyToSendByStream(streamType StreamType) bool {
 	session, ok := s.streams.Load(streamType)
 	return ok && session != nil
 }
 
+func (s *remoteMessageTarget) updateStreamGauge() {
+	readyCount := 0
+	s.streams.Range(func(_, value interface{}) bool {
+		if value != nil {
+			readyCount++
+		}
+		return true
+	})
+	metrics.MessagingStreamGauge.WithLabelValues(s.targetId.String()).Set(float64(readyCount))
+}
+
+func (s *remoteMessageTarget) clearMetrics() {
+	metrics.MessagingStreamGauge.DeleteLabelValues(s.targetId.String())
+}
+
+func isExpectedStreamShutdown(ctx context.Context, err error) bool {
+	if err == nil || ctx.Err() == nil {
+		return false
+	}
+	if goerrors.Is(err, context.Canceled) || goerrors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	code := status.Code(err)
+	return code == codes.Canceled || code == codes.DeadlineExceeded
+}
+
 // Send an event message to the remote target
 func (s *remoteMessageTarget) sendEvent(msg ...*TargetMessage) error {
-	if !s.isReadyToSendByStream(streamTypeEvent) {
+	if !s.isReadyToSendByStream(EventStreamType) {
 		s.errorCounter.Inc()
 		return AppError{Type: ErrorTypeConnectionNotFound, Reason: genSendErrorMsg("Stream not ready", string(s.messageCenterID), s.localAddr, string(s.targetId), s.targetAddr)}
 	}
@@ -143,7 +170,7 @@ func (s *remoteMessageTarget) sendEvent(msg ...*TargetMessage) error {
 
 // Send a command message to the remote target
 func (s *remoteMessageTarget) sendCommand(msg ...*TargetMessage) error {
-	if !s.isReadyToSendByStream(streamTypeCommand) {
+	if !s.isReadyToSendByStream(CommandStreamType) {
 		s.errorCounter.Inc()
 		return AppError{Type: ErrorTypeConnectionNotFound, Reason: genSendErrorMsg("Stream not ready", string(s.messageCenterID), s.localAddr, string(s.targetId), s.targetAddr)}
 	}
@@ -219,8 +246,9 @@ func newRemoteMessageTarget(
 	}
 
 	// initialize streams placeholder
-	rt.streams.Store(streamTypeEvent, nil)
-	rt.streams.Store(streamTypeCommand, nil)
+	rt.streams.Store(EventStreamType, nil)
+	rt.streams.Store(CommandStreamType, nil)
+	rt.updateStreamGauge()
 
 	err := rt.connect()
 	if err != nil {
@@ -241,6 +269,7 @@ func (s *remoteMessageTarget) close() {
 
 	s.closeConn()
 	s.cancel()
+	s.clearMetrics()
 
 	log.Info("Close remote target done",
 		zap.Stringer("localID", s.messageCenterID),
@@ -296,7 +325,7 @@ func (s *remoteMessageTarget) connect() error {
 	var outerErr error
 
 	s.streams.Range(func(key, value interface{}) bool {
-		streamType := key.(string)
+		streamType := key.(StreamType)
 		stream, ok := value.(grpcStream)
 		if ok && stream != nil {
 			log.Panic("Stream already exists",
@@ -304,7 +333,7 @@ func (s *remoteMessageTarget) connect() error {
 				zap.String("localAddr", s.localAddr),
 				zap.Any("remoteID", s.targetId),
 				zap.String("remoteAddr", s.targetAddr),
-				zap.String("streamType", streamType))
+				zap.String("streamType", string(streamType)))
 		}
 
 		streamCtx, streamCancel := context.WithCancel(s.ctx)
@@ -333,7 +362,7 @@ func (s *remoteMessageTarget) connect() error {
 		handshake := &HandshakeMessage{
 			Version:    1,
 			Timestamp:  time.Now().Unix(),
-			StreamType: streamType,
+			StreamType: string(streamType),
 		}
 
 		hsBytes, err := handshake.Marshal()
@@ -368,6 +397,7 @@ func (s *remoteMessageTarget) connect() error {
 		}
 
 		s.streams.Store(streamType, session)
+		s.updateStreamGauge()
 		return true
 	})
 
@@ -381,7 +411,7 @@ func (s *remoteMessageTarget) connect() error {
 	// Start goroutines for sending messages
 	eg, egCtx := errgroup.WithContext(s.ctx)
 	s.streams.Range(func(key, value interface{}) bool {
-		streamType := key.(string)
+		streamType := key.(StreamType)
 		s.run(eg, egCtx, streamType)
 		return true
 	})
@@ -398,7 +428,7 @@ func (s *remoteMessageTarget) connect() error {
 // Reset the connection to the remote target
 func (s *remoteMessageTarget) resetConnect() {
 	// Only reconnect if this node should initiate connections
-	if !s.isInitiator {
+	if !s.isInitiator || s.ctx.Err() != nil {
 		return
 	}
 	log.Info("start to reset connection to remote target",
@@ -435,6 +465,7 @@ LOOP:
 
 // Handle an incoming stream connection from a remote node, it will block until remote cancel the stream.
 func (s *remoteMessageTarget) handleIncomingStream(stream proto.MessageService_StreamMessagesServer, handshake *HandshakeMessage) error {
+	streamType := StreamType(handshake.StreamType)
 	// Only accept incoming connections if this node should not initiate
 	if s.isInitiator {
 		log.Warn("Received unexpected connection from node with higher ID",
@@ -446,11 +477,11 @@ func (s *remoteMessageTarget) handleIncomingStream(stream proto.MessageService_S
 	}
 
 	// Cancel the old stream session if it exists.
-	if old, ok := s.streams.Load(handshake.StreamType); ok && old != nil {
+	if old, ok := s.streams.Load(streamType); ok && old != nil {
 		log.Info("Canceling old stream session",
 			zap.Stringer("localID", s.messageCenterID),
 			zap.Stringer("remoteID", s.targetId),
-			zap.String("streamType", handshake.StreamType))
+			zap.String("streamType", string(streamType)))
 		old.(*streamSession).cancel()
 	}
 
@@ -460,17 +491,18 @@ func (s *remoteMessageTarget) handleIncomingStream(stream proto.MessageService_S
 		stream: stream,
 		cancel: streamCancel,
 	}
-	s.streams.Store(handshake.StreamType, session)
+	s.streams.Store(streamType, session)
+	s.updateStreamGauge()
 
 	eg, egCtx := errgroup.WithContext(streamCtx)
 	// Start goroutines for sending and receiving messages
-	s.run(eg, egCtx, handshake.StreamType)
+	s.run(eg, egCtx, streamType)
 	// Block until the there is an error or the context is done
 	return eg.Wait()
 }
 
 // run spawn two goroutines to handle message sending and receiving
-func (s *remoteMessageTarget) run(eg *errgroup.Group, ctx context.Context, streamType string) {
+func (s *remoteMessageTarget) run(eg *errgroup.Group, ctx context.Context, streamType StreamType) {
 	eg.Go(func() error {
 		return s.runReceiveMessages(ctx, streamType)
 	})
@@ -483,13 +515,13 @@ func (s *remoteMessageTarget) run(eg *errgroup.Group, ctx context.Context, strea
 		zap.String("localAddr", s.localAddr),
 		zap.Stringer("remoteID", s.targetId),
 		zap.String("remoteAddr", s.targetAddr),
-		zap.String("streamType", streamType))
+		zap.String("streamType", string(streamType)))
 }
 
 // Run goroutine to handle message sending
-func (s *remoteMessageTarget) runSendMessages(ctx context.Context, streamType string) (err error) {
+func (s *remoteMessageTarget) runSendMessages(ctx context.Context, streamType StreamType) (err error) {
 	defer func() {
-		if err != nil {
+		if err != nil && !isExpectedStreamShutdown(ctx, err) {
 			s.collectErr(err)
 		}
 		log.Info("exit runSendMessages",
@@ -497,7 +529,7 @@ func (s *remoteMessageTarget) runSendMessages(ctx context.Context, streamType st
 			zap.String("localAddr", s.localAddr),
 			zap.Stringer("remoteID", s.targetId),
 			zap.String("remoteAddr", s.targetAddr),
-			zap.String("streamType", streamType),
+			zap.String("streamType", string(streamType)),
 			zap.Error(err))
 	}()
 
@@ -533,7 +565,7 @@ func (s *remoteMessageTarget) runSendMessages(ctx context.Context, streamType st
 	gs := session.(*streamSession).stream
 
 	sendCh := s.sendEventCh
-	if streamType == streamTypeCommand {
+	if streamType == CommandStreamType {
 		sendCh = s.sendCmdCh
 	}
 	for {
@@ -542,18 +574,27 @@ func (s *remoteMessageTarget) runSendMessages(ctx context.Context, streamType st
 			return ctx.Err()
 		case msg := <-sendCh:
 			failpoint.Inject("InjectDropRemoteMessage", func() {
-				log.Info("Inject Drop Remote Message", zap.Stringer("localID", s.messageCenterID), zap.String("localAddr", s.localAddr), zap.Stringer("remoteID", s.targetId), zap.String("remoteAddr", s.targetAddr), zap.String("streamType", streamType), zap.Any("message", msg))
+				log.Info("Inject Drop Remote Message", zap.Stringer("localID", s.messageCenterID), zap.String("localAddr", s.localAddr), zap.Stringer("remoteID", s.targetId), zap.String("remoteAddr", s.targetAddr), zap.String("streamType", string(streamType)), zap.Any("message", msg))
 				failpoint.Continue()
 			})
 
 			if err := gs.Send(msg); err != nil {
+				if isExpectedStreamShutdown(ctx, err) {
+					log.Info("remote target send loop exits with canceled stream",
+						zap.Stringer("localID", s.messageCenterID),
+						zap.String("localAddr", s.localAddr),
+						zap.Stringer("remoteID", s.targetId),
+						zap.String("remoteAddr", s.targetAddr),
+						zap.String("streamType", string(streamType)))
+					return ctx.Err()
+				}
 				log.Error("Error sending message",
 					zap.Error(err),
 					zap.Stringer("localID", s.messageCenterID),
 					zap.String("localAddr", s.localAddr),
 					zap.Stringer("remoteID", s.targetId),
 					zap.String("remoteAddr", s.targetAddr),
-					zap.String("streamType", streamType),
+					zap.String("streamType", string(streamType)),
 					zap.Stringer("message", msg))
 				err = AppError{Type: ErrorTypeMessageSendFailed, Reason: errors.Trace(err).Error()}
 				return err
@@ -563,9 +604,9 @@ func (s *remoteMessageTarget) runSendMessages(ctx context.Context, streamType st
 }
 
 // Run goroutine to handle message receiving
-func (s *remoteMessageTarget) runReceiveMessages(ctx context.Context, streamType string) (err error) {
+func (s *remoteMessageTarget) runReceiveMessages(ctx context.Context, streamType StreamType) (err error) {
 	defer func() {
-		if err != nil {
+		if err != nil && !isExpectedStreamShutdown(ctx, err) {
 			s.collectErr(err)
 		}
 		log.Info("exit runReceiveMessages",
@@ -573,7 +614,7 @@ func (s *remoteMessageTarget) runReceiveMessages(ctx context.Context, streamType
 			zap.String("localAddr", s.localAddr),
 			zap.Stringer("remoteID", s.targetId),
 			zap.String("remoteAddr", s.targetAddr),
-			zap.String("streamType", streamType),
+			zap.String("streamType", string(streamType)),
 			zap.Error(err))
 	}()
 
@@ -609,7 +650,7 @@ func (s *remoteMessageTarget) runReceiveMessages(ctx context.Context, streamType
 	gs := session.(*streamSession).stream
 
 	recvCh := s.recvEventCh
-	if streamType == streamTypeCommand {
+	if streamType == CommandStreamType {
 		recvCh = s.recvCmdCh
 	}
 
@@ -627,6 +668,14 @@ func (s *remoteMessageTarget) handleIncomingMessage(ctx context.Context, stream 
 		}
 		message, err := stream.Recv()
 		if err != nil {
+			if isExpectedStreamShutdown(ctx, err) {
+				log.Info("remote target receive loop exits with canceled stream",
+					zap.Stringer("localID", s.messageCenterID),
+					zap.String("localAddr", s.localAddr),
+					zap.Stringer("remoteID", s.targetId),
+					zap.String("remoteAddr", s.targetAddr))
+				return ctx.Err()
+			}
 			log.Error("Error receiving message",
 				zap.Error(err),
 				zap.Stringer("localID", s.messageCenterID),
@@ -662,7 +711,11 @@ func (s *remoteMessageTarget) handleIncomingMessage(ctx context.Context, stream 
 			targetMsg.Message = append(targetMsg.Message, msg)
 		}
 
-		ch <- targetMsg
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case ch <- targetMsg:
+		}
 	}
 }
 
@@ -726,6 +779,7 @@ func (s *remoteMessageTarget) closeConn() {
 		s.streams.Store(key, nil)
 		return true
 	})
+	s.updateStreamGauge()
 }
 
 func (s *remoteMessageTarget) getErr() error {
