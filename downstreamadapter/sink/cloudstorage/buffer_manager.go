@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/pingcap/failpoint"
-	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/cloudstorage/spool"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -27,7 +26,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/prometheus/client_golang/prometheus"
-	"go.uber.org/zap"
 )
 
 const (
@@ -42,7 +40,6 @@ const (
 // bufferManager owns pending DML batches for one writer shard. It decides
 // when to emit a flush batch and how to react when local spool disk quota is tight.
 type bufferManager struct {
-	shardID      int
 	changeFeedID common.ChangeFeedID
 	config       *cloudstorage.Config
 	spool        *spool.Spool
@@ -63,31 +60,32 @@ func newBufferManager(
 	spoolBuffer *spool.Spool,
 	flushCh chan writerTask,
 ) *bufferManager {
+	var (
+		keyspace    = changefeedID.Keyspace()
+		name        = changefeedID.Name()
+		writerLabel = strconv.Itoa(shardID)
+	)
 	return &bufferManager{
-		shardID:      shardID,
-		changeFeedID: changefeedID,
-		config:       config,
-		spool:        spoolBuffer,
-		inputCh:      chann.NewAutoDrainChann[*task](),
-		flushCh:      flushCh,
-		writerLabel:  strconv.Itoa(shardID),
-		metricPendingTables: metrics.CloudStoragePendingTablesGauge.
-			WithLabelValues(changefeedID.Keyspace(), changefeedID.ID().String(), strconv.Itoa(shardID)),
-		metricPendingEntries: metrics.CloudStoragePendingEntriesGauge.
-			WithLabelValues(changefeedID.Keyspace(), changefeedID.ID().String(), strconv.Itoa(shardID)),
-		metricPendingBytes: metrics.CloudStoragePendingBytesGauge.
-			WithLabelValues(changefeedID.Keyspace(), changefeedID.ID().String(), strconv.Itoa(shardID)),
+		changeFeedID:         changefeedID,
+		config:               config,
+		spool:                spoolBuffer,
+		inputCh:              chann.NewAutoDrainChann[*task](),
+		flushCh:              flushCh,
+		writerLabel:          writerLabel,
+		metricPendingTables:  metrics.CloudStoragePendingTablesGauge.WithLabelValues(keyspace, name, writerLabel),
+		metricPendingEntries: metrics.CloudStoragePendingEntriesGauge.WithLabelValues(keyspace, name, writerLabel),
+		metricPendingBytes:   metrics.CloudStoragePendingBytesGauge.WithLabelValues(keyspace, name, writerLabel),
 	}
 }
 
 func (c *bufferManager) run(ctx context.Context) error {
-	batch := newBatchedTask()
+	buffered := newBufferedTasks()
 	ticker := time.NewTicker(c.config.FlushInterval)
-	defer ticker.Stop()
-	defer close(c.flushCh)
-	defer c.deleteMetrics()
-	c.updatePendingMetrics(batch)
-
+	defer func() {
+		ticker.Stop()
+		close(c.flushCh)
+		c.deleteMetrics()
+	}()
 	for {
 		failpoint.Inject("passTickerOnce", func() {
 			<-ticker.C
@@ -97,28 +95,25 @@ func (c *bufferManager) run(ctx context.Context) error {
 		case <-ctx.Done():
 			return errors.Trace(context.Cause(ctx))
 		case <-ticker.C:
-			if batch.isEmpty() {
+			if buffered.isEmpty() {
 				continue
 			}
-			tablesLength := len(batch.batch)
 			var err error
-			batch, err = c.emitBatch(ctx, batch, flushReasonInterval)
+			buffered, err = c.emitBatch(ctx, buffered, flushReasonInterval)
 			if err != nil {
 				return err
 			}
-			log.Debug("flush task is emitted successfully when flush interval exceeds",
-				zap.Int("tablesLength", tablesLength))
 		case task, ok := <-c.inputCh.Out():
 			if !ok {
-				if batch.isEmpty() {
+				if buffered.isEmpty() {
 					return nil
 				}
-				_, err := c.emitBatch(ctx, batch, flushReasonClose)
+				_, err := c.emitBatch(ctx, buffered, flushReasonClose)
 				return err
 			}
 
 			if task.isFlushTask() {
-				dispatcherBatch := batch.detachTaskByDispatcher(task.dispatcherID)
+				dispatcherBatch := buffered.detachDispatcher(task.dispatcherID)
 				if !dispatcherBatch.isEmpty() {
 					var err error
 					dispatcherBatch, err = c.emitBatch(ctx, dispatcherBatch, flushReasonBarrier)
@@ -135,7 +130,7 @@ func (c *bufferManager) run(ctx context.Context) error {
 			}
 
 			var err error
-			batch, err = c.handleDMLEvent(ctx, batch, task)
+			buffered, err = c.handleDMLEvent(ctx, buffered, task)
 			if err != nil {
 				return err
 			}
@@ -143,7 +138,7 @@ func (c *bufferManager) run(ctx context.Context) error {
 	}
 }
 
-func (c *bufferManager) handleDMLEvent(ctx context.Context, batch batchedTask, task *task) (batchedTask, error) {
+func (c *bufferManager) handleDMLEvent(ctx context.Context, batch bufferedTasks, task *task) (bufferedTasks, error) {
 	if len(task.encodedMsgs) == 0 {
 		task.event.PostEnqueue()
 		return batch, nil
@@ -154,12 +149,11 @@ func (c *bufferManager) handleDMLEvent(ctx context.Context, batch batchedTask, t
 		if err != nil {
 			return batch, err
 		}
-		if action == spool.EnqueueActionAcceptedOversized {
-			batch.handleSingleTableEvent(task, entry)
+		switch action {
+		case spool.EnqueueActionAcceptedOversized:
+			batch.addEntry(task, entry)
 			return c.emitTableBatch(ctx, batch, task.versionedTable, flushReasonOversize)
-		}
-
-		if action == spool.EnqueueActionWaitDiskQuota {
+		case spool.EnqueueActionWaitDiskQuota:
 			batch, err = c.emitBatch(ctx, batch, flushReasonQuota)
 			if err != nil {
 				return batch, err
@@ -168,12 +162,12 @@ func (c *bufferManager) handleDMLEvent(ctx context.Context, batch batchedTask, t
 				return batch, err
 			}
 			continue
+		default:
+			batch.addEntry(task, entry)
 		}
 
-		batch.handleSingleTableEvent(task, entry)
-
 		table := task.versionedTable
-		if batch.batch[table].size < uint64(c.config.FileSize) {
+		if batch.tables[table].size < uint64(c.config.FileSize) {
 			c.updatePendingMetrics(batch)
 			return batch, nil
 		}
@@ -181,7 +175,7 @@ func (c *bufferManager) handleDMLEvent(ctx context.Context, batch batchedTask, t
 	}
 }
 
-func (c *bufferManager) emitBatch(ctx context.Context, batch batchedTask, reason string) (batchedTask, error) {
+func (c *bufferManager) emitBatch(ctx context.Context, batch bufferedTasks, reason string) (bufferedTasks, error) {
 	if batch.isEmpty() {
 		c.updatePendingMetrics(batch)
 		return batch, nil
@@ -190,9 +184,9 @@ func (c *bufferManager) emitBatch(ctx context.Context, batch batchedTask, reason
 	select {
 	case <-ctx.Done():
 		return batch, errors.Trace(context.Cause(ctx))
-	case c.flushCh <- writerTask{batch: batch}:
-		c.recordFlush(reason)
-		emptyBatch := newBatchedTask()
+	case c.flushCh <- writerTask{tableBatch: batch}:
+		metrics.CloudStorageFlushCountCounter.WithLabelValues(c.changeFeedID.Keyspace(), c.changeFeedID.Name(), c.writerLabel, reason).Inc()
+		emptyBatch := newBufferedTasks()
 		c.updatePendingMetrics(emptyBatch)
 		return emptyBatch, nil
 	}
@@ -200,20 +194,17 @@ func (c *bufferManager) emitBatch(ctx context.Context, batch batchedTask, reason
 
 func (c *bufferManager) emitTableBatch(
 	ctx context.Context,
-	batch batchedTask,
+	batch bufferedTasks,
 	table cloudstorage.VersionedTableName,
 	reason string,
-) (batchedTask, error) {
-	tableBatch := batch.detachTaskByTable(table)
+) (bufferedTasks, error) {
+	tableBatch := batch.detachTable(table)
 	select {
 	case <-ctx.Done():
 		return batch, errors.Trace(context.Cause(ctx))
-	case c.flushCh <- writerTask{batch: tableBatch}:
-		c.recordFlush(reason)
+	case c.flushCh <- writerTask{tableBatch: tableBatch}:
+		metrics.CloudStorageFlushCountCounter.WithLabelValues(c.changeFeedID.Keyspace(), c.changeFeedID.Name(), c.writerLabel, reason).Inc()
 		c.updatePendingMetrics(batch)
-		log.Debug("flush task is emitted successfully when file size exceeds",
-			zap.Any("table", table),
-			zap.Int("eventsLength", len(tableBatch.batch[table].entries)))
 		return batch, nil
 	}
 }
@@ -227,20 +218,11 @@ func (c *bufferManager) enqueueTask(ctx context.Context, t *task) error {
 	}
 }
 
-func (c *bufferManager) recordFlush(reason string) {
-	metrics.CloudStorageFlushCountCounter.WithLabelValues(
-		c.changeFeedID.Keyspace(),
-		c.changeFeedID.ID().String(),
-		c.writerLabel,
-		reason,
-	).Inc()
-}
-
-func (c *bufferManager) updatePendingMetrics(batch batchedTask) {
-	pendingTables := len(batch.batch)
+func (c *bufferManager) updatePendingMetrics(batch bufferedTasks) {
+	pendingTables := len(batch.tables)
 	pendingEntries := 0
 	pendingBytes := uint64(0)
-	for _, tableTask := range batch.batch {
+	for _, tableTask := range batch.tables {
 		pendingEntries += len(tableTask.entries)
 		pendingBytes += tableTask.size
 	}
@@ -250,31 +232,23 @@ func (c *bufferManager) updatePendingMetrics(batch batchedTask) {
 }
 
 func (c *bufferManager) deleteMetrics() {
-	metrics.CloudStoragePendingTablesGauge.DeleteLabelValues(
-		c.changeFeedID.Keyspace(),
-		c.changeFeedID.ID().String(),
-		c.writerLabel,
+	var (
+		keyspace = c.changeFeedID.Keyspace()
+		name     = c.changeFeedID.Name()
 	)
-	metrics.CloudStoragePendingEntriesGauge.DeleteLabelValues(
-		c.changeFeedID.Keyspace(),
-		c.changeFeedID.ID().String(),
-		c.writerLabel,
-	)
-	metrics.CloudStoragePendingBytesGauge.DeleteLabelValues(
-		c.changeFeedID.Keyspace(),
-		c.changeFeedID.ID().String(),
-		c.writerLabel,
-	)
-	metrics.CloudStorageFlushCountCounter.DeleteLabelValues(c.changeFeedID.Keyspace(), c.changeFeedID.ID().String(), c.writerLabel, flushReasonSize)
-	metrics.CloudStorageFlushCountCounter.DeleteLabelValues(c.changeFeedID.Keyspace(), c.changeFeedID.ID().String(), c.writerLabel, flushReasonInterval)
-	metrics.CloudStorageFlushCountCounter.DeleteLabelValues(c.changeFeedID.Keyspace(), c.changeFeedID.ID().String(), c.writerLabel, flushReasonBarrier)
-	metrics.CloudStorageFlushCountCounter.DeleteLabelValues(c.changeFeedID.Keyspace(), c.changeFeedID.ID().String(), c.writerLabel, flushReasonClose)
-	metrics.CloudStorageFlushCountCounter.DeleteLabelValues(c.changeFeedID.Keyspace(), c.changeFeedID.ID().String(), c.writerLabel, flushReasonQuota)
-	metrics.CloudStorageFlushCountCounter.DeleteLabelValues(c.changeFeedID.Keyspace(), c.changeFeedID.ID().String(), c.writerLabel, flushReasonOversize)
+	metrics.CloudStoragePendingTablesGauge.DeleteLabelValues(keyspace, name, c.writerLabel)
+	metrics.CloudStoragePendingEntriesGauge.DeleteLabelValues(keyspace, name, c.writerLabel)
+	metrics.CloudStoragePendingBytesGauge.DeleteLabelValues(keyspace, name, c.writerLabel)
+	metrics.CloudStorageFlushCountCounter.DeleteLabelValues(keyspace, name, c.writerLabel, flushReasonSize)
+	metrics.CloudStorageFlushCountCounter.DeleteLabelValues(keyspace, name, c.writerLabel, flushReasonInterval)
+	metrics.CloudStorageFlushCountCounter.DeleteLabelValues(keyspace, name, c.writerLabel, flushReasonBarrier)
+	metrics.CloudStorageFlushCountCounter.DeleteLabelValues(keyspace, name, c.writerLabel, flushReasonClose)
+	metrics.CloudStorageFlushCountCounter.DeleteLabelValues(keyspace, name, c.writerLabel, flushReasonQuota)
+	metrics.CloudStorageFlushCountCounter.DeleteLabelValues(keyspace, name, c.writerLabel, flushReasonOversize)
 }
 
-type batchedTask struct {
-	batch map[cloudstorage.VersionedTableName]*singleTableTask
+type bufferedTasks struct {
+	tables map[cloudstorage.VersionedTableName]*singleTableTask
 }
 
 type singleTableTask struct {
@@ -283,50 +257,50 @@ type singleTableTask struct {
 	entries   []*spool.Entry
 }
 
-func newBatchedTask() batchedTask {
-	return batchedTask{
-		batch: make(map[cloudstorage.VersionedTableName]*singleTableTask),
+func newBufferedTasks() bufferedTasks {
+	return bufferedTasks{
+		tables: make(map[cloudstorage.VersionedTableName]*singleTableTask),
 	}
 }
 
-func (t *batchedTask) isEmpty() bool {
-	return len(t.batch) == 0
+func (t *bufferedTasks) isEmpty() bool {
+	return len(t.tables) == 0
 }
 
-func (t *batchedTask) handleSingleTableEvent(event *task, entry *spool.Entry) {
+func (t *bufferedTasks) addEntry(event *task, entry *spool.Entry) {
 	table := event.versionedTable
-	if _, ok := t.batch[table]; !ok {
-		t.batch[table] = &singleTableTask{
+	if _, ok := t.tables[table]; !ok {
+		t.tables[table] = &singleTableTask{
 			size:      0,
 			tableInfo: event.event.TableInfo,
 		}
 	}
 
-	tableTask := t.batch[table]
+	tableTask := t.tables[table]
 	tableTask.size += entry.FileBytes()
 	tableTask.entries = append(tableTask.entries, entry)
 }
 
-func (t *batchedTask) detachTaskByTable(table cloudstorage.VersionedTableName) batchedTask {
-	tableTask := t.batch[table]
+func (t *bufferedTasks) detachTable(table cloudstorage.VersionedTableName) bufferedTasks {
+	tableTask := t.tables[table]
 	if tableTask == nil {
-		log.Panic("table not found in dml task", zap.Any("table", table), zap.Any("task", t))
+		panic("table batch not found")
 	}
-	delete(t.batch, table)
+	delete(t.tables, table)
 
-	return batchedTask{
-		batch: map[cloudstorage.VersionedTableName]*singleTableTask{table: tableTask},
+	return bufferedTasks{
+		tables: map[cloudstorage.VersionedTableName]*singleTableTask{table: tableTask},
 	}
 }
 
-func (t *batchedTask) detachTaskByDispatcher(dispatcherID common.DispatcherID) batchedTask {
-	batchByDispatcher := newBatchedTask()
-	for table, tableTask := range t.batch {
+func (t *bufferedTasks) detachDispatcher(dispatcherID common.DispatcherID) bufferedTasks {
+	batchByDispatcher := newBufferedTasks()
+	for table, tableTask := range t.tables {
 		if table.DispatcherID != dispatcherID {
 			continue
 		}
-		batchByDispatcher.batch[table] = tableTask
-		delete(t.batch, table)
+		batchByDispatcher.tables[table] = tableTask
+		delete(t.tables, table)
 	}
 	return batchByDispatcher
 }

@@ -469,7 +469,7 @@ func TestWriterStoresPendingMessagesInSpoolBeforeFlush(t *testing.T) {
 		dataDir,
 		"cloudstorage-sink-spool",
 		changefeedID.Keyspace(),
-		fmt.Sprintf("%s-%s", changefeedID.Name(), changefeedID.ID().String()),
+		changefeedID.Name(),
 	)
 	require.Eventually(t, func() bool {
 		return hasSpoolLogFile(spoolDir)

@@ -57,8 +57,8 @@ type writer struct {
 // writerTask is internal and never crosses component boundary.
 // marker task and data batch are mutually exclusive in normal flow.
 type writerTask struct {
-	batch  batchedTask
-	marker *flushMarker
+	tableBatch bufferedTasks
+	marker     *flushMarker
 }
 
 func newWriter(
@@ -129,23 +129,23 @@ func (d *writer) flushMessages(ctx context.Context) error {
 		case <-overseerTicker.C:
 			d.metricsWorkerBusyRatio.Add(flushTimeSlice.Seconds())
 			flushTimeSlice = 0
-		case task, ok := <-d.toBeFlushedCh:
+		case flushTask, ok := <-d.toBeFlushedCh:
 			if !ok {
 				return nil
 			}
-			if task.marker != nil {
+			if flushTask.marker != nil {
 				// Flush marker ack point:
 				// marker is emitted only after the pending batch of the same dispatcher
 				// is emitted by bufferManager.
-				task.marker.finish()
+				flushTask.marker.finish()
 				continue
 			}
-			if len(task.batch.batch) == 0 {
+			if len(flushTask.tableBatch.tables) == 0 {
 				continue
 			}
 
 			start := time.Now()
-			for table, singleTask := range task.batch.batch {
+			for table, singleTask := range flushTask.tableBatch.tables {
 				if len(singleTask.entries) == 0 {
 					continue
 				}
