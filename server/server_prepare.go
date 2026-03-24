@@ -148,7 +148,7 @@ func mergeAndDedupPDEndpoints(seed []string, discovered []string) []string {
 	merged := make([]string, 0, len(seed)+len(discovered))
 	seen := make(map[string]struct{}, len(seed)+len(discovered))
 
-	appendUnique := func(endpoints []string) {
+	for _, endpoints := range [][]string{seed, discovered} {
 		for _, endpoint := range endpoints {
 			if _, ok := seen[endpoint]; ok {
 				continue
@@ -157,9 +157,6 @@ func mergeAndDedupPDEndpoints(seed []string, discovered []string) []string {
 			merged = append(merged, endpoint)
 		}
 	}
-
-	appendUnique(seed)
-	appendUnique(discovered)
 	return merged
 }
 
