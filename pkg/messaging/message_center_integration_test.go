@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/heartbeatpb"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/stretchr/testify/require"
@@ -79,6 +80,15 @@ func waitForTargetsReady(mc *messageCenter) {
 	}
 }
 
+func waitForTargetStreamReady(t *testing.T, mc *messageCenter, targetID node.ID, streamType string) {
+	require.Eventually(t, func() bool {
+		mc.remoteTargets.RLock()
+		target, ok := mc.remoteTargets.m[targetID]
+		mc.remoteTargets.RUnlock()
+		return ok && target.isReadyToSendByStream(streamType)
+	}, 10*time.Second, 100*time.Millisecond)
+}
+
 func sendAndReceiveMessage(t *testing.T, sender *messageCenter, receiver *messageCenter, topic string, event *commonEvent.BatchDMLEvent) {
 	targetMsg := NewSingleTargetMessage(receiver.id, topic, event)
 	ch := make(chan *TargetMessage, 1)
@@ -111,6 +121,41 @@ func validateReceivedMessage(t *testing.T, targetMsg *TargetMessage, receivedMsg
 	receivedEvent := receivedMsg.Message[0].(*commonEvent.BatchDMLEvent)
 	receivedEvent.AssembleRows(event.TableInfo)
 	require.Equal(t, event.Rows.ToString(event.TableInfo.GetFieldSlice()), receivedEvent.Rows.ToString(event.TableInfo.GetFieldSlice()))
+}
+
+func TestRemoteMessageEnvelopeMetadata(t *testing.T) {
+	mc1, mc2, _, cleanup := setupMessageCenters(t)
+	defer cleanup()
+
+	waitForTargetStreamReady(t, mc1, mc2.id, streamTypeCommand)
+
+	topic := "metadata-topic"
+	receivedCh := make(chan *TargetMessage, 1)
+	mc2.RegisterHandler(topic, func(ctx context.Context, msg *TargetMessage) error {
+		receivedCh <- msg
+		return nil
+	})
+
+	msg := NewSingleTargetMessage(mc2.id, topic, &heartbeatpb.HeartBeatRequest{})
+	msg.CreateAt = 123456789
+	msg.Group = 23
+
+	require.NoError(t, mc1.SendCommand(msg))
+
+	select {
+	case receivedMsg := <-receivedCh:
+		require.Equal(t, mc1.id, receivedMsg.From)
+		require.Equal(t, mc2.id, receivedMsg.To)
+		require.Equal(t, msg.Type, receivedMsg.Type)
+		require.Equal(t, msg.Topic, receivedMsg.Topic)
+		require.Equal(t, msg.CreateAt, receivedMsg.CreateAt)
+		require.Equal(t, msg.Group, receivedMsg.Group)
+		require.Len(t, receivedMsg.Message, 1)
+		_, ok := receivedMsg.Message[0].(*heartbeatpb.HeartBeatRequest)
+		require.True(t, ok)
+	case <-time.After(10 * time.Second):
+		t.Fatal("Timeout when waiting for message metadata")
+	}
 }
 
 // func TestMessageCenterBasic(t *testing.T) {

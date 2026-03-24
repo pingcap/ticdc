@@ -14,8 +14,6 @@
 package messaging
 
 import (
-	"sync/atomic"
-
 	. "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -26,8 +24,7 @@ import (
 // It is used to send messages to the local server.
 // It simply pushes the messages to the messageCenter's channel directly.
 type localMessageTarget struct {
-	localId  node.ID
-	sequence atomic.Uint64
+	localId node.ID
 
 	// The gather channel from the message center.
 	// We only need to push and pull the messages from those channel.
@@ -81,7 +78,6 @@ func (s *localMessageTarget) sendMsgToChan(ch chan *TargetMessage, msg ...*Targe
 	for i, m := range msg {
 		m.To = s.localId
 		m.From = s.localId
-		m.Sequence = s.sequence.Add(1)
 		select {
 		case ch <- m:
 		default:

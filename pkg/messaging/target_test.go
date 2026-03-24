@@ -16,6 +16,7 @@ package messaging
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -47,4 +48,36 @@ func TestRemoteTargetNewMessage(t *testing.T) {
 	msg2 := rt.newMessage(msg)
 	log.Info("msg2", zap.Any("msg2", msg2))
 	require.Equal(t, TypeMessageHandShake, IOType(msg2.Type))
+}
+
+func TestRemoteTargetReadinessByStream(t *testing.T) {
+	rt := newRemoteMessageTargetForTest()
+	defer rt.close()
+
+	session := &streamSession{cancel: func() {}}
+	rt.streams.Store(streamTypeEvent, session)
+	require.True(t, rt.isReadyToSendByStream(streamTypeEvent))
+	require.False(t, rt.isReadyToSendByStream(streamTypeCommand))
+
+	msg := &TargetMessage{
+		Topic:   "test-topic",
+		Type:    TypeMessageHandShake,
+		Message: newMockIOTypeT([]byte("test")),
+	}
+
+	require.NoError(t, rt.sendEvent(msg))
+	select {
+	case protoMsg := <-rt.sendEventCh:
+		require.Equal(t, int32(TypeMessageHandShake), protoMsg.Type)
+	case <-time.After(time.Second):
+		t.Fatal("event message not sent")
+	}
+
+	err := rt.sendCommand(msg)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "Stream not ready")
+
+	rt.streams.Store(streamTypeCommand, session)
+	require.True(t, rt.isReadyToSendByStream(streamTypeCommand))
+	require.NoError(t, rt.sendCommand(msg))
 }

@@ -55,6 +55,7 @@ type MessageCenter interface {
 type MessageSender interface {
 	SendEvent(msg *TargetMessage) error
 	SendCommand(cmd *TargetMessage) error
+	// IsReadyToSend reports whether the target event stream is ready.
 	IsReadyToSend(target node.ID) bool
 }
 
@@ -268,7 +269,7 @@ func (mc *messageCenter) IsReadyToSend(targetID node.ID) bool {
 	if !ok {
 		return false
 	}
-	return target.isReadyToSend()
+	return target.isReadyToSendByStream(streamTypeEvent)
 }
 
 func (mc *messageCenter) SendEvent(msg *TargetMessage) error {

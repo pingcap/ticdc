@@ -113,9 +113,14 @@ func (s *remoteMessageTarget) isReadyToSend() bool {
 	return ready
 }
 
+func (s *remoteMessageTarget) isReadyToSendByStream(streamType string) bool {
+	session, ok := s.streams.Load(streamType)
+	return ok && session != nil
+}
+
 // Send an event message to the remote target
 func (s *remoteMessageTarget) sendEvent(msg ...*TargetMessage) error {
-	if !s.isReadyToSend() {
+	if !s.isReadyToSendByStream(streamTypeEvent) {
 		s.errorCounter.Inc()
 		return AppError{Type: ErrorTypeConnectionNotFound, Reason: genSendErrorMsg("Stream not ready", string(s.messageCenterID), s.localAddr, string(s.targetId), s.targetAddr)}
 	}
@@ -138,7 +143,7 @@ func (s *remoteMessageTarget) sendEvent(msg ...*TargetMessage) error {
 
 // Send a command message to the remote target
 func (s *remoteMessageTarget) sendCommand(msg ...*TargetMessage) error {
-	if !s.isReadyToSend() {
+	if !s.isReadyToSendByStream(streamTypeCommand) {
 		s.errorCounter.Inc()
 		return AppError{Type: ErrorTypeConnectionNotFound, Reason: genSendErrorMsg("Stream not ready", string(s.messageCenterID), s.localAddr, string(s.targetId), s.targetAddr)}
 	}
@@ -498,7 +503,7 @@ func (s *remoteMessageTarget) runSendMessages(ctx context.Context, streamType st
 
 	// wait stream ready
 	for {
-		if s.isReadyToSend() {
+		if s.isReadyToSendByStream(streamType) {
 			break
 		}
 		select {
@@ -574,7 +579,7 @@ func (s *remoteMessageTarget) runReceiveMessages(ctx context.Context, streamType
 
 	// wait stream ready
 	for {
-		if s.isReadyToSend() {
+		if s.isReadyToSendByStream(streamType) {
 			break
 		}
 		select {
@@ -635,10 +640,12 @@ func (s *remoteMessageTarget) handleIncomingMessage(ctx context.Context, stream 
 		mt := IOType(message.Type)
 
 		targetMsg := &TargetMessage{
-			From:  node.ID(message.From),
-			To:    node.ID(message.To),
-			Topic: message.Topic,
-			Type:  mt,
+			From:     node.ID(message.From),
+			To:       node.ID(message.To),
+			Topic:    message.Topic,
+			Type:     mt,
+			CreateAt: message.CreateAt,
+			Group:    message.Group,
 		}
 
 		for _, payload := range message.Payload {
@@ -680,11 +687,13 @@ func (s *remoteMessageTarget) newMessage(msg ...*TargetMessage) *proto.Message {
 		}
 	}
 	protoMsg := &proto.Message{
-		From:    string(s.messageCenterID),
-		To:      string(s.targetId),
-		Topic:   string(msg[0].Topic),
-		Type:    int32(msg[0].Type),
-		Payload: msgBytes,
+		From:     string(s.messageCenterID),
+		To:       string(s.targetId),
+		Topic:    string(msg[0].Topic),
+		Type:     int32(msg[0].Type),
+		Payload:  msgBytes,
+		CreateAt: msg[0].CreateAt,
+		Group:    msg[0].Group,
 	}
 	return protoMsg
 }
