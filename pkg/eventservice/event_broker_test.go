@@ -726,10 +726,15 @@ func TestSyncPointTwoStagePrepareThenCommit(t *testing.T) {
 	msg = <-broker.messageCh[disp2.messageWorkerIndex]
 	require.Equal(t, event.TypeSyncPointEvent, msg.msgType)
 
-	// Syncpoint lifecycle is finished once all active dispatchers have emitted the
-	// in-flight syncpoint and advanced nextSyncPoint beyond in-flight ts.
+	// Syncpoint lifecycle is not finished until checkpoint also moves beyond in-flight ts.
 	disp1.checkpointTs.Store(oracle.GoTimeToTS(time.Unix(0, 0).Add(9 * time.Second)))
 	disp2.checkpointTs.Store(oracle.GoTimeToTS(time.Unix(0, 0).Add(9 * time.Second)))
+	changefeedStatus.tryFinishSyncPointCommitIfAllEmitted()
+	require.Equal(t, oracle.GoTimeToTS(time.Unix(0, 0).Add(10*time.Second)), changefeedStatus.syncPointInFlightTs.Load())
+	require.Equal(t, oracle.GoTimeToTS(time.Unix(0, 0).Add(10*time.Second)), changefeedStatus.getSyncPointPreparingTs())
+
+	disp1.checkpointTs.Store(oracle.GoTimeToTS(time.Unix(0, 0).Add(11 * time.Second)))
+	disp2.checkpointTs.Store(oracle.GoTimeToTS(time.Unix(0, 0).Add(11 * time.Second)))
 	changefeedStatus.tryFinishSyncPointCommitIfAllEmitted()
 	require.Equal(t, uint64(0), changefeedStatus.syncPointInFlightTs.Load())
 	require.Equal(t, uint64(0), changefeedStatus.getSyncPointPreparingTs())
