@@ -308,7 +308,7 @@ data-dir = "/tmp/data"
 		require.Contains(t, err.Error(), "pd-addrs is required")
 	})
 
-	t.Run("missing s3-sink-uri", func(t *testing.T) {
+	t.Run("empty s3-sink-uri is allowed", func(t *testing.T) {
 		t.Parallel()
 		tmpDir := t.TempDir()
 		configPath := filepath.Join(tmpDir, "config.toml")
@@ -337,9 +337,10 @@ data-dir = "/tmp/data"
 		require.NoError(t, err)
 
 		cfg, err := LoadConfig(configPath)
-		require.Error(t, err)
-		require.Nil(t, cfg)
-		require.Contains(t, err.Error(), "s3-sink-uri is required")
+		require.NoError(t, err)
+		require.NotNil(t, cfg)
+		require.Empty(t, cfg.Clusters["cluster1"].S3SinkURI)
+		require.Equal(t, "s3://bucket/cluster2/", cfg.Clusters["cluster2"].S3SinkURI)
 	})
 
 	t.Run("missing s3-changefeed-id", func(t *testing.T) {

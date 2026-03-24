@@ -67,6 +67,9 @@ func (c *canalValueDecoderJSONMessage) messageType() common.MessageType {
 
 type TiDBCommitTsExtension struct {
 	CommitTs uint64 `json:"commitTs"`
+	// OriginTs mirrors _tidb.originTs
+	OriginTs uint64 `json:"originTs,omitempty"`
+	Checksum []byte `json:"checksum,omitempty"`
 }
 
 type canalValueDecoderJSONMessageWithTiDBExtension struct {
@@ -90,8 +93,13 @@ type Record struct {
 	PkStr        string
 	PkMap        map[string]any
 	ColumnValues map[string]any
+	// Checksum is from _tidb.checksum when present; nil means unset (legacy messages).
+	Checksum []byte
 }
 
+// EqualReplicatedRecord compares a local row to a replicated row.
+// Checksum: both nil or both empty slice match; if exactly one side has a non-empty checksum, they differ;
+// if both are non-empty, bytes must match. Two non-nil empty slices also match via bytes.Equal.
 func (r *Record) EqualReplicatedRecord(replicatedRecord *Record) bool {
 	if replicatedRecord == nil {
 		return false
@@ -103,6 +111,9 @@ func (r *Record) EqualReplicatedRecord(replicatedRecord *Record) bool {
 		return false
 	}
 	if len(r.ColumnValues) != len(replicatedRecord.ColumnValues) {
+		return false
+	}
+	if !bytes.Equal(r.Checksum, replicatedRecord.Checksum) {
 		return false
 	}
 	for columnName, columnValue := range r.ColumnValues {
@@ -259,11 +270,11 @@ func decodeRecord(msg *canalValueDecoderJSONMessageWithTiDBExtension, columnFiel
 		return nil, errors.Annotate(err, "failed to encode primary key")
 	}
 	pk := hex.EncodeToString(pkEncoded)
-	originTs := uint64(0)
+	originTs := msg.TiDBCommitTsExtension.OriginTs
 	columnValues := make(map[string]any)
 	for columnName, columnValue := range msg.Data[0] {
 		if columnName == event.OriginTsColumn {
-			if columnValue != nil {
+			if columnValue != nil && originTs == 0 {
 				originTs, err = strconv.ParseUint(columnValue.(string), 10, 64)
 				if err != nil {
 					return nil, errors.Trace(err)
@@ -283,6 +294,7 @@ func decodeRecord(msg *canalValueDecoderJSONMessageWithTiDBExtension, columnFiel
 			CommitTs: commitTs,
 			OriginTs: originTs,
 		},
+		Checksum: msg.TiDBCommitTsExtension.Checksum,
 	}, nil
 }
 

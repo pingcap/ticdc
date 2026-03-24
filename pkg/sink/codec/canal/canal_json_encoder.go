@@ -15,6 +15,9 @@ package canal
 
 import (
 	"context"
+	"crypto/sha256"
+	"sort"
+	"strconv"
 	"time"
 
 	"github.com/goccy/go-json"
@@ -30,6 +33,11 @@ import (
 )
 
 var bytesDecoder = charmap.ISO8859_1.NewDecoder()
+
+type checksumEntry struct {
+	Name  string `json:"name"`
+	Value any    `json:"value"`
+}
 
 // TODO: we need to reorg this code later, including use util.jsonWriter and other unreasonable code
 func fillColumns(
@@ -135,6 +143,7 @@ func newJSONMessageForDML(
 	if isDelete && config.DeleteOnlyHandleKeyColumns {
 		onlyHandleKey = true
 	}
+	onlyOutputPKColumns := onlyHandleKey || config.OnlyOutputPKColumns
 
 	columnLen := 0
 	for _, col := range e.TableInfo.GetColumns() {
@@ -233,7 +242,7 @@ func newJSONMessageForDML(
 			if col != nil && !col.IsVirtualGenerated() && e.ColumnSelector.Select(col) {
 				colID := col.ID
 				colName := col.Name.O
-				if onlyHandleKey && !tableInfo.IsHandleKey(colID) {
+				if onlyOutputPKColumns && !tableInfo.IsHandleKey(colID) {
 					continue
 				}
 				if emptyColumn {
@@ -258,7 +267,7 @@ func newJSONMessageForDML(
 	{
 		const prefix string = ",\"mysqlType\":"
 		out.RawString(prefix)
-		if mysqlTypeMap == nil {
+		if len(mysqlTypeMap) == 0 {
 			out.RawString(`null`)
 		} else {
 			out.RawByte('{')
@@ -280,13 +289,13 @@ func newJSONMessageForDML(
 	if e.IsDelete() {
 		out.RawString(",\"old\":null")
 		out.RawString(",\"data\":")
-		if err := fillColumns(valueMap, e.TableInfo, onlyHandleKey, out, e.ColumnSelector); err != nil {
+		if err := fillColumns(valueMap, e.TableInfo, onlyOutputPKColumns, out, e.ColumnSelector); err != nil {
 			return nil, err
 		}
 	} else if e.IsInsert() {
 		out.RawString(",\"old\":null")
 		out.RawString(",\"data\":")
-		if err := fillColumns(valueMap, e.TableInfo, onlyHandleKey, out, e.ColumnSelector); err != nil {
+		if err := fillColumns(valueMap, e.TableInfo, onlyOutputPKColumns, out, e.ColumnSelector); err != nil {
 			return nil, err
 		}
 	} else if e.IsUpdate() {
@@ -302,12 +311,12 @@ func newJSONMessageForDML(
 			oldValueMap[col.ID] = value
 		}
 
-		if err := fillUpdateColumns(valueMap, oldValueMap, e.TableInfo, onlyHandleKey,
+		if err := fillUpdateColumns(valueMap, oldValueMap, e.TableInfo, onlyOutputPKColumns,
 			config.OnlyOutputUpdatedColumns, out, e.ColumnSelector); err != nil {
 			return nil, err
 		}
 		out.RawString(",\"data\":")
-		if err := fillColumns(valueMap, e.TableInfo, onlyHandleKey, out, e.ColumnSelector); err != nil {
+		if err := fillColumns(valueMap, e.TableInfo, onlyOutputPKColumns, out, e.ColumnSelector); err != nil {
 			return nil, err
 		}
 	} else {
@@ -342,6 +351,18 @@ func newJSONMessageForDML(
 			out.RawString("\"rowkey\":")
 			out.Base64Bytes(e.Event.RowKey)
 		}
+
+		if config.OnlyOutputPKColumns {
+			originTs, checksum, err := buildOriginTsAndChecksum(e, valueMap)
+			if err != nil {
+				return nil, err
+			}
+			out.RawString(",\"originTs\":")
+			out.Uint64(originTs)
+			out.RawString(",\"checksum\":")
+			out.Base64Bytes(checksum)
+		}
+
 		out.RawByte('}')
 	}
 	out.RawByte('}')
@@ -361,6 +382,61 @@ func eventTypeString(e *commonEvent.RowEvent) string {
 		return "INSERT"
 	}
 	return "UPDATE"
+}
+
+// buildOriginTsAndChecksum derives originTs from the _tidb_origin_ts column in valueMap (new row)
+// and a stable checksum over other non-PK columns. For UPDATE, if _tidb_origin_ts is absent or null
+// in the post-update row, originTs stays 0; the checksum still captures non-PK data in valueMap.
+func buildOriginTsAndChecksum(
+	e *commonEvent.RowEvent,
+	valueMap map[int64]optionalString,
+) (uint64, []byte, error) {
+	var (
+		originTs uint64
+		entries  = make([]checksumEntry, 0, len(valueMap))
+	)
+	for _, col := range e.TableInfo.GetColumns() {
+		if col == nil || col.IsVirtualGenerated() || !e.ColumnSelector.Select(col) {
+			continue
+		}
+		value, ok := valueMap[col.ID]
+		if !ok {
+			continue
+		}
+		if col.Name.O == commonEvent.OriginTsColumn {
+			if value.isNull {
+				continue
+			}
+			parsedOriginTs, err := strconv.ParseUint(value.value, 10, 64)
+			if err != nil {
+				return 0, nil, errors.WrapError(errors.ErrCanalEncodeFailed, err)
+			}
+			originTs = parsedOriginTs
+			continue
+		}
+		if e.TableInfo.IsHandleKey(col.ID) {
+			continue
+		}
+
+		var checksumValue any
+		if !value.isNull {
+			checksumValue = value.value
+		}
+		entries = append(entries, checksumEntry{
+			Name:  col.Name.O,
+			Value: checksumValue,
+		})
+	}
+
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].Name < entries[j].Name
+	})
+	payload, err := json.Marshal(entries)
+	if err != nil {
+		return 0, nil, errors.WrapError(errors.ErrCanalEncodeFailed, err)
+	}
+	sum := sha256.Sum256(payload)
+	return originTs, sum[:], nil
 }
 
 // JSONRowEventEncoder encodes row event in JSON format

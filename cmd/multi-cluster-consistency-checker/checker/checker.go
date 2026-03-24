@@ -470,7 +470,8 @@ func (cd *clusterDataChecker) checkLocalRecordsForDataLoss(
 						log.Error("data inconsistent detected",
 							zap.String("localClusterID", cd.clusterID),
 							zap.String("replicatedClusterID", replicatedClusterID),
-							zap.Any("record", record))
+							zap.Any("localRecord", record),
+							zap.Any("replicatedRecord", replicatedRecord))
 						cd.report.AddDataInconsistentItem(replicatedClusterID, schemaKey, record.PkMap, record.PkStr, record.CommitTs, replicatedRecord.CommitTs, diffColumns(record, replicatedRecord))
 					}
 				}

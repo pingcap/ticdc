@@ -718,6 +718,81 @@ func TestE2EPartitionTableByHash(t *testing.T) {
 	require.NotZero(t, decodedEvent.GetTableID())
 }
 
+func TestCanalJSONOriginTsChecksumAndPKOnly(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	_ = helper.DDL2Event(`create table test.aa_t(
+		id int primary key,
+		v varchar(32),
+		_tidb_origin_ts bigint unsigned
+	)`)
+
+	insertEvent := helper.DML2Event(
+		"test", "aa_t",
+		`insert into test.aa_t values (1, "v1", 12345)`,
+	)
+
+	ctx := context.Background()
+	codecConfig := common.NewConfig(config.ProtocolCanalJSON)
+	codecConfig.EnableTiDBExtension = true
+	codecConfig.OnlyOutputPKColumns = true
+	encoder, err := NewJSONRowEventEncoder(ctx, codecConfig)
+	require.NoError(t, err)
+
+	err = encoder.AppendRowChangedEvent(ctx, "", dml2rowEvent(t, insertEvent))
+	require.NoError(t, err)
+	insertMsg := encoder.Build()[0]
+	parsedInsert := &canalJSONMessageWithTiDBExtension{
+		JSONMessage: &JSONMessage{},
+		Extensions:  &tidbExtension{},
+	}
+	require.NoError(t, json.Unmarshal(insertMsg.Value, parsedInsert))
+	require.NotNil(t, parsedInsert.Extensions)
+	require.Equal(t, uint64(12345), parsedInsert.Extensions.OriginTs)
+	require.NotEmpty(t, parsedInsert.Extensions.Checksum)
+	require.Len(t, parsedInsert.SQLType, 1)
+	require.Len(t, parsedInsert.MySQLType, 1)
+	require.Len(t, parsedInsert.Data, 1)
+	require.Contains(t, parsedInsert.SQLType, "id")
+	require.Contains(t, parsedInsert.MySQLType, "id")
+	require.Contains(t, parsedInsert.Data[0], "id")
+	require.NotContains(t, parsedInsert.Data[0], "v")
+	require.NotContains(t, parsedInsert.Data[0], commonEvent.OriginTsColumn)
+
+	_, _, updateEvent, _ := common.NewLargeEvent4Test(t)
+	err = encoder.AppendRowChangedEvent(ctx, "", updateEvent)
+	require.NoError(t, err)
+	updateMsg := encoder.Build()[0]
+	parsedUpdate := &canalJSONMessageWithTiDBExtension{
+		JSONMessage: &JSONMessage{},
+		Extensions:  &tidbExtension{},
+	}
+	require.NoError(t, json.Unmarshal(updateMsg.Value, parsedUpdate))
+	require.NotNil(t, parsedUpdate.Extensions)
+	require.Equal(t, uint64(0), parsedUpdate.Extensions.OriginTs)
+	require.NotEmpty(t, parsedUpdate.Extensions.Checksum)
+	require.Len(t, parsedUpdate.Data, 1)
+	require.Len(t, parsedUpdate.Old, 1)
+	for _, col := range updateEvent.TableInfo.GetColumns() {
+		if col == nil {
+			continue
+		}
+		colName := updateEvent.TableInfo.ForceGetColumnName(col.ID)
+		if updateEvent.TableInfo.IsHandleKey(col.ID) {
+			require.Contains(t, parsedUpdate.Data[0], colName)
+			require.Contains(t, parsedUpdate.Old[0], colName)
+			require.Contains(t, parsedUpdate.SQLType, colName)
+			require.Contains(t, parsedUpdate.MySQLType, colName)
+		} else {
+			require.NotContains(t, parsedUpdate.Data[0], colName)
+			require.NotContains(t, parsedUpdate.Old[0], colName)
+			require.NotContains(t, parsedUpdate.SQLType, colName)
+			require.NotContains(t, parsedUpdate.MySQLType, colName)
+		}
+	}
+}
+
 func TestE2EPartitionTableByRange(t *testing.T) {
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()

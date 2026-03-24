@@ -463,3 +463,37 @@ func TestShouldSendAllBootstrapAtStart(t *testing.T) {
 	sinkConfig.SendAllBootstrapAtStart = &should
 	require.True(t, sinkConfig.ShouldSendAllBootstrapAtStart())
 }
+
+func TestSinkConfigResolvedEnableTiDBExtension(t *testing.T) {
+	t.Parallel()
+
+	uriTrue, err := url.Parse("kafka://x/t?enable-tidb-extension=true")
+	require.NoError(t, err)
+	en, err := (&SinkConfig{}).ResolvedEnableTiDBExtension(uriTrue)
+	require.NoError(t, err)
+	require.True(t, en)
+
+	uriFalse, err := url.Parse("kafka://x/t?enable-tidb-extension=false")
+	require.NoError(t, err)
+	en, err = (&SinkConfig{
+		KafkaConfig: &KafkaConfig{
+			CodecConfig: &CodecConfig{EnableTiDBExtension: util.AddressOf(true)},
+		},
+	}).ResolvedEnableTiDBExtension(uriFalse)
+	require.NoError(t, err)
+	require.False(t, en)
+
+	uriBare, err := url.Parse("kafka://x/t")
+	require.NoError(t, err)
+	en, err = (&SinkConfig{
+		KafkaConfig: &KafkaConfig{
+			CodecConfig: &CodecConfig{EnableTiDBExtension: util.AddressOf(true)},
+		},
+	}).ResolvedEnableTiDBExtension(uriBare)
+	require.NoError(t, err)
+	require.True(t, en)
+
+	en, err = (&SinkConfig{}).ResolvedEnableTiDBExtension(uriBare)
+	require.NoError(t, err)
+	require.False(t, en)
+}
