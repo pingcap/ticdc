@@ -198,23 +198,23 @@ func TestSpoolDiskQuotaConfig(t *testing.T) {
 	require.Equal(t, int64(3221225472), cfg.SpoolDiskQuota)
 }
 
-func TestSpoolDirConfig(t *testing.T) {
-	uriSpoolDir := t.TempDir()
-	configSpoolDir := t.TempDir()
+func TestSpoolBaseDirConfig(t *testing.T) {
+	uriSpoolBaseDir := t.TempDir()
+	configSpoolBaseDir := t.TempDir()
 
-	uri := "s3://bucket/prefix?spool-dir=" + url.QueryEscape(uriSpoolDir)
+	uri := "s3://bucket/prefix?spool-base-dir=" + url.QueryEscape(uriSpoolBaseDir)
 	sinkURI, err := url.Parse(uri)
 	require.NoError(t, err)
 
 	replicaConfig := config.GetDefaultReplicaConfig()
 	replicaConfig.Sink.CloudStorageConfig = &config.CloudStorageConfig{
-		SpoolDir: aws.String(configSpoolDir),
+		SpoolBaseDir: aws.String(configSpoolBaseDir),
 	}
 
 	cfg := NewConfig()
 	err = cfg.Apply(context.Background(), sinkURI, replicaConfig.Sink, true)
 	require.NoError(t, err)
-	require.Equal(t, uriSpoolDir, cfg.SpoolDir)
+	require.Equal(t, uriSpoolBaseDir, cfg.SpoolBaseDir)
 
 	uri = "s3://bucket/prefix"
 	sinkURI, err = url.Parse(uri)
@@ -223,11 +223,11 @@ func TestSpoolDirConfig(t *testing.T) {
 	cfg = NewConfig()
 	err = cfg.Apply(context.Background(), sinkURI, replicaConfig.Sink, true)
 	require.NoError(t, err)
-	require.Equal(t, configSpoolDir, cfg.SpoolDir)
+	require.Equal(t, configSpoolBaseDir, cfg.SpoolBaseDir)
 }
 
-func TestInvalidSpoolDirConfig(t *testing.T) {
-	uri := "s3://bucket/prefix?spool-dir=relative/path"
+func TestInvalidSpoolBaseDirConfig(t *testing.T) {
+	uri := "s3://bucket/prefix?spool-base-dir=relative/path"
 	sinkURI, err := url.Parse(uri)
 	require.NoError(t, err)
 
@@ -241,7 +241,7 @@ func TestInvalidSpoolDirConfig(t *testing.T) {
 
 	replicaConfig := config.GetDefaultReplicaConfig()
 	replicaConfig.Sink.CloudStorageConfig = &config.CloudStorageConfig{
-		SpoolDir: aws.String("relative/path"),
+		SpoolBaseDir: aws.String("relative/path"),
 	}
 
 	cfg = NewConfig()

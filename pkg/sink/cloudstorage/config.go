@@ -71,7 +71,7 @@ type urlConfig struct {
 	FileSize         *int    `form:"file-size"`
 	UseTableIDAsPath *bool   `form:"use-table-id-as-path"`
 	SpoolDiskQuota   *int64  `form:"spool-disk-quota"`
-	SpoolDir         *string `form:"spool-dir"`
+	SpoolBaseDir     *string `form:"spool-base-dir"`
 }
 
 // Config is the configuration for cloud storage sink.
@@ -89,7 +89,7 @@ type Config struct {
 	EnableTableAcrossNodes   bool
 	UseTableIDAsPath         bool
 	SpoolDiskQuota           int64
-	SpoolDir                 string
+	SpoolBaseDir             string
 }
 
 // NewConfig returns the default cloud storage sink config.
@@ -147,7 +147,7 @@ func (c *Config) Apply(
 	if err = getSpoolDiskQuota(urlParameter, &c.SpoolDiskQuota); err != nil {
 		return err
 	}
-	if err = getSpoolDir(urlParameter, &c.SpoolDir); err != nil {
+	if err = getSpoolBaseDir(urlParameter, &c.SpoolBaseDir); err != nil {
 		return err
 	}
 
@@ -199,8 +199,8 @@ func mergeConfig(
 		if sinkConfig.CloudStorageConfig.SpoolDiskQuota != nil {
 			dest.SpoolDiskQuota = util.AddressOf(*sinkConfig.CloudStorageConfig.SpoolDiskQuota)
 		}
-		if sinkConfig.CloudStorageConfig.SpoolDir != nil {
-			dest.SpoolDir = util.AddressOf(*sinkConfig.CloudStorageConfig.SpoolDir)
+		if sinkConfig.CloudStorageConfig.SpoolBaseDir != nil {
+			dest.SpoolBaseDir = util.AddressOf(*sinkConfig.CloudStorageConfig.SpoolBaseDir)
 		}
 	}
 	if err := mergo.Merge(dest, urlParameters, mergo.WithOverride); err != nil {
@@ -298,17 +298,17 @@ func getSpoolDiskQuota(values *urlConfig, spoolDiskQuota *int64) error {
 	return nil
 }
 
-func getSpoolDir(values *urlConfig, spoolDir *string) error {
-	if values.SpoolDir == nil || len(*values.SpoolDir) == 0 {
+func getSpoolBaseDir(values *urlConfig, spoolBaseDir *string) error {
+	if values.SpoolBaseDir == nil || len(*values.SpoolBaseDir) == 0 {
 		return nil
 	}
 
-	dir := *values.SpoolDir
+	dir := *values.SpoolBaseDir
 	if !filepath.IsAbs(dir) {
 		return errors.ErrStorageSinkInvalidConfig.GenWithStack(
-			"invalid spool-dir %q, it must be an absolute path", dir)
+			"invalid spool-base-dir %q, it must be an absolute path", dir)
 	}
 
-	*spoolDir = dir
+	*spoolBaseDir = dir
 	return nil
 }

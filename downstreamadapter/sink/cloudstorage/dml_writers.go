@@ -64,7 +64,7 @@ func newDMLWriters(
 	)
 	spool, err := spool.New(
 		changefeedID,
-		spool.WithRootDir(config.SpoolDir),
+		spool.WithRootDir(config.SpoolBaseDir),
 		spool.WithDiskQuotaBytes(config.SpoolDiskQuota),
 	)
 	if err != nil {
