@@ -20,6 +20,7 @@ import (
 	"math/rand"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -27,9 +28,8 @@ import (
 )
 
 const (
-	shop2DefaultKeySpace          = 1_000_000
-	shop2PrimaryKeyLowBits uint64 = 1<<62 - 1
-	shop2PrimaryKeyHighBit uint64 = 1 << 62
+	shop2DefaultKeySpace              = 1_000_000
+	shop2PrimaryKeyPayloadMask uint64 = 1<<63 - 1
 )
 
 const createShop2ItemTable = `
@@ -197,8 +197,13 @@ type Shop2Workload struct {
 	rowSize          int
 	tableStartIndex  int
 	perTableKeySpace uint64
-	primaryKeySalt   uint64
 	tableSeq         []atomic.Uint64
+	primaryKeys      []shop2PrimaryKeyTracker
+}
+
+type shop2PrimaryKeyTracker struct {
+	mu   sync.Mutex
+	keys map[uint64]struct{}
 }
 
 var shop2InsertColumnList = buildInsertColumnList()
@@ -219,12 +224,17 @@ func NewShop2Workload(totalRowCount uint64, rowSize int, tableCount int, tableSt
 		}
 	}
 
+	primaryKeys := make([]shop2PrimaryKeyTracker, tableCount)
+	for idx := range primaryKeys {
+		primaryKeys[idx].keys = make(map[uint64]struct{})
+	}
+
 	return &Shop2Workload{
 		rowSize:          rowSize,
 		tableStartIndex:  tableStartIndex,
 		perTableKeySpace: perTableKeySpace,
-		primaryKeySalt:   randomUint64() & shop2PrimaryKeyLowBits,
 		tableSeq:         make([]atomic.Uint64, tableCount),
+		primaryKeys:      primaryKeys,
 	}
 }
 
@@ -341,7 +351,7 @@ func (w *Shop2Workload) generateInsertRow(tableIndex int, seed int64) string {
 		values = append(values, quoteLiteral(w.timestampValue(columnSeed, seed)))
 	}
 
-	values = append(values, strconv.FormatInt(w.primaryKeyValue(tableIndex, seed), 10))
+	values = append(values, strconv.FormatInt(w.primaryKeyValue(tableIndex), 10))
 	values = append(values, strconv.FormatInt(w.catalogID(seed), 10))
 	values = append(values, strconv.FormatInt(w.merchantID(seed), 10))
 	addText(127, "c004")
@@ -458,11 +468,23 @@ func (w *Shop2Workload) generateInsertRow(tableIndex int, seed int64) string {
 	return strings.Join(values, ",")
 }
 
-func (w *Shop2Workload) primaryKeyValue(tableIndex int, seed int64) int64 {
-	slot := uint64(w.tableSlot(tableIndex) + 1)
-	source := (uint64(seed) * 6364136223846793005) & shop2PrimaryKeyLowBits
-	offset := (w.primaryKeySalt + slot*1442695040888963407) & shop2PrimaryKeyLowBits
-	return int64(((source + offset) & shop2PrimaryKeyLowBits) | shop2PrimaryKeyHighBit)
+func (w *Shop2Workload) primaryKeyValue(tableIndex int) int64 {
+	tracker := &w.primaryKeys[w.tableSlot(tableIndex)]
+
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+
+	for {
+		candidate := (uint64(time.Now().UnixNano()) ^ randomUint64()) & shop2PrimaryKeyPayloadMask
+		if candidate == 0 {
+			continue
+		}
+		if _, exists := tracker.keys[candidate]; exists {
+			continue
+		}
+		tracker.keys[candidate] = struct{}{}
+		return int64(candidate)
+	}
 }
 
 func (w *Shop2Workload) catalogID(rowID int64) int64 {
