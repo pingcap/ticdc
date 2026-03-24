@@ -155,7 +155,7 @@ func (c *tikvEncryptionHTTPClient) getEncryptionMetaFromStore(ctx context.Contex
 
 	metaResp, err := decodeEncryptionMetaResponseFromProtobuf(body)
 	if err != nil {
-		decodeErr := errors.Annotatef(err, "json decode failed: %v", err)
+		decodeErr := errors.Annotatef(err, "protobuf decode failed: %v", err)
 		log.Warn("failed to decode encryption meta response",
 			zap.Uint64("storeID", storeID),
 			zap.String("statusAddr", statusAddr),
@@ -218,36 +218,36 @@ func (c *tikvEncryptionHTTPClient) buildStatusURL(statusAddr string, keyspaceID 
 }
 
 type encryptionMetaResponse struct {
-	KeyspaceId uint32                     `json:"keyspace_id"`
-	Current    encryptionEpochResponse    `json:"current"`
-	MasterKey  masterKeyResponse          `json:"master_key"`
-	DataKeys   map[uint32]dataKeyResponse `json:"data_keys"`
-	History    []encryptionEpochResponse  `json:"history"`
+	KeyspaceId uint32
+	Current    encryptionEpochResponse
+	MasterKey  masterKeyResponse
+	DataKeys   map[uint32]dataKeyResponse
+	History    []encryptionEpochResponse
 }
 
 type encryptionEpochResponse struct {
-	FileId    uint64 `json:"file_id"`
-	DataKeyId uint32 `json:"data_key_id"`
-	CreatedAt uint64 `json:"created_at"`
+	FileId    uint64
+	DataKeyId uint32
+	CreatedAt uint64
 }
 
 type masterKeyResponse struct {
-	Vendor     string    `json:"vendor"`
-	CmekId     string    `json:"cmek_id"`
-	Region     string    `json:"region"`
-	Endpoint   string    `json:"endpoint"`
-	Ciphertext ByteArray `json:"ciphertext"`
+	Vendor     string
+	CmekId     string
+	Region     string
+	Endpoint   string
+	Ciphertext []byte
 }
 
 type dataKeyResponse struct {
-	Ciphertext ByteArray `json:"ciphertext"`
+	Ciphertext []byte
 }
 
 type keyspaceEncryptionMetaPB struct {
-	KeyspaceId uint32                        `protobuf:"varint,1,opt,name=keyspace_id,json=keyspaceId,proto3"`
+	KeyspaceId uint32                        `protobuf:"varint,1,opt,name=keyspace_id,proto3"`
 	Current    *keyspaceEncryptionEpochPB    `protobuf:"bytes,2,opt,name=current,proto3"`
-	MasterKey  *keyspaceMasterKeyPB          `protobuf:"bytes,3,opt,name=master_key,json=masterKey,proto3"`
-	DataKeys   map[uint32]*keyspaceDataKeyPB `protobuf:"bytes,4,rep,name=data_keys,json=dataKeys,proto3" protobuf_key:"varint,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
+	MasterKey  *keyspaceMasterKeyPB          `protobuf:"bytes,3,opt,name=master_key,proto3"`
+	DataKeys   map[uint32]*keyspaceDataKeyPB `protobuf:"bytes,4,rep,name=data_keys,proto3" protobuf_key:"varint,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
 	History    []*keyspaceEncryptionEpochPB  `protobuf:"bytes,5,rep,name=history,proto3"`
 }
 
@@ -256,9 +256,9 @@ func (m *keyspaceEncryptionMetaPB) String() string { return "" }
 func (*keyspaceEncryptionMetaPB) ProtoMessage()    {}
 
 type keyspaceEncryptionEpochPB struct {
-	FileId    uint64 `protobuf:"varint,1,opt,name=file_id,json=fileId,proto3"`
-	DataKeyId uint32 `protobuf:"varint,2,opt,name=data_key_id,json=dataKeyId,proto3"`
-	CreatedAt uint64 `protobuf:"varint,3,opt,name=created_at,json=createdAt,proto3"`
+	FileId    uint64 `protobuf:"varint,1,opt,name=file_id,proto3"`
+	DataKeyId uint32 `protobuf:"varint,2,opt,name=data_key_id,proto3"`
+	CreatedAt uint64 `protobuf:"varint,3,opt,name=created_at,proto3"`
 }
 
 func (m *keyspaceEncryptionEpochPB) Reset()         { *m = keyspaceEncryptionEpochPB{} }
@@ -267,7 +267,7 @@ func (*keyspaceEncryptionEpochPB) ProtoMessage()    {}
 
 type keyspaceMasterKeyPB struct {
 	Vendor     string `protobuf:"bytes,1,opt,name=vendor,proto3"`
-	CmekId     string `protobuf:"bytes,2,opt,name=cmek_id,json=cmekId,proto3"`
+	CmekId     string `protobuf:"bytes,2,opt,name=cmek_id,proto3"`
 	Region     string `protobuf:"bytes,3,opt,name=region,proto3"`
 	Endpoint   string `protobuf:"bytes,4,opt,name=endpoint,proto3"`
 	Ciphertext []byte `protobuf:"bytes,5,opt,name=ciphertext,proto3"`
@@ -317,7 +317,7 @@ func (m *keyspaceEncryptionMetaPB) toEncryptionMetaResponse() *encryptionMetaRes
 			CmekId:     m.MasterKey.CmekId,
 			Region:     m.MasterKey.Region,
 			Endpoint:   m.MasterKey.Endpoint,
-			Ciphertext: ByteArray(m.MasterKey.Ciphertext),
+			Ciphertext: m.MasterKey.Ciphertext,
 		}
 	}
 
@@ -326,7 +326,7 @@ func (m *keyspaceEncryptionMetaPB) toEncryptionMetaResponse() *encryptionMetaRes
 			continue
 		}
 		resp.DataKeys[id] = dataKeyResponse{
-			Ciphertext: ByteArray(dataKey.Ciphertext),
+			Ciphertext: dataKey.Ciphertext,
 		}
 	}
 
