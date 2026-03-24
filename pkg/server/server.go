@@ -27,7 +27,7 @@ import (
 // information in etcd and schedules Task on it.
 type Server interface {
 	Run(ctx context.Context) error
-	Close(ctx context.Context)
+	Close()
 
 	SelfInfo() (*node.Info, error)
 	Liveness() api.Liveness
