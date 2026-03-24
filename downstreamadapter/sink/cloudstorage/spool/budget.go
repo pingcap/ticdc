@@ -53,13 +53,15 @@ func (b *budget) shouldSpill(entryBytes int64) bool {
 	return b.memoryBytes+entryBytes > b.memoryQuotaBytes
 }
 
-// exceedsDiskQuota return true if incoming entry size is too large that exceed the diska quota bytes
-func (b *budget) exceedsDiskQuota(entryBytes int64) bool {
+// entryExceedsDiskQuota returns true when a single spilled entry is larger
+// than the configured disk quota by itself.
+func (b *budget) entryExceedsDiskQuota(entryBytes int64) bool {
 	return entryBytes > b.diskQuotaBytes
 }
 
-// wouldExceedDiskQuota return true if add the incomming entry size would exceed the disk quota.
-func (b *budget) wouldExceedDiskQuota(entryBytes int64) bool {
+// spillWouldExceedDiskQuota returns true when adding one more spilled entry to
+// the current on-disk usage would exceed the configured disk quota.
+func (b *budget) spillWouldExceedDiskQuota(entryBytes int64) bool {
 	return b.diskBytes+entryBytes > b.diskQuotaBytes
 }
 

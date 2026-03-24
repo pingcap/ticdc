@@ -72,12 +72,12 @@ func (q *quotaController) shouldSpill(entryBytes int64) bool {
 	return q.budget.shouldSpill(entryBytes)
 }
 
-func (q *quotaController) exceedsDiskQuota(entryBytes int64) bool {
-	return q.budget.exceedsDiskQuota(entryBytes)
+func (q *quotaController) entryExceedsDiskQuota(entryBytes int64) bool {
+	return q.budget.entryExceedsDiskQuota(entryBytes)
 }
 
-func (q *quotaController) wouldExceedDiskQuota(entryBytes int64) bool {
-	return q.budget.wouldExceedDiskQuota(entryBytes)
+func (q *quotaController) spillWouldExceedDiskQuota(entryBytes int64) bool {
+	return q.budget.spillWouldExceedDiskQuota(entryBytes)
 }
 
 func (q *quotaController) addDiskQuotaWaiter() (uint64, <-chan struct{}) {

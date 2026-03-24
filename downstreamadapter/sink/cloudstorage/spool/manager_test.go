@@ -40,7 +40,7 @@ func TestSuppressAndResumeWake(t *testing.T) {
 	options := &options{
 		diskQuotaBytes:     1000,
 		rootDir:            t.TempDir(),
-		segmentBytes:       1 << 20,
+		segmentCapacity:    1 << 20,
 		memoryRatio:        0.99,
 		highWatermarkRatio: 0.6,
 		lowWatermarkRatio:  0.3,
@@ -49,7 +49,7 @@ func TestSuppressAndResumeWake(t *testing.T) {
 		changefeedID,
 		WithDiskQuotaBytes(options.diskQuotaBytes),
 		WithRootDir(options.rootDir),
-		WithSegmentBytes(options.segmentBytes),
+		WithSegmentBytes(options.segmentCapacity),
 		WithMemoryRatio(options.memoryRatio),
 		WithHighWatermarkRatio(options.highWatermarkRatio),
 		WithLowWatermarkRatio(options.lowWatermarkRatio),
@@ -88,7 +88,7 @@ func TestSpillAndReadBack(t *testing.T) {
 	options := &options{
 		diskQuotaBytes:     64,
 		rootDir:            t.TempDir(),
-		segmentBytes:       1 << 20,
+		segmentCapacity:    1 << 20,
 		memoryRatio:        0.01,
 		highWatermarkRatio: 0.95,
 		lowWatermarkRatio:  0.7,
@@ -97,7 +97,7 @@ func TestSpillAndReadBack(t *testing.T) {
 		changefeedID,
 		WithDiskQuotaBytes(options.diskQuotaBytes),
 		WithRootDir(options.rootDir),
-		WithSegmentBytes(options.segmentBytes),
+		WithSegmentBytes(options.segmentCapacity),
 		WithMemoryRatio(options.memoryRatio),
 		WithHighWatermarkRatio(options.highWatermarkRatio),
 		WithLowWatermarkRatio(options.lowWatermarkRatio),
@@ -130,7 +130,7 @@ func TestNewUsesDefaultOptionsWhenValuesAreMissing(t *testing.T) {
 	manager, err := New(changefeedID, WithRootDir(t.TempDir()))
 	require.NoError(t, err)
 	require.NotNil(t, manager)
-	require.Equal(t, defaultSegmentBytes, manager.segmentBytes)
+	require.Equal(t, defaultSegmentCapacity, manager.segmentCapacity)
 	require.Equal(t, int64(float64(expectedQuotaBytes)*defaultMemoryRatio), manager.quota.budget.memoryQuotaBytes)
 	require.Equal(t, int64(float64(expectedQuotaBytes)*defaultHighWatermarkRatio), manager.quota.budget.highWatermarkBytes)
 	require.Equal(t, int64(float64(expectedQuotaBytes)*defaultLowWatermarkRatio), manager.quota.budget.lowWatermarkBytes)
@@ -148,7 +148,7 @@ func TestInvalidWithOptionsKeepDefaults(t *testing.T) {
 	WithLowWatermarkRatio(-1)(cfg)
 
 	require.Equal(t, defaultDiskQuotaBytes, cfg.diskQuotaBytes)
-	require.Equal(t, defaultSegmentBytes, cfg.segmentBytes)
+	require.Equal(t, defaultSegmentCapacity, cfg.segmentCapacity)
 	require.Equal(t, defaultMemoryRatio, cfg.memoryRatio)
 	require.Equal(t, defaultHighWatermarkRatio, cfg.highWatermarkRatio)
 	require.Equal(t, defaultLowWatermarkRatio, cfg.lowWatermarkRatio)
@@ -218,7 +218,7 @@ func TestNewSanitizesInvalidOptions(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.NotNil(t, manager)
-	require.Equal(t, defaultSegmentBytes, manager.segmentBytes)
+	require.Equal(t, defaultSegmentCapacity, manager.segmentCapacity)
 	require.Equal(t, int64(float64(expectedQuotaBytes)*defaultMemoryRatio), manager.quota.budget.memoryQuotaBytes)
 	require.Equal(t, int64(float64(expectedQuotaBytes)*defaultHighWatermarkRatio), manager.quota.budget.highWatermarkBytes)
 	require.Equal(t, int64(float64(expectedQuotaBytes)*defaultLowWatermarkRatio), manager.quota.budget.lowWatermarkBytes)
@@ -228,11 +228,11 @@ func TestNewSanitizesInvalidOptions(t *testing.T) {
 func TestNewAppliesFunctionalOptions(t *testing.T) {
 	t.Parallel()
 
-	rootDir := t.TempDir()
+	baseDir := t.TempDir()
 	changefeedID := commonType.NewChangefeedID4Test("test", "spool")
 	manager, err := New(
 		changefeedID,
-		WithRootDir(rootDir),
+		WithRootDir(baseDir),
 		WithDiskQuotaBytes(2048),
 		WithSegmentBytes(4096),
 		WithMemoryRatio(0.25),
@@ -240,55 +240,56 @@ func TestNewAppliesFunctionalOptions(t *testing.T) {
 		WithLowWatermarkRatio(0.5),
 	)
 	require.NoError(t, err)
-	require.Equal(t, rootDir, manager.rootDir)
-	require.Equal(t, int64(4096), manager.segmentBytes)
+	require.Equal(t, filepath.Join(baseDir, changefeedID.Keyspace(), changefeedID.Name()), manager.workDir)
+	require.Equal(t, int64(4096), manager.segmentCapacity)
 	require.Equal(t, int64(512), manager.quota.budget.memoryQuotaBytes)
 	require.Equal(t, int64(1536), manager.quota.budget.highWatermarkBytes)
 	require.Equal(t, int64(1024), manager.quota.budget.lowWatermarkBytes)
 	manager.Close()
 }
 
-func TestPrepareRootDirOnlyRemovesSegmentLogs(t *testing.T) {
+func TestPrepareRootDirRecreatesOwnedChangefeedDir(t *testing.T) {
 	t.Parallel()
 
-	rootDir := t.TempDir()
-	segmentPath := filepath.Join(rootDir, "segment-000001.log")
-	segmentBackupPath := filepath.Join(rootDir, "segment-backup.log")
-	keepPath := filepath.Join(rootDir, "keep.txt")
-
-	require.NoError(t, os.WriteFile(segmentPath, []byte("stale"), 0o644))
-	require.NoError(t, os.WriteFile(segmentBackupPath, []byte("keep"), 0o644))
-	require.NoError(t, os.WriteFile(keepPath, []byte("keep"), 0o644))
-
+	baseDir := t.TempDir()
 	changefeedID := commonType.NewChangefeedID4Test("test", "spool")
+	rootDir := filepath.Join(baseDir, changefeedID.Keyspace(), changefeedID.Name())
+	segmentPath := filepath.Join(rootDir, "segment-000001.log")
+	keepInSpoolDir := filepath.Join(rootDir, "keep.txt")
+	keepInBaseDir := filepath.Join(baseDir, "keep.txt")
+
+	require.NoError(t, os.MkdirAll(rootDir, 0o755))
+	require.NoError(t, os.WriteFile(segmentPath, []byte("stale"), 0o644))
+	require.NoError(t, os.WriteFile(keepInSpoolDir, []byte("remove"), 0o644))
+	require.NoError(t, os.WriteFile(keepInBaseDir, []byte("keep"), 0o644))
+
 	manager, err := New(
 		changefeedID,
 		WithDiskQuotaBytes(1024),
-		WithRootDir(rootDir),
+		WithRootDir(baseDir),
 	)
 	require.NoError(t, err)
 	t.Cleanup(manager.Close)
 
 	_, err = os.Stat(segmentPath)
 	require.ErrorIs(t, err, os.ErrNotExist)
-	_, err = os.Stat(segmentBackupPath)
-	require.NoError(t, err)
-	_, err = os.Stat(keepPath)
+	_, err = os.Stat(keepInSpoolDir)
+	require.ErrorIs(t, err, os.ErrNotExist)
+	_, err = os.Stat(keepInBaseDir)
 	require.NoError(t, err)
 }
 
-func TestCloseOnlyRemovesSegmentLogs(t *testing.T) {
+func TestCloseRemovesOwnedChangefeedDir(t *testing.T) {
 	t.Parallel()
 
-	rootDir := t.TempDir()
-	keepPath := filepath.Join(rootDir, "keep.txt")
-	require.NoError(t, os.WriteFile(keepPath, []byte("keep"), 0o644))
-
+	baseDir := t.TempDir()
 	changefeedID := commonType.NewChangefeedID4Test("test", "spool")
+	keepPath := filepath.Join(baseDir, "keep.txt")
+	require.NoError(t, os.WriteFile(keepPath, []byte("keep"), 0o644))
 	manager, err := New(
 		changefeedID,
 		WithDiskQuotaBytes(32),
-		WithRootDir(rootDir),
+		WithRootDir(baseDir),
 	)
 	require.NoError(t, err)
 
@@ -298,7 +299,7 @@ func TestCloseOnlyRemovesSegmentLogs(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, entry.IsSpilled())
 
-	segmentPath := filepath.Join(rootDir, "segment-000001.log")
+	segmentPath := filepath.Join(manager.workDir, "segment-000001.log")
 	_, err = os.Stat(segmentPath)
 	require.NoError(t, err)
 
@@ -306,15 +307,9 @@ func TestCloseOnlyRemovesSegmentLogs(t *testing.T) {
 
 	_, err = os.Stat(segmentPath)
 	require.ErrorIs(t, err, os.ErrNotExist)
+	_, err = os.Stat(manager.workDir)
+	require.ErrorIs(t, err, os.ErrNotExist)
 	_, err = os.Stat(keepPath)
-	require.NoError(t, err)
-}
-
-func TestRemoveSpoolFilesIgnoresMissingDir(t *testing.T) {
-	t.Parallel()
-
-	rootDir := filepath.Join(t.TempDir(), "missing")
-	err := removeSpoolFiles(rootDir)
 	require.NoError(t, err)
 }
 
@@ -343,12 +338,12 @@ func TestEnqueueSpillsWhenSerializedBatchExceedsMemoryQuota(t *testing.T) {
 func TestExternalRootDirDeletionReturnsErrorWhenNewSegmentIsNeeded(t *testing.T) {
 	t.Parallel()
 
-	rootDir := t.TempDir()
+	baseDir := t.TempDir()
 	changefeedID := commonType.NewChangefeedID4Test("test", "spool")
 	manager, err := New(
 		changefeedID,
 		WithDiskQuotaBytes(64),
-		WithRootDir(rootDir),
+		WithRootDir(baseDir),
 		WithSegmentBytes(40),
 		WithMemoryRatio(0.01),
 		WithHighWatermarkRatio(0.95),
@@ -363,7 +358,7 @@ func TestExternalRootDirDeletionReturnsErrorWhenNewSegmentIsNeeded(t *testing.T)
 	require.NoError(t, err)
 	require.True(t, firstEntry.IsSpilled())
 
-	require.NoError(t, os.RemoveAll(rootDir))
+	require.NoError(t, os.RemoveAll(manager.workDir))
 
 	// Removing the directory is not immediately fatal if the existing spilled
 	// entry is still readable through the open segment file handle.
@@ -387,12 +382,12 @@ func TestExternalRootDirDeletionReturnsErrorWhenNewSegmentIsNeeded(t *testing.T)
 func TestExternalSegmentDamageReturnsErrorOnLoad(t *testing.T) {
 	t.Parallel()
 
-	rootDir := t.TempDir()
+	baseDir := t.TempDir()
 	changefeedID := commonType.NewChangefeedID4Test("test", "spool")
 	manager, err := New(
 		changefeedID,
 		WithDiskQuotaBytes(64),
-		WithRootDir(rootDir),
+		WithRootDir(baseDir),
 		WithSegmentBytes(1<<20),
 		WithMemoryRatio(0.01),
 		WithHighWatermarkRatio(0.95),
@@ -407,7 +402,7 @@ func TestExternalSegmentDamageReturnsErrorOnLoad(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, entry.IsSpilled())
 
-	segmentPath := filepath.Join(rootDir, "segment-000001.log")
+	segmentPath := filepath.Join(manager.workDir, "segment-000001.log")
 	require.NoError(t, os.Truncate(segmentPath, 0))
 
 	msgs, callbacks, err := manager.Load(entry)

@@ -18,8 +18,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
-	"strings"
 	"sync"
 
 	"github.com/pingcap/log"
@@ -29,6 +27,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/prometheus/client_golang/prometheus"
+	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
 
@@ -40,7 +39,7 @@ const (
 	// Use the same order of magnitude as the storage sink's default file size.
 	// One segment is large enough for sequential local writes, but still small
 	// enough to roll over and reclaim files without waiting too long.
-	defaultSegmentBytes = int64(64 * 1024 * 1024)
+	defaultSegmentCapacity = int64(64 * 1024 * 1024)
 
 	// Keep enough local disk space for temporary downstream slowdowns by
 	// default, while still requiring operators to size the quota explicitly
@@ -61,8 +60,8 @@ const (
 )
 
 type options struct {
-	// rootDir is the local directory used by spool. If empty, use a
-	// changefeed-specific directory under TiCDC's data dir.
+	// rootDir is the base directory used to build one changefeed's spool
+	// directory. If empty, use TiCDC's data dir as the base directory.
 	rootDir string
 
 	// diskQuotaBytes is the disk budget for local spool files.
@@ -70,8 +69,8 @@ type options struct {
 	// runtime contract exposed by spool-disk-quota only constrains spilled bytes.
 	diskQuotaBytes int64
 
-	// segmentBytes is the largest size of one segment file before spool rolls to the next file.
-	segmentBytes int64
+	// segmentCapacity is the largest size of one segment file before spool rolls to the next file.
+	segmentCapacity int64
 
 	// memoryRatio is the fraction of diskQuotaBytes kept in memory before spilling to disk.
 	memoryRatio float64
@@ -117,11 +116,11 @@ func WithSegmentBytes(segmentBytes int64) option {
 				"spool option is invalid, use default",
 				zap.String("field", "segment-bytes"),
 				zap.Int64("original", segmentBytes),
-				zap.Int64("default", defaultSegmentBytes),
+				zap.Int64("default", defaultSegmentCapacity),
 			)
 			return
 		}
-		options.segmentBytes = segmentBytes
+		options.segmentCapacity = segmentBytes
 	}
 }
 
@@ -179,6 +178,8 @@ func WithLowWatermarkRatio(lowWatermarkRatio float64) option {
 	}
 }
 
+type segmentID uint64
+
 // Spool keeps encoded DML messages after a writer shard has accepted them and
 // before that writer shard has flushed them to external storage.
 //
@@ -194,19 +195,21 @@ type Spool struct {
 	keyspace   string
 	changefeed string
 
-	// rootDir is where this spool instance keeps its temporary segment files.
-	rootDir string
+	// workDir is where this spool instance keeps its temporary segment files.
+	workDir string
 
-	// mu protects the mutable runtime state below.
+	// mu protects the mutable runtime state below:
+	// quota state transitions, nextSegmentID, activeSegment, segments, and the
+	// per-segment metadata updated during append, load, release, and rotate.
 	mu sync.Mutex
 
 	// closed makes Close idempotent and blocks new writes after shutdown starts.
-	closed bool
+	closed atomic.Bool
 
 	// quota tracks bytes through budget and applies spool-specific wake and metrics policy.
 	quota *quotaController
-	// segmentBytes is the size limit for a single segment file.
-	segmentBytes int64
+	// segmentCapacity is the size limit for a single segment file.
+	segmentCapacity int64
 	// metricLoadedBytes records the byte distribution of loads from spilled files.
 	metricLoadedBytes prometheus.Observer
 	// metricRotatedCount records how many times spool rolls to a new segment.
@@ -215,17 +218,17 @@ type Spool struct {
 	metricSegmentCount prometheus.Gauge
 
 	// nextSegmentID is the next local file sequence number to allocate.
-	nextSegmentID uint64
+	nextSegmentID segmentID
 	// activeSegment is the current append target for spilled blobs.
 	activeSegment *segment
 	// segments keeps every live segment so Load/Release can find it by ID.
-	segments map[uint64]*segment
+	segments map[segmentID]*segment
 }
 
 // segment is one append-only local file that stores spilled message batches.
 type segment struct {
 	// id becomes part of the segment file name and lookup key.
-	id uint64
+	id segmentID
 	// path is the on-disk location of this segment file.
 	path string
 	// file is the opened segment file handle.
@@ -238,8 +241,8 @@ type segment struct {
 
 // segmentLocation tells Load and Release where one spilled batch lives inside a segment file.
 type segmentLocation struct {
-	// segmentID tells which segment file stores this blob.
-	segmentID uint64
+	// id tells which segment file stores this blob.
+	id segmentID
 	// offset is the starting byte offset inside the segment file.
 	offset int64
 	// length is the blob length in bytes.
@@ -300,7 +303,7 @@ func (e *Entry) InMemory() bool {
 	return e != nil && e.memoryMsgs != nil
 }
 
-// New creates a per-changefeed spool.
+// New return a spool that manages unflushed data.
 func New(
 	changefeedID commonType.ChangeFeedID,
 	opts ...option,
@@ -312,39 +315,33 @@ func New(
 		}
 	}
 	normalizeOptions(cfg)
-	rootDir := resolveRootDir(changefeedID, cfg.rootDir)
-	if err := prepareRootDir(rootDir); err != nil {
+	workDir := resolveWorkDir(changefeedID, cfg.rootDir)
+	if err := prepareWorkDir(workDir); err != nil {
 		return nil, err
 	}
 
+	var (
+		keyspace   = changefeedID.Keyspace()
+		changefeed = changefeedID.Name()
+	)
 	spool := &Spool{
-		keyspace:     changefeedID.Keyspace(),
-		changefeed:   changefeedID.ID().String(),
-		rootDir:      rootDir,
-		quota:        newQuotaController(changefeedID, cfg),
-		segmentBytes: cfg.segmentBytes,
-		metricLoadedBytes: metrics.CloudStorageLoadBytesHistogram.WithLabelValues(
-			changefeedID.Keyspace(),
-			changefeedID.ID().String(),
-		),
-		metricRotatedCount: metrics.CloudStorageRotateCountCounter.WithLabelValues(
-			changefeedID.Keyspace(),
-			changefeedID.ID().String(),
-		),
-		metricSegmentCount: metrics.CloudStorageSpoolSegmentCountGauge.WithLabelValues(
-			changefeedID.Keyspace(),
-			changefeedID.ID().String(),
-		),
-		segments: make(map[uint64]*segment),
+		keyspace:           keyspace,
+		changefeed:         changefeed,
+		workDir:            workDir,
+		quota:              newQuotaController(changefeedID, cfg),
+		segmentCapacity:    cfg.segmentCapacity,
+		metricLoadedBytes:  metrics.CloudStorageLoadBytesHistogram.WithLabelValues(keyspace, changefeed),
+		metricRotatedCount: metrics.CloudStorageRotateCountCounter.WithLabelValues(keyspace, changefeed),
+		metricSegmentCount: metrics.CloudStorageSpoolSegmentCountGauge.WithLabelValues(keyspace, changefeed),
+		segments:           make(map[segmentID]*segment),
 	}
-	spool.metricSegmentCount.Set(0)
 	return spool, nil
 }
 
 func defaultOptions() *options {
 	return &options{
 		diskQuotaBytes:     defaultDiskQuotaBytes,
-		segmentBytes:       defaultSegmentBytes,
+		segmentCapacity:    defaultSegmentCapacity,
 		memoryRatio:        defaultMemoryRatio,
 		highWatermarkRatio: defaultHighWatermarkRatio,
 		lowWatermarkRatio:  defaultLowWatermarkRatio,
@@ -366,78 +363,34 @@ func normalizeOptions(cfg *options) {
 	cfg.highWatermarkRatio = defaultHighWatermarkRatio
 }
 
-func resolveRootDir(changefeedID commonType.ChangeFeedID, rootDir string) string {
-	if rootDir != "" {
-		return rootDir
+func resolveWorkDir(changefeedID commonType.ChangeFeedID, rootDir string) string {
+	baseDir := rootDir
+	if baseDir == "" {
+		baseDir = config.GetGlobalServerConfig().DataDir
+		if baseDir == "" {
+			baseDir = os.TempDir()
+		}
+		baseDir = filepath.Join(baseDir, defaultDirectoryName)
 	}
 
-	dataDir := config.GetGlobalServerConfig().DataDir
-	if dataDir == "" {
-		dataDir = os.TempDir()
-	}
 	return filepath.Join(
-		dataDir,
-		defaultDirectoryName,
+		baseDir,
 		changefeedID.Keyspace(),
-		fmt.Sprintf("%s-%s", changefeedID.Name(), changefeedID.ID().String()),
+		changefeedID.Name(),
 	)
 }
 
-// prepareRootDir starts each spool instance from a clean set of spool-owned
-// segment files. The intent is to avoid appending to stale segment logs from a
-// previous run, while leaving any unrelated files under the configured spool root directory intact.
-func prepareRootDir(rootDir string) error {
-	if err := os.MkdirAll(rootDir, 0o755); err != nil {
+// prepareWorkDir recreates the changefeed-specific spool directory from
+// scratch. The final workDir is fully owned by one spool instance, so startup
+// can clear the whole directory before creating fresh segment files.
+func prepareWorkDir(workDir string) error {
+	if err := os.RemoveAll(workDir); err != nil {
 		return errors.WrapError(errors.ErrCheckDirValid, err)
 	}
-
-	return removeSpoolFiles(rootDir)
-}
-
-// removeSpoolFiles only removes files created by spool itself. We use
-// RemoveAll on each matched path so cleanup still works if the file was
-// replaced with a symlink or some other filesystem entry, but we never delete
-// the whole root directory because callers may keep unrelated files there.
-func removeSpoolFiles(rootDir string) error {
-	entries, err := os.ReadDir(rootDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
 		return errors.WrapError(errors.ErrCheckDirValid, err)
-	}
-	for _, entry := range entries {
-		if !isSegmentFile(entry) {
-			continue
-		}
-
-		path := filepath.Join(rootDir, entry.Name())
-		if err := os.RemoveAll(path); err != nil {
-			return errors.WrapError(errors.ErrCheckDirValid, err)
-		}
 	}
 	return nil
-}
-
-func isSegmentFile(entry os.DirEntry) bool {
-	if entry.IsDir() {
-		return false
-	}
-	name := entry.Name()
-	if !strings.HasPrefix(name, segmentFilePrefix) {
-		return false
-	}
-	if filepath.Ext(name) != segmentFileExt {
-		return false
-	}
-
-	segmentID := strings.TrimPrefix(name, segmentFilePrefix)
-	segmentID = strings.TrimSuffix(segmentID, segmentFileExt)
-	if segmentID == "" {
-		return false
-	}
-	_, err := strconv.ParseUint(segmentID, 10, 64)
-	return err == nil
 }
 
 // TryEnqueue decides how spool should handle the next batch under one lock.
@@ -454,30 +407,28 @@ func (s *Spool) TryEnqueue(
 	}
 
 	s.mu.Lock()
-
-	if s.closed {
+	if s.closed.Load() {
 		s.mu.Unlock()
 		return EnqueueActionAccepted, nil, errors.ErrInternalCheckFailed.GenWithStackByArgs("spool is closed")
 	}
-
 	shouldSpill := s.quota.shouldSpill(size.accountingBytes)
-	if shouldSpill && s.quota.exceedsDiskQuota(size.accountingBytes) {
-		entry, callbackToRun, err := s.acceptEntryLocked(msgs, postEnqueue, size, true)
+	if shouldSpill && s.quota.entryExceedsDiskQuota(size.accountingBytes) {
+		entry, postEnqueueToRun, err := s.acceptEntryLocked(msgs, postEnqueue, size, true)
 		s.mu.Unlock()
-		if callbackToRun != nil {
-			callbackToRun()
+		if postEnqueueToRun != nil {
+			postEnqueueToRun()
 		}
 		return EnqueueActionAcceptedOversized, entry, err
 	}
-	if shouldSpill && s.quota.wouldExceedDiskQuota(size.accountingBytes) {
+	if shouldSpill && s.quota.spillWouldExceedDiskQuota(size.accountingBytes) {
 		s.mu.Unlock()
 		return EnqueueActionWaitDiskQuota, nil, nil
 	}
 
-	entry, callbackToRun, err := s.acceptEntryLocked(msgs, postEnqueue, size, false)
+	entry, postEnqueueToRun, err := s.acceptEntryLocked(msgs, postEnqueue, size, false)
 	s.mu.Unlock()
-	if callbackToRun != nil {
-		callbackToRun()
+	if postEnqueueToRun != nil {
+		postEnqueueToRun()
 	}
 	return EnqueueActionAccepted, entry, err
 }
@@ -492,11 +443,11 @@ func (s *Spool) WaitForDiskQuota(ctx context.Context, msgs []*common.Message) er
 
 	for {
 		s.mu.Lock()
-		if s.closed {
+		if s.closed.Load() {
 			s.mu.Unlock()
 			return errors.ErrInternalCheckFailed.GenWithStackByArgs("spool is closed")
 		}
-		if !s.quota.wouldExceedDiskQuota(size.accountingBytes) {
+		if !s.quota.spillWouldExceedDiskQuota(size.accountingBytes) {
 			s.mu.Unlock()
 			return nil
 		}
@@ -523,14 +474,14 @@ func (s *Spool) Enqueue(
 	}
 
 	s.mu.Lock()
-	if s.closed {
+	if s.closed.Load() {
 		s.mu.Unlock()
 		return nil, errors.ErrInternalCheckFailed.GenWithStackByArgs("spool is closed")
 	}
-	entry, callbackToRun, err := s.acceptEntryLocked(msgs, postEnqueue, size, false)
+	entry, postEnqueueToRun, err := s.acceptEntryLocked(msgs, postEnqueue, size, false)
 	s.mu.Unlock()
-	if callbackToRun != nil {
-		callbackToRun()
+	if postEnqueueToRun != nil {
+		postEnqueueToRun()
 	}
 	return entry, err
 }
@@ -558,8 +509,8 @@ func (s *Spool) acceptEntryLocked(
 		entry.memoryMsgs = msgs
 	}
 	entry.callbacks = detachCallbacks(msgs)
-	callbackToRun := s.quota.acquire(entry.accountingBytes, shouldSpill, postEnqueue)
-	return entry, callbackToRun, nil
+	postEnqueueToRun := s.quota.acquire(entry.accountingBytes, shouldSpill, postEnqueue)
+	return entry, postEnqueueToRun, nil
 }
 
 func detachCallbacks(msgs []*common.Message) []func() {
@@ -589,12 +540,12 @@ func (s *Spool) Load(entry *Entry) ([]*common.Message, []func(), error) {
 	}
 
 	s.mu.Lock()
-	spoolSegment := s.segments[entry.location.segmentID]
+	spoolSegment := s.segments[entry.location.id]
 	if spoolSegment == nil {
 		s.mu.Unlock()
 		return nil, nil, errors.ErrInternalCheckFailed.GenWithStack(
 			"spool segment %d not found",
-			entry.location.segmentID,
+			entry.location.id,
 		)
 	}
 	file := spoolSegment.file
@@ -619,39 +570,39 @@ func (s *Spool) Release(entry *Entry) {
 	if entry == nil || entryConsumed(entry) {
 		return
 	}
-
 	location, accountingBytes, spilled := consumeEntry(entry)
 
 	s.mu.Lock()
-	if s.closed {
+	if s.closed.Load() {
 		s.mu.Unlock()
 		return
 	}
 
 	if spilled {
-		spoolSegment := s.segments[location.segmentID]
-		if spoolSegment != nil {
-			spoolSegment.refCnt--
-			if spoolSegment.refCnt == 0 && s.activeSegment != spoolSegment {
-				if err := spoolSegment.file.Close(); err != nil {
-					log.Warn("close spool segment file failed", zap.Error(err))
+		seg := s.segments[location.id]
+		if seg != nil {
+			seg.refCnt--
+			if seg.refCnt == 0 && s.activeSegment != seg {
+				if err := seg.file.Close(); err != nil {
+					log.Warn("close spool segment file failed",
+						zap.String("keyspace", s.keyspace), zap.String("changefeed", s.changefeed),
+						zap.Error(err))
 				}
-				if err := os.Remove(spoolSegment.path); err != nil {
+				if err := os.Remove(seg.path); err != nil {
 					log.Warn(
 						"remove spool segment file failed",
-						zap.Error(err),
-						zap.String("path", spoolSegment.path),
-					)
+						zap.String("keyspace", s.keyspace), zap.String("changefeed", s.changefeed),
+						zap.String("path", seg.path), zap.Error(err))
 				}
-				delete(s.segments, spoolSegment.id)
+				delete(s.segments, seg.id)
 				s.metricSegmentCount.Set(float64(len(s.segments)))
 			}
 		}
 	}
-	callbacksToRun := s.quota.release(accountingBytes, spilled)
+	postEnqueueCallbacks := s.quota.release(accountingBytes, spilled)
 	s.mu.Unlock()
 
-	for _, callback := range callbacksToRun {
+	for _, callback := range postEnqueueCallbacks {
 		if callback != nil {
 			callback()
 		}
@@ -659,6 +610,7 @@ func (s *Spool) Release(entry *Entry) {
 }
 
 // Discard runs the entry callbacks and then releases its local spool resources.
+// it's called when the entry corresponding data is staled.
 func (s *Spool) Discard(entry *Entry) {
 	if entry == nil {
 		return
@@ -674,26 +626,25 @@ func (s *Spool) Discard(entry *Entry) {
 
 // Close closes spool and removes the segment files created by this spool instance.
 func (s *Spool) Close() {
-	s.mu.Lock()
-	if s.closed {
-		s.mu.Unlock()
+	if !s.closed.CompareAndSwap(false, true) {
 		return
 	}
-	s.closed = true
-	for _, spoolSegment := range s.segments {
-		if spoolSegment.file != nil {
-			if err := spoolSegment.file.Close(); err != nil {
+
+	s.mu.Lock()
+	for _, seg := range s.segments {
+		if seg.file != nil {
+			if err := seg.file.Close(); err != nil {
 				log.Warn("close spool segment failed",
-					zap.String("path", spoolSegment.path),
-					zap.Error(err))
+					zap.String("keyspace", s.keyspace), zap.String("changefeed", s.changefeed),
+					zap.String("path", seg.path), zap.Error(err))
 			}
 		}
 	}
 	s.mu.Unlock()
 
-	if err := removeSpoolFiles(s.rootDir); err != nil {
+	if err := os.RemoveAll(s.workDir); err != nil {
 		log.Warn("remove spool files failed",
-			zap.String("path", s.rootDir),
+			zap.String("path", s.workDir),
 			zap.Error(err))
 	}
 	metrics.CloudStorageLoadBytesHistogram.DeleteLabelValues(s.keyspace, s.changefeed)
@@ -703,12 +654,12 @@ func (s *Spool) Close() {
 }
 
 func (s *Spool) appendBlobLocked(blob []byte) (*segmentLocation, error) {
-	spoolSegment, err := s.getWritableSegmentLocked(int64(len(blob)))
+	seg, err := s.getWritableSegmentLocked(int64(len(blob)))
 	if err != nil {
 		return nil, err
 	}
-	offset := spoolSegment.size
-	n, err := spoolSegment.file.Write(blob)
+	offset := seg.size
+	n, err := seg.file.Write(blob)
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrUnexpected, err, "write spool segment file")
 	}
@@ -719,21 +670,23 @@ func (s *Spool) appendBlobLocked(blob []byte) (*segmentLocation, error) {
 			n,
 		)
 	}
-	spoolSegment.size += int64(n)
-	spoolSegment.refCnt++
+	seg.size += int64(n)
+	seg.refCnt++
 
 	return &segmentLocation{
-		segmentID: spoolSegment.id,
-		offset:    offset,
-		length:    int64(n),
+		id:     seg.id,
+		offset: offset,
+		length: int64(n),
 	}, nil
 }
 
 func (s *Spool) getWritableSegmentLocked(needBytes int64) (*segment, error) {
-	if s.activeSegment == nil || s.activeSegment.size+needBytes > s.segmentBytes {
-		if err := s.rotateLocked(); err != nil {
-			return nil, err
-		}
+	if s.activeSegment != nil && s.activeSegment.size+needBytes <= s.segmentCapacity {
+		return s.activeSegment, nil
+	}
+
+	if err := s.rotateLocked(); err != nil {
+		return nil, err
 	}
 	return s.activeSegment, nil
 }
@@ -742,7 +695,7 @@ func (s *Spool) rotateLocked() error {
 	s.nextSegmentID++
 	segmentID := s.nextSegmentID
 	path := filepath.Join(
-		s.rootDir,
+		s.workDir,
 		fmt.Sprintf("%s%06d%s", segmentFilePrefix, segmentID, segmentFileExt),
 	)
 	// External damage to the spool directory becomes fatal here. Once spool
@@ -752,13 +705,13 @@ func (s *Spool) rotateLocked() error {
 	if err != nil {
 		return errors.WrapError(errors.ErrUnexpected, err, "open spool segment file")
 	}
-	spoolSegment := &segment{
+	seg := &segment{
 		id:   segmentID,
 		path: path,
 		file: file,
 	}
-	s.segments[segmentID] = spoolSegment
-	s.activeSegment = spoolSegment
+	s.segments[segmentID] = seg
+	s.activeSegment = seg
 	s.metricRotatedCount.Inc()
 	s.metricSegmentCount.Set(float64(len(s.segments)))
 	return nil
