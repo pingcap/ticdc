@@ -398,26 +398,42 @@ func (c *eventBroker) sendDML(remoteID node.ID, batchEvent *event.BatchDMLEvent,
 }
 
 func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *event.DDLEvent, d *dispatcherStat) {
-	c.emitSyncPointEventIfNeeded(e.FinishedTs, d, remoteID)
-	e.DispatcherID = d.id
-	e.Seq = d.seq.Add(1)
-	e.Epoch = d.epoch
-	ddlEvent := newWrapDDLEvent(remoteID, e)
-	select {
-	case <-ctx.Done():
-		log.Error("send ddl event failed", zap.Error(ctx.Err()))
-		return
-	case c.getMessageCh(d.messageWorkerIndex, common.IsRedoMode(d.info.GetMode())) <- ddlEvent:
-		updateMetricEventServiceSendDDLCount(d.info.GetMode())
+	sendDDLEvent := func() bool {
+		e.DispatcherID = d.id
+		e.Seq = d.seq.Add(1)
+		e.Epoch = d.epoch
+		ddlEvent := newWrapDDLEvent(remoteID, e)
+		select {
+		case <-ctx.Done():
+			log.Error("send ddl event failed", zap.Error(ctx.Err()))
+			return false
+		case c.getMessageCh(d.messageWorkerIndex, common.IsRedoMode(d.info.GetMode())) <- ddlEvent:
+			updateMetricEventServiceSendDDLCount(d.info.GetMode())
+		}
+
+		log.Info("send ddl event to dispatcher",
+			zap.Stringer("changefeedID", d.changefeedStat.changefeedID),
+			zap.Stringer("dispatcherID", d.id),
+			zap.Int64("DDLSpanTableID", d.info.GetTableSpan().TableID),
+			zap.Int64("EventTableID", e.GetTableID()),
+			zap.String("query", e.Query), zap.Uint64("commitTs", e.FinishedTs),
+			zap.Uint64("seq", e.Seq), zap.Int64("mode", d.info.GetMode()))
+		return true
 	}
 
-	log.Info("send ddl event to dispatcher",
-		zap.Stringer("changefeedID", d.changefeedStat.changefeedID),
-		zap.Stringer("dispatcherID", d.id),
-		zap.Int64("DDLSpanTableID", d.info.GetTableSpan().TableID),
-		zap.Int64("EventTableID", e.GetTableID()),
-		zap.String("query", e.Query), zap.Uint64("commitTs", e.FinishedTs),
-		zap.Uint64("seq", e.Seq), zap.Int64("mode", d.info.GetMode()))
+	// Keep same-ts barrier order as (commitTs, isSyncPoint): DDL before syncpoint.
+	// This matches maintainer/dispatcher assumptions when DDL and syncpoint share commitTs.
+	c.fastForwardSyncPointIfNeeded(d)
+	if d.enableSyncPoint && d.nextSyncPoint.Load() == e.FinishedTs {
+		if !sendDDLEvent() {
+			return
+		}
+		c.emitSyncPointEventIfNeeded(e.FinishedTs, d, remoteID)
+		return
+	}
+
+	c.emitSyncPointEventIfNeeded(e.FinishedTs, d, remoteID)
+	_ = sendDDLEvent()
 }
 
 func (c *eventBroker) refreshMinSentResolvedTs(ctx context.Context) error {
@@ -550,34 +566,49 @@ func (c *eventBroker) tickTableTriggerDispatchers(ctx context.Context) error {
 		case <-ticker.C:
 			c.tableTriggerDispatchers.Range(func(key, value interface{}) bool {
 				stat := value.(*atomic.Pointer[dispatcherStat]).Load()
-				if !c.checkAndSendReady(stat) {
-					return true
-				}
-				c.sendHandshakeIfNeed(stat)
-				startTs := stat.sentResolvedTs.Load()
-				remoteID := node.ID(stat.info.GetServerID())
-				keyspaceMeta := common.KeyspaceMeta{
-					ID:   stat.info.GetTableSpan().KeyspaceID,
-					Name: stat.info.GetChangefeedID().Keyspace(),
-				}
-				ddlEvents, endTs, err := c.schemaStore.FetchTableTriggerDDLEvents(keyspaceMeta, key.(common.DispatcherID), stat.filter, startTs, 100)
-				if err != nil {
-					log.Error("table trigger ddl events fetch failed", zap.Uint32("keyspaceID", stat.info.GetTableSpan().KeyspaceID), zap.Stringer("dispatcherID", stat.id), zap.Error(err))
-					return true
-				}
-				stat.receivedResolvedTs.Store(endTs)
-
-				for _, e := range ddlEvents {
-					ep := &e
-					c.sendDDL(ctx, remoteID, ep, stat)
-				}
-				if endTs > startTs {
-					// After all the events are sent, we send the watermark to the dispatcher.
-					c.sendResolvedTs(stat, endTs)
-				}
+				c.processTableTriggerDispatcher(ctx, key.(common.DispatcherID), stat)
 				return true
 			})
 		}
+	}
+}
+
+func (c *eventBroker) processTableTriggerDispatcher(ctx context.Context, dispatcherID common.DispatcherID, stat *dispatcherStat) {
+	if !c.checkAndSendReady(stat) {
+		return
+	}
+	c.sendHandshakeIfNeed(stat)
+
+	startTs := stat.sentResolvedTs.Load()
+	remoteID := node.ID(stat.info.GetServerID())
+	keyspaceMeta := common.KeyspaceMeta{
+		ID:   stat.info.GetTableSpan().KeyspaceID,
+		Name: stat.info.GetChangefeedID().Keyspace(),
+	}
+
+	ddlEvents, endTs, err := c.schemaStore.FetchTableTriggerDDLEvents(keyspaceMeta, dispatcherID, stat.filter, startTs, 100)
+	if err != nil {
+		log.Error("table trigger ddl events fetch failed", zap.Uint32("keyspaceID", stat.info.GetTableSpan().KeyspaceID), zap.Stringer("dispatcherID", stat.id), zap.Error(err))
+		return
+	}
+	// Keep the raw resolved-ts from schema store for scan readiness/lag visibility.
+	stat.receivedResolvedTs.Store(endTs)
+
+	boundedEndTs := c.capCommitTsEndBySyncPoint(stat, endTs)
+
+	for _, e := range ddlEvents {
+		if e.FinishedTs > boundedEndTs {
+			break
+		}
+		ep := &e
+		c.sendDDL(ctx, remoteID, ep, stat)
+	}
+
+	if boundedEndTs > startTs {
+		// After all the events are sent, we send the watermark to the dispatcher.
+		c.sendResolvedTs(stat, boundedEndTs)
+	} else {
+		c.nudgeSyncPointCommitIfNeeded(stat)
 	}
 }
 
