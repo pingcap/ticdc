@@ -44,8 +44,8 @@ type bufferManager struct {
 	config       *cloudstorage.Config
 	spool        *spool.Spool
 
-	inputCh *chann.DrainableChann[*task]
-	flushCh chan writerTask
+	inputCh  *chann.DrainableChann[*task]
+	outputCh chan writerTask
 
 	writerLabel          string
 	metricPendingTables  prometheus.Gauge
@@ -58,7 +58,7 @@ func newBufferManager(
 	changefeedID common.ChangeFeedID,
 	config *cloudstorage.Config,
 	spoolBuffer *spool.Spool,
-	flushCh chan writerTask,
+	outputCh chan writerTask,
 ) *bufferManager {
 	var (
 		keyspace    = changefeedID.Keyspace()
@@ -70,7 +70,7 @@ func newBufferManager(
 		config:               config,
 		spool:                spoolBuffer,
 		inputCh:              chann.NewAutoDrainChann[*task](),
-		flushCh:              flushCh,
+		outputCh:             outputCh,
 		writerLabel:          writerLabel,
 		metricPendingTables:  metrics.CloudStoragePendingTablesGauge.WithLabelValues(keyspace, name, writerLabel),
 		metricPendingEntries: metrics.CloudStoragePendingEntriesGauge.WithLabelValues(keyspace, name, writerLabel),
@@ -83,9 +83,11 @@ func (c *bufferManager) run(ctx context.Context) error {
 	ticker := time.NewTicker(c.config.FlushInterval)
 	defer func() {
 		ticker.Stop()
-		close(c.flushCh)
+		close(c.outputCh)
 		c.deleteMetrics()
 	}()
+
+	var err error
 	for {
 		failpoint.Inject("passTickerOnce", func() {
 			<-ticker.C
@@ -95,41 +97,38 @@ func (c *bufferManager) run(ctx context.Context) error {
 		case <-ctx.Done():
 			return errors.Trace(context.Cause(ctx))
 		case <-ticker.C:
-			if buffered.isEmpty() {
-				continue
-			}
-			var err error
 			buffered, err = c.emitBatch(ctx, buffered, flushReasonInterval)
 			if err != nil {
 				return err
 			}
 		case task, ok := <-c.inputCh.Out():
 			if !ok {
-				if buffered.isEmpty() {
-					return nil
-				}
 				_, err := c.emitBatch(ctx, buffered, flushReasonClose)
 				return err
 			}
-
 			if task.isFlushTask() {
-				dispatcherBatch := buffered.detachDispatcher(task.dispatcherID)
+				dispatcherBatch := buffered.detachByDispatcher(task.dispatcherID)
 				if !dispatcherBatch.isEmpty() {
-					var err error
-					dispatcherBatch, err = c.emitBatch(ctx, dispatcherBatch, flushReasonBarrier)
-					if err != nil {
-						return err
+					select {
+					case <-ctx.Done():
+						return errors.Trace(context.Cause(ctx))
+					case c.outputCh <- writerTask{tableBatch: dispatcherBatch}:
+						metrics.CloudStorageFlushCountCounter.WithLabelValues(
+							c.changeFeedID.Keyspace(),
+							c.changeFeedID.Name(),
+							c.writerLabel,
+							flushReasonBarrier,
+						).Inc()
 					}
 				}
+				c.updatePendingMetrics(buffered)
 				select {
 				case <-ctx.Done():
 					return errors.Trace(context.Cause(ctx))
-				case c.flushCh <- writerTask{marker: task.marker}:
+				case c.outputCh <- writerTask{marker: task.marker}:
 				}
 				continue
 			}
-
-			var err error
 			buffered, err = c.handleDMLEvent(ctx, buffered, task)
 			if err != nil {
 				return err
@@ -138,57 +137,57 @@ func (c *bufferManager) run(ctx context.Context) error {
 	}
 }
 
-func (c *bufferManager) handleDMLEvent(ctx context.Context, batch bufferedTasks, task *task) (bufferedTasks, error) {
+func (c *bufferManager) handleDMLEvent(ctx context.Context, buffered bufferedTasks, task *task) (bufferedTasks, error) {
 	if len(task.encodedMsgs) == 0 {
 		task.event.PostEnqueue()
-		return batch, nil
+		return buffered, nil
 	}
 
 	for {
 		action, entry, err := c.spool.TryEnqueue(task.encodedMsgs, task.event.PostEnqueue)
 		if err != nil {
-			return batch, err
+			return buffered, err
 		}
 		switch action {
 		case spool.EnqueueActionAcceptedOversized:
-			batch.addEntry(task, entry)
-			return c.emitTableBatch(ctx, batch, task.versionedTable, flushReasonOversize)
+			buffered.addEntry(task, entry)
+			return c.emitTableBatch(ctx, buffered, task.versionedTable, flushReasonOversize)
 		case spool.EnqueueActionWaitDiskQuota:
-			batch, err = c.emitBatch(ctx, batch, flushReasonQuota)
+			buffered, err = c.emitBatch(ctx, buffered, flushReasonQuota)
 			if err != nil {
-				return batch, err
+				return buffered, err
 			}
 			if err := c.spool.WaitForDiskQuota(ctx, task.encodedMsgs); err != nil {
-				return batch, err
+				return buffered, err
 			}
 			continue
 		default:
-			batch.addEntry(task, entry)
+			buffered.addEntry(task, entry)
 		}
 
-		table := task.versionedTable
-		if batch.tables[table].size < uint64(c.config.FileSize) {
-			c.updatePendingMetrics(batch)
-			return batch, nil
+		version := task.versionedTable
+		if buffered.tasks[version].size < uint64(c.config.FileSize) {
+			c.updatePendingMetrics(buffered)
+			return buffered, nil
 		}
-		return c.emitTableBatch(ctx, batch, table, flushReasonSize)
+		return c.emitTableBatch(ctx, buffered, version, flushReasonSize)
 	}
 }
 
-func (c *bufferManager) emitBatch(ctx context.Context, batch bufferedTasks, reason string) (bufferedTasks, error) {
-	if batch.isEmpty() {
-		c.updatePendingMetrics(batch)
-		return batch, nil
+func (c *bufferManager) emitBatch(ctx context.Context, buffer bufferedTasks, reason string) (bufferedTasks, error) {
+	if buffer.isEmpty() {
+		c.updatePendingMetrics(buffer)
+		return buffer, nil
 	}
 
 	select {
 	case <-ctx.Done():
-		return batch, errors.Trace(context.Cause(ctx))
-	case c.flushCh <- writerTask{tableBatch: batch}:
+		return buffer, errors.Trace(context.Cause(ctx))
+	case c.outputCh <- writerTask{tableBatch: buffer}:
 		metrics.CloudStorageFlushCountCounter.WithLabelValues(c.changeFeedID.Keyspace(), c.changeFeedID.Name(), c.writerLabel, reason).Inc()
-		emptyBatch := newBufferedTasks()
-		c.updatePendingMetrics(emptyBatch)
-		return emptyBatch, nil
+		buffered := newBufferedTasks()
+		c.updatePendingMetrics(buffered)
+		return buffered, nil
 	}
 }
 
@@ -198,11 +197,14 @@ func (c *bufferManager) emitTableBatch(
 	table cloudstorage.VersionedTableName,
 	reason string,
 ) (bufferedTasks, error) {
-	tableBatch := batch.detachTable(table)
+	tableBatch, err := batch.detachByTable(table)
+	if err != nil {
+		return batch, err
+	}
 	select {
 	case <-ctx.Done():
 		return batch, errors.Trace(context.Cause(ctx))
-	case c.flushCh <- writerTask{tableBatch: tableBatch}:
+	case c.outputCh <- writerTask{tableBatch: tableBatch}:
 		metrics.CloudStorageFlushCountCounter.WithLabelValues(c.changeFeedID.Keyspace(), c.changeFeedID.Name(), c.writerLabel, reason).Inc()
 		c.updatePendingMetrics(batch)
 		return batch, nil
@@ -219,10 +221,10 @@ func (c *bufferManager) enqueueTask(ctx context.Context, t *task) error {
 }
 
 func (c *bufferManager) updatePendingMetrics(batch bufferedTasks) {
-	pendingTables := len(batch.tables)
+	pendingTables := len(batch.tasks)
 	pendingEntries := 0
 	pendingBytes := uint64(0)
-	for _, tableTask := range batch.tables {
+	for _, tableTask := range batch.tasks {
 		pendingEntries += len(tableTask.entries)
 		pendingBytes += tableTask.size
 	}
@@ -248,7 +250,7 @@ func (c *bufferManager) deleteMetrics() {
 }
 
 type bufferedTasks struct {
-	tables map[cloudstorage.VersionedTableName]*singleTableTask
+	tasks map[cloudstorage.VersionedTableName]*singleTableTask
 }
 
 type singleTableTask struct {
@@ -259,48 +261,51 @@ type singleTableTask struct {
 
 func newBufferedTasks() bufferedTasks {
 	return bufferedTasks{
-		tables: make(map[cloudstorage.VersionedTableName]*singleTableTask),
+		tasks: make(map[cloudstorage.VersionedTableName]*singleTableTask),
 	}
 }
 
 func (t *bufferedTasks) isEmpty() bool {
-	return len(t.tables) == 0
+	return len(t.tasks) == 0
 }
 
 func (t *bufferedTasks) addEntry(event *task, entry *spool.Entry) {
 	table := event.versionedTable
-	if _, ok := t.tables[table]; !ok {
-		t.tables[table] = &singleTableTask{
+	if _, ok := t.tasks[table]; !ok {
+		t.tasks[table] = &singleTableTask{
 			size:      0,
 			tableInfo: event.event.TableInfo,
 		}
 	}
 
-	tableTask := t.tables[table]
+	tableTask := t.tasks[table]
 	tableTask.size += entry.FileBytes()
 	tableTask.entries = append(tableTask.entries, entry)
 }
 
-func (t *bufferedTasks) detachTable(table cloudstorage.VersionedTableName) bufferedTasks {
-	tableTask := t.tables[table]
+func (t *bufferedTasks) detachByTable(version cloudstorage.VersionedTableName) (bufferedTasks, error) {
+	tableTask := t.tasks[version]
 	if tableTask == nil {
-		panic("table batch not found")
+		return bufferedTasks{}, errors.ErrInternalCheckFailed.GenWithStack(
+			"table batch not found: %+v",
+			version,
+		)
 	}
-	delete(t.tables, table)
+	delete(t.tasks, version)
 
 	return bufferedTasks{
-		tables: map[cloudstorage.VersionedTableName]*singleTableTask{table: tableTask},
-	}
+		tasks: map[cloudstorage.VersionedTableName]*singleTableTask{version: tableTask},
+	}, nil
 }
 
-func (t *bufferedTasks) detachDispatcher(dispatcherID common.DispatcherID) bufferedTasks {
+func (t *bufferedTasks) detachByDispatcher(dispatcherID common.DispatcherID) bufferedTasks {
 	batchByDispatcher := newBufferedTasks()
-	for table, tableTask := range t.tables {
-		if table.DispatcherID != dispatcherID {
+	for version, tableTask := range t.tasks {
+		if version.DispatcherID != dispatcherID {
 			continue
 		}
-		batchByDispatcher.tables[table] = tableTask
-		delete(t.tables, table)
+		batchByDispatcher.tasks[version] = tableTask
+		delete(t.tasks, version)
 	}
 	return batchByDispatcher
 }

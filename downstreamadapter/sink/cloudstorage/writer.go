@@ -140,12 +140,12 @@ func (d *writer) flushMessages(ctx context.Context) error {
 				flushTask.marker.finish()
 				continue
 			}
-			if len(flushTask.tableBatch.tables) == 0 {
+			if len(flushTask.tableBatch.tasks) == 0 {
 				continue
 			}
 
 			start := time.Now()
-			for table, singleTask := range flushTask.tableBatch.tables {
+			for table, singleTask := range flushTask.tableBatch.tasks {
 				if len(singleTask.entries) == 0 {
 					continue
 				}

@@ -21,6 +21,7 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/sink/cloudstorage/spool"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/stretchr/testify/require"
@@ -65,7 +66,7 @@ func TestBufferManagerFlushesPendingBatchBeforeWaitingForDiskQuota(t *testing.T)
 	select {
 	case flushed := <-flushCh:
 		require.Nil(t, flushed.marker)
-		require.Len(t, flushed.tableBatch.tables, 1)
+		require.Len(t, flushed.tableBatch.tasks, 1)
 	case <-time.After(3 * time.Second):
 		t.Fatal("buffer controller did not flush pending batch before waiting for disk quota")
 	}
@@ -109,8 +110,8 @@ func TestBufferManagerOversizedBatchFlushesImmediatelyFromMemory(t *testing.T) {
 
 	select {
 	case flushed := <-flushCh:
-		require.Len(t, flushed.tableBatch.tables, 1)
-		for _, tableTask := range flushed.tableBatch.tables {
+		require.Len(t, flushed.tableBatch.tasks, 1)
+		for _, tableTask := range flushed.tableBatch.tasks {
 			require.Len(t, tableTask.entries, 1)
 			require.True(t, tableTask.entries[0].InMemory())
 			require.False(t, tableTask.entries[0].IsSpilled())
@@ -121,6 +122,23 @@ func TestBufferManagerOversizedBatchFlushesImmediatelyFromMemory(t *testing.T) {
 
 	cancel()
 	require.ErrorIs(t, <-done, context.Canceled)
+}
+
+func TestDetachByTableReturnsErrorWhenTableIsMissing(t *testing.T) {
+	t.Parallel()
+
+	buffered := newBufferedTasks()
+	_, err := buffered.detachByTable(cloudstorage.VersionedTableName{
+		TableNameWithPhysicTableID: commonType.TableName{
+			Schema:  "test",
+			Table:   "table1",
+			TableID: 100,
+		},
+		TableInfoVersion: 1,
+		DispatcherID:     commonType.NewDispatcherID(),
+	})
+	require.Error(t, err)
+	require.True(t, errors.ErrInternalCheckFailed.Equal(err))
 }
 
 func newBufferedTask(table string, dispatcherID commonType.DispatcherID, payload string) *task {
