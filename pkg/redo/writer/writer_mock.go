@@ -84,23 +84,23 @@ func (m *MockRedoDMLWriter) EXPECT() *MockRedoDMLWriterMockRecorder {
 	return m.recorder
 }
 
-// AppendDMLEvents mocks base method.
-func (m *MockRedoDMLWriter) AppendDMLEvents(ctx context.Context, events ...*event.RedoRowEvent) error {
+// AddDMLEvents mocks base method.
+func (m *MockRedoDMLWriter) AddDMLEvents(ctx context.Context, events ...*event.RedoRowEvent) error {
 	m.ctrl.T.Helper()
 	varargs := []interface{}{ctx}
 	for _, a := range events {
 		varargs = append(varargs, a)
 	}
-	ret := m.ctrl.Call(m, "AppendDMLEvents", varargs...)
+	ret := m.ctrl.Call(m, "AddDMLEvents", varargs...)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
-// AppendDMLEvents indicates an expected call of AppendDMLEvents.
-func (mr *MockRedoDMLWriterMockRecorder) AppendDMLEvents(ctx interface{}, events ...interface{}) *gomock.Call {
+// AddDMLEvents indicates an expected call of AddDMLEvents.
+func (mr *MockRedoDMLWriterMockRecorder) AddDMLEvents(ctx interface{}, events ...interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	varargs := append([]interface{}{ctx}, events...)
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AppendDMLEvents", reflect.TypeOf((*MockRedoDMLWriter)(nil).AppendDMLEvents), varargs...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AddDMLEvents", reflect.TypeOf((*MockRedoDMLWriter)(nil).AddDMLEvents), varargs...)
 }
 
 // Close mocks base method.

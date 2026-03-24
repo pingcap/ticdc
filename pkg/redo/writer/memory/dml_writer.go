@@ -68,7 +68,7 @@ func (l *dmlWriter) Run(ctx context.Context) error {
 	return eg.Wait()
 }
 
-func (l *dmlWriter) AppendDMLEvents(ctx context.Context, events ...*commonEvent.RedoRowEvent) error {
+func (l *dmlWriter) AddDMLEvents(ctx context.Context, events ...*commonEvent.RedoRowEvent) error {
 	for _, event := range events {
 		if event == nil {
 			log.Warn("writing nil event to redo log, ignore this",

@@ -59,7 +59,7 @@ func (bs *blackHoleDMLWriter) Run(ctx context.Context) error {
 	}
 }
 
-func (bs *blackHoleDMLWriter) AppendDMLEvents(_ context.Context, events ...*event.RedoRowEvent) (err error) {
+func (bs *blackHoleDMLWriter) AddDMLEvents(_ context.Context, events ...*event.RedoRowEvent) (err error) {
 	if bs.invalid {
 		return errors.New("[WriteLog] invalid black hole writer")
 	}

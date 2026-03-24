@@ -33,7 +33,7 @@ type RedoEvent interface {
 
 // RedoDMLWriter writes row redo events, all operations are thread-safe.
 type RedoDMLWriter interface {
-	AppendDMLEvents(ctx context.Context, events ...*commonEvent.RedoRowEvent) error
+	AddDMLEvents(ctx context.Context, events ...*commonEvent.RedoRowEvent) error
 	Run(ctx context.Context) error
 	Close() error
 }

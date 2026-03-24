@@ -341,7 +341,7 @@ func TestRedoSinkSendMessagesInBatch(t *testing.T) {
 			args = append(args, gomock.Any())
 		}
 		return mockWriter.EXPECT().
-			AppendDMLEvents(args[0], args[1:]...).
+			AddDMLEvents(args[0], args[1:]...).
 			DoAndReturn(func(_ context.Context, events ...*commonEvent.RedoRowEvent) error {
 				require.Len(t, events, batchSize)
 				return nil

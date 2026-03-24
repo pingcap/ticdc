@@ -237,7 +237,7 @@ func (s *Sink) sendMessages(ctx context.Context) error {
 		buffer = events[:0]
 
 		start := time.Now()
-		err := s.dmlWriter.AppendDMLEvents(ctx, events...)
+		err := s.dmlWriter.AddDMLEvents(ctx, events...)
 		if err != nil {
 			return err
 		}
