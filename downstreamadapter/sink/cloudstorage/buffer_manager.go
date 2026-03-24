@@ -45,7 +45,11 @@ type bufferManager struct {
 	config       *cloudstorage.Config
 	spool        *spool.Spool
 
-	inputCh  chan *task
+	// inputCh is a bounded task queue owned by bufferManager.
+	// Producers stop on ctx cancellation, so the channel does not need to be closed.
+	inputCh chan *task
+	// outputCh points to writer.flushCh. bufferManager is the sole sender and
+	// the sole closer after it has stopped sending.
 	outputCh chan flushTask
 	buffer   bufferedTasks
 

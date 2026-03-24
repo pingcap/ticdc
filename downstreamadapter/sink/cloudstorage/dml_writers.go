@@ -36,9 +36,9 @@ type dmlWriters struct {
 	changefeedID commonType.ChangeFeedID
 	statistics   *metrics.Statistics
 
-	// msgCh is a channel to hold task.
-	// The caller of WriteEvents will write tasks to msgCh and
-	// encoding pipelines will read tasks from msgCh to encode events.
+	// msgCh is the only unbounded queue in the storage sink pipeline.
+	// External callers push tasks into it, addTasks consumes it, and
+	// dmlWriters.close is the only place allowed to close it.
 	msgCh *chann.UnlimitedChannel[*task, any]
 
 	encodeGroup *encoderGroup

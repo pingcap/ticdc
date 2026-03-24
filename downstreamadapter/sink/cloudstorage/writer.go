@@ -40,6 +40,8 @@ type writer struct {
 	spool         *spool.Spool
 	bufferManager *bufferManager
 
+	// flushCh is owned by bufferManager: bufferManager is the only sender and
+	// closes it after it has stopped emitting flush tasks.
 	flushCh chan flushTask
 
 	statistics        *pmetrics.Statistics

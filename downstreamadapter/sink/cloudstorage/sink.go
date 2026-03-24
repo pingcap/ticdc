@@ -57,6 +57,8 @@ type sink struct {
 
 	dmlWriters *dmlWriters
 
+	// checkpointChan is a bounded best-effort queue. It is not closed
+	// explicitly; both senders and the background checkpoint worker stop on ctx.
 	checkpointChan           chan uint64
 	lastCheckpointTs         atomic.Uint64
 	lastSendCheckpointTsTime time.Time
@@ -319,21 +321,12 @@ func (s *sink) sendCheckpointTs(ctx context.Context) error {
 		metrics.CheckpointTsMessageCount.DeleteLabelValues(s.changefeedID.Keyspace(), s.changefeedID.Name())
 	}()
 
-	var (
-		checkpoint uint64
-		ok         bool
-	)
+	var checkpoint uint64
 	for {
 		select {
 		case <-ctx.Done():
 			return errors.Trace(context.Cause(ctx))
-		case checkpoint, ok = <-s.checkpointChan:
-			if !ok {
-				log.Warn("cloud storage sink checkpoint channel closed",
-					zap.String("keyspace", s.changefeedID.Keyspace()),
-					zap.String("changefeed", s.changefeedID.Name()))
-				return nil
-			}
+		case checkpoint = <-s.checkpointChan:
 		}
 
 		if checkpoint < s.lastCheckpointTs.Load() {

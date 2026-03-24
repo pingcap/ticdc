@@ -32,6 +32,9 @@ type encoderGroup struct {
 	concurrency int
 	indexer     *indexer
 
+	// inputCh/outputCh are bounded channels owned by encoderGroup.
+	// They are not closed explicitly; all producers and consumers stop on the
+	// shared errgroup context.
 	inputCh  []chan *future
 	outputCh []chan *future
 }
@@ -98,10 +101,7 @@ func (eg *encoderGroup) runEncoder(ctx context.Context, index int) error {
 		select {
 		case <-ctx.Done():
 			return errors.Trace(context.Cause(ctx))
-		case future, ok := <-inputCh:
-			if !ok {
-				return nil
-			}
+		case future := <-inputCh:
 			task := future.task
 			if task.isFlushTask() {
 				future.Done()
