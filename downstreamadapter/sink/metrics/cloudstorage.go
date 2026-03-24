@@ -150,13 +150,6 @@ var (
 		Name:      "cloud_storage_flush_total",
 		Help:      "Total number of flush batches emitted by one cloud storage writer shard",
 	}, []string{"namespace", "changefeed", "writer", "reason"})
-
-	CloudStorageWriterErrorCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace: namespace,
-		Subsystem: subsystem,
-		Name:      "cloud_storage_writer_error_total",
-		Help:      "Total number of cloud storage writer errors by stage",
-	}, []string{"namespace", "changefeed", "writer", "stage"})
 )
 
 // InitCloudStorageMetrics registers all metrics in this file.
@@ -178,5 +171,4 @@ func InitCloudStorageMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(CloudStoragePendingEntriesGauge)
 	registry.MustRegister(CloudStoragePendingBytesGauge)
 	registry.MustRegister(CloudStorageFlushCountCounter)
-	registry.MustRegister(CloudStorageWriterErrorCounter)
 }

@@ -479,7 +479,7 @@ func TestWriterStoresPendingMessagesInSpoolBeforeFlush(t *testing.T) {
 	require.ErrorIs(t, <-done, context.Canceled)
 }
 
-func TestIgnoreTableTaskDoesNotLoadSpilledPayload(t *testing.T) {
+func TestDiscardTableEntriesDoesNotLoadSpilledPayload(t *testing.T) {
 	ctx := context.Background()
 	dataDir := t.TempDir()
 
@@ -510,7 +510,7 @@ func TestIgnoreTableTaskDoesNotLoadSpilledPayload(t *testing.T) {
 
 	d.spool.Close()
 
-	d.ignoreTableTask(&singleTableTask{
+	d.discardTableEntries(&singleTableTask{
 		entries: []*spool.Entry{entry},
 	})
 	require.Equal(t, int64(1), callbackCount.Load())
@@ -550,7 +550,7 @@ func (s *failOnIndexStorage) WriteFile(ctx context.Context, name string, data []
 	return s.ExternalStorage.WriteFile(ctx, name, data)
 }
 
-func TestWriterIndexWriteErrorMetricAndCleanup(t *testing.T) {
+func TestWriterIndexWriteError(t *testing.T) {
 	ctx := context.Background()
 	parentDir := t.TempDir()
 	uri := fmt.Sprintf("file:///%s?flush-interval=2s", parentDir)
