@@ -286,30 +286,31 @@ func (r *SpanReplication) NewAddDispatcherMessage(server node.ID, operatorType h
 		}
 	}
 	committedCheckpointTs := r.getCommittedCheckpointTs()
-	if ddlBarrierBlockTs > 0 && committedCheckpointTs > startTs {
-		// A stale DDL barrier state may survive maintainer failover or dispatcher recreation.
-		// Once the controller committed checkpoint has advanced beyond the replay point, replaying the
-		// DDL is no longer correct. Recreate the dispatcher from the committed checkpoint instead.
-		log.Debug("use committed checkpoint for stale ddl barrier",
-			zap.Stringer("changefeedID", r.ChangefeedID),
-			zap.String("dispatcherID", r.ID.String()),
-			zap.Int64("tableID", r.Span.TableID),
-			zap.String("operatorType", operatorType.String()),
-			zap.Uint64("ddlBarrierBlockTs", ddlBarrierBlockTs),
-			zap.Uint64("originalStartTs", startTs),
-			zap.Uint64("committedCheckpointTs", committedCheckpointTs))
-		startTs = committedCheckpointTs
-		skipDMLAsStartTs = false
-	}
 	if committedCheckpointTs > startTs {
-		log.Debug("clamp dispatcher start ts to committed checkpoint",
-			zap.Stringer("changefeedID", r.ChangefeedID),
-			zap.String("dispatcherID", r.ID.String()),
-			zap.Int64("tableID", r.Span.TableID),
-			zap.String("operatorType", operatorType.String()),
-			zap.Uint64("originalStartTs", startTs),
-			zap.Uint64("committedCheckpointTs", committedCheckpointTs),
-			zap.Uint64("finalStartTs", committedCheckpointTs))
+		originalStartTs := startTs
+		if ddlBarrierBlockTs > 0 {
+			// A stale DDL barrier state may survive maintainer failover or dispatcher recreation.
+			// Once the controller committed checkpoint has advanced beyond the replay point, replaying the
+			// DDL is no longer correct. Recreate the dispatcher from the committed checkpoint instead.
+			log.Debug("use committed checkpoint for stale ddl barrier",
+				zap.Stringer("changefeedID", r.ChangefeedID),
+				zap.String("dispatcherID", r.ID.String()),
+				zap.Int64("tableID", r.Span.TableID),
+				zap.String("operatorType", operatorType.String()),
+				zap.Uint64("ddlBarrierBlockTs", ddlBarrierBlockTs),
+				zap.Uint64("originalStartTs", originalStartTs),
+				zap.Uint64("committedCheckpointTs", committedCheckpointTs))
+			skipDMLAsStartTs = false
+		} else {
+			log.Debug("clamp dispatcher start ts to committed checkpoint",
+				zap.Stringer("changefeedID", r.ChangefeedID),
+				zap.String("dispatcherID", r.ID.String()),
+				zap.Int64("tableID", r.Span.TableID),
+				zap.String("operatorType", operatorType.String()),
+				zap.Uint64("originalStartTs", originalStartTs),
+				zap.Uint64("committedCheckpointTs", committedCheckpointTs),
+				zap.Uint64("finalStartTs", committedCheckpointTs))
+		}
 		startTs = committedCheckpointTs
 	}
 	return messaging.NewSingleTargetMessage(server,
