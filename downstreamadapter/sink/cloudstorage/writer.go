@@ -14,7 +14,6 @@
 package cloudstorage
 
 import (
-	"bytes"
 	"context"
 	"path"
 	"strconv"
@@ -57,8 +56,17 @@ type writer struct {
 // flushTask is internal and never crosses component boundary.
 // marker task and data batch are mutually exclusive in normal flow.
 type flushTask struct {
-	batch  bufferedTasks
+	batch  map[cloudstorage.VersionedTableName]*payload
 	marker *flushMarker
+}
+
+type payload struct {
+	tableInfo  *common.TableInfo
+	data       []byte
+	rowsCount  int
+	bytesCount int64
+	entries    []*spool.Entry
+	callbacks  []func()
 }
 
 func newWriter(
@@ -139,17 +147,17 @@ func (d *writer) flushMessages(ctx context.Context) error {
 				task.marker.finish()
 				continue
 			}
-			if len(task.batch.tables) == 0 {
+			if len(task.batch) == 0 {
 				continue
 			}
 
 			start := time.Now()
-			for table, singleTask := range task.batch.tables {
-				if len(singleTask.entries) == 0 {
+			for table, payload := range task.batch {
+				if payload == nil || len(payload.entries) == 0 {
 					continue
 				}
 
-				hasNewerSchemaVersion, err := d.filePathGenerator.CheckOrWriteSchema(ctx, table, singleTask.tableInfo)
+				hasNewerSchemaVersion, err := d.filePathGenerator.CheckOrWriteSchema(ctx, table, payload.tableInfo)
 				if err != nil {
 					log.Error("failed to write schema file to external storage",
 						zap.String("keyspace", keyspace),
@@ -159,7 +167,7 @@ func (d *writer) flushMessages(ctx context.Context) error {
 					return err
 				}
 				if hasNewerSchemaVersion {
-					d.discardTableEntries(singleTask)
+					d.discardPayload(payload)
 					log.Warn("ignore messages belonging to an old schema version",
 						zap.String("keyspace", keyspace),
 						zap.Stringer("changefeed", changefeedID),
@@ -190,7 +198,7 @@ func (d *writer) flushMessages(ctx context.Context) error {
 					return errors.Trace(err)
 				}
 
-				if err := d.writeDataFile(ctx, dataFilePath, indexFilePath, singleTask); err != nil {
+				if err := d.writeDataFile(ctx, dataFilePath, indexFilePath, payload); err != nil {
 					log.Error("failed to write data file to external storage",
 						zap.String("keyspace", keyspace),
 						zap.Stringer("changefeed", changefeedID),
@@ -225,61 +233,25 @@ func (d *writer) writeIndexFile(ctx context.Context, path, content string) error
 	return nil
 }
 
-func (d *writer) loadEntryIntoBuffer(
-	buf *bytes.Buffer,
-	entry *spool.Entry,
-	rowsCnt *int,
-	bytesCnt *int64,
-) ([]func(), error) {
-	msgs, callbacks, err := d.spool.Load(entry)
-	if err != nil {
-		return nil, err
-	}
-
-	for _, msg := range msgs {
-		if msg.Key != nil && *rowsCnt == 0 {
-			buf.Write(msg.Key)
-			*bytesCnt += int64(len(msg.Key))
-		}
-		*bytesCnt += int64(len(msg.Value))
-		*rowsCnt += msg.GetRowsCount()
-		buf.Write(msg.Value)
-	}
-	return callbacks, nil
-}
-
-func (d *writer) discardTableEntries(task *singleTableTask) {
-	for _, entry := range task.entries {
+func (d *writer) discardPayload(payload *payload) {
+	for _, entry := range payload.entries {
 		d.spool.Discard(entry)
 	}
 }
 
-func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath string, task *singleTableTask) error {
-	var callbacks []func()
-	var buf bytes.Buffer
-	buf.Grow(int(task.size))
-	rowsCnt := 0
-	bytesCnt := int64(0)
+func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath string, payload *payload) error {
 	keyspace := d.changeFeedID.Keyspace()
 	changefeedID := d.changeFeedID.ID()
-
-	for _, entry := range task.entries {
-		entryCallbacks, err := d.loadEntryIntoBuffer(&buf, entry, &rowsCnt, &bytesCnt)
-		if err != nil {
-			return err
-		}
-		callbacks = append(callbacks, entryCallbacks...)
-	}
 
 	if err := d.statistics.RecordBatchExecution(func() (int, int64, error) {
 		start := time.Now()
 		if d.config.FlushConcurrency <= 1 {
-			err := d.storage.WriteFile(ctx, dataFilePath, buf.Bytes())
+			err := d.storage.WriteFile(ctx, dataFilePath, payload.data)
 			if err != nil {
 				return 0, 0, errors.Trace(err)
 			}
 			d.metricWriteDuration.Observe(time.Since(start).Seconds())
-			return rowsCnt, bytesCnt, nil
+			return payload.rowsCount, payload.bytesCount, nil
 		}
 
 		writer, inErr := d.storage.Create(ctx, dataFilePath, &storage.WriterOption{
@@ -289,27 +261,27 @@ func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath 
 			return 0, 0, errors.Trace(inErr)
 		}
 
-		if _, inErr = writer.Write(ctx, buf.Bytes()); inErr != nil {
+		if _, inErr = writer.Write(ctx, payload.data); inErr != nil {
 			return 0, 0, errors.Trace(inErr)
 		}
 		if inErr = writer.Close(ctx); inErr != nil {
 			log.Error("failed to close writer",
 				zap.String("keyspace", keyspace),
 				zap.Stringer("changefeed", changefeedID),
-				zap.Any("table", task.tableInfo.TableName),
+				zap.Any("table", payload.tableInfo.TableName),
 				zap.Int("shardID", d.shardID),
 				zap.Error(inErr))
 			return 0, 0, errors.Trace(inErr)
 		}
 
 		d.metricFlushDuration.Observe(time.Since(start).Seconds())
-		return rowsCnt, bytesCnt, nil
+		return payload.rowsCount, payload.bytesCount, nil
 	}); err != nil {
 		return err
 	}
 
-	d.metricWriteBytes.Add(float64(bytesCnt))
-	d.metricFileCount.Add(1)
+	d.metricWriteBytes.Add(float64(payload.bytesCount))
+	d.metricFileCount.Inc()
 
 	if err := d.writeIndexFile(ctx, indexFilePath, path.Base(dataFilePath)+"\n"); err != nil {
 		log.Error("failed to write index file to external storage",
@@ -321,12 +293,12 @@ func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath 
 		return err
 	}
 
-	for _, callback := range callbacks {
+	for _, callback := range payload.callbacks {
 		if callback != nil {
 			callback()
 		}
 	}
-	for _, entry := range task.entries {
+	for _, entry := range payload.entries {
 		d.spool.Release(entry)
 	}
 	return nil

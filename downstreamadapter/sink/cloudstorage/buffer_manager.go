@@ -14,6 +14,7 @@
 package cloudstorage
 
 import (
+	"bytes"
 	"context"
 	"strconv"
 	"time"
@@ -107,7 +108,7 @@ func (c *bufferManager) run(ctx context.Context) error {
 			if task.isFlushTask() {
 				dispatcherBatch := c.buffer.detachByDispatcher(task.dispatcherID)
 				if !dispatcherBatch.isEmpty() {
-					if err := c.sendToWriter(ctx, flushTask{batch: dispatcherBatch}, flushReasonBarrier); err != nil {
+					if err := c.sendToWriter(ctx, dispatcherBatch, flushReasonBarrier); err != nil {
 						return err
 					}
 				}
@@ -168,7 +169,7 @@ func (c *bufferManager) emitBatch(ctx context.Context, reason string) error {
 		return nil
 	}
 
-	if err := c.sendToWriter(ctx, flushTask{batch: c.buffer}, reason); err != nil {
+	if err := c.sendToWriter(ctx, c.buffer, reason); err != nil {
 		return err
 	}
 
@@ -186,7 +187,7 @@ func (c *bufferManager) emitTableBatch(
 	if err != nil {
 		return err
 	}
-	if err := c.sendToWriter(ctx, flushTask{batch: tableBatch}, reason); err != nil {
+	if err := c.sendToWriter(ctx, tableBatch, reason); err != nil {
 		return err
 	}
 	c.updatePendingMetrics()
@@ -293,12 +294,57 @@ func (t *bufferedTasks) detachByDispatcher(dispatcherID common.DispatcherID) buf
 	return detached
 }
 
-func (c *bufferManager) sendToWriter(ctx context.Context, task flushTask, reason string) error {
+func (c *bufferManager) sendToWriter(ctx context.Context, batch bufferedTasks, reason string) error {
+	payloads := make(map[cloudstorage.VersionedTableName]*payload, len(batch.tables))
+	for table, tableTask := range batch.tables {
+		payload, err := c.buildPayload(tableTask)
+		if err != nil {
+			return err
+		}
+		payloads[table] = payload
+	}
+
 	select {
 	case <-ctx.Done():
 		return errors.Trace(context.Cause(ctx))
-	case c.outputCh <- task:
+	case c.outputCh <- flushTask{batch: payloads}:
 		metrics.CloudStorageFlushCountCounter.WithLabelValues(c.changeFeedID.Keyspace(), c.changeFeedID.Name(), c.writerLabel, reason).Inc()
 		return nil
 	}
+}
+
+func (c *bufferManager) buildPayload(task *singleTableTask) (*payload, error) {
+	var (
+		buf        bytes.Buffer
+		rowsCount  int
+		bytesCount int64
+		callbacks  []func()
+	)
+	buf.Grow(int(task.size))
+
+	for _, entry := range task.entries {
+		msgs, entryCallbacks, err := c.spool.Load(entry)
+		if err != nil {
+			return nil, err
+		}
+		callbacks = append(callbacks, entryCallbacks...)
+		for _, msg := range msgs {
+			if msg.Key != nil && rowsCount == 0 {
+				buf.Write(msg.Key)
+				bytesCount += int64(len(msg.Key))
+			}
+			bytesCount += int64(len(msg.Value))
+			rowsCount += msg.GetRowsCount()
+			buf.Write(msg.Value)
+		}
+	}
+
+	return &payload{
+		tableInfo:  task.tableInfo,
+		data:       buf.Bytes(),
+		rowsCount:  rowsCount,
+		bytesCount: bytesCount,
+		entries:    task.entries,
+		callbacks:  callbacks,
+	}, nil
 }

@@ -479,7 +479,7 @@ func TestWriterStoresPendingMessagesInSpoolBeforeFlush(t *testing.T) {
 	require.ErrorIs(t, <-done, context.Canceled)
 }
 
-func TestDiscardTableEntriesDoesNotLoadSpilledPayload(t *testing.T) {
+func TestDiscardPayloadDoesNotLoadSpilledPayload(t *testing.T) {
 	ctx := context.Background()
 	dataDir := t.TempDir()
 
@@ -510,7 +510,7 @@ func TestDiscardTableEntriesDoesNotLoadSpilledPayload(t *testing.T) {
 
 	d.spool.Close()
 
-	d.discardTableEntries(&singleTableTask{
+	d.discardPayload(&payload{
 		entries: []*spool.Entry{entry},
 	})
 	require.Equal(t, int64(1), callbackCount.Load())

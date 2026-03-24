@@ -66,7 +66,11 @@ func TestBufferManagerFlushesPendingBatchBeforeWaitingForDiskQuota(t *testing.T)
 	select {
 	case flushed := <-flushCh:
 		require.Nil(t, flushed.marker)
-		require.Len(t, flushed.batch.tables, 1)
+		require.Len(t, flushed.batch, 1)
+		for _, payload := range flushed.batch {
+			require.NotEmpty(t, payload.data)
+			require.Len(t, payload.entries, 1)
+		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("buffer controller did not flush pending batch before waiting for disk quota")
 	}
@@ -110,11 +114,12 @@ func TestBufferManagerOversizedBatchFlushesImmediatelyFromMemory(t *testing.T) {
 
 	select {
 	case flushed := <-flushCh:
-		require.Len(t, flushed.batch.tables, 1)
-		for _, tableTask := range flushed.batch.tables {
-			require.Len(t, tableTask.entries, 1)
-			require.True(t, tableTask.entries[0].InMemory())
-			require.False(t, tableTask.entries[0].IsSpilled())
+		require.Len(t, flushed.batch, 1)
+		for _, payload := range flushed.batch {
+			require.NotEmpty(t, payload.data)
+			require.Len(t, payload.entries, 1)
+			require.True(t, payload.entries[0].InMemory())
+			require.False(t, payload.entries[0].IsSpilled())
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("buffer controller did not flush oversized batch immediately")
