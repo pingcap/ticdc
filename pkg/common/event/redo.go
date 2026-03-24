@@ -328,12 +328,11 @@ func (r *RedoDMLEvent) ToDMLEvent() *DMLEvent {
 		tidbTableInfo.Indices = append(tidbTableInfo.Indices, indexInfo)
 	}
 	event := &DMLEvent{
-		TableInfo:         commonType.NewTableInfo4Decoder(r.Row.Table.Schema, tidbTableInfo),
-		CommitTs:          r.Row.CommitTs,
-		StartTs:           r.Row.StartTs,
-		Length:            1,
-		PhysicalTableID:   r.Row.Table.TableID,
-		ConflictKeyHashes: make(map[uint64]struct{}),
+		TableInfo:       commonType.NewTableInfo4Decoder(r.Row.Table.Schema, tidbTableInfo),
+		CommitTs:        r.Row.CommitTs,
+		StartTs:         r.Row.StartTs,
+		Length:          1,
+		PhysicalTableID: r.Row.Table.TableID,
 	}
 
 	chk := chunk.NewChunkFromPoolWithCapacity(event.TableInfo.GetFieldSlice(), chunk.InitialCapacity)

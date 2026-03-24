@@ -667,6 +667,30 @@ func (t *DMLEvent) ConflictKeys() []uint64 {
 		return nil
 	}
 
+	if t.ConflictKeyHashes == nil {
+		hashRes := make(map[uint64]struct{}, t.Len())
+		hasher := fnv.New32a()
+		for {
+			row, ok := t.GetNextRow()
+			if !ok {
+				t.Rewind()
+				break
+			}
+			keys := genRowKeys(row, t.TableInfo, t.DispatcherID)
+			for _, key := range keys {
+				if n, err := hasher.Write(key); n != len(key) || err != nil {
+					log.Panic("transaction key hash fail")
+				}
+				hashRes[uint64(hasher.Sum32())] = struct{}{}
+				hasher.Reset()
+			}
+		}
+		keys := make([]uint64, 0, len(hashRes))
+		for key := range hashRes {
+			keys = append(keys, key)
+		}
+		return keys
+	}
 	keys := make([]uint64, 0, len(t.ConflictKeyHashes))
 	for key := range t.ConflictKeyHashes {
 		keys = append(keys, key)
