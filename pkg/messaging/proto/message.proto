@@ -3,8 +3,6 @@ package proto;
 option go_package = "./messaging/proto";
 
 message Message {
-    reserved 6, 7;
-    reserved "epoch", "sequence";
     // type is the type of the message, it is used to determine how to decode the message.
     int32 type = 1;
     // from is the sender of the message.
