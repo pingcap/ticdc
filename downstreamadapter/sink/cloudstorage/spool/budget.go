@@ -24,12 +24,12 @@ type budget struct {
 	memoryQuotaBytes int64
 
 	// highWatermarkBytes is the byte count that makes spool stop running the
-	// new onEnqueued callback immediately. The callback is saved in memory and
+	// new PostEnqueue callback immediately. The callback is saved in memory and
 	// will be run later.
 	highWatermarkBytes int64
 
 	// lowWatermarkBytes is the byte count that lets spool run the saved
-	// onEnqueued callbacks again after some queued data has been flushed to the
+	// PostEnqueue callbacks again after some queued data has been flushed to the
 	// downstream storage or discarded locally.
 	lowWatermarkBytes int64
 

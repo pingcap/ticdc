@@ -128,11 +128,13 @@ func (d *dmlWriters) run(ctx context.Context) error {
 }
 
 func (d *dmlWriters) deleteMetrics() {
-	sinkmetrics.CloudStorageWriteBytesGauge.DeleteLabelValues(d.changefeedID.Keyspace(), d.changefeedID.ID().String())
-	sinkmetrics.CloudStorageFileCountGauge.DeleteLabelValues(d.changefeedID.Keyspace(), d.changefeedID.ID().String())
-	sinkmetrics.CloudStorageWriteDurationHistogram.DeleteLabelValues(d.changefeedID.Keyspace(), d.changefeedID.ID().String())
-	sinkmetrics.CloudStorageFlushDurationHistogram.DeleteLabelValues(d.changefeedID.Keyspace(), d.changefeedID.ID().String())
-	sinkmetrics.CloudStorageDDLFlushDurationHistogram.DeleteLabelValues(d.changefeedID.Keyspace(), d.changefeedID.ID().String())
+	keyspace := d.changefeedID.Keyspace()
+	changefeed := d.changefeedID.Name()
+	sinkmetrics.CloudStorageWriteBytesGauge.DeleteLabelValues(keyspace, changefeed)
+	sinkmetrics.CloudStorageFileCountGauge.DeleteLabelValues(keyspace, changefeed)
+	sinkmetrics.CloudStorageWriteDurationHistogram.DeleteLabelValues(keyspace, changefeed)
+	sinkmetrics.CloudStorageFlushDurationHistogram.DeleteLabelValues(keyspace, changefeed)
+	sinkmetrics.CloudStorageDDLFlushDurationHistogram.DeleteLabelValues(keyspace, changefeed)
 }
 
 func (d *dmlWriters) addTasks(ctx context.Context) error {
@@ -176,11 +178,11 @@ func (d *dmlWriters) flushDMLBeforeBlock(ctx context.Context, event commonEvent.
 	}
 
 	start := time.Now()
+	keyspace := d.changefeedID.Keyspace()
+	changefeed := d.changefeedID.Name()
 	defer func() {
-		sinkmetrics.CloudStorageDDLFlushDurationHistogram.WithLabelValues(
-			d.changefeedID.Keyspace(),
-			d.changefeedID.ID().String(),
-		).Observe(time.Since(start).Seconds())
+		sinkmetrics.CloudStorageDDLFlushDurationHistogram.WithLabelValues(keyspace, changefeed).
+			Observe(time.Since(start).Seconds())
 	}()
 
 	// Invariant for DDL ordering:

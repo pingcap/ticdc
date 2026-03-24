@@ -74,7 +74,7 @@ type options struct {
 
 	// memoryRatio is the fraction of diskQuotaBytes kept in memory before spilling to disk.
 	memoryRatio float64
-	// highWatermarkRatio is the ratio that starts suppressing wake callbacks.
+	// highWatermarkRatio is the ratio that starts pausing PostEnqueue callbacks.
 	highWatermarkRatio float64
 	// lowWatermarkRatio is the ratio that resumes pending PostEnqueue callbacks.
 	lowWatermarkRatio float64
@@ -256,8 +256,9 @@ type Entry struct {
 	// location points to the on-disk blob when the entry has been spilled.
 	location *segmentLocation
 
-	// callbacks are deferred until the entry is either acknowledged or discarded.
-	callbacks []func()
+	// postFlushCallbacks are detached from encoded messages and kept until the
+	// entry is either acknowledged by a successful flush or discarded.
+	postFlushCallbacks []func()
 
 	// accountingBytes is the size charged against the spool quota.
 	accountingBytes int64
@@ -508,20 +509,20 @@ func (s *Spool) acceptEntryLocked(
 	if !shouldSpill {
 		entry.memoryMsgs = msgs
 	}
-	entry.callbacks = detachCallbacks(msgs)
+	entry.postFlushCallbacks = detachPostFlushCallbacks(msgs)
 	postEnqueueToRun := s.quota.acquire(entry.accountingBytes, shouldSpill, postEnqueue)
 	return entry, postEnqueueToRun, nil
 }
 
-func detachCallbacks(msgs []*common.Message) []func() {
-	var callbacks []func()
+func detachPostFlushCallbacks(msgs []*common.Message) []func() {
+	var postFlushCallbacks []func()
 	for _, msg := range msgs {
 		if msg.Callback != nil {
-			callbacks = append(callbacks, msg.Callback)
+			postFlushCallbacks = append(postFlushCallbacks, msg.Callback)
 			msg.Callback = nil
 		}
 	}
-	return callbacks
+	return postFlushCallbacks
 }
 
 // Load fetches messages from memory or spilled segments.
@@ -533,10 +534,10 @@ func (s *Spool) Load(entry *Entry) ([]*common.Message, []func(), error) {
 		return nil, nil, nil
 	}
 	if entry.memoryMsgs != nil {
-		return entry.memoryMsgs, entry.callbacks, nil
+		return entry.memoryMsgs, entry.postFlushCallbacks, nil
 	}
 	if entry.location == nil {
-		return nil, entry.callbacks, nil
+		return nil, entry.postFlushCallbacks, nil
 	}
 
 	s.mu.Lock()
@@ -562,7 +563,7 @@ func (s *Spool) Load(entry *Entry) ([]*common.Message, []func(), error) {
 		return nil, nil, err
 	}
 	s.metricLoadedBytes.Observe(float64(length))
-	return msgs, entry.callbacks, nil
+	return msgs, entry.postFlushCallbacks, nil
 }
 
 // Release releases memory or spilled bytes held by an entry.
@@ -602,23 +603,23 @@ func (s *Spool) Release(entry *Entry) {
 	postEnqueueCallbacks := s.quota.release(accountingBytes, spilled)
 	s.mu.Unlock()
 
-	for _, callback := range postEnqueueCallbacks {
-		if callback != nil {
-			callback()
+	for _, postEnqueueCallback := range postEnqueueCallbacks {
+		if postEnqueueCallback != nil {
+			postEnqueueCallback()
 		}
 	}
 }
 
-// Discard runs the entry callbacks and then releases its local spool resources.
-// it's called when the entry corresponding data is staled.
+// Discard runs the entry postFlush callbacks and then releases its local spool
+// resources. It's called when the corresponding flushed data should be ignored.
 func (s *Spool) Discard(entry *Entry) {
 	if entry == nil {
 		return
 	}
 
-	for _, callback := range takeCallbacks(entry) {
-		if callback != nil {
-			callback()
+	for _, postFlushCallback := range takePostFlushCallbacks(entry) {
+		if postFlushCallback != nil {
+			postFlushCallback()
 		}
 	}
 	s.Release(entry)
@@ -717,10 +718,10 @@ func (s *Spool) rotateLocked() error {
 	return nil
 }
 
-func takeCallbacks(entry *Entry) []func() {
-	callbacks := entry.callbacks
-	entry.callbacks = nil
-	return callbacks
+func takePostFlushCallbacks(entry *Entry) []func() {
+	postFlushCallbacks := entry.postFlushCallbacks
+	entry.postFlushCallbacks = nil
+	return postFlushCallbacks
 }
 
 func entryConsumed(entry *Entry) bool {
@@ -728,7 +729,7 @@ func entryConsumed(entry *Entry) bool {
 		entry.memoryMsgs == nil &&
 		entry.accountingBytes == 0 &&
 		entry.fileBytes == 0 &&
-		entry.callbacks == nil
+		entry.postFlushCallbacks == nil
 }
 
 func consumeEntry(entry *Entry) (*segmentLocation, int64, bool) {
@@ -738,7 +739,7 @@ func consumeEntry(entry *Entry) (*segmentLocation, int64, bool) {
 
 	entry.memoryMsgs = nil
 	entry.location = nil
-	entry.callbacks = nil
+	entry.postFlushCallbacks = nil
 	entry.accountingBytes = 0
 	entry.fileBytes = 0
 	return location, accountingBytes, spilled

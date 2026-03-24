@@ -25,15 +25,15 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
-	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
 const (
+	defaultBufferManagerChannelSize = 64
+
 	flushReasonSize     = "size"
 	flushReasonInterval = "interval"
 	flushReasonBarrier  = "barrier"
-	flushReasonClose    = "close"
 	flushReasonQuota    = "quota"
 	flushReasonOversize = "oversized"
 )
@@ -45,7 +45,7 @@ type bufferManager struct {
 	config       *cloudstorage.Config
 	spool        *spool.Spool
 
-	inputCh  *chann.DrainableChann[*task]
+	inputCh  chan *task
 	outputCh chan flushTask
 	buffer   bufferedTasks
 
@@ -71,7 +71,7 @@ func newBufferManager(
 		changeFeedID:         changefeedID,
 		config:               config,
 		spool:                spoolBuffer,
-		inputCh:              chann.NewAutoDrainChann[*task](),
+		inputCh:              make(chan *task, defaultBufferManagerChannelSize),
 		outputCh:             outputCh,
 		buffer:               newBufferedTasks(),
 		writerLabel:          writerLabel,
@@ -101,10 +101,7 @@ func (c *bufferManager) run(ctx context.Context) error {
 			if err := c.emitBatch(ctx, flushReasonInterval); err != nil {
 				return err
 			}
-		case task, ok := <-c.inputCh.Out():
-			if !ok {
-				return c.emitBatch(ctx, flushReasonClose)
-			}
+		case task := <-c.inputCh:
 			if task.isFlushTask() {
 				dispatcherBatch := c.buffer.detachByDispatcher(task.dispatcherID)
 				if !dispatcherBatch.isEmpty() {
@@ -198,7 +195,7 @@ func (c *bufferManager) enqueueTask(ctx context.Context, t *task) error {
 	select {
 	case <-ctx.Done():
 		return errors.Trace(context.Cause(ctx))
-	case c.inputCh.In() <- t:
+	case c.inputCh <- t:
 		return nil
 	}
 }
@@ -228,7 +225,6 @@ func (c *bufferManager) deleteMetrics() {
 	metrics.CloudStorageFlushCountCounter.DeleteLabelValues(keyspace, name, c.writerLabel, flushReasonSize)
 	metrics.CloudStorageFlushCountCounter.DeleteLabelValues(keyspace, name, c.writerLabel, flushReasonInterval)
 	metrics.CloudStorageFlushCountCounter.DeleteLabelValues(keyspace, name, c.writerLabel, flushReasonBarrier)
-	metrics.CloudStorageFlushCountCounter.DeleteLabelValues(keyspace, name, c.writerLabel, flushReasonClose)
 	metrics.CloudStorageFlushCountCounter.DeleteLabelValues(keyspace, name, c.writerLabel, flushReasonQuota)
 	metrics.CloudStorageFlushCountCounter.DeleteLabelValues(keyspace, name, c.writerLabel, flushReasonOversize)
 }
@@ -315,19 +311,19 @@ func (c *bufferManager) sendToWriter(ctx context.Context, batch bufferedTasks, r
 
 func (c *bufferManager) buildPayload(task *singleTableTask) (*payload, error) {
 	var (
-		buf        bytes.Buffer
-		rowsCount  int
-		bytesCount int64
-		callbacks  []func()
+		buf                bytes.Buffer
+		rowsCount          int
+		bytesCount         int64
+		postFlushCallbacks []func()
 	)
 	buf.Grow(int(task.size))
 
 	for _, entry := range task.entries {
-		msgs, entryCallbacks, err := c.spool.Load(entry)
+		msgs, entryPostFlushCallbacks, err := c.spool.Load(entry)
 		if err != nil {
 			return nil, err
 		}
-		callbacks = append(callbacks, entryCallbacks...)
+		postFlushCallbacks = append(postFlushCallbacks, entryPostFlushCallbacks...)
 		for _, msg := range msgs {
 			if msg.Key != nil && rowsCount == 0 {
 				buf.Write(msg.Key)
@@ -340,11 +336,11 @@ func (c *bufferManager) buildPayload(task *singleTableTask) (*payload, error) {
 	}
 
 	return &payload{
-		tableInfo:  task.tableInfo,
-		data:       buf.Bytes(),
-		rowsCount:  rowsCount,
-		bytesCount: bytesCount,
-		entries:    task.entries,
-		callbacks:  callbacks,
+		tableInfo:          task.tableInfo,
+		data:               buf.Bytes(),
+		rowsCount:          rowsCount,
+		bytesCount:         bytesCount,
+		entries:            task.entries,
+		postFlushCallbacks: postFlushCallbacks,
 	}, nil
 }

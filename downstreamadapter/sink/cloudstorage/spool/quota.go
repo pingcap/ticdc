@@ -52,7 +52,7 @@ func newQuotaController(
 	options *options,
 ) *quotaController {
 	keyspace := changefeedID.Keyspace()
-	changefeed := changefeedID.ID().String()
+	changefeed := changefeedID.Name()
 	controller := &quotaController{
 		keyspace:   keyspace,
 		changefeed: changefeed,
@@ -97,9 +97,10 @@ func (q *quotaController) removeDiskQuotaWaiter(waiterID uint64) {
 	q.waitersMu.Unlock()
 }
 
-// acquire records a newly accepted entry and returns callbacks that may run
-// immediately. If total staged bytes cross the high watermark, acquire puts
-// new PostEnqueue callbacks into the pending queue instead of running them inline.
+// acquire records a newly accepted entry and returns the PostEnqueue callback
+// that may run immediately. If total staged bytes cross the high watermark,
+// acquire puts new PostEnqueue callbacks into the pending queue instead of
+// running them inline.
 func (q *quotaController) acquire(
 	entryBytes int64,
 	spilled bool,
@@ -123,8 +124,9 @@ func (q *quotaController) acquire(
 	return postEnqueue
 }
 
-// release should be called after make sure the entry has been fully consumed or discarded.
-// return all pending callbacks
+// release should be called after the entry has been fully flushed or
+// discarded. It returns all pending PostEnqueue callbacks once local usage has
+// dropped back to the low watermark.
 func (q *quotaController) release(entryBytes int64, spilled bool) []func() {
 	atOrBelowLowWatermark := q.budget.release(entryBytes, spilled)
 	if spilled {
@@ -139,10 +141,10 @@ func (q *quotaController) release(entryBytes int64, spilled bool) []func() {
 		return nil
 	}
 
-	callbacks := append([]func(){}, q.pendingPostEnqueue...)
+	postEnqueueCallbacks := append([]func(){}, q.pendingPostEnqueue...)
 	q.pendingPostEnqueue = nil
 	q.postEnqueuePaused = false
-	return callbacks
+	return postEnqueueCallbacks
 }
 
 // deleteMetrics removes per-changefeed label values owned by this adapter.

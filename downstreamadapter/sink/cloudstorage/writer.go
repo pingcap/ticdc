@@ -61,12 +61,12 @@ type flushTask struct {
 }
 
 type payload struct {
-	tableInfo  *common.TableInfo
-	data       []byte
-	rowsCount  int
-	bytesCount int64
-	entries    []*spool.Entry
-	callbacks  []func()
+	tableInfo          *common.TableInfo
+	data               []byte
+	rowsCount          int
+	bytesCount         int64
+	entries            []*spool.Entry
+	postFlushCallbacks []func()
 }
 
 func newWriter(
@@ -293,9 +293,9 @@ func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath 
 		return err
 	}
 
-	for _, callback := range payload.callbacks {
-		if callback != nil {
-			callback()
+	for _, postFlushCallback := range payload.postFlushCallbacks {
+		if postFlushCallback != nil {
+			postFlushCallback()
 		}
 	}
 	for _, entry := range payload.entries {

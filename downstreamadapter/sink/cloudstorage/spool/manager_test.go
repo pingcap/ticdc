@@ -112,9 +112,9 @@ func TestSpillAndReadBack(t *testing.T) {
 	require.False(t, entry.InMemory())
 	require.Equal(t, uint64(len(msg.Value)), entry.FileBytes())
 
-	msgs, callbacks, err := manager.Load(entry)
+	msgs, postFlushCallbacks, err := manager.Load(entry)
 	require.NoError(t, err)
-	require.Len(t, callbacks, 0)
+	require.Len(t, postFlushCallbacks, 0)
 	require.Len(t, msgs, 1)
 	require.Equal(t, []byte("hello-spool"), msgs[0].Value)
 	require.Equal(t, 3, msgs[0].GetRowsCount())
@@ -405,9 +405,9 @@ func TestExternalSegmentDamageReturnsErrorOnLoad(t *testing.T) {
 	segmentPath := filepath.Join(manager.workDir, "segment-000001.log")
 	require.NoError(t, os.Truncate(segmentPath, 0))
 
-	msgs, callbacks, err := manager.Load(entry)
+	msgs, postFlushCallbacks, err := manager.Load(entry)
 	require.Nil(t, msgs)
-	require.Nil(t, callbacks)
+	require.Nil(t, postFlushCallbacks)
 	require.Error(t, err)
 	rfcCode, ok := errors.RFCCode(err)
 	require.True(t, ok)
