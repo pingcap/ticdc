@@ -50,6 +50,7 @@ type sink struct {
 	storage              storage.ExternalStorage
 
 	dmlWriters *dmlWriters
+	iceberg    *icebergProcessor
 
 	checkpointChan           chan uint64
 	lastCheckpointTs         atomic.Uint64
@@ -78,6 +79,9 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.
 	if err != nil {
 		return err
 	}
+	if protocol == config.ProtocolIceberg {
+		return verifyIcebergStorageProtocol(ctx, sinkURI, sinkConfig)
+	}
 	_, err = helper.GetEncoderConfig(changefeedID, sinkURI, protocol, sinkConfig, math.MaxInt)
 	if err != nil {
 		return err
@@ -105,20 +109,47 @@ func New(
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
+	storage, err := util.GetExternalStorageWithDefaultTimeout(ctx, sinkURI.String())
+	if err != nil {
+		return nil, err
+	}
+	statistics := metrics.NewStatistics(changefeedID, "cloudstorage")
+
+	if protocol == config.ProtocolIceberg {
+		icebergProcessor, err := newIcebergProcessor(ctx, changefeedID, sinkURI, sinkConfig, storage, statistics, atomic.NewBool(true))
+		if err != nil {
+			storage.Close()
+			statistics.Close()
+			return nil, err
+		}
+		return &sink{
+			changefeedID:             changefeedID,
+			sinkURI:                  sinkURI,
+			cfg:                      cfg,
+			cleanupJobs:              cleanupJobs,
+			storage:                  storage,
+			iceberg:                  icebergProcessor,
+			checkpointChan:           make(chan uint64, 16),
+			lastSendCheckpointTsTime: time.Now(),
+			outputRawChangeEvent:     sinkConfig.CloudStorageConfig.GetOutputRawChangeEvent(),
+			statistics:               statistics,
+			isNormal:                 icebergProcessor.isNormal,
+			ctx:                      ctx,
+		}, nil
+	}
+
 	// get cloud storage file extension according to the specific protocol.
 	ext := helper.GetFileExtension(protocol)
 	// the last param maxMsgBytes is mainly to limit the size of a single message for
 	// batch protocols in mq scenario. In cloud storage sink, we just set it to max int.
 	encoderConfig, err := helper.GetEncoderConfig(changefeedID, sinkURI, protocol, sinkConfig, math.MaxInt)
 	if err != nil {
+		storage.Close()
+		statistics.Close()
 		return nil, errors.Trace(err)
 	}
-	storage, err := util.GetExternalStorageWithDefaultTimeout(ctx, sinkURI.String())
-	if err != nil {
-		return nil, err
-	}
-	statistics := metrics.NewStatistics(changefeedID, "cloudstorage")
 	dmlWriters := newDMLWriters(changefeedID, storage, cfg, encoderConfig, ext, statistics)
+	isNormal := atomic.NewBool(true)
 	return &sink{
 		changefeedID:             changefeedID,
 		sinkURI:                  sinkURI,
@@ -130,7 +161,7 @@ func New(
 		lastSendCheckpointTsTime: time.Now(),
 		outputRawChangeEvent:     sinkConfig.CloudStorageConfig.GetOutputRawChangeEvent(),
 		statistics:               statistics,
-		isNormal:                 atomic.NewBool(true),
+		isNormal:                 isNormal,
 
 		ctx: ctx,
 	}, nil
@@ -142,6 +173,10 @@ func (s *sink) SinkType() common.SinkType {
 
 // Run the sink, the ctx is the same as the ctx in the New function.
 func (s *sink) Run(ctx context.Context) error {
+	if s.iceberg != nil {
+		return s.iceberg.run(ctx)
+	}
+
 	g, ctx := errgroup.WithContext(ctx)
 
 	g.Go(func() error {
@@ -167,10 +202,21 @@ func (s *sink) IsNormal() bool {
 }
 
 func (s *sink) AddDMLEvent(event *commonEvent.DMLEvent) {
+	if s.iceberg != nil {
+		s.iceberg.addDMLEvent(event)
+		return
+	}
 	s.dmlWriters.addDMLEvent(event)
 }
 
 func (s *sink) FlushDMLBeforeBlock(event commonEvent.BlockEvent) error {
+	if s.iceberg != nil {
+		if err := s.iceberg.flushDMLBeforeBlock(s.ctx, event); err != nil {
+			s.isNormal.Store(false)
+			return err
+		}
+		return nil
+	}
 	if err := s.dmlWriters.flushDMLBeforeBlock(s.ctx, event); err != nil {
 		s.isNormal.Store(false)
 		return err
@@ -179,6 +225,24 @@ func (s *sink) FlushDMLBeforeBlock(event commonEvent.BlockEvent) error {
 }
 
 func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
+	if s.iceberg != nil {
+		switch e := event.(type) {
+		case *commonEvent.DDLEvent:
+			if err := s.iceberg.handleDDLEvent(s.ctx, e); err != nil {
+				s.isNormal.Store(false)
+				return err
+			}
+		default:
+			log.Error("cloudstorage sink doesn't support this type of block event",
+				zap.String("namespace", s.changefeedID.Keyspace()),
+				zap.String("changefeed", s.changefeedID.Name()),
+				zap.String("eventType", commonEvent.TypeToString(event.GetType())))
+			return errors.ErrInvalidEventType.GenWithStackByArgs(commonEvent.TypeToString(event.GetType()))
+		}
+		event.PostFlush()
+		return nil
+	}
+
 	var err error
 	switch e := event.(type) {
 	case *commonEvent.DDLEvent:
@@ -272,6 +336,10 @@ func (s *sink) writeFile(v *commonEvent.DDLEvent, def cloudstorage.TableDefiniti
 }
 
 func (s *sink) AddCheckpointTs(ts uint64) {
+	if s.iceberg != nil {
+		return
+	}
+
 	select {
 	case s.checkpointChan <- ts:
 	case <-s.ctx.Done():
@@ -458,10 +526,19 @@ func (s *sink) genCleanupJob(ctx context.Context, uri *url.URL) []func() {
 }
 
 func (s *sink) Close(_ bool) {
-	s.dmlWriters.close()
-	s.cron.Stop()
+	if s.iceberg != nil {
+		s.iceberg.close()
+	}
+	if s.dmlWriters != nil {
+		s.dmlWriters.close()
+	}
+	if s.cron != nil {
+		s.cron.Stop()
+	}
 	if s.statistics != nil {
 		s.statistics.Close()
 	}
-	s.storage.Close()
+	if s.storage != nil {
+		s.storage.Close()
+	}
 }

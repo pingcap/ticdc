@@ -76,6 +76,10 @@ func TestValidateTxnAtomicity(t *testing.T) {
 			shouldSplitTxn: true,
 		},
 		{
+			sinkURI:     "kafka://127.0.0.1:9092?protocol=iceberg",
+			expectedErr: ".*protocol iceberg is incompatible with kafka scheme.*",
+		},
+		{
 			sinkURI:     "kafka://127.0.0.1:9092?transaction-atomicity=none",
 			expectedErr: ".*unknown .* message protocol for sink.*",
 		},
@@ -96,6 +100,10 @@ func TestValidateTxnAtomicity(t *testing.T) {
 		},
 		{
 			sinkURI:        "pulsar://127.0.0.1:6550/test?protocol=canal-json",
+			shouldSplitTxn: true,
+		},
+		{
+			sinkURI:        "s3://bucket/prefix?protocol=iceberg",
 			shouldSplitTxn: true,
 		},
 	}
