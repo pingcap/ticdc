@@ -41,7 +41,7 @@ type writer struct {
 	spool         *spool.Spool
 	bufferManager *bufferManager
 
-	toBeFlushedCh chan writerTask
+	toBeFlushedCh chan flushTask
 
 	statistics        *pmetrics.Statistics
 	filePathGenerator *cloudstorage.FilePathGenerator
@@ -54,11 +54,11 @@ type writer struct {
 	writerLabel            string
 }
 
-// writerTask is internal and never crosses component boundary.
+// flushTask is internal and never crosses component boundary.
 // marker task and data batch are mutually exclusive in normal flow.
-type writerTask struct {
-	tableBatch bufferedTasks
-	marker     *flushMarker
+type flushTask struct {
+	batch  bufferedTasks
+	marker *flushMarker
 }
 
 func newWriter(
@@ -70,29 +70,26 @@ func newWriter(
 	statistics *pmetrics.Statistics,
 	spoolBuffer *spool.Spool,
 ) *writer {
-	flushCh := make(chan writerTask, 64)
+	var (
+		keyspace   = changefeedID.Keyspace()
+		changefeed = changefeedID.Name()
+	)
 	d := &writer{
-		shardID:       id,
-		changeFeedID:  changefeedID,
-		storage:       storage,
-		config:        config,
-		spool:         spoolBuffer,
-		toBeFlushedCh: flushCh,
-		statistics:    statistics,
-		filePathGenerator: cloudstorage.NewFilePathGenerator(
-			changefeedID, config, storage, extension,
-		),
-		metricWriteBytes: metrics.CloudStorageWriteBytesGauge.
-			WithLabelValues(changefeedID.Keyspace(), changefeedID.ID().String()),
-		metricFileCount: metrics.CloudStorageFileCountGauge.
-			WithLabelValues(changefeedID.Keyspace(), changefeedID.ID().String()),
-		metricWriteDuration: metrics.CloudStorageWriteDurationHistogram.
-			WithLabelValues(changefeedID.Keyspace(), changefeedID.ID().String()),
-		metricFlushDuration: metrics.CloudStorageFlushDurationHistogram.
-			WithLabelValues(changefeedID.Keyspace(), changefeedID.ID().String()),
-		metricsWorkerBusyRatio: metrics.CloudStorageWorkerBusyRatio.
-			WithLabelValues(changefeedID.Keyspace(), changefeedID.ID().String(), strconv.Itoa(id)),
-		writerLabel: strconv.Itoa(id),
+		shardID:           id,
+		changeFeedID:      changefeedID,
+		storage:           storage,
+		config:            config,
+		spool:             spoolBuffer,
+		toBeFlushedCh:     make(chan flushTask, 64),
+		statistics:        statistics,
+		filePathGenerator: cloudstorage.NewFilePathGenerator(changefeedID, config, storage, extension),
+
+		metricWriteBytes:       metrics.CloudStorageWriteBytesGauge.WithLabelValues(keyspace, changefeed),
+		metricFileCount:        metrics.CloudStorageFileCountGauge.WithLabelValues(keyspace, changefeed),
+		metricWriteDuration:    metrics.CloudStorageWriteDurationHistogram.WithLabelValues(keyspace, changefeed),
+		metricFlushDuration:    metrics.CloudStorageFlushDurationHistogram.WithLabelValues(keyspace, changefeed),
+		metricsWorkerBusyRatio: metrics.CloudStorageWorkerBusyRatio.WithLabelValues(keyspace, changefeed, strconv.Itoa(id)),
+		writerLabel:            strconv.Itoa(id),
 	}
 	d.bufferManager = newBufferManager(
 		d.shardID,
@@ -140,12 +137,12 @@ func (d *writer) flushMessages(ctx context.Context) error {
 				flushTask.marker.finish()
 				continue
 			}
-			if len(flushTask.tableBatch.tasks) == 0 {
+			if len(flushTask.batch.tables) == 0 {
 				continue
 			}
 
 			start := time.Now()
-			for table, singleTask := range flushTask.tableBatch.tasks {
+			for table, singleTask := range flushTask.batch.tables {
 				if len(singleTask.entries) == 0 {
 					continue
 				}

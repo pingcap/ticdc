@@ -31,7 +31,7 @@ func TestBufferManagerFlushesPendingBatchBeforeWaitingForDiskQuota(t *testing.T)
 	t.Parallel()
 
 	changefeedID := commonType.NewChangefeedID4Test("test", "buffer-quota")
-	flushCh := make(chan writerTask, 16)
+	flushCh := make(chan flushTask, 16)
 	spoolBuffer, err := spool.New(
 		changefeedID,
 		spool.WithRootDir(t.TempDir()),
@@ -66,7 +66,7 @@ func TestBufferManagerFlushesPendingBatchBeforeWaitingForDiskQuota(t *testing.T)
 	select {
 	case flushed := <-flushCh:
 		require.Nil(t, flushed.marker)
-		require.Len(t, flushed.tableBatch.tasks, 1)
+		require.Len(t, flushed.batch.tables, 1)
 	case <-time.After(3 * time.Second):
 		t.Fatal("buffer controller did not flush pending batch before waiting for disk quota")
 	}
@@ -79,7 +79,7 @@ func TestBufferManagerOversizedBatchFlushesImmediatelyFromMemory(t *testing.T) {
 	t.Parallel()
 
 	changefeedID := commonType.NewChangefeedID4Test("test", "buffer-oversized")
-	flushCh := make(chan writerTask, 16)
+	flushCh := make(chan flushTask, 16)
 	spoolBuffer, err := spool.New(
 		changefeedID,
 		spool.WithRootDir(t.TempDir()),
@@ -110,8 +110,8 @@ func TestBufferManagerOversizedBatchFlushesImmediatelyFromMemory(t *testing.T) {
 
 	select {
 	case flushed := <-flushCh:
-		require.Len(t, flushed.tableBatch.tasks, 1)
-		for _, tableTask := range flushed.tableBatch.tasks {
+		require.Len(t, flushed.batch.tables, 1)
+		for _, tableTask := range flushed.batch.tables {
 			require.Len(t, tableTask.entries, 1)
 			require.True(t, tableTask.entries[0].InMemory())
 			require.False(t, tableTask.entries[0].IsSpilled())
