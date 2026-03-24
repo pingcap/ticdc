@@ -115,7 +115,13 @@ func TestRemoteTargetHandleIncomingMessageExitOnContextCancel(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- rt.handleIncomingMessage(ctx, stream, recvCh)
+		done <- rt.handleIncomingMessage(
+			ctx,
+			stream,
+			recvCh,
+			metrics.MessagingReceiveMsgCounter.WithLabelValues("event"),
+			EventStreamType,
+		)
 	}()
 
 	cancel()

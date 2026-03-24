@@ -145,12 +145,12 @@ func (mc *messageCenter) Run(ctx context.Context) {
 	mc.cancel = cancel
 
 	mc.g.Go(func() error {
-		mc.router.runDispatch(ctx, mc.receiveEventCh)
+		mc.router.runDispatch(ctx, EventStreamType, mc.receiveEventCh)
 		return nil
 	})
 
 	mc.g.Go(func() error {
-		mc.router.runDispatch(ctx, mc.receiveCmdCh)
+		mc.router.runDispatch(ctx, CommandStreamType, mc.receiveCmdCh)
 		return nil
 	})
 
@@ -188,7 +188,7 @@ func (mc *messageCenter) checkRemoteTarget(ctx context.Context) {
 						zap.Stringer("remoteID", target.targetId),
 						zap.String("remoteAddr", target.targetAddr),
 						zap.Error(err))
-					target.resetConnect()
+					target.resetConnect(getMessagingErrorReason(err))
 				}
 			}
 			mc.remoteTargets.RUnlock()
@@ -400,11 +400,37 @@ func (mc *messageCenter) updateMetrics(ctx context.Context) {
 	defer ticker.Stop()
 	commandChLen := metrics.MessagingReceiveChannelLength.WithLabelValues("command")
 	eventChLen := metrics.MessagingReceiveChannelLength.WithLabelValues("event")
+	sendEventTotalChLen := metrics.MessagingSendChannelLength.WithLabelValues("event", "total")
+	sendEventMaxChLen := metrics.MessagingSendChannelLength.WithLabelValues("event", "max")
+	sendCommandTotalChLen := metrics.MessagingSendChannelLength.WithLabelValues("command", "total")
+	sendCommandMaxChLen := metrics.MessagingSendChannelLength.WithLabelValues("command", "max")
 	for {
 		select {
 		case <-ticker.C:
 			commandChLen.Set(float64(len(mc.receiveCmdCh)))
 			eventChLen.Set(float64(len(mc.receiveEventCh)))
+			eventTotal := 0
+			eventMax := 0
+			commandTotal := 0
+			commandMax := 0
+			mc.remoteTargets.RLock()
+			for _, target := range mc.remoteTargets.m {
+				eventLen := len(target.sendEventCh)
+				commandLen := len(target.sendCmdCh)
+				eventTotal += eventLen
+				commandTotal += commandLen
+				if eventLen > eventMax {
+					eventMax = eventLen
+				}
+				if commandLen > commandMax {
+					commandMax = commandLen
+				}
+			}
+			mc.remoteTargets.RUnlock()
+			sendEventTotalChLen.Set(float64(eventTotal))
+			sendEventMaxChLen.Set(float64(eventMax))
+			sendCommandTotalChLen.Set(float64(commandTotal))
+			sendCommandMaxChLen.Set(float64(commandMax))
 		case <-ctx.Done():
 			return
 		}

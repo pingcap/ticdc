@@ -145,6 +145,17 @@ func isExpectedStreamShutdown(ctx context.Context, err error) bool {
 	return code == codes.Canceled || code == codes.DeadlineExceeded
 }
 
+func getMessagingErrorReason(err error) string {
+	switch e := errors.Cause(err).(type) {
+	case AppError:
+		return e.Type.String()
+	case *AppError:
+		return e.Type.String()
+	default:
+		return ErrorTypeUnknown.String()
+	}
+}
+
 // Send an event message to the remote target
 func (s *remoteMessageTarget) sendEvent(msg ...*TargetMessage) error {
 	if !s.isReadyToSendByStream(EventStreamType) {
@@ -308,6 +319,7 @@ func (s *remoteMessageTarget) connect() error {
 
 	conn, err := conn.Connect(string(s.targetAddr), s.security)
 	if err != nil {
+		metrics.MessagingConnectCounter.WithLabelValues("fail").Inc()
 		log.Info("Cannot create grpc client",
 			zap.Any("localID", s.messageCenterID),
 			zap.Any("localAddr", s.localAddr),
@@ -339,6 +351,7 @@ func (s *remoteMessageTarget) connect() error {
 		streamCtx, streamCancel := context.WithCancel(s.ctx)
 		gs, err := client.StreamMessages(streamCtx)
 		if err != nil {
+			metrics.MessagingConnectCounter.WithLabelValues("fail").Inc()
 			log.Info("Cannot establish bidirectional grpc stream",
 				zap.Any("localID", s.messageCenterID),
 				zap.String("localAddr", s.localAddr),
@@ -367,6 +380,7 @@ func (s *remoteMessageTarget) connect() error {
 
 		hsBytes, err := handshake.Marshal()
 		if err != nil {
+			metrics.MessagingConnectCounter.WithLabelValues("fail").Inc()
 			log.Error("Failed to marshal handshake message", zap.Error(err))
 			err = AppError{Type: ErrorTypeMessageSendFailed, Reason: errors.Trace(err).Error()}
 			outerErr = err
@@ -382,6 +396,7 @@ func (s *remoteMessageTarget) connect() error {
 		}
 
 		if err := gs.Send(msg); err != nil {
+			metrics.MessagingConnectCounter.WithLabelValues("fail").Inc()
 			log.Info("Failed to send handshake",
 				zap.Any("localID", s.messageCenterID),
 				zap.String("localAddr", s.localAddr),
@@ -421,12 +436,13 @@ func (s *remoteMessageTarget) connect() error {
 		zap.String("localAddr", s.localAddr),
 		zap.Stringer("remoteID", s.targetId),
 		zap.String("remoteAddr", s.targetAddr))
+	metrics.MessagingConnectCounter.WithLabelValues("success").Inc()
 
 	return nil
 }
 
 // Reset the connection to the remote target
-func (s *remoteMessageTarget) resetConnect() {
+func (s *remoteMessageTarget) resetConnect(reason string) {
 	// Only reconnect if this node should initiate connections
 	if !s.isInitiator || s.ctx.Err() != nil {
 		return
@@ -452,8 +468,11 @@ LOOP:
 	// Reconnect
 	err := s.connect()
 	if err != nil {
+		metrics.MessagingResetCounter.WithLabelValues("fail", reason).Inc()
 		log.Error("Failed to connect to remote target", zap.Error(err))
 		s.collectErr(err)
+	} else {
+		metrics.MessagingResetCounter.WithLabelValues("success", reason).Inc()
 	}
 
 	log.Info("reset connection to remote target done",
@@ -650,16 +669,24 @@ func (s *remoteMessageTarget) runReceiveMessages(ctx context.Context, streamType
 	gs := session.(*streamSession).stream
 
 	recvCh := s.recvEventCh
+	recvCounter := s.recvEventCounter
 	if streamType == CommandStreamType {
 		recvCh = s.recvCmdCh
+		recvCounter = s.recvCmdCounter
 	}
 
 	// Process the received message
-	return s.handleIncomingMessage(ctx, gs, recvCh)
+	return s.handleIncomingMessage(ctx, gs, recvCh, recvCounter, streamType)
 }
 
 // Process a received message
-func (s *remoteMessageTarget) handleIncomingMessage(ctx context.Context, stream grpcStream, ch chan *TargetMessage) error {
+func (s *remoteMessageTarget) handleIncomingMessage(
+	ctx context.Context,
+	stream grpcStream,
+	ch chan *TargetMessage,
+	recvCounter prometheus.Counter,
+	streamType StreamType,
+) error {
 	for {
 		select {
 		case <-ctx.Done():
@@ -700,6 +727,7 @@ func (s *remoteMessageTarget) handleIncomingMessage(ctx context.Context, stream 
 		for _, payload := range message.Payload {
 			msg, err := decodeIOType(mt, payload)
 			if err != nil {
+				metrics.MessagingErrorCounter.WithLabelValues(string(streamType), "decode_error").Inc()
 				log.Error("Failed to decode message",
 					zap.Error(err),
 					zap.Stringer("localID", s.messageCenterID),
@@ -715,6 +743,7 @@ func (s *remoteMessageTarget) handleIncomingMessage(ctx context.Context, stream 
 		case <-ctx.Done():
 			return ctx.Err()
 		case ch <- targetMsg:
+			recvCounter.Inc()
 		}
 	}
 }
