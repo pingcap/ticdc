@@ -47,11 +47,9 @@ type bufferManager struct {
 
 	// inputCh is a bounded task queue owned by bufferManager.
 	// Producers stop on ctx cancellation, so the channel does not need to be closed.
-	inputCh chan *task
-	// outputCh points to writer.flushCh. bufferManager is the sole sender and
-	// the sole closer after it has stopped sending.
-	outputCh chan flushTask
-	buffer   bufferedTasks
+	inputCh          chan *task
+	enqueueFlushTask func(context.Context, flushTask) error
+	buffer           bufferedTasks
 
 	writerLabel          string
 	metricPendingTables  prometheus.Gauge
@@ -64,7 +62,7 @@ func newBufferManager(
 	changefeedID common.ChangeFeedID,
 	config *cloudstorage.Config,
 	spoolBuffer *spool.Spool,
-	outputCh chan flushTask,
+	enqueueFlushTask func(context.Context, flushTask) error,
 ) *bufferManager {
 	var (
 		keyspace    = changefeedID.Keyspace()
@@ -76,7 +74,7 @@ func newBufferManager(
 		config:               config,
 		spool:                spoolBuffer,
 		inputCh:              make(chan *task, defaultBufferManagerChannelSize),
-		outputCh:             outputCh,
+		enqueueFlushTask:     enqueueFlushTask,
 		buffer:               newBufferedTasks(),
 		writerLabel:          writerLabel,
 		metricPendingTables:  metrics.CloudStoragePendingTablesGauge.WithLabelValues(keyspace, name, writerLabel),
@@ -89,7 +87,6 @@ func (c *bufferManager) run(ctx context.Context) error {
 	ticker := time.NewTicker(c.config.FlushInterval)
 	defer func() {
 		ticker.Stop()
-		close(c.outputCh)
 		c.deleteMetrics()
 	}()
 
@@ -114,10 +111,8 @@ func (c *bufferManager) run(ctx context.Context) error {
 					}
 				}
 				c.updatePendingMetrics()
-				select {
-				case <-ctx.Done():
-					return errors.Trace(context.Cause(ctx))
-				case c.outputCh <- flushTask{marker: task.marker}:
+				if err := c.enqueueFlushTask(ctx, flushTask{marker: task.marker}); err != nil {
+					return err
 				}
 				continue
 			}
@@ -304,13 +299,11 @@ func (c *bufferManager) sendToWriter(ctx context.Context, batch bufferedTasks, r
 		payloads[table] = payload
 	}
 
-	select {
-	case <-ctx.Done():
-		return errors.Trace(context.Cause(ctx))
-	case c.outputCh <- flushTask{batch: payloads}:
-		metrics.CloudStorageFlushCountCounter.WithLabelValues(c.changeFeedID.Keyspace(), c.changeFeedID.Name(), c.writerLabel, reason).Inc()
-		return nil
+	if err := c.enqueueFlushTask(ctx, flushTask{batch: payloads}); err != nil {
+		return err
 	}
+	metrics.CloudStorageFlushCountCounter.WithLabelValues(c.changeFeedID.Keyspace(), c.changeFeedID.Name(), c.writerLabel, reason).Inc()
+	return nil
 }
 
 func (c *bufferManager) buildPayload(task *singleTableTask) (*payload, error) {

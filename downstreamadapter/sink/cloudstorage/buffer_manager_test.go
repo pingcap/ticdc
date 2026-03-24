@@ -27,11 +27,30 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type testFlushTaskSink struct {
+	ch chan flushTask
+}
+
+func newTestFlushTaskSink(bufferSize int) *testFlushTaskSink {
+	return &testFlushTaskSink{
+		ch: make(chan flushTask, bufferSize),
+	}
+}
+
+func (s *testFlushTaskSink) enqueueFlushTask(ctx context.Context, task flushTask) error {
+	select {
+	case <-ctx.Done():
+		return errors.Trace(context.Cause(ctx))
+	case s.ch <- task:
+		return nil
+	}
+}
+
 func TestBufferManagerFlushesPendingBatchBeforeWaitingForDiskQuota(t *testing.T) {
 	t.Parallel()
 
 	changefeedID := commonType.NewChangefeedID4Test("test", "buffer-quota")
-	flushCh := make(chan flushTask, 16)
+	flushSink := newTestFlushTaskSink(16)
 	spoolBuffer, err := spool.New(
 		changefeedID,
 		spool.WithRootDir(t.TempDir()),
@@ -47,7 +66,7 @@ func TestBufferManagerFlushesPendingBatchBeforeWaitingForDiskQuota(t *testing.T)
 		SpoolDiskQuota:   40,
 		FileIndexWidth:   6,
 		UseTableIDAsPath: false,
-	}, spoolBuffer, flushCh)
+	}, spoolBuffer, flushSink.enqueueFlushTask)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -64,7 +83,7 @@ func TestBufferManagerFlushesPendingBatchBeforeWaitingForDiskQuota(t *testing.T)
 	require.NoError(t, controller.enqueueTask(ctx, secondTask))
 
 	select {
-	case flushed := <-flushCh:
+	case flushed := <-flushSink.ch:
 		require.Nil(t, flushed.marker)
 		require.Len(t, flushed.batch, 1)
 		for _, payload := range flushed.batch {
@@ -83,7 +102,7 @@ func TestBufferManagerOversizedBatchFlushesImmediatelyFromMemory(t *testing.T) {
 	t.Parallel()
 
 	changefeedID := commonType.NewChangefeedID4Test("test", "buffer-oversized")
-	flushCh := make(chan flushTask, 16)
+	flushSink := newTestFlushTaskSink(16)
 	spoolBuffer, err := spool.New(
 		changefeedID,
 		spool.WithRootDir(t.TempDir()),
@@ -99,7 +118,7 @@ func TestBufferManagerOversizedBatchFlushesImmediatelyFromMemory(t *testing.T) {
 		SpoolDiskQuota:   1,
 		FileIndexWidth:   6,
 		UseTableIDAsPath: false,
-	}, spoolBuffer, flushCh)
+	}, spoolBuffer, flushSink.enqueueFlushTask)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -113,7 +132,7 @@ func TestBufferManagerOversizedBatchFlushesImmediatelyFromMemory(t *testing.T) {
 	require.NoError(t, controller.enqueueTask(ctx, task))
 
 	select {
-	case flushed := <-flushCh:
+	case flushed := <-flushSink.ch:
 		require.Len(t, flushed.batch, 1)
 		for _, payload := range flushed.batch {
 			require.NotEmpty(t, payload.data)

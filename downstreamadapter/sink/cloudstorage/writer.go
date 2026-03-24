@@ -40,8 +40,9 @@ type writer struct {
 	spool         *spool.Spool
 	bufferManager *bufferManager
 
-	// flushCh is owned by bufferManager: bufferManager is the only sender and
-	// closes it after it has stopped emitting flush tasks.
+	// flushCh is owned by writer. bufferManager emits flush work only through
+	// writer methods. Both writer and bufferManager stop on the shared ctx, so
+	// the channel does not need to be closed explicitly.
 	flushCh chan flushTask
 
 	statistics        *pmetrics.Statistics
@@ -101,13 +102,7 @@ func newWriter(
 		metricsWorkerBusyRatio: metrics.CloudStorageWorkerBusyRatio.WithLabelValues(keyspace, changefeed, strconv.Itoa(id)),
 		writerLabel:            strconv.Itoa(id),
 	}
-	d.bufferManager = newBufferManager(
-		d.shardID,
-		d.changeFeedID,
-		d.config,
-		d.spool,
-		d.flushCh,
-	)
+	d.bufferManager = newBufferManager(d.shardID, d.changeFeedID, d.config, d.spool, d.enqueueFlushTask)
 	return d
 }
 
@@ -138,10 +133,7 @@ func (d *writer) flushMessages(ctx context.Context) error {
 		case <-overseerTicker.C:
 			d.metricsWorkerBusyRatio.Add(flushTimeSlice.Seconds())
 			flushTimeSlice = 0
-		case task, ok := <-d.flushCh:
-			if !ok {
-				return nil
-			}
+		case task := <-d.flushCh:
 			if task.marker != nil {
 				// Flush marker ack point:
 				// marker is emitted only after the pending batch of the same dispatcher
@@ -308,6 +300,15 @@ func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath 
 
 func (d *writer) enqueueTask(ctx context.Context, t *task) error {
 	return d.bufferManager.enqueueTask(ctx, t)
+}
+
+func (d *writer) enqueueFlushTask(ctx context.Context, task flushTask) error {
+	select {
+	case <-ctx.Done():
+		return errors.Trace(context.Cause(ctx))
+	case d.flushCh <- task:
+		return nil
+	}
 }
 
 func (d *writer) deleteMetrics() {
