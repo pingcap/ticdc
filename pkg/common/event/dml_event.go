@@ -16,6 +16,7 @@ package event
 import (
 	"encoding/binary"
 	"fmt"
+	"hash"
 	"hash/fnv"
 	"strings"
 	"time"
@@ -427,6 +428,7 @@ type DMLEvent struct {
 	// event. They are generated when building MySQL sink events and serialized
 	// into the wire format so downstream receivers can reuse them directly.
 	ConflictKeyHashes map[uint64]struct{} `json:"-"`
+	hasher            hash.Hash32
 }
 
 // NewDMLEvent creates a new DMLEvent with the given parameters
@@ -446,6 +448,7 @@ func NewDMLEvent(
 		TableInfo:         tableInfo,
 		RowTypes:          make([]common.RowType, 0),
 		ConflictKeyHashes: make(map[uint64]struct{}),
+		hasher:            fnv.New32a(),
 	}
 }
 
@@ -625,14 +628,13 @@ func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 		}
 
 		if sinkType == common.MysqlSinkType {
-			hasher := fnv.New32a()
 			keys := genRowKeys(RowChange{PreRow: preRow, Row: row}, t.TableInfo, t.DispatcherID)
 			for _, key := range keys {
-				if n, err := hasher.Write(key); n != len(key) || err != nil {
+				if n, err := t.hasher.Write(key); n != len(key) || err != nil {
 					log.Panic("transaction key hash fail")
 				}
-				t.ConflictKeyHashes[uint64(hasher.Sum32())] = struct{}{}
-				hasher.Reset()
+				t.ConflictKeyHashes[uint64(t.hasher.Sum32())] = struct{}{}
+				t.hasher.Reset()
 			}
 		}
 	}
