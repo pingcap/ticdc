@@ -14,22 +14,27 @@
 package shop2
 
 import (
+	cryptorand "crypto/rand"
+	"encoding/binary"
 	"fmt"
 	"math/rand"
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"workload/schema"
 )
 
 const (
-	shop2DefaultKeySpace = 1_000_000
+	shop2DefaultKeySpace          = 1_000_000
+	shop2PrimaryKeyLowBits uint64 = 1<<62 - 1
+	shop2PrimaryKeyHighBit uint64 = 1 << 62
 )
 
 const createShop2ItemTable = `
 CREATE TABLE IF NOT EXISTS shop2_item_%d (
-  c001 bigint(20) NOT NULL AUTO_INCREMENT,
+  c001 bigint(20) NOT NULL,
   c002 bigint(20) NOT NULL,
   c003 bigint(20) NOT NULL,
   c004 varchar(127) NOT NULL,
@@ -192,6 +197,7 @@ type Shop2Workload struct {
 	rowSize          int
 	tableStartIndex  int
 	perTableKeySpace uint64
+	primaryKeySalt   uint64
 	tableSeq         []atomic.Uint64
 }
 
@@ -217,6 +223,7 @@ func NewShop2Workload(totalRowCount uint64, rowSize int, tableCount int, tableSt
 		rowSize:          rowSize,
 		tableStartIndex:  tableStartIndex,
 		perTableKeySpace: perTableKeySpace,
+		primaryKeySalt:   randomUint64() & shop2PrimaryKeyLowBits,
 		tableSeq:         make([]atomic.Uint64, tableCount),
 	}
 }
@@ -275,8 +282,8 @@ func (w *Shop2Workload) BuildDeleteSql(opt schema.DeleteOption) string {
 }
 
 func buildInsertColumnList() string {
-	columns := make([]string, 0, 151)
-	for idx := 2; idx <= 152; idx++ {
+	columns := make([]string, 0, 152)
+	for idx := 1; idx <= 152; idx++ {
 		columns = append(columns, columnName(idx))
 	}
 	return strings.Join(columns, ",")
@@ -307,7 +314,7 @@ func (w *Shop2Workload) buildInsertSQL(tableIndex int, seeds []int64) string {
 }
 
 func (w *Shop2Workload) generateInsertRow(tableIndex int, seed int64) string {
-	values := make([]string, 0, 151)
+	values := make([]string, 0, 152)
 
 	addBigInt := func(columnSeed int64) {
 		values = append(values, strconv.FormatInt(w.bigIntValue(columnSeed, seed), 10))
@@ -334,6 +341,7 @@ func (w *Shop2Workload) generateInsertRow(tableIndex int, seed int64) string {
 		values = append(values, quoteLiteral(w.timestampValue(columnSeed, seed)))
 	}
 
+	values = append(values, strconv.FormatInt(w.primaryKeyValue(tableIndex, seed), 10))
 	values = append(values, strconv.FormatInt(w.catalogID(seed), 10))
 	values = append(values, strconv.FormatInt(w.merchantID(seed), 10))
 	addText(127, "c004")
@@ -444,10 +452,17 @@ func (w *Shop2Workload) generateInsertRow(tableIndex int, seed int64) string {
 	addJSON("c151")
 	addText(32, "c152")
 
-	if len(values) != 151 {
+	if len(values) != 152 {
 		panic(fmt.Sprintf("unexpected shop2 values count: %d", len(values)))
 	}
 	return strings.Join(values, ",")
+}
+
+func (w *Shop2Workload) primaryKeyValue(tableIndex int, seed int64) int64 {
+	slot := uint64(w.tableSlot(tableIndex) + 1)
+	source := (uint64(seed) * 6364136223846793005) & shop2PrimaryKeyLowBits
+	offset := (w.primaryKeySalt + slot*1442695040888963407) & shop2PrimaryKeyLowBits
+	return int64(((source + offset) & shop2PrimaryKeyLowBits) | shop2PrimaryKeyHighBit)
 }
 
 func (w *Shop2Workload) catalogID(rowID int64) int64 {
@@ -570,4 +585,12 @@ func (w *Shop2Workload) sampleSeed() int64 {
 
 func (w *Shop2Workload) seedForSlot(slot int, offset uint64) int64 {
 	return int64(uint64(slot)*w.perTableKeySpace + offset)
+}
+
+func randomUint64() uint64 {
+	var buf [8]byte
+	if _, err := cryptorand.Read(buf[:]); err == nil {
+		return binary.LittleEndian.Uint64(buf[:])
+	}
+	return uint64(time.Now().UnixNano()) ^ uint64(rand.Int63())
 }
