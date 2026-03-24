@@ -108,7 +108,7 @@ func (c *server) prepare(ctx context.Context) error {
 	if err != nil {
 		return errors.Trace(err)
 	}
-	c.pdEndpoints = append(c.pdEndpoints, allPDEndpoints...)
+	c.pdEndpoints = mergeAndDedupPDEndpoints(c.pdEndpoints, allPDEndpoints)
 
 	// Update meta-region label to ensure that meta region isolated from data regions.
 	err = pdAPIClient.UpdateMetaLabel(ctx)
@@ -139,6 +139,28 @@ func (c *server) prepare(ctx context.Context) error {
 	c.info = node.NewInfo(conf.AdvertiseAddr, deployPath)
 	c.session = session
 	return nil
+}
+
+// mergeAndDedupPDEndpoints keeps the first occurrence order stable while
+// removing duplicate PD endpoints merged from CLI seed addresses and PD member
+// discovery results.
+func mergeAndDedupPDEndpoints(seed []string, discovered []string) []string {
+	merged := make([]string, 0, len(seed)+len(discovered))
+	seen := make(map[string]struct{}, len(seed)+len(discovered))
+
+	appendUnique := func(endpoints []string) {
+		for _, endpoint := range endpoints {
+			if _, ok := seen[endpoint]; ok {
+				continue
+			}
+			seen[endpoint] = struct{}{}
+			merged = append(merged, endpoint)
+		}
+	}
+
+	appendUnique(seed)
+	appendUnique(discovered)
+	return merged
 }
 
 func calcMemoryLimit(percentage float64) int64 {
