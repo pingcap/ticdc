@@ -16,6 +16,7 @@ package event
 import (
 	"encoding/binary"
 	"fmt"
+	"hash/fnv"
 	"strings"
 	"time"
 
@@ -421,6 +422,11 @@ type DMLEvent struct {
 	// and TiCDC set the integrity check level to the correctness.
 	Checksum       []*integrity.Checksum `json:"-"`
 	checksumOffset int                   `json:"-"`
+
+	// ConflictKeyHashes stores the precomputed hashes of conflict keys for this
+	// event. They are generated when building MySQL sink events and serialized
+	// into the wire format so downstream receivers can reuse them directly.
+	ConflictKeyHashes map[uint64]struct{} `json:"-"`
 }
 
 // NewDMLEvent creates a new DMLEvent with the given parameters
@@ -432,13 +438,14 @@ func NewDMLEvent(
 	tableInfo *common.TableInfo,
 ) *DMLEvent {
 	return &DMLEvent{
-		Version:         DMLEventVersion1,
-		DispatcherID:    dispatcherID,
-		PhysicalTableID: tableID,
-		StartTs:         startTs,
-		CommitTs:        commitTs,
-		TableInfo:       tableInfo,
-		RowTypes:        make([]common.RowType, 0),
+		Version:           DMLEventVersion1,
+		DispatcherID:      dispatcherID,
+		PhysicalTableID:   tableID,
+		StartTs:           startTs,
+		CommitTs:          commitTs,
+		TableInfo:         tableInfo,
+		RowTypes:          make([]common.RowType, 0),
+		ConflictKeyHashes: make(map[uint64]struct{}),
 	}
 }
 
@@ -537,6 +544,7 @@ func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 		chk *chunk.Chunk,
 	) (int, *integrity.Checksum, error),
 	filter filter.Filter,
+	sinkType common.SinkType,
 ) error {
 	// Some transactions could generate empty row change event, such as
 	// begin; insert into t (id) values (1); delete from t where id=1; commit;
@@ -615,6 +623,18 @@ func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 		if checksum != nil {
 			t.Checksum = append(t.Checksum, checksum)
 		}
+
+		if sinkType == common.MysqlSinkType {
+			hasher := fnv.New32a()
+			keys := genRowKeys(RowChange{PreRow: preRow, Row: row}, t.TableInfo, t.DispatcherID)
+			for _, key := range keys {
+				if n, err := hasher.Write(key); n != len(key) || err != nil {
+					log.Panic("transaction key hash fail")
+				}
+				t.ConflictKeyHashes[uint64(hasher.Sum32())] = struct{}{}
+				hasher.Reset()
+			}
+		}
 	}
 	return nil
 }
@@ -640,6 +660,18 @@ func (t *DMLEvent) GetCommitTs() common.Ts {
 // GetStartTs returns the first transaction startTs
 func (t *DMLEvent) GetStartTs() common.Ts {
 	return t.StartTs
+}
+
+func (t *DMLEvent) ConflictKeys() []uint64 {
+	if t.Len() == 0 {
+		return nil
+	}
+
+	keys := make([]uint64, 0, len(t.ConflictKeyHashes))
+	for key := range t.ConflictKeyHashes {
+		keys = append(keys, key)
+	}
+	return keys
 }
 
 // PostFlush marks the transaction as flushed to downstream.
@@ -848,12 +880,14 @@ func (t *DMLEvent) encodeV1() ([]byte, error) {
 	}
 	// DispatcherID(16) + PhysicalTableID(8) + StartTs(8) + CommitTs(8) +
 	// Seq(8) + Epoch(8) + Length(4) + ApproximateSize(8) + PreviousTotalOffset(4)
-	// + size of len(t.RowTypes)(4) + len(t.RowTypes)
+	// + size of len(t.RowTypes)(4) + len(t.RowTypes) + len(t.ConflictKeyHashes)(4) +
+	// size of each hash result(8)
 	size := t.DispatcherID.GetSize() + 5*8 + 4 + 8 + 4*2 + len(t.RowTypes)
 	size += 4 // len(t.RowKeys)
 	for i := 0; i < len(t.RowKeys); i++ {
 		size += 4 + len(t.RowKeys[i]) // size + contents of t.RowKeys[i]
 	}
+	size += 4 + 8*len(t.ConflictKeyHashes)
 
 	// Allocate a buffer with the calculated size
 	buf := make([]byte, size)
@@ -905,6 +939,14 @@ func (t *DMLEvent) encodeV1() ([]byte, error) {
 		copy(buf[offset:], rowKey)
 		offset += len(rowKey)
 	}
+	// ConflictKeyHashes are appended after RowKeys so the receiver can reuse the
+	// already computed conflict information without hashing again.
+	binary.BigEndian.PutUint32(buf[offset:], uint32(len(t.ConflictKeyHashes)))
+	offset += 4
+	for hash := range t.ConflictKeyHashes {
+		binary.BigEndian.PutUint64(buf[offset:], hash)
+		offset += 8
+	}
 	return buf, nil
 }
 
@@ -922,6 +964,7 @@ func (t *DMLEvent) decodeV1(data []byte) error {
 		log.Panic("DMLEvent: unexpected version", zap.Uint8("expected", DMLEventVersion1), zap.Int("version", t.Version))
 		return nil
 	}
+	t.ConflictKeyHashes = make(map[uint64]struct{})
 	offset := 0
 	err := t.DispatcherID.Unmarshal(data[offset:])
 	if err != nil {
@@ -955,11 +998,22 @@ func (t *DMLEvent) decodeV1(data []byte) error {
 	offset += 4
 	t.RowKeys = make([][]byte, rowKeysLen)
 	for i := 0; i < int(rowKeysLen); i++ {
-		len := int32(binary.BigEndian.Uint32(data[offset:]))
+		rowKeyLen := int(binary.BigEndian.Uint32(data[offset:]))
 		offset += 4
-		t.RowKeys[i] = make([]byte, len)
-		copy(t.RowKeys[i], data[offset:offset+int(len)])
-		offset += int(len)
+		t.RowKeys[i] = make([]byte, rowKeyLen)
+		copy(t.RowKeys[i], data[offset:offset+rowKeyLen])
+		offset += rowKeyLen
+	}
+	if offset == len(data) {
+		// ConflictKeyHashes was added after the original v1 layout. Old payloads
+		// stop here and should still decode successfully.
+		return nil
+	}
+	hashResLen := int(binary.BigEndian.Uint32(data[offset:]))
+	offset += 4
+	for i := 0; i < hashResLen; i++ {
+		t.ConflictKeyHashes[binary.BigEndian.Uint64(data[offset:])] = struct{}{}
+		offset += 8
 	}
 	return nil
 }

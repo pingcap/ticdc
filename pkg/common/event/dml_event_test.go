@@ -53,20 +53,24 @@ func TestDMLEventBasicEncodeAndDecode(t *testing.T) {
 		err := e.AppendRow(&common.RawKVEntry{
 			OpType: common.OpTypePut,
 			Value:  []byte("value1"),
-		}, mockDecodeRawKVToChunk, nil)
+		}, mockDecodeRawKVToChunk, nil, common.BlackHoleSinkType)
 		require.Nil(t, err)
 		// update
 		err = e.AppendRow(&common.RawKVEntry{
 			OpType:   common.OpTypePut,
 			Value:    []byte("value1"),
 			OldValue: []byte("old_value1"),
-		}, mockDecodeRawKVToChunk, nil)
+		}, mockDecodeRawKVToChunk, nil, common.BlackHoleSinkType)
 		require.Nil(t, err)
 		// delete
 		err = e.AppendRow(&common.RawKVEntry{
 			OpType: common.OpTypeDelete,
-		}, mockDecodeRawKVToChunk, nil)
+		}, mockDecodeRawKVToChunk, nil, common.BlackHoleSinkType)
 		require.Nil(t, err)
+	}
+	e.ConflictKeyHashes = map[uint64]struct{}{
+		11: {},
+		29: {},
 	}
 	// TableInfo is not encoded, for test comparison purpose, set it to nil.
 	e.TableInfo = nil
@@ -86,6 +90,18 @@ func TestDMLEventBasicEncodeAndDecode(t *testing.T) {
 	require.Nil(t, err)
 	reverseEvent.eventSize = 0
 	require.Equal(t, e, reverseEvent)
+}
+
+func TestDMLEventConflictKeysUseStoredConflictKeyHashes(t *testing.T) {
+	e := NewDMLEvent(common.NewDispatcherID(), 1, 100, 200, &common.TableInfo{})
+	e.Length = 1
+	e.ConflictKeyHashes = map[uint64]struct{}{
+		11: {},
+		29: {},
+	}
+
+	keys := e.ConflictKeys()
+	require.ElementsMatch(t, []uint64{11, 29}, keys)
 }
 
 // TestBatchDMLEvent test the Marshal and Unmarshal of BatchDMLEvent.
@@ -161,6 +177,10 @@ func TestEncodeAnddecodeV1(t *testing.T) {
 	dmlEvent := helper.DML2Event("test", "t", insertDataSQL)
 	dmlEvent.Seq = 1000
 	dmlEvent.Epoch = 10
+	dmlEvent.ConflictKeyHashes = map[uint64]struct{}{
+		11: {},
+		29: {},
+	}
 	require.NotNil(t, dmlEvent)
 
 	data, err := dmlEvent.encodeV1()
@@ -180,6 +200,35 @@ func TestEncodeAnddecodeV1(t *testing.T) {
 	dmlEvent.TableInfo = nil
 	reverseEvent.TableInfo = nil
 	require.Equal(t, dmlEvent, reverseEvent)
+}
+
+func TestDecodeV1WithoutConflictKeyHashesPayload(t *testing.T) {
+	event := &DMLEvent{
+		Version:             DMLEventVersion1,
+		DispatcherID:        common.NewDispatcherID(),
+		PhysicalTableID:     1,
+		StartTs:             100,
+		CommitTs:            200,
+		Seq:                 10,
+		Epoch:               2,
+		Length:              1,
+		ApproximateSize:     128,
+		PreviousTotalOffset: 3,
+		RowTypes:            []common.RowType{common.RowTypeInsert},
+		RowKeys:             [][]byte{[]byte("row-key")},
+		ConflictKeyHashes:   map[uint64]struct{}{},
+	}
+
+	data, err := event.encodeV1()
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(data), 4)
+
+	legacyData := data[:len(data)-4]
+	reverseEvent := &DMLEvent{Version: DMLEventVersion1}
+	err = reverseEvent.decodeV1(legacyData)
+	require.NoError(t, err)
+	reverseEvent.eventSize = 0
+	require.Equal(t, event, reverseEvent)
 }
 
 func TestBatchDMLEventAppendWithDifferentTableInfo(t *testing.T) {
