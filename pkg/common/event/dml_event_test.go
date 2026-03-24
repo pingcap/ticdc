@@ -199,6 +199,7 @@ func TestEncodeAnddecodeV1(t *testing.T) {
 	reverseEvent.eventSize = 0
 	dmlEvent.TableInfo = nil
 	reverseEvent.TableInfo = nil
+	dmlEvent.hasher = nil
 	require.Equal(t, dmlEvent, reverseEvent)
 }
 
