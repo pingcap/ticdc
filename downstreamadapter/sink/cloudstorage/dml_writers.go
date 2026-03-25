@@ -132,7 +132,6 @@ func (d *dmlWriters) deleteMetrics() {
 	changefeed := d.changefeedID.Name()
 	sinkmetrics.CloudStorageWriteBytesCounter.DeleteLabelValues(keyspace, changefeed)
 	sinkmetrics.CloudStorageFileCounter.DeleteLabelValues(keyspace, changefeed)
-	sinkmetrics.CloudStorageWriteDurationHistogram.DeleteLabelValues(keyspace, changefeed)
 	sinkmetrics.CloudStorageFlushDurationHistogram.DeleteLabelValues(keyspace, changefeed)
 	sinkmetrics.CloudStorageDDLFlushDurationHistogram.DeleteLabelValues(keyspace, changefeed)
 }

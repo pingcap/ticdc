@@ -37,7 +37,6 @@ type quotaController struct {
 	metricMemoryBytes        prometheus.Gauge
 	metricDiskBytes          prometheus.Gauge
 	metricPendingPostEnqueue prometheus.Gauge
-	metricSpilledBytes       prometheus.Observer
 
 	keyspace   string
 	changefeed string
@@ -62,7 +61,6 @@ func newQuotaController(
 		metricMemoryBytes:        metrics.CloudStorageSpoolMemoryBytesGauge.WithLabelValues(keyspace, changefeed),
 		metricDiskBytes:          metrics.CloudStorageSpoolDiskBytesGauge.WithLabelValues(keyspace, changefeed),
 		metricPendingPostEnqueue: metrics.CloudStoragePendingPostEnqueueGauge.WithLabelValues(keyspace, changefeed),
-		metricSpilledBytes:       metrics.CloudStorageSpillBytesHistogram.WithLabelValues(keyspace, changefeed),
 		waiters:                  make(map[uint64]chan struct{}),
 	}
 	return controller
@@ -109,9 +107,6 @@ func (q *quotaController) acquire(
 	if q.budget.acquire(entryBytes, spilled) {
 		q.postEnqueuePaused = true
 	}
-	if spilled {
-		q.metricSpilledBytes.Observe(float64(entryBytes))
-	}
 
 	defer q.updateMetrics()
 	if postEnqueue == nil {
@@ -152,7 +147,6 @@ func (q *quotaController) deleteMetrics() {
 	metrics.CloudStorageSpoolMemoryBytesGauge.DeleteLabelValues(q.keyspace, q.changefeed)
 	metrics.CloudStorageSpoolDiskBytesGauge.DeleteLabelValues(q.keyspace, q.changefeed)
 	metrics.CloudStoragePendingPostEnqueueGauge.DeleteLabelValues(q.keyspace, q.changefeed)
-	metrics.CloudStorageSpillBytesHistogram.DeleteLabelValues(q.keyspace, q.changefeed)
 }
 
 func (q *quotaController) updateMetrics() {

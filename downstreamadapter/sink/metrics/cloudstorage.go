@@ -43,16 +43,16 @@ var (
 		Subsystem: subsystem,
 		Name:      "cloud_storage_flush_duration_seconds",
 		Help:      "The latency distributions of flush storage by a cloud storage sink",
-		Buckets:   prometheus.ExponentialBuckets(0.001, 2.0, 13), // 1ms ~ 4.096s
+		Buckets:   prometheus.ExponentialBuckets(0.001, 2.0, 15), // 1ms ~ 16s
 	}, []string{"namespace", "changefeed"})
 
 	// CloudStorageDDLFlushDurationHistogram records DDL flush duration.
 	CloudStorageDDLFlushDurationHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: namespace,
 		Subsystem: subsystem,
-		Name:      "cloud_storage_ddl_flush_duration_seconds",
+		Name:      "cloud_storage_flush_dml_by_ddl_duration_seconds",
 		Help:      "DDL flush duration for cloud storage sink",
-		Buckets:   prometheus.ExponentialBuckets(0.001, 2.0, 13), // 1ms ~ 4.096s
+		Buckets:   prometheus.ExponentialBuckets(0.001, 2.0, 16), // 1ms ~ 16s
 	}, []string{"namespace", "changefeed"})
 
 	// CloudStorageWorkerBusyRatio records the busy ratio of CloudStorage bgUpdateLog worker.
@@ -85,15 +85,6 @@ var (
 		Help:      "Current number of PostEnqueue callbacks waiting in cloud storage spool",
 	}, []string{"namespace", "changefeed"})
 
-	// CloudStorageSpillBytesHistogram records spilled batch sizes.
-	CloudStorageSpillBytesHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
-		Namespace: namespace,
-		Subsystem: subsystem,
-		Name:      "cloud_storage_spill_bytes",
-		Help:      "Byte distribution of encoded batches spilled into cloud storage spool files",
-		Buckets:   prometheus.ExponentialBuckets(1024, 2.0, 20), // 1KiB ~ 512MiB
-	}, []string{"namespace", "changefeed"})
-
 	// CloudStorageLoadBytesHistogram records loaded batch sizes.
 	CloudStorageLoadBytesHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: namespace,
@@ -117,20 +108,6 @@ var (
 		Help:      "Current number of live cloud storage spool segments",
 	}, []string{"namespace", "changefeed"})
 
-	CloudStoragePendingTablesGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Namespace: namespace,
-		Subsystem: subsystem,
-		Name:      "cloud_storage_pending_tables",
-		Help:      "Current number of tables buffered in one cloud storage writer shard",
-	}, []string{"namespace", "changefeed", "writer"})
-
-	CloudStoragePendingEntriesGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Namespace: namespace,
-		Subsystem: subsystem,
-		Name:      "cloud_storage_pending_entries",
-		Help:      "Current number of buffered entries in one cloud storage writer shard",
-	}, []string{"namespace", "changefeed", "writer"})
-
 	CloudStoragePendingBytesGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: namespace,
 		Subsystem: subsystem,
@@ -138,7 +115,7 @@ var (
 		Help:      "Current buffered bytes in one cloud storage writer shard before flush",
 	}, []string{"namespace", "changefeed", "writer"})
 
-	CloudStorageFlushCountCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
+	CloudStorageFlushReasonCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: namespace,
 		Subsystem: subsystem,
 		Name:      "cloud_storage_flush_total",
@@ -156,12 +133,9 @@ func InitCloudStorageMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(CloudStorageSpoolMemoryBytesGauge)
 	registry.MustRegister(CloudStorageSpoolDiskBytesGauge)
 	registry.MustRegister(CloudStoragePendingPostEnqueueGauge)
-	registry.MustRegister(CloudStorageSpillBytesHistogram)
 	registry.MustRegister(CloudStorageLoadBytesHistogram)
 	registry.MustRegister(CloudStorageRotateCountCounter)
 	registry.MustRegister(CloudStorageSpoolSegmentCountGauge)
-	registry.MustRegister(CloudStoragePendingTablesGauge)
-	registry.MustRegister(CloudStoragePendingEntriesGauge)
 	registry.MustRegister(CloudStoragePendingBytesGauge)
-	registry.MustRegister(CloudStorageFlushCountCounter)
+	registry.MustRegister(CloudStorageFlushReasonCounter)
 }

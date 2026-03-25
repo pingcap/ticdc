@@ -51,10 +51,8 @@ type bufferManager struct {
 	enqueueFlushTask func(context.Context, flushTask) error
 	buffer           bufferedTasks
 
-	writerLabel          string
-	metricPendingTables  prometheus.Gauge
-	metricPendingEntries prometheus.Gauge
-	metricPendingBytes   prometheus.Gauge
+	writerLabel        string
+	metricPendingBytes prometheus.Gauge
 }
 
 func newBufferManager(
@@ -70,16 +68,14 @@ func newBufferManager(
 		writerLabel = strconv.Itoa(shardID)
 	)
 	return &bufferManager{
-		changeFeedID:         changefeedID,
-		config:               config,
-		spool:                spoolBuffer,
-		inputCh:              make(chan *task, defaultBufferManagerChannelSize),
-		enqueueFlushTask:     enqueueFlushTask,
-		buffer:               newBufferedTasks(),
-		writerLabel:          writerLabel,
-		metricPendingTables:  metrics.CloudStoragePendingTablesGauge.WithLabelValues(keyspace, name, writerLabel),
-		metricPendingEntries: metrics.CloudStoragePendingEntriesGauge.WithLabelValues(keyspace, name, writerLabel),
-		metricPendingBytes:   metrics.CloudStoragePendingBytesGauge.WithLabelValues(keyspace, name, writerLabel),
+		changeFeedID:       changefeedID,
+		config:             config,
+		spool:              spoolBuffer,
+		inputCh:            make(chan *task, defaultBufferManagerChannelSize),
+		enqueueFlushTask:   enqueueFlushTask,
+		buffer:             newBufferedTasks(),
+		writerLabel:        writerLabel,
+		metricPendingBytes: metrics.CloudStoragePendingBytesGauge.WithLabelValues(keyspace, name, writerLabel),
 	}
 }
 
@@ -200,16 +196,10 @@ func (c *bufferManager) enqueueTask(ctx context.Context, t *task) error {
 }
 
 func (c *bufferManager) updatePendingMetrics() {
-	var (
-		pendingEntries = 0
-		pendingBytes   = uint64(0)
-	)
+	pendingBytes := uint64(0)
 	for _, tableTask := range c.buffer.tables {
-		pendingEntries += len(tableTask.entries)
 		pendingBytes += tableTask.size
 	}
-	c.metricPendingTables.Set(float64(len(c.buffer.tables)))
-	c.metricPendingEntries.Set(float64(pendingEntries))
 	c.metricPendingBytes.Set(float64(pendingBytes))
 }
 
@@ -218,14 +208,12 @@ func (c *bufferManager) deleteMetrics() {
 		keyspace = c.changeFeedID.Keyspace()
 		name     = c.changeFeedID.Name()
 	)
-	metrics.CloudStoragePendingTablesGauge.DeleteLabelValues(keyspace, name, c.writerLabel)
-	metrics.CloudStoragePendingEntriesGauge.DeleteLabelValues(keyspace, name, c.writerLabel)
 	metrics.CloudStoragePendingBytesGauge.DeleteLabelValues(keyspace, name, c.writerLabel)
-	metrics.CloudStorageFlushCountCounter.DeleteLabelValues(keyspace, name, c.writerLabel, flushReasonSize)
-	metrics.CloudStorageFlushCountCounter.DeleteLabelValues(keyspace, name, c.writerLabel, flushReasonInterval)
-	metrics.CloudStorageFlushCountCounter.DeleteLabelValues(keyspace, name, c.writerLabel, flushReasonBarrier)
-	metrics.CloudStorageFlushCountCounter.DeleteLabelValues(keyspace, name, c.writerLabel, flushReasonQuota)
-	metrics.CloudStorageFlushCountCounter.DeleteLabelValues(keyspace, name, c.writerLabel, flushReasonOversize)
+	metrics.CloudStorageFlushReasonCounter.DeleteLabelValues(keyspace, name, c.writerLabel, flushReasonSize)
+	metrics.CloudStorageFlushReasonCounter.DeleteLabelValues(keyspace, name, c.writerLabel, flushReasonInterval)
+	metrics.CloudStorageFlushReasonCounter.DeleteLabelValues(keyspace, name, c.writerLabel, flushReasonBarrier)
+	metrics.CloudStorageFlushReasonCounter.DeleteLabelValues(keyspace, name, c.writerLabel, flushReasonQuota)
+	metrics.CloudStorageFlushReasonCounter.DeleteLabelValues(keyspace, name, c.writerLabel, flushReasonOversize)
 }
 
 type bufferedTasks struct {
@@ -302,7 +290,7 @@ func (c *bufferManager) sendToWriter(ctx context.Context, batch bufferedTasks, r
 	if err := c.enqueueFlushTask(ctx, flushTask{batch: payloads}); err != nil {
 		return err
 	}
-	metrics.CloudStorageFlushCountCounter.WithLabelValues(c.changeFeedID.Keyspace(), c.changeFeedID.Name(), c.writerLabel, reason).Inc()
+	metrics.CloudStorageFlushReasonCounter.WithLabelValues(c.changeFeedID.Keyspace(), c.changeFeedID.Name(), c.writerLabel, reason).Inc()
 	return nil
 }
 
