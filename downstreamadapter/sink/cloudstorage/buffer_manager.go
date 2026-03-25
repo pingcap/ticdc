@@ -106,7 +106,7 @@ func (c *bufferManager) run(ctx context.Context) error {
 						return err
 					}
 				}
-				c.updatePendingMetrics()
+				c.metricPendingBytes.Set(float64(c.buffer.nBytes))
 				if err := c.enqueueFlushTask(ctx, flushTask{marker: task.marker}); err != nil {
 					return err
 				}
@@ -132,7 +132,7 @@ func (c *bufferManager) handleDMLTask(ctx context.Context, task *task) error {
 		}
 		switch action {
 		case spool.EnqueueActionAcceptedOversized:
-			c.buffer.addEntry(task, entry)
+			c.addEntry(task, entry)
 			return c.emitTableBatch(ctx, task.versionedTable, flushReasonOversize)
 		case spool.EnqueueActionWaitDiskQuota:
 			if err := c.emitBatch(ctx, flushReasonQuota); err != nil {
@@ -143,12 +143,12 @@ func (c *bufferManager) handleDMLTask(ctx context.Context, task *task) error {
 			}
 			continue
 		default:
-			c.buffer.addEntry(task, entry)
+			c.addEntry(task, entry)
 		}
 
 		version := task.versionedTable
 		if c.buffer.tables[version].size < uint64(c.config.FileSize) {
-			c.updatePendingMetrics()
+			c.metricPendingBytes.Set(float64(c.buffer.nBytes))
 			return nil
 		}
 		return c.emitTableBatch(ctx, version, flushReasonSize)
@@ -157,7 +157,7 @@ func (c *bufferManager) handleDMLTask(ctx context.Context, task *task) error {
 
 func (c *bufferManager) emitBatch(ctx context.Context, reason string) error {
 	if c.buffer.isEmpty() {
-		c.updatePendingMetrics()
+		c.metricPendingBytes.Set(float64(c.buffer.nBytes))
 		return nil
 	}
 
@@ -166,7 +166,7 @@ func (c *bufferManager) emitBatch(ctx context.Context, reason string) error {
 	}
 
 	c.buffer = newBufferedTasks()
-	c.updatePendingMetrics()
+	c.metricPendingBytes.Set(float64(c.buffer.nBytes))
 	return nil
 }
 
@@ -182,7 +182,7 @@ func (c *bufferManager) emitTableBatch(
 	if err := c.sendToWriter(ctx, tableBatch, reason); err != nil {
 		return err
 	}
-	c.updatePendingMetrics()
+	c.metricPendingBytes.Set(float64(c.buffer.nBytes))
 	return nil
 }
 
@@ -193,14 +193,6 @@ func (c *bufferManager) enqueueTask(ctx context.Context, t *task) error {
 	case c.inputCh <- t:
 		return nil
 	}
-}
-
-func (c *bufferManager) updatePendingMetrics() {
-	pendingBytes := uint64(0)
-	for _, tableTask := range c.buffer.tables {
-		pendingBytes += tableTask.size
-	}
-	c.metricPendingBytes.Set(float64(pendingBytes))
 }
 
 func (c *bufferManager) deleteMetrics() {
@@ -218,6 +210,7 @@ func (c *bufferManager) deleteMetrics() {
 
 type bufferedTasks struct {
 	tables map[cloudstorage.VersionedTableName]*singleTableTask
+	nBytes uint64
 }
 
 type singleTableTask struct {
@@ -248,6 +241,11 @@ func (t *bufferedTasks) addEntry(event *task, entry *spool.Entry) {
 	tableTask := t.tables[table]
 	tableTask.size += entry.FileBytes()
 	tableTask.entries = append(tableTask.entries, entry)
+	t.nBytes += entry.FileBytes()
+}
+
+func (c *bufferManager) addEntry(event *task, entry *spool.Entry) {
+	c.buffer.addEntry(event, entry)
 }
 
 func (t *bufferedTasks) detachByTable(version cloudstorage.VersionedTableName) (bufferedTasks, error) {
@@ -259,9 +257,11 @@ func (t *bufferedTasks) detachByTable(version cloudstorage.VersionedTableName) (
 		)
 	}
 	delete(t.tables, version)
+	t.nBytes -= tableTask.size
 
 	return bufferedTasks{
 		tables: map[cloudstorage.VersionedTableName]*singleTableTask{version: tableTask},
+		nBytes: tableTask.size,
 	}, nil
 }
 
@@ -272,6 +272,8 @@ func (t *bufferedTasks) detachByDispatcher(dispatcherID common.DispatcherID) buf
 			continue
 		}
 		detached.tables[version] = tableTask
+		detached.nBytes += tableTask.size
+		t.nBytes -= tableTask.size
 		delete(t.tables, version)
 	}
 	return detached
