@@ -102,7 +102,7 @@ func (c *bufferManager) run(ctx context.Context) error {
 			if task.isFlushTask() {
 				dispatcherBatch := c.buffer.detachByDispatcher(task.dispatcherID)
 				if !dispatcherBatch.isEmpty() {
-					if err := c.sendToWriter(ctx, dispatcherBatch, flushReasonBarrier); err != nil {
+					if err := c.emitFlushTask(ctx, dispatcherBatch, flushReasonBarrier); err != nil {
 						return err
 					}
 				}
@@ -161,7 +161,7 @@ func (c *bufferManager) emitBatch(ctx context.Context, reason string) error {
 		return nil
 	}
 
-	if err := c.sendToWriter(ctx, c.buffer, reason); err != nil {
+	if err := c.emitFlushTask(ctx, c.buffer, reason); err != nil {
 		return err
 	}
 
@@ -179,7 +179,7 @@ func (c *bufferManager) emitTableBatch(
 	if err != nil {
 		return err
 	}
-	if err := c.sendToWriter(ctx, tableBatch, reason); err != nil {
+	if err := c.emitFlushTask(ctx, tableBatch, reason); err != nil {
 		return err
 	}
 	c.metricPendingBytes.Set(float64(c.buffer.nBytes))
@@ -279,17 +279,20 @@ func (t *tableBatches) detachByDispatcher(dispatcherID common.DispatcherID) tabl
 	return detached
 }
 
-func (c *bufferManager) sendToWriter(ctx context.Context, batch tableBatches, reason string) error {
-	payloads := make(map[cloudstorage.VersionedTableName]*payload, len(batch.tables))
+func (c *bufferManager) emitFlushTask(ctx context.Context, batch tableBatches, reason string) error {
+	batches := make([]tablePayload, 0, len(batch.tables))
 	for table, tableTask := range batch.tables {
 		payload, err := c.buildPayload(tableTask)
 		if err != nil {
 			return err
 		}
-		payloads[table] = payload
+		batches = append(batches, tablePayload{
+			table:   table,
+			payload: payload,
+		})
 	}
 
-	if err := c.enqueueFlushTask(ctx, flushTask{batch: payloads}); err != nil {
+	if err := c.enqueueFlushTask(ctx, flushTask{batches: batches}); err != nil {
 		return err
 	}
 	metrics.CloudStorageFlushReasonCounter.WithLabelValues(c.changeFeedID.Keyspace(), c.changeFeedID.Name(), c.writerLabel, reason).Inc()

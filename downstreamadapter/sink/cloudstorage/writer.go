@@ -58,8 +58,13 @@ type writer struct {
 // flushTask is internal and never crosses component boundary.
 // marker task and data batch are mutually exclusive in normal flow.
 type flushTask struct {
-	batch  map[cloudstorage.VersionedTableName]*payload
-	marker *flushMarker
+	batches []tablePayload
+	marker  *flushMarker
+}
+
+type tablePayload struct {
+	table   cloudstorage.VersionedTableName
+	payload *payload
 }
 
 type payload struct {
@@ -139,12 +144,14 @@ func (d *writer) flushMessages(ctx context.Context) error {
 				task.marker.finish()
 				continue
 			}
-			if len(task.batch) == 0 {
+			if len(task.batches) == 0 {
 				continue
 			}
 
 			start := time.Now()
-			for table, payload := range task.batch {
+			for _, batch := range task.batches {
+				table := batch.table
+				payload := batch.payload
 				if payload == nil || len(payload.entries) == 0 {
 					continue
 				}
