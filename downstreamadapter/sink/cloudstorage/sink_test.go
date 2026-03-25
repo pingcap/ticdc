@@ -230,14 +230,14 @@ func TestWriteDDLEventWithTableIDAsPath(t *testing.T) {
 
 	tableInfo := common.WrapTableInfo("test", &timodel.TableInfo{
 		ID:   20,
-		Name: ast.NewCIStr("table1"),
+		Name: parser_model.NewCIStr("table1"),
 		Columns: []*timodel.ColumnInfo{
 			{
-				Name:      ast.NewCIStr("col1"),
+				Name:      parser_model.NewCIStr("col1"),
 				FieldType: *types.NewFieldType(mysql.TypeLong),
 			},
 			{
-				Name:      ast.NewCIStr("col2"),
+				Name:      parser_model.NewCIStr("col2"),
 				FieldType: *types.NewFieldType(mysql.TypeVarchar),
 			},
 		},
@@ -333,10 +333,10 @@ func TestWriteDDLEventWithInvalidExchangePartitionEvent(t *testing.T) {
 
 	tableInfo := common.WrapTableInfo("test", &timodel.TableInfo{
 		ID:   20,
-		Name: ast.NewCIStr("table1"),
+		Name: parser_model.NewCIStr("table1"),
 		Columns: []*timodel.ColumnInfo{
 			{
-				Name:      ast.NewCIStr("col1"),
+				Name:      parser_model.NewCIStr("col1"),
 				FieldType: *types.NewFieldType(mysql.TypeLong),
 			},
 		},
