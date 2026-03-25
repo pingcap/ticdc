@@ -37,6 +37,8 @@ type quotaController struct {
 	metricMemoryBytes        prometheus.Gauge
 	metricDiskBytes          prometheus.Gauge
 	metricPendingPostEnqueue prometheus.Gauge
+	metricDiskQuotaWaiters   prometheus.Gauge
+	metricDiskQuotaWait      prometheus.Observer
 
 	keyspace   string
 	changefeed string
@@ -61,8 +63,11 @@ func newQuotaController(
 		metricMemoryBytes:        metrics.CloudStorageSpoolMemoryBytesGauge.WithLabelValues(keyspace, changefeed),
 		metricDiskBytes:          metrics.CloudStorageSpoolDiskBytesGauge.WithLabelValues(keyspace, changefeed),
 		metricPendingPostEnqueue: metrics.CloudStoragePendingPostEnqueueGauge.WithLabelValues(keyspace, changefeed),
+		metricDiskQuotaWaiters:   metrics.CloudStorageSpoolDiskQuotaWaitersGauge.WithLabelValues(keyspace, changefeed),
+		metricDiskQuotaWait:      metrics.CloudStorageSpoolDiskQuotaWaitDurationHistogram.WithLabelValues(keyspace, changefeed),
 		waiters:                  make(map[uint64]chan struct{}),
 	}
+	controller.metricDiskQuotaWaiters.Set(0)
 	return controller
 }
 
@@ -86,12 +91,14 @@ func (q *quotaController) addDiskQuotaWaiter() (uint64, <-chan struct{}) {
 	waiterID := q.nextWaiterID
 	waitCh := make(chan struct{}, 1)
 	q.waiters[waiterID] = waitCh
+	q.metricDiskQuotaWaiters.Set(float64(len(q.waiters)))
 	return waiterID, waitCh
 }
 
 func (q *quotaController) removeDiskQuotaWaiter(waiterID uint64) {
 	q.waitersMu.Lock()
 	delete(q.waiters, waiterID)
+	q.metricDiskQuotaWaiters.Set(float64(len(q.waiters)))
 	q.waitersMu.Unlock()
 }
 
@@ -147,6 +154,8 @@ func (q *quotaController) deleteMetrics() {
 	metrics.CloudStorageSpoolMemoryBytesGauge.DeleteLabelValues(q.keyspace, q.changefeed)
 	metrics.CloudStorageSpoolDiskBytesGauge.DeleteLabelValues(q.keyspace, q.changefeed)
 	metrics.CloudStoragePendingPostEnqueueGauge.DeleteLabelValues(q.keyspace, q.changefeed)
+	metrics.CloudStorageSpoolDiskQuotaWaitersGauge.DeleteLabelValues(q.keyspace, q.changefeed)
+	metrics.CloudStorageSpoolDiskQuotaWaitDurationHistogram.DeleteLabelValues(q.keyspace, q.changefeed)
 }
 
 func (q *quotaController) updateMetrics() {
@@ -162,6 +171,7 @@ func (q *quotaController) wakeDiskQuotaWaiters() {
 		waiters = append(waiters, waitCh)
 	}
 	q.waiters = make(map[uint64]chan struct{})
+	q.metricDiskQuotaWaiters.Set(0)
 	q.waitersMu.Unlock()
 
 	for _, waitCh := range waiters {

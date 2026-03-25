@@ -86,6 +86,21 @@ var (
 		Help:      "Current number of PostEnqueue callbacks waiting in cloud storage spool",
 	}, []string{"namespace", "changefeed"})
 
+	CloudStorageSpoolDiskQuotaWaitDurationHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: namespace,
+		Subsystem: subsystem,
+		Name:      "cloud_storage_spool_disk_quota_wait_duration_seconds",
+		Help:      "Wait duration for cloud storage spool disk quota",
+		Buckets:   prometheus.ExponentialBuckets(0.001, 2.0, 16), // 1ms ~ 32s
+	}, []string{"namespace", "changefeed"})
+
+	CloudStorageSpoolDiskQuotaWaitersGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: namespace,
+		Subsystem: subsystem,
+		Name:      "cloud_storage_spool_disk_quota_waiters",
+		Help:      "Current number of waiters blocked by cloud storage spool disk quota",
+	}, []string{"namespace", "changefeed"})
+
 	// CloudStorageLoadBytesHistogram records loaded batch sizes.
 	CloudStorageLoadBytesHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: namespace,
@@ -134,6 +149,8 @@ func InitCloudStorageMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(CloudStorageSpoolMemoryBytesGauge)
 	registry.MustRegister(CloudStorageSpoolDiskBytesGauge)
 	registry.MustRegister(CloudStoragePendingPostEnqueueGauge)
+	registry.MustRegister(CloudStorageSpoolDiskQuotaWaitDurationHistogram)
+	registry.MustRegister(CloudStorageSpoolDiskQuotaWaitersGauge)
 	registry.MustRegister(CloudStorageLoadBytesHistogram)
 	registry.MustRegister(CloudStorageRotateCountCounter)
 	registry.MustRegister(CloudStorageSpoolSegmentCountGauge)

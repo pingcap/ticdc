@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
@@ -442,6 +443,10 @@ func (s *Spool) WaitForDiskQuota(ctx context.Context, msgs []*common.Message) er
 		return nil
 	}
 
+	start := time.Now()
+	defer func() {
+		s.quota.metricDiskQuotaWait.Observe(time.Since(start).Seconds())
+	}()
 	for {
 		s.mu.Lock()
 		if s.closed.Load() {
