@@ -17,6 +17,7 @@ CUR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source $CUR/../_utils/test_prepare
 WORK_DIR=$OUT_DIR/$TEST_NAME
 CDC_BINARY=cdc.test
+SINK_TYPE=$1
 MAX_RETRIES=20
 
 CDC_ADDRS=("127.0.0.1:8300" "127.0.0.1:8301")
