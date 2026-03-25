@@ -6,14 +6,12 @@ set -eu
 # migration.
 #
 # Steps:
-# 1. Start two TiCDC nodes and create a blackhole changefeed.
+# 1. Start two TiCDC nodes and create a changefeed.
 # 2. Trigger one real scheduling by moving a table from the current maintainer node
 #    to the other node.
 # 3. Kill the current maintainer so the surviving node becomes the new maintainer.
 # 4. Enable a one-shot failpoint on the surviving node so its first bootstrap fails
 #    while loading tables from schema store.
-# 5. Restart the old node and verify the cluster stays healthy while the changefeed
-#    transitions to failed with ErrSnapshotLostByGC.
 
 CUR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source $CUR/../_utils/test_prepare
