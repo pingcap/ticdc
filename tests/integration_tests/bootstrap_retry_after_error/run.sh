@@ -32,7 +32,7 @@ function get_maintainer_addr() {
 function wait_for_maintainer_addr() {
 	local api_addr=$1
 	local maintainer_addr=""
-	for ((i = 0; i <60; i++)); do
+	for ((i = 0; i < 60; i++)); do
 		maintainer_addr=$(get_maintainer_addr "$api_addr")
 		if [ -n "$maintainer_addr" ] && [ "$maintainer_addr" != "null" ]; then
 			echo "$maintainer_addr"
