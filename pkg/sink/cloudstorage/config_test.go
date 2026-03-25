@@ -21,7 +21,7 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/pingcap/ticdc/pkg/config"
-	configerrors "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
 
@@ -234,7 +234,7 @@ func TestInvalidSpoolBaseDirConfig(t *testing.T) {
 	cfg := NewConfig()
 	err = cfg.Apply(context.Background(), sinkURI, config.GetDefaultReplicaConfig().Sink, true)
 	require.Error(t, err)
-	require.True(t, configerrors.ErrStorageSinkInvalidConfig.Equal(err))
+	require.True(t, errors.ErrStorageSinkInvalidConfig.Equal(err))
 
 	sinkURI, err = url.Parse("s3://bucket/prefix")
 	require.NoError(t, err)
@@ -247,5 +247,5 @@ func TestInvalidSpoolBaseDirConfig(t *testing.T) {
 	cfg = NewConfig()
 	err = cfg.Apply(context.Background(), sinkURI, replicaConfig.Sink, true)
 	require.Error(t, err)
-	require.True(t, configerrors.ErrStorageSinkInvalidConfig.Equal(err))
+	require.True(t, errors.ErrStorageSinkInvalidConfig.Equal(err))
 }

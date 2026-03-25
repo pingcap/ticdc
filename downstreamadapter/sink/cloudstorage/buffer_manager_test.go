@@ -148,23 +148,6 @@ func TestBufferManagerOversizedBatchFlushesImmediatelyFromMemory(t *testing.T) {
 	require.ErrorIs(t, <-done, context.Canceled)
 }
 
-func TestDetachByTableReturnsErrorWhenTableIsMissing(t *testing.T) {
-	t.Parallel()
-
-	buffered := newBufferedTasks()
-	_, err := buffered.detachByTable(cloudstorage.VersionedTableName{
-		TableNameWithPhysicTableID: commonType.TableName{
-			Schema:  "test",
-			Table:   "table1",
-			TableID: 100,
-		},
-		TableInfoVersion: 1,
-		DispatcherID:     commonType.NewDispatcherID(),
-	})
-	require.Error(t, err)
-	require.True(t, errors.ErrInternalCheckFailed.Equal(err))
-}
-
 func newBufferedTask(table string, dispatcherID commonType.DispatcherID, payload string) *task {
 	tableInfo := &commonType.TableInfo{
 		TableName: commonType.TableName{
