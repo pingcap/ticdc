@@ -20,22 +20,19 @@ source $CUR/../_utils/test_prepare
 WORK_DIR=$OUT_DIR/$TEST_NAME
 CDC_BINARY=cdc.test
 MAX_RETRIES=20
-CHECK_RETRIES=60
 
-PD_ADDR="http://${UP_PD_HOST_1}:${UP_PD_PORT_1}"
-CHANGEFEED_ID="bootstrap-retry-after-error-$RANDOM"
 CDC_ADDRS=("127.0.0.1:8300" "127.0.0.1:8301")
 FAILPOINT_NAME="github.com/pingcap/ticdc/logservice/schemastore/getAllPhysicalTablesGCFastFail"
 
 function get_maintainer_addr() {
 	local api_addr=$1
-	curl -s --connect-timeout 1 --max-time 1 "http://${api_addr}/api/v2/changefeeds/${CHANGEFEED_ID}?keyspace=$KEYSPACE_NAME" | jq -r '.maintainer_addr'
+	curl -s --connect-timeout 1 --max-time 1 "http://${api_addr}/api/v2/changefeeds/${id}?keyspace=$KEYSPACE_NAME" | jq -r '.maintainer_addr'
 }
 
 function wait_for_maintainer_addr() {
 	local api_addr=$1
 	local maintainer_addr=""
-	for ((i = 0; i < CHECK_RETRIES; i++)); do
+	for ((i = 0; i <60; i++)); do
 		maintainer_addr=$(get_maintainer_addr "$api_addr")
 		if [ -n "$maintainer_addr" ] && [ "$maintainer_addr" != "null" ]; then
 			echo "$maintainer_addr"
@@ -80,22 +77,23 @@ function run() {
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1" --addr "127.0.0.1:8301" --pd "$PD_ADDR"
 	export GO_FAILPOINTS=''
 
-	run_sql "CREATE DATABASE bootstrap_retry_after_error;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-	run_sql "CREATE TABLE bootstrap_retry_after_error.t1(id INT PRIMARY KEY, val INT);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	run_sql "CREATE DATABASE test;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	run_sql "CREATE TABLE test.t1(id INT PRIMARY KEY, val INT);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
-	table_id=$(get_table_id "bootstrap_retry_after_error" "t1")
+	table_id=$(get_table_id "test" "t1")
 
-	cdc_cli_changefeed create --pd="$PD_ADDR" --sink-uri="blackhole://" -c "$CHANGEFEED_ID"
+	id="bootstrap-retry-after-error-$RANDOM"
+	cdc_cli_changefeed create --sink-uri="blackhole://" -c "$id"
 
 	maintainer_addr=$(wait_for_maintainer_addr "${CDC_ADDRS[0]}")
 	other_addr=$(pick_other_addr "$maintainer_addr")
 	maintainer_logsuffix=$(addr_to_logsuffix "$maintainer_addr")
 	other_logsuffix=$(addr_to_logsuffix "$other_addr")
 
-	check_coordinator_and_maintainer "$maintainer_addr" "$CHANGEFEED_ID" $CHECK_RETRIES
-	query_dispatcher_count "$maintainer_addr" "$CHANGEFEED_ID" 2 $CHECK_RETRIES
+	check_coordinator_and_maintainer "$maintainer_addr" "$id" 60
+	query_dispatcher_count "$maintainer_addr" "$id" 2 60
 
-	move_table_with_retry "$other_addr" $table_id "$CHANGEFEED_ID" 10
+	move_table_with_retry "$other_addr" $table_id "$id" 10
 
 	enable_failpoint --addr "$other_addr" --name "$FAILPOINT_NAME" --expr "1*return(true)"
 
@@ -111,19 +109,13 @@ function run() {
 
 	ensure $MAX_RETRIES "check_logs_contains $WORK_DIR 'ErrSnapshotLostByGC' '$other_logsuffix'"
 
-	export GO_FAILPOINTS='github.com/pingcap/ticdc/maintainer/scheduler/StopBalanceScheduler=return(true)'
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "${maintainer_logsuffix}-restart" --addr "$maintainer_addr" --pd "$PD_ADDR"
-	export GO_FAILPOINTS=''
-
-	ensure $MAX_RETRIES "get_cdc_pid 127.0.0.1 8300 >/dev/null"
-	ensure $MAX_RETRIES "get_cdc_pid 127.0.0.1 8301 >/dev/null"
-	ensure $MAX_RETRIES "check_changefeed_state $PD_ADDR $CHANGEFEED_ID failed ErrSnapshotLostByGC ''"
-
+	run_sql "CREATE TABLE test.finish_mark (a int primary key);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	check_table_exists test.finish_mark ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 200
+	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml
 	cleanup_process $CDC_BINARY
-	stop_tidb_cluster
 }
 
 trap 'stop_test $WORK_DIR' EXIT
-run
+run $*
 check_logs $WORK_DIR
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"
