@@ -135,9 +135,11 @@ func (l *memoryLogWriter) asyncWriteEvents(ctx context.Context, events ...writer
 func (l *memoryLogWriter) Close() error {
 	if l.cancel != nil {
 		l.cancel()
+		l.cancel = nil
 	}
 	if l.storage != nil {
 		l.storage.Close()
+		l.storage = nil
 	}
 	return nil
 }
