@@ -310,7 +310,7 @@ func (c *bufferManager) buildPayload(task *singleTableTask) (*payload, error) {
 	var (
 		buf                bytes.Buffer
 		rowsCount          int
-		bytesCount         int64
+		nBytes             int64
 		postFlushCallbacks []func()
 	)
 	buf.Grow(int(task.size))
@@ -324,9 +324,9 @@ func (c *bufferManager) buildPayload(task *singleTableTask) (*payload, error) {
 		for _, msg := range msgs {
 			if msg.Key != nil && rowsCount == 0 {
 				buf.Write(msg.Key)
-				bytesCount += int64(len(msg.Key))
+				nBytes += int64(len(msg.Key))
 			}
-			bytesCount += int64(len(msg.Value))
+			nBytes += int64(len(msg.Value))
 			rowsCount += msg.GetRowsCount()
 			buf.Write(msg.Value)
 		}
@@ -336,7 +336,7 @@ func (c *bufferManager) buildPayload(task *singleTableTask) (*payload, error) {
 		tableInfo:          task.tableInfo,
 		data:               buf.Bytes(),
 		rowsCount:          rowsCount,
-		bytesCount:         bytesCount,
+		nBytes:             nBytes,
 		entries:            task.entries,
 		postFlushCallbacks: postFlushCallbacks,
 	}, nil
