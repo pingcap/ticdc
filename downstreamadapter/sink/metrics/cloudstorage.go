@@ -47,11 +47,11 @@ var (
 		Buckets:   prometheus.ExponentialBuckets(0.001, 2.0, 15), // 1ms ~ 16s
 	}, []string{"namespace", "changefeed"})
 
-	// CloudStorageDDLFlushDurationHistogram records DDL flush duration.
-	CloudStorageDDLFlushDurationHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+	// CloudStorageDDLFlushDMLDurationHistogram records DDL flush duration.
+	CloudStorageDDLFlushDMLDurationHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: namespace,
 		Subsystem: subsystem,
-		Name:      "cloud_storage_flush_dml_by_ddl_duration_seconds",
+		Name:      "cloud_storage_ddl_flush_dml_duration_seconds",
 		Help:      "DDL flush duration for cloud storage sink",
 		Buckets:   prometheus.ExponentialBuckets(0.001, 2.0, 16), // 1ms ~ 32s
 	}, []string{"namespace", "changefeed"})
@@ -144,7 +144,7 @@ func InitCloudStorageMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(CloudStorageWriteBytesHist)
 	registry.MustRegister(CloudStorageFileCounter)
 	registry.MustRegister(CloudStorageFlushDurationHistogram)
-	registry.MustRegister(CloudStorageDDLFlushDurationHistogram)
+	registry.MustRegister(CloudStorageDDLFlushDMLDurationHistogram)
 	registry.MustRegister(CloudStorageWorkerBusyRatio)
 	registry.MustRegister(CloudStorageSpoolMemoryBytesGauge)
 	registry.MustRegister(CloudStorageSpoolDiskBytesGauge)
