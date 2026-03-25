@@ -29,6 +29,12 @@ const (
 	serializedMessageHeaderBytes = 12
 )
 
+type serializedMessageReader struct {
+	data      []byte
+	offset    int
+	remaining uint32
+}
+
 func serializedMessagesSize(msgs []*common.Message) int {
 	size := serializedMessageCountBytes
 	for _, msg := range msgs {
@@ -63,7 +69,7 @@ func serializeMessages(msgs []*common.Message) []byte {
 	return data
 }
 
-func deserializeMessages(data []byte) ([]*common.Message, error) {
+func newSerializedMessageReader(data []byte) (*serializedMessageReader, error) {
 	if len(data) < serializedMessageCountBytes {
 		return nil, errors.WrapError(errors.ErrDecodeFailed, io.ErrUnexpectedEOF)
 	}
@@ -84,39 +90,41 @@ func deserializeMessages(data []byte) ([]*common.Message, error) {
 			len(data),
 		)
 	}
+	return &serializedMessageReader{
+		data:      data,
+		offset:    offset,
+		remaining: count,
+	}, nil
+}
 
-	result := make([]*common.Message, 0, count)
-	for range count {
-		if len(data[offset:]) < serializedMessageHeaderBytes {
-			return nil, errors.WrapError(errors.ErrDecodeFailed, io.ErrUnexpectedEOF)
-		}
-
-		keyLen := int(binary.LittleEndian.Uint32(data[offset:]))
-		offset += 4
-		valueLen := int(binary.LittleEndian.Uint32(data[offset:]))
-		offset += 4
-		rowCount := binary.LittleEndian.Uint32(data[offset:])
-		offset += 4
-
-		totalLen := keyLen + valueLen
-		if len(data[offset:]) < totalLen {
-			return nil, errors.WrapError(errors.ErrDecodeFailed, io.ErrUnexpectedEOF)
-		}
-
-		key := data[offset : offset+keyLen]
-		offset += keyLen
-		value := data[offset : offset+valueLen]
-		offset += valueLen
-
-		if keyLen == 0 {
-			key = nil
-		}
-		msg := &common.Message{
-			Key:   key,
-			Value: value,
-		}
-		msg.SetRowsCount(int(rowCount))
-		result = append(result, msg)
+func (r *serializedMessageReader) next() (key, value []byte, rowCount int, ok bool, err error) {
+	if r.remaining == 0 {
+		return nil, nil, 0, false, nil
 	}
-	return result, nil
+	if len(r.data[r.offset:]) < serializedMessageHeaderBytes {
+		return nil, nil, 0, false, errors.WrapError(errors.ErrDecodeFailed, io.ErrUnexpectedEOF)
+	}
+
+	keyLen := int(binary.LittleEndian.Uint32(r.data[r.offset:]))
+	r.offset += 4
+	valueLen := int(binary.LittleEndian.Uint32(r.data[r.offset:]))
+	r.offset += 4
+	rowCount = int(binary.LittleEndian.Uint32(r.data[r.offset:]))
+	r.offset += 4
+
+	totalLen := keyLen + valueLen
+	if len(r.data[r.offset:]) < totalLen {
+		return nil, nil, 0, false, errors.WrapError(errors.ErrDecodeFailed, io.ErrUnexpectedEOF)
+	}
+
+	key = r.data[r.offset : r.offset+keyLen]
+	r.offset += keyLen
+	value = r.data[r.offset : r.offset+valueLen]
+	r.offset += valueLen
+	r.remaining--
+
+	if keyLen == 0 {
+		key = nil
+	}
+	return key, value, rowCount, true, nil
 }

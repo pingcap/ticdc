@@ -22,7 +22,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestSerializeDeserializeMessagesRoundTrip(t *testing.T) {
+func TestSerializedMessageReaderRoundTrip(t *testing.T) {
 	t.Parallel()
 
 	msgs := []*common.Message{
@@ -34,28 +34,42 @@ func TestSerializeDeserializeMessagesRoundTrip(t *testing.T) {
 
 	data := serializeMessages(msgs)
 
-	decoded, err := deserializeMessages(data)
+	reader, err := newSerializedMessageReader(data)
 	require.NoError(t, err)
-	require.Len(t, decoded, 2)
-	require.Equal(t, []byte("header"), decoded[0].Key)
-	require.Equal(t, []byte("value-1"), decoded[0].Value)
-	require.Equal(t, 1, decoded[0].GetRowsCount())
-	require.Nil(t, decoded[1].Key)
-	require.Equal(t, []byte("value-2"), decoded[1].Value)
-	require.Equal(t, 2, decoded[1].GetRowsCount())
+
+	key, value, rowCount, ok, err := reader.next()
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, []byte("header"), key)
+	require.Equal(t, []byte("value-1"), value)
+	require.Equal(t, 1, rowCount)
+
+	key, value, rowCount, ok, err = reader.next()
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Nil(t, key)
+	require.Equal(t, []byte("value-2"), value)
+	require.Equal(t, 2, rowCount)
+
+	key, value, rowCount, ok, err = reader.next()
+	require.NoError(t, err)
+	require.False(t, ok)
+	require.Nil(t, key)
+	require.Nil(t, value)
+	require.Zero(t, rowCount)
 }
 
-func TestDeserializeMessagesRejectsImpossibleCount(t *testing.T) {
+func TestSerializedMessageReaderRejectsImpossibleCount(t *testing.T) {
 	t.Parallel()
 
 	// A payload that only contains the batch count cannot possibly hold one full
-	// serialized message header, so deserializeMessages should reject it before
+	// serialized message header, so newSerializedMessageReader should reject it before
 	// trying to allocate based on the claimed count.
 	data := make([]byte, serializedMessageCountBytes)
 	binary.LittleEndian.PutUint32(data, 1)
 
-	decoded, err := deserializeMessages(data)
-	require.Nil(t, decoded)
+	reader, err := newSerializedMessageReader(data)
+	require.Nil(t, reader)
 	require.Error(t, err)
 	require.True(t, errors.ErrDecodeFailed.Equal(err))
 	require.ErrorContains(t, err, "message count")

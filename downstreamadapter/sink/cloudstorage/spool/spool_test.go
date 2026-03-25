@@ -112,14 +112,84 @@ func TestSpillAndReadBack(t *testing.T) {
 	require.False(t, entry.InMemory())
 	require.Equal(t, uint64(len(msg.Value)), entry.FileBytes())
 
-	msgs, postFlushCallbacks, err := manager.Load(entry)
+	reader, err := manager.NewMessageReader(entry)
 	require.NoError(t, err)
+	var msgs []*common.Message
+	for {
+		key, value, rowCount, ok, err := reader.Next()
+		require.NoError(t, err)
+		if !ok {
+			break
+		}
+		readMsg := &common.Message{
+			Key:   key,
+			Value: value,
+		}
+		readMsg.SetRowsCount(rowCount)
+		msgs = append(msgs, readMsg)
+	}
+	postFlushCallbacks := reader.PostFlushCallbacks()
 	require.Len(t, postFlushCallbacks, 0)
 	require.Len(t, msgs, 1)
 	require.Equal(t, []byte("hello-spool"), msgs[0].Value)
 	require.Equal(t, 3, msgs[0].GetRowsCount())
 
 	manager.Release(entry)
+}
+
+func TestMessageReaderIteratesSpilledEntry(t *testing.T) {
+	t.Parallel()
+
+	changefeedID := commonType.NewChangefeedID4Test("test", "spool")
+	manager, err := New(
+		changefeedID,
+		WithDiskQuotaBytes(64),
+		WithRootDir(t.TempDir()),
+		WithSegmentBytes(1<<20),
+		WithMemoryRatio(0.01),
+	)
+	require.NoError(t, err)
+	defer manager.Close()
+
+	var callbackCount atomic.Int64
+	msg1 := common.NewMsg([]byte("header"), []byte("value-1"))
+	msg1.SetRowsCount(2)
+	msg1.Callback = func() { callbackCount.Add(1) }
+	msg2 := common.NewMsg(nil, []byte("value-2"))
+	msg2.SetRowsCount(3)
+	msg2.Callback = func() { callbackCount.Add(1) }
+
+	entry, err := manager.Enqueue([]*common.Message{msg1, msg2}, nil)
+	require.NoError(t, err)
+	require.True(t, entry.IsSpilled())
+
+	var (
+		keys      [][]byte
+		values    [][]byte
+		rowsCount []int
+	)
+	reader, err := manager.NewMessageReader(entry)
+	require.NoError(t, err)
+	for {
+		key, value, rowCount, ok, err := reader.Next()
+		require.NoError(t, err)
+		if !ok {
+			break
+		}
+		keys = append(keys, append([]byte(nil), key...))
+		values = append(values, append([]byte(nil), value...))
+		rowsCount = append(rowsCount, rowCount)
+	}
+	postFlushCallbacks := reader.PostFlushCallbacks()
+	require.Len(t, postFlushCallbacks, 2)
+	require.Equal(t, [][]byte{[]byte("header"), nil}, keys)
+	require.Equal(t, [][]byte{[]byte("value-1"), []byte("value-2")}, values)
+	require.Equal(t, []int{2, 3}, rowsCount)
+
+	for _, postFlushCallback := range postFlushCallbacks {
+		postFlushCallback()
+	}
+	require.Equal(t, int64(2), callbackCount.Load())
 }
 
 func TestNewUsesDefaultOptionsWhenValuesAreMissing(t *testing.T) {
@@ -345,8 +415,22 @@ func TestExternalRootDirDeletionReturnsErrorWhenNewSegmentIsNeeded(t *testing.T)
 
 	// Removing the directory is not immediately fatal if the existing spilled
 	// entry is still readable through the open segment file handle.
-	firstMsgs, _, err := manager.Load(firstEntry)
+	reader, err := manager.NewMessageReader(firstEntry)
 	require.NoError(t, err)
+	var firstMsgs []*common.Message
+	for {
+		key, value, rowCount, ok, err := reader.Next()
+		require.NoError(t, err)
+		if !ok {
+			break
+		}
+		readMsg := &common.Message{
+			Key:   key,
+			Value: value,
+		}
+		readMsg.SetRowsCount(rowCount)
+		firstMsgs = append(firstMsgs, readMsg)
+	}
 	require.Len(t, firstMsgs, 1)
 	require.Equal(t, []byte("first-spilled-entry"), firstMsgs[0].Value)
 
@@ -388,9 +472,8 @@ func TestExternalSegmentDamageReturnsErrorOnLoad(t *testing.T) {
 	segmentPath := filepath.Join(manager.workDir, "segment-000001.log")
 	require.NoError(t, os.Truncate(segmentPath, 0))
 
-	msgs, postFlushCallbacks, err := manager.Load(entry)
-	require.Nil(t, msgs)
-	require.Nil(t, postFlushCallbacks)
+	reader, err := manager.NewMessageReader(entry)
+	require.Nil(t, reader)
 	require.Error(t, err)
 	rfcCode, ok := errors.RFCCode(err)
 	require.True(t, ok)

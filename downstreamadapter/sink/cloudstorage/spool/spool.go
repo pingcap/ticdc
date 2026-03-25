@@ -530,26 +530,59 @@ func detachPostFlushCallbacks(msgs []*common.Message) []func() {
 	return postFlushCallbacks
 }
 
-// Load fetches messages from memory or spilled segments.
-// If external damage has already made spilled bytes unreadable, Load returns
-// an error immediately because spool can no longer guarantee those pending
-// bytes are still recoverable for flush.
-func (s *Spool) Load(entry *Entry) ([]*common.Message, []func(), error) {
+type MessageReader struct {
+	memoryMsgs         []*common.Message
+	memoryIndex        int
+	serializedReader   *serializedMessageReader
+	postFlushCallbacks []func()
+}
+
+func (r *MessageReader) Next() (key, value []byte, rowCount int, ok bool, err error) {
+	if r == nil {
+		return nil, nil, 0, false, nil
+	}
+	if r.memoryMsgs != nil {
+		if r.memoryIndex >= len(r.memoryMsgs) {
+			return nil, nil, 0, false, nil
+		}
+		msg := r.memoryMsgs[r.memoryIndex]
+		r.memoryIndex++
+		return msg.Key, msg.Value, msg.GetRowsCount(), true, nil
+	}
+	if r.serializedReader == nil {
+		return nil, nil, 0, false, nil
+	}
+	return r.serializedReader.next()
+}
+
+func (r *MessageReader) PostFlushCallbacks() []func() {
+	if r == nil {
+		return nil
+	}
+	return r.postFlushCallbacks
+}
+
+func (s *Spool) NewMessageReader(entry *Entry) (*MessageReader, error) {
 	if entry == nil {
-		return nil, nil, nil
+		return &MessageReader{}, nil
 	}
 	if entry.memoryMsgs != nil {
-		return entry.memoryMsgs, entry.postFlushCallbacks, nil
+		return &MessageReader{
+			memoryMsgs:         entry.memoryMsgs,
+			postFlushCallbacks: entry.postFlushCallbacks,
+		}, nil
 	}
 	if entry.location == nil {
-		return nil, entry.postFlushCallbacks, nil
+		return &MessageReader{
+			postFlushCallbacks: entry.postFlushCallbacks,
+		}, nil
 	}
 
 	s.mu.Lock()
 	spoolSegment := s.segments[entry.location.id]
 	if spoolSegment == nil {
 		s.mu.Unlock()
-		return nil, nil, errors.ErrInternalCheckFailed.GenWithStack(
+		return nil, errors.ErrInternalCheckFailed.GenWithStack(
 			"spool segment %d not found",
 			entry.location.id,
 		)
@@ -561,14 +594,17 @@ func (s *Spool) Load(entry *Entry) ([]*common.Message, []func(), error) {
 
 	buf := make([]byte, length)
 	if _, err := file.ReadAt(buf, offset); err != nil {
-		return nil, nil, errors.WrapError(errors.ErrUnexpected, err, "read spool segment file")
+		return nil, errors.WrapError(errors.ErrUnexpected, err, "read spool segment file")
 	}
-	msgs, err := deserializeMessages(buf)
+	reader, err := newSerializedMessageReader(buf)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	s.metricLoadedBytes.Observe(float64(length))
-	return msgs, entry.postFlushCallbacks, nil
+	return &MessageReader{
+		serializedReader:   reader,
+		postFlushCallbacks: entry.postFlushCallbacks,
+	}, nil
 }
 
 // Release releases memory or spilled bytes held by an entry.
