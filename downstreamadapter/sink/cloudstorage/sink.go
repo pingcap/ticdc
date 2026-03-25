@@ -428,6 +428,7 @@ func (s *sink) genCleanupJob(ctx context.Context, uri *url.URL) []func() {
 					zap.String("changefeedID", s.changefeedID.Name()))
 				return
 			}
+			defer isRemoveEmptyDirsRunning.Store(false)
 
 			checkpointTs := s.lastCheckpointTs.Load()
 			start := time.Now()

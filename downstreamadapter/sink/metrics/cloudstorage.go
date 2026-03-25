@@ -53,7 +53,7 @@ var (
 		Subsystem: subsystem,
 		Name:      "cloud_storage_flush_dml_by_ddl_duration_seconds",
 		Help:      "DDL flush duration for cloud storage sink",
-		Buckets:   prometheus.ExponentialBuckets(0.001, 2.0, 16), // 1ms ~ 16s
+		Buckets:   prometheus.ExponentialBuckets(0.001, 2.0, 16), // 1ms ~ 32s
 	}, []string{"namespace", "changefeed"})
 
 	// CloudStorageWorkerBusyRatio records the busy ratio of CloudStorage bgUpdateLog worker.

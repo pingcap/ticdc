@@ -19,6 +19,7 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -550,4 +551,34 @@ func TestCleanupExpiredFiles(t *testing.T) {
 
 	time.Sleep(5 * time.Second)
 	require.LessOrEqual(t, int64(1), count.Load())
+}
+
+func TestRemoveEmptyDirsCleanupJobCanRunMultipleTimes(t *testing.T) {
+	parentDir := t.TempDir()
+	uri := fmt.Sprintf("file:///%s?protocol=csv", parentDir)
+	sinkURI, err := url.Parse(uri)
+	require.NoError(t, err)
+
+	replicaConfig := config.GetDefaultReplicaConfig()
+	err = replicaConfig.ValidateAndAdjust(sinkURI)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	cloudStorageSink, err := newSinkForTest(ctx, replicaConfig, sinkURI, nil)
+	require.NoError(t, err)
+
+	cleanupJobs := cloudStorageSink.genCleanupJob(ctx, sinkURI)
+	require.NotEmpty(t, cleanupJobs)
+
+	firstEmptyDir := filepath.Join(parentDir, "first")
+	require.NoError(t, os.MkdirAll(firstEmptyDir, 0o755))
+	cleanupJobs[0]()
+	_, err = os.Stat(firstEmptyDir)
+	require.ErrorIs(t, err, os.ErrNotExist)
+
+	secondEmptyDir := filepath.Join(parentDir, "second")
+	require.NoError(t, os.MkdirAll(secondEmptyDir, 0o755))
+	cleanupJobs[0]()
+	_, err = os.Stat(secondEmptyDir)
+	require.ErrorIs(t, err, os.ErrNotExist)
 }
