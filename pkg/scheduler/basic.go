@@ -80,10 +80,11 @@ func BasicScheduleWithTwin[T replica.ReplicationID, R replica.Replication[T]](
 	taskSize := 0
 	for _, cf := range absent {
 		var item *item[T, R]
-		twinNodeID, ok := twinMap[cf.GetID()]
-		if ok {
-			item = items[twinNodeID]
-		} else {
+		twinNodeID, exist := twinMap[cf.GetID()]
+		if exist {
+			item, exist = items[twinNodeID]
+		}
+		if !exist {
 			item, _ = minPriorityQueue.PeekTop()
 		}
 		// the operator is pushed successfully
