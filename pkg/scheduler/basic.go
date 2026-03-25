@@ -54,3 +54,47 @@ func BasicSchedule[T replica.ReplicationID, R replica.Replication[T]](
 		minPriorityQueue.AddOrUpdate(item)
 	}
 }
+
+// BasicScheduleWithTwin schedules the absent tasks to the available nodes
+func BasicScheduleWithTwin[T replica.ReplicationID, R replica.Replication[T]](
+	availableSize int,
+	absent []R,
+	twinMap map[T]node.ID,
+	nodeTasks map[node.ID]int,
+	schedule func(R, node.ID) bool,
+) {
+	if len(nodeTasks) == 0 {
+		log.Warn("scheduler: no node available, skip")
+		return
+	}
+	minPriorityQueue := priorityQueue[T, R]{
+		h:    heap.NewHeap[*item[T, R]](),
+		less: func(a, b int) bool { return a < b },
+	}
+	items := make(map[node.ID]*item[T, R])
+	for key, size := range nodeTasks {
+		item := minPriorityQueue.InitItem(key, size, nil)
+		items[key] = item
+	}
+
+	taskSize := 0
+	for _, cf := range absent {
+		var item *item[T, R]
+		twinNodeID, ok := twinMap[cf.GetID()]
+		if ok {
+			item = items[twinNodeID]
+		} else {
+			item, _ = minPriorityQueue.PeekTop()
+		}
+		// the operator is pushed successfully
+		if schedule(cf, item.Node) {
+			// update the task size priority queue
+			item.Load++
+			taskSize++
+		}
+		if taskSize >= availableSize {
+			break
+		}
+		minPriorityQueue.AddOrUpdate(item)
+	}
+}
