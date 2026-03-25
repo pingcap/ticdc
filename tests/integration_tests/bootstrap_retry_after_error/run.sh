@@ -68,8 +68,10 @@ function addr_to_logsuffix() {
 }
 
 function run() {
+	if [ "$SINK_TYPE" != "mysql" ]; then
+		return
+	fi
 	rm -rf $WORK_DIR && mkdir -p $WORK_DIR
-
 	start_tidb_cluster --workdir $WORK_DIR
 
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/maintainer/scheduler/StopBalanceScheduler=return(true)'
@@ -82,18 +84,18 @@ function run() {
 
 	table_id=$(get_table_id "test" "t1")
 
-	id="bootstrap-retry-after-error-$RANDOM"
-	cdc_cli_changefeed create --sink-uri="blackhole://" -c "$id"
+	SINK_URI="mysql://normal:123456@127.0.0.1:3306/"
+	cdc_cli_changefeed create --sink-uri=$SINK_URI -c "test"
 
 	maintainer_addr=$(wait_for_maintainer_addr "${CDC_ADDRS[0]}")
 	other_addr=$(pick_other_addr "$maintainer_addr")
 	maintainer_logsuffix=$(addr_to_logsuffix "$maintainer_addr")
 	other_logsuffix=$(addr_to_logsuffix "$other_addr")
 
-	check_coordinator_and_maintainer "$maintainer_addr" "$id" 60
-	query_dispatcher_count "$maintainer_addr" "$id" 2 60
+	check_coordinator_and_maintainer "$maintainer_addr" "test" 60
+	query_dispatcher_count "$maintainer_addr" "test" 2 60
 
-	move_table_with_retry "$other_addr" $table_id "$id" 10
+	move_table_with_retry "$other_addr" $table_id "test" 10
 
 	enable_failpoint --addr "$other_addr" --name "$FAILPOINT_NAME" --expr "1*return(true)"
 
