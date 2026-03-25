@@ -159,13 +159,13 @@ func (s *basicScheduler) schedule(groupID pkgreplica.GroupID, availableSize int)
 	absentReplications := s.spanController.GetAbsentByGroup(groupID, availableSize)
 
 	if s.twinSpanController != nil {
-		m := make(map[int64]node.ID)
+		spanMap := make(map[string]node.ID)
 		twinMap := make(map[common.DispatcherID]node.ID)
 		for _, twinSpan := range s.twinSpanController.GetAllTasks() {
-			m[twinSpan.Span.TableID] = twinSpan.GetNodeID()
+			spanMap[twinSpan.Span.String()] = twinSpan.GetNodeID()
 		}
 		for _, absent := range absentReplications {
-			nodeID, ok := m[absent.Span.TableID]
+			nodeID, ok := spanMap[absent.Span.String()]
 			if ok {
 				twinMap[absent.GetID()] = nodeID
 			}
