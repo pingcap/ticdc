@@ -344,11 +344,14 @@ func (m *Manager) dispatcherMaintainerMessage(
 			zap.String("message", msg.String()))
 		return nil
 	}
+	maintainer := c.(*Maintainer)
+	if !shouldForwardDirectResponse(maintainer, msg) {
+		return nil
+	}
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
 	default:
-		maintainer := c.(*Maintainer)
 		maintainer.pushEvent(&Event{
 			changefeedID: changefeed,
 			eventType:    EventMessage,
@@ -356,6 +359,41 @@ func (m *Manager) dispatcherMaintainerMessage(
 		})
 	}
 	return nil
+}
+
+func shouldForwardDirectResponse(maintainer *Maintainer, msg *messaging.TargetMessage) bool {
+	if maintainer == nil || msg == nil || len(msg.Message) == 0 {
+		return false
+	}
+
+	responseEpoch, ok := getDirectResponseMaintainerEpoch(msg)
+	if !ok {
+		return true
+	}
+	if responseEpoch == maintainer.maintainerEpoch {
+		return true
+	}
+
+	log.Info("drop direct response with stale maintainer epoch",
+		zap.Stringer("changefeedID", maintainer.changefeedID),
+		zap.Stringer("sourceNodeID", msg.From),
+		zap.Uint64("responseEpoch", responseEpoch),
+		zap.Uint64("maintainerEpoch", maintainer.maintainerEpoch),
+		zap.String("messageType", msg.Type.String()))
+	return false
+}
+
+func getDirectResponseMaintainerEpoch(msg *messaging.TargetMessage) (uint64, bool) {
+	switch response := msg.Message[0].(type) {
+	case *heartbeatpb.MaintainerBootstrapResponse:
+		return response.MaintainerEpoch, true
+	case *heartbeatpb.MaintainerPostBootstrapResponse:
+		return response.MaintainerEpoch, true
+	case *heartbeatpb.MaintainerCloseResponse:
+		return response.MaintainerEpoch, true
+	default:
+		return 0, false
+	}
 }
 
 func (m *Manager) GetMaintainerForChangefeed(changefeedID common.ChangeFeedID) (*Maintainer, bool) {

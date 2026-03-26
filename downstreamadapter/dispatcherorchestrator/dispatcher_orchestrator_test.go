@@ -162,6 +162,102 @@ func TestPendingMessageQueue_CloseRequestUpgradeBetweenPopAndGet(t *testing.T) {
 	q.Done(key)
 }
 
+func TestPendingMessageQueue_NewerEpochOverridesOlderPendingRequest(t *testing.T) {
+	t.Parallel()
+
+	q := newPendingMessageQueue()
+	cfID := common.NewChangeFeedIDWithName("cf", "default")
+	key := pendingMessageKey{
+		changefeedID: cfID,
+		msgType:      messaging.TypeMaintainerBootstrapRequest,
+	}
+
+	oldMsg := messaging.NewSingleTargetMessage(
+		node.ID("to"),
+		messaging.DispatcherManagerManagerTopic,
+		&heartbeatpb.MaintainerBootstrapRequest{
+			ChangefeedID:    cfID.ToPB(),
+			MaintainerEpoch: 10,
+		},
+	)
+	newMsg := messaging.NewSingleTargetMessage(
+		node.ID("to"),
+		messaging.DispatcherManagerManagerTopic,
+		&heartbeatpb.MaintainerBootstrapRequest{
+			ChangefeedID:    cfID.ToPB(),
+			MaintainerEpoch: 11,
+		},
+	)
+
+	require.True(t, q.TryEnqueue(key, oldMsg))
+	require.True(t, q.TryEnqueue(key, newMsg))
+
+	poppedKey, ok := q.Pop()
+	require.True(t, ok)
+	require.Equal(t, key, poppedKey)
+	poppedMsg := q.Get(poppedKey)
+	require.NotNil(t, poppedMsg)
+	req := poppedMsg.Message[0].(*heartbeatpb.MaintainerBootstrapRequest)
+	require.EqualValues(t, 11, req.MaintainerEpoch)
+	q.Done(key)
+}
+
+func TestPendingMessageQueue_OlderEpochCannotOverridePendingRequest(t *testing.T) {
+	t.Parallel()
+
+	q := newPendingMessageQueue()
+	cfID := common.NewChangeFeedIDWithName("cf", "default")
+	key := pendingMessageKey{
+		changefeedID: cfID,
+		msgType:      messaging.TypeMaintainerBootstrapRequest,
+	}
+
+	newerMsg := messaging.NewSingleTargetMessage(
+		node.ID("to"),
+		messaging.DispatcherManagerManagerTopic,
+		&heartbeatpb.MaintainerBootstrapRequest{
+			ChangefeedID:    cfID.ToPB(),
+			MaintainerEpoch: 11,
+		},
+	)
+	olderMsg := messaging.NewSingleTargetMessage(
+		node.ID("to"),
+		messaging.DispatcherManagerManagerTopic,
+		&heartbeatpb.MaintainerBootstrapRequest{
+			ChangefeedID:    cfID.ToPB(),
+			MaintainerEpoch: 10,
+		},
+	)
+
+	require.True(t, q.TryEnqueue(key, newerMsg))
+	require.False(t, q.TryEnqueue(key, olderMsg))
+
+	poppedKey, ok := q.Pop()
+	require.True(t, ok)
+	require.Equal(t, key, poppedKey)
+	poppedMsg := q.Get(poppedKey)
+	require.NotNil(t, poppedMsg)
+	req := poppedMsg.Message[0].(*heartbeatpb.MaintainerBootstrapRequest)
+	require.EqualValues(t, 11, req.MaintainerEpoch)
+	q.Done(key)
+}
+
+func TestShouldAcceptMaintainerRequest(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, maintainerRequestStale, compareBootstrapMaintainerEpoch(20, 10))
+	require.Equal(t, maintainerRequestRetry, compareBootstrapMaintainerEpoch(20, 20))
+	require.Equal(t, maintainerRequestTakeover, compareBootstrapMaintainerEpoch(20, 30))
+
+	require.False(t, shouldAcceptPostBootstrapRequest(20, 10))
+	require.True(t, shouldAcceptPostBootstrapRequest(20, 20))
+	require.False(t, shouldAcceptPostBootstrapRequest(20, 30))
+
+	require.False(t, shouldAcceptCloseRequest(20, 10))
+	require.True(t, shouldAcceptCloseRequest(20, 20))
+	require.True(t, shouldAcceptCloseRequest(20, 30))
+}
+
 func TestGetPendingMessageKey_SupportedTypes(t *testing.T) {
 	t.Parallel()
 

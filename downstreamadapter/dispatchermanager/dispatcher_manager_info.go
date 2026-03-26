@@ -58,10 +58,23 @@ func (e *DispatcherManager) SetMaintainerID(maintainerID node.ID) {
 	e.meta.maintainerID = maintainerID
 }
 
-func (e *DispatcherManager) GetMaintainerEpoch() uint64 {
+func (e *DispatcherManager) GetActiveMaintainerEpoch() uint64 {
 	e.meta.Lock()
 	defer e.meta.Unlock()
-	return e.meta.maintainerEpoch
+	return e.meta.activeMaintainerEpoch
+}
+
+func (e *DispatcherManager) GetChangefeedEpoch() uint64 {
+	e.meta.Lock()
+	defer e.meta.Unlock()
+	return e.meta.changefeedEpoch
+}
+
+func (e *DispatcherManager) SetActiveMaintainer(maintainerID node.ID, maintainerEpoch uint64) {
+	e.meta.Lock()
+	defer e.meta.Unlock()
+	e.meta.maintainerID = maintainerID
+	e.meta.activeMaintainerEpoch = maintainerEpoch
 }
 
 func (e *DispatcherManager) GetTableTriggerEventDispatcher() *dispatcher.EventDispatcher {

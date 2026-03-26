@@ -95,7 +95,11 @@ type Maintainer struct {
 	// It is sent to dispatcher managers during bootstrap to initialize their
 	// checkpointTs.
 	startCheckpointTs uint64
-	enableRedo        bool
+	// maintainerEpoch identifies one maintainer instance for the direct
+	// request-response path. A recreated maintainer must use a different value
+	// so stale responses can be dropped after ownership changes.
+	maintainerEpoch uint64
+	enableRedo      bool
 	// redoMetaTs is the redo meta unflushed ts to forward
 	redoMetaTs *heartbeatpb.RedoMetaMessage
 	// redoResolvedTs is the redo meta flushed resolvedTs
@@ -191,6 +195,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		keyspaceName = cfID.Keyspace()
 		name         = cfID.Name()
 	)
+	pdClock := appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock)
 	keyspaceMeta := common.KeyspaceMeta{
 		ID:   keyspaceID,
 		Name: keyspaceName,
@@ -208,12 +213,13 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		closedNodes:           make(map[node.ID]struct{}),
 		statusChanged:         atomic.NewBool(true),
 		info:                  info,
-		pdClock:               appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
+		pdClock:               pdClock,
 		ddlSpan:               ddlSpan,
 		redoDDLSpan:           redoDDLSpan,
 		checkpointTsByCapture: newWatermarkCaptureMap(),
 		redoTsByCapture:       newWatermarkCaptureMap(),
 		newChangefeed:         newChangefeed,
+		maintainerEpoch:       newMaintainerEpoch(pdClock),
 		enableRedo:            enableRedo,
 
 		checkpointTsGauge:    metrics.MaintainerCheckpointTsGauge.WithLabelValues(keyspaceName, name),
@@ -269,12 +275,20 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		zap.Stringer("changefeedID", cfID),
 		zap.String("state", string(info.State)),
 		zap.Uint64("checkpointTs", checkpointTs),
+		zap.Uint64("maintainerEpoch", m.maintainerEpoch),
 		zap.String("ddlDispatcherID", tableTriggerEventDispatcherID.String()),
 		zap.String("redoTs", m.redoMetaTs.String()),
 		zap.Bool("newChangefeed", newChangefeed),
 	)
 
 	return m
+}
+
+func newMaintainerEpoch(pdClock pdutil.Clock) uint64 {
+	if pdClock != nil {
+		return uint64(pdClock.CurrentTime().UnixNano())
+	}
+	return uint64(time.Now().UnixNano())
 }
 
 func NewMaintainerForRemove(cfID common.ChangeFeedID,
@@ -499,6 +513,8 @@ func (m *Maintainer) onRemoveMaintainer(cascade, changefeedRemoved bool) {
 			zap.Stringer("changefeedID", m.changefeedID))
 		return
 	}
+	log.Info("start to remove changefeed maintainer",
+		zap.Stringer("changefeedID", m.changefeedID))
 	m.removing.Store(true)
 	m.cascadeRemoving.Store(cascade)
 	m.changefeedRemoved.Store(changefeedRemoved)
@@ -909,6 +925,9 @@ func (m *Maintainer) onBootstrapResponses(responses map[node.ID]*heartbeatpb.Mai
 	// onMaintainerBootstrapResponse() run in the same event loop goroutine as onRemoveMaintainer(),
 	// hence guarding with m.removing is sufficient to avoid accessing a removed DDL span leading to panic.
 	if responses == nil || m.removing.Load() {
+		log.Info("bootstrap responses is nil or maintainer is removing, ignore it",
+			zap.Stringer("changefeedID", m.changefeedID),
+			zap.Bool("removing", m.removing.Load()))
 		return
 	}
 	isMySQLSinkCompatible, err := isMysqlCompatible(m.info.SinkURI)
@@ -938,6 +957,7 @@ func (m *Maintainer) onBootstrapResponses(responses map[node.ID]*heartbeatpb.Mai
 
 func (m *Maintainer) sendPostBootstrapRequest() {
 	if m.postBootstrapMsg != nil {
+		m.postBootstrapMsg.MaintainerEpoch = m.maintainerEpoch
 		msg := messaging.NewSingleTargetMessage(
 			m.selfNode.ID,
 			messaging.DispatcherManagerManagerTopic,
@@ -999,8 +1019,9 @@ func (m *Maintainer) trySendMaintainerCloseRequestToAllNode() bool {
 				n,
 				messaging.DispatcherManagerManagerTopic,
 				&heartbeatpb.MaintainerCloseRequest{
-					ChangefeedID: m.changefeedID.ToPB(),
-					Removed:      m.changefeedRemoved.Load(),
+					ChangefeedID:    m.changefeedID.ToPB(),
+					Removed:         m.changefeedRemoved.Load(),
+					MaintainerEpoch: m.maintainerEpoch,
 				}))
 		}
 	}
@@ -1061,6 +1082,7 @@ func (m *Maintainer) createBootstrapMessageFactory() bootstrap.NewBootstrapReque
 			TableTriggerRedoDispatcherId:  nil,
 			IsNewChangefeed:               false,
 			KeyspaceId:                    m.info.KeyspaceID,
+			MaintainerEpoch:               m.maintainerEpoch,
 		}
 
 		// only send dispatcher targetNodeID to dispatcher manager on the same node

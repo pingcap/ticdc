@@ -27,6 +27,14 @@ type pendingMessageKey struct {
 	msgType      messaging.IOType
 }
 
+type maintainerRequestDecision int
+
+const (
+	maintainerRequestStale maintainerRequestDecision = iota
+	maintainerRequestRetry
+	maintainerRequestTakeover
+)
+
 // pendingMessageQueue de-duplicates messages by (changefeedID, messageType) to prevent
 // floods of retry messages from blocking or starving other requests.
 //
@@ -71,22 +79,70 @@ func (q *pendingMessageQueue) TryEnqueue(key pendingMessageKey, msg *messaging.T
 }
 
 func shouldReplacePendingMessage(key pendingMessageKey, oldMsg, newMsg *messaging.TargetMessage) bool {
-	if key.msgType != messaging.TypeMaintainerCloseRequest {
-		return false
-	}
 	if oldMsg == nil || newMsg == nil {
 		return false
 	}
-	if len(oldMsg.Message) == 0 || len(newMsg.Message) == 0 {
+	oldEpoch, ok := getRequestMaintainerEpoch(oldMsg)
+	if !ok {
 		return false
 	}
+	newEpoch, ok := getRequestMaintainerEpoch(newMsg)
+	if !ok {
+		return false
+	}
+	if newEpoch > oldEpoch {
+		return true
+	}
+	if newEpoch < oldEpoch {
+		return false
+	}
+	if key.msgType != messaging.TypeMaintainerCloseRequest {
+		return false
+	}
+
 	oldReq, ok1 := oldMsg.Message[0].(*heartbeatpb.MaintainerCloseRequest)
 	newReq, ok2 := newMsg.Message[0].(*heartbeatpb.MaintainerCloseRequest)
 	if !ok1 || !ok2 {
 		return false
 	}
-	// Only upgrade semantics: allow removed=true to override removed=false.
+	// Only upgrade semantics within the same maintainer instance: allow
+	// removed=true to override removed=false.
 	return !oldReq.Removed && newReq.Removed
+}
+
+func compareBootstrapMaintainerEpoch(activeEpoch, requestEpoch uint64) maintainerRequestDecision {
+	switch {
+	case requestEpoch < activeEpoch:
+		return maintainerRequestStale
+	case requestEpoch == activeEpoch:
+		return maintainerRequestRetry
+	default:
+		return maintainerRequestTakeover
+	}
+}
+
+func shouldAcceptPostBootstrapRequest(activeEpoch, requestEpoch uint64) bool {
+	return requestEpoch == activeEpoch
+}
+
+func shouldAcceptCloseRequest(activeEpoch, requestEpoch uint64) bool {
+	return requestEpoch >= activeEpoch
+}
+
+func getRequestMaintainerEpoch(msg *messaging.TargetMessage) (uint64, bool) {
+	if msg == nil || len(msg.Message) == 0 {
+		return 0, false
+	}
+	switch req := msg.Message[0].(type) {
+	case *heartbeatpb.MaintainerBootstrapRequest:
+		return req.MaintainerEpoch, true
+	case *heartbeatpb.MaintainerPostBootstrapRequest:
+		return req.MaintainerEpoch, true
+	case *heartbeatpb.MaintainerCloseRequest:
+		return req.MaintainerEpoch, true
+	default:
+		return 0, false
+	}
 }
 
 // Pop blocks until a key is available or the queue is closed.
