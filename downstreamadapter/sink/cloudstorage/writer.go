@@ -48,11 +48,8 @@ type writer struct {
 	statistics        *pmetrics.Statistics
 	filePathGenerator *cloudstorage.FilePathGenerator
 
-	metricFlushBytes       prometheus.Observer
-	metricFileCount        prometheus.Counter
-	metricFlushDuration    prometheus.Observer
-	metricsWorkerBusyRatio prometheus.Counter
-	writerLabel            string
+	metricFlushBytes    prometheus.Observer
+	metricFlushDuration prometheus.Observer
 }
 
 // flushTask is internal and never crosses component boundary.
@@ -99,18 +96,14 @@ func newWriter(
 		statistics:        statistics,
 		filePathGenerator: cloudstorage.NewFilePathGenerator(changefeedID, config, storage, extension),
 
-		metricFlushBytes:       metrics.CloudStorageFlushBytesHist.WithLabelValues(keyspace, changefeed),
-		metricFileCount:        metrics.CloudStorageFileCounter.WithLabelValues(keyspace, changefeed),
-		metricFlushDuration:    metrics.CloudStorageFlushDurationHistogram.WithLabelValues(keyspace, changefeed),
-		metricsWorkerBusyRatio: metrics.CloudStorageWorkerBusyRatio.WithLabelValues(keyspace, changefeed, strconv.Itoa(id)),
-		writerLabel:            strconv.Itoa(id),
+		metricFlushBytes:    metrics.CloudStorageFlushBytesHist.WithLabelValues(keyspace, changefeed),
+		metricFlushDuration: metrics.CloudStorageFlushDurationHistogram.WithLabelValues(keyspace, changefeed),
 	}
 	d.bufferManager = newBufferManager(d.changeFeedID, d.config, d.spool, d.enqueueFlushTask)
 	return d
 }
 
 func (d *writer) run(ctx context.Context) error {
-	defer d.deleteMetrics()
 	g, ctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
 		return d.flushMessages(ctx)
@@ -123,18 +116,23 @@ func (d *writer) run(ctx context.Context) error {
 
 func (d *writer) flushMessages(ctx context.Context) error {
 	var flushTimeSlice time.Duration
-	overseerDuration := d.config.FlushInterval * 2
-	overseerTicker := time.NewTicker(overseerDuration)
-	defer overseerTicker.Stop()
 	keyspace := d.changeFeedID.Keyspace()
 	changefeed := d.changeFeedID.Name()
+
+	overseerTicker := time.NewTicker(d.config.FlushInterval * 2)
+	writerLabel := strconv.Itoa(d.shardID)
+	metricBusyRatio := metrics.CloudStorageWorkerBusyRatio.WithLabelValues(keyspace, changefeed, writerLabel)
+	defer func() {
+		overseerTicker.Stop()
+		metrics.CloudStorageWorkerBusyRatio.DeleteLabelValues(keyspace, changefeed, writerLabel)
+	}()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return errors.Trace(context.Cause(ctx))
 		case <-overseerTicker.C:
-			d.metricsWorkerBusyRatio.Add(flushTimeSlice.Seconds())
+			metricBusyRatio.Add(flushTimeSlice.Seconds())
 			flushTimeSlice = 0
 		case task := <-d.flushCh:
 			if task.marker != nil {
@@ -278,7 +276,6 @@ func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath 
 
 	d.metricFlushDuration.Observe(time.Since(start).Seconds())
 	d.metricFlushBytes.Observe(float64(payload.nBytes))
-	d.metricFileCount.Inc()
 
 	for _, postFlushCallback := range payload.postFlushCallbacks {
 		if postFlushCallback != nil {
@@ -302,10 +299,4 @@ func (d *writer) enqueueFlushTask(ctx context.Context, task flushTask) error {
 	case d.flushCh <- task:
 		return nil
 	}
-}
-
-func (d *writer) deleteMetrics() {
-	keyspace := d.changeFeedID.Keyspace()
-	changefeedName := d.changeFeedID.Name()
-	metrics.CloudStorageWorkerBusyRatio.DeleteLabelValues(keyspace, changefeedName, d.writerLabel)
 }

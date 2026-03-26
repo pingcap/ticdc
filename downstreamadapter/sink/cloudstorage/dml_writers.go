@@ -131,7 +131,6 @@ func (d *dmlWriters) deleteMetrics() {
 	keyspace := d.changefeedID.Keyspace()
 	changefeed := d.changefeedID.Name()
 	sinkmetrics.CloudStorageFlushBytesHist.DeleteLabelValues(keyspace, changefeed)
-	sinkmetrics.CloudStorageFileCounter.DeleteLabelValues(keyspace, changefeed)
 	sinkmetrics.CloudStorageFlushDurationHistogram.DeleteLabelValues(keyspace, changefeed)
 	sinkmetrics.CloudStorageDDLFlushDMLDurationHistogram.DeleteLabelValues(keyspace, changefeed)
 	sinkmetrics.CloudStorageFlushReasonCounter.DeleteLabelValues(keyspace, changefeed, flushReasonSize)
