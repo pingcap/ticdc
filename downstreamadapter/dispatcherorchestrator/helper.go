@@ -30,8 +30,14 @@ type pendingMessageKey struct {
 type maintainerRequestDecision int
 
 const (
+	// maintainerRequestStale means the request belongs to an older maintainer
+	// instance and must never affect the current dispatcher manager state.
 	maintainerRequestStale maintainerRequestDecision = iota
+	// maintainerRequestRetry means the request belongs to the current maintainer
+	// instance and can be treated as an idempotent resend.
 	maintainerRequestRetry
+	// maintainerRequestTakeover means a newer maintainer instance is taking over
+	// ownership through the bootstrap path.
 	maintainerRequestTakeover
 )
 
@@ -42,9 +48,13 @@ const (
 // messages with the same key are dropped. This is safe because the sender periodically
 // retries until it receives a response.
 //
-// For MaintainerCloseRequest, we treat removed=true as stronger semantics than removed=false.
-// If a pending removed=false request exists, a later removed=true request with the same key
-// will replace it to avoid missing removal-related cleanup.
+// The queue is also epoch-aware for direct maintainer requests:
+// - newer maintainer epochs replace older pending requests for the same key
+// - older maintainer epochs are dropped
+// - within the same epoch, close removed=true overrides removed=false
+//
+// This lets a new maintainer instance take over promptly even when the old
+// instance still has retries buffered in the queue.
 type pendingMessageQueue struct {
 	mu      sync.Mutex
 	pending map[pendingMessageKey]*messaging.TargetMessage
@@ -110,6 +120,8 @@ func shouldReplacePendingMessage(key pendingMessageKey, oldMsg, newMsg *messagin
 	return !oldReq.Removed && newReq.Removed
 }
 
+// compareBootstrapMaintainerEpoch is intentionally asymmetric:
+// bootstrap is the only request that can establish or transfer ownership.
 func compareBootstrapMaintainerEpoch(activeEpoch, requestEpoch uint64) maintainerRequestDecision {
 	switch {
 	case requestEpoch < activeEpoch:
@@ -121,14 +133,20 @@ func compareBootstrapMaintainerEpoch(activeEpoch, requestEpoch uint64) maintaine
 	}
 }
 
+// post-bootstrap only applies to the bootstrap sequence started by the active
+// maintainer instance. A newer maintainer must restart from bootstrap first.
 func shouldAcceptPostBootstrapRequest(activeEpoch, requestEpoch uint64) bool {
 	return requestEpoch == activeEpoch
 }
 
+// close accepts a newer epoch so removal can still clean up an old dispatcher
+// manager before the new maintainer finishes bootstrap on this node.
 func shouldAcceptCloseRequest(activeEpoch, requestEpoch uint64) bool {
 	return requestEpoch >= activeEpoch
 }
 
+// getRequestMaintainerEpoch extracts the maintainer instance identity from the
+// direct request types protected by the epoch mechanism.
 func getRequestMaintainerEpoch(msg *messaging.TargetMessage) (uint64, bool) {
 	if msg == nil || len(msg.Message) == 0 {
 		return 0, false

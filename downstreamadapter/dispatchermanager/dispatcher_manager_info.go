@@ -70,6 +70,8 @@ func (e *DispatcherManager) GetChangefeedEpoch() uint64 {
 	return e.meta.changefeedEpoch
 }
 
+// SetActiveMaintainer updates the current maintainer identity atomically so
+// request admission and downstream heartbeat targeting observe the same owner.
 func (e *DispatcherManager) SetActiveMaintainer(maintainerID node.ID, maintainerEpoch uint64) {
 	e.meta.Lock()
 	defer e.meta.Unlock()

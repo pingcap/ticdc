@@ -285,6 +285,8 @@ func NewMaintainer(cfID common.ChangeFeedID,
 }
 
 func newMaintainerEpoch(pdClock pdutil.Clock) uint64 {
+	// Prefer the PD-backed clock when available so a restarted maintainer is
+	// overwhelmingly likely to observe a strictly newer epoch than the previous one.
 	if pdClock != nil {
 		return uint64(pdClock.CurrentTime().UnixNano())
 	}

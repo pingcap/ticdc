@@ -227,6 +227,8 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 				return nil
 			}
 		case maintainerRequestTakeover:
+			// A bootstrap with a newer epoch is the only path that can move
+			// ownership to another maintainer instance.
 			log.Info("maintainer changed",
 				zap.String("changefeed", cfId.Name()),
 				zap.String("oldMaintainer", manager.GetMaintainerID().String()),
@@ -312,6 +314,9 @@ func (m *DispatcherOrchestrator) handlePostBootstrapRequest(
 			zap.Any("changefeedID", cfId.Name()))
 		return nil
 	}
+	// Post-bootstrap must match the active bootstrap sequence exactly. Allowing a
+	// newer epoch here would let a maintainer skip the ownership handoff checks in
+	// bootstrap and reuse partially initialized state from another instance.
 	if !shouldAcceptPostBootstrapRequest(manager.GetActiveMaintainerEpoch(), req.MaintainerEpoch) {
 		log.Info("drop post bootstrap request with inactive maintainer epoch",
 			zap.Stringer("changefeedID", cfId),
@@ -402,6 +407,8 @@ func (m *DispatcherOrchestrator) handleCloseRequest(
 			return nil
 		}
 		if req.MaintainerEpoch > activeEpoch {
+			// Close accepts a newer epoch so remove can still clean up the old
+			// dispatcher manager state before the new maintainer finishes bootstrap.
 			manager.SetActiveMaintainer(from, req.MaintainerEpoch)
 		} else if manager.GetMaintainerID() != from {
 			m.mutex.Unlock()

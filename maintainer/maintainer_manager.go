@@ -370,6 +370,9 @@ func shouldForwardDirectResponse(maintainer *Maintainer, msg *messaging.TargetMe
 	if !ok {
 		return true
 	}
+	// Direct responses must return to the exact maintainer instance that sent the
+	// request. Once ownership changes, old responses are ignored instead of letting
+	// them mutate the new maintainer's bootstrap or removal state.
 	if responseEpoch == maintainer.maintainerEpoch {
 		return true
 	}
@@ -383,6 +386,8 @@ func shouldForwardDirectResponse(maintainer *Maintainer, msg *messaging.TargetMe
 	return false
 }
 
+// getDirectResponseMaintainerEpoch only covers the protected direct response
+// path. Heartbeats and other convergent messages keep their existing behavior.
 func getDirectResponseMaintainerEpoch(msg *messaging.TargetMessage) (uint64, bool) {
 	switch response := msg.Message[0].(type) {
 	case *heartbeatpb.MaintainerBootstrapResponse:
