@@ -557,6 +557,17 @@ func TestDispatcherMaintainerMessageFiltersDirectResponsesByEpoch(t *testing.T) 
 			forwarded: false,
 		},
 		{
+			name: "bootstrap response without epoch is forwarded as legacy traffic",
+			msg: messaging.NewSingleTargetMessage(
+				node.ID("to"),
+				messaging.MaintainerManagerTopic,
+				&heartbeatpb.MaintainerBootstrapResponse{
+					ChangefeedID: cfID.ToPB(),
+				},
+			),
+			forwarded: true,
+		},
+		{
 			name: "close response with stale epoch is dropped",
 			msg: messaging.NewSingleTargetMessage(
 				node.ID("to"),

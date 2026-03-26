@@ -258,6 +258,50 @@ func TestShouldAcceptMaintainerRequest(t *testing.T) {
 	require.True(t, shouldAcceptCloseRequest(20, 30))
 }
 
+func TestGetRequestMaintainerEpochTreatsZeroAsLegacy(t *testing.T) {
+	t.Parallel()
+
+	cfID := common.NewChangeFeedIDWithName("cf", "default")
+	bootstrap := messaging.NewSingleTargetMessage(
+		node.ID("to"),
+		messaging.DispatcherManagerManagerTopic,
+		&heartbeatpb.MaintainerBootstrapRequest{ChangefeedID: cfID.ToPB()},
+	)
+	epoch, ok := getRequestMaintainerEpoch(bootstrap)
+	require.False(t, ok)
+	require.EqualValues(t, 0, epoch)
+
+	postBootstrap := messaging.NewSingleTargetMessage(
+		node.ID("to"),
+		messaging.DispatcherManagerManagerTopic,
+		&heartbeatpb.MaintainerPostBootstrapRequest{ChangefeedID: cfID.ToPB()},
+	)
+	epoch, ok = getRequestMaintainerEpoch(postBootstrap)
+	require.False(t, ok)
+	require.EqualValues(t, 0, epoch)
+
+	closeReq := messaging.NewSingleTargetMessage(
+		node.ID("to"),
+		messaging.DispatcherManagerManagerTopic,
+		&heartbeatpb.MaintainerCloseRequest{ChangefeedID: cfID.ToPB()},
+	)
+	epoch, ok = getRequestMaintainerEpoch(closeReq)
+	require.False(t, ok)
+	require.EqualValues(t, 0, epoch)
+
+	bootstrapWithEpoch := messaging.NewSingleTargetMessage(
+		node.ID("to"),
+		messaging.DispatcherManagerManagerTopic,
+		&heartbeatpb.MaintainerBootstrapRequest{
+			ChangefeedID:    cfID.ToPB(),
+			MaintainerEpoch: 10,
+		},
+	)
+	epoch, ok = getRequestMaintainerEpoch(bootstrapWithEpoch)
+	require.True(t, ok)
+	require.EqualValues(t, 10, epoch)
+}
+
 func TestGetPendingMessageKey_SupportedTypes(t *testing.T) {
 	t.Parallel()
 

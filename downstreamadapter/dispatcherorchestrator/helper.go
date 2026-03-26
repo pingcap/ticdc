@@ -92,19 +92,15 @@ func shouldReplacePendingMessage(key pendingMessageKey, oldMsg, newMsg *messagin
 	if oldMsg == nil || newMsg == nil {
 		return false
 	}
-	oldEpoch, ok := getRequestMaintainerEpoch(oldMsg)
-	if !ok {
-		return false
-	}
-	newEpoch, ok := getRequestMaintainerEpoch(newMsg)
-	if !ok {
-		return false
-	}
-	if newEpoch > oldEpoch {
-		return true
-	}
-	if newEpoch < oldEpoch {
-		return false
+	oldEpoch, oldHasEpoch := getRequestMaintainerEpoch(oldMsg)
+	newEpoch, newHasEpoch := getRequestMaintainerEpoch(newMsg)
+	if oldHasEpoch && newHasEpoch {
+		if newEpoch > oldEpoch {
+			return true
+		}
+		if newEpoch < oldEpoch {
+			return false
+		}
 	}
 	if key.msgType != messaging.TypeMaintainerCloseRequest {
 		return false
@@ -145,6 +141,10 @@ func shouldAcceptCloseRequest(activeEpoch, requestEpoch uint64) bool {
 	return requestEpoch >= activeEpoch
 }
 
+func shouldUseStrictMaintainerEpoch(activeEpoch, requestEpoch uint64) bool {
+	return activeEpoch != 0 && requestEpoch != 0
+}
+
 // getRequestMaintainerEpoch extracts the maintainer instance identity from the
 // direct request types protected by the epoch mechanism.
 func getRequestMaintainerEpoch(msg *messaging.TargetMessage) (uint64, bool) {
@@ -153,10 +153,19 @@ func getRequestMaintainerEpoch(msg *messaging.TargetMessage) (uint64, bool) {
 	}
 	switch req := msg.Message[0].(type) {
 	case *heartbeatpb.MaintainerBootstrapRequest:
+		if req.MaintainerEpoch == 0 {
+			return 0, false
+		}
 		return req.MaintainerEpoch, true
 	case *heartbeatpb.MaintainerPostBootstrapRequest:
+		if req.MaintainerEpoch == 0 {
+			return 0, false
+		}
 		return req.MaintainerEpoch, true
 	case *heartbeatpb.MaintainerCloseRequest:
+		if req.MaintainerEpoch == 0 {
+			return 0, false
+		}
 		return req.MaintainerEpoch, true
 	default:
 		return 0, false

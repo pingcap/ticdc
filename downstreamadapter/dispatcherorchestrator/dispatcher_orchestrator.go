@@ -209,33 +209,48 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 		metrics.DispatcherManagerGauge.WithLabelValues(cfId.Keyspace(), cfId.Name()).Inc()
 	} else {
 		activeEpoch := manager.GetActiveMaintainerEpoch()
-		switch compareBootstrapMaintainerEpoch(activeEpoch, req.MaintainerEpoch) {
-		case maintainerRequestStale:
-			log.Info("drop stale bootstrap request",
-				zap.Stringer("changefeedID", cfId),
-				zap.Stringer("maintainerID", from),
-				zap.Uint64("requestEpoch", req.MaintainerEpoch),
-				zap.Uint64("activeEpoch", activeEpoch))
-			return nil
-		case maintainerRequestRetry:
-			if manager.GetMaintainerID() != from {
-				log.Warn("drop bootstrap retry from unexpected maintainer",
+		if !shouldUseStrictMaintainerEpoch(activeEpoch, req.MaintainerEpoch) {
+			// During rolling upgrade, legacy peers decode the new field as zero.
+			// Fall back to the pre-epoch ownership behavior until both sides send
+			// a non-zero maintainer epoch.
+			if manager.GetMaintainerID() != from || activeEpoch != req.MaintainerEpoch {
+				log.Info("maintainer changed in legacy compatible mode",
+					zap.String("changefeed", cfId.Name()),
+					zap.String("oldMaintainer", manager.GetMaintainerID().String()),
+					zap.String("newMaintainer", from.String()),
+					zap.Uint64("oldEpoch", activeEpoch),
+					zap.Uint64("newEpoch", req.MaintainerEpoch))
+				manager.SetActiveMaintainer(from, req.MaintainerEpoch)
+			}
+		} else {
+			switch compareBootstrapMaintainerEpoch(activeEpoch, req.MaintainerEpoch) {
+			case maintainerRequestStale:
+				log.Info("drop stale bootstrap request",
 					zap.Stringer("changefeedID", cfId),
 					zap.Stringer("maintainerID", from),
-					zap.Stringer("activeMaintainerID", manager.GetMaintainerID()),
-					zap.Uint64("maintainerEpoch", req.MaintainerEpoch))
+					zap.Uint64("requestEpoch", req.MaintainerEpoch),
+					zap.Uint64("activeEpoch", activeEpoch))
 				return nil
+			case maintainerRequestRetry:
+				if manager.GetMaintainerID() != from {
+					log.Warn("drop bootstrap retry from unexpected maintainer",
+						zap.Stringer("changefeedID", cfId),
+						zap.Stringer("maintainerID", from),
+						zap.Stringer("activeMaintainerID", manager.GetMaintainerID()),
+						zap.Uint64("maintainerEpoch", req.MaintainerEpoch))
+					return nil
+				}
+			case maintainerRequestTakeover:
+				// A bootstrap with a newer epoch is the only path that can move
+				// ownership to another maintainer instance.
+				log.Info("maintainer changed",
+					zap.String("changefeed", cfId.Name()),
+					zap.String("oldMaintainer", manager.GetMaintainerID().String()),
+					zap.String("newMaintainer", from.String()),
+					zap.Uint64("oldEpoch", activeEpoch),
+					zap.Uint64("newEpoch", req.MaintainerEpoch))
+				manager.SetActiveMaintainer(from, req.MaintainerEpoch)
 			}
-		case maintainerRequestTakeover:
-			// A bootstrap with a newer epoch is the only path that can move
-			// ownership to another maintainer instance.
-			log.Info("maintainer changed",
-				zap.String("changefeed", cfId.Name()),
-				zap.String("oldMaintainer", manager.GetMaintainerID().String()),
-				zap.String("newMaintainer", from.String()),
-				zap.Uint64("oldEpoch", activeEpoch),
-				zap.Uint64("newEpoch", req.MaintainerEpoch))
-			manager.SetActiveMaintainer(from, req.MaintainerEpoch)
 		}
 
 		// Check and potentially add a table trigger event dispatcher.
@@ -314,24 +329,27 @@ func (m *DispatcherOrchestrator) handlePostBootstrapRequest(
 			zap.Any("changefeedID", cfId.Name()))
 		return nil
 	}
-	// Post-bootstrap must match the active bootstrap sequence exactly. Allowing a
-	// newer epoch here would let a maintainer skip the ownership handoff checks in
-	// bootstrap and reuse partially initialized state from another instance.
-	if !shouldAcceptPostBootstrapRequest(manager.GetActiveMaintainerEpoch(), req.MaintainerEpoch) {
-		log.Info("drop post bootstrap request with inactive maintainer epoch",
-			zap.Stringer("changefeedID", cfId),
-			zap.Stringer("maintainerID", from),
-			zap.Uint64("requestEpoch", req.MaintainerEpoch),
-			zap.Uint64("activeEpoch", manager.GetActiveMaintainerEpoch()))
-		return nil
-	}
-	if manager.GetMaintainerID() != from {
-		log.Warn("drop post bootstrap request from unexpected maintainer",
-			zap.Stringer("changefeedID", cfId),
-			zap.Stringer("maintainerID", from),
-			zap.Stringer("activeMaintainerID", manager.GetMaintainerID()),
-			zap.Uint64("maintainerEpoch", req.MaintainerEpoch))
-		return nil
+	activeEpoch := manager.GetActiveMaintainerEpoch()
+	if shouldUseStrictMaintainerEpoch(activeEpoch, req.MaintainerEpoch) {
+		// Post-bootstrap must match the active bootstrap sequence exactly. Allowing a
+		// newer epoch here would let a maintainer skip the ownership handoff checks in
+		// bootstrap and reuse partially initialized state from another instance.
+		if !shouldAcceptPostBootstrapRequest(activeEpoch, req.MaintainerEpoch) {
+			log.Info("drop post bootstrap request with inactive maintainer epoch",
+				zap.Stringer("changefeedID", cfId),
+				zap.Stringer("maintainerID", from),
+				zap.Uint64("requestEpoch", req.MaintainerEpoch),
+				zap.Uint64("activeEpoch", activeEpoch))
+			return nil
+		}
+		if manager.GetMaintainerID() != from {
+			log.Warn("drop post bootstrap request from unexpected maintainer",
+				zap.Stringer("changefeedID", cfId),
+				zap.Stringer("maintainerID", from),
+				zap.Stringer("activeMaintainerID", manager.GetMaintainerID()),
+				zap.Uint64("maintainerEpoch", req.MaintainerEpoch))
+			return nil
+		}
 	}
 	if manager.GetTableTriggerEventDispatcher().GetId() !=
 		common.NewDispatcherIDFromPB(req.TableTriggerEventDispatcherId) {
@@ -397,27 +415,29 @@ func (m *DispatcherOrchestrator) handleCloseRequest(
 	m.mutex.Lock()
 	if manager, ok := m.dispatcherManagers[cfId]; ok {
 		activeEpoch := manager.GetActiveMaintainerEpoch()
-		if !shouldAcceptCloseRequest(activeEpoch, req.MaintainerEpoch) {
-			m.mutex.Unlock()
-			log.Info("drop stale close request",
-				zap.Stringer("changefeedID", cfId),
-				zap.Stringer("maintainerID", from),
-				zap.Uint64("requestEpoch", req.MaintainerEpoch),
-				zap.Uint64("activeEpoch", activeEpoch))
-			return nil
-		}
-		if req.MaintainerEpoch > activeEpoch {
-			// Close accepts a newer epoch so remove can still clean up the old
-			// dispatcher manager state before the new maintainer finishes bootstrap.
-			manager.SetActiveMaintainer(from, req.MaintainerEpoch)
-		} else if manager.GetMaintainerID() != from {
-			m.mutex.Unlock()
-			log.Warn("drop close request from unexpected maintainer",
-				zap.Stringer("changefeedID", cfId),
-				zap.Stringer("maintainerID", from),
-				zap.Stringer("activeMaintainerID", manager.GetMaintainerID()),
-				zap.Uint64("maintainerEpoch", req.MaintainerEpoch))
-			return nil
+		if shouldUseStrictMaintainerEpoch(activeEpoch, req.MaintainerEpoch) {
+			if !shouldAcceptCloseRequest(activeEpoch, req.MaintainerEpoch) {
+				m.mutex.Unlock()
+				log.Info("drop stale close request",
+					zap.Stringer("changefeedID", cfId),
+					zap.Stringer("maintainerID", from),
+					zap.Uint64("requestEpoch", req.MaintainerEpoch),
+					zap.Uint64("activeEpoch", activeEpoch))
+				return nil
+			}
+			if req.MaintainerEpoch > activeEpoch {
+				// Close accepts a newer epoch so remove can still clean up the old
+				// dispatcher manager state before the new maintainer finishes bootstrap.
+				manager.SetActiveMaintainer(from, req.MaintainerEpoch)
+			} else if manager.GetMaintainerID() != from {
+				m.mutex.Unlock()
+				log.Warn("drop close request from unexpected maintainer",
+					zap.Stringer("changefeedID", cfId),
+					zap.Stringer("maintainerID", from),
+					zap.Stringer("activeMaintainerID", manager.GetMaintainerID()),
+					zap.Uint64("maintainerEpoch", req.MaintainerEpoch))
+				return nil
+			}
 		}
 		if closed := manager.TryClose(req.Removed); closed {
 			delete(m.dispatcherManagers, cfId)

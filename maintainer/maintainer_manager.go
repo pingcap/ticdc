@@ -391,10 +391,19 @@ func shouldForwardDirectResponse(maintainer *Maintainer, msg *messaging.TargetMe
 func getDirectResponseMaintainerEpoch(msg *messaging.TargetMessage) (uint64, bool) {
 	switch response := msg.Message[0].(type) {
 	case *heartbeatpb.MaintainerBootstrapResponse:
+		if response.MaintainerEpoch == 0 {
+			return 0, false
+		}
 		return response.MaintainerEpoch, true
 	case *heartbeatpb.MaintainerPostBootstrapResponse:
+		if response.MaintainerEpoch == 0 {
+			return 0, false
+		}
 		return response.MaintainerEpoch, true
 	case *heartbeatpb.MaintainerCloseResponse:
+		if response.MaintainerEpoch == 0 {
+			return 0, false
+		}
 		return response.MaintainerEpoch, true
 	default:
 		return 0, false
