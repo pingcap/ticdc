@@ -124,354 +124,10 @@
   "editable": true,
   "gnetId": null,
   "graphTooltip": 1,
-  "id": 38,
-  "iteration": 1774514315729,
+  "id": 39,
+  "iteration": 1774515109805,
   "links": [],
   "panels": [
-    {
-      "aliasColors": {},
-      "bars": false,
-      "dashLength": 10,
-      "dashes": false,
-      "datasource": "${DS_TEST-CLUSTER}",
-      "fieldConfig": {
-        "defaults": {},
-        "overrides": []
-      },
-      "fill": 1,
-      "fillGradient": 0,
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": -20
-      },
-      "hiddenSeries": false,
-      "id": 62011,
-      "legend": {
-        "avg": false,
-        "current": false,
-        "max": false,
-        "min": false,
-        "show": true,
-        "total": false,
-        "values": false
-      },
-      "lines": true,
-      "linewidth": 1,
-      "nullPointMode": "null",
-      "options": {
-        "alertThreshold": true
-      },
-      "percentage": false,
-      "pluginVersion": "7.5.17",
-      "pointradius": 2,
-      "points": false,
-      "renderer": "flot",
-      "seriesOverrides": [],
-      "spaceLength": 10,
-      "stack": false,
-      "steppedLine": false,
-      "targets": [
-        {
-          "exemplar": true,
-          "expr": "sum(ticdc_sink_cloud_storage_file_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\",changefeed=~\"$changefeed\"}) by (namespace,changefeed, instance)",
-          "interval": "",
-          "legendFormat": "{{namespace}}-{{changefeed}}-{{instance}}",
-          "queryType": "randomWalk",
-          "refId": "A"
-        }
-      ],
-      "thresholds": [],
-      "timeFrom": null,
-      "timeRegions": [],
-      "timeShift": null,
-      "title": "File Count",
-      "tooltip": {
-        "shared": true,
-        "sort": 0,
-        "value_type": "individual"
-      },
-      "type": "graph",
-      "xaxis": {
-        "buckets": null,
-        "mode": "time",
-        "name": null,
-        "show": true,
-        "values": []
-      },
-      "yaxes": [
-        {
-          "format": "short",
-          "label": null,
-          "logBase": 1,
-          "max": null,
-          "min": "0",
-          "show": true
-        },
-        {
-          "format": "short",
-          "label": null,
-          "logBase": 1,
-          "max": null,
-          "min": null,
-          "show": true
-        }
-      ],
-      "yaxis": {
-        "align": false,
-        "alignLevel": null
-      }
-    },
-    {
-      "aliasColors": {},
-      "bars": false,
-      "dashLength": 10,
-      "dashes": false,
-      "datasource": "${DS_TEST-CLUSTER}",
-      "fieldConfig": {
-        "defaults": {},
-        "overrides": []
-      },
-      "fill": 1,
-      "fillGradient": 0,
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": -20
-      },
-      "hiddenSeries": false,
-      "id": 62011,
-      "legend": {
-        "alignAsTable": true,
-        "avg": false,
-        "current": true,
-        "max": true,
-        "min": false,
-        "show": true,
-        "total": false,
-        "values": true
-      },
-      "lines": true,
-      "linewidth": 1,
-      "nullPointMode": "null",
-      "options": {
-        "alertThreshold": true
-      },
-      "percentage": false,
-      "pluginVersion": "7.5.17",
-      "pointradius": 2,
-      "points": false,
-      "renderer": "flot",
-      "seriesOverrides": [],
-      "spaceLength": 10,
-      "stack": false,
-      "steppedLine": false,
-      "targets": [
-        {
-          "exemplar": true,
-          "expr": "sum(rate(ticdc_sink_cloud_storage_flush_bytes_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\", changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (namespace, changefeed, instance)",
-          "interval": "",
-          "legendFormat": "{{namespace}}-{{changefeed}}-{{instance}}",
-          "queryType": "randomWalk",
-          "refId": "A"
-        }
-      ],
-      "thresholds": [],
-      "timeFrom": null,
-      "timeRegions": [],
-      "timeShift": null,
-      "title": "File Count / s",
-      "tooltip": {
-        "shared": true,
-        "sort": 0,
-        "value_type": "individual"
-      },
-      "type": "graph",
-      "xaxis": {
-        "buckets": null,
-        "mode": "time",
-        "name": null,
-        "show": true,
-        "values": []
-      },
-      "yaxes": [
-        {
-          "decimals": 0,
-          "format": "short",
-          "label": null,
-          "logBase": 1,
-          "max": null,
-          "min": "0",
-          "show": true
-        },
-        {
-          "format": "short",
-          "label": null,
-          "logBase": 1,
-          "max": null,
-          "min": null,
-          "show": false
-        }
-      ],
-      "yaxis": {
-        "align": false,
-        "alignLevel": null
-      }
-    },
-    {
-      "cards": {
-        "cardPadding": 0,
-        "cardRound": 0
-      },
-      "color": {
-        "cardColor": "#b4ff00",
-        "colorScale": "sqrt",
-        "colorScheme": "interpolateSpectral",
-        "exponent": 0.5,
-        "max": null,
-        "min": 0,
-        "mode": "spectrum"
-      },
-      "dataFormat": "tsbuckets",
-      "datasource": "${DS_TEST-CLUSTER}",
-      "description": "The latency distributions of write storage by a cloud storage sink",
-      "fieldConfig": {
-        "defaults": {},
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": -12
-      },
-      "heatmap": {},
-      "hideZeroBuckets": true,
-      "highlightCards": true,
-      "id": 62012,
-      "legend": {
-        "show": true
-      },
-      "pluginVersion": "7.5.11",
-      "reverseYBuckets": false,
-      "targets": [
-        {
-          "exemplar": true,
-          "expr": "max(rate(ticdc_sink_cloud_storage_write_duration_seconds_bucket{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",namespace=~\"$namespace\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (le)",
-          "format": "heatmap",
-          "hide": false,
-          "interval": "",
-          "intervalFactor": 2,
-          "legendFormat": "{{le}}",
-          "queryType": "randomWalk",
-          "refId": "A"
-        }
-      ],
-      "timeFrom": null,
-      "timeShift": null,
-      "title": "Write duration",
-      "tooltip": {
-        "show": true,
-        "showHistogram": true
-      },
-      "tooltipDecimals": 1,
-      "type": "heatmap",
-      "xAxis": {
-        "show": true
-      },
-      "xBucketNumber": null,
-      "xBucketSize": null,
-      "yAxis": {
-        "decimals": 1,
-        "format": "s",
-        "logBase": 1,
-        "max": null,
-        "min": null,
-        "show": true,
-        "splitFactor": null
-      },
-      "yBucketBound": "upper",
-      "yBucketNumber": null,
-      "yBucketSize": null
-    },
-    {
-      "cards": {
-        "cardPadding": 0,
-        "cardRound": 0
-      },
-      "color": {
-        "cardColor": "#b4ff00",
-        "colorScale": "sqrt",
-        "colorScheme": "interpolateSpectral",
-        "exponent": 0.5,
-        "max": null,
-        "min": 0,
-        "mode": "spectrum"
-      },
-      "dataFormat": "tsbuckets",
-      "datasource": "${DS_TEST-CLUSTER}",
-      "description": "The latency distributions of flush storage by a cloud storage sink",
-      "fieldConfig": {
-        "defaults": {},
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": -12
-      },
-      "heatmap": {},
-      "hideZeroBuckets": true,
-      "highlightCards": true,
-      "id": 60015,
-      "legend": {
-        "show": true
-      },
-      "pluginVersion": "7.5.11",
-      "reverseYBuckets": false,
-      "targets": [
-        {
-          "exemplar": true,
-          "expr": "max(rate(ticdc_sink_cloud_storage_flush_duration_seconds_bucket{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",namespace=~\"$namespace\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (le)",
-          "format": "heatmap",
-          "hide": false,
-          "interval": "",
-          "intervalFactor": 2,
-          "legendFormat": "{{le}}",
-          "queryType": "randomWalk",
-          "refId": "A"
-        }
-      ],
-      "timeFrom": null,
-      "timeShift": null,
-      "title": "Flush duration",
-      "tooltip": {
-        "show": true,
-        "showHistogram": true
-      },
-      "tooltipDecimals": 1,
-      "type": "heatmap",
-      "xAxis": {
-        "show": true
-      },
-      "xBucketNumber": null,
-      "xBucketSize": null,
-      "yAxis": {
-        "decimals": 1,
-        "format": "s",
-        "logBase": 1,
-        "max": null,
-        "min": null,
-        "show": true,
-        "splitFactor": null
-      },
-      "yBucketBound": "upper",
-      "yBucketNumber": null,
-      "yBucketSize": null
-    },
     {
       "collapsed": true,
       "datasource": {
@@ -3235,7 +2891,7 @@
             "h": 9,
             "w": 12,
             "x": 0,
-            "y": 43
+            "y": 4
           },
           "hiddenSeries": false,
           "id": 19,
@@ -3350,7 +3006,7 @@
             "h": 9,
             "w": 12,
             "x": 12,
-            "y": 43
+            "y": 4
           },
           "hiddenSeries": false,
           "id": 24,
@@ -3466,7 +3122,7 @@
             "h": 9,
             "w": 12,
             "x": 0,
-            "y": 52
+            "y": 13
           },
           "hiddenSeries": false,
           "id": 26,
@@ -3575,7 +3231,7 @@
             "h": 9,
             "w": 12,
             "x": 12,
-            "y": 52
+            "y": 13
           },
           "hiddenSeries": false,
           "id": 23,
@@ -3684,7 +3340,7 @@
             "h": 9,
             "w": 12,
             "x": 0,
-            "y": 61
+            "y": 22
           },
           "hiddenSeries": false,
           "id": 275,
@@ -3783,7 +3439,7 @@
             "h": 9,
             "w": 12,
             "x": 12,
-            "y": 61
+            "y": 22
           },
           "hiddenSeries": false,
           "id": 110,
@@ -3884,7 +3540,7 @@
             "h": 9,
             "w": 12,
             "x": 0,
-            "y": 70
+            "y": 31
           },
           "hiddenSeries": false,
           "id": 293,
@@ -3998,7 +3654,7 @@
             "h": 9,
             "w": 12,
             "x": 12,
-            "y": 70
+            "y": 31
           },
           "id": 22473,
           "options": {
@@ -4060,7 +3716,7 @@
             "h": 9,
             "w": 12,
             "x": 0,
-            "y": 79
+            "y": 40
           },
           "hiddenSeries": false,
           "id": 60000,
@@ -4160,7 +3816,7 @@
             "h": 9,
             "w": 12,
             "x": 12,
-            "y": 79
+            "y": 40
           },
           "hiddenSeries": false,
           "id": 60001,
@@ -7814,7 +7470,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 54
+            "y": 9
           },
           "hiddenSeries": false,
           "id": 12050,
@@ -7923,7 +7579,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 54
+            "y": 9
           },
           "hiddenSeries": false,
           "id": 22296,
@@ -8014,7 +7670,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 62
+            "y": 17
           },
           "hiddenSeries": false,
           "id": 22269,
@@ -8123,7 +7779,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 62
+            "y": 17
           },
           "hiddenSeries": false,
           "id": 22299,
@@ -8214,7 +7870,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 70
+            "y": 25
           },
           "hiddenSeries": false,
           "id": 22291,
@@ -8311,7 +7967,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 70
+            "y": 25
           },
           "heatmap": {},
           "hideZeroBuckets": true,
@@ -8386,7 +8042,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 78
+            "y": 33
           },
           "hiddenSeries": false,
           "id": 60025,
@@ -8495,7 +8151,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 78
+            "y": 33
           },
           "hiddenSeries": false,
           "id": 60026,
@@ -8604,7 +8260,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 86
+            "y": 41
           },
           "hiddenSeries": false,
           "id": 22360,
@@ -18831,7 +18487,7 @@
             "y": 19
           },
           "hiddenSeries": false,
-          "id": 62004,
+          "id": 62015,
           "legend": {
             "alignAsTable": true,
             "avg": false,
@@ -18929,7 +18585,7 @@
             "y": 19
           },
           "hiddenSeries": false,
-          "id": 60017,
+          "id": 62029,
           "legend": {
             "alignAsTable": true,
             "avg": false,
@@ -19028,7 +18684,7 @@
             "y": 27
           },
           "hiddenSeries": false,
-          "id": 62015,
+          "id": 62017,
           "legend": {
             "alignAsTable": true,
             "avg": false,
@@ -19132,7 +18788,7 @@
             "y": 27
           },
           "hiddenSeries": false,
-          "id": 62026,
+          "id": 62031,
           "legend": {
             "alignAsTable": true,
             "avg": false,
@@ -19229,7 +18885,7 @@
             "y": 35
           },
           "hiddenSeries": false,
-          "id": 62025,
+          "id": 62019,
           "legend": {
             "alignAsTable": true,
             "avg": false,
@@ -19327,7 +18983,7 @@
             "y": 35
           },
           "hiddenSeries": false,
-          "id": 62016,
+          "id": 62033,
           "legend": {
             "alignAsTable": true,
             "avg": false,
@@ -19431,7 +19087,7 @@
             "y": 43
           },
           "hiddenSeries": false,
-          "id": 62017,
+          "id": 62021,
           "legend": {
             "alignAsTable": true,
             "avg": false,
@@ -19529,7 +19185,7 @@
             "y": 43
           },
           "hiddenSeries": false,
-          "id": 62024,
+          "id": 62035,
           "legend": {
             "alignAsTable": true,
             "avg": false,
@@ -19626,7 +19282,7 @@
             "y": 51
           },
           "hiddenSeries": false,
-          "id": 62018,
+          "id": 62023,
           "legend": {
             "alignAsTable": true,
             "avg": false,
@@ -19725,7 +19381,7 @@
             "y": 51
           },
           "hiddenSeries": false,
-          "id": 62023,
+          "id": 62037,
           "legend": {
             "alignAsTable": true,
             "avg": false,
@@ -19823,7 +19479,7 @@
             "y": 59
           },
           "hiddenSeries": false,
-          "id": 62022,
+          "id": 62025,
           "legend": {
             "alignAsTable": true,
             "avg": false,
@@ -19922,7 +19578,7 @@
             "y": 59
           },
           "hiddenSeries": false,
-          "id": 62019,
+          "id": 62039,
           "legend": {
             "alignAsTable": true,
             "avg": false,
@@ -20020,7 +19676,7 @@
             "y": 67
           },
           "hiddenSeries": false,
-          "id": 62021,
+          "id": 62027,
           "legend": {
             "alignAsTable": true,
             "avg": false,
@@ -20118,7 +19774,7 @@
             "y": 67
           },
           "hiddenSeries": false,
-          "id": 62020,
+          "id": 62041,
           "legend": {
             "alignAsTable": true,
             "avg": false,
@@ -25566,7 +25222,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 165
+            "y": 25
           },
           "hiddenSeries": false,
           "id": 613,
@@ -25671,7 +25327,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 165
+            "y": 25
           },
           "hiddenSeries": false,
           "id": 614,
@@ -25764,7 +25420,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 173
+            "y": 33
           },
           "hiddenSeries": false,
           "id": 6141,
@@ -25857,7 +25513,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 173
+            "y": 33
           },
           "hiddenSeries": false,
           "id": 615,
@@ -25956,7 +25612,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 181
+            "y": 41
           },
           "heatmap": {},
           "hideZeroBuckets": true,
@@ -27640,7 +27296,7 @@
     ]
   },
   "timezone": "browser",
-  "title": "test-cluster-TiCDC-New-Archxx",
-  "uid": "YiGL8hBZ0aacxxxxx",
-  "version": 1
+  "title": "test-cluster-TiCDC-New-Arch-master",
+  "uid": "YiGL8hBZ0aacmastrer",
+  "version": 2
 }
