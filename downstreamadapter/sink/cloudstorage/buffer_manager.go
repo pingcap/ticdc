@@ -16,7 +16,6 @@ package cloudstorage
 import (
 	"bytes"
 	"context"
-	"strconv"
 	"time"
 
 	"github.com/pingcap/failpoint"
@@ -25,7 +24,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
-	"github.com/prometheus/client_golang/prometheus"
 )
 
 const (
@@ -50,41 +48,27 @@ type bufferManager struct {
 	inputCh          chan *task
 	enqueueFlushTask func(context.Context, flushTask) error
 	buffer           tableBatches
-
-	writerLabel        string
-	metricPendingBytes prometheus.Gauge
 }
 
 func newBufferManager(
-	shardID int,
 	changefeedID common.ChangeFeedID,
 	config *cloudstorage.Config,
 	spoolBuffer *spool.Spool,
 	enqueueFlushTask func(context.Context, flushTask) error,
 ) *bufferManager {
-	var (
-		keyspace    = changefeedID.Keyspace()
-		name        = changefeedID.Name()
-		writerLabel = strconv.Itoa(shardID)
-	)
 	return &bufferManager{
-		changeFeedID:       changefeedID,
-		config:             config,
-		spool:              spoolBuffer,
-		inputCh:            make(chan *task, defaultBufferManagerChannelSize),
-		enqueueFlushTask:   enqueueFlushTask,
-		buffer:             newTableBatches(),
-		writerLabel:        writerLabel,
-		metricPendingBytes: metrics.CloudStoragePendingBytesGauge.WithLabelValues(keyspace, name, writerLabel),
+		changeFeedID:     changefeedID,
+		config:           config,
+		spool:            spoolBuffer,
+		inputCh:          make(chan *task, defaultBufferManagerChannelSize),
+		enqueueFlushTask: enqueueFlushTask,
+		buffer:           newTableBatches(),
 	}
 }
 
 func (c *bufferManager) run(ctx context.Context) error {
 	ticker := time.NewTicker(c.config.FlushInterval)
-	defer func() {
-		ticker.Stop()
-		c.deleteMetrics()
-	}()
+	defer ticker.Stop()
 
 	for {
 		failpoint.Inject("passTickerOnce", func() {
@@ -106,7 +90,6 @@ func (c *bufferManager) run(ctx context.Context) error {
 						return err
 					}
 				}
-				c.metricPendingBytes.Set(float64(c.buffer.nBytes))
 				if err := c.enqueueFlushTask(ctx, flushTask{marker: task.marker}); err != nil {
 					return err
 				}
@@ -148,7 +131,6 @@ func (c *bufferManager) handleDMLTask(ctx context.Context, task *task) error {
 
 		version := task.versionedTable
 		if c.buffer.tables[version].size < uint64(c.config.FileSize) {
-			c.metricPendingBytes.Set(float64(c.buffer.nBytes))
 			return nil
 		}
 		return c.emitTableBatch(ctx, version, flushReasonSize)
@@ -157,7 +139,6 @@ func (c *bufferManager) handleDMLTask(ctx context.Context, task *task) error {
 
 func (c *bufferManager) emitBatch(ctx context.Context, reason string) error {
 	if c.buffer.isEmpty() {
-		c.metricPendingBytes.Set(float64(c.buffer.nBytes))
 		return nil
 	}
 
@@ -166,7 +147,6 @@ func (c *bufferManager) emitBatch(ctx context.Context, reason string) error {
 	}
 
 	c.buffer = newTableBatches()
-	c.metricPendingBytes.Set(float64(c.buffer.nBytes))
 	return nil
 }
 
@@ -182,7 +162,6 @@ func (c *bufferManager) emitTableBatch(
 	if err := c.emitFlushTask(ctx, tableBatch, reason); err != nil {
 		return err
 	}
-	c.metricPendingBytes.Set(float64(c.buffer.nBytes))
 	return nil
 }
 
@@ -193,19 +172,6 @@ func (c *bufferManager) enqueueTask(ctx context.Context, t *task) error {
 	case c.inputCh <- t:
 		return nil
 	}
-}
-
-func (c *bufferManager) deleteMetrics() {
-	var (
-		keyspace = c.changeFeedID.Keyspace()
-		name     = c.changeFeedID.Name()
-	)
-	metrics.CloudStoragePendingBytesGauge.DeleteLabelValues(keyspace, name, c.writerLabel)
-	metrics.CloudStorageFlushReasonCounter.DeleteLabelValues(keyspace, name, c.writerLabel, flushReasonSize)
-	metrics.CloudStorageFlushReasonCounter.DeleteLabelValues(keyspace, name, c.writerLabel, flushReasonInterval)
-	metrics.CloudStorageFlushReasonCounter.DeleteLabelValues(keyspace, name, c.writerLabel, flushReasonBarrier)
-	metrics.CloudStorageFlushReasonCounter.DeleteLabelValues(keyspace, name, c.writerLabel, flushReasonQuota)
-	metrics.CloudStorageFlushReasonCounter.DeleteLabelValues(keyspace, name, c.writerLabel, flushReasonOversize)
 }
 
 type tableBatches struct {
@@ -295,7 +261,7 @@ func (c *bufferManager) emitFlushTask(ctx context.Context, batch tableBatches, r
 	if err := c.enqueueFlushTask(ctx, flushTask{batches: batches}); err != nil {
 		return err
 	}
-	metrics.CloudStorageFlushReasonCounter.WithLabelValues(c.changeFeedID.Keyspace(), c.changeFeedID.Name(), c.writerLabel, reason).Inc()
+	metrics.CloudStorageFlushReasonCounter.WithLabelValues(c.changeFeedID.Keyspace(), c.changeFeedID.Name(), reason).Inc()
 	return nil
 }
 

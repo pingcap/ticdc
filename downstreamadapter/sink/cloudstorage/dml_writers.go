@@ -130,10 +130,15 @@ func (d *dmlWriters) run(ctx context.Context) error {
 func (d *dmlWriters) deleteMetrics() {
 	keyspace := d.changefeedID.Keyspace()
 	changefeed := d.changefeedID.Name()
-	sinkmetrics.CloudStorageWriteBytesHist.DeleteLabelValues(keyspace, changefeed)
+	sinkmetrics.CloudStorageFlushBytesHist.DeleteLabelValues(keyspace, changefeed)
 	sinkmetrics.CloudStorageFileCounter.DeleteLabelValues(keyspace, changefeed)
 	sinkmetrics.CloudStorageFlushDurationHistogram.DeleteLabelValues(keyspace, changefeed)
 	sinkmetrics.CloudStorageDDLFlushDMLDurationHistogram.DeleteLabelValues(keyspace, changefeed)
+	sinkmetrics.CloudStorageFlushReasonCounter.DeleteLabelValues(keyspace, changefeed, flushReasonSize)
+	sinkmetrics.CloudStorageFlushReasonCounter.DeleteLabelValues(keyspace, changefeed, flushReasonInterval)
+	sinkmetrics.CloudStorageFlushReasonCounter.DeleteLabelValues(keyspace, changefeed, flushReasonBarrier)
+	sinkmetrics.CloudStorageFlushReasonCounter.DeleteLabelValues(keyspace, changefeed, flushReasonQuota)
+	sinkmetrics.CloudStorageFlushReasonCounter.DeleteLabelValues(keyspace, changefeed, flushReasonOversize)
 }
 
 func (d *dmlWriters) addTasks(ctx context.Context) error {

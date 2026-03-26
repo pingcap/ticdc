@@ -21,11 +21,11 @@ const (
 
 // Metrics for cloud storage sink
 var (
-	// CloudStorageWriteBytesHist records the total number of bytes written to cloud storage.
-	CloudStorageWriteBytesHist = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+	// CloudStorageFlushBytesHist records the total number of bytes flushed to external storage.
+	CloudStorageFlushBytesHist = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: namespace,
 		Subsystem: subsystem,
-		Name:      "cloud_storage_write_bytes",
+		Name:      "cloud_storage_flushed_bytes",
 		Help:      "Total number of bytes written to cloud storage",
 		Buckets:   prometheus.ExponentialBuckets(1024, 2.0, 20), // 1KiB ~ 512MiB
 	}, []string{"namespace", "changefeed"})
@@ -56,13 +56,13 @@ var (
 		Buckets:   prometheus.ExponentialBuckets(0.001, 2.0, 16), // 1ms ~ 32s
 	}, []string{"namespace", "changefeed"})
 
-	// CloudStorageWorkerBusyRatio records the busy ratio of CloudStorage bgUpdateLog worker.
+	// CloudStorageWorkerBusyRatio records the busy ratio of CloudStorage writers.
 	CloudStorageWorkerBusyRatio = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: namespace,
 			Subsystem: subsystem,
 			Name:      "cloud_storage_worker_busy_ratio",
-			Help:      "Busy ratio for cloud storage sink dml worker.",
+			Help:      "Busy ratio for cloud storage sink dml writers.",
 		}, []string{"namespace", "changefeed", "id"})
 
 	CloudStorageSpoolMemoryBytesGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
@@ -124,24 +124,17 @@ var (
 		Help:      "Current number of live cloud storage spool segments",
 	}, []string{"namespace", "changefeed"})
 
-	CloudStoragePendingBytesGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Namespace: namespace,
-		Subsystem: subsystem,
-		Name:      "cloud_storage_pending_bytes",
-		Help:      "Current buffered bytes in one cloud storage writer shard before flush",
-	}, []string{"namespace", "changefeed", "writer"})
-
 	CloudStorageFlushReasonCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: namespace,
 		Subsystem: subsystem,
 		Name:      "cloud_storage_flush_total",
-		Help:      "Total number of flush batches emitted by one cloud storage writer shard",
-	}, []string{"namespace", "changefeed", "writer", "reason"})
+		Help:      "Total number of flush batches emitted by cloud storage buffer manager",
+	}, []string{"namespace", "changefeed", "reason"})
 )
 
 // InitCloudStorageMetrics registers all metrics in this file.
 func InitCloudStorageMetrics(registry *prometheus.Registry) {
-	registry.MustRegister(CloudStorageWriteBytesHist)
+	registry.MustRegister(CloudStorageFlushBytesHist)
 	registry.MustRegister(CloudStorageFileCounter)
 	registry.MustRegister(CloudStorageFlushDurationHistogram)
 	registry.MustRegister(CloudStorageDDLFlushDMLDurationHistogram)
@@ -154,6 +147,5 @@ func InitCloudStorageMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(CloudStorageLoadBytesHistogram)
 	registry.MustRegister(CloudStorageRotateCountCounter)
 	registry.MustRegister(CloudStorageSpoolSegmentCountGauge)
-	registry.MustRegister(CloudStoragePendingBytesGauge)
 	registry.MustRegister(CloudStorageFlushReasonCounter)
 }

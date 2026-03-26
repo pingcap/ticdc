@@ -48,7 +48,7 @@ type writer struct {
 	statistics        *pmetrics.Statistics
 	filePathGenerator *cloudstorage.FilePathGenerator
 
-	metricWriteBytes       prometheus.Observer
+	metricFlushBytes       prometheus.Observer
 	metricFileCount        prometheus.Counter
 	metricFlushDuration    prometheus.Observer
 	metricsWorkerBusyRatio prometheus.Counter
@@ -99,13 +99,13 @@ func newWriter(
 		statistics:        statistics,
 		filePathGenerator: cloudstorage.NewFilePathGenerator(changefeedID, config, storage, extension),
 
-		metricWriteBytes:       metrics.CloudStorageWriteBytesHist.WithLabelValues(keyspace, changefeed),
+		metricFlushBytes:       metrics.CloudStorageFlushBytesHist.WithLabelValues(keyspace, changefeed),
 		metricFileCount:        metrics.CloudStorageFileCounter.WithLabelValues(keyspace, changefeed),
 		metricFlushDuration:    metrics.CloudStorageFlushDurationHistogram.WithLabelValues(keyspace, changefeed),
 		metricsWorkerBusyRatio: metrics.CloudStorageWorkerBusyRatio.WithLabelValues(keyspace, changefeed, strconv.Itoa(id)),
 		writerLabel:            strconv.Itoa(id),
 	}
-	d.bufferManager = newBufferManager(d.shardID, d.changeFeedID, d.config, d.spool, d.enqueueFlushTask)
+	d.bufferManager = newBufferManager(d.changeFeedID, d.config, d.spool, d.enqueueFlushTask)
 	return d
 }
 
@@ -277,7 +277,7 @@ func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath 
 	}
 
 	d.metricFlushDuration.Observe(time.Since(start).Seconds())
-	d.metricWriteBytes.Observe(float64(payload.nBytes))
+	d.metricFlushBytes.Observe(float64(payload.nBytes))
 	d.metricFileCount.Inc()
 
 	for _, postFlushCallback := range payload.postFlushCallbacks {

@@ -60,7 +60,7 @@ func TestBufferManagerFlushesPendingBatchBeforeWaitingForDiskQuota(t *testing.T)
 	require.NoError(t, err)
 	defer spoolBuffer.Close()
 
-	controller := newBufferManager(1, changefeedID, &cloudstorage.Config{
+	controller := newBufferManager(changefeedID, &cloudstorage.Config{
 		FlushInterval:    time.Hour,
 		FileSize:         1 << 20,
 		SpoolDiskQuota:   40,
@@ -112,7 +112,7 @@ func TestBufferManagerOversizedBatchFlushesImmediatelyFromMemory(t *testing.T) {
 	require.NoError(t, err)
 	defer spoolBuffer.Close()
 
-	controller := newBufferManager(1, changefeedID, &cloudstorage.Config{
+	controller := newBufferManager(changefeedID, &cloudstorage.Config{
 		FlushInterval:    time.Hour,
 		FileSize:         1 << 20,
 		SpoolDiskQuota:   1,
