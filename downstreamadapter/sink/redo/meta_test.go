@@ -23,11 +23,15 @@ import (
 
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/redo"
 	misc "github.com/pingcap/ticdc/pkg/redo/common"
+	"github.com/pingcap/ticdc/pkg/redo/testutil"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/uuid"
+	promtestutil "github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
+	"github.com/tikv/client-go/v2/oracle"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -71,15 +75,7 @@ func TestInitAndWriteMeta(t *testing.T) {
 	}
 
 	startTs := uint64(10)
-	cfg := &config.ConsistentConfig{
-		Level:                 util.AddressOf(string(redo.ConsistentLevelEventual)),
-		MaxLogSize:            util.AddressOf(redo.DefaultMaxLogSize),
-		Storage:               util.AddressOf(uri.String()),
-		FlushIntervalInMs:     util.AddressOf(int64(redo.MinFlushIntervalInMs)),
-		MetaFlushIntervalInMs: util.AddressOf(int64(redo.MinFlushIntervalInMs)),
-		EncodingWorkerNum:     util.AddressOf(redo.DefaultEncodingWorkerNum),
-		FlushWorkerNum:        util.AddressOf(redo.DefaultFlushWorkerNum),
-	}
+	cfg := testutil.NewConsistentConfig(uri.String())
 	m := NewRedoMeta(changefeedID, startTs, cfg)
 
 	var eg errgroup.Group
@@ -155,15 +151,7 @@ func TestPreCleanupAndWriteMeta(t *testing.T) {
 	}
 
 	startTs := uint64(10)
-	cfg := &config.ConsistentConfig{
-		Level:                 util.AddressOf(string(redo.ConsistentLevelEventual)),
-		MaxLogSize:            util.AddressOf(redo.DefaultMaxLogSize),
-		Storage:               util.AddressOf(uri.String()),
-		FlushIntervalInMs:     util.AddressOf(int64(redo.MinFlushIntervalInMs)),
-		MetaFlushIntervalInMs: util.AddressOf(int64(redo.MinFlushIntervalInMs)),
-		EncodingWorkerNum:     util.AddressOf(redo.DefaultEncodingWorkerNum),
-		FlushWorkerNum:        util.AddressOf(redo.DefaultFlushWorkerNum),
-	}
+	cfg := testutil.NewConsistentConfig(uri.String())
 	m := NewRedoMeta(changefeedID, startTs, cfg)
 
 	var eg errgroup.Group
@@ -292,15 +280,7 @@ func TestGCAndCleanup(t *testing.T) {
 	}
 
 	startTs := uint64(3)
-	cfg := &config.ConsistentConfig{
-		Level:                 util.AddressOf(string(redo.ConsistentLevelEventual)),
-		MaxLogSize:            util.AddressOf(redo.DefaultMaxLogSize),
-		Storage:               util.AddressOf(uri.String()),
-		FlushIntervalInMs:     util.AddressOf(int64(redo.MinFlushIntervalInMs)),
-		MetaFlushIntervalInMs: util.AddressOf(int64(redo.MinFlushIntervalInMs)),
-		EncodingWorkerNum:     util.AddressOf(redo.DefaultEncodingWorkerNum),
-		FlushWorkerNum:        util.AddressOf(redo.DefaultFlushWorkerNum),
-	}
+	cfg := testutil.NewConsistentConfig(uri.String())
 
 	m := NewRedoMeta(changefeedID, startTs, cfg)
 
@@ -339,4 +319,50 @@ func TestGCAndCleanup(t *testing.T) {
 		return nil
 	})
 	require.Equal(t, 1, cnt)
+}
+
+func TestRedoMetaMetrics(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	nConfig := config.GetGlobalServerConfig().Clone()
+	config.StoreGlobalServerConfig(nConfig)
+
+	changefeedID := common.NewChangeFeedIDWithName("test-redo-meta-metrics", common.DefaultKeyspaceName)
+	keyspace := changefeedID.Keyspace()
+	changefeed := changefeedID.Name()
+	defer metrics.RedoCheckpointTsGauge.DeleteLabelValues(keyspace, changefeed)
+	defer metrics.RedoResolvedTsGauge.DeleteLabelValues(keyspace, changefeed)
+
+	_, uri, err := util.GetTestExtStorage(ctx, t.TempDir())
+	require.NoError(t, err)
+
+	startTs := oracle.ComposeTS(10_000, 0)
+	cfg := testutil.NewConsistentConfig(uri.String())
+
+	m := NewRedoMeta(changefeedID, startTs, cfg)
+	require.NoError(t, m.PreStart(ctx))
+
+	var eg errgroup.Group
+	eg.Go(func() error {
+		return m.Run(ctx)
+	})
+
+	require.Eventually(t, func() bool {
+		checkpointTs := promtestutil.ToFloat64(metrics.RedoCheckpointTsGauge.WithLabelValues(keyspace, changefeed))
+		resolvedTs := promtestutil.ToFloat64(metrics.RedoResolvedTsGauge.WithLabelValues(keyspace, changefeed))
+		return checkpointTs == float64(10_000) && resolvedTs == float64(10_000)
+	}, time.Second, 50*time.Millisecond)
+
+	m.UpdateMeta(oracle.ComposeTS(20_000, 0), oracle.ComposeTS(21_000, 0))
+	require.Eventually(t, func() bool {
+		checkpointTs := promtestutil.ToFloat64(metrics.RedoCheckpointTsGauge.WithLabelValues(keyspace, changefeed))
+		resolvedTs := promtestutil.ToFloat64(metrics.RedoResolvedTsGauge.WithLabelValues(keyspace, changefeed))
+		return checkpointTs == 20_000 && resolvedTs == 21_000
+	}, time.Second, 50*time.Millisecond)
+
+	cancel()
+	require.ErrorIs(t, eg.Wait(), context.Canceled)
 }
