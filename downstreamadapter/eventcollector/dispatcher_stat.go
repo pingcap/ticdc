@@ -83,7 +83,7 @@ func newDispatcherStat(
 			zap.Stringer("changefeedID", target.GetChangefeedID()),
 			zap.Stringer("dispatcher", target.GetId()))
 	}
-	return newDispatcherStatWithSession(
+	return newDispatcherStatInternal(
 		target,
 		eventCollector,
 		eventCollector.getLocalServerID(),
@@ -92,7 +92,7 @@ func newDispatcherStat(
 	)
 }
 
-func newDispatcherStatWithSession(
+func newDispatcherStatInternal(
 	target dispatcher.DispatcherService,
 	eventCollector *EventCollector,
 	localServerID node.ID,

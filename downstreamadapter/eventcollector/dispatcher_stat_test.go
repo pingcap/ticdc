@@ -57,7 +57,7 @@ func newMockDispatcher(id common.DispatcherID, startTs uint64) *mockDispatcher {
 }
 
 func newDispatcherStatForTest(target dispatcher.DispatcherService, readyCallback func()) *dispatcherStat {
-	return newDispatcherStatWithSession(
+	return newDispatcherStatInternal(
 		target,
 		nil,
 		"",
