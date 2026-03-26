@@ -78,15 +78,30 @@ func newDispatcherStat(
 	eventCollector *EventCollector,
 	readyCallback func(),
 ) *dispatcherStat {
+	if eventCollector == nil {
+		log.Panic("event collector must not be nil when creating dispatcher stat",
+			zap.Stringer("changefeedID", target.GetChangefeedID()),
+			zap.Stringer("dispatcher", target.GetId()))
+	}
+	return newDispatcherStatWithSession(
+		target,
+		eventCollector,
+		eventCollector.getLocalServerID(),
+		eventCollector.enqueueMessageForSend,
+		readyCallback,
+	)
+}
+
+func newDispatcherStatWithSession(
+	target dispatcher.DispatcherService,
+	eventCollector *EventCollector,
+	localServerID node.ID,
+	sendMessage func(*messaging.TargetMessage),
+	readyCallback func(),
+) *dispatcherStat {
 	stat := &dispatcherStat{
 		target:         target,
 		eventCollector: eventCollector,
-	}
-	localServerID := node.ID("")
-	sendMessage := func(*messaging.TargetMessage) {}
-	if eventCollector != nil {
-		localServerID = eventCollector.getLocalServerID()
-		sendMessage = eventCollector.enqueueMessageForSend
 	}
 	stat.currentEpoch.Store(newDispatcherEpochState(0, 0, target.GetStartTs()))
 	stat.lastEventCommitTs.Store(target.GetStartTs())
