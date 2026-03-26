@@ -515,7 +515,7 @@ func TestHandleSignalEvent(t *testing.T) {
 				},
 			},
 			initialState: func(stat *dispatcherStat) {
-				stat.connState.setEventServiceID(localServerID)
+				stat.session.connState.setEventServiceID(localServerID)
 			},
 			expectedEventServiceID: localServerID,
 			expectedReadyReceived:  false,
@@ -529,7 +529,7 @@ func TestHandleSignalEvent(t *testing.T) {
 				},
 			},
 			initialState: func(stat *dispatcherStat) {
-				stat.connState.setEventServiceID(remoteServerID)
+				stat.session.connState.setEventServiceID(remoteServerID)
 			},
 			expectedEventServiceID: remoteServerID,
 			expectedReadyReceived:  false,
@@ -543,7 +543,7 @@ func TestHandleSignalEvent(t *testing.T) {
 				},
 			},
 			initialState: func(stat *dispatcherStat) {
-				stat.readyCallback = func() {}
+				stat.session.readyCallback = func() {}
 			},
 			expectedEventServiceID: localServerID,
 			expectedReadyReceived:  true,
@@ -557,7 +557,7 @@ func TestHandleSignalEvent(t *testing.T) {
 				},
 			},
 			initialState: func(stat *dispatcherStat) {
-				stat.connState.setEventServiceID(remoteServerID)
+				stat.session.connState.setEventServiceID(remoteServerID)
 			},
 			expectedEventServiceID: localServerID,
 			expectedReadyReceived:  true,
@@ -571,7 +571,7 @@ func TestHandleSignalEvent(t *testing.T) {
 				},
 			},
 			initialState: func(stat *dispatcherStat) {
-				stat.connState.setEventServiceID(remoteServerID)
+				stat.session.connState.setEventServiceID(remoteServerID)
 			},
 			expectedEventServiceID: remoteServerID,
 			expectedReadyReceived:  true,
@@ -585,8 +585,8 @@ func TestHandleSignalEvent(t *testing.T) {
 				},
 			},
 			initialState: func(stat *dispatcherStat) {
-				stat.connState.setEventServiceID(remoteServerID)
-				stat.connState.readyEventReceived.Store(true)
+				stat.session.connState.setEventServiceID(remoteServerID)
+				stat.session.connState.readyEventReceived.Store(true)
 			},
 			expectedEventServiceID: remoteServerID,
 			expectedReadyReceived:  true,
@@ -600,8 +600,8 @@ func TestHandleSignalEvent(t *testing.T) {
 				},
 			},
 			initialState: func(stat *dispatcherStat) {
-				stat.connState.setEventServiceID(remoteServerID)
-				stat.connState.remoteCandidates = []string{anotherRemoteServerID.String()}
+				stat.session.connState.setEventServiceID(remoteServerID)
+				stat.session.connState.remoteCandidates = []string{anotherRemoteServerID.String()}
 			},
 			expectedEventServiceID: anotherRemoteServerID,
 			expectedReadyReceived:  false,
@@ -615,7 +615,7 @@ func TestHandleSignalEvent(t *testing.T) {
 				},
 			},
 			initialState: func(stat *dispatcherStat) {
-				stat.connState.setEventServiceID(remoteServerID)
+				stat.session.connState.setEventServiceID(remoteServerID)
 			},
 			expectedPanic: true,
 		},
@@ -628,7 +628,7 @@ func TestHandleSignalEvent(t *testing.T) {
 				},
 			},
 			initialState: func(stat *dispatcherStat) {
-				stat.connState.setEventServiceID(remoteServerID)
+				stat.session.connState.setEventServiceID(remoteServerID)
 			},
 			expectedPanic: true,
 		},
@@ -649,8 +649,8 @@ func TestHandleSignalEvent(t *testing.T) {
 			}
 
 			stat.handleSignalEvent(tt.event)
-			require.Equal(t, tt.expectedEventServiceID, stat.connState.getEventServiceID())
-			require.Equal(t, tt.expectedReadyReceived, stat.connState.readyEventReceived.Load())
+			require.Equal(t, tt.expectedEventServiceID, stat.session.connState.getEventServiceID())
+			require.Equal(t, tt.expectedReadyReceived, stat.session.connState.readyEventReceived.Load())
 		})
 	}
 }
@@ -769,7 +769,7 @@ func TestHandleDataEvents(t *testing.T) {
 				},
 			},
 			initialState: func(stat *dispatcherStat) {
-				stat.connState.setEventServiceID(remoteServerID)
+				stat.session.connState.setEventServiceID(remoteServerID)
 				stat.currentEpoch.Store(newDispatcherEpochState(2, 1, stat.target.GetStartTs()))
 			},
 			handleEvents:   normalHandleEvents,
@@ -789,7 +789,7 @@ func TestHandleDataEvents(t *testing.T) {
 				},
 			},
 			initialState: func(stat *dispatcherStat) {
-				stat.connState.setEventServiceID(remoteServerID)
+				stat.session.connState.setEventServiceID(remoteServerID)
 				stat.currentEpoch.Store(newDispatcherEpochState(2, 1, stat.target.GetStartTs()))
 				stat.lastEventCommitTs.Store(50)
 			},
@@ -810,7 +810,7 @@ func TestHandleDataEvents(t *testing.T) {
 				},
 			},
 			initialState: func(stat *dispatcherStat) {
-				stat.connState.setEventServiceID(remoteServerID)
+				stat.session.connState.setEventServiceID(remoteServerID)
 				stat.currentEpoch.Store(newDispatcherEpochState(10, 1, stat.target.GetStartTs()))
 				stat.lastEventCommitTs.Store(50)
 			},
@@ -832,7 +832,7 @@ func TestHandleDataEvents(t *testing.T) {
 				},
 			},
 			initialState: func(stat *dispatcherStat) {
-				stat.connState.setEventServiceID(remoteServerID)
+				stat.session.connState.setEventServiceID(remoteServerID)
 				stat.currentEpoch.Store(newDispatcherEpochState(10, 1, stat.target.GetStartTs()))
 				stat.lastEventCommitTs.Store(50)
 			},
@@ -863,7 +863,7 @@ func TestHandleDataEvents(t *testing.T) {
 				},
 			},
 			initialState: func(stat *dispatcherStat) {
-				stat.connState.setEventServiceID(remoteServerID)
+				stat.session.connState.setEventServiceID(remoteServerID)
 				stat.currentEpoch.Store(newDispatcherEpochState(10, 1, stat.target.GetStartTs()))
 				stat.lastEventCommitTs.Store(50)
 				stat.tableInfo.Store(&common.TableInfo{})
@@ -885,7 +885,7 @@ func TestHandleDataEvents(t *testing.T) {
 				},
 			},
 			initialState: func(stat *dispatcherStat) {
-				stat.connState.setEventServiceID(remoteServerID)
+				stat.session.connState.setEventServiceID(remoteServerID)
 				stat.currentEpoch.Store(newDispatcherEpochState(10, 1, stat.target.GetStartTs()))
 				stat.lastEventCommitTs.Store(50)
 			},
@@ -906,7 +906,7 @@ func TestHandleDataEvents(t *testing.T) {
 				},
 			},
 			initialState: func(stat *dispatcherStat) {
-				stat.connState.setEventServiceID(remoteServerID)
+				stat.session.connState.setEventServiceID(remoteServerID)
 				stat.currentEpoch.Store(newDispatcherEpochState(20, 1, stat.target.GetStartTs()))
 				stat.lastEventCommitTs.Store(50)
 			},
@@ -1015,8 +1015,8 @@ func TestHandleBatchDataEvents(t *testing.T) {
 			stat.lastEventCommitTs.Store(tt.lastCommitTs)
 			state := stat.loadCurrentEpochState()
 			stat.currentEpoch.Store(newDispatcherEpochState(tt.epoch, state.lastEventSeq.Load(), state.maxEventTs.Load()))
-			stat.connState.setEventServiceID(tt.currentService)
-			stat.connState.readyEventReceived.Store(true)
+			stat.session.connState.setEventServiceID(tt.currentService)
+			stat.session.connState.readyEventReceived.Store(true)
 
 			got := stat.handleBatchDataEvents(tt.events)
 			require.Equal(t, tt.want, got)
@@ -1104,8 +1104,8 @@ func TestHandleSingleDataEvents(t *testing.T) {
 			stat.lastEventCommitTs.Store(tt.lastCommitTs)
 			state := stat.loadCurrentEpochState()
 			stat.currentEpoch.Store(newDispatcherEpochState(tt.epoch, state.lastEventSeq.Load(), state.maxEventTs.Load()))
-			stat.connState.setEventServiceID(tt.currentService)
-			stat.connState.readyEventReceived.Store(true)
+			stat.session.connState.setEventServiceID(tt.currentService)
+			stat.session.connState.readyEventReceived.Store(true)
 
 			// Special handling for multiple events test case - it should panic
 			if tt.name == "multiple events" {

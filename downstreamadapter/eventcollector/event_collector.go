@@ -416,12 +416,12 @@ func (c *EventCollector) groupHeartbeat() map[node.ID]*event.DispatcherHeartbeat
 
 	c.dispatcherMap.Range(func(_, value interface{}) bool {
 		stat := value.(*dispatcherStat)
-		if !stat.connState.isReceivingDataEvent() {
+		if !stat.isReceivingDataEvent() {
 			return true
 		}
 		checkpointTs, epoch := stat.getHeartbeatProgressForEventService()
 		group(
-			stat.connState.getEventServiceID(),
+			stat.getEventServiceID(),
 			stat.getDispatcherID(),
 			checkpointTs,
 			epoch,
@@ -506,7 +506,7 @@ func (c *EventCollector) handleDispatcherHeartbeatResponse(targetMessage *messag
 			}
 			stat := v.(*dispatcherStat)
 			// If the serverID not match, it means the dispatcher is not registered on this server now, just ignore it the response.
-			if stat.connState.isCurrentEventService(targetMessage.From) {
+			if stat.isCurrentEventService(targetMessage.From) {
 				log.Info("dispatcher removed in event service",
 					zap.Stringer("dispatcherID", ds.DispatcherID),
 					zap.Stringer("eventServiceID", targetMessage.From))
@@ -702,7 +702,7 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 
 	c.dispatcherMap.Range(func(k, v interface{}) bool {
 		stat := v.(*dispatcherStat)
-		eventServiceID := stat.connState.getEventServiceID()
+		eventServiceID := stat.getEventServiceID()
 		if eventServiceID == "" {
 			return true
 		}

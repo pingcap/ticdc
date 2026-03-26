@@ -254,8 +254,8 @@ func TestGroupHeartbeatUsesEpochAndClamp(t *testing.T) {
 	c.AddDispatcher(localDispatcher, 1024)
 	localStat := c.getDispatcherStatByID(localDispatcher.id)
 	require.NotNil(t, localStat)
-	localStat.connState.setEventServiceID(serverInfo.ID)
-	localStat.connState.readyEventReceived.Store(true)
+	localStat.session.connState.setEventServiceID(serverInfo.ID)
+	localStat.session.connState.readyEventReceived.Store(true)
 	localStat.currentEpoch.Store(newDispatcherEpochState(3, 0, 150))
 
 	remoteID := node.ID("remote-server")
@@ -268,8 +268,8 @@ func TestGroupHeartbeatUsesEpochAndClamp(t *testing.T) {
 	c.AddDispatcher(remoteDispatcher, 1024)
 	remoteStat := c.getDispatcherStatByID(remoteDispatcher.id)
 	require.NotNil(t, remoteStat)
-	remoteStat.connState.setEventServiceID(remoteID)
-	remoteStat.connState.readyEventReceived.Store(true)
+	remoteStat.session.connState.setEventServiceID(remoteID)
+	remoteStat.session.connState.readyEventReceived.Store(true)
 	remoteStat.currentEpoch.Store(newDispatcherEpochState(5, 1, 210))
 
 	grouped := c.groupHeartbeat()
@@ -314,8 +314,8 @@ func TestGroupHeartbeatResetThenHandshake(t *testing.T) {
 	c.AddDispatcher(mockDisp, 1024)
 	stat := c.getDispatcherStatByID(dispatcherID)
 	require.NotNil(t, stat)
-	stat.connState.setEventServiceID(serverInfo.ID)
-	stat.connState.readyEventReceived.Store(true)
+	stat.session.connState.setEventServiceID(serverInfo.ID)
+	stat.session.connState.readyEventReceived.Store(true)
 
 	// Simulate a reset to a smaller ts while old in-flight flushes have already
 	// advanced sink checkpoint to a larger value.
