@@ -608,7 +608,9 @@ func (c *eventBroker) processTableTriggerDispatcher(ctx context.Context, dispatc
 		// After all the events are sent, we send the watermark to the dispatcher.
 		c.sendResolvedTs(stat, boundedEndTs)
 	} else {
-		c.nudgeSyncPointCommitIfNeeded(stat)
+		if !c.nudgeSyncPointCommitIfNeeded(stat) {
+			c.sendSignalResolvedTs(stat)
+		}
 	}
 }
 
@@ -882,7 +884,12 @@ func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, r
 			return
 		}
 
-		d.nextSyncPoint.Store(oracle.GoTimeToTS(oracle.GetTimeFromTS(commitTs).Add(d.syncPointInterval)))
+		nextSyncPoint := oracle.GoTimeToTS(oracle.GetTimeFromTS(commitTs).Add(d.syncPointInterval))
+		// Advance nextSyncPoint with CAS so concurrent send paths cannot emit the same
+		// syncpoint twice or move nextSyncPoint backward.
+		if !d.nextSyncPoint.CompareAndSwap(commitTs, nextSyncPoint) {
+			continue
+		}
 
 		e := event.NewSyncPointEvent(d.id, commitTs, d.seq.Add(1), d.epoch)
 		log.Debug("send syncpoint event to dispatcher",
@@ -899,6 +906,24 @@ func (c *eventBroker) fastForwardSyncPointIfNeeded(d *dispatcherStat) {
 	c.fastForwardSyncPointToInFlightIfNeeded(d)
 }
 
+type uint64Value interface {
+	Load() uint64
+	CompareAndSwap(old, new uint64) bool
+}
+
+// setUint64Floor makes v >= floor by CAS retry, and never decreases v.
+func setUint64Floor(v uint64Value, floor uint64) (uint64, bool) {
+	for {
+		current := v.Load()
+		if current == 0 || current >= floor {
+			return current, false
+		}
+		if v.CompareAndSwap(current, floor) {
+			return current, true
+		}
+	}
+}
+
 func (c *eventBroker) fastForwardSyncPointToInFlightIfNeeded(d *dispatcherStat) {
 	if d == nil || !d.enableSyncPoint {
 		return
@@ -907,16 +932,15 @@ func (c *eventBroker) fastForwardSyncPointToInFlightIfNeeded(d *dispatcherStat) 
 	if inFlightTs == 0 {
 		return
 	}
-	nextSyncPoint := d.nextSyncPoint.Load()
-	if nextSyncPoint == 0 || nextSyncPoint >= inFlightTs {
+	oldSyncPointTs, updated := setUint64Floor(&d.nextSyncPoint, inFlightTs)
+	if !updated {
 		return
 	}
-	d.nextSyncPoint.Store(inFlightTs)
 	log.Info("fast forward stale syncpoint to in flight syncpoint",
 		zap.Stringer("changefeedID", d.changefeedStat.changefeedID),
 		zap.Stringer("dispatcherID", d.id),
 		zap.Int64("tableID", d.info.GetTableSpan().GetTableID()),
-		zap.Uint64("oldSyncPointTs", nextSyncPoint),
+		zap.Uint64("oldSyncPointTs", oldSyncPointTs),
 		zap.Uint64("inFlightSyncPointTs", inFlightTs))
 }
 

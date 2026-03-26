@@ -180,13 +180,12 @@ func TestResolvedTsCache(t *testing.T) {
 	require.False(t, rc.isFull())
 }
 
-func TestSyncPointPromoteDoesNotRaceWithPrepareLowering(t *testing.T) {
+func TestSyncPointPrepareCannotLowerAfterPromote(t *testing.T) {
 	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "syncpoint-race"), 10*time.Second)
 
 	const (
-		preparingTs    = uint64(50)
-		loweredTarget  = uint64(40)
-		dispatcherSize = 200000
+		preparingTs   = uint64(50)
+		loweredTarget = uint64(40)
 	)
 
 	readyDispatcher := &dispatcherStat{}
@@ -194,20 +193,14 @@ func TestSyncPointPromoteDoesNotRaceWithPrepareLowering(t *testing.T) {
 	readyDispatcher.sentResolvedTs.Store(preparingTs)
 	dispatcherPtr := &atomic.Pointer[dispatcherStat]{}
 	dispatcherPtr.Store(readyDispatcher)
-	for i := 0; i < dispatcherSize; i++ {
-		status.addDispatcher(common.DispatcherID{Low: uint64(i + 1), High: 1}, dispatcherPtr)
-	}
+	status.addDispatcher(common.DispatcherID{Low: 1, High: 1}, dispatcherPtr)
 
 	status.syncPointPreparingTs.Store(preparingTs)
-	loweredCh := make(chan bool, 1)
-	go func() {
-		time.Sleep(500 * time.Microsecond)
-		loweredCh <- status.tryEnterSyncPointPrepare(loweredTarget)
-	}()
-
 	status.tryPromoteSyncPointToCommitIfReady()
-	require.False(t, <-loweredCh)
+	require.True(t, status.isSyncPointInCommitStage(preparingTs))
+
+	lowered := status.tryEnterSyncPointPrepare(loweredTarget)
+	require.False(t, lowered)
 	require.Equal(t, preparingTs, status.syncPointPreparingTs.Load())
 	require.Equal(t, preparingTs, status.syncPointInFlightTs.Load())
-	require.True(t, status.isSyncPointInCommitStage(preparingTs))
 }

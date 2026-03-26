@@ -60,6 +60,49 @@ type notifyMsg struct {
 	latestCommitTs uint64
 }
 
+type floorRetryMockUint64 struct {
+	value                 atomic.Uint64
+	failFirstCASWithValue uint64
+	failFirstCASDone      atomic.Bool
+}
+
+func (m *floorRetryMockUint64) Load() uint64 {
+	return m.value.Load()
+}
+
+func (m *floorRetryMockUint64) CompareAndSwap(old, new uint64) bool {
+	if m.failFirstCASWithValue > 0 && m.failFirstCASDone.CompareAndSwap(false, true) {
+		// Simulate concurrent advance between load and CAS.
+		m.value.Store(m.failFirstCASWithValue)
+		return false
+	}
+	return m.value.CompareAndSwap(old, new)
+}
+
+func TestSetUint64Floor(t *testing.T) {
+	t.Parallel()
+
+	t.Run("update stale value", func(t *testing.T) {
+		var v atomic.Uint64
+		v.Store(10)
+		old, updated := setUint64Floor(&v, 20)
+		require.True(t, updated)
+		require.Equal(t, uint64(10), old)
+		require.Equal(t, uint64(20), v.Load())
+	})
+
+	t.Run("retry without fallback after concurrent advance", func(t *testing.T) {
+		mock := &floorRetryMockUint64{
+			failFirstCASWithValue: 30,
+		}
+		mock.value.Store(10)
+		old, updated := setUint64Floor(mock, 20)
+		require.False(t, updated)
+		require.Equal(t, uint64(30), old)
+		require.Equal(t, uint64(30), mock.Load())
+	})
+}
+
 func TestCheckNeedScan(t *testing.T) {
 	broker, _, _, _ := newEventBrokerForTest()
 	// Close the broker, so we can catch all message in the test.
@@ -1313,6 +1356,47 @@ func TestProcessTableTriggerDispatcherNudgesCommitStageWhenNoForwardRange(t *tes
 	require.True(t, ok)
 	require.Equal(t, ts10, syncPointEvent.GetCommitTs())
 	require.Equal(t, ts10, second.resolvedTsEvent.ResolvedTs)
+	require.Equal(t, ts20, dispatcher.nextSyncPoint.Load())
+}
+
+func TestProcessTableTriggerDispatcherSendsSignalResolvedWhenNoForwardRangeAndNotInCommitStage(t *testing.T) {
+	broker, _, _, _ := newEventBrokerForTest()
+	// Stop background workers so we can deterministically inspect broker.messageCh.
+	broker.close()
+
+	base := time.Unix(0, 0)
+	ts10 := oracle.GoTimeToTS(base.Add(10 * time.Second))
+	ts20 := oracle.GoTimeToTS(base.Add(20 * time.Second))
+
+	info := newMockDispatcherInfo(t, ts10, common.NewDispatcherID(), 0, eventpb.ActionType_ACTION_TYPE_REGISTER)
+	info.epoch = 1
+	info.span = common.KeyspaceDDLSpan(common.DefaultKeyspaceID)
+	info.enableSyncPoint = true
+	info.syncPointInterval = 10 * time.Second
+	info.nextSyncPoint = ts20
+
+	changefeed := broker.getOrSetChangefeedStatus(info.GetChangefeedID(), info.GetSyncPointInterval())
+	dispatcher := newDispatcherStat(info, 1, 1, nil, changefeed)
+	dispatcher.lastSentResolvedTsTime.Store(time.Now().Add(-defaultSendResolvedTsInterval - time.Second))
+
+	dispatcherPtr := &atomic.Pointer[dispatcherStat]{}
+	dispatcherPtr.Store(dispatcher)
+	changefeed.addDispatcher(dispatcher.id, dispatcherPtr)
+
+	broker.schemaStore = &tableTriggerSchemaStore{
+		mockSchemaStore: NewMockSchemaStore(),
+		endTs:           ts10,
+	}
+
+	broker.processTableTriggerDispatcher(context.Background(), dispatcher.id, dispatcher)
+
+	require.Equal(t, 2, len(broker.messageCh[dispatcher.messageWorkerIndex]))
+	first := <-broker.messageCh[dispatcher.messageWorkerIndex]
+	second := <-broker.messageCh[dispatcher.messageWorkerIndex]
+	require.Equal(t, event.TypeHandshakeEvent, first.msgType)
+	require.Equal(t, event.TypeResolvedEvent, second.msgType)
+	require.Equal(t, ts10, second.resolvedTsEvent.ResolvedTs)
+	require.Equal(t, ts10, dispatcher.sentResolvedTs.Load())
 	require.Equal(t, ts20, dispatcher.nextSyncPoint.Load())
 }
 
