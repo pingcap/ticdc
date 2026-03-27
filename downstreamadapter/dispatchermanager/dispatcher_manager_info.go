@@ -52,16 +52,25 @@ func (e *DispatcherManager) GetMaintainerID() node.ID {
 	return e.meta.maintainerID
 }
 
-func (e *DispatcherManager) SetMaintainerID(maintainerID node.ID) {
+func (e *DispatcherManager) GetActiveMaintainerEpoch() uint64 {
+	e.meta.Lock()
+	defer e.meta.Unlock()
+	return e.meta.activeMaintainerEpoch
+}
+
+func (e *DispatcherManager) GetChangefeedEpoch() uint64 {
+	e.meta.Lock()
+	defer e.meta.Unlock()
+	return e.meta.changefeedEpoch
+}
+
+// SetActiveMaintainer updates the current maintainer identity atomically so
+// request admission and downstream heartbeat targeting observe the same owner.
+func (e *DispatcherManager) SetActiveMaintainer(maintainerID node.ID, maintainerEpoch uint64) {
 	e.meta.Lock()
 	defer e.meta.Unlock()
 	e.meta.maintainerID = maintainerID
-}
-
-func (e *DispatcherManager) GetMaintainerEpoch() uint64 {
-	e.meta.Lock()
-	defer e.meta.Unlock()
-	return e.meta.maintainerEpoch
+	e.meta.activeMaintainerEpoch = maintainerEpoch
 }
 
 func (e *DispatcherManager) GetTableTriggerEventDispatcher() *dispatcher.EventDispatcher {

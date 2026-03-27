@@ -14,15 +14,63 @@
 package dispatcherorchestrator
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
+	"github.com/pingcap/ticdc/downstreamadapter/dispatchermanager"
+	"github.com/pingcap/ticdc/downstreamadapter/eventcollector"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/stretchr/testify/require"
 )
+
+func newTestDispatcherManagerForEpoch(
+	t *testing.T,
+	changefeedID common.ChangeFeedID,
+	maintainerID node.ID,
+	withTableTrigger bool,
+) (*dispatchermanager.DispatcherManager, *config.ChangefeedConfig, *heartbeatpb.DispatcherID) {
+	t.Helper()
+
+	mc := messaging.NewMockMessageCenter()
+	appcontext.SetService(appcontext.MessageCenter, mc)
+	appcontext.SetService(appcontext.DefaultPDClock, pdutil.NewClock4Test())
+	appcontext.SetService(appcontext.HeartbeatCollector, dispatchermanager.NewHeartBeatCollector(node.ID("dispatcher")))
+	appcontext.SetService(appcontext.EventCollector, eventcollector.New(node.ID("dispatcher")))
+
+	info := &config.ChangeFeedInfo{
+		ChangefeedID: changefeedID,
+		SinkURI:      "blackhole://",
+		Config:       config.GetDefaultReplicaConfig(),
+	}
+	cfConfig := info.ToChangefeedConfig()
+	cfConfig.Epoch = 42
+
+	var tableTriggerID *heartbeatpb.DispatcherID
+	if withTableTrigger {
+		tableTriggerID = common.NewDispatcherID().ToPB()
+	}
+
+	manager, err := dispatchermanager.NewDispatcherManager(
+		0,
+		changefeedID,
+		cfConfig,
+		tableTriggerID,
+		nil,
+		1,
+		maintainerID,
+		false,
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { manager.TryClose(true) })
+	return manager, cfConfig, tableTriggerID
+}
 
 func TestPendingMessageQueue_TryEnqueueDropsDuplicatesUntilDone(t *testing.T) {
 	t.Parallel()
@@ -160,6 +208,172 @@ func TestPendingMessageQueue_CloseRequestUpgradeBetweenPopAndGet(t *testing.T) {
 	req2 := poppedMsg.Message[0].(*heartbeatpb.MaintainerCloseRequest)
 	require.True(t, req2.Removed)
 	q.Done(key)
+}
+
+func TestPendingMessageQueue_KeepsFirstBootstrapRequestUntilCurrentAttemptFinishes(t *testing.T) {
+	t.Parallel()
+
+	q := newPendingMessageQueue()
+	cfID := common.NewChangeFeedIDWithName("cf", "default")
+	key := pendingMessageKey{
+		changefeedID: cfID,
+		msgType:      messaging.TypeMaintainerBootstrapRequest,
+	}
+
+	oldMsg := messaging.NewSingleTargetMessage(
+		node.ID("old"),
+		messaging.DispatcherManagerManagerTopic,
+		&heartbeatpb.MaintainerBootstrapRequest{
+			ChangefeedID:    cfID.ToPB(),
+			MaintainerEpoch: 10,
+		},
+	)
+	newMsg := messaging.NewSingleTargetMessage(
+		node.ID("new"),
+		messaging.DispatcherManagerManagerTopic,
+		&heartbeatpb.MaintainerBootstrapRequest{
+			ChangefeedID:    cfID.ToPB(),
+			MaintainerEpoch: 11,
+		},
+	)
+
+	require.True(t, q.TryEnqueue(key, oldMsg))
+
+	poppedKey, ok := q.Pop()
+	require.True(t, ok)
+	require.Equal(t, key, poppedKey)
+	require.Same(t, oldMsg, q.Get(poppedKey))
+
+	// Ownership handoff is decided in the request handler. The queue should only
+	// de-duplicate retries for the in-flight attempt instead of overwriting it.
+	require.False(t, q.TryEnqueue(key, newMsg))
+	require.Same(t, oldMsg, q.Get(poppedKey))
+	q.Done(key)
+}
+
+func TestShouldAcceptMaintainerRequest(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, maintainerRequestStale, compareBootstrapMaintainerEpoch(20, 10))
+	require.Equal(t, maintainerRequestRetry, compareBootstrapMaintainerEpoch(20, 20))
+	require.Equal(t, maintainerRequestTakeover, compareBootstrapMaintainerEpoch(20, 30))
+
+	require.False(t, shouldAcceptPostBootstrapRequest(20, 10))
+	require.True(t, shouldAcceptPostBootstrapRequest(20, 20))
+	require.False(t, shouldAcceptPostBootstrapRequest(20, 30))
+
+	require.False(t, shouldAcceptCloseRequest(20, 10))
+	require.True(t, shouldAcceptCloseRequest(20, 20))
+	require.True(t, shouldAcceptCloseRequest(20, 30))
+}
+
+func TestHandleBootstrapRequestDropsLegacyTakeoverAfterStrictOwnerEstablished(t *testing.T) {
+	cfID := common.NewChangeFeedIDWithName("cf", "default")
+	manager, cfConfig, _ := newTestDispatcherManagerForEpoch(t, cfID, node.ID("owner-a"), false)
+	manager.SetActiveMaintainer(node.ID("owner-a"), 22)
+
+	cfgBytes, err := json.Marshal(cfConfig)
+	require.NoError(t, err)
+
+	orchestrator := &DispatcherOrchestrator{
+		mc: messaging.NewMockMessageCenter(),
+		dispatcherManagers: map[common.ChangeFeedID]*dispatchermanager.DispatcherManager{
+			cfID: manager,
+		},
+		msgQueue: newPendingMessageQueue(),
+	}
+
+	req := &heartbeatpb.MaintainerBootstrapRequest{
+		ChangefeedID:    cfID.ToPB(),
+		Config:          cfgBytes,
+		StartTs:         1,
+		KeyspaceId:      0,
+		MaintainerEpoch: 0,
+	}
+
+	require.NoError(t, orchestrator.handleBootstrapRequest(node.ID("owner-b"), req))
+	require.Equal(t, node.ID("owner-a"), manager.GetMaintainerID())
+	require.EqualValues(t, 22, manager.GetActiveMaintainerEpoch())
+}
+
+func TestHandleBootstrapRequestAllowsNewerEpochTakeover(t *testing.T) {
+	cfID := common.NewChangeFeedIDWithName("cf", "default")
+	manager, cfConfig, _ := newTestDispatcherManagerForEpoch(t, cfID, node.ID("owner-a"), false)
+	manager.SetActiveMaintainer(node.ID("owner-a"), 22)
+
+	cfgBytes, err := json.Marshal(cfConfig)
+	require.NoError(t, err)
+
+	orchestrator := &DispatcherOrchestrator{
+		mc: messaging.NewMockMessageCenter(),
+		dispatcherManagers: map[common.ChangeFeedID]*dispatchermanager.DispatcherManager{
+			cfID: manager,
+		},
+		msgQueue: newPendingMessageQueue(),
+	}
+
+	req := &heartbeatpb.MaintainerBootstrapRequest{
+		ChangefeedID:    cfID.ToPB(),
+		Config:          cfgBytes,
+		StartTs:         1,
+		KeyspaceId:      0,
+		MaintainerEpoch: 23,
+	}
+
+	require.NoError(t, orchestrator.handleBootstrapRequest(node.ID("owner-b"), req))
+	require.Equal(t, node.ID("owner-b"), manager.GetMaintainerID())
+	require.EqualValues(t, 23, manager.GetActiveMaintainerEpoch())
+}
+
+func TestHandleCloseRequestDropsLegacyCloseAfterStrictOwnerEstablished(t *testing.T) {
+	cfID := common.NewChangeFeedIDWithName("cf", "default")
+	manager, _, _ := newTestDispatcherManagerForEpoch(t, cfID, node.ID("owner-a"), false)
+	manager.SetActiveMaintainer(node.ID("owner-a"), 22)
+
+	orchestrator := &DispatcherOrchestrator{
+		mc: messaging.NewMockMessageCenter(),
+		dispatcherManagers: map[common.ChangeFeedID]*dispatchermanager.DispatcherManager{
+			cfID: manager,
+		},
+		msgQueue: newPendingMessageQueue(),
+	}
+
+	req := &heartbeatpb.MaintainerCloseRequest{
+		ChangefeedID:    cfID.ToPB(),
+		Removed:         false,
+		MaintainerEpoch: 0,
+	}
+
+	require.NoError(t, orchestrator.handleCloseRequest(node.ID("owner-b"), req))
+	require.Equal(t, node.ID("owner-a"), manager.GetMaintainerID())
+	require.EqualValues(t, 22, manager.GetActiveMaintainerEpoch())
+	_, ok := orchestrator.dispatcherManagers[cfID]
+	require.True(t, ok)
+}
+
+func TestHandlePostBootstrapRequestDropsUnexpectedMaintainerAfterStrictOwnerEstablished(t *testing.T) {
+	cfID := common.NewChangeFeedIDWithName("cf", "default")
+	manager, _, tableTriggerID := newTestDispatcherManagerForEpoch(t, cfID, node.ID("owner-a"), true)
+	manager.SetActiveMaintainer(node.ID("owner-a"), 22)
+	require.NotNil(t, tableTriggerID)
+
+	orchestrator := &DispatcherOrchestrator{
+		mc: messaging.NewMockMessageCenter(),
+		dispatcherManagers: map[common.ChangeFeedID]*dispatchermanager.DispatcherManager{
+			cfID: manager,
+		},
+		msgQueue: newPendingMessageQueue(),
+	}
+
+	req := &heartbeatpb.MaintainerPostBootstrapRequest{
+		ChangefeedID:                  cfID.ToPB(),
+		TableTriggerEventDispatcherId: tableTriggerID,
+		MaintainerEpoch:               0,
+	}
+
+	require.NoError(t, orchestrator.handlePostBootstrapRequest(node.ID("owner-b"), req))
+	require.Equal(t, node.ID("owner-a"), manager.GetMaintainerID())
+	require.EqualValues(t, 22, manager.GetActiveMaintainerEpoch())
 }
 
 func TestGetPendingMessageKey_SupportedTypes(t *testing.T) {

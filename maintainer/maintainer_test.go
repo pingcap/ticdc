@@ -131,9 +131,10 @@ func (m *mockDispatcherManager) onBootstrapRequest(msg *messaging.TargetMessage)
 	req := msg.Message[0].(*heartbeatpb.MaintainerBootstrapRequest)
 	m.maintainerID = msg.From
 	response := &heartbeatpb.MaintainerBootstrapResponse{
-		ChangefeedID: req.ChangefeedID,
-		Spans:        m.bootstrapTables,
-		CheckpointTs: req.StartTs,
+		ChangefeedID:    req.ChangefeedID,
+		Spans:           m.bootstrapTables,
+		CheckpointTs:    req.StartTs,
+		MaintainerEpoch: req.MaintainerEpoch,
 	}
 	m.changefeedID = req.ChangefeedID
 	m.checkpointTs = req.StartTs
@@ -163,6 +164,7 @@ func (m *mockDispatcherManager) onPostBootstrapRequest(msg *messaging.TargetMess
 	response := &heartbeatpb.MaintainerPostBootstrapResponse{
 		ChangefeedID:                  req.ChangefeedID,
 		TableTriggerEventDispatcherId: req.TableTriggerEventDispatcherId,
+		MaintainerEpoch:               req.MaintainerEpoch,
 		Err:                           nil,
 	}
 	err := m.mc.SendCommand(messaging.NewSingleTargetMessage(
@@ -233,8 +235,9 @@ func (m *mockDispatcherManager) onDispatchRequest(
 func (m *mockDispatcherManager) onMaintainerCloseRequest(msg *messaging.TargetMessage) {
 	_ = m.mc.SendCommand(messaging.NewSingleTargetMessage(msg.From,
 		messaging.MaintainerTopic, &heartbeatpb.MaintainerCloseResponse{
-			ChangefeedID: msg.Message[0].(*heartbeatpb.MaintainerCloseRequest).ChangefeedID,
-			Success:      true,
+			ChangefeedID:    msg.Message[0].(*heartbeatpb.MaintainerCloseRequest).ChangefeedID,
+			MaintainerEpoch: msg.Message[0].(*heartbeatpb.MaintainerCloseRequest).MaintainerEpoch,
+			Success:         true,
 		}))
 }
 

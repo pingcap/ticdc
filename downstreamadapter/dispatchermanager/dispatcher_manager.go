@@ -68,12 +68,13 @@ type DispatcherManager struct {
 	// mu is only used for table trigger dispatcher
 	mu sync.Mutex
 
-	// meta is used to store the meta info of the event dispatcher manager
-	// it's used to avoid data race when we update the maintainerID and maintainerEpoch
+	// meta is used to store the meta info of the event dispatcher manager.
+	// It keeps the active maintainer identity separate from the changefeed config epoch.
 	meta struct {
 		sync.Mutex
-		maintainerEpoch uint64
-		maintainerID    node.ID
+		changefeedEpoch       uint64
+		activeMaintainerEpoch uint64
+		maintainerID          node.ID
 	}
 
 	pdClock pdutil.Clock
@@ -217,8 +218,9 @@ func NewDispatcherManager(
 		metricRedoCreateDispatcherDuration:    metrics.CreateDispatcherDuration.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "redoDispatcher"),
 	}
 
-	// Set the epoch and maintainerID of the event dispatcher manager
-	manager.meta.maintainerEpoch = cfConfig.Epoch
+	// Record both the changefeed config epoch and the active maintainer epoch.
+	manager.meta.changefeedEpoch = cfConfig.Epoch
+	manager.meta.activeMaintainerEpoch = 0
 	manager.meta.maintainerID = maintainerID
 
 	// Set Sync Point Config
