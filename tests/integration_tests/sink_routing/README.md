@@ -16,8 +16,8 @@ The test uses the following routing rules in `conf/changefeed.toml`:
 ```toml
 [[sink.dispatchers]]
 matcher = ['source_db.*']
-schema = 'target_db'
-table = '{table}_routed'
+target-schema = 'target_db'
+target-table = '{table}_routed'
 ```
 
 This routes:

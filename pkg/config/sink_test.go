@@ -294,6 +294,128 @@ func TestCheckCompatibilityWithSinkURI(t *testing.T) {
 	}
 }
 
+func TestValidateAndAdjustRejectsRoutingForNonMySQLSink(t *testing.T) {
+	t.Parallel()
+
+	cfg := &SinkConfig{
+		DispatchRules: []*DispatchRule{
+			{
+				Matcher:      []string{"db1.*"},
+				TargetSchema: "archive",
+				TargetTable:  "{table}_bak",
+			},
+		},
+	}
+
+	sinkURI, err := url.Parse("kafka://127.0.0.1:9092/test?protocol=open-protocol")
+	require.NoError(t, err)
+	err = cfg.validateAndAdjust(sinkURI)
+	require.ErrorContains(t, err, "sink routing is only supported for mysql and tidb sinks")
+}
+
+func TestValidateAndAdjustAllowsRoutingForMySQLCompatibleSink(t *testing.T) {
+	t.Parallel()
+
+	testCases := []string{
+		"mysql://127.0.0.1:3306/",
+		"tidb://127.0.0.1:4000/",
+	}
+
+	for _, sink := range testCases {
+		cfg := &SinkConfig{
+			DispatchRules: []*DispatchRule{
+				{
+					Matcher:      []string{"db1.*"},
+					TargetSchema: "archive",
+					TargetTable:  "{table}_bak",
+				},
+			},
+		}
+		sinkURI, err := url.Parse(sink)
+		require.NoError(t, err)
+		require.NoError(t, cfg.validateAndAdjust(sinkURI))
+	}
+}
+
+func TestValidateSinkRouting(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name    string
+		sinkURI string
+		cfg     *SinkConfig
+		wantErr string
+	}{
+		{
+			name:    "valid routing rule",
+			sinkURI: "mysql://127.0.0.1:3306/",
+			cfg: &SinkConfig{
+				DispatchRules: []*DispatchRule{
+					{
+						Matcher:      []string{"db1.*"},
+						TargetSchema: "archive",
+						TargetTable:  "{table}_bak",
+					},
+				},
+			},
+		},
+		{
+			name:    "invalid target schema expression",
+			sinkURI: "mysql://127.0.0.1:3306/",
+			cfg: &SinkConfig{
+				DispatchRules: []*DispatchRule{
+					{
+						Matcher:      []string{"db1.*"},
+						TargetSchema: "{bad}",
+						TargetTable:  "{table}_bak",
+					},
+				},
+			},
+			wantErr: "target-schema",
+		},
+		{
+			name:    "non mysql sink rejects routing",
+			sinkURI: "kafka://127.0.0.1:9092/test?protocol=open-protocol",
+			cfg: &SinkConfig{
+				DispatchRules: []*DispatchRule{
+					{
+						Matcher:      []string{"db1.*"},
+						TargetSchema: "archive",
+						TargetTable:  "{table}_bak",
+					},
+				},
+			},
+			wantErr: "sink routing is only supported for mysql and tidb sinks",
+		},
+		{
+			name:    "mq dispatch rule ignored",
+			sinkURI: "kafka://127.0.0.1:9092/test?protocol=open-protocol",
+			cfg: &SinkConfig{
+				DispatchRules: []*DispatchRule{
+					{
+						Matcher:       []string{"db1.*"},
+						PartitionRule: "columns",
+						Columns:       []string{"id"},
+					},
+				},
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			sinkURI, err := url.Parse(tc.sinkURI)
+			require.NoError(t, err)
+			err = tc.cfg.validateSinkRouting(sinkURI.Scheme)
+			if tc.wantErr == "" {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, tc.wantErr)
+			}
+		})
+	}
+}
+
 func TestValidateAndAdjustCSVConfig(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

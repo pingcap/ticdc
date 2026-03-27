@@ -431,7 +431,7 @@ func TestBuildDMLWithRouting(t *testing.T) {
 }
 
 // TestBuildDMLWithSchemaOnlyRouting tests that only the schema is changed when
-// TableRule="{table}" (table name stays the same).
+// TargetTable="{table}" (table name stays the same).
 func TestBuildDMLWithSchemaOnlyRouting(t *testing.T) {
 	helper := event.NewEventTestHelper(t)
 	defer helper.Close()
@@ -483,7 +483,7 @@ func TestBuildDMLWithSchemaOnlyRouting(t *testing.T) {
 }
 
 // TestBuildDMLWithTableOnlyRouting tests that only the table name is changed when
-// SchemaRule="{schema}" (schema stays the same).
+// TargetSchema="{schema}" (schema stays the same).
 func TestBuildDMLWithTableOnlyRouting(t *testing.T) {
 	helper := event.NewEventTestHelper(t)
 	defer helper.Close()

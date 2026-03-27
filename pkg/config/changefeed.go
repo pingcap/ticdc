@@ -500,8 +500,8 @@ func (info *ChangeFeedInfo) rmMQOnlyFields() {
 	log.Info("since the downstream is not a MQ, remove MQ only fields",
 		zap.String("keyspace", info.ChangefeedID.Keyspace()),
 		zap.String("changefeed", info.ChangefeedID.Name()))
-	// Don't nil out DispatchRules entirely - it may contain routing rules (SchemaRule/TableRule)
-	// that are valid for all sink types. Instead, remove only MQ-specific fields from each rule.
+	// Don't nil out DispatchRules entirely - it may contain routing rules (TargetSchema/TargetTable)
+	// that are still valid for MySQL/TiDB sinks. Instead, remove only MQ-specific fields from each rule.
 	for _, rule := range info.Config.Sink.DispatchRules {
 		rule.DispatcherRule = ""
 		rule.PartitionRule = ""

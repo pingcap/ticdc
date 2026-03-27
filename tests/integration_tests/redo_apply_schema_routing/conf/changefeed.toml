@@ -12,5 +12,5 @@ meta-flush-interval = 200
 # This tests that TargetSchema/TargetTable are preserved in redo logs
 [[sink.dispatchers]]
 matcher = ["source_db.*"]
-schema = "target_db"
-table = "{table}"
+target-schema = "target_db"
+target-table = "{table}"

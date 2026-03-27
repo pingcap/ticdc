@@ -140,9 +140,6 @@ type SinkConfig struct {
 	// Protocol is NOT available when the downstream is DB.
 	Protocol *string `toml:"protocol" json:"protocol,omitempty"`
 
-	// DispatchRules configures event routing.
-	// For MQ sinks, rules control partition dispatching.
-	// For MySQL/TiDB sinks, rules with SchemaRule/TableRule enable schema and table name routing to write to different target tables.
 	DispatchRules []*DispatchRule `toml:"dispatchers" json:"dispatchers,omitempty"`
 
 	ColumnSelectors []*ColumnSelector `toml:"column-selectors" json:"column-selectors,omitempty"`
@@ -388,7 +385,9 @@ func (d DateSeparator) String() string {
 	}
 }
 
-// DispatchRule represents partition rule for a table.
+// DispatchRules configures event routing.
+// For MQ sinks, rules control topic / partition dispatching.
+// For MySQL/TiDB sinks, rules with TargetSchema/TargetTable enable schema and table name routing to write to different target tables.
 type DispatchRule struct {
 	Matcher []string `toml:"matcher" json:"matcher"`
 	// Deprecated, please use PartitionRule.
@@ -405,15 +404,21 @@ type DispatchRule struct {
 
 	TopicRule string `toml:"topic" json:"topic"`
 
-	// SchemaRule is an expression for the target schema name.
-	// Supports {schema} and {table} placeholders, e.g., "target_db" or "{schema}_backup".
-	// If empty, the source schema name is used.
-	SchemaRule string `toml:"schema" json:"schema"`
+	// TargetSchema rewrites the downstream schema name for MySQL/TiDB sinks.
+	// Leave it empty to keep the source schema name.
+	// For example, if the source table is `sales`.`orders`, `target-schema = "sales_bak"`
+	// writes to `sales_bak`.`orders`.
+	// You can also use placeholders. For example, `target-schema = "{schema}_bak"`
+	// becomes `sales_bak`.
+	TargetSchema string `toml:"target-schema" json:"target-schema"`
 
-	// TableRule is an expression for the target table name.
-	// Supports {schema} and {table} placeholders, e.g., "target_table" or "{schema}_{table}".
-	// If empty, the source table name is used.
-	TableRule string `toml:"table" json:"table"`
+	// TargetTable rewrites the downstream table name for MySQL/TiDB sinks.
+	// Leave it empty to keep the source table name.
+	// For example, if the source table is `sales`.`orders`, `target-table = "orders_bak"`
+	// writes to `sales`.`orders_bak`.
+	// You can also use placeholders. For example, `target-table = "{schema}_{table}"`
+	// becomes `sales_orders`.
+	TargetTable string `toml:"target-table" json:"target-table"`
 }
 
 // ColumnSelector represents a column selector for a table.
@@ -753,10 +758,6 @@ func (s *SinkConfig) validateAndAdjust(sinkURI *url.URL) error {
 		return err
 	}
 
-	if IsMySQLCompatibleScheme(sinkURI.Scheme) {
-		return nil
-	}
-
 	if util.GetOrZero(s.EnableKafkaSinkV2) {
 		log.Warn("enable-kafka-sink-v2 is deprecated, still use the default kafka sink")
 	}
@@ -821,13 +822,14 @@ func (s *SinkConfig) validateAndAdjust(sinkURI *url.URL) error {
 			rule.PartitionRule = rule.DispatcherRule
 			rule.DispatcherRule = ""
 		}
-		// Validate routing expressions
-		if err := ValidateRoutingExpression(rule.SchemaRule); err != nil {
-			return cerror.ErrInvalidRoutingRule.GenWithStackByArgs("schema rule", rule.SchemaRule, err.Error())
-		}
-		if err := ValidateRoutingExpression(rule.TableRule); err != nil {
-			return cerror.ErrInvalidRoutingRule.GenWithStackByArgs("table rule", rule.TableRule, err.Error())
-		}
+	}
+
+	if err := s.validateSinkRouting(sinkURI.Scheme); err != nil {
+		return err
+	}
+
+	if IsMySQLCompatibleScheme(sinkURI.Scheme) {
+		return nil
 	}
 
 	if util.GetOrZero(s.EncoderConcurrency) < 0 {
@@ -875,6 +877,29 @@ func (s *SinkConfig) validateAndAdjust(sinkURI *url.URL) error {
 		s.AdvanceTimeoutInSec = util.AddressOf(DefaultAdvanceTimeoutInSec)
 	}
 
+	return nil
+}
+
+func (s *SinkConfig) validateSinkRouting(scheme string) error {
+	var hasRoutingRules bool
+	for _, rule := range s.DispatchRules {
+		if rule.TargetSchema == "" && rule.TargetTable == "" {
+			continue
+		}
+		hasRoutingRules = true
+		if err := ValidateRoutingExpression(rule.TargetSchema); err != nil {
+			return cerror.ErrInvalidRoutingRule.GenWithStackByArgs("target-schema", rule.TargetSchema, err.Error())
+		}
+		if err := ValidateRoutingExpression(rule.TargetTable); err != nil {
+			return cerror.ErrInvalidRoutingRule.GenWithStackByArgs("target-table", rule.TargetTable, err.Error())
+		}
+	}
+	if hasRoutingRules && !IsMySQLCompatibleScheme(scheme) {
+		return cerror.ErrSinkInvalidConfig.GenWithStack(
+			"sink routing is only supported for mysql and tidb sinks, but got scheme %s",
+			scheme,
+		)
+	}
 	return nil
 }
 

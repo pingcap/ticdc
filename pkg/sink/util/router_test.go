@@ -90,6 +90,30 @@ func TestSubstituteExpression(t *testing.T) {
 	}
 }
 
+func TestNewRouterFromDispatchRulesUsesTargetFieldNames(t *testing.T) {
+	t.Parallel()
+
+	router, err := NewRouterFromDispatchRules(true, []*config.DispatchRule{
+		{
+			Matcher:      []string{"db1.*"},
+			TargetSchema: "target_db",
+			TargetTable:  TablePlaceholder,
+		},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, router)
+
+	router, err = NewRouter(true, []RoutingRuleConfig{
+		{
+			Matcher:      []string{"db1.users"},
+			TargetSchema: "archive",
+			TargetTable:  "users_bak",
+		},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, router)
+}
+
 func TestNewRouter(t *testing.T) {
 	t.Parallel()
 
@@ -102,30 +126,30 @@ func TestNewRouter(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, router)
 
-	// Rules with empty schema and table rules are skipped
+	// Rules with empty target schema and target table are skipped
 	router, err = NewRouter(true, []RoutingRuleConfig{
-		{Matcher: []string{"db1.*"}, SchemaRule: "", TableRule: ""},
+		{Matcher: []string{"db1.*"}, TargetSchema: "", TargetTable: ""},
 	})
 	require.NoError(t, err)
 	require.Nil(t, router)
 
 	// Valid rules
 	router, err = NewRouter(true, []RoutingRuleConfig{
-		{Matcher: []string{"db1.*"}, SchemaRule: "target_db", TableRule: TablePlaceholder},
+		{Matcher: []string{"db1.*"}, TargetSchema: "target_db", TargetTable: TablePlaceholder},
 	})
 	require.NoError(t, err)
 	require.NotNil(t, router)
 
 	// Invalid schema rule
 	_, err = NewRouter(true, []RoutingRuleConfig{
-		{Matcher: []string{"db1.*"}, SchemaRule: "{invalid}", TableRule: TablePlaceholder},
+		{Matcher: []string{"db1.*"}, TargetSchema: "{invalid}", TargetTable: TablePlaceholder},
 	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "invalid schema rule")
 
 	// Invalid table rule
 	_, err = NewRouter(true, []RoutingRuleConfig{
-		{Matcher: []string{"db1.*"}, SchemaRule: SchemaPlaceholder, TableRule: "{bad}"},
+		{Matcher: []string{"db1.*"}, TargetSchema: SchemaPlaceholder, TargetTable: "{bad}"},
 	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "invalid table rule")
@@ -143,11 +167,11 @@ func TestRouterRoute(t *testing.T) {
 	// Router with rules
 	router, err := NewRouter(true, []RoutingRuleConfig{
 		// Route all tables in db1 to target_db
-		{Matcher: []string{"db1.*"}, SchemaRule: "target_db", TableRule: TablePlaceholder},
+		{Matcher: []string{"db1.*"}, TargetSchema: "target_db", TargetTable: TablePlaceholder},
 		// Route specific table to a different name
-		{Matcher: []string{"db2.users"}, SchemaRule: SchemaPlaceholder, TableRule: "customers"},
+		{Matcher: []string{"db2.users"}, TargetSchema: SchemaPlaceholder, TargetTable: "customers"},
 		// Route with combined expression
-		{Matcher: []string{"staging.*"}, SchemaRule: "prod", TableRule: SchemaPlaceholder + "_" + TablePlaceholder},
+		{Matcher: []string{"staging.*"}, TargetSchema: "prod", TargetTable: SchemaPlaceholder + "_" + TablePlaceholder},
 	})
 	require.NoError(t, err)
 	require.NotNil(t, router)
@@ -184,7 +208,7 @@ func TestRouterCaseInsensitive(t *testing.T) {
 
 	// Case-insensitive router
 	router, err := NewRouter(false, []RoutingRuleConfig{
-		{Matcher: []string{"db1.*"}, SchemaRule: "target", TableRule: TablePlaceholder},
+		{Matcher: []string{"db1.*"}, TargetSchema: "target", TargetTable: TablePlaceholder},
 	})
 	require.NoError(t, err)
 	require.NotNil(t, router)
@@ -203,8 +227,8 @@ func TestRouterFirstMatchWins(t *testing.T) {
 
 		// First matching rule wins
 		router, err := NewRouter(true, []RoutingRuleConfig{
-			{Matcher: []string{"db1.specific"}, SchemaRule: "first", TableRule: TablePlaceholder},
-			{Matcher: []string{"db1.*"}, SchemaRule: "second", TableRule: TablePlaceholder},
+			{Matcher: []string{"db1.specific"}, TargetSchema: "first", TargetTable: TablePlaceholder},
+			{Matcher: []string{"db1.*"}, TargetSchema: "second", TargetTable: TablePlaceholder},
 		})
 		require.NoError(t, err)
 
@@ -224,11 +248,11 @@ func TestRouterFirstMatchWins(t *testing.T) {
 
 		router, err := NewRouter(true, []RoutingRuleConfig{
 			// Rule 1: Specific table match
-			{Matcher: []string{"db1.users"}, SchemaRule: "target_specific", TableRule: "users_v1"},
+			{Matcher: []string{"db1.users"}, TargetSchema: "target_specific", TargetTable: "users_v1"},
 			// Rule 2: All tables in db1 (overlaps with Rule 1 for db1.users)
-			{Matcher: []string{"db1.*"}, SchemaRule: "target_db1", TableRule: TablePlaceholder},
+			{Matcher: []string{"db1.*"}, TargetSchema: "target_db1", TargetTable: TablePlaceholder},
 			// Rule 3: Wildcard match (overlaps with Rules 1 and 2)
-			{Matcher: []string{"*.*"}, SchemaRule: "target_all", TableRule: TablePlaceholder},
+			{Matcher: []string{"*.*"}, TargetSchema: "target_all", TargetTable: TablePlaceholder},
 		})
 		require.NoError(t, err)
 		require.NotNil(t, router)
@@ -263,11 +287,11 @@ func TestRouterFirstMatchWins(t *testing.T) {
 		// Intentionally put the wildcard rule FIRST - it should win for all matches
 		router, err := NewRouter(true, []RoutingRuleConfig{
 			// Rule 1: Wildcard - catches everything
-			{Matcher: []string{"*.*"}, SchemaRule: "catch_all", TableRule: TablePlaceholder},
+			{Matcher: []string{"*.*"}, TargetSchema: "catch_all", TargetTable: TablePlaceholder},
 			// Rule 2: More specific, but comes after wildcard
-			{Matcher: []string{"db1.*"}, SchemaRule: "should_not_match", TableRule: TablePlaceholder},
+			{Matcher: []string{"db1.*"}, TargetSchema: "should_not_match", TargetTable: TablePlaceholder},
 			// Rule 3: Even more specific, but comes after wildcard
-			{Matcher: []string{"db1.users"}, SchemaRule: "also_should_not_match", TableRule: "renamed"},
+			{Matcher: []string{"db1.users"}, TargetSchema: "also_should_not_match", TargetTable: "renamed"},
 		})
 		require.NoError(t, err)
 		require.NotNil(t, router)
@@ -297,9 +321,9 @@ func TestRouterSchemaOnly(t *testing.T) {
 
 	router, err := NewRouter(true, []RoutingRuleConfig{
 		{
-			Matcher:    []string{"source_db.*"},
-			SchemaRule: "target_db",
-			TableRule:  TablePlaceholder,
+			Matcher:      []string{"source_db.*"},
+			TargetSchema: "target_db",
+			TargetTable:  TablePlaceholder,
 		},
 	})
 	require.NoError(t, err)
@@ -350,9 +374,9 @@ func TestRouterTableOnly(t *testing.T) {
 
 	router, err := NewRouter(true, []RoutingRuleConfig{
 		{
-			Matcher:    []string{"mydb.source_table"},
-			SchemaRule: SchemaPlaceholder,
-			TableRule:  "target_table",
+			Matcher:      []string{"mydb.source_table"},
+			TargetSchema: SchemaPlaceholder,
+			TargetTable:  "target_table",
 		},
 	})
 	require.NoError(t, err)
@@ -403,9 +427,9 @@ func TestRouterSchemaAndTable(t *testing.T) {
 
 	router, err := NewRouter(true, []RoutingRuleConfig{
 		{
-			Matcher:    []string{"src_db.src_table"},
-			SchemaRule: "dst_db",
-			TableRule:  "dst_table",
+			Matcher:      []string{"src_db.src_table"},
+			TargetSchema: "dst_db",
+			TargetTable:  "dst_table",
 		},
 	})
 	require.NoError(t, err)
@@ -427,9 +451,9 @@ func TestRouterWithTransformation(t *testing.T) {
 
 	router, err := NewRouter(true, []RoutingRuleConfig{
 		{
-			Matcher:    []string{"prod.*"},
-			SchemaRule: "backup_" + SchemaPlaceholder,
-			TableRule:  TablePlaceholder + "_archive",
+			Matcher:      []string{"prod.*"},
+			TargetSchema: "backup_" + SchemaPlaceholder,
+			TargetTable:  TablePlaceholder + "_archive",
 		},
 	})
 	require.NoError(t, err)
@@ -445,19 +469,19 @@ func TestRouterMultipleRules(t *testing.T) {
 
 	router, err := NewRouter(true, []RoutingRuleConfig{
 		{
-			Matcher:    []string{"db1.*"},
-			SchemaRule: "target1",
-			TableRule:  TablePlaceholder,
+			Matcher:      []string{"db1.*"},
+			TargetSchema: "target1",
+			TargetTable:  TablePlaceholder,
 		},
 		{
-			Matcher:    []string{"db2.*"},
-			SchemaRule: "target2",
-			TableRule:  TablePlaceholder,
+			Matcher:      []string{"db2.*"},
+			TargetSchema: "target2",
+			TargetTable:  TablePlaceholder,
 		},
 		{
-			Matcher:    []string{"db3.specific_table"},
-			SchemaRule: "target3",
-			TableRule:  "renamed_table",
+			Matcher:      []string{"db3.specific_table"},
+			TargetSchema: "target3",
+			TargetTable:  "renamed_table",
 		},
 	})
 	require.NoError(t, err)
@@ -489,9 +513,9 @@ func TestRouterCaseSensitiveSchema(t *testing.T) {
 
 	router, err := NewRouter(true, []RoutingRuleConfig{
 		{
-			Matcher:    []string{"MyDB.*"},
-			SchemaRule: "target_db",
-			TableRule:  TablePlaceholder,
+			Matcher:      []string{"MyDB.*"},
+			TargetSchema: "target_db",
+			TargetTable:  TablePlaceholder,
 		},
 	})
 	require.NoError(t, err)
@@ -517,9 +541,9 @@ func TestRouterCaseSensitiveTable(t *testing.T) {
 
 	router, err := NewRouter(true, []RoutingRuleConfig{
 		{
-			Matcher:    []string{"mydb.MyTable"},
-			SchemaRule: "target_db",
-			TableRule:  "target_table",
+			Matcher:      []string{"mydb.MyTable"},
+			TargetSchema: "target_db",
+			TargetTable:  "target_table",
 		},
 	})
 	require.NoError(t, err)
@@ -545,9 +569,9 @@ func TestRouterCaseSensitiveBoth(t *testing.T) {
 
 	router, err := NewRouter(true, []RoutingRuleConfig{
 		{
-			Matcher:    []string{"MyDB.MyTable"},
-			SchemaRule: "target_db",
-			TableRule:  "target_table",
+			Matcher:      []string{"MyDB.MyTable"},
+			TargetSchema: "target_db",
+			TargetTable:  "target_table",
 		},
 	})
 	require.NoError(t, err)
@@ -583,9 +607,9 @@ func TestRouterCaseInsensitiveSchema(t *testing.T) {
 
 	router, err := NewRouter(false, []RoutingRuleConfig{
 		{
-			Matcher:    []string{"MyDB.*"},
-			SchemaRule: "target_db",
-			TableRule:  TablePlaceholder,
+			Matcher:      []string{"MyDB.*"},
+			TargetSchema: "target_db",
+			TargetTable:  TablePlaceholder,
 		},
 	})
 	require.NoError(t, err)
@@ -610,9 +634,9 @@ func TestRouterCaseInsensitiveTable(t *testing.T) {
 
 	router, err := NewRouter(false, []RoutingRuleConfig{
 		{
-			Matcher:    []string{"mydb.MyTable"},
-			SchemaRule: "target_db",
-			TableRule:  "target_table",
+			Matcher:      []string{"mydb.MyTable"},
+			TargetSchema: "target_db",
+			TargetTable:  "target_table",
 		},
 	})
 	require.NoError(t, err)
@@ -642,9 +666,9 @@ func TestRouterCaseInsensitiveBoth(t *testing.T) {
 
 	router, err := NewRouter(false, []RoutingRuleConfig{
 		{
-			Matcher:    []string{"MyDB.MyTable"},
-			SchemaRule: "target_db",
-			TableRule:  "target_table",
+			Matcher:      []string{"MyDB.MyTable"},
+			TargetSchema: "target_db",
+			TargetTable:  "target_table",
 		},
 	})
 	require.NoError(t, err)
@@ -681,9 +705,9 @@ func TestRouterCaseInsensitiveWithSchemaPlaceholder(t *testing.T) {
 
 	router, err := NewRouter(false, []RoutingRuleConfig{
 		{
-			Matcher:    []string{"MyDB.*"},
-			SchemaRule: "backup_" + SchemaPlaceholder,
-			TableRule:  TablePlaceholder,
+			Matcher:      []string{"MyDB.*"},
+			TargetSchema: "backup_" + SchemaPlaceholder,
+			TargetTable:  TablePlaceholder,
 		},
 	})
 	require.NoError(t, err)
@@ -700,9 +724,9 @@ func TestRouterWildcardMatchers(t *testing.T) {
 
 	router, err := NewRouter(true, []RoutingRuleConfig{
 		{
-			Matcher:    []string{"*.*"},
-			SchemaRule: "all_to_one",
-			TableRule:  TablePlaceholder,
+			Matcher:      []string{"*.*"},
+			TargetSchema: "all_to_one",
+			TargetTable:  TablePlaceholder,
 		},
 	})
 	require.NoError(t, err)
@@ -723,9 +747,9 @@ func TestNewRouterInvalidSchemaExpression(t *testing.T) {
 
 	router, err := NewRouter(true, []RoutingRuleConfig{
 		{
-			Matcher:    []string{"db.*"},
-			SchemaRule: "{invalid}",
-			TableRule:  TablePlaceholder,
+			Matcher:      []string{"db.*"},
+			TargetSchema: "{invalid}",
+			TargetTable:  TablePlaceholder,
 		},
 	})
 	require.Error(t, err)
@@ -738,9 +762,9 @@ func TestNewRouterInvalidTableExpression(t *testing.T) {
 
 	router, err := NewRouter(true, []RoutingRuleConfig{
 		{
-			Matcher:    []string{"db.*"},
-			SchemaRule: SchemaPlaceholder,
-			TableRule:  "{bad}",
+			Matcher:      []string{"db.*"},
+			TargetSchema: SchemaPlaceholder,
+			TargetTable:  "{bad}",
 		},
 	})
 	require.Error(t, err)
@@ -753,9 +777,9 @@ func TestNewRouterInvalidMatcher(t *testing.T) {
 
 	router, err := NewRouter(true, []RoutingRuleConfig{
 		{
-			Matcher:    []string{"[invalid"},
-			SchemaRule: "target",
-			TableRule:  TablePlaceholder,
+			Matcher:      []string{"[invalid"},
+			TargetSchema: "target",
+			TargetTable:  TablePlaceholder,
 		},
 	})
 	require.Error(t, err)
@@ -778,7 +802,7 @@ func TestNewRouterFromDispatchRulesNoRoutingRules(t *testing.T) {
 		{
 			Matcher:        []string{"test.*"},
 			DispatcherRule: "ts",
-			// No SchemaRule or TableRule
+			// No TargetSchema or TargetTable
 		},
 	}
 	router, err := NewRouterFromDispatchRules(true, rules)
@@ -791,9 +815,9 @@ func TestNewRouterFromDispatchRulesWithSchemaRouting(t *testing.T) {
 
 	rules := []*config.DispatchRule{
 		{
-			Matcher:    []string{"source_db.*"},
-			SchemaRule: "target_db",
-			TableRule:  TablePlaceholder,
+			Matcher:      []string{"source_db.*"},
+			TargetSchema: "target_db",
+			TargetTable:  TablePlaceholder,
 		},
 	}
 	router, err := NewRouterFromDispatchRules(true, rules)
@@ -806,9 +830,9 @@ func TestNewRouterFromDispatchRulesWithTableRouting(t *testing.T) {
 
 	rules := []*config.DispatchRule{
 		{
-			Matcher:    []string{"db.source_table"},
-			SchemaRule: SchemaPlaceholder,
-			TableRule:  "target_table",
+			Matcher:      []string{"db.source_table"},
+			TargetSchema: SchemaPlaceholder,
+			TargetTable:  "target_table",
 		},
 	}
 	router, err := NewRouterFromDispatchRules(true, rules)
@@ -827,9 +851,9 @@ func TestNewRouterFromDispatchRulesMixedRulesWithAndWithoutRouting(t *testing.T)
 			// No routing - just partition dispatch
 		},
 		{
-			Matcher:    []string{"db2.*"},
-			SchemaRule: "routed_db",
-			TableRule:  TablePlaceholder,
+			Matcher:      []string{"db2.*"},
+			TargetSchema: "routed_db",
+			TargetTable:  TablePlaceholder,
 		},
 		{
 			Matcher:        []string{"db3.*"},

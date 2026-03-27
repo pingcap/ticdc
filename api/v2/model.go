@@ -342,8 +342,8 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 				IndexName:      rule.IndexName,
 				Columns:        rule.Columns,
 				TopicRule:      rule.TopicRule,
-				SchemaRule:     rule.SchemaRule,
-				TableRule:      rule.TableRule,
+				TargetSchema:   rule.TargetSchema,
+				TargetTable:    rule.TargetTable,
 			})
 		}
 		var columnSelectors []*config.ColumnSelector
@@ -702,8 +702,8 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 				IndexName:     rule.IndexName,
 				Columns:       rule.Columns,
 				TopicRule:     rule.TopicRule,
-				SchemaRule:    rule.SchemaRule,
-				TableRule:     rule.TableRule,
+				TargetSchema:  rule.TargetSchema,
+				TargetTable:   rule.TargetTable,
 			})
 		}
 		var columnSelectors []*ColumnSelector
@@ -1194,12 +1194,21 @@ type DispatchRule struct {
 	IndexName     string   `json:"index,omitempty"`
 	Columns       []string `json:"columns,omitempty"`
 	TopicRule     string   `json:"topic,omitempty"`
-	// SchemaRule is an expression for the target schema name.
-	// Supports {schema} and {table} placeholders.
-	SchemaRule string `json:"schema,omitempty"`
-	// TableRule is an expression for the target table name.
-	// Supports {schema} and {table} placeholders.
-	TableRule string `json:"table,omitempty"`
+
+	// TargetSchema rewrites the downstream schema name for MySQL sink.
+	// Leave it empty to keep the source schema name.
+	// For example, if the source table is `sales`.`orders`, `target-schema = "sales_bak"`
+	// writes to `sales_bak`.`orders`.
+	// You can also use placeholders. For example, `target-schema = "{schema}_bak"`
+	// the target schema becomes `sales_bak`.
+	TargetSchema string `json:"target-schema,omitempty"`
+	// TargetTable rewrites the downstream table name for MySQL sink.
+	// Leave it empty to keep the source table name.
+	// For example, if the source table is `sales`.`orders`, `target-table = "orders_bak"`
+	// writes to `sales`.`orders_bak`.
+	// You can also use placeholders. For example, `target-table = "{schema}_{table}"`
+	// becomes `sales_orders`.
+	TargetTable string `json:"target-table,omitempty"`
 }
 
 // ColumnSelector represents a column selector for a table.

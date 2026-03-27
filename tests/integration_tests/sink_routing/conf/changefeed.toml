@@ -9,5 +9,5 @@ rules = ['source_db.*']
 # Route source_db.* to target_db.* with table suffix "_routed"
 [[sink.dispatchers]]
 matcher = ['source_db.*']
-schema = 'target_db'
-table = '{table}_routed'
+target-schema = 'target_db'
+target-table = '{table}_routed'

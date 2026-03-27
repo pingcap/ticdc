@@ -23,7 +23,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// Routing expression placeholders that can be used in SchemaRule and TableRule.
+// Routing expression placeholders that can be used in TargetSchema and TargetTable.
 const (
 	// SchemaPlaceholder is replaced with the source schema name in routing expressions.
 	SchemaPlaceholder = "{schema}"
@@ -47,10 +47,10 @@ type routingRule struct {
 type RoutingRuleConfig struct {
 	// Matcher is a filter pattern like "db1.*" or "db1.table1"
 	Matcher []string `toml:"matcher" json:"matcher"`
-	// SchemaRule is an expression for the target schema, e.g., "{schema}" or "target_db"
-	SchemaRule string `toml:"schema" json:"schema"`
-	// TableRule is an expression for the target table, e.g., "{table}" or "target_table"
-	TableRule string `toml:"table" json:"table"`
+	// TargetSchema is an expression for the target schema, e.g., "{schema}" or "target_db"
+	TargetSchema string `toml:"target-schema" json:"target-schema"`
+	// TargetTable is an expression for the target table, e.g., "{table}" or "target_table"
+	TargetTable string `toml:"target-table" json:"target-table"`
 }
 
 // NewRouter creates a new Router from a list of routing rule configurations.
@@ -63,15 +63,15 @@ func NewRouter(caseSensitive bool, rules []RoutingRuleConfig) (*Router, error) {
 	routingRules := make([]*routingRule, 0, len(rules))
 
 	for _, ruleConfig := range rules {
-		if ruleConfig.SchemaRule == "" && ruleConfig.TableRule == "" {
+		if ruleConfig.TargetSchema == "" && ruleConfig.TargetTable == "" {
 			continue
 		}
 
-		if err := config.ValidateRoutingExpression(ruleConfig.SchemaRule); err != nil {
-			return nil, errors.ErrInvalidSchemaRule.GenWithStackByArgs(ruleConfig.SchemaRule, err)
+		if err := config.ValidateRoutingExpression(ruleConfig.TargetSchema); err != nil {
+			return nil, errors.ErrInvalidSchemaRule.GenWithStackByArgs(ruleConfig.TargetSchema, err)
 		}
-		if err := config.ValidateRoutingExpression(ruleConfig.TableRule); err != nil {
-			return nil, errors.ErrInvalidTableRule.GenWithStackByArgs(ruleConfig.TableRule, err)
+		if err := config.ValidateRoutingExpression(ruleConfig.TargetTable); err != nil {
+			return nil, errors.ErrInvalidTableRule.GenWithStackByArgs(ruleConfig.TargetTable, err)
 		}
 
 		f, err := tfilter.Parse(ruleConfig.Matcher)
@@ -84,8 +84,8 @@ func NewRouter(caseSensitive bool, rules []RoutingRuleConfig) (*Router, error) {
 
 		routingRules = append(routingRules, &routingRule{
 			filter:     f,
-			schemaExpr: ruleConfig.SchemaRule,
-			tableExpr:  ruleConfig.TableRule,
+			schemaExpr: ruleConfig.TargetSchema,
+			tableExpr:  ruleConfig.TargetTable,
 		})
 	}
 
@@ -155,14 +155,14 @@ func NewRouterFromDispatchRules(caseSensitive bool, rules []*config.DispatchRule
 	routingConfigs := make([]RoutingRuleConfig, 0, len(rules))
 	for _, rule := range rules {
 		// Skip rules without routing configuration
-		if rule.SchemaRule == "" && rule.TableRule == "" {
+		if rule.TargetSchema == "" && rule.TargetTable == "" {
 			continue
 		}
 
 		routingConfigs = append(routingConfigs, RoutingRuleConfig{
-			Matcher:    rule.Matcher,
-			SchemaRule: rule.SchemaRule,
-			TableRule:  rule.TableRule,
+			Matcher:      rule.Matcher,
+			TargetSchema: rule.TargetSchema,
+			TargetTable:  rule.TargetTable,
 		})
 	}
 

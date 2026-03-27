@@ -129,7 +129,7 @@ func TestRedoSinkInProcessor(t *testing.T) {
 		ctx, cancel := context.WithCancel(ctx)
 		cfg := newTestConsistentConfig(storage)
 		cfg.UseFileBackend = util.AddressOf(useFileBackend)
-		dmlMgr, err := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), cfg)
+		dmlMgr, err := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), cfg, nil)
 		require.NoError(t, err)
 		defer dmlMgr.Close(false)
 
@@ -212,7 +212,7 @@ func TestRedoSinkError(t *testing.T) {
 	defer cancel()
 
 	cfg := newTestConsistentConfig("blackhole-invalid://")
-	logMgr, err := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), cfg)
+	logMgr, err := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), cfg, nil)
 	require.NoError(t, err)
 	defer logMgr.Close(false)
 
@@ -266,7 +266,7 @@ func runBenchTest(b *testing.B, storage string, useFileBackend bool) {
 	cfg.EncodingWorkerNum = util.AddressOf(redo.DefaultEncodingWorkerNum)
 	cfg.FlushWorkerNum = util.AddressOf(redo.DefaultFlushWorkerNum)
 	cfg.UseFileBackend = util.AddressOf(useFileBackend)
-	dmlMgr, err := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), cfg)
+	dmlMgr, err := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), cfg, nil)
 	require.NoError(b, err)
 	defer dmlMgr.Close(false)
 
@@ -334,9 +334,9 @@ func TestRedoSinkDDLRoutingDelegation(t *testing.T) {
 	// Test with routing configured
 	router, err := sinkutil.NewRouter(false, []sinkutil.RoutingRuleConfig{
 		{
-			Matcher:    []string{"source_db.*"},
-			SchemaRule: "target_db",
-			TableRule:  sinkutil.TablePlaceholder,
+			Matcher:      []string{"source_db.*"},
+			TargetSchema: "target_db",
+			TargetTable:  sinkutil.TablePlaceholder,
 		},
 	})
 	require.NoError(t, err)

@@ -462,9 +462,9 @@ func TestDDLRoutingWithTargetSchemaName(t *testing.T) {
 	// Create a router that routes source_db.* to target_db.*
 	rules := []*config.DispatchRule{
 		{
-			Matcher:    []string{"source_db.*"},
-			SchemaRule: "target_db",
-			TableRule:  util.TablePlaceholder,
+			Matcher:      []string{"source_db.*"},
+			TargetSchema: "target_db",
+			TargetTable:  util.TablePlaceholder,
 		},
 	}
 	router, err := util.NewRouterFromDispatchRules(true, rules)
@@ -516,9 +516,9 @@ func TestDDLRoutingPreservesSourceSchemaWhenNoRouting(t *testing.T) {
 	// Create a router that only routes other_db.* (not source_db.*)
 	rules := []*config.DispatchRule{
 		{
-			Matcher:    []string{"other_db.*"},
-			SchemaRule: "target_db",
-			TableRule:  util.TablePlaceholder,
+			Matcher:      []string{"other_db.*"},
+			TargetSchema: "target_db",
+			TargetTable:  util.TablePlaceholder,
 		},
 	}
 	router, err := util.NewRouterFromDispatchRules(true, rules)
@@ -558,9 +558,9 @@ func TestDDLRoutingTableOnly(t *testing.T) {
 	// Create a router that only routes the table name: source_db.old_table -> source_db.new_table
 	rules := []*config.DispatchRule{
 		{
-			Matcher:    []string{"source_db.old_table"},
-			SchemaRule: util.SchemaPlaceholder, // Keep schema unchanged
-			TableRule:  "new_table",
+			Matcher:      []string{"source_db.old_table"},
+			TargetSchema: util.SchemaPlaceholder, // Keep schema unchanged
+			TargetTable:  "new_table",
 		},
 	}
 	router, err := util.NewRouterFromDispatchRules(true, rules)
@@ -600,9 +600,9 @@ func TestDDLRoutingBothSchemaAndTable(t *testing.T) {
 	// Create a router that routes both schema and table: source_db.source_table -> target_db.target_table
 	rules := []*config.DispatchRule{
 		{
-			Matcher:    []string{"source_db.source_table"},
-			SchemaRule: "target_db",
-			TableRule:  "target_table",
+			Matcher:      []string{"source_db.source_table"},
+			TargetSchema: "target_db",
+			TargetTable:  "target_table",
 		},
 	}
 	router, err := util.NewRouterFromDispatchRules(true, rules)
@@ -643,14 +643,14 @@ func TestRoutingBlockedTableNames(t *testing.T) {
 	// Create a router that routes source_db.source_table -> target_db.target_table
 	rules := []*config.DispatchRule{
 		{
-			Matcher:    []string{"source_db.source_table"},
-			SchemaRule: "target_db",
-			TableRule:  "target_table",
+			Matcher:      []string{"source_db.source_table"},
+			TargetSchema: "target_db",
+			TargetTable:  "target_table",
 		},
 		{
-			Matcher:    []string{"source_db.other_table"},
-			SchemaRule: "target_db",
-			TableRule:  "other_routed",
+			Matcher:      []string{"source_db.other_table"},
+			TargetSchema: "target_db",
+			TargetTable:  "other_routed",
 		},
 	}
 	router, err := util.NewRouterFromDispatchRules(true, rules)
@@ -693,14 +693,14 @@ func TestRoutingBlockedTableNamesMultiple(t *testing.T) {
 	// Create a router with multiple rules
 	rules := []*config.DispatchRule{
 		{
-			Matcher:    []string{"db1.*"},
-			SchemaRule: "target_db1",
-			TableRule:  util.TablePlaceholder,
+			Matcher:      []string{"db1.*"},
+			TargetSchema: "target_db1",
+			TargetTable:  util.TablePlaceholder,
 		},
 		{
-			Matcher:    []string{"db2.*"},
-			SchemaRule: "target_db2",
-			TableRule:  util.TablePlaceholder,
+			Matcher:      []string{"db2.*"},
+			TargetSchema: "target_db2",
+			TargetTable:  util.TablePlaceholder,
 		},
 	}
 	router, err := util.NewRouterFromDispatchRules(true, rules)

@@ -45,9 +45,9 @@ func TestRewriteDDLQueryWithEmptyQuery(t *testing.T) {
 
 	router, err := NewRouter(false, []RoutingRuleConfig{
 		{
-			Matcher:    []string{"source_db.*"},
-			SchemaRule: "target_db",
-			TableRule:  TablePlaceholder,
+			Matcher:      []string{"source_db.*"},
+			TargetSchema: "target_db",
+			TargetTable:  TablePlaceholder,
 		},
 	})
 	require.NoError(t, err)
@@ -69,9 +69,9 @@ func TestRewriteDDLQueryWithBasicRouting(t *testing.T) {
 	// Create a router with a routing rule: source_db.* -> target_db.*
 	router, err := NewRouter(false, []RoutingRuleConfig{
 		{
-			Matcher:    []string{"source_db.*"},
-			SchemaRule: "target_db",
-			TableRule:  TablePlaceholder,
+			Matcher:      []string{"source_db.*"},
+			TargetSchema: "target_db",
+			TargetTable:  TablePlaceholder,
 		},
 	})
 	require.NoError(t, err)
@@ -116,9 +116,9 @@ func TestRewriteDDLQueryWithSchemaAndTableRouting(t *testing.T) {
 	// Create a router with full routing: source_db.test_table -> target_db.test_table_routed
 	router, err := NewRouter(true, []RoutingRuleConfig{
 		{
-			Matcher:    []string{"source_db.test_table"},
-			SchemaRule: "target_db",
-			TableRule:  "test_table_routed",
+			Matcher:      []string{"source_db.test_table"},
+			TargetSchema: "target_db",
+			TargetTable:  "test_table_routed",
 		},
 	})
 	require.NoError(t, err)
@@ -189,7 +189,7 @@ func TestRewriteDDLQueryWithSchemaAndTableRouting(t *testing.T) {
 }
 
 // TestRewriteDDLQueryWithSchemaOnlyRouting tests routing where ONLY the schema changes.
-// The table name stays the same via TableRule="{table}".
+// The table name stays the same via TargetTable="{table}".
 // Example: source_db.test_table -> target_db.test_table
 func TestRewriteDDLQueryWithSchemaOnlyRouting(t *testing.T) {
 	t.Parallel()
@@ -197,9 +197,9 @@ func TestRewriteDDLQueryWithSchemaOnlyRouting(t *testing.T) {
 	// Create a router that only routes the schema: source_db.* -> target_db.*
 	router, err := NewRouter(true, []RoutingRuleConfig{
 		{
-			Matcher:    []string{"source_db.*"},
-			SchemaRule: "target_db",
-			TableRule:  TablePlaceholder,
+			Matcher:      []string{"source_db.*"},
+			TargetSchema: "target_db",
+			TargetTable:  TablePlaceholder,
 		},
 	})
 	require.NoError(t, err)
@@ -269,7 +269,7 @@ func TestRewriteDDLQueryWithSchemaOnlyRouting(t *testing.T) {
 }
 
 // TestRewriteDDLQueryWithTableOnlyRouting tests routing where ONLY the table name changes.
-// The schema stays the same via SchemaRule="{schema}".
+// The schema stays the same via TargetSchema="{schema}".
 // Example: source_db.test_table -> source_db.test_table_routed
 func TestRewriteDDLQueryWithTableOnlyRouting(t *testing.T) {
 	t.Parallel()
@@ -277,9 +277,9 @@ func TestRewriteDDLQueryWithTableOnlyRouting(t *testing.T) {
 	// Create a router that only routes the table name: mydb.old_table -> mydb.new_table
 	router, err := NewRouter(true, []RoutingRuleConfig{
 		{
-			Matcher:    []string{"mydb.old_table"},
-			SchemaRule: SchemaPlaceholder, // Keep schema unchanged
-			TableRule:  "new_table",
+			Matcher:      []string{"mydb.old_table"},
+			TargetSchema: SchemaPlaceholder, // Keep schema unchanged
+			TargetTable:  "new_table",
 		},
 	})
 	require.NoError(t, err)
@@ -350,9 +350,9 @@ func TestRewriteDDLQueryWithMultiTableOrdering(t *testing.T) {
 	// Create a router where one schema is mapped and one is not
 	router, err := NewRouter(true, []RoutingRuleConfig{
 		{
-			Matcher:    []string{"mapped_source_db.*"},
-			SchemaRule: "mapped_target_db",
-			TableRule:  TablePlaceholder,
+			Matcher:      []string{"mapped_source_db.*"},
+			TargetSchema: "mapped_target_db",
+			TargetTable:  TablePlaceholder,
 		},
 	})
 	require.NoError(t, err)
@@ -449,24 +449,24 @@ func TestRewriteDDLQueryWithComplexMultiTableRouting(t *testing.T) {
 	// Test with full routing (schema + table name changes)
 	tableRouter, err := NewRouter(true, []RoutingRuleConfig{
 		{
-			Matcher:    []string{"source_db.source_table"},
-			SchemaRule: "target_db",
-			TableRule:  "target_table_routed",
+			Matcher:      []string{"source_db.source_table"},
+			TargetSchema: "target_db",
+			TargetTable:  "target_table_routed",
 		},
 		{
-			Matcher:    []string{"source_db.old_table"},
-			SchemaRule: "target_db",
-			TableRule:  "old_table_routed",
+			Matcher:      []string{"source_db.old_table"},
+			TargetSchema: "target_db",
+			TargetTable:  "old_table_routed",
 		},
 		{
-			Matcher:    []string{"source_db.new_table"},
-			SchemaRule: "target_db",
-			TableRule:  "new_table_routed",
+			Matcher:      []string{"source_db.new_table"},
+			TargetSchema: "target_db",
+			TargetTable:  "new_table_routed",
 		},
 		{
-			Matcher:    []string{"source_db.template_table"},
-			SchemaRule: "target_db",
-			TableRule:  "template_table_routed",
+			Matcher:      []string{"source_db.template_table"},
+			TargetSchema: "target_db",
+			TargetTable:  "template_table_routed",
 		},
 	})
 	require.NoError(t, err)
@@ -548,14 +548,14 @@ func TestRewriteDDLQueryWithConsolidatedRouting(t *testing.T) {
 	// Scenario: db1.* -> consolidated, db2.* -> consolidated
 	consolidatedRouter, err := NewRouter(true, []RoutingRuleConfig{
 		{
-			Matcher:    []string{"db1.*"},
-			SchemaRule: "consolidated",
-			TableRule:  TablePlaceholder,
+			Matcher:      []string{"db1.*"},
+			TargetSchema: "consolidated",
+			TargetTable:  TablePlaceholder,
 		},
 		{
-			Matcher:    []string{"db2.*"},
-			SchemaRule: "consolidated",
-			TableRule:  TablePlaceholder,
+			Matcher:      []string{"db2.*"},
+			TargetSchema: "consolidated",
+			TargetTable:  TablePlaceholder,
 		},
 	})
 	require.NoError(t, err)
@@ -582,14 +582,14 @@ func TestRewriteDDLQueryWithConsolidatedRouting(t *testing.T) {
 	// Scenario: db1.* -> target1, db2.* -> target2
 	multiSchemaRouter, err := NewRouter(true, []RoutingRuleConfig{
 		{
-			Matcher:    []string{"db1.*"},
-			SchemaRule: "target1",
-			TableRule:  TablePlaceholder,
+			Matcher:      []string{"db1.*"},
+			TargetSchema: "target1",
+			TargetTable:  TablePlaceholder,
 		},
 		{
-			Matcher:    []string{"db2.*"},
-			SchemaRule: "target2",
-			TableRule:  TablePlaceholder,
+			Matcher:      []string{"db2.*"},
+			TargetSchema: "target2",
+			TargetTable:  TablePlaceholder,
 		},
 	})
 	require.NoError(t, err)
@@ -642,9 +642,9 @@ func TestRewriteDDLQueryWithErrors(t *testing.T) {
 
 	router, err := NewRouter(false, []RoutingRuleConfig{
 		{
-			Matcher:    []string{"source_db.*"},
-			SchemaRule: "target_db",
-			TableRule:  TablePlaceholder,
+			Matcher:      []string{"source_db.*"},
+			TargetSchema: "target_db",
+			TargetTable:  TablePlaceholder,
 		},
 	})
 	require.NoError(t, err)
