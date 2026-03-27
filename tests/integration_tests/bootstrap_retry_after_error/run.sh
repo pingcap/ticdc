@@ -22,13 +22,7 @@ SINK_TYPE=$1
 MAX_RETRIES=20
 
 PD_ADDR="http://${UP_PD_HOST_1}:${UP_PD_PORT_1}"
-CHANGEFEED_ID="bootstrap-retry-after-error-$RANDOM"
 SINK_URI="mysql://normal:123456@127.0.0.1:3306/"
-FAILPOINT_NAME="github.com/pingcap/ticdc/logservice/schemastore/getAllPhysicalTablesGCFastFail"
-
-function ensure_failpoint_cdc_binary() {
-	make -C "$REPO_ROOT" integration_test_build_fast
-}
 
 function check_api_ready() {
 	local addr=$1
@@ -54,25 +48,22 @@ function run() {
 		return
 	fi
 
-	ensure_failpoint_cdc_binary
-
 	rm -rf $WORK_DIR && mkdir -p $WORK_DIR
 
 	start_tidb_cluster --workdir $WORK_DIR
 
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0" \
-		--addr "127.0.0.1:8300" --pd "$PD_ADDR" \
-		--failpoint "${FAILPOINT_NAME}=1*return(true)"
+	export GO_FAILPOINTS='github.com/pingcap/ticdc/logservice/schemastore/getAllPhysicalTablesGCFastFail=1*return(true)'
+	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0"
 
 	run_sql "CREATE DATABASE bootstrap_retry_after_error;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "CREATE TABLE bootstrap_retry_after_error.t1(id INT PRIMARY KEY, val INT);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "CREATE DATABASE bootstrap_retry_after_error;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 	run_sql "CREATE TABLE bootstrap_retry_after_error.t1(id INT PRIMARY KEY, val INT);" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 
-	cdc_cli_changefeed create --pd="$PD_ADDR" --sink-uri="$SINK_URI" -c "$CHANGEFEED_ID"
+	cdc_cli_changefeed create --sink-uri="$SINK_URI" -c "test"
 
 	ensure $MAX_RETRIES "check_cdc_logs_contains $WORK_DIR 'ErrSnapshotLostByGC'"
-	ensure $MAX_RETRIES "check_changefeed_state $PD_ADDR $CHANGEFEED_ID failed ErrSnapshotLostByGC ''"
+	ensure $MAX_RETRIES "check_changefeed_state $PD_ADDR test failed ErrSnapshotLostByGC ''"
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1" --addr "127.0.0.1:8301" --pd "$PD_ADDR"
 
@@ -80,7 +71,7 @@ function run() {
 	ensure $MAX_RETRIES "get_cdc_pid 127.0.0.1 8301 >/dev/null"
 	ensure $MAX_RETRIES "check_api_ready 127.0.0.1:8300"
 	ensure $MAX_RETRIES "check_api_ready 127.0.0.1:8301"
-	ensure $MAX_RETRIES "check_changefeed_state $PD_ADDR $CHANGEFEED_ID failed ErrSnapshotLostByGC ''"
+	ensure $MAX_RETRIES "check_changefeed_state $PD_ADDR test failed ErrSnapshotLostByGC ''"
 }
 
 trap 'stop_test $WORK_DIR' EXIT
