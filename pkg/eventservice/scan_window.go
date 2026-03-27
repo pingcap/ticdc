@@ -27,15 +27,15 @@ import (
 const (
 	// defaultScanInterval is the initial scan interval used when starting up
 	// or when the current interval is invalid.
-	defaultScanInterval = 5 * time.Second
+	defaultScanInterval = 5 * time.Minute
 
 	// minScanInterval is the minimum allowed scan interval. Even under critical
 	// memory pressure, the interval will never go below this value.
-	minScanInterval = 1 * time.Second
+	minScanInterval = 5 * time.Minute
 
 	// maxScanInterval is the maximum allowed scan interval. Even under very low
 	// memory pressure, the interval will never exceed this value.
-	maxScanInterval = 30 * time.Minute
+	maxScanInterval = 10 * time.Minute
 
 	// scanIntervalAdjustCooldown is the minimum time that must pass between
 	// scan interval increases. This prevents oscillation by enforcing a waiting
