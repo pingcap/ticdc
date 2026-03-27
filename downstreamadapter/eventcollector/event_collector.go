@@ -423,12 +423,12 @@ func (c *EventCollector) groupHeartbeat() map[node.ID]*event.DispatcherHeartbeat
 
 	c.dispatcherMap.Range(func(_, value interface{}) bool {
 		stat := value.(*dispatcherStat)
-		if !stat.isReceivingDataEvent() {
+		eventServiceID, checkpointTs, epoch, ok := stat.getHeartbeatReport()
+		if !ok {
 			return true
 		}
-		checkpointTs, epoch := stat.getHeartbeatProgressForEventService()
 		group(
-			stat.getEventServiceID(),
+			eventServiceID,
 			stat.getDispatcherID(),
 			checkpointTs,
 			epoch,
@@ -702,8 +702,8 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 
 	c.dispatcherMap.Range(func(k, v interface{}) bool {
 		stat := v.(*dispatcherStat)
-		eventServiceID := stat.getEventServiceID()
-		if eventServiceID == "" {
+		eventServiceID, ok := stat.getCurrentEventServiceTarget()
+		if !ok {
 			return true
 		}
 
