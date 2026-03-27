@@ -402,8 +402,6 @@ func decodeIOType(ioType IOType, value []byte) (IOTypeT, error) {
 type TargetMessage struct {
 	From     node.ID
 	To       node.ID
-	Epoch    uint64
-	Sequence uint64
 	Topic    string
 	Type     IOType
 	Message  []IOTypeT
