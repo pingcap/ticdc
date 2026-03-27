@@ -275,9 +275,9 @@ func (s *dpanicSuite) TestGenUpdate() {
 func (s *dpanicSuite) TestExpressionIndex() {
 	source := &common.TableName{Schema: "db", Table: "tb1"}
 	sql := `CREATE TABLE tb1 (
-    	id INT PRIMARY KEY,
-    	j JSON,
-    	UNIQUE KEY j_index ((cast(json_extract(j,'$[*]') as signed array)), id)
+    id INT PRIMARY KEY,
+    j JSON,
+    UNIQUE KEY j_index ((cast(json_extract(j,'$[*]') as signed array)), id)
 )`
 	ti := mockTableInfo(s.T(), sql)
 	change := NewRowChange(source, nil, nil, []interface{}{1, `[1,2,3]`}, ti, nil, nil)
