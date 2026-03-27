@@ -39,6 +39,27 @@ import (
 	"go.uber.org/zap"
 )
 
+type ddlOrderKeyKind uint8
+
+const (
+	ddlOrderKeyKindGlobal ddlOrderKeyKind = iota
+	ddlOrderKeyKindTable
+	ddlOrderKeyKindSchema
+	ddlOrderKeyKindSchemaTable
+)
+
+// ddlOrderKey identifies which logical object a DDL ordering guarantee applies to.
+//
+// It is intentionally different from the flush barrier set returned by getBlockTableIDs():
+// DDLSpanTableID is a shared coordination barrier, not a real object identity. Reusing it as the
+// stale-drop key causes unrelated CREATE SCHEMA / independent CREATE TABLE DDLs to suppress each other.
+type ddlOrderKey struct {
+	kind   ddlOrderKeyKind
+	id     int64
+	schema string
+	table  string
+}
+
 type partitionProgress struct {
 	partition       int32
 	watermark       uint64
@@ -76,9 +97,9 @@ func (p *partitionProgress) updateWatermark(newWatermark uint64, offset kafka.Of
 }
 
 type writer struct {
-	progresses         []*partitionProgress
-	ddlList            []*commonEvent.DDLEvent
-	ddlWithMaxCommitTs map[int64]uint64
+	progresses                 []*partitionProgress
+	ddlList                    []*commonEvent.DDLEvent
+	ddlOrderKeyWithMaxCommitTs map[ddlOrderKey]uint64
 
 	// this should be used by the canal-json, avro and open protocol
 	partitionTableAccessor *common.PartitionTableAccessor
@@ -93,14 +114,14 @@ type writer struct {
 
 func newWriter(ctx context.Context, o *option) *writer {
 	w := &writer{
-		protocol:               o.protocol,
-		maxMessageBytes:        o.maxMessageBytes,
-		maxBatchSize:           o.maxBatchSize,
-		progresses:             make([]*partitionProgress, o.partitionNum),
-		partitionTableAccessor: common.NewPartitionTableAccessor(),
-		ddlList:                make([]*commonEvent.DDLEvent, 0),
-		ddlWithMaxCommitTs:     make(map[int64]uint64),
-		enableTableAcrossNodes: o.enableTableAcrossNodes,
+		protocol:                   o.protocol,
+		maxMessageBytes:            o.maxMessageBytes,
+		maxBatchSize:               o.maxBatchSize,
+		progresses:                 make([]*partitionProgress, o.partitionNum),
+		partitionTableAccessor:     common.NewPartitionTableAccessor(),
+		ddlList:                    make([]*commonEvent.DDLEvent, 0),
+		ddlOrderKeyWithMaxCommitTs: make(map[ddlOrderKey]uint64),
+		enableTableAcrossNodes:     o.enableTableAcrossNodes,
 	}
 	var (
 		db  *sql.DB
@@ -250,16 +271,84 @@ func (w *writer) getBlockTableIDs(ddl *commonEvent.DDLEvent) map[int64]struct{} 
 	return tableIDs
 }
 
+func newDDLOrderKeyForSchema(ddl *commonEvent.DDLEvent) ddlOrderKey {
+	if ddl.SchemaID != 0 {
+		return ddlOrderKey{kind: ddlOrderKeyKindSchema, id: ddl.SchemaID}
+	}
+	return ddlOrderKey{kind: ddlOrderKeyKindSchema, schema: ddl.GetSchemaName()}
+}
+
+func newDDLOrderKeyForTable(ddl *commonEvent.DDLEvent) ddlOrderKey {
+	if tableID := ddl.GetTableID(); tableID != 0 {
+		return ddlOrderKey{kind: ddlOrderKeyKindTable, id: tableID}
+	}
+	return ddlOrderKey{
+		kind:   ddlOrderKeyKindSchemaTable,
+		schema: ddl.GetSchemaName(),
+		table:  ddl.GetTableName(),
+	}
+}
+
+// getDDLOrderKeys returns the keys used by appendDDL to reject truly stale DDLs.
+//
+// These keys intentionally ignore the shared DDL span barrier. The DDL span must still participate
+// in flush/watermark coordination, but it must not be treated as the identity of every DDLSpan-only
+// DDL; otherwise unrelated schema/table creations can suppress each other before ddlList sorting runs.
+func (w *writer) getDDLOrderKeys(ddl *commonEvent.DDLEvent) map[ddlOrderKey]struct{} {
+	keys := make(map[ddlOrderKey]struct{})
+	blockedTables := ddl.GetBlockedTables()
+	if blockedTables == nil {
+		return keys
+	}
+
+	addGlobalKey := func() {
+		keys[ddlOrderKey{kind: ddlOrderKeyKindGlobal}] = struct{}{}
+	}
+
+	switch blockedTables.InfluenceType {
+	case commonEvent.InfluenceTypeDB:
+		keys[newDDLOrderKeyForSchema(ddl)] = struct{}{}
+	case commonEvent.InfluenceTypeAll:
+		// InfluenceTypeAll DDLs affect global downstream state, so a single global key is the
+		// narrowest safe fallback that still preserves the stale-drop protection.
+		addGlobalKey()
+	case commonEvent.InfluenceTypeNormal:
+		for _, tableID := range blockedTables.TableIDs {
+			if tableID == commonType.DDLSpanTableID {
+				continue
+			}
+			keys[ddlOrderKey{kind: ddlOrderKeyKindTable, id: tableID}] = struct{}{}
+		}
+		if len(keys) != 0 {
+			return keys
+		}
+
+		switch timodel.ActionType(ddl.Type) {
+		case timodel.ActionCreateSchema:
+			keys[newDDLOrderKeyForSchema(ddl)] = struct{}{}
+		case timodel.ActionCreateTable:
+			keys[newDDLOrderKeyForTable(ddl)] = struct{}{}
+		default:
+			addGlobalKey()
+		}
+	default:
+		log.Panic("unsupported influence type", zap.Any("influenceType", blockedTables.InfluenceType))
+	}
+
+	return keys
+}
+
 // appendDDL enqueues a DDL event to be flushed later.
 //
 // DDLs may be received out of commit-ts order (e.g. due to MQ delivery or buffering), so Write() sorts
-// ddlList by commit-ts before executing. ddlWithMaxCommitTs is a guard against per-table commit-ts
-// regressions: executing an older DDL after a newer one may corrupt downstream schema/DML ordering.
+// ddlList by commit-ts before executing. ddlOrderKeyWithMaxCommitTs is a guard against real object-level
+// commit-ts regressions: executing an older DDL after a newer one on the same logical object may corrupt
+// downstream schema/DML ordering.
 func (w *writer) appendDDL(ddl *commonEvent.DDLEvent) {
-	// If commitTs goes backwards for a blocked table, ignore this DDL instead of applying it out of order.
-	tableIDs := w.getBlockTableIDs(ddl)
-	for tableID := range tableIDs {
-		maxCommitTs, ok := w.ddlWithMaxCommitTs[tableID]
+	// If commitTs goes backwards for the same logical object, ignore this DDL instead of applying it out of order.
+	orderKeys := w.getDDLOrderKeys(ddl)
+	for orderKey := range orderKeys {
+		maxCommitTs, ok := w.ddlOrderKeyWithMaxCommitTs[orderKey]
 		if ok && ddl.GetCommitTs() < maxCommitTs {
 			log.Warn("DDL CommitTs < maxCommitTsDDL.CommitTs",
 				zap.Uint64("commitTs", ddl.GetCommitTs()),
@@ -270,8 +359,8 @@ func (w *writer) appendDDL(ddl *commonEvent.DDLEvent) {
 	}
 
 	w.ddlList = append(w.ddlList, ddl)
-	for tableID := range tableIDs {
-		w.ddlWithMaxCommitTs[tableID] = ddl.GetCommitTs()
+	for orderKey := range orderKeys {
+		w.ddlOrderKeyWithMaxCommitTs[orderKey] = ddl.GetCommitTs()
 	}
 }
 

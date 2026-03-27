@@ -24,7 +24,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
-	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
+	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
@@ -98,7 +98,7 @@ func TestWriterWrite_executesIndependentCreateTableWithoutWatermark(t *testing.T
 		},
 	}
 
-	w.Write(ctx, codecCommon.MessageTypeDDL)
+	w.Write(ctx, codeccommon.MessageTypeDDL)
 
 	require.Equal(t, []string{"CREATE TABLE `test`.`t` (`id` INT PRIMARY KEY)"}, s.ddls)
 	require.Empty(t, w.ddlList)
@@ -144,12 +144,12 @@ func TestWriterWrite_preservesOrderWhenBlockedDDLNotReady(t *testing.T) {
 		},
 	}
 
-	w.Write(ctx, codecCommon.MessageTypeDDL)
+	w.Write(ctx, codeccommon.MessageTypeDDL)
 	require.Empty(t, s.ddls)
 	require.Len(t, w.ddlList, 2)
 
 	p.watermark = 200
-	w.Write(ctx, codecCommon.MessageTypeDDL)
+	w.Write(ctx, codeccommon.MessageTypeDDL)
 	require.Equal(t, []string{
 		"ALTER TABLE `test`.`t` ADD COLUMN `c2` INT",
 		"CREATE TABLE `test`.`t2` (`id` INT PRIMARY KEY)",
@@ -190,12 +190,12 @@ func TestWriterWrite_doesNotBypassWatermarkForCreateTableLike(t *testing.T) {
 		},
 	}
 
-	w.Write(ctx, codecCommon.MessageTypeDDL)
+	w.Write(ctx, codeccommon.MessageTypeDDL)
 	require.Empty(t, s.ddls)
 	require.Len(t, w.ddlList, 1)
 
 	p.watermark = 200
-	w.Write(ctx, codecCommon.MessageTypeDDL)
+	w.Write(ctx, codeccommon.MessageTypeDDL)
 	require.Equal(t, []string{"CREATE TABLE `test`.`t2` LIKE `test`.`t1`"}, s.ddls)
 	require.Empty(t, w.ddlList)
 }
@@ -272,7 +272,7 @@ func TestWriterWrite_handlesOutOfOrderDDLsByCommitTs(t *testing.T) {
 		},
 	}
 
-	w.Write(ctx, codecCommon.MessageTypeDDL)
+	w.Write(ctx, codeccommon.MessageTypeDDL)
 
 	require.Equal(t, []string{
 		"CREATE TABLE `common_1`.`add_and_drop_columns` (`id` INT(11) NOT NULL PRIMARY KEY)",
@@ -284,15 +284,247 @@ func TestWriterWrite_handlesOutOfOrderDDLsByCommitTs(t *testing.T) {
 	require.Equal(t, "CREATE TABLE `common_1`.`a` (`a` BIGINT PRIMARY KEY,`b` INT)", w.ddlList[0].Query)
 }
 
-func TestAppendRow2Group_DoesNotDropCommitTsFallbackBeforeApplied(t *testing.T) {
-	// Scenario:
-	// 1) TiCDC writes DML messages to Kafka in commitTs order.
-	// 2) Under network partition / changefeed restart, TiCDC may replay older commitTs,
-	//    which will be appended to Kafka at a larger offset (commitTs appears to go backwards).
+func TestWriterAppendDDL_keepsCrossObjectDDLSpanOnlyDDLs(t *testing.T) {
+	// Scenario: DDLSpanTableID is a shared barrier, not a logical object identity. Cross-object DDLs
+	// that only carry the DDL span must not suppress each other before ddlList sorting executes.
 	//
-	// The kafka-consumer must not drop these "fallback commitTs" events unless they have
-	// already been flushed to downstream (AppliedWatermark), otherwise the replay cannot
-	// heal the missing window.
+	// Steps:
+	// 1) Append a newer CREATE SCHEMA DDL that only blocks the DDL span.
+	// 2) Append an older independent CREATE TABLE DDL for another object that also only blocks the DDL span.
+	// 3) Verify both DDLs stay queued, then call writer.Write and expect commit-ts order is preserved.
+	ctx := context.Background()
+	s := &recordingSink{}
+	p := &partitionProgress{partition: 0, watermark: 300}
+	w := &writer{
+		progresses:                 []*partitionProgress{p},
+		ddlList:                    make([]*commonEvent.DDLEvent, 0),
+		ddlOrderKeyWithMaxCommitTs: make(map[ddlOrderKey]uint64),
+		mysqlSink:                  s,
+	}
+
+	w.appendDDL(&commonEvent.DDLEvent{
+		Query:      "CREATE DATABASE `db_newer`",
+		SchemaID:   101,
+		SchemaName: "db_newer",
+		Type:       byte(timodel.ActionCreateSchema),
+		FinishedTs: 200,
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{common.DDLSpanTableID},
+		},
+	})
+	w.appendDDL(&commonEvent.DDLEvent{
+		Query:      "CREATE TABLE `db_existing`.`t_old` (`id` INT PRIMARY KEY)",
+		SchemaName: "db_existing",
+		TableName:  "t_old",
+		Type:       byte(timodel.ActionCreateTable),
+		FinishedTs: 100,
+		TableInfo: &common.TableInfo{
+			TableName: common.TableName{
+				Schema:  "db_existing",
+				Table:   "t_old",
+				TableID: 202,
+			},
+		},
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{common.DDLSpanTableID},
+		},
+	})
+
+	require.Len(t, w.ddlList, 2)
+
+	w.Write(ctx, codeccommon.MessageTypeDDL)
+	require.Equal(t, []string{
+		"CREATE TABLE `db_existing`.`t_old` (`id` INT PRIMARY KEY)",
+		"CREATE DATABASE `db_newer`",
+	}, s.ddls)
+	require.Empty(t, w.ddlList)
+}
+
+func TestWriterAppendDDL_keepsCrossObjectCreateDDLsWithEmptyBlockedTableIDs(t *testing.T) {
+	// Scenario: Some producer paths decode CREATE SCHEMA / CREATE TABLE with empty blocked table IDs
+	// instead of an explicit DDLSpanTableID entry. The consumer must still derive logical ordering keys
+	// from schema/table identity so unrelated create DDLs do not suppress each other.
+	//
+	// Steps:
+	// 1) Append a newer CREATE SCHEMA DDL with empty blocked table IDs.
+	// 2) Append an older independent CREATE TABLE DDL for another object with empty blocked table IDs.
+	// 3) Verify both DDLs stay queued, then call writer.Write and expect commit-ts order is preserved.
+	ctx := context.Background()
+	s := &recordingSink{}
+	p := &partitionProgress{partition: 0, watermark: 300}
+	w := &writer{
+		progresses:                 []*partitionProgress{p},
+		ddlList:                    make([]*commonEvent.DDLEvent, 0),
+		ddlOrderKeyWithMaxCommitTs: make(map[ddlOrderKey]uint64),
+		mysqlSink:                  s,
+	}
+
+	w.appendDDL(&commonEvent.DDLEvent{
+		Query:      "CREATE DATABASE `db_newer_empty`",
+		SchemaID:   102,
+		SchemaName: "db_newer_empty",
+		Type:       byte(timodel.ActionCreateSchema),
+		FinishedTs: 200,
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+		},
+	})
+	w.appendDDL(&commonEvent.DDLEvent{
+		Query:      "CREATE TABLE `db_existing`.`t_old_empty` (`id` INT PRIMARY KEY)",
+		SchemaName: "db_existing",
+		TableName:  "t_old_empty",
+		Type:       byte(timodel.ActionCreateTable),
+		FinishedTs: 100,
+		TableInfo: &common.TableInfo{
+			TableName: common.TableName{
+				Schema:  "db_existing",
+				Table:   "t_old_empty",
+				TableID: 203,
+			},
+		},
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+		},
+	})
+
+	require.Len(t, w.ddlList, 2)
+
+	w.Write(ctx, codeccommon.MessageTypeDDL)
+	require.Equal(t, []string{
+		"CREATE TABLE `db_existing`.`t_old_empty` (`id` INT PRIMARY KEY)",
+		"CREATE DATABASE `db_newer_empty`",
+	}, s.ddls)
+	require.Empty(t, w.ddlList)
+}
+
+func TestWriterAppendDDL_dropsStaleCreateSchemaWithEmptyBlockedTableIDs(t *testing.T) {
+	// Scenario: The empty blocked-table-ID path must still reject truly stale DDLs for the same logical
+	// schema after the consumer falls back to schema-scoped ordering keys.
+	//
+	// Steps:
+	// 1) Append a newer CREATE SCHEMA DDL with empty blocked table IDs.
+	// 2) Append an older CREATE SCHEMA DDL for the same schema with empty blocked table IDs.
+	// 3) Verify the older DDL is ignored while the newer one remains queued.
+	w := &writer{
+		ddlList:                    make([]*commonEvent.DDLEvent, 0),
+		ddlOrderKeyWithMaxCommitTs: make(map[ddlOrderKey]uint64),
+	}
+
+	w.appendDDL(&commonEvent.DDLEvent{
+		Query:      "CREATE DATABASE `db_same_empty`",
+		SchemaID:   302,
+		SchemaName: "db_same_empty",
+		Type:       byte(timodel.ActionCreateSchema),
+		FinishedTs: 200,
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+		},
+	})
+	w.appendDDL(&commonEvent.DDLEvent{
+		Query:      "CREATE DATABASE `db_same_empty`",
+		SchemaID:   302,
+		SchemaName: "db_same_empty",
+		Type:       byte(timodel.ActionCreateSchema),
+		FinishedTs: 100,
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+		},
+	})
+
+	require.Len(t, w.ddlList, 1)
+	require.Equal(t, "CREATE DATABASE `db_same_empty`", w.ddlList[0].Query)
+}
+
+func TestWriterAppendDDL_dropsStaleDDLForSameDDLSpanOnlyObject(t *testing.T) {
+	// Scenario: The stale-drop protection from #1781 must still reject truly stale DDLs for the same
+	// DDLSpan-only object after we stop using DDLSpanTableID as the shared key.
+	//
+	// Steps:
+	// 1) Append a newer CREATE SCHEMA DDL for one schema.
+	// 2) Append an older CREATE SCHEMA DDL for the same schema.
+	// 3) Verify the older DDL is ignored while the newer one remains queued.
+	w := &writer{
+		ddlList:                    make([]*commonEvent.DDLEvent, 0),
+		ddlOrderKeyWithMaxCommitTs: make(map[ddlOrderKey]uint64),
+	}
+
+	w.appendDDL(&commonEvent.DDLEvent{
+		Query:      "CREATE DATABASE `db_same`",
+		SchemaID:   301,
+		SchemaName: "db_same",
+		Type:       byte(timodel.ActionCreateSchema),
+		FinishedTs: 200,
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{common.DDLSpanTableID},
+		},
+	})
+	w.appendDDL(&commonEvent.DDLEvent{
+		Query:      "CREATE DATABASE `db_same`",
+		SchemaID:   301,
+		SchemaName: "db_same",
+		Type:       byte(timodel.ActionCreateSchema),
+		FinishedTs: 100,
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{common.DDLSpanTableID},
+		},
+	})
+
+	require.Len(t, w.ddlList, 1)
+	require.Equal(t, "CREATE DATABASE `db_same`", w.ddlList[0].Query)
+}
+
+func TestWriterAppendDDL_dropsStaleDDLForSameBlockedTable(t *testing.T) {
+	// Scenario: The #1781 stale-drop protection must still work for DDLs that block a real table, even
+	// after we stop using the shared DDL span as the ordering key.
+	//
+	// Steps:
+	// 1) Append a newer ALTER TABLE DDL that blocks a specific table ID.
+	// 2) Append an older ALTER TABLE DDL for the same blocked table.
+	// 3) Verify the older DDL is ignored while the newer one remains queued.
+	w := &writer{
+		ddlList:                    make([]*commonEvent.DDLEvent, 0),
+		ddlOrderKeyWithMaxCommitTs: make(map[ddlOrderKey]uint64),
+	}
+
+	w.appendDDL(&commonEvent.DDLEvent{
+		Query:      "ALTER TABLE `test`.`t` ADD COLUMN `c1` INT",
+		SchemaName: "test",
+		TableName:  "t",
+		Type:       byte(timodel.ActionAddColumn),
+		FinishedTs: 200,
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{common.DDLSpanTableID, 401},
+		},
+	})
+	w.appendDDL(&commonEvent.DDLEvent{
+		Query:      "ALTER TABLE `test`.`t` ADD COLUMN `c0` INT",
+		SchemaName: "test",
+		TableName:  "t",
+		Type:       byte(timodel.ActionAddColumn),
+		FinishedTs: 100,
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{common.DDLSpanTableID, 401},
+		},
+	})
+
+	require.Len(t, w.ddlList, 1)
+	require.Equal(t, "ALTER TABLE `test`.`t` ADD COLUMN `c1` INT", w.ddlList[0].Query)
+}
+
+func TestAppendRow2GroupDoesNotDropCommitTsFallbackBeforeApplied(t *testing.T) {
+	// Scenario: TiCDC can replay older commitTs after restart or network recovery, so the Kafka consumer
+	// must keep fallback commitTs DMLs until the same table's events are already flushed downstream.
+	//
+	// Steps:
+	// 1) Append a newer DML and then an older replayed DML for the same table.
+	// 2) Verify the replayed DML is still resolvable before AppliedWatermark advances.
+	// 3) Advance AppliedWatermark beyond the replayed commitTs and verify the same replay is ignored.
 	replicaCfg := config.GetDefaultReplicaConfig()
 	eventRouter, err := eventrouter.NewEventRouter(replicaCfg.Sink, "test-topic", false, false)
 	require.NoError(t, err)
@@ -301,7 +533,7 @@ func TestAppendRow2Group_DoesNotDropCommitTsFallbackBeforeApplied(t *testing.T) 
 		progresses:             []*partitionProgress{{partition: 0, eventsGroup: make(map[int64]*util.EventsGroup)}},
 		eventRouter:            eventRouter,
 		protocol:               config.ProtocolCanalJSON,
-		partitionTableAccessor: codecCommon.NewPartitionTableAccessor(),
+		partitionTableAccessor: codeccommon.NewPartitionTableAccessor(),
 	}
 
 	newDMLEvent := func(tableID int64, commitTs uint64) *commonEvent.DMLEvent {
@@ -318,25 +550,18 @@ func TestAppendRow2Group_DoesNotDropCommitTsFallbackBeforeApplied(t *testing.T) 
 
 	progress := w.progresses[0]
 
-	// Step 1: observe a larger commitTs first (e.g. produced before restart).
 	w.appendRow2Group(newDMLEvent(1, 200), progress, kafka.Offset(10))
-
-	// Step 2: observe a smaller commitTs later (e.g. replayed after restart).
 	w.appendRow2Group(newDMLEvent(1, 100), progress, kafka.Offset(11))
 
 	group := progress.eventsGroup[1]
 	require.NotNil(t, group)
 
-	resolvedEvents := make([]*commonEvent.DMLEvent, 0)
-	// Expect: commitTs=100 is still kept and can be resolved.
 	resolved := group.ResolveInto(150, nil)
 	require.Len(t, resolved, 1)
 	require.Equal(t, uint64(100), resolved[0].CommitTs)
 
-	// Step 3: once downstream has flushed beyond commitTs=100, the replay is safe to ignore.
-	resolvedEvents = make([]*commonEvent.DMLEvent, 0)
 	group.AppliedWatermark = 200
 	w.appendRow2Group(newDMLEvent(1, 100), progress, kafka.Offset(12))
-	resolved = group.ResolveInto(150, resolvedEvents)
+	resolved = group.ResolveInto(150, nil)
 	require.Empty(t, resolved)
 }
