@@ -1,0 +1,11 @@
+# Column selector excludes only `status`, which is not required by the outbox
+# config. VerifyTables must accept this and the changefeed must stay normal.
+[sink]
+column-selectors = [
+    {matcher = ["outbox_test.*"], columns = ["*", "!status"]},
+]
+
+[sink.outbox]
+id-column    = "id"
+key-column   = "event_key"
+value-column = "payload"

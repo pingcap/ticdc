@@ -158,6 +158,37 @@ func TestGetActiveTopics(t *testing.T) {
 	require.Equal(t, []string{"test", "hello_test_table_world", "test_index_value_world", "hello_test", "sbs_table"}, topics)
 }
 
+func TestHasRowDependentTopicDispatchStaticOnly(t *testing.T) {
+	t.Parallel()
+
+	sinkConfig := &config.SinkConfig{}
+	d, err := NewEventRouter(sinkConfig, "test", false, false)
+	require.NoError(t, err)
+	require.False(t, d.HasRowDependentTopicDispatch())
+}
+
+func TestHasRowDependentTopicDispatchMixed(t *testing.T) {
+	t.Parallel()
+
+	sinkConfig := &config.SinkConfig{
+		DispatchRules: []*config.DispatchRule{
+			{
+				Matcher:       []string{"row_topic.*"},
+				PartitionRule: "table",
+				TopicRule:     "topic_{column:topic_key}",
+			},
+			{
+				Matcher:       []string{"static_topic.*"},
+				PartitionRule: "table",
+				TopicRule:     "topic_{schema}_{table}",
+			},
+		},
+	}
+	d, err := NewEventRouter(sinkConfig, "test", false, false)
+	require.NoError(t, err)
+	require.True(t, d.HasRowDependentTopicDispatch())
+}
+
 func TestGetTopicForRowChange(t *testing.T) {
 	t.Parallel()
 
@@ -165,19 +196,35 @@ func TestGetTopicForRowChange(t *testing.T) {
 	d, err := NewEventRouter(sinkConfig, "test", false, false)
 	require.NoError(t, err)
 
-	topicName := d.GetTopicForRowChange("test_default1", "table")
+	newRowEvent := func(schema, table string) *commonEvent.RowEvent {
+		return &commonEvent.RowEvent{
+			TableInfo: &common.TableInfo{
+				TableName: common.TableName{
+					Schema: schema,
+					Table:  table,
+				},
+			},
+		}
+	}
+
+	topicName, err := d.GetTopicForRowChange(newRowEvent("test_default1", "table"))
+	require.NoError(t, err)
 	require.Equal(t, "test", topicName)
 
-	topicName = d.GetTopicForRowChange("test_default2", "table")
+	topicName, err = d.GetTopicForRowChange(newRowEvent("test_default2", "table"))
+	require.NoError(t, err)
 	require.Equal(t, "test", topicName)
 
-	topicName = d.GetTopicForRowChange("test_table", "table")
+	topicName, err = d.GetTopicForRowChange(newRowEvent("test_table", "table"))
+	require.NoError(t, err)
 	require.Equal(t, "hello_test_table_world", topicName)
 
-	topicName = d.GetTopicForRowChange("test_index_value", "table")
+	topicName, err = d.GetTopicForRowChange(newRowEvent("test_index_value", "table"))
+	require.NoError(t, err)
 	require.Equal(t, "test_index_value_world", topicName)
 
-	topicName = d.GetTopicForRowChange("a", "table")
+	topicName, err = d.GetTopicForRowChange(newRowEvent("a", "table"))
+	require.NoError(t, err)
 	require.Equal(t, "a_table", topicName)
 }
 
@@ -316,4 +363,249 @@ func TestGetTopicForDDL(t *testing.T) {
 	for _, test := range tests {
 		require.Equal(t, test.expectedTopic, d.GetTopicForDDL(test.ddl))
 	}
+}
+
+func TestGetTopicForRowChangeWithColumnPlaceholder(t *testing.T) {
+	sinkConfig := &config.SinkConfig{
+		DispatchRules: []*config.DispatchRule{
+			{
+				Matcher:   []string{"topic_dispatch.*"},
+				TopicRule: "topic_{column:topic_key}",
+			},
+		},
+	}
+
+	d, err := NewEventRouter(sinkConfig, "default_topic", false, false)
+	require.NoError(t, err)
+
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("create database topic_dispatch")
+	helper.Tk().MustExec("use topic_dispatch")
+	helper.DDL2Job("create table t (id int primary key, topic_key varchar(128), payload varchar(128))")
+
+	insertEvent := helper.DML2Event("topic_dispatch", "t",
+		"insert into t values (1, 'proxy.transaction-balance-change', 'v1')")
+	insertRow, ok := insertEvent.GetNextRow()
+	require.True(t, ok)
+
+	topicName, err := d.GetTopicForRowChange(&commonEvent.RowEvent{
+		TableInfo: insertEvent.TableInfo,
+		Event:     insertRow,
+	})
+	require.NoError(t, err)
+	require.Equal(t, "topic_proxy.transaction-balance-change", topicName)
+
+	deleteEvent := helper.DML2DeleteEvent("topic_dispatch", "t",
+		"insert into t values (2, 'delete-topic', 'v2')",
+		"delete from t where id = 2")
+	deleteRow, ok := deleteEvent.GetNextRow()
+	require.True(t, ok)
+
+	topicName, err = d.GetTopicForRowChange(&commonEvent.RowEvent{
+		TableInfo: deleteEvent.TableInfo,
+		Event:     deleteRow,
+	})
+	require.NoError(t, err)
+	require.Equal(t, "topic_delete-topic", topicName)
+}
+
+func TestGetTopicForRowChangeColumnPlaceholderInvalidValue(t *testing.T) {
+	sinkConfig := &config.SinkConfig{
+		DispatchRules: []*config.DispatchRule{
+			{
+				Matcher:   []string{"topic_dispatch_err.*"},
+				TopicRule: "topic_{column:topic_key}",
+			},
+		},
+	}
+
+	d, err := NewEventRouter(sinkConfig, "default_topic", false, false)
+	require.NoError(t, err)
+
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("create database topic_dispatch_err")
+	helper.Tk().MustExec("use topic_dispatch_err")
+	helper.DDL2Job("create table t (id int primary key, topic_key varchar(128), payload varchar(128))")
+
+	nullEvent := helper.DML2Event("topic_dispatch_err", "t",
+		"insert into t values (1, null, 'v1')")
+	nullRow, ok := nullEvent.GetNextRow()
+	require.True(t, ok)
+	_, err = d.GetTopicForRowChange(&commonEvent.RowEvent{
+		TableInfo: nullEvent.TableInfo,
+		Event:     nullRow,
+	})
+	require.ErrorContains(t, err, "topic dispatch column value is null")
+
+	emptyEvent := helper.DML2Event("topic_dispatch_err", "t",
+		"insert into t values (2, '   ', 'v2')")
+	emptyRow, ok := emptyEvent.GetNextRow()
+	require.True(t, ok)
+	_, err = d.GetTopicForRowChange(&commonEvent.RowEvent{
+		TableInfo: emptyEvent.TableInfo,
+		Event:     emptyRow,
+	})
+	require.ErrorContains(t, err, "topic dispatch column value is empty")
+}
+
+func TestGetTopicForDDLWithColumnPlaceholderFallback(t *testing.T) {
+	t.Parallel()
+
+	sinkConfig := &config.SinkConfig{
+		DispatchRules: []*config.DispatchRule{
+			{
+				Matcher:   []string{"test_col.*"},
+				TopicRule: "topic_{column:topic_key}",
+			},
+		},
+	}
+
+	d, err := NewEventRouter(sinkConfig, "default_topic", false, false)
+	require.NoError(t, err)
+
+	ddl := &commonEvent.DDLEvent{
+		SchemaName: "test_col",
+		TableName:  "t1",
+	}
+	require.Equal(t, "default_topic", d.GetTopicForDDL(ddl))
+}
+
+func TestGetTopicForTable(t *testing.T) {
+	t.Parallel()
+
+	sinkConfig := newSinkConfig4Test()
+	d, err := NewEventRouter(sinkConfig, "test", false, false)
+	require.NoError(t, err)
+
+	// StaticTopicGenerator: rule with no topic expression uses the default topic.
+	topicName, isStatic := d.GetTopicForTable("test_default1", "table")
+	require.True(t, isStatic)
+	require.Equal(t, "test", topicName)
+
+	// DynamicTopicGenerator without column placeholders: {schema} and {table}
+	// tokens are table-static so the topic can be resolved without row data.
+	topicName, isStatic = d.GetTopicForTable("sbs", "table2")
+	require.True(t, isStatic)
+	require.Equal(t, "sbs_table2", topicName)
+
+	// DynamicTopicGenerator with column placeholder: topic cannot be resolved
+	// without row data.
+	colPlaceholderConfig := &config.SinkConfig{
+		DispatchRules: []*config.DispatchRule{
+			{
+				Matcher:   []string{"row_topic.*"},
+				TopicRule: "prefix_{column:topic_col}",
+			},
+		},
+	}
+	d2, err := NewEventRouter(colPlaceholderConfig, "default", false, false)
+	require.NoError(t, err)
+	topicName, isStatic = d2.GetTopicForTable("row_topic", "t")
+	require.False(t, isStatic)
+	require.Empty(t, topicName)
+}
+
+func TestGetActiveTopicsSkipsRowDependentTopics(t *testing.T) {
+	t.Parallel()
+
+	sinkConfig := &config.SinkConfig{
+		DispatchRules: []*config.DispatchRule{
+			{
+				Matcher:   []string{"row_topic.*"},
+				TopicRule: "topic_{column:topic_key}",
+			},
+			{
+				Matcher:   []string{"static_topic.*"},
+				TopicRule: "topic_{schema}_{table}",
+			},
+		},
+	}
+
+	d, err := NewEventRouter(sinkConfig, "default_topic", false, false)
+	require.NoError(t, err)
+
+	topics := d.GetActiveTopics([]*commonEvent.SchemaTableName{
+		{SchemaName: "row_topic", TableName: "t1"},
+		{SchemaName: "static_topic", TableName: "t2"},
+	})
+	require.Equal(t, []string{"topic_static_topic_t2", "default_topic"}, topics)
+}
+
+func TestVerifyTablesForTopicDispatchAndOutboxColumns(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("create database verify_router")
+	helper.Tk().MustExec("use verify_router")
+	helper.DDL2Job("create table t (" +
+		"id int primary key, " +
+		"aggregate_id varchar(64), " +
+		"payload varchar(128), " +
+		"header_key varchar(64), " +
+		"topic_key varchar(128), " +
+		"virtual_topic varchar(128) as (topic_key) virtual)")
+
+	event := helper.DML2Event("verify_router", "t",
+		"insert into t(id, aggregate_id, payload, header_key, topic_key) values (1, 'a1', 'p1', 'h1', 'route-1')")
+	tableInfo := event.TableInfo
+
+	protocol := "outbox-json"
+	validRouter, err := NewEventRouter(&config.SinkConfig{
+		Protocol: &protocol,
+		Outbox: &config.OutboxConfig{
+			IDColumn:      "id",
+			KeyColumn:     "aggregate_id",
+			ValueColumn:   "payload",
+			HeaderColumns: map[string]string{"header_key": "header_key"},
+		},
+		DispatchRules: []*config.DispatchRule{
+			{
+				Matcher:   []string{"verify_router.*"},
+				TopicRule: "topic_{column:topic_key}",
+			},
+		},
+	}, "default_topic", false, false)
+	require.NoError(t, err)
+	require.NoError(t, validRouter.VerifyTables([]*common.TableInfo{tableInfo}))
+
+	missingTopicColumnRouter, err := NewEventRouter(&config.SinkConfig{
+		DispatchRules: []*config.DispatchRule{
+			{
+				Matcher:   []string{"verify_router.*"},
+				TopicRule: "topic_{column:not_found}",
+			},
+		},
+	}, "default_topic", false, false)
+	require.NoError(t, err)
+	err = missingTopicColumnRouter.VerifyTables([]*common.TableInfo{tableInfo})
+	require.ErrorContains(t, err, "columns not found")
+
+	virtualTopicColumnRouter, err := NewEventRouter(&config.SinkConfig{
+		DispatchRules: []*config.DispatchRule{
+			{
+				Matcher:   []string{"verify_router.*"},
+				TopicRule: "topic_{column:virtual_topic}",
+			},
+		},
+	}, "default_topic", false, false)
+	require.NoError(t, err)
+	err = virtualTopicColumnRouter.VerifyTables([]*common.TableInfo{tableInfo})
+	require.ErrorContains(t, err, "virtual generated columns")
+
+	outboxMissingColumnRouter, err := NewEventRouter(&config.SinkConfig{
+		Protocol: &protocol,
+		Outbox: &config.OutboxConfig{
+			IDColumn:      "id",
+			KeyColumn:     "aggregate_id",
+			ValueColumn:   "payload",
+			HeaderColumns: map[string]string{"not_found": "not_found"},
+		},
+	}, "default_topic", false, false)
+	require.NoError(t, err)
+	err = outboxMissingColumnRouter.VerifyTables([]*common.TableInfo{tableInfo})
+	require.ErrorContains(t, err, "columns not found")
 }

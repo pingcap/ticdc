@@ -184,6 +184,7 @@ func (p *saramaAsyncProducer) AsyncSend(
 		Partition: partition,
 		Key:       sarama.StringEncoder(message.Key),
 		Value:     sarama.ByteEncoder(message.Value),
+		Headers:   toSaramaHeaders(message.Headers),
 		Metadata:  meta,
 	}
 	select {
@@ -192,6 +193,21 @@ func (p *saramaAsyncProducer) AsyncSend(
 	case p.producer.Input() <- msg:
 	}
 	return nil
+}
+
+// toSaramaHeaders converts common message headers into Sarama record headers.
+func toSaramaHeaders(headers []common.MessageHeader) []sarama.RecordHeader {
+	if len(headers) == 0 {
+		return nil
+	}
+	result := make([]sarama.RecordHeader, 0, len(headers))
+	for _, header := range headers {
+		result = append(result, sarama.RecordHeader{
+			Key:   []byte(header.Key),
+			Value: header.Value,
+		})
+	}
+	return result
 }
 
 func extractLogInfo(msg *sarama.ProducerMessage) *common.MessageLogInfo {

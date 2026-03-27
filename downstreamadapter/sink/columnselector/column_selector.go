@@ -14,6 +14,8 @@
 package columnselector
 
 import (
+	"strings"
+
 	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter/partition"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -71,7 +73,8 @@ func (s *ColumnSelector) Select(colInfo *model.ColumnInfo) bool {
 // ColumnSelectors manages an array of selectors, the first selector match the given
 // event is used to select out columns.
 type ColumnSelectors struct {
-	selectors []*ColumnSelector
+	selectors             []*ColumnSelector
+	outboxRequiredColumns []string
 }
 
 // New return a column selectors
@@ -86,7 +89,8 @@ func New(sinkConfig *config.SinkConfig) (*ColumnSelectors, error) {
 	}
 
 	return &ColumnSelectors{
-		selectors: selectors,
+		selectors:             selectors,
+		outboxRequiredColumns: sinkConfig.OutboxRequiredColumns(),
 	}, nil
 }
 
@@ -116,6 +120,15 @@ func (c *ColumnSelectors) VerifyTables(
 			}
 
 			retainedColumns := make(map[string]struct{})
+			topicColumns := make(map[string]struct{})
+			for _, col := range eventRouter.GetTopicDispatchColumns(table.TableName.Schema, table.TableName.Table) {
+				topicColumns[strings.ToLower(col)] = struct{}{}
+			}
+			outboxColumns := make(map[string]struct{})
+			for _, col := range c.outboxRequiredColumns {
+				outboxColumns[strings.ToLower(col)] = struct{}{}
+			}
+
 			for _, columnInfo := range table.GetColumns() {
 				columnName := columnInfo.Name.O
 				if s.columnM.MatchColumn(columnName) {
@@ -134,6 +147,18 @@ func (c *ColumnSelectors) VerifyTables(
 						}
 					}
 				default:
+				}
+
+				lowerColumnName := strings.ToLower(columnName)
+				if _, ok := topicColumns[lowerColumnName]; ok {
+					return errors.ErrColumnSelectorFailed.GenWithStack(
+						"the filtered out column is used in the topic dispatcher, table: %v, column: %s",
+						table.TableName, columnInfo.Name)
+				}
+				if _, ok := outboxColumns[lowerColumnName]; ok {
+					return errors.ErrColumnSelectorFailed.GenWithStack(
+						"the filtered out column is required by outbox config, table: %v, column: %s",
+						table.TableName, columnInfo.Name)
 				}
 			}
 

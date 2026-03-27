@@ -16,6 +16,8 @@ package kafka
 import (
 	"context"
 	"net/url"
+	"sort"
+	"sync"
 	"time"
 
 	"github.com/pingcap/log"
@@ -37,6 +39,15 @@ import (
 const (
 	// batchSize is the maximum size of the number of messages in a batch.
 	batchSize = 2048
+
+	// discoveredTopicRetention is how long a dynamically discovered row topic is
+	// retained in the checkpoint set after the last message was sent to it.
+	// Once a topic has been quiet for this duration its consumers have had
+	// sufficient time to process pending events; checkpoint messages to that
+	// topic are no longer needed until it becomes active again.
+	// This is intentionally not configurable: the right value requires knowledge
+	// of CDC checkpoint semantics that operators should not need to reason about.
+	discoveredTopicRetention = 30 * time.Minute
 )
 
 type sink struct {
@@ -61,6 +72,9 @@ type sink struct {
 	// isNormal indicate whether the sink is in the normal state.
 	isNormal *atomic.Bool
 	ctx      context.Context
+
+	discoveredRowTopicsMu sync.Mutex
+	discoveredRowTopics   map[string]time.Time // topic -> time of last message sent
 }
 
 func (s *sink) SinkType() commonType.SinkType {
@@ -113,6 +127,8 @@ func New(
 
 		isNormal: atomic.NewBool(true),
 		ctx:      ctx,
+
+		discoveredRowTopics: make(map[string]time.Time),
 	}, nil
 }
 
@@ -215,17 +231,16 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 			}
 			schema := event.TableInfo.GetSchemaName()
 			table := event.TableInfo.GetTableName()
-			topic := s.comp.eventRouter.GetTopicForRowChange(schema, table)
-			partitionNum, err := s.comp.topicManager.GetPartitionNum(ctx, topic)
-			if err != nil {
-				return err
-			}
-
 			partitionGenerator := s.comp.eventRouter.GetPartitionGenerator(schema, table)
+			staticTopic, isStaticTopic := s.comp.eventRouter.GetTopicForTable(schema, table)
+			// staticPartitionNum is resolved lazily on the first row that will
+			// actually be emitted, so that skip-only events (e.g. outbox-json
+			// update/delete transactions) never trigger a partition lookup.
+			var staticPartitionNum int32
+			var staticPartitionReady bool
 			selector := s.comp.columnSelector.Get(schema, table)
-			rowsCount := event.Len()
-			events := make([]*commonEvent.MQRowEvent, 0, rowsCount)
-			rowCallback := helper.NewTxnPostFlushRowCallback(event, uint64(rowsCount))
+			seenTopics := make(map[string]struct{})
+			rowCallback := helper.NewTxnPostFlushRowCallback(event, uint64(event.Len()))
 
 			for {
 				row, ok := event.GetNextRow()
@@ -234,31 +249,67 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 					break
 				}
 
+				rowEvent := commonEvent.RowEvent{
+					PhysicalTableID: event.PhysicalTableID,
+					TableInfo:       event.TableInfo,
+					StartTs:         event.StartTs,
+					CommitTs:        event.CommitTs,
+					Event:           row,
+					Callback:        rowCallback,
+					ColumnSelector:  selector,
+					Checksum:        row.Checksum,
+				}
+				if s.protocol == config.ProtocolOutboxJSON && !rowEvent.IsInsert() {
+					rowCallback()
+					continue
+				}
+
+					var (
+						topic        string
+						partitionNum int32
+					)
+				if isStaticTopic {
+					if !staticPartitionReady {
+						var err error
+						staticPartitionNum, err = s.comp.topicManager.GetPartitionNum(ctx, staticTopic)
+						if err != nil {
+							return err
+						}
+						staticPartitionReady = true
+					}
+					topic = staticTopic
+					partitionNum = staticPartitionNum
+				} else {
+					var err error
+					topic, err = s.comp.eventRouter.GetTopicForRowChange(&rowEvent)
+					if err != nil {
+						return err
+					}
+					if _, ok := seenTopics[topic]; !ok {
+						s.addDiscoveredRowTopic(topic)
+						seenTopics[topic] = struct{}{}
+					}
+					partitionNum, err = s.comp.topicManager.GetPartitionNum(ctx, topic)
+					if err != nil {
+						return err
+					}
+				}
+
 				index, key, err := partitionGenerator.GeneratePartitionIndexAndKey(&row, partitionNum, event.TableInfo, event.CommitTs)
 				if err != nil {
 					return errors.Trace(err)
 				}
 
-				events = append(events, &commonEvent.MQRowEvent{
+				s.rowChan.Push(&commonEvent.MQRowEvent{
 					Key: commonEvent.TopicPartitionKey{
 						Topic:          topic,
 						Partition:      index,
 						PartitionKey:   key,
 						TotalPartition: partitionNum,
 					},
-					RowEvent: commonEvent.RowEvent{
-						PhysicalTableID: event.PhysicalTableID,
-						TableInfo:       event.TableInfo,
-						StartTs:         event.StartTs,
-						CommitTs:        event.CommitTs,
-						Event:           row,
-						Callback:        rowCallback,
-						ColumnSelector:  selector,
-						Checksum:        row.Checksum,
-					},
+					RowEvent: rowEvent,
 				})
 			}
-			s.rowChan.Push(events...)
 		}
 	}
 }
@@ -495,12 +546,8 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 			}
 			common.SetCheckpointMessageLogInfo(msg, ts)
 
-			tableNames := s.getAllTableNames(ts)
-			// NOTICE: When there are no tables to replicate,
-			// we need to send checkpoint ts to the default topic.
-			// This will be compatible with the old behavior.
-			if len(tableNames) == 0 {
-				topic := s.comp.eventRouter.GetDefaultTopic()
+			topics := s.getCheckpointTopics(ts)
+			for _, topic := range topics {
 				partitionNum, err = s.comp.topicManager.GetPartitionNum(ctx, topic)
 				if err != nil {
 					return err
@@ -508,18 +555,6 @@ func (s *sink) sendCheckpoint(ctx context.Context) error {
 				err = s.ddlProducer.SendMessages(topic, partitionNum, msg)
 				if err != nil {
 					return err
-				}
-			} else {
-				topics := s.comp.eventRouter.GetActiveTopics(tableNames)
-				for _, topic := range topics {
-					partitionNum, err = s.comp.topicManager.GetPartitionNum(ctx, topic)
-					if err != nil {
-						return err
-					}
-					err = s.ddlProducer.SendMessages(topic, partitionNum, msg)
-					if err != nil {
-						return err
-					}
 				}
 			}
 			checkpointTsMessageCount.Inc()
@@ -541,6 +576,60 @@ func (s *sink) getAllTableNames(ts uint64) []*commonEvent.SchemaTableName {
 		return nil
 	}
 	return s.tableSchemaStore.GetAllTableNames(ts, true)
+}
+
+// addDiscoveredRowTopic records a topic that has been used by a publishable
+// row event, refreshing its last-seen timestamp.
+func (s *sink) addDiscoveredRowTopic(topic string) {
+	if topic == "" {
+		return
+	}
+	s.discoveredRowTopicsMu.Lock()
+	s.discoveredRowTopics[topic] = time.Now()
+	s.discoveredRowTopicsMu.Unlock()
+}
+
+// snapshotDiscoveredRowTopics returns a point-in-time copy of the runtime
+// discovered row topics, evicting entries that have not been seen within
+// discoveredTopicRetention.
+func (s *sink) snapshotDiscoveredRowTopics() []string {
+	now := time.Now()
+	s.discoveredRowTopicsMu.Lock()
+	defer s.discoveredRowTopicsMu.Unlock()
+
+	topics := make([]string, 0, len(s.discoveredRowTopics))
+	for topic, lastSeen := range s.discoveredRowTopics {
+		if now.Sub(lastSeen) > discoveredTopicRetention {
+			delete(s.discoveredRowTopics, topic)
+			continue
+		}
+		topics = append(topics, topic)
+	}
+	return topics
+}
+
+// getCheckpointTopics returns the deduplicated set of topics that should
+// receive checkpoint messages.
+func (s *sink) getCheckpointTopics(ts uint64) []string {
+	topicsMap := make(map[string]struct{})
+	topicsMap[s.comp.eventRouter.GetDefaultTopic()] = struct{}{}
+
+	tableNames := s.getAllTableNames(ts)
+	for _, topic := range s.comp.eventRouter.GetActiveTopics(tableNames) {
+		topicsMap[topic] = struct{}{}
+	}
+	if s.comp.eventRouter.HasRowDependentTopicDispatch() {
+		for _, topic := range s.snapshotDiscoveredRowTopics() {
+			topicsMap[topic] = struct{}{}
+		}
+	}
+
+	topics := make([]string, 0, len(topicsMap))
+	for topic := range topicsMap {
+		topics = append(topics, topic)
+	}
+	sort.Strings(topics)
+	return topics
 }
 
 func (s *sink) Close(_ bool) {
