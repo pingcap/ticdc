@@ -59,6 +59,7 @@ type DispatcherInfo interface {
 	GetTimezone() *time.Location
 	GetMode() int64
 	GetEpoch() uint64
+	GetSinkType() common.SinkType
 	IsOutputRawChangeEvent() bool
 }
 

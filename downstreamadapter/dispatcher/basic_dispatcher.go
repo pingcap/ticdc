@@ -52,6 +52,7 @@ type DispatcherService interface {
 	GetTxnAtomicity() config.AtomicityLevel
 	GetResolvedTs() uint64
 	GetCheckpointTs() uint64
+	GetSinkType() common.SinkType
 	HandleEvents(events []DispatcherEvent, wakeCallback func()) (block bool)
 	IsOutputRawChangeEvent() bool
 }
