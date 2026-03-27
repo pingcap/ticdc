@@ -8,6 +8,38 @@ WORK_DIR=$OUT_DIR/$TEST_NAME
 CDC_BINARY=cdc.test
 SINK_TYPE=$1
 
+function print_upstream_table_schemas_before_changefeed() {
+	echo "[$(date)] print upstream table schemas before creating changefeed"
+
+	local listTablesSQL
+	listTablesSQL="SELECT CONCAT('SHOW CREATE TABLE \`', TABLE_SCHEMA, '\`.\`', TABLE_NAME, '\`;')
+FROM information_schema.tables
+WHERE TABLE_TYPE = 'BASE TABLE'
+  AND LOWER(TABLE_SCHEMA) NOT IN (
+    'information_schema',
+    'performance_schema',
+    'metrics_schema',
+    'inspection_schema',
+    'inspection_result',
+    'cluster_info',
+    'mysql',
+    'sys'
+  )
+ORDER BY TABLE_SCHEMA, TABLE_NAME;"
+
+	local showCreateTableSQLs
+	showCreateTableSQLs=$(mysql -uroot -h${UP_TIDB_HOST} -P${UP_TIDB_PORT} --default-character-set utf8mb4 -N -e "$listTablesSQL")
+	if [ -z "$showCreateTableSQLs" ]; then
+		echo "[$(date)] no upstream user tables found before creating changefeed"
+		return
+	fi
+
+	while IFS= read -r showCreateSQL; do
+		[ -z "$showCreateSQL" ] && continue
+		run_sql "$showCreateSQL" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	done <<<"$showCreateTableSQLs"
+}
+
 function run() {
 	rm -rf $WORK_DIR && mkdir -p $WORK_DIR
 	stop_tidb_cluster
@@ -33,6 +65,7 @@ function run() {
 		;;
 	*) SINK_URI="mysql://normal:123456@127.0.0.1:3306/" ;;
 	esac
+	print_upstream_table_schemas_before_changefeed
 	cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI"
 	case $SINK_TYPE in
 	kafka) run_kafka_consumer $WORK_DIR $SINK_URI ;;
