@@ -29,7 +29,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/testutil"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
-	sinkutil "github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/stretchr/testify/require"
@@ -129,7 +128,7 @@ func TestRedoSinkInProcessor(t *testing.T) {
 		ctx, cancel := context.WithCancel(ctx)
 		cfg := newTestConsistentConfig(storage)
 		cfg.UseFileBackend = util.AddressOf(useFileBackend)
-		dmlMgr, err := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), cfg, nil)
+		dmlMgr, err := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), cfg)
 		require.NoError(t, err)
 		defer dmlMgr.Close(false)
 
@@ -212,7 +211,7 @@ func TestRedoSinkError(t *testing.T) {
 	defer cancel()
 
 	cfg := newTestConsistentConfig("blackhole-invalid://")
-	logMgr, err := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), cfg, nil)
+	logMgr, err := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), cfg)
 	require.NoError(t, err)
 	defer logMgr.Close(false)
 
@@ -266,7 +265,7 @@ func runBenchTest(b *testing.B, storage string, useFileBackend bool) {
 	cfg.EncodingWorkerNum = util.AddressOf(redo.DefaultEncodingWorkerNum)
 	cfg.FlushWorkerNum = util.AddressOf(redo.DefaultFlushWorkerNum)
 	cfg.UseFileBackend = util.AddressOf(useFileBackend)
-	dmlMgr, err := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), cfg, nil)
+	dmlMgr, err := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), cfg)
 	require.NoError(b, err)
 	defer dmlMgr.Close(false)
 
@@ -323,68 +322,6 @@ func runBenchTest(b *testing.B, storage string, useFileBackend bool) {
 	cancel()
 
 	require.ErrorIs(b, eg.Wait(), context.Canceled)
-}
-
-// TestRedoSinkDDLRoutingDelegation tests that the redo sink's rewriteDDLQueryWithRouting
-// method properly delegates to the shared RewriteDDLQueryWithRouting function.
-// Comprehensive tests for the core DDL routing logic are in pkg/sink/util/ddl_routing_test.go.
-func TestRedoSinkDDLRoutingDelegation(t *testing.T) {
-	t.Parallel()
-
-	// Test with routing configured
-	router, err := sinkutil.NewRouter(false, []sinkutil.RoutingRuleConfig{
-		{
-			Matcher:      []string{"source_db.*"},
-			TargetSchema: "target_db",
-			TargetTable:  sinkutil.TablePlaceholder,
-		},
-	})
-	require.NoError(t, err)
-
-	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
-	s := &Sink{
-		changefeedID: changefeedID,
-		router:       router,
-	}
-
-	// Test that routing is applied and query is modified
-	ddlEvent := &commonEvent.DDLEvent{
-		Query: "CREATE TABLE `source_db`.`test_table` (id INT PRIMARY KEY)",
-		TableInfo: &common.TableInfo{
-			TableName: common.TableName{Schema: "source_db", Table: "test_table"},
-		},
-	}
-
-	err = s.rewriteDDLQueryWithRouting(ddlEvent)
-	require.NoError(t, err)
-	require.Contains(t, ddlEvent.Query, "target_db", "Query should be rewritten with target schema")
-	require.NotContains(t, ddlEvent.Query, "source_db", "Query should not contain source schema")
-
-	// Test with nil router - should be a no-op
-	sNoRouter := &Sink{
-		changefeedID: changefeedID,
-		router:       nil,
-	}
-
-	ddlEvent2 := &commonEvent.DDLEvent{
-		Query: "CREATE TABLE `source_db`.`test_table` (id INT PRIMARY KEY)",
-		TableInfo: &common.TableInfo{
-			TableName: common.TableName{Schema: "source_db", Table: "test_table"},
-		},
-	}
-
-	originalQuery := ddlEvent2.Query
-	err = sNoRouter.rewriteDDLQueryWithRouting(ddlEvent2)
-	require.NoError(t, err)
-	require.Equal(t, originalQuery, ddlEvent2.Query, "Query should not be modified when router is nil")
-
-	// Test with empty query - should be a no-op
-	ddlEvent3 := &commonEvent.DDLEvent{
-		Query: "",
-	}
-	err = s.rewriteDDLQueryWithRouting(ddlEvent3)
-	require.NoError(t, err)
-	require.Equal(t, "", ddlEvent3.Query)
 }
 
 func TestRedoSinkSendMessagesInBatch(t *testing.T) {

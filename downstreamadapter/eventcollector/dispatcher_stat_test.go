@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
+	"github.com/pingcap/ticdc/downstreamadapter/routing"
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -27,7 +28,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
-	sinkutil "github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
@@ -46,7 +46,7 @@ type mockDispatcher struct {
 	checkPointTs uint64
 
 	skipSyncpointAtStartTs bool
-	router                 *sinkutil.Router
+	router                 *routing.Router
 }
 
 func newMockDispatcher(id common.DispatcherID, startTs uint64) *mockDispatcher {
@@ -133,7 +133,7 @@ func (m *mockDispatcher) IsOutputRawChangeEvent() bool {
 	return false
 }
 
-func (m *mockDispatcher) GetRouter() *sinkutil.Router {
+func (m *mockDispatcher) GetRouter() *routing.Router {
 	return m.router
 }
 
@@ -1354,8 +1354,8 @@ func TestApplyRoutingToTableInfo(t *testing.T) {
 	remoteServerID := node.ID("remote")
 
 	// Create a router that routes source_db.* -> target_db.*
-	router, err := sinkutil.NewRouter(true, []sinkutil.RoutingRuleConfig{
-		{Matcher: []string{"source_db.*"}, TargetSchema: "target_db", TargetTable: sinkutil.TablePlaceholder},
+	router, err := routing.NewRouter(true, []routing.RoutingRuleConfig{
+		{Matcher: []string{"source_db.*"}, TargetSchema: "target_db", TargetTable: routing.TablePlaceholder},
 	})
 	require.NoError(t, err)
 
@@ -1552,7 +1552,7 @@ func TestApplyRoutingToTableInfo(t *testing.T) {
 
 	t.Run("DDL with table-only routing (schema unchanged)", func(t *testing.T) {
 		// Create a router that only renames the table, keeping schema the same
-		tableOnlyRouter, err := sinkutil.NewRouter(true, []sinkutil.RoutingRuleConfig{
+		tableOnlyRouter, err := routing.NewRouter(true, []routing.RoutingRuleConfig{
 			{Matcher: []string{"mydb.old_users"}, TargetSchema: "{schema}", TargetTable: "new_users"},
 		})
 		require.NoError(t, err)
@@ -1607,7 +1607,7 @@ func TestApplyRoutingToTableInfo(t *testing.T) {
 
 	t.Run("DDL with both schema and table routing", func(t *testing.T) {
 		// Create a router that renames both schema and table
-		bothRouter, err := sinkutil.NewRouter(true, []sinkutil.RoutingRuleConfig{
+		bothRouter, err := routing.NewRouter(true, []routing.RoutingRuleConfig{
 			{Matcher: []string{"staging.*"}, TargetSchema: "prod", TargetTable: "{schema}_{table}"},
 		})
 		require.NoError(t, err)

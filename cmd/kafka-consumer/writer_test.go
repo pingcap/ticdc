@@ -25,7 +25,6 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	codecCommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
-	sinkutil "github.com/pingcap/ticdc/pkg/sink/util"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
@@ -65,7 +64,6 @@ func (s *recordingSink) SetTableSchemaStore(_ *commonEvent.TableSchemaStore) {
 func (s *recordingSink) Close(_ bool) {
 }
 func (s *recordingSink) Run(_ context.Context) error { return nil }
-func (s *recordingSink) GetRouter() *sinkutil.Router { return nil }
 
 func TestWriterWrite_executesIndependentCreateTableWithoutWatermark(t *testing.T) {
 	// Scenario: In some integration tests the upstream intentionally pauses dispatcher creation, which can

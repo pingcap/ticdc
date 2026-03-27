@@ -26,7 +26,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/redo/writer/factory"
-	sinkutil "github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/chann"
 	"go.uber.org/atomic"
@@ -44,11 +43,6 @@ type Sink struct {
 
 	logBuffer *chann.UnlimitedChannel[*commonEvent.RedoRowEvent, any]
 
-	// router is used for schema/table name routing in DDL queries.
-	// When routing is configured, DDL queries are rewritten to use target table names
-	// before being written to the redo log.
-	router *sinkutil.Router
-
 	// isNormal indicate whether the sink is in the normal state.
 	isNormal *atomic.Bool
 	isClosed *atomic.Bool
@@ -63,12 +57,7 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, cfg *config.C
 	return nil
 }
 
-// New creates a new redo sink.
-// The router parameter is used for DDL query rewriting when sink routing is configured.
-func New(ctx context.Context, changefeedID common.ChangeFeedID,
-	cfg *config.ConsistentConfig,
-	router *sinkutil.Router,
-) (*Sink, error) {
+func New(ctx context.Context, changefeedID common.ChangeFeedID, cfg *config.ConsistentConfig) (*Sink, error) {
 	var err error
 	config, err := writer.NewConfig(changefeedID, cfg)
 	if err != nil {
@@ -145,15 +134,6 @@ func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	switch e := event.(type) {
 	case *commonEvent.DDLEvent:
 		start := time.Now()
-		// Rewrite DDL query with routing before writing to redo log.
-		// This ensures the redo log contains already-routed DDL statements,
-		// so replay will write to the correct target tables.
-		if s.router != nil {
-			if err := s.rewriteDDLQueryWithRouting(e); err != nil {
-				s.isNormal.Store(false)
-				return errors.Trace(err)
-			}
-		}
 		err := s.ddlWriter.WriteDDLEvent(s.ctx, e)
 		if err != nil {
 			s.isNormal.Store(false)
@@ -199,11 +179,6 @@ func (s *Sink) IsNormal() bool {
 
 func (s *Sink) SinkType() common.SinkType {
 	return common.RedoSinkType
-}
-
-// GetRouter returns the router for schema/table name routing.
-func (s *Sink) GetRouter() *sinkutil.Router {
-	return s.router
 }
 
 func (s *Sink) SetTableSchemaStore(tableSchemaStore *commonEvent.TableSchemaStore) {
@@ -270,46 +245,3 @@ func (s *Sink) sendMessages(ctx context.Context) error {
 }
 
 func (s *Sink) AddCheckpointTs(_ uint64) {}
-
-// rewriteDDLQueryWithRouting rewrites the DDL query by applying routing rules
-// to transform source table names to target table names.
-//
-// IMPORTANT: This function mutates ddl.Query and ddl.BlockedTableNames in place. This is safe because:
-// 1. This is only called once per DDL event at the start of WriteBlockEvent
-// 2. The redo writer's WriteEvents has no internal retries for DDL events
-// 3. If WriteBlockEvent fails, the dispatcher reports an error and does not retry with the same event
-func (s *Sink) rewriteDDLQueryWithRouting(ddl *commonEvent.DDLEvent) error {
-	result, err := sinkutil.RewriteDDLQueryWithRouting(s.router, ddl, s.changefeedID.String())
-	if err != nil {
-		return errors.Trace(err)
-	}
-
-	// Only update the query if it actually changed
-	if result.QueryChanged {
-		ddl.Query = result.NewQuery
-	}
-	// Note: TargetSchemaName is not used by redo sink (no USE statement needed for redo logs)
-
-	// Route BlockedTableNames to maintain consistency between the rewritten query and
-	// the table names stored in redo logs. This ensures that when redo logs are replayed,
-	// the BlockedTableNames match the routed table names in the query.
-	s.routeBlockedTableNames(ddl)
-
-	return nil
-}
-
-// routeBlockedTableNames applies routing rules to BlockedTableNames so that
-// redo logs contain consistent target table names throughout.
-func (s *Sink) routeBlockedTableNames(ddl *commonEvent.DDLEvent) {
-	if s.router == nil || len(ddl.BlockedTableNames) == 0 {
-		return
-	}
-
-	for i := range ddl.BlockedTableNames {
-		srcSchema := ddl.BlockedTableNames[i].SchemaName
-		srcTable := ddl.BlockedTableNames[i].TableName
-		targetSchema, targetTable := s.router.Route(srcSchema, srcTable)
-		ddl.BlockedTableNames[i].SchemaName = targetSchema
-		ddl.BlockedTableNames[i].TableName = targetTable
-	}
-}

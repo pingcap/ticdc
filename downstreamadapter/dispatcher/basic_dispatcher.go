@@ -21,6 +21,7 @@ import (
 
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/routing"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -28,7 +29,6 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	tidbTypes "github.com/pingcap/tidb/pkg/types"
 	"go.uber.org/atomic"
@@ -44,6 +44,7 @@ type DispatcherService interface {
 	GetBDRMode() bool
 	GetChangefeedID() common.ChangeFeedID
 	GetTableSpan() *heartbeatpb.TableSpan
+	GetRouter() *routing.Router
 	GetTimezone() string
 	GetIntegrityConfig() *eventpb.IntegrityConfig
 	GetFilterConfig() *eventpb.FilterConfig
@@ -55,9 +56,6 @@ type DispatcherService interface {
 	GetCheckpointTs() uint64
 	HandleEvents(events []DispatcherEvent, wakeCallback func()) (block bool)
 	IsOutputRawChangeEvent() bool
-	// GetRouter returns the router for schema/table name routing.
-	// May return nil if no routing rules are configured.
-	GetRouter() *util.Router
 }
 
 // Dispatcher defines the interface for event dispatchers that are responsible for receiving events

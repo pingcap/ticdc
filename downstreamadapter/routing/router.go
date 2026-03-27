@@ -1,4 +1,4 @@
-// Copyright 2025 PingCAP, Inc.
+// Copyright 2026 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,12 +11,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package util
+package routing
 
 import (
 	"strings"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/common"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	tfilter "github.com/pingcap/tidb/pkg/util/table-filter"
@@ -121,6 +123,65 @@ func (r *Router) Route(sourceSchema, sourceTable string) (targetSchema, targetTa
 	return targetSchema, targetTable
 }
 
+// ApplyToTableInfo returns the original TableInfo unless routing changes the target name.
+// When routing changes the target, it clones the TableInfo so the caller can safely reuse
+// routed metadata without mutating the shared source TableInfo.
+func (r *Router) ApplyToTableInfo(tableInfo *common.TableInfo) *common.TableInfo {
+	if tableInfo == nil {
+		return nil
+	}
+
+	sourceSchema := tableInfo.TableName.Schema
+	sourceTable := tableInfo.TableName.Table
+	targetSchema, targetTable := r.Route(sourceSchema, sourceTable)
+	if targetSchema == sourceSchema && targetTable == sourceTable {
+		return tableInfo
+	}
+
+	return tableInfo.CloneWithRouting(targetSchema, targetTable)
+}
+
+// ApplyToDDLEvent returns the original DDL event unless routing changes the query or related
+// table metadata. When routing applies, it clones the DDL event once and rewrites all relevant
+// routing-aware fields on the clone.
+func (r *Router) ApplyToDDLEvent(ddl *commonEvent.DDLEvent, changefeedID string) (*commonEvent.DDLEvent, error) {
+	if ddl == nil {
+		return nil, nil
+	}
+
+	result, err := RewriteDDLQueryWithRouting(r, ddl, changefeedID)
+	if err != nil {
+		return nil, err
+	}
+
+	routedTableInfo, tableInfoChanged := applyToTableInfoAndReport(r, ddl.TableInfo)
+	routedMultipleTableInfos, multipleTableInfosChanged := applyToMultipleTableInfos(r, ddl.MultipleTableInfos)
+	routedBlockedTableNames, blockedTableNamesChanged := applyToBlockedTableNames(r, ddl.BlockedTableNames)
+
+	if !result.RoutingApplied && !tableInfoChanged && !multipleTableInfosChanged && !blockedTableNamesChanged {
+		return ddl, nil
+	}
+
+	cloned := ddl.CloneForRouting()
+	if result.RoutingApplied {
+		cloned.TargetSchemaName = result.TargetSchemaName
+		if result.QueryChanged {
+			cloned.Query = result.NewQuery
+		}
+	}
+	if tableInfoChanged {
+		cloned.TableInfo = routedTableInfo
+	}
+	if multipleTableInfosChanged {
+		cloned.MultipleTableInfos = routedMultipleTableInfos
+	}
+	if blockedTableNamesChanged {
+		cloned.BlockedTableNames = routedBlockedTableNames
+	}
+
+	return cloned, nil
+}
+
 // matchRule finds the first rule that matches the given schema/table.
 func (r *Router) matchRule(schema, table string) *routingRule {
 	for _, rule := range r.rules {
@@ -129,6 +190,62 @@ func (r *Router) matchRule(schema, table string) *routingRule {
 		}
 	}
 	return nil
+}
+
+func applyToTableInfoAndReport(r *Router, tableInfo *common.TableInfo) (*common.TableInfo, bool) {
+	routedTableInfo := r.ApplyToTableInfo(tableInfo)
+	return routedTableInfo, routedTableInfo != tableInfo
+}
+
+func applyToMultipleTableInfos(r *Router, tableInfos []*common.TableInfo) ([]*common.TableInfo, bool) {
+	if len(tableInfos) == 0 {
+		return tableInfos, false
+	}
+
+	var routedTableInfos []*common.TableInfo
+	changed := false
+	for i, tableInfo := range tableInfos {
+		routedTableInfo := r.ApplyToTableInfo(tableInfo)
+		if routedTableInfo != tableInfo {
+			if !changed {
+				routedTableInfos = append([]*common.TableInfo(nil), tableInfos...)
+				changed = true
+			}
+			routedTableInfos[i] = routedTableInfo
+		}
+	}
+
+	if !changed {
+		return tableInfos, false
+	}
+	return routedTableInfos, true
+}
+
+func applyToBlockedTableNames(r *Router, tableNames []commonEvent.SchemaTableName) ([]commonEvent.SchemaTableName, bool) {
+	if len(tableNames) == 0 {
+		return tableNames, false
+	}
+
+	var routedTableNames []commonEvent.SchemaTableName
+	changed := false
+	for i, tableName := range tableNames {
+		targetSchema, targetTable := r.Route(tableName.SchemaName, tableName.TableName)
+		if targetSchema != tableName.SchemaName || targetTable != tableName.TableName {
+			if !changed {
+				routedTableNames = append([]commonEvent.SchemaTableName(nil), tableNames...)
+				changed = true
+			}
+			routedTableNames[i] = commonEvent.SchemaTableName{
+				SchemaName: targetSchema,
+				TableName:  targetTable,
+			}
+		}
+	}
+
+	if !changed {
+		return tableNames, false
+	}
+	return routedTableNames, true
 }
 
 // substituteExpression replaces {schema} and {table} placeholders with actual values.

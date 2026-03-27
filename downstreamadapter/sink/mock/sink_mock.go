@@ -9,9 +9,8 @@ import (
 	reflect "reflect"
 
 	gomock "github.com/golang/mock/gomock"
-	common "github.com/pingcap/ticdc/pkg/common"
-	event "github.com/pingcap/ticdc/pkg/common/event"
-	util "github.com/pingcap/ticdc/pkg/sink/util"
+	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/common/event"
 )
 
 // MockSink is a mock of Sink interface.
@@ -85,20 +84,6 @@ func (m *MockSink) FlushDMLBeforeBlock(event event.BlockEvent) error {
 func (mr *MockSinkMockRecorder) FlushDMLBeforeBlock(event interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FlushDMLBeforeBlock", reflect.TypeOf((*MockSink)(nil).FlushDMLBeforeBlock), event)
-}
-
-// GetRouter mocks base method.
-func (m *MockSink) GetRouter() *util.Router {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetRouter")
-	ret0, _ := ret[0].(*util.Router)
-	return ret0
-}
-
-// GetRouter indicates an expected call of GetRouter.
-func (mr *MockSinkMockRecorder) GetRouter() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetRouter", reflect.TypeOf((*MockSink)(nil).GetRouter))
 }
 
 // IsNormal mocks base method.

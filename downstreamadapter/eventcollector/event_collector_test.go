@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
+	"github.com/pingcap/ticdc/downstreamadapter/routing"
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -28,7 +29,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
-	sinkutil "github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
 )
@@ -117,7 +117,7 @@ func (m *mockEventDispatcher) IsOutputRawChangeEvent() bool {
 	return false
 }
 
-func (m *mockEventDispatcher) GetRouter() *sinkutil.Router {
+func (m *mockEventDispatcher) GetRouter() *routing.Router {
 	return nil
 }
 

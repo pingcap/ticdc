@@ -28,7 +28,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
-	sinkUtil "github.com/pingcap/ticdc/pkg/sink/util"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	"github.com/pingcap/tidb/pkg/meta/model"
@@ -157,11 +156,6 @@ func New(
 
 func (s *sink) SinkType() common.SinkType {
 	return common.CloudStorageSinkType
-}
-
-// GetRouter returns nil as CloudStorage sink does not support routing yet.
-func (s *sink) GetRouter() *sinkUtil.Router {
-	return nil
 }
 
 // Run the sink, the ctx is the same as the ctx in the New function.
