@@ -140,7 +140,7 @@ func TestSpanReplication_NewAddDispatcherMessage_UseBlockTsMinusOneForDDLInFligh
 	require.True(t, req.Config.SkipDMLAsStartTs)
 }
 
-func TestSpanReplication_NewAddDispatcherMessage_PanicWhenCommittedCheckpointViolatesDDLBarrier(t *testing.T) {
+func TestSpanReplication_NewAddDispatcherMessage_UseCommittedCheckpointForStaleDDLBarrier(t *testing.T) {
 	t.Parallel()
 
 	replicaSet := NewSpanReplication(common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), common.NewDispatcherID(), 1, getTableSpanByID(4), 9, common.DefaultMode, false)
@@ -152,9 +152,28 @@ func TestSpanReplication_NewAddDispatcherMessage_PanicWhenCommittedCheckpointVio
 		Stage:       heartbeatpb.BlockStage_WAITING,
 	})
 
-	require.Panics(t, func() {
-		replicaSet.NewAddDispatcherMessage("node1", heartbeatpb.OperatorType_O_Add)
+	msg := replicaSet.NewAddDispatcherMessage("node1", heartbeatpb.OperatorType_O_Add)
+	req := msg.Message[0].(*heartbeatpb.ScheduleDispatcherRequest)
+	require.Equal(t, uint64(10), req.Config.StartTs)
+	require.False(t, req.Config.SkipDMLAsStartTs)
+}
+
+func TestSpanReplication_NewAddDispatcherMessage_UseCommittedCheckpointForStaleDDLBarrierWritingStage(t *testing.T) {
+	t.Parallel()
+
+	replicaSet := NewSpanReplication(common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), common.NewDispatcherID(), 1, getTableSpanByID(4), 9, common.DefaultMode, false)
+	replicaSet.BindCommittedCheckpointTs(atomic.NewUint64(11))
+	replicaSet.UpdateBlockState(heartbeatpb.State{
+		IsBlocked:   true,
+		BlockTs:     10,
+		IsSyncPoint: false,
+		Stage:       heartbeatpb.BlockStage_WRITING,
 	})
+
+	msg := replicaSet.NewAddDispatcherMessage("node1", heartbeatpb.OperatorType_O_Add)
+	req := msg.Message[0].(*heartbeatpb.ScheduleDispatcherRequest)
+	require.Equal(t, uint64(11), req.Config.StartTs)
+	require.False(t, req.Config.SkipDMLAsStartTs)
 }
 
 // getTableSpanByID returns a mock TableSpan for testing
