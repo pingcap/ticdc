@@ -518,6 +518,39 @@ func TestWriteCheckpointEvent(t *testing.T) {
 	require.JSONEq(t, `{"checkpoint-ts":100}`, string(metadata))
 }
 
+func TestCloseBeforeRunDoesNotPanicAndCleansSpool(t *testing.T) {
+	spoolBaseDir := t.TempDir()
+	uri := fmt.Sprintf("file:///%s?protocol=csv&spool-base-dir=%s", t.TempDir(), url.QueryEscape(spoolBaseDir))
+	sinkURI, err := url.Parse(uri)
+	require.NoError(t, err)
+
+	replicaConfig := config.GetDefaultReplicaConfig()
+	err = replicaConfig.ValidateAndAdjust(sinkURI)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	mockPDClock := pdutil.NewClock4Test()
+	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+
+	changefeedID := common.NewChangefeedID4Test("test", "close-before-run")
+	cloudStorageSink, err := New(ctx, changefeedID, sinkURI, replicaConfig.Sink, true, nil)
+	require.NoError(t, err)
+
+	spoolDir := filepath.Join(spoolBaseDir, changefeedID.Keyspace(), changefeedID.Name())
+	_, err = os.Stat(spoolDir)
+	require.NoError(t, err)
+
+	require.NotPanics(t, func() {
+		cloudStorageSink.Close(false)
+	})
+
+	_, err = os.Stat(spoolDir)
+	require.Error(t, err)
+	require.True(t, os.IsNotExist(err))
+}
+
 func TestCleanupExpiredFiles(t *testing.T) {
 	parentDir := t.TempDir()
 	uri := fmt.Sprintf("file:///%s?protocol=csv", parentDir)
