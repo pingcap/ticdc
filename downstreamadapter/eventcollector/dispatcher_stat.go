@@ -592,10 +592,22 @@ func (d *dispatcherStat) handleHandshakeEvent(event dispatcher.DispatcherEvent) 
 	d.observeCurrentEpochMaxEventTs(state, handshakeEvent.GetCommitTs())
 }
 
-func (d *dispatcherStat) getHeartbeatProgressForEventService() (uint64, uint64) {
+func (d *dispatcherStat) getHeartbeatReport() (node.ID, uint64, uint64, bool) {
+	eventServiceID := d.session.getEventServiceID()
+	if eventServiceID.IsEmpty() {
+		return "", 0, 0, false
+	}
 	state := d.loadCurrentEpochState()
 	checkpointTs := min(d.target.GetCheckpointTs(), state.maxEventTs.Load())
-	return checkpointTs, state.epoch
+	return eventServiceID, checkpointTs, state.epoch, true
+}
+
+func (d *dispatcherStat) getCurrentEventServiceTarget() (node.ID, bool) {
+	eventServiceID := d.session.getEventServiceID()
+	if eventServiceID.IsEmpty() {
+		return "", false
+	}
+	return eventServiceID, true
 }
 
 func (d *dispatcherStat) startRemoteProbing(nodes []string) {
@@ -612,12 +624,4 @@ func (d *dispatcherStat) retryCurrentRegistrationIfRemovedFrom(serverID node.ID)
 		zap.Stringer("eventServiceID", serverID))
 	d.session.retryCurrentRegistration()
 	return true
-}
-
-func (d *dispatcherStat) getEventServiceID() node.ID {
-	return d.session.getEventServiceID()
-}
-
-func (d *dispatcherStat) isReceivingDataEvent() bool {
-	return d.session.isReceivingDataEvent()
 }

@@ -1600,8 +1600,10 @@ func TestCheckpointTsForEventServiceUsesCollectorObservedMaxTs(t *testing.T) {
 	mockDisp := newMockDispatcher(dispatcherID, 100)
 	mockDisp.checkPointTs = 220
 	stat := newDispatcherStat(mockDisp, newTestEventCollector(node.ID("local")), nil)
+	markSessionReceiving(stat.session, node.ID("local"))
 	getHeartbeatCheckpoint := func() uint64 {
-		checkpointTs, _ := stat.getHeartbeatProgressForEventService()
+		_, checkpointTs, _, ok := stat.getHeartbeatReport()
+		require.True(t, ok)
 		return checkpointTs
 	}
 
