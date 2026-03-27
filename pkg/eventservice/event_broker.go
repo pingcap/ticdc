@@ -343,7 +343,7 @@ func (c *eventBroker) logSyncPointStage(ctx context.Context, interval time.Durat
 						zap.Uint64("commitBlockingNextSyncPointTs", commitBlockingNextSPTs),
 					)
 				}
-				log.Info("syncpoint stage snapshot", fields...)
+				log.Debug("syncpoint stage snapshot", fields...)
 				return true
 			})
 		}
@@ -414,8 +414,8 @@ func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *event.DD
 		log.Info("send ddl event to dispatcher",
 			zap.Stringer("changefeedID", d.changefeedStat.changefeedID),
 			zap.Stringer("dispatcherID", d.id),
-			zap.Int64("DDLSpanTableID", d.info.GetTableSpan().TableID),
-			zap.Int64("EventTableID", e.GetTableID()),
+			zap.Int64("tableID", d.info.GetTableSpan().TableID),
+			zap.Int64("ddlEventTableID", e.GetTableID()),
 			zap.String("query", e.Query), zap.Uint64("commitTs", e.FinishedTs),
 			zap.Uint64("seq", e.Seq), zap.Int64("mode", d.info.GetMode()))
 		return true
@@ -936,7 +936,7 @@ func (c *eventBroker) fastForwardSyncPointToInFlightIfNeeded(d *dispatcherStat) 
 	if !updated {
 		return
 	}
-	log.Info("fast forward stale syncpoint to in flight syncpoint",
+	log.Debug("fast forward stale syncpoint to in flight syncpoint",
 		zap.Stringer("changefeedID", d.changefeedStat.changefeedID),
 		zap.Stringer("dispatcherID", d.id),
 		zap.Int64("tableID", d.info.GetTableSpan().GetTableID()),
