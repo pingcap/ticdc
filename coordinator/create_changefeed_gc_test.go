@@ -16,6 +16,7 @@ package coordinator
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/coordinator/changefeed"
@@ -147,4 +148,74 @@ func TestUpdateGCSafepointCallsGCManagerUpdate(t *testing.T) {
 	require.NotNil(t, cf)
 	require.Equal(t, config.StateNormal, cf.GetInfo().State)
 	require.Nil(t, cf.GetInfo().Error)
+}
+
+func TestUpdateGCSafepointDeletesServiceSafepointWhenNoChangefeed(t *testing.T) {
+	if !kerneltype.IsClassic() {
+		t.Skip("classic mode only")
+	}
+
+	ctrl := gomock.NewController(t)
+	backend := mock_changefeed.NewMockBackend(ctrl)
+	gcManager := gc.NewMockManager(ctrl)
+
+	co, _ := newTestCoordinatorWithGCManager(t, backend, gcManager)
+
+	gcManager.EXPECT().
+		TryDeleteServiceGCSafepoint(gomock.Any()).
+		Return(nil).
+		Times(1)
+	gcManager.EXPECT().
+		TryUpdateServiceGCSafepoint(gomock.Any(), gomock.Any()).
+		Times(0)
+
+	require.NoError(t, co.updateGCSafepoint(context.Background()))
+}
+
+func TestRemoveLastChangefeedDeletesServiceSafepointImmediately(t *testing.T) {
+	if !kerneltype.IsClassic() {
+		t.Skip("classic mode only")
+	}
+
+	ctrl := gomock.NewController(t)
+	backend := mock_changefeed.NewMockBackend(ctrl)
+	gcManager := gc.NewMockManager(ctrl)
+
+	co, changefeedDB := newTestCoordinatorWithGCManager(t, backend, gcManager)
+
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		Config:       config.GetDefaultReplicaConfig(),
+		State:        config.StateNormal,
+		SinkURI:      "mysql://127.0.0.1:3306",
+	}, 101, true)
+	changefeedDB.AddReplicatingMaintainer(cf, "node1")
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			op := co.controller.operatorController.GetOperator(cfID)
+			if op != nil {
+				op.OnTaskRemoved()
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}()
+
+	backend.EXPECT().
+		SetChangefeedProgress(gomock.Any(), cfID, config.ProgressRemoving).
+		Return(nil).
+		Times(1)
+	gcManager.EXPECT().
+		TryDeleteServiceGCSafepoint(gomock.Any()).
+		Return(nil).
+		Times(1)
+
+	cp, err := co.RemoveChangefeed(context.Background(), cfID)
+	require.NoError(t, err)
+	require.Equal(t, uint64(101), cp)
+	<-done
 }
