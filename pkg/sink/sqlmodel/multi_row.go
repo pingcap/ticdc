@@ -116,7 +116,7 @@ func GenInsertSQL(tp DMLType, changes ...*RowChange) (string, []interface{}) {
 	} else {
 		buf.WriteString("INSERT INTO ")
 	}
-	buf.WriteString(first.targetTable.QuoteString())
+	buf.WriteString(first.targetTable.QuoteTargetString())
 	buf.WriteString(" (")
 	columnNum := 0
 	var skipColIdx []int

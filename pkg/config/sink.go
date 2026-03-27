@@ -140,7 +140,6 @@ type SinkConfig struct {
 	// Protocol is NOT available when the downstream is DB.
 	Protocol *string `toml:"protocol" json:"protocol,omitempty"`
 
-	// DispatchRules is only available when the downstream is MQ.
 	DispatchRules []*DispatchRule `toml:"dispatchers" json:"dispatchers,omitempty"`
 
 	ColumnSelectors []*ColumnSelector `toml:"column-selectors" json:"column-selectors,omitempty"`
@@ -386,7 +385,9 @@ func (d DateSeparator) String() string {
 	}
 }
 
-// DispatchRule represents partition rule for a table.
+// DispatchRules configures event routing.
+// For MQ sinks, rules control topic / partition dispatching.
+// TargetSchema and TargetTable configure sink routing for sink implementations that support it.
 type DispatchRule struct {
 	Matcher []string `toml:"matcher" json:"matcher"`
 	// Deprecated, please use PartitionRule.
@@ -402,6 +403,22 @@ type DispatchRule struct {
 	Columns []string `toml:"columns" json:"columns"`
 
 	TopicRule string `toml:"topic" json:"topic"`
+
+	// TargetSchema sets the routed downstream schema name.
+	// Leave it empty to keep the source schema name.
+	// For example, if the source table is `sales`.`orders`, `target-schema = "sales_bak"`
+	// writes to `sales_bak`.`orders`.
+	// You can also use placeholders. For example, `target-schema = "{schema}_bak"`
+	// becomes `sales_bak`.
+	TargetSchema string `toml:"target-schema" json:"target-schema"`
+
+	// TargetTable sets the routed downstream table name.
+	// Leave it empty to keep the source table name.
+	// For example, if the source table is `sales`.`orders`, `target-table = "orders_bak"`
+	// writes to `sales`.`orders_bak`.
+	// You can also use placeholders. For example, `target-table = "{schema}_{table}"`
+	// becomes `sales_orders`.
+	TargetTable string `toml:"target-table" json:"target-table"`
 }
 
 // ColumnSelector represents a column selector for a table.
@@ -743,10 +760,6 @@ func (s *SinkConfig) validateAndAdjust(sinkURI *url.URL) error {
 		return err
 	}
 
-	if IsMySQLCompatibleScheme(sinkURI.Scheme) {
-		return nil
-	}
-
 	if util.GetOrZero(s.EnableKafkaSinkV2) {
 		log.Warn("enable-kafka-sink-v2 is deprecated, still use the default kafka sink")
 	}
@@ -813,6 +826,14 @@ func (s *SinkConfig) validateAndAdjust(sinkURI *url.URL) error {
 		}
 	}
 
+	if err := s.validateSinkRouting(); err != nil {
+		return err
+	}
+
+	if IsMySQLCompatibleScheme(sinkURI.Scheme) {
+		return nil
+	}
+
 	if util.GetOrZero(s.EncoderConcurrency) < 0 {
 		return cerror.ErrSinkInvalidConfig.GenWithStack(
 			"encoder-concurrency should greater than 0, but got %d", s.EncoderConcurrency)
@@ -858,6 +879,21 @@ func (s *SinkConfig) validateAndAdjust(sinkURI *url.URL) error {
 		s.AdvanceTimeoutInSec = util.AddressOf(DefaultAdvanceTimeoutInSec)
 	}
 
+	return nil
+}
+
+func (s *SinkConfig) validateSinkRouting() error {
+	for _, rule := range s.DispatchRules {
+		if rule.TargetSchema == "" && rule.TargetTable == "" {
+			continue
+		}
+		if err := ValidateRoutingExpression(rule.TargetSchema); err != nil {
+			return cerror.ErrInvalidRoutingRule.GenWithStackByArgs("target-schema", rule.TargetSchema, err.Error())
+		}
+		if err := ValidateRoutingExpression(rule.TargetTable); err != nil {
+			return cerror.ErrInvalidRoutingRule.GenWithStackByArgs("target-table", rule.TargetTable, err.Error())
+		}
+	}
 	return nil
 }
 
@@ -1112,4 +1148,32 @@ type OpenProtocolConfig struct {
 // DebeziumConfig represents the configurations for debezium protocol encoding
 type DebeziumConfig struct {
 	OutputOldValue bool `toml:"output-old-value" json:"output-old-value"`
+}
+
+// ValidateRoutingExpression validates a routing expression.
+// Valid expressions can contain literal text and {schema} or {table} placeholders.
+func ValidateRoutingExpression(expr string) error {
+	if expr == "" {
+		return nil
+	}
+
+	// Check for invalid placeholders (anything in braces that isn't schema or table)
+	for i := 0; i < len(expr); i++ {
+		if expr[i] == '{' {
+			// Find closing brace
+			end := strings.Index(expr[i:], "}")
+			if end == -1 {
+				return fmt.Errorf("unbalanced braces in expression %q", expr)
+			}
+			placeholder := expr[i : i+end+1]
+			if placeholder != "{schema}" && placeholder != "{table}" {
+				return fmt.Errorf("invalid placeholder %q, only {schema} and {table} are allowed", placeholder)
+			}
+			i += end
+		} else if expr[i] == '}' {
+			return fmt.Errorf("unbalanced braces in expression %q", expr)
+		}
+	}
+
+	return nil
 }

@@ -294,6 +294,65 @@ func TestCheckCompatibilityWithSinkURI(t *testing.T) {
 	}
 }
 
+func TestValidateSinkRouting(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name    string
+		cfg     *SinkConfig
+		wantErr string
+	}{
+		{
+			name: "valid routing rule",
+			cfg: &SinkConfig{
+				DispatchRules: []*DispatchRule{
+					{
+						Matcher:      []string{"db1.*"},
+						TargetSchema: "archive",
+						TargetTable:  "{table}_bak",
+					},
+				},
+			},
+		},
+		{
+			name: "invalid target schema expression",
+			cfg: &SinkConfig{
+				DispatchRules: []*DispatchRule{
+					{
+						Matcher:      []string{"db1.*"},
+						TargetSchema: "{bad}",
+						TargetTable:  "{table}_bak",
+					},
+				},
+			},
+			wantErr: "target-schema",
+		},
+		{
+			name: "mq dispatch rule ignored",
+			cfg: &SinkConfig{
+				DispatchRules: []*DispatchRule{
+					{
+						Matcher:       []string{"db1.*"},
+						PartitionRule: "columns",
+						Columns:       []string{"id"},
+					},
+				},
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.cfg.validateSinkRouting()
+			if tc.wantErr == "" {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, tc.wantErr)
+			}
+		})
+	}
+}
+
 func TestValidateAndAdjustCSVConfig(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
