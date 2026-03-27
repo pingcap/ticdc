@@ -35,15 +35,14 @@ type RedoEvent interface {
 	ToRedoLog() *pevent.RedoLog
 }
 
-// RedoLogWriter defines the interfaces used to write redo log, all operations are thread-safe.
-type RedoLogWriter interface {
-	// WriteEvents writes DDL/DML events to the redo log.
-	WriteEvents(ctx context.Context, events ...RedoEvent) error
-
+// RedoDMLWriter writes row redo events, all operations are thread-safe.
+type RedoDMLWriter interface {
+	AddDMLEvents(ctx context.Context, events ...*commonEvent.RedoRowEvent) error
 	Run(ctx context.Context) error
-	// Close is used to close the writer.
 	Close() error
+}
 
+<<<<<<< HEAD
 	SetTableSchemaStore(*pevent.TableSchemaStore)
 }
 
@@ -63,6 +62,13 @@ func (cfg LogWriterConfig) String() string {
 	return fmt.Sprintf("%s:%s:%s:%s:%d:%s:%t",
 		cfg.ChangeFeedID.Keyspace(), cfg.ChangeFeedID.Name(), cfg.CaptureID,
 		cfg.Dir, cfg.MaxLogSize, cfg.URI.String(), cfg.UseExternalStorage)
+=======
+// RedoDDLWriter writes DDL redo events, all operations are thread-safe.
+type RedoDDLWriter interface {
+	WriteDDLEvent(ctx context.Context, event *commonEvent.DDLEvent) error
+	Close() error
+	SetTableSchemaStore(*commonEvent.TableSchemaStore)
+>>>>>>> 7b6e554bb (redo: split the redo writer interface to ddl writer and dml writer (#4580))
 }
 
 // Option define the writerOptions

@@ -85,8 +85,12 @@ func (f *fileCache) markFlushed() {
 }
 
 type fileWorkerGroup struct {
+<<<<<<< HEAD
 	cfg           *writer.LogWriterConfig
 	logType       string
+=======
+	cfg           *writer.Config
+>>>>>>> 7b6e554bb (redo: split the redo writer interface to ddl writer and dml writer (#4580))
 	op            *writer.LogWriterOptions
 	workerNum     int
 	inputCh       chan *polymorphicRedoEvent
@@ -101,16 +105,21 @@ type fileWorkerGroup struct {
 	metricFlushAllDuration prometheus.Observer
 }
 
-// newFileWorkerGroup create a fileWorkerGroup
+// newFileWorkerGroup creates a DML fileWorkerGroup.
 // fileWorkerGroup receives encoded redo events and writes them to cache, with
 // background goroutines handling file flush.
 func newFileWorkerGroup(
+<<<<<<< HEAD
 	cfg *writer.LogWriterConfig, workerNum int,
 	logType string,
+=======
+	cfg *writer.Config,
+>>>>>>> 7b6e554bb (redo: split the redo writer interface to ddl writer and dml writer (#4580))
 	inputCh chan *polymorphicRedoEvent,
 	extStorage storage.ExternalStorage,
 	opts ...writer.Option,
 ) *fileWorkerGroup {
+	workerNum := cfg.FlushWorkerNum()
 	if workerNum <= 0 {
 		workerNum = redo.DefaultFlushWorkerNum
 	}
@@ -126,7 +135,6 @@ func newFileWorkerGroup(
 
 	return &fileWorkerGroup{
 		cfg:           cfg,
-		logType:       logType,
 		op:            op,
 		workerNum:     workerNum,
 		inputCh:       inputCh,
@@ -142,9 +150,15 @@ func newFileWorkerGroup(
 		},
 		flushCh: make(chan *fileCache, 32),
 		metricWriteBytes: metrics.RedoWriteBytesGauge.
+<<<<<<< HEAD
 			WithLabelValues(cfg.ChangeFeedID.Keyspace(), cfg.ChangeFeedID.Name(), logType),
 		metricFlushAllDuration: metrics.RedoFlushAllDurationHistogram.
 			WithLabelValues(cfg.ChangeFeedID.Keyspace(), cfg.ChangeFeedID.Name(), logType),
+=======
+			WithLabelValues(cfg.ChangeFeedID().Keyspace(), cfg.ChangeFeedID().Name(), redo.RedoRowLogFileType),
+		metricFlushAllDuration: metrics.RedoFlushAllDurationHistogram.
+			WithLabelValues(cfg.ChangeFeedID().Keyspace(), cfg.ChangeFeedID().Name(), redo.RedoRowLogFileType),
+>>>>>>> 7b6e554bb (redo: split the redo writer interface to ddl writer and dml writer (#4580))
 	}
 }
 
@@ -177,9 +191,15 @@ func (f *fileWorkerGroup) Run(
 
 func (f *fileWorkerGroup) close() {
 	metrics.RedoFlushAllDurationHistogram.
+<<<<<<< HEAD
 		DeleteLabelValues(f.cfg.ChangeFeedID.Keyspace(), f.cfg.ChangeFeedID.Name(), f.logType)
 	metrics.RedoWriteBytesGauge.
 		DeleteLabelValues(f.cfg.ChangeFeedID.Keyspace(), f.cfg.ChangeFeedID.Name(), f.logType)
+=======
+		DeleteLabelValues(f.cfg.ChangeFeedID().Keyspace(), f.cfg.ChangeFeedID().Name(), redo.RedoRowLogFileType)
+	metrics.RedoWriteBytesGauge.
+		DeleteLabelValues(f.cfg.ChangeFeedID().Keyspace(), f.cfg.ChangeFeedID().Name(), redo.RedoRowLogFileType)
+>>>>>>> 7b6e554bb (redo: split the redo writer interface to ddl writer and dml writer (#4580))
 }
 
 func (f *fileWorkerGroup) bgFlushFileCache(egCtx context.Context) error {
@@ -259,20 +279,6 @@ func (f *fileWorkerGroup) bgWriteLogs(
 			}
 		}
 	}
-}
-
-func (f *fileWorkerGroup) syncWrite(egCtx context.Context, event *polymorphicRedoEvent) error {
-	data := event.data
-	file := f.newFileCache(data, event.commitTs)
-	if file == nil {
-		return errors.ErrRedoWriterStopped.FastGenByArgs("failed to create file cache")
-	}
-	if err := f.syncWriteFile(egCtx, file); err != nil {
-		return err
-	}
-	// flush
-	event.PostFlush()
-	return nil
 }
 
 func (f *fileWorkerGroup) syncWriteFile(egCtx context.Context, file *fileCache) error {
@@ -419,10 +425,19 @@ func (f *fileWorkerGroup) getLogFileName(maxCommitTS common.Ts) string {
 	uid := f.uuidGenerator.NewString()
 	if common.DefaultKeyspaceName == f.cfg.ChangeFeedID.Keyspace() {
 		return fmt.Sprintf(redo.RedoLogFileFormatV1,
+<<<<<<< HEAD
 			f.cfg.CaptureID, f.cfg.ChangeFeedID.Name(), f.logType,
 			maxCommitTS, uid, redo.LogEXT)
 	}
 	return fmt.Sprintf(redo.RedoLogFileFormatV2,
 		f.cfg.CaptureID, f.cfg.ChangeFeedID.Keyspace(), f.cfg.ChangeFeedID.Name(),
 		f.logType, maxCommitTS, uid, redo.LogEXT)
+=======
+			f.cfg.CaptureID(), f.cfg.ChangeFeedID().Name(), redo.RedoRowLogFileType,
+			maxCommitTS, uid, redo.LogEXT)
+	}
+	return fmt.Sprintf(redo.RedoLogFileFormatV2,
+		f.cfg.CaptureID(), f.cfg.ChangeFeedID().Keyspace(), f.cfg.ChangeFeedID().Name(),
+		redo.RedoRowLogFileType, maxCommitTS, uid, redo.LogEXT)
+>>>>>>> 7b6e554bb (redo: split the redo writer interface to ddl writer and dml writer (#4580))
 }

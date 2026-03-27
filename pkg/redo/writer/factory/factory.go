@@ -27,6 +27,7 @@ import (
 	"github.com/pingcap/tidb/br/pkg/storage"
 )
 
+<<<<<<< HEAD
 // NewRedoLogWriter creates a new RedoLogWriter.
 func NewRedoLogWriter(
 	ctx context.Context, lwCfg *writer.LogWriterConfig, fileType string,
@@ -43,13 +44,43 @@ func NewRedoLogWriter(
 	lwCfg.URI = uri
 	lwCfg.UseExternalStorage = redo.IsExternalStorage(uri.Scheme)
 
+=======
+// NewRedoDMLWriter creates a new RedoDMLWriter.
+func NewRedoDMLWriter(
+	ctx context.Context, cfg *writer.Config,
+) (writer.RedoDMLWriter, error) {
+	uri := cfg.URI()
+>>>>>>> 7b6e554bb (redo: split the redo writer interface to ddl writer and dml writer (#4580))
 	if redo.IsBlackholeStorage(uri.Scheme) {
 		invalid := strings.HasSuffix(uri.Scheme, "invalid")
-		return blackhole.NewLogWriter(invalid), nil
+		return blackhole.NewDMLWriter(invalid), nil
 	}
 
+<<<<<<< HEAD
 	if util.GetOrZero(lwCfg.UseFileBackend) {
 		return file.NewLogWriter(ctx, lwCfg, fileType)
 	}
 	return memory.NewLogWriter(ctx, lwCfg, fileType)
+=======
+	if cfg.UseFileBackend() {
+		return file.NewDMLWriter(ctx, cfg)
+	}
+	return memory.NewDMLWriter(ctx, cfg)
+}
+
+// NewRedoDDLWriter creates a new RedoDDLWriter.
+func NewRedoDDLWriter(
+	ctx context.Context, cfg *writer.Config,
+) (writer.RedoDDLWriter, error) {
+	uri := cfg.URI()
+	if redo.IsBlackholeStorage(uri.Scheme) {
+		invalid := strings.HasSuffix(uri.Scheme, "invalid")
+		return blackhole.NewDDLWriter(invalid), nil
+	}
+
+	if cfg.UseFileBackend() {
+		return file.NewDDLWriter(ctx, cfg)
+	}
+	return memory.NewDDLWriter(ctx, cfg)
+>>>>>>> 7b6e554bb (redo: split the redo writer interface to ddl writer and dml writer (#4580))
 }

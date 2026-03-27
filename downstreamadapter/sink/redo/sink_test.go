@@ -342,7 +342,7 @@ func TestRedoSinkSendMessagesInBatch(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	mockWriter := writer.NewMockRedoLogWriter(ctrl)
+	mockWriter := writer.NewMockRedoDMLWriter(ctrl)
 	expectWriteBatch := func(batchSize int) *gomock.Call {
 		args := make([]interface{}, 0, batchSize+1)
 		args = append(args, gomock.Any()) // context
@@ -350,8 +350,8 @@ func TestRedoSinkSendMessagesInBatch(t *testing.T) {
 			args = append(args, gomock.Any())
 		}
 		return mockWriter.EXPECT().
-			WriteEvents(args[0], args[1:]...).
-			DoAndReturn(func(_ context.Context, events ...writer.RedoEvent) error {
+			AddDMLEvents(args[0], args[1:]...).
+			DoAndReturn(func(_ context.Context, events ...*commonEvent.RedoRowEvent) error {
 				require.Len(t, events, batchSize)
 				return nil
 			})
@@ -365,7 +365,7 @@ func TestRedoSinkSendMessagesInBatch(t *testing.T) {
 
 	s := &Sink{
 		dmlWriter: mockWriter,
-		logBuffer: chann.NewUnlimitedChannelDefault[writer.RedoEvent](),
+		logBuffer: chann.NewUnlimitedChannelDefault[*commonEvent.RedoRowEvent](),
 	}
 
 	doneCh := make(chan error, 1)
@@ -374,8 +374,13 @@ func TestRedoSinkSendMessagesInBatch(t *testing.T) {
 	}()
 
 	totalEvents := redo.DefaultFlushBatchSize*2 + 17
+<<<<<<< HEAD
 	events := make([]writer.RedoEvent, 0, totalEvents)
 	for i := 0; i < totalEvents; i++ {
+=======
+	events := make([]*commonEvent.RedoRowEvent, 0, totalEvents)
+	for range totalEvents {
+>>>>>>> 7b6e554bb (redo: split the redo writer interface to ddl writer and dml writer (#4580))
 		events = append(events, &commonEvent.RedoRowEvent{})
 	}
 	s.logBuffer.Push(events...)

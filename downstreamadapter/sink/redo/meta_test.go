@@ -81,12 +81,10 @@ func TestInitAndWriteMeta(t *testing.T) {
 		FlushWorkerNum:        util.AddressOf(redo.DefaultFlushWorkerNum),
 	}
 	m := NewRedoMeta(changefeedID, startTs, cfg)
+	require.NoError(t, m.PreStart(ctx))
 
 	var eg errgroup.Group
 	eg.Go(func() error {
-		if err := m.PreStart(ctx); err != nil {
-			return err
-		}
 		return m.Run(ctx)
 	})
 
@@ -165,12 +163,10 @@ func TestPreCleanupAndWriteMeta(t *testing.T) {
 		FlushWorkerNum:        util.AddressOf(redo.DefaultFlushWorkerNum),
 	}
 	m := NewRedoMeta(changefeedID, startTs, cfg)
+	require.NoError(t, m.PreStart(ctx))
 
 	var eg errgroup.Group
 	eg.Go(func() error {
-		if err := m.PreStart(ctx); err != nil {
-			return err
-		}
 		return m.Run(ctx)
 	})
 

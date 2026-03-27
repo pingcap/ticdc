@@ -1,15 +1,15 @@
-//  Copyright 2026 PingCAP, Inc.
+// Copyright 2023 PingCAP, Inc.
 //
-//  Licensed under the Apache License, Version 2.0 (the "License");
-//  you may not use this file except in compliance with the License.
-//  You may obtain a copy of the License at
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
 //
 //      http://www.apache.org/licenses/LICENSE-2.0
 //
-//  Unless required by applicable law or agreed to in writing, software
-//  distributed under the License is distributed on an "AS IS" BASIS,
-//  See the License for the specific language governing permissions and
-//  limitations under the License.
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package memory
 
@@ -43,17 +43,19 @@ func (e *polymorphicRedoEvent) PostFlush() {
 	}
 }
 
-func toPolymorphicRedoEvent(
-	event writer.RedoEvent,
-	tableSchemaStore *commonEvent.TableSchemaStore,
+func toPolymorphicDMLEvent(
+	event *commonEvent.RedoRowEvent,
 ) (*polymorphicRedoEvent, error) {
 	rl := event.ToRedoLog()
+<<<<<<< HEAD
 	if rl == nil {
 		return nil, errors.ErrUnexpected.FastGenByArgs("redo event to log conversion failed")
 	}
 	if rl.Type == commonEvent.RedoLogTypeDDL {
 		rl.RedoDDL.SetTableSchemaStore(tableSchemaStore)
 	}
+=======
+>>>>>>> 7b6e554bb (redo: split the redo writer interface to ddl writer and dml writer (#4580))
 
 	rawData, err := codec.MarshalRedoLog(rl, nil)
 	if err != nil {
@@ -74,13 +76,11 @@ type encodingWorkerGroup struct {
 	changefeed common.ChangeFeedID
 
 	outputCh  chan *polymorphicRedoEvent
-	inputChs  []chan writer.RedoEvent
+	inputChs  []chan *commonEvent.RedoRowEvent
 	workerNum int
 
 	nextWorker atomic.Uint64
 	closed     chan error
-
-	tableSchemaStore *commonEvent.TableSchemaStore
 }
 
 func newEncodingWorkerGroup(cfg *writer.LogWriterConfig) *encodingWorkerGroup {
@@ -88,9 +88,9 @@ func newEncodingWorkerGroup(cfg *writer.LogWriterConfig) *encodingWorkerGroup {
 	if workerNum <= 0 {
 		workerNum = redo.DefaultEncodingWorkerNum
 	}
-	inputChs := make([]chan writer.RedoEvent, workerNum)
+	inputChs := make([]chan *commonEvent.RedoRowEvent, workerNum)
 	for i := 0; i < workerNum; i++ {
-		inputChs[i] = make(chan writer.RedoEvent, redo.DefaultEncodingInputChanSize)
+		inputChs[i] = make(chan *commonEvent.RedoRowEvent, redo.DefaultEncodingInputChanSize)
 	}
 	return &encodingWorkerGroup{
 		changefeed: cfg.ChangeFeedID,
@@ -129,7 +129,7 @@ func (e *encodingWorkerGroup) Run(ctx context.Context) (err error) {
 	return g.Wait()
 }
 
-func (e *encodingWorkerGroup) AddEvent(ctx context.Context, event writer.RedoEvent) error {
+func (e *encodingWorkerGroup) AddEvent(ctx context.Context, event *commonEvent.RedoRowEvent) error {
 	idx := int((e.nextWorker.Inc() - 1) % uint64(e.workerNum))
 	return e.input(ctx, idx, event)
 }
@@ -146,7 +146,7 @@ func (e *encodingWorkerGroup) runWorker(egCtx context.Context, idx int) error {
 					zap.String("changefeed", e.changefeed.Name()))
 				continue
 			}
-			redoLogEvent, err := toPolymorphicRedoEvent(event, e.tableSchemaStore)
+			redoLogEvent, err := toPolymorphicDMLEvent(event)
 			if err != nil {
 				return errors.Trace(err)
 			}
