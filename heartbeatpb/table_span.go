@@ -13,7 +13,9 @@
 
 package heartbeatpb
 
-import "bytes"
+import (
+	"bytes"
+)
 
 // Less compares two Spans, defines the order between spans.
 func (s *TableSpan) Less(other *TableSpan) bool {
