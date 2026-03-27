@@ -121,18 +121,16 @@ func (d *dispatcherStat) loadCurrentEpochState() *dispatcherEpochState {
 	return state
 }
 
-func (d *dispatcherStat) run() {
-	d.session.registerTo(d.eventCollector.getLocalServerID())
+func (d *dispatcherStat) start() {
+	d.session.startLocalRegistration()
 }
 
-// registerTo register the dispatcher to the specified event service.
-func (d *dispatcherStat) registerTo(serverID node.ID) {
-	d.session.registerTo(serverID)
+func (d *dispatcherStat) retryCurrentRegistration() {
+	d.session.retryCurrentRegistration()
 }
 
-// commitReady is used to notify the event service to start sending events.
-func (d *dispatcherStat) commitReady(serverID node.ID) {
-	d.session.commitReady(serverID)
+func (d *dispatcherStat) commitLocalRegistration() {
+	d.session.commitReady(d.eventCollector.getLocalServerID())
 }
 
 // reset sends a RESET request to the specified EventService using the current
@@ -600,16 +598,24 @@ func (d *dispatcherStat) getHeartbeatProgressForEventService() (uint64, uint64) 
 	return checkpointTs, state.epoch
 }
 
-func (d *dispatcherStat) setRemoteCandidates(nodes []string) {
-	d.session.setRemoteCandidates(nodes)
+func (d *dispatcherStat) startRemoteProbing(nodes []string) {
+	d.session.startRemoteProbing(nodes)
+}
+
+func (d *dispatcherStat) retryCurrentRegistrationIfRemovedFrom(serverID node.ID) bool {
+	if d.session.getEventServiceID() != serverID {
+		return false
+	}
+	log.Info("dispatcher removed in current event service, retry registration",
+		zap.Stringer("changefeedID", d.target.GetChangefeedID()),
+		zap.Stringer("dispatcherID", d.getDispatcherID()),
+		zap.Stringer("eventServiceID", serverID))
+	d.session.retryCurrentRegistration()
+	return true
 }
 
 func (d *dispatcherStat) getEventServiceID() node.ID {
 	return d.session.getEventServiceID()
-}
-
-func (d *dispatcherStat) isCurrentEventService(serverID node.ID) bool {
-	return d.session.isCurrentEventService(serverID)
 }
 
 func (d *dispatcherStat) isReceivingDataEvent() bool {

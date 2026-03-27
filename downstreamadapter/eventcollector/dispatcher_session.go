@@ -205,12 +205,6 @@ func (d *dispatcherConnState) getCurrentEventServiceID() node.ID {
 	return d.currentEventServiceID
 }
 
-func (d *dispatcherConnState) isCurrentEventService(serverID node.ID) bool {
-	d.RLock()
-	defer d.RUnlock()
-	return d.currentEventServiceID == serverID
-}
-
 func (d *dispatcherConnState) isReceivingDataEvent() bool {
 	d.RLock()
 	defer d.RUnlock()
@@ -308,11 +302,24 @@ func newDispatcherSession(
 
 // Register/reset/remove request entry points.
 
-// registerTo records the in-flight register state, then sends the register
-// request to the target event service.
-func (s *dispatcherSession) registerTo(serverID node.ID) {
+func (s *dispatcherSession) startLocalRegistration() {
 	s.requestMu.Lock()
 	defer s.requestMu.Unlock()
+	if !s.beginRegister(s.localServerID) {
+		return
+	}
+	s.sendRegisterRequest(s.localServerID)
+}
+
+func (s *dispatcherSession) retryCurrentRegistration() {
+	s.requestMu.Lock()
+	defer s.requestMu.Unlock()
+	serverID := s.connState.getCurrentEventServiceID()
+	if serverID.IsEmpty() {
+		log.Panic("current event service should not be empty when retrying registration",
+			zap.Stringer("changefeedID", s.target.GetChangefeedID()),
+			zap.Stringer("dispatcher", s.target.GetId()))
+	}
 	if !s.beginRegister(serverID) {
 		return
 	}
@@ -560,8 +567,8 @@ func (s *dispatcherSession) newDispatcherRemoveRequest(serverID string) *messagi
 	}
 }
 
-// Entry point used by the log coordinator callback to start remote reuse probing.
-func (s *dispatcherSession) setRemoteCandidates(nodes []string) {
+// startRemoteProbing begins probing reusable remote event services one by one.
+func (s *dispatcherSession) startRemoteProbing(nodes []string) {
 	s.requestMu.Lock()
 	defer s.requestMu.Unlock()
 	candidate, ok := s.connState.beginRemoteProbing(nodes)
@@ -579,10 +586,6 @@ func (s *dispatcherSession) setRemoteCandidates(nodes []string) {
 // Read-only session queries.
 func (s *dispatcherSession) getEventServiceID() node.ID {
 	return s.connState.getCurrentEventServiceID()
-}
-
-func (s *dispatcherSession) isCurrentEventService(serverID node.ID) bool {
-	return s.connState.isCurrentEventService(serverID)
 }
 
 func (s *dispatcherSession) isReceivingDataEvent() bool {

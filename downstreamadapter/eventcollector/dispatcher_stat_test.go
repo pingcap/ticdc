@@ -764,7 +764,7 @@ func TestRemoteReadyClearsRemoteCandidates(t *testing.T) {
 		dispatcherRequestRecord{to: remoteServerID, action: eventpb.ActionType_ACTION_TYPE_RESET},
 	)
 
-	stat.session.registerTo(remoteServerID)
+	stat.retryCurrentRegistration()
 	requireDispatcherRequests(
 		t,
 		readDispatcherRequests(t, mockEventCollector, 1),
@@ -1629,7 +1629,7 @@ func TestCheckpointTsForEventServiceUsesCollectorObservedMaxTs(t *testing.T) {
 	require.Equal(t, uint64(210), getHeartbeatCheckpoint())
 }
 
-func TestRegisterTo(t *testing.T) {
+func TestRegistrationEntrypoints(t *testing.T) {
 	localServerID := node.ID("local-server")
 	remoteServerID := node.ID("remote-server")
 	dispatcherID := common.NewDispatcherID()
@@ -1639,9 +1639,8 @@ func TestRegisterTo(t *testing.T) {
 	mockEventCollector := newTestEventCollector(localServerID)
 	stat := newDispatcherStat(mockDisp, mockEventCollector, nil)
 
-	// Test case 1: Register to local server
-	t.Run("register to local server", func(t *testing.T) {
-		stat.registerTo(localServerID)
+	t.Run("start local registration", func(t *testing.T) {
+		stat.start()
 
 		select {
 		case msg := <-mockEventCollector.dispatcherMessageChan.Out():
@@ -1656,9 +1655,8 @@ func TestRegisterTo(t *testing.T) {
 		}
 	})
 
-	// Test case 2: Register to remote server
-	t.Run("register to remote server", func(t *testing.T) {
-		stat.registerTo(remoteServerID)
+	t.Run("start remote probing", func(t *testing.T) {
+		stat.startRemoteProbing([]string{remoteServerID.String()})
 
 		select {
 		case msg := <-mockEventCollector.dispatcherMessageChan.Out():
@@ -1667,6 +1665,24 @@ func TestRegisterTo(t *testing.T) {
 			require.True(t, ok)
 			require.Equal(t, eventpb.ActionType_ACTION_TYPE_REGISTER, req.ActionType)
 			require.True(t, req.OnlyReuse, "OnlyReuse should be true for remote registration")
+			require.Equal(t, dispatcherID.ToPB(), req.DispatcherId)
+		case <-time.After(1 * time.Second):
+			require.Fail(t, "timed out waiting for message")
+		}
+	})
+
+	t.Run("retry current registration", func(t *testing.T) {
+		setSessionState(stat.session, remoteServerID, true, "")
+
+		stat.retryCurrentRegistration()
+
+		select {
+		case msg := <-mockEventCollector.dispatcherMessageChan.Out():
+			require.Equal(t, remoteServerID, msg.Message.To)
+			req, ok := msg.Message.Message[0].(*messaging.DispatcherRequest)
+			require.True(t, ok)
+			require.Equal(t, eventpb.ActionType_ACTION_TYPE_REGISTER, req.ActionType)
+			require.True(t, req.OnlyReuse, "OnlyReuse should be true for remote registration retry")
 			require.Equal(t, dispatcherID.ToPB(), req.DispatcherId)
 		case <-time.After(1 * time.Second):
 			require.Fail(t, "timed out waiting for message")
@@ -1716,7 +1732,7 @@ func TestRegisterAndRemoveRequestOrder(t *testing.T) {
 
 	registerDone := make(chan struct{})
 	go func() {
-		stat.registerTo(remoteServerID)
+		stat.startRemoteProbing([]string{remoteServerID.String()})
 		close(registerDone)
 	}()
 
