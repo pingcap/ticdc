@@ -18,7 +18,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/config"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	tfilter "github.com/pingcap/tidb/pkg/util/table-filter"
 	"go.uber.org/zap"
 )
@@ -68,15 +68,15 @@ func NewRouter(caseSensitive bool, rules []RoutingRuleConfig) (*Router, error) {
 		}
 
 		if err := config.ValidateRoutingExpression(ruleConfig.SchemaRule); err != nil {
-			return nil, cerror.ErrInvalidSchemaRule.GenWithStackByArgs(ruleConfig.SchemaRule, err)
+			return nil, errors.ErrInvalidSchemaRule.GenWithStackByArgs(ruleConfig.SchemaRule, err)
 		}
 		if err := config.ValidateRoutingExpression(ruleConfig.TableRule); err != nil {
-			return nil, cerror.ErrInvalidTableRule.GenWithStackByArgs(ruleConfig.TableRule, err)
+			return nil, errors.ErrInvalidTableRule.GenWithStackByArgs(ruleConfig.TableRule, err)
 		}
 
 		f, err := tfilter.Parse(ruleConfig.Matcher)
 		if err != nil {
-			return nil, cerror.ErrInvalidRoutingRule.GenWithStackByArgs(ruleConfig.Matcher, err)
+			return nil, errors.ErrInvalidRoutingRule.GenWithStackByArgs(ruleConfig.Matcher, err)
 		}
 		if !caseSensitive {
 			f = tfilter.CaseInsensitive(f)
