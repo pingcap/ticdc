@@ -48,13 +48,12 @@ const (
 // messages with the same key are dropped. This is safe because the sender periodically
 // retries until it receives a response.
 //
-// The queue is also epoch-aware for direct maintainer requests:
-// - newer maintainer epochs replace older pending requests for the same key
-// - older maintainer epochs are dropped
-// - within the same epoch, close removed=true overrides removed=false
+// Queueing does not participate in ownership transfer. The request handlers
+// apply the epoch checks, while the queue only suppresses duplicate retries for
+// the current in-flight request.
 //
-// This lets a new maintainer instance take over promptly even when the old
-// instance still has retries buffered in the queue.
+// For MaintainerCloseRequest, removed=true still overrides removed=false so a
+// removal retry does not lose the stronger cleanup intent.
 type pendingMessageQueue struct {
 	mu      sync.Mutex
 	pending map[pendingMessageKey]*messaging.TargetMessage
@@ -89,20 +88,10 @@ func (q *pendingMessageQueue) TryEnqueue(key pendingMessageKey, msg *messaging.T
 }
 
 func shouldReplacePendingMessage(key pendingMessageKey, oldMsg, newMsg *messaging.TargetMessage) bool {
-	if oldMsg == nil || newMsg == nil {
+	if key.msgType != messaging.TypeMaintainerCloseRequest {
 		return false
 	}
-	oldEpoch, oldHasEpoch := getRequestMaintainerEpoch(oldMsg)
-	newEpoch, newHasEpoch := getRequestMaintainerEpoch(newMsg)
-	if oldHasEpoch && newHasEpoch {
-		if newEpoch > oldEpoch {
-			return true
-		}
-		if newEpoch < oldEpoch {
-			return false
-		}
-	}
-	if key.msgType != messaging.TypeMaintainerCloseRequest {
+	if oldMsg == nil || newMsg == nil {
 		return false
 	}
 
@@ -143,33 +132,6 @@ func shouldAcceptCloseRequest(activeEpoch, requestEpoch uint64) bool {
 
 func shouldUseStrictMaintainerEpoch(activeEpoch, requestEpoch uint64) bool {
 	return activeEpoch != 0 && requestEpoch != 0
-}
-
-// getRequestMaintainerEpoch extracts the maintainer instance identity from the
-// direct request types protected by the epoch mechanism.
-func getRequestMaintainerEpoch(msg *messaging.TargetMessage) (uint64, bool) {
-	if msg == nil || len(msg.Message) == 0 {
-		return 0, false
-	}
-	switch req := msg.Message[0].(type) {
-	case *heartbeatpb.MaintainerBootstrapRequest:
-		if req.MaintainerEpoch == 0 {
-			return 0, false
-		}
-		return req.MaintainerEpoch, true
-	case *heartbeatpb.MaintainerPostBootstrapRequest:
-		if req.MaintainerEpoch == 0 {
-			return 0, false
-		}
-		return req.MaintainerEpoch, true
-	case *heartbeatpb.MaintainerCloseRequest:
-		if req.MaintainerEpoch == 0 {
-			return 0, false
-		}
-		return req.MaintainerEpoch, true
-	default:
-		return 0, false
-	}
 }
 
 // Pop blocks until a key is available or the queue is closed.

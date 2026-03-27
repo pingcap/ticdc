@@ -14,15 +14,63 @@
 package dispatcherorchestrator
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
+	"github.com/pingcap/ticdc/downstreamadapter/dispatchermanager"
+	"github.com/pingcap/ticdc/downstreamadapter/eventcollector"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/stretchr/testify/require"
 )
+
+func newTestDispatcherManagerForEpoch(
+	t *testing.T,
+	changefeedID common.ChangeFeedID,
+	maintainerID node.ID,
+	withTableTrigger bool,
+) (*dispatchermanager.DispatcherManager, *config.ChangefeedConfig, *heartbeatpb.DispatcherID) {
+	t.Helper()
+
+	mc := messaging.NewMockMessageCenter()
+	appcontext.SetService(appcontext.MessageCenter, mc)
+	appcontext.SetService(appcontext.DefaultPDClock, pdutil.NewClock4Test())
+	appcontext.SetService(appcontext.HeartbeatCollector, dispatchermanager.NewHeartBeatCollector(node.ID("dispatcher")))
+	appcontext.SetService(appcontext.EventCollector, eventcollector.New(node.ID("dispatcher")))
+
+	info := &config.ChangeFeedInfo{
+		ChangefeedID: changefeedID,
+		SinkURI:      "blackhole://",
+		Config:       config.GetDefaultReplicaConfig(),
+	}
+	cfConfig := info.ToChangefeedConfig()
+	cfConfig.Epoch = 42
+
+	var tableTriggerID *heartbeatpb.DispatcherID
+	if withTableTrigger {
+		tableTriggerID = common.NewDispatcherID().ToPB()
+	}
+
+	manager, err := dispatchermanager.NewDispatcherManager(
+		0,
+		changefeedID,
+		cfConfig,
+		tableTriggerID,
+		nil,
+		1,
+		maintainerID,
+		false,
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { manager.TryClose(true) })
+	return manager, cfConfig, tableTriggerID
+}
 
 func TestPendingMessageQueue_TryEnqueueDropsDuplicatesUntilDone(t *testing.T) {
 	t.Parallel()
@@ -162,7 +210,7 @@ func TestPendingMessageQueue_CloseRequestUpgradeBetweenPopAndGet(t *testing.T) {
 	q.Done(key)
 }
 
-func TestPendingMessageQueue_NewerEpochOverridesOlderPendingRequest(t *testing.T) {
+func TestPendingMessageQueue_KeepsFirstBootstrapRequestUntilCurrentAttemptFinishes(t *testing.T) {
 	t.Parallel()
 
 	q := newPendingMessageQueue()
@@ -173,7 +221,7 @@ func TestPendingMessageQueue_NewerEpochOverridesOlderPendingRequest(t *testing.T
 	}
 
 	oldMsg := messaging.NewSingleTargetMessage(
-		node.ID("to"),
+		node.ID("old"),
 		messaging.DispatcherManagerManagerTopic,
 		&heartbeatpb.MaintainerBootstrapRequest{
 			ChangefeedID:    cfID.ToPB(),
@@ -181,7 +229,7 @@ func TestPendingMessageQueue_NewerEpochOverridesOlderPendingRequest(t *testing.T
 		},
 	)
 	newMsg := messaging.NewSingleTargetMessage(
-		node.ID("to"),
+		node.ID("new"),
 		messaging.DispatcherManagerManagerTopic,
 		&heartbeatpb.MaintainerBootstrapRequest{
 			ChangefeedID:    cfID.ToPB(),
@@ -190,55 +238,16 @@ func TestPendingMessageQueue_NewerEpochOverridesOlderPendingRequest(t *testing.T
 	)
 
 	require.True(t, q.TryEnqueue(key, oldMsg))
-	require.True(t, q.TryEnqueue(key, newMsg))
 
 	poppedKey, ok := q.Pop()
 	require.True(t, ok)
 	require.Equal(t, key, poppedKey)
-	poppedMsg := q.Get(poppedKey)
-	require.NotNil(t, poppedMsg)
-	req := poppedMsg.Message[0].(*heartbeatpb.MaintainerBootstrapRequest)
-	require.EqualValues(t, 11, req.MaintainerEpoch)
-	q.Done(key)
-}
+	require.Same(t, oldMsg, q.Get(poppedKey))
 
-func TestPendingMessageQueue_OlderEpochCannotOverridePendingRequest(t *testing.T) {
-	t.Parallel()
-
-	q := newPendingMessageQueue()
-	cfID := common.NewChangeFeedIDWithName("cf", "default")
-	key := pendingMessageKey{
-		changefeedID: cfID,
-		msgType:      messaging.TypeMaintainerBootstrapRequest,
-	}
-
-	newerMsg := messaging.NewSingleTargetMessage(
-		node.ID("to"),
-		messaging.DispatcherManagerManagerTopic,
-		&heartbeatpb.MaintainerBootstrapRequest{
-			ChangefeedID:    cfID.ToPB(),
-			MaintainerEpoch: 11,
-		},
-	)
-	olderMsg := messaging.NewSingleTargetMessage(
-		node.ID("to"),
-		messaging.DispatcherManagerManagerTopic,
-		&heartbeatpb.MaintainerBootstrapRequest{
-			ChangefeedID:    cfID.ToPB(),
-			MaintainerEpoch: 10,
-		},
-	)
-
-	require.True(t, q.TryEnqueue(key, newerMsg))
-	require.False(t, q.TryEnqueue(key, olderMsg))
-
-	poppedKey, ok := q.Pop()
-	require.True(t, ok)
-	require.Equal(t, key, poppedKey)
-	poppedMsg := q.Get(poppedKey)
-	require.NotNil(t, poppedMsg)
-	req := poppedMsg.Message[0].(*heartbeatpb.MaintainerBootstrapRequest)
-	require.EqualValues(t, 11, req.MaintainerEpoch)
+	// Ownership handoff is decided in the request handler. The queue should only
+	// de-duplicate retries for the in-flight attempt instead of overwriting it.
+	require.False(t, q.TryEnqueue(key, newMsg))
+	require.Same(t, oldMsg, q.Get(poppedKey))
 	q.Done(key)
 }
 
@@ -258,48 +267,113 @@ func TestShouldAcceptMaintainerRequest(t *testing.T) {
 	require.True(t, shouldAcceptCloseRequest(20, 30))
 }
 
-func TestGetRequestMaintainerEpochTreatsZeroAsLegacy(t *testing.T) {
-	t.Parallel()
-
+func TestHandleBootstrapRequestDropsLegacyTakeoverAfterStrictOwnerEstablished(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("cf", "default")
-	bootstrap := messaging.NewSingleTargetMessage(
-		node.ID("to"),
-		messaging.DispatcherManagerManagerTopic,
-		&heartbeatpb.MaintainerBootstrapRequest{ChangefeedID: cfID.ToPB()},
-	)
-	epoch, ok := getRequestMaintainerEpoch(bootstrap)
-	require.False(t, ok)
-	require.EqualValues(t, 0, epoch)
+	manager, cfConfig, _ := newTestDispatcherManagerForEpoch(t, cfID, node.ID("owner-a"), false)
+	manager.SetActiveMaintainer(node.ID("owner-a"), 22)
 
-	postBootstrap := messaging.NewSingleTargetMessage(
-		node.ID("to"),
-		messaging.DispatcherManagerManagerTopic,
-		&heartbeatpb.MaintainerPostBootstrapRequest{ChangefeedID: cfID.ToPB()},
-	)
-	epoch, ok = getRequestMaintainerEpoch(postBootstrap)
-	require.False(t, ok)
-	require.EqualValues(t, 0, epoch)
+	cfgBytes, err := json.Marshal(cfConfig)
+	require.NoError(t, err)
 
-	closeReq := messaging.NewSingleTargetMessage(
-		node.ID("to"),
-		messaging.DispatcherManagerManagerTopic,
-		&heartbeatpb.MaintainerCloseRequest{ChangefeedID: cfID.ToPB()},
-	)
-	epoch, ok = getRequestMaintainerEpoch(closeReq)
-	require.False(t, ok)
-	require.EqualValues(t, 0, epoch)
-
-	bootstrapWithEpoch := messaging.NewSingleTargetMessage(
-		node.ID("to"),
-		messaging.DispatcherManagerManagerTopic,
-		&heartbeatpb.MaintainerBootstrapRequest{
-			ChangefeedID:    cfID.ToPB(),
-			MaintainerEpoch: 10,
+	orchestrator := &DispatcherOrchestrator{
+		mc: messaging.NewMockMessageCenter(),
+		dispatcherManagers: map[common.ChangeFeedID]*dispatchermanager.DispatcherManager{
+			cfID: manager,
 		},
-	)
-	epoch, ok = getRequestMaintainerEpoch(bootstrapWithEpoch)
+		msgQueue: newPendingMessageQueue(),
+	}
+
+	req := &heartbeatpb.MaintainerBootstrapRequest{
+		ChangefeedID:    cfID.ToPB(),
+		Config:          cfgBytes,
+		StartTs:         1,
+		KeyspaceId:      0,
+		MaintainerEpoch: 0,
+	}
+
+	require.NoError(t, orchestrator.handleBootstrapRequest(node.ID("owner-b"), req))
+	require.Equal(t, node.ID("owner-a"), manager.GetMaintainerID())
+	require.EqualValues(t, 22, manager.GetActiveMaintainerEpoch())
+}
+
+func TestHandleBootstrapRequestAllowsNewerEpochTakeover(t *testing.T) {
+	cfID := common.NewChangeFeedIDWithName("cf", "default")
+	manager, cfConfig, _ := newTestDispatcherManagerForEpoch(t, cfID, node.ID("owner-a"), false)
+	manager.SetActiveMaintainer(node.ID("owner-a"), 22)
+
+	cfgBytes, err := json.Marshal(cfConfig)
+	require.NoError(t, err)
+
+	orchestrator := &DispatcherOrchestrator{
+		mc: messaging.NewMockMessageCenter(),
+		dispatcherManagers: map[common.ChangeFeedID]*dispatchermanager.DispatcherManager{
+			cfID: manager,
+		},
+		msgQueue: newPendingMessageQueue(),
+	}
+
+	req := &heartbeatpb.MaintainerBootstrapRequest{
+		ChangefeedID:    cfID.ToPB(),
+		Config:          cfgBytes,
+		StartTs:         1,
+		KeyspaceId:      0,
+		MaintainerEpoch: 23,
+	}
+
+	require.NoError(t, orchestrator.handleBootstrapRequest(node.ID("owner-b"), req))
+	require.Equal(t, node.ID("owner-b"), manager.GetMaintainerID())
+	require.EqualValues(t, 23, manager.GetActiveMaintainerEpoch())
+}
+
+func TestHandleCloseRequestDropsLegacyCloseAfterStrictOwnerEstablished(t *testing.T) {
+	cfID := common.NewChangeFeedIDWithName("cf", "default")
+	manager, _, _ := newTestDispatcherManagerForEpoch(t, cfID, node.ID("owner-a"), false)
+	manager.SetActiveMaintainer(node.ID("owner-a"), 22)
+
+	orchestrator := &DispatcherOrchestrator{
+		mc: messaging.NewMockMessageCenter(),
+		dispatcherManagers: map[common.ChangeFeedID]*dispatchermanager.DispatcherManager{
+			cfID: manager,
+		},
+		msgQueue: newPendingMessageQueue(),
+	}
+
+	req := &heartbeatpb.MaintainerCloseRequest{
+		ChangefeedID:    cfID.ToPB(),
+		Removed:         false,
+		MaintainerEpoch: 0,
+	}
+
+	require.NoError(t, orchestrator.handleCloseRequest(node.ID("owner-b"), req))
+	require.Equal(t, node.ID("owner-a"), manager.GetMaintainerID())
+	require.EqualValues(t, 22, manager.GetActiveMaintainerEpoch())
+	_, ok := orchestrator.dispatcherManagers[cfID]
 	require.True(t, ok)
-	require.EqualValues(t, 10, epoch)
+}
+
+func TestHandlePostBootstrapRequestDropsUnexpectedMaintainerAfterStrictOwnerEstablished(t *testing.T) {
+	cfID := common.NewChangeFeedIDWithName("cf", "default")
+	manager, _, tableTriggerID := newTestDispatcherManagerForEpoch(t, cfID, node.ID("owner-a"), true)
+	manager.SetActiveMaintainer(node.ID("owner-a"), 22)
+	require.NotNil(t, tableTriggerID)
+
+	orchestrator := &DispatcherOrchestrator{
+		mc: messaging.NewMockMessageCenter(),
+		dispatcherManagers: map[common.ChangeFeedID]*dispatchermanager.DispatcherManager{
+			cfID: manager,
+		},
+		msgQueue: newPendingMessageQueue(),
+	}
+
+	req := &heartbeatpb.MaintainerPostBootstrapRequest{
+		ChangefeedID:                  cfID.ToPB(),
+		TableTriggerEventDispatcherId: tableTriggerID,
+		MaintainerEpoch:               0,
+	}
+
+	require.NoError(t, orchestrator.handlePostBootstrapRequest(node.ID("owner-b"), req))
+	require.Equal(t, node.ID("owner-a"), manager.GetMaintainerID())
+	require.EqualValues(t, 22, manager.GetActiveMaintainerEpoch())
 }
 
 func TestGetPendingMessageKey_SupportedTypes(t *testing.T) {
