@@ -277,7 +277,7 @@ func (c *EventCollector) PrepareAddDispatcher(
 	if err != nil {
 		log.Warn("add dispatcher to dynamic stream failed", zap.Error(err))
 	}
-	stat.run()
+	stat.start()
 }
 
 // CommitAddDispatcher notify local event service that the dispatcher is ready to receive events.
@@ -293,7 +293,7 @@ func (c *EventCollector) CommitAddDispatcher(target dispatcher.DispatcherService
 		return
 	}
 	stat := value.(*dispatcherStat)
-	stat.commitReady(c.getLocalServerID())
+	stat.commitLocalRegistration()
 }
 
 func (c *EventCollector) RemoveDispatcher(target dispatcher.DispatcherService) {
@@ -498,14 +498,7 @@ func (c *EventCollector) handleDispatcherHeartbeatResponse(targetMessage *messag
 				continue
 			}
 			stat := v.(*dispatcherStat)
-			// If the serverID not match, it means the dispatcher is not registered on this server now, just ignore it the response.
-			if stat.isCurrentEventService(targetMessage.From) {
-				log.Info("dispatcher removed in event service",
-					zap.Stringer("dispatcherID", ds.DispatcherID),
-					zap.Stringer("eventServiceID", targetMessage.From))
-				// register the dispatcher again
-				stat.registerTo(targetMessage.From)
-			}
+			stat.retryCurrentRegistrationIfRemovedFrom(targetMessage.From)
 		}
 	}
 }
