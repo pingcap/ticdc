@@ -192,7 +192,7 @@ func (d *writer) flushMessages(ctx context.Context) error {
 						zap.String("changefeed", changefeed),
 						zap.Int("shardID", d.shardID),
 						zap.Error(err))
-					return errors.Trace(err)
+					return err
 				}
 
 				if err := d.writeDataFile(ctx, dataFilePath, indexFilePath, payload); err != nil {
@@ -231,11 +231,11 @@ func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath 
 	changefeed := d.changeFeedID.Name()
 
 	start := time.Now()
-	if err := d.statistics.RecordBatchExecution(func() (int, int64, error) {
+	if err := d.statistics.RecordBatchExecution(func() (_ int, _ int64, retErr error) {
 		if d.config.FlushConcurrency <= 1 {
 			err := d.storage.WriteFile(ctx, dataFilePath, payload.data)
 			if err != nil {
-				return 0, 0, errors.Trace(err)
+				return 0, 0, err
 			}
 			return payload.rowsCount, payload.nBytes, nil
 		}
@@ -244,20 +244,21 @@ func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath 
 			Concurrency: d.config.FlushConcurrency,
 		})
 		if inErr != nil {
-			return 0, 0, errors.Trace(inErr)
+			return 0, 0, inErr
 		}
-
-		if _, inErr = writer.Write(ctx, payload.data); inErr != nil {
-			return 0, 0, errors.Trace(inErr)
-		}
-		if inErr = writer.Close(ctx); inErr != nil {
-			log.Error("failed to close writer",
-				zap.String("keyspace", keyspace),
-				zap.String("changefeed", changefeed),
-				zap.Any("table", payload.tableInfo.TableName),
-				zap.Int("shardID", d.shardID),
-				zap.Error(inErr))
-			return 0, 0, errors.Trace(inErr)
+		defer func() {
+			closeErr := writer.Close(ctx)
+			if closeErr != nil {
+				log.Warn("failed to close writer",
+					zap.String("keyspace", keyspace),
+					zap.String("changefeed", changefeed),
+					zap.Any("table", payload.tableInfo.TableName),
+					zap.Int("shardID", d.shardID),
+					zap.Error(closeErr))
+			}
+		}()
+		if _, retErr = writer.Write(ctx, payload.data); retErr != nil {
+			return 0, 0, retErr
 		}
 		return payload.rowsCount, payload.nBytes, nil
 	}); err != nil {

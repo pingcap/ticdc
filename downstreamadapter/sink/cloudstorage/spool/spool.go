@@ -686,8 +686,8 @@ func (s *Spool) Close() {
 
 	if err := os.RemoveAll(s.workDir); err != nil {
 		log.Warn("remove spool files failed",
-			zap.String("path", s.workDir),
-			zap.Error(err))
+			zap.String("keyspace", s.keyspace), zap.String("changefeed", s.changefeed),
+			zap.String("path", s.workDir), zap.Error(err))
 	}
 	metrics.CloudStorageLoadBytesHistogram.DeleteLabelValues(s.keyspace, s.changefeed)
 	metrics.CloudStorageRotateCountCounter.DeleteLabelValues(s.keyspace, s.changefeed)

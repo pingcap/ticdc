@@ -87,10 +87,6 @@ func newDMLWriters(
 }
 
 func (d *dmlWriters) run(ctx context.Context) error {
-	if d.spool != nil {
-		defer d.spool.Close()
-	}
-	defer d.deleteMetrics()
 	g, ctx := errgroup.WithContext(ctx)
 
 	g.Go(func() error {
@@ -201,4 +197,8 @@ func (d *dmlWriters) close() {
 		return
 	}
 	d.msgCh.Close()
+	if d.spool != nil {
+		d.spool.Close()
+	}
+	d.deleteMetrics()
 }

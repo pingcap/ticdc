@@ -112,7 +112,7 @@ func New(
 	// fetch protocol from replicaConfig defined by changefeed config file.
 	protocol, err := helper.GetProtocol(util.GetOrZero(sinkConfig.Protocol))
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, err
 	}
 	// get cloud storage file extension according to the specific protocol.
 	ext := helper.GetFileExtension(protocol)
@@ -120,13 +120,19 @@ func New(
 	// batch protocols in mq scenario. In cloud storage sink, we just set it to max int.
 	encoderConfig, err := helper.GetEncoderConfig(changefeedID, sinkURI, protocol, sinkConfig, math.MaxInt)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, err
 	}
 	storage, err := util.GetExternalStorageWithDefaultTimeout(ctx, sinkURI.String())
 	if err != nil {
 		return nil, err
 	}
 	statistics := metrics.NewStatistics(changefeedID, "cloudstorage")
+	defer func() {
+		if err != nil {
+			statistics.Close()
+			storage.Close()
+		}
+	}()
 	dmlWriters, err := newDMLWriters(changefeedID, storage, cfg, encoderConfig, ext, statistics)
 	if err != nil {
 		return nil, err
@@ -282,12 +288,12 @@ func (s *sink) writeFile(v *commonEvent.DDLEvent, def cloudstorage.TableDefiniti
 	}
 	encodedDef, err := def.MarshalWithQuery()
 	if err != nil {
-		return errors.Trace(err)
+		return err
 	}
 
 	path, err := def.GenerateSchemaFilePath(s.cfg.UseTableIDAsPath, v.GetTableID())
 	if err != nil {
-		return errors.Trace(err)
+		return err
 	}
 	log.Debug("write ddl event to external storage",
 		zap.String("path", path), zap.Any("ddl", v))
@@ -345,7 +351,7 @@ func (s *sink) sendCheckpointTs(ctx context.Context) error {
 		message, err := json.Marshal(map[string]uint64{"checkpoint-ts": checkpoint})
 		if err != nil {
 			log.Panic("cloud storage sink marshal checkpoint failed, this should never happen",
-				zap.String("keyspace", changefeed),
+				zap.String("keyspace", keyspace),
 				zap.String("changefeed", changefeed),
 				zap.Uint64("checkpoint", checkpoint),
 				zap.Duration("duration", time.Since(start)),
@@ -354,11 +360,11 @@ func (s *sink) sendCheckpointTs(ctx context.Context) error {
 		err = s.storage.WriteFile(ctx, "metadata", message)
 		if err != nil {
 			log.Error("cloud storage sink write file failed",
-				zap.String("keyspace", changefeed),
+				zap.String("keyspace", keyspace),
 				zap.String("changefeed", changefeed),
 				zap.Duration("duration", time.Since(start)),
 				zap.Error(err))
-			return errors.Trace(err)
+			return err
 		}
 		s.lastSendCheckpointTsTime = time.Now()
 		s.lastCheckpointTs.Store(checkpoint)
@@ -486,10 +492,16 @@ func (s *sink) genCleanupJob(ctx context.Context, uri *url.URL) []func() {
 }
 
 func (s *sink) Close(_ bool) {
-	s.dmlWriters.close()
-	s.cron.Stop()
+	if s.dmlWriters != nil {
+		s.dmlWriters.close()
+	}
+	if s.cron != nil {
+		s.cron.Stop()
+	}
 	if s.statistics != nil {
 		s.statistics.Close()
 	}
-	s.storage.Close()
+	if s.storage != nil {
+		s.storage.Close()
+	}
 }

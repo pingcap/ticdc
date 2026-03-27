@@ -93,7 +93,7 @@ func (eg *encoderGroup) run(ctx context.Context) error {
 func (eg *encoderGroup) runEncoder(ctx context.Context, index int) error {
 	encoder, err := codec.NewTxnEventEncoder(eg.codecConfig)
 	if err != nil {
-		return errors.Trace(err)
+		return err
 	}
 
 	inputCh := eg.inputCh[index]
@@ -110,7 +110,7 @@ func (eg *encoderGroup) runEncoder(ctx context.Context, index int) error {
 
 			err = encoder.AppendTxnEvent(task.event)
 			if err != nil {
-				return errors.Trace(err)
+				return err
 			}
 			task.encodedMsgs = encoder.Build()
 			future.Done()
