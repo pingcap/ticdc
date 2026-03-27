@@ -129,10 +129,6 @@ func (d *dispatcherStat) run() {
 	d.session.registerTo(d.eventCollector.getLocalServerID())
 }
 
-func (d *dispatcherStat) clear() {
-	d.session.clear()
-}
-
 // registerTo register the dispatcher to the specified event service.
 func (d *dispatcherStat) registerTo(serverID node.ID) {
 	d.session.registerTo(serverID)
