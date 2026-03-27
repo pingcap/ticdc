@@ -387,7 +387,7 @@ func (d DateSeparator) String() string {
 
 // DispatchRules configures event routing.
 // For MQ sinks, rules control topic / partition dispatching.
-// For MySQL/TiDB sinks, rules with TargetSchema/TargetTable enable schema and table name routing to write to different target tables.
+// TargetSchema and TargetTable configure sink routing for sink implementations that support it.
 type DispatchRule struct {
 	Matcher []string `toml:"matcher" json:"matcher"`
 	// Deprecated, please use PartitionRule.
@@ -404,7 +404,7 @@ type DispatchRule struct {
 
 	TopicRule string `toml:"topic" json:"topic"`
 
-	// TargetSchema rewrites the downstream schema name for MySQL/TiDB sinks.
+	// TargetSchema sets the routed downstream schema name.
 	// Leave it empty to keep the source schema name.
 	// For example, if the source table is `sales`.`orders`, `target-schema = "sales_bak"`
 	// writes to `sales_bak`.`orders`.
@@ -412,7 +412,7 @@ type DispatchRule struct {
 	// becomes `sales_bak`.
 	TargetSchema string `toml:"target-schema" json:"target-schema"`
 
-	// TargetTable rewrites the downstream table name for MySQL/TiDB sinks.
+	// TargetTable sets the routed downstream table name.
 	// Leave it empty to keep the source table name.
 	// For example, if the source table is `sales`.`orders`, `target-table = "orders_bak"`
 	// writes to `sales`.`orders_bak`.
@@ -824,7 +824,7 @@ func (s *SinkConfig) validateAndAdjust(sinkURI *url.URL) error {
 		}
 	}
 
-	if err := s.validateSinkRouting(sinkURI.Scheme); err != nil {
+	if err := s.validateSinkRouting(); err != nil {
 		return err
 	}
 
@@ -880,25 +880,17 @@ func (s *SinkConfig) validateAndAdjust(sinkURI *url.URL) error {
 	return nil
 }
 
-func (s *SinkConfig) validateSinkRouting(scheme string) error {
-	var hasRoutingRules bool
+func (s *SinkConfig) validateSinkRouting() error {
 	for _, rule := range s.DispatchRules {
 		if rule.TargetSchema == "" && rule.TargetTable == "" {
 			continue
 		}
-		hasRoutingRules = true
 		if err := ValidateRoutingExpression(rule.TargetSchema); err != nil {
 			return cerror.ErrInvalidRoutingRule.GenWithStackByArgs("target-schema", rule.TargetSchema, err.Error())
 		}
 		if err := ValidateRoutingExpression(rule.TargetTable); err != nil {
 			return cerror.ErrInvalidRoutingRule.GenWithStackByArgs("target-table", rule.TargetTable, err.Error())
 		}
-	}
-	if hasRoutingRules && !IsMySQLCompatibleScheme(scheme) {
-		return cerror.ErrSinkInvalidConfig.GenWithStack(
-			"sink routing is only supported for mysql and tidb sinks, but got scheme %s",
-			scheme,
-		)
 	}
 	return nil
 }

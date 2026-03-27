@@ -1195,14 +1195,14 @@ type DispatchRule struct {
 	Columns       []string `json:"columns,omitempty"`
 	TopicRule     string   `json:"topic,omitempty"`
 
-	// TargetSchema rewrites the downstream schema name for MySQL sink.
+	// TargetSchema sets the routed downstream schema name.
 	// Leave it empty to keep the source schema name.
 	// For example, if the source table is `sales`.`orders`, `target-schema = "sales_bak"`
 	// writes to `sales_bak`.`orders`.
 	// You can also use placeholders. For example, `target-schema = "{schema}_bak"`
 	// the target schema becomes `sales_bak`.
 	TargetSchema string `json:"target-schema,omitempty"`
-	// TargetTable rewrites the downstream table name for MySQL sink.
+	// TargetTable sets the routed downstream table name.
 	// Leave it empty to keep the source table name.
 	// For example, if the source table is `sales`.`orders`, `target-table = "orders_bak"`
 	// writes to `sales`.`orders_bak`.
