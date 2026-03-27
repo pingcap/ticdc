@@ -39,10 +39,10 @@ import (
 type Sink struct {
 	ctx          context.Context
 	changefeedID common.ChangeFeedID
-	ddlWriter    writer.RedoLogWriter
-	dmlWriter    writer.RedoLogWriter
+	ddlWriter    writer.RedoDDLWriter
+	dmlWriter    writer.RedoDMLWriter
 
-	logBuffer *chann.UnlimitedChannel[writer.RedoEvent, any]
+	logBuffer *chann.UnlimitedChannel[*commonEvent.RedoRowEvent, any]
 
 	// router is used for schema/table name routing in DDL queries.
 	// When routing is configured, DDL queries are rewritten to use target table names
@@ -77,16 +77,15 @@ func New(ctx context.Context, changefeedID common.ChangeFeedID,
 	s := &Sink{
 		ctx:          ctx,
 		changefeedID: changefeedID,
-		logBuffer:    chann.NewUnlimitedChannelDefault[writer.RedoEvent](),
-		router:       router,
+		logBuffer:    chann.NewUnlimitedChannelDefault[*commonEvent.RedoRowEvent](),
 		isNormal:     atomic.NewBool(true),
 		isClosed:     atomic.NewBool(false),
 	}
 
 	var (
 		start     = time.Now()
-		ddlWriter writer.RedoLogWriter
-		dmlWriter writer.RedoLogWriter
+		ddlWriter writer.RedoDDLWriter
+		dmlWriter writer.RedoDMLWriter
 	)
 	defer func() {
 		if err == nil {
@@ -100,7 +99,7 @@ func New(ctx context.Context, changefeedID common.ChangeFeedID,
 		}
 	}()
 
-	ddlWriter, err = factory.NewRedoLogWriter(ctx, config, redo.RedoDDLLogFileType)
+	ddlWriter, err = factory.NewRedoDDLWriter(ctx, config)
 	if err != nil {
 		log.Error("redo: failed to create redo log writer",
 			zap.String("keyspace", changefeedID.Keyspace()),
@@ -109,7 +108,7 @@ func New(ctx context.Context, changefeedID common.ChangeFeedID,
 			zap.Error(err))
 		return nil, err
 	}
-	dmlWriter, err = factory.NewRedoLogWriter(ctx, config, redo.RedoRowLogFileType)
+	dmlWriter, err = factory.NewRedoDMLWriter(ctx, config)
 	if err != nil {
 		log.Error("redo: failed to create redo log writer",
 			zap.String("keyspace", changefeedID.Keyspace()),
@@ -155,7 +154,7 @@ func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 				return errors.Trace(err)
 			}
 		}
-		err := s.ddlWriter.WriteEvents(s.ctx, e)
+		err := s.ddlWriter.WriteDDLEvent(s.ctx, e)
 		if err != nil {
 			s.isNormal.Store(false)
 			return err
@@ -173,7 +172,7 @@ func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 
 func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	rowsCount := event.Len()
-	events := make([]writer.RedoEvent, 0, rowsCount)
+	events := make([]*commonEvent.RedoRowEvent, 0, rowsCount)
 	rowCallback := helper.NewTxnPostFlushRowCallback(event, uint64(rowsCount))
 
 	for {
@@ -243,7 +242,7 @@ func (s *Sink) Close(_ bool) {
 }
 
 func (s *Sink) sendMessages(ctx context.Context) error {
-	buffer := make([]writer.RedoEvent, 0, redo.DefaultFlushBatchSize)
+	buffer := make([]*commonEvent.RedoRowEvent, 0, redo.DefaultFlushBatchSize)
 	for {
 		select {
 		case <-ctx.Done():
@@ -260,7 +259,7 @@ func (s *Sink) sendMessages(ctx context.Context) error {
 		buffer = events[:0]
 
 		start := time.Now()
-		err := s.dmlWriter.WriteEvents(ctx, events...)
+		err := s.dmlWriter.AddDMLEvents(ctx, events...)
 		if err != nil {
 			return err
 		}
