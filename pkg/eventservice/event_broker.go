@@ -588,7 +588,8 @@ func (c *eventBroker) processTableTriggerDispatcher(ctx context.Context, dispatc
 
 	ddlEvents, endTs, err := c.schemaStore.FetchTableTriggerDDLEvents(keyspaceMeta, dispatcherID, stat.filter, startTs, 100)
 	if err != nil {
-		log.Error("table trigger ddl events fetch failed", zap.Uint32("keyspaceID", stat.info.GetTableSpan().KeyspaceID), zap.Stringer("dispatcherID", stat.id), zap.Error(err))
+		log.Error("table trigger ddl events fetch failed", zap.Uint32("keyspaceID", stat.info.GetTableSpan().KeyspaceID),
+			zap.Stringer("dispatcherID", stat.id), zap.Uint64("startTs", startTs), zap.Error(err))
 		return
 	}
 	// Keep the raw resolved-ts from schema store for scan readiness/lag visibility.
