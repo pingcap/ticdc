@@ -18,7 +18,6 @@ import (
 	"database/sql"
 	"net/url"
 	"strconv"
-	"strings"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -49,50 +48,51 @@ var (
 func IsSameUpstreamDownstream(
 	ctx context.Context, upPD pd.Client, changefeedCfg *config.ChangefeedConfig,
 ) (bool, error) {
-	if upPD == nil {
-		return false, cerrors.New("pd client is nil")
-	}
-	if changefeedCfg == nil {
-		return false, cerrors.New("changefeed config is nil")
-	}
+	return false, nil
+	// if upPD == nil {
+	// 	return false, cerrors.New("pd client is nil")
+	// }
+	// if changefeedCfg == nil {
+	// 	return false, cerrors.New("changefeed config is nil")
+	// }
 
-	upID := upPD.GetClusterID(ctx)
-	upKeyspace := changefeedCfg.ChangefeedID.Keyspace()
-	if upKeyspace == "" {
-		upKeyspace = common.DefaultKeyspaceName
-	}
+	// upID := upPD.GetClusterID(ctx)
+	// upKeyspace := changefeedCfg.ChangefeedID.Keyspace()
+	// if upKeyspace == "" {
+	// 	upKeyspace = common.DefaultKeyspaceName
+	// }
 
-	downID, downKeyspace, isTiDB, err := getClusterIDBySinkURIFn(ctx, changefeedCfg.SinkURI, changefeedCfg)
-	log.Debug("check upstream and downstream cluster",
-		zap.Uint64("upID", upID),
-		zap.String("upKeyspace", upKeyspace),
-		zap.Uint64("downID", downID),
-		zap.String("downKeyspace", downKeyspace),
-		zap.Bool("isTiDB", isTiDB),
-		zap.String("sinkURI", util.MaskSensitiveDataInURI(changefeedCfg.SinkURI)))
-	if err != nil {
-		log.Error("failed to get cluster ID from sink URI",
-			zap.String("sinkURI", util.MaskSensitiveDataInURI(changefeedCfg.SinkURI)),
-			zap.Error(err))
-		return false, cerrors.Trace(err)
-	}
-	if !isTiDB {
-		return false, nil
-	}
+	// downID, downKeyspace, isTiDB, err := getClusterIDBySinkURIFn(ctx, changefeedCfg.SinkURI, changefeedCfg)
+	// log.Debug("check upstream and downstream cluster",
+	// 	zap.Uint64("upID", upID),
+	// 	zap.String("upKeyspace", upKeyspace),
+	// 	zap.Uint64("downID", downID),
+	// 	zap.String("downKeyspace", downKeyspace),
+	// 	zap.Bool("isTiDB", isTiDB),
+	// 	zap.String("sinkURI", util.MaskSensitiveDataInURI(changefeedCfg.SinkURI)))
+	// if err != nil {
+	// 	log.Error("failed to get cluster ID from sink URI",
+	// 		zap.String("sinkURI", util.MaskSensitiveDataInURI(changefeedCfg.SinkURI)),
+	// 		zap.Error(err))
+	// 	return false, cerrors.Trace(err)
+	// }
+	// if !isTiDB {
+	// 	return false, nil
+	// }
 
-	// In TiDB Classic, `cluster_id` identifies the whole cluster. In TiDB Next-Gen, a physical
-	// cluster can contain multiple logical clusters (keyspaces), and all keyspaces share the same
-	// `cluster_id`. To avoid blocking valid cross-keyspace replication, treat (cluster_id, keyspace)
-	// as the cluster identity when both sides are TiDB and keyspace is available.
-	if upID != downID {
-		return false, nil
-	}
-	if downKeyspace == "" {
-		// If the downstream keyspace can't be determined, keep the legacy behavior: treat the same
-		// physical cluster as "same" to prevent accidental self-replication loops.
-		return true, nil
-	}
-	return strings.EqualFold(upKeyspace, downKeyspace), nil
+	// // In TiDB Classic, `cluster_id` identifies the whole cluster. In TiDB Next-Gen, a physical
+	// // cluster can contain multiple logical clusters (keyspaces), and all keyspaces share the same
+	// // `cluster_id`. To avoid blocking valid cross-keyspace replication, treat (cluster_id, keyspace)
+	// // as the cluster identity when both sides are TiDB and keyspace is available.
+	// if upID != downID {
+	// 	return false, nil
+	// }
+	// if downKeyspace == "" {
+	// 	// If the downstream keyspace can't be determined, keep the legacy behavior: treat the same
+	// 	// physical cluster as "same" to prevent accidental self-replication loops.
+	// 	return true, nil
+	// }
+	// return strings.EqualFold(upKeyspace, downKeyspace), nil
 }
 
 // getClusterIDBySinkURI gets the downstream TiDB cluster ID and keyspace name by the sink URI.

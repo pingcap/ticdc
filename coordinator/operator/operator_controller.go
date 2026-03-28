@@ -232,6 +232,24 @@ func (oc *Controller) OperatorSize() int {
 	return len(oc.operators)
 }
 
+// CountOperatorsInvolvingNode returns the number of in-flight operators whose affected nodes include n.
+// It is used by node drain to determine whether it is safe to advance a node to STOPPING.
+func (oc *Controller) CountOperatorsInvolvingNode(n node.ID) int {
+	oc.mu.RLock()
+	defer oc.mu.RUnlock()
+
+	count := 0
+	for _, op := range oc.operators {
+		for _, affected := range op.OP.AffectedNodes() {
+			if affected == n {
+				count++
+				break
+			}
+		}
+	}
+	return count
+}
+
 // pollQueueingOperator returns the operator need to be executed,
 // "next" is true to indicate that it may exist in next attempt,
 // and false is the end for the poll.
