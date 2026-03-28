@@ -427,15 +427,9 @@ func (s *dispatcherSession) removeFromLocked(serverID node.ID) {
 
 // Signal-event orchestration.
 
-// handleSignalEvent is the control-plane event entrypoint.
-//
-// Signal handling follows one rule throughout this file:
-//  1. connState decides whether the incoming signal is relevant and returns the
-//     resulting control-plane decision;
-//  2. session applies the side effects for that decision in a fixed order.
-//
-// Keeping "state transition" and "side effects" separate makes it easier to
-// audit whether a signal path forgot cleanup, retry, or commit work.
+// handleSignalEvent is the control-plane event dispatch entrypoint. It only
+// routes to the ready / not reusable handlers; the actual acceptance rules live
+// in the corresponding connState transition helpers.
 func (s *dispatcherSession) handleSignalEvent(event dispatcher.DispatcherEvent) {
 	if s.connState.isRemoved() {
 		return
@@ -460,9 +454,8 @@ func (s *dispatcherSession) handleSignalEvent(event dispatcher.DispatcherEvent) 
 	}
 }
 
-// handleReadyEvent always applies ready in two steps:
-// 1. clean up stale registrations returned by connState;
-// 2. commit the accepted target, if this ready won the race.
+// handleReadyEvent applies the ready decision produced by connState: clean up
+// any stale registrations, then commit whichever target won the ready race.
 func (s *dispatcherSession) handleReadyEvent(from node.ID) {
 	s.requestMu.Lock()
 	defer s.requestMu.Unlock()
