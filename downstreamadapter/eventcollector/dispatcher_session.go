@@ -326,10 +326,11 @@ func (s *dispatcherSession) retryCurrentRegistration() {
 	s.sendRegisterRequest(serverID)
 }
 
+// sendRegisterRequest sends a REGISTER request to the target event service.
+// For local registration, OnlyReuse=false means the target may initialize a new
+// source if needed. For remote probing, OnlyReuse=true means the target should
+// only accept the dispatcher if it can reuse an existing source.
 func (s *dispatcherSession) sendRegisterRequest(serverID node.ID) {
-	// `onlyReuse` is used to control the register behavior at logservice side
-	// it should be set to `false` when register to a local event service,
-	// and set to `true` when register to a remote event service.
 	onlyReuse := serverID != s.localServerID
 	msg := messaging.NewSingleTargetMessage(
 		serverID,
@@ -350,7 +351,10 @@ func (s *dispatcherSession) beginRegister(serverID node.ID) bool {
 	return s.connState.beginRegisterToRemote(serverID)
 }
 
-// commitReady is used to notify the event service to start sending events.
+// commitReady commits an accepted READY by sending RESET to the chosen
+// event service. In the current protocol, READY only means the registration is
+// accepted; RESET is the command that starts or restarts event delivery from
+// the collector checkpoint.
 func (s *dispatcherSession) commitReady(serverID node.ID) {
 	s.doReset(serverID, s.target.GetCheckpointTs())
 }
@@ -363,6 +367,8 @@ func (s *dispatcherSession) reset(serverID node.ID) {
 	s.doReset(serverID, s.target.GetCheckpointTs())
 }
 
+// doReset sends RESET to the target event service and advances the
+// collector epoch for the new stream.
 func (s *dispatcherSession) doReset(serverID node.ID, resetTs uint64) {
 	s.requestMu.Lock()
 	defer s.requestMu.Unlock()
@@ -403,6 +409,9 @@ func (s *dispatcherSession) remove() {
 	}
 }
 
+// removeFromLocked sends REMOVE to the target event service. The request may
+// represent either terminal removal of the dispatcher session or best-effort
+// cleanup of a stale registration on another event service.
 func (s *dispatcherSession) removeFromLocked(serverID node.ID) {
 	log.Info("send remove dispatcher request to event service",
 		zap.Stringer("changefeedID", s.target.GetChangefeedID()),
@@ -416,6 +425,17 @@ func (s *dispatcherSession) removeFromLocked(serverID node.ID) {
 	s.sendMessage(msg)
 }
 
+// Signal-event orchestration.
+
+// handleSignalEvent is the control-plane event entrypoint.
+//
+// Signal handling follows one rule throughout this file:
+//  1. connState decides whether the incoming signal is relevant and returns the
+//     resulting control-plane decision;
+//  2. session applies the side effects for that decision in a fixed order.
+//
+// Keeping "state transition" and "side effects" separate makes it easier to
+// audit whether a signal path forgot cleanup, retry, or commit work.
 func (s *dispatcherSession) handleSignalEvent(event dispatcher.DispatcherEvent) {
 	if s.connState.isRemoved() {
 		return
@@ -440,8 +460,9 @@ func (s *dispatcherSession) handleSignalEvent(event dispatcher.DispatcherEvent) 
 	}
 }
 
-// handleReadyEvent applies the ready decision produced by connState: clean up
-// any stale registrations, then commit whichever target won the ready race.
+// handleReadyEvent always applies ready in two steps:
+// 1. clean up stale registrations returned by connState;
+// 2. commit the accepted target, if this ready won the race.
 func (s *dispatcherSession) handleReadyEvent(from node.ID) {
 	s.requestMu.Lock()
 	defer s.requestMu.Unlock()
@@ -451,14 +472,18 @@ func (s *dispatcherSession) handleReadyEvent(from node.ID) {
 	for _, target := range accepted.cleanupTargets {
 		s.removeFromLocked(target)
 	}
-	if accepted.commitTarget.IsEmpty() {
+	s.commitAcceptedReadyLocked(accepted.commitTarget)
+}
+
+func (s *dispatcherSession) commitAcceptedReadyLocked(serverID node.ID) {
+	if serverID.IsEmpty() {
 		return
 	}
-	if accepted.commitTarget == s.localServerID {
+	if serverID == s.localServerID {
 		s.handleAcceptedLocalReadyLocked()
 		return
 	}
-	s.handleAcceptedRemoteReadyLocked(accepted.commitTarget)
+	s.handleAcceptedRemoteReadyLocked(serverID)
 }
 
 func (s *dispatcherSession) handleAcceptedLocalReadyLocked() {
