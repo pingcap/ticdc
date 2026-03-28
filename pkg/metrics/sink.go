@@ -243,6 +243,9 @@ func initSinkMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(ActiveActiveConflictSkipRowsCounter)
 	registry.MustRegister(ExecutionErrorCounter)
 
+	// iceberg sink metrics
+	initIcebergMetrics(registry)
+
 	// txn sink metrics
 	registry.MustRegister(ConflictDetectDuration)
 	registry.MustRegister(QueueDuration)
