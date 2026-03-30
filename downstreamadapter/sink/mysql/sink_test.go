@@ -73,6 +73,20 @@ func MysqlSinkForTestWithMaxTxnRows(maxTxnRows int) (*Sink, sqlmock.Sqlmock) {
 	return sink, mock
 }
 
+func TestMysqlSinkBatchConfig(t *testing.T) {
+	cfg := mysql.New()
+	cfg.MaxTxnRow = 128
+	cfg.MaxAllowedPacket = 4096
+
+	sink := &Sink{
+		cfg:       cfg,
+		dmlWriter: make([]*mysql.Writer, 3),
+	}
+
+	require.Equal(t, 384, sink.BatchCount())
+	require.Equal(t, 4096, sink.BatchBytes())
+}
+
 // Test callback and tableProgress works as expected after AddDMLEvent
 func TestMysqlSinkBasicFunctionality(t *testing.T) {
 	sink, mock := MysqlSinkForTest()
