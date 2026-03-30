@@ -181,6 +181,47 @@ func TestGetTopicForRowChange(t *testing.T) {
 	require.Equal(t, "a_table", topicName)
 }
 
+func TestTableRoutingDoesNotAffectTopicOrPartitionMatching(t *testing.T) {
+	t.Parallel()
+
+	sinkConfig := &config.SinkConfig{
+		DispatchRules: []*config.DispatchRule{
+			{
+				Matcher:       []string{"source_db.*"},
+				PartitionRule: "ts",
+				TopicRule:     "{schema}_topic",
+			},
+			{
+				Matcher:       []string{"target_db.*"},
+				PartitionRule: "default",
+				TopicRule:     "target_topic",
+			},
+		},
+	}
+
+	d, err := NewEventRouter(sinkConfig, "default_topic", false, false)
+	require.NoError(t, err)
+
+	sourceTableInfo := &common.TableInfo{
+		TableName: common.TableName{
+			Schema: "source_db",
+			Table:  "orders",
+		},
+	}
+	routedTableInfo := sourceTableInfo.CloneWithRouting("target_db", "orders_routed")
+
+	require.Equal(t, "source_db", routedTableInfo.GetSchemaName())
+	require.Equal(t, "orders", routedTableInfo.GetTableName())
+	require.Equal(t, "target_db", routedTableInfo.GetTargetSchemaName())
+	require.Equal(t, "orders_routed", routedTableInfo.GetTargetTableName())
+
+	topicName := d.GetTopicForRowChange(routedTableInfo.GetSchemaName(), routedTableInfo.GetTableName())
+	require.Equal(t, "source_db_topic", topicName)
+
+	partitionGenerator := d.GetPartitionGenerator(routedTableInfo.GetSchemaName(), routedTableInfo.GetTableName())
+	require.IsType(t, &partition.TsPartitionGenerator{}, partitionGenerator)
+}
+
 func TestGetPartitionForRowChange(t *testing.T) {
 	t.Parallel()
 
@@ -316,4 +357,35 @@ func TestGetTopicForDDL(t *testing.T) {
 	for _, test := range tests {
 		require.Equal(t, test.expectedTopic, d.GetTopicForDDL(test.ddl))
 	}
+}
+
+func TestTableRoutingDoesNotAffectDDLTopicMatching(t *testing.T) {
+	t.Parallel()
+
+	sinkConfig := &config.SinkConfig{
+		DispatchRules: []*config.DispatchRule{
+			{
+				Matcher:       []string{"source_db.*"},
+				PartitionRule: "table",
+				TopicRule:     "{schema}_topic",
+			},
+			{
+				Matcher:       []string{"target_db.*"},
+				PartitionRule: "table",
+				TopicRule:     "target_topic",
+			},
+		},
+	}
+
+	d, err := NewEventRouter(sinkConfig, "default_topic", false, false)
+	require.NoError(t, err)
+
+	ddl := &commonEvent.DDLEvent{
+		SchemaName:       "source_db",
+		TableName:        "orders",
+		TargetSchemaName: "target_db",TestTableRoutingDoesNotAffectDDLTopicMatching
+		Query:            "ALTER TABLE `target_db`.`orders_routed` ADD COLUMN c INT",
+	}
+
+	require.Equal(t, "source_db_topic", d.GetTopicForDDL(ddl))
 }
