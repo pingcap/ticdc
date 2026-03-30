@@ -1371,10 +1371,7 @@ func TestApplyRoutingToTableInfo(t *testing.T) {
 			return false
 		}
 
-		stat := &dispatcherStat{
-			target:         mockDisp,
-			eventCollector: newTestEventCollector(localServerID),
-		}
+		stat := newDispatcherStat(mockDisp, newTestEventCollector(localServerID), nil)
 		stat.connState.setEventServiceID(remoteServerID)
 		stat.epoch.Store(10)
 		stat.lastEventSeq.Store(1)
@@ -1434,10 +1431,7 @@ func TestApplyRoutingToTableInfo(t *testing.T) {
 			return false
 		}
 
-		stat := &dispatcherStat{
-			target:         mockDisp,
-			eventCollector: newTestEventCollector(localServerID),
-		}
+		stat := newDispatcherStat(mockDisp, newTestEventCollector(localServerID), nil)
 		stat.connState.setEventServiceID(remoteServerID)
 		stat.epoch.Store(10)
 		stat.lastEventSeq.Store(1)
@@ -1511,10 +1505,7 @@ func TestApplyRoutingToTableInfo(t *testing.T) {
 			return false
 		}
 
-		stat := &dispatcherStat{
-			target:         mockDisp,
-			eventCollector: newTestEventCollector(localServerID),
-		}
+		stat := newDispatcherStat(mockDisp, newTestEventCollector(localServerID), nil)
 		stat.connState.setEventServiceID(remoteServerID)
 		stat.epoch.Store(10)
 		stat.lastEventSeq.Store(1)
@@ -1563,10 +1554,7 @@ func TestApplyRoutingToTableInfo(t *testing.T) {
 			return false
 		}
 
-		stat := &dispatcherStat{
-			target:         mockDisp,
-			eventCollector: newTestEventCollector(localServerID),
-		}
+		stat := newDispatcherStat(mockDisp, newTestEventCollector(localServerID), nil)
 		stat.connState.setEventServiceID(remoteServerID)
 		stat.epoch.Store(10)
 		stat.lastEventSeq.Store(1)
@@ -1618,10 +1606,7 @@ func TestApplyRoutingToTableInfo(t *testing.T) {
 			return false
 		}
 
-		stat := &dispatcherStat{
-			target:         mockDisp,
-			eventCollector: newTestEventCollector(localServerID),
-		}
+		stat := newDispatcherStat(mockDisp, newTestEventCollector(localServerID), nil)
 		stat.connState.setEventServiceID(remoteServerID)
 		stat.epoch.Store(10)
 		stat.lastEventSeq.Store(1)
@@ -1679,10 +1664,7 @@ func TestApplyRoutingToTableInfo(t *testing.T) {
 			return false
 		}
 
-		stat := &dispatcherStat{
-			target:         mockDisp,
-			eventCollector: newTestEventCollector(localServerID),
-		}
+		stat := newDispatcherStat(mockDisp, newTestEventCollector(localServerID), nil)
 		stat.connState.setEventServiceID(remoteServerID)
 		stat.epoch.Store(10)
 		stat.lastEventSeq.Store(1)
