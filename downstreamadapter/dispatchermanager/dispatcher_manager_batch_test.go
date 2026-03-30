@@ -14,50 +14,77 @@
 package dispatchermanager
 
 import (
-	"context"
 	"testing"
 
+	"github.com/golang/mock/gomock"
+	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
+	sinkmock "github.com/pingcap/ticdc/downstreamadapter/sink/mock"
+	"github.com/pingcap/ticdc/eventpb"
+	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/stretchr/testify/require"
 )
 
-func TestDispatcherManager_GetEventCollectorBatchCountAndBytes(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+func newBatchConfigSink(t *testing.T, sinkType common.SinkType, batchCount int, batchBytes int) *sinkmock.MockSink {
+	t.Helper()
+	ctrl := gomock.NewController(t)
+	s := sinkmock.NewMockSink(ctrl)
+	s.EXPECT().SinkType().Return(sinkType).AnyTimes()
+	s.EXPECT().BatchCount().Return(batchCount).AnyTimes()
+	s.EXPECT().BatchBytes().Return(batchBytes).AnyTimes()
+	return s
+}
 
-	s := newMockKafkaSink(ctx, cancel)
-	baseCount, baseBytes := s.BatchCount(), s.BatchBytes()
-
+func TestDispatcherManagerBatchConfig(t *testing.T) {
 	cases := []struct {
-		name      string
-		cfg       *config.ChangefeedConfig
-		wantCount int
-		wantBytes int
+		name           string
+		sinkBatchCount int
+		sinkBatchBytes int
+		cfg            *config.ChangefeedConfig
+		wantCount      int
+		wantBytes      int
 	}{
 		{
-			name:      "defaults-from-sink",
-			cfg:       &config.ChangefeedConfig{},
-			wantCount: baseCount,
-			wantBytes: baseBytes,
+			name:           "uses sink defaults",
+			sinkBatchCount: 4096,
+			sinkBatchBytes: 0,
+			cfg:            &config.ChangefeedConfig{},
+			wantCount:      4096,
+			wantBytes:      0,
 		},
 		{
-			name: "override-count-only",
+			name:           "uses sink provided values",
+			sinkBatchCount: 2048,
+			sinkBatchBytes: 8192,
+			cfg:            &config.ChangefeedConfig{},
+			wantCount:      2048,
+			wantBytes:      8192,
+		},
+		{
+			name:           "overrides count only",
+			sinkBatchCount: 2048,
+			sinkBatchBytes: 8192,
 			cfg: &config.ChangefeedConfig{
 				EventCollectorBatchCount: 123,
 			},
 			wantCount: 123,
-			wantBytes: baseBytes,
+			wantBytes: 8192,
 		},
 		{
-			name: "override-bytes-only",
+			name:           "overrides bytes only",
+			sinkBatchCount: 2048,
+			sinkBatchBytes: 8192,
 			cfg: &config.ChangefeedConfig{
 				EventCollectorBatchBytes: 456,
 			},
-			wantCount: baseCount,
+			wantCount: 2048,
 			wantBytes: 456,
 		},
 		{
-			name: "override-both",
+			name:           "overrides both",
+			sinkBatchCount: 2048,
+			sinkBatchBytes: 8192,
 			cfg: &config.ChangefeedConfig{
 				EventCollectorBatchCount: 123,
 				EventCollectorBatchBytes: 456,
@@ -69,8 +96,9 @@ func TestDispatcherManager_GetEventCollectorBatchCountAndBytes(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			sink := newBatchConfigSink(t, common.MysqlSinkType, tc.sinkBatchCount, tc.sinkBatchBytes)
 			m := &DispatcherManager{
-				sink:   s,
+				sink:   sink,
 				config: tc.cfg,
 			}
 			gotCount, gotBytes := m.getEventCollectorBatchCountAndBytes()
@@ -78,4 +106,51 @@ func TestDispatcherManager_GetEventCollectorBatchCountAndBytes(t *testing.T) {
 			require.Equal(t, tc.wantBytes, gotBytes)
 		})
 	}
+}
+
+func TestDispatcherManagerBatchConfigPassThroughDispatcher(t *testing.T) {
+	sink := newBatchConfigSink(t, common.MysqlSinkType, 2048, 8192)
+	manager := &DispatcherManager{
+		sink:   sink,
+		config: &config.ChangefeedConfig{},
+	}
+
+	batchCount, batchBytes := manager.getEventCollectorBatchCountAndBytes()
+	require.Equal(t, 2048, batchCount)
+	require.Equal(t, 8192, batchBytes)
+
+	sharedInfo := dispatcher.NewSharedInfo(
+		common.NewChangefeedID(common.DefaultKeyspaceName),
+		"system",
+		false,
+		false,
+		false,
+		nil,
+		&eventpb.FilterConfig{},
+		nil,
+		nil,
+		false,
+		batchCount,
+		batchBytes,
+		make(chan dispatcher.TableSpanStatusWithSeq, 1),
+		make(chan *heartbeatpb.TableSpanBlockStatus, 1),
+		make(chan error, 1),
+	)
+	d := dispatcher.NewBasicDispatcher(
+		common.NewDispatcherID(),
+		&heartbeatpb.TableSpan{TableID: 1},
+		1,
+		1,
+		dispatcher.NewSchemaIDToDispatchers(),
+		false,
+		false,
+		0,
+		common.DefaultMode,
+		sink,
+		sharedInfo,
+	)
+
+	gotCount, gotBytes := d.GetEventCollectorBatchConfig()
+	require.Equal(t, 2048, gotCount)
+	require.Equal(t, 8192, gotBytes)
 }

@@ -188,13 +188,11 @@ type ChangefeedConfig struct {
 	TimeZone      string `json:"timezone" default:"system"`
 	CaseSensitive bool   `json:"case_sensitive" default:"false"`
 	// if true, force to replicate some ineligible tables
-	ForceReplicate bool          `json:"force_replicate" default:"false"`
-	Filter         *FilterConfig `toml:"filter" json:"filter"`
-	MemoryQuota    uint64        `toml:"memory-quota" json:"memory-quota"`
-	// EventCollectorBatchCount/Bytes are used by the event collector dynamic stream to achieve better batch performance.
-	// 0 means not set and the default sink-specific batch config will be used.
-	EventCollectorBatchCount int `json:"event_collector_batch_count"`
-	EventCollectorBatchBytes int `json:"event_collector_batch_bytes"`
+	ForceReplicate           bool          `json:"force_replicate" default:"false"`
+	Filter                   *FilterConfig `toml:"filter" json:"filter"`
+	MemoryQuota              uint64        `toml:"memory-quota" json:"memory-quota"`
+	EventCollectorBatchCount int           `json:"event_collector_batch_count"`
+	EventCollectorBatchBytes int           `json:"event_collector_batch_bytes"`
 	// sync point related
 	// TODO: Is syncPointRetention|default can be removed?
 	EnableSyncPoint       bool          `json:"enable_sync_point" default:"false"`
@@ -203,8 +201,11 @@ type ChangefeedConfig struct {
 	SinkConfig            *SinkConfig   `json:"sink_config"`
 	EnableSplittableCheck bool          `json:"enable_splittable_check" default:"false"`
 	// Epoch is the epoch of a changefeed, changes on every restart.
-	Epoch   uint64 `json:"epoch"`
-	BDRMode bool   `json:"bdr_mode" default:"false"`
+	Epoch                         uint64        `json:"epoch"`
+	BDRMode                       bool          `json:"bdr_mode" default:"false"`
+	EnableActiveActive            bool          `json:"enable_active_active" default:"false"`
+	ActiveActiveProgressInterval  time.Duration `json:"active_active_progress_interval" default:"30m"`
+	ActiveActiveSyncStatsInterval time.Duration `json:"active_active_sync_stats_interval" default:"1m"`
 	// redo releated
 	Consistent             *ConsistentConfig `toml:"consistent" json:"consistent,omitempty"`
 	EnableTableAcrossNodes bool              `toml:"enable-table-across-nodes" json:"enable-table-across-nodes,omitempty"`
@@ -266,26 +267,29 @@ type ChangeFeedInfo struct {
 
 func (info *ChangeFeedInfo) ToChangefeedConfig() *ChangefeedConfig {
 	return &ChangefeedConfig{
-		ChangefeedID:             info.ChangefeedID,
-		StartTS:                  info.StartTs,
-		TargetTS:                 info.TargetTs,
-		SinkURI:                  info.SinkURI,
-		CaseSensitive:            util.GetOrZero(info.Config.CaseSensitive),
-		ForceReplicate:           util.GetOrZero(info.Config.ForceReplicate),
-		SinkConfig:               info.Config.Sink,
-		Filter:                   info.Config.Filter,
-		EnableSyncPoint:          util.GetOrZero(info.Config.EnableSyncPoint),
-		SyncPointInterval:        util.GetOrZero(info.Config.SyncPointInterval),
-		SyncPointRetention:       util.GetOrZero(info.Config.SyncPointRetention),
-		EnableSplittableCheck:    util.GetOrZero(info.Config.Scheduler.EnableSplittableCheck),
-		MemoryQuota:              util.GetOrZero(info.Config.MemoryQuota),
-		EventCollectorBatchCount: util.GetOrZero(info.Config.EventCollectorBatchCount),
-		EventCollectorBatchBytes: util.GetOrZero(info.Config.EventCollectorBatchBytes),
-		Epoch:                    info.Epoch,
-		BDRMode:                  util.GetOrZero(info.Config.BDRMode),
-		TimeZone:                 GetGlobalServerConfig().TZ,
-		Consistent:               info.Config.Consistent,
-		EnableTableAcrossNodes:   util.GetOrZero(info.Config.Scheduler.EnableTableAcrossNodes),
+		ChangefeedID:                  info.ChangefeedID,
+		StartTS:                       info.StartTs,
+		TargetTS:                      info.TargetTs,
+		SinkURI:                       info.SinkURI,
+		CaseSensitive:                 util.GetOrZero(info.Config.CaseSensitive),
+		ForceReplicate:                util.GetOrZero(info.Config.ForceReplicate),
+		SinkConfig:                    info.Config.Sink,
+		Filter:                        info.Config.Filter,
+		EnableSyncPoint:               util.GetOrZero(info.Config.EnableSyncPoint),
+		SyncPointInterval:             util.GetOrZero(info.Config.SyncPointInterval),
+		SyncPointRetention:            util.GetOrZero(info.Config.SyncPointRetention),
+		EnableSplittableCheck:         util.GetOrZero(info.Config.Scheduler.EnableSplittableCheck),
+		MemoryQuota:                   util.GetOrZero(info.Config.MemoryQuota),
+		EventCollectorBatchCount:      util.GetOrZero(info.Config.EventCollectorBatchCount),
+		EventCollectorBatchBytes:      util.GetOrZero(info.Config.EventCollectorBatchBytes),
+		Epoch:                         info.Epoch,
+		BDRMode:                       util.GetOrZero(info.Config.BDRMode),
+		EnableActiveActive:            util.GetOrZero(info.Config.EnableActiveActive),
+		ActiveActiveProgressInterval:  util.GetOrZero(info.Config.ActiveActiveProgressInterval),
+		ActiveActiveSyncStatsInterval: util.GetOrZero(info.Config.ActiveActiveSyncStatsInterval),
+		TimeZone:                      GetGlobalServerConfig().TZ,
+		Consistent:                    info.Config.Consistent,
+		EnableTableAcrossNodes:        util.GetOrZero(info.Config.Scheduler.EnableTableAcrossNodes),
 		// other fields are not necessary for dispatcherManager
 	}
 }
@@ -444,6 +448,14 @@ func (info *ChangeFeedInfo) VerifyAndComplete() {
 	}
 	if info.Config.SyncedStatus == nil {
 		info.Config.SyncedStatus = defaultConfig.SyncedStatus
+	}
+	if info.Config.ActiveActiveProgressInterval == nil {
+		interval := *defaultConfig.ActiveActiveProgressInterval
+		info.Config.ActiveActiveProgressInterval = util.AddressOf(interval)
+	}
+	if info.Config.ActiveActiveSyncStatsInterval == nil {
+		interval := *defaultConfig.ActiveActiveSyncStatsInterval
+		info.Config.ActiveActiveSyncStatsInterval = util.AddressOf(interval)
 	}
 	info.RmUnusedFields()
 }

@@ -18,9 +18,15 @@ import (
 )
 
 type batchConfig struct {
-	softCount int
-	hardBytes int
+	// count controls event-count based flushing.
+	// If bytes == 0, it acts as the hard count limit.
+	// If bytes > 0, it acts as the count target.
+	count int
+	// bytes controls size based flushing. 0 disables byte based limit.
+	bytes int
 }
+
+const countCapMultiple = 2
 
 func newDefaultBatchConfig() batchConfig {
 	// Keep the default behavior consistent with the legacy Option.BatchCount=1:
@@ -28,12 +34,20 @@ func newDefaultBatchConfig() batchConfig {
 	return NewBatchConfig(1, 0)
 }
 
-// if the hardBytes is 0, the softCount become the hard limit, cannot be exceeded
-// else the softCount can be exceed, but the hardBytes cannot be exceeded.
-func NewBatchConfig(count, nBytes int) batchConfig {
+// If bytes is 0, count is the hard limit.
+// If bytes is enabled, count is a target:
+// bytes is checked before appending the next event, so the current batch can
+// exceed bytes by at most one event.
+func NewBatchConfig(count, bytes int) batchConfig {
+	if count <= 0 {
+		count = 1
+	}
+	if bytes < 0 {
+		bytes = 0
+	}
 	return batchConfig{
-		softCount: count,
-		hardBytes: nBytes,
+		count: count,
+		bytes: bytes,
 	}
 }
 
@@ -50,13 +64,22 @@ func newDefaultBatcher[T Event]() *batcher[T] {
 }
 
 func newBatcher[T Event](cfg batchConfig) *batcher[T] {
-	if cfg.softCount <= 0 {
-		cfg.softCount = 1
+	b := &batcher[T]{}
+	b.setLimit(cfg)
+	return b
+}
+
+func (b *batcher[T]) setLimit(cfg batchConfig) {
+	if cfg.count <= 0 {
+		cfg.count = 1
 	}
-	return &batcher[T]{
-		config: cfg,
-		buf:    make([]T, 0, cfg.softCount),
+	b.config = cfg
+	if cap(b.buf) < cfg.count {
+		b.buf = make([]T, 0, cfg.count)
+	} else {
+		b.buf = b.buf[:0]
 	}
+	b.nBytes = 0
 }
 
 func (b *batcher[T]) addEvent(event T, size int) {
@@ -67,46 +90,36 @@ func (b *batcher[T]) addEvent(event T, size int) {
 	b.nBytes += size
 }
 
-// the batcher aims to batch messages as much as possible in one time.
-// 1. always make sure the hardBytes not exceeded, to avoid high memory pressue.
-// 2. the softCount can be exceeded if the event size is very small, but also make sure the total event count not
-// too much if the event size is extreamly small, to avoid high CPU usage pressue and high latency.
-// isFull return true if the batcher cannot add more events, and the caller should flushed it.
+// isFull returns true if the batcher should flush and stop appending more events.
 func (b *batcher[T]) isFull() bool {
 	n := len(b.buf)
 	if n == 0 {
 		return false
 	}
 
-	hardBytes := b.config.hardBytes
+	// If bytes is disabled, count is the hard limit.
+	if b.config.bytes <= 0 {
+		return n >= b.config.count
+	}
 
-	// 1) Hard bytes limit (if enabled).
-	if hardBytes > 0 && b.nBytes >= hardBytes {
+	// When bytes is enabled, keep batching past count for small events,
+	// but cap the total events with countCap to avoid oversized batches.
+	countCap := b.config.count * countCapMultiple
+	if n >= countCap {
 		return true
 	}
 
-	// 2) Protective hard count to avoid pathological tiny events.
-	// Choose a simple, deterministic cap. Tune as needed.
-	hardCount := 4 * b.config.softCount
-	if n >= hardCount {
-		return true
-	}
-
-	// 3) If hardBytes is disabled, fall back to count-only to avoid unbounded growth.
-	if hardBytes <= 0 {
-		return n >= b.config.softCount
-	}
-
-	// 4) Otherwise, bytes is the primary driver; softCount does NOT force flush.
-	// Caller should use a max-wait (time-based) policy to prevent high latency under low traffic.
-	return false
+	// bytes is checked before appending the next event.
+	// So with tiny events we can exceed bytes by at most one event.
+	return b.nBytes >= b.config.bytes
 }
 
+// flush returned events must be processed before adding more events to the batcher.
 func (b *batcher[T]) flush() ([]T, int, time.Duration) {
 	if len(b.buf) == 0 {
 		return nil, 0, 0
 	}
-	// note: the returned events is shared the underline slice with the batcher
+	// note: the returned events share the underlying slice with the batcher
 	events := b.buf
 	b.buf = b.buf[:0]
 	nBytes := b.nBytes

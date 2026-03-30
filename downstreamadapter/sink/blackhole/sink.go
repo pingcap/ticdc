@@ -48,8 +48,13 @@ func (s *sink) SetTableSchemaStore(tableSchemaStore *commonEvent.TableSchemaStor
 func (s *sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	// NOTE: don't change the log, integration test `lossy_ddl` depends on it.
 	// ref: https://github.com/pingcap/ticdc/blob/da834db76e0662ff15ef12645d1f37bfa6506d83/tests/integration_tests/lossy_ddl/run.sh#L23
-	log.Debug("BlackHoleSink: WriteEvents", zap.Any("dml", event))
+	// Use zap.Stringer to call String() method which applies log redaction
+	log.Debug("BlackHoleSink: WriteEvents", zap.Stringer("dml", event))
 	s.eventCh <- event
+}
+
+func (s *sink) FlushDMLBeforeBlock(_ commonEvent.BlockEvent) error {
+	return nil
 }
 
 func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
@@ -90,5 +95,5 @@ func (s *sink) BatchCount() int {
 }
 
 func (s *sink) BatchBytes() int {
-	return 1024 * 1024 * 1024
+	return 0
 }

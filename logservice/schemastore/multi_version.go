@@ -153,6 +153,7 @@ func (v *versionedTableInfoStore) gc(gcTs uint64) bool {
 		return false
 	}
 
+	clear(v.infos[:target-1])
 	v.infos = v.infos[target-1:]
 	if len(v.infos) == 0 {
 		log.Panic("should not happen")

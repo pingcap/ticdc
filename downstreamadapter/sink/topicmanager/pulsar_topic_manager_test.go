@@ -20,6 +20,7 @@ import (
 
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/sink/pulsar"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
 )
 
@@ -45,7 +46,7 @@ func TestGetPartitionNumMock(t *testing.T) {
 
 	replicaConfig := config.GetDefaultReplicaConfig()
 	replicaConfig.Sink = &config.SinkConfig{
-		Protocol: str2Pointer("canal-json"),
+		Protocol: util.AddressOf("canal-json"),
 	}
 
 	ctx := context.Background()

@@ -33,6 +33,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/common/event"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
@@ -87,6 +88,16 @@ type DispatcherManager struct {
 	dispatcherMap *DispatcherMap[*dispatcher.EventDispatcher]
 	// redoDispatcherMap restore all the redo dispatchers in the DispatcherManager, including table trigger redo dispatcher
 	redoDispatcherMap *DispatcherMap[*dispatcher.RedoDispatcher]
+	// currentOperatorMap stores at most one in-flight scheduling request per dispatcherID (event and redo).
+	//
+	// It is used for:
+	//   - suppressing duplicate maintainer requests for the same dispatcher,
+	//   - reporting unfinished requests during bootstrap so a new maintainer can restore operators,
+	//   - cleaning up remove requests when a dispatcher is fully removed.
+	//
+	// Entries must be deleted on completion (create -> after creation; remove -> on cleanup), otherwise
+	// future maintainer requests for the same dispatcherID will be ignored.
+	currentOperatorMap sync.Map // map[common.DispatcherID]SchedulerDispatcherRequest (in dispatcher manager, not heartbeatpb)
 	// schemaIDToDispatchers is shared in the DispatcherManager,
 	// it store all the infos about schemaID->Dispatchers
 	// Dispatchers may change the schemaID when meets some special events, such as rename ddl
@@ -139,6 +150,7 @@ type DispatcherManager struct {
 	metricCheckpointTsLag                  prometheus.Gauge
 	metricResolvedTs                       prometheus.Gauge
 	metricResolvedTsLag                    prometheus.Gauge
+	metricBlockStatusesChanLen             prometheus.Gauge
 
 	metricTableTriggerRedoDispatcherCount prometheus.Gauge
 	metricRedoEventDispatcherCount        prometheus.Gauge
@@ -175,6 +187,7 @@ func NewDispatcherManager(
 	manager := &DispatcherManager{
 		ctx:                   ctx,
 		dispatcherMap:         newDispatcherMap[*dispatcher.EventDispatcher](),
+		currentOperatorMap:    sync.Map{},
 		changefeedID:          changefeedID,
 		keyspaceID:            keyspaceID,
 		pdClock:               pdClock,
@@ -192,6 +205,7 @@ func NewDispatcherManager(
 		metricCheckpointTsLag:                  metrics.DispatcherManagerCheckpointTsLagGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
 		metricResolvedTs:                       metrics.DispatcherManagerResolvedTsGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
 		metricResolvedTsLag:                    metrics.DispatcherManagerResolvedTsLagGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
+		metricBlockStatusesChanLen:             metrics.DispatcherManagerBlockStatusesChanLenGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
 
 		metricTableTriggerRedoDispatcherCount: metrics.TableTriggerEventDispatcherGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "redoDispatcher"),
 		metricRedoEventDispatcherCount:        metrics.EventDispatcherGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "redoDispatcher"),
@@ -233,6 +247,7 @@ func NewDispatcherManager(
 		manager.changefeedID,
 		manager.config.TimeZone,
 		manager.config.BDRMode,
+		manager.config.EnableActiveActive,
 		outputRawChangeEvent,
 		integrityCfg,
 		filterCfg,
@@ -307,14 +322,15 @@ func NewDispatcherManager(
 }
 
 func (e *DispatcherManager) getEventCollectorBatchCountAndBytes() (int, int) {
-	batchCount := e.sink.BatchCount()
-	batchBytes := e.sink.BatchBytes()
-
-	if count := e.config.EventCollectorBatchCount; count > 0 {
-		batchCount = count
+	var (
+		batchCount = e.sink.BatchCount()
+		batchBytes = e.sink.BatchBytes()
+	)
+	if e.config.EventCollectorBatchCount > 0 {
+		batchCount = e.config.EventCollectorBatchCount
 	}
-	if nBytes := e.config.EventCollectorBatchBytes; nBytes > 0 {
-		batchBytes = nBytes
+	if e.config.EventCollectorBatchBytes > 0 {
+		batchBytes = e.config.EventCollectorBatchBytes
 	}
 	return batchCount, batchBytes
 }
@@ -363,8 +379,11 @@ func (e *DispatcherManager) InitalizeTableTriggerEventDispatcher(schemaInfo []*h
 	// table trigger event dispatcher can register to event collector to receive events after finish the initial table schema store from the maintainer.
 	appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).AddDispatcher(e.GetTableTriggerEventDispatcher(), e.sinkQuota)
 
-	// when sink is not mysql-class, table trigger event dispatcher need to receive the checkpointTs message from maintainer.
-	if e.sink.SinkType() != common.MysqlSinkType {
+	// The table trigger event dispatcher needs changefeed-level checkpoint updates only
+	// when downstream components must maintain table names (for non-MySQL sinks), or
+	// when MySQL/TiDB sink runs in enable-active-active mode to update the progress table.
+	needCheckpointUpdates := commonEvent.NeedTableNameStoreAndCheckpointTs(e.sink.SinkType() == common.MysqlSinkType, e.sharedInfo.EnableActiveActive())
+	if needCheckpointUpdates {
 		appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RegisterCheckpointTsMessageDs(e)
 	}
 	return nil
@@ -463,7 +482,7 @@ func (e *DispatcherManager) newEventDispatchers(infos map[common.DispatcherID]di
 			e.heartBeatTask = newHeartBeatTask(e)
 		}
 
-		if d.IsTableTriggerEventDispatcher() {
+		if d.IsTableTriggerDispatcher() {
 			if util.GetOrZero(e.config.SinkConfig.SendAllBootstrapAtStart) {
 				d.BootstrapState = dispatcher.BootstrapNotStarted
 			}
@@ -479,7 +498,7 @@ func (e *DispatcherManager) newEventDispatchers(infos map[common.DispatcherID]di
 		seq := e.dispatcherMap.Set(id, d)
 		d.SetSeq(seq)
 
-		if d.IsTableTriggerEventDispatcher() {
+		if d.IsTableTriggerDispatcher() {
 			e.metricTableTriggerEventDispatcherCount.Inc()
 		} else {
 			e.metricEventDispatcherCount.Inc()
@@ -595,6 +614,7 @@ func (e *DispatcherManager) collectBlockStatusRequest(ctx context.Context) {
 				}
 			}
 
+			e.metricBlockStatusesChanLen.Set(float64(len(e.sharedInfo.GetBlockStatusesChan())))
 			if len(blockStatusMessage) != 0 {
 				enqueueBlockStatus(blockStatusMessage, common.DefaultMode)
 			}
@@ -632,12 +652,25 @@ func (e *DispatcherManager) collectComponentStatusWhenChanged(ctx context.Contex
 		case tableSpanStatus := <-e.sharedInfo.GetStatusesChan():
 			statusMessage = append(statusMessage, tableSpanStatus.TableSpanStatus)
 			if common.IsDefaultMode(tableSpanStatus.Mode) {
-				newWatermark.Seq = tableSpanStatus.Seq
+				// Note: tableSpanStatus.Seq is the seq assigned when that dispatcher was created.
+				// status messages can arrive out-of-order and Seq has no ordering relationship with
+				// per-dispatcher checkpoint/resolved ts.
+				//
+				// - Keep Watermark.Seq monotonic to avoid maintainer dropping the watermark as stale
+				//   while still applying status updates (statuses are handled regardless of watermark Seq).
+				// - Still update CheckpointTs with min() regardless of Seq ordering; the periodic
+				//   aggregateDispatcherHeartbeats() is responsible for advancing the watermark.
+				if newWatermark.Seq < tableSpanStatus.Seq {
+					newWatermark.Seq = tableSpanStatus.Seq
+				}
 				if tableSpanStatus.CheckpointTs != 0 && tableSpanStatus.CheckpointTs < newWatermark.CheckpointTs {
 					newWatermark.CheckpointTs = tableSpanStatus.CheckpointTs
 				}
 			} else {
-				newRedoWatermark.Seq = tableSpanStatus.Seq
+				// Same rule applies to redo watermark.
+				if newRedoWatermark.Seq < tableSpanStatus.Seq {
+					newRedoWatermark.Seq = tableSpanStatus.Seq
+				}
 				if tableSpanStatus.CheckpointTs != 0 && tableSpanStatus.CheckpointTs < newRedoWatermark.CheckpointTs {
 					newRedoWatermark.CheckpointTs = tableSpanStatus.CheckpointTs
 				}
@@ -868,7 +901,7 @@ func (e *DispatcherManager) TryClose(removeChangefeed bool) bool {
 	if e.closing.Load() {
 		return e.closed.Load()
 	}
-	e.cleanMetrics()
+
 	e.closing.Store(true)
 	go e.close(removeChangefeed)
 	return false
@@ -883,6 +916,14 @@ func (e *DispatcherManager) close(removeChangefeed bool) {
 		closeAllDispatchers(e.changefeedID, e.redoDispatcherMap, e.redoSink.SinkType())
 		log.Info("closed all redo dispatchers",
 			zap.Stringer("changefeedID", e.changefeedID))
+		err := appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RemoveRedoMessage(e.changefeedID)
+		if err != nil {
+			log.Error("remove redo message failed",
+				zap.Stringer("changefeedID", e.changefeedID),
+				zap.Error(err),
+			)
+			return
+		}
 	}
 
 	closeAllDispatchers(e.changefeedID, e.dispatcherMap, e.sink.SinkType())
@@ -891,7 +932,7 @@ func (e *DispatcherManager) close(removeChangefeed bool) {
 
 	err := appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RemoveDispatcherManager(e.changefeedID)
 	if err != nil {
-		log.Error("remove event dispatcher manager from heartbeat collector failed",
+		log.Error("remove dispatcher manager from heartbeat collector failed",
 			zap.Stringer("changefeedID", e.changefeedID),
 			zap.Error(err),
 		)
@@ -933,17 +974,7 @@ func (e *DispatcherManager) close(removeChangefeed bool) {
 		return true
 	})
 
-	metrics.TableTriggerEventDispatcherGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name(), "eventDispatcher")
-	metrics.EventDispatcherGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name(), "eventDispatcher")
-	metrics.CreateDispatcherDuration.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name(), "eventDispatcher")
-	metrics.DispatcherManagerCheckpointTsGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name())
-	metrics.DispatcherManagerResolvedTsGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name())
-	metrics.DispatcherManagerCheckpointTsLagGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name())
-	metrics.DispatcherManagerResolvedTsLagGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name())
-
-	metrics.TableTriggerEventDispatcherGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name(), "redoDispatcher")
-	metrics.EventDispatcherGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name(), "redoDispatcher")
-	metrics.CreateDispatcherDuration.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name(), "redoDispatcher")
+	e.cleanMetrics()
 
 	e.closed.Store(true)
 	log.Info("event dispatcher manager closed",
@@ -954,6 +985,11 @@ func (e *DispatcherManager) close(removeChangefeed bool) {
 func (e *DispatcherManager) cleanEventDispatcher(id common.DispatcherID, schemaID int64) {
 	e.dispatcherMap.Delete(id)
 	e.schemaIDToDispatchers.Delete(schemaID, id)
+	e.currentOperatorMap.Delete(id)
+	log.Debug("delete current working remove operator",
+		zap.String("changefeedID", e.changefeedID.String()),
+		zap.String("dispatcherID", id.String()),
+	)
 	tableTriggerEventDispatcher := e.GetTableTriggerEventDispatcher()
 	if tableTriggerEventDispatcher != nil && tableTriggerEventDispatcher.GetId() == id {
 		e.SetTableTriggerEventDispatcher(nil)
@@ -975,6 +1011,7 @@ func (e *DispatcherManager) cleanMetrics() {
 	metrics.DispatcherManagerResolvedTsGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name())
 	metrics.DispatcherManagerCheckpointTsLagGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name())
 	metrics.DispatcherManagerResolvedTsLagGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name())
+	metrics.DispatcherManagerBlockStatusesChanLenGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name())
 
 	metrics.TableTriggerEventDispatcherGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name(), "redoDispatcher")
 	metrics.EventDispatcherGauge.DeleteLabelValues(e.changefeedID.Keyspace(), e.changefeedID.Name(), "redoDispatcher")

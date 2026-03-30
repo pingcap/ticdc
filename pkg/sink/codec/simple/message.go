@@ -23,6 +23,7 @@ import (
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/util"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
@@ -415,7 +416,7 @@ func (a *avroMarshaller) encodeValue4Avro(row *chunk.Row, i int, ft *types.Field
 	case mysql.TypeBit:
 		v, err := d.GetMysqlBit().ToInt(types.DefaultStmtNoWarningContext)
 		if err != nil {
-			log.Panic("invalid column value for bit", zap.Any("value", d.GetValue()), zap.Error(err))
+			log.Panic("invalid column value for bit", zap.String("value", util.RedactAny(d.GetValue())), zap.Error(err))
 		}
 		return strconv.FormatUint(v, 10), "string"
 	case mysql.TypeJSON:
@@ -440,7 +441,7 @@ func encodeValue(
 	case mysql.TypeBit:
 		v, err := d.GetMysqlBit().ToInt(types.DefaultStmtNoWarningContext)
 		if err != nil {
-			log.Panic("invalid column value for bit", zap.Any("value", value), zap.Error(err))
+			log.Panic("invalid column value for bit", zap.String("value", util.RedactAny(value)), zap.Error(err))
 		}
 		value = strconv.FormatUint(v, 10)
 	case mysql.TypeTimestamp:
@@ -459,11 +460,32 @@ func encodeValue(
 		} else {
 			value = d.GetString()
 		}
+	case mysql.TypeTiDBVectorFloat32:
+		value = d.GetVectorFloat32().String()
 	default:
 		// NOTICE: GetValue() may return some types that go sql not support, which will cause sink DML fail
 		// Make specified convert upper if you need
 		// Go sql support type ref to: https://github.com/golang/go/blob/go1.17.4/src/database/sql/driver/types.go#L236
-		value = fmt.Sprintf("%v", d.GetValue())
+		switch v := d.GetValue().(type) {
+		case int64:
+			value = strconv.FormatInt(v, 10)
+		case uint64:
+			value = strconv.FormatUint(v, 10)
+		case float32:
+			value = strconv.FormatFloat(float64(v), 'f', -1, 32)
+		case float64:
+			value = strconv.FormatFloat(v, 'f', -1, 64)
+		case string:
+			value = v
+		case []byte:
+			if mysql.HasBinaryFlag(ft.GetFlag()) {
+				value = base64.StdEncoding.EncodeToString(v)
+			} else {
+				value = string(v)
+			}
+		default:
+			value = fmt.Sprintf("%v", v)
+		}
 	}
 	return value
 }

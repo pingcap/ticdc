@@ -14,12 +14,10 @@
 package dynstream
 
 import (
-	"fmt"
 	"sync/atomic"
 	"time"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/utils/deque"
 )
 
@@ -30,20 +28,26 @@ type eventSignal[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct 
 
 type eventQueue[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 	handler H
-	// Used to reduce the block allocation in the paths' pending queue.
+	// Used to reduce the block allocation in the paths pending queue.
 	eventBlockAlloc *deque.BlockAllocator[eventWrap[A, P, T, D, H]]
 
-	// Signal queue is used to decide which path's events should be popped.
+	batchConfigRegistry *areaBatchConfigRegistry[A]
+
+	// Signal queue is used to decide which paths events should be popped.
 	signalQueue        *deque.Deque[eventSignal[A, P, T, D, H]]
 	totalPendingLength *atomic.Int64 // The total signal count in the queue.
 }
 
-func newEventQueue[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](handler H) eventQueue[A, P, T, D, H] {
+func newEventQueue[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
+	handler H,
+	batchConfigRegistry *areaBatchConfigRegistry[A],
+) eventQueue[A, P, T, D, H] {
 	return eventQueue[A, P, T, D, H]{
-		handler:            handler,
-		eventBlockAlloc:    deque.NewBlockAllocator[eventWrap[A, P, T, D, H]](32, 1024),
-		signalQueue:        deque.NewDeque(1024, deque.NewBlockAllocator[eventSignal[A, P, T, D, H]](1024, 32)),
-		totalPendingLength: &atomic.Int64{},
+		handler:             handler,
+		eventBlockAlloc:     deque.NewBlockAllocator[eventWrap[A, P, T, D, H]](32, 1024),
+		batchConfigRegistry: batchConfigRegistry,
+		signalQueue:         deque.NewDeque(1024, deque.NewBlockAllocator[eventSignal[A, P, T, D, H]](1024, 32)),
+		totalPendingLength:  &atomic.Int64{},
 	}
 }
 
@@ -98,12 +102,12 @@ func (q *eventQueue[A, P, T, D, H]) wakePath(path *pathInfo[A, P, T, D, H]) {
 	}
 }
 
-func (q *eventQueue[A, P, T, D, H]) popEvents() ([]T, *pathInfo[A, P, T, D, H]) {
+func (q *eventQueue[A, P, T, D, H]) popEvents(b *batcher[T]) ([]T, *pathInfo[A, P, T, D, H], int) {
 	for {
 		// We are going to update the signal directly, so we need the reference.
 		signal, ok := q.signalQueue.FrontRef()
 		if !ok {
-			return nil, nil
+			return nil, nil, 0
 		}
 
 		if signal.eventCount == 0 {
@@ -132,14 +136,17 @@ func (q *eventQueue[A, P, T, D, H]) popEvents() ([]T, *pathInfo[A, P, T, D, H]) 
 		firstGroup := firstEvent.eventType.DataGroup
 		firstProperty := firstEvent.eventType.Property
 
+		batchConfig := q.batchConfigRegistry.getBatchConfig(path.area)
+		b.setLimit(batchConfig)
+
 		var count int
-		batcher := path.batcher
-		batcher.addEvent(firstEvent.event, firstEvent.eventSize)
+		b.addEvent(firstEvent.event, firstEvent.eventSize)
 		path.popEvent()
 		count++
 
 		// Try to batch events with the same data group.
-		for count < signal.eventCount && !batcher.isFull() {
+		// We check isFull before append, so batch-by-bytes can exceed the limit by at most one event.
+		for count < signal.eventCount && !b.isFull() {
 			// Get the reference of the front event of the path.
 			// We don't use PopFront here because we need to keep the event in the path.
 			// Otherwise, the event may lost when the loop is break below.
@@ -151,14 +158,7 @@ func (q *eventQueue[A, P, T, D, H]) popEvents() ([]T, *pathInfo[A, P, T, D, H]) 
 				front.eventType.Property == NonBatchable {
 				break
 			}
-			// Make sure we don't exceed the hard bytes limit (best-effort).
-			// If a single event itself exceeds hardBytes, we still need to process it.
-			if batcher.config.hardBytes > 0 &&
-				batcher.nBytes > 0 &&
-				batcher.nBytes+front.eventSize > batcher.config.hardBytes {
-				break
-			}
-			batcher.addEvent(front.event, front.eventSize)
+			b.addEvent(front.event, front.eventSize)
 			path.popEvent()
 			count++
 		}
@@ -168,12 +168,7 @@ func (q *eventQueue[A, P, T, D, H]) popEvents() ([]T, *pathInfo[A, P, T, D, H]) 
 			q.signalQueue.PopFront()
 		}
 		q.totalPendingLength.Add(-int64(count))
-		events, nBytes, duration := batcher.flush()
-
-		area := fmt.Sprint(path.area)
-		metrics.DynamicStreamBatchSize.WithLabelValues(area).Observe(float64(len(events)))
-		metrics.DynamicStreamBatchBytes.WithLabelValues(area).Observe(float64(nBytes))
-		metrics.DynamicStreamBatchDuration.WithLabelValues(area).Observe(float64(duration))
-		return events, path
+		events, nBytes, _ := b.flush()
+		return events, path, nBytes
 	}
 }

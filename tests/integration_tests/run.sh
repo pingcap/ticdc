@@ -41,12 +41,19 @@ run_case() {
 	local case=$1
 	local script=$2
 	local sink_type=$3
-	echo "=================>> Running test $script using Sink-Type: $sink_type... <<================="
+	echo "=================>> Running test $case $script using Sink-Type: $sink_type... <<================="
+	local start_ts
+	local end_ts
+	local duration
+	start_ts=$(date +%s)
 	PATH="$CUR/../bin:$CUR/_utils:$PATH" \
 		LD_LIBRARY_PATH="$CUR/../bin:$CUR/_utils:$PATH" \
 		OUT_DIR=$OUT_DIR \
 		TEST_NAME=$case \
 		bash "$script" "$sink_type"
+	end_ts=$(date +%s)
+	duration=$((end_ts - start_ts))
+	echo "=================>> Finished test $case $script in ${duration}s <<================="
 }
 
 sink_type=$1

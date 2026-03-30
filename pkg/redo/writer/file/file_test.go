@@ -19,9 +19,12 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	backuppb "github.com/pingcap/kvproto/pkg/brpb"
 	"github.com/pingcap/ticdc/pkg/common"
+	pevent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/fsutil"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/redo"
@@ -39,7 +42,7 @@ func TestWriterWrite(t *testing.T) {
 
 	dir := t.TempDir()
 	cfs := []common.ChangeFeedID{
-		common.NewChangeFeedIDWithName("test-cf", common.DefaultKeyspaceNamme),
+		common.NewChangeFeedIDWithName("test-cf", common.DefaultKeyspaceName),
 		common.NewChangeFeedIDWithDisplayName(common.ChangeFeedDisplayName{
 			Keyspace: "abcd",
 			Name:     "test-cf",
@@ -47,7 +50,7 @@ func TestWriterWrite(t *testing.T) {
 	}
 
 	cf11s := []common.ChangeFeedID{
-		common.NewChangeFeedIDWithName("test-cf11", common.DefaultKeyspaceNamme),
+		common.NewChangeFeedIDWithName("test-cf11", common.DefaultKeyspaceName),
 		common.NewChangeFeedIDWithDisplayName(common.ChangeFeedDisplayName{
 			Keyspace: "abcd",
 			Name:     "test-cf11",
@@ -80,7 +83,7 @@ func TestWriterWrite(t *testing.T) {
 		require.Nil(t, err)
 		var fileName string
 		// create a .tmp file
-		if w.cfg.ChangeFeedID.Keyspace() == common.DefaultKeyspaceNamme {
+		if w.cfg.ChangeFeedID.Keyspace() == common.DefaultKeyspaceName {
 			fileName = fmt.Sprintf(redo.RedoLogFileFormatV1, w.cfg.CaptureID,
 				w.cfg.ChangeFeedID.Name(),
 				w.logType, 1, uuidGen.NewString(), redo.LogEXT) + redo.TmpEXT
@@ -102,7 +105,7 @@ func TestWriterWrite(t *testing.T) {
 		require.Nil(t, err)
 
 		// after rotate, rename to .log
-		if w.cfg.ChangeFeedID.Keyspace() == common.DefaultKeyspaceNamme {
+		if w.cfg.ChangeFeedID.Keyspace() == common.DefaultKeyspaceName {
 			fileName = fmt.Sprintf(redo.RedoLogFileFormatV1, w.cfg.CaptureID,
 				w.cfg.ChangeFeedID.Name(),
 				w.logType, 1, uuidGen.NewString(), redo.LogEXT)
@@ -116,7 +119,7 @@ func TestWriterWrite(t *testing.T) {
 		require.Nil(t, err)
 		require.Equal(t, fileName, info.Name())
 		// create a .tmp file with first eventCommitTS as name
-		if w.cfg.ChangeFeedID.Keyspace() == common.DefaultKeyspaceNamme {
+		if w.cfg.ChangeFeedID.Keyspace() == common.DefaultKeyspaceName {
 			fileName = fmt.Sprintf(redo.RedoLogFileFormatV1, w.cfg.CaptureID,
 				w.cfg.ChangeFeedID.Name(),
 				w.logType, 12, uuidGen.NewString(), redo.LogEXT) + redo.TmpEXT
@@ -133,7 +136,7 @@ func TestWriterWrite(t *testing.T) {
 		require.Nil(t, err)
 		require.False(t, w.IsRunning())
 		// safe close, rename to .log with max eventCommitTS as name
-		if w.cfg.ChangeFeedID.Keyspace() == common.DefaultKeyspaceNamme {
+		if w.cfg.ChangeFeedID.Keyspace() == common.DefaultKeyspaceName {
 			fileName = fmt.Sprintf(redo.RedoLogFileFormatV1, w.cfg.CaptureID,
 				w.cfg.ChangeFeedID.Name(),
 				w.logType, 22, uuidGen.NewString(), redo.LogEXT)
@@ -170,7 +173,7 @@ func TestWriterWrite(t *testing.T) {
 		_, err = w1.Write([]byte("tes1t11111"))
 		require.Nil(t, err)
 		// create a .tmp file
-		if w1.cfg.ChangeFeedID.Keyspace() == common.DefaultKeyspaceNamme {
+		if w1.cfg.ChangeFeedID.Keyspace() == common.DefaultKeyspaceName {
 			fileName = fmt.Sprintf(redo.RedoLogFileFormatV1, w1.cfg.CaptureID,
 				w1.cfg.ChangeFeedID.Name(),
 				w1.logType, 1, uuidGen.NewString(), redo.LogEXT) + redo.TmpEXT
@@ -400,4 +403,66 @@ func TestRotateFileWithoutFileAllocator(t *testing.T) {
 	require.Nil(t, err)
 
 	w.Close()
+}
+
+func TestRunFlushesOnBatchBoundaryAndExecutesPostFlush(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	flushIntervalInMs := int64(60 * 1000)
+	flushWorkerNum := 9
+	w, err := NewFileWriter(context.Background(), &writer.LogWriterConfig{
+		ConsistentConfig: config.ConsistentConfig{
+			FlushIntervalInMs: &flushIntervalInMs,
+			FlushWorkerNum:    &flushWorkerNum,
+		},
+		Dir:               dir,
+		CaptureID:         "cp",
+		ChangeFeedID:      common.NewChangeFeedIDWithName("test-run-batch", common.DefaultKeyspaceName),
+		MaxLogSizeInBytes: redo.DefaultMaxLogSize * redo.Megabyte,
+	}, redo.RedoRowLogFileType)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runErrCh := make(chan error, 1)
+	go func() {
+		runErrCh <- w.Run(ctx)
+	}()
+
+	postFlushCnt := atomic.NewInt64(0)
+	for i := 0; i < redo.DefaultFlushBatchSize-1; i++ {
+		ts := uint64(i + 1)
+		w.GetInputCh() <- &pevent.RedoRowEvent{
+			StartTs:  ts,
+			CommitTs: ts,
+			Callback: func() {
+				postFlushCnt.Inc()
+			},
+		}
+	}
+
+	// The callback should not be executed before the batch reaches the boundary.
+	require.Equal(t, int64(0), postFlushCnt.Load())
+	select {
+	case err := <-runErrCh:
+		require.Failf(t, "run exited unexpectedly", "run returned before cancel: %v", err)
+	default:
+	}
+
+	ts := uint64(redo.DefaultFlushBatchSize)
+	w.GetInputCh() <- &pevent.RedoRowEvent{
+		StartTs:  ts,
+		CommitTs: ts,
+		Callback: func() {
+			postFlushCnt.Inc()
+		},
+	}
+
+	require.Eventually(t, func() bool {
+		return postFlushCnt.Load() == int64(redo.DefaultFlushBatchSize)
+	}, 10*time.Second, 20*time.Millisecond)
+
+	cancel()
+	require.ErrorIs(t, <-runErrCh, context.Canceled)
+	require.NoError(t, w.Close())
 }

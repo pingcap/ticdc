@@ -25,7 +25,15 @@ import (
 )
 
 const (
-	defaultReleaseMemoryRatio     = 0.4
+	// MemoryControlForPuller is the algorithm of the memory control.
+	// It sill send pause and resume [area, path] feedback.
+	MemoryControlForPuller = 0
+	// MemoryControlForEventCollector is the algorithm of the memory control.
+	// It will only send pause and resume [path] feedback.
+	// For now, we only use it in event collector.
+	MemoryControlForEventCollector = 1
+
+	defaultReleaseMemoryRatio     = 0.6
 	defaultDeadlockDuration       = 5 * time.Second
 	defaultReleaseMemoryThreshold = 256
 )
@@ -68,7 +76,7 @@ func newAreaMemStat[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
 		feedbackChan:         feedbackChan,
 		lastSendFeedbackTime: atomic.Value{},
 		lastSizeDecreaseTime: atomic.Value{},
-		algorithm:            NewMemoryControlAlgorithm(settings.method),
+		algorithm:            NewMemoryControlAlgorithm(settings.algorithm),
 	}
 
 	res.lastAppendEventTime.Store(time.Now())
@@ -114,7 +122,7 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 		as.releaseMemory()
 	}
 
-	if as.memoryUsageRatio() >= 1 && as.settings.Load().method ==
+	if as.memoryUsageRatio() >= 1.5 && as.settings.Load().algorithm ==
 		MemoryControlForEventCollector {
 		as.releaseMemory()
 		if event.eventType.Droppable {
@@ -129,7 +137,7 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 	}
 
 	failpoint.Inject("InjectDropEvent", func() {
-		if as.settings.Load().method == MemoryControlForEventCollector {
+		if as.settings.Load().algorithm == MemoryControlForEventCollector {
 			dropEvent := handler.OnDrop(event.event)
 			if dropEvent != nil {
 				event.eventType = handler.GetType(dropEvent.(T))
@@ -151,14 +159,14 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 func (as *areaMemStat[A, P, T, D, H]) checkDeadlock() bool {
 	failpoint.Inject("InjectDeadlock", func() { failpoint.Return(true) })
 
-	if as.settings.Load().method !=
+	if as.settings.Load().algorithm !=
 		MemoryControlForEventCollector {
 		return false
 	}
 
 	hasEventComeButNotOut := time.Since(as.lastAppendEventTime.Load().(time.Time)) < defaultDeadlockDuration && time.Since(as.lastSizeDecreaseTime.Load().(time.Time)) > defaultDeadlockDuration
 
-	memoryHighWaterMark := as.memoryUsageRatio() > (1 - defaultReleaseMemoryRatio)
+	memoryHighWaterMark := as.memoryUsageRatio() > defaultReleaseMemoryRatio
 
 	return hasEventComeButNotOut && memoryHighWaterMark
 }
@@ -253,7 +261,7 @@ func (as *areaMemStat[A, P, T, D, H]) updateAreaPauseState(path *pathInfo[A, P, 
 		)
 	}
 
-	if as.settings.Load().method != MemoryControlForEventCollector {
+	if as.settings.Load().algorithm != MemoryControlForEventCollector {
 		failpoint.Inject("PauseArea", func() {
 			log.Warn("inject PauseArea")
 			sendFeedback(true)
@@ -267,7 +275,7 @@ func (as *areaMemStat[A, P, T, D, H]) updateAreaPauseState(path *pathInfo[A, P, 
 		sendFeedback(false)
 	}
 
-	if as.settings.Load().method == MemoryControlForEventCollector && as.paused.Load() {
+	if as.settings.Load().algorithm == MemoryControlForEventCollector && as.paused.Load() {
 		log.Panic("area is paused, but the algorithm is v2, this should not happen", zap.String("component", as.settings.Load().component))
 	}
 }

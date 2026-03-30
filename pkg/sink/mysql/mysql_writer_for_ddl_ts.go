@@ -14,6 +14,7 @@
 package mysql
 
 import (
+	"database/sql"
 	"fmt"
 	"strconv"
 	"strings"
@@ -109,17 +110,14 @@ func (w *Writer) SendDDLTsPre(event commonEvent.BlockEvent) error {
 	}
 
 	if len(tableIds) > 0 {
-		query := insertItemQuery(tableIds, ticdcClusterID, changefeedID, ddlTs, "0", isSyncpoint)
-		log.Debug("send ddl ts table query", zap.String("query", query))
-
-		_, err = tx.Exec(query)
+		err = w.execInsertItemBatches(tx, tableIds, ticdcClusterID, changefeedID, ddlTs, "0", isSyncpoint)
 		if err != nil {
 			log.Error("failed to write ddl ts table", zap.Error(err))
 			err2 := tx.Rollback()
 			if err2 != nil {
 				log.Error("failed to write ddl ts table", zap.Error(err2))
 			}
-			return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to write ddl ts table; Exec Failed; Query is %s", query)))
+			return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, "failed to write ddl ts table; Exec Failed"))
 		}
 	} else {
 		log.Error("table ids is empty when write ddl ts table, FIX IT", zap.Any("event", event))
@@ -185,35 +183,32 @@ func (w *Writer) SendDDLTs(event commonEvent.BlockEvent) error {
 	}
 
 	if len(tableIds) > 0 {
-		query := insertItemQuery(tableIds, ticdcClusterID, changefeedID, ddlTs, "1", isSyncpoint)
-		log.Info("send ddl ts table query", zap.String("query", query))
-
-		_, err = tx.Exec(query)
+		err = w.execInsertItemBatches(tx, tableIds, ticdcClusterID, changefeedID, ddlTs, "1", isSyncpoint)
 		if err != nil {
 			log.Error("failed to write ddl ts table", zap.Error(err))
 			err2 := tx.Rollback()
 			if err2 != nil {
 				log.Error("failed to write ddl ts table", zap.Error(err2))
 			}
-			return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to write ddl ts table; Exec Failed; Query is %s", query)))
+			return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, "failed to write ddl ts table; Exec Failed"))
 		}
 	} else {
 		log.Error("table ids is empty when write ddl ts table, FIX IT", zap.Any("event", event))
 	}
 
 	if len(dropTableIds) > 0 {
-		// drop item for this tableid
-		query := dropItemQuery(dropTableIds, ticdcClusterID, changefeedID)
-		log.Debug("send ddl ts table query", zap.String("query", query))
+		queries := dropItemQueries(dropTableIds, ticdcClusterID, changefeedID, w.maxDDLTsBatch)
+		for _, query := range queries {
+			log.Debug("send ddl ts table query", zap.String("query", query))
 
-		_, err = tx.Exec(query)
-		if err != nil {
-			log.Error("failed to delete ddl ts item ", zap.Error(err))
-			err2 := tx.Rollback()
-			if err2 != nil {
-				log.Error("failed to delete ddl ts item", zap.Error(err2))
+			if _, err = tx.Exec(query); err != nil {
+				log.Error("failed to delete ddl ts item ", zap.Error(err))
+				err2 := tx.Rollback()
+				if err2 != nil {
+					log.Error("failed to delete ddl ts item", zap.Error(err2))
+				}
+				return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to delete ddl ts item; Query is %s", query)))
 			}
-			return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to delete ddl ts item; Query is %s", query)))
 		}
 	}
 
@@ -221,16 +216,40 @@ func (w *Writer) SendDDLTs(event commonEvent.BlockEvent) error {
 	return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, "failed to write ddl ts table; Commit Fail;"))
 }
 
-func insertItemQuery(tableIds []int64, ticdcClusterID, changefeedID, ddlTs, finished, isSyncpoint string) string {
-	var builder strings.Builder
+func (w *Writer) execInsertItemBatches(
+	tx *sql.Tx,
+	tableIds []int64,
+	ticdcClusterID, changefeedID, ddlTs, finished, isSyncpoint string,
+) error {
+	if len(tableIds) == 0 {
+		return nil
+	}
+	batchSize := w.maxDDLTsBatch
+	for start := 0; start < len(tableIds); start += batchSize {
+		end := start + batchSize
+		if end > len(tableIds) {
+			end = len(tableIds)
+		}
+		query := buildInsertItemQuery(tableIds[start:end], ticdcClusterID, changefeedID, ddlTs, finished, isSyncpoint)
+		log.Debug("send ddl ts table query", zap.String("query", query))
+		if _, err := tx.Exec(query); err != nil {
+			return errors.WithMessage(err, fmt.Sprintf("failed to execute ddl ts insert chunk [%d:%d)", start, end))
+		}
+	}
+	return nil
+}
 
+func buildInsertItemQuery(tableIds []int64, ticdcClusterID, changefeedID, ddlTs, finished, isSyncpoint string) string {
+	var builder strings.Builder
 	builder.WriteString("INSERT INTO ")
 	builder.WriteString(filter.TiCDCSystemSchema)
 	builder.WriteString(".")
 	builder.WriteString(filter.DDLTsTable)
 	builder.WriteString(" (ticdc_cluster_id, changefeed, ddl_ts, table_id, finished, is_syncpoint) VALUES ")
-
 	for idx, tableId := range tableIds {
+		if idx > 0 {
+			builder.WriteString(", ")
+		}
 		builder.WriteString("('")
 		builder.WriteString(ticdcClusterID)
 		builder.WriteString("', '")
@@ -244,38 +263,43 @@ func insertItemQuery(tableIds []int64, ticdcClusterID, changefeedID, ddlTs, fini
 		builder.WriteString(", ")
 		builder.WriteString(isSyncpoint)
 		builder.WriteString(")")
-		if idx < len(tableIds)-1 {
-			builder.WriteString(", ")
-		}
 	}
 	builder.WriteString(" ON DUPLICATE KEY UPDATE finished=VALUES(finished), ddl_ts=VALUES(ddl_ts), is_syncpoint=VALUES(is_syncpoint);")
-
 	return builder.String()
 }
 
-func dropItemQuery(dropTableIds []int64, ticdcClusterID string, changefeedID string) string {
-	var builder strings.Builder
-	builder.WriteString("DELETE FROM ")
-	builder.WriteString(filter.TiCDCSystemSchema)
-	builder.WriteString(".")
-	builder.WriteString(filter.DDLTsTable)
-	builder.WriteString(" WHERE (ticdc_cluster_id, changefeed, table_id) IN (")
-
-	for idx, tableId := range dropTableIds {
-		builder.WriteString("('")
-		builder.WriteString(ticdcClusterID)
-		builder.WriteString("', '")
-		builder.WriteString(changefeedID)
-		builder.WriteString("', ")
-		builder.WriteString(strconv.FormatInt(tableId, 10))
-		builder.WriteString(")")
-		if idx < len(dropTableIds)-1 {
-			builder.WriteString(", ")
+func dropItemQueries(dropTableIds []int64, ticdcClusterID string, changefeedID string, maxBatch int) []string {
+	result := make([]string, 0, (len(dropTableIds)+maxBatch-1)/maxBatch)
+	for start := 0; start < len(dropTableIds); start += maxBatch {
+		end := start + maxBatch
+		if end > len(dropTableIds) {
+			end = len(dropTableIds)
 		}
+		var builder strings.Builder
+		builder.WriteString("DELETE FROM ")
+		builder.WriteString(filter.TiCDCSystemSchema)
+		builder.WriteString(".")
+		builder.WriteString(filter.DDLTsTable)
+		builder.WriteString(" WHERE (ticdc_cluster_id, changefeed, table_id) IN (")
+
+		for idx, tableId := range dropTableIds[start:end] {
+			if idx > 0 {
+				builder.WriteString(", ")
+			}
+			builder.WriteString("('")
+			builder.WriteString(ticdcClusterID)
+			builder.WriteString("', '")
+			builder.WriteString(changefeedID)
+			builder.WriteString("', ")
+			builder.WriteString(strconv.FormatInt(tableId, 10))
+			builder.WriteString(")")
+		}
+
+		builder.WriteString(")")
+		result = append(result, builder.String())
 	}
 
-	builder.WriteString(")")
-	return builder.String()
+	return result
 }
 
 // GetTableRecoveryInfo queries ddl_ts_v1 to determine recovery information for the given tables.
@@ -479,6 +503,9 @@ func (w *Writer) RemoveDDLTsItem() error {
 	_, err = tx.Exec(query)
 	if err != nil {
 		if errors.IsTableNotExistsErr(err) {
+			if rbErr := tx.Rollback(); rbErr != nil {
+				log.Error("failed to rollback", zap.Error(rbErr))
+			}
 			// If this table is not existed, this means the changefeed has not table, so we just return nil.
 			log.Info("ddl ts table is not found when RemoveDDLTsItem",
 				zap.String("keyspace", w.ChangefeedID.Keyspace()),

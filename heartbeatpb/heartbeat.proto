@@ -27,8 +27,18 @@ message Watermark {
 }
 
 enum Action {
+    // Write means the selected writer dispatcher executes the barrier event
+    // (DDL/syncpoint) to downstream.
     Write = 0;
+    // Pass means influenced dispatchers mark this barrier as passed after the
+    // writer has finished Write for the same (commitTs, isSyncPoint).
     Pass = 1;
+    // Flush means influenced dispatchers flush all DML before this barrier and
+    // keep the pending barrier event for the later Write/Pass steps.
+    // It is required for storage sink when split-table is enabled: one table may have multiple
+    // dispatchers on different nodes, and every dispatcher must flush pre-barrier
+    // DML first to prevent it from being reordered after the writer executes DDL.
+    Flush = 2;
 }
 
 message DispatcherAction {
@@ -96,6 +106,14 @@ enum ScheduleAction {
     Remove = 1;
 }
 
+enum OperatorType {
+    O_Add = 0;
+    O_Remove = 1;
+    O_Move = 2;
+    O_Split = 3;
+    O_Merge = 4;
+}
+
 message DispatcherConfig {
     TableSpan span = 1;
     uint64 startTs = 2;
@@ -113,6 +131,7 @@ message ScheduleDispatcherRequest {
     ChangefeedID changefeedID = 1;
     DispatcherConfig config = 2;
     ScheduleAction scheduleAction = 3;
+    OperatorType operatorType = 4;
 }
 
 message MergeDispatcherRequest {
@@ -185,6 +204,7 @@ message MaintainerBootstrapResponse {
     // redo_checkpoint_ts is similar to checkpoint_ts, for nodes with a table trigger redo dispatcher.
     // It will be used when redo enable.
     uint64 redo_checkpoint_ts = 5;
+    repeated ScheduleDispatcherRequest operators = 6;
 }
 
 message MaintainerPostBootstrapRequest {
@@ -332,4 +352,48 @@ message LogCoordinatorResolvedTsRequest {
 message LogCoordinatorResolvedTsResponse {
     ChangefeedID changefeedID = 1;
     uint64 resolvedTs = 2;
+}
+
+enum ChecksumState {
+    // UNINITIALIZED is the default value when the field is absent in proto3.
+    // It must block checkpoint advancement until the checksum is explicitly verified as OK.
+    UNINITIALIZED = 0;
+    // MISMATCH means the checksum comparison failed. We need to block forwarding checkpointTs.
+    MISMATCH = 1;
+    // MATCH means the checksum comparison is successful. We can forward checkpointTs.
+    MATCH = 2;
+}
+
+message ChecksumMeta {
+    ChecksumState state = 1;
+    // checksumStateSeq is a monotonic version for checksumState, 
+    // used to discard out-of-order meta info.
+    uint64 checksumStateSeq = 2;
+}
+
+message DispatcherSetChecksum {
+    uint64 count = 1;
+    uint64 xorHigh = 2;
+    uint64 xorLow = 3;
+    uint64 sumHigh = 4;
+    uint64 sumLow = 5;
+}
+
+// DispatcherSetChecksumAckResponse is sent from dispatcherManager to maintainer
+// to ack the set checksum request.
+message DispatcherSetChecksumAckResponse {
+    ChangefeedID changefeedID = 1;
+    uint64 epoch = 2;
+    int64 mode = 3;
+    uint64 seq = 4;
+}
+
+// DispatcherSetChecksumUpdateRequest is sent from maintainer to dispatcherManager
+// to update the set checksum.
+message DispatcherSetChecksumUpdateRequest {
+    ChangefeedID changefeedID = 1;
+    uint64 epoch = 2;
+    int64 mode = 3;
+    uint64 seq = 4;
+    DispatcherSetChecksum checksum = 5;
 }

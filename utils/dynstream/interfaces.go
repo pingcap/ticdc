@@ -119,6 +119,10 @@ type Handler[A Area, P Path, T Event, D Dest] interface {
 	// Used in deciding the handle priority of the events from different areas.
 	GetArea(path P, dest D) A
 
+	// GetMetricLabel returns the prometheus "module" label value for dynamic stream batch metrics.
+	// Returning an empty string uses the default label (fmt.Sprint(area)).
+	GetMetricLabel(dest D) string
+
 	// GetTimestamp Get the timestamp of the event. This method is called once for each event.
 	// Events are processed in the order of the timestamps.
 	// Return zero by default implementation. In this case, the events are processed
@@ -207,6 +211,8 @@ type Option struct {
 	ReportInterval    time.Duration // The interval of reporting the status of stream, the status is used by the scheduler.
 
 	StreamCount int // The count of streams. I.e. the count of goroutines to handle events. By default 0, means runtime.NumCPU().
+	BatchCount  int // The batch count limit of handling events. <= 0 means 1.
+	BatchBytes  int // The batch bytes limit of handling events. < 0 means 0.
 
 	EnableMemoryControl bool // Enable the memory control. By default false.
 
@@ -220,6 +226,8 @@ func NewOption() Option {
 		SchedulerInterval: DefaultSchedulerInterval,
 		ReportInterval:    DefaultReportInterval,
 		StreamCount:       0,
+		BatchCount:        1,
+		BatchBytes:        0,
 		UseBuffer:         false,
 	}
 }
@@ -231,6 +239,12 @@ func (o *Option) fix() {
 	if o.StreamCount == 0 {
 		o.StreamCount = runtime.NumCPU()
 	}
+	if o.BatchCount <= 0 {
+		o.BatchCount = 1
+	}
+	if o.BatchBytes < 0 {
+		o.BatchBytes = 0
+	}
 }
 
 type AreaSettings struct {
@@ -241,26 +255,10 @@ type AreaSettings struct {
 
 	// Remove it when we determine the v2 is working well.
 	// The algorithm of the memory control.
-	method memoryControlType
+	algorithm int
 
-	// control how to control events
+	// control how to batch events
 	batchConfig batchConfig
-}
-
-func NewAreaSettingsWithMaxPendingSize(
-	quota uint64, method memoryControlType, component string,
-	batchConfig batchConfig,
-) AreaSettings {
-	// The path max pending size is at least 1MB.
-	pathMaxPendingSize := max(quota/10, 1*1024*1024)
-	return AreaSettings{
-		component:          component,
-		feedbackInterval:   DefaultFeedbackInterval,
-		maxPendingSize:     quota,
-		pathMaxPendingSize: pathMaxPendingSize,
-		method:             method,
-		batchConfig:        batchConfig,
-	}
 }
 
 func (s *AreaSettings) fix() {
@@ -271,6 +269,29 @@ func (s *AreaSettings) fix() {
 	if s.feedbackInterval == 0 {
 		s.feedbackInterval = DefaultFeedbackInterval
 	}
+}
+
+func NewAreaSettingsWithMaxPendingSize(
+	quota uint64, algorithm int, component string,
+) AreaSettings {
+	// The path max pending size is at least 1MB.
+	pathMaxPendingSize := max(quota/10, 1*1024*1024)
+	return AreaSettings{
+		component:          component,
+		feedbackInterval:   DefaultFeedbackInterval,
+		maxPendingSize:     quota,
+		pathMaxPendingSize: pathMaxPendingSize,
+		algorithm:          algorithm,
+		batchConfig:        batchConfig{},
+	}
+}
+
+func NewAreaSettingsWithMaxPendingSizeAndBatchConfig(
+	quota uint64, algorithm int, component string, batchCount int, batchBytes int,
+) AreaSettings {
+	s := NewAreaSettingsWithMaxPendingSize(quota, algorithm, component)
+	s.batchConfig = NewBatchConfig(batchCount, batchBytes)
+	return s
 }
 
 type FeedbackType int
@@ -309,12 +330,15 @@ func (f *Feedback[A, P, D]) String() string {
 	return fmt.Sprintf("DynamicStream Feedback{Area: %v, Path: %v, FeedbackType: %s}", f.Area, f.Path, f.FeedbackType.String())
 }
 
-func NewParallelDynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](handler H, option ...Option) DynamicStream[A, P, T, D, H] {
+func NewParallelDynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
+	component string,
+	handler H, option ...Option,
+) DynamicStream[A, P, T, D, H] {
 	opt := NewOption()
 	if len(option) > 0 {
 		opt = option[0]
 	}
-	return newParallelDynamicStream(handler, opt)
+	return newParallelDynamicStream(component, handler, opt)
 }
 
 type Metrics[A Area, P Path] struct {

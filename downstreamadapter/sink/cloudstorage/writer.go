@@ -45,7 +45,7 @@ type writer struct {
 	storage      storage.ExternalStorage
 	config       *cloudstorage.Config
 	// toBeFlushedCh contains a set of batchedTask waiting to be flushed to cloud storage.
-	toBeFlushedCh          chan batchedTask
+	toBeFlushedCh          chan writerTask
 	inputCh                *chann.DrainableChann[eventFragment]
 	isClosed               uint64
 	statistics             *pmetrics.Statistics
@@ -56,6 +56,19 @@ type writer struct {
 	metricFlushDuration    prometheus.Observer
 	metricsWorkerBusyRatio prometheus.Counter
 }
+
+type writerTask struct {
+	batch       batchedTask
+	marker      *drainMarker
+	flushReason string
+}
+
+const (
+	flushReasonInterval   = "interval"
+	flushReasonFileSize   = "fileSize"
+	flushReasonDrain      = "drain"
+	flushReasonInputClose = "inputClose"
+)
 
 func newWriter(
 	id int,
@@ -72,7 +85,7 @@ func newWriter(
 		storage:           storage,
 		config:            config,
 		inputCh:           inputCh,
-		toBeFlushedCh:     make(chan batchedTask, 64),
+		toBeFlushedCh:     make(chan writerTask, 64),
 		statistics:        statistics,
 		filePathGenerator: cloudstorage.NewFilePathGenerator(changefeedID, config, storage, extension),
 		metricWriteBytes: metrics.CloudStorageWriteBytesGauge.
@@ -123,34 +136,66 @@ func (d *writer) flushMessages(ctx context.Context) error {
 		case <-overseerTicker.C:
 			d.metricsWorkerBusyRatio.Add(flushTimeSlice.Seconds())
 			flushTimeSlice = 0
-		case batchedTask := <-d.toBeFlushedCh:
+		case task := <-d.toBeFlushedCh:
 			if atomic.LoadUint64(&d.isClosed) == 1 {
 				return nil
 			}
+			if task.marker != nil {
+				log.Info("storage sink writer observed drain marker",
+					zap.String("keyspace", d.changeFeedID.Keyspace()),
+					zap.String("changefeed", d.changeFeedID.ID().String()),
+					zap.Int("workerID", d.id),
+					zap.String("dispatcher", task.marker.dispatcherID.String()),
+					zap.Uint64("commitTs", task.marker.commitTs),
+					zap.String("flushReason", task.flushReason))
+				task.marker.done(nil)
+				continue
+			}
+			batchedTask := task.batch
+			if len(batchedTask.batch) == 0 {
+				continue
+			}
+			log.Info("storage sink writer start flush task",
+				zap.String("keyspace", d.changeFeedID.Keyspace()),
+				zap.String("changefeed", d.changeFeedID.ID().String()),
+				zap.Int("workerID", d.id),
+				zap.String("flushReason", task.flushReason))
 			start := time.Now()
-			for table, task := range batchedTask.batch {
-				if len(task.msgs) == 0 {
+			for table, tableTask := range batchedTask.batch {
+				if len(tableTask.msgs) == 0 {
 					continue
 				}
+				log.Info("storage sink writer flush table task",
+					zap.String("keyspace", d.changeFeedID.Keyspace()),
+					zap.String("changefeed", d.changeFeedID.ID().String()),
+					zap.Int("workerID", d.id),
+					zap.String("flushReason", task.flushReason),
+					zap.String("schema", table.TableNameWithPhysicTableID.Schema),
+					zap.String("table", table.TableNameWithPhysicTableID.Table),
+					zap.Int64("tableID", table.TableNameWithPhysicTableID.TableID),
+					zap.Uint64("tableVersion", table.TableInfoVersion),
+					zap.Int("messageCount", len(tableTask.msgs)),
+					zap.Uint64("taskBytes", tableTask.size))
 
 				// generate scheme.json file before generating the first data file if necessary
-				hasNewerSchemaVersion, err := d.filePathGenerator.CheckOrWriteSchema(ctx, table, task.tableInfo)
+				hasNewerSchemaVersion, err := d.filePathGenerator.CheckOrWriteSchema(ctx, table, tableTask.tableInfo)
 				if err != nil {
 					log.Error("failed to write schema file to external storage",
-						zap.Int("workerID", d.id),
 						zap.String("keyspace", d.changeFeedID.Keyspace()),
-						zap.Stringer("changefeed", d.changeFeedID.ID()),
+						zap.String("changefeed", d.changeFeedID.ID().String()),
+						zap.Int("workerID", d.id),
 						zap.Error(err))
 					return errors.Trace(err)
 				}
 				// It is possible that a DML event is sent after a DDL event during dispatcher scheduling.
 				// We need to ignore such DML events, as they belong to a stale schema version.
 				if hasNewerSchemaVersion {
-					d.ignoreTableTask(task)
+					d.ignoreTableTask(tableTask)
 					log.Warn("ignore messages belonging to an old schema version",
-						zap.Int("workerID", d.id),
 						zap.String("keyspace", d.changeFeedID.Keyspace()),
-						zap.Stringer("changefeed", d.changeFeedID.ID()),
+						zap.String("changefeed", d.changeFeedID.ID().String()),
+						zap.Int("workerID", d.id),
+						zap.String("flushReason", task.flushReason),
 						zap.String("schema", table.TableNameWithPhysicTableID.Schema),
 						zap.String("table", table.TableNameWithPhysicTableID.Table),
 						zap.Uint64("version", table.TableInfoVersion))
@@ -165,33 +210,25 @@ func (d *writer) flushMessages(ctx context.Context) error {
 				dataFilePath, err := d.filePathGenerator.GenerateDataFilePath(ctx, table, date)
 				if err != nil {
 					log.Error("failed to generate data file path",
-						zap.Int("workerID", d.id),
 						zap.String("keyspace", d.changeFeedID.Keyspace()),
-						zap.Stringer("changefeed", d.changeFeedID.ID()),
+						zap.String("changefeed", d.changeFeedID.ID().String()),
+						zap.Int("workerID", d.id),
 						zap.Error(err))
 					return errors.Trace(err)
 				}
 				indexFilePath := d.filePathGenerator.GenerateIndexFilePath(table, date)
 
 				// first write the data file to external storage.
-				err = d.writeDataFile(ctx, dataFilePath, indexFilePath, task)
+				err = d.writeDataFile(ctx, table, dataFilePath, indexFilePath, tableTask)
 				if err != nil {
 					log.Error("failed to write data file to external storage",
-						zap.Int("workerID", d.id),
 						zap.String("keyspace", d.changeFeedID.Keyspace()),
-						zap.Stringer("changefeed", d.changeFeedID.ID()),
+						zap.String("changefeed", d.changeFeedID.ID().String()),
+						zap.Int("workerID", d.id),
 						zap.String("path", dataFilePath),
 						zap.Error(err))
 					return errors.Trace(err)
 				}
-
-				log.Debug("write file to storage success", zap.Int("workerID", d.id),
-					zap.String("keyspace", d.changeFeedID.Keyspace()),
-					zap.Stringer("changefeed", d.changeFeedID.ID()),
-					zap.String("schema", table.TableNameWithPhysicTableID.Schema),
-					zap.String("table", table.TableNameWithPhysicTableID.Table),
-					zap.String("path", dataFilePath),
-				)
 			}
 			flushTimeSlice += time.Since(start)
 		}
@@ -213,7 +250,12 @@ func (d *writer) ignoreTableTask(task *singleTableTask) {
 	}
 }
 
-func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath string, task *singleTableTask) error {
+func (d *writer) writeDataFile(
+	ctx context.Context,
+	table cloudstorage.VersionedTableName,
+	dataFilePath, indexFilePath string,
+	task *singleTableTask,
+) error {
 	var callbacks []func()
 	buf := bytes.NewBuffer(make([]byte, 0, task.size))
 	rowsCnt := 0
@@ -249,11 +291,12 @@ func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath 
 		// We have to wait the writer to close to complete the upload
 		// If failed to close writer, some DMLs may not be upload successfully
 		if inErr = writer.Close(ctx); inErr != nil {
-			log.Error("failed to close writer", zap.Error(inErr),
+			log.Error("failed to close writer",
+				zap.String("keyspace", d.changeFeedID.Keyspace()),
+				zap.String("changefeed", d.changeFeedID.ID().String()),
 				zap.Int("workerID", d.id),
 				zap.Any("table", task.tableInfo.TableName),
-				zap.String("keyspace", d.changeFeedID.Keyspace()),
-				zap.Stringer("changefeed", d.changeFeedID.ID()))
+				zap.Error(inErr))
 			return 0, 0, inErr
 		}
 
@@ -271,13 +314,24 @@ func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath 
 	err := d.writeIndexFile(ctx, indexFilePath, path.Base(dataFilePath)+"\n")
 	if err != nil {
 		log.Error("failed to write index file to external storage",
-			zap.Int("workerID", d.id),
 			zap.String("keyspace", d.changeFeedID.Keyspace()),
-			zap.Stringer("changefeed", d.changeFeedID.ID()),
+			zap.String("changefeed", d.changeFeedID.ID().String()),
+			zap.Int("workerID", d.id),
 			zap.String("path", indexFilePath),
 			zap.Error(err))
 		return errors.Trace(err)
 	}
+
+	log.Info("storage sink persisted dml file",
+		zap.String("keyspace", d.changeFeedID.Keyspace()),
+		zap.String("changefeed", d.changeFeedID.ID().String()),
+		zap.String("schema", table.TableNameWithPhysicTableID.Schema),
+		zap.String("table", table.TableNameWithPhysicTableID.Table),
+		zap.Int64("tableID", table.TableNameWithPhysicTableID.TableID),
+		zap.Uint64("tableVersion", table.TableInfoVersion),
+		zap.String("dispatcher", table.DispatcherID.String()),
+		zap.String("dataPath", dataFilePath),
+		zap.String("indexPath", indexFilePath))
 
 	for _, cb := range callbacks {
 		if cb != nil {
@@ -314,15 +368,65 @@ func (d *writer) genAndDispatchTask(ctx context.Context,
 			select {
 			case <-ctx.Done():
 				return errors.Trace(ctx.Err())
-			case d.toBeFlushedCh <- batchedTask:
-				log.Debug("flush task is emitted successfully when flush interval exceeds",
-					zap.Int("tablesLength", len(batchedTask.batch)))
+			case d.toBeFlushedCh <- writerTask{batch: batchedTask, flushReason: flushReasonInterval}:
+				length := len(batchedTask.batch)
+				if length > 0 {
+					log.Info("flush task is emitted successfully when flush interval exceeds",
+						zap.String("keyspace", d.changeFeedID.Keyspace()),
+						zap.String("changefeed", d.changeFeedID.ID().String()),
+						zap.Int("workerID", d.id),
+						zap.Int("tableCount", length))
+				}
 				batchedTask = newBatchedTask()
 			default:
 			}
 		case frag, ok := <-ch.Out():
 			if !ok || atomic.LoadUint64(&d.isClosed) == 1 {
-				return nil
+				if len(batchedTask.batch) == 0 {
+					return nil
+				}
+				select {
+				case <-ctx.Done():
+					return errors.Trace(ctx.Err())
+				case d.toBeFlushedCh <- writerTask{batch: batchedTask, flushReason: flushReasonInputClose}:
+					log.Info("flush task is emitted when writer input channel closes",
+						zap.String("keyspace", d.changeFeedID.Keyspace()),
+						zap.String("changefeed", d.changeFeedID.ID().String()),
+						zap.Int("workerID", d.id),
+						zap.Int("tableCount", len(batchedTask.batch)))
+					return nil
+				}
+			}
+			if frag.isDrain() {
+				// Drain marker must be placed behind pending batchedTask so the caller
+				// observes completion only after all prior DML flush tasks are handled.
+				if len(batchedTask.batch) > 0 {
+					select {
+					case <-ctx.Done():
+						return errors.Trace(ctx.Err())
+					case d.toBeFlushedCh <- writerTask{batch: batchedTask, flushReason: flushReasonDrain}:
+						log.Info("flush task is emitted for drain marker",
+							zap.String("keyspace", d.changeFeedID.Keyspace()),
+							zap.String("changefeed", d.changeFeedID.ID().String()),
+							zap.Int("workerID", d.id),
+							zap.Int("tableCount", len(batchedTask.batch)),
+							zap.String("dispatcher", frag.dispatcherID.String()),
+							zap.Uint64("drainCommitTs", frag.marker.commitTs))
+						batchedTask = newBatchedTask()
+					}
+				}
+				select {
+				case <-ctx.Done():
+					return errors.Trace(ctx.Err())
+				case d.toBeFlushedCh <- writerTask{marker: frag.marker, flushReason: flushReasonDrain}:
+					log.Info("drain marker is emitted to writer flush queue",
+						zap.String("keyspace", d.changeFeedID.Keyspace()),
+						zap.String("changefeed", d.changeFeedID.ID().String()),
+						zap.Int("workerID", d.id),
+						zap.String("dispatcher", frag.dispatcherID.String()),
+						zap.Uint64("drainCommitTs", frag.marker.commitTs))
+				}
+				continue
 			}
 			batchedTask.handleSingleTableEvent(frag)
 			// if the file size exceeds the upper limit, emit the flush task containing the table
@@ -333,10 +437,15 @@ func (d *writer) genAndDispatchTask(ctx context.Context,
 				select {
 				case <-ctx.Done():
 					return errors.Trace(ctx.Err())
-				case d.toBeFlushedCh <- task:
-					log.Debug("flush task is emitted successfully when file size exceeds",
+				case d.toBeFlushedCh <- writerTask{batch: task, flushReason: flushReasonFileSize}:
+					log.Info("flush task is emitted successfully when file size exceeds",
+						zap.String("keyspace", d.changeFeedID.Keyspace()),
+						zap.String("changefeed", d.changeFeedID.ID().String()),
+						zap.Int("workerID", d.id),
 						zap.Any("table", table),
-						zap.Int("eventsLenth", len(task.batch[table].msgs)))
+						zap.Int("eventsLenth", len(task.batch[table].msgs)),
+						zap.Uint64("tableTaskBytes", task.batch[table].size),
+						zap.Uint64("fileSizeLimit", uint64(d.config.FileSize)))
 				}
 			}
 		}

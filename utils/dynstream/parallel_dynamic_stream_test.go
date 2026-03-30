@@ -28,7 +28,7 @@ import (
 func TestParallelDynamicStreamBasic(t *testing.T) {
 	handler := &mockHandler{}
 	option := Option{StreamCount: 4}
-	stream := NewParallelDynamicStream(handler, option)
+	stream := NewParallelDynamicStream("test", handler, option)
 	stream.Start()
 	defer stream.Close()
 
@@ -52,7 +52,7 @@ func TestParallelDynamicStreamBasic(t *testing.T) {
 func TestParallelDynamicStreamPush(t *testing.T) {
 	handler := &mockHandler{}
 	option := Option{StreamCount: 4}
-	stream := newParallelDynamicStream(handler, option)
+	stream := newParallelDynamicStream("test", handler, option)
 	stream.Start()
 	defer stream.Close()
 
@@ -75,7 +75,7 @@ func TestParallelDynamicStreamPush(t *testing.T) {
 func TestParallelDynamicStreamMetrics(t *testing.T) {
 	handler := &mockHandler{}
 	option := Option{StreamCount: 4}
-	stream := newParallelDynamicStream(handler, option)
+	stream := newParallelDynamicStream("test", handler, option)
 
 	stream.Start()
 	defer stream.Close()
@@ -95,13 +95,43 @@ func TestParallelDynamicStreamMetrics(t *testing.T) {
 	require.Equal(t, 1, metrics.RemovePath)
 }
 
+func TestAddPathKeepsDefaultBatchConfig(t *testing.T) {
+	handler := &mockHandler{}
+	stream := newParallelDynamicStream("test", handler, Option{
+		StreamCount: 1,
+		BatchCount:  4,
+	})
+	defer stream.Close()
+
+	require.NoError(t, stream.AddPath("path1", "dest1"))
+	require.Equal(t, NewBatchConfig(4, 0), stream.batchConfigRegistry.getBatchConfig(0))
+
+	// first-add wins: later explicit area batch config should not override an existing area
+	settings := NewAreaSettingsWithMaxPendingSizeAndBatchConfig(64*1024*1024, 0, "test", 1, 0)
+	require.NoError(t, stream.AddPath("path2", "dest2", settings))
+	require.Equal(t, NewBatchConfig(4, 0), stream.batchConfigRegistry.getBatchConfig(0))
+}
+
+func TestAddPathWithAreaSettingsKeepsDefaultBatchConfig(t *testing.T) {
+	handler := &mockHandler{}
+	stream := newParallelDynamicStream("test", handler, Option{
+		StreamCount: 1,
+		BatchCount:  4,
+	})
+	defer stream.Close()
+
+	settings := NewAreaSettingsWithMaxPendingSize(64*1024*1024, 0, "test")
+	require.NoError(t, stream.AddPath("path1", "dest1", settings))
+	require.Equal(t, NewBatchConfig(4, 0), stream.batchConfigRegistry.getBatchConfig(0))
+}
+
 func TestParallelDynamicStreamMemoryControl(t *testing.T) {
 	handler := &mockHandler{}
 	option := Option{
 		StreamCount:         4,
 		EnableMemoryControl: true,
 	}
-	stream := newParallelDynamicStream(handler, option)
+	stream := newParallelDynamicStream("test", handler, option)
 
 	stream.Start()
 	defer stream.Close()
@@ -161,7 +191,7 @@ func TestParallelDynamicStreamStress(t *testing.T) {
 	for i := 0; i < streamCount; i++ {
 		handlers[i] = &mockHandler{}
 		option := Option{StreamCount: 4}
-		streams[i] = newParallelDynamicStream(handlers[i], option)
+		streams[i] = newParallelDynamicStream("test", handlers[i], option)
 		streams[i].Start()
 	}
 
@@ -272,7 +302,7 @@ func TestParallelDynamicStreamConcurrentClose(t *testing.T) {
 		t.Run(fmt.Sprintf("iteration_%d", iter), func(t *testing.T) {
 			handler := &mockHandler{}
 			option := Option{StreamCount: 4}
-			stream := newParallelDynamicStream(handler, option)
+			stream := newParallelDynamicStream("test", handler, option)
 			stream.Start()
 
 			// Add some initial paths

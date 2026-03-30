@@ -19,11 +19,27 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestBatchEventsBySize(t *testing.T) {
-	handler := mockHandler{}
-	eq := newEventQueue(&handler)
+func TestBatcherSetLimit(t *testing.T) {
+	b := newBatcher[*mockEvent](NewBatchConfig(4, 0))
+	b.addEvent(&mockEvent{value: 1}, 16)
+	require.Equal(t, 1, len(b.buf))
+	require.Equal(t, 16, b.nBytes)
 
-	path := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", nil, newBatcher[*mockEvent](NewBatchConfig(10, 12)))
+	b.setLimit(NewBatchConfig(8, 64))
+	require.Equal(t, 0, len(b.buf))
+	require.Equal(t, 0, b.nBytes)
+	require.Equal(t, 8, b.config.count)
+	require.Equal(t, 64, b.config.bytes)
+}
+
+func TestBatchByBytes(t *testing.T) {
+	handler := mockHandler{}
+	registry := newAreaBatchConfigRegistry[int](newDefaultBatchConfig())
+	registry.onAddPath(0, batchConfig{count: 10, bytes: 12})
+	eq := newEventQueue(&handler, registry)
+	b := newDefaultBatcher[*mockEvent]()
+
+	path := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", "test", nil)
 	eq.initPath(path)
 
 	for i := 1; i <= 4; i++ {
@@ -38,27 +54,24 @@ func TestBatchEventsBySize(t *testing.T) {
 		})
 	}
 
-	events, _ := eq.popEvents()
+	events, _, _ := eq.popEvents(b)
 	require.Len(t, events, 3)
 	require.Equal(t, 1, events[0].value)
 	require.Equal(t, 2, events[1].value)
 	require.Equal(t, 3, events[2].value)
 	require.Equal(t, int64(1), eq.totalPendingLength.Load())
 
-	events, _ = eq.popEvents()
+	events, _, _ = eq.popEvents(b)
 	require.Len(t, events, 1)
 	require.Equal(t, 4, events[0].value)
 	require.Equal(t, int64(0), eq.totalPendingLength.Load())
-}
 
-func TestBatchEventsBySize_NotExceedHardBytes(t *testing.T) {
-	handler := mockHandler{}
-	eq := newEventQueue(&handler)
-
-	path := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", nil, newBatcher[*mockEvent](NewBatchConfig(10, 12)))
+	registry = newAreaBatchConfigRegistry[int](newDefaultBatchConfig())
+	registry.onAddPath(0, batchConfig{count: 10, bytes: 12})
+	eq = newEventQueue(&handler, registry)
+	path = newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", "test", nil)
 	eq.initPath(path)
-
-	for i := 1; i <= 3; i++ {
+	for i := 1; i <= 4; i++ {
 		eq.appendEvent(eventWrap[int, string, *mockEvent, any, *mockHandler]{
 			pathInfo:  path,
 			event:     &mockEvent{value: i},
@@ -69,63 +82,82 @@ func TestBatchEventsBySize_NotExceedHardBytes(t *testing.T) {
 			},
 		})
 	}
-
-	events, _ := eq.popEvents()
-	require.Len(t, events, 2)
+	events, _, _ = eq.popEvents(b)
+	require.Len(t, events, 3)
 	require.Equal(t, int64(1), eq.totalPendingLength.Load())
 
-	events, _ = eq.popEvents()
+	events, _, _ = eq.popEvents(b)
 	require.Len(t, events, 1)
 	require.Equal(t, int64(0), eq.totalPendingLength.Load())
 }
 
-func TestBatcherIsFull_Empty(t *testing.T) {
-	b := newBatcher[int](NewBatchConfig(3, 0))
-	require.False(t, b.isFull())
-}
+func TestBatchByHardCount(t *testing.T) {
+	handler := mockHandler{}
+	registry := newAreaBatchConfigRegistry[int](newDefaultBatchConfig())
+	registry.onAddPath(0, batchConfig{count: 3, bytes: 100})
+	eq := newEventQueue(&handler, registry)
+	b := newDefaultBatcher[*mockEvent]()
 
-func TestBatcherIsFull_CountOnly(t *testing.T) {
-	b := newBatcher[int](NewBatchConfig(3, 0))
+	path := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", "test", nil)
+	eq.initPath(path)
 
-	b.addEvent(1, 1)
-	require.False(t, b.isFull())
-	b.addEvent(2, 1)
-	require.False(t, b.isFull())
-	b.addEvent(3, 1)
-	require.True(t, b.isFull())
-}
-
-func TestBatcherIsFull_HardBytesLimit(t *testing.T) {
-	b := newBatcher[int](NewBatchConfig(10, 12))
-
-	b.addEvent(1, 4)
-	require.False(t, b.isFull())
-	b.addEvent(2, 4)
-	require.False(t, b.isFull())
-	b.addEvent(3, 4)
-	require.True(t, b.isFull())
-}
-
-func TestBatcherIsFull_HardBytesEnabled_SoftCountNotHardLimit(t *testing.T) {
-	b := newBatcher[int](NewBatchConfig(3, 100))
-
-	for i := 0; i < 9; i++ {
-		b.addEvent(i, 10)
+	for i := 1; i <= 7; i++ {
+		eq.appendEvent(eventWrap[int, string, *mockEvent, any, *mockHandler]{
+			pathInfo:  path,
+			event:     &mockEvent{value: i},
+			eventSize: 10,
+			eventType: EventType{
+				DataGroup: 1,
+				Property:  BatchableData,
+			},
+		})
 	}
-	require.False(t, b.isFull())
 
-	b.addEvent(9, 10)
-	require.True(t, b.isFull())
+	events, _, _ := eq.popEvents(b)
+	require.Len(t, events, 6)
+	require.Equal(t, int64(1), eq.totalPendingLength.Load())
+
+	events, _, _ = eq.popEvents(b)
+	require.Len(t, events, 1)
+	require.Equal(t, int64(0), eq.totalPendingLength.Load())
 }
 
-func TestBatcherIsFull_ProtectiveHardCount(t *testing.T) {
-	b := newBatcher[int](NewBatchConfig(3, 1000))
+func TestBatchByBytesLargeFirstEvent(t *testing.T) {
+	handler := mockHandler{}
+	registry := newAreaBatchConfigRegistry[int](newDefaultBatchConfig())
+	registry.onAddPath(0, batchConfig{count: 10, bytes: 50})
+	eq := newEventQueue(&handler, registry)
+	b := newDefaultBatcher[*mockEvent]()
 
-	for i := 0; i < 11; i++ {
-		b.addEvent(i, 1)
-	}
-	require.False(t, b.isFull())
+	path := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", "test", nil)
+	eq.initPath(path)
 
-	b.addEvent(11, 1)
-	require.True(t, b.isFull())
+	eq.appendEvent(eventWrap[int, string, *mockEvent, any, *mockHandler]{
+		pathInfo:  path,
+		event:     &mockEvent{value: 1},
+		eventSize: 100,
+		eventType: EventType{
+			DataGroup: 1,
+			Property:  BatchableData,
+		},
+	})
+	eq.appendEvent(eventWrap[int, string, *mockEvent, any, *mockHandler]{
+		pathInfo:  path,
+		event:     &mockEvent{value: 2},
+		eventSize: 10,
+		eventType: EventType{
+			DataGroup: 1,
+			Property:  BatchableData,
+		},
+	})
+
+	events, _, _ := eq.popEvents(b)
+	require.Len(t, events, 1)
+	require.Equal(t, 1, events[0].value)
+	require.Equal(t, int64(1), eq.totalPendingLength.Load())
+
+	events, _, _ = eq.popEvents(b)
+	require.Len(t, events, 1)
+	require.Equal(t, 2, events[0].value)
+	require.Equal(t, int64(0), eq.totalPendingLength.Load())
 }

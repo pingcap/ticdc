@@ -120,15 +120,7 @@ func (c *HeartBeatCollector) RegisterDispatcherManager(m *DispatcherManager) err
 	if err != nil {
 		return errors.Trace(err)
 	}
-
-	batchConfig := dynstream.NewBatchConfig(1024, 0)
-	// since memory control not enabled, so that quota and method won't take effect.
-	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(0, dynstream.MemoryControlNone, "heart-beat-collector", batchConfig)
-	err = c.schedulerDispatcherRequestDynamicStream.AddPath(
-		m.changefeedID.Id,
-		m,
-		areaSetting,
-	)
+	err = c.schedulerDispatcherRequestDynamicStream.AddPath(m.changefeedID.Id, m)
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -209,7 +201,10 @@ func (c *HeartBeatCollector) RemoveRedoMessage(changefeedID common.ChangeFeedID)
 		return nil
 	}
 	err = c.redoMetaMessageDynamicStream.RemovePath(changefeedID.Id)
-	return errors.Trace(err)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	return nil
 }
 
 func (c *HeartBeatCollector) sendHeartBeatMessages(ctx context.Context) error {
