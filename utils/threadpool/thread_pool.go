@@ -53,6 +53,7 @@ func (t *threadPoolImpl) Submit(task Task, next time.Time) *TaskHandle {
 	}
 	select {
 	case <-t.reactor.stopSignal:
+		return nil
 	case t.reactor.newTaskChan <- taskAndTime{st, next}:
 	}
 	return &TaskHandle{st}
@@ -85,6 +86,7 @@ func (t *threadPoolImpl) executeTasks() {
 				if !next.IsZero() {
 					select {
 					case <-t.reactor.stopSignal:
+						return
 					case t.reactor.newTaskChan <- taskAndTime{task, next}:
 					}
 				}
