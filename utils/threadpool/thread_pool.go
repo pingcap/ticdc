@@ -51,7 +51,10 @@ func (t *threadPoolImpl) Submit(task Task, next time.Time) *TaskHandle {
 	st := &scheduledTask{
 		task: task,
 	}
-	t.reactor.newTaskChan <- taskAndTime{st, next}
+	select {
+	case <-t.reactor.stopSignal:
+	case t.reactor.newTaskChan <- taskAndTime{st, next}:
+	}
 	return &TaskHandle{st}
 }
 
@@ -80,7 +83,10 @@ func (t *threadPoolImpl) executeTasks() {
 			if !task.isCanceled() {
 				next := task.task.Execute()
 				if !next.IsZero() {
-					t.reactor.newTaskChan <- taskAndTime{task, next}
+					select {
+					case <-t.reactor.stopSignal:
+					case t.reactor.newTaskChan <- taskAndTime{task, next}:
+					}
 				}
 			}
 		}
