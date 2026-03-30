@@ -69,13 +69,6 @@ func NewRouter(caseSensitive bool, rules []RoutingRuleConfig) (*Router, error) {
 			continue
 		}
 
-		if err := config.ValidateRoutingExpression(ruleConfig.TargetSchema); err != nil {
-			return nil, errors.ErrInvalidSchemaRule.GenWithStackByArgs(ruleConfig.TargetSchema, err)
-		}
-		if err := config.ValidateRoutingExpression(ruleConfig.TargetTable); err != nil {
-			return nil, errors.ErrInvalidTableRule.GenWithStackByArgs(ruleConfig.TargetTable, err)
-		}
-
 		f, err := tfilter.Parse(ruleConfig.Matcher)
 		if err != nil {
 			return nil, errors.ErrInvalidRoutingRule.GenWithStackByArgs(ruleConfig.Matcher, err)

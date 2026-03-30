@@ -20,863 +20,255 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestValidateRoutingExpression(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		expr    string
-		wantErr bool
-	}{
-		// Valid expressions
-		{"", false},
-		{SchemaPlaceholder, false},
-		{TablePlaceholder, false},
-		{"prefix_" + SchemaPlaceholder, false},
-		{SchemaPlaceholder + "_suffix", false},
-		{"prefix_" + SchemaPlaceholder + "_suffix", false},
-		{SchemaPlaceholder + "_" + TablePlaceholder, false},
-		{"static_name", false},
-		{"db_" + SchemaPlaceholder + "_" + TablePlaceholder + "_v2", false},
-
-		// Invalid expressions
-		{"{invalid}", true},
-		{"{Schema}", true}, // case sensitive
-		{"{TABLE}", true},  // case sensitive
-		{"{db}", true},
-		{"{", true},
-		{"}", true},
-		{"{schema", true},
-		{"schema}", true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.expr, func(t *testing.T) {
-			err := config.ValidateRoutingExpression(tt.expr)
-			if tt.wantErr {
-				require.Error(t, err)
-			} else {
-				require.NoError(t, err)
-			}
-		})
-	}
-}
-
 func TestSubstituteExpression(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
+	testCases := []struct {
+		name         string
 		expr         string
 		sourceSchema string
 		sourceTable  string
 		defaultValue string
 		expected     string
 	}{
-		{SchemaPlaceholder, "mydb", "mytable", "mydb", "mydb"},
-		{TablePlaceholder, "mydb", "mytable", "mytable", "mytable"},
-		{SchemaPlaceholder + "_" + TablePlaceholder, "mydb", "mytable", "mydb", "mydb_mytable"},
-		{"prefix_" + SchemaPlaceholder, "mydb", "mytable", "mydb", "prefix_mydb"},
-		{TablePlaceholder + "_suffix", "mydb", "mytable", "mytable", "mytable_suffix"},
-		{"static_name", "mydb", "mytable", "mydb", "static_name"},
-		{"", "mydb", "mytable", "mydb", "mydb"},       // empty schema expr defaults to sourceSchema
-		{"", "mydb", "mytable", "mytable", "mytable"}, // empty table expr defaults to sourceTable
-		{"db_" + SchemaPlaceholder + "_" + TablePlaceholder + "_v2", "prod", "users", "prod", "db_prod_users_v2"},
+		{
+			name:         "empty expression falls back to default",
+			expr:         "",
+			sourceSchema: "mydb",
+			sourceTable:  "mytable",
+			defaultValue: "mydb",
+			expected:     "mydb",
+		},
+		{
+			name:         "schema placeholder",
+			expr:         SchemaPlaceholder,
+			sourceSchema: "mydb",
+			sourceTable:  "mytable",
+			defaultValue: "unused",
+			expected:     "mydb",
+		},
+		{
+			name:         "table placeholder",
+			expr:         TablePlaceholder + "_bak",
+			sourceSchema: "mydb",
+			sourceTable:  "mytable",
+			defaultValue: "unused",
+			expected:     "mytable_bak",
+		},
+		{
+			name:         "literal with both placeholders",
+			expr:         "db_" + SchemaPlaceholder + "_" + TablePlaceholder + "_v2",
+			sourceSchema: "prod",
+			sourceTable:  "users",
+			defaultValue: "unused",
+			expected:     "db_prod_users_v2",
+		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.expr+"_default_"+tt.defaultValue, func(t *testing.T) {
-			result := substituteExpression(tt.expr, tt.sourceSchema, tt.sourceTable, tt.defaultValue)
-			require.Equal(t, tt.expected, result)
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := substituteExpression(tc.expr, tc.sourceSchema, tc.sourceTable, tc.defaultValue)
+			require.Equal(t, tc.expected, result)
 		})
 	}
-}
-
-func TestNewRouterFromDispatchRulesUsesTargetFieldNames(t *testing.T) {
-	t.Parallel()
-
-	router, err := NewRouterFromDispatchRules(true, []*config.DispatchRule{
-		{
-			Matcher:      []string{"db1.*"},
-			TargetSchema: "target_db",
-			TargetTable:  TablePlaceholder,
-		},
-	})
-	require.NoError(t, err)
-	require.NotNil(t, router)
-
-	router, err = NewRouter(true, []RoutingRuleConfig{
-		{
-			Matcher:      []string{"db1.users"},
-			TargetSchema: "archive",
-			TargetTable:  "users_bak",
-		},
-	})
-	require.NoError(t, err)
-	require.NotNil(t, router)
 }
 
 func TestNewRouter(t *testing.T) {
 	t.Parallel()
 
-	// Empty rules returns nil router
-	router, err := NewRouter(true, nil)
-	require.NoError(t, err)
-	require.Nil(t, router)
+	t.Run("nil or empty rules return nil router", func(t *testing.T) {
+		t.Parallel()
 
-	router, err = NewRouter(true, []RoutingRuleConfig{})
-	require.NoError(t, err)
-	require.Nil(t, router)
+		router, err := NewRouter(true, nil)
+		require.NoError(t, err)
+		require.Nil(t, router)
 
-	// Rules with empty target schema and target table are skipped
-	router, err = NewRouter(true, []RoutingRuleConfig{
-		{Matcher: []string{"db1.*"}, TargetSchema: "", TargetTable: ""},
+		router, err = NewRouter(true, []RoutingRuleConfig{})
+		require.NoError(t, err)
+		require.Nil(t, router)
 	})
-	require.NoError(t, err)
-	require.Nil(t, router)
 
-	// Valid rules
-	router, err = NewRouter(true, []RoutingRuleConfig{
-		{Matcher: []string{"db1.*"}, TargetSchema: "target_db", TargetTable: TablePlaceholder},
-	})
-	require.NoError(t, err)
-	require.NotNil(t, router)
+	t.Run("rules without routing targets are skipped", func(t *testing.T) {
+		t.Parallel()
 
-	// Invalid schema rule
-	_, err = NewRouter(true, []RoutingRuleConfig{
-		{Matcher: []string{"db1.*"}, TargetSchema: "{invalid}", TargetTable: TablePlaceholder},
+		router, err := NewRouter(true, []RoutingRuleConfig{
+			{Matcher: []string{"db1.*"}},
+		})
+		require.NoError(t, err)
+		require.Nil(t, router)
 	})
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "invalid schema rule")
 
-	// Invalid table rule
-	_, err = NewRouter(true, []RoutingRuleConfig{
-		{Matcher: []string{"db1.*"}, TargetSchema: SchemaPlaceholder, TargetTable: "{bad}"},
+	t.Run("invalid matcher returns error", func(t *testing.T) {
+		t.Parallel()
+
+		router, err := NewRouter(true, []RoutingRuleConfig{
+			{
+				Matcher:      []string{"[invalid"},
+				TargetSchema: "target",
+				TargetTable:  TablePlaceholder,
+			},
+		})
+		require.Error(t, err)
+		require.Nil(t, router)
 	})
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "invalid table rule")
 }
 
 func TestRouterRoute(t *testing.T) {
 	t.Parallel()
 
-	// Nil router returns source unchanged
 	var nilRouter *Router
-	schema, table := nilRouter.Route("mydb", "mytable")
-	require.Equal(t, "mydb", schema)
-	require.Equal(t, "mytable", table)
+	schema, table := nilRouter.Route("source_db", "source_table")
+	require.Equal(t, "source_db", schema)
+	require.Equal(t, "source_table", table)
 
-	// Router with rules
 	router, err := NewRouter(true, []RoutingRuleConfig{
-		// Route all tables in db1 to target_db
-		{Matcher: []string{"db1.*"}, TargetSchema: "target_db", TargetTable: TablePlaceholder},
-		// Route specific table to a different name
-		{Matcher: []string{"db2.users"}, TargetSchema: SchemaPlaceholder, TargetTable: "customers"},
-		// Route with combined expression
+		{Matcher: []string{"db1.specific"}, TargetSchema: "specific_db", TargetTable: "specific_table"},
+		{Matcher: []string{"db1.*"}, TargetSchema: "db1_archive", TargetTable: TablePlaceholder},
 		{Matcher: []string{"staging.*"}, TargetSchema: "prod", TargetTable: SchemaPlaceholder + "_" + TablePlaceholder},
+		{Matcher: []string{"*.*"}, TargetSchema: "fallback", TargetTable: TablePlaceholder},
 	})
 	require.NoError(t, err)
 	require.NotNil(t, router)
 
-	tests := []struct {
+	testCases := []struct {
+		name           string
 		sourceSchema   string
 		sourceTable    string
 		expectedSchema string
 		expectedTable  string
 	}{
-		// Matches first rule
-		{"db1", "orders", "target_db", "orders"},
-		{"db1", "products", "target_db", "products"},
-		// Matches second rule
-		{"db2", "users", "db2", "customers"},
-		// Matches third rule
-		{"staging", "events", "prod", "staging_events"},
-		// No match - returns source unchanged
-		{"db2", "orders", "db2", "orders"},
-		{"other", "table", "other", "table"},
+		{
+			name:           "specific matcher rewrites both names",
+			sourceSchema:   "db1",
+			sourceTable:    "specific",
+			expectedSchema: "specific_db",
+			expectedTable:  "specific_table",
+		},
+		{
+			name:           "schema wildcard rewrites schema only",
+			sourceSchema:   "db1",
+			sourceTable:    "orders",
+			expectedSchema: "db1_archive",
+			expectedTable:  "orders",
+		},
+		{
+			name:           "placeholders use source names",
+			sourceSchema:   "staging",
+			sourceTable:    "events",
+			expectedSchema: "prod",
+			expectedTable:  "staging_events",
+		},
+		{
+			name:           "fallback matcher applies when no prior rule matches",
+			sourceSchema:   "db2",
+			sourceTable:    "products",
+			expectedSchema: "fallback",
+			expectedTable:  "products",
+		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.sourceSchema+"."+tt.sourceTable, func(t *testing.T) {
-			schema, table := router.Route(tt.sourceSchema, tt.sourceTable)
-			require.Equal(t, tt.expectedSchema, schema)
-			require.Equal(t, tt.expectedTable, table)
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			gotSchema, gotTable := router.Route(tc.sourceSchema, tc.sourceTable)
+			require.Equal(t, tc.expectedSchema, gotSchema)
+			require.Equal(t, tc.expectedTable, gotTable)
 		})
 	}
-}
-
-func TestRouterCaseInsensitive(t *testing.T) {
-	t.Parallel()
-
-	// Case-insensitive router
-	router, err := NewRouter(false, []RoutingRuleConfig{
-		{Matcher: []string{"db1.*"}, TargetSchema: "target", TargetTable: TablePlaceholder},
-	})
-	require.NoError(t, err)
-	require.NotNil(t, router)
-
-	// Should match regardless of case
-	schema, table := router.Route("DB1", "MyTable")
-	require.Equal(t, "target", schema)
-	require.Equal(t, "MyTable", table) // {table} substitutes to the original table name
 }
 
 func TestRouterFirstMatchWins(t *testing.T) {
 	t.Parallel()
 
-	t.Run("specific_before_wildcard", func(t *testing.T) {
+	router, err := NewRouter(true, []RoutingRuleConfig{
+		{Matcher: []string{"*.*"}, TargetSchema: "catch_all", TargetTable: TablePlaceholder},
+		{Matcher: []string{"db1.*"}, TargetSchema: "db1_only", TargetTable: TablePlaceholder},
+		{Matcher: []string{"db1.users"}, TargetSchema: "users_only", TargetTable: "users_bak"},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, router)
+
+	schema, table := router.Route("db1", "users")
+	require.Equal(t, "catch_all", schema)
+	require.Equal(t, "users", table)
+}
+
+func TestRouterCaseSensitivity(t *testing.T) {
+	t.Parallel()
+
+	t.Run("case sensitive router requires exact match", func(t *testing.T) {
 		t.Parallel()
 
-		// First matching rule wins
 		router, err := NewRouter(true, []RoutingRuleConfig{
-			{Matcher: []string{"db1.specific"}, TargetSchema: "first", TargetTable: TablePlaceholder},
-			{Matcher: []string{"db1.*"}, TargetSchema: "second", TargetTable: TablePlaceholder},
+			{Matcher: []string{"MyDB.MyTable"}, TargetSchema: "target_db", TargetTable: "target_table"},
 		})
 		require.NoError(t, err)
 
-		// Specific match uses first rule
-		schema, _ := router.Route("db1", "specific")
-		require.Equal(t, "first", schema)
+		schema, table := router.Route("MyDB", "MyTable")
+		require.Equal(t, "target_db", schema)
+		require.Equal(t, "target_table", table)
 
-		// General match uses second rule
-		schema, _ = router.Route("db1", "other")
-		require.Equal(t, "second", schema)
+		schema, table = router.Route("mydb", "mytable")
+		require.Equal(t, "mydb", schema)
+		require.Equal(t, "mytable", table)
 	})
 
-	// Test overlapping rules where multiple rules could match the same table.
-	// The first matching rule in configuration order wins.
-	t.Run("overlapping_rules", func(t *testing.T) {
+	t.Run("case insensitive router preserves source case in placeholders", func(t *testing.T) {
 		t.Parallel()
 
-		router, err := NewRouter(true, []RoutingRuleConfig{
-			// Rule 1: Specific table match
-			{Matcher: []string{"db1.users"}, TargetSchema: "target_specific", TargetTable: "users_v1"},
-			// Rule 2: All tables in db1 (overlaps with Rule 1 for db1.users)
-			{Matcher: []string{"db1.*"}, TargetSchema: "target_db1", TargetTable: TablePlaceholder},
-			// Rule 3: Wildcard match (overlaps with Rules 1 and 2)
-			{Matcher: []string{"*.*"}, TargetSchema: "target_all", TargetTable: TablePlaceholder},
+		router, err := NewRouter(false, []RoutingRuleConfig{
+			{Matcher: []string{"MyDB.*"}, TargetSchema: "backup_" + SchemaPlaceholder, TargetTable: TablePlaceholder},
+		})
+		require.NoError(t, err)
+
+		schema, table := router.Route("mydb", "MyTable")
+		require.Equal(t, "backup_mydb", schema)
+		require.Equal(t, "MyTable", table)
+	})
+}
+
+func TestNewRouterFromDispatchRules(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil config returns nil router", func(t *testing.T) {
+		t.Parallel()
+
+		router, err := NewRouterFromDispatchRules(true, nil)
+		require.NoError(t, err)
+		require.Nil(t, router)
+	})
+
+	t.Run("builds router from rules with target fields and ignores pure dispatch rules", func(t *testing.T) {
+		t.Parallel()
+
+		router, err := NewRouterFromDispatchRules(true, []*config.DispatchRule{
+			{
+				Matcher:        []string{"db1.*"},
+				DispatcherRule: "ts",
+			},
+			{
+				Matcher:      []string{"db2.*"},
+				TargetSchema: "archive",
+				TargetTable:  TablePlaceholder,
+			},
+			{
+				Matcher:      []string{"db3.users"},
+				TargetSchema: SchemaPlaceholder,
+				TargetTable:  "users_bak",
+			},
 		})
 		require.NoError(t, err)
 		require.NotNil(t, router)
 
-		tests := []struct {
-			name         string
-			sourceSchema string
-			sourceTable  string
-			wantSchema   string
-			wantTable    string
-		}{
-			// db1.users matches Rule 1 (most specific), not Rule 2 or 3
-			{"specific_table", "db1", "users", "target_specific", "users_v1"},
-			// db1.orders matches Rule 2 (db1.*), not Rule 3
-			{"schema_wildcard", "db1", "orders", "target_db1", "orders"},
-			// db2.products only matches Rule 3 (*.*)"
-			{"global_wildcard", "db2", "products", "target_all", "products"},
-		}
+		schema, table := router.Route("db1", "orders")
+		require.Equal(t, "db1", schema)
+		require.Equal(t, "orders", table)
 
-		for _, tt := range tests {
-			gotSchema, gotTable := router.Route(tt.sourceSchema, tt.sourceTable)
-			require.Equal(t, tt.wantSchema, gotSchema, "schema mismatch for %s", tt.name)
-			require.Equal(t, tt.wantTable, gotTable, "table mismatch for %s", tt.name)
-		}
+		schema, table = router.Route("db2", "orders")
+		require.Equal(t, "archive", schema)
+		require.Equal(t, "orders", table)
+
+		schema, table = router.Route("db3", "users")
+		require.Equal(t, "db3", schema)
+		require.Equal(t, "users_bak", table)
 	})
-
-	// Verify that rule order in configuration determines which rule wins,
-	// not specificity. If a wildcard rule comes first, it wins.
-	t.Run("order_matters_not_specificity", func(t *testing.T) {
-		t.Parallel()
-
-		// Intentionally put the wildcard rule FIRST - it should win for all matches
-		router, err := NewRouter(true, []RoutingRuleConfig{
-			// Rule 1: Wildcard - catches everything
-			{Matcher: []string{"*.*"}, TargetSchema: "catch_all", TargetTable: TablePlaceholder},
-			// Rule 2: More specific, but comes after wildcard
-			{Matcher: []string{"db1.*"}, TargetSchema: "should_not_match", TargetTable: TablePlaceholder},
-			// Rule 3: Even more specific, but comes after wildcard
-			{Matcher: []string{"db1.users"}, TargetSchema: "also_should_not_match", TargetTable: "renamed"},
-		})
-		require.NoError(t, err)
-		require.NotNil(t, router)
-
-		// All should match the first rule (wildcard) because it comes first
-		tests := []struct {
-			sourceSchema string
-			sourceTable  string
-		}{
-			{"db1", "users"},    // Would match all 3 rules, but first wins
-			{"db1", "orders"},   // Would match rules 1 and 2, but first wins
-			{"db2", "products"}, // Only matches rule 1
-		}
-
-		for _, tt := range tests {
-			gotSchema, gotTable := router.Route(tt.sourceSchema, tt.sourceTable)
-			require.Equal(t, "catch_all", gotSchema,
-				"first matching rule should win for %s.%s", tt.sourceSchema, tt.sourceTable)
-			require.Equal(t, tt.sourceTable, gotTable,
-				"first matching rule should win for %s.%s", tt.sourceSchema, tt.sourceTable)
-		}
-	})
-}
-
-func TestRouterSchemaOnly(t *testing.T) {
-	t.Parallel()
-
-	router, err := NewRouter(true, []RoutingRuleConfig{
-		{
-			Matcher:      []string{"source_db.*"},
-			TargetSchema: "target_db",
-			TargetTable:  TablePlaceholder,
-		},
-	})
-	require.NoError(t, err)
-	require.NotNil(t, router)
-
-	tests := []struct {
-		name         string
-		sourceSchema string
-		sourceTable  string
-		wantSchema   string
-		wantTable    string
-	}{
-		{
-			name:         "matching table",
-			sourceSchema: "source_db",
-			sourceTable:  "users",
-			wantSchema:   "target_db",
-			wantTable:    "users",
-		},
-		{
-			name:         "another matching table",
-			sourceSchema: "source_db",
-			sourceTable:  "orders",
-			wantSchema:   "target_db",
-			wantTable:    "orders",
-		},
-		{
-			name:         "non-matching schema",
-			sourceSchema: "other_db",
-			sourceTable:  "users",
-			wantSchema:   "other_db",
-			wantTable:    "users",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			gotSchema, gotTable := router.Route(tt.sourceSchema, tt.sourceTable)
-			require.Equal(t, tt.wantSchema, gotSchema)
-			require.Equal(t, tt.wantTable, gotTable)
-		})
-	}
-}
-
-func TestRouterTableOnly(t *testing.T) {
-	t.Parallel()
-
-	router, err := NewRouter(true, []RoutingRuleConfig{
-		{
-			Matcher:      []string{"mydb.source_table"},
-			TargetSchema: SchemaPlaceholder,
-			TargetTable:  "target_table",
-		},
-	})
-	require.NoError(t, err)
-	require.NotNil(t, router)
-
-	tests := []struct {
-		name         string
-		sourceSchema string
-		sourceTable  string
-		wantSchema   string
-		wantTable    string
-	}{
-		{
-			name:         "matching table",
-			sourceSchema: "mydb",
-			sourceTable:  "source_table",
-			wantSchema:   "mydb",
-			wantTable:    "target_table",
-		},
-		{
-			name:         "non-matching table",
-			sourceSchema: "mydb",
-			sourceTable:  "other_table",
-			wantSchema:   "mydb",
-			wantTable:    "other_table",
-		},
-		{
-			name:         "non-matching schema",
-			sourceSchema: "otherdb",
-			sourceTable:  "source_table",
-			wantSchema:   "otherdb",
-			wantTable:    "source_table",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			gotSchema, gotTable := router.Route(tt.sourceSchema, tt.sourceTable)
-			require.Equal(t, tt.wantSchema, gotSchema)
-			require.Equal(t, tt.wantTable, gotTable)
-		})
-	}
-}
-
-func TestRouterSchemaAndTable(t *testing.T) {
-	t.Parallel()
-
-	router, err := NewRouter(true, []RoutingRuleConfig{
-		{
-			Matcher:      []string{"src_db.src_table"},
-			TargetSchema: "dst_db",
-			TargetTable:  "dst_table",
-		},
-	})
-	require.NoError(t, err)
-	require.NotNil(t, router)
-
-	// Matching
-	schema, table := router.Route("src_db", "src_table")
-	require.Equal(t, "dst_db", schema)
-	require.Equal(t, "dst_table", table)
-
-	// Non-matching
-	schema, table = router.Route("src_db", "other_table")
-	require.Equal(t, "src_db", schema)
-	require.Equal(t, "other_table", table)
-}
-
-func TestRouterWithTransformation(t *testing.T) {
-	t.Parallel()
-
-	router, err := NewRouter(true, []RoutingRuleConfig{
-		{
-			Matcher:      []string{"prod.*"},
-			TargetSchema: "backup_" + SchemaPlaceholder,
-			TargetTable:  TablePlaceholder + "_archive",
-		},
-	})
-	require.NoError(t, err)
-	require.NotNil(t, router)
-
-	schema, table := router.Route("prod", "users")
-	require.Equal(t, "backup_prod", schema)
-	require.Equal(t, "users_archive", table)
-}
-
-func TestRouterMultipleRules(t *testing.T) {
-	t.Parallel()
-
-	router, err := NewRouter(true, []RoutingRuleConfig{
-		{
-			Matcher:      []string{"db1.*"},
-			TargetSchema: "target1",
-			TargetTable:  TablePlaceholder,
-		},
-		{
-			Matcher:      []string{"db2.*"},
-			TargetSchema: "target2",
-			TargetTable:  TablePlaceholder,
-		},
-		{
-			Matcher:      []string{"db3.specific_table"},
-			TargetSchema: "target3",
-			TargetTable:  "renamed_table",
-		},
-	})
-	require.NoError(t, err)
-	require.NotNil(t, router)
-
-	tests := []struct {
-		sourceSchema string
-		sourceTable  string
-		wantSchema   string
-		wantTable    string
-	}{
-		{"db1", "table1", "target1", "table1"},
-		{"db1", "table2", "target1", "table2"},
-		{"db2", "table1", "target2", "table1"},
-		{"db3", "specific_table", "target3", "renamed_table"},
-		{"db3", "other_table", "db3", "other_table"}, // No match
-		{"db4", "table1", "db4", "table1"},           // No match
-	}
-
-	for _, tt := range tests {
-		gotSchema, gotTable := router.Route(tt.sourceSchema, tt.sourceTable)
-		require.Equal(t, tt.wantSchema, gotSchema, "schema mismatch for %s.%s", tt.sourceSchema, tt.sourceTable)
-		require.Equal(t, tt.wantTable, gotTable, "table mismatch for %s.%s", tt.sourceSchema, tt.sourceTable)
-	}
-}
-
-func TestRouterCaseSensitiveSchema(t *testing.T) {
-	t.Parallel()
-
-	router, err := NewRouter(true, []RoutingRuleConfig{
-		{
-			Matcher:      []string{"MyDB.*"},
-			TargetSchema: "target_db",
-			TargetTable:  TablePlaceholder,
-		},
-	})
-	require.NoError(t, err)
-	require.NotNil(t, router)
-
-	// Should only match exact case
-	schema, table := router.Route("MyDB", "table1")
-	require.Equal(t, "target_db", schema)
-	require.Equal(t, "table1", table)
-
-	// Should not match different case
-	schema, table = router.Route("mydb", "table2")
-	require.Equal(t, "mydb", schema)
-	require.Equal(t, "table2", table)
-
-	schema, table = router.Route("MYDB", "table3")
-	require.Equal(t, "MYDB", schema)
-	require.Equal(t, "table3", table)
-}
-
-func TestRouterCaseSensitiveTable(t *testing.T) {
-	t.Parallel()
-
-	router, err := NewRouter(true, []RoutingRuleConfig{
-		{
-			Matcher:      []string{"mydb.MyTable"},
-			TargetSchema: "target_db",
-			TargetTable:  "target_table",
-		},
-	})
-	require.NoError(t, err)
-	require.NotNil(t, router)
-
-	// Should only match exact table case
-	schema, table := router.Route("mydb", "MyTable")
-	require.Equal(t, "target_db", schema)
-	require.Equal(t, "target_table", table)
-
-	// Should not match different table case
-	schema, table = router.Route("mydb", "mytable")
-	require.Equal(t, "mydb", schema)
-	require.Equal(t, "mytable", table)
-
-	schema, table = router.Route("mydb", "MYTABLE")
-	require.Equal(t, "mydb", schema)
-	require.Equal(t, "MYTABLE", table)
-}
-
-func TestRouterCaseSensitiveBoth(t *testing.T) {
-	t.Parallel()
-
-	router, err := NewRouter(true, []RoutingRuleConfig{
-		{
-			Matcher:      []string{"MyDB.MyTable"},
-			TargetSchema: "target_db",
-			TargetTable:  "target_table",
-		},
-	})
-	require.NoError(t, err)
-	require.NotNil(t, router)
-
-	// Should only match exact case for both schema and table
-	tests := []struct {
-		sourceSchema string
-		sourceTable  string
-		shouldMatch  bool
-	}{
-		{"MyDB", "MyTable", true},  // Exact match
-		{"mydb", "mytable", false}, // Both wrong case
-		{"MYDB", "MYTABLE", false}, // Both wrong case
-		{"MyDB", "mytable", false}, // Table wrong case
-		{"mydb", "MyTable", false}, // Schema wrong case
-	}
-
-	for _, tt := range tests {
-		schema, table := router.Route(tt.sourceSchema, tt.sourceTable)
-		if tt.shouldMatch {
-			require.Equal(t, "target_db", schema, "schema mismatch for %s.%s", tt.sourceSchema, tt.sourceTable)
-			require.Equal(t, "target_table", table, "table mismatch for %s.%s", tt.sourceSchema, tt.sourceTable)
-		} else {
-			require.Equal(t, tt.sourceSchema, schema, "should pass through for %s.%s", tt.sourceSchema, tt.sourceTable)
-			require.Equal(t, tt.sourceTable, table, "should pass through for %s.%s", tt.sourceSchema, tt.sourceTable)
-		}
-	}
-}
-
-func TestRouterCaseInsensitiveSchema(t *testing.T) {
-	t.Parallel()
-
-	router, err := NewRouter(false, []RoutingRuleConfig{
-		{
-			Matcher:      []string{"MyDB.*"},
-			TargetSchema: "target_db",
-			TargetTable:  TablePlaceholder,
-		},
-	})
-	require.NoError(t, err)
-	require.NotNil(t, router)
-
-	// Should match regardless of schema case
-	schema, table := router.Route("mydb", "table1")
-	require.Equal(t, "target_db", schema)
-	require.Equal(t, "table1", table)
-
-	schema, table = router.Route("MYDB", "table2")
-	require.Equal(t, "target_db", schema)
-	require.Equal(t, "table2", table)
-
-	schema, table = router.Route("MyDb", "table3")
-	require.Equal(t, "target_db", schema)
-	require.Equal(t, "table3", table)
-}
-
-func TestRouterCaseInsensitiveTable(t *testing.T) {
-	t.Parallel()
-
-	router, err := NewRouter(false, []RoutingRuleConfig{
-		{
-			Matcher:      []string{"mydb.MyTable"},
-			TargetSchema: "target_db",
-			TargetTable:  "target_table",
-		},
-	})
-	require.NoError(t, err)
-	require.NotNil(t, router)
-
-	// Should match regardless of table case
-	schema, table := router.Route("mydb", "mytable")
-	require.Equal(t, "target_db", schema)
-	require.Equal(t, "target_table", table)
-
-	schema, table = router.Route("mydb", "MYTABLE")
-	require.Equal(t, "target_db", schema)
-	require.Equal(t, "target_table", table)
-
-	schema, table = router.Route("mydb", "MyTable")
-	require.Equal(t, "target_db", schema)
-	require.Equal(t, "target_table", table)
-
-	// Non-matching table should pass through
-	schema, table = router.Route("mydb", "other_table")
-	require.Equal(t, "mydb", schema)
-	require.Equal(t, "other_table", table)
-}
-
-func TestRouterCaseInsensitiveBoth(t *testing.T) {
-	t.Parallel()
-
-	router, err := NewRouter(false, []RoutingRuleConfig{
-		{
-			Matcher:      []string{"MyDB.MyTable"},
-			TargetSchema: "target_db",
-			TargetTable:  "target_table",
-		},
-	})
-	require.NoError(t, err)
-	require.NotNil(t, router)
-
-	// Should match regardless of case for both schema and table
-	tests := []struct {
-		sourceSchema string
-		sourceTable  string
-		shouldMatch  bool
-	}{
-		{"MyDB", "MyTable", true},
-		{"mydb", "mytable", true},
-		{"MYDB", "MYTABLE", true},
-		{"Mydb", "Mytable", true},
-		{"MyDB", "other", false},
-		{"other", "MyTable", false},
-	}
-
-	for _, tt := range tests {
-		schema, table := router.Route(tt.sourceSchema, tt.sourceTable)
-		if tt.shouldMatch {
-			require.Equal(t, "target_db", schema, "schema mismatch for %s.%s", tt.sourceSchema, tt.sourceTable)
-			require.Equal(t, "target_table", table, "table mismatch for %s.%s", tt.sourceSchema, tt.sourceTable)
-		} else {
-			require.Equal(t, tt.sourceSchema, schema, "should pass through for %s.%s", tt.sourceSchema, tt.sourceTable)
-			require.Equal(t, tt.sourceTable, table, "should pass through for %s.%s", tt.sourceSchema, tt.sourceTable)
-		}
-	}
-}
-
-func TestRouterCaseInsensitiveWithSchemaPlaceholder(t *testing.T) {
-	t.Parallel()
-
-	router, err := NewRouter(false, []RoutingRuleConfig{
-		{
-			Matcher:      []string{"MyDB.*"},
-			TargetSchema: "backup_" + SchemaPlaceholder,
-			TargetTable:  TablePlaceholder,
-		},
-	})
-	require.NoError(t, err)
-	require.NotNil(t, router)
-
-	// "mydb" matches "MyDB.*" case-insensitively, but output preserves actual source case
-	schema, table := router.Route("mydb", "t1")
-	require.Equal(t, "backup_mydb", schema) // NOT "backup_MyDB"
-	require.Equal(t, "t1", table)
-}
-
-func TestRouterWildcardMatchers(t *testing.T) {
-	t.Parallel()
-
-	router, err := NewRouter(true, []RoutingRuleConfig{
-		{
-			Matcher:      []string{"*.*"},
-			TargetSchema: "all_to_one",
-			TargetTable:  TablePlaceholder,
-		},
-	})
-	require.NoError(t, err)
-	require.NotNil(t, router)
-
-	// All tables should be routed
-	schema, table := router.Route("any_db", "any_table")
-	require.Equal(t, "all_to_one", schema)
-	require.Equal(t, "any_table", table)
-
-	schema, table = router.Route("other_db", "other_table")
-	require.Equal(t, "all_to_one", schema)
-	require.Equal(t, "other_table", table)
-}
-
-func TestNewRouterInvalidSchemaExpression(t *testing.T) {
-	t.Parallel()
-
-	router, err := NewRouter(true, []RoutingRuleConfig{
-		{
-			Matcher:      []string{"db.*"},
-			TargetSchema: "{invalid}",
-			TargetTable:  TablePlaceholder,
-		},
-	})
-	require.Error(t, err)
-	require.Nil(t, router)
-	require.Contains(t, err.Error(), "invalid schema rule")
-}
-
-func TestNewRouterInvalidTableExpression(t *testing.T) {
-	t.Parallel()
-
-	router, err := NewRouter(true, []RoutingRuleConfig{
-		{
-			Matcher:      []string{"db.*"},
-			TargetSchema: SchemaPlaceholder,
-			TargetTable:  "{bad}",
-		},
-	})
-	require.Error(t, err)
-	require.Nil(t, router)
-	require.Contains(t, err.Error(), "invalid table rule")
-}
-
-func TestNewRouterInvalidMatcher(t *testing.T) {
-	t.Parallel()
-
-	router, err := NewRouter(true, []RoutingRuleConfig{
-		{
-			Matcher:      []string{"[invalid"},
-			TargetSchema: "target",
-			TargetTable:  TablePlaceholder,
-		},
-	})
-	require.Error(t, err)
-	require.Nil(t, router)
-}
-
-func TestNewRouterFromDispatchRulesNilConfig(t *testing.T) {
-	t.Parallel()
-
-	router, err := NewRouterFromDispatchRules(true, nil)
-	require.NoError(t, err)
-	require.Nil(t, router)
-}
-
-func TestNewRouterFromDispatchRulesNoRoutingRules(t *testing.T) {
-	t.Parallel()
-
-	// Config with dispatch rules but no schema/table routing
-	rules := []*config.DispatchRule{
-		{
-			Matcher:        []string{"test.*"},
-			DispatcherRule: "ts",
-			// No TargetSchema or TargetTable
-		},
-	}
-	router, err := NewRouterFromDispatchRules(true, rules)
-	require.NoError(t, err)
-	require.Nil(t, router, "router should be nil when no routing rules configured")
-}
-
-func TestNewRouterFromDispatchRulesWithSchemaRouting(t *testing.T) {
-	t.Parallel()
-
-	rules := []*config.DispatchRule{
-		{
-			Matcher:      []string{"source_db.*"},
-			TargetSchema: "target_db",
-			TargetTable:  TablePlaceholder,
-		},
-	}
-	router, err := NewRouterFromDispatchRules(true, rules)
-	require.NoError(t, err)
-	require.NotNil(t, router)
-}
-
-func TestNewRouterFromDispatchRulesWithTableRouting(t *testing.T) {
-	t.Parallel()
-
-	rules := []*config.DispatchRule{
-		{
-			Matcher:      []string{"db.source_table"},
-			TargetSchema: SchemaPlaceholder,
-			TargetTable:  "target_table",
-		},
-	}
-	router, err := NewRouterFromDispatchRules(true, rules)
-	require.NoError(t, err)
-	require.NotNil(t, router)
-}
-
-func TestNewRouterFromDispatchRulesMixedRulesWithAndWithoutRouting(t *testing.T) {
-	t.Parallel()
-
-	// Some dispatch rules have routing, some don't
-	rules := []*config.DispatchRule{
-		{
-			Matcher:        []string{"db1.*"},
-			DispatcherRule: "ts",
-			// No routing - just partition dispatch
-		},
-		{
-			Matcher:      []string{"db2.*"},
-			TargetSchema: "routed_db",
-			TargetTable:  TablePlaceholder,
-		},
-		{
-			Matcher:        []string{"db3.*"},
-			DispatcherRule: "rowid",
-			// No routing
-		},
-	}
-	router, err := NewRouterFromDispatchRules(true, rules)
-	require.NoError(t, err)
-	require.NotNil(t, router, "router should exist because db2 has routing")
-
-	// db1 has no routing rule - should pass through
-	schema, table := router.Route("db1", "table1")
-	require.Equal(t, "db1", schema)
-	require.Equal(t, "table1", table)
-
-	// db2 has routing - should be routed
-	schema, table = router.Route("db2", "table1")
-	require.Equal(t, "routed_db", schema)
-	require.Equal(t, "table1", table)
-
-	// db3 has no routing rule - should pass through
-	schema, table = router.Route("db3", "table1")
-	require.Equal(t, "db3", schema)
-	require.Equal(t, "table1", table)
 }

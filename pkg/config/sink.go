@@ -887,10 +887,10 @@ func (s *SinkConfig) validateSinkRouting() error {
 		if rule.TargetSchema == "" && rule.TargetTable == "" {
 			continue
 		}
-		if err := ValidateRoutingExpression(rule.TargetSchema); err != nil {
+		if err := validateRoutingExpression(rule.TargetSchema); err != nil {
 			return cerror.ErrInvalidRoutingRule.GenWithStackByArgs("target-schema", rule.TargetSchema, err.Error())
 		}
-		if err := ValidateRoutingExpression(rule.TargetTable); err != nil {
+		if err := validateRoutingExpression(rule.TargetTable); err != nil {
 			return cerror.ErrInvalidRoutingRule.GenWithStackByArgs("target-table", rule.TargetTable, err.Error())
 		}
 	}
@@ -1150,9 +1150,9 @@ type DebeziumConfig struct {
 	OutputOldValue bool `toml:"output-old-value" json:"output-old-value"`
 }
 
-// ValidateRoutingExpression validates a routing expression.
+// validateRoutingExpression validates a routing expression.
 // Valid expressions can contain literal text and {schema} or {table} placeholders.
-func ValidateRoutingExpression(expr string) error {
+func validateRoutingExpression(expr string) error {
 	if expr == "" {
 		return nil
 	}

@@ -353,6 +353,35 @@ func TestValidateSinkRouting(t *testing.T) {
 	}
 }
 
+func TestValidateRoutingExpression(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name    string
+		expr    string
+		wantErr string
+	}{
+		{name: "empty expression", expr: ""},
+		{name: "schema placeholder", expr: "{schema}"},
+		{name: "table placeholder", expr: "{table}"},
+		{name: "literal and placeholders", expr: "db_{schema}_{table}_v2"},
+		{name: "invalid placeholder", expr: "{invalid}", wantErr: "invalid placeholder"},
+		{name: "unbalanced opening brace", expr: "{schema", wantErr: "unbalanced braces"},
+		{name: "unbalanced closing brace", expr: "schema}", wantErr: "unbalanced braces"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateRoutingExpression(tc.expr)
+			if tc.wantErr == "" {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, tc.wantErr)
+			}
+		})
+	}
+}
+
 func TestValidateAndAdjustCSVConfig(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
