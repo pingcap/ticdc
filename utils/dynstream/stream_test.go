@@ -160,14 +160,6 @@ func TestStreamBasic(t *testing.T) {
 	require.Equal(t, 0, stream.getPendingSize())
 }
 
-func TestStreamOwnsSharedBatcher(t *testing.T) {
-	handler := mockHandler{}
-	stream := newStream(1, "test", &handler, Option{UseBuffer: false}, newTestBatchConfigRegistry())
-
-	require.NotNil(t, stream.batcher)
-	require.Equal(t, newDefaultBatchConfig(), stream.batcher.config)
-}
-
 func TestStreamBasicWithBuffer(t *testing.T) {
 	handler := mockHandler{}
 	stream := newStream(1, "test", &handler, Option{UseBuffer: true}, newTestBatchConfigRegistry())

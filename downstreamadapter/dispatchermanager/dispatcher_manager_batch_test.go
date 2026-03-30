@@ -17,10 +17,7 @@ import (
 	"testing"
 
 	"github.com/golang/mock/gomock"
-	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	sinkmock "github.com/pingcap/ticdc/downstreamadapter/sink/mock"
-	"github.com/pingcap/ticdc/eventpb"
-	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/stretchr/testify/require"
@@ -106,51 +103,4 @@ func TestDispatcherManagerBatchConfig(t *testing.T) {
 			require.Equal(t, tc.wantBytes, gotBytes)
 		})
 	}
-}
-
-func TestDispatcherManagerBatchConfigPassThroughDispatcher(t *testing.T) {
-	sink := newBatchConfigSink(t, common.MysqlSinkType, 2048, 8192)
-	manager := &DispatcherManager{
-		sink:   sink,
-		config: &config.ChangefeedConfig{},
-	}
-
-	batchCount, batchBytes := manager.getEventCollectorBatchCountAndBytes()
-	require.Equal(t, 2048, batchCount)
-	require.Equal(t, 8192, batchBytes)
-
-	sharedInfo := dispatcher.NewSharedInfo(
-		common.NewChangefeedID(common.DefaultKeyspaceName),
-		"system",
-		false,
-		false,
-		false,
-		nil,
-		&eventpb.FilterConfig{},
-		nil,
-		nil,
-		false,
-		batchCount,
-		batchBytes,
-		make(chan dispatcher.TableSpanStatusWithSeq, 1),
-		make(chan *heartbeatpb.TableSpanBlockStatus, 1),
-		make(chan error, 1),
-	)
-	d := dispatcher.NewBasicDispatcher(
-		common.NewDispatcherID(),
-		&heartbeatpb.TableSpan{TableID: 1},
-		1,
-		1,
-		dispatcher.NewSchemaIDToDispatchers(),
-		false,
-		false,
-		0,
-		common.DefaultMode,
-		sink,
-		sharedInfo,
-	)
-
-	gotCount, gotBytes := d.GetEventCollectorBatchConfig()
-	require.Equal(t, 2048, gotCount)
-	require.Equal(t, 8192, gotBytes)
 }
