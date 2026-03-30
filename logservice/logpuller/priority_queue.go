@@ -120,6 +120,7 @@ func (pq *PriorityQueue) Len() int {
 // Close closes the signal channel
 func (pq *PriorityQueue) Close() {
 	// pop all tasks
+	close(pq.signal)
 	for pq.Len() > 0 {
 		pq.TryPop()
 	}
