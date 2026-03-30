@@ -98,7 +98,7 @@ func TestApplyToDDLEvent(t *testing.T) {
 		},
 	}
 
-	routed, err := router.ApplyToDDLEvent(ddl, "test-changefeed")
+	routed, err := router.ApplyToDDLEvent(ddl, common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test-changefeed"))
 	require.NoError(t, err)
 	require.NotSame(t, ddl, routed)
 	require.Contains(t, routed.Query, "`target_db`.`target_table`")
