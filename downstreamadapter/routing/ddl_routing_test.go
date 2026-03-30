@@ -18,6 +18,7 @@ import (
 
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/stretchr/testify/require"
 )
 
@@ -43,7 +44,7 @@ func TestRewriteDDLQueryWithNilRouter(t *testing.T) {
 func TestRewriteDDLQueryWithEmptyQuery(t *testing.T) {
 	t.Parallel()
 
-	router, err := NewRouter(false, []RoutingRuleConfig{
+	router, err := NewRouter(false, []*config.DispatchRule{
 		{
 			Matcher:      []string{"source_db.*"},
 			TargetSchema: "target_db",
@@ -67,7 +68,7 @@ func TestRewriteDDLQueryWithBasicRouting(t *testing.T) {
 	t.Parallel()
 
 	// Create a router with a routing rule: source_db.* -> target_db.*
-	router, err := NewRouter(false, []RoutingRuleConfig{
+	router, err := NewRouter(false, []*config.DispatchRule{
 		{
 			Matcher:      []string{"source_db.*"},
 			TargetSchema: "target_db",
@@ -114,7 +115,7 @@ func TestRewriteDDLQueryWithSchemaAndTableRouting(t *testing.T) {
 	t.Parallel()
 
 	// Create a router with full routing: source_db.test_table -> target_db.test_table_routed
-	router, err := NewRouter(true, []RoutingRuleConfig{
+	router, err := NewRouter(true, []*config.DispatchRule{
 		{
 			Matcher:      []string{"source_db.test_table"},
 			TargetSchema: "target_db",
@@ -195,7 +196,7 @@ func TestRewriteDDLQueryWithSchemaOnlyRouting(t *testing.T) {
 	t.Parallel()
 
 	// Create a router that only routes the schema: source_db.* -> target_db.*
-	router, err := NewRouter(true, []RoutingRuleConfig{
+	router, err := NewRouter(true, []*config.DispatchRule{
 		{
 			Matcher:      []string{"source_db.*"},
 			TargetSchema: "target_db",
@@ -275,7 +276,7 @@ func TestRewriteDDLQueryWithTableOnlyRouting(t *testing.T) {
 	t.Parallel()
 
 	// Create a router that only routes the table name: mydb.old_table -> mydb.new_table
-	router, err := NewRouter(true, []RoutingRuleConfig{
+	router, err := NewRouter(true, []*config.DispatchRule{
 		{
 			Matcher:      []string{"mydb.old_table"},
 			TargetSchema: SchemaPlaceholder, // Keep schema unchanged
@@ -348,7 +349,7 @@ func TestRewriteDDLQueryWithMultiTableOrdering(t *testing.T) {
 	t.Parallel()
 
 	// Create a router where one schema is mapped and one is not
-	router, err := NewRouter(true, []RoutingRuleConfig{
+	router, err := NewRouter(true, []*config.DispatchRule{
 		{
 			Matcher:      []string{"mapped_source_db.*"},
 			TargetSchema: "mapped_target_db",
@@ -447,7 +448,7 @@ func TestRewriteDDLQueryWithComplexMultiTableRouting(t *testing.T) {
 	t.Parallel()
 
 	// Test with full routing (schema + table name changes)
-	tableRouter, err := NewRouter(true, []RoutingRuleConfig{
+	tableRouter, err := NewRouter(true, []*config.DispatchRule{
 		{
 			Matcher:      []string{"source_db.source_table"},
 			TargetSchema: "target_db",
@@ -546,7 +547,7 @@ func TestRewriteDDLQueryWithConsolidatedRouting(t *testing.T) {
 
 	// Test scenario with multiple schemas consolidated to a single target
 	// Scenario: db1.* -> consolidated, db2.* -> consolidated
-	consolidatedRouter, err := NewRouter(true, []RoutingRuleConfig{
+	consolidatedRouter, err := NewRouter(true, []*config.DispatchRule{
 		{
 			Matcher:      []string{"db1.*"},
 			TargetSchema: "consolidated",
@@ -580,7 +581,7 @@ func TestRewriteDDLQueryWithConsolidatedRouting(t *testing.T) {
 
 	// Test scenarios with multiple schemas mapped to different targets
 	// Scenario: db1.* -> target1, db2.* -> target2
-	multiSchemaRouter, err := NewRouter(true, []RoutingRuleConfig{
+	multiSchemaRouter, err := NewRouter(true, []*config.DispatchRule{
 		{
 			Matcher:      []string{"db1.*"},
 			TargetSchema: "target1",
@@ -640,7 +641,7 @@ func TestRewriteDDLQueryWithConsolidatedRouting(t *testing.T) {
 func TestRewriteDDLQueryWithErrors(t *testing.T) {
 	t.Parallel()
 
-	router, err := NewRouter(false, []RoutingRuleConfig{
+	router, err := NewRouter(false, []*config.DispatchRule{
 		{
 			Matcher:      []string{"source_db.*"},
 			TargetSchema: "target_db",

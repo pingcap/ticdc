@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
 
@@ -83,7 +84,7 @@ func TestNewRouter(t *testing.T) {
 		require.NoError(t, err)
 		require.Nil(t, router)
 
-		router, err = NewRouter(true, []RoutingRuleConfig{})
+		router, err = NewRouter(true, []*config.DispatchRule{})
 		require.NoError(t, err)
 		require.Nil(t, router)
 	})
@@ -91,7 +92,7 @@ func TestNewRouter(t *testing.T) {
 	t.Run("rules without routing targets are skipped", func(t *testing.T) {
 		t.Parallel()
 
-		router, err := NewRouter(true, []RoutingRuleConfig{
+		router, err := NewRouter(true, []*config.DispatchRule{
 			{Matcher: []string{"db1.*"}},
 		})
 		require.NoError(t, err)
@@ -101,7 +102,7 @@ func TestNewRouter(t *testing.T) {
 	t.Run("invalid matcher returns error", func(t *testing.T) {
 		t.Parallel()
 
-		router, err := NewRouter(true, []RoutingRuleConfig{
+		router, err := NewRouter(true, []*config.DispatchRule{
 			{
 				Matcher:      []string{"[invalid"},
 				TargetSchema: "target",
@@ -109,6 +110,10 @@ func TestNewRouter(t *testing.T) {
 			},
 		})
 		require.Error(t, err)
+		code, ok := errors.RFCCode(err)
+		require.True(t, ok)
+		require.Equal(t, errors.ErrInvalidRoutingRule.RFCCode(), code)
+		require.ErrorContains(t, err, "matcher")
 		require.Nil(t, router)
 	})
 }
@@ -121,7 +126,7 @@ func TestRouterRoute(t *testing.T) {
 	require.Equal(t, "source_db", schema)
 	require.Equal(t, "source_table", table)
 
-	router, err := NewRouter(true, []RoutingRuleConfig{
+	router, err := NewRouter(true, []*config.DispatchRule{
 		{Matcher: []string{"db1.specific"}, TargetSchema: "specific_db", TargetTable: "specific_table"},
 		{Matcher: []string{"db1.*"}, TargetSchema: "db1_archive", TargetTable: TablePlaceholder},
 		{Matcher: []string{"staging.*"}, TargetSchema: "prod", TargetTable: SchemaPlaceholder + "_" + TablePlaceholder},
@@ -179,7 +184,7 @@ func TestRouterRoute(t *testing.T) {
 func TestRouterFirstMatchWins(t *testing.T) {
 	t.Parallel()
 
-	router, err := NewRouter(true, []RoutingRuleConfig{
+	router, err := NewRouter(true, []*config.DispatchRule{
 		{Matcher: []string{"*.*"}, TargetSchema: "catch_all", TargetTable: TablePlaceholder},
 		{Matcher: []string{"db1.*"}, TargetSchema: "db1_only", TargetTable: TablePlaceholder},
 		{Matcher: []string{"db1.users"}, TargetSchema: "users_only", TargetTable: "users_bak"},
@@ -198,7 +203,7 @@ func TestRouterCaseSensitivity(t *testing.T) {
 	t.Run("case sensitive router requires exact match", func(t *testing.T) {
 		t.Parallel()
 
-		router, err := NewRouter(true, []RoutingRuleConfig{
+		router, err := NewRouter(true, []*config.DispatchRule{
 			{Matcher: []string{"MyDB.MyTable"}, TargetSchema: "target_db", TargetTable: "target_table"},
 		})
 		require.NoError(t, err)
@@ -215,7 +220,7 @@ func TestRouterCaseSensitivity(t *testing.T) {
 	t.Run("case insensitive router preserves source case in placeholders", func(t *testing.T) {
 		t.Parallel()
 
-		router, err := NewRouter(false, []RoutingRuleConfig{
+		router, err := NewRouter(false, []*config.DispatchRule{
 			{Matcher: []string{"MyDB.*"}, TargetSchema: "backup_" + SchemaPlaceholder, TargetTable: TablePlaceholder},
 		})
 		require.NoError(t, err)
@@ -226,13 +231,13 @@ func TestRouterCaseSensitivity(t *testing.T) {
 	})
 }
 
-func TestNewRouterFromDispatchRules(t *testing.T) {
+func TestNewRouterUsesDispatchRules(t *testing.T) {
 	t.Parallel()
 
 	t.Run("nil config returns nil router", func(t *testing.T) {
 		t.Parallel()
 
-		router, err := NewRouterFromDispatchRules(true, nil)
+		router, err := NewRouter(true, nil)
 		require.NoError(t, err)
 		require.Nil(t, router)
 	})
@@ -240,7 +245,7 @@ func TestNewRouterFromDispatchRules(t *testing.T) {
 	t.Run("builds router from rules with target fields and ignores pure dispatch rules", func(t *testing.T) {
 		t.Parallel()
 
-		router, err := NewRouterFromDispatchRules(true, []*config.DispatchRule{
+		router, err := NewRouter(true, []*config.DispatchRule{
 			{
 				Matcher:        []string{"db1.*"},
 				DispatcherRule: "ts",

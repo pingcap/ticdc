@@ -18,6 +18,7 @@ import (
 
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/stretchr/testify/require"
 )
 
@@ -35,7 +36,7 @@ func TestApplyToTableInfo(t *testing.T) {
 	var nilRouter *Router
 	require.Same(t, tableInfo, nilRouter.ApplyToTableInfo(tableInfo))
 
-	noOpRouter, err := NewRouter(false, []RoutingRuleConfig{
+	noOpRouter, err := NewRouter(false, []*config.DispatchRule{
 		{
 			Matcher:      []string{"other_db.*"},
 			TargetSchema: "target_db",
@@ -45,7 +46,7 @@ func TestApplyToTableInfo(t *testing.T) {
 	require.NoError(t, err)
 	require.Same(t, tableInfo, noOpRouter.ApplyToTableInfo(tableInfo))
 
-	router, err := NewRouter(false, []RoutingRuleConfig{
+	router, err := NewRouter(false, []*config.DispatchRule{
 		{
 			Matcher:      []string{"source_db.source_table"},
 			TargetSchema: "target_db",
@@ -68,7 +69,7 @@ func TestApplyToTableInfo(t *testing.T) {
 func TestApplyToDDLEvent(t *testing.T) {
 	t.Parallel()
 
-	router, err := NewRouter(false, []RoutingRuleConfig{
+	router, err := NewRouter(false, []*config.DispatchRule{
 		{
 			Matcher:      []string{"source_db.source_table"},
 			TargetSchema: "target_db",

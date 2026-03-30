@@ -45,33 +45,24 @@ type routingRule struct {
 	tableExpr  string
 }
 
-// RoutingRuleConfig represents configuration for a single routing rule.
-type RoutingRuleConfig struct {
-	// Matcher is a filter pattern like "db1.*" or "db1.table1"
-	Matcher []string `toml:"matcher" json:"matcher"`
-	// TargetSchema is an expression for the target schema, e.g., "{schema}" or "target_db"
-	TargetSchema string `toml:"target-schema" json:"target-schema"`
-	// TargetTable is an expression for the target table, e.g., "{table}" or "target_table"
-	TargetTable string `toml:"target-table" json:"target-table"`
-}
-
-// NewRouter creates a new Router from a list of routing rule configurations.
-// Returns nil if no rules are provided.
-func NewRouter(caseSensitive bool, rules []RoutingRuleConfig) (*Router, error) {
+// NewRouter creates a new Router from dispatch rules.
+// Returns nil if no routing rules are configured.
+func NewRouter(caseSensitive bool, rules []*config.DispatchRule) (*Router, error) {
 	if len(rules) == 0 {
 		return nil, nil
 	}
 
 	routingRules := make([]*routingRule, 0, len(rules))
 
-	for _, ruleConfig := range rules {
-		if ruleConfig.TargetSchema == "" && ruleConfig.TargetTable == "" {
+	for _, rule := range rules {
+		if rule.TargetSchema == "" && rule.TargetTable == "" {
 			continue
 		}
 
-		f, err := tfilter.Parse(ruleConfig.Matcher)
+		f, err := tfilter.Parse(rule.Matcher)
 		if err != nil {
-			return nil, errors.ErrInvalidRoutingRule.GenWithStackByArgs(ruleConfig.Matcher, err)
+			log.Warn("router failed to initialize", zap.Strings("matcher", rule.Matcher), zap.Error(err))
+			return nil, errors.WrapError(errors.ErrInvalidRoutingRule, err)
 		}
 		if !caseSensitive {
 			f = tfilter.CaseInsensitive(f)
@@ -79,8 +70,8 @@ func NewRouter(caseSensitive bool, rules []RoutingRuleConfig) (*Router, error) {
 
 		routingRules = append(routingRules, &routingRule{
 			filter:     f,
-			schemaExpr: ruleConfig.TargetSchema,
-			tableExpr:  ruleConfig.TargetTable,
+			schemaExpr: rule.TargetSchema,
+			tableExpr:  rule.TargetTable,
 		})
 	}
 
@@ -253,28 +244,4 @@ func substituteExpression(expr, sourceSchema, sourceTable, defaultValue string) 
 	result = strings.ReplaceAll(result, SchemaPlaceholder, sourceSchema)
 	result = strings.ReplaceAll(result, TablePlaceholder, sourceTable)
 	return result
-}
-
-// NewRouterFromDispatchRules creates a new Router from dispatch rule configurations.
-// This is a convenience function that extracts routing rules from DispatchRule configs.
-func NewRouterFromDispatchRules(caseSensitive bool, rules []*config.DispatchRule) (*Router, error) {
-	if len(rules) == 0 {
-		return nil, nil
-	}
-
-	routingConfigs := make([]RoutingRuleConfig, 0, len(rules))
-	for _, rule := range rules {
-		// Skip rules without routing configuration
-		if rule.TargetSchema == "" && rule.TargetTable == "" {
-			continue
-		}
-
-		routingConfigs = append(routingConfigs, RoutingRuleConfig{
-			Matcher:      rule.Matcher,
-			TargetSchema: rule.TargetSchema,
-			TargetTable:  rule.TargetTable,
-		})
-	}
-
-	return NewRouter(caseSensitive, routingConfigs)
 }
