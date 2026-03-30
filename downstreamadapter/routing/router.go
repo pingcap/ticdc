@@ -128,7 +128,8 @@ func (r *Router) ApplyToDDLEvent(ddl *commonEvent.DDLEvent, changefeedID common.
 		return nil, err
 	}
 
-	routedTableInfo, tableInfoChanged := applyToTableInfoAndReport(r, ddl.TableInfo)
+	routedTableInfo := r.ApplyToTableInfo(ddl.TableInfo)
+	tableInfoChanged := routedTableInfo != ddl.TableInfo
 	routedMultipleTableInfos, multipleTableInfosChanged := applyToMultipleTableInfos(r, ddl.MultipleTableInfos)
 	routedBlockedTableNames, blockedTableNamesChanged := applyToBlockedTableNames(r, ddl.BlockedTableNames)
 
@@ -166,18 +167,15 @@ func (r *Router) matchRule(schema, table string) *rule {
 	return nil
 }
 
-func applyToTableInfoAndReport(r *Router, tableInfo *common.TableInfo) (*common.TableInfo, bool) {
-	routedTableInfo := r.ApplyToTableInfo(tableInfo)
-	return routedTableInfo, routedTableInfo != tableInfo
-}
-
 func applyToMultipleTableInfos(r *Router, tableInfos []*common.TableInfo) ([]*common.TableInfo, bool) {
 	if len(tableInfos) == 0 {
 		return tableInfos, false
 	}
 
-	var routedTableInfos []*common.TableInfo
-	changed := false
+	var (
+		changed          bool
+		routedTableInfos []*common.TableInfo
+	)
 	for i, tableInfo := range tableInfos {
 		routedTableInfo := r.ApplyToTableInfo(tableInfo)
 		if routedTableInfo != tableInfo {
@@ -200,8 +198,10 @@ func applyToBlockedTableNames(r *Router, tableNames []commonEvent.SchemaTableNam
 		return tableNames, false
 	}
 
-	var routedTableNames []commonEvent.SchemaTableName
-	changed := false
+	var (
+		changed          bool
+		routedTableNames []commonEvent.SchemaTableName
+	)
 	for i, tableName := range tableNames {
 		targetSchema, targetTable := r.Route(tableName.SchemaName, tableName.TableName)
 		if targetSchema != tableName.SchemaName || targetTable != tableName.TableName {
