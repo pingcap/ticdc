@@ -1161,7 +1161,7 @@ func validateRoutingExpression(fieldName, expr string) error {
 	if expr == "" || validRoutingExpressionRegexp.MatchString(expr) {
 		return nil
 	}
-	return errors.ErrInvalidRoutingRule.GenWithStack(
+	return errors.ErrInvalidTableRoutingRule.GenWithStack(
 		"%s %q must contain only literal text, {schema}, and {table}",
 		fieldName,
 		expr,

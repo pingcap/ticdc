@@ -15,6 +15,7 @@ package routing
 
 import (
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tidb/pkg/parser"
@@ -42,7 +43,7 @@ type DDLRoutingResult struct {
 	QueryChanged bool
 }
 
-// RewriteDDLQueryWithRouting rewrites a DDL query by applying routing rules
+// rewriteDDLQueryWithRouting rewrites a DDL query by applying routing rules
 // to transform source table names to target table names.
 //
 // This function is used by both MySQL and Redo sinks to ensure DDL statements
@@ -60,7 +61,7 @@ type DDLRoutingResult struct {
 //
 // IMPORTANT: This function does NOT mutate ddl.Query. Callers are responsible
 // for applying the returned NewQuery to the DDL event if QueryChanged is true.
-func RewriteDDLQueryWithRouting(router *Router, ddl *commonEvent.DDLEvent, changefeedID string) (*DDLRoutingResult, error) {
+func rewriteDDLQueryWithRouting(router *Router, ddl *commonEvent.DDLEvent, changefeedID common.ChangeFeedID) (*DDLRoutingResult, error) {
 	result := &DDLRoutingResult{
 		NewQuery:       ddl.Query,
 		RoutingApplied: false,
@@ -75,22 +76,30 @@ func RewriteDDLQueryWithRouting(router *Router, ddl *commonEvent.DDLEvent, chang
 	// Get the default schema for parsing. If TableInfo is nil (e.g., for
 	// database-level DDLs like CREATE DATABASE), FetchDDLTables will extract
 	// the schema name directly from the DDL statement itself.
-	defaultSchema := ""
+	var originSchema string
 	if ddl.TableInfo != nil {
-		defaultSchema = ddl.TableInfo.GetSchemaName()
+		originSchema = ddl.TableInfo.GetSchemaName()
 	}
 
 	// Parse the DDL query using TiDB parser
 	p := parser.New()
 	stmt, err := p.ParseOneStmt(ddl.Query, "", "")
 	if err != nil {
-		return nil, errors.Annotatef(errors.Trace(err), "failed to parse DDL query for routing (query: %s)", ddl.Query)
+		log.Error("rewrite ddl failed due to parse ddl query",
+			zap.String("keyspace", changefeedID.Keyspace()),
+			zap.String("changefeed", changefeedID.Name()),
+			zap.String("query", ddl.Query), zap.Error(err))
+		return nil, errors.WrapError(errors.ErrTableRoutingFailed, err)
 	}
 
 	// Fetch source tables from the DDL
-	sourceTables, err := FetchDDLTables(defaultSchema, stmt)
+	sourceTables, err := fetchDDLTables(originSchema, stmt)
 	if err != nil {
-		return nil, errors.Annotatef(errors.Trace(err), "failed to fetch tables from DDL for routing (query: %s)", ddl.Query)
+		log.Error("rewrite ddl failed due to fetch ddl tables",
+			zap.String("keyspace", changefeedID.Keyspace()),
+			zap.String("changefeed", changefeedID.Name()),
+			zap.String("query", ddl.Query), zap.Error(err))
+		return nil, errors.WrapError(errors.ErrTableRoutingFailed, err)
 	}
 
 	if len(sourceTables) == 0 {
@@ -98,12 +107,14 @@ func RewriteDDLQueryWithRouting(router *Router, ddl *commonEvent.DDLEvent, chang
 	}
 
 	// Build target tables by applying routing rules
-	targetTables := make([]*filter.Table, 0, len(sourceTables))
-	hasRouting := false
+	var (
+		routed       bool
+		targetTables = make([]*filter.Table, 0, len(sourceTables))
+	)
 	for _, srcTable := range sourceTables {
 		targetSchema, targetTable := router.Route(srcTable.Schema, srcTable.Name)
 		if targetSchema != srcTable.Schema || targetTable != srcTable.Name {
-			hasRouting = true
+			routed = true
 		}
 		targetTables = append(targetTables, &filter.Table{
 			Schema: targetSchema,
@@ -111,7 +122,7 @@ func RewriteDDLQueryWithRouting(router *Router, ddl *commonEvent.DDLEvent, chang
 		})
 	}
 
-	if !hasRouting {
+	if !routed {
 		return result, nil
 	}
 
@@ -130,14 +141,19 @@ func RewriteDDLQueryWithRouting(router *Router, ddl *commonEvent.DDLEvent, chang
 	}
 
 	// Rewrite the DDL with target tables
-	newQuery, err := RenameDDLTable(stmt, targetTables)
+	newQuery, err := rewriteDDLQuery(stmt, targetTables)
 	if err != nil {
-		return nil, errors.Annotatef(errors.Trace(err), "failed to rewrite DDL query with routing (query: %s)", ddl.Query)
+		log.Error("rewrite ddl failed due to rewrite ddl query",
+			zap.String("keyspace", changefeedID.Keyspace()),
+			zap.String("changefeed", changefeedID.Name()),
+			zap.String("query", ddl.Query), zap.Any("targetTables", targetTables), zap.Error(err))
+		return nil, errors.WrapError(errors.ErrTableRoutingFailed, err)
 	}
 
 	if newQuery != ddl.Query {
 		log.Info("DDL query rewritten with routing",
-			zap.String("changefeed", changefeedID),
+			zap.String("keyspace", changefeedID.Keyspace()),
+			zap.String("changefeed", changefeedID.Name()),
 			zap.String("originalQuery", ddl.Query),
 			zap.String("newQuery", newQuery))
 		result.NewQuery = newQuery

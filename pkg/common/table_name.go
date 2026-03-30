@@ -26,12 +26,10 @@ type TableName struct {
 	// TableID is the logic table ID
 	TableID     int64 `toml:"tbl-id" msg:"tbl-id"`
 	IsPartition bool  `toml:"is-partition" msg:"is-partition"`
-	// TargetSchema is the target schema name for routing.
-	// If empty, Schema is used as the target.
+
+	// TargetSchema and TargetTable is not empty if table routing enabled
 	TargetSchema string `toml:"target-db-name" msg:"target-db-name"`
-	// TargetTable is the target table name for routing.
-	// If empty, Table is used as the target.
-	TargetTable string `toml:"target-tbl-name" msg:"target-tbl-name"`
+	TargetTable  string `toml:"target-tbl-name" msg:"target-tbl-name"`
 }
 
 // String implements fmt.Stringer interface.

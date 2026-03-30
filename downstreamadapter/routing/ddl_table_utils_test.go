@@ -408,11 +408,11 @@ func TestError(t *testing.T) {
 
 	stmts, _, err := p.Parse(dml, "", "")
 	require.NoError(t, err)
-	_, err = FetchDDLTables("test", stmts[0])
+	_, err = fetchDDLTables("test", stmts[0])
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unknown DDL type")
 
-	_, err = RenameDDLTable(stmts[0], nil)
+	_, err = rewriteDDLQuery(stmts[0], nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unknown DDL type")
 
@@ -420,7 +420,7 @@ func TestError(t *testing.T) {
 	ddl := "create table `s1`.`t1` (id int)"
 	stmts, _, err = p.Parse(ddl, "", "")
 	require.NoError(t, err)
-	_, err = RenameDDLTable(stmts[0], nil)
+	_, err = rewriteDDLQuery(stmts[0], nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "not enough target tables")
 }
@@ -436,7 +436,7 @@ func TestResolveDDL(t *testing.T) {
 		require.Len(t, stmts, 1)
 
 		// Test FetchDDLTables
-		tableNames, err := FetchDDLTables("test", stmts[0])
+		tableNames, err := fetchDDLTables("test", stmts[0])
 		require.NoError(t, err)
 		require.Equal(t, ca.expectedTableNames[0], tableNames, "FetchDDLTables failed for: %s", ca.sql)
 
@@ -445,7 +445,7 @@ func TestResolveDDL(t *testing.T) {
 		require.NoError(t, err)
 
 		// Test RenameDDLTable
-		targetSQL, err := RenameDDLTable(stmts[0], ca.targetTableNames[0])
+		targetSQL, err := rewriteDDLQuery(stmts[0], ca.targetTableNames[0])
 		require.NoError(t, err)
 		require.Equal(t, ca.targetSQLs[0], targetSQL, "RenameDDLTable failed for: %s", ca.sql)
 	}

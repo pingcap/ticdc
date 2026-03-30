@@ -53,13 +53,13 @@ func (tne *tableNameExtractor) Leave(in ast.Node) (ast.Node, bool) {
 	return in, true
 }
 
-// FetchDDLTables returns tables in DDL statement.
+// fetchDDLTables returns tables in DDL statement.
 // Because we use visitor pattern, first tableName is always upper-most table in AST.
 // Specifically:
 //   - for `CREATE TABLE ... LIKE` DDL, result contains [sourceTable, sourceRefTable]
 //   - for RENAME TABLE DDL, result contains [old1, new1, old2, new2, old3, new3, ...] because of TiDB parser
 //   - for other DDL, order of tableName is the node visit order.
-func FetchDDLTables(schema string, stmt ast.StmtNode) ([]*filter.Table, error) {
+func fetchDDLTables(schema string, stmt ast.StmtNode) ([]*filter.Table, error) {
 	switch stmt.(type) {
 	case ast.DDLNode:
 	default:
@@ -123,10 +123,10 @@ func (v *tableRenameVisitor) Leave(in ast.Node) (ast.Node, bool) {
 	return in, true
 }
 
-// RenameDDLTable renames tables in DDL by given `targetTables`.
-// Argument `targetTables` should have the same structure as the return value of FetchDDLTables.
+// rewriteDDLQuery renames tables in DDL by given `targetTables`.
+// Argument `targetTables` should have the same structure as the return value of fetchDDLTables.
 // Returned DDL is formatted like StringSingleQuotes, KeyWordUppercase and NameBackQuotes.
-func RenameDDLTable(stmt ast.StmtNode, targetTables []*filter.Table) (string, error) {
+func rewriteDDLQuery(stmt ast.StmtNode, targetTables []*filter.Table) (string, error) {
 	switch stmt.(type) {
 	case ast.DDLNode:
 	default:

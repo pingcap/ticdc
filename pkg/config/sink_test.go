@@ -408,7 +408,7 @@ func TestValidateRoutingExpressionRejectsInvalidExpressions(t *testing.T) {
 			require.Error(t, err)
 			code, ok := errors.RFCCode(err)
 			require.True(t, ok)
-			require.Equal(t, errors.ErrInvalidRoutingRule.RFCCode(), code)
+			require.Equal(t, errors.ErrInvalidTableRoutingRule.RFCCode(), code)
 		})
 	}
 }

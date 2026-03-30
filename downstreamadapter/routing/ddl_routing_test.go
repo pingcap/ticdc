@@ -34,7 +34,7 @@ func TestRewriteDDLQueryWithNilRouter(t *testing.T) {
 	}
 
 	originalQuery := ddlEvent.Query
-	result, err := RewriteDDLQueryWithRouting(nil, ddlEvent, "test-changefeed")
+	result, err := rewriteDDLQueryWithRouting(nil, ddlEvent, "test-changefeed")
 	require.NoError(t, err)
 	require.False(t, result.RoutingApplied, "Query should not be rewritten when router is nil")
 	require.Equal(t, originalQuery, result.NewQuery, "Query should not be modified when router is nil")
@@ -57,7 +57,7 @@ func TestRewriteDDLQueryWithEmptyQuery(t *testing.T) {
 		Query: "",
 	}
 
-	result, err := RewriteDDLQueryWithRouting(router, ddlEvent, "test-changefeed")
+	result, err := rewriteDDLQueryWithRouting(router, ddlEvent, "test-changefeed")
 	require.NoError(t, err)
 	require.False(t, result.RoutingApplied)
 	require.Equal(t, "", result.NewQuery)
@@ -86,7 +86,7 @@ func TestRewriteDDLQueryWithBasicRouting(t *testing.T) {
 		},
 	}
 
-	result, err := RewriteDDLQueryWithRouting(router, ddlEvent, "test-changefeed")
+	result, err := rewriteDDLQueryWithRouting(router, ddlEvent, "test-changefeed")
 	require.NoError(t, err)
 	require.True(t, result.RoutingApplied)
 	require.Contains(t, result.NewQuery, "target_db")
@@ -103,7 +103,7 @@ func TestRewriteDDLQueryWithBasicRouting(t *testing.T) {
 	}
 
 	originalQuery := ddlEvent2.Query
-	result2, err := RewriteDDLQueryWithRouting(router, ddlEvent2, "test-changefeed")
+	result2, err := rewriteDDLQueryWithRouting(router, ddlEvent2, "test-changefeed")
 	require.NoError(t, err)
 	require.False(t, result2.RoutingApplied, "Query should not be rewritten when no routing rule matches")
 	require.Equal(t, originalQuery, result2.NewQuery, "Query should not be modified when no routing rule matches")
@@ -178,7 +178,7 @@ func TestRewriteDDLQueryWithSchemaAndTableRouting(t *testing.T) {
 				},
 			}
 
-			result, err := RewriteDDLQueryWithRouting(router, ddlEvent, "test-changefeed")
+			result, err := rewriteDDLQueryWithRouting(router, ddlEvent, "test-changefeed")
 			require.NoError(t, err)
 			require.True(t, result.RoutingApplied)
 			require.Contains(t, result.NewQuery, tt.expectedQuery, "Query should contain routed schema and table")
@@ -259,7 +259,7 @@ func TestRewriteDDLQueryWithSchemaOnlyRouting(t *testing.T) {
 				},
 			}
 
-			result, err := RewriteDDLQueryWithRouting(router, ddlEvent, "test-changefeed")
+			result, err := rewriteDDLQueryWithRouting(router, ddlEvent, "test-changefeed")
 			require.NoError(t, err)
 			require.True(t, result.RoutingApplied)
 			require.Contains(t, result.NewQuery, tt.expectedQuery, "Query should contain routed schema with original table")
@@ -332,7 +332,7 @@ func TestRewriteDDLQueryWithTableOnlyRouting(t *testing.T) {
 				},
 			}
 
-			result, err := RewriteDDLQueryWithRouting(router, ddlEvent, "test-changefeed")
+			result, err := rewriteDDLQueryWithRouting(router, ddlEvent, "test-changefeed")
 			require.NoError(t, err)
 			require.True(t, result.RoutingApplied)
 			require.Contains(t, result.NewQuery, tt.expectedQuery, "Query should contain original schema with routed table")
@@ -434,7 +434,7 @@ func TestRewriteDDLQueryWithMultiTableOrdering(t *testing.T) {
 				},
 			}
 
-			result, err := RewriteDDLQueryWithRouting(router, ddlEvent, "test-changefeed")
+			result, err := rewriteDDLQueryWithRouting(router, ddlEvent, "test-changefeed")
 			require.NoError(t, err)
 			require.Equal(t, tt.expectedQuery, result.NewQuery,
 				"ORDERING TEST FAILED for %s\n%s\nExpected: %s\nActual:   %s",
@@ -532,7 +532,7 @@ func TestRewriteDDLQueryWithComplexMultiTableRouting(t *testing.T) {
 				},
 			}
 
-			result, err := RewriteDDLQueryWithRouting(tableRouter, ddlEvent, "test-changefeed")
+			result, err := rewriteDDLQueryWithRouting(tableRouter, ddlEvent, "test-changefeed")
 			require.NoError(t, err)
 			require.Equal(t, tt.expectedQuery, result.NewQuery,
 				"TABLE ROUTING TEST FAILED for %s\n%s\nExpected: %s\nActual:   %s",
@@ -571,7 +571,7 @@ func TestRewriteDDLQueryWithConsolidatedRouting(t *testing.T) {
 			},
 		}
 
-		result, err := RewriteDDLQueryWithRouting(consolidatedRouter, ddlEvent, "test-changefeed")
+		result, err := rewriteDDLQueryWithRouting(consolidatedRouter, ddlEvent, "test-changefeed")
 		require.NoError(t, err)
 
 		expectedQuery := "CREATE TABLE `consolidated`.`t1` LIKE `consolidated`.`t2`"
@@ -606,7 +606,7 @@ func TestRewriteDDLQueryWithConsolidatedRouting(t *testing.T) {
 			},
 		}
 
-		result, err := RewriteDDLQueryWithRouting(multiSchemaRouter, ddlEvent, "test-changefeed")
+		result, err := rewriteDDLQueryWithRouting(multiSchemaRouter, ddlEvent, "test-changefeed")
 		require.NoError(t, err)
 
 		expectedQuery := "CREATE TABLE `target1`.`users` LIKE `target2`.`users`"
@@ -626,7 +626,7 @@ func TestRewriteDDLQueryWithConsolidatedRouting(t *testing.T) {
 			},
 		}
 
-		result, err := RewriteDDLQueryWithRouting(multiSchemaRouter, ddlEvent, "test-changefeed")
+		result, err := rewriteDDLQueryWithRouting(multiSchemaRouter, ddlEvent, "test-changefeed")
 		require.NoError(t, err)
 
 		expectedQuery := "RENAME TABLE `target1`.`users` TO `target2`.`users`"
@@ -658,7 +658,7 @@ func TestRewriteDDLQueryWithErrors(t *testing.T) {
 			},
 		}
 
-		result, err := RewriteDDLQueryWithRouting(router, ddlEvent, "test-changefeed")
+		result, err := rewriteDDLQueryWithRouting(router, ddlEvent, "test-changefeed")
 		require.Error(t, err, "Should return error for invalid SQL syntax")
 		require.Nil(t, result, "Result should be nil on error")
 		require.Contains(t, err.Error(), "failed to parse DDL query", "Error should mention parsing failure")
@@ -672,7 +672,7 @@ func TestRewriteDDLQueryWithErrors(t *testing.T) {
 			},
 		}
 
-		result, err := RewriteDDLQueryWithRouting(router, ddlEvent, "test-changefeed")
+		result, err := rewriteDDLQueryWithRouting(router, ddlEvent, "test-changefeed")
 		require.Error(t, err, "Should return error for syntax error")
 		require.Nil(t, result)
 		require.Contains(t, err.Error(), "failed to parse DDL query", "Error should mention parsing failure")
@@ -686,7 +686,7 @@ func TestRewriteDDLQueryWithErrors(t *testing.T) {
 			TableInfo: nil, // Database-level DDL has no TableInfo
 		}
 
-		result, err := RewriteDDLQueryWithRouting(router, ddlEvent, "test-changefeed")
+		result, err := rewriteDDLQueryWithRouting(router, ddlEvent, "test-changefeed")
 		require.NoError(t, err, "Database-level DDL with no tables should not error")
 		require.False(t, result.RoutingApplied, "Database DDL should not be rewritten")
 		require.Equal(t, ddlEvent.Query, result.NewQuery, "Query should remain unchanged")

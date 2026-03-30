@@ -35,11 +35,11 @@ const (
 
 // Router routes source schema/table names to target schema/table names.
 type Router struct {
-	rules []*routingRule
+	rules []*rule
 }
 
-// routingRule represents a single routing rule.
-type routingRule struct {
+// rule represents a single routing rule.
+type rule struct {
 	filter     tfilter.Filter
 	schemaExpr string
 	tableExpr  string
@@ -52,26 +52,25 @@ func NewRouter(caseSensitive bool, rules []*config.DispatchRule) (*Router, error
 		return nil, nil
 	}
 
-	routingRules := make([]*routingRule, 0, len(rules))
-
-	for _, rule := range rules {
-		if rule.TargetSchema == "" && rule.TargetTable == "" {
+	routingRules := make([]*rule, 0, len(rules))
+	for _, r := range rules {
+		if r.TargetSchema == "" && r.TargetTable == "" {
 			continue
 		}
 
-		f, err := tfilter.Parse(rule.Matcher)
+		f, err := tfilter.Parse(r.Matcher)
 		if err != nil {
-			log.Warn("router failed to initialize", zap.Strings("matcher", rule.Matcher), zap.Error(err))
-			return nil, errors.WrapError(errors.ErrInvalidRoutingRule, err)
+			log.Warn("router failed to initialize", zap.Strings("matcher", r.Matcher), zap.Error(err))
+			return nil, errors.WrapError(errors.ErrInvalidTableRoutingRule, err)
 		}
 		if !caseSensitive {
 			f = tfilter.CaseInsensitive(f)
 		}
 
-		routingRules = append(routingRules, &routingRule{
+		routingRules = append(routingRules, &rule{
 			filter:     f,
-			schemaExpr: rule.TargetSchema,
-			tableExpr:  rule.TargetTable,
+			schemaExpr: r.TargetSchema,
+			tableExpr:  r.TargetTable,
 		})
 	}
 
@@ -83,7 +82,6 @@ func NewRouter(caseSensitive bool, rules []*config.DispatchRule) (*Router, error
 }
 
 // Route returns the target schema and table names for the given source schema/table.
-// If no rule matches, returns the source schema and table unchanged.
 func (r *Router) Route(sourceSchema, sourceTable string) (targetSchema, targetTable string) {
 	if r == nil || len(r.rules) == 0 {
 		return sourceSchema, sourceTable
@@ -96,14 +94,6 @@ func (r *Router) Route(sourceSchema, sourceTable string) (targetSchema, targetTa
 
 	targetSchema = substituteExpression(rule.schemaExpr, sourceSchema, sourceTable, sourceSchema)
 	targetTable = substituteExpression(rule.tableExpr, sourceSchema, sourceTable, sourceTable)
-
-	log.Debug("sink routing applied",
-		zap.String("sourceSchema", sourceSchema),
-		zap.String("sourceTable", sourceTable),
-		zap.String("targetSchema", targetSchema),
-		zap.String("targetTable", targetTable),
-	)
-
 	return targetSchema, targetTable
 }
 
@@ -128,12 +118,12 @@ func (r *Router) ApplyToTableInfo(tableInfo *common.TableInfo) *common.TableInfo
 // ApplyToDDLEvent returns the original DDL event unless routing changes the query or related
 // table metadata. When routing applies, it clones the DDL event once and rewrites all relevant
 // routing-aware fields on the clone.
-func (r *Router) ApplyToDDLEvent(ddl *commonEvent.DDLEvent, changefeedID string) (*commonEvent.DDLEvent, error) {
+func (r *Router) ApplyToDDLEvent(ddl *commonEvent.DDLEvent, changefeedID common.ChangeFeedID) (*commonEvent.DDLEvent, error) {
 	if ddl == nil {
 		return nil, nil
 	}
 
-	result, err := RewriteDDLQueryWithRouting(r, ddl, changefeedID)
+	result, err := rewriteDDLQueryWithRouting(r, ddl, changefeedID)
 	if err != nil {
 		return nil, err
 	}
@@ -167,7 +157,7 @@ func (r *Router) ApplyToDDLEvent(ddl *commonEvent.DDLEvent, changefeedID string)
 }
 
 // matchRule finds the first rule that matches the given schema/table.
-func (r *Router) matchRule(schema, table string) *routingRule {
+func (r *Router) matchRule(schema, table string) *rule {
 	for _, rule := range r.rules {
 		if rule.filter.MatchTable(schema, table) {
 			return rule

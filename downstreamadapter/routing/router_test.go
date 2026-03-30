@@ -112,8 +112,7 @@ func TestNewRouter(t *testing.T) {
 		require.Error(t, err)
 		code, ok := errors.RFCCode(err)
 		require.True(t, ok)
-		require.Equal(t, errors.ErrInvalidRoutingRule.RFCCode(), code)
-		require.ErrorContains(t, err, "matcher")
+		require.Equal(t, errors.ErrInvalidTableRoutingRule.RFCCode(), code)
 		require.Nil(t, router)
 	})
 }

@@ -764,5 +764,5 @@ func (d *dispatcherStat) applyRoutingToTableInfo(tableInfo *common.TableInfo) *c
 }
 
 func (d *dispatcherStat) applyRoutingToDDLEvent(ddl *commonEvent.DDLEvent) (*commonEvent.DDLEvent, error) {
-	return d.target.GetRouter().ApplyToDDLEvent(ddl, d.target.GetChangefeedID().String())
+	return d.target.GetRouter().ApplyToDDLEvent(ddl, d.target.GetChangefeedID())
 }
