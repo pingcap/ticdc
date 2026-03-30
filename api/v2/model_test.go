@@ -33,6 +33,11 @@ func TestReplicaConfigConversion(t *testing.T) {
 		EnableSyncPoint:       util.AddressOf(true),
 		EnableTableMonitor:    util.AddressOf(true),
 		BDRMode:               util.AddressOf(true),
+		Sink: &SinkConfig{
+			CloudStorageConfig: &CloudStorageConfig{
+				UseTableIDAsPath: util.AddressOf(true),
+			},
+		},
 		Mounter: &MounterConfig{
 			WorkerNum: util.AddressOf(16),
 		},
@@ -61,6 +66,7 @@ func TestReplicaConfigConversion(t *testing.T) {
 	require.True(t, util.GetOrZero(internalCfg.EnableSyncPoint))
 	require.True(t, util.GetOrZero(internalCfg.EnableTableMonitor))
 	require.True(t, util.GetOrZero(internalCfg.BDRMode))
+	require.True(t, util.GetOrZero(internalCfg.Sink.CloudStorageConfig.UseTableIDAsPath))
 	require.Equal(t, internalCfg.Mounter.WorkerNum, *apiCfg.Mounter.WorkerNum)
 	require.True(t, util.GetOrZero(internalCfg.Scheduler.EnableTableAcrossNodes))
 	require.Equal(t, 1000, util.GetOrZero(internalCfg.Scheduler.RegionThreshold))
@@ -85,6 +91,7 @@ func TestReplicaConfigConversion(t *testing.T) {
 	require.True(t, *apiCfgBack.CaseSensitive)
 	require.True(t, *apiCfgBack.ForceReplicate)
 	require.True(t, *apiCfgBack.IgnoreIneligibleTable)
+	require.True(t, *apiCfgBack.Sink.CloudStorageConfig.UseTableIDAsPath)
 	require.Equal(t, 16, *apiCfgBack.Mounter.WorkerNum)
 	require.True(t, *apiCfgBack.Scheduler.EnableTableAcrossNodes)
 	require.Equal(t, "correctness", *apiCfgBack.Integrity.IntegrityCheckLevel)
