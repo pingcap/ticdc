@@ -70,11 +70,6 @@ func NewMaintainerManager(
 	}
 
 	mc.RegisterHandler(messaging.MaintainerManagerTopic, m.recvMessages)
-	mc.RegisterHandler(messaging.MaintainerTopic,
-		func(ctx context.Context, msg *messaging.TargetMessage) error {
-			req := msg.Message[0].(*heartbeatpb.MaintainerCloseResponse)
-			return m.dispatcherMaintainerMessage(ctx, common.NewChangefeedIDFromPB(req.ChangefeedID), msg)
-		})
 	return m
 }
 
@@ -91,12 +86,15 @@ func (m *Manager) recvMessages(ctx context.Context, msg *messaging.TargetMessage
 		case m.msgCh <- msg:
 		}
 		return nil
-	// receive bootstrap response message from the dispatcher manager
+		// receive bootstrap response message from the dispatcher manager
 	case messaging.TypeMaintainerBootstrapResponse:
 		req := msg.Message[0].(*heartbeatpb.MaintainerBootstrapResponse)
 		return m.dispatcherMaintainerMessage(ctx, common.NewChangefeedIDFromPB(req.ChangefeedID), msg)
 	case messaging.TypeMaintainerPostBootstrapResponse:
 		req := msg.Message[0].(*heartbeatpb.MaintainerPostBootstrapResponse)
+		return m.dispatcherMaintainerMessage(ctx, common.NewChangefeedIDFromPB(req.ChangefeedID), msg)
+	case messaging.TypeMaintainerCloseResponse:
+		req := msg.Message[0].(*heartbeatpb.MaintainerCloseResponse)
 		return m.dispatcherMaintainerMessage(ctx, common.NewChangefeedIDFromPB(req.ChangefeedID), msg)
 	// receive heartbeat message from dispatchers
 	case messaging.TypeHeartBeatRequest:

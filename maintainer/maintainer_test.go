@@ -232,7 +232,7 @@ func (m *mockDispatcherManager) onDispatchRequest(
 
 func (m *mockDispatcherManager) onMaintainerCloseRequest(msg *messaging.TargetMessage) {
 	_ = m.mc.SendCommand(messaging.NewSingleTargetMessage(msg.From,
-		messaging.MaintainerTopic, &heartbeatpb.MaintainerCloseResponse{
+		messaging.MaintainerManagerTopic, &heartbeatpb.MaintainerCloseResponse{
 			ChangefeedID: msg.Message[0].(*heartbeatpb.MaintainerCloseRequest).ChangefeedID,
 			Success:      true,
 		}))
