@@ -51,8 +51,7 @@ func (t *threadPoolImpl) Submit(task Task, next time.Time) *TaskHandle {
 	st := &scheduledTask{
 		task: task,
 	}
-	t.reactor.newTaskChan <- taskAndTime{st, next}:
-	}
+	t.reactor.newTaskChan <- taskAndTime{st, next}
 	return &TaskHandle{st}
 }
 
