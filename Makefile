@@ -11,7 +11,6 @@
 
 FAIL_ON_STDOUT := awk "{ print } END { if (NR > 0) { exit 1  }  }"
 
-
 PROJECT=ticdc
 .DEFAULT_GOAL := cdc
 CURDIR := $(shell pwd)
