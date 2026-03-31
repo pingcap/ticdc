@@ -206,3 +206,35 @@ func TestPathInfo(t *testing.T) {
 	require.Equal(t, "test/path", pi.path)
 	require.Equal(t, int64(0), pi.pendingSize.Load())
 }
+
+func TestStreamCleansBatcherBufferAfterHandle(t *testing.T) {
+	handler := mockHandler{}
+	stream := newStream(1, "test", &handler, Option{UseBuffer: false}, newTestBatchConfigRegistry())
+
+	stream.start()
+	defer stream.close()
+
+	path := newPathInfo[int, string, *mockEvent, any, *mockHandler](1, "test", "test/path", nil)
+	stream.addPath(path)
+
+	done := &sync.WaitGroup{}
+	stream.addEvent(eventWrap[int, string, *mockEvent, any, *mockHandler]{
+		pathInfo: path,
+		event:    newMockEvent(1, path.path, 0, nil, nil, done),
+	})
+
+	done.Wait()
+
+	require.Eventually(t, func() bool {
+		if cap(stream.batcher.buf) == 0 {
+			return true
+		}
+		backing := stream.batcher.buf[:cap(stream.batcher.buf)]
+		for _, event := range backing {
+			if event != nil {
+				return false
+			}
+		}
+		return true
+	}, time.Second, 10*time.Millisecond)
+}
