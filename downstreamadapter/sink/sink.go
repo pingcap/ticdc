@@ -52,6 +52,7 @@ func New(ctx context.Context, cfg *config.ChangefeedConfig, changefeedID common.
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrSinkURIInvalid, err)
 	}
+
 	scheme := config.GetScheme(sinkURI)
 	switch scheme {
 	case config.MySQLScheme, config.MySQLSSLScheme, config.TiDBScheme, config.TiDBSSLScheme:

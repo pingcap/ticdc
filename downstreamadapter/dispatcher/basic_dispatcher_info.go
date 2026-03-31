@@ -17,6 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/pingcap/ticdc/downstreamadapter/routing"
 	"github.com/pingcap/ticdc/downstreamadapter/syncpoint"
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -54,6 +55,11 @@ type SharedInfo struct {
 	// will break the splittability of this table.
 	enableSplittableCheck bool
 
+	// router is used to route source schema/table names to target schema/table names.
+	// It is used to apply routing to TableInfo before storing it.
+	// May be nil if no routing rules are configured.
+	router *routing.Router
+
 	// Shared resources
 	// statusesChan is used to store the status of dispatchers when status changed
 	// and push to heartbeatRequestQueue
@@ -87,6 +93,7 @@ func NewSharedInfo(
 	syncPointConfig *syncpoint.SyncPointConfig,
 	txnAtomicity *config.AtomicityLevel,
 	enableSplittableCheck bool,
+	router *routing.Router,
 	statusesChan chan TableSpanStatusWithSeq,
 	blockStatusesChan chan *heartbeatpb.TableSpanBlockStatus,
 	errCh chan error,
@@ -101,6 +108,7 @@ func NewSharedInfo(
 		filterConfig:          filterConfig,
 		syncPointConfig:       syncPointConfig,
 		enableSplittableCheck: enableSplittableCheck,
+		router:                router,
 		statusesChan:          statusesChan,
 		blockStatusesChan:     blockStatusesChan,
 		blockExecutor:         newBlockEventExecutor(),
@@ -174,6 +182,13 @@ func (d *BasicDispatcher) GetTimezone() string {
 
 func (d *BasicDispatcher) IsOutputRawChangeEvent() bool {
 	return d.sharedInfo.outputRawChangeEvent
+}
+
+func (d *BasicDispatcher) GetRouter() *routing.Router {
+	if d.sharedInfo == nil {
+		return nil
+	}
+	return d.sharedInfo.GetRouter()
 }
 
 func (d *BasicDispatcher) GetFilterConfig() *eventpb.FilterConfig {
@@ -264,6 +279,12 @@ func (s *SharedInfo) GetErrCh() chan error {
 
 func (s *SharedInfo) GetBlockEventExecutor() *blockEventExecutor {
 	return s.blockExecutor
+}
+
+// GetRouter returns the router for schema/table name routing.
+// May return nil if no routing rules are configured.
+func (s *SharedInfo) GetRouter() *routing.Router {
+	return s.router
 }
 
 func (s *SharedInfo) Close() {
