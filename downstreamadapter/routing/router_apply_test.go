@@ -57,8 +57,10 @@ func TestApplyToTableInfo(t *testing.T) {
 
 	routed := router.ApplyToTableInfo(tableInfo)
 	require.NotSame(t, tableInfo, routed)
-	require.Equal(t, "target_db", routed.GetSchemaName())
-	require.Equal(t, "target_table", routed.GetTableName())
+	require.Equal(t, "source_db", routed.GetSchemaName())
+	require.Equal(t, "source_table", routed.GetTableName())
+	require.Equal(t, "target_db", routed.GetTargetSchemaName())
+	require.Equal(t, "target_table", routed.GetTargetTableName())
 	require.Equal(t, "source_db", routed.TableName.Schema)
 	require.Equal(t, "source_table", routed.TableName.Table)
 	require.Equal(t, "target_db", routed.TableName.TargetSchema)
@@ -112,16 +114,22 @@ func TestApplyToDDLEvent(t *testing.T) {
 			check: func(t *testing.T, original, routed *event.DDLEvent) {
 				require.Contains(t, routed.Query, "`target_db`.`target_table`")
 				require.Equal(t, "target_db", routed.GetDDLSchemaName())
-				require.Equal(t, "target_db", routed.SchemaName)
-				require.Equal(t, "target_table", routed.TableName)
+				require.Equal(t, "source_db", routed.SchemaName)
+				require.Equal(t, "source_table", routed.TableName)
+				require.Equal(t, "target_db", routed.TargetSchemaName)
+				require.Equal(t, "target_table", routed.TargetTableName)
 				require.NotSame(t, original.TableInfo, routed.TableInfo)
-				require.Equal(t, "target_db", routed.TableInfo.GetSchemaName())
-				require.Equal(t, "target_table", routed.TableInfo.GetTableName())
+				require.Equal(t, "source_db", routed.TableInfo.GetSchemaName())
+				require.Equal(t, "source_table", routed.TableInfo.GetTableName())
+				require.Equal(t, "target_db", routed.TableInfo.GetTargetSchemaName())
+				require.Equal(t, "target_table", routed.TableInfo.GetTargetTableName())
 				require.Equal(t, "target_db", routed.TableInfo.TableName.TargetSchema)
 				require.Equal(t, "target_table", routed.TableInfo.TableName.TargetTable)
 				require.NotSame(t, original.MultipleTableInfos[0], routed.MultipleTableInfos[0])
-				require.Equal(t, "target_db", routed.MultipleTableInfos[0].GetSchemaName())
-				require.Equal(t, "target_table", routed.MultipleTableInfos[0].GetTableName())
+				require.Equal(t, "source_db", routed.MultipleTableInfos[0].GetSchemaName())
+				require.Equal(t, "source_table", routed.MultipleTableInfos[0].GetTableName())
+				require.Equal(t, "target_db", routed.MultipleTableInfos[0].GetTargetSchemaName())
+				require.Equal(t, "target_table", routed.MultipleTableInfos[0].GetTargetTableName())
 				require.Equal(t, event.SchemaTableName{
 					SchemaName: "target_db",
 					TableName:  "target_table",
@@ -169,17 +177,21 @@ func TestApplyToDDLEvent(t *testing.T) {
 				},
 			},
 			check: func(t *testing.T, original, routed *event.DDLEvent) {
-				require.Equal(t, "new_target_db", routed.SchemaName)
-				require.Equal(t, "orders_archive_new", routed.TableName)
-				require.Equal(t, "old_target_db", routed.ExtraSchemaName)
-				require.Equal(t, "orders_old", routed.ExtraTableName)
+				require.Equal(t, "new_db", routed.SchemaName)
+				require.Equal(t, "orders_archive", routed.TableName)
+				require.Equal(t, "old_db", routed.ExtraSchemaName)
+				require.Equal(t, "orders", routed.ExtraTableName)
+				require.Equal(t, "new_target_db", routed.TargetSchemaName)
+				require.Equal(t, "orders_archive_new", routed.TargetTableName)
+				require.Equal(t, "old_target_db", routed.TargetExtraSchemaName)
+				require.Equal(t, "orders_old", routed.TargetExtraTableName)
 				require.Equal(t, event.SchemaTableName{
-					SchemaName: "new_target_db",
-					TableName:  "orders_archive_new",
+					SchemaName: "new_db",
+					TableName:  "orders_archive",
 				}, routed.TableNameChange.AddName[0])
 				require.Equal(t, event.SchemaTableName{
-					SchemaName: "old_target_db",
-					TableName:  "orders_old",
+					SchemaName: "old_db",
+					TableName:  "orders",
 				}, routed.TableNameChange.DropName[0])
 				require.Contains(t, routed.Query, "`old_target_db`.`orders_old`")
 				require.Contains(t, routed.Query, "`new_target_db`.`orders_archive_new`")
@@ -187,6 +199,27 @@ func TestApplyToDDLEvent(t *testing.T) {
 				require.Equal(t, "orders_archive", original.TableName)
 				require.Equal(t, "old_db", original.ExtraSchemaName)
 				require.Equal(t, "orders", original.ExtraTableName)
+			},
+		},
+		{
+			name: "database ddl",
+			router: func() *Router {
+				router, err := NewRouter(false, []*config.DispatchRule{{
+					Matcher:      []string{"source_db.*"},
+					TargetSchema: "target_db",
+				}})
+				require.NoError(t, err)
+				return router
+			}(),
+			ddl: &event.DDLEvent{
+				Query:      "CREATE DATABASE `source_db`",
+				SchemaName: "source_db",
+			},
+			check: func(t *testing.T, original, routed *event.DDLEvent) {
+				require.Equal(t, "source_db", routed.SchemaName)
+				require.Equal(t, "target_db", routed.TargetSchemaName)
+				require.Equal(t, "target_db", routed.GetDDLSchemaName())
+				require.Equal(t, "source_db", original.SchemaName)
 			},
 		},
 	}

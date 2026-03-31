@@ -124,8 +124,8 @@ func newTableSchemaMap(tableInfo *commonType.TableInfo) interface{} {
 	}
 
 	result := map[string]interface{}{
-		"database": tableInfo.GetSchemaName(),
-		"table":    tableInfo.GetTableName(),
+		"database": tableInfo.GetTargetSchemaName(),
+		"table":    tableInfo.GetTargetTableName(),
 		"tableID":  tableInfo.TableName.TableID,
 		"version":  int64(tableInfo.GetUpdateTS()),
 		"columns":  columnsSchema,
@@ -254,8 +254,8 @@ func (a *avroMarshaller) newDMLMessageMap(
 ) map[string]interface{} {
 	dmlMessagePayload := dmlMessagePayloadPool.Get().(map[string]interface{})
 	dmlMessagePayload["version"] = defaultVersion
-	dmlMessagePayload["database"] = event.TableInfo.GetSchemaName()
-	dmlMessagePayload["table"] = event.TableInfo.GetTableName()
+	dmlMessagePayload["database"] = event.TableInfo.GetTargetSchemaName()
+	dmlMessagePayload["table"] = event.TableInfo.GetTargetTableName()
 	dmlMessagePayload["tableID"] = event.GetTableID()
 	dmlMessagePayload["commitTs"] = int64(event.CommitTs)
 	dmlMessagePayload["buildTs"] = time.Now().UnixMilli()

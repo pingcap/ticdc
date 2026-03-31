@@ -373,11 +373,13 @@ func (r *RedoDMLEvent) ToDMLEvent() *DMLEvent {
 func (r *RedoDDLEvent) ToDDLEvent() *DDLEvent {
 	blockedTables := r.DDL.BlockedTables
 	blockedTableNames := r.DDL.BlockedTableNames
-	schemaName := r.TableName.GetTargetSchema()
-	tableName := r.TableName.GetTargetTable()
+	sourceSchemaName := r.TableName.GetOriginSchema()
+	sourceTableName := r.TableName.GetOriginTable()
+	targetSchemaName := r.TableName.GetTargetSchema()
+	targetTableName := r.TableName.GetTargetTable()
 	if blockedTables == nil {
 		blockedTables = &InfluencedTables{InfluenceType: InfluenceTypeNormal}
-		blockedTableNames = []SchemaTableName{{SchemaName: schemaName, TableName: tableName}}
+		blockedTableNames = []SchemaTableName{{SchemaName: targetSchemaName, TableName: targetTableName}}
 	}
 	return &DDLEvent{
 		TableInfo: &common.TableInfo{
@@ -385,8 +387,10 @@ func (r *RedoDDLEvent) ToDDLEvent() *DDLEvent {
 		},
 		Query:             r.DDL.Query,
 		Type:              r.Type,
-		SchemaName:        schemaName,
-		TableName:         tableName,
+		SchemaName:        sourceSchemaName,
+		TableName:         sourceTableName,
+		TargetSchemaName:  targetSchemaName,
+		TargetTableName:   targetTableName,
 		FinishedTs:        r.DDL.CommitTs,
 		StartTs:           r.DDL.StartTs,
 		BlockedTables:     blockedTables,

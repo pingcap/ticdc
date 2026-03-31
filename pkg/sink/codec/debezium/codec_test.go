@@ -18,15 +18,122 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pingcap/ticdc/downstreamadapter/routing"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
+	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser/ast"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
+	tidbTypes "github.com/pingcap/tidb/pkg/types"
+	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
 	"github.com/thanhpk/randstr"
 )
+
+func TestTableRouteDMLUsesTargetNames(t *testing.T) {
+	codec := &dbzCodec{
+		config:    common.NewConfig(config.ProtocolDebezium),
+		clusterID: "test_cluster",
+		nowFunc:   func() time.Time { return time.Unix(1701326309, 0) },
+	}
+
+	routedTableInfo := commonType.WrapTableInfo("test", &timodel.TableInfo{
+		ID:   100,
+		Name: ast.NewCIStr("table1"),
+		Columns: []*timodel.ColumnInfo{
+			{
+				Name:      ast.NewCIStr("id"),
+				FieldType: *tidbTypes.NewFieldType(mysql.TypeLong),
+				State:     timodel.StatePublic,
+			},
+		},
+	}).CloneWithRouting("target_db", "target_table")
+	rows := chunk.NewChunkWithCapacity(routedTableInfo.GetFieldSlice(), 1)
+	common.AppendRow2Chunk(map[string]any{"id": int64(1)}, routedTableInfo.GetColumns(), rows)
+
+	keyBuf := bytes.NewBuffer(nil)
+	valueBuf := bytes.NewBuffer(nil)
+	rowEvent := &commonEvent.RowEvent{
+		PhysicalTableID: routedTableInfo.TableName.TableID,
+		TableInfo:       routedTableInfo,
+		CommitTs:        1,
+		Event: commonEvent.RowChange{
+			Row:     rows.GetRow(0),
+			RowType: commonType.RowTypeInsert,
+		},
+		ColumnSelector: columnselector.NewDefaultColumnSelector(),
+	}
+	err := codec.EncodeKey(rowEvent, keyBuf)
+	require.NoError(t, err)
+
+	err = codec.EncodeValue(rowEvent, valueBuf)
+	require.NoError(t, err)
+
+	require.Contains(t, keyBuf.String(), "\"test_cluster.target_db.target_table.Key\"")
+	require.Contains(t, valueBuf.String(), "\"db\":\"target_db\"")
+	require.Contains(t, valueBuf.String(), "\"table\":\"target_table\"")
+	require.Contains(t, valueBuf.String(), "\"test_cluster.target_db.target_table.Envelope\"")
+}
+
+func TestTableRouteDDLRenameUsesTargetNames(t *testing.T) {
+	codec := &dbzCodec{
+		config:    common.NewConfig(config.ProtocolDebezium),
+		clusterID: "test_cluster",
+		nowFunc:   func() time.Time { return time.Unix(1701326309, 0) },
+	}
+
+	tableInfo := commonType.WrapTableInfo("test", &timodel.TableInfo{
+		ID:   100,
+		Name: ast.NewCIStr("table2"),
+		Columns: []*timodel.ColumnInfo{
+			{
+				Name:      ast.NewCIStr("id"),
+				FieldType: *tidbTypes.NewFieldType(mysql.TypeLong),
+				State:     timodel.StatePublic,
+			},
+		},
+	})
+
+	router, err := routing.NewRouter(false, []*config.DispatchRule{
+		{
+			Matcher:      []string{"test.table1"},
+			TargetSchema: "target_db",
+			TargetTable:  "old_target_table",
+		},
+		{
+			Matcher:      []string{"test.table2"},
+			TargetSchema: "target_db",
+			TargetTable:  "new_target_table",
+		},
+	})
+	require.NoError(t, err)
+
+	routedDDL, err := router.ApplyToDDLEvent(&commonEvent.DDLEvent{
+		FinishedTs:      1,
+		TableInfo:       tableInfo,
+		SchemaName:      "test",
+		TableName:       "table2",
+		ExtraSchemaName: "test",
+		ExtraTableName:  "table1",
+		Query:           "RENAME TABLE `test`.`table1` TO `test`.`table2`",
+		Type:            byte(timodel.ActionRenameTable),
+	}, commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "test-changefeed"))
+	require.NoError(t, err)
+
+	keyBuf := bytes.NewBuffer(nil)
+	valueBuf := bytes.NewBuffer(nil)
+	err = codec.EncodeDDLEvent(routedDDL, keyBuf, valueBuf)
+	require.NoError(t, err)
+
+	require.Contains(t, keyBuf.String(), "\"databaseName\":\"target_db\"")
+	require.Contains(t, valueBuf.String(), "\"db\":\"target_db\"")
+	require.Contains(t, valueBuf.String(), "\"table\":\"new_target_table\"")
+	require.Contains(t, valueBuf.String(), "\"id\":\"\\\"target_db\\\".\\\"old_target_table\\\",\\\"target_db\\\".\\\"new_target_table\\\"\"")
+}
 
 func TestDDLEvent(t *testing.T) {
 	codec := &dbzCodec{

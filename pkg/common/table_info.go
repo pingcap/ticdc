@@ -174,9 +174,7 @@ func (ti *TableInfo) CloneWithRouting(targetSchema, targetTable string) *TableIn
 		SoftDeleteTable:   ti.SoftDeleteTable,
 		// preSQLs is zero-initialized (uninitialized mutex/atomic, empty strings)
 	}
-	// Apply routing to the cloned TableName
-	cloned.TableName.sourceSchema = ti.TableName.GetSourceSchema()
-	cloned.TableName.sourceTable = ti.TableName.GetSourceTable()
+	// Apply routing to the cloned TableName while keeping Schema/Table as source names.
 	cloned.TableName.TargetSchema = targetSchema
 	cloned.TableName.TargetTable = targetTable
 
@@ -394,35 +392,27 @@ func (ti *TableInfo) MustGetColumnOffsetByID(id int64) int {
 	return offset
 }
 
-// GetSchemaName returns the canonical schema name visible to sink output paths.
-// When routing is enabled on this TableInfo, it returns the target schema.
+// GetSchemaName returns the source schema name carried by this TableInfo.
 func (ti *TableInfo) GetSchemaName() string {
-	return ti.TableName.GetTargetSchema()
+	return ti.TableName.GetOriginSchema()
 }
 
-// GetTableName returns the canonical table name visible to sink output paths.
-// When routing is enabled on this TableInfo, it returns the target table.
+// GetTableName returns the source table name carried by this TableInfo.
 func (ti *TableInfo) GetTableName() string {
-	return ti.TableName.GetTargetTable()
+	return ti.TableName.GetOriginTable()
 }
 
 func (ti *TableInfo) GetTableNameCIStr() ast.CIStr {
 	return ast.NewCIStr(ti.GetTableName())
 }
 
-// GetSchemaNamePtr returns the pointer to the canonical schema name.
+// GetSchemaNamePtr returns the pointer to the source schema name.
 func (ti *TableInfo) GetSchemaNamePtr() *string {
-	if ti.TableName.TargetSchema != "" {
-		return &ti.TableName.TargetSchema
-	}
 	return &ti.TableName.Schema
 }
 
-// GetTableNamePtr returns the pointer to the canonical table name.
+// GetTableNamePtr returns the pointer to the source table name.
 func (ti *TableInfo) GetTableNamePtr() *string {
-	if ti.TableName.TargetTable != "" {
-		return &ti.TableName.TargetTable
-	}
 	return &ti.TableName.Table
 }
 
@@ -445,12 +435,12 @@ func (ti *TableInfo) GetTargetTableName() string {
 
 // GetSourceSchemaName returns the source schema name before routing.
 func (ti *TableInfo) GetSourceSchemaName() string {
-	return ti.TableName.GetSourceSchema()
+	return ti.TableName.GetOriginSchema()
 }
 
 // GetSourceTableName returns the source table name before routing.
 func (ti *TableInfo) GetSourceTableName() string {
-	return ti.TableName.GetSourceTable()
+	return ti.TableName.GetOriginTable()
 }
 
 // IsView checks if TableInfo is a view.

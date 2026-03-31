@@ -74,11 +74,15 @@ func TestRedoDDLEventToDDLEventPreservesCanonicalTargetNames(t *testing.T) {
 	}
 
 	ddlEvent := redoDDLEvent.ToDDLEvent()
-	require.Equal(t, "target_db", ddlEvent.SchemaName)
-	require.Equal(t, "target_table", ddlEvent.TableName)
+	require.Equal(t, "source_db", ddlEvent.SchemaName)
+	require.Equal(t, "source_table", ddlEvent.TableName)
+	require.Equal(t, "target_db", ddlEvent.TargetSchemaName)
+	require.Equal(t, "target_table", ddlEvent.TargetTableName)
 	require.Equal(t, "target_db", ddlEvent.GetDDLSchemaName())
-	require.Equal(t, "target_db", ddlEvent.TableInfo.GetSchemaName())
-	require.Equal(t, "target_table", ddlEvent.TableInfo.GetTableName())
+	require.Equal(t, "source_db", ddlEvent.TableInfo.GetSchemaName())
+	require.Equal(t, "source_table", ddlEvent.TableInfo.GetTableName())
+	require.Equal(t, "target_db", ddlEvent.TableInfo.GetTargetSchemaName())
+	require.Equal(t, "target_table", ddlEvent.TableInfo.GetTargetTableName())
 	require.Equal(t, "source_db", ddlEvent.TableInfo.GetSourceSchemaName())
 	require.Equal(t, "source_table", ddlEvent.TableInfo.GetSourceTableName())
 	require.Equal(t, []SchemaTableName{{

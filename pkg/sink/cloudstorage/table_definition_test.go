@@ -82,12 +82,18 @@ func generateTableDef() (TableDefinition, *common.TableInfo) {
 func TestFromDDLEventUsesCanonicalTargetNames(t *testing.T) {
 	t.Parallel()
 
-	helper := commonEvent.NewEventTestHelper(t)
-	defer helper.Close()
-
-	helper.Tk().MustExec("use test")
-	job := helper.DDL2Job(`create table test.t(id int primary key)`)
-	require.NotNil(t, job)
+	tableInfo := common.WrapTableInfo("test", &timodel.TableInfo{
+		ID:   100,
+		Name: ast.NewCIStr("t"),
+		Columns: []*timodel.ColumnInfo{
+			{
+				Name:      ast.NewCIStr("id"),
+				FieldType: *types.NewFieldType(mysql.TypeLong),
+				State:     timodel.StatePublic,
+			},
+		},
+		UpdateTS: 100,
+	})
 
 	router, err := routing.NewRouter(false, []*config.DispatchRule{{
 		Matcher:      []string{"test.t"},
@@ -97,11 +103,11 @@ func TestFromDDLEventUsesCanonicalTargetNames(t *testing.T) {
 	require.NoError(t, err)
 
 	ddlEvent := &commonEvent.DDLEvent{
-		Query:      job.Query,
-		Type:       byte(job.Type),
-		SchemaName: job.SchemaName,
-		TableName:  job.TableName,
-		TableInfo:  common.WrapTableInfo(job.SchemaName, job.BinlogInfo.TableInfo),
+		Query:      "CREATE TABLE `test`.`t` (`id` INT PRIMARY KEY)",
+		Type:       byte(timodel.ActionCreateTable),
+		SchemaName: "test",
+		TableName:  "t",
+		TableInfo:  tableInfo,
 		FinishedTs: 100,
 	}
 

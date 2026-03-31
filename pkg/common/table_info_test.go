@@ -55,16 +55,18 @@ func TestCloneWithRouting(t *testing.T) {
 		require.Equal(t, "target_db", cloned.TableName.TargetSchema)
 		require.Equal(t, "target_table", cloned.TableName.TargetTable)
 		require.Equal(t, int64(123), cloned.TableName.TableID)
-		require.Equal(t, "target_db", cloned.GetSchemaName())
-		require.Equal(t, "target_table", cloned.GetTableName())
+		require.Equal(t, "source_db", cloned.GetSchemaName())
+		require.Equal(t, "source_table", cloned.GetTableName())
 		require.Equal(t, "source_db", cloned.GetSourceSchemaName())
 		require.Equal(t, "source_table", cloned.GetSourceTableName())
-		require.Equal(t, "target_db.target_table", cloned.TableName.String())
-		require.Equal(t, "`target_db`.`target_table`", cloned.TableName.QuoteString())
-		require.Equal(t, "source_db.source_table", cloned.TableName.SourceString())
-		require.Equal(t, "`source_db`.`source_table`", cloned.TableName.QuoteSourceString())
-		require.Same(t, &cloned.TableName.TargetSchema, cloned.GetSchemaNamePtr())
-		require.Same(t, &cloned.TableName.TargetTable, cloned.GetTableNamePtr())
+		require.Equal(t, "target_db", cloned.GetTargetSchemaName())
+		require.Equal(t, "target_table", cloned.GetTargetTableName())
+		require.Equal(t, "source_db.source_table", cloned.TableName.String())
+		require.Equal(t, "`source_db`.`source_table`", cloned.TableName.QuoteString())
+		require.Equal(t, "source_db.source_table", cloned.TableName.OriginString())
+		require.Equal(t, "`source_db`.`source_table`", cloned.TableName.QuoteOriginString())
+		require.Same(t, &cloned.TableName.Schema, cloned.GetSchemaNamePtr())
+		require.Same(t, &cloned.TableName.Table, cloned.GetTableNamePtr())
 
 		// Verify other fields are copied
 		require.Equal(t, "utf8mb4", cloned.Charset)
@@ -78,7 +80,7 @@ func TestCloneWithRouting(t *testing.T) {
 		require.Equal(t, "", original.TableName.TargetTable)
 	})
 
-	t.Run("source routing context survives canonical field rewrite", func(t *testing.T) {
+	t.Run("target getters remain available without changing source fields", func(t *testing.T) {
 		original := &TableInfo{
 			TableName: TableName{
 				Schema:  "source_db",
@@ -88,13 +90,13 @@ func TestCloneWithRouting(t *testing.T) {
 		}
 
 		cloned := original.CloneWithRouting("target_db", "target_table")
-		cloned.TableName.Schema = cloned.GetTargetSchemaName()
-		cloned.TableName.Table = cloned.GetTargetTableName()
 
-		require.Equal(t, "target_db", cloned.GetSchemaName())
-		require.Equal(t, "target_table", cloned.GetTableName())
+		require.Equal(t, "source_db", cloned.GetSchemaName())
+		require.Equal(t, "source_table", cloned.GetTableName())
 		require.Equal(t, "source_db", cloned.GetSourceSchemaName())
 		require.Equal(t, "source_table", cloned.GetSourceTableName())
+		require.Equal(t, "target_db", cloned.GetTargetSchemaName())
+		require.Equal(t, "target_table", cloned.GetTargetTableName())
 	})
 }
 

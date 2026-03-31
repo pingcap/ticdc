@@ -213,7 +213,7 @@ type tableDefWithoutQuery struct {
 
 // FromDDLEvent converts from DDLEvent to TableDefinition.
 func (t *TableDefinition) FromDDLEvent(event *commonEvent.DDLEvent, outputColumnID bool) {
-	t.FromTableInfo(event.SchemaName, event.TableName, event.TableInfo, event.FinishedTs, outputColumnID)
+	t.FromTableInfo(event.GetTargetSchemaName(), event.GetTargetTableName(), event.TableInfo, event.FinishedTs, outputColumnID)
 	t.Query = event.Query
 	t.Type = event.Type
 }

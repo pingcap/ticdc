@@ -308,7 +308,7 @@ func buildActiveActiveUpsertSQL(
 
 	var builder strings.Builder
 	builder.WriteString("INSERT INTO ")
-	builder.WriteString(tableInfo.TableName.QuoteString())
+	builder.WriteString(tableInfo.TableName.QuoteTargetString())
 	builder.WriteString(" (")
 	for i, colName := range insertColumns {
 		if i > 0 {

@@ -30,46 +30,35 @@ type TableName struct {
 	// TargetSchema and TargetTable is not empty if table routing enabled
 	TargetSchema string `toml:"target-db-name" msg:"target-db-name"`
 	TargetTable  string `toml:"target-tbl-name" msg:"target-tbl-name"`
-
-	// sourceSchema and sourceTable are internal routing context used to preserve
-	// source identity for dispatch after sink-local canonical fields are rewritten.
-	sourceSchema string
-	sourceTable  string
 }
 
 // String implements fmt.Stringer interface.
 func (t TableName) String() string {
-	return t.TargetString()
+	return t.OriginString()
 }
 
-// SourceString returns the source schema.table string.
-func (t TableName) SourceString() string {
-	return fmt.Sprintf("%s.%s", t.GetSourceSchema(), t.GetSourceTable())
+// OriginString returns the source schema.table string.
+func (t TableName) OriginString() string {
+	return fmt.Sprintf("%s.%s", t.GetOriginSchema(), t.GetOriginTable())
 }
 
 // QuoteString returns quoted full canonical table name.
 func (t TableName) QuoteString() string {
-	return t.QuoteTargetString()
+	return t.QuoteOriginString()
 }
 
-// QuoteSourceString returns quoted full source table name.
-func (t TableName) QuoteSourceString() string {
-	return QuoteSchema(t.GetSourceSchema(), t.GetSourceTable())
+// QuoteOriginString returns quoted full source table name.
+func (t TableName) QuoteOriginString() string {
+	return QuoteSchema(t.GetOriginSchema(), t.GetOriginTable())
 }
 
-// GetSourceSchema returns the source schema name.
-func (t *TableName) GetSourceSchema() string {
-	if t.sourceSchema != "" {
-		return t.sourceSchema
-	}
+// GetOriginSchema returns the source schema name.
+func (t *TableName) GetOriginSchema() string {
 	return t.Schema
 }
 
-// GetSourceTable returns the source table name.
-func (t *TableName) GetSourceTable() string {
-	if t.sourceTable != "" {
-		return t.sourceTable
-	}
+// GetOriginTable returns the source table name.
+func (t *TableName) GetOriginTable() string {
 	return t.Table
 }
 
