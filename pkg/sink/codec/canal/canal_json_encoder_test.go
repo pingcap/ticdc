@@ -19,9 +19,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/pingcap/ticdc/downstreamadapter/routing"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
-	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/compression"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -253,30 +251,14 @@ func TestEncodeRoutedDDLEventUsesTargetNames(t *testing.T) {
 	defer helper.Close()
 
 	helper.Tk().MustExec("use test")
-	job := helper.DDL2Job(`create table test.t(id int primary key)`)
-	require.NotNil(t, job)
+	sourceDDL := helper.DDL2Event(`create table test.t(id int primary key)`)
+	require.NotNil(t, sourceDDL)
 
-	router, err := routing.NewRouter(false, []*config.DispatchRule{{
-		Matcher:      []string{"test.t"},
-		TargetSchema: "target_db",
-		TargetTable:  "target_table",
-	}})
-	require.NoError(t, err)
-
-	ddlEvent := &commonEvent.DDLEvent{
-		Query:      job.Query,
-		Type:       byte(job.Type),
-		SchemaName: job.SchemaName,
-		TableName:  job.TableName,
-		TableInfo:  commonType.WrapTableInfo(job.SchemaName, job.BinlogInfo.TableInfo),
-		FinishedTs: 1,
-	}
-
-	routedDDL, err := router.ApplyToDDLEvent(
-		ddlEvent,
-		commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "test-changefeed"),
-	)
-	require.NoError(t, err)
+	routedDDL := sourceDDL.CloneForRouting()
+	routedDDL.TargetSchemaName = "target_db"
+	routedDDL.TargetTableName = "target_table"
+	routedDDL.Query = "CREATE TABLE `target_db`.`target_table` (`id` INT PRIMARY KEY)"
+	routedDDL.TableInfo = sourceDDL.TableInfo.CloneWithRouting("target_db", "target_table")
 
 	ctx := context.Background()
 	codecConfig := common.NewConfig(config.ProtocolCanalJSON)

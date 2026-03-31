@@ -181,49 +181,6 @@ func TestGetTopicForRowChange(t *testing.T) {
 	require.Equal(t, "a_table", topicName)
 }
 
-func TestTableRoutingDoesNotAffectTopicOrPartitionMatching(t *testing.T) {
-	t.Parallel()
-
-	sinkConfig := &config.SinkConfig{
-		DispatchRules: []*config.DispatchRule{
-			{
-				Matcher:       []string{"source_db.*"},
-				PartitionRule: "ts",
-				TopicRule:     "{schema}_topic",
-			},
-			{
-				Matcher:       []string{"target_db.*"},
-				PartitionRule: "default",
-				TopicRule:     "target_topic",
-			},
-		},
-	}
-
-	d, err := NewEventRouter(sinkConfig, "default_topic", false, false)
-	require.NoError(t, err)
-
-	sourceTableInfo := &common.TableInfo{
-		TableName: common.TableName{
-			Schema: "source_db",
-			Table:  "orders",
-		},
-	}
-	routedTableInfo := sourceTableInfo.CloneWithRouting("target_db", "orders_routed")
-
-	require.Equal(t, "target_db", routedTableInfo.GetSchemaName())
-	require.Equal(t, "orders_routed", routedTableInfo.GetTableName())
-	require.Equal(t, "source_db", routedTableInfo.GetSourceSchemaName())
-	require.Equal(t, "orders", routedTableInfo.GetSourceTableName())
-	require.Equal(t, "target_db", routedTableInfo.GetTargetSchemaName())
-	require.Equal(t, "orders_routed", routedTableInfo.GetTargetTableName())
-
-	topicName := d.GetTopicForRowChange(routedTableInfo.GetSourceSchemaName(), routedTableInfo.GetSourceTableName())
-	require.Equal(t, "source_db_topic", topicName)
-
-	partitionGenerator := d.GetPartitionGenerator(routedTableInfo.GetSourceSchemaName(), routedTableInfo.GetSourceTableName())
-	require.IsType(t, &partition.TsPartitionGenerator{}, partitionGenerator)
-}
-
 func TestGetPartitionForRowChange(t *testing.T) {
 	t.Parallel()
 
@@ -368,7 +325,6 @@ func TestTableRoutingDoesNotAffectDDLTopicMatching(t *testing.T) {
 		name          string
 		sinkConfig    *config.SinkConfig
 		ddl           *event.DDLEvent
-		mutateRouted  func(*event.DDLEvent)
 		expectedTopic string
 	}{
 		{
@@ -388,14 +344,11 @@ func TestTableRoutingDoesNotAffectDDLTopicMatching(t *testing.T) {
 				},
 			},
 			ddl: &event.DDLEvent{
-				SchemaName: "source_db",
-				TableName:  "orders",
-				Query:      "ALTER TABLE `source_db`.`orders` ADD COLUMN c INT",
-			},
-			mutateRouted: func(routedDDL *event.DDLEvent) {
-				routedDDL.SchemaName = "target_db"
-				routedDDL.TableName = "orders_routed"
-				routedDDL.Query = "ALTER TABLE `target_db`.`orders_routed` ADD COLUMN c INT"
+				SchemaName:       "source_db",
+				TableName:        "orders",
+				TargetSchemaName: "target_db",
+				TargetTableName:  "orders_routed",
+				Query:            "ALTER TABLE `target_db`.`orders_routed` ADD COLUMN c INT",
 			},
 			expectedTopic: "source_db_topic",
 		},
@@ -416,18 +369,15 @@ func TestTableRoutingDoesNotAffectDDLTopicMatching(t *testing.T) {
 				},
 			},
 			ddl: &event.DDLEvent{
-				SchemaName:      "source_db",
-				TableName:       "orders_new",
-				ExtraSchemaName: "source_db",
-				ExtraTableName:  "orders_old",
-				Query:           "RENAME TABLE `source_db`.`orders_old` TO `source_db`.`orders_new`",
-			},
-			mutateRouted: func(routedDDL *event.DDLEvent) {
-				routedDDL.SchemaName = "target_db"
-				routedDDL.TableName = "orders_new_routed"
-				routedDDL.ExtraSchemaName = "target_db"
-				routedDDL.ExtraTableName = "orders_old_routed"
-				routedDDL.Query = "RENAME TABLE `target_db`.`orders_old_routed` TO `target_db`.`orders_new_routed`"
+				SchemaName:            "source_db",
+				TableName:             "orders_new",
+				ExtraSchemaName:       "source_db",
+				ExtraTableName:        "orders_old",
+				TargetSchemaName:      "target_db",
+				TargetTableName:       "orders_new_routed",
+				TargetExtraSchemaName: "target_db",
+				TargetExtraTableName:  "orders_old_routed",
+				Query:                 "RENAME TABLE `target_db`.`orders_old_routed` TO `target_db`.`orders_new_routed`",
 			},
 			expectedTopic: "source_db_orders_old_topic",
 		},
@@ -439,9 +389,7 @@ func TestTableRoutingDoesNotAffectDDLTopicMatching(t *testing.T) {
 			d, err := NewEventRouter(tc.sinkConfig, "default_topic", false, false)
 			require.NoError(t, err)
 
-			routedDDL := tc.ddl.CloneForRouting()
-			tc.mutateRouted(routedDDL)
-			require.Equal(t, tc.expectedTopic, d.GetTopicForDDL(routedDDL))
+			require.Equal(t, tc.expectedTopic, d.GetTopicForDDL(tc.ddl))
 		})
 	}
 }

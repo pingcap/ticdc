@@ -18,10 +18,8 @@ import (
 	"math/rand"
 	"testing"
 
-	"github.com/pingcap/ticdc/downstreamadapter/routing"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/config"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/charset"
@@ -82,40 +80,18 @@ func generateTableDef() (TableDefinition, *common.TableInfo) {
 func TestFromDDLEventUsesCanonicalTargetNames(t *testing.T) {
 	t.Parallel()
 
-	tableInfo := common.WrapTableInfo("test", &timodel.TableInfo{
-		ID:   100,
-		Name: ast.NewCIStr("t"),
-		Columns: []*timodel.ColumnInfo{
-			{
-				Name:      ast.NewCIStr("id"),
-				FieldType: *types.NewFieldType(mysql.TypeLong),
-				State:     timodel.StatePublic,
-			},
-		},
-		UpdateTS: 100,
-	})
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
 
-	router, err := routing.NewRouter(false, []*config.DispatchRule{{
-		Matcher:      []string{"test.t"},
-		TargetSchema: "target_db",
-		TargetTable:  "target_table",
-	}})
-	require.NoError(t, err)
+	helper.Tk().MustExec("use test")
+	sourceDDL := helper.DDL2Event("create table test.t(id int primary key)")
+	require.NotNil(t, sourceDDL)
 
-	ddlEvent := &commonEvent.DDLEvent{
-		Query:      "CREATE TABLE `test`.`t` (`id` INT PRIMARY KEY)",
-		Type:       byte(timodel.ActionCreateTable),
-		SchemaName: "test",
-		TableName:  "t",
-		TableInfo:  tableInfo,
-		FinishedTs: 100,
-	}
-
-	routedDDL, err := router.ApplyToDDLEvent(
-		ddlEvent,
-		common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test-changefeed"),
-	)
-	require.NoError(t, err)
+	routedDDL := sourceDDL.CloneForRouting()
+	routedDDL.TargetSchemaName = "target_db"
+	routedDDL.TargetTableName = "target_table"
+	routedDDL.Query = "CREATE TABLE `target_db`.`target_table` (`id` INT PRIMARY KEY)"
+	routedDDL.TableInfo = sourceDDL.TableInfo.CloneWithRouting("target_db", "target_table")
 
 	var def TableDefinition
 	def.FromDDLEvent(routedDDL, false)

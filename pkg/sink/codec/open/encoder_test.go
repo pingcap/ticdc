@@ -18,9 +18,7 @@ import (
 	"testing"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/downstreamadapter/routing"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
-	commonTable "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -658,17 +656,8 @@ func TestCreateTableDDL(t *testing.T) {
 
 	helper.Tk().MustExec("use test")
 
-	job := helper.DDL2Job(`create table test.t(a tinyint primary key, b int)`)
-	require.NotNil(t, job)
-
-	ddlEvent := &commonEvent.DDLEvent{
-		Query:      job.Query,
-		Type:       byte(job.Type),
-		SchemaName: job.SchemaName,
-		TableName:  job.TableName,
-		TableInfo:  commonTable.WrapTableInfo(job.SchemaName, job.BinlogInfo.TableInfo),
-		FinishedTs: 1,
-	}
+	ddlEvent := helper.DDL2Event(`create table test.t(a tinyint primary key, b int)`)
+	require.NotNil(t, ddlEvent)
 
 	ctx := context.Background()
 	codecConfig := common.NewConfig(config.ProtocolOpen)
@@ -702,32 +691,14 @@ func TestEncodeRoutedDDLEventUsesTargetNames(t *testing.T) {
 
 	helper.Tk().MustExec("use test")
 
-	job := helper.DDL2Job(`create table test.t(a tinyint primary key, b int)`)
-	require.NotNil(t, job)
+	sourceDDL := helper.DDL2Event(`create table test.t(a tinyint primary key, b int)`)
+	require.NotNil(t, sourceDDL)
 
-	router, err := routing.NewRouter(false, []*config.DispatchRule{
-		{
-			Matcher:      []string{"test.t"},
-			TargetSchema: "target_db",
-			TargetTable:  "target_table",
-		},
-	})
-	require.NoError(t, err)
-
-	ddlEvent := &commonEvent.DDLEvent{
-		Query:      job.Query,
-		Type:       byte(job.Type),
-		SchemaName: job.SchemaName,
-		TableName:  job.TableName,
-		TableInfo:  commonTable.WrapTableInfo(job.SchemaName, job.BinlogInfo.TableInfo),
-		FinishedTs: 1,
-	}
-
-	routedDDL, err := router.ApplyToDDLEvent(
-		ddlEvent,
-		commonTable.NewChangefeedID4Test(commonTable.DefaultKeyspaceName, "test-changefeed"),
-	)
-	require.NoError(t, err)
+	routedDDL := sourceDDL.CloneForRouting()
+	routedDDL.TargetSchemaName = "target_db"
+	routedDDL.TargetTableName = "target_table"
+	routedDDL.Query = "CREATE TABLE `target_db`.`target_table` (`a` TINYINT PRIMARY KEY, `b` INT)"
+	routedDDL.TableInfo = sourceDDL.TableInfo.CloneWithRouting("target_db", "target_table")
 
 	ctx := context.Background()
 	codecConfig := common.NewConfig(config.ProtocolOpen)

@@ -18,18 +18,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pingcap/ticdc/downstreamadapter/routing"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
-	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
-	"github.com/pingcap/tidb/pkg/parser/ast"
-	"github.com/pingcap/tidb/pkg/parser/mysql"
-	tidbTypes "github.com/pingcap/tidb/pkg/types"
-	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
 	"github.com/thanhpk/randstr"
 )
@@ -41,31 +35,27 @@ func TestTableRouteDMLUsesTargetNames(t *testing.T) {
 		nowFunc:   func() time.Time { return time.Unix(1701326309, 0) },
 	}
 
-	routedTableInfo := commonType.WrapTableInfo("test", &timodel.TableInfo{
-		ID:   100,
-		Name: ast.NewCIStr("table1"),
-		Columns: []*timodel.ColumnInfo{
-			{
-				Name:      ast.NewCIStr("id"),
-				FieldType: *tidbTypes.NewFieldType(mysql.TypeLong),
-				State:     timodel.StatePublic,
-			},
-		},
-	}).CloneWithRouting("target_db", "target_table")
-	rows := chunk.NewChunkWithCapacity(routedTableInfo.GetFieldSlice(), 1)
-	common.AppendRow2Chunk(map[string]any{"id": int64(1)}, routedTableInfo.GetColumns(), rows)
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	job := helper.DDL2Job(`create table test.table1(id int primary key)`)
+	require.NotNil(t, job)
+
+	dmlEvent := helper.DML2Event("test", "table1", `insert into test.table1 values (1)`)
+	row, ok := dmlEvent.GetNextRow()
+	require.True(t, ok)
+
+	routedTableInfo := helper.GetTableInfo(job).CloneWithRouting("target_db", "target_table")
 
 	keyBuf := bytes.NewBuffer(nil)
 	valueBuf := bytes.NewBuffer(nil)
 	rowEvent := &commonEvent.RowEvent{
 		PhysicalTableID: routedTableInfo.TableName.TableID,
 		TableInfo:       routedTableInfo,
-		CommitTs:        1,
-		Event: commonEvent.RowChange{
-			Row:     rows.GetRow(0),
-			RowType: commonType.RowTypeInsert,
-		},
-		ColumnSelector: columnselector.NewDefaultColumnSelector(),
+		CommitTs:        dmlEvent.CommitTs,
+		Event:           row,
+		ColumnSelector:  columnselector.NewDefaultColumnSelector(),
 	}
 	err := codec.EncodeKey(rowEvent, keyBuf)
 	require.NoError(t, err)
@@ -86,47 +76,27 @@ func TestTableRouteDDLRenameUsesTargetNames(t *testing.T) {
 		nowFunc:   func() time.Time { return time.Unix(1701326309, 0) },
 	}
 
-	tableInfo := commonType.WrapTableInfo("test", &timodel.TableInfo{
-		ID:   100,
-		Name: ast.NewCIStr("table2"),
-		Columns: []*timodel.ColumnInfo{
-			{
-				Name:      ast.NewCIStr("id"),
-				FieldType: *tidbTypes.NewFieldType(mysql.TypeLong),
-				State:     timodel.StatePublic,
-			},
-		},
-	})
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
 
-	router, err := routing.NewRouter(false, []*config.DispatchRule{
-		{
-			Matcher:      []string{"test.table1"},
-			TargetSchema: "target_db",
-			TargetTable:  "old_target_table",
-		},
-		{
-			Matcher:      []string{"test.table2"},
-			TargetSchema: "target_db",
-			TargetTable:  "new_target_table",
-		},
-	})
-	require.NoError(t, err)
+	helper.Tk().MustExec("use test")
+	helper.DDL2Job(`create table test.table1(id int primary key)`)
+	sourceDDL := helper.DDL2Event(`rename table test.table1 to test.table2`)
+	require.NotNil(t, sourceDDL)
 
-	routedDDL, err := router.ApplyToDDLEvent(&commonEvent.DDLEvent{
-		FinishedTs:      1,
-		TableInfo:       tableInfo,
-		SchemaName:      "test",
-		TableName:       "table2",
-		ExtraSchemaName: "test",
-		ExtraTableName:  "table1",
-		Query:           "RENAME TABLE `test`.`table1` TO `test`.`table2`",
-		Type:            byte(timodel.ActionRenameTable),
-	}, commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "test-changefeed"))
-	require.NoError(t, err)
+	routedDDL := sourceDDL.CloneForRouting()
+	routedDDL.ExtraSchemaName = "test"
+	routedDDL.ExtraTableName = "table1"
+	routedDDL.TargetSchemaName = "target_db"
+	routedDDL.TargetTableName = "new_target_table"
+	routedDDL.TargetExtraSchemaName = "target_db"
+	routedDDL.TargetExtraTableName = "old_target_table"
+	routedDDL.Query = "RENAME TABLE `target_db`.`old_target_table` TO `target_db`.`new_target_table`"
+	routedDDL.TableInfo = sourceDDL.TableInfo.CloneWithRouting("target_db", "new_target_table")
 
 	keyBuf := bytes.NewBuffer(nil)
 	valueBuf := bytes.NewBuffer(nil)
-	err = codec.EncodeDDLEvent(routedDDL, keyBuf, valueBuf)
+	err := codec.EncodeDDLEvent(routedDDL, keyBuf, valueBuf)
 	require.NoError(t, err)
 
 	require.Contains(t, keyBuf.String(), "\"databaseName\":\"target_db\"")

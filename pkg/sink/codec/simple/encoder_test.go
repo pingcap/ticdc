@@ -22,9 +22,7 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/golang/mock/gomock"
-	"github.com/pingcap/ticdc/downstreamadapter/routing"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
-	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/compression"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -97,82 +95,69 @@ func TestEncodeRoutedDMLEventUsesTargetNames(t *testing.T) {
 		common.EncodingFormatJSON,
 		common.EncodingFormatAvro,
 	} {
-		helper := commonEvent.NewEventTestHelper(t)
-		helper.Tk().MustExec("use test")
-		job := helper.DDL2Job(`create table test.t(id int primary key, name varchar(32))`)
-		require.NotNil(t, job)
+		format := format
+		t.Run(string(format), func(t *testing.T) {
+			helper := commonEvent.NewEventTestHelper(t)
+			defer helper.Close()
 
-		router, err := routing.NewRouter(false, []*config.DispatchRule{{
-			Matcher:      []string{"test.t"},
-			TargetSchema: "target_db",
-			TargetTable:  "target_table",
-		}})
-		require.NoError(t, err)
+			helper.Tk().MustExec("use test")
+			sourceDDL := helper.DDL2Event("create table test.t(id int primary key, name varchar(32))")
+			require.NotNil(t, sourceDDL)
 
-		ddlEvent := &commonEvent.DDLEvent{
-			Query:      job.Query,
-			Type:       byte(job.Type),
-			SchemaName: job.SchemaName,
-			TableName:  job.TableName,
-			TableInfo:  commonType.WrapTableInfo(job.SchemaName, job.BinlogInfo.TableInfo),
-			FinishedTs: 1,
-		}
-		routedDDL, err := router.ApplyToDDLEvent(
-			ddlEvent,
-			commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "test-changefeed"),
-		)
-		require.NoError(t, err)
+			dmlEvent := helper.DML2Event("test", "t", "insert into test.t values (1, 'alice')")
+			row, ok := dmlEvent.GetNextRow()
+			require.True(t, ok)
 
-		dmlEvent := helper.DML2Event("test", "t", `insert into test.t values (1, 'alice')`)
-		row, ok := dmlEvent.GetNextRow()
-		require.True(t, ok)
-		rowEvent := &commonEvent.RowEvent{
-			TableInfo:      routedDDL.TableInfo,
-			CommitTs:       dmlEvent.GetCommitTs(),
-			Event:          row,
-			ColumnSelector: columnselector.NewDefaultColumnSelector(),
-		}
+			routedTableInfo := sourceDDL.TableInfo.CloneWithRouting("target_db", "target_table")
+			rowEvent := &commonEvent.RowEvent{
+				TableInfo:      routedTableInfo,
+				CommitTs:       dmlEvent.CommitTs,
+				Event:          row,
+				ColumnSelector: columnselector.NewDefaultColumnSelector(),
+			}
 
-		ctx := context.Background()
-		codecConfig := common.NewConfig(config.ProtocolSimple)
-		codecConfig.EncodingFormat = format
+			routedDDL := sourceDDL.CloneForRouting()
+			routedDDL.TargetSchemaName = "target_db"
+			routedDDL.TargetTableName = "target_table"
+			routedDDL.Query = "CREATE TABLE `target_db`.`target_table` (`id` INT PRIMARY KEY, `name` VARCHAR(32))"
+			routedDDL.TableInfo = routedTableInfo
 
-		encoder, err := NewEncoder(ctx, codecConfig)
-		require.NoError(t, err)
+			ctx := context.Background()
+			codecConfig := common.NewConfig(config.ProtocolSimple)
+			codecConfig.EncodingFormat = format
 
-		ddlMessage, err := encoder.EncodeDDLEvent(routedDDL)
-		require.NoError(t, err)
+			encoder, err := NewEncoder(ctx, codecConfig)
+			require.NoError(t, err)
 
-		decoder, err := NewDecoder(ctx, codecConfig, nil)
-		require.NoError(t, err)
-		dec := decoder.(*Decoder)
-		dec.AddKeyValue(ddlMessage.Key, ddlMessage.Value)
+			decoder, err := NewDecoder(ctx, codecConfig, nil)
+			require.NoError(t, err)
+			dec := decoder.(*Decoder)
 
-		messageType, hasNext := dec.HasNext()
-		require.True(t, hasNext)
-		require.Equal(t, common.MessageTypeDDL, messageType)
-		decodedDDL := dec.NextDDLEvent()
-		require.Equal(t, "target_db", decodedDDL.SchemaName)
-		require.Equal(t, "target_table", decodedDDL.TableName)
+			ddlMessage, err := encoder.EncodeDDLEvent(routedDDL)
+			require.NoError(t, err)
+			dec.AddKeyValue(ddlMessage.Key, ddlMessage.Value)
+			messageType, hasNext := dec.HasNext()
+			require.True(t, hasNext)
+			require.Equal(t, common.MessageTypeDDL, messageType)
+			_ = dec.NextDDLEvent()
 
-		require.NoError(t, encoder.AppendRowChangedEvent(ctx, "", rowEvent))
-		messages := encoder.Build()
-		require.Len(t, messages, 1)
+			require.NoError(t, encoder.AppendRowChangedEvent(ctx, "", rowEvent))
+			messages := encoder.Build()
+			require.Len(t, messages, 1)
 
-		dec.AddKeyValue(messages[0].Key, messages[0].Value)
-		messageType, hasNext = dec.HasNext()
-		require.True(t, hasNext)
-		require.Equal(t, common.MessageTypeRow, messageType)
+			dec.AddKeyValue(messages[0].Key, messages[0].Value)
+			messageType, hasNext = dec.HasNext()
+			require.True(t, hasNext)
+			require.Equal(t, common.MessageTypeRow, messageType)
 
-		decoded := dec.NextDMLEvent()
-		require.NotNil(t, decoded)
-		require.Equal(t, "target_db", decoded.TableInfo.GetSchemaName())
-		require.Equal(t, "target_table", decoded.TableInfo.GetTableName())
-		decodedRow, ok := decoded.GetNextRow()
-		require.True(t, ok)
-		require.Equal(t, "alice", decodedRow.Row.GetString(1))
-
-		helper.Close()
+			decoded := dec.NextDMLEvent()
+			require.NotNil(t, decoded)
+			require.Equal(t, "target_db", decoded.TableInfo.GetSchemaName())
+			require.Equal(t, "target_table", decoded.TableInfo.GetTableName())
+			decodedRow, ok := decoded.GetNextRow()
+			require.True(t, ok)
+			require.Equal(t, "alice", decodedRow.Row.GetString(1))
+		})
 	}
 }
 
@@ -183,58 +168,45 @@ func TestEncodeRoutedDDLEventUsesTargetNames(t *testing.T) {
 		common.EncodingFormatJSON,
 		common.EncodingFormatAvro,
 	} {
-		helper := commonEvent.NewEventTestHelper(t)
-		helper.Tk().MustExec("use test")
-		job := helper.DDL2Job(`create table test.t(id int primary key)`)
-		require.NotNil(t, job)
+		format := format
+		t.Run(string(format), func(t *testing.T) {
+			helper := commonEvent.NewEventTestHelper(t)
+			defer helper.Close()
 
-		router, err := routing.NewRouter(false, []*config.DispatchRule{{
-			Matcher:      []string{"test.t"},
-			TargetSchema: "target_db",
-			TargetTable:  "target_table",
-		}})
-		require.NoError(t, err)
+			helper.Tk().MustExec("use test")
+			sourceDDL := helper.DDL2Event("create table test.t(id int primary key)")
+			require.NotNil(t, sourceDDL)
 
-		ddlEvent := &commonEvent.DDLEvent{
-			Query:      job.Query,
-			Type:       byte(job.Type),
-			SchemaName: job.SchemaName,
-			TableName:  job.TableName,
-			TableInfo:  commonType.WrapTableInfo(job.SchemaName, job.BinlogInfo.TableInfo),
-			FinishedTs: 1,
-		}
+			routedDDL := sourceDDL.CloneForRouting()
+			routedDDL.TargetSchemaName = "target_db"
+			routedDDL.TargetTableName = "target_table"
+			routedDDL.Query = "CREATE TABLE `target_db`.`target_table` (`id` INT PRIMARY KEY)"
+			routedDDL.TableInfo = sourceDDL.TableInfo.CloneWithRouting("target_db", "target_table")
 
-		routedDDL, err := router.ApplyToDDLEvent(
-			ddlEvent,
-			commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "test-changefeed"),
-		)
-		require.NoError(t, err)
+			ctx := context.Background()
+			codecConfig := common.NewConfig(config.ProtocolSimple)
+			codecConfig.EncodingFormat = format
 
-		ctx := context.Background()
-		codecConfig := common.NewConfig(config.ProtocolSimple)
-		codecConfig.EncodingFormat = format
+			encoder, err := NewEncoder(ctx, codecConfig)
+			require.NoError(t, err)
 
-		encoder, err := NewEncoder(ctx, codecConfig)
-		require.NoError(t, err)
+			message, err := encoder.EncodeDDLEvent(routedDDL)
+			require.NoError(t, err)
 
-		message, err := encoder.EncodeDDLEvent(routedDDL)
-		require.NoError(t, err)
+			decoder, err := NewDecoder(ctx, codecConfig, nil)
+			require.NoError(t, err)
+			dec := decoder.(*Decoder)
+			dec.AddKeyValue(message.Key, message.Value)
 
-		decoder, err := NewDecoder(ctx, codecConfig, nil)
-		require.NoError(t, err)
-		dec := decoder.(*Decoder)
-		dec.AddKeyValue(message.Key, message.Value)
+			messageType, hasNext := dec.HasNext()
+			require.True(t, hasNext)
+			require.Equal(t, common.MessageTypeDDL, messageType)
 
-		messageType, hasNext := dec.HasNext()
-		require.True(t, hasNext)
-		require.Equal(t, common.MessageTypeDDL, messageType)
-
-		decoded := dec.NextDDLEvent()
-		require.Equal(t, "target_db", decoded.SchemaName)
-		require.Equal(t, "target_table", decoded.TableName)
-		require.Contains(t, decoded.Query, "`target_db`.`target_table`")
-
-		helper.Close()
+			decoded := dec.NextDDLEvent()
+			require.Equal(t, "target_db", decoded.SchemaName)
+			require.Equal(t, "target_table", decoded.TableName)
+			require.Contains(t, decoded.Query, "`target_db`.`target_table`")
+		})
 	}
 }
 

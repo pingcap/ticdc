@@ -17,32 +17,24 @@ import (
 	"context"
 	"testing"
 
-	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/utils/chann"
-	timodel "github.com/pingcap/tidb/pkg/meta/model"
-	"github.com/pingcap/tidb/pkg/parser/ast"
-	"github.com/pingcap/tidb/pkg/parser/mysql"
-	"github.com/pingcap/tidb/pkg/types"
 	"github.com/stretchr/testify/require"
 )
 
 func TestAddDMLEventUsesTargetNames(t *testing.T) {
 	t.Parallel()
 
-	routedTableInfo := commonType.WrapTableInfo("test", &timodel.TableInfo{
-		ID:   100,
-		Name: ast.NewCIStr("t"),
-		Columns: []*timodel.ColumnInfo{
-			{
-				Name:      ast.NewCIStr("id"),
-				FieldType: *types.NewFieldType(mysql.TypeLong),
-				State:     timodel.StatePublic,
-			},
-		},
-		UpdateTS: 99,
-	}).CloneWithRouting("target_db", "target_table")
-	dmlEvent := commonEvent.NewDMLEvent(commonType.NewDispatcherID(), routedTableInfo.TableName.TableID, 1, 2, routedTableInfo)
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	job := helper.DDL2Job("create table test.t(id int primary key)")
+	require.NotNil(t, job)
+
+	dmlEvent := helper.DML2Event("test", "t", "insert into test.t values (1)")
+	routedTableInfo := helper.GetTableInfo(job).CloneWithRouting("target_db", "target_table")
+	dmlEvent.TableInfo = routedTableInfo
 	dmlEvent.TableInfoVersion = routedTableInfo.GetUpdateTS()
 
 	writers := &dmlWriters{
@@ -55,10 +47,8 @@ func TestAddDMLEventUsesTargetNames(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.NotNil(t, task)
-	require.Equal(t, commonType.TableName{
-		Schema:      "target_db",
-		Table:       "target_table",
-		TableID:     dmlEvent.PhysicalTableID,
-		IsPartition: routedTableInfo.IsPartitionTable(),
-	}, task.versionedTable.TableNameWithPhysicTableID)
+	require.Equal(t, "target_db", task.versionedTable.TableNameWithPhysicTableID.Schema)
+	require.Equal(t, "target_table", task.versionedTable.TableNameWithPhysicTableID.Table)
+	require.Equal(t, dmlEvent.PhysicalTableID, task.versionedTable.TableNameWithPhysicTableID.TableID)
+	require.Equal(t, routedTableInfo.IsPartitionTable(), task.versionedTable.TableNameWithPhysicTableID.IsPartition)
 }

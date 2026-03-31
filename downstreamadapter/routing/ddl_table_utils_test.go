@@ -372,33 +372,6 @@ var nonDDLs = []string{
 	"GRANT CREATE TABLESPACE ON *.* TO `root`@`%` WITH GRANT OPTION",
 }
 
-func TestParser(t *testing.T) {
-	t.Parallel()
-	p := parser.New()
-
-	for _, ca := range testCases {
-		sql := ca.sql
-		stmts, _, err := p.Parse(sql, "", "")
-		require.NoError(t, err)
-		require.Len(t, stmts, 1)
-	}
-
-	for _, sql := range nonDDLs {
-		stmts, _, err := p.Parse(sql, "", "")
-		require.NoError(t, err)
-		require.Len(t, stmts, 1)
-	}
-
-	unsupportedSQLs := []string{
-		"alter table bar ADD SPATIAL INDEX (`g`)",
-	}
-
-	for _, sql := range unsupportedSQLs {
-		_, _, err := p.Parse(sql, "", "")
-		require.NotNil(t, err)
-	}
-}
-
 func TestError(t *testing.T) {
 	t.Parallel()
 	p := parser.New()
@@ -423,6 +396,9 @@ func TestError(t *testing.T) {
 	_, err = rewriteDDLQuery(stmts[0], nil)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "not enough target tables")
+
+	_, _, err = p.Parse("alter table bar ADD SPATIAL INDEX (`g`)", "", "")
+	require.Error(t, err)
 }
 
 // TestResolveDDL tests FetchDDLTables and RenameDDLTable
