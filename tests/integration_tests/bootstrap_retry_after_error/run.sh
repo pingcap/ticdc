@@ -9,8 +9,12 @@ set -eu
 # 1. Start one TiCDC node with a one-shot schema store failpoint.
 # 2. Create a mysql sink changefeed and wait until bootstrap fails with
 #    ErrSnapshotLostByGC.
-# 3. Start a second TiCDC node to trigger node change / bootstrap retry.
-# 4. Verify both TiCDC servers keep running and the changefeed remains failed
+# 3. Start a second TiCDC node immediately after the first bootstrap error so
+#    the failed maintainer still observes node scheduling and processes another
+#    bootstrap response.
+# 4. Verify logs contain the retry path:
+#    maintainer node changed -> bootstrap response -> handle bootstrap response.
+# 5. Verify both TiCDC servers keep running and the changefeed remains failed
 #    with ErrSnapshotLostByGC.
 
 CUR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -40,8 +44,41 @@ function check_cdc_logs_contains() {
 	grep -Eq "$pattern" "$work_dir"/cdc*.log
 }
 
+function check_node_change_triggers_bootstrap() {
+	local work_dir=$1
+	local file
+
+	for file in "$work_dir"/cdc*.log; do
+		if [ ! -f "$file" ]; then
+			continue
+		fi
+		if awk '
+			/maintainer node changed/ {
+				nodeChanged = 1
+				gotResp = 0
+				handled = 0
+			}
+			nodeChanged && /maintainer received bootstrap response/ {
+				gotResp = 1
+			}
+			nodeChanged && gotResp && /handle bootstrap response/ {
+				handled = 1
+				exit 0
+			}
+			END {
+				exit handled ? 0 : 1
+			}
+		' "$file"; then
+			return 0
+		fi
+	done
+
+	return 1
+}
+
 export -f check_api_ready
 export -f check_cdc_logs_contains
+export -f check_node_change_triggers_bootstrap
 
 function run() {
 	if [ "$SINK_TYPE" != "mysql" ]; then
@@ -63,10 +100,15 @@ function run() {
 	cdc_cli_changefeed create --sink-uri="$SINK_URI" -c "test"
 
 	ensure $MAX_RETRIES "check_cdc_logs_contains $WORK_DIR 'ErrSnapshotLostByGC'"
-	ensure $MAX_RETRIES "check_changefeed_state $PD_ADDR test failed ErrSnapshotLostByGC ''"
+
+	# Only the first capture should consume the one-shot failpoint. Start the
+	# second node without the failpoint so it can send a real bootstrap response
+	# during the retry window.
+	export GO_FAILPOINTS=''
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1" --addr "127.0.0.1:8301" --pd "$PD_ADDR"
 
+	ensure $MAX_RETRIES "check_node_change_triggers_bootstrap $WORK_DIR"
 	ensure $MAX_RETRIES "get_cdc_pid 127.0.0.1 8300 >/dev/null"
 	ensure $MAX_RETRIES "get_cdc_pid 127.0.0.1 8301 >/dev/null"
 	ensure $MAX_RETRIES "check_api_ready 127.0.0.1:8300"
