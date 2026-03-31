@@ -189,10 +189,6 @@ type DynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] inter
 	// After this call return, events in the path will be dropped.
 	Release(path P)
 
-	// SetAreaSettings sets the settings of the area. An area uses the default settings if it is not set.
-	// This method can be called at any time. But to avoid the memory leak, setting on a area without existing paths is a no-op.
-	SetAreaSettings(area A, settings AreaSettings)
-
 	GetMetrics() Metrics[A, P]
 }
 
