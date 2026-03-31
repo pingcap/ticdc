@@ -36,6 +36,13 @@ const (
 	EnsureGCServiceInitializing = "-initializing-"
 )
 
+type serviceTsSafetyMode int
+
+const (
+	serviceTsSafetyStartTs serviceTsSafetyMode = iota
+	serviceTsSafetyExactTs
+)
+
 // EnsureChangefeedStartTsSafety checks if the startTs less than the minimum of
 // service GC safepoint and this function will update the service GC to startTs
 func EnsureChangefeedStartTsSafety(
@@ -53,8 +60,7 @@ func EnsureChangefeedStartTsSafety(
 }
 
 func ensureChangefeedStartTsSafetyClassic(ctx context.Context, pdCli GCServiceClient, gcServiceID string, ttl int64, startTs uint64) error {
-	// set gc safepoint for the changefeed gc service
-	minServiceGCTs, err := SetServiceGCSafepoint(ctx, pdCli, gcServiceID, ttl, startTs)
+	minServiceGCTs, err := ensureServiceGCSafetyClassic(ctx, pdCli, gcServiceID, ttl, startTs, serviceTsSafetyStartTs)
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -74,10 +80,87 @@ func ensureChangefeedStartTsSafetyClassic(ctx context.Context, pdCli GCServiceCl
 }
 
 func ensureChangefeedStartTsSafetyNextGen(ctx context.Context, pdCli GCServiceClient, gcServiceID string, keyspaceID uint32, ttl int64, startTs uint64) error {
-	gcCli := pdCli.GetGCStatesClient(keyspaceID)
-	_, err := SetGCBarrier(ctx, gcCli, gcServiceID, startTs, time.Duration(ttl)*time.Second)
+	return ensureServiceGCSafetyNextGen(ctx, pdCli, gcServiceID, keyspaceID, ttl, startTs, serviceTsSafetyStartTs)
+}
+
+// EnsureServiceTsSafety ensures the exact ts remains readable by the specified
+// GC service ID. It is intended for internal callers like schema store that
+// maintain their own dedicated service safepoints / barriers.
+func EnsureServiceTsSafety(
+	ctx context.Context, pdCli GCServiceClient,
+	serviceID string,
+	keyspaceID uint32,
+	ttl int64,
+	ts uint64,
+) error {
+	if kerneltype.IsClassic() {
+		_, err := ensureServiceGCSafetyClassic(ctx, pdCli, serviceID, ttl, ts, serviceTsSafetyExactTs)
+		return err
+	}
+	return ensureServiceGCSafetyNextGen(ctx, pdCli, serviceID, keyspaceID, ttl, ts, serviceTsSafetyExactTs)
+}
+
+func ensureServiceGCSafetyClassic(
+	ctx context.Context,
+	pdCli GCServiceClient,
+	serviceID string,
+	ttl int64,
+	ts uint64,
+	mode serviceTsSafetyMode,
+) (uint64, error) {
+	minServiceGCTs, err := SetServiceGCSafepoint(ctx, pdCli, serviceID, ttl, ts)
 	if err != nil {
-		return errors.ErrStartTsBeforeGC.GenWithStackByArgs(startTs)
+		return 0, errors.Trace(err)
+	}
+	if err := checkServiceTsSafety(mode, ts, minServiceGCTs); err != nil {
+		return minServiceGCTs, err
+	}
+	return minServiceGCTs, nil
+}
+
+func ensureServiceGCSafetyNextGen(
+	ctx context.Context,
+	pdCli GCServiceClient,
+	serviceID string,
+	keyspaceID uint32,
+	ttl int64,
+	ts uint64,
+	mode serviceTsSafetyMode,
+) error {
+	gcCli := pdCli.GetGCStatesClient(keyspaceID)
+	_, err := SetGCBarrier(ctx, gcCli, serviceID, ts, time.Duration(ttl)*time.Second)
+	if err == nil {
+		return nil
+	}
+	if mode == serviceTsSafetyStartTs {
+		return errors.ErrStartTsBeforeGC.GenWithStackByArgs(ts)
+	}
+	if !errors.IsGCBarrierTSBehindTxnSafePointError(err) {
+		return errors.WrapError(errors.ErrUpdateGCBarrierFailed, err)
+	}
+
+	minBarrierTS, barrierErr := UnifyGetServiceGCSafepoint(ctx, pdCli, keyspaceID, serviceID)
+	if barrierErr != nil {
+		return barrierErr
+	}
+	return checkServiceTsSafety(mode, ts, minBarrierTS)
+}
+
+func checkServiceTsSafety(mode serviceTsSafetyMode, ts uint64, lowerBound uint64) error {
+	switch mode {
+	case serviceTsSafetyStartTs:
+		// startTs should be greater than or equal to minServiceGCTs + 1, otherwise gcManager
+		// would return a ErrSnapshotLostByGC even though the changefeed would appear to be successfully
+		// created/resumed. See issue #6350 for more detail.
+		if ts > 0 && ts < lowerBound+1 {
+			return errors.ErrStartTsBeforeGC.GenWithStackByArgs(ts, lowerBound)
+		}
+	case serviceTsSafetyExactTs:
+		if lowerBound != math.MaxUint64 && ts < lowerBound {
+			return errors.ErrSnapshotLostByGC.GenWithStackByArgs(ts+1, lowerBound)
+		}
+	default:
+		log.Panic("unknown service ts safety mode", zap.Int("mode", int(mode)))
 	}
 	return nil
 }

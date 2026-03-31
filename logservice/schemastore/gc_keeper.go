@@ -16,15 +16,12 @@ package schemastore
 import (
 	"context"
 	"fmt"
-	"math"
 	"strings"
 	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/ticdc/pkg/config/kerneltype"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
 	"go.uber.org/zap"
 )
@@ -65,31 +62,7 @@ func (k *schemaStoreGCKeeper) refresh(ctx context.Context, resolvedTs uint64) er
 }
 
 func (k *schemaStoreGCKeeper) refreshWithTs(ctx context.Context, ts uint64) error {
-	if kerneltype.IsClassic() {
-		minServiceGCTs, err := gc.SetServiceGCSafepoint(ctx, k.pdCli, k.gcServiceID, defaultGcServiceTTL, ts)
-		if err != nil {
-			return err
-		}
-		if minServiceGCTs != math.MaxUint64 && ts < minServiceGCTs {
-			return cerror.ErrSnapshotLostByGC.GenWithStackByArgs(ts+1, minServiceGCTs)
-		}
-		return nil
-	}
-
-	gcCli := k.pdCli.GetGCStatesClient(k.keyspaceMeta.ID)
-	_, err := gc.SetGCBarrier(ctx, gcCli, k.gcServiceID, ts, time.Duration(defaultGcServiceTTL)*time.Second)
-	if err == nil {
-		return nil
-	}
-	if !cerror.IsGCBarrierTSBehindTxnSafePointError(err) {
-		return cerror.WrapError(cerror.ErrUpdateGCBarrierFailed, err)
-	}
-
-	minBarrierTS, barrierErr := gc.UnifyGetServiceGCSafepoint(ctx, k.pdCli, k.keyspaceMeta.ID, k.gcServiceID)
-	if barrierErr != nil {
-		return barrierErr
-	}
-	return cerror.ErrSnapshotLostByGC.GenWithStackByArgs(ts+1, minBarrierTS)
+	return gc.EnsureServiceTsSafety(ctx, k.pdCli, k.gcServiceID, k.keyspaceMeta.ID, defaultGcServiceTTL, ts)
 }
 
 func (k *schemaStoreGCKeeper) close(ctx context.Context) error {
