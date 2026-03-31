@@ -55,6 +55,16 @@ func TestCloneWithRouting(t *testing.T) {
 		require.Equal(t, "target_db", cloned.TableName.TargetSchema)
 		require.Equal(t, "target_table", cloned.TableName.TargetTable)
 		require.Equal(t, int64(123), cloned.TableName.TableID)
+		require.Equal(t, "target_db", cloned.GetSchemaName())
+		require.Equal(t, "target_table", cloned.GetTableName())
+		require.Equal(t, "source_db", cloned.GetSourceSchemaName())
+		require.Equal(t, "source_table", cloned.GetSourceTableName())
+		require.Equal(t, "target_db.target_table", cloned.TableName.String())
+		require.Equal(t, "`target_db`.`target_table`", cloned.TableName.QuoteString())
+		require.Equal(t, "source_db.source_table", cloned.TableName.SourceString())
+		require.Equal(t, "`source_db`.`source_table`", cloned.TableName.QuoteSourceString())
+		require.Same(t, &cloned.TableName.TargetSchema, cloned.GetSchemaNamePtr())
+		require.Same(t, &cloned.TableName.TargetTable, cloned.GetTableNamePtr())
 
 		// Verify other fields are copied
 		require.Equal(t, "utf8mb4", cloned.Charset)
@@ -66,6 +76,25 @@ func TestCloneWithRouting(t *testing.T) {
 		// Verify original is NOT modified
 		require.Equal(t, "", original.TableName.TargetSchema)
 		require.Equal(t, "", original.TableName.TargetTable)
+	})
+
+	t.Run("source routing context survives canonical field rewrite", func(t *testing.T) {
+		original := &TableInfo{
+			TableName: TableName{
+				Schema:  "source_db",
+				Table:   "source_table",
+				TableID: 123,
+			},
+		}
+
+		cloned := original.CloneWithRouting("target_db", "target_table")
+		cloned.TableName.Schema = cloned.GetTargetSchemaName()
+		cloned.TableName.Table = cloned.GetTargetTableName()
+
+		require.Equal(t, "target_db", cloned.GetSchemaName())
+		require.Equal(t, "target_table", cloned.GetTableName())
+		require.Equal(t, "source_db", cloned.GetSourceSchemaName())
+		require.Equal(t, "source_table", cloned.GetSourceTableName())
 	})
 
 	t.Run("cloning does not affect original preSQLs", func(t *testing.T) {
@@ -90,6 +119,12 @@ func TestCloneWithRouting(t *testing.T) {
 		// Original should be unchanged
 		require.Equal(t, "", original.TableName.TargetSchema)
 		require.Equal(t, "", original.TableName.TargetTable)
+		require.Equal(t, "source_db", original.GetSchemaName())
+		require.Equal(t, "source_table", original.GetTableName())
+		require.Equal(t, "source_db", original.GetSourceSchemaName())
+		require.Equal(t, "source_table", original.GetSourceTableName())
+		require.Same(t, &original.TableName.Schema, original.GetSchemaNamePtr())
+		require.Same(t, &original.TableName.Table, original.GetTableNamePtr())
 
 		// Clones should be independent
 		require.NotSame(t, cloned1, cloned2)

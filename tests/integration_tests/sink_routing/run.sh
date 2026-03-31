@@ -1,7 +1,9 @@
 #!/bin/bash
 
-# Integration test for sink routing feature
-# This test verifies that schema and table routing works correctly for MySQL sinks
+# Integration test for table routing feature.
+# This test verifies that schema and table routing works correctly for
+# mysql / kafka / storage / pulsar sinks, with MQ/storage consumers
+# materializing routed names into downstream TiDB.
 # Source: source_db.* -> Target: target_db.*_routed
 
 set -eu
@@ -11,12 +13,6 @@ source $CUR/../_utils/test_prepare
 WORK_DIR=$OUT_DIR/$TEST_NAME
 CDC_BINARY=cdc.test
 SINK_TYPE=$1
-
-# This test only works with MySQL sink
-if [ "$SINK_TYPE" != "mysql" ]; then
-	echo "Skipping sink_routing test for non-MySQL sink type: $SINK_TYPE"
-	exit 0
-fi
 
 function run() {
 	rm -rf $WORK_DIR && mkdir -p $WORK_DIR
@@ -31,8 +27,34 @@ function run() {
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --cluster-id "$KEYSPACE_NAME"
 
-	SINK_URI="mysql://normal:123456@${DOWN_TIDB_HOST}:${DOWN_TIDB_PORT}/"
+	TOPIC_NAME="ticdc-sink-routing-$RANDOM"
+	case $SINK_TYPE in
+	kafka)
+		SINK_URI="kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&kafka-version=${KAFKA_VERSION}&max-message-bytes=10485760"
+		;;
+	storage)
+		SINK_URI="file://$WORK_DIR/storage_test/$TOPIC_NAME?protocol=canal-json&enable-tidb-extension=true"
+		;;
+	pulsar)
+		run_pulsar_cluster $WORK_DIR normal
+		SINK_URI="pulsar://127.0.0.1:6650/$TOPIC_NAME?protocol=canal-json&enable-tidb-extension=true"
+		;;
+	*)
+		SINK_URI="mysql://normal:123456@${DOWN_TIDB_HOST}:${DOWN_TIDB_PORT}/"
+		;;
+	esac
 	cdc_cli_changefeed create --sink-uri="$SINK_URI" --config="$CUR/conf/changefeed.toml"
+	case $SINK_TYPE in
+	kafka)
+		run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760"
+		;;
+	storage)
+		run_storage_consumer $WORK_DIR $SINK_URI "" ""
+		;;
+	pulsar)
+		run_pulsar_consumer --upstream-uri $SINK_URI
+		;;
+	esac
 
 	# Run the prepare SQL to create source tables and insert initial data
 	run_sql_file $CUR/data/prepare.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}

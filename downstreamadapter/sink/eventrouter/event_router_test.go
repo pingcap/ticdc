@@ -210,15 +210,17 @@ func TestTableRoutingDoesNotAffectTopicOrPartitionMatching(t *testing.T) {
 	}
 	routedTableInfo := sourceTableInfo.CloneWithRouting("target_db", "orders_routed")
 
-	require.Equal(t, "source_db", routedTableInfo.GetSchemaName())
-	require.Equal(t, "orders", routedTableInfo.GetTableName())
+	require.Equal(t, "target_db", routedTableInfo.GetSchemaName())
+	require.Equal(t, "orders_routed", routedTableInfo.GetTableName())
+	require.Equal(t, "source_db", routedTableInfo.GetSourceSchemaName())
+	require.Equal(t, "orders", routedTableInfo.GetSourceTableName())
 	require.Equal(t, "target_db", routedTableInfo.GetTargetSchemaName())
 	require.Equal(t, "orders_routed", routedTableInfo.GetTargetTableName())
 
-	topicName := d.GetTopicForRowChange(routedTableInfo.GetSchemaName(), routedTableInfo.GetTableName())
+	topicName := d.GetTopicForRowChange(routedTableInfo.GetSourceSchemaName(), routedTableInfo.GetSourceTableName())
 	require.Equal(t, "source_db_topic", topicName)
 
-	partitionGenerator := d.GetPartitionGenerator(routedTableInfo.GetSchemaName(), routedTableInfo.GetTableName())
+	partitionGenerator := d.GetPartitionGenerator(routedTableInfo.GetSourceSchemaName(), routedTableInfo.GetSourceTableName())
 	require.IsType(t, &partition.TsPartitionGenerator{}, partitionGenerator)
 }
 
@@ -381,11 +383,52 @@ func TestTableRoutingDoesNotAffectDDLTopicMatching(t *testing.T) {
 	require.NoError(t, err)
 
 	ddl := &commonEvent.DDLEvent{
-		SchemaName:       "source_db",
-		TableName:        "orders",
-		TargetSchemaName: "target_db",TestTableRoutingDoesNotAffectDDLTopicMatching
-		Query:            "ALTER TABLE `target_db`.`orders_routed` ADD COLUMN c INT",
+		SchemaName: "source_db",
+		TableName:  "orders",
+		Query:      "ALTER TABLE `source_db`.`orders` ADD COLUMN c INT",
+	}
+	routedDDL := ddl.CloneForRouting()
+	routedDDL.SchemaName = "target_db"
+	routedDDL.TableName = "orders_routed"
+	routedDDL.Query = "ALTER TABLE `target_db`.`orders_routed` ADD COLUMN c INT"
+
+	require.Equal(t, "source_db_topic", d.GetTopicForDDL(routedDDL))
+}
+
+func TestTableRoutingDoesNotAffectRenameDDLTopicMatching(t *testing.T) {
+	t.Parallel()
+
+	sinkConfig := &config.SinkConfig{
+		DispatchRules: []*config.DispatchRule{
+			{
+				Matcher:       []string{"source_db.*"},
+				PartitionRule: "table",
+				TopicRule:     "{schema}_{table}_topic",
+			},
+			{
+				Matcher:       []string{"target_db.*"},
+				PartitionRule: "table",
+				TopicRule:     "target_topic",
+			},
+		},
 	}
 
-	require.Equal(t, "source_db_topic", d.GetTopicForDDL(ddl))
+	d, err := NewEventRouter(sinkConfig, "default_topic", false, false)
+	require.NoError(t, err)
+
+	ddl := &commonEvent.DDLEvent{
+		SchemaName:      "source_db",
+		TableName:       "orders_new",
+		ExtraSchemaName: "source_db",
+		ExtraTableName:  "orders_old",
+		Query:           "RENAME TABLE `source_db`.`orders_old` TO `source_db`.`orders_new`",
+	}
+	routedDDL := ddl.CloneForRouting()
+	routedDDL.SchemaName = "target_db"
+	routedDDL.TableName = "orders_new_routed"
+	routedDDL.ExtraSchemaName = "target_db"
+	routedDDL.ExtraTableName = "orders_old_routed"
+	routedDDL.Query = "RENAME TABLE `target_db`.`orders_old_routed` TO `target_db`.`orders_new_routed`"
+
+	require.Equal(t, "source_db_orders_old_topic", d.GetTopicForDDL(routedDDL))
 }

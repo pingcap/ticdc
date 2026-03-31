@@ -124,8 +124,8 @@ func newTableSchemaMap(tableInfo *commonType.TableInfo) interface{} {
 	}
 
 	result := map[string]interface{}{
-		"database": tableInfo.TableName.Schema,
-		"table":    tableInfo.TableName.Table,
+		"database": tableInfo.GetSchemaName(),
+		"table":    tableInfo.GetTableName(),
 		"tableID":  tableInfo.TableName.TableID,
 		"version":  int64(tableInfo.GetUpdateTS()),
 		"columns":  columnsSchema,

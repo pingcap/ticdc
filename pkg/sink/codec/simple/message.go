@@ -224,8 +224,8 @@ func newTableSchema(tableInfo *commonType.TableInfo) *TableSchema {
 	}
 
 	return &TableSchema{
-		Schema:  tableInfo.TableName.Schema,
-		Table:   tableInfo.TableName.Table,
+		Schema:  tableInfo.GetSchemaName(),
+		Table:   tableInfo.GetTableName(),
 		TableID: tableInfo.TableName.TableID,
 		Version: tableInfo.GetUpdateTS(),
 		Columns: columns,

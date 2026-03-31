@@ -88,18 +88,18 @@ func (s *EventRouter) GetTopicForRowChange(schema, table string) string {
 func (s *EventRouter) GetTopicForDDL(ddl *commonEvent.DDLEvent) string {
 	var schema, table string
 
-	if ddl.GetExtraSchemaName() != "" {
-		if ddl.GetExtraTableName() == "" {
+	if ddl.GetSourceExtraSchemaName() != "" {
+		if ddl.GetSourceExtraTableName() == "" {
 			return s.defaultTopic
 		}
-		schema = ddl.GetExtraSchemaName()
-		table = ddl.GetExtraTableName()
+		schema = ddl.GetSourceExtraSchemaName()
+		table = ddl.GetSourceExtraTableName()
 	} else {
-		if ddl.GetTableName() == "" {
+		if ddl.GetSourceTableName() == "" {
 			return s.defaultTopic
 		}
-		schema = ddl.GetSchemaName()
-		table = ddl.GetTableName()
+		schema = ddl.GetSourceSchemaName()
+		table = ddl.GetSourceTableName()
 	}
 
 	topicGenerator := s.matchTopicGenerator(schema, table)

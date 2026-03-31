@@ -88,7 +88,7 @@ func TestGenDeleteSQLWithRouting(t *testing.T) {
 
 	rows := []*RowChange{row1, row2, row3, row4}
 
-	sql, args := GenDeleteSQL(rows...)
+	sql, args := GenDeleteSQL(DefaultWhereClause, rows...)
 	require.Contains(t, sql, "DELETE FROM `target_db`.`target_table`", "DELETE should use target schema and table")
 	require.NotContains(t, sql, "`test`.`t`", "DELETE should not contain source schema.table")
 	// DELETE uses WHERE with primary key (id column only for this table)
@@ -96,8 +96,7 @@ func TestGenDeleteSQLWithRouting(t *testing.T) {
 	require.Len(t, args, 4)
 	expectedArgs := []interface{}{int64(1), int64(2), int64(3), int64(4)}
 	require.Equal(t, expectedArgs, args, "DELETE args should contain PK values for all rows")
-	// Verify OR clauses for multi-row delete
-	require.Contains(t, sql, "OR", "Multi-row DELETE should have OR clauses")
+	require.Contains(t, sql, "IN", "Multi-row DELETE should use IN clauses in v2 mode")
 }
 
 // TestGenUpdateSQLWithRouting tests that GenUpdateSQL uses target schema/table
@@ -121,13 +120,13 @@ func TestGenUpdateSQLWithRouting(t *testing.T) {
 
 	rows := []*RowChange{row1, row2, row3}
 
-	sql, args := GenUpdateSQL(rows...)
+	sql, args := GenUpdateSQL(DefaultWhereClause, rows...)
 	require.Contains(t, sql, "UPDATE `target_db`.`target_table`", "UPDATE should use target schema and table")
 	require.NotContains(t, sql, "`test`.`t`", "UPDATE should not contain source schema.table")
 	// UPDATE uses CASE WHEN for multi-row updates
 	require.Contains(t, sql, "CASE", "Multi-row UPDATE should use CASE expression")
 	require.Contains(t, sql, "WHEN", "Multi-row UPDATE should use WHEN clauses")
-	require.Contains(t, sql, "OR", "Multi-row UPDATE WHERE should have OR clauses")
+	require.Contains(t, sql, "IN", "Multi-row UPDATE WHERE should use IN clauses in v2 mode")
 	// Args should contain values for all rows
 	// Multi-row UPDATE args: for each column: [WHEN pk=? THEN new_val] repeated for each row, then WHERE pk values
 	// 2 columns (id, name) * 3 rows * (1 pk + 1 new_val) + 3 WHERE pk values = 2*3*2 + 3 = 15
@@ -201,7 +200,7 @@ func TestGenDeleteSQLWithSchemaOnlyRouting(t *testing.T) {
 
 	rows := []*RowChange{row1, row2, row3, row4}
 
-	sql, args := GenDeleteSQL(rows...)
+	sql, args := GenDeleteSQL(DefaultWhereClause, rows...)
 	require.Contains(t, sql, "`target_db`.`orders`", "Should use target schema and table")
 	require.NotContains(t, sql, "`test`.`t`", "Should not contain source schema.table")
 	require.Len(t, args, 4)
@@ -230,7 +229,7 @@ func TestGenUpdateSQLWithTableOnlyRouting(t *testing.T) {
 
 	rows := []*RowChange{row1, row2, row3}
 
-	sql, args := GenUpdateSQL(rows...)
+	sql, args := GenUpdateSQL(DefaultWhereClause, rows...)
 	require.Contains(t, sql, "`test`.`new_products`", "Should use original schema with target table name")
 	require.NotContains(t, sql, "`test`.`t`", "Should not contain source table name")
 	// 2 columns * 3 rows * 2 (pk + new_val) + 3 WHERE pk values = 15
@@ -269,7 +268,7 @@ func TestGenMultiRowSQLWithoutRouting(t *testing.T) {
 		[]interface{}{int64(3), "val3"}, nil, sourceTableInfo, nil, nil)
 
 	deleteRows := []*RowChange{delRow1, delRow2, delRow3}
-	sql, args = GenDeleteSQL(deleteRows...)
+	sql, args = GenDeleteSQL(DefaultWhereClause, deleteRows...)
 	require.Contains(t, sql, "`test`.`t`", "Should use source schema and table")
 	require.Len(t, args, 3)
 	expectedDeleteArgs := []interface{}{int64(1), int64(2), int64(3)}
@@ -290,7 +289,7 @@ func TestGenMultiRowSQLWithoutRouting(t *testing.T) {
 		sourceTableInfo, nil, nil)
 
 	updateRows := []*RowChange{updRow1, updRow2, updRow3}
-	sql, args = GenUpdateSQL(updateRows...)
+	sql, args = GenUpdateSQL(DefaultWhereClause, updateRows...)
 	require.Contains(t, sql, "`test`.`t`", "Should use source schema and table")
 	require.Len(t, args, 15, "Multi-row UPDATE should have correct number of args")
 	require.Contains(t, args, "new1")

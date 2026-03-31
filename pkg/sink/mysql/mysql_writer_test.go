@@ -341,6 +341,54 @@ func TestMysqlWriter_FlushDDLEvent(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestMysqlWriter_ExecDDLUsesRoutedSchemaName(t *testing.T) {
+	writer, db, mock := newTestMysqlWriter(t)
+	defer db.Close()
+
+	ddlEvent := &commonEvent.DDLEvent{
+		Query:      "ALTER TABLE `target_db`.`target_table` ADD COLUMN age INT",
+		Type:       byte(timodel.ActionAddColumn),
+		SchemaName: "target_db",
+		TableName:  "target_table",
+		FinishedTs: 1,
+	}
+
+	mock.ExpectBegin()
+	mock.ExpectExec("USE `target_db`;").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("SET TIMESTAMP = DEFAULT").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("ALTER TABLE `target_db`.`target_table` ADD COLUMN age INT").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	err := writer.execDDL(ddlEvent)
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestMysqlWriter_ExecRenameDDLUsesRoutedNewSchemaName(t *testing.T) {
+	writer, db, mock := newTestMysqlWriter(t)
+	defer db.Close()
+
+	ddlEvent := &commonEvent.DDLEvent{
+		Query:           "RENAME TABLE `old_target_db`.`orders_old` TO `new_target_db`.`orders_new`",
+		Type:            byte(timodel.ActionRenameTable),
+		SchemaName:      "new_target_db",
+		TableName:       "orders_new",
+		ExtraSchemaName: "old_target_db",
+		ExtraTableName:  "orders_old",
+		FinishedTs:      1,
+	}
+
+	mock.ExpectBegin()
+	mock.ExpectExec("USE `new_target_db`;").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("SET TIMESTAMP = DEFAULT").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("RENAME TABLE `old_target_db`.`orders_old` TO `new_target_db`.`orders_new`").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	err := writer.execDDL(ddlEvent)
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestMysqlWriter_Flush_EmptyEvents(t *testing.T) {
 	writer, db, mock := newTestMysqlWriter(t)
 	defer db.Close()

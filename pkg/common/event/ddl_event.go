@@ -41,10 +41,6 @@ type DDLEvent struct {
 	SchemaID   int64  `json:"schema_id"`
 	SchemaName string `json:"schema_name"`
 	TableName  string `json:"table_name"`
-	// TargetSchemaName is the routed schema name when sink routing is configured.
-	// When set, GetDDLSchemaName() returns this value instead of SchemaName.
-	// This field is not serialized as it's only used during sink execution.
-	TargetSchemaName string `json:"-"`
 	// the following two fields are just used for RenameTable,
 	// they are the old schema/table name of the table
 	ExtraSchemaName string            `json:"extra_schema_name"`
@@ -113,6 +109,13 @@ type DDLEvent struct {
 	// UnmarshalJSON compatibility so both `not_sync` and legacy `NotSync`
 	// are interoperable in mixed-version deployment.
 	NotSync bool `json:"not_sync"`
+
+	// source* fields are internal routing context used to preserve source identity
+	// for dispatch after sink-local canonical fields are rewritten.
+	sourceSchemaName      string
+	sourceTableName       string
+	sourceExtraSchemaName string
+	sourceExtraTableName  string
 }
 
 type ddlEventJSONAlias DDLEvent
@@ -193,7 +196,21 @@ func (d *DDLEvent) GetSchemaName() string {
 	return d.SchemaName
 }
 
+func (d *DDLEvent) GetSourceSchemaName() string {
+	if d.sourceSchemaName != "" {
+		return d.sourceSchemaName
+	}
+	return d.SchemaName
+}
+
 func (d *DDLEvent) GetTableName() string {
+	return d.TableName
+}
+
+func (d *DDLEvent) GetSourceTableName() string {
+	if d.sourceTableName != "" {
+		return d.sourceTableName
+	}
 	return d.TableName
 }
 
@@ -201,7 +218,21 @@ func (d *DDLEvent) GetExtraSchemaName() string {
 	return d.ExtraSchemaName
 }
 
+func (d *DDLEvent) GetSourceExtraSchemaName() string {
+	if d.sourceExtraSchemaName != "" {
+		return d.sourceExtraSchemaName
+	}
+	return d.ExtraSchemaName
+}
+
 func (d *DDLEvent) GetExtraTableName() string {
+	return d.ExtraTableName
+}
+
+func (d *DDLEvent) GetSourceExtraTableName() string {
+	if d.sourceExtraTableName != "" {
+		return d.sourceExtraTableName
+	}
 	return d.ExtraTableName
 }
 
@@ -306,10 +337,6 @@ func (e *DDLEvent) GetDDLQuery() string {
 func (e *DDLEvent) GetDDLSchemaName() string {
 	if e == nil {
 		return ""
-	}
-	// Return the target schema name if routing is configured
-	if e.TargetSchemaName != "" {
-		return e.TargetSchemaName
 	}
 	return e.SchemaName
 }
@@ -501,7 +528,7 @@ func (t *DDLEvent) IsPaused() bool {
 // The clone shares most fields with the original (they are read-only after creation),
 // but the following fields are prepared for independent mutation:
 // - Query: will be rewritten with routed schema/table names
-// - TargetSchemaName: will be set by routing
+// - SchemaName/TableName/Extra*: will be rewritten to canonical target names
 // - TableInfo: will be replaced with routed version (via CloneWithRouting)
 // - MultipleTableInfos: each element will be replaced with routed version
 // - PostTxnFlushed: independent slice to allow safe callback appends
@@ -512,6 +539,10 @@ func (d *DDLEvent) CloneForRouting() *DDLEvent {
 
 	// Create shallow copy
 	clone := *d
+	clone.sourceSchemaName = d.GetSourceSchemaName()
+	clone.sourceTableName = d.GetSourceTableName()
+	clone.sourceExtraSchemaName = d.GetSourceExtraSchemaName()
+	clone.sourceExtraTableName = d.GetSourceExtraTableName()
 
 	// PostTxnFlushed needs its own backing array to prevent potential races.
 	// Currently, DDL events arrive with nil PostTxnFlushed (callbacks are added

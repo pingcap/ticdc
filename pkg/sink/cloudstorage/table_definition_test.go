@@ -18,8 +18,10 @@ import (
 	"math/rand"
 	"testing"
 
+	"github.com/pingcap/ticdc/downstreamadapter/routing"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/charset"
@@ -75,6 +77,45 @@ func generateTableDef() (TableDefinition, *common.TableInfo) {
 	var def TableDefinition
 	def.FromTableInfo(tableInfo.GetSchemaName(), tableInfo.GetTableName(), tableInfo, tableInfo.GetUpdateTS(), false)
 	return def, tableInfo
+}
+
+func TestFromDDLEventUsesCanonicalTargetNames(t *testing.T) {
+	t.Parallel()
+
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	job := helper.DDL2Job(`create table test.t(id int primary key)`)
+	require.NotNil(t, job)
+
+	router, err := routing.NewRouter(false, []*config.DispatchRule{{
+		Matcher:      []string{"test.t"},
+		TargetSchema: "target_db",
+		TargetTable:  "target_table",
+	}})
+	require.NoError(t, err)
+
+	ddlEvent := &commonEvent.DDLEvent{
+		Query:      job.Query,
+		Type:       byte(job.Type),
+		SchemaName: job.SchemaName,
+		TableName:  job.TableName,
+		TableInfo:  common.WrapTableInfo(job.SchemaName, job.BinlogInfo.TableInfo),
+		FinishedTs: 100,
+	}
+
+	routedDDL, err := router.ApplyToDDLEvent(
+		ddlEvent,
+		common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test-changefeed"),
+	)
+	require.NoError(t, err)
+
+	var def TableDefinition
+	def.FromDDLEvent(routedDDL, false)
+	require.Equal(t, "target_db", def.Schema)
+	require.Equal(t, "target_table", def.Table)
+	require.Contains(t, def.Query, "`target_db`.`target_table`")
 }
 
 func TestTableCol(t *testing.T) {

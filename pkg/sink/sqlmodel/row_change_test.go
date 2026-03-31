@@ -292,7 +292,7 @@ type dpanicSuite struct {
 }
 
 func (s *dpanicSuite) SetupSuite() {
-	err := log.InitLogger(&log.Config{Level: "debug"})
+	_, _, err := log.InitLogger(&log.Config{Level: "debug"})
 	s.NoError(err)
 }
 

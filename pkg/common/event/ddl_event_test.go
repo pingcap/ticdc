@@ -533,7 +533,6 @@ func TestDDLEventCloneForRouting(t *testing.T) {
 		SchemaID:           ddlJob.SchemaID,
 		SchemaName:         ddlJob.SchemaName,
 		TableName:          ddlJob.TableName,
-		TargetSchemaName:   "",
 		Query:              ddlJob.Query,
 		TableInfo:          originalTableInfo,
 		FinishedTs:         ddlJob.BinlogInfo.FinishedTS,
@@ -589,7 +588,7 @@ func TestDDLEventCloneForRouting(t *testing.T) {
 	require.Equal(t, 2, len(original.PostTxnFlushed), "Original should be unaffected by clone's append")
 
 	// Now simulate what happens during routing: mutate the cloned event
-	cloned.TargetSchemaName = "routed_schema"
+	cloned.SchemaName = "routed_schema"
 	cloned.Query = "CREATE TABLE routed_schema.test ..."
 	newRoutedTableInfo := originalTableInfo.CloneWithRouting("routed_schema", "test")
 	cloned.TableInfo = newRoutedTableInfo
@@ -597,20 +596,42 @@ func TestDDLEventCloneForRouting(t *testing.T) {
 	cloned.MultipleTableInfos[1] = multipleTableInfo2.CloneWithRouting("routed_schema2", "table2")
 
 	// Verify that mutations to cloned event don't affect the original
-	require.Equal(t, "", original.TargetSchemaName, "Original TargetSchemaName should be unchanged")
+	require.Equal(t, ddlJob.SchemaName, original.SchemaName, "Original SchemaName should be unchanged")
 	require.Equal(t, ddlJob.Query, original.Query, "Original Query should be unchanged")
 	require.True(t, original.TableInfo == originalTableInfo, "Original TableInfo should be unchanged")
 	require.True(t, original.MultipleTableInfos[0] == multipleTableInfo1, "Original MultipleTableInfos[0] should be unchanged")
 	require.True(t, original.MultipleTableInfos[1] == multipleTableInfo2, "Original MultipleTableInfos[1] should be unchanged")
 
 	// Verify that cloned event has the mutations
-	require.Equal(t, "routed_schema", cloned.TargetSchemaName)
+	require.Equal(t, "routed_schema", cloned.SchemaName)
 	require.Equal(t, "CREATE TABLE routed_schema.test ...", cloned.Query)
 	require.True(t, cloned.TableInfo == newRoutedTableInfo)
 	require.Equal(t, "routed_schema", cloned.TableInfo.TableName.TargetSchema)
+	require.Equal(t, original.SchemaName, cloned.GetSourceSchemaName())
+	require.Equal(t, original.TableName, cloned.GetSourceTableName())
 
 	// Test cloning nil event
 	var nilEvent *DDLEvent
 	clonedNil := nilEvent.CloneForRouting()
 	require.Nil(t, clonedNil)
+}
+
+func TestCloneForRoutingPreservesDDLSourceContext(t *testing.T) {
+	original := &DDLEvent{
+		SchemaName:      "source_db",
+		TableName:       "new_orders",
+		ExtraSchemaName: "source_db",
+		ExtraTableName:  "old_orders",
+	}
+
+	cloned := original.CloneForRouting()
+	cloned.SchemaName = "target_db"
+	cloned.TableName = "new_orders_routed"
+	cloned.ExtraSchemaName = "target_db"
+	cloned.ExtraTableName = "old_orders_routed"
+
+	require.Equal(t, "source_db", cloned.GetSourceSchemaName())
+	require.Equal(t, "new_orders", cloned.GetSourceTableName())
+	require.Equal(t, "source_db", cloned.GetSourceExtraSchemaName())
+	require.Equal(t, "old_orders", cloned.GetSourceExtraTableName())
 }

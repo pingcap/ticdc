@@ -23,54 +23,16 @@ import (
 	"go.uber.org/zap"
 )
 
-// DDLRoutingResult contains the result of DDL routing rewriting.
-type DDLRoutingResult struct {
-	// NewQuery is the rewritten DDL query with target table names.
-	// May be identical to the original query even when routing was applied
-	// (e.g., if parser normalization produces the same string).
-	NewQuery string
-	// TargetSchemaName is the target schema to use for the USE statement (if needed).
-	// This is set to the first target table's schema when routing rules match.
-	TargetSchemaName string
-	// RoutingApplied indicates whether routing rules matched and were applied.
-	// This is true when target names differ from source names, regardless of
-	// whether the query string actually changed. Use this to determine if
-	// TargetSchemaName should be used for the USE statement.
-	RoutingApplied bool
-	// QueryChanged indicates whether the query string was actually modified.
-	// This is a subset of RoutingApplied - when true, NewQuery differs from
-	// the original query and should be used.
-	QueryChanged bool
-}
-
 // rewriteDDLQueryWithRouting rewrites a DDL query by applying routing rules
 // to transform source table names to target table names.
 //
-// This function is used by both MySQL and Redo sinks to ensure DDL statements
-// use the correct target table names when sink routing is configured.
-//
-// Parameters:
-//   - router: The Router instance containing routing rules. May be nil.
-//   - ddl: The DDL event containing the query to rewrite.
-//   - changefeedID: The changefeed ID for logging purposes.
-//
-// Returns:
-//   - *DDLRoutingResult: Contains the rewritten query and metadata.
-//   - error: Returns an error if DDL parsing or rewriting fails. Silent fallback
-//     is not acceptable as it could lead to data going to wrong tables.
-//
-// IMPORTANT: This function does NOT mutate ddl.Query. Callers are responsible
-// for applying the returned NewQuery to the DDL event if QueryChanged is true.
-func rewriteDDLQueryWithRouting(router *Router, ddl *commonEvent.DDLEvent, changefeedID common.ChangeFeedID) (*DDLRoutingResult, error) {
-	result := &DDLRoutingResult{
-		NewQuery:       ddl.Query,
-		RoutingApplied: false,
-		QueryChanged:   false,
-	}
-
-	// Early returns for no-op cases
+// It only returns the query string and whether the query text changed.
+// Canonical DDL schema/table fields are rewritten separately by ApplyToDDLEvent.
+func rewriteDDLQueryWithRouting(
+	router *Router, ddl *commonEvent.DDLEvent, changefeedID common.ChangeFeedID,
+) (string, bool, error) {
 	if router == nil || ddl.Query == "" {
-		return result, nil
+		return ddl.Query, false, nil
 	}
 
 	// Get the default schema for parsing. If TableInfo is nil (e.g., for
@@ -89,7 +51,7 @@ func rewriteDDLQueryWithRouting(router *Router, ddl *commonEvent.DDLEvent, chang
 			zap.String("keyspace", changefeedID.Keyspace()),
 			zap.String("changefeed", changefeedID.Name()),
 			zap.String("query", ddl.Query), zap.Error(err))
-		return nil, errors.WrapError(errors.ErrTableRoutingFailed, err)
+		return "", false, errors.WrapError(errors.ErrTableRoutingFailed, err)
 	}
 
 	// Fetch source tables from the DDL
@@ -99,11 +61,11 @@ func rewriteDDLQueryWithRouting(router *Router, ddl *commonEvent.DDLEvent, chang
 			zap.String("keyspace", changefeedID.Keyspace()),
 			zap.String("changefeed", changefeedID.Name()),
 			zap.String("query", ddl.Query), zap.Error(err))
-		return nil, errors.WrapError(errors.ErrTableRoutingFailed, err)
+		return "", false, errors.WrapError(errors.ErrTableRoutingFailed, err)
 	}
 
 	if len(sourceTables) == 0 {
-		return result, nil
+		return ddl.Query, false, nil
 	}
 
 	// Build target tables by applying routing rules
@@ -123,21 +85,7 @@ func rewriteDDLQueryWithRouting(router *Router, ddl *commonEvent.DDLEvent, chang
 	}
 
 	if !routed {
-		return result, nil
-	}
-
-	// Routing rules matched - mark as applied regardless of whether query changes
-	result.RoutingApplied = true
-
-	// Set the target schema for the USE command when executing the DDL.
-	// We use the first target table's schema because:
-	// 1. For single-table DDLs, this is the correct target schema
-	// 2. For multi-table DDLs (e.g., RENAME TABLE), all table references in the
-	//    rewritten query are fully qualified, so the USE command just needs to
-	//    switch to any database the user has access to - the first target schema
-	//    is guaranteed to be accessible since routing was configured for it.
-	if len(targetTables) > 0 {
-		result.TargetSchemaName = targetTables[0].Schema
+		return ddl.Query, false, nil
 	}
 
 	// Rewrite the DDL with target tables
@@ -147,7 +95,7 @@ func rewriteDDLQueryWithRouting(router *Router, ddl *commonEvent.DDLEvent, chang
 			zap.String("keyspace", changefeedID.Keyspace()),
 			zap.String("changefeed", changefeedID.Name()),
 			zap.String("query", ddl.Query), zap.Any("targetTables", targetTables), zap.Error(err))
-		return nil, errors.WrapError(errors.ErrTableRoutingFailed, err)
+		return "", false, errors.WrapError(errors.ErrTableRoutingFailed, err)
 	}
 
 	if newQuery != ddl.Query {
@@ -156,9 +104,7 @@ func rewriteDDLQueryWithRouting(router *Router, ddl *commonEvent.DDLEvent, chang
 			zap.String("changefeed", changefeedID.Name()),
 			zap.String("originalQuery", ddl.Query),
 			zap.String("newQuery", newQuery))
-		result.NewQuery = newQuery
-		result.QueryChanged = true
 	}
 
-	return result, nil
+	return newQuery, newQuery != ddl.Query, nil
 }

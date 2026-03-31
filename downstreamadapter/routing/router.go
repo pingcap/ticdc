@@ -123,26 +123,44 @@ func (r *Router) ApplyToDDLEvent(ddl *commonEvent.DDLEvent, changefeedID common.
 		return nil, nil
 	}
 
-	result, err := rewriteDDLQueryWithRouting(r, ddl, changefeedID)
+	newQuery, queryChanged, err := rewriteDDLQueryWithRouting(r, ddl, changefeedID)
 	if err != nil {
 		return nil, err
 	}
 
+	routedSchemaName, routedTableName, schemaTableChanged := routeSchemaTable(
+		r, ddl.GetSourceSchemaName(), ddl.GetSourceTableName(),
+	)
+	routedExtraSchemaName, routedExtraTableName, extraSchemaTableChanged := routeSchemaTable(
+		r, ddl.GetSourceExtraSchemaName(), ddl.GetSourceExtraTableName(),
+	)
 	routedTableInfo := r.ApplyToTableInfo(ddl.TableInfo)
 	tableInfoChanged := routedTableInfo != ddl.TableInfo
 	routedMultipleTableInfos, multipleTableInfosChanged := applyToMultipleTableInfos(r, ddl.MultipleTableInfos)
 	routedBlockedTableNames, blockedTableNamesChanged := applyToBlockedTableNames(r, ddl.BlockedTableNames)
+	routedTableNameChange, tableNameChangeChanged := applyToTableNameChange(r, ddl.TableNameChange)
 
-	if !result.RoutingApplied && !tableInfoChanged && !multipleTableInfosChanged && !blockedTableNamesChanged {
+	if !queryChanged &&
+		!schemaTableChanged &&
+		!extraSchemaTableChanged &&
+		!tableInfoChanged &&
+		!multipleTableInfosChanged &&
+		!blockedTableNamesChanged &&
+		!tableNameChangeChanged {
 		return ddl, nil
 	}
 
 	cloned := ddl.CloneForRouting()
-	if result.RoutingApplied {
-		cloned.TargetSchemaName = result.TargetSchemaName
-		if result.QueryChanged {
-			cloned.Query = result.NewQuery
-		}
+	if queryChanged {
+		cloned.Query = newQuery
+	}
+	if schemaTableChanged {
+		cloned.SchemaName = routedSchemaName
+		cloned.TableName = routedTableName
+	}
+	if extraSchemaTableChanged {
+		cloned.ExtraSchemaName = routedExtraSchemaName
+		cloned.ExtraTableName = routedExtraTableName
 	}
 	if tableInfoChanged {
 		cloned.TableInfo = routedTableInfo
@@ -152,6 +170,9 @@ func (r *Router) ApplyToDDLEvent(ddl *commonEvent.DDLEvent, changefeedID common.
 	}
 	if blockedTableNamesChanged {
 		cloned.BlockedTableNames = routedBlockedTableNames
+	}
+	if tableNameChangeChanged {
+		cloned.TableNameChange = routedTableNameChange
 	}
 
 	return cloned, nil
@@ -220,6 +241,52 @@ func applyToBlockedTableNames(r *Router, tableNames []commonEvent.SchemaTableNam
 		return tableNames, false
 	}
 	return routedTableNames, true
+}
+
+func applyToTableNameChange(r *Router, change *commonEvent.TableNameChange) (*commonEvent.TableNameChange, bool) {
+	if change == nil {
+		return nil, false
+	}
+
+	routedAddNames, addChanged := applyToBlockedTableNames(r, change.AddName)
+	routedDropNames, dropChanged := applyToBlockedTableNames(r, change.DropName)
+	routedDropDatabaseName, dropDatabaseChanged := routeSchemaOnly(r, change.DropDatabaseName)
+
+	if !addChanged && !dropChanged && !dropDatabaseChanged {
+		return change, false
+	}
+
+	cloned := *change
+	if addChanged {
+		cloned.AddName = routedAddNames
+	}
+	if dropChanged {
+		cloned.DropName = routedDropNames
+	}
+	if dropDatabaseChanged {
+		cloned.DropDatabaseName = routedDropDatabaseName
+	}
+	return &cloned, true
+}
+
+func routeSchemaOnly(r *Router, schema string) (string, bool) {
+	if schema == "" {
+		return "", false
+	}
+	targetSchema, _ := r.Route(schema, "")
+	return targetSchema, targetSchema != schema
+}
+
+func routeSchemaTable(r *Router, schema, table string) (string, string, bool) {
+	if schema == "" && table == "" {
+		return "", "", false
+	}
+	if table == "" {
+		targetSchema, changed := routeSchemaOnly(r, schema)
+		return targetSchema, "", changed
+	}
+	targetSchema, targetTable := r.Route(schema, table)
+	return targetSchema, targetTable, targetSchema != schema || targetTable != table
 }
 
 // substituteExpression replaces {schema} and {table} placeholders with actual values.
