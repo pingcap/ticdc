@@ -170,7 +170,10 @@ func (e *DispatcherManager) newRedoDispatchers(infos map[common.DispatcherID]dis
 			e.SetTableTriggerRedoDispatcher(rd)
 		} else {
 			e.redoSchemaIDToDispatchers.Set(schemaIds[idx], id)
-			appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).AddDispatcher(rd, e.redoQuota)
+			appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).AddDispatcher(
+				rd,
+				e.redoQuota,
+			)
 		}
 
 		redoSeq := e.redoDispatcherMap.Set(rd.GetId(), rd)
@@ -280,7 +283,10 @@ func (e *DispatcherManager) InitalizeTableTriggerRedoDispatcher(schemaInfo []*he
 	if !needAddDispatcher {
 		return nil
 	}
-	appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).AddDispatcher(e.GetTableTriggerRedoDispatcher(), e.redoQuota)
+	appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).AddDispatcher(
+		e.GetTableTriggerRedoDispatcher(),
+		e.redoQuota,
+	)
 	return nil
 }
 

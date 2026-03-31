@@ -142,6 +142,7 @@ func newTestBasicDispatcher(t *testing.T, sinkType common.SinkType, enableActive
 		nil,
 		nil,
 		false,
+		nil, // router
 		statuses,
 		blockStatuses,
 		errCh,
