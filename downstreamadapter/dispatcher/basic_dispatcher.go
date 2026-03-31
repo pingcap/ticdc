@@ -840,8 +840,8 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 			ID: d.id.ToPB(),
 			State: &heartbeatpb.State{
 				IsBlocked:   true,
-				BlockTs:     dispatcherStatus.GetAction().CommitTs,
-				IsSyncPoint: dispatcherStatus.GetAction().IsSyncPoint,
+				BlockTs:     action.CommitTs,
+				IsSyncPoint: action.IsSyncPoint,
 				Stage:       heartbeatpb.BlockStage_DONE,
 			},
 			Mode: d.GetMode(),
