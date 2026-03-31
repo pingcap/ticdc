@@ -6,7 +6,8 @@ set -eu
 # bootstrap failure.
 #
 # Steps:
-# 1. Start one TiCDC node with a one-shot schema store failpoint.
+# 1. Start one TiCDC node with a schema store failpoint that keeps bootstrap
+#    failing with ErrSnapshotLostByGC on the maintainer node.
 # 2. Create a mysql sink changefeed and wait until bootstrap fails with
 #    ErrSnapshotLostByGC.
 # 3. Start a second TiCDC node immediately after the first bootstrap error so
@@ -24,6 +25,7 @@ WORK_DIR=$OUT_DIR/$TEST_NAME
 CDC_BINARY=cdc.test
 SINK_TYPE=$1
 MAX_RETRIES=20
+FAILPOINT_BLOCK_BEFORE_STOP_CHANGEFEED="github.com/pingcap/ticdc/coordinator/BlockBeforeStopChangefeed"
 
 PD_ADDR="http://${UP_PD_HOST_1}:${UP_PD_PORT_1}"
 SINK_URI="mysql://normal:123456@127.0.0.1:3306/"
@@ -89,8 +91,10 @@ function run() {
 
 	start_tidb_cluster --workdir $WORK_DIR
 
-	export GO_FAILPOINTS='github.com/pingcap/ticdc/logservice/schemastore/getAllPhysicalTablesGCFastFail=1*return(true)'
+	export GO_FAILPOINTS='github.com/pingcap/ticdc/logservice/schemastore/getAllPhysicalTablesGCFastFail=return(true)'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0"
+	ensure $MAX_RETRIES "check_api_ready 127.0.0.1:8300"
+	enable_failpoint --addr "127.0.0.1:8300" --name "$FAILPOINT_BLOCK_BEFORE_STOP_CHANGEFEED" --expr "pause"
 
 	run_sql "CREATE DATABASE bootstrap_retry_after_error;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "CREATE TABLE bootstrap_retry_after_error.t1(id INT PRIMARY KEY, val INT);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
@@ -101,14 +105,16 @@ function run() {
 
 	ensure $MAX_RETRIES "check_cdc_logs_contains $WORK_DIR 'ErrSnapshotLostByGC'"
 
-	# Only the first capture should consume the one-shot failpoint. Start the
-	# second node without the failpoint so it can send a real bootstrap response
-	# during the retry window.
+	# Start the second node without the schema-store failpoint. The retry still
+	# fails because the maintainer is running on the first node, which keeps the
+	# bootstrap error active while we verify node scheduling triggers another
+	# bootstrap round.
 	export GO_FAILPOINTS=''
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "1" --addr "127.0.0.1:8301" --pd "$PD_ADDR"
 
 	ensure $MAX_RETRIES "check_node_change_triggers_bootstrap $WORK_DIR"
+	disable_failpoint --addr "127.0.0.1:8300" --name "$FAILPOINT_BLOCK_BEFORE_STOP_CHANGEFEED"
 	ensure $MAX_RETRIES "get_cdc_pid 127.0.0.1 8300 >/dev/null"
 	ensure $MAX_RETRIES "get_cdc_pid 127.0.0.1 8301 >/dev/null"
 	ensure $MAX_RETRIES "check_api_ready 127.0.0.1:8300"
