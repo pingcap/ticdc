@@ -139,7 +139,7 @@ type Handler[A Area, P Path, T Event, D Dest] interface {
 
 	// OnDrop is called when an event is dropped. Could be caused by the memory control or cannot find the path.
 	// Do nothing by default implementation.
-	OnDrop(event T) interface{}
+	OnDrop(event T) any
 }
 
 type PathAndDest[P Path, D Dest] struct {
@@ -189,10 +189,6 @@ type DynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] inter
 	// After this call return, events in the path will be dropped.
 	Release(path P)
 
-	// SetAreaSettings sets the settings of the area. An area uses the default settings if it is not set.
-	// This method can be called at any time. But to avoid the memory leak, setting on a area without existing paths is a no-op.
-	SetAreaSettings(area A, settings AreaSettings)
-
 	GetMetrics() Metrics[A, P]
 }
 
@@ -211,8 +207,8 @@ type Option struct {
 	ReportInterval    time.Duration // The interval of reporting the status of stream, the status is used by the scheduler.
 
 	StreamCount int // The count of streams. I.e. the count of goroutines to handle events. By default 0, means runtime.NumCPU().
-	BatchCount  int // The batch count of handling events. <= 1 means no batch. By default 1.
-	BatchBytes  int // The max bytes of the batch. <= 1 means no limit. By default 0.
+	BatchCount  int // The batch count limit of handling events. <= 0 means 1.
+	BatchBytes  int // The batch bytes limit of handling events. < 0 means 0.
 
 	EnableMemoryControl bool // Enable the memory control. By default false.
 
@@ -227,6 +223,7 @@ func NewOption() Option {
 		ReportInterval:    DefaultReportInterval,
 		StreamCount:       0,
 		BatchCount:        1,
+		BatchBytes:        0,
 		UseBuffer:         false,
 	}
 }
@@ -241,6 +238,9 @@ func (o *Option) fix() {
 	if o.BatchCount <= 0 {
 		o.BatchCount = 1
 	}
+	if o.BatchBytes < 0 {
+		o.BatchBytes = 0
+	}
 }
 
 type AreaSettings struct {
@@ -248,8 +248,13 @@ type AreaSettings struct {
 	maxPendingSize     uint64        // The max memory usage of the pending events of the area. Must be larger than 0. By default 1GB.
 	pathMaxPendingSize uint64        // The max memory usage of the pending events of the path. Must be larger than 0. By default 10% of the area max pending size.
 	feedbackInterval   time.Duration // The interval of the feedback. By default 1000ms.
+
 	// Remove it when we determine the v2 is working well.
-	algorithm int // The algorithm of the memory control.
+	// The algorithm of the memory control.
+	algorithm int
+
+	// control how to batch events
+	batchConfig batchConfig
 }
 
 func (s *AreaSettings) fix() {
@@ -262,17 +267,27 @@ func (s *AreaSettings) fix() {
 	}
 }
 
-func NewAreaSettingsWithMaxPendingSize(size uint64, memoryControlAlgorithm int, component string) AreaSettings {
+func NewAreaSettingsWithMaxPendingSize(
+	quota uint64, algorithm int, component string,
+) AreaSettings {
 	// The path max pending size is at least 1MB.
-	pathMaxPendingSize := max(size/10, 1*1024*1024)
-
+	pathMaxPendingSize := max(quota/10, 1*1024*1024)
 	return AreaSettings{
 		component:          component,
 		feedbackInterval:   DefaultFeedbackInterval,
-		maxPendingSize:     size,
+		maxPendingSize:     quota,
 		pathMaxPendingSize: pathMaxPendingSize,
-		algorithm:          memoryControlAlgorithm,
+		algorithm:          algorithm,
+		batchConfig:        batchConfig{},
 	}
+}
+
+func NewAreaSettingsWithMaxPendingSizeAndBatchConfig(
+	quota uint64, algorithm int, component string, batchCount int, batchBytes int,
+) AreaSettings {
+	s := NewAreaSettingsWithMaxPendingSize(quota, algorithm, component)
+	s.batchConfig = NewBatchConfig(batchCount, batchBytes)
+	return s
 }
 
 type FeedbackType int
