@@ -35,8 +35,9 @@ type parallelDynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D
 		m map[P]*pathInfo[A, P, T, D, H]
 	}
 
-	eventExtraSize int
-	memControl     *memControl[A, P, T, D, H]
+	eventExtraSize      int
+	memControl          *memControl[A, P, T, D, H]
+	batchConfigRegistry *areaBatchConfigRegistry[A]
 
 	feedbackChan chan Feedback[A, P, D]
 
@@ -68,6 +69,7 @@ func newParallelDynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T
 	}
 
 	s.pathMap.m = make(map[P]*pathInfo[A, P, T, D, H])
+	s.batchConfigRegistry = newAreaBatchConfigRegistry[A](NewBatchConfig(option.BatchCount, option.BatchBytes))
 
 	if option.EnableMemoryControl {
 		log.Info("Dynamic stream enable memory control")
@@ -75,7 +77,7 @@ func newParallelDynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T
 		s.memControl = newMemControl[A, P, T, D, H]()
 	}
 	for i := range option.StreamCount {
-		s.streams = append(s.streams, newStream(i, component, handler, option))
+		s.streams = append(s.streams, newStream(i, component, handler, option, s.batchConfigRegistry))
 	}
 	return s
 }
@@ -204,6 +206,11 @@ func (s *parallelDynamicStream[A, P, T, D, H]) AddPath(path P, dest D, as ...Are
 
 	area := s.handler.GetArea(path, dest)
 	metricLabel := s.handler.GetMetricLabel(dest)
+	areaBatchConfig := batchConfig{}
+	if len(as) > 0 {
+		areaBatchConfig = as[0].batchConfig
+	}
+	s.batchConfigRegistry.onAddPath(area, areaBatchConfig)
 	pi := newPathInfo[A, P, T, D, H](area, metricLabel, path, dest)
 
 	streamID := s._statAddPathCount.Load() % int64(len(s.streams))
@@ -237,6 +244,7 @@ func (s *parallelDynamicStream[A, P, T, D, H]) RemovePath(path P) error {
 	if s.memControl != nil {
 		s.memControl.removePathFromArea(pi)
 	}
+	s.batchConfigRegistry.onRemovePath(pi.area)
 	delete(s.pathMap.m, path)
 	s.pathMap.Unlock()
 	pi.stream.addEvent(eventWrap[A, P, T, D, H]{pathInfo: pi})
