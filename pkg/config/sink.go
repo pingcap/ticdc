@@ -761,6 +761,14 @@ func (s *SinkConfig) validateAndAdjust(sinkURI *url.URL) error {
 		return err
 	}
 
+	if err := s.validateTableRoute(); err != nil {
+		return err
+	}
+
+	if IsMySQLCompatibleScheme(sinkURI.Scheme) {
+		return nil
+	}
+
 	if util.GetOrZero(s.EnableKafkaSinkV2) {
 		log.Warn("enable-kafka-sink-v2 is deprecated, still use the default kafka sink")
 	}
@@ -825,14 +833,6 @@ func (s *SinkConfig) validateAndAdjust(sinkURI *url.URL) error {
 			rule.PartitionRule = rule.DispatcherRule
 			rule.DispatcherRule = ""
 		}
-	}
-
-	if err := s.validateTableRoute(); err != nil {
-		return err
-	}
-
-	if IsMySQLCompatibleScheme(sinkURI.Scheme) {
-		return nil
 	}
 
 	if util.GetOrZero(s.EncoderConcurrency) < 0 {
@@ -1152,8 +1152,7 @@ type DebeziumConfig struct {
 }
 
 // validRoutingExpressionRegexp accepts routing expressions made of literal text
-// and the {schema}/{table} placeholders, such as "archive", "{table}_bak", or
-// "{schema}_{table}".
+// and the {schema}/{table} placeholders, such as "archive", "{table}_bak", or "{schema}_{table}".
 var validRoutingExpressionRegexp = regexp.MustCompile(`^(?:[^{}]|\{schema\}|\{table\})*$`)
 
 // validateRoutingExpression validates a routing expression for a single routing field.
