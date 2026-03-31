@@ -44,10 +44,10 @@ func TestSchemaStoreGCKeeperLifecycle(t *testing.T) {
 
 	ctx := context.Background()
 	require.NoError(t, keeper.initialize(ctx, 100))
-	assertSchemaStoreBarrierTS(t, state, serviceID, 101)
+	assertSchemaStoreBarrierTS(t, state, serviceID, 100)
 
 	require.NoError(t, keeper.refresh(ctx, 130))
-	assertSchemaStoreBarrierTS(t, state, serviceID, 131)
+	assertSchemaStoreBarrierTS(t, state, serviceID, 130)
 
 	require.NoError(t, keeper.close(ctx))
 	if kerneltype.IsClassic() {
@@ -71,7 +71,7 @@ func TestCloseSchemaStoreGCKeeperUsesFreshContext(t *testing.T) {
 
 	ctx := context.Background()
 	require.NoError(t, keeper.initialize(ctx, 100))
-	assertSchemaStoreBarrierTS(t, state, serviceID, 101)
+	assertSchemaStoreBarrierTS(t, state, serviceID, 100)
 
 	canceledCtx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -84,6 +84,26 @@ func TestCloseSchemaStoreGCKeeperUsesFreshContext(t *testing.T) {
 	}
 	_, ok := state.gcBarriers[serviceID]
 	require.False(t, ok)
+}
+
+func TestSchemaStoreGCKeeperRefreshReturnsErrorWhenTsIsStale(t *testing.T) {
+	originalConfig := config.GetGlobalServerConfig()
+	cfg := originalConfig.Clone()
+	cfg.AdvertiseAddr = "127.0.0.1:8300"
+	config.StoreGlobalServerConfig(cfg)
+	defer config.StoreGlobalServerConfig(originalConfig)
+
+	pdCli, state := newMockGCServiceClientForSchemaStoreGC(t)
+	keeper := newSchemaStoreGCKeeper(pdCli, common.DefaultKeyspace)
+
+	if kerneltype.IsClassic() {
+		state.serviceSafePoint["other"] = 120
+	} else {
+		state.txnSafePoint = 120
+	}
+
+	err := keeper.refresh(context.Background(), 100)
+	require.Error(t, err)
 }
 
 func TestSanitizeSchemaStoreNodeID(t *testing.T) {
