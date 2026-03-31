@@ -15,6 +15,7 @@ package dynstream
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -283,4 +284,30 @@ func TestAreaBatchCount(t *testing.T) {
 	events, path, _, _ = eq.popEvents(b)
 	require.Equal(t, path2, path)
 	require.Len(t, events, 2)
+}
+
+func TestPopEventsReturnsBatchResidenceDuration(t *testing.T) {
+	handler := mockHandler{}
+	eq := newEventQueue(&handler, newTestBatchConfigRegistry())
+	b := newDefaultBatcher[*mockEvent]()
+
+	path := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", "test", nil)
+	eq.initPath(path)
+
+	eq.appendEvent(eventWrap[int, string, *mockEvent, any, *mockHandler]{
+		pathInfo:  path,
+		event:     &mockEvent{value: 1},
+		queueTime: time.Now(),
+		eventType: EventType{
+			DataGroup: 1,
+			Property:  BatchableData,
+		},
+	})
+
+	time.Sleep(20 * time.Millisecond)
+
+	events, popPath, _, batchDuration := eq.popEvents(b)
+	require.Len(t, events, 1)
+	require.Equal(t, path, popPath)
+	require.GreaterOrEqual(t, batchDuration, 15*time.Millisecond)
 }

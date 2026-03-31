@@ -79,10 +79,11 @@ func (b *batcher[T]) setLimit(cfg batchConfig) {
 		b.buf = b.buf[:0]
 	}
 	b.nBytes = 0
+	b.start = time.Time{}
 }
 
 func (b *batcher[T]) addEvent(event T, size int) {
-	if len(b.buf) == 0 {
+	if len(b.buf) == 0 && b.start.IsZero() {
 		b.start = time.Now()
 	}
 	b.buf = append(b.buf, event)
@@ -108,6 +109,7 @@ func (b *batcher[T]) isFull() bool {
 }
 
 // flush returned events must be processed before adding more events to the batcher.
+// The third return value is the residence duration from the first event entering the batch to flush.
 func (b *batcher[T]) flush() ([]T, int, time.Duration) {
 	if len(b.buf) == 0 {
 		return nil, 0, 0
@@ -117,5 +119,7 @@ func (b *batcher[T]) flush() ([]T, int, time.Duration) {
 	b.buf = b.buf[:0]
 	nBytes := b.nBytes
 	b.nBytes = 0
-	return events, nBytes, time.Since(b.start)
+	duration := time.Since(b.start)
+	b.start = time.Time{}
+	return events, nBytes, duration
 }

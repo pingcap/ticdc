@@ -140,6 +140,11 @@ func (q *eventQueue[A, P, T, D, H]) popEvents(b *batcher[T]) ([]T, *pathInfo[A, 
 		b.setLimit(batchConfig)
 
 		var count int
+		// The batch residence duration is measured from when the first event enters the queue.
+		b.start = firstEvent.queueTime
+		if b.start.IsZero() {
+			b.start = time.Now()
+		}
 		b.addEvent(firstEvent.event, firstEvent.eventSize)
 		path.popEvent()
 		count++

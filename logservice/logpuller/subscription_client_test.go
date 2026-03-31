@@ -206,8 +206,6 @@ func (s *mockDynamicStream) RemovePath(_ SubscriptionID) error {
 
 func (s *mockDynamicStream) Release(_ SubscriptionID) {}
 
-func (s *mockDynamicStream) SetAreaSettings(_ int, _ dynstream.AreaSettings) {}
-
 func (s *mockDynamicStream) GetMetrics() dynstream.Metrics[int, SubscriptionID] {
 	return dynstream.Metrics[int, SubscriptionID]{}
 }
