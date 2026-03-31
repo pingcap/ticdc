@@ -56,7 +56,7 @@ func (s *areaBatchConfigRegistry[A]) onAddPath(area A, cfg batchConfig) {
 	}
 
 	// Zero config means no explicit area batch config was provided.
-	if cfg.count <= 0 && cfg.bytes <= 0 {
+	if cfg.softCount <= 0 && cfg.hardBytes <= 0 {
 		return
 	}
 

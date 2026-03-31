@@ -102,12 +102,12 @@ func (q *eventQueue[A, P, T, D, H]) wakePath(path *pathInfo[A, P, T, D, H]) {
 	}
 }
 
-func (q *eventQueue[A, P, T, D, H]) popEvents(b *batcher[T]) ([]T, *pathInfo[A, P, T, D, H], int) {
+func (q *eventQueue[A, P, T, D, H]) popEvents(b *batcher[T]) ([]T, *pathInfo[A, P, T, D, H], int, time.Duration) {
 	for {
 		// We are going to update the signal directly, so we need the reference.
 		signal, ok := q.signalQueue.FrontRef()
 		if !ok {
-			return nil, nil, 0
+			return nil, nil, 0, 0
 		}
 
 		if signal.eventCount == 0 {
@@ -168,7 +168,7 @@ func (q *eventQueue[A, P, T, D, H]) popEvents(b *batcher[T]) ([]T, *pathInfo[A, 
 			q.signalQueue.PopFront()
 		}
 		q.totalPendingLength.Add(-int64(count))
-		events, nBytes, _ := b.flush()
-		return events, path, nBytes
+		events, nBytes, duration := b.flush()
+		return events, path, nBytes, duration
 	}
 }

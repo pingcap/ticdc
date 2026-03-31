@@ -15,6 +15,7 @@ package dynstream
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -58,7 +59,7 @@ func TestAppendAndPopSingleEvent(t *testing.T) {
 
 	require.Equal(t, int64(1), eq.totalPendingLength.Load())
 
-	events, popPath, _ := eq.popEvents(b)
+	events, popPath, _, _ := eq.popEvents(b)
 	require.Equal(t, 1, len(events))
 	require.Equal(t, mockEvent{value: 1}, *events[0])
 	require.Equal(t, path, popPath)
@@ -85,14 +86,14 @@ func TestBlockAndWakePath(t *testing.T) {
 
 	eq.blockPath(path)
 
-	events, _, _ := eq.popEvents(b)
+	events, _, _, _ := eq.popEvents(b)
 	require.Equal(t, 0, len(events))
 	require.Equal(t, int64(0), eq.totalPendingLength.Load())
 
 	eq.wakePath(path)
 	require.Equal(t, int64(1), eq.totalPendingLength.Load())
 
-	events, popPath, _ := eq.popEvents(b)
+	events, popPath, _, _ := eq.popEvents(b)
 	require.Equal(t, 1, len(events))
 	require.Equal(t, &mockEvent{value: 1}, events[0])
 	require.Equal(t, path, popPath)
@@ -119,7 +120,7 @@ func TestBatchEvents(t *testing.T) {
 		eq.appendEvent(event)
 	}
 
-	events, _, _ := eq.popEvents(b)
+	events, _, _, _ := eq.popEvents(b)
 	require.Equal(t, 3, len(events))
 	require.Equal(t, &mockEvent{value: 1}, events[0])
 	require.Equal(t, &mockEvent{value: 2}, events[1])
@@ -181,35 +182,35 @@ func TestBatchableAndNonBatchableEvents(t *testing.T) {
 		eq.appendEvent(e)
 	}
 
-	events, _, _ := eq.popEvents(b)
+	events, _, _, _ := eq.popEvents(b)
 	require.Equal(t, 1, len(events))
 	require.Equal(t, &mockEvent{value: 1}, events[0])
 	require.Equal(t, int64(9), eq.totalPendingLength.Load())
 
-	events, _, _ = eq.popEvents(b)
+	events, _, _, _ = eq.popEvents(b)
 	require.Equal(t, 2, len(events))
 	require.Equal(t, &mockEvent{value: 1}, events[0])
 	require.Equal(t, &mockEvent{value: 2}, events[1])
 	require.Equal(t, int64(7), eq.totalPendingLength.Load())
 
-	events, _, _ = eq.popEvents(b)
+	events, _, _, _ = eq.popEvents(b)
 	require.Equal(t, 1, len(events))
 	require.Equal(t, &mockEvent{value: 1}, events[0])
 	require.Equal(t, int64(6), eq.totalPendingLength.Load())
 
-	events, _, _ = eq.popEvents(b)
+	events, _, _, _ = eq.popEvents(b)
 	require.Equal(t, 1, len(events))
 	require.Equal(t, &mockEvent{value: 2}, events[0])
 	require.Equal(t, int64(5), eq.totalPendingLength.Load())
 
-	events, _, _ = eq.popEvents(b)
+	events, _, _, _ = eq.popEvents(b)
 	require.Equal(t, 3, len(events))
 	require.Equal(t, &mockEvent{value: 1}, events[0])
 	require.Equal(t, &mockEvent{value: 2}, events[1])
 	require.Equal(t, &mockEvent{value: 3}, events[2])
 	require.Equal(t, int64(2), eq.totalPendingLength.Load())
 
-	events, _, _ = eq.popEvents(b)
+	events, _, _, _ = eq.popEvents(b)
 	require.Equal(t, 2, len(events))
 	require.Equal(t, &mockEvent{value: 4}, events[0])
 	require.Equal(t, &mockEvent{value: 5}, events[1])
@@ -236,7 +237,7 @@ func TestRemovePath(t *testing.T) {
 	require.Equal(t, int64(1), eq.totalPendingLength.Load())
 
 	path.removed.Store(true)
-	events, _, _ := eq.popEvents(b)
+	events, _, _, _ := eq.popEvents(b)
 	require.Equal(t, 0, len(events))
 	require.Equal(t, int64(0), eq.totalPendingLength.Load())
 }
@@ -251,7 +252,7 @@ func TestAreaBatchCount(t *testing.T) {
 	eq.initPath(path1)
 	eq.initPath(path2)
 
-	registry.onAddPath(1, batchConfig{count: 1})
+	registry.onAddPath(1, batchConfig{softCount: 1})
 	registry.onAddPath(2, batchConfig{})
 
 	appendEvent := func(path *pathInfo[int, string, *mockEvent, any, *mockHandler], value int) {
@@ -272,15 +273,40 @@ func TestAreaBatchCount(t *testing.T) {
 
 	b := newDefaultBatcher[*mockEvent]()
 
-	events, path, _ := eq.popEvents(b)
+	events, path, _, _ := eq.popEvents(b)
 	require.Equal(t, path1, path)
 	require.Len(t, events, 1)
 
-	events, path, _ = eq.popEvents(b)
+	events, path, _, _ = eq.popEvents(b)
 	require.Equal(t, path1, path)
 	require.Len(t, events, 1)
 
-	events, path, _ = eq.popEvents(b)
+	events, path, _, _ = eq.popEvents(b)
 	require.Equal(t, path2, path)
 	require.Len(t, events, 2)
+}
+
+func TestPopEventsReturnsBatchResidenceDuration(t *testing.T) {
+	handler := mockHandler{}
+	eq := newEventQueue(&handler, newTestBatchConfigRegistry())
+	b := newDefaultBatcher[*mockEvent]()
+
+	path := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", "test", nil)
+	eq.initPath(path)
+
+	eq.appendEvent(eventWrap[int, string, *mockEvent, any, *mockHandler]{
+		pathInfo: path,
+		event:    &mockEvent{value: 1},
+		eventType: EventType{
+			DataGroup: 1,
+			Property:  BatchableData,
+		},
+	})
+
+	time.Sleep(20 * time.Millisecond)
+
+	events, popPath, _, batchDuration := eq.popEvents(b)
+	require.Len(t, events, 1)
+	require.Equal(t, path, popPath)
+	require.GreaterOrEqual(t, batchDuration, 15*time.Millisecond)
 }

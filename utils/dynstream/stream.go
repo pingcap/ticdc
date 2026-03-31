@@ -236,6 +236,7 @@ func (s *stream[A, P, T, D, H]) handleLoop() {
 		eventBuf        []T
 		path            *pathInfo[A, P, T, D, H]
 		nBytes          int
+		duration        time.Duration
 	)
 
 	// For testing. Don't handle events until this wait group is done.
@@ -281,8 +282,7 @@ Loop:
 				handleEvent(e)
 				eventQueueEmpty = false
 			default:
-				start := time.Now()
-				eventBuf, path, nBytes = s.eventQueue.popEvents(s.batcher)
+				eventBuf, path, nBytes, duration = s.eventQueue.popEvents(s.batcher)
 				if len(eventBuf) == 0 {
 					eventQueueEmpty = true
 					continue Loop
@@ -295,7 +295,7 @@ Loop:
 
 				path.blocking.Store(s.handler.Handle(path.dest, eventBuf...))
 
-				metrics.DynamicStreamBatchDuration.WithLabelValues(s.module, path.metricLabel).Observe(float64(time.Since(start).Seconds()))
+				metrics.DynamicStreamBatchDuration.WithLabelValues(s.module, path.metricLabel).Observe(float64(duration.Seconds()))
 				metrics.DynamicStreamBatchCount.WithLabelValues(s.module, path.metricLabel).Observe(float64(len(eventBuf)))
 				metrics.DynamicStreamBatchBytes.WithLabelValues(s.module, path.metricLabel).Observe(float64(nBytes))
 

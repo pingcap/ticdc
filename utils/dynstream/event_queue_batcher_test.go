@@ -28,14 +28,14 @@ func TestBatcherSetLimit(t *testing.T) {
 	b.setLimit(NewBatchConfig(8, 64))
 	require.Equal(t, 0, len(b.buf))
 	require.Equal(t, 0, b.nBytes)
-	require.Equal(t, 8, b.config.count)
-	require.Equal(t, 64, b.config.bytes)
+	require.Equal(t, 8, b.config.softCount)
+	require.Equal(t, 64, b.config.hardBytes)
 }
 
 func TestBatchByBytes(t *testing.T) {
 	handler := mockHandler{}
 	registry := newAreaBatchConfigRegistry[int](newDefaultBatchConfig())
-	registry.onAddPath(0, batchConfig{count: 10, bytes: 12})
+	registry.onAddPath(0, batchConfig{softCount: 10, hardBytes: 12})
 	eq := newEventQueue(&handler, registry)
 	b := newDefaultBatcher[*mockEvent]()
 
@@ -54,20 +54,20 @@ func TestBatchByBytes(t *testing.T) {
 		})
 	}
 
-	events, _, _ := eq.popEvents(b)
+	events, _, _, _ := eq.popEvents(b)
 	require.Len(t, events, 3)
 	require.Equal(t, 1, events[0].value)
 	require.Equal(t, 2, events[1].value)
 	require.Equal(t, 3, events[2].value)
 	require.Equal(t, int64(1), eq.totalPendingLength.Load())
 
-	events, _, _ = eq.popEvents(b)
+	events, _, _, _ = eq.popEvents(b)
 	require.Len(t, events, 1)
 	require.Equal(t, 4, events[0].value)
 	require.Equal(t, int64(0), eq.totalPendingLength.Load())
 
 	registry = newAreaBatchConfigRegistry[int](newDefaultBatchConfig())
-	registry.onAddPath(0, batchConfig{count: 10, bytes: 12})
+	registry.onAddPath(0, batchConfig{softCount: 10, hardBytes: 12})
 	eq = newEventQueue(&handler, registry)
 	path = newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", "test", nil)
 	eq.initPath(path)
@@ -82,11 +82,11 @@ func TestBatchByBytes(t *testing.T) {
 			},
 		})
 	}
-	events, _, _ = eq.popEvents(b)
+	events, _, _, _ = eq.popEvents(b)
 	require.Len(t, events, 3)
 	require.Equal(t, int64(1), eq.totalPendingLength.Load())
 
-	events, _, _ = eq.popEvents(b)
+	events, _, _, _ = eq.popEvents(b)
 	require.Len(t, events, 1)
 	require.Equal(t, int64(0), eq.totalPendingLength.Load())
 }
@@ -94,7 +94,7 @@ func TestBatchByBytes(t *testing.T) {
 func TestBatchByHardCount(t *testing.T) {
 	handler := mockHandler{}
 	registry := newAreaBatchConfigRegistry[int](newDefaultBatchConfig())
-	registry.onAddPath(0, batchConfig{count: 3, bytes: 100})
+	registry.onAddPath(0, batchConfig{softCount: 3, hardBytes: 100})
 	eq := newEventQueue(&handler, registry)
 	b := newDefaultBatcher[*mockEvent]()
 
@@ -113,11 +113,11 @@ func TestBatchByHardCount(t *testing.T) {
 		})
 	}
 
-	events, _, _ := eq.popEvents(b)
+	events, _, _, _ := eq.popEvents(b)
 	require.Len(t, events, 6)
 	require.Equal(t, int64(1), eq.totalPendingLength.Load())
 
-	events, _, _ = eq.popEvents(b)
+	events, _, _, _ = eq.popEvents(b)
 	require.Len(t, events, 1)
 	require.Equal(t, int64(0), eq.totalPendingLength.Load())
 }
@@ -125,7 +125,7 @@ func TestBatchByHardCount(t *testing.T) {
 func TestBatchByBytesLargeFirstEvent(t *testing.T) {
 	handler := mockHandler{}
 	registry := newAreaBatchConfigRegistry[int](newDefaultBatchConfig())
-	registry.onAddPath(0, batchConfig{count: 10, bytes: 50})
+	registry.onAddPath(0, batchConfig{softCount: 10, hardBytes: 50})
 	eq := newEventQueue(&handler, registry)
 	b := newDefaultBatcher[*mockEvent]()
 
@@ -151,12 +151,12 @@ func TestBatchByBytesLargeFirstEvent(t *testing.T) {
 		},
 	})
 
-	events, _, _ := eq.popEvents(b)
+	events, _, _, _ := eq.popEvents(b)
 	require.Len(t, events, 1)
 	require.Equal(t, 1, events[0].value)
 	require.Equal(t, int64(1), eq.totalPendingLength.Load())
 
-	events, _, _ = eq.popEvents(b)
+	events, _, _, _ = eq.popEvents(b)
 	require.Len(t, events, 1)
 	require.Equal(t, 2, events[0].value)
 	require.Equal(t, int64(0), eq.totalPendingLength.Load())
