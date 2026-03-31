@@ -199,6 +199,7 @@ func TestReplicaConfigValidateBatchConfig(t *testing.T) {
 		name       string
 		batchCount *int
 		batchBytes *int
+		redoCount  *int
 		wantErr    bool
 	}{
 		{
@@ -217,6 +218,16 @@ func TestReplicaConfigValidateBatchConfig(t *testing.T) {
 			batchBytes: util.AddressOf(1),
 			wantErr:    false,
 		},
+		{
+			name:      "rejects non-positive redo batch count",
+			redoCount: util.AddressOf(0),
+			wantErr:   true,
+		},
+		{
+			name:      "accepts positive redo batch count",
+			redoCount: util.AddressOf(1),
+			wantErr:   false,
+		},
 	}
 
 	for _, tc := range cases {
@@ -224,6 +235,12 @@ func TestReplicaConfigValidateBatchConfig(t *testing.T) {
 			cfg := GetDefaultReplicaConfig()
 			cfg.EventCollectorBatchCount = tc.batchCount
 			cfg.EventCollectorBatchBytes = tc.batchBytes
+			cfg.Consistent.EventCollectorBatchCount = tc.redoCount
+			if tc.redoCount != nil {
+				cfg.EnableRedoIOCheck = util.AddressOf(false)
+				cfg.Consistent.Level = util.AddressOf("eventual")
+				cfg.Consistent.Storage = util.AddressOf("s3:///redo-test-no-bucket")
+			}
 
 			sinkURI, err := url.Parse("mysql://localhost:3306/test")
 			require.NoError(t, err)

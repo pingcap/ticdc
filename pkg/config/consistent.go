@@ -40,6 +40,9 @@ type ConsistentConfig struct {
 	// flush meta(resolvedTs and checkpointTs) to storage.
 	// Default is 200ms.
 	MetaFlushIntervalInMs *int64 `toml:"meta-flush-interval" json:"meta-flush-interval,omitempty"`
+	// EventCollectorBatchCount overrides redo event collector batch count.
+	// If unset, redo uses the sink-derived default or the global event collector override.
+	EventCollectorBatchCount *int `toml:"event-collector-batch-count" json:"event-collector-batch-count,omitempty"`
 	// EncodingWorkerNum is the number of workers to encode `RowChangeEvent`` to redo log.
 	// Default is 16.
 	EncodingWorkerNum *int `toml:"encoding-worker-num" json:"encoding-worker-num,omitempty"`
@@ -105,6 +108,11 @@ func (c *ConsistentConfig) validateAndAdjust(enableIOCheck bool) error {
 		return errors.ErrInvalidReplicaConfig.FastGenByArgs(
 			fmt.Sprintf("The consistent.meta-flush-interval:%d must be equal or greater than %d",
 				util.GetOrZero(c.MetaFlushIntervalInMs), redo.MinFlushIntervalInMs))
+	}
+	if c.EventCollectorBatchCount != nil && *c.EventCollectorBatchCount <= 0 {
+		return errors.ErrInvalidReplicaConfig.FastGenByArgs(
+			fmt.Sprintf("The consistent.event-collector-batch-count:%d must be larger than 0",
+				*c.EventCollectorBatchCount))
 	}
 
 	compressionType := util.GetOrZero(c.Compression)
