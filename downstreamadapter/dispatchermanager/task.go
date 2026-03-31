@@ -29,9 +29,18 @@ import (
 )
 
 const (
+<<<<<<< HEAD
 	defaultHeartbeatInterval     = 200 * time.Millisecond
 	lowLatencyHeartbeatInterval  = 50 * time.Millisecond
 	defaultHeartbeatInitialDelay = time.Second
+=======
+	heartbeatTaskExecuteInterval = 200 * time.Millisecond
+
+	defaultCompleteStatusInterval = 10 * time.Second
+	// syncPointCompleteStatusInterval is shorter so eventBroker can receive dispatcher-level
+	// checkpointTs progress faster when two-phase syncpoint commit is enabled.
+	syncPointCompleteStatusInterval = 1 * time.Second
+>>>>>>> fa1e59cb0 (eventBroker: implement two stage syncpoint (#4429))
 )
 
 // HeartbeatTask is a perioic task to collect the heartbeat status from event dispatcher manager and push to heartbeatRequestQueue
@@ -52,12 +61,33 @@ func newHeartBeatTask(manager *DispatcherManager) *HeartBeatTask {
 	return t
 }
 
+func getCompleteStatusInterval(enableSyncPoint bool) time.Duration {
+	if enableSyncPoint {
+		return syncPointCompleteStatusInterval
+	}
+	return defaultCompleteStatusInterval
+}
+
+func getIntervalTicks(interval, executeInterval time.Duration) int {
+	ticks := int(interval / executeInterval)
+	if ticks <= 0 {
+		return 1
+	}
+	return ticks
+}
+
 func (t *HeartBeatTask) Execute() time.Time {
 	if t.manager.closed.Load() {
 		return time.Time{}
 	}
+<<<<<<< HEAD
 	executeInterval := heartbeatInterval(t.manager)
 	completeStatusInterval := int(time.Second * 10 / executeInterval)
+=======
+	executeInterval := heartbeatTaskExecuteInterval
+	enableSyncPoint := t.manager.config != nil && t.manager.config.EnableSyncPoint
+	completeStatusInterval := getIntervalTicks(getCompleteStatusInterval(enableSyncPoint), executeInterval)
+>>>>>>> fa1e59cb0 (eventBroker: implement two stage syncpoint (#4429))
 	t.statusTick++
 	needCompleteStatus := t.statusTick%completeStatusInterval == 0
 	message := t.manager.aggregateDispatcherHeartbeats(needCompleteStatus)
