@@ -244,6 +244,22 @@ func TestNewWriter(t *testing.T) {
 		Keyspace: "abcd",
 		Name:     "test",
 	})
+<<<<<<< HEAD
+=======
+	ddlWriterCfg := newTestWriterConfig(
+		t,
+		changefeed,
+		&config.ConsistentConfig{
+			Storage: util.AddressOf("file://" + dir),
+		},
+	)
+	mockStorage.EXPECT().WriteFile(
+		gomock.Any(),
+		expectedLogFileName(ddlWriterCfg, redo.RedoDDLLogFileType, 0, "const-uuid"),
+		gomock.Any(),
+	).Return(nil).Times(1)
+	mockStorage.EXPECT().Close().Times(1)
+>>>>>>> b8a1cd664 (*: fix missing resource cleanup on initialization failure paths (#4517))
 	w = &Writer{
 		logType: redo.RedoDDLLogFileType,
 		cfg: &writer.LogWriterConfig{
@@ -302,6 +318,27 @@ func TestRotateFileWithFileAllocator(t *testing.T) {
 		Keyspace: "abcd",
 		Name:     "test",
 	})
+<<<<<<< HEAD
+=======
+	rowWriterCfg := newTestWriterConfig(
+		t,
+		changefeed,
+		&config.ConsistentConfig{
+			Storage: util.AddressOf("file://" + dir),
+		},
+	)
+	mockStorage.EXPECT().WriteFile(
+		gomock.Any(),
+		expectedLogFileName(rowWriterCfg, redo.RedoRowLogFileType, 0, "uuid-1"),
+		gomock.Any(),
+	).Return(nil).Times(1)
+	mockStorage.EXPECT().WriteFile(
+		gomock.Any(),
+		expectedLogFileName(rowWriterCfg, redo.RedoRowLogFileType, 100, "uuid-2"),
+		gomock.Any(),
+	).Return(nil).Times(1)
+	mockStorage.EXPECT().Close().Times(1)
+>>>>>>> b8a1cd664 (*: fix missing resource cleanup on initialization failure paths (#4517))
 	w := &Writer{
 		logType: redo.RedoRowLogFileType,
 		cfg: &writer.LogWriterConfig{
@@ -369,6 +406,27 @@ func TestRotateFileWithoutFileAllocator(t *testing.T) {
 		Keyspace: "abcd",
 		Name:     "test",
 	})
+<<<<<<< HEAD
+=======
+	ddlWriterCfg := newTestWriterConfig(
+		t,
+		changefeed,
+		&config.ConsistentConfig{
+			Storage: util.AddressOf("file://" + dir),
+		},
+	)
+	mockStorage.EXPECT().WriteFile(
+		gomock.Any(),
+		expectedLogFileName(ddlWriterCfg, redo.RedoDDLLogFileType, 0, "uuid-2"),
+		gomock.Any(),
+	).Return(nil).Times(1)
+	mockStorage.EXPECT().WriteFile(
+		gomock.Any(),
+		expectedLogFileName(ddlWriterCfg, redo.RedoDDLLogFileType, 100, "uuid-4"),
+		gomock.Any(),
+	).Return(nil).Times(1)
+	mockStorage.EXPECT().Close().Times(1)
+>>>>>>> b8a1cd664 (*: fix missing resource cleanup on initialization failure paths (#4517))
 	w := &Writer{
 		logType: redo.RedoDDLLogFileType,
 		cfg: &writer.LogWriterConfig{
