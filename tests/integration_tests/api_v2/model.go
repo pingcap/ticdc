@@ -256,6 +256,8 @@ type DispatchRule struct {
 	TopicRule     string   `json:"topic"`
 	IndexName     string   `json:"index,omitempty"`
 	Columns       []string `json:"columns,omitempty"`
+	TargetSchema  string   `json:"target-schema,omitempty"`
+	TargetTable   string   `json:"target-table,omitempty"`
 }
 
 // ColumnSelector represents a column selector for a table.
