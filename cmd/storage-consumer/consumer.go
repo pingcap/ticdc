@@ -17,6 +17,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -33,6 +34,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec/canal"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/codec/csv"
+	sinkiceberg "github.com/pingcap/ticdc/pkg/sink/iceberg"
 	putil "github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	"go.uber.org/atomic"
@@ -51,6 +53,11 @@ type (
 	fileIndexKeyMap map[cloudstorage.FileIndexKey]uint64
 )
 
+type icebergTableState struct {
+	lastMetadataVersion int
+	lastTableVersion    *sinkiceberg.TableVersion
+}
+
 // indexRange defines a range of files. eg. CDC000002.csv ~ CDC000005.csv
 type indexRange struct {
 	start uint64
@@ -58,11 +65,14 @@ type indexRange struct {
 }
 
 type consumer struct {
+	protocol        config.Protocol
 	replicationCfg  *config.ReplicaConfig
 	codecCfg        *common.Config
 	externalStorage storage.ExternalStorage
 	fileExtension   string
 	sink            sink.Sink
+	icebergCfg      *sinkiceberg.Config
+	icebergStates   map[string]*icebergTableState
 	// tableDMLIdxMap maintains a map of <dmlPathKey, fileIndexKeyMap>
 	tableDMLIdxMap map[cloudstorage.DmlPathKey]fileIndexKeyMap
 	eventsGroup    map[int64]*util.EventsGroup
@@ -102,25 +112,44 @@ func newConsumer(ctx context.Context) (*consumer, error) {
 		return nil, err
 	}
 
-	switch putil.GetOrZero(replicaConfig.Sink.Protocol) {
-	case config.ProtocolCsv.String():
-	case config.ProtocolCanalJSON.String():
-	default:
-		return nil, fmt.Errorf(
-			"data encoded in protocol %s is not supported yet",
-			putil.GetOrZero(replicaConfig.Sink.Protocol),
-		)
-	}
-
 	protocol, err := config.ParseSinkProtocolFromString(putil.GetOrZero(replicaConfig.Sink.Protocol))
 	if err != nil {
 		return nil, err
 	}
 
-	codecConfig := common.NewConfig(protocol)
-	err = codecConfig.Apply(upstreamURI, replicaConfig.Sink)
-	if err != nil {
-		return nil, err
+	var (
+		codecConfig *common.Config
+		icebergCfg  *sinkiceberg.Config
+	)
+	switch protocol {
+	case config.ProtocolCsv, config.ProtocolCanalJSON:
+		codecConfig = common.NewConfig(protocol)
+		err = codecConfig.Apply(upstreamURI, replicaConfig.Sink)
+		if err != nil {
+			return nil, err
+		}
+	case config.ProtocolIceberg:
+		downstreamURI, err := url.Parse(downstreamURIStr)
+		if err != nil {
+			return nil, err
+		}
+		downstreamScheme := config.GetScheme(downstreamURI)
+		if !config.IsMySQLCompatibleScheme(downstreamScheme) {
+			return nil, fmt.Errorf("iceberg storage consumer only supports mysql or tidb downstream")
+		}
+		safeMode := true
+		replicaConfig.Sink.SafeMode = &safeMode
+
+		icebergCfg = sinkiceberg.NewConfig()
+		err = icebergCfg.Apply(ctx, upstreamURI, replicaConfig.Sink)
+		if err != nil {
+			return nil, err
+		}
+		if icebergCfg.Catalog != sinkiceberg.CatalogHadoop && icebergCfg.Catalog != sinkiceberg.CatalogGlue {
+			return nil, fmt.Errorf("iceberg storage consumer only supports hadoop or glue catalog")
+		}
+	default:
+		return nil, fmt.Errorf("data encoded in protocol %s is not supported yet", protocol)
 	}
 
 	extension := helper.GetFileExtension(protocol)
@@ -145,11 +174,14 @@ func newConsumer(ctx context.Context) (*consumer, error) {
 	}
 
 	return &consumer{
+		protocol:          protocol,
 		replicationCfg:    replicaConfig,
 		codecCfg:          codecConfig,
 		externalStorage:   storage,
 		fileExtension:     extension,
 		sink:              sink,
+		icebergCfg:        icebergCfg,
+		icebergStates:     make(map[string]*icebergTableState),
 		errCh:             errCh,
 		tableDMLIdxMap:    make(map[cloudstorage.DmlPathKey]fileIndexKeyMap),
 		eventsGroup:       make(map[int64]*util.EventsGroup),
@@ -665,6 +697,13 @@ func (c *consumer) handle(ctx context.Context) error {
 		}
 
 		round++
+		if c.protocol == config.ProtocolIceberg {
+			if err := c.handleIceberg(ctx, round); err != nil {
+				return errors.Trace(err)
+			}
+			continue
+		}
+
 		dmlFileMap, err := c.getNewFiles(ctx)
 		if err != nil {
 			return errors.Trace(err)
