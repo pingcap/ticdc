@@ -62,6 +62,8 @@ func (s *recordingSink) SetTableSchemaStore(_ *commonEvent.TableSchemaStore) {
 func (s *recordingSink) Close(_ bool) {
 }
 func (s *recordingSink) Run(_ context.Context) error { return nil }
+func (s *recordingSink) BatchCount() int             { return 0 }
+func (s *recordingSink) BatchBytes() int             { return 0 }
 
 func TestWriterWrite_executesIndependentCreateTableWithoutWatermark(t *testing.T) {
 	// Scenario: If upstream resolved-ts is held back (e.g. failpoints in integration tests), the consumer

@@ -266,3 +266,9 @@ func TestKafkaSinkBasicFunctionality(t *testing.T) {
 	cancel()
 	kafkaSink.AddCheckpointTs(12345)
 }
+
+func TestKafkaSinkBatchConfig(t *testing.T) {
+	sink := &sink{}
+	require.Equal(t, 4096, sink.BatchCount())
+	require.Zero(t, sink.BatchBytes())
+}
