@@ -95,12 +95,28 @@ func TestDispatcherManagerBatchConfig(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			sink := newBatchConfigSink(t, common.MysqlSinkType, tc.sinkBatchCount, tc.sinkBatchBytes)
 			m := &DispatcherManager{
-				sink:   sink,
 				config: tc.cfg,
 			}
-			gotCount, gotBytes := m.getEventCollectorBatchCountAndBytes()
+			gotCount, gotBytes := m.getEventCollectorBatchCountAndBytes(sink)
 			require.Equal(t, tc.wantCount, gotCount)
 			require.Equal(t, tc.wantBytes, gotBytes)
 		})
 	}
+}
+
+func TestDispatcherManagerRedoBatchConfigUsesRedoSinkDefaults(t *testing.T) {
+	m := &DispatcherManager{
+		config: &config.ChangefeedConfig{},
+	}
+
+	normalSink := newBatchConfigSink(t, common.MysqlSinkType, 2048, 8192)
+	redoSink := newBatchConfigSink(t, common.BlackHoleSinkType, 4096, 32<<20)
+
+	normalCount, normalBytes := m.getEventCollectorBatchCountAndBytes(normalSink)
+	require.Equal(t, 2048, normalCount)
+	require.Equal(t, 8192, normalBytes)
+
+	redoCount, redoBytes := m.getEventCollectorBatchCountAndBytes(redoSink)
+	require.Equal(t, 4096, redoCount)
+	require.Equal(t, 32<<20, redoBytes)
 }

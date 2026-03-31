@@ -246,7 +246,7 @@ func NewDispatcherManager(
 		outputRawChangeEvent = manager.config.SinkConfig.KafkaConfig.GetOutputRawChangeEvent()
 	}
 
-	batchCounts, batchBytes := manager.getEventCollectorBatchCountAndBytes()
+	batchCounts, batchBytes := manager.getEventCollectorBatchCountAndBytes(manager.sink)
 	// Create shared info for all dispatchers
 	manager.sharedInfo = dispatcher.NewSharedInfo(
 		manager.changefeedID,
@@ -326,10 +326,10 @@ func NewDispatcherManager(
 	return manager, nil
 }
 
-func (e *DispatcherManager) getEventCollectorBatchCountAndBytes() (int, int) {
+func (e *DispatcherManager) getEventCollectorBatchCountAndBytes(s sink.Sink) (int, int) {
 	var (
-		batchCount = e.sink.BatchCount()
-		batchBytes = e.sink.BatchBytes()
+		batchCount = s.BatchCount()
+		batchBytes = s.BatchBytes()
 	)
 	if e.config.EventCollectorBatchCount > 0 {
 		batchCount = e.config.EventCollectorBatchCount
