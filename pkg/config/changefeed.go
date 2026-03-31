@@ -308,7 +308,7 @@ func (info *ChangeFeedInfo) isFailedByGC() bool {
 		log.Panic("changefeed info is not consistent",
 			zap.Any("state", info.State), zap.Any("error", info.Error))
 	}
-	return errors.IsChangefeedGCFastFailErrorCode(errors.RFCErrorCode(info.Error.Code))
+	return isChangefeedGCFastFailErrorCode(info.Error.Code)
 }
 
 // String implements fmt.Stringer interface, but hide some sensitive information
@@ -586,7 +586,7 @@ func (info *ChangeFeedInfo) fixState() {
 		// This corresponds to the case of failure or error.
 		case AdminNone, AdminResume:
 			if info.Error != nil {
-				if errors.IsChangefeedGCFastFailErrorCode(errors.RFCErrorCode(info.Error.Code)) {
+				if isChangefeedGCFastFailErrorCode(info.Error.Code) {
 					state = StateFailed
 				} else {
 					state = StateWarning
@@ -744,6 +744,15 @@ func (status *ChangeFeedStatus) Unmarshal(data []byte) error {
 	err := json.Unmarshal(data, status)
 	return errors.Annotatef(
 		errors.WrapError(errors.ErrUnmarshalFailed, err), "Unmarshal data: %v", data)
+}
+
+func isChangefeedGCFastFailErrorCode(code string) bool {
+	for _, fastFailErr := range errors.ChangeFeedGCFastFailError {
+		if code == string(fastFailErr.RFCCode()) {
+			return true
+		}
+	}
+	return false
 }
 
 // GetMaintainerAddr returns the address of the changefeed's maintainer

@@ -468,13 +468,13 @@ func isRetryableDMLError(err error) bool {
 	return true
 }
 
-func getSQLErrCode(err error) (errors.ErrCode, bool) {
+func getSQLErrCode(err error) (uint16, bool) {
 	mysqlErr, ok := errors.Cause(err).(*dmysql.MySQLError)
 	if !ok {
-		return -1, false
+		return 0, false
 	}
 
-	return errors.ErrCode(mysqlErr.Number), true
+	return mysqlErr.Number, true
 }
 
 // queryMaxPreparedStmtCount gets the value of max_prepared_stmt_count
