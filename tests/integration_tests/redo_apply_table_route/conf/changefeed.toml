@@ -1,9 +1,9 @@
-# Changefeed config with redo log enabled for schema routing test
+# Changefeed config with redo log enabled for table route test
 # Tests that TargetSchema/TargetTable are preserved in redo logs
 
 [consistent]
 level = "eventual"
-storage = "file:///tmp/tidb_cdc_test/redo_apply_schema_routing/redo"
+storage = "file:///tmp/tidb_cdc_test/redo_apply_table_route/redo"
 flush-interval = 2000
 meta-flush-interval = 200
 

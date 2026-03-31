@@ -20,10 +20,9 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/version"
 	"github.com/tikv/client-go/v2/oracle"
@@ -127,7 +126,7 @@ func (e RunningError) Value() (driver.Value, error) {
 func (e *RunningError) Scan(value interface{}) error {
 	b, ok := value.([]byte)
 	if !ok {
-		return errors.New("type assertion to []byte failed")
+		return errors.ErrUnmarshalFailed.GenWithStack("type assertion to []byte failed")
 	}
 
 	return json.Unmarshal(b, e)
@@ -309,7 +308,7 @@ func (info *ChangeFeedInfo) isFailedByGC() bool {
 		log.Panic("changefeed info is not consistent",
 			zap.Any("state", info.State), zap.Any("error", info.Error))
 	}
-	return cerror.IsChangefeedGCFastFailErrorCode(errors.RFCErrorCode(info.Error.Code))
+	return errors.IsChangefeedGCFastFailErrorCode(errors.RFCErrorCode(info.Error.Code))
 }
 
 // String implements fmt.Stringer interface, but hide some sensitive information
@@ -384,7 +383,7 @@ func (info *ChangeFeedInfo) MarshalWithTruncation(truncateError bool) (string, e
 	}
 
 	data, err := json.Marshal(dataToMarshal)
-	return string(data), cerror.WrapError(cerror.ErrMarshalFailed, err)
+	return string(data), errors.WrapError(errors.ErrMarshalFailed, err)
 }
 
 // Unmarshal unmarshals into *ChangeFeedInfo from json marshal byte slice
@@ -392,7 +391,7 @@ func (info *ChangeFeedInfo) Unmarshal(data []byte) error {
 	err := json.Unmarshal(data, &info)
 	if err != nil {
 		return errors.Annotatef(
-			cerror.WrapError(cerror.ErrUnmarshalFailed, err), "Unmarshal data: %v", data)
+			errors.WrapError(errors.ErrUnmarshalFailed, err), "Unmarshal data: %v", data)
 	}
 	return nil
 }
@@ -587,7 +586,7 @@ func (info *ChangeFeedInfo) fixState() {
 		// This corresponds to the case of failure or error.
 		case AdminNone, AdminResume:
 			if info.Error != nil {
-				if cerror.IsChangefeedGCFastFailErrorCode(errors.RFCErrorCode(info.Error.Code)) {
+				if errors.IsChangefeedGCFastFailErrorCode(errors.RFCErrorCode(info.Error.Code)) {
 					state = StateFailed
 				} else {
 					state = StateWarning
@@ -737,14 +736,14 @@ type ChangeFeedStatus struct {
 // Marshal returns json encoded string of ChangeFeedStatus, only contains necessary fields stored in storage
 func (status *ChangeFeedStatus) Marshal() (string, error) {
 	data, err := json.Marshal(status)
-	return string(data), cerror.WrapError(cerror.ErrMarshalFailed, err)
+	return string(data), errors.WrapError(errors.ErrMarshalFailed, err)
 }
 
 // Unmarshal into *ChangeFeedStatus from json marshal byte slice
 func (status *ChangeFeedStatus) Unmarshal(data []byte) error {
 	err := json.Unmarshal(data, status)
 	return errors.Annotatef(
-		cerror.WrapError(cerror.ErrUnmarshalFailed, err), "Unmarshal data: %v", data)
+		errors.WrapError(errors.ErrUnmarshalFailed, err), "Unmarshal data: %v", data)
 }
 
 // GetMaintainerAddr returns the address of the changefeed's maintainer

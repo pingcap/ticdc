@@ -19,6 +19,13 @@ import (
 	perrors "github.com/pingcap/errors"
 )
 
+type (
+	// ErrCode is the numeric error code type exposed by pingcap/errors.
+	ErrCode = perrors.ErrCode
+	// RFCErrorCode is the RFC-style error code type exposed by pingcap/errors.
+	RFCErrorCode = perrors.RFCErrorCode
+)
+
 var (
 	// Is is a shortcut for errors.Is.
 	Is = errors.Is

@@ -17,7 +17,7 @@ import (
 	"fmt"
 
 	"github.com/pingcap/log"
-	commonType "github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/util"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
@@ -51,10 +51,10 @@ type RedoDMLEvent struct {
 
 // RedoDDLEvent represents DDL event used in redo log persistent
 type RedoDDLEvent struct {
-	DDL              *DDLEventInRedoLog   `msg:"ddl"`
-	Type             byte                 `msg:"type"`
-	TableName        commonType.TableName `msg:"table-name"`
-	TableSchemaStore *TableSchemaStore    `msg:"table-schema-store"`
+	DDL              *DDLEventInRedoLog `msg:"ddl"`
+	Type             byte               `msg:"type"`
+	TableName        common.TableName   `msg:"table-name"`
+	TableSchemaStore *TableSchemaStore  `msg:"table-schema-store"`
 }
 
 // DMLEventInRedoLog is used to store DMLEvent in redo log v2 format
@@ -64,7 +64,7 @@ type DMLEventInRedoLog struct {
 
 	// Table contains the table name and table ID.
 	// NOTICE: We store the physical table ID here, not the logical table ID.
-	Table *commonType.TableName `msg:"table"`
+	Table *common.TableName `msg:"table"`
 
 	Columns    []*RedoColumn `msg:"columns"`
 	PreColumns []*RedoColumn `msg:"pre-columns"`
@@ -105,7 +105,7 @@ type RedoRowEvent struct {
 	StartTs         uint64
 	CommitTs        uint64
 	PhysicalTableID int64
-	TableInfo       *commonType.TableInfo
+	TableInfo       *common.TableInfo
 	Event           RowChange
 	Callback        func()
 }
@@ -142,7 +142,7 @@ func (r *RedoRowEvent) ToRedoLog() *RedoLog {
 		Type: RedoLogTypeRow,
 	}
 	if r.TableInfo != nil {
-		redoLog.RedoRow.Row.Table = &commonType.TableName{
+		redoLog.RedoRow.Row.Table = &common.TableName{
 			Schema:       r.TableInfo.TableName.Schema,
 			Table:        r.TableInfo.TableName.Table,
 			TableID:      r.PhysicalTableID,
@@ -155,18 +155,18 @@ func (r *RedoRowEvent) ToRedoLog() *RedoLog {
 		columnCount := len(r.TableInfo.GetColumns())
 		columns := make([]*RedoColumn, 0, columnCount)
 		switch r.Event.RowType {
-		case commonType.RowTypeInsert:
+		case common.RowTypeInsert:
 			redoLog.RedoRow.Columns = make([]RedoColumnValue, 0, columnCount)
-		case commonType.RowTypeDelete:
+		case common.RowTypeDelete:
 			redoLog.RedoRow.PreColumns = make([]RedoColumnValue, 0, columnCount)
-		case commonType.RowTypeUpdate:
+		case common.RowTypeUpdate:
 			redoLog.RedoRow.Columns = make([]RedoColumnValue, 0, columnCount)
 			redoLog.RedoRow.PreColumns = make([]RedoColumnValue, 0, columnCount)
 		default:
 		}
 
 		for i, column := range r.TableInfo.GetColumns() {
-			if commonType.IsColCDCVisible(column) {
+			if common.IsColCDCVisible(column) {
 				columns = append(columns, &RedoColumn{
 					Name:      column.Name.String(),
 					Type:      column.GetType(),
@@ -175,13 +175,13 @@ func (r *RedoRowEvent) ToRedoLog() *RedoLog {
 				})
 				isHandleKey := r.TableInfo.IsHandleKey(column.ID)
 				switch r.Event.RowType {
-				case commonType.RowTypeInsert:
+				case common.RowTypeInsert:
 					v := parseColumnValue(&r.Event.Row, column, i, isHandleKey)
 					redoLog.RedoRow.Columns = append(redoLog.RedoRow.Columns, v)
-				case commonType.RowTypeDelete:
+				case common.RowTypeDelete:
 					v := parseColumnValue(&r.Event.PreRow, column, i, isHandleKey)
 					redoLog.RedoRow.PreColumns = append(redoLog.RedoRow.PreColumns, v)
-				case commonType.RowTypeUpdate:
+				case common.RowTypeUpdate:
 					v := parseColumnValue(&r.Event.Row, column, i, isHandleKey)
 					redoLog.RedoRow.Columns = append(redoLog.RedoRow.Columns, v)
 					v = parseColumnValue(&r.Event.PreRow, column, i, isHandleKey)
@@ -191,11 +191,11 @@ func (r *RedoRowEvent) ToRedoLog() *RedoLog {
 			}
 		}
 		switch r.Event.RowType {
-		case commonType.RowTypeInsert:
+		case common.RowTypeInsert:
 			redoLog.RedoRow.Row.Columns = columns
-		case commonType.RowTypeDelete:
+		case common.RowTypeDelete:
 			redoLog.RedoRow.Row.PreColumns = columns
-		case commonType.RowTypeUpdate:
+		case common.RowTypeUpdate:
 			redoLog.RedoRow.Row.Columns = columns
 			redoLog.RedoRow.Row.PreColumns = columns
 		}
@@ -228,7 +228,7 @@ func (d *DDLEvent) ToRedoLog() *RedoLog {
 }
 
 // GetCommitTs returns commit timestamp of the log event.
-func (r *RedoLog) GetCommitTs() commonType.Ts {
+func (r *RedoLog) GetCommitTs() common.Ts {
 	switch r.Type {
 	case RedoLogTypeRow:
 		return r.RedoRow.Row.CommitTs
@@ -281,7 +281,7 @@ func (r *RedoDMLEvent) ToDMLEvent() *DMLEvent {
 		colInfo.SetType(col.Type)
 		colInfo.SetCharset(col.Charset)
 		colInfo.SetCollate(col.Collation)
-		flag := commonType.ColumnFlagType(rawColsValue[idx].Flag)
+		flag := common.ColumnFlagType(rawColsValue[idx].Flag)
 		// if flag.IsHandleKey() {
 		// }
 		// if flag.IsBinary(){
@@ -329,8 +329,8 @@ func (r *RedoDMLEvent) ToDMLEvent() *DMLEvent {
 		indexInfo.Primary = isPrimary
 		tidbTableInfo.Indices = append(tidbTableInfo.Indices, indexInfo)
 	}
-	tableInfo := commonType.NewTableInfo4Decoder(r.Row.Table.Schema, tidbTableInfo)
-	// Restore routing info from redo log (TargetSchema/TargetTable for sink routing).
+	tableInfo := common.NewTableInfo4Decoder(r.Row.Table.Schema, tidbTableInfo)
+	// Restore routing info from redo log (TargetSchema/TargetTable for table routing).
 	// We must use CloneWithRouting because NewTableInfo4Decoder already called InitPrivateFields()
 	// which pre-computed SQL statements using the source schema/table. CloneWithRouting creates
 	// a new TableInfo with routing applied and uninitialized preSQLs that will be computed
@@ -354,15 +354,15 @@ func (r *RedoDMLEvent) ToDMLEvent() *DMLEvent {
 	columns := event.TableInfo.GetColumns()
 	if r.IsDelete() {
 		collectAllColumnsValue(r.PreColumns, columns, chk)
-		event.RowTypes = append(event.RowTypes, commonType.RowTypeDelete)
+		event.RowTypes = append(event.RowTypes, common.RowTypeDelete)
 	} else if r.IsUpdate() {
 		collectAllColumnsValue(r.PreColumns, columns, chk)
 		collectAllColumnsValue(r.Columns, columns, chk)
 		// FIXME: exclude columns with same value
-		event.RowTypes = append(event.RowTypes, commonType.RowTypeUpdate, commonType.RowTypeUpdate)
+		event.RowTypes = append(event.RowTypes, common.RowTypeUpdate, common.RowTypeUpdate)
 	} else if r.IsInsert() {
 		collectAllColumnsValue(r.Columns, columns, chk)
-		event.RowTypes = append(event.RowTypes, commonType.RowTypeInsert)
+		event.RowTypes = append(event.RowTypes, common.RowTypeInsert)
 	} else {
 		log.Panic("unknown event type for the DML event")
 	}
@@ -380,7 +380,7 @@ func (r *RedoDDLEvent) ToDDLEvent() *DDLEvent {
 		blockedTableNames = []SchemaTableName{{SchemaName: schemaName, TableName: tableName}}
 	}
 	return &DDLEvent{
-		TableInfo: &commonType.TableInfo{
+		TableInfo: &common.TableInfo{
 			TableName: r.TableName,
 		},
 		Query:             r.DDL.Query,
@@ -403,7 +403,7 @@ func (r *RedoDDLEvent) SetTableSchemaStore(tableSchemaStore *TableSchemaStore) {
 }
 
 func parseColumnValue(row *chunk.Row, colInfo *timodel.ColumnInfo, i int, isHandleKey bool) RedoColumnValue {
-	v := commonType.ExtractColVal(row, colInfo, i)
+	v := common.ExtractColVal(row, colInfo, i)
 	switch colInfo.GetType() {
 	case mysql.TypeString, mysql.TypeVarString, mysql.TypeVarchar,
 		mysql.TypeTinyBlob, mysql.TypeMediumBlob, mysql.TypeLongBlob, mysql.TypeBlob:
@@ -423,7 +423,7 @@ func parseColumnValue(row *chunk.Row, colInfo *timodel.ColumnInfo, i int, isHand
 
 // For compatibility
 func convertFlag(colInfo *timodel.ColumnInfo, isHandleKey bool) uint64 {
-	var flag commonType.ColumnFlagType
+	var flag common.ColumnFlagType
 	if isHandleKey {
 		flag.SetIsHandleKey()
 	}
@@ -452,7 +452,7 @@ func convertFlag(colInfo *timodel.ColumnInfo, isHandleKey bool) uint64 {
 }
 
 // For compatibility
-func getIndexColumns(tableInfo *commonType.TableInfo) [][]int {
+func getIndexColumns(tableInfo *common.TableInfo) [][]int {
 	indexColumns := make([][]int, 0, len(tableInfo.GetIndexColumns()))
 	rowColumnsOffset := tableInfo.GetRowColumnsOffset()
 	for _, index := range tableInfo.GetIndexColumns() {

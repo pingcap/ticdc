@@ -387,7 +387,7 @@ func (d DateSeparator) String() string {
 
 // DispatchRules configures event routing.
 // For MQ sinks, rules control topic / partition dispatching.
-// TargetSchema and TargetTable configure sink routing for sink implementations that support it.
+// TargetSchema and TargetTable configure table routing for sink implementations that support it.
 type DispatchRule struct {
 	Matcher []string `toml:"matcher" json:"matcher"`
 	// Deprecated, please use PartitionRule.
@@ -826,7 +826,7 @@ func (s *SinkConfig) validateAndAdjust(sinkURI *url.URL) error {
 		}
 	}
 
-	if err := s.validateSinkRouting(); err != nil {
+	if err := s.validateTableRoute(); err != nil {
 		return err
 	}
 
@@ -882,7 +882,7 @@ func (s *SinkConfig) validateAndAdjust(sinkURI *url.URL) error {
 	return nil
 }
 
-func (s *SinkConfig) validateSinkRouting() error {
+func (s *SinkConfig) validateTableRoute() error {
 	for _, rule := range s.DispatchRules {
 		if rule.TargetSchema == "" && rule.TargetTable == "" {
 			continue

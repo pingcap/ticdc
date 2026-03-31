@@ -117,9 +117,9 @@ function run() {
 	grep -E "DROPPED" $WORK_DIR/cdc.log 2>/dev/null | tail -20 || echo "No DROPPED events found"
 
 	# ============================================
-	# Verify schema routing: tables should be in target_db, not source_db
+	# Verify table route: tables should be in target_db, not source_db
 	# ============================================
-	echo "Verifying schema routing..."
+	echo "Verifying table route..."
 	check_table_exists target_db.users_routed ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 	check_table_exists target_db.orders_routed ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 	check_table_exists target_db.products_routed ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}

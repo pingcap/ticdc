@@ -295,7 +295,7 @@ func TestCheckCompatibilityWithSinkURI(t *testing.T) {
 	}
 }
 
-func TestValidateSinkRouting(t *testing.T) {
+func TestValidateTableRoute(t *testing.T) {
 	t.Parallel()
 
 	testCases := []struct {
@@ -344,7 +344,7 @@ func TestValidateSinkRouting(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := tc.cfg.validateSinkRouting()
+			err := tc.cfg.validateTableRoute()
 			if tc.wantErr == "" {
 				require.NoError(t, err)
 			} else {

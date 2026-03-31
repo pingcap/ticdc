@@ -23,13 +23,12 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/go-sql-driver/mysql"
 	lru "github.com/hashicorp/golang-lru"
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config/kerneltype"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/tidb/br/pkg/version"
 	ticonfig "github.com/pingcap/tidb/pkg/config"
@@ -342,51 +341,57 @@ func TestMysqlWriter_FlushDDLEvent(t *testing.T) {
 }
 
 func TestMysqlWriter_ExecDDLUsesRoutedSchemaName(t *testing.T) {
-	writer, db, mock := newTestMysqlWriter(t)
-	defer db.Close()
-
-	ddlEvent := &commonEvent.DDLEvent{
-		Query:      "ALTER TABLE `target_db`.`target_table` ADD COLUMN age INT",
-		Type:       byte(timodel.ActionAddColumn),
-		SchemaName: "target_db",
-		TableName:  "target_table",
-		FinishedTs: 1,
+	tests := []struct {
+		name      string
+		ddlEvent  *commonEvent.DDLEvent
+		useSchema string
+		query     string
+	}{
+		{
+			name: "single table ddl",
+			ddlEvent: &commonEvent.DDLEvent{
+				Query:      "ALTER TABLE `target_db`.`target_table` ADD COLUMN age INT",
+				Type:       byte(timodel.ActionAddColumn),
+				SchemaName: "target_db",
+				TableName:  "target_table",
+				FinishedTs: 1,
+			},
+			useSchema: "target_db",
+			query:     "ALTER TABLE `target_db`.`target_table` ADD COLUMN age INT",
+		},
+		{
+			name: "rename ddl",
+			ddlEvent: &commonEvent.DDLEvent{
+				Query:           "RENAME TABLE `old_target_db`.`orders_old` TO `new_target_db`.`orders_new`",
+				Type:            byte(timodel.ActionRenameTable),
+				SchemaName:      "new_target_db",
+				TableName:       "orders_new",
+				ExtraSchemaName: "old_target_db",
+				ExtraTableName:  "orders_old",
+				FinishedTs:      1,
+			},
+			useSchema: "new_target_db",
+			query:     "RENAME TABLE `old_target_db`.`orders_old` TO `new_target_db`.`orders_new`",
+		},
 	}
 
-	mock.ExpectBegin()
-	mock.ExpectExec("USE `target_db`;").WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec("SET TIMESTAMP = DEFAULT").WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec("ALTER TABLE `target_db`.`target_table` ADD COLUMN age INT").WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectCommit()
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			writer, db, mock := newTestMysqlWriter(t)
+			defer db.Close()
 
-	err := writer.execDDL(ddlEvent)
-	require.NoError(t, err)
-	require.NoError(t, mock.ExpectationsWereMet())
-}
+			mock.ExpectBegin()
+			mock.ExpectExec("USE `" + tc.useSchema + "`;").WillReturnResult(sqlmock.NewResult(1, 1))
+			mock.ExpectExec("SET TIMESTAMP = DEFAULT").WillReturnResult(sqlmock.NewResult(1, 1))
+			mock.ExpectExec(tc.query).WillReturnResult(sqlmock.NewResult(1, 1))
+			mock.ExpectCommit()
 
-func TestMysqlWriter_ExecRenameDDLUsesRoutedNewSchemaName(t *testing.T) {
-	writer, db, mock := newTestMysqlWriter(t)
-	defer db.Close()
-
-	ddlEvent := &commonEvent.DDLEvent{
-		Query:           "RENAME TABLE `old_target_db`.`orders_old` TO `new_target_db`.`orders_new`",
-		Type:            byte(timodel.ActionRenameTable),
-		SchemaName:      "new_target_db",
-		TableName:       "orders_new",
-		ExtraSchemaName: "old_target_db",
-		ExtraTableName:  "orders_old",
-		FinishedTs:      1,
+			err := writer.execDDL(tc.ddlEvent)
+			require.NoError(t, err)
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
 	}
-
-	mock.ExpectBegin()
-	mock.ExpectExec("USE `new_target_db`;").WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec("SET TIMESTAMP = DEFAULT").WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec("RENAME TABLE `old_target_db`.`orders_old` TO `new_target_db`.`orders_new`").WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectCommit()
-
-	err := writer.execDDL(ddlEvent)
-	require.NoError(t, err)
-	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestMysqlWriter_Flush_EmptyEvents(t *testing.T) {
@@ -784,7 +789,7 @@ func TestCheckIsDuplicateEntryError(t *testing.T) {
 	// Test case 3: Wrap Error with "Duplicate entry" in message should return true
 	beforeTime = time.Now()
 	stringErr2 := fmt.Errorf("Error 1062: Duplicate entry 'test' for key 'PRIMARY'")
-	testErr := cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(stringErr2, fmt.Sprintf("Failed to execute DMLs, query info:%s, args:%v; ", "test sql", "test args")))
+	testErr := errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(stringErr2, fmt.Sprintf("Failed to execute DMLs, query info:%s, args:%v; ", "test sql", "test args")))
 	result = writer.checkIsDuplicateEntryError(testErr)
 
 	require.True(t, result)

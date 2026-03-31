@@ -25,7 +25,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/compression"
 	"github.com/pingcap/ticdc/pkg/config"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/stretchr/testify/require"
 )
@@ -722,7 +722,7 @@ func TestMaxMessageBytes(t *testing.T) {
 		Event:          rc,
 		ColumnSelector: columnselector.NewDefaultColumnSelector(),
 	})
-	require.Error(t, err, cerror.ErrMessageTooLarge)
+	require.Error(t, err, errors.ErrMessageTooLarge)
 }
 
 func TestCanalJSONContentCompatibleE2E(t *testing.T) {

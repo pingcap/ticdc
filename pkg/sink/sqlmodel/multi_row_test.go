@@ -20,281 +20,274 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestGenInsertSQLWithRouting tests that GenInsertSQL uses target schema/table
-// when routing is configured via TableInfo.CloneWithRouting().
-func TestGenInsertSQLWithRouting(t *testing.T) {
-	sourceTableInfo := getSharedTableInfo(t)
-	routedTableInfo := sourceTableInfo.CloneWithRouting("target_db", "target_table")
-
-	// Create 5 row changes to properly test multi-row batch insert
-	row1 := NewRowChange(&routedTableInfo.TableName, nil, nil,
-		[]interface{}{int64(1), "alice"}, routedTableInfo, nil, nil)
-	row2 := NewRowChange(&routedTableInfo.TableName, nil, nil,
-		[]interface{}{int64(2), "bob"}, routedTableInfo, nil, nil)
-	row3 := NewRowChange(&routedTableInfo.TableName, nil, nil,
-		[]interface{}{int64(3), "charlie"}, routedTableInfo, nil, nil)
-	row4 := NewRowChange(&routedTableInfo.TableName, nil, nil,
-		[]interface{}{int64(4), "david"}, routedTableInfo, nil, nil)
-	row5 := NewRowChange(&routedTableInfo.TableName, nil, nil,
-		[]interface{}{int64(5), "eve"}, routedTableInfo, nil, nil)
-
-	rows := []*RowChange{row1, row2, row3, row4, row5}
-
-	// Test INSERT
-	sql, args := GenInsertSQL(DMLInsert, rows...)
-	require.Contains(t, sql, "INSERT INTO `target_db`.`target_table`", "INSERT should use target schema and table")
-	require.NotContains(t, sql, "`test`.`t`", "INSERT should not contain source schema.table")
-	// Verify all 5 rows' values are in args (2 columns * 5 rows = 10 args)
-	require.Len(t, args, 10)
-	expectedArgs := []interface{}{
-		int64(1), "alice",
-		int64(2), "bob",
-		int64(3), "charlie",
-		int64(4), "david",
-		int64(5), "eve",
+func newInsertRowChanges(tableInfo *common.TableInfo, rows ...[]interface{}) []*RowChange {
+	changes := make([]*RowChange, 0, len(rows))
+	for _, row := range rows {
+		changes = append(changes, NewRowChange(&tableInfo.TableName, nil, nil, row, tableInfo, nil, nil))
 	}
-	require.Equal(t, expectedArgs, args, "INSERT args should contain all row values in order")
-
-	// Test REPLACE
-	sql, args = GenInsertSQL(DMLReplace, rows...)
-	require.Contains(t, sql, "REPLACE INTO `target_db`.`target_table`", "REPLACE should use target schema and table")
-	require.NotContains(t, sql, "`test`.`t`", "REPLACE should not contain source schema.table")
-	require.Len(t, args, 10)
-	require.Equal(t, expectedArgs, args, "REPLACE args should contain all row values in order")
-
-	// Test INSERT ON DUPLICATE KEY UPDATE
-	sql, args = GenInsertSQL(DMLInsertOnDuplicateUpdate, rows...)
-	require.Contains(t, sql, "INSERT INTO `target_db`.`target_table`", "INSERT ON DUP should use target schema and table")
-	require.Contains(t, sql, "ON DUPLICATE KEY UPDATE", "Should have ON DUPLICATE KEY UPDATE clause")
-	require.NotContains(t, sql, "`test`.`t`", "INSERT ON DUP should not contain source schema.table")
-	require.Len(t, args, 10)
-	require.Equal(t, expectedArgs, args, "INSERT ON DUP args should contain all row values in order")
+	return changes
 }
 
-// TestGenDeleteSQLWithRouting tests that GenDeleteSQL uses target schema/table
-func TestGenDeleteSQLWithRouting(t *testing.T) {
-	sourceTableInfo := getSharedTableInfo(t)
-	routedTableInfo := sourceTableInfo.CloneWithRouting("target_db", "target_table")
-
-	// Create 4 row changes for delete (preValues only)
-	row1 := NewRowChange(&routedTableInfo.TableName, nil,
-		[]interface{}{int64(1), "alice"}, nil, routedTableInfo, nil, nil)
-	row2 := NewRowChange(&routedTableInfo.TableName, nil,
-		[]interface{}{int64(2), "bob"}, nil, routedTableInfo, nil, nil)
-	row3 := NewRowChange(&routedTableInfo.TableName, nil,
-		[]interface{}{int64(3), "charlie"}, nil, routedTableInfo, nil, nil)
-	row4 := NewRowChange(&routedTableInfo.TableName, nil,
-		[]interface{}{int64(4), "david"}, nil, routedTableInfo, nil, nil)
-
-	rows := []*RowChange{row1, row2, row3, row4}
-
-	sql, args := GenDeleteSQL(DefaultWhereClause, rows...)
-	require.Contains(t, sql, "DELETE FROM `target_db`.`target_table`", "DELETE should use target schema and table")
-	require.NotContains(t, sql, "`test`.`t`", "DELETE should not contain source schema.table")
-	// DELETE uses WHERE with primary key (id column only for this table)
-	// 4 rows * 1 PK column = 4 args
-	require.Len(t, args, 4)
-	expectedArgs := []interface{}{int64(1), int64(2), int64(3), int64(4)}
-	require.Equal(t, expectedArgs, args, "DELETE args should contain PK values for all rows")
-	require.Contains(t, sql, "IN", "Multi-row DELETE should use IN clauses in v2 mode")
+func newDeleteRowChanges(tableInfo *common.TableInfo, rows ...[]interface{}) []*RowChange {
+	changes := make([]*RowChange, 0, len(rows))
+	for _, row := range rows {
+		changes = append(changes, NewRowChange(&tableInfo.TableName, nil, row, nil, tableInfo, nil, nil))
+	}
+	return changes
 }
 
-// TestGenUpdateSQLWithRouting tests that GenUpdateSQL uses target schema/table
-func TestGenUpdateSQLWithRouting(t *testing.T) {
-	sourceTableInfo := getSharedTableInfo(t)
-	routedTableInfo := sourceTableInfo.CloneWithRouting("target_db", "target_table")
-
-	// Create 3 row changes for update (both preValues and postValues)
-	row1 := NewRowChange(&routedTableInfo.TableName, nil,
-		[]interface{}{int64(1), "alice_old"},
-		[]interface{}{int64(1), "alice_new"},
-		routedTableInfo, nil, nil)
-	row2 := NewRowChange(&routedTableInfo.TableName, nil,
-		[]interface{}{int64(2), "bob_old"},
-		[]interface{}{int64(2), "bob_new"},
-		routedTableInfo, nil, nil)
-	row3 := NewRowChange(&routedTableInfo.TableName, nil,
-		[]interface{}{int64(3), "charlie_old"},
-		[]interface{}{int64(3), "charlie_new"},
-		routedTableInfo, nil, nil)
-
-	rows := []*RowChange{row1, row2, row3}
-
-	sql, args := GenUpdateSQL(DefaultWhereClause, rows...)
-	require.Contains(t, sql, "UPDATE `target_db`.`target_table`", "UPDATE should use target schema and table")
-	require.NotContains(t, sql, "`test`.`t`", "UPDATE should not contain source schema.table")
-	// UPDATE uses CASE WHEN for multi-row updates
-	require.Contains(t, sql, "CASE", "Multi-row UPDATE should use CASE expression")
-	require.Contains(t, sql, "WHEN", "Multi-row UPDATE should use WHEN clauses")
-	require.Contains(t, sql, "IN", "Multi-row UPDATE WHERE should use IN clauses in v2 mode")
-	// Args should contain values for all rows
-	// Multi-row UPDATE args: for each column: [WHEN pk=? THEN new_val] repeated for each row, then WHERE pk values
-	// 2 columns (id, name) * 3 rows * (1 pk + 1 new_val) + 3 WHERE pk values = 2*3*2 + 3 = 15
-	require.Len(t, args, 15, "Multi-row UPDATE should have correct number of args")
-	// Verify args contain expected new values
-	require.Contains(t, args, "alice_new")
-	require.Contains(t, args, "bob_new")
-	require.Contains(t, args, "charlie_new")
+func newUpdateRowChanges(tableInfo *common.TableInfo, preRows [][]interface{}, postRows [][]interface{}) []*RowChange {
+	changes := make([]*RowChange, 0, len(preRows))
+	for i := range preRows {
+		changes = append(changes, NewRowChange(&tableInfo.TableName, nil, preRows[i], postRows[i], tableInfo, nil, nil))
+	}
+	return changes
 }
 
-// TestGenInsertSQLWithSchemaOnlyRouting tests routing where only schema changes
-func TestGenInsertSQLWithSchemaOnlyRouting(t *testing.T) {
-	sourceTableInfo := getSharedTableInfo(t)
-	routedTableInfo := sourceTableInfo.CloneWithRouting("prod", "users")
+func TestGenInsertSQLTableRoute(t *testing.T) {
+	sourceTableInfo := mockRouteTableInfo(t)
 
-	// Create 3 row changes
-	row1 := NewRowChange(&routedTableInfo.TableName, nil, nil,
-		[]interface{}{int64(100), "user1"}, routedTableInfo, nil, nil)
-	row2 := NewRowChange(&routedTableInfo.TableName, nil, nil,
-		[]interface{}{int64(200), "user2"}, routedTableInfo, nil, nil)
-	row3 := NewRowChange(&routedTableInfo.TableName, nil, nil,
-		[]interface{}{int64(300), "user3"}, routedTableInfo, nil, nil)
+	tests := []struct {
+		name            string
+		targetSchema    string
+		targetTable     string
+		expectedTableID string
+		expectedArgs    []interface{}
+		forbidden       string
+		checkAllModes   bool
+	}{
+		{
+			name:            "full route",
+			targetSchema:    "target_db",
+			targetTable:     "target_table",
+			expectedTableID: "`target_db`.`target_table`",
+			expectedArgs: []interface{}{
+				int64(1), "alice",
+				int64(2), "bob",
+				int64(3), "charlie",
+				int64(4), "david",
+				int64(5), "eve",
+			},
+			forbidden:     "`test`.`t`",
+			checkAllModes: true,
+		},
+		{
+			name:            "schema only route",
+			targetSchema:    "prod",
+			targetTable:     "users",
+			expectedTableID: "`prod`.`users`",
+			expectedArgs: []interface{}{
+				int64(1), "alice",
+				int64(2), "bob",
+				int64(3), "charlie",
+				int64(4), "david",
+				int64(5), "eve",
+			},
+			forbidden: "`test`.`t`",
+		},
+		{
+			name:            "table only route",
+			targetSchema:    "test",
+			targetTable:     "new_table",
+			expectedTableID: "`test`.`new_table`",
+			expectedArgs: []interface{}{
+				int64(1), "alice",
+				int64(2), "bob",
+				int64(3), "charlie",
+				int64(4), "david",
+				int64(5), "eve",
+			},
+			forbidden: "`test`.`t`",
+		},
+		{
+			name:            "no route",
+			targetSchema:    "test",
+			targetTable:     "t",
+			expectedTableID: "`test`.`t`",
+			expectedArgs: []interface{}{
+				int64(1), "alice",
+				int64(2), "bob",
+				int64(3), "charlie",
+				int64(4), "david",
+				int64(5), "eve",
+			},
+		},
+	}
 
-	rows := []*RowChange{row1, row2, row3}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			tableInfo := sourceTableInfo
+			if tc.targetSchema != sourceTableInfo.TableName.Schema || tc.targetTable != sourceTableInfo.TableName.Table {
+				tableInfo = sourceTableInfo.CloneWithRouting(tc.targetSchema, tc.targetTable)
+			}
 
-	sql, args := GenInsertSQL(DMLInsert, rows...)
-	require.Contains(t, sql, "`prod`.`users`", "Should use target schema and table")
-	require.NotContains(t, sql, "`test`.`t`", "Should not contain source schema.table")
-	require.Len(t, args, 6)
-	expectedArgs := []interface{}{int64(100), "user1", int64(200), "user2", int64(300), "user3"}
-	require.Equal(t, expectedArgs, args)
+			rows := newInsertRowChanges(tableInfo,
+				[]interface{}{int64(1), "alice"},
+				[]interface{}{int64(2), "bob"},
+				[]interface{}{int64(3), "charlie"},
+				[]interface{}{int64(4), "david"},
+				[]interface{}{int64(5), "eve"},
+			)
+
+			sql, args := GenInsertSQL(DMLInsert, rows...)
+			require.Contains(t, sql, tc.expectedTableID)
+			require.Equal(t, tc.expectedArgs, args)
+			if tc.forbidden != "" {
+				require.NotContains(t, sql, tc.forbidden)
+			}
+
+			if !tc.checkAllModes {
+				return
+			}
+
+			sql, args = GenInsertSQL(DMLReplace, rows...)
+			require.Contains(t, sql, "REPLACE INTO "+tc.expectedTableID)
+			require.Equal(t, tc.expectedArgs, args)
+			require.NotContains(t, sql, tc.forbidden)
+
+			sql, args = GenInsertSQL(DMLInsertOnDuplicateUpdate, rows...)
+			require.Contains(t, sql, "INSERT INTO "+tc.expectedTableID)
+			require.Contains(t, sql, "ON DUPLICATE KEY UPDATE")
+			require.Equal(t, tc.expectedArgs, args)
+			require.NotContains(t, sql, tc.forbidden)
+		})
+	}
 }
 
-// TestGenInsertSQLWithTableOnlyRouting tests routing where only table name changes
-func TestGenInsertSQLWithTableOnlyRouting(t *testing.T) {
-	sourceTableInfo := getSharedTableInfo(t)
-	routedTableInfo := sourceTableInfo.CloneWithRouting("test", "new_table")
+func TestGenDeleteSQLTableRoute(t *testing.T) {
+	sourceTableInfo := mockRouteTableInfo(t)
 
-	// Create 3 row changes
-	row1 := NewRowChange(&routedTableInfo.TableName, nil, nil,
-		[]interface{}{int64(10), "data1"}, routedTableInfo, nil, nil)
-	row2 := NewRowChange(&routedTableInfo.TableName, nil, nil,
-		[]interface{}{int64(20), "data2"}, routedTableInfo, nil, nil)
-	row3 := NewRowChange(&routedTableInfo.TableName, nil, nil,
-		[]interface{}{int64(30), "data3"}, routedTableInfo, nil, nil)
+	tests := []struct {
+		name            string
+		targetSchema    string
+		targetTable     string
+		expectedTableID string
+		expectedArgs    []interface{}
+		forbidden       string
+	}{
+		{
+			name:            "full route",
+			targetSchema:    "target_db",
+			targetTable:     "target_table",
+			expectedTableID: "`target_db`.`target_table`",
+			expectedArgs:    []interface{}{int64(1), int64(2), int64(3), int64(4)},
+			forbidden:       "`test`.`t`",
+		},
+		{
+			name:            "schema only route",
+			targetSchema:    "target_db",
+			targetTable:     "orders",
+			expectedTableID: "`target_db`.`orders`",
+			expectedArgs:    []interface{}{int64(1), int64(2), int64(3), int64(4)},
+			forbidden:       "`test`.`t`",
+		},
+		{
+			name:            "no route",
+			targetSchema:    "test",
+			targetTable:     "t",
+			expectedTableID: "`test`.`t`",
+			expectedArgs:    []interface{}{int64(1), int64(2), int64(3), int64(4)},
+		},
+	}
 
-	rows := []*RowChange{row1, row2, row3}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			tableInfo := sourceTableInfo
+			if tc.targetSchema != sourceTableInfo.TableName.Schema || tc.targetTable != sourceTableInfo.TableName.Table {
+				tableInfo = sourceTableInfo.CloneWithRouting(tc.targetSchema, tc.targetTable)
+			}
 
-	sql, args := GenInsertSQL(DMLInsert, rows...)
-	require.Contains(t, sql, "`test`.`new_table`", "Should use original schema with target table name")
-	require.NotContains(t, sql, "`test`.`t`", "Should not contain source table name")
-	require.Len(t, args, 6)
-	expectedArgs := []interface{}{int64(10), "data1", int64(20), "data2", int64(30), "data3"}
-	require.Equal(t, expectedArgs, args)
+			rows := newDeleteRowChanges(tableInfo,
+				[]interface{}{int64(1), "alice"},
+				[]interface{}{int64(2), "bob"},
+				[]interface{}{int64(3), "charlie"},
+				[]interface{}{int64(4), "david"},
+			)
+
+			sql, args := GenDeleteSQL(DefaultWhereClause, rows...)
+			require.Contains(t, sql, "DELETE FROM "+tc.expectedTableID)
+			require.Contains(t, sql, "IN")
+			require.Equal(t, tc.expectedArgs, args)
+			if tc.forbidden != "" {
+				require.NotContains(t, sql, tc.forbidden)
+			}
+		})
+	}
 }
 
-// TestGenDeleteSQLWithSchemaOnlyRouting tests DELETE with schema-only routing
-func TestGenDeleteSQLWithSchemaOnlyRouting(t *testing.T) {
-	sourceTableInfo := getSharedTableInfo(t)
-	routedTableInfo := sourceTableInfo.CloneWithRouting("target_db", "orders")
+func TestGenUpdateSQLTableRoute(t *testing.T) {
+	sourceTableInfo := mockRouteTableInfo(t)
 
-	// Create 4 row changes for delete
-	row1 := NewRowChange(&routedTableInfo.TableName, nil,
-		[]interface{}{int64(1001), "order1"}, nil, routedTableInfo, nil, nil)
-	row2 := NewRowChange(&routedTableInfo.TableName, nil,
-		[]interface{}{int64(1002), "order2"}, nil, routedTableInfo, nil, nil)
-	row3 := NewRowChange(&routedTableInfo.TableName, nil,
-		[]interface{}{int64(1003), "order3"}, nil, routedTableInfo, nil, nil)
-	row4 := NewRowChange(&routedTableInfo.TableName, nil,
-		[]interface{}{int64(1004), "order4"}, nil, routedTableInfo, nil, nil)
+	tests := []struct {
+		name            string
+		targetSchema    string
+		targetTable     string
+		expectedTableID string
+		forbidden       string
+		expectedNames   []string
+	}{
+		{
+			name:            "full route",
+			targetSchema:    "target_db",
+			targetTable:     "target_table",
+			expectedTableID: "`target_db`.`target_table`",
+			forbidden:       "`test`.`t`",
+			expectedNames:   []string{"alice_new", "bob_new", "charlie_new"},
+		},
+		{
+			name:            "table only route",
+			targetSchema:    "test",
+			targetTable:     "new_products",
+			expectedTableID: "`test`.`new_products`",
+			forbidden:       "`test`.`t`",
+			expectedNames:   []string{"alice_new", "bob_new", "charlie_new"},
+		},
+		{
+			name:            "no route",
+			targetSchema:    "test",
+			targetTable:     "t",
+			expectedTableID: "`test`.`t`",
+			expectedNames:   []string{"alice_new", "bob_new", "charlie_new"},
+		},
+	}
 
-	rows := []*RowChange{row1, row2, row3, row4}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			tableInfo := sourceTableInfo
+			if tc.targetSchema != sourceTableInfo.TableName.Schema || tc.targetTable != sourceTableInfo.TableName.Table {
+				tableInfo = sourceTableInfo.CloneWithRouting(tc.targetSchema, tc.targetTable)
+			}
 
-	sql, args := GenDeleteSQL(DefaultWhereClause, rows...)
-	require.Contains(t, sql, "`target_db`.`orders`", "Should use target schema and table")
-	require.NotContains(t, sql, "`test`.`t`", "Should not contain source schema.table")
-	require.Len(t, args, 4)
-	expectedArgs := []interface{}{int64(1001), int64(1002), int64(1003), int64(1004)}
-	require.Equal(t, expectedArgs, args)
-}
+			rows := newUpdateRowChanges(tableInfo,
+				[][]interface{}{
+					{int64(1), "alice_old"},
+					{int64(2), "bob_old"},
+					{int64(3), "charlie_old"},
+				},
+				[][]interface{}{
+					{int64(1), "alice_new"},
+					{int64(2), "bob_new"},
+					{int64(3), "charlie_new"},
+				},
+			)
 
-// TestGenUpdateSQLWithTableOnlyRouting tests UPDATE with table-only routing
-func TestGenUpdateSQLWithTableOnlyRouting(t *testing.T) {
-	sourceTableInfo := getSharedTableInfo(t)
-	routedTableInfo := sourceTableInfo.CloneWithRouting("test", "new_products")
-
-	// Create 3 row changes for update
-	row1 := NewRowChange(&routedTableInfo.TableName, nil,
-		[]interface{}{int64(1), "old_name1"},
-		[]interface{}{int64(1), "new_name1"},
-		routedTableInfo, nil, nil)
-	row2 := NewRowChange(&routedTableInfo.TableName, nil,
-		[]interface{}{int64(2), "old_name2"},
-		[]interface{}{int64(2), "new_name2"},
-		routedTableInfo, nil, nil)
-	row3 := NewRowChange(&routedTableInfo.TableName, nil,
-		[]interface{}{int64(3), "old_name3"},
-		[]interface{}{int64(3), "new_name3"},
-		routedTableInfo, nil, nil)
-
-	rows := []*RowChange{row1, row2, row3}
-
-	sql, args := GenUpdateSQL(DefaultWhereClause, rows...)
-	require.Contains(t, sql, "`test`.`new_products`", "Should use original schema with target table name")
-	require.NotContains(t, sql, "`test`.`t`", "Should not contain source table name")
-	// 2 columns * 3 rows * 2 (pk + new_val) + 3 WHERE pk values = 15
-	require.Len(t, args, 15, "Multi-row UPDATE should have correct number of args")
-	require.Contains(t, args, "new_name1")
-	require.Contains(t, args, "new_name2")
-	require.Contains(t, args, "new_name3")
-}
-
-// TestGenMultiRowSQLWithoutRouting verifies that when no routing is configured,
-// source schema/table names are used.
-func TestGenMultiRowSQLWithoutRouting(t *testing.T) {
-	sourceTableInfo := getSharedTableInfo(t)
-
-	// Test INSERT without routing - 3 rows
-	row1 := NewRowChange(&sourceTableInfo.TableName, nil, nil,
-		[]interface{}{int64(1), "val1"}, sourceTableInfo, nil, nil)
-	row2 := NewRowChange(&sourceTableInfo.TableName, nil, nil,
-		[]interface{}{int64(2), "val2"}, sourceTableInfo, nil, nil)
-	row3 := NewRowChange(&sourceTableInfo.TableName, nil, nil,
-		[]interface{}{int64(3), "val3"}, sourceTableInfo, nil, nil)
-
-	insertRows := []*RowChange{row1, row2, row3}
-	sql, args := GenInsertSQL(DMLInsert, insertRows...)
-	require.Contains(t, sql, "`test`.`t`", "Should use source schema and table")
-	require.Len(t, args, 6)
-	expectedArgs := []interface{}{int64(1), "val1", int64(2), "val2", int64(3), "val3"}
-	require.Equal(t, expectedArgs, args)
-
-	// Test DELETE without routing - 3 rows
-	delRow1 := NewRowChange(&sourceTableInfo.TableName, nil,
-		[]interface{}{int64(1), "val1"}, nil, sourceTableInfo, nil, nil)
-	delRow2 := NewRowChange(&sourceTableInfo.TableName, nil,
-		[]interface{}{int64(2), "val2"}, nil, sourceTableInfo, nil, nil)
-	delRow3 := NewRowChange(&sourceTableInfo.TableName, nil,
-		[]interface{}{int64(3), "val3"}, nil, sourceTableInfo, nil, nil)
-
-	deleteRows := []*RowChange{delRow1, delRow2, delRow3}
-	sql, args = GenDeleteSQL(DefaultWhereClause, deleteRows...)
-	require.Contains(t, sql, "`test`.`t`", "Should use source schema and table")
-	require.Len(t, args, 3)
-	expectedDeleteArgs := []interface{}{int64(1), int64(2), int64(3)}
-	require.Equal(t, expectedDeleteArgs, args)
-
-	// Test UPDATE without routing - 3 rows
-	updRow1 := NewRowChange(&sourceTableInfo.TableName, nil,
-		[]interface{}{int64(1), "old1"},
-		[]interface{}{int64(1), "new1"},
-		sourceTableInfo, nil, nil)
-	updRow2 := NewRowChange(&sourceTableInfo.TableName, nil,
-		[]interface{}{int64(2), "old2"},
-		[]interface{}{int64(2), "new2"},
-		sourceTableInfo, nil, nil)
-	updRow3 := NewRowChange(&sourceTableInfo.TableName, nil,
-		[]interface{}{int64(3), "old3"},
-		[]interface{}{int64(3), "new3"},
-		sourceTableInfo, nil, nil)
-
-	updateRows := []*RowChange{updRow1, updRow2, updRow3}
-	sql, args = GenUpdateSQL(DefaultWhereClause, updateRows...)
-	require.Contains(t, sql, "`test`.`t`", "Should use source schema and table")
-	require.Len(t, args, 15, "Multi-row UPDATE should have correct number of args")
-	require.Contains(t, args, "new1")
-	require.Contains(t, args, "new2")
-	require.Contains(t, args, "new3")
+			sql, args := GenUpdateSQL(DefaultWhereClause, rows...)
+			require.Contains(t, sql, "UPDATE "+tc.expectedTableID)
+			require.Contains(t, sql, "CASE")
+			require.Contains(t, sql, "WHEN")
+			require.Contains(t, sql, "IN")
+			require.Len(t, args, 15)
+			for _, expectedName := range tc.expectedNames {
+				require.Contains(t, args, expectedName)
+			}
+			if tc.forbidden != "" {
+				require.NotContains(t, sql, tc.forbidden)
+			}
+		})
+	}
 }
 
 type genSQLFunc func(whereClause string, changes ...*RowChange) (string, []any)

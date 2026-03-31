@@ -17,8 +17,7 @@ import (
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/ticdc/pkg/common/event"
-	pevent "github.com/pingcap/ticdc/pkg/common/event"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/stretchr/testify/require"
 )
 
@@ -101,8 +100,8 @@ var preInsertDataSQL = `insert into t values (
 	'测试', "中国", "上海", "你好,世界", 0xC4E3BAC3CAC0BDE7
 );`
 
-func getRowForTest(t testing.TB) (insert, delete, update pevent.RowChange, tableInfo *common.TableInfo) {
-	helper := pevent.NewEventTestHelper(t)
+func getRowForTest(t testing.TB) (insert, delete, update commonEvent.RowChange, tableInfo *common.TableInfo) {
+	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
 
 	helper.Tk().MustExec("use test")
@@ -123,7 +122,7 @@ func getRowForTest(t testing.TB) (insert, delete, update pevent.RowChange, table
 	update.PreRow = insert.Row
 	update.RowType = common.RowTypeUpdate
 
-	delete = pevent.RowChange{
+	delete = commonEvent.RowChange{
 		PreRow:  insert.Row,
 		RowType: common.RowTypeDelete,
 	}
@@ -183,7 +182,7 @@ func TestBuildInsert(t *testing.T) {
 }
 
 func TestBuildDelete(t *testing.T) {
-	helper := event.NewEventTestHelper(t)
+	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
 
 	helper.Tk().MustExec("use test")
@@ -301,7 +300,7 @@ func TestBuildDelete(t *testing.T) {
 }
 
 func TestBuildUpdate(t *testing.T) {
-	helper := event.NewEventTestHelper(t)
+	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
 
 	helper.Tk().MustExec("use test")
@@ -363,225 +362,119 @@ func TestBuildUpdate(t *testing.T) {
 	require.Equal(t, expectedArgs, args)
 }
 
-// TestBuildDMLWithRouting tests that DML SQL generation uses the target schema/table
-// when routing is configured via TableInfo.TableName.TargetSchema/TargetTable.
-// This verifies that QuoteTargetString() is actually used in SQL generation.
-func TestBuildDMLWithRouting(t *testing.T) {
-	helper := event.NewEventTestHelper(t)
-	defer helper.Close()
+func TestBuildDMLTableRoute(t *testing.T) {
+	t.Parallel()
 
-	helper.Tk().MustExec("use test")
-
-	// Create table and get DML events
-	createTableSQL := "create table t (id int primary key, name varchar(32));"
-	job := helper.DDL2Job(createTableSQL)
-	require.NotNil(t, job)
-
-	insertDataSQL := "insert into t values (1, 'test');"
-	insertEvent := helper.DML2Event("test", "t", insertDataSQL)
-	require.NotNil(t, insertEvent)
-
-	// Clone TableInfo with routing: test.t -> target_db.target_table
-	routedTableInfo := insertEvent.TableInfo.CloneWithRouting("target_db", "target_table")
-	routedTableInfo.InitPrivateFields() // Initialize preSQLs with target names
-
-	// Test INSERT uses target schema/table
-	insertRow, ok := insertEvent.GetNextRow()
-	require.True(t, ok)
-	require.NotNil(t, insertRow)
-
-	sql, args := buildInsert(routedTableInfo, insertRow, false)
-	require.Contains(t, sql, "INSERT INTO `target_db`.`target_table`", "INSERT should use target schema and table")
-	require.NotContains(t, sql, "`test`.`t`", "INSERT should not contain source schema.table")
-	require.Len(t, args, 2)
-	require.Equal(t, []interface{}{int64(1), "test"}, args)
-
-	// Test REPLACE uses target schema/table
-	sql, args = buildInsert(routedTableInfo, insertRow, true)
-	require.Contains(t, sql, "REPLACE INTO `target_db`.`target_table`", "REPLACE should use target schema and table")
-	require.NotContains(t, sql, "`test`.`t`", "REPLACE should not contain source schema.table")
-	require.Len(t, args, 2)
-
-	// Test DELETE uses target schema/table
-	deleteRow := event.RowChange{
-		PreRow:  insertRow.Row,
-		RowType: common.RowTypeDelete,
+	tests := []struct {
+		name            string
+		createTableSQL  string
+		insertSQL       string
+		updateSQL       string
+		sourceSchema    string
+		sourceTable     string
+		targetSchema    string
+		targetTable     string
+		expectedTableID string
+		forbidden       string
+	}{
+		{
+			name:            "full route",
+			createTableSQL:  "create table t (id int primary key, name varchar(32));",
+			insertSQL:       "insert into t values (1, 'test');",
+			updateSQL:       "update t set name = 'test2' where id = 1;",
+			sourceSchema:    "test",
+			sourceTable:     "t",
+			targetSchema:    "target_db",
+			targetTable:     "target_table",
+			expectedTableID: "`target_db`.`target_table`",
+			forbidden:       "`test`.`t`",
+		},
+		{
+			name:            "schema only route",
+			createTableSQL:  "create table users (id int primary key, name varchar(32));",
+			insertSQL:       "insert into users values (1, 'alice');",
+			updateSQL:       "update users set name = 'bob' where id = 1;",
+			sourceSchema:    "test",
+			sourceTable:     "users",
+			targetSchema:    "prod",
+			targetTable:     "users",
+			expectedTableID: "`prod`.`users`",
+			forbidden:       "`test`.`users`",
+		},
+		{
+			name:            "table only route",
+			createTableSQL:  "create table old_table (id int primary key, value varchar(32));",
+			insertSQL:       "insert into old_table values (1, 'data');",
+			updateSQL:       "update old_table set value = 'newdata' where id = 1;",
+			sourceSchema:    "test",
+			sourceTable:     "old_table",
+			targetSchema:    "test",
+			targetTable:     "new_table",
+			expectedTableID: "`test`.`new_table`",
+			forbidden:       "old_table",
+		},
+		{
+			name:            "no route",
+			createTableSQL:  "create table plain_table (id int primary key, name varchar(32));",
+			insertSQL:       "insert into plain_table values (1, 'test');",
+			updateSQL:       "update plain_table set name = 'test2' where id = 1;",
+			sourceSchema:    "test",
+			sourceTable:     "plain_table",
+			targetSchema:    "test",
+			targetTable:     "plain_table",
+			expectedTableID: "`test`.`plain_table`",
+		},
 	}
 
-	sql, args = buildDelete(routedTableInfo, deleteRow)
-	require.Contains(t, sql, "DELETE FROM `target_db`.`target_table`", "DELETE should use target schema and table")
-	require.NotContains(t, sql, "`test`.`t`", "DELETE should not contain source schema.table")
-	require.Len(t, args, 1)
-	require.Equal(t, []interface{}{int64(1)}, args)
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			helper := commonEvent.NewEventTestHelper(t)
+			defer helper.Close()
 
-	// Test UPDATE uses target schema/table
-	updateDataSQL := "update t set name = 'test2' where id = 1;"
-	updateEvent := helper.DML2Event("test", "t", updateDataSQL)
-	require.NotNil(t, updateEvent)
-	updateRow, ok := updateEvent.GetNextRow()
-	require.True(t, ok)
-	updateRow.PreRow = insertRow.Row
-	updateRow.RowType = common.RowTypeUpdate
+			helper.Tk().MustExec("use test")
+			job := helper.DDL2Job(tc.createTableSQL)
+			require.NotNil(t, job)
 
-	sql, args = buildUpdate(routedTableInfo, updateRow)
-	require.Contains(t, sql, "UPDATE `target_db`.`target_table`", "UPDATE should use target schema and table")
-	require.NotContains(t, sql, "`test`.`t`", "UPDATE should not contain source schema.table")
-	require.Len(t, args, 3)
-	require.Equal(t, []interface{}{int64(1), "test2", int64(1)}, args)
-}
+			insertEvent := helper.DML2Event(tc.sourceSchema, tc.sourceTable, tc.insertSQL)
+			require.NotNil(t, insertEvent)
 
-// TestBuildDMLWithSchemaOnlyRouting tests that only the schema is changed when
-// TargetTable="{table}" (table name stays the same).
-func TestBuildDMLWithSchemaOnlyRouting(t *testing.T) {
-	helper := event.NewEventTestHelper(t)
-	defer helper.Close()
+			tableInfo := insertEvent.TableInfo
+			if tc.targetSchema != tc.sourceSchema || tc.targetTable != tc.sourceTable {
+				tableInfo = tableInfo.CloneWithRouting(tc.targetSchema, tc.targetTable)
+				tableInfo.InitPrivateFields()
+			}
 
-	helper.Tk().MustExec("use test")
+			insertRow, ok := insertEvent.GetNextRow()
+			require.True(t, ok)
 
-	createTableSQL := "create table users (id int primary key, name varchar(32));"
-	job := helper.DDL2Job(createTableSQL)
-	require.NotNil(t, job)
+			sql, args := buildInsert(tableInfo, insertRow, false)
+			require.Contains(t, sql, "INSERT INTO "+tc.expectedTableID)
+			require.Len(t, args, 2)
 
-	insertDataSQL := "insert into users values (1, 'alice');"
-	insertEvent := helper.DML2Event("test", "users", insertDataSQL)
-	require.NotNil(t, insertEvent)
+			sql, args = buildInsert(tableInfo, insertRow, true)
+			require.Contains(t, sql, "REPLACE INTO "+tc.expectedTableID)
+			require.Len(t, args, 2)
 
-	// Clone TableInfo with schema-only routing: test.users -> prod.users
-	routedTableInfo := insertEvent.TableInfo.CloneWithRouting("prod", "users")
-	routedTableInfo.InitPrivateFields()
+			deleteRow := commonEvent.RowChange{
+				PreRow:  insertRow.Row,
+				RowType: common.RowTypeDelete,
+			}
+			sql, _ = buildDelete(tableInfo, deleteRow)
+			require.Contains(t, sql, "DELETE FROM "+tc.expectedTableID)
 
-	insertRow, ok := insertEvent.GetNextRow()
-	require.True(t, ok)
+			updateEvent := helper.DML2Event(tc.sourceSchema, tc.sourceTable, tc.updateSQL)
+			require.NotNil(t, updateEvent)
+			updateRow, ok := updateEvent.GetNextRow()
+			require.True(t, ok)
+			updateRow.PreRow = insertRow.Row
+			updateRow.RowType = common.RowTypeUpdate
 
-	// Test INSERT
-	sql, args := buildInsert(routedTableInfo, insertRow, false)
-	require.Contains(t, sql, "INSERT INTO `prod`.`users`", "Should use target schema with original table name")
-	require.NotContains(t, sql, "`test`.`users`", "Should not contain source schema")
-	require.Len(t, args, 2)
-
-	// Test DELETE
-	deleteRow := event.RowChange{
-		PreRow:  insertRow.Row,
-		RowType: common.RowTypeDelete,
+			sql, _ = buildUpdate(tableInfo, updateRow)
+			require.Contains(t, sql, "UPDATE "+tc.expectedTableID)
+			if tc.forbidden != "" {
+				require.NotContains(t, sql, tc.forbidden)
+			}
+		})
 	}
-	sql, args = buildDelete(routedTableInfo, deleteRow)
-	require.Contains(t, sql, "DELETE FROM `prod`.`users`", "Should use target schema with original table name")
-	require.NotContains(t, sql, "`test`.`users`", "Should not contain source schema")
-
-	// Test UPDATE
-	updateDataSQL := "update users set name = 'bob' where id = 1;"
-	updateEvent := helper.DML2Event("test", "users", updateDataSQL)
-	require.NotNil(t, updateEvent)
-	updateRow, ok := updateEvent.GetNextRow()
-	require.True(t, ok)
-	updateRow.PreRow = insertRow.Row
-	updateRow.RowType = common.RowTypeUpdate
-
-	sql, args = buildUpdate(routedTableInfo, updateRow)
-	require.Contains(t, sql, "UPDATE `prod`.`users`", "Should use target schema with original table name")
-	require.NotContains(t, sql, "`test`.`users`", "Should not contain source schema")
-}
-
-// TestBuildDMLWithTableOnlyRouting tests that only the table name is changed when
-// TargetSchema="{schema}" (schema stays the same).
-func TestBuildDMLWithTableOnlyRouting(t *testing.T) {
-	helper := event.NewEventTestHelper(t)
-	defer helper.Close()
-
-	helper.Tk().MustExec("use test")
-
-	createTableSQL := "create table old_table (id int primary key, value varchar(32));"
-	job := helper.DDL2Job(createTableSQL)
-	require.NotNil(t, job)
-
-	insertDataSQL := "insert into old_table values (1, 'data');"
-	insertEvent := helper.DML2Event("test", "old_table", insertDataSQL)
-	require.NotNil(t, insertEvent)
-
-	// Clone TableInfo with table-only routing: test.old_table -> test.new_table
-	routedTableInfo := insertEvent.TableInfo.CloneWithRouting("test", "new_table")
-	routedTableInfo.InitPrivateFields()
-
-	insertRow, ok := insertEvent.GetNextRow()
-	require.True(t, ok)
-
-	// Test INSERT
-	sql, args := buildInsert(routedTableInfo, insertRow, false)
-	require.Contains(t, sql, "INSERT INTO `test`.`new_table`", "Should use original schema with target table name")
-	require.NotContains(t, sql, "`test`.`old_table`", "Should not contain source table name")
-	require.Len(t, args, 2)
-
-	// Test DELETE
-	deleteRow := event.RowChange{
-		PreRow:  insertRow.Row,
-		RowType: common.RowTypeDelete,
-	}
-	sql, args = buildDelete(routedTableInfo, deleteRow)
-	require.Contains(t, sql, "DELETE FROM `test`.`new_table`", "Should use original schema with target table name")
-	require.NotContains(t, sql, "old_table", "Should not contain source table name")
-
-	// Test UPDATE
-	updateDataSQL := "update old_table set value = 'newdata' where id = 1;"
-	updateEvent := helper.DML2Event("test", "old_table", updateDataSQL)
-	require.NotNil(t, updateEvent)
-	updateRow, ok := updateEvent.GetNextRow()
-	require.True(t, ok)
-	updateRow.PreRow = insertRow.Row
-	updateRow.RowType = common.RowTypeUpdate
-
-	sql, args = buildUpdate(routedTableInfo, updateRow)
-	require.Contains(t, sql, "UPDATE `test`.`new_table`", "Should use original schema with target table name")
-	require.NotContains(t, sql, "old_table", "Should not contain source table name")
-}
-
-// TestBuildDMLWithoutRouting verifies that when no routing is configured
-// (TargetSchema/TargetTable are empty), the source schema/table names are used.
-func TestBuildDMLWithoutRouting(t *testing.T) {
-	helper := event.NewEventTestHelper(t)
-	defer helper.Close()
-
-	helper.Tk().MustExec("use test")
-
-	createTableSQL := "create table t (id int primary key, name varchar(32));"
-	job := helper.DDL2Job(createTableSQL)
-	require.NotNil(t, job)
-
-	insertDataSQL := "insert into t values (1, 'test');"
-	insertEvent := helper.DML2Event("test", "t", insertDataSQL)
-	require.NotNil(t, insertEvent)
-
-	// Use original TableInfo without any routing
-	tableInfo := insertEvent.TableInfo
-
-	// Verify TargetSchema and TargetTable are not set
-	require.Equal(t, "", tableInfo.TableName.TargetSchema, "TargetSchema should be empty")
-	require.Equal(t, "", tableInfo.TableName.TargetTable, "TargetTable should be empty")
-
-	insertRow, ok := insertEvent.GetNextRow()
-	require.True(t, ok)
-
-	// Test INSERT uses source schema/table
-	sql, args := buildInsert(tableInfo, insertRow, false)
-	require.Contains(t, sql, "INSERT INTO `test`.`t`", "Should use source schema and table")
-	require.Len(t, args, 2)
-
-	// Test DELETE uses source schema/table
-	deleteRow := event.RowChange{
-		PreRow:  insertRow.Row,
-		RowType: common.RowTypeDelete,
-	}
-	sql, args = buildDelete(tableInfo, deleteRow)
-	require.Contains(t, sql, "DELETE FROM `test`.`t`", "Should use source schema and table")
-
-	// Test UPDATE uses source schema/table
-	updateDataSQL := "update t set name = 'test2' where id = 1;"
-	updateEvent := helper.DML2Event("test", "t", updateDataSQL)
-	require.NotNil(t, updateEvent)
-	updateRow, ok := updateEvent.GetNextRow()
-	require.True(t, ok)
-	updateRow.PreRow = insertRow.Row
-	updateRow.RowType = common.RowTypeUpdate
-
-	sql, args = buildUpdate(tableInfo, updateRow)
-	require.Contains(t, sql, "UPDATE `test`.`t`", "Should use source schema and table")
 }

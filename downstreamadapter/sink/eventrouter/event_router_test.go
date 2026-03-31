@@ -19,7 +19,7 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter/partition"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter/topic"
 	"github.com/pingcap/ticdc/pkg/common"
-	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/stretchr/testify/require"
 )
@@ -146,7 +146,7 @@ func TestGetActiveTopics(t *testing.T) {
 	sinkConfig := newSinkConfig4Test()
 	d, err := NewEventRouter(sinkConfig, "test", false, false)
 	require.NoError(t, err)
-	names := []*commonEvent.SchemaTableName{
+	names := []*event.SchemaTableName{
 		{SchemaName: "test_default1", TableName: "table"},
 		{SchemaName: "test_default2", TableName: "table"},
 		{SchemaName: "test_table", TableName: "table"},
@@ -236,7 +236,7 @@ func TestGetPartitionForRowChange(t *testing.T) {
 		TableName: common.TableName{Schema: "test_default1", Table: "table"},
 	}
 	partitionGenerator := d.GetPartitionGenerator(tableInfo.GetSchemaName(), tableInfo.GetTableName())
-	p, _, err := partitionGenerator.GeneratePartitionIndexAndKey(&commonEvent.RowChange{}, 16, tableInfo, 0)
+	p, _, err := partitionGenerator.GeneratePartitionIndexAndKey(&event.RowChange{}, 16, tableInfo, 0)
 	require.NoError(t, err)
 	require.Equal(t, int32(14), p)
 
@@ -245,7 +245,7 @@ func TestGetPartitionForRowChange(t *testing.T) {
 		TableName: common.TableName{Schema: "test_default2", Table: "table"},
 	}
 	partitionGenerator = d.GetPartitionGenerator(tableInfo.GetSchemaName(), tableInfo.GetTableName())
-	p, _, err = partitionGenerator.GeneratePartitionIndexAndKey(&commonEvent.RowChange{}, 16, tableInfo, 0)
+	p, _, err = partitionGenerator.GeneratePartitionIndexAndKey(&event.RowChange{}, 16, tableInfo, 0)
 	require.NoError(t, err)
 	require.Equal(t, int32(0), p)
 
@@ -254,7 +254,7 @@ func TestGetPartitionForRowChange(t *testing.T) {
 		TableName: common.TableName{Schema: "test_table", Table: "table"},
 	}
 	partitionGenerator = d.GetPartitionGenerator(tableInfo.GetSchemaName(), tableInfo.GetTableName())
-	p, _, err = partitionGenerator.GeneratePartitionIndexAndKey(&commonEvent.RowChange{}, 16, tableInfo, 1)
+	p, _, err = partitionGenerator.GeneratePartitionIndexAndKey(&event.RowChange{}, 16, tableInfo, 1)
 	require.NoError(t, err)
 	require.Equal(t, int32(15), p)
 
@@ -263,7 +263,7 @@ func TestGetPartitionForRowChange(t *testing.T) {
 		TableName: common.TableName{Schema: "test_index_value", Table: "table"},
 	}
 
-	helper := commonEvent.NewEventTestHelper(t)
+	helper := event.NewEventTestHelper(t)
 	defer helper.Close()
 
 	helper.Tk().MustExec("create database test_index_value")
@@ -288,7 +288,7 @@ func TestGetPartitionForRowChange(t *testing.T) {
 		TableName: common.TableName{Schema: "a", Table: "table"},
 	}
 	partitionGenerator = d.GetPartitionGenerator(tableInfo.GetSchemaName(), tableInfo.GetTableName())
-	p, _, err = partitionGenerator.GeneratePartitionIndexAndKey(&commonEvent.RowChange{}, 2, tableInfo, 1)
+	p, _, err = partitionGenerator.GeneratePartitionIndexAndKey(&event.RowChange{}, 2, tableInfo, 1)
 	require.NoError(t, err)
 	require.Equal(t, int32(1), p)
 }
@@ -315,38 +315,38 @@ func TestGetTopicForDDL(t *testing.T) {
 	require.NoError(t, err)
 
 	tests := []struct {
-		ddl           *commonEvent.DDLEvent
+		ddl           *event.DDLEvent
 		expectedTopic string
 	}{
 		{
-			ddl: &commonEvent.DDLEvent{
+			ddl: &event.DDLEvent{
 				SchemaName: "test",
 			},
 			expectedTopic: "test",
 		},
 		{
-			ddl: &commonEvent.DDLEvent{
+			ddl: &event.DDLEvent{
 				SchemaName: "test",
 				TableName:  "tb1",
 			},
 			expectedTopic: "hello_test",
 		},
 		{
-			ddl: &commonEvent.DDLEvent{
+			ddl: &event.DDLEvent{
 				SchemaName: "test1",
 				TableName:  "view1",
 			},
 			expectedTopic: "test1_view1",
 		},
 		{
-			ddl: &commonEvent.DDLEvent{
+			ddl: &event.DDLEvent{
 				SchemaName: "test1",
 				TableName:  "tb1",
 			},
 			expectedTopic: "test1_tb1",
 		},
 		{
-			ddl: &commonEvent.DDLEvent{
+			ddl: &event.DDLEvent{
 				ExtraSchemaName: "test1",
 				ExtraTableName:  "tb1",
 				SchemaName:      "test1",
@@ -364,71 +364,84 @@ func TestGetTopicForDDL(t *testing.T) {
 func TestTableRoutingDoesNotAffectDDLTopicMatching(t *testing.T) {
 	t.Parallel()
 
-	sinkConfig := &config.SinkConfig{
-		DispatchRules: []*config.DispatchRule{
-			{
-				Matcher:       []string{"source_db.*"},
-				PartitionRule: "table",
-				TopicRule:     "{schema}_topic",
+	tests := []struct {
+		name          string
+		sinkConfig    *config.SinkConfig
+		ddl           *event.DDLEvent
+		mutateRouted  func(*event.DDLEvent)
+		expectedTopic string
+	}{
+		{
+			name: "single table ddl",
+			sinkConfig: &config.SinkConfig{
+				DispatchRules: []*config.DispatchRule{
+					{
+						Matcher:       []string{"source_db.*"},
+						PartitionRule: "table",
+						TopicRule:     "{schema}_topic",
+					},
+					{
+						Matcher:       []string{"target_db.*"},
+						PartitionRule: "table",
+						TopicRule:     "target_topic",
+					},
+				},
 			},
-			{
-				Matcher:       []string{"target_db.*"},
-				PartitionRule: "table",
-				TopicRule:     "target_topic",
+			ddl: &event.DDLEvent{
+				SchemaName: "source_db",
+				TableName:  "orders",
+				Query:      "ALTER TABLE `source_db`.`orders` ADD COLUMN c INT",
 			},
+			mutateRouted: func(routedDDL *event.DDLEvent) {
+				routedDDL.SchemaName = "target_db"
+				routedDDL.TableName = "orders_routed"
+				routedDDL.Query = "ALTER TABLE `target_db`.`orders_routed` ADD COLUMN c INT"
+			},
+			expectedTopic: "source_db_topic",
+		},
+		{
+			name: "rename ddl",
+			sinkConfig: &config.SinkConfig{
+				DispatchRules: []*config.DispatchRule{
+					{
+						Matcher:       []string{"source_db.orders_old"},
+						PartitionRule: "table",
+						TopicRule:     "{schema}_{table}_topic",
+					},
+					{
+						Matcher:       []string{"target_db.orders_old_routed"},
+						PartitionRule: "table",
+						TopicRule:     "target_topic",
+					},
+				},
+			},
+			ddl: &event.DDLEvent{
+				SchemaName:      "source_db",
+				TableName:       "orders_new",
+				ExtraSchemaName: "source_db",
+				ExtraTableName:  "orders_old",
+				Query:           "RENAME TABLE `source_db`.`orders_old` TO `source_db`.`orders_new`",
+			},
+			mutateRouted: func(routedDDL *event.DDLEvent) {
+				routedDDL.SchemaName = "target_db"
+				routedDDL.TableName = "orders_new_routed"
+				routedDDL.ExtraSchemaName = "target_db"
+				routedDDL.ExtraTableName = "orders_old_routed"
+				routedDDL.Query = "RENAME TABLE `target_db`.`orders_old_routed` TO `target_db`.`orders_new_routed`"
+			},
+			expectedTopic: "source_db_orders_old_topic",
 		},
 	}
 
-	d, err := NewEventRouter(sinkConfig, "default_topic", false, false)
-	require.NoError(t, err)
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			d, err := NewEventRouter(tc.sinkConfig, "default_topic", false, false)
+			require.NoError(t, err)
 
-	ddl := &commonEvent.DDLEvent{
-		SchemaName: "source_db",
-		TableName:  "orders",
-		Query:      "ALTER TABLE `source_db`.`orders` ADD COLUMN c INT",
+			routedDDL := tc.ddl.CloneForRouting()
+			tc.mutateRouted(routedDDL)
+			require.Equal(t, tc.expectedTopic, d.GetTopicForDDL(routedDDL))
+		})
 	}
-	routedDDL := ddl.CloneForRouting()
-	routedDDL.SchemaName = "target_db"
-	routedDDL.TableName = "orders_routed"
-	routedDDL.Query = "ALTER TABLE `target_db`.`orders_routed` ADD COLUMN c INT"
-
-	require.Equal(t, "source_db_topic", d.GetTopicForDDL(routedDDL))
-}
-
-func TestTableRoutingDoesNotAffectRenameDDLTopicMatching(t *testing.T) {
-	t.Parallel()
-
-	sinkConfig := &config.SinkConfig{
-		DispatchRules: []*config.DispatchRule{
-			{
-				Matcher:       []string{"source_db.*"},
-				PartitionRule: "table",
-				TopicRule:     "{schema}_{table}_topic",
-			},
-			{
-				Matcher:       []string{"target_db.*"},
-				PartitionRule: "table",
-				TopicRule:     "target_topic",
-			},
-		},
-	}
-
-	d, err := NewEventRouter(sinkConfig, "default_topic", false, false)
-	require.NoError(t, err)
-
-	ddl := &commonEvent.DDLEvent{
-		SchemaName:      "source_db",
-		TableName:       "orders_new",
-		ExtraSchemaName: "source_db",
-		ExtraTableName:  "orders_old",
-		Query:           "RENAME TABLE `source_db`.`orders_old` TO `source_db`.`orders_new`",
-	}
-	routedDDL := ddl.CloneForRouting()
-	routedDDL.SchemaName = "target_db"
-	routedDDL.TableName = "orders_new_routed"
-	routedDDL.ExtraSchemaName = "target_db"
-	routedDDL.ExtraTableName = "orders_old_routed"
-	routedDDL.Query = "RENAME TABLE `target_db`.`orders_old_routed` TO `target_db`.`orders_new_routed`"
-
-	require.Equal(t, "source_db_orders_old_topic", d.GetTopicForDDL(routedDDL))
 }

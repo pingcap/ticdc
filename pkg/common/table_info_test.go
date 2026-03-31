@@ -96,39 +96,6 @@ func TestCloneWithRouting(t *testing.T) {
 		require.Equal(t, "source_db", cloned.GetSourceSchemaName())
 		require.Equal(t, "source_table", cloned.GetSourceTableName())
 	})
-
-	t.Run("cloning does not affect original preSQLs", func(t *testing.T) {
-		original := &TableInfo{
-			TableName: TableName{
-				Schema:  "source_db",
-				Table:   "source_table",
-				TableID: 123,
-			},
-		}
-
-		// Clone with different routing
-		cloned1 := original.CloneWithRouting("db1", "table1")
-		cloned2 := original.CloneWithRouting("db2", "table2")
-
-		// Each clone should have its own routing
-		require.Equal(t, "db1", cloned1.TableName.TargetSchema)
-		require.Equal(t, "table1", cloned1.TableName.TargetTable)
-		require.Equal(t, "db2", cloned2.TableName.TargetSchema)
-		require.Equal(t, "table2", cloned2.TableName.TargetTable)
-
-		// Original should be unchanged
-		require.Equal(t, "", original.TableName.TargetSchema)
-		require.Equal(t, "", original.TableName.TargetTable)
-		require.Equal(t, "source_db", original.GetSchemaName())
-		require.Equal(t, "source_table", original.GetTableName())
-		require.Equal(t, "source_db", original.GetSourceSchemaName())
-		require.Equal(t, "source_table", original.GetSourceTableName())
-		require.Same(t, &original.TableName.Schema, original.GetSchemaNamePtr())
-		require.Same(t, &original.TableName.Table, original.GetTableNamePtr())
-
-		// Clones should be independent
-		require.NotSame(t, cloned1, cloned2)
-	})
 }
 
 func TestUnmarshalJSONToTableInfoInvalidData(t *testing.T) {

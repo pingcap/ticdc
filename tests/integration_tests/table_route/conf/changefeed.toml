@@ -1,4 +1,4 @@
-# Changefeed configuration for sink routing integration test
+# Changefeed configuration for table route integration test
 # This tests schema and table routing for MySQL sinks
 
 [filter]

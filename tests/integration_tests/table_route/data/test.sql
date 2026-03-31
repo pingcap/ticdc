@@ -1,4 +1,4 @@
--- Test mixed DDL and DML operations for sink routing
+-- Test mixed DDL and DML operations for table route
 USE source_db;
 
 -- ============================================

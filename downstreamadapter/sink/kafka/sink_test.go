@@ -22,13 +22,13 @@ import (
 	"time"
 
 	"github.com/IBM/sarama/mocks"
-	"github.com/pingcap/errors"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/pkg/common"
-	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"github.com/pingcap/ticdc/utils/chann"
@@ -93,8 +93,8 @@ func newKafkaSinkForTestWithProducers(ctx context.Context,
 		statistics:    statistics,
 
 		checkpointChan: make(chan uint64, 16),
-		eventChan:      chann.NewUnlimitedChannelDefault[*commonEvent.DMLEvent](),
-		rowChan:        chann.NewUnlimitedChannelDefault[*commonEvent.MQRowEvent](),
+		eventChan:      chann.NewUnlimitedChannelDefault[*event.DMLEvent](),
+		rowChan:        chann.NewUnlimitedChannelDefault[*event.MQRowEvent](),
 
 		isNormal: atomic.NewBool(true),
 		ctx:      ctx,
@@ -209,7 +209,7 @@ func TestDMLProducerHeartbeat(t *testing.T) {
 }
 
 func TestKafkaSinkBasicFunctionality(t *testing.T) {
-	helper := commonEvent.NewEventTestHelper(t)
+	helper := event.NewEventTestHelper(t)
 	defer helper.Close()
 
 	helper.Tk().MustExec("use test")
@@ -218,33 +218,33 @@ func TestKafkaSinkBasicFunctionality(t *testing.T) {
 	require.NotNil(t, job)
 
 	var count atomic.Int64
-	ddlEvent := &commonEvent.DDLEvent{
+	ddlEvent := &event.DDLEvent{
 		Query:      job.Query,
 		SchemaName: job.SchemaName,
 		TableName:  job.TableName,
 		TableInfo:  common.WrapTableInfo(job.SchemaName, job.BinlogInfo.TableInfo),
 		FinishedTs: 1,
-		BlockedTables: &commonEvent.InfluencedTables{
-			InfluenceType: commonEvent.InfluenceTypeNormal,
+		BlockedTables: &event.InfluencedTables{
+			InfluenceType: event.InfluenceTypeNormal,
 			TableIDs:      []int64{0},
 		},
-		NeedAddedTables: []commonEvent.Table{{TableID: 1, SchemaID: 1}},
+		NeedAddedTables: []event.Table{{TableID: 1, SchemaID: 1}},
 		PostTxnFlushed: []func(){
 			func() { count.Add(1) },
 		},
 	}
 
-	ddlEvent2 := &commonEvent.DDLEvent{
+	ddlEvent2 := &event.DDLEvent{
 		Query:      job.Query,
 		SchemaName: job.SchemaName,
 		TableName:  job.TableName,
 		TableInfo:  common.WrapTableInfo(job.SchemaName, job.BinlogInfo.TableInfo),
 		FinishedTs: 4,
-		BlockedTables: &commonEvent.InfluencedTables{
-			InfluenceType: commonEvent.InfluenceTypeNormal,
+		BlockedTables: &event.InfluencedTables{
+			InfluenceType: event.InfluenceTypeNormal,
 			TableIDs:      []int64{0},
 		},
-		NeedAddedTables: []commonEvent.Table{{TableID: 1, SchemaID: 1}},
+		NeedAddedTables: []event.Table{{TableID: 1, SchemaID: 1}},
 		PostTxnFlushed: []func(){
 			func() { count.Add(1) },
 		},
@@ -287,7 +287,7 @@ func TestKafkaSinkBasicFunctionality(t *testing.T) {
 func TestCalculateKeyPartitionsUsesSourceIdentityForColumnSelector(t *testing.T) {
 	t.Parallel()
 
-	helper := commonEvent.NewEventTestHelper(t)
+	helper := event.NewEventTestHelper(t)
 	defer helper.Close()
 
 	helper.Tk().MustExec("create database source_db")
@@ -333,8 +333,8 @@ func TestCalculateKeyPartitionsUsesSourceIdentityForColumnSelector(t *testing.T)
 			columnSelector: selectors,
 			topicManager:   staticTopicManager{partitionNum: 4},
 		},
-		eventChan: chann.NewUnlimitedChannelDefault[*commonEvent.DMLEvent](),
-		rowChan:   chann.NewUnlimitedChannelDefault[*commonEvent.MQRowEvent](),
+		eventChan: chann.NewUnlimitedChannelDefault[*event.DMLEvent](),
+		rowChan:   chann.NewUnlimitedChannelDefault[*event.MQRowEvent](),
 	}
 
 	s.eventChan.Push(dmlEvent)

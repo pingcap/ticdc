@@ -1,16 +1,16 @@
 #!/bin/bash
 
 # [DESCRIPTION]:
-#   This test verifies that redo log replay works correctly with schema routing.
+#   This test verifies that redo log replay works correctly with table route.
 #   It tests the following scenario:
-#   1. Create a changefeed with redo log enabled AND schema routing (source_db -> target_db)
+#   1. Create a changefeed with redo log enabled AND table route (source_db -> target_db)
 #   2. Insert data into source_db.t1 in upstream
-#   3. Verify data flows to target_db.t1 in downstream (via schema routing)
+#   3. Verify data flows to target_db.t1 in downstream (via table route)
 #   4. Restart CDC with MySQLSinkHangLongTime failpoint to block sink writes
 #   5. Insert more data (goes to redo logs but NOT to downstream due to failpoint)
 #   6. Wait for redo logs to catch up, then stop CDC
 #   7. Use `cdc redo apply` to replay redo logs
-#   8. Verify all data is replayed to target_db.t1 (schema routing preserved in redo logs)
+#   8. Verify all data is replayed to target_db.t1 (table route preserved in redo logs)
 #   9. Restart CDC without failpoint and verify normal replication resumes
 
 set -euo pipefail
@@ -21,7 +21,7 @@ WORK_DIR=$OUT_DIR/$TEST_NAME
 CDC_BINARY=cdc.test
 SINK_TYPE=$1
 
-REDO_DIR="/tmp/tidb_cdc_test/redo_apply_schema_routing/redo"
+REDO_DIR="/tmp/tidb_cdc_test/redo_apply_table_route/redo"
 SQL_RES_FILE="$OUT_DIR/$TEST_NAME/sql_res.$TEST_NAME.log"
 
 function cleanup_redo_dir() {
@@ -53,7 +53,7 @@ function run() {
 	run_sql "CREATE TABLE source_db.t1 (id INT PRIMARY KEY, val VARCHAR(255));" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 
 	# Create TARGET database and table in downstream (where data should be routed to)
-	# The schema routing rule routes source_db.* -> target_db.*
+	# The table route rule routes source_db.* -> target_db.*
 	run_sql "CREATE DATABASE IF NOT EXISTS target_db;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 	run_sql "CREATE TABLE target_db.t1 (id INT PRIMARY KEY, val VARCHAR(255));" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 
@@ -69,7 +69,7 @@ function run() {
 	SINK_URI="mysql://root@127.0.0.1:3306/"
 	changefeedid="redo-schema-routing-test"
 
-	# Create changefeed with redo log AND schema routing enabled
+	# Create changefeed with redo log AND table route enabled
 	cdc_cli_changefeed create \
 		--start-ts=$start_ts \
 		--sink-uri="$SINK_URI" \
@@ -85,8 +85,8 @@ function run() {
 	# Wait for data to be replicated
 	sleep 10
 
-	# Verify data arrived in TARGET database (not source database) via schema routing
-	echo "Verifying schema routing during normal replication..."
+	# Verify data arrived in TARGET database (not source database) via table route
+	echo "Verifying table route during normal replication..."
 	run_sql "SELECT COUNT(*) as cnt FROM source_db.t1;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	upstream_count=$(get_sql_count)
 	run_sql "SELECT COUNT(*) as cnt FROM target_db.t1;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
@@ -169,8 +169,8 @@ function run() {
 
 	echo "Redo apply completed"
 
-	# Verify schema routing was preserved through redo replay
-	echo "Verifying schema routing after redo replay..."
+	# Verify table route was preserved through redo replay
+	echo "Verifying table route after redo replay..."
 
 	# Get expected count from upstream (should be 100 now: 50 original + 50 during failpoint)
 	run_sql "SELECT COUNT(*) as cnt FROM source_db.t1;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}

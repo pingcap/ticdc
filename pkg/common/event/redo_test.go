@@ -16,7 +16,7 @@ package event
 import (
 	"testing"
 
-	commonType "github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/stretchr/testify/require"
 )
@@ -65,7 +65,7 @@ func TestRedoDDLEventToDDLEventPreservesCanonicalTargetNames(t *testing.T) {
 			Query:    "ALTER TABLE `target_db`.`target_table` ADD COLUMN age INT",
 		},
 		Type: byte(model.ActionAddColumn),
-		TableName: commonType.TableName{
+		TableName: common.TableName{
 			Schema:       "source_db",
 			Table:        "source_table",
 			TargetSchema: "target_db",

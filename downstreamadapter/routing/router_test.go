@@ -115,6 +115,41 @@ func TestNewRouter(t *testing.T) {
 		require.Equal(t, errors.ErrInvalidTableRoutingRule.RFCCode(), code)
 		require.Nil(t, router)
 	})
+
+	t.Run("builds router from rules with target fields and ignores pure dispatch rules", func(t *testing.T) {
+		t.Parallel()
+
+		router, err := NewRouter(true, []*config.DispatchRule{
+			{
+				Matcher:        []string{"db1.*"},
+				DispatcherRule: "ts",
+			},
+			{
+				Matcher:      []string{"db2.*"},
+				TargetSchema: "archive",
+				TargetTable:  TablePlaceholder,
+			},
+			{
+				Matcher:      []string{"db3.users"},
+				TargetSchema: SchemaPlaceholder,
+				TargetTable:  "users_bak",
+			},
+		})
+		require.NoError(t, err)
+		require.NotNil(t, router)
+
+		schema, table := router.Route("db1", "orders")
+		require.Equal(t, "db1", schema)
+		require.Equal(t, "orders", table)
+
+		schema, table = router.Route("db2", "orders")
+		require.Equal(t, "archive", schema)
+		require.Equal(t, "orders", table)
+
+		schema, table = router.Route("db3", "users")
+		require.Equal(t, "db3", schema)
+		require.Equal(t, "users_bak", table)
+	})
 }
 
 func TestRouterRoute(t *testing.T) {
@@ -227,52 +262,5 @@ func TestRouterCaseSensitivity(t *testing.T) {
 		schema, table := router.Route("mydb", "MyTable")
 		require.Equal(t, "backup_mydb", schema)
 		require.Equal(t, "MyTable", table)
-	})
-}
-
-func TestNewRouterUsesDispatchRules(t *testing.T) {
-	t.Parallel()
-
-	t.Run("nil config returns nil router", func(t *testing.T) {
-		t.Parallel()
-
-		router, err := NewRouter(true, nil)
-		require.NoError(t, err)
-		require.Nil(t, router)
-	})
-
-	t.Run("builds router from rules with target fields and ignores pure dispatch rules", func(t *testing.T) {
-		t.Parallel()
-
-		router, err := NewRouter(true, []*config.DispatchRule{
-			{
-				Matcher:        []string{"db1.*"},
-				DispatcherRule: "ts",
-			},
-			{
-				Matcher:      []string{"db2.*"},
-				TargetSchema: "archive",
-				TargetTable:  TablePlaceholder,
-			},
-			{
-				Matcher:      []string{"db3.users"},
-				TargetSchema: SchemaPlaceholder,
-				TargetTable:  "users_bak",
-			},
-		})
-		require.NoError(t, err)
-		require.NotNil(t, router)
-
-		schema, table := router.Route("db1", "orders")
-		require.Equal(t, "db1", schema)
-		require.Equal(t, "orders", table)
-
-		schema, table = router.Route("db2", "orders")
-		require.Equal(t, "archive", schema)
-		require.Equal(t, "orders", table)
-
-		schema, table = router.Route("db3", "users")
-		require.Equal(t, "db3", schema)
-		require.Equal(t, "users_bak", table)
 	})
 }

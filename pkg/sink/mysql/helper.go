@@ -25,11 +25,10 @@ import (
 
 	"github.com/coreos/go-semver/semver"
 	dmysql "github.com/go-sql-driver/mysql"
-	"github.com/pingcap/errors"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
-	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/retry"
 	"github.com/pingcap/tidb/br/pkg/version"
 	"github.com/pingcap/tidb/dumpling/export"
@@ -206,7 +205,7 @@ func checkTiDBVariable(db *sql.DB, variableName, defaultValue string) (string, e
 	err := db.QueryRowContext(context.Background(), querySQL).Scan(&name, &value)
 	if err != nil && err != sql.ErrNoRows {
 		errMsg := "fail to query session variable " + variableName
-		return "", cerror.ErrMySQLQueryError.Wrap(err).GenWithStack(errMsg)
+		return "", errors.ErrMySQLQueryError.Wrap(err).GenWithStack(errMsg)
 	}
 	// session variable works, use given default value
 	if err == nil {
@@ -310,7 +309,7 @@ func checkCharsetSupport(db *sql.DB, charsetName string) (bool, error) {
 		"where character_set_name = '" + charsetName + "';"
 	err = db.QueryRowContext(context.Background(), querySQL).Scan(&characterSetName)
 	if err != nil && err != sql.ErrNoRows {
-		return false, cerror.WrapError(cerror.ErrMySQLQueryError, err)
+		return false, errors.WrapError(errors.ErrMySQLQueryError, err)
 	}
 	if err != nil {
 		return false, nil
@@ -344,7 +343,7 @@ func GenerateDSN(ctx context.Context, cfg *Config) (string, error) {
 
 	cfg.IsTiDB = CheckIsTiDB(ctx, testDB)
 	if cfg.EnableActiveActive && !cfg.IsTiDB {
-		return "", cerror.ErrMySQLInvalidConfig.GenWithStack(
+		return "", errors.ErrMySQLInvalidConfig.GenWithStack(
 			"enable-active-active requires downstream TiDB")
 	}
 
@@ -391,7 +390,7 @@ func GenerateDSN(ctx context.Context, cfg *Config) (string, error) {
 func CreateMysqlDBConn(dsnStr string) (*sql.DB, error) {
 	db, err := sql.Open("mysql", dsnStr)
 	if err != nil {
-		return nil, cerror.ErrMySQLConnectionError.Wrap(err).GenWithStack("fail to open MySQL connection")
+		return nil, errors.ErrMySQLConnectionError.Wrap(err).GenWithStack("fail to open MySQL connection")
 	}
 
 	err = db.PingContext(context.Background())
@@ -400,16 +399,16 @@ func CreateMysqlDBConn(dsnStr string) (*sql.DB, error) {
 		if closeErr := db.Close(); closeErr != nil {
 			log.Warn("close db failed", zap.Error(err))
 		}
-		return nil, cerror.ErrMySQLConnectionError.Wrap(err).GenWithStack("fail to open MySQL connection")
+		return nil, errors.ErrMySQLConnectionError.Wrap(err).GenWithStack("fail to open MySQL connection")
 	}
 	return db, nil
 }
 
-func needSwitchDB(event *commonEvent.DDLEvent) bool {
-	if len(event.GetDDLSchemaName()) == 0 {
+func needSwitchDB(ddlEvent *event.DDLEvent) bool {
+	if len(ddlEvent.GetDDLSchemaName()) == 0 {
 		return false
 	}
-	if event.GetDDLType() == timodel.ActionCreateSchema || event.GetDDLType() == timodel.ActionDropSchema {
+	if ddlEvent.GetDDLType() == timodel.ActionCreateSchema || ddlEvent.GetDDLType() == timodel.ActionDropSchema {
 		return false
 	}
 	return true
@@ -452,7 +451,7 @@ func getCheckRunningAddIndexSQL(cfg *Config) string {
 }
 
 func isRetryableDMLError(err error) bool {
-	if !cerror.IsRetryableError(err) {
+	if !errors.IsRetryableError(err) {
 		return false
 	}
 
@@ -484,7 +483,7 @@ func queryMaxPreparedStmtCount(ctx context.Context, db *sql.DB) (int, error) {
 	var maxPreparedStmtCount sql.NullInt32
 	err := row.Scan(&maxPreparedStmtCount)
 	if err != nil {
-		err = cerror.WrapError(cerror.ErrMySQLQueryError, err)
+		err = errors.WrapError(errors.ErrMySQLQueryError, err)
 	}
 	return int(maxPreparedStmtCount.Int32), err
 }
@@ -494,7 +493,7 @@ func queryMaxAllowedPacket(ctx context.Context, db *sql.DB) (int64, error) {
 	row := db.QueryRowContext(ctx, "select @@global.max_allowed_packet;")
 	var maxAllowedPacket sql.NullInt64
 	if err := row.Scan(&maxAllowedPacket); err != nil {
-		return 0, cerror.WrapError(cerror.ErrMySQLQueryError, err)
+		return 0, errors.WrapError(errors.ErrMySQLQueryError, err)
 	}
 	return maxAllowedPacket.Int64, nil
 }
@@ -626,16 +625,16 @@ func formatUnixTimestamp(unixTimestamp float64) string {
 	return strconv.FormatFloat(unixTimestamp, 'f', 6, 64)
 }
 
-func ddlSessionTimestampFromOriginDefault(event *commonEvent.DDLEvent, timezone string) (float64, bool) {
-	if event == nil || event.TableInfo == nil {
+func ddlSessionTimestampFromOriginDefault(ddlEvent *event.DDLEvent, timezone string) (float64, bool) {
+	if ddlEvent == nil || ddlEvent.TableInfo == nil {
 		return 0, false
 	}
-	targetColumns, err := extractCurrentTimestampDefaultColumns(event.GetDDLQuery())
+	targetColumns, err := extractCurrentTimestampDefaultColumns(ddlEvent.GetDDLQuery())
 	if err != nil || len(targetColumns) == 0 {
 		return 0, false
 	}
 
-	for _, col := range event.TableInfo.GetColumns() {
+	for _, col := range ddlEvent.TableInfo.GetColumns() {
 		if _, ok := targetColumns[col.Name.L]; !ok {
 			continue
 		}
