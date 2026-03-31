@@ -20,6 +20,7 @@ import (
 	sinkmock "github.com/pingcap/ticdc/downstreamadapter/sink/mock"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
 )
 
@@ -119,4 +120,25 @@ func TestDispatcherManagerRedoBatchConfigUsesRedoSinkDefaults(t *testing.T) {
 	redoCount, redoBytes := m.getEventCollectorBatchCountAndBytes(redoSink)
 	require.Equal(t, 4096, redoCount)
 	require.Equal(t, 32<<20, redoBytes)
+}
+
+func TestDispatcherManagerRedoBatchConfigOverridePrecedence(t *testing.T) {
+	m := &DispatcherManager{
+		config: &config.ChangefeedConfig{
+			EventCollectorBatchCount: 111,
+			Consistent: &config.ConsistentConfig{
+				EventCollectorBatchCount: util.AddressOf(222),
+			},
+		},
+	}
+
+	redoSink := newBatchConfigSink(t, common.BlackHoleSinkType, 4096, 32<<20)
+
+	redoCount, redoBytes := m.getRedoEventCollectorBatchCountAndBytes(redoSink)
+	require.Equal(t, 222, redoCount)
+	require.Equal(t, 32<<20, redoBytes)
+
+	normalCount, normalBytes := m.getEventCollectorBatchCountAndBytes(redoSink)
+	require.Equal(t, 111, normalCount)
+	require.Equal(t, 32<<20, normalBytes)
 }

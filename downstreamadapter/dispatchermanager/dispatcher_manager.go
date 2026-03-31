@@ -340,6 +340,14 @@ func (e *DispatcherManager) getEventCollectorBatchCountAndBytes(s sink.Sink) (in
 	return batchCount, batchBytes
 }
 
+func (e *DispatcherManager) getRedoEventCollectorBatchCountAndBytes(s sink.Sink) (int, int) {
+	batchCount, batchBytes := e.getEventCollectorBatchCountAndBytes(s)
+	if e.config.Consistent != nil && e.config.Consistent.EventCollectorBatchCount != nil {
+		batchCount = *e.config.Consistent.EventCollectorBatchCount
+	}
+	return batchCount, batchBytes
+}
+
 func (e *DispatcherManager) NewTableTriggerEventDispatcher(id *heartbeatpb.DispatcherID, startTs uint64, newChangefeed bool) error {
 	if e.GetTableTriggerEventDispatcher() != nil {
 		return errors.ErrChangefeedInitTableTriggerDispatcherFailed.FastGenByArgs("table trigger event dispatcher existed!")
