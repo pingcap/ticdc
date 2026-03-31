@@ -73,9 +73,7 @@ func Verify(ctx context.Context, changefeedID commonType.ChangeFeedID, uri *url.
 	return err
 }
 
-func New(
-	ctx context.Context, changefeedID commonType.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig,
-) (*sink, error) {
+func New(ctx context.Context, changefeedID commonType.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig) (*sink, error) {
 	comp, protocol, err := newKafkaSinkComponent(ctx, changefeedID, sinkURI, sinkConfig)
 	if err != nil {
 		return nil, errors.Trace(err)
@@ -213,8 +211,8 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 					zap.String("changefeed", s.changefeedID.Name()))
 				return nil
 			}
-			schema := event.TableInfo.GetSchemaName()
-			table := event.TableInfo.GetTableName()
+			schema := event.TableInfo.GetSourceSchemaName()
+			table := event.TableInfo.GetSourceTableName()
 			topic := s.comp.eventRouter.GetTopicForRowChange(schema, table)
 			partitionNum, err := s.comp.topicManager.GetPartitionNum(ctx, topic)
 			if err != nil {

@@ -45,7 +45,7 @@ func (r *IndexValuePartitionGenerator) GeneratePartitionIndexAndKey(
 	r.lock.Lock()
 	defer r.lock.Unlock()
 	r.hasher.Reset()
-	r.hasher.Write([]byte(tableInfo.GetSchemaName()), []byte(tableInfo.GetTableName()))
+	r.hasher.Write([]byte(tableInfo.GetSourceSchemaName()), []byte(tableInfo.GetSourceTableName()))
 
 	rowData := row.Row
 	if rowData.IsEmpty() {
@@ -70,10 +70,10 @@ func (r *IndexValuePartitionGenerator) GeneratePartitionIndexAndKey(
 		names, offsets, ok := tableInfo.IndexByName(r.IndexName)
 		if !ok {
 			log.Error("index not found when dispatch event",
-				zap.Any("tableName", tableInfo.GetTableName()),
+				zap.Any("tableName", tableInfo.GetSourceTableName()),
 				zap.String("indexName", r.IndexName))
 			return 0, "", errors.ErrDispatcherFailed.GenWithStack(
-				"index not found when dispatch event, table: %v, index: %s", tableInfo.GetTableName(), r.IndexName)
+				"index not found when dispatch event, table: %v, index: %s", tableInfo.GetSourceTableName(), r.IndexName)
 		}
 		for idx := 0; idx < len(names); idx++ {
 			colInfo := tableInfo.GetColumns()[offsets[idx]]
