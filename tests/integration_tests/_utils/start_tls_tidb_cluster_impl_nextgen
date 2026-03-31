@@ -68,6 +68,15 @@ else
 	echo "Bucket tls-cse-test already exists, skipping creation"
 fi
 
+echo "Checking TiKV version information..."
+tikvVersionInfo=$(tikv-server -V 2>&1)
+printf '%s\n' "$tikvVersionInfo"
+tikvGitCommitBranch=$(printf '%s\n' "$tikvVersionInfo" | sed -nE 's/^Git Commit Branch:[[:space:]]*([^[:space:]]+).*$/\1/p' | head -n 1)
+tikvNeedsCdcEnable=false
+if [ "$tikvGitCommitBranch" = "cloud-engine" ]; then
+	tikvNeedsCdcEnable=true
+fi
+
 # Tries to limit the max number of open files under the system limit
 cat - >"$OUT_DIR/tikv-config-tls.toml" <<EOF
 [storage]
@@ -93,6 +102,12 @@ ca-path = "$TLS_DIR/ca.pem"
 cert-path = "$TLS_DIR/server.pem"
 key-path = "$TLS_DIR/server-key.pem"
 EOF
+if [ "$tikvNeedsCdcEnable" = "true" ]; then
+	cat >>"$OUT_DIR/tikv-config-tls.toml" <<EOF
+[cdc]
+enable = true
+EOF
+fi
 
 cat >"$OUT_DIR/tikv-worker-tls.toml" <<EOF
 [dfs]
@@ -176,7 +191,6 @@ cluster-ssl-key = "$TLS_DIR/server-key.pem"
 EOF
 
 echo "Starting TLS TiKV..."
-tikv-server --version
 # Uncomment to turn on grpc versbose log.
 # GRPC_VERBOSITY=debug \
 # GRPC_TRACE=server_channel,call_error,handshaker,tsi \

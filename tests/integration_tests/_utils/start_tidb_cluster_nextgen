@@ -95,6 +95,15 @@ if [ -z "$OUT_DIR" ]; then
 	exit 1
 fi
 
+echo "Checking TiKV version information..."
+tikvVersionInfo=$(tikv-server -V 2>&1)
+printf '%s\n' "$tikvVersionInfo"
+tikvGitCommitBranch=$(printf '%s\n' "$tikvVersionInfo" | sed -nE 's/^Git Commit Branch:[[:space:]]*([^[:space:]]+).*$/\1/p' | head -n 1)
+tikvNeedsCdcEnable=false
+if [ "$tikvGitCommitBranch" = "cloud-engine" ]; then
+	tikvNeedsCdcEnable=true
+fi
+
 # start minio
 echo "Starting MinIO server..."
 mkdir -p "$TEST_DATA_DIR/minio"
@@ -221,6 +230,12 @@ lightweight-backup = true
 target-file-size = "512MB"
 wal-chunk-target-file-size = "128MB"
 EOF
+if [ "$tikvNeedsCdcEnable" = "true" ]; then
+	cat >>"$OUT_DIR/upstream-tikv.toml" <<EOF
+[cdc]
+enable = true
+EOF
+fi
 
 touch "$OUT_DIR/downstream-tikv.toml"
 if [ -f "$tikv_config" ]; then
@@ -249,7 +264,6 @@ EOF
 echo "Starting upstream TiKV..."
 mkdir -p "$TEST_DATA_DIR/upstream"
 mkdir -p "$OUT_DIR/log/upstream/tikv"
-tikv-server --version
 for idx in $(seq 1 3); do
 	host="UP_TIKV_HOST_$idx"
 	port="UP_TIKV_PORT_$idx"
@@ -269,7 +283,6 @@ done
 echo "Starting downstream TiKV..."
 mkdir -p "$TEST_DATA_DIR/downstream"
 mkdir -p "$OUT_DIR/log/downstream/tikv"
-tikv-server --version
 tikv-server \
 	--pd "${DOWN_PD_HOST}:${DOWN_PD_PORT}" \
 	-A "${DOWN_TIKV_HOST}:${DOWN_TIKV_PORT}" \
