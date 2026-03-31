@@ -260,6 +260,12 @@ lightweight-backup = true
 target-file-size = "512MB"
 wal-chunk-target-file-size = "128MB"
 EOF
+if [ "$tikvNeedsCdcEnable" = "true" ]; then
+	cat >>"$OUT_DIR/downstream-tikv.toml" <<EOF
+[cdc]
+enable = true
+EOF
+fi
 
 echo "Starting upstream TiKV..."
 mkdir -p "$TEST_DATA_DIR/upstream"
