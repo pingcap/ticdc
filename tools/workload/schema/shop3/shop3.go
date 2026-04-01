@@ -15,9 +15,7 @@ package shop3
 
 import (
 	cryptorand "crypto/rand"
-	"crypto/sha256"
 	"encoding/binary"
-	"encoding/hex"
 	"fmt"
 	"math/rand"
 	"strconv"
@@ -302,23 +300,37 @@ func buildPayload(seed uint64, channel byte, length int) string {
 		return ""
 	}
 
+	pattern := payloadPattern(seed, channel)
+	return repeatToLength(pattern, length)
+}
+
+func payloadPattern(seed uint64, channel byte) string {
+	var buf [32]byte
+	buf[0] = channel
+	buf[1] = '_'
+	n := 2 + copy(buf[2:], strconv.FormatUint(seed, 16))
+	buf[n] = '_'
+	n++
+	return string(buf[:n])
+}
+
+func repeatToLength(pattern string, length int) string {
+	if length <= 0 {
+		return ""
+	}
+	if len(pattern) >= length {
+		return pattern[:length]
+	}
+
 	var sb strings.Builder
 	sb.Grow(length)
-
-	var input [17]byte
-	binary.BigEndian.PutUint64(input[:8], seed)
-	input[8] = channel
-
-	for counter := uint64(0); sb.Len() < length; counter++ {
-		binary.BigEndian.PutUint64(input[9:], counter)
-		sum := sha256.Sum256(input[:])
-		chunk := hex.EncodeToString(sum[:])
+	for sb.Len() < length {
 		remaining := length - sb.Len()
-		if remaining >= len(chunk) {
-			sb.WriteString(chunk)
+		if remaining >= len(pattern) {
+			sb.WriteString(pattern)
 			continue
 		}
-		sb.WriteString(chunk[:remaining])
+		sb.WriteString(pattern[:remaining])
 	}
 	return sb.String()
 }
