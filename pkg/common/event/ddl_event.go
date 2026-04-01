@@ -22,6 +22,8 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser"
+	"github.com/pingcap/tidb/pkg/parser/ast"
 	"go.uber.org/zap"
 )
 
@@ -38,17 +40,25 @@ type DDLEvent struct {
 	// Type is the type of the DDL.
 	Type byte `json:"type"`
 	// SchemaID is from upstream job.SchemaID
-	SchemaID   int64  `json:"schema_id"`
+	SchemaID int64 `json:"schema_id"`
+	// SchemaName and TableName carry the origin upstream names.
 	SchemaName string `json:"schema_name"`
 	TableName  string `json:"table_name"`
-	// the following two fields are just used for RenameTable,
-	// they are the old schema/table name of the table
-	ExtraSchemaName string            `json:"extra_schema_name"`
-	ExtraTableName  string            `json:"extra_table_name"`
-	Query           string            `json:"query"`
-	TableInfo       *common.TableInfo `json:"-"`
-	StartTs         uint64            `json:"start_ts"`
-	FinishedTs      uint64            `json:"finished_ts"`
+	// TargetSchemaName and TargetTableName carry routed names for sink output paths.
+	// They are runtime-only fields and are not serialized.
+	TargetSchemaName string `json:"-"`
+	TargetTableName  string `json:"-"`
+	// ExtraSchemaName and ExtraTableName carry the origin old names for RenameTable.
+	ExtraSchemaName string `json:"extra_schema_name"`
+	ExtraTableName  string `json:"extra_table_name"`
+	// TargetExtraSchemaName and TargetExtraTableName carry routed old names for rename DDLs.
+	// They are runtime-only fields and are not serialized.
+	TargetExtraSchemaName string            `json:"-"`
+	TargetExtraTableName  string            `json:"-"`
+	Query                 string            `json:"query"`
+	TableInfo             *common.TableInfo `json:"-"`
+	StartTs               uint64            `json:"start_ts"`
+	FinishedTs            uint64            `json:"finished_ts"`
 	// The seq of the event. It is set by event service.
 	Seq uint64 `json:"seq"`
 	// The epoch of the event. It is set by event service.
@@ -201,6 +211,34 @@ func (d *DDLEvent) GetExtraTableName() string {
 	return d.ExtraTableName
 }
 
+func (d *DDLEvent) GetTargetSchemaName() string {
+	if d.TargetSchemaName != "" {
+		return d.TargetSchemaName
+	}
+	return d.SchemaName
+}
+
+func (d *DDLEvent) GetTargetTableName() string {
+	if d.TargetTableName != "" {
+		return d.TargetTableName
+	}
+	return d.TableName
+}
+
+func (d *DDLEvent) GetTargetExtraSchemaName() string {
+	if d.TargetExtraSchemaName != "" {
+		return d.TargetExtraSchemaName
+	}
+	return d.ExtraSchemaName
+}
+
+func (d *DDLEvent) GetTargetExtraTableName() string {
+	if d.TargetExtraTableName != "" {
+		return d.TargetExtraTableName
+	}
+	return d.ExtraTableName
+}
+
 // GetTableID returns the logic table ID of the event.
 // it returns 0 when there is no tableinfo
 func (d *DDLEvent) GetTableID() int64 {
@@ -230,18 +268,23 @@ func (d *DDLEvent) GetEvents() []*DDLEvent {
 		}
 		for i, info := range d.MultipleTableInfos {
 			event := &DDLEvent{
-				Version:    d.Version,
-				Type:       byte(t),
-				SchemaName: info.GetSchemaName(),
-				TableName:  info.GetTableName(),
-				TableInfo:  info,
-				Query:      queries[i],
-				StartTs:    d.StartTs,
-				FinishedTs: d.FinishedTs,
+				Version:          d.Version,
+				Type:             byte(t),
+				SchemaName:       info.GetSchemaName(),
+				TableName:        info.GetTableName(),
+				TargetSchemaName: info.GetTargetSchemaName(),
+				TargetTableName:  info.GetTargetTableName(),
+				TableInfo:        info,
+				Query:            queries[i],
+				StartTs:          d.StartTs,
+				FinishedTs:       d.FinishedTs,
 			}
 			if model.ActionType(d.Type) == model.ActionRenameTables {
 				event.ExtraSchemaName = d.TableNameChange.DropName[i].SchemaName
 				event.ExtraTableName = d.TableNameChange.DropName[i].TableName
+				targetExtraSchemaName, targetExtraTableName := extractRenameTargetExtraFromQuery(queries[i])
+				event.TargetExtraSchemaName = targetExtraSchemaName
+				event.TargetExtraTableName = targetExtraTableName
 			}
 			events = append(events, event)
 		}
@@ -249,6 +292,19 @@ func (d *DDLEvent) GetEvents() []*DDLEvent {
 	default:
 	}
 	return []*DDLEvent{d}
+}
+
+func extractRenameTargetExtraFromQuery(query string) (string, string) {
+	stmt, err := parser.New().ParseOneStmt(query, "", "")
+	if err != nil {
+		log.Panic("parse split rename query failed", zap.String("query", query), zap.Error(err))
+	}
+	renameStmt, ok := stmt.(*ast.RenameTableStmt)
+	if !ok || len(renameStmt.TableToTables) == 0 {
+		log.Panic("unexpected split rename query", zap.String("query", query), zap.Any("stmt", stmt))
+	}
+	oldTable := renameStmt.TableToTables[0].OldTable
+	return oldTable.Schema.O, oldTable.Name.O
 }
 
 func (d *DDLEvent) GetSeq() uint64 {
@@ -297,6 +353,13 @@ func (e *DDLEvent) GetDDLQuery() string {
 		return ""
 	}
 	return e.Query
+}
+
+func (e *DDLEvent) GetDDLSchemaName() string {
+	if e == nil {
+		return ""
+	}
+	return e.GetTargetSchemaName()
 }
 
 func (e *DDLEvent) GetDDLType() model.ActionType {
@@ -477,6 +540,45 @@ func (t *DDLEvent) GetSize() int64 {
 
 func (t *DDLEvent) IsPaused() bool {
 	return false
+}
+
+// CloneForRouting creates a shallow copy of the DDLEvent that can safely be mutated
+// for table-route purposes without affecting the original event.
+//
+// The clone shares most read-only fields with the original. Slice fields that can be
+// replaced independently downstream are copied so routing can update them without
+// mutating shared state.
+func (d *DDLEvent) CloneForRouting() *DDLEvent {
+	if d == nil {
+		return nil
+	}
+
+	// Create shallow copy
+	clone := *d
+
+	// PostTxnFlushed needs its own backing array to prevent potential races.
+	// Currently, DDL events arrive with nil PostTxnFlushed (callbacks are added
+	// downstream by basic_dispatcher.go), so append(nil, f) naturally creates a
+	// fresh slice. However, we make an explicit copy here for future-proofing:
+	// if any code path later adds callbacks before cloning, sharing the backing
+	// array could cause nondeterministic callback visibility or data races.
+	if d.PostTxnFlushed != nil {
+		clone.PostTxnFlushed = make([]func(), len(d.PostTxnFlushed))
+		copy(clone.PostTxnFlushed, d.PostTxnFlushed)
+	}
+
+	// MultipleTableInfos needs a new slice so each dispatcher can independently
+	// apply routing to its elements without affecting others
+	if d.MultipleTableInfos != nil {
+		clone.MultipleTableInfos = make([]*common.TableInfo, len(d.MultipleTableInfos))
+		copy(clone.MultipleTableInfos, d.MultipleTableInfos)
+	}
+
+	if d.BlockedTableNames != nil {
+		clone.BlockedTableNames = append([]SchemaTableName(nil), d.BlockedTableNames...)
+	}
+
+	return &clone
 }
 
 func (t *DDLEvent) Len() int32 {

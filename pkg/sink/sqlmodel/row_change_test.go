@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Inc.
+// Copyright 2024 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,6 +16,7 @@ package sqlmodel
 import (
 	"testing"
 
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/ddl"
@@ -23,13 +24,163 @@ import (
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/charset"
-	_ "github.com/pingcap/tidb/pkg/planner/core" // init expression.EvalSimpleAst related function
-	"github.com/pingcap/tiflow/dm/pkg/log"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 )
 
-func mockTableInfo(t *testing.T, sql string) *common.TableInfo {
+func TestGenSQLTableRoute(t *testing.T) {
+	sourceTableInfo := mockRouteTableInfo(t)
+
+	tests := []struct {
+		name            string
+		dmlType         DMLType
+		targetSchema    string
+		targetTable     string
+		preValues       []interface{}
+		postValues      []interface{}
+		expectedTableID string
+		expectedArgs    []interface{}
+		forbidden       string
+	}{
+		{
+			name:            "insert with full route",
+			dmlType:         DMLInsert,
+			targetSchema:    "target_db",
+			targetTable:     "target_table",
+			postValues:      []interface{}{int64(1), "test_value"},
+			expectedTableID: "`target_db`.`target_table`",
+			expectedArgs:    []interface{}{int64(1), "test_value"},
+			forbidden:       "`test`.`t`",
+		},
+		{
+			name:            "replace with full route",
+			dmlType:         DMLReplace,
+			targetSchema:    "target_db",
+			targetTable:     "target_table",
+			postValues:      []interface{}{int64(1), "test_value"},
+			expectedTableID: "`target_db`.`target_table`",
+			expectedArgs:    []interface{}{int64(1), "test_value"},
+			forbidden:       "`test`.`t`",
+		},
+		{
+			name:            "delete with full route",
+			dmlType:         DMLDelete,
+			targetSchema:    "target_db",
+			targetTable:     "target_table",
+			preValues:       []interface{}{int64(1), "test_value"},
+			expectedTableID: "`target_db`.`target_table`",
+			expectedArgs:    []interface{}{int64(1)},
+			forbidden:       "`test`.`t`",
+		},
+		{
+			name:            "update with full route",
+			dmlType:         DMLUpdate,
+			targetSchema:    "target_db",
+			targetTable:     "target_table",
+			preValues:       []interface{}{int64(1), "old_value"},
+			postValues:      []interface{}{int64(1), "new_value"},
+			expectedTableID: "`target_db`.`target_table`",
+			expectedArgs:    []interface{}{int64(1), "new_value", int64(1)},
+			forbidden:       "`test`.`t`",
+		},
+		{
+			name:            "update with schema only route",
+			dmlType:         DMLUpdate,
+			targetSchema:    "prod",
+			targetTable:     "users",
+			preValues:       []interface{}{int64(1), "alice"},
+			postValues:      []interface{}{int64(1), "bob"},
+			expectedTableID: "`prod`.`users`",
+			expectedArgs:    []interface{}{int64(1), "bob", int64(1)},
+			forbidden:       "`test`.`t`",
+		},
+		{
+			name:            "delete with table only route",
+			dmlType:         DMLDelete,
+			targetSchema:    "test",
+			targetTable:     "new_table",
+			preValues:       []interface{}{int64(1), "data"},
+			expectedTableID: "`test`.`new_table`",
+			expectedArgs:    []interface{}{int64(1)},
+			forbidden:       "`test`.`t`",
+		},
+		{
+			name:            "insert without route",
+			dmlType:         DMLInsert,
+			targetSchema:    sourceTableInfo.TableName.Schema,
+			targetTable:     sourceTableInfo.TableName.Table,
+			postValues:      []interface{}{int64(1), "test"},
+			expectedTableID: "`test`.`t`",
+			expectedArgs:    []interface{}{int64(1), "test"},
+		},
+		{
+			name:            "delete without route",
+			dmlType:         DMLDelete,
+			targetSchema:    sourceTableInfo.TableName.Schema,
+			targetTable:     sourceTableInfo.TableName.Table,
+			preValues:       []interface{}{int64(1), "test"},
+			expectedTableID: "`test`.`t`",
+			expectedArgs:    []interface{}{int64(1)},
+		},
+		{
+			name:            "update without route",
+			dmlType:         DMLUpdate,
+			targetSchema:    sourceTableInfo.TableName.Schema,
+			targetTable:     sourceTableInfo.TableName.Table,
+			preValues:       []interface{}{int64(1), "old"},
+			postValues:      []interface{}{int64(1), "new"},
+			expectedTableID: "`test`.`t`",
+			expectedArgs:    []interface{}{int64(1), "new", int64(1)},
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			tableInfo := sourceTableInfo
+			if tc.targetSchema != sourceTableInfo.TableName.Schema || tc.targetTable != sourceTableInfo.TableName.Table {
+				tableInfo = sourceTableInfo.CloneWithRouting(tc.targetSchema, tc.targetTable)
+			}
+
+			row := NewRowChange(
+				&tableInfo.TableName,
+				nil,
+				tc.preValues,
+				tc.postValues,
+				tableInfo,
+				nil,
+				nil,
+			)
+
+			sql, args := row.GenSQL(tc.dmlType)
+			require.Contains(t, sql, tc.expectedTableID)
+			require.Equal(t, tc.expectedArgs, args)
+			if tc.forbidden != "" {
+				require.NotContains(t, sql, tc.forbidden)
+			}
+		})
+	}
+}
+
+// TestTargetTableID verifies that TargetTableID returns the correct quoted target string
+func TestTargetTableID(t *testing.T) {
+	sourceTableInfo := mockRouteTableInfo(t)
+	routedTableInfo := sourceTableInfo.CloneWithRouting("target_db", "target_table")
+
+	row := NewRowChange(
+		&routedTableInfo.TableName,
+		nil,
+		nil,
+		[]interface{}{int64(1), "test"},
+		routedTableInfo,
+		nil,
+		nil,
+	)
+
+	require.Equal(t, "`target_db`.`target_table`", row.TargetTableID())
+}
+
+func mockTableInfoWithSchema(t *testing.T, schema, sql string) *common.TableInfo {
 	p := parser.New()
 	se := metabuild.NewContext()
 	node, err := p.ParseOneStmt(sql, "", "")
@@ -37,7 +188,15 @@ func mockTableInfo(t *testing.T, sql string) *common.TableInfo {
 	dbChs, dbColl := charset.GetDefaultCharsetAndCollate()
 	rawTi, err := ddl.BuildTableInfoWithStmt(se, node.(*ast.CreateTableStmt), dbChs, dbColl, nil)
 	require.NoError(t, err)
-	return common.WrapTableInfo("db", rawTi)
+	return common.WrapTableInfo(schema, rawTi)
+}
+
+func mockTableInfo(t *testing.T, sql string) *common.TableInfo {
+	return mockTableInfoWithSchema(t, "db", sql)
+}
+
+func mockRouteTableInfo(t *testing.T) *common.TableInfo {
+	return mockTableInfoWithSchema(t, "test", "CREATE TABLE t (id INT PRIMARY KEY, name VARCHAR(32))")
 }
 
 type dpanicSuite struct {
@@ -45,7 +204,7 @@ type dpanicSuite struct {
 }
 
 func (s *dpanicSuite) SetupSuite() {
-	err := log.InitLogger(&log.Config{Level: "debug"})
+	_, _, err := log.InitLogger(&log.Config{Level: "debug"})
 	s.NoError(err)
 }
 

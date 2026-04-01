@@ -18,9 +18,9 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter/partition"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter/topic"
 	"github.com/pingcap/ticdc/pkg/common"
-	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/util"
 	tableFilter "github.com/pingcap/tidb/pkg/util/table-filter"
 )
@@ -55,7 +55,7 @@ func NewEventRouter(
 	for _, ruleConfig := range ruleConfigs {
 		f, err := tableFilter.Parse(ruleConfig.Matcher)
 		if err != nil {
-			return nil, cerror.WrapError(cerror.ErrFilterRuleInvalid, err, ruleConfig.Matcher)
+			return nil, errors.WrapError(errors.ErrFilterRuleInvalid, err, ruleConfig.Matcher)
 		}
 		if !util.GetOrZero(sinkConfig.CaseSensitive) {
 			f = tableFilter.CaseInsensitive(f)
@@ -85,7 +85,7 @@ func (s *EventRouter) GetTopicForRowChange(schema, table string) string {
 }
 
 // GetTopicForDDL returns the target topic for DDL.
-func (s *EventRouter) GetTopicForDDL(ddl *commonEvent.DDLEvent) string {
+func (s *EventRouter) GetTopicForDDL(ddl *event.DDLEvent) string {
 	var schema, table string
 
 	if ddl.GetExtraSchemaName() != "" {
@@ -108,7 +108,7 @@ func (s *EventRouter) GetTopicForDDL(ddl *commonEvent.DDLEvent) string {
 
 // GetActiveTopics returns a list of the corresponding topics
 // for the tables that are actively synchronized.
-func (s *EventRouter) GetActiveTopics(activeTables []*commonEvent.SchemaTableName) []string {
+func (s *EventRouter) GetActiveTopics(activeTables []*event.SchemaTableName) []string {
 	topics := make([]string, 0, len(activeTables))
 	topicsMap := make(map[string]bool, len(activeTables))
 	for _, tableName := range activeTables {
@@ -163,14 +163,14 @@ func (s *EventRouter) VerifyTables(infos []*common.TableInfo) error {
 			if v.IndexName != "" {
 				index := table.GetIndex(v.IndexName)
 				if index == nil {
-					return cerror.ErrDispatcherFailed.GenWithStack(
+					return errors.ErrDispatcherFailed.GenWithStack(
 						"index not found when verify the table, table: %v, index: %s", table.TableName, v.IndexName)
 				}
 				// only allow the unique index to be set.
 				// For the non-unique index, if any column belongs to the index is updated,
 				// the event is not split, it may cause incorrect data consumption.
 				if !index.Unique {
-					return cerror.ErrDispatcherFailed.GenWithStack(
+					return errors.ErrDispatcherFailed.GenWithStack(
 						"index is not unique when verify the table, table: %v, index: %s", table.TableName, v.IndexName)
 				}
 			}

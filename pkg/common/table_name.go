@@ -26,14 +26,66 @@ type TableName struct {
 	// TableID is the logic table ID
 	TableID     int64 `toml:"tbl-id" msg:"tbl-id"`
 	IsPartition bool  `toml:"is-partition" msg:"is-partition"`
+
+	// TargetSchema and TargetTable is not empty if table routing enabled
+	TargetSchema string `toml:"target-db-name" msg:"target-db-name"`
+	TargetTable  string `toml:"target-tbl-name" msg:"target-tbl-name"`
 }
 
 // String implements fmt.Stringer interface.
 func (t TableName) String() string {
-	return fmt.Sprintf("%s.%s", t.Schema, t.Table)
+	return t.OriginString()
 }
 
-// QuoteString returns quoted full table name
+// OriginString returns the source schema.table string.
+func (t TableName) OriginString() string {
+	return fmt.Sprintf("%s.%s", t.GetOriginSchema(), t.GetOriginTable())
+}
+
+// QuoteString returns quoted full canonical table name.
 func (t TableName) QuoteString() string {
-	return QuoteSchema(t.Schema, t.Table)
+	return t.QuoteOriginString()
+}
+
+// QuoteOriginString returns quoted full source table name.
+func (t TableName) QuoteOriginString() string {
+	return QuoteSchema(t.GetOriginSchema(), t.GetOriginTable())
+}
+
+// GetOriginSchema returns the source schema name.
+func (t *TableName) GetOriginSchema() string {
+	return t.Schema
+}
+
+// GetOriginTable returns the source table name.
+func (t *TableName) GetOriginTable() string {
+	return t.Table
+}
+
+// GetTargetSchema returns the target schema name for routing.
+// If TargetSchema is empty, returns Schema.
+func (t *TableName) GetTargetSchema() string {
+	if t.TargetSchema != "" {
+		return t.TargetSchema
+	}
+	return t.Schema
+}
+
+// GetTargetTable returns the target table name for routing.
+// If TargetTable is empty, returns Table.
+func (t *TableName) GetTargetTable() string {
+	if t.TargetTable != "" {
+		return t.TargetTable
+	}
+	return t.Table
+}
+
+// TargetString returns the target schema.table string for routing.
+func (t TableName) TargetString() string {
+	return fmt.Sprintf("%s.%s", t.GetTargetSchema(), t.GetTargetTable())
+}
+
+// QuoteTargetString returns quoted full target table name for routing.
+func (t TableName) QuoteTargetString() string {
+	return QuoteSchema(t.GetTargetSchema(), t.GetTargetTable())
 }

@@ -77,6 +77,29 @@ func generateTableDef() (TableDefinition, *common.TableInfo) {
 	return def, tableInfo
 }
 
+func TestFromDDLEventUsesCanonicalTargetNames(t *testing.T) {
+	t.Parallel()
+
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	sourceDDL := helper.DDL2Event("create table test.t(id int primary key)")
+	require.NotNil(t, sourceDDL)
+
+	routedDDL := sourceDDL.CloneForRouting()
+	routedDDL.TargetSchemaName = "target_db"
+	routedDDL.TargetTableName = "target_table"
+	routedDDL.Query = "CREATE TABLE `target_db`.`target_table` (`id` INT PRIMARY KEY)"
+	routedDDL.TableInfo = sourceDDL.TableInfo.CloneWithRouting("target_db", "target_table")
+
+	var def TableDefinition
+	def.FromDDLEvent(routedDDL, false)
+	require.Equal(t, "target_db", def.Schema)
+	require.Equal(t, "target_table", def.Table)
+	require.Contains(t, def.Query, "`target_db`.`target_table`")
+}
+
 func TestTableCol(t *testing.T) {
 	t.Parallel()
 

@@ -338,8 +338,8 @@ func rowChangedEvent2CSVMsg(csvConfig *common.Config, e *event.RowEvent) (*csvMe
 
 	csvMsg := &csvMessage{
 		config:     csvConfig,
-		tableName:  e.TableInfo.GetTableName(),
-		schemaName: e.TableInfo.GetSchemaName(),
+		tableName:  e.TableInfo.GetTargetTableName(),
+		schemaName: e.TableInfo.GetTargetSchemaName(),
 		commitTs:   e.CommitTs,
 		newRecord:  true,
 	}

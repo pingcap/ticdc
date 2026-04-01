@@ -19,7 +19,6 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
-	commonTable "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -92,6 +91,49 @@ func TestEncodeFlag(t *testing.T) {
 	messageType, hasNext = decoder.HasNext()
 	require.False(t, hasNext)
 	require.Equal(t, common.MessageTypeUnknown, messageType)
+}
+
+func TestEncodeRoutedDMLEventUsesTargetNames(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	job := helper.DDL2Job(`create table test.t(id int primary key, name varchar(32))`)
+
+	dmlEvent := helper.DML2Event("test", "t", `insert into test.t values (1, 'a')`)
+	row, ok := dmlEvent.GetNextRow()
+	require.True(t, ok)
+
+	routedTableInfo := helper.GetTableInfo(job).CloneWithRouting("target_db", "target_table")
+	rowEvent := &commonEvent.RowEvent{
+		TableInfo:      routedTableInfo,
+		CommitTs:       dmlEvent.GetCommitTs(),
+		Event:          row,
+		ColumnSelector: columnselector.NewDefaultColumnSelector(),
+		Callback:       func() {},
+	}
+
+	ctx := context.Background()
+	codecConfig := common.NewConfig(config.ProtocolOpen)
+
+	encoder, err := NewBatchEncoder(ctx, codecConfig)
+	require.NoError(t, err)
+	require.NoError(t, encoder.AppendRowChangedEvent(ctx, "", rowEvent))
+
+	messages := encoder.Build()
+	require.Len(t, messages, 1)
+
+	decoder, err := NewDecoder(ctx, 0, codecConfig, nil)
+	require.NoError(t, err)
+	decoder.AddKeyValue(messages[0].Key, messages[0].Value)
+
+	messageType, hasNext := decoder.HasNext()
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeRow, messageType)
+
+	decoded := decoder.NextDMLEvent()
+	require.Equal(t, "target_db", decoded.TableInfo.GetSchemaName())
+	require.Equal(t, "target_table", decoded.TableInfo.GetTableName())
 }
 
 func TestIntegerTypes(t *testing.T) {
@@ -614,17 +656,8 @@ func TestCreateTableDDL(t *testing.T) {
 
 	helper.Tk().MustExec("use test")
 
-	job := helper.DDL2Job(`create table test.t(a tinyint primary key, b int)`)
-	require.NotNil(t, job)
-
-	ddlEvent := &commonEvent.DDLEvent{
-		Query:      job.Query,
-		Type:       byte(job.Type),
-		SchemaName: job.SchemaName,
-		TableName:  job.TableName,
-		TableInfo:  commonTable.WrapTableInfo(job.SchemaName, job.BinlogInfo.TableInfo),
-		FinishedTs: 1,
-	}
+	ddlEvent := helper.DDL2Event(`create table test.t(a tinyint primary key, b int)`)
+	require.NotNil(t, ddlEvent)
 
 	ctx := context.Background()
 	codecConfig := common.NewConfig(config.ProtocolOpen)
@@ -650,6 +683,45 @@ func TestCreateTableDDL(t *testing.T) {
 	require.Equal(t, ddlEvent.SchemaName, obtained.SchemaName)
 	require.Equal(t, ddlEvent.TableName, obtained.TableName)
 	require.Equal(t, ddlEvent.FinishedTs, obtained.FinishedTs)
+}
+
+func TestEncodeRoutedDDLEventUsesTargetNames(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+
+	sourceDDL := helper.DDL2Event(`create table test.t(a tinyint primary key, b int)`)
+	require.NotNil(t, sourceDDL)
+
+	routedDDL := sourceDDL.CloneForRouting()
+	routedDDL.TargetSchemaName = "target_db"
+	routedDDL.TargetTableName = "target_table"
+	routedDDL.Query = "CREATE TABLE `target_db`.`target_table` (`a` TINYINT PRIMARY KEY, `b` INT)"
+	routedDDL.TableInfo = sourceDDL.TableInfo.CloneWithRouting("target_db", "target_table")
+
+	ctx := context.Background()
+	codecConfig := common.NewConfig(config.ProtocolOpen)
+
+	encoder, err := NewBatchEncoder(ctx, codecConfig)
+	require.NoError(t, err)
+
+	message, err := encoder.EncodeDDLEvent(routedDDL)
+	require.NoError(t, err)
+
+	decoder, err := NewDecoder(ctx, 0, codecConfig, nil)
+	require.NoError(t, err)
+
+	decoder.AddKeyValue(message.Key, message.Value)
+
+	messageType, hasNext := decoder.HasNext()
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeDDL, messageType)
+
+	decoded := decoder.NextDDLEvent()
+	require.Equal(t, "target_db", decoded.SchemaName)
+	require.Equal(t, "target_table", decoded.TableName)
+	require.Contains(t, decoded.Query, "`target_db`.`target_table`")
 }
 
 func TestEncoderOneMessage(t *testing.T) {

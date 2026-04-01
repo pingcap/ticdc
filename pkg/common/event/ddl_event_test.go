@@ -21,6 +21,8 @@ import (
 
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -502,4 +504,193 @@ INSERT INTO test VALUES (1);
 			}
 		})
 	}
+}
+
+// TestDDLEventCloneForRouting tests the CloneForRouting method to ensure it properly
+// clones DDL events to avoid race conditions between multiple dispatchers
+func TestDDLEventCloneForRouting(t *testing.T) {
+	helper := NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.tk.MustExec("use test")
+	ddlJob := helper.DDL2Job(createTableSQL)
+	require.NotNil(t, ddlJob)
+
+	// Create original DDL event with all fields populated
+	originalTableInfo := common.WrapTableInfo(ddlJob.SchemaName, ddlJob.BinlogInfo.TableInfo)
+	originalTableInfo.InitPrivateFields()
+
+	multipleTableInfo1 := common.WrapTableInfo("schema1", ddlJob.BinlogInfo.TableInfo)
+	multipleTableInfo1.InitPrivateFields()
+	multipleTableInfo2 := common.WrapTableInfo("schema2", ddlJob.BinlogInfo.TableInfo)
+	multipleTableInfo2.InitPrivateFields()
+
+	postFlushFunc1 := func() {}
+	postFlushFunc2 := func() {}
+
+	original := &DDLEvent{
+		Version:            DDLEventVersion1,
+		DispatcherID:       common.NewDispatcherID(),
+		Type:               byte(ddlJob.Type),
+		SchemaID:           ddlJob.SchemaID,
+		SchemaName:         ddlJob.SchemaName,
+		TableName:          ddlJob.TableName,
+		Query:              ddlJob.Query,
+		TableInfo:          originalTableInfo,
+		FinishedTs:         ddlJob.BinlogInfo.FinishedTS,
+		Seq:                1,
+		Epoch:              2,
+		MultipleTableInfos: []*common.TableInfo{multipleTableInfo1, multipleTableInfo2},
+		PostTxnFlushed:     []func(){postFlushFunc1, postFlushFunc2},
+		TiDBOnly:           true,
+		BDRMode:            "test-mode",
+	}
+
+	// Clone the event
+	cloned := original.CloneForRouting()
+	require.NotNil(t, cloned)
+
+	// Verify that cloned is a separate object
+	require.False(t, original == cloned, "cloned event should be a different object")
+
+	// Verify that immutable fields are shared (shallow copy)
+	require.Equal(t, original.Version, cloned.Version)
+	require.Equal(t, original.DispatcherID, cloned.DispatcherID)
+	require.Equal(t, original.Type, cloned.Type)
+	require.Equal(t, original.SchemaID, cloned.SchemaID)
+	require.Equal(t, original.SchemaName, cloned.SchemaName)
+	require.Equal(t, original.TableName, cloned.TableName)
+	require.Equal(t, original.Query, cloned.Query)
+	require.Equal(t, original.FinishedTs, cloned.FinishedTs)
+	require.Equal(t, original.Seq, cloned.Seq)
+	require.Equal(t, original.Epoch, cloned.Epoch)
+	require.Equal(t, original.TiDBOnly, cloned.TiDBOnly)
+	require.Equal(t, original.BDRMode, cloned.BDRMode)
+
+	// Verify that TableInfo pointer is shared initially
+	require.True(t, original.TableInfo == cloned.TableInfo, "TableInfo should be shared initially")
+
+	// Verify that MultipleTableInfos is a new slice (but points to same TableInfo objects initially)
+	require.False(t, &original.MultipleTableInfos[0] == &cloned.MultipleTableInfos[0], "MultipleTableInfos should be a new slice")
+	require.True(t, original.MultipleTableInfos[0] == cloned.MultipleTableInfos[0], "MultipleTableInfos elements should be shared initially")
+	require.True(t, original.MultipleTableInfos[1] == cloned.MultipleTableInfos[1], "MultipleTableInfos elements should be shared initially")
+
+	// Verify that PostTxnFlushed is an independent copy (not shared)
+	// This is defensive: currently DDL events arrive with nil PostTxnFlushed,
+	// but we copy it to prevent races if callbacks are ever added before cloning.
+	require.NotNil(t, cloned.PostTxnFlushed)
+	require.Equal(t, 2, len(cloned.PostTxnFlushed), "PostTxnFlushed should have same length as original")
+	require.Equal(t, 2, len(original.PostTxnFlushed), "Original PostTxnFlushed should remain unchanged")
+	// Verify independent backing arrays - appending to clone should not affect original
+	require.NotEqual(t, &original.PostTxnFlushed[0], &cloned.PostTxnFlushed[0], "PostTxnFlushed should have independent backing arrays")
+
+	// Verify that appending to cloned PostTxnFlushed doesn't affect original
+	cloned.AddPostFlushFunc(func() {})
+	require.Equal(t, 3, len(cloned.PostTxnFlushed), "Clone should have appended callback")
+	require.Equal(t, 2, len(original.PostTxnFlushed), "Original should be unaffected by clone's append")
+
+	// Now simulate what happens during routing: mutate the cloned event
+	cloned.SchemaName = "routed_schema"
+	cloned.Query = "CREATE TABLE routed_schema.test ..."
+	newRoutedTableInfo := originalTableInfo.CloneWithRouting("routed_schema", "test")
+	cloned.TableInfo = newRoutedTableInfo
+	cloned.MultipleTableInfos[0] = multipleTableInfo1.CloneWithRouting("routed_schema1", "table1")
+	cloned.MultipleTableInfos[1] = multipleTableInfo2.CloneWithRouting("routed_schema2", "table2")
+
+	// Verify that mutations to cloned event don't affect the original
+	require.Equal(t, ddlJob.SchemaName, original.SchemaName, "Original SchemaName should be unchanged")
+	require.Equal(t, ddlJob.Query, original.Query, "Original Query should be unchanged")
+	require.True(t, original.TableInfo == originalTableInfo, "Original TableInfo should be unchanged")
+	require.True(t, original.MultipleTableInfos[0] == multipleTableInfo1, "Original MultipleTableInfos[0] should be unchanged")
+	require.True(t, original.MultipleTableInfos[1] == multipleTableInfo2, "Original MultipleTableInfos[1] should be unchanged")
+
+	// Verify that cloned event has the mutations
+	require.Equal(t, "routed_schema", cloned.TargetSchemaName)
+	require.Equal(t, "CREATE TABLE routed_schema.test ...", cloned.Query)
+	require.True(t, cloned.TableInfo == newRoutedTableInfo)
+	require.Equal(t, "routed_schema", cloned.TableInfo.TableName.TargetSchema)
+	require.Equal(t, original.SchemaName, cloned.GetSchemaName())
+	require.Equal(t, original.TableName, cloned.GetTableName())
+
+	// Test cloning nil event
+	var nilEvent *DDLEvent
+	clonedNil := nilEvent.CloneForRouting()
+	require.Nil(t, clonedNil)
+}
+
+func TestCloneForRoutingPreservesSourceFields(t *testing.T) {
+	original := &DDLEvent{
+		SchemaName:            "source_db",
+		TableName:             "new_orders",
+		ExtraSchemaName:       "source_db",
+		ExtraTableName:        "old_orders",
+		TargetSchemaName:      "target_db",
+		TargetTableName:       "new_orders_routed",
+		TargetExtraSchemaName: "target_db",
+		TargetExtraTableName:  "old_orders_routed",
+	}
+
+	cloned := original.CloneForRouting()
+	cloned.TargetSchemaName = "target_db_v2"
+	cloned.TargetTableName = "new_orders_routed_v2"
+	cloned.TargetExtraSchemaName = "target_db_v2"
+	cloned.TargetExtraTableName = "old_orders_routed_v2"
+
+	require.Equal(t, "source_db", cloned.GetSchemaName())
+	require.Equal(t, "new_orders", cloned.GetTableName())
+	require.Equal(t, "source_db", cloned.GetExtraSchemaName())
+	require.Equal(t, "old_orders", cloned.GetExtraTableName())
+	require.Equal(t, "target_db_v2", cloned.GetTargetSchemaName())
+	require.Equal(t, "new_orders_routed_v2", cloned.GetTargetTableName())
+	require.Equal(t, "target_db_v2", cloned.GetTargetExtraSchemaName())
+	require.Equal(t, "old_orders_routed_v2", cloned.GetTargetExtraTableName())
+}
+
+func TestGetEventsForRenameTablesPreservesSourceAndTargetNames(t *testing.T) {
+	sourceTable1 := common.WrapTableInfo("new_db1", &model.TableInfo{
+		ID:       100,
+		Name:     ast.NewCIStr("new_table1"),
+		UpdateTS: 10,
+	})
+	sourceTable2 := common.WrapTableInfo("new_db2", &model.TableInfo{
+		ID:       101,
+		Name:     ast.NewCIStr("new_table2"),
+		UpdateTS: 11,
+	})
+
+	ddl := &DDLEvent{
+		Type:  byte(model.ActionRenameTables),
+		Query: "RENAME TABLE `old_target_db1`.`old_target_table1` TO `new_target_db1`.`new_target_table1`; RENAME TABLE `old_target_db2`.`old_target_table2` TO `new_target_db2`.`new_target_table2`",
+		MultipleTableInfos: []*common.TableInfo{
+			sourceTable1.CloneWithRouting("new_target_db1", "new_target_table1"),
+			sourceTable2.CloneWithRouting("new_target_db2", "new_target_table2"),
+		},
+		TableNameChange: &TableNameChange{
+			DropName: []SchemaTableName{
+				{SchemaName: "old_db1", TableName: "old_table1"},
+				{SchemaName: "old_db2", TableName: "old_table2"},
+			},
+		},
+	}
+
+	events := ddl.GetEvents()
+	require.Len(t, events, 2)
+
+	require.Equal(t, "new_db1", events[0].SchemaName)
+	require.Equal(t, "new_table1", events[0].TableName)
+	require.Equal(t, "new_target_db1", events[0].TargetSchemaName)
+	require.Equal(t, "new_target_table1", events[0].TargetTableName)
+	require.Equal(t, "old_db1", events[0].ExtraSchemaName)
+	require.Equal(t, "old_table1", events[0].ExtraTableName)
+	require.Equal(t, "old_target_db1", events[0].TargetExtraSchemaName)
+	require.Equal(t, "old_target_table1", events[0].TargetExtraTableName)
+
+	require.Equal(t, "new_db2", events[1].SchemaName)
+	require.Equal(t, "new_table2", events[1].TableName)
+	require.Equal(t, "new_target_db2", events[1].TargetSchemaName)
+	require.Equal(t, "new_target_table2", events[1].TargetTableName)
+	require.Equal(t, "old_db2", events[1].ExtraSchemaName)
+	require.Equal(t, "old_table2", events[1].ExtraTableName)
+	require.Equal(t, "old_target_db2", events[1].TargetExtraSchemaName)
+	require.Equal(t, "old_target_table2", events[1].TargetExtraTableName)
 }

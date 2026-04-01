@@ -160,8 +160,8 @@ func (d *dmlWriters) addTasks(ctx context.Context) error {
 func (d *dmlWriters) addDMLEvent(event *commonEvent.DMLEvent) {
 	table := cloudstorage.VersionedTableName{
 		TableNameWithPhysicTableID: commonType.TableName{
-			Schema:      event.TableInfo.GetSchemaName(),
-			Table:       event.TableInfo.GetTableName(),
+			Schema:      event.TableInfo.GetTargetSchemaName(),
+			Table:       event.TableInfo.GetTargetTableName(),
 			TableID:     event.PhysicalTableID,
 			IsPartition: event.TableInfo.IsPartitionTable(),
 		},

@@ -46,5 +46,5 @@ func (t *TablePartitionGenerator) GeneratePartitionIndexAndKey(
 	t.hasher.Reset()
 	// distribute partition by table
 	t.hasher.Write([]byte(tableInfo.GetSchemaName()), []byte(tableInfo.GetTableName()))
-	return int32(t.hasher.Sum32() % uint32(partitionNum)), tableInfo.TableName.String(), nil
+	return int32(t.hasher.Sum32() % uint32(partitionNum)), tableInfo.TableName.OriginString(), nil
 }

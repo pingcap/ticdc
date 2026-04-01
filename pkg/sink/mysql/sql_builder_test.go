@@ -17,8 +17,7 @@ import (
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/ticdc/pkg/common/event"
-	pevent "github.com/pingcap/ticdc/pkg/common/event"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/stretchr/testify/require"
 )
 
@@ -101,8 +100,8 @@ var preInsertDataSQL = `insert into t values (
 	'测试', "中国", "上海", "你好,世界", 0xC4E3BAC3CAC0BDE7
 );`
 
-func getRowForTest(t testing.TB) (insert, delete, update pevent.RowChange, tableInfo *common.TableInfo) {
-	helper := pevent.NewEventTestHelper(t)
+func getRowForTest(t testing.TB) (insert, delete, update commonEvent.RowChange, tableInfo *common.TableInfo) {
+	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
 
 	helper.Tk().MustExec("use test")
@@ -123,7 +122,7 @@ func getRowForTest(t testing.TB) (insert, delete, update pevent.RowChange, table
 	update.PreRow = insert.Row
 	update.RowType = common.RowTypeUpdate
 
-	delete = pevent.RowChange{
+	delete = commonEvent.RowChange{
 		PreRow:  insert.Row,
 		RowType: common.RowTypeDelete,
 	}
@@ -183,7 +182,7 @@ func TestBuildInsert(t *testing.T) {
 }
 
 func TestBuildDelete(t *testing.T) {
-	helper := event.NewEventTestHelper(t)
+	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
 
 	helper.Tk().MustExec("use test")
@@ -301,7 +300,7 @@ func TestBuildDelete(t *testing.T) {
 }
 
 func TestBuildUpdate(t *testing.T) {
-	helper := event.NewEventTestHelper(t)
+	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
 
 	helper.Tk().MustExec("use test")
@@ -361,4 +360,121 @@ func TestBuildUpdate(t *testing.T) {
 	require.Equal(t, expectedSQL, sql)
 	require.Len(t, args, 5)
 	require.Equal(t, expectedArgs, args)
+}
+
+func TestBuildDMLTableRoute(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name            string
+		createTableSQL  string
+		insertSQL       string
+		updateSQL       string
+		sourceSchema    string
+		sourceTable     string
+		targetSchema    string
+		targetTable     string
+		expectedTableID string
+		forbidden       string
+	}{
+		{
+			name:            "full route",
+			createTableSQL:  "create table t (id int primary key, name varchar(32));",
+			insertSQL:       "insert into t values (1, 'test');",
+			updateSQL:       "update t set name = 'test2' where id = 1;",
+			sourceSchema:    "test",
+			sourceTable:     "t",
+			targetSchema:    "target_db",
+			targetTable:     "target_table",
+			expectedTableID: "`target_db`.`target_table`",
+			forbidden:       "`test`.`t`",
+		},
+		{
+			name:            "schema only route",
+			createTableSQL:  "create table users (id int primary key, name varchar(32));",
+			insertSQL:       "insert into users values (1, 'alice');",
+			updateSQL:       "update users set name = 'bob' where id = 1;",
+			sourceSchema:    "test",
+			sourceTable:     "users",
+			targetSchema:    "prod",
+			targetTable:     "users",
+			expectedTableID: "`prod`.`users`",
+			forbidden:       "`test`.`users`",
+		},
+		{
+			name:            "table only route",
+			createTableSQL:  "create table old_table (id int primary key, value varchar(32));",
+			insertSQL:       "insert into old_table values (1, 'data');",
+			updateSQL:       "update old_table set value = 'newdata' where id = 1;",
+			sourceSchema:    "test",
+			sourceTable:     "old_table",
+			targetSchema:    "test",
+			targetTable:     "new_table",
+			expectedTableID: "`test`.`new_table`",
+			forbidden:       "old_table",
+		},
+		{
+			name:            "no route",
+			createTableSQL:  "create table plain_table (id int primary key, name varchar(32));",
+			insertSQL:       "insert into plain_table values (1, 'test');",
+			updateSQL:       "update plain_table set name = 'test2' where id = 1;",
+			sourceSchema:    "test",
+			sourceTable:     "plain_table",
+			targetSchema:    "test",
+			targetTable:     "plain_table",
+			expectedTableID: "`test`.`plain_table`",
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			helper := commonEvent.NewEventTestHelper(t)
+			defer helper.Close()
+
+			helper.Tk().MustExec("use test")
+			job := helper.DDL2Job(tc.createTableSQL)
+			require.NotNil(t, job)
+
+			insertEvent := helper.DML2Event(tc.sourceSchema, tc.sourceTable, tc.insertSQL)
+			require.NotNil(t, insertEvent)
+
+			tableInfo := insertEvent.TableInfo
+			if tc.targetSchema != tc.sourceSchema || tc.targetTable != tc.sourceTable {
+				tableInfo = tableInfo.CloneWithRouting(tc.targetSchema, tc.targetTable)
+				tableInfo.InitPrivateFields()
+			}
+
+			insertRow, ok := insertEvent.GetNextRow()
+			require.True(t, ok)
+
+			sql, args := buildInsert(tableInfo, insertRow, false)
+			require.Contains(t, sql, "INSERT INTO "+tc.expectedTableID)
+			require.Len(t, args, 2)
+
+			sql, args = buildInsert(tableInfo, insertRow, true)
+			require.Contains(t, sql, "REPLACE INTO "+tc.expectedTableID)
+			require.Len(t, args, 2)
+
+			deleteRow := commonEvent.RowChange{
+				PreRow:  insertRow.Row,
+				RowType: common.RowTypeDelete,
+			}
+			sql, _ = buildDelete(tableInfo, deleteRow)
+			require.Contains(t, sql, "DELETE FROM "+tc.expectedTableID)
+
+			updateEvent := helper.DML2Event(tc.sourceSchema, tc.sourceTable, tc.updateSQL)
+			require.NotNil(t, updateEvent)
+			updateRow, ok := updateEvent.GetNextRow()
+			require.True(t, ok)
+			updateRow.PreRow = insertRow.Row
+			updateRow.RowType = common.RowTypeUpdate
+
+			sql, _ = buildUpdate(tableInfo, updateRow)
+			require.Contains(t, sql, "UPDATE "+tc.expectedTableID)
+			if tc.forbidden != "" {
+				require.NotContains(t, sql, tc.forbidden)
+			}
+		})
+	}
 }

@@ -23,7 +23,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/compression"
 	"github.com/pingcap/ticdc/pkg/config"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/stretchr/testify/require"
 )
@@ -198,6 +198,89 @@ func TestCanalJSONCompressionE2E(t *testing.T) {
 
 	decodedWatermark := decoder.NextResolvedEvent()
 	require.Equal(t, decodedWatermark, waterMark)
+}
+
+func TestEncodeRoutedDMLEventUsesTargetNames(t *testing.T) {
+	t.Parallel()
+
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	job := helper.DDL2Job(`create table test.t(id int primary key, name varchar(32))`)
+	require.NotNil(t, job)
+
+	dmlEvent := helper.DML2Event("test", "t", `insert into test.t values (1, 'alice')`)
+	row, ok := dmlEvent.GetNextRow()
+	require.True(t, ok)
+
+	routedTableInfo := helper.GetTableInfo(job).CloneWithRouting("target_db", "target_table")
+	ctx := context.Background()
+	codecConfig := common.NewConfig(config.ProtocolCanalJSON)
+
+	encIface, err := NewJSONRowEventEncoder(ctx, codecConfig)
+	require.NoError(t, err)
+	encoder := encIface.(*JSONRowEventEncoder)
+
+	require.NoError(t, encoder.AppendRowChangedEvent(ctx, "", &commonEvent.RowEvent{
+		TableInfo:      routedTableInfo,
+		CommitTs:       dmlEvent.CommitTs,
+		Event:          row,
+		ColumnSelector: columnselector.NewDefaultColumnSelector(),
+	}))
+
+	message := encoder.Build()[0]
+
+	decoder, err := NewDecoder(ctx, codecConfig, nil)
+	require.NoError(t, err)
+	decoder.AddKeyValue(message.Key, message.Value)
+
+	messageType, hasNext := decoder.HasNext()
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeRow, messageType)
+
+	decoded := dml2rowEvent(t, decoder.NextDMLEvent())
+	require.Equal(t, "target_db", decoded.TableInfo.GetSchemaName())
+	require.Equal(t, "target_table", decoded.TableInfo.GetTableName())
+}
+
+func TestEncodeRoutedDDLEventUsesTargetNames(t *testing.T) {
+	t.Parallel()
+
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	sourceDDL := helper.DDL2Event(`create table test.t(id int primary key)`)
+	require.NotNil(t, sourceDDL)
+
+	routedDDL := sourceDDL.CloneForRouting()
+	routedDDL.TargetSchemaName = "target_db"
+	routedDDL.TargetTableName = "target_table"
+	routedDDL.Query = "CREATE TABLE `target_db`.`target_table` (`id` INT PRIMARY KEY)"
+	routedDDL.TableInfo = sourceDDL.TableInfo.CloneWithRouting("target_db", "target_table")
+
+	ctx := context.Background()
+	codecConfig := common.NewConfig(config.ProtocolCanalJSON)
+	encIface, err := NewJSONRowEventEncoder(ctx, codecConfig)
+	require.NoError(t, err)
+	encoder := encIface.(*JSONRowEventEncoder)
+
+	message, err := encoder.EncodeDDLEvent(routedDDL)
+	require.NoError(t, err)
+
+	decoder, err := NewDecoder(ctx, codecConfig, nil)
+	require.NoError(t, err)
+	decoder.AddKeyValue(message.Key, message.Value)
+
+	messageType, hasNext := decoder.HasNext()
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeDDL, messageType)
+
+	decoded := decoder.NextDDLEvent()
+	require.Equal(t, "target_db", decoded.SchemaName)
+	require.Equal(t, "target_table", decoded.TableName)
+	require.Contains(t, decoded.Query, "`target_db`.`target_table`")
 }
 
 func TestCanalJSONClaimCheckE2E(t *testing.T) {
@@ -621,7 +704,7 @@ func TestMaxMessageBytes(t *testing.T) {
 		Event:          rc,
 		ColumnSelector: columnselector.NewDefaultColumnSelector(),
 	})
-	require.Error(t, err, cerror.ErrMessageTooLarge)
+	require.Error(t, err, errors.ErrMessageTooLarge)
 }
 
 func TestCanalJSONContentCompatibleE2E(t *testing.T) {
