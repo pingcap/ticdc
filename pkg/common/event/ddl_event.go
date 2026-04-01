@@ -199,7 +199,7 @@ func (d *DDLEvent) GetSchemaName() string {
 	return d.SchemaName
 }
 
-func (d *DDLEvent) GetSourceSchemaName() string {
+func (d *DDLEvent) GetOriginSchemaName() string {
 	return d.SchemaName
 }
 
@@ -207,7 +207,7 @@ func (d *DDLEvent) GetTableName() string {
 	return d.TableName
 }
 
-func (d *DDLEvent) GetSourceTableName() string {
+func (d *DDLEvent) GetOriginTableName() string {
 	return d.TableName
 }
 
@@ -215,7 +215,7 @@ func (d *DDLEvent) GetExtraSchemaName() string {
 	return d.ExtraSchemaName
 }
 
-func (d *DDLEvent) GetSourceExtraSchemaName() string {
+func (d *DDLEvent) GetOriginExtraSchemaName() string {
 	return d.ExtraSchemaName
 }
 
@@ -223,7 +223,7 @@ func (d *DDLEvent) GetExtraTableName() string {
 	return d.ExtraTableName
 }
 
-func (d *DDLEvent) GetSourceExtraTableName() string {
+func (d *DDLEvent) GetOriginExtraTableName() string {
 	return d.ExtraTableName
 }
 

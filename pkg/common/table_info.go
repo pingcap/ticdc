@@ -433,13 +433,13 @@ func (ti *TableInfo) GetTargetTableName() string {
 	return ti.TableName.GetTargetTable()
 }
 
-// GetSourceSchemaName returns the source schema name before routing.
-func (ti *TableInfo) GetSourceSchemaName() string {
+// GetOriginSchemaName returns the origin schema name before routing.
+func (ti *TableInfo) GetOriginSchemaName() string {
 	return ti.TableName.GetOriginSchema()
 }
 
-// GetSourceTableName returns the source table name before routing.
-func (ti *TableInfo) GetSourceTableName() string {
+// GetOriginTableName returns the origin table name before routing.
+func (ti *TableInfo) GetOriginTableName() string {
 	return ti.TableName.GetOriginTable()
 }
 

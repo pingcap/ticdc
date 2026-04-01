@@ -53,8 +53,8 @@ func TestRedoDMLEventToDMLEventPreservesSourceAndTargetNames(t *testing.T) {
 	require.Equal(t, "t", decoded.TableInfo.GetTableName())
 	require.Equal(t, "target_db", decoded.TableInfo.GetTargetSchemaName())
 	require.Equal(t, "target_table", decoded.TableInfo.GetTargetTableName())
-	require.Equal(t, "test", decoded.TableInfo.GetSourceSchemaName())
-	require.Equal(t, "t", decoded.TableInfo.GetSourceTableName())
+	require.Equal(t, "test", decoded.TableInfo.GetOriginSchemaName())
+	require.Equal(t, "t", decoded.TableInfo.GetOriginTableName())
 }
 
 func TestRedoDDLEventToDDLEventPreservesSourceAndTargetNames(t *testing.T) {
@@ -85,8 +85,8 @@ func TestRedoDDLEventToDDLEventPreservesSourceAndTargetNames(t *testing.T) {
 	require.Equal(t, "source_table", ddlEvent.TableInfo.GetTableName())
 	require.Equal(t, "target_db", ddlEvent.TableInfo.GetTargetSchemaName())
 	require.Equal(t, "target_table", ddlEvent.TableInfo.GetTargetTableName())
-	require.Equal(t, "source_db", ddlEvent.TableInfo.GetSourceSchemaName())
-	require.Equal(t, "source_table", ddlEvent.TableInfo.GetSourceTableName())
+	require.Equal(t, "source_db", ddlEvent.TableInfo.GetOriginSchemaName())
+	require.Equal(t, "source_table", ddlEvent.TableInfo.GetOriginTableName())
 	require.Equal(t, []SchemaTableName{{
 		SchemaName: "target_db",
 		TableName:  "target_table",
