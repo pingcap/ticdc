@@ -49,7 +49,7 @@ type DDLEvent struct {
 	ExtraTableName  string `json:"extra_table_name"`
 
 	// target related fields carry routed names for sink output paths.
-	// They are runtime-only fields and are not serialized.
+	// They are set after the unmarshal, so no need to be serialized.
 	targetSchemaName      string `json:"-"`
 	targetTableName       string `json:"-"`
 	targetExtraSchemaName string `json:"-"`
