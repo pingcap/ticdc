@@ -26,6 +26,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
 )
 
@@ -106,6 +107,32 @@ func (d *dispatcherConnState) clearRemoteCandidates() {
 	d.remoteCandidates = nil
 }
 
+type dispatcherEpochState struct {
+	epoch uint64
+	// lastEventSeq is the sequence number of the last received DML/DDL/Handshake
+	// event in this epoch.
+	lastEventSeq atomic.Uint64
+	// maxEventTs tracks the largest ts that the event collector has safely
+	// accepted in this epoch. Event service checkpoint heartbeats must not exceed
+	// it, otherwise a sink-side checkpoint jump could make event service skip data
+	// that has not reached the collector yet. Such checkpoint jumps are possible
+	// because reset only changes the upstream epoch. Old in-flight events that
+	// were already forwarded to the sink before reset may still finish
+	// asynchronously and advance target.GetCheckpointTs() after reset/handshake,
+	// even though the collector has not received the same progress from the new
+	// epoch yet.
+	maxEventTs atomic.Uint64
+}
+
+func newDispatcherEpochState(epoch uint64, lastEventSeq uint64, maxEventTs uint64) *dispatcherEpochState {
+	state := &dispatcherEpochState{
+		epoch: epoch,
+	}
+	state.lastEventSeq.Store(lastEventSeq)
+	state.maxEventTs.Store(maxEventTs)
+	return state
+}
+
 // dispatcherStat is a helper struct to manage the state of a dispatcher.
 type dispatcherStat struct {
 	target         dispatcher.DispatcherService
@@ -114,12 +141,7 @@ type dispatcherStat struct {
 
 	connState dispatcherConnState
 
-	// epoch is used to filter invalid events.
-	// It is incremented when the dispatcher is reset.
-	epoch atomic.Uint64
-	// lastEventSeq is the sequence number of the last received DML/DDL/Handshake event.
-	// It is used to ensure the order of events.
-	lastEventSeq atomic.Uint64
+	currentEpoch atomic.Pointer[dispatcherEpochState]
 	// lastEventCommitTs is the commitTs of the last received DDL/DML/SyncPoint events.
 	lastEventCommitTs atomic.Uint64
 	// gotDDLOnTS indicates whether a DDL event was received at the sentCommitTs.
@@ -143,9 +165,19 @@ func newDispatcherStat(
 		eventCollector: eventCollector,
 		readyCallback:  readyCallback,
 	}
-	stat.lastEventSeq.Store(0)
+	stat.currentEpoch.Store(newDispatcherEpochState(0, 0, target.GetStartTs()))
 	stat.lastEventCommitTs.Store(target.GetStartTs())
 	return stat
+}
+
+func (d *dispatcherStat) loadCurrentEpochState() *dispatcherEpochState {
+	state := d.currentEpoch.Load()
+	if state == nil {
+		log.Panic("dispatcher epoch state is not initialized",
+			zap.Stringer("changefeedID", d.target.GetChangefeedID()),
+			zap.Stringer("dispatcher", d.getDispatcherID()))
+	}
+	return state
 }
 
 func (d *dispatcherStat) run() {
@@ -181,8 +213,15 @@ func (d *dispatcherStat) reset(serverID node.ID) {
 }
 
 func (d *dispatcherStat) doReset(serverID node.ID, resetTs uint64) {
-	epoch := d.epoch.Add(1)
-	d.lastEventSeq.Store(0)
+	var epoch uint64
+	for {
+		currentState := d.loadCurrentEpochState()
+		nextState := newDispatcherEpochState(currentState.epoch+1, 0, resetTs)
+		if d.currentEpoch.CompareAndSwap(currentState, nextState) {
+			epoch = nextState.epoch
+			break
+		}
+	}
 	// remove the dispatcher from the dynamic stream
 	resetRequest := d.newDispatcherResetRequest(d.eventCollector.getLocalServerID().String(), resetTs, epoch)
 	msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, resetRequest)
@@ -234,11 +273,9 @@ func (d *dispatcherStat) getDispatcherID() common.DispatcherID {
 	return d.target.GetId()
 }
 
-// verifyEventSequence verifies if the event's sequence number is continuous with previous events.
-// Returns false if sequence is discontinuous (indicating dropped events), which requires dispatcher reset.
-func (d *dispatcherStat) verifyEventSequence(event dispatcher.DispatcherEvent) bool {
+func (d *dispatcherStat) verifyEventSequence(event dispatcher.DispatcherEvent, state *dispatcherEpochState) bool {
 	// check the invariant that handshake event is the first event of every epoch
-	if event.GetType() != commonEvent.TypeHandshakeEvent && d.lastEventSeq.Load() == 0 {
+	if event.GetType() != commonEvent.TypeHandshakeEvent && state.lastEventSeq.Load() == 0 {
 		log.Warn("receive non-handshake event before handshake event, reset the dispatcher",
 			zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 			zap.Stringer("dispatcher", d.getDispatcherID()),
@@ -257,10 +294,10 @@ func (d *dispatcherStat) verifyEventSequence(event dispatcher.DispatcherEvent) b
 			zap.Stringer("dispatcher", d.getDispatcherID()),
 			zap.String("eventType", commonEvent.TypeToString(event.GetType())),
 			zap.Uint64("receivedSeq", event.GetSeq()),
-			zap.Uint64("lastEventSeq", d.lastEventSeq.Load()),
+			zap.Uint64("lastEventSeq", state.lastEventSeq.Load()),
 			zap.Uint64("commitTs", event.GetCommitTs()))
 
-		lastEventSeq := d.lastEventSeq.Load()
+		lastEventSeq := state.lastEventSeq.Load()
 		expectedSeq := uint64(0)
 
 		// Resolved event's seq is the last concrete data event's seq.
@@ -268,7 +305,7 @@ func (d *dispatcherStat) verifyEventSequence(event dispatcher.DispatcherEvent) b
 			expectedSeq = lastEventSeq
 		} else {
 			// Other events' seq is the next sequence number.
-			expectedSeq = d.lastEventSeq.Add(1)
+			expectedSeq = state.lastEventSeq.Add(1)
 		}
 
 		if event.GetSeq() != expectedSeq {
@@ -289,16 +326,16 @@ func (d *dispatcherStat) verifyEventSequence(event dispatcher.DispatcherEvent) b
 				zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 				zap.Stringer("dispatcher", d.getDispatcherID()),
 				zap.Uint64("receivedSeq", e.Seq),
-				zap.Uint64("lastEventSeq", d.lastEventSeq.Load()),
+				zap.Uint64("lastEventSeq", state.lastEventSeq.Load()),
 				zap.Uint64("commitTs", e.CommitTs))
 
-			expectedSeq := d.lastEventSeq.Add(1)
+			expectedSeq := state.lastEventSeq.Add(1)
 			if e.Seq != expectedSeq {
 				log.Warn("receive an out-of-order batch DML event, reset the dispatcher",
 					zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 					zap.Stringer("dispatcher", d.getDispatcherID()),
 					zap.String("eventType", commonEvent.TypeToString(event.GetType())),
-					zap.Uint64("lastEventSeq", d.lastEventSeq.Load()),
+					zap.Uint64("lastEventSeq", state.lastEventSeq.Load()),
 					zap.Uint64("lastEventCommitTs", d.lastEventCommitTs.Load()),
 					zap.Uint64("receivedSeq", e.Seq),
 					zap.Uint64("expectedSeq", expectedSeq),
@@ -341,12 +378,18 @@ func (d *dispatcherStat) shouldForwardEventByCommitTs(event dispatcher.Dispatche
 	return true
 }
 
-func (d *dispatcherStat) updateCommitTsStateByEvents(events []dispatcher.DispatcherEvent) {
+func (d *dispatcherStat) observeCurrentEpochMaxEventTs(state *dispatcherEpochState, ts uint64) {
+	util.MustCompareAndMonotonicIncrease(&state.maxEventTs, ts)
+}
+
+func (d *dispatcherStat) updateCommitTsStateByEvents(state *dispatcherEpochState, events []dispatcher.DispatcherEvent) {
 	lastEventCommitTs := d.lastEventCommitTs.Load()
 	gotDDLOnTs := d.gotDDLOnTs.Load()
 	gotSyncpointOnTS := d.gotSyncpointOnTS.Load()
 
 	for _, event := range events {
+		d.observeCurrentEpochMaxEventTs(state, event.GetCommitTs())
+
 		if event.GetCommitTs() > lastEventCommitTs {
 			// if the commit ts is larger than the last sent commit ts,
 			// we need to reset the DDL and SyncPoint flags.
@@ -375,16 +418,16 @@ func (d *dispatcherStat) updateCommitTsStateByEvents(events []dispatcher.Dispatc
 	d.gotSyncpointOnTS.Store(gotSyncpointOnTS)
 }
 
-func (d *dispatcherStat) isFromCurrentEpoch(event dispatcher.DispatcherEvent) bool {
+func (d *dispatcherStat) isFromCurrentEpoch(event dispatcher.DispatcherEvent, state *dispatcherEpochState) bool {
 	if event.GetType() == commonEvent.TypeBatchDMLEvent {
 		batchDML := event.Event.(*commonEvent.BatchDMLEvent)
 		for _, dml := range batchDML.DMLEvents {
-			if dml.GetEpoch() != d.epoch.Load() {
+			if dml.GetEpoch() != state.epoch {
 				return false
 			}
 		}
 	}
-	return event.GetEpoch() == d.epoch.Load()
+	return event.GetEpoch() == state.epoch
 }
 
 // handleBatchDataEvents processes a batch of DML and Resolved events with the following algorithm:
@@ -399,8 +442,9 @@ func (d *dispatcherStat) isFromCurrentEpoch(event dispatcher.DispatcherEvent) bo
 // 3. Finally: Forward valid events to target with wake callback
 func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEvent) bool {
 	var validEvents []dispatcher.DispatcherEvent
+	state := d.loadCurrentEpochState()
 	for _, event := range events {
-		if !d.isFromCurrentEpoch(event) {
+		if !d.isFromCurrentEpoch(event, state) {
 			log.Debug("receive DML/Resolved event from a stale epoch, ignore it",
 				zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 				zap.Stringer("dispatcher", d.getDispatcherID()),
@@ -408,7 +452,7 @@ func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEve
 				zap.Any("event", event.Event))
 			continue
 		}
-		if !d.verifyEventSequence(event) {
+		if !d.verifyEventSequence(event, state) {
 			d.reset(d.connState.getEventServiceID())
 			return false
 		}
@@ -453,7 +497,7 @@ func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEve
 	if len(validEvents) == 0 {
 		return false
 	}
-	d.updateCommitTsStateByEvents(validEvents)
+	d.updateCommitTsStateByEvents(state, validEvents)
 	return d.target.HandleEvents(validEvents, func() { d.wake() })
 }
 
@@ -472,19 +516,20 @@ func (d *dispatcherStat) handleSingleDataEvents(events []dispatcher.DispatcherEv
 		log.Panic("should not happen: only one event should be sent for DDL/SyncPoint/Handshake event")
 	}
 	from := events[0].From
-	if !d.isFromCurrentEpoch(events[0]) {
+	state := d.loadCurrentEpochState()
+	if !d.isFromCurrentEpoch(events[0], state) {
 		log.Info("receive DDL/SyncPoint/Handshake event from a stale epoch, ignore it",
 			zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 			zap.Stringer("dispatcher", d.getDispatcherID()),
 			zap.String("eventType", commonEvent.TypeToString(events[0].GetType())),
 			zap.Any("event", events[0].Event),
 			zap.Uint64("eventEpoch", events[0].GetEpoch()),
-			zap.Uint64("dispatcherEpoch", d.epoch.Load()),
+			zap.Uint64("dispatcherEpoch", state.epoch),
 			zap.Stringer("staleEventService", *from),
 			zap.Stringer("currentEventService", d.connState.getEventServiceID()))
 		return false
 	}
-	if !d.verifyEventSequence(events[0]) {
+	if !d.verifyEventSequence(events[0], state) {
 		d.reset(d.connState.getEventServiceID())
 		return false
 	}
@@ -498,7 +543,7 @@ func (d *dispatcherStat) handleSingleDataEvents(events []dispatcher.DispatcherEv
 			d.tableInfo.Store(ddl.TableInfo)
 		}
 	}
-	d.updateCommitTsStateByEvents(events)
+	d.updateCommitTsStateByEvents(state, events)
 	return d.target.HandleEvents(events, func() { d.wake() })
 }
 
@@ -602,7 +647,8 @@ func (d *dispatcherStat) handleDropEvent(event dispatcher.DispatcherEvent) {
 			zap.Any("event", event))
 	}
 
-	if !d.isFromCurrentEpoch(event) {
+	state := d.loadCurrentEpochState()
+	if !d.isFromCurrentEpoch(event, state) {
 		log.Debug("receive a drop event from a stale epoch, ignore it",
 			zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 			zap.Stringer("dispatcher", d.getDispatcherID()),
@@ -630,7 +676,8 @@ func (d *dispatcherStat) handleHandshakeEvent(event dispatcher.DispatcherEvent) 
 	if !ok {
 		log.Panic("handshake event is not a handshake event", zap.Any("event", event))
 	}
-	if !d.isFromCurrentEpoch(event) {
+	state := d.loadCurrentEpochState()
+	if !d.isFromCurrentEpoch(event, state) {
 		log.Info("receive a handshake event from a stale epoch, ignore it",
 			zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 			zap.Stringer("dispatcher", d.getDispatcherID()),
@@ -648,7 +695,14 @@ func (d *dispatcherStat) handleHandshakeEvent(event dispatcher.DispatcherEvent) 
 	if tableInfo != nil {
 		d.tableInfo.Store(tableInfo)
 	}
-	d.lastEventSeq.Store(handshakeEvent.Seq)
+	state.lastEventSeq.Store(handshakeEvent.Seq)
+	d.observeCurrentEpochMaxEventTs(state, handshakeEvent.GetCommitTs())
+}
+
+func (d *dispatcherStat) getHeartbeatProgressForEventService() (uint64, uint64) {
+	state := d.loadCurrentEpochState()
+	checkpointTs := min(d.target.GetCheckpointTs(), state.maxEventTs.Load())
+	return checkpointTs, state.epoch
 }
 
 func (d *dispatcherStat) setRemoteCandidates(nodes []string) {
