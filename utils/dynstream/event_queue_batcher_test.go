@@ -94,19 +94,18 @@ func TestBatchByBytes(t *testing.T) {
 func TestBatchByHardCount(t *testing.T) {
 	handler := mockHandler{}
 	registry := newAreaBatchConfigRegistry[int](newDefaultBatchConfig())
-	cfg := NewBatchConfig(3, 1024)
-	registry.onAddPath(0, cfg)
+	registry.onAddPath(0, batchConfig{softCount: 3, hardBytes: 100})
 	eq := newEventQueue(&handler, registry)
 	b := newDefaultBatcher[*mockEvent]()
 
 	path := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", "test", nil)
 	eq.initPath(path)
 
-	for i := 1; i <= cfg.hardCount+1; i++ {
+	for i := 1; i <= 7; i++ {
 		eq.appendEvent(eventWrap[int, string, *mockEvent, any, *mockHandler]{
 			pathInfo:  path,
 			event:     &mockEvent{value: i},
-			eventSize: 1,
+			eventSize: 10,
 			eventType: EventType{
 				DataGroup: 1,
 				Property:  BatchableData,
@@ -115,7 +114,7 @@ func TestBatchByHardCount(t *testing.T) {
 	}
 
 	events, _, _, _ := eq.popEvents(b)
-	require.Len(t, events, cfg.hardCount)
+	require.Len(t, events, 6)
 	require.Equal(t, int64(1), eq.totalPendingLength.Load())
 
 	events, _, _, _ = eq.popEvents(b)

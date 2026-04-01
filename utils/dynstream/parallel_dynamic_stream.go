@@ -252,12 +252,6 @@ func (s *parallelDynamicStream[A, P, T, D, H]) RemovePath(path P) error {
 	return nil
 }
 
-func (s *parallelDynamicStream[A, P, T, D, H]) SetAreaSettings(area A, settings AreaSettings) {
-	if s.memControl != nil {
-		s.memControl.setAreaSettings(area, settings)
-	}
-}
-
 func (s *parallelDynamicStream[A, P, T, D, H]) GetMetrics() Metrics[A, P] {
 	metrics := Metrics[A, P]{}
 	for _, ds := range s.streams {

@@ -234,9 +234,16 @@ func (s *stream[A, P, T, D, H]) handleLoop() {
 	var (
 		eventQueueEmpty = false
 		eventBuf        []T
-		path            *pathInfo[A, P, T, D, H]
-		nBytes          int
-		duration        time.Duration
+		zeroT           T
+		cleanUpEventBuf = func() {
+			for i := range eventBuf {
+				eventBuf[i] = zeroT
+			}
+			eventBuf = nil
+		}
+		path     *pathInfo[A, P, T, D, H]
+		nBytes   int
+		duration time.Duration
 	)
 
 	// For testing. Don't handle events until this wait group is done.
@@ -288,6 +295,7 @@ Loop:
 					continue Loop
 				}
 				if path.removed.Load() {
+					cleanUpEventBuf()
 					continue Loop
 				}
 
@@ -302,6 +310,8 @@ Loop:
 				if path.blocking.Load() {
 					s.eventQueue.blockPath(path)
 				}
+
+				cleanUpEventBuf()
 			}
 		}
 	}
