@@ -885,7 +885,7 @@ func (s *SinkConfig) validateAndAdjust(sinkURI *url.URL) error {
 
 func (s *SinkConfig) validateTableRoute() error {
 	for _, rule := range s.DispatchRules {
-		if rule.TargetSchema == "" && rule.TargetTable == "" {
+		if rule == nil || (rule.TargetSchema == "" && rule.TargetTable == "") {
 			continue
 		}
 		if err := validateRoutingExpression("target-schema", rule.TargetSchema); err != nil {
