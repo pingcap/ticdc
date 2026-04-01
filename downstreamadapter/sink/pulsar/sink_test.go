@@ -139,7 +139,6 @@ func TestPulsarSinkBatchConfig(t *testing.T) {
 	require.Equal(t, 4096, sink.BatchCount())
 	require.Zero(t, sink.BatchBytes())
 }
-
 func TestPulsarSinkNewWithComponentReturnsDMLProducerError(t *testing.T) {
 	changefeedID := common.NewChangefeedID4Test("test", "test")
 	expectedErr := cerror.ErrPulsarNewProducer.GenWithStackByArgs()

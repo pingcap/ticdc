@@ -420,3 +420,11 @@ func (s *Sink) BatchCount() int {
 func (s *Sink) BatchBytes() int {
 	return int(s.cfg.MaxAllowedPacket)
 }
+
+func (s *Sink) BatchCount() int {
+	return s.maxTxnRows * len(s.dmlWriter)
+}
+
+func (s *Sink) BatchBytes() int {
+	return int(s.cfg.MaxAllowedPacket)
+}
