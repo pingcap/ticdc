@@ -310,6 +310,16 @@ func newMemControl[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]]() *me
 	}
 }
 
+func (m *memControl[A, P, T, D, H]) setAreaSettings(area A, settings AreaSettings) {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	// Update the settings
+	if as, ok := m.areaStatMap[area]; ok {
+		settings.fix()
+		as.settings.Store(&settings)
+	}
+}
+
 func (m *memControl[A, P, T, D, H]) addPathToArea(path *pathInfo[A, P, T, D, H], settings AreaSettings, feedbackChan chan<- Feedback[A, P, D]) {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()

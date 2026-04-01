@@ -105,7 +105,7 @@ func TestAddPathKeepsDefaultBatchConfig(t *testing.T) {
 		defer stream.Close()
 
 		require.NoError(t, stream.AddPath("path1", "dest1"))
-		require.Equal(t, NewBatchConfig(4, 0), stream.batchConfigRegistry.getBatchConfig(0))
+		require.Equal(t, newBatchConfig(4, 0), stream.batchConfigRegistry.getBatchConfig(0))
 	})
 
 	t.Run("area settings without batch override", func(t *testing.T) {
@@ -118,7 +118,7 @@ func TestAddPathKeepsDefaultBatchConfig(t *testing.T) {
 
 		settings := NewAreaSettingsWithMaxPendingSize(64*1024*1024, 0, "test")
 		require.NoError(t, stream.AddPath("path1", "dest1", settings))
-		require.Equal(t, NewBatchConfig(4, 0), stream.batchConfigRegistry.getBatchConfig(0))
+		require.Equal(t, newBatchConfig(4, 0), stream.batchConfigRegistry.getBatchConfig(0))
 	})
 
 	t.Run("first add wins over later override", func(t *testing.T) {
@@ -130,11 +130,11 @@ func TestAddPathKeepsDefaultBatchConfig(t *testing.T) {
 		defer stream.Close()
 
 		require.NoError(t, stream.AddPath("path1", "dest1"))
-		require.Equal(t, NewBatchConfig(4, 0), stream.batchConfigRegistry.getBatchConfig(0))
+		require.Equal(t, newBatchConfig(4, 0), stream.batchConfigRegistry.getBatchConfig(0))
 
 		settings := NewAreaSettingsWithMaxPendingSizeAndBatchConfig(64*1024*1024, 0, "test", 1, 0)
 		require.NoError(t, stream.AddPath("path2", "dest2", settings))
-		require.Equal(t, NewBatchConfig(4, 0), stream.batchConfigRegistry.getBatchConfig(0))
+		require.Equal(t, newBatchConfig(4, 0), stream.batchConfigRegistry.getBatchConfig(0))
 	})
 }
 
