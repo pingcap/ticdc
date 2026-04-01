@@ -98,6 +98,11 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 	event eventWrap[A, P, T, D, H],
 	handler H,
 ) bool {
+	// The removed flag can flip between handleLoop's removed check and appendEvent call.
+	// Guard here to avoid accounting events for a removed path.
+	if path.removed.Load() {
+		return false
+	}
 	defer as.updateAreaPauseState(path)
 	as.lastAppendEventTime.Store(time.Now())
 
@@ -335,11 +340,13 @@ func (m *memControl[A, P, T, D, H]) addPathToArea(path *pathInfo[A, P, T, D, H],
 // This method is called after the path is removed.
 func (m *memControl[A, P, T, D, H]) removePathFromArea(path *pathInfo[A, P, T, D, H]) {
 	area := path.areaMemStat
-	area.decPendingSize(path, path.pendingSize.Load())
+	pendingSize := path.pendingSize.Swap(0)
+	area.decPendingSize(path, pendingSize)
 
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 
+	area.pathMap.Delete(path.path)
 	area.pathCount.Add(-1)
 	if area.pathCount.Load() == 0 {
 		delete(m.areaStatMap, area.area)
