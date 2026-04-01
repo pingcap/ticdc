@@ -124,15 +124,15 @@ func (pq *PriorityQueue) Len() int {
 
 // Close drains queued tasks and wakes blocked Pop callers.
 func (pq *PriorityQueue) Close() {
- 	pq.mu.Lock()
- 	if !pq.closed {
- 		close(pq.signal)
- 		pq.closed = true
- 	}
- 	pq.mu.Unlock()
- 
- 	// pop all tasks
- 	for pq.Len() > 0 {
- 		pq.TryPop()
- 	}
+	pq.mu.Lock()
+	if !pq.closed {
+		close(pq.signal)
+		pq.closed = true
+	}
+	pq.mu.Unlock()
+
+	// pop all tasks
+	for pq.Len() > 0 {
+		pq.TryPop()
+	}
 }
