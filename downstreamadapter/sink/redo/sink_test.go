@@ -103,6 +103,22 @@ func TestConsistentConfig(t *testing.T) {
 	}
 }
 
+func TestRedoSinkBatchConfig(t *testing.T) {
+	cfg := newTestConsistentConfig("blackhole://")
+	cfg.MaxLogSize = util.AddressOf(int64(32))
+
+	sink, err := New(
+		context.Background(),
+		common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName),
+		cfg,
+	)
+	require.NoError(t, err)
+	defer sink.Close(false)
+
+	require.Equal(t, 4096, sink.BatchCount())
+	require.Equal(t, int(32*redo.Megabyte), sink.BatchBytes())
+}
+
 // TestRedoSinkInProcessor tests how redo log manager is used in processor.
 func TestRedoSinkInProcessor(t *testing.T) {
 	helper := commonEvent.NewEventTestHelper(t)
