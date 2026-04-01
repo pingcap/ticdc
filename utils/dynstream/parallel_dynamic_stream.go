@@ -69,7 +69,7 @@ func newParallelDynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T
 	}
 
 	s.pathMap.m = make(map[P]*pathInfo[A, P, T, D, H])
-	s.batchConfigRegistry = newAreaBatchConfigRegistry[A](NewBatchConfig(option.BatchCount, option.BatchBytes))
+	s.batchConfigRegistry = newAreaBatchConfigRegistry[A](newBatchConfig(option.BatchCount, option.BatchBytes))
 
 	if option.EnableMemoryControl {
 		log.Info("Dynamic stream enable memory control")
@@ -250,6 +250,12 @@ func (s *parallelDynamicStream[A, P, T, D, H]) RemovePath(path P) error {
 	pi.stream.addEvent(eventWrap[A, P, T, D, H]{pathInfo: pi})
 	s._statRemovePathCount.Add(1)
 	return nil
+}
+
+func (s *parallelDynamicStream[A, P, T, D, H]) SetAreaSettings(area A, settings AreaSettings) {
+	if s.memControl != nil {
+		s.memControl.setAreaSettings(area, settings)
+	}
 }
 
 func (s *parallelDynamicStream[A, P, T, D, H]) GetMetrics() Metrics[A, P] {
