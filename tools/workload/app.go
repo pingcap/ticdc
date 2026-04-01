@@ -36,6 +36,7 @@ import (
 	"workload/schema/largerow"
 	"workload/schema/shop"
 	pshop2 "workload/schema/shop2"
+	pshop3 "workload/schema/shop3"
 	psysbench "workload/schema/sysbench"
 	puuu "workload/schema/uuu"
 	pwidetablewithjson "workload/schema/wide_table_with_json"
@@ -79,6 +80,7 @@ const (
 	largeRow          = "large_row"
 	shopItem          = "shop_item"
 	shop2Item         = "shop2"
+	shop3Item         = "shop3"
 	uuu               = "uuu"
 	crawler           = "crawler"
 	bank2             = "bank2"
@@ -136,6 +138,8 @@ func (app *WorkloadApp) createWorkload() schema.Workload {
 		workload = shop.NewShopItemWorkload(app.Config.TotalRowCount, app.Config.RowSize)
 	case shop2Item:
 		workload = pshop2.NewShop2Workload(app.Config.TotalRowCount, app.Config.RowSize, app.Config.TableCount, app.Config.TableStartIndex)
+	case shop3Item:
+		workload = pshop3.NewShop3Workload(app.Config.TotalRowCount, app.Config.RowSize, app.Config.TableCount, app.Config.TableStartIndex)
 	case uuu:
 		workload = puuu.NewUUUWorkload()
 	case crawler:
