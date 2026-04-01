@@ -96,13 +96,7 @@ if [ -z "$OUT_DIR" ]; then
 fi
 
 echo "Checking TiKV version information..."
-tikvVersionInfo=$(tikv-server -V 2>&1)
-printf '%s\n' "$tikvVersionInfo"
-tikvGitCommitBranch=$(printf '%s\n' "$tikvVersionInfo" | sed -nE 's/^Git Commit Branch:[[:space:]]*([^[:space:]]+).*$/\1/p' | head -n 1)
-tikvNeedsCdcEnable=false
-if [ "$tikvGitCommitBranch" = "cloud-engine" ]; then
-	tikvNeedsCdcEnable=true
-fi
+tikv-server -V
 
 # start minio
 echo "Starting MinIO server..."
@@ -229,13 +223,10 @@ wal-sync-dir = "$TEST_DATA_DIR/wal-sync/upstream/tikv/raft-wal"
 lightweight-backup = true
 target-file-size = "512MB"
 wal-chunk-target-file-size = "128MB"
-EOF
-if [ "$tikvNeedsCdcEnable" = "true" ]; then
-	cat >>"$OUT_DIR/upstream-tikv.toml" <<EOF
+
 [cdc]
 enable = true
 EOF
-fi
 
 touch "$OUT_DIR/downstream-tikv.toml"
 if [ -f "$tikv_config" ]; then
@@ -259,13 +250,10 @@ wal-sync-dir = "$TEST_DATA_DIR/wal-sync/downstream/tikv/raft-wal"
 lightweight-backup = true
 target-file-size = "512MB"
 wal-chunk-target-file-size = "128MB"
-EOF
-if [ "$tikvNeedsCdcEnable" = "true" ]; then
-	cat >>"$OUT_DIR/downstream-tikv.toml" <<EOF
+
 [cdc]
 enable = true
 EOF
-fi
 
 echo "Starting upstream TiKV..."
 mkdir -p "$TEST_DATA_DIR/upstream"
