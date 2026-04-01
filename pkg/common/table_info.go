@@ -392,12 +392,12 @@ func (ti *TableInfo) MustGetColumnOffsetByID(id int64) int {
 	return offset
 }
 
-// GetSchemaName returns the source schema name carried by this TableInfo.
+// GetSchemaName returns the origin schema name carried by this TableInfo.
 func (ti *TableInfo) GetSchemaName() string {
 	return ti.TableName.GetOriginSchema()
 }
 
-// GetTableName returns the source table name carried by this TableInfo.
+// GetTableName returns the origin table name carried by this TableInfo.
 func (ti *TableInfo) GetTableName() string {
 	return ti.TableName.GetOriginTable()
 }
@@ -406,12 +406,12 @@ func (ti *TableInfo) GetTableNameCIStr() ast.CIStr {
 	return ast.NewCIStr(ti.GetTableName())
 }
 
-// GetSchemaNamePtr returns the pointer to the source schema name.
+// GetSchemaNamePtr returns the pointer to the origin schema name.
 func (ti *TableInfo) GetSchemaNamePtr() *string {
 	return &ti.TableName.Schema
 }
 
-// GetTableNamePtr returns the pointer to the source table name.
+// GetTableNamePtr returns the pointer to the origin table name.
 func (ti *TableInfo) GetTableNamePtr() *string {
 	return &ti.TableName.Table
 }

@@ -3,7 +3,7 @@
 package event
 
 import (
-	"github.com/pingcap/ticdc/pkg/common"
+	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/tinylib/msgp/msgp"
 )
 
@@ -475,7 +475,7 @@ func (z *DMLEventInRedoLog) DecodeMsg(dc *msgp.Reader) (err error) {
 				z.Table = nil
 			} else {
 				if z.Table == nil {
-					z.Table = new(common.TableName)
+					z.Table = new(commonType.TableName)
 				}
 				err = z.Table.DecodeMsg(dc)
 				if err != nil {
@@ -803,7 +803,7 @@ func (z *DMLEventInRedoLog) UnmarshalMsg(bts []byte) (o []byte, err error) {
 				z.Table = nil
 			} else {
 				if z.Table == nil {
-					z.Table = new(common.TableName)
+					z.Table = new(commonType.TableName)
 				}
 				bts, err = z.Table.UnmarshalMsg(bts)
 				if err != nil {
