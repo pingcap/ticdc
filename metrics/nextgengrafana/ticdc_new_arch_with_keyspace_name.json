@@ -2408,6 +2408,7 @@
                     "value": 180
                   }
                 ]
+<<<<<<< HEAD
               },
               {
                 "matcher": {
@@ -2420,6 +2421,8 @@
                     "value": 180
                   }
                 ]
+=======
+>>>>>>> e9fe8ade5 (utils: refactor task submission with select for stop signal (#4641))
               }
             ]
           },
@@ -2437,7 +2440,11 @@
           "pluginVersion": "7.5.17",
           "targets": [
             {
+<<<<<<< HEAD
               "expr": "max by (keyspace_name, changefeed, state, code, error_time, message) (ticdc_owner_changefeed_error_info{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"})",
+=======
+              "expr": "max by (keyspace_name, changefeed, state, code, message) (ticdc_owner_changefeed_error_info{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"})",
+>>>>>>> e9fe8ade5 (utils: refactor task submission with select for stop signal (#4641))
               "format": "time_series",
               "instant": true,
               "refId": "A"
@@ -2459,18 +2466,27 @@
                   "__name__": true
                 },
                 "indexByName": {
+<<<<<<< HEAD
                   "keyspace_name": 0,
                   "changefeed": 1,
                   "state": 2,
                   "error_time": 3,
                   "code": 4,
                   "message": 5
+=======
+                  "changefeed": 1,
+                  "code": 3,
+                  "message": 4,
+                  "keyspace_name": 0,
+                  "state": 2
+>>>>>>> e9fe8ade5 (utils: refactor task submission with select for stop signal (#4641))
                 },
                 "renameByName": {}
               }
             }
           ],
           "type": "table"
+<<<<<<< HEAD
         },
         {
           "datasource": "${DS_TEST-CLUSTER}",
@@ -2645,6 +2661,8 @@
             }
           ],
           "type": "table"
+=======
+>>>>>>> e9fe8ade5 (utils: refactor task submission with select for stop signal (#4641))
         }
       ],
       "title": "Changefeed",
