@@ -21,7 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestRedoDMLEventToDMLEventPreservesSourceAndTargetNames(t *testing.T) {
+func TestRedoDMLEventToDMLEventPreservesOriginAndTargetNames(t *testing.T) {
 	t.Parallel()
 
 	helper := NewEventTestHelper(t)
@@ -53,11 +53,9 @@ func TestRedoDMLEventToDMLEventPreservesSourceAndTargetNames(t *testing.T) {
 	require.Equal(t, "t", decoded.TableInfo.GetTableName())
 	require.Equal(t, "target_db", decoded.TableInfo.GetTargetSchemaName())
 	require.Equal(t, "target_table", decoded.TableInfo.GetTargetTableName())
-	require.Equal(t, "test", decoded.TableInfo.GetOriginSchemaName())
-	require.Equal(t, "t", decoded.TableInfo.GetOriginTableName())
 }
 
-func TestRedoDDLEventToDDLEventPreservesSourceAndTargetNames(t *testing.T) {
+func TestRedoDDLEventToDDLEventPreservesOriginAndTargetNames(t *testing.T) {
 	t.Parallel()
 
 	redoDDLEvent := &RedoDDLEvent{
@@ -85,8 +83,6 @@ func TestRedoDDLEventToDDLEventPreservesSourceAndTargetNames(t *testing.T) {
 	require.Equal(t, "source_table", ddlEvent.TableInfo.GetTableName())
 	require.Equal(t, "target_db", ddlEvent.TableInfo.GetTargetSchemaName())
 	require.Equal(t, "target_table", ddlEvent.TableInfo.GetTargetTableName())
-	require.Equal(t, "source_db", ddlEvent.TableInfo.GetOriginSchemaName())
-	require.Equal(t, "source_table", ddlEvent.TableInfo.GetOriginTableName())
 	require.Equal(t, []SchemaTableName{{
 		SchemaName: "target_db",
 		TableName:  "target_table",

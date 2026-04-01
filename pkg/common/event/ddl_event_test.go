@@ -609,8 +609,8 @@ func TestDDLEventCloneForRouting(t *testing.T) {
 	require.Equal(t, "CREATE TABLE routed_schema.test ...", cloned.Query)
 	require.True(t, cloned.TableInfo == newRoutedTableInfo)
 	require.Equal(t, "routed_schema", cloned.TableInfo.TableName.TargetSchema)
-	require.Equal(t, original.SchemaName, cloned.GetOriginSchemaName())
-	require.Equal(t, original.TableName, cloned.GetOriginTableName())
+	require.Equal(t, original.SchemaName, cloned.GetSchemaName())
+	require.Equal(t, original.TableName, cloned.GetTableName())
 
 	// Test cloning nil event
 	var nilEvent *DDLEvent
@@ -618,7 +618,7 @@ func TestDDLEventCloneForRouting(t *testing.T) {
 	require.Nil(t, clonedNil)
 }
 
-func TestCloneForRoutingPreservesSourceFields(t *testing.T) {
+func TestCloneForRoutingPreservesOriginFields(t *testing.T) {
 	original := &DDLEvent{
 		SchemaName:            "source_db",
 		TableName:             "new_orders",
@@ -636,10 +636,10 @@ func TestCloneForRoutingPreservesSourceFields(t *testing.T) {
 	cloned.TargetExtraSchemaName = "target_db_v2"
 	cloned.TargetExtraTableName = "old_orders_routed_v2"
 
-	require.Equal(t, "source_db", cloned.GetOriginSchemaName())
-	require.Equal(t, "new_orders", cloned.GetOriginTableName())
-	require.Equal(t, "source_db", cloned.GetOriginExtraSchemaName())
-	require.Equal(t, "old_orders", cloned.GetOriginExtraTableName())
+	require.Equal(t, "source_db", cloned.GetSchemaName())
+	require.Equal(t, "new_orders", cloned.GetTableName())
+	require.Equal(t, "source_db", cloned.GetExtraSchemaName())
+	require.Equal(t, "old_orders", cloned.GetExtraTableName())
 	require.Equal(t, "target_db_v2", cloned.GetTargetSchemaName())
 	require.Equal(t, "new_orders_routed_v2", cloned.GetTargetTableName())
 	require.Equal(t, "target_db_v2", cloned.GetTargetExtraSchemaName())
