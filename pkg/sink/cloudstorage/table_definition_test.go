@@ -87,11 +87,17 @@ func TestFromDDLEventUsesCanonicalTargetNames(t *testing.T) {
 	sourceDDL := helper.DDL2Event("create table test.t(id int primary key)")
 	require.NotNil(t, sourceDDL)
 
-	routedDDL := sourceDDL.CloneForRouting()
-	routedDDL.TargetSchemaName = "target_db"
-	routedDDL.TargetTableName = "target_table"
-	routedDDL.Query = "CREATE TABLE `target_db`.`target_table` (`id` INT PRIMARY KEY)"
-	routedDDL.TableInfo = sourceDDL.TableInfo.CloneWithRouting("target_db", "target_table")
+	routedDDL := commonEvent.NewRoutedDDLEvent(
+		sourceDDL,
+		"CREATE TABLE `target_db`.`target_table` (`id` INT PRIMARY KEY)",
+		"target_db",
+		"target_table",
+		"",
+		"",
+		sourceDDL.TableInfo.CloneWithRouting("target_db", "target_table"),
+		nil,
+		nil,
+	)
 
 	var def TableDefinition
 	def.FromDDLEvent(routedDDL, false)

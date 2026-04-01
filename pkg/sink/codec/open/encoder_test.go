@@ -694,11 +694,17 @@ func TestEncodeRoutedDDLEventUsesTargetNames(t *testing.T) {
 	sourceDDL := helper.DDL2Event(`create table test.t(a tinyint primary key, b int)`)
 	require.NotNil(t, sourceDDL)
 
-	routedDDL := sourceDDL.CloneForRouting()
-	routedDDL.TargetSchemaName = "target_db"
-	routedDDL.TargetTableName = "target_table"
-	routedDDL.Query = "CREATE TABLE `target_db`.`target_table` (`a` TINYINT PRIMARY KEY, `b` INT)"
-	routedDDL.TableInfo = sourceDDL.TableInfo.CloneWithRouting("target_db", "target_table")
+	routedDDL := commonEvent.NewRoutedDDLEvent(
+		sourceDDL,
+		"CREATE TABLE `target_db`.`target_table` (`a` TINYINT PRIMARY KEY, `b` INT)",
+		"target_db",
+		"target_table",
+		"",
+		"",
+		sourceDDL.TableInfo.CloneWithRouting("target_db", "target_table"),
+		nil,
+		nil,
+	)
 
 	ctx := context.Background()
 	codecConfig := common.NewConfig(config.ProtocolOpen)

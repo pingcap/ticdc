@@ -57,8 +57,7 @@ type SharedInfo struct {
 
 	// router is used to route source schema/table names to target schema/table names.
 	// It is used to apply routing to TableInfo before storing it.
-	// May be nil if no routing rules are configured.
-	router *routing.Router
+	router routing.Router
 
 	// Shared resources
 	// statusesChan is used to store the status of dispatchers when status changed
@@ -93,7 +92,7 @@ func NewSharedInfo(
 	syncPointConfig *syncpoint.SyncPointConfig,
 	txnAtomicity *config.AtomicityLevel,
 	enableSplittableCheck bool,
-	router *routing.Router,
+	router routing.Router,
 	statusesChan chan TableSpanStatusWithSeq,
 	blockStatusesChan chan *heartbeatpb.TableSpanBlockStatus,
 	errCh chan error,
@@ -184,9 +183,9 @@ func (d *BasicDispatcher) IsOutputRawChangeEvent() bool {
 	return d.sharedInfo.outputRawChangeEvent
 }
 
-func (d *BasicDispatcher) GetRouter() *routing.Router {
+func (d *BasicDispatcher) GetRouter() routing.Router {
 	if d.sharedInfo == nil {
-		return nil
+		return routing.Router{}
 	}
 	return d.sharedInfo.GetRouter()
 }
@@ -282,8 +281,8 @@ func (s *SharedInfo) GetBlockEventExecutor() *blockEventExecutor {
 }
 
 // GetRouter returns the router for schema/table name routing.
-// May return nil if no routing rules are configured.
-func (s *SharedInfo) GetRouter() *routing.Router {
+// The zero value router is a no-op router.
+func (s *SharedInfo) GetRouter() routing.Router {
 	return s.router
 }
 

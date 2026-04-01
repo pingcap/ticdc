@@ -84,15 +84,17 @@ func TestTableRouteDDLRenameUsesTargetNames(t *testing.T) {
 	sourceDDL := helper.DDL2Event(`rename table test.table1 to test.table2`)
 	require.NotNil(t, sourceDDL)
 
-	routedDDL := sourceDDL.CloneForRouting()
-	routedDDL.ExtraSchemaName = "test"
-	routedDDL.ExtraTableName = "table1"
-	routedDDL.TargetSchemaName = "target_db"
-	routedDDL.TargetTableName = "new_target_table"
-	routedDDL.TargetExtraSchemaName = "target_db"
-	routedDDL.TargetExtraTableName = "old_target_table"
-	routedDDL.Query = "RENAME TABLE `target_db`.`old_target_table` TO `target_db`.`new_target_table`"
-	routedDDL.TableInfo = sourceDDL.TableInfo.CloneWithRouting("target_db", "new_target_table")
+	routedDDL := commonEvent.NewRoutedDDLEvent(
+		sourceDDL,
+		"RENAME TABLE `target_db`.`old_target_table` TO `target_db`.`new_target_table`",
+		"target_db",
+		"new_target_table",
+		"target_db",
+		"old_target_table",
+		sourceDDL.TableInfo.CloneWithRouting("target_db", "new_target_table"),
+		nil,
+		nil,
+	)
 
 	keyBuf := bytes.NewBuffer(nil)
 	valueBuf := bytes.NewBuffer(nil)

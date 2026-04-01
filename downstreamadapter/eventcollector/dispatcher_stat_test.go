@@ -46,7 +46,7 @@ type mockDispatcher struct {
 	checkPointTs uint64
 
 	skipSyncpointAtStartTs bool
-	router                 *routing.Router
+	router                 routing.Router
 }
 
 func newMockDispatcher(id common.DispatcherID, startTs uint64) *mockDispatcher {
@@ -133,7 +133,7 @@ func (m *mockDispatcher) IsOutputRawChangeEvent() bool {
 	return false
 }
 
-func (m *mockDispatcher) GetRouter() *routing.Router {
+func (m *mockDispatcher) GetRouter() routing.Router {
 	return m.router
 }
 
@@ -1535,10 +1535,10 @@ func TestApplyRoutingToTableInfo(t *testing.T) {
 		require.Equal(t, "", originalTableInfo.TableName.TargetSchema)
 		require.Equal(t, "", originalTableInfo.TableName.TargetTable)
 
-		// Verify original ddlEvent was NOT mutated (due to CloneForRouting)
+		// Verify original ddlEvent was NOT mutated.
 		require.Equal(t, "", ddlEvent.TableInfo.TableName.TargetSchema)
 
-		// Verify the cloned event passed to HandleEvents has routing applied
+		// Verify the routed event passed to HandleEvents has routing applied.
 		require.NotNil(t, capturedEvent)
 		require.Equal(t, "target_db", capturedEvent.TableInfo.TableName.TargetSchema)
 	})
@@ -1607,11 +1607,11 @@ func TestApplyRoutingToTableInfo(t *testing.T) {
 		require.Equal(t, "orders", storedTableInfo.TableName.Table)
 		require.Equal(t, "target_db", storedTableInfo.TableName.TargetSchema)
 
-		// Verify original ddlEvent was NOT mutated (due to CloneForRouting)
+		// Verify original ddlEvent was NOT mutated.
 		require.Equal(t, "", ddlEvent.MultipleTableInfos[0].TableName.TargetSchema)
 		require.Equal(t, "", ddlEvent.MultipleTableInfos[1].TableName.TargetSchema)
 
-		// Verify the cloned event passed to HandleEvents has routing applied
+		// Verify the routed event passed to HandleEvents has routing applied.
 		require.NotNil(t, capturedEvent)
 		require.Equal(t, "target_db", capturedEvent.MultipleTableInfos[0].TableName.TargetSchema)
 		require.Equal(t, "target_db", capturedEvent.MultipleTableInfos[1].TableName.TargetSchema)
@@ -1624,7 +1624,7 @@ func TestApplyRoutingToTableInfo(t *testing.T) {
 	t.Run("DDL without routing configured passes through unchanged", func(t *testing.T) {
 		mockDisp := newMockDispatcher(common.NewDispatcherID(), 0)
 		// No router configured
-		mockDisp.router = nil
+		mockDisp.router = routing.Router{}
 		mockDisp.handleEvents = func(events []dispatcher.DispatcherEvent, wakeCallback func()) bool {
 			return false
 		}

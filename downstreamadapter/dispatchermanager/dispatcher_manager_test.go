@@ -22,6 +22,7 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/downstreamadapter/eventcollector"
+	"github.com/pingcap/ticdc/downstreamadapter/routing"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/mock"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -79,7 +80,7 @@ func createTestDispatcher(t *testing.T, manager *DispatcherManager, id common.Di
 		nil,
 		&defaultAtomicity,
 		false,
-		nil, // router
+		routing.Router{},
 		make(chan dispatcher.TableSpanStatusWithSeq, 1),
 		make(chan *heartbeatpb.TableSpanBlockStatus, 1),
 		make(chan error, 1),
@@ -141,7 +142,7 @@ func createTestManager(t *testing.T) *DispatcherManager {
 		nil,   // syncPointConfig
 		&defaultAtomicity,
 		false,
-		nil, // router
+		routing.Router{},
 		make(chan dispatcher.TableSpanStatusWithSeq, 8192),
 		make(chan *heartbeatpb.TableSpanBlockStatus, 1024*1024),
 		make(chan error, 1),

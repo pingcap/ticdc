@@ -15,6 +15,7 @@ package dispatcher
 import (
 	"testing"
 
+	"github.com/pingcap/ticdc/downstreamadapter/routing"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -142,7 +143,7 @@ func newTestBasicDispatcher(t *testing.T, sinkType common.SinkType, enableActive
 		nil,
 		nil,
 		false,
-		nil, // router
+		routing.Router{},
 		statuses,
 		blockStatuses,
 		errCh,
