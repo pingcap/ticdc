@@ -32,6 +32,18 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+type newPulsarDMLProducerFunc func(
+	changefeedID commonType.ChangeFeedID,
+	comp component,
+	failpointCh chan error,
+) (dmlProducer, error)
+
+type newPulsarDDLProducerFunc func(
+	changefeedID commonType.ChangeFeedID,
+	comp component,
+	sinkConfig *config.SinkConfig,
+) (ddlProducer, error)
+
 type sink struct {
 	changefeedID commonType.ChangeFeedID
 
@@ -71,20 +83,54 @@ func New(
 	if err != nil {
 		return nil, err
 	}
+	return newWithComponent(
+		ctx,
+		changefeedID,
+		sinkConfig,
+		comp,
+		protocol,
+		func(changefeedID commonType.ChangeFeedID, comp component, failpointCh chan error) (dmlProducer, error) {
+			return newDMLProducers(changefeedID, comp, failpointCh)
+		},
+		func(changefeedID commonType.ChangeFeedID, comp component, sinkConfig *config.SinkConfig) (ddlProducer, error) {
+			return newDDLProducers(changefeedID, comp, sinkConfig)
+		},
+	)
+}
+
+func newWithComponent(
+	ctx context.Context,
+	changefeedID commonType.ChangeFeedID,
+	sinkConfig *config.SinkConfig,
+	comp component,
+	protocol config.Protocol,
+	newDMLProducer newPulsarDMLProducerFunc,
+	newDDLProducer newPulsarDDLProducerFunc,
+) (_ *sink, err error) {
+	var (
+		dmlProducer dmlProducer
+		ddlProducer ddlProducer
+	)
 	defer func() {
 		if err != nil {
+			if ddlProducer != nil {
+				ddlProducer.close()
+			}
+			if dmlProducer != nil {
+				dmlProducer.close()
+			}
 			comp.close()
 		}
 	}()
 
 	failpointCh := make(chan error, 1)
 	statistics := metrics.NewStatistics(changefeedID, "pulsar")
-	dmlProducer, err := newDMLProducers(changefeedID, comp, failpointCh)
+	dmlProducer, err = newDMLProducer(changefeedID, comp, failpointCh)
 	if err != nil {
 		return nil, err
 	}
 
-	ddlProducer, err := newDDLProducers(changefeedID, comp, sinkConfig)
+	ddlProducer, err = newDDLProducer(changefeedID, comp, sinkConfig)
 	if err != nil {
 		return nil, err
 	}

@@ -499,6 +499,9 @@ func (info *ChangeFeedInfo) rmMQOnlyFields() {
 	// Don't nil out DispatchRules entirely - it may contain routing rules (TargetSchema/TargetTable)
 	// Remove only MQ-specific fields from each rule.
 	for _, rule := range info.Config.Sink.DispatchRules {
+		if rule == nil {
+			continue
+		}
 		rule.DispatcherRule = ""
 		rule.PartitionRule = ""
 		rule.IndexName = ""
