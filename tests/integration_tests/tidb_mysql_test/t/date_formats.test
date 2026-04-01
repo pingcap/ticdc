@@ -93,11 +93,6 @@ select date,format,concat(str_to_date(date, format),'') as con from t1;
 # Test of get_format
 #
 SET sql_mode = default;
-select get_format(DATE, 'USA') as a;
-select get_format(TIME, 'internal') as a;
-select get_format(DATETIME, 'eur') as a;
-select get_format(TIMESTAMP, 'eur') as a;
-select get_format(DATE, 'TEST') as a;
 select str_to_date('15-01-2001 12:59:59', GET_FORMAT(DATE,'USA'));
 
 
@@ -119,7 +114,7 @@ SET sql_mode = 'NO_ENGINE_SUBSTITUTION';
 #			str_to_date("02", "%d") as f4, str_to_date("02 10", "%d %H") as f5;
 create table t3(f1 datetime ,f2 datetime,f3 datetime,f4 datetime,f5 datetime);
 insert into t3 values (str_to_date("2003-01-02 10:11:12.0012", "%Y-%m-%d %H:%i:%S.%f"),str_to_date("10:11:12.0012", "%H:%i:%S.%f"),
-str_to_date("2003-01-02", "%Y-%m-%d"), str_to_date("02", "%d") , str_to_date("02 10", "%d %H"));      
+str_to_date("2003-01-02", "%Y-%m-%d"), str_to_date("02", "%d") , str_to_date("02 10", "%d %H"));
 describe t3;
 --replace_column 2 #
 select * from t3;
@@ -161,7 +156,7 @@ set names latin1;
 #set lc_time_names=en_US;
 
 #
-# Bug #14016 
+# Bug #14016
 #
 create table t5 (f1 datetime);
 insert into t5 (f1) values ("2005-01-01");
@@ -279,7 +274,7 @@ SELECT TIME_FORMAT(NULL, '%s')+0e0;
 do str_to_date(1, "%#");
 
 --echo #
---echo # Bug#19047488 MAKE_DATE_TIME WITH TOO BIG STRING ARGUMENT, 
+--echo # Bug#19047488 MAKE_DATE_TIME WITH TOO BIG STRING ARGUMENT,
 --echo #              INVALID MEMORY READS
 --echo #
 

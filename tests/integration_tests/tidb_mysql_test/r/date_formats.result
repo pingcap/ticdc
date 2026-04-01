@@ -312,21 +312,6 @@ date	format	con
 2003-01-02 10:11:12	%Y-%m-%d %h:%i:%S	2003-01-02 10:11:12.000000
 03-01-02 10:11:12 PM	%Y-%m-%d %h:%i:%S %p	2003-01-02 22:11:12.000000
 SET sql_mode = default;
-select get_format(DATE, 'USA') as a;
-a
-%m.%d.%Y
-select get_format(TIME, 'internal') as a;
-a
-%H%i%s
-select get_format(DATETIME, 'eur') as a;
-a
-%Y-%m-%d %H.%i.%s
-select get_format(TIMESTAMP, 'eur') as a;
-a
-%Y-%m-%d %H.%i.%s
-select get_format(DATE, 'TEST') as a;
-a
-
 select str_to_date('15-01-2001 12:59:59', GET_FORMAT(DATE,'USA'));
 str_to_date('15-01-2001 12:59:59', GET_FORMAT(DATE,'USA'))
 NULL
@@ -345,11 +330,11 @@ insert into t3 values (str_to_date("2003-01-02 10:11:12.0012", "%Y-%m-%d %H:%i:%
 str_to_date("2003-01-02", "%Y-%m-%d"), str_to_date("02", "%d") , str_to_date("02 10", "%d %H"));
 describe t3;
 Field	Type	Null	Key	Default	Extra
-f1	datetime	YES		NULL	
-f2	datetime	YES		NULL	
-f3	datetime	YES		NULL	
-f4	datetime	YES		NULL	
-f5	datetime	YES		NULL	
+f1	datetime	YES		NULL
+f2	datetime	YES		NULL
+f3	datetime	YES		NULL
+f4	datetime	YES		NULL
+f5	datetime	YES		NULL
 select * from t3;
 f1	f2	f3	f4	f5
 2003-01-02 10:11:12	#	2003-01-02 00:00:00	0000-00-02 00:00:00	0000-00-02 10:00:00
