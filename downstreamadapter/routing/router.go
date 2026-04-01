@@ -129,10 +129,10 @@ func (r *Router) ApplyToDDLEvent(ddl *commonEvent.DDLEvent, changefeedID common.
 	}
 
 	routedSchemaName, routedTableName, schemaTableChanged := routeSchemaTable(
-		r, ddl.GetSourceSchemaName(), ddl.GetSourceTableName(),
+		r, ddl.GetSchemaName(), ddl.GetTableName(),
 	)
 	routedExtraSchemaName, routedExtraTableName, extraSchemaTableChanged := routeSchemaTable(
-		r, ddl.GetSourceExtraSchemaName(), ddl.GetSourceExtraTableName(),
+		r, ddl.GetExtraSchemaName(), ddl.GetExtraTableName(),
 	)
 	routedTableInfo := r.ApplyToTableInfo(ddl.TableInfo)
 	tableInfoChanged := routedTableInfo != ddl.TableInfo

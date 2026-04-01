@@ -192,8 +192,8 @@ func queryRowChecksum(
 	ctx context.Context, db *sql.DB, dmlEvent *event.DMLEvent,
 ) error {
 	var (
-		schema   = dmlEvent.TableInfo.GetSourceSchemaName()
-		table    = dmlEvent.TableInfo.GetSourceTableName()
+		schema   = dmlEvent.TableInfo.GetSchemaName()
+		table    = dmlEvent.TableInfo.GetTableName()
 		commitTs = dmlEvent.GetCommitTs()
 	)
 

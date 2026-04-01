@@ -40,15 +40,15 @@ type DDLEvent struct {
 	// Type is the type of the DDL.
 	Type byte `json:"type"`
 	// SchemaID is from upstream job.SchemaID
-	SchemaID   int64  `json:"schema_id"`
+	SchemaID int64 `json:"schema_id"`
+	// SchemaName and TableName carry the origin upstream names.
 	SchemaName string `json:"schema_name"`
 	TableName  string `json:"table_name"`
 	// TargetSchemaName and TargetTableName carry routed names for sink output paths.
 	// They are runtime-only fields and are not serialized.
 	TargetSchemaName string `json:"-"`
 	TargetTableName  string `json:"-"`
-	// the following two fields are just used for RenameTable,
-	// they are the old schema/table name of the table
+	// ExtraSchemaName and ExtraTableName carry the origin old names for RenameTable.
 	ExtraSchemaName string `json:"extra_schema_name"`
 	ExtraTableName  string `json:"extra_table_name"`
 	// TargetExtraSchemaName and TargetExtraTableName carry routed old names for rename DDLs.
@@ -199,15 +199,7 @@ func (d *DDLEvent) GetSchemaName() string {
 	return d.SchemaName
 }
 
-func (d *DDLEvent) GetSourceSchemaName() string {
-	return d.SchemaName
-}
-
 func (d *DDLEvent) GetTableName() string {
-	return d.TableName
-}
-
-func (d *DDLEvent) GetSourceTableName() string {
 	return d.TableName
 }
 
@@ -215,15 +207,7 @@ func (d *DDLEvent) GetExtraSchemaName() string {
 	return d.ExtraSchemaName
 }
 
-func (d *DDLEvent) GetSourceExtraSchemaName() string {
-	return d.ExtraSchemaName
-}
-
 func (d *DDLEvent) GetExtraTableName() string {
-	return d.ExtraTableName
-}
-
-func (d *DDLEvent) GetSourceExtraTableName() string {
 	return d.ExtraTableName
 }
 

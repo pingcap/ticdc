@@ -369,8 +369,8 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 					zap.String("changefeed", s.changefeedID.Name()))
 				return nil
 			}
-			schema := event.TableInfo.GetSourceSchemaName()
-			table := event.TableInfo.GetSourceTableName()
+			schema := event.TableInfo.GetSchemaName()
+			table := event.TableInfo.GetTableName()
 			topic := s.comp.eventRouter.GetTopicForRowChange(schema, table)
 			partitionNum, err := s.comp.topicManager.GetPartitionNum(ctx, topic)
 			if err != nil {
