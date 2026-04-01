@@ -1161,8 +1161,15 @@ func (c *eventBroker) getOrSetChangefeedStatus(changefeedID common.ChangeFeedID)
 
 func (c *eventBroker) handleDispatcherHeartbeat(heartbeat *DispatcherHeartBeatWithServerID) {
 	responseMap := make(map[string]*event.DispatcherHeartbeatResponse)
+<<<<<<< HEAD
 	for _, dp := range heartbeat.heartbeat.DispatcherProgresses {
 		dispatcherPtr := c.getDispatcher(dp.DispatcherID)
+=======
+	changedChangefeeds := make(map[*changefeedStatus]struct{})
+	now := time.Now().Unix()
+	handleProgress := func(dispatcherID common.DispatcherID, checkpointTs uint64, heartbeatEpoch uint64, checkEpoch bool) {
+		dispatcherPtr := c.getDispatcher(dispatcherID)
+>>>>>>> 7500c692c (eventcollector: move dispatcher heartbeat to collector and add epoch (#4566))
 		// Can't find the dispatcher, it means the dispatcher is removed.
 		if dispatcherPtr == nil {
 			response, ok := responseMap[heartbeat.serverID]
@@ -1170,16 +1177,34 @@ func (c *eventBroker) handleDispatcherHeartbeat(heartbeat *DispatcherHeartBeatWi
 				response = event.NewDispatcherHeartbeatResponse()
 				responseMap[heartbeat.serverID] = response
 			}
-			response.Append(event.NewDispatcherState(dp.DispatcherID, event.DSStateRemoved))
-			continue
+			response.Append(event.NewDispatcherState(dispatcherID, event.DSStateRemoved))
+			return
 		}
 		dispatcher := dispatcherPtr.Load()
+		if checkEpoch && heartbeatEpoch != dispatcher.epoch {
+			log.Warn("ignore dispatcher heartbeat from stale epoch",
+				zap.Stringer("changefeedID", dispatcher.changefeedStat.changefeedID),
+				zap.Stringer("dispatcherID", dispatcher.id),
+				zap.Uint64("heartbeatEpoch", heartbeatEpoch),
+				zap.Uint64("dispatcherEpoch", dispatcher.epoch),
+				zap.Uint64("checkpointTs", checkpointTs))
+			return
+		}
 		// TODO: Should we check if the dispatcher's serverID is the same as the heartbeat's serverID?
-		if dispatcher.checkpointTs.Load() < dp.CheckpointTs {
-			dispatcher.checkpointTs.Store(dp.CheckpointTs)
+		if dispatcher.checkpointTs.Load() < checkpointTs {
+			dispatcher.checkpointTs.Store(checkpointTs)
 		}
 		// Update the last received heartbeat time to the current time.
 		dispatcher.lastReceivedHeartbeatTime.Store(time.Now().Unix())
+	}
+	if heartbeat.heartbeat.Version >= event.DispatcherHeartbeatVersion2 {
+		for _, dp := range heartbeat.heartbeat.DispatcherProgresses {
+			handleProgress(dp.DispatcherID, dp.CheckpointTs, dp.Epoch, true)
+		}
+	} else {
+		for _, dp := range heartbeat.heartbeat.DispatcherProgressesLegacy {
+			handleProgress(dp.DispatcherID, dp.CheckpointTs, 0, false)
+		}
 	}
 	c.sendDispatcherResponse(responseMap)
 }
