@@ -57,9 +57,10 @@ type Sink struct {
 	conflictDetector *causality.ConflictDetector
 
 	// isNormal indicate whether the sink is in the normal state.
-	isNormal *atomic.Bool
-	cfg      *mysql.Config
-	bdrMode  bool
+	isNormal   *atomic.Bool
+	cfg        *mysql.Config
+	maxTxnRows int
+	bdrMode    bool
 
 	// enableActiveActive enables active-active replication behaviors in the MySQL-class sink.
 	enableActiveActive bool
@@ -141,6 +142,7 @@ func NewMySQLSink(
 			changefeedID),
 		isNormal:                       atomic.NewBool(true),
 		cfg:                            cfg,
+		maxTxnRows:                     cfg.MaxTxnRow,
 		bdrMode:                        bdrMode,
 		enableActiveActive:             enableActiveActive,
 		activeActiveSyncStatsCollector: activeActiveSyncStatsCollector,
@@ -193,7 +195,7 @@ func (s *Sink) runDMLWriter(ctx context.Context, idx int) error {
 	writer := s.dmlWriter[idx]
 
 	totalStart := time.Now()
-	buffer := make([]*commonEvent.DMLEvent, 0, s.cfg.MaxTxnRow)
+	buffer := make([]*commonEvent.DMLEvent, 0, s.maxTxnRows)
 	for {
 		select {
 		case <-ctx.Done():
@@ -226,7 +228,7 @@ func (s *Sink) runDMLWriter(ctx context.Context, idx int) error {
 			workerEventRowCount.Observe(float64(rowCount))
 			for i := 1; i < len(txnEvents); i++ {
 				workerEventRowCount.Observe(float64(txnEvents[i].Len()))
-				if rowCount+txnEvents[i].Len() > int32(s.cfg.MaxTxnRow) {
+				if rowCount+txnEvents[i].Len() > int32(s.maxTxnRows) {
 					if err := flushEvent(beginIndex, i, rowCount); err != nil {
 						return errors.Trace(err)
 					}

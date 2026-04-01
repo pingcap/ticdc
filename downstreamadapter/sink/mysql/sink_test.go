@@ -69,6 +69,7 @@ func MysqlSinkForTest() (*Sink, sqlmock.Sqlmock) {
 func MysqlSinkForTestWithMaxTxnRows(maxTxnRows int) (*Sink, sqlmock.Sqlmock) {
 	ctx, sink, mock := getMysqlSink()
 	sink.cfg.MaxTxnRow = maxTxnRows
+	sink.maxTxnRows = maxTxnRows
 	go sink.Run(ctx)
 	return sink, mock
 }
@@ -79,8 +80,9 @@ func TestMysqlSinkBatchConfig(t *testing.T) {
 	cfg.MaxAllowedPacket = 4096
 
 	sink := &Sink{
-		cfg:       cfg,
-		dmlWriter: make([]*mysql.Writer, 3),
+		cfg:        cfg,
+		maxTxnRows: cfg.MaxTxnRow,
+		dmlWriter:  make([]*mysql.Writer, 3),
 	}
 
 	require.Equal(t, 384, sink.BatchCount())
@@ -333,12 +335,12 @@ func TestMysqlSinkFlushLargeBatchEvent(t *testing.T) {
 	require.Equal(t, int32(10), dmlEvent1.Length, "First event should contain 10 rows")
 	require.Equal(t, int32(10), dmlEvent2.Length, "Second event should contain 10 rows")
 
-	// Set up mock expectations for DDL
-	mock.ExpectExec("BEGIN;INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?),(?,?),(?,?),(?,?),(?,?),(?,?),(?,?),(?,?),(?,?),(?,?);COMMIT;").
+	// Each 10-row event is split into 4+4+2 rows when maxTxnRows is 4.
+	mock.ExpectExec("BEGIN;INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?),(?,?),(?,?),(?,?);INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?),(?,?),(?,?),(?,?);INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?),(?,?);COMMIT;").
 		WithArgs(1, "test1", 2, "test2", 3, "test3", 4, "test4", 5, "test5", 6, "test6", 7, "test7", 8, "test8", 9, "test9", 10, "test10").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
-	mock.ExpectExec("BEGIN;INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?),(?,?),(?,?),(?,?),(?,?),(?,?),(?,?),(?,?),(?,?),(?,?);COMMIT;").
+	mock.ExpectExec("BEGIN;INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?),(?,?),(?,?),(?,?);INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?),(?,?),(?,?),(?,?);INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?),(?,?);COMMIT;").
 		WithArgs(11, "test11", 12, "test12", 13, "test13", 14, "test14", 15, "test15", 16, "test16", 17, "test17", 18, "test18", 19, "test19", 20, "test20").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 

@@ -20,6 +20,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
+	"github.com/pingcap/tidb/br/pkg/storage"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
@@ -30,8 +31,8 @@ type dmlWriter struct {
 	cfg           *writer.Config
 	encodeWorkers *encodingWorkerGroup
 	fileWorkers   *fileWorkerGroup
-
-	cancel context.CancelFunc
+	extStorage    storage.ExternalStorage
+	cancel        context.CancelFunc
 }
 
 // NewDMLWriter creates a new memory DML writer.
@@ -51,6 +52,7 @@ func NewDMLWriter(
 		cfg:           cfg,
 		encodeWorkers: encodeWorkers,
 		fileWorkers:   fileWorkers,
+		extStorage:    extStorage,
 	}, nil
 }
 
@@ -86,6 +88,11 @@ func (l *dmlWriter) AddDMLEvents(ctx context.Context, events ...*commonEvent.Red
 func (l *dmlWriter) Close() error {
 	if l.cancel != nil {
 		l.cancel()
+		l.cancel = nil
+	}
+	if l.extStorage != nil {
+		l.extStorage.Close()
+		l.extStorage = nil
 	}
 	return nil
 }
