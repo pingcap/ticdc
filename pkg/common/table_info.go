@@ -394,12 +394,12 @@ func (ti *TableInfo) MustGetColumnOffsetByID(id int64) int {
 
 // GetSchemaName returns the origin schema name carried by this TableInfo.
 func (ti *TableInfo) GetSchemaName() string {
-	return ti.TableName.GetOriginSchema()
+	return ti.TableName.GetSchema()
 }
 
 // GetTableName returns the origin table name carried by this TableInfo.
 func (ti *TableInfo) GetTableName() string {
-	return ti.TableName.GetOriginTable()
+	return ti.TableName.GetTable()
 }
 
 func (ti *TableInfo) GetTableNameCIStr() ast.CIStr {

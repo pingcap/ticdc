@@ -373,8 +373,8 @@ func (r *RedoDMLEvent) ToDMLEvent() *DMLEvent {
 func (r *RedoDDLEvent) ToDDLEvent() *DDLEvent {
 	blockedTables := r.DDL.BlockedTables
 	blockedTableNames := r.DDL.BlockedTableNames
-	sourceSchemaName := r.TableName.GetOriginSchema()
-	sourceTableName := r.TableName.GetOriginTable()
+	sourceSchemaName := r.TableName.GetSchema()
+	sourceTableName := r.TableName.GetTable()
 	targetSchemaName := r.TableName.GetTargetSchema()
 	targetTableName := r.TableName.GetTargetTable()
 	if blockedTables == nil {

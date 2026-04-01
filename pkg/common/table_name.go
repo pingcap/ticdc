@@ -34,31 +34,21 @@ type TableName struct {
 
 // String implements fmt.Stringer interface.
 func (t TableName) String() string {
-	return t.OriginString()
+	return fmt.Sprintf("%s.%s", t.GetSchema(), t.GetTable())
 }
 
-// OriginString returns the source schema.table string.
-func (t TableName) OriginString() string {
-	return fmt.Sprintf("%s.%s", t.GetOriginSchema(), t.GetOriginTable())
-}
-
-// QuoteString returns quoted full canonical table name.
+// QuoteString returns quoted full original table name.
 func (t TableName) QuoteString() string {
-	return t.QuoteOriginString()
+	return QuoteSchema(t.GetSchema(), t.GetTable())
 }
 
-// QuoteOriginString returns quoted full source table name.
-func (t TableName) QuoteOriginString() string {
-	return QuoteSchema(t.GetOriginSchema(), t.GetOriginTable())
-}
-
-// GetOriginSchema returns the source schema name.
-func (t *TableName) GetOriginSchema() string {
+// GetSchema returns the original schema name.
+func (t *TableName) GetSchema() string {
 	return t.Schema
 }
 
-// GetOriginTable returns the source table name.
-func (t *TableName) GetOriginTable() string {
+// GetTable returns the original table name.
+func (t *TableName) GetTable() string {
 	return t.Table
 }
 
@@ -78,11 +68,6 @@ func (t *TableName) GetTargetTable() string {
 		return t.TargetTable
 	}
 	return t.Table
-}
-
-// TargetString returns the target schema.table string for routing.
-func (t TableName) TargetString() string {
-	return fmt.Sprintf("%s.%s", t.GetTargetSchema(), t.GetTargetTable())
 }
 
 // QuoteTargetString returns quoted full target table name for routing.
