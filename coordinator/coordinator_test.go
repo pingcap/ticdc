@@ -374,6 +374,7 @@ func TestCoordinatorScheduling(t *testing.T) {
 
 func TestScaleNode(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
 	info, lis1 := newMaintainerNodeForTest(t)
 	etcdClient := newMockEtcdClient(string(info.ID))
 	nodeManager := watcher.NewNodeManager(nil, etcdClient)
@@ -435,7 +436,6 @@ func TestScaleNode(t *testing.T) {
 	mc3.Run(ctx)
 	node3 := startMaintainerNode(ctx, info3, mc3, nodeManager, lis3)
 	t.Cleanup(node3.stop)
-	t.Cleanup(cancel)
 
 	log.Info("Start maintainer node",
 		zap.Stringer("id", info3.ID),
