@@ -1049,3 +1049,64 @@ func TestPrepareDMLsWithNotNullUniqueKey(t *testing.T) {
 	}
 	require.True(t, found, "expected batched INSERT/REPLACE for table t3")
 }
+
+func TestPrepareDMLsWithExpressionIndex(t *testing.T) {
+	writer, _, _ := newTestMysqlWriter(t)
+	defer writer.db.Close()
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+
+	createTableSQL := `CREATE TABLE tb1 (
+    	id INT PRIMARY KEY,
+    	j JSON,
+    	UNIQUE KEY j_index ((cast(json_extract(j,'$[*]') as signed array)), id))`
+	job := helper.DDL2Job(createTableSQL)
+	require.NotNil(t, job)
+
+	tableInfo := helper.GetTableInfo(job)
+	require.NotNil(t, tableInfo)
+
+	hiddenColumnCount := 0
+	visibleColumnCount := 0
+	for _, col := range tableInfo.GetColumns() {
+		if col.Hidden {
+			hiddenColumnCount++
+		} else {
+			visibleColumnCount++
+		}
+	}
+	require.Len(t, tableInfo.GetColumns(), 3)
+	require.Equal(t, 1, hiddenColumnCount)
+	require.Equal(t, 2, visibleColumnCount)
+
+	dml1 := helper.DML2Event("test", "tb1",
+		`insert into tb1 (id,j) VALUES (1, '[1, 2, 3]')`)
+	helper.ExecuteDeleteDml("test", "tb1", "delete from tb1 where id = 1")
+	dml2 := helper.DML2Event("test", "tb1",
+		`insert into tb1 (id,j) VALUES (2, '[4, 5, 6]')`)
+	helper.ExecuteDeleteDml("test", "tb1", "delete from tb1 where id = 2")
+	row, ok := dml1.GetNextRow()
+	require.True(t, ok)
+	require.Len(t, getArgsWithGeneratedColumn(&row.Row, tableInfo), 3)
+	dml1.Rewind()
+
+	events := []*commonEvent.DMLEvent{dml1, dml2}
+	require.True(t, writer.shouldGenBatchSQL(tableInfo, events))
+	dmls, err := writer.prepareDMLs(events)
+	require.NoError(t, err)
+	require.NotNil(t, dmls)
+	require.Equal(t, []common.RowType{common.RowTypeInsert}, dmls.rowTypes)
+	require.Equal(t, []string{
+		"INSERT INTO `test`.`tb1` (`id`,`j`) VALUES (?,?),(?,?)",
+	}, dmls.sqls)
+	require.Len(t, dmls.values, 1)
+
+	expected := []interface{}{
+		int64(1), `[1, 2, 3]`,
+		int64(2), `[4, 5, 6]`,
+	}
+	require.True(t, reflect.DeepEqual(expected, dmls.values[0]),
+		"unexpected REPLACE args: %v %v", dmls.values[0], expected)
+}
