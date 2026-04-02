@@ -115,7 +115,7 @@ func (e *elector) campaignCoordinator(ctx context.Context) error {
 			log.Info("resign coordinator actively, liveness is stopping")
 			if resignErr := e.resign(ctx); resignErr != nil {
 				log.Warn("resign coordinator actively failed", zap.String("nodeID", nodeID), zap.Error(resignErr))
-				return errors.Trace(err)
+				return errors.Trace(resignErr)
 			}
 			return nil
 		}
