@@ -217,6 +217,16 @@ func TestCollectComponentStatusWhenChangedWatermarkSeqNoFallback(t *testing.T) {
 	require.Equal(t, uint64(200), req.Request.RedoWatermark.Seq)
 }
 
+func TestTryCloseLatchesRemoveChangefeedWhileClosing(t *testing.T) {
+	t.Parallel()
+
+	manager := &DispatcherManager{}
+	manager.closing.Store(true)
+
+	require.False(t, manager.TryClose(true))
+	require.True(t, manager.removeChangefeedOnClose.Load())
+}
+
 func TestMergeDispatcherNormal(t *testing.T) {
 	manager := createTestManager(t)
 

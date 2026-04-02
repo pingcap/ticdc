@@ -210,6 +210,60 @@ func TestPendingMessageQueue_CloseRequestUpgradeBetweenPopAndGet(t *testing.T) {
 	q.Done(key)
 }
 
+func TestPendingMessageQueue_CloseRequestUpgradeAfterGetRequeuesLatest(t *testing.T) {
+	t.Parallel()
+
+	q := newPendingMessageQueue()
+	cfID := common.NewChangeFeedIDWithName("cf", "default")
+	key := pendingMessageKey{
+		changefeedID: cfID,
+		msgType:      messaging.TypeMaintainerCloseRequest,
+	}
+
+	msgFalse := messaging.NewSingleTargetMessage(
+		node.ID("to"),
+		messaging.DispatcherManagerManagerTopic,
+		&heartbeatpb.MaintainerCloseRequest{ChangefeedID: cfID.ToPB(), Removed: false},
+	)
+	msgTrue := messaging.NewSingleTargetMessage(
+		node.ID("to"),
+		messaging.DispatcherManagerManagerTopic,
+		&heartbeatpb.MaintainerCloseRequest{ChangefeedID: cfID.ToPB(), Removed: true},
+	)
+
+	require.True(t, q.TryEnqueue(key, msgFalse))
+
+	poppedKey, ok := q.Pop()
+	require.True(t, ok)
+	require.Equal(t, key, poppedKey)
+
+	poppedMsg := q.Get(poppedKey)
+	require.NotNil(t, poppedMsg)
+	require.False(t, poppedMsg.Message[0].(*heartbeatpb.MaintainerCloseRequest).Removed)
+
+	require.True(t, q.TryEnqueue(key, msgTrue))
+	q.Done(key)
+
+	requeuedKeyCh := make(chan pendingMessageKey, 1)
+	go func() {
+		requeuedKey, requeuedOK := q.Pop()
+		if requeuedOK {
+			requeuedKeyCh <- requeuedKey
+		}
+	}()
+
+	select {
+	case requeuedKey := <-requeuedKeyCh:
+		require.Equal(t, key, requeuedKey)
+		requeuedMsg := q.Get(requeuedKey)
+		require.NotNil(t, requeuedMsg)
+		require.True(t, requeuedMsg.Message[0].(*heartbeatpb.MaintainerCloseRequest).Removed)
+		q.Done(requeuedKey)
+	case <-time.After(time.Second):
+		t.Fatal("close request upgrade should be requeued after the in-flight attempt finishes")
+	}
+}
+
 func TestPendingMessageQueue_KeepsFirstBootstrapRequestUntilCurrentAttemptFinishes(t *testing.T) {
 	t.Parallel()
 

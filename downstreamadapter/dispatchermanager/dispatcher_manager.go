@@ -133,10 +133,11 @@ type DispatcherManager struct {
 	latestWatermark     Watermark
 	latestRedoWatermark Watermark
 
-	closing atomic.Bool
-	closed  atomic.Bool
-	cancel  context.CancelFunc
-	wg      sync.WaitGroup
+	closing                 atomic.Bool
+	closed                  atomic.Bool
+	removeChangefeedOnClose atomic.Bool
+	cancel                  context.CancelFunc
+	wg                      sync.WaitGroup
 
 	// removeTaskHandles stores the task handles for async dispatcher removal
 	// map[common.DispatcherID]*threadpool.TaskHandle
@@ -885,6 +886,12 @@ func (e *DispatcherManager) mergeEventDispatcher(dispatcherIDs []common.Dispatch
 // ==== remove and clean related functions ====
 
 func (e *DispatcherManager) TryClose(removeChangefeed bool) bool {
+	// Close requests can be retried with removed=true after an earlier removed=false
+	// attempt has already started. Keep the strongest cleanup intent latched so
+	// the eventual sink shutdown can still observe it.
+	if removeChangefeed {
+		e.removeChangefeedOnClose.Store(true)
+	}
 	if e.closed.Load() {
 		return true
 	}
@@ -893,11 +900,11 @@ func (e *DispatcherManager) TryClose(removeChangefeed bool) bool {
 	}
 
 	e.closing.Store(true)
-	go e.close(removeChangefeed)
+	go e.close()
 	return false
 }
 
-func (e *DispatcherManager) close(removeChangefeed bool) {
+func (e *DispatcherManager) close() {
 	log.Info("closing event dispatcher manager",
 		zap.Stringer("changefeedID", e.changefeedID))
 
@@ -949,11 +956,11 @@ func (e *DispatcherManager) close(removeChangefeed bool) {
 	log.Info("shared info closed", zap.Stringer("changefeedID", e.changefeedID))
 
 	if e.IsRedoEnabled() {
-		e.redoSink.Close(removeChangefeed)
+		e.redoSink.Close(e.removeChangefeedOnClose.Load())
 		// FIXME: cleanup redo log when remove the changefeed
-		e.closeRedoMeta(removeChangefeed)
+		e.closeRedoMeta(e.removeChangefeedOnClose.Load())
 	}
-	e.sink.Close(removeChangefeed)
+	e.sink.Close(e.removeChangefeedOnClose.Load())
 	log.Info("sink closed", zap.Stringer("changefeedID", e.changefeedID))
 
 	e.wg.Wait()

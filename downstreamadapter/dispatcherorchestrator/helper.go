@@ -27,6 +27,12 @@ type pendingMessageKey struct {
 	msgType      messaging.IOType
 }
 
+type pendingMessageEntry struct {
+	msg          *messaging.TargetMessage
+	inFlight     bool
+	needsRequeue bool
+}
+
 type maintainerRequestDecision int
 
 const (
@@ -56,13 +62,13 @@ const (
 // removal retry does not lose the stronger cleanup intent.
 type pendingMessageQueue struct {
 	mu      sync.Mutex
-	pending map[pendingMessageKey]*messaging.TargetMessage
+	pending map[pendingMessageKey]*pendingMessageEntry
 	queue   *chann.UnlimitedChannel[pendingMessageKey, any]
 }
 
 func newPendingMessageQueue() *pendingMessageQueue {
 	return &pendingMessageQueue{
-		pending: make(map[pendingMessageKey]*messaging.TargetMessage),
+		pending: make(map[pendingMessageKey]*pendingMessageEntry),
 		queue:   chann.NewUnlimitedChannelDefault[pendingMessageKey](),
 	}
 }
@@ -71,16 +77,19 @@ func newPendingMessageQueue() *pendingMessageQueue {
 // It returns true if the message is accepted, otherwise false.
 func (q *pendingMessageQueue) TryEnqueue(key pendingMessageKey, msg *messaging.TargetMessage) bool {
 	q.mu.Lock()
-	if oldMsg, ok := q.pending[key]; ok {
-		if shouldReplacePendingMessage(key, oldMsg, msg) {
-			q.pending[key] = msg
+	if entry, ok := q.pending[key]; ok {
+		if shouldReplacePendingMessage(key, entry.msg, msg) {
+			entry.msg = msg
+			if entry.inFlight {
+				entry.needsRequeue = true
+			}
 			q.mu.Unlock()
 			return true
 		}
 		q.mu.Unlock()
 		return false
 	}
-	q.pending[key] = msg
+	q.pending[key] = &pendingMessageEntry{msg: msg}
 	q.mu.Unlock()
 
 	q.queue.Push(key)
@@ -137,17 +146,44 @@ func shouldUseStrictMaintainerEpoch(activeEpoch, requestEpoch uint64) bool {
 // Pop blocks until a key is available or the queue is closed.
 // The returned key is removed from the queue but remains pending until Done is called.
 func (q *pendingMessageQueue) Pop() (pendingMessageKey, bool) {
-	return q.queue.Get()
+	key, ok := q.queue.Get()
+	if !ok {
+		return pendingMessageKey{}, false
+	}
+
+	q.mu.Lock()
+	if entry, exists := q.pending[key]; exists {
+		entry.inFlight = true
+	}
+	q.mu.Unlock()
+
+	return key, true
 }
 
 func (q *pendingMessageQueue) Get(key pendingMessageKey) *messaging.TargetMessage {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	return q.pending[key]
+	entry, ok := q.pending[key]
+	if !ok {
+		return nil
+	}
+	return entry.msg
 }
 
 func (q *pendingMessageQueue) Done(key pendingMessageKey) {
 	q.mu.Lock()
+	entry, ok := q.pending[key]
+	if !ok {
+		q.mu.Unlock()
+		return
+	}
+	if entry.needsRequeue {
+		entry.inFlight = false
+		entry.needsRequeue = false
+		q.mu.Unlock()
+		q.queue.Push(key)
+		return
+	}
 	delete(q.pending, key)
 	q.mu.Unlock()
 }
