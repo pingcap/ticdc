@@ -31,10 +31,9 @@ func TestSetUpTestServicesKeepsMessageCenterAlive(t *testing.T) {
 	require.NotNil(t, mc)
 
 	const topic = "message-center-lifecycle-regression"
-	handlerCalled := make(chan struct{}, 1)
+	handlerCalled := make(chan string, 1)
 	mc.RegisterHandler(topic, func(_ context.Context, msg *messaging.TargetMessage) error {
-		require.Equal(t, localNodeID, msg.To)
-		handlerCalled <- struct{}{}
+		handlerCalled <- string(msg.To)
 		return nil
 	})
 	defer mc.DeRegisterHandler(topic)
@@ -43,7 +42,8 @@ func TestSetUpTestServicesKeepsMessageCenterAlive(t *testing.T) {
 	require.NoError(t, err)
 
 	select {
-	case <-handlerCalled:
+	case receivedTarget := <-handlerCalled:
+		require.Equal(t, string(localNodeID), receivedTarget)
 	case <-time.After(time.Second):
 		t.Fatalf("SetUpTestServices stored a closed message center in app context")
 	}
