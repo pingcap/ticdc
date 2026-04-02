@@ -52,6 +52,15 @@ func (e *DispatcherManager) GetMaintainerID() node.ID {
 	return e.meta.maintainerID
 }
 
+// GetActiveMaintainer returns the current maintainer identity and epoch from
+// the same metadata snapshot so admission checks can reason about ownership
+// transitions consistently.
+func (e *DispatcherManager) GetActiveMaintainer() (node.ID, uint64) {
+	e.meta.Lock()
+	defer e.meta.Unlock()
+	return e.meta.maintainerID, e.meta.activeMaintainerEpoch
+}
+
 func (e *DispatcherManager) GetActiveMaintainerEpoch() uint64 {
 	e.meta.Lock()
 	defer e.meta.Unlock()

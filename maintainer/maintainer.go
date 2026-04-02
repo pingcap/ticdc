@@ -926,8 +926,14 @@ func (m *Maintainer) onBootstrapResponses(responses map[node.ID]*heartbeatpb.Mai
 	// onNodeChanged() before FinishBootstrap succeeds. All other callers of onNodeChanged() and
 	// onMaintainerBootstrapResponse() run in the same event loop goroutine as onRemoveMaintainer(),
 	// hence guarding with m.removing is sufficient to avoid accessing a removed DDL span leading to panic.
-	if responses == nil || m.removing.Load() {
-		log.Info("bootstrap responses is nil or maintainer is removing, ignore it",
+	if responses == nil {
+		log.Debug("bootstrap responses is nil, ignore it",
+			zap.Stringer("changefeedID", m.changefeedID),
+			zap.Bool("removing", m.removing.Load()))
+		return
+	}
+	if m.removing.Load() {
+		log.Info("maintainer is removing, ignore bootstrap responses",
 			zap.Stringer("changefeedID", m.changefeedID),
 			zap.Bool("removing", m.removing.Load()))
 		return
