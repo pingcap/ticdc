@@ -40,9 +40,7 @@ type DDLEvent struct {
 	// Type is the type of the DDL.
 	Type byte `json:"type"`
 	// SchemaID is from upstream job.SchemaID
-	SchemaID int64 `json:"schema_id"`
-
-	// SchemaName and TableName carry the origin names.
+	SchemaID   int64  `json:"schema_id"`
 	SchemaName string `json:"schema_name"`
 	TableName  string `json:"table_name"`
 

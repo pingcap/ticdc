@@ -278,8 +278,6 @@ func (b *BatchDMLEvent) encodeV1() ([]byte, error) {
 
 // AssembleRows assembles the Rows from the RawRows.
 // It also sets the TableInfo and clears the RawRows.
-// For local events (same node, b.Rows already set), it only applies routing
-// without replacing the TableInfo to preserve schema version compatibility.
 func (b *BatchDMLEvent) AssembleRows(tableInfo *common.TableInfo) {
 	if tableInfo == nil {
 		log.Panic("DMLEvent: TableInfo is nil")
@@ -290,11 +288,10 @@ func (b *BatchDMLEvent) AssembleRows(tableInfo *common.TableInfo) {
 	}()
 
 	// For local events (same node), rows are already set.
-	// If routing is configured, reassign the TableInfo pointer to the passed tableInfo
-	// (which already has TargetSchema/TargetTable set via CloneWithRouting).
-	// IMPORTANT: We modify the POINTER, not the object it points to, because the
-	// original TableInfo is shared from the schema store across all dispatchers.
 	if b.Rows != nil {
+		// table routing is enabled, reassign the TableInfo pointer to the passed tableInfo
+		// IMPORTANT: We modify the POINTER, not the object it points to, because the
+		// original TableInfo is shared from the schema store across all dispatchers.
 		if tableInfo.TableName.TargetSchema != "" || tableInfo.TableName.TargetTable != "" {
 			b.TableInfo = tableInfo
 			for _, dml := range b.DMLEvents {
@@ -304,16 +301,15 @@ func (b *BatchDMLEvent) AssembleRows(tableInfo *common.TableInfo) {
 		return
 	}
 
-	// For remote events, verify schema version compatibility before replacing TableInfo
+	if len(b.RawRows) == 0 {
+		log.Panic("DMLEvent: RawRows is empty")
+		return
+	}
+
 	if b.TableInfo != nil && b.TableInfo.GetUpdateTS() != tableInfo.GetUpdateTS() {
 		log.Panic("DMLEvent: TableInfoVersion mismatch",
 			zap.Uint64("dmlEventTableInfoVersion", b.TableInfo.GetUpdateTS()),
 			zap.Uint64("tableInfoVersion", tableInfo.GetUpdateTS()))
-		return
-	}
-
-	if len(b.RawRows) == 0 {
-		log.Panic("DMLEvent: RawRows is empty")
 		return
 	}
 
