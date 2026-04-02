@@ -89,7 +89,8 @@ func (b *batcher[T]) addEvent(event T, size int) {
 	b.nBytes += size
 }
 
-// isFull returns true if the batcher should flush and stop appending more events.
+// isFull return true if the batched events have reached the limit.
+// the caller should call flush() and process the returned events.
 func (b *batcher[T]) isFull() bool {
 	n := len(b.buf)
 	if n == 0 {
