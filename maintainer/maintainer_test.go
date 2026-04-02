@@ -21,6 +21,8 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/maintainer/replica"
+	"github.com/pingcap/ticdc/maintainer/span"
 	"github.com/pingcap/ticdc/maintainer/testutil"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
@@ -33,6 +35,7 @@ import (
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
 
@@ -356,4 +359,39 @@ func TestMaintainerSchedule(t *testing.T) {
 
 	cancel()
 	wg.Wait()
+}
+
+func TestMaintainer_GetMaintainerStatusUsesCommittedCheckpoint(t *testing.T) {
+	testutil.SetUpTestServices()
+
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	tableTriggerEventDispatcherID := common.NewDispatcherID()
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
+		common.DDLSpanSchemaID,
+		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
+			ID:              tableTriggerEventDispatcherID.ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    10,
+			Mode:            common.DefaultMode,
+		}, "node1", false)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
+	spanController.AdvanceMaintainerCommittedCheckpointTs(20)
+
+	m := &Maintainer{
+		changefeedID: cfID,
+		controller: &Controller{
+			spanController: spanController,
+		},
+		statusChanged: atomic.NewBool(false),
+	}
+	m.watermark.Watermark = &heartbeatpb.Watermark{
+		CheckpointTs: 30,
+		ResolvedTs:   40,
+		LastSyncedTs: 50,
+	}
+	m.runningErrors.m = make(map[node.ID]*heartbeatpb.RunningError)
+
+	status := m.GetMaintainerStatus()
+	require.Equal(t, uint64(20), status.CheckpointTs)
+	require.Equal(t, uint64(50), status.LastSyncedTs)
 }
