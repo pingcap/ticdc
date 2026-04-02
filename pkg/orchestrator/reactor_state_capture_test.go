@@ -90,13 +90,13 @@ func mustUpdateCapture(
 	data, err := info.Marshal()
 	require.NoError(t, err)
 
-	err = state.Update(util.NewEtcdKey(etcd.GetEtcdKeyCaptureInfo(etcd.DefaultCDCClusterID, string(captureID))), data, false)
+	err = state.Update(util.NewEtcdKey(etcd.GetEtcdKeyCaptureInfo(state.ClusterID, string(captureID))), data, false)
 	require.NoError(t, err)
 }
 
 func mustDeleteCapture(t *testing.T, state *GlobalReactorState, captureID config.CaptureID) {
 	t.Helper()
 
-	err := state.Update(util.NewEtcdKey(etcd.GetEtcdKeyCaptureInfo(etcd.DefaultCDCClusterID, string(captureID))), nil, false)
+	err := state.Update(util.NewEtcdKey(etcd.GetEtcdKeyCaptureInfo(state.ClusterID, string(captureID))), nil, false)
 	require.NoError(t, err)
 }
