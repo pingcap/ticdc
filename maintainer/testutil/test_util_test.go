@@ -24,6 +24,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// The helper stores a concrete messageCenter behind the interface, and the bug is
+// specifically about whether its run context has already been canceled on return.
 func getMessageCenterContext(t *testing.T, mc messaging.MessageCenter) context.Context {
 	t.Helper()
 
