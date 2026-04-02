@@ -94,7 +94,7 @@ type RedoColumn struct {
 // RedoColumnValue stores Column change
 type RedoColumnValue struct {
 	// Fields from Column and can't be marshaled directly in Column.
-	Value interface{} `msg:"column"`
+	Value any `msg:"column"`
 	// msgp transforms empty byte slice into nil, PTAL msgp#247.
 	ValueIsEmptyBytes bool   `msg:"value-is-empty-bytes"`
 	Flag              uint64 `msg:"flag"`
@@ -143,12 +143,10 @@ func (r *RedoRowEvent) ToRedoLog() *RedoLog {
 	}
 	if r.TableInfo != nil {
 		redoLog.RedoRow.Row.Table = &common.TableName{
-			Schema:       r.TableInfo.TableName.Schema,
-			Table:        r.TableInfo.TableName.Table,
-			TableID:      r.PhysicalTableID,
-			IsPartition:  r.TableInfo.TableName.IsPartition,
-			TargetSchema: r.TableInfo.TableName.TargetSchema,
-			TargetTable:  r.TableInfo.TableName.TargetTable,
+			Schema:      r.TableInfo.GetTargetSchemaName(),
+			Table:       r.TableInfo.GetTargetTableName(),
+			TableID:     r.PhysicalTableID,
+			IsPartition: r.TableInfo.TableName.IsPartition,
 		}
 		redoLog.RedoRow.Row.IndexColumns = getIndexColumns(r.TableInfo)
 
@@ -221,7 +219,12 @@ func (d *DDLEvent) ToRedoLog() *RedoLog {
 		Type: RedoLogTypeDDL,
 	}
 	if d.TableInfo != nil {
-		redoLog.RedoDDL.TableName = d.TableInfo.TableName
+		redoLog.RedoDDL.TableName = common.TableName{
+			Schema:      d.TableInfo.GetTargetSchemaName(),
+			Table:       d.TableInfo.GetTargetTableName(),
+			TableID:     d.TableInfo.TableName.TableID,
+			IsPartition: d.TableInfo.TableName.IsPartition,
+		}
 	}
 
 	return redoLog
@@ -329,18 +332,8 @@ func (r *RedoDMLEvent) ToDMLEvent() *DMLEvent {
 		indexInfo.Primary = isPrimary
 		tidbTableInfo.Indices = append(tidbTableInfo.Indices, indexInfo)
 	}
-	tableInfo := common.NewTableInfo4Decoder(r.Row.Table.Schema, tidbTableInfo)
-	// Restore routing info from redo log (TargetSchema/TargetTable for table routing).
-	// We must use CloneWithRouting because NewTableInfo4Decoder already called InitPrivateFields()
-	// which pre-computed SQL statements using the source schema/table. CloneWithRouting creates
-	// a new TableInfo with routing applied and uninitialized preSQLs that will be computed
-	// correctly when InitPrivateFields() is called.
-	if r.Row.Table.TargetSchema != "" || r.Row.Table.TargetTable != "" {
-		tableInfo = tableInfo.CloneWithRouting(r.Row.Table.TargetSchema, r.Row.Table.TargetTable)
-		tableInfo.InitPrivateFields()
-	}
 	event := &DMLEvent{
-		TableInfo:       tableInfo,
+		TableInfo:       common.NewTableInfo4Decoder(r.Row.Table.Schema, tidbTableInfo),
 		CommitTs:        r.Row.CommitTs,
 		StartTs:         r.Row.StartTs,
 		Length:          1,
@@ -475,7 +468,7 @@ func collectAllColumnsValue(data []RedoColumnValue, columns []*timodel.ColumnInf
 	}
 }
 
-func appendCol2Chunk(idx int, raw interface{}, ft tiTypes.FieldType, chk *chunk.Chunk) {
+func appendCol2Chunk(idx int, raw any, ft tiTypes.FieldType, chk *chunk.Chunk) {
 	if raw == nil {
 		chk.AppendNull(idx)
 		return

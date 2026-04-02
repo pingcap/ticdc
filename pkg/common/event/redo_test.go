@@ -16,12 +16,11 @@ package event
 import (
 	"testing"
 
-	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/stretchr/testify/require"
 )
 
-func TestRedoDMLEventToDMLEventPreservesOriginAndTargetNames(t *testing.T) {
+func TestRedoUsesRoutedTableNames(t *testing.T) {
 	t.Parallel()
 
 	helper := NewEventTestHelper(t)
@@ -33,6 +32,35 @@ func TestRedoDMLEventToDMLEventPreservesOriginAndTargetNames(t *testing.T) {
 
 	sourceTableInfo := helper.GetTableInfo(job)
 	routedTableInfo := sourceTableInfo.CloneWithRouting("target_db", "target_table")
+
+	redoDDLEvent := (&DDLEvent{
+		Query:      "ALTER TABLE `target_db`.`target_table` ADD COLUMN age INT",
+		Type:       byte(model.ActionAddColumn),
+		SchemaName: "test",
+		TableName:  "t",
+		TableInfo:  routedTableInfo,
+		FinishedTs: 200,
+		StartTs:    100,
+	}).ToRedoLog().RedoDDL
+
+	require.Equal(t, "target_db", redoDDLEvent.TableName.Schema)
+	require.Equal(t, "target_table", redoDDLEvent.TableName.Table)
+	require.Empty(t, redoDDLEvent.TableName.TargetSchema)
+	require.Empty(t, redoDDLEvent.TableName.TargetTable)
+
+	ddlEvent := redoDDLEvent.ToDDLEvent()
+	require.Equal(t, "target_db", ddlEvent.SchemaName)
+	require.Equal(t, "target_table", ddlEvent.TableName)
+	require.Equal(t, "target_db", ddlEvent.GetTargetSchemaName())
+	require.Equal(t, "target_table", ddlEvent.GetTargetTableName())
+	require.Equal(t, "target_db", ddlEvent.TableInfo.GetSchemaName())
+	require.Equal(t, "target_table", ddlEvent.TableInfo.GetTableName())
+	require.Equal(t, "target_db", ddlEvent.TableInfo.GetTargetSchemaName())
+	require.Equal(t, "target_table", ddlEvent.TableInfo.GetTargetTableName())
+	require.Equal(t, []SchemaTableName{{
+		SchemaName: "target_db",
+		TableName:  "target_table",
+	}}, ddlEvent.BlockedTableNames)
 
 	dmlEvent := helper.DML2Event("test", "t", `insert into test.t values (1, 'alice')`)
 	dmlEvent.TableInfo = routedTableInfo
@@ -48,42 +76,14 @@ func TestRedoDMLEventToDMLEventPreservesOriginAndTargetNames(t *testing.T) {
 		Event:           row,
 	}).ToRedoLog().RedoRow
 
+	require.Equal(t, "target_db", redoRow.Row.Table.Schema)
+	require.Equal(t, "target_table", redoRow.Row.Table.Table)
+	require.Empty(t, redoRow.Row.Table.TargetSchema)
+	require.Empty(t, redoRow.Row.Table.TargetTable)
+
 	decoded := redoRow.ToDMLEvent()
-	require.Equal(t, "test", decoded.TableInfo.GetSchemaName())
-	require.Equal(t, "t", decoded.TableInfo.GetTableName())
+	require.Equal(t, "target_db", decoded.TableInfo.GetSchemaName())
+	require.Equal(t, "target_table", decoded.TableInfo.GetTableName())
 	require.Equal(t, "target_db", decoded.TableInfo.GetTargetSchemaName())
 	require.Equal(t, "target_table", decoded.TableInfo.GetTargetTableName())
-}
-
-func TestRedoDDLEventToDDLEventPreservesOriginAndTargetNames(t *testing.T) {
-	t.Parallel()
-
-	redoDDLEvent := &RedoDDLEvent{
-		DDL: &DDLEventInRedoLog{
-			StartTs:  100,
-			CommitTs: 200,
-			Query:    "ALTER TABLE `target_db`.`target_table` ADD COLUMN age INT",
-		},
-		Type: byte(model.ActionAddColumn),
-		TableName: common.TableName{
-			Schema:       "source_db",
-			Table:        "source_table",
-			TargetSchema: "target_db",
-			TargetTable:  "target_table",
-		},
-	}
-
-	ddlEvent := redoDDLEvent.ToDDLEvent()
-	require.Equal(t, "source_db", ddlEvent.SchemaName)
-	require.Equal(t, "source_table", ddlEvent.TableName)
-	require.Equal(t, "target_db", ddlEvent.GetTargetSchemaName())
-	require.Equal(t, "target_table", ddlEvent.GetTargetTableName())
-	require.Equal(t, "source_db", ddlEvent.TableInfo.GetSchemaName())
-	require.Equal(t, "source_table", ddlEvent.TableInfo.GetTableName())
-	require.Equal(t, "target_db", ddlEvent.TableInfo.GetTargetSchemaName())
-	require.Equal(t, "target_table", ddlEvent.TableInfo.GetTargetTableName())
-	require.Equal(t, []SchemaTableName{{
-		SchemaName: "target_db",
-		TableName:  "target_table",
-	}}, ddlEvent.BlockedTableNames)
 }
