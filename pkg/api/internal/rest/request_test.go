@@ -169,3 +169,23 @@ func TestResultZeroLengthBody(t *testing.T) {
 	require.NotNil(t, err)
 	require.Equal(t, strings.Contains(err.Error(), "0-length"), true)
 }
+
+func TestRequestDoReturnsMessageFieldForJSONError(t *testing.T) {
+	cli := httputil.NewTestClient(clientFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusBadRequest,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body: io.NopCloser(strings.NewReader(
+				`{"class":0,"code":0,"message":"invalid api parameter","rfccode":"CDC:ErrAPIInvalidParam"}`,
+			)),
+		}, nil
+	}))
+
+	req := newRequestWithClient(&url.URL{Path: "/test"}, "/api/v2", nil).WithMethod(HTTPMethodGet)
+	req.WithURI("/changefeeds")
+	req.c.Client = cli
+
+	err := req.Do(context.Background()).Error()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid api parameter")
+}
