@@ -22,7 +22,7 @@ function run() {
 	stop_tidb_cluster || true
 	rm -rf "$WORK_DIR" && mkdir -p "$WORK_DIR"
 	start_tidb_cluster --workdir "$WORK_DIR"
-	TICDC_NEWARCH=true run_cdc_server --workdir "$WORK_DIR" --binary "$CDC_BINARY"
+	run_cdc_server --workdir "$WORK_DIR" --binary "$CDC_BINARY"
 
 	set +e
 	output=$(cdc cli --server "http://127.0.0.1:8300" changefeed pause --changefeed-id "missing-keyspace" 2>&1)
