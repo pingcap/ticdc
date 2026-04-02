@@ -424,7 +424,7 @@ func TestMarkSpanAbsent(t *testing.T) {
 }
 
 func newControllerWithCheckerForTest(t *testing.T) *Controller {
-	testutil.SetUpTestServices()
+	testutil.SetUpTestServices(t)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
