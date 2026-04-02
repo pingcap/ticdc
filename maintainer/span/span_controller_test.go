@@ -301,8 +301,6 @@ func TestController_Statistics(t *testing.T) {
 
 // TestBasicFunction tests the basic functionality of the controller
 func TestBasicFunction(t *testing.T) {
-	t.Parallel()
-
 	controller := newControllerWithCheckerForTest(t)
 	absent := replica.NewSpanReplication(controller.changefeedID, common.NewDispatcherID(), 1, testutil.GetTableSpanByID(4), 1, common.DefaultMode, false)
 	controller.AddAbsentReplicaSet(absent)
@@ -377,8 +375,6 @@ func TestBasicFunction(t *testing.T) {
 
 // TestReplaceReplicaSet tests the ReplaceReplicaSet functionality
 func TestReplaceReplicaSet(t *testing.T) {
-	t.Parallel()
-
 	controller := newControllerWithCheckerForTest(t)
 	// replicating and scheduling will be returned
 	replicaSpanID := common.NewDispatcherID()
@@ -405,8 +401,6 @@ func TestReplaceReplicaSet(t *testing.T) {
 
 // TestMarkSpanAbsent tests the MarkSpanAbsent functionality
 func TestMarkSpanAbsent(t *testing.T) {
-	t.Parallel()
-
 	controller := newControllerWithCheckerForTest(t)
 	// replicating and scheduling will be returned
 	replicaSpanID := common.NewDispatcherID()
