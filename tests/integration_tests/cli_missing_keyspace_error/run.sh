@@ -6,31 +6,7 @@ CUR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source $CUR/../_utils/test_prepare
 WORK_DIR=$OUT_DIR/$TEST_NAME
 SINK_TYPE=$1
-cdc_pid=
-
-function start_cdc_server() {
-	TICDC_NEWARCH=true cdc server \
-		--addr "127.0.0.1:8300" \
-		--log-file "$WORK_DIR/cdc.log" \
-		--log-level debug >"$WORK_DIR/stdout.log" 2>&1 &
-	cdc_pid=$!
-
-	for i in $(seq 1 30); do
-		if ! kill -0 "$cdc_pid" >/dev/null 2>&1; then
-			echo "cdc server exited unexpectedly while starting"
-			tail -n 80 "$WORK_DIR/stdout.log" || true
-			exit 1
-		fi
-		if curl -sf http://127.0.0.1:8300/api/v2/status >/dev/null; then
-			return
-		fi
-		sleep 2
-	done
-
-	echo "cdc server is not ready after timeout"
-	tail -n 80 "$WORK_DIR/stdout.log" || true
-	exit 1
-}
+CDC_BINARY=cdc
 
 function run() {
 	if [ "$SINK_TYPE" != "mysql" ]; then
@@ -46,7 +22,7 @@ function run() {
 	stop_tidb_cluster || true
 	rm -rf "$WORK_DIR" && mkdir -p "$WORK_DIR"
 	start_tidb_cluster --workdir "$WORK_DIR"
-	start_cdc_server
+	TICDC_NEWARCH=true run_cdc_server --workdir "$WORK_DIR" --binary "$CDC_BINARY"
 
 	set +e
 	output=$(cdc cli --server "http://127.0.0.1:8300" changefeed pause --changefeed-id "missing-keyspace" 2>&1)
