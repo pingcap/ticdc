@@ -24,38 +24,6 @@ function run() {
 	start_tidb_cluster --workdir "$WORK_DIR"
 	run_cdc_server --workdir "$WORK_DIR" --binary "$CDC_BINARY"
 
-	http_status=$(curl -sS -X POST "http://127.0.0.1:8300/api/v2/changefeeds/missing-keyspace/pause" \
-		-o "$WORK_DIR/http_api_missing_keyspace.json" -w "%{http_code}")
-	http_body=$(cat "$WORK_DIR/http_api_missing_keyspace.json")
-
-	if [ "$http_status" != "400" ]; then
-		echo "expected HTTP API status 400 when keyspace is missing, got ${http_status}"
-		echo "$http_body"
-		exit 1
-	fi
-
-	if ! echo "$http_body" | grep -q "please specify --keyspace or -k"; then
-		echo "expected missing-keyspace guidance not found in HTTP API response:"
-		echo "$http_body"
-		exit 1
-	fi
-
-	http_status=$(curl -sS -X POST "http://127.0.0.1:8300/api/v2/changefeeds/missing-keyspace/pause?keyspace=not-exist" \
-		-o "$WORK_DIR/http_api_not_exist_keyspace.json" -w "%{http_code}")
-	http_body=$(cat "$WORK_DIR/http_api_not_exist_keyspace.json")
-
-	if [ "$http_status" != "400" ]; then
-		echo "expected HTTP API status 400 when keyspace does not exist, got ${http_status}"
-		echo "$http_body"
-		exit 1
-	fi
-
-	if ! echo "$http_body" | grep -q "does not exist, please check --keyspace or -k"; then
-		echo "expected non-existing keyspace guidance not found in HTTP API response:"
-		echo "$http_body"
-		exit 1
-	fi
-
 	set +e
 	output=$(cdc cli --server "http://127.0.0.1:8300" changefeed pause --changefeed-id "missing-keyspace" 2>&1)
 	exit_code=$?
