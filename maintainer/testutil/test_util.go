@@ -44,7 +44,10 @@ func GetTableSpanByID(id common.TableID) *heartbeatpb.TableSpan {
 // SetUpTestServices installs the shared test services and keeps them alive for the
 // whole test. The message center must stay open until cleanup because callers store
 // it in app context and use it after this helper returns.
-func SetUpTestServices(t testing.TB) {
+//
+// The returned node ID lets tests exercise the live local message center without
+// reaching into its internal state.
+func SetUpTestServices(t testing.TB) node.ID {
 	t.Helper()
 
 	n := node.NewInfo("", "")
@@ -64,6 +67,8 @@ func SetUpTestServices(t testing.TB) {
 
 	pdAPIClient := NewMockPDAPIClient()
 	appcontext.SetService(appcontext.PDAPIClient, pdAPIClient)
+
+	return n.ID
 }
 
 type MockCache struct {

@@ -15,39 +15,36 @@ package testutil
 
 import (
 	"context"
-	"reflect"
 	"testing"
-	"unsafe"
+	"time"
 
+	"github.com/pingcap/ticdc/heartbeatpb"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/stretchr/testify/require"
 )
 
-// The helper stores a concrete messageCenter behind the interface, and the bug is
-// specifically about whether its run context has already been canceled on return.
-func getMessageCenterContext(t *testing.T, mc messaging.MessageCenter) context.Context {
-	t.Helper()
-
-	value := reflect.ValueOf(mc)
-	require.Equal(t, reflect.Ptr, value.Kind())
-
-	ctxField := value.Elem().FieldByName("ctx")
-	require.True(t, ctxField.IsValid())
-	require.True(t, ctxField.CanAddr())
-
-	return *(*context.Context)(unsafe.Pointer(ctxField.UnsafeAddr()))
-}
-
 func TestSetUpTestServicesKeepsMessageCenterAlive(t *testing.T) {
-	SetUpTestServices(t)
+	localNodeID := SetUpTestServices(t)
 
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
-	ctx := getMessageCenterContext(t, mc)
+	require.NotNil(t, mc)
+
+	const topic = "message-center-lifecycle-regression"
+	handlerCalled := make(chan struct{}, 1)
+	mc.RegisterHandler(topic, func(_ context.Context, msg *messaging.TargetMessage) error {
+		require.Equal(t, localNodeID, msg.To)
+		handlerCalled <- struct{}{}
+		return nil
+	})
+	defer mc.DeRegisterHandler(topic)
+
+	err := mc.SendCommand(messaging.NewSingleTargetMessage(localNodeID, topic, &heartbeatpb.RemoveMaintainerRequest{}))
+	require.NoError(t, err)
 
 	select {
-	case <-ctx.Done():
+	case <-handlerCalled:
+	case <-time.After(time.Second):
 		t.Fatalf("SetUpTestServices stored a closed message center in app context")
-	default:
 	}
 }
