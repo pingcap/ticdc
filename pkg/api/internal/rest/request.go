@@ -359,7 +359,17 @@ func (r *Request) checkResponse(resp *http.Response) *Result {
 
 	contentType := resp.Header.Get("Content-Type")
 	if resp.StatusCode < http.StatusOK || resp.StatusCode > http.StatusPartialContent {
-		err := r.parseResponseError(body, contentType, resp.StatusCode)
+		var jsonErr api.HTTPError
+		err := json.Unmarshal(body, &jsonErr)
+		if err == nil {
+			err = errors.New(jsonErr.Error)
+		} else {
+			err = fmt.Errorf(
+				"call cdc api failed, url=%s, "+
+					"code=%d, contentType=%s, response=%s",
+				r.URL().String(),
+				resp.StatusCode, contentType, string(body))
+		}
 
 		return &Result{
 			body:        body,
@@ -374,35 +384,6 @@ func (r *Request) checkResponse(resp *http.Response) *Result {
 		contentType: contentType,
 		statusCode:  resp.StatusCode,
 	}
-}
-
-func (r *Request) parseResponseError(body []byte, contentType string, statusCode int) error {
-	var httpErr api.HTTPError
-	if err := json.Unmarshal(body, &httpErr); err == nil && httpErr.Error != "" {
-		return errors.New(httpErr.Error)
-	}
-
-	var genericErr struct {
-		Message string `json:"message"`
-		Error   string `json:"error"`
-		RFCCode string `json:"rfccode"`
-	}
-	if err := json.Unmarshal(body, &genericErr); err == nil {
-		if genericErr.Message != "" {
-			if genericErr.RFCCode != "" {
-				return errors.New(fmt.Sprintf("[%s]%s", genericErr.RFCCode, genericErr.Message))
-			}
-			return errors.New(genericErr.Message)
-		}
-		if genericErr.Error != "" {
-			return errors.New(genericErr.Error)
-		}
-	}
-
-	return fmt.Errorf(
-		"call cdc api failed, url=%s, code=%d, contentType=%s, response=%s",
-		r.URL().String(),
-		statusCode, contentType, string(body))
 }
 
 // Result contains the result of calling Request.Do().
