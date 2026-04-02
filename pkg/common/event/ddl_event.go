@@ -41,14 +41,17 @@ type DDLEvent struct {
 	Type byte `json:"type"`
 	// SchemaID is from upstream job.SchemaID
 	SchemaID int64 `json:"schema_id"`
-	// SchemaName and TableName carry the origin upstream names.
+
+	// SchemaName and TableName carry the origin names.
 	SchemaName string `json:"schema_name"`
 	TableName  string `json:"table_name"`
-	// ExtraSchemaName and ExtraTableName carry the origin old names for RenameTable.
+
+	// the following two fields are just used for RenameTable,
+	// they are the old schema/table name of the table
 	ExtraSchemaName string `json:"extra_schema_name"`
 	ExtraTableName  string `json:"extra_table_name"`
 
-	// target related fields carry routed names for sink output paths.
+	// target related fields carry routed names.
 	// They are set after the unmarshal, so no need to be serialized.
 	targetSchemaName      string `json:"-"`
 	targetTableName       string `json:"-"`
@@ -353,13 +356,6 @@ func (e *DDLEvent) GetDDLQuery() string {
 		return ""
 	}
 	return e.Query
-}
-
-func (e *DDLEvent) GetDDLSchemaName() string {
-	if e == nil {
-		return ""
-	}
-	return e.GetTargetSchemaName()
 }
 
 func (e *DDLEvent) GetDDLType() model.ActionType {

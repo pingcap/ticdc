@@ -78,7 +78,6 @@ func TestRedoDDLEventToDDLEventPreservesOriginAndTargetNames(t *testing.T) {
 	require.Equal(t, "source_table", ddlEvent.TableName)
 	require.Equal(t, "target_db", ddlEvent.GetTargetSchemaName())
 	require.Equal(t, "target_table", ddlEvent.GetTargetTableName())
-	require.Equal(t, "target_db", ddlEvent.GetDDLSchemaName())
 	require.Equal(t, "source_db", ddlEvent.TableInfo.GetSchemaName())
 	require.Equal(t, "source_table", ddlEvent.TableInfo.GetTableName())
 	require.Equal(t, "target_db", ddlEvent.TableInfo.GetTargetSchemaName())

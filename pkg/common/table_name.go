@@ -34,12 +34,12 @@ type TableName struct {
 
 // String implements fmt.Stringer interface.
 func (t TableName) String() string {
-	return fmt.Sprintf("%s.%s", t.GetSchema(), t.GetTable())
+	return fmt.Sprintf("%s.%s", t.Schema, t.Table)
 }
 
 // QuoteString returns quoted full original table name.
 func (t TableName) QuoteString() string {
-	return QuoteSchema(t.GetSchema(), t.GetTable())
+	return QuoteSchema(t.Schema, t.Table)
 }
 
 // GetSchema returns the original schema name.
