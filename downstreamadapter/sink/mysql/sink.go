@@ -61,6 +61,7 @@ type Sink struct {
 	cfg        *mysql.Config
 	maxTxnRows int
 	bdrMode    bool
+
 	// enableActiveActive enables active-active replication behaviors in the MySQL-class sink.
 	enableActiveActive bool
 
@@ -418,7 +419,7 @@ func (s *Sink) Close(removeChangefeed bool) {
 }
 
 func (s *Sink) BatchCount() int {
-	return s.maxTxnRows * len(s.dmlWriter)
+	return s.cfg.MaxTxnRow * len(s.dmlWriter)
 }
 
 func (s *Sink) BatchBytes() int {

@@ -48,6 +48,7 @@ type stream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 
 	// The queue to store the pending events of this stream.
 	eventQueue eventQueue[A, P, T, D, H]
+	batcher    *batcher[T]
 
 	option Option
 
@@ -65,12 +66,14 @@ func newStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
 	component string,
 	handler H,
 	option Option,
+	batchConfigRegistry *areaBatchConfigRegistry[A],
 ) *stream[A, P, T, D, H] {
 	s := &stream[A, P, T, D, H]{
 		module:     component,
 		id:         id,
 		handler:    handler,
-		eventQueue: newEventQueue(option, handler),
+		eventQueue: newEventQueue(handler, batchConfigRegistry),
+		batcher:    newDefaultBatcher[T](),
 		option:     option,
 		startTime:  time.Now(),
 	}
@@ -109,7 +112,6 @@ func (s *stream[A, P, T, D, H]) addEvent(event eventWrap[A, P, T, D, H]) {
 	// Fast path: try direct send without blocking to avoid context check
 	select {
 	case eventChan <- event:
-		return
 	default:
 		// Slow path: with close check while waiting
 		select {
@@ -161,10 +163,10 @@ func (s *stream[A, P, T, D, H]) receiver() {
 	}()
 
 	for {
-		event, ok := buffer.FrontRef()
 		if s.closed.Load() {
 			return
 		}
+		event, ok := buffer.FrontRef()
 		if !ok {
 			select {
 			case <-s.ctx.Done():
@@ -231,16 +233,17 @@ func (s *stream[A, P, T, D, H]) handleLoop() {
 	// Declared here to avoid repeated allocation.
 	var (
 		eventQueueEmpty = false
-		eventBuf        = make([]T, 0, s.option.BatchCount)
+		eventBuf        []T
 		zeroT           T
 		cleanUpEventBuf = func() {
 			for i := range eventBuf {
 				eventBuf[i] = zeroT
 			}
-			eventBuf = eventBuf[:0]
+			eventBuf = nil
 		}
-		path   *pathInfo[A, P, T, D, H]
-		nBytes int
+		path     *pathInfo[A, P, T, D, H]
+		nBytes   int
+		duration time.Duration
 	)
 
 	// For testing. Don't handle events until this wait group is done.
@@ -248,6 +251,9 @@ func (s *stream[A, P, T, D, H]) handleLoop() {
 		s.option.handleWait.Wait()
 	}
 
+	// Variables below will be used in the Loop below.
+	// Declared here to avoid repeated allocation.
+	// todo: shall we preallocate the event buff and path here ?
 	// 1. Drain the eventChan to pendingQueue.
 	// 2. Pop events from the eventQueue and handle them.
 Loop:
@@ -283,8 +289,7 @@ Loop:
 				handleEvent(e)
 				eventQueueEmpty = false
 			default:
-				start := time.Now()
-				eventBuf, path, nBytes = s.eventQueue.popEvents(eventBuf)
+				eventBuf, path, nBytes, duration = s.eventQueue.popEvents(s.batcher)
 				if len(eventBuf) == 0 {
 					eventQueueEmpty = true
 					continue Loop
@@ -298,7 +303,7 @@ Loop:
 
 				path.blocking.Store(s.handler.Handle(path.dest, eventBuf...))
 
-				metrics.DynamicStreamBatchDuration.WithLabelValues(s.module, path.metricLabel).Observe(float64(time.Since(start).Seconds()))
+				metrics.DynamicStreamBatchDuration.WithLabelValues(s.module, path.metricLabel).Observe(float64(duration.Seconds()))
 				metrics.DynamicStreamBatchCount.WithLabelValues(s.module, path.metricLabel).Observe(float64(len(eventBuf)))
 				metrics.DynamicStreamBatchBytes.WithLabelValues(s.module, path.metricLabel).Observe(float64(nBytes))
 

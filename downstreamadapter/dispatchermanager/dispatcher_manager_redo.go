@@ -130,6 +130,7 @@ func (e *DispatcherManager) NewTableTriggerRedoDispatcher(id *heartbeatpb.Dispat
 
 func (e *DispatcherManager) newRedoDispatchers(infos map[common.DispatcherID]dispatcherCreateInfo, removeDDLTs bool) error {
 	start := time.Now()
+	batchCount, batchBytes := e.getRedoEventCollectorBatchCountAndBytes(e.redoSink)
 
 	dispatcherIds, _, startTsList, tableSpans, schemaIds, scheduleSkipDMLAsStartTsList := prepareCreateDispatcher(infos, e.redoDispatcherMap)
 	if len(dispatcherIds) == 0 {
@@ -159,6 +160,8 @@ func (e *DispatcherManager) newRedoDispatchers(infos map[common.DispatcherID]dis
 			e.redoSchemaIDToDispatchers,
 			false, // skipSyncpointAtStartTs
 			scheduleSkipDMLAsStartTsList[idx],
+			batchCount,
+			batchBytes,
 			e.redoSink,
 			e.sharedInfo,
 		)
@@ -214,6 +217,7 @@ func (e *DispatcherManager) mergeRedoDispatcher(dispatcherIDs []common.Dispatche
 	if mergedSpan == nil {
 		return nil
 	}
+	batchCount, batchBytes := e.getRedoEventCollectorBatchCountAndBytes(e.redoSink)
 
 	mergedDispatcher := dispatcher.NewRedoDispatcher(
 		mergedDispatcherID,
@@ -223,6 +227,8 @@ func (e *DispatcherManager) mergeRedoDispatcher(dispatcherIDs []common.Dispatche
 		e.redoSchemaIDToDispatchers,
 		false, // skipSyncpointAtStartTs
 		false, // skipDMLAsStartTs
+		batchCount,
+		batchBytes,
 		e.redoSink,
 		e.sharedInfo,
 	)

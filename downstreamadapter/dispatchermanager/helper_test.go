@@ -20,7 +20,7 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/mock"
+	sinkmock "github.com/pingcap/ticdc/downstreamadapter/sink/mock"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/redo"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -34,20 +34,41 @@ func TestCheckpointTsMessageHandlerDeadlock(t *testing.T) {
 		Keyspace: "test-namespace",
 		Name:     "test-changefeed",
 	}
-
 	checkpointTsMessage := NewCheckpointTsMessage(&heartbeatpb.CheckpointTsMessage{
 		ChangefeedID: changefeedID,
 		CheckpointTs: 12345,
 	})
-
 	handler := &CheckpointTsMessageHandler{}
 
-	t.Run("normal_operation", func(t *testing.T) {
+	t.Run("normalOperation", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
+		mockSink := sinkmock.NewMockSink(ctrl)
+		mockSink.EXPECT().AddCheckpointTs(uint64(12345)).Times(1)
+		dispatcherManager := &DispatcherManager{
+			sink:                        mockSink,
+			tableTriggerEventDispatcher: &dispatcher.EventDispatcher{},
+		}
 
-		mockSink := mock.NewMockSink(ctrl)
-		mockSink.EXPECT().AddCheckpointTs(checkpointTsMessage.CheckpointTs).Times(1)
+		done := make(chan bool, 1)
+		go func() {
+			done <- handler.Handle(dispatcherManager, checkpointTsMessage)
+		}()
+
+		select {
+		case blocking := <-done:
+			require.False(t, blocking)
+		case <-time.After(time.Second):
+			t.Fatal("normal operation timed out")
+		}
+	})
+
+	t.Run("deadlockScenario", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		mockSink := sinkmock.NewMockSink(ctrl)
+		blockCh := make(chan struct{})
+		mockSink.EXPECT().AddCheckpointTs(uint64(12345)).DoAndReturn(func(uint64) {
+			<-blockCh
+		}).Times(1)
 
 		dispatcherManager := &DispatcherManager{
 			sink:                        mockSink,
@@ -56,90 +77,54 @@ func TestCheckpointTsMessageHandlerDeadlock(t *testing.T) {
 
 		done := make(chan bool, 1)
 		go func() {
-			blocking := handler.Handle(dispatcherManager, checkpointTsMessage)
-			require.False(t, blocking, "Handler should not return blocking=true")
-			done <- true
+			done <- handler.Handle(dispatcherManager, checkpointTsMessage)
 		}()
 
 		select {
 		case <-done:
-		case <-time.After(1 * time.Second):
-			t.Fatal("Normal operation took too long, unexpected")
-		}
-	})
-
-	t.Run("deadlock_scenario", func(t *testing.T) {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-
-		blockCh := make(chan struct{})
-		deadlockMockSink := mock.NewMockSink(ctrl)
-		deadlockMockSink.EXPECT().AddCheckpointTs(checkpointTsMessage.CheckpointTs).Do(
-			func(uint64) {
-				<-blockCh
-			},
-		).Times(1)
-
-		deadlockDispatcherManager := &DispatcherManager{
-			sink:                        deadlockMockSink,
-			tableTriggerEventDispatcher: &dispatcher.EventDispatcher{},
-		}
-
-		done := make(chan bool, 1)
-		go func() {
-			handler.Handle(deadlockDispatcherManager, checkpointTsMessage)
-			done <- true
-		}()
-
-		select {
-		case <-done:
-			t.Fatal("Handler completed unexpectedly - deadlock was not reproduced")
-		case <-time.After(1 * time.Second):
-			t.Log("Successfully reproduced the deadlock: handler is blocked in AddCheckpointTs")
+			t.Fatal("handler completed unexpectedly, deadlock not reproduced")
+		case <-time.After(time.Second):
 		}
 
 		close(blockCh)
+
 		select {
-		case <-done:
-		case <-time.After(1 * time.Second):
-			t.Fatal("handler should resume once AddCheckpointTs unblocks")
+		case blocking := <-done:
+			require.False(t, blocking)
+		case <-time.After(time.Second):
+			t.Fatal("handler did not return after unblocking AddCheckpointTs")
 		}
 	})
 
-	t.Run("deadlock_resolve_scenario", func(t *testing.T) {
+	t.Run("deadlockResolveScenario", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
+		mockSink := sinkmock.NewMockSink(ctrl)
+		sinkCtx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		mockSink.EXPECT().AddCheckpointTs(uint64(12345)).DoAndReturn(func(uint64) {
+			<-sinkCtx.Done()
+		}).Times(1)
 
-		ctx, cancel := context.WithCancel(context.Background())
-		cancel()
-
-		deadlockMockSink := mock.NewMockSink(ctrl)
-		deadlockMockSink.EXPECT().AddCheckpointTs(checkpointTsMessage.CheckpointTs).Do(
-			func(uint64) {
-				select {
-				case <-ctx.Done():
-					return
-				case <-time.After(1 * time.Second):
-					t.Fatal("context cancellation should unblock AddCheckpointTs path")
-				}
-			},
-		).Times(1)
-
-		deadlockDispatcherManager := &DispatcherManager{
-			sink:                        deadlockMockSink,
+		dispatcherManager := &DispatcherManager{
+			sink:                        mockSink,
 			tableTriggerEventDispatcher: &dispatcher.EventDispatcher{},
 		}
-
 		done := make(chan bool, 1)
 		go func() {
-			handler.Handle(deadlockDispatcherManager, checkpointTsMessage)
-			done <- true
+			done <- handler.Handle(dispatcherManager, checkpointTsMessage)
 		}()
 
 		select {
 		case <-done:
-			t.Log("Handler completed normally")
-		case <-time.After(1 * time.Second):
+			t.Fatal("handler completed unexpectedly before cancel")
+		case <-time.After(200 * time.Millisecond):
+		}
+
+		cancel()
+		select {
+		case blocking := <-done:
+			require.False(t, blocking)
+		case <-time.After(time.Second):
 			t.Fatal("deadlock: handler is blocked in AddCheckpointTs")
 		}
 	})
