@@ -80,14 +80,18 @@ func (m *DispatcherOrchestrator) RecvMaintainerRequest(
 	msg *messaging.TargetMessage,
 ) error {
 	if !m.msgGuardWaitGroup.AddIf(func() bool { return !m.closed.Load() }) {
-		log.Debug("dispatcher orchestrator already closed, drop message", zap.Any("message", msg.Message))
+		log.Debug("dispatcher orchestrator already closed, drop message", zap.Any("message", msg))
 		return nil
 	}
 	defer m.msgGuardWaitGroup.Done()
 
 	key, ok := getPendingMessageKey(msg)
 	if !ok {
-		log.Warn("unknown message type, drop message",
+		if msg == nil {
+			log.Warn("nil maintainer message, drop message")
+			return nil
+		}
+		log.Warn("unknown or empty message type, drop message",
 			zap.String("type", msg.Type.String()),
 			zap.Any("message", msg.Message))
 		return nil
@@ -99,6 +103,10 @@ func (m *DispatcherOrchestrator) RecvMaintainerRequest(
 }
 
 func getPendingMessageKey(msg *messaging.TargetMessage) (pendingMessageKey, bool) {
+	if msg == nil || len(msg.Message) == 0 {
+		return pendingMessageKey{}, false
+	}
+
 	var changefeedID *heartbeatpb.ChangefeedID
 	switch req := msg.Message[0].(type) {
 	case *heartbeatpb.MaintainerBootstrapRequest:

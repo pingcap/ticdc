@@ -14,6 +14,7 @@
 package dispatcherorchestrator
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 	"time"
@@ -465,4 +466,19 @@ func TestGetPendingMessageKey_SupportedTypes(t *testing.T) {
 	key, ok = getPendingMessageKey(closeReq)
 	require.True(t, ok)
 	require.Equal(t, pendingMessageKey{changefeedID: cfID, msgType: messaging.TypeMaintainerCloseRequest}, key)
+}
+
+func TestRecvMaintainerRequestDropsNilOrEmptyMessage(t *testing.T) {
+	t.Parallel()
+
+	orchestrator := &DispatcherOrchestrator{}
+
+	require.NotPanics(t, func() {
+		require.NoError(t, orchestrator.RecvMaintainerRequest(context.Background(), nil))
+	})
+
+	emptyMsg := &messaging.TargetMessage{Type: messaging.TypeMaintainerBootstrapRequest}
+	require.NotPanics(t, func() {
+		require.NoError(t, orchestrator.RecvMaintainerRequest(context.Background(), emptyMsg))
+	})
 }
