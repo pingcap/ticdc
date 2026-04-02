@@ -236,9 +236,8 @@ func KeyspaceCheckerMiddleware() gin.HandlerFunc {
 
 		ks := c.Query(api.APIOpVarKeyspace)
 		if ks == "" {
-			err := errors.WrapError(
-				errors.ErrAPIInvalidParam,
-				errors.New("missing required query parameter keyspace, please specify --keyspace or -k"),
+			err := errors.ErrAPIInvalidParam.GenWithStack(
+				"missing required query parameter keyspace, please specify --keyspace or -k",
 			)
 			c.IndentedJSON(http.StatusBadRequest, api.NewHTTPError(err))
 			c.Abort()
@@ -248,9 +247,8 @@ func KeyspaceCheckerMiddleware() gin.HandlerFunc {
 		keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
 		meta, err := keyspaceManager.LoadKeyspace(c.Request.Context(), ks)
 		if errors.IsKeyspaceNotExistError(err) {
-			err = errors.WrapError(
-				errors.ErrAPIInvalidParam,
-				errors.Errorf("keyspace %q does not exist, please check --keyspace or -k", ks),
+			err = errors.ErrAPIInvalidParam.GenWithStack(
+				"keyspace %q does not exist, please check --keyspace or -k", ks,
 			)
 			c.IndentedJSON(http.StatusBadRequest, api.NewHTTPError(err))
 			c.Abort()

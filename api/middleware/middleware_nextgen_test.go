@@ -58,7 +58,7 @@ func TestKeyspaceCheckerMiddleware(t *testing.T) {
 			},
 			expectedStatus:       http.StatusBadRequest,
 			expectedAbort:        true,
-			expectedBodyContains: "invalid api parameter",
+			expectedBodyContains: "does not exist, please check --keyspace or -k",
 		},
 		{
 			name:     "internal server error",
