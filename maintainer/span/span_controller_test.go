@@ -299,6 +299,33 @@ func TestController_Statistics(t *testing.T) {
 	require.Equal(t, 0, controller.GetTaskSizeBySchemaID(3))
 }
 
+func TestController_MaintainerCommittedCheckpointMonotonic(t *testing.T) {
+	t.Parallel()
+
+	controller := newControllerWithCheckerForTest(t)
+	require.Equal(t, uint64(1), controller.GetMaintainerCommittedCheckpointTs())
+
+	controller.AdvanceMaintainerCommittedCheckpointTs(10)
+	require.Equal(t, uint64(10), controller.GetMaintainerCommittedCheckpointTs())
+
+	controller.AdvanceMaintainerCommittedCheckpointTs(5)
+	require.Equal(t, uint64(10), controller.GetMaintainerCommittedCheckpointTs())
+}
+
+func TestController_BindCommittedCheckpointToManagedSpan(t *testing.T) {
+	t.Parallel()
+
+	controller := newControllerWithCheckerForTest(t)
+	controller.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 100}, 5)
+
+	task := controller.GetTasksByTableID(100)[0]
+	controller.AdvanceMaintainerCommittedCheckpointTs(20)
+
+	msg := task.NewAddDispatcherMessage("node1", heartbeatpb.OperatorType_O_Add)
+	req := msg.Message[0].(*heartbeatpb.ScheduleDispatcherRequest)
+	require.Equal(t, uint64(20), req.Config.StartTs)
+}
+
 // TestBasicFunction tests the basic functionality of the controller
 func TestBasicFunction(t *testing.T) {
 	controller := newControllerWithCheckerForTest(t)
