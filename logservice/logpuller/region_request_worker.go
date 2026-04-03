@@ -422,6 +422,7 @@ func (s *regionRequestWorker) processRegionSendTask(
 			// requests in cleanup.
 			s.requestCache.markSent(regionReq)
 			if err := doSend(s.createRegionRequest(region)); err != nil {
+				s.requestCache.markStopped(subID, region.verID.GetID())
 				return err
 			}
 		}
