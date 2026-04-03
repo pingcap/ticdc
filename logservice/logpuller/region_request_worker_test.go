@@ -31,14 +31,14 @@ type mockEventFeedV2Client struct {
 	sendErr error
 }
 
-func (m *mockEventFeedV2Client) Send(*cdcpb.ChangeDataRequest) error { return m.sendErr }
+func (m *mockEventFeedV2Client) Send(*cdcpb.ChangeDataRequest) error   { return m.sendErr }
 func (m *mockEventFeedV2Client) Recv() (*cdcpb.ChangeDataEvent, error) { return nil, nil }
-func (m *mockEventFeedV2Client) Header() (metadata.MD, error) { return metadata.MD{}, nil }
-func (m *mockEventFeedV2Client) Trailer() metadata.MD { return metadata.MD{} }
-func (m *mockEventFeedV2Client) CloseSend() error { return nil }
-func (m *mockEventFeedV2Client) Context() context.Context { return context.Background() }
-func (m *mockEventFeedV2Client) SendMsg(any) error { return nil }
-func (m *mockEventFeedV2Client) RecvMsg(any) error { return nil }
+func (m *mockEventFeedV2Client) Header() (metadata.MD, error)          { return metadata.MD{}, nil }
+func (m *mockEventFeedV2Client) Trailer() metadata.MD                  { return metadata.MD{} }
+func (m *mockEventFeedV2Client) CloseSend() error                      { return nil }
+func (m *mockEventFeedV2Client) Context() context.Context              { return context.Background() }
+func (m *mockEventFeedV2Client) SendMsg(any) error                     { return nil }
+func (m *mockEventFeedV2Client) RecvMsg(any) error                     { return nil }
 
 func prepareRegionForSendTest(region regionInfo) regionInfo {
 	region.rpcCtx = &tikv.RPCContext{
