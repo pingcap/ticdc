@@ -15,15 +15,18 @@ package maintainer
 
 import (
 	"context"
+	"math"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/maintainer/operator"
 	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/maintainer/span"
 	"github.com/pingcap/ticdc/maintainer/testutil"
+	"github.com/pingcap/ticdc/pkg/bootstrap"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -394,4 +397,66 @@ func TestMaintainer_GetMaintainerStatusUsesCommittedCheckpoint(t *testing.T) {
 	status := m.GetMaintainerStatus()
 	require.Equal(t, uint64(20), status.CheckpointTs)
 	require.Equal(t, uint64(50), status.LastSyncedTs)
+}
+
+func TestMaintainerCalculateNewCheckpointTs(t *testing.T) {
+	t.Run("uses reported checkpoint", func(t *testing.T) {
+		m, selfNodeID := newMaintainerForCheckpointCalculationTest()
+		m.checkpointTsByCapture.Set(selfNodeID, heartbeatpb.Watermark{
+			CheckpointTs: 100,
+			ResolvedTs:   100,
+		})
+
+		newWatermark, canUpdate := m.calculateNewCheckpointTs()
+
+		require.True(t, canUpdate)
+		require.NotNil(t, newWatermark)
+		require.Equal(t, uint64(100), newWatermark.CheckpointTs)
+		require.Equal(t, uint64(100), newWatermark.ResolvedTs)
+	})
+
+	t.Run("drops max checkpoint", func(t *testing.T) {
+		m, selfNodeID := newMaintainerForCheckpointCalculationTest()
+		m.checkpointTsByCapture.Set(selfNodeID, heartbeatpb.Watermark{
+			CheckpointTs: math.MaxUint64,
+			ResolvedTs:   math.MaxUint64,
+		})
+
+		newWatermark, canUpdate := m.calculateNewCheckpointTs()
+
+		require.False(t, canUpdate)
+		require.Nil(t, newWatermark)
+	})
+}
+
+func newMaintainerForCheckpointCalculationTest() (*Maintainer, node.ID) {
+	testutil.SetUpTestServices()
+
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	selfNode := node.NewInfo("127.0.0.1:8300", "")
+	_, ddlSpan := newDDLSpan(common.DefaultKeyspaceID, cfID, 1, selfNode, common.DefaultMode)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
+	operatorController := operator.NewOperatorController(cfID, spanController, 1, common.DefaultMode)
+
+	controller := &Controller{
+		spanController:     spanController,
+		operatorController: operatorController,
+	}
+	controller.barrier = NewBarrier(spanController, operatorController, false, nil, common.DefaultMode)
+
+	bootstrapper := bootstrap.NewBootstrapper[heartbeatpb.MaintainerBootstrapResponse](
+		"test",
+		func(id node.ID, addr string) *messaging.TargetMessage { return nil },
+	)
+	_, _, _, _ = bootstrapper.HandleNodesChange(map[node.ID]*node.Info{selfNode.ID: selfNode})
+
+	m := &Maintainer{
+		changefeedID:          cfID,
+		selfNode:              selfNode,
+		controller:            controller,
+		bootstrapper:          bootstrapper,
+		checkpointTsByCapture: newWatermarkCaptureMap(),
+	}
+	m.watermark.Watermark = heartbeatpb.NewMaxWatermark()
+	return m, selfNode.ID
 }
