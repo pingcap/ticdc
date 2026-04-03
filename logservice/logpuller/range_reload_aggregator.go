@@ -83,6 +83,8 @@ func (a *rangeReloadAggregator) add(
 		immediateFlush = true
 		set.flushScheduled = false
 	} else if !set.flushScheduled {
+		// Debounce reloads so a split/merge storm can be collapsed into a
+		// smaller batch of merged spans before hitting region metadata APIs.
 		set.flushScheduled = true
 		a.client.retryScheduler.schedule(a.debounce, func(_ context.Context) {
 			a.flush(subscribedSpan.subID)
@@ -148,6 +150,8 @@ func mergeTableSpans(spans []heartbeatpb.TableSpan) []heartbeatpb.TableSpan {
 		}
 		last := merged[len(merged)-1]
 		if common.EndCompare(last.EndKey, span.StartKey) >= 0 {
+			// Adjacent retry spans are merged too, because they can be resolved
+			// by a single BatchLoadRegionsWithKeyRange call later.
 			if common.EndCompare(span.EndKey, last.EndKey) > 0 {
 				last.EndKey = span.EndKey
 			}

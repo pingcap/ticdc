@@ -634,6 +634,8 @@ func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 
 		cooldown := s.getStoreCooldown(region.rpcCtx.Addr)
 		if cooldown > 0 {
+			// Reschedule the same priority task instead of busy-looping through
+			// attachRPCContext and worker selection while the store is cooling down.
 			s.schedulePriorityTaskAfter(regionTask, cooldown)
 			continue
 		}

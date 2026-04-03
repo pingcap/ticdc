@@ -128,6 +128,8 @@ func (s *retryScheduler) run(ctx context.Context) error {
 		timerCh = nil
 	}
 	for {
+		// Keep only the nearest deadline armed so delayed retries do not spin
+		// when the heap contains many future tasks.
 		if taskHeap.Len() > 0 {
 			resetTimer(time.Until(taskHeap[0].at))
 		} else {
@@ -293,6 +295,8 @@ func (s *subscriptionClient) scheduleRegionRequestAfter(
 	delay time.Duration,
 ) {
 	s.retryScheduler.schedule(delay, func(taskCtx context.Context) {
+		// Re-enter the normal scheduling path after the backoff expires so
+		// range locking and worker selection still use the same code path.
 		s.scheduleRegionRequest(taskCtx, region, priority)
 	})
 }
@@ -329,6 +333,8 @@ func (s *subscriptionClient) getRetryBackoffDelay(
 	regionID uint64,
 	reason retryBackoffReason,
 ) time.Duration {
+	// Backoff is tracked per region and reason so a successful resolved-ts
+	// update on one path can reset retries without affecting unrelated errors.
 	key := retryBackoffKey{subID: subID, regionID: regionID, reason: reason}
 	switch reason {
 	case retryBackoffNotLeader:
@@ -357,6 +363,8 @@ func (s *subscriptionClient) markStoreFailure(storeAddr string) time.Duration {
 	}
 	delay := s.storeBackoff.markFailure(storeAddr)
 	if delay > 0 {
+		// The store-level cooldown prevents a reconnect storm from immediately
+		// pushing the same batch of regions back to a store that just failed.
 		log.Info("subscription client mark store cooldown",
 			zap.String("addr", storeAddr),
 			zap.Duration("delay", delay))
