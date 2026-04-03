@@ -362,7 +362,7 @@ func TestMaintainerSchedule(t *testing.T) {
 }
 
 func TestMaintainer_GetMaintainerStatusUsesCommittedCheckpoint(t *testing.T) {
-	testutil.SetUpTestServices()
+	testutil.SetUpTestServices(t)
 
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
