@@ -222,6 +222,11 @@ type subscriptionClient struct {
 	// errCh is used to receive region errors.
 	// The errors will be handled in `handleErrors` goroutine.
 	errCache *errCache
+
+	retryScheduler        *retryScheduler
+	rangeReloadAggregator *rangeReloadAggregator
+	retryBackoff          *retryBackoffManager
+	storeBackoff          *storeBackoffManager
 }
 
 // NewSubscriptionClient creates a client.
@@ -248,6 +253,10 @@ func NewSubscriptionClient(
 		errCache:          newErrCache(),
 	}
 	subClient.ctx, subClient.cancel = context.WithCancel(context.Background())
+	subClient.retryScheduler = newRetryScheduler(subClient)
+	subClient.rangeReloadAggregator = newRangeReloadAggregator(subClient, rangeReloadDebounceInterval, rangeReloadImmediateFlushMax)
+	subClient.retryBackoff = newRetryBackoffManager()
+	subClient.storeBackoff = newStoreBackoffManager()
 	subClient.totalSpans.spanMap = make(map[SubscriptionID]*subscribedSpan)
 
 	option := dynstream.NewOption()
@@ -463,6 +472,7 @@ func (s *subscriptionClient) Run(ctx context.Context) error {
 	g.Go(func() error { return s.handleRangeTasks(ctx) })
 	g.Go(func() error { return s.handleRegions(ctx, g) })
 	g.Go(func() error { return s.handleErrors(ctx) })
+	g.Go(func() error { return s.retryScheduler.run(ctx) })
 	g.Go(func() error { return s.runResolveLockChecker(ctx) })
 	g.Go(func() error { return s.handleResolveLockTasks(ctx) })
 	g.Go(func() error { return s.logSlowRegions(ctx) })
@@ -619,6 +629,12 @@ func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 		region, ok := s.attachRPCContextForRegion(ctx, region)
 		// If attachRPCContextForRegion fails, the region will be re-scheduled.
 		if !ok {
+			continue
+		}
+
+		cooldown := s.getStoreCooldown(region.rpcCtx.Addr)
+		if cooldown > 0 {
+			s.schedulePriorityTaskAfter(regionTask, cooldown)
 			continue
 		}
 
@@ -822,10 +838,7 @@ func (s *subscriptionClient) scheduleRangeRequest(
 	filterLoop bool,
 	priority TaskType,
 ) {
-	select {
-	case <-ctx.Done():
-	case s.rangeTaskCh <- rangeTask{span: span, subscribedSpan: subscribedSpan, filterLoop: filterLoop, priority: priority}:
-	}
+	s.scheduleRangeTaskAfter(rangeTask{span: span, subscribedSpan: subscribedSpan, filterLoop: filterLoop, priority: priority}, 0)
 }
 
 func (s *subscriptionClient) handleErrors(ctx context.Context) error {
@@ -855,27 +868,40 @@ func (s *subscriptionClient) doHandleError(ctx context.Context, errInfo regionEr
 		if notLeader := innerErr.GetNotLeader(); notLeader != nil {
 			metricFeedNotLeaderCounter.Inc()
 			s.regionCache.UpdateLeader(errInfo.verID, notLeader.GetLeader(), errInfo.rpcCtx.AccessIdx)
-			s.scheduleRegionRequest(ctx, errInfo.regionInfo, TaskHighPrior)
+			delay := s.getRetryBackoffDelay(errInfo.subscribedSpan.subID, errInfo.verID.GetID(), retryBackoffNotLeader)
+			s.scheduleRegionRequestAfter(ctx, errInfo.regionInfo, TaskHighPrior, delay)
 			return nil
 		}
 		if innerErr.GetEpochNotMatch() != nil {
 			metricFeedEpochNotMatchCounter.Inc()
-			s.scheduleRangeRequest(ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, TaskHighPrior)
+			s.addReloadRangeTask(errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, TaskHighPrior)
 			return nil
 		}
 		if innerErr.GetRegionNotFound() != nil {
 			metricFeedRegionNotFoundCounter.Inc()
-			s.scheduleRangeRequest(ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, TaskHighPrior)
+			s.addReloadRangeTask(errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, TaskHighPrior)
 			return nil
 		}
 		if innerErr.GetCongested() != nil {
 			metricKvCongestedCounter.Inc()
-			s.scheduleRegionRequest(ctx, errInfo.regionInfo, TaskLowPrior)
+			delay := s.getRetryBackoffDelay(errInfo.subscribedSpan.subID, errInfo.verID.GetID(), retryBackoffBusy)
+			if errInfo.rpcCtx != nil {
+				if storeDelay := s.markStoreFailure(errInfo.rpcCtx.Addr); storeDelay > delay {
+					delay = storeDelay
+				}
+			}
+			s.scheduleRegionRequestAfter(ctx, errInfo.regionInfo, TaskLowPrior, delay)
 			return nil
 		}
 		if innerErr.GetServerIsBusy() != nil {
 			metricKvIsBusyCounter.Inc()
-			s.scheduleRegionRequest(ctx, errInfo.regionInfo, TaskLowPrior)
+			delay := s.getRetryBackoffDelay(errInfo.subscribedSpan.subID, errInfo.verID.GetID(), retryBackoffBusy)
+			if errInfo.rpcCtx != nil {
+				if storeDelay := s.markStoreFailure(errInfo.rpcCtx.Addr); storeDelay > delay {
+					delay = storeDelay
+				}
+			}
+			s.scheduleRegionRequestAfter(ctx, errInfo.regionInfo, TaskLowPrior, delay)
 			return nil
 		}
 		if duplicated := innerErr.GetDuplicateRequest(); duplicated != nil {
@@ -894,24 +920,40 @@ func (s *subscriptionClient) doHandleError(ctx context.Context, errInfo regionEr
 			zap.Uint64("subscriptionID", uint64(errInfo.subscribedSpan.subID)),
 			zap.Stringer("error", innerErr))
 		metricFeedUnknownErrorCounter.Inc()
-		s.scheduleRegionRequest(ctx, errInfo.regionInfo, TaskHighPrior)
+		delay := s.getRetryBackoffDelay(errInfo.subscribedSpan.subID, errInfo.verID.GetID(), retryBackoffStoreFailure)
+		s.scheduleRegionRequestAfter(ctx, errInfo.regionInfo, TaskHighPrior, delay)
 		return nil
 	case *rpcCtxUnavailableErr:
 		metricFeedRPCCtxUnavailable.Inc()
-		s.scheduleRangeRequest(ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, TaskHighPrior)
+		delay := s.getRetryBackoffDelay(errInfo.subscribedSpan.subID, errInfo.verID.GetID(), retryBackoffRPCContext)
+		s.retryScheduler.schedule(delay, func(context.Context) {
+			s.addReloadRangeTask(errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, TaskHighPrior)
+		})
 		return nil
 	case *getStoreErr:
 		metricGetStoreErr.Inc()
 		bo := tikv.NewBackoffer(ctx, tikvRequestMaxBackoff)
 		// cannot get the store the region belongs to, so we need to reload the region.
 		s.regionCache.OnSendFail(bo, errInfo.rpcCtx, true, err)
-		s.scheduleRangeRequest(ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, TaskHighPrior)
+		delay := time.Duration(0)
+		if errInfo.rpcCtx != nil {
+			delay = s.markStoreFailure(errInfo.rpcCtx.Addr)
+		}
+		s.retryScheduler.schedule(delay, func(context.Context) {
+			s.addReloadRangeTask(errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, TaskHighPrior)
+		})
 		return nil
 	case *sendRequestToStoreErr:
 		metricStoreSendRequestErr.Inc()
 		bo := tikv.NewBackoffer(ctx, tikvRequestMaxBackoff)
 		s.regionCache.OnSendFail(bo, errInfo.rpcCtx, regionScheduleReload, err)
-		s.scheduleRegionRequest(ctx, errInfo.regionInfo, TaskHighPrior)
+		delay := s.getRetryBackoffDelay(errInfo.subscribedSpan.subID, errInfo.verID.GetID(), retryBackoffStoreFailure)
+		if errInfo.rpcCtx != nil {
+			if storeDelay := s.markStoreFailure(errInfo.rpcCtx.Addr); storeDelay > delay {
+				delay = storeDelay
+			}
+		}
+		s.scheduleRegionRequestAfter(ctx, errInfo.regionInfo, TaskHighPrior, delay)
 		return nil
 	case *requestCancelledErr:
 		// the corresponding subscription has been unsubscribed, just ignore.

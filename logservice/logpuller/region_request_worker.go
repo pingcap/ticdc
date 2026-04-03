@@ -123,6 +123,7 @@ func newRegionRequestWorker(
 				}
 				regionErr = &sendRequestToStoreErr{}
 			}
+			worker.client.markStoreFailure(worker.store.storeAddr)
 			for subID, m := range worker.clearRegionStates() {
 				for _, state := range m {
 					state.markStopped(regionErr)
@@ -186,6 +187,7 @@ func (s *regionRequestWorker) run(ctx context.Context, credential *security.Cred
 	defer func() {
 		_ = conn.Conn.Close()
 	}()
+	s.client.markStoreSuccess(s.store.storeAddr)
 
 	g.Go(func() error {
 		return s.receiveAndDispatchChangeEvents(conn)
@@ -221,6 +223,7 @@ func (s *regionRequestWorker) receiveAndDispatchChangeEvents(conn *ConnAndClient
 			}
 			return errors.Trace(err)
 		}
+		s.client.markStoreSuccess(s.store.storeAddr)
 		if len(changeEvent.Events) > 0 {
 			s.dispatchRegionChangeEvents(changeEvent.Events)
 		}
@@ -345,6 +348,7 @@ func (s *regionRequestWorker) processRegionSendTask(
 				zap.Error(err))
 			return errors.Trace(err)
 		}
+		s.client.markStoreSuccess(s.store.storeAddr)
 		// TODO: add a metric?
 		return nil
 	}
@@ -410,6 +414,7 @@ func (s *regionRequestWorker) processRegionSendTask(
 				s.requestCache.markDone()
 				return err
 			}
+			s.client.resetRetryBackoff(subID, region.verID.GetID())
 			s.requestCache.markSent(regionReq)
 		}
 		regionReq, err = fetchMoreReq()
