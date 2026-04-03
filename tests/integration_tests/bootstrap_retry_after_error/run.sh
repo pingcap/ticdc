@@ -30,21 +30,6 @@ FAILPOINT_BLOCK_BEFORE_STOP_CHANGEFEED="github.com/pingcap/ticdc/coordinator/Blo
 PD_ADDR="http://${UP_PD_HOST_1}:${UP_PD_PORT_1}"
 SINK_URI="mysql://normal:123456@127.0.0.1:3306/"
 
-function check_api_ready() {
-	local addr=$1
-	local http_code
-
-	http_code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
-		"http://${addr}/api/v2/changefeeds?keyspace=$KEYSPACE_NAME" \
-		--user ticdc:ticdc_secret)
-	[ "$http_code" = "200" ]
-}
-
-function check_cdc_logs_contains() {
-	local work_dir=$1
-	local pattern=$2
-	grep -Eq "$pattern" "$work_dir"/cdc*.log
-}
 
 function check_node_change_triggers_bootstrap() {
 	local work_dir=$1
@@ -78,8 +63,6 @@ function check_node_change_triggers_bootstrap() {
 	return 1
 }
 
-export -f check_api_ready
-export -f check_cdc_logs_contains
 export -f check_node_change_triggers_bootstrap
 
 function run() {
@@ -93,7 +76,8 @@ function run() {
 
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/logservice/schemastore/getAllPhysicalTablesGCFastFail=return(true)'
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --logsuffix "0"
-	ensure $MAX_RETRIES "check_api_ready 127.0.0.1:8300"
+	# wait for 5 seconds to let the server start and hit the failpoint
+	sleep 20
 	enable_failpoint --addr "127.0.0.1:8300" --name "$FAILPOINT_BLOCK_BEFORE_STOP_CHANGEFEED" --expr "pause"
 
 	run_sql "CREATE DATABASE bootstrap_retry_after_error;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
@@ -103,7 +87,7 @@ function run() {
 
 	cdc_cli_changefeed create --sink-uri="$SINK_URI" -c "test"
 
-	ensure $MAX_RETRIES "check_cdc_logs_contains $WORK_DIR 'ErrSnapshotLostByGC'"
+	ensure $MAX_RETRIES "grep -Eq 'ErrSnapshotLostByGC' $WORK_DIR/cdc*.log"
 
 	# Start the second node without the schema-store failpoint. The retry still
 	# fails because the maintainer is running on the first node, which keeps the
@@ -117,8 +101,8 @@ function run() {
 	disable_failpoint --addr "127.0.0.1:8300" --name "$FAILPOINT_BLOCK_BEFORE_STOP_CHANGEFEED"
 	ensure $MAX_RETRIES "get_cdc_pid 127.0.0.1 8300 >/dev/null"
 	ensure $MAX_RETRIES "get_cdc_pid 127.0.0.1 8301 >/dev/null"
-	ensure $MAX_RETRIES "check_api_ready 127.0.0.1:8300"
-	ensure $MAX_RETRIES "check_api_ready 127.0.0.1:8301"
+	# sleep for a while to let the logs flush
+	sleep 10
 	ensure $MAX_RETRIES "check_changefeed_state $PD_ADDR test failed ErrSnapshotLostByGC ''"
 }
 
