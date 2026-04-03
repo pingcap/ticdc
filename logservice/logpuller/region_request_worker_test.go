@@ -160,4 +160,6 @@ func TestProcessRegionSendTaskSendFailureCleansSentRequest(t *testing.T) {
 	require.ErrorIs(t, err, sendErr)
 	require.Equal(t, 0, worker.requestCache.getPendingCount())
 	require.Empty(t, worker.requestCache.sentRequests.regionReqs)
+	state := worker.getRegionState(req.regionInfo.subscribedSpan.subID, req.regionInfo.verID.GetID())
+	require.True(t, state == nil || state.isStale(), "region state should be removed or marked stale after send failure")
 }
