@@ -37,6 +37,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/threadpool"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -429,6 +430,48 @@ func TestMaintainerCalculateNewCheckpointTs(t *testing.T) {
 	})
 }
 
+func TestMaintainerCalCheckpointTsSkipsInvalidGlobalCheckpoint(t *testing.T) {
+	m, selfNodeID := newMaintainerForCheckpointCalculationTest()
+	m.initialized.Store(true)
+	m.watermark.Watermark = &heartbeatpb.Watermark{
+		CheckpointTs: 1,
+		ResolvedTs:   1,
+	}
+	m.checkpointTsByCapture.Set(selfNodeID, heartbeatpb.Watermark{
+		CheckpointTs: math.MaxUint64,
+		ResolvedTs:   math.MaxUint64,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		m.calCheckpointTs(ctx)
+	}()
+
+	require.Never(t, func() bool {
+		watermark := m.getWatermark()
+		return m.controller.spanController.GetMaintainerCommittedCheckpointTs() != 1 ||
+			watermark.CheckpointTs != 1 ||
+			watermark.ResolvedTs != 1
+	}, 250*time.Millisecond, 50*time.Millisecond)
+
+	m.checkpointTsByCapture.Set(selfNodeID, heartbeatpb.Watermark{
+		CheckpointTs: 2,
+		ResolvedTs:   2,
+	})
+	require.Eventually(t, func() bool {
+		watermark := m.getWatermark()
+		return m.controller.spanController.GetMaintainerCommittedCheckpointTs() == 2 &&
+			watermark.CheckpointTs == 2 &&
+			watermark.ResolvedTs == 2
+	}, time.Second, 50*time.Millisecond)
+
+	cancel()
+	wg.Wait()
+}
+
 func newMaintainerForCheckpointCalculationTest() (*Maintainer, node.ID) {
 	testutil.SetUpTestServices()
 
@@ -454,8 +497,21 @@ func newMaintainerForCheckpointCalculationTest() (*Maintainer, node.ID) {
 		changefeedID:          cfID,
 		selfNode:              selfNode,
 		controller:            controller,
+		pdClock:               pdutil.NewClock4Test(),
 		bootstrapper:          bootstrapper,
 		checkpointTsByCapture: newWatermarkCaptureMap(),
+		checkpointTsGauge: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "test_checkpoint_ts",
+		}),
+		checkpointTsLagGauge: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "test_checkpoint_ts_lag",
+		}),
+		resolvedTsGauge: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "test_resolved_ts",
+		}),
+		resolvedTsLagGauge: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "test_resolved_ts_lag",
+		}),
 	}
 	m.watermark.Watermark = heartbeatpb.NewMaxWatermark()
 	return m, selfNode.ID

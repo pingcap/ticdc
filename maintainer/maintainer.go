@@ -728,7 +728,7 @@ func (m *Maintainer) calculateNewCheckpointTs() (*heartbeatpb.Watermark, bool) {
 	// MaxUint64 means this round still has no effective global checkpoint.
 	// Skipping the update keeps the committed checkpoint from being poisoned.
 	if newWatermark.CheckpointTs == math.MaxUint64 {
-		log.Warn("checkpointTs can not be advanced, since global checkpoint is invalid",
+		log.Debug("checkpointTs can not be advanced, since global checkpoint is invalid",
 			zap.Stringer("changefeedID", m.changefeedID),
 			zap.Uint64("resolvedTs", newWatermark.ResolvedTs),
 			zap.Uint64("minCheckpointTsForScheduler", minCheckpointTsForScheduler),
