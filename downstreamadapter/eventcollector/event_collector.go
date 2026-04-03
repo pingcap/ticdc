@@ -147,6 +147,10 @@ type EventCollector struct {
 	metricDSPendingQueue      prometheus.Gauge
 	metricDSEventChanSizeRedo prometheus.Gauge
 	metricDSPendingQueueRedo  prometheus.Gauge
+
+	lastDispatcherRequestDropLogTime atomic.Int64
+	lastUnknownMessageLogTime        atomic.Int64
+	lastCongestionControlErrLogTime  atomic.Int64
 }
 
 func New(serverId node.ID) *EventCollector {
@@ -483,8 +487,10 @@ func (c *EventCollector) sendDispatcherRequests(ctx context.Context) error {
 					lastRetryLogTime = now
 				}
 				if !req.decrAndCheckRetry() {
-					log.Warn("dispatcher request retry limit exceeded, dropping request",
-						zap.String("message", req.Message.String()))
+					if shouldLogDispatcherIssue(&c.lastDispatcherRequestDropLogTime, dispatcherIssueLogInterval) {
+						log.Warn("dispatcher request retry limit exceeded, dropping request",
+							zap.String("message", req.Message.String()))
+					}
 					continue
 				}
 				// Put the request back to the channel for later retry.
@@ -549,9 +555,11 @@ func (c *EventCollector) MessageCenterHandler(ctx context.Context, targetMessage
 		case *event.DispatcherHeartbeatResponse:
 			c.handleDispatcherHeartbeatResponse(targetMessage)
 		default:
-			log.Warn("unknown message type, ignore it",
-				zap.String("type", targetMessage.Type.String()),
-				zap.Any("msg", msg))
+			if shouldLogDispatcherIssue(&c.lastUnknownMessageLogTime, dispatcherIssueLogInterval) {
+				log.Warn("unknown message type, ignore it",
+					zap.String("type", targetMessage.Type.String()),
+					zap.Any("msg", msg))
+			}
 		}
 	}
 	return nil
@@ -569,9 +577,11 @@ func (c *EventCollector) RedoMessageCenterHandler(ctx context.Context, targetMes
 		}
 		return nil
 	}
-	log.Warn("unknown message type, ignore it",
-		zap.String("type", targetMessage.Type.String()),
-		zap.Any("msg", targetMessage))
+	if shouldLogDispatcherIssue(&c.lastUnknownMessageLogTime, dispatcherIssueLogInterval) {
+		log.Warn("unknown message type, ignore it",
+			zap.String("type", targetMessage.Type.String()),
+			zap.Any("msg", targetMessage))
+	}
 	return nil
 }
 
@@ -605,9 +615,11 @@ func (c *EventCollector) runDispatchMessage(ctx context.Context, inCh <-chan *me
 						ds.Push(e.GetDispatcherID(), dispatcherEvent)
 					}
 				default:
-					log.Warn("unknown message type, ignore it",
-						zap.String("type", targetMessage.Type.String()),
-						zap.Any("msg", msg))
+					if shouldLogDispatcherIssue(&c.lastUnknownMessageLogTime, dispatcherIssueLogInterval) {
+						log.Warn("unknown message type, ignore it",
+							zap.String("type", targetMessage.Type.String()),
+							zap.Any("msg", msg))
+					}
 				}
 			}
 		}
@@ -628,7 +640,9 @@ func (c *EventCollector) controlCongestion(ctx context.Context) error {
 				if len(m.GetAvailables()) != 0 {
 					msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, m)
 					if err := c.mc.SendCommand(msg); err != nil {
-						log.Warn("send congestion control message failed", zap.Error(err))
+						if shouldLogDispatcherIssue(&c.lastCongestionControlErrLogTime, dispatcherIssueLogInterval) {
+							log.Warn("send congestion control message failed", zap.Error(err))
+						}
 					}
 				}
 			}

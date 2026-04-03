@@ -152,6 +152,7 @@ type DispatcherManager struct {
 	wg      sync.WaitGroup
 
 	lastErrorChannelFullLogTime atomic.Int64
+	lastCollectErrLogTime       atomic.Int64
 
 	// removeTaskHandles stores the task handles for async dispatcher removal
 	// map[common.DispatcherID]*threadpool.TaskHandle
@@ -549,10 +550,12 @@ func (e *DispatcherManager) collectErrors(ctx context.Context) {
 			return
 		case err := <-e.sharedInfo.GetErrCh():
 			if !errors.Is(errors.Cause(err), context.Canceled) {
-				log.Error("Event Dispatcher Manager Meets Error",
-					zap.Stringer("changefeedID", e.changefeedID),
-					zap.Error(err),
-				)
+				if shouldLogDispatcherManagerWarning(&e.lastCollectErrLogTime, dispatcherManagerWarnLogInterval) {
+					log.Error("Event Dispatcher Manager Meets Error",
+						zap.Stringer("changefeedID", e.changefeedID),
+						zap.Error(err),
+					)
+				}
 
 				// report error to maintainer
 				var message heartbeatpb.HeartBeatRequest
