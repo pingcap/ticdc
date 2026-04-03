@@ -35,6 +35,21 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
+const dispatcherWarnLogInterval = 10 * time.Second
+
+func shouldLogDispatcherWarning(lastLogTime *atomic.Int64, interval time.Duration) bool {
+	now := time.Now().UnixNano()
+	for {
+		last := lastLogTime.Load()
+		if last != 0 && now-last < interval.Nanoseconds() {
+			return false
+		}
+		if lastLogTime.CAS(last, now) {
+			return true
+		}
+	}
+}
+
 // DispatcherService defines the interface for providing dispatcher information and basic event handling.
 type DispatcherService interface {
 	GetId() common.DispatcherID
@@ -211,6 +226,11 @@ type BasicDispatcher struct {
 	// This field prevents a race condition where TryClose is called while events are being processed.
 	// In this corner case, `tableProgress` might be empty, which could lead to the dispatcher being removed prematurely.
 	duringHandleEvents atomic.Bool
+	// Limit repeated warnings on hot paths such as stale events, removing state, and errCh backpressure.
+	lastErrorChannelFullLogTime atomic.Int64
+	lastRemovingLogTime         atomic.Int64
+	lastStaleEventLogTime       atomic.Int64
+	lastUnexpectedEventLogTime  atomic.Int64
 
 	seq  uint64
 	mode int64
@@ -539,10 +559,12 @@ func (d *BasicDispatcher) HandleError(err error) {
 	select {
 	case d.sharedInfo.errCh <- err:
 	default:
-		log.Error("error channel is full, discard error",
-			zap.Stringer("changefeedID", d.sharedInfo.changefeedID),
-			zap.Stringer("dispatcherID", d.id),
-			zap.Error(err))
+		if shouldLogDispatcherWarning(&d.lastErrorChannelFullLogTime, dispatcherWarnLogInterval) {
+			log.Error("error channel is full, discard error",
+				zap.Stringer("changefeedID", d.sharedInfo.changefeedID),
+				zap.Stringer("dispatcherID", d.id),
+				zap.Error(err))
+		}
 	}
 }
 
@@ -563,7 +585,9 @@ func (d *BasicDispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeC
 // Return true if should block the dispatcher.
 func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeCallback func()) bool {
 	if d.GetRemovingStatus() {
-		log.Warn("dispatcher is removing", zap.Any("id", d.id))
+		if shouldLogDispatcherWarning(&d.lastRemovingLogTime, dispatcherWarnLogInterval) {
+			log.Warn("dispatcher is removing", zap.Any("id", d.id))
+		}
 		return true
 	}
 
@@ -592,12 +616,14 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 		event := dispatcherEvent.Event
 		// Pre-check, make sure the event is not stale
 		if event.GetCommitTs() < d.GetResolvedTs() {
-			log.Warn("Received a stale event, should ignore it",
-				zap.Uint64("dispatcherResolvedTs", d.GetResolvedTs()),
-				zap.Uint64("eventCommitTs", event.GetCommitTs()),
-				zap.Uint64("seq", event.GetSeq()),
-				zap.Int("eventType", event.GetType()),
-				zap.Stringer("dispatcher", d.id))
+			if shouldLogDispatcherWarning(&d.lastStaleEventLogTime, dispatcherWarnLogInterval) {
+				log.Warn("Received a stale event, should ignore it",
+					zap.Uint64("dispatcherResolvedTs", d.GetResolvedTs()),
+					zap.Uint64("eventCommitTs", event.GetCommitTs()),
+					zap.Uint64("seq", event.GetSeq()),
+					zap.Int("eventType", event.GetType()),
+					zap.Stringer("dispatcher", d.id))
+			}
 			continue
 		}
 
@@ -708,9 +734,11 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 			})
 			d.DealWithBlockEvent(syncPoint)
 		case commonEvent.TypeHandshakeEvent:
-			log.Warn("Receive handshake event unexpectedly",
-				zap.Stringer("dispatcher", d.id),
-				zap.Any("event", event))
+			if shouldLogDispatcherWarning(&d.lastUnexpectedEventLogTime, dispatcherWarnLogInterval) {
+				log.Warn("Receive handshake event unexpectedly",
+					zap.Stringer("dispatcher", d.id),
+					zap.Any("event", event))
+			}
 		default:
 			log.Panic("Unexpected event type",
 				zap.Int("eventType", event.GetType()),

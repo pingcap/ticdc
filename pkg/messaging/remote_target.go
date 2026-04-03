@@ -17,6 +17,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pingcap/errors"
@@ -36,9 +37,10 @@ import (
 )
 
 const (
-	reconnectInterval = 2 * time.Second
-	streamTypeEvent   = "event"
-	streamTypeCommand = "command"
+	reconnectInterval          = 2 * time.Second
+	connectionIssueLogInterval = 10 * time.Second
+	streamTypeEvent            = "event"
+	streamTypeCommand          = "command"
 
 	eventRecvCh   = "eventRecvCh"
 	commandRecvCh = "commandRecvCh"
@@ -79,6 +81,8 @@ type remoteMessageTarget struct {
 
 	errCh chan error
 
+	lastConnectionIssueLogTime atomic.Int64
+
 	ctx    context.Context
 	cancel context.CancelFunc
 
@@ -111,6 +115,18 @@ func (s *remoteMessageTarget) isReadyToSend() bool {
 		return true
 	})
 	return ready
+}
+
+func (s *remoteMessageTarget) shouldLogConnectionIssue(now time.Time, interval time.Duration) bool {
+	for {
+		last := s.lastConnectionIssueLogTime.Load()
+		if last != 0 && now.UnixNano()-last < interval.Nanoseconds() {
+			return false
+		}
+		if s.lastConnectionIssueLogTime.CompareAndSwap(last, now.UnixNano()) {
+			return true
+		}
+	}
 }
 
 // Send an event message to the remote target
@@ -219,7 +235,9 @@ func newRemoteMessageTarget(
 
 	err := rt.connect()
 	if err != nil {
-		log.Error("Failed to connect to remote target", zap.Error(err))
+		if rt.shouldLogConnectionIssue(time.Now(), connectionIssueLogInterval) {
+			log.Error("Failed to connect to remote target", zap.Error(err))
+		}
 		rt.collectErr(err)
 	}
 
@@ -367,7 +385,6 @@ func (s *remoteMessageTarget) connect() error {
 	})
 
 	if outerErr != nil {
-		log.Error("Failed to connect to remote target", zap.Error(outerErr))
 		return outerErr
 	}
 
@@ -417,7 +434,9 @@ LOOP:
 	// Reconnect
 	err := s.connect()
 	if err != nil {
-		log.Error("Failed to connect to remote target", zap.Error(err))
+		if s.shouldLogConnectionIssue(time.Now(), connectionIssueLogInterval) {
+			log.Error("Failed to connect to remote target", zap.Error(err))
+		}
 		s.collectErr(err)
 	}
 
@@ -505,11 +524,13 @@ func (s *remoteMessageTarget) runSendMessages(ctx context.Context, streamType st
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-time.After(500 * time.Millisecond):
-			log.Warn("remote target stream is not ready, wait and check again",
-				zap.Stringer("localID", s.messageCenterID),
-				zap.String("localAddr", s.localAddr),
-				zap.Stringer("remoteID", s.targetId),
-				zap.String("remoteAddr", s.targetAddr))
+			if s.shouldLogConnectionIssue(time.Now(), connectionIssueLogInterval) {
+				log.Warn("remote target stream is not ready, wait and check again",
+					zap.Stringer("localID", s.messageCenterID),
+					zap.String("localAddr", s.localAddr),
+					zap.Stringer("remoteID", s.targetId),
+					zap.String("remoteAddr", s.targetAddr))
+			}
 			continue
 		}
 	}
@@ -581,11 +602,13 @@ func (s *remoteMessageTarget) runReceiveMessages(ctx context.Context, streamType
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-time.After(500 * time.Millisecond):
-			log.Warn("remote target stream is not ready, wait and check again",
-				zap.Stringer("localID", s.messageCenterID),
-				zap.String("localAddr", s.localAddr),
-				zap.Stringer("remoteID", s.targetId),
-				zap.String("remoteAddr", s.targetAddr))
+			if s.shouldLogConnectionIssue(time.Now(), connectionIssueLogInterval) {
+				log.Warn("remote target stream is not ready, wait and check again",
+					zap.Stringer("localID", s.messageCenterID),
+					zap.String("localAddr", s.localAddr),
+					zap.Stringer("remoteID", s.targetId),
+					zap.String("remoteAddr", s.targetAddr))
+			}
 			continue
 		}
 	}

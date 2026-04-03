@@ -678,7 +678,7 @@ func (p *persistentStorage) persistUpperBoundPeriodically(ctx context.Context) {
 		case <-ticker.C:
 			p.mu.Lock()
 			if !p.upperBoundChanged {
-				log.Warn("schema store upper bound not changed")
+				log.Debug("schema store upper bound not changed")
 				p.mu.Unlock()
 				continue
 			}

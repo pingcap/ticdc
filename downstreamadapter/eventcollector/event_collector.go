@@ -37,9 +37,10 @@ import (
 )
 
 const (
-	receiveChanSize               = 1024 * 8
-	commonMsgRetryQuota           = 3 // The number of retries for most droppable dispatcher requests.
-	eventServiceHeartbeatInterval = time.Second
+	receiveChanSize                   = 1024 * 8
+	commonMsgRetryQuota               = 3 // The number of retries for most droppable dispatcher requests.
+	eventServiceHeartbeatInterval     = time.Second
+	dispatcherRequestRetryLogInterval = 10 * time.Second
 )
 
 // DispatcherMessage is the message send to EventService.
@@ -460,6 +461,7 @@ func (c *EventCollector) processDSFeedback(ctx context.Context) error {
 }
 
 func (c *EventCollector) sendDispatcherRequests(ctx context.Context) error {
+	lastRetryLogTime := time.Time{}
 	for {
 		select {
 		case <-ctx.Done():
@@ -472,10 +474,14 @@ func (c *EventCollector) sendDispatcherRequests(ctx context.Context) error {
 				if appErr, ok := err.(errors.AppError); ok && appErr.Type == errors.ErrorTypeMessageCongested {
 					sleepInterval = 1 * time.Second
 				}
-				log.Info("failed to send dispatcher request message, try again later",
-					zap.String("message", req.Message.String()),
-					zap.Duration("sleepInterval", sleepInterval),
-					zap.Error(err))
+				now := time.Now()
+				if lastRetryLogTime.IsZero() || now.Sub(lastRetryLogTime) >= dispatcherRequestRetryLogInterval {
+					log.Info("failed to send dispatcher request message, try again later",
+						zap.String("message", req.Message.String()),
+						zap.Duration("sleepInterval", sleepInterval),
+						zap.Error(err))
+					lastRetryLogTime = now
+				}
 				if !req.decrAndCheckRetry() {
 					log.Warn("dispatcher request retry limit exceeded, dropping request",
 						zap.String("message", req.Message.String()))

@@ -46,10 +46,11 @@ import (
 //     and we will pull ddl job from `resolved_ts` at restart if the current gc ts is smaller than resolved_ts.
 
 const (
-	snapshotSchemaKeyPrefix    = "ss_"
-	snapshotTableKeyPrefix     = "st_"
-	snapshotPartitionKeyPrefix = "sp_"
-	ddlKeyPrefix               = "ds_"
+	snapshotSchemaKeyPrefix        = "ss_"
+	snapshotTableKeyPrefix         = "st_"
+	snapshotPartitionKeyPrefix     = "sp_"
+	ddlKeyPrefix                   = "ds_"
+	schemaSnapshotRetryLogInterval = 10 * time.Second
 )
 
 func gcTsKey() []byte {
@@ -590,13 +591,25 @@ func persistSchemaSnapshot(
 	snapTs uint64,
 	collectMetaInfo bool,
 ) (map[int64]*BasicDatabaseInfo, map[int64]*BasicTableInfo, map[int64]BasicPartitionInfo, error) {
+	var (
+		lastListDatabasesLogTime time.Time
+		lastGetTablesLogTime     time.Time
+	)
+	logRetry := func(lastLogTime *time.Time, msg string, fields ...zap.Field) {
+		now := time.Now()
+		if !lastLogTime.IsZero() && now.Sub(*lastLogTime) < schemaSnapshotRetryLogInterval {
+			return
+		}
+		log.Warn(msg, fields...)
+		*lastLogTime = now
+	}
 	for {
 		meta := getSnapshotMeta(tiStore, snapTs)
 		start := time.Now()
 		dbInfos, err := meta.ListDatabases()
 		if err != nil {
 			time.Sleep(100 * time.Millisecond)
-			log.Warn("list databases failed, retrying", zap.Error(err))
+			logRetry(&lastListDatabasesLogTime, "list databases failed, retrying", zap.Error(err))
 			continue
 		}
 
@@ -667,7 +680,7 @@ func persistSchemaSnapshot(
 				}
 
 				time.Sleep(100 * time.Millisecond)
-				log.Warn("get tables failed", zap.Error(err))
+				logRetry(&lastGetTablesLogTime, "get tables failed", zap.Error(err))
 			}
 		}
 

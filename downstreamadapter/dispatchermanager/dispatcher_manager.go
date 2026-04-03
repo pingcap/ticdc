@@ -45,6 +45,21 @@ import (
 	"go.uber.org/zap"
 )
 
+const dispatcherManagerWarnLogInterval = 10 * time.Second
+
+func shouldLogDispatcherManagerWarning(lastLogTime *atomic.Int64, interval time.Duration) bool {
+	now := time.Now().UnixNano()
+	for {
+		last := lastLogTime.Load()
+		if last != 0 && now-last < interval.Nanoseconds() {
+			return false
+		}
+		if lastLogTime.CompareAndSwap(last, now) {
+			return true
+		}
+	}
+}
+
 /*
 DispatcherManager manages dispatchers for a changefeed instance with responsibilities including:
 
@@ -135,6 +150,8 @@ type DispatcherManager struct {
 	closed  atomic.Bool
 	cancel  context.CancelFunc
 	wg      sync.WaitGroup
+
+	lastErrorChannelFullLogTime atomic.Int64
 
 	// removeTaskHandles stores the task handles for async dispatcher removal
 	// map[common.DispatcherID]*threadpool.TaskHandle
@@ -514,10 +531,12 @@ func (e *DispatcherManager) handleError(ctx context.Context, err error) {
 			return
 		case e.sharedInfo.GetErrCh() <- err:
 		default:
-			log.Error("error channel is full, discard error",
-				zap.Stringer("changefeedID", e.changefeedID),
-				zap.Error(err),
-			)
+			if shouldLogDispatcherManagerWarning(&e.lastErrorChannelFullLogTime, dispatcherManagerWarnLogInterval) {
+				log.Error("error channel is full, discard error",
+					zap.Stringer("changefeedID", e.changefeedID),
+					zap.Error(err),
+				)
+			}
 		}
 	}
 }

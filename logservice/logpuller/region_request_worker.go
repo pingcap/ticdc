@@ -59,6 +59,9 @@ type regionRequestWorker struct {
 
 		subscriptions map[SubscriptionID]regionFeedStates
 	}
+
+	lastConnectionIssueLogTime atomic.Int64
+	lastUnexpectedEventLogTime atomic.Int64
 }
 
 func newRegionRequestWorker(
@@ -108,10 +111,12 @@ func newRegionRequestWorker(
 				if errors.Cause(err) == context.Canceled {
 					return nil
 				}
-				log.Error("event feed check store version fails",
-					zap.Uint64("workerID", worker.workerID),
-					zap.String("addr", worker.store.storeAddr),
-					zap.Error(err))
+				if shouldLogLogPullerWarning(&worker.lastConnectionIssueLogTime, logPullerWarnLogInterval) {
+					log.Error("event feed check store version fails",
+						zap.Uint64("workerID", worker.workerID),
+						zap.String("addr", worker.store.storeAddr),
+						zap.Error(err))
+				}
 				if cerror.Is(err, cerror.ErrGetAllStoresFailed) {
 					regionErr = &getStoreErr{}
 				} else {
@@ -173,10 +178,12 @@ func (s *regionRequestWorker) run(ctx context.Context, credential *security.Cred
 	g, gctx := errgroup.WithContext(ctx)
 	conn, err := Connect(gctx, credential, s.store.storeAddr)
 	if err != nil {
-		log.Warn("region request worker create grpc stream failed",
-			zap.Uint64("workerID", s.workerID),
-			zap.String("addr", s.store.storeAddr),
-			zap.Error(err))
+		if shouldLogLogPullerWarning(&s.lastConnectionIssueLogTime, logPullerWarnLogInterval) {
+			log.Warn("region request worker create grpc stream failed",
+				zap.Uint64("workerID", s.workerID),
+				zap.String("addr", s.store.storeAddr),
+				zap.Error(err))
+		}
 		// Close the connection if it was partially created to prevent goroutine leaks
 		if conn != nil && conn.Conn != nil {
 			_ = conn.Conn.Close()
@@ -268,15 +275,18 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 				log.Panic("unknown event type", zap.Any("event", event))
 			}
 			s.client.pushRegionEventToDS(SubscriptionID(event.RequestId), regionEvent)
-		} else {
-			switch event.Event.(type) {
-			case *cdcpb.Event_Error:
-				// it is normal to receive region error after deregister a subscription
-				log.Debug("region request worker receives an error for a stale region, ignore it",
-					zap.Uint64("workerID", s.workerID),
-					zap.Uint64("subscriptionID", uint64(subscriptionID)),
-					zap.Uint64("regionID", event.RegionId))
-			default:
+			continue
+		}
+
+		switch event.Event.(type) {
+		case *cdcpb.Event_Error:
+			// it is normal to receive region error after deregister a subscription
+			log.Debug("region request worker receives an error for a stale region, ignore it",
+				zap.Uint64("workerID", s.workerID),
+				zap.Uint64("subscriptionID", uint64(subscriptionID)),
+				zap.Uint64("regionID", event.RegionId))
+		default:
+			if shouldLogLogPullerWarning(&s.lastUnexpectedEventLogTime, logPullerWarnLogInterval) {
 				log.Warn("region request worker receives a region event for an untracked region",
 					zap.Uint64("workerID", s.workerID),
 					zap.Uint64("subscriptionID", uint64(subscriptionID)),
@@ -292,10 +302,12 @@ func (s *regionRequestWorker) dispatchResolvedTsEvent(resolvedTsEvent *cdcpb.Res
 	s.client.metrics.batchResolvedSize.Observe(float64(len(resolvedTsEvent.Regions)))
 	// TODO: resolvedTsEvent.Ts be 0 is impossible, we need find the root cause.
 	if resolvedTsEvent.Ts == 0 {
-		log.Warn("region request worker receives a resolved ts event with zero value, ignore it",
-			zap.Uint64("workerID", s.workerID),
-			zap.Uint64("subscriptionID", resolvedTsEvent.RequestId),
-			zap.Any("regionIDs", resolvedTsEvent.Regions))
+		if shouldLogLogPullerWarning(&s.lastUnexpectedEventLogTime, logPullerWarnLogInterval) {
+			log.Warn("region request worker receives a resolved ts event with zero value, ignore it",
+				zap.Uint64("workerID", s.workerID),
+				zap.Uint64("subscriptionID", resolvedTsEvent.RequestId),
+				zap.Any("regionIDs", resolvedTsEvent.Regions))
+		}
 		return
 	}
 	// Avoid allocating a huge states slice when resolvedTsEvent.Regions is large.
@@ -321,11 +333,13 @@ func (s *regionRequestWorker) dispatchResolvedTsEvent(resolvedTsEvent *cdcpb.Res
 			}
 			continue
 		}
-		log.Warn("region request worker receives a resolved ts event for an untracked region",
-			zap.Uint64("workerID", s.workerID),
-			zap.Uint64("subscriptionID", uint64(subscriptionID)),
-			zap.Uint64("regionID", regionID),
-			zap.Uint64("resolvedTs", resolvedTsEvent.Ts))
+		if shouldLogLogPullerWarning(&s.lastUnexpectedEventLogTime, logPullerWarnLogInterval) {
+			log.Warn("region request worker receives a resolved ts event for an untracked region",
+				zap.Uint64("workerID", s.workerID),
+				zap.Uint64("subscriptionID", uint64(subscriptionID)),
+				zap.Uint64("regionID", regionID),
+				zap.Uint64("resolvedTs", resolvedTsEvent.Ts))
+		}
 	}
 	flush()
 }
@@ -337,12 +351,14 @@ func (s *regionRequestWorker) processRegionSendTask(
 ) error {
 	doSend := func(req *cdcpb.ChangeDataRequest) error {
 		if err := conn.Client.Send(req); err != nil {
-			log.Warn("region request worker send request to grpc stream failed",
-				zap.Uint64("workerID", s.workerID),
-				zap.Uint64("subscriptionID", req.RequestId),
-				zap.Uint64("regionID", req.RegionId),
-				zap.String("addr", s.store.storeAddr),
-				zap.Error(err))
+			if shouldLogLogPullerWarning(&s.lastConnectionIssueLogTime, logPullerWarnLogInterval) {
+				log.Warn("region request worker send request to grpc stream failed",
+					zap.Uint64("workerID", s.workerID),
+					zap.Uint64("subscriptionID", req.RequestId),
+					zap.Uint64("regionID", req.RegionId),
+					zap.String("addr", s.store.storeAddr),
+					zap.Error(err))
+			}
 			return errors.Trace(err)
 		}
 		// TODO: add a metric?
