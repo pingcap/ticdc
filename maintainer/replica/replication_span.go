@@ -47,6 +47,9 @@ type SpanReplication struct {
 	groupID     replica.GroupID
 	status      *atomic.Pointer[heartbeatpb.TableSpanStatus]
 	blockState  *atomic.Pointer[heartbeatpb.State]
+	// committedCheckpointTs points to the controller owned committed checkpoint for this mode.
+	// It provides a monotonic lower bound for any recreated dispatcher StartTs.
+	committedCheckpointTs *atomic.Uint64
 }
 
 func NewSpanReplication(cfID common.ChangeFeedID,
@@ -193,6 +196,12 @@ func (r *SpanReplication) UpdateBlockState(newState heartbeatpb.State) {
 	r.blockState.Store(&newState)
 }
 
+// GetBlockState returns the current block state (DDL / syncpoint barrier) tracked for this span.
+// It can be nil if the span is not participating in any in-flight barrier.
+func (r *SpanReplication) GetBlockState() *heartbeatpb.State {
+	return r.blockState.Load()
+}
+
 func (r *SpanReplication) GetSchemaID() int64 {
 	return r.schemaID
 }
@@ -228,35 +237,120 @@ func (r *SpanReplication) GetGroupID() replica.GroupID {
 	return r.groupID
 }
 
-func (r *SpanReplication) NewAddDispatcherMessage(server node.ID) *messaging.TargetMessage {
+// BindCommittedCheckpointTs attaches the controller owned committed checkpoint to this span.
+func (r *SpanReplication) BindCommittedCheckpointTs(committedCheckpointTs *atomic.Uint64) {
+	r.committedCheckpointTs = committedCheckpointTs
+}
+
+func (r *SpanReplication) getCommittedCheckpointTs() uint64 {
+	if r.committedCheckpointTs == nil {
+		return 0
+	}
+	return r.committedCheckpointTs.Load()
+}
+
+// NewAddDispatcherMessage creates a ScheduleDispatcherRequest(Create) for this span.
+//
+// The StartTs in the request is usually the span checkpoint. However, when a dispatcher is being
+// moved/recreated during an in-flight barrier (DDL or syncpoint), starting from the raw checkpoint can
+// violate barrier semantics (e.g. replaying events that have already been acknowledged by the barrier),
+// so we adjust StartTs and (for DDL) optionally skip DML at StartTs+1.
+func (r *SpanReplication) NewAddDispatcherMessage(server node.ID, operatorType heartbeatpb.OperatorType) *messaging.TargetMessage {
+	startTs := r.status.Load().CheckpointTs
+	skipDMLAsStartTs := false
+	ddlBarrierBlockTs := uint64(0)
+	if state := r.blockState.Load(); state != nil && state.IsBlocked &&
+		(state.Stage == heartbeatpb.BlockStage_WAITING || state.Stage == heartbeatpb.BlockStage_WRITING) && state.BlockTs > 0 {
+		if state.IsSyncPoint {
+			// When a syncpoint is in-flight (WAITING/WRITING), the maintainer will force the span checkpoint to BlockTs-1
+			// when handling block status. If we start a moved/recreated dispatcher from that forced checkpoint, it may re-scan
+			// and re-apply events with commitTs <= BlockTs, which can race with the syncpoint write and corrupt the snapshot
+			// semantics of that syncpoint. Starting from BlockTs avoids replaying those events, and is safe because the
+			// dispatcher can only enter the syncpoint barrier after all events with commitTs <= BlockTs have been pushed
+			// downstream.
+			if state.BlockTs > startTs {
+				startTs = state.BlockTs
+			}
+		} else {
+			ddlBarrierBlockTs = state.BlockTs
+			// For an in-flight DDL barrier, a recreated dispatcher must start from (blockTs-1) so that it can
+			// replay the DDL at blockTs. At the same time, it should skip DML events at blockTs to avoid potential
+			// duplicate DML writes when the dispatcher is moved/recreated during the barrier.
+			blockTsMinusOne := state.BlockTs - 1
+			if blockTsMinusOne > startTs {
+				startTs = blockTsMinusOne
+			}
+			if startTs+1 == state.BlockTs {
+				skipDMLAsStartTs = true
+			}
+		}
+	}
+	committedCheckpointTs := r.getCommittedCheckpointTs()
+	if committedCheckpointTs > startTs {
+		originalStartTs := startTs
+		if ddlBarrierBlockTs > 0 {
+			// A stale DDL barrier state may survive maintainer failover or dispatcher recreation.
+			// Once the controller committed checkpoint has advanced beyond the replay point, replaying the
+			// DDL is no longer correct. Recreate the dispatcher from the committed checkpoint instead.
+			log.Debug("use committed checkpoint for stale ddl barrier",
+				zap.Stringer("changefeedID", r.ChangefeedID),
+				zap.String("dispatcherID", r.ID.String()),
+				zap.Int64("tableID", r.Span.TableID),
+				zap.String("operatorType", operatorType.String()),
+				zap.Uint64("ddlBarrierBlockTs", ddlBarrierBlockTs),
+				zap.Uint64("originalStartTs", originalStartTs),
+				zap.Uint64("committedCheckpointTs", committedCheckpointTs))
+			skipDMLAsStartTs = false
+		} else {
+			log.Debug("clamp dispatcher start ts to committed checkpoint",
+				zap.Stringer("changefeedID", r.ChangefeedID),
+				zap.String("dispatcherID", r.ID.String()),
+				zap.Int64("tableID", r.Span.TableID),
+				zap.String("operatorType", operatorType.String()),
+				zap.Uint64("originalStartTs", originalStartTs),
+				zap.Uint64("committedCheckpointTs", committedCheckpointTs),
+				zap.Uint64("finalStartTs", committedCheckpointTs))
+		}
+		startTs = committedCheckpointTs
+	}
 	return messaging.NewSingleTargetMessage(server,
 		messaging.HeartbeatCollectorTopic,
 		&heartbeatpb.ScheduleDispatcherRequest{
 			ChangefeedID: r.ChangefeedID.ToPB(),
 			Config: &heartbeatpb.DispatcherConfig{
-				DispatcherID: r.ID.ToPB(),
-				SchemaID:     r.schemaID,
-				Span:         r.Span,
-				StartTs:      r.status.Load().CheckpointTs,
-				Mode:         r.GetMode(),
+				DispatcherID:     r.ID.ToPB(),
+				SchemaID:         r.schemaID,
+				Span:             r.Span,
+				StartTs:          startTs,
+				SkipDMLAsStartTs: skipDMLAsStartTs,
+				Mode:             r.GetMode(),
 			},
 			ScheduleAction: heartbeatpb.ScheduleAction_Create,
+			OperatorType:   operatorType,
 		})
 }
 
-func (r *SpanReplication) NewRemoveDispatcherMessage(server node.ID) *messaging.TargetMessage {
-	return NewRemoveDispatcherMessage(server, r.ChangefeedID, r.ID.ToPB(), r.GetMode())
+// NewRemoveDispatcherMessage creates a ScheduleDispatcherRequest(Remove) for this span.
+// Span and OperatorType are included so a new maintainer can reconstruct intent during bootstrap/failover,
+// even if the dispatcher has already disappeared from the node span snapshot.
+func (r *SpanReplication) NewRemoveDispatcherMessage(server node.ID, operatorType heartbeatpb.OperatorType) *messaging.TargetMessage {
+	return NewRemoveDispatcherMessage(server, r.ChangefeedID, r.ID.ToPB(), r.Span, r.GetMode(), operatorType)
 }
 
-func NewRemoveDispatcherMessage(server node.ID, cfID common.ChangeFeedID, dispatcherID *heartbeatpb.DispatcherID, mode int64) *messaging.TargetMessage {
+// NewRemoveDispatcherMessage creates a ScheduleDispatcherRequest(Remove) for a dispatcherID.
+// The span is optional for the dispatcher manager, but is useful for maintainer bootstrap to correlate
+// in-flight remove requests with table spans when the dispatcher no longer exists.
+func NewRemoveDispatcherMessage(server node.ID, cfID common.ChangeFeedID, dispatcherID *heartbeatpb.DispatcherID, span *heartbeatpb.TableSpan, mode int64, operatorType heartbeatpb.OperatorType) *messaging.TargetMessage {
 	return messaging.NewSingleTargetMessage(server,
 		messaging.HeartbeatCollectorTopic,
 		&heartbeatpb.ScheduleDispatcherRequest{
 			ChangefeedID: cfID.ToPB(),
 			Config: &heartbeatpb.DispatcherConfig{
 				DispatcherID: dispatcherID,
+				Span:         span,
 				Mode:         mode,
 			},
 			ScheduleAction: heartbeatpb.ScheduleAction_Remove,
+			OperatorType:   operatorType,
 		})
 }

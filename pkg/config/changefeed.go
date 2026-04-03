@@ -199,8 +199,11 @@ type ChangefeedConfig struct {
 	SinkConfig            *SinkConfig   `json:"sink_config"`
 	EnableSplittableCheck bool          `json:"enable_splittable_check" default:"false"`
 	// Epoch is the epoch of a changefeed, changes on every restart.
-	Epoch   uint64 `json:"epoch"`
-	BDRMode bool   `json:"bdr_mode" default:"false"`
+	Epoch                         uint64        `json:"epoch"`
+	BDRMode                       bool          `json:"bdr_mode" default:"false"`
+	EnableActiveActive            bool          `json:"enable_active_active" default:"false"`
+	ActiveActiveProgressInterval  time.Duration `json:"active_active_progress_interval" default:"30m"`
+	ActiveActiveSyncStatsInterval time.Duration `json:"active_active_sync_stats_interval" default:"1m"`
 	// redo releated
 	Consistent             *ConsistentConfig `toml:"consistent" json:"consistent,omitempty"`
 	EnableTableAcrossNodes bool              `toml:"enable-table-across-nodes" json:"enable-table-across-nodes,omitempty"`
@@ -262,24 +265,27 @@ type ChangeFeedInfo struct {
 
 func (info *ChangeFeedInfo) ToChangefeedConfig() *ChangefeedConfig {
 	return &ChangefeedConfig{
-		ChangefeedID:           info.ChangefeedID,
-		StartTS:                info.StartTs,
-		TargetTS:               info.TargetTs,
-		SinkURI:                info.SinkURI,
-		CaseSensitive:          util.GetOrZero(info.Config.CaseSensitive),
-		ForceReplicate:         util.GetOrZero(info.Config.ForceReplicate),
-		SinkConfig:             info.Config.Sink,
-		Filter:                 info.Config.Filter,
-		EnableSyncPoint:        util.GetOrZero(info.Config.EnableSyncPoint),
-		SyncPointInterval:      util.GetOrZero(info.Config.SyncPointInterval),
-		SyncPointRetention:     util.GetOrZero(info.Config.SyncPointRetention),
-		EnableSplittableCheck:  util.GetOrZero(info.Config.Scheduler.EnableSplittableCheck),
-		MemoryQuota:            util.GetOrZero(info.Config.MemoryQuota),
-		Epoch:                  info.Epoch,
-		BDRMode:                util.GetOrZero(info.Config.BDRMode),
-		TimeZone:               GetGlobalServerConfig().TZ,
-		Consistent:             info.Config.Consistent,
-		EnableTableAcrossNodes: util.GetOrZero(info.Config.Scheduler.EnableTableAcrossNodes),
+		ChangefeedID:                  info.ChangefeedID,
+		StartTS:                       info.StartTs,
+		TargetTS:                      info.TargetTs,
+		SinkURI:                       info.SinkURI,
+		CaseSensitive:                 util.GetOrZero(info.Config.CaseSensitive),
+		ForceReplicate:                util.GetOrZero(info.Config.ForceReplicate),
+		SinkConfig:                    info.Config.Sink,
+		Filter:                        info.Config.Filter,
+		EnableSyncPoint:               util.GetOrZero(info.Config.EnableSyncPoint),
+		SyncPointInterval:             util.GetOrZero(info.Config.SyncPointInterval),
+		SyncPointRetention:            util.GetOrZero(info.Config.SyncPointRetention),
+		EnableSplittableCheck:         util.GetOrZero(info.Config.Scheduler.EnableSplittableCheck),
+		MemoryQuota:                   util.GetOrZero(info.Config.MemoryQuota),
+		Epoch:                         info.Epoch,
+		BDRMode:                       util.GetOrZero(info.Config.BDRMode),
+		EnableActiveActive:            util.GetOrZero(info.Config.EnableActiveActive),
+		ActiveActiveProgressInterval:  util.GetOrZero(info.Config.ActiveActiveProgressInterval),
+		ActiveActiveSyncStatsInterval: util.GetOrZero(info.Config.ActiveActiveSyncStatsInterval),
+		TimeZone:                      GetGlobalServerConfig().TZ,
+		Consistent:                    info.Config.Consistent,
+		EnableTableAcrossNodes:        util.GetOrZero(info.Config.Scheduler.EnableTableAcrossNodes),
 		// other fields are not necessary for dispatcherManager
 	}
 }
@@ -439,6 +445,14 @@ func (info *ChangeFeedInfo) VerifyAndComplete() {
 	if info.Config.SyncedStatus == nil {
 		info.Config.SyncedStatus = defaultConfig.SyncedStatus
 	}
+	if info.Config.ActiveActiveProgressInterval == nil {
+		interval := *defaultConfig.ActiveActiveProgressInterval
+		info.Config.ActiveActiveProgressInterval = util.AddressOf(interval)
+	}
+	if info.Config.ActiveActiveSyncStatsInterval == nil {
+		interval := *defaultConfig.ActiveActiveSyncStatsInterval
+		info.Config.ActiveActiveSyncStatsInterval = util.AddressOf(interval)
+	}
 	info.RmUnusedFields()
 }
 
@@ -483,10 +497,18 @@ func (info *ChangeFeedInfo) RmUnusedFields() {
 }
 
 func (info *ChangeFeedInfo) rmMQOnlyFields() {
-	log.Info("since the downstream is not a MQ, remove MQ only fields",
-		zap.String("keyspace", info.ChangefeedID.Keyspace()),
-		zap.String("changefeed", info.ChangefeedID.Name()))
-	info.Config.Sink.DispatchRules = nil
+	// Don't nil out DispatchRules entirely - it may contain routing rules (TargetSchema/TargetTable)
+	// Remove only MQ-specific fields from each rule.
+	for _, rule := range info.Config.Sink.DispatchRules {
+		if rule == nil {
+			continue
+		}
+		rule.DispatcherRule = ""
+		rule.PartitionRule = ""
+		rule.IndexName = ""
+		rule.Columns = nil
+		rule.TopicRule = ""
+	}
 	info.Config.Sink.SchemaRegistry = nil
 	info.Config.Sink.EncoderConcurrency = nil
 	info.Config.Sink.OnlyOutputUpdatedColumns = nil

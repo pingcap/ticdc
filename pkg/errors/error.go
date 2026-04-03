@@ -110,6 +110,14 @@ var (
 		"cluster ID mismatch, tikv cluster ID is %d and request cluster ID is %d",
 		errors.RFCCodeText("CDC:ErrClusterIDMismatch"),
 	)
+	ErrSameUpstreamDownstream = errors.Normalize(
+		"upstream and downstream are the same, %s",
+		errors.RFCCodeText("CDC:ErrSameUpstreamDownstream"),
+	)
+	ErrActiveActiveTSOIndexIncompatible = errors.Normalize(
+		"active active tso index is incompatible, %s",
+		errors.RFCCodeText("CDC:ErrActiveActiveTSOIndexIncompatible"),
+	)
 	ErrMultipleCDCClustersExist = errors.Normalize(
 		"multiple TiCDC clusters exist while using --pd",
 		errors.RFCCodeText("CDC:ErrMultipleCDCClustersExist"),
@@ -252,6 +260,10 @@ var (
 	ErrSinkInvalidConfig = errors.Normalize(
 		"sink config invalid",
 		errors.RFCCodeText("CDC:ErrSinkInvalidConfig"),
+	)
+	ErrInvalidTableRoutingRule = errors.Normalize(
+		"invalid table routing rule",
+		errors.RFCCodeText("CDC:ErrInvalidTableRoutingRule"),
 	)
 	ErrMessageTooLarge = errors.Normalize(
 		"message is too large. table:%s, length:%d, maxMessageBytes:%d",
@@ -766,9 +778,9 @@ var (
 		"changefeed is in retryable state",
 		errors.RFCCodeText("CDC:ErrChangefeedRetryable"),
 	)
-	ErrChangefeedInitTableTriggerEventDispatcherFailed = errors.Normalize(
-		"failed to init table trigger event dispatcher",
-		errors.RFCCodeText("CDC:ErrChangefeedInitTableTriggerEventDispatcherFailed"),
+	ErrChangefeedInitTableTriggerDispatcherFailed = errors.Normalize(
+		"failed to init table trigger dispatcher",
+		errors.RFCCodeText("CDC:ErrChangefeedInitTableTriggerDispatcherFailed"),
 	)
 	ErrDDLEventError = errors.Normalize(
 		"ddl event meets error",
@@ -812,6 +824,37 @@ var (
 	ErrUnimplementedIOType = errors.Normalize(
 		"unimplemented IOType: %d",
 		errors.RFCCodeText("CDC:ErrUnimplementedIOType"),
+	)
+
+	// encryption related errors
+	ErrEncryptionMetaNotFound = errors.Normalize(
+		"encryption meta not found",
+		errors.RFCCodeText("CDC:ErrEncryptionMetaNotFound"),
+	)
+
+	ErrUnsupportedEncryptionAlgorithm = errors.Normalize(
+		"unsupported encryption algorithm: %s",
+		errors.RFCCodeText("CDC:ErrUnsupportedEncryptionAlgorithm"),
+	)
+
+	ErrEncryptionFailed = errors.Normalize(
+		"encryption failed: %s",
+		errors.RFCCodeText("CDC:ErrEncryptionFailed"),
+	)
+
+	ErrDecryptionFailed = errors.Normalize(
+		"decryption failed: %s",
+		errors.RFCCodeText("CDC:ErrDecryptionFailed"),
+	)
+
+	ErrInvalidDataKeyID = errors.Normalize(
+		"invalid data key ID: %s",
+		errors.RFCCodeText("CDC:ErrInvalidDataKeyID"),
+	)
+
+	ErrDataKeyNotFound = errors.Normalize(
+		"data key not found: %s",
+		errors.RFCCodeText("CDC:ErrDataKeyNotFound"),
 	)
 )
 

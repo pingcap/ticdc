@@ -39,7 +39,7 @@ func getMysqlSink() (context.Context, *Sink, sqlmock.Sqlmock) {
 	cfg.MaxAllowedPacket = int64(vardef.DefMaxAllowedPacket)
 	cfg.CachePrepStmts = false
 
-	sink := NewMySQLSink(ctx, changefeedID, cfg, db, false)
+	sink := NewMySQLSink(ctx, changefeedID, cfg, db, false, false, time.Minute)
 	return ctx, sink, mock
 }
 
@@ -55,7 +55,7 @@ func getMysqlSinkWithDDLTs() (context.Context, *Sink, sqlmock.Sqlmock) {
 	cfg.CachePrepStmts = false
 	cfg.EnableDDLTs = true // Enable DDL-ts feature for testing
 
-	sink := NewMySQLSink(ctx, changefeedID, cfg, db, false)
+	sink := NewMySQLSink(ctx, changefeedID, cfg, db, false, false, time.Minute)
 	return ctx, sink, mock
 }
 
@@ -71,6 +71,21 @@ func MysqlSinkForTestWithMaxTxnRows(maxTxnRows int) (*Sink, sqlmock.Sqlmock) {
 	sink.maxTxnRows = maxTxnRows
 	go sink.Run(ctx)
 	return sink, mock
+}
+
+func TestMysqlSinkBatchConfig(t *testing.T) {
+	cfg := mysql.New()
+	cfg.MaxTxnRow = 128
+	cfg.MaxAllowedPacket = 4096
+
+	sink := &Sink{
+		cfg:        cfg,
+		maxTxnRows: cfg.MaxTxnRow,
+		dmlWriter:  make([]*mysql.Writer, 3),
+	}
+
+	require.Equal(t, 384, sink.BatchCount())
+	require.Equal(t, 4096, sink.BatchBytes())
 }
 
 // Test callback and tableProgress works as expected after AddDMLEvent
@@ -147,6 +162,7 @@ func TestMysqlSinkBasicFunctionality(t *testing.T) {
 	// Step 2: execDDLWithMaxRetries - Execute the actual DDL
 	mock.ExpectBegin()
 	mock.ExpectExec("USE `test`;").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("SET TIMESTAMP = DEFAULT").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec("create table t (id int primary key, name varchar(32));").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
@@ -261,6 +277,7 @@ func TestMysqlSinkMeetsDDLError(t *testing.T) {
 	// Step 2: execDDLWithMaxRetries - Execute the actual DDL (will fail)
 	mock.ExpectBegin()
 	mock.ExpectExec("USE `test`;").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("SET TIMESTAMP = DEFAULT").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec("create table t (id int primary key, name varchar(32));").WillReturnError(errors.New("connect: connection refused"))
 	mock.ExpectRollback()
 

@@ -23,6 +23,7 @@ import (
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
+	"go.uber.org/atomic"
 )
 
 func TestNewDispatcherStat(t *testing.T) {
@@ -43,7 +44,7 @@ func TestNewDispatcherStat(t *testing.T) {
 	info.syncPointInterval = syncPointInterval
 
 	workerCount := uint64(1)
-	status := newChangefeedStatus(info.GetChangefeedID())
+	status := newChangefeedStatus(info.GetChangefeedID(), info.GetSyncPointInterval())
 	stat := newDispatcherStat(info, workerCount, workerCount, nil, status)
 
 	require.Equal(t, info.GetID(), stat.id)
@@ -63,7 +64,7 @@ func TestDispatcherStatResolvedTs(t *testing.T) {
 	t.Parallel()
 
 	info := newMockDispatcherInfo(t, 100, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
-	status := newChangefeedStatus(info.GetChangefeedID())
+	status := newChangefeedStatus(info.GetChangefeedID(), info.GetSyncPointInterval())
 	stat := newDispatcherStat(info, 1, 1, nil, status)
 
 	// Test normal update
@@ -80,7 +81,7 @@ func TestDispatcherStatGetDataRange(t *testing.T) {
 	t.Parallel()
 
 	info := newMockDispatcherInfo(t, 100, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
-	status := newChangefeedStatus(info.GetChangefeedID())
+	status := newChangefeedStatus(info.GetChangefeedID(), info.GetSyncPointInterval())
 	stat := newDispatcherStat(info, 1, 1, nil, status)
 	stat.setHandshaked()
 
@@ -120,7 +121,7 @@ func TestDispatcherStatGetDataRange(t *testing.T) {
 func TestDispatcherStatUpdateWatermark(t *testing.T) {
 	startTs := uint64(100)
 	info := newMockDispatcherInfo(t, startTs, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
-	status := newChangefeedStatus(info.GetChangefeedID())
+	status := newChangefeedStatus(info.GetChangefeedID(), info.GetSyncPointInterval())
 	stat := newDispatcherStat(info, 1, 1, nil, status)
 
 	// Case 1: no new events, only watermark change
@@ -177,4 +178,29 @@ func TestResolvedTsCache(t *testing.T) {
 	require.Equal(t, uint64(100), res[0].ResolvedTs)
 	require.Equal(t, uint64(109), res[9].ResolvedTs)
 	require.False(t, rc.isFull())
+}
+
+func TestSyncPointPrepareCannotLowerAfterPromote(t *testing.T) {
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "syncpoint-race"), 10*time.Second)
+
+	const (
+		preparingTs   = uint64(50)
+		loweredTarget = uint64(40)
+	)
+
+	readyDispatcher := &dispatcherStat{}
+	readyDispatcher.seq.Store(1)
+	readyDispatcher.sentResolvedTs.Store(preparingTs)
+	dispatcherPtr := &atomic.Pointer[dispatcherStat]{}
+	dispatcherPtr.Store(readyDispatcher)
+	status.addDispatcher(common.DispatcherID{Low: 1, High: 1}, dispatcherPtr)
+
+	status.syncPointPreparingTs.Store(preparingTs)
+	status.tryPromoteSyncPointToCommitIfReady()
+	require.True(t, status.isSyncPointInCommitStage(preparingTs))
+
+	lowered := status.tryEnterSyncPointPrepare(loweredTarget)
+	require.False(t, lowered)
+	require.Equal(t, preparingTs, status.syncPointPreparingTs.Load())
+	require.Equal(t, preparingTs, status.syncPointInFlightTs.Load())
 }

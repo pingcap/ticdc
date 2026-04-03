@@ -17,7 +17,7 @@ import (
 	"fmt"
 
 	"github.com/pingcap/ticdc/pkg/compression"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/br/pkg/storage"
@@ -72,7 +72,15 @@ type ConsistentMemoryUsage struct {
 }
 
 // ValidateAndAdjust validates the consistency config and adjusts it if necessary.
+// The exported API keeps the default behavior and always enables redo storage
+// I/O checks for normal callers.
 func (c *ConsistentConfig) ValidateAndAdjust() error {
+	return c.validateAndAdjust(true)
+}
+
+// validateAndAdjust is an internal helper that allows toggling redo storage
+// I/O checks. enableIOCheck=false is only used by CLI-side pre-validation.
+func (c *ConsistentConfig) validateAndAdjust(enableIOCheck bool) error {
 	if !redo.IsConsistentEnabled(util.GetOrZero(c.Level)) {
 		return nil
 	}
@@ -85,7 +93,7 @@ func (c *ConsistentConfig) ValidateAndAdjust() error {
 		c.FlushIntervalInMs = util.AddressOf(int64(redo.DefaultFlushIntervalInMs))
 	}
 	if util.GetOrZero(c.FlushIntervalInMs) < redo.MinFlushIntervalInMs {
-		return cerror.ErrInvalidReplicaConfig.FastGenByArgs(
+		return errors.ErrInvalidReplicaConfig.FastGenByArgs(
 			fmt.Sprintf("The consistent.flush-interval:%d must be equal or greater than %d",
 				util.GetOrZero(c.FlushIntervalInMs), redo.MinFlushIntervalInMs))
 	}
@@ -94,14 +102,20 @@ func (c *ConsistentConfig) ValidateAndAdjust() error {
 		c.MetaFlushIntervalInMs = util.AddressOf(int64(redo.DefaultMetaFlushIntervalInMs))
 	}
 	if util.GetOrZero(c.MetaFlushIntervalInMs) < redo.MinFlushIntervalInMs {
-		return cerror.ErrInvalidReplicaConfig.FastGenByArgs(
+		return errors.ErrInvalidReplicaConfig.FastGenByArgs(
 			fmt.Sprintf("The consistent.meta-flush-interval:%d must be equal or greater than %d",
 				util.GetOrZero(c.MetaFlushIntervalInMs), redo.MinFlushIntervalInMs))
 	}
-	if len(util.GetOrZero(c.Compression)) > 0 &&
-		util.GetOrZero(c.Compression) != compression.None && util.GetOrZero(c.Compression) != compression.LZ4 {
-		return cerror.ErrInvalidReplicaConfig.FastGenByArgs(
-			fmt.Sprintf("The consistent.compression:%s must be 'none' or 'lz4'", util.GetOrZero(c.Compression)))
+
+	compressionType := util.GetOrZero(c.Compression)
+	if len(compressionType) == 0 {
+		compressionType = compression.None
+		c.Compression = util.AddressOf(compressionType)
+	}
+
+	if compressionType != compression.None && compressionType != compression.LZ4 {
+		return errors.ErrInvalidReplicaConfig.FastGenByArgs(
+			fmt.Sprintf("The consistent.compression:%s must be 'none' or 'lz4'", compressionType))
 	}
 
 	if util.GetOrZero(c.EncodingWorkerNum) == 0 {
@@ -113,10 +127,10 @@ func (c *ConsistentConfig) ValidateAndAdjust() error {
 
 	uri, err := storage.ParseRawURL(util.GetOrZero(c.Storage))
 	if err != nil {
-		return cerror.ErrInvalidReplicaConfig.GenWithStackByArgs(
+		return errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
 			fmt.Sprintf("invalid storage uri: %s", util.GetOrZero(c.Storage)))
 	}
-	return redo.ValidateStorage(uri)
+	return redo.ValidateStorageWithOptions(uri, redo.StorageValidationOptions{EnableIOCheck: enableIOCheck})
 }
 
 // MaskSensitiveData masks sensitive data in ConsistentConfig

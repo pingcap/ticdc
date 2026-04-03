@@ -270,7 +270,7 @@ func (c *server) setPreServices(ctx context.Context) error {
 
 	// Set DispatcherOrchestrator to Global Context
 	dispatcherOrchestrator := dispatcherorchestrator.New()
-	dispatcherOrchestrator.Run(ctx)
+	dispatcherOrchestrator.Run()
 	appctx.SetService(appctx.DispatcherOrchestrator, dispatcherOrchestrator)
 	c.preServices = append(c.preServices, dispatcherOrchestrator)
 
@@ -415,7 +415,7 @@ func (c *server) GetCoordinator() (tiserver.Coordinator, error) {
 // Close closes the server by deregister it from etcd,
 // it also closes the coordinator and processorManager
 // Note: this function should be reentrant
-func (c *server) Close(ctx context.Context) {
+func (c *server) Close() {
 	if !c.closed.CompareAndSwap(false, true) {
 		return
 	}
@@ -435,11 +435,14 @@ func (c *server) Close(ctx context.Context) {
 		c.closePreServices()
 	}()
 
+	closeCtx, closeCancel := context.WithTimeout(context.Background(), GracefulShutdownTimeout)
+	defer closeCancel()
+
 	// There are also some dependencies inside subModules,
 	// so we close subModules in reverse order of their startup.
 	for i := len(c.subModules) - 1; i >= 0; i-- {
 		m := c.subModules[i]
-		if err := m.Close(ctx); err != nil {
+		if err := m.Close(closeCtx); err != nil {
 			log.Warn("failed to close sub module",
 				zap.String("module", m.Name()),
 				zap.Error(err))
@@ -448,7 +451,7 @@ func (c *server) Close(ctx context.Context) {
 	}
 
 	for _, m := range c.nodeModules {
-		if err := m.Close(ctx); err != nil {
+		if err := m.Close(closeCtx); err != nil {
 			log.Warn("failed to close sub common module",
 				zap.String("module", m.Name()),
 				zap.Error(err))
@@ -457,7 +460,7 @@ func (c *server) Close(ctx context.Context) {
 	}
 
 	for _, nm := range c.networkModules {
-		if err := nm.Close(ctx); err != nil {
+		if err := nm.Close(closeCtx); err != nil {
 			log.Warn("failed to close sub base module",
 				zap.String("module", nm.Name()),
 				zap.Error(err))
@@ -466,8 +469,8 @@ func (c *server) Close(ctx context.Context) {
 	}
 
 	// delete server info from etcd
-	timeoutCtx, cancel := context.WithTimeout(context.Background(), cleanMetaDuration)
-	defer cancel()
+	timeoutCtx, timeoutCancel := context.WithTimeout(closeCtx, cleanMetaDuration)
+	defer timeoutCancel()
 	if err := c.EtcdClient.DeleteCaptureInfo(timeoutCtx, string(c.info.ID)); err != nil {
 		log.Warn("failed to delete server info when server exited",
 			zap.String("captureID", string(c.info.ID)),

@@ -57,6 +57,54 @@ func TestMemControlAddRemovePath(t *testing.T) {
 	require.Empty(t, mc.areaStatMap)
 }
 
+func TestRemovePathLateAppendDoesNotPolluteAreaPendingSize(t *testing.T) {
+	mc, path := setupTestComponents()
+	settings := AreaSettings{
+		maxPendingSize:   1000,
+		feedbackInterval: time.Second,
+		algorithm:        MemoryControlForPuller,
+	}
+	feedbackChan := make(chan Feedback[int, string, any], 10)
+	mc.addPathToArea(path, settings, feedbackChan)
+
+	handler := &mockHandler{}
+	eq := newEventQueue(Option{BatchCount: 4}, handler)
+	eq.initPath(path)
+
+	appendEvent := func(id int, size int) {
+		eq.appendEvent(eventWrap[int, string, *mockEvent, any, *mockHandler]{
+			pathInfo:  path,
+			event:     &mockEvent{id: id, path: path.path},
+			eventType: DefaultEventType,
+			eventSize: size,
+		})
+	}
+
+	// Append one event before path removal.
+	appendEvent(1, 10)
+	require.Equal(t, int64(10), path.areaMemStat.totalPendingSize.Load())
+	require.Equal(t, int64(10), path.pendingSize.Load())
+
+	// Remove path and deduct the current pending size immediately.
+	path.removed.Store(true)
+	mc.removePathFromArea(path)
+	require.Equal(t, int64(0), path.areaMemStat.totalPendingSize.Load())
+	require.Equal(t, int64(0), path.pendingSize.Load())
+
+	// Simulate a stale in-flight append that races with RemovePath.
+	appendEvent(2, 7)
+
+	buf := make([]*mockEvent, 0)
+	events, _, _ := eq.popEvents(buf)
+	require.Len(t, events, 0)
+
+	// Removed-path events must not leave stale memory accounting behind.
+	require.Equal(t, int64(0), path.areaMemStat.totalPendingSize.Load())
+	require.Equal(t, int64(0), path.pendingSize.Load())
+	require.Equal(t, 0, path.pendingQueue.Length())
+	require.Equal(t, int64(0), eq.totalPendingLength.Load())
+}
+
 func TestAreaMemStatAppendEvent(t *testing.T) {
 	mc, path1 := setupTestComponents()
 	settings := AreaSettings{
@@ -272,6 +320,25 @@ func TestReleaseMemory(t *testing.T) {
 	}
 	feedbackChan := make(chan Feedback[int, string, any], 10)
 
+	calcExpectedReleasedPaths := func(
+		as *areaMemStat[int, string, *mockEvent, any, *mockHandler],
+		paths ...*pathInfo[int, string, *mockEvent, any, *mockHandler],
+	) []string {
+		sizeToRelease := int64(float64(as.totalPendingSize.Load()) * defaultReleaseMemoryRatio)
+		releasedSize := int64(0)
+		res := make([]string, 0)
+		for _, path := range paths {
+			if releasedSize >= sizeToRelease ||
+				path.pendingSize.Load() < int64(defaultReleaseMemoryThreshold) ||
+				!path.blocking.Load() {
+				continue
+			}
+			releasedSize += path.pendingSize.Load()
+			res = append(res, path.path)
+		}
+		return res
+	}
+
 	// Create 3 paths with different last handle event timestamps
 	path1 := &pathInfo[int, string, *mockEvent, any, *mockHandler]{
 		area:         area,
@@ -310,7 +377,7 @@ func TestReleaseMemory(t *testing.T) {
 	path2.lastHandleEventTs.Store(200)
 	path3.lastHandleEventTs.Store(100)
 
-	// Case 1: release path1
+	// Case 1: release most recent paths
 	// Add events to each path
 	// Each event has size 100
 	for i := 0; i < 4; i++ {
@@ -355,20 +422,27 @@ func TestReleaseMemory(t *testing.T) {
 	path1.areaMemStat.lastReleaseMemoryTime.Store(time.Now().Add(-2 * time.Second))
 	path1.areaMemStat.releaseMemory()
 
+	expectedPaths := calcExpectedReleasedPaths(path1.areaMemStat, path1, path2, path3)
 	feedbacks := make([]Feedback[int, string, any], 0)
-	for i := 0; i < 1; i++ {
+	for i := 0; i < len(expectedPaths); i++ {
 		select {
 		case fb := <-feedbackChan:
 			feedbacks = append(feedbacks, fb)
 		case <-time.After(100 * time.Millisecond):
-			require.Fail(t, "should receive 1 feedbacks")
+			require.Fail(t, "should receive feedbacks")
 		}
 	}
 
-	require.Equal(t, 1, len(feedbacks))
-	require.Equal(t, ReleasePath, feedbacks[0].FeedbackType)
-	require.Equal(t, area, feedbacks[0].Area)
-	require.Equal(t, path1.path, feedbacks[0].Path)
+	require.Len(t, feedbacks, len(expectedPaths))
+	gotPaths := make(map[string]bool, len(feedbacks))
+	for _, fb := range feedbacks {
+		require.Equal(t, ReleasePath, fb.FeedbackType)
+		require.Equal(t, area, fb.Area)
+		gotPaths[fb.Path] = true
+	}
+	for _, path := range expectedPaths {
+		require.True(t, gotPaths[path])
+	}
 
 	// Case 2: release path1 and path2
 	// Reset the paths
@@ -407,40 +481,39 @@ func TestReleaseMemory(t *testing.T) {
 	path1.areaMemStat.totalPendingSize.Store(900)
 
 	// Call releaseMemory
-	// sizeToRelease = 1000 * 0.4 = 360
-	// path1 (ts=300): release 300 bytes, sizeToRelease = 360 - 300 = 60
-	// path2 (ts=200): release 300 bytes, sizeToRelease = 60 - 300 = -240
+	// sizeToRelease = totalPendingSize * defaultReleaseMemoryRatio
 	path1.areaMemStat.lastReleaseMemoryTime.Store(time.Now().Add(-2 * time.Second))
 	path1.areaMemStat.releaseMemory()
 
 	// Verify feedback messages
-	// Should receive 2 ResetPath feedbacks
+	// Should receive feedbacks to release memory.
+	expectedPaths = calcExpectedReleasedPaths(path1.areaMemStat, path1, path2, path3)
 	feedbacks = make([]Feedback[int, string, any], 0)
 	timer := time.After(100 * time.Millisecond)
-	for i := 0; i < 2; i++ {
+	for i := 0; i < len(expectedPaths); i++ {
 		select {
 		case fb := <-feedbackChan:
 			feedbacks = append(feedbacks, fb)
 		case <-timer:
-			require.Fail(t, "should receive 2 feedbacks")
+			require.Fail(t, "should receive feedbacks")
 		}
 	}
 
-	require.Equal(t, 2, len(feedbacks))
-	// Both should be ResetPath type
+	require.Len(t, feedbacks, len(expectedPaths))
+	// Both should be ReleasePath type
 	for _, fb := range feedbacks {
 		require.Equal(t, ReleasePath, fb.FeedbackType)
 		require.Equal(t, area, fb.Area)
 	}
 
-	// Check that we got feedbacks for path1 and path2
-	paths := make(map[string]bool)
+	// Check that we got expected feedbacks.
+	paths := make(map[string]bool, len(feedbacks))
 	for _, fb := range feedbacks {
 		paths[fb.Path] = true
 	}
-	require.True(t, paths["path-1"])
-	require.True(t, paths["path-2"])
-	require.False(t, paths["path-3"])
+	for _, path := range expectedPaths {
+		require.True(t, paths[path])
+	}
 
 	// Verify no more feedbacks
 	select {

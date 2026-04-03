@@ -139,7 +139,8 @@ func (b *BlockEventStatus) actionMatchs(action *heartbeatpb.DispatcherAction) bo
 		return false
 	}
 
-	return b.blockCommitTs == action.CommitTs
+	pendingIsSyncPoint := b.blockPendingEvent.GetType() == commonEvent.TypeSyncPointEvent
+	return b.blockCommitTs == action.CommitTs && pendingIsSyncPoint == action.IsSyncPoint
 }
 
 func (b *BlockEventStatus) getEventCommitTs() (uint64, bool) {
@@ -244,13 +245,14 @@ type HeartBeatInfo struct {
 	IsRemoving      bool
 }
 
-// Resend Task is reponsible for resending the TableSpanBlockStatus message with ddl info to maintainer each 50ms.
-// The task will be cancelled when the the dispatcher received the ack message from the maintainer
+// ResendTask is responsible for periodically resending the TableSpanBlockStatus message to the maintainer.
+// The task will be cancelled when the dispatcher receives the ACK message from the maintainer.
 type ResendTask struct {
-	message    *heartbeatpb.TableSpanBlockStatus
-	dispatcher Dispatcher
-	callback   func() // function need to be called when the task is cancelled
-	taskHandle *threadpool.TaskHandle
+	message      *heartbeatpb.TableSpanBlockStatus
+	dispatcher   Dispatcher
+	callback     func() // function need to be called when the task is cancelled
+	taskHandle   *threadpool.TaskHandle
+	executeCount uint64
 }
 
 const resendTimeInterval = 5 * time.Second
@@ -269,6 +271,14 @@ func newResendTask(message *heartbeatpb.TableSpanBlockStatus, dispatcher Dispatc
 func (t *ResendTask) Execute() time.Time {
 	log.Debug("resend task", zap.Any("message", t.message), zap.Any("dispatcherID", t.dispatcher.GetId()))
 	t.dispatcher.GetBlockStatusesChan() <- t.message
+
+	executeCount := atomic.AddUint64(&t.executeCount, 1)
+	if executeCount%10 == 0 {
+		log.Info("resend task periodic resend",
+			zap.Any("dispatcherID", t.dispatcher.GetId()),
+			zap.Any("message", t.message),
+			zap.Uint64("executeCount", executeCount))
+	}
 	return time.Now().Add(resendTimeInterval)
 }
 
@@ -337,9 +347,8 @@ func (d *DispatcherStatusWithID) GetDispatcherID() common.DispatcherID {
 // If so, we can cancel the resend task.
 // If we get a dispatcher action, we need to check whether the action is for the current pending ddl event.
 // If so, we can deal the ddl event based on the action.
-// 1. If the action is a write, we need to add the ddl event to the sink for writing to downstream(async).
-// 2. If the action is a pass, we just need to pass the event in tableProgress(for correct calculation) and
-// wake the dispatcherEventsHandler to handle the event.
+// 1. If the action is a write, flush prior DML and write the block event to sink(async).
+// 2. If the action is a pass, flush prior DML and pass the event in tableProgress(async).
 type DispatcherStatusHandler struct{}
 
 func (h *DispatcherStatusHandler) Path(event DispatcherStatusWithID) common.DispatcherID {
@@ -359,6 +368,10 @@ func (h *DispatcherStatusHandler) GetArea(path common.DispatcherID, dest Dispatc
 	return dest.GetChangefeedID().ID()
 }
 
+func (h *DispatcherStatusHandler) GetMetricLabel(dest Dispatcher) string {
+	return dest.GetChangefeedID().String()
+}
+
 func (h *DispatcherStatusHandler) GetTimestamp(event DispatcherStatusWithID) dynstream.Timestamp {
 	if event.GetDispatcherStatus().Action != nil {
 		return dynstream.Timestamp(event.GetDispatcherStatus().Action.CommitTs)
@@ -369,7 +382,8 @@ func (h *DispatcherStatusHandler) GetTimestamp(event DispatcherStatusWithID) dyn
 }
 
 func (h *DispatcherStatusHandler) GetType(event DispatcherStatusWithID) dynstream.EventType {
-	// DispatcherStatus may trigger downstream IO (e.g. executing DDL) when handling Action_Write.
+	// DispatcherStatus may trigger downstream IO when handling action write/pass
+	// because we flush prior DML before completing the block action.
 	// Make it non-batchable to ensure we can safely return await=true for a single event.
 	return dynstream.EventType{DataGroup: 0, Property: dynstream.NonBatchable}
 }
@@ -387,7 +401,7 @@ var (
 
 func GetDispatcherStatusDynamicStream() dynstream.DynamicStream[common.GID, common.DispatcherID, DispatcherStatusWithID, Dispatcher, *DispatcherStatusHandler] {
 	dispatcherStatusDSOnce.Do(func() {
-		dispatcherStatusDS = dynstream.NewParallelDynamicStream(&DispatcherStatusHandler{})
+		dispatcherStatusDS = dynstream.NewParallelDynamicStream("dispatcher-status", &DispatcherStatusHandler{})
 		dispatcherStatusDS.Start()
 	})
 	return dispatcherStatusDS

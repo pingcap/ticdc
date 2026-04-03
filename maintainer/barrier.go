@@ -42,7 +42,10 @@ type Barrier struct {
 	spanController     *span.Controller
 	operatorController *operator.Controller
 	splitTableEnabled  bool
-	mode               int64
+	// mode identifies which replication pipeline this barrier belongs to
+	// (common.DefaultMode or common.RedoMode). Barrier state, resend messages,
+	// and logs must stay in the same mode.
+	mode int64
 }
 
 // NewBarrier create a new barrier for the changefeed
@@ -80,11 +83,11 @@ func (b *Barrier) HandleStatus(from node.ID,
 		if dispatcherID != b.spanController.GetDDLDispatcherID() {
 			task := b.spanController.GetTaskByID(dispatcherID)
 			if task == nil {
-				log.Info("Get block status from unexisted dispatcher, ignore it", zap.String("changefeed", request.ChangefeedID.GetName()), zap.String("dispatcher", dispatcherID.String()), zap.Uint64("commitTs", status.State.BlockTs))
+				log.Info("Get block status from unexisted dispatcher, ignore it", zap.String("changefeed", request.ChangefeedID.GetName()), zap.String("dispatcher", dispatcherID.String()), zap.Uint64("commitTs", status.State.BlockTs), zap.Int64("mode", b.mode))
 				continue
 			} else {
 				if !b.spanController.IsReplicating(task) {
-					log.Info("Get block status from unreplicating dispatcher, ignore it", zap.String("changefeed", request.ChangefeedID.GetName()), zap.String("dispatcher", dispatcherID.String()), zap.Uint64("commitTs", status.State.BlockTs))
+					log.Info("Get block status from unreplicating dispatcher, ignore it", zap.String("changefeed", request.ChangefeedID.GetName()), zap.String("dispatcher", dispatcherID.String()), zap.Uint64("commitTs", status.State.BlockTs), zap.Int64("mode", b.mode))
 					continue
 				}
 			}
@@ -100,7 +103,8 @@ func (b *Barrier) HandleStatus(from node.ID,
 				zap.String("from", from.String()),
 				zap.String("changefeed", request.ChangefeedID.GetName()),
 				zap.String("detail", status.String()),
-				zap.Uint64("commitTs", status.State.BlockTs))
+				zap.Uint64("commitTs", status.State.BlockTs),
+				zap.Int64("mode", b.mode))
 			continue
 		}
 		if needACK {
@@ -123,7 +127,8 @@ func (b *Barrier) HandleStatus(from node.ID,
 	if len(dispatcherStatus) <= 0 {
 		log.Warn("no dispatcher status to send",
 			zap.String("from", from.String()),
-			zap.String("changefeed", request.ChangefeedID.String()))
+			zap.String("changefeed", request.ChangefeedID.String()),
+			zap.Int64("mode", b.mode))
 	}
 
 	// send ack or write action message to dispatcher
@@ -167,7 +172,7 @@ func (b *Barrier) handleBootstrapResponse(bootstrapRespMap map[node.ID]*heartbea
 			key := getEventKey(blockState.BlockTs, blockState.IsSyncPoint)
 			event, ok := b.blockedEvents.Get(key)
 			if !ok {
-				event = NewBlockEvent(common.NewChangefeedIDFromPB(resp.ChangefeedID), common.NewDispatcherIDFromPB(span.ID), b.spanController, b.operatorController, blockState, b.splitTableEnabled)
+				event = NewBlockEvent(common.NewChangefeedIDFromPB(resp.ChangefeedID), common.NewDispatcherIDFromPB(span.ID), b.spanController, b.operatorController, blockState, b.splitTableEnabled, b.mode)
 				b.blockedEvents.Set(key, event)
 			}
 			switch blockState.Stage {
@@ -238,7 +243,7 @@ func (b *Barrier) Resend() []*messaging.TargetMessage {
 // because on the complete checkpointTs calculation should consider the new dispatcher.
 func (b *Barrier) ShouldBlockCheckpointTs() bool {
 	flag := false
-	b.blockedEvents.RangeWoLock(func(key eventKey, barrierEvent *BarrierEvent) bool {
+	b.blockedEvents.RangeWithoutLock(func(key eventKey, barrierEvent *BarrierEvent) bool {
 		if barrierEvent.hasNewTable {
 			flag = true
 			return false
@@ -339,7 +344,8 @@ func (b *Barrier) handleBlockState(changefeedID common.ChangeFeedID,
 			log.Info("the block event is sent by ddl dispatcher",
 				zap.String("changefeed", changefeedID.Name()),
 				zap.String("dispatcher", dispatcherID.String()),
-				zap.Uint64("commitTs", blockState.BlockTs))
+				zap.Uint64("commitTs", blockState.BlockTs),
+				zap.Int64("mode", b.mode))
 			event.tableTriggerDispatcherRelated = true
 		}
 		if event.selected.Load() {
@@ -348,11 +354,39 @@ func (b *Barrier) handleBlockState(changefeedID common.ChangeFeedID,
 				zap.String("changefeed", changefeedID.Name()),
 				zap.String("dispatcher", dispatcherID.String()),
 				zap.Uint64("commitTs", blockState.BlockTs),
+				zap.Int64("mode", b.mode),
 			)
 			// check whether the event can be finished.
 			b.checkEventFinish(event)
 			return event, nil, "", true
 		}
+
+		// For DB/All block events (including syncpoint), maintainer creates the range checker based on
+		// spanController's current task snapshot when it receives the table trigger dispatcher's report
+		// (see BarrierEvent.markDispatcherEventDone -> createRangeCheckerForTypeDB/All).
+		//
+		// If there are pending schedule-required events (e.g. TRUNCATE TABLE) that have finished writing
+		// but not finished scheduling yet, this snapshot may miss newly added tables and lead to an
+		// incomplete range checker, allowing the DB/All event to advance too early.
+		//
+		// To avoid this race, when the table trigger dispatcher reports a DB/All block event and there
+		// are still pending schedule-required events, we intentionally do NOT ack or act on this report.
+		// The table trigger dispatcher will resend the block status later, after scheduling is done.
+		if dispatcherID == b.spanController.GetDDLDispatcherID() &&
+			blockState.BlockTables != nil &&
+			(blockState.BlockTables.InfluenceType != heartbeatpb.InfluenceType_Normal) {
+			if pending := b.pendingEvents.Len(); pending > 0 {
+				log.Debug("discard db/all block event from ddl dispatcher due to pending schedule events, wait next resend",
+					zap.String("changefeed", changefeedID.Name()),
+					zap.String("dispatcher", dispatcherID.String()),
+					zap.Uint64("commitTs", blockState.BlockTs),
+					zap.Bool("isSyncPoint", blockState.IsSyncPoint),
+					zap.Int("pendingScheduleEvents", pending),
+					zap.Int64("mode", b.mode))
+				return event, nil, "", false
+			}
+		}
+
 		// the block event, and check whether we need to send write action
 		event.markDispatcherEventDone(dispatcherID)
 		status, targetID := event.checkEventAction(dispatcherID)
@@ -395,7 +429,7 @@ func (b *Barrier) getOrInsertNewEvent(changefeedID common.ChangeFeedID, dispatch
 ) *BarrierEvent {
 	event, ok := b.blockedEvents.Get(key)
 	if !ok {
-		event = NewBlockEvent(changefeedID, dispatcherID, b.spanController, b.operatorController, blockState, b.splitTableEnabled)
+		event = NewBlockEvent(changefeedID, dispatcherID, b.spanController, b.operatorController, blockState, b.splitTableEnabled, b.mode)
 		b.blockedEvents.Set(key, event)
 	}
 	return event
@@ -410,7 +444,8 @@ func (b *Barrier) checkEventFinish(be *BarrierEvent) {
 	if be.selected.Load() {
 		log.Info("all dispatchers reported event done, remove event",
 			zap.String("changefeed", be.cfID.Name()),
-			zap.Uint64("committs", be.commitTs))
+			zap.Uint64("committs", be.commitTs),
+			zap.Int64("mode", b.mode))
 		// already selected a dispatcher to write, now all dispatchers reported the block event
 		b.blockedEvents.Delete(getEventKey(be.commitTs, be.isSyncPoint))
 	}
@@ -423,7 +458,8 @@ func (b *Barrier) tryScheduleEvent(event *BarrierEvent) bool {
 	log.Info("event trySchedule",
 		zap.String("changefeed", event.cfID.Name()),
 		zap.String("writerDispatcher", event.writerDispatcher.String()),
-		zap.Uint64("EventCommitTs", event.commitTs))
+		zap.Uint64("EventCommitTs", event.commitTs),
+		zap.Int64("mode", b.mode))
 	// pending queue ensures ddl with the same eventKey only schedules once and in order
 	ready, candidate := b.pendingEvents.popIfHead(event)
 	if !ready {
@@ -432,7 +468,8 @@ func (b *Barrier) tryScheduleEvent(event *BarrierEvent) bool {
 				zap.String("changefeed", event.cfID.Name()),
 				zap.String("writerDispatcher", event.writerDispatcher.String()),
 				zap.Uint64("EventCommitTs", event.commitTs),
-				zap.Bool("isSyncPoint", event.isSyncPoint))
+				zap.Bool("isSyncPoint", event.isSyncPoint),
+				zap.Int64("mode", b.mode))
 		} else {
 			log.Info("event waits for a smaller commitTs before scheduling",
 				zap.String("changefeed", event.cfID.Name()),
@@ -440,7 +477,8 @@ func (b *Barrier) tryScheduleEvent(event *BarrierEvent) bool {
 				zap.Uint64("EventCommitTs", event.commitTs),
 				zap.Bool("isSyncPoint", event.isSyncPoint),
 				zap.Uint64("blockingEventCommitTs", candidate.commitTs),
-				zap.Bool("blockingEventIsSyncPoint", candidate.isSyncPoint))
+				zap.Bool("blockingEventIsSyncPoint", candidate.isSyncPoint),
+				zap.Int64("mode", b.mode))
 		}
 		return false
 	}

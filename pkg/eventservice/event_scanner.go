@@ -161,7 +161,7 @@ func (s *eventScanner) fetchDDLEvents(stat *dispatcherStat, dataRange common.Dat
 	)
 	if err != nil {
 		log.Error("get ddl events failed", zap.Stringer("dispatcherID", dispatcherID),
-			zap.Int64("tableID", dataRange.Span.TableID), zap.Error(err))
+			zap.Int64("tableID", dataRange.Span.TableID), zap.Error(err), zap.Int64("mode", s.mode))
 		return nil, err
 	}
 
@@ -190,7 +190,7 @@ func (s *eventScanner) scanAndMergeEvents(
 ) (bool, error) {
 	tableID := session.dataRange.Span.TableID
 	dispatcher := session.dispatcherStat
-	processor := newDMLProcessor(s.mounter, s.schemaGetter, dispatcher.filter, dispatcher.info.IsOutputRawChangeEvent())
+	processor := newDMLProcessor(s.mounter, s.schemaGetter, dispatcher.filter, dispatcher.info.IsOutputRawChangeEvent(), s.mode)
 
 	for {
 		shouldStop, err := s.checkScanConditions(session)
@@ -240,7 +240,8 @@ func (s *eventScanner) scanAndMergeEvents(
 				zap.Stringer("dispatcherID", session.dispatcherStat.id),
 				zap.Int64("tableID", tableID),
 				zap.Uint64("startTs", rawEvent.StartTs),
-				zap.Uint64("commitTs", rawEvent.CRTs))
+				zap.Uint64("commitTs", rawEvent.CRTs),
+				zap.Int64("mode", s.mode))
 			return false, err
 		}
 	}
@@ -269,20 +270,20 @@ func (s *eventScanner) getTableInfo4Txn(dispatcher *dispatcherStat, tableID int6
 	if dispatcher.isRemoved.Load() {
 		log.Warn("get table info failed, but the dispatcher is removed from the event service",
 			zap.Stringer("dispatcherID", dispatcher.id), zap.Int64("tableID", tableID),
-			zap.Uint64("ts", ts), zap.Error(err))
+			zap.Uint64("ts", ts), zap.Error(err), zap.Int64("mode", s.mode))
 		return nil, nil
 	}
 
 	if errors.Is(err, &schemastore.TableDeletedError{}) {
 		log.Warn("get table info failed, since the table is deleted",
 			zap.Stringer("dispatcherID", dispatcher.id), zap.Int64("tableID", tableID),
-			zap.Uint64("ts", ts))
+			zap.Uint64("ts", ts), zap.Int64("mode", s.mode))
 		return nil, nil
 	}
 
 	log.Error("get table info failed, unknown reason",
 		zap.Stringer("dispatcherID", dispatcher.id), zap.Int64("tableID", tableID),
-		zap.Uint64("ts", ts), zap.Error(err))
+		zap.Uint64("ts", ts), zap.Error(err), zap.Int64("mode", s.mode))
 	return nil, err
 }
 
@@ -675,12 +676,13 @@ type dmlProcessor struct {
 
 	batchDML             *event.BatchDMLEvent
 	outputRawChangeEvent bool
+	mode                 int64
 }
 
 // newDMLProcessor creates a new DML processor
 func newDMLProcessor(
 	mounter event.Mounter, schemaGetter schemaGetter,
-	filter filter.Filter, outputRawChangeEvent bool,
+	filter filter.Filter, outputRawChangeEvent bool, mode int64,
 ) *dmlProcessor {
 	return &dmlProcessor{
 		mounter:              mounter,
@@ -689,6 +691,7 @@ func newDMLProcessor(
 		batchDML:             event.NewBatchDMLEvent(),
 		insertRowCache:       make([]*common.RawKVEntry, 0),
 		outputRawChangeEvent: outputRawChangeEvent,
+		mode:                 mode,
 	}
 }
 
@@ -754,7 +757,9 @@ func (p *dmlProcessor) appendRow(rawEvent *common.RawKVEntry) error {
 
 	rawEvent.Key = event.RemoveKeyspacePrefix(rawEvent.Key)
 
+	rawType := rawEvent.GetType()
 	if !rawEvent.IsUpdate() {
+		updateMetricEventServiceSendDMLTypeCount(p.mode, rawType, false)
 		return p.currentTxn.AppendRow(rawEvent, p.mounter.DecodeToChunk, p.filter)
 	}
 
@@ -768,6 +773,8 @@ func (p *dmlProcessor) appendRow(rawEvent *common.RawKVEntry) error {
 			return err
 		}
 	}
+
+	updateMetricEventServiceSendDMLTypeCount(p.mode, rawType, shouldSplit)
 
 	if !shouldSplit {
 		return p.currentTxn.AppendRow(rawEvent, p.mounter.DecodeToChunk, p.filter)

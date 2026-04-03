@@ -186,16 +186,19 @@ func NewController(
 func (c *Controller) collectMetrics(ctx context.Context) error {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
+	errorMetricLabels := make(map[common.ChangeFeedID]changefeedErrorMetricLabels)
 	for {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return context.Cause(ctx)
 		case <-ticker.C:
 			metrics.ChangefeedStateGauge.WithLabelValues("Total").Set(float64(c.changefeedDB.GetSize()))
 			metrics.ChangefeedStateGauge.WithLabelValues("Working").Set(float64(c.changefeedDB.GetReplicatingSize()))
 			metrics.ChangefeedStateGauge.WithLabelValues("Scheduling").Set(float64(c.operatorController.OperatorSize()))
 			metrics.ChangefeedStateGauge.WithLabelValues("Absent").Set(float64(c.changefeedDB.GetAbsentSize()))
 			metrics.ChangefeedStateGauge.WithLabelValues("Stopped").Set(float64(c.changefeedDB.GetStoppedSize()))
+
+			currentChangefeeds := make(map[common.ChangeFeedID]struct{})
 
 			c.changefeedDB.Foreach(func(cf *changefeed.Changefeed) {
 				info := cf.GetInfo()
@@ -213,13 +216,41 @@ func (c *Controller) collectMetrics(ctx context.Context) error {
 				lag := float64(pdPhysicalTime-phyCkpTs) / 1e3
 				metrics.ChangefeedCheckpointTsGauge.WithLabelValues(keyspace, name).Set(float64(phyCkpTs))
 				metrics.ChangefeedCheckpointTsLagGauge.WithLabelValues(keyspace, name).Set(lag)
+
+				// sync changefeed error metrics
+				currentChangefeeds[cf.ID] = struct{}{}
+				oldLabels, exists := errorMetricLabels[cf.ID]
+				newLabels, hasError := getChangefeedErrorMetricLabels(cf.GetInfo())
+				// If the error state has not changed, do nothing.
+				if exists && hasError && oldLabels == newLabels {
+					return
+				}
+				// If there was an old metric, delete it, as the state has changed.
+				if exists {
+					metrics.ChangefeedErrorInfoGauge.DeleteLabelValues(oldLabels.labelValues()...)
+				}
+				if hasError {
+					// An error exists (either new or changed). Set the new metric and update cache.
+					metrics.ChangefeedErrorInfoGauge.WithLabelValues(newLabels.labelValues()...).Set(1)
+					errorMetricLabels[cf.ID] = newLabels
+				} else {
+					// The error has disappeared, remove from cache.
+					delete(errorMetricLabels, cf.ID)
+				}
 			})
+			for changefeedID, labels := range errorMetricLabels {
+				if _, ok := currentChangefeeds[changefeedID]; ok {
+					continue
+				}
+				metrics.ChangefeedErrorInfoGauge.DeleteLabelValues(labels.labelValues()...)
+				delete(errorMetricLabels, changefeedID)
+			}
 		}
 	}
 }
 
 // HandleEvent implements the event-driven process mode
-func (c *Controller) HandleEvent(event *Event) {
+func (c *Controller) HandleEvent(ctx context.Context, event *Event) {
 	if event == nil {
 		return
 	}
@@ -236,22 +267,22 @@ func (c *Controller) HandleEvent(event *Event) {
 
 	// Before processing the event, we need to check the online/offline nodes,
 	// the following logic is based on whether the node changed.
-	c.checkOnNodeChanged()
+	c.checkOnNodeChanged(ctx)
 
 	switch event.eventType {
 	case EventMessage:
-		c.onMessage(event.message)
+		c.onMessage(ctx, event.message)
 	case EventPeriod:
 		c.onPeriodTask()
 	}
 }
 
-func (c *Controller) checkOnNodeChanged() {
+func (c *Controller) checkOnNodeChanged(ctx context.Context) {
 	c.nodeChanged.Lock()
 	defer c.nodeChanged.Unlock()
 
 	if c.nodeChanged.changed {
-		c.onNodeChanged()
+		c.onNodeChanged(ctx)
 		c.nodeChanged.changed = false
 	}
 }
@@ -264,10 +295,10 @@ func (c *Controller) onPeriodTask() {
 	}
 }
 
-func (c *Controller) onMessage(msg *messaging.TargetMessage) {
+func (c *Controller) onMessage(ctx context.Context, msg *messaging.TargetMessage) {
 	switch msg.Type {
 	case messaging.TypeCoordinatorBootstrapResponse:
-		c.onMaintainerBootstrapResponse(msg)
+		c.onMaintainerBootstrapResponse(ctx, msg)
 	case messaging.TypeMaintainerHeartbeatRequest:
 		if c.bootstrapper.AllNodesReady() {
 			req := msg.Message[0].(*heartbeatpb.MaintainerHeartbeat)
@@ -327,7 +358,7 @@ func (c *Controller) RequestResolvedTsFromLogCoordinator(ctx context.Context, ch
 	}
 }
 
-func (c *Controller) onNodeChanged() {
+func (c *Controller) onNodeChanged(ctx context.Context) {
 	addedNodes, removedNodes, requests, responses := c.bootstrapper.HandleNodesChange(c.nodeManager.GetAliveNodes())
 	log.Info("controller detects node changed",
 		zap.Int("addedCount", len(addedNodes)),
@@ -345,16 +376,16 @@ func (c *Controller) onNodeChanged() {
 				zap.Any("targetNode", req.To), zap.Error(err))
 		}
 	}
-	c.handleBootstrapResponses(responses)
+	c.handleBootstrapResponses(ctx, responses)
 }
 
-func (c *Controller) onMaintainerBootstrapResponse(req *messaging.TargetMessage) {
+func (c *Controller) onMaintainerBootstrapResponse(ctx context.Context, req *messaging.TargetMessage) {
 	response := req.Message[0].(*heartbeatpb.CoordinatorBootstrapResponse)
 	log.Info("controller received maintainer bootstrap response",
 		zap.Stringer("node", req.From),
 		zap.Int("maintainerCount", len(response.Statuses)))
 	responses := c.bootstrapper.HandleBootstrapResponse(req.From, response)
-	c.handleBootstrapResponses(responses)
+	c.handleBootstrapResponses(ctx, responses)
 }
 
 type remoteMaintainer struct {
@@ -362,7 +393,7 @@ type remoteMaintainer struct {
 	status *heartbeatpb.MaintainerStatus
 }
 
-func (c *Controller) handleBootstrapResponses(responses map[node.ID]*heartbeatpb.CoordinatorBootstrapResponse) {
+func (c *Controller) handleBootstrapResponses(ctx context.Context, responses map[node.ID]*heartbeatpb.CoordinatorBootstrapResponse) {
 	if c.initialized.Load() || responses == nil {
 		return
 	}
@@ -385,7 +416,7 @@ func (c *Controller) handleBootstrapResponses(responses map[node.ID]*heartbeatpb
 			}
 		}
 	}
-	c.finishBootstrap(runningCfs)
+	c.finishBootstrap(ctx, runningCfs)
 }
 
 // handleMaintainerStatus handle the status report from the maintainers
@@ -504,9 +535,9 @@ func (c *Controller) updateChangefeedStatus(
 // It will load all changefeeds from metastore, and compare with running changefeeds
 // Then initialize the changefeeds that are not running on other nodes
 // And construct all changefeeds state in memory.
-func (c *Controller) finishBootstrap(runningChangefeeds map[common.ChangeFeedID]remoteMaintainer) {
+func (c *Controller) finishBootstrap(ctx context.Context, runningChangefeeds map[common.ChangeFeedID]remoteMaintainer) {
 	// load all changefeeds from metastore, and check if the changefeed is already in workingMap
-	allChangefeeds, err := c.backend.GetAllChangefeeds(context.Background())
+	allChangefeeds, err := c.backend.GetAllChangefeeds(ctx)
 	if err != nil {
 		log.Panic("load all changefeeds failed", zap.Error(err))
 	}
@@ -514,7 +545,6 @@ func (c *Controller) finishBootstrap(runningChangefeeds map[common.ChangeFeedID]
 	// Register keyspace
 	schemaStore := appcontext.GetService[schemastore.SchemaStore](appcontext.SchemaStore)
 	registeredKeyspace := make(map[string]struct{})
-	ctx := context.Background()
 	for id := range allChangefeeds {
 		if _, ok := registeredKeyspace[id.Keyspace()]; ok {
 			continue
@@ -565,7 +595,7 @@ func (c *Controller) finishBootstrap(runningChangefeeds map[common.ChangeFeedID]
 		switch cfMeta.Status.Progress {
 		case config.ProgressStopping, config.ProgressRemoving:
 			remove := cfMeta.Status.Progress == config.ProgressRemoving
-			c.operatorController.StopChangefeed(context.Background(), cfID, remove)
+			c.operatorController.StopChangefeed(ctx, cfID, remove)
 			log.Info("stop changefeed when bootstrapping", zap.String("changefeed", cfID.String()), zap.Any("meta", cfMeta))
 		}
 	}
@@ -614,15 +644,22 @@ func (c *Controller) CreateChangefeed(ctx context.Context, info *config.ChangeFe
 	// remove changefeed is async action, so when we create the same changefeed just when we remove the changefeed
 	// the remove changefeed may not finished, so we need to wait a moment
 	count := 0
+	ticker := time.NewTicker(createChangefeedRetryInterval)
+	defer ticker.Stop()
 	for count < createChangefeedMaxRetry {
 		ok := c.operatorController.HasOperator(info.ChangefeedID.DisplayName)
 		if !ok {
 			break
 		}
-		log.Warn("changefeed is in scheduling, wait a moment", zap.String("changefeed", info.ChangefeedID.DisplayName.String()))
-		time.Sleep(createChangefeedRetryInterval)
-		count += 1
+		select {
+		case <-ctx.Done():
+			return errors.Trace(ctx.Err())
+		case <-ticker.C:
+			log.Warn("changefeed is in scheduling, wait a moment", zap.String("changefeed", info.ChangefeedID.DisplayName.String()))
+			count += 1
+		}
 	}
+
 	if count >= createChangefeedMaxRetry {
 		return errors.New("changefeed is still in scheduling, please try again later")
 	}
@@ -639,59 +676,75 @@ func (c *Controller) CreateChangefeed(ctx context.Context, info *config.ChangeFe
 
 func (c *Controller) RemoveChangefeed(ctx context.Context, id common.ChangeFeedID) (uint64, error) {
 	c.apiLock.Lock()
-	defer c.apiLock.Unlock()
 
 	cf := c.changefeedDB.GetByID(id)
 	if cf == nil {
+		c.apiLock.Unlock()
 		return 0, errors.New("changefeed not found")
 	}
 	err := c.backend.SetChangefeedProgress(ctx, id, config.ProgressRemoving)
 	if err != nil {
+		c.apiLock.Unlock()
 		return 0, errors.Trace(err)
 	}
 	op := c.operatorController.StopChangefeed(ctx, id, true)
+	c.apiLock.Unlock()
+
 	count := 0
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
 	for {
 		if op.IsFinished() {
 			break
 		}
-
-		time.Sleep(1 * time.Second)
-		count += 1
-		log.Info("wait for stop changefeed operator finished", zap.Int("count", count), zap.Any("id", id))
+		select {
+		case <-ctx.Done():
+			return 0, errors.Trace(ctx.Err())
+		case <-ticker.C:
+			count += 1
+			log.Info("wait for stop changefeed operator finished", zap.Int("count", count), zap.Any("id", id))
+		}
 	}
 	return cf.GetStatus().CheckpointTs, nil
 }
 
 func (c *Controller) PauseChangefeed(ctx context.Context, id common.ChangeFeedID) error {
 	c.apiLock.Lock()
-	defer c.apiLock.Unlock()
 
 	cf := c.changefeedDB.GetByID(id)
 	if cf == nil {
+		c.apiLock.Unlock()
 		return errors.New("changefeed not found")
 	}
 	if err := c.backend.PauseChangefeed(ctx, id); err != nil {
+		c.apiLock.Unlock()
 		return err
 	}
 
 	clone, err := cf.GetInfo().Clone()
 	if err != nil {
+		c.apiLock.Unlock()
 		return err
 	}
 	clone.State = config.StateStopped
 	cf.SetInfo(clone)
 	op := c.operatorController.StopChangefeed(ctx, id, false)
+	c.apiLock.Unlock()
 
 	count := 0
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
 	for {
 		if op.IsFinished() {
 			break
 		}
-
-		time.Sleep(1 * time.Second)
-		count += 1
-		log.Info("wait for stop changefeed operator finished", zap.Int("count", count), zap.Any("id", id))
+		select {
+		case <-ctx.Done():
+			return errors.Trace(ctx.Err())
+		case <-ticker.C:
+			count += 1
+			log.Info("wait for stop changefeed operator finished", zap.Int("count", count), zap.Any("id", id))
+		}
 	}
 	return nil
 }
@@ -710,6 +763,16 @@ func (c *Controller) ResumeChangefeed(
 	if cf == nil {
 		return errors.New("changefeed not found")
 	}
+
+	state := cf.GetInfo().State
+	switch state {
+	case config.StateFailed, config.StateStopped, config.StateFinished:
+	default:
+		log.Warn("ignore resume the changefeed",
+			zap.Stringer("changefeedID", id), zap.Any("state", state))
+		return nil
+	}
+
 	if err := c.backend.ResumeChangefeed(ctx, id, newCheckpointTs); err != nil {
 		return err
 	}
@@ -723,7 +786,7 @@ func (c *Controller) ResumeChangefeed(
 	clone.Epoch = pdutil.GenerateChangefeedEpoch(ctx, c.pdClient)
 	cf.SetInfo(clone)
 
-	status := cf.GetClonedStatus()
+	status := cf.GetStatusForResume()
 	status.CheckpointTs = newCheckpointTs
 	_, _, runningErr := cf.ForceUpdateStatus(status)
 	if runningErr != nil {

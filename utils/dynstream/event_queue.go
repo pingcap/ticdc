@@ -100,10 +100,12 @@ func (q *eventQueue[A, P, T, D, H]) wakePath(path *pathInfo[A, P, T, D, H]) {
 	}
 }
 
-func (q *eventQueue[A, P, T, D, H]) popEvents(buf []T) ([]T, *pathInfo[A, P, T, D, H]) {
+func (q *eventQueue[A, P, T, D, H]) popEvents(buf []T) ([]T, *pathInfo[A, P, T, D, H], int) {
 	// Append the event to the buffer
+	var totalBytes int
 	appendToBuf := func(event *eventWrap[A, P, T, D, H], path *pathInfo[A, P, T, D, H]) {
 		buf = append(buf, event.event)
+		totalBytes += event.eventSize
 		path.popEvent()
 	}
 
@@ -111,7 +113,7 @@ func (q *eventQueue[A, P, T, D, H]) popEvents(buf []T) ([]T, *pathInfo[A, P, T, 
 		// We are going to update the signal directly, so we need the reference.
 		signal, ok := q.signalQueue.FrontRef()
 		if !ok {
-			return buf, nil
+			return buf, nil, totalBytes
 		}
 
 		path := signal.pathInfo
@@ -120,8 +122,16 @@ func (q *eventQueue[A, P, T, D, H]) popEvents(buf []T) ([]T, *pathInfo[A, P, T, 
 		if signal.eventCount == 0 {
 			log.Panic("signal event count is zero")
 		}
-		if path.blocking.Load() || path.removed.Load() {
-			// The path is blocking or removed, we should ignore the signal completely.
+		if path.removed.Load() {
+			// A removed path can still receive stale in-flight signals/events.
+			// Clear the path queue and reconcile memory before dropping the signal.
+			q.releasePath(path)
+			q.totalPendingLength.Add(-int64(signal.eventCount))
+			q.signalQueue.PopFront()
+			continue
+		}
+		if path.blocking.Load() {
+			// The path is blocking, we should ignore the signal completely.
 			// Since when it is waked, a signal event will be added to the queue.
 			q.totalPendingLength.Add(-int64(signal.eventCount))
 			q.signalQueue.PopFront()
@@ -167,6 +177,6 @@ func (q *eventQueue[A, P, T, D, H]) popEvents(buf []T) ([]T, *pathInfo[A, P, T, 
 		}
 		q.totalPendingLength.Add(-int64(count))
 
-		return buf, path
+		return buf, path, totalBytes
 	}
 }

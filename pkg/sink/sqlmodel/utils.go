@@ -14,7 +14,6 @@
 package sqlmodel
 
 import (
-	"fmt"
 	"strings"
 
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
@@ -28,8 +27,10 @@ func getColsAndValuesOfIdx(
 	cols := make([]*timodel.ColumnInfo, 0, len(indexColumns.Columns))
 	values := make([]interface{}, 0, len(indexColumns.Columns))
 	for _, col := range indexColumns.Columns {
-		cols = append(cols, columns[col.Offset])
-		values = append(values, data[col.Offset])
+		if !columns[col.Offset].IsVirtualGenerated() {
+			cols = append(cols, columns[col.Offset])
+			values = append(values, data[col.Offset])
+		}
 	}
 
 	return cols, values
@@ -59,15 +60,4 @@ func generatedColumnsNameSet(columns []*timodel.ColumnInfo) map[string]struct{} 
 		}
 	}
 	return m
-}
-
-// ColValAsStr convert column value as string
-func ColValAsStr(v interface{}) string {
-	switch dv := v.(type) {
-	case []byte:
-		return string(dv)
-	case string:
-		return dv
-	}
-	return fmt.Sprintf("%v", v)
 }

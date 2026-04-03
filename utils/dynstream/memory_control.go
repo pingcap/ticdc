@@ -33,7 +33,7 @@ const (
 	// For now, we only use it in event collector.
 	MemoryControlForEventCollector = 1
 
-	defaultReleaseMemoryRatio     = 0.4
+	defaultReleaseMemoryRatio     = 0.6
 	defaultDeadlockDuration       = 5 * time.Second
 	defaultReleaseMemoryThreshold = 256
 )
@@ -98,6 +98,11 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 	event eventWrap[A, P, T, D, H],
 	handler H,
 ) bool {
+	// The removed flag can flip between handleLoop's removed check and appendEvent call.
+	// Guard here to avoid accounting events for a removed path.
+	if path.removed.Load() {
+		return false
+	}
 	defer as.updateAreaPauseState(path)
 	as.lastAppendEventTime.Store(time.Now())
 
@@ -122,7 +127,7 @@ func (as *areaMemStat[A, P, T, D, H]) appendEvent(
 		as.releaseMemory()
 	}
 
-	if as.memoryUsageRatio() >= 1 && as.settings.Load().algorithm ==
+	if as.memoryUsageRatio() >= 1.5 && as.settings.Load().algorithm ==
 		MemoryControlForEventCollector {
 		as.releaseMemory()
 		if event.eventType.Droppable {
@@ -166,7 +171,7 @@ func (as *areaMemStat[A, P, T, D, H]) checkDeadlock() bool {
 
 	hasEventComeButNotOut := time.Since(as.lastAppendEventTime.Load().(time.Time)) < defaultDeadlockDuration && time.Since(as.lastSizeDecreaseTime.Load().(time.Time)) > defaultDeadlockDuration
 
-	memoryHighWaterMark := as.memoryUsageRatio() > (1 - defaultReleaseMemoryRatio)
+	memoryHighWaterMark := as.memoryUsageRatio() > defaultReleaseMemoryRatio
 
 	return hasEventComeButNotOut && memoryHighWaterMark
 }
@@ -335,11 +340,13 @@ func (m *memControl[A, P, T, D, H]) addPathToArea(path *pathInfo[A, P, T, D, H],
 // This method is called after the path is removed.
 func (m *memControl[A, P, T, D, H]) removePathFromArea(path *pathInfo[A, P, T, D, H]) {
 	area := path.areaMemStat
-	area.decPendingSize(path, int64(path.pendingSize.Load()))
+	pendingSize := path.pendingSize.Swap(0)
+	area.decPendingSize(path, pendingSize)
 
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 
+	area.pathMap.Delete(path.path)
 	area.pathCount.Add(-1)
 	if area.pathCount.Load() == 0 {
 		delete(m.areaStatMap, area.area)

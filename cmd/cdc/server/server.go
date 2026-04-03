@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/fatih/color"
+	perrors "github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/cmd/util"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -30,6 +31,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/logger"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/security"
+	pkgutil "github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/version"
 	"github.com/pingcap/ticdc/server"
 	ticonfig "github.com/pingcap/tidb/pkg/config"
@@ -101,8 +103,24 @@ func (o *options) run(cmd *cobra.Command) error {
 	}
 	log.Info("init log", zap.String("file", loggerConfig.File), zap.String("level", loggerConfig.Level))
 
+	// Initialize log redaction mode from config
+	// Empty string defaults to OFF (no redaction)
+	redactConfigValue := o.serverConfig.Security.RedactInfoLog.String()
+	redactMode, err := pkgutil.ParseRedactMode(redactConfigValue)
+	if err != nil {
+		cmd.Printf("invalid redact-info-log configuration: %v\n", err)
+		os.Exit(1)
+	}
+	if redactMode == "" {
+		redactMode = perrors.RedactLogDisable // Default to OFF when not set
+	}
+	perrors.RedactLogEnabled.Store(redactMode)
+	log.Info("log redaction initialized", zap.String("config", redactConfigValue), zap.String("mode", redactMode))
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	logger.StartLogFileMonitor(ctx, loggerConfig.File, 30*time.Second)
 
 	version.LogVersionInfo("Change Data Capture (CDC)")
 	metrics.BuildInfo.WithLabelValues(version.ReleaseVersion, version.GitHash, version.BuildTS, kerneltype.Name()).Set(1)
@@ -129,7 +147,8 @@ func (o *options) run(cmd *cobra.Command) error {
 	util.InitSignalHandling(shutdown, cancel)
 
 	err = svr.Run(ctx)
-	if err != nil && !errors.Is(errors.Cause(err), context.Canceled) {
+	isNormalExit := isNormalServerShutdown(err, ctx)
+	if !isNormalExit {
 		log.Error("cdc server exits with error", zap.Error(err))
 	} else {
 		log.Info("cdc server exits normally")
@@ -139,15 +158,31 @@ func (o *options) run(cmd *cobra.Command) error {
 	ticker := time.NewTicker(server.GracefulShutdownTimeout)
 	defer ticker.Stop()
 	go func() {
-		svr.Close(ctx)
+		svr.Close()
 		close(ch)
 	}()
 	select {
 	case <-ch:
 	case <-ticker.C:
 		log.Warn("graceful shutdown timeout, exit server")
+		if isNormalExit {
+			return errors.New("graceful shutdown timeout")
+		}
+	}
+	if isNormalExit {
+		return nil
 	}
 	return err
+}
+
+func isNormalServerShutdown(err error, ctx context.Context) bool {
+	if err == nil {
+		return true
+	}
+	// Treat cancellation as a normal exit only when the top-level context was
+	// explicitly canceled by shutdown/signal. This avoids masking internal module
+	// failures that also surface as context.Canceled via errgroup cancellation.
+	return errors.Is(err, context.Canceled) && ctx.Err() == context.Canceled
 }
 
 // complete adapts from the command line args and config file to the data required.
@@ -294,28 +329,48 @@ func isNewArchEnabled(o *options) bool {
 	return newarch
 }
 
-func runTiFlowServer(o *options, cmd *cobra.Command) error {
+func buildTiFlowServerOptions(o *options) (*tiflowServer.Options, error) {
+	// Populate security credentials from CLI flags before marshaling to JSON.
+	//
+	// NOTE: When TiCDC runs in old architecture mode, it delegates to
+	// `github.com/pingcap/tiflow/pkg/cmd/server` but *reuses TiCDC's cobra.Command*.
+	// That means cobra flags are bound to TiCDC's `options` fields, not tiflow's.
+	//
+	// tiflow's `Options.complete()` treats TLS flags as "visited" and then reads
+	// the values from `tiflowServer.Options.CaPath/CertPath/KeyPath`. If we don't
+	// copy the TLS flag values into those fields, tiflow will see the TLS flags
+	// as set but with empty values, overwrite `ServerConfig.Security` with empty,
+	// and fail https PD endpoint validation.
+	o.serverConfig.Security = o.getCredential()
+
 	cfgData, err := json.Marshal(o.serverConfig)
 	if err != nil {
-		return errors.Trace(err)
+		return nil, errors.Trace(err)
 	}
 
 	var oldCfg tiflowConfig.ServerConfig
 	err = json.Unmarshal(cfgData, &oldCfg)
 	if err != nil {
-		return errors.Trace(err)
+		return nil, errors.Trace(err)
 	}
 
-	var oldOptions tiflowServer.Options
-	oldOptions.ServerConfig = &oldCfg
-	oldOptions.ServerPdAddr = strings.Join(o.pdEndpoints, ",")
-	oldOptions.ServerConfigFilePath = o.serverConfigFilePath
-	oldOptions.CaPath = o.caPath
-	oldOptions.CertPath = o.certPath
-	oldOptions.KeyPath = o.keyPath
-	oldOptions.AllowedCertCN = o.allowedCertCN
+	return &tiflowServer.Options{
+		ServerConfig:         &oldCfg,
+		ServerPdAddr:         strings.Join(o.pdEndpoints, ","),
+		ServerConfigFilePath: o.serverConfigFilePath,
+		CaPath:               o.caPath,
+		CertPath:             o.certPath,
+		KeyPath:              o.keyPath,
+		AllowedCertCN:        o.allowedCertCN,
+	}, nil
+}
 
-	return tiflowServer.Run(&oldOptions, cmd)
+func runTiFlowServer(o *options, cmd *cobra.Command) error {
+	oldOptions, err := buildTiFlowServerOptions(o)
+	if err != nil {
+		return err
+	}
+	return tiflowServer.Run(oldOptions, cmd)
 }
 
 // NewCmdServer creates the `server` command.
