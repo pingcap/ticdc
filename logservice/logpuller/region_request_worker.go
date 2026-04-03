@@ -339,7 +339,11 @@ func (s *regionRequestWorker) dispatchResolvedTsEvent(resolvedTsEvent *cdcpb.Res
 			if len(resolvedStates) >= resolvedTsStateBatchSize {
 				flush()
 				if i+1 < len(resolvedTsEvent.Regions) {
-					resolvedStates = make([]*regionFeedState, 0, resolvedTsStateBatchSize)
+					capHint = len(resolvedTsEvent.Regions) - (i + 1)
+					if capHint > resolvedTsStateBatchSize {
+						capHint = resolvedTsStateBatchSize
+					}
+					resolvedStates = make([]*regionFeedState, 0, capHint)
 				}
 			}
 			continue
