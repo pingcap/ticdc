@@ -15,7 +15,6 @@ package coordinator
 
 import (
 	"context"
-	"sync"
 	"testing"
 	"time"
 
@@ -75,49 +74,6 @@ func newTestCoordinatorWithGCManager(
 		gcCleaner: gccleaner.New(nil, "test-gc-service"),
 	}
 	return co, changefeedDB
-}
-
-type recordingGCManager struct {
-	mu        sync.Mutex
-	updatedTs []common.Ts
-	deleted   int
-}
-
-func (m *recordingGCManager) TryUpdateServiceGCSafepoint(ctx context.Context, checkpointTs common.Ts) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.updatedTs = append(m.updatedTs, checkpointTs)
-	return nil
-}
-
-func (m *recordingGCManager) TryDeleteServiceGCSafepoint(ctx context.Context) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.deleted++
-	return nil
-}
-
-func (m *recordingGCManager) CheckStaleCheckpointTs(keyspaceID uint32, changefeedID common.ChangeFeedID, checkpointTs common.Ts) error {
-	return nil
-}
-
-func (m *recordingGCManager) TryUpdateKeyspaceGCBarrier(ctx context.Context, keyspaceID uint32, keyspaceName string, checkpointTs common.Ts) error {
-	return nil
-}
-
-func (m *recordingGCManager) DeleteCount() int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.deleted
-}
-
-func (m *recordingGCManager) UpdatedTs() []common.Ts {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	updated := make([]common.Ts, len(m.updatedTs))
-	copy(updated, m.updatedTs)
-	return updated
 }
 
 func TestCreateChangefeedDoesNotUpdateGCSafepoint(t *testing.T) {
@@ -272,7 +228,7 @@ func TestConcurrentDeleteLastChangefeedAndCreateNewOneKeepsExpectedGCSafepoint(t
 	for i := 0; i < 5; i++ {
 		ctrl := gomock.NewController(t)
 		backend := mock_changefeed.NewMockBackend(ctrl)
-		gcManager := &recordingGCManager{}
+		gcManager := gc.NewMockManager(ctrl)
 
 		co, changefeedDB := newTestCoordinatorWithGCManager(t, backend, gcManager)
 
@@ -303,6 +259,13 @@ func TestConcurrentDeleteLastChangefeedAndCreateNewOneKeepsExpectedGCSafepoint(t
 			CreateChangefeed(gomock.Any(), gomock.Any()).
 			Return(nil).
 			Times(1)
+		gcManager.EXPECT().
+			TryDeleteServiceGCSafepoint(gomock.Any()).
+			Times(0)
+		gcManager.EXPECT().
+			TryUpdateServiceGCSafepoint(gomock.Any(), common.Ts(newInfo.StartTs-1)).
+			Return(nil).
+			Times(1)
 
 		cpCh := make(chan uint64, 1)
 		errCh := make(chan error, 1)
@@ -323,9 +286,7 @@ func TestConcurrentDeleteLastChangefeedAndCreateNewOneKeepsExpectedGCSafepoint(t
 
 		require.NoError(t, <-errCh)
 		require.Equalf(t, uint64(101), <-cpCh, "iteration %d", i)
-		require.Equalf(t, 0, gcManager.DeleteCount(), "iteration %d", i)
 
 		require.NoError(t, co.updateGCSafepoint(context.Background()))
-		require.Equalf(t, []common.Ts{common.Ts(newInfo.StartTs - 1)}, gcManager.UpdatedTs(), "iteration %d", i)
 	}
 }
