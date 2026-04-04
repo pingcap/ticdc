@@ -277,6 +277,9 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 		switch entry.Type {
 		case cdcpb.Event_INITIALIZED:
 			state.setInitialized()
+			if state.worker != nil {
+				state.worker.client.resetRetryBackoff(SubscriptionID(state.requestID), regionID)
+			}
 			log.Debug("region is initialized",
 				zap.Int64("tableID", span.span.TableID),
 				zap.Uint64("regionID", regionID),
@@ -364,6 +367,9 @@ func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs u
 	}
 
 	state.updateResolvedTs(resolvedTs)
+	if state.worker != nil {
+		state.worker.client.resetRetryBackoff(SubscriptionID(state.requestID), regionID)
+	}
 
 	ts := uint64(0)
 	shouldAdvance := false
