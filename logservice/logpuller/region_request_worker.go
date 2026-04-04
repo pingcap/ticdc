@@ -301,23 +301,6 @@ func (s *regionRequestWorker) dispatchResolvedTsEvent(resolvedTsEvent *cdcpb.Res
 	// Avoid allocating a huge states slice when resolvedTsEvent.Regions is large.
 	// Push resolved-ts events in batches to reduce peak memory usage and improve GC behavior.
 	const resolvedTsStateBatchSize = 1024
-	if len(resolvedTsEvent.Regions) == 1 {
-		regionID := resolvedTsEvent.Regions[0]
-		if state := s.getRegionState(subscriptionID, regionID); state != nil {
-			s.client.pushRegionEventToDS(subscriptionID, regionEvent{
-				resolvedTs: resolvedTsEvent.Ts,
-				states:     []*regionFeedState{state},
-			})
-			return
-		}
-		log.Warn("region request worker receives a resolved ts event for an untracked region",
-			zap.Uint64("workerID", s.workerID),
-			zap.Uint64("subscriptionID", uint64(subscriptionID)),
-			zap.Uint64("regionID", regionID),
-			zap.Uint64("resolvedTs", resolvedTsEvent.Ts))
-		return
-	}
-
 	capHint := len(resolvedTsEvent.Regions)
 	if capHint > resolvedTsStateBatchSize {
 		capHint = resolvedTsStateBatchSize
