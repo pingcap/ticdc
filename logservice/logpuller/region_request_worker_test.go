@@ -188,7 +188,7 @@ func benchmarkDispatchResolvedTsEvent(b *testing.B, regionCount int, useLegacy b
 	}
 }
 
-func TestDispatchResolvedTsEventSingleRegionFastPath(t *testing.T) {
+func TestDispatchResolvedTsEventSingleRegion(t *testing.T) {
 	worker, ds, event := newDispatchResolvedTsTestWorker(1)
 	worker.dispatchResolvedTsEvent(event)
 
