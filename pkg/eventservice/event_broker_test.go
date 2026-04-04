@@ -37,6 +37,8 @@ import (
 	"go.uber.org/zap"
 )
 
+const testTableTriggerKeyspaceID uint32 = 1
+
 func newEventBrokerForTest() (*eventBroker, *mockEventStore, *mockSchemaStore, chan *messaging.TargetMessage) {
 	mockPDClock := pdutil.NewClock4Test()
 	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
@@ -1384,7 +1386,8 @@ func TestProcessTableTriggerDispatcherRespectsSyncPointBoundary(t *testing.T) {
 
 	info := newMockDispatcherInfo(t, ts5, common.NewDispatcherID(), 0, eventpb.ActionType_ACTION_TYPE_REGISTER)
 	info.epoch = 1
-	info.span = common.KeyspaceDDLSpan(common.DefaultKeyspaceID)
+	// Next Gen rejects DefaultKeyspaceID, so table-trigger tests need a real keyspace ID.
+	info.span = common.KeyspaceDDLSpan(testTableTriggerKeyspaceID)
 	info.enableSyncPoint = true
 	info.syncPointInterval = 10 * time.Second
 	info.nextSyncPoint = ts10
@@ -1428,7 +1431,7 @@ func TestProcessTableTriggerDispatcherNudgesCommitStageWhenNoForwardRange(t *tes
 
 	info := newMockDispatcherInfo(t, ts10, common.NewDispatcherID(), 0, eventpb.ActionType_ACTION_TYPE_REGISTER)
 	info.epoch = 1
-	info.span = common.KeyspaceDDLSpan(common.DefaultKeyspaceID)
+	info.span = common.KeyspaceDDLSpan(testTableTriggerKeyspaceID)
 	info.enableSyncPoint = true
 	info.syncPointInterval = 10 * time.Second
 	info.nextSyncPoint = ts10
@@ -1474,7 +1477,7 @@ func TestProcessTableTriggerDispatcherSendsSignalResolvedWhenNoForwardRangeAndNo
 
 	info := newMockDispatcherInfo(t, ts10, common.NewDispatcherID(), 0, eventpb.ActionType_ACTION_TYPE_REGISTER)
 	info.epoch = 1
-	info.span = common.KeyspaceDDLSpan(common.DefaultKeyspaceID)
+	info.span = common.KeyspaceDDLSpan(testTableTriggerKeyspaceID)
 	info.enableSyncPoint = true
 	info.syncPointInterval = 10 * time.Second
 	info.nextSyncPoint = ts20
@@ -1598,12 +1601,12 @@ func TestTickTableTriggerDispatchersSendsDDLEventAndResolved(t *testing.T) {
 	defer broker.close()
 
 	info := newMockDispatcherInfo(t, 300, common.NewDispatcherID(), 0, eventpb.ActionType_ACTION_TYPE_REGISTER)
-	info.span = common.KeyspaceDDLSpan(common.DefaultKeyspaceID)
+	info.span = common.KeyspaceDDLSpan(testTableTriggerKeyspaceID)
 	err := broker.addDispatcher(info)
 	require.NoError(t, err)
 
 	resetInfo := newMockDispatcherInfo(t, 300, info.GetID(), 0, eventpb.ActionType_ACTION_TYPE_RESET)
-	resetInfo.span = common.KeyspaceDDLSpan(common.DefaultKeyspaceID)
+	resetInfo.span = common.KeyspaceDDLSpan(testTableTriggerKeyspaceID)
 	resetInfo.epoch = 1
 	err = broker.resetDispatcher(resetInfo)
 	require.NoError(t, err)

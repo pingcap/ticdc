@@ -299,13 +299,12 @@ Loop:
 					continue Loop
 				}
 
-				path.lastHandleEventTs.Store(uint64(s.handler.GetTimestamp(eventBuf[0])))
-
-				path.blocking.Store(s.handler.Handle(path.dest, eventBuf...))
-
 				metrics.DynamicStreamBatchDuration.WithLabelValues(s.module, path.metricLabel).Observe(float64(duration.Seconds()))
 				metrics.DynamicStreamBatchCount.WithLabelValues(s.module, path.metricLabel).Observe(float64(len(eventBuf)))
 				metrics.DynamicStreamBatchBytes.WithLabelValues(s.module, path.metricLabel).Observe(float64(nBytes))
+
+				path.lastHandleEventTs.Store(uint64(s.handler.GetTimestamp(eventBuf[0])))
+				path.blocking.Store(s.handler.Handle(path.dest, eventBuf...))
 
 				if path.blocking.Load() {
 					s.eventQueue.blockPath(path)
