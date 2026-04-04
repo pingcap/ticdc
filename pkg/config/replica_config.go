@@ -365,13 +365,12 @@ func (c *ReplicaConfig) ValidateAndAdjust(sinkURI *url.URL) error { // check sin
 					minChangeFeedErrorStuckDuration.Seconds()))
 	}
 
-	if c.EventCollectorBatchCount != nil && *c.EventCollectorBatchCount <= 0 {
-		return cerror.ErrInvalidReplicaConfig.FastGenByArgs(
-			fmt.Sprintf("The EventCollectorBatchCount:%d must be larger than 0", *c.EventCollectorBatchCount))
+	// allow the batch count and batch bytes set to 0, to disable the batch mechanism
+	if c.EventCollectorBatchCount != nil && *c.EventCollectorBatchCount < 0 {
+		return cerror.ErrInvalidReplicaConfig.FastGenByArgs("event-collector-batch-count must be set not smaller than 0")
 	}
-	if c.EventCollectorBatchBytes != nil && *c.EventCollectorBatchBytes <= 0 {
-		return cerror.ErrInvalidReplicaConfig.FastGenByArgs(
-			fmt.Sprintf("The EventCollectorBatchBytes:%d must be larger than 0", *c.EventCollectorBatchBytes))
+	if c.EventCollectorBatchBytes != nil && *c.EventCollectorBatchBytes < 0 {
+		return cerror.ErrInvalidReplicaConfig.FastGenByArgs("event-collector-batch-bytes must be set not smaller than 0")
 	}
 	if c.ActiveActiveProgressInterval == nil {
 		interval := defaultActiveActiveProgressInterval
