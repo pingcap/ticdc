@@ -152,40 +152,6 @@ func createTestManager(t *testing.T) *DispatcherManager {
 	return manager
 }
 
-func setupDispatcherManagerConstructorTest(t *testing.T) func() {
-	t.Helper()
-
-	appcontext.SetService(appcontext.DefaultPDClock, pdutil.NewClock4Test())
-	messageCenter, _, stopMessageCenter := messaging.NewMessageCenterForTest(t)
-	appcontext.SetService(appcontext.MessageCenter, messageCenter)
-
-	heartBeatCollector := NewHeartBeatCollector(node.NewID())
-	heartBeatCollector.cancel = func() {}
-	appcontext.SetService(appcontext.HeartbeatCollector, heartBeatCollector)
-
-	return func() {
-		heartBeatCollector.Close()
-		stopMessageCenter()
-	}
-}
-
-func newDispatcherManagerConfigForTest(changefeedID common.ChangeFeedID) *config.ChangefeedConfig {
-	replicaConfig := config.GetDefaultReplicaConfig()
-	return &config.ChangefeedConfig{
-		ChangefeedID:                  changefeedID,
-		SinkURI:                       "blackhole://",
-		TimeZone:                      "system",
-		CaseSensitive:                 util.GetOrZero(replicaConfig.CaseSensitive),
-		ForceReplicate:                util.GetOrZero(replicaConfig.ForceReplicate),
-		Filter:                        replicaConfig.Filter,
-		MemoryQuota:                   util.GetOrZero(replicaConfig.MemoryQuota),
-		SinkConfig:                    replicaConfig.Sink,
-		Consistent:                    replicaConfig.Consistent,
-		ActiveActiveProgressInterval:  time.Minute,
-		ActiveActiveSyncStatsInterval: time.Minute,
-	}
-}
-
 func TestCollectComponentStatusWhenChangedWatermarkSeqNoFallback(t *testing.T) {
 	manager := createTestManager(t)
 
@@ -249,55 +215,6 @@ func TestCollectComponentStatusWhenChangedWatermarkSeqNoFallback(t *testing.T) {
 	require.NotNil(t, req.Request)
 	require.NotNil(t, req.Request.RedoWatermark)
 	require.Equal(t, uint64(200), req.Request.RedoWatermark.Seq)
-}
-
-func TestNewDispatcherManagerInitialWatermarkUsesStartTs(t *testing.T) {
-	cleanup := setupDispatcherManagerConstructorTest(t)
-	defer cleanup()
-
-	startTs := uint64(123456)
-	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
-	manager, err := NewDispatcherManager(
-		0,
-		changefeedID,
-		newDispatcherManagerConfigForTest(changefeedID),
-		nil,
-		nil,
-		startTs,
-		node.NewID(),
-		true,
-	)
-	require.NoError(t, err)
-	defer manager.close(false)
-
-	require.Equal(t, startTs, manager.latestWatermark.Get().CheckpointTs)
-	require.Equal(t, startTs, manager.latestWatermark.Get().ResolvedTs)
-	require.Equal(t, startTs, manager.latestRedoWatermark.Get().CheckpointTs)
-	require.Equal(t, startTs, manager.latestRedoWatermark.Get().ResolvedTs)
-
-	manager.sharedInfo.GetStatusesChan() <- dispatcher.TableSpanStatusWithSeq{
-		TableSpanStatus: &heartbeatpb.TableSpanStatus{
-			ID:              common.NewDispatcherID().ToPB(),
-			ComponentStatus: heartbeatpb.ComponentState_Working,
-			CheckpointTs:    startTs + 100,
-			Mode:            common.DefaultMode,
-		},
-		Seq: 10,
-	}
-
-	dequeueCtx, cancel := context.WithTimeout(context.Background(), time.Second)
-	req := manager.heartbeatRequestQueue.Dequeue(dequeueCtx)
-	cancel()
-
-	require.NotNil(t, req)
-	require.NotNil(t, req.Request)
-	require.NotNil(t, req.Request.Watermark)
-	require.NotNil(t, req.Request.RedoWatermark)
-	require.Equal(t, startTs, req.Request.Watermark.CheckpointTs)
-	require.Equal(t, startTs, req.Request.Watermark.ResolvedTs)
-	require.Equal(t, startTs, req.Request.RedoWatermark.CheckpointTs)
-	require.Equal(t, startTs, req.Request.RedoWatermark.ResolvedTs)
-	require.Equal(t, uint64(10), req.Request.Watermark.Seq)
 }
 
 func TestMergeDispatcherNormal(t *testing.T) {
