@@ -52,6 +52,7 @@ type stream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 
 	// The queue to store the pending events of this stream.
 	eventQueue            eventQueue[A, P, T, D, H]
+	batcher               *batcher[T]
 	batchMetricCache      map[string]batchMetricObservers
 	batchMetricCacheOrder []string
 	batchMetricCacheNext  int
@@ -72,12 +73,14 @@ func newStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
 	component string,
 	handler H,
 	option Option,
+	batchConfigRegistry *areaBatchConfigRegistry[A],
 ) *stream[A, P, T, D, H] {
 	s := &stream[A, P, T, D, H]{
 		module:           component,
 		id:               id,
 		handler:          handler,
-		eventQueue:       newEventQueue(option, handler),
+		eventQueue:       newEventQueue(handler, batchConfigRegistry),
+		batcher:          newDefaultBatcher[T](),
 		batchMetricCache: make(map[string]batchMetricObservers),
 		option:           option,
 		startTime:        time.Now(),
@@ -151,7 +154,6 @@ func (s *stream[A, P, T, D, H]) addEvent(event eventWrap[A, P, T, D, H]) {
 	// Fast path: try direct send without blocking to avoid context check
 	select {
 	case eventChan <- event:
-		return
 	default:
 		// Slow path: with close check while waiting
 		select {
@@ -203,10 +205,10 @@ func (s *stream[A, P, T, D, H]) receiver() {
 	}()
 
 	for {
-		event, ok := buffer.FrontRef()
 		if s.closed.Load() {
 			return
 		}
+		event, ok := buffer.FrontRef()
 		if !ok {
 			select {
 			case <-s.ctx.Done():
@@ -273,16 +275,17 @@ func (s *stream[A, P, T, D, H]) handleLoop() {
 	// Declared here to avoid repeated allocation.
 	var (
 		eventQueueEmpty = false
-		eventBuf        = make([]T, 0, s.option.BatchCount)
+		eventBuf        []T
 		zeroT           T
 		cleanUpEventBuf = func() {
 			for i := range eventBuf {
 				eventBuf[i] = zeroT
 			}
-			eventBuf = eventBuf[:0]
+			eventBuf = nil
 		}
-		path   *pathInfo[A, P, T, D, H]
-		nBytes int
+		path     *pathInfo[A, P, T, D, H]
+		nBytes   int
+		duration time.Duration
 	)
 
 	// For testing. Don't handle events until this wait group is done.
@@ -325,8 +328,7 @@ Loop:
 				handleEvent(e)
 				eventQueueEmpty = false
 			default:
-				start := time.Now()
-				eventBuf, path, nBytes = s.eventQueue.popEvents(eventBuf)
+				eventBuf, path, nBytes, duration = s.eventQueue.popEvents(s.batcher)
 				if len(eventBuf) == 0 {
 					eventQueueEmpty = true
 					continue Loop
@@ -336,15 +338,13 @@ Loop:
 					continue Loop
 				}
 
-				path.lastHandleEventTs.Store(uint64(s.handler.GetTimestamp(eventBuf[0])))
-
-				path.blocking.Store(s.handler.Handle(path.dest, eventBuf...))
-
-				duration := time.Since(start)
 				batchMetrics := s.getBatchMetricObservers(path.metricLabel)
 				batchMetrics.duration.Observe(duration.Seconds())
 				batchMetrics.count.Observe(float64(len(eventBuf)))
 				batchMetrics.bytes.Observe(float64(nBytes))
+
+				path.lastHandleEventTs.Store(uint64(s.handler.GetTimestamp(eventBuf[0])))
+				path.blocking.Store(s.handler.Handle(path.dest, eventBuf...))
 
 				if path.blocking.Load() {
 					s.eventQueue.blockPath(path)
