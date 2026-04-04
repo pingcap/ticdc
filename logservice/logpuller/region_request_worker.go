@@ -84,17 +84,17 @@ func newRegionRequestWorker(
 				zap.String("addr", store.storeAddr))
 		}
 		for {
-			req, err := worker.requestCache.pop(ctx)
+			region, err := worker.requestCache.pop(ctx)
 			if err != nil {
 				return err
 			}
-			if req.regionInfo.isStopped() {
-				worker.requestCache.markDone()
+			if !region.regionInfo.isStopped() {
+				worker.preFetchForConnecting = new(regionInfo)
+				*worker.preFetchForConnecting = region.regionInfo
+				return nil
+			} else {
 				continue
 			}
-			worker.preFetchForConnecting = new(regionInfo)
-			*worker.preFetchForConnecting = req.regionInfo
-			return nil
 		}
 	}
 
@@ -123,13 +123,11 @@ func newRegionRequestWorker(
 				}
 				regionErr = &sendRequestToStoreErr{}
 			}
-			for subID, m := range worker.clearRegionStates() {
+			for _, m := range worker.clearRegionStates() {
 				for _, state := range m {
 					state.markStopped(regionErr)
-					regionEvent := regionEvent{
-						states: []*regionFeedState{state},
-					}
-					worker.client.pushRegionEventToDS(subID, regionEvent)
+					regionEvent := regionEvent{states: []*regionFeedState{state}}
+					worker.client.regionEventProcessor.dispatch(regionEvent)
 				}
 			}
 			// The store may fail forever, so we need try to re-schedule all pending regions.
@@ -206,7 +204,7 @@ func (s *regionRequestWorker) run(ctx context.Context, credential *security.Cred
 	return isCanceled()
 }
 
-// receiveAndDispatchChangeEventsToProcessor receives events from the grpc stream and dispatches them to ds.
+// receiveAndDispatchChangeEvents receives events from the grpc stream and dispatches them to the region event processor.
 func (s *regionRequestWorker) receiveAndDispatchChangeEvents(conn *ConnAndClient) error {
 	for {
 		changeEvent, err := conn.Client.Recv()
@@ -236,9 +234,7 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 		subscriptionID := SubscriptionID(event.RequestId)
 		state := s.getRegionState(subscriptionID, regionID)
 		if state != nil {
-			regionEvent := regionEvent{
-				states: []*regionFeedState{state},
-			}
+			regionEvent := regionEvent{states: []*regionFeedState{state}}
 			switch eventData := event.Event.(type) {
 			case *cdcpb.Event_Entries_:
 				if eventData == nil {
@@ -257,6 +253,7 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 					zap.Uint64("workerID", s.workerID),
 					zap.Uint64("subscriptionID", uint64(subscriptionID)),
 					zap.Uint64("regionID", event.RegionId),
+					zap.Bool("stateIsNil", state == nil),
 					zap.Any("error", eventData.Error))
 				state.markStopped(&eventError{err: eventData.Error})
 			case *cdcpb.Event_ResolvedTs:
@@ -267,7 +264,7 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 			default:
 				log.Panic("unknown event type", zap.Any("event", event))
 			}
-			s.client.pushRegionEventToDS(SubscriptionID(event.RequestId), regionEvent)
+			s.client.regionEventProcessor.dispatch(regionEvent)
 		} else {
 			switch event.Event.(type) {
 			case *cdcpb.Event_Error:
@@ -298,36 +295,56 @@ func (s *regionRequestWorker) dispatchResolvedTsEvent(resolvedTsEvent *cdcpb.Res
 			zap.Any("regionIDs", resolvedTsEvent.Regions))
 		return
 	}
-	// Avoid allocating a huge states slice when resolvedTsEvent.Regions is large.
-	// Push resolved-ts events in batches to reduce peak memory usage and improve GC behavior.
-	const resolvedTsStateBatchSize = 1024
-	resolvedStates := make([]*regionFeedState, 0, resolvedTsStateBatchSize)
-	flush := func() {
-		if len(resolvedStates) == 0 {
-			return
-		}
-		states := resolvedStates
-		s.client.pushRegionEventToDS(subscriptionID, regionEvent{
-			resolvedTs: resolvedTsEvent.Ts,
-			states:     states,
-		})
-		resolvedStates = make([]*regionFeedState, 0, resolvedTsStateBatchSize)
+	if len(resolvedTsEvent.Regions) == 0 {
+		return
 	}
-	for _, regionID := range resolvedTsEvent.Regions {
-		if state := s.getRegionState(subscriptionID, regionID); state != nil {
-			resolvedStates = append(resolvedStates, state)
-			if len(resolvedStates) >= resolvedTsStateBatchSize {
-				flush()
+
+	states, missingCount, missingSample := s.collectRegionStates(subscriptionID, resolvedTsEvent.Regions)
+	if missingCount > 0 {
+		log.Warn("region request worker receives a resolved ts event for untracked regions",
+			zap.Uint64("workerID", s.workerID),
+			zap.Uint64("subscriptionID", uint64(subscriptionID)),
+			zap.Uint64("resolvedTs", resolvedTsEvent.Ts),
+			zap.Int("missingCount", missingCount),
+			zap.Any("missingSampleRegionIDs", missingSample))
+	}
+	s.client.regionEventProcessor.dispatchResolvedTsBatch(resolvedTsEvent.Ts, states)
+}
+
+func (s *regionRequestWorker) collectRegionStates(
+	subID SubscriptionID,
+	regionIDs []uint64,
+) (states []*regionFeedState, missingCount int, missingSample []uint64) {
+	if len(regionIDs) == 0 {
+		return nil, 0, nil
+	}
+	missingSample = make([]uint64, 0, 8)
+
+	s.requestedRegions.RLock()
+	statesMap := s.requestedRegions.subscriptions[subID]
+	if statesMap == nil {
+		s.requestedRegions.RUnlock()
+		sampleLen := len(regionIDs)
+		if sampleLen > cap(missingSample) {
+			sampleLen = cap(missingSample)
+		}
+		missingSample = append(missingSample, regionIDs[:sampleLen]...)
+		return nil, len(regionIDs), missingSample
+	}
+	states = make([]*regionFeedState, 0, len(regionIDs))
+	for _, regionID := range regionIDs {
+		state := statesMap[regionID]
+		if state == nil {
+			missingCount++
+			if len(missingSample) < cap(missingSample) {
+				missingSample = append(missingSample, regionID)
 			}
 			continue
 		}
-		log.Warn("region request worker receives a resolved ts event for an untracked region",
-			zap.Uint64("workerID", s.workerID),
-			zap.Uint64("subscriptionID", uint64(subscriptionID)),
-			zap.Uint64("regionID", regionID),
-			zap.Uint64("resolvedTs", resolvedTsEvent.Ts))
+		states = append(states, state)
 	}
-	flush()
+	s.requestedRegions.RUnlock()
+	return states, missingCount, missingSample
 }
 
 // processRegionSendTask receives region requests from the channel and sends them to the remote store.
@@ -385,29 +402,25 @@ func (s *regionRequestWorker) processRegionSendTask(
 				},
 				FilterLoop: region.filterLoop,
 			}
-			s.requestCache.markDone()
 			if err := doSend(req); err != nil {
 				return err
 			}
 			for _, state := range s.takeRegionStates(subID) {
 				state.markStopped(&requestCancelledErr{})
-				regionEvent := regionEvent{
-					states: []*regionFeedState{state},
-				}
-				s.client.pushRegionEventToDS(subID, regionEvent)
+				regionEvent := regionEvent{states: []*regionFeedState{state}}
+				s.client.regionEventProcessor.dispatch(regionEvent)
 			}
+
 		} else if region.subscribedSpan.stopped.Load() {
 			// It can be skipped directly because there must be no pending states from
 			// the stopped subscribedTable, or the special singleRegionInfo for stopping
 			// the table will be handled later.
 			s.client.onRegionFail(newRegionErrorInfo(region, &sendRequestToStoreErr{}))
-			s.requestCache.markDone()
 		} else {
 			state := newRegionFeedState(region, uint64(subID), s)
 			state.start()
 			s.addRegionState(subID, region.verID.GetID(), state)
 			if err := doSend(s.createRegionRequest(region)); err != nil {
-				s.requestCache.markDone()
 				return err
 			}
 			s.requestCache.markSent(regionReq)
@@ -498,9 +511,6 @@ func (s *regionRequestWorker) clearPendingRegions() []regionInfo {
 		region := *s.preFetchForConnecting
 		s.preFetchForConnecting = nil
 		regions = append(regions, region)
-		// The pre-fetched region was popped from pendingQueue but hasn't been marked as sent or done yet.
-		// Release its pendingCount slot to avoid leaking flow control credits on worker failures.
-		s.requestCache.markDone()
 	}
 
 	// Clear all regions from cache
