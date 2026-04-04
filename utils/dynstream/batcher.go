@@ -35,10 +35,10 @@ const countCapMultiple = 8
 func newDefaultBatchConfig() batchConfig {
 	// Keep the default behavior consistent with the legacy Option.BatchCount=1:
 	// no batching unless explicitly configured by the caller.
-	return NewBatchConfig(1, 0)
+	return newBatchConfig(1, 0)
 }
 
-func NewBatchConfig(count, bytes int) batchConfig {
+func newBatchConfig(count, bytes int) batchConfig {
 	if count <= 0 {
 		count = 1
 	}
@@ -79,18 +79,15 @@ func (b *batcher[T]) setLimit(cfg batchConfig) {
 		b.buf = b.buf[:0]
 	}
 	b.nBytes = 0
+	b.start = time.Now()
 }
 
 func (b *batcher[T]) addEvent(event T, size int) {
-	if len(b.buf) == 0 {
-		b.start = time.Now()
-	}
 	b.buf = append(b.buf, event)
 	b.nBytes += size
 }
 
-// isFull return true if the batched events have reached the limit.
-// the caller should call flush() and process the returned events.
+// isFull returns true if the batcher should flush and stop appending more events.
 func (b *batcher[T]) isFull() bool {
 	n := len(b.buf)
 	if n == 0 {

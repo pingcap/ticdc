@@ -69,7 +69,7 @@ func newParallelDynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T
 	}
 
 	s.pathMap.m = make(map[P]*pathInfo[A, P, T, D, H])
-	s.batchConfigRegistry = newAreaBatchConfigRegistry[A](NewBatchConfig(option.BatchCount, option.BatchBytes))
+	s.batchConfigRegistry = newAreaBatchConfigRegistry[A](newBatchConfig(option.BatchCount, option.BatchBytes))
 
 	if option.EnableMemoryControl {
 		log.Info("Dynamic stream enable memory control")

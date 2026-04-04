@@ -61,8 +61,7 @@ func (s *areaBatchConfigRegistry[A]) onAddPath(area A, cfg batchConfig) {
 		return
 	}
 
-	cfg = NewBatchConfig(cfg.softCount, cfg.hardBytes)
-
+	cfg = newBatchConfig(cfg.softCount, cfg.hardBytes)
 	if cfg == s.defaultConfig {
 		return
 	}
