@@ -217,6 +217,42 @@ func TestCollectComponentStatusWhenChangedWatermarkSeqNoFallback(t *testing.T) {
 	require.Equal(t, uint64(200), req.Request.RedoWatermark.Seq)
 }
 
+func TestAggregateDispatcherHeartbeatsIgnoresInitializingDispatcherWatermark(t *testing.T) {
+	manager := createTestManager(t)
+
+	workingDispatcher := createTestDispatcher(
+		t,
+		manager,
+		common.NewDispatcherID(),
+		1,
+		[]byte("a"),
+		[]byte("m"),
+	)
+	workingDispatcher.HandleEvents([]dispatcher.DispatcherEvent{
+		dispatcher.NewDispatcherEvent(nil, event.NewResolvedEvent(100, workingDispatcher.GetId(), 0)),
+	}, func() {})
+
+	initializingDispatcher := createTestDispatcher(
+		t,
+		manager,
+		common.NewDispatcherID(),
+		2,
+		[]byte("m"),
+		[]byte("z"),
+	)
+	initializingDispatcher.SetComponentStatus(heartbeatpb.ComponentState_Initializing)
+
+	manager.dispatcherMap.Set(workingDispatcher.GetId(), workingDispatcher)
+	manager.dispatcherMap.Set(initializingDispatcher.GetId(), initializingDispatcher)
+
+	req := manager.aggregateDispatcherHeartbeats(false)
+
+	require.NotNil(t, req)
+	require.NotNil(t, req.Watermark)
+	require.Equal(t, uint64(100), req.Watermark.CheckpointTs)
+	require.Equal(t, uint64(100), req.Watermark.ResolvedTs)
+}
+
 func TestMergeDispatcherNormal(t *testing.T) {
 	manager := createTestManager(t)
 
