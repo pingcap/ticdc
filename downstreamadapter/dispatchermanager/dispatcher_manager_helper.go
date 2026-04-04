@@ -51,19 +51,6 @@ func getDispatcherStatus(id common.DispatcherID, dispatcherItem dispatcher.Dispa
 			}, &cleanMap{dispatcherItem.GetId(), dispatcherItem.GetSchemaID(), dispatcherItem.GetMode()}, &watermark
 		}
 	}
-	if dispatcherItem.GetComponentStatus() == heartbeatpb.ComponentState_Initializing {
-		// An initializing dispatcher has not established a stable progress watermark yet.
-		// Its zero watermark would poison the node-level aggregate heartbeat and cause the
-		// maintainer to observe a false global fallback. The maintainer already blocks
-		// checkpoint advancement for in-flight adds through operator and barrier constraints.
-		log.Debug("dispatcher is initializing",
-			zap.Stringer("changefeedID", dispatcherItem.GetChangefeedID()),
-			zap.Stringer("dispatcherID", id),
-			zap.String("tableSpan", common.FormatTableSpan(dispatcherItem.GetTableSpan())),
-			zap.Any("componentStatus", dispatcherItem.GetComponentStatus()),
-		)
-		return nil, nil, nil
-	}
 	if needCompleteStatus {
 		return &heartbeatpb.TableSpanStatus{
 			ID:                 id.ToPB(),
