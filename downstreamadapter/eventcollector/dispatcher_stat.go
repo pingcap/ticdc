@@ -16,6 +16,7 @@ package eventcollector
 import (
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
@@ -29,6 +30,21 @@ import (
 	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
 )
+
+const dispatcherIssueLogInterval = 10 * time.Second
+
+func shouldLogDispatcherIssue(lastLogTime *atomic.Int64, interval time.Duration) bool {
+	now := time.Now().UnixNano()
+	for {
+		last := lastLogTime.Load()
+		if last != 0 && now-last < interval.Nanoseconds() {
+			return false
+		}
+		if lastLogTime.CompareAndSwap(last, now) {
+			return true
+		}
+	}
+}
 
 type dispatcherConnState struct {
 	sync.RWMutex
@@ -153,6 +169,9 @@ type dispatcherStat struct {
 	// tableInfoVersion is the latest table info version of the dispatcher's corresponding table.
 	// It is updated by ddl event
 	tableInfoVersion atomic.Uint64
+
+	lastOrderingIssueLogTime atomic.Int64
+	lastStaleEventLogTime    atomic.Int64
 }
 
 func newDispatcherStat(
@@ -276,10 +295,12 @@ func (d *dispatcherStat) getDispatcherID() common.DispatcherID {
 func (d *dispatcherStat) verifyEventSequence(event dispatcher.DispatcherEvent, state *dispatcherEpochState) bool {
 	// check the invariant that handshake event is the first event of every epoch
 	if event.GetType() != commonEvent.TypeHandshakeEvent && state.lastEventSeq.Load() == 0 {
-		log.Warn("receive non-handshake event before handshake event, reset the dispatcher",
-			zap.Stringer("changefeedID", d.target.GetChangefeedID()),
-			zap.Stringer("dispatcher", d.getDispatcherID()),
-			zap.Any("event", event.Event))
+		if shouldLogDispatcherIssue(&d.lastOrderingIssueLogTime, dispatcherIssueLogInterval) {
+			log.Warn("receive non-handshake event before handshake event, reset the dispatcher",
+				zap.Stringer("changefeedID", d.target.GetChangefeedID()),
+				zap.Stringer("dispatcher", d.getDispatcherID()),
+				zap.Any("event", event.Event))
+		}
 		return false
 	}
 
@@ -309,15 +330,17 @@ func (d *dispatcherStat) verifyEventSequence(event dispatcher.DispatcherEvent, s
 		}
 
 		if event.GetSeq() != expectedSeq {
-			log.Warn("receive an out-of-order event, reset the dispatcher",
-				zap.Stringer("changefeedID", d.target.GetChangefeedID()),
-				zap.Stringer("dispatcher", d.getDispatcherID()),
-				zap.String("eventType", commonEvent.TypeToString(event.GetType())),
-				zap.Uint64("lastEventSeq", lastEventSeq),
-				zap.Uint64("lastEventCommitTs", d.lastEventCommitTs.Load()),
-				zap.Uint64("receivedSeq", event.GetSeq()),
-				zap.Uint64("expectedSeq", expectedSeq),
-				zap.Uint64("commitTs", event.GetCommitTs()))
+			if shouldLogDispatcherIssue(&d.lastOrderingIssueLogTime, dispatcherIssueLogInterval) {
+				log.Warn("receive an out-of-order event, reset the dispatcher",
+					zap.Stringer("changefeedID", d.target.GetChangefeedID()),
+					zap.Stringer("dispatcher", d.getDispatcherID()),
+					zap.String("eventType", commonEvent.TypeToString(event.GetType())),
+					zap.Uint64("lastEventSeq", lastEventSeq),
+					zap.Uint64("lastEventCommitTs", d.lastEventCommitTs.Load()),
+					zap.Uint64("receivedSeq", event.GetSeq()),
+					zap.Uint64("expectedSeq", expectedSeq),
+					zap.Uint64("commitTs", event.GetCommitTs()))
+			}
 			return false
 		}
 	case commonEvent.TypeBatchDMLEvent:
@@ -331,15 +354,17 @@ func (d *dispatcherStat) verifyEventSequence(event dispatcher.DispatcherEvent, s
 
 			expectedSeq := state.lastEventSeq.Add(1)
 			if e.Seq != expectedSeq {
-				log.Warn("receive an out-of-order batch DML event, reset the dispatcher",
-					zap.Stringer("changefeedID", d.target.GetChangefeedID()),
-					zap.Stringer("dispatcher", d.getDispatcherID()),
-					zap.String("eventType", commonEvent.TypeToString(event.GetType())),
-					zap.Uint64("lastEventSeq", state.lastEventSeq.Load()),
-					zap.Uint64("lastEventCommitTs", d.lastEventCommitTs.Load()),
-					zap.Uint64("receivedSeq", e.Seq),
-					zap.Uint64("expectedSeq", expectedSeq),
-					zap.Uint64("commitTs", e.CommitTs))
+				if shouldLogDispatcherIssue(&d.lastOrderingIssueLogTime, dispatcherIssueLogInterval) {
+					log.Warn("receive an out-of-order batch DML event, reset the dispatcher",
+						zap.Stringer("changefeedID", d.target.GetChangefeedID()),
+						zap.Stringer("dispatcher", d.getDispatcherID()),
+						zap.String("eventType", commonEvent.TypeToString(event.GetType())),
+						zap.Uint64("lastEventSeq", state.lastEventSeq.Load()),
+						zap.Uint64("lastEventCommitTs", d.lastEventCommitTs.Load()),
+						zap.Uint64("receivedSeq", e.Seq),
+						zap.Uint64("expectedSeq", expectedSeq),
+						zap.Uint64("commitTs", e.CommitTs))
+				}
 				return false
 			}
 		}
@@ -366,13 +391,15 @@ func (d *dispatcherStat) shouldForwardEventByCommitTs(event dispatcher.Dispatche
 		}
 	}
 	if shouldIgnore {
-		log.Warn("receive a event older than sendCommitTs, ignore it",
-			zap.Stringer("changefeedID", d.target.GetChangefeedID()),
-			zap.Int64("tableID", d.target.GetTableSpan().TableID),
-			zap.Stringer("dispatcher", d.getDispatcherID()),
-			zap.Any("event", event.Event),
-			zap.Uint64("eventCommitTs", event.GetCommitTs()),
-			zap.Uint64("sentCommitTs", d.lastEventCommitTs.Load()))
+		if shouldLogDispatcherIssue(&d.lastStaleEventLogTime, dispatcherIssueLogInterval) {
+			log.Warn("receive a event older than sendCommitTs, ignore it",
+				zap.Stringer("changefeedID", d.target.GetChangefeedID()),
+				zap.Int64("tableID", d.target.GetTableSpan().TableID),
+				zap.Stringer("dispatcher", d.getDispatcherID()),
+				zap.Any("event", event.Event),
+				zap.Uint64("eventCommitTs", event.GetCommitTs()),
+				zap.Uint64("sentCommitTs", d.lastEventCommitTs.Load()))
+		}
 		return false
 	}
 	return true
@@ -685,10 +712,12 @@ func (d *dispatcherStat) handleHandshakeEvent(event dispatcher.DispatcherEvent) 
 		return
 	}
 	if event.GetSeq() != 1 {
-		log.Warn("should not happen: handshake event sequence number is not 1",
-			zap.Stringer("changefeedID", d.target.GetChangefeedID()),
-			zap.Stringer("dispatcher", d.getDispatcherID()),
-			zap.Uint64("sequence", event.GetSeq()))
+		if shouldLogDispatcherIssue(&d.lastOrderingIssueLogTime, dispatcherIssueLogInterval) {
+			log.Warn("should not happen: handshake event sequence number is not 1",
+				zap.Stringer("changefeedID", d.target.GetChangefeedID()),
+				zap.Stringer("dispatcher", d.getDispatcherID()),
+				zap.Uint64("sequence", event.GetSeq()))
+		}
 		return
 	}
 	tableInfo := handshakeEvent.TableInfo

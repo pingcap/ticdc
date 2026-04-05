@@ -30,6 +30,7 @@ const (
 	addReqRetryInterval          = time.Millisecond * 1
 	addReqRetryLimit             = 3
 	abnormalRequestDurationInSec = 60 * 60 * 2 // 2 hours
+	requestCacheWarnLogInterval  = 10 * time.Second
 )
 
 // regionReq represents a wrapped region request with state
@@ -73,6 +74,8 @@ type requestCache struct {
 	spaceAvailable chan struct{}
 
 	lastCheckStaleRequestTime atomic.Time
+	lastOverwriteLogTime      time.Time
+	lastStaleRequestLogTime   time.Time
 }
 
 func newRequestCache(maxPendingCount int) *requestCache {
@@ -163,13 +166,17 @@ func (c *requestCache) markSent(req regionReq) {
 	}
 
 	if oldReq, exists := m[req.regionInfo.verID.GetID()]; exists {
-		log.Warn("region request overwritten",
-			zap.Uint64("subID", uint64(req.regionInfo.subscribedSpan.subID)),
-			zap.Uint64("regionID", req.regionInfo.verID.GetID()),
-			zap.Float64("oldAgeSec", time.Since(oldReq.createTime).Seconds()),
-			zap.Float64("newAgeSec", time.Since(req.createTime).Seconds()),
-			zap.Int("pendingCount", int(c.pendingCount.Load())),
-			zap.Int("pendingQueueLen", len(c.pendingQueue)))
+		now := time.Now()
+		if c.lastOverwriteLogTime.IsZero() || now.Sub(c.lastOverwriteLogTime) >= requestCacheWarnLogInterval {
+			log.Warn("region request overwritten",
+				zap.Uint64("subID", uint64(req.regionInfo.subscribedSpan.subID)),
+				zap.Uint64("regionID", req.regionInfo.verID.GetID()),
+				zap.Float64("oldAgeSec", time.Since(oldReq.createTime).Seconds()),
+				zap.Float64("newAgeSec", time.Since(req.createTime).Seconds()),
+				zap.Int("pendingCount", int(c.pendingCount.Load())),
+				zap.Int("pendingQueueLen", len(c.pendingQueue)))
+			c.lastOverwriteLogTime = now
+		}
 		c.markDone()
 	}
 	m[req.regionInfo.verID.GetID()] = req
@@ -244,15 +251,19 @@ func (c *requestCache) clearStaleRequest() {
 				regionReq.regionInfo.lockedRangeState.Initialized.Load() ||
 				regionReq.isStale() {
 				c.markDone()
-				log.Warn("region worker delete stale region request",
-					zap.Uint64("subID", uint64(subID)),
-					zap.Uint64("regionID", regionID),
-					zap.Int("pendingCount", int(c.pendingCount.Load())),
-					zap.Int("pendingQueueLen", len(c.pendingQueue)),
-					zap.Bool("isRegionStopped", regionReq.regionInfo.isStopped()),
-					zap.Bool("isSubscribedSpanStopped", regionReq.regionInfo.subscribedSpan.stopped.Load()),
-					zap.Bool("isStale", regionReq.isStale()),
-					zap.Time("createTime", regionReq.createTime))
+				now := time.Now()
+				if c.lastStaleRequestLogTime.IsZero() || now.Sub(c.lastStaleRequestLogTime) >= requestCacheWarnLogInterval {
+					log.Warn("region worker delete stale region request",
+						zap.Uint64("subID", uint64(subID)),
+						zap.Uint64("regionID", regionID),
+						zap.Int("pendingCount", int(c.pendingCount.Load())),
+						zap.Int("pendingQueueLen", len(c.pendingQueue)),
+						zap.Bool("isRegionStopped", regionReq.regionInfo.isStopped()),
+						zap.Bool("isSubscribedSpanStopped", regionReq.regionInfo.subscribedSpan.stopped.Load()),
+						zap.Bool("isStale", regionReq.isStale()),
+						zap.Time("createTime", regionReq.createTime))
+					c.lastStaleRequestLogTime = now
+				}
 				delete(regionReqs, regionID)
 			} else {
 				reqCount++

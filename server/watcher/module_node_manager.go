@@ -30,6 +30,8 @@ import (
 
 const NodeManagerName = "node-manager"
 
+const getCoordinatorErrLogInterval = 10 * time.Second
+
 type (
 	NodeChangeHandler  func(map[node.ID]*node.Info)
 	OwnerChangeHandler func(newOwnerKeys string)
@@ -42,6 +44,8 @@ type NodeManager struct {
 	etcdClient    etcd.CDCEtcdClient
 	coordinatorID atomic.Value
 	nodes         atomic.Pointer[map[node.ID]*node.Info]
+
+	lastGetCoordinatorErrLogTime atomic.Int64
 
 	nodeChangeHandlers struct {
 		sync.RWMutex
@@ -79,6 +83,14 @@ func (c *NodeManager) Name() string {
 	return NodeManagerName
 }
 
+func (c *NodeManager) shouldLogGetCoordinatorErr(now time.Time) bool {
+	last := c.lastGetCoordinatorErrLogTime.Load()
+	if last != 0 && now.UnixNano()-last < getCoordinatorErrLogInterval.Nanoseconds() {
+		return false
+	}
+	return c.lastGetCoordinatorErrLogTime.CompareAndSwap(last, now.UnixNano())
+}
+
 // Tick is triggered by the server update events
 func (c *NodeManager) Tick(
 	_ context.Context,
@@ -94,7 +106,9 @@ func (c *NodeManager) Tick(
 	oldCoordinatorID := c.coordinatorID.Load().(string)
 	newCoordinatorID, err := c.etcdClient.GetOwnerID(context.Background())
 	if err != nil {
-		log.Warn("get coordinator id failed, will retry in next tick", zap.Error(err))
+		if c.shouldLogGetCoordinatorErr(time.Now()) {
+			log.Warn("get coordinator id failed, will retry in next tick", zap.Error(err))
+		}
 		return state, nil
 	}
 
