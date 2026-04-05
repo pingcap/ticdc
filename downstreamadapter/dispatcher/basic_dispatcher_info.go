@@ -227,6 +227,10 @@ func (d *BasicDispatcher) GetEventSizePerSecond() float32 {
 	return d.tableProgress.GetEventSizePerSecond()
 }
 
+func (d *BasicDispatcher) GetSinkType() common.SinkType {
+	return d.sink.SinkType()
+}
+
 func (d *BasicDispatcher) IsTableTriggerDispatcher() bool {
 	return d.tableSpan.Equal(common.KeyspaceDDLSpan(d.tableSpan.KeyspaceID))
 }
