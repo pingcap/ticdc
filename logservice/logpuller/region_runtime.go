@@ -28,16 +28,12 @@ const (
 	regionPhaseUnknown         regionPhase = "unknown"
 	regionPhaseDiscovered      regionPhase = "discovered"
 	regionPhaseRangeLockWait   regionPhase = "range_lock_wait"
-	regionPhaseRangeLocked     regionPhase = "range_locked"
 	regionPhaseQueued          regionPhase = "queued"
 	regionPhaseRPCReady        regionPhase = "rpc_ready"
-	regionPhaseSent            regionPhase = "sent"
 	regionPhaseWaitInitialized regionPhase = "wait_initialized"
 	regionPhaseReplicating     regionPhase = "replicating"
-	regionPhaseStuck           regionPhase = "stuck"
 	regionPhaseRetryPending    regionPhase = "retry_pending"
 	regionPhaseRemoved         regionPhase = "removed"
-	regionPhaseDeregistering   regionPhase = "deregistering"
 )
 
 type regionRuntimeIdentity struct {
@@ -73,11 +69,12 @@ type regionRuntimeState struct {
 	lastErrorTime time.Time
 	retryCount    int
 
-	requestEnqueueTime  time.Time
-	requestRPCReadyTime time.Time
-	requestSendTime     time.Time
-	initializedTime     time.Time
-	replicatingTime     time.Time
+	rangeLockAcquiredTime time.Time
+	requestEnqueueTime    time.Time
+	requestRPCReadyTime   time.Time
+	requestSendTime       time.Time
+	initializedTime       time.Time
+	replicatingTime       time.Time
 }
 
 func (s regionRuntimeState) clone() regionRuntimeState {
@@ -236,6 +233,15 @@ func (r *regionRuntimeRegistry) setRequestEnqueueTime(
 ) regionRuntimeState {
 	return r.upsert(key, func(state *regionRuntimeState) {
 		state.requestEnqueueTime = enqueueTime
+	})
+}
+
+func (r *regionRuntimeRegistry) setRangeLockAcquiredTime(
+	key regionRuntimeKey,
+	acquiredTime time.Time,
+) regionRuntimeState {
+	return r.upsert(key, func(state *regionRuntimeState) {
+		state.rangeLockAcquiredTime = acquiredTime
 	})
 }
 
