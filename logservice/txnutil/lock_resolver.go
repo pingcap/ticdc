@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/keyspace"
 	tikverr "github.com/tikv/client-go/v2/error"
+	tikvkv "github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv"
@@ -43,6 +44,16 @@ func NewLockerResolver() LockResolver {
 }
 
 const scanLockLimit = 1024
+
+func nextScanLockKey(locks []*txnkv.Lock, endKey []byte, msBeforeExpired int64) ([]byte, bool) {
+	if len(locks) < scanLockLimit {
+		return endKey, false
+	}
+	if msBeforeExpired > 0 {
+		return nil, true
+	}
+	return tikvkv.NextKey(locks[len(locks)-1].Key), false
+}
 
 func (r *resolver) Resolve(ctx context.Context, keyspaceID uint32, regionID uint64, maxVersion uint64) (err error) {
 	var totalLocks []*txnkv.Lock
@@ -138,15 +149,24 @@ func (r *resolver) Resolve(ctx context.Context, keyspaceID uint32, regionID uint
 		}
 		totalLocks = append(totalLocks, locks...)
 
-		_, err1 := kvStorage.GetLockResolver().ResolveLocks(bo, 0, locks)
+		msBeforeExpired, err1 := kvStorage.GetLockResolver().ResolveLocks(bo, 0, locks)
 		if err1 != nil {
 			return errors.Trace(err1)
 		}
-		if len(locks) < scanLockLimit {
-			key = loc.EndKey
-		} else {
-			key = locks[len(locks)-1].Key
+
+		nextKey, shouldRetry := nextScanLockKey(locks, loc.EndKey, msBeforeExpired)
+		if shouldRetry {
+			err = bo.BackoffWithMaxSleepTxnLockFast(
+				int(msBeforeExpired),
+				errors.Errorf("remain locks after resolve: %d", len(locks)),
+			)
+			if err != nil {
+				return errors.Trace(err)
+			}
+			bo = tikv.NewGcResolveLockMaxBackoffer(ctx)
+			continue
 		}
+		key = nextKey
 
 		if len(key) == 0 || (len(loc.EndKey) != 0 && bytes.Compare(key, loc.EndKey) >= 0) {
 			break
