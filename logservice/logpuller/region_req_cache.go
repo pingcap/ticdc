@@ -191,6 +191,9 @@ func (c *requestCache) markStopped(subID SubscriptionID, regionID uint64) {
 	}
 
 	delete(regionReqs, regionID)
+	if len(regionReqs) == 0 {
+		delete(c.sentRequests.regionReqs, subID)
+	}
 	c.markDone()
 }
 

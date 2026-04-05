@@ -68,7 +68,8 @@ func TestRemovePathLateAppendDoesNotPolluteAreaPendingSize(t *testing.T) {
 	mc.addPathToArea(path, settings, feedbackChan)
 
 	handler := &mockHandler{}
-	eq := newEventQueue(Option{BatchCount: 4}, handler)
+	eq := newEventQueue(handler, newTestBatchConfigRegistryWithDefault(newBatchConfig(4, 0)))
+	b := newDefaultBatcher[*mockEvent]()
 	eq.initPath(path)
 
 	appendEvent := func(id int, size int) {
@@ -94,8 +95,7 @@ func TestRemovePathLateAppendDoesNotPolluteAreaPendingSize(t *testing.T) {
 	// Simulate a stale in-flight append that races with RemovePath.
 	appendEvent(2, 7)
 
-	buf := make([]*mockEvent, 0)
-	events, _, _ := eq.popEvents(buf)
+	events, _, _, _ := eq.popEvents(b)
 	require.Len(t, events, 0)
 
 	// Removed-path events must not leave stale memory accounting behind.
