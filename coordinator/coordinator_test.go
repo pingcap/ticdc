@@ -373,8 +373,9 @@ func TestCoordinatorScheduling(t *testing.T) {
 }
 
 func TestScaleNode(t *testing.T) {
-	ctx := context.Background()
-	info := node.NewInfo("127.0.0.1:28300", "")
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	info, lis1 := newMaintainerNodeForTest(t)
 	etcdClient := newMockEtcdClient(string(info.ID))
 	nodeManager := watcher.NewNodeManager(nil, etcdClient)
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)
@@ -384,13 +385,10 @@ func TestScaleNode(t *testing.T) {
 	cfg := config.NewDefaultMessageCenterConfig(info.AdvertiseAddr)
 	mc1 := messaging.NewMessageCenter(ctx, info.ID, cfg, nil)
 	mc1.Run(ctx)
-	defer func() {
-		mc1.Close()
-		log.Info("close message center 1")
-	}()
 
 	appcontext.SetService(appcontext.MessageCenter, mc1)
-	startMaintainerNode(ctx, info, mc1, nodeManager)
+	node1 := startMaintainerNode(ctx, info, mc1, nodeManager, lis1)
+	t.Cleanup(node1.stop)
 
 	serviceID := "default"
 
@@ -428,23 +426,16 @@ func TestScaleNode(t *testing.T) {
 	}, waitTime, time.Millisecond*5)
 
 	// add two nodes
-	info2 := node.NewInfo("127.0.0.1:28400", "")
+	info2, lis2 := newMaintainerNodeForTest(t)
 	mc2 := messaging.NewMessageCenter(ctx, info2.ID, config.NewDefaultMessageCenterConfig(info2.AdvertiseAddr), nil)
 	mc2.Run(ctx)
-	defer func() {
-		mc2.Close()
-		log.Info("close message center 2")
-	}()
-	startMaintainerNode(ctx, info2, mc2, nodeManager)
-	info3 := node.NewInfo("127.0.0.1:28500", "")
+	node2 := startMaintainerNode(ctx, info2, mc2, nodeManager, lis2)
+	t.Cleanup(node2.stop)
+	info3, lis3 := newMaintainerNodeForTest(t)
 	mc3 := messaging.NewMessageCenter(ctx, info3.ID, config.NewDefaultMessageCenterConfig(info3.AdvertiseAddr), nil)
 	mc3.Run(ctx)
-	defer func() {
-		mc3.Close()
-		log.Info("close message center 3")
-	}()
-
-	startMaintainerNode(ctx, info3, mc3, nodeManager)
+	node3 := startMaintainerNode(ctx, info3, mc3, nodeManager, lis3)
+	t.Cleanup(node3.stop)
 
 	log.Info("Start maintainer node",
 		zap.Stringer("id", info3.ID),
@@ -490,7 +481,7 @@ func TestScaleNode(t *testing.T) {
 func TestBootstrapWithUnStoppedChangefeed(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	info := node.NewInfo("127.0.0.1:28301", "")
+	info, lis := newMaintainerNodeForTest(t)
 	etcdClient := newMockEtcdClient(string(info.ID))
 	nodeManager := watcher.NewNodeManager(nil, etcdClient)
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)
@@ -500,10 +491,10 @@ func TestBootstrapWithUnStoppedChangefeed(t *testing.T) {
 
 	mc1 := messaging.NewMessageCenter(ctx, info.ID, config.NewDefaultMessageCenterConfig(info.AdvertiseAddr), nil)
 	mc1.Run(ctx)
-	defer mc1.Close()
 
 	appcontext.SetService(appcontext.MessageCenter, mc1)
-	mNode := startMaintainerNode(ctx, info, mc1, nodeManager)
+	mNode := startMaintainerNode(ctx, info, mc1, nodeManager, lis)
+	defer mNode.stop()
 
 	removingCf1 := &changefeed.ChangefeedMetaWrapper{
 		Info: &config.ChangeFeedInfo{
@@ -712,40 +703,51 @@ type maintainNode struct {
 	cancel  context.CancelFunc
 	mc      messaging.MessageCenter
 	manager *mockMaintainerManager
+	wg      sync.WaitGroup
 }
 
 func (d *maintainNode) stop() {
-	d.mc.Close()
 	d.cancel()
+	d.wg.Wait()
+	d.mc.Close()
+}
+
+func newMaintainerNodeForTest(t *testing.T) (*node.Info, net.Listener) {
+	t.Helper()
+
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	return node.NewInfo(lis.Addr().String(), ""), lis
 }
 
 func startMaintainerNode(ctx context.Context,
 	node *node.Info, mc messaging.MessageCenter,
 	nodeManager *watcher.NodeManager,
+	lis net.Listener,
 ) *maintainNode {
 	nodeManager.RegisterNodeChangeHandler(node.ID, mc.OnNodeChanges)
 	ctx, cancel := context.WithCancel(ctx)
 	maintainerM := NewMaintainerManager(mc)
+	res := &maintainNode{
+		cancel:  cancel,
+		mc:      mc,
+		manager: maintainerM,
+	}
+	res.wg.Add(1)
 	go func() {
+		defer res.wg.Done()
 		var opts []grpc.ServerOption
 		grpcServer := grpc.NewServer(opts...)
 		mcs := messaging.NewMessageCenterServer(mc)
 		proto.RegisterMessageServiceServer(grpcServer, mcs)
-		lis, err := net.Listen("tcp", node.AdvertiseAddr)
-		if err != nil {
-			panic(err)
-		}
 		go func() {
 			_ = grpcServer.Serve(lis)
 		}()
 		_ = maintainerM.Run(ctx)
 		grpcServer.Stop()
 	}()
-	return &maintainNode{
-		cancel:  cancel,
-		mc:      mc,
-		manager: maintainerM,
-	}
+	return res
 }
 
 type mockEtcdClient struct {
