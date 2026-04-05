@@ -36,6 +36,13 @@ var (
 			Help:      "Size of KV events.",
 			Buckets:   prometheus.ExponentialBuckets(16, 2, 25),
 		}, []string{"type"})
+	PullerEventCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "kvclient",
+			Name:      "pull_event_count",
+			Help:      "event count received by this puller",
+		}, []string{"type"})
 	clientChannelSize = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
@@ -43,6 +50,14 @@ var (
 			Name:      "channel_size",
 			Help:      "size of each channel in kv client",
 		}, []string{"channel"})
+	BatchResolvedEventSize = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "ticdc",
+			Subsystem: "kvclient",
+			Name:      "batch_resolved_event_size",
+			Help:      "The number of region in one batch resolved ts event",
+			Buckets:   prometheus.ExponentialBuckets(1, 2, 16),
+		}, []string{"type"})
 	LockResolveDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
@@ -93,7 +108,9 @@ func initPullerMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(RegionWorkerProcessDuration)
 	registry.MustRegister(RegionWorkerTotalDuration)
 	registry.MustRegister(EventFeedErrorCounter)
+	registry.MustRegister(BatchResolvedEventSize)
 	registry.MustRegister(eventSize)
+	registry.MustRegister(PullerEventCounter)
 	registry.MustRegister(clientChannelSize)
 	registry.MustRegister(LockResolveDuration)
 	registry.MustRegister(regionWorkerQueueDuration)

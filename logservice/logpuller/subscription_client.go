@@ -35,6 +35,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/spanz"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/dynstream"
+	"github.com/prometheus/client_golang/prometheus"
 	kvclientv2 "github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikv"
@@ -157,6 +158,10 @@ type SubscriptionClientConfig struct {
 	RegionRequestWorkerPerStore uint
 }
 
+type sharedClientMetrics struct {
+	batchResolvedSize prometheus.Observer
+}
+
 // subscriptionClient is used to subscribe events of table ranges from TiKV.
 // All exported Methods are thread-safe.
 type SubscriptionClient interface {
@@ -181,6 +186,7 @@ type subscriptionClient struct {
 	ctx       context.Context
 	cancel    context.CancelFunc
 	config    *SubscriptionClientConfig
+	metrics   sharedClientMetrics
 	clusterID uint64
 
 	pd           pd.Client
@@ -259,6 +265,8 @@ func NewSubscriptionClient(
 	ds.Start()
 	subClient.ds = ds
 	subClient.cond = sync.NewCond(&subClient.mu)
+
+	subClient.initMetrics()
 	return subClient
 }
 
@@ -269,6 +277,11 @@ func (s *subscriptionClient) Name() string {
 // AllocsubscriptionID gets an ID can be used in `Subscribe`.
 func (s *subscriptionClient) AllocSubscriptionID() SubscriptionID {
 	return SubscriptionID(subscriptionIDGen.Add(1))
+}
+
+func (s *subscriptionClient) initMetrics() {
+	// TODO: fix metrics
+	s.metrics.batchResolvedSize = metrics.BatchResolvedEventSize.WithLabelValues("event-store")
 }
 
 func (s *subscriptionClient) updateMetrics(ctx context.Context) error {
