@@ -36,6 +36,13 @@ var (
 			Help:      "Size of KV events.",
 			Buckets:   prometheus.ExponentialBuckets(16, 2, 25),
 		}, []string{"type"})
+	PullerEventCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "kvclient",
+			Name:      "pull_event_count",
+			Help:      "event count received by this puller",
+		}, []string{"type"})
 	clientChannelSize = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
@@ -94,6 +101,7 @@ func initPullerMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(RegionWorkerTotalDuration)
 	registry.MustRegister(EventFeedErrorCounter)
 	registry.MustRegister(eventSize)
+	registry.MustRegister(PullerEventCounter)
 	registry.MustRegister(clientChannelSize)
 	registry.MustRegister(LockResolveDuration)
 	registry.MustRegister(regionWorkerQueueDuration)
