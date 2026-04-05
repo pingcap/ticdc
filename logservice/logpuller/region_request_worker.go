@@ -301,23 +301,33 @@ func (s *regionRequestWorker) dispatchResolvedTsEvent(resolvedTsEvent *cdcpb.Res
 	// Avoid allocating a huge states slice when resolvedTsEvent.Regions is large.
 	// Push resolved-ts events in batches to reduce peak memory usage and improve GC behavior.
 	const resolvedTsStateBatchSize = 1024
-	resolvedStates := make([]*regionFeedState, 0, resolvedTsStateBatchSize)
+	capHint := len(resolvedTsEvent.Regions)
+	if capHint > resolvedTsStateBatchSize {
+		capHint = resolvedTsStateBatchSize
+	}
+	resolvedStates := make([]*regionFeedState, 0, capHint)
 	flush := func() {
 		if len(resolvedStates) == 0 {
 			return
 		}
-		states := resolvedStates
 		s.client.pushRegionEventToDS(subscriptionID, regionEvent{
 			resolvedTs: resolvedTsEvent.Ts,
-			states:     states,
+			states:     resolvedStates,
 		})
-		resolvedStates = make([]*regionFeedState, 0, resolvedTsStateBatchSize)
+		resolvedStates = nil
 	}
-	for _, regionID := range resolvedTsEvent.Regions {
+	for i, regionID := range resolvedTsEvent.Regions {
 		if state := s.getRegionState(subscriptionID, regionID); state != nil {
 			resolvedStates = append(resolvedStates, state)
 			if len(resolvedStates) >= resolvedTsStateBatchSize {
 				flush()
+				if i+1 < len(resolvedTsEvent.Regions) {
+					capHint = len(resolvedTsEvent.Regions) - (i + 1)
+					if capHint > resolvedTsStateBatchSize {
+						capHint = resolvedTsStateBatchSize
+					}
+					resolvedStates = make([]*regionFeedState, 0, capHint)
+				}
 			}
 			continue
 		}
