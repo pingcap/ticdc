@@ -80,14 +80,18 @@ func (m *DispatcherOrchestrator) RecvMaintainerRequest(
 	msg *messaging.TargetMessage,
 ) error {
 	if !m.msgGuardWaitGroup.AddIf(func() bool { return !m.closed.Load() }) {
-		log.Debug("dispatcher orchestrator already closed, drop message", zap.Any("message", msg.Message))
+		log.Debug("dispatcher orchestrator already closed, drop message", zap.Any("message", msg))
 		return nil
 	}
 	defer m.msgGuardWaitGroup.Done()
 
 	key, ok := getPendingMessageKey(msg)
 	if !ok {
-		log.Warn("unknown message type, drop message",
+		if msg == nil {
+			log.Warn("nil maintainer message, drop message")
+			return nil
+		}
+		log.Warn("unknown or empty message type, drop message",
 			zap.String("type", msg.Type.String()),
 			zap.Any("message", msg.Message))
 		return nil
@@ -99,6 +103,10 @@ func (m *DispatcherOrchestrator) RecvMaintainerRequest(
 }
 
 func getPendingMessageKey(msg *messaging.TargetMessage) (pendingMessageKey, bool) {
+	if msg == nil || len(msg.Message) == 0 {
+		return pendingMessageKey{}, false
+	}
+
 	var changefeedID *heartbeatpb.ChangefeedID
 	switch req := msg.Message[0].(type) {
 	case *heartbeatpb.MaintainerBootstrapRequest:
@@ -186,73 +194,60 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 				zap.Any("changefeedID", cfId.Name()), zap.Duration("duration", time.Since(start)), zap.Error(err))
 
 			appcontext.GetService[*dispatchermanager.HeartBeatCollector](appcontext.HeartbeatCollector).RemoveDispatcherManager(cfId)
-
-			response := &heartbeatpb.MaintainerBootstrapResponse{
-				ChangefeedID: req.ChangefeedID,
-				Err: &heartbeatpb.RunningError{
-					Time:    time.Now().String(),
-					Node:    from.String(),
-					Code:    string(errors.ErrorCode(err)),
-					Message: err.Error(),
-				},
-			}
-			log.Error("create new dispatcher manager failed",
-				zap.Any("changefeedID", cfId.Name()), zap.Duration("duration", time.Since(start)), zap.Error(err))
-
-			return m.sendResponse(from, messaging.MaintainerManagerTopic, response)
+			return m.sendBootstrapErrorResponse(from, req.ChangefeedID, req.MaintainerEpoch, err)
 		}
+		manager.SetActiveMaintainer(from, req.MaintainerEpoch)
 		m.mutex.Lock()
 		m.dispatcherManagers[cfId] = manager
 		m.mutex.Unlock()
 		metrics.DispatcherManagerGauge.WithLabelValues(cfId.Keyspace(), cfId.Name()).Inc()
-	} else {
-		// Check and potentially add a table trigger event dispatcher.
-		// This is necessary during maintainer node migration, as the existing
-		// dispatcher manager on the new node may not have a table trigger
-		// event dispatcher configured yet.
-		if req.TableTriggerEventDispatcherId != nil {
-			tableTriggerDispatcher := manager.GetTableTriggerEventDispatcher()
-			if tableTriggerDispatcher == nil {
-				err = manager.NewTableTriggerEventDispatcher(
-					req.TableTriggerEventDispatcherId,
-					req.StartTs,
-					false,
-				)
-				if err != nil {
-					log.Error("failed to create new table trigger event dispatcher",
-						zap.Stringer("changefeedID", cfId), zap.Error(err))
-					return m.handleDispatcherError(from, req.ChangefeedID, err)
-				}
+	} else if !admitBootstrapRequest(manager, cfId, from, req.MaintainerEpoch) {
+		return nil
+	}
+
+	// Check and potentially add a table trigger event dispatcher.
+	// This is necessary during maintainer node migration, as the existing
+	// dispatcher manager on the new node may not have a table trigger
+	// event dispatcher configured yet.
+	if req.TableTriggerEventDispatcherId != nil {
+		tableTriggerDispatcher := manager.GetTableTriggerEventDispatcher()
+		if tableTriggerDispatcher == nil {
+			err = manager.NewTableTriggerEventDispatcher(
+				req.TableTriggerEventDispatcherId,
+				req.StartTs,
+				false,
+			)
+			if err != nil {
+				log.Error("failed to create new table trigger event dispatcher",
+					zap.Stringer("changefeedID", cfId), zap.Error(err))
+				return m.sendBootstrapErrorResponse(from, req.ChangefeedID, req.MaintainerEpoch, err)
 			}
 		}
-		if req.TableTriggerRedoDispatcherId != nil {
-			tableTriggerRedoDispatcher := manager.GetTableTriggerRedoDispatcher()
-			if tableTriggerRedoDispatcher == nil {
-				err = manager.NewTableTriggerRedoDispatcher(
-					req.TableTriggerRedoDispatcherId,
-					req.StartTs,
-					false,
-				)
-				if err != nil {
-					log.Error("failed to create new table trigger redo dispatcher",
-						zap.Stringer("changefeedID", cfId), zap.Error(err))
-					return m.handleDispatcherError(from, req.ChangefeedID, err)
-				}
+	}
+	if req.TableTriggerRedoDispatcherId != nil {
+		tableTriggerRedoDispatcher := manager.GetTableTriggerRedoDispatcher()
+		if tableTriggerRedoDispatcher == nil {
+			err = manager.NewTableTriggerRedoDispatcher(
+				req.TableTriggerRedoDispatcherId,
+				req.StartTs,
+				false,
+			)
+			if err != nil {
+				log.Error("failed to create new table trigger redo dispatcher",
+					zap.Stringer("changefeedID", cfId), zap.Error(err))
+				return m.sendBootstrapErrorResponse(from, req.ChangefeedID, req.MaintainerEpoch, err)
 			}
 		}
 	}
 
-	if manager.GetMaintainerID() != from {
-		manager.SetMaintainerID(from)
-		log.Info("maintainer changed",
-			zap.String("changefeed", cfId.Name()), zap.String("maintainer", from.String()))
-	}
-
-	// FIXME(fizz): This is a temporary check to ensure the maintainer epoch is consistent.
-	// I will remove this after fully testing the new maintainer epoch mechanism.
-	if manager.GetMaintainerEpoch() != cfConfig.Epoch {
-		log.Error("maintainer epoch changed, this should not happen, please report this issue",
-			zap.String("changefeed", cfId.Name()), zap.Uint64("epoch", cfConfig.Epoch))
+	if manager.GetChangefeedEpoch() != cfConfig.Epoch {
+		// Ownership is guarded by maintainer epoch. A config epoch mismatch still
+		// deserves attention, but returning the bootstrap response keeps recovery
+		// simple and lets the maintainer reconcile from the reported state.
+		log.Warn("changefeed epoch changed, this should not happen, please report this issue",
+			zap.String("changefeed", cfId.Name()),
+			zap.Uint64("activeConfigEpoch", manager.GetChangefeedEpoch()),
+			zap.Uint64("requestConfigEpoch", cfConfig.Epoch))
 	}
 
 	var (
@@ -267,7 +262,7 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 			redoStartTs = tableTriggerRedoDispatcher.GetStartTs()
 		}
 	}
-	response := createBootstrapResponse(req.ChangefeedID, manager, startTs, redoStartTs)
+	response := createBootstrapResponse(req.ChangefeedID, manager, startTs, redoStartTs, req.MaintainerEpoch)
 	return m.sendResponse(from, messaging.MaintainerManagerTopic, response)
 }
 
@@ -290,6 +285,9 @@ func (m *DispatcherOrchestrator) handlePostBootstrapRequest(
 			zap.Any("changefeedID", cfId.Name()))
 		return nil
 	}
+	if !admitPostBootstrapRequest(manager, cfId, from, req.MaintainerEpoch) {
+		return nil
+	}
 	if manager.GetTableTriggerEventDispatcher().GetId() !=
 		common.NewDispatcherIDFromPB(req.TableTriggerEventDispatcherId) {
 		log.Error("Receive post bootstrap request but the table trigger event dispatcher id is not match",
@@ -303,13 +301,9 @@ func (m *DispatcherOrchestrator) handlePostBootstrapRequest(
 			GenWithStackByArgs("Receive post bootstrap request but the table trigger event dispatcher id is not match")
 
 		response := &heartbeatpb.MaintainerPostBootstrapResponse{
-			ChangefeedID: req.ChangefeedID,
-			Err: &heartbeatpb.RunningError{
-				Time:    time.Now().String(),
-				Node:    from.String(),
-				Code:    string(errors.ErrorCode(err)),
-				Message: err.Error(),
-			},
+			ChangefeedID:    req.ChangefeedID,
+			MaintainerEpoch: req.MaintainerEpoch,
+			Err:             newRunningError(from, err),
 		}
 
 		return m.sendResponse(from, messaging.MaintainerManagerTopic, response)
@@ -320,20 +314,21 @@ func (m *DispatcherOrchestrator) handlePostBootstrapRequest(
 	if err != nil {
 		log.Error("failed to initialize table trigger event dispatcher",
 			zap.Any("changefeedID", cfId.Name()), zap.Error(err))
-		return m.handleDispatcherError(from, req.ChangefeedID, err)
+		return m.sendPostBootstrapErrorResponse(from, req.ChangefeedID, req.MaintainerEpoch, err)
 	}
 	if manager.IsRedoReady() {
 		err := manager.InitalizeTableTriggerRedoDispatcher(req.RedoSchemas)
 		if err != nil {
 			log.Error("failed to initialize table trigger redo dispatcher",
 				zap.Any("changefeedID", cfId.Name()), zap.Error(err))
-			return m.handleDispatcherError(from, req.ChangefeedID, err)
+			return m.sendPostBootstrapErrorResponse(from, req.ChangefeedID, req.MaintainerEpoch, err)
 		}
 	}
 
 	response := &heartbeatpb.MaintainerPostBootstrapResponse{
 		ChangefeedID:                  req.ChangefeedID,
 		TableTriggerEventDispatcherId: req.TableTriggerEventDispatcherId,
+		MaintainerEpoch:               req.MaintainerEpoch,
 	}
 	return m.sendResponse(from, messaging.MaintainerManagerTopic, response)
 }
@@ -344,12 +339,17 @@ func (m *DispatcherOrchestrator) handleCloseRequest(
 ) error {
 	cfId := common.NewChangefeedIDFromPB(req.ChangefeedID)
 	response := &heartbeatpb.MaintainerCloseResponse{
-		ChangefeedID: req.ChangefeedID,
-		Success:      true,
+		ChangefeedID:    req.ChangefeedID,
+		MaintainerEpoch: req.MaintainerEpoch,
+		Success:         true,
 	}
 
 	m.mutex.Lock()
 	if manager, ok := m.dispatcherManagers[cfId]; ok {
+		if !admitCloseRequest(manager, cfId, from, req.MaintainerEpoch) {
+			m.mutex.Unlock()
+			return nil
+		}
 		if closed := manager.TryClose(req.Removed); closed {
 			delete(m.dispatcherManagers, cfId)
 			metrics.DispatcherManagerGauge.WithLabelValues(cfId.Keyspace(), cfId.Name()).Dec()
@@ -365,14 +365,196 @@ func (m *DispatcherOrchestrator) handleCloseRequest(
 	return m.sendResponse(from, messaging.MaintainerTopic, response)
 }
 
+func admitBootstrapRequest(
+	manager *dispatchermanager.DispatcherManager,
+	cfID common.ChangeFeedID,
+	from node.ID,
+	requestEpoch uint64,
+) bool {
+	activeMaintainer, activeEpoch := manager.GetActiveMaintainer()
+	if !shouldUseStrictMaintainerEpoch(activeEpoch, requestEpoch) {
+		return admitLegacyBootstrapRequest(manager, cfID, activeMaintainer, activeEpoch, from, requestEpoch)
+	}
+
+	switch compareBootstrapMaintainerEpoch(activeEpoch, requestEpoch) {
+	case maintainerRequestStale:
+		log.Info("drop stale bootstrap request",
+			zap.Stringer("changefeedID", cfID),
+			zap.Stringer("maintainerID", from),
+			zap.Uint64("requestEpoch", requestEpoch),
+			zap.Uint64("activeEpoch", activeEpoch))
+		return false
+	case maintainerRequestRetry:
+		if activeMaintainer != from {
+			log.Warn("drop bootstrap retry from unexpected maintainer",
+				zap.Stringer("changefeedID", cfID),
+				zap.Stringer("maintainerID", from),
+				zap.Stringer("activeMaintainerID", activeMaintainer),
+				zap.Uint64("maintainerEpoch", requestEpoch))
+			return false
+		}
+	case maintainerRequestTakeover:
+		// A bootstrap with a newer epoch is the only path that can move
+		// ownership to another maintainer instance.
+		log.Info("maintainer changed",
+			zap.String("changefeed", cfID.Name()),
+			zap.String("oldMaintainer", activeMaintainer.String()),
+			zap.String("newMaintainer", from.String()),
+			zap.Uint64("oldEpoch", activeEpoch),
+			zap.Uint64("newEpoch", requestEpoch))
+		manager.SetActiveMaintainer(from, requestEpoch)
+	}
+	return true
+}
+
+func admitLegacyBootstrapRequest(
+	manager *dispatchermanager.DispatcherManager,
+	cfID common.ChangeFeedID,
+	activeMaintainer node.ID,
+	activeEpoch uint64,
+	from node.ID,
+	requestEpoch uint64,
+) bool {
+	// During rolling upgrade, legacy peers decode the new field as zero.
+	// Keep compatibility, but once strict ownership is established do not
+	// let zero-epoch traffic take ownership back.
+	if requestEpoch == 0 {
+		if activeEpoch != 0 {
+			if activeMaintainer != from {
+				log.Warn("drop legacy bootstrap request from unexpected maintainer",
+					zap.Stringer("changefeedID", cfID),
+					zap.Stringer("maintainerID", from),
+					zap.Stringer("activeMaintainerID", activeMaintainer),
+					zap.Uint64("activeEpoch", activeEpoch))
+				return false
+			}
+			return true
+		}
+		if activeMaintainer != from {
+			log.Info("maintainer changed in legacy compatible mode",
+				zap.String("changefeed", cfID.Name()),
+				zap.String("oldMaintainer", activeMaintainer.String()),
+				zap.String("newMaintainer", from.String()),
+				zap.Uint64("oldEpoch", activeEpoch),
+				zap.Uint64("newEpoch", requestEpoch))
+			manager.SetActiveMaintainer(from, 0)
+		}
+		return true
+	}
+
+	if activeMaintainer != from || activeEpoch != requestEpoch {
+		log.Info("maintainer changed in legacy compatible mode",
+			zap.String("changefeed", cfID.Name()),
+			zap.String("oldMaintainer", activeMaintainer.String()),
+			zap.String("newMaintainer", from.String()),
+			zap.Uint64("oldEpoch", activeEpoch),
+			zap.Uint64("newEpoch", requestEpoch))
+		manager.SetActiveMaintainer(from, requestEpoch)
+	}
+	return true
+}
+
+func admitPostBootstrapRequest(
+	manager *dispatchermanager.DispatcherManager,
+	cfID common.ChangeFeedID,
+	from node.ID,
+	requestEpoch uint64,
+) bool {
+	activeMaintainer, activeEpoch := manager.GetActiveMaintainer()
+	if shouldUseStrictMaintainerEpoch(activeEpoch, requestEpoch) {
+		// Post-bootstrap must match the active bootstrap sequence exactly. Allowing a
+		// newer epoch here would let a maintainer skip the ownership handoff checks in
+		// bootstrap and reuse partially initialized state from another instance.
+		if !shouldAcceptPostBootstrapRequest(activeEpoch, requestEpoch) {
+			log.Info("drop post bootstrap request with inactive maintainer epoch",
+				zap.Stringer("changefeedID", cfID),
+				zap.Stringer("maintainerID", from),
+				zap.Uint64("requestEpoch", requestEpoch),
+				zap.Uint64("activeEpoch", activeEpoch))
+			return false
+		}
+		if activeMaintainer != from {
+			log.Warn("drop post bootstrap request from unexpected maintainer",
+				zap.Stringer("changefeedID", cfID),
+				zap.Stringer("maintainerID", from),
+				zap.Stringer("activeMaintainerID", activeMaintainer),
+				zap.Uint64("maintainerEpoch", requestEpoch))
+			return false
+		}
+		return true
+	}
+
+	if (activeEpoch != 0 || requestEpoch != 0) && activeMaintainer != from {
+		log.Warn("drop post bootstrap request from unexpected maintainer in legacy compatible mode",
+			zap.Stringer("changefeedID", cfID),
+			zap.Stringer("maintainerID", from),
+			zap.Stringer("activeMaintainerID", activeMaintainer),
+			zap.Uint64("requestEpoch", requestEpoch),
+			zap.Uint64("activeEpoch", activeEpoch))
+		return false
+	}
+	return true
+}
+
+func admitCloseRequest(
+	manager *dispatchermanager.DispatcherManager,
+	cfID common.ChangeFeedID,
+	from node.ID,
+	requestEpoch uint64,
+) bool {
+	activeMaintainer, activeEpoch := manager.GetActiveMaintainer()
+	if shouldUseStrictMaintainerEpoch(activeEpoch, requestEpoch) {
+		if !shouldAcceptCloseRequest(activeEpoch, requestEpoch) {
+			log.Info("drop stale close request",
+				zap.Stringer("changefeedID", cfID),
+				zap.Stringer("maintainerID", from),
+				zap.Uint64("requestEpoch", requestEpoch),
+				zap.Uint64("activeEpoch", activeEpoch))
+			return false
+		}
+		if requestEpoch > activeEpoch {
+			// Close accepts a newer epoch so remove can still clean up the old
+			// dispatcher manager state before the new maintainer finishes bootstrap.
+			manager.SetActiveMaintainer(from, requestEpoch)
+			return true
+		}
+		if activeMaintainer != from {
+			log.Warn("drop close request from unexpected maintainer",
+				zap.Stringer("changefeedID", cfID),
+				zap.Stringer("maintainerID", from),
+				zap.Stringer("activeMaintainerID", activeMaintainer),
+				zap.Uint64("maintainerEpoch", requestEpoch))
+			return false
+		}
+		return true
+	}
+
+	if requestEpoch == 0 {
+		if activeEpoch != 0 && activeMaintainer != from {
+			log.Warn("drop legacy close request from unexpected maintainer",
+				zap.Stringer("changefeedID", cfID),
+				zap.Stringer("maintainerID", from),
+				zap.Stringer("activeMaintainerID", activeMaintainer),
+				zap.Uint64("activeEpoch", activeEpoch))
+			return false
+		}
+		return true
+	}
+
+	manager.SetActiveMaintainer(from, requestEpoch)
+	return true
+}
+
 func createBootstrapResponse(
 	changefeedID *heartbeatpb.ChangefeedID,
 	manager *dispatchermanager.DispatcherManager,
 	startTs, redoStartTs uint64,
+	maintainerEpoch uint64,
 ) *heartbeatpb.MaintainerBootstrapResponse {
 	response := &heartbeatpb.MaintainerBootstrapResponse{
-		ChangefeedID: changefeedID,
-		Spans:        make([]*heartbeatpb.BootstrapTableSpan, 0, manager.GetDispatcherMap().Len()),
+		ChangefeedID:    changefeedID,
+		MaintainerEpoch: maintainerEpoch,
+		Spans:           make([]*heartbeatpb.BootstrapTableSpan, 0, manager.GetDispatcherMap().Len()),
 	}
 
 	// table trigger event dispatcher startTs
@@ -391,6 +573,15 @@ func createBootstrapResponse(
 	retrieveOperatorsForBootstrapResponse(changefeedID, manager, response)
 
 	return response
+}
+
+func newRunningError(from node.ID, err error) *heartbeatpb.RunningError {
+	return &heartbeatpb.RunningError{
+		Time:    time.Now().String(),
+		Node:    from.String(),
+		Code:    string(errors.ErrorCode(err)),
+		Message: err.Error(),
+	}
 }
 
 func (m *DispatcherOrchestrator) sendResponse(to node.ID, topic string, msg messaging.IOTypeT) error {
@@ -430,20 +621,32 @@ func (m *DispatcherOrchestrator) Close() {
 	log.Info("dispatcher orchestrator closed")
 }
 
-// handleDispatcherError creates and sends an error response for create dispatcher-related failures
-func (m *DispatcherOrchestrator) handleDispatcherError(
+// sendBootstrapErrorResponse sends a bootstrap-phase error back to the maintainer.
+func (m *DispatcherOrchestrator) sendBootstrapErrorResponse(
 	from node.ID,
 	changefeedID *heartbeatpb.ChangefeedID,
+	maintainerEpoch uint64,
 	err error,
 ) error {
 	response := &heartbeatpb.MaintainerBootstrapResponse{
-		ChangefeedID: changefeedID,
-		Err: &heartbeatpb.RunningError{
-			Time:    time.Now().String(),
-			Node:    from.String(),
-			Code:    string(errors.ErrorCode(err)),
-			Message: err.Error(),
-		},
+		ChangefeedID:    changefeedID,
+		MaintainerEpoch: maintainerEpoch,
+		Err:             newRunningError(from, err),
+	}
+	return m.sendResponse(from, messaging.MaintainerManagerTopic, response)
+}
+
+// sendPostBootstrapErrorResponse sends a post-bootstrap-phase error back to the maintainer.
+func (m *DispatcherOrchestrator) sendPostBootstrapErrorResponse(
+	from node.ID,
+	changefeedID *heartbeatpb.ChangefeedID,
+	maintainerEpoch uint64,
+	err error,
+) error {
+	response := &heartbeatpb.MaintainerPostBootstrapResponse{
+		ChangefeedID:    changefeedID,
+		MaintainerEpoch: maintainerEpoch,
+		Err:             newRunningError(from, err),
 	}
 	return m.sendResponse(from, messaging.MaintainerManagerTopic, response)
 }

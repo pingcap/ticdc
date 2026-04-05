@@ -27,6 +27,26 @@ type pendingMessageKey struct {
 	msgType      messaging.IOType
 }
 
+type pendingMessageEntry struct {
+	msg          *messaging.TargetMessage
+	inFlight     bool
+	needsRequeue bool
+}
+
+type maintainerRequestDecision int
+
+const (
+	// maintainerRequestStale means the request belongs to an older maintainer
+	// instance and must never affect the current dispatcher manager state.
+	maintainerRequestStale maintainerRequestDecision = iota
+	// maintainerRequestRetry means the request belongs to the current maintainer
+	// instance and can be treated as an idempotent resend.
+	maintainerRequestRetry
+	// maintainerRequestTakeover means a newer maintainer instance is taking over
+	// ownership through the bootstrap path.
+	maintainerRequestTakeover
+)
+
 // pendingMessageQueue de-duplicates messages by (changefeedID, messageType) to prevent
 // floods of retry messages from blocking or starving other requests.
 //
@@ -34,18 +54,21 @@ type pendingMessageKey struct {
 // messages with the same key are dropped. This is safe because the sender periodically
 // retries until it receives a response.
 //
-// For MaintainerCloseRequest, we treat removed=true as stronger semantics than removed=false.
-// If a pending removed=false request exists, a later removed=true request with the same key
-// will replace it to avoid missing removal-related cleanup.
+// Queueing does not participate in ownership transfer. The request handlers
+// apply the epoch checks, while the queue only suppresses duplicate retries for
+// the current in-flight request.
+//
+// For MaintainerCloseRequest, removed=true still overrides removed=false so a
+// removal retry does not lose the stronger cleanup intent.
 type pendingMessageQueue struct {
 	mu      sync.Mutex
-	pending map[pendingMessageKey]*messaging.TargetMessage
+	pending map[pendingMessageKey]*pendingMessageEntry
 	queue   *chann.UnlimitedChannel[pendingMessageKey, any]
 }
 
 func newPendingMessageQueue() *pendingMessageQueue {
 	return &pendingMessageQueue{
-		pending: make(map[pendingMessageKey]*messaging.TargetMessage),
+		pending: make(map[pendingMessageKey]*pendingMessageEntry),
 		queue:   chann.NewUnlimitedChannelDefault[pendingMessageKey](),
 	}
 }
@@ -54,16 +77,19 @@ func newPendingMessageQueue() *pendingMessageQueue {
 // It returns true if the message is accepted, otherwise false.
 func (q *pendingMessageQueue) TryEnqueue(key pendingMessageKey, msg *messaging.TargetMessage) bool {
 	q.mu.Lock()
-	if oldMsg, ok := q.pending[key]; ok {
-		if shouldReplacePendingMessage(key, oldMsg, msg) {
-			q.pending[key] = msg
+	if entry, ok := q.pending[key]; ok {
+		if shouldReplacePendingMessage(key, entry.msg, msg) {
+			entry.msg = msg
+			if entry.inFlight {
+				entry.needsRequeue = true
+			}
 			q.mu.Unlock()
 			return true
 		}
 		q.mu.Unlock()
 		return false
 	}
-	q.pending[key] = msg
+	q.pending[key] = &pendingMessageEntry{msg: msg}
 	q.mu.Unlock()
 
 	q.queue.Push(key)
@@ -77,32 +103,87 @@ func shouldReplacePendingMessage(key pendingMessageKey, oldMsg, newMsg *messagin
 	if oldMsg == nil || newMsg == nil {
 		return false
 	}
-	if len(oldMsg.Message) == 0 || len(newMsg.Message) == 0 {
-		return false
-	}
+
 	oldReq, ok1 := oldMsg.Message[0].(*heartbeatpb.MaintainerCloseRequest)
 	newReq, ok2 := newMsg.Message[0].(*heartbeatpb.MaintainerCloseRequest)
 	if !ok1 || !ok2 {
 		return false
 	}
-	// Only upgrade semantics: allow removed=true to override removed=false.
+	// Only upgrade semantics within the same maintainer instance: allow
+	// removed=true to override removed=false.
 	return !oldReq.Removed && newReq.Removed
+}
+
+// compareBootstrapMaintainerEpoch is intentionally asymmetric:
+// bootstrap is the only request that can establish or transfer ownership.
+func compareBootstrapMaintainerEpoch(activeEpoch, requestEpoch uint64) maintainerRequestDecision {
+	switch {
+	case requestEpoch < activeEpoch:
+		return maintainerRequestStale
+	case requestEpoch == activeEpoch:
+		return maintainerRequestRetry
+	default:
+		return maintainerRequestTakeover
+	}
+}
+
+// post-bootstrap only applies to the bootstrap sequence started by the active
+// maintainer instance. A newer maintainer must restart from bootstrap first.
+func shouldAcceptPostBootstrapRequest(activeEpoch, requestEpoch uint64) bool {
+	return requestEpoch == activeEpoch
+}
+
+// close accepts a newer epoch so removal can still clean up an old dispatcher
+// manager before the new maintainer finishes bootstrap on this node.
+func shouldAcceptCloseRequest(activeEpoch, requestEpoch uint64) bool {
+	return requestEpoch >= activeEpoch
+}
+
+func shouldUseStrictMaintainerEpoch(activeEpoch, requestEpoch uint64) bool {
+	return activeEpoch != 0 && requestEpoch != 0
 }
 
 // Pop blocks until a key is available or the queue is closed.
 // The returned key is removed from the queue but remains pending until Done is called.
 func (q *pendingMessageQueue) Pop() (pendingMessageKey, bool) {
-	return q.queue.Get()
+	key, ok := q.queue.Get()
+	if !ok {
+		return pendingMessageKey{}, false
+	}
+
+	q.mu.Lock()
+	if entry, exists := q.pending[key]; exists {
+		entry.inFlight = true
+	}
+	q.mu.Unlock()
+
+	return key, true
 }
 
 func (q *pendingMessageQueue) Get(key pendingMessageKey) *messaging.TargetMessage {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	return q.pending[key]
+	entry, ok := q.pending[key]
+	if !ok {
+		return nil
+	}
+	return entry.msg
 }
 
 func (q *pendingMessageQueue) Done(key pendingMessageKey) {
 	q.mu.Lock()
+	entry, ok := q.pending[key]
+	if !ok {
+		q.mu.Unlock()
+		return
+	}
+	if entry.needsRequeue {
+		entry.inFlight = false
+		entry.needsRequeue = false
+		q.mu.Unlock()
+		q.queue.Push(key)
+		return
+	}
 	delete(q.pending, key)
 	q.mu.Unlock()
 }
