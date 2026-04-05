@@ -251,6 +251,9 @@ func (s *stream[A, P, T, D, H]) handleLoop() {
 		s.option.handleWait.Wait()
 	}
 
+	// Variables below will be used in the Loop below.
+	// Declared here to avoid repeated allocation.
+	// todo: shall we preallocate the event buff and path here ?
 	// 1. Drain the eventChan to pendingQueue.
 	// 2. Pop events from the eventQueue and handle them.
 Loop:

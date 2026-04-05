@@ -189,6 +189,12 @@ type replicaConfig struct {
 	// This option only takes effect when EnableActiveActive is true and the downstream is TiDB.
 	ActiveActiveSyncStatsInterval *time.Duration `toml:"active-active-sync-stats-interval" json:"active-active-sync-stats-interval,omitempty"`
 
+	// these fields are used by the event collector dynamic stream to achieve better batch performance.
+	// it's not initialized in the defaultReplicaConfig by the purpose.
+	// if it's set, will override the default value which derived from the internal sink.
+	EventCollectorBatchCount *int `toml:"event-collector-batch-count" json:"event-collector-batch-count,omitempty"`
+	EventCollectorBatchBytes *int `toml:"event-collector-batch-bytes" json:"event-collector-batch-bytes,omitempty"`
+
 	// Deprecated: we don't use this field since v8.0.0.
 	SQLMode string `toml:"sql-mode" json:"sql-mode"`
 }
@@ -359,6 +365,13 @@ func (c *ReplicaConfig) ValidateAndAdjust(sinkURI *url.URL) error { // check sin
 					minChangeFeedErrorStuckDuration.Seconds()))
 	}
 
+	// allow the batch count and batch bytes set to 0, to disable the batch mechanism
+	if c.EventCollectorBatchCount != nil && *c.EventCollectorBatchCount < 0 {
+		return cerror.ErrInvalidReplicaConfig.FastGenByArgs("event-collector-batch-count must be set not smaller than 0")
+	}
+	if c.EventCollectorBatchBytes != nil && *c.EventCollectorBatchBytes < 0 {
+		return cerror.ErrInvalidReplicaConfig.FastGenByArgs("event-collector-batch-bytes must be set not smaller than 0")
+	}
 	if c.ActiveActiveProgressInterval == nil {
 		interval := defaultActiveActiveProgressInterval
 		c.ActiveActiveProgressInterval = util.AddressOf(interval)
