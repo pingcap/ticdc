@@ -189,6 +189,8 @@ type subscriptionClient struct {
 	metrics   sharedClientMetrics
 	clusterID uint64
 
+	regionRuntimeRegistry *regionRuntimeRegistry
+
 	pd           pd.Client
 	regionCache  *tikv.RegionCache
 	pdClock      pdutil.Clock
@@ -239,6 +241,8 @@ func NewSubscriptionClient(
 		regionCache:  appcontext.GetService[*tikv.RegionCache](appcontext.RegionCache),
 		pdClock:      appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
 		lockResolver: lockResolver,
+
+		regionRuntimeRegistry: newRegionRuntimeRegistry(),
 
 		credential: credential,
 
