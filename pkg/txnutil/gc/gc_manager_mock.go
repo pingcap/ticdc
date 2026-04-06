@@ -46,7 +46,39 @@ func (m *MockManager) CheckStaleCheckpointTs(changefeedID common.ChangeFeedID, c
 // CheckStaleCheckpointTs indicates an expected call of CheckStaleCheckpointTs.
 func (mr *MockManagerMockRecorder) CheckStaleCheckpointTs(changefeedID, checkpointTs interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
+<<<<<<< HEAD
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CheckStaleCheckpointTs", reflect.TypeOf((*MockManager)(nil).CheckStaleCheckpointTs), changefeedID, checkpointTs)
+=======
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CheckStaleCheckpointTs", reflect.TypeOf((*MockManager)(nil).CheckStaleCheckpointTs), keyspaceID, changefeedID, checkpointTs)
+}
+
+// TryDeleteServiceGCSafepoint mocks base method.
+func (m *MockManager) TryDeleteServiceGCSafepoint(ctx context.Context) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "TryDeleteServiceGCSafepoint", ctx)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// TryDeleteServiceGCSafepoint indicates an expected call of TryDeleteServiceGCSafepoint.
+func (mr *MockManagerMockRecorder) TryDeleteServiceGCSafepoint(ctx interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "TryDeleteServiceGCSafepoint", reflect.TypeOf((*MockManager)(nil).TryDeleteServiceGCSafepoint), ctx)
+}
+
+// TryUpdateKeyspaceGCBarrier mocks base method.
+func (m *MockManager) TryUpdateKeyspaceGCBarrier(ctx context.Context, keyspaceID uint32, keyspaceName string, checkpointTs common.Ts) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "TryUpdateKeyspaceGCBarrier", ctx, keyspaceID, keyspaceName, checkpointTs)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// TryUpdateKeyspaceGCBarrier indicates an expected call of TryUpdateKeyspaceGCBarrier.
+func (mr *MockManagerMockRecorder) TryUpdateKeyspaceGCBarrier(ctx, keyspaceID, keyspaceName, checkpointTs interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "TryUpdateKeyspaceGCBarrier", reflect.TypeOf((*MockManager)(nil).TryUpdateKeyspaceGCBarrier), ctx, keyspaceID, keyspaceName, checkpointTs)
+>>>>>>> 430effd4f (coordinator,gc: delete stale cluster service safepoint (#4613))
 }
 
 // TryUpdateServiceGCSafepoint mocks base method.
