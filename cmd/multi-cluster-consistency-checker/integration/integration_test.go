@@ -88,10 +88,10 @@ func (e *testEnv) executeRound(t *testing.T, c1Content, c2Content []byte) roundR
 		require.NoError(t, e.mc.WriteDMLFile(e.ctx, "c2", c2Content))
 	}
 
-	twData, err := e.advancer.AdvanceTimeWindow(e.ctx)
+	twData, _, err := e.advancer.AdvanceTimeWindow(e.ctx)
 	require.NoError(t, err)
 
-	report, err := e.checker.CheckInNextTimeWindow(twData)
+	report, _, err := e.checker.CheckInNextTimeWindow(twData)
 	require.NoError(t, err)
 
 	return roundResult{report: report, twData: twData}

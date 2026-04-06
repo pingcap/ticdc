@@ -79,15 +79,24 @@ func runTask(ctx context.Context, cfg *config.Config, dryRun bool) error {
 		default:
 		}
 
-		newTimeWindowData, err := timeWindowAdvancer.AdvanceTimeWindow(ctx)
+		roundStart := time.Now()
+		newTimeWindowData, advancePhases, err := timeWindowAdvancer.AdvanceTimeWindow(ctx)
 		if err != nil {
 			return &ExitError{Code: ExitCodeTransient, Err: errors.Trace(err)}
 		}
 
-		report, err := dataChecker.CheckInNextTimeWindow(newTimeWindowData)
+		report, checkPhases, err := dataChecker.CheckInNextTimeWindow(newTimeWindowData)
 		if err != nil {
 			return &ExitError{Code: ExitCodeTransient, Err: errors.Trace(err)}
 		}
+
+		log.Info("consistency check round phase durations",
+			zap.Uint64("round", report.Round),
+			zap.Duration("total", time.Since(roundStart)),
+			zap.Duration("timeWindowAdvance", advancePhases.TimeWindowAdvance),
+			zap.Duration("dataDownload", advancePhases.DataDownload),
+			zap.Duration("decode", checkPhases.Decode),
+			zap.Duration("verify", checkPhases.Verify))
 
 		if err := rec.RecordTimeWindow(newTimeWindowData, report); err != nil {
 			return &ExitError{Code: ExitCodeTransient, Err: errors.Trace(err)}
