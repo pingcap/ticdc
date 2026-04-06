@@ -40,6 +40,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/orchestrator"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/server/watcher"
+	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 )
@@ -511,6 +512,91 @@ func TestStopNotExistsMaintainer(t *testing.T) {
 	}
 	require.False(t, ok)
 	cancel()
+}
+
+func TestDispatcherMaintainerMessageFiltersDirectResponsesByEpoch(t *testing.T) {
+	t.Parallel()
+
+	cfID := common.NewChangeFeedIDWithName("cf", common.DefaultKeyspaceName)
+	maintainer := &Maintainer{
+		changefeedID:    cfID,
+		eventCh:         chann.NewAutoDrainChann[*Event](),
+		maintainerEpoch: 22,
+	}
+
+	manager := &Manager{}
+	manager.maintainers.Store(cfID, maintainer)
+
+	cases := []struct {
+		name      string
+		msg       *messaging.TargetMessage
+		forwarded bool
+	}{
+		{
+			name: "bootstrap response with current epoch is forwarded",
+			msg: messaging.NewSingleTargetMessage(
+				node.ID("to"),
+				messaging.MaintainerManagerTopic,
+				&heartbeatpb.MaintainerBootstrapResponse{
+					ChangefeedID:    cfID.ToPB(),
+					MaintainerEpoch: 22,
+				},
+			),
+			forwarded: true,
+		},
+		{
+			name: "post bootstrap response with stale epoch is dropped",
+			msg: messaging.NewSingleTargetMessage(
+				node.ID("to"),
+				messaging.MaintainerManagerTopic,
+				&heartbeatpb.MaintainerPostBootstrapResponse{
+					ChangefeedID:    cfID.ToPB(),
+					MaintainerEpoch: 21,
+				},
+			),
+			forwarded: false,
+		},
+		{
+			name: "bootstrap response without epoch is forwarded as legacy traffic",
+			msg: messaging.NewSingleTargetMessage(
+				node.ID("to"),
+				messaging.MaintainerManagerTopic,
+				&heartbeatpb.MaintainerBootstrapResponse{
+					ChangefeedID: cfID.ToPB(),
+				},
+			),
+			forwarded: true,
+		},
+		{
+			name: "close response with stale epoch is dropped",
+			msg: messaging.NewSingleTargetMessage(
+				node.ID("to"),
+				messaging.MaintainerTopic,
+				&heartbeatpb.MaintainerCloseResponse{
+					ChangefeedID:    cfID.ToPB(),
+					MaintainerEpoch: 21,
+					Success:         true,
+				},
+			),
+			forwarded: false,
+		},
+	}
+
+	ctx := context.Background()
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.NoError(t, manager.dispatcherMaintainerMessage(ctx, cfID, tc.msg))
+
+			select {
+			case event := <-maintainer.eventCh.Out():
+				require.True(t, tc.forwarded)
+				require.Equal(t, EventMessage, event.eventType)
+				require.Same(t, tc.msg, event.message)
+			case <-time.After(100 * time.Millisecond):
+				require.False(t, tc.forwarded)
+			}
+		})
+	}
 }
 
 type dispatcherNode struct {

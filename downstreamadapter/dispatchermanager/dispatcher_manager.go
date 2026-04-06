@@ -67,12 +67,13 @@ type DispatcherManager struct {
 	// mu is only used for table trigger dispatcher
 	mu sync.Mutex
 
-	// meta is used to store the meta info of the event dispatcher manager
-	// it's used to avoid data race when we update the maintainerID and maintainerEpoch
+	// meta is used to store the meta info of the event dispatcher manager.
+	// It keeps the active maintainer identity separate from the changefeed config epoch.
 	meta struct {
 		sync.Mutex
-		maintainerEpoch uint64
-		maintainerID    node.ID
+		changefeedEpoch       uint64
+		activeMaintainerEpoch uint64
+		maintainerID          node.ID
 	}
 
 	pdClock pdutil.Clock
@@ -131,10 +132,11 @@ type DispatcherManager struct {
 	latestWatermark     Watermark
 	latestRedoWatermark Watermark
 
-	closing atomic.Bool
-	closed  atomic.Bool
-	cancel  context.CancelFunc
-	wg      sync.WaitGroup
+	closing                 atomic.Bool
+	closed                  atomic.Bool
+	removeChangefeedOnClose atomic.Bool
+	cancel                  context.CancelFunc
+	wg                      sync.WaitGroup
 
 	// removeTaskHandles stores the task handles for async dispatcher removal
 	// map[common.DispatcherID]*threadpool.TaskHandle
@@ -216,8 +218,9 @@ func NewDispatcherManager(
 		metricRedoCreateDispatcherDuration:    metrics.CreateDispatcherDuration.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "redoDispatcher"),
 	}
 
-	// Set the epoch and maintainerID of the event dispatcher manager
-	manager.meta.maintainerEpoch = cfConfig.Epoch
+	// Record both the changefeed config epoch and the active maintainer epoch.
+	manager.meta.changefeedEpoch = cfConfig.Epoch
+	manager.meta.activeMaintainerEpoch = 0
 	manager.meta.maintainerID = maintainerID
 
 	// Set Sync Point Config
@@ -838,6 +841,12 @@ func (e *DispatcherManager) mergeEventDispatcher(dispatcherIDs []common.Dispatch
 // ==== remove and clean related functions ====
 
 func (e *DispatcherManager) TryClose(removeChangefeed bool) bool {
+	// Close requests can be retried with removed=true after an earlier removed=false
+	// attempt has already started. Keep the strongest cleanup intent latched so
+	// the eventual sink shutdown can still observe it.
+	if removeChangefeed {
+		e.removeChangefeedOnClose.Store(true)
+	}
 	if e.closed.Load() {
 		return true
 	}
@@ -846,11 +855,11 @@ func (e *DispatcherManager) TryClose(removeChangefeed bool) bool {
 	}
 
 	e.closing.Store(true)
-	go e.close(removeChangefeed)
+	go e.close()
 	return false
 }
 
-func (e *DispatcherManager) close(removeChangefeed bool) {
+func (e *DispatcherManager) close() {
 	log.Info("closing event dispatcher manager",
 		zap.Stringer("changefeedID", e.changefeedID))
 
@@ -902,11 +911,11 @@ func (e *DispatcherManager) close(removeChangefeed bool) {
 	log.Info("shared info closed", zap.Stringer("changefeedID", e.changefeedID))
 
 	if e.IsRedoEnabled() {
-		e.redoSink.Close(removeChangefeed)
+		e.redoSink.Close(e.removeChangefeedOnClose.Load())
 		// FIXME: cleanup redo log when remove the changefeed
-		e.closeRedoMeta(removeChangefeed)
+		e.closeRedoMeta(e.removeChangefeedOnClose.Load())
 	}
-	e.sink.Close(removeChangefeed)
+	e.sink.Close(e.removeChangefeedOnClose.Load())
 	log.Info("sink closed", zap.Stringer("changefeedID", e.changefeedID))
 
 	e.wg.Wait()

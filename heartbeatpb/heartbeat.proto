@@ -180,6 +180,7 @@ message MaintainerBootstrapRequest {
     bool is_new_changefeed = 5;                               // only true when the changefeed is new created or resumed with overwriteCheckpointTs
     DispatcherID table_trigger_redo_dispatcher_id = 6;  // only for redo
     uint32 keyspace_id = 7;
+    uint64 maintainer_epoch = 8;
 }
 
 message MaintainerBootstrapResponse {
@@ -199,6 +200,7 @@ message MaintainerBootstrapResponse {
     // It will be used when redo enable.
     uint64 redo_checkpoint_ts = 5;
     repeated ScheduleDispatcherRequest operators = 6;
+    uint64 maintainer_epoch = 7;
 }
 
 message MaintainerPostBootstrapRequest {
@@ -206,12 +208,14 @@ message MaintainerPostBootstrapRequest {
     DispatcherID table_trigger_event_dispatcher_id = 2;
     repeated SchemaInfo schemas = 3;
     repeated SchemaInfo redo_schemas = 4;
+    uint64 maintainer_epoch = 5;
 }
 
 message MaintainerPostBootstrapResponse {
     ChangefeedID changefeedID = 1;
     DispatcherID table_trigger_event_dispatcher_id = 2;
     RunningError err = 3;
+    uint64 maintainer_epoch = 4;
 }
 
 message SchemaInfo {
@@ -246,11 +250,13 @@ message MaintainerCloseRequest {
     ChangefeedID changefeedID = 1;
     // true when remove changefeed, false when pause the changefeed.
     bool removed = 2;
+    uint64 maintainer_epoch = 3;
 }
 
 message MaintainerCloseResponse {
     ChangefeedID changefeedID = 1;
     bool success = 2;
+    uint64 maintainer_epoch = 3;
 }
 
 enum InfluenceType {
