@@ -161,6 +161,8 @@ func New(conf *config.ServerConfig, pdEndpoints []string) (tiserver.Server, erro
 		pdEndpoints: pdEndpoints,
 		tcpServer:   tcpServer,
 		security:    conf.Security,
+		// Initialize liveness explicitly to make the default node state obvious.
+		liveness:    api.LivenessCaptureAlive,
 		preServices: make([]common.Closeable, 0),
 	}
 	return s, nil
@@ -219,7 +221,7 @@ func (c *server) initialize(ctx context.Context) error {
 		subscriptionClient,
 		schemaStore,
 		eventStore,
-		maintainer.NewMaintainerManager(c.info, conf.Debug.Scheduler),
+		maintainer.NewMaintainerManager(c.info, conf.Debug.Scheduler, &c.liveness),
 		eventService,
 	}
 	// register it into global var
