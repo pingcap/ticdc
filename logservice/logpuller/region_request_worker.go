@@ -431,6 +431,11 @@ func (s *regionRequestWorker) processRegionSendTask(
 			// sentRequests visible in the same order and avoids leaving stale
 			// requests in cleanup.
 			s.requestCache.markSent(regionReq)
+			if s.client != nil && s.client.regionRuntimeRegistry != nil && region.runtimeKey.isValid() {
+				s.client.regionRuntimeRegistry.updateWorker(region.runtimeKey, s.workerID)
+				s.client.regionRuntimeRegistry.setRequestSendTime(region.runtimeKey, time.Now())
+				s.client.regionRuntimeRegistry.transition(region.runtimeKey, regionPhaseWaitInitialized, time.Now())
+			}
 			if err := doSend(s.createRegionRequest(region)); err != nil {
 				state.markStopped(err)
 				return err
@@ -511,7 +516,11 @@ func (s *regionRequestWorker) clearRegionStates() map[SubscriptionID]regionFeedS
 // add adds a region request to the worker's cache
 // It blocks if the cache is full until there's space or ctx is cancelled
 func (s *regionRequestWorker) add(ctx context.Context, region regionInfo, force bool) (bool, error) {
-	return s.requestCache.add(ctx, region, force)
+	ok, err := s.requestCache.add(ctx, region, force)
+	if ok && err == nil && s.client != nil && s.client.regionRuntimeRegistry != nil && region.runtimeKey.isValid() {
+		s.client.regionRuntimeRegistry.setRequestEnqueueTime(region.runtimeKey, time.Now())
+	}
+	return ok, err
 }
 
 func (s *regionRequestWorker) clearPendingRegions() []regionInfo {

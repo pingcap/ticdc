@@ -252,6 +252,9 @@ func (h *regionEventHandler) handleRegionError(state *regionFeedState) {
 
 func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *cdcpb.Event_Entries_) {
 	regionID, _, _ := state.getRegionMeta()
+	if state.region.runtimeKey.isValid() && state.worker != nil && state.worker.client != nil && state.worker.client.regionRuntimeRegistry != nil {
+		state.worker.client.regionRuntimeRegistry.updateLastEvent(state.region.runtimeKey, time.Now())
+	}
 	assembleRowEvent := func(regionID uint64, entry *cdcpb.Event_Row) common.RawKVEntry {
 		var opType common.OpType
 		switch entry.GetOpType() {
@@ -277,6 +280,13 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 		switch entry.Type {
 		case cdcpb.Event_INITIALIZED:
 			state.setInitialized()
+			if state.region.runtimeKey.isValid() && state.worker != nil && state.worker.client != nil && state.worker.client.regionRuntimeRegistry != nil {
+				now := time.Now()
+				registry := state.worker.client.regionRuntimeRegistry
+				registry.setInitializedTime(state.region.runtimeKey, now)
+				registry.setReplicatingTime(state.region.runtimeKey, now)
+				registry.transition(state.region.runtimeKey, regionPhaseReplicating, now)
+			}
 			log.Debug("region is initialized",
 				zap.Int64("tableID", span.span.TableID),
 				zap.Uint64("regionID", regionID),
@@ -364,6 +374,9 @@ func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs u
 	}
 
 	state.updateResolvedTs(resolvedTs)
+	if state.region.runtimeKey.isValid() && state.worker != nil && state.worker.client != nil && state.worker.client.regionRuntimeRegistry != nil {
+		state.worker.client.regionRuntimeRegistry.updateResolvedTs(state.region.runtimeKey, resolvedTs, time.Now())
+	}
 
 	ts := uint64(0)
 	shouldAdvance := false

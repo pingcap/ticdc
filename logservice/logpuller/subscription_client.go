@@ -226,6 +226,43 @@ type subscriptionClient struct {
 	errCache *errCache
 }
 
+func (s *subscriptionClient) ensureRegionRuntime(region *regionInfo, now time.Time) {
+	if s.regionRuntimeRegistry == nil {
+		return
+	}
+	if region == nil || region.subscribedSpan == nil {
+		return
+	}
+	if region.verID.GetID() == 0 {
+		return
+	}
+	if !region.runtimeKey.isValid() {
+		region.runtimeKey = s.regionRuntimeRegistry.allocKey(region.subscribedSpan.subID, region.verID.GetID())
+		s.regionRuntimeRegistry.updateRegionInfo(region.runtimeKey, *region)
+		s.regionRuntimeRegistry.transition(region.runtimeKey, regionPhaseDiscovered, now)
+	}
+}
+
+func (s *subscriptionClient) updateRegionRuntimeInfo(region regionInfo) {
+	if s.regionRuntimeRegistry == nil {
+		return
+	}
+	if !region.runtimeKey.isValid() {
+		return
+	}
+	s.regionRuntimeRegistry.updateRegionInfo(region.runtimeKey, region)
+}
+
+func (s *subscriptionClient) transitionRegionRuntime(region regionInfo, phase regionPhase, now time.Time) {
+	if s.regionRuntimeRegistry == nil {
+		return
+	}
+	if !region.runtimeKey.isValid() {
+		return
+	}
+	s.regionRuntimeRegistry.transition(region.runtimeKey, phase, now)
+}
+
 // NewSubscriptionClient creates a client.
 func NewSubscriptionClient(
 	config *SubscriptionClientConfig,
@@ -508,6 +545,10 @@ func (s *subscriptionClient) onTableDrained(rt *subscribedSpan) {
 	log.Info("subscription client stop span is finished",
 		zap.Uint64("subscriptionID", uint64(rt.subID)))
 
+	if s.regionRuntimeRegistry != nil {
+		s.regionRuntimeRegistry.removeBySubscription(rt.subID)
+	}
+
 	err := s.ds.RemovePath(rt.subID)
 	if err != nil {
 		log.Warn("subscription client remove path failed",
@@ -521,6 +562,11 @@ func (s *subscriptionClient) onTableDrained(rt *subscribedSpan) {
 
 // Note: don't block the caller, otherwise there may be deadlock
 func (s *subscriptionClient) onRegionFail(errInfo regionErrorInfo) {
+	if s.regionRuntimeRegistry != nil && errInfo.runtimeKey.isValid() {
+		s.regionRuntimeRegistry.recordError(errInfo.runtimeKey, errInfo.err, time.Now())
+		s.regionRuntimeRegistry.incRetry(errInfo.runtimeKey)
+		s.regionRuntimeRegistry.transition(errInfo.runtimeKey, regionPhaseRetryPending, time.Now())
+	}
 	// unlock the range early to prevent blocking the range.
 	if errInfo.subscribedSpan.rangeLock.UnlockRange(
 		errInfo.span.StartKey, errInfo.span.EndKey,
@@ -625,6 +671,11 @@ func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 		if !ok {
 			continue
 		}
+		s.updateRegionRuntimeInfo(region)
+		if s.regionRuntimeRegistry != nil && region.runtimeKey.isValid() {
+			s.regionRuntimeRegistry.setRPCReadyTime(region.runtimeKey, time.Now())
+		}
+		s.transitionRegionRuntime(region, regionPhaseRPCReady, time.Now())
 
 		store := getStore(region.rpcCtx.Addr)
 		worker := store.getRequestWorker()
@@ -800,20 +851,35 @@ func (s *subscriptionClient) divideSpanAndScheduleRegionRequests(
 // scheduleRegionRequest locks the region's range and send the region to regionTaskQueue,
 // which will be handled by handleRegions.
 func (s *subscriptionClient) scheduleRegionRequest(ctx context.Context, region regionInfo, priority TaskType) {
+	s.ensureRegionRuntime(&region, time.Now())
 	lockRangeResult := region.subscribedSpan.rangeLock.LockRange(
 		ctx, region.span.StartKey, region.span.EndKey, region.verID.GetID(), region.verID.GetVer())
 
 	if lockRangeResult.Status == regionlock.LockRangeStatusWait {
+		s.transitionRegionRuntime(region, regionPhaseRangeLockWait, time.Now())
 		lockRangeResult = lockRangeResult.WaitFn()
 	}
 
 	switch lockRangeResult.Status {
 	case regionlock.LockRangeStatusSuccess:
 		region.lockedRangeState = lockRangeResult.LockedRangeState
+		if s.regionRuntimeRegistry != nil && region.runtimeKey.isValid() {
+			s.regionRuntimeRegistry.setRangeLockAcquiredTime(region.runtimeKey, lockRangeResult.LockedRangeState.Created)
+		}
+		s.transitionRegionRuntime(region, regionPhaseQueued, time.Now())
 		s.regionTaskQueue.Push(NewRegionPriorityTask(priority, region, s.pdClock.CurrentTS()))
 	case regionlock.LockRangeStatusStale:
+		s.transitionRegionRuntime(region, regionPhaseRemoved, time.Now())
+		if s.regionRuntimeRegistry != nil && region.runtimeKey.isValid() {
+			s.regionRuntimeRegistry.remove(region.runtimeKey)
+		}
 		for _, r := range lockRangeResult.RetryRanges {
 			s.scheduleRangeRequest(ctx, r, region.subscribedSpan, region.filterLoop, priority)
+		}
+	case regionlock.LockRangeStatusCancel:
+		s.transitionRegionRuntime(region, regionPhaseRemoved, time.Now())
+		if s.regionRuntimeRegistry != nil && region.runtimeKey.isValid() {
+			s.regionRuntimeRegistry.remove(region.runtimeKey)
 		}
 	default:
 		return

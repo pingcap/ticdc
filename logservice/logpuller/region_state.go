@@ -28,6 +28,10 @@ const (
 )
 
 type regionInfo struct {
+	// runtimeKey links this region info to a regionRuntimeRegistry entry.
+	// It is assigned by subscriptionClient when scheduling the region.
+	runtimeKey regionRuntimeKey
+
 	verID tikv.RegionVerID
 	// The span of the region.
 	// Note(dongmen): The span doesn't always represent the whole span of a region.

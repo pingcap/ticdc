@@ -47,6 +47,10 @@ type regionRuntimeKey struct {
 	generation uint64
 }
 
+func (k regionRuntimeKey) isValid() bool {
+	return k.subID != InvalidSubscriptionID && k.regionID != 0 && k.generation != 0
+}
+
 type regionRuntimeState struct {
 	key regionRuntimeKey
 
