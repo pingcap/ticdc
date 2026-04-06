@@ -362,7 +362,7 @@ func (m *DispatcherOrchestrator) handleCloseRequest(
 
 	log.Info("try close dispatcher manager",
 		zap.String("changefeed", cfId.String()), zap.Bool("success", response.Success))
-	return m.sendResponse(from, messaging.MaintainerTopic, response)
+	return m.sendResponse(from, messaging.MaintainerManagerTopic, response)
 }
 
 func createBootstrapResponse(
