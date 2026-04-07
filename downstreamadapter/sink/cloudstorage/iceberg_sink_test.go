@@ -22,8 +22,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
+	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser/ast"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
+	"github.com/pingcap/tidb/pkg/types"
+	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
 )
 
@@ -47,17 +53,35 @@ func TestStorageSinkIcebergAppendBasic(t *testing.T) {
 		_ = cloudStorageSink.Run(ctx)
 	}()
 
-	helper := commonEvent.NewEventTestHelper(t)
-	defer helper.Close()
-	helper.Tk().MustExec("use test")
-	job := helper.DDL2Job("create table t_iceberg (id int primary key, v varchar(32))")
-	require.NotNil(t, job)
-	helper.ApplyJob(job)
+	tableInfo := common.WrapTableInfo("test", &timodel.TableInfo{
+		ID:         100,
+		Name:       ast.NewCIStr("t_iceberg"),
+		PKIsHandle: true,
+		UpdateTS:   1,
+		Columns: []*timodel.ColumnInfo{
+			{
+				ID:        1,
+				Name:      ast.NewCIStr("id"),
+				FieldType: *types.NewFieldType(mysql.TypeLong),
+			},
+			{
+				ID:        2,
+				Name:      ast.NewCIStr("v"),
+				FieldType: *types.NewFieldType(mysql.TypeVarchar),
+			},
+		},
+	})
+	rows := chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 2)
+	rows.AppendInt64(0, 1)
+	rows.AppendString(1, "a")
+	rows.AppendInt64(0, 2)
+	rows.AppendString(1, "b")
 
-	dmlEvent := helper.DML2Event("test", "t_iceberg",
-		"insert into t_iceberg values (1, 'a')",
-		"insert into t_iceberg values (2, 'b')")
-	dmlEvent.TableInfoVersion = job.BinlogInfo.FinishedTS
+	dmlEvent := commonEvent.NewDMLEvent(common.NewDispatcherID(), tableInfo.TableName.TableID, 1, 2, tableInfo)
+	dmlEvent.SetRows(rows)
+	dmlEvent.RowTypes = []common.RowType{common.RowTypeInsert, common.RowTypeInsert}
+	dmlEvent.Length = 2
+	dmlEvent.TableInfoVersion = 1
 	cloudStorageSink.AddDMLEvent(dmlEvent)
 
 	metadataGlob := filepath.Join(parentDir, "ns", "test", "t_iceberg", "metadata", "v*.metadata.json")
