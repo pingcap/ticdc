@@ -16,9 +16,13 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/http"
+	_ "net/http/pprof" // register pprof handlers on DefaultServeMux
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
+	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/config"
@@ -29,8 +33,9 @@ import (
 )
 
 var (
-	cfgPath string
-	dryRun  bool
+	cfgPath    string
+	dryRun     bool
+	statusAddr string
 )
 
 // Exit codes for multi-cluster-consistency-checker.
@@ -71,8 +76,9 @@ func exitCodeFromError(err error, fallback int) int {
 }
 
 const (
-	FlagConfig = "config"
-	FlagDryRun = "dry-run"
+	FlagConfig     = "config"
+	FlagDryRun     = "dry-run"
+	FlagStatusAddr = "status-addr"
 )
 
 func main() {
@@ -86,6 +92,7 @@ func main() {
 	rootCmd.Flags().StringVarP(&cfgPath, FlagConfig, "c", "", "configuration file path (required)")
 	rootCmd.MarkFlagRequired(FlagConfig)
 	rootCmd.Flags().BoolVar(&dryRun, FlagDryRun, false, "validate config and connectivity without running the checker")
+	rootCmd.Flags().StringVar(&statusAddr, FlagStatusAddr, "", "HTTP status listen address; when set, serves /debug/pprof/ like TiCDC")
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -119,6 +126,20 @@ func run(cmd *cobra.Command, args []string) {
 		os.Exit(ExitCodeUnrecoverable)
 	}
 	log.Info("Logger initialized", zap.String("level", logLevel))
+
+	addr := strings.TrimSpace(statusAddr)
+	if addr != "" {
+		go func() {
+			server := &http.Server{
+				Addr:              addr,
+				ReadHeaderTimeout: 5 * time.Second,
+			}
+			log.Info("Starting status HTTP server", zap.String("addr", server.Addr))
+			if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Error("status http server failed to start", zap.Error(err))
+			}
+		}()
+	}
 
 	// Create a context that can be cancelled by signals
 	ctx, cancel := context.WithCancel(context.Background())

@@ -176,7 +176,7 @@ func TestTimeWindowAdvancer_AdvanceMultipleRounds(t *testing.T) {
 	prevRightBoundary := uint64(0) // max across all clusters
 
 	for round := range 4 {
-		result, err := advancer.AdvanceTimeWindow(ctx)
+		result, _, err := advancer.AdvanceTimeWindow(ctx)
 		require.NoError(t, err, "round %d", round)
 		require.Len(t, result, 2, "round %d: should have data for both clusters", round)
 

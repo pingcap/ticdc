@@ -250,8 +250,13 @@ func (cw *CheckpointWatcher) watchOnce() error {
 		zap.Uint64("checkpoint", status.CheckpointTs),
 		zap.Int64("startRev", modRev+1))
 
+	// Per-cycle context so WatchWithChan exits when watchOnce returns (retry, error, or
+	// shutdown). Using cw.ctx alone left the old etcd watch running with no reader.
+	watchCtx, watchCancel := context.WithCancel(cw.ctx)
+	defer watchCancel()
+
 	watchCh := cw.etcdClient.GetEtcdClient().Watch(
-		cw.ctx,
+		watchCtx,
 		statusKey,
 		"checkpoint-watcher",
 		clientv3.WithRev(modRev+1),
@@ -259,7 +264,7 @@ func (cw *CheckpointWatcher) watchOnce() error {
 
 	for {
 		select {
-		case <-cw.ctx.Done():
+		case <-watchCtx.Done():
 			return nil
 		case watchResp, ok := <-watchCh:
 			if !ok {

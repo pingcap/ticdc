@@ -514,7 +514,7 @@ func TestDataChecker_FourRoundsCheck(t *testing.T) {
 
 		rounds := [4]map[string]types.TimeWindowData{base[0], base[1], round2, round3}
 		for i, roundData := range rounds {
-			report, err := checker.CheckInNextTimeWindow(roundData)
+			report, _, err := checker.CheckInNextTimeWindow(roundData)
 			require.NoError(t, err, "round %d", i)
 			require.Equal(t, uint64(i), report.Round)
 			// Every round now produces cluster reports (LWW always runs).
@@ -548,7 +548,7 @@ func TestDataChecker_FourRoundsCheck(t *testing.T) {
 		rounds := [4]map[string]types.TimeWindowData{base[0], base[1], round2, round3}
 		var lastReport *recorder.Report
 		for i, roundData := range rounds {
-			report, err := checker.CheckInNextTimeWindow(roundData)
+			report, _, err := checker.CheckInNextTimeWindow(roundData)
 			require.NoError(t, err, "round %d", i)
 			lastReport = report
 		}
@@ -593,7 +593,7 @@ func TestDataChecker_FourRoundsCheck(t *testing.T) {
 		rounds := [4]map[string]types.TimeWindowData{base[0], base[1], round2, round3}
 		var lastReport *recorder.Report
 		for i, roundData := range rounds {
-			report, err := checker.CheckInNextTimeWindow(roundData)
+			report, _, err := checker.CheckInNextTimeWindow(roundData)
 			require.NoError(t, err, "round %d", i)
 			lastReport = report
 		}
@@ -627,7 +627,7 @@ func TestDataChecker_FourRoundsCheck(t *testing.T) {
 		rounds := [4]map[string]types.TimeWindowData{base[0], base[1], round2, round3}
 		var lastReport *recorder.Report
 		for i, roundData := range rounds {
-			report, err := checker.CheckInNextTimeWindow(roundData)
+			report, _, err := checker.CheckInNextTimeWindow(roundData)
 			require.NoError(t, err, "round %d", i)
 			lastReport = report
 		}
@@ -674,7 +674,7 @@ func TestDataChecker_FourRoundsCheck(t *testing.T) {
 		rounds := [4]map[string]types.TimeWindowData{base[0], base[1], round2, round3}
 		var lastReport *recorder.Report
 		for i, roundData := range rounds {
-			report, err := checker.CheckInNextTimeWindow(roundData)
+			report, _, err := checker.CheckInNextTimeWindow(roundData)
 			require.NoError(t, err, "round %d", i)
 			lastReport = report
 		}
@@ -724,7 +724,7 @@ func TestDataChecker_FourRoundsCheck(t *testing.T) {
 		rounds := [4]map[string]types.TimeWindowData{base[0], base[1], round2, round3}
 		var lastReport *recorder.Report
 		for i, roundData := range rounds {
-			report, err := checker.CheckInNextTimeWindow(roundData)
+			report, _, err := checker.CheckInNextTimeWindow(roundData)
 			require.NoError(t, err, "round %d", i)
 			lastReport = report
 		}
@@ -774,11 +774,11 @@ func TestDataChecker_FourRoundsCheck(t *testing.T) {
 			"c2": makeTWData(100, 200, nil, nil),
 		}
 
-		report0, err := checker.CheckInNextTimeWindow(round0)
+		report0, _, err := checker.CheckInNextTimeWindow(round0)
 		require.NoError(t, err)
 		require.False(t, report0.NeedFlush(), "round 0 should not need flush")
 
-		report1, err := checker.CheckInNextTimeWindow(round1)
+		report1, _, err := checker.CheckInNextTimeWindow(round1)
 		require.NoError(t, err)
 
 		// LWW violation should be detected at round 1
@@ -829,19 +829,19 @@ func TestDataChecker_FourRoundsCheck(t *testing.T) {
 				makeContent(makeCanalJSON(3, 360, 350, "c"))),
 		}
 
-		report0, err := checker.CheckInNextTimeWindow(round0)
+		report0, _, err := checker.CheckInNextTimeWindow(round0)
 		require.NoError(t, err)
 		require.False(t, report0.NeedFlush())
 
-		report1, err := checker.CheckInNextTimeWindow(round1)
+		report1, _, err := checker.CheckInNextTimeWindow(round1)
 		require.NoError(t, err)
 		require.False(t, report1.NeedFlush(), "round 1 should not detect data loss yet")
 
-		report2, err := checker.CheckInNextTimeWindow(round2)
+		report2, _, err := checker.CheckInNextTimeWindow(round2)
 		require.NoError(t, err)
 		require.False(t, report2.NeedFlush(), "round 2 should not detect data loss yet")
 
-		report3, err := checker.CheckInNextTimeWindow(round3)
+		report3, _, err := checker.CheckInNextTimeWindow(round3)
 		require.NoError(t, err)
 		require.True(t, report3.NeedFlush(), "round 3 should detect data loss")
 		c1Report := report3.ClusterReports["c1"]
@@ -898,20 +898,20 @@ func TestDataChecker_FourRoundsCheck(t *testing.T) {
 				makeContent(makeCanalJSON(3, 360, 350, "c"))),
 		}
 
-		report0, err := checker.CheckInNextTimeWindow(round0)
+		report0, _, err := checker.CheckInNextTimeWindow(round0)
 		require.NoError(t, err)
 		require.False(t, report0.NeedFlush(), "round 0 should not need flush")
 
-		report1, err := checker.CheckInNextTimeWindow(round1)
+		report1, _, err := checker.CheckInNextTimeWindow(round1)
 		require.NoError(t, err)
 		require.False(t, report1.NeedFlush(), "round 1 should not need flush")
 
-		report2, err := checker.CheckInNextTimeWindow(round2)
+		report2, _, err := checker.CheckInNextTimeWindow(round2)
 		require.NoError(t, err)
 		// Round 2: redundant detection is NOT enabled; the orphan pk=99 should NOT be flagged.
 		require.False(t, report2.NeedFlush(), "round 2 should not flag data redundant yet")
 
-		report3, err := checker.CheckInNextTimeWindow(round3)
+		report3, _, err := checker.CheckInNextTimeWindow(round3)
 		require.NoError(t, err)
 		// Round 3: redundant detection is enabled; the orphan pk=99 in [1] (round 2)
 		// is now caught.
@@ -940,7 +940,7 @@ func TestDataChecker_CheckInNextTimeWindowInvalidCheckpointTarget(t *testing.T) 
 			"c1": makeTWData(0, 100, map[string]uint64{"c3": 80}, nil),
 			"c2": makeTWData(0, 100, nil, nil),
 		}
-		_, err := checker.CheckInNextTimeWindow(round0)
+		_, _, err := checker.CheckInNextTimeWindow(round0)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "cluster c1 has checkpoint ts target c3 not found")
 	})
@@ -954,8 +954,36 @@ func TestDataChecker_CheckInNextTimeWindowInvalidCheckpointTarget(t *testing.T) 
 			"c1": makeTWData(0, 100, map[string]uint64{"c1": 80}, nil),
 			"c2": makeTWData(0, 100, nil, nil),
 		}
-		_, err := checker.CheckInNextTimeWindow(round0)
+		_, _, err := checker.CheckInNextTimeWindow(round0)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "cluster c1 has invalid checkpoint ts target to itself")
 	})
+}
+
+func TestDataChecker_FindClusterReplicatedData_OverDataNotCountedAsLWWSkip(t *testing.T) {
+	t.Parallel()
+
+	const schemaKey = "test.t1"
+	const clusterID = "c2"
+	pk := types.PkType("pk-1")
+
+	c2Checker := newClusterDataChecker(clusterID, false)
+	c2Checker.overDataCaches[schemaKey] = []*decoder.Record{
+		{
+			Pk: pk,
+			CdcVersion: types.CdcVersion{
+				CommitTs: 320,
+				OriginTs: 250,
+			},
+		},
+	}
+	dataChecker := &DataChecker{
+		clusterDataCheckers: map[string]*clusterDataChecker{
+			clusterID: c2Checker,
+		},
+	}
+
+	record, skipped := dataChecker.FindClusterReplicatedData(clusterID, schemaKey, pk, 250, false)
+	require.Nil(t, record)
+	require.False(t, skipped)
 }

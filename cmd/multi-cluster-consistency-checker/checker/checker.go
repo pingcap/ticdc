@@ -16,6 +16,7 @@ package checker
 import (
 	"context"
 	"sort"
+	"time"
 
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
@@ -27,6 +28,12 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"go.uber.org/zap"
 )
+
+// CheckPhaseDurations records wall-clock time for decode (S3 bytes → records) vs verify (consistency checks).
+type CheckPhaseDurations struct {
+	Decode time.Duration
+	Verify time.Duration
+}
 
 type versionCacheEntry struct {
 	previous   int
@@ -648,11 +655,16 @@ func (c *DataChecker) FindSourceLocalData(localClusterID string, schemaKey strin
 	return false
 }
 
-func (c *DataChecker) CheckInNextTimeWindow(newTimeWindowData map[string]types.TimeWindowData) (*recorder.Report, error) {
+func (c *DataChecker) CheckInNextTimeWindow(newTimeWindowData map[string]types.TimeWindowData) (*recorder.Report, CheckPhaseDurations, error) {
+	var phaseDurations CheckPhaseDurations
+
+	decodeStart := time.Now()
 	if err := c.decodeNewTimeWindowData(newTimeWindowData); err != nil {
 		log.Error("failed to decode new time window data", zap.Error(err))
-		return nil, errors.Annotate(err, "failed to decode new time window data")
+		return nil, phaseDurations, errors.Annotate(err, "failed to decode new time window data")
 	}
+	phaseDurations.Decode = time.Since(decodeStart)
+
 	report := recorder.NewReport(c.round)
 
 	// Round 0:  seed the LWW cache (round 0 data is empty by convention).
@@ -662,6 +674,7 @@ func (c *DataChecker) CheckInNextTimeWindow(newTimeWindowData map[string]types.T
 	enableDataLoss := c.checkableRound >= 3 || (len(c.clusterDataCheckers) > 2 && c.checkableRound >= 2)
 	enableDataRedundant := c.checkableRound >= 3
 
+	verifyStart := time.Now()
 	for clusterID, clusterDataChecker := range c.clusterDataCheckers {
 		clusterDataChecker.Check(c, enableDataLoss, enableDataRedundant)
 		log.Info("checked records count",
@@ -679,7 +692,8 @@ func (c *DataChecker) CheckInNextTimeWindow(newTimeWindowData map[string]types.T
 		c.checkableRound++
 	}
 	c.round++
-	return report, nil
+	phaseDurations.Verify = time.Since(verifyStart)
+	return report, phaseDurations, nil
 }
 
 func (c *DataChecker) decodeNewTimeWindowData(newTimeWindowData map[string]types.TimeWindowData) error {

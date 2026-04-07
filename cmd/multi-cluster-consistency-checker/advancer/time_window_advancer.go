@@ -17,6 +17,7 @@ import (
 	"context"
 	"maps"
 	"sync"
+	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/recorder"
@@ -29,6 +30,13 @@ import (
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
+
+// AdvancePhaseDurations records wall-clock time for the two phases of AdvanceTimeWindow:
+// checkpoint / time-window advancement (etcd), then S3 fetch (ConsumeNewFiles).
+type AdvancePhaseDurations struct {
+	TimeWindowAdvance time.Duration
+	DataDownload      time.Duration
+}
 
 type TimeWindowAdvancer struct {
 	// round is the current round of the time window
@@ -147,19 +155,20 @@ func (t *TimeWindowAdvancer) initializeFromCheckpoint(
 // For any cluster, the time window should be updated to the new time window.
 func (t *TimeWindowAdvancer) AdvanceTimeWindow(
 	pctx context.Context,
-) (map[string]types.TimeWindowData, error) {
+) (map[string]types.TimeWindowData, AdvancePhaseDurations, error) {
+	var phaseDurations AdvancePhaseDurations
 	log.Debug("advance time window", zap.Uint64("round", t.round))
 	// mapping from local cluster ID to replicated cluster ID to the min checkpoint timestamp
-	minCheckpointTsMap := make(map[string]map[string]uint64)
-	maxTimeWindowRightBoundary := uint64(0)
+	checkpointTsMapFloor := make(map[string]map[string]uint64)
+	maxLastTimeWindowRightBoundary := uint64(0)
 	for replicatedClusterID, triplet := range t.timeWindowTriplet {
 		for localClusterID, pdTimestampAfterTimeWindow := range triplet[2].PDTimestampAfterTimeWindow {
-			if _, ok := minCheckpointTsMap[localClusterID]; !ok {
-				minCheckpointTsMap[localClusterID] = make(map[string]uint64)
+			if _, ok := checkpointTsMapFloor[localClusterID]; !ok {
+				checkpointTsMapFloor[localClusterID] = make(map[string]uint64)
 			}
-			minCheckpointTsMap[localClusterID][replicatedClusterID] = max(minCheckpointTsMap[localClusterID][replicatedClusterID], pdTimestampAfterTimeWindow)
+			checkpointTsMapFloor[localClusterID][replicatedClusterID] = max(checkpointTsMapFloor[localClusterID][replicatedClusterID], pdTimestampAfterTimeWindow)
 		}
-		maxTimeWindowRightBoundary = max(maxTimeWindowRightBoundary, triplet[2].RightBoundary)
+		maxLastTimeWindowRightBoundary = max(maxLastTimeWindowRightBoundary, triplet[2].RightBoundary)
 	}
 
 	var lock sync.Mutex
@@ -168,17 +177,17 @@ func (t *TimeWindowAdvancer) AdvanceTimeWindow(
 	// for cluster ID, the max checkpoint timestamp is maximum of checkpoint from cluster to other clusters and checkpoint from other clusters to cluster
 	maxCheckpointTs := make(map[string]uint64)
 	// Advance the checkpoint ts for each cluster
+	timeWindowAdvanceStart := time.Now()
 	eg, ctx := errgroup.WithContext(pctx)
 	for localClusterID, replicatedCheckpointWatcherMap := range t.checkpointWatcher {
 		for replicatedClusterID, checkpointWatcher := range replicatedCheckpointWatcherMap {
-			minCheckpointTs := max(minCheckpointTsMap[localClusterID][replicatedClusterID], maxTimeWindowRightBoundary)
+			checkpointTsFloor := max(checkpointTsMapFloor[localClusterID][replicatedClusterID], maxLastTimeWindowRightBoundary)
 			eg.Go(func() error {
-				checkpointTs, err := checkpointWatcher.AdvanceCheckpointTs(ctx, minCheckpointTs)
+				checkpointTs, err := checkpointWatcher.AdvanceCheckpointTs(ctx, checkpointTsFloor)
 				if err != nil {
 					return errors.Trace(err)
 				}
-				// TODO: optimize this by getting pd ts in the end of all checkpoint ts advance
-				pdtsos, err := t.getPDTsFromOtherClusters(ctx, localClusterID)
+				pdtso, err := t.getPDTsFromCluster(ctx, replicatedClusterID)
 				if err != nil {
 					return errors.Trace(err)
 				}
@@ -189,9 +198,7 @@ func (t *TimeWindowAdvancer) AdvanceTimeWindow(
 				}
 				timeWindow.CheckpointTs[replicatedClusterID] = checkpointTs
 				newTimeWindow[localClusterID] = timeWindow
-				for otherClusterID, pdtso := range pdtsos {
-					maxPDTimestampAfterCheckpointTs[otherClusterID] = max(maxPDTimestampAfterCheckpointTs[otherClusterID], pdtso)
-				}
+				maxPDTimestampAfterCheckpointTs[replicatedClusterID] = max(maxPDTimestampAfterCheckpointTs[replicatedClusterID], pdtso)
 				maxCheckpointTs[localClusterID] = max(maxCheckpointTs[localClusterID], checkpointTs)
 				maxCheckpointTs[replicatedClusterID] = max(maxCheckpointTs[replicatedClusterID], checkpointTs)
 				lock.Unlock()
@@ -200,18 +207,20 @@ func (t *TimeWindowAdvancer) AdvanceTimeWindow(
 		}
 	}
 	if err := eg.Wait(); err != nil {
-		return nil, errors.Annotate(err, "advance checkpoint timestamp failed")
+		return nil, phaseDurations, errors.Annotate(err, "advance checkpoint timestamp failed")
 	}
+	phaseDurations.TimeWindowAdvance = time.Since(timeWindowAdvanceStart)
 
 	// Update the time window for each cluster
+	dataDownloadStart := time.Now()
 	newDataMap := make(map[string]map[cloudstorage.DmlPathKey]types.IncrementalData)
 	maxVersionMap := make(map[string]map[types.SchemaTableKey]types.VersionKey)
 	eg, ctx = errgroup.WithContext(pctx)
 	for clusterID, triplet := range t.timeWindowTriplet {
-		minTimeWindowRightBoundary := max(maxCheckpointTs[clusterID], maxPDTimestampAfterCheckpointTs[clusterID], triplet[2].NextMinLeftBoundary)
+		timeWindowRightBoundaryFloor := max(maxCheckpointTs[clusterID], maxPDTimestampAfterCheckpointTs[clusterID], triplet[2].NextMinLeftBoundary)
 		s3Watcher := t.s3Watcher[clusterID]
 		eg.Go(func() error {
-			s3CheckpointTs, err := s3Watcher.AdvanceS3CheckpointTs(ctx, minTimeWindowRightBoundary)
+			s3CheckpointTs, err := s3Watcher.AdvanceS3CheckpointTs(ctx, timeWindowRightBoundaryFloor)
 			if err != nil {
 				return errors.Trace(err)
 			}
@@ -242,11 +251,12 @@ func (t *TimeWindowAdvancer) AdvanceTimeWindow(
 		})
 	}
 	if err := eg.Wait(); err != nil {
-		return nil, errors.Annotate(err, "advance time window failed")
+		return nil, phaseDurations, errors.Annotate(err, "advance time window failed")
 	}
+	phaseDurations.DataDownload = time.Since(dataDownloadStart)
 	t.updateTimeWindow(newTimeWindow)
 	t.round++
-	return newTimeWindowData(newTimeWindow, newDataMap, maxVersionMap), nil
+	return newTimeWindowData(newTimeWindow, newDataMap, maxVersionMap), phaseDurations, nil
 }
 
 func (t *TimeWindowAdvancer) updateTimeWindow(newTimeWindow map[string]types.TimeWindow) {
