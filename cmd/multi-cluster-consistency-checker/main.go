@@ -135,8 +135,8 @@ func run(cmd *cobra.Command, args []string) {
 				ReadHeaderTimeout: 5 * time.Second,
 			}
 			log.Info("Starting status HTTP server", zap.String("addr", server.Addr))
-			if err := server.ListenAndServe(); err != nil {
-				log.Fatal("status http server", zap.Error(err))
+			if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Error("status http server failed to start", zap.Error(err))
 			}
 		}()
 	}
