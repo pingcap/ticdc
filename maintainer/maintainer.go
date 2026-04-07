@@ -201,7 +201,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		eventCh:           chann.NewAutoDrainChann[*Event](),
 		startCheckpointTs: checkpointTs,
 		controller: NewController(cfID, checkpointTs, taskScheduler,
-			info.Config, ddlSpan, redoDDLSpan, conf.AddTableBatchSize, time.Duration(conf.CheckBalanceInterval), refresher, keyspaceMeta, enableRedo),
+			info.Config, ddlSpan, redoDDLSpan, conf.AddTableBatchSize, time.Duration(conf.CheckBalanceInterval), refresher, keyspaceMeta, enableRedo, conf.BalanceMoveBatchSize),
 		mc:                    mc,
 		removed:               atomic.NewBool(false),
 		nodeManager:           nodeManager,
@@ -231,6 +231,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		redoSpanCountGauge:     metrics.SpanCountGauge.WithLabelValues(keyspaceName, name, "redo"),
 		redoTableCountGauge:    metrics.TableCountGauge.WithLabelValues(keyspaceName, name, "redo"),
 	}
+	m.controller.SetSelfNodeID(selfNode.ID)
 	m.nodeChanged.changed = false
 	m.runningErrors.m = make(map[node.ID]*heartbeatpb.RunningError)
 
@@ -380,10 +381,41 @@ func (m *Maintainer) GetMaintainerStatus() *heartbeatpb.MaintainerStatus {
 		BootstrapDone: m.initialized.Load(),
 		LastSyncedTs:  m.getWatermark().LastSyncedTs,
 	}
+	drainTarget, drainEpoch := m.controller.getDispatcherDrainTarget()
+	if !drainTarget.IsEmpty() && drainEpoch > 0 {
+		// Report drain progress against the controller snapshot that all local
+		// schedulers are using. Coordinator compares this status with its own
+		// drain epoch, so stale or cleared targets naturally stop contributing.
+		dispatcherCount := m.controller.spanController.GetTaskSizeByNodeID(drainTarget)
+		inflightDrainMoveCount := m.controller.operatorController.CountInflightDrainMovesFromNode(drainTarget)
+		if m.enableRedo {
+			dispatcherCount += m.controller.redoSpanController.GetTaskSizeByNodeID(drainTarget)
+			inflightDrainMoveCount += m.controller.redoOperatorController.CountInflightDrainMovesFromNode(drainTarget)
+		}
+		// DrainProgress is encoded as uint32 counters in heartbeat protobuf.
+		// Clamp the aggregated maintainer view before publishing it.
+		if dispatcherCount < 0 {
+			dispatcherCount = 0
+		}
+		if dispatcherCount > math.MaxUint32 {
+			dispatcherCount = math.MaxUint32
+		}
+		if inflightDrainMoveCount > math.MaxUint32 {
+			inflightDrainMoveCount = math.MaxUint32
+		}
+		status.DrainProgress = &heartbeatpb.DrainProgress{
+			TargetNodeId:                 drainTarget.String(),
+			TargetEpoch:                  drainEpoch,
+			TargetDispatcherCount:        uint32(dispatcherCount),
+			TargetInflightDrainMoveCount: uint32(inflightDrainMoveCount),
+		}
+	}
 	return status
 }
 
-// SetDispatcherDrainTarget applies the newest drain target to this maintainer.
+// SetDispatcherDrainTarget applies the newest drain target to this maintainer
+// and forces an earlier status report so coordinator observes the new epoch
+// without waiting for unrelated status changes.
 func (m *Maintainer) SetDispatcherDrainTarget(target node.ID, epoch uint64) {
 	m.controller.SetDispatcherDrainTarget(target, epoch)
 	m.statusChanged.Store(true)
@@ -1076,20 +1108,18 @@ func (m *Maintainer) createBootstrapMessageFactory() bootstrap.NewBootstrapReque
 
 		// only send dispatcher targetNodeID to dispatcher manager on the same node
 		if targetNodeID == m.selfNode.ID {
-			msg.TableTriggerEventDispatcherId = m.ddlSpan.ID.ToPB()
-			if m.enableRedo {
-				msg.TableTriggerRedoDispatcherId = m.redoDDLSpan.ID.ToPB()
-			}
-			msg.IsNewChangefeed = m.newChangefeed
 			log.Info("create table event trigger dispatcher bootstrap message",
 				zap.Stringer("changefeedID", m.changefeedID),
 				zap.String("nodeAddr", targetAddr),
 				zap.Any("nodeID", targetNodeID),
 				zap.String("dispatcherID", m.ddlSpan.ID.String()),
-				zap.Bool("enableRedo", m.enableRedo),
-				zap.Bool("newChangefeed", m.newChangefeed),
 				zap.Uint64("startTs", m.startCheckpointTs),
 			)
+			msg.TableTriggerEventDispatcherId = m.ddlSpan.ID.ToPB()
+			if m.enableRedo {
+				msg.TableTriggerRedoDispatcherId = m.redoDDLSpan.ID.ToPB()
+			}
+			msg.IsNewChangefeed = m.newChangefeed
 		}
 
 		log.Info("maintainer new bootstrap message to dispatcher orchestrator",
