@@ -1264,6 +1264,7 @@ type icebergField struct {
 	Name     string `json:"name"`
 	Required bool   `json:"required"`
 	Type     string `json:"type"`
+	Doc      string `json:"doc,omitempty"`
 }
 
 type partitionSpec struct {
@@ -1370,7 +1371,17 @@ func buildChangelogSchemas(tableInfo *common.TableInfo, emitMetadata bool) (stri
 		colID := int(colInfo.ID)
 		_, required := requiredColumnIDs[colInfo.ID]
 		mapped := mapTiDBFieldType(&colInfo.FieldType)
-		fields = append(fields, icebergField{ID: colID, Name: colInfo.Name.O, Required: required, Type: mapped.icebergType})
+		doc, err := encodeOriginalTableCol(colInfo)
+		if err != nil {
+			return "", nil, 0, err
+		}
+		fields = append(fields, icebergField{
+			ID:       colID,
+			Name:     colInfo.Name.O,
+			Required: required,
+			Type:     mapped.icebergType,
+			Doc:      doc,
+		})
 		avroField := map[string]any{
 			"name":     colInfo.Name.O,
 			"field-id": colID,

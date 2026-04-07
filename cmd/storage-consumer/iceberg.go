@@ -64,7 +64,7 @@ func buildIcebergDDLEvents(
 				fmt.Sprintf(
 					"CREATE TABLE IF NOT EXISTS %s (%s)",
 					commonType.QuoteSchema(curr.SchemaName, curr.TableName),
-					strings.Join(icebergColumnSQLDefs(curr.Columns), ","),
+					strings.Join(icebergCreateTableSQLDefs(curr.Columns), ","),
 				),
 				tableInfo,
 				model.ActionCreateTable,
@@ -243,6 +243,32 @@ func icebergColumnSQLDefs(columns []sinkiceberg.Column) []string {
 	return defs
 }
 
+func icebergCreateTableSQLDefs(columns []sinkiceberg.Column) []string {
+	defs := icebergColumnSQLDefs(columns)
+	if primaryKey := icebergPrimaryKeySQLDef(columns); primaryKey != "" {
+		defs = append(defs, primaryKey)
+	}
+	return defs
+}
+
+func icebergPrimaryKeySQLDef(columns []sinkiceberg.Column) string {
+	primaryKeyColumns := make([]string, 0, len(columns))
+	for _, col := range columns {
+		if !icebergColumnIsPrimaryKey(col) {
+			continue
+		}
+		primaryKeyColumns = append(primaryKeyColumns, commonType.QuoteName(col.Name))
+	}
+	if len(primaryKeyColumns) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("PRIMARY KEY (%s)", strings.Join(primaryKeyColumns, ","))
+}
+
+func icebergColumnIsPrimaryKey(col sinkiceberg.Column) bool {
+	return col.OriginalTableCol != nil && strings.EqualFold(strings.TrimSpace(col.OriginalTableCol.IsPK), "true")
+}
+
 func icebergColumnSQLDef(col sinkiceberg.Column) string {
 	return fmt.Sprintf("%s %s %s",
 		commonType.QuoteName(col.Name),
@@ -259,6 +285,10 @@ func icebergColumnNullability(required bool) string {
 }
 
 func icebergColumnSQLType(col sinkiceberg.Column) string {
+	if sqlType, ok := originalIcebergColumnSQLType(col); ok {
+		return sqlType
+	}
+
 	switch strings.TrimSpace(col.Type) {
 	case "int":
 		return "INT"
@@ -283,6 +313,10 @@ func icebergColumnSQLType(col sinkiceberg.Column) string {
 }
 
 func icebergColumnToTableCol(col sinkiceberg.Column) (cloudstorage.TableCol, error) {
+	if original := cloneOriginalIcebergTableCol(col); original != nil {
+		return *original, nil
+	}
+
 	result := cloudstorage.TableCol{
 		Name: col.Name,
 	}
@@ -316,6 +350,65 @@ func icebergColumnToTableCol(col sinkiceberg.Column) (cloudstorage.TableCol, err
 		result.Tp = "VARCHAR"
 	}
 	return result, nil
+}
+
+func originalIcebergColumnSQLType(col sinkiceberg.Column) (string, bool) {
+	if col.OriginalTableCol == nil {
+		return "", false
+	}
+
+	switch strings.ToUpper(strings.TrimSpace(col.OriginalTableCol.Tp)) {
+	case "CHAR", "VARCHAR", "VAR_STRING",
+		"BINARY", "VARBINARY",
+		"TINYTEXT", "TEXT", "MEDIUMTEXT", "LONGTEXT",
+		"TINYBLOB", "BLOB", "MEDIUMBLOB", "LONGBLOB",
+		"ENUM", "SET":
+		return formatTableColSQLType(*cloneOriginalIcebergTableCol(col)), true
+	default:
+		return "", false
+	}
+}
+
+func cloneOriginalIcebergTableCol(col sinkiceberg.Column) *cloudstorage.TableCol {
+	if col.OriginalTableCol == nil {
+		return nil
+	}
+
+	cloned := *col.OriginalTableCol
+	cloned.Name = col.Name
+	if col.Required {
+		cloned.Nullable = "false"
+	} else {
+		cloned.Nullable = ""
+	}
+	return &cloned
+}
+
+func formatTableColSQLType(col cloudstorage.TableCol) string {
+	tp := strings.ToUpper(strings.TrimSpace(col.Tp))
+	baseType := strings.TrimSuffix(tp, " UNSIGNED")
+
+	switch baseType {
+	case "CHAR", "VARCHAR", "VAR_STRING", "BINARY", "VARBINARY", "BIT":
+		if col.Precision != "" {
+			return fmt.Sprintf("%s(%s)", tp, col.Precision)
+		}
+	case "ENUM", "SET":
+		if len(col.Elems) > 0 {
+			return fmt.Sprintf("%s(%s)", tp, quoteSQLStringList(col.Elems))
+		}
+	}
+	return tp
+}
+
+func quoteSQLStringList(values []string) string {
+	quoted := make([]string, 0, len(values))
+	for _, value := range values {
+		escaped := strings.ReplaceAll(value, "\\", "\\\\")
+		escaped = strings.ReplaceAll(escaped, "'", "''")
+		quoted = append(quoted, fmt.Sprintf("'%s'", escaped))
+	}
+	return strings.Join(quoted, ",")
 }
 
 func parseIcebergDecimalType(raw string) (int, int, bool) {
@@ -514,7 +607,7 @@ func (c *consumer) handleIceberg(ctx context.Context, round uint64) error {
 				}
 			}
 
-			if err := c.flushDMLEvents(ctx, tableID); err != nil {
+			if err := c.flushIcebergDMLEvents(ctx, tableID); err != nil {
 				return err
 			}
 			state.lastMetadataVersion = metadataVersion

@@ -14,11 +14,50 @@
 package main
 
 import (
+	"context"
 	"testing"
+	"time"
 
+	"github.com/pingcap/ticdc/cmd/util"
+	downstreamsink "github.com/pingcap/ticdc/downstreamadapter/sink"
+	"github.com/pingcap/ticdc/pkg/common"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	sinkiceberg "github.com/pingcap/ticdc/pkg/sink/iceberg"
 	"github.com/stretchr/testify/require"
 )
+
+type blockingFlushSink struct {
+	added     chan uint64
+	firstDone chan struct{}
+}
+
+func (s *blockingFlushSink) SinkType() common.SinkType { return common.MysqlSinkType }
+func (s *blockingFlushSink) IsNormal() bool            { return true }
+func (s *blockingFlushSink) FlushDMLBeforeBlock(commonEvent.BlockEvent) error {
+	return nil
+}
+func (s *blockingFlushSink) WriteBlockEvent(commonEvent.BlockEvent) error { return nil }
+func (s *blockingFlushSink) AddCheckpointTs(uint64)                       {}
+func (s *blockingFlushSink) SetTableSchemaStore(*commonEvent.TableSchemaStore) {
+}
+func (s *blockingFlushSink) Close(bool)              {}
+func (s *blockingFlushSink) Run(context.Context) error { return nil }
+func (s *blockingFlushSink) BatchCount() int         { return 0 }
+func (s *blockingFlushSink) BatchBytes() int         { return 0 }
+
+func (s *blockingFlushSink) AddDMLEvent(event *commonEvent.DMLEvent) {
+	s.added <- event.CommitTs
+	if event.CommitTs == 1 {
+		go func() {
+			<-s.firstDone
+			event.PostFlush()
+		}()
+		return
+	}
+	event.PostFlush()
+}
+
+var _ downstreamsink.Sink = (*blockingFlushSink)(nil)
 
 func TestBuildIcebergDDLEventsForCreateTable(t *testing.T) {
 	version := &sinkiceberg.TableVersion{
@@ -94,4 +133,42 @@ func TestBuildIcebergDMLEventTreatsUpdateAsInsert(t *testing.T) {
 	require.Equal(t, event.TableInfo.GetTableName(), "t1")
 	require.True(t, row.PreRow.IsEmpty())
 	require.False(t, row.Row.IsEmpty())
+}
+
+func TestFlushIcebergDMLEventsSerializesByFlushCompletion(t *testing.T) {
+	tableID := int64(42)
+	group := util.NewEventsGroup(0, tableID)
+	group.Append(&commonEvent.DMLEvent{CommitTs: 1, PhysicalTableID: tableID}, false)
+	group.Append(&commonEvent.DMLEvent{CommitTs: 2, PhysicalTableID: tableID}, false)
+
+	sink := &blockingFlushSink{
+		added:     make(chan uint64, 2),
+		firstDone: make(chan struct{}),
+	}
+	c := &consumer{
+		sink: sink,
+		eventsGroup: map[int64]*util.EventsGroup{
+			tableID: group,
+		},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- c.flushIcebergDMLEvents(ctx, tableID)
+	}()
+
+	require.Equal(t, uint64(1), <-sink.added)
+	select {
+	case commitTs := <-sink.added:
+		t.Fatalf("second event %d was sent before first flush completed", commitTs)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(sink.firstDone)
+
+	require.Equal(t, uint64(2), <-sink.added)
+	require.NoError(t, <-errCh)
 }

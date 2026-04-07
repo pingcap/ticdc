@@ -20,6 +20,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pingcap/errors"
@@ -419,6 +420,60 @@ func (c *consumer) flushDMLEvents(ctx context.Context, tableID int64) error {
 				zap.Int("total", total), zap.Int64("flushed", flushed.Load()))
 		}
 	}
+}
+
+func (c *consumer) flushIcebergDMLEvents(ctx context.Context, tableID int64) error {
+	group := c.eventsGroup[tableID]
+	if group == nil {
+		return nil
+	}
+	events := group.GetAllEvents()
+	total := len(events)
+	if total == 0 {
+		return nil
+	}
+	var (
+		schema string
+		table  string
+	)
+	if events[0].TableInfo != nil {
+		schema = events[0].TableInfo.GetSchemaName()
+		table = events[0].TableInfo.GetTableName()
+	}
+
+	start := time.Now()
+	for i, e := range events {
+		done := make(chan struct{})
+		var once sync.Once
+		e.AddPostFlushFunc(func() {
+			once.Do(func() {
+				close(done)
+			})
+		})
+		c.sink.AddDMLEvent(e)
+
+		ticker := time.NewTicker(defaultLogInterval)
+		for {
+			select {
+			case <-ctx.Done():
+				ticker.Stop()
+				return context.Cause(ctx)
+			case <-done:
+				ticker.Stop()
+				goto NEXT
+			case <-ticker.C:
+				log.Warn("iceberg DML event cannot be flushed in time",
+					zap.Int("total", total), zap.Int("flushed", i),
+					zap.Uint64("commitTs", e.CommitTs), zap.String("schema", schema), zap.String("table", table))
+			}
+		}
+	NEXT:
+	}
+
+	log.Info("flush iceberg DML events done",
+		zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
+		zap.Int("total", total), zap.Duration("duration", time.Since(start)))
+	return nil
 }
 
 func (c *consumer) parseDMLFilePath(ctx context.Context, path string) error {

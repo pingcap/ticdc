@@ -34,15 +34,17 @@ import (
 	"github.com/apache/arrow-go/v18/parquet/pqarrow"
 	"github.com/linkedin/goavro/v2"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/tidb/br/pkg/storage"
 )
 
 // Column is a simplified Iceberg column definition exposed to readers.
 type Column struct {
-	ID       int
-	Name     string
-	Type     string
-	Required bool
+	ID               int
+	Name             string
+	Type             string
+	Required         bool
+	OriginalTableCol *cloudstorage.TableCol
 }
 
 // TableIdentifier describes an Iceberg table discovered under a Hadoop warehouse.
@@ -196,11 +198,16 @@ func LoadTableVersion(
 		if isIcebergMetadataColumn(field.Name) {
 			continue
 		}
+		originalTableCol, err := decodeOriginalTableCol(field.Doc)
+		if err != nil {
+			return nil, cerror.WrapError(cerror.ErrSinkURIInvalid, err)
+		}
 		version.Columns = append(version.Columns, Column{
-			ID:       field.ID,
-			Name:     field.Name,
-			Type:     field.Type,
-			Required: field.Required,
+			ID:               field.ID,
+			Name:             field.Name,
+			Type:             field.Type,
+			Required:         field.Required,
+			OriginalTableCol: originalTableCol,
 		})
 	}
 
