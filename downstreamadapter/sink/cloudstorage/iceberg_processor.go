@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -33,6 +34,7 @@ import (
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser/charset"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
@@ -630,7 +632,11 @@ func formatIcebergColumnValue(row *chunk.Row, idx int, ft *types.FieldType) (*st
 		}
 		value = setVal.Name
 	case mysql.TypeBlob, mysql.TypeTinyBlob, mysql.TypeMediumBlob, mysql.TypeLongBlob:
-		value = base64.StdEncoding.EncodeToString(d.GetBytes())
+		if strings.EqualFold(ft.GetCharset(), charset.CharsetBin) {
+			value = base64.StdEncoding.EncodeToString(d.GetBytes())
+		} else {
+			value = string(d.GetBytes())
+		}
 	case mysql.TypeVarchar, mysql.TypeVarString, mysql.TypeString:
 		if mysql.HasBinaryFlag(ft.GetFlag()) {
 			value = base64.StdEncoding.EncodeToString(d.GetBytes())

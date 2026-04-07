@@ -19,6 +19,7 @@ import (
 	"strings"
 
 	"github.com/apache/arrow-go/v18/arrow"
+	"github.com/pingcap/tidb/pkg/parser/charset"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
 )
@@ -74,6 +75,9 @@ func mapTiDBFieldType(ft *types.FieldType) mappedColumnType {
 	case mysql.TypeEnum, mysql.TypeSet:
 		return mappedColumnType{icebergType: "string", arrowType: arrow.BinaryTypes.String}
 	case mysql.TypeBlob, mysql.TypeTinyBlob, mysql.TypeMediumBlob, mysql.TypeLongBlob:
+		if !strings.EqualFold(ft.GetCharset(), charset.CharsetBin) {
+			return mappedColumnType{icebergType: "string", arrowType: arrow.BinaryTypes.String}
+		}
 		return mappedColumnType{icebergType: "binary", arrowType: arrow.BinaryTypes.Binary}
 	case mysql.TypeString, mysql.TypeVarchar, mysql.TypeVarString:
 		if mysql.HasBinaryFlag(ft.GetFlag()) {
