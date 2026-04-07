@@ -266,7 +266,7 @@ func (c *client) resolveGCP(metaEndpoint string) gcpClientConfig {
 
 func (c *client) getAWSDecryptor(ctx context.Context, cfg awsClientConfig) (awsDecryptor, error) {
 	if c.awsFactory == nil {
-		log.Error("aws kms decryptor factory is nil")
+		log.Warn("aws kms decryptor factory is nil")
 		return nil, cerrors.ErrEncryptionFailed.GenWithStackByArgs("aws kms decryptor factory is nil")
 	}
 
@@ -301,7 +301,7 @@ func (c *client) getAWSDecryptor(ctx context.Context, cfg awsClientConfig) (awsD
 
 func (c *client) getGCPDecryptor(ctx context.Context, cfg gcpClientConfig) (gcpDecryptor, error) {
 	if c.gcpFactory == nil {
-		log.Error("gcp kms decryptor factory is nil")
+		log.Warn("gcp kms decryptor factory is nil")
 		return nil, cerrors.ErrEncryptionFailed.GenWithStackByArgs("gcp kms decryptor factory is nil")
 	}
 
