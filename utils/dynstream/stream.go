@@ -295,6 +295,7 @@ Loop:
 					continue Loop
 				}
 				if path.removed.Load() {
+					cleanUpEventBuf()
 					continue Loop
 				}
 
@@ -308,6 +309,8 @@ Loop:
 				if path.blocking.Load() {
 					s.eventQueue.blockPath(path)
 				}
+
+				cleanUpEventBuf()
 			}
 		}
 	}
