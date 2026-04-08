@@ -402,7 +402,7 @@ func TestMaintainer_GetMaintainerStatusUsesCommittedCheckpoint(t *testing.T) {
 
 func TestMaintainerCalculateNewCheckpointTs(t *testing.T) {
 	t.Run("uses reported checkpoint", func(t *testing.T) {
-		m, selfNodeID := newMaintainerForCheckpointCalculationTest()
+		m, selfNodeID := newMaintainerForCheckpointCalculationTest(t)
 		m.checkpointTsByCapture.Set(selfNodeID, heartbeatpb.Watermark{
 			CheckpointTs: 100,
 			ResolvedTs:   100,
@@ -417,7 +417,7 @@ func TestMaintainerCalculateNewCheckpointTs(t *testing.T) {
 	})
 
 	t.Run("drops max checkpoint", func(t *testing.T) {
-		m, selfNodeID := newMaintainerForCheckpointCalculationTest()
+		m, selfNodeID := newMaintainerForCheckpointCalculationTest(t)
 		m.checkpointTsByCapture.Set(selfNodeID, heartbeatpb.Watermark{
 			CheckpointTs: math.MaxUint64,
 			ResolvedTs:   math.MaxUint64,
@@ -431,7 +431,7 @@ func TestMaintainerCalculateNewCheckpointTs(t *testing.T) {
 }
 
 func TestMaintainerCalCheckpointTsSkipsInvalidGlobalCheckpoint(t *testing.T) {
-	m, selfNodeID := newMaintainerForCheckpointCalculationTest()
+	m, selfNodeID := newMaintainerForCheckpointCalculationTest(t)
 	m.initialized.Store(true)
 	m.watermark.Watermark = &heartbeatpb.Watermark{
 		CheckpointTs: 1,
@@ -473,7 +473,7 @@ func TestMaintainerCalCheckpointTsSkipsInvalidGlobalCheckpoint(t *testing.T) {
 }
 
 func TestMaintainerHandleRedoMetaTsMessageUsesRedoCheckpointForRedoController(t *testing.T) {
-	m, selfNodeID := newMaintainerForRedoCheckpointCalculationTest()
+	m, selfNodeID := newMaintainerForRedoCheckpointCalculationTest(t)
 	m.initialized.Store(true)
 	m.watermark.Watermark = &heartbeatpb.Watermark{
 		CheckpointTs: 100,
@@ -501,8 +501,9 @@ func TestMaintainerHandleRedoMetaTsMessageUsesRedoCheckpointForRedoController(t 
 	wg.Wait()
 }
 
-func newMaintainerForCheckpointCalculationTest() (*Maintainer, node.ID) {
-	testutil.SetUpTestServices()
+func newMaintainerForCheckpointCalculationTest(t testing.TB) (*Maintainer, node.ID) {
+	t.Helper()
+	testutil.SetUpTestServices(t)
 
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	selfNode := node.NewInfo("127.0.0.1:8300", "")
@@ -546,8 +547,9 @@ func newMaintainerForCheckpointCalculationTest() (*Maintainer, node.ID) {
 	return m, selfNode.ID
 }
 
-func newMaintainerForRedoCheckpointCalculationTest() (*Maintainer, node.ID) {
-	testutil.SetUpTestServices()
+func newMaintainerForRedoCheckpointCalculationTest(t testing.TB) (*Maintainer, node.ID) {
+	t.Helper()
+	testutil.SetUpTestServices(t)
 
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	selfNode := node.NewInfo("127.0.0.1:8300", "")
