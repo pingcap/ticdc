@@ -97,6 +97,8 @@ type DispatcherManager struct {
 	// Entries must be deleted on completion (create -> after creation; remove -> on cleanup), otherwise
 	// future maintainer requests for the same dispatcherID will be ignored.
 	currentOperatorMap sync.Map // map[common.DispatcherID]SchedulerDispatcherRequest (in dispatcher manager, not heartbeatpb)
+	// mergeOperatorMap keeps in-flight merge requests so bootstrap can reconstruct merge operators after maintainer failover.
+	mergeOperatorMap sync.Map // map[mergedDispatcherID.String()]*heartbeatpb.MergeDispatcherRequest
 	// schemaIDToDispatchers is shared in the DispatcherManager,
 	// it store all the infos about schemaID->Dispatchers
 	// Dispatchers may change the schemaID when meets some special events, such as rename ddl
@@ -191,6 +193,7 @@ func NewDispatcherManager(
 		ctx:                   ctx,
 		dispatcherMap:         newDispatcherMap[*dispatcher.EventDispatcher](),
 		currentOperatorMap:    sync.Map{},
+		mergeOperatorMap:      sync.Map{},
 		changefeedID:          changefeedID,
 		keyspaceID:            keyspaceID,
 		pdClock:               pdClock,
