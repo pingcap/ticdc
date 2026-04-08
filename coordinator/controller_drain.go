@@ -21,6 +21,12 @@ type drainSession struct {
 	target node.ID
 	epoch  uint64
 
+	// trackedChangefeeds is the frozen set of running changefeeds that were
+	// relevant to this drain session when it started. Drain-aware scheduling must
+	// prevent new work from landing on the target, so repeated API polls can
+	// reuse this set instead of rescanning all replicating changefeeds.
+	trackedChangefeeds []common.ChangeFeedID
+
 	// pendingStatus is the frozen baseline of running changefeeds that had not
 	// yet acknowledged this drain epoch when the session was created.
 	// The set only shrinks over time during one drain session.
@@ -83,29 +89,31 @@ func (c *Controller) DrainNode(_ context.Context, target node.ID) (int, error) {
 	c.drainController.RequestDrain(target)
 
 	observation := c.observeDrainNode(target, targetEpoch)
-
-	// drain API must not return 0 until drain completion is proven.
-	if isDrainCompletionProven(
+	completionProven := isDrainCompletionProven(
 		observation.nodeState,
 		observation.drainingObserved,
 		observation.stoppingObserved,
 		observation.remaining,
-	) {
+	)
+
+	// drain API must not return 0 until drain completion is proven.
+	if completionProven {
 		c.clearDispatcherDrainTarget(target, targetEpoch)
 		return 0, nil
 	}
 
-	if observation.remaining > 0 {
-		log.Info("drain completion blocked by remaining work",
-			zap.Stringer("targetNodeID", target),
-			zap.Uint64("targetEpoch", targetEpoch),
-			zap.Int("maintainersOnTarget", observation.maintainersOnTarget),
-			zap.Int("inflightOpsInvolvingTarget", observation.inflightOpsInvolvingTarget),
-			zap.Int("dispatcherCountOnTarget", observation.dispatcherCountOnTarget),
-			zap.Int("targetInflightDrainMoveCount", observation.targetInflightDrainMoveCount),
-			zap.Int("pendingStatusCount", observation.pendingStatusCount),
-			zap.Int("remaining", observation.remaining))
-	}
+	log.Info("drain completion not yet proven",
+		zap.Stringer("targetNodeID", target),
+		zap.Uint64("targetEpoch", targetEpoch),
+		zap.String("nodeState", drainStateString(observation.nodeState)),
+		zap.Bool("drainingObserved", observation.drainingObserved),
+		zap.Bool("stoppingObserved", observation.stoppingObserved),
+		zap.Int("maintainersOnTarget", observation.maintainersOnTarget),
+		zap.Int("inflightOpsInvolvingTarget", observation.inflightOpsInvolvingTarget),
+		zap.Int("dispatcherCountOnTarget", observation.dispatcherCountOnTarget),
+		zap.Int("targetInflightDrainMoveCount", observation.targetInflightDrainMoveCount),
+		zap.Int("pendingStatusCount", observation.pendingStatusCount),
+		zap.Int("remaining", observation.remaining))
 	return ensureDrainRemainingNonZero(observation.remaining), nil
 }
 
@@ -191,26 +199,17 @@ func (c *Controller) collectDrainPendingStatus(target node.ID, epoch uint64) int
 	return len(session.pendingStatus)
 }
 
-// snapshotDrainStatusBaseline captures running changefeeds that have not yet
-// reported the active drain target epoch. The returned snapshot is used as a
-// monotonic pending set during one drain session.
-func (c *Controller) snapshotDrainStatusBaseline(target node.ID, epoch uint64) map[common.ChangeFeedID]struct{} {
+// snapshotDrainTrackedChangefeeds captures the running changefeeds that are
+// relevant to this drain session. The returned slice is frozen at session start
+// so repeated API polls do not need to rescan the full replicating set.
+func (c *Controller) snapshotDrainTrackedChangefeeds() []common.ChangeFeedID {
 	cfs := c.changefeedDB.GetReplicating()
-	targetID := target.String()
-	snapshot := make(map[common.ChangeFeedID]struct{}, len(cfs))
+	snapshot := make([]common.ChangeFeedID, 0, len(cfs))
 	for _, cf := range cfs {
 		if !isDrainStatusConvergenceRelevant(cf) {
 			continue
 		}
-		status := cf.GetStatus()
-		if status != nil {
-			progress := status.GetDrainProgress()
-			if progress != nil && progress.GetTargetNodeId() == targetID && progress.GetTargetEpoch() == epoch {
-				// Changefeeds that already acknowledged this drain epoch do not need further tracking.
-				continue
-			}
-		}
-		snapshot[cf.ID] = struct{}{}
+		snapshot = append(snapshot, cf.ID)
 	}
 	return snapshot
 }
@@ -244,13 +243,18 @@ func (c *Controller) ensureDispatcherDrainTarget(target node.ID) (uint64, error)
 		c.dispatcherDrainEpoch = 1
 	}
 
-	pendingStatus := c.snapshotDrainStatusBaseline(target, c.dispatcherDrainEpoch)
+	trackedChangefeeds := c.snapshotDrainTrackedChangefeeds()
+	pendingStatus := make(map[common.ChangeFeedID]struct{}, len(trackedChangefeeds))
+	for _, id := range trackedChangefeeds {
+		pendingStatus[id] = struct{}{}
+	}
 	c.drainClearState = nil
 	c.drainSession = &drainSession{
-		target:        target,
-		epoch:         c.dispatcherDrainEpoch,
-		pendingStatus: pendingStatus,
-		dirty:         true,
+		target:             target,
+		epoch:              c.dispatcherDrainEpoch,
+		trackedChangefeeds: trackedChangefeeds,
+		pendingStatus:      pendingStatus,
+		dirty:              true,
 	}
 	log.Info("dispatcher drain target activated",
 		zap.Stringer("targetNodeID", target),
@@ -450,9 +454,21 @@ func (c *Controller) aggregateDrainTargetProgress(target node.ID, epoch uint64) 
 	}
 
 	targetID := target.String()
-	cfs := c.changefeedDB.GetReplicating()
-	for _, cf := range cfs {
+	c.drainSessionMu.Lock()
+	session := c.drainSession
+	if session == nil || session.target != target || session.epoch != epoch {
+		c.drainSessionMu.Unlock()
+		return 0, 0
+	}
+	tracked := session.trackedChangefeeds
+	c.drainSessionMu.Unlock()
+
+	for _, id := range tracked {
+		cf := c.changefeedDB.GetByID(id)
 		if cf == nil {
+			continue
+		}
+		if !c.changefeedDB.IsReplicating(cf) {
 			continue
 		}
 		status := cf.GetStatus()
@@ -467,6 +483,21 @@ func (c *Controller) aggregateDrainTargetProgress(target node.ID, epoch uint64) 
 		inflightMoveCount += int(progress.GetTargetInflightDrainMoveCount())
 	}
 	return dispatcherCount, inflightMoveCount
+}
+
+func drainStateString(state drain.State) string {
+	switch state {
+	case drain.StateAlive:
+		return "alive"
+	case drain.StateDraining:
+		return "draining"
+	case drain.StateStopping:
+		return "stopping"
+	case drain.StateUnknown:
+		return "unknown"
+	default:
+		return "unspecified"
+	}
 }
 
 // isDrainCompletionProven checks whether drain completion can be safely concluded.
