@@ -58,7 +58,9 @@ func (s *DrainState) SetSelfNodeID(id node.ID) {
 }
 
 // SetDispatcherDrainTarget applies the newest drain target visible to the
-// changefeed. Older epochs are ignored so scheduler state does not regress.
+// changefeed. Older epochs are ignored so scheduler state does not regress, and
+// same-epoch updates follow the manager-level monotonic rule: only clearing a
+// non-empty target is allowed.
 func (s *DrainState) SetDispatcherDrainTarget(target node.ID, epoch uint64) {
 	if s == nil {
 		return
@@ -66,6 +68,15 @@ func (s *DrainState) SetDispatcherDrainTarget(target node.ID, epoch uint64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if epoch < s.targetEpoch {
+		return
+	}
+	if epoch == s.targetEpoch {
+		if target == s.targetNodeID {
+			return
+		}
+		if target.IsEmpty() && !s.targetNodeID.IsEmpty() {
+			s.targetNodeID = target
+		}
 		return
 	}
 	s.targetNodeID = target

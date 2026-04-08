@@ -95,7 +95,7 @@ func (s *drainScheduler) Execute() time.Time {
 	if availableSize <= 0 {
 		return time.Now().Add(time.Millisecond * 200)
 	}
-	drainSlots := s.fixedDrainMoveLimit - s.countInflightDrainMoves(target)
+	drainSlots := s.fixedDrainMoveLimit - s.operatorController.CountInflightDrainMovesFromNode(target)
 	if drainSlots <= 0 {
 		return time.Now().Add(time.Millisecond * 200)
 	}
@@ -199,27 +199,6 @@ func calculateDrainMoveLimit(initialTargetDispatcherCount int) int {
 		return maxDrainMovePerRound
 	}
 	return limit
-}
-
-// countInflightDrainMoves returns unfinished move operators whose origin is the
-// current drain target. These operators already contribute to evacuation and
-// must be included in the per-round drain limit.
-func (s *drainScheduler) countInflightDrainMoves(target node.ID) int {
-	count := 0
-	for _, op := range s.operatorController.GetAllOperators() {
-		moveOp, ok := op.(*operator.MoveDispatcherOperator)
-		if !ok {
-			continue
-		}
-		if moveOp.IsFinished() {
-			continue
-		}
-		if moveOp.OriginNode() != target {
-			continue
-		}
-		count++
-	}
-	return count
 }
 
 // chooseLeastLoadedNode picks the alive destination with the smallest current
