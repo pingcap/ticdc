@@ -46,7 +46,7 @@ const (
 	dataDirThreshold = 500
 )
 
-func (c *server) prepare(ctx context.Context) error {
+func (c *server) prepare(ctx context.Context) (err error) {
 	conf := config.GetGlobalServerConfig()
 	grpcTLSOption, err := conf.Security.ToGRPCDialOption()
 	if err != nil {
@@ -94,6 +94,11 @@ func (c *server) prepare(ctx context.Context) error {
 	if err != nil {
 		return errors.Trace(err)
 	}
+	defer func() {
+		if err != nil && etcdCli != nil {
+			_ = etcdCli.Close()
+		}
+	}()
 
 	cdcEtcdClient, err := etcd.NewCDCEtcdClient(ctx, etcdCli, conf.ClusterID)
 	if err != nil {

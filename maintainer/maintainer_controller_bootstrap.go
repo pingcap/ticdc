@@ -69,7 +69,6 @@ import (
 // Parameters:
 //   - allNodesResp: Bootstrap responses from all nodes containing their current state
 //   - isMysqlCompatible: Flag indicating if using MySQL-compatible backend
-//   - isStorageSinkBackend: Flag indicating if downstream sink is storage backend
 //
 // Returns:
 //   - *MaintainerPostBootstrapRequest: Configuration for post-bootstrap setup
@@ -77,7 +76,6 @@ import (
 func (c *Controller) FinishBootstrap(
 	allNodesResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse,
 	isMysqlCompatibleBackend bool,
-	isStorageSinkBackend bool,
 ) (*heartbeatpb.MaintainerPostBootstrapRequest, error) {
 	if c.bootstrapped {
 		log.Info("maintainer already bootstrapped, may a new node join the cluster",
@@ -141,7 +139,7 @@ func (c *Controller) FinishBootstrap(
 	c.handleRemainingWorkingTasks(workingTaskMap, redoWorkingTaskMap)
 
 	// Step 5: Initialize and start sub components
-	c.initializeComponents(allNodesResp, isStorageSinkBackend)
+	c.initializeComponents(allNodesResp)
 
 	// Step 6: Mark the controller as bootstrapped
 	c.bootstrapped = true
@@ -367,14 +365,12 @@ func (c *Controller) handleRemainingWorkingTasks(
 
 func (c *Controller) initializeComponents(
 	allNodesResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse,
-	isStorageSinkBackend bool,
 ) {
 	// Initialize barrier
-	defaultBarrierFlushEnabled := isStorageSinkBackend
 	if c.enableRedo {
-		c.redoBarrier = NewBarrierWithFlush(c.redoSpanController, c.redoOperatorController, c.enableTableAcrossNodes, false, allNodesResp, common.RedoMode)
+		c.redoBarrier = NewBarrier(c.redoSpanController, c.redoOperatorController, util.GetOrZero(c.replicaConfig.Scheduler.EnableTableAcrossNodes), allNodesResp, common.RedoMode)
 	}
-	c.barrier = NewBarrierWithFlush(c.spanController, c.operatorController, c.enableTableAcrossNodes, defaultBarrierFlushEnabled, allNodesResp, common.DefaultMode)
+	c.barrier = NewBarrier(c.spanController, c.operatorController, util.GetOrZero(c.replicaConfig.Scheduler.EnableTableAcrossNodes), allNodesResp, common.DefaultMode)
 
 	// Start scheduler
 	c.taskHandlesMu.Lock()
@@ -720,6 +716,20 @@ func (c *Controller) restoreCurrentWorkingCreateAction(
 	replicaSet *replica.SpanReplication,
 	tableSplitMap map[int64]bool,
 ) error {
+	splitable, tableExists := tableSplitMap[span.TableID]
+	if !tableExists {
+		// The bootstrap schema-store snapshot is already taken at startTs. If the table is absent there,
+		// this create request is stale (for example, add/move/split was in-flight before a DROP TABLE) and
+		// restoring it would recreate a ghost task/operator for a table that should stay removed.
+		log.Warn("bootstrap create operator references table missing from schema snapshot, skip restoring it",
+			zap.String("nodeID", nodeID.String()),
+			zap.String("changefeed", resp.ChangefeedID.String()),
+			zap.String("dispatcherID", dispatcherID.String()),
+			zap.String("operatorType", req.OperatorType.String()),
+			zap.Int64("tableID", span.TableID))
+		return nil
+	}
+
 	// Create is only meaningful if the dispatcher does not already exist. If the node snapshot already contains
 	// the dispatcher (or maintainer already bound the span), treat it as done.
 	if spanInfo != nil {
@@ -745,7 +755,7 @@ func (c *Controller) restoreCurrentWorkingCreateAction(
 			span,
 			req.Config.StartTs,
 			req.Config.Mode,
-			spanController.ShouldEnableSplit(tableSplitMap[span.TableID]),
+			spanController.ShouldEnableSplit(splitable),
 		)
 		spanController.AddAbsentReplicaSet(replicaSet)
 	}

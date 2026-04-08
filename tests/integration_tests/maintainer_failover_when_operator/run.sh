@@ -459,7 +459,7 @@ function run_impl() {
 	#
 	# Note: For MQ sinks (kafka/pulsar/storage), downstream table existence may be gated by watermarks which can be
 	# blocked by in-flight Add operators (BlockTsForward). Therefore, do NOT check downstream table existence here.
-	query_dispatcher_count "$api_addr" "$changefeed_id" 6 60 ge "" "$mode"
+	query_dispatcher_count "$api_addr" "$changefeed_id" 6 60 ge "$mode"
 	scheduled_node_id_4=$(wait_for_table_scheduled "$api_addr" "$changefeed_id" "$table_id_4" "$mode")
 	scheduled_node_id_5=$(wait_for_table_scheduled "$api_addr" "$changefeed_id" "$table_id_5" "$mode")
 	echo "table $table_id_4 scheduled on node $scheduled_node_id_4"

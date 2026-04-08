@@ -93,10 +93,10 @@ func NewRowChange(
 	tiCtx sessionctx.Context,
 ) *RowChange {
 	if sourceTable == nil {
-		log.L().DPanic("sourceTable is nil")
+		log.Panic("sourceTable is nil")
 	}
 	if sourceTableInfo == nil {
-		log.L().DPanic("sourceTableInfo is nil")
+		log.Panic("sourceTableInfo is nil")
 	}
 
 	ret := &RowChange{
@@ -106,15 +106,17 @@ func NewRowChange(
 		sourceTableInfo: sourceTableInfo,
 	}
 
-	colCount := ret.ColumnCount()
+	// The values should contain expression indexes,
+	// because whereColumnsAndValues relies on the order of values to match the columns
+	colCount := len(sourceTableInfo.GetColumns())
 	if preValues != nil && len(preValues) != colCount {
-		log.L().DPanic("preValues length not equal to sourceTableInfo columns",
+		log.Panic("preValues length not equal to sourceTableInfo columns",
 			zap.Int("preValues", len(preValues)),
 			zap.Int("sourceTableInfo", colCount),
 			zap.Stringer("sourceTable", sourceTable))
 	}
 	if postValues != nil && len(postValues) != colCount {
-		log.L().DPanic("postValues length not equal to sourceTableInfo columns",
+		log.Panic("postValues length not equal to sourceTableInfo columns",
 			zap.Int("postValues", len(postValues)),
 			zap.Int("sourceTableInfo", colCount),
 			zap.Stringer("sourceTable", sourceTable))
@@ -152,7 +154,7 @@ func (r *RowChange) calculateType() {
 	case r.preValues != nil && r.postValues == nil:
 		r.tp = RowChangeDelete
 	default:
-		log.L().DPanic("preValues and postValues can't both be nil",
+		log.Panic("preValues and postValues can't both be nil",
 			zap.Stringer("sourceTable", r.sourceTable))
 	}
 }
@@ -172,19 +174,6 @@ func (r *RowChange) String() string {
 // TargetTableID returns a ID string for target table.
 func (r *RowChange) TargetTableID() string {
 	return r.targetTable.QuoteString()
-}
-
-// ColumnCount returns the number of columns of this RowChange.
-// TiDB TableInfo contains some internal columns like expression index, they
-// are not included in this count.
-func (r *RowChange) ColumnCount() int {
-	c := 0
-	for _, col := range r.sourceTableInfo.GetColumns() {
-		if !col.Hidden {
-			c++
-		}
-	}
-	return c
 }
 
 // SourceTableInfo returns the TableInfo of source table.
@@ -239,11 +228,12 @@ func (r *RowChange) whereColumnsAndValues() ([]string, []interface{}) {
 	}
 
 	failpoint.Inject("DownstreamTrackerWhereCheck", func() {
-		if r.tp == RowChangeUpdate {
-			log.L().Info("UpdateWhereColumnsCheck",
+		switch r.tp {
+		case RowChangeUpdate:
+			log.Info("UpdateWhereColumnsCheck",
 				zap.String("Columns", fmt.Sprintf("%v", columnNames)))
-		} else if r.tp == RowChangeDelete {
-			log.L().Info("DeleteWhereColumnsCheck",
+		case RowChangeDelete:
+			log.Info("DeleteWhereColumnsCheck",
 				zap.String("Columns", fmt.Sprintf("%v", columnNames)))
 		}
 	})
@@ -275,7 +265,7 @@ func (r *RowChange) genWhere(buf *strings.Builder) []interface{} {
 
 func (r *RowChange) genDeleteSQL() (string, []interface{}) {
 	if r.tp != RowChangeDelete && r.tp != RowChangeUpdate {
-		log.L().DPanic("illegal type for genDeleteSQL",
+		log.Panic("illegal type for genDeleteSQL",
 			zap.String("sourceTable", r.sourceTable.String()),
 			zap.Stringer("changeType", r.tp))
 		return "", nil
@@ -294,7 +284,7 @@ func (r *RowChange) genDeleteSQL() (string, []interface{}) {
 
 func (r *RowChange) genUpdateSQL() (string, []interface{}) {
 	if r.tp != RowChangeUpdate {
-		log.L().DPanic("illegal type for genUpdateSQL",
+		log.Panic("illegal type for genUpdateSQL",
 			zap.String("sourceTable", r.sourceTable.String()),
 			zap.Stringer("changeType", r.tp))
 		return "", nil
@@ -376,7 +366,7 @@ func (r *RowChange) GenSQL(tp DMLType) (string, []interface{}) {
 	case DMLDelete:
 		return r.genDeleteSQL()
 	}
-	log.L().DPanic("illegal type for GenSQL",
+	log.Panic("illegal type for GenSQL",
 		zap.String("sourceTable", r.sourceTable.String()),
 		zap.Stringer("DMLType", tp))
 	return "", nil

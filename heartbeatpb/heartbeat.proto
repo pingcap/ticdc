@@ -33,12 +33,6 @@ enum Action {
     // Pass means influenced dispatchers mark this barrier as passed after the
     // writer has finished Write for the same (commitTs, isSyncPoint).
     Pass = 1;
-    // Flush means influenced dispatchers flush all DML before this barrier and
-    // keep the pending barrier event for the later Write/Pass steps.
-    // It is required for storage sink when split-table is enabled: one table may have multiple
-    // dispatchers on different nodes, and every dispatcher must flush pre-barrier
-    // DML first to prevent it from being reordered after the writer executes DDL.
-    Flush = 2;
 }
 
 message DispatcherAction {
@@ -153,6 +147,39 @@ message MaintainerStatus {
     repeated RunningError err = 5;
     bool bootstrap_done = 6;
     uint64 lastSyncedTs = 7;  // last synced ts of all tables in the changefeed, used in /:changefeed_id/synced API
+}
+
+// NodeLiveness is node-reported liveness.
+// Coordinator uses it for destination filtering and safe rolling-restart handoff
+// without persisting a separate intent in etcd.
+// It is monotonic and only allows: ALIVE -> DRAINING -> STOPPING.
+enum NodeLiveness {
+    // ALIVE accepts new destination placement, maintainer creation, and leader campaign/service.
+    ALIVE = 0;
+    // DRAINING is excluded from destination selection and is being drained.
+    // In-flight operations may still complete, but no new leader campaign is allowed.
+    DRAINING = 1;
+    // STOPPING keeps destination exclusion and enforces shutdown safety.
+    // It rejects new maintainer creation, allows cleanup/remove
+    STOPPING = 2;
+}
+
+// NodeHeartbeat is sent periodically from a node to the coordinator.
+message NodeHeartbeat {
+    NodeLiveness liveness = 1;
+    uint64 node_epoch = 2;
+}
+
+// SetNodeLivenessRequest asks a node to transition its local liveness.
+message SetNodeLivenessRequest {
+    NodeLiveness target = 1;
+    uint64 node_epoch = 2;
+}
+
+// SetNodeLivenessResponse reports the liveness state applied by the node.
+message SetNodeLivenessResponse {
+    NodeLiveness applied = 1;
+    uint64 node_epoch = 2;
 }
 
 message CoordinatorBootstrapRequest {

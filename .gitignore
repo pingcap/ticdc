@@ -4,11 +4,15 @@ tools/bin
 tools/include
 tools/workload/bin
 
+.codex
+.design
+.issue
 .vscode
 .idea
 *.log
 .DS_Store
 .test
+.codex
 
 # Unit test reports
 cdc-junit-report.xml

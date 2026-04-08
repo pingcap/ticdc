@@ -252,7 +252,11 @@ func (m *MergeDispatcherOperator) OnTaskRemoved() {
 }
 
 func (m *MergeDispatcherOperator) PostFinish() {
-	setOccupyOperatorsFinished(m.occupyOperators)
+	// Keep occupy operators alive until the old replica sets have been fully removed or restored.
+	// Otherwise a late terminal status from an old dispatcher can observe "no operator" while the
+	// old task still exists in spanController, and maintainer fallback may incorrectly reschedule it.
+	defer setOccupyOperatorsFinished(m.occupyOperators)
+
 	if m.aborted.Load() {
 		if !m.abortedByDDL.Load() {
 			// if removed by node offline, we set the toMergedReplicaSet to be absent, to ignore the merge operation
