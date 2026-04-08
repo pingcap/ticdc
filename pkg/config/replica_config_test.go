@@ -202,14 +202,14 @@ func TestReplicaConfigValidateBatchConfig(t *testing.T) {
 		wantErr    bool
 	}{
 		{
-			name:       "rejects non-positive batch count",
+			name:       "accepts zero batch count to disable count based batching",
 			batchCount: util.AddressOf(0),
-			wantErr:    true,
+			wantErr:    false,
 		},
 		{
-			name:       "rejects non-positive batch bytes",
+			name:       "accepts zero batch bytes to disable byte based batching",
 			batchBytes: util.AddressOf(0),
-			wantErr:    true,
+			wantErr:    false,
 		},
 		{
 			name:       "accepts positive batch count and bytes",

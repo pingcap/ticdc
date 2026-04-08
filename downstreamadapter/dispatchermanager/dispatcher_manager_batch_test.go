@@ -20,6 +20,7 @@ import (
 	sinkmock "github.com/pingcap/ticdc/downstreamadapter/sink/mock"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
 )
 
@@ -51,6 +52,17 @@ func TestDispatcherManagerBatchConfig(t *testing.T) {
 			wantBytes:      0,
 		},
 		{
+			name:           "explicit zero disables count and bytes batching",
+			sinkBatchCount: 2048,
+			sinkBatchBytes: 8192,
+			cfg: &config.ChangefeedConfig{
+				EventCollectorBatchCount: util.AddressOf(0),
+				EventCollectorBatchBytes: util.AddressOf(0),
+			},
+			wantCount: 0,
+			wantBytes: 0,
+		},
+		{
 			name:           "uses sink provided values",
 			sinkBatchCount: 2048,
 			sinkBatchBytes: 8192,
@@ -63,7 +75,7 @@ func TestDispatcherManagerBatchConfig(t *testing.T) {
 			sinkBatchCount: 2048,
 			sinkBatchBytes: 8192,
 			cfg: &config.ChangefeedConfig{
-				EventCollectorBatchCount: 123,
+				EventCollectorBatchCount: util.AddressOf(123),
 			},
 			wantCount: 123,
 			wantBytes: 8192,
@@ -73,7 +85,7 @@ func TestDispatcherManagerBatchConfig(t *testing.T) {
 			sinkBatchCount: 2048,
 			sinkBatchBytes: 8192,
 			cfg: &config.ChangefeedConfig{
-				EventCollectorBatchBytes: 456,
+				EventCollectorBatchBytes: util.AddressOf(456),
 			},
 			wantCount: 2048,
 			wantBytes: 456,
@@ -83,8 +95,8 @@ func TestDispatcherManagerBatchConfig(t *testing.T) {
 			sinkBatchCount: 2048,
 			sinkBatchBytes: 8192,
 			cfg: &config.ChangefeedConfig{
-				EventCollectorBatchCount: 123,
-				EventCollectorBatchBytes: 456,
+				EventCollectorBatchCount: util.AddressOf(123),
+				EventCollectorBatchBytes: util.AddressOf(456),
 			},
 			wantCount: 123,
 			wantBytes: 456,

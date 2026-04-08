@@ -330,11 +330,11 @@ func (e *DispatcherManager) getEventCollectorBatchCountAndBytes(s sink.Sink) (in
 		batchCount = s.BatchCount()
 		batchBytes = s.BatchBytes()
 	)
-	if e.config.EventCollectorBatchCount > 0 {
-		batchCount = e.config.EventCollectorBatchCount
+	if e.config.EventCollectorBatchCount != nil {
+		batchCount = *e.config.EventCollectorBatchCount
 	}
-	if e.config.EventCollectorBatchBytes > 0 {
-		batchBytes = e.config.EventCollectorBatchBytes
+	if e.config.EventCollectorBatchBytes != nil {
+		batchBytes = *e.config.EventCollectorBatchBytes
 	}
 	return batchCount, batchBytes
 }
