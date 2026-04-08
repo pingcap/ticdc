@@ -109,8 +109,7 @@ func (c *requestCache) add(ctx context.Context, region regionInfo, force bool) (
 				return false, ctx.Err()
 			case c.pendingQueue <- req:
 				c.pendingCount.Inc()
-				cost := time.Since(start)
-				metrics.SubscriptionClientAddRegionRequestDuration.Observe(cost.Seconds())
+				metrics.SubscriptionClientAddRegionRequestDuration.Observe(time.Since(start).Seconds())
 				return true, nil
 			case <-ticker.C:
 				addReqRetryLimit--
