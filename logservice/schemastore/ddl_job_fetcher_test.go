@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/pingcap/ticdc/logservice/logpuller"
+	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/utils/heap"
 	"github.com/stretchr/testify/require"
 )
@@ -106,4 +107,15 @@ func TestAdvanceSchemaStoreResolvedTs(t *testing.T) {
 			require.True(t, false, "must get an event")
 		}
 	}
+}
+
+func TestGetAllDDLSpan(t *testing.T) {
+	// Scenario: TiCDC now watches only tidb_ddl_job after TiDB normalized
+	// create-table DDL delivery back onto the job table.
+	// Steps: build the watched spans for the default keyspace and verify there
+	// is exactly one subscription span for tidb_ddl_job.
+	spans, err := getAllDDLSpan(common.DefaultKeyspaceID)
+	require.NoError(t, err)
+	require.Len(t, spans, 1)
+	require.Equal(t, common.JobTableID, spans[0].TableID)
 }
