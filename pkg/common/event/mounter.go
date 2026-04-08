@@ -248,6 +248,7 @@ func parseJob(v []byte, startTs, CRTs uint64, fromHistoryTable bool) (*model.Job
 		zap.Int64("schemaID", job.SchemaID),
 		zap.Int64("tableID", job.TableID),
 		zap.Int64("type", int64(job.Type)),
+		zap.Bool("jobIsDone", job.IsDone()),
 		zap.String("typeName", job.Type.String()),
 		zap.String("state", job.State.String()),
 		zap.ByteString("jobMeta", v))
