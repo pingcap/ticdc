@@ -53,7 +53,6 @@ func EnsureChangefeedStartTsSafety(
 }
 
 func ensureChangefeedStartTsSafetyClassic(ctx context.Context, pdCli GCServiceClient, gcServiceID string, ttl int64, startTs uint64) error {
-	// set gc safepoint for the changefeed gc service
 	minServiceGCTs, err := SetServiceGCSafepoint(ctx, pdCli, gcServiceID, ttl, startTs)
 	if err != nil {
 		return errors.Trace(err)
@@ -78,6 +77,66 @@ func ensureChangefeedStartTsSafetyNextGen(ctx context.Context, pdCli GCServiceCl
 	_, err := SetGCBarrier(ctx, gcCli, gcServiceID, startTs, time.Duration(ttl)*time.Second)
 	if err != nil {
 		return errors.ErrStartTsBeforeGC.GenWithStackByArgs(startTs)
+	}
+	return nil
+}
+
+// EnsureServiceTsSafety ensures the exact ts remains readable by the specified
+// GC service ID. It is intended for internal callers like schema store that
+// maintain their own dedicated service safepoints / barriers.
+func EnsureServiceTsSafety(
+	ctx context.Context, pdCli GCServiceClient,
+	serviceID string,
+	keyspaceID uint32,
+	ttl int64,
+	ts uint64,
+) error {
+	if kerneltype.IsClassic() {
+		return ensureServiceTsSafetyClassic(ctx, pdCli, serviceID, ttl, ts)
+	}
+	return ensureServiceTsSafetyNextGen(ctx, pdCli, serviceID, keyspaceID, ttl, ts)
+}
+
+func ensureServiceTsSafetyClassic(
+	ctx context.Context,
+	pdCli GCServiceClient,
+	serviceID string,
+	ttl int64,
+	ts uint64,
+) error {
+	minServiceGCTs, err := SetServiceGCSafepoint(ctx, pdCli, serviceID, ttl, ts)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	if minServiceGCTs != math.MaxUint64 && ts < minServiceGCTs {
+		return errors.ErrSnapshotLostByGC.GenWithStackByArgs(ts+1, minServiceGCTs)
+	}
+	return nil
+}
+
+func ensureServiceTsSafetyNextGen(
+	ctx context.Context,
+	pdCli GCServiceClient,
+	serviceID string,
+	keyspaceID uint32,
+	ttl int64,
+	ts uint64,
+) error {
+	gcCli := pdCli.GetGCStatesClient(keyspaceID)
+	_, err := SetGCBarrier(ctx, gcCli, serviceID, ts, time.Duration(ttl)*time.Second)
+	if err == nil {
+		return nil
+	}
+	if !errors.IsGCBarrierTSBehindTxnSafePointError(err) {
+		return errors.WrapError(errors.ErrUpdateGCBarrierFailed, err)
+	}
+
+	minBarrierTS, barrierErr := UnifyGetServiceGCSafepoint(ctx, pdCli, keyspaceID, serviceID)
+	if barrierErr != nil {
+		return barrierErr
+	}
+	if minBarrierTS != math.MaxUint64 && ts < minBarrierTS {
+		return errors.ErrSnapshotLostByGC.GenWithStackByArgs(ts+1, minBarrierTS)
 	}
 	return nil
 }
