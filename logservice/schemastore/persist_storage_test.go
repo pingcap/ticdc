@@ -2641,6 +2641,73 @@ func TestApplyDDLJobs(t *testing.T) {
 	}
 }
 
+func TestActionMViewRefreshOutOfPlaceCutoverDDL(t *testing.T) {
+	dbPath := fmt.Sprintf("/tmp/testdb-%s", t.Name())
+	t.Cleanup(func() {
+		_ = os.RemoveAll(dbPath)
+	})
+
+	buildActionMViewRefreshOutOfPlaceCutoverJob := func(schemaID, tableID int64, tableName string, finishedTs uint64) *model.Job {
+		return &model.Job{
+			Type:     model.ActionMViewRefreshOutOfPlaceCutover,
+			SchemaID: schemaID,
+			TableID:  tableID,
+			BinlogInfo: &model.HistoryInfo{
+				TableInfo:  newEligibleTableInfoForTest(tableID, tableName),
+				FinishedTS: finishedTs,
+			},
+		}
+	}
+
+	checkState := func(t *testing.T, pStorage *persistentStorage) {
+		t.Helper()
+
+		require.Equal(t, []uint64{1000, 1010}, pStorage.tableTriggerDDLHistory)
+		require.Equal(t, []uint64{1010, 1020}, pStorage.tablesDDLHistory[200])
+
+		tableInfo, err := pStorage.forceGetTableInfo(200, 1020)
+		require.NoError(t, err)
+		require.NotNil(t, tableInfo)
+		require.Equal(t, int64(200), tableInfo.TableName.TableID)
+
+		events, err := pStorage.fetchTableDDLEvents(common.NewDispatcherID(), 200, nil, 1010, 2000)
+		require.NoError(t, err)
+		require.Len(t, events, 1)
+
+		ddl := events[0]
+		require.Equal(t, byte(model.ActionMViewRefreshOutOfPlaceCutover), ddl.Type)
+		require.Equal(t, uint64(1020), ddl.FinishedTs)
+		require.True(t, ddl.NotSync)
+		require.False(t, ddl.TiDBOnly)
+		require.Equal(t, &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{200},
+		}, ddl.BlockedTables)
+		require.Equal(t, []commonEvent.SchemaTableName{
+			{SchemaName: "test", TableName: "t1"},
+		}, ddl.BlockedTableNames)
+
+		triggerEvents, err := pStorage.fetchTableTriggerDDLEvents(nil, 1010, 10)
+		require.NoError(t, err)
+		require.Empty(t, triggerEvents)
+	}
+
+	pStorage := newPersistentStorageForTest(dbPath, nil)
+	for _, job := range []*model.Job{
+		buildCreateSchemaJobForTest(100, "test", 1000),
+		buildCreateTableJobForTest(100, 200, "t1", 1010),
+		buildActionMViewRefreshOutOfPlaceCutoverJob(100, 200, "t1", 1020),
+	} {
+		require.NoError(t, pStorage.handleDDLJob(job))
+	}
+	checkState(t, pStorage)
+	pStorage.close()
+
+	pStorage = loadPersistentStorageFromPathForTest(dbPath, math.MaxUint64)
+	defer pStorage.close()
+	checkState(t, pStorage)
+}
+
 func TestReadWriteMeta(t *testing.T) {
 	dbPath := fmt.Sprintf("/tmp/testdb-%s", t.Name())
 	err := os.RemoveAll(dbPath)
