@@ -23,6 +23,7 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/liveness"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -71,8 +72,7 @@ func (m *Manager) onAddMaintainerRequest(req *heartbeatpb.AddMaintainerRequest) 
 		return nil
 	}
 
-	target, epoch := m.getDispatcherDrainTarget()
-	return m.maintainers.handleAddMaintainer(req, target, epoch)
+	return m.maintainers.handleAddMaintainer(req, m.getDispatcherDrainTarget)
 }
 
 // onRemoveMaintainerRequest delegates changefeed removal to the maintainer part.
@@ -86,10 +86,20 @@ func (m *Manager) onDispatchMaintainerRequest(
 	msg *messaging.TargetMessage,
 ) *heartbeatpb.MaintainerStatus {
 	if m.coordinatorID != msg.From {
-		log.Warn("ignore invalid coordinator id",
-			zap.Any("request", msg),
-			zap.Any("coordinatorID", m.coordinatorID),
-			zap.Stringer("from", msg.From))
+		fields := []zap.Field{
+			zap.String("type", msg.Type.String()),
+			zap.Stringer("coordinatorID", m.coordinatorID),
+			zap.Stringer("from", msg.From),
+		}
+		switch msg.Type {
+		case messaging.TypeAddMaintainerRequest:
+			changefeedID := common.NewChangefeedIDFromPB(msg.Message[0].(*heartbeatpb.AddMaintainerRequest).Id)
+			fields = append(fields, zap.Stringer("changefeedID", changefeedID))
+		case messaging.TypeRemoveMaintainerRequest:
+			changefeedID := common.NewChangefeedIDFromPB(msg.Message[0].(*heartbeatpb.RemoveMaintainerRequest).Id)
+			fields = append(fields, zap.Stringer("changefeedID", changefeedID))
+		}
+		log.Warn("ignore invalid coordinator id", fields...)
 		return nil
 	}
 	switch msg.Type {
@@ -155,33 +165,42 @@ func (p *managerMaintainerSet) buildBootstrapResponse() *heartbeatpb.Coordinator
 // with the latest node-scoped dispatcher drain target.
 func (p *managerMaintainerSet) handleAddMaintainer(
 	req *heartbeatpb.AddMaintainerRequest,
-	target node.ID,
-	epoch uint64,
+	getDrainTarget func() (node.ID, uint64),
 ) *heartbeatpb.MaintainerStatus {
 	changefeedID := common.NewChangefeedIDFromPB(req.Id)
-	_, ok := p.registry.Load(changefeedID)
-	if ok {
+	if _, ok := p.registry.Load(changefeedID); ok {
 		return nil
 	}
 
 	info := &config.ChangeFeedInfo{}
-	err := json.Unmarshal(req.Config, info)
-	if err != nil {
-		log.Panic("decode changefeed fail", zap.Error(err))
+	if err := json.Unmarshal(req.Config, info); err != nil {
+		log.Error("ignore add maintainer request with invalid config",
+			zap.Stringer("changefeedID", changefeedID),
+			zap.Int("configBytes", len(req.Config)),
+			zap.Error(err))
+		return nil
 	}
 	if req.CheckpointTs == 0 {
-		log.Panic("add maintainer with invalid checkpointTs",
+		log.Error("ignore add maintainer request with invalid checkpointTs",
 			zap.Stringer("changefeedID", changefeedID),
-			zap.Uint64("checkpointTs", req.CheckpointTs),
-			zap.Any("info", info))
+			zap.Uint64("checkpointTs", req.CheckpointTs))
+		return nil
+	}
+	maintainer := NewMaintainer(changefeedID, p.conf, info, p.nodeInfo, p.taskScheduler, req.CheckpointTs, req.IsNewChangefeed, req.KeyspaceId)
+	registered, loaded := p.registry.LoadOrStore(changefeedID, maintainer)
+	if loaded {
+		// Duplicate add requests can race on the same changefeed. Drop the loser and
+		// stop the redundant maintainer immediately so background goroutines do not leak.
+		maintainer.Close()
+		return nil
 	}
 
-	maintainer := NewMaintainer(changefeedID, p.conf, info, p.nodeInfo, p.taskScheduler, req.CheckpointTs, req.IsNewChangefeed, req.KeyspaceId)
-	// Seed the maintainer with the manager-level drain snapshot before its event
-	// loop starts so late additions still honor an already-active drain target.
-	maintainer.SetDispatcherDrainTarget(target, epoch)
-	p.registry.Store(changefeedID, maintainer)
-	maintainer.pushEvent(&Event{changefeedID: changefeedID, eventType: EventInit})
+	registeredMaintainer := registered.(*Maintainer)
+	// Register the maintainer before seeding the drain snapshot so concurrent
+	// manager-level drain fanout can always observe it in the registry.
+	target, epoch := getDrainTarget()
+	registeredMaintainer.SetDispatcherDrainTarget(target, epoch)
+	registeredMaintainer.pushEvent(&Event{changefeedID: changefeedID, eventType: EventInit})
 	return nil
 }
 
@@ -276,7 +295,7 @@ func (p *managerMaintainerSet) dispatchMaintainerMessage(
 	}
 	select {
 	case <-ctx.Done():
-		return ctx.Err()
+		return errors.Trace(ctx.Err())
 	default:
 		maintainer := c.(*Maintainer)
 		maintainer.pushEvent(&Event{
