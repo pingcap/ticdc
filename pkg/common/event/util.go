@@ -436,6 +436,27 @@ func toTableInfosKey(schema, table string) string {
 	return schema + "." + table
 }
 
+func Restore(stmt ast.StmtNode) (string, error) {
+	var sb strings.Builder
+	// translate TiDB feature to special comment
+	restoreFlags := format.RestoreTiDBSpecialComment
+	// escape the keyword
+	restoreFlags |= format.RestoreNameBackQuotes
+	// upper case keyword
+	restoreFlags |= format.RestoreKeyWordUppercase
+	// wrap string with single quote
+	restoreFlags |= format.RestoreStringSingleQuotes
+	// remove placement rule
+	restoreFlags |= format.SkipPlacementRuleForRestore
+	// force disable ttl
+	restoreFlags |= format.RestoreWithTTLEnableOff
+	err := stmt.Restore(format.NewRestoreCtx(restoreFlags, &sb))
+	if err != nil {
+		return "", errors.Trace(err)
+	}
+	return sb.String(), nil
+}
+
 // SplitQueries takes a string containing multiple SQL statements and splits them into individual SQL statements.
 // This function is designed for scenarios like batch creation of tables, where multiple `CREATE TABLE` statements
 // might be combined into a single query string.
@@ -453,31 +474,14 @@ func SplitQueries(queries string) ([]string, error) {
 
 	var res []string
 	for _, stmt := range stmts {
-		var sb strings.Builder
-		// translate TiDB feature to special comment
-		restoreFlags := format.RestoreTiDBSpecialComment
-		// escape the keyword
-		restoreFlags |= format.RestoreNameBackQuotes
-		// upper case keyword
-		restoreFlags |= format.RestoreKeyWordUppercase
-		// wrap string with single quote
-		restoreFlags |= format.RestoreStringSingleQuotes
-		// remove placement rule
-		restoreFlags |= format.SkipPlacementRuleForRestore
-		// force disable ttl
-		restoreFlags |= format.RestoreWithTTLEnableOff
-		err := stmt.Restore(&format.RestoreCtx{
-			Flags: restoreFlags,
-			In:    &sb,
-		})
+		query, err := Restore(stmt)
 		if err != nil {
 			return nil, errors.WrapError(errors.ErrTiDBUnexpectedJobMeta, err)
 		}
 		// The (ast.Node).Restore function generates a SQL string representation of the AST (Abstract Syntax Tree) node.
 		// By default, the resulting SQL string does not include a trailing semicolon ";".
 		// Therefore, we explicitly append a semicolon here to ensure the SQL statement is complete.
-		sb.WriteByte(';')
-		res = append(res, sb.String())
+		res = append(res, fmt.Sprintf("%s;", query))
 	}
 
 	return res, nil
