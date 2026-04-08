@@ -571,7 +571,7 @@ func (m *Maintainer) handleRedoMetaTsMessage(ctx context.Context) {
 			}
 			needUpdate := false
 			redoWatermark, canUpdate := m.calculateNewRedoCheckpointTs()
-			if canUpdate && m.controller.redoSpanController != nil {
+			if canUpdate {
 				// Keep the redo scheduling baseline aligned with the redo pipeline checkpoint.
 				// Recreated redo dispatchers clamp their startTs to this controller owned value.
 				m.controller.redoSpanController.AdvanceMaintainerCommittedCheckpointTs(redoWatermark.CheckpointTs)
@@ -704,6 +704,7 @@ func (m *Maintainer) calculateNewCheckpointTs() (*heartbeatpb.Watermark, bool) {
 
 	// MaxUint64 means this round still has no effective global checkpoint.
 	// Skipping the update keeps the committed checkpoint from being poisoned.
+	// Only all the heartbeat from dispatcherManager contains no dispatcher span (eg. all dispatchers are in absent state), will cause MaxUint64.
 	if newWatermark.CheckpointTs == math.MaxUint64 {
 		log.Debug("checkpointTs can not be advanced, since global checkpoint is invalid",
 			zap.Stringer("changefeedID", m.changefeedID),
