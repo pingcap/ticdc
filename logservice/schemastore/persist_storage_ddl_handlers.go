@@ -145,6 +145,15 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
 		buildDDLEventFunc:          buildDDLEventForNewTableDDL,
 	},
+	model.ActionCreateMaterializedViewShadow: {
+		buildPersistedDDLEventFunc: buildPersistedDDLEventForCreateTable,
+		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
+		updateFullTableInfoFunc:    updateFullTableInfoForSingleTableDDL,
+		updateSchemaMetadataFunc:   updateSchemaMetadataForNewTableDDL,
+		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
+		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
+		buildDDLEventFunc:          buildDDLEventIgnore,
+	},
 	model.ActionDropTable: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForDropTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForAddDropTable,
@@ -651,7 +660,6 @@ func buildPersistedDDLEventForMViewRefreshOutOfPlaceCutover(args buildPersistedD
 			zap.Int64("shadowTableID", cutoverArgs.ShadowTableID),
 			zap.Int64("tableInfoID", event.TableInfo.ID))
 	}
-
 	event.ExtraTableID = cutoverArgs.ShadowTableID
 	event.SchemaName = getSchemaName(args.databaseMap, event.SchemaID)
 	event.TableName = event.TableInfo.Name.O
@@ -949,6 +957,7 @@ func updateDDLHistoryForTruncateTable(args updateDDLHistoryFuncArgs) []uint64 {
 }
 
 func updateDDLHistoryForMViewRefreshOutOfPlaceCutover(args updateDDLHistoryFuncArgs) []uint64 {
+	args.appendTableTriggerDDLHistory(args.ddlEvent.FinishedTs)
 	if isPartitionTable(args.ddlEvent.TableInfo) {
 		args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, getAllPartitionIDs(args.ddlEvent.TableInfo)...)
 		args.appendTablesDDLHistory(args.ddlEvent.FinishedTs, args.ddlEvent.PrevPartitions...)
@@ -1737,6 +1746,10 @@ func buildDDLEventCommonWithTableID(rawEvent *PersistedDDLEvent, tableID int64, 
 
 		NotSync: notSync,
 	}, !filtered, nil
+}
+
+func buildDDLEventIgnore(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error) {
+	return commonEvent.DDLEvent{}, false, nil
 }
 
 func filterDDL(tableFilter filter.Filter, schema, table, query string, ddlType model.ActionType, tableInfo *model.TableInfo, startTs uint64) (bool, bool, error) {
