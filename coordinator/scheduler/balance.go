@@ -50,8 +50,6 @@ type balanceScheduler struct {
 	drainBalanceBlockedUntil time.Time
 }
 
-const drainBalanceCooldown = 120 * time.Second
-
 func NewBalanceScheduler(
 	id string, batchSize int,
 	oc *operator.Controller,
@@ -76,7 +74,9 @@ func (s *balanceScheduler) Execute() time.Time {
 	now := time.Now()
 	if hasDrainingOrStoppingNode(s.liveness) {
 		// Pause regular balance scheduling while any node is draining/stopping.
-		s.drainBalanceBlockedUntil = now.Add(drainBalanceCooldown)
+		// Reuse the configured balance interval as the post-drain quiet period so
+		// operators can settle before regular rebalance resumes.
+		s.drainBalanceBlockedUntil = now.Add(s.drainCooldown())
 		return now.Add(s.checkBalanceInterval)
 	}
 	if now.Before(s.drainBalanceBlockedUntil) {
@@ -110,6 +110,13 @@ func (s *balanceScheduler) Execute() time.Time {
 	s.lastRebalanceTime = time.Now()
 
 	return now.Add(s.checkBalanceInterval)
+}
+
+func (s *balanceScheduler) drainCooldown() time.Duration {
+	if s.checkBalanceInterval > 0 {
+		return s.checkBalanceInterval
+	}
+	return time.Second
 }
 
 func (s *balanceScheduler) Name() string {

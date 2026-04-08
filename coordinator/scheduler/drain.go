@@ -89,6 +89,11 @@ func (s *drainScheduler) Execute() time.Time {
 	}
 
 	nodeTaskSize := s.changefeedDB.GetTaskSizePerNode()
+	maintainersByNode := make(map[node.ID][]*changefeed.Changefeed, len(drainingNodes))
+	nextMaintainerIndex := make(map[node.ID]int, len(drainingNodes))
+	for _, origin := range drainingNodes {
+		maintainersByNode[origin] = s.changefeedDB.GetByNodeID(origin)
+	}
 	scheduled := 0
 
 	if s.rrCursor >= len(drainingNodes) {
@@ -99,7 +104,15 @@ func (s *drainScheduler) Execute() time.Time {
 		progress := false
 		for i := 0; i < len(drainingNodes) && scheduled < availableSize; i++ {
 			origin := drainingNodes[(s.rrCursor+i)%len(drainingNodes)]
-			if s.scheduleOneFromNode(origin, destCandidates, nodeTaskSize) {
+			nextIndex, ok := s.scheduleOneFromNode(
+				origin,
+				maintainersByNode[origin],
+				nextMaintainerIndex[origin],
+				destCandidates,
+				nodeTaskSize,
+			)
+			nextMaintainerIndex[origin] = nextIndex
+			if ok {
 				scheduled++
 				progress = true
 			}
@@ -119,32 +132,32 @@ func (s *drainScheduler) Execute() time.Time {
 	return now.Add(time.Millisecond * 200)
 }
 
-// scheduleOneFromNode tries to schedule one maintainer move from origin.
-// It skips changefeeds that already have in-flight operators.
+// scheduleOneFromNode tries to schedule one maintainer move from origin,
+// continuing from nextIndex within the pre-fetched maintainer slice. It skips
+// changefeeds that already have in-flight operators.
 func (s *drainScheduler) scheduleOneFromNode(
 	origin node.ID,
+	maintainers []*changefeed.Changefeed,
+	nextIndex int,
 	destCandidates []node.ID,
 	nodeTaskSize map[node.ID]int,
-) bool {
-	maintainers := s.changefeedDB.GetByNodeID(origin)
-	if len(maintainers) == 0 {
-		return false
-	}
-
-	for _, cf := range maintainers {
+) (int, bool) {
+	for nextIndex < len(maintainers) {
+		cf := maintainers[nextIndex]
+		nextIndex++
 		if s.operatorController.HasOperator(cf.ID.DisplayName) {
 			continue
 		}
 		dest, ok := chooseLeastLoadedDest(origin, destCandidates, nodeTaskSize)
 		if !ok {
-			return false
+			return nextIndex, false
 		}
 		if s.operatorController.AddOperator(operator.NewMoveMaintainerOperator(s.changefeedDB, cf, origin, dest)) {
 			nodeTaskSize[dest]++
-			return true
+			return nextIndex, true
 		}
 	}
-	return false
+	return nextIndex, false
 }
 
 // chooseLeastLoadedDest selects the destination with the smallest task count, excluding origin.

@@ -148,6 +148,38 @@ func TestBalanceSchedulerSkipsUntilAllDrainCompleteAndCooldownExpires(t *testing
 	require.Greater(t, oc.OperatorSize(), 0)
 }
 
+func TestBalanceSchedulerUsesBalanceIntervalAsDrainCooldown(t *testing.T) {
+	setupCoordinatorSchedulerTestServices()
+	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+
+	drainingNode := node.ID("draining")
+	nodeA := node.ID("node-a")
+	nodeB := node.ID("node-b")
+	nodeManager.GetAliveNodes()[drainingNode] = &node.Info{ID: drainingNode}
+	nodeManager.GetAliveNodes()[nodeA] = &node.Info{ID: nodeA}
+	nodeManager.GetAliveNodes()[nodeB] = &node.Info{ID: nodeB}
+
+	drainController := drain.NewController(mc)
+	drainController.ObserveHeartbeat(drainingNode, &heartbeatpb.NodeHeartbeat{
+		Liveness:  heartbeatpb.NodeLiveness_DRAINING,
+		NodeEpoch: 1,
+	})
+
+	db := changefeed.NewChangefeedDB(1)
+	addReplicatingMaintainer(t, db, "cf-a-1", nodeA)
+	addReplicatingMaintainer(t, db, "cf-a-2", nodeA)
+
+	selfNode := &node.Info{ID: node.ID("coordinator")}
+	oc := operator.NewOperatorController(selfNode, db, nil, 10)
+	interval := 200 * time.Millisecond
+	s := NewBalanceScheduler("test", 10, oc, db, interval, drainController)
+
+	start := time.Now()
+	_ = s.Execute()
+	require.WithinDuration(t, start.Add(interval), s.drainBalanceBlockedUntil, 50*time.Millisecond)
+}
+
 func setupCoordinatorSchedulerTestServices() {
 	mc := messaging.NewMockMessageCenter()
 	appcontext.SetService(appcontext.MessageCenter, mc)
