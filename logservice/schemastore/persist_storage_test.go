@@ -2647,16 +2647,26 @@ func TestActionMViewRefreshOutOfPlaceCutoverDDL(t *testing.T) {
 		_ = os.RemoveAll(dbPath)
 	})
 
-	buildActionMViewRefreshOutOfPlaceCutoverJob := func(schemaID, tableID int64, tableName string, finishedTs uint64) *model.Job {
-		return &model.Job{
+	buildActionMViewRefreshOutOfPlaceCutoverJob := func(schemaID, oldMViewID, shadowTableID int64, tableName string, finishedTs uint64) *model.Job {
+		job := &model.Job{
 			Type:     model.ActionMViewRefreshOutOfPlaceCutover,
+			Version:  model.JobVersion2,
 			SchemaID: schemaID,
-			TableID:  tableID,
+			TableID:  oldMViewID,
+			Query:    fmt.Sprintf("REFRESH MATERIALIZED VIEW `test`.`%s` COMPLETE OUT OF PLACE", tableName),
 			BinlogInfo: &model.HistoryInfo{
-				TableInfo:  newEligibleTableInfoForTest(tableID, tableName),
+				TableInfo:  newEligibleTableInfoForTest(shadowTableID, tableName),
 				FinishedTS: finishedTs,
 			},
 		}
+		job.FillArgs(&model.RefreshMaterializedViewCompleteOutOfPlaceCutoverArgs{
+			OldMViewID:           oldMViewID,
+			ShadowTableID:        shadowTableID,
+			BuildReadTSO:         finishedTs - 1,
+			NextTime:             nil,
+			ShouldUpdateNextTime: false,
+		})
+		return job
 	}
 
 	checkState := func(t *testing.T, pStorage *persistentStorage) {
@@ -2664,11 +2674,17 @@ func TestActionMViewRefreshOutOfPlaceCutoverDDL(t *testing.T) {
 
 		require.Equal(t, []uint64{1000, 1010}, pStorage.tableTriggerDDLHistory)
 		require.Equal(t, []uint64{1010, 1020}, pStorage.tablesDDLHistory[200])
+		require.Equal(t, []uint64{1020}, pStorage.tablesDDLHistory[300])
 
-		tableInfo, err := pStorage.forceGetTableInfo(200, 1020)
+		tableInfo, err := pStorage.forceGetTableInfo(300, 1020)
 		require.NoError(t, err)
 		require.NotNil(t, tableInfo)
-		require.Equal(t, int64(200), tableInfo.TableName.TableID)
+		require.Equal(t, int64(300), tableInfo.TableName.TableID)
+		require.Equal(t, "t1", tableInfo.TableName.Table)
+
+		var deletedErr *TableDeletedError
+		_, err = pStorage.forceGetTableInfo(200, 1020)
+		require.ErrorAs(t, err, &deletedErr)
 
 		events, err := pStorage.fetchTableDDLEvents(common.NewDispatcherID(), 200, nil, 1010, 2000)
 		require.NoError(t, err)
@@ -2681,11 +2697,30 @@ func TestActionMViewRefreshOutOfPlaceCutoverDDL(t *testing.T) {
 		require.False(t, ddl.TiDBOnly)
 		require.Equal(t, &commonEvent.InfluencedTables{
 			InfluenceType: commonEvent.InfluenceTypeNormal,
-			TableIDs:      []int64{200},
+			TableIDs:      []int64{200, common.DDLSpanTableID},
 		}, ddl.BlockedTables)
+		require.Equal(t, &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{200},
+		}, ddl.NeedDroppedTables)
+		require.Equal(t, []commonEvent.Table{
+			{
+				SchemaID:  100,
+				TableID:   300,
+				Splitable: true,
+			},
+		}, ddl.NeedAddedTables)
 		require.Equal(t, []commonEvent.SchemaTableName{
 			{SchemaName: "test", TableName: "t1"},
 		}, ddl.BlockedTableNames)
+		require.NotNil(t, ddl.TableInfo)
+		require.Equal(t, int64(200), ddl.TableInfo.TableName.TableID)
+
+		newTableEvents, err := pStorage.fetchTableDDLEvents(common.NewDispatcherID(), 300, nil, 0, 2000)
+		require.NoError(t, err)
+		require.Len(t, newTableEvents, 1)
+		require.NotNil(t, newTableEvents[0].TableInfo)
+		require.Equal(t, int64(300), newTableEvents[0].TableInfo.TableName.TableID)
 
 		triggerEvents, err := pStorage.fetchTableTriggerDDLEvents(nil, 1010, 10)
 		require.NoError(t, err)
@@ -2696,7 +2731,7 @@ func TestActionMViewRefreshOutOfPlaceCutoverDDL(t *testing.T) {
 	for _, job := range []*model.Job{
 		buildCreateSchemaJobForTest(100, "test", 1000),
 		buildCreateTableJobForTest(100, 200, "t1", 1010),
-		buildActionMViewRefreshOutOfPlaceCutoverJob(100, 200, "t1", 1020),
+		buildActionMViewRefreshOutOfPlaceCutoverJob(100, 200, 300, "t1", 1020),
 	} {
 		require.NoError(t, pStorage.handleDDLJob(job))
 	}

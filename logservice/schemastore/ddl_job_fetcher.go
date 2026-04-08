@@ -124,10 +124,6 @@ func (p *ddlJobFetcher) tryAdvanceResolvedTs(subID logpuller.SubscriptionID, new
 	}
 	// minResolvedTsItem may be 0, it's ok to send it because it will be filtered later.
 	// it is ok to send redundant resolved ts to advanceResolvedTs.
-	log.Info("ddl job fetcher advance resolved ts",
-		zap.Uint64("subscriptionID", uint64(subID)),
-		zap.Uint64("newResolvedTs", newResolvedTs),
-		zap.Uint64("minResolvedTs", minResolvedTsItem.resolvedTs))
 	p.advanceResolvedTs(minResolvedTsItem.resolvedTs)
 }
 
@@ -143,18 +139,6 @@ func (p *ddlJobFetcher) input(kvs []common.RawKVEntry, _ func()) bool {
 		}
 
 		// cache ddl job in memory until the resolve ts pass its commit ts
-		log.Info("cache ddl job",
-			zap.Int64("jobID", job.ID),
-			zap.Int64("schemaID", job.SchemaID),
-			zap.String("schemaName", job.SchemaName),
-			zap.Int64("tableID", job.TableID),
-			zap.String("tableName", job.TableName),
-			zap.Any("type", job.Type),
-			zap.String("typeName", job.Type.String()),
-			zap.Int64("schemaVersion", job.BinlogInfo.SchemaVersion),
-			zap.Uint64("finishedTs", job.BinlogInfo.FinishedTS),
-			zap.Uint64("commitTs", entry.CRTs),
-			zap.String("query", job.Query))
 		p.cacheDDLEvent(DDLJobWithCommitTs{
 			Job:      job,
 			CommitTs: entry.CRTs,
