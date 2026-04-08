@@ -741,6 +741,7 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 	handler, ok := allDDLHandlers[job.Type]
 	if !ok {
 		log.Warn("unknown ddl type, ignore it", zap.Any("ddlType", job.Type), zap.String("query", job.Query))
+		p.mu.Unlock()
 		return nil
 	}
 
@@ -812,7 +813,7 @@ func shouldSkipDDL(job *model.Job, tableMap map[int64]*BasicTableInfo) bool {
 	//    One of these actions could be garbage collected, leaving the table present in the snapshot.
 	//    Therefore, the only reliable way to determine if a later DDL operation is redundant
 	//    is by verifying whether the table already exists.
-	case model.ActionCreateTable:
+	case model.ActionCreateTable, model.ActionCreateMaterializedViewShadow:
 		// Note: partition table's logical table id is also in tableMap
 		if _, ok := tableMap[job.BinlogInfo.TableInfo.ID]; ok {
 			log.Debug("table already exists. ignore DDL",

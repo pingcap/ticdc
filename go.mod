@@ -54,9 +54,9 @@ require (
 	github.com/pingcap/failpoint v0.0.0-20240528011301-b51a646c7c86
 	github.com/pingcap/kvproto v0.0.0-20250923091925-d79d11002599
 	github.com/pingcap/log v1.1.1-0.20250917021125-19901e015dc9
-	github.com/pingcap/tidb v1.1.0-beta.0.20250415080739-a02630cc24cf
+	github.com/pingcap/tidb v1.1.0-beta.0.20260407144938-f4213910f645
 	github.com/pingcap/tidb-dashboard v0.0.0-20250928152019-e111aaee93f4
-	github.com/pingcap/tidb/pkg/parser v0.0.0-20241120103608-82376c7732c1
+	github.com/pingcap/tidb/pkg/parser v0.0.0-20260407144938-f4213910f645
 	github.com/pingcap/tiflow v0.0.0-20251114054540-6e617c886bfe
 	github.com/prometheus/client_golang v1.22.0
 	github.com/r3labs/diff v1.1.0
@@ -68,9 +68,9 @@ require (
 	github.com/spf13/pflag v1.0.7
 	github.com/stretchr/testify v1.10.0
 	github.com/thanhpk/randstr v1.0.6
-	github.com/tikv/client-go/v2 v2.0.8-0.20250304121540-cc8b9491145b
+	github.com/tikv/client-go/v2 v2.0.8-0.20260113054240-c88e82cf2927
 	github.com/tikv/pd v1.1.0-beta.0.20251113050911-303c6c3b403e
-	github.com/tikv/pd/client v0.0.0-20250213080903-727c2086a763
+	github.com/tikv/pd/client v0.0.0-20250901062501-1646b924d286
 	github.com/tinylib/msgp v1.5.0
 	github.com/uber-go/atomic v1.4.0
 	github.com/xdg/scram v1.0.5
@@ -272,7 +272,7 @@ require (
 	github.com/pingcap/fn v1.0.0 // indirect
 	github.com/pingcap/goleveldb v0.0.0-20191226122134-f82aafb29989 // indirect
 	github.com/pingcap/sysutil v1.0.1-0.20240311050922-ae81ee01f3a5 // indirect
-	github.com/pingcap/tipb v0.0.0-20250829062436-85a019a5df23 // indirect
+	github.com/pingcap/tipb v0.0.0-20260324015222-fe7badb76b66 // indirect
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
@@ -296,6 +296,7 @@ require (
 	github.com/shurcooL/vfsgen v0.0.0-20200824052919-0d455de96546 // indirect
 	github.com/sirupsen/logrus v1.9.3 // indirect
 	github.com/spaolacci/murmur3 v1.1.0 // indirect
+	github.com/spf13/afero v1.11.0 // indirect
 	github.com/spkg/bom v1.0.0 // indirect
 	github.com/stretchr/objx v0.5.2 // indirect
 	github.com/swaggo/files v0.0.0-20210815190702-a29dd2bc99b2 // indirect
@@ -371,10 +372,14 @@ require (
 // copy from TiDB
 replace github.com/go-ldap/ldap/v3 v3.4.4 => github.com/yangkeao/ldap/v3 v3.4.5-0.20230421065457-369a3bab1117
 
-replace github.com/tikv/pd/client => github.com/tikv/pd/client v0.0.0-20250213080903-727c2086a763
+replace github.com/tikv/pd/client => github.com/tikv/pd/client v0.0.0-20250901062501-1646b924d286
 
-replace github.com/pingcap/tipb => github.com/pingcap/tipb v0.0.0-20241022082558-0607513e7fa4
+replace github.com/pingcap/tipb => github.com/pingcap/tipb v0.0.0-20260324015222-fe7badb76b66
 
-replace github.com/pingcap/kvproto => github.com/pingcap/kvproto v0.0.0-20250224053625-b6a98c6bf02d
+replace github.com/pingcap/kvproto => github.com/pingcap/kvproto v0.0.0-20250908061600-97d984880071
+
+replace github.com/pingcap/tidb => github.com/windtalker/tidb v1.1.0-beta.0.20260407144938-f4213910f645
+
+replace github.com/pingcap/tidb/pkg/parser => github.com/windtalker/tidb/pkg/parser v0.0.0-20260407144938-f4213910f645
 
 replace github.com/IBM/sarama v1.41.2 => github.com/pingcap/sarama v1.41.2-pingcap-20251202-x
