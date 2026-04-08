@@ -241,6 +241,16 @@ func parseJob(v []byte, startTs, CRTs uint64, fromHistoryTable bool) (*model.Job
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
+	log.Info("parse ddl job",
+		zap.Bool("fromHistoryTable", fromHistoryTable),
+		zap.Uint64("startTs", startTs),
+		zap.Uint64("commitTs", CRTs),
+		zap.Int64("schemaID", job.SchemaID),
+		zap.Int64("tableID", job.TableID),
+		zap.Int64("type", int64(job.Type)),
+		zap.String("typeName", job.Type.String()),
+		zap.String("state", job.State.String()),
+		zap.ByteString("jobMeta", v))
 
 	if fromHistoryTable {
 		// we only want to get `create table` and `create tables` ddl from tidb_ddl_history, so we just throw out others ddls.
