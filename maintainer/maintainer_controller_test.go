@@ -1537,6 +1537,242 @@ func TestFinishBootstrapSkipsStaleCreateOperatorForDroppedTable(t *testing.T) {
 	}
 }
 
+// TestFinishBootstrapRestoresInFlightMergeWithoutDuplicateCoverage covers maintainer failover in
+// the middle of a merge. The bootstrap snapshot contains two source spans in WaitingMerge and the
+// overlapping merged target span in Preparing. FinishBootstrap must not panic in findHoles or
+// create a fresh absent table task; instead it should rebuild the merge-related tasks/operators
+// from the bootstrap snapshot.
+func TestFinishBootstrapRestoresInFlightMergeWithoutDuplicateCoverage(t *testing.T) {
+	testutil.SetUpTestServices(t)
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
+
+	tableTriggerEventDispatcherID := common.NewDispatcherID()
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
+		common.DDLSpanSchemaID,
+		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
+			ID:              tableTriggerEventDispatcherID.ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    1,
+		}, "node1", false)
+
+	cfg := config.GetDefaultReplicaConfig().Clone()
+	cfg.Scheduler = &config.ChangefeedSchedulerConfig{
+		EnableTableAcrossNodes: util.AddressOf(true),
+		BalanceScoreThreshold:  util.AddressOf(1),
+		MinTrafficPercentage:   util.AddressOf(0.8),
+		MaxTrafficPercentage:   util.AddressOf(1.2),
+	}
+	refresher := replica.NewRegionCountRefresher(cfID, time.Minute)
+	s := NewController(cfID, 1, &mockThreadPool{}, cfg, ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false)
+
+	schemaStore := eventservice.NewMockSchemaStore()
+	schemaStore.SetTables([]commonEvent.Table{
+		{
+			TableID:         1,
+			SchemaID:        1,
+			Splitable:       true,
+			SchemaTableName: &commonEvent.SchemaTableName{SchemaName: "test", TableName: "t1"},
+		},
+	})
+	appcontext.SetService(appcontext.SchemaStore, schemaStore)
+
+	totalSpan := common.TableIDToComparableSpan(common.DefaultKeyspaceID, 1)
+	midKey := appendNew(totalSpan.StartKey, 'a')
+	sourceSpan1 := &heartbeatpb.TableSpan{
+		TableID:    1,
+		StartKey:   totalSpan.StartKey,
+		EndKey:     midKey,
+		KeyspaceID: common.DefaultKeyspaceID,
+	}
+	sourceSpan2 := &heartbeatpb.TableSpan{
+		TableID:    1,
+		StartKey:   midKey,
+		EndKey:     totalSpan.EndKey,
+		KeyspaceID: common.DefaultKeyspaceID,
+	}
+	mergedSpan := &heartbeatpb.TableSpan{
+		TableID:    1,
+		StartKey:   totalSpan.StartKey,
+		EndKey:     totalSpan.EndKey,
+		KeyspaceID: common.DefaultKeyspaceID,
+	}
+
+	sourceDispatcherID1 := common.NewDispatcherID()
+	sourceDispatcherID2 := common.NewDispatcherID()
+	mergedDispatcherID := common.NewDispatcherID()
+
+	_, err := s.FinishBootstrap(map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{
+		"node1": {
+			ChangefeedID: cfID.ToPB(),
+			Spans: []*heartbeatpb.BootstrapTableSpan{
+				{
+					ID:              sourceDispatcherID1.ToPB(),
+					SchemaID:        1,
+					Span:            sourceSpan1,
+					ComponentStatus: heartbeatpb.ComponentState_WaitingMerge,
+					CheckpointTs:    10,
+					Mode:            common.DefaultMode,
+				},
+				{
+					ID:              sourceDispatcherID2.ToPB(),
+					SchemaID:        1,
+					Span:            sourceSpan2,
+					ComponentStatus: heartbeatpb.ComponentState_WaitingMerge,
+					CheckpointTs:    10,
+					Mode:            common.DefaultMode,
+				},
+				{
+					ID:              mergedDispatcherID.ToPB(),
+					SchemaID:        1,
+					Span:            mergedSpan,
+					ComponentStatus: heartbeatpb.ComponentState_Preparing,
+					CheckpointTs:    10,
+					Mode:            common.DefaultMode,
+				},
+			},
+			MergeOperators: []*heartbeatpb.MergeDispatcherRequest{
+				{
+					ChangefeedID:       cfID.ToPB(),
+					DispatcherIDs:      []*heartbeatpb.DispatcherID{sourceDispatcherID1.ToPB(), sourceDispatcherID2.ToPB()},
+					MergedDispatcherID: mergedDispatcherID.ToPB(),
+					Mode:               common.DefaultMode,
+				},
+			},
+			CheckpointTs: 10,
+		},
+	}, false)
+	require.NoError(t, err)
+	require.True(t, s.bootstrapped)
+
+	// No extra absent table span should be created during bootstrap; only the two source spans and
+	// the restored merged target should exist.
+	require.Zero(t, s.spanController.GetAbsentSize())
+	require.Equal(t, 3, len(s.spanController.GetTasksByTableID(1)))
+	require.Equal(t, 3, s.spanController.GetSchedulingSize())
+	require.Zero(t, s.spanController.GetReplicatingSize())
+	require.NotNil(t, s.spanController.GetTaskByID(sourceDispatcherID1))
+	require.NotNil(t, s.spanController.GetTaskByID(sourceDispatcherID2))
+	require.NotNil(t, s.spanController.GetTaskByID(mergedDispatcherID))
+
+	mergeOp := s.operatorController.GetOperator(mergedDispatcherID)
+	require.NotNil(t, mergeOp)
+	_, ok := mergeOp.(*operator.MergeDispatcherOperator)
+	require.True(t, ok)
+}
+
+// TestFinishBootstrapKeepsOverlapCoveredAfterMergeJournalCleanup covers a later merge-recovery
+// window where dispatcher manager has already committed the merged dispatcher and dropped the merge
+// journal, but the old source dispatchers are still waiting to be cleaned up. Bootstrap must still
+// treat the overlapping spans as complete coverage and avoid creating absent hole tasks.
+func TestFinishBootstrapKeepsOverlapCoveredAfterMergeJournalCleanup(t *testing.T) {
+	testutil.SetUpTestServices(t)
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
+
+	tableTriggerEventDispatcherID := common.NewDispatcherID()
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
+		common.DDLSpanSchemaID,
+		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
+			ID:              tableTriggerEventDispatcherID.ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    1,
+		}, "node1", false)
+
+	cfg := config.GetDefaultReplicaConfig().Clone()
+	cfg.Scheduler = &config.ChangefeedSchedulerConfig{
+		EnableTableAcrossNodes: util.AddressOf(true),
+		BalanceScoreThreshold:  util.AddressOf(1),
+		MinTrafficPercentage:   util.AddressOf(0.8),
+		MaxTrafficPercentage:   util.AddressOf(1.2),
+	}
+	refresher := replica.NewRegionCountRefresher(cfID, time.Minute)
+	s := NewController(cfID, 1, &mockThreadPool{}, cfg, ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false)
+
+	schemaStore := eventservice.NewMockSchemaStore()
+	schemaStore.SetTables([]commonEvent.Table{
+		{
+			TableID:         1,
+			SchemaID:        1,
+			Splitable:       true,
+			SchemaTableName: &commonEvent.SchemaTableName{SchemaName: "test", TableName: "t1"},
+		},
+	})
+	appcontext.SetService(appcontext.SchemaStore, schemaStore)
+
+	totalSpan := common.TableIDToComparableSpan(common.DefaultKeyspaceID, 1)
+	midKey := appendNew(totalSpan.StartKey, 'a')
+	sourceSpan1 := &heartbeatpb.TableSpan{
+		TableID:    1,
+		StartKey:   totalSpan.StartKey,
+		EndKey:     midKey,
+		KeyspaceID: common.DefaultKeyspaceID,
+	}
+	sourceSpan2 := &heartbeatpb.TableSpan{
+		TableID:    1,
+		StartKey:   midKey,
+		EndKey:     totalSpan.EndKey,
+		KeyspaceID: common.DefaultKeyspaceID,
+	}
+	mergedSpan := &heartbeatpb.TableSpan{
+		TableID:    1,
+		StartKey:   totalSpan.StartKey,
+		EndKey:     totalSpan.EndKey,
+		KeyspaceID: common.DefaultKeyspaceID,
+	}
+
+	sourceDispatcherID1 := common.NewDispatcherID()
+	sourceDispatcherID2 := common.NewDispatcherID()
+	mergedDispatcherID := common.NewDispatcherID()
+
+	// Scenario:
+	// 1. Source dispatchers are already in WaitingMerge and still present in bootstrap spans.
+	// 2. The merged dispatcher is committed and visible as Initializing.
+	// 3. The persisted merge operator is already gone, so bootstrap only has overlapping coverage.
+	// Expectation: FinishBootstrap succeeds without adding absent spans for fake holes.
+	_, err := s.FinishBootstrap(map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{
+		"node1": {
+			ChangefeedID: cfID.ToPB(),
+			Spans: []*heartbeatpb.BootstrapTableSpan{
+				{
+					ID:              sourceDispatcherID1.ToPB(),
+					SchemaID:        1,
+					Span:            sourceSpan1,
+					ComponentStatus: heartbeatpb.ComponentState_WaitingMerge,
+					CheckpointTs:    10,
+					Mode:            common.DefaultMode,
+				},
+				{
+					ID:              sourceDispatcherID2.ToPB(),
+					SchemaID:        1,
+					Span:            sourceSpan2,
+					ComponentStatus: heartbeatpb.ComponentState_WaitingMerge,
+					CheckpointTs:    10,
+					Mode:            common.DefaultMode,
+				},
+				{
+					ID:              mergedDispatcherID.ToPB(),
+					SchemaID:        1,
+					Span:            mergedSpan,
+					ComponentStatus: heartbeatpb.ComponentState_Initializing,
+					CheckpointTs:    10,
+					Mode:            common.DefaultMode,
+				},
+			},
+			CheckpointTs: 10,
+		},
+	}, false)
+	require.NoError(t, err)
+	require.True(t, s.bootstrapped)
+	require.Zero(t, s.spanController.GetAbsentSize())
+	require.GreaterOrEqual(t, len(s.spanController.GetTasksByTableID(1)), 2)
+	require.GreaterOrEqual(t, s.spanController.GetReplicatingSize(), 2)
+	require.Zero(t, s.spanController.GetSchedulingSize())
+	require.NotNil(t, s.spanController.GetTaskByID(mergedDispatcherID))
+}
+
 func TestSplitTableWhenBootstrapFinished(t *testing.T) {
 	testutil.SetUpTestServices(t)
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
@@ -1681,6 +1917,14 @@ func TestMapFindHole(t *testing.T) {
 			expectedHole: []*heartbeatpb.TableSpan{
 				{StartKey: []byte("t1_1"), EndKey: []byte("t2_0")},
 			},
+		},
+		{ // 6. overlapping spans still cover the whole range.
+			spans: []*heartbeatpb.TableSpan{
+				{StartKey: []byte("t1_0"), EndKey: []byte("t1_1")},
+				{StartKey: []byte("t1_0"), EndKey: []byte("t2_0")},
+				{StartKey: []byte("t1_1"), EndKey: []byte("t2_0")},
+			},
+			rang: &heartbeatpb.TableSpan{StartKey: []byte("t1_0"), EndKey: []byte("t2_0")},
 		},
 	}
 

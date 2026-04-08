@@ -456,40 +456,40 @@ func addToWorkingTaskMap(
 	tableSpans.ReplaceOrInsert(span, spanReplication)
 }
 
-// findHoles returns an array of Span that are not covered in the range
+// findHoles returns the uncovered sub-spans in totalSpan.
+//
+// Bootstrap snapshots can temporarily contain overlapping spans during in-flight merge recovery:
+// for example, source dispatchers in WaitingMerge can coexist with a merged dispatcher in
+// Preparing/Initializing. We therefore compute holes from the union of reported coverage instead
+// of assuming the input spans are strictly non-overlapping.
 func findHoles(currentSpan utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication], totalSpan *heartbeatpb.TableSpan) []*heartbeatpb.TableSpan {
-	lastSpan := &heartbeatpb.TableSpan{
-		TableID:    totalSpan.TableID,
-		StartKey:   totalSpan.StartKey,
-		EndKey:     totalSpan.StartKey,
-		KeyspaceID: totalSpan.KeyspaceID,
-	}
+	coveredEnd := totalSpan.StartKey
 	var holes []*heartbeatpb.TableSpan
 	// table span is sorted
 	currentSpan.Ascend(func(current *heartbeatpb.TableSpan, _ *replica.SpanReplication) bool {
-		ord := bytes.Compare(lastSpan.EndKey, current.StartKey)
-		if ord < 0 {
+		// Skip spans that are fully covered by earlier overlaps. This preserves complete table
+		// coverage without manufacturing holes for legitimate bootstrap overlap.
+		if bytes.Compare(current.EndKey, coveredEnd) <= 0 {
+			return true
+		}
+		if bytes.Compare(coveredEnd, current.StartKey) < 0 {
 			// Find a hole.
 			holes = append(holes, &heartbeatpb.TableSpan{
 				TableID:    totalSpan.TableID,
-				StartKey:   lastSpan.EndKey,
+				StartKey:   coveredEnd,
 				EndKey:     current.StartKey,
 				KeyspaceID: totalSpan.KeyspaceID,
 			})
-		} else if ord > 0 {
-			log.Panic("map is out of order",
-				zap.String("lastSpan", lastSpan.String()),
-				zap.String("current", current.String()))
 		}
-		lastSpan = current
+		coveredEnd = current.EndKey
 		return true
 	})
 	// Check if there is a hole in the end.
-	// the lastSpan not reach the totalSpan end
-	if !bytes.Equal(lastSpan.EndKey, totalSpan.EndKey) {
+	// coveredEnd not reach the totalSpan end
+	if !bytes.Equal(coveredEnd, totalSpan.EndKey) {
 		holes = append(holes, &heartbeatpb.TableSpan{
 			TableID:    totalSpan.TableID,
-			StartKey:   lastSpan.EndKey,
+			StartKey:   coveredEnd,
 			EndKey:     totalSpan.EndKey,
 			KeyspaceID: totalSpan.KeyspaceID,
 		})
