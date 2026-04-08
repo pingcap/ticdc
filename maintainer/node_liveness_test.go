@@ -13,9 +13,11 @@
 package maintainer
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/liveness"
@@ -187,4 +189,55 @@ func TestSetDispatcherDrainTargetSendsNodeHeartbeatAck(t *testing.T) {
 	hb = apply("", 1)
 	require.Equal(t, "", hb.DispatcherDrainTargetNodeId)
 	require.Equal(t, uint64(1), hb.DispatcherDrainTargetEpoch)
+
+	// Same-epoch reactivation is rejected locally, but retries should still get
+	// an immediate heartbeat that reflects the latest applied snapshot.
+	hb = apply("n2", 1)
+	require.Equal(t, "", hb.DispatcherDrainTargetNodeId)
+	require.Equal(t, uint64(1), hb.DispatcherDrainTargetEpoch)
+}
+
+func TestAddMaintainerIgnoreInvalidConfig(t *testing.T) {
+	mc := messaging.NewMockMessageCenter()
+	appcontext.SetService(appcontext.MessageCenter, mc)
+
+	var nodeLiveness liveness.Liveness
+	m := NewMaintainerManager(&node.Info{ID: node.ID("n1")}, &config.SchedulerConfig{}, &nodeLiveness)
+
+	changefeedID := common.NewChangeFeedIDWithName("cf-invalid-config", common.DefaultKeyspaceName)
+	status := m.onAddMaintainerRequest(&heartbeatpb.AddMaintainerRequest{
+		Id:           changefeedID.ToPB(),
+		Config:       []byte("not-json"),
+		CheckpointTs: 10,
+	})
+	require.Nil(t, status)
+
+	_, ok := m.GetMaintainerForChangefeed(changefeedID)
+	require.False(t, ok)
+}
+
+func TestAddMaintainerIgnoreInvalidCheckpointTs(t *testing.T) {
+	mc := messaging.NewMockMessageCenter()
+	appcontext.SetService(appcontext.MessageCenter, mc)
+
+	var nodeLiveness liveness.Liveness
+	m := NewMaintainerManager(&node.Info{ID: node.ID("n1")}, &config.SchedulerConfig{}, &nodeLiveness)
+
+	changefeedID := common.NewChangeFeedIDWithName("cf-invalid-checkpoint", common.DefaultKeyspaceName)
+	info := &config.ChangeFeedInfo{
+		ChangefeedID: changefeedID,
+		Config:       config.GetDefaultReplicaConfig(),
+	}
+	data, err := json.Marshal(info)
+	require.NoError(t, err)
+
+	status := m.onAddMaintainerRequest(&heartbeatpb.AddMaintainerRequest{
+		Id:           changefeedID.ToPB(),
+		Config:       data,
+		CheckpointTs: 0,
+	})
+	require.Nil(t, status)
+
+	_, ok := m.GetMaintainerForChangefeed(changefeedID)
+	require.False(t, ok)
 }
