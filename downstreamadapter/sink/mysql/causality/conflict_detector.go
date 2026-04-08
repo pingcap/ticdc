@@ -59,7 +59,7 @@ func New(
 ) *ConflictDetector {
 	ret := &ConflictDetector{
 		resolvedTxnCaches:            make([]txnCache, opt.Count),
-		slots:                        NewSlots(numSlots),
+		slots:                        newSlots(numSlots),
 		notifiedNodes:                chann.NewUnlimitedChannelDefault[func()](),
 		metricConflictDetectDuration: metrics.ConflictDetectDuration.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
 
@@ -100,7 +100,7 @@ func (d *ConflictDetector) Run(ctx context.Context) error {
 // ConflictKeys must be sorted by the slot index.
 func (d *ConflictDetector) Add(event *commonEvent.DMLEvent) {
 	start := time.Now()
-	hashes := ConflictKeys(event)
+	hashes := event.ConflictKeys()
 	node := d.slots.AllocNode(hashes)
 
 	event.AddPostFlushFunc(func() {
