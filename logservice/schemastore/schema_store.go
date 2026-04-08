@@ -162,10 +162,17 @@ func (s *keyspaceSchemaStore) tryUpdateResolvedTs() {
 
 // TODO tenfyzhong 2025-09-13 13:40:26 use a chan to decoupling
 func (s *keyspaceSchemaStore) writeDDLEvent(ddlEvent DDLJobWithCommitTs) {
-	log.Debug("write ddl event",
+	log.Info("write ddl event",
+		zap.Int64("jobID", ddlEvent.Job.ID),
 		zap.Int64("schemaID", ddlEvent.Job.SchemaID),
+		zap.String("schemaName", ddlEvent.Job.SchemaName),
 		zap.Int64("tableID", ddlEvent.Job.TableID),
+		zap.String("tableName", ddlEvent.Job.TableName),
+		zap.Any("type", ddlEvent.Job.Type),
+		zap.String("typeName", ddlEvent.Job.Type.String()),
+		zap.Int64("schemaVersion", ddlEvent.Job.BinlogInfo.SchemaVersion),
 		zap.Uint64("finishedTs", ddlEvent.Job.BinlogInfo.FinishedTS),
+		zap.Uint64("commitTs", ddlEvent.CommitTs),
 		zap.String("query", ddlEvent.Job.Query))
 
 	serverConfig := config.GetGlobalServerConfig()
