@@ -2847,6 +2847,121 @@ func TestActionMViewRefreshOutOfPlaceCutoverDDL(t *testing.T) {
 	checkState(t, pStorage)
 }
 
+func TestActionCreateMaterializedViewShadowDDL(t *testing.T) {
+	dbPath := fmt.Sprintf("/tmp/testdb-%s", t.Name())
+	t.Cleanup(func() {
+		_ = os.RemoveAll(dbPath)
+	})
+
+	const (
+		schemaID        int64  = 100
+		schemaName      string = "test"
+		sourceMViewID   int64  = 200
+		shadowTableID   int64  = 300
+		shadowTableName string = "__mv_shadow_200_1"
+	)
+
+	newMaterializedViewShadowTableInfoForTest := func() *model.TableInfo {
+		tableInfo := newEligibleTableInfoForTest(shadowTableID, shadowTableName)
+		tableInfo.MaterializedViewShadow = &model.MaterializedViewShadowInfo{
+			SourceMViewID: sourceMViewID,
+		}
+		return tableInfo
+	}
+
+	buildCreateMaterializedViewShadowJob := func(finishedTs uint64) *model.Job {
+		return &model.Job{
+			Type:     model.ActionCreateMaterializedViewShadow,
+			SchemaID: schemaID,
+			TableID:  shadowTableID,
+			BinlogInfo: &model.HistoryInfo{
+				TableInfo:  newMaterializedViewShadowTableInfoForTest(),
+				FinishedTS: finishedTs,
+			},
+		}
+	}
+
+	readDDLEventForTest := func(t *testing.T, pStorage *persistentStorage, ts uint64) PersistedDDLEvent {
+		t.Helper()
+
+		snap := pStorage.db.NewSnapshot()
+		defer snap.Close()
+		return readPersistedDDLEvent(snap, ts)
+	}
+
+	checkPhysicalTables := func(t *testing.T, pStorage *persistentStorage, snapTs uint64, expected map[int64]string) {
+		t.Helper()
+
+		tables, err := pStorage.getAllPhysicalTables(snapTs, nil)
+		require.NoError(t, err)
+		actual := make(map[int64]string, len(tables))
+		for _, table := range tables {
+			require.NotNil(t, table.SchemaTableName)
+			actual[table.TableID] = table.SchemaTableName.TableName
+		}
+		require.Equal(t, expected, actual)
+	}
+
+	checkState := func(t *testing.T, pStorage *persistentStorage) {
+		t.Helper()
+
+		require.Equal(t, []uint64{1000, 1030}, pStorage.tableTriggerDDLHistory)
+		require.Equal(t, []uint64{1020, 1030}, pStorage.tablesDDLHistory[shadowTableID])
+
+		checkPhysicalTables(t, pStorage, 1025, map[int64]string{})
+		checkPhysicalTables(t, pStorage, 1035, map[int64]string{})
+
+		createShadowDDL := readDDLEventForTest(t, pStorage, 1020)
+		require.Equal(t, byte(model.ActionCreateMaterializedViewShadow), createShadowDDL.Type)
+		require.Equal(t, shadowTableName, createShadowDDL.TableName)
+		require.NotNil(t, createShadowDDL.TableInfo)
+		require.NotNil(t, createShadowDDL.TableInfo.MaterializedViewShadow)
+		require.Equal(t, sourceMViewID, createShadowDDL.TableInfo.MaterializedViewShadow.SourceMViewID)
+
+		tableInfo, err := pStorage.forceGetTableInfo(shadowTableID, 1025)
+		require.NoError(t, err)
+		require.NotNil(t, tableInfo)
+		require.Equal(t, shadowTableID, tableInfo.TableName.TableID)
+		require.Equal(t, shadowTableName, tableInfo.TableName.Table)
+
+		var deletedErr *TableDeletedError
+		_, err = pStorage.forceGetTableInfo(shadowTableID, 1030)
+		require.ErrorAs(t, err, &deletedErr)
+
+		tableEvents, err := pStorage.fetchTableDDLEvents(common.NewDispatcherID(), shadowTableID, nil, 0, 2000)
+		require.NoError(t, err)
+		require.Len(t, tableEvents, 1)
+		require.Equal(t, byte(model.ActionDropTable), tableEvents[0].Type)
+		require.Equal(t, uint64(1030), tableEvents[0].FinishedTs)
+		require.Equal(t, fmt.Sprintf("DROP TABLE `%s`.`%s`", schemaName, shadowTableName), tableEvents[0].Query)
+		require.Equal(t, &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{shadowTableID},
+		}, tableEvents[0].NeedDroppedTables)
+
+		triggerEvents, err := pStorage.fetchTableTriggerDDLEvents(nil, 1000, 10)
+		require.NoError(t, err)
+		require.Len(t, triggerEvents, 1)
+		require.Equal(t, byte(model.ActionDropTable), triggerEvents[0].Type)
+		require.Equal(t, uint64(1030), triggerEvents[0].FinishedTs)
+	}
+
+	pStorage := newPersistentStorageForTest(dbPath, nil)
+	for _, job := range []*model.Job{
+		buildCreateSchemaJobForTest(schemaID, schemaName, 1000),
+		buildCreateMaterializedViewShadowJob(1020),
+		buildDropTableJobForTest(schemaID, shadowTableID, 1030),
+	} {
+		require.NoError(t, pStorage.handleDDLJob(job))
+	}
+	checkState(t, pStorage)
+	pStorage.close()
+
+	pStorage = loadPersistentStorageFromPathForTest(dbPath, math.MaxUint64)
+	defer pStorage.close()
+	checkState(t, pStorage)
+}
+
 func TestReadWriteMeta(t *testing.T) {
 	dbPath := fmt.Sprintf("/tmp/testdb-%s", t.Name())
 	err := os.RemoveAll(dbPath)
