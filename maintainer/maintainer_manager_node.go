@@ -163,16 +163,15 @@ func (m *Manager) onSetDispatcherDrainTargetRequest(msg *messaging.TargetMessage
 
 	req := msg.Message[0].(*heartbeatpb.SetDispatcherDrainTargetRequest)
 	target := node.ID(req.TargetNodeId)
-	if !m.node.tryUpdateDispatcherDrainTarget(target, req.TargetEpoch) {
-		return
+	if m.node.tryUpdateDispatcherDrainTarget(target, req.TargetEpoch) {
+		log.Info("dispatcher drain target updated",
+			zap.Stringer("targetNodeID", target),
+			zap.Uint64("targetEpoch", req.TargetEpoch))
+		m.maintainers.applyDispatcherDrainTarget(target, req.TargetEpoch)
 	}
-
-	log.Info("dispatcher drain target updated",
-		zap.Stringer("targetNodeID", target),
-		zap.Uint64("targetEpoch", req.TargetEpoch))
-	m.maintainers.applyDispatcherDrainTarget(target, req.TargetEpoch)
-	// A manager-level heartbeat is the authoritative acknowledgement that this
-	// node has applied the latest drain target, even when no maintainers exist.
+	// A manager-level heartbeat is the authoritative acknowledgement of the
+	// latest local drain snapshot, even when this request is a retry or stale
+	// duplicate and no maintainer update is needed.
 	m.sendNodeHeartbeat(true)
 }
 
