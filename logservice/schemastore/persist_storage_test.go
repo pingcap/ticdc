@@ -2768,7 +2768,6 @@ func TestActionCreateMaterializedViewDDL(t *testing.T) {
 	defer pStorage.close()
 	checkState(t, pStorage)
 }
-
 func TestActionMViewRefreshOutOfPlaceCutoverDDL(t *testing.T) {
 	dbPath := fmt.Sprintf("/tmp/testdb-%s", t.Name())
 	t.Cleanup(func() {
