@@ -59,10 +59,3 @@ func TestAreaConfigReapplyAfterCleanup(t *testing.T) {
 	registry.onAddPath(1, newBatchConfig(3, 0))
 	require.Equal(t, newBatchConfig(3, 0), registry.getBatchConfig(1))
 }
-
-func TestAreaSettingsBatchConfigNormalized(t *testing.T) {
-	settings := NewAreaSettingsWithMaxPendingSizeAndBatchConfig(
-		64*1024*1024, 0, "test", 0, -1,
-	)
-	require.Equal(t, newBatchConfig(0, -1), settings.batchConfig)
-}

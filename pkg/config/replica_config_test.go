@@ -195,47 +195,27 @@ func TestReplicaConfig_EnableSplittableCheck_DefaultValue(t *testing.T) {
 }
 
 func TestReplicaConfigValidateBatchConfig(t *testing.T) {
-	cases := []struct {
-		name       string
-		batchCount *int
-		batchBytes *int
-		wantErr    bool
-	}{
-		{
-			name:       "accepts zero batch count to disable count based batching",
-			batchCount: util.AddressOf(0),
-			wantErr:    false,
-		},
-		{
-			name:       "accepts zero batch bytes to disable byte based batching",
-			batchBytes: util.AddressOf(0),
-			wantErr:    false,
-		},
-		{
-			name:       "accepts positive batch count and bytes",
-			batchCount: util.AddressOf(1),
-			batchBytes: util.AddressOf(1),
-			wantErr:    false,
-		},
+	sinkURI, err := url.Parse("mysql://localhost:3306/test")
+	require.NoError(t, err)
+
+	assertBatchConfig := func(batchCount *int, batchBytes *int, wantErr string) {
+		cfg := GetDefaultReplicaConfig()
+		cfg.EventCollectorBatchCount = batchCount
+		cfg.EventCollectorBatchBytes = batchBytes
+
+		err := cfg.ValidateAndAdjust(sinkURI)
+		if wantErr != "" {
+			require.ErrorContains(t, err, wantErr)
+			return
+		}
+		require.NoError(t, err)
 	}
 
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			cfg := GetDefaultReplicaConfig()
-			cfg.EventCollectorBatchCount = tc.batchCount
-			cfg.EventCollectorBatchBytes = tc.batchBytes
-
-			sinkURI, err := url.Parse("mysql://localhost:3306/test")
-			require.NoError(t, err)
-
-			err = cfg.ValidateAndAdjust(sinkURI)
-			if tc.wantErr {
-				require.Error(t, err)
-				return
-			}
-			require.NoError(t, err)
-		})
-	}
+	assertBatchConfig(util.AddressOf(0), nil, "")
+	assertBatchConfig(nil, util.AddressOf(0), "")
+	assertBatchConfig(util.AddressOf(1), util.AddressOf(1), "")
+	assertBatchConfig(util.AddressOf(-1), nil, "event-collector-batch-count")
+	assertBatchConfig(nil, util.AddressOf(-1), "event-collector-batch-bytes")
 }
 
 func TestReplicaConfig_EnableRedoIOCheck_DefaultValue(t *testing.T) {

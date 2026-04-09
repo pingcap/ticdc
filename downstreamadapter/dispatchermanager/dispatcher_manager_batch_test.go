@@ -35,83 +35,41 @@ func newBatchConfigSink(t *testing.T, sinkType common.SinkType, batchCount int, 
 }
 
 func TestDispatcherManagerBatchConfig(t *testing.T) {
-	cases := []struct {
-		name           string
-		sinkBatchCount int
-		sinkBatchBytes int
-		cfg            *config.ChangefeedConfig
-		wantCount      int
-		wantBytes      int
-	}{
-		{
-			name:           "uses sink defaults",
-			sinkBatchCount: 4096,
-			sinkBatchBytes: 0,
-			cfg:            &config.ChangefeedConfig{},
-			wantCount:      4096,
-			wantBytes:      0,
-		},
-		{
-			name:           "explicit zero disables count and bytes batching",
-			sinkBatchCount: 2048,
-			sinkBatchBytes: 8192,
-			cfg: &config.ChangefeedConfig{
-				EventCollectorBatchCount: util.AddressOf(0),
-				EventCollectorBatchBytes: util.AddressOf(0),
-			},
-			wantCount: 0,
-			wantBytes: 0,
-		},
-		{
-			name:           "uses sink provided values",
-			sinkBatchCount: 2048,
-			sinkBatchBytes: 8192,
-			cfg:            &config.ChangefeedConfig{},
-			wantCount:      2048,
-			wantBytes:      8192,
-		},
-		{
-			name:           "overrides count only",
-			sinkBatchCount: 2048,
-			sinkBatchBytes: 8192,
-			cfg: &config.ChangefeedConfig{
-				EventCollectorBatchCount: util.AddressOf(123),
-			},
-			wantCount: 123,
-			wantBytes: 8192,
-		},
-		{
-			name:           "overrides bytes only",
-			sinkBatchCount: 2048,
-			sinkBatchBytes: 8192,
-			cfg: &config.ChangefeedConfig{
-				EventCollectorBatchBytes: util.AddressOf(456),
-			},
-			wantCount: 2048,
-			wantBytes: 456,
-		},
-		{
-			name:           "overrides both",
-			sinkBatchCount: 2048,
-			sinkBatchBytes: 8192,
-			cfg: &config.ChangefeedConfig{
-				EventCollectorBatchCount: util.AddressOf(123),
-				EventCollectorBatchBytes: util.AddressOf(456),
-			},
-			wantCount: 123,
-			wantBytes: 456,
-		},
+	assertBatchConfig := func(
+		sinkBatchCount int,
+		sinkBatchBytes int,
+		cfg *config.ChangefeedConfig,
+		wantCount int,
+		wantBytes int,
+	) {
+		sink := newBatchConfigSink(t, common.MysqlSinkType, sinkBatchCount, sinkBatchBytes)
+		m := &DispatcherManager{
+			config: cfg,
+		}
+		gotCount, gotBytes := m.getEventCollectorBatchCountAndBytes(sink)
+		require.Equal(t, wantCount, gotCount)
+		require.Equal(t, wantBytes, gotBytes)
 	}
 
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			sink := newBatchConfigSink(t, common.MysqlSinkType, tc.sinkBatchCount, tc.sinkBatchBytes)
-			m := &DispatcherManager{
-				config: tc.cfg,
-			}
-			gotCount, gotBytes := m.getEventCollectorBatchCountAndBytes(sink)
-			require.Equal(t, tc.wantCount, gotCount)
-			require.Equal(t, tc.wantBytes, gotBytes)
-		})
-	}
+	assertBatchConfig(2048, 8192, &config.ChangefeedConfig{}, 2048, 8192)
+	assertBatchConfig(2048, 8192, &config.ChangefeedConfig{
+		EventCollectorBatchCount: util.AddressOf(0),
+		EventCollectorBatchBytes: util.AddressOf(0),
+	}, 0, 0)
+	assertBatchConfig(2048, 8192, &config.ChangefeedConfig{
+		EventCollectorBatchBytes: util.AddressOf(0),
+	}, 2048, 0)
+	assertBatchConfig(2048, 8192, &config.ChangefeedConfig{
+		EventCollectorBatchCount: util.AddressOf(0),
+	}, 0, 8192)
+	assertBatchConfig(2048, 8192, &config.ChangefeedConfig{
+		EventCollectorBatchCount: util.AddressOf(123),
+	}, 123, 8192)
+	assertBatchConfig(2048, 8192, &config.ChangefeedConfig{
+		EventCollectorBatchBytes: util.AddressOf(456),
+	}, 2048, 456)
+	assertBatchConfig(2048, 8192, &config.ChangefeedConfig{
+		EventCollectorBatchCount: util.AddressOf(123),
+		EventCollectorBatchBytes: util.AddressOf(456),
+	}, 123, 456)
 }

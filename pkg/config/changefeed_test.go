@@ -22,42 +22,22 @@ import (
 )
 
 func TestChangeFeedInfoToChangefeedConfigBatchFields(t *testing.T) {
-	cases := []struct {
-		name       string
-		batchCount *int
-		batchBytes *int
-	}{
-		{
-			name:       "preserves nil batch fields",
-			batchCount: nil,
-			batchBytes: nil,
-		},
-		{
-			name:       "preserves explicit zero batch fields",
-			batchCount: util.AddressOf(0),
-			batchBytes: util.AddressOf(0),
-		},
-		{
-			name:       "preserves positive batch fields",
-			batchCount: util.AddressOf(123),
-			batchBytes: util.AddressOf(456),
-		},
+	assertBatchFields := func(batchCount *int, batchBytes *int) {
+		replicaConfig := GetDefaultReplicaConfig()
+		replicaConfig.EventCollectorBatchCount = batchCount
+		replicaConfig.EventCollectorBatchBytes = batchBytes
+
+		info := &ChangeFeedInfo{
+			ChangefeedID: common.NewChangefeedID4Test("test", "test"),
+			Config:       replicaConfig,
+		}
+
+		changefeedConfig := info.ToChangefeedConfig()
+		require.Equal(t, batchCount, changefeedConfig.EventCollectorBatchCount)
+		require.Equal(t, batchBytes, changefeedConfig.EventCollectorBatchBytes)
 	}
 
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			replicaConfig := GetDefaultReplicaConfig()
-			replicaConfig.EventCollectorBatchCount = tc.batchCount
-			replicaConfig.EventCollectorBatchBytes = tc.batchBytes
-
-			info := &ChangeFeedInfo{
-				ChangefeedID: common.NewChangefeedID4Test("test", "test"),
-				Config:       replicaConfig,
-			}
-
-			changefeedConfig := info.ToChangefeedConfig()
-			require.Equal(t, tc.batchCount, changefeedConfig.EventCollectorBatchCount)
-			require.Equal(t, tc.batchBytes, changefeedConfig.EventCollectorBatchBytes)
-		})
-	}
+	assertBatchFields(nil, nil)
+	assertBatchFields(util.AddressOf(0), util.AddressOf(0))
+	assertBatchFields(util.AddressOf(123), util.AddressOf(456))
 }
