@@ -814,8 +814,12 @@ func shouldSkipDDL(job *model.Job, tableMap map[int64]*BasicTableInfo) bool {
 	//    Therefore, the only reliable way to determine if a later DDL operation is redundant
 	//    is by verifying whether the table already exists.
 	case model.ActionCreateTable, model.ActionCreateMaterializedView, model.ActionCreateMaterializedViewShadow:
+		tableInfo := job.BinlogInfo.TableInfo
+		if model.ActionType(job.Type) == model.ActionCreateMaterializedView {
+			tableInfo = getCreateMaterializedViewTableInfo(job)
+		}
 		// Note: partition table's logical table id is also in tableMap
-		if _, ok := tableMap[job.BinlogInfo.TableInfo.ID]; ok {
+		if _, ok := tableMap[tableInfo.ID]; ok {
 			log.Debug("table already exists. ignore DDL",
 				zap.Int64("schemaID", job.SchemaID),
 				zap.String("schemaName", job.SchemaName),

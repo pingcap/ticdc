@@ -2818,7 +2818,7 @@ func TestActionMViewRefreshOutOfPlaceCutoverDDL(t *testing.T) {
 			TableID:  oldMViewID,
 			Query:    fmt.Sprintf("REFRESH MATERIALIZED VIEW `%s`.`%s` COMPLETE OUT OF PLACE", schemaName, mviewName),
 			BinlogInfo: &model.HistoryInfo{
-				TableInfo:  buildCreateMaterializedViewJobForTest(schemaID, shadowTableID, mviewName, []int64{baseTableID}, "select * from t_base", finishedTs).BinlogInfo.TableInfo,
+				TableInfo:  newEligibleMaterializedViewTableInfoForTest(shadowTableID, mviewName, []int64{baseTableID}, "select * from t_base"),
 				FinishedTS: finishedTs,
 			},
 		}

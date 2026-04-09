@@ -137,6 +137,12 @@ func TestCreateMaterializedViewWithEmptySchemaVersionIsHandled(t *testing.T) {
 	}
 	createSchemaDDL.Job.BinlogInfo.SchemaVersion = 100
 
+	createBaseTableDDL := DDLJobWithCommitTs{
+		Job:      buildCreateTableJobForTest(100, 150, "t_base", 1005),
+		CommitTs: 1005,
+	}
+	createBaseTableDDL.Job.BinlogInfo.SchemaVersion = 101
+
 	createMVDDL := DDLJobWithCommitTs{
 		Job:      buildCreateMaterializedViewJobForTest(100, 200, "mv1", []int64{150}, "select * from t_base", 1010),
 		CommitTs: 1010,
@@ -144,7 +150,7 @@ func TestCreateMaterializedViewWithEmptySchemaVersionIsHandled(t *testing.T) {
 	// This is the real case on the cluster: create materialized view comes with SchemaVersion == 0.
 	createMVDDL.Job.BinlogInfo.SchemaVersion = 0
 
-	for _, ddl := range []DDLJobWithCommitTs{createSchemaDDL, createMVDDL} {
+	for _, ddl := range []DDLJobWithCommitTs{createSchemaDDL, createBaseTableDDL, createMVDDL} {
 		store.writeDDLEvent(ddl)
 	}
 	store.advancePendingResolvedTs(1010)
@@ -156,10 +162,15 @@ func TestCreateMaterializedViewWithEmptySchemaVersionIsHandled(t *testing.T) {
 
 	tables, err := pstorage.getAllPhysicalTables(1010, nil)
 	require.NoError(t, err)
-	require.Len(t, tables, 1)
-	require.NotNil(t, tables[0].SchemaTableName)
-	require.Equal(t, "test", tables[0].SchemaTableName.SchemaName)
-	require.Equal(t, "mv1", tables[0].SchemaTableName.TableName)
+	require.Len(t, tables, 2)
+	tableNames := make(map[string]struct{}, len(tables))
+	for _, table := range tables {
+		require.NotNil(t, table.SchemaTableName)
+		require.Equal(t, "test", table.SchemaTableName.SchemaName)
+		tableNames[table.SchemaTableName.TableName] = struct{}{}
+	}
+	require.Contains(t, tableNames, "t_base")
+	require.Contains(t, tableNames, "mv1")
 
 	events, err := pstorage.fetchTableDDLEvents(common.NewDispatcherID(), 200, nil, 1000, 2000)
 	require.NoError(t, err)
