@@ -805,18 +805,55 @@ func loadAllPhysicalTablesAtTs(
 		if !ok {
 			log.Panic("table info not found", zap.Int64("tableID", tableID))
 		}
+		log.Info("encounter physical table when loading tables at ts",
+			zap.Uint64("gcTs", gcTs),
+			zap.Uint64("snapVersion", snapVersion),
+			zap.Int64("schemaID", tableInfo.SchemaID),
+			zap.Int64("tableID", tableID),
+			zap.String("schema", schemaName),
+			zap.String("table", tableInfo.Name))
 		if fullTableInfo.MaterializedViewShadow != nil {
+			log.Info("skip physical table when loading tables at ts due to materialized view shadow",
+				zap.Int64("schemaID", tableInfo.SchemaID),
+				zap.Int64("tableID", tableID),
+				zap.String("schema", schemaName),
+				zap.String("table", tableInfo.Name))
 			continue
 		}
 		if tableFilter != nil {
-			if tableFilter.ShouldIgnoreTable(schemaName, tableInfo.Name) {
+			wrappedTableInfo := common.WrapTableInfo(schemaName, fullTableInfo)
+			ignoredByFilter := tableFilter.ShouldIgnoreTable(schemaName, tableInfo.Name)
+			eligible := tableFilter.IsEligibleTable(wrappedTableInfo)
+			log.Info("evaluate physical table against changefeed filter when loading tables at ts",
+				zap.Int64("schemaID", tableInfo.SchemaID),
+				zap.Int64("tableID", tableID),
+				zap.String("schema", schemaName),
+				zap.String("table", tableInfo.Name),
+				zap.Bool("ignoredByFilter", ignoredByFilter),
+				zap.Bool("eligible", eligible))
+			if ignoredByFilter {
+				log.Info("skip physical table when loading tables at ts due to filter rules",
+					zap.Int64("schemaID", tableInfo.SchemaID),
+					zap.Int64("tableID", tableID),
+					zap.String("schema", schemaName),
+					zap.String("table", tableInfo.Name))
 				continue
 			}
-			if !tableFilter.IsEligibleTable(common.WrapTableInfo(schemaName, fullTableInfo)) {
-				log.Info("table is not eligible, should ignore this table", zap.String("schema", schemaName), zap.String("table", tableInfo.Name), zap.Any("tableInfo", fullTableInfo))
+			if !eligible {
+				log.Info("table is not eligible, should ignore this table",
+					zap.String("schema", schemaName),
+					zap.String("table", tableInfo.Name),
+					zap.Int64("schemaID", tableInfo.SchemaID),
+					zap.Int64("tableID", tableID),
+					zap.Any("tableInfo", fullTableInfo))
 				continue
 			}
 		}
+		log.Info("keep physical table when loading tables at ts",
+			zap.Int64("schemaID", tableInfo.SchemaID),
+			zap.Int64("tableID", tableID),
+			zap.String("schema", schemaName),
+			zap.String("table", tableInfo.Name))
 
 		splitable := isSplitable(fullTableInfo)
 		if partitionInfo, ok := partitionMap[tableID]; ok {
