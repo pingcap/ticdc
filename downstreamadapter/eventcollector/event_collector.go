@@ -285,8 +285,6 @@ func (c *EventCollector) PrepareAddDispatcher(
 	err := ds.AddPath(target.GetId(), stat, areaSetting)
 	if err != nil {
 		log.Warn("add dispatcher to dynamic stream failed", zap.Error(err))
-		stat.run()
-		return
 	}
 	stat.run()
 }
