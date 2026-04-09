@@ -39,6 +39,8 @@ const (
 	minChangeFeedErrorStuckDuration      = time.Minute * 30
 	defaultActiveActiveProgressInterval  = time.Minute * 30
 	defaultActiveActiveSyncStatsInterval = time.Minute
+	// Keep in sync with utils/dynstream.MaxBatchCount.
+	maxEventCollectorBatchCount = 4096
 	// DefaultTiDBSourceID is the default source ID of TiDB cluster.
 	DefaultTiDBSourceID = 1
 )
@@ -368,6 +370,11 @@ func (c *ReplicaConfig) ValidateAndAdjust(sinkURI *url.URL) error { // check sin
 	// allow the batch count and batch bytes set to 0, to disable the batch mechanism
 	if c.EventCollectorBatchCount != nil && *c.EventCollectorBatchCount < 0 {
 		return cerror.ErrInvalidReplicaConfig.FastGenByArgs("event-collector-batch-count must be set not smaller than 0")
+	}
+	if c.EventCollectorBatchCount != nil && *c.EventCollectorBatchCount > maxEventCollectorBatchCount {
+		return cerror.ErrInvalidReplicaConfig.FastGenByArgs(
+			"event-collector-batch-count must be set not larger than %d", maxEventCollectorBatchCount,
+		)
 	}
 	if c.EventCollectorBatchBytes != nil && *c.EventCollectorBatchBytes < 0 {
 		return cerror.ErrInvalidReplicaConfig.FastGenByArgs("event-collector-batch-bytes must be set not smaller than 0")

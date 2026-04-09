@@ -214,6 +214,8 @@ func TestReplicaConfigValidateBatchConfig(t *testing.T) {
 	assertBatchConfig(util.AddressOf(0), nil, "")
 	assertBatchConfig(nil, util.AddressOf(0), "")
 	assertBatchConfig(util.AddressOf(1), util.AddressOf(1), "")
+	assertBatchConfig(util.AddressOf(4096), nil, "")
+	assertBatchConfig(util.AddressOf(4097), nil, "event-collector-batch-count")
 	assertBatchConfig(util.AddressOf(-1), nil, "event-collector-batch-count")
 	assertBatchConfig(nil, util.AddressOf(-1), "event-collector-batch-bytes")
 }
