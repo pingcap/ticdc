@@ -2641,6 +2641,134 @@ func TestApplyDDLJobs(t *testing.T) {
 	}
 }
 
+func TestActionCreateMaterializedViewDDL(t *testing.T) {
+	dbPath := fmt.Sprintf("/tmp/testdb-%s", t.Name())
+	t.Cleanup(func() {
+		_ = os.RemoveAll(dbPath)
+	})
+
+	const (
+		schemaID    int64  = 100
+		schemaName  string = "test"
+		baseTableID int64  = 150
+		mviewID     int64  = 200
+		mviewName   string = "mv1"
+	)
+
+	readDDLEventForTest := func(t *testing.T, pStorage *persistentStorage, ts uint64) PersistedDDLEvent {
+		t.Helper()
+
+		snap := pStorage.db.NewSnapshot()
+		defer snap.Close()
+		return readPersistedDDLEvent(snap, ts)
+	}
+
+	checkPhysicalTables := func(t *testing.T, pStorage *persistentStorage, snapTs uint64, expected map[int64]string) {
+		t.Helper()
+
+		tables, err := pStorage.getAllPhysicalTables(snapTs, nil)
+		require.NoError(t, err)
+		actual := make(map[int64]string, len(tables))
+		for _, table := range tables {
+			require.NotNil(t, table.SchemaTableName)
+			actual[table.TableID] = table.SchemaTableName.TableName
+		}
+		require.Equal(t, expected, actual)
+	}
+
+	checkState := func(t *testing.T, pStorage *persistentStorage) {
+		t.Helper()
+
+		require.Equal(t, map[int64]*BasicTableInfo{
+			mviewID: {
+				SchemaID: schemaID,
+				Name:     mviewName,
+			},
+		}, pStorage.tableMap)
+		require.Equal(t, map[int64]*BasicDatabaseInfo{
+			schemaID: {
+				Name: schemaName,
+				Tables: map[int64]bool{
+					mviewID: true,
+				},
+			},
+		}, pStorage.databaseMap)
+		require.Equal(t, map[int64][]uint64{
+			mviewID: {1010},
+		}, pStorage.tablesDDLHistory)
+		require.Equal(t, []uint64{1000, 1010}, pStorage.tableTriggerDDLHistory)
+
+		checkPhysicalTables(t, pStorage, 1005, map[int64]string{})
+		checkPhysicalTables(t, pStorage, 1015, map[int64]string{
+			mviewID: mviewName,
+		})
+
+		createMVDDL := readDDLEventForTest(t, pStorage, 1010)
+		require.Equal(t, byte(model.ActionCreateMaterializedView), createMVDDL.Type)
+		require.Equal(t, schemaName, createMVDDL.SchemaName)
+		require.Equal(t, mviewName, createMVDDL.TableName)
+		require.NotNil(t, createMVDDL.TableInfo.MaterializedView)
+		require.Nil(t, createMVDDL.TableInfo.MaterializedViewShadow)
+		require.Equal(t, []int64{baseTableID}, createMVDDL.TableInfo.MaterializedView.BaseTableIDs)
+
+		tableInfo, err := pStorage.forceGetTableInfo(mviewID, 1010)
+		require.NoError(t, err)
+		require.NotNil(t, tableInfo)
+		require.Equal(t, mviewID, tableInfo.TableName.TableID)
+		require.Equal(t, mviewName, tableInfo.TableName.Table)
+
+		events, err := pStorage.fetchTableDDLEvents(common.NewDispatcherID(), mviewID, nil, 1000, 2000)
+		require.NoError(t, err)
+		require.Len(t, events, 1)
+		require.Equal(t, byte(model.ActionCreateMaterializedView), events[0].Type)
+		require.Equal(t, uint64(1010), events[0].FinishedTs)
+		require.False(t, events[0].NotSync)
+		require.False(t, events[0].TiDBOnly)
+		require.Equal(t, &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{common.DDLSpanTableID},
+		}, events[0].BlockedTables)
+		require.Equal(t, []commonEvent.Table{
+			{
+				SchemaID:  schemaID,
+				TableID:   mviewID,
+				Splitable: true,
+			},
+		}, events[0].NeedAddedTables)
+		require.Equal(t, &commonEvent.TableNameChange{
+			AddName: []commonEvent.SchemaTableName{
+				{
+					SchemaName: schemaName,
+					TableName:  mviewName,
+				},
+			},
+		}, events[0].TableNameChange)
+		require.NotNil(t, events[0].TableInfo)
+		require.Equal(t, mviewID, events[0].TableInfo.TableName.TableID)
+		require.Equal(t, mviewName, events[0].TableInfo.TableName.Table)
+
+		triggerEvents, err := pStorage.fetchTableTriggerDDLEvents(nil, 999, 10)
+		require.NoError(t, err)
+		require.Len(t, triggerEvents, 2)
+		require.Equal(t, byte(model.ActionCreateSchema), triggerEvents[0].Type)
+		require.Equal(t, byte(model.ActionCreateMaterializedView), triggerEvents[1].Type)
+	}
+
+	pStorage := newPersistentStorageForTest(dbPath, nil)
+	for _, job := range []*model.Job{
+		buildCreateSchemaJobForTest(schemaID, schemaName, 1000),
+		buildCreateMaterializedViewJobForTest(schemaID, mviewID, mviewName, []int64{baseTableID}, "select * from t_base", 1010),
+	} {
+		require.NoError(t, pStorage.handleDDLJob(job))
+	}
+	checkState(t, pStorage)
+	pStorage.close()
+
+	pStorage = loadPersistentStorageFromPathForTest(dbPath, math.MaxUint64)
+	defer pStorage.close()
+	checkState(t, pStorage)
+}
+
 func TestActionMViewRefreshOutOfPlaceCutoverDDL(t *testing.T) {
 	dbPath := fmt.Sprintf("/tmp/testdb-%s", t.Name())
 	t.Cleanup(func() {
@@ -2657,15 +2785,6 @@ func TestActionMViewRefreshOutOfPlaceCutoverDDL(t *testing.T) {
 		shadowTableName string = "__mv_shadow_200_1"
 	)
 
-	newMaterializedViewTableInfoForTest := func(tableID int64, tableName string) *model.TableInfo {
-		tableInfo := newEligibleTableInfoForTest(tableID, tableName)
-		tableInfo.MaterializedView = &model.MaterializedViewInfo{
-			BaseTableIDs: []int64{baseTableID},
-			SQLContent:   "select * from t_base",
-		}
-		return tableInfo
-	}
-
 	newMaterializedViewShadowTableInfoForTest := func(tableID int64, tableName string, sourceMViewID int64) *model.TableInfo {
 		tableInfo := newEligibleTableInfoForTest(tableID, tableName)
 		tableInfo.MaterializedViewShadow = &model.MaterializedViewShadowInfo{
@@ -2675,15 +2794,9 @@ func TestActionMViewRefreshOutOfPlaceCutoverDDL(t *testing.T) {
 	}
 
 	buildCreateMaterializedViewJob := func(finishedTs uint64) *model.Job {
-		return &model.Job{
-			Type:     model.ActionCreateTable,
-			SchemaID: schemaID,
-			TableID:  oldMViewID,
-			BinlogInfo: &model.HistoryInfo{
-				TableInfo:  newMaterializedViewTableInfoForTest(oldMViewID, mviewName),
-				FinishedTS: finishedTs,
-			},
-		}
+		return buildCreateMaterializedViewJobForTest(
+			schemaID, oldMViewID, mviewName, []int64{baseTableID}, "select * from t_base", finishedTs,
+		)
 	}
 
 	buildCreateMaterializedViewShadowJob := func(finishedTs uint64) *model.Job {
@@ -2706,7 +2819,7 @@ func TestActionMViewRefreshOutOfPlaceCutoverDDL(t *testing.T) {
 			TableID:  oldMViewID,
 			Query:    fmt.Sprintf("REFRESH MATERIALIZED VIEW `%s`.`%s` COMPLETE OUT OF PLACE", schemaName, mviewName),
 			BinlogInfo: &model.HistoryInfo{
-				TableInfo:  newMaterializedViewTableInfoForTest(shadowTableID, mviewName),
+				TableInfo:  buildCreateMaterializedViewJobForTest(schemaID, shadowTableID, mviewName, []int64{baseTableID}, "select * from t_base", finishedTs).BinlogInfo.TableInfo,
 				FinishedTS: finishedTs,
 			},
 		}

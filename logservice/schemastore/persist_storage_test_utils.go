@@ -263,6 +263,25 @@ func buildCreateTableJobForTest(schemaID, tableID int64, tableName string, finis
 	}
 }
 
+func buildCreateMaterializedViewJobForTest(
+	schemaID, tableID int64, tableName string, baseTableIDs []int64, sqlContent string, finishedTs uint64,
+) *model.Job {
+	tableInfo := newEligibleTableInfoForTest(tableID, tableName)
+	tableInfo.MaterializedView = &model.MaterializedViewInfo{
+		BaseTableIDs: append([]int64(nil), baseTableIDs...),
+		SQLContent:   sqlContent,
+	}
+	return &model.Job{
+		Type:     model.ActionCreateMaterializedView,
+		SchemaID: schemaID,
+		TableID:  tableID,
+		BinlogInfo: &model.HistoryInfo{
+			TableInfo:  tableInfo,
+			FinishedTS: finishedTs,
+		},
+	}
+}
+
 func buildCreateTablesJobForTest(schemaID int64, tableIDs []int64, tableNames []string, finishedTs uint64) *model.Job {
 	querys := make([]string, 0, len(tableIDs))
 	for i := range tableIDs {
