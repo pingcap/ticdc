@@ -32,6 +32,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/keyspace"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/tikv/client-go/v2/oracle"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
@@ -109,7 +110,7 @@ func (s *keyspaceSchemaStore) tryUpdateResolvedTs() {
 	}
 	resolvedEvents := s.unsortedCache.fetchSortedDDLEventBeforeTS(pendingTs)
 	for _, event := range resolvedEvents {
-		if event.Job.BinlogInfo.SchemaVersion == 0 /* means the ddl is ignored in upstream */ {
+		if shouldSkipDDLWithEmptySchemaVersion(event.Job) {
 			log.Info("skip ddl job with empty SchemaVersion",
 				zap.Any("type", event.Job.Type),
 				zap.String("job", event.Job.Query),
@@ -158,6 +159,15 @@ func (s *keyspaceSchemaStore) tryUpdateResolvedTs() {
 		SchemaVersion: s.schemaVersion,
 		ResolvedTs:    pendingTs,
 	})
+}
+
+func shouldSkipDDLWithEmptySchemaVersion(job *timodel.Job) bool {
+	if job.BinlogInfo.SchemaVersion != 0 {
+		return false
+	}
+	// Materialized view creation jobs may legitimately carry an empty schema version.
+	// They still need to be persisted so existing MV tables are visible during bootstrap.
+	return job.Type != timodel.ActionCreateMaterializedView
 }
 
 // TODO tenfyzhong 2025-09-13 13:40:26 use a chan to decoupling
