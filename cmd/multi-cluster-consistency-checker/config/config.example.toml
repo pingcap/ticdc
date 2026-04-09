@@ -9,6 +9,12 @@ log-level = "info"
 # Data directory configuration, contains report and checkpoint data
 data-dir = "/tmp/multi-cluster-consistency-checker-data"
 
+# Maximum number of report files to keep in data directory
+max-report-files = 1000
+
+# Enable list by file index
+enable-list-by-file-index = false
+
   # Tables configuration
   [global.tables]
   schema1 = ["table1", "table2"]

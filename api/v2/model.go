@@ -497,14 +497,15 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 		var cloudStorageConfig *config.CloudStorageConfig
 		if c.Sink.CloudStorageConfig != nil {
 			cloudStorageConfig = &config.CloudStorageConfig{
-				WorkerCount:          c.Sink.CloudStorageConfig.WorkerCount,
-				FlushInterval:        c.Sink.CloudStorageConfig.FlushInterval,
-				FileSize:             c.Sink.CloudStorageConfig.FileSize,
-				OutputColumnID:       c.Sink.CloudStorageConfig.OutputColumnID,
-				FileExpirationDays:   c.Sink.CloudStorageConfig.FileExpirationDays,
-				FileCleanupCronSpec:  c.Sink.CloudStorageConfig.FileCleanupCronSpec,
-				FlushConcurrency:     c.Sink.CloudStorageConfig.FlushConcurrency,
-				OutputRawChangeEvent: c.Sink.CloudStorageConfig.OutputRawChangeEvent,
+				WorkerCount:                  c.Sink.CloudStorageConfig.WorkerCount,
+				FlushInterval:                c.Sink.CloudStorageConfig.FlushInterval,
+				FileSize:                     c.Sink.CloudStorageConfig.FileSize,
+				OutputColumnID:               c.Sink.CloudStorageConfig.OutputColumnID,
+				FileExpirationDays:           c.Sink.CloudStorageConfig.FileExpirationDays,
+				FileCleanupCronSpec:          c.Sink.CloudStorageConfig.FileCleanupCronSpec,
+				FlushConcurrency:             c.Sink.CloudStorageConfig.FlushConcurrency,
+				EnableSchemaIndexByGetObject: c.Sink.CloudStorageConfig.EnableSchemaIndexByGetObject,
+				OutputRawChangeEvent:         c.Sink.CloudStorageConfig.OutputRawChangeEvent,
 			}
 		}
 		var debeziumConfig *config.DebeziumConfig
@@ -854,14 +855,15 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 		var cloudStorageConfig *CloudStorageConfig
 		if cloned.Sink.CloudStorageConfig != nil {
 			cloudStorageConfig = &CloudStorageConfig{
-				WorkerCount:          cloned.Sink.CloudStorageConfig.WorkerCount,
-				FlushInterval:        cloned.Sink.CloudStorageConfig.FlushInterval,
-				FileSize:             cloned.Sink.CloudStorageConfig.FileSize,
-				OutputColumnID:       cloned.Sink.CloudStorageConfig.OutputColumnID,
-				FileExpirationDays:   cloned.Sink.CloudStorageConfig.FileExpirationDays,
-				FileCleanupCronSpec:  cloned.Sink.CloudStorageConfig.FileCleanupCronSpec,
-				FlushConcurrency:     cloned.Sink.CloudStorageConfig.FlushConcurrency,
-				OutputRawChangeEvent: cloned.Sink.CloudStorageConfig.OutputRawChangeEvent,
+				WorkerCount:                  cloned.Sink.CloudStorageConfig.WorkerCount,
+				FlushInterval:                cloned.Sink.CloudStorageConfig.FlushInterval,
+				FileSize:                     cloned.Sink.CloudStorageConfig.FileSize,
+				OutputColumnID:               cloned.Sink.CloudStorageConfig.OutputColumnID,
+				FileExpirationDays:           cloned.Sink.CloudStorageConfig.FileExpirationDays,
+				FileCleanupCronSpec:          cloned.Sink.CloudStorageConfig.FileCleanupCronSpec,
+				FlushConcurrency:             cloned.Sink.CloudStorageConfig.FlushConcurrency,
+				EnableSchemaIndexByGetObject: cloned.Sink.CloudStorageConfig.EnableSchemaIndexByGetObject,
+				OutputRawChangeEvent:         cloned.Sink.CloudStorageConfig.OutputRawChangeEvent,
 			}
 		}
 		var debeziumConfig *DebeziumConfig
@@ -1490,14 +1492,15 @@ type MySQLConfig struct {
 
 // CloudStorageConfig represents a cloud storage sink configuration
 type CloudStorageConfig struct {
-	WorkerCount          *int    `json:"worker_count,omitempty"`
-	FlushInterval        *string `json:"flush_interval,omitempty"`
-	FileSize             *int    `json:"file_size,omitempty"`
-	OutputColumnID       *bool   `json:"output_column_id,omitempty"`
-	FileExpirationDays   *int    `json:"file_expiration_days,omitempty"`
-	FileCleanupCronSpec  *string `json:"file_cleanup_cron_spec,omitempty"`
-	FlushConcurrency     *int    `json:"flush_concurrency,omitempty"`
-	OutputRawChangeEvent *bool   `json:"output_raw_change_event,omitempty"`
+	WorkerCount                  *int    `json:"worker_count,omitempty"`
+	FlushInterval                *string `json:"flush_interval,omitempty"`
+	FileSize                     *int    `json:"file_size,omitempty"`
+	OutputColumnID               *bool   `json:"output_column_id,omitempty"`
+	FileExpirationDays           *int    `json:"file_expiration_days,omitempty"`
+	FileCleanupCronSpec          *string `json:"file_cleanup_cron_spec,omitempty"`
+	FlushConcurrency             *int    `json:"flush_concurrency,omitempty"`
+	EnableSchemaIndexByGetObject *bool   `json:"enable_schema_index_by_get_object,omitempty"`
+	OutputRawChangeEvent         *bool   `json:"output_raw_change_event,omitempty"`
 }
 
 // ChangefeedStatus holds common information of a changefeed in cdc

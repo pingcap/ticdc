@@ -214,9 +214,9 @@ func validateS3ChangefeedSinkConfig(
 			return "", fmt.Errorf("cluster %s: s3 changefeed %s date-separator is %q, but only %q is supported",
 				clusterID, s3ChangefeedID, dateSep.String(), cdcconfig.DateSeparatorNone.String())
 		}
-		if sinkConfig.CloudStorageConfig == nil ||
-			sinkConfig.CloudStorageConfig.EnableSchemaIndexByGetObject == nil ||
-			!*sinkConfig.CloudStorageConfig.EnableSchemaIndexByGetObject {
+		enableSchemaIndexByGetObject := sinkConfig.CloudStorageConfig != nil &&
+			util.GetOrZero(sinkConfig.CloudStorageConfig.EnableSchemaIndexByGetObject)
+		if !enableSchemaIndexByGetObject {
 			return "", fmt.Errorf("cluster %s: s3 changefeed %s enable-schema-index-by-get-object is not enabled",
 				clusterID, s3ChangefeedID)
 		}

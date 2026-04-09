@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/types"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	"go.uber.org/zap"
 )
@@ -340,6 +341,9 @@ func (c *indexBasedNewFileDiscoverer) discoverAndDownloadNewTableVersions(
 	metaIndexPath := cloudstorage.GenerateSchemaMetaIndexFilePath(schema, table)
 	content, err := c.consumer.s3Storage.ReadFile(ctx, metaIndexPath)
 	if err != nil {
+		if util.IsNotExistInExtStorage(err) {
+			return nil, nil
+		}
 		return nil, errors.Trace(err)
 	}
 	latestSeq, err := cloudstorage.FetchSchemaMetaIndexFromFileName(strings.TrimSpace(string(content)))
@@ -465,13 +469,17 @@ func (c *indexBasedNewFileDiscoverer) readIndexFile(
 	ctx context.Context,
 	schema, table string,
 	version uint64,
-) (uint64, error) {
+) (uint64, bool, error) {
 	indexFilePath := path.Join(schema, table, fmt.Sprintf("%d", version), "meta/CDC.index")
 	content, err := c.consumer.s3Storage.ReadFile(ctx, indexFilePath)
 	if err != nil {
-		return 0, errors.Trace(err)
+		if util.IsNotExistInExtStorage(err) {
+			return 0, false, nil
+		}
+		return 0, false, errors.Trace(err)
 	}
-	return cloudstorage.FetchIndexFromFileName(strings.TrimSpace(string(content)), c.consumer.fileExtension)
+	seq, err := cloudstorage.FetchIndexFromFileName(strings.TrimSpace(string(content)), c.consumer.fileExtension)
+	return seq, true, errors.Trace(err)
 }
 
 func (c *indexBasedNewFileDiscoverer) getNewFilesForSchemaPathKey(
@@ -479,9 +487,12 @@ func (c *indexBasedNewFileDiscoverer) getNewFilesForSchemaPathKey(
 	schema, table string,
 	version *types.VersionKey,
 ) (map[cloudstorage.DmlPathKey]fileIndexRange, error) {
-	latestSeq, err := c.readIndexFile(ctx, schema, table, version.Version)
+	latestSeq, exists, err := c.readIndexFile(ctx, schema, table, version.Version)
 	if err != nil {
 		return nil, errors.Trace(err)
+	}
+	if !exists {
+		return nil, nil
 	}
 
 	schemaPathKey := cloudstorage.SchemaPathKey{Schema: schema, Table: table, TableVersion: version.Version}
@@ -504,9 +515,12 @@ func (c *indexBasedNewFileDiscoverer) getNewFilesForSchemaPathKeyWithEndPath(
 	startDataPath string,
 	endDataPath string,
 ) (map[cloudstorage.DmlPathKey]fileIndexRange, error) {
-	latestSeq, err := c.readIndexFile(ctx, schema, table, version)
+	latestSeq, exists, err := c.readIndexFile(ctx, schema, table, version)
 	if err != nil {
 		return nil, errors.Trace(err)
+	}
+	if !exists {
+		return nil, errors.Errorf("index file not found: %s.%s", schema, table)
 	}
 	startSeq := uint64(0)
 	if startDataPath != "" {
