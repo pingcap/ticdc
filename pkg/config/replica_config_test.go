@@ -194,6 +194,32 @@ func TestReplicaConfig_EnableSplittableCheck_DefaultValue(t *testing.T) {
 	require.False(t, util.GetOrZero(config.Scheduler.EnableSplittableCheck))
 }
 
+func TestReplicaConfigValidateBatchConfig(t *testing.T) {
+	sinkURI, err := url.Parse("mysql://localhost:3306/test")
+	require.NoError(t, err)
+
+	assertBatchConfig := func(batchCount *int, batchBytes *int, wantErr string) {
+		cfg := GetDefaultReplicaConfig()
+		cfg.EventCollectorBatchCount = batchCount
+		cfg.EventCollectorBatchBytes = batchBytes
+
+		err := cfg.ValidateAndAdjust(sinkURI)
+		if wantErr != "" {
+			require.ErrorContains(t, err, wantErr)
+			return
+		}
+		require.NoError(t, err)
+	}
+
+	assertBatchConfig(util.AddressOf(0), nil, "")
+	assertBatchConfig(nil, util.AddressOf(0), "")
+	assertBatchConfig(util.AddressOf(1), util.AddressOf(1), "")
+	assertBatchConfig(util.AddressOf(4096), nil, "")
+	assertBatchConfig(util.AddressOf(4097), nil, "event-collector-batch-count")
+	assertBatchConfig(util.AddressOf(-1), nil, "event-collector-batch-count")
+	assertBatchConfig(nil, util.AddressOf(-1), "event-collector-batch-bytes")
+}
+
 func TestReplicaConfig_EnableRedoIOCheck_DefaultValue(t *testing.T) {
 	config := GetDefaultReplicaConfig()
 	require.True(t, util.GetOrZero(config.EnableRedoIOCheck))

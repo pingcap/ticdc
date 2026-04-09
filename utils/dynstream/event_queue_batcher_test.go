@@ -32,6 +32,20 @@ func TestBatcherSetLimit(t *testing.T) {
 	require.Equal(t, 64, b.config.hardBytes)
 }
 
+func TestNewAreaSettingsWithMaxPendingSizeAndBatchConfigNormalizesBatchConfig(t *testing.T) {
+	settings := NewAreaSettingsWithMaxPendingSizeAndBatchConfig(
+		64*1024*1024, 0, "test", 0, -1,
+	)
+	require.Equal(t, newBatchConfig(0, -1), settings.batchConfig)
+}
+
+func TestNewBatchConfigClampsSoftCount(t *testing.T) {
+	cfg := newBatchConfig(MaxBatchCount+1, 0)
+	require.Equal(t, MaxBatchCount, cfg.softCount)
+	require.Equal(t, MaxBatchCount*countCapMultiple, cfg.hardCount)
+	require.Equal(t, 0, cfg.hardBytes)
+}
+
 func TestBatchByBytes(t *testing.T) {
 	handler := mockHandler{}
 	registry := newAreaBatchConfigRegistry[int](newDefaultBatchConfig())

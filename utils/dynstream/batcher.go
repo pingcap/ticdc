@@ -30,7 +30,12 @@ type batchConfig struct {
 	hardBytes int
 }
 
-const countCapMultiple = 8
+const (
+	// MaxBatchCount bounds the batcher's preallocated slice capacity.
+	// It is also used by higher-level config validation to reject unsafe values.
+	MaxBatchCount    = 4096
+	countCapMultiple = 8
+)
 
 func newDefaultBatchConfig() batchConfig {
 	// Keep the default behavior consistent with the legacy Option.BatchCount=1:
@@ -41,6 +46,9 @@ func newDefaultBatchConfig() batchConfig {
 func newBatchConfig(count, bytes int) batchConfig {
 	if count <= 0 {
 		count = 1
+	}
+	if count > MaxBatchCount {
+		count = MaxBatchCount
 	}
 	if bytes < 0 {
 		bytes = 0
