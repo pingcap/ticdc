@@ -123,6 +123,7 @@ func NewMockMultiCluster(
 			s3CpWatcher,
 			mc.S3Storages[id],
 			tables,
+			false,
 		)
 	}
 

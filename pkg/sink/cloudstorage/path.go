@@ -44,6 +44,9 @@ const (
 	minFileNamePrefixLen                 = 3 + config.MinFileIndexWidth
 	defaultTableAcrossNodesIndexFileName = "meta/CDC_%s.index"
 	defaultIndexFileName                 = "meta/CDC.index"
+	defaultSchemaMetaIndexFileName       = "meta-index/meta/SCHEMA.index"
+	schemaMetaIndexDataFileNameFormat    = "meta-index/SCHEMA%020d"
+	schemaMetaIndexPrefix                = "SCHEMA"
 
 	// The following constants are used to generate file paths.
 	schemaFileNameFormat = "schema_%d_%010d.json"
@@ -110,6 +113,14 @@ func generateSchemaFilePath(
 	return path.Join(dir, name)
 }
 
+func GenerateSchemaMetaIndexFilePath(schema, table string) string {
+	return path.Join(schema, table, defaultSchemaMetaIndexFileName)
+}
+
+func GenerateSchemaMetaIndexDataFilePath(schema, table string, seq uint64) string {
+	return path.Join(schema, table, fmt.Sprintf(schemaMetaIndexDataFileNameFormat, seq))
+}
+
 func generateDataFileName(enableTableAcrossNodes bool, dispatcherID string, index uint64, extension string, fileIndexWidth int) string {
 	indexFmt := "%0" + strconv.Itoa(fileIndexWidth) + "d"
 	if enableTableAcrossNodes {
@@ -145,8 +156,9 @@ type FilePathGenerator struct {
 	storage      storage.ExternalStorage
 	fileIndex    map[VersionedTableName]*indexWithDate
 
-	hasher     *hash.PositionInertia
-	versionMap map[VersionedTableName]uint64
+	hasher          *hash.PositionInertia
+	versionMap      map[VersionedTableName]uint64
+	schemaMetaIndex map[string]uint64
 }
 
 // NewFilePathGenerator creates a FilePathGenerator.
@@ -158,14 +170,15 @@ func NewFilePathGenerator(
 ) *FilePathGenerator {
 	pdClock := appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock)
 	return &FilePathGenerator{
-		changefeedID: changefeedID,
-		config:       config,
-		extension:    extension,
-		storage:      storage,
-		pdClock:      pdClock,
-		fileIndex:    make(map[VersionedTableName]*indexWithDate),
-		hasher:       hash.NewPositionInertia(),
-		versionMap:   make(map[VersionedTableName]uint64),
+		changefeedID:    changefeedID,
+		config:          config,
+		extension:       extension,
+		storage:         storage,
+		pdClock:         pdClock,
+		fileIndex:       make(map[VersionedTableName]*indexWithDate),
+		hasher:          hash.NewPositionInertia(),
+		versionMap:      make(map[VersionedTableName]uint64),
+		schemaMetaIndex: make(map[string]uint64),
 	}
 }
 
@@ -203,6 +216,9 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 		return false, err
 	}
 	if exist {
+		if err := f.writeSchemaIndexFile(ctx, def.Schema, def.Table, tblSchemaFile); err != nil {
+			return false, err
+		}
 		f.versionMap[table] = table.TableInfoVersion
 		return false, nil
 	}
@@ -257,6 +273,10 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 			zap.Uint32("checksum", checksum))
 		// record the last version of the table schema file.
 		// we don't need to write schema file to external storage again.
+		lastSchemaFile := generateSchemaFilePath(def.Schema, def.Table, lastVersion, checksum)
+		if err := f.writeSchemaIndexFile(ctx, def.Schema, def.Table, lastSchemaFile); err != nil {
+			return false, err
+		}
 		f.versionMap[table] = lastVersion
 		return false, nil
 	}
@@ -275,8 +295,66 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 	if err != nil {
 		return false, err
 	}
+	if err := f.storage.WriteFile(ctx, tblSchemaFile, encodedDetail); err != nil {
+		return false, err
+	}
+	if err := f.writeSchemaIndexFile(ctx, def.Schema, def.Table, tblSchemaFile); err != nil {
+		return false, err
+	}
 	f.versionMap[table] = table.TableInfoVersion
-	return false, f.storage.WriteFile(ctx, tblSchemaFile, encodedDetail)
+	return false, nil
+}
+
+func (f *FilePathGenerator) writeSchemaIndexFile(
+	ctx context.Context,
+	schema, table string,
+	schemaFilePath string,
+) error {
+	if !f.config.EnableSchemaIndexByGetObject {
+		return nil
+	}
+	key := commonType.QuoteSchema(schema, table)
+	seq := f.schemaMetaIndex[key]
+	if seq == 0 {
+		metaPath := GenerateSchemaMetaIndexFilePath(schema, table)
+		data, err := f.storage.ReadFile(ctx, metaPath)
+		if err != nil {
+			if !util.IsNotExistInExtStorage(err) {
+				return err
+			}
+		} else {
+			name := strings.TrimSpace(string(data))
+			parsed, err := FetchSchemaMetaIndexFromFileName(name)
+			if err != nil {
+				return err
+			}
+			seq = parsed
+		}
+	}
+	seq++
+	if err := f.storage.WriteFile(
+		ctx,
+		GenerateSchemaMetaIndexDataFilePath(schema, table, seq),
+		[]byte(schemaFilePath+"\n"),
+	); err != nil {
+		return err
+	}
+	metaName := fmt.Sprintf(schemaMetaIndexPrefix+"%020d", seq)
+	if err := f.storage.WriteFile(
+		ctx, GenerateSchemaMetaIndexFilePath(schema, table), []byte(metaName+"\n"),
+	); err != nil {
+		return err
+	}
+	f.schemaMetaIndex[key] = seq
+	return nil
+}
+
+func FetchSchemaMetaIndexFromFileName(fileName string) (uint64, error) {
+	if len(fileName) != len(schemaMetaIndexPrefix)+20 || !strings.HasPrefix(fileName, schemaMetaIndexPrefix) {
+		return 0, errors.WrapError(errors.ErrStorageSinkInvalidFileName,
+			fmt.Errorf("'%s' is an invalid schema meta index file name", fileName))
+	}
+	return strconv.ParseUint(fileName[len(schemaMetaIndexPrefix):], 10, 64)
 }
 
 // SetClock is used for unit test

@@ -376,6 +376,68 @@ func TestCheckOrWriteSchema(t *testing.T) {
 	require.Equal(t, 2, len(files))
 }
 
+func TestCheckOrWriteSchemaWriteSchemaIndex(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	dir := t.TempDir()
+	f := testFilePathGenerator(ctx, t, dir)
+	f.config.EnableSchemaIndexByGetObject = true
+
+	var columns []*timodel.ColumnInfo
+	ft := types.NewFieldType(mysql.TypeLong)
+	ft.SetFlag(mysql.PriKeyFlag | mysql.NotNullFlag)
+	col := &timodel.ColumnInfo{
+		Name:         ast.NewCIStr("Id"),
+		FieldType:    *ft,
+		DefaultValue: 10,
+	}
+	columns = append(columns, col)
+	tidbInfo := &timodel.TableInfo{
+		ID:      20,
+		Name:    ast.NewCIStr("table1"),
+		Columns: columns,
+		Version: 100,
+	}
+	tableInfo := commonType.WrapTableInfo("test", tidbInfo)
+	table := VersionedTableName{
+		TableNameWithPhysicTableID: tableInfo.TableName,
+		TableInfoVersion:           100,
+	}
+
+	hasNewerSchemaVersion, err := f.CheckOrWriteSchema(ctx, table, tableInfo)
+	require.NoError(t, err)
+	require.False(t, hasNewerSchemaVersion)
+
+	latestPath := GenerateSchemaMetaIndexFilePath("test", "table1")
+	content, err := f.storage.ReadFile(ctx, latestPath)
+	require.NoError(t, err)
+	require.Equal(t, "SCHEMA00000000000000000001\n", string(content))
+	var def TableDefinition
+	def.FromTableInfo(tableInfo.GetSchemaName(), tableInfo.GetTableName(), tableInfo, table.TableInfoVersion, f.config.OutputColumnID)
+	expectedSchemaPath, err := def.GenerateSchemaFilePath()
+	require.NoError(t, err)
+	versionIndexPath := GenerateSchemaMetaIndexDataFilePath("test", "table1", 1)
+	content, err = f.storage.ReadFile(ctx, versionIndexPath)
+	require.NoError(t, err)
+	require.Equal(t, expectedSchemaPath+"\n", string(content))
+}
+
+func TestFetchSchemaMetaIndexFromFileName(t *testing.T) {
+	t.Parallel()
+
+	seq, err := FetchSchemaMetaIndexFromFileName("SCHEMA00000000000000000123")
+	require.NoError(t, err)
+	require.Equal(t, uint64(123), seq)
+
+	_, err = FetchSchemaMetaIndexFromFileName("SCHEMA123")
+	require.Error(t, err)
+
+	_, err = FetchSchemaMetaIndexFromFileName("CDC00000000000000000123")
+	require.Error(t, err)
+}
+
 func TestRemoveExpiredFilesWithoutPartition(t *testing.T) {
 	t.Parallel()
 

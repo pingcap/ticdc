@@ -82,6 +82,7 @@ type Config struct {
 	OutputColumnID           bool
 	FlushConcurrency         int
 	EnableTableAcrossNodes   bool
+	EnableSchemaIndexByGetObject bool
 }
 
 // NewConfig returns the default cloud storage sink config.
@@ -145,6 +146,7 @@ func (c *Config) Apply(
 			c.FileCleanupCronSpec = *sinkConfig.CloudStorageConfig.FileCleanupCronSpec
 		}
 		c.FlushConcurrency = util.GetOrZero(sinkConfig.CloudStorageConfig.FlushConcurrency)
+		c.EnableSchemaIndexByGetObject = util.GetOrZero(sinkConfig.CloudStorageConfig.EnableSchemaIndexByGetObject)
 	}
 
 	if c.FileIndexWidth < config.MinFileIndexWidth || c.FileIndexWidth > config.MaxFileIndexWidth {
@@ -155,6 +157,11 @@ func (c *Config) Apply(
 	}
 
 	c.EnableTableAcrossNodes = enableTableAcrossNodes
+	if c.EnableSchemaIndexByGetObject && c.EnableTableAcrossNodes {
+		return cerror.ErrStorageSinkInvalidConfig.GenWithStack(
+			"enable-schema-index-by-get-object requires exclusive table directory writer, " +
+				"please disable table-across-nodes scheduling for this changefeed")
+	}
 	return nil
 }
 
