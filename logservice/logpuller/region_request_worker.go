@@ -406,11 +406,25 @@ func (s *regionRequestWorker) processRegionSendTask(
 			state := newRegionFeedState(region, uint64(subID), s)
 			state.start()
 			s.addRegionState(subID, region.verID.GetID(), state)
+			// Mark the request as sent before sending it.
+			// Otherwise there is a race with the receiver goroutine:
+			//  1. addRegionState makes the region visible to error handling.
+			//  2. doSend sends the request.
+			//  3. the receiver goroutine may receive a region error immediately.
+			//  4. markStopped runs before markSent, so requestCache.markStopped cannot
+			//     find the request in sentRequests.
+			//  5. the sender goroutine then calls markSent and leaves a stale sent
+			//     request behind, even though the region has already been
+			//     unlocked/rescheduled.
+			//
+			// Tracking the request before Send keeps requestedRegions and
+			// sentRequests visible in the same order and avoids leaving stale
+			// requests in cleanup.
+			s.requestCache.markSent(regionReq)
 			if err := doSend(s.createRegionRequest(region)); err != nil {
-				s.requestCache.markDone()
+				state.markStopped(err)
 				return err
 			}
-			s.requestCache.markSent(regionReq)
 		}
 		regionReq, err = fetchMoreReq()
 		if err != nil {
