@@ -73,6 +73,7 @@ jq '
 ' "$NEXT_GEN_SHARED_FILE" >"$NEXT_GEN_USER_FILE"
 
 "$SED_CMD" "${SED_INPLACE_ARGS[@]}" "s/\${DS_TEST-CLUSTER}-TiCDC-New-Arch/&-KeyspaceName/" "$NEXT_GEN_USER_FILE"
+"$SED_CMD" "${SED_INPLACE_ARGS[@]}" "s/YiGL8hBZ0aac/zHSo4WLgHDpS/" "$NEXT_GEN_SHARED_FILE"
 "$SED_CMD" "${SED_INPLACE_ARGS[@]}" "s/YiGL8hBZ0aac/lGT5hED6vqTn/" "$NEXT_GEN_USER_FILE"
 require_file_contains "$NEXT_GEN_USER_FILE" "-KeyspaceName"
 
