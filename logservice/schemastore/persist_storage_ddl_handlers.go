@@ -2870,15 +2870,9 @@ func buildDDLEventForCreateTables(rawEvent *PersistedDDLEvent, tableFilter filte
 	if allFiltered {
 		return commonEvent.DDLEvent{}, false, err
 	}
-	querys, err := commonEvent.SplitQueries(rawEvent.Query)
+	querys, err := splitCreateTablesQueries(rawEvent)
 	if err != nil {
-		log.Panic("split queries failed", zap.Error(err))
-	}
-	if len(querys) != len(rawEvent.MultipleTableInfos) {
-		log.Panic("query count not match table count",
-			zap.Int("queryCount", len(querys)),
-			zap.Int("tableCount", len(rawEvent.MultipleTableInfos)),
-			zap.String("query", rawEvent.Query))
+		return commonEvent.DDLEvent{}, false, err
 	}
 	ddlEvent.NeedAddedTables = make([]commonEvent.Table, 0, physicalTableCount)
 	addName := make([]commonEvent.SchemaTableName, 0, logicalTableCount)
@@ -2936,6 +2930,24 @@ func buildDDLEventForCreateTables(rawEvent *PersistedDDLEvent, tableFilter filte
 		log.Fatal("should not happen")
 	}
 	return ddlEvent, true, err
+}
+
+func splitCreateTablesQueries(rawEvent *PersistedDDLEvent) ([]string, error) {
+	querys, err := commonEvent.SplitQueries(rawEvent.Query)
+	if err == nil && len(querys) == len(rawEvent.MultipleTableInfos) {
+		return querys, nil
+	}
+	fields := []zap.Field{
+		zap.Int("tableCount", len(rawEvent.MultipleTableInfos)),
+		zap.String("query", rawEvent.Query),
+	}
+	if err != nil {
+		fields = append(fields, zap.Error(err))
+	} else {
+		fields = append(fields, zap.Int("queryCount", len(querys)))
+	}
+	log.Warn("create tables query count not match table count", fields...)
+	return nil, cerror.WrapError(cerror.ErrTiDBUnexpectedJobMeta, errors.New("create tables query count not match table count"))
 }
 
 func buildDDLEventForAlterTablePartitioning(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error) {
