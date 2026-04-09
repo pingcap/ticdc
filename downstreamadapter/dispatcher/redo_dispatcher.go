@@ -56,8 +56,6 @@ func NewRedoDispatcher(
 		schemaIDToDispatchers,
 		skipSyncpointAtStartTs,
 		skipDMLAsStartTs,
-		sharedInfo.eventCollectorBatchCount,
-		sharedInfo.eventCollectorBatchBytes,
 		0,
 		common.RedoMode,
 		sink,

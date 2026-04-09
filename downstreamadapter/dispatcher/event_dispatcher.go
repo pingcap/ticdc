@@ -73,8 +73,6 @@ func NewEventDispatcher(
 		schemaIDToDispatchers,
 		skipSyncpointAtStartTs,
 		skipDMLAsStartTs,
-		sharedInfo.eventCollectorBatchCount,
-		sharedInfo.eventCollectorBatchBytes,
 		currentPdTs,
 		common.DefaultMode,
 		sink,

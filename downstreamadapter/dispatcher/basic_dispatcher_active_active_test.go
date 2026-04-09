@@ -158,8 +158,6 @@ func newTestBasicDispatcher(t *testing.T, sinkType common.SinkType, enableActive
 		NewSchemaIDToDispatchers(),
 		false,
 		false,
-		4096,
-		0,
 		200,
 		common.DefaultMode,
 		dispatcherSink.Sink(),
