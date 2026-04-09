@@ -383,6 +383,12 @@ func (m *Maintainer) GetMaintainerStatus() *heartbeatpb.MaintainerStatus {
 	return status
 }
 
+// SetDispatcherDrainTarget applies the newest drain target to this maintainer.
+func (m *Maintainer) SetDispatcherDrainTarget(target node.ID, epoch uint64) {
+	m.controller.SetDispatcherDrainTarget(target, epoch)
+	m.statusChanged.Store(true)
+}
+
 func (m *Maintainer) initialize() error {
 	start := time.Now()
 	log.Info("start to initialize changefeed maintainer",
