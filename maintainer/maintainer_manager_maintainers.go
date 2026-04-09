@@ -31,6 +31,17 @@ import (
 	"go.uber.org/zap"
 )
 
+// managerMaintainerSet owns the changefeed-scoped part of a maintainer manager.
+// It tracks the local changefeedID -> maintainer registry, creates and removes
+// maintainers, routes maintainer-bound messages, and aggregates maintainer
+// heartbeats back to coordinator.
+//
+// In contrast, managerNodeState owns node-scoped state shared by the whole
+// capture, such as liveness, node epoch, and the latest manager-level drain
+// target. The Manager combines both layers: managerNodeState is the single
+// node-wide source of truth, while managerMaintainerSet fans that node-scoped
+// state out to individual maintainers and manages their per-changefeed
+// lifecycles.
 type managerMaintainerSet struct {
 	// conf is shared scheduler configuration for newly created maintainers.
 	conf *config.SchedulerConfig
