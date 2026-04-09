@@ -1484,7 +1484,12 @@ func TestProcessTableTriggerDispatcherSendsSignalResolvedWhenNoForwardRangeAndNo
 
 	changefeed := broker.getOrSetChangefeedStatus(info.GetChangefeedID(), info.GetSyncPointInterval())
 	dispatcher := newDispatcherStat(info, 1, 1, nil, changefeed)
-	dispatcher.lastSentResolvedTsTime.Store(time.Now().Add(-defaultSendResolvedTsInterval - time.Second))
+	// Keep the test focused on the signal resolved path instead of coupling it with
+	// the separate handshake behavior.
+	dispatcher.seq.Store(1)
+	// Use the zero time to bypass the rate limit deterministically without depending
+	// on wall clock timing.
+	dispatcher.lastSentResolvedTsTime.Store(time.Time{})
 
 	dispatcherPtr := &atomic.Pointer[dispatcherStat]{}
 	dispatcherPtr.Store(dispatcher)
@@ -1497,12 +1502,10 @@ func TestProcessTableTriggerDispatcherSendsSignalResolvedWhenNoForwardRangeAndNo
 
 	broker.processTableTriggerDispatcher(context.Background(), dispatcher.id, dispatcher)
 
-	require.Equal(t, 2, len(broker.messageCh[dispatcher.messageWorkerIndex]))
-	first := <-broker.messageCh[dispatcher.messageWorkerIndex]
-	second := <-broker.messageCh[dispatcher.messageWorkerIndex]
-	require.Equal(t, event.TypeHandshakeEvent, first.msgType)
-	require.Equal(t, event.TypeResolvedEvent, second.msgType)
-	require.Equal(t, ts10, second.resolvedTsEvent.ResolvedTs)
+	require.Equal(t, 1, len(broker.messageCh[dispatcher.messageWorkerIndex]))
+	msg := <-broker.messageCh[dispatcher.messageWorkerIndex]
+	require.Equal(t, event.TypeResolvedEvent, msg.msgType)
+	require.Equal(t, ts10, msg.resolvedTsEvent.ResolvedTs)
 	require.Equal(t, ts10, dispatcher.sentResolvedTs.Load())
 	require.Equal(t, ts20, dispatcher.nextSyncPoint.Load())
 }
