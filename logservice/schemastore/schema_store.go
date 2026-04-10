@@ -43,13 +43,11 @@ type SchemaStore interface {
 
 	GetAllPhysicalTables(keyspaceMeta common.KeyspaceMeta, snapTs uint64, filter filter.Filter) ([]commonEvent.Table, error)
 
+	GetMaterializedViewIDs(keyspaceMeta common.KeyspaceMeta, snapTs uint64, filter filter.Filter) ([]int64, error)
+
 	RegisterTable(keyspaceMeta common.KeyspaceMeta, tableID int64, startTs uint64) error
 
 	UnregisterTable(keyspaceMeta common.KeyspaceMeta, tableID int64) error
-
-	RegisterTableTriggerDispatcher(keyspaceMeta common.KeyspaceMeta, dispatcherID common.DispatcherID, epoch uint64, startTs uint64, tableFilter filter.Filter) error
-
-	UnregisterTableTriggerDispatcher(keyspaceMeta common.KeyspaceMeta, dispatcherID common.DispatcherID) error
 
 	// GetTableInfo return table info with the largest version <= ts
 	GetTableInfo(keyspaceMeta common.KeyspaceMeta, tableID int64, ts uint64) (*common.TableInfo, error)
@@ -62,7 +60,7 @@ type SchemaStore interface {
 	// TODO: add a parameter limit
 	FetchTableDDLEvents(keyspaceMeta common.KeyspaceMeta, dispatcherID common.DispatcherID, tableID int64, tableFilter filter.Filter, start, end uint64) ([]commonEvent.DDLEvent, error)
 
-	FetchTableTriggerDDLEvents(keyspaceMeta common.KeyspaceMeta, dispatcherID common.DispatcherID, dispatcherEpoch uint64, tableFilter filter.Filter, start uint64, limit int) ([]commonEvent.DDLEvent, uint64, error)
+	FetchTableTriggerDDLEvents(keyspaceMeta common.KeyspaceMeta, dispatcherID common.DispatcherID, tableFilter filter.Filter, start uint64, trackedMaterializedViewIDs map[int64]struct{}, limit int) ([]commonEvent.DDLEvent, uint64, error)
 
 	// RegisterKeyspace register a keyspace to fetch table ddl
 	RegisterKeyspace(ctx context.Context, keyspaceMeta common.KeyspaceMeta) error
@@ -98,15 +96,6 @@ type keyspaceSchemaStore struct {
 	finishedDDLTs uint64
 	// max schemaVersion of all applied ddl events
 	schemaVersion int64
-
-	tableTriggerDispatcherStatesMu sync.Mutex
-	tableTriggerDispatcherStates   sync.Map // common.DispatcherID -> *tableTriggerDispatcherState
-}
-
-type tableTriggerDispatcherState struct {
-	epoch                      uint64
-	mu                         sync.Mutex
-	trackedMaterializedViewIDs map[int64]struct{}
 }
 
 func (s *keyspaceSchemaStore) tryUpdateResolvedTs() {
@@ -346,61 +335,14 @@ func (s *schemaStore) GetAllPhysicalTables(keyspaceMeta common.KeyspaceMeta, sna
 	return store.dataStorage.getAllPhysicalTables(snapTs, filter)
 }
 
-func (s *schemaStore) RegisterTableTriggerDispatcher(keyspaceMeta common.KeyspaceMeta, dispatcherID common.DispatcherID, epoch uint64, startTs uint64, tableFilter filter.Filter) error {
+func (s *schemaStore) GetMaterializedViewIDs(keyspaceMeta common.KeyspaceMeta, snapTs uint64, filter filter.Filter) ([]int64, error) {
 	store, err := s.getKeyspaceSchemaStore(keyspaceMeta)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	store.waitResolvedTs(0, startTs, 10*time.Second)
-	tableIDs, err := store.dataStorage.getMaterializedViewIDs(startTs, tableFilter)
-	if err != nil {
-		return err
-	}
-
-	trackedMaterializedViewIDs := make(map[int64]struct{}, len(tableIDs))
-	for _, tableID := range tableIDs {
-		trackedMaterializedViewIDs[tableID] = struct{}{}
-	}
-
-	newState := &tableTriggerDispatcherState{
-		epoch:                      epoch,
-		trackedMaterializedViewIDs: trackedMaterializedViewIDs,
-	}
-
-	store.tableTriggerDispatcherStatesMu.Lock()
-	defer store.tableTriggerDispatcherStatesMu.Unlock()
-	if oldState, ok := store.tableTriggerDispatcherStates.Load(dispatcherID); ok {
-		if oldState.(*tableTriggerDispatcherState).epoch > epoch {
-			log.Info("ignore stale table trigger dispatcher registration",
-				zap.Any("keyspace", keyspaceMeta),
-				zap.Stringer("dispatcherID", dispatcherID),
-				zap.Uint64("epoch", epoch),
-				zap.Uint64("currentEpoch", oldState.(*tableTriggerDispatcherState).epoch),
-				zap.Uint64("startTs", startTs))
-			return nil
-		}
-	}
-	store.tableTriggerDispatcherStates.Store(dispatcherID, newState)
-	log.Info("register table trigger dispatcher",
-		zap.Any("keyspace", keyspaceMeta),
-		zap.Stringer("dispatcherID", dispatcherID),
-		zap.Uint64("epoch", epoch),
-		zap.Uint64("startTs", startTs),
-		zap.Int("trackedMaterializedViews", len(trackedMaterializedViewIDs)),
-		zap.Uint64("resolvedTs", store.resolvedTs.Load()))
-	return nil
-}
-
-func (s *schemaStore) UnregisterTableTriggerDispatcher(keyspaceMeta common.KeyspaceMeta, dispatcherID common.DispatcherID) error {
-	store, err := s.getKeyspaceSchemaStore(keyspaceMeta)
-	if err != nil {
-		return err
-	}
-	store.tableTriggerDispatcherStatesMu.Lock()
-	defer store.tableTriggerDispatcherStatesMu.Unlock()
-	store.tableTriggerDispatcherStates.Delete(dispatcherID)
-	return nil
+	store.waitResolvedTs(0, snapTs, 10*time.Second)
+	return store.dataStorage.getMaterializedViewIDs(snapTs, filter)
 }
 
 func (s *schemaStore) RegisterTable(keyspaceMeta common.KeyspaceMeta, tableID int64, startTs uint64) error {
@@ -485,7 +427,7 @@ func (s *schemaStore) FetchTableDDLEvents(
 }
 
 // FetchTableTriggerDDLEvents returns the next ddl events which finishedTs are within the range (start, end]
-func (s *schemaStore) FetchTableTriggerDDLEvents(keyspaceMeta common.KeyspaceMeta, dispatcherID common.DispatcherID, dispatcherEpoch uint64, tableFilter filter.Filter, start uint64, limit int) ([]commonEvent.DDLEvent, uint64, error) {
+func (s *schemaStore) FetchTableTriggerDDLEvents(keyspaceMeta common.KeyspaceMeta, dispatcherID common.DispatcherID, tableFilter filter.Filter, start uint64, trackedMaterializedViewIDs map[int64]struct{}, limit int) ([]commonEvent.DDLEvent, uint64, error) {
 	store, err := s.getKeyspaceSchemaStore(keyspaceMeta)
 	if err != nil {
 		return nil, 0, err
@@ -497,29 +439,7 @@ func (s *schemaStore) FetchTableTriggerDDLEvents(keyspaceMeta common.KeyspaceMet
 		return nil, currentResolvedTs, nil
 	}
 
-	state, ok := store.tableTriggerDispatcherStates.Load(dispatcherID)
-	if !ok {
-		log.Warn("table trigger dispatcher state not found",
-			zap.Any("keyspace", keyspaceMeta),
-			zap.Stringer("dispatcherID", dispatcherID),
-			zap.Uint64("start", start))
-		return nil, start, nil
-	}
-
-	dispatcherState := state.(*tableTriggerDispatcherState)
-	dispatcherState.mu.Lock()
-	defer dispatcherState.mu.Unlock()
-	if dispatcherState.epoch != dispatcherEpoch {
-		log.Info("skip fetch ddl events for stale table trigger dispatcher",
-			zap.Any("keyspace", keyspaceMeta),
-			zap.Stringer("dispatcherID", dispatcherID),
-			zap.Uint64("dispatcherEpoch", dispatcherEpoch),
-			zap.Uint64("stateEpoch", dispatcherState.epoch),
-			zap.Uint64("start", start))
-		return nil, start, nil
-	}
-
-	events, err := store.dataStorage.fetchTableTriggerDDLEvents(tableFilter, start, dispatcherState.trackedMaterializedViewIDs, limit)
+	events, err := store.dataStorage.fetchTableTriggerDDLEvents(tableFilter, start, trackedMaterializedViewIDs, limit)
 	if err != nil {
 		return nil, 0, err
 	}
