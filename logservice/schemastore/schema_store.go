@@ -32,6 +32,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/keyspace"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/tikv/client-go/v2/oracle"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
@@ -41,6 +42,8 @@ type SchemaStore interface {
 	common.SubModule
 
 	GetAllPhysicalTables(keyspaceMeta common.KeyspaceMeta, snapTs uint64, filter filter.Filter) ([]commonEvent.Table, error)
+
+	GetMaterializedViewIDs(keyspaceMeta common.KeyspaceMeta, snapTs uint64, filter filter.Filter) ([]int64, error)
 
 	RegisterTable(keyspaceMeta common.KeyspaceMeta, tableID int64, startTs uint64) error
 
@@ -57,7 +60,7 @@ type SchemaStore interface {
 	// TODO: add a parameter limit
 	FetchTableDDLEvents(keyspaceMeta common.KeyspaceMeta, dispatcherID common.DispatcherID, tableID int64, tableFilter filter.Filter, start, end uint64) ([]commonEvent.DDLEvent, error)
 
-	FetchTableTriggerDDLEvents(keyspaceMeta common.KeyspaceMeta, dispatcherID common.DispatcherID, tableFilter filter.Filter, start uint64, limit int) ([]commonEvent.DDLEvent, uint64, error)
+	FetchTableTriggerDDLEvents(keyspaceMeta common.KeyspaceMeta, dispatcherID common.DispatcherID, tableFilter filter.Filter, start uint64, trackedMaterializedViewIDs map[int64]struct{}, limit int) ([]commonEvent.DDLEvent, uint64, error)
 
 	// RegisterKeyspace register a keyspace to fetch table ddl
 	RegisterKeyspace(ctx context.Context, keyspaceMeta common.KeyspaceMeta) error
@@ -109,7 +112,7 @@ func (s *keyspaceSchemaStore) tryUpdateResolvedTs() {
 	}
 	resolvedEvents := s.unsortedCache.fetchSortedDDLEventBeforeTS(pendingTs)
 	for _, event := range resolvedEvents {
-		if event.Job.BinlogInfo.SchemaVersion == 0 /* means the ddl is ignored in upstream */ {
+		if shouldSkipDDLWithEmptySchemaVersion(event.Job) {
 			log.Info("skip ddl job with empty SchemaVersion",
 				zap.Any("type", event.Job.Type),
 				zap.String("job", event.Job.Query),
@@ -158,6 +161,15 @@ func (s *keyspaceSchemaStore) tryUpdateResolvedTs() {
 		SchemaVersion: s.schemaVersion,
 		ResolvedTs:    pendingTs,
 	})
+}
+
+func shouldSkipDDLWithEmptySchemaVersion(job *timodel.Job) bool {
+	if job.BinlogInfo.SchemaVersion != 0 {
+		return false
+	}
+	// Materialized view creation jobs may legitimately carry an empty schema version.
+	// They still need to be persisted so existing MV tables are visible during bootstrap.
+	return job.Type != timodel.ActionCreateMaterializedView
 }
 
 // TODO tenfyzhong 2025-09-13 13:40:26 use a chan to decoupling
@@ -323,6 +335,16 @@ func (s *schemaStore) GetAllPhysicalTables(keyspaceMeta common.KeyspaceMeta, sna
 	return store.dataStorage.getAllPhysicalTables(snapTs, filter)
 }
 
+func (s *schemaStore) GetMaterializedViewIDs(keyspaceMeta common.KeyspaceMeta, snapTs uint64, filter filter.Filter) ([]int64, error) {
+	store, err := s.getKeyspaceSchemaStore(keyspaceMeta)
+	if err != nil {
+		return nil, err
+	}
+
+	store.waitResolvedTs(0, snapTs, 10*time.Second)
+	return store.dataStorage.getMaterializedViewIDs(snapTs, filter)
+}
+
 func (s *schemaStore) RegisterTable(keyspaceMeta common.KeyspaceMeta, tableID int64, startTs uint64) error {
 	store, err := s.getKeyspaceSchemaStore(keyspaceMeta)
 	if err != nil {
@@ -405,7 +427,7 @@ func (s *schemaStore) FetchTableDDLEvents(
 }
 
 // FetchTableTriggerDDLEvents returns the next ddl events which finishedTs are within the range (start, end]
-func (s *schemaStore) FetchTableTriggerDDLEvents(keyspaceMeta common.KeyspaceMeta, dispatcherID common.DispatcherID, tableFilter filter.Filter, start uint64, limit int) ([]commonEvent.DDLEvent, uint64, error) {
+func (s *schemaStore) FetchTableTriggerDDLEvents(keyspaceMeta common.KeyspaceMeta, dispatcherID common.DispatcherID, tableFilter filter.Filter, start uint64, trackedMaterializedViewIDs map[int64]struct{}, limit int) ([]commonEvent.DDLEvent, uint64, error) {
 	store, err := s.getKeyspaceSchemaStore(keyspaceMeta)
 	if err != nil {
 		return nil, 0, err
@@ -417,7 +439,7 @@ func (s *schemaStore) FetchTableTriggerDDLEvents(keyspaceMeta common.KeyspaceMet
 		return nil, currentResolvedTs, nil
 	}
 
-	events, err := store.dataStorage.fetchTableTriggerDDLEvents(tableFilter, start, limit)
+	events, err := store.dataStorage.fetchTableTriggerDDLEvents(tableFilter, start, trackedMaterializedViewIDs, limit)
 	if err != nil {
 		return nil, 0, err
 	}

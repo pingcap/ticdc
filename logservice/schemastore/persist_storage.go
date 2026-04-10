@@ -336,6 +336,25 @@ func (p *persistentStorage) getAllPhysicalTables(snapTs uint64, tableFilter filt
 	return loadAllPhysicalTablesAtTs(storageSnap, gcTs, snapTs, tableFilter)
 }
 
+func (p *persistentStorage) getMaterializedViewIDs(snapTs uint64, tableFilter filter.Filter) ([]int64, error) {
+	storageSnap := p.db.NewSnapshot()
+	defer storageSnap.Close()
+
+	p.mu.Lock()
+	failpoint.Inject("getAllPhysicalTablesGCFastFail", func() {
+		snapTs = 0
+	})
+	if snapTs < p.gcTs {
+		p.mu.Unlock()
+		return nil, errors.ErrSnapshotLostByGC.GenWithStackByArgs("snapTs %d is smaller than gcTs %d", snapTs, p.gcTs)
+	}
+
+	gcTs := p.gcTs
+	p.mu.Unlock()
+
+	return loadMaterializedViewIDsAtTs(storageSnap, gcTs, snapTs, tableFilter)
+}
+
 // only return when table info is initialized
 func (p *persistentStorage) registerTable(tableID int64, startTs uint64) error {
 	p.mu.Lock()
@@ -485,7 +504,7 @@ func (p *persistentStorage) fetchTableDDLEvents(dispatcherID common.DispatcherID
 	return events, nil
 }
 
-func (p *persistentStorage) fetchTableTriggerDDLEvents(tableFilter filter.Filter, start uint64, limit int) ([]commonEvent.DDLEvent, error) {
+func (p *persistentStorage) fetchTableTriggerDDLEvents(tableFilter filter.Filter, start uint64, trackedMaterializedViewIDs map[int64]struct{}, limit int) ([]commonEvent.DDLEvent, error) {
 	// fast check
 	p.mu.RLock()
 	if len(p.tableTriggerDDLHistory) == 0 || start >= p.tableTriggerDDLHistory[len(p.tableTriggerDDLHistory)-1] {
@@ -529,6 +548,15 @@ func (p *persistentStorage) fetchTableTriggerDDLEvents(tableFilter filter.Filter
 		p.mu.RUnlock()
 		for _, ts := range allTargetTs {
 			rawEvent := readPersistedDDLEvent(storageSnap, ts)
+			if p.shouldSkipTableTriggerDDLEvent(&rawEvent, trackedMaterializedViewIDs) {
+				log.Info("skip table trigger ddl event",
+					zap.Uint64("ts", ts),
+					zap.String("type", model.ActionType(rawEvent.Type).String()),
+					zap.String("query", rawEvent.Query),
+					zap.String("schema", rawEvent.SchemaName),
+					zap.String("table", rawEvent.TableName))
+				continue
+			}
 			// the tableID of buildDDLEvent is not used in this function, set it to 0
 			ddlEvent, ok, err := buildDDLEvent(&rawEvent, tableFilter, 0)
 			if err != nil {
@@ -544,6 +572,48 @@ func (p *persistentStorage) fetchTableTriggerDDLEvents(tableFilter filter.Filter
 		}
 		nextStartTs = allTargetTs[len(allTargetTs)-1]
 	}
+}
+
+func (p *persistentStorage) shouldSkipTableTriggerDDLEvent(rawEvent *PersistedDDLEvent, trackedMaterializedViewIDs map[int64]struct{}) bool {
+	switch model.ActionType(rawEvent.Type) {
+	case model.ActionCreateMaterializedView:
+		// Existing materialized views are loaded from snapshot during bootstrap.
+		// Ignore runtime create-MV DDLs so they do not create new dispatchers mid-run.
+		return true
+	case model.ActionMViewRefreshOutOfPlaceCutover:
+		// This DDL is only relevant to at most two dispatcher kinds:
+		//   1. the table dispatcher for the materialized view being refreshed; and
+		//   2. the table trigger dispatcher.
+		//
+		// If the current changefeed is not capturing that materialized view, (1) does not
+		// exist at all. For the table trigger path, it is therefore sufficient to check
+		// whether the materialized view lineage is in `trackedMaterializedViewIDs`, which
+		// represents the materialized views currently managed by this changefeed run.
+		return !p.handleTrackedMaterializedViewCutover(rawEvent, trackedMaterializedViewIDs)
+	default:
+		return false
+	}
+}
+
+// handleTrackedMaterializedViewCutover reports whether a refresh cutover belongs to a
+// materialized view that is already tracked by the current table trigger dispatcher.
+//
+// We intentionally keep runtime-created materialized views invisible until the next bootstrap:
+//   - `CREATE MATERIALIZED VIEW` is ignored at runtime, so no dispatcher is created for it.
+//   - Such MVs never enter `trackedMaterializedViewIDs`, so later out-of-place cutovers stay invisible too.
+//
+// For tracked MVs, out-of-place refresh changes the logical table ID from old MV -> shadow table,
+// so we roll the tracked set forward here to keep future cutovers of the same MV lineage visible.
+func (p *persistentStorage) handleTrackedMaterializedViewCutover(rawEvent *PersistedDDLEvent, trackedMaterializedViewIDs map[int64]struct{}) bool {
+	if trackedMaterializedViewIDs == nil {
+		return false
+	}
+	if _, ok := trackedMaterializedViewIDs[rawEvent.TableID]; !ok {
+		return false
+	}
+	delete(trackedMaterializedViewIDs, rawEvent.TableID)
+	trackedMaterializedViewIDs[rawEvent.ExtraTableID] = struct{}{}
+	return true
 }
 
 func (p *persistentStorage) buildVersionedTableInfoStore(store *versionedTableInfoStore) error {
@@ -790,7 +860,7 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 			if store, ok := p.tableInfoStoreMap[tableID]; ok {
 				// do some safety check
 				switch model.ActionType(job.Type) {
-				case model.ActionCreateTable, model.ActionCreateTables:
+				case model.ActionCreateTable, model.ActionCreateMaterializedView, model.ActionCreateTables:
 					// newly created tables should not be registered before this ddl are handled
 					log.Panic("should not be registered", zap.Int64("tableID", tableID))
 				default:
@@ -805,17 +875,21 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 
 func shouldSkipDDL(job *model.Job, tableMap map[int64]*BasicTableInfo) bool {
 	switch model.ActionType(job.Type) {
-	// Skipping ActionCreateTable and ActionCreateTables when the table already exists:
+	// Skipping ActionCreateTable, ActionCreateMaterializedView and ActionCreateTables when the table already exists:
 	// 1. It is possible to receive ActionCreateTable and ActionCreateTables multiple times,
 	//    and filtering duplicates in a generic way is challenging.
 	//    (SchemaVersion checks are unreliable because versions might not be strictly ordered in some cases.)
-	// 2. ActionCreateTable and ActionCreateTables for the same table may have different commit ts.
+	// 2. Those create-table-like actions for the same table may have different commit ts.
 	//    One of these actions could be garbage collected, leaving the table present in the snapshot.
 	//    Therefore, the only reliable way to determine if a later DDL operation is redundant
 	//    is by verifying whether the table already exists.
-	case model.ActionCreateTable, model.ActionCreateMaterializedViewShadow:
+	case model.ActionCreateTable, model.ActionCreateMaterializedView, model.ActionCreateMaterializedViewShadow:
+		tableInfo := job.BinlogInfo.TableInfo
+		if model.ActionType(job.Type) == model.ActionCreateMaterializedView {
+			tableInfo = getCreateMaterializedViewTableInfo(job)
+		}
 		// Note: partition table's logical table id is also in tableMap
-		if _, ok := tableMap[job.BinlogInfo.TableInfo.ID]; ok {
+		if _, ok := tableMap[tableInfo.ID]; ok {
 			log.Debug("table already exists. ignore DDL",
 				zap.Int64("schemaID", job.SchemaID),
 				zap.String("schemaName", job.SchemaName),

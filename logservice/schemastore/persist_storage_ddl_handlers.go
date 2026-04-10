@@ -145,6 +145,15 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
 		buildDDLEventFunc:          buildDDLEventForNewTableDDL,
 	},
+	model.ActionCreateMaterializedView: {
+		buildPersistedDDLEventFunc: buildPersistedDDLEventForCreateMaterializedView,
+		updateDDLHistoryFunc:       updateDDLHistoryForAddDropTable,
+		updateFullTableInfoFunc:    updateFullTableInfoForSingleTableDDL,
+		updateSchemaMetadataFunc:   updateSchemaMetadataForNewTableDDL,
+		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
+		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
+		buildDDLEventFunc:          buildDDLEventIgnore,
+	},
 	model.ActionCreateMaterializedViewShadow: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForCreateTable,
 		updateDDLHistoryFunc:       updateDDLHistoryForNormalDDLOnSingleTable,
@@ -556,8 +565,9 @@ func buildPersistedDDLEventCommon(args buildPersistedDDLEventFuncArgs) Persisted
 		query = job.Query
 	}
 
-	// Note: if a ddl involve multiple tables, job.TableID is different with job.BinlogInfo.TableInfo.ID
-	// and usually job.BinlogInfo.TableInfo.ID will be the newly created IDs.
+	// Note: if a ddl involve multiple tables, job.TableID is different with job.BinlogInfo.TableInfo.ID.
+	// For some upstream DDLs like ActionCreateMaterializedView, BinlogInfo.TableInfo may even point to
+	// a related base table, so callers must override TableInfo when needed.
 	event := PersistedDDLEvent{
 		ID:             job.ID,
 		Type:           byte(job.Type),
@@ -607,6 +617,35 @@ func buildPersistedDDLEventForCreateTable(args buildPersistedDDLEventFuncArgs) P
 	event.SchemaName = getSchemaName(args.databaseMap, event.SchemaID)
 	event.TableName = event.TableInfo.Name.O
 	return event
+}
+
+func buildPersistedDDLEventForCreateMaterializedView(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
+	event := buildPersistedDDLEventCommon(args)
+	event.SchemaName = getSchemaName(args.databaseMap, event.SchemaID)
+	event.TableInfo = getCreateMaterializedViewTableInfo(args.job)
+	event.TableName = event.TableInfo.Name.O
+	return event
+}
+
+func getCreateMaterializedViewTableInfo(job *model.Job) *model.TableInfo {
+	args, err := model.GetCreateMaterializedViewArgs(job)
+	if err == nil && args != nil && args.TableInfo != nil {
+		return args.TableInfo
+	}
+	if job.BinlogInfo != nil && job.BinlogInfo.TableInfo != nil {
+		log.Warn("fallback to binlog table info for create materialized view",
+			zap.Error(err),
+			zap.Int64("jobID", job.ID),
+			zap.Int64("tableID", job.TableID),
+			zap.String("tableName", job.TableName))
+		return job.BinlogInfo.TableInfo
+	}
+	log.Panic("table info not found for create materialized view",
+		zap.Error(err),
+		zap.Int64("jobID", job.ID),
+		zap.Int64("tableID", job.TableID),
+		zap.String("tableName", job.TableName))
+	return nil
 }
 
 func buildPersistedDDLEventForDropTable(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {

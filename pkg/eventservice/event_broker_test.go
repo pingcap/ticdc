@@ -212,6 +212,50 @@ func TestCURDDispatcher(t *testing.T) {
 	require.False(t, ok, "changefeedStatus should be removed after the last dispatcher is removed")
 }
 
+func TestTableTriggerDispatcherTrackedMaterializedViewsStayInBroker(t *testing.T) {
+	broker, _, ss, _ := newEventBrokerForTest()
+	defer broker.close()
+
+	dispatcherID := common.NewDispatcherID()
+	dispInfo := newMockDispatcherInfo(t, 100, dispatcherID, common.DDLSpanTableID, eventpb.ActionType_ACTION_TYPE_REGISTER)
+	dispInfo.span = common.KeyspaceDDLSpan(0)
+
+	ss.MViewIDs = []int64{101, 102}
+	err := broker.addDispatcher(dispInfo)
+	require.NoError(t, err)
+
+	stat := broker.getDispatcher(dispatcherID).Load()
+	require.Equal(t, map[int64]struct{}{
+		101: {},
+		102: {},
+	}, stat.trackedMaterializedViewIDs)
+
+	ss.MViewIDs = []int64{999}
+	staleResetInfo := newMockDispatcherInfo(t, 150, dispatcherID, common.DDLSpanTableID, eventpb.ActionType_ACTION_TYPE_RESET)
+	staleResetInfo.span = common.KeyspaceDDLSpan(0)
+	staleResetInfo.epoch = 0
+	err = broker.resetDispatcher(staleResetInfo)
+	require.NoError(t, err)
+
+	stat = broker.getDispatcher(dispatcherID).Load()
+	require.Equal(t, map[int64]struct{}{
+		101: {},
+		102: {},
+	}, stat.trackedMaterializedViewIDs)
+
+	ss.MViewIDs = []int64{201}
+	resetInfo := newMockDispatcherInfo(t, 200, dispatcherID, common.DDLSpanTableID, eventpb.ActionType_ACTION_TYPE_RESET)
+	resetInfo.span = common.KeyspaceDDLSpan(0)
+	resetInfo.epoch = 1
+	err = broker.resetDispatcher(resetInfo)
+	require.NoError(t, err)
+
+	stat = broker.getDispatcher(dispatcherID).Load()
+	require.Equal(t, map[int64]struct{}{
+		201: {},
+	}, stat.trackedMaterializedViewIDs)
+}
+
 func TestResetDispatcher(t *testing.T) {
 	broker, _, _, _ := newEventBrokerForTest()
 	defer broker.close()

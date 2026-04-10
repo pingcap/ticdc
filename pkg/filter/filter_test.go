@@ -302,6 +302,8 @@ func TestShouldDiscardDDL(t *testing.T) {
 
 	// DDL (create table) does not match any discard rule, should not discard.
 	require.False(t, f.ShouldDiscardDDL("test", "t1", model.ActionCreateTable, nil))
+	require.True(t, f.ShouldDiscardDDL("test", "t1", model.ActionCreateMaterializedView, nil))
+	require.False(t, f.ShouldDiscardDDL("test", "t1", model.ActionMViewRefreshOutOfPlaceCutover, nil))
 
 	// DDL on system schema, should discard.
 	require.True(t, f.ShouldDiscardDDL("mysql", "t1", model.ActionCreateTable, nil))
@@ -349,6 +351,31 @@ func TestShouldIgnoreDDL(t *testing.T) {
 
 	// DDL matches an SQL regex rule, should ignore.
 	ignore, err = f.ShouldIgnoreDDL("test", "t2", "DROP TABLE t2", model.ActionDropTable, 0)
+	require.NoError(t, err)
+	require.True(t, ignore)
+
+	cfg = &config.FilterConfig{
+		Rules: []string{"test.*"},
+		EventFilters: []*config.EventFilterRule{
+			{
+				Matcher:     []string{"test.t1"},
+				IgnoreEvent: []bf.EventType{bf.RenameTable},
+			},
+			{
+				Matcher:     []string{"test.t2"},
+				IgnoreEvent: []bf.EventType{EventTypeMViewRefreshOutOfPlaceCutover},
+			},
+		},
+	}
+
+	f, err = NewFilter(cfg, "UTC", false, false)
+	require.NoError(t, err)
+
+	ignore, err = f.ShouldIgnoreDDL("test", "t1", "REFRESH MATERIALIZED VIEW `test`.`t1` COMPLETE OUT OF PLACE", model.ActionMViewRefreshOutOfPlaceCutover, 0)
+	require.NoError(t, err)
+	require.False(t, ignore)
+
+	ignore, err = f.ShouldIgnoreDDL("test", "t2", "REFRESH MATERIALIZED VIEW `test`.`t2` COMPLETE OUT OF PLACE", model.ActionMViewRefreshOutOfPlaceCutover, 0)
 	require.NoError(t, err)
 	require.True(t, ignore)
 
@@ -614,7 +641,7 @@ func TestIsEligible(t *testing.T) {
 }
 
 func TestIsAllowedDDL(t *testing.T) {
-	require.Len(t, ddlWhiteListMap, 41)
+	require.Len(t, ddlWhiteListMap, 42)
 	type testCase struct {
 		model.ActionType
 		allowed bool

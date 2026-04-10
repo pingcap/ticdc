@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/pdutil"
@@ -107,4 +108,70 @@ func TestIgnoreDDLByCommitTs(t *testing.T) {
 	require.Contains(t, tableNames, "t1")
 	require.Contains(t, tableNames, "t3")
 	require.NotContains(t, tableNames, "t2")
+}
+
+func TestCreateMaterializedViewWithEmptySchemaVersionIsHandled(t *testing.T) {
+	mockPDClock := pdutil.NewClock4Test()
+	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+
+	dir := t.TempDir()
+	pstorage := newPersistentStorageForTest(dir, nil)
+	defer func() {
+		err := pstorage.close()
+		require.NoError(t, err)
+	}()
+
+	store := &keyspaceSchemaStore{
+		pdClock:       mockPDClock,
+		unsortedCache: newDDLCache(),
+		dataStorage:   pstorage,
+		notifyCh:      make(chan any, 1),
+	}
+	store.resolvedTs.Store(pstorage.gcTs)
+	store.pendingResolvedTs.Store(pstorage.gcTs)
+
+	createSchemaDDL := DDLJobWithCommitTs{
+		Job:      buildCreateSchemaJobForTest(100, "test", 1000),
+		CommitTs: 1000,
+	}
+	createSchemaDDL.Job.BinlogInfo.SchemaVersion = 100
+
+	createBaseTableDDL := DDLJobWithCommitTs{
+		Job:      buildCreateTableJobForTest(100, 150, "t_base", 1005),
+		CommitTs: 1005,
+	}
+	createBaseTableDDL.Job.BinlogInfo.SchemaVersion = 101
+
+	createMVDDL := DDLJobWithCommitTs{
+		Job:      buildCreateMaterializedViewJobForTest(100, 200, "mv1", []int64{150}, "select * from t_base", 1010),
+		CommitTs: 1010,
+	}
+	// This is the real case on the cluster: create materialized view comes with SchemaVersion == 0.
+	createMVDDL.Job.BinlogInfo.SchemaVersion = 0
+
+	for _, ddl := range []DDLJobWithCommitTs{createSchemaDDL, createBaseTableDDL, createMVDDL} {
+		store.writeDDLEvent(ddl)
+	}
+	store.advancePendingResolvedTs(1010)
+	store.tryUpdateResolvedTs()
+
+	require.Eventually(t, func() bool {
+		return store.resolvedTs.Load() >= 1010
+	}, 5*time.Second, 10*time.Millisecond)
+
+	tables, err := pstorage.getAllPhysicalTables(1010, nil)
+	require.NoError(t, err)
+	require.Len(t, tables, 2)
+	tableNames := make(map[string]struct{}, len(tables))
+	for _, table := range tables {
+		require.NotNil(t, table.SchemaTableName)
+		require.Equal(t, "test", table.SchemaTableName.SchemaName)
+		tableNames[table.SchemaTableName.TableName] = struct{}{}
+	}
+	require.Contains(t, tableNames, "t_base")
+	require.Contains(t, tableNames, "mv1")
+
+	events, err := pstorage.fetchTableDDLEvents(common.NewDispatcherID(), 200, nil, 1000, 2000)
+	require.NoError(t, err)
+	require.Empty(t, events)
 }

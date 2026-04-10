@@ -28,6 +28,13 @@ const ActionAddFullTextIndex = timodel.ActionType(230)
 // TODO: remove this after CREATE HYBRID INDEX has a dedicated action type in tidb repo
 const ActionCreateHybridIndex = timodel.ActionType(231)
 
+// EventTypeMViewRefreshOutOfPlaceCutover is a TiCDC-local DDL event type for
+// materialized view out-of-place refresh cutover.
+//
+// It is intentionally kept local to pkg/filter for now. When binlog-filter
+// grows first-class support for this DDL, the two can be unified.
+const EventTypeMViewRefreshOutOfPlaceCutover = bf.EventType("mview refresh out of place cutover")
+
 // ddlWhiteListMap is a map of all DDL types that can be applied to cdc's schema storage.
 var ddlWhiteListMap = map[timodel.ActionType]bf.EventType{
 	// schema related DDLs
@@ -49,6 +56,9 @@ var ddlWhiteListMap = map[timodel.ActionType]bf.EventType{
 	// view related DDLs
 	timodel.ActionCreateView: bf.CreateView,
 	timodel.ActionDropView:   bf.DropView,
+
+	// materialized view related DDLs
+	timodel.ActionMViewRefreshOutOfPlaceCutover: EventTypeMViewRefreshOutOfPlaceCutover,
 
 	// partition related DDLs
 	timodel.ActionAddTablePartition:      bf.AddTablePartition,
@@ -147,7 +157,8 @@ var singleTableDDLs = map[timodel.ActionType]struct{}{
 
 // multiTableDDLs affect multiple tables.
 var multiTableDDLs = map[timodel.ActionType]struct{}{
-	timodel.ActionRenameTables: {},
+	timodel.ActionRenameTables:                  {},
+	timodel.ActionMViewRefreshOutOfPlaceCutover: {},
 	// partition related DDLs
 	timodel.ActionAddTablePartition:      {},
 	timodel.ActionDropTablePartition:     {},
