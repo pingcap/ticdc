@@ -14,13 +14,10 @@
 package decoder_test
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
-	"os"
 	"sort"
 	"testing"
-	"time"
 
 	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/decoder"
 	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/types"
@@ -359,71 +356,4 @@ func TestRecord_EqualReplicatedRecord(t *testing.T) {
 			require.Equal(t, tt.expectedEqual, result)
 		})
 	}
-}
-
-const (
-	localPerfSchemaFile = "/Users/polnareff/Workstation/active/schema_464590049124810814_0006962445.json"
-	localPerfRecordFile = "/Users/polnareff/Workstation/active/CDC00000000000000000039.json"
-)
-
-// TestDecodePerformanceWithLocalFiles is a local-only performance test for Decode.
-// To run:
-// MCCC_ENABLE_LOCAL_PERF_TEST=1 go test ./cmd/multi-cluster-consistency-checker/decoder -run TestDecodePerformanceWithLocalFiles -v
-func TestDecodePerformanceWithLocalFiles(t *testing.T) {
-	schemaBytes, err := os.ReadFile(localPerfSchemaFile)
-	if err != nil {
-		t.Skipf("local schema file not found or unreadable: %v", err)
-	}
-	recordBytes, err := os.ReadFile(localPerfRecordFile)
-	if err != nil {
-		t.Skipf("local records file not found or unreadable: %v", err)
-	}
-
-	var tableDefinition cloudstorage.TableDefinition
-	err = json.Unmarshal(schemaBytes, &tableDefinition)
-	require.NoError(t, err)
-	columnFieldTypes := buildColumnFieldTypes(t, &tableDefinition)
-	recordBytes, srcRows := replicateRecordsToMultiTables(recordBytes, tableDefinition.Table, 100)
-	require.Greater(t, srcRows, 0)
-
-	start := time.Now()
-	records, err := decoder.Decode(recordBytes, columnFieldTypes)
-	elapsed := time.Since(start)
-	require.NoError(t, err)
-	require.NotEmpty(t, records)
-
-	avg := elapsed / time.Duration(len(records))
-	t.Logf(
-		"Decode local perf result: source_rows=%d table_count=%d records=%d elapsed=%s avg_per_record=%s input_bytes=%d",
-		srcRows, 100, len(records), elapsed, avg, len(recordBytes),
-	)
-	require.Fail(t, "success")
-}
-
-func replicateRecordsToMultiTables(recordBytes []byte, baseTable string, tableCount int) ([]byte, int) {
-	const lineTerminator = "\r\n"
-	lines := bytes.Split(recordBytes, []byte(lineTerminator))
-	pattern := []byte(`"table":"` + baseTable + `"`)
-	validLines := make([][]byte, 0, len(lines))
-	for _, line := range lines {
-		if len(line) == 0 {
-			continue
-		}
-		validLines = append(validLines, line)
-	}
-	if len(validLines) == 0 || tableCount <= 1 {
-		return recordBytes, len(validLines)
-	}
-
-	var expanded bytes.Buffer
-	expanded.Grow(len(recordBytes) * tableCount)
-	for i := range tableCount {
-		tablePattern := []byte(`"table":"` + fmt.Sprintf("%s_perf_%03d", baseTable, i) + `"`)
-		for _, line := range validLines {
-			rewrittenLine := bytes.Replace(line, pattern, tablePattern, 1)
-			expanded.Write(rewrittenLine)
-			expanded.WriteString(lineTerminator)
-		}
-	}
-	return expanded.Bytes(), len(validLines)
 }
