@@ -224,6 +224,21 @@ func (d *dispatcherStat) doReset(serverID node.ID, resetTs uint64) {
 	}
 	// remove the dispatcher from the dynamic stream
 	resetRequest := d.newDispatcherResetRequest(d.eventCollector.getLocalServerID().String(), resetTs, epoch)
+	if d.target.EnableSyncPoint() {
+		req := resetRequest.DispatcherRequest
+		log.Info("send reset dispatcher syncpoint request",
+			zap.Stringer("changefeedID", d.target.GetChangefeedID()),
+			zap.Stringer("dispatcher", d.getDispatcherID()),
+			zap.Stringer("eventServiceID", serverID),
+			zap.Uint64("epoch", epoch),
+			zap.Uint64("resetTs", resetTs),
+			zap.Uint64("checkpointTs", d.target.GetCheckpointTs()),
+			zap.Uint64("lastEventCommitTs", d.lastEventCommitTs.Load()),
+			zap.Uint64("syncPointTs", req.SyncPointTs),
+			zap.Uint64("syncPointIntervalSeconds", req.SyncPointInterval),
+			zap.Bool("skipSyncpointAtStartTs", d.target.GetSkipSyncpointAtStartTs()),
+		)
+	}
 	msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, resetRequest)
 	d.eventCollector.enqueueMessageForSend(msg)
 	log.Info("send reset dispatcher request to event service",
