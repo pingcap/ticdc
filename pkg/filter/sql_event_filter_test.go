@@ -532,8 +532,63 @@ func TestShouldSkipDDL(t *testing.T) {
 		})
 	}
 
-	// config error
+	// filter ddl by the local materialized-view cutover event type
 	case4 := testCase{
+		cfg: &config.FilterConfig{
+			EventFilters: []*config.EventFilterRule{
+				{
+					Matcher:     []string{"test.t1"},
+					IgnoreEvent: []bf.EventType{bf.RenameTable},
+				},
+				{
+					Matcher:     []string{"test.t2"},
+					IgnoreEvent: []bf.EventType{EventTypeMViewRefreshOutOfPlaceCutover},
+				},
+				{
+					Matcher:   []string{"test.t3"},
+					IgnoreSQL: []string{"REFRESH MATERIALIZED VIEW"},
+				},
+			},
+		},
+		cases: []innerCase{
+			{
+				schema:  "test",
+				table:   "t1",
+				query:   "REFRESH MATERIALIZED VIEW `test`.`t1` COMPLETE OUT OF PLACE",
+				ddlType: timodel.ActionMViewRefreshOutOfPlaceCutover,
+				skip:    false,
+			},
+			{
+				schema:  "test",
+				table:   "t2",
+				query:   "REFRESH MATERIALIZED VIEW `test`.`t2` COMPLETE OUT OF PLACE",
+				ddlType: timodel.ActionMViewRefreshOutOfPlaceCutover,
+				skip:    true,
+			},
+			{
+				schema:  "test",
+				table:   "t3",
+				query:   "REFRESH MATERIALIZED VIEW `test`.`t3` COMPLETE OUT OF PLACE",
+				ddlType: timodel.ActionMViewRefreshOutOfPlaceCutover,
+				skip:    true,
+			},
+		},
+	}
+
+	for _, caseSensitive := range []bool{true, false} {
+		t.Run(fmt.Sprintf("customMViewCutover-caseSensitive-%v", caseSensitive), func(t *testing.T) {
+			f, err := newSQLEventFilter(case4.cfg, caseSensitive)
+			require.True(t, errors.ErrorEqual(err, case4.err), "case: %+s", err)
+			for _, c := range case4.cases {
+				skip, err := f.shouldSkipDDL(c.schema, c.table, c.query, c.ddlType)
+				require.NoError(t, err)
+				require.Equal(t, c.skip, skip, "case: %+v", c)
+			}
+		})
+	}
+
+	// config error
+	case5 := testCase{
 		cfg: &config.FilterConfig{
 			EventFilters: []*config.EventFilterRule{
 				{
@@ -544,11 +599,11 @@ func TestShouldSkipDDL(t *testing.T) {
 		},
 		err: cerror.ErrInvalidIgnoreEventType,
 	}
-	_, err := newSQLEventFilter(case4.cfg, false)
-	require.True(t, errors.ErrorEqual(err, case4.err), "case: %+s", err)
+	_, err := newSQLEventFilter(case5.cfg, false)
+	require.True(t, errors.ErrorEqual(err, case5.err), "case: %+s", err)
 
 	// config error
-	case5 := testCase{
+	case6 := testCase{
 		cfg: &config.FilterConfig{
 			EventFilters: []*config.EventFilterRule{
 				{
@@ -558,8 +613,8 @@ func TestShouldSkipDDL(t *testing.T) {
 			},
 		},
 	}
-	_, err = newSQLEventFilter(case5.cfg, false)
-	require.True(t, errors.ErrorEqual(err, case5.err), "case: %+s", err)
+	_, err = newSQLEventFilter(case6.cfg, false)
+	require.True(t, errors.ErrorEqual(err, case6.err), "case: %+s", err)
 }
 
 func TestVerifyIgnoreEvents(t *testing.T) {

@@ -354,6 +354,31 @@ func TestShouldIgnoreDDL(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ignore)
 
+	cfg = &config.FilterConfig{
+		Rules: []string{"test.*"},
+		EventFilters: []*config.EventFilterRule{
+			{
+				Matcher:     []string{"test.t1"},
+				IgnoreEvent: []bf.EventType{bf.RenameTable},
+			},
+			{
+				Matcher:     []string{"test.t2"},
+				IgnoreEvent: []bf.EventType{EventTypeMViewRefreshOutOfPlaceCutover},
+			},
+		},
+	}
+
+	f, err = NewFilter(cfg, "UTC", false, false)
+	require.NoError(t, err)
+
+	ignore, err = f.ShouldIgnoreDDL("test", "t1", "REFRESH MATERIALIZED VIEW `test`.`t1` COMPLETE OUT OF PLACE", model.ActionMViewRefreshOutOfPlaceCutover, 0)
+	require.NoError(t, err)
+	require.False(t, ignore)
+
+	ignore, err = f.ShouldIgnoreDDL("test", "t2", "REFRESH MATERIALIZED VIEW `test`.`t2` COMPLETE OUT OF PLACE", model.ActionMViewRefreshOutOfPlaceCutover, 0)
+	require.NoError(t, err)
+	require.True(t, ignore)
+
 	// DDL does not match any rule, should not ignore.
 	ignore, err = f.ShouldIgnoreDDL("test", "t3", "CREATE TABLE t3(id int)", model.ActionCreateTable, 0)
 	require.NoError(t, err)

@@ -27,7 +27,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
@@ -328,7 +327,7 @@ func (c *eventBroker) tickTableTriggerDispatchers(ctx context.Context) error {
 					ID:   stat.info.GetTableSpan().KeyspaceID,
 					Name: stat.info.GetChangefeedID().Keyspace(),
 				}
-				ddlEvents, endTs, err := c.schemaStore.FetchTableTriggerDDLEvents(keyspaceMeta, key.(common.DispatcherID), stat.filter, startTs, stat.trackedMaterializedViewIDs, 100)
+				ddlEvents, endTs, err := c.schemaStore.FetchTableTriggerDDLEvents(keyspaceMeta, key.(common.DispatcherID), stat.epoch, stat.filter, startTs, 100)
 				if err != nil {
 					log.Error("table trigger ddl events fetch failed", zap.Uint32("keyspaceID", stat.info.GetTableSpan().KeyspaceID), zap.Stringer("dispatcherID", stat.id), zap.Error(err))
 					return true
@@ -927,15 +926,13 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 			ID:   span.KeyspaceID,
 			Name: changefeedID.Keyspace(),
 		}
-		trackedMaterializedViewIDs, err := c.loadTrackedMaterializedViewIDs(keyspaceMeta, info.GetStartTs(), info.GetFilter())
-		if err != nil {
+		if err := c.schemaStore.RegisterTableTriggerDispatcher(keyspaceMeta, id, info.GetEpoch(), info.GetStartTs(), info.GetFilter()); err != nil {
 			status.removeDispatcher(id)
 			if status.isEmpty() {
 				c.changefeedMap.Delete(changefeedID)
 			}
 			return err
 		}
-		dispatcher.trackedMaterializedViewIDs = trackedMaterializedViewIDs
 		c.tableTriggerDispatchers.Store(id, dispatcherPtr)
 		log.Info("table trigger dispatcher register dispatcher",
 			zap.Uint64("clusterID", c.tidbClusterID),
@@ -1021,7 +1018,6 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 		if !ok {
 			return
 		}
-		c.tableTriggerDispatchers.Delete(id)
 	}
 	stat := statPtr.(*atomic.Pointer[dispatcherStat]).Load()
 
@@ -1044,8 +1040,19 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 		ID:   span.KeyspaceID,
 		Name: changefeedID.Keyspace(),
 	}
-	c.schemaStore.UnregisterTable(keyspaceMeta, span.TableID)
-	c.dispatchers.Delete(id)
+	if span.Equal(common.KeyspaceDDLSpan(span.KeyspaceID)) {
+		c.tableTriggerDispatchers.Delete(id)
+		if err := c.schemaStore.UnregisterTableTriggerDispatcher(keyspaceMeta, id); err != nil {
+			log.Warn("unregister table trigger dispatcher from schemaStore failed",
+				zap.Uint32("keyspaceID", span.KeyspaceID),
+				zap.Stringer("dispatcherID", id),
+				zap.String("span", common.FormatTableSpan(span)),
+				zap.Error(err))
+		}
+	} else {
+		c.schemaStore.UnregisterTable(keyspaceMeta, span.TableID)
+		c.dispatchers.Delete(id)
+	}
 
 	log.Info("remove dispatcher",
 		zap.Uint64("clusterID", c.tidbClusterID), zap.Stringer("changefeedID", changefeedID),
@@ -1086,7 +1093,6 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 	changefeedID := dispatcherInfo.GetChangefeedID()
 	span := dispatcherInfo.GetTableSpan()
 	var tableInfo *common.TableInfo
-	var trackedMaterializedViewIDs map[int64]struct{}
 	keyspaceMeta := common.KeyspaceMeta{
 		ID:   span.KeyspaceID,
 		Name: changefeedID.Keyspace(),
@@ -1105,10 +1111,8 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 			return err
 		}
 	} else {
-		var err error
-		trackedMaterializedViewIDs, err = c.loadTrackedMaterializedViewIDs(keyspaceMeta, dispatcherInfo.GetStartTs(), dispatcherInfo.GetFilter())
-		if err != nil {
-			log.Error("get tracked materialized views from schemaStore failed",
+		if err := c.schemaStore.RegisterTableTriggerDispatcher(keyspaceMeta, dispatcherID, dispatcherInfo.GetEpoch(), dispatcherInfo.GetStartTs(), dispatcherInfo.GetFilter()); err != nil {
+			log.Error("register table trigger dispatcher to schemaStore failed",
 				zap.Stringer("changefeedID", changefeedID),
 				zap.Stringer("dispatcherID", dispatcherID),
 				zap.Uint64("startTs", dispatcherInfo.GetStartTs()),
@@ -1119,7 +1123,6 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 	}
 	status := c.getOrSetChangefeedStatus(changefeedID)
 	newStat := newDispatcherStat(dispatcherInfo, uint64(len(c.taskChan)), uint64(len(c.messageCh)), tableInfo, status)
-	newStat.trackedMaterializedViewIDs = trackedMaterializedViewIDs
 	newStat.copyStatistics(oldStat)
 
 	for {
@@ -1155,22 +1158,6 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 		zap.Duration("resetTime", time.Since(start)))
 
 	return nil
-}
-
-func (c *eventBroker) loadTrackedMaterializedViewIDs(
-	keyspaceMeta common.KeyspaceMeta,
-	startTs uint64,
-	tableFilter filter.Filter,
-) (map[int64]struct{}, error) {
-	tableIDs, err := c.schemaStore.GetMaterializedViewIDs(keyspaceMeta, startTs, tableFilter)
-	if err != nil {
-		return nil, err
-	}
-	tracked := make(map[int64]struct{}, len(tableIDs))
-	for _, tableID := range tableIDs {
-		tracked[tableID] = struct{}{}
-	}
-	return tracked, nil
 }
 
 func (c *eventBroker) getOrSetChangefeedStatus(changefeedID common.ChangeFeedID) *changefeedStatus {
