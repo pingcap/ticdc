@@ -529,6 +529,15 @@ func (p *persistentStorage) fetchTableTriggerDDLEvents(tableFilter filter.Filter
 		p.mu.RUnlock()
 		for _, ts := range allTargetTs {
 			rawEvent := readPersistedDDLEvent(storageSnap, ts)
+			if p.shouldSkipTableTriggerDDLEvent(&rawEvent) {
+				log.Info("skip table trigger ddl event",
+					zap.Uint64("ts", ts),
+					zap.String("type", model.ActionType(rawEvent.Type).String()),
+					zap.String("query", rawEvent.Query),
+					zap.String("schema", rawEvent.SchemaName),
+					zap.String("table", rawEvent.TableName))
+				continue
+			}
 			// the tableID of buildDDLEvent is not used in this function, set it to 0
 			ddlEvent, ok, err := buildDDLEvent(&rawEvent, tableFilter, 0)
 			if err != nil {
@@ -544,6 +553,44 @@ func (p *persistentStorage) fetchTableTriggerDDLEvents(tableFilter filter.Filter
 		}
 		nextStartTs = allTargetTs[len(allTargetTs)-1]
 	}
+}
+
+func (p *persistentStorage) shouldSkipTableTriggerDDLEvent(rawEvent *PersistedDDLEvent) bool {
+	switch model.ActionType(rawEvent.Type) {
+	case model.ActionCreateMaterializedView:
+		// Existing materialized views are loaded from snapshot during bootstrap.
+		// Ignore runtime create-MV DDLs so they do not create new dispatchers mid-run.
+		return true
+	case model.ActionMViewRefreshOutOfPlaceCutover:
+		return !p.shouldHandleMViewRefreshOutOfPlaceCutover(rawEvent)
+	default:
+		return false
+	}
+}
+
+// shouldHandleMViewRefreshOutOfPlaceCutover reports whether a refresh cutover belongs to a
+// materialized view that is already tracked in the current changefeed run.
+//
+// We intentionally keep runtime-created materialized views invisible until the next bootstrap:
+//   - `CREATE MATERIALIZED VIEW` is ignored at runtime, so no dispatcher is created for it.
+//   - If we still processed a later out-of-place cutover for that MV, the refresh could either
+//     re-introduce the MV dynamically or block waiting for an old-table dispatcher that never existed.
+//
+// Therefore, we only allow the cutover when the source MV table is already registered, which
+// means the MV was loaded during bootstrap or had otherwise become part of the current run.
+func (p *persistentStorage) shouldHandleMViewRefreshOutOfPlaceCutover(rawEvent *PersistedDDLEvent) bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
+	if rawEvent.TableInfo != nil && isPartitionTable(rawEvent.TableInfo) {
+		for _, tableID := range rawEvent.PrevPartitions {
+			if p.tableRegisteredCount[tableID] > 0 {
+				return true
+			}
+		}
+		return false
+	}
+	return p.tableRegisteredCount[rawEvent.TableID] > 0
 }
 
 func (p *persistentStorage) buildVersionedTableInfoStore(store *versionedTableInfoStore) error {

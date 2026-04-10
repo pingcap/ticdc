@@ -22,7 +22,6 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/pdutil"
-	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
@@ -174,6 +173,5 @@ func TestCreateMaterializedViewWithEmptySchemaVersionIsHandled(t *testing.T) {
 
 	events, err := pstorage.fetchTableDDLEvents(common.NewDispatcherID(), 200, nil, 1000, 2000)
 	require.NoError(t, err)
-	require.Len(t, events, 1)
-	require.Equal(t, byte(model.ActionCreateMaterializedView), events[0].Type)
+	require.Empty(t, events)
 }

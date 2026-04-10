@@ -302,7 +302,7 @@ func TestShouldDiscardDDL(t *testing.T) {
 
 	// DDL (create table) does not match any discard rule, should not discard.
 	require.False(t, f.ShouldDiscardDDL("test", "t1", model.ActionCreateTable, nil))
-	require.False(t, f.ShouldDiscardDDL("test", "t1", model.ActionCreateMaterializedView, nil))
+	require.True(t, f.ShouldDiscardDDL("test", "t1", model.ActionCreateMaterializedView, nil))
 	require.False(t, f.ShouldDiscardDDL("test", "t1", model.ActionMViewRefreshOutOfPlaceCutover, nil))
 
 	// DDL on system schema, should discard.
@@ -616,7 +616,7 @@ func TestIsEligible(t *testing.T) {
 }
 
 func TestIsAllowedDDL(t *testing.T) {
-	require.Len(t, ddlWhiteListMap, 43)
+	require.Len(t, ddlWhiteListMap, 42)
 	type testCase struct {
 		model.ActionType
 		allowed bool

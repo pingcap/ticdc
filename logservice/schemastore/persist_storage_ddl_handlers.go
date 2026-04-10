@@ -152,7 +152,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		updateSchemaMetadataFunc:   updateSchemaMetadataForNewTableDDL,
 		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
 		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
-		buildDDLEventFunc:          buildDDLEventForNewTableDDL,
+		buildDDLEventFunc:          buildDDLEventIgnore,
 	},
 	model.ActionCreateMaterializedViewShadow: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForCreateTable,
