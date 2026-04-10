@@ -581,6 +581,14 @@ func (p *persistentStorage) shouldSkipTableTriggerDDLEvent(rawEvent *PersistedDD
 		// Ignore runtime create-MV DDLs so they do not create new dispatchers mid-run.
 		return true
 	case model.ActionMViewRefreshOutOfPlaceCutover:
+		// This DDL is only relevant to at most two dispatcher kinds:
+		//   1. the table dispatcher for the materialized view being refreshed; and
+		//   2. the table trigger dispatcher.
+		//
+		// If the current changefeed is not capturing that materialized view, (1) does not
+		// exist at all. For the table trigger path, it is therefore sufficient to check
+		// whether the materialized view lineage is in `trackedMaterializedViewIDs`, which
+		// represents the materialized views currently managed by this changefeed run.
 		return !p.handleTrackedMaterializedViewCutover(rawEvent, trackedMaterializedViewIDs)
 	default:
 		return false
