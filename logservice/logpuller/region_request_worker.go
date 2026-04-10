@@ -76,9 +76,7 @@ func (s *regionRequestWorker) markRegionRuntimeEnqueued(region regionInfo, now t
 
 func (s *regionRequestWorker) markRegionRuntimeSent(region regionInfo, now time.Time) {
 	if registry := s.runtimeRegistry(); registry != nil && region.runtimeKey.isValid() {
-		registry.updateWorker(region.runtimeKey, s.workerID)
-		registry.setRequestSendTime(region.runtimeKey, now)
-		registry.transition(region.runtimeKey, regionPhaseWaitInitialized, now)
+		registry.markWaitInitialized(region.runtimeKey, s.workerID, now)
 	}
 }
 

@@ -215,9 +215,7 @@ func (s *regionFeedState) updateRuntimeLastEvent(now time.Time) {
 
 func (s *regionFeedState) markRuntimeReplicating(now time.Time) {
 	if registry := s.runtimeRegistry(); registry != nil {
-		registry.setInitializedTime(s.region.runtimeKey, now)
-		registry.setReplicatingTime(s.region.runtimeKey, now)
-		registry.transition(s.region.runtimeKey, regionPhaseReplicating, now)
+		registry.markReplicating(s.region.runtimeKey, now)
 	}
 }
 

@@ -238,8 +238,7 @@ func (s *subscriptionClient) ensureRegionRuntime(region *regionInfo, now time.Ti
 	}
 	if !region.runtimeKey.isValid() {
 		region.runtimeKey = s.regionRuntimeRegistry.allocKey(region.subscribedSpan.subID, region.verID.GetID())
-		s.regionRuntimeRegistry.updateRegionInfo(region.runtimeKey, *region)
-		s.regionRuntimeRegistry.transition(region.runtimeKey, regionPhaseDiscovered, now)
+		s.regionRuntimeRegistry.registerRegion(region.runtimeKey, *region, now)
 	}
 }
 
@@ -267,9 +266,42 @@ func (s *subscriptionClient) markRegionRetryPending(region regionInfo, err error
 	if s.regionRuntimeRegistry == nil || !region.runtimeKey.isValid() {
 		return
 	}
+	s.regionRuntimeRegistry.markRetryPending(region.runtimeKey, err, now)
+}
+
+func (s *subscriptionClient) markRegionRuntimeRPCReady(region regionInfo, now time.Time) {
+	if s.regionRuntimeRegistry == nil || !region.runtimeKey.isValid() {
+		return
+	}
+	s.regionRuntimeRegistry.markRPCReady(region.runtimeKey, now)
+}
+
+func (s *subscriptionClient) markRegionRuntimeQueued(region regionInfo, acquiredTime, queuedTime time.Time) {
+	if s.regionRuntimeRegistry == nil || !region.runtimeKey.isValid() {
+		return
+	}
+	s.regionRuntimeRegistry.markQueued(region.runtimeKey, acquiredTime, queuedTime)
+}
+
+func (s *subscriptionClient) recordRegionRuntimeError(region regionInfo, err error, now time.Time) {
+	if s.regionRuntimeRegistry == nil || !region.runtimeKey.isValid() {
+		return
+	}
 	s.regionRuntimeRegistry.recordError(region.runtimeKey, err, now)
-	s.regionRuntimeRegistry.incRetry(region.runtimeKey)
-	s.regionRuntimeRegistry.transition(region.runtimeKey, regionPhaseRetryPending, now)
+}
+
+func (s *subscriptionClient) regionRuntimePhaseCounts() map[regionPhase]int {
+	if s.regionRuntimeRegistry == nil {
+		return nil
+	}
+	return s.regionRuntimeRegistry.phaseCounts()
+}
+
+func (s *subscriptionClient) removeSubscriptionRuntime(subID SubscriptionID) {
+	if s.regionRuntimeRegistry == nil {
+		return
+	}
+	s.regionRuntimeRegistry.removeBySubscription(subID)
 }
 
 func (s *subscriptionClient) removeRegionRuntime(region regionInfo, now time.Time) {
@@ -390,8 +422,7 @@ func (s *subscriptionClient) updateMetrics(ctx context.Context) error {
 
 			metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("pending").Set(float64(pendingRegionReqCount))
 
-			if s.regionRuntimeRegistry != nil {
-				counts := s.regionRuntimeRegistry.phaseCounts()
+			if counts := s.regionRuntimePhaseCounts(); counts != nil {
 				for _, phase := range regionRuntimePhases {
 					metrics.SubscriptionClientRegionRuntimePhaseCount.WithLabelValues(string(phase)).Set(float64(counts[phase]))
 				}
@@ -569,9 +600,7 @@ func (s *subscriptionClient) onTableDrained(rt *subscribedSpan) {
 	log.Info("subscription client stop span is finished",
 		zap.Uint64("subscriptionID", uint64(rt.subID)))
 
-	if s.regionRuntimeRegistry != nil {
-		s.regionRuntimeRegistry.removeBySubscription(rt.subID)
-	}
+	s.removeSubscriptionRuntime(rt.subID)
 
 	err := s.ds.RemovePath(rt.subID)
 	if err != nil {
@@ -586,9 +615,7 @@ func (s *subscriptionClient) onTableDrained(rt *subscribedSpan) {
 
 // Note: don't block the caller, otherwise there may be deadlock
 func (s *subscriptionClient) onRegionFail(errInfo regionErrorInfo) {
-	if s.regionRuntimeRegistry != nil && errInfo.runtimeKey.isValid() {
-		s.regionRuntimeRegistry.recordError(errInfo.runtimeKey, errInfo.err, time.Now())
-	}
+	s.recordRegionRuntimeError(errInfo.regionInfo, errInfo.err, time.Now())
 	// unlock the range early to prevent blocking the range.
 	if errInfo.subscribedSpan.rangeLock.UnlockRange(
 		errInfo.span.StartKey, errInfo.span.EndKey,
@@ -694,10 +721,7 @@ func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 			continue
 		}
 		s.updateRegionRuntimeInfo(region)
-		if s.regionRuntimeRegistry != nil && region.runtimeKey.isValid() {
-			s.regionRuntimeRegistry.setRPCReadyTime(region.runtimeKey, time.Now())
-		}
-		s.transitionRegionRuntime(region, regionPhaseRPCReady, time.Now())
+		s.markRegionRuntimeRPCReady(region, time.Now())
 
 		store := getStore(region.rpcCtx.Addr)
 		worker := store.getRequestWorker()
@@ -885,24 +909,15 @@ func (s *subscriptionClient) scheduleRegionRequest(ctx context.Context, region r
 	switch lockRangeResult.Status {
 	case regionlock.LockRangeStatusSuccess:
 		region.lockedRangeState = lockRangeResult.LockedRangeState
-		if s.regionRuntimeRegistry != nil && region.runtimeKey.isValid() {
-			s.regionRuntimeRegistry.setRangeLockAcquiredTime(region.runtimeKey, lockRangeResult.LockedRangeState.Created)
-		}
-		s.transitionRegionRuntime(region, regionPhaseQueued, time.Now())
+		s.markRegionRuntimeQueued(region, lockRangeResult.LockedRangeState.Created, time.Now())
 		s.regionTaskQueue.Push(NewRegionPriorityTask(priority, region, s.pdClock.CurrentTS()))
 	case regionlock.LockRangeStatusStale:
-		s.transitionRegionRuntime(region, regionPhaseRemoved, time.Now())
-		if s.regionRuntimeRegistry != nil && region.runtimeKey.isValid() {
-			s.regionRuntimeRegistry.remove(region.runtimeKey)
-		}
+		s.removeRegionRuntime(region, time.Now())
 		for _, r := range lockRangeResult.RetryRanges {
 			s.scheduleRangeRequest(ctx, r, region.subscribedSpan, region.filterLoop, priority)
 		}
 	case regionlock.LockRangeStatusCancel:
-		s.transitionRegionRuntime(region, regionPhaseRemoved, time.Now())
-		if s.regionRuntimeRegistry != nil && region.runtimeKey.isValid() {
-			s.regionRuntimeRegistry.remove(region.runtimeKey)
-		}
+		s.removeRegionRuntime(region, time.Now())
 	default:
 		return
 	}
