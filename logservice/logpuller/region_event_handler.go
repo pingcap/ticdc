@@ -252,6 +252,7 @@ func (h *regionEventHandler) handleRegionError(state *regionFeedState) {
 
 func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *cdcpb.Event_Entries_) {
 	regionID, _, _ := state.getRegionMeta()
+	state.updateRuntimeLastEvent(time.Now())
 	assembleRowEvent := func(regionID uint64, entry *cdcpb.Event_Row) common.RawKVEntry {
 		var opType common.OpType
 		switch entry.GetOpType() {
@@ -277,6 +278,7 @@ func handleEventEntries(span *subscribedSpan, state *regionFeedState, entries *c
 		switch entry.Type {
 		case cdcpb.Event_INITIALIZED:
 			state.setInitialized()
+			state.markRuntimeReplicating(time.Now())
 			log.Debug("region is initialized",
 				zap.Int64("tableID", span.span.TableID),
 				zap.Uint64("regionID", regionID),
@@ -364,6 +366,7 @@ func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs u
 	}
 
 	state.updateResolvedTs(resolvedTs)
+	state.updateRuntimeResolvedTs(resolvedTs, time.Now())
 
 	ts := uint64(0)
 	shouldAdvance := false
