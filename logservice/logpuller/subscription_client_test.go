@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/ticdc/logservice/logpuller/regionlock"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/security"
@@ -36,6 +37,16 @@ import (
 	"github.com/tikv/client-go/v2/testutils"
 	"github.com/tikv/client-go/v2/tikv"
 )
+
+func TestSubscriptionClientConfigGetMemoryQuota(t *testing.T) {
+	t.Parallel()
+
+	cfg := &SubscriptionClientConfig{}
+	require.Equal(t, config.DefaultPullerMemoryQuota, cfg.getMemoryQuota())
+
+	cfg.MemoryQuota = 128
+	require.Equal(t, uint64(128), cfg.getMemoryQuota())
+}
 
 func TestGenerateResolveLockTask(t *testing.T) {
 	client := &subscriptionClient{

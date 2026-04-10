@@ -19,6 +19,12 @@ import (
 	"github.com/pingcap/errors"
 )
 
+const (
+	// DefaultPullerMemoryQuota is the default max pending memory size for each
+	// log puller subscription in dynamic stream.
+	DefaultPullerMemoryQuota uint64 = 1024 * 1024 * 1024 // 1GB.
+)
+
 // DebugConfig represents config for ticdc unexposed feature configurations
 type DebugConfig struct {
 	DB *DBConfig `toml:"db" json:"db"`
@@ -49,6 +55,12 @@ func (c *DebugConfig) ValidateAndAdjust() error {
 	if err := c.Scheduler.ValidateAndAdjust(); err != nil {
 		return errors.Trace(err)
 	}
+	if c.Puller == nil {
+		c.Puller = NewDefaultPullerConfig()
+	}
+	if err := c.Puller.ValidateAndAdjust(); err != nil {
+		return errors.Trace(err)
+	}
 
 	return nil
 }
@@ -67,6 +79,10 @@ type PullerConfig struct {
 	// For example, if PendingRegionRequestQueueSize is 32 and there are 8 workers connecting to the same store,
 	// each worker's queue size will be 32 / 8 = 4.
 	PendingRegionRequestQueueSize int `toml:"pending-region-request-queue-size" json:"pending_region_request_queue_size"`
+
+	// MemoryQuota is the max pending memory size in bytes for a log puller
+	// subscription in dynamic stream.
+	MemoryQuota uint64 `toml:"memory-quota" json:"memory_quota"`
 }
 
 // NewDefaultPullerConfig return the default puller configuration
@@ -76,7 +92,16 @@ func NewDefaultPullerConfig() *PullerConfig {
 		ResolvedTsStuckInterval:        TomlDuration(5 * time.Minute),
 		LogRegionDetails:               false,
 		PendingRegionRequestQueueSize:  32, // This value is chosen to reduce the impact of new changefeeds on existing ones.
+		MemoryQuota:                    DefaultPullerMemoryQuota,
 	}
+}
+
+// ValidateAndAdjust validates and adjusts the puller configuration.
+func (c *PullerConfig) ValidateAndAdjust() error {
+	if c.MemoryQuota == 0 {
+		c.MemoryQuota = DefaultPullerMemoryQuota
+	}
+	return nil
 }
 
 type EventStoreConfig struct {

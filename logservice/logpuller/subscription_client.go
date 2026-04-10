@@ -156,6 +156,17 @@ func (span *subscribedSpan) clearKVEventsCache() {
 type SubscriptionClientConfig struct {
 	// The number of region request workers to send region task for every tikv store
 	RegionRequestWorkerPerStore uint
+
+	// MemoryQuota is the max pending memory size in bytes for each log puller
+	// subscription in dynamic stream.
+	MemoryQuota uint64
+}
+
+func (c *SubscriptionClientConfig) getMemoryQuota() uint64 {
+	if c == nil || c.MemoryQuota == 0 {
+		return config.DefaultPullerMemoryQuota
+	}
+	return c.MemoryQuota
 }
 
 type sharedClientMetrics struct {
@@ -367,7 +378,11 @@ func (s *subscriptionClient) Subscribe(
 	s.totalSpans.spanMap[subID] = rt
 	s.totalSpans.Unlock()
 
-	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(1*1024*1024*1024, dynstream.MemoryControlForPuller, "logPuller") // 1GB
+	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(
+		s.config.getMemoryQuota(),
+		dynstream.MemoryControlForPuller,
+		"logPuller",
+	)
 	s.ds.AddPath(rt.subID, rt, areaSetting)
 
 	select {
