@@ -336,6 +336,25 @@ func (p *persistentStorage) getAllPhysicalTables(snapTs uint64, tableFilter filt
 	return loadAllPhysicalTablesAtTs(storageSnap, gcTs, snapTs, tableFilter)
 }
 
+func (p *persistentStorage) getMaterializedViewIDs(snapTs uint64, tableFilter filter.Filter) ([]int64, error) {
+	storageSnap := p.db.NewSnapshot()
+	defer storageSnap.Close()
+
+	p.mu.Lock()
+	failpoint.Inject("getAllPhysicalTablesGCFastFail", func() {
+		snapTs = 0
+	})
+	if snapTs < p.gcTs {
+		p.mu.Unlock()
+		return nil, errors.ErrSnapshotLostByGC.GenWithStackByArgs("snapTs %d is smaller than gcTs %d", snapTs, p.gcTs)
+	}
+
+	gcTs := p.gcTs
+	p.mu.Unlock()
+
+	return loadMaterializedViewIDsAtTs(storageSnap, gcTs, snapTs, tableFilter)
+}
+
 // only return when table info is initialized
 func (p *persistentStorage) registerTable(tableID int64, startTs uint64) error {
 	p.mu.Lock()
@@ -485,7 +504,7 @@ func (p *persistentStorage) fetchTableDDLEvents(dispatcherID common.DispatcherID
 	return events, nil
 }
 
-func (p *persistentStorage) fetchTableTriggerDDLEvents(tableFilter filter.Filter, start uint64, limit int) ([]commonEvent.DDLEvent, error) {
+func (p *persistentStorage) fetchTableTriggerDDLEvents(tableFilter filter.Filter, start uint64, trackedMaterializedViewIDs map[int64]struct{}, limit int) ([]commonEvent.DDLEvent, error) {
 	// fast check
 	p.mu.RLock()
 	if len(p.tableTriggerDDLHistory) == 0 || start >= p.tableTriggerDDLHistory[len(p.tableTriggerDDLHistory)-1] {
@@ -529,7 +548,7 @@ func (p *persistentStorage) fetchTableTriggerDDLEvents(tableFilter filter.Filter
 		p.mu.RUnlock()
 		for _, ts := range allTargetTs {
 			rawEvent := readPersistedDDLEvent(storageSnap, ts)
-			if p.shouldSkipTableTriggerDDLEvent(&rawEvent) {
+			if p.shouldSkipTableTriggerDDLEvent(&rawEvent, trackedMaterializedViewIDs) {
 				log.Info("skip table trigger ddl event",
 					zap.Uint64("ts", ts),
 					zap.String("type", model.ActionType(rawEvent.Type).String()),
@@ -555,42 +574,38 @@ func (p *persistentStorage) fetchTableTriggerDDLEvents(tableFilter filter.Filter
 	}
 }
 
-func (p *persistentStorage) shouldSkipTableTriggerDDLEvent(rawEvent *PersistedDDLEvent) bool {
+func (p *persistentStorage) shouldSkipTableTriggerDDLEvent(rawEvent *PersistedDDLEvent, trackedMaterializedViewIDs map[int64]struct{}) bool {
 	switch model.ActionType(rawEvent.Type) {
 	case model.ActionCreateMaterializedView:
 		// Existing materialized views are loaded from snapshot during bootstrap.
 		// Ignore runtime create-MV DDLs so they do not create new dispatchers mid-run.
 		return true
 	case model.ActionMViewRefreshOutOfPlaceCutover:
-		return !p.shouldHandleMViewRefreshOutOfPlaceCutover(rawEvent)
+		return !p.handleTrackedMaterializedViewCutover(rawEvent, trackedMaterializedViewIDs)
 	default:
 		return false
 	}
 }
 
-// shouldHandleMViewRefreshOutOfPlaceCutover reports whether a refresh cutover belongs to a
-// materialized view that is already tracked in the current changefeed run.
+// handleTrackedMaterializedViewCutover reports whether a refresh cutover belongs to a
+// materialized view that is already tracked by the current table trigger dispatcher.
 //
 // We intentionally keep runtime-created materialized views invisible until the next bootstrap:
 //   - `CREATE MATERIALIZED VIEW` is ignored at runtime, so no dispatcher is created for it.
-//   - If we still processed a later out-of-place cutover for that MV, the refresh could either
-//     re-introduce the MV dynamically or block waiting for an old-table dispatcher that never existed.
+//   - Such MVs never enter `trackedMaterializedViewIDs`, so later out-of-place cutovers stay invisible too.
 //
-// Therefore, we only allow the cutover when the source MV table is already registered, which
-// means the MV was loaded during bootstrap or had otherwise become part of the current run.
-func (p *persistentStorage) shouldHandleMViewRefreshOutOfPlaceCutover(rawEvent *PersistedDDLEvent) bool {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-
-	if rawEvent.TableInfo != nil && isPartitionTable(rawEvent.TableInfo) {
-		for _, tableID := range rawEvent.PrevPartitions {
-			if p.tableRegisteredCount[tableID] > 0 {
-				return true
-			}
-		}
+// For tracked MVs, out-of-place refresh changes the logical table ID from old MV -> shadow table,
+// so we roll the tracked set forward here to keep future cutovers of the same MV lineage visible.
+func (p *persistentStorage) handleTrackedMaterializedViewCutover(rawEvent *PersistedDDLEvent, trackedMaterializedViewIDs map[int64]struct{}) bool {
+	if trackedMaterializedViewIDs == nil {
 		return false
 	}
-	return p.tableRegisteredCount[rawEvent.TableID] > 0
+	if _, ok := trackedMaterializedViewIDs[rawEvent.TableID]; !ok {
+		return false
+	}
+	delete(trackedMaterializedViewIDs, rawEvent.TableID)
+	trackedMaterializedViewIDs[rawEvent.ExtraTableID] = struct{}{}
+	return true
 }
 
 func (p *persistentStorage) buildVersionedTableInfoStore(store *versionedTableInfoStore) error {
