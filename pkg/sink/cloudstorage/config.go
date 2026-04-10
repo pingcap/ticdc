@@ -71,17 +71,17 @@ type urlConfig struct {
 
 // Config is the configuration for cloud storage sink.
 type Config struct {
-	WorkerCount              int
-	FlushInterval            time.Duration
-	FileSize                 int
-	FileIndexWidth           int
-	DateSeparator            string
-	FileExpirationDays       int
-	FileCleanupCronSpec      string
-	EnablePartitionSeparator bool
-	OutputColumnID           bool
-	FlushConcurrency         int
-	EnableTableAcrossNodes   bool
+	WorkerCount                  int
+	FlushInterval                time.Duration
+	FileSize                     int
+	FileIndexWidth               int
+	DateSeparator                string
+	FileExpirationDays           int
+	FileCleanupCronSpec          string
+	EnablePartitionSeparator     bool
+	OutputColumnID               bool
+	FlushConcurrency             int
+	EnableTableAcrossNodes       bool
 	EnableSchemaIndexByGetObject bool
 }
 
