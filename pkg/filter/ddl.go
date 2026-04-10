@@ -50,6 +50,10 @@ var ddlWhiteListMap = map[timodel.ActionType]bf.EventType{
 	timodel.ActionCreateView: bf.CreateView,
 	timodel.ActionDropView:   bf.DropView,
 
+	// materialized view related DDLs
+	timodel.ActionCreateMaterializedView:        bf.CreateTable,
+	timodel.ActionMViewRefreshOutOfPlaceCutover: bf.RenameTable,
+
 	// partition related DDLs
 	timodel.ActionAddTablePartition:      bf.AddTablePartition,
 	timodel.ActionDropTablePartition:     bf.DropTablePartition,
@@ -147,7 +151,8 @@ var singleTableDDLs = map[timodel.ActionType]struct{}{
 
 // multiTableDDLs affect multiple tables.
 var multiTableDDLs = map[timodel.ActionType]struct{}{
-	timodel.ActionRenameTables: {},
+	timodel.ActionRenameTables:                  {},
+	timodel.ActionMViewRefreshOutOfPlaceCutover: {},
 	// partition related DDLs
 	timodel.ActionAddTablePartition:      {},
 	timodel.ActionDropTablePartition:     {},
@@ -164,6 +169,7 @@ var globalTableDDLs = map[timodel.ActionType]struct{}{
 	timodel.ActionDropSchema:                    {},
 	timodel.ActionModifySchemaCharsetAndCollate: {},
 	timodel.ActionCreateTable:                   {},
+	timodel.ActionCreateMaterializedView:        {},
 	timodel.ActionDropTable:                     {},
 	timodel.ActionCreateTables:                  {},
 	timodel.ActionRecoverTable:                  {},
@@ -178,7 +184,7 @@ func ShouldBlock(action timodel.ActionType) bool {
 	}
 	switch action {
 	case timodel.ActionCreateSchema, timodel.ActionCreateTables,
-		timodel.ActionCreateTable, timodel.ActionRecoverTable:
+		timodel.ActionCreateTable, timodel.ActionCreateMaterializedView, timodel.ActionRecoverTable:
 		// not block since there are no affected dispatchers.
 		return false
 	default:
