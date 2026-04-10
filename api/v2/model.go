@@ -23,6 +23,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/integrity"
+	"github.com/pingcap/ticdc/pkg/liveness"
 	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/pingcap/ticdc/pkg/util"
 )
@@ -1385,13 +1386,13 @@ type ProcessorDetail struct {
 
 // ServerStatus holds some common information of a server
 type ServerStatus struct {
-	Version   string       `json:"version"`
-	GitHash   string       `json:"git_hash"`
-	ID        string       `json:"id"`
-	ClusterID string       `json:"cluster_id"`
-	Pid       int          `json:"pid"`
-	IsOwner   bool         `json:"is_owner"`
-	Liveness  api.Liveness `json:"liveness"`
+	Version   string            `json:"version"`
+	GitHash   string            `json:"git_hash"`
+	ID        string            `json:"id"`
+	ClusterID string            `json:"cluster_id"`
+	Pid       int               `json:"pid"`
+	IsOwner   bool              `json:"is_owner"`
+	Liveness  liveness.Liveness `json:"liveness"`
 }
 
 // Capture holds common information of a capture in cdc
