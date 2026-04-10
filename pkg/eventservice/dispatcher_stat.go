@@ -484,6 +484,14 @@ func (c *changefeedStatus) getSyncPointPreparingTs() uint64 {
 	return c.syncPointPreparingTs.Load()
 }
 
+func (c *changefeedStatus) isDispatcherStaleForSyncpoint(dispatcher *dispatcherStat, now time.Time) bool {
+	lastHeartbeatTime := dispatcher.lastReceivedHeartbeatTime.Load()
+	if lastHeartbeatTime <= 0 {
+		return false
+	}
+	return now.Sub(time.Unix(lastHeartbeatTime, 0)) > scanWindowStaleDispatcherHeartbeatThreshold
+}
+
 // tryEnterSyncPointPrepare tries to enter syncpoint prepare stage for candidateTs.
 // If a prepare ts already exists, the same ts is accepted, and a smaller ts can
 // replace it before commit stage starts.
@@ -534,6 +542,7 @@ func (c *changefeedStatus) tryPromoteSyncPointToCommitIfReady() {
 		return
 	}
 
+	now := time.Now()
 	hasEligible := false
 	ready := true
 	blockingFound := false
@@ -548,6 +557,9 @@ func (c *changefeedStatus) tryPromoteSyncPointToCommitIfReady() {
 	c.dispatchers.Range(func(_ any, value any) bool {
 		dispatcher := value.(*atomic.Pointer[dispatcherStat]).Load()
 		if dispatcher == nil || dispatcher.isRemoved.Load() || dispatcher.seq.Load() == 0 {
+			return true
+		}
+		if c.isDispatcherStaleForSyncpoint(dispatcher, now) {
 			return true
 		}
 		hasEligible = true
@@ -605,6 +617,8 @@ func (c *changefeedStatus) tryFinishSyncPointCommitIfAllEmitted() {
 		return
 	}
 
+	now := time.Now()
+	hasEligible := false
 	canAdvance := true
 	blockingFound := false
 	blockingReason := ""
@@ -621,6 +635,10 @@ func (c *changefeedStatus) tryFinishSyncPointCommitIfAllEmitted() {
 		if dispatcher == nil || dispatcher.isRemoved.Load() || dispatcher.seq.Load() == 0 {
 			return true
 		}
+		if c.isDispatcherStaleForSyncpoint(dispatcher, now) {
+			return true
+		}
+		hasEligible = true
 		nextSyncPointTs := dispatcher.nextSyncPoint.Load()
 		checkpointTs := dispatcher.checkpointTs.Load()
 		if nextSyncPointTs <= inFlightTs {
@@ -653,6 +671,10 @@ func (c *changefeedStatus) tryFinishSyncPointCommitIfAllEmitted() {
 		}
 		return true
 	})
+
+	if !hasEligible {
+		return
+	}
 
 	if !canAdvance {
 		fields := []zap.Field{
