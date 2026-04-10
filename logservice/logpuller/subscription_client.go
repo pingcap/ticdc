@@ -263,6 +263,23 @@ func (s *subscriptionClient) transitionRegionRuntime(region regionInfo, phase re
 	s.regionRuntimeRegistry.transition(region.runtimeKey, phase, now)
 }
 
+func (s *subscriptionClient) markRegionRetryPending(region regionInfo, err error, now time.Time) {
+	if s.regionRuntimeRegistry == nil || !region.runtimeKey.isValid() {
+		return
+	}
+	s.regionRuntimeRegistry.recordError(region.runtimeKey, err, now)
+	s.regionRuntimeRegistry.incRetry(region.runtimeKey)
+	s.regionRuntimeRegistry.transition(region.runtimeKey, regionPhaseRetryPending, now)
+}
+
+func (s *subscriptionClient) removeRegionRuntime(region regionInfo, now time.Time) {
+	if s.regionRuntimeRegistry == nil || !region.runtimeKey.isValid() {
+		return
+	}
+	s.regionRuntimeRegistry.transition(region.runtimeKey, regionPhaseRemoved, now)
+	s.regionRuntimeRegistry.remove(region.runtimeKey)
+}
+
 // NewSubscriptionClient creates a client.
 func NewSubscriptionClient(
 	config *SubscriptionClientConfig,
@@ -372,6 +389,13 @@ func (s *subscriptionClient) updateMetrics(ctx context.Context) error {
 			})
 
 			metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("pending").Set(float64(pendingRegionReqCount))
+
+			if s.regionRuntimeRegistry != nil {
+				counts := s.regionRuntimeRegistry.phaseCounts()
+				for _, phase := range regionRuntimePhases {
+					metrics.SubscriptionClientRegionRuntimePhaseCount.WithLabelValues(string(phase)).Set(float64(counts[phase]))
+				}
+			}
 
 			count := 0
 			s.totalSpans.RLock()
@@ -564,8 +588,6 @@ func (s *subscriptionClient) onTableDrained(rt *subscribedSpan) {
 func (s *subscriptionClient) onRegionFail(errInfo regionErrorInfo) {
 	if s.regionRuntimeRegistry != nil && errInfo.runtimeKey.isValid() {
 		s.regionRuntimeRegistry.recordError(errInfo.runtimeKey, errInfo.err, time.Now())
-		s.regionRuntimeRegistry.incRetry(errInfo.runtimeKey)
-		s.regionRuntimeRegistry.transition(errInfo.runtimeKey, regionPhaseRetryPending, time.Now())
 	}
 	// unlock the range early to prevent blocking the range.
 	if errInfo.subscribedSpan.rangeLock.UnlockRange(
@@ -925,26 +947,31 @@ func (s *subscriptionClient) doHandleError(ctx context.Context, errInfo regionEr
 		if notLeader := innerErr.GetNotLeader(); notLeader != nil {
 			metricFeedNotLeaderCounter.Inc()
 			s.regionCache.UpdateLeader(errInfo.verID, notLeader.GetLeader(), errInfo.rpcCtx.AccessIdx)
+			s.markRegionRetryPending(errInfo.regionInfo, errInfo.err, time.Now())
 			s.scheduleRegionRequest(ctx, errInfo.regionInfo, TaskHighPrior)
 			return nil
 		}
 		if innerErr.GetEpochNotMatch() != nil {
 			metricFeedEpochNotMatchCounter.Inc()
+			s.removeRegionRuntime(errInfo.regionInfo, time.Now())
 			s.scheduleRangeRequest(ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, TaskHighPrior)
 			return nil
 		}
 		if innerErr.GetRegionNotFound() != nil {
 			metricFeedRegionNotFoundCounter.Inc()
+			s.removeRegionRuntime(errInfo.regionInfo, time.Now())
 			s.scheduleRangeRequest(ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, TaskHighPrior)
 			return nil
 		}
 		if innerErr.GetCongested() != nil {
 			metricKvCongestedCounter.Inc()
+			s.markRegionRetryPending(errInfo.regionInfo, errInfo.err, time.Now())
 			s.scheduleRegionRequest(ctx, errInfo.regionInfo, TaskLowPrior)
 			return nil
 		}
 		if innerErr.GetServerIsBusy() != nil {
 			metricKvIsBusyCounter.Inc()
+			s.markRegionRetryPending(errInfo.regionInfo, errInfo.err, time.Now())
 			s.scheduleRegionRequest(ctx, errInfo.regionInfo, TaskLowPrior)
 			return nil
 		}
@@ -964,10 +991,12 @@ func (s *subscriptionClient) doHandleError(ctx context.Context, errInfo regionEr
 			zap.Uint64("subscriptionID", uint64(errInfo.subscribedSpan.subID)),
 			zap.Stringer("error", innerErr))
 		metricFeedUnknownErrorCounter.Inc()
+		s.markRegionRetryPending(errInfo.regionInfo, errInfo.err, time.Now())
 		s.scheduleRegionRequest(ctx, errInfo.regionInfo, TaskHighPrior)
 		return nil
 	case *rpcCtxUnavailableErr:
 		metricFeedRPCCtxUnavailable.Inc()
+		s.removeRegionRuntime(errInfo.regionInfo, time.Now())
 		s.scheduleRangeRequest(ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, TaskHighPrior)
 		return nil
 	case *getStoreErr:
@@ -975,15 +1004,18 @@ func (s *subscriptionClient) doHandleError(ctx context.Context, errInfo regionEr
 		bo := tikv.NewBackoffer(ctx, tikvRequestMaxBackoff)
 		// cannot get the store the region belongs to, so we need to reload the region.
 		s.regionCache.OnSendFail(bo, errInfo.rpcCtx, true, err)
+		s.removeRegionRuntime(errInfo.regionInfo, time.Now())
 		s.scheduleRangeRequest(ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, TaskHighPrior)
 		return nil
 	case *sendRequestToStoreErr:
 		metricStoreSendRequestErr.Inc()
 		bo := tikv.NewBackoffer(ctx, tikvRequestMaxBackoff)
 		s.regionCache.OnSendFail(bo, errInfo.rpcCtx, regionScheduleReload, err)
+		s.markRegionRetryPending(errInfo.regionInfo, errInfo.err, time.Now())
 		s.scheduleRegionRequest(ctx, errInfo.regionInfo, TaskHighPrior)
 		return nil
 	case *requestCancelledErr:
+		s.removeRegionRuntime(errInfo.regionInfo, time.Now())
 		// the corresponding subscription has been unsubscribed, just ignore.
 		return nil
 	default:

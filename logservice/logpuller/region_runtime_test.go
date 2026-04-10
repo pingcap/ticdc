@@ -117,3 +117,21 @@ func TestRegionRuntimeRegistryRemoveBySubscription(t *testing.T) {
 	require.Equal(t, regionPhaseReplicating, state.phase)
 	require.Len(t, registry.snapshot(), 1)
 }
+
+func TestRegionRuntimeRegistryPhaseCounts(t *testing.T) {
+	registry := newRegionRuntimeRegistry()
+	now := time.Unix(1700000000, 0)
+
+	key1 := registry.allocKey(1, 101)
+	key2 := registry.allocKey(1, 102)
+	key3 := registry.allocKey(2, 201)
+
+	registry.transition(key1, regionPhaseQueued, now)
+	registry.transition(key2, regionPhaseQueued, now.Add(time.Second))
+	registry.transition(key3, regionPhaseWaitInitialized, now.Add(2*time.Second))
+
+	counts := registry.phaseCounts()
+	require.Equal(t, 2, counts[regionPhaseQueued])
+	require.Equal(t, 1, counts[regionPhaseWaitInitialized])
+	require.Equal(t, 0, counts[regionPhaseReplicating])
+}

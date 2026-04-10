@@ -85,6 +85,13 @@ var (
 			Name:      "resolve_lock_task_drop_count",
 			Help:      "The number of resolve lock tasks dropped before being processed",
 		})
+	SubscriptionClientRegionRuntimePhaseCount = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "subscription_client",
+			Name:      "region_runtime_phase_count",
+			Help:      "The number of regions in each runtime phase",
+		}, []string{"phase"})
 
 	SubscriptionClientRegionEventHandleDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -114,6 +121,7 @@ func initLogPullerMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(RegionRequestFinishScanDuration)
 	registry.MustRegister(SubscriptionClientSubscribedRegionCount)
 	registry.MustRegister(SubscriptionClientResolveLockTaskDropCounter)
+	registry.MustRegister(SubscriptionClientRegionRuntimePhaseCount)
 	registry.MustRegister(SubscriptionClientRegionEventHandleDuration)
 	registry.MustRegister(SubscriptionClientConsumeKVEventsCallbackDuration)
 }

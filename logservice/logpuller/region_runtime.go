@@ -36,6 +36,18 @@ const (
 	regionPhaseRemoved         regionPhase = "removed"
 )
 
+var regionRuntimePhases = []regionPhase{
+	regionPhaseUnknown,
+	regionPhaseDiscovered,
+	regionPhaseRangeLockWait,
+	regionPhaseQueued,
+	regionPhaseRPCReady,
+	regionPhaseWaitInitialized,
+	regionPhaseReplicating,
+	regionPhaseRetryPending,
+	regionPhaseRemoved,
+}
+
 type regionRuntimeIdentity struct {
 	subID    SubscriptionID
 	regionID uint64
@@ -315,6 +327,17 @@ func (r *regionRuntimeRegistry) snapshot() []regionRuntimeState {
 		return left.generation < right.generation
 	})
 	return snapshots
+}
+
+func (r *regionRuntimeRegistry) phaseCounts() map[regionPhase]int {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	counts := make(map[regionPhase]int, len(r.states))
+	for _, state := range r.states {
+		counts[state.phase]++
+	}
+	return counts
 }
 
 func (r *regionRuntimeRegistry) remove(key regionRuntimeKey) bool {
