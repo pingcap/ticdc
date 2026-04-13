@@ -16,9 +16,11 @@ package maintainer
 import (
 	"time"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/operator"
+	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/maintainer/span"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/messaging"
@@ -37,11 +39,12 @@ import (
 // 6. maintainer wait for all dispatchers reporting event(pass) done message
 // 7. maintainer clear the event, and schedule block event? todo: what if we schedule first then wait for all dispatchers?
 type Barrier struct {
-	blockedEvents      *BlockedEventMap         // tracks all block events that still wait for dispatcher progress
-	pendingEvents      *pendingScheduleEventMap // pending DDL events that require scheduling order
-	spanController     *span.Controller
-	operatorController *operator.Controller
-	splitTableEnabled  bool
+	blockedEvents                *BlockedEventMap               // tracks all block events that still wait for dispatcher progress
+	pendingEvents                *pendingScheduleEventMap       // pending DDL events that require scheduling order
+	pendingUnreplicatingStatuses *pendingUnreplicatingStatusMap // WAITING statuses deferred until the dispatcher enters replicating
+	spanController               *span.Controller
+	operatorController           *operator.Controller
+	splitTableEnabled            bool
 	// mode identifies which replication pipeline this barrier belongs to
 	// (common.DefaultMode or common.RedoMode). Barrier state, resend messages,
 	// and logs must stay in the same mode.
@@ -56,12 +59,13 @@ func NewBarrier(spanController *span.Controller,
 	mode int64,
 ) *Barrier {
 	barrier := Barrier{
-		blockedEvents:      NewBlockEventMap(),
-		pendingEvents:      newPendingScheduleEventMap(),
-		spanController:     spanController,
-		operatorController: operatorController,
-		splitTableEnabled:  splitTableEnabled,
-		mode:               mode,
+		blockedEvents:                NewBlockEventMap(),
+		pendingEvents:                newPendingScheduleEventMap(),
+		pendingUnreplicatingStatuses: newPendingUnreplicatingStatusMap(),
+		spanController:               spanController,
+		operatorController:           operatorController,
+		splitTableEnabled:            splitTableEnabled,
+		mode:                         mode,
 	}
 	barrier.handleBootstrapResponse(bootstrapRespMap)
 	return &barrier
@@ -74,34 +78,32 @@ func (b *Barrier) HandleStatus(from node.ID,
 	log.Debug("handle block status", zap.String("from", from.String()),
 		zap.String("changefeed", request.ChangefeedID.GetName()),
 		zap.Any("detail", request), zap.Int64("mode", b.mode))
+	cfID := common.NewChangefeedIDFromPB(request.ChangefeedID)
 	eventDispatcherIDsMap := make(map[*BarrierEvent][]*heartbeatpb.DispatcherID)
 	actions := map[node.ID][]*heartbeatpb.DispatcherStatus{}
 	var dispatcherStatus []*heartbeatpb.DispatcherStatus
 	for _, status := range request.BlockStatuses {
-		// only receive block status from the replicating dispatcher
 		dispatcherID := common.NewDispatcherIDFromPB(status.ID)
-		if dispatcherID != b.spanController.GetDDLDispatcherID() {
-			task := b.spanController.GetTaskByID(dispatcherID)
-			if task == nil {
-				log.Info("Get block status from unexisted dispatcher, ignore it", zap.String("changefeed", request.ChangefeedID.GetName()), zap.String("dispatcher", dispatcherID.String()), zap.Uint64("commitTs", status.State.BlockTs), zap.Int64("mode", b.mode))
-				continue
-			} else {
-				if !b.spanController.IsReplicating(task) {
-					log.Info("Get block status from unreplicating dispatcher, ignore it", zap.String("changefeed", request.ChangefeedID.GetName()), zap.String("dispatcher", dispatcherID.String()), zap.Uint64("commitTs", status.State.BlockTs), zap.Int64("mode", b.mode))
-					continue
-				}
-			}
+		if status.State == nil {
+			log.Warn("Get block status with nil state, ignore it",
+				zap.String("changefeed", cfID.Name()),
+				zap.String("dispatcher", dispatcherID.String()),
+				zap.Int64("mode", b.mode))
+			continue
+		}
+		if b.tryDeferUnreplicatingWaitingStatus(from, cfID, dispatcherID, status) {
+			continue
 		}
 
 		// deal with block status, and check whether need to return action.
 		// we need to deal with the block status in order, otherwise scheduler may have problem
 		// e.g. TODO（truncate + create table)
-		event, action, targetID, needACK := b.handleOneStatus(request.ChangefeedID, status)
+		event, action, targetID, needACK := b.handleOneStatus(cfID, status)
 		if event == nil {
 			// should not happen
 			log.Error("handle block status failed, event is nil",
 				zap.String("from", from.String()),
-				zap.String("changefeed", request.ChangefeedID.GetName()),
+				zap.String("changefeed", cfID.Name()),
 				zap.String("detail", status.String()),
 				zap.Uint64("commitTs", status.State.BlockTs),
 				zap.Int64("mode", b.mode))
@@ -218,7 +220,7 @@ func (b *Barrier) handleBootstrapResponse(bootstrapRespMap map[node.ID]*heartbea
 
 // Resend resends the message to the dispatcher manger, the pass action is handle here
 func (b *Barrier) Resend() []*messaging.TargetMessage {
-	var msgs []*messaging.TargetMessage
+	msgs := b.drainPendingUnreplicatingStatuses()
 
 	eventList := make([]*BarrierEvent, 0)
 	b.blockedEvents.Range(func(key eventKey, barrierEvent *BarrierEvent) bool {
@@ -236,6 +238,195 @@ func (b *Barrier) Resend() []*messaging.TargetMessage {
 		}
 	}
 	return msgs
+}
+
+func (b *Barrier) tryDeferUnreplicatingWaitingStatus(
+	from node.ID,
+	cfID common.ChangeFeedID,
+	dispatcherID common.DispatcherID,
+	status *heartbeatpb.TableSpanBlockStatus,
+) bool {
+	if dispatcherID == b.spanController.GetDDLDispatcherID() {
+		return false
+	}
+
+	task := b.spanController.GetTaskByID(dispatcherID)
+	if task == nil {
+		log.Info("Get block status from unexisted dispatcher, ignore it",
+			zap.String("changefeed", cfID.Name()),
+			zap.String("dispatcher", dispatcherID.String()),
+			zap.Uint64("commitTs", status.State.BlockTs),
+			zap.Int64("mode", b.mode))
+		return true
+	}
+	if b.spanController.IsReplicating(task) {
+		return false
+	}
+	if !status.State.IsBlocked || status.State.Stage != heartbeatpb.BlockStage_WAITING {
+		log.Info("Get block status from unreplicating dispatcher, ignore it",
+			zap.String("changefeed", cfID.Name()),
+			zap.String("dispatcher", dispatcherID.String()),
+			zap.Uint64("commitTs", status.State.BlockTs),
+			zap.Any("stage", status.State.Stage),
+			zap.Int64("mode", b.mode))
+		return true
+	}
+	if task.GetNodeID() != from {
+		log.Info("Get block status from stale dispatcher node, ignore it",
+			zap.String("changefeed", cfID.Name()),
+			zap.String("dispatcher", dispatcherID.String()),
+			zap.String("from", from.String()),
+			zap.String("taskNode", task.GetNodeID().String()),
+			zap.Uint64("commitTs", status.State.BlockTs),
+			zap.Int64("mode", b.mode))
+		return true
+	}
+
+	now := time.Now()
+	key := pendingUnreplicatingStatusKey{
+		blockTs:     status.State.BlockTs,
+		isSyncPoint: status.State.IsSyncPoint,
+		stage:       status.State.Stage,
+	}
+	b.pendingUnreplicatingStatuses.upsert(dispatcherID, key, &pendingUnreplicatingStatus{
+		cfID:        cfID,
+		from:        from,
+		state:       proto.Clone(status.State).(*heartbeatpb.State),
+		firstSeenAt: now,
+		lastSeenAt:  now,
+	})
+	log.Info("defer block status from unreplicating dispatcher",
+		zap.String("changefeed", cfID.Name()),
+		zap.String("dispatcher", dispatcherID.String()),
+		zap.Uint64("commitTs", status.State.BlockTs),
+		zap.Int64("mode", b.mode))
+	return true
+}
+
+func (b *Barrier) drainPendingUnreplicatingStatuses() []*messaging.TargetMessage {
+	entries := b.pendingUnreplicatingStatuses.snapshot()
+	if len(entries) == 0 {
+		return nil
+	}
+
+	acks := make(map[node.ID]map[eventKey][]*heartbeatpb.DispatcherID)
+	actions := make(map[node.ID][]*heartbeatpb.DispatcherStatus)
+	changefeedIDs := make(map[node.ID]common.ChangeFeedID)
+
+	for _, entry := range entries {
+		task := b.spanController.GetTaskByID(entry.dispatcherID)
+		if task == nil {
+			b.pendingUnreplicatingStatuses.delete(entry.dispatcherID, entry.key)
+			log.Info("drop deferred block status because dispatcher does not exist",
+				zap.String("changefeed", entry.value.cfID.Name()),
+				zap.String("dispatcher", entry.dispatcherID.String()),
+				zap.Uint64("commitTs", entry.key.blockTs),
+				zap.Int64("mode", b.mode))
+			continue
+		}
+		if task.GetNodeID() != entry.value.from {
+			b.pendingUnreplicatingStatuses.delete(entry.dispatcherID, entry.key)
+			log.Info("drop deferred block status because dispatcher moved to another node",
+				zap.String("changefeed", entry.value.cfID.Name()),
+				zap.String("dispatcher", entry.dispatcherID.String()),
+				zap.String("from", entry.value.from.String()),
+				zap.String("taskNode", task.GetNodeID().String()),
+				zap.Uint64("commitTs", entry.key.blockTs),
+				zap.Int64("mode", b.mode))
+			continue
+		}
+		if dispatcherAlreadyPassedPendingState(task, entry.value.state) {
+			b.pendingUnreplicatingStatuses.delete(entry.dispatcherID, entry.key)
+			log.Info("drop deferred block status because dispatcher already passed it",
+				zap.String("changefeed", entry.value.cfID.Name()),
+				zap.String("dispatcher", entry.dispatcherID.String()),
+				zap.Uint64("commitTs", entry.key.blockTs),
+				zap.Int64("mode", b.mode))
+			continue
+		}
+		if !b.spanController.IsReplicating(task) {
+			continue
+		}
+
+		replayedState := proto.Clone(entry.value.state).(*heartbeatpb.State)
+		event, action, targetID, needACK := b.handleOneStatus(entry.value.cfID, &heartbeatpb.TableSpanBlockStatus{
+			ID:    entry.dispatcherID.ToPB(),
+			State: replayedState,
+			Mode:  b.mode,
+		})
+		if event == nil {
+			b.pendingUnreplicatingStatuses.delete(entry.dispatcherID, entry.key)
+			log.Error("replay deferred block status failed, event is nil",
+				zap.String("changefeed", entry.value.cfID.Name()),
+				zap.String("dispatcher", entry.dispatcherID.String()),
+				zap.Uint64("commitTs", entry.key.blockTs),
+				zap.Duration("deferredDuration", time.Since(entry.value.firstSeenAt)),
+				zap.Int64("mode", b.mode))
+			continue
+		}
+
+		if needACK {
+			if _, ok := acks[entry.value.from]; !ok {
+				acks[entry.value.from] = make(map[eventKey][]*heartbeatpb.DispatcherID)
+			}
+			ackKey := getEventKey(event.commitTs, event.isSyncPoint)
+			acks[entry.value.from][ackKey] = append(acks[entry.value.from][ackKey], entry.dispatcherID.ToPB())
+			changefeedIDs[entry.value.from] = entry.value.cfID
+			if action != nil && targetID != "" {
+				actions[targetID] = append(actions[targetID], action)
+				changefeedIDs[targetID] = entry.value.cfID
+			}
+		}
+
+		b.pendingUnreplicatingStatuses.delete(entry.dispatcherID, entry.key)
+		log.Info("replay deferred block status after dispatcher entered replicating",
+			zap.String("changefeed", entry.value.cfID.Name()),
+			zap.String("dispatcher", entry.dispatcherID.String()),
+			zap.Uint64("commitTs", entry.key.blockTs),
+			zap.Duration("deferredDuration", time.Since(entry.value.firstSeenAt)),
+			zap.Int64("mode", b.mode))
+	}
+
+	msgs := make([]*messaging.TargetMessage, 0, len(changefeedIDs))
+	for targetID, eventMap := range acks {
+		statuses := make([]*heartbeatpb.DispatcherStatus, 0, len(eventMap)+len(actions[targetID]))
+		for key, dispatcherIDs := range eventMap {
+			statuses = append(statuses, &heartbeatpb.DispatcherStatus{
+				InfluencedDispatchers: &heartbeatpb.InfluencedDispatchers{
+					InfluenceType: heartbeatpb.InfluenceType_Normal,
+					DispatcherIDs: dispatcherIDs,
+				},
+				Ack: ackEvent(key.blockTs, key.isSyncPoint),
+			})
+		}
+		statuses = append(statuses, actions[targetID]...)
+		msgs = append(msgs, messaging.NewSingleTargetMessage(targetID,
+			messaging.HeartbeatCollectorTopic,
+			&heartbeatpb.HeartBeatResponse{
+				ChangefeedID:       changefeedIDs[targetID].ToPB(),
+				DispatcherStatuses: statuses,
+				Mode:               b.mode,
+			}))
+		delete(actions, targetID)
+	}
+
+	for targetID, actionStatuses := range actions {
+		msgs = append(msgs, messaging.NewSingleTargetMessage(targetID,
+			messaging.HeartbeatCollectorTopic,
+			&heartbeatpb.HeartBeatResponse{
+				ChangefeedID:       changefeedIDs[targetID].ToPB(),
+				DispatcherStatuses: actionStatuses,
+				Mode:               b.mode,
+			}))
+	}
+	return msgs
+}
+
+func dispatcherAlreadyPassedPendingState(
+	task *replica.SpanReplication,
+	pending *heartbeatpb.State,
+) bool {
+	return replicationPassedBarrier(task, pending.BlockTs, pending.IsSyncPoint)
 }
 
 // ShouldBlockCheckpointTs returns ture if there is a block event need block the checkpoint ts forwarding
@@ -264,8 +455,7 @@ func (b *Barrier) GetMinBlockedCheckpointTsForNewTables(minCheckpointTs uint64) 
 	return minCheckpointTs
 }
 
-func (b *Barrier) handleOneStatus(changefeedID *heartbeatpb.ChangefeedID, status *heartbeatpb.TableSpanBlockStatus) (*BarrierEvent, *heartbeatpb.DispatcherStatus, node.ID, bool) {
-	cfID := common.NewChangefeedIDFromPB(changefeedID)
+func (b *Barrier) handleOneStatus(changefeedID common.ChangeFeedID, status *heartbeatpb.TableSpanBlockStatus) (*BarrierEvent, *heartbeatpb.DispatcherStatus, node.ID, bool) {
 	dispatcherID := common.NewDispatcherIDFromPB(status.ID)
 
 	// when a span send a block event, its checkpint must reached status.State.BlockTs - 1,
@@ -283,9 +473,9 @@ func (b *Barrier) handleOneStatus(changefeedID *heartbeatpb.ChangefeedID, status
 		}
 	}
 	if status.State.Stage == heartbeatpb.BlockStage_DONE {
-		return b.handleEventDone(cfID, dispatcherID, status), nil, "", true
+		return b.handleEventDone(changefeedID, dispatcherID, status), nil, "", true
 	}
-	return b.handleBlockState(cfID, dispatcherID, status)
+	return b.handleBlockState(changefeedID, dispatcherID, status)
 }
 
 func (b *Barrier) handleEventDone(changefeedID common.ChangeFeedID, dispatcherID common.DispatcherID, status *heartbeatpb.TableSpanBlockStatus) *BarrierEvent {

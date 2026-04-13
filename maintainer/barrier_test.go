@@ -27,6 +27,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/stretchr/testify/require"
@@ -1629,4 +1630,216 @@ func TestDeferAllDBBlockEventFromDDLDispatcherWhilePendingSchedule(t *testing.T)
 	require.True(t, ok)
 	require.Contains(t, rc.Detail(), "uncovered tables")
 	require.Contains(t, rc.Detail(), "101")
+}
+
+func TestDeferUnreplicatingWaitingStatus(t *testing.T) {
+	barrier, spanController, tableDispatcher, cfID := newBarrierWithUnreplicatingTableDispatcher(t)
+	blockState := newNormalWaitingBlockState(tableDispatcher.Span.TableID, 10)
+
+	msgs := barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
+		ChangefeedID: cfID.ToPB(),
+		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
+			{
+				ID:    tableDispatcher.ID.ToPB(),
+				State: blockState,
+			},
+		},
+	})
+
+	require.Len(t, msgs, 1)
+	resp := msgs[0].Message[0].(*heartbeatpb.HeartBeatResponse)
+	require.Len(t, resp.DispatcherStatuses, 0)
+	require.Zero(t, barrier.blockedEvents.Len())
+	require.Equal(t, 1, barrier.pendingUnreplicatingStatuses.len())
+	require.False(t, spanController.IsReplicating(tableDispatcher))
+}
+
+func TestResendReplaysDeferredWaitingStatusAfterDispatcherReplicating(t *testing.T) {
+	barrier, spanController, tableDispatcher, cfID := newBarrierWithUnreplicatingTableDispatcher(t)
+	blockState := newNormalWaitingBlockState(tableDispatcher.Span.TableID, 10)
+
+	ddlMsgs := barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
+		ChangefeedID: cfID.ToPB(),
+		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
+			{
+				ID:    spanController.GetDDLDispatcherID().ToPB(),
+				State: blockState,
+			},
+		},
+	})
+	require.Len(t, ddlMsgs, 1)
+	require.Equal(t, 1, barrier.blockedEvents.Len())
+
+	_ = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
+		ChangefeedID: cfID.ToPB(),
+		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
+			{
+				ID:    tableDispatcher.ID.ToPB(),
+				State: blockState,
+			},
+		},
+	})
+	require.Equal(t, 1, barrier.pendingUnreplicatingStatuses.len())
+
+	spanController.MarkSpanReplicating(tableDispatcher)
+	require.True(t, spanController.IsReplicating(tableDispatcher))
+
+	msgs := barrier.Resend()
+	statuses := collectDispatcherStatusesForNode(msgs, "node1")
+	require.Len(t, statuses, 2)
+	require.True(t, hasAck(statuses, 10, false))
+	require.True(t, hasAction(statuses, 10, false, heartbeatpb.Action_Write))
+	require.Zero(t, barrier.pendingUnreplicatingStatuses.len())
+
+	event, ok := barrier.blockedEvents.Get(getEventKey(10, false))
+	require.True(t, ok)
+	require.True(t, event.selected.Load())
+	require.Equal(t, spanController.GetDDLDispatcherID(), event.writerDispatcher)
+}
+
+func TestResendDropsDeferredWaitingStatusWhenDispatcherMissing(t *testing.T) {
+	barrier, spanController, tableDispatcher, cfID := newBarrierWithUnreplicatingTableDispatcher(t)
+	blockState := newNormalWaitingBlockState(tableDispatcher.Span.TableID, 10)
+
+	_ = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
+		ChangefeedID: cfID.ToPB(),
+		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
+			{
+				ID:    tableDispatcher.ID.ToPB(),
+				State: blockState,
+			},
+		},
+	})
+	require.Equal(t, 1, barrier.pendingUnreplicatingStatuses.len())
+
+	spanController.RemoveByTableIDs(tableDispatcher.Span.TableID)
+
+	msgs := barrier.Resend()
+	require.Len(t, msgs, 0)
+	require.Zero(t, barrier.pendingUnreplicatingStatuses.len())
+}
+
+func TestResendDropsDeferredWaitingStatusWhenDispatcherAlreadyPassed(t *testing.T) {
+	barrier, _, tableDispatcher, cfID := newBarrierWithUnreplicatingTableDispatcher(t)
+	blockState := newNormalWaitingBlockState(tableDispatcher.Span.TableID, 10)
+
+	_ = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
+		ChangefeedID: cfID.ToPB(),
+		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
+			{
+				ID:    tableDispatcher.ID.ToPB(),
+				State: blockState,
+			},
+		},
+	})
+	require.Equal(t, 1, barrier.pendingUnreplicatingStatuses.len())
+
+	tableDispatcher.UpdateStatus(&heartbeatpb.TableSpanStatus{
+		ID:              tableDispatcher.ID.ToPB(),
+		ComponentStatus: heartbeatpb.ComponentState_Working,
+		CheckpointTs:    11,
+	})
+
+	msgs := barrier.Resend()
+	require.Len(t, msgs, 0)
+	require.Zero(t, barrier.pendingUnreplicatingStatuses.len())
+}
+
+func TestResendDropsDeferredWaitingStatusWhenDispatcherMoved(t *testing.T) {
+	barrier, spanController, tableDispatcher, cfID := newBarrierWithUnreplicatingTableDispatcher(t)
+	blockState := newNormalWaitingBlockState(tableDispatcher.Span.TableID, 10)
+
+	_ = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
+		ChangefeedID: cfID.ToPB(),
+		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
+			{
+				ID:    tableDispatcher.ID.ToPB(),
+				State: blockState,
+			},
+		},
+	})
+	require.Equal(t, 1, barrier.pendingUnreplicatingStatuses.len())
+
+	spanController.BindSpanToNode("node1", "node2", tableDispatcher)
+
+	msgs := barrier.Resend()
+	require.Len(t, msgs, 0)
+	require.Zero(t, barrier.pendingUnreplicatingStatuses.len())
+}
+
+func newBarrierWithUnreplicatingTableDispatcher(t *testing.T) (*Barrier, *span.Controller, *replica.SpanReplication, common.ChangeFeedID) {
+	t.Helper()
+
+	testutil.SetUpTestServices(t)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	tableTriggerDispatcherID := common.NewDispatcherID()
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerDispatcherID,
+		common.DDLSpanSchemaID,
+		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
+			ID:              tableTriggerDispatcherID.ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    1,
+		}, "node1", false)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
+	operatorController := operator.NewOperatorController(cfID, spanController, 1000, common.DefaultMode)
+
+	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 1)
+	tableDispatcher := spanController.GetTasksByTableID(1)[0]
+	spanController.BindSpanToNode("", "node1", tableDispatcher)
+	spanController.MarkSpanScheduling(tableDispatcher)
+
+	barrier := NewBarrier(spanController, operatorController, false, nil, common.DefaultMode)
+	return barrier, spanController, tableDispatcher, cfID
+}
+
+func newNormalWaitingBlockState(tableID int64, blockTs uint64) *heartbeatpb.State {
+	return &heartbeatpb.State{
+		IsBlocked: true,
+		BlockTs:   blockTs,
+		Stage:     heartbeatpb.BlockStage_WAITING,
+		BlockTables: &heartbeatpb.InfluencedTables{
+			InfluenceType: heartbeatpb.InfluenceType_Normal,
+			TableIDs:      []int64{tableID, common.DDLSpanTableID},
+		},
+	}
+}
+
+func collectDispatcherStatusesForNode(msgs []*messaging.TargetMessage, nodeID node.ID) []*heartbeatpb.DispatcherStatus {
+	var statuses []*heartbeatpb.DispatcherStatus
+	for _, msg := range msgs {
+		if msg.To != nodeID {
+			continue
+		}
+		for _, payload := range msg.Message {
+			resp, ok := payload.(*heartbeatpb.HeartBeatResponse)
+			if !ok {
+				continue
+			}
+			statuses = append(statuses, resp.DispatcherStatuses...)
+		}
+	}
+	return statuses
+}
+
+func hasAck(statuses []*heartbeatpb.DispatcherStatus, commitTs uint64, isSyncPoint bool) bool {
+	for _, status := range statuses {
+		ack := status.GetAck()
+		if ack != nil && ack.CommitTs == commitTs && ack.IsSyncPoint == isSyncPoint {
+			return true
+		}
+	}
+	return false
+}
+
+func hasAction(statuses []*heartbeatpb.DispatcherStatus, commitTs uint64, isSyncPoint bool, action heartbeatpb.Action) bool {
+	for _, status := range statuses {
+		dispatcherAction := status.GetAction()
+		if dispatcherAction != nil &&
+			dispatcherAction.CommitTs == commitTs &&
+			dispatcherAction.IsSyncPoint == isSyncPoint &&
+			dispatcherAction.Action == action {
+			return true
+		}
+	}
+	return false
 }
