@@ -25,6 +25,8 @@ import (
 )
 
 const (
+	cdcKeyRoot = "/tidb/cdc"
+
 	// Note that tidb-dashboard depends on this prefix to filter out TiCDC keys.
 	// Ref: https://github.com/pingcap/tidb-dashboard/blob/1f39ee09c5352adbf23af8ec7e15020147ef9ca4/pkg/utils/topology/ticdc.go#L23
 	metaPrefix = "/__cdc_meta__"
@@ -107,7 +109,7 @@ type CDCKey struct {
 // Note that tidb-dashboard depends on this prefix to filter out TiCDC keys.
 // Ref: https://github.com/pingcap/tidb-dashboard/blob/1f39ee09c5352adbf23af8ec7e15020147ef9ca4/pkg/utils/topology/ticdc.go#L22
 func BaseKey(clusterID string) string {
-	return fmt.Sprintf("/tidb/cdc/%s", clusterID)
+	return fmt.Sprintf("%s/%s", cdcKeyRoot, clusterID)
 }
 
 // NewCDCBaseKey is used for keys added by New Arch TiCDC
@@ -120,15 +122,30 @@ func NewCDCBaseKey(clusterID string) string {
 
 // KeyspacePrefix returns the etcd prefix of changefeed data
 func KeyspacePrefix(clusterID, keyspace string) string {
-	return BaseKey(clusterID) + "/" + keyspace
+	return fmt.Sprintf("%s/%s", BaseKey(clusterID), keyspace)
+}
+
+func pathPrefix(prefix string) string {
+	if strings.HasSuffix(prefix, "/") {
+		return prefix
+	}
+	return fmt.Sprintf("%s/", prefix)
+}
+
+func clusterPrefix(clusterID string) string {
+	return pathPrefix(BaseKey(clusterID))
+}
+
+func hasPathPrefix(key, prefix string) bool {
+	return key == prefix || strings.HasPrefix(key, pathPrefix(prefix))
 }
 
 // Parse parses the given etcd key
 func (k *CDCKey) Parse(clusterID, key string) error {
-	if !strings.HasPrefix(key, BaseKey(clusterID)) {
+	if !strings.HasPrefix(key, clusterPrefix(clusterID)) {
 		return errors.ErrInvalidEtcdKey.GenWithStackByArgs(key)
 	}
-	key = key[len("/tidb/cdc"):]
+	key = key[len(cdcKeyRoot):]
 	parts := strings.Split(key, "/")
 	k.ClusterID = parts[1]
 	key = key[len(k.ClusterID)+1:]
