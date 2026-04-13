@@ -14,6 +14,7 @@
 package dispatcherorchestrator
 
 import (
+	"reflect"
 	"testing"
 	"time"
 
@@ -153,7 +154,7 @@ func TestPendingMessageQueue_PopKeepsStateShapeForNextRetry(t *testing.T) {
 	state := q.pending[key]
 	q.mu.Unlock()
 	require.NotNil(t, state)
-	require.Nil(t, state.inFlight)
+	require.Equal(t, 1, reflect.TypeOf(*state).NumField())
 	require.Same(t, msg2, state.queued)
 }
 

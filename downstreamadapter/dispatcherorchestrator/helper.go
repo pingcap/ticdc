@@ -32,17 +32,14 @@ type pendingMessageKey struct {
 type pendingMessageState struct {
 	// queued stores the next request waiting to be processed for this key.
 	queued *messaging.TargetMessage
-	// inFlight stores the request currently being handed to the caller by Pop.
-	// Pop clears it before returning so the external API no longer needs Done.
-	inFlight *messaging.TargetMessage
 }
 
 // pendingMessageQueue de-duplicates messages by (changefeedID, messageType) to prevent
 // floods of retry messages from blocking or starving other requests.
 //
 // The queue keeps at most one queued request for each key.
-// It still tracks a per-key state object so Pop can preserve the old queued -> in-flight
-// transition internally while returning the message directly to the caller.
+// The state object remains so per-key queue ownership stays explicit, but queued is the
+// only state the queue needs after Pop starts returning the message directly.
 //
 // For MaintainerCloseRequest, we treat removed=true as stronger semantics than removed=false.
 // While a request is still queued, a later removed=true request replaces removed=false in
@@ -107,8 +104,6 @@ func shouldReplacePendingMessage(key pendingMessageKey, oldMsg, newMsg *messagin
 
 // Pop blocks until a key is available or the queue is closed.
 // The returned message is removed from the queue and handed to the caller immediately.
-// Internally, Pop still performs the queued -> in-flight -> completed transition so the
-// per-key state machine remains equivalent to the previous Pop/Get/Done flow.
 func (q *pendingMessageQueue) Pop() (pendingMessageKey, *messaging.TargetMessage, bool) {
 	for {
 		key, ok := q.queue.Get()
@@ -127,13 +122,8 @@ func (q *pendingMessageQueue) Pop() (pendingMessageKey, *messaging.TargetMessage
 				zap.String("messageType", key.msgType.String()))
 			continue
 		}
-		state.inFlight = state.queued
-		state.queued = nil
-		msg := state.inFlight
-		state.inFlight = nil
-		if state.queued == nil {
-			delete(q.pending, key)
-		}
+		msg := state.queued
+		delete(q.pending, key)
 		q.mu.Unlock()
 		return key, msg, true
 	}
