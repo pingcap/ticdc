@@ -362,6 +362,10 @@ func (c *eventBroker) tickTableTriggerDispatchers(ctx context.Context) error {
 				if endTs > startTs {
 					// After all the events are sent, we send the watermark to the dispatcher.
 					c.sendResolvedTs(stat, endTs)
+				} else {
+					// If there is no new ddl event, we still need to send a signal resolved-ts event to keep downstream responsive,
+					// but do not advance the watermark here.
+					c.sendSignalResolvedTs(stat)
 				}
 				return true
 			})
