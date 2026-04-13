@@ -403,7 +403,7 @@ func (r *RedoDDLEvent) ToDDLEvent() *DDLEvent {
 		}
 		columns = append(columns, colInfo)
 	}
-	tableInfo := commonType.NewTableInfo4Decoder(r.TableName.Schema, &timodel.TableInfo{
+	tableInfo := commonType.WrapTableInfo(r.TableName.Schema, &timodel.TableInfo{
 		ID:      r.TableName.TableID,
 		Name:    ast.NewCIStr(r.TableName.Table),
 		Columns: columns,
