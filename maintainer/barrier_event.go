@@ -32,6 +32,8 @@ import (
 	"go.uber.org/zap"
 )
 
+const barrierEventWarnLogInterval = 10 * time.Second
+
 // BarrierEvent is a barrier event that reported by dispatchers, note is a block multiple dispatchers
 // all of these dispatchers should report the same event
 type BarrierEvent struct {
@@ -73,7 +75,9 @@ type BarrierEvent struct {
 	rangeChecker   range_checker.RangeChecker
 	lastResendTime time.Time
 
-	lastWarningLogTime time.Time
+	lastWarningLogTime           time.Time
+	lastDispatcherMissingLogTime time.Time
+	lastWriterMissingLogTime     time.Time
 }
 
 func NewBlockEvent(cfID common.ChangeFeedID,
@@ -306,10 +310,14 @@ func (be *BarrierEvent) addDispatchersToRangeChecker() {
 func (be *BarrierEvent) markDispatcherEventDone(dispatcherID common.DispatcherID) {
 	replicaSpan := be.spanController.GetTaskByID(dispatcherID)
 	if replicaSpan == nil {
-		log.Warn("dispatcher not found, ignore",
-			zap.String("changefeed", be.cfID.Name()),
-			zap.String("dispatcher", dispatcherID.String()),
-			zap.Int64("mode", be.mode))
+		now := time.Now()
+		if be.lastDispatcherMissingLogTime.IsZero() || now.Sub(be.lastDispatcherMissingLogTime) >= barrierEventWarnLogInterval {
+			log.Warn("dispatcher not found, ignore",
+				zap.String("changefeed", be.cfID.Name()),
+				zap.String("dispatcher", dispatcherID.String()),
+				zap.Int64("mode", be.mode))
+			be.lastDispatcherMissingLogTime = now
+		}
 		return
 	}
 
@@ -585,7 +593,7 @@ func (be *BarrierEvent) resend(mode int64) []*messaging.TargetMessage {
 	}
 	var msgs []*messaging.TargetMessage
 	defer func() {
-		if time.Since(be.lastWarningLogTime) > time.Second*10 {
+		if time.Since(be.lastWarningLogTime) > barrierEventWarnLogInterval {
 			if be.rangeChecker != nil {
 				log.Warn("barrier event is not resolved",
 					zap.String("changefeed", be.cfID.Name()),
@@ -616,7 +624,7 @@ func (be *BarrierEvent) resend(mode int64) []*messaging.TargetMessage {
 
 	// still waiting for all dispatcher to reach the block commit ts
 	if !be.selected.Load() {
-		if time.Since(be.lastWarningLogTime) > time.Second*10 {
+		if time.Since(be.lastWarningLogTime) > barrierEventWarnLogInterval {
 			log.Info("barrier event is not being selected",
 				zap.String("changefeed", be.cfID.Name()),
 				zap.Uint64("commitTs", be.commitTs),
@@ -635,12 +643,16 @@ func (be *BarrierEvent) resend(mode int64) []*messaging.TargetMessage {
 		// resend write action
 		stm := be.spanController.GetTaskByID(be.writerDispatcher)
 		if stm == nil || stm.GetNodeID() == "" {
-			log.Warn("writer dispatcher not found",
-				zap.String("changefeed", be.cfID.Name()),
-				zap.String("dispatcher", be.writerDispatcher.String()),
-				zap.Uint64("commitTs", be.commitTs),
-				zap.Bool("isSyncPoint", be.isSyncPoint),
-				zap.Int64("mode", be.mode))
+			now := time.Now()
+			if be.lastWriterMissingLogTime.IsZero() || now.Sub(be.lastWriterMissingLogTime) >= barrierEventWarnLogInterval {
+				log.Warn("writer dispatcher not found",
+					zap.String("changefeed", be.cfID.Name()),
+					zap.String("dispatcher", be.writerDispatcher.String()),
+					zap.Uint64("commitTs", be.commitTs),
+					zap.Bool("isSyncPoint", be.isSyncPoint),
+					zap.Int64("mode", be.mode))
+				be.lastWriterMissingLogTime = now
+			}
 
 			// choose a new one as the writer
 			// it only can happen then the split and merge happens to a table, and the writeDispatcher is not the table trigger event dispatcher

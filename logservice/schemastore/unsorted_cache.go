@@ -35,7 +35,7 @@ func ddlEventLess(a, b DDLJobWithCommitTs) bool {
 
 func newDDLCache() *ddlCache {
 	return &ddlCache{
-		ddlEvents: btree.NewG[DDLJobWithCommitTs](16, ddlEventLess),
+		ddlEvents: btree.NewG(16, ddlEventLess),
 	}
 }
 

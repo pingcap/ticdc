@@ -41,6 +41,10 @@ type LogCoordinatorClient struct {
 	coordinatorInfo           atomic.Value
 	logCoordinatorRequestChan *chann.DrainableChann[*logservicepb.ReusableEventServiceRequest]
 	enableRemoteEventService  bool
+
+	lastCoordinatorUnavailableLogTime atomic.Int64
+	lastSendCoordinatorErrLogTime     atomic.Int64
+	lastUnknownMessageLogTime         atomic.Int64
 }
 
 func newLogCoordinatorClient(eventCollector *EventCollector) *LogCoordinatorClient {
@@ -66,9 +70,11 @@ func (l *LogCoordinatorClient) MessageCenterHandler(_ context.Context, targetMes
 				dispatcher.setRemoteCandidates(msg.Nodes)
 			}
 		default:
-			log.Warn("unknown message type, ignore it",
-				zap.String("type", targetMessage.Type.String()),
-				zap.Any("msg", msg))
+			if shouldLogDispatcherIssue(&l.lastUnknownMessageLogTime, dispatcherIssueLogInterval) {
+				log.Warn("unknown message type, ignore it",
+					zap.String("type", targetMessage.Type.String()),
+					zap.Any("msg", msg))
+			}
 		}
 	}
 	return nil
@@ -81,7 +87,9 @@ func (l *LogCoordinatorClient) run(ctx context.Context) error {
 			return context.Cause(ctx)
 		case req := <-l.logCoordinatorRequestChan.Out():
 			if l.getCoordinatorInfo() == "" {
-				log.Info("coordinator info is empty, try send request later")
+				if shouldLogDispatcherIssue(&l.lastCoordinatorUnavailableLogTime, dispatcherIssueLogInterval) {
+					log.Info("coordinator info is empty, try send request later")
+				}
 				l.logCoordinatorRequestChan.In() <- req
 				// Since the log coordinator isn't ready and won't be available soon, processing later requests would be pointless.
 				// Thus, we apply a longer sleep interval here.
@@ -95,7 +103,9 @@ func (l *LogCoordinatorClient) run(ctx context.Context) error {
 				msg := messaging.NewSingleTargetMessage(coordinatorID, logCoordinatorTopic, req)
 				err := l.mc.SendCommand(msg)
 				if err != nil {
-					log.Info("fail to send dispatcher request message to log coordinator, try again later", zap.Error(err))
+					if shouldLogDispatcherIssue(&l.lastSendCoordinatorErrLogTime, dispatcherIssueLogInterval) {
+						log.Info("fail to send dispatcher request message to log coordinator, try again later", zap.Error(err))
+					}
 					time.Sleep(sleepInterval)
 				} else {
 					break

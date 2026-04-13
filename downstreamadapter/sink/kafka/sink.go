@@ -36,8 +36,22 @@ import (
 
 const (
 	// batchSize is the maximum size of the number of messages in a batch.
-	batchSize = 2048
+	batchSize                = 2048
+	kafkaSinkWarnLogInterval = 10 * time.Second
 )
+
+func shouldLogKafkaSinkWarning(lastLogTime *atomic.Int64, interval time.Duration) bool {
+	now := time.Now().UnixNano()
+	for {
+		last := lastLogTime.Load()
+		if last != 0 && now-last < interval.Nanoseconds() {
+			return false
+		}
+		if lastLogTime.CAS(last, now) {
+			return true
+		}
+	}
+}
 
 type sink struct {
 	changefeedID commonType.ChangeFeedID
@@ -61,6 +75,8 @@ type sink struct {
 	// isNormal indicate whether the sink is in the normal state.
 	isNormal *atomic.Bool
 	ctx      context.Context
+
+	lastSendErrLogTime atomic.Int64
 }
 
 func (s *sink) SinkType() commonType.SinkType {
@@ -406,10 +422,12 @@ func (s *sink) sendMessages(ctx context.Context) error {
 						future.Key.Topic,
 						future.Key.Partition,
 						message); err != nil {
-						log.Error("kafka sink send message failed",
-							zap.String("keyspace", s.changefeedID.Keyspace()),
-							zap.String("changefeed", s.changefeedID.Name()),
-							zap.Error(err))
+						if shouldLogKafkaSinkWarning(&s.lastSendErrLogTime, kafkaSinkWarnLogInterval) {
+							log.Error("kafka sink send message failed",
+								zap.String("keyspace", s.changefeedID.Keyspace()),
+								zap.String("changefeed", s.changefeedID.Name()),
+								zap.Error(err))
+						}
 						return 0, 0, err
 					}
 					return message.GetRowsCount(), int64(message.Length()), nil

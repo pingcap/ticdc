@@ -63,6 +63,10 @@ type HeartBeatCollector struct {
 	wg       sync.WaitGroup
 	cancel   context.CancelFunc
 	isClosed atomic.Bool
+
+	lastHeartbeatReqErrLogTime atomic.Int64
+	lastBlockStatusErrLogTime  atomic.Int64
+	lastUnknownMessageLogTime  atomic.Int64
 }
 
 func NewHeartBeatCollector(serverId node.ID) *HeartBeatCollector {
@@ -225,7 +229,9 @@ func (c *HeartBeatCollector) sendHeartBeatMessages(ctx context.Context) error {
 					heartBeatRequestWithTargetID.Request,
 				))
 			if err != nil {
-				log.Error("failed to send heartbeat request message", zap.Error(err))
+				if shouldLogDispatcherManagerWarning(&c.lastHeartbeatReqErrLogTime, dispatcherManagerWarnLogInterval) {
+					log.Error("failed to send heartbeat request message", zap.Error(err))
+				}
 			}
 		}
 	}
@@ -249,7 +255,9 @@ func (c *HeartBeatCollector) sendBlockStatusMessages(ctx context.Context) error 
 					blockStatusRequestWithTargetID.Request,
 				))
 			if err != nil {
-				log.Error("failed to send block status request message", zap.Error(err))
+				if shouldLogDispatcherManagerWarning(&c.lastBlockStatusErrLogTime, dispatcherManagerWarnLogInterval) {
+					log.Error("failed to send block status request message", zap.Error(err))
+				}
 			}
 		}
 	}
@@ -291,9 +299,11 @@ func (c *HeartBeatCollector) RecvMessages(_ context.Context, msg *messaging.Targ
 			common.NewChangefeedGIDFromPB(mergeDispatcherRequest.ChangefeedID),
 			NewMergeDispatcherRequest(mergeDispatcherRequest))
 	default:
-		log.Warn("unknown message type, ignore it",
-			zap.String("type", msg.Type.String()),
-			zap.Any("message", msg.Message))
+		if shouldLogDispatcherManagerWarning(&c.lastUnknownMessageLogTime, dispatcherManagerWarnLogInterval) {
+			log.Warn("unknown message type, ignore it",
+				zap.String("type", msg.Type.String()),
+				zap.Any("message", msg.Message))
+		}
 	}
 	return nil
 }

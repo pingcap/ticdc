@@ -288,7 +288,9 @@ func (e *DispatcherManager) UpdateRedoMeta(checkpointTs, resolvedTs uint64) {
 	// only update meta on the one node
 	d := e.GetTableTriggerRedoDispatcher()
 	if d == nil {
-		log.Warn("should not reach here. only update redo meta on the tableTriggerRedoDispatcher")
+		if shouldLogDispatcherManagerWarning(&e.lastRedoMetaInvariantLogTime, dispatcherManagerWarnLogInterval) {
+			log.Warn("should not reach here. only update redo meta on the tableTriggerRedoDispatcher")
+		}
 		return
 	}
 	d.UpdateMeta(checkpointTs, resolvedTs)
@@ -309,7 +311,9 @@ func (e *DispatcherManager) collectRedoMeta(ctx context.Context) error {
 			return ctx.Err()
 		case <-ticker.C:
 			if e.GetTableTriggerRedoDispatcher() == nil {
-				log.Error("should not reach here. only collect redo meta on the tableTriggerRedoDispatcher")
+				if shouldLogDispatcherManagerWarning(&e.lastRedoMetaInvariantLogTime, dispatcherManagerWarnLogInterval) {
+					log.Error("should not reach here. only collect redo meta on the tableTriggerRedoDispatcher")
+				}
 				continue
 			}
 			logMeta := e.GetTableTriggerRedoDispatcher().GetFlushedMeta()
@@ -326,7 +330,9 @@ func (e *DispatcherManager) collectRedoMeta(ctx context.Context) error {
 					},
 				))
 			if err != nil {
-				log.Error("failed to send redo request message", zap.Error(err))
+				if shouldLogDispatcherManagerWarning(&e.lastRedoMetaErrLogTime, dispatcherManagerWarnLogInterval) {
+					log.Error("failed to send redo request message", zap.Error(err))
+				}
 			}
 			preResolvedTs = logMeta.ResolvedTs
 		}

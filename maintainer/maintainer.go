@@ -47,8 +47,9 @@ import (
 )
 
 const (
-	periodEventInterval = time.Millisecond * 100
-	periodRedoInterval  = time.Second * 1
+	periodEventInterval               = time.Millisecond * 100
+	periodRedoInterval                = time.Second * 1
+	progressAdvanceBlockedLogInterval = 10 * time.Second
 )
 
 // Maintainer is response for handle changefeed replication tasks. Maintainer should:
@@ -163,6 +164,30 @@ type Maintainer struct {
 	redoScheduledTaskGauge prometheus.Gauge
 	redoSpanCountGauge     prometheus.Gauge
 	redoTableCountGauge    prometheus.Gauge
+
+	lastCheckpointAdvanceBlockedLogTime atomic.Int64
+	lastRedoAdvanceBlockedLogTime       atomic.Int64
+}
+
+func shouldLogAdvanceBlockedWarning(lastLogTime *atomic.Int64, interval time.Duration) bool {
+	now := time.Now().UnixNano()
+	for {
+		last := lastLogTime.Load()
+		if last != 0 && now-last < interval.Nanoseconds() {
+			return false
+		}
+		if lastLogTime.CompareAndSwap(last, now) {
+			return true
+		}
+	}
+}
+
+func nodeIDsToStrings(ids []node.ID) []string {
+	res := make([]string, 0, len(ids))
+	for _, id := range ids {
+		res = append(res, id.String())
+	}
+	return res
 }
 
 // NewMaintainer create the maintainer for the changefeed
@@ -565,12 +590,15 @@ func (m *Maintainer) handleRedoMetaTsMessage(ctx context.Context) {
 			return
 		case <-ticker.C:
 			if !m.initialized.Load() {
-				log.Warn("can not advance redoTs since not bootstrapped",
-					zap.Stringer("changefeedID", m.changefeedID))
+				if shouldLogAdvanceBlockedWarning(&m.lastRedoAdvanceBlockedLogTime, progressAdvanceBlockedLogInterval) {
+					log.Warn("can not advance redoTs since not bootstrapped",
+						zap.Stringer("changefeedID", m.changefeedID))
+				}
 				break
 			}
 			needUpdate := false
 			updateCheckpointTs := true
+			missingNodes := make([]node.ID, 0)
 
 			newWatermark := heartbeatpb.NewMaxWatermark()
 			// Calculate operator and barrier constraints first to ensure atomicity.
@@ -590,12 +618,19 @@ func (m *Maintainer) handleRedoMetaTsMessage(ctx context.Context) {
 				watermark, ok := m.redoTsByCapture.Get(id)
 				if !ok {
 					updateCheckpointTs = false
-					log.Warn("redo checkpointTs can not be advanced, since missing capture heartbeat",
-						zap.Stringer("changefeedID", m.changefeedID),
-						zap.Any("node", id))
+					missingNodes = append(missingNodes, id)
 					continue
 				}
 				newWatermark.UpdateMin(watermark)
+			}
+
+			if !updateCheckpointTs &&
+				len(missingNodes) > 0 &&
+				shouldLogAdvanceBlockedWarning(&m.lastRedoAdvanceBlockedLogTime, progressAdvanceBlockedLogInterval) {
+				log.Warn("redo checkpointTs can not be advanced, since missing capture heartbeat",
+					zap.Stringer("changefeedID", m.changefeedID),
+					zap.Int("missingNodeCount", len(missingNodes)),
+					zap.Strings("missingNodes", nodeIDsToStrings(missingNodes)))
 			}
 
 			newWatermark.UpdateMin(heartbeatpb.Watermark{CheckpointTs: minRedoCheckpointTsForScheduler, ResolvedTs: minRedoCheckpointTsForScheduler})
@@ -640,10 +675,12 @@ func (m *Maintainer) calCheckpointTs(ctx context.Context) {
 			return
 		case <-ticker.C:
 			if !m.initialized.Load() {
-				log.Warn("can not advance checkpointTs since not bootstrapped",
-					zap.Stringer("changefeedID", m.changefeedID),
-					zap.Uint64("checkpointTs", m.getWatermark().CheckpointTs),
-					zap.Uint64("resolvedTs", m.getWatermark().ResolvedTs))
+				if shouldLogAdvanceBlockedWarning(&m.lastCheckpointAdvanceBlockedLogTime, progressAdvanceBlockedLogInterval) {
+					log.Warn("can not advance checkpointTs since not bootstrapped",
+						zap.Stringer("changefeedID", m.changefeedID),
+						zap.Uint64("checkpointTs", m.getWatermark().CheckpointTs),
+						zap.Uint64("resolvedTs", m.getWatermark().ResolvedTs))
+				}
 				break
 			}
 
@@ -699,6 +736,7 @@ func (m *Maintainer) calculateNewCheckpointTs() (*heartbeatpb.Watermark, bool) {
 
 	// Step 2: Apply heartbeat constraints from all nodes
 	updateCheckpointTs := true
+	missingNodes := make([]node.ID, 0)
 	for _, id := range m.bootstrapper.GetAllNodeIDs() {
 		// maintainer node has the table trigger event dispatcher
 		if id != m.selfNode.ID && m.controller.spanController.GetTaskSizeByNodeID(id) <= 0 {
@@ -708,10 +746,7 @@ func (m *Maintainer) calculateNewCheckpointTs() (*heartbeatpb.Watermark, bool) {
 		watermark, ok := m.checkpointTsByCapture.Get(id)
 		if !ok {
 			updateCheckpointTs = false
-			log.Warn("checkpointTs can not be advanced, since missing capture heartbeat",
-				zap.Stringer("changefeedID", m.changefeedID), zap.Any("node", id),
-				zap.Uint64("checkpointTs", m.getWatermark().CheckpointTs),
-				zap.Uint64("resolvedTs", m.getWatermark().ResolvedTs))
+			missingNodes = append(missingNodes, id)
 			continue
 		}
 		// Apply heartbeat constraint - can only make checkpointTs smaller (safer)
@@ -719,6 +754,15 @@ func (m *Maintainer) calculateNewCheckpointTs() (*heartbeatpb.Watermark, bool) {
 	}
 
 	if !updateCheckpointTs {
+		if len(missingNodes) > 0 &&
+			shouldLogAdvanceBlockedWarning(&m.lastCheckpointAdvanceBlockedLogTime, progressAdvanceBlockedLogInterval) {
+			log.Warn("checkpointTs can not be advanced, since missing capture heartbeat",
+				zap.Stringer("changefeedID", m.changefeedID),
+				zap.Uint64("checkpointTs", m.getWatermark().CheckpointTs),
+				zap.Uint64("resolvedTs", m.getWatermark().ResolvedTs),
+				zap.Int("missingNodeCount", len(missingNodes)),
+				zap.Strings("missingNodes", nodeIDsToStrings(missingNodes)))
+		}
 		return nil, false
 	}
 
