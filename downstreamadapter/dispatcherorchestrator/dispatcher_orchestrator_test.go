@@ -101,6 +101,30 @@ func TestPendingMessageQueue_PopReturnsAfterClose(t *testing.T) {
 	}
 }
 
+func TestPendingMessageQueue_PopSkipsStaleKey(t *testing.T) {
+	t.Parallel()
+
+	q := newPendingMessageQueue()
+	staleKey := pendingMessageKey{
+		changefeedID: common.NewChangeFeedIDWithName("stale", "default"),
+		msgType:      messaging.TypeMaintainerBootstrapRequest,
+	}
+	validKey := pendingMessageKey{
+		changefeedID: common.NewChangeFeedIDWithName("valid", "default"),
+		msgType:      messaging.TypeMaintainerBootstrapRequest,
+	}
+	validMsg := &messaging.TargetMessage{Type: messaging.TypeMaintainerBootstrapRequest}
+
+	q.queue.Push(staleKey)
+	require.True(t, q.TryEnqueue(validKey, validMsg))
+
+	poppedKey, ok := q.Pop()
+	require.True(t, ok)
+	require.Equal(t, validKey, poppedKey)
+	require.Same(t, validMsg, q.Get(poppedKey))
+	q.Done(poppedKey)
+}
+
 func TestPendingMessageQueue_CloseRequestRemovedTrueOverridesPendingFalse(t *testing.T) {
 	t.Parallel()
 

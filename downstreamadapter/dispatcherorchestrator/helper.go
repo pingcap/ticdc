@@ -16,10 +16,12 @@ package dispatcherorchestrator
 import (
 	"sync"
 
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/utils/chann"
+	"go.uber.org/zap"
 )
 
 type pendingMessageKey struct {
@@ -106,21 +108,28 @@ func shouldReplacePendingMessage(key pendingMessageKey, oldMsg, newMsg *messagin
 // Pop blocks until a key is available or the queue is closed.
 // The returned key is removed from the queue and promoted to in-flight until Done is called.
 func (q *pendingMessageQueue) Pop() (pendingMessageKey, bool) {
-	key, ok := q.queue.Get()
-	if !ok {
-		return pendingMessageKey{}, false
-	}
+	for {
+		key, ok := q.queue.Get()
+		if !ok {
+			return pendingMessageKey{}, false
+		}
 
-	q.mu.Lock()
-	defer q.mu.Unlock()
-
-	state := q.pending[key]
-	if state == nil || state.queued == nil {
-		return pendingMessageKey{}, false
+		q.mu.Lock()
+		state := q.pending[key]
+		if state == nil || state.queued == nil {
+			q.mu.Unlock()
+			// Returning false here would make the caller treat an internal stale key as shutdown.
+			// Keep draining until the underlying queue is actually closed.
+			log.Error("skip stale pending message key",
+				zap.Stringer("changefeedID", key.changefeedID),
+				zap.String("messageType", key.msgType.String()))
+			continue
+		}
+		state.inFlight = state.queued
+		state.queued = nil
+		q.mu.Unlock()
+		return key, true
 	}
-	state.inFlight = state.queued
-	state.queued = nil
-	return key, true
 }
 
 func (q *pendingMessageQueue) Get(key pendingMessageKey) *messaging.TargetMessage {
