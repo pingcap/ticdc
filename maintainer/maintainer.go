@@ -375,7 +375,7 @@ func (m *Maintainer) GetMaintainerStatus() *heartbeatpb.MaintainerStatus {
 	status := &heartbeatpb.MaintainerStatus{
 		ChangefeedID:  m.changefeedID.ToPB(),
 		State:         heartbeatpb.ComponentState(m.scheduleState.Load()),
-		CheckpointTs:  m.getWatermark().CheckpointTs,
+		CheckpointTs:  m.controller.spanController.GetMaintainerCommittedCheckpointTs(),
 		Err:           runningErrors,
 		BootstrapDone: m.initialized.Load(),
 		LastSyncedTs:  m.getWatermark().LastSyncedTs,
@@ -657,6 +657,11 @@ func (m *Maintainer) calCheckpointTs(ctx context.Context) {
 			// CRITICAL SECTION: Calculate checkpointTs with proper ordering to prevent race condition
 			newWatermark, canUpdate := m.calculateNewCheckpointTs()
 			if canUpdate {
+				m.controller.spanController.AdvanceMaintainerCommittedCheckpointTs(newWatermark.CheckpointTs)
+				if m.enableRedo && m.controller.redoSpanController != nil {
+					// Redo dispatchers must not start below the changefeed committed checkpoint.
+					m.controller.redoSpanController.AdvanceMaintainerCommittedCheckpointTs(newWatermark.CheckpointTs)
+				}
 				m.setWatermark(*newWatermark)
 				m.updateMetrics()
 			}

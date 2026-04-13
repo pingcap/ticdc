@@ -17,7 +17,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/pingcap/errors"
@@ -142,37 +141,5 @@ func WriteData(w http.ResponseWriter, data interface{}) {
 	_, err = w.Write(js)
 	if err != nil {
 		log.Error("fail to write data", zap.Error(err))
-	}
-}
-
-// Liveness can only be changed from alive to stopping, and no way back.
-type Liveness int32
-
-const (
-	// LivenessCaptureAlive means the capture is alive, and ready to serve.
-	LivenessCaptureAlive Liveness = 0
-	// LivenessCaptureStopping means the capture is in the process of graceful shutdown.
-	LivenessCaptureStopping Liveness = 1
-)
-
-// Store the given liveness. Returns true if it success.
-func (l *Liveness) Store(v Liveness) bool {
-	return atomic.CompareAndSwapInt32(
-		(*int32)(l), int32(LivenessCaptureAlive), int32(v))
-}
-
-// Load the liveness.
-func (l *Liveness) Load() Liveness {
-	return Liveness(atomic.LoadInt32((*int32)(l)))
-}
-
-func (l *Liveness) String() string {
-	switch *l {
-	case LivenessCaptureAlive:
-		return "Alive"
-	case LivenessCaptureStopping:
-		return "Stopping"
-	default:
-		return "unknown"
 	}
 }

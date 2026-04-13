@@ -20,6 +20,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/coordinator/changefeed"
+	"github.com/pingcap/ticdc/coordinator/drain"
 	"github.com/pingcap/ticdc/coordinator/operator"
 	coscheduler "github.com/pingcap/ticdc/coordinator/scheduler"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -86,6 +87,8 @@ type Controller struct {
 
 	changefeedChangeCh chan []*changefeedChange
 	apiLock            sync.RWMutex
+
+	drainController *drain.Controller
 }
 
 type changefeedChange struct {
@@ -117,8 +120,10 @@ func NewController(
 	pdClient pd.Client,
 ) *Controller {
 	changefeedDB := changefeed.NewChangefeedDB(version)
+	messageCenter := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 
 	oc := operator.NewOperatorController(selfNode, changefeedDB, backend, batchSize)
+	drainController := drain.NewController(messageCenter)
 	c := &Controller{
 		version:     version,
 		selfNode:    selfNode,
@@ -140,7 +145,7 @@ func NewController(
 		}),
 		eventCh:            eventCh,
 		operatorController: oc,
-		messageCenter:      appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
+		messageCenter:      messageCenter,
 		changefeedDB:       changefeedDB,
 		nodeManager:        appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
 		taskScheduler:      threadpool.NewThreadPoolDefault(),
@@ -148,6 +153,7 @@ func NewController(
 		changefeedChangeCh: changefeedChangeCh,
 		pdClient:           pdClient,
 		pdClock:            appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
+		drainController:    drainController,
 	}
 	c.nodeChanged.changed = false
 
@@ -186,6 +192,7 @@ func NewController(
 func (c *Controller) collectMetrics(ctx context.Context) error {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
+	errorMetricLabels := make(map[common.ChangeFeedID]changefeedErrorMetricLabels)
 	for {
 		select {
 		case <-ctx.Done():
@@ -196,6 +203,8 @@ func (c *Controller) collectMetrics(ctx context.Context) error {
 			metrics.ChangefeedStateGauge.WithLabelValues("Scheduling").Set(float64(c.operatorController.OperatorSize()))
 			metrics.ChangefeedStateGauge.WithLabelValues("Absent").Set(float64(c.changefeedDB.GetAbsentSize()))
 			metrics.ChangefeedStateGauge.WithLabelValues("Stopped").Set(float64(c.changefeedDB.GetStoppedSize()))
+
+			currentChangefeeds := make(map[common.ChangeFeedID]struct{})
 
 			c.changefeedDB.Foreach(func(cf *changefeed.Changefeed) {
 				info := cf.GetInfo()
@@ -213,7 +222,35 @@ func (c *Controller) collectMetrics(ctx context.Context) error {
 				lag := float64(pdPhysicalTime-phyCkpTs) / 1e3
 				metrics.ChangefeedCheckpointTsGauge.WithLabelValues(keyspace, name).Set(float64(phyCkpTs))
 				metrics.ChangefeedCheckpointTsLagGauge.WithLabelValues(keyspace, name).Set(lag)
+
+				// sync changefeed error metrics
+				currentChangefeeds[cf.ID] = struct{}{}
+				oldLabels, exists := errorMetricLabels[cf.ID]
+				newLabels, hasError := getChangefeedErrorMetricLabels(cf.GetInfo())
+				// If the error state has not changed, do nothing.
+				if exists && hasError && oldLabels == newLabels {
+					return
+				}
+				// If there was an old metric, delete it, as the state has changed.
+				if exists {
+					metrics.ChangefeedErrorInfoGauge.DeleteLabelValues(oldLabels.labelValues()...)
+				}
+				if hasError {
+					// An error exists (either new or changed). Set the new metric and update cache.
+					metrics.ChangefeedErrorInfoGauge.WithLabelValues(newLabels.labelValues()...).Set(1)
+					errorMetricLabels[cf.ID] = newLabels
+				} else {
+					// The error has disappeared, remove from cache.
+					delete(errorMetricLabels, cf.ID)
+				}
 			})
+			for changefeedID, labels := range errorMetricLabels {
+				if _, ok := currentChangefeeds[changefeedID]; ok {
+					continue
+				}
+				metrics.ChangefeedErrorInfoGauge.DeleteLabelValues(labels.labelValues()...)
+				delete(errorMetricLabels, changefeedID)
+			}
 		}
 	}
 }
@@ -262,6 +299,14 @@ func (c *Controller) onPeriodTask() {
 	for _, req := range requests {
 		_ = c.messageCenter.SendCommand(req)
 	}
+
+	if !c.initialized.Load() {
+		return
+	}
+
+	c.drainController.AdvanceLiveness(func(id node.ID) bool {
+		return len(c.changefeedDB.GetByNodeID(id)) == 0 && !c.operatorController.HasOperatorInvolvingNode(id)
+	})
 }
 
 func (c *Controller) onMessage(ctx context.Context, msg *messaging.TargetMessage) {
@@ -273,6 +318,12 @@ func (c *Controller) onMessage(ctx context.Context, msg *messaging.TargetMessage
 			req := msg.Message[0].(*heartbeatpb.MaintainerHeartbeat)
 			c.handleMaintainerStatus(msg.From, req.Statuses)
 		}
+	case messaging.TypeNodeHeartbeatRequest:
+		req := msg.Message[0].(*heartbeatpb.NodeHeartbeat)
+		c.drainController.ObserveHeartbeat(msg.From, req)
+	case messaging.TypeSetNodeLivenessResponse:
+		req := msg.Message[0].(*heartbeatpb.SetNodeLivenessResponse)
+		c.drainController.ObserveSetNodeLivenessResponse(msg.From, req)
 	case messaging.TypeLogCoordinatorResolvedTsResponse:
 		c.onLogCoordinatorReportResolvedTs(msg)
 	default:
@@ -838,6 +889,7 @@ func (c *Controller) getChangefeed(id common.ChangeFeedID) *changefeed.Changefee
 // RemoveNode is called when a node is removed
 func (c *Controller) RemoveNode(id node.ID) {
 	c.operatorController.OnNodeRemoved(id)
+	c.drainController.RemoveNode(id)
 }
 
 func (c *Controller) submitPeriodTask() {
