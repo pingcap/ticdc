@@ -70,7 +70,9 @@ type dispatcherStat struct {
 	enableSyncPoint   bool
 	nextSyncPoint     atomic.Uint64
 	syncPointInterval time.Duration
-	txnAtomicity      config.AtomicityLevel
+	// syncPointSendSuppressed tracks whether syncpoint emission is temporarily suppressed due to lag.
+	syncPointSendSuppressed atomic.Bool
+	txnAtomicity            config.AtomicityLevel
 
 	// =============================================================================
 	// ================== below are fields need copied when reset ==================
