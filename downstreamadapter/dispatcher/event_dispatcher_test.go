@@ -429,6 +429,58 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	t.Run("cloud storage wake callback after batch enqueue", verifyDMLWakeCallbackStorageAfterBatchEnqueue)
 }
 
+func TestOutdatedActionDoneIsThrottled(t *testing.T) {
+	tableSpan, err := getCompleteTableSpan(getTestingKeyspaceID())
+	require.NoError(t, err)
+	testSink := newDispatcherTestSink(t, common.MysqlSinkType)
+	dispatcher := newDispatcherForTest(testSink.Sink(), tableSpan)
+	nodeID := node.NewID()
+
+	block := dispatcher.HandleEvents([]DispatcherEvent{
+		NewDispatcherEvent(&nodeID, commonEvent.ResolvedEvent{ResolvedTs: 10}),
+	}, func() {})
+	require.False(t, block)
+	require.Equal(t, uint64(10), dispatcher.GetResolvedTs())
+
+	staleStatus := &heartbeatpb.DispatcherStatus{
+		Action: &heartbeatpb.DispatcherAction{
+			Action:      heartbeatpb.Action_Pass,
+			CommitTs:    5,
+			IsSyncPoint: false,
+		},
+	}
+
+	await := dispatcher.HandleDispatcherStatus(staleStatus)
+	require.False(t, await)
+	select {
+	case msg := <-dispatcher.GetBlockStatusesChan():
+		require.Equal(t, heartbeatpb.BlockStage_DONE, msg.State.Stage)
+		require.Equal(t, uint64(5), msg.State.BlockTs)
+	case <-time.After(time.Second):
+		require.FailNow(t, "expected stale action DONE")
+	}
+
+	await = dispatcher.HandleDispatcherStatus(staleStatus)
+	require.False(t, await)
+	select {
+	case msg := <-dispatcher.GetBlockStatusesChan():
+		require.FailNow(t, "unexpected duplicate stale action DONE", "msg=%v", msg)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	time.Sleep(outdatedActionDoneReportInterval + 50*time.Millisecond)
+
+	await = dispatcher.HandleDispatcherStatus(staleStatus)
+	require.False(t, await)
+	select {
+	case msg := <-dispatcher.GetBlockStatusesChan():
+		require.Equal(t, heartbeatpb.BlockStage_DONE, msg.State.Stage)
+		require.Equal(t, uint64(5), msg.State.BlockTs)
+	case <-time.After(time.Second):
+		require.FailNow(t, "expected stale action DONE after throttle interval")
+	}
+}
+
 func TestBlockingDDLFlushBeforeWaitingAndWriteDoesNotFlushAgain(t *testing.T) {
 	keyspaceID := getTestingKeyspaceID()
 	tableSpan := getUncompleteTableSpan()
