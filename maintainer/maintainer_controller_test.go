@@ -1436,7 +1436,7 @@ func TestFinishBootstrap(t *testing.T) {
 }
 
 func TestFinishBootstrapReturnsErrorWhenCheckpointMissing(t *testing.T) {
-	testutil.SetUpTestServices()
+	testutil.SetUpTestServices(t)
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
 
