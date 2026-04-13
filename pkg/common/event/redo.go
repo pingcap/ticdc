@@ -390,7 +390,6 @@ func (r *RedoDDLEvent) ToDDLEvent() *DDLEvent {
 	columns := make([]*timodel.ColumnInfo, 0, len(r.DDL.Columns))
 	for _, col := range r.DDL.Columns {
 		colInfo := &timodel.ColumnInfo{
-			ID:      int64(len(columns)),
 			Name:    ast.NewCIStr(col.Name),
 			State:   timodel.StatePublic,
 			Version: col.Version,
