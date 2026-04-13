@@ -29,25 +29,33 @@ type pendingMessageKey struct {
 	msgType      messaging.IOType
 }
 
+type pendingMessageState struct {
+	// queued stores the next request waiting to be processed for this key.
+	queued *messaging.TargetMessage
+	// inFlight stores the request currently being handed to the caller by Pop.
+	// Pop clears it before returning so the external API no longer needs Done.
+	inFlight *messaging.TargetMessage
+}
+
 // pendingMessageQueue de-duplicates messages by (changefeedID, messageType) to prevent
 // floods of retry messages from blocking or starving other requests.
 //
 // The queue keeps at most one queued request for each key.
-// Once Pop returns a request, ownership of that message moves to the caller. A later
-// retry for the same key simply becomes the next queued request.
+// It still tracks a per-key state object so Pop can preserve the old queued -> in-flight
+// transition internally while returning the message directly to the caller.
 //
 // For MaintainerCloseRequest, we treat removed=true as stronger semantics than removed=false.
 // While a request is still queued, a later removed=true request replaces removed=false in
 // that queued slot so the next execution still observes the stronger semantics.
 type pendingMessageQueue struct {
 	mu      sync.Mutex
-	pending map[pendingMessageKey]*messaging.TargetMessage
+	pending map[pendingMessageKey]*pendingMessageState
 	queue   *chann.UnlimitedChannel[pendingMessageKey, any]
 }
 
 func newPendingMessageQueue() *pendingMessageQueue {
 	return &pendingMessageQueue{
-		pending: make(map[pendingMessageKey]*messaging.TargetMessage),
+		pending: make(map[pendingMessageKey]*pendingMessageState),
 		queue:   chann.NewUnlimitedChannelDefault[pendingMessageKey](),
 	}
 }
@@ -56,9 +64,14 @@ func newPendingMessageQueue() *pendingMessageQueue {
 // It returns true if the message is accepted, otherwise false.
 func (q *pendingMessageQueue) TryEnqueue(key pendingMessageKey, msg *messaging.TargetMessage) bool {
 	q.mu.Lock()
-	if queued, ok := q.pending[key]; ok {
-		if shouldReplacePendingMessage(key, queued, msg) {
-			q.pending[key] = msg
+	state, ok := q.pending[key]
+	if !ok {
+		state = &pendingMessageState{}
+		q.pending[key] = state
+	}
+	if state.queued != nil {
+		if shouldReplacePendingMessage(key, state.queued, msg) {
+			state.queued = msg
 			q.mu.Unlock()
 			return true
 		}
@@ -66,7 +79,7 @@ func (q *pendingMessageQueue) TryEnqueue(key pendingMessageKey, msg *messaging.T
 		return false
 	}
 
-	q.pending[key] = msg
+	state.queued = msg
 	q.mu.Unlock()
 
 	q.queue.Push(key)
@@ -94,6 +107,8 @@ func shouldReplacePendingMessage(key pendingMessageKey, oldMsg, newMsg *messagin
 
 // Pop blocks until a key is available or the queue is closed.
 // The returned message is removed from the queue and handed to the caller immediately.
+// Internally, Pop still performs the queued -> in-flight -> completed transition so the
+// per-key state machine remains equivalent to the previous Pop/Get/Done flow.
 func (q *pendingMessageQueue) Pop() (pendingMessageKey, *messaging.TargetMessage, bool) {
 	for {
 		key, ok := q.queue.Get()
@@ -102,8 +117,8 @@ func (q *pendingMessageQueue) Pop() (pendingMessageKey, *messaging.TargetMessage
 		}
 
 		q.mu.Lock()
-		msg := q.pending[key]
-		if msg == nil {
+		state := q.pending[key]
+		if state == nil || state.queued == nil {
 			q.mu.Unlock()
 			// Returning false here would make the caller treat an internal stale key as shutdown.
 			// Keep draining until the underlying queue is actually closed.
@@ -112,7 +127,13 @@ func (q *pendingMessageQueue) Pop() (pendingMessageKey, *messaging.TargetMessage
 				zap.String("messageType", key.msgType.String()))
 			continue
 		}
-		delete(q.pending, key)
+		state.inFlight = state.queued
+		state.queued = nil
+		msg := state.inFlight
+		state.inFlight = nil
+		if state.queued == nil {
+			delete(q.pending, key)
+		}
 		q.mu.Unlock()
 		return key, msg, true
 	}
