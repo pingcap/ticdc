@@ -77,10 +77,23 @@ type DDLEventInRedoLog struct {
 	StartTs           uint64            `msg:"start-ts"`
 	CommitTs          uint64            `msg:"commit-ts"`
 	Query             string            `msg:"query"`
+	Columns           []*ColumnInfo     `msg:"columns"`
 	BlockedTables     *InfluencedTables `msg:"blocked-tables"`
 	BlockedTableNames []SchemaTableName `msg:"blocked-table-names"`
 	NeedDroppedTables *InfluencedTables `msg:"need-dropped-tables"`
 	NeedAddedTables   []Table           `msg:"need_added_tables"`
+}
+
+type ColumnInfo struct {
+	Name               string `msg:"name"`
+	OriginDefaultValue any    `msg:"origin_default"`
+	Type               byte   `msg:"type"`
+	// Version means the version of the column info.
+	// Version = 0: For OriginDefaultValue and DefaultValue of timestamp column will stores the default time in system time zone.
+	//              That is a bug if multiple TiDB servers in different system time zone.
+	// Version = 1: For OriginDefaultValue and DefaultValue of timestamp column will stores the default time in UTC time zone.
+	//              This will fix bug in version 0. For compatibility with version 0, we add version field in column info struct.
+	Version uint64 `msg:"version"`
 }
 
 // RedoColumn is for column meta
@@ -203,12 +216,22 @@ func (r *RedoRowEvent) ToRedoLog() *RedoLog {
 
 // ToRedoLog converts ddl event to redo log
 func (d *DDLEvent) ToRedoLog() *RedoLog {
+	columns := make([]*ColumnInfo, 0, len(d.TableInfo.GetColumns()))
+	for _, col := range d.TableInfo.GetColumns() {
+		columns = append(columns, &ColumnInfo{
+			Name:               col.Name.String(),
+			OriginDefaultValue: col.GetOriginDefaultValue(),
+			Type:               col.GetType(),
+			Version:            col.Version,
+		})
+	}
 	redoLog := &RedoLog{
 		RedoDDL: &RedoDDLEvent{
 			DDL: &DDLEventInRedoLog{
 				StartTs:           d.GetStartTs(),
 				CommitTs:          d.GetCommitTs(),
 				Query:             d.Query,
+				Columns:           columns,
 				BlockedTables:     d.BlockedTables,
 				BlockedTableNames: d.BlockedTableNames,
 				NeedDroppedTables: d.NeedDroppedTables,
@@ -365,10 +388,23 @@ func (r *RedoDDLEvent) ToDDLEvent() *DDLEvent {
 		blockedTables = &InfluencedTables{InfluenceType: InfluenceTypeNormal}
 		blockedTableNames = []SchemaTableName{{SchemaName: r.TableName.Schema, TableName: r.TableName.Table}}
 	}
+	columns := make([]*timodel.ColumnInfo, 0, len(r.DDL.Columns))
+	for _, col := range r.DDL.Columns {
+		colInfo := &timodel.ColumnInfo{
+			ID:      int64(len(columns)),
+			Name:    ast.NewCIStr(col.Name),
+			State:   timodel.StatePublic,
+			Version: col.Version,
+		}
+		colInfo.SetType(col.Type)
+		colInfo.SetOriginDefaultValue(col.OriginDefaultValue)
+		columns = append(columns, colInfo)
+	}
 	return &DDLEvent{
-		TableInfo: &commonType.TableInfo{
-			TableName: r.TableName,
-		},
+		TableInfo: commonType.NewTableInfo4Decoder(r.TableName.Schema, &timodel.TableInfo{
+			Name:    ast.NewCIStr(r.TableName.Table),
+			Columns: columns,
+		}),
 		Query:             r.DDL.Query,
 		Type:              r.Type,
 		SchemaName:        r.TableName.Schema,
