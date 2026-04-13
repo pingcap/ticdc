@@ -228,7 +228,9 @@ func (h *regionEventHandler) OnDrop(event regionEvent) interface{} {
 		zap.Bool("stateIsStale", state.isStale()),
 		zap.Uint64("workerID", state.worker.workerID),
 	}
-	log.Warn("drop region event", fields...)
+	if shouldLogLogPullerWarning(&h.subClient.lastDroppedRegionEventLogTime, logPullerWarnLogInterval) {
+		log.Warn("drop region event", fields...)
+	}
 	return nil
 }
 
@@ -401,13 +403,15 @@ func handleResolvedTs(span *subscribedSpan, state *regionFeedState, resolvedTs u
 			decreaseLag := float64(nextResolvedPhyTs-resolvedPhyTs) / 1e3
 			const largeResolvedTsAdvanceStepInSecs = 30
 			if decreaseLag > largeResolvedTsAdvanceStepInSecs {
-				log.Warn("resolved ts advance step is too large",
-					zap.Uint64("subID", uint64(span.subID)),
-					zap.Int64("tableID", span.span.TableID),
-					zap.Uint64("regionID", regionID),
-					zap.Uint64("resolvedTs", ts),
-					zap.Uint64("lastResolvedTs", lastResolvedTs),
-					zap.Float64("decreaseLag(s)", decreaseLag))
+				if shouldLogLogPullerWarning(&state.worker.client.lastResolvedTsJumpLogTime, logPullerWarnLogInterval) {
+					log.Warn("resolved ts advance step is too large",
+						zap.Uint64("subID", uint64(span.subID)),
+						zap.Int64("tableID", span.span.TableID),
+						zap.Uint64("regionID", regionID),
+						zap.Uint64("resolvedTs", ts),
+						zap.Uint64("lastResolvedTs", lastResolvedTs),
+						zap.Float64("decreaseLag(s)", decreaseLag))
+				}
 			}
 			span.resolvedTs.Store(ts)
 			span.resolvedTsUpdated.Store(time.Now().Unix())

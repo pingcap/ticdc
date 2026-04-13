@@ -109,7 +109,9 @@ func (d *EventDispatcher) cache(dispatcherEvents []DispatcherEvent, wakeCallback
 	d.cacheEvents.Lock()
 	defer d.cacheEvents.Unlock()
 	if d.GetRemovingStatus() {
-		log.Warn("dispatcher has removed", zap.Any("id", d.id))
+		if shouldLogDispatcherWarning(&d.lastRemovingLogTime, dispatcherWarnLogInterval) {
+			log.Warn("dispatcher has removed", zap.Any("id", d.id))
+		}
 		return
 	}
 	// Here we have to create a new event slice, because dispatcherEvents will be cleaned up in dynamic stream
@@ -174,6 +176,15 @@ func (d *EventDispatcher) EmitBootstrap() bool {
 	ts := d.GetStartTs()
 	schemaStore := appcontext.GetService[schemastore.SchemaStore](appcontext.SchemaStore)
 	currentTables := make([]*common.TableInfo, 0, len(tables))
+	lastBootstrapWarnLogTime := time.Time{}
+	logBootstrapWarning := func(msg string, fields ...zap.Field) {
+		now := time.Now()
+		if !lastBootstrapWarnLogTime.IsZero() && now.Sub(lastBootstrapWarnLogTime) < dispatcherWarnLogInterval {
+			return
+		}
+		lastBootstrapWarnLogTime = now
+		log.Warn(msg, fields...)
+	}
 	meta := common.KeyspaceMeta{
 		ID:   d.tableSpan.KeyspaceID,
 		Name: d.sharedInfo.changefeedID.Keyspace(),
@@ -181,7 +192,7 @@ func (d *EventDispatcher) EmitBootstrap() bool {
 	for _, table := range tables {
 		err := schemaStore.RegisterTable(meta, table, ts)
 		if err != nil {
-			log.Warn("register table to schemaStore failed",
+			logBootstrapWarning("register table to schemaStore failed",
 				zap.Int64("tableID", table),
 				zap.Uint64("startTs", ts),
 				zap.Error(err),
@@ -190,7 +201,7 @@ func (d *EventDispatcher) EmitBootstrap() bool {
 		}
 		tableInfo, err := schemaStore.GetTableInfo(meta, table, ts)
 		if err != nil {
-			log.Warn("get table info failed, just ignore",
+			logBootstrapWarning("get table info failed, just ignore",
 				zap.Stringer("changefeed", d.sharedInfo.changefeedID),
 				zap.Error(err))
 			continue

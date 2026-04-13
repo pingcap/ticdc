@@ -17,6 +17,7 @@ import (
 	"context"
 	"encoding/json"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pingcap/log"
@@ -29,6 +30,21 @@ import (
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"go.uber.org/zap"
 )
+
+const maintainerManagerWarnLogInterval = 10 * time.Second
+
+func shouldLogMaintainerManagerWarning(lastLogTime *atomic.Int64, interval time.Duration) bool {
+	now := time.Now().UnixNano()
+	for {
+		last := lastLogTime.Load()
+		if last != 0 && now-last < interval.Nanoseconds() {
+			return false
+		}
+		if lastLogTime.CompareAndSwap(last, now) {
+			return true
+		}
+	}
+}
 
 // Manager is the manager of all changefeed maintainer in a ticdc server, each ticdc server will
 // start a Manager when the ticdc server is startup. It responsible for:
@@ -51,6 +67,12 @@ type Manager struct {
 	msgCh chan *messaging.TargetMessage
 
 	taskScheduler threadpool.ThreadPool
+
+	lastUnknownMessageLogTime       atomic.Int64
+	lastSendCommandErrLogTime       atomic.Int64
+	lastInvalidCoordinatorLogTime   atomic.Int64
+	lastSendBootstrapRespErrLogTime atomic.Int64
+	lastMaintainerNotFoundLogTime   atomic.Int64
 }
 
 // NewMaintainerManager create a changefeed maintainer manager instance
@@ -112,9 +134,11 @@ func (m *Manager) recvMessages(ctx context.Context, msg *messaging.TargetMessage
 		req := msg.Message[0].(*heartbeatpb.RedoResolvedTsProgressMessage)
 		return m.dispatcherMaintainerMessage(ctx, common.NewChangefeedIDFromPB(req.ChangefeedID), msg)
 	default:
-		log.Warn("unknown message type, ignore it",
-			zap.String("type", msg.Type.String()),
-			zap.Any("message", msg.Message))
+		if shouldLogMaintainerManagerWarning(&m.lastUnknownMessageLogTime, maintainerManagerWarnLogInterval) {
+			log.Warn("unknown message type, ignore it",
+				zap.String("type", msg.Type.String()),
+				zap.Any("message", msg.Message))
+		}
 	}
 	return nil
 }
@@ -164,10 +188,12 @@ func (m *Manager) sendMessages(msg *heartbeatpb.MaintainerHeartbeat) {
 	target := m.newCoordinatorTopicMessage(msg)
 	err := m.mc.SendCommand(target)
 	if err != nil {
-		log.Warn("send command failed",
-			zap.Stringer("from", m.nodeInfo.ID),
-			zap.Stringer("target", target.To),
-			zap.Error(err))
+		if shouldLogMaintainerManagerWarning(&m.lastSendCommandErrLogTime, maintainerManagerWarnLogInterval) {
+			log.Warn("send command failed",
+				zap.Stringer("from", m.nodeInfo.ID),
+				zap.Stringer("target", target.To),
+				zap.Error(err))
+		}
 	}
 }
 
@@ -184,9 +210,11 @@ func (m *Manager) Close(_ context.Context) error {
 func (m *Manager) onCoordinatorBootstrapRequest(msg *messaging.TargetMessage) {
 	req := msg.Message[0].(*heartbeatpb.CoordinatorBootstrapRequest)
 	if m.coordinatorVersion > req.Version {
-		log.Warn("ignore invalid coordinator version",
-			zap.Int64("coordinatorVersion", m.coordinatorVersion),
-			zap.Int64("version", req.Version))
+		if shouldLogMaintainerManagerWarning(&m.lastInvalidCoordinatorLogTime, maintainerManagerWarnLogInterval) {
+			log.Warn("ignore invalid coordinator version",
+				zap.Int64("coordinatorVersion", m.coordinatorVersion),
+				zap.Int64("version", req.Version))
+		}
 		return
 	}
 	m.coordinatorID = msg.From
@@ -205,10 +233,12 @@ func (m *Manager) onCoordinatorBootstrapRequest(msg *messaging.TargetMessage) {
 	msg = m.newCoordinatorTopicMessage(response)
 	err := m.mc.SendCommand(msg)
 	if err != nil {
-		log.Warn("send bootstrap response failed",
-			zap.Stringer("coordinatorID", m.coordinatorID),
-			zap.Int64("coordinatorVersion", m.coordinatorVersion),
-			zap.Error(err))
+		if shouldLogMaintainerManagerWarning(&m.lastSendBootstrapRespErrLogTime, maintainerManagerWarnLogInterval) {
+			log.Warn("send bootstrap response failed",
+				zap.Stringer("coordinatorID", m.coordinatorID),
+				zap.Int64("coordinatorVersion", m.coordinatorVersion),
+				zap.Error(err))
+		}
 	}
 
 	log.Info("new coordinator online, bootstrap response already sent",
@@ -247,10 +277,12 @@ func (m *Manager) onRemoveMaintainerRequest(msg *messaging.TargetMessage) *heart
 	maintainer, ok := m.maintainers.Load(changefeedID)
 	if !ok {
 		if !req.Cascade {
-			log.Warn("ignore remove maintainer request, "+
-				"since the maintainer not found",
-				zap.Stringer("changefeedID", changefeedID),
-				zap.Any("request", req))
+			if shouldLogMaintainerManagerWarning(&m.lastMaintainerNotFoundLogTime, maintainerManagerWarnLogInterval) {
+				log.Warn("ignore remove maintainer request, "+
+					"since the maintainer not found",
+					zap.Stringer("changefeedID", changefeedID),
+					zap.Any("request", req))
+			}
 			return &heartbeatpb.MaintainerStatus{
 				ChangefeedID: req.GetId(),
 				State:        heartbeatpb.ComponentState_Stopped,
@@ -276,10 +308,12 @@ func (m *Manager) onDispatchMaintainerRequest(
 	msg *messaging.TargetMessage,
 ) *heartbeatpb.MaintainerStatus {
 	if m.coordinatorID != msg.From {
-		log.Warn("ignore invalid coordinator id",
-			zap.Any("request", msg),
-			zap.Any("coordinatorID", m.coordinatorID),
-			zap.Stringer("from", msg.From))
+		if shouldLogMaintainerManagerWarning(&m.lastInvalidCoordinatorLogTime, maintainerManagerWarnLogInterval) {
+			log.Warn("ignore invalid coordinator id",
+				zap.Any("request", msg),
+				zap.Any("coordinatorID", m.coordinatorID),
+				zap.Stringer("from", msg.From))
+		}
 		return nil
 	}
 	switch msg.Type {
@@ -289,7 +323,9 @@ func (m *Manager) onDispatchMaintainerRequest(
 	case messaging.TypeRemoveMaintainerRequest:
 		return m.onRemoveMaintainerRequest(msg)
 	default:
-		log.Warn("unknown message type", zap.Any("message", msg.Message))
+		if shouldLogMaintainerManagerWarning(&m.lastUnknownMessageLogTime, maintainerManagerWarnLogInterval) {
+			log.Warn("unknown message type", zap.Any("message", msg.Message))
+		}
 	}
 	return nil
 }
@@ -339,9 +375,11 @@ func (m *Manager) dispatcherMaintainerMessage(
 ) error {
 	c, ok := m.maintainers.Load(changefeed)
 	if !ok {
-		log.Warn("maintainer is not found",
-			zap.Stringer("changefeedID", changefeed),
-			zap.String("message", msg.String()))
+		if shouldLogMaintainerManagerWarning(&m.lastMaintainerNotFoundLogTime, maintainerManagerWarnLogInterval) {
+			log.Warn("maintainer is not found",
+				zap.Stringer("changefeedID", changefeed),
+				zap.String("message", msg.String()))
+		}
 		return nil
 	}
 	select {

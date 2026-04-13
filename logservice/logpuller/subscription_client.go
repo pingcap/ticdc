@@ -216,10 +216,12 @@ type subscriptionClient struct {
 
 	ds dynstream.DynamicStream[int, SubscriptionID, regionEvent, *subscribedSpan, *regionEventHandler]
 	// the following three fields are used to manage feedback from ds and notify other goroutines
-	mu                        sync.Mutex
-	cond                      *sync.Cond
-	paused                    atomic.Bool
-	lastResolveLockErrLogTime atomic.Int64
+	mu                            sync.Mutex
+	cond                          *sync.Cond
+	paused                        atomic.Bool
+	lastResolveLockErrLogTime     atomic.Int64
+	lastDroppedRegionEventLogTime atomic.Int64
+	lastResolvedTsJumpLogTime     atomic.Int64
 
 	// the credential to connect tikv
 	credential *security.Credential

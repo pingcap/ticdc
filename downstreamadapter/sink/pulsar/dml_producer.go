@@ -16,6 +16,7 @@ package pulsar
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	pulsarClient "github.com/apache/pulsar-client-go/pulsar"
@@ -29,6 +30,21 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/pulsar"
 	"go.uber.org/zap"
 )
+
+const pulsarProducerWarnLogInterval = 10 * time.Second
+
+func shouldLogPulsarProducerWarning(lastLogTime *atomic.Int64, interval time.Duration) bool {
+	now := time.Now().UnixNano()
+	for {
+		last := lastLogTime.Load()
+		if last != 0 && now-last < interval.Nanoseconds() {
+			return false
+		}
+		if lastLogTime.CompareAndSwap(last, now) {
+			return true
+		}
+	}
+}
 
 // dmlProducer is the interface for the pulsar DML message producer.
 type dmlProducer interface {
@@ -65,6 +81,9 @@ type dmlProducers struct {
 	failpointCh chan error
 	// closeCh is send error
 	errChan chan error
+
+	lastAsyncSendErrLogTime atomic.Int64
+	lastErrChanFullLogTime  atomic.Int64
 }
 
 // newDMLProducers creates a new pulsar producer.
@@ -165,12 +184,14 @@ func (p *dmlProducers) asyncSendMessage(
 			// fail
 			if err != nil {
 				e := errors.WrapError(errors.ErrPulsarAsyncSendMessage, err)
-				log.Error("Pulsar DML producer async send error",
-					zap.String("keyspace", p.changefeedID.Keyspace()),
-					zap.String("changefeed", p.changefeedID.ID().String()),
-					zap.Int("messageSize", len(m.Payload)),
-					zap.String("topic", topic),
-					zap.Error(err))
+				if shouldLogPulsarProducerWarning(&p.lastAsyncSendErrLogTime, pulsarProducerWarnLogInterval) {
+					log.Error("Pulsar DML producer async send error",
+						zap.String("keyspace", p.changefeedID.Keyspace()),
+						zap.String("changefeed", p.changefeedID.ID().String()),
+						zap.Int("messageSize", len(m.Payload)),
+						zap.String("topic", topic),
+						zap.Error(err))
+				}
 				pulsar.IncPublishedDMLFail(topic, p.changefeedID.String())
 				// use this select to avoid send error to a closed channel
 				// the ctx will always be called before the errChan is closed
@@ -179,8 +200,10 @@ func (p *dmlProducers) asyncSendMessage(
 					return
 				case p.errChan <- e:
 				default:
-					log.Warn("Error channel is full in pulsar DML producer",
-						zap.Stringer("changefeed", p.changefeedID), zap.Error(e))
+					if shouldLogPulsarProducerWarning(&p.lastErrChanFullLogTime, pulsarProducerWarnLogInterval) {
+						log.Warn("Error channel is full in pulsar DML producer",
+							zap.Stringer("changefeed", p.changefeedID), zap.Error(e))
+					}
 				}
 			} else if message.Callback != nil {
 				// success

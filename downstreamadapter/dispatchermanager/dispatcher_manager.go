@@ -151,8 +151,10 @@ type DispatcherManager struct {
 	cancel  context.CancelFunc
 	wg      sync.WaitGroup
 
-	lastErrorChannelFullLogTime atomic.Int64
-	lastCollectErrLogTime       atomic.Int64
+	lastErrorChannelFullLogTime  atomic.Int64
+	lastCollectErrLogTime        atomic.Int64
+	lastRedoMetaErrLogTime       atomic.Int64
+	lastRedoMetaInvariantLogTime atomic.Int64
 
 	// removeTaskHandles stores the task handles for async dispatcher removal
 	// map[common.DispatcherID]*threadpool.TaskHandle
