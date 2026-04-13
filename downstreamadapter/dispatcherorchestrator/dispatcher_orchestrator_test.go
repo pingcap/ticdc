@@ -125,6 +125,39 @@ func TestPendingMessageQueue_PopSkipsStaleKey(t *testing.T) {
 	q.Done(poppedKey)
 }
 
+func TestPendingMessageQueue_GetOnlyReturnsInFlightMessage(t *testing.T) {
+	t.Parallel()
+
+	q := newPendingMessageQueue()
+	cfID := common.NewChangeFeedIDWithName("cf", "default")
+	key := pendingMessageKey{
+		changefeedID: cfID,
+		msgType:      messaging.TypeMaintainerBootstrapRequest,
+	}
+	msg1 := &messaging.TargetMessage{Type: messaging.TypeMaintainerBootstrapRequest}
+	msg2 := &messaging.TargetMessage{Type: messaging.TypeMaintainerBootstrapRequest}
+
+	require.True(t, q.TryEnqueue(key, msg1))
+	require.Nil(t, q.Get(key))
+
+	poppedKey, ok := q.Pop()
+	require.True(t, ok)
+	require.Equal(t, key, poppedKey)
+	require.Same(t, msg1, q.Get(key))
+
+	require.True(t, q.TryEnqueue(key, msg2))
+	require.Same(t, msg1, q.Get(key))
+
+	q.Done(key)
+	require.Nil(t, q.Get(key))
+
+	nextKey, ok := q.Pop()
+	require.True(t, ok)
+	require.Equal(t, key, nextKey)
+	require.Same(t, msg2, q.Get(key))
+	q.Done(key)
+}
+
 func TestPendingMessageQueue_CloseRequestRemovedTrueOverridesPendingFalse(t *testing.T) {
 	t.Parallel()
 

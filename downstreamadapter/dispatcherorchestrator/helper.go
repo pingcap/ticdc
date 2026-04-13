@@ -132,6 +132,8 @@ func (q *pendingMessageQueue) Pop() (pendingMessageKey, bool) {
 	}
 }
 
+// Get returns the message currently being processed for the key.
+// Queued retries stay internal until Pop promotes them to in-flight.
 func (q *pendingMessageQueue) Get(key pendingMessageKey) *messaging.TargetMessage {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -139,10 +141,7 @@ func (q *pendingMessageQueue) Get(key pendingMessageKey) *messaging.TargetMessag
 	if state == nil {
 		return nil
 	}
-	if state.inFlight != nil {
-		return state.inFlight
-	}
-	return state.queued
+	return state.inFlight
 }
 
 func (q *pendingMessageQueue) Done(key pendingMessageKey) {
