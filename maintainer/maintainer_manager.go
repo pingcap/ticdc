@@ -160,7 +160,7 @@ func (m *Manager) sendMessages(msg *heartbeatpb.MaintainerHeartbeat) {
 	}
 }
 
-// Close closes, it's a block call.
+// Close blocks until all local maintainers stop.
 func (m *Manager) Close(_ context.Context) error {
 	m.maintainers.closeAll()
 	return nil

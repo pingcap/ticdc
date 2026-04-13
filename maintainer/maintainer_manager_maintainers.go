@@ -67,10 +67,8 @@ func newManagerMaintainerSet(conf *config.SchedulerConfig, nodeInfo *node.Info) 
 // onAddMaintainerRequest enforces node-scoped admission rules before creating
 // a changefeed-scoped maintainer.
 func (m *Manager) onAddMaintainerRequest(req *heartbeatpb.AddMaintainerRequest) *heartbeatpb.MaintainerStatus {
-	// Intentionally allow AddMaintainer while the node is draining.
-	// During liveness propagation and scheduler view convergence, in-flight operators can still
-	// issue add requests to this node; rejecting them here may break drain convergence.
-	// Only STOPPING performs a hard reject for new maintainer creation.
+	// Allow AddMaintainer while draining so in-flight operators can still
+	// converge during liveness propagation. Only STOPPING hard-rejects new adds.
 	currentLiveness := liveness.CaptureAlive
 	if m.node.liveness != nil {
 		currentLiveness = m.node.liveness.Load()
