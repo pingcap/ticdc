@@ -17,8 +17,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pingcap/errors"
@@ -33,6 +35,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec/canal"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/codec/csv"
+	sinkiceberg "github.com/pingcap/ticdc/pkg/sink/iceberg"
 	putil "github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	"go.uber.org/atomic"
@@ -51,6 +54,11 @@ type (
 	fileIndexKeyMap map[cloudstorage.FileIndexKey]uint64
 )
 
+type icebergTableState struct {
+	lastMetadataVersion int
+	lastTableVersion    *sinkiceberg.TableVersion
+}
+
 // indexRange defines a range of files. eg. CDC000002.csv ~ CDC000005.csv
 type indexRange struct {
 	start uint64
@@ -58,11 +66,14 @@ type indexRange struct {
 }
 
 type consumer struct {
+	protocol        config.Protocol
 	replicationCfg  *config.ReplicaConfig
 	codecCfg        *common.Config
 	externalStorage storage.ExternalStorage
 	fileExtension   string
 	sink            sink.Sink
+	icebergCfg      *sinkiceberg.Config
+	icebergStates   map[string]*icebergTableState
 	// tableDMLIdxMap maintains a map of <dmlPathKey, fileIndexKeyMap>
 	tableDMLIdxMap map[cloudstorage.DmlPathKey]fileIndexKeyMap
 	eventsGroup    map[int64]*util.EventsGroup
@@ -102,25 +113,44 @@ func newConsumer(ctx context.Context) (*consumer, error) {
 		return nil, err
 	}
 
-	switch putil.GetOrZero(replicaConfig.Sink.Protocol) {
-	case config.ProtocolCsv.String():
-	case config.ProtocolCanalJSON.String():
-	default:
-		return nil, fmt.Errorf(
-			"data encoded in protocol %s is not supported yet",
-			putil.GetOrZero(replicaConfig.Sink.Protocol),
-		)
-	}
-
 	protocol, err := config.ParseSinkProtocolFromString(putil.GetOrZero(replicaConfig.Sink.Protocol))
 	if err != nil {
 		return nil, err
 	}
 
-	codecConfig := common.NewConfig(protocol)
-	err = codecConfig.Apply(upstreamURI, replicaConfig.Sink)
-	if err != nil {
-		return nil, err
+	var (
+		codecConfig *common.Config
+		icebergCfg  *sinkiceberg.Config
+	)
+	switch protocol {
+	case config.ProtocolCsv, config.ProtocolCanalJSON:
+		codecConfig = common.NewConfig(protocol)
+		err = codecConfig.Apply(upstreamURI, replicaConfig.Sink)
+		if err != nil {
+			return nil, err
+		}
+	case config.ProtocolIceberg:
+		downstreamURI, err := url.Parse(downstreamURIStr)
+		if err != nil {
+			return nil, err
+		}
+		downstreamScheme := config.GetScheme(downstreamURI)
+		if !config.IsMySQLCompatibleScheme(downstreamScheme) {
+			return nil, fmt.Errorf("iceberg storage consumer only supports mysql or tidb downstream")
+		}
+		safeMode := true
+		replicaConfig.Sink.SafeMode = &safeMode
+
+		icebergCfg = sinkiceberg.NewConfig()
+		err = icebergCfg.Apply(ctx, upstreamURI, replicaConfig.Sink)
+		if err != nil {
+			return nil, err
+		}
+		if icebergCfg.Catalog != sinkiceberg.CatalogHadoop && icebergCfg.Catalog != sinkiceberg.CatalogGlue {
+			return nil, fmt.Errorf("iceberg storage consumer only supports hadoop or glue catalog")
+		}
+	default:
+		return nil, fmt.Errorf("data encoded in protocol %s is not supported yet", protocol)
 	}
 
 	extension := helper.GetFileExtension(protocol)
@@ -145,11 +175,14 @@ func newConsumer(ctx context.Context) (*consumer, error) {
 	}
 
 	return &consumer{
+		protocol:          protocol,
 		replicationCfg:    replicaConfig,
 		codecCfg:          codecConfig,
 		externalStorage:   storage,
 		fileExtension:     extension,
 		sink:              sink,
+		icebergCfg:        icebergCfg,
+		icebergStates:     make(map[string]*icebergTableState),
 		errCh:             errCh,
 		tableDMLIdxMap:    make(map[cloudstorage.DmlPathKey]fileIndexKeyMap),
 		eventsGroup:       make(map[int64]*util.EventsGroup),
@@ -387,6 +420,60 @@ func (c *consumer) flushDMLEvents(ctx context.Context, tableID int64) error {
 				zap.Int("total", total), zap.Int64("flushed", flushed.Load()))
 		}
 	}
+}
+
+func (c *consumer) flushIcebergDMLEvents(ctx context.Context, tableID int64) error {
+	group := c.eventsGroup[tableID]
+	if group == nil {
+		return nil
+	}
+	events := group.GetAllEvents()
+	total := len(events)
+	if total == 0 {
+		return nil
+	}
+	var (
+		schema string
+		table  string
+	)
+	if events[0].TableInfo != nil {
+		schema = events[0].TableInfo.GetSchemaName()
+		table = events[0].TableInfo.GetTableName()
+	}
+
+	start := time.Now()
+	for i, e := range events {
+		done := make(chan struct{})
+		var once sync.Once
+		e.AddPostFlushFunc(func() {
+			once.Do(func() {
+				close(done)
+			})
+		})
+		c.sink.AddDMLEvent(e)
+
+		ticker := time.NewTicker(defaultLogInterval)
+		for {
+			select {
+			case <-ctx.Done():
+				ticker.Stop()
+				return context.Cause(ctx)
+			case <-done:
+				ticker.Stop()
+				goto NEXT
+			case <-ticker.C:
+				log.Warn("iceberg DML event cannot be flushed in time",
+					zap.Int("total", total), zap.Int("flushed", i),
+					zap.Uint64("commitTs", e.CommitTs), zap.String("schema", schema), zap.String("table", table))
+			}
+		}
+	NEXT:
+	}
+
+	log.Info("flush iceberg DML events done",
+		zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
+		zap.Int("total", total), zap.Duration("duration", time.Since(start)))
+	return nil
 }
 
 func (c *consumer) parseDMLFilePath(ctx context.Context, path string) error {
@@ -665,6 +752,13 @@ func (c *consumer) handle(ctx context.Context) error {
 		}
 
 		round++
+		if c.protocol == config.ProtocolIceberg {
+			if err := c.handleIceberg(ctx, round); err != nil {
+				return errors.Trace(err)
+			}
+			continue
+		}
+
 		dmlFileMap, err := c.getNewFiles(ctx)
 		if err != nil {
 			return errors.Trace(err)
