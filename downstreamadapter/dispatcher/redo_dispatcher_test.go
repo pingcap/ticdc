@@ -48,7 +48,7 @@ func newRedoDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) 
 		&defaultAtomicity,
 		false, // enableSplittableCheck
 		make(chan TableSpanStatusWithSeq, 128),
-		make(chan *heartbeatpb.TableSpanBlockStatus, 128),
+		128,
 		make(chan error, 1),
 	)
 	return NewRedoDispatcher(

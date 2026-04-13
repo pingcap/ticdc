@@ -80,7 +80,7 @@ func createTestDispatcher(t *testing.T, manager *DispatcherManager, id common.Di
 		&defaultAtomicity,
 		false,
 		make(chan dispatcher.TableSpanStatusWithSeq, 1),
-		make(chan *heartbeatpb.TableSpanBlockStatus, 1),
+		1,
 		make(chan error, 1),
 	)
 	d := dispatcher.NewEventDispatcher(
@@ -141,7 +141,7 @@ func createTestManager(t *testing.T) *DispatcherManager {
 		&defaultAtomicity,
 		false,
 		make(chan dispatcher.TableSpanStatusWithSeq, 8192),
-		make(chan *heartbeatpb.TableSpanBlockStatus, 1024*1024),
+		1024*1024,
 		make(chan error, 1),
 	)
 	nodeID := node.NewID()
