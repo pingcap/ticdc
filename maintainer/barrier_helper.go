@@ -16,8 +16,12 @@ package maintainer
 import (
 	"container/heap"
 	"sync"
+	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/node"
 )
 
 type BlockedEventMap struct {
@@ -40,9 +44,40 @@ type pendingScheduleEventMap struct {
 	events map[eventKey]*BarrierEvent
 }
 
+type pendingUnreplicatingStatusKey struct {
+	blockTs     uint64
+	isSyncPoint bool
+	stage       heartbeatpb.BlockStage
+}
+
+type pendingUnreplicatingStatus struct {
+	cfID        common.ChangeFeedID
+	from        node.ID
+	state       *heartbeatpb.State
+	firstSeenAt time.Time
+	lastSeenAt  time.Time
+}
+
+type pendingUnreplicatingStatusEntry struct {
+	dispatcherID common.DispatcherID
+	key          pendingUnreplicatingStatusKey
+	value        *pendingUnreplicatingStatus
+}
+
+type pendingUnreplicatingStatusMap struct {
+	mutex        sync.Mutex
+	byDispatcher map[common.DispatcherID]map[pendingUnreplicatingStatusKey]*pendingUnreplicatingStatus
+}
+
 func newPendingScheduleEventMap() *pendingScheduleEventMap {
 	return &pendingScheduleEventMap{
 		events: make(map[eventKey]*BarrierEvent),
+	}
+}
+
+func newPendingUnreplicatingStatusMap() *pendingUnreplicatingStatusMap {
+	return &pendingUnreplicatingStatusMap{
+		byDispatcher: make(map[common.DispatcherID]map[pendingUnreplicatingStatusKey]*pendingUnreplicatingStatus),
 	}
 }
 
@@ -81,6 +116,70 @@ func (m *pendingScheduleEventMap) popIfHead(event *BarrierEvent) (bool, *Barrier
 	heap.Pop(&m.queue)
 	delete(m.events, headKey)
 	return true, candidate
+}
+
+func (m *pendingUnreplicatingStatusMap) upsert(
+	dispatcherID common.DispatcherID,
+	key pendingUnreplicatingStatusKey,
+	value *pendingUnreplicatingStatus,
+) {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
+	statuses, ok := m.byDispatcher[dispatcherID]
+	if !ok {
+		statuses = make(map[pendingUnreplicatingStatusKey]*pendingUnreplicatingStatus)
+		m.byDispatcher[dispatcherID] = statuses
+	}
+	if existing, ok := statuses[key]; ok {
+		value.firstSeenAt = existing.firstSeenAt
+	}
+	statuses[key] = value
+}
+
+func (m *pendingUnreplicatingStatusMap) delete(
+	dispatcherID common.DispatcherID,
+	key pendingUnreplicatingStatusKey,
+) {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
+	statuses, ok := m.byDispatcher[dispatcherID]
+	if !ok {
+		return
+	}
+	delete(statuses, key)
+	if len(statuses) == 0 {
+		delete(m.byDispatcher, dispatcherID)
+	}
+}
+
+func (m *pendingUnreplicatingStatusMap) snapshot() []pendingUnreplicatingStatusEntry {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
+	entries := make([]pendingUnreplicatingStatusEntry, 0)
+	for dispatcherID, statuses := range m.byDispatcher {
+		for key, value := range statuses {
+			entries = append(entries, pendingUnreplicatingStatusEntry{
+				dispatcherID: dispatcherID,
+				key:          key,
+				value:        value,
+			})
+		}
+	}
+	return entries
+}
+
+func (m *pendingUnreplicatingStatusMap) len() int {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
+	length := 0
+	for _, statuses := range m.byDispatcher {
+		length += len(statuses)
+	}
+	return length
 }
 
 type pendingEventKeyHeap []eventKey
