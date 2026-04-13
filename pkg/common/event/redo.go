@@ -216,14 +216,17 @@ func (r *RedoRowEvent) ToRedoLog() *RedoLog {
 
 // ToRedoLog converts ddl event to redo log
 func (d *DDLEvent) ToRedoLog() *RedoLog {
-	columns := make([]*ColumnInfo, 0, len(d.TableInfo.GetColumns()))
-	for _, col := range d.TableInfo.GetColumns() {
-		columns = append(columns, &ColumnInfo{
-			Name:               col.Name.String(),
-			OriginDefaultValue: col.GetOriginDefaultValue(),
-			Type:               col.GetType(),
-			Version:            col.Version,
-		})
+	var columns []*ColumnInfo
+	if d.TableInfo != nil {
+		columns = make([]*ColumnInfo, 0, len(d.TableInfo.GetColumns()))
+		for _, col := range d.TableInfo.GetColumns() {
+			columns = append(columns, &ColumnInfo{
+				Name:               col.Name.String(),
+				OriginDefaultValue: col.GetOriginDefaultValue(),
+				Type:               col.GetType(),
+				Version:            col.Version,
+			})
+		}
 	}
 	redoLog := &RedoLog{
 		RedoDDL: &RedoDDLEvent{
@@ -397,14 +400,22 @@ func (r *RedoDDLEvent) ToDDLEvent() *DDLEvent {
 			Version: col.Version,
 		}
 		colInfo.SetType(col.Type)
-		colInfo.SetOriginDefaultValue(col.OriginDefaultValue)
+		if err := colInfo.SetOriginDefaultValue(col.OriginDefaultValue); err != nil {
+			log.Panic("set origin default value failed",
+				zap.String("column", col.Name),
+				zap.Any("originDefaultValue", col.OriginDefaultValue),
+				zap.Error(err))
+		}
 		columns = append(columns, colInfo)
 	}
+	tableInfo := commonType.NewTableInfo4Decoder(r.TableName.Schema, &timodel.TableInfo{
+		ID:      r.TableName.TableID,
+		Name:    ast.NewCIStr(r.TableName.Table),
+		Columns: columns,
+	})
+	tableInfo.TableName.IsPartition = r.TableName.IsPartition
 	return &DDLEvent{
-		TableInfo: commonType.NewTableInfo4Decoder(r.TableName.Schema, &timodel.TableInfo{
-			Name:    ast.NewCIStr(r.TableName.Table),
-			Columns: columns,
-		}),
+		TableInfo:         tableInfo,
 		Query:             r.DDL.Query,
 		Type:              r.Type,
 		SchemaName:        r.TableName.Schema,
