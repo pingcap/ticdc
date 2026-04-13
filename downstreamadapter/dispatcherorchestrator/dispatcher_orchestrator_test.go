@@ -38,20 +38,19 @@ func TestPendingMessageQueue_TryEnqueueDropsDuplicatesOnlyWhileQueued(t *testing
 	require.True(t, q.TryEnqueue(key, msg))
 	require.False(t, q.TryEnqueue(key, msg))
 
-	poppedKey, ok := q.Pop()
+	poppedKey, poppedMsg, ok := q.Pop()
 	require.True(t, ok)
 	require.Equal(t, key, poppedKey)
+	require.Same(t, msg, poppedMsg)
 
-	// Once the request is already in-flight, allow one queued retry for the next round.
+	// Once the request is popped, allow one queued retry for the next round.
 	require.True(t, q.TryEnqueue(key, msg))
 	require.False(t, q.TryEnqueue(key, msg))
 
-	q.Done(key)
-
-	nextKey, ok := q.Pop()
+	nextKey, nextMsg, ok := q.Pop()
 	require.True(t, ok)
 	require.Equal(t, key, nextKey)
-	q.Done(nextKey)
+	require.Same(t, msg, nextMsg)
 
 	require.True(t, q.TryEnqueue(key, msg))
 }
@@ -69,15 +68,15 @@ func TestPendingMessageQueue_OrderPreservedAcrossKeys(t *testing.T) {
 	require.True(t, q.TryEnqueue(key1, &messaging.TargetMessage{Type: key1.msgType}))
 	require.True(t, q.TryEnqueue(key2, &messaging.TargetMessage{Type: key2.msgType}))
 
-	poppedKey, ok := q.Pop()
+	poppedKey, poppedMsg, ok := q.Pop()
 	require.True(t, ok)
 	require.Equal(t, key1, poppedKey)
-	q.Done(poppedKey)
+	require.Equal(t, key1.msgType, poppedMsg.Type)
 
-	poppedKey, ok = q.Pop()
+	poppedKey, poppedMsg, ok = q.Pop()
 	require.True(t, ok)
 	require.Equal(t, key2, poppedKey)
-	q.Done(poppedKey)
+	require.Equal(t, key2.msgType, poppedMsg.Type)
 }
 
 func TestPendingMessageQueue_PopReturnsAfterClose(t *testing.T) {
@@ -86,7 +85,7 @@ func TestPendingMessageQueue_PopReturnsAfterClose(t *testing.T) {
 	q := newPendingMessageQueue()
 	doneCh := make(chan bool, 1)
 	go func() {
-		_, ok := q.Pop()
+		_, _, ok := q.Pop()
 		doneCh <- ok
 	}()
 
@@ -118,44 +117,10 @@ func TestPendingMessageQueue_PopSkipsStaleKey(t *testing.T) {
 	q.queue.Push(staleKey)
 	require.True(t, q.TryEnqueue(validKey, validMsg))
 
-	poppedKey, ok := q.Pop()
+	poppedKey, poppedMsg, ok := q.Pop()
 	require.True(t, ok)
 	require.Equal(t, validKey, poppedKey)
-	require.Same(t, validMsg, q.Get(poppedKey))
-	q.Done(poppedKey)
-}
-
-func TestPendingMessageQueue_GetOnlyReturnsInFlightMessage(t *testing.T) {
-	t.Parallel()
-
-	q := newPendingMessageQueue()
-	cfID := common.NewChangeFeedIDWithName("cf", "default")
-	key := pendingMessageKey{
-		changefeedID: cfID,
-		msgType:      messaging.TypeMaintainerBootstrapRequest,
-	}
-	msg1 := &messaging.TargetMessage{Type: messaging.TypeMaintainerBootstrapRequest}
-	msg2 := &messaging.TargetMessage{Type: messaging.TypeMaintainerBootstrapRequest}
-
-	require.True(t, q.TryEnqueue(key, msg1))
-	require.Nil(t, q.Get(key))
-
-	poppedKey, ok := q.Pop()
-	require.True(t, ok)
-	require.Equal(t, key, poppedKey)
-	require.Same(t, msg1, q.Get(key))
-
-	require.True(t, q.TryEnqueue(key, msg2))
-	require.Same(t, msg1, q.Get(key))
-
-	q.Done(key)
-	require.Nil(t, q.Get(key))
-
-	nextKey, ok := q.Pop()
-	require.True(t, ok)
-	require.Equal(t, key, nextKey)
-	require.Same(t, msg2, q.Get(key))
-	q.Done(key)
+	require.Same(t, validMsg, poppedMsg)
 }
 
 func TestPendingMessageQueue_CloseRequestRemovedTrueOverridesPendingFalse(t *testing.T) {
@@ -182,17 +147,15 @@ func TestPendingMessageQueue_CloseRequestRemovedTrueOverridesPendingFalse(t *tes
 	require.True(t, q.TryEnqueue(key, msgFalse))
 	require.True(t, q.TryEnqueue(key, msgTrue))
 
-	poppedKey, ok := q.Pop()
+	poppedKey, poppedMsg, ok := q.Pop()
 	require.True(t, ok)
 	require.Equal(t, key, poppedKey)
-	poppedMsg := q.Get(poppedKey)
 	require.NotNil(t, poppedMsg)
 	req := poppedMsg.Message[0].(*heartbeatpb.MaintainerCloseRequest)
 	require.True(t, req.Removed)
-	q.Done(key)
 }
 
-func TestPendingMessageQueue_CloseRequestUpgradeBetweenPopAndGetKeepsInFlightStable(t *testing.T) {
+func TestPendingMessageQueue_CloseRequestUpgradeAfterPopKeepsReturnedMessageStable(t *testing.T) {
 	t.Parallel()
 
 	q := newPendingMessageQueue()
@@ -214,19 +177,17 @@ func TestPendingMessageQueue_CloseRequestUpgradeBetweenPopAndGetKeepsInFlightSta
 	)
 
 	require.True(t, q.TryEnqueue(key, msgFalse))
-	poppedKey, ok := q.Pop()
+	poppedKey, poppedMsg, ok := q.Pop()
 	require.True(t, ok)
 	require.Equal(t, key, poppedKey)
+	require.NotNil(t, poppedMsg)
 
 	require.True(t, q.TryEnqueue(key, msgTrue))
-	poppedMsg := q.Get(poppedKey)
-	require.NotNil(t, poppedMsg)
 	req2 := poppedMsg.Message[0].(*heartbeatpb.MaintainerCloseRequest)
 	require.False(t, req2.Removed)
-	q.Done(key)
 }
 
-func TestPendingMessageQueue_CloseRequestUpgradeAfterGetRequeuesNextRound(t *testing.T) {
+func TestPendingMessageQueue_CloseRequestUpgradeAfterPopRequeuesNextRound(t *testing.T) {
 	t.Parallel()
 
 	q := newPendingMessageQueue()
@@ -249,40 +210,37 @@ func TestPendingMessageQueue_CloseRequestUpgradeAfterGetRequeuesNextRound(t *tes
 
 	require.True(t, q.TryEnqueue(key, msgFalse))
 
-	poppedKey, ok := q.Pop()
+	poppedKey, poppedMsg, ok := q.Pop()
 	require.True(t, ok)
 	require.Equal(t, key, poppedKey)
 
-	poppedMsg := q.Get(poppedKey)
 	require.NotNil(t, poppedMsg)
 	req := poppedMsg.Message[0].(*heartbeatpb.MaintainerCloseRequest)
 	require.False(t, req.Removed)
 
 	require.True(t, q.TryEnqueue(key, msgTrue))
-	q.Done(poppedKey)
 
 	type popResult struct {
 		key pendingMessageKey
+		msg *messaging.TargetMessage
 		ok  bool
 	}
 	resultCh := make(chan popResult, 1)
 	go func() {
-		nextKey, nextOK := q.Pop()
-		resultCh <- popResult{key: nextKey, ok: nextOK}
+		nextKey, nextMsg, nextOK := q.Pop()
+		resultCh <- popResult{key: nextKey, msg: nextMsg, ok: nextOK}
 	}()
 
 	select {
 	case result := <-resultCh:
 		require.True(t, result.ok)
 		require.Equal(t, key, result.key)
-		nextMsg := q.Get(result.key)
-		require.NotNil(t, nextMsg)
-		nextReq := nextMsg.Message[0].(*heartbeatpb.MaintainerCloseRequest)
+		require.NotNil(t, result.msg)
+		nextReq := result.msg.Message[0].(*heartbeatpb.MaintainerCloseRequest)
 		require.True(t, nextReq.Removed)
-		q.Done(result.key)
 	case <-time.After(time.Second):
 		q.Close()
-		require.FailNow(t, "upgraded close request was not requeued after in-flight request completed")
+		require.FailNow(t, "upgraded close request was not requeued after the first pop")
 	}
 }
 

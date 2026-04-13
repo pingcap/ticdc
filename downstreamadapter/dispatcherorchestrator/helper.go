@@ -29,32 +29,25 @@ type pendingMessageKey struct {
 	msgType      messaging.IOType
 }
 
-type pendingMessageState struct {
-	// queued stores the next request waiting to be processed for this key.
-	queued *messaging.TargetMessage
-	// inFlight stores the request currently being processed for this key.
-	inFlight *messaging.TargetMessage
-}
-
 // pendingMessageQueue de-duplicates messages by (changefeedID, messageType) to prevent
 // floods of retry messages from blocking or starving other requests.
 //
-// The queue keeps at most one queued request and one in-flight request for each key.
-// Subsequent messages only compete with the queued slot. If that slot is empty, the new
-// message becomes the next request no matter whether the current request is idle or in-flight.
+// The queue keeps at most one queued request for each key.
+// Once Pop returns a request, ownership of that message moves to the caller. A later
+// retry for the same key simply becomes the next queued request.
 //
 // For MaintainerCloseRequest, we treat removed=true as stronger semantics than removed=false.
 // While a request is still queued, a later removed=true request replaces removed=false in
 // that queued slot so the next execution still observes the stronger semantics.
 type pendingMessageQueue struct {
 	mu      sync.Mutex
-	pending map[pendingMessageKey]*pendingMessageState
+	pending map[pendingMessageKey]*messaging.TargetMessage
 	queue   *chann.UnlimitedChannel[pendingMessageKey, any]
 }
 
 func newPendingMessageQueue() *pendingMessageQueue {
 	return &pendingMessageQueue{
-		pending: make(map[pendingMessageKey]*pendingMessageState),
+		pending: make(map[pendingMessageKey]*messaging.TargetMessage),
 		queue:   chann.NewUnlimitedChannelDefault[pendingMessageKey](),
 	}
 }
@@ -63,15 +56,9 @@ func newPendingMessageQueue() *pendingMessageQueue {
 // It returns true if the message is accepted, otherwise false.
 func (q *pendingMessageQueue) TryEnqueue(key pendingMessageKey, msg *messaging.TargetMessage) bool {
 	q.mu.Lock()
-	state, ok := q.pending[key]
-	if !ok {
-		state = &pendingMessageState{}
-		q.pending[key] = state
-	}
-
-	if state.queued != nil {
-		if shouldReplacePendingMessage(key, state.queued, msg) {
-			state.queued = msg
+	if queued, ok := q.pending[key]; ok {
+		if shouldReplacePendingMessage(key, queued, msg) {
+			q.pending[key] = msg
 			q.mu.Unlock()
 			return true
 		}
@@ -79,7 +66,7 @@ func (q *pendingMessageQueue) TryEnqueue(key pendingMessageKey, msg *messaging.T
 		return false
 	}
 
-	state.queued = msg
+	q.pending[key] = msg
 	q.mu.Unlock()
 
 	q.queue.Push(key)
@@ -106,17 +93,17 @@ func shouldReplacePendingMessage(key pendingMessageKey, oldMsg, newMsg *messagin
 }
 
 // Pop blocks until a key is available or the queue is closed.
-// The returned key is removed from the queue and promoted to in-flight until Done is called.
-func (q *pendingMessageQueue) Pop() (pendingMessageKey, bool) {
+// The returned message is removed from the queue and handed to the caller immediately.
+func (q *pendingMessageQueue) Pop() (pendingMessageKey, *messaging.TargetMessage, bool) {
 	for {
 		key, ok := q.queue.Get()
 		if !ok {
-			return pendingMessageKey{}, false
+			return pendingMessageKey{}, nil, false
 		}
 
 		q.mu.Lock()
-		state := q.pending[key]
-		if state == nil || state.queued == nil {
+		msg := q.pending[key]
+		if msg == nil {
 			q.mu.Unlock()
 			// Returning false here would make the caller treat an internal stale key as shutdown.
 			// Keep draining until the underlying queue is actually closed.
@@ -125,37 +112,10 @@ func (q *pendingMessageQueue) Pop() (pendingMessageKey, bool) {
 				zap.String("messageType", key.msgType.String()))
 			continue
 		}
-		state.inFlight = state.queued
-		state.queued = nil
-		q.mu.Unlock()
-		return key, true
-	}
-}
-
-// Get returns the message currently being processed for the key.
-// Queued retries stay internal until Pop promotes them to in-flight.
-func (q *pendingMessageQueue) Get(key pendingMessageKey) *messaging.TargetMessage {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	state := q.pending[key]
-	if state == nil {
-		return nil
-	}
-	return state.inFlight
-}
-
-func (q *pendingMessageQueue) Done(key pendingMessageKey) {
-	q.mu.Lock()
-	state := q.pending[key]
-	if state == nil {
-		q.mu.Unlock()
-		return
-	}
-	state.inFlight = nil
-	if state.queued == nil {
 		delete(q.pending, key)
+		q.mu.Unlock()
+		return key, msg, true
 	}
-	q.mu.Unlock()
 }
 
 func (q *pendingMessageQueue) Close() {
