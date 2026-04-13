@@ -91,6 +91,22 @@ func TestDDLEventToRedoLogHandlesNilTableInfo(t *testing.T) {
 	})
 }
 
+func TestDDLEventToRedoLogHandlesUninitializedTableInfo(t *testing.T) {
+	ddlEvent := &DDLEvent{
+		Type:       byte(timodel.ActionAddColumn),
+		Query:      "alter table test_redo.t add column c int",
+		StartTs:    55,
+		FinishedTs: 66,
+		TableInfo:  &commonType.TableInfo{},
+	}
+
+	redoLog := ddlEvent.ToRedoLog()
+	require.Equal(t, ddlEvent.Query, redoLog.RedoDDL.DDL.Query)
+	require.Equal(t, ddlEvent.StartTs, redoLog.RedoDDL.DDL.StartTs)
+	require.Equal(t, ddlEvent.FinishedTs, redoLog.RedoDDL.DDL.CommitTs)
+	require.Empty(t, redoLog.RedoDDL.DDL.Columns)
+}
+
 func newRedoDDLTestColumn(
 	t *testing.T,
 	id int64,
