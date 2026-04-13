@@ -165,3 +165,18 @@ func TestMergeConfig(t *testing.T) {
 	require.Equal(t, 33554432, c.FileSize)
 	require.Equal(t, "2m2s", c.FlushInterval.String())
 }
+
+func TestEnableSchemaIndexByGetObjectRequiresExclusiveWriter(t *testing.T) {
+	uri := "s3://bucket/prefix"
+	sinkURI, err := url.Parse(uri)
+	require.NoError(t, err)
+	replicaConfig := config.GetDefaultReplicaConfig()
+	replicaConfig.Sink.CloudStorageConfig = &config.CloudStorageConfig{
+		EnableSchemaIndexByGetObject: aws.Bool(true),
+	}
+
+	c := NewConfig()
+	err = c.Apply(context.TODO(), sinkURI, replicaConfig.Sink, true)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "enable-schema-index-by-get-object requires exclusive table directory writer")
+}

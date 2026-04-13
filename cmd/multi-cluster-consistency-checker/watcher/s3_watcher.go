@@ -33,8 +33,9 @@ func NewS3Watcher(
 	checkpointWatcher Watcher,
 	s3Storage storage.ExternalStorage,
 	tables map[string][]string,
+	enableSchemaIndexByGetObject bool,
 ) *S3Watcher {
-	consumer := consumer.NewS3Consumer(s3Storage, tables)
+	consumer := consumer.NewS3Consumer(s3Storage, tables, enableSchemaIndexByGetObject)
 	return &S3Watcher{
 		checkpointWatcher: checkpointWatcher,
 		consumer:          consumer,
@@ -61,7 +62,6 @@ func (sw *S3Watcher) AdvanceS3CheckpointTs(ctx context.Context, minCheckpointTs 
 func (sw *S3Watcher) ConsumeNewFiles(
 	ctx context.Context,
 ) (map[cloudstorage.DmlPathKey]types.IncrementalData, map[types.SchemaTableKey]types.VersionKey, error) {
-	// TODO: get the index updated from the s3
 	newData, maxVersionMap, err := sw.consumer.ConsumeNewFiles(ctx)
 	if err != nil {
 		return nil, nil, errors.Annotate(err, "consume new files failed")

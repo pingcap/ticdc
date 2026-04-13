@@ -53,7 +53,7 @@ func TestS3Watcher_Close(t *testing.T) {
 		mock := &mockWatcher{}
 		sw := &S3Watcher{
 			checkpointWatcher: mock,
-			consumer:          consumer.NewS3Consumer(storage.NewMemStorage(), nil),
+			consumer:          consumer.NewS3Consumer(storage.NewMemStorage(), nil, false),
 		}
 
 		sw.Close()
@@ -70,7 +70,7 @@ func TestS3Watcher_Close(t *testing.T) {
 		}
 		sw := &S3Watcher{
 			checkpointWatcher: mock,
-			consumer:          consumer.NewS3Consumer(storage.NewMemStorage(), nil),
+			consumer:          consumer.NewS3Consumer(storage.NewMemStorage(), nil, false),
 		}
 
 		sw.Close()
@@ -92,7 +92,7 @@ func TestS3Watcher_AdvanceS3CheckpointTs(t *testing.T) {
 		}
 		sw := &S3Watcher{
 			checkpointWatcher: mock,
-			consumer:          consumer.NewS3Consumer(storage.NewMemStorage(), nil),
+			consumer:          consumer.NewS3Consumer(storage.NewMemStorage(), nil, false),
 		}
 
 		checkpoint, err := sw.AdvanceS3CheckpointTs(context.Background(), uint64(3000))
@@ -109,7 +109,7 @@ func TestS3Watcher_AdvanceS3CheckpointTs(t *testing.T) {
 		}
 		sw := &S3Watcher{
 			checkpointWatcher: mock,
-			consumer:          consumer.NewS3Consumer(storage.NewMemStorage(), nil),
+			consumer:          consumer.NewS3Consumer(storage.NewMemStorage(), nil, false),
 		}
 
 		checkpoint, err := sw.AdvanceS3CheckpointTs(context.Background(), uint64(3000))
@@ -128,7 +128,7 @@ func TestS3Watcher_AdvanceS3CheckpointTs(t *testing.T) {
 		}
 		sw := &S3Watcher{
 			checkpointWatcher: mock,
-			consumer:          consumer.NewS3Consumer(storage.NewMemStorage(), nil),
+			consumer:          consumer.NewS3Consumer(storage.NewMemStorage(), nil, false),
 		}
 
 		checkpoint, err := sw.AdvanceS3CheckpointTs(context.Background(), uint64(3000))
@@ -146,7 +146,7 @@ func TestS3Watcher_InitializeFromCheckpoint(t *testing.T) {
 		mock := &mockWatcher{}
 		sw := &S3Watcher{
 			checkpointWatcher: mock,
-			consumer:          consumer.NewS3Consumer(storage.NewMemStorage(), nil),
+			consumer:          consumer.NewS3Consumer(storage.NewMemStorage(), nil, false),
 		}
 
 		result, err := sw.InitializeFromCheckpoint(context.Background(), "cluster1", nil)
@@ -159,7 +159,7 @@ func TestS3Watcher_InitializeFromCheckpoint(t *testing.T) {
 		mock := &mockWatcher{}
 		sw := &S3Watcher{
 			checkpointWatcher: mock,
-			consumer:          consumer.NewS3Consumer(storage.NewMemStorage(), nil),
+			consumer:          consumer.NewS3Consumer(storage.NewMemStorage(), nil, false),
 		}
 
 		checkpoint := recorder.NewCheckpoint()
@@ -177,7 +177,7 @@ func TestS3Watcher_ConsumeNewFiles(t *testing.T) {
 		mock := &mockWatcher{}
 		sw := &S3Watcher{
 			checkpointWatcher: mock,
-			consumer:          consumer.NewS3Consumer(storage.NewMemStorage(), map[string][]string{}),
+			consumer:          consumer.NewS3Consumer(storage.NewMemStorage(), map[string][]string{}, false),
 		}
 
 		newData, maxVersionMap, err := sw.ConsumeNewFiles(context.Background())
@@ -191,7 +191,7 @@ func TestS3Watcher_ConsumeNewFiles(t *testing.T) {
 		mock := &mockWatcher{}
 		sw := &S3Watcher{
 			checkpointWatcher: mock,
-			consumer:          consumer.NewS3Consumer(storage.NewMemStorage(), nil),
+			consumer:          consumer.NewS3Consumer(storage.NewMemStorage(), nil, false),
 		}
 
 		newData, maxVersionMap, err := sw.ConsumeNewFiles(context.Background())

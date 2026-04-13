@@ -719,6 +719,10 @@ type CloudStorageConfig struct {
 	FileExpirationDays  *int    `toml:"file-expiration-days" json:"file-expiration-days,omitempty"`
 	FileCleanupCronSpec *string `toml:"file-cleanup-cron-spec" json:"file-cleanup-cron-spec,omitempty"`
 	FlushConcurrency    *int    `toml:"flush-concurrency" json:"flush-concurrency,omitempty"`
+	// EnableSchemaIndexByGetObject writes a deterministic schema index file for each table.
+	// The index file can be fetched with ReadFile/GetObject to discover the latest schema file
+	// without relying on directory listing consistency.
+	EnableSchemaIndexByGetObject *bool `toml:"enable-schema-index-by-get-object" json:"enable-schema-index-by-get-object,omitempty"`
 
 	// OutputRawChangeEvent controls whether to split the update pk/uk events.
 	OutputRawChangeEvent *bool `toml:"output-raw-change-event" json:"output-raw-change-event,omitempty"`

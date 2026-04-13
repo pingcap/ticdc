@@ -38,6 +38,11 @@ type GlobalConfig struct {
 	DataDir        string              `toml:"data-dir" json:"data-dir"`
 	MaxReportFiles int                 `toml:"max-report-files" json:"max-report-files"`
 	Tables         map[string][]string `toml:"tables" json:"tables"`
+
+	// EnableListByFileIndex is the flag to enable list by file index
+	// If true, the consistency checker will use the file index to list the files
+	// If false, the consistency checker will use list directory to list the files
+	EnableListByFileIndex bool `toml:"enable-list-by-file-index" json:"enable-list-by-file-index"`
 }
 
 type PeerClusterChangefeedConfig struct {

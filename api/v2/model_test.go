@@ -90,3 +90,22 @@ func TestReplicaConfigConversion(t *testing.T) {
 	require.Equal(t, "correctness", *apiCfgBack.Integrity.IntegrityCheckLevel)
 	require.Equal(t, "eventual", *apiCfgBack.Consistent.Level)
 }
+
+func TestCloudStorageConfigEnableSchemaIndexByGetObjectConversion(t *testing.T) {
+	t.Parallel()
+
+	apiCfg := &ReplicaConfig{
+		Sink: &SinkConfig{
+			CloudStorageConfig: &CloudStorageConfig{
+				EnableSchemaIndexByGetObject: util.AddressOf(true),
+			},
+		},
+	}
+	internalCfg := apiCfg.ToInternalReplicaConfig()
+	require.NotNil(t, internalCfg.Sink.CloudStorageConfig)
+	require.True(t, util.GetOrZero(internalCfg.Sink.CloudStorageConfig.EnableSchemaIndexByGetObject))
+
+	apiCfgBack := ToAPIReplicaConfig(internalCfg)
+	require.NotNil(t, apiCfgBack.Sink.CloudStorageConfig)
+	require.True(t, util.GetOrZero(apiCfgBack.Sink.CloudStorageConfig.EnableSchemaIndexByGetObject))
+}

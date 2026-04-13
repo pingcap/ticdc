@@ -133,7 +133,7 @@ func initClients(ctx context.Context, cfg *config.Config) (
 		checkpointWatchers[clusterID] = clusterCheckpointWatchers
 
 		// When s3-sink-uri is set, validate it matches etcd; when empty, use SinkURI from changefeed info in etcd.
-		effectiveS3SinkURI, err := validateS3ChangefeedSinkConfig(ctx, etcdClient, clusterID, clusterConfig.S3ChangefeedID, clusterConfig.S3SinkURI)
+		effectiveS3SinkURI, err := validateS3ChangefeedSinkConfig(ctx, etcdClient, clusterID, cfg.GlobalConfig.EnableListByFileIndex, clusterConfig.S3ChangefeedID, clusterConfig.S3SinkURI)
 		if err != nil {
 			cleanupClients(pdClients, etcdClients, checkpointWatchers, s3Watchers)
 			return nil, nil, nil, nil, errors.Trace(err)
@@ -149,6 +149,7 @@ func initClients(ctx context.Context, cfg *config.Config) (
 			watcher.NewCheckpointWatcher(ctx, clusterID, "s3", clusterConfig.S3ChangefeedID, etcdClient),
 			s3Storage,
 			cfg.GlobalConfig.Tables,
+			cfg.GlobalConfig.EnableListByFileIndex,
 		)
 		s3Watchers[clusterID] = s3Watcher
 		pdClients[clusterID] = pdClient
@@ -164,7 +165,14 @@ func initClients(ctx context.Context, cfg *config.Config) (
 // 4. The file index width must be DefaultFileIndexWidth
 //
 // It returns the changefeed's SinkURI from etcd (used for storage when s3SinkURI was empty).
-func validateS3ChangefeedSinkConfig(ctx context.Context, etcdClient *etcd.CDCEtcdClientImpl, clusterID string, s3ChangefeedID string, s3SinkURI string) (string, error) {
+func validateS3ChangefeedSinkConfig(
+	ctx context.Context,
+	etcdClient *etcd.CDCEtcdClientImpl,
+	clusterID string,
+	enableListByFileIndex bool,
+	s3ChangefeedID string,
+	s3SinkURI string,
+) (string, error) {
 	displayName := common.NewChangeFeedDisplayName(s3ChangefeedID, "default")
 	cfInfo, err := etcdClient.GetChangeFeedInfo(ctx, displayName)
 	if err != nil {
@@ -197,16 +205,26 @@ func validateS3ChangefeedSinkConfig(ctx context.Context, etcdClient *etcd.CDCEtc
 
 	// 3. Validate date separator must be "day"
 	dateSeparatorStr := util.GetOrZero(sinkConfig.DateSeparator)
-	if dateSeparatorStr == "" {
-		dateSeparatorStr = cdcconfig.DateSeparatorNone.String()
-	}
 	var dateSep cdcconfig.DateSeparator
 	if err := dateSep.FromString(dateSeparatorStr); err != nil {
 		return "", errors.Annotate(err, fmt.Sprintf("cluster %s: s3 changefeed %s has invalid date-separator %q", clusterID, s3ChangefeedID, dateSeparatorStr))
 	}
-	if dateSep != cdcconfig.DateSeparatorDay {
-		return "", fmt.Errorf("cluster %s: s3 changefeed %s date-separator is %q, but only %q is supported",
-			clusterID, s3ChangefeedID, dateSep.String(), cdcconfig.DateSeparatorDay.String())
+	if enableListByFileIndex {
+		if dateSep != cdcconfig.DateSeparatorNone {
+			return "", fmt.Errorf("cluster %s: s3 changefeed %s date-separator is %q, but only %q is supported",
+				clusterID, s3ChangefeedID, dateSep.String(), cdcconfig.DateSeparatorNone.String())
+		}
+		enableSchemaIndexByGetObject := sinkConfig.CloudStorageConfig != nil &&
+			util.GetOrZero(sinkConfig.CloudStorageConfig.EnableSchemaIndexByGetObject)
+		if !enableSchemaIndexByGetObject {
+			return "", fmt.Errorf("cluster %s: s3 changefeed %s enable-schema-index-by-get-object is not enabled",
+				clusterID, s3ChangefeedID)
+		}
+	} else {
+		if dateSep != cdcconfig.DateSeparatorDay {
+			return "", fmt.Errorf("cluster %s: s3 changefeed %s date-separator is %q, but only %q is supported",
+				clusterID, s3ChangefeedID, dateSep.String(), cdcconfig.DateSeparatorDay.String())
+		}
 	}
 
 	// 4. Validate file index width must be DefaultFileIndexWidth
@@ -215,6 +233,11 @@ func validateS3ChangefeedSinkConfig(ctx context.Context, etcdClient *etcd.CDCEtc
 		return "", fmt.Errorf("cluster %s: s3 changefeed %s file-index-width is %d, but only %d is supported",
 			clusterID, s3ChangefeedID, fileIndexWidth, cdcconfig.DefaultFileIndexWidth)
 	}
+	// 5. Validate enable-partition-separator must be false
+	if util.GetOrZero(sinkConfig.EnablePartitionSeparator) {
+		return "", fmt.Errorf("cluster %s: s3 changefeed %s enable-partition-separator is true, but only false is supported",
+			clusterID, s3ChangefeedID)
+	}
 
 	log.Info("Validated s3 changefeed sink config from etcd",
 		zap.String("clusterID", clusterID),
@@ -222,6 +245,8 @@ func validateS3ChangefeedSinkConfig(ctx context.Context, etcdClient *etcd.CDCEtc
 		zap.String("protocol", protocolStr),
 		zap.String("dateSeparator", dateSep.String()),
 		zap.Int("fileIndexWidth", fileIndexWidth),
+		zap.Bool("enablePartitionSeparator", util.GetOrZero(sinkConfig.EnablePartitionSeparator)),
+		zap.Bool("enableListByFileIndex", enableListByFileIndex),
 	)
 
 	return effectiveS3SinkURI, nil

@@ -100,8 +100,8 @@ func TestNewTimeWindowAdvancerInitializeFromCheckpointMissingClusterInfo(t *test
 		"cluster2": {},
 	}
 	s3Watchers := map[string]*watcher.S3Watcher{
-		"cluster1": watcher.NewS3Watcher(&mockAdvancerWatcher{delta: 1}, storage.NewMemStorage(), nil),
-		"cluster2": watcher.NewS3Watcher(&mockAdvancerWatcher{delta: 1}, storage.NewMemStorage(), nil),
+		"cluster1": watcher.NewS3Watcher(&mockAdvancerWatcher{delta: 1}, storage.NewMemStorage(), nil, false),
+		"cluster2": watcher.NewS3Watcher(&mockAdvancerWatcher{delta: 1}, storage.NewMemStorage(), nil, false),
 	}
 	pdClients := map[string]pd.Client{
 		"cluster1": &mockPDClient{},
@@ -159,8 +159,8 @@ func TestTimeWindowAdvancer_AdvanceMultipleRounds(t *testing.T) {
 	s3WatcherMockC1 := &mockAdvancerWatcher{delta: 50}
 	s3WatcherMockC2 := &mockAdvancerWatcher{delta: 50}
 	s3Watchers := map[string]*watcher.S3Watcher{
-		"c1": watcher.NewS3Watcher(s3WatcherMockC1, storage.NewMemStorage(), nil),
-		"c2": watcher.NewS3Watcher(s3WatcherMockC2, storage.NewMemStorage(), nil),
+		"c1": watcher.NewS3Watcher(s3WatcherMockC1, storage.NewMemStorage(), nil, false),
+		"c2": watcher.NewS3Watcher(s3WatcherMockC2, storage.NewMemStorage(), nil, false),
 	}
 
 	advancer, _, err := NewTimeWindowAdvancer(ctx, checkpointWatchers, s3Watchers, pdClients, nil)

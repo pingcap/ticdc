@@ -26,6 +26,7 @@ import (
 
 	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/recorder"
 	"github.com/pingcap/ticdc/cmd/multi-cluster-consistency-checker/types"
+	cdcconfig "github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
@@ -481,7 +482,7 @@ func TestDownloadDMLFilesGlobalConcurrencyLimit(t *testing.T) {
 		{name: "test/t1/1/2026-01-02/CDC00000000000000000003.json", content: []byte("f6")},
 	}
 	s3Storage := NewTrackingMockS3Storage(files, 40*time.Millisecond)
-	s3Consumer := NewS3Consumer(s3Storage, map[string][]string{"test": {"t1"}})
+	s3Consumer := NewS3Consumer(s3Storage, map[string][]string{"test": {"t1"}}, false)
 	s3Consumer.skipDownloadData = false
 	s3Consumer.readLimiter = make(chan struct{}, 2)
 
@@ -513,6 +514,154 @@ func TestDownloadDMLFilesGlobalConcurrencyLimit(t *testing.T) {
 
 	require.Greater(t, s3Storage.MaxConcurrent(), int64(1))
 	require.LessOrEqual(t, s3Storage.MaxConcurrent(), int64(2))
+}
+
+func TestIndexBasedGetNewFilesForSchemaPathKeyWithEndPath(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	files := []mockFile{
+		{
+			name:    "test/t1/1/meta/CDC.index",
+			content: []byte("CDC00000000000000000010.json\n"),
+		},
+	}
+	s3Storage := NewMockS3Storage(files)
+	s3Consumer := NewS3Consumer(s3Storage, map[string][]string{"test": {"t1"}}, true)
+	s3Consumer.dateSeparator = cdcconfig.DateSeparatorNone.String()
+
+	discoverer, ok := s3Consumer.newFileDiscoverer.(*indexBasedNewFileDiscoverer)
+	require.True(t, ok)
+
+	dmlKey := cloudstorage.DmlPathKey{
+		SchemaPathKey: cloudstorage.SchemaPathKey{Schema: "test", Table: "t1", TableVersion: 1},
+		PartitionNum:  0,
+		Date:          "",
+	}
+	startDataPath := dmlKey.GenerateDMLFilePath(
+		&cloudstorage.FileIndex{
+			FileIndexKey: cloudstorage.FileIndexKey{DispatcherID: "", EnableTableAcrossNodes: false},
+			Idx:          3,
+		},
+		s3Consumer.fileExtension,
+		s3Consumer.fileIndexWidth,
+	)
+	endDataPath := dmlKey.GenerateDMLFilePath(
+		&cloudstorage.FileIndex{
+			FileIndexKey: cloudstorage.FileIndexKey{DispatcherID: "", EnableTableAcrossNodes: false},
+			Idx:          7,
+		},
+		s3Consumer.fileExtension,
+		s3Consumer.fileIndexWidth,
+	)
+
+	newFiles, err := discoverer.getNewFilesForSchemaPathKeyWithEndPath(
+		ctx, "test", "t1", 1, startDataPath, endDataPath,
+	)
+	require.NoError(t, err)
+	require.Equal(t, map[cloudstorage.DmlPathKey]fileIndexRange{
+		dmlKey: {
+			cloudstorage.FileIndexKey{DispatcherID: "", EnableTableAcrossNodes: false}: {
+				start: 4,
+				end:   7,
+			},
+		},
+	}, newFiles)
+	require.Equal(t, uint64(7), discoverer.getLastDataSeq(dmlKey.SchemaPathKey))
+}
+
+func TestIndexBasedGetNewFilesForSchemaPathKeyWithEndPathEmptyRange(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	files := []mockFile{
+		{
+			name:    "test/t1/1/meta/CDC.index",
+			content: []byte("CDC00000000000000000003.json\n"),
+		},
+	}
+	s3Storage := NewMockS3Storage(files)
+	s3Consumer := NewS3Consumer(s3Storage, map[string][]string{"test": {"t1"}}, true)
+	s3Consumer.dateSeparator = cdcconfig.DateSeparatorNone.String()
+
+	discoverer, ok := s3Consumer.newFileDiscoverer.(*indexBasedNewFileDiscoverer)
+	require.True(t, ok)
+
+	dmlKey := cloudstorage.DmlPathKey{
+		SchemaPathKey: cloudstorage.SchemaPathKey{Schema: "test", Table: "t1", TableVersion: 1},
+	}
+	startDataPath := dmlKey.GenerateDMLFilePath(
+		&cloudstorage.FileIndex{
+			FileIndexKey: cloudstorage.FileIndexKey{DispatcherID: "", EnableTableAcrossNodes: false},
+			Idx:          5,
+		},
+		s3Consumer.fileExtension,
+		s3Consumer.fileIndexWidth,
+	)
+
+	newFiles, err := discoverer.getNewFilesForSchemaPathKeyWithEndPath(
+		ctx, "test", "t1", 1, startDataPath, "",
+	)
+	require.NoError(t, err)
+	require.Empty(t, newFiles)
+}
+
+func TestIndexBasedGetNewFilesForSchemaPathKey(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	files := []mockFile{
+		{
+			name:    "test/t1/1/meta/CDC.index",
+			content: []byte("CDC00000000000000000008.json\n"),
+		},
+	}
+	s3Storage := NewMockS3Storage(files)
+	s3Consumer := NewS3Consumer(s3Storage, map[string][]string{"test": {"t1"}}, true)
+	s3Consumer.dateSeparator = cdcconfig.DateSeparatorNone.String()
+
+	discoverer, ok := s3Consumer.newFileDiscoverer.(*indexBasedNewFileDiscoverer)
+	require.True(t, ok)
+
+	version := &types.VersionKey{Version: 1}
+	newFiles, err := discoverer.getNewFilesForSchemaPathKey(ctx, "test", "t1", version)
+	require.NoError(t, err)
+	require.Equal(t, map[cloudstorage.DmlPathKey]fileIndexRange{
+		{
+			SchemaPathKey: cloudstorage.SchemaPathKey{Schema: "test", Table: "t1", TableVersion: 1},
+			PartitionNum:  0,
+			Date:          "",
+		}: {
+			{DispatcherID: "", EnableTableAcrossNodes: false}: {start: 1, end: 8},
+		},
+	}, newFiles)
+	require.Equal(t, uint64(8), discoverer.getLastDataSeq(cloudstorage.SchemaPathKey{
+		Schema: "test", Table: "t1", TableVersion: 1,
+	}))
+}
+
+func TestIndexBasedGetNewFilesForSchemaPathKeyWithEndPathInvalidStartPath(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	files := []mockFile{
+		{
+			name:    "test/t1/1/meta/CDC.index",
+			content: []byte("CDC00000000000000000010.json\n"),
+		},
+	}
+	s3Storage := NewMockS3Storage(files)
+	s3Consumer := NewS3Consumer(s3Storage, map[string][]string{"test": {"t1"}}, true)
+	s3Consumer.dateSeparator = cdcconfig.DateSeparatorNone.String()
+
+	discoverer, ok := s3Consumer.newFileDiscoverer.(*indexBasedNewFileDiscoverer)
+	require.True(t, ok)
+
+	_, err := discoverer.getNewFilesForSchemaPathKeyWithEndPath(
+		ctx, "test", "t1", 1, "invalid/path", "",
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "failed to parse start dml file path")
 }
 
 func TestS3Consumer(t *testing.T) {
@@ -699,7 +848,7 @@ func TestS3Consumer(t *testing.T) {
 	t.Run("checkpoint with nil items returns nil", func(t *testing.T) {
 		t.Parallel()
 		s3Storage := NewMockS3Storage(round1Files)
-		s3Consumer := NewS3Consumer(s3Storage, map[string][]string{"test": {"t1"}})
+		s3Consumer := NewS3Consumer(s3Storage, map[string][]string{"test": {"t1"}}, false)
 		data, err := s3Consumer.InitializeFromCheckpoint(ctx, "test", nil)
 		require.NoError(t, err)
 		require.Empty(t, data)
@@ -722,7 +871,7 @@ func TestS3Consumer(t *testing.T) {
 		t.Parallel()
 		checkpoint := recorder.NewCheckpoint()
 		s3Storage := NewMockS3Storage(round1Files)
-		s3Consumer := NewS3Consumer(s3Storage, map[string][]string{"test": {"t1"}})
+		s3Consumer := NewS3Consumer(s3Storage, map[string][]string{"test": {"t1"}}, false)
 		data, err := s3Consumer.InitializeFromCheckpoint(ctx, "test", checkpoint)
 		require.NoError(t, err)
 		require.Empty(t, data)
@@ -748,7 +897,7 @@ func TestS3Consumer(t *testing.T) {
 			"clusterX": round1TimeWindowData,
 		})
 		s3Storage := NewMockS3Storage(round1Files)
-		s3Consumer := NewS3Consumer(s3Storage, map[string][]string{"test": {"t1"}})
+		s3Consumer := NewS3Consumer(s3Storage, map[string][]string{"test": {"t1"}}, false)
 		data, err := s3Consumer.InitializeFromCheckpoint(ctx, "clusterX", checkpoint)
 		require.NoError(t, err)
 		require.Empty(t, data)
@@ -773,7 +922,7 @@ func TestS3Consumer(t *testing.T) {
 			"clusterX": round2TimeWindowData,
 		})
 		s3Storage := NewMockS3Storage(round2Files)
-		s3Consumer := NewS3Consumer(s3Storage, map[string][]string{"test": {"t1"}})
+		s3Consumer := NewS3Consumer(s3Storage, map[string][]string{"test": {"t1"}}, false)
 		data, err := s3Consumer.InitializeFromCheckpoint(ctx, "clusterX", checkpoint)
 		require.NoError(t, err)
 		expectedNewData2(data)
@@ -796,7 +945,7 @@ func TestS3Consumer(t *testing.T) {
 			"clusterX": round3TimeWindowData,
 		})
 		s3Storage := NewMockS3Storage(round3Files)
-		s3Consumer := NewS3Consumer(s3Storage, map[string][]string{"test": {"t1"}})
+		s3Consumer := NewS3Consumer(s3Storage, map[string][]string{"test": {"t1"}}, false)
 		data, err := s3Consumer.InitializeFromCheckpoint(ctx, "clusterX", checkpoint)
 		require.NoError(t, err)
 		expectedCheckpoint23(data)
