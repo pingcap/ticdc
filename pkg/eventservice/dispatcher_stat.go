@@ -623,12 +623,12 @@ func (c *changefeedStatus) tryFinishSyncPointCommitIfAllEmitted() {
 	blockingFound := false
 	blockingReason := ""
 	var (
-		blockingDispatcherID      common.DispatcherID
-		blockingNextSyncPointTs   uint64
-		blockingCheckpointTs      uint64
-		blockingSentResolvedTs    uint64
-		blockingDispatcherSeq     uint64
-		blockingDispatcherEpoch   uint64
+		blockingDispatcherID    common.DispatcherID
+		blockingNextSyncPointTs uint64
+		blockingCheckpointTs    uint64
+		blockingSentResolvedTs  uint64
+		blockingDispatcherSeq   uint64
+		blockingDispatcherEpoch uint64
 	)
 	c.dispatchers.Range(func(_ any, value any) bool {
 		dispatcher := value.(*atomic.Pointer[dispatcherStat]).Load()

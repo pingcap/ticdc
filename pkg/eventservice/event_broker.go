@@ -95,6 +95,9 @@ type eventBroker struct {
 
 	scanRateLimiter  *rate.Limiter
 	scanLimitInBytes uint64
+	// enableTwoStageSyncPoint controls whether event broker uses global
+	// prepare/commit syncpoint coordination.
+	enableTwoStageSyncPoint bool
 }
 
 func newEventBroker(
@@ -143,6 +146,7 @@ func newEventBroker(
 		g:                       g,
 		scanRateLimiter:         rate.NewLimiter(rate.Limit(scanLimitInBytes), scanLimitInBytes),
 		scanLimitInBytes:        uint64(scanLimitInBytes),
+		enableTwoStageSyncPoint: eventServiceConfig.EnableTwoStageSyncPoint,
 	}
 
 	// Initialize metrics collector
@@ -187,13 +191,16 @@ func newEventBroker(
 		return c.refreshMinSentResolvedTs(ctx)
 	})
 
-	g.Go(func() error {
-		return c.logSyncPointStage(ctx, defaultLogSyncPointStageInterval)
-	})
+	if c.enableTwoStageSyncPoint {
+		g.Go(func() error {
+			return c.logSyncPointStage(ctx, defaultLogSyncPointStageInterval)
+		})
+	}
 
 	log.Info("new event broker created",
 		zap.Uint64("id", id),
-		zap.Uint64("scanLimitInBytes", c.scanLimitInBytes))
+		zap.Uint64("scanLimitInBytes", c.scanLimitInBytes),
+		zap.Bool("enableTwoStageSyncPoint", c.enableTwoStageSyncPoint))
 	return c
 }
 
@@ -456,11 +463,17 @@ func (c *eventBroker) refreshMinSentResolvedTs(ctx context.Context) error {
 }
 
 func (c *eventBroker) advanceSyncPointState(status *changefeedStatus) {
+	if !c.enableTwoStageSyncPoint {
+		return
+	}
 	status.tryPromoteSyncPointToCommitIfReady()
 	status.tryFinishSyncPointCommitIfAllEmitted()
 }
 
 func (c *eventBroker) nudgeSyncPointCommitDispatchers(status *changefeedStatus) {
+	if !c.enableTwoStageSyncPoint {
+		return
+	}
 	inFlightTs := status.syncPointInFlightTs.Load()
 	if inFlightTs == 0 {
 		return
@@ -480,7 +493,7 @@ func (c *eventBroker) nudgeSyncPointCommitDispatchers(status *changefeedStatus) 
 }
 
 func (c *eventBroker) shouldNudgeSyncPointCommit(d *dispatcherStat) bool {
-	if d == nil || d.isRemoved.Load() || !d.enableSyncPoint || d.seq.Load() == 0 {
+	if !c.enableTwoStageSyncPoint || d == nil || d.isRemoved.Load() || !d.enableSyncPoint || d.seq.Load() == 0 {
 		return false
 	}
 	c.fastForwardSyncPointIfNeeded(d)
@@ -792,6 +805,24 @@ func (c *eventBroker) capCommitTsEndBySyncPoint(task scanTask, commitTsEnd uint6
 		return commitTsEnd
 	}
 	originalCommitTsEnd := commitTsEnd
+	if !c.enableTwoStageSyncPoint {
+		nextSyncPoint := task.nextSyncPoint.Load()
+		if nextSyncPoint > 0 && commitTsEnd > nextSyncPoint {
+			commitTsEnd = nextSyncPoint
+			log.Debug("scan range commitTsEnd capped by syncpoint",
+				zap.Stringer("changefeedID", task.changefeedStat.changefeedID),
+				zap.Stringer("dispatcherID", task.id),
+				zap.Uint64("oldCommitTsEnd", originalCommitTsEnd),
+				zap.Uint64("newCommitTsEnd", commitTsEnd),
+				zap.Bool("cappedByNextSyncPoint", true),
+				zap.Bool("cappedByPreparingTs", false),
+				zap.Uint64("nextSyncPointTs", nextSyncPoint),
+				zap.Uint64("preparingTs", 0),
+				zap.Bool("inCommitStage", false),
+			)
+		}
+		return commitTsEnd
+	}
 	c.fastForwardSyncPointIfNeeded(task)
 
 	cappedByNextSyncPoint := false
@@ -915,10 +946,13 @@ func (c *eventBroker) sendHandshakeIfNeed(task scanTask) {
 
 // hasSyncPointEventBeforeTs checks if there is any sync point events before the given ts.
 func (c *eventBroker) hasSyncPointEventsBeforeTs(ts uint64, d *dispatcherStat) bool {
-	c.fastForwardSyncPointIfNeeded(d)
 	if !d.enableSyncPoint {
 		return false
 	}
+	if !c.enableTwoStageSyncPoint {
+		return ts > d.nextSyncPoint.Load()
+	}
+	c.fastForwardSyncPointIfNeeded(d)
 	nextSyncPoint := d.nextSyncPoint.Load()
 	if ts <= nextSyncPoint {
 		return false
@@ -931,6 +965,32 @@ func (c *eventBroker) hasSyncPointEventsBeforeTs(ts uint64, d *dispatcherStat) b
 // We need call this function every time we send a event(whether dml/ddl/resolvedTs),
 // thus to ensure the sync point event is in correct order for each dispatcher.
 func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, remoteID node.ID) {
+	if !d.enableSyncPoint {
+		return
+	}
+	if !c.enableTwoStageSyncPoint {
+		for {
+			commitTs := d.nextSyncPoint.Load()
+			if commitTs == 0 || ts < commitTs {
+				return
+			}
+			nextSyncPoint := oracle.GoTimeToTS(oracle.GetTimeFromTS(commitTs).Add(d.syncPointInterval))
+			// Advance nextSyncPoint with CAS so concurrent send paths cannot emit the same
+			// syncpoint twice or move nextSyncPoint backward.
+			if !d.nextSyncPoint.CompareAndSwap(commitTs, nextSyncPoint) {
+				continue
+			}
+
+			e := event.NewSyncPointEvent(d.id, commitTs, d.seq.Add(1), d.epoch)
+			log.Debug("send syncpoint event to dispatcher",
+				zap.Stringer("changefeedID", d.changefeedStat.changefeedID),
+				zap.Stringer("dispatcherID", d.id), zap.Int64("tableID", d.info.GetTableSpan().GetTableID()),
+				zap.Uint64("commitTs", e.GetCommitTs()), zap.Uint64("seq", e.GetSeq()))
+
+			syncPointEvent := newWrapSyncPointEvent(remoteID, e)
+			c.getMessageCh(d.messageWorkerIndex, common.IsRedoMode(d.info.GetMode())) <- syncPointEvent
+		}
+	}
 	c.fastForwardSyncPointIfNeeded(d)
 	for d.enableSyncPoint {
 		commitTs := d.nextSyncPoint.Load()
@@ -965,6 +1025,9 @@ func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, r
 }
 
 func (c *eventBroker) fastForwardSyncPointIfNeeded(d *dispatcherStat) {
+	if !c.enableTwoStageSyncPoint {
+		return
+	}
 	c.fastForwardSyncPointToInFlightIfNeeded(d)
 }
 

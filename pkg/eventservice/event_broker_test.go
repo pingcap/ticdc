@@ -423,6 +423,42 @@ func TestNudgeSyncPointCommitIfNeededFastForwardsStaleSyncPoint(t *testing.T) {
 	require.Equal(t, ts30, disp.nextSyncPoint.Load())
 }
 
+func TestEmitSyncPointEventIfNeededWithoutTwoStageDoesNotWaitCommitStage(t *testing.T) {
+	broker, _, _, _ := newEventBrokerForTest()
+	// Close the broker, so we can catch all messages in the test.
+	broker.close()
+
+	info := newMockDispatcherInfoForTest(t)
+	info.epoch = 1
+	info.enableSyncPoint = true
+	info.syncPointInterval = 10 * time.Second
+
+	ts5 := oracle.GoTimeToTS(time.Unix(0, 0).Add(5 * time.Second))
+	ts10 := oracle.GoTimeToTS(time.Unix(0, 0).Add(10 * time.Second))
+	ts20 := oracle.GoTimeToTS(time.Unix(0, 0).Add(20 * time.Second))
+
+	info.startTs = ts5
+	info.nextSyncPoint = ts10
+
+	changefeedStatus := broker.getOrSetChangefeedStatus(info.GetChangefeedID(), info.GetSyncPointInterval())
+	disp := newDispatcherStat(info, 1, 1, nil, changefeedStatus)
+	disp.setHandshaked()
+
+	// Turn off two-stage syncpoint and verify syncpoint can be emitted at boundary ts
+	// without entering commit stage.
+	broker.enableTwoStageSyncPoint = false
+	require.False(t, changefeedStatus.isSyncPointInCommitStage(ts10))
+
+	broker.emitSyncPointEventIfNeeded(ts10, disp, node.ID(info.GetServerID()))
+
+	first := <-broker.messageCh[disp.messageWorkerIndex]
+	require.Equal(t, event.TypeSyncPointEvent, first.msgType)
+	syncPointEvent, ok := first.e.(*event.SyncPointEvent)
+	require.True(t, ok)
+	require.Equal(t, ts10, syncPointEvent.GetCommitTs())
+	require.Equal(t, ts20, disp.nextSyncPoint.Load())
+}
+
 func TestNudgeSyncPointCommitDispatchersPushesTask(t *testing.T) {
 	broker, _, _, _ := newEventBrokerForTest()
 	// Close the broker, so we can inspect task queue.
