@@ -463,12 +463,12 @@ func (d *BasicDispatcher) ensureTableModeCompatibility(tableInfo *common.TableIn
 func (d *BasicDispatcher) isFirstEvent(event commonEvent.Event) bool {
 	if d.componentStatus.Get() == heartbeatpb.ComponentState_Initializing {
 		switch event.GetType() {
-		case commonEvent.TypeDMLEvent, commonEvent.TypeDDLEvent:
+		case commonEvent.TypeResolvedEvent, commonEvent.TypeDMLEvent, commonEvent.TypeDDLEvent:
 			if event.GetCommitTs() > d.startTs {
 				return true
 			}
 		// the first syncpoint event can be same as startTs
-		case commonEvent.TypeResolvedEvent, commonEvent.TypeSyncPointEvent:
+		case commonEvent.TypeSyncPointEvent:
 			if event.GetCommitTs() >= d.startTs {
 				return true
 			}
@@ -749,11 +749,11 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 // and return await=true.
 // The status path will be waked up after the action finishes.
 func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.DispatcherStatus) (await bool) {
-	// log.Debug("dispatcher handle dispatcher status",
-	// 	zap.String("dispatcherStatus", common.FormatDispatcherStatus(dispatcherStatus)),
-	// 	zap.Stringer("dispatcher", d.id),
-	// 	zap.Any("action", dispatcherStatus.GetAction()),
-	// 	zap.Any("ack", dispatcherStatus.GetAck()))
+	log.Debug("dispatcher handle dispatcher status",
+		zap.String("dispatcherStatus", common.FormatDispatcherStatus(dispatcherStatus)),
+		zap.Stringer("dispatcher", d.id),
+		zap.Any("action", dispatcherStatus.GetAction()),
+		zap.Any("ack", dispatcherStatus.GetAck()))
 
 	// Step1: deal with the ack info
 	ack := dispatcherStatus.GetAck()

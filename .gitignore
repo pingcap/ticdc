@@ -4,8 +4,8 @@ tools/bin
 tools/include
 tools/workload/bin
 
-.codex
 .design
+.codex
 .issue
 .vscode
 .idea

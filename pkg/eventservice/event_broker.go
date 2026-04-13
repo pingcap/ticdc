@@ -52,7 +52,9 @@ const (
 	// defaultSendResolvedTsInterval use to control whether to send a resolvedTs event to the dispatcher when its scan is skipped.
 	defaultSendResolvedTsInterval           = time.Second * 2
 	defaultRefreshMinSentResolvedTsInterval = time.Second * 1
-	defaultLogSyncPointStageInterval        = time.Minute
+	defaultSyncPointCheckpointCapMultiplier = 2
+	defaultSyncPointLagSuppressThreshold    = 20 * time.Minute
+	defaultSyncPointLagResumeThreshold      = 15 * time.Minute
 )
 
 // eventBroker get event from the eventStore, and send the event to the dispatchers.
@@ -93,8 +95,11 @@ type eventBroker struct {
 	// metricsCollector handles all metrics collection and reporting
 	metricsCollector *metricsCollector
 
-	scanRateLimiter  *rate.Limiter
-	scanLimitInBytes uint64
+	scanRateLimiter                  *rate.Limiter
+	scanLimitInBytes                 uint64
+	syncPointCheckpointCapMultiplier uint64
+	syncPointLagSuppressThreshold    time.Duration
+	syncPointLagResumeThreshold      time.Duration
 }
 
 func newEventBroker(
@@ -119,6 +124,21 @@ func newEventBroker(
 	sendMessageQueueSize := basicChannelSize * 4
 
 	scanLimitInBytes := eventServiceConfig.ScanLimitInBytes
+	syncPointCheckpointCapMultiplier := eventServiceConfig.SyncPointCheckpointCapMultiplier
+	if syncPointCheckpointCapMultiplier <= 0 {
+		syncPointCheckpointCapMultiplier = defaultSyncPointCheckpointCapMultiplier
+	}
+	syncPointLagSuppressThreshold := eventServiceConfig.SyncPointLagSuppressThreshold
+	if syncPointLagSuppressThreshold <= 0 {
+		syncPointLagSuppressThreshold = defaultSyncPointLagSuppressThreshold
+	}
+	syncPointLagResumeThreshold := eventServiceConfig.SyncPointLagResumeThreshold
+	if syncPointLagResumeThreshold <= 0 {
+		syncPointLagResumeThreshold = defaultSyncPointLagResumeThreshold
+	}
+	if syncPointLagResumeThreshold > syncPointLagSuppressThreshold {
+		syncPointLagResumeThreshold = syncPointLagSuppressThreshold
+	}
 
 	g, ctx := errgroup.WithContext(ctx)
 	ctx, cancel := context.WithCancel(ctx)
@@ -127,22 +147,25 @@ func newEventBroker(
 	// For now, since there is only one upstream, using the default pdClock is sufficient.
 	pdClock := appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock)
 	c := &eventBroker{
-		tidbClusterID:           id,
-		eventStore:              eventStore,
-		pdClock:                 pdClock,
-		mounter:                 event.NewMounter(tz, integrity),
-		schemaStore:             schemaStore,
-		changefeedMap:           sync.Map{},
-		dispatchers:             sync.Map{},
-		tableTriggerDispatchers: sync.Map{},
-		msgSender:               mc,
-		taskChan:                make([]chan scanTask, scanWorkerCount),
-		messageCh:               make([]chan *wrapEvent, sendMessageWorkerCount),
-		redoMessageCh:           make([]chan *wrapEvent, sendMessageWorkerCount),
-		cancel:                  cancel,
-		g:                       g,
-		scanRateLimiter:         rate.NewLimiter(rate.Limit(scanLimitInBytes), scanLimitInBytes),
-		scanLimitInBytes:        uint64(scanLimitInBytes),
+		tidbClusterID:                    id,
+		eventStore:                       eventStore,
+		pdClock:                          pdClock,
+		mounter:                          event.NewMounter(tz, integrity),
+		schemaStore:                      schemaStore,
+		changefeedMap:                    sync.Map{},
+		dispatchers:                      sync.Map{},
+		tableTriggerDispatchers:          sync.Map{},
+		msgSender:                        mc,
+		taskChan:                         make([]chan scanTask, scanWorkerCount),
+		messageCh:                        make([]chan *wrapEvent, sendMessageWorkerCount),
+		redoMessageCh:                    make([]chan *wrapEvent, sendMessageWorkerCount),
+		cancel:                           cancel,
+		g:                                g,
+		scanRateLimiter:                  rate.NewLimiter(rate.Limit(scanLimitInBytes), scanLimitInBytes),
+		scanLimitInBytes:                 uint64(scanLimitInBytes),
+		syncPointCheckpointCapMultiplier: uint64(syncPointCheckpointCapMultiplier),
+		syncPointLagSuppressThreshold:    syncPointLagSuppressThreshold,
+		syncPointLagResumeThreshold:      syncPointLagResumeThreshold,
 	}
 
 	// Initialize metrics collector
@@ -187,167 +210,13 @@ func newEventBroker(
 		return c.refreshMinSentResolvedTs(ctx)
 	})
 
-	g.Go(func() error {
-		return c.logSyncPointStage(ctx, defaultLogSyncPointStageInterval)
-	})
-
 	log.Info("new event broker created",
 		zap.Uint64("id", id),
-		zap.Uint64("scanLimitInBytes", c.scanLimitInBytes))
+		zap.Uint64("scanLimitInBytes", c.scanLimitInBytes),
+		zap.Uint64("syncPointCheckpointCapMultiplier", c.syncPointCheckpointCapMultiplier),
+		zap.Duration("syncPointLagSuppressThreshold", c.syncPointLagSuppressThreshold),
+		zap.Duration("syncPointLagResumeThreshold", c.syncPointLagResumeThreshold))
 	return c
-}
-
-func (c *eventBroker) logSyncPointStage(ctx context.Context, interval time.Duration) error {
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return context.Cause(ctx)
-		case <-ticker.C:
-			c.changefeedMap.Range(func(_, value interface{}) bool {
-				status := value.(*changefeedStatus)
-				if !status.isSyncpointEnabled() {
-					return true
-				}
-
-				preparingTs := status.getSyncPointPreparingTs()
-				inFlightTs := status.syncPointInFlightTs.Load()
-				commitReady := preparingTs > 0 && inFlightTs == preparingTs
-				stage := "idle"
-				switch {
-				case preparingTs == 0 && inFlightTs == 0:
-					stage = "idle"
-				case preparingTs > 0 && !commitReady:
-					stage = "prepare"
-				case preparingTs > 0 && commitReady:
-					stage = "commit"
-				default:
-					stage = "unknown"
-				}
-
-				var (
-					totalDispatcherCount   int
-					activeDispatcherCount  int
-					prepareReadyCount      int
-					prepareWaitingCount    int
-					commitDoneCount        int
-					commitWaitingCount     int
-					commitEmitPendingCount int
-					minSentResolvedTs      = ^uint64(0)
-					minCheckpointTs        = ^uint64(0)
-					minNextSyncPointTs     = ^uint64(0)
-					prepareBlockingFound   bool
-					commitBlockingFound    bool
-					prepareBlockingDispID  common.DispatcherID
-					prepareBlockingSentTs  uint64
-					commitBlockingDispID   common.DispatcherID
-					commitBlockingCkptTs   uint64
-					commitBlockingNextSPTs uint64
-				)
-
-				status.dispatchers.Range(func(_, dispatcherValue any) bool {
-					dispatcher := dispatcherValue.(*atomic.Pointer[dispatcherStat]).Load()
-					if dispatcher == nil || dispatcher.isRemoved.Load() {
-						return true
-					}
-
-					totalDispatcherCount++
-					if dispatcher.seq.Load() == 0 {
-						return true
-					}
-
-					activeDispatcherCount++
-					sentResolvedTs := dispatcher.sentResolvedTs.Load()
-					checkpointTs := dispatcher.checkpointTs.Load()
-					nextSyncPointTs := dispatcher.nextSyncPoint.Load()
-					if sentResolvedTs < minSentResolvedTs {
-						minSentResolvedTs = sentResolvedTs
-					}
-					if checkpointTs < minCheckpointTs {
-						minCheckpointTs = checkpointTs
-					}
-					if nextSyncPointTs > 0 && nextSyncPointTs < minNextSyncPointTs {
-						minNextSyncPointTs = nextSyncPointTs
-					}
-
-					if preparingTs > 0 {
-						if sentResolvedTs >= preparingTs {
-							prepareReadyCount++
-						} else {
-							prepareWaitingCount++
-							if !prepareBlockingFound {
-								prepareBlockingFound = true
-								prepareBlockingDispID = dispatcher.id
-								prepareBlockingSentTs = sentResolvedTs
-							}
-						}
-					}
-					if inFlightTs > 0 {
-						if nextSyncPointTs == inFlightTs && sentResolvedTs >= inFlightTs {
-							commitEmitPendingCount++
-						}
-						if nextSyncPointTs > inFlightTs {
-							commitDoneCount++
-						} else {
-							commitWaitingCount++
-							if !commitBlockingFound {
-								commitBlockingFound = true
-								commitBlockingDispID = dispatcher.id
-								commitBlockingCkptTs = checkpointTs
-								commitBlockingNextSPTs = nextSyncPointTs
-							}
-						}
-					}
-					return true
-				})
-
-				if minSentResolvedTs == ^uint64(0) {
-					minSentResolvedTs = 0
-				}
-				if minCheckpointTs == ^uint64(0) {
-					minCheckpointTs = 0
-				}
-				if minNextSyncPointTs == ^uint64(0) {
-					minNextSyncPointTs = 0
-				}
-
-				fields := []zap.Field{
-					zap.Stringer("changefeedID", status.changefeedID),
-					zap.String("stage", stage),
-					zap.Uint64("preparingTs", preparingTs),
-					zap.Bool("commitReady", commitReady),
-					zap.Uint64("inFlightTs", inFlightTs),
-					zap.Int("dispatchersTotal", totalDispatcherCount),
-					zap.Int("dispatchersActive", activeDispatcherCount),
-					zap.Int("prepareReadyCount", prepareReadyCount),
-					zap.Int("prepareWaitingCount", prepareWaitingCount),
-					zap.Int("commitDoneCount", commitDoneCount),
-					zap.Int("commitWaitingCount", commitWaitingCount),
-					zap.Int("commitEmitPendingCount", commitEmitPendingCount),
-					zap.Uint64("minSentResolvedTs", minSentResolvedTs),
-					zap.Uint64("minCheckpointTs", minCheckpointTs),
-					zap.Uint64("minNextSyncPointTs", minNextSyncPointTs),
-				}
-				if prepareBlockingFound {
-					fields = append(fields,
-						zap.Stringer("prepareBlockingDispatcher", prepareBlockingDispID),
-						zap.Uint64("prepareBlockingSentResolvedTs", prepareBlockingSentTs),
-					)
-				}
-				if commitBlockingFound {
-					fields = append(fields,
-						zap.Stringer("commitBlockingDispatcher", commitBlockingDispID),
-						zap.Uint64("commitBlockingCheckpointTs", commitBlockingCkptTs),
-						zap.Uint64("commitBlockingNextSyncPointTs", commitBlockingNextSPTs),
-					)
-				}
-				log.Debug("syncpoint stage snapshot", fields...)
-				return true
-			})
-		}
-	}
 }
 
 func (c *eventBroker) sendDML(remoteID node.ID, batchEvent *event.BatchDMLEvent, d *dispatcherStat) {
@@ -374,7 +243,7 @@ func (c *eventBroker) sendDML(remoteID node.ID, batchEvent *event.BatchDMLEvent,
 			doSendDML(events)
 			// Reset the index to 1 to process the next event after `dml` in next loop
 			idx = 1
-			// Emit sync point event if needed.
+			// Emit sync point event if needed
 			c.emitSyncPointEventIfNeeded(dml.GetCommitTs(), d, remoteID)
 		} else {
 			idx++
@@ -398,42 +267,26 @@ func (c *eventBroker) sendDML(remoteID node.ID, batchEvent *event.BatchDMLEvent,
 }
 
 func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *event.DDLEvent, d *dispatcherStat) {
-	sendDDLEvent := func() bool {
-		e.DispatcherID = d.id
-		e.Seq = d.seq.Add(1)
-		e.Epoch = d.epoch
-		ddlEvent := newWrapDDLEvent(remoteID, e)
-		select {
-		case <-ctx.Done():
-			log.Error("send ddl event failed", zap.Error(ctx.Err()))
-			return false
-		case c.getMessageCh(d.messageWorkerIndex, common.IsRedoMode(d.info.GetMode())) <- ddlEvent:
-			updateMetricEventServiceSendDDLCount(d.info.GetMode())
-		}
-
-		log.Info("send ddl event to dispatcher",
-			zap.Stringer("changefeedID", d.changefeedStat.changefeedID),
-			zap.Stringer("dispatcherID", d.id),
-			zap.Int64("tableID", d.info.GetTableSpan().TableID),
-			zap.Int64("ddlEventTableID", e.GetTableID()),
-			zap.String("query", e.Query), zap.Uint64("commitTs", e.FinishedTs),
-			zap.Uint64("seq", e.Seq), zap.Int64("mode", d.info.GetMode()))
-		return true
-	}
-
-	// Keep same-ts barrier order as (commitTs, isSyncPoint): DDL before syncpoint.
-	// This matches maintainer/dispatcher assumptions when DDL and syncpoint share commitTs.
-	c.fastForwardSyncPointIfNeeded(d)
-	if d.enableSyncPoint && d.nextSyncPoint.Load() == e.FinishedTs {
-		if !sendDDLEvent() {
-			return
-		}
-		c.emitSyncPointEventIfNeeded(e.FinishedTs, d, remoteID)
-		return
-	}
-
 	c.emitSyncPointEventIfNeeded(e.FinishedTs, d, remoteID)
-	_ = sendDDLEvent()
+	e.DispatcherID = d.id
+	e.Seq = d.seq.Add(1)
+	e.Epoch = d.epoch
+	ddlEvent := newWrapDDLEvent(remoteID, e)
+	select {
+	case <-ctx.Done():
+		log.Error("send ddl event failed", zap.Error(ctx.Err()))
+		return
+	case c.getMessageCh(d.messageWorkerIndex, common.IsRedoMode(d.info.GetMode())) <- ddlEvent:
+		updateMetricEventServiceSendDDLCount(d.info.GetMode())
+	}
+
+	log.Info("send ddl event to dispatcher",
+		zap.Stringer("changefeedID", d.changefeedStat.changefeedID),
+		zap.Stringer("dispatcherID", d.id),
+		zap.Int64("DDLSpanTableID", d.info.GetTableSpan().TableID),
+		zap.Int64("EventTableID", e.GetTableID()),
+		zap.String("query", e.Query), zap.Uint64("commitTs", e.FinishedTs),
+		zap.Uint64("seq", e.Seq), zap.Int64("mode", d.info.GetMode()))
 }
 
 func (c *eventBroker) refreshMinSentResolvedTs(ctx context.Context) error {
@@ -447,60 +300,10 @@ func (c *eventBroker) refreshMinSentResolvedTs(ctx context.Context) error {
 			c.changefeedMap.Range(func(key, value interface{}) bool {
 				status := value.(*changefeedStatus)
 				status.refreshMinSentResolvedTs()
-				c.advanceSyncPointState(status)
-				c.nudgeSyncPointCommitDispatchers(status)
 				return true
 			})
 		}
 	}
-}
-
-func (c *eventBroker) advanceSyncPointState(status *changefeedStatus) {
-	status.tryPromoteSyncPointToCommitIfReady()
-	status.tryFinishSyncPointCommitIfAllEmitted()
-}
-
-func (c *eventBroker) nudgeSyncPointCommitDispatchers(status *changefeedStatus) {
-	inFlightTs := status.syncPointInFlightTs.Load()
-	if inFlightTs == 0 {
-		return
-	}
-
-	c.dispatchers.Range(func(_, value interface{}) bool {
-		dispatcher := value.(*atomic.Pointer[dispatcherStat]).Load()
-		if dispatcher == nil || dispatcher.changefeedStat != status {
-			return true
-		}
-		if !c.shouldNudgeSyncPointCommit(dispatcher) {
-			return true
-		}
-		c.pushTask(dispatcher, false)
-		return true
-	})
-}
-
-func (c *eventBroker) shouldNudgeSyncPointCommit(d *dispatcherStat) bool {
-	if d == nil || d.isRemoved.Load() || !d.enableSyncPoint || d.seq.Load() == 0 {
-		return false
-	}
-	c.fastForwardSyncPointIfNeeded(d)
-
-	commitTs := d.nextSyncPoint.Load()
-	if commitTs == 0 || d.sentResolvedTs.Load() < commitTs {
-		return false
-	}
-
-	return d.changefeedStat.isSyncPointInCommitStage(commitTs)
-}
-
-func (c *eventBroker) nudgeSyncPointCommitIfNeeded(d *dispatcherStat) bool {
-	if !c.shouldNudgeSyncPointCommit(d) {
-		return false
-	}
-	// Resend resolved-ts at current watermark to trigger syncpoint emission in commit stage,
-	// even when there is no fresh upstream event to drive a new scan.
-	c.sendResolvedTs(d, d.sentResolvedTs.Load())
-	return true
 }
 
 func (c *eventBroker) sendSignalResolvedTs(d *dispatcherStat) {
@@ -566,51 +369,40 @@ func (c *eventBroker) tickTableTriggerDispatchers(ctx context.Context) error {
 		case <-ticker.C:
 			c.tableTriggerDispatchers.Range(func(key, value interface{}) bool {
 				stat := value.(*atomic.Pointer[dispatcherStat]).Load()
-				c.processTableTriggerDispatcher(ctx, key.(common.DispatcherID), stat)
+				if !c.checkAndSendReady(stat) {
+					return true
+				}
+				c.sendHandshakeIfNeed(stat)
+				startTs := stat.sentResolvedTs.Load()
+				remoteID := node.ID(stat.info.GetServerID())
+				keyspaceMeta := common.KeyspaceMeta{
+					ID:   stat.info.GetTableSpan().KeyspaceID,
+					Name: stat.info.GetChangefeedID().Keyspace(),
+				}
+				ddlEvents, endTs, err := c.schemaStore.FetchTableTriggerDDLEvents(keyspaceMeta, key.(common.DispatcherID), stat.filter, startTs, 100)
+				if err != nil {
+					log.Error("table trigger ddl events fetch failed", zap.Uint32("keyspaceID", stat.info.GetTableSpan().KeyspaceID), zap.Stringer("dispatcherID", stat.id), zap.Error(err))
+					return true
+				}
+				stat.receivedResolvedTs.Store(endTs)
+				boundedEndTs := c.capCommitTsEndByCheckpoint(stat, endTs)
+				for _, e := range ddlEvents {
+					if e.FinishedTs > boundedEndTs {
+						break
+					}
+					ep := &e
+					c.sendDDL(ctx, remoteID, ep, stat)
+				}
+				if boundedEndTs > startTs {
+					// After all the events are sent, we send the watermark to the dispatcher.
+					c.sendResolvedTs(stat, boundedEndTs)
+				} else {
+					// If there is no new ddl event, we still need to send a signal resolved-ts event to keep downstream responsive,
+					// but do not advance the watermark here.
+					c.sendSignalResolvedTs(stat)
+				}
 				return true
 			})
-		}
-	}
-}
-
-func (c *eventBroker) processTableTriggerDispatcher(ctx context.Context, dispatcherID common.DispatcherID, stat *dispatcherStat) {
-	if !c.checkAndSendReady(stat) {
-		return
-	}
-	c.sendHandshakeIfNeed(stat)
-
-	startTs := stat.sentResolvedTs.Load()
-	remoteID := node.ID(stat.info.GetServerID())
-	keyspaceMeta := common.KeyspaceMeta{
-		ID:   stat.info.GetTableSpan().KeyspaceID,
-		Name: stat.info.GetChangefeedID().Keyspace(),
-	}
-
-	ddlEvents, endTs, err := c.schemaStore.FetchTableTriggerDDLEvents(keyspaceMeta, dispatcherID, stat.filter, startTs, 100)
-	if err != nil {
-		log.Error("table trigger ddl events fetch failed", zap.Uint32("keyspaceID", stat.info.GetTableSpan().KeyspaceID),
-			zap.Stringer("dispatcherID", stat.id), zap.Uint64("startTs", startTs), zap.Error(err))
-		return
-	}
-	// Keep the raw resolved-ts from schema store for scan readiness/lag visibility.
-	stat.receivedResolvedTs.Store(endTs)
-
-	boundedEndTs := c.capCommitTsEndBySyncPoint(stat, endTs)
-
-	for _, e := range ddlEvents {
-		if e.FinishedTs > boundedEndTs {
-			break
-		}
-		ep := &e
-		c.sendDDL(ctx, remoteID, ep, stat)
-	}
-
-	if boundedEndTs > startTs {
-		// After all the events are sent, we send the watermark to the dispatcher.
-		c.sendResolvedTs(stat, boundedEndTs)
-	} else {
-		if !c.nudgeSyncPointCommitIfNeeded(stat) {
-			c.sendSignalResolvedTs(stat)
 		}
 	}
 }
@@ -648,6 +440,33 @@ func (c *eventBroker) logUninitializedDispatchers(ctx context.Context) error {
 	}
 }
 
+func (c *eventBroker) capCommitTsEndByCheckpoint(task scanTask, commitTsEnd uint64) uint64 {
+	if !task.enableSyncPoint || task.syncPointInterval <= 0 || c.syncPointCheckpointCapMultiplier == 0 {
+		return commitTsEnd
+	}
+	checkpointTs := task.checkpointTs.Load()
+	if checkpointTs == 0 {
+		return commitTsEnd
+	}
+
+	capDuration := time.Duration(c.syncPointCheckpointCapMultiplier) * task.syncPointInterval
+	checkpointCapTs := oracle.GoTimeToTS(oracle.GetTimeFromTS(checkpointTs).Add(capDuration))
+	if checkpointCapTs >= commitTsEnd {
+		return commitTsEnd
+	}
+
+	log.Debug("scan range commitTsEnd capped by checkpoint bound",
+		zap.Stringer("changefeedID", task.changefeedStat.changefeedID),
+		zap.Stringer("dispatcherID", task.id),
+		zap.Uint64("oldCommitTsEnd", commitTsEnd),
+		zap.Uint64("newCommitTsEnd", checkpointCapTs),
+		zap.Uint64("checkpointTs", checkpointTs),
+		zap.Duration("syncPointInterval", task.syncPointInterval),
+		zap.Uint64("multiplier", c.syncPointCheckpointCapMultiplier))
+	metrics.EventServiceScanCappedByCheckpointCount.WithLabelValues(task.changefeedStat.changefeedID.String()).Inc()
+	return checkpointCapTs
+}
+
 // getScanTaskDataRange determines the valid data range for scanning a given task.
 // It checks various conditions (dispatcher status, DDL state, max commit ts of dml event)
 // to decide whether scanning is needed and returns the appropriate time range.
@@ -656,7 +475,6 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 	// 1. Get the data range of the dispatcher.
 	dataRange, needScan := task.getDataRange()
 	if !needScan {
-		c.nudgeSyncPointCommitIfNeeded(task)
 		updateMetricEventServiceSkipResolvedTsCount(task.info.GetMode())
 		return false, common.DataRange{}
 	}
@@ -693,7 +511,7 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 			)
 		}
 	}
-	dataRange.CommitTsEnd = c.capCommitTsEndBySyncPoint(task, dataRange.CommitTsEnd)
+	dataRange.CommitTsEnd = c.capCommitTsEndByCheckpoint(task, dataRange.CommitTsEnd)
 
 	if dataRange.CommitTsEnd <= dataRange.CommitTsStart && hasPendingDDLEventInCurrentRange {
 		// Global scan window base can be pinned by other lagging dispatchers.
@@ -705,9 +523,7 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 		}
 		localScanMaxTs := oracle.GoTimeToTS(oracle.GetTimeFromTS(dataRange.CommitTsStart).Add(interval))
 		dataRange.CommitTsEnd = min(commitTsEndBeforeWindow, localScanMaxTs)
-		// Local pending-DDL advance is allowed to bypass scan window, but must still obey
-		// syncpoint prepare/commit boundary.
-		dataRange.CommitTsEnd = c.capCommitTsEndBySyncPoint(task, dataRange.CommitTsEnd)
+		dataRange.CommitTsEnd = c.capCommitTsEndByCheckpoint(task, dataRange.CommitTsEnd)
 		if dataRange.CommitTsEnd > dataRange.CommitTsStart {
 			log.Info("scan window local advance due to pending ddl",
 				zap.Stringer("changefeedID", task.changefeedStat.changefeedID),
@@ -722,9 +538,6 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 
 	if dataRange.CommitTsEnd <= dataRange.CommitTsStart {
 		updateMetricEventServiceSkipResolvedTsCount(task.info.GetMode())
-		if c.nudgeSyncPointCommitIfNeeded(task) {
-			return false, common.DataRange{}
-		}
 		// Scan range can become empty after applying capping (for example, scan window).
 		// Send a signal resolved-ts event (rate limited) to keep downstream responsive,
 		// but do not advance the watermark here.
@@ -747,26 +560,6 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 		return false, common.DataRange{}
 	}
 	return true, dataRange
-}
-
-// capCommitTsEndBySyncPoint enforces two-stage syncpoint boundary on scan range:
-// 1. Always cap by next syncpoint boundary.
-// 2. In prepare stage, cap by global preparing ts until commit stage is ready.
-func (c *eventBroker) capCommitTsEndBySyncPoint(task scanTask, commitTsEnd uint64) uint64 {
-	if !task.enableSyncPoint {
-		return commitTsEnd
-	}
-	c.fastForwardSyncPointIfNeeded(task)
-	nextSyncPoint := task.nextSyncPoint.Load()
-	if nextSyncPoint > 0 && commitTsEnd > nextSyncPoint {
-		task.changefeedStat.tryEnterSyncPointPrepare(nextSyncPoint)
-		commitTsEnd = nextSyncPoint
-	}
-	preparingTs := task.changefeedStat.getSyncPointPreparingTs()
-	if preparingTs > 0 && !task.changefeedStat.isSyncPointInCommitStage(preparingTs) {
-		commitTsEnd = min(commitTsEnd, preparingTs)
-	}
-	return commitTsEnd
 }
 
 // scanReady checks if the dispatcher needs to scan the event store/schema store.
@@ -854,95 +647,78 @@ func (c *eventBroker) sendHandshakeIfNeed(task scanTask) {
 
 // hasSyncPointEventBeforeTs checks if there is any sync point events before the given ts.
 func (c *eventBroker) hasSyncPointEventsBeforeTs(ts uint64, d *dispatcherStat) bool {
-	c.fastForwardSyncPointIfNeeded(d)
-	if !d.enableSyncPoint {
+	return d.enableSyncPoint && ts > d.nextSyncPoint.Load()
+}
+
+func syncPointLagDuration(sentResolvedTs, checkpointTs uint64) time.Duration {
+	if sentResolvedTs <= checkpointTs {
+		return 0
+	}
+	return oracle.GetTimeFromTS(sentResolvedTs).Sub(oracle.GetTimeFromTS(checkpointTs))
+}
+
+func (c *eventBroker) shouldSuppressSyncPointEmission(d *dispatcherStat) bool {
+	if d == nil || c.syncPointLagSuppressThreshold <= 0 {
 		return false
 	}
-	nextSyncPoint := d.nextSyncPoint.Load()
-	if ts <= nextSyncPoint {
-		return false
+
+	sentResolvedTs := d.sentResolvedTs.Load()
+	checkpointTs := d.checkpointTs.Load()
+	lag := syncPointLagDuration(sentResolvedTs, checkpointTs)
+	metrics.EventServiceSyncPointLagGaugeVec.WithLabelValues(d.changefeedStat.changefeedID.String()).Set(lag.Seconds())
+
+	if d.syncPointSendSuppressed.Load() {
+		if lag <= c.syncPointLagResumeThreshold {
+			if d.syncPointSendSuppressed.CompareAndSwap(true, false) {
+				log.Info("syncpoint emission resumed",
+					zap.Stringer("changefeedID", d.changefeedStat.changefeedID),
+					zap.Stringer("dispatcherID", d.id),
+					zap.Uint64("sentResolvedTs", sentResolvedTs),
+					zap.Uint64("checkpointTs", checkpointTs),
+					zap.Duration("lag", lag),
+					zap.Duration("resumeThreshold", c.syncPointLagResumeThreshold))
+			}
+			return false
+		}
+		return true
 	}
-	d.changefeedStat.tryEnterSyncPointPrepare(nextSyncPoint)
-	return d.changefeedStat.isSyncPointInCommitStage(nextSyncPoint)
+
+	if lag > c.syncPointLagSuppressThreshold {
+		if d.syncPointSendSuppressed.CompareAndSwap(false, true) {
+			log.Info("syncpoint emission suppressed due to lag",
+				zap.Stringer("changefeedID", d.changefeedStat.changefeedID),
+				zap.Stringer("dispatcherID", d.id),
+				zap.Uint64("sentResolvedTs", sentResolvedTs),
+				zap.Uint64("checkpointTs", checkpointTs),
+				zap.Duration("lag", lag),
+				zap.Duration("suppressThreshold", c.syncPointLagSuppressThreshold),
+				zap.Duration("resumeThreshold", c.syncPointLagResumeThreshold))
+		}
+		return true
+	}
+	return false
 }
 
 // emitSyncPointEventIfNeeded emits a sync point event if the current ts is greater than the next sync point, and updates the next sync point.
 // We need call this function every time we send a event(whether dml/ddl/resolvedTs),
 // thus to ensure the sync point event is in correct order for each dispatcher.
 func (c *eventBroker) emitSyncPointEventIfNeeded(ts uint64, d *dispatcherStat, remoteID node.ID) {
-	c.fastForwardSyncPointIfNeeded(d)
-	for d.enableSyncPoint {
+	for d.enableSyncPoint && ts > d.nextSyncPoint.Load() {
 		commitTs := d.nextSyncPoint.Load()
-		if !d.changefeedStat.isSyncPointInCommitStage(commitTs) {
-			if ts <= commitTs {
-				return
-			}
-			d.changefeedStat.tryEnterSyncPointPrepare(commitTs)
-			if !d.changefeedStat.isSyncPointInCommitStage(commitTs) {
-				return
-			}
-		} else if ts < commitTs {
-			return
-		}
-
-		nextSyncPoint := oracle.GoTimeToTS(oracle.GetTimeFromTS(commitTs).Add(d.syncPointInterval))
-		// Advance nextSyncPoint with CAS so concurrent send paths cannot emit the same
-		// syncpoint twice or move nextSyncPoint backward.
-		if !d.nextSyncPoint.CompareAndSwap(commitTs, nextSyncPoint) {
+		d.nextSyncPoint.Store(oracle.GoTimeToTS(oracle.GetTimeFromTS(commitTs).Add(d.syncPointInterval)))
+		if c.shouldSuppressSyncPointEmission(d) {
+			metrics.EventServiceSyncPointSuppressedCount.WithLabelValues(d.changefeedStat.changefeedID.String()).Inc()
 			continue
 		}
 
 		e := event.NewSyncPointEvent(d.id, commitTs, d.seq.Add(1), d.epoch)
+		syncPointEvent := newWrapSyncPointEvent(remoteID, e)
+		c.getMessageCh(d.messageWorkerIndex, common.IsRedoMode(d.info.GetMode())) <- syncPointEvent
 		log.Debug("send syncpoint event to dispatcher",
 			zap.Stringer("changefeedID", d.changefeedStat.changefeedID),
 			zap.Stringer("dispatcherID", d.id), zap.Int64("tableID", d.info.GetTableSpan().GetTableID()),
 			zap.Uint64("commitTs", e.GetCommitTs()), zap.Uint64("seq", e.GetSeq()))
-
-		syncPointEvent := newWrapSyncPointEvent(remoteID, e)
-		c.getMessageCh(d.messageWorkerIndex, common.IsRedoMode(d.info.GetMode())) <- syncPointEvent
 	}
-}
-
-func (c *eventBroker) fastForwardSyncPointIfNeeded(d *dispatcherStat) {
-	c.fastForwardSyncPointToInFlightIfNeeded(d)
-}
-
-type uint64Value interface {
-	Load() uint64
-	CompareAndSwap(old, new uint64) bool
-}
-
-// setUint64Floor makes v >= floor by CAS retry, and never decreases v.
-func setUint64Floor(v uint64Value, floor uint64) (uint64, bool) {
-	for {
-		current := v.Load()
-		if current == 0 || current >= floor {
-			return current, false
-		}
-		if v.CompareAndSwap(current, floor) {
-			return current, true
-		}
-	}
-}
-
-func (c *eventBroker) fastForwardSyncPointToInFlightIfNeeded(d *dispatcherStat) {
-	if d == nil || !d.enableSyncPoint {
-		return
-	}
-	inFlightTs := d.changefeedStat.syncPointInFlightTs.Load()
-	if inFlightTs == 0 {
-		return
-	}
-	oldSyncPointTs, updated := setUint64Floor(&d.nextSyncPoint, inFlightTs)
-	if !updated {
-		return
-	}
-	log.Debug("fast forward stale syncpoint to in flight syncpoint",
-		zap.Stringer("changefeedID", d.changefeedStat.changefeedID),
-		zap.Stringer("dispatcherID", d.id),
-		zap.Int64("tableID", d.info.GetTableSpan().GetTableID()),
-		zap.Uint64("oldSyncPointTs", oldSyncPointTs),
-		zap.Uint64("inFlightSyncPointTs", inFlightTs))
 }
 
 func (c *eventBroker) calculateScanLimit(task scanTask) scanLimit {
@@ -1473,7 +1249,6 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 		Name: changefeedID.Keyspace(),
 	}
 	c.schemaStore.UnregisterTable(keyspaceMeta, span.TableID)
-	c.advanceSyncPointState(stat.changefeedStat)
 
 	log.Info("remove dispatcher",
 		zap.Uint64("clusterID", c.tidbClusterID), zap.Stringer("changefeedID", changefeedID),
@@ -1628,9 +1403,6 @@ func (c *eventBroker) handleDispatcherHeartbeat(heartbeat *DispatcherHeartBeatWi
 		}
 	}
 	c.sendDispatcherResponse(responseMap)
-	for changefeed := range changedChangefeeds {
-		c.advanceSyncPointState(changefeed)
-	}
 }
 
 func (c *eventBroker) handleCongestionControl(from node.ID, m *event.CongestionControl) {
