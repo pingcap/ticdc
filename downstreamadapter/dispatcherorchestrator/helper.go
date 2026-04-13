@@ -38,12 +38,12 @@ type pendingMessageState struct {
 // floods of retry messages from blocking or starving other requests.
 //
 // The queue keeps at most one queued request and one in-flight request for each key.
-// Subsequent messages with the same key are dropped unless they strengthen the queued
-// or in-flight close semantics from removed=false to removed=true.
+// Subsequent messages only compete with the queued slot. Once a request is already
+// in-flight, one next-round retry may wait in queued.
 //
 // For MaintainerCloseRequest, we treat removed=true as stronger semantics than removed=false.
-// If an in-flight removed=false request exists, a later removed=true request is queued for
-// the next round instead of overwriting the request the worker is already executing.
+// While a request is still queued, a later removed=true request replaces removed=false in
+// that queued slot so the next execution still observes the stronger semantics.
 type pendingMessageQueue struct {
 	mu      sync.Mutex
 	pending map[pendingMessageKey]*pendingMessageState
@@ -78,14 +78,10 @@ func (q *pendingMessageQueue) TryEnqueue(key pendingMessageKey, msg *messaging.T
 	}
 
 	if state.inFlight != nil {
-		if shouldReplacePendingMessage(key, state.inFlight, msg) {
-			state.queued = msg
-			q.mu.Unlock()
-			q.queue.Push(key)
-			return true
-		}
+		state.queued = msg
 		q.mu.Unlock()
-		return false
+		q.queue.Push(key)
+		return true
 	}
 
 	state.queued = msg

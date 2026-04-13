@@ -24,7 +24,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestPendingMessageQueue_TryEnqueueDropsDuplicatesUntilDone(t *testing.T) {
+func TestPendingMessageQueue_TryEnqueueDropsDuplicatesOnlyWhileQueued(t *testing.T) {
 	t.Parallel()
 
 	q := newPendingMessageQueue()
@@ -42,10 +42,17 @@ func TestPendingMessageQueue_TryEnqueueDropsDuplicatesUntilDone(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, key, poppedKey)
 
-	// The key remains pending while being processed.
+	// Once the request is already in-flight, allow one queued retry for the next round.
+	require.True(t, q.TryEnqueue(key, msg))
 	require.False(t, q.TryEnqueue(key, msg))
 
 	q.Done(key)
+
+	nextKey, ok := q.Pop()
+	require.True(t, ok)
+	require.Equal(t, key, nextKey)
+	q.Done(nextKey)
+
 	require.True(t, q.TryEnqueue(key, msg))
 }
 
