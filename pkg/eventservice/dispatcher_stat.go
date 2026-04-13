@@ -641,6 +641,7 @@ func (c *changefeedStatus) tryFinishSyncPointCommitIfAllEmitted() {
 		hasEligible = true
 		nextSyncPointTs := dispatcher.nextSyncPoint.Load()
 		checkpointTs := dispatcher.checkpointTs.Load()
+		sentResolvedTs := dispatcher.sentResolvedTs.Load()
 		if nextSyncPointTs <= inFlightTs {
 			canAdvance = false
 			if !blockingFound {
@@ -655,7 +656,7 @@ func (c *changefeedStatus) tryFinishSyncPointCommitIfAllEmitted() {
 			}
 			return false
 		}
-		if checkpointTs <= inFlightTs {
+		if sentResolvedTs <= inFlightTs {
 			canAdvance = false
 			if !blockingFound {
 				blockingFound = true
