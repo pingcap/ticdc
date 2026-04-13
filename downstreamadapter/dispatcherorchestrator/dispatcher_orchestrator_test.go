@@ -128,7 +128,7 @@ func TestPendingMessageQueue_CloseRequestRemovedTrueOverridesPendingFalse(t *tes
 	q.Done(key)
 }
 
-func TestPendingMessageQueue_CloseRequestUpgradeBetweenPopAndGet(t *testing.T) {
+func TestPendingMessageQueue_CloseRequestUpgradeBetweenPopAndGetKeepsInFlightStable(t *testing.T) {
 	t.Parallel()
 
 	q := newPendingMessageQueue()
@@ -158,8 +158,68 @@ func TestPendingMessageQueue_CloseRequestUpgradeBetweenPopAndGet(t *testing.T) {
 	poppedMsg := q.Get(poppedKey)
 	require.NotNil(t, poppedMsg)
 	req2 := poppedMsg.Message[0].(*heartbeatpb.MaintainerCloseRequest)
-	require.True(t, req2.Removed)
+	require.False(t, req2.Removed)
 	q.Done(key)
+}
+
+func TestPendingMessageQueue_CloseRequestUpgradeAfterGetRequeuesNextRound(t *testing.T) {
+	t.Parallel()
+
+	q := newPendingMessageQueue()
+	cfID := common.NewChangeFeedIDWithName("cf", "default")
+	key := pendingMessageKey{
+		changefeedID: cfID,
+		msgType:      messaging.TypeMaintainerCloseRequest,
+	}
+
+	msgFalse := messaging.NewSingleTargetMessage(
+		node.ID("to"),
+		messaging.DispatcherManagerManagerTopic,
+		&heartbeatpb.MaintainerCloseRequest{ChangefeedID: cfID.ToPB(), Removed: false},
+	)
+	msgTrue := messaging.NewSingleTargetMessage(
+		node.ID("to"),
+		messaging.DispatcherManagerManagerTopic,
+		&heartbeatpb.MaintainerCloseRequest{ChangefeedID: cfID.ToPB(), Removed: true},
+	)
+
+	require.True(t, q.TryEnqueue(key, msgFalse))
+
+	poppedKey, ok := q.Pop()
+	require.True(t, ok)
+	require.Equal(t, key, poppedKey)
+
+	poppedMsg := q.Get(poppedKey)
+	require.NotNil(t, poppedMsg)
+	req := poppedMsg.Message[0].(*heartbeatpb.MaintainerCloseRequest)
+	require.False(t, req.Removed)
+
+	require.True(t, q.TryEnqueue(key, msgTrue))
+	q.Done(poppedKey)
+
+	type popResult struct {
+		key pendingMessageKey
+		ok  bool
+	}
+	resultCh := make(chan popResult, 1)
+	go func() {
+		nextKey, nextOK := q.Pop()
+		resultCh <- popResult{key: nextKey, ok: nextOK}
+	}()
+
+	select {
+	case result := <-resultCh:
+		require.True(t, result.ok)
+		require.Equal(t, key, result.key)
+		nextMsg := q.Get(result.key)
+		require.NotNil(t, nextMsg)
+		nextReq := nextMsg.Message[0].(*heartbeatpb.MaintainerCloseRequest)
+		require.True(t, nextReq.Removed)
+		q.Done(result.key)
+	case <-time.After(time.Second):
+		q.Close()
+		require.FailNow(t, "upgraded close request was not requeued after in-flight request completed")
+	}
 }
 
 func TestGetPendingMessageKey_SupportedTypes(t *testing.T) {

@@ -27,25 +27,32 @@ type pendingMessageKey struct {
 	msgType      messaging.IOType
 }
 
+type pendingMessageState struct {
+	// queued stores the next request waiting to be processed for this key.
+	queued *messaging.TargetMessage
+	// inFlight stores the request currently being processed for this key.
+	inFlight *messaging.TargetMessage
+}
+
 // pendingMessageQueue de-duplicates messages by (changefeedID, messageType) to prevent
 // floods of retry messages from blocking or starving other requests.
 //
-// The queue keeps the first message while it is pending or being processed. Subsequent
-// messages with the same key are dropped. This is safe because the sender periodically
-// retries until it receives a response.
+// The queue keeps at most one queued request and one in-flight request for each key.
+// Subsequent messages with the same key are dropped unless they strengthen the queued
+// or in-flight close semantics from removed=false to removed=true.
 //
 // For MaintainerCloseRequest, we treat removed=true as stronger semantics than removed=false.
-// If a pending removed=false request exists, a later removed=true request with the same key
-// will replace it to avoid missing removal-related cleanup.
+// If an in-flight removed=false request exists, a later removed=true request is queued for
+// the next round instead of overwriting the request the worker is already executing.
 type pendingMessageQueue struct {
 	mu      sync.Mutex
-	pending map[pendingMessageKey]*messaging.TargetMessage
+	pending map[pendingMessageKey]*pendingMessageState
 	queue   *chann.UnlimitedChannel[pendingMessageKey, any]
 }
 
 func newPendingMessageQueue() *pendingMessageQueue {
 	return &pendingMessageQueue{
-		pending: make(map[pendingMessageKey]*messaging.TargetMessage),
+		pending: make(map[pendingMessageKey]*pendingMessageState),
 		queue:   chann.NewUnlimitedChannelDefault[pendingMessageKey](),
 	}
 }
@@ -54,16 +61,34 @@ func newPendingMessageQueue() *pendingMessageQueue {
 // It returns true if the message is accepted, otherwise false.
 func (q *pendingMessageQueue) TryEnqueue(key pendingMessageKey, msg *messaging.TargetMessage) bool {
 	q.mu.Lock()
-	if oldMsg, ok := q.pending[key]; ok {
-		if shouldReplacePendingMessage(key, oldMsg, msg) {
-			q.pending[key] = msg
+	state, ok := q.pending[key]
+	if !ok {
+		state = &pendingMessageState{}
+		q.pending[key] = state
+	}
+
+	if state.queued != nil {
+		if shouldReplacePendingMessage(key, state.queued, msg) {
+			state.queued = msg
 			q.mu.Unlock()
 			return true
 		}
 		q.mu.Unlock()
 		return false
 	}
-	q.pending[key] = msg
+
+	if state.inFlight != nil {
+		if shouldReplacePendingMessage(key, state.inFlight, msg) {
+			state.queued = msg
+			q.mu.Unlock()
+			q.queue.Push(key)
+			return true
+		}
+		q.mu.Unlock()
+		return false
+	}
+
+	state.queued = msg
 	q.mu.Unlock()
 
 	q.queue.Push(key)
@@ -90,20 +115,49 @@ func shouldReplacePendingMessage(key pendingMessageKey, oldMsg, newMsg *messagin
 }
 
 // Pop blocks until a key is available or the queue is closed.
-// The returned key is removed from the queue but remains pending until Done is called.
+// The returned key is removed from the queue and promoted to in-flight until Done is called.
 func (q *pendingMessageQueue) Pop() (pendingMessageKey, bool) {
-	return q.queue.Get()
+	key, ok := q.queue.Get()
+	if !ok {
+		return pendingMessageKey{}, false
+	}
+
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	state := q.pending[key]
+	if state == nil || state.queued == nil {
+		return pendingMessageKey{}, false
+	}
+	state.inFlight = state.queued
+	state.queued = nil
+	return key, true
 }
 
 func (q *pendingMessageQueue) Get(key pendingMessageKey) *messaging.TargetMessage {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	return q.pending[key]
+	state := q.pending[key]
+	if state == nil {
+		return nil
+	}
+	if state.inFlight != nil {
+		return state.inFlight
+	}
+	return state.queued
 }
 
 func (q *pendingMessageQueue) Done(key pendingMessageKey) {
 	q.mu.Lock()
-	delete(q.pending, key)
+	state := q.pending[key]
+	if state == nil {
+		q.mu.Unlock()
+		return
+	}
+	state.inFlight = nil
+	if state.queued == nil {
+		delete(q.pending, key)
+	}
 	q.mu.Unlock()
 }
 
