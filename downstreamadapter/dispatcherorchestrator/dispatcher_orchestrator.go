@@ -202,6 +202,9 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 		m.mutex.Unlock()
 		metrics.DispatcherManagerGauge.WithLabelValues(cfId.Keyspace(), cfId.Name()).Inc()
 	} else if !admitBootstrapRequest(manager, cfId, from, req.MaintainerEpoch) {
+		// Reuse the existing manager only for the active bootstrap attempt or
+		// an explicit newer-epoch takeover. Stale bootstrap traffic must not
+		// observe or mutate dispatcher state that now belongs to another owner.
 		return nil
 	}
 
@@ -365,6 +368,11 @@ func (m *DispatcherOrchestrator) handleCloseRequest(
 	return m.sendResponse(from, messaging.MaintainerTopic, response)
 }
 
+// admitBootstrapRequest is the ownership gate for bootstrap on an existing
+// dispatcher manager. Bootstrap is the only request that can establish or move
+// maintainer ownership on this node, so this check decides whether the request
+// may reuse the current manager state, should be treated as a retry from the
+// active owner, or must be dropped as stale or unexpected traffic.
 func admitBootstrapRequest(
 	manager *dispatchermanager.DispatcherManager,
 	cfID common.ChangeFeedID,
@@ -372,86 +380,54 @@ func admitBootstrapRequest(
 	requestEpoch uint64,
 ) bool {
 	activeMaintainer, activeEpoch := manager.GetActiveMaintainer()
-	if !shouldUseStrictMaintainerEpoch(activeEpoch, requestEpoch) {
-		return admitLegacyBootstrapRequest(manager, cfID, activeMaintainer, activeEpoch, from, requestEpoch)
-	}
-
-	switch compareBootstrapMaintainerEpoch(activeEpoch, requestEpoch) {
-	case maintainerRequestStale:
-		log.Info("drop stale bootstrap request",
-			zap.Stringer("changefeedID", cfID),
-			zap.Stringer("maintainerID", from),
-			zap.Uint64("requestEpoch", requestEpoch),
-			zap.Uint64("activeEpoch", activeEpoch))
+	admission := admitMaintainerRequest(
+		maintainerBootstrapRequest,
+		activeMaintainer,
+		from,
+		activeEpoch,
+		requestEpoch,
+	)
+	if !admission.accept {
+		logDroppedMaintainerRequest("bootstrap", cfID, activeMaintainer, activeEpoch, from, requestEpoch)
 		return false
-	case maintainerRequestRetry:
-		if activeMaintainer != from {
-			log.Warn("drop bootstrap retry from unexpected maintainer",
-				zap.Stringer("changefeedID", cfID),
-				zap.Stringer("maintainerID", from),
-				zap.Stringer("activeMaintainerID", activeMaintainer),
-				zap.Uint64("maintainerEpoch", requestEpoch))
-			return false
-		}
-	case maintainerRequestTakeover:
-		// A bootstrap with a newer epoch is the only path that can move
-		// ownership to another maintainer instance.
-		log.Info("maintainer changed",
-			zap.String("changefeed", cfID.Name()),
-			zap.String("oldMaintainer", activeMaintainer.String()),
-			zap.String("newMaintainer", from.String()),
-			zap.Uint64("oldEpoch", activeEpoch),
-			zap.Uint64("newEpoch", requestEpoch))
+	}
+	if admission.updateOwner {
+		logMaintainerChange(cfID, activeMaintainer, activeEpoch, from, requestEpoch)
 		manager.SetActiveMaintainer(from, requestEpoch)
 	}
 	return true
 }
 
-func admitLegacyBootstrapRequest(
-	manager *dispatchermanager.DispatcherManager,
+func logDroppedMaintainerRequest(
+	request string,
 	cfID common.ChangeFeedID,
 	activeMaintainer node.ID,
 	activeEpoch uint64,
 	from node.ID,
 	requestEpoch uint64,
-) bool {
-	// During rolling upgrade, legacy peers decode the new field as zero.
-	// Keep compatibility, but once strict ownership is established do not
-	// let zero-epoch traffic take ownership back.
-	if requestEpoch == 0 {
-		if activeEpoch != 0 {
-			if activeMaintainer != from {
-				log.Warn("drop legacy bootstrap request from unexpected maintainer",
-					zap.Stringer("changefeedID", cfID),
-					zap.Stringer("maintainerID", from),
-					zap.Stringer("activeMaintainerID", activeMaintainer),
-					zap.Uint64("activeEpoch", activeEpoch))
-				return false
-			}
-			return true
-		}
-		if activeMaintainer != from {
-			log.Info("maintainer changed in legacy compatible mode",
-				zap.String("changefeed", cfID.Name()),
-				zap.String("oldMaintainer", activeMaintainer.String()),
-				zap.String("newMaintainer", from.String()),
-				zap.Uint64("oldEpoch", activeEpoch),
-				zap.Uint64("newEpoch", requestEpoch))
-			manager.SetActiveMaintainer(from, 0)
-		}
-		return true
-	}
+) {
+	log.Warn("drop maintainer request",
+		zap.String("request", request),
+		zap.Stringer("changefeedID", cfID),
+		zap.Stringer("maintainerID", from),
+		zap.Stringer("activeMaintainerID", activeMaintainer),
+		zap.Uint64("requestEpoch", requestEpoch),
+		zap.Uint64("activeEpoch", activeEpoch))
+}
 
-	if activeMaintainer != from || activeEpoch != requestEpoch {
-		log.Info("maintainer changed in legacy compatible mode",
-			zap.String("changefeed", cfID.Name()),
-			zap.String("oldMaintainer", activeMaintainer.String()),
-			zap.String("newMaintainer", from.String()),
-			zap.Uint64("oldEpoch", activeEpoch),
-			zap.Uint64("newEpoch", requestEpoch))
-		manager.SetActiveMaintainer(from, requestEpoch)
-	}
-	return true
+func logMaintainerChange(
+	cfID common.ChangeFeedID,
+	activeMaintainer node.ID,
+	activeEpoch uint64,
+	from node.ID,
+	requestEpoch uint64,
+) {
+	log.Info("maintainer changed",
+		zap.String("changefeed", cfID.Name()),
+		zap.String("oldMaintainer", activeMaintainer.String()),
+		zap.String("newMaintainer", from.String()),
+		zap.Uint64("oldEpoch", activeEpoch),
+		zap.Uint64("newEpoch", requestEpoch))
 }
 
 func admitPostBootstrapRequest(
@@ -461,36 +437,18 @@ func admitPostBootstrapRequest(
 	requestEpoch uint64,
 ) bool {
 	activeMaintainer, activeEpoch := manager.GetActiveMaintainer()
-	if shouldUseStrictMaintainerEpoch(activeEpoch, requestEpoch) {
-		// Post-bootstrap must match the active bootstrap sequence exactly. Allowing a
-		// newer epoch here would let a maintainer skip the ownership handoff checks in
-		// bootstrap and reuse partially initialized state from another instance.
-		if !shouldAcceptPostBootstrapRequest(activeEpoch, requestEpoch) {
-			log.Info("drop post bootstrap request with inactive maintainer epoch",
-				zap.Stringer("changefeedID", cfID),
-				zap.Stringer("maintainerID", from),
-				zap.Uint64("requestEpoch", requestEpoch),
-				zap.Uint64("activeEpoch", activeEpoch))
-			return false
-		}
-		if activeMaintainer != from {
-			log.Warn("drop post bootstrap request from unexpected maintainer",
-				zap.Stringer("changefeedID", cfID),
-				zap.Stringer("maintainerID", from),
-				zap.Stringer("activeMaintainerID", activeMaintainer),
-				zap.Uint64("maintainerEpoch", requestEpoch))
-			return false
-		}
-		return true
-	}
-
-	if (activeEpoch != 0 || requestEpoch != 0) && activeMaintainer != from {
-		log.Warn("drop post bootstrap request from unexpected maintainer in legacy compatible mode",
-			zap.Stringer("changefeedID", cfID),
-			zap.Stringer("maintainerID", from),
-			zap.Stringer("activeMaintainerID", activeMaintainer),
-			zap.Uint64("requestEpoch", requestEpoch),
-			zap.Uint64("activeEpoch", activeEpoch))
+	// Keep a dedicated wrapper for post-bootstrap so the caller can read the
+	// request-specific intent at the call site while the shared ownership rules
+	// stay centralized in admitMaintainerRequest.
+	admission := admitMaintainerRequest(
+		maintainerPostBootstrapRequest,
+		activeMaintainer,
+		from,
+		activeEpoch,
+		requestEpoch,
+	)
+	if !admission.accept {
+		logDroppedMaintainerRequest("post bootstrap", cfID, activeMaintainer, activeEpoch, from, requestEpoch)
 		return false
 	}
 	return true
@@ -503,45 +461,24 @@ func admitCloseRequest(
 	requestEpoch uint64,
 ) bool {
 	activeMaintainer, activeEpoch := manager.GetActiveMaintainer()
-	if shouldUseStrictMaintainerEpoch(activeEpoch, requestEpoch) {
-		if !shouldAcceptCloseRequest(activeEpoch, requestEpoch) {
-			log.Info("drop stale close request",
-				zap.Stringer("changefeedID", cfID),
-				zap.Stringer("maintainerID", from),
-				zap.Uint64("requestEpoch", requestEpoch),
-				zap.Uint64("activeEpoch", activeEpoch))
-			return false
-		}
-		if requestEpoch > activeEpoch {
-			// Close accepts a newer epoch so remove can still clean up the old
-			// dispatcher manager state before the new maintainer finishes bootstrap.
-			manager.SetActiveMaintainer(from, requestEpoch)
-			return true
-		}
-		if activeMaintainer != from {
-			log.Warn("drop close request from unexpected maintainer",
-				zap.Stringer("changefeedID", cfID),
-				zap.Stringer("maintainerID", from),
-				zap.Stringer("activeMaintainerID", activeMaintainer),
-				zap.Uint64("maintainerEpoch", requestEpoch))
-			return false
-		}
-		return true
+	// Close shares the same admission core, but ownership updates remain local
+	// here because close has the only non-bootstrap path that may legally move
+	// the active maintainer forward.
+	admission := admitMaintainerRequest(
+		maintainerCloseRequest,
+		activeMaintainer,
+		from,
+		activeEpoch,
+		requestEpoch,
+	)
+	if !admission.accept {
+		logDroppedMaintainerRequest("close", cfID, activeMaintainer, activeEpoch, from, requestEpoch)
+		return false
 	}
-
-	if requestEpoch == 0 {
-		if activeEpoch != 0 && activeMaintainer != from {
-			log.Warn("drop legacy close request from unexpected maintainer",
-				zap.Stringer("changefeedID", cfID),
-				zap.Stringer("maintainerID", from),
-				zap.Stringer("activeMaintainerID", activeMaintainer),
-				zap.Uint64("activeEpoch", activeEpoch))
-			return false
-		}
-		return true
+	if admission.updateOwner {
+		logMaintainerChange(cfID, activeMaintainer, activeEpoch, from, requestEpoch)
+		manager.SetActiveMaintainer(from, requestEpoch)
 	}
-
-	manager.SetActiveMaintainer(from, requestEpoch)
 	return true
 }
 

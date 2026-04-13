@@ -306,20 +306,124 @@ func TestPendingMessageQueue_KeepsFirstBootstrapRequestUntilCurrentAttemptFinish
 	q.Done(key)
 }
 
-func TestShouldAcceptMaintainerRequest(t *testing.T) {
+func TestAdmitMaintainerRequest(t *testing.T) {
 	t.Parallel()
 
-	require.Equal(t, maintainerRequestStale, compareBootstrapMaintainerEpoch(20, 10))
-	require.Equal(t, maintainerRequestRetry, compareBootstrapMaintainerEpoch(20, 20))
-	require.Equal(t, maintainerRequestTakeover, compareBootstrapMaintainerEpoch(20, 30))
+	testCases := []struct {
+		name              string
+		kind              maintainerRequestKind
+		activeMaintainer  node.ID
+		requestMaintainer node.ID
+		activeEpoch       uint64
+		requestEpoch      uint64
+		want              maintainerRequestAdmission
+	}{
+		{
+			name:              "bootstrap stale strict request is rejected",
+			kind:              maintainerBootstrapRequest,
+			activeMaintainer:  node.ID("owner-a"),
+			requestMaintainer: node.ID("owner-a"),
+			activeEpoch:       20,
+			requestEpoch:      10,
+			want:              maintainerRequestAdmission{},
+		},
+		{
+			name:              "bootstrap retry from active owner is accepted",
+			kind:              maintainerBootstrapRequest,
+			activeMaintainer:  node.ID("owner-a"),
+			requestMaintainer: node.ID("owner-a"),
+			activeEpoch:       20,
+			requestEpoch:      20,
+			want:              maintainerRequestAdmission{accept: true},
+		},
+		{
+			name:              "bootstrap newer epoch takes ownership",
+			kind:              maintainerBootstrapRequest,
+			activeMaintainer:  node.ID("owner-a"),
+			requestMaintainer: node.ID("owner-b"),
+			activeEpoch:       20,
+			requestEpoch:      21,
+			want:              maintainerRequestAdmission{accept: true, updateOwner: true},
+		},
+		{
+			name:              "legacy bootstrap cannot take over strict owner with zero epoch",
+			kind:              maintainerBootstrapRequest,
+			activeMaintainer:  node.ID("owner-a"),
+			requestMaintainer: node.ID("owner-b"),
+			activeEpoch:       20,
+			requestEpoch:      0,
+			want:              maintainerRequestAdmission{},
+		},
+		{
+			name:              "legacy bootstrap can establish owner before strict epoch exists",
+			kind:              maintainerBootstrapRequest,
+			activeMaintainer:  node.ID("owner-a"),
+			requestMaintainer: node.ID("owner-b"),
+			activeEpoch:       0,
+			requestEpoch:      0,
+			want:              maintainerRequestAdmission{accept: true, updateOwner: true},
+		},
+		{
+			name:              "post bootstrap only accepts active sequence",
+			kind:              maintainerPostBootstrapRequest,
+			activeMaintainer:  node.ID("owner-a"),
+			requestMaintainer: node.ID("owner-a"),
+			activeEpoch:       20,
+			requestEpoch:      20,
+			want:              maintainerRequestAdmission{accept: true},
+		},
+		{
+			name:              "post bootstrap rejects newer epoch",
+			kind:              maintainerPostBootstrapRequest,
+			activeMaintainer:  node.ID("owner-a"),
+			requestMaintainer: node.ID("owner-a"),
+			activeEpoch:       20,
+			requestEpoch:      21,
+			want:              maintainerRequestAdmission{},
+		},
+		{
+			name:              "close accepts newer epoch takeover",
+			kind:              maintainerCloseRequest,
+			activeMaintainer:  node.ID("owner-a"),
+			requestMaintainer: node.ID("owner-b"),
+			activeEpoch:       20,
+			requestEpoch:      21,
+			want:              maintainerRequestAdmission{accept: true, updateOwner: true},
+		},
+		{
+			name:              "legacy close cannot override strict owner with zero epoch",
+			kind:              maintainerCloseRequest,
+			activeMaintainer:  node.ID("owner-a"),
+			requestMaintainer: node.ID("owner-b"),
+			activeEpoch:       20,
+			requestEpoch:      0,
+			want:              maintainerRequestAdmission{},
+		},
+		{
+			name:              "close can establish strict epoch from legacy owner",
+			kind:              maintainerCloseRequest,
+			activeMaintainer:  node.ID("owner-a"),
+			requestMaintainer: node.ID("owner-b"),
+			activeEpoch:       0,
+			requestEpoch:      20,
+			want:              maintainerRequestAdmission{accept: true, updateOwner: true},
+		},
+	}
 
-	require.False(t, shouldAcceptPostBootstrapRequest(20, 10))
-	require.True(t, shouldAcceptPostBootstrapRequest(20, 20))
-	require.False(t, shouldAcceptPostBootstrapRequest(20, 30))
-
-	require.False(t, shouldAcceptCloseRequest(20, 10))
-	require.True(t, shouldAcceptCloseRequest(20, 20))
-	require.True(t, shouldAcceptCloseRequest(20, 30))
+	for _, tc := range testCases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := admitMaintainerRequest(
+				tc.kind,
+				tc.activeMaintainer,
+				tc.requestMaintainer,
+				tc.activeEpoch,
+				tc.requestEpoch,
+			)
+			require.Equal(t, tc.want, got)
+		})
+	}
 }
 
 func TestHandleBootstrapRequestDropsLegacyTakeoverAfterStrictOwnerEstablished(t *testing.T) {
