@@ -30,7 +30,6 @@ FAILPOINT_BLOCK_BEFORE_STOP_CHANGEFEED="github.com/pingcap/ticdc/coordinator/Blo
 PD_ADDR="http://${UP_PD_HOST_1}:${UP_PD_PORT_1}"
 SINK_URI="mysql://normal:123456@127.0.0.1:3306/"
 
-
 function check_node_change_triggers_bootstrap() {
 	local work_dir=$1
 	local file
