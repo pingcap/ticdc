@@ -202,14 +202,7 @@ func (c *CDCEtcdClientImpl) GetAllCDCInfo(ctx context.Context) ([]*mvccpb.KeyVal
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrPDEtcdAPIError, err)
 	}
-	kvs := make([]*mvccpb.KeyValue, 0, len(resp.Kvs))
-	for _, kv := range resp.Kvs {
-		if !hasPathPrefix(string(kv.Key), BaseKey(c.ClusterID)) {
-			continue
-		}
-		kvs = append(kvs, kv)
-	}
-	return kvs, nil
+	return resp.Kvs, nil
 }
 
 // CheckMultipleCDCClusterExist checks if other cdc clusters exists,
@@ -255,9 +248,6 @@ func (c *CDCEtcdClientImpl) GetChangefeedInfoAndStatus(ctx context.Context) (rev
 	statusMap = make(map[common.ChangeFeedDisplayName]*mvccpb.KeyValue, 0)
 	infoMap = make(map[common.ChangeFeedDisplayName]*mvccpb.KeyValue, 0)
 	for _, kv := range resp.Kvs {
-		if !hasPathPrefix(string(kv.Key), BaseKey(c.ClusterID)) {
-			continue
-		}
 		ks, cf, isStatus, isChangefeed := extractChangefeedKeySuffix(string(kv.Key))
 		if !isChangefeed {
 			continue
