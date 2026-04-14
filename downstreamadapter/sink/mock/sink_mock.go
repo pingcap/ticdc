@@ -89,9 +89,11 @@ func (mr *MockSinkMockRecorder) BatchCount() *gomock.Call {
 }
 
 // Close mocks base method.
-func (m *MockSink) Close(removeChangefeed bool) {
+func (m *MockSink) Close(removeChangefeed bool) bool {
 	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "Close", removeChangefeed)
+	ret := m.ctrl.Call(m, "Close", removeChangefeed)
+	ret0, _ := ret[0].(bool)
+	return ret0
 }
 
 // Close indicates an expected call of Close.

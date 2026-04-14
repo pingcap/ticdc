@@ -262,7 +262,7 @@ func TestKafkaSinkBasicFunctionality(t *testing.T) {
 		}, 5*time.Second, time.Second)
 
 	// case 2: add checkpoint ts when sink is closed and it will not block
-	kafkaSink.Close(false)
+	_ = kafkaSink.Close(false)
 	cancel()
 	kafkaSink.AddCheckpointTs(12345)
 }

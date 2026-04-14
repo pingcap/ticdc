@@ -18,6 +18,7 @@ import (
 	"database/sql"
 	"net/url"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/pingcap/log"
@@ -68,6 +69,20 @@ type Sink struct {
 	// variable @@tidb_cdc_active_active_sync_stats and is shared by all DML writers.
 	// It is nil when disabled or unsupported by downstream.
 	activeActiveSyncStatsCollector *mysql.ActiveActiveSyncStatsCollector
+
+	// closeMu guards the close state below so Close(false) can be upgraded safely by
+	// a later Close(true) after the base close path has already run.
+	closeMu      sync.Mutex
+	closeStarted bool
+	baseClosed   bool
+	// removeRequested is sticky once any caller asks for remove semantics.
+	removeRequested bool
+	// removeCleanupInProgress prevents concurrent retries from running the
+	// remove-only cleanup more than once at the same time.
+	removeCleanupInProgress bool
+	removeCleaned           bool
+
+	removeCleanupFn func() error
 }
 
 // Verify is used to verify the sink uri and config is valid
@@ -146,6 +161,7 @@ func NewMySQLSink(
 		enableActiveActive:             enableActiveActive,
 		activeActiveSyncStatsCollector: activeActiveSyncStatsCollector,
 	}
+	result.removeCleanupFn = result.cleanupRemovedChangefeed
 	for i := 0; i < len(result.dmlWriter); i++ {
 		result.dmlWriter[i] = mysql.NewWriter(ctx, i, db, cfg, changefeedID, stat, activeActiveSyncStatsCollector)
 	}
@@ -391,15 +407,84 @@ func (s *Sink) GetTableRecoveryInfo(
 	return newStartTsList, skipSyncpointAtStartTsList, skipDMLAsStartTsList, nil
 }
 
-func (s *Sink) Close(removeChangefeed bool) {
-	// when remove the changefeed, we need to remove the ddl ts item in the ddl worker
+func (s *Sink) Close(removeChangefeed bool) bool {
+	needBaseClose := false
+
+	s.closeMu.Lock()
 	if removeChangefeed {
-		if err := s.CleanupRemovedChangefeed(); err != nil {
-			log.Warn("close mysql sink, remove changefeed meet error",
-				zap.Any("changefeed", s.changefeedID.String()), zap.Error(err))
-		}
+		// Keep remove intent sticky so a later Close(true) upgrades an earlier
+		// Close(false) even after base resources have been released.
+		s.removeRequested = true
+	}
+	switch {
+	case !s.closeStarted:
+		s.closeStarted = true
+		needBaseClose = true
+	case !s.baseClosed:
+		s.closeMu.Unlock()
+		return false
+	case !s.removeRequested:
+		s.closeMu.Unlock()
+		return true
+	case s.removeCleaned || s.removeCleanupInProgress:
+		completed := s.removeCleaned
+		s.closeMu.Unlock()
+		return completed
+	default:
+		s.removeCleanupInProgress = true
+		s.closeMu.Unlock()
+		return s.runRemoveCleanupAndFinish()
+	}
+	s.closeMu.Unlock()
+
+	if needBaseClose {
+		s.closeBase()
 	}
 
+	s.closeMu.Lock()
+	s.baseClosed = true
+	switch {
+	case !s.removeRequested:
+		s.closeMu.Unlock()
+		return true
+	case s.removeCleaned || s.removeCleanupInProgress:
+		completed := s.removeCleaned
+		s.closeMu.Unlock()
+		return completed
+	default:
+		s.removeCleanupInProgress = true
+		s.closeMu.Unlock()
+		return s.runRemoveCleanupAndFinish()
+	}
+}
+
+func (s *Sink) runRemoveCleanup() error {
+	if s.removeCleanupFn != nil {
+		return s.removeCleanupFn()
+	}
+	return nil
+}
+
+func (s *Sink) runRemoveCleanupAndFinish() bool {
+	err := s.runRemoveCleanup()
+
+	s.closeMu.Lock()
+	s.removeCleanupInProgress = false
+	if err == nil {
+		s.removeCleaned = true
+	}
+	s.closeMu.Unlock()
+
+	if err != nil {
+		log.Warn("close mysql sink, remove changefeed meet error",
+			zap.Any("changefeed", s.changefeedID.String()),
+			zap.Error(err))
+		return false
+	}
+	return true
+}
+
+func (s *Sink) closeBase() {
 	s.conflictDetector.CloseNotifiedNodes()
 	s.ddlWriter.Close()
 	for _, w := range s.dmlWriter {
@@ -417,10 +502,10 @@ func (s *Sink) Close(removeChangefeed bool) {
 	s.statistics.Close()
 }
 
-// CleanupRemovedChangefeed removes ddl_ts state for a deleted changefeed.
+// cleanupRemovedChangefeed removes ddl_ts state for a deleted changefeed.
 // It uses a short-lived DB connection so the cleanup can still run after the
 // normal sink close path has already closed the long-lived connection.
-func (s *Sink) CleanupRemovedChangefeed() error {
+func (s *Sink) cleanupRemovedChangefeed() error {
 	if !s.cfg.EnableDDLTs {
 		return nil
 	}
@@ -443,6 +528,7 @@ func (s *Sink) CleanupRemovedChangefeed() error {
 	}()
 
 	cleanupWriter := mysql.NewWriter(context.Background(), -1, db, s.cfg, s.changefeedID, nil, nil)
+	defer cleanupWriter.Close()
 	return cleanupWriter.RemoveDDLTsItem()
 }
 

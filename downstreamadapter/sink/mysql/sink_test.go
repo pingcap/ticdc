@@ -410,7 +410,7 @@ func TestGetTableRecoveryInfo_StartTsGreaterThanDDLTs(t *testing.T) {
 	require.False(t, skipDMLList[2], "Table 3: skipDML should be reset to false when startTs > ddlTs")
 
 	// Clean up
-	sink.Close(false)
+	_ = sink.Close(false)
 
 	// Check all mock expectations were met (after closing)
 	require.NoError(t, mock.ExpectationsWereMet())
@@ -448,8 +448,45 @@ func TestGetTableRecoveryInfo_RemoveDDLTs(t *testing.T) {
 	}
 
 	// Clean up
-	sink.Close(false)
+	_ = sink.Close(false)
 
 	// Check all mock expectations were met (after closing)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestMysqlSinkCloseUpgradeAfterBaseClose(t *testing.T) {
+	_, sink, mock := getMysqlSink()
+	mock.ExpectClose()
+
+	cleanupCalls := 0
+	sink.removeCleanupFn = func() error {
+		cleanupCalls++
+		return nil
+	}
+
+	require.True(t, sink.Close(false))
+	require.True(t, sink.Close(true))
+	require.True(t, sink.Close(true))
+	require.Equal(t, 1, cleanupCalls)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestMysqlSinkCloseUpgradeRetriesCleanup(t *testing.T) {
+	_, sink, mock := getMysqlSink()
+	mock.ExpectClose()
+
+	cleanupCalls := 0
+	sink.removeCleanupFn = func() error {
+		cleanupCalls++
+		if cleanupCalls == 1 {
+			return errors.New("cleanup failed")
+		}
+		return nil
+	}
+
+	require.True(t, sink.Close(false))
+	require.False(t, sink.Close(true))
+	require.True(t, sink.Close(true))
+	require.Equal(t, 2, cleanupCalls)
 	require.NoError(t, mock.ExpectationsWereMet())
 }

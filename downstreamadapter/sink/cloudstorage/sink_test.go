@@ -554,7 +554,7 @@ func TestCloseBeforeRunDoesNotPanicAndCleansSpool(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NotPanics(t, func() {
-		cloudStorageSink.Close(false)
+		_ = cloudStorageSink.Close(false)
 	})
 
 	_, err = os.Stat(spoolDir)

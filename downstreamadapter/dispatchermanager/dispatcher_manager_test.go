@@ -39,8 +39,8 @@ import (
 )
 
 type closeTrackingSink struct {
-	closeCalls   []bool
-	cleanupCalls int
+	closeCalls  []bool
+	closeResult bool
 }
 
 func (s *closeTrackingSink) SinkType() common.SinkType {
@@ -65,8 +65,9 @@ func (s *closeTrackingSink) AddCheckpointTs(uint64) {}
 
 func (s *closeTrackingSink) SetTableSchemaStore(_ *event.TableSchemaStore) {}
 
-func (s *closeTrackingSink) Close(removeChangefeed bool) {
+func (s *closeTrackingSink) Close(removeChangefeed bool) bool {
 	s.closeCalls = append(s.closeCalls, removeChangefeed)
+	return s.closeResult
 }
 
 func (s *closeTrackingSink) Run(context.Context) error {
@@ -79,11 +80,6 @@ func (s *closeTrackingSink) BatchCount() int {
 
 func (s *closeTrackingSink) BatchBytes() int {
 	return 0
-}
-
-func (s *closeTrackingSink) CleanupRemovedChangefeed() error {
-	s.cleanupCalls++
-	return nil
 }
 
 func newDispatcherManagerTestSink(t *testing.T, sinkType common.SinkType) sink.Sink {
@@ -101,7 +97,7 @@ func newDispatcherManagerTestSink(t *testing.T, sinkType common.SinkType) sink.S
 	}).AnyTimes()
 	mockSink.EXPECT().AddCheckpointTs(gomock.Any()).AnyTimes()
 	mockSink.EXPECT().SetTableSchemaStore(gomock.Any()).AnyTimes()
-	mockSink.EXPECT().Close(gomock.Any()).AnyTimes()
+	mockSink.EXPECT().Close(gomock.Any()).Return(true).AnyTimes()
 	mockSink.EXPECT().Run(gomock.Any()).Return(nil).AnyTimes()
 	return mockSink
 }
@@ -318,8 +314,8 @@ func TestMergeDispatcherInvalidIDs(t *testing.T) {
 	require.False(t, exists)
 }
 
-func TestTryCloseRemovedRequestAfterClosedTriggersCleanup(t *testing.T) {
-	trackingSink := &closeTrackingSink{}
+func TestTryCloseRemovedRequestAfterClosedUpgradesSinkClose(t *testing.T) {
+	trackingSink := &closeTrackingSink{closeResult: true}
 	manager := &DispatcherManager{
 		changefeedID:            common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName),
 		dispatcherMap:           newDispatcherMap[*dispatcher.EventDispatcher](),
@@ -337,8 +333,7 @@ func TestTryCloseRemovedRequestAfterClosedTriggersCleanup(t *testing.T) {
 
 	closed := manager.TryClose(true)
 	require.True(t, closed)
-	require.Empty(t, trackingSink.closeCalls)
-	require.Equal(t, 1, trackingSink.cleanupCalls)
+	require.Equal(t, []bool{true}, trackingSink.closeCalls)
 }
 
 func TestMergeDispatcherExistingID(t *testing.T) {

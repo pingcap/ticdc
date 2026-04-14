@@ -190,9 +190,9 @@ func (s *Sink) SetTableSchemaStore(tableSchemaStore *commonEvent.TableSchemaStor
 	s.ddlWriter.SetTableSchemaStore(tableSchemaStore)
 }
 
-func (s *Sink) Close(_ bool) {
+func (s *Sink) Close(_ bool) bool {
 	if !s.isClosed.CompareAndSwap(false, true) {
-		return
+		return true
 	}
 	start := time.Now()
 	s.logBuffer.Close()
@@ -219,6 +219,7 @@ func (s *Sink) Close(_ bool) {
 		zap.String("keyspace", s.changefeedID.Keyspace()),
 		zap.String("changefeed", s.changefeedID.Name()),
 		zap.Duration("duration", time.Since(start)))
+	return true
 }
 
 func (s *Sink) sendMessages(ctx context.Context) error {

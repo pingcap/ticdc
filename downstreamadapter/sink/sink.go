@@ -43,7 +43,10 @@ type Sink interface {
 	AddCheckpointTs(ts uint64)
 
 	SetTableSchemaStore(tableSchemaStore *commonEvent.TableSchemaStore)
-	Close(removeChangefeed bool)
+	// Close is idempotent and may be called multiple times as remove semantics are
+	// upgraded from stop to delete. It returns whether all close work required by
+	// the latest remove intent has completed.
+	Close(removeChangefeed bool) bool
 	Run(ctx context.Context) error
 	BatchCount() int
 	BatchBytes() int

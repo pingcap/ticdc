@@ -243,7 +243,7 @@ func TestCloudStorageWriteEventsWithoutDateSeparator(t *testing.T) {
 	require.Equal(t, fmt.Sprintf("CDC_%s_000002.csv\n", dispatcherID.String()), string(content))
 	require.Equal(t, uint64(200), atomic.LoadUint64(&cnt))
 
-	cloudStorageSink.Close(false)
+	_ = cloudStorageSink.Close(false)
 }
 
 func TestSubmitTaskToEncoderExitOnContextCancel(t *testing.T) {
@@ -424,7 +424,7 @@ func TestCloudStorageWriteEventsWithDateSeparator(t *testing.T) {
 	require.Nil(t, err)
 	require.Equal(t, fmt.Sprintf("CDC_%s_000001.csv\n", dispatcherID.String()), string(content))
 	require.Equal(t, uint64(300), atomic.LoadUint64(&cnt))
-	cloudStorageSink.Close(false)
+	_ = cloudStorageSink.Close(false)
 
 	cancel()
 	time.Sleep(5 * time.Second)
