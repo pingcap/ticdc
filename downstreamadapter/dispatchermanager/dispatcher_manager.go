@@ -917,9 +917,9 @@ func (e *DispatcherManager) close() {
 	log.Info("shared info closed", zap.Stringer("changefeedID", e.changefeedID))
 
 	if e.IsRedoEnabled() {
-		e.redoSink.Close(false)
+		e.redoSink.Close()
 	}
-	e.sink.Close(false)
+	e.sink.Close()
 	log.Info("sink closed", zap.Stringer("changefeedID", e.changefeedID))
 
 	e.wg.Wait()

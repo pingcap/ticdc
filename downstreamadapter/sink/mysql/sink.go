@@ -391,17 +391,7 @@ func (s *Sink) GetTableRecoveryInfo(
 	return newStartTsList, skipSyncpointAtStartTsList, skipDMLAsStartTsList, nil
 }
 
-func (s *Sink) Close(removeChangefeed bool) {
-	// Keep direct callers compatible: if they choose remove semantics at the sink
-	// layer, run the remove-only cleanup before releasing the long-lived resources.
-	if removeChangefeed {
-		if err := s.CleanupRemovedChangefeed(); err != nil {
-			log.Warn("close mysql sink, remove changefeed meet error",
-				zap.Any("changefeed", s.changefeedID.String()),
-				zap.Error(err))
-		}
-	}
-
+func (s *Sink) Close() {
 	s.conflictDetector.CloseNotifiedNodes()
 	s.ddlWriter.Close()
 	for _, w := range s.dmlWriter {
