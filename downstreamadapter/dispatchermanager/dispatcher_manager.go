@@ -136,11 +136,13 @@ type DispatcherManager struct {
 	// removeChangefeedRequested is sticky once any close request asks for removed=true.
 	// A later removed=false request must not downgrade the final cleanup semantics.
 	removeChangefeedRequested atomic.Bool
-	// removeChangefeedCleaned records whether the remove-only cleanup has finished.
-	// closed=true only means the base close path completed; remove cleanup may still be pending.
+	// removeChangefeedCleaned records whether the best-effort remove-only cleanup has finished.
+	// It is intentionally not part of the TryClose success condition so the close contract
+	// stays compatible with the historical behavior.
 	removeChangefeedCleaned atomic.Bool
 	// removeChangefeedCleanupRunning prevents duplicate background cleanup runs
-	// while retries keep asking for remove semantics after the base close path ends.
+	// while late remove requests or retries keep asking for remove semantics after
+	// the base close path ends.
 	removeChangefeedCleanupRunning atomic.Bool
 	cancel                         context.CancelFunc
 	wg                             sync.WaitGroup
@@ -851,10 +853,11 @@ func (e *DispatcherManager) TryClose(removeChangefeed bool) bool {
 		e.removeChangefeedRequested.Store(true)
 	}
 	if e.closed.Load() {
-		return e.tryScheduleRemoveChangefeedCleanup()
+		e.tryScheduleRemoveChangefeedCleanup()
+		return true
 	}
 	if e.closing.Load() {
-		return false
+		return e.closed.Load()
 	}
 
 	e.closing.Store(true)
@@ -935,15 +938,15 @@ func (e *DispatcherManager) close() {
 		zap.Stringer("changefeedID", e.changefeedID))
 }
 
-func (e *DispatcherManager) tryScheduleRemoveChangefeedCleanup() bool {
+func (e *DispatcherManager) tryScheduleRemoveChangefeedCleanup() {
 	if !e.removeChangefeedRequested.Load() {
-		return true
+		return
 	}
 	if e.removeChangefeedCleaned.Load() {
-		return true
+		return
 	}
 	if !e.removeChangefeedCleanupRunning.CompareAndSwap(false, true) {
-		return false
+		return
 	}
 
 	go func() {
@@ -957,7 +960,6 @@ func (e *DispatcherManager) tryScheduleRemoveChangefeedCleanup() bool {
 		}
 		e.removeChangefeedCleaned.Store(true)
 	}()
-	return false
 }
 
 func (e *DispatcherManager) runRemoveChangefeedCleanup() error {

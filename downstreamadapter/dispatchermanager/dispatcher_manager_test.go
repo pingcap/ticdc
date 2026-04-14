@@ -272,7 +272,7 @@ func TestMergeDispatcherInvalidIDs(t *testing.T) {
 	require.False(t, exists)
 }
 
-func TestTryCloseRemovedRequestAfterClosedTriggersCleanup(t *testing.T) {
+func TestTryCloseRemovedRequestAfterClosedReturnsImmediatelyAndTriggersCleanup(t *testing.T) {
 	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	mysqlConfig := mysqlcfg.New()
 	mysqlConfig.EnableDDLTs = false
@@ -291,8 +291,10 @@ func TestTryCloseRemovedRequestAfterClosedTriggersCleanup(t *testing.T) {
 	}
 	manager.closed.Store(true)
 
+	// Preserve the historical close contract: once the manager is already closed,
+	// late remove requests should not delay TryClose success.
 	closed := manager.TryClose(true)
-	require.False(t, closed)
+	require.True(t, closed)
 	require.True(t, manager.removeChangefeedRequested.Load())
 	require.Eventually(t, func() bool {
 		return manager.removeChangefeedCleaned.Load()
