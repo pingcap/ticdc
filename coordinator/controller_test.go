@@ -163,7 +163,7 @@ func TestResumeChangefeed(t *testing.T) {
 	require.Equal(t, config.StateNormal, changefeedDB.GetByID(cfID).GetInfo().State)
 }
 
-func TestHandleNonExistentChangefeedUsesLegacyRemoveWhenLocalMetadataMissing(t *testing.T) {
+func TestHandleNonExistentChangefeedUsesReportedSessionEpochWhenLocalMetadataMissing(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -188,6 +188,7 @@ func TestHandleNonExistentChangefeedUsesLegacyRemoveWhenLocalMetadataMissing(t *
 		controller.handleNonExistentChangefeed(cfID, node.ID("node-1"), &heartbeatpb.MaintainerStatus{
 			ChangefeedID: cfID.ToPB(),
 			State:        heartbeatpb.ComponentState_Working,
+			SessionEpoch: 55,
 		})
 	})
 
@@ -197,6 +198,44 @@ func TestHandleNonExistentChangefeedUsesLegacyRemoveWhenLocalMetadataMissing(t *
 		req := msg.Message[0].(*heartbeatpb.RemoveMaintainerRequest)
 		require.Equal(t, cfID.ToPB(), req.Id)
 		require.Equal(t, uint32(0), req.KeyspaceId)
+		require.Equal(t, uint64(55), req.SessionEpoch)
+	default:
+		t.Fatal("expected a remove maintainer request")
+	}
+}
+
+func TestHandleNonExistentChangefeedKeepsZeroSessionForLegacyReporter(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	backend := mock_changefeed.NewMockBackend(ctrl)
+	changefeedDB := changefeed.NewChangefeedDB(1216)
+	self := node.NewInfo("localhost:8300", "")
+	nodeManager := watcher.NewNodeManager(nil, nil)
+	nodeManager.GetAliveNodes()[self.ID] = self
+
+	mc := messaging.NewMockMessageCenter()
+	appcontext.SetService(appcontext.MessageCenter, mc)
+	appcontext.SetService(watcher.NodeManagerName, nodeManager)
+
+	controller := &Controller{
+		changefeedDB:       changefeedDB,
+		messageCenter:      mc,
+		operatorController: operator.NewOperatorController(self, changefeedDB, backend, 10, nil),
+	}
+
+	cfID := common.NewChangeFeedIDWithName("legacy-stale", common.DefaultKeyspaceName)
+	controller.handleNonExistentChangefeed(cfID, node.ID("node-1"), &heartbeatpb.MaintainerStatus{
+		ChangefeedID: cfID.ToPB(),
+		State:        heartbeatpb.ComponentState_Working,
+		SessionEpoch: 0,
+	})
+
+	select {
+	case msg := <-mc.GetMessageChannel():
+		require.Equal(t, messaging.TypeRemoveMaintainerRequest, msg.Type)
+		req := msg.Message[0].(*heartbeatpb.RemoveMaintainerRequest)
+		require.Equal(t, cfID.ToPB(), req.Id)
 		require.Equal(t, uint64(0), req.SessionEpoch)
 	default:
 		t.Fatal("expected a remove maintainer request")
@@ -265,6 +304,60 @@ func TestFinishBootstrapRestoresMaintainerSessionEpoch(t *testing.T) {
 	require.NotNil(t, cf)
 	require.Equal(t, node.ID("node-1"), cf.GetNodeID())
 	require.Equal(t, uint64(88), cf.GetCurrentMaintainerSessionEpoch())
+}
+
+func TestFinishBootstrapRemovesStaleMaintainerWithReportedSessionEpoch(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	backend := mock_changefeed.NewMockBackend(ctrl)
+	changefeedDB := changefeed.NewChangefeedDB(1216)
+	self := node.NewInfo("localhost:8300", "")
+	nodeManager := watcher.NewNodeManager(nil, nil)
+	nodeManager.GetAliveNodes()[self.ID] = self
+
+	mc := messaging.NewMockMessageCenter()
+	appcontext.SetService(appcontext.MessageCenter, mc)
+	appcontext.SetService(appcontext.SchemaStore, eventservice.NewMockSchemaStore())
+	appcontext.SetService(watcher.NodeManagerName, nodeManager)
+
+	controller := &Controller{
+		selfNode:      self,
+		backend:       backend,
+		changefeedDB:  changefeedDB,
+		messageCenter: mc,
+		initialized:   atomic.NewBool(false),
+		taskScheduler: threadpool.NewThreadPoolDefault(),
+		scheduler: pkgscheduler.NewController(map[string]pkgscheduler.Scheduler{
+			pkgscheduler.BasicScheduler: &noopScheduler{name: pkgscheduler.BasicScheduler},
+		}),
+		operatorController: operator.NewOperatorController(self, changefeedDB, backend, 10, nil),
+	}
+	t.Cleanup(controller.Stop)
+
+	backend.EXPECT().GetAllChangefeeds(gomock.Any()).Return(map[common.ChangeFeedID]*changefeed.ChangefeedMetaWrapper{}, nil).Times(1)
+
+	cfID := common.NewChangeFeedIDWithName("stale-bootstrap-session", common.DefaultKeyspaceName)
+	controller.finishBootstrap(context.Background(), map[common.ChangeFeedID]remoteMaintainer{
+		cfID: {
+			nodeID: node.ID("node-1"),
+			status: &heartbeatpb.MaintainerStatus{
+				ChangefeedID: cfID.ToPB(),
+				State:        heartbeatpb.ComponentState_Working,
+				SessionEpoch: 88,
+			},
+		},
+	})
+
+	select {
+	case msg := <-mc.GetMessageChannel():
+		require.Equal(t, messaging.TypeRemoveMaintainerRequest, msg.Type)
+		req := msg.Message[0].(*heartbeatpb.RemoveMaintainerRequest)
+		require.Equal(t, cfID.ToPB(), req.Id)
+		require.Equal(t, uint64(88), req.SessionEpoch)
+	default:
+		t.Fatal("expected a remove maintainer request")
+	}
 }
 
 func TestResumeChangefeedNormalState(t *testing.T) {

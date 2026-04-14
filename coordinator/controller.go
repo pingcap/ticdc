@@ -494,13 +494,16 @@ func (c *Controller) handleNonExistentChangefeed(
 			zap.Stringer("changefeed", cfID),
 			zap.Stringer("sourceNode", from),
 			zap.String("status", common.FormatMaintainerStatus(status)))
-
-		keyspaceID := c.getChangefeed(cfID).GetKeyspaceID()
-		sessionEpoch := c.getChangefeed(cfID).GetCurrentMaintainerSessionEpoch()
-
-		// Remove working changefeed from maintainer if it's not in changefeedDB
-		_ = c.messageCenter.SendCommand(changefeed.RemoveMaintainerMessage(keyspaceID, cfID, from, true, true, sessionEpoch))
+		c.removeReportedMaintainer(cfID, from, status.SessionEpoch)
 	}
+}
+
+// removeReportedMaintainer removes a working maintainer that is only visible via
+// remote runtime state. Once local metadata is gone, the reporter's session is
+// the only fenced owner token we can still trust for cleanup.
+func (c *Controller) removeReportedMaintainer(cfID common.ChangeFeedID, from node.ID, sessionEpoch uint64) {
+	keyspaceID := c.getChangefeed(cfID).GetKeyspaceID()
+	_ = c.messageCenter.SendCommand(changefeed.RemoveMaintainerMessage(keyspaceID, cfID, from, true, true, sessionEpoch))
 }
 
 func (c *Controller) validateMaintainerNode(
@@ -630,9 +633,7 @@ func (c *Controller) finishBootstrap(ctx context.Context, runningChangefeeds map
 			zap.String("changefeed", id.Name()),
 			zap.String("node", rm.nodeID.String()),
 		)
-		keyspaceID := c.getChangefeed(id).GetKeyspaceID()
-		sessionEpoch := c.getChangefeed(id).GetCurrentMaintainerSessionEpoch()
-		_ = c.messageCenter.SendCommand(changefeed.RemoveMaintainerMessage(keyspaceID, id, rm.nodeID, true, true, sessionEpoch))
+		c.removeReportedMaintainer(id, rm.nodeID, rm.status.SessionEpoch)
 	}
 
 	// start operator and scheduler
