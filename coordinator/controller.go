@@ -462,11 +462,12 @@ func (c *Controller) handleSingleMaintainerStatus(
 	status *heartbeatpb.MaintainerStatus,
 	cfID common.ChangeFeedID,
 ) *changefeedChange {
-	// Update the operator status first
-	c.operatorController.UpdateOperatorStatus(cfID, from, status)
-
 	cf := c.getChangefeed(cfID)
 	if cf == nil {
+		// Removed changefeeds can still have a stop operator waiting for the final
+		// non-working status, so keep forwarding unknown-changefeed status updates
+		// to operators. The operator is responsible for fencing by session.
+		c.operatorController.UpdateOperatorStatus(cfID, from, status)
 		c.handleNonExistentChangefeed(cfID, from, status)
 		return nil
 	}
@@ -474,7 +475,11 @@ func (c *Controller) handleSingleMaintainerStatus(
 	if !c.validateMaintainerNode(cf, from, cfID) {
 		return nil
 	}
+	if !c.validateMaintainerSession(cf, status, cfID) {
+		return nil
+	}
 
+	c.operatorController.UpdateOperatorStatus(cfID, from, status)
 	change := c.updateChangefeedStatus(cf, cfID, status)
 	return change
 }
@@ -524,6 +529,45 @@ func (c *Controller) validateMaintainerNode(
 		return false
 	}
 	return true
+}
+
+func (c *Controller) validateMaintainerSession(
+	cf *changefeed.Changefeed,
+	status *heartbeatpb.MaintainerStatus,
+	cfID common.ChangeFeedID,
+) bool {
+	currentSessionEpoch := cf.GetCurrentMaintainerSessionEpoch()
+	incomingSessionEpoch := status.GetSessionEpoch()
+
+	switch {
+	case incomingSessionEpoch == 0:
+		if currentSessionEpoch == 0 {
+			return true
+		}
+		log.Info("drop legacy maintainer status after session aware owner installed",
+			zap.Stringer("changefeed", cfID),
+			zap.Uint64("currentSessionEpoch", currentSessionEpoch))
+		return false
+	case currentSessionEpoch == 0:
+		log.Warn("drop maintainer status before local session is restored",
+			zap.Stringer("changefeed", cfID),
+			zap.Uint64("incomingSessionEpoch", incomingSessionEpoch))
+		return false
+	case incomingSessionEpoch < currentSessionEpoch:
+		log.Info("drop stale maintainer status",
+			zap.Stringer("changefeed", cfID),
+			zap.Uint64("incomingSessionEpoch", incomingSessionEpoch),
+			zap.Uint64("currentSessionEpoch", currentSessionEpoch))
+		return false
+	case incomingSessionEpoch > currentSessionEpoch:
+		log.Warn("drop maintainer status from unexpected future session",
+			zap.Stringer("changefeed", cfID),
+			zap.Uint64("incomingSessionEpoch", incomingSessionEpoch),
+			zap.Uint64("currentSessionEpoch", currentSessionEpoch))
+		return false
+	default:
+		return true
+	}
 }
 
 func (c *Controller) updateChangefeedStatus(

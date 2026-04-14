@@ -19,6 +19,7 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/coordinator/changefeed"
 	mock_changefeed "github.com/pingcap/ticdc/coordinator/changefeed/mock"
+	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -79,4 +80,20 @@ func TestStopChangefeedOperator_PostFinish(t *testing.T) {
 	op2 := NewStopChangefeedOperator(common.DefaultKeyspaceID, cfID, "n1", 10, "n2", backend, false)
 	backend.EXPECT().SetChangefeedProgress(gomock.Any(), cfID, config.ProgressNone).Return(errors.New("err"))
 	op2.PostFinish()
+}
+
+func TestStopChangefeedOperator_CheckRequiresMatchingSessionEpoch(t *testing.T) {
+	op := NewStopChangefeedOperator(common.DefaultKeyspaceID, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), "n1", 10, "n2", nil, true)
+
+	op.Check("n1", &heartbeatpb.MaintainerStatus{
+		State:        heartbeatpb.ComponentState_Stopped,
+		SessionEpoch: 9,
+	})
+	require.False(t, op.finished.Load())
+
+	op.Check("n1", &heartbeatpb.MaintainerStatus{
+		State:        heartbeatpb.ComponentState_Stopped,
+		SessionEpoch: 10,
+	})
+	require.True(t, op.finished.Load())
 }

@@ -40,6 +40,13 @@ type StopChangefeedOperator struct {
 	backend             changefeed.Backend
 }
 
+func matchesMaintainerSession(expectedSessionEpoch, incomingSessionEpoch uint64) bool {
+	if incomingSessionEpoch == 0 {
+		return expectedSessionEpoch == 0
+	}
+	return incomingSessionEpoch == expectedSessionEpoch
+}
+
 func NewStopChangefeedOperator(
 	keyspaceID uint32,
 	cfID common.ChangeFeedID,
@@ -61,6 +68,16 @@ func NewStopChangefeedOperator(
 }
 
 func (m *StopChangefeedOperator) Check(_ node.ID, status *heartbeatpb.MaintainerStatus) {
+	if status == nil {
+		return
+	}
+	if !matchesMaintainerSession(m.sessionEpoch, status.GetSessionEpoch()) {
+		log.Info("ignore maintainer status with mismatched session during stop",
+			zap.Stringer("maintainer", m.cfID),
+			zap.Uint64("incomingSessionEpoch", status.GetSessionEpoch()),
+			zap.Uint64("expectedSessionEpoch", m.sessionEpoch))
+		return
+	}
 	if !m.finished.Load() && status.State != heartbeatpb.ComponentState_Working {
 		log.Info("maintainer report non-working status",
 			zap.Stringer("maintainer", m.cfID))

@@ -266,11 +266,14 @@ func (m *mockMaintainerManager) onDispatchMaintainerRequest(
 				FeedState:    "normal",
 				State:        heartbeatpb.ComponentState_Working,
 				CheckpointTs: req.CheckpointTs,
+				SessionEpoch: req.SessionEpoch,
 				// In these coordinator tests, the mock maintainer is considered immediately bootstrapped.
 				BootstrapDone: true,
 			}
 			m.maintainerMap[cfID] = cf
 			m.maintainers = append(m.maintainers, cf)
+		} else {
+			cf.SessionEpoch = req.SessionEpoch
 		}
 	} else {
 		req := msg.Message[0].(*heartbeatpb.RemoveMaintainerRequest)

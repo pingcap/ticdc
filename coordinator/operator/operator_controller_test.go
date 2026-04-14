@@ -15,6 +15,7 @@ package operator
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -28,7 +29,19 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/stretchr/testify/require"
+	pd "github.com/tikv/pd/client"
 )
+
+type deadlineCheckingPDClient struct {
+	pd.Client
+}
+
+func (m *deadlineCheckingPDClient) GetTS(ctx context.Context) (int64, int64, error) {
+	if _, ok := ctx.Deadline(); !ok {
+		return 0, 0, errors.New("missing deadline")
+	}
+	return 100, 1, nil
+}
 
 func newOperatorControllerForTest(
 	t *testing.T,
@@ -212,6 +225,61 @@ func TestController_HasOperatorInvolvingNode(t *testing.T) {
 	require.False(t, oc.HasOperatorInvolvingNode("n3"))
 }
 
+func TestController_NewAddMaintainerOperatorUsesTimeoutContextForSessionEpoch(t *testing.T) {
+	changefeedDB := changefeed.NewChangefeedDB(1216)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	backend := mock_changefeed.NewMockBackend(ctrl)
+	self := node.NewInfo("localhost:8300", "")
+	nodeManager := watcher.NewNodeManager(nil, nil)
+	nodeManager.GetAliveNodes()[self.ID] = self
+
+	appcontext.SetService(appcontext.MessageCenter, messaging.NewMockMessageCenter())
+	appcontext.SetService(watcher.NodeManagerName, nodeManager)
+
+	oc := NewOperatorController(self, changefeedDB, backend, 10, &deadlineCheckingPDClient{})
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		Config:       config.GetDefaultReplicaConfig(),
+		SinkURI:      "mysql://127.0.0.1:3306",
+	}, 1, true)
+	changefeedDB.AddAbsentChangefeed(cf)
+
+	op, err := oc.NewAddMaintainerOperator(cf, node.ID("node-1"))
+	require.NoError(t, err)
+	require.NotNil(t, op)
+}
+
+func TestController_NewMoveMaintainerOperatorUsesTimeoutContextForSessionEpoch(t *testing.T) {
+	changefeedDB := changefeed.NewChangefeedDB(1216)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	backend := mock_changefeed.NewMockBackend(ctrl)
+	self := node.NewInfo("localhost:8300", "")
+	nodeManager := watcher.NewNodeManager(nil, nil)
+	nodeManager.GetAliveNodes()[self.ID] = self
+
+	appcontext.SetService(appcontext.MessageCenter, messaging.NewMockMessageCenter())
+	appcontext.SetService(watcher.NodeManagerName, nodeManager)
+
+	oc := NewOperatorController(self, changefeedDB, backend, 10, &deadlineCheckingPDClient{})
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		Config:       config.GetDefaultReplicaConfig(),
+		SinkURI:      "mysql://127.0.0.1:3306",
+	}, 1, true)
+	cf.SetCurrentMaintainerSessionEpoch(10)
+	changefeedDB.AddReplicatingMaintainer(cf, self.ID)
+
+	op, err := oc.NewMoveMaintainerOperator(cf, self.ID, node.ID("node-1"))
+	require.NoError(t, err)
+	require.NotNil(t, op)
+}
+
 func TestController_StopChangefeedDuringAddOperator(t *testing.T) {
 	// Setup test environment
 	changefeedDB := changefeed.NewChangefeedDB(1216)
@@ -261,7 +329,8 @@ func TestController_StopChangefeedDuringAddOperator(t *testing.T) {
 	// Simulate StopChangefeedOperator completion (by calling Check method)
 	// First simulate maintainer reporting non-working status
 	stopOp.Check(target.ID, &heartbeatpb.MaintainerStatus{
-		State: heartbeatpb.ComponentState_Stopped,
+		State:        heartbeatpb.ComponentState_Stopped,
+		SessionEpoch: 1,
 	})
 
 	// Execute operator controller to trigger operator completion

@@ -360,6 +360,48 @@ func TestFinishBootstrapRemovesStaleMaintainerWithReportedSessionEpoch(t *testin
 	}
 }
 
+func TestHandleSingleMaintainerStatusDropsMismatchedSessionEpoch(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	backend := mock_changefeed.NewMockBackend(ctrl)
+	changefeedDB := changefeed.NewChangefeedDB(1216)
+	self := node.NewInfo("localhost:8300", "")
+	nodeManager := watcher.NewNodeManager(nil, nil)
+	nodeManager.GetAliveNodes()[self.ID] = self
+
+	mc := messaging.NewMockMessageCenter()
+	appcontext.SetService(appcontext.MessageCenter, mc)
+	appcontext.SetService(watcher.NodeManagerName, nodeManager)
+
+	controller := &Controller{
+		changefeedDB:       changefeedDB,
+		messageCenter:      mc,
+		operatorController: operator.NewOperatorController(self, changefeedDB, backend, 10, nil),
+	}
+
+	cfID := common.NewChangeFeedIDWithName("session-filter", common.DefaultKeyspaceName)
+	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		Config:       config.GetDefaultReplicaConfig(),
+		State:        config.StateNormal,
+		SinkURI:      "mysql://127.0.0.1:3306",
+	}, 10, false)
+	cf.SetCurrentMaintainerSessionEpoch(20)
+	changefeedDB.AddReplicatingMaintainer(cf, node.ID("node-1"))
+
+	change := controller.handleSingleMaintainerStatus(node.ID("node-1"), &heartbeatpb.MaintainerStatus{
+		ChangefeedID:  cfID.ToPB(),
+		State:         heartbeatpb.ComponentState_Working,
+		CheckpointTs:  30,
+		BootstrapDone: true,
+		SessionEpoch:  19,
+	}, cfID)
+
+	require.Nil(t, change)
+	require.Equal(t, uint64(10), cf.GetStatus().CheckpointTs)
+}
+
 func TestResumeChangefeedNormalState(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	backend := mock_changefeed.NewMockBackend(ctrl)

@@ -34,6 +34,8 @@ import (
 	"go.uber.org/zap"
 )
 
+const sessionEpochRequestTimeout = 3 * time.Second
+
 // Controller is the operator controller, it manages all operators.
 // And the Controller is responsible for the execution of the operator.
 type Controller struct {
@@ -321,8 +323,16 @@ func (oc *Controller) checkAffectedNodes(op operator.Operator[common.ChangeFeedI
 	}
 }
 
+func (oc *Controller) allocateSessionEpoch(lastIssued uint64) (uint64, error) {
+	// Bound the PD TSO RPC so a slow or unhealthy PD cannot stall scheduling
+	// forever. Callers treat timeout as "skip this round and retry later".
+	ctx, cancel := context.WithTimeout(context.Background(), sessionEpochRequestTimeout)
+	defer cancel()
+	return pdutil.GenerateStrictSessionEpoch(ctx, oc.pdClient, lastIssued)
+}
+
 func (oc *Controller) NewAddMaintainerOperator(cf *changefeed.Changefeed, dest node.ID) (operator.Operator[common.ChangeFeedID, *heartbeatpb.MaintainerStatus], error) {
-	sessionEpoch, err := pdutil.GenerateStrictSessionEpoch(context.Background(), oc.pdClient, cf.GetCurrentMaintainerSessionEpoch())
+	sessionEpoch, err := oc.allocateSessionEpoch(cf.GetCurrentMaintainerSessionEpoch())
 	if err != nil {
 		return nil, err
 	}
@@ -331,7 +341,7 @@ func (oc *Controller) NewAddMaintainerOperator(cf *changefeed.Changefeed, dest n
 
 func (oc *Controller) NewMoveMaintainerOperator(cf *changefeed.Changefeed, origin, dest node.ID) (operator.Operator[common.ChangeFeedID, *heartbeatpb.MaintainerStatus], error) {
 	activeSessionEpoch := cf.GetCurrentMaintainerSessionEpoch()
-	destSessionEpoch, err := pdutil.GenerateStrictSessionEpoch(context.Background(), oc.pdClient, activeSessionEpoch)
+	destSessionEpoch, err := oc.allocateSessionEpoch(activeSessionEpoch)
 	if err != nil {
 		return nil, err
 	}
