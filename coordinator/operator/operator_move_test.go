@@ -117,6 +117,7 @@ func TestMoveMaintainerOperator_ScheduleUsesOldAndNewSessions(t *testing.T) {
 		Config:       config.GetDefaultReplicaConfig(),
 		SinkURI:      "mysql://127.0.0.1:3306",
 	}, 1, true)
+	cf.SetCurrentMaintainerSessionEpoch(10)
 	changefeedDB.AddReplicatingMaintainer(cf, "n1")
 
 	op := NewMoveMaintainerOperator(changefeedDB, cf, "n1", "n2", 10, 20)

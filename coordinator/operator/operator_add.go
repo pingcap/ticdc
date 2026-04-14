@@ -135,7 +135,6 @@ func (m *AddMaintainerOperator) PostFinish() {
 	switch m.canceled.Load() {
 	case None:
 		m.db.MarkMaintainerReplicating(m.cf)
-		m.cf.SetCurrentMaintainerSessionEpoch(m.sessionEpoch)
 		m.cf.SetIsNew(false)
 	case NodeRemoved:
 		m.db.MarkMaintainerAbsent(m.cf)

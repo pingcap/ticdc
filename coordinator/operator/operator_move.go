@@ -190,9 +190,6 @@ func (m *MoveMaintainerOperator) PostFinish() {
 	log.Info("move changefeed operator finished",
 		zap.String("changefeed", m.changefeed.ID.String()))
 	m.db.MarkMaintainerReplicating(m.changefeed)
-	if m.dest != m.origin {
-		m.changefeed.SetCurrentMaintainerSessionEpoch(m.destSessionEpoch)
-	}
 }
 
 func (m *MoveMaintainerOperator) String() string {

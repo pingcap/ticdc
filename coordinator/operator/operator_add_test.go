@@ -85,6 +85,9 @@ func TestAddMaintainerOperator_ScheduleCarriesSessionEpochAndPostFinishPublishes
 	require.NotNil(t, msg)
 	require.Equal(t, uint64(42), msg.Message[0].(*heartbeatpb.AddMaintainerRequest).SessionEpoch)
 
+	op.Start()
+	require.Equal(t, uint64(42), cf.GetCurrentMaintainerSessionEpoch())
+
 	op.finished.Store(true)
 	op.PostFinish()
 	require.Equal(t, uint64(42), cf.GetCurrentMaintainerSessionEpoch())
