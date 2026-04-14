@@ -68,8 +68,6 @@ type Sink struct {
 	// variable @@tidb_cdc_active_active_sync_stats and is shared by all DML writers.
 	// It is nil when disabled or unsupported by downstream.
 	activeActiveSyncStatsCollector *mysql.ActiveActiveSyncStatsCollector
-
-	removeCleanupFn func() error
 }
 
 // Verify is used to verify the sink uri and config is valid
@@ -425,9 +423,6 @@ func (s *Sink) Close(removeChangefeed bool) {
 // It uses a short-lived DB connection so the cleanup can still run after the
 // normal sink close path has already closed the long-lived connection.
 func (s *Sink) CleanupRemovedChangefeed() error {
-	if s.removeCleanupFn != nil {
-		return s.removeCleanupFn()
-	}
 	if !s.cfg.EnableDDLTs {
 		return nil
 	}

@@ -848,10 +848,7 @@ func (e *DispatcherManager) TryClose(removeChangefeed bool) bool {
 		e.removeChangefeedRequested.Store(true)
 	}
 	if e.closed.Load() {
-		if !e.cleanupRemovedChangefeed() {
-			return false
-		}
-		return e.isCloseComplete()
+		return e.cleanupRemovedChangefeed()
 	}
 	if e.closing.Load() {
 		return false
@@ -937,10 +934,6 @@ func (e *DispatcherManager) close() {
 	e.closed.Store(true)
 	log.Info("event dispatcher manager closed",
 		zap.Stringer("changefeedID", e.changefeedID))
-}
-
-func (e *DispatcherManager) isCloseComplete() bool {
-	return e.closed.Load() && (!e.removeChangefeedRequested.Load() || e.removeChangefeedCleaned.Load())
 }
 
 func (e *DispatcherManager) cleanupRemovedChangefeed() bool {

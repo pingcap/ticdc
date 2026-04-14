@@ -14,7 +14,6 @@
 package dispatcherorchestrator
 
 import (
-	"reflect"
 	"testing"
 	"time"
 
@@ -99,63 +98,6 @@ func TestPendingMessageQueue_PopReturnsAfterClose(t *testing.T) {
 	case <-time.After(time.Second):
 		require.FailNow(t, "Pop did not return after context cancel")
 	}
-}
-
-func TestPendingMessageQueue_PopSkipsStaleKey(t *testing.T) {
-	t.Parallel()
-
-	q := newPendingMessageQueue()
-	staleKey := pendingMessageKey{
-		changefeedID: common.NewChangeFeedIDWithName("stale", "default"),
-		msgType:      messaging.TypeMaintainerBootstrapRequest,
-	}
-	validKey := pendingMessageKey{
-		changefeedID: common.NewChangeFeedIDWithName("valid", "default"),
-		msgType:      messaging.TypeMaintainerBootstrapRequest,
-	}
-	validMsg := &messaging.TargetMessage{Type: messaging.TypeMaintainerBootstrapRequest}
-
-	q.queue.Push(staleKey)
-	require.True(t, q.TryEnqueue(validKey, validMsg))
-
-	poppedKey, poppedMsg, ok := q.Pop()
-	require.True(t, ok)
-	require.Equal(t, validKey, poppedKey)
-	require.Same(t, validMsg, poppedMsg)
-}
-
-func TestPendingMessageQueue_PopKeepsStateShapeForNextRetry(t *testing.T) {
-	t.Parallel()
-
-	q := newPendingMessageQueue()
-	cfID := common.NewChangeFeedIDWithName("cf", "default")
-	key := pendingMessageKey{
-		changefeedID: cfID,
-		msgType:      messaging.TypeMaintainerBootstrapRequest,
-	}
-	msg1 := &messaging.TargetMessage{Type: messaging.TypeMaintainerBootstrapRequest}
-	msg2 := &messaging.TargetMessage{Type: messaging.TypeMaintainerBootstrapRequest}
-
-	require.True(t, q.TryEnqueue(key, msg1))
-
-	poppedKey, poppedMsg, ok := q.Pop()
-	require.True(t, ok)
-	require.Equal(t, key, poppedKey)
-	require.Same(t, msg1, poppedMsg)
-
-	q.mu.Lock()
-	_, exists := q.pending[key]
-	q.mu.Unlock()
-	require.False(t, exists)
-
-	require.True(t, q.TryEnqueue(key, msg2))
-
-	q.mu.Lock()
-	state := q.pending[key]
-	q.mu.Unlock()
-	require.NotNil(t, state)
-	require.Equal(t, 1, reflect.TypeOf(*state).NumField())
-	require.Same(t, msg2, state.queued)
 }
 
 func TestPendingMessageQueue_CloseRequestRemovedTrueOverridesPendingFalse(t *testing.T) {

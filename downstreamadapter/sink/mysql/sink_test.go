@@ -453,26 +453,3 @@ func TestGetTableRecoveryInfo_RemoveDDLTs(t *testing.T) {
 	// Check all mock expectations were met (after closing)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
-
-func TestMysqlSinkCleanupRemovedChangefeedUsesExplicitHelper(t *testing.T) {
-	_, sink, _ := getMysqlSink()
-
-	cleanupCalls := 0
-	sink.removeCleanupFn = func() error {
-		cleanupCalls++
-		return nil
-	}
-
-	require.NoError(t, sink.CleanupRemovedChangefeed())
-	require.Equal(t, 1, cleanupCalls)
-}
-
-func TestMysqlSinkCleanupRemovedChangefeedReturnsError(t *testing.T) {
-	_, sink, _ := getMysqlSink()
-
-	sink.removeCleanupFn = func() error {
-		return errors.New("cleanup failed")
-	}
-
-	require.ErrorContains(t, sink.CleanupRemovedChangefeed(), "cleanup failed")
-}

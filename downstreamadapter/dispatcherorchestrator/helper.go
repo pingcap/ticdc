@@ -16,12 +16,10 @@ package dispatcherorchestrator
 import (
 	"sync"
 
-	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/utils/chann"
-	"go.uber.org/zap"
 )
 
 type pendingMessageKey struct {
@@ -29,30 +27,25 @@ type pendingMessageKey struct {
 	msgType      messaging.IOType
 }
 
-type pendingMessageState struct {
-	// queued stores the next request waiting to be processed for this key.
-	queued *messaging.TargetMessage
-}
-
 // pendingMessageQueue de-duplicates messages by (changefeedID, messageType) to prevent
 // floods of retry messages from blocking or starving other requests.
 //
 // The queue keeps at most one queued request for each key.
-// The state object remains so per-key queue ownership stays explicit, but queued is the
-// only state the queue needs after Pop starts returning the message directly.
+// Once Pop returns a message, the key leaves the pending set immediately, so the next
+// retry can queue one more request for the next processing round.
 //
 // For MaintainerCloseRequest, we treat removed=true as stronger semantics than removed=false.
 // While a request is still queued, a later removed=true request replaces removed=false in
 // that queued slot so the next execution still observes the stronger semantics.
 type pendingMessageQueue struct {
 	mu      sync.Mutex
-	pending map[pendingMessageKey]*pendingMessageState
+	pending map[pendingMessageKey]*messaging.TargetMessage
 	queue   *chann.UnlimitedChannel[pendingMessageKey, any]
 }
 
 func newPendingMessageQueue() *pendingMessageQueue {
 	return &pendingMessageQueue{
-		pending: make(map[pendingMessageKey]*pendingMessageState),
+		pending: make(map[pendingMessageKey]*messaging.TargetMessage),
 		queue:   chann.NewUnlimitedChannelDefault[pendingMessageKey](),
 	}
 }
@@ -61,14 +54,9 @@ func newPendingMessageQueue() *pendingMessageQueue {
 // It returns true if the message is accepted, otherwise false.
 func (q *pendingMessageQueue) TryEnqueue(key pendingMessageKey, msg *messaging.TargetMessage) bool {
 	q.mu.Lock()
-	state, ok := q.pending[key]
-	if !ok {
-		state = &pendingMessageState{}
-		q.pending[key] = state
-	}
-	if state.queued != nil {
-		if shouldReplacePendingMessage(key, state.queued, msg) {
-			state.queued = msg
+	if pendingMsg, ok := q.pending[key]; ok {
+		if shouldReplacePendingMessage(key, pendingMsg, msg) {
+			q.pending[key] = msg
 			q.mu.Unlock()
 			return true
 		}
@@ -76,7 +64,7 @@ func (q *pendingMessageQueue) TryEnqueue(key pendingMessageKey, msg *messaging.T
 		return false
 	}
 
-	state.queued = msg
+	q.pending[key] = msg
 	q.mu.Unlock()
 
 	q.queue.Push(key)
@@ -105,28 +93,16 @@ func shouldReplacePendingMessage(key pendingMessageKey, oldMsg, newMsg *messagin
 // Pop blocks until a key is available or the queue is closed.
 // The returned message is removed from the queue and handed to the caller immediately.
 func (q *pendingMessageQueue) Pop() (pendingMessageKey, *messaging.TargetMessage, bool) {
-	for {
-		key, ok := q.queue.Get()
-		if !ok {
-			return pendingMessageKey{}, nil, false
-		}
-
-		q.mu.Lock()
-		state := q.pending[key]
-		if state == nil || state.queued == nil {
-			q.mu.Unlock()
-			// Returning false here would make the caller treat an internal stale key as shutdown.
-			// Keep draining until the underlying queue is actually closed.
-			log.Error("skip stale pending message key",
-				zap.Stringer("changefeedID", key.changefeedID),
-				zap.String("messageType", key.msgType.String()))
-			continue
-		}
-		msg := state.queued
-		delete(q.pending, key)
-		q.mu.Unlock()
-		return key, msg, true
+	key, ok := q.queue.Get()
+	if !ok {
+		return pendingMessageKey{}, nil, false
 	}
+
+	q.mu.Lock()
+	msg := q.pending[key]
+	delete(q.pending, key)
+	q.mu.Unlock()
+	return key, msg, true
 }
 
 func (q *pendingMessageQueue) Close() {
