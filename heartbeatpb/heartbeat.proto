@@ -81,6 +81,7 @@ message RedoMetaMessage {
     ChangefeedID changefeedID = 1;
     uint64 resolvedTs = 2;
     uint64 checkpointTs = 3;
+    uint64 session_epoch = 4;
 }
 
 // RedoResolvedTsProgressMessage used to send redo meta flushed resolvedTs 
@@ -96,6 +97,7 @@ message RedoResolvedTsProgressMessage {
 message RedoResolvedTsForwardMessage {
     ChangefeedID changefeedID = 1;
     uint64 resolvedTs = 2;
+    uint64 session_epoch = 3;
 }
 
 enum ScheduleAction {
@@ -152,6 +154,7 @@ message MaintainerStatus {
     repeated RunningError err = 5;
     bool bootstrap_done = 6;
     uint64 lastSyncedTs = 7;  // last synced ts of all tables in the changefeed, used in /:changefeed_id/synced API
+    uint64 session_epoch = 8;
 }
 
 // NodeLiveness is node-reported liveness.

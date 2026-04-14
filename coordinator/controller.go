@@ -608,6 +608,9 @@ func (c *Controller) finishBootstrap(ctx context.Context, runningChangefeeds map
 				zap.String("node", rm.nodeID.String()),
 				zap.String("status", common.FormatMaintainerStatus(rm.status)))
 			cf := changefeed.NewChangefeed(cfID, cfMeta.Info, rm.status.CheckpointTs, false)
+			// Restore the active maintainer session learned during bootstrap so
+			// follow-up stop or move commands keep using the fenced session.
+			cf.SetCurrentMaintainerSessionEpoch(rm.status.SessionEpoch)
 			c.changefeedDB.AddReplicatingMaintainer(cf, rm.nodeID)
 			delete(runningChangefeeds, cfID)
 		}

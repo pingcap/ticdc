@@ -375,6 +375,85 @@ func TestMaintainerShouldAcceptDispatcherMessage(t *testing.T) {
 	require.False(t, m.shouldAcceptDispatcherMessage(messaging.TypeHeartBeatRequest, 21))
 }
 
+func TestMaintainerOnMessageFiltersRemoveBySessionEpoch(t *testing.T) {
+	t.Parallel()
+
+	newMaintainer := func() *Maintainer {
+		m := &Maintainer{
+			changefeedID:  common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName),
+			sessionEpoch:  20,
+			nodeManager:   watcher.NewNodeManager(nil, nil),
+			removed:       atomic.NewBool(false),
+			statusChanged: atomic.NewBool(false),
+			runningErrors: struct {
+				sync.Mutex
+				m map[node.ID]*heartbeatpb.RunningError
+			}{m: make(map[node.ID]*heartbeatpb.RunningError)},
+		}
+		m.watermark.Watermark = &heartbeatpb.Watermark{}
+		return m
+	}
+
+	stale := newMaintainer()
+	stale.onMessage(messaging.NewSingleTargetMessage(
+		node.ID("coordinator"),
+		messaging.MaintainerManagerTopic,
+		&heartbeatpb.RemoveMaintainerRequest{
+			Id:           stale.changefeedID.ToPB(),
+			Cascade:      true,
+			SessionEpoch: 19,
+		},
+	))
+	require.False(t, stale.removing.Load())
+	require.False(t, stale.removed.Load())
+
+	current := newMaintainer()
+	current.onMessage(messaging.NewSingleTargetMessage(
+		node.ID("coordinator"),
+		messaging.MaintainerManagerTopic,
+		&heartbeatpb.RemoveMaintainerRequest{
+			Id:           current.changefeedID.ToPB(),
+			Cascade:      true,
+			SessionEpoch: 20,
+		},
+	))
+	require.True(t, current.removing.Load())
+	require.True(t, current.removed.Load())
+}
+
+func TestMaintainerAttachSessionEpochToRedoMessages(t *testing.T) {
+	t.Parallel()
+
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	m := &Maintainer{
+		changefeedID: cfID,
+		sessionEpoch: 30,
+	}
+
+	redoMetaMsg := messaging.NewSingleTargetMessage(
+		node.ID("node-1"),
+		messaging.HeartbeatCollectorTopic,
+		&heartbeatpb.RedoMetaMessage{
+			ChangefeedID: cfID.ToPB(),
+			CheckpointTs: 100,
+			ResolvedTs:   120,
+		},
+	)
+	m.attachSessionEpoch(redoMetaMsg)
+	require.Equal(t, uint64(30), redoMetaMsg.Message[0].(*heartbeatpb.RedoMetaMessage).SessionEpoch)
+
+	redoForwardMsg := messaging.NewSingleTargetMessage(
+		node.ID("node-1"),
+		messaging.HeartbeatCollectorTopic,
+		&heartbeatpb.RedoResolvedTsForwardMessage{
+			ChangefeedID: cfID.ToPB(),
+			ResolvedTs:   140,
+		},
+	)
+	m.attachSessionEpoch(redoForwardMsg)
+	require.Equal(t, uint64(30), redoForwardMsg.Message[0].(*heartbeatpb.RedoResolvedTsForwardMessage).SessionEpoch)
+}
+
 func TestMaintainer_GetMaintainerStatusUsesCommittedCheckpoint(t *testing.T) {
 	testutil.SetUpTestServices(t)
 
@@ -396,6 +475,7 @@ func TestMaintainer_GetMaintainerStatusUsesCommittedCheckpoint(t *testing.T) {
 		controller: &Controller{
 			spanController: spanController,
 		},
+		sessionEpoch:  55,
 		statusChanged: atomic.NewBool(false),
 	}
 	m.watermark.Watermark = &heartbeatpb.Watermark{
@@ -408,4 +488,5 @@ func TestMaintainer_GetMaintainerStatusUsesCommittedCheckpoint(t *testing.T) {
 	status := m.GetMaintainerStatus()
 	require.Equal(t, uint64(20), status.CheckpointTs)
 	require.Equal(t, uint64(50), status.LastSyncedTs)
+	require.Equal(t, uint64(55), status.SessionEpoch)
 }

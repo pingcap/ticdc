@@ -677,6 +677,14 @@ func (h *RedoResolvedTsForwardMessageHandler) Handle(dispatcherManager *Dispatch
 		panic("invalid message count")
 	}
 	msg := messages[0]
+	if accepted, reason := dispatcherManager.AcceptMaintainerSession(msg.SessionEpoch); !accepted {
+		log.Info("drop redo resolved ts forward message due to session mismatch",
+			zap.Stringer("changefeedID", dispatcherManager.changefeedID),
+			zap.String("reason", reason),
+			zap.Uint64("sessionEpoch", msg.SessionEpoch),
+			zap.Uint64("currentSessionEpoch", dispatcherManager.GetMaintainerSessionEpoch()))
+		return false
+	}
 	ok := dispatcherManager.SetRedoResolvedTs(msg.ResolvedTs)
 	if ok {
 		dispatcherManager.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.EventDispatcher) {
@@ -745,8 +753,16 @@ func (h *RedoMetaMessageHandler) Handle(dispatcherManager *DispatcherManager, me
 		// TODO: Support batch
 		panic("invalid message count")
 	}
+	msg := messages[0]
+	if accepted, reason := dispatcherManager.AcceptMaintainerSession(msg.SessionEpoch); !accepted {
+		log.Info("drop redo meta message due to session mismatch",
+			zap.Stringer("changefeedID", dispatcherManager.changefeedID),
+			zap.String("reason", reason),
+			zap.Uint64("sessionEpoch", msg.SessionEpoch),
+			zap.Uint64("currentSessionEpoch", dispatcherManager.GetMaintainerSessionEpoch()))
+		return false
+	}
 	if dispatcherManager.GetTableTriggerRedoDispatcher() != nil {
-		msg := messages[0]
 		dispatcherManager.UpdateRedoMeta(msg.CheckpointTs, msg.ResolvedTs)
 	}
 	return false

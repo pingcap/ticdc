@@ -282,3 +282,32 @@ func TestDispatcherManagerAcceptMaintainerSession(t *testing.T) {
 	require.False(t, accepted)
 	require.Contains(t, reason, "future")
 }
+
+func TestRedoResolvedTsForwardMessageHandlerFiltersSessionEpoch(t *testing.T) {
+	t.Parallel()
+
+	changefeedID := common.NewChangeFeedIDWithName("test-changefeed", "test-namespace")
+	handler := &RedoResolvedTsForwardMessageHandler{}
+	dm := &DispatcherManager{
+		changefeedID:  changefeedID,
+		dispatcherMap: newDispatcherMap[*dispatcher.EventDispatcher](),
+	}
+	dm.meta.maintainerSessionEpoch = 10
+	dm.redoGlobalTs.Store(100)
+
+	blocking := handler.Handle(dm, NewRedoResolvedTsForwardMessage(&heartbeatpb.RedoResolvedTsForwardMessage{
+		ChangefeedID: changefeedID.ToPB(),
+		ResolvedTs:   150,
+		SessionEpoch: 9,
+	}))
+	require.False(t, blocking)
+	require.Equal(t, uint64(100), dm.redoGlobalTs.Load())
+
+	blocking = handler.Handle(dm, NewRedoResolvedTsForwardMessage(&heartbeatpb.RedoResolvedTsForwardMessage{
+		ChangefeedID: changefeedID.ToPB(),
+		ResolvedTs:   150,
+		SessionEpoch: 10,
+	}))
+	require.False(t, blocking)
+	require.Equal(t, uint64(150), dm.redoGlobalTs.Load())
+}

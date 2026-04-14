@@ -29,12 +29,27 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/eventservice"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
+	pkgscheduler "github.com/pingcap/ticdc/pkg/scheduler"
 	"github.com/pingcap/ticdc/server/watcher"
+	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/atomic"
 )
+
+type noopScheduler struct {
+	name string
+}
+
+func (s *noopScheduler) Execute() time.Time {
+	return time.Time{}
+}
+
+func (s *noopScheduler) Name() string {
+	return s.name
+}
 
 func TestOnPeriodTaskAdvanceLiveness(t *testing.T) {
 	newController := func(t *testing.T) (*Controller, chan *messaging.TargetMessage, *changefeed.ChangefeedDB, node.ID) {
@@ -186,6 +201,70 @@ func TestHandleNonExistentChangefeedUsesLegacyRemoveWhenLocalMetadataMissing(t *
 	default:
 		t.Fatal("expected a remove maintainer request")
 	}
+}
+
+func TestFinishBootstrapRestoresMaintainerSessionEpoch(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	backend := mock_changefeed.NewMockBackend(ctrl)
+	changefeedDB := changefeed.NewChangefeedDB(1216)
+	self := node.NewInfo("localhost:8300", "")
+	nodeManager := watcher.NewNodeManager(nil, nil)
+	nodeManager.GetAliveNodes()[self.ID] = self
+
+	mc := messaging.NewMockMessageCenter()
+	appcontext.SetService(appcontext.MessageCenter, mc)
+	appcontext.SetService(appcontext.SchemaStore, eventservice.NewMockSchemaStore())
+	appcontext.SetService(watcher.NodeManagerName, nodeManager)
+
+	controller := &Controller{
+		selfNode:      self,
+		backend:       backend,
+		changefeedDB:  changefeedDB,
+		messageCenter: mc,
+		initialized:   atomic.NewBool(false),
+		taskScheduler: threadpool.NewThreadPoolDefault(),
+		scheduler: pkgscheduler.NewController(map[string]pkgscheduler.Scheduler{
+			pkgscheduler.BasicScheduler: &noopScheduler{name: pkgscheduler.BasicScheduler},
+		}),
+		operatorController: operator.NewOperatorController(self, changefeedDB, backend, 10, nil),
+	}
+	t.Cleanup(controller.Stop)
+
+	cfID := common.NewChangeFeedIDWithName("bootstrap-session", common.DefaultKeyspaceName)
+	backend.EXPECT().GetAllChangefeeds(gomock.Any()).Return(map[common.ChangeFeedID]*changefeed.ChangefeedMetaWrapper{
+		cfID: {
+			Info: &config.ChangeFeedInfo{
+				ChangefeedID: cfID,
+				Config:       config.GetDefaultReplicaConfig(),
+				State:        config.StateNormal,
+				SinkURI:      "mysql://127.0.0.1:3306",
+			},
+			Status: &config.ChangeFeedStatus{
+				CheckpointTs: 10,
+				Progress:     config.ProgressNone,
+			},
+		},
+	}, nil).Times(1)
+
+	controller.finishBootstrap(context.Background(), map[common.ChangeFeedID]remoteMaintainer{
+		cfID: {
+			nodeID: node.ID("node-1"),
+			status: &heartbeatpb.MaintainerStatus{
+				ChangefeedID:  cfID.ToPB(),
+				State:         heartbeatpb.ComponentState_Working,
+				CheckpointTs:  20,
+				BootstrapDone: true,
+				SessionEpoch:  88,
+			},
+		},
+	})
+
+	cf := changefeedDB.GetByID(cfID)
+	require.NotNil(t, cf)
+	require.Equal(t, node.ID("node-1"), cf.GetNodeID())
+	require.Equal(t, uint64(88), cf.GetCurrentMaintainerSessionEpoch())
 }
 
 func TestResumeChangefeedNormalState(t *testing.T) {

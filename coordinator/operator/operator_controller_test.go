@@ -71,6 +71,29 @@ func TestController_StopChangefeed(t *testing.T) {
 	require.Len(t, oc.operators, 1)
 }
 
+func TestController_StopChangefeedCarriesCurrentMaintainerSessionEpoch(t *testing.T) {
+	changefeedDB := changefeed.NewChangefeedDB(1216)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	backend := mock_changefeed.NewMockBackend(ctrl)
+	oc, self, _ := newOperatorControllerForTest(t, changefeedDB, backend)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		Config:       config.GetDefaultReplicaConfig(),
+		SinkURI:      "mysql://127.0.0.1:3306",
+	}, 1, true)
+	cf.SetCurrentMaintainerSessionEpoch(66)
+	changefeedDB.AddReplicatingMaintainer(cf, self.ID)
+
+	op := oc.StopChangefeed(context.Background(), cfID, false)
+	stopOp, ok := op.(*StopChangefeedOperator)
+	require.True(t, ok)
+	require.Equal(t, uint64(66), stopOp.sessionEpoch)
+	require.Equal(t, uint64(66), stopOp.Schedule().Message[0].(*heartbeatpb.RemoveMaintainerRequest).SessionEpoch)
+}
+
 func TestController_AddOperator(t *testing.T) {
 	changefeedDB := changefeed.NewChangefeedDB(1216)
 	ctrl := gomock.NewController(t)

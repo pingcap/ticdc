@@ -386,6 +386,7 @@ func (m *Maintainer) GetMaintainerStatus() *heartbeatpb.MaintainerStatus {
 		Err:           runningErrors,
 		BootstrapDone: m.initialized.Load(),
 		LastSyncedTs:  m.getWatermark().LastSyncedTs,
+		SessionEpoch:  m.sessionEpoch,
 	}
 	return status
 }
@@ -501,6 +502,9 @@ func (m *Maintainer) onMessage(msg *messaging.TargetMessage) {
 		m.onMaintainerCloseResponse(msg.From, resp)
 	case messaging.TypeRemoveMaintainerRequest:
 		req := msg.Message[0].(*heartbeatpb.RemoveMaintainerRequest)
+		if !m.shouldAcceptDispatcherMessage(msg.Type, req.SessionEpoch) {
+			return
+		}
 		m.onRemoveMaintainer(req.Cascade, req.Removed)
 	case messaging.TypeCheckpointTsMessage:
 		req := msg.Message[0].(*heartbeatpb.CheckpointTsMessage)
@@ -526,7 +530,7 @@ func (m *Maintainer) shouldAcceptDispatcherMessage(msgType messaging.IOType, inc
 
 	switch {
 	case incomingSessionEpoch < m.sessionEpoch:
-		log.Info("drop stale dispatcher manager message",
+		log.Info("drop stale session bound message",
 			zap.Stringer("changefeedID", m.changefeedID),
 			zap.String("messageType", msgType.String()),
 			zap.Uint64("incomingSessionEpoch", incomingSessionEpoch),
@@ -535,7 +539,7 @@ func (m *Maintainer) shouldAcceptDispatcherMessage(msgType messaging.IOType, inc
 	case incomingSessionEpoch == m.sessionEpoch:
 		return true
 	default:
-		log.Warn("drop dispatcher manager message from unexpected future session",
+		log.Warn("drop session bound message from unexpected future session",
 			zap.Stringer("changefeedID", m.changefeedID),
 			zap.String("messageType", msgType.String()),
 			zap.Uint64("incomingSessionEpoch", incomingSessionEpoch),
@@ -834,6 +838,10 @@ func (m *Maintainer) attachSessionEpoch(msg *messaging.TargetMessage) {
 	case *heartbeatpb.MaintainerCloseRequest:
 		req.SessionEpoch = m.sessionEpoch
 	case *heartbeatpb.HeartBeatResponse:
+		req.SessionEpoch = m.sessionEpoch
+	case *heartbeatpb.RedoMetaMessage:
+		req.SessionEpoch = m.sessionEpoch
+	case *heartbeatpb.RedoResolvedTsForwardMessage:
 		req.SessionEpoch = m.sessionEpoch
 	case *heartbeatpb.ScheduleDispatcherRequest:
 		req.SessionEpoch = m.sessionEpoch
