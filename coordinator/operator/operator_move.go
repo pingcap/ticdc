@@ -91,6 +91,9 @@ func (m *MoveMaintainerOperator) Schedule() *messaging.TargetMessage {
 	if m.originNodeStopped {
 		if !m.bind {
 			m.db.BindChangefeedToNode(m.origin, m.dest, m.changefeed)
+			// Publish the owner token at cutover time so later stop/remove
+			// commands observe the same destination node/session pair.
+			m.changefeed.SetCurrentMaintainerSessionEpoch(m.destSessionEpoch)
 			m.bind = true
 		}
 		sessionEpoch := m.destSessionEpoch

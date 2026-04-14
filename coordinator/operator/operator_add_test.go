@@ -20,6 +20,7 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/stretchr/testify/require"
 )
 
@@ -86,5 +87,22 @@ func TestAddMaintainerOperator_ScheduleCarriesSessionEpochAndPostFinishPublishes
 
 	op.finished.Store(true)
 	op.PostFinish()
+	require.Equal(t, uint64(42), cf.GetCurrentMaintainerSessionEpoch())
+}
+
+func TestAddMaintainerOperator_StartPublishesOwnerSessionEpoch(t *testing.T) {
+	changefeedDB := changefeed.NewChangefeedDB(1216)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		Config:       config.GetDefaultReplicaConfig(),
+		SinkURI:      "mysql://127.0.0.1:3306",
+	}, 1, true)
+	changefeedDB.AddAbsentChangefeed(cf)
+
+	op := NewAddMaintainerOperator(changefeedDB, cf, "n1", 42)
+	op.Start()
+
+	require.Equal(t, node.ID("n1"), cf.GetNodeID())
 	require.Equal(t, uint64(42), cf.GetCurrentMaintainerSessionEpoch())
 }

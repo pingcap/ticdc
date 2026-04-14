@@ -46,7 +46,9 @@ type Changefeed struct {
 	lastSavedCheckpointTs    *atomic.Uint64
 	logCoordinatorResolvedTs *atomic.Uint64
 	// currentMaintainerSessionEpoch is runtime-only coordinator state.
-	// It tracks the maintainer session that has already become active.
+	// It is the control-plane session token paired with the currently recorded
+	// maintainer node, and must stay in sync with owner handoff so stop/remove
+	// requests always fence the right maintainer.
 	currentMaintainerSessionEpoch *atomic.Uint64
 	// the heartbeatpb.MaintainerStatus is read only
 	status *atomic.Pointer[heartbeatpb.MaintainerStatus]

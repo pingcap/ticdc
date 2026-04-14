@@ -134,8 +134,13 @@ func (oc *Controller) StopChangefeed(_ context.Context, cfID common.ChangeFeedID
 
 	changefeed := oc.changefeedDB.GetByID(cfID)
 	keyspaceID := uint32(0)
+	sessionEpoch := uint64(0)
 	if changefeed != nil {
 		keyspaceID = changefeed.GetKeyspaceID()
+		// Capture the owner token before StopByChangefeedID mutates/removes the
+		// in-memory record. The stop operator must keep using the same fencing
+		// session even when `removed=true` deletes the changefeed immediately.
+		sessionEpoch = changefeed.GetCurrentMaintainerSessionEpoch()
 	}
 	scheduledNode := oc.changefeedDB.StopByChangefeedID(cfID, removed)
 	if scheduledNode == "" {
@@ -146,17 +151,13 @@ func (oc *Controller) StopChangefeed(_ context.Context, cfID common.ChangeFeedID
 		scheduledNode = oc.selfNode.ID
 	}
 
-	return oc.pushStopChangefeedOperator(keyspaceID, cfID, scheduledNode, removed)
+	return oc.pushStopChangefeedOperator(keyspaceID, cfID, scheduledNode, sessionEpoch, removed)
 }
 
 // pushStopChangefeedOperator pushes a stop changefeed operator to the controller.
 // it checks if the operator already exists, if exists, it will replace the old one.
 // if the old operator is the removing operator, it will skip this operator.
-func (oc *Controller) pushStopChangefeedOperator(keyspaceID uint32, cfID common.ChangeFeedID, nodeID node.ID, remove bool) operator.Operator[common.ChangeFeedID, *heartbeatpb.MaintainerStatus] {
-	sessionEpoch := uint64(0)
-	if cf := oc.changefeedDB.GetByID(cfID); cf != nil {
-		sessionEpoch = cf.GetCurrentMaintainerSessionEpoch()
-	}
+func (oc *Controller) pushStopChangefeedOperator(keyspaceID uint32, cfID common.ChangeFeedID, nodeID node.ID, sessionEpoch uint64, remove bool) operator.Operator[common.ChangeFeedID, *heartbeatpb.MaintainerStatus] {
 	op := NewStopChangefeedOperator(keyspaceID, cfID, nodeID, sessionEpoch, oc.selfNode.ID, oc.backend, remove)
 	if old, ok := oc.operators[cfID]; ok {
 		oldStop, ok := old.OP.(*StopChangefeedOperator)

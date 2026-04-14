@@ -125,6 +125,9 @@ func (m *AddMaintainerOperator) OnTaskRemoved() {
 // Start binds the changefeed to the destination node before the first scheduling attempt.
 func (m *AddMaintainerOperator) Start() {
 	m.db.BindChangefeedToNode("", m.dest, m.cf)
+	// Publish the destination owner token together with the node handoff so any
+	// concurrent stop/remove command uses the same session that add is fencing on.
+	m.cf.SetCurrentMaintainerSessionEpoch(m.sessionEpoch)
 }
 
 // PostFinish applies side effects after the operator is removed from the controller.
