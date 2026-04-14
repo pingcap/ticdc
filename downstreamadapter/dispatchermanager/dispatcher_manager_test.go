@@ -292,9 +292,12 @@ func TestTryCloseRemovedRequestAfterClosedTriggersCleanup(t *testing.T) {
 	manager.closed.Store(true)
 
 	closed := manager.TryClose(true)
-	require.True(t, closed)
+	require.False(t, closed)
 	require.True(t, manager.removeChangefeedRequested.Load())
-	require.True(t, manager.removeChangefeedCleaned.Load())
+	require.Eventually(t, func() bool {
+		return manager.removeChangefeedCleaned.Load()
+	}, time.Second, 10*time.Millisecond)
+	require.True(t, manager.TryClose(true))
 }
 
 func TestMergeDispatcherExistingID(t *testing.T) {

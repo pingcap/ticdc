@@ -139,8 +139,11 @@ type DispatcherManager struct {
 	// removeChangefeedCleaned records whether the remove-only cleanup has finished.
 	// closed=true only means the base close path completed; remove cleanup may still be pending.
 	removeChangefeedCleaned atomic.Bool
-	cancel                  context.CancelFunc
-	wg                      sync.WaitGroup
+	// removeChangefeedCleanupRunning prevents duplicate background cleanup runs
+	// while retries keep asking for remove semantics after the base close path ends.
+	removeChangefeedCleanupRunning atomic.Bool
+	cancel                         context.CancelFunc
+	wg                             sync.WaitGroup
 
 	// removeTaskHandles stores the task handles for async dispatcher removal
 	// map[common.DispatcherID]*threadpool.TaskHandle
@@ -848,7 +851,7 @@ func (e *DispatcherManager) TryClose(removeChangefeed bool) bool {
 		e.removeChangefeedRequested.Store(true)
 	}
 	if e.closed.Load() {
-		return e.cleanupRemovedChangefeed()
+		return e.tryScheduleRemoveChangefeedCleanup()
 	}
 	if e.closing.Load() {
 		return false
@@ -916,11 +919,6 @@ func (e *DispatcherManager) close() {
 	e.sink.Close(false)
 	log.Info("sink closed", zap.Stringer("changefeedID", e.changefeedID))
 
-	if !e.cleanupRemovedChangefeed() {
-		log.Warn("remove changefeed cleanup is not finished during close",
-			zap.Stringer("changefeedID", e.changefeedID))
-	}
-
 	e.wg.Wait()
 
 	e.removeTaskHandles.Range(func(key, value interface{}) bool {
@@ -932,34 +930,57 @@ func (e *DispatcherManager) close() {
 	e.cleanMetrics()
 
 	e.closed.Store(true)
+	e.tryScheduleRemoveChangefeedCleanup()
 	log.Info("event dispatcher manager closed",
 		zap.Stringer("changefeedID", e.changefeedID))
 }
 
-func (e *DispatcherManager) cleanupRemovedChangefeed() bool {
-	if !e.removeChangefeedRequested.Load() || e.removeChangefeedCleaned.Load() {
+func (e *DispatcherManager) tryScheduleRemoveChangefeedCleanup() bool {
+	if !e.removeChangefeedRequested.Load() {
 		return true
+	}
+	if e.removeChangefeedCleaned.Load() {
+		return true
+	}
+	if !e.removeChangefeedCleanupRunning.CompareAndSwap(false, true) {
+		return false
+	}
+
+	go func() {
+		defer e.removeChangefeedCleanupRunning.Store(false)
+
+		if err := e.runRemoveChangefeedCleanup(); err != nil {
+			log.Warn("failed to cleanup removed changefeed",
+				zap.Stringer("changefeedID", e.changefeedID),
+				zap.Error(err))
+			return
+		}
+		e.removeChangefeedCleaned.Store(true)
+	}()
+	return false
+}
+
+func (e *DispatcherManager) runRemoveChangefeedCleanup() error {
+	if !e.removeChangefeedRequested.Load() || e.removeChangefeedCleaned.Load() {
+		return nil
 	}
 
 	if e.IsRedoEnabled() {
 		// Redo meta cleanup is the remove-only step for redo mode. It is safe to retry
 		// because removeChangefeedCleaned is only set after all remove-only cleanup succeeds.
-		e.closeRedoMeta(true)
+		if err := e.closeRedoMeta(true); err != nil {
+			return errors.Trace(err)
+		}
 	}
 
 	if mysqlSink, ok := e.sink.(*mysql.Sink); ok {
 		// MySQL sink may still need ddl_ts cleanup after the base close path has already
 		// released the long-lived DB connection, so keep the retryable remove step here.
 		if err := mysqlSink.CleanupRemovedChangefeed(); err != nil {
-			log.Warn("failed to cleanup removed changefeed",
-				zap.Stringer("changefeedID", e.changefeedID),
-				zap.Error(err))
-			return false
+			return errors.Trace(err)
 		}
 	}
-
-	e.removeChangefeedCleaned.Store(true)
-	return true
+	return nil
 }
 
 // cleanEventDispatcher is called when the event dispatcher is removed successfully.
