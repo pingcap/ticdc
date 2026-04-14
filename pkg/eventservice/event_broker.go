@@ -676,9 +676,9 @@ func (c *eventBroker) shouldSuppressSyncPointEmission(d *dispatcherStat) bool {
 		return false
 	}
 
-	sentResolvedTs := d.sentResolvedTs.Load()
+	receivedResolvedTs := d.receivedResolvedTs.Load()
 	checkpointTs := d.checkpointTs.Load()
-	lag := syncPointLagDuration(sentResolvedTs, checkpointTs)
+	lag := syncPointLagDuration(receivedResolvedTs, checkpointTs)
 	metrics.EventServiceSyncPointLagGaugeVec.WithLabelValues(d.changefeedStat.changefeedID.String()).Set(lag.Seconds())
 
 	if d.syncPointSendSuppressed.Load() {
@@ -687,7 +687,7 @@ func (c *eventBroker) shouldSuppressSyncPointEmission(d *dispatcherStat) bool {
 				log.Info("syncpoint emission resumed",
 					zap.Stringer("changefeedID", d.changefeedStat.changefeedID),
 					zap.Stringer("dispatcherID", d.id),
-					zap.Uint64("sentResolvedTs", sentResolvedTs),
+					zap.Uint64("receivedResolvedTs", receivedResolvedTs),
 					zap.Uint64("checkpointTs", checkpointTs),
 					zap.Duration("lag", lag),
 					zap.Duration("resumeThreshold", c.syncPointLagResumeThreshold))
@@ -702,7 +702,7 @@ func (c *eventBroker) shouldSuppressSyncPointEmission(d *dispatcherStat) bool {
 			log.Info("syncpoint emission suppressed due to lag",
 				zap.Stringer("changefeedID", d.changefeedStat.changefeedID),
 				zap.Stringer("dispatcherID", d.id),
-				zap.Uint64("sentResolvedTs", sentResolvedTs),
+				zap.Uint64("sentResolvedTs", receivedResolvedTs),
 				zap.Uint64("checkpointTs", checkpointTs),
 				zap.Duration("lag", lag),
 				zap.Duration("suppressThreshold", c.syncPointLagSuppressThreshold),
