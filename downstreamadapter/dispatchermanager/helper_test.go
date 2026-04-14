@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/sink/redo"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/stretchr/testify/require"
 )
 
@@ -220,4 +221,64 @@ func TestDispatcherManagerIsRedoReadyRequiresPublication(t *testing.T) {
 	dm.redoReady.Store(true)
 
 	require.True(t, dm.IsRedoReady())
+}
+
+func TestDispatcherManagerAcceptBootstrapSession(t *testing.T) {
+	t.Parallel()
+
+	dm := &DispatcherManager{}
+	dm.meta.maintainerID = node.ID("old")
+	dm.meta.maintainerSessionEpoch = 10
+
+	accepted, reason := dm.AcceptBootstrapSession(node.ID("new"), 9)
+	require.False(t, accepted)
+	require.Contains(t, reason, "stale")
+	require.Equal(t, uint64(10), dm.GetMaintainerSessionEpoch())
+
+	accepted, reason = dm.AcceptBootstrapSession(node.ID("new"), 10)
+	require.True(t, accepted)
+	require.Equal(t, "current", reason)
+	require.Equal(t, node.ID("new"), dm.GetMaintainerID())
+
+	accepted, reason = dm.AcceptBootstrapSession(node.ID("next"), 11)
+	require.True(t, accepted)
+	require.Equal(t, "advance", reason)
+	require.Equal(t, uint64(11), dm.GetMaintainerSessionEpoch())
+	require.Equal(t, node.ID("next"), dm.GetMaintainerID())
+}
+
+func TestDispatcherManagerAcceptBootstrapSessionLegacyCompatibility(t *testing.T) {
+	t.Parallel()
+
+	dm := &DispatcherManager{}
+	dm.meta.maintainerID = node.ID("current")
+	dm.meta.maintainerSessionEpoch = 10
+
+	accepted, reason := dm.AcceptBootstrapSession(node.ID("legacy"), 0)
+	require.True(t, accepted)
+	require.Equal(t, "legacy", reason)
+	require.Equal(t, node.ID("current"), dm.GetMaintainerID())
+	require.Equal(t, uint64(10), dm.GetMaintainerSessionEpoch())
+}
+
+func TestDispatcherManagerAcceptMaintainerSession(t *testing.T) {
+	t.Parallel()
+
+	dm := &DispatcherManager{}
+	dm.meta.maintainerSessionEpoch = 10
+
+	accepted, _ := dm.AcceptMaintainerSession(0)
+	require.True(t, accepted)
+
+	accepted, reason := dm.AcceptMaintainerSession(9)
+	require.False(t, accepted)
+	require.Contains(t, reason, "stale")
+
+	accepted, reason = dm.AcceptMaintainerSession(10)
+	require.True(t, accepted)
+	require.Equal(t, "current", reason)
+
+	accepted, reason = dm.AcceptMaintainerSession(11)
+	require.False(t, accepted)
+	require.Contains(t, reason, "future")
 }

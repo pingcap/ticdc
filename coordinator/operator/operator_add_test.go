@@ -18,6 +18,8 @@ import (
 
 	"github.com/pingcap/ticdc/coordinator/changefeed"
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/stretchr/testify/require"
 )
 
@@ -25,7 +27,7 @@ import (
 // does not affect scheduling, while removing the destination node cancels the operator
 // and stops it from scheduling further commands.
 func TestAddMaintainerOperator_OnNodeRemove(t *testing.T) {
-	op := NewAddMaintainerOperator(nil, &changefeed.Changefeed{}, "n1")
+	op := NewAddMaintainerOperator(nil, &changefeed.Changefeed{}, "n1", 1)
 	op.OnNodeRemove("n2")
 	require.Equal(t, None, op.canceled.Load())
 	require.False(t, op.finished.Load())
@@ -40,7 +42,7 @@ func TestAddMaintainerOperator_OnNodeRemove(t *testing.T) {
 // TestAddMaintainerOperator_OnTaskRemoved verifies that removing the changefeed task
 // cancels the operator and prevents any further scheduling.
 func TestAddMaintainerOperator_OnTaskRemoved(t *testing.T) {
-	op := NewAddMaintainerOperator(nil, &changefeed.Changefeed{}, "n1")
+	op := NewAddMaintainerOperator(nil, &changefeed.Changefeed{}, "n1", 1)
 
 	op.OnTaskRemoved()
 	require.Equal(t, TaskRemoved, op.canceled.Load())
@@ -52,7 +54,7 @@ func TestAddMaintainerOperator_OnTaskRemoved(t *testing.T) {
 // TestAddMaintainerOperator_CheckRequiresBootstrapDone verifies that the operator only
 // completes after it observes a Working status with BootstrapDone from the destination node.
 func TestAddMaintainerOperator_CheckRequiresBootstrapDone(t *testing.T) {
-	op := NewAddMaintainerOperator(nil, &changefeed.Changefeed{}, "n1")
+	op := NewAddMaintainerOperator(nil, &changefeed.Changefeed{}, "n1", 1)
 
 	op.Check("n1", &heartbeatpb.MaintainerStatus{
 		State:         heartbeatpb.ComponentState_Working,
@@ -65,4 +67,24 @@ func TestAddMaintainerOperator_CheckRequiresBootstrapDone(t *testing.T) {
 		BootstrapDone: true,
 	})
 	require.True(t, op.finished.Load())
+}
+
+func TestAddMaintainerOperator_ScheduleCarriesSessionEpochAndPostFinishPublishesIt(t *testing.T) {
+	changefeedDB := changefeed.NewChangefeedDB(1216)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		Config:       config.GetDefaultReplicaConfig(),
+		SinkURI:      "mysql://127.0.0.1:3306",
+	}, 1, true)
+	changefeedDB.AddAbsentChangefeed(cf)
+
+	op := NewAddMaintainerOperator(changefeedDB, cf, "n1", 42)
+	msg := op.Schedule()
+	require.NotNil(t, msg)
+	require.Equal(t, uint64(42), msg.Message[0].(*heartbeatpb.AddMaintainerRequest).SessionEpoch)
+
+	op.finished.Store(true)
+	op.PostFinish()
+	require.Equal(t, uint64(42), cf.GetCurrentMaintainerSessionEpoch())
 }

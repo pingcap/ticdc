@@ -58,7 +58,7 @@ func TestOnPeriodTaskAdvanceLiveness(t *testing.T) {
 		return &Controller{
 			changefeedDB: changefeedDB,
 			operatorController: operator.NewOperatorController(
-				self, changefeedDB, backend, 10,
+				self, changefeedDB, backend, 10, nil,
 			),
 			initialized:     atomic.NewBool(true),
 			drainController: drain.NewController(mc),
@@ -106,7 +106,7 @@ func TestOnPeriodTaskAdvanceLiveness(t *testing.T) {
 		}, 1, true)
 		changefeedDB.AddAbsentChangefeed(cf)
 		require.True(t, controller.operatorController.AddOperator(
-			operator.NewAddMaintainerOperator(changefeedDB, cf, targetNodeID),
+			operator.NewAddMaintainerOperator(changefeedDB, cf, targetNodeID, 1),
 		))
 
 		controller.onPeriodTask()
@@ -146,6 +146,46 @@ func TestResumeChangefeed(t *testing.T) {
 	backend.EXPECT().ResumeChangefeed(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).Times(1)
 	require.Nil(t, controller.ResumeChangefeed(context.Background(), cfID, 12, false))
 	require.Equal(t, config.StateNormal, changefeedDB.GetByID(cfID).GetInfo().State)
+}
+
+func TestHandleNonExistentChangefeedUsesLegacyRemoveWhenLocalMetadataMissing(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	backend := mock_changefeed.NewMockBackend(ctrl)
+	changefeedDB := changefeed.NewChangefeedDB(1216)
+	self := node.NewInfo("localhost:8300", "")
+	nodeManager := watcher.NewNodeManager(nil, nil)
+	nodeManager.GetAliveNodes()[self.ID] = self
+
+	mc := messaging.NewMockMessageCenter()
+	appcontext.SetService(appcontext.MessageCenter, mc)
+	appcontext.SetService(watcher.NodeManagerName, nodeManager)
+
+	controller := &Controller{
+		changefeedDB:       changefeedDB,
+		messageCenter:      mc,
+		operatorController: operator.NewOperatorController(self, changefeedDB, backend, 10, nil),
+	}
+
+	cfID := common.NewChangeFeedIDWithName("stale", common.DefaultKeyspaceName)
+	require.NotPanics(t, func() {
+		controller.handleNonExistentChangefeed(cfID, node.ID("node-1"), &heartbeatpb.MaintainerStatus{
+			ChangefeedID: cfID.ToPB(),
+			State:        heartbeatpb.ComponentState_Working,
+		})
+	})
+
+	select {
+	case msg := <-mc.GetMessageChannel():
+		require.Equal(t, messaging.TypeRemoveMaintainerRequest, msg.Type)
+		req := msg.Message[0].(*heartbeatpb.RemoveMaintainerRequest)
+		require.Equal(t, cfID.ToPB(), req.Id)
+		require.Equal(t, uint32(0), req.KeyspaceId)
+		require.Equal(t, uint64(0), req.SessionEpoch)
+	default:
+		t.Fatal("expected a remove maintainer request")
+	}
 }
 
 func TestResumeChangefeedNormalState(t *testing.T) {
@@ -258,7 +298,7 @@ func TestPauseChangefeed(t *testing.T) {
 		backend:      backend,
 		changefeedDB: changefeedDB,
 		operatorController: operator.NewOperatorController(node.NewInfo("node1", ""),
-			changefeedDB, backend, 10),
+			changefeedDB, backend, 10, nil),
 	}
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
@@ -373,7 +413,7 @@ func TestRemoveChangefeed(t *testing.T) {
 		backend:      backend,
 		changefeedDB: changefeedDB,
 		operatorController: operator.NewOperatorController(node.NewInfo("node1", ""),
-			changefeedDB, backend, 10),
+			changefeedDB, backend, 10, nil),
 	}
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
@@ -418,7 +458,7 @@ func TestListChangefeed(t *testing.T) {
 		backend:      backend,
 		changefeedDB: changefeedDB,
 		operatorController: operator.NewOperatorController(node.NewInfo("node1", ""),
-			changefeedDB, backend, 10),
+			changefeedDB, backend, 10, nil),
 	}
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
@@ -465,7 +505,7 @@ func TestCreateChangefeed(t *testing.T) {
 		backend:      backend,
 		changefeedDB: changefeedDB,
 		operatorController: operator.NewOperatorController(node.NewInfo("node1", ""),
-			changefeedDB, backend, 10),
+			changefeedDB, backend, 10, nil),
 		initialized: atomic.NewBool(false),
 	}
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
@@ -492,7 +532,7 @@ func TestCreateChangefeed(t *testing.T) {
 
 	// changefeed is in stopping
 	require.Equal(t, 1, changefeedDB.GetAbsentSize())
-	controller.operatorController.AddOperator(operator.NewAddMaintainerOperator(changefeedDB, changefeedDB.GetByID(cfID), "node1"))
+	controller.operatorController.AddOperator(operator.NewAddMaintainerOperator(changefeedDB, changefeedDB.GetByID(cfID), "node1", 1))
 
 	cf2ID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	cf2Config := &config.ChangeFeedInfo{

@@ -28,10 +28,12 @@ import (
 
 // MoveMaintainerOperator is an operator to move a maintainer to the destination node
 type MoveMaintainerOperator struct {
-	changefeed *changefeed.Changefeed
-	db         *changefeed.ChangefeedDB
-	origin     node.ID
-	dest       node.ID
+	changefeed         *changefeed.Changefeed
+	db                 *changefeed.ChangefeedDB
+	origin             node.ID
+	dest               node.ID
+	activeSessionEpoch uint64
+	destSessionEpoch   uint64
 
 	originNodeStopped bool
 	finished          bool
@@ -43,13 +45,15 @@ type MoveMaintainerOperator struct {
 }
 
 func NewMoveMaintainerOperator(db *changefeed.ChangefeedDB, changefeed *changefeed.Changefeed,
-	origin, dest node.ID,
+	origin, dest node.ID, activeSessionEpoch, destSessionEpoch uint64,
 ) *MoveMaintainerOperator {
 	return &MoveMaintainerOperator{
-		changefeed: changefeed,
-		origin:     origin,
-		dest:       dest,
-		db:         db,
+		changefeed:         changefeed,
+		origin:             origin,
+		dest:               dest,
+		activeSessionEpoch: activeSessionEpoch,
+		destSessionEpoch:   destSessionEpoch,
+		db:                 db,
 	}
 }
 
@@ -89,9 +93,15 @@ func (m *MoveMaintainerOperator) Schedule() *messaging.TargetMessage {
 			m.db.BindChangefeedToNode(m.origin, m.dest, m.changefeed)
 			m.bind = true
 		}
-		return m.changefeed.NewAddMaintainerMessage(m.dest)
+		sessionEpoch := m.destSessionEpoch
+		if m.dest == m.origin {
+			// If the move falls back to the original node before cutover, keep the
+			// current session so the old maintainer is treated as the active owner.
+			sessionEpoch = m.activeSessionEpoch
+		}
+		return m.changefeed.NewAddMaintainerMessage(m.dest, sessionEpoch)
 	}
-	return m.changefeed.NewRemoveMaintainerMessage(m.origin, false, false)
+	return m.changefeed.NewRemoveMaintainerMessage(m.origin, false, false, m.activeSessionEpoch)
 }
 
 func (m *MoveMaintainerOperator) OnNodeRemove(n node.ID) {
@@ -177,6 +187,9 @@ func (m *MoveMaintainerOperator) PostFinish() {
 	log.Info("move changefeed operator finished",
 		zap.String("changefeed", m.changefeed.ID.String()))
 	m.db.MarkMaintainerReplicating(m.changefeed)
+	if m.dest != m.origin {
+		m.changefeed.SetCurrentMaintainerSessionEpoch(m.destSessionEpoch)
+	}
 }
 
 func (m *MoveMaintainerOperator) String() string {

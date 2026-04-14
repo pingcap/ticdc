@@ -27,8 +27,10 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/scheduler/operator"
 	"github.com/pingcap/ticdc/server/watcher"
+	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
 )
 
@@ -46,6 +48,7 @@ type Controller struct {
 	selfNode      *node.Info
 	backend       changefeed.Backend
 	nodeManger    *watcher.NodeManager
+	pdClient      pd.Client
 }
 
 func NewOperatorController(
@@ -53,6 +56,7 @@ func NewOperatorController(
 	db *changefeed.ChangefeedDB,
 	backend changefeed.Backend,
 	batchSize int,
+	pdClient pd.Client,
 ) *Controller {
 	oc := &Controller{
 		role:          "coordinator",
@@ -64,6 +68,7 @@ func NewOperatorController(
 		selfNode:      selfNode,
 		backend:       backend,
 		nodeManger:    appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
+		pdClient:      pdClient,
 	}
 	return oc
 }
@@ -127,6 +132,11 @@ func (oc *Controller) StopChangefeed(_ context.Context, cfID common.ChangeFeedID
 	oc.mu.Lock()
 	defer oc.mu.Unlock()
 
+	changefeed := oc.changefeedDB.GetByID(cfID)
+	keyspaceID := uint32(0)
+	if changefeed != nil {
+		keyspaceID = changefeed.GetKeyspaceID()
+	}
 	scheduledNode := oc.changefeedDB.StopByChangefeedID(cfID, removed)
 	if scheduledNode == "" {
 		log.Info("changefeed is not scheduled, try stop maintainer using coordinator node",
@@ -136,9 +146,6 @@ func (oc *Controller) StopChangefeed(_ context.Context, cfID common.ChangeFeedID
 		scheduledNode = oc.selfNode.ID
 	}
 
-	changefeed := oc.changefeedDB.GetByID(cfID)
-	keyspaceID := changefeed.GetKeyspaceID()
-
 	return oc.pushStopChangefeedOperator(keyspaceID, cfID, scheduledNode, removed)
 }
 
@@ -146,7 +153,11 @@ func (oc *Controller) StopChangefeed(_ context.Context, cfID common.ChangeFeedID
 // it checks if the operator already exists, if exists, it will replace the old one.
 // if the old operator is the removing operator, it will skip this operator.
 func (oc *Controller) pushStopChangefeedOperator(keyspaceID uint32, cfID common.ChangeFeedID, nodeID node.ID, remove bool) operator.Operator[common.ChangeFeedID, *heartbeatpb.MaintainerStatus] {
-	op := NewStopChangefeedOperator(keyspaceID, cfID, nodeID, oc.selfNode.ID, oc.backend, remove)
+	sessionEpoch := uint64(0)
+	if cf := oc.changefeedDB.GetByID(cfID); cf != nil {
+		sessionEpoch = cf.GetCurrentMaintainerSessionEpoch()
+	}
+	op := NewStopChangefeedOperator(keyspaceID, cfID, nodeID, sessionEpoch, oc.selfNode.ID, oc.backend, remove)
 	if old, ok := oc.operators[cfID]; ok {
 		oldStop, ok := old.OP.(*StopChangefeedOperator)
 		if ok {
@@ -309,10 +320,19 @@ func (oc *Controller) checkAffectedNodes(op operator.Operator[common.ChangeFeedI
 	}
 }
 
-func (oc *Controller) NewAddMaintainerOperator(cf *changefeed.Changefeed, dest node.ID) operator.Operator[common.ChangeFeedID, *heartbeatpb.MaintainerStatus] {
-	return NewAddMaintainerOperator(oc.changefeedDB, cf, dest)
+func (oc *Controller) NewAddMaintainerOperator(cf *changefeed.Changefeed, dest node.ID) (operator.Operator[common.ChangeFeedID, *heartbeatpb.MaintainerStatus], error) {
+	sessionEpoch, err := pdutil.GenerateStrictSessionEpoch(context.Background(), oc.pdClient, cf.GetCurrentMaintainerSessionEpoch())
+	if err != nil {
+		return nil, err
+	}
+	return NewAddMaintainerOperator(oc.changefeedDB, cf, dest, sessionEpoch), nil
 }
 
-func (oc *Controller) NewMoveMaintainerOperator(cf *changefeed.Changefeed, origin, dest node.ID) operator.Operator[common.ChangeFeedID, *heartbeatpb.MaintainerStatus] {
-	return NewMoveMaintainerOperator(oc.changefeedDB, cf, origin, dest)
+func (oc *Controller) NewMoveMaintainerOperator(cf *changefeed.Changefeed, origin, dest node.ID) (operator.Operator[common.ChangeFeedID, *heartbeatpb.MaintainerStatus], error) {
+	activeSessionEpoch := cf.GetCurrentMaintainerSessionEpoch()
+	destSessionEpoch, err := pdutil.GenerateStrictSessionEpoch(context.Background(), oc.pdClient, activeSessionEpoch)
+	if err != nil {
+		return nil, err
+	}
+	return NewMoveMaintainerOperator(oc.changefeedDB, cf, origin, dest, activeSessionEpoch, destSessionEpoch), nil
 }

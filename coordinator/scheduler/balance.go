@@ -17,12 +17,14 @@ import (
 	"math/rand"
 	"time"
 
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/coordinator/changefeed"
 	"github.com/pingcap/ticdc/coordinator/operator"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/node"
 	pkgScheduler "github.com/pingcap/ticdc/pkg/scheduler"
 	"github.com/pingcap/ticdc/server/watcher"
+	"go.uber.org/zap"
 )
 
 // balanceScheduler is used to check the balance status of all spans among all nodes
@@ -84,7 +86,16 @@ func (s *balanceScheduler) Execute() time.Time {
 	// balance changefeeds among the active nodes
 	movedSize := pkgScheduler.Balance(s.batchSize, s.random, s.nodeManager.GetAliveNodes(), s.changefeedDB.GetReplicating(),
 		func(cf *changefeed.Changefeed, nodeID node.ID) bool {
-			return s.operatorController.AddOperator(operator.NewMoveMaintainerOperator(s.changefeedDB, cf, cf.GetNodeID(), nodeID))
+			op, err := s.operatorController.NewMoveMaintainerOperator(cf, cf.GetNodeID(), nodeID)
+			if err != nil {
+				log.Warn("failed to allocate maintainer session epoch",
+					zap.Stringer("changefeed", cf.ID),
+					zap.Stringer("originNode", cf.GetNodeID()),
+					zap.Stringer("targetNode", nodeID),
+					zap.Error(err))
+				return false
+			}
+			return s.operatorController.AddOperator(op)
 		})
 	s.forceBalance = movedSize >= s.batchSize
 	s.lastRebalanceTime = time.Now()

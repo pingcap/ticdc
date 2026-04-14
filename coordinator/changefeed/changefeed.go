@@ -45,6 +45,9 @@ type Changefeed struct {
 	// it's saved to the backend db
 	lastSavedCheckpointTs    *atomic.Uint64
 	logCoordinatorResolvedTs *atomic.Uint64
+	// currentMaintainerSessionEpoch is runtime-only coordinator state.
+	// It tracks the maintainer session that has already become active.
+	currentMaintainerSessionEpoch *atomic.Uint64
 	// the heartbeatpb.MaintainerStatus is read only
 	status *atomic.Pointer[heartbeatpb.MaintainerStatus]
 
@@ -69,13 +72,14 @@ func NewChangefeed(cfID common.ChangeFeedID,
 	}
 
 	res := &Changefeed{
-		ID:                       cfID,
-		info:                     atomic.NewPointer(info),
-		configBytes:              bytes,
-		lastSavedCheckpointTs:    atomic.NewUint64(checkpointTs),
-		logCoordinatorResolvedTs: atomic.NewUint64(checkpointTs),
-		sinkType:                 getSinkType(uri.Scheme),
-		isNew:                    isNew,
+		ID:                            cfID,
+		info:                          atomic.NewPointer(info),
+		configBytes:                   bytes,
+		lastSavedCheckpointTs:         atomic.NewUint64(checkpointTs),
+		logCoordinatorResolvedTs:      atomic.NewUint64(checkpointTs),
+		currentMaintainerSessionEpoch: atomic.NewUint64(0),
+		sinkType:                      getSinkType(uri.Scheme),
+		isNew:                         isNew,
 		// Initialize the status
 		status: atomic.NewPointer(
 			&heartbeatpb.MaintainerStatus{
@@ -204,6 +208,20 @@ func (c *Changefeed) SetIsNew(isNew bool) {
 	c.isNew = isNew
 }
 
+func (c *Changefeed) GetCurrentMaintainerSessionEpoch() uint64 {
+	if c == nil || c.currentMaintainerSessionEpoch == nil {
+		return 0
+	}
+	return c.currentMaintainerSessionEpoch.Load()
+}
+
+func (c *Changefeed) SetCurrentMaintainerSessionEpoch(sessionEpoch uint64) {
+	if c == nil || c.currentMaintainerSessionEpoch == nil {
+		return
+	}
+	c.currentMaintainerSessionEpoch.Store(sessionEpoch)
+}
+
 // GetStatus returns the changefeed status.
 // Note: the returned status is a pointer, so it's not safe to modify it!
 func (c *Changefeed) GetStatus() *heartbeatpb.MaintainerStatus {
@@ -246,7 +264,7 @@ func (c *Changefeed) GetLastSavedCheckPointTs() uint64 {
 	return c.lastSavedCheckpointTs.Load()
 }
 
-func (c *Changefeed) NewAddMaintainerMessage(server node.ID) *messaging.TargetMessage {
+func (c *Changefeed) NewAddMaintainerMessage(server node.ID, sessionEpoch uint64) *messaging.TargetMessage {
 	return messaging.NewSingleTargetMessage(server,
 		messaging.MaintainerManagerTopic,
 		&heartbeatpb.AddMaintainerRequest{
@@ -255,11 +273,12 @@ func (c *Changefeed) NewAddMaintainerMessage(server node.ID) *messaging.TargetMe
 			Config:          c.configBytes,
 			IsNewChangefeed: c.isNew,
 			KeyspaceId:      c.GetKeyspaceID(),
+			SessionEpoch:    sessionEpoch,
 		})
 }
 
-func (c *Changefeed) NewRemoveMaintainerMessage(server node.ID, casCade, removed bool) *messaging.TargetMessage {
-	return RemoveMaintainerMessage(c.GetKeyspaceID(), c.ID, server, casCade, removed)
+func (c *Changefeed) NewRemoveMaintainerMessage(server node.ID, casCade, removed bool, sessionEpoch uint64) *messaging.TargetMessage {
+	return RemoveMaintainerMessage(c.GetKeyspaceID(), c.ID, server, casCade, removed, sessionEpoch)
 }
 
 func (c *Changefeed) NewCheckpointTsMessage(ts uint64) *messaging.TargetMessage {
@@ -271,15 +290,16 @@ func (c *Changefeed) NewCheckpointTsMessage(ts uint64) *messaging.TargetMessage 
 		})
 }
 
-func RemoveMaintainerMessage(keyspaceID uint32, id common.ChangeFeedID, server node.ID, casCade bool, removed bool) *messaging.TargetMessage {
+func RemoveMaintainerMessage(keyspaceID uint32, id common.ChangeFeedID, server node.ID, casCade bool, removed bool, sessionEpoch uint64) *messaging.TargetMessage {
 	casCade = casCade || removed
 	return messaging.NewSingleTargetMessage(server,
 		messaging.MaintainerManagerTopic,
 		&heartbeatpb.RemoveMaintainerRequest{
-			Id:         id.ToPB(),
-			Cascade:    casCade,
-			Removed:    removed,
-			KeyspaceId: keyspaceID,
+			Id:           id.ToPB(),
+			Cascade:      casCade,
+			Removed:      removed,
+			KeyspaceId:   keyspaceID,
+			SessionEpoch: sessionEpoch,
 		})
 }
 

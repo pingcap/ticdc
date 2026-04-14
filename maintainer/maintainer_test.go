@@ -316,7 +316,7 @@ func TestMaintainerSchedule(t *testing.T) {
 		},
 		&config.ChangeFeedInfo{
 			Config: config.GetDefaultReplicaConfig(),
-		}, n, taskScheduler, 10, true, common.DefaultKeyspaceID)
+		}, n, taskScheduler, 10, true, 1, common.DefaultKeyspaceID)
 	defer maintainer.Close()
 
 	mc.RegisterHandler(messaging.MaintainerManagerTopic,
@@ -359,6 +359,20 @@ func TestMaintainerSchedule(t *testing.T) {
 
 	cancel()
 	wg.Wait()
+}
+
+func TestMaintainerShouldAcceptDispatcherMessage(t *testing.T) {
+	t.Parallel()
+
+	m := &Maintainer{
+		changefeedID: common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName),
+		sessionEpoch: 20,
+	}
+
+	require.True(t, m.shouldAcceptDispatcherMessage(messaging.TypeHeartBeatRequest, 0))
+	require.True(t, m.shouldAcceptDispatcherMessage(messaging.TypeHeartBeatRequest, 20))
+	require.False(t, m.shouldAcceptDispatcherMessage(messaging.TypeHeartBeatRequest, 19))
+	require.False(t, m.shouldAcceptDispatcherMessage(messaging.TypeHeartBeatRequest, 21))
 }
 
 func TestMaintainer_GetMaintainerStatusUsesCommittedCheckpoint(t *testing.T) {

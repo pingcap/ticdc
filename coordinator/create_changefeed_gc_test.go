@@ -60,6 +60,7 @@ func newTestCoordinatorWithGCManager(
 			changefeedDB,
 			backend,
 			10,
+			nil,
 		),
 		initialized: atomic.NewBool(true),
 		nodeManager: nodeManager,

@@ -40,9 +40,10 @@ const (
 // Note: OperatorController can call Schedule/Check/OnNodeRemove concurrently under a
 // shared read lock, so the operator's internal state must be concurrency-safe.
 type AddMaintainerOperator struct {
-	cf       *changefeed.Changefeed
-	dest     node.ID
-	finished atomic.Bool
+	cf           *changefeed.Changefeed
+	dest         node.ID
+	sessionEpoch uint64
+	finished     atomic.Bool
 	// canceled records why the operator stops scheduling.
 	// It must be atomic because Schedule can run concurrently with OnNodeRemove/OnTaskRemoved.
 	canceled atomic.Int32
@@ -54,11 +55,13 @@ func NewAddMaintainerOperator(
 	db *changefeed.ChangefeedDB,
 	cf *changefeed.Changefeed,
 	dest node.ID,
+	sessionEpoch uint64,
 ) *AddMaintainerOperator {
 	return &AddMaintainerOperator{
-		cf:   cf,
-		dest: dest,
-		db:   db,
+		cf:           cf,
+		dest:         dest,
+		sessionEpoch: sessionEpoch,
+		db:           db,
 	}
 }
 
@@ -85,7 +88,7 @@ func (m *AddMaintainerOperator) Schedule() *messaging.TargetMessage {
 	if m.finished.Load() || m.canceled.Load() != None {
 		return nil
 	}
-	return m.cf.NewAddMaintainerMessage(m.dest)
+	return m.cf.NewAddMaintainerMessage(m.dest, m.sessionEpoch)
 }
 
 // OnNodeRemove cancels the operator when the destination node goes offline.
@@ -129,6 +132,7 @@ func (m *AddMaintainerOperator) PostFinish() {
 	switch m.canceled.Load() {
 	case None:
 		m.db.MarkMaintainerReplicating(m.cf)
+		m.cf.SetCurrentMaintainerSessionEpoch(m.sessionEpoch)
 		m.cf.SetIsNew(false)
 	case NodeRemoved:
 		m.db.MarkMaintainerAbsent(m.cf)

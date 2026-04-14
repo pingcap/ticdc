@@ -33,6 +33,14 @@ var (
 			Help:      "length of maintainer event channel",
 		}, []string{getKeyspaceLabel(), "changefeed"})
 
+	MaintainerSessionRejectCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "maintainer",
+			Name:      "session_reject_total",
+			Help:      "total count of maintainer session rejections",
+		}, []string{"reason"})
+
 	OperatorCount = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
@@ -62,6 +70,7 @@ var (
 func initMaintainerMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(MaintainerHandleEventDuration)
 	registry.MustRegister(MaintainerEventChLenGauge)
+	registry.MustRegister(MaintainerSessionRejectCounter)
 	registry.MustRegister(OperatorCount)
 	registry.MustRegister(OperatorDuration)
 	registry.MustRegister(TotalOperatorCount)

@@ -219,6 +219,14 @@ func (h *SchedulerDispatcherRequestHandler) Handle(dispatcherManager *Dispatcher
 	infos := map[common.DispatcherID]dispatcherCreateInfo{}
 	redoInfos := map[common.DispatcherID]dispatcherCreateInfo{}
 	for _, req := range reqs {
+		if accepted, reason := dispatcherManager.AcceptMaintainerSession(req.SessionEpoch); !accepted {
+			log.Info("drop scheduler dispatcher request due to session mismatch",
+				zap.Stringer("changefeedID", dispatcherManager.changefeedID),
+				zap.String("reason", reason),
+				zap.Uint64("sessionEpoch", req.SessionEpoch),
+				zap.Uint64("currentSessionEpoch", dispatcherManager.GetMaintainerSessionEpoch()))
+			continue
+		}
 		operatorKey, ok := preCheckForSchedulerHandler(req, dispatcherManager)
 		if !ok {
 			continue
@@ -514,6 +522,14 @@ func (h *HeartBeatResponseHandler) Handle(dispatcherManager *DispatcherManager, 
 		panic("invalid response count")
 	}
 	heartbeatResponse := resps[0]
+	if accepted, reason := dispatcherManager.AcceptMaintainerSession(heartbeatResponse.SessionEpoch); !accepted {
+		log.Info("drop heartbeat response due to session mismatch",
+			zap.Stringer("changefeedID", dispatcherManager.changefeedID),
+			zap.String("reason", reason),
+			zap.Uint64("sessionEpoch", heartbeatResponse.SessionEpoch),
+			zap.Uint64("currentSessionEpoch", dispatcherManager.GetMaintainerSessionEpoch()))
+		return false
+	}
 	dispatcherStatuses := heartbeatResponse.GetDispatcherStatuses()
 	for _, dispatcherStatus := range dispatcherStatuses {
 		influencedDispatchersType := dispatcherStatus.InfluencedDispatchers.InfluenceType
@@ -785,6 +801,14 @@ func (h *MergeDispatcherRequestHandler) Handle(dispatcherManager *DispatcherMana
 	}
 
 	mergeDispatcherRequest := reqs[0]
+	if accepted, reason := dispatcherManager.AcceptMaintainerSession(mergeDispatcherRequest.SessionEpoch); !accepted {
+		log.Info("drop merge dispatcher request due to session mismatch",
+			zap.Stringer("changefeedID", dispatcherManager.changefeedID),
+			zap.String("reason", reason),
+			zap.Uint64("sessionEpoch", mergeDispatcherRequest.SessionEpoch),
+			zap.Uint64("currentSessionEpoch", dispatcherManager.GetMaintainerSessionEpoch()))
+		return false
+	}
 	dispatcherIDs := make([]common.DispatcherID, 0, len(mergeDispatcherRequest.DispatcherIDs))
 	for _, id := range mergeDispatcherRequest.DispatcherIDs {
 		dispatcherIDs = append(dispatcherIDs, common.NewDispatcherIDFromPB(id))

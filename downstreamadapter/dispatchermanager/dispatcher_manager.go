@@ -68,11 +68,12 @@ type DispatcherManager struct {
 	mu sync.Mutex
 
 	// meta is used to store the meta info of the event dispatcher manager
-	// it's used to avoid data race when we update the maintainerID and maintainerEpoch
+	// it's used to avoid data race when we update the maintainer metadata
 	meta struct {
 		sync.Mutex
-		maintainerEpoch uint64
-		maintainerID    node.ID
+		maintainerEpoch        uint64
+		maintainerID           node.ID
+		maintainerSessionEpoch uint64
 	}
 
 	pdClock pdutil.Clock
@@ -170,6 +171,7 @@ func NewDispatcherManager(
 	tableTriggerRedoDispatcherID *heartbeatpb.DispatcherID,
 	startTs uint64,
 	maintainerID node.ID,
+	maintainerSessionEpoch uint64,
 	newChangefeed bool,
 ) (*DispatcherManager, error) {
 	failpoint.Inject("NewDispatcherManagerDelay", nil)
@@ -219,6 +221,7 @@ func NewDispatcherManager(
 	// Set the epoch and maintainerID of the event dispatcher manager
 	manager.meta.maintainerEpoch = cfConfig.Epoch
 	manager.meta.maintainerID = maintainerID
+	manager.meta.maintainerSessionEpoch = maintainerSessionEpoch
 
 	// Set Sync Point Config
 	var syncPointConfig *syncpoint.SyncPointConfig
@@ -538,6 +541,7 @@ func (e *DispatcherManager) collectErrors(ctx context.Context) {
 				// report error to maintainer
 				var message heartbeatpb.HeartBeatRequest
 				message.ChangefeedID = e.changefeedID.ToPB()
+				message.SessionEpoch = e.GetMaintainerSessionEpoch()
 				message.Err = &heartbeatpb.RunningError{
 					Time:    time.Now().String(),
 					Node:    appcontext.GetID(),
@@ -572,6 +576,7 @@ func (e *DispatcherManager) collectBlockStatusRequest(ctx context.Context) {
 		message.ChangefeedID = e.changefeedID.ToPB()
 		message.BlockStatuses = blockStatusMessage
 		message.Mode = mode
+		message.SessionEpoch = e.GetMaintainerSessionEpoch()
 		e.blockStatusRequestQueue.Enqueue(&BlockStatusRequestWithTargetID{TargetID: e.GetMaintainerID(), Request: &message})
 	}
 	for {
@@ -692,6 +697,7 @@ func (e *DispatcherManager) collectComponentStatusWhenChanged(ctx context.Contex
 			message.Statuses = statusMessage
 			message.Watermark = newWatermark
 			message.RedoWatermark = newRedoWatermark
+			message.SessionEpoch = e.GetMaintainerSessionEpoch()
 			e.heartbeatRequestQueue.Enqueue(&HeartBeatRequestWithTargetID{TargetID: e.GetMaintainerID(), Request: &message})
 		}
 	}
@@ -714,6 +720,7 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 		CompeleteStatus: needCompleteStatus,
 		Watermark:       heartbeatpb.NewMaxWatermark(),
 		RedoWatermark:   heartbeatpb.NewMaxWatermark(),
+		SessionEpoch:    e.GetMaintainerSessionEpoch(),
 	}
 
 	toCleanMap := make([]*cleanMap, 0)

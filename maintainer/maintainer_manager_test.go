@@ -304,6 +304,30 @@ func TestMaintainerSchedulesNodeChanges(t *testing.T) {
 	cancel()
 }
 
+func TestManagerOnAddMaintainerRequestRejectsHigherSessionWhenMaintainerExists(t *testing.T) {
+	t.Parallel()
+
+	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	manager := &Manager{
+		nodeInfo: &node.Info{ID: node.ID("node-1")},
+	}
+	manager.maintainers.Store(changefeedID, &Maintainer{
+		changefeedID: changefeedID,
+		sessionEpoch: 10,
+	})
+
+	req := &heartbeatpb.AddMaintainerRequest{
+		Id:           changefeedID.ToPB(),
+		SessionEpoch: 11,
+	}
+	status := manager.onAddMaintainerRequest(req)
+	require.Nil(t, status)
+
+	value, ok := manager.maintainers.Load(changefeedID)
+	require.True(t, ok)
+	require.Equal(t, uint64(10), value.(*Maintainer).sessionEpoch)
+}
+
 func TestMaintainerBootstrapWithTablesReported(t *testing.T) {
 	ctx := context.Background()
 	ctx, cancel := context.WithCancel(ctx)

@@ -1,4 +1,4 @@
-// Copyright 2023 PingCAP, Inc.
+// Copyright 2026 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,33 +15,59 @@ package pdutil
 
 import (
 	"context"
+	"errors"
 	"testing"
-	"time"
 
-	"github.com/pingcap/tidb/pkg/kv"
-	"github.com/pingcap/tidb/pkg/session"
-	"github.com/pingcap/tidb/pkg/store/mockstore"
 	"github.com/stretchr/testify/require"
+	"github.com/tikv/client-go/v2/oracle"
+	pd "github.com/tikv/pd/client"
 )
 
-func TestGetSourceID(t *testing.T) {
-	store, err := mockstore.NewMockStore()
+type mockStrictSessionPDClient struct {
+	pd.Client
+	physical int64
+	logical  int64
+	err      error
+}
+
+func (m *mockStrictSessionPDClient) GetTS(ctx context.Context) (int64, int64, error) {
+	return m.physical, m.logical, m.err
+}
+
+func TestGenerateStrictSessionEpochUsesPDTSO(t *testing.T) {
+	t.Parallel()
+
+	pdClient := &mockStrictSessionPDClient{
+		physical: 100,
+		logical:  2,
+	}
+
+	sessionEpoch, err := GenerateStrictSessionEpoch(context.Background(), pdClient, 0)
 	require.NoError(t, err)
-	defer func() {
-		err := store.Close()
-		require.NoError(t, err)
-	}()
-	domain, err := session.BootstrapSession(store)
+	require.Equal(t, oracle.ComposeTS(100, 2), sessionEpoch)
+}
+
+func TestGenerateStrictSessionEpochRemainsMonotonic(t *testing.T) {
+	t.Parallel()
+
+	pdClient := &mockStrictSessionPDClient{
+		physical: 100,
+		logical:  1,
+	}
+
+	sessionEpoch, err := GenerateStrictSessionEpoch(context.Background(), pdClient, oracle.ComposeTS(100, 5))
 	require.NoError(t, err)
-	defer domain.Close()
-	se, err := session.CreateSession4Test(store)
-	require.NoError(t, err)
-	_, err = se.Execute(context.Background(), "set @@global.tidb_source_id=2;")
-	require.NoError(t, err)
-	require.Eventually(t, func() bool {
-		client := store.(kv.StorageWithPD).GetPDClient()
-		sourceID, err := GetSourceID(context.Background(), client)
-		require.NoError(t, err)
-		return sourceID == 2
-	}, 5*time.Second, 100*time.Millisecond)
+	require.Equal(t, oracle.ComposeTS(100, 5)+1, sessionEpoch)
+}
+
+func TestGenerateStrictSessionEpochReturnsErrorWithoutPDTSO(t *testing.T) {
+	t.Parallel()
+
+	_, err := GenerateStrictSessionEpoch(context.Background(), &mockStrictSessionPDClient{
+		err: errors.New("pd unavailable"),
+	}, 0)
+	require.Error(t, err)
+
+	_, err = GenerateStrictSessionEpoch(context.Background(), nil, 0)
+	require.Error(t, err)
 }

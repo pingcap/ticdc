@@ -16,6 +16,7 @@ package scheduler
 import (
 	"time"
 
+	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/coordinator/changefeed"
 	"github.com/pingcap/ticdc/coordinator/operator"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
@@ -23,6 +24,7 @@ import (
 	pkgScheduler "github.com/pingcap/ticdc/pkg/scheduler"
 	"github.com/pingcap/ticdc/pkg/scheduler/replica"
 	"github.com/pingcap/ticdc/server/watcher"
+	"go.uber.org/zap"
 )
 
 // basicScheduler generates operators for the spans, and push them to the operator controller
@@ -81,7 +83,15 @@ func (s *basicScheduler) doBasicSchedule(availableSize int) {
 	}
 
 	pkgScheduler.BasicSchedule(availableSize, absentChangefeeds, nodeSize, func(cf *changefeed.Changefeed, nodeID node.ID) bool {
-		return s.operatorController.AddOperator(operator.NewAddMaintainerOperator(s.changefeedDB, cf, nodeID))
+		op, err := s.operatorController.NewAddMaintainerOperator(cf, nodeID)
+		if err != nil {
+			log.Warn("failed to allocate maintainer session epoch",
+				zap.Stringer("changefeed", cf.ID),
+				zap.Stringer("targetNode", nodeID),
+				zap.Error(err))
+			return false
+		}
+		return s.operatorController.AddOperator(op)
 	})
 }
 

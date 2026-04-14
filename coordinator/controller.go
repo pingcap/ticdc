@@ -122,7 +122,7 @@ func NewController(
 	changefeedDB := changefeed.NewChangefeedDB(version)
 	messageCenter := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 
-	oc := operator.NewOperatorController(selfNode, changefeedDB, backend, batchSize)
+	oc := operator.NewOperatorController(selfNode, changefeedDB, backend, batchSize, pdClient)
 	drainController := drain.NewController(messageCenter)
 	c := &Controller{
 		version:     version,
@@ -496,9 +496,10 @@ func (c *Controller) handleNonExistentChangefeed(
 			zap.String("status", common.FormatMaintainerStatus(status)))
 
 		keyspaceID := c.getChangefeed(cfID).GetKeyspaceID()
+		sessionEpoch := c.getChangefeed(cfID).GetCurrentMaintainerSessionEpoch()
 
 		// Remove working changefeed from maintainer if it's not in changefeedDB
-		_ = c.messageCenter.SendCommand(changefeed.RemoveMaintainerMessage(keyspaceID, cfID, from, true, true))
+		_ = c.messageCenter.SendCommand(changefeed.RemoveMaintainerMessage(keyspaceID, cfID, from, true, true, sessionEpoch))
 	}
 }
 
@@ -627,7 +628,8 @@ func (c *Controller) finishBootstrap(ctx context.Context, runningChangefeeds map
 			zap.String("node", rm.nodeID.String()),
 		)
 		keyspaceID := c.getChangefeed(id).GetKeyspaceID()
-		_ = c.messageCenter.SendCommand(changefeed.RemoveMaintainerMessage(keyspaceID, id, rm.nodeID, true, true))
+		sessionEpoch := c.getChangefeed(id).GetCurrentMaintainerSessionEpoch()
+		_ = c.messageCenter.SendCommand(changefeed.RemoveMaintainerMessage(keyspaceID, id, rm.nodeID, true, true, sessionEpoch))
 	}
 
 	// start operator and scheduler

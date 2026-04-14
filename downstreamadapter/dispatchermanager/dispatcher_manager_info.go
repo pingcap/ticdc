@@ -14,6 +14,7 @@
 package dispatchermanager
 
 import (
+	"fmt"
 	"sync"
 
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
@@ -58,10 +59,74 @@ func (e *DispatcherManager) SetMaintainerID(maintainerID node.ID) {
 	e.meta.maintainerID = maintainerID
 }
 
+func (e *DispatcherManager) GetMaintainerSessionEpoch() uint64 {
+	e.meta.Lock()
+	defer e.meta.Unlock()
+	return e.meta.maintainerSessionEpoch
+}
+
+func (e *DispatcherManager) SetMaintainerSession(maintainerID node.ID, sessionEpoch uint64) {
+	e.meta.Lock()
+	defer e.meta.Unlock()
+	e.meta.maintainerID = maintainerID
+	e.meta.maintainerSessionEpoch = sessionEpoch
+}
+
 func (e *DispatcherManager) GetMaintainerEpoch() uint64 {
 	e.meta.Lock()
 	defer e.meta.Unlock()
 	return e.meta.maintainerEpoch
+}
+
+// AcceptBootstrapSession is the only path that may install or advance the
+// runtime maintainer session on dispatcher manager.
+func (e *DispatcherManager) AcceptBootstrapSession(maintainerID node.ID, sessionEpoch uint64) (bool, string) {
+	if sessionEpoch == 0 {
+		// Zero means the peer is still running the legacy protocol. We must keep
+		// accepting that path during rolling upgrade, otherwise a new dispatcher
+		// manager can no longer interoperate with an old maintainer.
+		return true, "legacy"
+	}
+
+	e.meta.Lock()
+	defer e.meta.Unlock()
+
+	switch {
+	case e.meta.maintainerSessionEpoch == 0:
+		e.meta.maintainerID = maintainerID
+		e.meta.maintainerSessionEpoch = sessionEpoch
+		return true, "install"
+	case sessionEpoch < e.meta.maintainerSessionEpoch:
+		return false, fmt.Sprintf("stale:%d<%d", sessionEpoch, e.meta.maintainerSessionEpoch)
+	case sessionEpoch == e.meta.maintainerSessionEpoch:
+		if e.meta.maintainerID != maintainerID {
+			e.meta.maintainerID = maintainerID
+		}
+		return true, "current"
+	default:
+		e.meta.maintainerID = maintainerID
+		e.meta.maintainerSessionEpoch = sessionEpoch
+		return true, "advance"
+	}
+}
+
+func (e *DispatcherManager) AcceptMaintainerSession(sessionEpoch uint64) (bool, string) {
+	if sessionEpoch == 0 {
+		// Zero-session control messages intentionally stay on the legacy path for
+		// mixed-version upgrade compatibility. Strict stale-session filtering only
+		// applies after both ends speak the session-aware protocol.
+		return true, "legacy"
+	}
+
+	current := e.GetMaintainerSessionEpoch()
+	switch {
+	case sessionEpoch < current:
+		return false, fmt.Sprintf("stale:%d<%d", sessionEpoch, current)
+	case sessionEpoch == current:
+		return true, "current"
+	default:
+		return false, fmt.Sprintf("future:%d>%d", sessionEpoch, current)
+	}
 }
 
 func (e *DispatcherManager) GetTableTriggerEventDispatcher() *dispatcher.EventDispatcher {

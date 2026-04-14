@@ -68,6 +68,9 @@ type Maintainer struct {
 	info         *config.ChangeFeedInfo
 	selfNode     *node.Info
 	controller   *Controller
+	// sessionEpoch identifies the current maintainer runtime session for one changefeed.
+	// It is assigned by coordinator and is not persisted.
+	sessionEpoch uint64
 
 	pdClock pdutil.Clock
 	eventCh *chann.DrainableChann[*Event]
@@ -173,6 +176,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 	taskScheduler threadpool.ThreadPool,
 	checkpointTs uint64,
 	newChangefeed bool,
+	sessionEpoch uint64,
 	keyspaceID uint32,
 ) *Maintainer {
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
@@ -198,6 +202,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 	m := &Maintainer{
 		changefeedID:      cfID,
 		selfNode:          selfNode,
+		sessionEpoch:      sessionEpoch,
 		eventCh:           chann.NewAutoDrainChann[*Event](),
 		startCheckpointTs: checkpointTs,
 		controller: NewController(cfID, checkpointTs, taskScheduler,
@@ -272,6 +277,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		zap.String("ddlDispatcherID", tableTriggerEventDispatcherID.String()),
 		zap.String("redoTs", m.redoMetaTs.String()),
 		zap.Bool("newChangefeed", newChangefeed),
+		zap.Uint64("sessionEpoch", sessionEpoch),
 	)
 
 	return m
@@ -281,6 +287,7 @@ func NewMaintainerForRemove(cfID common.ChangeFeedID,
 	conf *config.SchedulerConfig,
 	selfNode *node.Info,
 	taskScheduler threadpool.ThreadPool,
+	sessionEpoch uint64,
 	keyspaceID uint32,
 ) *Maintainer {
 	unused := &config.ChangeFeedInfo{
@@ -288,7 +295,7 @@ func NewMaintainerForRemove(cfID common.ChangeFeedID,
 		SinkURI:      "",
 		Config:       config.GetDefaultReplicaConfig(),
 	}
-	m := NewMaintainer(cfID, conf, unused, selfNode, taskScheduler, 1, false, keyspaceID)
+	m := NewMaintainer(cfID, conf, unused, selfNode, taskScheduler, 1, false, sessionEpoch, keyspaceID)
 	m.cascadeRemoving.Store(true)
 	return m
 }
@@ -463,15 +470,34 @@ func (m *Maintainer) onInit() bool {
 func (m *Maintainer) onMessage(msg *messaging.TargetMessage) {
 	switch msg.Type {
 	case messaging.TypeHeartBeatRequest:
+		req := msg.Message[0].(*heartbeatpb.HeartBeatRequest)
+		if !m.shouldAcceptDispatcherMessage(msg.Type, req.SessionEpoch) {
+			return
+		}
 		m.onHeartbeatRequest(msg)
 	case messaging.TypeBlockStatusRequest:
+		req := msg.Message[0].(*heartbeatpb.BlockStatusRequest)
+		if !m.shouldAcceptDispatcherMessage(msg.Type, req.SessionEpoch) {
+			return
+		}
 		m.onBlockStateRequest(msg)
 	case messaging.TypeMaintainerBootstrapResponse:
+		req := msg.Message[0].(*heartbeatpb.MaintainerBootstrapResponse)
+		if !m.shouldAcceptDispatcherMessage(msg.Type, req.SessionEpoch) {
+			return
+		}
 		m.onMaintainerBootstrapResponse(msg)
 	case messaging.TypeMaintainerPostBootstrapResponse:
+		req := msg.Message[0].(*heartbeatpb.MaintainerPostBootstrapResponse)
+		if !m.shouldAcceptDispatcherMessage(msg.Type, req.SessionEpoch) {
+			return
+		}
 		m.onMaintainerPostBootstrapResponse(msg)
 	case messaging.TypeMaintainerCloseResponse:
 		resp := msg.Message[0].(*heartbeatpb.MaintainerCloseResponse)
+		if !m.shouldAcceptDispatcherMessage(msg.Type, resp.SessionEpoch) {
+			return
+		}
 		m.onMaintainerCloseResponse(msg.From, resp)
 	case messaging.TypeRemoveMaintainerRequest:
 		req := msg.Message[0].(*heartbeatpb.RemoveMaintainerRequest)
@@ -481,12 +507,40 @@ func (m *Maintainer) onMessage(msg *messaging.TargetMessage) {
 		m.onCheckpointTsPersisted(req)
 	case messaging.TypeRedoResolvedTsProgressMessage:
 		req := msg.Message[0].(*heartbeatpb.RedoResolvedTsProgressMessage)
+		if !m.shouldAcceptDispatcherMessage(msg.Type, req.SessionEpoch) {
+			return
+		}
 		m.onRedoPersisted(req)
 	default:
 		log.Warn("unknown message type, ignore it",
 			zap.Stringer("changefeedID", m.changefeedID),
 			zap.String("type", msg.Type.String()),
 			zap.Any("message", msg.Message))
+	}
+}
+
+func (m *Maintainer) shouldAcceptDispatcherMessage(msgType messaging.IOType, incomingSessionEpoch uint64) bool {
+	if incomingSessionEpoch == 0 {
+		return true
+	}
+
+	switch {
+	case incomingSessionEpoch < m.sessionEpoch:
+		log.Info("drop stale dispatcher manager message",
+			zap.Stringer("changefeedID", m.changefeedID),
+			zap.String("messageType", msgType.String()),
+			zap.Uint64("incomingSessionEpoch", incomingSessionEpoch),
+			zap.Uint64("currentSessionEpoch", m.sessionEpoch))
+		return false
+	case incomingSessionEpoch == m.sessionEpoch:
+		return true
+	default:
+		log.Warn("drop dispatcher manager message from unexpected future session",
+			zap.Stringer("changefeedID", m.changefeedID),
+			zap.String("messageType", msgType.String()),
+			zap.Uint64("incomingSessionEpoch", incomingSessionEpoch),
+			zap.Uint64("currentSessionEpoch", m.sessionEpoch))
+		return false
 	}
 }
 
@@ -754,12 +808,37 @@ func (m *Maintainer) updateMetrics() {
 // send message to other components
 func (m *Maintainer) sendMessages(msgs []*messaging.TargetMessage) {
 	for _, msg := range msgs {
+		m.attachSessionEpoch(msg)
 		err := m.mc.SendCommand(msg)
 		if err != nil {
 			log.Debug("failed to send maintainer request",
 				zap.Stringer("changefeedID", m.changefeedID),
 				zap.Any("msg", msg), zap.Error(err))
 		}
+	}
+}
+
+// attachSessionEpoch tags the maintainer-session-bound messages before send.
+// This keeps session logic at the transport boundary instead of spreading it
+// across barrier, scheduler, and bootstrap code paths.
+func (m *Maintainer) attachSessionEpoch(msg *messaging.TargetMessage) {
+	if msg == nil || len(msg.Message) == 0 {
+		return
+	}
+
+	switch req := msg.Message[0].(type) {
+	case *heartbeatpb.MaintainerBootstrapRequest:
+		req.SessionEpoch = m.sessionEpoch
+	case *heartbeatpb.MaintainerPostBootstrapRequest:
+		req.SessionEpoch = m.sessionEpoch
+	case *heartbeatpb.MaintainerCloseRequest:
+		req.SessionEpoch = m.sessionEpoch
+	case *heartbeatpb.HeartBeatResponse:
+		req.SessionEpoch = m.sessionEpoch
+	case *heartbeatpb.ScheduleDispatcherRequest:
+		req.SessionEpoch = m.sessionEpoch
+	case *heartbeatpb.MergeDispatcherRequest:
+		req.SessionEpoch = m.sessionEpoch
 	}
 }
 
@@ -1006,6 +1085,7 @@ func (m *Maintainer) trySendMaintainerCloseRequestToAllNode() bool {
 				&heartbeatpb.MaintainerCloseRequest{
 					ChangefeedID: m.changefeedID.ToPB(),
 					Removed:      m.changefeedRemoved.Load(),
+					SessionEpoch: m.sessionEpoch,
 				}))
 		}
 	}
@@ -1066,6 +1146,7 @@ func (m *Maintainer) createBootstrapMessageFactory() bootstrap.NewBootstrapReque
 			TableTriggerRedoDispatcherId:  nil,
 			IsNewChangefeed:               false,
 			KeyspaceId:                    m.info.KeyspaceID,
+			SessionEpoch:                  m.sessionEpoch,
 		}
 
 		// only send dispatcher targetNodeID to dispatcher manager on the same node

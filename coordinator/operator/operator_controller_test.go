@@ -44,7 +44,7 @@ func newOperatorControllerForTest(
 	appcontext.SetService(appcontext.MessageCenter, messaging.NewMockMessageCenter())
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)
 
-	return NewOperatorController(self, changefeedDB, backend, 10), self, nodeManager
+	return NewOperatorController(self, changefeedDB, backend, 10, nil), self, nodeManager
 }
 
 func TestController_StopChangefeed(t *testing.T) {
@@ -87,8 +87,8 @@ func TestController_AddOperator(t *testing.T) {
 		1, true)
 	changefeedDB.AddReplicatingMaintainer(cf, self.ID)
 
-	require.True(t, oc.AddOperator(NewAddMaintainerOperator(changefeedDB, cf, target.ID)))
-	require.False(t, oc.AddOperator(NewAddMaintainerOperator(changefeedDB, cf, target.ID)))
+	require.True(t, oc.AddOperator(NewAddMaintainerOperator(changefeedDB, cf, target.ID, 1)))
+	require.False(t, oc.AddOperator(NewAddMaintainerOperator(changefeedDB, cf, target.ID, 1)))
 	cf2ID := common.NewChangeFeedIDWithName("test2", common.DefaultKeyspaceName)
 	cf2 := changefeed.NewChangefeed(cf2ID, &config.ChangeFeedInfo{
 		ChangefeedID: cf2ID,
@@ -96,7 +96,7 @@ func TestController_AddOperator(t *testing.T) {
 		SinkURI:      "mysql://127.0.0.1:3306",
 	},
 		1, true)
-	require.False(t, oc.AddOperator(NewAddMaintainerOperator(changefeedDB, cf2, target.ID)))
+	require.False(t, oc.AddOperator(NewAddMaintainerOperator(changefeedDB, cf2, target.ID, 1)))
 
 	require.NotNil(t, oc.GetOperator(cfID))
 	require.Nil(t, oc.GetOperator(cf2ID))
@@ -121,7 +121,7 @@ func TestController_HasOperatorInvolvingNode(t *testing.T) {
 	}, 1, true)
 	changefeedDB.AddReplicatingMaintainer(cf, self.ID)
 
-	require.True(t, oc.AddOperator(NewAddMaintainerOperator(changefeedDB, cf, target.ID)))
+	require.True(t, oc.AddOperator(NewAddMaintainerOperator(changefeedDB, cf, target.ID, 1)))
 
 	require.True(t, oc.HasOperatorInvolvingNode(target.ID))
 	require.False(t, oc.HasOperatorInvolvingNode("n3"))
@@ -150,7 +150,7 @@ func TestController_StopChangefeedDuringAddOperator(t *testing.T) {
 	require.Equal(t, 1, changefeedDB.GetSize())
 
 	// Add AddMaintainerOperator (simulating starting to schedule the changefeed)
-	addOp := NewAddMaintainerOperator(changefeedDB, cf, target.ID)
+	addOp := NewAddMaintainerOperator(changefeedDB, cf, target.ID, 1)
 	require.True(t, oc.AddOperator(addOp))
 
 	// Verify operator has been added

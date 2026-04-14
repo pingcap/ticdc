@@ -26,6 +26,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/liveness"
 	"github.com/pingcap/ticdc/pkg/messaging"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"go.uber.org/zap"
@@ -230,7 +231,7 @@ func (m *Manager) onAddMaintainerRequest(req *heartbeatpb.AddMaintainerRequest) 
 	// Draining is used to stop NEW scheduling decisions targeting this node, but in-flight
 	// scheduling requests decided before draining should still be able to complete.
 	// We only hard-block new maintainers when the node is stopping.
-	if m.node.liveness != nil && m.node.liveness.Load() == liveness.CaptureStopping {
+	if m.node != nil && m.node.liveness != nil && m.node.liveness.Load() == liveness.CaptureStopping {
 		log.Info("ignore add maintainer request, node is stopping",
 			zap.Stringer("changefeedID", common.NewChangefeedIDFromPB(req.Id)),
 			zap.Stringer("nodeID", m.nodeInfo.ID))
@@ -238,8 +239,27 @@ func (m *Manager) onAddMaintainerRequest(req *heartbeatpb.AddMaintainerRequest) 
 	}
 
 	changefeedID := common.NewChangefeedIDFromPB(req.Id)
-	_, ok := m.maintainers.Load(changefeedID)
+	value, ok := m.maintainers.Load(changefeedID)
 	if ok {
+		existing := value.(*Maintainer)
+		switch {
+		case req.SessionEpoch == existing.sessionEpoch:
+			log.Info("ignore duplicate add maintainer request",
+				zap.Stringer("changefeedID", changefeedID),
+				zap.Uint64("sessionEpoch", req.SessionEpoch))
+		case req.SessionEpoch < existing.sessionEpoch:
+			log.Info("ignore stale add maintainer request",
+				zap.Stringer("changefeedID", changefeedID),
+				zap.Uint64("sessionEpoch", req.SessionEpoch),
+				zap.Uint64("currentSessionEpoch", existing.sessionEpoch))
+		default:
+			metrics.MaintainerSessionRejectCounter.WithLabelValues("higher_session_add").Inc()
+			log.Error("reject add maintainer request with higher session while local maintainer still exists",
+				zap.Stringer("changefeedID", changefeedID),
+				zap.Uint64("sessionEpoch", req.SessionEpoch),
+				zap.Uint64("currentSessionEpoch", existing.sessionEpoch),
+				zap.Stringer("nodeID", m.nodeInfo.ID))
+		}
 		return nil
 	}
 
@@ -255,7 +275,7 @@ func (m *Manager) onAddMaintainerRequest(req *heartbeatpb.AddMaintainerRequest) 
 			zap.Any("info", info))
 	}
 
-	maintainer := NewMaintainer(changefeedID, m.conf, info, m.nodeInfo, m.taskScheduler, req.CheckpointTs, req.IsNewChangefeed, req.KeyspaceId)
+	maintainer := NewMaintainer(changefeedID, m.conf, info, m.nodeInfo, m.taskScheduler, req.CheckpointTs, req.IsNewChangefeed, req.SessionEpoch, req.KeyspaceId)
 	m.maintainers.Store(changefeedID, maintainer)
 	maintainer.pushEvent(&Event{changefeedID: changefeedID, eventType: EventInit})
 	return nil
@@ -279,7 +299,7 @@ func (m *Manager) onRemoveMaintainerRequest(msg *messaging.TargetMessage) *heart
 
 		// it's cascade remove, we should remove the dispatcher from all node
 		// here we create a maintainer to run the remove the dispatcher logic
-		maintainer = NewMaintainerForRemove(changefeedID, m.conf, m.nodeInfo, m.taskScheduler, req.KeyspaceId)
+		maintainer = NewMaintainerForRemove(changefeedID, m.conf, m.nodeInfo, m.taskScheduler, req.SessionEpoch, req.KeyspaceId)
 		m.maintainers.Store(changefeedID, maintainer)
 	}
 	maintainer.(*Maintainer).pushEvent(&Event{

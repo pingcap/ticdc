@@ -156,9 +156,10 @@ func TestChangefeed_NewAddMaintainerMessage(t *testing.T) {
 	cf := NewChangefeed(cfID, info, 100, true)
 
 	server := node.ID("server-1")
-	msg := cf.NewAddMaintainerMessage(server)
+	msg := cf.NewAddMaintainerMessage(server, 123)
 	require.Equal(t, server, msg.To)
 	require.Equal(t, messaging.MaintainerManagerTopic, msg.Topic)
+	require.Equal(t, uint64(123), msg.Message[0].(*heartbeatpb.AddMaintainerRequest).SessionEpoch)
 }
 
 func TestChangefeed_NewRemoveMaintainerMessage(t *testing.T) {
@@ -171,9 +172,10 @@ func TestChangefeed_NewRemoveMaintainerMessage(t *testing.T) {
 	cf := NewChangefeed(cfID, info, 100, true)
 
 	server := node.ID("server-1")
-	msg := cf.NewRemoveMaintainerMessage(server, true, true)
+	msg := cf.NewRemoveMaintainerMessage(server, true, true, 456)
 	require.Equal(t, server, msg.To)
 	require.Equal(t, messaging.MaintainerManagerTopic, msg.Topic)
+	require.Equal(t, uint64(456), msg.Message[0].(*heartbeatpb.RemoveMaintainerRequest).SessionEpoch)
 }
 
 func TestChangefeed_NewCheckpointTsMessage(t *testing.T) {
@@ -194,9 +196,10 @@ func TestChangefeed_NewCheckpointTsMessage(t *testing.T) {
 func TestRemoveMaintainerMessage(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	server := node.ID("server-1")
-	msg := RemoveMaintainerMessage(common.DefaultKeyspaceID, cfID, server, true, true)
+	msg := RemoveMaintainerMessage(common.DefaultKeyspaceID, cfID, server, true, true, 789)
 	require.Equal(t, server, msg.To)
 	require.Equal(t, messaging.MaintainerManagerTopic, msg.Topic)
+	require.Equal(t, uint64(789), msg.Message[0].(*heartbeatpb.RemoveMaintainerRequest).SessionEpoch)
 }
 
 func TestChangefeedGetStatusForResume(t *testing.T) {

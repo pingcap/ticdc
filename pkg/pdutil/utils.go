@@ -15,6 +15,7 @@ package pdutil
 
 import (
 	"context"
+	stderrors "errors"
 	"strconv"
 	"time"
 
@@ -65,4 +66,28 @@ func GenerateChangefeedEpoch(ctx context.Context, pdClient pd.Client) uint64 {
 		return uint64(time.Now().UnixNano())
 	}
 	return oracle.ComposeTS(phyTs, logical)
+}
+
+// GenerateStrictSessionEpoch generates a strictly monotonic runtime session epoch.
+//
+// Unlike GenerateChangefeedEpoch, this helper never falls back to local time because
+// session ownership must only advance when PD TSO is available.
+func GenerateStrictSessionEpoch(ctx context.Context, pdClient pd.Client, lastIssued uint64) (uint64, error) {
+	if pdClient == nil {
+		return 0, cerror.WrapError(cerror.ErrPDEtcdAPIError, stderrors.New("pd client is nil"))
+	}
+
+	phyTs, logical, err := pdClient.GetTS(ctx)
+	if err != nil {
+		return 0, cerror.WrapError(cerror.ErrPDEtcdAPIError, err)
+	}
+
+	sessionEpoch := oracle.ComposeTS(phyTs, logical)
+	if sessionEpoch <= lastIssued {
+		if lastIssued == ^uint64(0) {
+			return 0, cerror.WrapError(cerror.ErrPDEtcdAPIError, stderrors.New("session epoch overflow"))
+		}
+		return lastIssued + 1, nil
+	}
+	return sessionEpoch, nil
 }

@@ -34,7 +34,7 @@ func TestMoveMaintainerOperator_OnNodeRemove(t *testing.T) {
 		1, true)
 	changefeedDB.AddReplicatingMaintainer(cf, "n1")
 
-	op := NewMoveMaintainerOperator(changefeedDB, cf, "n1", "n2")
+	op := NewMoveMaintainerOperator(changefeedDB, cf, "n1", "n2", 10, 20)
 	op.OnNodeRemove("n2")
 
 	require.True(t, op.bind)
@@ -43,6 +43,7 @@ func TestMoveMaintainerOperator_OnNodeRemove(t *testing.T) {
 	require.Len(t, changefeedDB.GetByNodeID("n1"), 1)
 	req := op.Schedule().Message[0].(*heartbeatpb.AddMaintainerRequest)
 	require.NotNil(t, req)
+	require.Equal(t, uint64(10), req.SessionEpoch)
 	require.Len(t, changefeedDB.GetByNodeID("n1"), 1)
 
 	op.OnNodeRemove("n1")
@@ -59,7 +60,7 @@ func TestMoveMaintainerOperator_OnNodeRemove(t *testing.T) {
 	},
 		1, true)
 	changefeedDB.AddReplicatingMaintainer(cf2, "n1")
-	op2 := NewMoveMaintainerOperator(changefeedDB, cf2, "n1", "n2")
+	op2 := NewMoveMaintainerOperator(changefeedDB, cf2, "n1", "n2", 10, 20)
 	op2.OnNodeRemove("n1")
 	require.True(t, op2.originNodeStopped)
 	op2.Schedule()
@@ -68,7 +69,7 @@ func TestMoveMaintainerOperator_OnNodeRemove(t *testing.T) {
 }
 
 func TestMoveMaintainerOperator_OnTaskRemoved(t *testing.T) {
-	op := NewMoveMaintainerOperator(nil, &changefeed.Changefeed{}, "n1", "n2")
+	op := NewMoveMaintainerOperator(nil, &changefeed.Changefeed{}, "n1", "n2", 10, 20)
 	op.OnTaskRemoved()
 	require.True(t, op.canceled)
 	require.Nil(t, op.Schedule())
@@ -87,7 +88,7 @@ func TestMoveMaintainerOperator_CheckRequiresDestBootstrapDone(t *testing.T) {
 		1, true)
 	changefeedDB.AddReplicatingMaintainer(cf, "n1")
 
-	op := NewMoveMaintainerOperator(changefeedDB, cf, "n1", "n2")
+	op := NewMoveMaintainerOperator(changefeedDB, cf, "n1", "n2", 10, 20)
 
 	op.Check("n1", &heartbeatpb.MaintainerStatus{State: heartbeatpb.ComponentState_Stopped})
 	require.True(t, op.originNodeStopped)
@@ -105,4 +106,28 @@ func TestMoveMaintainerOperator_CheckRequiresDestBootstrapDone(t *testing.T) {
 	})
 	require.True(t, op.finished)
 	require.Nil(t, op.Schedule())
+}
+
+func TestMoveMaintainerOperator_ScheduleUsesOldAndNewSessions(t *testing.T) {
+	changefeedDB := changefeed.NewChangefeedDB(1216)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		Config:       config.GetDefaultReplicaConfig(),
+		SinkURI:      "mysql://127.0.0.1:3306",
+	}, 1, true)
+	changefeedDB.AddReplicatingMaintainer(cf, "n1")
+
+	op := NewMoveMaintainerOperator(changefeedDB, cf, "n1", "n2", 10, 20)
+
+	removeReq := op.Schedule().Message[0].(*heartbeatpb.RemoveMaintainerRequest)
+	require.Equal(t, uint64(10), removeReq.SessionEpoch)
+
+	op.Check("n1", &heartbeatpb.MaintainerStatus{State: heartbeatpb.ComponentState_Stopped})
+	addReq := op.Schedule().Message[0].(*heartbeatpb.AddMaintainerRequest)
+	require.Equal(t, uint64(20), addReq.SessionEpoch)
+
+	op.finished = true
+	op.PostFinish()
+	require.Equal(t, uint64(20), cf.GetCurrentMaintainerSessionEpoch())
 }

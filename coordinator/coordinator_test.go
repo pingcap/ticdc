@@ -43,6 +43,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/stretchr/testify/require"
+	"github.com/tikv/client-go/v2/oracle"
 	pd "github.com/tikv/pd/client"
 	pdgc "github.com/tikv/pd/client/clients/gc"
 	"go.uber.org/zap"
@@ -53,6 +54,10 @@ type mockPdClient struct {
 	pd.Client
 	mu       sync.Mutex
 	gcClient map[uint32]*mockGCStatesClient
+}
+
+func (m *mockPdClient) GetTS(ctx context.Context) (int64, int64, error) {
+	return oracle.GetPhysical(time.Now()), 0, nil
 }
 
 func (m *mockPdClient) UpdateServiceGCSafePoint(ctx context.Context, serviceID string, ttl int64, safePoint uint64) (uint64, error) {

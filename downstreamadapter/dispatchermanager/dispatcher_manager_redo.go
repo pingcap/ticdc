@@ -323,6 +323,7 @@ func (e *DispatcherManager) collectRedoMeta(ctx context.Context) error {
 					&heartbeatpb.RedoResolvedTsProgressMessage{
 						ChangefeedID: e.changefeedID.ToPB(),
 						ResolvedTs:   logMeta.ResolvedTs,
+						SessionEpoch: e.GetMaintainerSessionEpoch(),
 					},
 				))
 			if err != nil {
