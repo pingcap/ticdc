@@ -524,6 +524,20 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 		localScanMaxTs := oracle.GoTimeToTS(oracle.GetTimeFromTS(dataRange.CommitTsStart).Add(interval))
 		dataRange.CommitTsEnd = min(commitTsEndBeforeWindow, localScanMaxTs)
 		dataRange.CommitTsEnd = c.capCommitTsEndByCheckpoint(task, dataRange.CommitTsEnd)
+		if dataRange.CommitTsEnd <= dataRange.CommitTsStart {
+			bypassEndTs := min(commitTsEndBeforeWindow, localScanMaxTs)
+			bypassEndTs = min(bypassEndTs, ddlState.MaxEventCommitTs)
+			if bypassEndTs > dataRange.CommitTsStart {
+				dataRange.CommitTsEnd = bypassEndTs
+				log.Info("scan window local advance bypass checkpoint cap due to pending ddl",
+					zap.Stringer("changefeedID", task.changefeedStat.changefeedID),
+					zap.Stringer("dispatcherID", task.id),
+					zap.Uint64("startTs", dataRange.CommitTsStart),
+					zap.Uint64("checkpointTs", task.checkpointTs.Load()),
+					zap.Uint64("ddlCommitTs", ddlState.MaxEventCommitTs),
+					zap.Uint64("newEndTs", dataRange.CommitTsEnd))
+			}
+		}
 		if dataRange.CommitTsEnd > dataRange.CommitTsStart {
 			log.Info("scan window local advance due to pending ddl",
 				zap.Stringer("changefeedID", task.changefeedStat.changefeedID),

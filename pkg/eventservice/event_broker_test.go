@@ -425,6 +425,44 @@ func TestGetScanTaskDataRangePendingDDLWithCheckpointCapCanAdvance(t *testing.T)
 	require.Equal(t, ts102, dataRange.CommitTsEnd)
 }
 
+func TestGetScanTaskDataRangePendingDDLBypassesCheckpointCapLock(t *testing.T) {
+	broker, _, ss, _ := newEventBrokerForTest()
+	broker.close()
+
+	base := time.Unix(0, 0)
+	ts100 := oracle.GoTimeToTS(base.Add(100 * time.Second))
+	ts102 := oracle.GoTimeToTS(base.Add(102 * time.Second))
+	ts103 := oracle.GoTimeToTS(base.Add(103 * time.Second))
+	ts110 := oracle.GoTimeToTS(base.Add(110 * time.Second))
+
+	info := newMockDispatcherInfoForTest(t)
+	info.epoch = 1
+	info.enableSyncPoint = true
+	info.syncPointInterval = time.Second
+	info.nextSyncPoint = ts110
+
+	changefeedStatus := broker.getOrSetChangefeedStatus(info.GetChangefeedID(), info.GetSyncPointInterval())
+	changefeedStatus.scanInterval.Store(int64(time.Second))
+	changefeedStatus.minSentTs.Store(ts100)
+
+	disp := newDispatcherStat(info, 1, 1, nil, changefeedStatus)
+	disp.seq.Store(1)
+	disp.checkpointTs.Store(ts100)
+	disp.sentResolvedTs.Store(ts102)
+	disp.lastScannedCommitTs.Store(ts102)
+	disp.lastScannedStartTs.Store(ts102 - 1)
+	disp.receivedResolvedTs.Store(ts110)
+	disp.eventStoreCommitTs.Store(ts103)
+
+	ss.resolvedTs = ts110
+	ss.maxDDLCommitTs = ts103
+
+	needScan, dataRange := broker.getScanTaskDataRange(disp)
+	require.True(t, needScan)
+	require.Equal(t, ts102, dataRange.CommitTsStart)
+	require.Equal(t, ts103, dataRange.CommitTsEnd)
+}
+
 func TestEmitSyncPointEventIfNeededSuppressesWhenLagging(t *testing.T) {
 	broker, _, _, _ := newEventBrokerForTest()
 	broker.close()
