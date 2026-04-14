@@ -49,13 +49,6 @@ type Sink interface {
 	BatchBytes() int
 }
 
-// RemoveChangefeedCleaner is implemented by sinks that need an explicit
-// remove-only cleanup step after the base close path has released shared
-// resources.
-type RemoveChangefeedCleaner interface {
-	CleanupRemovedChangefeed() error
-}
-
 func New(ctx context.Context, cfg *config.ChangefeedConfig, changefeedID common.ChangeFeedID) (Sink, error) {
 	sinkURI, err := url.Parse(cfg.SinkURI)
 	if err != nil {

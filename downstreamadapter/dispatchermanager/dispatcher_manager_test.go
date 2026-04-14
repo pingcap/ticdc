@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/eventcollector"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/mock"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
@@ -33,58 +34,11 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	mysqlcfg "github.com/pingcap/ticdc/pkg/sink/mysql"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/stretchr/testify/require"
 )
-
-type closeTrackingSink struct {
-	closeCalls   []bool
-	cleanupCalls int
-}
-
-func (s *closeTrackingSink) SinkType() common.SinkType {
-	return common.BlackHoleSinkType
-}
-
-func (s *closeTrackingSink) IsNormal() bool {
-	return true
-}
-
-func (s *closeTrackingSink) AddDMLEvent(_ *event.DMLEvent) {}
-
-func (s *closeTrackingSink) FlushDMLBeforeBlock(_ event.BlockEvent) error {
-	return nil
-}
-
-func (s *closeTrackingSink) WriteBlockEvent(event.BlockEvent) error {
-	return nil
-}
-
-func (s *closeTrackingSink) AddCheckpointTs(uint64) {}
-
-func (s *closeTrackingSink) SetTableSchemaStore(_ *event.TableSchemaStore) {}
-
-func (s *closeTrackingSink) Close(removeChangefeed bool) {
-	s.closeCalls = append(s.closeCalls, removeChangefeed)
-}
-
-func (s *closeTrackingSink) Run(context.Context) error {
-	return nil
-}
-
-func (s *closeTrackingSink) BatchCount() int {
-	return 0
-}
-
-func (s *closeTrackingSink) BatchBytes() int {
-	return 0
-}
-
-func (s *closeTrackingSink) CleanupRemovedChangefeed() error {
-	s.cleanupCalls++
-	return nil
-}
 
 func newDispatcherManagerTestSink(t *testing.T, sinkType common.SinkType) sink.Sink {
 	t.Helper()
@@ -319,26 +273,28 @@ func TestMergeDispatcherInvalidIDs(t *testing.T) {
 }
 
 func TestTryCloseRemovedRequestAfterClosedTriggersCleanup(t *testing.T) {
-	trackingSink := &closeTrackingSink{}
+	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	mysqlConfig := mysqlcfg.New()
+	mysqlConfig.EnableDDLTs = false
+	mysqlSink := mysql.NewMySQLSink(
+		context.Background(),
+		changefeedID,
+		mysqlConfig,
+		nil,
+		false,
+		false,
+		time.Minute,
+	)
 	manager := &DispatcherManager{
-		changefeedID:            common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName),
-		dispatcherMap:           newDispatcherMap[*dispatcher.EventDispatcher](),
-		heartbeatRequestQueue:   NewHeartbeatRequestQueue(),
-		blockStatusRequestQueue: NewBlockStatusRequestQueue(),
-		sink:                    trackingSink,
-		schemaIDToDispatchers:   dispatcher.NewSchemaIDToDispatchers(),
-		latestWatermark:         NewWatermark(0),
-		latestRedoWatermark:     NewWatermark(0),
-		config: &config.ChangefeedConfig{
-			BDRMode: true,
-		},
+		changefeedID: changefeedID,
+		sink:         mysqlSink,
 	}
 	manager.closed.Store(true)
 
 	closed := manager.TryClose(true)
 	require.True(t, closed)
-	require.Empty(t, trackingSink.closeCalls)
-	require.Equal(t, 1, trackingSink.cleanupCalls)
+	require.True(t, manager.removeChangefeedRequested.Load())
+	require.True(t, manager.removeChangefeedCleaned.Load())
 }
 
 func TestMergeDispatcherExistingID(t *testing.T) {

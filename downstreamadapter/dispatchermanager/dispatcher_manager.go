@@ -947,10 +947,10 @@ func (e *DispatcherManager) cleanupRemovedChangefeed() bool {
 		e.closeRedoMeta(true)
 	}
 
-	if cleaner, ok := e.sink.(sink.RemoveChangefeedCleaner); ok {
-		// Some sinks need an explicit remove-only cleanup step after the normal close path
-		// has already released shared resources. Keep the boundary explicit and retryable.
-		if err := cleaner.CleanupRemovedChangefeed(); err != nil {
+	if mysqlSink, ok := e.sink.(*mysql.Sink); ok {
+		// MySQL sink may still need ddl_ts cleanup after the base close path has already
+		// released the long-lived DB connection, so keep the retryable remove step here.
+		if err := mysqlSink.CleanupRemovedChangefeed(); err != nil {
 			log.Warn("failed to cleanup removed changefeed",
 				zap.Stringer("changefeedID", e.changefeedID),
 				zap.Error(err))
