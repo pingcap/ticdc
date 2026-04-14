@@ -43,13 +43,17 @@ type Sink interface {
 	AddCheckpointTs(ts uint64)
 
 	SetTableSchemaStore(tableSchemaStore *commonEvent.TableSchemaStore)
-	// Close is idempotent and may be called multiple times as remove semantics are
-	// upgraded from stop to delete. It returns whether all close work required by
-	// the latest remove intent has completed.
-	Close(removeChangefeed bool) bool
+	Close(removeChangefeed bool)
 	Run(ctx context.Context) error
 	BatchCount() int
 	BatchBytes() int
+}
+
+// RemoveChangefeedCleaner is implemented by sinks that need an explicit
+// remove-only cleanup step after the base close path has released shared
+// resources.
+type RemoveChangefeedCleaner interface {
+	CleanupRemovedChangefeed() error
 }
 
 func New(ctx context.Context, cfg *config.ChangefeedConfig, changefeedID common.ChangeFeedID) (Sink, error) {

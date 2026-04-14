@@ -136,8 +136,11 @@ type DispatcherManager struct {
 	// removeChangefeedRequested is sticky once any close request asks for removed=true.
 	// A later removed=false request must not downgrade the final cleanup semantics.
 	removeChangefeedRequested atomic.Bool
-	cancel                    context.CancelFunc
-	wg                        sync.WaitGroup
+	// removeChangefeedCleaned records whether the remove-only cleanup has finished.
+	// closed=true only means the base close path completed; remove cleanup may still be pending.
+	removeChangefeedCleaned atomic.Bool
+	cancel                  context.CancelFunc
+	wg                      sync.WaitGroup
 
 	// removeTaskHandles stores the task handles for async dispatcher removal
 	// map[common.DispatcherID]*threadpool.TaskHandle
@@ -845,7 +848,10 @@ func (e *DispatcherManager) TryClose(removeChangefeed bool) bool {
 		e.removeChangefeedRequested.Store(true)
 	}
 	if e.closed.Load() {
-		return e.finishClose()
+		if !e.cleanupRemovedChangefeed() {
+			return false
+		}
+		return e.isCloseComplete()
 	}
 	if e.closing.Load() {
 		return false
@@ -908,16 +914,12 @@ func (e *DispatcherManager) close() {
 	log.Info("shared info closed", zap.Stringer("changefeedID", e.changefeedID))
 
 	if e.IsRedoEnabled() {
-		_ = e.redoSink.Close(false)
+		e.redoSink.Close(false)
 	}
-	removeChangefeed := e.removeChangefeedRequested.Load()
-	sinkClosed := e.sink.Close(removeChangefeed)
+	e.sink.Close(false)
 	log.Info("sink closed", zap.Stringer("changefeedID", e.changefeedID))
 
-	if removeChangefeed && e.IsRedoEnabled() {
-		e.closeRedoMeta(true)
-	}
-	if !sinkClosed {
+	if !e.cleanupRemovedChangefeed() {
 		log.Warn("remove changefeed cleanup is not finished during close",
 			zap.Stringer("changefeedID", e.changefeedID))
 	}
@@ -937,15 +939,34 @@ func (e *DispatcherManager) close() {
 		zap.Stringer("changefeedID", e.changefeedID))
 }
 
-// finishClose replays any sticky remove semantics after the async close path has
-// finished. This keeps remove-only cleanup retryable without a separate manager
-// cleanup state machine for the regular sink.
-func (e *DispatcherManager) finishClose() bool {
-	removeChangefeed := e.removeChangefeedRequested.Load()
-	if removeChangefeed && e.IsRedoEnabled() {
+func (e *DispatcherManager) isCloseComplete() bool {
+	return e.closed.Load() && (!e.removeChangefeedRequested.Load() || e.removeChangefeedCleaned.Load())
+}
+
+func (e *DispatcherManager) cleanupRemovedChangefeed() bool {
+	if !e.removeChangefeedRequested.Load() || e.removeChangefeedCleaned.Load() {
+		return true
+	}
+
+	if e.IsRedoEnabled() {
+		// Redo meta cleanup is the remove-only step for redo mode. It is safe to retry
+		// because removeChangefeedCleaned is only set after all remove-only cleanup succeeds.
 		e.closeRedoMeta(true)
 	}
-	return e.sink.Close(removeChangefeed)
+
+	if cleaner, ok := e.sink.(sink.RemoveChangefeedCleaner); ok {
+		// Some sinks need an explicit remove-only cleanup step after the normal close path
+		// has already released shared resources. Keep the boundary explicit and retryable.
+		if err := cleaner.CleanupRemovedChangefeed(); err != nil {
+			log.Warn("failed to cleanup removed changefeed",
+				zap.Stringer("changefeedID", e.changefeedID),
+				zap.Error(err))
+			return false
+		}
+	}
+
+	e.removeChangefeedCleaned.Store(true)
+	return true
 }
 
 // cleanEventDispatcher is called when the event dispatcher is removed successfully.

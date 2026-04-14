@@ -101,7 +101,7 @@ func main() {
 	deferFunc := func() int {
 		stop()
 		if consumer != nil {
-			_ = consumer.sink.Close(false)
+			consumer.sink.Close(false)
 		}
 		if err != nil && err != context.Canceled {
 			return 1

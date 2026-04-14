@@ -491,7 +491,7 @@ func (s *sink) genCleanupJob(ctx context.Context, uri *url.URL) []func() {
 	return ret
 }
 
-func (s *sink) Close(_ bool) bool {
+func (s *sink) Close(_ bool) {
 	if s.dmlWriters != nil {
 		s.dmlWriters.close()
 	}
@@ -504,7 +504,6 @@ func (s *sink) Close(_ bool) bool {
 	if s.storage != nil {
 		s.storage.Close()
 	}
-	return true
 }
 
 func (s *sink) BatchCount() int {
