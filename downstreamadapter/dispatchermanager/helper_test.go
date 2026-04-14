@@ -25,8 +25,44 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/utils/dynstream"
 	"github.com/stretchr/testify/require"
 )
+
+type fakeDispatcherStatusDynamicStream struct {
+	pushCount int
+}
+
+func (f *fakeDispatcherStatusDynamicStream) Start() {}
+
+func (f *fakeDispatcherStatusDynamicStream) Close() {}
+
+func (f *fakeDispatcherStatusDynamicStream) Push(path common.DispatcherID, event dispatcher.DispatcherStatusWithID) {
+	f.pushCount++
+}
+
+func (f *fakeDispatcherStatusDynamicStream) Wake(path common.DispatcherID) {}
+
+func (f *fakeDispatcherStatusDynamicStream) Feedback() <-chan dynstream.Feedback[common.GID, common.DispatcherID, dispatcher.Dispatcher] {
+	return nil
+}
+
+func (f *fakeDispatcherStatusDynamicStream) AddPath(path common.DispatcherID, dest dispatcher.Dispatcher, area ...dynstream.AreaSettings) error {
+	return nil
+}
+
+func (f *fakeDispatcherStatusDynamicStream) RemovePath(path common.DispatcherID) error {
+	return nil
+}
+
+func (f *fakeDispatcherStatusDynamicStream) Release(path common.DispatcherID) {}
+
+func (f *fakeDispatcherStatusDynamicStream) SetAreaSettings(area common.GID, settings dynstream.AreaSettings) {
+}
+
+func (f *fakeDispatcherStatusDynamicStream) GetMetrics() dynstream.Metrics[common.GID, common.DispatcherID] {
+	return dynstream.Metrics[common.GID, common.DispatcherID]{}
+}
 
 func TestCheckpointTsMessageHandlerDeadlock(t *testing.T) {
 	t.Parallel()
@@ -265,12 +301,17 @@ func TestDispatcherManagerAcceptMaintainerSession(t *testing.T) {
 	t.Parallel()
 
 	dm := &DispatcherManager{}
+	accepted, reason := dm.AcceptMaintainerSession(0)
+	require.True(t, accepted)
+	require.Equal(t, "legacy", reason)
+
 	dm.meta.maintainerSessionEpoch = 10
 
-	accepted, _ := dm.AcceptMaintainerSession(0)
-	require.True(t, accepted)
+	accepted, reason = dm.AcceptMaintainerSession(0)
+	require.False(t, accepted)
+	require.Contains(t, reason, "stale legacy")
 
-	accepted, reason := dm.AcceptMaintainerSession(9)
+	accepted, reason = dm.AcceptMaintainerSession(9)
 	require.False(t, accepted)
 	require.Contains(t, reason, "stale")
 
@@ -281,6 +322,84 @@ func TestDispatcherManagerAcceptMaintainerSession(t *testing.T) {
 	accepted, reason = dm.AcceptMaintainerSession(11)
 	require.False(t, accepted)
 	require.Contains(t, reason, "future")
+}
+
+func TestSchedulerDispatcherRequestHandlerDropsLegacyZeroSessionAfterSessionAware(t *testing.T) {
+	t.Parallel()
+
+	changefeedID := common.NewChangeFeedIDWithName("test-changefeed", "test-namespace")
+	dispatcherID := common.NewDispatcherID()
+	handler := &SchedulerDispatcherRequestHandler{}
+	dm := &DispatcherManager{
+		changefeedID:  changefeedID,
+		dispatcherMap: newDispatcherMap[*dispatcher.EventDispatcher](),
+	}
+	dm.meta.maintainerSessionEpoch = 10
+
+	blocking := handler.Handle(dm, NewSchedulerDispatcherRequest(&heartbeatpb.ScheduleDispatcherRequest{
+		ChangefeedID: changefeedID.ToPB(),
+		Config: &heartbeatpb.DispatcherConfig{
+			DispatcherID: dispatcherID.ToPB(),
+			Mode:         common.DefaultMode,
+		},
+		ScheduleAction: heartbeatpb.ScheduleAction_Create,
+		OperatorType:   heartbeatpb.OperatorType_O_Add,
+		SessionEpoch:   0,
+	}))
+	require.False(t, blocking)
+	require.Equal(t, 0, dm.dispatcherMap.Len())
+	_, exists := dm.currentOperatorMap.Load(dispatcherID)
+	require.False(t, exists)
+}
+
+func TestHeartBeatResponseHandlerDropsLegacyZeroSessionAfterSessionAware(t *testing.T) {
+	t.Parallel()
+
+	changefeedID := common.NewChangeFeedIDWithName("test-changefeed", "test-namespace")
+	dispatcherID := common.NewDispatcherID()
+	statusStream := &fakeDispatcherStatusDynamicStream{}
+	handler := &HeartBeatResponseHandler{dispatcherStatusDynamicStream: statusStream}
+	dm := &DispatcherManager{
+		changefeedID: changefeedID,
+	}
+	dm.meta.maintainerSessionEpoch = 10
+
+	blocking := handler.Handle(dm, NewHeartBeatResponse(&heartbeatpb.HeartBeatResponse{
+		ChangefeedID: changefeedID.ToPB(),
+		DispatcherStatuses: []*heartbeatpb.DispatcherStatus{
+			{
+				InfluencedDispatchers: &heartbeatpb.InfluencedDispatchers{
+					InfluenceType: heartbeatpb.InfluenceType_Normal,
+					DispatcherIDs: []*heartbeatpb.DispatcherID{dispatcherID.ToPB()},
+				},
+			},
+		},
+		SessionEpoch: 0,
+	}))
+	require.False(t, blocking)
+	require.Equal(t, 0, statusStream.pushCount)
+}
+
+func TestMergeDispatcherRequestHandlerDropsLegacyZeroSessionAfterSessionAware(t *testing.T) {
+	t.Parallel()
+
+	changefeedID := common.NewChangeFeedIDWithName("test-changefeed", "test-namespace")
+	handler := &MergeDispatcherRequestHandler{}
+	dm := &DispatcherManager{
+		changefeedID: changefeedID,
+	}
+	dm.meta.maintainerSessionEpoch = 10
+
+	require.NotPanics(t, func() {
+		blocking := handler.Handle(dm, NewMergeDispatcherRequest(&heartbeatpb.MergeDispatcherRequest{
+			ChangefeedID:       changefeedID.ToPB(),
+			DispatcherIDs:      []*heartbeatpb.DispatcherID{common.NewDispatcherID().ToPB(), common.NewDispatcherID().ToPB()},
+			MergedDispatcherID: common.NewDispatcherID().ToPB(),
+			Mode:               common.DefaultMode,
+			SessionEpoch:       0,
+		}))
+		require.False(t, blocking)
+	})
 }
 
 func TestRedoResolvedTsForwardMessageHandlerFiltersSessionEpoch(t *testing.T) {

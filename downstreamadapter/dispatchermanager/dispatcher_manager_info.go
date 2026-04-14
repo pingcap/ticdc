@@ -111,14 +111,17 @@ func (e *DispatcherManager) AcceptBootstrapSession(maintainerID node.ID, session
 }
 
 func (e *DispatcherManager) AcceptMaintainerSession(sessionEpoch uint64) (bool, string) {
+	current := e.GetMaintainerSessionEpoch()
 	if sessionEpoch == 0 {
-		// Zero-session control messages intentionally stay on the legacy path for
-		// mixed-version upgrade compatibility. Strict stale-session filtering only
-		// applies after both ends speak the session-aware protocol.
-		return true, "legacy"
+		// Zero-session control messages are only allowed before the dispatcher
+		// manager enters the session-aware path. Once a non-zero owner session is
+		// installed, later legacy control messages can only come from stale owners.
+		if current == 0 {
+			return true, "legacy"
+		}
+		return false, fmt.Sprintf("stale legacy:0<%d", current)
 	}
 
-	current := e.GetMaintainerSessionEpoch()
 	switch {
 	case sessionEpoch < current:
 		return false, fmt.Sprintf("stale:%d<%d", sessionEpoch, current)
