@@ -324,6 +324,7 @@ func (c *eventBroker) sendResolvedTs(d *dispatcherStat, watermark uint64) {
 	resolvedEvent := newWrapResolvedEvent(remoteID, re)
 	c.getMessageCh(d.messageWorkerIndex, common.IsRedoMode(d.info.GetMode())) <- resolvedEvent
 	d.updateSentResolvedTs(watermark)
+	log.Debug("send resolvedTs", zap.Uint64("resolvedTs", watermark), zap.String("dispatcher", d.id.String()))
 	updateMetricEventServiceSendResolvedTsCount(d.info.GetMode())
 }
 
@@ -385,17 +386,15 @@ func (c *eventBroker) tickTableTriggerDispatchers(ctx context.Context) error {
 					return true
 				}
 				stat.receivedResolvedTs.Store(endTs)
-				boundedEndTs := c.capCommitTsEndBySyncPoint(stat, endTs)
+				//boundedEndTs := c.capCommitTsEndBySyncPoint(stat, endTs)
 				for _, e := range ddlEvents {
-					if e.FinishedTs > boundedEndTs {
-						break
-					}
 					ep := &e
 					c.sendDDL(ctx, remoteID, ep, stat)
 				}
-				if boundedEndTs > startTs {
+
+				if endTs > startTs {
 					// After all the events are sent, we send the watermark to the dispatcher.
-					c.sendResolvedTs(stat, boundedEndTs)
+					c.sendResolvedTs(stat, endTs)
 				} else {
 					// If there is no new ddl event, we still need to send a signal resolved-ts event to keep downstream responsive,
 					// but do not advance the watermark here.
@@ -442,6 +441,9 @@ func (c *eventBroker) logUninitializedDispatchers(ctx context.Context) error {
 
 // capCommitTsEndBySyncPoint caps the commitTsEnd by the checkpoint bound determined by the sync point configuration.
 func (c *eventBroker) capCommitTsEndBySyncPoint(task scanTask, commitTsEnd uint64) uint64 {
+
+	return commitTsEnd
+
 	if !task.enableSyncPoint || task.syncPointInterval <= 0 || c.syncPointCheckpointCapMultiplier == 0 {
 		return commitTsEnd
 	}
