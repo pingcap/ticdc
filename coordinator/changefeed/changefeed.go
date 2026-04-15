@@ -37,19 +37,22 @@ type Changefeed struct {
 	sinkType common.SinkType
 	isNew    bool // only true when the changefeed is newly created or resumed by overwriteCheckpointTs
 
-	// nodeIDMu protects nodeID
+	// nodeIDMu protects the maintainer runtime control state that coordinator
+	// uses to route stop/remove requests and to validate maintainer heartbeats.
 	nodeIDMu sync.Mutex
 	nodeID   node.ID
+	// currentMaintainerSessionEpoch is the session token coordinator currently
+	// expects from the maintainer bound to nodeID.
+	currentMaintainerSessionEpoch uint64
+	// acceptZeroMaintainerSession keeps rolling-upgrade compatibility for a
+	// maintainer that may still report the legacy zero session while coordinator
+	// has already published a non-zero session to it.
+	acceptZeroMaintainerSession bool
 
 	configBytes []byte
 	// it's saved to the backend db
 	lastSavedCheckpointTs    *atomic.Uint64
 	logCoordinatorResolvedTs *atomic.Uint64
-	// currentMaintainerSessionEpoch is runtime-only coordinator state.
-	// It is the control-plane session token paired with the currently recorded
-	// maintainer node, and must stay in sync with owner handoff so stop/remove
-	// requests always fence the right maintainer.
-	currentMaintainerSessionEpoch *atomic.Uint64
 	// the heartbeatpb.MaintainerStatus is read only
 	status *atomic.Pointer[heartbeatpb.MaintainerStatus]
 
@@ -74,14 +77,14 @@ func NewChangefeed(cfID common.ChangeFeedID,
 	}
 
 	res := &Changefeed{
-		ID:                            cfID,
-		info:                          atomic.NewPointer(info),
-		configBytes:                   bytes,
-		lastSavedCheckpointTs:         atomic.NewUint64(checkpointTs),
-		logCoordinatorResolvedTs:      atomic.NewUint64(checkpointTs),
-		currentMaintainerSessionEpoch: atomic.NewUint64(0),
-		sinkType:                      getSinkType(uri.Scheme),
-		isNew:                         isNew,
+		ID:                          cfID,
+		info:                        atomic.NewPointer(info),
+		configBytes:                 bytes,
+		lastSavedCheckpointTs:       atomic.NewUint64(checkpointTs),
+		logCoordinatorResolvedTs:    atomic.NewUint64(checkpointTs),
+		sinkType:                    getSinkType(uri.Scheme),
+		isNew:                       isNew,
+		acceptZeroMaintainerSession: true,
 		// Initialize the status
 		status: atomic.NewPointer(
 			&heartbeatpb.MaintainerStatus{
@@ -211,17 +214,60 @@ func (c *Changefeed) SetIsNew(isNew bool) {
 }
 
 func (c *Changefeed) GetCurrentMaintainerSessionEpoch() uint64 {
-	if c == nil || c.currentMaintainerSessionEpoch == nil {
+	if c == nil {
 		return 0
 	}
-	return c.currentMaintainerSessionEpoch.Load()
+	c.nodeIDMu.Lock()
+	defer c.nodeIDMu.Unlock()
+	return c.currentMaintainerSessionEpoch
 }
 
 func (c *Changefeed) SetCurrentMaintainerSessionEpoch(sessionEpoch uint64) {
-	if c == nil || c.currentMaintainerSessionEpoch == nil {
+	if c == nil {
 		return
 	}
-	c.currentMaintainerSessionEpoch.Store(sessionEpoch)
+	c.nodeIDMu.Lock()
+	defer c.nodeIDMu.Unlock()
+	c.currentMaintainerSessionEpoch = sessionEpoch
+	c.acceptZeroMaintainerSession = sessionEpoch == 0
+}
+
+// PublishMaintainerSessionEpoch publishes a maintainer session before the
+// coordinator has observed whether the target maintainer speaks the new
+// session-aware protocol.
+func (c *Changefeed) PublishMaintainerSessionEpoch(sessionEpoch uint64) {
+	if c == nil {
+		return
+	}
+	c.nodeIDMu.Lock()
+	defer c.nodeIDMu.Unlock()
+	c.currentMaintainerSessionEpoch = sessionEpoch
+	c.acceptZeroMaintainerSession = true
+}
+
+// ConfirmMaintainerSessionEpoch turns a published session into a strict session
+// once coordinator observes the non-zero session from the current maintainer.
+func (c *Changefeed) ConfirmMaintainerSessionEpoch(sessionEpoch uint64) {
+	if c == nil || sessionEpoch == 0 {
+		return
+	}
+	c.nodeIDMu.Lock()
+	defer c.nodeIDMu.Unlock()
+	if c.currentMaintainerSessionEpoch == 0 {
+		c.currentMaintainerSessionEpoch = sessionEpoch
+	}
+	if c.currentMaintainerSessionEpoch == sessionEpoch {
+		c.acceptZeroMaintainerSession = false
+	}
+}
+
+func (c *Changefeed) GetMaintainerRuntimeState() (node.ID, uint64, bool) {
+	if c == nil {
+		return "", 0, false
+	}
+	c.nodeIDMu.Lock()
+	defer c.nodeIDMu.Unlock()
+	return c.nodeID, c.currentMaintainerSessionEpoch, c.acceptZeroMaintainerSession
 }
 
 // GetStatus returns the changefeed status.

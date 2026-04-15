@@ -135,6 +135,37 @@ func TestController_StopChangefeedCarriesPublishedSessionEpochDuringAdd(t *testi
 	require.Equal(t, uint64(42), stopOp.Schedule().Message[0].(*heartbeatpb.RemoveMaintainerRequest).SessionEpoch)
 }
 
+func TestController_StopChangefeedDuringAddAcceptsLegacyZeroSessionAck(t *testing.T) {
+	changefeedDB := changefeed.NewChangefeedDB(1216)
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	backend := mock_changefeed.NewMockBackend(ctrl)
+	oc, _, nodeManager := newOperatorControllerForTest(t, changefeedDB, backend)
+	target := node.NewInfo("localhost:8301", "")
+	nodeManager.GetAliveNodes()[target.ID] = target
+
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		Config:       config.GetDefaultReplicaConfig(),
+		SinkURI:      "mysql://127.0.0.1:3306",
+	}, 1, true)
+	changefeedDB.AddAbsentChangefeed(cf)
+
+	require.True(t, oc.AddOperator(NewAddMaintainerOperator(changefeedDB, cf, target.ID, 42)))
+
+	op := oc.StopChangefeed(context.Background(), cfID, false)
+	stopOp, ok := op.(*StopChangefeedOperator)
+	require.True(t, ok)
+
+	stopOp.Check(target.ID, &heartbeatpb.MaintainerStatus{
+		State:        heartbeatpb.ComponentState_Stopped,
+		SessionEpoch: 0,
+	})
+	require.True(t, stopOp.finished.Load())
+}
+
 func TestController_StopChangefeedCarriesPublishedSessionEpochAfterMoveCutover(t *testing.T) {
 	changefeedDB := changefeed.NewChangefeedDB(1216)
 	ctrl := gomock.NewController(t)

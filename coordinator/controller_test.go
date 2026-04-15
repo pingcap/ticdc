@@ -242,6 +242,55 @@ func TestHandleNonExistentChangefeedKeepsZeroSessionForLegacyReporter(t *testing
 	}
 }
 
+func TestHandleSingleMaintainerStatusAcceptsLegacyZeroEpochDuringPublishedSession(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	backend := mock_changefeed.NewMockBackend(ctrl)
+	changefeedDB := changefeed.NewChangefeedDB(1216)
+	self := node.NewInfo("localhost:8300", "")
+	target := node.NewInfo("localhost:8301", "")
+	nodeManager := watcher.NewNodeManager(nil, nil)
+	nodeManager.GetAliveNodes()[self.ID] = self
+	nodeManager.GetAliveNodes()[target.ID] = target
+
+	mc := messaging.NewMockMessageCenter()
+	appcontext.SetService(appcontext.MessageCenter, mc)
+	appcontext.SetService(watcher.NodeManagerName, nodeManager)
+
+	controller := &Controller{
+		changefeedDB:       changefeedDB,
+		messageCenter:      mc,
+		operatorController: operator.NewOperatorController(self, changefeedDB, backend, 10, nil),
+	}
+
+	cfID := common.NewChangeFeedIDWithName("legacy-zero-during-add", common.DefaultKeyspaceName)
+	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		Config:       config.GetDefaultReplicaConfig(),
+		State:        config.StateNormal,
+		SinkURI:      "mysql://127.0.0.1:3306",
+	}, 10, true)
+	changefeedDB.AddAbsentChangefeed(cf)
+	require.True(t, controller.operatorController.AddOperator(
+		operator.NewAddMaintainerOperator(changefeedDB, cf, target.ID, 42),
+	))
+
+	change := controller.handleSingleMaintainerStatus(target.ID, &heartbeatpb.MaintainerStatus{
+		ChangefeedID:  cfID.ToPB(),
+		State:         heartbeatpb.ComponentState_Working,
+		CheckpointTs:  30,
+		BootstrapDone: true,
+		SessionEpoch:  0,
+	}, cfID)
+
+	require.NotNil(t, change)
+	require.Equal(t, uint64(30), cf.GetStatus().CheckpointTs)
+	op := controller.operatorController.GetOperator(cfID)
+	require.NotNil(t, op)
+	require.True(t, op.IsFinished())
+}
+
 func TestFinishBootstrapRestoresMaintainerSessionEpoch(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()

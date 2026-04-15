@@ -39,7 +39,7 @@ func TestStopChangefeedOperator_OnNodeRemove(t *testing.T) {
 
 	ctrl := gomock.NewController(t)
 	backend := mock_changefeed.NewMockBackend(ctrl)
-	op := NewStopChangefeedOperator(common.DefaultKeyspaceID, cfID, "n1", 10, "n2", backend, true)
+	op := NewStopChangefeedOperator(common.DefaultKeyspaceID, cfID, "n1", 10, false, "n2", backend, true)
 	op.OnNodeRemove("n1")
 	require.Equal(t, "n2", op.nodeID.String())
 	require.False(t, op.finished.Load())
@@ -55,7 +55,7 @@ func TestStopChangefeedOperator_OnTaskRemoved(t *testing.T) {
 	},
 		1, true)
 	changefeedDB.AddReplicatingMaintainer(cf, "n1")
-	op := NewStopChangefeedOperator(common.DefaultKeyspaceID, cfID, "n1", 10, "n2", nil, true)
+	op := NewStopChangefeedOperator(common.DefaultKeyspaceID, cfID, "n1", 10, false, "n2", nil, true)
 	op.OnTaskRemoved()
 	require.True(t, op.finished.Load())
 }
@@ -73,17 +73,17 @@ func TestStopChangefeedOperator_PostFinish(t *testing.T) {
 
 	ctrl := gomock.NewController(t)
 	backend := mock_changefeed.NewMockBackend(ctrl)
-	op := NewStopChangefeedOperator(common.DefaultKeyspaceID, cfID, "n1", 10, "n2", backend, true)
+	op := NewStopChangefeedOperator(common.DefaultKeyspaceID, cfID, "n1", 10, false, "n2", backend, true)
 	backend.EXPECT().DeleteChangefeed(gomock.Any(), cfID).Return(errors.New("err"))
 	op.PostFinish()
 
-	op2 := NewStopChangefeedOperator(common.DefaultKeyspaceID, cfID, "n1", 10, "n2", backend, false)
+	op2 := NewStopChangefeedOperator(common.DefaultKeyspaceID, cfID, "n1", 10, false, "n2", backend, false)
 	backend.EXPECT().SetChangefeedProgress(gomock.Any(), cfID, config.ProgressNone).Return(errors.New("err"))
 	op2.PostFinish()
 }
 
 func TestStopChangefeedOperator_CheckRequiresMatchingSessionEpoch(t *testing.T) {
-	op := NewStopChangefeedOperator(common.DefaultKeyspaceID, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), "n1", 10, "n2", nil, true)
+	op := NewStopChangefeedOperator(common.DefaultKeyspaceID, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), "n1", 10, false, "n2", nil, true)
 
 	op.Check("n1", &heartbeatpb.MaintainerStatus{
 		State:        heartbeatpb.ComponentState_Stopped,
@@ -96,4 +96,24 @@ func TestStopChangefeedOperator_CheckRequiresMatchingSessionEpoch(t *testing.T) 
 		SessionEpoch: 10,
 	})
 	require.True(t, op.finished.Load())
+}
+
+func TestStopChangefeedOperator_CheckAllowsLegacyZeroEpochWhenRequested(t *testing.T) {
+	op := NewStopChangefeedOperator(common.DefaultKeyspaceID, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), "n1", 10, true, "n2", nil, true)
+
+	op.Check("n1", &heartbeatpb.MaintainerStatus{
+		State:        heartbeatpb.ComponentState_Stopped,
+		SessionEpoch: 0,
+	})
+	require.True(t, op.finished.Load())
+}
+
+func TestStopChangefeedOperator_CheckRejectsUnexpectedNode(t *testing.T) {
+	op := NewStopChangefeedOperator(common.DefaultKeyspaceID, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), "n1", 10, true, "n2", nil, true)
+
+	op.Check("n3", &heartbeatpb.MaintainerStatus{
+		State:        heartbeatpb.ComponentState_Stopped,
+		SessionEpoch: 0,
+	})
+	require.False(t, op.finished.Load())
 }

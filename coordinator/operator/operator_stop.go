@@ -34,17 +34,18 @@ type StopChangefeedOperator struct {
 	cfID                common.ChangeFeedID
 	nodeID              node.ID
 	sessionEpoch        uint64
+	allowZeroEpoch      bool
 	changefeedIsRemoved bool
 	finished            atomic.Bool
 	coordinatorNodeID   node.ID
 	backend             changefeed.Backend
 }
 
-func matchesMaintainerSession(expectedSessionEpoch, incomingSessionEpoch uint64) bool {
-	if incomingSessionEpoch == 0 {
-		return expectedSessionEpoch == 0
+func matchesMaintainerSession(expectedSessionEpoch, incomingSessionEpoch uint64, allowZeroEpoch bool) bool {
+	if incomingSessionEpoch == expectedSessionEpoch {
+		return true
 	}
-	return incomingSessionEpoch == expectedSessionEpoch
+	return incomingSessionEpoch == 0 && allowZeroEpoch
 }
 
 func NewStopChangefeedOperator(
@@ -52,6 +53,7 @@ func NewStopChangefeedOperator(
 	cfID common.ChangeFeedID,
 	nodeID node.ID,
 	sessionEpoch uint64,
+	allowZeroEpoch bool,
 	coordinatorNode node.ID,
 	backend changefeed.Backend,
 	removed bool,
@@ -61,21 +63,30 @@ func NewStopChangefeedOperator(
 		cfID:                cfID,
 		nodeID:              nodeID,
 		sessionEpoch:        sessionEpoch,
+		allowZeroEpoch:      allowZeroEpoch,
 		changefeedIsRemoved: removed,
 		coordinatorNodeID:   coordinatorNode,
 		backend:             backend,
 	}
 }
 
-func (m *StopChangefeedOperator) Check(_ node.ID, status *heartbeatpb.MaintainerStatus) {
+func (m *StopChangefeedOperator) Check(from node.ID, status *heartbeatpb.MaintainerStatus) {
 	if status == nil {
 		return
 	}
-	if !matchesMaintainerSession(m.sessionEpoch, status.GetSessionEpoch()) {
+	if from != m.nodeID {
+		log.Info("ignore maintainer status from unexpected node during stop",
+			zap.Stringer("maintainer", m.cfID),
+			zap.Stringer("incomingNode", from),
+			zap.Stringer("expectedNode", m.nodeID))
+		return
+	}
+	if !matchesMaintainerSession(m.sessionEpoch, status.GetSessionEpoch(), m.allowZeroEpoch) {
 		log.Info("ignore maintainer status with mismatched session during stop",
 			zap.Stringer("maintainer", m.cfID),
 			zap.Uint64("incomingSessionEpoch", status.GetSessionEpoch()),
-			zap.Uint64("expectedSessionEpoch", m.sessionEpoch))
+			zap.Uint64("expectedSessionEpoch", m.sessionEpoch),
+			zap.Bool("allowZeroEpoch", m.allowZeroEpoch))
 		return
 	}
 	if !m.finished.Load() && status.State != heartbeatpb.ComponentState_Working {
