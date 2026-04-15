@@ -345,6 +345,9 @@ func (m *Maintainer) HandleEvent(event *Event) bool {
 }
 
 func (m *Maintainer) checkNodeChanged() {
+	if m.removing.Load() {
+		return
+	}
 	m.nodeChanged.Lock()
 	defer m.nodeChanged.Unlock()
 	if m.nodeChanged.changed {
@@ -502,6 +505,13 @@ func (m *Maintainer) onRemoveMaintainer(cascade, changefeedRemoved bool) {
 	m.removing.Store(true)
 	m.cascadeRemoving.Store(cascade)
 	m.changefeedRemoved.Store(changefeedRemoved)
+	// Freeze ordinary scheduling on the old maintainer before we start the close flow.
+	// Only the DDL trigger close operator is allowed to keep running.
+	allowedDispatcherIDs := []common.DispatcherID{m.ddlSpan.ID}
+	if m.enableRedo {
+		allowedDispatcherIDs = append(allowedDispatcherIDs, m.redoDDLSpan.ID)
+	}
+	m.controller.EnterRemovingMode(allowedDispatcherIDs...)
 	closed := m.tryCloseChangefeed()
 	if closed {
 		m.removed.Store(true)
@@ -812,6 +822,14 @@ func (m *Maintainer) onHeartbeatRequest(msg *messaging.TargetMessage) {
 	// Process operator status updates AFTER checkpointTsByCapture is updated
 	// This ensures when operators complete, checkpointTsByCapture already contains the complete heartbeat
 	// Works with calCheckpointTs constraint ordering to prevent checkpoint advancing past new dispatcher startTs
+	if m.removing.Load() {
+		// Once RemoveMaintainer starts, we still need status updates for the close flow itself
+		// (for example DDL-trigger close operators reaching terminal states), but we must not run
+		// failover self-healing. A late Stopped/Working heartbeat from a closing dispatcher manager
+		// would otherwise mark spans absent or remove/recreate dispatchers after shutdown has begun.
+		m.controller.handleStatus(msg.From, req.Statuses, false)
+		return
+	}
 	m.controller.HandleStatus(msg.From, req.Statuses)
 }
 
@@ -828,7 +846,7 @@ func (m *Maintainer) onError(from node.ID, err *heartbeatpb.RunningError) {
 
 func (m *Maintainer) onBlockStateRequest(msg *messaging.TargetMessage) {
 	// the barrier is not initialized
-	if !m.initialized.Load() {
+	if !m.initialized.Load() || m.removing.Load() {
 		return
 	}
 	req := msg.Message[0].(*heartbeatpb.BlockStatusRequest)
@@ -961,8 +979,12 @@ func (m *Maintainer) onMaintainerCloseResponse(from node.ID, response *heartbeat
 
 func (m *Maintainer) handleResendMessage() {
 	// resend closing message
-	if m.removing.Load() && m.cascadeRemoving.Load() {
-		m.trySendMaintainerCloseRequestToAllNode()
+	if m.removing.Load() {
+		// After RemoveMaintainer starts, the old maintainer must stop resending bootstrap/barrier
+		// traffic. Otherwise stale control-plane messages can race with the new maintainer.
+		if m.cascadeRemoving.Load() {
+			m.trySendMaintainerCloseRequestToAllNode()
+		}
 		return
 	}
 	// resend bootstrap message

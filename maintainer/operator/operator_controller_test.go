@@ -21,6 +21,8 @@ import (
 	"unsafe"
 
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/maintainer/replica"
+	maintainertestutil "github.com/pingcap/ticdc/maintainer/testutil"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/messaging"
@@ -100,6 +102,35 @@ func (o *neverFinishOperator) AffectedNodes() []node.ID { return nil }
 func (o *neverFinishOperator) OnTaskRemoved()           {}
 func (o *neverFinishOperator) String() string           { return "never-finish" }
 func (o *neverFinishOperator) BlockTsForward() bool     { return false }
+
+type countingOperator struct {
+	id               common.DispatcherID
+	targetNode       node.ID
+	blockTsForward   bool
+	scheduleCount    syncatomic.Int32
+	checkCount       syncatomic.Int32
+	nodeRemovedCount syncatomic.Int32
+}
+
+func (o *countingOperator) ID() common.DispatcherID { return o.id }
+func (o *countingOperator) Type() string            { return "add" }
+func (o *countingOperator) Start()                  {}
+func (o *countingOperator) Schedule() *messaging.TargetMessage {
+	o.scheduleCount.Add(1)
+	return messaging.NewSingleTargetMessage(o.targetNode, messaging.MaintainerManagerTopic, &heartbeatpb.RemoveMaintainerRequest{})
+}
+func (o *countingOperator) IsFinished() bool { return false }
+func (o *countingOperator) PostFinish()      {}
+func (o *countingOperator) Check(node.ID, *heartbeatpb.TableSpanStatus) {
+	o.checkCount.Add(1)
+}
+func (o *countingOperator) OnNodeRemove(node.ID) {
+	o.nodeRemovedCount.Add(1)
+}
+func (o *countingOperator) AffectedNodes() []node.ID { return []node.ID{o.targetNode} }
+func (o *countingOperator) OnTaskRemoved()           {}
+func (o *countingOperator) String() string           { return "counting-operator" }
+func (o *countingOperator) BlockTsForward() bool     { return o.blockTsForward }
 
 func setAliveNodes(nodeManager *watcher.NodeManager, alive map[node.ID]*node.Info) {
 	type nodeMap = map[node.ID]*node.Info
@@ -201,4 +232,73 @@ func TestController_RemoveReplicaSet_ReplacesRemoveOperatorOnTaskRemoved(t *test
 
 	require.Equal(t, int32(0), postFinishCount.Load())
 	require.NotNil(t, oc.GetOperator(replicaSet.ID))
+}
+
+func TestController_QuiesceExceptFreezesNonAllowedOperators(t *testing.T) {
+	messageCenter := messaging.NewMockMessageCenter()
+	appcontext.SetService(appcontext.MessageCenter, messageCenter)
+
+	spanController, changefeedID, replicaSet, nodeA, _ := setupTestEnvironment(t)
+	spanController.AddReplicatingSpan(replicaSet)
+
+	allowedID := common.NewDispatcherID()
+	allowedReplica := setupReplicaSetWithID(t, changefeedID, allowedID, nodeA)
+	spanController.AddReplicatingSpan(allowedReplica)
+
+	blockedID := common.NewDispatcherID()
+	blockedReplica := setupReplicaSetWithID(t, changefeedID, blockedID, nodeA)
+	spanController.AddReplicatingSpan(blockedReplica)
+
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+	setAliveNodes(nodeManager, map[node.ID]*node.Info{nodeA: {ID: nodeA}})
+
+	oc := NewOperatorController(changefeedID, spanController, 10, common.DefaultMode)
+	allowedOp := &countingOperator{id: allowedID, targetNode: nodeA, blockTsForward: true}
+	blockedOp := &countingOperator{id: blockedID, targetNode: nodeA, blockTsForward: true}
+	require.True(t, oc.AddOperator(allowedOp))
+	require.True(t, oc.AddOperator(blockedOp))
+
+	oc.QuiesceExcept(allowedID)
+
+	oc.UpdateOperatorStatus(allowedID, nodeA, &heartbeatpb.TableSpanStatus{ID: allowedID.ToPB()})
+	oc.UpdateOperatorStatus(blockedID, nodeA, &heartbeatpb.TableSpanStatus{ID: blockedID.ToPB()})
+	require.Equal(t, int32(1), allowedOp.checkCount.Load())
+	require.Equal(t, int32(0), blockedOp.checkCount.Load())
+
+	oc.OnNodeRemoved(nodeA)
+	require.Equal(t, int32(0), allowedOp.nodeRemovedCount.Load())
+	require.Equal(t, int32(0), blockedOp.nodeRemovedCount.Load())
+	require.Equal(t, 0, spanController.GetAbsentSize())
+
+	newBlockedID := common.NewDispatcherID()
+	newBlockedReplica := setupReplicaSetWithID(t, changefeedID, newBlockedID, nodeA)
+	spanController.AddReplicatingSpan(newBlockedReplica)
+	require.False(t, oc.AddOperator(&countingOperator{id: newBlockedID, targetNode: nodeA}))
+
+	require.Equal(t, uint64(10), oc.GetMinCheckpointTs(^uint64(0)))
+
+	next := oc.Execute()
+	require.False(t, next.IsZero())
+	require.Equal(t, int32(1), allowedOp.scheduleCount.Load())
+	require.Equal(t, int32(0), blockedOp.scheduleCount.Load())
+	require.Len(t, messageCenter.GetMessageChannel(), 1)
+	require.Equal(t, 2, oc.OperatorSize())
+}
+
+func setupReplicaSetWithID(
+	t *testing.T,
+	changefeedID common.ChangeFeedID,
+	dispatcherID common.DispatcherID,
+	nodeID node.ID,
+) *replica.SpanReplication {
+	t.Helper()
+
+	tableID := int64(dispatcherID.Low + 100)
+	span := maintainertestutil.GetTableSpanByID(tableID)
+	return replica.NewWorkingSpanReplication(changefeedID, dispatcherID, 1, span, &heartbeatpb.TableSpanStatus{
+		ID:              dispatcherID.ToPB(),
+		ComponentStatus: heartbeatpb.ComponentState_Working,
+		CheckpointTs:    10,
+		Mode:            common.DefaultMode,
+	}, nodeID, false)
 }
