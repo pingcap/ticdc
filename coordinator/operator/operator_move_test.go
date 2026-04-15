@@ -91,22 +91,87 @@ func TestMoveMaintainerOperator_CheckRequiresDestBootstrapDone(t *testing.T) {
 
 	op := NewMoveMaintainerOperator(changefeedDB, cf, "n1", "n2", 10, 20)
 
-	op.Check("n1", &heartbeatpb.MaintainerStatus{State: heartbeatpb.ComponentState_Stopped})
+	op.Check("n1", &heartbeatpb.MaintainerStatus{
+		State:        heartbeatpb.ComponentState_Stopped,
+		SessionEpoch: 10,
+	})
 	require.True(t, op.originNodeStopped)
 	require.False(t, op.finished)
 
+	op.Schedule()
 	op.Check("n2", &heartbeatpb.MaintainerStatus{
 		State:         heartbeatpb.ComponentState_Working,
 		BootstrapDone: false,
+		SessionEpoch:  20,
 	})
 	require.False(t, op.finished)
 
 	op.Check("n2", &heartbeatpb.MaintainerStatus{
 		State:         heartbeatpb.ComponentState_Working,
 		BootstrapDone: true,
+		SessionEpoch:  20,
 	})
 	require.True(t, op.finished)
 	require.Nil(t, op.Schedule())
+}
+
+func TestMoveMaintainerOperator_CheckIgnoresStaleOriginSession(t *testing.T) {
+	changefeedDB := changefeed.NewChangefeedDB(1216)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		Config:       config.GetDefaultReplicaConfig(),
+		SinkURI:      "mysql://127.0.0.1:3306",
+	}, 1, true)
+	cf.SetCurrentMaintainerSessionEpoch(10)
+	changefeedDB.AddReplicatingMaintainer(cf, "n1")
+
+	op := NewMoveMaintainerOperator(changefeedDB, cf, "n1", "n2", 10, 20)
+
+	op.Check("n1", &heartbeatpb.MaintainerStatus{
+		State:        heartbeatpb.ComponentState_Stopped,
+		SessionEpoch: 9,
+	})
+	require.False(t, op.originNodeStopped)
+
+	op.Check("n1", &heartbeatpb.MaintainerStatus{
+		State:        heartbeatpb.ComponentState_Stopped,
+		SessionEpoch: 10,
+	})
+	require.True(t, op.originNodeStopped)
+}
+
+func TestMoveMaintainerOperator_CheckIgnoresStaleDestSession(t *testing.T) {
+	changefeedDB := changefeed.NewChangefeedDB(1216)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		Config:       config.GetDefaultReplicaConfig(),
+		SinkURI:      "mysql://127.0.0.1:3306",
+	}, 1, true)
+	cf.SetCurrentMaintainerSessionEpoch(10)
+	changefeedDB.AddReplicatingMaintainer(cf, "n1")
+
+	op := NewMoveMaintainerOperator(changefeedDB, cf, "n1", "n2", 10, 20)
+	op.Check("n1", &heartbeatpb.MaintainerStatus{
+		State:        heartbeatpb.ComponentState_Stopped,
+		SessionEpoch: 10,
+	})
+	op.Schedule()
+
+	op.Check("n2", &heartbeatpb.MaintainerStatus{
+		State:         heartbeatpb.ComponentState_Working,
+		BootstrapDone: true,
+		SessionEpoch:  19,
+	})
+	require.False(t, op.finished)
+
+	op.Check("n2", &heartbeatpb.MaintainerStatus{
+		State:         heartbeatpb.ComponentState_Working,
+		BootstrapDone: true,
+		SessionEpoch:  20,
+	})
+	require.True(t, op.finished)
 }
 
 func TestMoveMaintainerOperator_ScheduleUsesOldAndNewSessions(t *testing.T) {
@@ -125,7 +190,10 @@ func TestMoveMaintainerOperator_ScheduleUsesOldAndNewSessions(t *testing.T) {
 	removeReq := op.Schedule().Message[0].(*heartbeatpb.RemoveMaintainerRequest)
 	require.Equal(t, uint64(10), removeReq.SessionEpoch)
 
-	op.Check("n1", &heartbeatpb.MaintainerStatus{State: heartbeatpb.ComponentState_Stopped})
+	op.Check("n1", &heartbeatpb.MaintainerStatus{
+		State:        heartbeatpb.ComponentState_Stopped,
+		SessionEpoch: 10,
+	})
 	addReq := op.Schedule().Message[0].(*heartbeatpb.AddMaintainerRequest)
 	require.Equal(t, uint64(20), addReq.SessionEpoch)
 
@@ -146,7 +214,10 @@ func TestMoveMaintainerOperator_CutoverPublishesDestOwnerSessionEpoch(t *testing
 	changefeedDB.AddReplicatingMaintainer(cf, "n1")
 
 	op := NewMoveMaintainerOperator(changefeedDB, cf, "n1", "n2", 10, 20)
-	op.Check("n1", &heartbeatpb.MaintainerStatus{State: heartbeatpb.ComponentState_Stopped})
+	op.Check("n1", &heartbeatpb.MaintainerStatus{
+		State:        heartbeatpb.ComponentState_Stopped,
+		SessionEpoch: 10,
+	})
 	msg := op.Schedule()
 
 	require.NotNil(t, msg)

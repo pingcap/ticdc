@@ -71,6 +71,19 @@ func (m *AddMaintainerOperator) Check(from node.ID, status *heartbeatpb.Maintain
 	if status == nil {
 		return
 	}
+	// The controller forwards status to operators before it applies the
+	// coordinator-side session fence, so add must reject stale session reports
+	// itself or it can finish on a late status from the wrong maintainer session.
+	_, _, allowZeroEpoch := m.cf.GetMaintainerRuntimeState()
+	if !matchesMaintainerSession(m.sessionEpoch, status.GetSessionEpoch(), allowZeroEpoch) {
+		log.Info("ignore maintainer status with mismatched session during add",
+			zap.String("changefeed", m.cf.ID.String()),
+			zap.String("node", from.String()),
+			zap.Uint64("incomingSessionEpoch", status.GetSessionEpoch()),
+			zap.Uint64("expectedSessionEpoch", m.sessionEpoch),
+			zap.Bool("allowZeroEpoch", allowZeroEpoch))
+		return
+	}
 
 	// Require bootstrap to be done before considering the maintainer successfully started.
 	// This avoids false positives when a removal-only maintainer reports Working.

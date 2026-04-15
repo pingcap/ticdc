@@ -33,6 +33,7 @@ type MoveMaintainerOperator struct {
 	origin             node.ID
 	dest               node.ID
 	activeSessionEpoch uint64
+	activeAllowZero    bool
 	destSessionEpoch   uint64
 
 	originNodeStopped bool
@@ -47,11 +48,13 @@ type MoveMaintainerOperator struct {
 func NewMoveMaintainerOperator(db *changefeed.ChangefeedDB, changefeed *changefeed.Changefeed,
 	origin, dest node.ID, activeSessionEpoch, destSessionEpoch uint64,
 ) *MoveMaintainerOperator {
+	_, _, activeAllowZero := changefeed.GetMaintainerRuntimeState()
 	return &MoveMaintainerOperator{
 		changefeed:         changefeed,
 		origin:             origin,
 		dest:               dest,
 		activeSessionEpoch: activeSessionEpoch,
+		activeAllowZero:    activeAllowZero,
 		destSessionEpoch:   destSessionEpoch,
 		db:                 db,
 	}
@@ -65,7 +68,23 @@ func (m *MoveMaintainerOperator) Check(from node.ID, status *heartbeatpb.Maintai
 		return
 	}
 
-	if from == m.origin && status.State != heartbeatpb.ComponentState_Working {
+	// Move observes two different maintainer sessions: the current owner on the
+	// origin node before cutover, and the published destination owner after
+	// cutover. Each phase must validate against its own fenced session token.
+	if from == m.origin && !m.originNodeStopped {
+		if !matchesMaintainerSession(m.activeSessionEpoch, status.GetSessionEpoch(), m.activeAllowZero) {
+			log.Info("ignore maintainer status with mismatched active session during move",
+				zap.String("changefeed", m.changefeed.ID.String()),
+				zap.String("node", from.String()),
+				zap.Uint64("incomingSessionEpoch", status.GetSessionEpoch()),
+				zap.Uint64("expectedSessionEpoch", m.activeSessionEpoch),
+				zap.Bool("allowZeroEpoch", m.activeAllowZero))
+			return
+		}
+	}
+
+	if from == m.origin && !m.originNodeStopped &&
+		status.State != heartbeatpb.ComponentState_Working {
 		log.Info("changefeed changefeedIsRemoved from origin node",
 			zap.String("changefeed", m.changefeed.ID.String()))
 		m.originNodeStopped = true
@@ -73,6 +92,21 @@ func (m *MoveMaintainerOperator) Check(from node.ID, status *heartbeatpb.Maintai
 	if m.originNodeStopped && from == m.dest &&
 		status.State == heartbeatpb.ComponentState_Working &&
 		status.BootstrapDone {
+		expectedSessionEpoch := m.destSessionEpoch
+		_, _, allowZeroEpoch := m.changefeed.GetMaintainerRuntimeState()
+		if m.dest == m.origin {
+			expectedSessionEpoch = m.activeSessionEpoch
+			allowZeroEpoch = m.activeAllowZero
+		}
+		if !matchesMaintainerSession(expectedSessionEpoch, status.GetSessionEpoch(), allowZeroEpoch) {
+			log.Info("ignore maintainer status with mismatched destination session during move",
+				zap.String("changefeed", m.changefeed.ID.String()),
+				zap.String("node", from.String()),
+				zap.Uint64("incomingSessionEpoch", status.GetSessionEpoch()),
+				zap.Uint64("expectedSessionEpoch", expectedSessionEpoch),
+				zap.Bool("allowZeroEpoch", allowZeroEpoch))
+			return
+		}
 		log.Info("changefeed added to dest node",
 			zap.String("dest", m.dest.String()),
 			zap.String("changefeed", m.changefeed.ID.String()))

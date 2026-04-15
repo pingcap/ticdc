@@ -188,7 +188,10 @@ func TestController_StopChangefeedCarriesPublishedSessionEpochAfterMoveCutover(t
 	moveOp := NewMoveMaintainerOperator(changefeedDB, cf, self.ID, target.ID, 10, 20)
 	require.True(t, oc.AddOperator(moveOp))
 
-	moveOp.Check(self.ID, &heartbeatpb.MaintainerStatus{State: heartbeatpb.ComponentState_Stopped})
+	moveOp.Check(self.ID, &heartbeatpb.MaintainerStatus{
+		State:        heartbeatpb.ComponentState_Stopped,
+		SessionEpoch: 10,
+	})
 	msg := moveOp.Schedule()
 	require.NotNil(t, msg)
 

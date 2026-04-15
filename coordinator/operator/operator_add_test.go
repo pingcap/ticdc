@@ -60,12 +60,32 @@ func TestAddMaintainerOperator_CheckRequiresBootstrapDone(t *testing.T) {
 	op.Check("n1", &heartbeatpb.MaintainerStatus{
 		State:         heartbeatpb.ComponentState_Working,
 		BootstrapDone: false,
+		SessionEpoch:  1,
 	})
 	require.False(t, op.finished.Load())
 
 	op.Check("n1", &heartbeatpb.MaintainerStatus{
 		State:         heartbeatpb.ComponentState_Working,
 		BootstrapDone: true,
+		SessionEpoch:  1,
+	})
+	require.True(t, op.finished.Load())
+}
+
+func TestAddMaintainerOperator_CheckIgnoresStaleSession(t *testing.T) {
+	op := NewAddMaintainerOperator(nil, &changefeed.Changefeed{}, "n1", 42)
+
+	op.Check("n1", &heartbeatpb.MaintainerStatus{
+		State:         heartbeatpb.ComponentState_Working,
+		BootstrapDone: true,
+		SessionEpoch:  41,
+	})
+	require.False(t, op.finished.Load())
+
+	op.Check("n1", &heartbeatpb.MaintainerStatus{
+		State:         heartbeatpb.ComponentState_Working,
+		BootstrapDone: true,
+		SessionEpoch:  42,
 	})
 	require.True(t, op.finished.Load())
 }
