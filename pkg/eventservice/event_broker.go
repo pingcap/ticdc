@@ -385,7 +385,7 @@ func (c *eventBroker) tickTableTriggerDispatchers(ctx context.Context) error {
 					return true
 				}
 				stat.receivedResolvedTs.Store(endTs)
-				boundedEndTs := c.capCommitTsEndByCheckpoint(stat, endTs)
+				boundedEndTs := c.capCommitTsEndBySyncPoint(stat, endTs)
 				for _, e := range ddlEvents {
 					if e.FinishedTs > boundedEndTs {
 						break
@@ -440,7 +440,8 @@ func (c *eventBroker) logUninitializedDispatchers(ctx context.Context) error {
 	}
 }
 
-func (c *eventBroker) capCommitTsEndByCheckpoint(task scanTask, commitTsEnd uint64) uint64 {
+// capCommitTsEndBySyncPoint caps the commitTsEnd by the checkpoint bound determined by the sync point configuration.
+func (c *eventBroker) capCommitTsEndBySyncPoint(task scanTask, commitTsEnd uint64) uint64 {
 	if !task.enableSyncPoint || task.syncPointInterval <= 0 || c.syncPointCheckpointCapMultiplier == 0 {
 		return commitTsEnd
 	}
@@ -511,7 +512,7 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 			)
 		}
 	}
-	dataRange.CommitTsEnd = c.capCommitTsEndByCheckpoint(task, dataRange.CommitTsEnd)
+	dataRange.CommitTsEnd = c.capCommitTsEndBySyncPoint(task, dataRange.CommitTsEnd)
 
 	if dataRange.CommitTsEnd <= dataRange.CommitTsStart && hasPendingDDLEventInCurrentRange {
 		// Global scan window base can be pinned by other lagging dispatchers.
@@ -523,21 +524,24 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 		}
 		localScanMaxTs := oracle.GoTimeToTS(oracle.GetTimeFromTS(dataRange.CommitTsStart).Add(interval))
 		dataRange.CommitTsEnd = min(commitTsEndBeforeWindow, localScanMaxTs)
-		dataRange.CommitTsEnd = c.capCommitTsEndByCheckpoint(task, dataRange.CommitTsEnd)
-		if dataRange.CommitTsEnd <= dataRange.CommitTsStart {
-			bypassEndTs := min(commitTsEndBeforeWindow, localScanMaxTs)
-			bypassEndTs = min(bypassEndTs, ddlState.MaxEventCommitTs)
-			if bypassEndTs > dataRange.CommitTsStart {
-				dataRange.CommitTsEnd = bypassEndTs
-				log.Info("scan window local advance bypass checkpoint cap due to pending ddl",
-					zap.Stringer("changefeedID", task.changefeedStat.changefeedID),
-					zap.Stringer("dispatcherID", task.id),
-					zap.Uint64("startTs", dataRange.CommitTsStart),
-					zap.Uint64("checkpointTs", task.checkpointTs.Load()),
-					zap.Uint64("ddlCommitTs", ddlState.MaxEventCommitTs),
-					zap.Uint64("newEndTs", dataRange.CommitTsEnd))
-			}
-		}
+
+		// Don't cap by syncpoint again when in comes to local advance.
+		//dataRange.CommitTsEnd = c.capCommitTsEndBySyncPoint(task, dataRange.CommitTsEnd)
+		// if dataRange.CommitTsEnd <= dataRange.CommitTsStart {
+		// 	bypassEndTs := min(commitTsEndBeforeWindow, localScanMaxTs)
+		// 	bypassEndTs = min(bypassEndTs, ddlState.MaxEventCommitTs)
+		// 	if bypassEndTs > dataRange.CommitTsStart {
+		// 		dataRange.CommitTsEnd = bypassEndTs
+		// 		log.Info("scan window local advance bypass checkpoint cap due to pending ddl",
+		// 			zap.Stringer("changefeedID", task.changefeedStat.changefeedID),
+		// 			zap.Stringer("dispatcherID", task.id),
+		// 			zap.Uint64("startTs", dataRange.CommitTsStart),
+		// 			zap.Uint64("checkpointTs", task.checkpointTs.Load()),
+		// 			zap.Uint64("ddlCommitTs", ddlState.MaxEventCommitTs),
+		// 			zap.Uint64("newEndTs", dataRange.CommitTsEnd))
+		// 	}
+		// }
+
 		if dataRange.CommitTsEnd > dataRange.CommitTsStart {
 			log.Info("scan window local advance due to pending ddl",
 				zap.Stringer("changefeedID", task.changefeedStat.changefeedID),
