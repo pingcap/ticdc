@@ -119,7 +119,7 @@ func getPendingMessageKey(msg *messaging.TargetMessage) (pendingMessageKey, bool
 // handleMessages processes messages from the queue
 func (m *DispatcherOrchestrator) handleMessages() {
 	for {
-		_, msg, ok := m.msgQueue.Pop()
+		msg, ok := m.msgQueue.Pop()
 		if !ok {
 			log.Info("dispatcher orchestrator is shutting down, exit handleMessages")
 			return

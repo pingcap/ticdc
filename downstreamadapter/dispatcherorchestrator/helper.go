@@ -90,19 +90,19 @@ func shouldReplacePendingMessage(key pendingMessageKey, oldMsg, newMsg *messagin
 	return !oldReq.Removed && newReq.Removed
 }
 
-// Pop blocks until a key is available or the queue is closed.
-// The returned message is removed from the queue and handed to the caller immediately.
-func (q *pendingMessageQueue) Pop() (pendingMessageKey, *messaging.TargetMessage, bool) {
+// Pop blocks until a message is available or the queue is closed.
+// The queue key stays internal because callers only need the dequeued message.
+func (q *pendingMessageQueue) Pop() (*messaging.TargetMessage, bool) {
 	key, ok := q.queue.Get()
 	if !ok {
-		return pendingMessageKey{}, nil, false
+		return nil, false
 	}
 
 	q.mu.Lock()
 	msg := q.pending[key]
 	delete(q.pending, key)
 	q.mu.Unlock()
-	return key, msg, true
+	return msg, true
 }
 
 func (q *pendingMessageQueue) Close() {

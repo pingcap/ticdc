@@ -38,18 +38,16 @@ func TestPendingMessageQueue_TryEnqueueDropsDuplicatesOnlyWhileQueued(t *testing
 	require.True(t, q.TryEnqueue(key, msg))
 	require.False(t, q.TryEnqueue(key, msg))
 
-	poppedKey, poppedMsg, ok := q.Pop()
+	poppedMsg, ok := q.Pop()
 	require.True(t, ok)
-	require.Equal(t, key, poppedKey)
 	require.Same(t, msg, poppedMsg)
 
 	// Once the request is popped, allow one queued retry for the next round.
 	require.True(t, q.TryEnqueue(key, msg))
 	require.False(t, q.TryEnqueue(key, msg))
 
-	nextKey, nextMsg, ok := q.Pop()
+	nextMsg, ok := q.Pop()
 	require.True(t, ok)
-	require.Equal(t, key, nextKey)
 	require.Same(t, msg, nextMsg)
 
 	require.True(t, q.TryEnqueue(key, msg))
@@ -68,14 +66,12 @@ func TestPendingMessageQueue_OrderPreservedAcrossKeys(t *testing.T) {
 	require.True(t, q.TryEnqueue(key1, &messaging.TargetMessage{Type: key1.msgType}))
 	require.True(t, q.TryEnqueue(key2, &messaging.TargetMessage{Type: key2.msgType}))
 
-	poppedKey, poppedMsg, ok := q.Pop()
+	poppedMsg, ok := q.Pop()
 	require.True(t, ok)
-	require.Equal(t, key1, poppedKey)
 	require.Equal(t, key1.msgType, poppedMsg.Type)
 
-	poppedKey, poppedMsg, ok = q.Pop()
+	poppedMsg, ok = q.Pop()
 	require.True(t, ok)
-	require.Equal(t, key2, poppedKey)
 	require.Equal(t, key2.msgType, poppedMsg.Type)
 }
 
@@ -85,7 +81,7 @@ func TestPendingMessageQueue_PopReturnsAfterClose(t *testing.T) {
 	q := newPendingMessageQueue()
 	doneCh := make(chan bool, 1)
 	go func() {
-		_, _, ok := q.Pop()
+		_, ok := q.Pop()
 		doneCh <- ok
 	}()
 
@@ -124,9 +120,8 @@ func TestPendingMessageQueue_CloseRequestRemovedTrueOverridesPendingFalse(t *tes
 	require.True(t, q.TryEnqueue(key, msgFalse))
 	require.True(t, q.TryEnqueue(key, msgTrue))
 
-	poppedKey, poppedMsg, ok := q.Pop()
+	poppedMsg, ok := q.Pop()
 	require.True(t, ok)
-	require.Equal(t, key, poppedKey)
 	require.NotNil(t, poppedMsg)
 	req := poppedMsg.Message[0].(*heartbeatpb.MaintainerCloseRequest)
 	require.True(t, req.Removed)
@@ -154,9 +149,8 @@ func TestPendingMessageQueue_CloseRequestUpgradeAfterPopKeepsReturnedMessageStab
 	)
 
 	require.True(t, q.TryEnqueue(key, msgFalse))
-	poppedKey, poppedMsg, ok := q.Pop()
+	poppedMsg, ok := q.Pop()
 	require.True(t, ok)
-	require.Equal(t, key, poppedKey)
 	require.NotNil(t, poppedMsg)
 
 	require.True(t, q.TryEnqueue(key, msgTrue))
@@ -187,9 +181,8 @@ func TestPendingMessageQueue_CloseRequestUpgradeAfterPopRequeuesNextRound(t *tes
 
 	require.True(t, q.TryEnqueue(key, msgFalse))
 
-	poppedKey, poppedMsg, ok := q.Pop()
+	poppedMsg, ok := q.Pop()
 	require.True(t, ok)
-	require.Equal(t, key, poppedKey)
 
 	require.NotNil(t, poppedMsg)
 	req := poppedMsg.Message[0].(*heartbeatpb.MaintainerCloseRequest)
@@ -198,20 +191,18 @@ func TestPendingMessageQueue_CloseRequestUpgradeAfterPopRequeuesNextRound(t *tes
 	require.True(t, q.TryEnqueue(key, msgTrue))
 
 	type popResult struct {
-		key pendingMessageKey
 		msg *messaging.TargetMessage
 		ok  bool
 	}
 	resultCh := make(chan popResult, 1)
 	go func() {
-		nextKey, nextMsg, nextOK := q.Pop()
-		resultCh <- popResult{key: nextKey, msg: nextMsg, ok: nextOK}
+		nextMsg, nextOK := q.Pop()
+		resultCh <- popResult{msg: nextMsg, ok: nextOK}
 	}()
 
 	select {
 	case result := <-resultCh:
 		require.True(t, result.ok)
-		require.Equal(t, key, result.key)
 		require.NotNil(t, result.msg)
 		nextReq := result.msg.Message[0].(*heartbeatpb.MaintainerCloseRequest)
 		require.True(t, nextReq.Removed)
