@@ -85,6 +85,7 @@ func TestHandleNewNodes(t *testing.T) {
 	require.Len(t, responses, 2)
 	require.Equal(t, 1, len(responses[node1.ID].Spans))
 	require.Equal(t, 2, len(responses[node2.ID].Spans))
+	b.ClearBootstrapResponses()
 
 	// add one new node
 	node3 := node.NewInfo("", "")
@@ -105,6 +106,7 @@ func TestHandleNewNodes(t *testing.T) {
 	require.True(t, b.AllNodesReady())
 	require.Len(t, responses, 1)
 	require.Equal(t, 3, len(responses[node3.ID].Spans))
+	b.ClearBootstrapResponses()
 
 	// remove a node
 	delete(nodes, node1.ID)
@@ -134,6 +136,64 @@ func TestHandleNewNodes(t *testing.T) {
 	require.True(t, b.AllNodesReady())
 	require.Len(t, responses, 1)
 	require.Equal(t, 1, len(responses[node1.ID].Spans))
+}
+
+func TestBootstrapperRetainsResponsesUntilCleared(t *testing.T) {
+	b := NewBootstrapper[heartbeatpb.MaintainerBootstrapResponse]("test", func(id node.ID, addr string) *messaging.TargetMessage {
+		return &messaging.TargetMessage{}
+	})
+
+	nodes := make(map[node.ID]*node.Info)
+	node1 := node.NewInfo("", "")
+	node2 := node.NewInfo("", "")
+	nodes[node1.ID] = node1
+	nodes[node2.ID] = node2
+
+	_, _, _, responses := b.HandleNodesChange(nodes)
+	require.Nil(t, responses)
+
+	changefeedIDPB := common.NewChangefeedID4Test("ns", "cf").ToPB()
+	responses = b.HandleBootstrapResponse(
+		node1.ID,
+		&heartbeatpb.MaintainerBootstrapResponse{
+			ChangefeedID: changefeedIDPB,
+			CheckpointTs: 10,
+			Spans:        []*heartbeatpb.BootstrapTableSpan{{}},
+		},
+	)
+	require.Nil(t, responses)
+
+	responses = b.HandleBootstrapResponse(
+		node2.ID,
+		&heartbeatpb.MaintainerBootstrapResponse{
+			ChangefeedID: changefeedIDPB,
+			CheckpointTs: 20,
+			Spans:        []*heartbeatpb.BootstrapTableSpan{{}, {}},
+		},
+	)
+	require.Len(t, responses, 2)
+	require.Equal(t, uint64(10), responses[node1.ID].CheckpointTs)
+	require.Equal(t, uint64(20), responses[node2.ID].CheckpointTs)
+
+	// Simulate the higher level bootstrap failing after the first round.
+	node3 := node.NewInfo("", "")
+	nodes[node3.ID] = node3
+	_, _, _, responses = b.HandleNodesChange(nodes)
+	require.Nil(t, responses)
+
+	responses = b.HandleBootstrapResponse(
+		node3.ID,
+		&heartbeatpb.MaintainerBootstrapResponse{
+			ChangefeedID: changefeedIDPB,
+			Spans:        []*heartbeatpb.BootstrapTableSpan{{}, {}, {}},
+		},
+	)
+	require.Len(t, responses, 3)
+	require.Equal(t, uint64(10), responses[node1.ID].CheckpointTs)
+	require.Equal(t, uint64(20), responses[node2.ID].CheckpointTs)
+	require.Equal(t, uint64(0), responses[node3.ID].CheckpointTs)
+
+	b.ClearBootstrapResponses()
 }
 
 func TestResendBootstrapMessage(t *testing.T) {

@@ -155,7 +155,9 @@ func (t *Status[T]) Initialized() bool {
 }
 
 func (t *Status[T]) GetResponse() *T {
-	response := t.response
+	return t.response
+}
+
+func (t *Status[T]) ClearResponse() {
 	t.response = nil
-	return response
 }
