@@ -497,9 +497,21 @@ func (c *eventBroker) nudgeSyncPointCommitIfNeeded(d *dispatcherStat) bool {
 	if !c.shouldNudgeSyncPointCommit(d) {
 		return false
 	}
+	commitTs := d.nextSyncPoint.Load()
+	watermark := d.sentResolvedTs.Load()
+	preparingTs := d.changefeedStat.getSyncPointPreparingTs()
+	inFlightTs := d.changefeedStat.syncPointInFlightTs.Load()
+	log.Debug("nudge syncpoint commit with resolved event",
+		zap.Stringer("changefeedID", d.changefeedStat.changefeedID),
+		zap.Stringer("dispatcherID", d.id),
+		zap.Uint64("watermark", watermark),
+		zap.Uint64("nextSyncPointTs", commitTs),
+		zap.Uint64("preparingTs", preparingTs),
+		zap.Uint64("inFlightTs", inFlightTs),
+		zap.Bool("inCommitStage", d.changefeedStat.isSyncPointInCommitStage(commitTs)))
 	// Resend resolved-ts at current watermark to trigger syncpoint emission in commit stage,
 	// even when there is no fresh upstream event to drive a new scan.
-	c.sendResolvedTs(d, d.sentResolvedTs.Load())
+	c.sendResolvedTs(d, watermark)
 	return true
 }
 
@@ -722,7 +734,30 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 
 	if dataRange.CommitTsEnd <= dataRange.CommitTsStart {
 		updateMetricEventServiceSkipResolvedTsCount(task.info.GetMode())
-		if c.nudgeSyncPointCommitIfNeeded(task) {
+		nextSyncPointTs := uint64(0)
+		preparingTs := uint64(0)
+		inFlightTs := uint64(0)
+		if task.enableSyncPoint {
+			nextSyncPointTs = task.nextSyncPoint.Load()
+			preparingTs = task.changefeedStat.getSyncPointPreparingTs()
+			inFlightTs = task.changefeedStat.syncPointInFlightTs.Load()
+		}
+		nudged := c.nudgeSyncPointCommitIfNeeded(task)
+		log.Debug("scan range empty after capping",
+			zap.Stringer("changefeedID", task.changefeedStat.changefeedID),
+			zap.Stringer("dispatcherID", task.id),
+			zap.Uint64("startTs", dataRange.CommitTsStart),
+			zap.Uint64("endTs", dataRange.CommitTsEnd),
+			zap.Uint64("scanMaxTs", scanMaxTs),
+			zap.Uint64("ddlResolvedTs", ddlState.ResolvedTs),
+			zap.Uint64("ddlCommitTs", ddlState.MaxEventCommitTs),
+			zap.Bool("hasPendingDDLEventInCurrentRange", hasPendingDDLEventInCurrentRange),
+			zap.Uint64("nextSyncPointTs", nextSyncPointTs),
+			zap.Uint64("preparingTs", preparingTs),
+			zap.Uint64("inFlightTs", inFlightTs),
+			zap.Bool("nudgedSyncPointCommit", nudged),
+		)
+		if nudged {
 			return false, common.DataRange{}
 		}
 		// Scan range can become empty after applying capping (for example, scan window).
@@ -756,15 +791,41 @@ func (c *eventBroker) capCommitTsEndBySyncPoint(task scanTask, commitTsEnd uint6
 	if !task.enableSyncPoint {
 		return commitTsEnd
 	}
+	originalCommitTsEnd := commitTsEnd
 	c.fastForwardSyncPointIfNeeded(task)
+
+	cappedByNextSyncPoint := false
 	nextSyncPoint := task.nextSyncPoint.Load()
 	if nextSyncPoint > 0 && commitTsEnd > nextSyncPoint {
 		task.changefeedStat.tryEnterSyncPointPrepare(nextSyncPoint)
 		commitTsEnd = nextSyncPoint
+		cappedByNextSyncPoint = true
 	}
+
+	cappedByPreparingTs := false
 	preparingTs := task.changefeedStat.getSyncPointPreparingTs()
-	if preparingTs > 0 && !task.changefeedStat.isSyncPointInCommitStage(preparingTs) {
-		commitTsEnd = min(commitTsEnd, preparingTs)
+	inCommitStage := false
+	if preparingTs > 0 {
+		inCommitStage = task.changefeedStat.isSyncPointInCommitStage(preparingTs)
+		if !inCommitStage {
+			newCommitTsEnd := min(commitTsEnd, preparingTs)
+			cappedByPreparingTs = newCommitTsEnd < commitTsEnd
+			commitTsEnd = newCommitTsEnd
+		}
+	}
+
+	if commitTsEnd < originalCommitTsEnd {
+		log.Debug("scan range commitTsEnd capped by syncpoint",
+			zap.Stringer("changefeedID", task.changefeedStat.changefeedID),
+			zap.Stringer("dispatcherID", task.id),
+			zap.Uint64("oldCommitTsEnd", originalCommitTsEnd),
+			zap.Uint64("newCommitTsEnd", commitTsEnd),
+			zap.Bool("cappedByNextSyncPoint", cappedByNextSyncPoint),
+			zap.Bool("cappedByPreparingTs", cappedByPreparingTs),
+			zap.Uint64("nextSyncPointTs", nextSyncPoint),
+			zap.Uint64("preparingTs", preparingTs),
+			zap.Bool("inCommitStage", inCommitStage),
+		)
 	}
 	return commitTsEnd
 }
@@ -1536,6 +1597,24 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 
 	newStat := newDispatcherStat(dispatcherInfo, uint64(len(c.taskChan)), uint64(len(c.messageCh)), tableInfo, status)
 	newStat.copyStatistics(oldStat)
+	if newStat.enableSyncPoint {
+		oldNextSyncPoint := oldStat.nextSyncPoint.Load()
+		newNextSyncPoint := newStat.nextSyncPoint.Load()
+		if newNextSyncPoint > 0 && oldNextSyncPoint > 0 && newNextSyncPoint < oldNextSyncPoint {
+			log.Warn("dispatcher syncpoint moved backward after reset",
+				zap.Stringer("changefeedID", changefeedID),
+				zap.Stringer("dispatcherID", dispatcherID),
+				zap.Uint64("oldEpoch", oldStat.epoch),
+				zap.Uint64("newEpoch", newStat.epoch),
+				zap.Uint64("oldStartTs", oldStat.info.GetStartTs()),
+				zap.Uint64("newStartTs", dispatcherInfo.GetStartTs()),
+				zap.Uint64("oldNextSyncPointTs", oldNextSyncPoint),
+				zap.Uint64("newNextSyncPointTs", newNextSyncPoint),
+				zap.Uint64("preparingTs", status.getSyncPointPreparingTs()),
+				zap.Uint64("inFlightTs", status.syncPointInFlightTs.Load()),
+			)
+		}
+	}
 
 	for {
 		if statPtr.CompareAndSwap(oldStat, newStat) {

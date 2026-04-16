@@ -204,3 +204,63 @@ func TestSyncPointPrepareCannotLowerAfterPromote(t *testing.T) {
 	require.Equal(t, preparingTs, status.syncPointPreparingTs.Load())
 	require.Equal(t, preparingTs, status.syncPointInFlightTs.Load())
 }
+
+func TestSyncPointPreparePromotionSkipsStaleDispatcher(t *testing.T) {
+	t.Parallel()
+
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "syncpoint-stale-prepare"), 10*time.Second)
+	preparingTs := uint64(200)
+	status.syncPointPreparingTs.Store(preparingTs)
+
+	fresh := &dispatcherStat{}
+	fresh.seq.Store(1)
+	fresh.sentResolvedTs.Store(preparingTs)
+	fresh.lastReceivedHeartbeatTime.Store(time.Now().Unix())
+	freshPtr := &atomic.Pointer[dispatcherStat]{}
+	freshPtr.Store(fresh)
+	status.addDispatcher(common.DispatcherID{Low: 1, High: 1}, freshPtr)
+
+	stale := &dispatcherStat{}
+	stale.seq.Store(1)
+	stale.sentResolvedTs.Store(preparingTs - 1)
+	stale.lastReceivedHeartbeatTime.Store(time.Now().Add(-scanWindowStaleDispatcherHeartbeatThreshold - time.Second).Unix())
+	stalePtr := &atomic.Pointer[dispatcherStat]{}
+	stalePtr.Store(stale)
+	status.addDispatcher(common.DispatcherID{Low: 2, High: 2}, stalePtr)
+
+	status.tryPromoteSyncPointToCommitIfReady()
+	require.True(t, status.isSyncPointInCommitStage(preparingTs))
+}
+
+func TestSyncPointCommitFinishSkipsStaleDispatcher(t *testing.T) {
+	t.Parallel()
+
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "syncpoint-stale-commit"), 10*time.Second)
+	inFlightTs := uint64(300)
+	status.syncPointPreparingTs.Store(inFlightTs)
+	status.syncPointInFlightTs.Store(inFlightTs)
+
+	fresh := &dispatcherStat{}
+	fresh.seq.Store(1)
+	fresh.nextSyncPoint.Store(inFlightTs + 100)
+	fresh.checkpointTs.Store(inFlightTs + 100)
+	fresh.sentResolvedTs.Store(inFlightTs + 100)
+	fresh.lastReceivedHeartbeatTime.Store(time.Now().Unix())
+	freshPtr := &atomic.Pointer[dispatcherStat]{}
+	freshPtr.Store(fresh)
+	status.addDispatcher(common.DispatcherID{Low: 3, High: 3}, freshPtr)
+
+	stale := &dispatcherStat{}
+	stale.seq.Store(1)
+	stale.nextSyncPoint.Store(inFlightTs)
+	stale.checkpointTs.Store(inFlightTs)
+	stale.sentResolvedTs.Store(inFlightTs)
+	stale.lastReceivedHeartbeatTime.Store(time.Now().Add(-scanWindowStaleDispatcherHeartbeatThreshold - time.Second).Unix())
+	stalePtr := &atomic.Pointer[dispatcherStat]{}
+	stalePtr.Store(stale)
+	status.addDispatcher(common.DispatcherID{Low: 4, High: 4}, stalePtr)
+
+	status.tryFinishSyncPointCommitIfAllEmitted()
+	require.Equal(t, uint64(0), status.syncPointInFlightTs.Load())
+	require.Equal(t, uint64(0), status.syncPointPreparingTs.Load())
+}

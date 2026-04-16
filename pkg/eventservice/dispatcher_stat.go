@@ -484,6 +484,14 @@ func (c *changefeedStatus) getSyncPointPreparingTs() uint64 {
 	return c.syncPointPreparingTs.Load()
 }
 
+func (c *changefeedStatus) isDispatcherStaleForSyncpoint(dispatcher *dispatcherStat, now time.Time) bool {
+	lastHeartbeatTime := dispatcher.lastReceivedHeartbeatTime.Load()
+	if lastHeartbeatTime <= 0 {
+		return false
+	}
+	return now.Sub(time.Unix(lastHeartbeatTime, 0)) > scanWindowStaleDispatcherHeartbeatThreshold
+}
+
 // tryEnterSyncPointPrepare tries to enter syncpoint prepare stage for candidateTs.
 // If a prepare ts already exists, the same ts is accepted, and a smaller ts can
 // replace it before commit stage starts.
@@ -504,6 +512,11 @@ func (c *changefeedStatus) tryEnterSyncPointPrepare(candidateTs uint64) bool {
 	case c.syncPointInFlightTs.Load() != 0:
 		return false
 	case candidateTs < preparingTs:
+		log.Info("syncpoint prepare ts moved backward",
+			zap.Stringer("changefeedID", c.changefeedID),
+			zap.Uint64("oldPreparingTs", preparingTs),
+			zap.Uint64("newPreparingTs", candidateTs),
+			zap.Uint64("inFlightTs", c.syncPointInFlightTs.Load()))
 		c.syncPointPreparingTs.Store(candidateTs)
 		return true
 	default:
@@ -529,21 +542,62 @@ func (c *changefeedStatus) tryPromoteSyncPointToCommitIfReady() {
 		return
 	}
 
+	now := time.Now()
 	hasEligible := false
 	ready := true
+	blockingFound := false
+	var (
+		blockingDispatcherID   common.DispatcherID
+		blockingSentResolvedTs uint64
+		blockingCheckpointTs   uint64
+		blockingNextSyncPoint  uint64
+		blockingSeq            uint64
+		blockingEpoch          uint64
+	)
 	c.dispatchers.Range(func(_ any, value any) bool {
 		dispatcher := value.(*atomic.Pointer[dispatcherStat]).Load()
 		if dispatcher == nil || dispatcher.isRemoved.Load() || dispatcher.seq.Load() == 0 {
 			return true
 		}
+		if c.isDispatcherStaleForSyncpoint(dispatcher, now) {
+			return true
+		}
 		hasEligible = true
-		if dispatcher.sentResolvedTs.Load() < preparingTs {
+		sentResolvedTs := dispatcher.sentResolvedTs.Load()
+		if sentResolvedTs < preparingTs {
 			ready = false
+			if !blockingFound {
+				blockingFound = true
+				blockingDispatcherID = dispatcher.id
+				blockingSentResolvedTs = sentResolvedTs
+				blockingCheckpointTs = dispatcher.checkpointTs.Load()
+				blockingNextSyncPoint = dispatcher.nextSyncPoint.Load()
+				blockingSeq = dispatcher.seq.Load()
+				blockingEpoch = dispatcher.epoch
+			}
 			return false
 		}
 		return true
 	})
-	if !hasEligible || !ready {
+	if !hasEligible {
+		return
+	}
+	if !ready {
+		fields := []zap.Field{
+			zap.Stringer("changefeedID", c.changefeedID),
+			zap.Uint64("preparingTs", preparingTs),
+		}
+		if blockingFound {
+			fields = append(fields,
+				zap.Stringer("blockingDispatcherID", blockingDispatcherID),
+				zap.Uint64("blockingSentResolvedTs", blockingSentResolvedTs),
+				zap.Uint64("blockingCheckpointTs", blockingCheckpointTs),
+				zap.Uint64("blockingNextSyncPointTs", blockingNextSyncPoint),
+				zap.Uint64("blockingSeq", blockingSeq),
+				zap.Uint64("blockingEpoch", blockingEpoch),
+			)
+		}
+		log.Debug("syncpoint prepare stage blocked by dispatcher", fields...)
 		return
 	}
 
@@ -563,27 +617,88 @@ func (c *changefeedStatus) tryFinishSyncPointCommitIfAllEmitted() {
 		return
 	}
 
+	now := time.Now()
+	hasEligible := false
 	canAdvance := true
+	blockingFound := false
+	blockingReason := ""
+	var (
+		blockingDispatcherID      common.DispatcherID
+		blockingNextSyncPointTs   uint64
+		blockingCheckpointTs      uint64
+		blockingSentResolvedTs    uint64
+		blockingDispatcherSeq     uint64
+		blockingDispatcherEpoch   uint64
+	)
 	c.dispatchers.Range(func(_ any, value any) bool {
 		dispatcher := value.(*atomic.Pointer[dispatcherStat]).Load()
 		if dispatcher == nil || dispatcher.isRemoved.Load() || dispatcher.seq.Load() == 0 {
 			return true
 		}
-		if dispatcher.nextSyncPoint.Load() <= inFlightTs {
+		if c.isDispatcherStaleForSyncpoint(dispatcher, now) {
+			return true
+		}
+		hasEligible = true
+		nextSyncPointTs := dispatcher.nextSyncPoint.Load()
+		checkpointTs := dispatcher.checkpointTs.Load()
+		if nextSyncPointTs <= inFlightTs {
 			canAdvance = false
+			if !blockingFound {
+				blockingFound = true
+				blockingReason = "nextSyncPointNotAdvanced"
+				blockingDispatcherID = dispatcher.id
+				blockingNextSyncPointTs = nextSyncPointTs
+				blockingCheckpointTs = checkpointTs
+				blockingSentResolvedTs = dispatcher.sentResolvedTs.Load()
+				blockingDispatcherSeq = dispatcher.seq.Load()
+				blockingDispatcherEpoch = dispatcher.epoch
+			}
 			return false
 		}
-		if dispatcher.checkpointTs.Load() <= inFlightTs {
+		if checkpointTs <= inFlightTs {
 			canAdvance = false
+			if !blockingFound {
+				blockingFound = true
+				blockingReason = "checkpointNotAdvanced"
+				blockingDispatcherID = dispatcher.id
+				blockingNextSyncPointTs = nextSyncPointTs
+				blockingCheckpointTs = checkpointTs
+				blockingSentResolvedTs = dispatcher.sentResolvedTs.Load()
+				blockingDispatcherSeq = dispatcher.seq.Load()
+				blockingDispatcherEpoch = dispatcher.epoch
+			}
 			return false
 		}
 		return true
 	})
 
-	if canAdvance {
-		c.syncPointInFlightTs.Store(0)
-		if c.syncPointPreparingTs.Load() == inFlightTs {
-			c.syncPointPreparingTs.Store(0)
+	if !hasEligible {
+		return
+	}
+
+	if !canAdvance {
+		fields := []zap.Field{
+			zap.Stringer("changefeedID", c.changefeedID),
+			zap.Uint64("inFlightTs", inFlightTs),
+			zap.Uint64("preparingTs", c.syncPointPreparingTs.Load()),
 		}
+		if blockingFound {
+			fields = append(fields,
+				zap.String("blockingReason", blockingReason),
+				zap.Stringer("blockingDispatcherID", blockingDispatcherID),
+				zap.Uint64("blockingNextSyncPointTs", blockingNextSyncPointTs),
+				zap.Uint64("blockingCheckpointTs", blockingCheckpointTs),
+				zap.Uint64("blockingSentResolvedTs", blockingSentResolvedTs),
+				zap.Uint64("blockingSeq", blockingDispatcherSeq),
+				zap.Uint64("blockingEpoch", blockingDispatcherEpoch),
+			)
+		}
+		log.Debug("syncpoint commit stage blocked by dispatcher", fields...)
+		return
+	}
+
+	c.syncPointInFlightTs.Store(0)
+	if c.syncPointPreparingTs.Load() == inFlightTs {
+		c.syncPointPreparingTs.Store(0)
 	}
 }
