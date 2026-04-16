@@ -24,16 +24,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func newBatchConfigSink(t *testing.T, sinkType common.SinkType, batchCount int, batchBytes int) *sinkmock.MockSink {
+func newBatchConfigSink(t *testing.T, batchCount int, batchBytes int) *sinkmock.MockSink {
 	t.Helper()
 	ctrl := gomock.NewController(t)
 	s := sinkmock.NewMockSink(ctrl)
-	s.EXPECT().SinkType().Return(sinkType).AnyTimes()
+	s.EXPECT().SinkType().Return(common.MysqlSinkType).AnyTimes()
 	s.EXPECT().BatchCount().Return(batchCount).AnyTimes()
 	s.EXPECT().BatchBytes().Return(batchBytes).AnyTimes()
 	return s
 }
 
+// TestDispatcherManagerBatchConfig ensures changefeed overrides take precedence
+// over sink-derived defaults while preserving explicit zero values.
 func TestDispatcherManagerBatchConfig(t *testing.T) {
 	assertBatchConfig := func(
 		sinkBatchCount int,
@@ -42,7 +44,7 @@ func TestDispatcherManagerBatchConfig(t *testing.T) {
 		wantCount int,
 		wantBytes int,
 	) {
-		sink := newBatchConfigSink(t, common.MysqlSinkType, sinkBatchCount, sinkBatchBytes)
+		sink := newBatchConfigSink(t, sinkBatchCount, sinkBatchBytes)
 		m := &DispatcherManager{
 			config: cfg,
 		}

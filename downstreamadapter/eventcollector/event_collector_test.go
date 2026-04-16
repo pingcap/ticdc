@@ -393,6 +393,8 @@ func TestGroupHeartbeatResetThenHandshake(t *testing.T) {
 	require.Equal(t, uint64(1), heartbeat.DispatcherProgresses[0].Epoch)
 }
 
+// TestEventCollectorBatchByCount blocks the first wake-up so pending DMLs
+// accumulate and the dynamic stream must honor the configured batch count.
 func TestEventCollectorBatchByCount(t *testing.T) {
 	ctx := context.Background()
 	localServerID := node.NewID()
@@ -496,6 +498,8 @@ func TestEventCollectorBatchByCount(t *testing.T) {
 	require.Equal(t, totalDML, sumDML)
 }
 
+// TestEventCollectorBatchByBytes uses a tiny byte budget so each DML must be
+// delivered alone once the per-dispatcher batch bytes wiring is applied.
 func TestEventCollectorBatchByBytes(t *testing.T) {
 	ctx := context.Background()
 	localServerID := node.NewID()

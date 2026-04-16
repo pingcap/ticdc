@@ -194,6 +194,8 @@ func TestReplicaConfig_EnableSplittableCheck_DefaultValue(t *testing.T) {
 	require.False(t, util.GetOrZero(config.Scheduler.EnableSplittableCheck))
 }
 
+// TestReplicaConfigValidateBatchConfig verifies validation accepts zero as an
+// explicit override and rejects values outside the supported range.
 func TestReplicaConfigValidateBatchConfig(t *testing.T) {
 	sinkURI, err := url.Parse("mysql://localhost:3306/test")
 	require.NoError(t, err)
@@ -214,8 +216,8 @@ func TestReplicaConfigValidateBatchConfig(t *testing.T) {
 	assertBatchConfig(util.AddressOf(0), nil, "")
 	assertBatchConfig(nil, util.AddressOf(0), "")
 	assertBatchConfig(util.AddressOf(1), util.AddressOf(1), "")
-	assertBatchConfig(util.AddressOf(4096), nil, "")
-	assertBatchConfig(util.AddressOf(4097), nil, "event-collector-batch-count")
+	assertBatchConfig(util.AddressOf(MaxEventCollectorBatchCount), nil, "")
+	assertBatchConfig(util.AddressOf(MaxEventCollectorBatchCount+1), nil, "event-collector-batch-count")
 	assertBatchConfig(util.AddressOf(-1), nil, "event-collector-batch-count")
 	assertBatchConfig(nil, util.AddressOf(-1), "event-collector-batch-bytes")
 }

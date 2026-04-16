@@ -20,6 +20,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestReplicaConfigConversion verifies API/internal replica config conversion,
+// including round-tripping the optional event collector batch overrides.
 func TestReplicaConfigConversion(t *testing.T) {
 	t.Parallel()
 

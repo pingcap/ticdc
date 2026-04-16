@@ -21,6 +21,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestChangeFeedInfoToChangefeedConfigBatchFields ensures the maintainer-facing
+// changefeed config keeps the optional event collector batch overrides.
 func TestChangeFeedInfoToChangefeedConfigBatchFields(t *testing.T) {
 	assertBatchFields := func(batchCount *int, batchBytes *int) {
 		replicaConfig := GetDefaultReplicaConfig()
