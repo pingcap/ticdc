@@ -18,7 +18,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"strings"
 	"testing"
 
 	oldproto "github.com/gogo/protobuf/proto"
@@ -43,6 +42,27 @@ func TestTiKVEncryptionHTTPClientGetKeyspaceEncryptionMeta(t *testing.T) {
 
 	const keyspaceID = uint32(1)
 	const dataKeyID = uint32(0x010203) // 24-bit big-endian -> [0x01 0x02 0x03]
+	metaPB := &testKeyspaceEncryptionMetaPB{
+		KeyspaceId: keyspaceID,
+		Current: &testEncryptionEpochPB{
+			FileId:    1,
+			DataKeyId: dataKeyID,
+			CreatedAt: 0,
+		},
+		MasterKey: &testMasterKeyPB{
+			Vendor:     "aws-kms",
+			CmekId:     "cmek-1",
+			Region:     "us-west-1",
+			Endpoint:   "",
+			Ciphertext: []byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31},
+		},
+		DataKeys: map[uint32]*testDataKeyPB{
+			dataKeyID: {Ciphertext: []byte{31, 30, 29, 28, 27, 26, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0}},
+		},
+		History: []*testEncryptionEpochPB{},
+	}
+	payload, err := oldproto.Marshal(metaPB)
+	require.NoError(t, err)
 
 	handler := http.NewServeMux()
 	handler.HandleFunc("/encryption/get-meta", func(w http.ResponseWriter, r *http.Request) {
@@ -55,16 +75,8 @@ func TestTiKVEncryptionHTTPClientGetKeyspaceEncryptionMeta(t *testing.T) {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{
-  "keyspace_id": 1,
-  "current": {"file_id": 1, "data_key_id": 66051, "created_at": 0},
-  "master_key": {"vendor": "aws-kms", "cmek_id": "cmek-1", "region": "us-west-1", "endpoint": "", "ciphertext": [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31]},
-  "data_keys": {
-    "66051": {"ciphertext": [31,30,29,28,27,26,25,24,23,22,21,20,19,18,17,16,15,14,13,12,11,10,9,8,7,6,5,4,3,2,1,0]}
-  },
-  "history": []
-}`))
+		w.Header().Set("Content-Type", "application/protobuf")
+		_, _ = w.Write(payload)
 	})
 
 	srv := httptest.NewServer(handler)
@@ -193,17 +205,31 @@ func TestTiKVEncryptionHTTPClientNotFoundReturnsErrEncryptionMetaNotFound(t *tes
 
 func TestTiKVEncryptionHTTPClientRejectsVersionZeroMeta(t *testing.T) {
 	t.Parallel()
+	metaPB := &testKeyspaceEncryptionMetaPB{
+		KeyspaceId: 1,
+		Current: &testEncryptionEpochPB{
+			FileId:    1,
+			DataKeyId: 66048,
+			CreatedAt: 0,
+		},
+		MasterKey: &testMasterKeyPB{
+			Vendor:     "aws-kms",
+			CmekId:     "cmek-1",
+			Region:     "us-west-1",
+			Ciphertext: []byte{0, 1, 2},
+		},
+		DataKeys: map[uint32]*testDataKeyPB{
+			66048: {Ciphertext: []byte{1, 2, 3}},
+		},
+		History: []*testEncryptionEpochPB{},
+	}
+	payload, err := oldproto.Marshal(metaPB)
+	require.NoError(t, err)
 
 	handler := http.NewServeMux()
 	handler.HandleFunc("/encryption/get-meta", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{
-  "keyspace_id": 1,
-  "current": {"file_id": 1, "data_key_id": 66048, "created_at": 0},
-  "master_key": {"vendor": "aws-kms", "cmek_id": "cmek-1", "region": "us-west-1", "endpoint": "", "ciphertext": [0,1,2]},
-  "data_keys": {"66048": {"ciphertext": [1,2,3]}},
-  "history": []
-}`))
+		w.Header().Set("Content-Type", "application/protobuf")
+		_, _ = w.Write(payload)
 	})
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
@@ -225,17 +251,31 @@ func TestTiKVEncryptionHTTPClientRejectsVersionZeroMeta(t *testing.T) {
 
 func TestTiKVEncryptionHTTPClientRejectsMetaMissingCurrentDataKey(t *testing.T) {
 	t.Parallel()
+	metaPB := &testKeyspaceEncryptionMetaPB{
+		KeyspaceId: 1,
+		Current: &testEncryptionEpochPB{
+			FileId:    1,
+			DataKeyId: 66051,
+			CreatedAt: 0,
+		},
+		MasterKey: &testMasterKeyPB{
+			Vendor:     "aws-kms",
+			CmekId:     "cmek-1",
+			Region:     "us-west-1",
+			Ciphertext: []byte{0, 1, 2},
+		},
+		DataKeys: map[uint32]*testDataKeyPB{
+			66052: {Ciphertext: []byte{1, 2, 3}},
+		},
+		History: []*testEncryptionEpochPB{},
+	}
+	payload, err := oldproto.Marshal(metaPB)
+	require.NoError(t, err)
 
 	handler := http.NewServeMux()
 	handler.HandleFunc("/encryption/get-meta", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{
-  "keyspace_id": 1,
-  "current": {"file_id": 1, "data_key_id": 66051, "created_at": 0},
-  "master_key": {"vendor": "aws-kms", "cmek_id": "cmek-1", "region": "us-west-1", "endpoint": "", "ciphertext": [0,1,2]},
-  "data_keys": {"66052": {"ciphertext": [1,2,3]}},
-  "history": []
-}`))
+		w.Header().Set("Content-Type", "application/protobuf")
+		_, _ = w.Write(payload)
 	})
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
@@ -255,25 +295,11 @@ func TestTiKVEncryptionHTTPClientRejectsMetaMissingCurrentDataKey(t *testing.T) 
 	require.True(t, cerrors.ErrDataKeyNotFound.Equal(err), "err=%v", err)
 }
 
-func TestByteArrayUnmarshalSupportsUint8Array(t *testing.T) {
-	t.Parallel()
-
-	var b ByteArray
-	err := b.UnmarshalJSON([]byte(`[0, 1, 2, 255]`))
-	require.NoError(t, err)
-	require.Equal(t, []byte{0, 1, 2, 255}, []byte(b))
-
-	var bad ByteArray
-	err = bad.UnmarshalJSON([]byte(`[256]`))
-	require.Error(t, err)
-	require.True(t, strings.Contains(err.Error(), "out of range"))
-}
-
 type testKeyspaceEncryptionMetaPB struct {
-	KeyspaceId uint32                    `protobuf:"varint,1,opt,name=keyspace_id,json=keyspaceId,proto3"`
+	KeyspaceId uint32                    `protobuf:"varint,1,opt,name=keyspace_id,proto3"`
 	Current    *testEncryptionEpochPB    `protobuf:"bytes,2,opt,name=current,proto3"`
-	MasterKey  *testMasterKeyPB          `protobuf:"bytes,3,opt,name=master_key,json=masterKey,proto3"`
-	DataKeys   map[uint32]*testDataKeyPB `protobuf:"bytes,4,rep,name=data_keys,json=dataKeys,proto3" protobuf_key:"varint,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
+	MasterKey  *testMasterKeyPB          `protobuf:"bytes,3,opt,name=master_key,proto3"`
+	DataKeys   map[uint32]*testDataKeyPB `protobuf:"bytes,4,rep,name=data_keys,proto3" protobuf_key:"varint,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
 	History    []*testEncryptionEpochPB  `protobuf:"bytes,5,rep,name=history,proto3"`
 }
 
@@ -282,9 +308,9 @@ func (m *testKeyspaceEncryptionMetaPB) String() string { return "" }
 func (*testKeyspaceEncryptionMetaPB) ProtoMessage()    {}
 
 type testEncryptionEpochPB struct {
-	FileId    uint64 `protobuf:"varint,1,opt,name=file_id,json=fileId,proto3"`
-	DataKeyId uint32 `protobuf:"varint,2,opt,name=data_key_id,json=dataKeyId,proto3"`
-	CreatedAt uint64 `protobuf:"varint,3,opt,name=created_at,json=createdAt,proto3"`
+	FileId    uint64 `protobuf:"varint,1,opt,name=file_id,proto3"`
+	DataKeyId uint32 `protobuf:"varint,2,opt,name=data_key_id,proto3"`
+	CreatedAt uint64 `protobuf:"varint,3,opt,name=created_at,proto3"`
 }
 
 func (m *testEncryptionEpochPB) Reset()         { *m = testEncryptionEpochPB{} }
@@ -293,7 +319,7 @@ func (*testEncryptionEpochPB) ProtoMessage()    {}
 
 type testMasterKeyPB struct {
 	Vendor     string `protobuf:"bytes,1,opt,name=vendor,proto3"`
-	CmekId     string `protobuf:"bytes,2,opt,name=cmek_id,json=cmekId,proto3"`
+	CmekId     string `protobuf:"bytes,2,opt,name=cmek_id,proto3"`
 	Region     string `protobuf:"bytes,3,opt,name=region,proto3"`
 	Endpoint   string `protobuf:"bytes,4,opt,name=endpoint,proto3"`
 	Ciphertext []byte `protobuf:"bytes,5,opt,name=ciphertext,proto3"`
