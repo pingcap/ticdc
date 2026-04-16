@@ -30,6 +30,7 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -496,6 +497,44 @@ func (m *mockDispatcherInfo) IsOutputRawChangeEvent() bool {
 
 func (m *mockDispatcherInfo) GetTxnAtomicity() config.AtomicityLevel {
 	return config.DefaultAtomicityLevel()
+}
+
+func newChangefeedStatusForTest(t testing.TB, info DispatcherInfo) *changefeedStatus {
+	t.Helper()
+
+	status := newChangefeedStatus(info.GetChangefeedID(), info.GetSyncPointInterval())
+	status.filter = newChangefeedFilterForTest(t, info, time.UTC.String())
+	return status
+}
+
+func addChangefeedStatusToBrokerForTest(
+	t testing.TB,
+	broker *eventBroker,
+	changefeedID common.ChangeFeedID,
+	syncPointInterval time.Duration,
+) *changefeedStatus {
+	t.Helper()
+
+	status := newChangefeedStatus(changefeedID, syncPointInterval)
+	broker.changefeedMap.Store(changefeedID, status)
+	return status
+}
+
+func mustInitChangefeedStatusFilter(t testing.TB, status *changefeedStatus, info DispatcherInfo, timezone string) {
+	t.Helper()
+	if status.filter != nil {
+		return
+	}
+	status.filter = newChangefeedFilterForTest(t, info, timezone)
+}
+
+func newChangefeedFilterForTest(t testing.TB, info DispatcherInfo, timezone string) filter.Filter {
+	t.Helper()
+
+	changefeedFilter, err := filter.GetSharedFilterStorage().
+		GetOrSetFilter(info.GetChangefeedID(), info.GetFilterConfig(), timezone)
+	require.NoError(t, err)
+	return changefeedFilter
 }
 
 func genEvents(helper *commonEvent.EventTestHelper, ddl string, dmls ...string) (commonEvent.DDLEvent, []*common.RawKVEntry) {

@@ -27,6 +27,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
@@ -1340,7 +1341,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 	span := info.GetTableSpan()
 	changefeedID := info.GetChangefeedID()
 
-	status := c.getOrSetChangefeedStatus(changefeedID, info.GetSyncPointInterval())
+	status := c.getOrSetChangefeedStatus(info)
 	dispatcher := newDispatcherStat(info, uint64(len(c.taskChan)), uint64(len(c.messageCh)), nil, status)
 	dispatcherPtr := &atomic.Pointer[dispatcherStat]{}
 	dispatcherPtr.Store(dispatcher)
@@ -1534,7 +1535,7 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 			return err
 		}
 	}
-	status := c.getOrSetChangefeedStatus(changefeedID, dispatcherInfo.GetSyncPointInterval())
+	status := c.getOrSetChangefeedStatus(dispatcherInfo)
 
 	newStat := newDispatcherStat(dispatcherInfo, uint64(len(c.taskChan)), uint64(len(c.messageCh)), tableInfo, status)
 	newStat.copyStatistics(oldStat)
@@ -1574,17 +1575,35 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 	return nil
 }
 
-func (c *eventBroker) getOrSetChangefeedStatus(changefeedID common.ChangeFeedID, syncPointInterval time.Duration) *changefeedStatus {
-	stat, ok := c.changefeedMap.Load(changefeedID)
-	if !ok {
-		stat = newChangefeedStatus(changefeedID, syncPointInterval)
-		stat.(*changefeedStatus).timezone = c.timezone
-		log.Info("new changefeed status", zap.Stringer("changefeedID", changefeedID))
-		c.changefeedMap.Store(changefeedID, stat)
-		metrics.EventServiceScanWindowBaseTsGaugeVec.WithLabelValues(changefeedID.String()).Set(0)
-		metrics.EventServiceScanWindowIntervalGaugeVec.WithLabelValues(changefeedID.String()).Set(defaultScanInterval.Seconds())
+func (c *eventBroker) getOrSetChangefeedStatus(info DispatcherInfo) *changefeedStatus {
+	changefeedID := info.GetChangefeedID()
+	if stat, ok := c.changefeedMap.Load(changefeedID); ok {
+		return stat.(*changefeedStatus)
 	}
-	return stat.(*changefeedStatus)
+
+	// Filter config is changefeed scoped. In production, a config change must pause the
+	// changefeed first, which closes all related dispatchers and removes the old
+	// changefeedStatus before a new one is created. So within one changefeedStatus
+	// lifecycle we expect filter config and timezone to stay stable.
+	changefeedFilter, err := filter.GetSharedFilterStorage().GetOrSetFilter(
+		changefeedID, info.GetFilterConfig(), c.timezone)
+	if err != nil {
+		log.Panic("create filter failed",
+			zap.Stringer("changefeedID", changefeedID),
+			zap.Any("filterConfig", info.GetFilterConfig()),
+			zap.Error(err))
+	}
+
+	status := newChangefeedStatus(changefeedID, info.GetSyncPointInterval())
+	status.filter = changefeedFilter
+	actual, loaded := c.changefeedMap.LoadOrStore(changefeedID, status)
+	if loaded {
+		return actual.(*changefeedStatus)
+	}
+	log.Info("new changefeed status", zap.Stringer("changefeedID", changefeedID))
+	metrics.EventServiceScanWindowBaseTsGaugeVec.WithLabelValues(changefeedID.String()).Set(0)
+	metrics.EventServiceScanWindowIntervalGaugeVec.WithLabelValues(changefeedID.String()).Set(defaultScanInterval.Seconds())
+	return status
 }
 
 func (c *eventBroker) handleDispatcherHeartbeat(heartbeat *DispatcherHeartBeatWithServerID) {
