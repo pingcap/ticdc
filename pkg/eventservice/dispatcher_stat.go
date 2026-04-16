@@ -139,13 +139,20 @@ func newDispatcherStat(
 	changefeedStatus *changefeedStatus,
 ) *dispatcherStat {
 	id := info.GetID()
+	dispatcherFilter, err := filter.
+		GetSharedFilterStorage().
+		GetOrSetFilter(info.GetChangefeedID(), info.GetFilterConfig(), changefeedStatus.timezone)
+	if err != nil {
+		log.Panic("create filter failed", zap.Error(err), zap.Any("filterConfig", info.GetFilterConfig()))
+	}
+
 	dispStat := &dispatcherStat{
 		id:                 id,
 		changefeedStat:     changefeedStatus,
 		scanWorkerIndex:    (common.GID)(id).Hash(scanWorkerCount),
 		messageWorkerIndex: (common.GID)(id).Hash(messageWorkerCount),
 		info:               info,
-		filter:             info.GetFilter(),
+		filter:             dispatcherFilter,
 		startTs:            info.GetStartTs(),
 		epoch:              info.GetEpoch(),
 		startTableInfo:     startTableInfo,
@@ -423,6 +430,7 @@ func (c *resolvedTsCache) reset() {
 
 type changefeedStatus struct {
 	changefeedID common.ChangeFeedID
+	timezone     string
 
 	dispatchers sync.Map // common.DispatcherID -> *atomic.Pointer[dispatcherStat]
 

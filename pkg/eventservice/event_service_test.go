@@ -30,7 +30,6 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -389,10 +388,9 @@ type mockDispatcherInfo struct {
 	span              *heartbeatpb.TableSpan
 	startTs           uint64
 	actionType        eventpb.ActionType
-	filter            filter.Filter
+	filterConfig      *eventpb.FilterConfig
 	bdrMode           bool
 	integrity         *integrity.Config
-	tz                *time.Location
 	mode              int64
 	epoch             uint64
 	enableSyncPoint   bool
@@ -401,9 +399,6 @@ type mockDispatcherInfo struct {
 }
 
 func newMockDispatcherInfo(t *testing.T, startTs uint64, dispatcherID common.DispatcherID, tableID int64, actionType eventpb.ActionType) *mockDispatcherInfo {
-	cfg := config.NewDefaultFilterConfig()
-	filter, err := filter.NewFilter(cfg, "", false, false)
-	require.NoError(t, err)
 	return &mockDispatcherInfo{
 		clusterID:    1,
 		serverID:     "server1",
@@ -417,10 +412,13 @@ func newMockDispatcherInfo(t *testing.T, startTs uint64, dispatcherID common.Dis
 		},
 		startTs:    startTs,
 		actionType: actionType,
-		filter:     filter,
-		bdrMode:    false,
-		integrity:  config.GetDefaultReplicaConfig().Integrity,
-		tz:         time.Local,
+		filterConfig: &eventpb.FilterConfig{
+			FilterConfig: &eventpb.InnerFilterConfig{
+				Rules: []string{"*.*"},
+			},
+		},
+		bdrMode:   false,
+		integrity: config.GetDefaultReplicaConfig().Integrity,
 	}
 }
 
@@ -456,10 +454,8 @@ func (m *mockDispatcherInfo) GetChangefeedID() common.ChangeFeedID {
 	return m.changefeedID
 }
 
-func (m *mockDispatcherInfo) GetFilterConfig() *config.FilterConfig {
-	return &config.FilterConfig{
-		Rules: []string{"*.*"},
-	}
+func (m *mockDispatcherInfo) GetFilterConfig() *eventpb.FilterConfig {
+	return m.filterConfig
 }
 
 func (m *mockDispatcherInfo) SyncPointEnabled() bool {
@@ -474,10 +470,6 @@ func (m *mockDispatcherInfo) GetSyncPointInterval() time.Duration {
 	return m.syncPointInterval
 }
 
-func (m *mockDispatcherInfo) GetFilter() filter.Filter {
-	return m.filter
-}
-
 func (m *mockDispatcherInfo) IsOnlyReuse() bool {
 	return false
 }
@@ -488,10 +480,6 @@ func (m *mockDispatcherInfo) GetBdrMode() bool {
 
 func (m *mockDispatcherInfo) GetIntegrity() *integrity.Config {
 	return m.integrity
-}
-
-func (m *mockDispatcherInfo) GetTimezone() *time.Location {
-	return m.tz
 }
 
 func (m *mockDispatcherInfo) GetMode() int64 {
