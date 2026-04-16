@@ -33,6 +33,14 @@ var (
 			Help:      "length of maintainer event channel",
 		}, []string{getKeyspaceLabel(), "changefeed"})
 
+	MaintainerBlockStatusMailboxLenGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "maintainer",
+			Name:      "block_status_mailbox_len",
+			Help:      "number of logical entries in maintainer block status mailbox",
+		}, []string{getKeyspaceLabel(), "changefeed"})
+
 	OperatorCount = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
@@ -62,6 +70,7 @@ var (
 func initMaintainerMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(MaintainerHandleEventDuration)
 	registry.MustRegister(MaintainerEventChLenGauge)
+	registry.MustRegister(MaintainerBlockStatusMailboxLenGauge)
 	registry.MustRegister(OperatorCount)
 	registry.MustRegister(OperatorDuration)
 	registry.MustRegister(TotalOperatorCount)

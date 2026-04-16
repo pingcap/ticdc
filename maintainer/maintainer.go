@@ -71,6 +71,10 @@ type Maintainer struct {
 
 	pdClock pdutil.Clock
 	eventCh *chann.DrainableChann[*Event]
+	// blockStatusMailbox is a dedicated bounded mailbox for block-status requests.
+	// It keeps block-status traffic away from the generic event channel so repeated
+	// WAITING/DONE messages do not inflate maintainer memory without bound.
+	blockStatusMailbox *blockStatusMailbox
 
 	mc messaging.MessageCenter
 
@@ -151,9 +155,10 @@ type Maintainer struct {
 	checkpointTsGauge    prometheus.Gauge
 	checkpointTsLagGauge prometheus.Gauge
 
-	resolvedTsGauge    prometheus.Gauge
-	resolvedTsLagGauge prometheus.Gauge
-	eventChLenGauge    prometheus.Gauge
+	resolvedTsGauge            prometheus.Gauge
+	resolvedTsLagGauge         prometheus.Gauge
+	eventChLenGauge            prometheus.Gauge
+	blockStatusMailboxLenGauge prometheus.Gauge
 
 	scheduledTaskGauge  prometheus.Gauge
 	spanCountGauge      prometheus.Gauge
@@ -196,10 +201,11 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		Name: keyspaceName,
 	}
 	m := &Maintainer{
-		changefeedID:      cfID,
-		selfNode:          selfNode,
-		eventCh:           chann.NewAutoDrainChann[*Event](),
-		startCheckpointTs: checkpointTs,
+		changefeedID:       cfID,
+		selfNode:           selfNode,
+		eventCh:            chann.NewAutoDrainChann[*Event](),
+		blockStatusMailbox: newBlockStatusMailbox(0, 0),
+		startCheckpointTs:  checkpointTs,
 		controller: NewController(cfID, checkpointTs, taskScheduler,
 			info.Config, ddlSpan, redoDDLSpan, conf.AddTableBatchSize, time.Duration(conf.CheckBalanceInterval), refresher, keyspaceMeta, enableRedo),
 		mc:                    mc,
@@ -216,11 +222,12 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		newChangefeed:         newChangefeed,
 		enableRedo:            enableRedo,
 
-		checkpointTsGauge:    metrics.MaintainerCheckpointTsGauge.WithLabelValues(keyspaceName, name),
-		checkpointTsLagGauge: metrics.MaintainerCheckpointTsLagGauge.WithLabelValues(keyspaceName, name),
-		resolvedTsGauge:      metrics.MaintainerResolvedTsGauge.WithLabelValues(keyspaceName, name),
-		resolvedTsLagGauge:   metrics.MaintainerResolvedTsLagGauge.WithLabelValues(keyspaceName, name),
-		eventChLenGauge:      metrics.MaintainerEventChLenGauge.WithLabelValues(keyspaceName, name),
+		checkpointTsGauge:          metrics.MaintainerCheckpointTsGauge.WithLabelValues(keyspaceName, name),
+		checkpointTsLagGauge:       metrics.MaintainerCheckpointTsLagGauge.WithLabelValues(keyspaceName, name),
+		resolvedTsGauge:            metrics.MaintainerResolvedTsGauge.WithLabelValues(keyspaceName, name),
+		resolvedTsLagGauge:         metrics.MaintainerResolvedTsLagGauge.WithLabelValues(keyspaceName, name),
+		eventChLenGauge:            metrics.MaintainerEventChLenGauge.WithLabelValues(keyspaceName, name),
+		blockStatusMailboxLenGauge: metrics.MaintainerBlockStatusMailboxLenGauge.WithLabelValues(keyspaceName, name),
 
 		scheduledTaskGauge:  metrics.ScheduleTaskGauge.WithLabelValues(keyspaceName, name, "default"),
 		spanCountGauge:      metrics.SpanCountGauge.WithLabelValues(keyspaceName, name, "default"),
@@ -425,6 +432,7 @@ func (m *Maintainer) cleanupMetrics() {
 	metrics.MaintainerCheckpointTsLagGauge.DeleteLabelValues(keyspace, name)
 	metrics.MaintainerHandleEventDuration.DeleteLabelValues(keyspace, name)
 	metrics.MaintainerEventChLenGauge.DeleteLabelValues(keyspace, name)
+	metrics.MaintainerBlockStatusMailboxLenGauge.DeleteLabelValues(keyspace, name)
 	metrics.MaintainerResolvedTsGauge.DeleteLabelValues(keyspace, name)
 	metrics.MaintainerResolvedTsLagGauge.DeleteLabelValues(keyspace, name)
 
@@ -827,21 +835,37 @@ func (m *Maintainer) onError(from node.ID, err *heartbeatpb.RunningError) {
 }
 
 func (m *Maintainer) onBlockStateRequest(msg *messaging.TargetMessage) {
+	req := msg.Message[0].(*heartbeatpb.BlockStatusRequest)
+	m.onBlockStateRequestBatch(msg.From, req.Mode, req.BlockStatuses)
+}
+
+func (m *Maintainer) onBlockStateRequestBatch(
+	from node.ID,
+	mode int64,
+	statuses []*heartbeatpb.TableSpanBlockStatus,
+) {
 	// the barrier is not initialized
-	if !m.initialized.Load() {
+	if !m.initialized.Load() || len(statuses) == 0 {
 		return
 	}
-	req := msg.Message[0].(*heartbeatpb.BlockStatusRequest)
-
 	var ackMsg []*messaging.TargetMessage
-	if common.IsDefaultMode(req.Mode) {
-		ackMsg = m.controller.barrier.HandleStatus(msg.From, req)
+	req := &heartbeatpb.BlockStatusRequest{
+		ChangefeedID:  m.changefeedID.ToPB(),
+		BlockStatuses: statuses,
+		Mode:          mode,
+	}
+	if common.IsDefaultMode(mode) {
+		ackMsg = m.controller.barrier.HandleStatus(from, req)
 	} else {
-		ackMsg = m.controller.redoBarrier.HandleStatus(msg.From, req)
+		ackMsg = m.controller.redoBarrier.HandleStatus(from, req)
 	}
 	if ackMsg != nil {
 		m.sendMessages(ackMsg)
 	}
+}
+
+func (m *Maintainer) enqueueBlockStatus(from node.ID, request *heartbeatpb.BlockStatusRequest) {
+	m.blockStatusMailbox.enqueueRequest(from, request)
 }
 
 // onMaintainerBootstrapResponse is called when a maintainer bootstrap response(send by dispatcher manager) is received.
@@ -1139,6 +1163,7 @@ func (m *Maintainer) collectMetrics() {
 	}
 	if time.Since(m.lastPrintStatusTime) > time.Second*20 {
 		m.eventChLenGauge.Set(float64(m.eventCh.Len()))
+		m.blockStatusMailboxLenGauge.Set(float64(m.blockStatusMailbox.Len()))
 		updateMetric(common.DefaultMode)
 		if m.enableRedo {
 			updateMetric(common.RedoMode)
@@ -1155,6 +1180,11 @@ func (m *Maintainer) runHandleEvents(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
+		case <-m.blockStatusMailbox.Notify():
+			batch, ok := m.blockStatusMailbox.drainBatch()
+			if ok {
+				m.onBlockStateRequestBatch(batch.from, batch.mode, batch.statuses)
+			}
 		case event := <-m.eventCh.Out():
 			m.HandleEvent(event)
 		case <-ticker.C:

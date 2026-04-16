@@ -110,7 +110,7 @@ func (m *Manager) recvMessages(ctx context.Context, msg *messaging.TargetMessage
 		return m.dispatcherMaintainerMessage(ctx, common.NewChangefeedIDFromPB(req.ChangefeedID), msg)
 	case messaging.TypeBlockStatusRequest:
 		req := msg.Message[0].(*heartbeatpb.BlockStatusRequest)
-		return m.dispatcherMaintainerMessage(ctx, common.NewChangefeedIDFromPB(req.ChangefeedID), msg)
+		return m.dispatcherMaintainerBlockStatus(ctx, common.NewChangefeedIDFromPB(req.ChangefeedID), msg.From, req)
 	case messaging.TypeCheckpointTsMessage:
 		req := msg.Message[0].(*heartbeatpb.CheckpointTsMessage)
 		return m.dispatcherMaintainerMessage(ctx, common.NewChangefeedIDFromPB(req.ChangefeedID), msg)
@@ -378,6 +378,29 @@ func (m *Manager) dispatcherMaintainerMessage(
 			eventType:    EventMessage,
 			message:      msg,
 		})
+	}
+	return nil
+}
+
+func (m *Manager) dispatcherMaintainerBlockStatus(
+	ctx context.Context,
+	changefeed common.ChangeFeedID,
+	from node.ID,
+	request *heartbeatpb.BlockStatusRequest,
+) error {
+	c, ok := m.maintainers.Load(changefeed)
+	if !ok {
+		log.Warn("maintainer is not found",
+			zap.Stringer("changefeedID", changefeed),
+			zap.String("messageType", messaging.TypeBlockStatusRequest.String()))
+		return nil
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+		maintainer := c.(*Maintainer)
+		maintainer.enqueueBlockStatus(from, request)
 	}
 	return nil
 }
