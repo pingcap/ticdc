@@ -1394,7 +1394,7 @@ func TestProcessTableTriggerDispatcherRespectsSyncPointBoundary(t *testing.T) {
 
 	changefeed := broker.getOrSetChangefeedStatus(info.GetChangefeedID(), info.GetSyncPointInterval())
 	dispatcher := newDispatcherStat(info, 1, 1, nil, changefeed)
-	dispatcher.seq.Store(1)
+	dispatcher.setHandshaked()
 
 	dispatcherPtr := &atomic.Pointer[dispatcherStat]{}
 	dispatcherPtr.Store(dispatcher)
@@ -1438,7 +1438,7 @@ func TestProcessTableTriggerDispatcherNudgesCommitStageWhenNoForwardRange(t *tes
 
 	changefeed := broker.getOrSetChangefeedStatus(info.GetChangefeedID(), info.GetSyncPointInterval())
 	dispatcher := newDispatcherStat(info, 1, 1, nil, changefeed)
-	dispatcher.seq.Store(1)
+	dispatcher.setHandshaked()
 	changefeed.syncPointPreparingTs.Store(ts10)
 	changefeed.syncPointInFlightTs.Store(ts10)
 
