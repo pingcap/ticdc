@@ -3,7 +3,12 @@ module github.com/pingcap/ticdc
 go 1.25.12
 
 require (
+<<<<<<< HEAD
 	cloud.google.com/go/storage v1.50.0
+=======
+	cloud.google.com/go/kms v1.15.8
+	cloud.google.com/go/storage v1.39.1
+>>>>>>> 65605891f (cmek split 3/8: AWS and GCP KMS clients (#4572))
 	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.20.0
 	github.com/BurntSushi/toml v1.5.0
 	github.com/DATA-DOG/go-sqlmock v1.5.0
@@ -11,11 +16,17 @@ require (
 	github.com/KimMachineGun/automemlimit v0.2.4
 	github.com/agiledragon/gomonkey/v2 v2.11.0
 	github.com/apache/pulsar-client-go v0.13.0
+<<<<<<< HEAD
 	github.com/aws/aws-sdk-go v1.55.7
 	github.com/aws/aws-sdk-go-v2 v1.41.5
+=======
+	github.com/aws/aws-sdk-go v1.55.5
+	github.com/aws/aws-sdk-go-v2 v1.41.1
+>>>>>>> 65605891f (cmek split 3/8: AWS and GCP KMS clients (#4572))
 	github.com/aws/aws-sdk-go-v2/config v1.32.2
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.2
 	github.com/aws/aws-sdk-go-v2/service/glue v1.134.1
+	github.com/aws/aws-sdk-go-v2/service/kms v1.49.5
 	github.com/benbjohnson/clock v1.3.5
 	github.com/bradleyjkemp/grpc-tools v0.2.5
 	github.com/cenkalti/backoff/v4 v4.2.1
@@ -84,6 +95,7 @@ require (
 	go.uber.org/mock v0.5.2
 	go.uber.org/multierr v1.11.0
 	go.uber.org/zap v1.27.1
+<<<<<<< HEAD
 	golang.org/x/net v0.56.0
 	golang.org/x/oauth2 v0.36.0
 	golang.org/x/sync v0.21.0
@@ -106,6 +118,35 @@ require (
 	cloud.google.com/go/longrunning v0.6.6 // indirect
 	cloud.google.com/go/monitoring v1.24.0 // indirect
 	filippo.io/edwards25519 v1.1.1 // indirect
+=======
+	golang.org/x/net v0.43.0
+	golang.org/x/oauth2 v0.30.0
+	golang.org/x/sync v0.17.0
+	golang.org/x/sys v0.35.0
+	golang.org/x/term v0.34.0
+	golang.org/x/text v0.29.0
+	golang.org/x/time v0.12.0
+	google.golang.org/api v0.170.0
+	google.golang.org/grpc v1.67.1
+	google.golang.org/protobuf v1.36.6
+)
+
+replace (
+	// Following modules are replaced to use grpc v1.65.0
+	// We can remove these replacements after upgrading grpc to > 1.65
+	cloud.google.com/go/kms => cloud.google.com/go/kms v1.15.8
+	cloud.google.com/go/pubsub => cloud.google.com/go/pubsub v1.37.0
+	cloud.google.com/go/storage => cloud.google.com/go/storage v1.39.1
+	google.golang.org/api => google.golang.org/api v0.170.0
+	google.golang.org/grpc => google.golang.org/grpc v1.65.0
+)
+
+require (
+	cloud.google.com/go v0.112.2 // indirect
+	cloud.google.com/go/compute/metadata v0.5.0 // indirect
+	cloud.google.com/go/iam v1.1.7 // indirect
+	filippo.io/edwards25519 v1.1.0 // indirect
+>>>>>>> 65605891f (cmek split 3/8: AWS and GCP KMS clients (#4572))
 	github.com/99designs/go-keychain v0.0.0-20191008050251-8e49817e8af4 // indirect
 	github.com/99designs/keyring v1.2.1 // indirect
 	github.com/AthenZ/athenz v1.10.39 // indirect
@@ -130,9 +171,14 @@ require (
 	github.com/asaskevich/govalidator v0.0.0-20230301143203-a9d515a09cc2 // indirect
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.8 // indirect
 	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.18.14 // indirect
+<<<<<<< HEAD
 	github.com/aws/aws-sdk-go-v2/feature/s3/manager v1.19.0 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/configsources v1.4.21 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.7.21 // indirect
+=======
+	github.com/aws/aws-sdk-go-v2/internal/configsources v1.4.17 // indirect
+	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.7.17 // indirect
+>>>>>>> 65605891f (cmek split 3/8: AWS and GCP KMS clients (#4572))
 	github.com/aws/aws-sdk-go-v2/internal/ini v1.8.4 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/v4a v1.4.22 // indirect
 	github.com/aws/aws-sdk-go-v2/service/cloudwatch v1.45.3 // indirect
@@ -147,7 +193,11 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sso v1.30.5 // indirect
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.35.10 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sts v1.41.2 // indirect
+<<<<<<< HEAD
 	github.com/aws/smithy-go v1.24.2 // indirect
+=======
+	github.com/aws/smithy-go v1.24.0 // indirect
+>>>>>>> 65605891f (cmek split 3/8: AWS and GCP KMS clients (#4572))
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/bits-and-blooms/bitset v1.14.3 // indirect
 	github.com/blacktear23/go-proxyprotocol v1.0.6 // indirect
@@ -374,10 +424,16 @@ require (
 	golang.org/x/telemetry v0.0.0-20260625142307-59b4966ccb57 // indirect
 	golang.org/x/tools v0.47.0 // indirect
 	golang.org/x/xerrors v0.0.0-20240903120638-7835f813f4da // indirect
+<<<<<<< HEAD
 	google.golang.org/api v0.230.0 // indirect
 	google.golang.org/genproto v0.0.0-20250303144028-a0af3efb3deb // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260414002931-afd174a4e478 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260414002931-afd174a4e478 // indirect
+=======
+	google.golang.org/genproto v0.0.0-20240401170217-c3f982113cda // indirect
+	google.golang.org/genproto/googleapis/api v0.0.0-20240814211410-ddb44dafa142 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20250425173222-7b384671a197 // indirect
+>>>>>>> 65605891f (cmek split 3/8: AWS and GCP KMS clients (#4572))
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
