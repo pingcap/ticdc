@@ -60,7 +60,7 @@ func setAllowDegradeOnError(t *testing.T, allow bool) func() {
 	t.Helper()
 	original := config.GetGlobalServerConfig().Clone()
 	updated := original.Clone()
-	updated.Debug.Encryption.AllowDegradeOnError = allow
+	updated.Encryption.AllowDegradeOnError = allow
 	config.StoreGlobalServerConfig(updated)
 	return func() {
 		config.StoreGlobalServerConfig(original)

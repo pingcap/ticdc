@@ -48,8 +48,8 @@ func NewEncryptionManager(metaManager EncryptionMetaManager) EncryptionManager {
 func (m *encryptionManager) EncryptData(ctx context.Context, keyspaceID uint32, data []byte) ([]byte, error) {
 	allowDegrade := true
 	serverCfg := config.GetGlobalServerConfig()
-	if serverCfg != nil && serverCfg.Debug != nil && serverCfg.Debug.Encryption != nil {
-		allowDegrade = serverCfg.Debug.Encryption.AllowDegradeOnError
+	if serverCfg != nil && serverCfg.Encryption != nil {
+		allowDegrade = serverCfg.Encryption.AllowDegradeOnError
 	}
 
 	// Get current data key, key ID and version together to avoid mismatch when keys rotate.

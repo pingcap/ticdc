@@ -36,9 +36,6 @@ type DebugConfig struct {
 	SchemaStore *SchemaStoreConfig `toml:"schema-store" json:"schema_store"`
 
 	EventService *EventServiceConfig `toml:"event-service" json:"event_service"`
-
-	// Encryption is the configuration for CMEK encryption at rest
-	Encryption *EncryptionConfig `toml:"encryption" json:"encryption"`
 }
 
 // ValidateAndAdjust validates and adjusts the debug configuration
