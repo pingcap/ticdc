@@ -35,6 +35,11 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
+const (
+	outdatedActionDoneReportInterval   = time.Second
+	outdatedActionDoneReportMaxEntries = 256
+)
+
 // DispatcherService defines the interface for providing dispatcher information and basic event handling.
 type DispatcherService interface {
 	GetId() common.DispatcherID
@@ -217,6 +222,11 @@ type BasicDispatcher struct {
 
 	BootstrapState bootstrapState
 
+	// outdatedActionDoneAt throttles DONE reports for the same outdated action to avoid
+	// flooding blockStatusesChan when maintainer resends stale actions repeatedly.
+	outdatedActionDoneMu sync.Mutex
+	outdatedActionDoneAt map[BlockEventIdentifier]time.Time
+
 	// tableModeCompatibilityChecked indicates whether we have already validated the newest
 	// table schema is compatible with the current replication mode configuration.
 	// Only when the initial case or a ddl event is received, we will reset tableModeCompatibilityChecked to check the compatibility.
@@ -256,10 +266,37 @@ func NewBasicDispatcher(
 		creationPDTs:           currentPDTs,
 		mode:                   mode,
 		BootstrapState:         BootstrapFinished,
+		outdatedActionDoneAt:   make(map[BlockEventIdentifier]time.Time),
 	}
 	dispatcher.resolvedTs.Store(startTs)
 
 	return dispatcher
+}
+
+func (d *BasicDispatcher) shouldReportOutdatedActionDone(identifier BlockEventIdentifier, now time.Time) bool {
+	d.outdatedActionDoneMu.Lock()
+	defer d.outdatedActionDoneMu.Unlock()
+
+	if last, ok := d.outdatedActionDoneAt[identifier]; ok && now.Sub(last) < outdatedActionDoneReportInterval {
+		return false
+	}
+
+	if len(d.outdatedActionDoneAt) >= outdatedActionDoneReportMaxEntries {
+		expireBefore := now.Add(-2 * outdatedActionDoneReportInterval)
+		for id, ts := range d.outdatedActionDoneAt {
+			if ts.Before(expireBefore) {
+				delete(d.outdatedActionDoneAt, id)
+			}
+		}
+		if len(d.outdatedActionDoneAt) >= outdatedActionDoneReportMaxEntries {
+			for id := range d.outdatedActionDoneAt {
+				delete(d.outdatedActionDoneAt, id)
+			}
+		}
+	}
+
+	d.outdatedActionDoneAt[identifier] = now
+	return true
 }
 
 // AddDMLEventsToSink filters events for special tables, registers batch wake
@@ -836,6 +873,13 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 		}
 
 		// Step3: whether the outdate message or not, we need to return message show we have finished the event.
+		identifier := BlockEventIdentifier{
+			CommitTs:    action.CommitTs,
+			IsSyncPoint: action.IsSyncPoint,
+		}
+		if !d.shouldReportOutdatedActionDone(identifier, time.Now()) {
+			return false
+		}
 		d.sharedInfo.blockStatusesChan <- &heartbeatpb.TableSpanBlockStatus{
 			ID: d.id.ToPB(),
 			State: &heartbeatpb.State{

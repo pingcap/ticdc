@@ -16,6 +16,7 @@ package eventservice
 import (
 	"context"
 	"errors"
+	"io"
 	"sync"
 	"testing"
 	"time"
@@ -35,6 +36,8 @@ import (
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 const testTableTriggerKeyspaceID uint32 = 1
@@ -418,6 +421,42 @@ func TestNudgeSyncPointCommitIfNeededFastForwardsStaleSyncPoint(t *testing.T) {
 	second := <-broker.messageCh[disp.messageWorkerIndex]
 	require.Equal(t, event.TypeResolvedEvent, second.msgType)
 	require.Equal(t, ts30, disp.nextSyncPoint.Load())
+}
+
+func TestEmitSyncPointEventIfNeededWithoutTwoStageDoesNotWaitCommitStage(t *testing.T) {
+	broker, _, _, _ := newEventBrokerForTest()
+	// Close the broker, so we can catch all messages in the test.
+	broker.close()
+
+	info := newMockDispatcherInfoForTest(t)
+	info.epoch = 1
+	info.enableSyncPoint = true
+	info.syncPointInterval = 10 * time.Second
+
+	ts5 := oracle.GoTimeToTS(time.Unix(0, 0).Add(5 * time.Second))
+	ts10 := oracle.GoTimeToTS(time.Unix(0, 0).Add(10 * time.Second))
+	ts20 := oracle.GoTimeToTS(time.Unix(0, 0).Add(20 * time.Second))
+
+	info.startTs = ts5
+	info.nextSyncPoint = ts10
+
+	changefeedStatus := broker.getOrSetChangefeedStatus(info.GetChangefeedID(), info.GetSyncPointInterval())
+	disp := newDispatcherStat(info, 1, 1, nil, changefeedStatus)
+	disp.setHandshaked()
+
+	// Turn off two-stage syncpoint and verify syncpoint can be emitted at boundary ts
+	// without entering commit stage.
+	broker.enableTwoStageSyncPoint = false
+	require.False(t, changefeedStatus.isSyncPointInCommitStage(ts10))
+
+	broker.emitSyncPointEventIfNeeded(ts10, disp, node.ID(info.GetServerID()))
+
+	first := <-broker.messageCh[disp.messageWorkerIndex]
+	require.Equal(t, event.TypeSyncPointEvent, first.msgType)
+	syncPointEvent, ok := first.e.(*event.SyncPointEvent)
+	require.True(t, ok)
+	require.Equal(t, ts10, syncPointEvent.GetCommitTs())
+	require.Equal(t, ts20, disp.nextSyncPoint.Load())
 }
 
 func TestNudgeSyncPointCommitDispatchersPushesTask(t *testing.T) {
@@ -1661,4 +1700,128 @@ func TestResetDispatcherCopiesRuntimeStatistics(t *testing.T) {
 	require.Equal(t, int64(4096), newStat.currentScanLimitInBytes.Load())
 	require.Equal(t, int64(8192), newStat.maxScanLimitInBytes.Load())
 	require.Equal(t, int64(2048), newStat.lastScanBytes.Load())
+}
+
+func TestLogSyncPointStageDoesNotPrintWhenSyncPointDisabledEvenIfDispatcherLags(t *testing.T) {
+	observedLogs := installObservedDebugLogger(t)
+
+	broker, _, _, _ := newEventBrokerForTest()
+	broker.close()
+
+	info := newMockDispatcherInfoForTest(t)
+	info.enableSyncPoint = false
+	info.syncPointInterval = 0
+
+	changefeed := broker.getOrSetChangefeedStatus(info.GetChangefeedID(), info.GetSyncPointInterval())
+	dispatcher := newDispatcherStat(info, 1, 1, nil, changefeed)
+	dispatcher.seq.Store(1)
+	dispatcher.sentResolvedTs.Store(100)
+	dispatcher.checkpointTs.Store(90)
+
+	dispatcherPtr := &atomic.Pointer[dispatcherStat]{}
+	dispatcherPtr.Store(dispatcher)
+	changefeed.addDispatcher(info.GetID(), dispatcherPtr)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	_ = broker.logSyncPointStage(ctx, 5*time.Millisecond)
+
+	require.Equal(t, 0, observedLogs.FilterMessage("syncpoint stage snapshot").Len())
+}
+
+func TestLogSyncPointStagePrintsPrepareSnapshotForLaggingDispatcher(t *testing.T) {
+	observedLogs := installObservedDebugLogger(t)
+
+	broker, _, _, _ := newEventBrokerForTest()
+	broker.close()
+
+	base := time.Unix(0, 0)
+	ts5 := oracle.GoTimeToTS(base.Add(5 * time.Second))
+	ts8 := oracle.GoTimeToTS(base.Add(8 * time.Second))
+	ts10 := oracle.GoTimeToTS(base.Add(10 * time.Second))
+
+	fastInfo := newMockDispatcherInfoForTest(t)
+	fastInfo.enableSyncPoint = true
+	fastInfo.syncPointInterval = 10 * time.Second
+	fastInfo.startTs = ts5
+	fastInfo.nextSyncPoint = ts10
+
+	slowInfo := newMockDispatcherInfoForTest(t)
+	slowInfo.enableSyncPoint = true
+	slowInfo.syncPointInterval = fastInfo.syncPointInterval
+	slowInfo.startTs = ts5
+	slowInfo.nextSyncPoint = ts10
+	slowInfo.changefeedID = fastInfo.changefeedID
+
+	changefeed := broker.getOrSetChangefeedStatus(fastInfo.GetChangefeedID(), fastInfo.GetSyncPointInterval())
+	changefeed.syncPointPreparingTs.Store(ts10)
+
+	fastDispatcher := newDispatcherStat(fastInfo, 1, 1, nil, changefeed)
+	fastDispatcher.seq.Store(1)
+	fastDispatcher.sentResolvedTs.Store(ts10)
+	fastDispatcher.checkpointTs.Store(ts10)
+
+	slowDispatcher := newDispatcherStat(slowInfo, 1, 1, nil, changefeed)
+	slowDispatcher.seq.Store(1)
+	slowDispatcher.sentResolvedTs.Store(ts8)
+	slowDispatcher.checkpointTs.Store(ts8)
+
+	fastPtr := &atomic.Pointer[dispatcherStat]{}
+	fastPtr.Store(fastDispatcher)
+	changefeed.addDispatcher(fastInfo.GetID(), fastPtr)
+
+	slowPtr := &atomic.Pointer[dispatcherStat]{}
+	slowPtr.Store(slowDispatcher)
+	changefeed.addDispatcher(slowInfo.GetID(), slowPtr)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+	defer cancel()
+	_ = broker.logSyncPointStage(ctx, 5*time.Millisecond)
+
+	snapshotLogs := observedLogs.FilterMessage("syncpoint stage snapshot").All()
+	require.NotEmpty(t, snapshotLogs)
+
+	last := snapshotLogs[len(snapshotLogs)-1]
+	require.Equal(t, "prepare", requireLogStringField(t, last.Context, "stage"))
+	require.Equal(t, int64(ts10), requireLogInt64Field(t, last.Context, "preparingTs"))
+	require.Equal(t, int64(2), requireLogInt64Field(t, last.Context, "dispatchersActive"))
+	require.Equal(t, int64(1), requireLogInt64Field(t, last.Context, "prepareReadyCount"))
+	require.Equal(t, int64(1), requireLogInt64Field(t, last.Context, "prepareWaitingCount"))
+	require.Equal(t, int64(ts8), requireLogInt64Field(t, last.Context, "prepareBlockingSentResolvedTs"))
+}
+
+func installObservedDebugLogger(t *testing.T) *observer.ObservedLogs {
+	t.Helper()
+	core, observedLogs := observer.New(zap.DebugLevel)
+	logger := zap.New(core)
+	restore := log.ReplaceGlobals(logger, &log.ZapProperties{
+		Core:      core,
+		Syncer:    zapcore.AddSync(io.Discard),
+		ErrSyncer: zapcore.AddSync(io.Discard),
+		Level:     zap.NewAtomicLevelAt(zap.DebugLevel),
+	})
+	t.Cleanup(restore)
+	return observedLogs
+}
+
+func requireLogInt64Field(t *testing.T, fields []zapcore.Field, key string) int64 {
+	t.Helper()
+	for _, field := range fields {
+		if field.Key == key {
+			return field.Integer
+		}
+	}
+	require.FailNowf(t, "missing log field", "field %s not found", key)
+	return 0
+}
+
+func requireLogStringField(t *testing.T, fields []zapcore.Field, key string) string {
+	t.Helper()
+	for _, field := range fields {
+		if field.Key == key {
+			return field.String
+		}
+	}
+	require.FailNowf(t, "missing log field", "field %s not found", key)
+	return ""
 }

@@ -128,6 +128,9 @@ type EventServiceConfig struct {
 	// TODO: Remove this config after we find a proper way to fix the OOM issue.
 	// Ref: https://github.com/pingcap/ticdc/issues/1784
 	EnableRemoteEventService bool `toml:"enable-remote-event-service" json:"enable_remote_event_service"`
+	// EnableTwoStageSyncPoint controls whether event broker uses global two-stage
+	// syncpoint coordination. Disable this only for troubleshooting.
+	EnableTwoStageSyncPoint bool `toml:"enable-two-stage-syncpoint" json:"enable_two_stage_syncpoint"`
 }
 
 // NewDefaultEventServiceConfig return the default event service configuration
@@ -138,5 +141,6 @@ func NewDefaultEventServiceConfig() *EventServiceConfig {
 		DMLEventMaxRows:          256,
 		DMLEventMaxBytes:         1024 * 1024 * 1, // 1MB
 		EnableRemoteEventService: true,
+		EnableTwoStageSyncPoint:  true,
 	}
 }
