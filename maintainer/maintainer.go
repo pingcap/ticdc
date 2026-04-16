@@ -921,6 +921,7 @@ func (m *Maintainer) onBootstrapResponses(responses map[node.ID]*heartbeatpb.Mai
 		m.handleError(err)
 		return
 	}
+	m.bootstrapper.ClearBootstrapResponses()
 
 	if postBootstrapRequest == nil {
 		return

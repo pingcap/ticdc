@@ -417,6 +417,7 @@ func (c *Controller) handleBootstrapResponses(ctx context.Context, responses map
 		}
 	}
 	c.finishBootstrap(ctx, runningCfs)
+	c.bootstrapper.ClearBootstrapResponses()
 }
 
 // handleMaintainerStatus handle the status report from the maintainers
