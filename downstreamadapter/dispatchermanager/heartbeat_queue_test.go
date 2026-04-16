@@ -61,7 +61,7 @@ func TestBlockStatusRequestQueueDeduplicatesQueuedAndInFlightDone(t *testing.T) 
 	require.Same(t, fourth, queue.Dequeue(ctx2))
 }
 
-func TestBlockStatusRequestQueueDoesNotDeduplicateWaiting(t *testing.T) {
+func TestBlockStatusRequestQueueDeduplicatesQueuedAndInFlightWaiting(t *testing.T) {
 	queue := NewBlockStatusRequestQueue()
 	targetID := node.NewID()
 	dispatcherID := common.NewDispatcherID()
@@ -106,11 +106,60 @@ func TestBlockStatusRequestQueueDoesNotDeduplicateWaiting(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	require.Same(t, first, queue.Dequeue(ctx))
+	dequeued := queue.Dequeue(ctx)
+	require.Same(t, first, dequeued)
+
+	shortCtx, shortCancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer shortCancel()
+	require.Nil(t, queue.Dequeue(shortCtx))
+
+	third := &BlockStatusRequestWithTargetID{
+		TargetID: targetID,
+		Request: &heartbeatpb.BlockStatusRequest{
+			BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
+				{
+					ID: dispatcherID.ToPB(),
+					State: &heartbeatpb.State{
+						IsBlocked: true,
+						BlockTs:   101,
+						Stage:     heartbeatpb.BlockStage_WAITING,
+					},
+					Mode: common.DefaultMode,
+				},
+			},
+			Mode: common.DefaultMode,
+		},
+	}
+	queue.Enqueue(third)
+
+	shortCtx2, shortCancel2 := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer shortCancel2()
+	require.Nil(t, queue.Dequeue(shortCtx2))
+
+	queue.OnSendComplete(dequeued)
+
+	fourth := &BlockStatusRequestWithTargetID{
+		TargetID: targetID,
+		Request: &heartbeatpb.BlockStatusRequest{
+			BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
+				{
+					ID: dispatcherID.ToPB(),
+					State: &heartbeatpb.State{
+						IsBlocked: true,
+						BlockTs:   101,
+						Stage:     heartbeatpb.BlockStage_WAITING,
+					},
+					Mode: common.DefaultMode,
+				},
+			},
+			Mode: common.DefaultMode,
+		},
+	}
+	queue.Enqueue(fourth)
 
 	ctx2, cancel2 := context.WithTimeout(context.Background(), time.Second)
 	defer cancel2()
-	require.Same(t, second, queue.Dequeue(ctx2))
+	require.Same(t, fourth, queue.Dequeue(ctx2))
 }
 
 func TestBlockStatusRequestQueueKeepsDistinctDoneKeys(t *testing.T) {
@@ -142,6 +191,42 @@ func TestBlockStatusRequestQueueKeepsDistinctDoneKeys(t *testing.T) {
 	ctx3, cancel3 := context.WithTimeout(context.Background(), time.Second)
 	defer cancel3()
 	require.Same(t, redoDone, queue.Dequeue(ctx3))
+}
+
+func TestBlockStatusRequestQueueKeepsWaitingAndDoneDistinct(t *testing.T) {
+	queue := NewBlockStatusRequestQueue()
+	targetID := node.NewID()
+	dispatcherID := common.NewDispatcherID()
+
+	waiting := &BlockStatusRequestWithTargetID{
+		TargetID: targetID,
+		Request: &heartbeatpb.BlockStatusRequest{
+			BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
+				{
+					ID: dispatcherID.ToPB(),
+					State: &heartbeatpb.State{
+						IsBlocked: true,
+						BlockTs:   300,
+						Stage:     heartbeatpb.BlockStage_WAITING,
+					},
+					Mode: common.DefaultMode,
+				},
+			},
+			Mode: common.DefaultMode,
+		},
+	}
+	done := newDoneBlockStatusRequest(targetID, dispatcherID, 300)
+
+	queue.Enqueue(waiting)
+	queue.Enqueue(done)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	require.Same(t, waiting, queue.Dequeue(ctx))
+
+	ctx2, cancel2 := context.WithTimeout(context.Background(), time.Second)
+	defer cancel2()
+	require.Same(t, done, queue.Dequeue(ctx2))
 }
 
 func newDoneBlockStatusRequest(targetID node.ID, dispatcherID common.DispatcherID, blockTs uint64) *BlockStatusRequestWithTargetID {

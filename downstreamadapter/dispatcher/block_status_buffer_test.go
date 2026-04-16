@@ -46,6 +46,67 @@ func TestBlockStatusBufferDeduplicatesPendingDone(t *testing.T) {
 	require.False(t, ok)
 }
 
+func TestBlockStatusBufferDeduplicatesPendingWaiting(t *testing.T) {
+	buffer := NewBlockStatusBuffer(4)
+	dispatcherID := common.NewDispatcherID()
+
+	waiting := &heartbeatpb.TableSpanBlockStatus{
+		ID: dispatcherID.ToPB(),
+		State: &heartbeatpb.State{
+			IsBlocked: true,
+			BlockTs:   150,
+			Stage:     heartbeatpb.BlockStage_WAITING,
+		},
+		Mode: common.DefaultMode,
+	}
+
+	buffer.Offer(waiting)
+	buffer.Offer(waiting)
+
+	require.Equal(t, 1, buffer.Len())
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	msg := buffer.Take(ctx)
+	require.NotNil(t, msg)
+	require.Equal(t, heartbeatpb.BlockStage_WAITING, msg.State.Stage)
+
+	_, ok := buffer.TryTake()
+	require.False(t, ok)
+}
+
+func TestBlockStatusBufferAllowsWaitingAgainAfterTake(t *testing.T) {
+	buffer := NewBlockStatusBuffer(4)
+	dispatcherID := common.NewDispatcherID()
+
+	waiting := &heartbeatpb.TableSpanBlockStatus{
+		ID: dispatcherID.ToPB(),
+		State: &heartbeatpb.State{
+			IsBlocked: true,
+			BlockTs:   180,
+			Stage:     heartbeatpb.BlockStage_WAITING,
+		},
+		Mode: common.DefaultMode,
+	}
+
+	buffer.Offer(waiting)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	first := buffer.Take(ctx)
+	require.NotNil(t, first)
+	require.Equal(t, heartbeatpb.BlockStage_WAITING, first.State.Stage)
+
+	buffer.Offer(waiting)
+
+	second := buffer.Take(ctx)
+	require.NotNil(t, second)
+	require.Equal(t, heartbeatpb.BlockStage_WAITING, second.State.Stage)
+
+	_, ok := buffer.TryTake()
+	require.False(t, ok)
+}
+
 func TestBlockStatusBufferKeepsWaitingBeforeDone(t *testing.T) {
 	buffer := NewBlockStatusBuffer(4)
 	dispatcherID := common.NewDispatcherID()
