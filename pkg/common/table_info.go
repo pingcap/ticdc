@@ -200,6 +200,9 @@ func (ti *TableInfo) ShadowCopyColumnSchema() *columnSchema {
 }
 
 func (ti *TableInfo) GetColumns() []*model.ColumnInfo {
+	if ti == nil || ti.columnSchema == nil {
+		return nil
+	}
 	return ti.columnSchema.Columns
 }
 
