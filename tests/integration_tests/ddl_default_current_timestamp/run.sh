@@ -74,6 +74,47 @@ function run() {
 
 	export GO_FAILPOINTS=''
 	cleanup_process $CDC_BINARY
+
+	# Start a redo-backed changefeed and block downstream DDL/DML execution so the
+	# following DDL must be applied by `cdc redo apply`.
+	redo_start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
+	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/sink/mysql/MySQLSinkHangLongTime=return(true);github.com/pingcap/ticdc/pkg/sink/mysql/MySQLSinkExecDDLDelay=return("3600")'
+	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --config "$CUR/conf/server.toml" --logsuffix redo
+	cdc_cli_changefeed create --start-ts=$redo_start_ts --sink-uri="$SINK_URI" --config="$CUR/conf/changefeed.toml" -c "test"
+
+	run_sql "SET time_zone = '${TIME_ZONE}'; SET @@timestamp = 1000000004.222222; ALTER TABLE ${DB_NAME}.t_fp ADD COLUMN redo_c DATETIME(6) DEFAULT CURRENT_TIMESTAMP(6);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+
+	storage_path="file://$WORK_DIR/redo"
+	tmp_download_path=$WORK_DIR/cdc_data/redo/test
+	current_tso=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
+	ensure 100 check_redo_resolved_ts test $current_tso $storage_path $tmp_download_path/meta
+
+	export GO_FAILPOINTS=''
+	cleanup_process $CDC_BINARY
+
+	down_redo_col_count=$(mysql -uroot -h${DOWN_TIDB_HOST} -P${DOWN_TIDB_PORT} --default-character-set utf8mb4 -Nse "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema='${DB_NAME}' AND table_name='t_fp' AND column_name='redo_c';")
+	if [ "$down_redo_col_count" != "0" ]; then
+		echo "downstream redo_c should not exist before redo apply"
+		exit 1
+	fi
+
+	cdc redo apply --log-level debug --tmp-dir="$tmp_download_path/apply" \
+		--storage="$storage_path" \
+		--sink-uri="$SINK_URI" >$WORK_DIR/cdc_redo.log
+
+	redo_expected_ts="2001-09-09 09:46:44.222222"
+	down_redo_c=""
+	for i in $(seq 1 30); do
+		down_redo_c=$(mysql -uroot -h${DOWN_TIDB_HOST} -P${DOWN_TIDB_PORT} --default-character-set utf8mb4 --init-command="set time_zone='${TIME_ZONE}'" -Nse "SELECT redo_c FROM ${DB_NAME}.t_fp WHERE id=1;" 2>/dev/null || true)
+		if [ "$down_redo_c" = "$redo_expected_ts" ]; then
+			break
+		fi
+		sleep 2
+	done
+	if [ "$down_redo_c" != "$redo_expected_ts" ]; then
+		echo "redo apply should set redo_c to ${redo_expected_ts}, got ${down_redo_c}"
+		exit 1
+	fi
 }
 
 if [ "$SINK_TYPE" != "mysql" ]; then
