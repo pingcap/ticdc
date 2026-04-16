@@ -279,16 +279,25 @@ func (b *BatchDMLEvent) encodeV1() ([]byte, error) {
 // AssembleRows assembles the Rows from the RawRows.
 // It also sets the TableInfo and clears the RawRows.
 func (b *BatchDMLEvent) AssembleRows(tableInfo *common.TableInfo) {
+	if tableInfo == nil {
+		log.Panic("DMLEvent: TableInfo is nil")
+	}
+
 	defer func() {
 		b.TableInfo.InitPrivateFields()
 	}()
-	// rows is already set, no need to assemble again
-	// When the event is passed from the same node, the Rows is already set.
+
+	// For local events (same node), rows are already set.
 	if b.Rows != nil {
-		return
-	}
-	if tableInfo == nil {
-		log.Panic("DMLEvent: TableInfo is nil")
+		// table routing is enabled, reassign the TableInfo pointer to the passed tableInfo
+		// IMPORTANT: We modify the POINTER, not the object it points to, because the
+		// original TableInfo is shared from the schema store across all dispatchers.
+		if tableInfo.TableName.TargetSchema != "" || tableInfo.TableName.TargetTable != "" {
+			b.TableInfo = tableInfo
+			for _, dml := range b.DMLEvents {
+				dml.TableInfo = tableInfo
+			}
+		}
 		return
 	}
 
@@ -298,9 +307,12 @@ func (b *BatchDMLEvent) AssembleRows(tableInfo *common.TableInfo) {
 	}
 
 	if b.TableInfo != nil && b.TableInfo.GetUpdateTS() != tableInfo.GetUpdateTS() {
-		log.Panic("DMLEvent: TableInfoVersion mismatch", zap.Uint64("dmlEventTableInfoVersion", b.TableInfo.GetUpdateTS()), zap.Uint64("tableInfoVersion", tableInfo.GetUpdateTS()))
+		log.Panic("DMLEvent: TableInfoVersion mismatch",
+			zap.Uint64("dmlEventTableInfoVersion", b.TableInfo.GetUpdateTS()),
+			zap.Uint64("tableInfoVersion", tableInfo.GetUpdateTS()))
 		return
 	}
+
 	decoder := chunk.NewCodec(tableInfo.GetFieldSlice())
 	b.Rows, _ = decoder.Decode(b.RawRows)
 	b.TableInfo = tableInfo
