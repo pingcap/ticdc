@@ -45,7 +45,7 @@ func TestBlockStatusMailboxDrainBlockedThenDoneInOrder(t *testing.T) {
 	require.Equal(t, 0, mailbox.Len())
 }
 
-func TestBlockStatusMailboxIgnoresRepeatedBlockedAfterDrain(t *testing.T) {
+func TestBlockStatusMailboxAcceptsRepeatedBlockedAfterDrain(t *testing.T) {
 	mailbox := newBlockStatusMailbox(8, 8)
 	from := node.NewID()
 	dispatcherID := common.NewDispatcherID()
@@ -69,8 +69,11 @@ func TestBlockStatusMailboxIgnoresRepeatedBlockedAfterDrain(t *testing.T) {
 			newMailboxBlockedStatus(dispatcherID, 101, heartbeatpb.BlockStage_WAITING),
 		},
 	})
-	_, ok = mailbox.drainBatch()
-	require.False(t, ok)
+
+	batch, ok = mailbox.drainBatch()
+	require.True(t, ok)
+	require.Len(t, batch.statuses, 1)
+	require.Equal(t, heartbeatpb.BlockStage_WAITING, batch.statuses[0].State.Stage)
 	require.Equal(t, 1, mailbox.Len())
 
 	mailbox.enqueueRequest(from, &heartbeatpb.BlockStatusRequest{

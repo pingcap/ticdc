@@ -91,11 +91,10 @@ func (p *blockStatusMailboxPayload) toPB() *heartbeatpb.TableSpanBlockStatus {
 }
 
 type blockStatusMailboxEntry struct {
-	blocked        *blockStatusMailboxPayload
-	done           *blockStatusMailboxPayload
-	nonBlocked     *blockStatusMailboxPayload
-	blockedDrained bool
-	inOrder        bool
+	blocked    *blockStatusMailboxPayload
+	done       *blockStatusMailboxPayload
+	nonBlocked *blockStatusMailboxPayload
+	inOrder    bool
 }
 
 func (e *blockStatusMailboxEntry) hasPending() bool {
@@ -233,10 +232,9 @@ func (m *blockStatusMailbox) enqueueStatusLocked(
 		return m.markReadyLocked(sourceKey, bucket, logicalKey, entry)
 	}
 
-	if entry.blockedDrained {
-		return false
-	}
-
+	// Repeated WAITING must still be accepted after an earlier WAITING has been
+	// drained. The barrier may intentionally wait for dispatcher resend before it
+	// sends ACK/action again, and ACK delivery itself is also retry-based.
 	entry.blocked = payload
 	return m.markReadyLocked(sourceKey, bucket, logicalKey, entry)
 }
@@ -357,12 +355,10 @@ func (m *blockStatusMailbox) drainEntryLocked(
 
 	if appendStatus(entry.blocked) {
 		entry.blocked = nil
-		entry.blockedDrained = true
 	}
 
-	if entry.done != nil && (entry.blockedDrained || entry.blocked == nil) && appendStatus(entry.done) {
+	if appendStatus(entry.done) {
 		entry.done = nil
-		entry.blockedDrained = false
 		return drained, true
 	}
 
