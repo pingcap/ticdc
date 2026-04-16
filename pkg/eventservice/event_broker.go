@@ -574,10 +574,9 @@ func (c *eventBroker) tickTableTriggerDispatchers(ctx context.Context) error {
 }
 
 func (c *eventBroker) processTableTriggerDispatcher(ctx context.Context, dispatcherID common.DispatcherID, stat *dispatcherStat) {
-	if !c.checkAndSendReady(stat) {
+	if !c.activateDispatcherControlPlane(stat) {
 		return
 	}
-	c.sendHandshakeIfNeed(stat)
 
 	startTs := stat.sentResolvedTs.Load()
 	remoteID := node.ID(stat.info.GetServerID())
@@ -776,23 +775,31 @@ func (c *eventBroker) capCommitTsEndBySyncPoint(task scanTask, commitTsEnd uint6
 // Note: A true return value only indicates potential scanning need,
 // final determination occurs when the scanTask is actully processed.
 func (c *eventBroker) scanReady(task scanTask) bool {
-	if task.isRemoved.Load() {
-		return false
-	}
-
 	if task.isTaskScanning.Load() {
 		return false
 	}
 
-	// If the dispatcher is not ready, we don't need do the scan.
+	if !c.activateDispatcherControlPlane(task) {
+		return false
+	}
+
+	ok, _ := c.getScanTaskDataRange(task)
+	return ok
+}
+
+// activateDispatcherControlPlane advances the dispatcher through ready/handshake
+// without coupling it to scan task generation.
+func (c *eventBroker) activateDispatcherControlPlane(task scanTask) bool {
+	if task.isRemoved.Load() {
+		return false
+	}
+
 	if !c.checkAndSendReady(task) {
 		return false
 	}
 
 	c.sendHandshakeIfNeed(task)
-
-	ok, _ := c.getScanTaskDataRange(task)
-	return ok
+	return true
 }
 
 func (c *eventBroker) checkAndSendReady(task scanTask) bool {
@@ -1416,6 +1423,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 	}
 	c.dispatchers.Store(id, dispatcherPtr)
 	c.metricsCollector.metricDispatcherCount.Inc()
+	c.activateDispatcherControlPlane(dispatcher)
 	log.Info("register dispatcher",
 		zap.Uint64("clusterID", c.tidbClusterID),
 		zap.Stringer("changefeedID", changefeedID),
@@ -1568,6 +1576,7 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 		zap.Uint64("newStartTs", dispatcherInfo.GetStartTs()),
 		zap.Uint64("newEpoch", newStat.epoch),
 		zap.Duration("resetTime", time.Since(start)))
+	c.activateDispatcherControlPlane(newStat)
 
 	return nil
 }
