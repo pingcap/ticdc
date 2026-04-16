@@ -16,10 +16,10 @@ package encryption
 import (
 	"bytes"
 	"context"
-	"errors"
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/config"
+	cerrors "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
 
@@ -44,11 +44,11 @@ func (m *mockMetaManager) GetDataKey(ctx context.Context, keyspaceID uint32, dat
 		if m.currentKeyID == dataKeyID && len(m.currentKey) > 0 {
 			return m.currentKey, nil
 		}
-		return nil, errors.New("data key not found")
+		return nil, cerrors.ErrDataKeyNotFound.GenWithStackByArgs("data key not found")
 	}
 	key, ok := m.dataKeys[dataKeyID]
 	if !ok {
-		return nil, errors.New("data key not found")
+		return nil, cerrors.ErrDataKeyNotFound.GenWithStackByArgs("data key not found")
 	}
 	return key, nil
 }
@@ -72,7 +72,7 @@ func TestEncryptDataAllowDegradeOnError(t *testing.T) {
 	defer restore()
 
 	meta := &mockMetaManager{
-		currentKeyErr: errors.New("boom"),
+		currentKeyErr: cerrors.ErrEncryptionFailed.GenWithStackByArgs("boom"),
 	}
 	manager := NewEncryptionManager(meta)
 	input := []byte("payload")
@@ -87,7 +87,7 @@ func TestEncryptDataDisallowDegradeOnError(t *testing.T) {
 	defer restore()
 
 	meta := &mockMetaManager{
-		currentKeyErr: errors.New("boom"),
+		currentKeyErr: cerrors.ErrEncryptionFailed.GenWithStackByArgs("boom"),
 	}
 	manager := NewEncryptionManager(meta)
 	_, err := manager.EncryptData(context.Background(), 1, []byte("payload"))

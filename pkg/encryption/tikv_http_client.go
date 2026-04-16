@@ -285,7 +285,7 @@ func decodeEncryptionMetaResponseFromProtobuf(body []byte) (*encryptionMetaRespo
 		return nil, errors.Trace(err)
 	}
 	if metaPB.Current == nil && metaPB.MasterKey == nil && len(metaPB.DataKeys) == 0 && len(metaPB.History) == 0 && metaPB.KeyspaceId == 0 {
-		return nil, errors.New("protobuf payload does not contain encryption meta fields")
+		return nil, cerrors.ErrDecodeFailed.GenWithStackByArgs("protobuf payload does not contain encryption meta fields")
 	}
 	return metaPB.toEncryptionMetaResponse(), nil
 }
