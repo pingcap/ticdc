@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Inc.
+// Copyright 2026 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,54 +11,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package causality
+package event
 
 import (
 	"encoding/binary"
-	"hash/fnv"
 	"strings"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
-	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"go.uber.org/zap"
 )
 
-// ConflictKeys implements causality.txnEvent interface.
-func ConflictKeys(event *commonEvent.DMLEvent) []uint64 {
-	if event.Len() == 0 {
-		return nil
-	}
-
-	hashRes := make(map[uint64]struct{}, event.Len())
-	hasher := fnv.New32a()
-
-	for {
-		row, ok := event.GetNextRow()
-		if !ok {
-			event.Rewind()
-			break
-		}
-		keys := genRowKeys(row, event.TableInfo, event.DispatcherID)
-		for _, key := range keys {
-			if n, err := hasher.Write(key); n != len(key) || err != nil {
-				log.Panic("transaction key hash fail")
-			}
-			hashRes[uint64(hasher.Sum32())] = struct{}{}
-			hasher.Reset()
-		}
-	}
-
-	keys := make([]uint64, 0, len(hashRes))
-	for key := range hashRes {
-		keys = append(keys, key)
-	}
-	return keys
-}
-
-func genRowKeys(row commonEvent.RowChange, tableInfo *common.TableInfo, dispatcherID common.DispatcherID) [][]byte {
+func genRowKeys(row RowChange, tableInfo *common.TableInfo, dispatcherID common.DispatcherID) [][]byte {
 	var keys [][]byte
 
 	if !row.Row.IsEmpty() {
