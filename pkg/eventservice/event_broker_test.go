@@ -62,6 +62,18 @@ type notifyMsg struct {
 	latestCommitTs uint64
 }
 
+func collectWrapEventTypes(ch chan *wrapEvent) []int {
+	eventTypes := make([]int, 0)
+	for {
+		select {
+		case e := <-ch:
+			eventTypes = append(eventTypes, e.msgType)
+		default:
+			return eventTypes
+		}
+	}
+}
+
 type floorRetryMockUint64 struct {
 	value                 atomic.Uint64
 	failFirstCASWithValue uint64
@@ -146,6 +158,64 @@ func TestCheckNeedScan(t *testing.T) {
 	e = <-broker.messageCh[0]
 	require.Equal(t, event.TypeHandshakeEvent, e.msgType)
 	log.Info("Pass case 3")
+}
+
+func TestAddDispatcherSendsReadyImmediatelyAfterRegistration(t *testing.T) {
+	broker, _, _, _ := newEventBrokerForTest()
+	broker.close()
+
+	info := newMockDispatcherInfoForTest(t)
+	err := broker.addDispatcher(info)
+	require.NoError(t, err)
+
+	dispPtr := broker.getDispatcher(info.GetID())
+	require.NotNil(t, dispPtr)
+	disp := dispPtr.Load()
+	require.NotNil(t, disp)
+
+	eventTypes := collectWrapEventTypes(broker.messageCh[disp.messageWorkerIndex])
+	require.Equal(t, []int{event.TypeReadyEvent}, eventTypes)
+}
+
+func TestResetDispatcherSendsHandshakeImmediatelyAfterEpochSwitch(t *testing.T) {
+	broker, _, _, _ := newEventBrokerForTest()
+	broker.close()
+
+	info := newMockDispatcherInfoForTest(t)
+	err := broker.addDispatcher(info)
+	require.NoError(t, err)
+
+	disp := broker.getDispatcher(info.GetID()).Load()
+	require.NotNil(t, disp)
+	collectWrapEventTypes(broker.messageCh[disp.messageWorkerIndex])
+
+	resetInfo := newMockDispatcherInfo(t, 500, info.GetID(), info.GetTableSpan().GetTableID(), eventpb.ActionType_ACTION_TYPE_RESET)
+	resetInfo.epoch = 1
+	err = broker.resetDispatcher(resetInfo)
+	require.NoError(t, err)
+
+	newDisp := broker.getDispatcher(info.GetID()).Load()
+	require.NotNil(t, newDisp)
+	require.Equal(t, uint64(1), newDisp.epoch)
+
+	eventTypes := collectWrapEventTypes(broker.messageCh[newDisp.messageWorkerIndex])
+	require.Equal(t, []int{event.TypeHandshakeEvent}, eventTypes)
+}
+
+func TestAddTableTriggerDispatcherDoesNotSendReadyImmediately(t *testing.T) {
+	broker, _, _, _ := newEventBrokerForTest()
+	broker.close()
+
+	info := newMockDispatcherInfo(t, 300, common.NewDispatcherID(), 0, eventpb.ActionType_ACTION_TYPE_REGISTER)
+	info.span = common.KeyspaceDDLSpan(testTableTriggerKeyspaceID)
+	err := broker.addDispatcher(info)
+	require.NoError(t, err)
+
+	disp := broker.getDispatcher(info.GetID()).Load()
+	require.NotNil(t, disp)
+
+	eventTypes := collectWrapEventTypes(broker.messageCh[disp.messageWorkerIndex])
+	require.Empty(t, eventTypes)
 }
 
 func TestOnNotify(t *testing.T) {
@@ -1346,7 +1416,7 @@ func TestSendHandshakeUsesStartTs(t *testing.T) {
 
 func TestAddDispatcherFailure(t *testing.T) {
 	broker, _, ss, _ := newEventBrokerForTest()
-	defer broker.close()
+	broker.close()
 
 	// Simulate schema store failure
 	ss.registerTableError = errors.New("mock error")
@@ -1357,6 +1427,10 @@ func TestAddDispatcherFailure(t *testing.T) {
 
 	_, ok := broker.changefeedMap.Load(dispInfo.GetChangefeedID())
 	require.False(t, ok, "changefeedStatus should be removed after failed registration")
+	require.Nil(t, broker.getDispatcher(dispInfo.GetID()))
+	for _, ch := range broker.messageCh {
+		require.Empty(t, collectWrapEventTypes(ch))
+	}
 }
 
 type tableTriggerSchemaStore struct {
