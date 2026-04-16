@@ -204,14 +204,6 @@ func TestCDCEtcdClientImpl_GetChangefeedInfoAndStatus(t *testing.T) {
 							Key:   []byte("/tidb/cdc/cluster-id/keyspace1/changefeed1/info/changefeed2"),
 							Value: []byte("{}"),
 						},
-						{
-							Key:   []byte("/tidb/cdc/cluster-id-index/keyspace1/changefeed/status/changefeed4"),
-							Value: []byte("{}"),
-						},
-						{
-							Key:   []byte("/tidb/cdc/cluster-id-index/keyspace1/changefeed/info/changefeed4"),
-							Value: []byte("{}"),
-						},
 					},
 					More:  false,
 					Count: 0,
@@ -292,10 +284,6 @@ func TestCDCEtcdClientImpl_GetAllCDCInfo(t *testing.T) {
 			Kvs: []*mvccpb.KeyValue{
 				{
 					Key:   []byte("/tidb/cdc/cluster-id/default/changefeed/info/changefeed1"),
-					Value: []byte("{}"),
-				},
-				{
-					Key:   []byte("/tidb/cdc/cluster-id-index/default/changefeed/info/changefeed2"),
 					Value: []byte("{}"),
 				},
 			},
