@@ -153,6 +153,7 @@ func TestRefreshMinSentResolvedTsMinAndSkipRules(t *testing.T) {
 	stale := &dispatcherStat{}
 	stale.seq.Store(1)
 	stale.sentResolvedTs.Store(10)
+	stale.checkpointTs.Store(10)
 	stale.lastReceivedHeartbeatTime.Store(time.Now().Add(-scanWindowStaleDispatcherHeartbeatThreshold - time.Second).Unix())
 
 	removed := &dispatcherStat{}
@@ -167,10 +168,12 @@ func TestRefreshMinSentResolvedTsMinAndSkipRules(t *testing.T) {
 	first := &dispatcherStat{}
 	first.seq.Store(1)
 	first.sentResolvedTs.Store(200)
+	first.checkpointTs.Store(200)
 
 	second := &dispatcherStat{}
 	second.seq.Store(1)
 	second.sentResolvedTs.Store(50)
+	second.checkpointTs.Store(50)
 
 	stalePtr := &atomic.Pointer[dispatcherStat]{}
 	stalePtr.Store(stale)
@@ -194,15 +197,23 @@ func TestRefreshMinSentResolvedTsMinAndSkipRules(t *testing.T) {
 
 	status.refreshMinSentResolvedTs()
 	require.Equal(t, uint64(50), status.minSentTs.Load())
+	minCheckpointTs, ok := status.getMinCheckpointTs()
+	require.True(t, ok)
+	require.Equal(t, uint64(50), minCheckpointTs)
 
 	second.isRemoved.Store(true)
 	status.refreshMinSentResolvedTs()
 	require.Equal(t, uint64(200), status.minSentTs.Load())
+	minCheckpointTs, ok = status.getMinCheckpointTs()
+	require.True(t, ok)
+	require.Equal(t, uint64(200), minCheckpointTs)
 
 	stale.isRemoved.Store(true)
 	first.seq.Store(0)
 	status.refreshMinSentResolvedTs()
 	require.Equal(t, uint64(0), status.minSentTs.Load())
+	_, ok = status.getMinCheckpointTs()
+	require.False(t, ok)
 }
 
 func TestRefreshMinSentResolvedTsStaleFallback(t *testing.T) {
@@ -213,6 +224,7 @@ func TestRefreshMinSentResolvedTsStaleFallback(t *testing.T) {
 	stale := &dispatcherStat{}
 	stale.seq.Store(1)
 	stale.sentResolvedTs.Store(123)
+	stale.checkpointTs.Store(123)
 	stale.lastReceivedHeartbeatTime.Store(time.Now().Add(-scanWindowStaleDispatcherHeartbeatThreshold - time.Second).Unix())
 
 	stalePtr := &atomic.Pointer[dispatcherStat]{}
@@ -221,6 +233,8 @@ func TestRefreshMinSentResolvedTsStaleFallback(t *testing.T) {
 
 	status.refreshMinSentResolvedTs()
 	require.Equal(t, uint64(123), status.minSentTs.Load())
+	_, ok := status.getMinCheckpointTs()
+	require.False(t, ok)
 }
 
 func TestGetScanMaxTsFallbackInterval(t *testing.T) {
