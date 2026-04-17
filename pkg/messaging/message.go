@@ -26,7 +26,6 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/util"
@@ -246,15 +245,8 @@ func (r DispatcherRequest) GetChangefeedID() common.ChangeFeedID {
 	return common.NewChangefeedIDFromPB(r.ChangefeedId)
 }
 
-func (r DispatcherRequest) GetFilter() filter.Filter {
-	changefeedID := r.GetChangefeedID()
-	filter, err := filter.
-		GetSharedFilterStorage().
-		GetOrSetFilter(changefeedID, r.DispatcherRequest.FilterConfig, r.GetTimezone().String())
-	if err != nil {
-		log.Panic("create filter failed", zap.Error(err), zap.Any("filterConfig", r.DispatcherRequest.FilterConfig))
-	}
-	return filter
+func (r DispatcherRequest) GetFilterConfig() *eventpb.FilterConfig {
+	return r.DispatcherRequest.FilterConfig
 }
 
 func (r DispatcherRequest) SyncPointEnabled() bool {
@@ -288,14 +280,6 @@ func (r DispatcherRequest) GetIntegrity() *integrity.Config {
 		IntegrityCheckLevel:   util.AddressOf(r.DispatcherRequest.Integrity.IntegrityCheckLevel),
 		CorruptionHandleLevel: util.AddressOf(r.DispatcherRequest.Integrity.CorruptionHandleLevel),
 	}
-}
-
-func (r DispatcherRequest) GetTimezone() *time.Location {
-	tz, err := util.GetTimezone(r.DispatcherRequest.GetTimezone())
-	if err != nil {
-		log.Panic("Can't load time zone from dispatcher info", zap.Error(err))
-	}
-	return tz
 }
 
 func (r DispatcherRequest) GetEpoch() uint64 {
