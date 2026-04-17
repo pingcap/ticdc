@@ -172,12 +172,14 @@ func (mc *messageCenter) checkRemoteTarget(ctx context.Context) {
 			mc.remoteTargets.RLock()
 			for _, target := range mc.remoteTargets.m {
 				if err := target.getErr(); err != nil {
-					log.Warn("remote target error, reset the connection",
-						zap.Stringer("localID", mc.id),
-						zap.String("localAddr", mc.addr),
-						zap.Stringer("remoteID", target.targetId),
-						zap.String("remoteAddr", target.targetAddr),
-						zap.Error(err))
+					if target.shouldLogConnectionIssue(time.Now(), connectionIssueLogInterval) {
+						log.Warn("remote target error, reset the connection",
+							zap.Stringer("localID", mc.id),
+							zap.String("localAddr", mc.addr),
+							zap.Stringer("remoteID", target.targetId),
+							zap.String("remoteAddr", target.targetAddr),
+							zap.Error(err))
+					}
 					target.resetConnect()
 				}
 			}

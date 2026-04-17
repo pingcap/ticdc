@@ -53,10 +53,11 @@ const (
 	// don't need to force reload region anymore.
 	regionScheduleReload = false
 
-	loadRegionRetryInterval time.Duration = 100 * time.Millisecond
-	resolveLockMinInterval  time.Duration = 10 * time.Second
-	resolveLockTickInterval time.Duration = 2 * time.Second
-	resolveLockFence        time.Duration = 4 * time.Second
+	loadRegionRetryInterval  time.Duration = 100 * time.Millisecond
+	resolveLockMinInterval   time.Duration = 10 * time.Second
+	resolveLockTickInterval  time.Duration = 2 * time.Second
+	resolveLockFence         time.Duration = 4 * time.Second
+	logPullerWarnLogInterval time.Duration = 10 * time.Second
 
 	// resolveLastRunGCThreshold is the size threshold to GC resolveLastRun and drop stale entries.
 	resolveLastRunGCThreshold = 1024
@@ -106,6 +107,19 @@ type rangeTask struct {
 
 const kvEventsCacheMaxSize = 32
 
+func shouldLogLogPullerWarning(lastLogTime *atomic.Int64, interval time.Duration) bool {
+	now := time.Now().UnixNano()
+	for {
+		last := lastLogTime.Load()
+		if last != 0 && now-last < interval.Nanoseconds() {
+			return false
+		}
+		if lastLogTime.CompareAndSwap(last, now) {
+			return true
+		}
+	}
+}
+
 // subscribedSpan represents a span to subscribe.
 // It contains a sub span of a table(or the total span of a table),
 // the startTs of the table, and the output event channel.
@@ -139,6 +153,10 @@ type subscribedSpan struct {
 	staleLocksTargetTs atomic.Uint64
 
 	lastAdvanceTime atomic.Int64
+
+	lastLoadRegionErrLogTime   atomic.Int64
+	lastLoadRegionHolesLogTime atomic.Int64
+	lastUnknownCdcErrLogTime   atomic.Int64
 
 	initialized       atomic.Bool
 	resolvedTsUpdated atomic.Int64
@@ -198,9 +216,12 @@ type subscriptionClient struct {
 
 	ds dynstream.DynamicStream[int, SubscriptionID, regionEvent, *subscribedSpan, *regionEventHandler]
 	// the following three fields are used to manage feedback from ds and notify other goroutines
-	mu     sync.Mutex
-	cond   *sync.Cond
-	paused atomic.Bool
+	mu                            sync.Mutex
+	cond                          *sync.Cond
+	paused                        atomic.Bool
+	lastResolveLockErrLogTime     atomic.Int64
+	lastDroppedRegionEventLogTime atomic.Int64
+	lastResolvedTsJumpLogTime     atomic.Int64
 
 	// the credential to connect tikv
 	credential *security.Credential
@@ -737,10 +758,12 @@ func (s *subscriptionClient) divideSpanAndScheduleRegionRequests(
 		backoff := tikv.NewBackoffer(ctx, tikvRequestMaxBackoff)
 		regions, err := s.regionCache.BatchLoadRegionsWithKeyRange(backoff, nextSpan.StartKey, nextSpan.EndKey, limit)
 		if err != nil {
-			log.Warn("subscription client load regions failed",
-				zap.Uint64("subscriptionID", uint64(subscribedSpan.subID)),
-				zap.Any("span", common.FormatTableSpan(&nextSpan)),
-				zap.Error(err))
+			if shouldLogLogPullerWarning(&subscribedSpan.lastLoadRegionErrLogTime, logPullerWarnLogInterval) {
+				log.Warn("subscription client load regions failed",
+					zap.Uint64("subscriptionID", uint64(subscribedSpan.subID)),
+					zap.Any("span", common.FormatTableSpan(&nextSpan)),
+					zap.Error(err))
+			}
 			backoffBeforeLoad = true
 			continue
 		}
@@ -752,9 +775,11 @@ func (s *subscriptionClient) divideSpanAndScheduleRegionRequests(
 		}
 		regionMetas = regionlock.CutRegionsLeftCoverSpan(regionMetas, nextSpan)
 		if len(regionMetas) == 0 {
-			log.Warn("subscription client load regions with holes",
-				zap.Uint64("subscriptionID", uint64(subscribedSpan.subID)),
-				zap.Any("span", common.FormatTableSpan(&nextSpan)))
+			if shouldLogLogPullerWarning(&subscribedSpan.lastLoadRegionHolesLogTime, logPullerWarnLogInterval) {
+				log.Warn("subscription client load regions with holes",
+					zap.Uint64("subscriptionID", uint64(subscribedSpan.subID)),
+					zap.Any("span", common.FormatTableSpan(&nextSpan)))
+			}
 			backoffBeforeLoad = true
 			continue
 		}
@@ -890,9 +915,11 @@ func (s *subscriptionClient) doHandleError(ctx context.Context, errInfo regionEr
 			return cerror.ErrClusterIDMismatch.GenWithStackByArgs(mismatch.Current, mismatch.Request)
 		}
 
-		log.Warn("empty or unknown cdc error",
-			zap.Uint64("subscriptionID", uint64(errInfo.subscribedSpan.subID)),
-			zap.Stringer("error", innerErr))
+		if shouldLogLogPullerWarning(&errInfo.subscribedSpan.lastUnknownCdcErrLogTime, logPullerWarnLogInterval) {
+			log.Warn("empty or unknown cdc error",
+				zap.Uint64("subscriptionID", uint64(errInfo.subscribedSpan.subID)),
+				zap.Stringer("error", innerErr))
+		}
 		metricFeedUnknownErrorCounter.Inc()
 		s.scheduleRegionRequest(ctx, errInfo.regionInfo, TaskHighPrior)
 		return nil
@@ -1009,13 +1036,15 @@ func (s *subscriptionClient) handleResolveLockTasks(ctx context.Context) error {
 		}
 
 		if err := s.lockResolver.Resolve(ctx, keyspaceID, regionID, targetTs); err != nil {
-			log.Warn("subscription client resolve lock fail",
-				zap.Uint32("keyspaceID", keyspaceID),
-				zap.Uint64("regionID", regionID),
-				zap.Uint64("targetTs", targetTs),
-				zap.Time("lastRun", lastRun),
-				zap.Any("state", state),
-				zap.Error(err))
+			if shouldLogLogPullerWarning(&s.lastResolveLockErrLogTime, logPullerWarnLogInterval) {
+				log.Warn("subscription client resolve lock fail",
+					zap.Uint32("keyspaceID", keyspaceID),
+					zap.Uint64("regionID", regionID),
+					zap.Uint64("targetTs", targetTs),
+					zap.Time("lastRun", lastRun),
+					zap.Any("state", state),
+					zap.Error(err))
+			}
 		}
 		resolveLastRun[regionID] = time.Now()
 	}

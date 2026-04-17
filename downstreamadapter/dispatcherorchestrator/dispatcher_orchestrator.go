@@ -35,6 +35,21 @@ import (
 	"go.uber.org/zap"
 )
 
+const dispatcherOrchestratorWarnLogInterval = 10 * time.Second
+
+func shouldLogDispatcherOrchestratorWarning(lastLogTime *atomic.Int64, interval time.Duration) bool {
+	now := time.Now().UnixNano()
+	for {
+		last := lastLogTime.Load()
+		if last != 0 && now-last < interval.Nanoseconds() {
+			return false
+		}
+		if lastLogTime.CompareAndSwap(last, now) {
+			return true
+		}
+	}
+}
+
 // DispatcherOrchestrator coordinates the creation, deletion, and management of event dispatcher managers
 // for different change feeds based on maintainer bootstrap messages.
 type DispatcherOrchestrator struct {
@@ -50,6 +65,11 @@ type DispatcherOrchestrator struct {
 	closed atomic.Bool
 	// msgGuardWaitGroup waits for in-flight RecvMaintainerRequest handlers before shutdown.
 	msgGuardWaitGroup util.GuardedWaitGroup
+
+	lastUnknownMessageLogTime   atomic.Int64
+	lastHandleMessageErrLogTime atomic.Int64
+	lastSendResponseErrLogTime  atomic.Int64
+	lastCreateManagerErrLogTime atomic.Int64
 }
 
 func New() *DispatcherOrchestrator {
@@ -87,9 +107,11 @@ func (m *DispatcherOrchestrator) RecvMaintainerRequest(
 
 	key, ok := getPendingMessageKey(msg)
 	if !ok {
-		log.Warn("unknown message type, drop message",
-			zap.String("type", msg.Type.String()),
-			zap.Any("message", msg.Message))
+		if shouldLogDispatcherOrchestratorWarning(&m.lastUnknownMessageLogTime, dispatcherOrchestratorWarnLogInterval) {
+			log.Warn("unknown message type, drop message",
+				zap.String("type", msg.Type.String()),
+				zap.Any("message", msg.Message))
+		}
 		return nil
 	}
 
@@ -130,21 +152,29 @@ func (m *DispatcherOrchestrator) handleMessages() {
 		switch req := msg.Message[0].(type) {
 		case *heartbeatpb.MaintainerBootstrapRequest:
 			if err := m.handleBootstrapRequest(msg.From, req); err != nil {
-				log.Error("failed to handle bootstrap request", zap.Error(err))
+				if shouldLogDispatcherOrchestratorWarning(&m.lastHandleMessageErrLogTime, dispatcherOrchestratorWarnLogInterval) {
+					log.Error("failed to handle bootstrap request", zap.Error(err))
+				}
 			}
 		case *heartbeatpb.MaintainerPostBootstrapRequest:
 			// Only the event dispatcher manager with table trigger event dispatcher will receive the post bootstrap request
 			if err := m.handlePostBootstrapRequest(msg.From, req); err != nil {
-				log.Error("failed to handle post bootstrap request", zap.Error(err))
+				if shouldLogDispatcherOrchestratorWarning(&m.lastHandleMessageErrLogTime, dispatcherOrchestratorWarnLogInterval) {
+					log.Error("failed to handle post bootstrap request", zap.Error(err))
+				}
 			}
 		case *heartbeatpb.MaintainerCloseRequest:
 			if err := m.handleCloseRequest(msg.From, req); err != nil {
-				log.Error("failed to handle close request", zap.Error(err))
+				if shouldLogDispatcherOrchestratorWarning(&m.lastHandleMessageErrLogTime, dispatcherOrchestratorWarnLogInterval) {
+					log.Error("failed to handle close request", zap.Error(err))
+				}
 			}
 		default:
-			log.Warn("unknown message type, ignore it",
-				zap.String("type", msg.Type.String()),
-				zap.Any("message", msg.Message))
+			if shouldLogDispatcherOrchestratorWarning(&m.lastUnknownMessageLogTime, dispatcherOrchestratorWarnLogInterval) {
+				log.Warn("unknown message type, ignore it",
+					zap.String("type", msg.Type.String()),
+					zap.Any("message", msg.Message))
+			}
 		}
 
 		m.msgQueue.Done(key)
@@ -182,8 +212,10 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 		)
 		// Fast return the error to maintainer.
 		if err != nil {
-			log.Error("failed to create new dispatcher manager",
-				zap.Any("changefeedID", cfId.Name()), zap.Duration("duration", time.Since(start)), zap.Error(err))
+			if shouldLogDispatcherOrchestratorWarning(&m.lastCreateManagerErrLogTime, dispatcherOrchestratorWarnLogInterval) {
+				log.Error("failed to create new dispatcher manager",
+					zap.Any("changefeedID", cfId.Name()), zap.Duration("duration", time.Since(start)), zap.Error(err))
+			}
 
 			appcontext.GetService[*dispatchermanager.HeartBeatCollector](appcontext.HeartbeatCollector).RemoveDispatcherManager(cfId)
 
@@ -196,8 +228,10 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 					Message: err.Error(),
 				},
 			}
-			log.Error("create new dispatcher manager failed",
-				zap.Any("changefeedID", cfId.Name()), zap.Duration("duration", time.Since(start)), zap.Error(err))
+			if shouldLogDispatcherOrchestratorWarning(&m.lastCreateManagerErrLogTime, dispatcherOrchestratorWarnLogInterval) {
+				log.Error("create new dispatcher manager failed",
+					zap.Any("changefeedID", cfId.Name()), zap.Duration("duration", time.Since(start)), zap.Error(err))
+			}
 
 			return m.sendResponse(from, messaging.MaintainerManagerTopic, response)
 		}
@@ -396,7 +430,9 @@ func createBootstrapResponse(
 func (m *DispatcherOrchestrator) sendResponse(to node.ID, topic string, msg messaging.IOTypeT) error {
 	message := messaging.NewSingleTargetMessage(to, topic, msg)
 	if err := m.mc.SendCommand(message); err != nil {
-		log.Error("failed to send response", zap.Error(err))
+		if shouldLogDispatcherOrchestratorWarning(&m.lastSendResponseErrLogTime, dispatcherOrchestratorWarnLogInterval) {
+			log.Error("failed to send response", zap.Error(err))
+		}
 		return err
 	}
 	return nil

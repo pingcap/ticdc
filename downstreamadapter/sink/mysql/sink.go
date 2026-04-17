@@ -37,7 +37,21 @@ import (
 const (
 	// defaultConflictDetectorSlots indicates the default slot count of conflict detector. TODO:check this
 	defaultConflictDetectorSlots uint64 = 16 * 1024
+	mysqlSinkWarnLogInterval            = 10 * time.Second
 )
+
+func shouldLogMySQLSinkWarning(lastLogTime *atomic.Int64, interval time.Duration) bool {
+	now := time.Now().UnixNano()
+	for {
+		last := lastLogTime.Load()
+		if last != 0 && now-last < interval.Nanoseconds() {
+			return false
+		}
+		if lastLogTime.CAS(last, now) {
+			return true
+		}
+	}
+}
 
 // Sink is responsible for writing data to mysql downstream.
 // Including DDL and DML.
@@ -68,6 +82,8 @@ type Sink struct {
 	// variable @@tidb_cdc_active_active_sync_stats and is shared by all DML writers.
 	// It is nil when disabled or unsupported by downstream.
 	activeActiveSyncStatsCollector *mysql.ActiveActiveSyncStatsCollector
+
+	lastProgressUpdateErrLogTime atomic.Int64
 }
 
 // Verify is used to verify the sink uri and config is valid
@@ -323,9 +339,11 @@ func (s *Sink) AddCheckpointTs(ts uint64) {
 	}
 
 	if err := s.progressTableWriter.Flush(ts); err != nil {
-		log.Warn("failed to update active active progress table",
-			zap.String("changefeed", s.changefeedID.DisplayName.String()),
-			zap.Error(err))
+		if shouldLogMySQLSinkWarning(&s.lastProgressUpdateErrLogTime, mysqlSinkWarnLogInterval) {
+			log.Warn("failed to update active active progress table",
+				zap.String("changefeed", s.changefeedID.DisplayName.String()),
+				zap.Error(err))
+		}
 		return
 	}
 }

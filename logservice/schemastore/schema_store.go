@@ -593,6 +593,8 @@ func (s *schemaStore) acquireInitialGCSafePoint(
 	keyspaceMeta common.KeyspaceMeta,
 	gcKeeper *schemaStoreGCKeeper,
 ) (uint64, error) {
+	const retryLogInterval = 10 * time.Second
+	lastLogTime := time.Time{}
 	for {
 		// Read the current lower bound first, then install a dedicated GC barrier
 		// for this schema store instance before any snapshot or incremental pull starts.
@@ -608,8 +610,12 @@ func (s *schemaStore) acquireInitialGCSafePoint(
 			}
 		}
 
-		log.Warn("prepare schema store gc safepoint failed, will retry in 1s",
-			zap.Any("keyspace", keyspaceMeta), zap.Error(err))
+		now := time.Now()
+		if lastLogTime.IsZero() || now.Sub(lastLogTime) >= retryLogInterval {
+			log.Warn("prepare schema store gc safepoint failed, will retry in 1s",
+				zap.Any("keyspace", keyspaceMeta), zap.Error(err))
+			lastLogTime = now
+		}
 		select {
 		case <-ctx.Done():
 			return 0, errors.Trace(err)
