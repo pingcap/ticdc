@@ -1070,7 +1070,6 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 	status.addDispatcher(id, dispatcherPtr)
 	if span.Equal(common.KeyspaceDDLSpan(span.KeyspaceID)) {
 		c.tableTriggerDispatchers.Store(id, dispatcherPtr)
-		status.refreshMinSentResolvedTs()
 		log.Info("table trigger dispatcher register dispatcher",
 			zap.Uint64("clusterID", c.tidbClusterID),
 			zap.Stringer("changefeedID", changefeedID),
@@ -1135,7 +1134,6 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 		return err
 	}
 	c.dispatchers.Store(id, dispatcherPtr)
-	status.refreshMinSentResolvedTs()
 	c.metricsCollector.metricDispatcherCount.Inc()
 	log.Info("register dispatcher",
 		zap.Uint64("clusterID", c.tidbClusterID),
@@ -1181,8 +1179,6 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 			zap.Stringer("changefeedID", changefeedID),
 		)
 		c.removeChangefeedStatus(stat.changefeedStat)
-	} else {
-		stat.changefeedStat.refreshMinSentResolvedTs()
 	}
 
 	c.eventStore.UnregisterDispatcher(changefeedID, id)
@@ -1274,7 +1270,6 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 	for {
 		if statPtr.CompareAndSwap(oldStat, newStat) {
 			status.addDispatcher(dispatcherID, statPtr)
-			status.refreshMinSentResolvedTs()
 			break
 		}
 		log.Warn("reset dispatcher failed since the dispatcher is changed concurrently",
