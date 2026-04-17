@@ -8,11 +8,35 @@ WORK_DIR=$OUT_DIR/$TEST_NAME
 CDC_BINARY=cdc.test
 SINK_TYPE=$1
 
+function skip_if_not_tidb_8_5() {
+	local tidbReleaseVersion
+	tidbReleaseVersion=$(get_tidb_release_version || true)
+	if [ -z "$tidbReleaseVersion" ]; then
+		echo "[$(date)] failed to parse TiDB release version, continue test case $TEST_NAME"
+		return
+	fi
+
+	local versionTriplet
+	if ! versionTriplet=$(normalize_tidb_semver_triplet "$tidbReleaseVersion"); then
+		echo "[$(date)] failed to normalize TiDB release version ${tidbReleaseVersion}, continue test case $TEST_NAME"
+		return
+	fi
+
+	local major minor patch
+	read -r major minor patch <<<"$versionTriplet"
+	if [ "$major" != "8" ] || [ "$minor" != "5" ]; then
+		stop_tidb_cluster
+		echo "[$(date)] <<<<<< skip test case $TEST_NAME, TiDB version ${tidbReleaseVersion} is not in 8.5.x >>>>>>"
+		exit 0
+	fi
+}
+
 function prepare() {
 	rm -rf $WORK_DIR && mkdir -p $WORK_DIR
 	stop_tidb_cluster
 
 	start_tidb_cluster --workdir $WORK_DIR
+	skip_if_not_tidb_8_5
 
 	# record tso before we create tables to skip the system table DDLs
 	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
