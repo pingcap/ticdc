@@ -461,6 +461,57 @@ func (oc *Controller) AddMergeOperator(
 	return mergeOperator
 }
 
+// AddRestoredMergeOperator rebuilds a merge operator from bootstrap state after maintainer failover.
+func (oc *Controller) AddRestoredMergeOperator(
+	affectedReplicaSets []*replica.SpanReplication,
+	mergedReplicaSet *replica.SpanReplication,
+) operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus] {
+	if mergedReplicaSet == nil {
+		return nil
+	}
+	if !checkMergeOperator(affectedReplicaSets) {
+		return nil
+	}
+
+	operators := make([]operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus], 0, len(affectedReplicaSets))
+	for _, replicaSet := range affectedReplicaSets {
+		operator := NewOccupyDispatcherOperator(oc.spanController, replicaSet)
+		ret := oc.AddOperator(operator)
+		if ret {
+			operators = append(operators, operator)
+		} else {
+			log.Error("failed to add occupy dispatcher operator when restoring merge",
+				zap.Stringer("changefeedID", oc.changefeedID),
+				zap.Int64("group", replicaSet.GetGroupID()),
+				zap.String("span", common.FormatTableSpan(replicaSet.Span)),
+				zap.String("operator", operator.String()))
+			for _, op := range operators {
+				oc.cancelOperator(op.ID())
+			}
+			return nil
+		}
+	}
+
+	mergeOperator := NewRestoredMergeDispatcherOperator(oc.spanController, affectedReplicaSets, mergedReplicaSet, operators)
+	ret := oc.AddOperator(mergeOperator)
+	if !ret {
+		log.Error("failed to add merge dispatcher operator when restoring merge",
+			zap.Stringer("changefeedID", oc.changefeedID),
+			zap.Any("mergeSpans", affectedReplicaSets),
+			zap.String("operator", mergeOperator.String()))
+		for _, op := range operators {
+			oc.cancelOperator(op.ID())
+		}
+		return nil
+	}
+	log.Info("restore merge operator",
+		zap.String("role", oc.role),
+		zap.Stringer("changefeedID", oc.changefeedID),
+		zap.Int("affectedReplicaSets", len(affectedReplicaSets)),
+	)
+	return mergeOperator
+}
+
 func (oc *Controller) GetAllOperators() []operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus] {
 	oc.mu.RLock()
 	defer oc.mu.RUnlock()
