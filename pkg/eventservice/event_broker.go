@@ -119,8 +119,7 @@ func newEventBroker(
 	sendMessageWorkerCount := config.DefaultBasicEventHandlerConcurrency
 	scanWorkerCount := config.DefaultBasicEventHandlerConcurrency * 4
 
-	eventServiceConfig := config.GetGlobalServerConfig().Debug.EventService
-	scanTaskQueueSize := eventServiceConfig.ScanTaskQueueSize / scanWorkerCount
+	scanTaskQueueSize := config.GetGlobalServerConfig().Debug.EventService.ScanTaskQueueSize / scanWorkerCount
 	sendMessageQueueSize := basicChannelSize * 4
 
 	scanLimitInBytes := eventServiceConfig.ScanLimitInBytes
@@ -514,7 +513,6 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 			)
 		}
 	}
-	dataRange.CommitTsEnd = c.capCommitTsEndBySyncPoint(task, dataRange.CommitTsEnd)
 
 	if dataRange.CommitTsEnd <= dataRange.CommitTsStart && hasPendingDDLEventInCurrentRange {
 		// Global scan window base can be pinned by other lagging dispatchers.
