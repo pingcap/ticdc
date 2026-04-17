@@ -82,6 +82,11 @@ const (
 	scanWindowStaleDispatcherHeartbeatThreshold = 1 * time.Minute
 )
 
+func isDispatcherStale(lastHeartbeatTime int64, now time.Time) bool {
+	return lastHeartbeatTime > 0 &&
+		now.Sub(time.Unix(lastHeartbeatTime, 0)) > scanWindowStaleDispatcherHeartbeatThreshold
+}
+
 type memoryUsageSample struct {
 	ts    time.Time
 	ratio float64
@@ -332,8 +337,10 @@ func (c *changefeedStatus) refreshMinSentResolvedTs() {
 	now := time.Now()
 	minSentResolvedTs := ^uint64(0)
 	minSentResolvedTsWithStale := ^uint64(0)
+	minCheckpointTs := uint64(0)
 	hasEligible := false
 	hasNonStale := false
+	hasMinCheckpointTs := false
 	c.dispatchers.Range(func(_ any, value any) bool {
 		dispatcher := value.(*atomic.Pointer[dispatcherStat]).Load()
 		if dispatcher == nil || dispatcher.isRemoved.Load() || dispatcher.seq.Load() == 0 {
@@ -346,9 +353,7 @@ func (c *changefeedStatus) refreshMinSentResolvedTs() {
 			minSentResolvedTsWithStale = sentResolvedTs
 		}
 
-		lastHeartbeatTime := dispatcher.lastReceivedHeartbeatTime.Load()
-		if lastHeartbeatTime > 0 &&
-			now.Sub(time.Unix(lastHeartbeatTime, 0)) > scanWindowStaleDispatcherHeartbeatThreshold {
+		if isDispatcherStale(dispatcher.lastReceivedHeartbeatTime.Load(), now) {
 			log.Info("dispatcher is stale, skip it's sent resolved ts", zap.Stringer("changefeedID", c.changefeedID), zap.Stringer("dispatcherID", dispatcher.id))
 			return true
 		}
@@ -357,18 +362,30 @@ func (c *changefeedStatus) refreshMinSentResolvedTs() {
 		if sentResolvedTs < minSentResolvedTs {
 			minSentResolvedTs = sentResolvedTs
 		}
+		checkpointTs := dispatcher.checkpointTs.Load()
+		if !hasMinCheckpointTs || checkpointTs < minCheckpointTs {
+			minCheckpointTs = checkpointTs
+			hasMinCheckpointTs = true
+		}
 		return true
 	})
 
 	if !hasEligible {
 		c.storeMinSentTs(0)
+		c.storeMinCheckpointTs(invalidMinCheckpointTs)
 		return
 	}
 	if !hasNonStale {
 		c.storeMinSentTs(minSentResolvedTsWithStale)
+		c.storeMinCheckpointTs(invalidMinCheckpointTs)
 		return
 	}
 	c.storeMinSentTs(minSentResolvedTs)
+	if hasMinCheckpointTs {
+		c.storeMinCheckpointTs(minCheckpointTs)
+	} else {
+		c.storeMinCheckpointTs(invalidMinCheckpointTs)
+	}
 }
 
 func (c *changefeedStatus) getScanMaxTs() uint64 {
@@ -391,6 +408,14 @@ func (c *changefeedStatus) storeMinSentTs(value uint64) {
 	}
 	c.minSentTs.Store(value)
 	metrics.EventServiceScanWindowBaseTsGaugeVec.WithLabelValues(c.changefeedID.String()).Set(float64(value))
+}
+
+func (c *changefeedStatus) storeMinCheckpointTs(value uint64) {
+	prev := c.minCheckpointTs.Load()
+	if prev == value {
+		return
+	}
+	c.minCheckpointTs.Store(value)
 }
 
 func scaleDuration(d time.Duration, numerator int64, denominator int64) time.Duration {

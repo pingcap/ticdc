@@ -118,6 +118,14 @@ type EventServiceConfig struct {
 	ScanTaskQueueSize int `toml:"scan-task-queue-size" json:"scan_task_queue_size"`
 	ScanLimitInBytes  int `toml:"scan-limit-in-bytes" json:"scan_limit_in_bytes"`
 
+	// SyncPointCheckpointCapMultiplier controls how far scan can lead checkpoint when syncpoint is enabled.
+	// The scan upper bound is capped by checkpointTs + multiplier*syncPointInterval.
+	SyncPointCheckpointCapMultiplier int `toml:"sync-point-checkpoint-cap-multiplier" json:"sync_point_checkpoint_cap_multiplier"`
+	// SyncPointLagSuppressThreshold controls when to suppress syncpoint emission for lagging dispatchers.
+	SyncPointLagSuppressThreshold time.Duration `toml:"sync-point-lag-suppress-threshold" json:"sync_point_lag_suppress_threshold"`
+	// SyncPointLagResumeThreshold controls when to resume syncpoint emission after suppression.
+	SyncPointLagResumeThreshold time.Duration `toml:"sync-point-lag-resume-threshold" json:"sync_point_lag_resume_threshold"`
+
 	// DMLEventMaxRows is the maximum number of rows in a DML event when split txn is enabled.
 	DMLEventMaxRows int32 `toml:"dml-event-max-rows" json:"dml_event_max_rows"`
 	// DMLEventMaxBytes is the maximum size of a DML event in bytes when split txn is enabled.
@@ -133,10 +141,13 @@ type EventServiceConfig struct {
 // NewDefaultEventServiceConfig return the default event service configuration
 func NewDefaultEventServiceConfig() *EventServiceConfig {
 	return &EventServiceConfig{
-		ScanTaskQueueSize:        1024 * 8,
-		ScanLimitInBytes:         1024 * 1024 * 256, // 256MB
-		DMLEventMaxRows:          256,
-		DMLEventMaxBytes:         1024 * 1024 * 1, // 1MB
-		EnableRemoteEventService: true,
+		ScanTaskQueueSize:                1024 * 8,
+		ScanLimitInBytes:                 1024 * 1024 * 256, // 256MB
+		SyncPointCheckpointCapMultiplier: 2,
+		SyncPointLagSuppressThreshold:    20 * time.Minute,
+		SyncPointLagResumeThreshold:      15 * time.Minute,
+		DMLEventMaxRows:                  256,
+		DMLEventMaxBytes:                 1024 * 1024 * 1, // 1MB
+		EnableRemoteEventService:         true,
 	}
 }

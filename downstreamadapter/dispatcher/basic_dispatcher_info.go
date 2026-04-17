@@ -14,6 +14,7 @@
 package dispatcher
 
 import (
+	"context"
 	"sync/atomic"
 	"time"
 
@@ -58,9 +59,9 @@ type SharedInfo struct {
 	// statusesChan is used to store the status of dispatchers when status changed
 	// and push to heartbeatRequestQueue
 	statusesChan chan TableSpanStatusWithSeq
-	// blockStatusesChan use to collector block status of ddl/sync point event to Maintainer
-	// shared by the event dispatcher manager
-	blockStatusesChan chan *heartbeatpb.TableSpanBlockStatus
+	// blockStatusBuffer keeps block statuses for the dispatcher manager.
+	// Identical WAITING and DONE statuses are coalesced while pending to reduce local memory amplification.
+	blockStatusBuffer *BlockStatusBuffer
 
 	// blockExecutor is used to execute block events such as DDL and sync point events asynchronously
 	// to avoid callback() called in handleEvents, causing deadlock in ds
@@ -88,7 +89,7 @@ func NewSharedInfo(
 	txnAtomicity *config.AtomicityLevel,
 	enableSplittableCheck bool,
 	statusesChan chan TableSpanStatusWithSeq,
-	blockStatusesChan chan *heartbeatpb.TableSpanBlockStatus,
+	blockStatusBufferSize int,
 	errCh chan error,
 ) *SharedInfo {
 	sharedInfo := &SharedInfo{
@@ -102,7 +103,7 @@ func NewSharedInfo(
 		syncPointConfig:       syncPointConfig,
 		enableSplittableCheck: enableSplittableCheck,
 		statusesChan:          statusesChan,
-		blockStatusesChan:     blockStatusesChan,
+		blockStatusBuffer:     NewBlockStatusBuffer(blockStatusBufferSize),
 		blockExecutor:         newBlockEventExecutor(),
 		errCh:                 errCh,
 		metricHandleDDLHis:    metrics.HandleDDLHistogram.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
@@ -219,8 +220,20 @@ func (d *BasicDispatcher) GetTxnAtomicity() config.AtomicityLevel {
 	return d.sharedInfo.txnAtomicity
 }
 
-func (d *BasicDispatcher) GetBlockStatusesChan() chan *heartbeatpb.TableSpanBlockStatus {
-	return d.sharedInfo.blockStatusesChan
+func (d *BasicDispatcher) OfferBlockStatus(status *heartbeatpb.TableSpanBlockStatus) {
+	d.sharedInfo.OfferBlockStatus(status)
+}
+
+func (d *BasicDispatcher) OfferDoneBlockStatus(blockTs uint64, isSyncPoint bool) {
+	d.sharedInfo.OfferDoneBlockStatus(d.id, blockTs, isSyncPoint, d.GetMode())
+}
+
+func (d *BasicDispatcher) TakeBlockStatus(ctx context.Context) *heartbeatpb.TableSpanBlockStatus {
+	return d.sharedInfo.TakeBlockStatus(ctx)
+}
+
+func (d *BasicDispatcher) TakeBlockStatusWithTimeout(timeout time.Duration) (*heartbeatpb.TableSpanBlockStatus, bool) {
+	return d.sharedInfo.TakeBlockStatusWithTimeout(timeout)
 }
 
 func (d *BasicDispatcher) GetEventSizePerSecond() float32 {
@@ -254,8 +267,34 @@ func (s *SharedInfo) EnableActiveActive() bool {
 	return s.enableActiveActive
 }
 
-func (s *SharedInfo) GetBlockStatusesChan() chan *heartbeatpb.TableSpanBlockStatus {
-	return s.blockStatusesChan
+func (s *SharedInfo) OfferBlockStatus(status *heartbeatpb.TableSpanBlockStatus) {
+	s.blockStatusBuffer.Offer(status)
+}
+
+func (s *SharedInfo) OfferDoneBlockStatus(dispatcherID common.DispatcherID, blockTs uint64, isSyncPoint bool, mode int64) {
+	s.blockStatusBuffer.OfferDone(dispatcherID, blockTs, isSyncPoint, mode)
+}
+
+func (s *SharedInfo) TakeBlockStatus(ctx context.Context) *heartbeatpb.TableSpanBlockStatus {
+	return s.blockStatusBuffer.Take(ctx)
+}
+
+func (s *SharedInfo) TakeBlockStatusWithTimeout(timeout time.Duration) (*heartbeatpb.TableSpanBlockStatus, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	status := s.TakeBlockStatus(ctx)
+	if status == nil {
+		return nil, false
+	}
+	return status, true
+}
+
+func (s *SharedInfo) TryTakeBlockStatus() (*heartbeatpb.TableSpanBlockStatus, bool) {
+	return s.blockStatusBuffer.TryTake()
+}
+
+func (s *SharedInfo) BlockStatusLen() int {
+	return s.blockStatusBuffer.Len()
 }
 
 func (s *SharedInfo) GetErrCh() chan error {

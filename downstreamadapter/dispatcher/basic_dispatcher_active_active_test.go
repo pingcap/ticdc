@@ -129,7 +129,6 @@ func TestDDLEventsAlwaysValidateActiveActive(t *testing.T) {
 func newTestBasicDispatcher(t *testing.T, sinkType common.SinkType, enableActiveActive bool) *BasicDispatcher {
 	t.Helper()
 	statuses := make(chan TableSpanStatusWithSeq, 2)
-	blockStatuses := make(chan *heartbeatpb.TableSpanBlockStatus, 1)
 	errCh := make(chan error, 1)
 	sharedInfo := NewSharedInfo(
 		common.NewChangefeedID("test"),
@@ -143,7 +142,7 @@ func newTestBasicDispatcher(t *testing.T, sinkType common.SinkType, enableActive
 		nil,
 		false,
 		statuses,
-		blockStatuses,
+		1,
 		errCh,
 	)
 	dispatcherSink := newDispatcherTestSink(t, sinkType)

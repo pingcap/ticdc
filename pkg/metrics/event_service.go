@@ -69,6 +69,27 @@ var (
 			Name:      "scan_window_interval",
 			Help:      "The scan window interval in seconds for each changefeed",
 		}, []string{"changefeed"})
+	EventServiceSyncPointLagGaugeVec = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "event_service",
+			Name:      "syncpoint_lag_seconds",
+			Help:      "The lag between sent resolved ts and checkpoint ts in seconds for each changefeed",
+		}, []string{"changefeed"})
+	EventServiceSyncPointSuppressedCount = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "event_service",
+			Name:      "syncpoint_suppressed_count",
+			Help:      "The number of syncpoint events suppressed due to lagging checkpoint",
+		}, []string{"changefeed"})
+	EventServiceScanCappedByCheckpointCount = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "event_service",
+			Name:      "scan_capped_by_checkpoint_count",
+			Help:      "The number of scan ranges capped by checkpoint based bound",
+		}, []string{"changefeed"})
 	EventServiceScanDuration = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
 			Namespace: "ticdc",
@@ -201,6 +222,9 @@ func initEventServiceMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(EventServiceResolvedTsLagGauge)
 	registry.MustRegister(EventServiceScanWindowBaseTsGaugeVec)
 	registry.MustRegister(EventServiceScanWindowIntervalGaugeVec)
+	registry.MustRegister(EventServiceSyncPointLagGaugeVec)
+	registry.MustRegister(EventServiceSyncPointSuppressedCount)
+	registry.MustRegister(EventServiceScanCappedByCheckpointCount)
 	registry.MustRegister(EventServiceScanDuration)
 	registry.MustRegister(EventServiceScannedCount)
 	registry.MustRegister(EventServiceDispatcherGauge)
