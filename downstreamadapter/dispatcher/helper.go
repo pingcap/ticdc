@@ -215,6 +215,7 @@ func (b *BlockEventStatus) actionMatchs(action *heartbeatpb.DispatcherAction) bo
 	}
 
 	return b.blockCommitTs == action.CommitTs
+<<<<<<< HEAD
 }
 
 // ignoredStatusMatches checks whether the ignored status is for the current pending ddl/sync point event.
@@ -232,6 +233,8 @@ func (b *BlockEventStatus) ignoredStatusMatches(ignored *heartbeatpb.IgnoredBloc
 
 	pendingIsSyncPoint := b.blockPendingEvent.GetType() == commonEvent.TypeSyncPointEvent
 	return b.blockCommitTs == ignored.CommitTs && pendingIsSyncPoint == ignored.IsSyncPoint
+=======
+>>>>>>> d9288d337 (Revert "eventBroker: implement two stage syncpoint (#4429)" (#4817))
 }
 
 func (b *BlockEventStatus) getEventCommitTs() (uint64, bool) {

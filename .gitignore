@@ -4,7 +4,10 @@ tools/bin
 tools/include
 tools/workload/bin
 
+<<<<<<< HEAD
 .design
+=======
+>>>>>>> d9288d337 (Revert "eventBroker: implement two stage syncpoint (#4429)" (#4817))
 .issue
 .vscode
 .idea

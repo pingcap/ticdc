@@ -624,7 +624,11 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 // and return await=true.
 // The status path will be woken up after the action finishes.
 func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.DispatcherStatus) (await bool) {
+<<<<<<< HEAD
 	if logger.IsDebugEnabled() {
+=======
+	if log.GetLevel() <= zapcore.DebugLevel {
+>>>>>>> d9288d337 (Revert "eventBroker: implement two stage syncpoint (#4429)" (#4817))
 		log.Debug("dispatcher handle dispatcher status",
 			zap.String("dispatcherStatus", common.FormatDispatcherStatus(dispatcherStatus)),
 			zap.Stringer("dispatcher", d.id),

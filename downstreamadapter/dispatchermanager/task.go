@@ -28,12 +28,15 @@ import (
 	"go.uber.org/zap"
 )
 
+<<<<<<< HEAD
 const (
 	defaultHeartbeatInterval     = 200 * time.Millisecond
 	lowLatencyHeartbeatInterval  = 50 * time.Millisecond
 	defaultHeartbeatInitialDelay = time.Second
 )
 
+=======
+>>>>>>> d9288d337 (Revert "eventBroker: implement two stage syncpoint (#4429)" (#4817))
 // HeartbeatTask is a perioic task to collect the heartbeat status from event dispatcher manager and push to heartbeatRequestQueue
 type HeartBeatTask struct {
 	taskHandle *threadpool.TaskHandle
@@ -56,10 +59,15 @@ func (t *HeartBeatTask) Execute() time.Time {
 	if t.manager.closed.Load() {
 		return time.Time{}
 	}
+<<<<<<< HEAD
 	executeInterval := heartbeatInterval(t.manager)
+=======
+	executeInterval := time.Millisecond * 200
+	// 10s / 200ms = 50
+>>>>>>> d9288d337 (Revert "eventBroker: implement two stage syncpoint (#4429)" (#4817))
 	completeStatusInterval := int(time.Second * 10 / executeInterval)
 	t.statusTick++
-	needCompleteStatus := t.statusTick%completeStatusInterval == 0
+	needCompleteStatus := (t.statusTick)%completeStatusInterval == 0
 	message := t.manager.aggregateDispatcherHeartbeats(needCompleteStatus)
 	t.manager.heartbeatRequestQueue.Enqueue(&HeartBeatRequestWithTargetID{TargetID: t.manager.GetMaintainerID(), Request: message})
 	return time.Now().Add(executeInterval)

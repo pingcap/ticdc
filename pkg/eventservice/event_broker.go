@@ -55,7 +55,10 @@ const (
 	// defaultSendResolvedTsInterval use to control whether to send a resolvedTs event to the dispatcher when its scan is skipped.
 	defaultSendResolvedTsInterval           = time.Second * 2
 	defaultRefreshMinSentResolvedTsInterval = time.Second * 1
+<<<<<<< HEAD
 	defaultScanSchemaBlockedInterval        = time.Millisecond * 50
+=======
+>>>>>>> d9288d337 (Revert "eventBroker: implement two stage syncpoint (#4429)" (#4817))
 )
 
 type schemaBlockedDispatcherBucket struct {
@@ -165,6 +168,10 @@ func newEventBroker(
 	sendMessageWorkerCount := config.DefaultBasicEventHandlerConcurrency
 	scanWorkerCount := config.DefaultBasicEventHandlerConcurrency * 4
 
+<<<<<<< HEAD
+=======
+	scanTaskQueueSize := config.GetGlobalServerConfig().Debug.EventService.ScanTaskQueueSize / scanWorkerCount
+>>>>>>> d9288d337 (Revert "eventBroker: implement two stage syncpoint (#4429)" (#4817))
 	sendMessageQueueSize := basicChannelSize * 4
 
 	scanLimitInBytes := config.GetGlobalServerConfig().Debug.EventService.ScanLimitInBytes
@@ -239,6 +246,7 @@ func newEventBroker(
 		return c.refreshMinSentResolvedTs(ctx)
 	})
 
+<<<<<<< HEAD
 	g.Go(func() error {
 		return c.runScanSchemaBlockedDispatchers(ctx)
 	})
@@ -247,6 +255,8 @@ func newEventBroker(
 		return c.runLargeTxnCleanupWorker(ctx, defaultLargeTxnCleanupRetryInterval)
 	})
 
+=======
+>>>>>>> d9288d337 (Revert "eventBroker: implement two stage syncpoint (#4429)" (#4817))
 	log.Info("new event broker created", zap.Uint64("id", id), zap.Uint64("scanLimitInBytes", c.scanLimitInBytes))
 	return c
 }
@@ -579,6 +589,7 @@ func (c *eventBroker) getScanTaskRequestResult(task scanTask) scanTaskRequestRes
 	}
 
 	if dataRange.CommitTsEnd <= dataRange.CommitTsStart {
+<<<<<<< HEAD
 		// A cursor makes [C, C] meaningful: Position resumes rows inside a
 		// transaction, while TxnStartTs resumes later transactions at the same C.
 		canResumeAtStart := dataRange.CommitTsEnd == dataRange.CommitTsStart &&
@@ -592,6 +603,8 @@ func (c *eventBroker) getScanTaskRequestResult(task scanTask) scanTaskRequestRes
 			}
 			return result
 		}
+=======
+>>>>>>> d9288d337 (Revert "eventBroker: implement two stage syncpoint (#4429)" (#4817))
 		updateMetricEventServiceSkipResolvedTsCount(task.info.GetMode())
 		// Scan range can become empty after applying capping (for example, scan window).
 		// Send a signal resolved-ts event (rate limited) to keep downstream responsive,
@@ -626,9 +639,39 @@ func (c *eventBroker) getScanTaskRequestResult(task scanTask) scanTaskRequestRes
 		c.sendResolvedTs(task, dataRange.CommitTsEnd)
 		return result
 	}
+<<<<<<< HEAD
 	result.needScan = true
 	result.request = request
 	return result
+=======
+	return true, dataRange
+}
+
+// scanReady checks if the dispatcher needs to scan the event store/schema store.
+// If the dispatcher needs to scan the event store/schema store, it returns true.
+// If the dispatcher does not need to scan the event store, it send the watermark to the dispatcher.
+//
+// Note: A true return value only indicates potential scanning need,
+// final determination occurs when the scanTask is actully processed.
+func (c *eventBroker) scanReady(task scanTask) bool {
+	if task.isRemoved.Load() {
+		return false
+	}
+
+	if task.isTaskScanning.Load() {
+		return false
+	}
+
+	// If the dispatcher is not ready, we don't need do the scan.
+	if !c.checkAndSendReady(task) {
+		return false
+	}
+
+	c.sendHandshakeIfNeed(task)
+
+	ok, _ := c.getScanTaskDataRange(task)
+	return ok
+>>>>>>> d9288d337 (Revert "eventBroker: implement two stage syncpoint (#4429)" (#4817))
 }
 
 func (c *eventBroker) checkAndSendReady(task scanTask) bool {

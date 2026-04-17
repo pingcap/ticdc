@@ -564,8 +564,15 @@ type changefeedStatus struct {
 	fastBandState        atomic.Int32
 	slowBandState        atomic.Int32
 
+<<<<<<< HEAD
 	scanWindowController *adaptiveScanWindowController
 	syncPointInterval    time.Duration
+=======
+	lastAdjustTime      atomic.Time
+	lastTrendAdjustTime atomic.Time
+	usageWindow         *memoryUsageWindow
+	syncPointInterval   time.Duration
+>>>>>>> d9288d337 (Revert "eventBroker: implement two stage syncpoint (#4429)" (#4817))
 }
 
 func newChangefeedStatus(changefeedID common.ChangeFeedID, syncPointInterval time.Duration) *changefeedStatus {

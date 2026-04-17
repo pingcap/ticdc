@@ -27,7 +27,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
@@ -67,7 +66,11 @@ func popScanTask(t *testing.T, broker *eventBroker, workerIndex int) scanTask {
 	return task
 }
 
+<<<<<<< HEAD
 func TestScanRequestCoalescing(t *testing.T) {
+=======
+func TestCheckNeedScan(t *testing.T) {
+>>>>>>> d9288d337 (Revert "eventBroker: implement two stage syncpoint (#4429)" (#4817))
 	broker, _, _, _ := newEventBrokerForTest()
 	broker.close()
 
@@ -786,14 +789,22 @@ func TestScanRangeCappedByScanWindow(t *testing.T) {
 	require.Equal(t, oracle.GoTimeToTS(baseTime.Add(defaultScanInterval)), result.request.Range.CommitTsEnd)
 }
 
+<<<<<<< HEAD
 func TestGetScanTaskRequestKeepsTxnCursorInsideShrunkWindow(t *testing.T) {
+=======
+func TestGetScanTaskDataRangeEmptyAfterCappingDoesNotResetScanRange(t *testing.T) {
+>>>>>>> d9288d337 (Revert "eventBroker: implement two stage syncpoint (#4429)" (#4817))
 	broker, _, _, _ := newEventBrokerForTest()
 	// Close the broker, so we can catch all message in the test.
 	broker.close()
 
 	info := newMockDispatcherInfoForTest(t)
 	info.epoch = 1
+<<<<<<< HEAD
 	changefeedStatus := broker.getOrSetChangefeedStatus(info)
+=======
+	changefeedStatus := broker.getOrSetChangefeedStatus(info.GetChangefeedID(), info.GetSyncPointInterval())
+>>>>>>> d9288d337 (Revert "eventBroker: implement two stage syncpoint (#4429)" (#4817))
 
 	disp := newDispatcherStat(info, 1, 1, nil, changefeedStatus)
 	disp.seq.Store(1)
@@ -888,6 +899,7 @@ func TestGetScanTaskDataRangeEmptyAfterCappingWithPendingDDLEventUsesLocalWindow
 	require.Equal(t, oracle.GoTimeToTS(oracle.GetTimeFromTS(commitStart).Add(defaultScanInterval)), dataRange.Range.CommitTsEnd)
 }
 
+<<<<<<< HEAD
 func TestGetScanTaskDataRangeEmptyAfterCappingWithPendingSyncPointCrossesSyncPoint(t *testing.T) {
 	broker, _, ss, _ := newEventBrokerForTest()
 	// Close the broker, so we can catch all message in the test.
@@ -926,6 +938,8 @@ func TestGetScanTaskDataRangeEmptyAfterCappingWithPendingSyncPointCrossesSyncPoi
 	require.Equal(t, nextSyncPointTs+1, dataRange.Range.CommitTsEnd)
 }
 
+=======
+>>>>>>> d9288d337 (Revert "eventBroker: implement two stage syncpoint (#4429)" (#4817))
 func TestGetScanTaskDataRangeRingWaitWithThreeDispatchersCanAdvancePendingDDL(t *testing.T) {
 	broker, _, ss, _ := newEventBrokerForTest()
 	// Close the broker, so we can catch all message in the test.
@@ -1047,6 +1061,7 @@ func TestDoScanSkipWhenChangefeedStatusNotFound(t *testing.T) {
 	require.False(t, disp.isScanBusy())
 }
 
+<<<<<<< HEAD
 func TestDoScanKeepsRowLevelProgressAfterSendingFragment(t *testing.T) {
 	setLargeTxnThresholdForTest(t, 0)
 
@@ -1091,6 +1106,8 @@ func TestDoScanKeepsRowLevelProgressAfterSendingFragment(t *testing.T) {
 	require.True(t, disp.isScanBusy())
 }
 
+=======
+>>>>>>> d9288d337 (Revert "eventBroker: implement two stage syncpoint (#4429)" (#4817))
 func TestCURDDispatcher(t *testing.T) {
 	broker, _, _, _ := newEventBrokerForTest()
 	defer broker.close()
