@@ -17,6 +17,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -65,7 +66,10 @@ type consumer struct {
 	sink            sink.Sink
 	// tableDMLIdxMap maintains a map of <dmlPathKey, fileIndexKeyMap>
 	tableDMLIdxMap map[cloudstorage.DmlPathKey]fileIndexKeyMap
-	eventsGroup    map[int64]*util.EventsGroup
+	// handledDMLIdxMap maintains the highest file indexes already applied to downstream.
+	// Keys discovered in storage remain pending until they are successfully handled.
+	handledDMLIdxMap map[cloudstorage.DmlPathKey]fileIndexKeyMap
+	eventsGroup      map[int64]*util.EventsGroup
 	// tableDDLWatermark maintains a map of <`schema`.`table`, max executed DDL table version>.
 	// DML files with smaller table versions are considered stale replays and should be ignored.
 	tableDDLWatermark map[string]uint64
@@ -152,6 +156,7 @@ func newConsumer(ctx context.Context) (*consumer, error) {
 		sink:              sink,
 		errCh:             errCh,
 		tableDMLIdxMap:    make(map[cloudstorage.DmlPathKey]fileIndexKeyMap),
+		handledDMLIdxMap:  make(map[cloudstorage.DmlPathKey]fileIndexKeyMap),
 		eventsGroup:       make(map[int64]*util.EventsGroup),
 		tableDDLWatermark: make(map[string]uint64),
 		tableDefMap:       make(map[string]map[uint64]*cloudstorage.TableDefinition),
@@ -202,15 +207,6 @@ func (c *consumer) getNewFiles(
 	tableDMLMap := make(map[cloudstorage.DmlPathKey]fileIndexRange)
 	opt := &storage.WalkOption{SubDir: ""}
 
-	origDMLIdxMap := make(map[cloudstorage.DmlPathKey]fileIndexKeyMap, len(c.tableDMLIdxMap))
-	for k, v := range c.tableDMLIdxMap {
-		m := make(fileIndexKeyMap)
-		for fileIndexKey, val := range v {
-			m[fileIndexKey] = val
-		}
-		origDMLIdxMap[k] = m
-	}
-
 	err := c.externalStorage.WalkDir(ctx, opt, func(path string, size int64) error {
 		if cloudstorage.IsSchemaFile(path) {
 			err := c.parseSchemaFilePath(ctx, path)
@@ -235,8 +231,40 @@ func (c *consumer) getNewFiles(
 		return tableDMLMap, err
 	}
 
-	tableDMLMap = diffDMLMaps(c.tableDMLIdxMap, origDMLIdxMap)
+	tableDMLMap = diffDMLMaps(c.tableDMLIdxMap, c.handledDMLIdxMap)
 	return tableDMLMap, err
+}
+
+func (c *consumer) getStableCheckpointTs(ctx context.Context) (uint64, error) {
+	data, err := c.externalStorage.ReadFile(ctx, "metadata")
+	if err != nil {
+		if os.IsNotExist(errors.Cause(err)) {
+			return 0, nil
+		}
+		return 0, errors.Trace(err)
+	}
+
+	var metadata struct {
+		CheckpointTs uint64 `json:"checkpoint-ts"`
+	}
+	if err := json.Unmarshal(data, &metadata); err != nil {
+		return 0, errors.Trace(err)
+	}
+	return metadata.CheckpointTs, nil
+}
+
+func cloneFileIndexKeyMap(src fileIndexKeyMap) fileIndexKeyMap {
+	dst := make(fileIndexKeyMap, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
+}
+
+func (c *consumer) markDMLPathHandled(pathKey cloudstorage.DmlPathKey) {
+	if fileIndexes, ok := c.tableDMLIdxMap[pathKey]; ok {
+		c.handledDMLIdxMap[pathKey] = cloneFileIndexKeyMap(fileIndexes)
+	}
 }
 
 func (c *consumer) appendRow2Group(dml *event.DMLEvent, enableTableAcrossNodes bool) {
@@ -513,6 +541,7 @@ func (c *consumer) mustGetTableDef(key cloudstorage.SchemaPathKey) cloudstorage.
 func (c *consumer) handleNewFiles(
 	ctx context.Context,
 	dmlFileMap map[cloudstorage.DmlPathKey]fileIndexRange,
+	stableCheckpointTs uint64,
 	round uint64,
 ) error {
 	if len(dmlFileMap) == 0 {
@@ -546,12 +575,26 @@ func (c *consumer) handleNewFiles(
 		log.Info("storage consumer handle file key",
 			zap.Uint64("round", round),
 			zap.Int("order", order),
+			zap.Uint64("stableCheckpointTs", stableCheckpointTs),
 			zap.String("schema", key.Schema),
 			zap.String("table", key.Table),
 			zap.Uint64("tableVersion", key.TableVersion),
 			zap.Int64("partition", key.PartitionNum),
 			zap.String("date", key.Date),
 			zap.Int("rangeCount", len(dmlFileMap[key])))
+
+		if key.TableVersion > stableCheckpointTs {
+			log.Info("storage consumer defer file key until checkpoint catches up",
+				zap.Uint64("round", round),
+				zap.Int("order", order),
+				zap.String("schema", key.Schema),
+				zap.String("table", key.Table),
+				zap.Uint64("tableVersion", key.TableVersion),
+				zap.Uint64("stableCheckpointTs", stableCheckpointTs),
+				zap.Int64("partition", key.PartitionNum),
+				zap.String("date", key.Date))
+			continue
+		}
 
 		// if the key is a fake dml path key which is mainly used for
 		// sorting schema.json file before the dml files, then execute the ddl query.
@@ -561,6 +604,7 @@ func (c *consumer) handleNewFiles(
 					zap.String("schema", key.Schema), zap.String("table", key.Table),
 					zap.Uint64("tableVersion", key.TableVersion), zap.Uint64("ddlWatermark", ddlWatermark),
 					zap.String("query", tableDef.Query))
+				c.markDMLPathHandled(key)
 				continue
 			}
 
@@ -583,6 +627,7 @@ func (c *consumer) handleNewFiles(
 				return errors.Trace(err)
 			}
 			c.tableDDLWatermark[tableKey] = key.TableVersion
+			c.markDMLPathHandled(key)
 			// TODO: need to cleanup tableDefMap in the future.
 			log.Info("execute ddl event successfully",
 				zap.String("query", tableDef.Query),
@@ -598,6 +643,7 @@ func (c *consumer) handleNewFiles(
 				zap.String("schema", key.Schema), zap.String("table", key.Table),
 				zap.Uint64("tableVersion", key.TableVersion), zap.Uint64("ddlWatermark", ddlWatermark),
 				zap.Int64("partition", key.PartitionNum), zap.String("date", key.Date))
+			c.markDMLPathHandled(key)
 			continue
 		}
 
@@ -630,7 +676,10 @@ func (c *consumer) handleNewFiles(
 				}
 			}
 		}
-		c.flushDMLEvents(ctx, tableID)
+		if err := c.flushDMLEvents(ctx, tableID); err != nil {
+			return err
+		}
+		c.markDMLPathHandled(key)
 	}
 
 	return nil
@@ -665,15 +714,20 @@ func (c *consumer) handle(ctx context.Context) error {
 		}
 
 		round++
+		stableCheckpointTs, err := c.getStableCheckpointTs(ctx)
+		if err != nil {
+			return errors.Trace(err)
+		}
 		dmlFileMap, err := c.getNewFiles(ctx)
 		if err != nil {
 			return errors.Trace(err)
 		}
 		log.Info("storage consumer scan done",
 			zap.Uint64("round", round),
+			zap.Uint64("stableCheckpointTs", stableCheckpointTs),
 			zap.Int("dmlPathKeyCount", len(dmlFileMap)))
 
-		err = c.handleNewFiles(ctx, dmlFileMap, round)
+		err = c.handleNewFiles(ctx, dmlFileMap, stableCheckpointTs, round)
 		if err != nil {
 			return errors.Trace(err)
 		}
