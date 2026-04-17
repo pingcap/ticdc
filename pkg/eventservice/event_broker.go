@@ -683,7 +683,20 @@ func (c *eventBroker) shouldSuppressSyncPointEmission(d *dispatcherStat) bool {
 	}
 
 	receivedResolvedTs := d.receivedResolvedTs.Load()
-	checkpointTs := d.checkpointTs.Load()
+	checkpointTs, ok := d.changefeedStat.getMinCheckpointTs()
+	if !ok {
+		metrics.EventServiceSyncPointLagGaugeVec.WithLabelValues(d.changefeedStat.changefeedID.String()).Set(0)
+		if d.syncPointSendSuppressed.Load() {
+			if d.syncPointSendSuppressed.CompareAndSwap(true, false) {
+				log.Info("syncpoint emission resumed",
+					zap.Stringer("changefeedID", d.changefeedStat.changefeedID),
+					zap.Stringer("dispatcherID", d.id),
+					zap.Uint64("receivedResolvedTs", receivedResolvedTs),
+					zap.Duration("resumeThreshold", c.syncPointLagResumeThreshold))
+			}
+		}
+		return false
+	}
 	lag := syncPointLagDuration(receivedResolvedTs, checkpointTs)
 	metrics.EventServiceSyncPointLagGaugeVec.WithLabelValues(d.changefeedStat.changefeedID.String()).Set(lag.Seconds())
 
@@ -694,7 +707,7 @@ func (c *eventBroker) shouldSuppressSyncPointEmission(d *dispatcherStat) bool {
 					zap.Stringer("changefeedID", d.changefeedStat.changefeedID),
 					zap.Stringer("dispatcherID", d.id),
 					zap.Uint64("receivedResolvedTs", receivedResolvedTs),
-					zap.Uint64("checkpointTs", checkpointTs),
+					zap.Uint64("minCheckpointTs", checkpointTs),
 					zap.Duration("lag", lag),
 					zap.Duration("resumeThreshold", c.syncPointLagResumeThreshold))
 			}
@@ -709,7 +722,7 @@ func (c *eventBroker) shouldSuppressSyncPointEmission(d *dispatcherStat) bool {
 				zap.Stringer("changefeedID", d.changefeedStat.changefeedID),
 				zap.Stringer("dispatcherID", d.id),
 				zap.Uint64("sentResolvedTs", receivedResolvedTs),
-				zap.Uint64("checkpointTs", checkpointTs),
+				zap.Uint64("minCheckpointTs", checkpointTs),
 				zap.Duration("lag", lag),
 				zap.Duration("suppressThreshold", c.syncPointLagSuppressThreshold),
 				zap.Duration("resumeThreshold", c.syncPointLagResumeThreshold))
@@ -1141,6 +1154,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 	status.addDispatcher(id, dispatcherPtr)
 	if span.Equal(common.KeyspaceDDLSpan(span.KeyspaceID)) {
 		c.tableTriggerDispatchers.Store(id, dispatcherPtr)
+		status.refreshMinSentResolvedTs()
 		log.Info("table trigger dispatcher register dispatcher",
 			zap.Uint64("clusterID", c.tidbClusterID),
 			zap.Stringer("changefeedID", changefeedID),
@@ -1211,6 +1225,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 		return err
 	}
 	c.dispatchers.Store(id, dispatcherPtr)
+	status.refreshMinSentResolvedTs()
 	c.metricsCollector.metricDispatcherCount.Inc()
 	log.Info("register dispatcher",
 		zap.Uint64("clusterID", c.tidbClusterID),
@@ -1259,6 +1274,8 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 		metrics.EventServiceAvailableMemoryQuotaGaugeVec.DeleteLabelValues(changefeedID.String())
 		metrics.EventServiceScanWindowBaseTsGaugeVec.DeleteLabelValues(changefeedID.String())
 		metrics.EventServiceScanWindowIntervalGaugeVec.DeleteLabelValues(changefeedID.String())
+	} else {
+		stat.changefeedStat.refreshMinSentResolvedTs()
 	}
 
 	c.eventStore.UnregisterDispatcher(changefeedID, id)
@@ -1335,6 +1352,7 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 	for {
 		if statPtr.CompareAndSwap(oldStat, newStat) {
 			status.addDispatcher(dispatcherID, statPtr)
+			status.refreshMinSentResolvedTs()
 			break
 		}
 		log.Warn("reset dispatcher failed since the dispatcher is changed concurrently",
@@ -1421,6 +1439,9 @@ func (c *eventBroker) handleDispatcherHeartbeat(heartbeat *DispatcherHeartBeatWi
 		for _, dp := range heartbeat.heartbeat.DispatcherProgressesLegacy {
 			handleProgress(dp.DispatcherID, dp.CheckpointTs, 0, false)
 		}
+	}
+	for changefeed := range changedChangefeeds {
+		changefeed.refreshMinSentResolvedTs()
 	}
 	c.sendDispatcherResponse(responseMap)
 }

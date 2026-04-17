@@ -430,6 +430,7 @@ type changefeedStatus struct {
 
 	availableMemoryQuota sync.Map // nodeID -> atomic.Uint64 (memory quota in bytes)
 	minSentTs            atomic.Uint64
+	minCheckpointTs      atomic.Uint64
 	scanInterval         atomic.Int64
 
 	lastAdjustTime      atomic.Time
@@ -438,6 +439,8 @@ type changefeedStatus struct {
 	syncPointInterval   time.Duration
 }
 
+const invalidMinCheckpointTs = ^uint64(0)
+
 func newChangefeedStatus(changefeedID common.ChangeFeedID, syncPointInterval time.Duration) *changefeedStatus {
 	status := &changefeedStatus{
 		changefeedID:      changefeedID,
@@ -445,6 +448,7 @@ func newChangefeedStatus(changefeedID common.ChangeFeedID, syncPointInterval tim
 		syncPointInterval: syncPointInterval,
 	}
 	status.scanInterval.Store(int64(defaultScanInterval))
+	status.minCheckpointTs.Store(invalidMinCheckpointTs)
 	status.lastAdjustTime.Store(time.Now())
 	status.lastTrendAdjustTime.Store(time.Now())
 
@@ -470,4 +474,12 @@ func (c *changefeedStatus) isEmpty() bool {
 
 func (c *changefeedStatus) isSyncpointEnabled() bool {
 	return c.syncPointInterval > 0
+}
+
+func (c *changefeedStatus) getMinCheckpointTs() (uint64, bool) {
+	minCheckpointTs := c.minCheckpointTs.Load()
+	if minCheckpointTs == invalidMinCheckpointTs {
+		return 0, false
+	}
+	return minCheckpointTs, true
 }
