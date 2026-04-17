@@ -935,6 +935,37 @@ func TestCURDDispatcher(t *testing.T) {
 	require.False(t, ok, "changefeedStatus should be removed after the last dispatcher is removed")
 }
 
+func TestRemoveDispatcherCleansUpSharedFilter(t *testing.T) {
+	broker, _, _, _ := newEventBrokerForTest()
+	defer broker.close()
+
+	dispInfo := newMockDispatcherInfoForTest(t)
+	dispInfo.changefeedID = common.NewChangefeedID4Test("default", t.Name())
+	filterStorage := filter.GetSharedFilterStorage()
+	filterStorage.RemoveFilter(dispInfo.GetChangefeedID())
+	t.Cleanup(func() {
+		filterStorage.RemoveFilter(dispInfo.GetChangefeedID())
+	})
+
+	err := broker.addDispatcher(dispInfo)
+	require.NoError(t, err)
+
+	dispPtr := broker.getDispatcher(dispInfo.GetID())
+	require.NotNil(t, dispPtr)
+	disp := dispPtr.Load()
+	require.NotNil(t, disp)
+	require.NotNil(t, disp.filter)
+
+	broker.removeDispatcher(dispInfo)
+
+	_, ok := broker.changefeedMap.Load(dispInfo.GetChangefeedID())
+	require.False(t, ok, "changefeedStatus should be removed after the last dispatcher is removed")
+
+	recreated, err := filterStorage.GetOrSetFilter(dispInfo.GetChangefeedID(), dispInfo.GetFilterConfig(), broker.timezone)
+	require.NoError(t, err)
+	require.NotSame(t, disp.filter, recreated)
+}
+
 func TestResetDispatcher(t *testing.T) {
 	broker, _, _, _ := newEventBrokerForTest()
 	defer broker.close()

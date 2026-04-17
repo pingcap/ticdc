@@ -1384,10 +1384,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 		}
 		status.removeDispatcher(id)
 		if status.isEmpty() {
-			c.changefeedMap.Delete(changefeedID)
-			metrics.EventServiceAvailableMemoryQuotaGaugeVec.DeleteLabelValues(changefeedID.String())
-			metrics.EventServiceScanWindowBaseTsGaugeVec.DeleteLabelValues(changefeedID.String())
-			metrics.EventServiceScanWindowIntervalGaugeVec.DeleteLabelValues(changefeedID.String())
+			c.removeChangefeedStatus(status)
 		}
 		c.sendNotReusableEvent(node.ID(info.GetServerID()), dispatcher)
 		return nil
@@ -1410,10 +1407,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 		c.eventStore.UnregisterDispatcher(changefeedID, id)
 		status.removeDispatcher(id)
 		if status.isEmpty() {
-			c.changefeedMap.Delete(changefeedID)
-			metrics.EventServiceAvailableMemoryQuotaGaugeVec.DeleteLabelValues(changefeedID.String())
-			metrics.EventServiceScanWindowBaseTsGaugeVec.DeleteLabelValues(changefeedID.String())
-			metrics.EventServiceScanWindowIntervalGaugeVec.DeleteLabelValues(changefeedID.String())
+			c.removeChangefeedStatus(status)
 		}
 		return err
 	}
@@ -1462,10 +1456,7 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 		log.Info("All dispatchers for the changefeed are removed, remove the changefeed status",
 			zap.Stringer("changefeedID", changefeedID),
 		)
-		c.changefeedMap.Delete(changefeedID)
-		metrics.EventServiceAvailableMemoryQuotaGaugeVec.DeleteLabelValues(changefeedID.String())
-		metrics.EventServiceScanWindowBaseTsGaugeVec.DeleteLabelValues(changefeedID.String())
-		metrics.EventServiceScanWindowIntervalGaugeVec.DeleteLabelValues(changefeedID.String())
+		c.removeChangefeedStatus(stat.changefeedStat)
 	}
 
 	c.eventStore.UnregisterDispatcher(changefeedID, id)
@@ -1483,6 +1474,21 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 		zap.Stringer("dispatcherID", id), zap.Int64("tableID", dispatcherInfo.GetTableSpan().GetTableID()),
 		zap.String("span", common.FormatTableSpan(dispatcherInfo.GetTableSpan())),
 	)
+}
+
+func (c *eventBroker) removeChangefeedStatus(status *changefeedStatus) {
+	changefeedID := status.changefeedID
+	// SharedFilterStorage is process-global. Only remove the cached filter after we
+	// successfully delete this exact changefeedStatus instance, otherwise a newer
+	// status for the same changefeed could still be using it.
+	if !c.changefeedMap.CompareAndDelete(changefeedID, status) {
+		return
+	}
+
+	filter.GetSharedFilterStorage().RemoveFilter(changefeedID)
+	metrics.EventServiceAvailableMemoryQuotaGaugeVec.DeleteLabelValues(changefeedID.String())
+	metrics.EventServiceScanWindowBaseTsGaugeVec.DeleteLabelValues(changefeedID.String())
+	metrics.EventServiceScanWindowIntervalGaugeVec.DeleteLabelValues(changefeedID.String())
 }
 
 func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
