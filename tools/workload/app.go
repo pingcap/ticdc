@@ -31,6 +31,7 @@ import (
 	pbank2 "workload/schema/bank2"
 	pbank3 "workload/schema/bank3"
 	"workload/schema/bankupdate"
+	pcontentmetadatawide "workload/schema/content_metadata_wide"
 	pcrawler "workload/schema/crawler"
 	pdc "workload/schema/dc"
 	"workload/schema/largerow"
@@ -73,17 +74,18 @@ type WorkloadApp struct {
 }
 
 const (
-	bank              = "bank"
-	sysbench          = "sysbench"
-	largeRow          = "large_row"
-	shopItem          = "shop_item"
-	uuu               = "uuu"
-	crawler           = "crawler"
-	bank2             = "bank2"
-	bank3             = "bank3"
-	bankUpdate        = "bank_update"
-	dc                = "dc"
-	wideTableWithJSON = "wide_table_with_json"
+	bank                = "bank"
+	sysbench            = "sysbench"
+	largeRow            = "large_row"
+	shopItem            = "shop_item"
+	uuu                 = "uuu"
+	crawler             = "crawler"
+	bank2               = "bank2"
+	bank3               = "bank3"
+	bankUpdate          = "bank_update"
+	dc                  = "dc"
+	wideTableWithJSON   = "wide_table_with_json"
+	contentMetadataWide = "content_metadata_wide"
 )
 
 // stmtCacheKey is used as the key for statement cache
@@ -146,6 +148,8 @@ func (app *WorkloadApp) createWorkload() schema.Workload {
 		workload = pdc.NewDCWorkload()
 	case wideTableWithJSON:
 		workload = pwidetablewithjson.NewWideTableWithJSONWorkload(app.Config.RowSize, app.Config.TableCount, app.Config.TableStartIndex, app.Config.TotalRowCount)
+	case contentMetadataWide:
+		workload = pcontentmetadatawide.NewContentMetadataWideWorkload(app.Config.RowSize, app.Config.TableCount, app.Config.TableStartIndex, app.Config.TotalRowCount)
 	default:
 		plog.Panic("unsupported workload type", zap.String("workload", app.Config.WorkloadType))
 	}
@@ -355,14 +359,8 @@ func (app *WorkloadApp) doInsertOnce(conn *sql.Conn) (uint64, error) {
 	)
 
 	switch app.Config.WorkloadType {
-	case uuu:
-		insertSQL, values := app.Workload.(*puuu.UUUWorkload).BuildInsertSqlWithValues(tableIndex, app.Config.BatchSize)
-		res, err = app.executeWithValues(conn, insertSQL, tableIndex, values)
-	case bank2:
-		insertSQL, values := app.Workload.(*pbank2.Bank2Workload).BuildInsertSqlWithValues(tableIndex, app.Config.BatchSize)
-		res, err = app.executeWithValues(conn, insertSQL, tableIndex, values)
-	case wideTableWithJSON:
-		insertSQL, values := app.Workload.(*pwidetablewithjson.WideTableWithJSONWorkload).BuildInsertSqlWithValues(tableIndex, app.Config.BatchSize)
+	case uuu, bank2, wideTableWithJSON, contentMetadataWide:
+		insertSQL, values := app.Workload.(schema.InsertValuesWorkload).BuildInsertSqlWithValues(tableIndex, app.Config.BatchSize)
 		res, err = app.executeWithValues(conn, insertSQL, tableIndex, values)
 	default:
 		insertSQL := app.Workload.BuildInsertSql(tableIndex, app.Config.BatchSize)
