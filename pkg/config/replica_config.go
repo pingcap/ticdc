@@ -41,6 +41,8 @@ const (
 	defaultActiveActiveSyncStatsInterval = time.Minute
 	// DefaultTiDBSourceID is the default source ID of TiDB cluster.
 	DefaultTiDBSourceID = 1
+
+	MaxEventCollectorBatchCount = 8192
 )
 
 var defaultReplicaConfig = &ReplicaConfig{
@@ -365,13 +367,17 @@ func (c *ReplicaConfig) ValidateAndAdjust(sinkURI *url.URL) error { // check sin
 					minChangeFeedErrorStuckDuration.Seconds()))
 	}
 
-	if c.EventCollectorBatchCount != nil && *c.EventCollectorBatchCount <= 0 {
-		return cerror.ErrInvalidReplicaConfig.FastGenByArgs(
-			fmt.Sprintf("The EventCollectorBatchCount:%d must be larger than 0", *c.EventCollectorBatchCount))
+	// allow the batch count and batch bytes set to 0, to disable the batch mechanism
+	if c.EventCollectorBatchCount != nil && *c.EventCollectorBatchCount < 0 {
+		return cerror.ErrInvalidReplicaConfig.FastGenByArgs("event-collector-batch-count must be set not smaller than 0")
 	}
-	if c.EventCollectorBatchBytes != nil && *c.EventCollectorBatchBytes <= 0 {
+	if c.EventCollectorBatchCount != nil && *c.EventCollectorBatchCount > MaxEventCollectorBatchCount {
 		return cerror.ErrInvalidReplicaConfig.FastGenByArgs(
-			fmt.Sprintf("The EventCollectorBatchBytes:%d must be larger than 0", *c.EventCollectorBatchBytes))
+			"event-collector-batch-count must be set not larger than %d", MaxEventCollectorBatchCount,
+		)
+	}
+	if c.EventCollectorBatchBytes != nil && *c.EventCollectorBatchBytes < 0 {
+		return cerror.ErrInvalidReplicaConfig.FastGenByArgs("event-collector-batch-bytes must be set not smaller than 0")
 	}
 	if c.ActiveActiveProgressInterval == nil {
 		interval := defaultActiveActiveProgressInterval

@@ -234,9 +234,16 @@ func (s *stream[A, P, T, D, H]) handleLoop() {
 	var (
 		eventQueueEmpty = false
 		eventBuf        []T
-		path            *pathInfo[A, P, T, D, H]
-		nBytes          int
-		duration        time.Duration
+		zeroT           T
+		cleanUpEventBuf = func() {
+			for i := range eventBuf {
+				eventBuf[i] = zeroT
+			}
+			eventBuf = nil
+		}
+		path     *pathInfo[A, P, T, D, H]
+		nBytes   int
+		duration time.Duration
 	)
 
 	// For testing. Don't handle events until this wait group is done.
@@ -288,20 +295,22 @@ Loop:
 					continue Loop
 				}
 				if path.removed.Load() {
+					cleanUpEventBuf()
 					continue Loop
 				}
-
-				path.lastHandleEventTs.Store(uint64(s.handler.GetTimestamp(eventBuf[0])))
-
-				path.blocking.Store(s.handler.Handle(path.dest, eventBuf...))
 
 				metrics.DynamicStreamBatchDuration.WithLabelValues(s.module, path.metricLabel).Observe(float64(duration.Seconds()))
 				metrics.DynamicStreamBatchCount.WithLabelValues(s.module, path.metricLabel).Observe(float64(len(eventBuf)))
 				metrics.DynamicStreamBatchBytes.WithLabelValues(s.module, path.metricLabel).Observe(float64(nBytes))
 
+				path.lastHandleEventTs.Store(uint64(s.handler.GetTimestamp(eventBuf[0])))
+				path.blocking.Store(s.handler.Handle(path.dest, eventBuf...))
+
 				if path.blocking.Load() {
 					s.eventQueue.blockPath(path)
 				}
+
+				cleanUpEventBuf()
 			}
 		}
 	}

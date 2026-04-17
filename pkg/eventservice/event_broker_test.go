@@ -36,6 +36,8 @@ import (
 	"go.uber.org/zap"
 )
 
+const testTableTriggerKeyspaceID uint32 = 1
+
 func newEventBrokerForTest() (*eventBroker, *mockEventStore, *mockSchemaStore, chan *messaging.TargetMessage) {
 	mockPDClock := pdutil.NewClock4Test()
 	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
@@ -602,7 +604,7 @@ func TestHandleDispatcherHeartbeat_InactiveDispatcherCleanup(t *testing.T) {
 			Version:         event.DispatcherHeartbeatVersion1,
 			ClusterID:       0,
 			DispatcherCount: 1,
-			DispatcherProgresses: []event.DispatcherProgress{
+			DispatcherProgressesLegacy: []event.DispatcherProgressLegacy{
 				{
 					DispatcherID: dispInfo.GetID(),
 					CheckpointTs: 100,
@@ -634,7 +636,7 @@ func TestHandleDispatcherHeartbeat_InactiveDispatcherCleanup(t *testing.T) {
 			Version:         event.DispatcherHeartbeatVersion1,
 			ClusterID:       0,
 			DispatcherCount: 1,
-			DispatcherProgresses: []event.DispatcherProgress{
+			DispatcherProgressesLegacy: []event.DispatcherProgressLegacy{
 				{
 					DispatcherID: dispInfo.GetID(), // Same dispatcher ID but it's removed
 					CheckpointTs: 200,
@@ -669,6 +671,74 @@ func TestHandleDispatcherHeartbeat_InactiveDispatcherCleanup(t *testing.T) {
 	case <-ctx.Done():
 		require.Fail(t, "Expected to receive a dispatcher heartbeat response")
 	}
+}
+
+func TestHandleDispatcherHeartbeatEpochFilter(t *testing.T) {
+	broker, _, _, _ := newEventBrokerForTest()
+	defer broker.close()
+
+	dispInfo := newMockDispatcherInfoForTest(t)
+	err := broker.addDispatcher(dispInfo)
+	require.NoError(t, err)
+
+	dispatcher := broker.getDispatcher(dispInfo.GetID()).Load()
+	require.NotNil(t, dispatcher)
+	dispatcher.epoch = 3
+	dispatcher.checkpointTs.Store(100)
+	dispatcher.lastReceivedHeartbeatTime.Store(0)
+
+	staleHeartbeat := &DispatcherHeartBeatWithServerID{
+		serverID: "test-server-1",
+		heartbeat: &event.DispatcherHeartbeat{
+			Version:         event.DispatcherHeartbeatVersion2,
+			ClusterID:       0,
+			DispatcherCount: 1,
+			DispatcherProgresses: []event.DispatcherProgress{{
+				Version:      event.DispatcherProgressVersion1,
+				DispatcherID: dispInfo.GetID(),
+				CheckpointTs: 200,
+				Epoch:        2,
+			}},
+		},
+	}
+	broker.handleDispatcherHeartbeat(staleHeartbeat)
+	require.Equal(t, uint64(100), dispatcher.checkpointTs.Load())
+	require.Equal(t, int64(0), dispatcher.lastReceivedHeartbeatTime.Load())
+
+	v1Heartbeat := &DispatcherHeartBeatWithServerID{
+		serverID: "test-server-1",
+		heartbeat: &event.DispatcherHeartbeat{
+			Version:         event.DispatcherHeartbeatVersion1,
+			ClusterID:       0,
+			DispatcherCount: 1,
+			DispatcherProgressesLegacy: []event.DispatcherProgressLegacy{{
+				DispatcherID: dispInfo.GetID(),
+				CheckpointTs: 180,
+			}},
+		},
+	}
+	broker.handleDispatcherHeartbeat(v1Heartbeat)
+	require.Equal(t, uint64(180), dispatcher.checkpointTs.Load())
+	require.Greater(t, dispatcher.lastReceivedHeartbeatTime.Load(), int64(0))
+
+	dispatcher.lastReceivedHeartbeatTime.Store(0)
+	currentHeartbeat := &DispatcherHeartBeatWithServerID{
+		serverID: "test-server-1",
+		heartbeat: &event.DispatcherHeartbeat{
+			Version:         event.DispatcherHeartbeatVersion2,
+			ClusterID:       0,
+			DispatcherCount: 1,
+			DispatcherProgresses: []event.DispatcherProgress{{
+				Version:      event.DispatcherProgressVersion1,
+				DispatcherID: dispInfo.GetID(),
+				CheckpointTs: 220,
+				Epoch:        3,
+			}},
+		},
+	}
+	broker.handleDispatcherHeartbeat(currentHeartbeat)
+	require.Equal(t, uint64(220), dispatcher.checkpointTs.Load())
+	require.Greater(t, dispatcher.lastReceivedHeartbeatTime.Load(), int64(0))
 }
 
 // TestSendHandshakeIfNeedConcurrency tests the concurrent safety of sendHandshakeIfNeed method
@@ -782,6 +852,42 @@ func TestSendHandshakeIfNeedConcurrency(t *testing.T) {
 		require.Equal(t, 1, handshakeCount, "Expected exactly 1 handshake event")
 		require.True(t, disp.isHandshaked(), "Dispatcher should be marked as handshaked")
 	})
+}
+
+func TestSendHandshakeUsesStartTs(t *testing.T) {
+	broker, _, _, outputCh := newEventBrokerForTest()
+	defer broker.close()
+
+	info := newMockDispatcherInfoForTest(t)
+	info.startTs = 100
+	info.epoch = 1
+
+	initialTableInfo := &common.TableInfo{
+		TableName: common.TableName{Schema: "test", Table: "t1", TableID: info.GetTableSpan().GetTableID()},
+		UpdateTS:  100,
+	}
+
+	changefeedStatus := broker.getOrSetChangefeedStatus(info.GetChangefeedID(), info.GetSyncPointInterval())
+	disp := newDispatcherStat(info, 1, 1, initialTableInfo, changefeedStatus)
+	disp.checkpointTs.Store(200)
+
+	broker.sendHandshakeIfNeed(disp)
+
+	select {
+	case msg := <-outputCh:
+		require.Len(t, msg.Message, 1)
+		handshake, ok := msg.Message[0].(*event.HandshakeEvent)
+		require.True(t, ok)
+		require.Equal(t, uint64(100), handshake.ResolvedTs)
+		require.NotNil(t, handshake.TableInfo)
+		require.Equal(t, uint64(100), handshake.TableInfo.GetUpdateTS())
+	case <-time.After(5 * time.Second):
+		require.Fail(t, "expected handshake event")
+	}
+
+	require.Equal(t, uint64(100), disp.sentResolvedTs.Load())
+	require.Equal(t, uint64(100), disp.lastScannedCommitTs.Load())
+	require.Equal(t, uint64(0), disp.lastScannedStartTs.Load())
 }
 
 func TestAddDispatcherFailure(t *testing.T) {

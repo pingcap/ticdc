@@ -23,6 +23,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/integrity"
+	"github.com/pingcap/ticdc/pkg/liveness"
 	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/pingcap/ticdc/pkg/util"
 )
@@ -353,6 +354,8 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 				IndexName:      rule.IndexName,
 				Columns:        rule.Columns,
 				TopicRule:      rule.TopicRule,
+				TargetSchema:   rule.TargetSchema,
+				TargetTable:    rule.TargetTable,
 			})
 		}
 		var columnSelectors []*config.ColumnSelector
@@ -713,6 +716,8 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 				IndexName:     rule.IndexName,
 				Columns:       rule.Columns,
 				TopicRule:     rule.TopicRule,
+				TargetSchema:  rule.TargetSchema,
+				TargetTable:   rule.TargetTable,
 			})
 		}
 		var columnSelectors []*ColumnSelector
@@ -1206,6 +1211,21 @@ type DispatchRule struct {
 	IndexName     string   `json:"index,omitempty"`
 	Columns       []string `json:"columns,omitempty"`
 	TopicRule     string   `json:"topic,omitempty"`
+
+	// TargetSchema sets the routed downstream schema name.
+	// Leave it empty to keep the source schema name.
+	// For example, if the source table is `sales`.`orders`, `target-schema = "sales_bak"`
+	// writes to `sales_bak`.`orders`.
+	// You can also use placeholders. For example, `target-schema = "{schema}_bak"`
+	// the target schema becomes `sales_bak`.
+	TargetSchema string `json:"target-schema,omitempty"`
+	// TargetTable sets the routed downstream table name.
+	// Leave it empty to keep the source table name.
+	// For example, if the source table is `sales`.`orders`, `target-table = "orders_bak"`
+	// writes to `sales`.`orders_bak`.
+	// You can also use placeholders. For example, `target-table = "{schema}_{table}"`
+	// becomes `sales_orders`.
+	TargetTable string `json:"target-table,omitempty"`
 }
 
 // ColumnSelector represents a column selector for a table.
@@ -1383,13 +1403,13 @@ type ProcessorDetail struct {
 
 // ServerStatus holds some common information of a server
 type ServerStatus struct {
-	Version   string       `json:"version"`
-	GitHash   string       `json:"git_hash"`
-	ID        string       `json:"id"`
-	ClusterID string       `json:"cluster_id"`
-	Pid       int          `json:"pid"`
-	IsOwner   bool         `json:"is_owner"`
-	Liveness  api.Liveness `json:"liveness"`
+	Version   string            `json:"version"`
+	GitHash   string            `json:"git_hash"`
+	ID        string            `json:"id"`
+	ClusterID string            `json:"cluster_id"`
+	Pid       int               `json:"pid"`
+	IsOwner   bool              `json:"is_owner"`
+	Liveness  liveness.Liveness `json:"liveness"`
 }
 
 // Capture holds common information of a capture in cdc

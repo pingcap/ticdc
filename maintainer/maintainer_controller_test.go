@@ -29,6 +29,7 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
+	cerrors "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/eventservice"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
@@ -58,7 +59,7 @@ func init() {
 }
 
 func TestSchedule(t *testing.T) {
-	testutil.SetUpTestServices()
+	testutil.SetUpTestServices(t)
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
 	nodeManager.GetAliveNodes()["node2"] = &node.Info{ID: "node2"}
@@ -97,7 +98,7 @@ func TestSchedule(t *testing.T) {
 // In this case, the num of split tables is more than the num of nodes,
 // and we can select appropriate split spans to move
 func TestBalanceGroupsNewNodeAdd_SplitsTableMoreThanNodeNum(t *testing.T) {
-	testutil.SetUpTestServices()
+	testutil.SetUpTestServices(t)
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
 
@@ -228,7 +229,7 @@ func TestBalanceGroupsNewNodeAdd_SplitsTableMoreThanNodeNum(t *testing.T) {
 // In this case, the num of split tables is less than the num of nodes,
 // and we should choose span to split.
 func TestBalanceGroupsNewNodeAdd_SplitsTableLessThanNodeNum(t *testing.T) {
-	testutil.SetUpTestServices()
+	testutil.SetUpTestServices(t)
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
 	nodeManager.GetAliveNodes()["node2"] = &node.Info{ID: "node2"}
@@ -349,7 +350,7 @@ func TestBalanceGroupsNewNodeAdd_SplitsTableLessThanNodeNum(t *testing.T) {
 
 // this test is to test the scenario that the split balance scheduler when a node is removed.
 func TestSplitBalanceGroupsWithNodeRemove(t *testing.T) {
-	testutil.SetUpTestServices()
+	testutil.SetUpTestServices(t)
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
 	nodeManager.GetAliveNodes()["node2"] = &node.Info{ID: "node2"}
@@ -449,7 +450,7 @@ func TestSplitBalanceGroupsWithNodeRemove(t *testing.T) {
 }
 
 func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
-	testutil.SetUpTestServices()
+	testutil.SetUpTestServices(t)
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
 	nodeManager.GetAliveNodes()["node2"] = &node.Info{ID: "node2"}
@@ -1063,7 +1064,7 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 }
 
 func TestBalance(t *testing.T) {
-	testutil.SetUpTestServices()
+	testutil.SetUpTestServices(t)
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
@@ -1156,7 +1157,7 @@ func TestBalance(t *testing.T) {
 }
 
 func TestDefaultSpanIntoSplit(t *testing.T) {
-	testutil.SetUpTestServices()
+	testutil.SetUpTestServices(t)
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
 	nodeManager.GetAliveNodes()["node2"] = &node.Info{ID: "node2"}
@@ -1312,7 +1313,7 @@ func TestDefaultSpanIntoSplit(t *testing.T) {
 }
 
 func TestStoppedWhenMoving(t *testing.T) {
-	testutil.SetUpTestServices()
+	testutil.SetUpTestServices(t)
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
@@ -1363,7 +1364,7 @@ func TestStoppedWhenMoving(t *testing.T) {
 }
 
 func TestFinishBootstrap(t *testing.T) {
-	testutil.SetUpTestServices()
+	testutil.SetUpTestServices(t)
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
@@ -1434,6 +1435,38 @@ func TestFinishBootstrap(t *testing.T) {
 	require.Nil(t, postBootstrapRequest)
 }
 
+func TestFinishBootstrapReturnsErrorWhenCheckpointMissing(t *testing.T) {
+	testutil.SetUpTestServices(t)
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
+
+	tableTriggerEventDispatcherID := common.NewDispatcherID()
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
+		common.DDLSpanSchemaID,
+		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
+			ID:              tableTriggerEventDispatcherID.ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    1,
+		}, "node1", false)
+	refresher := replica.NewRegionCountRefresher(cfID, time.Minute)
+	controller := NewController(cfID, 1, &mockThreadPool{},
+		config.GetDefaultReplicaConfig(), ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false)
+
+	postBootstrapRequest, err := controller.FinishBootstrap(map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{
+		"node1": {
+			ChangefeedID: cfID.ToPB(),
+		},
+	}, false)
+	require.Nil(t, postBootstrapRequest)
+	require.Error(t, err)
+	code, ok := cerrors.RFCCode(err)
+	require.True(t, ok)
+	require.Equal(t, cerrors.ErrChangefeedInitTableTriggerDispatcherFailed.RFCCode(), code)
+	require.Contains(t, err.Error(), "all bootstrap responses reported empty checkpointTs")
+	require.False(t, controller.bootstrapped)
+}
+
 // TestFinishBootstrapSkipsStaleCreateOperatorForDroppedTable covers stale bootstrap Create requests
 // for dropped tables across add/move/split operator types. Each subtest boots from an empty schema
 // snapshot and verifies bootstrap skips the stale create phase instead of recreating ghost tasks or
@@ -1467,7 +1500,7 @@ func TestFinishBootstrapSkipsStaleCreateOperatorForDroppedTable(t *testing.T) {
 		// Each subtest restores bootstrap state from a dropped-table snapshot and checks that
 		// no maintainer task/operator is recreated for the stale create request.
 		t.Run(tc.name, func(t *testing.T) {
-			testutil.SetUpTestServices()
+			testutil.SetUpTestServices(t)
 			nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 			nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
 
@@ -1538,7 +1571,7 @@ func TestFinishBootstrapSkipsStaleCreateOperatorForDroppedTable(t *testing.T) {
 }
 
 func TestSplitTableWhenBootstrapFinished(t *testing.T) {
-	testutil.SetUpTestServices()
+	testutil.SetUpTestServices(t)
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
 	nodeManager.GetAliveNodes()["node2"] = &node.Info{ID: "node2"}
@@ -1712,7 +1745,7 @@ func (m *mockThreadPool) SubmitFunc(_ threadpool.FuncTask, _ time.Time) *threadp
 }
 
 func TestLargeTableInitialization(t *testing.T) {
-	testutil.SetUpTestServices()
+	testutil.SetUpTestServices(t)
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
 	nodeManager.GetAliveNodes()["node2"] = &node.Info{ID: "node2"}

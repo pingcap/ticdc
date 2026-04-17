@@ -101,7 +101,7 @@ func TestBlockAndWakePath(t *testing.T) {
 
 func TestBatchEvents(t *testing.T) {
 	handler := mockHandler{}
-	eq := newEventQueue(&handler, newTestBatchConfigRegistryWithDefault(NewBatchConfig(3, 0)))
+	eq := newEventQueue(&handler, newTestBatchConfigRegistryWithDefault(newBatchConfig(3, 0)))
 	b := newDefaultBatcher[*mockEvent]()
 
 	path := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", "test", nil)
@@ -129,7 +129,7 @@ func TestBatchEvents(t *testing.T) {
 
 func TestBatchableAndNonBatchableEvents(t *testing.T) {
 	handler := mockHandler{}
-	eq := newEventQueue(&handler, newTestBatchConfigRegistryWithDefault(NewBatchConfig(3, 0)))
+	eq := newEventQueue(&handler, newTestBatchConfigRegistryWithDefault(newBatchConfig(3, 0)))
 	b := newDefaultBatcher[*mockEvent]()
 
 	path := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", "test", nil)
@@ -243,7 +243,7 @@ func TestRemovePath(t *testing.T) {
 
 func TestAreaBatchCount(t *testing.T) {
 	handler := mockHandler{}
-	registry := newAreaBatchConfigRegistry[int](NewBatchConfig(10, 0))
+	registry := newAreaBatchConfigRegistry[int](newBatchConfig(10, 0))
 	eq := newEventQueue(&handler, registry)
 
 	path1 := newPathInfo[int, string, *mockEvent, any, *mockHandler](1, "test", "path1", nil)
@@ -251,7 +251,7 @@ func TestAreaBatchCount(t *testing.T) {
 	eq.initPath(path1)
 	eq.initPath(path2)
 
-	registry.onAddPath(1, batchConfig{softCount: 1})
+	registry.onAddPath(1, newBatchConfig(1, 0))
 	registry.onAddPath(2, batchConfig{})
 
 	appendEvent := func(path *pathInfo[int, string, *mockEvent, any, *mockHandler], value int) {

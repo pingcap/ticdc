@@ -1,4 +1,4 @@
-// Copyright 2025 PingCAP, Inc.
+// Copyright 2026 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -22,7 +22,7 @@ import (
 )
 
 func TestAreaConfigNoOverrideOnZeroConfig(t *testing.T) {
-	defaultConfig := NewBatchConfig(4, 0)
+	defaultConfig := newBatchConfig(4, 0)
 	registry := newAreaBatchConfigRegistry[int](defaultConfig)
 
 	registry.onAddPath(1, batchConfig{})
@@ -30,39 +30,32 @@ func TestAreaConfigNoOverrideOnZeroConfig(t *testing.T) {
 }
 
 func TestAreaConfigApplyOnFirstAdd(t *testing.T) {
-	defaultConfig := NewBatchConfig(4, 0)
+	defaultConfig := newBatchConfig(4, 0)
 	registry := newAreaBatchConfigRegistry[int](defaultConfig)
 
-	registry.onAddPath(1, batchConfig{softCount: 2})
-	require.Equal(t, NewBatchConfig(2, 0), registry.getBatchConfig(1))
+	registry.onAddPath(1, newBatchConfig(2, 0))
+	require.Equal(t, newBatchConfig(2, 0), registry.getBatchConfig(1))
 }
 
 func TestAreaConfigFirstAddWins(t *testing.T) {
-	defaultConfig := NewBatchConfig(4, 0)
+	defaultConfig := newBatchConfig(4, 0)
 	registry := newAreaBatchConfigRegistry[int](defaultConfig)
 
-	registry.onAddPath(1, batchConfig{softCount: 2})
-	registry.onAddPath(1, batchConfig{softCount: 3})
-	require.Equal(t, NewBatchConfig(2, 0), registry.getBatchConfig(1))
+	registry.onAddPath(1, newBatchConfig(2, 0))
+	registry.onAddPath(1, newBatchConfig(3, 0))
+	require.Equal(t, newBatchConfig(2, 0), registry.getBatchConfig(1))
 }
 
 func TestAreaConfigReapplyAfterCleanup(t *testing.T) {
-	defaultConfig := NewBatchConfig(4, 0)
+	defaultConfig := newBatchConfig(4, 0)
 	registry := newAreaBatchConfigRegistry[int](defaultConfig)
 
-	registry.onAddPath(1, batchConfig{softCount: 2})
-	require.Equal(t, NewBatchConfig(2, 0), registry.getBatchConfig(1))
+	registry.onAddPath(1, newBatchConfig(2, 0))
+	require.Equal(t, newBatchConfig(2, 0), registry.getBatchConfig(1))
 
 	registry.onRemovePath(1)
 	require.Equal(t, defaultConfig, registry.getBatchConfig(1))
 
-	registry.onAddPath(1, batchConfig{softCount: 3})
-	require.Equal(t, NewBatchConfig(3, 0), registry.getBatchConfig(1))
-}
-
-func TestAreaSettingsBatchConfigNormalized(t *testing.T) {
-	settings := NewAreaSettingsWithMaxPendingSizeAndBatchConfig(
-		64*1024*1024, 0, "test", 0, -1,
-	)
-	require.Equal(t, NewBatchConfig(0, -1), settings.batchConfig)
+	registry.onAddPath(1, newBatchConfig(3, 0))
+	require.Equal(t, newBatchConfig(3, 0), registry.getBatchConfig(1))
 }

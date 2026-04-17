@@ -1,4 +1,4 @@
-// Copyright 2025 PingCAP, Inc.
+// Copyright 2026 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -46,6 +46,7 @@ func (s *areaBatchConfigRegistry[A]) getBatchConfig(area A) batchConfig {
 }
 
 // onAddPath is not thread safe.
+// it's called by the AddPath, which is protected by the caller's lock.
 func (s *areaBatchConfigRegistry[A]) onAddPath(area A, cfg batchConfig) {
 	oldCount := s.areaRefCount[area]
 	s.areaRefCount[area] = oldCount + 1
@@ -60,8 +61,7 @@ func (s *areaBatchConfigRegistry[A]) onAddPath(area A, cfg batchConfig) {
 		return
 	}
 
-	cfg = NewBatchConfig(cfg.softCount, cfg.hardBytes)
-
+	cfg = newBatchConfig(cfg.softCount, cfg.hardBytes)
 	if cfg == s.defaultConfig {
 		return
 	}
@@ -70,6 +70,7 @@ func (s *areaBatchConfigRegistry[A]) onAddPath(area A, cfg batchConfig) {
 }
 
 // onRemovePath is not thread safe.
+// it's called by the RemovePath, which is protected by the caller's lock.
 func (s *areaBatchConfigRegistry[A]) onRemovePath(area A) {
 	oldCount := s.areaRefCount[area]
 	if oldCount <= 1 {

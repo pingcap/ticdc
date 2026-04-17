@@ -194,65 +194,32 @@ func TestReplicaConfig_EnableSplittableCheck_DefaultValue(t *testing.T) {
 	require.False(t, util.GetOrZero(config.Scheduler.EnableSplittableCheck))
 }
 
+// TestReplicaConfigValidateBatchConfig verifies validation accepts zero as an
+// explicit override and rejects values outside the supported range.
 func TestReplicaConfigValidateBatchConfig(t *testing.T) {
-	cases := []struct {
-		name       string
-		batchCount *int
-		batchBytes *int
-		redoCount  *int
-		wantErr    bool
-	}{
-		{
-			name:       "rejects non-positive batch count",
-			batchCount: util.AddressOf(0),
-			wantErr:    true,
-		},
-		{
-			name:       "rejects non-positive batch bytes",
-			batchBytes: util.AddressOf(0),
-			wantErr:    true,
-		},
-		{
-			name:       "accepts positive batch count and bytes",
-			batchCount: util.AddressOf(1),
-			batchBytes: util.AddressOf(1),
-			wantErr:    false,
-		},
-		{
-			name:      "rejects non-positive redo batch count",
-			redoCount: util.AddressOf(0),
-			wantErr:   true,
-		},
-		{
-			name:      "accepts positive redo batch count",
-			redoCount: util.AddressOf(1),
-			wantErr:   false,
-		},
+	sinkURI, err := url.Parse("mysql://localhost:3306/test")
+	require.NoError(t, err)
+
+	assertBatchConfig := func(batchCount *int, batchBytes *int, wantErr string) {
+		cfg := GetDefaultReplicaConfig()
+		cfg.EventCollectorBatchCount = batchCount
+		cfg.EventCollectorBatchBytes = batchBytes
+
+		err := cfg.ValidateAndAdjust(sinkURI)
+		if wantErr != "" {
+			require.ErrorContains(t, err, wantErr)
+			return
+		}
+		require.NoError(t, err)
 	}
 
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			cfg := GetDefaultReplicaConfig()
-			cfg.EventCollectorBatchCount = tc.batchCount
-			cfg.EventCollectorBatchBytes = tc.batchBytes
-			cfg.Consistent.EventCollectorBatchCount = tc.redoCount
-			if tc.redoCount != nil {
-				cfg.EnableRedoIOCheck = util.AddressOf(false)
-				cfg.Consistent.Level = util.AddressOf("eventual")
-				cfg.Consistent.Storage = util.AddressOf("s3:///redo-test-no-bucket")
-			}
-
-			sinkURI, err := url.Parse("mysql://localhost:3306/test")
-			require.NoError(t, err)
-
-			err = cfg.ValidateAndAdjust(sinkURI)
-			if tc.wantErr {
-				require.Error(t, err)
-				return
-			}
-			require.NoError(t, err)
-		})
-	}
+	assertBatchConfig(util.AddressOf(0), nil, "")
+	assertBatchConfig(nil, util.AddressOf(0), "")
+	assertBatchConfig(util.AddressOf(1), util.AddressOf(1), "")
+	assertBatchConfig(util.AddressOf(MaxEventCollectorBatchCount), nil, "")
+	assertBatchConfig(util.AddressOf(MaxEventCollectorBatchCount+1), nil, "event-collector-batch-count")
+	assertBatchConfig(util.AddressOf(-1), nil, "event-collector-batch-count")
+	assertBatchConfig(nil, util.AddressOf(-1), "event-collector-batch-bytes")
 }
 
 func TestReplicaConfig_EnableRedoIOCheck_DefaultValue(t *testing.T) {
