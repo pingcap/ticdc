@@ -942,6 +942,9 @@ func (s *SinkConfig) ValidateProtocol(scheme string) error {
 	if err != nil {
 		return err
 	}
+	if protocol == ProtocolIceberg && !IsStorageScheme(scheme) {
+		return cerror.ErrSinkURIInvalid.GenWithStackByArgs(fmt.Sprintf("protocol %s is incompatible with %s scheme", protocol, scheme))
+	}
 	outputOldValue := false
 	switch protocol {
 	case ProtocolOpen:
