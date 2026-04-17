@@ -26,13 +26,13 @@ import (
 
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/fsutil"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/codec"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
-	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/uuid"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	"github.com/prometheus/client_golang/prometheus"
@@ -52,9 +52,54 @@ type fileWriter interface {
 	SetTableSchemaStore(*commonEvent.TableSchemaStore)
 }
 
+type fileWriterConfig interface {
+	CaptureID() config.CaptureID
+	ChangeFeedID() common.ChangeFeedID
+	Dir() string
+	MaxLogSizeInBytes() int64
+	FlushIntervalInMs() int64
+	FlushWorkerNum() int
+	UseExternalStorage() bool
+}
+
+type localFileConfig struct {
+	dir               string
+	maxLogSizeInBytes int64
+	flushIntervalInMs int64
+	flushWorkerNum    int
+}
+
+func (cfg *localFileConfig) CaptureID() config.CaptureID {
+	return ""
+}
+
+func (cfg *localFileConfig) ChangeFeedID() common.ChangeFeedID {
+	return common.ChangeFeedID{}
+}
+
+func (cfg *localFileConfig) Dir() string {
+	return cfg.dir
+}
+
+func (cfg *localFileConfig) MaxLogSizeInBytes() int64 {
+	return cfg.maxLogSizeInBytes
+}
+
+func (cfg *localFileConfig) FlushIntervalInMs() int64 {
+	return cfg.flushIntervalInMs
+}
+
+func (cfg *localFileConfig) FlushWorkerNum() int {
+	return cfg.flushWorkerNum
+}
+
+func (cfg *localFileConfig) UseExternalStorage() bool {
+	return false
+}
+
 // fileWriter is a redo log event fileWriter which writes redo log events to a file.
 type Writer struct {
-	cfg     *writer.LogWriterConfig
+	cfg     fileWriterConfig
 	logType string
 	op      *writer.LogWriterOptions
 	inputCh chan writer.RedoEvent
@@ -82,24 +127,12 @@ type Writer struct {
 	tableSchemaStore       *commonEvent.TableSchemaStore
 }
 
-// NewFileWriter return a file rotated writer, TODO: extract to a common rotate Writer
-func NewFileWriter(
-	ctx context.Context, cfg *writer.LogWriterConfig, logType string, opts ...writer.Option,
+func newWriter(
+	cfg fileWriterConfig,
+	logType string,
+	extStorage storage.ExternalStorage,
+	opts ...writer.Option,
 ) (*Writer, error) {
-	if cfg == nil {
-		err := errors.New("FileWriterConfig can not be nil")
-		return nil, errors.WrapError(errors.ErrRedoConfigInvalid, err)
-	}
-
-	var extStorage storage.ExternalStorage
-	if cfg.UseExternalStorage {
-		var err error
-		extStorage, err = redo.InitExternalStorage(ctx, *cfg.URI)
-		if err != nil {
-			return nil, err
-		}
-	}
-
 	op := &writer.LogWriterOptions{}
 	for _, opt := range opts {
 		opt(op)
@@ -109,16 +142,16 @@ func NewFileWriter(
 		cfg:       cfg,
 		logType:   logType,
 		op:        op,
-		inputCh:   make(chan writer.RedoEvent, redo.DefaultEncodingInputChanSize*util.GetOrZero(cfg.FlushWorkerNum)),
+		inputCh:   make(chan writer.RedoEvent, redo.DefaultEncodingInputChanSize*cfg.FlushWorkerNum()),
 		uint64buf: make([]byte, 8),
 		storage:   extStorage,
 
 		metricFsyncDuration: metrics.RedoFsyncDurationHistogram.
-			WithLabelValues(cfg.ChangeFeedID.Keyspace(), cfg.ChangeFeedID.Name(), logType),
+			WithLabelValues(cfg.ChangeFeedID().Keyspace(), cfg.ChangeFeedID().Name(), logType),
 		metricFlushAllDuration: metrics.RedoFlushAllDurationHistogram.
-			WithLabelValues(cfg.ChangeFeedID.Keyspace(), cfg.ChangeFeedID.Name(), logType),
+			WithLabelValues(cfg.ChangeFeedID().Keyspace(), cfg.ChangeFeedID().Name(), logType),
 		metricWriteBytes: metrics.RedoWriteBytesGauge.
-			WithLabelValues(cfg.ChangeFeedID.Keyspace(), cfg.ChangeFeedID.Name(), logType),
+			WithLabelValues(cfg.ChangeFeedID().Keyspace(), cfg.ChangeFeedID().Name(), logType),
 	}
 	if w.op.GetUUIDGenerator != nil {
 		w.uuidGenerator = w.op.GetUUIDGenerator()
@@ -126,25 +159,52 @@ func NewFileWriter(
 		w.uuidGenerator = uuid.NewGenerator()
 	}
 
-	if len(cfg.Dir) == 0 {
+	if len(cfg.Dir()) == 0 {
 		return nil, errors.WrapError(errors.ErrRedoFileOp, errors.New("invalid redo dir path"))
 	}
 
-	err := os.MkdirAll(cfg.Dir, redo.DefaultDirMode)
+	err := os.MkdirAll(cfg.Dir(), redo.DefaultDirMode)
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrRedoFileOp,
-			errors.Annotatef(err, "can't make dir: %s for redo writing", cfg.Dir))
+			errors.Annotatef(err, "can't make dir: %s for redo writing", cfg.Dir()))
 	}
 
-	// if we use S3 as the remote storage, a file allocator can be leveraged to
-	// pre-allocate files for us.
-	// TODO: test whether this improvement can also be applied to NFS.
-	if w.cfg.UseExternalStorage {
-		w.allocator = fsutil.NewFileAllocator(cfg.Dir, logType, cfg.MaxLogSizeInBytes)
+	if w.cfg.UseExternalStorage() {
+		w.allocator = fsutil.NewFileAllocator(cfg.Dir(), logType, cfg.MaxLogSizeInBytes())
 	}
 
 	w.running.Store(true)
 	return w, nil
+}
+
+// NewFileWriter returns a file rotated writer for the normal redo writer path.
+func NewFileWriter(
+	ctx context.Context, cfg *writer.Config, logType string, opts ...writer.Option,
+) (w *Writer, err error) {
+	var extStorage storage.ExternalStorage
+	if cfg.UseExternalStorage() {
+		extStorage, err = redo.InitExternalStorage(ctx, *cfg.URI())
+		if err != nil {
+			return nil, err
+		}
+	}
+	return newWriter(cfg, logType, extStorage, opts...)
+}
+
+// NewLocalFileWriter is used by reader-side local sorting. It keeps the
+// temporary sorted-file path local and avoids the external-storage write path.
+func NewLocalFileWriter(
+	dir string,
+	maxLogSizeInBytes int64,
+	logType string,
+	opts ...writer.Option,
+) (*Writer, error) {
+	return newWriter(&localFileConfig{
+		dir:               dir,
+		maxLogSizeInBytes: maxLogSizeInBytes,
+		flushIntervalInMs: redo.DefaultFlushIntervalInMs,
+		flushWorkerNum:    redo.DefaultFlushWorkerNum,
+	}, logType, nil, opts...)
 }
 
 func (w *Writer) SetTableSchemaStore(tableSchemaStore *commonEvent.TableSchemaStore) {
@@ -166,8 +226,8 @@ func (w *Writer) Write(rawData []byte) (int, error) {
 	defer w.Unlock()
 
 	writeLen := int64(len(rawData))
-	if writeLen > w.cfg.MaxLogSizeInBytes {
-		return 0, errors.ErrRedoFileSizeExceed.GenWithStackByArgs(writeLen, w.cfg.MaxLogSizeInBytes)
+	if writeLen > w.cfg.MaxLogSizeInBytes() {
+		return 0, errors.ErrRedoFileSizeExceed.GenWithStackByArgs(writeLen, w.cfg.MaxLogSizeInBytes())
 	}
 
 	if w.file == nil {
@@ -176,7 +236,7 @@ func (w *Writer) Write(rawData []byte) (int, error) {
 		}
 	}
 
-	if w.size+writeLen > w.cfg.MaxLogSizeInBytes {
+	if w.size+writeLen > w.cfg.MaxLogSizeInBytes() {
 		if err := w.rotate(); err != nil {
 			return 0, err
 		}
@@ -224,6 +284,12 @@ func (w *Writer) Close() error {
 	defer w.Unlock()
 	// always set to false when closed, since if having err may not get fixed just by retry
 	defer w.running.Store(false)
+	defer func() {
+		if w.storage != nil {
+			w.storage.Close()
+			w.storage = nil
+		}
+	}()
 
 	if w.allocator != nil {
 		w.allocator.Close()
@@ -235,11 +301,11 @@ func (w *Writer) Close() error {
 	}
 
 	metrics.RedoFlushAllDurationHistogram.
-		DeleteLabelValues(w.cfg.ChangeFeedID.Keyspace(), w.cfg.ChangeFeedID.Name(), w.logType)
+		DeleteLabelValues(w.cfg.ChangeFeedID().Keyspace(), w.cfg.ChangeFeedID().Name(), w.logType)
 	metrics.RedoFsyncDurationHistogram.
-		DeleteLabelValues(w.cfg.ChangeFeedID.Keyspace(), w.cfg.ChangeFeedID.Name(), w.logType)
+		DeleteLabelValues(w.cfg.ChangeFeedID().Keyspace(), w.cfg.ChangeFeedID().Name(), w.logType)
 	metrics.RedoWriteBytesGauge.
-		DeleteLabelValues(w.cfg.ChangeFeedID.Keyspace(), w.cfg.ChangeFeedID.Name(), w.logType)
+		DeleteLabelValues(w.cfg.ChangeFeedID().Keyspace(), w.cfg.ChangeFeedID().Name(), w.logType)
 
 	ctx, cancel := context.WithTimeout(context.Background(), redo.CloseTimeout)
 	defer cancel()
@@ -286,7 +352,7 @@ func (w *Writer) SyncWrite(event writer.RedoEvent) error {
 }
 
 func (w *Writer) encode(ctx context.Context) error {
-	d := time.Duration(util.GetOrZero(w.cfg.FlushIntervalInMs)) * time.Millisecond
+	d := time.Duration(w.cfg.FlushIntervalInMs()) * time.Millisecond
 	ticker := time.NewTicker(d)
 	defer ticker.Stop()
 	num := 0
@@ -303,31 +369,32 @@ func (w *Writer) encode(ctx context.Context) error {
 		cacheEventPostFlush = cacheEventPostFlush[:0]
 		return nil
 	}
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-ticker.C:
-		err := flush()
-		if err != nil {
-			return errors.Trace(err)
-		}
-	case e := <-w.inputCh:
-		err := w.write(e)
-		if err != nil {
-			return err
-		}
-		num++
-		if num > redo.DefaultFlushBatchSize {
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
 			err := flush()
 			if err != nil {
 				return errors.Trace(err)
 			}
-			e.PostFlush()
-		} else {
-			cacheEventPostFlush = append(cacheEventPostFlush, e.PostFlush)
+		case e := <-w.inputCh:
+			err := w.write(e)
+			if err != nil {
+				return err
+			}
+			num++
+			if num >= redo.DefaultFlushBatchSize {
+				err := flush()
+				if err != nil {
+					return errors.Trace(err)
+				}
+				e.PostFlush()
+			} else {
+				cacheEventPostFlush = append(cacheEventPostFlush, e.PostFlush)
+			}
 		}
 	}
-	return nil
 }
 
 func (w *Writer) close(ctx context.Context) error {
@@ -339,7 +406,7 @@ func (w *Writer) close(ctx context.Context) error {
 		return err
 	}
 
-	if w.cfg.UseExternalStorage {
+	if w.cfg.UseExternalStorage() {
 		off, err := w.file.Seek(0, io.SeekCurrent)
 		if err != nil {
 			return err
@@ -364,7 +431,7 @@ func (w *Writer) close(ctx context.Context) error {
 		return errors.WrapError(errors.ErrRedoFileOp, err)
 	}
 
-	dirFile, err := os.Open(w.cfg.Dir)
+	dirFile, err := os.Open(w.cfg.Dir())
 	if err != nil {
 		return errors.WrapError(errors.ErrRedoFileOp, err)
 	}
@@ -377,7 +444,7 @@ func (w *Writer) close(ctx context.Context) error {
 
 	// We only write content to S3 before closing the local file.
 	// By this way, we no longer need renaming object in S3.
-	if w.cfg.UseExternalStorage {
+	if w.cfg.UseExternalStorage() {
 		err = w.writeToS3(ctx, w.ongoingFilePath)
 		if err != nil {
 			w.file.Close()
@@ -396,20 +463,20 @@ func (w *Writer) getLogFileName() string {
 		return w.op.GetLogFileName()
 	}
 	uid := w.uuidGenerator.NewString()
-	if common.DefaultKeyspaceName == w.cfg.ChangeFeedID.Keyspace() {
+	if common.DefaultKeyspaceName == w.cfg.ChangeFeedID().Keyspace() {
 		return fmt.Sprintf(redo.RedoLogFileFormatV1,
-			w.cfg.CaptureID, w.cfg.ChangeFeedID.Name(), w.logType,
+			w.cfg.CaptureID(), w.cfg.ChangeFeedID().Name(), w.logType,
 			w.commitTS.Load(), uid, redo.LogEXT)
 	}
 	return fmt.Sprintf(redo.RedoLogFileFormatV2,
-		w.cfg.CaptureID, w.cfg.ChangeFeedID.Keyspace(), w.cfg.ChangeFeedID.Name(),
+		w.cfg.CaptureID(), w.cfg.ChangeFeedID().Keyspace(), w.cfg.ChangeFeedID().Name(),
 		w.logType, w.commitTS.Load(), uid, redo.LogEXT)
 }
 
 // filePath always creates a new, unique file path, note this function is not
 // thread-safe, writer needs to ensure lock is acquired when calling it.
 func (w *Writer) filePath() string {
-	fp := filepath.Join(w.cfg.Dir, w.getLogFileName())
+	fp := filepath.Join(w.cfg.Dir(), w.getLogFileName())
 	w.ongoingFilePath = fp
 	return fp
 }
@@ -419,10 +486,10 @@ func openTruncFile(name string) (*os.File, error) {
 }
 
 func (w *Writer) openNew() error {
-	err := os.MkdirAll(w.cfg.Dir, redo.DefaultDirMode)
+	err := os.MkdirAll(w.cfg.Dir(), redo.DefaultDirMode)
 	if err != nil {
 		return errors.WrapError(errors.ErrRedoFileOp,
-			errors.Annotatef(err, "can't make dir: %s for new redo logfile", w.cfg.Dir))
+			errors.Annotatef(err, "can't make dir: %s for new redo logfile", w.cfg.Dir()))
 	}
 
 	// reset ts used in file name when new file
@@ -485,7 +552,7 @@ func (w *Writer) flushAndRotateFile() error {
 		return err
 	}
 
-	if !w.cfg.UseExternalStorage {
+	if !w.cfg.UseExternalStorage() {
 		return nil
 	}
 

@@ -34,7 +34,7 @@ import (
 )
 
 func TestOneBlockEvent(t *testing.T) {
-	testutil.SetUpTestServices()
+	testutil.SetUpTestServices(t)
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
@@ -166,7 +166,7 @@ func TestOneBlockEvent(t *testing.T) {
 }
 
 func TestNormalBlock(t *testing.T) {
-	testutil.SetUpTestServices()
+	testutil.SetUpTestServices(t)
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
@@ -335,7 +335,7 @@ func TestNormalBlock(t *testing.T) {
 }
 
 func TestNormalBlockWithTableTrigger(t *testing.T) {
-	testutil.SetUpTestServices()
+	testutil.SetUpTestServices(t)
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
@@ -476,7 +476,7 @@ func TestNormalBlockWithTableTrigger(t *testing.T) {
 }
 
 func TestSchemaBlock(t *testing.T) {
-	testutil.SetUpTestServices()
+	testutil.SetUpTestServices(t)
 	nm := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	nmap := nm.GetAliveNodes()
 	for key := range nmap {
@@ -652,7 +652,7 @@ func TestSchemaBlock(t *testing.T) {
 }
 
 func TestSyncPointBlock(t *testing.T) {
-	testutil.SetUpTestServices()
+	testutil.SetUpTestServices(t)
 	nm := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	nmap := nm.GetAliveNodes()
 	for key := range nmap {
@@ -827,7 +827,7 @@ func TestSyncPointBlock(t *testing.T) {
 }
 
 func TestNonBlocked(t *testing.T) {
-	testutil.SetUpTestServices()
+	testutil.SetUpTestServices(t)
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
@@ -881,7 +881,7 @@ func TestNonBlocked(t *testing.T) {
 }
 
 func TestUpdateCheckpointTs(t *testing.T) {
-	testutil.SetUpTestServices()
+	testutil.SetUpTestServices(t)
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
@@ -929,14 +929,14 @@ func TestUpdateCheckpointTs(t *testing.T) {
 	require.Equal(t, resp.DispatcherStatuses[1].Action.Action, heartbeatpb.Action_Write)
 	require.False(t, resp.DispatcherStatuses[1].Action.IsSyncPoint)
 	// the checkpoint ts is updated
-	scheduleMsg := ddlSpan.NewAddDispatcherMessage("node1")
+	scheduleMsg := ddlSpan.NewAddDispatcherMessage("node1", heartbeatpb.OperatorType_O_Add)
 	require.Equal(t, uint64(9), scheduleMsg.Message[0].(*heartbeatpb.ScheduleDispatcherRequest).Config.StartTs, false)
 	require.NotEqual(t, uint64(0), scheduleMsg.Message[0].(*heartbeatpb.ScheduleDispatcherRequest).Config.StartTs, false)
 }
 
 // TODO:Add more cases here
 func TestHandleBlockBootstrapResponse(t *testing.T) {
-	testutil.SetUpTestServices()
+	testutil.SetUpTestServices(t)
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
@@ -1097,7 +1097,7 @@ func TestHandleBlockBootstrapResponse(t *testing.T) {
 }
 
 func TestSyncPointBlockPerf(t *testing.T) {
-	testutil.SetUpTestServices()
+	testutil.SetUpTestServices(t)
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
@@ -1176,7 +1176,7 @@ func TestSyncPointBlockPerf(t *testing.T) {
 // 3. The event selection logic works properly with the reallocated dispatchers
 // 4. The barrier maintains consistency when dispatcher IDs change but the same table spans are covered
 func TestBarrierEventWithDispatcherReallocation(t *testing.T) {
-	testutil.SetUpTestServices()
+	testutil.SetUpTestServices(t)
 
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
@@ -1382,7 +1382,7 @@ func TestBarrierEventWithDispatcherReallocation(t *testing.T) {
 // 2. When dispatcher A enters scheduling state and table trigger event dispatcher reports DDL, DDL should not execute
 // 3. When dispatcher A finishes scheduling and reports DDL again, DDL should execute
 func TestBarrierEventWithDispatcherScheduling(t *testing.T) {
-	testutil.SetUpTestServices()
+	testutil.SetUpTestServices(t)
 
 	// Setup table trigger event dispatcher (DDL dispatcher)
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
@@ -1514,7 +1514,7 @@ func TestBarrierEventWithDispatcherScheduling(t *testing.T) {
 }
 
 func TestDeferAllDBBlockEventFromDDLDispatcherWhilePendingSchedule(t *testing.T) {
-	testutil.SetUpTestServices()
+	testutil.SetUpTestServices(t)
 	nm := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 	nmap := nm.GetAliveNodes()
 	for key := range nmap {

@@ -18,11 +18,11 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/redo/writer/factory"
@@ -36,17 +36,19 @@ import (
 // Sink manages redo log writer, buffers un-persistent redo logs, calculates
 // redo log resolved ts. It implements Sink interface.
 type Sink struct {
-	ctx       context.Context
-	cfg       *writer.LogWriterConfig
-	ddlWriter writer.RedoLogWriter
-	dmlWriter writer.RedoLogWriter
+	ctx          context.Context
+	changefeedID common.ChangeFeedID
+	ddlWriter    writer.RedoDDLWriter
+	dmlWriter    writer.RedoDMLWriter
 
-	logBuffer *chann.UnlimitedChannel[writer.RedoEvent, any]
+	logBuffer         *chann.UnlimitedChannel[*commonEvent.RedoRowEvent, any]
+	maxLogSizeInBytes int
 
 	// isNormal indicate whether the sink is in the normal state.
-	isNormal   *atomic.Bool
-	isClosed   *atomic.Bool
-	statistics *metrics.Statistics
+	isNormal *atomic.Bool
+	isClosed *atomic.Bool
+
+	metricCollector *metricCollector
 }
 
 func Verify(ctx context.Context, changefeedID common.ChangeFeedID, cfg *config.ConsistentConfig) error {
@@ -59,42 +61,60 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, cfg *config.C
 // New creates a new redo sink.
 func New(ctx context.Context, changefeedID common.ChangeFeedID,
 	cfg *config.ConsistentConfig,
-) *Sink {
+) (*Sink, error) {
+	var err error
+	config, err := writer.NewConfig(changefeedID, cfg)
+	if err != nil {
+		return nil, err
+	}
 	s := &Sink{
-		ctx: ctx,
-		cfg: &writer.LogWriterConfig{
-			ConsistentConfig:  *cfg,
-			CaptureID:         config.GetGlobalServerConfig().AdvertiseAddr,
-			ChangeFeedID:      changefeedID,
-			MaxLogSizeInBytes: util.GetOrZero(cfg.MaxLogSize) * redo.Megabyte,
-		},
-		logBuffer:  chann.NewUnlimitedChannelDefault[writer.RedoEvent](),
-		isNormal:   atomic.NewBool(true),
-		isClosed:   atomic.NewBool(false),
-		statistics: metrics.NewStatistics(changefeedID, "redo"),
+		ctx:               ctx,
+		changefeedID:      changefeedID,
+		logBuffer:         chann.NewUnlimitedChannelDefault[*commonEvent.RedoRowEvent](),
+		maxLogSizeInBytes: int(config.MaxLogSizeInBytes()),
+		isNormal:          atomic.NewBool(true),
+		isClosed:          atomic.NewBool(false),
 	}
-	start := time.Now()
-	ddlWriter, err := factory.NewRedoLogWriter(s.ctx, s.cfg, redo.RedoDDLLogFileType)
+
+	var (
+		start     = time.Now()
+		ddlWriter writer.RedoDDLWriter
+		dmlWriter writer.RedoDMLWriter
+	)
+	defer func() {
+		if err == nil {
+			return
+		}
+		if ddlWriter != nil {
+			ddlWriter.Close()
+		}
+		if dmlWriter != nil {
+			dmlWriter.Close()
+		}
+	}()
+
+	ddlWriter, err = factory.NewRedoDDLWriter(ctx, config)
 	if err != nil {
 		log.Error("redo: failed to create redo log writer",
-			zap.String("keyspace", s.cfg.ChangeFeedID.Keyspace()),
-			zap.String("changefeed", s.cfg.ChangeFeedID.Name()),
+			zap.String("keyspace", changefeedID.Keyspace()),
+			zap.String("changefeed", changefeedID.Name()),
 			zap.Duration("duration", time.Since(start)),
 			zap.Error(err))
-		return nil
+		return nil, err
 	}
-	dmlWriter, err := factory.NewRedoLogWriter(s.ctx, s.cfg, redo.RedoRowLogFileType)
+	dmlWriter, err = factory.NewRedoDMLWriter(ctx, config)
 	if err != nil {
 		log.Error("redo: failed to create redo log writer",
-			zap.String("keyspace", s.cfg.ChangeFeedID.Keyspace()),
-			zap.String("changefeed", s.cfg.ChangeFeedID.Name()),
+			zap.String("keyspace", changefeedID.Keyspace()),
+			zap.String("changefeed", changefeedID.Name()),
 			zap.Duration("duration", time.Since(start)),
 			zap.Error(err))
-		return nil
+		return nil, err
 	}
 	s.ddlWriter = ddlWriter
 	s.dmlWriter = dmlWriter
-	return s
+	s.metricCollector = newMetricCollector(changefeedID)
+	return s, nil
 }
 
 func (s *Sink) Run(ctx context.Context) error {
@@ -111,54 +131,51 @@ func (s *Sink) Run(ctx context.Context) error {
 	return err
 }
 
+func (s *Sink) FlushDMLBeforeBlock(_ commonEvent.BlockEvent) error {
+	return nil
+}
+
 func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	switch e := event.(type) {
 	case *commonEvent.DDLEvent:
-		err := s.statistics.RecordDDLExecution(func() (string, error) {
-			ddlType := e.GetDDLType().String()
-			return ddlType, s.ddlWriter.WriteEvents(s.ctx, e)
-		})
+		start := time.Now()
+		err := s.ddlWriter.WriteDDLEvent(s.ctx, e)
 		if err != nil {
 			s.isNormal.Store(false)
-			return errors.Trace(err)
+			return err
 		}
+		if s.metricCollector != nil {
+			s.metricCollector.observeDDLWrite(time.Since(start))
+		}
+		log.Info("redo sink send DDL event",
+			zap.String("keyspace", s.changefeedID.Keyspace()), zap.String("changefeed", s.changefeedID.Name()),
+			zap.Any("event", e.GetDDLQuery()), zap.Any("startTs", event.GetStartTs()), zap.Any("commitTs", event.GetCommitTs()),
+			zap.String("schema", e.GetSchemaName()), zap.String("table", e.GetTableName()), zap.Int64("tableID", e.GetTableID()))
 	}
 	return nil
 }
 
 func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
-	_ = s.statistics.RecordBatchExecution(func() (int, int64, error) {
-		toRowCallback := func(postTxnFlushed []func(), totalCount uint64) func() {
-			var calledCount atomic.Uint64
-			// The callback of the last row will trigger the callback of the txn.
-			return func() {
-				if calledCount.Inc() == totalCount {
-					for _, callback := range postTxnFlushed {
-						callback()
-					}
-				}
-			}
-		}
-		rowsCount := uint64(event.Len())
-		rowCallback := toRowCallback(event.PostTxnFlushed, rowsCount)
+	rowsCount := event.Len()
+	events := make([]*commonEvent.RedoRowEvent, 0, rowsCount)
+	rowCallback := helper.NewTxnPostFlushRowCallback(event, uint64(rowsCount))
 
-		for {
-			row, ok := event.GetNextRow()
-			if !ok {
-				event.Rewind()
-				break
-			}
-			s.logBuffer.Push(&commonEvent.RedoRowEvent{
-				StartTs:         event.StartTs,
-				CommitTs:        event.CommitTs,
-				Event:           row,
-				PhysicalTableID: event.PhysicalTableID,
-				TableInfo:       event.TableInfo,
-				Callback:        rowCallback,
-			})
+	for {
+		row, ok := event.GetNextRow()
+		if !ok {
+			event.Rewind()
+			break
 		}
-		return int(event.Len()), event.GetSize(), nil
-	})
+		events = append(events, &commonEvent.RedoRowEvent{
+			StartTs:         event.StartTs,
+			CommitTs:        event.CommitTs,
+			Event:           row,
+			PhysicalTableID: event.PhysicalTableID,
+			TableInfo:       event.TableInfo,
+			Callback:        rowCallback,
+		})
+	}
+	s.logBuffer.Push(events...)
 }
 
 func (s *Sink) IsNormal() bool {
@@ -177,45 +194,67 @@ func (s *Sink) Close(_ bool) {
 	if !s.isClosed.CompareAndSwap(false, true) {
 		return
 	}
+	start := time.Now()
 	s.logBuffer.Close()
 	if s.ddlWriter != nil {
 		if err := s.ddlWriter.Close(); err != nil && errors.Cause(err) != context.Canceled {
 			log.Error("redo sink fails to close ddl writer",
-				zap.String("keyspace", s.cfg.ChangeFeedID.Keyspace()),
-				zap.String("changefeed", s.cfg.ChangeFeedID.Name()),
+				zap.String("keyspace", s.changefeedID.Keyspace()),
+				zap.String("changefeed", s.changefeedID.Name()),
 				zap.Error(err))
 		}
 	}
 	if s.dmlWriter != nil {
 		if err := s.dmlWriter.Close(); err != nil && errors.Cause(err) != context.Canceled {
 			log.Error("redo sink fails to close dml writer",
-				zap.String("keyspace", s.cfg.ChangeFeedID.Keyspace()),
-				zap.String("changefeed", s.cfg.ChangeFeedID.Name()),
+				zap.String("keyspace", s.changefeedID.Keyspace()),
+				zap.String("changefeed", s.changefeedID.Name()),
 				zap.Error(err))
 		}
 	}
-	if s.statistics != nil {
-		s.statistics.Close()
+	if s.metricCollector != nil {
+		s.metricCollector.close()
 	}
 	log.Info("redo sink closed",
-		zap.String("keyspace", s.cfg.ChangeFeedID.Keyspace()),
-		zap.String("changefeed", s.cfg.ChangeFeedID.Name()))
+		zap.String("keyspace", s.changefeedID.Keyspace()),
+		zap.String("changefeed", s.changefeedID.Name()),
+		zap.Duration("duration", time.Since(start)))
 }
 
 func (s *Sink) sendMessages(ctx context.Context) error {
+	buffer := make([]*commonEvent.RedoRowEvent, 0, redo.DefaultFlushBatchSize)
 	for {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return errors.Trace(context.Cause(ctx))
 		default:
-			if e, ok := s.logBuffer.Get(); ok {
-				err := s.dmlWriter.WriteEvents(ctx, e)
-				if err != nil {
-					return err
-				}
-			}
+		}
+		events, ok := s.logBuffer.GetMultipleNoGroup(buffer)
+		if !ok {
+			return nil
+		}
+		if len(events) == 0 {
+			continue
+		}
+		buffer = events[:0]
+
+		start := time.Now()
+		err := s.dmlWriter.AddDMLEvents(ctx, events...)
+		if err != nil {
+			return err
+		}
+		if s.metricCollector != nil {
+			s.metricCollector.observeRowWrite(len(events), time.Since(start))
 		}
 	}
 }
 
 func (s *Sink) AddCheckpointTs(_ uint64) {}
+
+func (s *Sink) BatchCount() int {
+	return 4096
+}
+
+func (s *Sink) BatchBytes() int {
+	return s.maxLogSizeInBytes
+}

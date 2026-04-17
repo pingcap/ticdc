@@ -18,6 +18,8 @@ import (
 
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
 )
@@ -35,11 +37,17 @@ func TestEventsGroupAppendForceMergesExistingCommitTs(t *testing.T) {
 
 	newDMLEvent := func(commitTs uint64) *commonEvent.DMLEvent {
 		return &commonEvent.DMLEvent{
-			CommitTs:  commitTs,
-			RowTypes:  []common.RowType{common.RowTypeUpdate},
-			Rows:      chunk.NewChunkWithCapacity(nil, 0),
-			Length:    0,
-			TableInfo: &common.TableInfo{},
+			CommitTs: commitTs,
+			RowTypes: []common.RowType{common.RowTypeUpdate},
+			Rows:     chunk.NewChunkWithCapacity(nil, 0),
+			Length:   0,
+			TableInfo: common.NewTableInfo4Decoder("test", &timodel.TableInfo{
+				ID:   100,
+				Name: ast.NewCIStr("t"),
+				Columns: []*timodel.ColumnInfo{
+					{Name: ast.NewCIStr("a")},
+				},
+			}),
 		}
 	}
 
@@ -49,10 +57,11 @@ func TestEventsGroupAppendForceMergesExistingCommitTs(t *testing.T) {
 
 	require.Equal(t, uint64(200), group.HighWatermark)
 
-	resolved := group.Resolve(150)
-	require.Len(t, resolved, 1)
-	require.Equal(t, uint64(100), resolved[0].CommitTs)
-	require.Len(t, resolved[0].RowTypes, 2)
+	var dst []*commonEvent.DMLEvent
+	dst = group.ResolveInto(150, dst)
+	require.Len(t, dst, 1)
+	require.Equal(t, uint64(100), dst[0].CommitTs)
+	require.Len(t, dst[0].RowTypes, 2)
 }
 
 func TestEventsGroupResolveIntoAppendsAndClearsResolvedPrefix(t *testing.T) {

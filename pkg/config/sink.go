@@ -16,6 +16,7 @@ package config
 import (
 	"fmt"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -37,6 +38,8 @@ const (
 
 	// TxnAtomicityKey specifies the key of the transaction-atomicity in the SinkURI.
 	TxnAtomicityKey = "transaction-atomicity"
+	// UseTableIDAsPathKey specifies the key of the use-table-id-as-path in the SinkURI.
+	UseTableIDAsPathKey = "use-table-id-as-path"
 	// defaultTxnAtomicity is the default atomicity level.
 	defaultTxnAtomicity = noneTxnAtomicity
 	// unknownTxnAtomicity is an invalid atomicity level and will be treated as
@@ -138,7 +141,6 @@ type SinkConfig struct {
 	// Protocol is NOT available when the downstream is DB.
 	Protocol *string `toml:"protocol" json:"protocol,omitempty"`
 
-	// DispatchRules is only available when the downstream is MQ.
 	DispatchRules []*DispatchRule `toml:"dispatchers" json:"dispatchers,omitempty"`
 
 	ColumnSelectors []*ColumnSelector `toml:"column-selectors" json:"column-selectors,omitempty"`
@@ -384,7 +386,9 @@ func (d DateSeparator) String() string {
 	}
 }
 
-// DispatchRule represents partition rule for a table.
+// DispatchRules configures event routing.
+// For MQ sinks, rules control topic / partition dispatching.
+// TargetSchema and TargetTable configure table routing.
 type DispatchRule struct {
 	Matcher []string `toml:"matcher" json:"matcher"`
 	// Deprecated, please use PartitionRule.
@@ -400,6 +404,22 @@ type DispatchRule struct {
 	Columns []string `toml:"columns" json:"columns"`
 
 	TopicRule string `toml:"topic" json:"topic"`
+
+	// TargetSchema sets the routed downstream schema name.
+	// Leave it empty to keep the source schema name.
+	// For example, if the source table is `sales`.`orders`, `target-schema = "sales_bak"`
+	// writes to `sales_bak`.`orders`.
+	// You can also use placeholders. For example, `target-schema = "{schema}_bak"`
+	// becomes `sales_bak`.
+	TargetSchema string `toml:"target-schema" json:"target-schema"`
+
+	// TargetTable sets the routed downstream table name.
+	// Leave it empty to keep the source table name.
+	// For example, if the source table is `sales`.`orders`, `target-table = "orders_bak"`
+	// writes to `sales`.`orders_bak`.
+	// You can also use placeholders. For example, `target-table = "{schema}_{table}"`
+	// becomes `sales_orders`.
+	TargetTable string `toml:"target-table" json:"target-table"`
 }
 
 // ColumnSelector represents a column selector for a table.
@@ -690,14 +710,18 @@ type MySQLConfig struct {
 
 // CloudStorageConfig represents a cloud storage sink configuration
 type CloudStorageConfig struct {
-	WorkerCount   *int    `toml:"worker-count" json:"worker-count,omitempty"`
-	FlushInterval *string `toml:"flush-interval" json:"flush-interval,omitempty"`
-	FileSize      *int    `toml:"file-size" json:"file-size,omitempty"`
+	WorkerCount    *int    `toml:"worker-count" json:"worker-count,omitempty"`
+	FlushInterval  *string `toml:"flush-interval" json:"flush-interval,omitempty"`
+	FileSize       *int    `toml:"file-size" json:"file-size,omitempty"`
+	SpoolDiskQuota *int64  `toml:"spool-disk-quota" json:"spool-disk-quota,omitempty"`
+	SpoolBaseDir   *string `toml:"spool-base-dir" json:"spool-base-dir,omitempty"`
 
 	OutputColumnID      *bool   `toml:"output-column-id" json:"output-column-id,omitempty"`
 	FileExpirationDays  *int    `toml:"file-expiration-days" json:"file-expiration-days,omitempty"`
 	FileCleanupCronSpec *string `toml:"file-cleanup-cron-spec" json:"file-cleanup-cron-spec,omitempty"`
 	FlushConcurrency    *int    `toml:"flush-concurrency" json:"flush-concurrency,omitempty"`
+	// UseTableIDAsPath is only available when the downstream is Storage (TiCI only).
+	UseTableIDAsPath *bool `toml:"use-table-id-as-path" json:"use-table-id-as-path,omitempty"`
 
 	// OutputRawChangeEvent controls whether to split the update pk/uk events.
 	OutputRawChangeEvent *bool `toml:"output-raw-change-event" json:"output-raw-change-event,omitempty"`
@@ -711,8 +735,33 @@ func (c *CloudStorageConfig) GetOutputRawChangeEvent() bool {
 	return *c.OutputRawChangeEvent
 }
 
+// CheckUseTableIDAsPathCompatibility checks the compatibility between sink config and sink URI.
+func CheckUseTableIDAsPathCompatibility(
+	sinkConfig *SinkConfig,
+	useTableIDAsPathFromURI *bool,
+) error {
+	if sinkConfig == nil ||
+		sinkConfig.CloudStorageConfig == nil ||
+		sinkConfig.CloudStorageConfig.UseTableIDAsPath == nil ||
+		useTableIDAsPathFromURI == nil {
+		return nil
+	}
+	useTableIDAsPathFromConfig := sinkConfig.CloudStorageConfig.UseTableIDAsPath
+	if util.GetOrZero(useTableIDAsPathFromConfig) == util.GetOrZero(useTableIDAsPathFromURI) {
+		return nil
+	}
+	return cerror.ErrIncompatibleSinkConfig.GenWithStackByArgs(
+		fmt.Sprintf("%s=%t", UseTableIDAsPathKey, util.GetOrZero(useTableIDAsPathFromURI)),
+		fmt.Sprintf("%s=%t", UseTableIDAsPathKey, util.GetOrZero(useTableIDAsPathFromConfig)),
+	)
+}
+
 func (s *SinkConfig) validateAndAdjust(sinkURI *url.URL) error {
 	if err := s.validateAndAdjustSinkURI(sinkURI); err != nil {
+		return err
+	}
+
+	if err := s.validateTableRoute(); err != nil {
 		return err
 	}
 
@@ -831,6 +880,21 @@ func (s *SinkConfig) validateAndAdjust(sinkURI *url.URL) error {
 		s.AdvanceTimeoutInSec = util.AddressOf(DefaultAdvanceTimeoutInSec)
 	}
 
+	return nil
+}
+
+func (s *SinkConfig) validateTableRoute() error {
+	for _, rule := range s.DispatchRules {
+		if rule == nil || (rule.TargetSchema == "" && rule.TargetTable == "") {
+			continue
+		}
+		if err := validateRoutingExpression("target-schema", rule.TargetSchema); err != nil {
+			return err
+		}
+		if err := validateRoutingExpression("target-table", rule.TargetTable); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -977,14 +1041,58 @@ func (s *SinkConfig) CheckCompatibilityWithSinkURI(
 		return cerror.WrapError(cerror.ErrSinkURIInvalid, err)
 	}
 
+	var useTableIDAsPathFromURI *bool
+	if IsStorageScheme(sinkURI.Scheme) {
+		useTableIDAsPathValue := sinkURI.Query().Get(UseTableIDAsPathKey)
+		if useTableIDAsPathValue != "" {
+			enabled, parseErr := strconv.ParseBool(useTableIDAsPathValue)
+			if parseErr != nil {
+				return cerror.WrapError(cerror.ErrSinkURIInvalid, parseErr)
+			}
+			useTableIDAsPathFromURI = util.AddressOf(enabled)
+		}
+	}
+
+	getUseTableIDAsPath := func(cfg *SinkConfig) *bool {
+		if cfg == nil || cfg.CloudStorageConfig == nil {
+			return nil
+		}
+		return cfg.CloudStorageConfig.UseTableIDAsPath
+	}
+
+	useTableIDAsPathChanged := func() bool {
+		newVal := getUseTableIDAsPath(s)
+		oldVal := getUseTableIDAsPath(oldSinkConfig)
+		if newVal == nil && oldVal == nil {
+			return false
+		}
+		if newVal == nil || oldVal == nil {
+			return true
+		}
+		return *newVal != *oldVal
+	}
+
 	cfgParamsChanged := s.Protocol != oldSinkConfig.Protocol ||
-		s.TxnAtomicity != oldSinkConfig.TxnAtomicity
+		s.TxnAtomicity != oldSinkConfig.TxnAtomicity ||
+		useTableIDAsPathChanged()
 
 	isURIParamsChanged := func(oldCfg SinkConfig) bool {
 		err := oldCfg.applyParameterBySinkURI(sinkURI)
-		return cerror.ErrIncompatibleSinkConfig.Equal(err)
+		if cerror.ErrIncompatibleSinkConfig.Equal(err) {
+			return true
+		}
+		if useTableIDAsPathFromURI == nil {
+			return false
+		}
+		return CheckUseTableIDAsPathCompatibility(&oldCfg, useTableIDAsPathFromURI) != nil
 	}
 	uriParamsChanged := isURIParamsChanged(*oldSinkConfig)
+
+	if !uriParamsChanged && IsStorageScheme(sinkURI.Scheme) {
+		if err := CheckUseTableIDAsPathCompatibility(s, useTableIDAsPathFromURI); err != nil {
+			return err
+		}
+	}
 
 	if !uriParamsChanged && !cfgParamsChanged {
 		return nil
@@ -1041,4 +1149,21 @@ type OpenProtocolConfig struct {
 // DebeziumConfig represents the configurations for debezium protocol encoding
 type DebeziumConfig struct {
 	OutputOldValue bool `toml:"output-old-value" json:"output-old-value"`
+}
+
+// validRoutingExpressionRegexp accepts routing expressions made of literal text
+// and the {schema}/{table} placeholders, such as "archive", "{table}_bak", or "{schema}_{table}".
+var validRoutingExpressionRegexp = regexp.MustCompile(`^(?:[^{}]|\{schema\}|\{table\})*$`)
+
+// validateRoutingExpression validates a routing expression for a single routing field.
+// Valid expressions can contain literal text and {schema} or {table} placeholders.
+func validateRoutingExpression(fieldName, expr string) error {
+	if expr == "" || validRoutingExpressionRegexp.MatchString(expr) {
+		return nil
+	}
+	return cerror.ErrInvalidTableRoutingRule.GenWithStack(
+		"%s %q must contain only literal text, {schema}, and {table}",
+		fieldName,
+		expr,
+	)
 }

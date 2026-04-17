@@ -21,18 +21,31 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/redo"
+	"github.com/pingcap/ticdc/pkg/redo/testutil"
+	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 )
 
 // Use a smaller worker number for test to speed up the test.
 var workerNumberForTest = 2
+
+func newTestConsistentConfig(storage string) *config.ConsistentConfig {
+	cfg := testutil.NewConsistentConfig(storage)
+	cfg.FlushIntervalInMs = util.AddressOf(int64(redo.MinFlushIntervalInMs))
+	cfg.MetaFlushIntervalInMs = util.AddressOf(int64(redo.MinFlushIntervalInMs))
+	cfg.EncodingWorkerNum = util.AddressOf(workerNumberForTest)
+	cfg.FlushWorkerNum = util.AddressOf(workerNumberForTest)
+	return cfg
+}
 
 func TestConsistentConfig(t *testing.T) {
 	t.Parallel()
@@ -90,6 +103,22 @@ func TestConsistentConfig(t *testing.T) {
 	}
 }
 
+func TestRedoSinkBatchConfig(t *testing.T) {
+	cfg := newTestConsistentConfig("blackhole://")
+	cfg.MaxLogSize = util.AddressOf(int64(32))
+
+	sink, err := New(
+		context.Background(),
+		common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName),
+		cfg,
+	)
+	require.NoError(t, err)
+	defer sink.Close(false)
+
+	require.Equal(t, 4096, sink.BatchCount())
+	require.Equal(t, int(32*redo.Megabyte), sink.BatchBytes())
+}
+
 // TestRedoSinkInProcessor tests how redo log manager is used in processor.
 func TestRedoSinkInProcessor(t *testing.T) {
 	helper := commonEvent.NewEventTestHelper(t)
@@ -113,17 +142,10 @@ func TestRedoSinkInProcessor(t *testing.T) {
 
 	testWriteDMLs := func(storage string, useFileBackend bool) {
 		ctx, cancel := context.WithCancel(ctx)
-		cfg := &config.ConsistentConfig{
-			Level:                 util.AddressOf(string(redo.ConsistentLevelEventual)),
-			MaxLogSize:            util.AddressOf(redo.DefaultMaxLogSize),
-			Storage:               util.AddressOf(storage),
-			FlushIntervalInMs:     util.AddressOf(int64(redo.MinFlushIntervalInMs)),
-			MetaFlushIntervalInMs: util.AddressOf(int64(redo.MinFlushIntervalInMs)),
-			EncodingWorkerNum:     util.AddressOf(workerNumberForTest),
-			FlushWorkerNum:        util.AddressOf(workerNumberForTest),
-			UseFileBackend:        util.AddressOf(useFileBackend),
-		}
-		dmlMgr := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), cfg)
+		cfg := newTestConsistentConfig(storage)
+		cfg.UseFileBackend = util.AddressOf(useFileBackend)
+		dmlMgr, err := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), cfg)
+		require.NoError(t, err)
 		defer dmlMgr.Close(false)
 
 		var eg errgroup.Group
@@ -204,16 +226,9 @@ func TestRedoSinkError(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 	defer cancel()
 
-	cfg := &config.ConsistentConfig{
-		Level:                 util.AddressOf(string(redo.ConsistentLevelEventual)),
-		MaxLogSize:            util.AddressOf(redo.DefaultMaxLogSize),
-		Storage:               util.AddressOf("blackhole-invalid://"),
-		FlushIntervalInMs:     util.AddressOf(int64(redo.MinFlushIntervalInMs)),
-		MetaFlushIntervalInMs: util.AddressOf(int64(redo.MinFlushIntervalInMs)),
-		EncodingWorkerNum:     util.AddressOf(workerNumberForTest),
-		FlushWorkerNum:        util.AddressOf(workerNumberForTest),
-	}
-	logMgr := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), cfg)
+	cfg := newTestConsistentConfig("blackhole-invalid://")
+	logMgr, err := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), cfg)
+	require.NoError(t, err)
 	defer logMgr.Close(false)
 
 	var eg errgroup.Group
@@ -241,7 +256,7 @@ func TestRedoSinkError(t *testing.T) {
 		}
 	}
 
-	err := eg.Wait()
+	err = eg.Wait()
 	require.Regexp(t, ".*invalid black hole writer.*", err)
 	require.Regexp(t, ".*WriteLog.*", err)
 }
@@ -262,17 +277,12 @@ func BenchmarkFileWriter(b *testing.B) {
 
 func runBenchTest(b *testing.B, storage string, useFileBackend bool) {
 	ctx, cancel := context.WithCancel(context.Background())
-	cfg := &config.ConsistentConfig{
-		Level:                 util.AddressOf(string(redo.ConsistentLevelEventual)),
-		MaxLogSize:            util.AddressOf(redo.DefaultMaxLogSize),
-		Storage:               util.AddressOf(storage),
-		FlushIntervalInMs:     util.AddressOf(int64(redo.MinFlushIntervalInMs)),
-		MetaFlushIntervalInMs: util.AddressOf(int64(redo.MinFlushIntervalInMs)),
-		EncodingWorkerNum:     util.AddressOf(redo.DefaultEncodingWorkerNum),
-		FlushWorkerNum:        util.AddressOf(redo.DefaultFlushWorkerNum),
-		UseFileBackend:        util.AddressOf(useFileBackend),
-	}
-	dmlMgr := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), cfg)
+	cfg := newTestConsistentConfig(storage)
+	cfg.EncodingWorkerNum = util.AddressOf(redo.DefaultEncodingWorkerNum)
+	cfg.FlushWorkerNum = util.AddressOf(redo.DefaultFlushWorkerNum)
+	cfg.UseFileBackend = util.AddressOf(useFileBackend)
+	dmlMgr, err := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), cfg)
+	require.NoError(b, err)
 	defer dmlMgr.Close(false)
 
 	var eg errgroup.Group
@@ -285,7 +295,7 @@ func runBenchTest(b *testing.B, storage string, useFileBackend bool) {
 	tables := make([]common.TableID, 0, numOfTables)
 	maxTsMap := common.NewSpanHashMap[*common.Ts]()
 	startTs := uint64(100)
-	for i := 0; i < numOfTables; i++ {
+	for i := range numOfTables {
 		tableID := common.TableID(i)
 		tables = append(tables, tableID)
 		span := common.TableIDToComparableSpan(common.DefaultKeyspaceID, tableID)
@@ -304,7 +314,7 @@ func runBenchTest(b *testing.B, storage string, useFileBackend bool) {
 			defer wg.Done()
 			maxCommitTs := maxTsMap.GetV(span)
 			var rows []*commonEvent.DMLEvent
-			for i := 0; i < maxRowCount; i++ {
+			for i := range maxRowCount {
 				if i%100 == 0 {
 					// prepare new row change events
 					b.StopTimer()
@@ -328,4 +338,56 @@ func runBenchTest(b *testing.B, storage string, useFileBackend bool) {
 	cancel()
 
 	require.ErrorIs(b, eg.Wait(), context.Canceled)
+}
+
+func TestRedoSinkSendMessagesInBatch(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockWriter := writer.NewMockRedoDMLWriter(ctrl)
+	expectWriteBatch := func(batchSize int) *gomock.Call {
+		args := make([]interface{}, 0, batchSize+1)
+		args = append(args, gomock.Any()) // context
+		for range batchSize {
+			args = append(args, gomock.Any())
+		}
+		return mockWriter.EXPECT().
+			AddDMLEvents(args[0], args[1:]...).
+			DoAndReturn(func(_ context.Context, events ...*commonEvent.RedoRowEvent) error {
+				require.Len(t, events, batchSize)
+				return nil
+			})
+	}
+
+	gomock.InOrder(
+		expectWriteBatch(redo.DefaultFlushBatchSize),
+		expectWriteBatch(redo.DefaultFlushBatchSize),
+		expectWriteBatch(17),
+	)
+
+	s := &Sink{
+		dmlWriter: mockWriter,
+		logBuffer: chann.NewUnlimitedChannelDefault[*commonEvent.RedoRowEvent](),
+	}
+
+	doneCh := make(chan error, 1)
+	go func() {
+		doneCh <- s.sendMessages(ctx)
+	}()
+
+	totalEvents := redo.DefaultFlushBatchSize*2 + 17
+	events := make([]*commonEvent.RedoRowEvent, 0, totalEvents)
+	for range totalEvents {
+		events = append(events, &commonEvent.RedoRowEvent{})
+	}
+	s.logBuffer.Push(events...)
+	s.logBuffer.Close()
+
+	err := <-doneCh
+	require.NoError(t, err)
 }

@@ -27,7 +27,11 @@ message Watermark {
 }
 
 enum Action {
+    // Write means the selected writer dispatcher executes the barrier event
+    // (DDL/syncpoint) to downstream.
     Write = 0;
+    // Pass means influenced dispatchers mark this barrier as passed after the
+    // writer has finished Write for the same (commitTs, isSyncPoint).
     Pass = 1;
 }
 
@@ -96,6 +100,14 @@ enum ScheduleAction {
     Remove = 1;
 }
 
+enum OperatorType {
+    O_Add = 0;
+    O_Remove = 1;
+    O_Move = 2;
+    O_Split = 3;
+    O_Merge = 4;
+}
+
 message DispatcherConfig {
     TableSpan span = 1;
     uint64 startTs = 2;
@@ -113,6 +125,7 @@ message ScheduleDispatcherRequest {
     ChangefeedID changefeedID = 1;
     DispatcherConfig config = 2;
     ScheduleAction scheduleAction = 3;
+    OperatorType operatorType = 4;
 }
 
 message MergeDispatcherRequest {
@@ -134,6 +147,39 @@ message MaintainerStatus {
     repeated RunningError err = 5;
     bool bootstrap_done = 6;
     uint64 lastSyncedTs = 7;  // last synced ts of all tables in the changefeed, used in /:changefeed_id/synced API
+}
+
+// NodeLiveness is node-reported liveness.
+// Coordinator uses it for destination filtering and safe rolling-restart handoff
+// without persisting a separate intent in etcd.
+// It is monotonic and only allows: ALIVE -> DRAINING -> STOPPING.
+enum NodeLiveness {
+    // ALIVE accepts new destination placement, maintainer creation, and leader campaign/service.
+    ALIVE = 0;
+    // DRAINING is excluded from destination selection and is being drained.
+    // In-flight operations may still complete, but no new leader campaign is allowed.
+    DRAINING = 1;
+    // STOPPING keeps destination exclusion and enforces shutdown safety.
+    // It rejects new maintainer creation, allows cleanup/remove
+    STOPPING = 2;
+}
+
+// NodeHeartbeat is sent periodically from a node to the coordinator.
+message NodeHeartbeat {
+    NodeLiveness liveness = 1;
+    uint64 node_epoch = 2;
+}
+
+// SetNodeLivenessRequest asks a node to transition its local liveness.
+message SetNodeLivenessRequest {
+    NodeLiveness target = 1;
+    uint64 node_epoch = 2;
+}
+
+// SetNodeLivenessResponse reports the liveness state applied by the node.
+message SetNodeLivenessResponse {
+    NodeLiveness applied = 1;
+    uint64 node_epoch = 2;
 }
 
 message CoordinatorBootstrapRequest {
@@ -185,6 +231,7 @@ message MaintainerBootstrapResponse {
     // redo_checkpoint_ts is similar to checkpoint_ts, for nodes with a table trigger redo dispatcher.
     // It will be used when redo enable.
     uint64 redo_checkpoint_ts = 5;
+    repeated ScheduleDispatcherRequest operators = 6;
 }
 
 message MaintainerPostBootstrapRequest {

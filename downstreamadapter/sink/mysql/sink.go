@@ -58,6 +58,7 @@ type Sink struct {
 
 	// isNormal indicate whether the sink is in the normal state.
 	isNormal   *atomic.Bool
+	cfg        *mysql.Config
 	maxTxnRows int
 	bdrMode    bool
 	// enableActiveActive enables active-active replication behaviors in the MySQL-class sink.
@@ -139,6 +140,7 @@ func NewMySQLSink(
 			},
 			changefeedID),
 		isNormal:                       atomic.NewBool(true),
+		cfg:                            cfg,
 		maxTxnRows:                     cfg.MaxTxnRow,
 		bdrMode:                        bdrMode,
 		enableActiveActive:             enableActiveActive,
@@ -268,6 +270,10 @@ func (s *Sink) SetTableSchemaStore(tableSchemaStore *commonEvent.TableSchemaStor
 
 func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	s.conflictDetector.Add(event)
+}
+
+func (s *Sink) FlushDMLBeforeBlock(_ commonEvent.BlockEvent) error {
+	return nil
 }
 
 func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
@@ -409,4 +415,12 @@ func (s *Sink) Close(removeChangefeed bool) {
 		s.activeActiveSyncStatsCollector.Close()
 	}
 	s.statistics.Close()
+}
+
+func (s *Sink) BatchCount() int {
+	return s.maxTxnRows * len(s.dmlWriter)
+}
+
+func (s *Sink) BatchBytes() int {
+	return int(s.cfg.MaxAllowedPacket)
 }

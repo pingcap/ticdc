@@ -53,6 +53,10 @@ func (s *sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	s.eventCh <- event
 }
 
+func (s *sink) FlushDMLBeforeBlock(_ commonEvent.BlockEvent) error {
+	return nil
+}
+
 func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	switch event.GetType() {
 	case commonEvent.TypeDDLEvent:
@@ -84,4 +88,12 @@ func (s *sink) Run(ctx context.Context) error {
 			event.PostFlush()
 		}
 	}
+}
+
+func (s *sink) BatchCount() int {
+	return 4096
+}
+
+func (s *sink) BatchBytes() int {
+	return 0
 }

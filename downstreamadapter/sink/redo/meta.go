@@ -31,6 +31,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/uuid"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -57,6 +58,8 @@ type RedoMeta struct {
 	lastFlushTime          time.Time
 	cfg                    *config.ConsistentConfig
 	metricFlushLogDuration prometheus.Observer
+	metricCheckpointTs     prometheus.Gauge
+	metricResolvedTs       prometheus.Gauge
 
 	flushIntervalInMs int64
 }
@@ -75,6 +78,10 @@ func NewRedoMeta(
 		cfg:               cfg,
 		startTs:           checkpoint,
 		flushIntervalInMs: util.GetOrZero(cfg.MetaFlushIntervalInMs),
+		metricCheckpointTs: metrics.RedoCheckpointTsGauge.
+			WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
+		metricResolvedTs: metrics.RedoResolvedTsGauge.
+			WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
 	}
 
 	if m.flushIntervalInMs < redo.MinFlushIntervalInMs {
@@ -93,7 +100,7 @@ func (m *RedoMeta) Running() bool {
 	return m.running.Load()
 }
 
-func (m *RedoMeta) PreStart(ctx context.Context) error {
+func (m *RedoMeta) PreStart(ctx context.Context) (err error) {
 	uri, err := storage.ParseRawURL(util.GetOrZero(m.cfg.Storage))
 	if err != nil {
 		return err
@@ -110,6 +117,11 @@ func (m *RedoMeta) PreStart(ctx context.Context) error {
 		return err
 	}
 	m.extStorage = extStorage
+	defer func() {
+		if err != nil {
+			m.closeExtStorage()
+		}
+	}()
 
 	m.metricFlushLogDuration = metrics.RedoFlushLogDurationHistogram.
 		WithLabelValues(m.changeFeedID.Keyspace(), m.changeFeedID.Name(), redo.RedoMetaFileType)
@@ -135,6 +147,10 @@ func (m *RedoMeta) PreStart(ctx context.Context) error {
 
 // Run runs bgFlushMeta and bgGC.
 func (m *RedoMeta) Run(ctx context.Context) error {
+	defer func() {
+		m.running.Store(false)
+		m.closeExtStorage()
+	}()
 	eg, egCtx := errgroup.WithContext(ctx)
 	eg.Go(func() error {
 		return m.bgFlushMeta(egCtx)
@@ -324,6 +340,7 @@ func (m *RedoMeta) deleteAllLogs(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		defer m.closeExtStorage()
 	}
 	// Write deleted mark before clean any files.
 	deleteMarker := getDeletedChangefeedMarker(m.changeFeedID)
@@ -391,6 +408,8 @@ func (m *RedoMeta) prepareForFlushMeta() (bool, misc.LogMeta) {
 func (m *RedoMeta) postFlushMeta(meta misc.LogMeta) {
 	m.metaResolvedTs.checkAndSetFlushed(meta.ResolvedTs)
 	m.metaCheckpointTs.checkAndSetFlushed(meta.CheckpointTs)
+	m.metricResolvedTs.Set(float64(oracle.ExtractPhysical(meta.ResolvedTs)))
+	m.metricCheckpointTs.Set(float64(oracle.ExtractPhysical(meta.CheckpointTs)))
 }
 
 func (m *RedoMeta) flush(ctx context.Context, meta misc.LogMeta) error {
@@ -433,15 +452,29 @@ func (m *RedoMeta) flush(ctx context.Context, meta misc.LogMeta) error {
 	return nil
 }
 
-func (m *RedoMeta) cleanup(logType string) {
+func (m *RedoMeta) CleanupMetrics() {
+	metrics.RedoCheckpointTsGauge.DeleteLabelValues(m.changeFeedID.Keyspace(), m.changeFeedID.Name())
+	metrics.RedoResolvedTsGauge.DeleteLabelValues(m.changeFeedID.Keyspace(), m.changeFeedID.Name())
 	metrics.RedoFlushLogDurationHistogram.
-		DeleteLabelValues(m.changeFeedID.Keyspace(), m.changeFeedID.Name(), logType)
+		DeleteLabelValues(m.changeFeedID.Keyspace(), m.changeFeedID.Name(), redo.RedoMetaFileType)
+}
+
+func (m *RedoMeta) closeExtStorage() {
+	if m.extStorage == nil {
+		return
+	}
+	m.extStorage.Close()
+	m.extStorage = nil
 }
 
 // Cleanup removes all redo logs of this manager, it is called when changefeed is removed
 // only owner should call this method.
 func (m *RedoMeta) Cleanup(ctx context.Context) error {
-	m.cleanup(redo.RedoMetaFileType)
+	defer func() {
+		if !m.running.Load() {
+			m.closeExtStorage()
+		}
+	}()
 	return m.deleteAllLogs(ctx)
 }
 

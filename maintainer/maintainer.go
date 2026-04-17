@@ -375,7 +375,7 @@ func (m *Maintainer) GetMaintainerStatus() *heartbeatpb.MaintainerStatus {
 	status := &heartbeatpb.MaintainerStatus{
 		ChangefeedID:  m.changefeedID.ToPB(),
 		State:         heartbeatpb.ComponentState(m.scheduleState.Load()),
-		CheckpointTs:  m.getWatermark().CheckpointTs,
+		CheckpointTs:  m.controller.spanController.GetMaintainerCommittedCheckpointTs(),
 		Err:           runningErrors,
 		BootstrapDone: m.initialized.Load(),
 		LastSyncedTs:  m.getWatermark().LastSyncedTs,
@@ -657,6 +657,11 @@ func (m *Maintainer) calCheckpointTs(ctx context.Context) {
 			// CRITICAL SECTION: Calculate checkpointTs with proper ordering to prevent race condition
 			newWatermark, canUpdate := m.calculateNewCheckpointTs()
 			if canUpdate {
+				m.controller.spanController.AdvanceMaintainerCommittedCheckpointTs(newWatermark.CheckpointTs)
+				if m.enableRedo && m.controller.redoSpanController != nil {
+					// Redo dispatchers must not start below the changefeed committed checkpoint.
+					m.controller.redoSpanController.AdvanceMaintainerCommittedCheckpointTs(newWatermark.CheckpointTs)
+				}
 				m.setWatermark(*newWatermark)
 				m.updateMetrics()
 			}
@@ -921,6 +926,7 @@ func (m *Maintainer) onBootstrapResponses(responses map[node.ID]*heartbeatpb.Mai
 		m.handleError(err)
 		return
 	}
+	m.bootstrapper.ClearBootstrapResponses()
 
 	if postBootstrapRequest == nil {
 		return
@@ -1065,18 +1071,20 @@ func (m *Maintainer) createBootstrapMessageFactory() bootstrap.NewBootstrapReque
 
 		// only send dispatcher targetNodeID to dispatcher manager on the same node
 		if targetNodeID == m.selfNode.ID {
-			log.Info("create table event trigger dispatcher bootstrap message",
-				zap.Stringer("changefeedID", m.changefeedID),
-				zap.String("nodeAddr", targetAddr),
-				zap.Any("nodeID", targetNodeID),
-				zap.String("dispatcherID", m.ddlSpan.ID.String()),
-				zap.Uint64("startTs", m.startCheckpointTs),
-			)
 			msg.TableTriggerEventDispatcherId = m.ddlSpan.ID.ToPB()
 			if m.enableRedo {
 				msg.TableTriggerRedoDispatcherId = m.redoDDLSpan.ID.ToPB()
 			}
 			msg.IsNewChangefeed = m.newChangefeed
+			log.Info("create table event trigger dispatcher bootstrap message",
+				zap.Stringer("changefeedID", m.changefeedID),
+				zap.String("nodeAddr", targetAddr),
+				zap.Any("nodeID", targetNodeID),
+				zap.String("dispatcherID", m.ddlSpan.ID.String()),
+				zap.Bool("enableRedo", m.enableRedo),
+				zap.Bool("newChangefeed", m.newChangefeed),
+				zap.Uint64("startTs", m.startCheckpointTs),
+			)
 		}
 
 		log.Info("maintainer new bootstrap message to dispatcher orchestrator",

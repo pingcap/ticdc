@@ -32,6 +32,18 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+type newPulsarDMLProducerFunc func(
+	changefeedID commonType.ChangeFeedID,
+	comp component,
+	failpointCh chan error,
+) (dmlProducer, error)
+
+type newPulsarDDLProducerFunc func(
+	changefeedID commonType.ChangeFeedID,
+	comp component,
+	sinkConfig *config.SinkConfig,
+) (ddlProducer, error)
+
 type sink struct {
 	changefeedID commonType.ChangeFeedID
 
@@ -71,20 +83,54 @@ func New(
 	if err != nil {
 		return nil, err
 	}
+	return newWithComponent(
+		ctx,
+		changefeedID,
+		sinkConfig,
+		comp,
+		protocol,
+		func(changefeedID commonType.ChangeFeedID, comp component, failpointCh chan error) (dmlProducer, error) {
+			return newDMLProducers(changefeedID, comp, failpointCh)
+		},
+		func(changefeedID commonType.ChangeFeedID, comp component, sinkConfig *config.SinkConfig) (ddlProducer, error) {
+			return newDDLProducers(changefeedID, comp, sinkConfig)
+		},
+	)
+}
+
+func newWithComponent(
+	ctx context.Context,
+	changefeedID commonType.ChangeFeedID,
+	sinkConfig *config.SinkConfig,
+	comp component,
+	protocol config.Protocol,
+	newDMLProducer newPulsarDMLProducerFunc,
+	newDDLProducer newPulsarDDLProducerFunc,
+) (_ *sink, err error) {
+	var (
+		dmlProducer dmlProducer
+		ddlProducer ddlProducer
+	)
 	defer func() {
 		if err != nil {
+			if ddlProducer != nil {
+				ddlProducer.close()
+			}
+			if dmlProducer != nil {
+				dmlProducer.close()
+			}
 			comp.close()
 		}
 	}()
 
 	failpointCh := make(chan error, 1)
 	statistics := metrics.NewStatistics(changefeedID, "pulsar")
-	dmlProducer, err := newDMLProducers(changefeedID, comp, failpointCh)
+	dmlProducer, err = newDMLProducer(changefeedID, comp, failpointCh)
 	if err != nil {
 		return nil, err
 	}
 
-	ddlProducer, err := newDDLProducers(changefeedID, comp, sinkConfig)
+	ddlProducer, err = newDDLProducer(changefeedID, comp, sinkConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -126,6 +172,10 @@ func (s *sink) IsNormal() bool {
 
 func (s *sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	s.eventChan.Push(event)
+}
+
+func (s *sink) FlushDMLBeforeBlock(_ commonEvent.BlockEvent) error {
+	return nil
 }
 
 func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
@@ -329,20 +379,9 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 
 			partitionGenerator := s.comp.eventRouter.GetPartitionGenerator(schema, table)
 			selector := s.comp.columnSelector.Get(schema, table)
-			toRowCallback := func(postTxnFlushed []func(), totalCount uint64) func() {
-				var calledCount atomic.Uint64
-				// The callback of the last row will trigger the callback of the txn.
-				return func() {
-					if calledCount.Inc() == totalCount {
-						for _, callback := range postTxnFlushed {
-							callback()
-						}
-					}
-				}
-			}
-
-			rowsCount := uint64(event.Len())
-			rowCallback := toRowCallback(event.PostTxnFlushed, rowsCount)
+			rowsCount := event.Len()
+			events := make([]*commonEvent.MQRowEvent, 0, rowsCount)
+			rowCallback := helper.NewTxnPostFlushRowCallback(event, uint64(rowsCount))
 
 			for {
 				row, ok := event.GetNextRow()
@@ -356,7 +395,7 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 					return errors.Trace(err)
 				}
 
-				mqEvent := &commonEvent.MQRowEvent{
+				events = append(events, &commonEvent.MQRowEvent{
 					Key: commonEvent.TopicPartitionKey{
 						Topic:          topic,
 						Partition:      index,
@@ -373,9 +412,9 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 						ColumnSelector:  selector,
 						Checksum:        row.Checksum,
 					},
-				}
-				s.rowChan.Push(mqEvent)
+				})
 			}
+			s.rowChan.Push(events...)
 		}
 	}
 }
@@ -444,6 +483,7 @@ func (s *sink) batch(ctx context.Context, buffer []*commonEvent.MQRowEvent, tick
 				zap.String("changefeed", s.changefeedID.Name()))
 			return nil, nil
 		}
+		buffer = buffer[:0]
 		return msgs, nil
 	}
 }
@@ -534,4 +574,12 @@ func (s *sink) Close(_ bool) {
 	s.dmlProducer.close()
 	s.comp.close()
 	s.statistics.Close()
+}
+
+func (s *sink) BatchCount() int {
+	return 4096
+}
+
+func (s *sink) BatchBytes() int {
+	return 0
 }

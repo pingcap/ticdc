@@ -34,6 +34,13 @@ import (
 	"go.uber.org/zap"
 )
 
+func isRedoConfigEnabled(cfConfig *config.ChangefeedConfig) bool {
+	if cfConfig == nil {
+		return false
+	}
+	return cfConfig.Consistent != nil && pkgRedo.IsConsistentEnabled(util.GetOrZero(cfConfig.Consistent.Level))
+}
+
 func initRedoComponet(
 	ctx context.Context,
 	manager *DispatcherManager,
@@ -42,12 +49,15 @@ func initRedoComponet(
 	startTs uint64,
 	newChangefeed bool,
 ) error {
-	if manager.config.Consistent == nil || !pkgRedo.IsConsistentEnabled(util.GetOrZero(manager.config.Consistent.Level)) {
+	if !manager.IsRedoEnabled() {
 		return nil
 	}
-	manager.RedoEnable = true
+	var err error
 	manager.redoDispatcherMap = newDispatcherMap[*dispatcher.RedoDispatcher]()
-	manager.redoSink = redo.New(ctx, changefeedID, manager.config.Consistent)
+	manager.redoSink, err = redo.New(ctx, changefeedID, manager.config.Consistent)
+	if err != nil {
+		return err
+	}
 	manager.redoSchemaIDToDispatchers = dispatcher.NewSchemaIDToDispatchers()
 
 	totalQuota := manager.sinkQuota
@@ -78,12 +88,15 @@ func initRedoComponet(
 		err := manager.redoSink.Run(ctx)
 		manager.handleError(ctx, err)
 	}()
+	// Publish redo availability only after all redo components are initialized,
+	// so scheduler precheck won't observe a partially initialized manager.
+	manager.redoReady.Store(true)
 	return nil
 }
 
 func (e *DispatcherManager) NewTableTriggerRedoDispatcher(id *heartbeatpb.DispatcherID, startTs uint64, newChangefeed bool) error {
 	if e.GetTableTriggerRedoDispatcher() != nil {
-		log.Error("table trigger redo dispatcher existed!")
+		return errors.ErrChangefeedInitTableTriggerDispatcherFailed.FastGenByArgs("table trigger redo dispatcher existed!")
 	}
 	infos := map[common.DispatcherID]dispatcherCreateInfo{}
 	dispatcherID := common.NewDispatcherIDFromPB(id)
@@ -100,7 +113,7 @@ func (e *DispatcherManager) NewTableTriggerRedoDispatcher(id *heartbeatpb.Dispat
 	// redo meta should keep the same node with table trigger event dispatcher
 	// table trigger event dispatcher and table trigger redo dispatcher must exist on the same node
 	redoDispatcher := e.GetTableTriggerRedoDispatcher()
-	redoDispatcher.SetRedoMeta(e.config.Consistent)
+	redoDispatcher.SetRedoMeta(e.ctx, e.config.Consistent)
 	e.wg.Add(1)
 	go func() {
 		defer e.wg.Done()
@@ -226,6 +239,11 @@ func (e *DispatcherManager) mergeRedoDispatcher(dispatcherIDs []common.Dispatche
 func (e *DispatcherManager) cleanRedoDispatcher(id common.DispatcherID, schemaID int64) {
 	e.redoDispatcherMap.Delete(id)
 	e.redoSchemaIDToDispatchers.Delete(schemaID, id)
+	e.currentOperatorMap.Delete(id)
+	log.Debug("delete current working remove operator for redo dispatcher",
+		zap.String("changefeedID", e.changefeedID.String()),
+		zap.String("dispatcherID", id.String()),
+	)
 	tableTriggerRedoDispatcher := e.GetTableTriggerRedoDispatcher()
 	if tableTriggerRedoDispatcher != nil && tableTriggerRedoDispatcher.GetId() == id {
 		e.SetTableTriggerRedoDispatcher(nil)
@@ -240,10 +258,13 @@ func (e *DispatcherManager) cleanRedoDispatcher(id common.DispatcherID, schemaID
 }
 
 func (e *DispatcherManager) closeRedoMeta(removeChangefeed bool) {
-	if removeChangefeed && e.GetTableTriggerRedoDispatcher() != nil {
-		redoMeta := e.GetTableTriggerRedoDispatcher().GetRedoMeta()
+	if d := e.GetTableTriggerRedoDispatcher(); d != nil {
+		redoMeta := d.GetRedoMeta()
 		if redoMeta != nil {
-			redoMeta.Cleanup(context.Background())
+			redoMeta.CleanupMetrics()
+			if removeChangefeed {
+				redoMeta.Cleanup(context.Background())
+			}
 		}
 	}
 }
@@ -278,7 +299,7 @@ func (e *DispatcherManager) SetRedoResolvedTs(resolvedTs uint64) bool {
 }
 
 func (e *DispatcherManager) collectRedoMeta(ctx context.Context) error {
-	ticker := time.NewTicker(time.Duration(*e.config.Consistent.FlushIntervalInMs))
+	ticker := time.NewTicker(time.Duration(*e.config.Consistent.FlushIntervalInMs) * time.Millisecond)
 	defer ticker.Stop()
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 	var preResolvedTs uint64

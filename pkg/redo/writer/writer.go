@@ -15,54 +15,34 @@ package writer
 
 import (
 	"context"
-	"fmt"
-	"net/url"
 
-	"github.com/pingcap/ticdc/pkg/common"
-	pevent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/config"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/uuid"
 )
 
 var (
-	_ RedoEvent = (*pevent.RedoRowEvent)(nil)
-	_ RedoEvent = (*pevent.DDLEvent)(nil)
+	_ RedoEvent = (*commonEvent.RedoRowEvent)(nil)
+	_ RedoEvent = (*commonEvent.DDLEvent)(nil)
 )
 
 // RedoEvent is the interface for redo event.
 type RedoEvent interface {
 	PostFlush()
-	ToRedoLog() *pevent.RedoLog
+	ToRedoLog() *commonEvent.RedoLog
 }
 
-// RedoLogWriter defines the interfaces used to write redo log, all operations are thread-safe.
-type RedoLogWriter interface {
-	// WriteEvents writes DDL/DML events to the redo log.
-	WriteEvents(ctx context.Context, events ...RedoEvent) error
-
+// RedoDMLWriter writes row redo events, all operations are thread-safe.
+type RedoDMLWriter interface {
+	AddDMLEvents(ctx context.Context, events ...*commonEvent.RedoRowEvent) error
 	Run(ctx context.Context) error
-	// Close is used to close the writer.
 	Close() error
-
-	SetTableSchemaStore(*pevent.TableSchemaStore)
 }
 
-// LogWriterConfig is the config for redo log writer.
-type LogWriterConfig struct {
-	config.ConsistentConfig
-	CaptureID    config.CaptureID
-	ChangeFeedID common.ChangeFeedID
-
-	URI                *url.URL
-	UseExternalStorage bool
-	Dir                string
-	MaxLogSizeInBytes  int64
-}
-
-func (cfg LogWriterConfig) String() string {
-	return fmt.Sprintf("%s:%s:%s:%s:%d:%s:%t",
-		cfg.ChangeFeedID.Keyspace(), cfg.ChangeFeedID.Name(), cfg.CaptureID,
-		cfg.Dir, cfg.MaxLogSize, cfg.URI.String(), cfg.UseExternalStorage)
+// RedoDDLWriter writes DDL redo events, all operations are thread-safe.
+type RedoDDLWriter interface {
+	WriteDDLEvent(ctx context.Context, event *commonEvent.DDLEvent) error
+	Close() error
+	SetTableSchemaStore(*commonEvent.TableSchemaStore)
 }
 
 // Option define the writerOptions

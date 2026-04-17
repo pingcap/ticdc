@@ -48,6 +48,14 @@ func QuoteName(name string) string {
 	return "`" + EscapeName(name) + "`"
 }
 
+// UnquoteName removes one layer of MySQL identifier quoting and unescapes doubled backticks.
+func UnquoteName(name string) string {
+	if len(name) < 2 || name[0] != '`' || name[len(name)-1] != '`' {
+		return name
+	}
+	return strings.ReplaceAll(name[1:len(name)-1], "``", "`")
+}
+
 // EscapeName replaces all "`" in name with double "`"
 func EscapeName(name string) string {
 	return strings.Replace(name, "`", "``", -1)
@@ -152,11 +160,22 @@ func (ti *TableInfo) Marshal() ([]byte, error) {
 
 func UnmarshalJSONToTableInfo(data []byte) (*TableInfo, error) {
 	// otherField | columnSchemaData | columnSchemaDataSize
+	if len(data) < 8 {
+		return nil, fmt.Errorf("invalid table info data: length %d is too short", len(data))
+	}
+
 	ti := &TableInfo{}
 	var err error
 	var columnSchemaDataSize uint64
 	columnSchemaDataSizeValue := data[len(data)-8:]
 	columnSchemaDataSize = binary.BigEndian.Uint64(columnSchemaDataSizeValue)
+	if columnSchemaDataSize > uint64(len(data)-8) {
+		return nil, fmt.Errorf(
+			"invalid table info data: column schema size %d exceeds payload length %d",
+			columnSchemaDataSize,
+			len(data)-8,
+		)
+	}
 
 	columnSchemaData := data[len(data)-8-int(columnSchemaDataSize) : len(data)-8]
 	restData := data[:len(data)-8-int(columnSchemaDataSize)]
@@ -184,6 +203,9 @@ func (ti *TableInfo) ShadowCopyColumnSchema() *columnSchema {
 }
 
 func (ti *TableInfo) GetColumns() []*model.ColumnInfo {
+	if ti == nil || ti.columnSchema == nil {
+		return nil
+	}
 	return ti.columnSchema.Columns
 }
 
@@ -622,7 +644,7 @@ func WrapTableInfo(schemaName string, info *model.TableInfo) *TableInfo {
 // NewTableInfo4Decoder is only used by the codec decoder for the test purpose,
 // do not call this method on the production code.
 func NewTableInfo4Decoder(schema string, tableInfo *model.TableInfo) *TableInfo {
-	cs := newColumnSchema4Decoder(tableInfo)
+	cs := NewColumnSchema4Decoder(tableInfo)
 	result := newTableInfo(schema, tableInfo.Name.O, tableInfo.ID, tableInfo.GetPartitionInfo() != nil, cs, tableInfo)
 	result.InitPrivateFields()
 	return result
