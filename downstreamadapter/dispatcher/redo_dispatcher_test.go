@@ -23,9 +23,7 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/node"
-	"github.com/pingcap/ticdc/pkg/routing"
 	"github.com/stretchr/testify/require"
 )
 
@@ -36,22 +34,7 @@ func redoCallback() {
 }
 
 func newRedoDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) *RedoDispatcher {
-	defaultAtomicity := config.DefaultAtomicityLevel()
-	sharedInfo := NewSharedInfo(
-		common.NewChangefeedID(common.DefaultKeyspaceName),
-		"system",
-		false,
-		false,
-		nil,
-		nil,
-		nil, // redo dispatcher doesn't need syncPointConfig
-		&defaultAtomicity,
-		false, // enableSplittableCheck
-		routing.Router{},
-		make(chan TableSpanStatusWithSeq, 128),
-		128,
-		make(chan error, 1),
-	)
+	sharedInfo := newTestSharedInfo(false, nil)
 	return NewRedoDispatcher(
 		common.NewDispatcherID(),
 		tableSpan,

@@ -15,6 +15,8 @@ package dynstream
 
 import (
 	"time"
+
+	"github.com/pingcap/ticdc/pkg/config"
 )
 
 type batchConfig struct {
@@ -30,7 +32,7 @@ type batchConfig struct {
 	hardBytes int
 }
 
-const countCapMultiple = 8
+const countCapMultiple = 4
 
 func newDefaultBatchConfig() batchConfig {
 	// Keep the default behavior consistent with the legacy Option.BatchCount=1:
@@ -41,6 +43,9 @@ func newDefaultBatchConfig() batchConfig {
 func newBatchConfig(count, bytes int) batchConfig {
 	if count <= 0 {
 		count = 1
+	}
+	if count > config.MaxEventCollectorBatchCount {
+		count = config.MaxEventCollectorBatchCount
 	}
 	if bytes < 0 {
 		bytes = 0

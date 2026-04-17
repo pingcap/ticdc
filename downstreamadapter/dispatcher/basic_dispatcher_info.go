@@ -55,6 +55,9 @@ type SharedInfo struct {
 	// will break the splittability of this table.
 	enableSplittableCheck bool
 
+	eventCollectorBatchCount int
+	eventCollectorBatchBytes int
+
 	// router is used to route source schema/table names to target schema/table names.
 	// It is used to apply routing to TableInfo before storing it.
 	router routing.Router
@@ -90,26 +93,30 @@ func NewSharedInfo(
 	syncPointConfig *syncpoint.SyncPointConfig,
 	txnAtomicity *config.AtomicityLevel,
 	enableSplittableCheck bool,
+	eventCollectorBatchCount int,
+	eventCollectorBatchBytes int,
 	router routing.Router,
 	statusesChan chan TableSpanStatusWithSeq,
 	blockStatusBufferSize int,
 	errCh chan error,
 ) *SharedInfo {
 	sharedInfo := &SharedInfo{
-		changefeedID:          changefeedID,
-		timezone:              timezone,
-		bdrMode:               bdrMode,
-		outputRawChangeEvent:  outputRawChangeEvent,
-		integrityConfig:       integrityConfig,
-		filterConfig:          filterConfig,
-		syncPointConfig:       syncPointConfig,
-		enableSplittableCheck: enableSplittableCheck,
-		router:                router,
-		statusesChan:          statusesChan,
-		blockStatusBuffer:     NewBlockStatusBuffer(blockStatusBufferSize),
-		blockExecutor:         newBlockEventExecutor(),
-		errCh:                 errCh,
-		metricHandleDDLHis:    metrics.HandleDDLHistogram.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
+		changefeedID:             changefeedID,
+		timezone:                 timezone,
+		bdrMode:                  bdrMode,
+		outputRawChangeEvent:     outputRawChangeEvent,
+		integrityConfig:          integrityConfig,
+		filterConfig:             filterConfig,
+		syncPointConfig:          syncPointConfig,
+		enableSplittableCheck:    enableSplittableCheck,
+		eventCollectorBatchCount: eventCollectorBatchCount,
+		eventCollectorBatchBytes: eventCollectorBatchBytes,
+		router:                   router,
+		statusesChan:             statusesChan,
+		blockStatusBuffer:        NewBlockStatusBuffer(blockStatusBufferSize),
+		blockExecutor:            newBlockEventExecutor(),
+		errCh:                    errCh,
+		metricHandleDDLHis:       metrics.HandleDDLHistogram.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
 	}
 
 	if txnAtomicity != nil {
@@ -134,6 +141,10 @@ func (d *BasicDispatcher) GetMode() int64 {
 
 func (d *BasicDispatcher) GetChangefeedID() common.ChangeFeedID {
 	return d.sharedInfo.changefeedID
+}
+
+func (d *BasicDispatcher) GetEventCollectorBatchConfig() (batchCount int, batchBytes int) {
+	return d.sharedInfo.eventCollectorBatchCount, d.sharedInfo.eventCollectorBatchBytes
 }
 
 func (d *BasicDispatcher) GetComponentStatus() heartbeatpb.ComponentState {

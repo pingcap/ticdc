@@ -158,6 +158,8 @@ func newTestSharedInfo(
 		syncPointConfig,
 		&defaultAtomicity,
 		enableSplittableCheck,
+		0,
+		0,
 		routing.Router{},
 		make(chan TableSpanStatusWithSeq, 128),
 		128,
@@ -199,24 +201,7 @@ func getUncompleteTableSpan() *heartbeatpb.TableSpan {
 func newDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) *EventDispatcher {
 	var redoTs atomic.Uint64
 	redoTs.Store(math.MaxUint64)
-	sharedInfo := NewSharedInfo(
-		common.NewChangefeedID(common.DefaultKeyspaceName),
-		"system",
-		false,
-		false,
-		nil,
-		nil,
-		&syncpoint.SyncPointConfig{
-			SyncPointInterval:  time.Duration(5 * time.Second),
-			SyncPointRetention: time.Duration(10 * time.Minute),
-		}, // syncPointConfig
-		&defaultAtomicity,
-		false, // enableSplittableCheck
-		routing.Router{},
-		make(chan TableSpanStatusWithSeq, 128),
-		128,
-		make(chan error, 1),
-	)
+	sharedInfo := newTestSharedInfo(false, newTestSyncPointConfig())
 	return NewEventDispatcher(
 		common.NewDispatcherID(),
 		tableSpan,
@@ -1179,24 +1164,7 @@ func TestDispatcherSplittableCheck(t *testing.T) {
 	tableSpan := getUncompleteTableSpan()
 
 	// Create shared info with enableSplittableCheck=true
-	sharedInfo := NewSharedInfo(
-		common.NewChangefeedID(common.DefaultKeyspaceName),
-		"system",
-		false,
-		false,
-		nil,
-		nil,
-		&syncpoint.SyncPointConfig{
-			SyncPointInterval:  time.Duration(5 * time.Second),
-			SyncPointRetention: time.Duration(10 * time.Minute),
-		},
-		&defaultAtomicity,
-		true, // enableSplittableCheck = true
-		routing.Router{},
-		make(chan TableSpanStatusWithSeq, 128),
-		128,
-		make(chan error, 1),
-	)
+	sharedInfo := newTestSharedInfo(true, newTestSyncPointConfig())
 
 	// Create dispatcher with the split table span
 	var redoTs atomic.Uint64
@@ -1289,24 +1257,7 @@ func TestDispatcher_SkipDMLAsStartTs_FilterCorrectly(t *testing.T) {
 	// - Need to skip DML at commitTs = 100 (already written before crash)
 	var redoTs atomic.Uint64
 	redoTs.Store(math.MaxUint64)
-	sharedInfo := NewSharedInfo(
-		common.NewChangefeedID(common.DefaultKeyspaceName),
-		"system",
-		false,
-		false,
-		nil,
-		nil,
-		&syncpoint.SyncPointConfig{
-			SyncPointInterval:  time.Duration(5 * time.Second),
-			SyncPointRetention: time.Duration(10 * time.Minute),
-		},
-		&defaultAtomicity,
-		false,
-		routing.Router{},
-		make(chan TableSpanStatusWithSeq, 128),
-		128,
-		make(chan error, 1),
-	)
+	sharedInfo := newTestSharedInfo(false, newTestSyncPointConfig())
 
 	dispatcher := NewEventDispatcher(
 		common.NewDispatcherID(),
@@ -1369,24 +1320,7 @@ func TestDispatcher_SkipDMLAsStartTs_Disabled(t *testing.T) {
 	// Create dispatcher with skipDMLAsStartTs=false
 	var redoTs atomic.Uint64
 	redoTs.Store(math.MaxUint64)
-	sharedInfo := NewSharedInfo(
-		common.NewChangefeedID(common.DefaultKeyspaceName),
-		"system",
-		false,
-		false,
-		nil,
-		nil,
-		&syncpoint.SyncPointConfig{
-			SyncPointInterval:  time.Duration(5 * time.Second),
-			SyncPointRetention: time.Duration(10 * time.Minute),
-		},
-		&defaultAtomicity,
-		false,
-		routing.Router{},
-		make(chan TableSpanStatusWithSeq, 128),
-		128,
-		make(chan error, 1),
-	)
+	sharedInfo := newTestSharedInfo(false, newTestSyncPointConfig())
 
 	dispatcher := NewEventDispatcher(
 		common.NewDispatcherID(),
