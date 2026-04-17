@@ -53,8 +53,8 @@ func encodeParquetRows(tableInfo *common.TableInfo, emitMetadata bool, rows []Ch
 		append func(row ChangeRow) error
 	}
 
-	fields := make([]arrow.Field, 0, len(tableInfo.GetColumns())+3)
-	encoders := make([]encoder, 0, len(tableInfo.GetColumns())+3)
+	fields := make([]arrow.Field, 0, len(tableInfo.GetColumns())+7)
+	encoders := make([]encoder, 0, len(tableInfo.GetColumns())+7)
 
 	appendField := func(id int, name string, isMeta bool, ft *types.FieldType) error {
 		var mapped mappedColumnType
@@ -66,6 +66,10 @@ func encodeParquetRows(tableInfo *common.TableInfo, emitMetadata bool, rows []Ch
 				mapped = mappedColumnType{icebergType: "long", arrowType: arrow.PrimitiveTypes.Int64}
 			case "_tidb_commit_time":
 				mapped = mappedColumnType{icebergType: "timestamp", arrowType: &arrow.TimestampType{Unit: arrow.Microsecond}}
+			case "_tidb_table_version":
+				mapped = mappedColumnType{icebergType: "long", arrowType: arrow.PrimitiveTypes.Int64}
+			case "_tidb_row_identity", "_tidb_old_row_identity", "_tidb_identity_kind":
+				mapped = mappedColumnType{icebergType: "string", arrowType: arrow.BinaryTypes.String}
 			default:
 				mapped = mappedColumnType{icebergType: "string", arrowType: arrow.BinaryTypes.String}
 			}
@@ -114,6 +118,57 @@ func encodeParquetRows(tableInfo *common.TableInfo, emitMetadata bool, rows []Ch
 				appendRow = func(row ChangeRow) error {
 					return appendTimestampMicrosFromString(tb, row.CommitTime)
 				}
+			case "_tidb_table_version":
+				ib, ok := b.(*array.Int64Builder)
+				if !ok {
+					return cerror.ErrSinkURIInvalid.GenWithStackByArgs("unexpected builder type for _tidb_table_version")
+				}
+				appendRow = func(row ChangeRow) error {
+					if strings.TrimSpace(row.TableVersion) == "" {
+						ib.AppendNull()
+						return nil
+					}
+					return appendInt64FromUintString(ib, row.TableVersion)
+				}
+			case "_tidb_row_identity":
+				sb, ok := b.(*array.StringBuilder)
+				if !ok {
+					return cerror.ErrSinkURIInvalid.GenWithStackByArgs("unexpected builder type for _tidb_row_identity")
+				}
+				appendRow = func(row ChangeRow) error {
+					if strings.TrimSpace(row.RowIdentity) == "" {
+						sb.AppendNull()
+						return nil
+					}
+					sb.Append(row.RowIdentity)
+					return nil
+				}
+			case "_tidb_old_row_identity":
+				sb, ok := b.(*array.StringBuilder)
+				if !ok {
+					return cerror.ErrSinkURIInvalid.GenWithStackByArgs("unexpected builder type for _tidb_old_row_identity")
+				}
+				appendRow = func(row ChangeRow) error {
+					if row.OldRowIdentity == nil || strings.TrimSpace(*row.OldRowIdentity) == "" {
+						sb.AppendNull()
+						return nil
+					}
+					sb.Append(*row.OldRowIdentity)
+					return nil
+				}
+			case "_tidb_identity_kind":
+				sb, ok := b.(*array.StringBuilder)
+				if !ok {
+					return cerror.ErrSinkURIInvalid.GenWithStackByArgs("unexpected builder type for _tidb_identity_kind")
+				}
+				appendRow = func(row ChangeRow) error {
+					if strings.TrimSpace(row.IdentityKind) == "" {
+						sb.AppendNull()
+						return nil
+					}
+					sb.Append(row.IdentityKind)
+					return nil
+				}
 			default:
 				sb, ok := b.(*array.StringBuilder)
 				if !ok {
@@ -153,6 +208,18 @@ func encodeParquetRows(tableInfo *common.TableInfo, emitMetadata bool, rows []Ch
 			return nil, err
 		}
 		if err := appendField(icebergMetaIDCommitTime, "_tidb_commit_time", true, nil); err != nil {
+			return nil, err
+		}
+		if err := appendField(icebergMetaIDTableVer, "_tidb_table_version", true, nil); err != nil {
+			return nil, err
+		}
+		if err := appendField(icebergMetaIDRowID, "_tidb_row_identity", true, nil); err != nil {
+			return nil, err
+		}
+		if err := appendField(icebergMetaIDOldRowID, "_tidb_old_row_identity", true, nil); err != nil {
+			return nil, err
+		}
+		if err := appendField(icebergMetaIDIdentity, "_tidb_identity_kind", true, nil); err != nil {
 			return nil, err
 		}
 	}

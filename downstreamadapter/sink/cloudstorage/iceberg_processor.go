@@ -16,6 +16,7 @@ package cloudstorage
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -68,10 +69,11 @@ type icebergTableBuffer struct {
 }
 
 type icebergProcessor struct {
-	changefeedID commonType.ChangeFeedID
-	cfg          *sinkiceberg.Config
-	tableWriter  *sinkiceberg.TableWriter
-	statistics   *metrics.Statistics
+	changefeedID    commonType.ChangeFeedID
+	cfg             *sinkiceberg.Config
+	externalStorage storage.ExternalStorage
+	tableWriter     *sinkiceberg.TableWriter
+	statistics      *metrics.Statistics
 
 	dmlCh *chann.UnlimitedChannel[*commonEvent.DMLEvent, any]
 
@@ -138,15 +140,16 @@ func newIcebergProcessor(
 	}
 
 	return &icebergProcessor{
-		changefeedID: changefeedID,
-		cfg:          icebergCfg,
-		tableWriter:  tableWriter,
-		statistics:   statistics,
-		dmlCh:        chann.NewUnlimitedChannelDefault[*commonEvent.DMLEvent](),
-		buffers:      make(map[int64]*icebergTableBuffer),
-		columnPlans:  make(map[int64]*icebergTableColumnPlan),
-		committed:    make(map[int64]uint64),
-		isNormal:     isNormal,
+		changefeedID:    changefeedID,
+		cfg:             icebergCfg,
+		externalStorage: st,
+		tableWriter:     tableWriter,
+		statistics:      statistics,
+		dmlCh:           chann.NewUnlimitedChannelDefault[*commonEvent.DMLEvent](),
+		buffers:         make(map[int64]*icebergTableBuffer),
+		columnPlans:     make(map[int64]*icebergTableColumnPlan),
+		committed:       make(map[int64]uint64),
+		isNormal:        isNormal,
 	}, nil
 }
 
@@ -204,6 +207,9 @@ func (p *icebergProcessor) handleDDLEvent(ctx context.Context, event *commonEven
 	}
 
 	return p.statistics.RecordDDLExecution(func() (string, error) {
+		if err := p.writeDDLAndSchemaManifests(ctx, event); err != nil {
+			return "", err
+		}
 		for _, e := range event.GetEvents() {
 			if e == nil || e.NotSync || e.TableInfo == nil {
 				continue
@@ -211,13 +217,6 @@ func (p *icebergProcessor) handleDDLEvent(ctx context.Context, event *commonEven
 			switch e.GetDDLType() {
 			case timodel.ActionDropTable, timodel.ActionDropSchema:
 				continue
-			case timodel.ActionTruncateTablePartition,
-				timodel.ActionAddTablePartition, timodel.ActionDropTablePartition,
-				timodel.ActionExchangeTablePartition, timodel.ActionReorganizePartition,
-				timodel.ActionAlterTablePartitioning, timodel.ActionRemovePartitioning:
-				return "", errors.ErrSinkURIInvalid.GenWithStackByArgs(
-					fmt.Sprintf("iceberg storage sink does not support ddl action: %s", e.GetDDLType()),
-				)
 			default:
 			}
 
@@ -523,7 +522,7 @@ func buildIcebergColumnPlan(tableInfo *commonType.TableInfo) (*icebergTableColum
 
 	dataColumns := make([]icebergColumnPlanColumn, 0, len(colInfos))
 	for idx, colInfo := range colInfos {
-		if colInfo == nil || colInfo.IsVirtualGenerated() {
+		if colInfo == nil || colInfo.IsVirtualGenerated() || colInfo.ID == timodel.ExtraHandleID {
 			continue
 		}
 		dataColumns = append(dataColumns, icebergColumnPlanColumn{
@@ -539,13 +538,14 @@ func buildIcebergColumnPlan(tableInfo *commonType.TableInfo) (*icebergTableColum
 }
 
 func convertToIcebergRows(event *commonEvent.DMLEvent, plan *icebergTableColumnPlan) ([]sinkiceberg.ChangeRow, error) {
-	if event == nil || plan == nil || len(plan.dataColumns) == 0 {
+	if event == nil || plan == nil {
 		return nil, nil
 	}
 
 	commitTime := oracle.GetTimeFromTS(event.CommitTs).UTC()
 	commitTimeStr := commitTime.Format(time.RFC3339Nano)
 	commitTsStr := strconv.FormatUint(event.CommitTs, 10)
+	tableVersionStr := strconv.FormatUint(event.TableInfoVersion, 10)
 
 	event.Rewind()
 	defer event.Rewind()
@@ -558,8 +558,9 @@ func convertToIcebergRows(event *commonEvent.DMLEvent, plan *icebergTableColumnP
 		}
 
 		var (
-			op  string
-			row chunk.Row
+			op     string
+			row    chunk.Row
+			preRow chunk.Row
 		)
 		switch change.RowType {
 		case commonType.RowTypeInsert:
@@ -567,9 +568,11 @@ func convertToIcebergRows(event *commonEvent.DMLEvent, plan *icebergTableColumnP
 			row = change.Row
 		case commonType.RowTypeUpdate:
 			op = "U"
+			preRow = change.PreRow
 			row = change.Row
 		case commonType.RowTypeDelete:
 			op = "D"
+			preRow = change.PreRow
 			row = change.PreRow
 		default:
 			continue
@@ -584,14 +587,121 @@ func convertToIcebergRows(event *commonEvent.DMLEvent, plan *icebergTableColumnP
 			columns[col.name] = v
 		}
 
+		identityKind, rowIdentity, oldRowIdentity, err := buildIcebergRowIdentity(event.TableInfo, change.RowType, row, preRow)
+		if err != nil {
+			return nil, err
+		}
+
 		rows = append(rows, sinkiceberg.ChangeRow{
-			Op:         op,
-			CommitTs:   commitTsStr,
-			CommitTime: commitTimeStr,
-			Columns:    columns,
+			Op:             op,
+			CommitTs:       commitTsStr,
+			CommitTime:     commitTimeStr,
+			TableVersion:   tableVersionStr,
+			RowIdentity:    rowIdentity,
+			OldRowIdentity: oldRowIdentity,
+			IdentityKind:   identityKind,
+			Columns:        columns,
 		})
 	}
 	return rows, nil
+}
+
+func buildIcebergRowIdentity(
+	tableInfo *commonType.TableInfo,
+	rowType commonType.RowType,
+	row chunk.Row,
+	preRow chunk.Row,
+) (string, string, *string, error) {
+	identityKind, columnIDs, err := resolveIcebergIdentityColumns(tableInfo)
+	if err != nil {
+		return "", "", nil, err
+	}
+
+	rowIdentity, err := encodeIcebergIdentityValues(tableInfo, row, columnIDs)
+	if err != nil {
+		return "", "", nil, err
+	}
+
+	switch rowType {
+	case commonType.RowTypeInsert:
+		return identityKind, rowIdentity, nil, nil
+	case commonType.RowTypeDelete:
+		oldRowIdentity := rowIdentity
+		return identityKind, rowIdentity, &oldRowIdentity, nil
+	case commonType.RowTypeUpdate:
+		oldIdentity, err := encodeIcebergIdentityValues(tableInfo, preRow, columnIDs)
+		if err != nil {
+			return "", "", nil, err
+		}
+		oldRowIdentity := oldIdentity
+		return identityKind, rowIdentity, &oldRowIdentity, nil
+	default:
+		return "", "", nil, errors.ErrSinkURIInvalid.GenWithStackByArgs("unsupported row type for iceberg row identity")
+	}
+}
+
+func resolveIcebergIdentityColumns(tableInfo *commonType.TableInfo) (string, []int64, error) {
+	if tableInfo == nil {
+		return "", nil, errors.ErrSinkURIInvalid.GenWithStackByArgs("table info is nil")
+	}
+
+	handleIDs := append([]int64(nil), tableInfo.GetOrderedHandleKeyColumnIDs()...)
+	if len(handleIDs) == 0 {
+		for _, colInfo := range tableInfo.GetColumns() {
+			if colInfo != nil && colInfo.ID == timodel.ExtraHandleID {
+				return "rowid", []int64{timodel.ExtraHandleID}, nil
+			}
+		}
+		return "", nil, errors.ErrSinkURIInvalid.GenWithStackByArgs("no handle columns available to build iceberg row identity")
+	}
+
+	for _, id := range handleIDs {
+		if id == timodel.ExtraHandleID {
+			return "rowid", handleIDs, nil
+		}
+	}
+	if tableInfo.HasPrimaryKey() {
+		return "pk", handleIDs, nil
+	}
+	return "uk", handleIDs, nil
+}
+
+func encodeIcebergIdentityValues(tableInfo *commonType.TableInfo, row chunk.Row, columnIDs []int64) (string, error) {
+	if tableInfo == nil {
+		return "", errors.ErrSinkURIInvalid.GenWithStackByArgs("table info is nil")
+	}
+	if row.IsEmpty() {
+		return "", errors.ErrSinkURIInvalid.GenWithStackByArgs("row is empty")
+	}
+
+	offsets := tableInfo.GetRowColumnsOffset()
+	values := make([]*string, 0, len(columnIDs))
+	for _, columnID := range columnIDs {
+		offset, ok := offsets[columnID]
+		if !ok {
+			return "", errors.ErrSinkURIInvalid.GenWithStackByArgs(
+				fmt.Sprintf("missing row offset for handle column %d", columnID),
+			)
+		}
+		colInfo, exists := tableInfo.GetColumnInfo(columnID)
+		if !exists {
+			return "", errors.ErrSinkURIInvalid.GenWithStackByArgs(
+				fmt.Sprintf("missing table info for handle column %d", columnID),
+			)
+		}
+		rawValue := commonType.ExtractColVal(&row, colInfo, offset)
+		if rawValue == nil {
+			values = append(values, nil)
+			continue
+		}
+		strValue := commonType.ColumnValueString(rawValue)
+		values = append(values, &strValue)
+	}
+	encoded, err := json.Marshal(values)
+	if err != nil {
+		return "", errors.Trace(err)
+	}
+	return string(encoded), nil
 }
 
 func formatIcebergColumnValue(row *chunk.Row, idx int, ft *types.FieldType) (*string, error) {

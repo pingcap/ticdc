@@ -190,7 +190,14 @@ func (s *sink) Run(ctx context.Context) error {
 		s.isNormal.Store(false)
 	}()
 	if s.iceberg != nil {
-		return s.iceberg.run(ctx)
+		g, ctx := errgroup.WithContext(ctx)
+		g.Go(func() error {
+			return s.iceberg.run(ctx)
+		})
+		g.Go(func() error {
+			return s.sendCheckpointTs(ctx)
+		})
+		return g.Wait()
 	}
 
 	g, ctx := errgroup.WithContext(ctx)
@@ -368,9 +375,6 @@ func (s *sink) AddCheckpointTs(ts uint64) {
 	if !s.IsNormal() {
 		return
 	}
-	if s.iceberg != nil {
-		return
-	}
 	select {
 	case s.checkpointChan <- ts:
 	case <-s.ctx.Done():
@@ -418,7 +422,11 @@ func (s *sink) sendCheckpointTs(ctx context.Context) error {
 				zap.Duration("duration", time.Since(start)),
 				zap.Error(err))
 		}
-		err = s.storage.WriteFile(ctx, "metadata", message)
+		if s.iceberg != nil {
+			err = s.iceberg.recordGlobalCheckpoint(ctx, checkpoint)
+		} else {
+			err = s.storage.WriteFile(ctx, "metadata", message)
+		}
 		if err != nil {
 			log.Error("cloud storage sink write file failed",
 				zap.String("keyspace", keyspace),

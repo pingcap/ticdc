@@ -62,6 +62,10 @@ const (
 	icebergMetaIDOp         = 2000000001
 	icebergMetaIDCommitTs   = 2000000002
 	icebergMetaIDCommitTime = 2000000003
+	icebergMetaIDTableVer   = 2000000004
+	icebergMetaIDRowID      = 2000000005
+	icebergMetaIDOldRowID   = 2000000006
+	icebergMetaIDIdentity   = 2000000007
 )
 
 const (
@@ -82,10 +86,14 @@ const (
 
 // ChangeRow carries the row fields used for Iceberg writes.
 type ChangeRow struct {
-	Op         string
-	CommitTs   string
-	CommitTime string
-	Columns    map[string]*string
+	Op             string
+	CommitTs       string
+	CommitTime     string
+	TableVersion   string
+	RowIdentity    string
+	OldRowIdentity *string
+	IdentityKind   string
+	Columns        map[string]*string
 }
 
 // FileInfo describes a file written to the Iceberg table.
@@ -1331,8 +1339,8 @@ func newTableMetadata(location string, lastColumnID int, schema *icebergSchema) 
 }
 
 func buildChangelogSchemas(tableInfo *common.TableInfo, emitMetadata bool) (string, *icebergSchema, int, error) {
-	fields := make([]icebergField, 0, len(tableInfo.GetColumns())+3)
-	avroFields := make([]map[string]any, 0, len(tableInfo.GetColumns())+3)
+	fields := make([]icebergField, 0, len(tableInfo.GetColumns())+7)
+	avroFields := make([]map[string]any, 0, len(tableInfo.GetColumns())+7)
 	lastID := 0
 
 	requiredColumnIDs := make(map[int64]struct{})
@@ -1345,19 +1353,29 @@ func buildChangelogSchemas(tableInfo *common.TableInfo, emitMetadata bool) (stri
 			id          int
 			name        string
 			icebergType string
+			required    bool
 		}{
 			{id: icebergMetaIDOp, name: "_tidb_op", icebergType: "string"},
 			{id: icebergMetaIDCommitTs, name: "_tidb_commit_ts", icebergType: "long"},
 			{id: icebergMetaIDCommitTime, name: "_tidb_commit_time", icebergType: "timestamp"},
+			{id: icebergMetaIDTableVer, name: "_tidb_table_version", icebergType: "long"},
+			{id: icebergMetaIDRowID, name: "_tidb_row_identity", icebergType: "string"},
+			{id: icebergMetaIDOldRowID, name: "_tidb_old_row_identity", icebergType: "string"},
+			{id: icebergMetaIDIdentity, name: "_tidb_identity_kind", icebergType: "string"},
 		}
 		for _, m := range meta {
-			fields = append(fields, icebergField{ID: m.id, Name: m.name, Required: false, Type: m.icebergType})
-			avroFields = append(avroFields, map[string]any{
+			fields = append(fields, icebergField{ID: m.id, Name: m.name, Required: m.required, Type: m.icebergType})
+			avroField := map[string]any{
 				"name":     m.name,
-				"type":     []any{"null", icebergTypeToAvroType(m.icebergType)},
-				"default":  nil,
 				"field-id": m.id,
-			})
+			}
+			if m.required {
+				avroField["type"] = icebergTypeToAvroType(m.icebergType)
+			} else {
+				avroField["type"] = []any{"null", icebergTypeToAvroType(m.icebergType)}
+				avroField["default"] = nil
+			}
+			avroFields = append(avroFields, avroField)
 			if m.id > lastID {
 				lastID = m.id
 			}

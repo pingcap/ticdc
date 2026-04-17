@@ -80,7 +80,10 @@ func estimateRowsSize(rows []ChangeRow, emitMetadata bool) int64 {
 func estimateChangeRowSize(row ChangeRow, emitMetadata bool) int64 {
 	var size int64
 	if emitMetadata {
-		size += int64(len(row.Op) + len(row.CommitTs) + len(row.CommitTime) + 32)
+		size += int64(len(row.Op) + len(row.CommitTs) + len(row.CommitTime) + len(row.TableVersion) + len(row.RowIdentity) + len(row.IdentityKind) + 64)
+		if row.OldRowIdentity != nil {
+			size += int64(len(*row.OldRowIdentity))
+		}
 	}
 	for _, v := range row.Columns {
 		if v == nil {

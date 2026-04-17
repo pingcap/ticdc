@@ -350,6 +350,20 @@ func DecodeParquetFile(
 					if value != nil {
 						row.CommitTime = *value
 					}
+				case "_tidb_table_version":
+					if value != nil {
+						row.TableVersion = *value
+					}
+				case "_tidb_row_identity":
+					if value != nil {
+						row.RowIdentity = *value
+					}
+				case "_tidb_old_row_identity":
+					row.OldRowIdentity = value
+				case "_tidb_identity_kind":
+					if value != nil {
+						row.IdentityKind = *value
+					}
 				default:
 					row.Columns[field.Name] = value
 				}
@@ -392,7 +406,8 @@ func parseHadoopTableMetadataPath(namespace, relPath string) (string, string, bo
 
 func isIcebergMetadataColumn(name string) bool {
 	switch name {
-	case "_tidb_op", "_tidb_commit_ts", "_tidb_commit_time":
+	case "_tidb_op", "_tidb_commit_ts", "_tidb_commit_time",
+		"_tidb_table_version", "_tidb_row_identity", "_tidb_old_row_identity", "_tidb_identity_kind":
 		return true
 	default:
 		return false

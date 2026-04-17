@@ -78,6 +78,10 @@ func TestBuildChangelogSchemasMapsTiDBTypesToIceberg(t *testing.T) {
 	require.Equal(t, "string", typesByName["_tidb_op"])
 	require.Equal(t, "long", typesByName["_tidb_commit_ts"])
 	require.Equal(t, "timestamp", typesByName["_tidb_commit_time"])
+	require.Equal(t, "long", typesByName["_tidb_table_version"])
+	require.Equal(t, "string", typesByName["_tidb_row_identity"])
+	require.Equal(t, "string", typesByName["_tidb_old_row_identity"])
+	require.Equal(t, "string", typesByName["_tidb_identity_kind"])
 
 	require.Equal(t, "int", typesByName["i"])
 	require.Equal(t, "long", typesByName["big"])
@@ -132,12 +136,20 @@ func TestEncodeParquetRowsWritesTypedColumns(t *testing.T) {
 	rawBytes := []byte{1, 2, 3}
 	b := base64.StdEncoding.EncodeToString(rawBytes)
 	s := "abc"
+	tableVersion := "456"
+	rowIdentity := "[\"1\"]"
+	oldRowIdentity := "[\"0\"]"
+	identityKind := "pk"
 
 	rows := []ChangeRow{
 		{
-			Op:         "I",
-			CommitTs:   "123",
-			CommitTime: "2026-01-01T00:00:00Z",
+			Op:             "I",
+			CommitTs:       "123",
+			CommitTime:     "2026-01-01T00:00:00Z",
+			TableVersion:   tableVersion,
+			RowIdentity:    rowIdentity,
+			OldRowIdentity: &oldRowIdentity,
+			IdentityKind:   identityKind,
 			Columns: map[string]*string{
 				"i":    &i,
 				"big":  &big,
@@ -178,6 +190,10 @@ func TestEncodeParquetRowsWritesTypedColumns(t *testing.T) {
 	require.Equal(t, arrow.STRING, fieldTypeByName["_tidb_op"].ID())
 	require.Equal(t, arrow.INT64, fieldTypeByName["_tidb_commit_ts"].ID())
 	require.Equal(t, arrow.TIMESTAMP, fieldTypeByName["_tidb_commit_time"].ID())
+	require.Equal(t, arrow.INT64, fieldTypeByName["_tidb_table_version"].ID())
+	require.Equal(t, arrow.STRING, fieldTypeByName["_tidb_row_identity"].ID())
+	require.Equal(t, arrow.STRING, fieldTypeByName["_tidb_old_row_identity"].ID())
+	require.Equal(t, arrow.STRING, fieldTypeByName["_tidb_identity_kind"].ID())
 
 	require.Equal(t, arrow.INT32, fieldTypeByName["i"].ID())
 	require.Equal(t, arrow.INT64, fieldTypeByName["big"].ID())
@@ -190,6 +206,10 @@ func TestEncodeParquetRowsWritesTypedColumns(t *testing.T) {
 
 	// Validate a couple of values to ensure parsing matches types.
 	requireColumnValue(t, tbl, "_tidb_commit_ts", int64(123))
+	requireColumnValue(t, tbl, "_tidb_table_version", int64(456))
+	requireStringColumnValue(t, tbl, "_tidb_row_identity", rowIdentity)
+	requireStringColumnValue(t, tbl, "_tidb_old_row_identity", oldRowIdentity)
+	requireStringColumnValue(t, tbl, "_tidb_identity_kind", identityKind)
 	requireDecimalColumnValue(t, tbl, "ubig", ubig, 20, 0)
 	requireDecimalColumnValue(t, tbl, "dec", dec, 10, 2)
 	requireBinaryColumnValue(t, tbl, "b", rawBytes)
@@ -201,6 +221,14 @@ func requireColumnValue(t *testing.T, tbl arrow.Table, name string, expected int
 	t.Helper()
 	chunk := firstChunkByName(t, tbl, name)
 	arr, ok := chunk.(*array.Int64)
+	require.True(t, ok)
+	require.Equal(t, expected, arr.Value(0))
+}
+
+func requireStringColumnValue(t *testing.T, tbl arrow.Table, name string, expected string) {
+	t.Helper()
+	chunk := firstChunkByName(t, tbl, name)
+	arr, ok := chunk.(*array.String)
 	require.True(t, ok)
 	require.Equal(t, expected, arr.Value(0))
 }

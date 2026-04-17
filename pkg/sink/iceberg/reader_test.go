@@ -146,11 +146,18 @@ func TestDecodeParquetFile(t *testing.T) {
 
 	id := "1"
 	name := "alice"
+	tableVersion := "9"
+	rowIdentity := "[\"1\"]"
+	oldRowIdentity := "[\"0\"]"
 	_, err = tableWriter.AppendChangelog(ctx, cfID, tableInfo, 20, []ChangeRow{
 		{
-			Op:         "I",
-			CommitTs:   "101",
-			CommitTime: "2026-01-01T00:00:00Z",
+			Op:             "I",
+			CommitTs:       "101",
+			CommitTime:     "2026-01-01T00:00:00Z",
+			TableVersion:   tableVersion,
+			RowIdentity:    rowIdentity,
+			OldRowIdentity: &oldRowIdentity,
+			IdentityKind:   "pk",
 			Columns: map[string]*string{
 				"id":   &id,
 				"name": &name,
@@ -168,6 +175,11 @@ func TestDecodeParquetFile(t *testing.T) {
 	require.Len(t, rows, 1)
 	require.Equal(t, "I", rows[0].Op)
 	require.Equal(t, "101", rows[0].CommitTs)
+	require.Equal(t, tableVersion, rows[0].TableVersion)
+	require.Equal(t, rowIdentity, rows[0].RowIdentity)
+	require.NotNil(t, rows[0].OldRowIdentity)
+	require.Equal(t, oldRowIdentity, *rows[0].OldRowIdentity)
+	require.Equal(t, "pk", rows[0].IdentityKind)
 	require.NotNil(t, rows[0].Columns["id"])
 	require.Equal(t, "1", *rows[0].Columns["id"])
 	require.NotNil(t, rows[0].Columns["name"])

@@ -412,5 +412,9 @@ func partitioningUsesMetadataColumns(expr string) bool {
 	}
 	return strings.Contains(s, "_tidb_commit_time") ||
 		strings.Contains(s, "_tidb_commit_ts") ||
-		strings.Contains(s, "_tidb_op")
+		strings.Contains(s, "_tidb_op") ||
+		strings.Contains(s, "_tidb_table_version") ||
+		strings.Contains(s, "_tidb_row_identity") ||
+		strings.Contains(s, "_tidb_old_row_identity") ||
+		strings.Contains(s, "_tidb_identity_kind")
 }
