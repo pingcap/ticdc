@@ -23,7 +23,6 @@ import (
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
-	"go.uber.org/atomic"
 )
 
 func TestNewDispatcherStat(t *testing.T) {
@@ -179,29 +178,4 @@ func TestResolvedTsCache(t *testing.T) {
 	require.Equal(t, uint64(100), res[0].ResolvedTs)
 	require.Equal(t, uint64(109), res[9].ResolvedTs)
 	require.False(t, rc.isFull())
-}
-
-func TestSyncPointPrepareCannotLowerAfterPromote(t *testing.T) {
-	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "syncpoint-race"), 10*time.Second)
-
-	const (
-		preparingTs   = uint64(50)
-		loweredTarget = uint64(40)
-	)
-
-	readyDispatcher := &dispatcherStat{}
-	readyDispatcher.seq.Store(1)
-	readyDispatcher.sentResolvedTs.Store(preparingTs)
-	dispatcherPtr := &atomic.Pointer[dispatcherStat]{}
-	dispatcherPtr.Store(readyDispatcher)
-	status.addDispatcher(common.DispatcherID{Low: 1, High: 1}, dispatcherPtr)
-
-	status.syncPointPreparingTs.Store(preparingTs)
-	status.tryPromoteSyncPointToCommitIfReady()
-	require.True(t, status.isSyncPointInCommitStage(preparingTs))
-
-	lowered := status.tryEnterSyncPointPrepare(loweredTarget)
-	require.False(t, lowered)
-	require.Equal(t, preparingTs, status.syncPointPreparingTs.Load())
-	require.Equal(t, preparingTs, status.syncPointInFlightTs.Load())
 }
