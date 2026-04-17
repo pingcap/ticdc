@@ -389,10 +389,9 @@ type mockDispatcherInfo struct {
 	span              *heartbeatpb.TableSpan
 	startTs           uint64
 	actionType        eventpb.ActionType
-	filter            filter.Filter
+	filterConfig      *eventpb.FilterConfig
 	bdrMode           bool
 	integrity         *integrity.Config
-	tz                *time.Location
 	mode              int64
 	epoch             uint64
 	enableSyncPoint   bool
@@ -401,9 +400,6 @@ type mockDispatcherInfo struct {
 }
 
 func newMockDispatcherInfo(t *testing.T, startTs uint64, dispatcherID common.DispatcherID, tableID int64, actionType eventpb.ActionType) *mockDispatcherInfo {
-	cfg := config.NewDefaultFilterConfig()
-	filter, err := filter.NewFilter(cfg, "", false, false)
-	require.NoError(t, err)
 	return &mockDispatcherInfo{
 		clusterID:    1,
 		serverID:     "server1",
@@ -417,10 +413,13 @@ func newMockDispatcherInfo(t *testing.T, startTs uint64, dispatcherID common.Dis
 		},
 		startTs:    startTs,
 		actionType: actionType,
-		filter:     filter,
-		bdrMode:    false,
-		integrity:  config.GetDefaultReplicaConfig().Integrity,
-		tz:         time.Local,
+		filterConfig: &eventpb.FilterConfig{
+			FilterConfig: &eventpb.InnerFilterConfig{
+				Rules: []string{"*.*"},
+			},
+		},
+		bdrMode:   false,
+		integrity: config.GetDefaultReplicaConfig().Integrity,
 	}
 }
 
@@ -456,10 +455,8 @@ func (m *mockDispatcherInfo) GetChangefeedID() common.ChangeFeedID {
 	return m.changefeedID
 }
 
-func (m *mockDispatcherInfo) GetFilterConfig() *config.FilterConfig {
-	return &config.FilterConfig{
-		Rules: []string{"*.*"},
-	}
+func (m *mockDispatcherInfo) GetFilterConfig() *eventpb.FilterConfig {
+	return m.filterConfig
 }
 
 func (m *mockDispatcherInfo) SyncPointEnabled() bool {
@@ -474,10 +471,6 @@ func (m *mockDispatcherInfo) GetSyncPointInterval() time.Duration {
 	return m.syncPointInterval
 }
 
-func (m *mockDispatcherInfo) GetFilter() filter.Filter {
-	return m.filter
-}
-
 func (m *mockDispatcherInfo) IsOnlyReuse() bool {
 	return false
 }
@@ -488,10 +481,6 @@ func (m *mockDispatcherInfo) GetBdrMode() bool {
 
 func (m *mockDispatcherInfo) GetIntegrity() *integrity.Config {
 	return m.integrity
-}
-
-func (m *mockDispatcherInfo) GetTimezone() *time.Location {
-	return m.tz
 }
 
 func (m *mockDispatcherInfo) GetMode() int64 {
@@ -508,6 +497,44 @@ func (m *mockDispatcherInfo) IsOutputRawChangeEvent() bool {
 
 func (m *mockDispatcherInfo) GetTxnAtomicity() config.AtomicityLevel {
 	return config.DefaultAtomicityLevel()
+}
+
+func newChangefeedStatusForTest(t testing.TB, info DispatcherInfo) *changefeedStatus {
+	t.Helper()
+
+	status := newChangefeedStatus(info.GetChangefeedID(), info.GetSyncPointInterval())
+	status.filter = newChangefeedFilterForTest(t, info, time.UTC.String())
+	return status
+}
+
+func addChangefeedStatusToBrokerForTest(
+	t testing.TB,
+	broker *eventBroker,
+	changefeedID common.ChangeFeedID,
+	syncPointInterval time.Duration,
+) *changefeedStatus {
+	t.Helper()
+
+	status := newChangefeedStatus(changefeedID, syncPointInterval)
+	broker.changefeedMap.Store(changefeedID, status)
+	return status
+}
+
+func mustInitChangefeedStatusFilter(t testing.TB, status *changefeedStatus, info DispatcherInfo, timezone string) {
+	t.Helper()
+	if status.filter != nil {
+		return
+	}
+	status.filter = newChangefeedFilterForTest(t, info, timezone)
+}
+
+func newChangefeedFilterForTest(t testing.TB, info DispatcherInfo, timezone string) filter.Filter {
+	t.Helper()
+
+	changefeedFilter, err := filter.GetSharedFilterStorage().
+		GetOrSetFilter(info.GetChangefeedID(), info.GetFilterConfig(), timezone)
+	require.NoError(t, err)
+	return changefeedFilter
 }
 
 func genEvents(helper *commonEvent.EventTestHelper, ddl string, dmls ...string) (commonEvent.DDLEvent, []*common.RawKVEntry) {
