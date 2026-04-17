@@ -122,6 +122,8 @@ func newEventBroker(
 	scanTaskQueueSize := config.GetGlobalServerConfig().Debug.EventService.ScanTaskQueueSize / scanWorkerCount
 	sendMessageQueueSize := basicChannelSize * 4
 
+	eventServiceConfig := config.GetGlobalServerConfig().Debug.EventService
+
 	scanLimitInBytes := eventServiceConfig.ScanLimitInBytes
 	syncPointCheckpointCapMultiplier := eventServiceConfig.SyncPointCheckpointCapMultiplier
 	if syncPointCheckpointCapMultiplier <= 0 {
