@@ -15,6 +15,7 @@ package logpuller
 
 import (
 	"sync"
+	"time"
 
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller/regionlock"
@@ -28,6 +29,10 @@ const (
 )
 
 type regionInfo struct {
+	// runtimeKey links this region info to a regionRuntimeRegistry entry.
+	// It is assigned by subscriptionClient when scheduling the region.
+	runtimeKey regionRuntimeKey
+
 	verID tikv.RegionVerID
 	// The span of the region.
 	// Note(dongmen): The span doesn't always represent the whole span of a region.
@@ -193,4 +198,29 @@ func (s *regionFeedState) getRegionInfo() regionInfo {
 
 func (s *regionFeedState) getRegionMeta() (uint64, heartbeatpb.TableSpan, string) {
 	return s.region.verID.GetID(), s.region.span, s.region.rpcCtx.Addr
+}
+
+func (s *regionFeedState) runtimeRegistry() *regionRuntimeRegistry {
+	if !s.region.runtimeKey.isValid() || s.worker == nil || s.worker.client == nil {
+		return nil
+	}
+	return s.worker.client.regionRuntimeRegistry
+}
+
+func (s *regionFeedState) updateRuntimeLastEvent(now time.Time) {
+	if registry := s.runtimeRegistry(); registry != nil {
+		registry.updateLastEvent(s.region.runtimeKey, now)
+	}
+}
+
+func (s *regionFeedState) markRuntimeReplicating(now time.Time) {
+	if registry := s.runtimeRegistry(); registry != nil {
+		registry.markReplicating(s.region.runtimeKey, now)
+	}
+}
+
+func (s *regionFeedState) updateRuntimeResolvedTs(resolvedTs uint64, now time.Time) {
+	if registry := s.runtimeRegistry(); registry != nil {
+		registry.updateResolvedTs(s.region.runtimeKey, resolvedTs, now)
+	}
 }

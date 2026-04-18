@@ -189,6 +189,8 @@ type subscriptionClient struct {
 	metrics   sharedClientMetrics
 	clusterID uint64
 
+	regionRuntimeRegistry *regionRuntimeRegistry
+
 	pd           pd.Client
 	regionCache  *tikv.RegionCache
 	pdClock      pdutil.Clock
@@ -224,6 +226,92 @@ type subscriptionClient struct {
 	errCache *errCache
 }
 
+func (s *subscriptionClient) ensureRegionRuntime(region *regionInfo, now time.Time) {
+	if s.regionRuntimeRegistry == nil {
+		return
+	}
+	if region == nil || region.subscribedSpan == nil {
+		return
+	}
+	if region.verID.GetID() == 0 {
+		return
+	}
+	if !region.runtimeKey.isValid() {
+		region.runtimeKey = s.regionRuntimeRegistry.allocKey(region.subscribedSpan.subID, region.verID.GetID())
+		s.regionRuntimeRegistry.registerRegion(region.runtimeKey, *region, now)
+	}
+}
+
+func (s *subscriptionClient) updateRegionRuntimeInfo(region regionInfo) {
+	if s.regionRuntimeRegistry == nil {
+		return
+	}
+	if !region.runtimeKey.isValid() {
+		return
+	}
+	s.regionRuntimeRegistry.updateRegionInfo(region.runtimeKey, region)
+}
+
+func (s *subscriptionClient) transitionRegionRuntime(region regionInfo, phase regionPhase, now time.Time) {
+	if s.regionRuntimeRegistry == nil {
+		return
+	}
+	if !region.runtimeKey.isValid() {
+		return
+	}
+	s.regionRuntimeRegistry.transition(region.runtimeKey, phase, now)
+}
+
+func (s *subscriptionClient) markRegionRetryPending(region regionInfo, err error, now time.Time) {
+	if s.regionRuntimeRegistry == nil || !region.runtimeKey.isValid() {
+		return
+	}
+	s.regionRuntimeRegistry.markRetryPending(region.runtimeKey, err, now)
+}
+
+func (s *subscriptionClient) markRegionRuntimeRPCReady(region regionInfo, now time.Time) {
+	if s.regionRuntimeRegistry == nil || !region.runtimeKey.isValid() {
+		return
+	}
+	s.regionRuntimeRegistry.markRPCReady(region.runtimeKey, now)
+}
+
+func (s *subscriptionClient) markRegionRuntimeQueued(region regionInfo, acquiredTime, queuedTime time.Time) {
+	if s.regionRuntimeRegistry == nil || !region.runtimeKey.isValid() {
+		return
+	}
+	s.regionRuntimeRegistry.markQueued(region.runtimeKey, acquiredTime, queuedTime)
+}
+
+func (s *subscriptionClient) recordRegionRuntimeError(region regionInfo, err error, now time.Time) {
+	if s.regionRuntimeRegistry == nil || !region.runtimeKey.isValid() {
+		return
+	}
+	s.regionRuntimeRegistry.recordError(region.runtimeKey, err, now)
+}
+
+func (s *subscriptionClient) regionRuntimePhaseCounts() map[regionPhase]int {
+	if s.regionRuntimeRegistry == nil {
+		return nil
+	}
+	return s.regionRuntimeRegistry.phaseCounts()
+}
+
+func (s *subscriptionClient) removeSubscriptionRuntime(subID SubscriptionID) {
+	if s.regionRuntimeRegistry == nil {
+		return
+	}
+	s.regionRuntimeRegistry.removeBySubscription(subID)
+}
+
+func (s *subscriptionClient) removeRegionRuntime(region regionInfo, now time.Time) {
+	if s.regionRuntimeRegistry == nil || !region.runtimeKey.isValid() {
+		return
+	}
+	s.regionRuntimeRegistry.transition(region.runtimeKey, regionPhaseRemoved, now)
+	s.regionRuntimeRegistry.remove(region.runtimeKey)
+}
+
 // NewSubscriptionClient creates a client.
 func NewSubscriptionClient(
 	config *SubscriptionClientConfig,
@@ -239,6 +327,8 @@ func NewSubscriptionClient(
 		regionCache:  appcontext.GetService[*tikv.RegionCache](appcontext.RegionCache),
 		pdClock:      appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
 		lockResolver: lockResolver,
+
+		regionRuntimeRegistry: newRegionRuntimeRegistry(),
 
 		credential: credential,
 
@@ -331,6 +421,12 @@ func (s *subscriptionClient) updateMetrics(ctx context.Context) error {
 			})
 
 			metrics.SubscriptionClientRequestedRegionCount.WithLabelValues("pending").Set(float64(pendingRegionReqCount))
+
+			if counts := s.regionRuntimePhaseCounts(); counts != nil {
+				for _, phase := range regionRuntimePhases {
+					metrics.SubscriptionClientRegionRuntimePhaseCount.WithLabelValues(string(phase)).Set(float64(counts[phase]))
+				}
+			}
 
 			count := 0
 			s.totalSpans.RLock()
@@ -504,6 +600,8 @@ func (s *subscriptionClient) onTableDrained(rt *subscribedSpan) {
 	log.Info("subscription client stop span is finished",
 		zap.Uint64("subscriptionID", uint64(rt.subID)))
 
+	s.removeSubscriptionRuntime(rt.subID)
+
 	err := s.ds.RemovePath(rt.subID)
 	if err != nil {
 		log.Warn("subscription client remove path failed",
@@ -517,6 +615,7 @@ func (s *subscriptionClient) onTableDrained(rt *subscribedSpan) {
 
 // Note: don't block the caller, otherwise there may be deadlock
 func (s *subscriptionClient) onRegionFail(errInfo regionErrorInfo) {
+	s.recordRegionRuntimeError(errInfo.regionInfo, errInfo.err, time.Now())
 	// unlock the range early to prevent blocking the range.
 	if errInfo.subscribedSpan.rangeLock.UnlockRange(
 		errInfo.span.StartKey, errInfo.span.EndKey,
@@ -621,6 +720,8 @@ func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 		if !ok {
 			continue
 		}
+		s.updateRegionRuntimeInfo(region)
+		s.markRegionRuntimeRPCReady(region, time.Now())
 
 		store := getStore(region.rpcCtx.Addr)
 		worker := store.getRequestWorker()
@@ -796,21 +897,27 @@ func (s *subscriptionClient) divideSpanAndScheduleRegionRequests(
 // scheduleRegionRequest locks the region's range and send the region to regionTaskQueue,
 // which will be handled by handleRegions.
 func (s *subscriptionClient) scheduleRegionRequest(ctx context.Context, region regionInfo, priority TaskType) {
+	s.ensureRegionRuntime(&region, time.Now())
 	lockRangeResult := region.subscribedSpan.rangeLock.LockRange(
 		ctx, region.span.StartKey, region.span.EndKey, region.verID.GetID(), region.verID.GetVer())
 
 	if lockRangeResult.Status == regionlock.LockRangeStatusWait {
+		s.transitionRegionRuntime(region, regionPhaseRangeLockWait, time.Now())
 		lockRangeResult = lockRangeResult.WaitFn()
 	}
 
 	switch lockRangeResult.Status {
 	case regionlock.LockRangeStatusSuccess:
 		region.lockedRangeState = lockRangeResult.LockedRangeState
+		s.markRegionRuntimeQueued(region, lockRangeResult.LockedRangeState.Created, time.Now())
 		s.regionTaskQueue.Push(NewRegionPriorityTask(priority, region, s.pdClock.CurrentTS()))
 	case regionlock.LockRangeStatusStale:
+		s.removeRegionRuntime(region, time.Now())
 		for _, r := range lockRangeResult.RetryRanges {
 			s.scheduleRangeRequest(ctx, r, region.subscribedSpan, region.filterLoop, priority)
 		}
+	case regionlock.LockRangeStatusCancel:
+		s.removeRegionRuntime(region, time.Now())
 	default:
 		return
 	}
@@ -855,26 +962,31 @@ func (s *subscriptionClient) doHandleError(ctx context.Context, errInfo regionEr
 		if notLeader := innerErr.GetNotLeader(); notLeader != nil {
 			metricFeedNotLeaderCounter.Inc()
 			s.regionCache.UpdateLeader(errInfo.verID, notLeader.GetLeader(), errInfo.rpcCtx.AccessIdx)
+			s.markRegionRetryPending(errInfo.regionInfo, errInfo.err, time.Now())
 			s.scheduleRegionRequest(ctx, errInfo.regionInfo, TaskHighPrior)
 			return nil
 		}
 		if innerErr.GetEpochNotMatch() != nil {
 			metricFeedEpochNotMatchCounter.Inc()
+			s.removeRegionRuntime(errInfo.regionInfo, time.Now())
 			s.scheduleRangeRequest(ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, TaskHighPrior)
 			return nil
 		}
 		if innerErr.GetRegionNotFound() != nil {
 			metricFeedRegionNotFoundCounter.Inc()
+			s.removeRegionRuntime(errInfo.regionInfo, time.Now())
 			s.scheduleRangeRequest(ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, TaskHighPrior)
 			return nil
 		}
 		if innerErr.GetCongested() != nil {
 			metricKvCongestedCounter.Inc()
+			s.markRegionRetryPending(errInfo.regionInfo, errInfo.err, time.Now())
 			s.scheduleRegionRequest(ctx, errInfo.regionInfo, TaskLowPrior)
 			return nil
 		}
 		if innerErr.GetServerIsBusy() != nil {
 			metricKvIsBusyCounter.Inc()
+			s.markRegionRetryPending(errInfo.regionInfo, errInfo.err, time.Now())
 			s.scheduleRegionRequest(ctx, errInfo.regionInfo, TaskLowPrior)
 			return nil
 		}
@@ -894,10 +1006,12 @@ func (s *subscriptionClient) doHandleError(ctx context.Context, errInfo regionEr
 			zap.Uint64("subscriptionID", uint64(errInfo.subscribedSpan.subID)),
 			zap.Stringer("error", innerErr))
 		metricFeedUnknownErrorCounter.Inc()
+		s.markRegionRetryPending(errInfo.regionInfo, errInfo.err, time.Now())
 		s.scheduleRegionRequest(ctx, errInfo.regionInfo, TaskHighPrior)
 		return nil
 	case *rpcCtxUnavailableErr:
 		metricFeedRPCCtxUnavailable.Inc()
+		s.removeRegionRuntime(errInfo.regionInfo, time.Now())
 		s.scheduleRangeRequest(ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, TaskHighPrior)
 		return nil
 	case *getStoreErr:
@@ -905,15 +1019,18 @@ func (s *subscriptionClient) doHandleError(ctx context.Context, errInfo regionEr
 		bo := tikv.NewBackoffer(ctx, tikvRequestMaxBackoff)
 		// cannot get the store the region belongs to, so we need to reload the region.
 		s.regionCache.OnSendFail(bo, errInfo.rpcCtx, true, err)
+		s.removeRegionRuntime(errInfo.regionInfo, time.Now())
 		s.scheduleRangeRequest(ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, TaskHighPrior)
 		return nil
 	case *sendRequestToStoreErr:
 		metricStoreSendRequestErr.Inc()
 		bo := tikv.NewBackoffer(ctx, tikvRequestMaxBackoff)
 		s.regionCache.OnSendFail(bo, errInfo.rpcCtx, regionScheduleReload, err)
+		s.markRegionRetryPending(errInfo.regionInfo, errInfo.err, time.Now())
 		s.scheduleRegionRequest(ctx, errInfo.regionInfo, TaskHighPrior)
 		return nil
 	case *requestCancelledErr:
+		s.removeRegionRuntime(errInfo.regionInfo, time.Now())
 		// the corresponding subscription has been unsubscribed, just ignore.
 		return nil
 	default:
