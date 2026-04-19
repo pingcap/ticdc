@@ -1,4 +1,4 @@
-// Copyright 2025 PingCAP, Inc.
+// Copyright 2026 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,9 +16,12 @@ package dynstream
 import (
 	"testing"
 
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/stretchr/testify/require"
 )
 
+// TestBatcherSetLimit verifies switching area batch config clears buffered
+// state before the batcher is reused.
 func TestBatcherSetLimit(t *testing.T) {
 	b := newBatcher[*mockEvent](newBatchConfig(4, 0))
 	b.addEvent(&mockEvent{value: 1}, 16)
@@ -32,6 +35,27 @@ func TestBatcherSetLimit(t *testing.T) {
 	require.Equal(t, 64, b.config.hardBytes)
 }
 
+// TestNewAreaSettingsWithMaxPendingSizeAndBatchConfigNormalizesBatchConfig
+// verifies the public constructor keeps the same normalization rules as the
+// internal batch config helper.
+func TestNewAreaSettingsWithMaxPendingSizeAndBatchConfigNormalizesBatchConfig(t *testing.T) {
+	settings := NewAreaSettingsWithMaxPendingSizeAndBatchConfig(
+		64*1024*1024, 0, "test", 0, -1,
+	)
+	require.Equal(t, newBatchConfig(0, -1), settings.batchConfig)
+}
+
+// TestNewBatchConfigClampsSoftCount keeps user overrides within the supported
+// upper bound before dynstream starts batching.
+func TestNewBatchConfigClampsSoftCount(t *testing.T) {
+	cfg := newBatchConfig(config.MaxEventCollectorBatchCount+1, 0)
+	require.Equal(t, config.MaxEventCollectorBatchCount, cfg.softCount)
+	require.Equal(t, config.MaxEventCollectorBatchCount*countCapMultiple, cfg.hardCount)
+	require.Equal(t, 0, cfg.hardBytes)
+}
+
+// TestBatchByBytes verifies byte-based batching flushes at the first event that
+// would push the accumulated batch size over the configured threshold.
 func TestBatchByBytes(t *testing.T) {
 	handler := mockHandler{}
 	registry := newAreaBatchConfigRegistry[int](newDefaultBatchConfig())
@@ -91,6 +115,8 @@ func TestBatchByBytes(t *testing.T) {
 	require.Equal(t, int64(0), eq.totalPendingLength.Load())
 }
 
+// TestBatchByHardCount verifies byte-based batching still has a hard event cap
+// to prevent unbounded growth when individual events are tiny.
 func TestBatchByHardCount(t *testing.T) {
 	handler := mockHandler{}
 	registry := newAreaBatchConfigRegistry[int](newDefaultBatchConfig())
@@ -114,14 +140,20 @@ func TestBatchByHardCount(t *testing.T) {
 	}
 
 	events, _, _, _ := eq.popEvents(b)
-	require.Len(t, events, 8)
-	require.Equal(t, int64(1), eq.totalPendingLength.Load())
+	require.Len(t, events, countCapMultiple)
+	require.Equal(t, int64(9-countCapMultiple), eq.totalPendingLength.Load())
+
+	events, _, _, _ = eq.popEvents(b)
+	require.Len(t, events, countCapMultiple)
+	require.Equal(t, int64(9-2*countCapMultiple), eq.totalPendingLength.Load())
 
 	events, _, _, _ = eq.popEvents(b)
 	require.Len(t, events, 1)
 	require.Equal(t, int64(0), eq.totalPendingLength.Load())
 }
 
+// TestBatchByBytesLargeFirstEvent verifies an oversized first event still gets
+// delivered and does not consume the following event in the same batch.
 func TestBatchByBytesLargeFirstEvent(t *testing.T) {
 	handler := mockHandler{}
 	registry := newAreaBatchConfigRegistry[int](newDefaultBatchConfig())

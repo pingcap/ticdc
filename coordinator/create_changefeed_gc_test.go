@@ -192,14 +192,6 @@ func TestRemoveLastChangefeedDeletesServiceSafepointImmediately(t *testing.T) {
 	}, 101, true)
 	changefeedDB.AddReplicatingMaintainer(cf, "node1")
 
-	cpCh := make(chan uint64, 1)
-	errCh := make(chan error, 1)
-	go func() {
-		cp, err := co.RemoveChangefeed(context.Background(), cfID)
-		cpCh <- cp
-		errCh <- err
-	}()
-
 	backend.EXPECT().
 		SetChangefeedProgress(gomock.Any(), cfID, config.ProgressRemoving).
 		Return(nil).
@@ -208,6 +200,14 @@ func TestRemoveLastChangefeedDeletesServiceSafepointImmediately(t *testing.T) {
 		TryDeleteServiceGCSafepoint(gomock.Any()).
 		Return(nil).
 		Times(1)
+
+	cpCh := make(chan uint64, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		cp, err := co.RemoveChangefeed(context.Background(), cfID)
+		cpCh <- cp
+		errCh <- err
+	}()
 
 	var op interface{ OnTaskRemoved() }
 	require.Eventually(t, func() bool {

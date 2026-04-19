@@ -42,6 +42,7 @@ type DispatcherService interface {
 	GetStartTs() uint64
 	GetBDRMode() bool
 	GetChangefeedID() common.ChangeFeedID
+	GetEventCollectorBatchConfig() (batchCount int, batchBytes int)
 	GetTableSpan() *heartbeatpb.TableSpan
 	GetTimezone() string
 	GetIntegrityConfig() *eventpb.IntegrityConfig
@@ -749,11 +750,13 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 // and return await=true.
 // The status path will be waked up after the action finishes.
 func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.DispatcherStatus) (await bool) {
-	log.Debug("dispatcher handle dispatcher status",
-		zap.String("dispatcherStatus", common.FormatDispatcherStatus(dispatcherStatus)),
-		zap.Stringer("dispatcher", d.id),
-		zap.Any("action", dispatcherStatus.GetAction()),
-		zap.Any("ack", dispatcherStatus.GetAck()))
+	if log.GetLevel() <= zapcore.DebugLevel {
+		log.Debug("dispatcher handle dispatcher status",
+			zap.String("dispatcherStatus", common.FormatDispatcherStatus(dispatcherStatus)),
+			zap.Stringer("dispatcher", d.id),
+			zap.Any("action", dispatcherStatus.GetAction()),
+			zap.Any("ack", dispatcherStatus.GetAck()))
+	}
 
 	// Step1: deal with the ack info
 	ack := dispatcherStatus.GetAck()
