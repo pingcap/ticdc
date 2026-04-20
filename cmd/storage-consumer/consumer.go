@@ -524,11 +524,15 @@ func getRenameTableOldTableKey(tableDef cloudstorage.TableDefinition) (string, b
 		log.Panic("parse statement failed", zap.Any("DDL", tableDef.Query), zap.Error(err))
 	}
 	// The query in job maybe "RENAME TABLE table1 to table2"
-	oldSchemaName := stmt.(*ast.RenameTableStmt).TableToTables[0].OldTable.Schema.O
-	if oldSchemaName != "" {
-		schemaName = oldSchemaName
+	renameStmt, ok := stmt.(*ast.RenameTableStmt)
+	if !ok || len(renameStmt.TableToTables) == 0 {
+		log.Panic("invalid rename table statement", zap.Any("DDL", tableDef.Query))
 	}
-	tableName = stmt.(*ast.RenameTableStmt).TableToTables[0].OldTable.Name.O
+	oldTable := renameStmt.TableToTables[0].OldTable
+	if oldTable.Schema.O != "" {
+		schemaName = oldTable.Schema.O
+	}
+	tableName = oldTable.Name.O
 	return commonType.QuoteSchema(schemaName, tableName), true
 }
 
