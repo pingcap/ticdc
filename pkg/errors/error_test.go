@@ -99,6 +99,11 @@ func TestShouldFailChangefeed(t *testing.T) {
 			expected: true,
 		},
 		{
+			name:     "ErrKafkaControllerNotAvailable should return false",
+			err:      ErrKafkaControllerNotAvailable.GenWithStackByArgs(),
+			expected: false,
+		},
+		{
 			name:     "ErrMySQLInvalidConfig should return true",
 			err:      ErrMySQLInvalidConfig.GenWithStackByArgs("invalid config"),
 			expected: true,

@@ -120,6 +120,7 @@ type urlConfig struct {
 	KafkaVersion                 *string `form:"kafka-version"`
 	MaxMessageBytes              *int    `form:"max-message-bytes"`
 	Compression                  *string `form:"compression"`
+	KafkaClient                  *string `form:"kafka-client"`
 	KafkaClientID                *string `form:"kafka-client-id"`
 	AutoCreateTopic              *bool   `form:"auto-create-topic"`
 	DialTimeout                  *string `form:"dial-timeout"`
@@ -148,6 +149,7 @@ type urlConfig struct {
 type options struct {
 	Topic           string
 	BrokerEndpoints []string
+	KafkaClient     string
 
 	// control whether to create topic
 	AutoCreate   bool
@@ -184,6 +186,7 @@ func NewOptions() *options {
 		Version: "2.4.0",
 		// MaxMessageBytes will be used to initialize producer
 		MaxMessageBytes:    config.DefaultMaxMessageBytes,
+		KafkaClient:        "franz",
 		ReplicationFactor:  1,
 		Compression:        "none",
 		RequiredAcks:       WaitForAll,
@@ -263,6 +266,16 @@ func (o *options) Apply(changefeedID common.ChangeFeedID,
 
 	if urlParameter.Compression != nil {
 		o.Compression = *urlParameter.Compression
+	}
+
+	if urlParameter.KafkaClient != nil && *urlParameter.KafkaClient != "" {
+		kafkaClient := strings.ToLower(strings.TrimSpace(*urlParameter.KafkaClient))
+		switch kafkaClient {
+		case "sarama", "franz":
+			o.KafkaClient = kafkaClient
+		default:
+			return cerror.ErrKafkaInvalidConfig.GenWithStack("unsupported kafka client %s", kafkaClient)
+		}
 	}
 
 	var kafkaClientID string
