@@ -392,25 +392,25 @@ func (m *Maintainer) GetMaintainerStatus() *heartbeatpb.MaintainerStatus {
 			dispatcherCount += m.controller.redoSpanController.GetTaskSizeByNodeID(drainTarget)
 			inflightDrainMoveCount += m.controller.redoOperatorController.CountInflightDrainMovesFromNode(drainTarget)
 		}
-		// DrainProgress is encoded as uint32 counters in heartbeat protobuf.
-		// Clamp the aggregated maintainer view before publishing it.
-		if dispatcherCount < 0 {
-			dispatcherCount = 0
-		}
-		if dispatcherCount > math.MaxUint32 {
-			dispatcherCount = math.MaxUint32
-		}
-		if inflightDrainMoveCount > math.MaxUint32 {
-			inflightDrainMoveCount = math.MaxUint32
-		}
 		status.DrainProgress = &heartbeatpb.DrainProgress{
 			TargetNodeId:                 drainTarget.String(),
 			TargetEpoch:                  drainEpoch,
-			TargetDispatcherCount:        uint32(dispatcherCount),
-			TargetInflightDrainMoveCount: uint32(inflightDrainMoveCount),
+			TargetDispatcherCount:        clampIntToUint32(dispatcherCount),
+			TargetInflightDrainMoveCount: clampIntToUint32(inflightDrainMoveCount),
 		}
 	}
 	return status
+}
+
+// clampIntToUint32 converts local int counters to heartbeat protobuf counters.
+func clampIntToUint32(v int) uint32 {
+	if v <= 0 {
+		return 0
+	}
+	if uint64(v) > uint64(math.MaxUint32) {
+		return math.MaxUint32
+	}
+	return uint32(v)
 }
 
 // SetDispatcherDrainTarget applies the newest drain target to this maintainer

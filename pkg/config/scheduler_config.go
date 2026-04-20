@@ -226,7 +226,7 @@ func (c *SchedulerConfig) ValidateAndAdjust() error {
 	}
 	if c.BalanceMoveBatchSize <= 0 {
 		return cerror.ErrInvalidServerOption.GenWithStackByArgs(
-			"balance-move-batch-size must be large than 0")
+			"balance-move-batch-size must be larger than 0")
 	}
 	return nil
 }

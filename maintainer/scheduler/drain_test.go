@@ -96,6 +96,36 @@ func TestDrainSchedulerCapsInflightDrainMoves(t *testing.T) {
 	require.Equal(t, maxDrainMovePerRound, oc.OperatorSize())
 }
 
+func TestDrainSchedulerIgnoresUnrelatedOperatorCapacity(t *testing.T) {
+	cfID, nodeManager, oc, sc, drainState, self := newDrainSchedulerTestHarness(t)
+	target := node.ID("target")
+	other := node.ID("other")
+	dest := node.ID("dest")
+	nodeManager.GetAliveNodes()[target] = &node.Info{ID: target}
+	nodeManager.GetAliveNodes()[other] = &node.Info{ID: other}
+	nodeManager.GetAliveNodes()[dest] = &node.Info{ID: dest}
+
+	onTarget := addReplicatingSpan(t, cfID, sc, 1, target)
+	unrelated := addReplicatingSpan(t, cfID, sc, 2, other)
+	require.True(t, oc.AddOperator(operator.NewMoveDispatcherOperator(sc, unrelated, other, dest)))
+	drainState.SetSelfNodeID(self)
+	drainState.SetDispatcherDrainTarget(target, 1)
+
+	s := NewDrainScheduler(
+		cfID,
+		1,
+		oc,
+		sc,
+		common.DefaultMode,
+		drainState,
+	)
+	_ = s.Execute()
+
+	require.NotNil(t, oc.GetOperator(onTarget.ID))
+	require.Equal(t, 1, oc.CountInflightDrainMovesFromNode(target))
+	require.Equal(t, 2, oc.OperatorSize())
+}
+
 func TestDrainSchedulerKeepsFixedLimitWithinDrainEpoch(t *testing.T) {
 	cfID, nodeManager, oc, sc, drainState, self := newDrainSchedulerTestHarness(t)
 	target := node.ID("target")
