@@ -139,6 +139,14 @@ func (m *MoveMaintainerOperator) AffectedNodes() []node.ID {
 	return []node.ID{m.origin, m.dest}
 }
 
+// OriginNode returns the source node of the move.
+func (m *MoveMaintainerOperator) OriginNode() node.ID {
+	m.lck.Lock()
+	defer m.lck.Unlock()
+
+	return m.origin
+}
+
 func (m *MoveMaintainerOperator) ID() common.ChangeFeedID {
 	return m.changefeed.ID
 }
