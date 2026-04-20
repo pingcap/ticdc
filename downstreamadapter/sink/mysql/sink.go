@@ -324,15 +324,7 @@ func (s *Sink) GetTableRecoveryInfo(
 	return newStartTsList, skipSyncpointAtStartTsList, skipDMLAsStartTsList, nil
 }
 
-func (s *Sink) Close(removeChangefeed bool) {
-	// when remove the changefeed, we need to remove the ddl ts item in the ddl worker
-	if removeChangefeed {
-		if err := s.ddlWriter.RemoveDDLTsItem(); err != nil {
-			log.Warn("close mysql sink, remove changefeed meet error",
-				zap.Any("changefeed", s.changefeedID.String()), zap.Error(err))
-		}
-	}
-
+func (s *Sink) Close() {
 	s.conflictDetector.CloseNotifiedNodes()
 	s.ddlWriter.Close()
 	for _, w := range s.dmlWriter {
@@ -346,3 +338,44 @@ func (s *Sink) Close(removeChangefeed bool) {
 	}
 	s.statistics.Close()
 }
+<<<<<<< HEAD
+=======
+
+// CleanupRemovedChangefeed removes ddl_ts state for a deleted changefeed.
+// It uses a short-lived DB connection so the cleanup can still run after the
+// normal sink close path has already closed the long-lived connection.
+func (s *Sink) CleanupRemovedChangefeed() error {
+	if !s.cfg.EnableDDLTs {
+		return nil
+	}
+
+	// Remove-changefeed cleanup must stay available even if the sink has already
+	// closed its long-lived DB connection in the normal close path.
+	dsnStr, err := mysql.GenerateDSN(context.Background(), s.cfg)
+	if err != nil {
+		return err
+	}
+	db, err := mysql.CreateMysqlDBConn(dsnStr)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if closeErr := db.Close(); closeErr != nil {
+			log.Warn("close mysql cleanup db meet error",
+				zap.Any("changefeed", s.changefeedID.String()), zap.Error(closeErr))
+		}
+	}()
+
+	cleanupWriter := mysql.NewWriter(context.Background(), -1, db, s.cfg, s.changefeedID, nil, nil)
+	defer cleanupWriter.Close()
+	return cleanupWriter.RemoveDDLTsItem()
+}
+
+func (s *Sink) BatchCount() int {
+	return s.maxTxnRows * len(s.dmlWriter)
+}
+
+func (s *Sink) BatchBytes() int {
+	return int(s.cfg.MaxAllowedPacket)
+}
+>>>>>>> 3c6a88206 (downstreamadapter: preserve remove upgrade during close (#4815))
