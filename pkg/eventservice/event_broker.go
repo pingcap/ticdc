@@ -1233,6 +1233,8 @@ func (c *eventBroker) removeChangefeedStatus(status *changefeedStatus) {
 	metrics.EventServiceAvailableMemoryQuotaGaugeVec.DeleteLabelValues(changefeedID.String())
 	metrics.EventServiceScanWindowBaseTsGaugeVec.DeleteLabelValues(changefeedID.String())
 	metrics.EventServiceScanWindowIntervalGaugeVec.DeleteLabelValues(changefeedID.String())
+	metrics.EventServiceSyncPointLagGaugeVec.DeleteLabelValues(changefeedID.String())
+	metrics.EventServiceSyncPointSuppressedCount.DeleteLabelValues(changefeedID.String())
 }
 
 func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
