@@ -43,7 +43,7 @@ type Sink interface {
 	AddCheckpointTs(ts uint64)
 
 	SetTableSchemaStore(tableSchemaStore *commonEvent.TableSchemaStore)
-	Close(removeChangefeed bool)
+	Close()
 	Run(ctx context.Context) error
 	BatchCount() int
 	BatchBytes() int

@@ -257,16 +257,19 @@ func (e *DispatcherManager) cleanRedoDispatcher(id common.DispatcherID, schemaID
 	)
 }
 
-func (e *DispatcherManager) closeRedoMeta(removeChangefeed bool) {
+func (e *DispatcherManager) closeRedoMeta(removeChangefeed bool) error {
 	if d := e.GetTableTriggerRedoDispatcher(); d != nil {
 		redoMeta := d.GetRedoMeta()
 		if redoMeta != nil {
 			redoMeta.CleanupMetrics()
 			if removeChangefeed {
-				redoMeta.Cleanup(context.Background())
+				if err := redoMeta.Cleanup(context.Background()); err != nil {
+					return errors.Trace(err)
+				}
 			}
 		}
 	}
+	return nil
 }
 
 func (e *DispatcherManager) InitalizeTableTriggerRedoDispatcher(schemaInfo []*heartbeatpb.SchemaInfo) error {
