@@ -29,17 +29,25 @@ const balanceDrainCooldown = 120 * time.Second
 // changefeed. All schedulers read it through snapshots so a single tick sees a
 // consistent view of the maintainer host and the active drain target.
 type DrainState struct {
+	// mu protects the full drain-state snapshot so schedulers can read a
+	// consistent self/target view within one tick.
 	mu sync.RWMutex
 
-	selfNodeID   node.ID
+	// selfNodeID is the node currently hosting this changefeed maintainer.
+	selfNodeID node.ID
+	// targetNodeID is the node currently being evacuated for this changefeed.
 	targetNodeID node.ID
-	targetEpoch  uint64
+	// targetEpoch is the monotonic epoch paired with targetNodeID.
+	targetEpoch uint64
 }
 
 type drainStateSnapshot struct {
-	selfNodeID   node.ID
+	// selfNodeID is the snapshot copy of the maintainer host node.
+	selfNodeID node.ID
+	// targetNodeID is the snapshot copy of the active drain target node.
 	targetNodeID node.ID
-	targetEpoch  uint64
+	// targetEpoch is the snapshot copy of the active drain target epoch.
+	targetEpoch uint64
 }
 
 // NewDrainState creates an empty drain state with no active drain target.

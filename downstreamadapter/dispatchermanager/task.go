@@ -28,15 +28,6 @@ import (
 	"go.uber.org/zap"
 )
 
-const (
-	heartbeatTaskExecuteInterval = 200 * time.Millisecond
-
-	defaultCompleteStatusInterval = 10 * time.Second
-	// syncPointCompleteStatusInterval is shorter so eventBroker can receive dispatcher-level
-	// checkpointTs progress faster when two-phase syncpoint commit is enabled.
-	syncPointCompleteStatusInterval = 1 * time.Second
-)
-
 // HeartbeatTask is a perioic task to collect the heartbeat status from event dispatcher manager and push to heartbeatRequestQueue
 type HeartBeatTask struct {
 	taskHandle *threadpool.TaskHandle
@@ -55,30 +46,15 @@ func newHeartBeatTask(manager *DispatcherManager) *HeartBeatTask {
 	return t
 }
 
-func getCompleteStatusInterval(enableSyncPoint bool) time.Duration {
-	if enableSyncPoint {
-		return syncPointCompleteStatusInterval
-	}
-	return defaultCompleteStatusInterval
-}
-
-func getIntervalTicks(interval, executeInterval time.Duration) int {
-	ticks := int(interval / executeInterval)
-	if ticks <= 0 {
-		return 1
-	}
-	return ticks
-}
-
 func (t *HeartBeatTask) Execute() time.Time {
 	if t.manager.closed.Load() {
 		return time.Time{}
 	}
-	executeInterval := heartbeatTaskExecuteInterval
-	enableSyncPoint := t.manager.config != nil && t.manager.config.EnableSyncPoint
-	completeStatusInterval := getIntervalTicks(getCompleteStatusInterval(enableSyncPoint), executeInterval)
+	executeInterval := time.Millisecond * 200
+	// 10s / 200ms = 50
+	completeStatusInterval := int(time.Second * 10 / executeInterval)
 	t.statusTick++
-	needCompleteStatus := t.statusTick%completeStatusInterval == 0
+	needCompleteStatus := (t.statusTick)%completeStatusInterval == 0
 	message := t.manager.aggregateDispatcherHeartbeats(needCompleteStatus)
 	t.manager.heartbeatRequestQueue.Enqueue(&HeartBeatRequestWithTargetID{TargetID: t.manager.GetMaintainerID(), Request: message})
 	return time.Now().Add(executeInterval)
