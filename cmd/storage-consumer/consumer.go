@@ -17,6 +17,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -35,6 +36,9 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec/csv"
 	putil "github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/br/pkg/storage"
+	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser"
+	"github.com/pingcap/tidb/pkg/parser/ast"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -45,6 +49,8 @@ const (
 	defaultLogInterval            = 5 * time.Second
 	fakePartitionNumForSchemaFile = -1
 )
+
+var renameTableQueryRe = regexp.MustCompile(`(?is)^rename\s+table\s+(.+?)\s+to\s+(.+?)$`)
 
 type (
 	fileIndexRange  map[cloudstorage.FileIndexKey]indexRange
@@ -510,6 +516,49 @@ func (c *consumer) mustGetTableDef(key cloudstorage.SchemaPathKey) cloudstorage.
 	return *tableDef
 }
 
+func getRenameTableOldTableKey(tableDef cloudstorage.TableDefinition) (string, bool) {
+	if tableDef.Type != byte(timodel.ActionRenameTable) {
+		return "", false
+	}
+	schemaName := tableDef.Schema
+	tableName := tableDef.Table
+	stmt, err := parser.New().ParseOneStmt(tableDef.Query, "", "")
+	if err != nil {
+		log.Panic("parse statement failed", zap.Any("DDL", tableDef.Query), zap.Error(err))
+	}
+	// The query in job maybe "RENAME TABLE table1 to table2"
+	oldSchemaName := stmt.(*ast.RenameTableStmt).TableToTables[0].OldTable.Schema.O
+	if oldSchemaName != "" {
+		schemaName = oldSchemaName
+	}
+	tableName = stmt.(*ast.RenameTableStmt).TableToTables[0].OldTable.Name.O
+	return commonType.QuoteSchema(schemaName, tableName), true
+}
+
+func getDDLWatermarkKeys(tableDef cloudstorage.TableDefinition) []string {
+	keys := make(map[string]struct{}, 2)
+	keys[commonType.QuoteSchema(tableDef.Schema, tableDef.Table)] = struct{}{}
+	if oldTableKey, ok := getRenameTableOldTableKey(tableDef); ok {
+		keys[oldTableKey] = struct{}{}
+	}
+
+	res := make([]string, 0, len(keys))
+	for key := range keys {
+		res = append(res, key)
+	}
+	return res
+}
+
+func (c *consumer) updateTableDDLWatermark(tableDef cloudstorage.TableDefinition) []string {
+	keys := getDDLWatermarkKeys(tableDef)
+	for _, key := range keys {
+		if c.tableDDLWatermark[key] < tableDef.TableVersion {
+			c.tableDDLWatermark[key] = tableDef.TableVersion
+		}
+	}
+	return keys
+}
+
 func (c *consumer) handleNewFiles(
 	ctx context.Context,
 	dmlFileMap map[cloudstorage.DmlPathKey]fileIndexRange,
@@ -582,12 +631,13 @@ func (c *consumer) handleNewFiles(
 			if err := c.sink.WriteBlockEvent(ddlEvent); err != nil {
 				return errors.Trace(err)
 			}
-			c.tableDDLWatermark[tableKey] = key.TableVersion
+			watermarkKeys := c.updateTableDDLWatermark(tableDef)
 			// TODO: need to cleanup tableDefMap in the future.
 			log.Info("execute ddl event successfully",
 				zap.String("query", tableDef.Query),
 				zap.String("schema", key.Schema), zap.String("table", key.Table),
-				zap.Uint64("ddlWatermark", c.tableDDLWatermark[tableKey]))
+				zap.Uint64("ddlWatermark", c.tableDDLWatermark[tableKey]),
+				zap.Strings("watermarkKeys", watermarkKeys))
 			continue
 		}
 
