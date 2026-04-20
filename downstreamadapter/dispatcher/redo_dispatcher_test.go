@@ -33,7 +33,12 @@ func redoCallback() {
 	redoCount.Add(1)
 }
 
-func newRedoDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) *RedoDispatcher {
+func newRedoDispatcherForTest(
+	sink sink.Sink,
+	tableSpan *heartbeatpb.TableSpan,
+	batchCount int,
+	batchBytes int,
+) *RedoDispatcher {
 	sharedInfo := newTestSharedInfo(false, false, nil)
 	return NewRedoDispatcher(
 		common.NewDispatcherID(),
