@@ -29,6 +29,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/utils/dynstream"
+	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/stretchr/testify/require"
 )
 
@@ -441,6 +443,203 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	checkpointTs = dispatcher.GetCheckpointTs()
 	require.Equal(t, uint64(7), checkpointTs)
 	t.Run("cloud storage wake callback after batch enqueue", verifyDMLWakeCallbackStorageAfterBatchEnqueue)
+}
+
+func TestDispatcherIgnoredBlockStatusSchedulesFastRetry(t *testing.T) {
+	tableSpan := getUncompleteTableSpan()
+	tableSpan.KeyspaceID = getTestingKeyspaceID()
+	dispatcher := newDispatcherForTest(newDispatcherTestSink(t, common.MysqlSinkType).Sink(), tableSpan)
+
+	previousScheduler := GetDispatcherTaskScheduler()
+	taskScheduler := threadpool.NewThreadPool(1)
+	SetDispatcherTaskScheduler(taskScheduler)
+	defer func() {
+		SetDispatcherTaskScheduler(previousScheduler)
+		taskScheduler.Stop()
+	}()
+
+	ddlEvent := &commonEvent.DDLEvent{
+		FinishedTs: 10,
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{1},
+		},
+	}
+	dispatcher.blockEventStatus.setBlockEvent(ddlEvent, heartbeatpb.BlockStage_WAITING)
+	identifier := BlockEventIdentifier{CommitTs: ddlEvent.FinishedTs}
+	dispatcher.resendTaskMap.Set(identifier, newResendTask(&heartbeatpb.TableSpanBlockStatus{
+		ID: dispatcher.GetId().ToPB(),
+		State: &heartbeatpb.State{
+			IsBlocked: true,
+			BlockTs:   ddlEvent.FinishedTs,
+			BlockTables: &heartbeatpb.InfluencedTables{
+				InfluenceType: heartbeatpb.InfluenceType_Normal,
+				TableIDs:      []int64{1},
+			},
+			Stage: heartbeatpb.BlockStage_WAITING,
+		},
+		Mode: dispatcher.GetMode(),
+	}, dispatcher, nil))
+	defer dispatcher.cancelResendTask(identifier)
+
+	ignoredStatus := &heartbeatpb.DispatcherStatus{
+		IgnoredBlockStatus: &heartbeatpb.IgnoredBlockStatus{
+			CommitTs:    ddlEvent.FinishedTs,
+			IsSyncPoint: false,
+		},
+	}
+
+	start := time.Now()
+	await := dispatcher.HandleDispatcherStatus(ignoredStatus)
+	require.False(t, await)
+
+	select {
+	case msg := <-dispatcher.GetBlockStatusesChan():
+		require.Equal(t, heartbeatpb.BlockStage_WAITING, msg.State.Stage)
+		require.Equal(t, ddlEvent.FinishedTs, msg.State.BlockTs)
+	case <-time.After(time.Second):
+		require.FailNow(t, "expected fast retry after ignored block status")
+	}
+	firstDelay := time.Since(start)
+	require.GreaterOrEqual(t, firstDelay, 40*time.Millisecond)
+	require.Less(t, firstDelay, 400*time.Millisecond)
+	require.Equal(t, 1, dispatcher.resendTaskMap.Len())
+
+	start = time.Now()
+	await = dispatcher.HandleDispatcherStatus(ignoredStatus)
+	require.False(t, await)
+
+	select {
+	case msg := <-dispatcher.GetBlockStatusesChan():
+		require.Equal(t, heartbeatpb.BlockStage_WAITING, msg.State.Stage)
+		require.Equal(t, ddlEvent.FinishedTs, msg.State.BlockTs)
+	case <-time.After(time.Second):
+		require.FailNow(t, "expected second fast retry after ignored block status")
+	}
+	secondDelay := time.Since(start)
+	require.GreaterOrEqual(t, secondDelay, 80*time.Millisecond)
+	require.Less(t, secondDelay, 500*time.Millisecond)
+}
+
+func TestDispatcherAckCancelsFastRetryScheduledByIgnoredBlockStatus(t *testing.T) {
+	tableSpan := getUncompleteTableSpan()
+	tableSpan.KeyspaceID = getTestingKeyspaceID()
+	dispatcher := newDispatcherForTest(newDispatcherTestSink(t, common.MysqlSinkType).Sink(), tableSpan)
+
+	previousScheduler := GetDispatcherTaskScheduler()
+	taskScheduler := threadpool.NewThreadPool(1)
+	SetDispatcherTaskScheduler(taskScheduler)
+	defer func() {
+		SetDispatcherTaskScheduler(previousScheduler)
+		taskScheduler.Stop()
+	}()
+
+	ddlEvent := &commonEvent.DDLEvent{
+		FinishedTs: 20,
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{1},
+		},
+	}
+	dispatcher.blockEventStatus.setBlockEvent(ddlEvent, heartbeatpb.BlockStage_WAITING)
+	identifier := BlockEventIdentifier{CommitTs: ddlEvent.FinishedTs}
+	dispatcher.resendTaskMap.Set(identifier, newResendTask(&heartbeatpb.TableSpanBlockStatus{
+		ID: dispatcher.GetId().ToPB(),
+		State: &heartbeatpb.State{
+			IsBlocked: true,
+			BlockTs:   ddlEvent.FinishedTs,
+			BlockTables: &heartbeatpb.InfluencedTables{
+				InfluenceType: heartbeatpb.InfluenceType_Normal,
+				TableIDs:      []int64{1},
+			},
+			Stage: heartbeatpb.BlockStage_WAITING,
+		},
+		Mode: dispatcher.GetMode(),
+	}, dispatcher, nil))
+
+	await := dispatcher.HandleDispatcherStatus(&heartbeatpb.DispatcherStatus{
+		IgnoredBlockStatus: &heartbeatpb.IgnoredBlockStatus{
+			CommitTs: ddlEvent.FinishedTs,
+		},
+	})
+	require.False(t, await)
+
+	await = dispatcher.HandleDispatcherStatus(&heartbeatpb.DispatcherStatus{
+		Ack: &heartbeatpb.ACK{
+			CommitTs: ddlEvent.FinishedTs,
+		},
+	})
+	require.False(t, await)
+	require.Equal(t, 0, dispatcher.resendTaskMap.Len())
+
+	select {
+	case msg := <-dispatcher.GetBlockStatusesChan():
+		require.FailNow(t, "unexpected resend after ack", "msg=%v", msg)
+	case <-time.After(250 * time.Millisecond):
+	}
+}
+
+func TestDispatcherIgnoresStaleIgnoredBlockStatus(t *testing.T) {
+	tableSpan := getUncompleteTableSpan()
+	tableSpan.KeyspaceID = getTestingKeyspaceID()
+	dispatcher := newDispatcherForTest(newDispatcherTestSink(t, common.MysqlSinkType).Sink(), tableSpan)
+
+	previousScheduler := GetDispatcherTaskScheduler()
+	taskScheduler := threadpool.NewThreadPool(1)
+	SetDispatcherTaskScheduler(taskScheduler)
+	defer func() {
+		SetDispatcherTaskScheduler(previousScheduler)
+		taskScheduler.Stop()
+	}()
+
+	ddlEvent := &commonEvent.DDLEvent{
+		FinishedTs: 30,
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{1},
+		},
+	}
+	dispatcher.blockEventStatus.setBlockEvent(ddlEvent, heartbeatpb.BlockStage_WRITING)
+	identifier := BlockEventIdentifier{CommitTs: ddlEvent.FinishedTs}
+	dispatcher.resendTaskMap.Set(identifier, newResendTask(&heartbeatpb.TableSpanBlockStatus{
+		ID: dispatcher.GetId().ToPB(),
+		State: &heartbeatpb.State{
+			IsBlocked: true,
+			BlockTs:   ddlEvent.FinishedTs,
+			BlockTables: &heartbeatpb.InfluencedTables{
+				InfluenceType: heartbeatpb.InfluenceType_Normal,
+				TableIDs:      []int64{1},
+			},
+			Stage: heartbeatpb.BlockStage_WAITING,
+		},
+		Mode: dispatcher.GetMode(),
+	}, dispatcher, nil))
+	defer dispatcher.cancelResendTask(identifier)
+
+	await := dispatcher.HandleDispatcherStatus(&heartbeatpb.DispatcherStatus{
+		IgnoredBlockStatus: &heartbeatpb.IgnoredBlockStatus{
+			CommitTs: ddlEvent.FinishedTs,
+		},
+	})
+	require.False(t, await)
+
+	select {
+	case msg := <-dispatcher.GetBlockStatusesChan():
+		require.FailNow(t, "unexpected fast retry for stale ignored block status", "msg=%v", msg)
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+func TestDispatcherStatusHandlerTimestampUsesIgnoredBlockStatus(t *testing.T) {
+	handler := &DispatcherStatusHandler{}
+	status := &heartbeatpb.DispatcherStatus{
+		IgnoredBlockStatus: &heartbeatpb.IgnoredBlockStatus{
+			CommitTs: 88,
+		},
+	}
+
+	ts := handler.GetTimestamp(NewDispatcherStatusWithID(status, common.NewDispatcherID()))
+	require.Equal(t, dynstream.Timestamp(88), ts)
 }
 
 func TestBlockingDDLFlushBeforeWaitingAndWriteDoesNotFlushAgain(t *testing.T) {
