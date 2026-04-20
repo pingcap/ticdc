@@ -167,7 +167,7 @@ type BasicDispatcher struct {
 
 	// the real batch defaults:
 	// normal event dispatchers set as the shared defaults.
-	// redo dispatcheres set as the redo specific defaults.
+	// redo dispatchers set as the redo specific defaults.
 	eventCollectorBatchCount int
 	eventCollectorBatchBytes int
 
