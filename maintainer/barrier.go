@@ -80,11 +80,42 @@ func (b *Barrier) HandleStatus(from node.ID,
 		if dispatcherID != b.spanController.GetDDLDispatcherID() {
 			task := b.spanController.GetTaskByID(dispatcherID)
 			if task == nil {
+<<<<<<< HEAD
 				log.Info("Get block status from unexisted dispatcher, ignore it", zap.String("changefeed", request.ChangefeedID.GetName()), zap.String("dispatcher", dispatcherID.String()), zap.Uint64("commitTs", status.State.BlockTs))
 				continue
 			} else {
 				if !b.spanController.IsReplicating(task) {
 					log.Info("Get block status from unreplicating dispatcher, ignore it", zap.String("changefeed", request.ChangefeedID.GetName()), zap.String("dispatcher", dispatcherID.String()), zap.Uint64("commitTs", status.State.BlockTs))
+=======
+				log.Info("Get block status from unexisted dispatcher, ignore it",
+					zap.String("changefeed", request.ChangefeedID.GetName()),
+					zap.String("dispatcher", dispatcherID.String()),
+					zap.Uint64("commitTs", status.State.BlockTs),
+					zap.Int64("mode", b.mode))
+				continue
+			} else {
+				if !b.spanController.IsReplicating(task) {
+					log.Info("Get block status from unreplicating dispatcher, ignore it",
+						zap.String("changefeed", request.ChangefeedID.GetName()),
+						zap.String("dispatcher", dispatcherID.String()),
+						zap.Uint64("commitTs", status.State.BlockTs),
+						zap.Int64("mode", b.mode))
+					// A newly added dispatcher may report its first WAITING barrier before the add
+					// operator moves it from scheduling to replicating. We still cannot admit that
+					// status into barrier, but silently dropping it would leave dispatcher waiting
+					// for the slow 5s resend timer. Return IgnoredBlockStatus so it keeps the live
+					// WAITING state locally and schedules a fast retry instead.
+					dispatcherStatus = append(dispatcherStatus, &heartbeatpb.DispatcherStatus{
+						InfluencedDispatchers: &heartbeatpb.InfluencedDispatchers{
+							InfluenceType: heartbeatpb.InfluenceType_Normal,
+							DispatcherIDs: []*heartbeatpb.DispatcherID{status.ID},
+						},
+						IgnoredBlockStatus: &heartbeatpb.IgnoredBlockStatus{
+							CommitTs:    status.State.BlockTs,
+							IsSyncPoint: status.State.IsSyncPoint,
+						},
+					})
+>>>>>>> fcc173191 (maintainer: fast retry temporarily ignored WAITING statuses (#4808))
 					continue
 				}
 			}

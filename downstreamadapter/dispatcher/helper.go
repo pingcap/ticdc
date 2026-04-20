@@ -142,6 +142,23 @@ func (b *BlockEventStatus) actionMatchs(action *heartbeatpb.DispatcherAction) bo
 	return b.blockCommitTs == action.CommitTs
 }
 
+// ignoredStatusMatches checks whether the ignored status is for the current pending ddl/sync point event.
+func (b *BlockEventStatus) ignoredStatusMatches(ignored *heartbeatpb.IgnoredBlockStatus) bool {
+	b.mutex.Lock()
+	defer b.mutex.Unlock()
+
+	if b.blockPendingEvent == nil {
+		return false
+	}
+
+	if b.blockStage != heartbeatpb.BlockStage_WAITING {
+		return false
+	}
+
+	pendingIsSyncPoint := b.blockPendingEvent.GetType() == commonEvent.TypeSyncPointEvent
+	return b.blockCommitTs == ignored.CommitTs && pendingIsSyncPoint == ignored.IsSyncPoint
+}
+
 func (b *BlockEventStatus) getEventCommitTs() (uint64, bool) {
 	b.mutex.Lock()
 	defer b.mutex.Unlock()
