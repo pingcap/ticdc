@@ -109,10 +109,14 @@ func (c *ConsistentConfig) validateAndAdjust(enableIOCheck bool) error {
 			fmt.Sprintf("The consistent.meta-flush-interval:%d must be equal or greater than %d",
 				util.GetOrZero(c.MetaFlushIntervalInMs), redo.MinFlushIntervalInMs))
 	}
-	if c.EventCollectorBatchCount != nil && *c.EventCollectorBatchCount <= 0 {
-		return errors.ErrInvalidReplicaConfig.FastGenByArgs(
-			fmt.Sprintf("The consistent.event-collector-batch-count:%d must be larger than 0",
-				*c.EventCollectorBatchCount))
+
+	if c.EventCollectorBatchCount != nil {
+		if *c.EventCollectorBatchCount < 0 {
+			return errors.ErrInvalidReplicaConfig.FastGenByArgs("consistent.event-collector-batch-count must be set not smaller than 0")
+		}
+		if *c.EventCollectorBatchCount > MaxEventCollectorBatchCount {
+			return errors.ErrInvalidReplicaConfig.FastGenByArgs("consistent.event-collector-batch-count must be set not larger than %d", MaxEventCollectorBatchCount)
+		}
 	}
 
 	compressionType := util.GetOrZero(c.Compression)
