@@ -134,3 +134,39 @@ func TestDrainSchedulerSkipsChangefeedWithInflightOperator(t *testing.T) {
 	require.Equal(t, 2, oc.OperatorSize())
 	require.NotNil(t, oc.GetOperator(cfID2))
 }
+
+func TestDrainSchedulerIgnoresUnrelatedOperatorCapacity(t *testing.T) {
+	mc := messaging.NewMockMessageCenter()
+	appcontext.SetService(appcontext.MessageCenter, mc)
+
+	nodeManager := watcher.NewNodeManager(nil, nil)
+	appcontext.SetService(watcher.NodeManagerName, nodeManager)
+
+	origin := node.ID("origin")
+	other := node.ID("other")
+	dest := node.ID("dest")
+	nodeManager.GetAliveNodes()[origin] = &node.Info{ID: origin}
+	nodeManager.GetAliveNodes()[other] = &node.Info{ID: other}
+	nodeManager.GetAliveNodes()[dest] = &node.Info{ID: dest}
+
+	drainController := drain.NewController(mc)
+	drainController.ObserveHeartbeat(origin, &heartbeatpb.NodeHeartbeat{
+		Liveness:  heartbeatpb.NodeLiveness_DRAINING,
+		NodeEpoch: 1,
+	})
+
+	db := changefeed.NewChangefeedDB(1)
+	cfID := addReplicatingMaintainer(t, db, "cf-drain", origin)
+	otherID := addReplicatingMaintainer(t, db, "cf-other", other)
+	otherCF := db.GetByID(otherID)
+
+	selfNode := &node.Info{ID: node.ID("coordinator")}
+	oc := operator.NewOperatorController(selfNode, db, nil, 10)
+	require.True(t, oc.AddOperator(operator.NewMoveMaintainerOperator(db, otherCF, other, dest)))
+
+	s := NewDrainScheduler("test", 1, oc, db, drainController)
+	_ = s.Execute()
+
+	require.Equal(t, 2, oc.OperatorSize())
+	require.NotNil(t, oc.GetOperator(cfID))
+}
