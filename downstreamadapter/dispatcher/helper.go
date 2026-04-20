@@ -139,8 +139,7 @@ func (b *BlockEventStatus) actionMatchs(action *heartbeatpb.DispatcherAction) bo
 		return false
 	}
 
-	pendingIsSyncPoint := b.blockPendingEvent.GetType() == commonEvent.TypeSyncPointEvent
-	return b.blockCommitTs == action.CommitTs && pendingIsSyncPoint == action.IsSyncPoint
+	return b.blockCommitTs == action.CommitTs
 }
 
 func (b *BlockEventStatus) getEventCommitTs() (uint64, bool) {

@@ -31,6 +31,17 @@ import (
 	"go.uber.org/zap"
 )
 
+// managerMaintainerSet owns the changefeed-scoped part of a maintainer manager.
+// It tracks the local changefeedID -> maintainer registry, creates and removes
+// maintainers, routes maintainer-bound messages, and aggregates maintainer
+// heartbeats back to coordinator.
+//
+// In contrast, managerNodeState owns node-scoped state shared by the whole
+// capture, such as liveness, node epoch, and the latest manager-level drain
+// target. The Manager combines both layers: managerNodeState is the single
+// node-wide source of truth, while managerMaintainerSet fans that node-scoped
+// state out to individual maintainers and manages their per-changefeed
+// lifecycles.
 type managerMaintainerSet struct {
 	// conf is shared scheduler configuration for newly created maintainers.
 	conf *config.SchedulerConfig
@@ -56,10 +67,8 @@ func newManagerMaintainerSet(conf *config.SchedulerConfig, nodeInfo *node.Info) 
 // onAddMaintainerRequest enforces node-scoped admission rules before creating
 // a changefeed-scoped maintainer.
 func (m *Manager) onAddMaintainerRequest(req *heartbeatpb.AddMaintainerRequest) *heartbeatpb.MaintainerStatus {
-	// Intentionally allow AddMaintainer while the node is draining.
-	// During liveness propagation and scheduler view convergence, in-flight operators can still
-	// issue add requests to this node; rejecting them here may break drain convergence.
-	// Only STOPPING performs a hard reject for new maintainer creation.
+	// Allow AddMaintainer while draining so in-flight operators can still
+	// converge during liveness propagation. Only STOPPING hard-rejects new adds.
 	currentLiveness := liveness.CaptureAlive
 	if m.node.liveness != nil {
 		currentLiveness = m.node.liveness.Load()

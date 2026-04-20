@@ -141,9 +141,17 @@ message MaintainerHeartbeat {
 
 // DrainProgress is maintainer-observed progress for dispatcher drain on one target.
 message DrainProgress {
+    // target_node_id is the node currently being evacuated for this changefeed.
+    // It matches the active dispatcher drain target seen by this maintainer.
     string target_node_id = 1;
+    // target_epoch is the epoch attached to target_node_id.
+    // Reviewers should read (target_node_id, target_epoch) as one monotonic target snapshot.
     uint64 target_epoch = 2;
+    // target_dispatcher_count is the current number of this changefeed's
+    // dispatchers still hosted on target_node_id in the maintainer snapshot.
     uint32 target_dispatcher_count = 3;
+    // target_inflight_drain_move_count is the number of unfinished move
+    // operators already evacuating dispatchers away from target_node_id.
     uint32 target_inflight_drain_move_count = 4;
 }
 

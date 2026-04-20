@@ -1294,9 +1294,17 @@ func (m *MaintainerHeartbeat) GetStatuses() []*MaintainerStatus {
 
 // DrainProgress is maintainer-observed progress for dispatcher drain on one target.
 type DrainProgress struct {
-	TargetNodeId                 string `protobuf:"bytes,1,opt,name=target_node_id,json=targetNodeId,proto3" json:"target_node_id,omitempty"`
-	TargetEpoch                  uint64 `protobuf:"varint,2,opt,name=target_epoch,json=targetEpoch,proto3" json:"target_epoch,omitempty"`
-	TargetDispatcherCount        uint32 `protobuf:"varint,3,opt,name=target_dispatcher_count,json=targetDispatcherCount,proto3" json:"target_dispatcher_count,omitempty"`
+	// target_node_id is the node currently being evacuated for this changefeed.
+	// It matches the active dispatcher drain target seen by this maintainer.
+	TargetNodeId string `protobuf:"bytes,1,opt,name=target_node_id,json=targetNodeId,proto3" json:"target_node_id,omitempty"`
+	// target_epoch is the epoch attached to target_node_id.
+	// Reviewers should read (target_node_id, target_epoch) as one monotonic target snapshot.
+	TargetEpoch uint64 `protobuf:"varint,2,opt,name=target_epoch,json=targetEpoch,proto3" json:"target_epoch,omitempty"`
+	// target_dispatcher_count is the current number of this changefeed's
+	// dispatchers still hosted on target_node_id in the maintainer snapshot.
+	TargetDispatcherCount uint32 `protobuf:"varint,3,opt,name=target_dispatcher_count,json=targetDispatcherCount,proto3" json:"target_dispatcher_count,omitempty"`
+	// target_inflight_drain_move_count is the number of unfinished move
+	// operators already evacuating dispatchers away from target_node_id.
 	TargetInflightDrainMoveCount uint32 `protobuf:"varint,4,opt,name=target_inflight_drain_move_count,json=targetInflightDrainMoveCount,proto3" json:"target_inflight_drain_move_count,omitempty"`
 }
 

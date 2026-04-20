@@ -21,7 +21,7 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/operator"
 	"github.com/pingcap/ticdc/maintainer/replica"
-	"github.com/pingcap/ticdc/maintainer/scheduler"
+	mscheduler "github.com/pingcap/ticdc/maintainer/scheduler"
 	"github.com/pingcap/ticdc/maintainer/span"
 	"github.com/pingcap/ticdc/maintainer/split"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -72,9 +72,10 @@ type Controller struct {
 	keyspaceMeta common.KeyspaceMeta
 	enableRedo   bool
 
-	// drainState is shared with all scheduler instances so each scheduling tick
-	// can read a consistent snapshot of the maintainer host and drain target.
-	drainState *scheduler.DrainState
+	// drainState keeps the latest dispatcher drain target visible to this
+	// maintainer and is shared by drain-aware schedulers so each tick reads a
+	// consistent host/target snapshot.
+	drainState *mscheduler.DrainState
 }
 
 func NewController(changefeedID common.ChangeFeedID,
@@ -136,7 +137,7 @@ func NewController(changefeedID common.ChangeFeedID,
 		splitter:               splitter,
 		keyspaceMeta:           keyspaceMeta,
 		enableRedo:             enableRedo,
-		drainState:             scheduler.NewDrainState(),
+		drainState:             mscheduler.NewDrainState(),
 	}
 	// Scheduler instances share a dedicated drain state object so each tick can
 	// read a consistent snapshot without depending on the whole controller.
@@ -286,13 +287,13 @@ func (c *Controller) SetSelfNodeID(selfNodeID node.ID) {
 }
 
 // SetDispatcherDrainTarget applies the newest drain target visible to this
-// changefeed. Older epochs are ignored so scheduler state does not regress.
+// changefeed. Older epochs are ignored so local state does not regress.
 func (c *Controller) SetDispatcherDrainTarget(target node.ID, epoch uint64) {
 	c.drainState.SetDispatcherDrainTarget(target, epoch)
 }
 
-// getDispatcherDrainTarget returns the current drain target and epoch snapshot
-// used by schedulers and status reporting.
+// getDispatcherDrainTarget returns the current drain target snapshot used by
+// status reporting and later drain-aware schedulers.
 func (c *Controller) getDispatcherDrainTarget() (node.ID, uint64) {
 	return c.drainState.DispatcherDrainTarget()
 }
