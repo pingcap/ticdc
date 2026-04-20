@@ -50,13 +50,13 @@ require (
 	github.com/pingcap/check v0.0.0-20211026125417-57bd13f7b5f0
 	github.com/pingcap/errors v0.11.5-0.20250523034308-74f78ae071ee
 	github.com/pingcap/failpoint v0.0.0-20240528011301-b51a646c7c86
-	github.com/pingcap/kvproto v0.0.0-20251212013835-ed676560b3b4
+	github.com/pingcap/kvproto v0.0.0-20260302041553-bdcab1db9bef
 	github.com/pingcap/log v1.1.1-0.20250917021125-19901e015dc9
 	github.com/pingcap/sysutil v1.0.1-0.20240311050922-ae81ee01f3a5
-	github.com/pingcap/tidb v1.1.0-beta.0.20251212033720-f5289a74240a
+	github.com/pingcap/tidb v1.1.0-beta.0.20260312160659-adb287a22464
 	github.com/pingcap/tidb-dashboard v0.0.0-20250928152019-e111aaee93f4
-	github.com/pingcap/tidb/pkg/parser v0.0.0-20251212033720-f5289a74240a
-	github.com/pingcap/tiflow v0.0.0-20260323082129-d6d53adbe1a0
+	github.com/pingcap/tidb/pkg/parser v0.0.0-20260312160659-adb287a22464
+	github.com/pingcap/tiflow v0.0.0-20260420035957-1fbf1f43007c
 	github.com/prometheus/client_golang v1.23.0
 	github.com/r3labs/diff v1.1.0
 	github.com/rcrowley/go-metrics v0.0.0-20201227073835-cf1acfcdf475
@@ -67,7 +67,7 @@ require (
 	github.com/spf13/pflag v1.0.7
 	github.com/stretchr/testify v1.11.1
 	github.com/thanhpk/randstr v1.0.6
-	github.com/tikv/client-go/v2 v2.0.8-0.20260112052152-1d3c5ec76bf8
+	github.com/tikv/client-go/v2 v2.0.8-0.20260128081005-bc0c2a6df45c
 	github.com/tikv/pd v1.1.0-beta.0.20251113050911-303c6c3b403e
 	github.com/tikv/pd/client v0.0.0-20251219084741-029eb6e7d5d0
 	github.com/tinylib/msgp v1.5.0
@@ -92,7 +92,7 @@ require (
 	golang.org/x/term v0.37.0
 	golang.org/x/text v0.31.0
 	golang.org/x/time v0.14.0
-	google.golang.org/grpc v1.65.0
+	google.golang.org/grpc v1.67.1
 	google.golang.org/protobuf v1.36.10
 )
 
@@ -111,13 +111,14 @@ require (
 	github.com/Azure/go-ntlmssp v0.0.0-20221128193559-754e69321358 // indirect
 	github.com/AzureAD/microsoft-authentication-library-for-go v1.4.2 // indirect
 	github.com/DataDog/zstd v1.5.5 // indirect
+	github.com/JohnCGriffin/overflow v0.0.0-20211019200055-46fa312c352c // indirect
 	github.com/KyleBanks/depth v1.2.1 // indirect
 	github.com/Masterminds/semver v1.5.0 // indirect
 	github.com/VividCortex/ewma v1.2.0 // indirect
 	github.com/acarl005/stripansi v0.0.0-20180116102854-5a71ef0e047d // indirect
 	github.com/aliyun/alibaba-cloud-sdk-go v1.61.1581 // indirect
 	github.com/andybalholm/brotli v1.1.1 // indirect
-	github.com/apache/arrow/go/v12 v12.0.1 // indirect
+	github.com/apache/arrow-go/v18 v18.0.0 // indirect
 	github.com/apache/thrift v0.21.0 // indirect
 	github.com/ardielle/ardielle-go v1.5.2 // indirect
 	github.com/asaskevich/govalidator v0.0.0-20230301143203-a9d515a09cc2 // indirect
@@ -190,7 +191,6 @@ require (
 	github.com/go-playground/universal-translator v0.18.1 // indirect
 	github.com/go-playground/validator/v10 v10.20.0 // indirect
 	github.com/go-resty/resty/v2 v2.11.0 // indirect
-	github.com/goccy/go-reflect v1.2.0 // indirect
 	github.com/godbus/dbus v0.0.0-20190726142602-4481cbc300e2 // indirect
 	github.com/godbus/dbus/v5 v5.0.4 // indirect
 	github.com/golang-jwt/jwt/v4 v4.5.2 // indirect
@@ -209,7 +209,7 @@ require (
 	github.com/grpc-ecosystem/grpc-gateway v1.16.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.19.1 // indirect
 	github.com/gsterjov/go-libsecret v0.0.0-20161001094733-a6f4afe4910c // indirect
-	github.com/hamba/avro/v2 v2.26.0 // indirect
+	github.com/hamba/avro/v2 v2.27.0 // indirect
 	github.com/hashicorp/errwrap v1.1.0 // indirect
 	github.com/hashicorp/go-multierror v1.1.1 // indirect
 	github.com/hashicorp/go-uuid v1.0.3 // indirect
@@ -271,7 +271,7 @@ require (
 	github.com/pingcap/badger v1.5.1-0.20241015064302-38533b6cbf8d // indirect
 	github.com/pingcap/fn v1.0.0 // indirect
 	github.com/pingcap/goleveldb v0.0.0-20191226122134-f82aafb29989 // indirect
-	github.com/pingcap/tipb v0.0.0-20251125085256-097db0b2c02a // indirect
+	github.com/pingcap/tipb v0.0.0-20260202031324-4ce7b6c65c98 // indirect
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
@@ -326,7 +326,6 @@ require (
 	github.com/xdg-go/stringprep v1.0.4 // indirect
 	github.com/xdg/stringprep v1.0.3 // indirect
 	github.com/xiang90/probing v0.0.0-20221125231312-a49e3df8f510 // indirect
-	github.com/xitongsys/parquet-go v1.6.3-0.20240520233950-75e935fc3e17 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
 	github.com/zeebo/xxh3 v1.0.2 // indirect
 	go.etcd.io/bbolt v1.3.10 // indirect
