@@ -17,7 +17,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -49,8 +48,6 @@ const (
 	defaultLogInterval            = 5 * time.Second
 	fakePartitionNumForSchemaFile = -1
 )
-
-var renameTableQueryRe = regexp.MustCompile(`(?is)^rename\s+table\s+(.+?)\s+to\s+(.+?)$`)
 
 type (
 	fileIndexRange  map[cloudstorage.FileIndexKey]indexRange
@@ -535,28 +532,17 @@ func getRenameTableOldTableKey(tableDef cloudstorage.TableDefinition) (string, b
 	return commonType.QuoteSchema(schemaName, tableName), true
 }
 
-func getDDLWatermarkKeys(tableDef cloudstorage.TableDefinition) []string {
-	keys := make(map[string]struct{}, 2)
-	keys[commonType.QuoteSchema(tableDef.Schema, tableDef.Table)] = struct{}{}
+func (c *consumer) updateTableDDLWatermark(tableDef cloudstorage.TableDefinition) string {
+	key := commonType.QuoteSchema(tableDef.Schema, tableDef.Table)
+	if c.tableDDLWatermark[key] < tableDef.TableVersion {
+		c.tableDDLWatermark[key] = tableDef.TableVersion
+	}
 	if oldTableKey, ok := getRenameTableOldTableKey(tableDef); ok {
-		keys[oldTableKey] = struct{}{}
-	}
-
-	res := make([]string, 0, len(keys))
-	for key := range keys {
-		res = append(res, key)
-	}
-	return res
-}
-
-func (c *consumer) updateTableDDLWatermark(tableDef cloudstorage.TableDefinition) []string {
-	keys := getDDLWatermarkKeys(tableDef)
-	for _, key := range keys {
-		if c.tableDDLWatermark[key] < tableDef.TableVersion {
-			c.tableDDLWatermark[key] = tableDef.TableVersion
+		if c.tableDDLWatermark[oldTableKey] < tableDef.TableVersion {
+			c.tableDDLWatermark[oldTableKey] = tableDef.TableVersion
 		}
 	}
-	return keys
+	return key
 }
 
 func (c *consumer) handleNewFiles(
@@ -631,13 +617,13 @@ func (c *consumer) handleNewFiles(
 			if err := c.sink.WriteBlockEvent(ddlEvent); err != nil {
 				return errors.Trace(err)
 			}
-			watermarkKeys := c.updateTableDDLWatermark(tableDef)
+			watermarkKey := c.updateTableDDLWatermark(tableDef)
 			// TODO: need to cleanup tableDefMap in the future.
 			log.Info("execute ddl event successfully",
 				zap.String("query", tableDef.Query),
 				zap.String("schema", key.Schema), zap.String("table", key.Table),
 				zap.Uint64("ddlWatermark", c.tableDDLWatermark[tableKey]),
-				zap.Strings("watermarkKeys", watermarkKeys))
+				zap.String("watermarkKey", watermarkKey))
 			continue
 		}
 
