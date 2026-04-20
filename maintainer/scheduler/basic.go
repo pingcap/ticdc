@@ -54,6 +54,7 @@ type basicScheduler struct {
 
 	operatorController *operator.Controller
 	spanController     *span.Controller
+	twinSpanController *span.Controller
 	nodeManager        *watcher.NodeManager
 	mode               int64
 }
@@ -62,6 +63,7 @@ func NewBasicScheduler(
 	changefeedID common.ChangeFeedID, batchSize int,
 	oc *operator.Controller,
 	spanController *span.Controller,
+	twinSpanController *span.Controller,
 	schedulerCfg *config.ChangefeedSchedulerConfig,
 	mode int64,
 ) *basicScheduler {
@@ -70,6 +72,7 @@ func NewBasicScheduler(
 		batchSize:                  batchSize,
 		operatorController:         oc,
 		spanController:             spanController,
+		twinSpanController:         twinSpanController,
 		nodeManager:                appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
 		schedulingTaskCountPerNode: 1,
 		mode:                       mode,
@@ -155,9 +158,27 @@ func (s *basicScheduler) schedule(groupID pkgreplica.GroupID, availableSize int)
 
 	absentReplications := s.spanController.GetAbsentByGroup(groupID, availableSize)
 
-	pkgScheduler.BasicSchedule(availableSize, absentReplications, nodeSize, func(replication *replica.SpanReplication, id node.ID) bool {
-		return s.operatorController.AddOperator(operator.NewAddDispatcherOperator(s.spanController, replication, id, heartbeatpb.OperatorType_O_Add))
-	})
+	if s.twinSpanController != nil {
+		spanMap := make(map[string]node.ID)
+		twinMap := make(map[common.DispatcherID]node.ID)
+		for _, twinSpan := range s.twinSpanController.GetAllTasks() {
+			spanMap[twinSpan.Span.String()] = twinSpan.GetNodeID()
+		}
+		for _, absent := range absentReplications {
+			nodeID, ok := spanMap[absent.Span.String()]
+			if ok {
+				twinMap[absent.GetID()] = nodeID
+			}
+		}
+		pkgScheduler.BasicScheduleWithTwin(availableSize, absentReplications, twinMap, nodeSize, func(replication *replica.SpanReplication, id node.ID) bool {
+			return s.operatorController.AddOperator(operator.NewAddDispatcherOperator(s.spanController, replication, id, heartbeatpb.OperatorType_O_Add))
+		})
+	} else {
+		pkgScheduler.BasicSchedule(availableSize, absentReplications, nodeSize, func(replication *replica.SpanReplication, id node.ID) bool {
+			return s.operatorController.AddOperator(operator.NewAddDispatcherOperator(s.spanController, replication, id, heartbeatpb.OperatorType_O_Add))
+		})
+	}
+
 	return len(absentReplications)
 }
 
