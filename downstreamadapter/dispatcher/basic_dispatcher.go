@@ -778,6 +778,8 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 		}
 		if task := d.resendTaskMap.Get(identifier); task != nil {
 			_ = task.Execute()
+		} else {
+			log.Info("resendTask not found; fast resend path cannot be executed.", zap.Uint64("CommitTs", ignoredBlockStatus.CommitTs), zap.Bool("IsSyncPoint", ignoredBlockStatus.IsSyncPoint))
 		}
 		return false
 	}
