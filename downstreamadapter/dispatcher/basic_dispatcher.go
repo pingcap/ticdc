@@ -739,8 +739,9 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 }
 
 // HandleDispatcherStatus handles the dispatcher status from the maintainer to process block events.
-// Each dispatcher status may contain an ACK info or a dispatcher action or both.
+// Each dispatcher status may contain an ACK info, an ignored-block hint, or a dispatcher action.
 // If we get an ack info, we need to check whether the ack is for the ddl event in resend task map. If so, we can cancel the resend task.
+// If we get an ignored-block hint for the current waiting event, we schedule one fast retry while keeping the slow fallback resend task.
 // If we get a dispatcher action, we need to check whether the action is for the current pending ddl event. If so, we can deal the ddl event based on the action.
 // 1. If the action is a write, we need to add the ddl event to the sink for writing to downstream.
 // 2. If the action is a pass, we just need to pass the event
@@ -768,7 +769,22 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 		d.cancelResendTask(identifier)
 	}
 
-	// Step2: deal with the dispatcher action
+	// Step2: deal with the ignored block status
+	ignoredBlockStatus := dispatcherStatus.GetIgnoredBlockStatus()
+	if ignoredBlockStatus != nil && d.blockEventStatus.ignoredStatusMatches(ignoredBlockStatus) {
+		identifier := BlockEventIdentifier{
+			CommitTs:    ignoredBlockStatus.CommitTs,
+			IsSyncPoint: ignoredBlockStatus.IsSyncPoint,
+		}
+		if task := d.resendTaskMap.Get(identifier); task != nil {
+			_ = task.Execute()
+		} else {
+			log.Info("resendTask not found; fast resend path cannot be executed.", zap.Uint64("CommitTs", ignoredBlockStatus.CommitTs), zap.Bool("IsSyncPoint", ignoredBlockStatus.IsSyncPoint))
+		}
+		return false
+	}
+
+	// Step3: deal with the dispatcher action
 	action := dispatcherStatus.GetAction()
 	if action != nil {
 		pendingEvent := d.blockEventStatus.getEvent()
@@ -838,7 +854,7 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 			}
 		}
 
-		// Step3: whether the outdate message or not, we need to return message show we have finished the event.
+		// Step4: whether the outdate message or not, we need to return message show we have finished the event.
 		d.sharedInfo.blockStatusesChan <- &heartbeatpb.TableSpanBlockStatus{
 			ID: d.id.ToPB(),
 			State: &heartbeatpb.State{

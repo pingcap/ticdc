@@ -29,6 +29,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/stretchr/testify/require"
 )
 
@@ -441,6 +442,57 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	checkpointTs = dispatcher.GetCheckpointTs()
 	require.Equal(t, uint64(7), checkpointTs)
 	t.Run("cloud storage wake callback after batch enqueue", verifyDMLWakeCallbackStorageAfterBatchEnqueue)
+}
+
+func TestDispatcherIgnoresStaleIgnoredBlockStatus(t *testing.T) {
+	tableSpan := getUncompleteTableSpan()
+	tableSpan.KeyspaceID = getTestingKeyspaceID()
+	dispatcher := newDispatcherForTest(newDispatcherTestSink(t, common.MysqlSinkType).Sink(), tableSpan)
+
+	previousScheduler := GetDispatcherTaskScheduler()
+	taskScheduler := threadpool.NewThreadPool(1)
+	SetDispatcherTaskScheduler(taskScheduler)
+	defer func() {
+		SetDispatcherTaskScheduler(previousScheduler)
+		taskScheduler.Stop()
+	}()
+
+	ddlEvent := &commonEvent.DDLEvent{
+		FinishedTs: 30,
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{1},
+		},
+	}
+	dispatcher.blockEventStatus.setBlockEvent(ddlEvent, heartbeatpb.BlockStage_WRITING)
+	identifier := BlockEventIdentifier{CommitTs: ddlEvent.FinishedTs}
+	dispatcher.resendTaskMap.Set(identifier, newResendTask(&heartbeatpb.TableSpanBlockStatus{
+		ID: dispatcher.GetId().ToPB(),
+		State: &heartbeatpb.State{
+			IsBlocked: true,
+			BlockTs:   ddlEvent.FinishedTs,
+			BlockTables: &heartbeatpb.InfluencedTables{
+				InfluenceType: heartbeatpb.InfluenceType_Normal,
+				TableIDs:      []int64{1},
+			},
+			Stage: heartbeatpb.BlockStage_WAITING,
+		},
+		Mode: dispatcher.GetMode(),
+	}, dispatcher, nil))
+	defer dispatcher.cancelResendTask(identifier)
+
+	await := dispatcher.HandleDispatcherStatus(&heartbeatpb.DispatcherStatus{
+		IgnoredBlockStatus: &heartbeatpb.IgnoredBlockStatus{
+			CommitTs: ddlEvent.FinishedTs,
+		},
+	})
+	require.False(t, await)
+
+	select {
+	case msg := <-dispatcher.GetBlockStatusesChan():
+		require.FailNow(t, "unexpected fast retry for stale ignored block status", "msg=%v", msg)
+	case <-time.After(200 * time.Millisecond):
+	}
 }
 
 func TestBlockingDDLFlushBeforeWaitingAndWriteDoesNotFlushAgain(t *testing.T) {

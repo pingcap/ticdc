@@ -27,6 +27,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/stretchr/testify/require"
@@ -1629,4 +1630,59 @@ func TestDeferAllDBBlockEventFromDDLDispatcherWhilePendingSchedule(t *testing.T)
 	require.True(t, ok)
 	require.Contains(t, rc.Detail(), "uncovered tables")
 	require.Contains(t, rc.Detail(), "101")
+}
+
+func TestBarrierReturnsTemporaryIgnoreForUnreplicatingWaitingStatus(t *testing.T) {
+	testutil.SetUpTestServices(t)
+
+	tableTriggerDispatcherID := common.NewDispatcherID()
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerDispatcherID,
+		common.DDLSpanSchemaID,
+		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
+			ID:              tableTriggerDispatcherID.ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    1,
+		}, "node1", false)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
+	operatorController := operator.NewOperatorController(cfID, spanController, 1000, common.DefaultMode)
+
+	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 10)
+	stm := spanController.GetTasksByTableID(1)[0]
+	spanController.BindSpanToNode("", "node1", stm)
+
+	barrier := NewBarrier(spanController, operatorController, false, nil, common.DefaultMode)
+	msgs := barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
+		ChangefeedID: cfID.ToPB(),
+		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
+			{
+				ID: stm.ID.ToPB(),
+				State: &heartbeatpb.State{
+					IsBlocked: true,
+					BlockTs:   10,
+					BlockTables: &heartbeatpb.InfluencedTables{
+						InfluenceType: heartbeatpb.InfluenceType_Normal,
+						TableIDs:      []int64{1},
+					},
+					Stage: heartbeatpb.BlockStage_WAITING,
+				},
+			},
+		},
+	})
+
+	require.Len(t, msgs, 1)
+	resp := msgs[0].Message[0].(*heartbeatpb.HeartBeatResponse)
+	require.Len(t, resp.DispatcherStatuses, 1)
+	status := resp.DispatcherStatuses[0]
+	require.Nil(t, status.Ack)
+	require.Nil(t, status.Action)
+	require.NotNil(t, status.IgnoredBlockStatus)
+	require.Equal(t, uint64(10), status.IgnoredBlockStatus.CommitTs)
+	require.False(t, status.IgnoredBlockStatus.IsSyncPoint)
+	require.NotNil(t, status.InfluencedDispatchers)
+	require.Equal(t, heartbeatpb.InfluenceType_Normal, status.InfluencedDispatchers.InfluenceType)
+	require.Len(t, status.InfluencedDispatchers.DispatcherIDs, 1)
+	require.Equal(t, stm.ID, common.NewDispatcherIDFromPB(status.InfluencedDispatchers.DispatcherIDs[0]))
+	require.Equal(t, 0, barrier.blockedEvents.Len())
+	require.Nil(t, stm.GetBlockState())
 }
