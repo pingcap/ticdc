@@ -15,8 +15,6 @@ package maintainer
 
 import (
 	"context"
-	"encoding/json"
-	"sync"
 	"time"
 
 	"github.com/pingcap/log"
@@ -26,7 +24,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
-	"github.com/pingcap/ticdc/utils/threadpool"
 	"go.uber.org/zap"
 )
 
@@ -36,37 +33,54 @@ import (
 // 2. Handle other commands from coordinator: like add or remove changefeed maintainer
 // 3. Manage maintainers lifetime
 type Manager struct {
+<<<<<<< HEAD
 	mc   messaging.MessageCenter
 	conf *config.SchedulerConfig
 
 	// changefeedID -> maintainer
 	maintainers sync.Map
+=======
+	mc messaging.MessageCenter
+>>>>>>> 0213a79b4 (maintainer,heartbeatpb: add drain target plumbing (#4759))
 
 	coordinatorID      node.ID
 	coordinatorVersion int64
 
 	nodeInfo *node.Info
 
-	// msgCh is used to cache messages from coordinator
+	// msgCh is used to cache messages from coordinator.
 	msgCh chan *messaging.TargetMessage
-
-	taskScheduler threadpool.ThreadPool
+	// node holds node-scoped liveness and drain state that applies to the whole capture.
+	node *managerNodeState
+	// maintainers holds changefeed-scoped state and lifecycle operations.
+	maintainers *managerMaintainerSet
 }
 
 // NewMaintainerManager create a changefeed maintainer manager instance
-// and register message handler to message center
+// and register message handler to message center.
+//
+// liveness must not be nil because it is shared with the server-wide node
+// liveness state for scheduling and election decisions.
 func NewMaintainerManager(
 	nodeInfo *node.Info,
 	conf *config.SchedulerConfig,
 ) *Manager {
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 	m := &Manager{
+<<<<<<< HEAD
 		mc:            mc,
 		conf:          conf,
 		maintainers:   sync.Map{},
 		nodeInfo:      nodeInfo,
 		msgCh:         make(chan *messaging.TargetMessage, 1024),
 		taskScheduler: threadpool.NewThreadPoolDefault(),
+=======
+		mc:          mc,
+		nodeInfo:    nodeInfo,
+		msgCh:       make(chan *messaging.TargetMessage, 1024),
+		node:        newManagerNodeState(nodeLiveness),
+		maintainers: newManagerMaintainerSet(conf, nodeInfo),
+>>>>>>> 0213a79b4 (maintainer,heartbeatpb: add drain target plumbing (#4759))
 	}
 
 	mc.RegisterHandler(messaging.MaintainerManagerTopic, m.recvMessages)
@@ -78,27 +92,33 @@ func NewMaintainerManager(
 	return m
 }
 
-// recvMessages is the message handler for maintainer manager
+// recvMessages is the message handler for maintainer manager.
 func (m *Manager) recvMessages(ctx context.Context, msg *messaging.TargetMessage) error {
 	switch msg.Type {
-	// Coordinator related messages
+	// Coordinator related messages.
 	case messaging.TypeAddMaintainerRequest,
 		messaging.TypeRemoveMaintainerRequest,
+<<<<<<< HEAD
 		messaging.TypeCoordinatorBootstrapRequest:
+=======
+		messaging.TypeCoordinatorBootstrapRequest,
+		messaging.TypeSetNodeLivenessRequest,
+		messaging.TypeSetDispatcherDrainTargetRequest:
+>>>>>>> 0213a79b4 (maintainer,heartbeatpb: add drain target plumbing (#4759))
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case m.msgCh <- msg:
 		}
 		return nil
-	// receive bootstrap response message from the dispatcher manager
+	// Receive bootstrap response message from the dispatcher manager.
 	case messaging.TypeMaintainerBootstrapResponse:
 		req := msg.Message[0].(*heartbeatpb.MaintainerBootstrapResponse)
 		return m.dispatcherMaintainerMessage(ctx, common.NewChangefeedIDFromPB(req.ChangefeedID), msg)
 	case messaging.TypeMaintainerPostBootstrapResponse:
 		req := msg.Message[0].(*heartbeatpb.MaintainerPostBootstrapResponse)
 		return m.dispatcherMaintainerMessage(ctx, common.NewChangefeedIDFromPB(req.ChangefeedID), msg)
-	// receive heartbeat message from dispatchers
+	// Receive heartbeat message from dispatchers.
 	case messaging.TypeHeartBeatRequest:
 		req := msg.Message[0].(*heartbeatpb.HeartBeatRequest)
 		return m.dispatcherMaintainerMessage(ctx, common.NewChangefeedIDFromPB(req.ChangefeedID), msg)
@@ -133,6 +153,7 @@ func (m *Manager) Run(ctx context.Context) error {
 		case msg := <-m.msgCh:
 			m.handleMessage(msg)
 		case <-ticker.C:
+<<<<<<< HEAD
 			// 1.  try to send heartbeat to coordinator
 			m.sendHeartbeat()
 			// 2. cleanup removed maintainers
@@ -148,6 +169,11 @@ func (m *Manager) Run(ctx context.Context) error {
 				}
 				return true
 			})
+=======
+			m.sendNodeHeartbeat(false)
+			m.sendHeartbeat()
+			m.cleanupRemovedMaintainers()
+>>>>>>> 0213a79b4 (maintainer,heartbeatpb: add drain target plumbing (#4759))
 		}
 	}
 }
@@ -171,13 +197,9 @@ func (m *Manager) sendMessages(msg *heartbeatpb.MaintainerHeartbeat) {
 	}
 }
 
-// Close closes, it's a block call
+// Close blocks until all local maintainers stop.
 func (m *Manager) Close(_ context.Context) error {
-	m.maintainers.Range(func(key, value interface{}) bool {
-		maintainer := value.(*Maintainer)
-		maintainer.Close()
-		return true
-	})
+	m.maintainers.closeAll()
 	return nil
 }
 
@@ -192,16 +214,7 @@ func (m *Manager) onCoordinatorBootstrapRequest(msg *messaging.TargetMessage) {
 	m.coordinatorID = msg.From
 	m.coordinatorVersion = req.Version
 
-	response := &heartbeatpb.CoordinatorBootstrapResponse{}
-	m.maintainers.Range(func(key, value interface{}) bool {
-		maintainer := value.(*Maintainer)
-		status := maintainer.GetMaintainerStatus()
-		response.Statuses = append(response.Statuses, status)
-		maintainer.statusChanged.Store(false)
-		maintainer.lastReportTime = time.Now()
-		return true
-	})
-
+	response := m.maintainers.buildBootstrapResponse()
 	msg = m.newCoordinatorTopicMessage(response)
 	err := m.mc.SendCommand(msg)
 	if err != nil {
@@ -216,6 +229,7 @@ func (m *Manager) onCoordinatorBootstrapRequest(msg *messaging.TargetMessage) {
 		zap.Int64("version", m.coordinatorVersion))
 }
 
+<<<<<<< HEAD
 func (m *Manager) onAddMaintainerRequest(req *heartbeatpb.AddMaintainerRequest) *heartbeatpb.MaintainerStatus {
 	changefeedID := common.NewChangefeedIDFromPB(req.Id)
 	_, ok := m.maintainers.Load(changefeedID)
@@ -314,6 +328,8 @@ func (m *Manager) sendHeartbeat() {
 	}
 }
 
+=======
+>>>>>>> 0213a79b4 (maintainer,heartbeatpb: add drain target plumbing (#4759))
 func (m *Manager) handleMessage(msg *messaging.TargetMessage) {
 	switch msg.Type {
 	case messaging.TypeCoordinatorBootstrapRequest:
@@ -330,54 +346,23 @@ func (m *Manager) handleMessage(msg *messaging.TargetMessage) {
 			}
 			m.sendMessages(response)
 		}
+<<<<<<< HEAD
+=======
+	case messaging.TypeSetNodeLivenessRequest:
+		m.onSetNodeLivenessRequest(msg)
+	case messaging.TypeSetDispatcherDrainTargetRequest:
+		m.onSetDispatcherDrainTargetRequest(msg)
+>>>>>>> 0213a79b4 (maintainer,heartbeatpb: add drain target plumbing (#4759))
 	default:
 	}
-}
-
-func (m *Manager) dispatcherMaintainerMessage(
-	ctx context.Context, changefeed common.ChangeFeedID, msg *messaging.TargetMessage,
-) error {
-	c, ok := m.maintainers.Load(changefeed)
-	if !ok {
-		log.Warn("maintainer is not found",
-			zap.Stringer("changefeedID", changefeed),
-			zap.String("message", msg.String()))
-		return nil
-	}
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-		maintainer := c.(*Maintainer)
-		maintainer.pushEvent(&Event{
-			changefeedID: changefeed,
-			eventType:    EventMessage,
-			message:      msg,
-		})
-	}
-	return nil
 }
 
 func (m *Manager) GetMaintainerForChangefeed(changefeedID common.ChangeFeedID) (*Maintainer, bool) {
-	c, ok := m.maintainers.Load(changefeedID)
-
-	m.maintainers.Range(func(key, value interface{}) bool {
-		return true
-	})
-
-	if !ok {
-		return nil, false
-	}
-	return c.(*Maintainer), true
+	return m.maintainers.getMaintainer(changefeedID)
 }
 
 func (m *Manager) ListMaintainers() []*Maintainer {
-	maintainers := make([]*Maintainer, 0)
-	m.maintainers.Range(func(key, value interface{}) bool {
-		maintainers = append(maintainers, value.(*Maintainer))
-		return true
-	})
-	return maintainers
+	return m.maintainers.listMaintainers()
 }
 
 func (m *Manager) isBootstrap() bool {

@@ -1311,6 +1311,83 @@ func (m *MaintainerHeartbeat) GetStatuses() []*MaintainerStatus {
 	return nil
 }
 
+// DrainProgress is maintainer-observed progress for dispatcher drain on one target.
+type DrainProgress struct {
+	// target_node_id is the node currently being evacuated for this changefeed.
+	// It matches the active dispatcher drain target seen by this maintainer.
+	TargetNodeId string `protobuf:"bytes,1,opt,name=target_node_id,json=targetNodeId,proto3" json:"target_node_id,omitempty"`
+	// target_epoch is the epoch attached to target_node_id.
+	// Reviewers should read (target_node_id, target_epoch) as one monotonic target snapshot.
+	TargetEpoch uint64 `protobuf:"varint,2,opt,name=target_epoch,json=targetEpoch,proto3" json:"target_epoch,omitempty"`
+	// target_dispatcher_count is the current number of this changefeed's
+	// dispatchers still hosted on target_node_id in the maintainer snapshot.
+	TargetDispatcherCount uint32 `protobuf:"varint,3,opt,name=target_dispatcher_count,json=targetDispatcherCount,proto3" json:"target_dispatcher_count,omitempty"`
+	// target_inflight_drain_move_count is the number of unfinished move
+	// operators already evacuating dispatchers away from target_node_id.
+	TargetInflightDrainMoveCount uint32 `protobuf:"varint,4,opt,name=target_inflight_drain_move_count,json=targetInflightDrainMoveCount,proto3" json:"target_inflight_drain_move_count,omitempty"`
+}
+
+func (m *DrainProgress) Reset()         { *m = DrainProgress{} }
+func (m *DrainProgress) String() string { return proto.CompactTextString(m) }
+func (*DrainProgress) ProtoMessage()    {}
+func (*DrainProgress) Descriptor() ([]byte, []int) {
+	return fileDescriptor_6d584080fdadb670, []int{16}
+}
+func (m *DrainProgress) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *DrainProgress) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_DrainProgress.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *DrainProgress) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_DrainProgress.Merge(m, src)
+}
+func (m *DrainProgress) XXX_Size() int {
+	return m.Size()
+}
+func (m *DrainProgress) XXX_DiscardUnknown() {
+	xxx_messageInfo_DrainProgress.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_DrainProgress proto.InternalMessageInfo
+
+func (m *DrainProgress) GetTargetNodeId() string {
+	if m != nil {
+		return m.TargetNodeId
+	}
+	return ""
+}
+
+func (m *DrainProgress) GetTargetEpoch() uint64 {
+	if m != nil {
+		return m.TargetEpoch
+	}
+	return 0
+}
+
+func (m *DrainProgress) GetTargetDispatcherCount() uint32 {
+	if m != nil {
+		return m.TargetDispatcherCount
+	}
+	return 0
+}
+
+func (m *DrainProgress) GetTargetInflightDrainMoveCount() uint32 {
+	if m != nil {
+		return m.TargetInflightDrainMoveCount
+	}
+	return 0
+}
+
 type MaintainerStatus struct {
 	ChangefeedID  *ChangefeedID   `protobuf:"bytes,1,opt,name=changefeedID,proto3" json:"changefeedID,omitempty"`
 	FeedState     string          `protobuf:"bytes,2,opt,name=feed_state,json=feedState,proto3" json:"feed_state,omitempty"`
@@ -1319,6 +1396,9 @@ type MaintainerStatus struct {
 	Err           []*RunningError `protobuf:"bytes,5,rep,name=err,proto3" json:"err,omitempty"`
 	BootstrapDone bool            `protobuf:"varint,6,opt,name=bootstrap_done,json=bootstrapDone,proto3" json:"bootstrap_done,omitempty"`
 	LastSyncedTs  uint64          `protobuf:"varint,7,opt,name=lastSyncedTs,proto3" json:"lastSyncedTs,omitempty"`
+	// drain_progress reports the active dispatcher drain target observed by this maintainer.
+	// Nil means no active dispatcher drain target.
+	DrainProgress *DrainProgress `protobuf:"bytes,8,opt,name=drain_progress,json=drainProgress,proto3" json:"drain_progress,omitempty"`
 }
 
 func (m *MaintainerStatus) Reset()         { *m = MaintainerStatus{} }
@@ -1403,6 +1483,247 @@ func (m *MaintainerStatus) GetLastSyncedTs() uint64 {
 	return 0
 }
 
+<<<<<<< HEAD
+=======
+func (m *MaintainerStatus) GetDrainProgress() *DrainProgress {
+	if m != nil {
+		return m.DrainProgress
+	}
+	return nil
+}
+
+// NodeHeartbeat is sent periodically from a node to the coordinator.
+type NodeHeartbeat struct {
+	Liveness  NodeLiveness `protobuf:"varint,1,opt,name=liveness,proto3,enum=heartbeatpb.NodeLiveness" json:"liveness,omitempty"`
+	NodeEpoch uint64       `protobuf:"varint,2,opt,name=node_epoch,json=nodeEpoch,proto3" json:"node_epoch,omitempty"`
+	// dispatcher_drain_target_* reports the manager-level dispatcher drain target
+	// currently applied on this node. Empty target means the drain target is clear.
+	DispatcherDrainTargetNodeId string `protobuf:"bytes,3,opt,name=dispatcher_drain_target_node_id,json=dispatcherDrainTargetNodeId,proto3" json:"dispatcher_drain_target_node_id,omitempty"`
+	DispatcherDrainTargetEpoch  uint64 `protobuf:"varint,4,opt,name=dispatcher_drain_target_epoch,json=dispatcherDrainTargetEpoch,proto3" json:"dispatcher_drain_target_epoch,omitempty"`
+}
+
+func (m *NodeHeartbeat) Reset()         { *m = NodeHeartbeat{} }
+func (m *NodeHeartbeat) String() string { return proto.CompactTextString(m) }
+func (*NodeHeartbeat) ProtoMessage()    {}
+func (*NodeHeartbeat) Descriptor() ([]byte, []int) {
+	return fileDescriptor_6d584080fdadb670, []int{18}
+}
+func (m *NodeHeartbeat) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *NodeHeartbeat) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_NodeHeartbeat.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *NodeHeartbeat) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_NodeHeartbeat.Merge(m, src)
+}
+func (m *NodeHeartbeat) XXX_Size() int {
+	return m.Size()
+}
+func (m *NodeHeartbeat) XXX_DiscardUnknown() {
+	xxx_messageInfo_NodeHeartbeat.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_NodeHeartbeat proto.InternalMessageInfo
+
+func (m *NodeHeartbeat) GetLiveness() NodeLiveness {
+	if m != nil {
+		return m.Liveness
+	}
+	return NodeLiveness_ALIVE
+}
+
+func (m *NodeHeartbeat) GetNodeEpoch() uint64 {
+	if m != nil {
+		return m.NodeEpoch
+	}
+	return 0
+}
+
+func (m *NodeHeartbeat) GetDispatcherDrainTargetNodeId() string {
+	if m != nil {
+		return m.DispatcherDrainTargetNodeId
+	}
+	return ""
+}
+
+func (m *NodeHeartbeat) GetDispatcherDrainTargetEpoch() uint64 {
+	if m != nil {
+		return m.DispatcherDrainTargetEpoch
+	}
+	return 0
+}
+
+// SetNodeLivenessRequest asks a node to transition its local liveness.
+type SetNodeLivenessRequest struct {
+	Target    NodeLiveness `protobuf:"varint,1,opt,name=target,proto3,enum=heartbeatpb.NodeLiveness" json:"target,omitempty"`
+	NodeEpoch uint64       `protobuf:"varint,2,opt,name=node_epoch,json=nodeEpoch,proto3" json:"node_epoch,omitempty"`
+}
+
+func (m *SetNodeLivenessRequest) Reset()         { *m = SetNodeLivenessRequest{} }
+func (m *SetNodeLivenessRequest) String() string { return proto.CompactTextString(m) }
+func (*SetNodeLivenessRequest) ProtoMessage()    {}
+func (*SetNodeLivenessRequest) Descriptor() ([]byte, []int) {
+	return fileDescriptor_6d584080fdadb670, []int{19}
+}
+func (m *SetNodeLivenessRequest) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *SetNodeLivenessRequest) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_SetNodeLivenessRequest.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *SetNodeLivenessRequest) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_SetNodeLivenessRequest.Merge(m, src)
+}
+func (m *SetNodeLivenessRequest) XXX_Size() int {
+	return m.Size()
+}
+func (m *SetNodeLivenessRequest) XXX_DiscardUnknown() {
+	xxx_messageInfo_SetNodeLivenessRequest.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_SetNodeLivenessRequest proto.InternalMessageInfo
+
+func (m *SetNodeLivenessRequest) GetTarget() NodeLiveness {
+	if m != nil {
+		return m.Target
+	}
+	return NodeLiveness_ALIVE
+}
+
+func (m *SetNodeLivenessRequest) GetNodeEpoch() uint64 {
+	if m != nil {
+		return m.NodeEpoch
+	}
+	return 0
+}
+
+// SetNodeLivenessResponse reports the liveness state applied by the node.
+type SetNodeLivenessResponse struct {
+	Applied   NodeLiveness `protobuf:"varint,1,opt,name=applied,proto3,enum=heartbeatpb.NodeLiveness" json:"applied,omitempty"`
+	NodeEpoch uint64       `protobuf:"varint,2,opt,name=node_epoch,json=nodeEpoch,proto3" json:"node_epoch,omitempty"`
+}
+
+func (m *SetNodeLivenessResponse) Reset()         { *m = SetNodeLivenessResponse{} }
+func (m *SetNodeLivenessResponse) String() string { return proto.CompactTextString(m) }
+func (*SetNodeLivenessResponse) ProtoMessage()    {}
+func (*SetNodeLivenessResponse) Descriptor() ([]byte, []int) {
+	return fileDescriptor_6d584080fdadb670, []int{20}
+}
+func (m *SetNodeLivenessResponse) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *SetNodeLivenessResponse) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_SetNodeLivenessResponse.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *SetNodeLivenessResponse) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_SetNodeLivenessResponse.Merge(m, src)
+}
+func (m *SetNodeLivenessResponse) XXX_Size() int {
+	return m.Size()
+}
+func (m *SetNodeLivenessResponse) XXX_DiscardUnknown() {
+	xxx_messageInfo_SetNodeLivenessResponse.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_SetNodeLivenessResponse proto.InternalMessageInfo
+
+func (m *SetNodeLivenessResponse) GetApplied() NodeLiveness {
+	if m != nil {
+		return m.Applied
+	}
+	return NodeLiveness_ALIVE
+}
+
+func (m *SetNodeLivenessResponse) GetNodeEpoch() uint64 {
+	if m != nil {
+		return m.NodeEpoch
+	}
+	return 0
+}
+
+// SetDispatcherDrainTargetRequest asks a maintainer manager to apply the dispatcher drain target.
+// target_node_id can be empty to clear the current target.
+type SetDispatcherDrainTargetRequest struct {
+	TargetNodeId string `protobuf:"bytes,1,opt,name=target_node_id,json=targetNodeId,proto3" json:"target_node_id,omitempty"`
+	TargetEpoch  uint64 `protobuf:"varint,2,opt,name=target_epoch,json=targetEpoch,proto3" json:"target_epoch,omitempty"`
+}
+
+func (m *SetDispatcherDrainTargetRequest) Reset()         { *m = SetDispatcherDrainTargetRequest{} }
+func (m *SetDispatcherDrainTargetRequest) String() string { return proto.CompactTextString(m) }
+func (*SetDispatcherDrainTargetRequest) ProtoMessage()    {}
+func (*SetDispatcherDrainTargetRequest) Descriptor() ([]byte, []int) {
+	return fileDescriptor_6d584080fdadb670, []int{21}
+}
+func (m *SetDispatcherDrainTargetRequest) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *SetDispatcherDrainTargetRequest) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_SetDispatcherDrainTargetRequest.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *SetDispatcherDrainTargetRequest) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_SetDispatcherDrainTargetRequest.Merge(m, src)
+}
+func (m *SetDispatcherDrainTargetRequest) XXX_Size() int {
+	return m.Size()
+}
+func (m *SetDispatcherDrainTargetRequest) XXX_DiscardUnknown() {
+	xxx_messageInfo_SetDispatcherDrainTargetRequest.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_SetDispatcherDrainTargetRequest proto.InternalMessageInfo
+
+func (m *SetDispatcherDrainTargetRequest) GetTargetNodeId() string {
+	if m != nil {
+		return m.TargetNodeId
+	}
+	return ""
+}
+
+func (m *SetDispatcherDrainTargetRequest) GetTargetEpoch() uint64 {
+	if m != nil {
+		return m.TargetEpoch
+	}
+	return 0
+}
+
+>>>>>>> 0213a79b4 (maintainer,heartbeatpb: add drain target plumbing (#4759))
 type CoordinatorBootstrapRequest struct {
 	Version int64 `protobuf:"varint,1,opt,name=version,proto3" json:"version,omitempty"`
 }
@@ -1411,7 +1732,11 @@ func (m *CoordinatorBootstrapRequest) Reset()         { *m = CoordinatorBootstra
 func (m *CoordinatorBootstrapRequest) String() string { return proto.CompactTextString(m) }
 func (*CoordinatorBootstrapRequest) ProtoMessage()    {}
 func (*CoordinatorBootstrapRequest) Descriptor() ([]byte, []int) {
+<<<<<<< HEAD
 	return fileDescriptor_6d584080fdadb670, []int{18}
+=======
+	return fileDescriptor_6d584080fdadb670, []int{22}
+>>>>>>> 0213a79b4 (maintainer,heartbeatpb: add drain target plumbing (#4759))
 }
 func (m *CoordinatorBootstrapRequest) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -1455,7 +1780,11 @@ func (m *CoordinatorBootstrapResponse) Reset()         { *m = CoordinatorBootstr
 func (m *CoordinatorBootstrapResponse) String() string { return proto.CompactTextString(m) }
 func (*CoordinatorBootstrapResponse) ProtoMessage()    {}
 func (*CoordinatorBootstrapResponse) Descriptor() ([]byte, []int) {
+<<<<<<< HEAD
 	return fileDescriptor_6d584080fdadb670, []int{19}
+=======
+	return fileDescriptor_6d584080fdadb670, []int{23}
+>>>>>>> 0213a79b4 (maintainer,heartbeatpb: add drain target plumbing (#4759))
 }
 func (m *CoordinatorBootstrapResponse) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -1503,7 +1832,11 @@ func (m *AddMaintainerRequest) Reset()         { *m = AddMaintainerRequest{} }
 func (m *AddMaintainerRequest) String() string { return proto.CompactTextString(m) }
 func (*AddMaintainerRequest) ProtoMessage()    {}
 func (*AddMaintainerRequest) Descriptor() ([]byte, []int) {
+<<<<<<< HEAD
 	return fileDescriptor_6d584080fdadb670, []int{20}
+=======
+	return fileDescriptor_6d584080fdadb670, []int{24}
+>>>>>>> 0213a79b4 (maintainer,heartbeatpb: add drain target plumbing (#4759))
 }
 func (m *AddMaintainerRequest) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -1578,7 +1911,11 @@ func (m *RemoveMaintainerRequest) Reset()         { *m = RemoveMaintainerRequest
 func (m *RemoveMaintainerRequest) String() string { return proto.CompactTextString(m) }
 func (*RemoveMaintainerRequest) ProtoMessage()    {}
 func (*RemoveMaintainerRequest) Descriptor() ([]byte, []int) {
+<<<<<<< HEAD
 	return fileDescriptor_6d584080fdadb670, []int{21}
+=======
+	return fileDescriptor_6d584080fdadb670, []int{25}
+>>>>>>> 0213a79b4 (maintainer,heartbeatpb: add drain target plumbing (#4759))
 }
 func (m *RemoveMaintainerRequest) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -1649,7 +1986,11 @@ func (m *MaintainerBootstrapRequest) Reset()         { *m = MaintainerBootstrapR
 func (m *MaintainerBootstrapRequest) String() string { return proto.CompactTextString(m) }
 func (*MaintainerBootstrapRequest) ProtoMessage()    {}
 func (*MaintainerBootstrapRequest) Descriptor() ([]byte, []int) {
+<<<<<<< HEAD
 	return fileDescriptor_6d584080fdadb670, []int{22}
+=======
+	return fileDescriptor_6d584080fdadb670, []int{26}
+>>>>>>> 0213a79b4 (maintainer,heartbeatpb: add drain target plumbing (#4759))
 }
 func (m *MaintainerBootstrapRequest) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -1750,7 +2091,11 @@ func (m *MaintainerBootstrapResponse) Reset()         { *m = MaintainerBootstrap
 func (m *MaintainerBootstrapResponse) String() string { return proto.CompactTextString(m) }
 func (*MaintainerBootstrapResponse) ProtoMessage()    {}
 func (*MaintainerBootstrapResponse) Descriptor() ([]byte, []int) {
+<<<<<<< HEAD
 	return fileDescriptor_6d584080fdadb670, []int{23}
+=======
+	return fileDescriptor_6d584080fdadb670, []int{27}
+>>>>>>> 0213a79b4 (maintainer,heartbeatpb: add drain target plumbing (#4759))
 }
 func (m *MaintainerBootstrapResponse) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -1832,7 +2177,11 @@ func (m *MaintainerPostBootstrapRequest) Reset()         { *m = MaintainerPostBo
 func (m *MaintainerPostBootstrapRequest) String() string { return proto.CompactTextString(m) }
 func (*MaintainerPostBootstrapRequest) ProtoMessage()    {}
 func (*MaintainerPostBootstrapRequest) Descriptor() ([]byte, []int) {
+<<<<<<< HEAD
 	return fileDescriptor_6d584080fdadb670, []int{24}
+=======
+	return fileDescriptor_6d584080fdadb670, []int{28}
+>>>>>>> 0213a79b4 (maintainer,heartbeatpb: add drain target plumbing (#4759))
 }
 func (m *MaintainerPostBootstrapRequest) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -1899,7 +2248,11 @@ func (m *MaintainerPostBootstrapResponse) Reset()         { *m = MaintainerPostB
 func (m *MaintainerPostBootstrapResponse) String() string { return proto.CompactTextString(m) }
 func (*MaintainerPostBootstrapResponse) ProtoMessage()    {}
 func (*MaintainerPostBootstrapResponse) Descriptor() ([]byte, []int) {
+<<<<<<< HEAD
 	return fileDescriptor_6d584080fdadb670, []int{25}
+=======
+	return fileDescriptor_6d584080fdadb670, []int{29}
+>>>>>>> 0213a79b4 (maintainer,heartbeatpb: add drain target plumbing (#4759))
 }
 func (m *MaintainerPostBootstrapResponse) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -1959,7 +2312,11 @@ func (m *SchemaInfo) Reset()         { *m = SchemaInfo{} }
 func (m *SchemaInfo) String() string { return proto.CompactTextString(m) }
 func (*SchemaInfo) ProtoMessage()    {}
 func (*SchemaInfo) Descriptor() ([]byte, []int) {
+<<<<<<< HEAD
 	return fileDescriptor_6d584080fdadb670, []int{26}
+=======
+	return fileDescriptor_6d584080fdadb670, []int{30}
+>>>>>>> 0213a79b4 (maintainer,heartbeatpb: add drain target plumbing (#4759))
 }
 func (m *SchemaInfo) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -2018,7 +2375,11 @@ func (m *TableInfo) Reset()         { *m = TableInfo{} }
 func (m *TableInfo) String() string { return proto.CompactTextString(m) }
 func (*TableInfo) ProtoMessage()    {}
 func (*TableInfo) Descriptor() ([]byte, []int) {
+<<<<<<< HEAD
 	return fileDescriptor_6d584080fdadb670, []int{27}
+=======
+	return fileDescriptor_6d584080fdadb670, []int{31}
+>>>>>>> 0213a79b4 (maintainer,heartbeatpb: add drain target plumbing (#4759))
 }
 func (m *TableInfo) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -2075,7 +2436,11 @@ func (m *BootstrapTableSpan) Reset()         { *m = BootstrapTableSpan{} }
 func (m *BootstrapTableSpan) String() string { return proto.CompactTextString(m) }
 func (*BootstrapTableSpan) ProtoMessage()    {}
 func (*BootstrapTableSpan) Descriptor() ([]byte, []int) {
+<<<<<<< HEAD
 	return fileDescriptor_6d584080fdadb670, []int{28}
+=======
+	return fileDescriptor_6d584080fdadb670, []int{32}
+>>>>>>> 0213a79b4 (maintainer,heartbeatpb: add drain target plumbing (#4759))
 }
 func (m *BootstrapTableSpan) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -2163,7 +2528,11 @@ func (m *MaintainerCloseRequest) Reset()         { *m = MaintainerCloseRequest{}
 func (m *MaintainerCloseRequest) String() string { return proto.CompactTextString(m) }
 func (*MaintainerCloseRequest) ProtoMessage()    {}
 func (*MaintainerCloseRequest) Descriptor() ([]byte, []int) {
+<<<<<<< HEAD
 	return fileDescriptor_6d584080fdadb670, []int{29}
+=======
+	return fileDescriptor_6d584080fdadb670, []int{33}
+>>>>>>> 0213a79b4 (maintainer,heartbeatpb: add drain target plumbing (#4759))
 }
 func (m *MaintainerCloseRequest) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -2215,7 +2584,11 @@ func (m *MaintainerCloseResponse) Reset()         { *m = MaintainerCloseResponse
 func (m *MaintainerCloseResponse) String() string { return proto.CompactTextString(m) }
 func (*MaintainerCloseResponse) ProtoMessage()    {}
 func (*MaintainerCloseResponse) Descriptor() ([]byte, []int) {
+<<<<<<< HEAD
 	return fileDescriptor_6d584080fdadb670, []int{30}
+=======
+	return fileDescriptor_6d584080fdadb670, []int{34}
+>>>>>>> 0213a79b4 (maintainer,heartbeatpb: add drain target plumbing (#4759))
 }
 func (m *MaintainerCloseResponse) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -2270,7 +2643,11 @@ func (m *InfluencedTables) Reset()         { *m = InfluencedTables{} }
 func (m *InfluencedTables) String() string { return proto.CompactTextString(m) }
 func (*InfluencedTables) ProtoMessage()    {}
 func (*InfluencedTables) Descriptor() ([]byte, []int) {
+<<<<<<< HEAD
 	return fileDescriptor_6d584080fdadb670, []int{31}
+=======
+	return fileDescriptor_6d584080fdadb670, []int{35}
+>>>>>>> 0213a79b4 (maintainer,heartbeatpb: add drain target plumbing (#4759))
 }
 func (m *InfluencedTables) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -2330,7 +2707,11 @@ func (m *Table) Reset()         { *m = Table{} }
 func (m *Table) String() string { return proto.CompactTextString(m) }
 func (*Table) ProtoMessage()    {}
 func (*Table) Descriptor() ([]byte, []int) {
+<<<<<<< HEAD
 	return fileDescriptor_6d584080fdadb670, []int{32}
+=======
+	return fileDescriptor_6d584080fdadb670, []int{36}
+>>>>>>> 0213a79b4 (maintainer,heartbeatpb: add drain target plumbing (#4759))
 }
 func (m *Table) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -2390,7 +2771,11 @@ func (m *SchemaIDChange) Reset()         { *m = SchemaIDChange{} }
 func (m *SchemaIDChange) String() string { return proto.CompactTextString(m) }
 func (*SchemaIDChange) ProtoMessage()    {}
 func (*SchemaIDChange) Descriptor() ([]byte, []int) {
+<<<<<<< HEAD
 	return fileDescriptor_6d584080fdadb670, []int{33}
+=======
+	return fileDescriptor_6d584080fdadb670, []int{37}
+>>>>>>> 0213a79b4 (maintainer,heartbeatpb: add drain target plumbing (#4759))
 }
 func (m *SchemaIDChange) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -2455,7 +2840,11 @@ func (m *State) Reset()         { *m = State{} }
 func (m *State) String() string { return proto.CompactTextString(m) }
 func (*State) ProtoMessage()    {}
 func (*State) Descriptor() ([]byte, []int) {
+<<<<<<< HEAD
 	return fileDescriptor_6d584080fdadb670, []int{34}
+=======
+	return fileDescriptor_6d584080fdadb670, []int{38}
+>>>>>>> 0213a79b4 (maintainer,heartbeatpb: add drain target plumbing (#4759))
 }
 func (m *State) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -2550,7 +2939,11 @@ func (m *TableSpanBlockStatus) Reset()         { *m = TableSpanBlockStatus{} }
 func (m *TableSpanBlockStatus) String() string { return proto.CompactTextString(m) }
 func (*TableSpanBlockStatus) ProtoMessage()    {}
 func (*TableSpanBlockStatus) Descriptor() ([]byte, []int) {
+<<<<<<< HEAD
 	return fileDescriptor_6d584080fdadb670, []int{35}
+=======
+	return fileDescriptor_6d584080fdadb670, []int{39}
+>>>>>>> 0213a79b4 (maintainer,heartbeatpb: add drain target plumbing (#4759))
 }
 func (m *TableSpanBlockStatus) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -2612,7 +3005,11 @@ func (m *TableSpanStatus) Reset()         { *m = TableSpanStatus{} }
 func (m *TableSpanStatus) String() string { return proto.CompactTextString(m) }
 func (*TableSpanStatus) ProtoMessage()    {}
 func (*TableSpanStatus) Descriptor() ([]byte, []int) {
+<<<<<<< HEAD
 	return fileDescriptor_6d584080fdadb670, []int{36}
+=======
+	return fileDescriptor_6d584080fdadb670, []int{40}
+>>>>>>> 0213a79b4 (maintainer,heartbeatpb: add drain target plumbing (#4759))
 }
 func (m *TableSpanStatus) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -2686,7 +3083,11 @@ func (m *BlockStatusRequest) Reset()         { *m = BlockStatusRequest{} }
 func (m *BlockStatusRequest) String() string { return proto.CompactTextString(m) }
 func (*BlockStatusRequest) ProtoMessage()    {}
 func (*BlockStatusRequest) Descriptor() ([]byte, []int) {
+<<<<<<< HEAD
 	return fileDescriptor_6d584080fdadb670, []int{37}
+=======
+	return fileDescriptor_6d584080fdadb670, []int{41}
+>>>>>>> 0213a79b4 (maintainer,heartbeatpb: add drain target plumbing (#4759))
 }
 func (m *BlockStatusRequest) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -2747,7 +3148,11 @@ func (m *RunningError) Reset()         { *m = RunningError{} }
 func (m *RunningError) String() string { return proto.CompactTextString(m) }
 func (*RunningError) ProtoMessage()    {}
 func (*RunningError) Descriptor() ([]byte, []int) {
+<<<<<<< HEAD
 	return fileDescriptor_6d584080fdadb670, []int{38}
+=======
+	return fileDescriptor_6d584080fdadb670, []int{42}
+>>>>>>> 0213a79b4 (maintainer,heartbeatpb: add drain target plumbing (#4759))
 }
 func (m *RunningError) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -2813,7 +3218,11 @@ func (m *DispatcherID) Reset()         { *m = DispatcherID{} }
 func (m *DispatcherID) String() string { return proto.CompactTextString(m) }
 func (*DispatcherID) ProtoMessage()    {}
 func (*DispatcherID) Descriptor() ([]byte, []int) {
+<<<<<<< HEAD
 	return fileDescriptor_6d584080fdadb670, []int{39}
+=======
+	return fileDescriptor_6d584080fdadb670, []int{43}
+>>>>>>> 0213a79b4 (maintainer,heartbeatpb: add drain target plumbing (#4759))
 }
 func (m *DispatcherID) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -2867,7 +3276,11 @@ func (m *ChangefeedID) Reset()         { *m = ChangefeedID{} }
 func (m *ChangefeedID) String() string { return proto.CompactTextString(m) }
 func (*ChangefeedID) ProtoMessage()    {}
 func (*ChangefeedID) Descriptor() ([]byte, []int) {
+<<<<<<< HEAD
 	return fileDescriptor_6d584080fdadb670, []int{40}
+=======
+	return fileDescriptor_6d584080fdadb670, []int{44}
+>>>>>>> 0213a79b4 (maintainer,heartbeatpb: add drain target plumbing (#4759))
 }
 func (m *ChangefeedID) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -2932,7 +3345,11 @@ func (m *LogCoordinatorResolvedTsRequest) Reset()         { *m = LogCoordinatorR
 func (m *LogCoordinatorResolvedTsRequest) String() string { return proto.CompactTextString(m) }
 func (*LogCoordinatorResolvedTsRequest) ProtoMessage()    {}
 func (*LogCoordinatorResolvedTsRequest) Descriptor() ([]byte, []int) {
+<<<<<<< HEAD
 	return fileDescriptor_6d584080fdadb670, []int{41}
+=======
+	return fileDescriptor_6d584080fdadb670, []int{45}
+>>>>>>> 0213a79b4 (maintainer,heartbeatpb: add drain target plumbing (#4759))
 }
 func (m *LogCoordinatorResolvedTsRequest) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -2977,7 +3394,11 @@ func (m *LogCoordinatorResolvedTsResponse) Reset()         { *m = LogCoordinator
 func (m *LogCoordinatorResolvedTsResponse) String() string { return proto.CompactTextString(m) }
 func (*LogCoordinatorResolvedTsResponse) ProtoMessage()    {}
 func (*LogCoordinatorResolvedTsResponse) Descriptor() ([]byte, []int) {
+<<<<<<< HEAD
 	return fileDescriptor_6d584080fdadb670, []int{42}
+=======
+	return fileDescriptor_6d584080fdadb670, []int{46}
+>>>>>>> 0213a79b4 (maintainer,heartbeatpb: add drain target plumbing (#4759))
 }
 func (m *LogCoordinatorResolvedTsResponse) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -3031,7 +3452,11 @@ func (m *ChecksumMeta) Reset()         { *m = ChecksumMeta{} }
 func (m *ChecksumMeta) String() string { return proto.CompactTextString(m) }
 func (*ChecksumMeta) ProtoMessage()    {}
 func (*ChecksumMeta) Descriptor() ([]byte, []int) {
+<<<<<<< HEAD
 	return fileDescriptor_6d584080fdadb670, []int{43}
+=======
+	return fileDescriptor_6d584080fdadb670, []int{47}
+>>>>>>> 0213a79b4 (maintainer,heartbeatpb: add drain target plumbing (#4759))
 }
 func (m *ChecksumMeta) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -3086,7 +3511,11 @@ func (m *DispatcherSetChecksum) Reset()         { *m = DispatcherSetChecksum{} }
 func (m *DispatcherSetChecksum) String() string { return proto.CompactTextString(m) }
 func (*DispatcherSetChecksum) ProtoMessage()    {}
 func (*DispatcherSetChecksum) Descriptor() ([]byte, []int) {
+<<<<<<< HEAD
 	return fileDescriptor_6d584080fdadb670, []int{44}
+=======
+	return fileDescriptor_6d584080fdadb670, []int{48}
+>>>>>>> 0213a79b4 (maintainer,heartbeatpb: add drain target plumbing (#4759))
 }
 func (m *DispatcherSetChecksum) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -3163,7 +3592,11 @@ func (m *DispatcherSetChecksumAckResponse) Reset()         { *m = DispatcherSetC
 func (m *DispatcherSetChecksumAckResponse) String() string { return proto.CompactTextString(m) }
 func (*DispatcherSetChecksumAckResponse) ProtoMessage()    {}
 func (*DispatcherSetChecksumAckResponse) Descriptor() ([]byte, []int) {
+<<<<<<< HEAD
 	return fileDescriptor_6d584080fdadb670, []int{45}
+=======
+	return fileDescriptor_6d584080fdadb670, []int{49}
+>>>>>>> 0213a79b4 (maintainer,heartbeatpb: add drain target plumbing (#4759))
 }
 func (m *DispatcherSetChecksumAckResponse) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -3234,7 +3667,11 @@ func (m *DispatcherSetChecksumUpdateRequest) Reset()         { *m = DispatcherSe
 func (m *DispatcherSetChecksumUpdateRequest) String() string { return proto.CompactTextString(m) }
 func (*DispatcherSetChecksumUpdateRequest) ProtoMessage()    {}
 func (*DispatcherSetChecksumUpdateRequest) Descriptor() ([]byte, []int) {
+<<<<<<< HEAD
 	return fileDescriptor_6d584080fdadb670, []int{46}
+=======
+	return fileDescriptor_6d584080fdadb670, []int{50}
+>>>>>>> 0213a79b4 (maintainer,heartbeatpb: add drain target plumbing (#4759))
 }
 func (m *DispatcherSetChecksumUpdateRequest) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -3323,7 +3760,15 @@ func init() {
 	proto.RegisterType((*ScheduleDispatcherRequest)(nil), "heartbeatpb.ScheduleDispatcherRequest")
 	proto.RegisterType((*MergeDispatcherRequest)(nil), "heartbeatpb.MergeDispatcherRequest")
 	proto.RegisterType((*MaintainerHeartbeat)(nil), "heartbeatpb.MaintainerHeartbeat")
+	proto.RegisterType((*DrainProgress)(nil), "heartbeatpb.DrainProgress")
 	proto.RegisterType((*MaintainerStatus)(nil), "heartbeatpb.MaintainerStatus")
+<<<<<<< HEAD
+=======
+	proto.RegisterType((*NodeHeartbeat)(nil), "heartbeatpb.NodeHeartbeat")
+	proto.RegisterType((*SetNodeLivenessRequest)(nil), "heartbeatpb.SetNodeLivenessRequest")
+	proto.RegisterType((*SetNodeLivenessResponse)(nil), "heartbeatpb.SetNodeLivenessResponse")
+	proto.RegisterType((*SetDispatcherDrainTargetRequest)(nil), "heartbeatpb.SetDispatcherDrainTargetRequest")
+>>>>>>> 0213a79b4 (maintainer,heartbeatpb: add drain target plumbing (#4759))
 	proto.RegisterType((*CoordinatorBootstrapRequest)(nil), "heartbeatpb.CoordinatorBootstrapRequest")
 	proto.RegisterType((*CoordinatorBootstrapResponse)(nil), "heartbeatpb.CoordinatorBootstrapResponse")
 	proto.RegisterType((*AddMaintainerRequest)(nil), "heartbeatpb.AddMaintainerRequest")
@@ -3358,6 +3803,7 @@ func init() {
 func init() { proto.RegisterFile("heartbeatpb/heartbeat.proto", fileDescriptor_6d584080fdadb670) }
 
 var fileDescriptor_6d584080fdadb670 = []byte{
+<<<<<<< HEAD
 	// 2479 bytes of a gzipped FileDescriptorProto
 	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0xbc, 0x3a, 0xcd, 0x6f, 0x1c, 0x49,
 	0xf5, 0xee, 0x9e, 0x0f, 0x7b, 0x9e, 0x3d, 0x76, 0xa7, 0xf2, 0xb1, 0xde, 0xc4, 0x71, 0xbc, 0xfd,
@@ -3514,6 +3960,181 @@ var fileDescriptor_6d584080fdadb670 = []byte{
 	0xf3, 0xe9, 0xff, 0x0f, 0xdd, 0x70, 0x7f, 0xb2, 0x77, 0xdd, 0xa6, 0xe3, 0x1b, 0xbe, 0xeb, 0x0d,
 	0x6d, 0xcb, 0xbf, 0x11, 0xba, 0xb6, 0x63, 0xdf, 0x48, 0x85, 0xc6, 0x5e, 0x5d, 0xfc, 0x59, 0xe5,
 	0xdd, 0xff, 0x05, 0x00, 0x00, 0xff, 0xff, 0xa6, 0xe8, 0x5b, 0x47, 0xcb, 0x22, 0x00, 0x00,
+=======
+	// 2738 bytes of a gzipped FileDescriptorProto
+	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0xbc, 0x1a, 0x4d, 0x8f, 0x1c, 0x57,
+	0xd1, 0xdd, 0xf3, 0x5d, 0xb3, 0xb3, 0x6e, 0x3f, 0xdb, 0xeb, 0x8d, 0xbd, 0x5e, 0x6f, 0x9a, 0x80,
+	0x96, 0x49, 0xb0, 0xb1, 0x13, 0xf3, 0x11, 0x42, 0xc2, 0x78, 0xc6, 0x89, 0x47, 0xde, 0x99, 0x5d,
+	0xbd, 0xd9, 0x60, 0x08, 0x87, 0xa1, 0xb7, 0xfb, 0x79, 0xb6, 0xb3, 0x33, 0xdd, 0xed, 0xee, 0x9e,
+	0x5d, 0xaf, 0xa5, 0x80, 0x50, 0xc4, 0x8d, 0x03, 0x48, 0x70, 0xe0, 0xc0, 0x01, 0xf1, 0x07, 0x90,
+	0x10, 0x47, 0xce, 0x20, 0x71, 0xc9, 0x09, 0x85, 0x13, 0x28, 0xb9, 0x23, 0x04, 0x07, 0xae, 0xe8,
+	0x7d, 0x74, 0xf7, 0xeb, 0x9e, 0xde, 0x0f, 0x6b, 0x47, 0xbe, 0xbd, 0x7a, 0xaf, 0xaa, 0x5e, 0xbd,
+	0xaa, 0x7a, 0x55, 0xf5, 0xaa, 0x1b, 0xae, 0xed, 0x12, 0xc3, 0x0f, 0x77, 0x88, 0x11, 0x7a, 0x3b,
+	0xb7, 0xe2, 0xf1, 0x4d, 0xcf, 0x77, 0x43, 0x17, 0xd5, 0xa5, 0x45, 0xfd, 0x10, 0x6a, 0xdb, 0xc6,
+	0xce, 0x98, 0x0c, 0x3c, 0xc3, 0x41, 0xcb, 0x50, 0x61, 0x40, 0xb7, 0xb3, 0xac, 0xac, 0x29, 0xeb,
+	0x05, 0x1c, 0x81, 0xe8, 0x2a, 0x54, 0x07, 0xa1, 0xe1, 0x87, 0x0f, 0xc9, 0xe1, 0xb2, 0xba, 0xa6,
+	0xac, 0x2f, 0xe0, 0x18, 0x46, 0x4b, 0x50, 0xbe, 0xef, 0x58, 0x74, 0xa5, 0xc0, 0x56, 0x04, 0x84,
+	0x56, 0x01, 0x1e, 0x92, 0xc3, 0xc0, 0x33, 0x4c, 0xca, 0xb0, 0xb8, 0xa6, 0xac, 0x37, 0xb0, 0x34,
+	0xa3, 0xff, 0x4d, 0x05, 0xed, 0x01, 0x15, 0xe5, 0x1e, 0x31, 0x42, 0x4c, 0x9e, 0x4c, 0x49, 0x10,
+	0xa2, 0x6f, 0xc3, 0x82, 0xb9, 0x6b, 0x38, 0x23, 0xf2, 0x98, 0x10, 0x4b, 0xc8, 0x51, 0xbf, 0xf3,
+	0xd2, 0x4d, 0x49, 0xe6, 0x9b, 0x6d, 0x09, 0x01, 0xa7, 0xd0, 0xd1, 0x1b, 0x50, 0x3b, 0x30, 0x42,
+	0xe2, 0x4f, 0x0c, 0x7f, 0x8f, 0x09, 0x5a, 0xbf, 0xb3, 0x94, 0xa2, 0x7d, 0x14, 0xad, 0xe2, 0x04,
+	0x11, 0xbd, 0x05, 0x0d, 0x9f, 0x58, 0x6e, 0xbc, 0xc6, 0x0e, 0x72, 0x34, 0x65, 0x1a, 0x19, 0x7d,
+	0x03, 0xaa, 0x41, 0x68, 0x84, 0xd3, 0x80, 0x04, 0xcb, 0xc5, 0xb5, 0xc2, 0x7a, 0xfd, 0xce, 0x4a,
+	0x8a, 0x30, 0xd6, 0xef, 0x80, 0x61, 0xe1, 0x18, 0x1b, 0xad, 0xc3, 0x79, 0xd3, 0x9d, 0x78, 0x64,
+	0x4c, 0x42, 0xc2, 0x17, 0x97, 0x4b, 0x6b, 0xca, 0x7a, 0x15, 0x67, 0xa7, 0xd1, 0xab, 0x50, 0x20,
+	0xbe, 0xbf, 0x5c, 0xce, 0xd1, 0x06, 0x9e, 0x3a, 0x8e, 0xed, 0x8c, 0xee, 0xfb, 0xbe, 0xeb, 0x63,
+	0x8a, 0xa5, 0xff, 0x54, 0x81, 0x5a, 0x22, 0x9e, 0x4e, 0x35, 0x4a, 0xcc, 0x3d, 0xcf, 0xb5, 0x9d,
+	0x70, 0x3b, 0x60, 0x1a, 0x2d, 0xe2, 0xd4, 0x1c, 0x35, 0x95, 0x4f, 0x02, 0x77, 0xbc, 0x4f, 0xac,
+	0xed, 0x80, 0xe9, 0xad, 0x88, 0xa5, 0x19, 0xa4, 0x41, 0x21, 0x20, 0x4f, 0x98, 0x5a, 0x8a, 0x98,
+	0x0e, 0x29, 0xd7, 0xb1, 0x11, 0x84, 0x83, 0x43, 0xc7, 0x64, 0x34, 0x45, 0xce, 0x55, 0x9e, 0xd3,
+	0x3f, 0x02, 0xad, 0x63, 0x07, 0x9e, 0x11, 0x9a, 0xbb, 0xc4, 0x6f, 0x99, 0xa1, 0xed, 0x3a, 0xe8,
+	0x55, 0x28, 0x1b, 0x6c, 0xc4, 0xe4, 0x58, 0xbc, 0x73, 0x31, 0x75, 0x16, 0x8e, 0x84, 0x05, 0x0a,
+	0xf5, 0xba, 0xb6, 0x3b, 0x99, 0xd8, 0x61, 0x2c, 0x54, 0x0c, 0xa3, 0x35, 0xa8, 0x77, 0x03, 0xba,
+	0xd5, 0x16, 0x3d, 0x03, 0x13, 0xad, 0x8a, 0xe5, 0x29, 0xbd, 0x0d, 0x85, 0x56, 0xfb, 0x61, 0x8a,
+	0x89, 0x72, 0x3c, 0x13, 0x75, 0x96, 0xc9, 0xc7, 0x2a, 0x5c, 0xee, 0x3a, 0x8f, 0xc7, 0x53, 0x42,
+	0x0f, 0x95, 0x1c, 0x27, 0x40, 0xdf, 0x81, 0x46, 0xbc, 0xb0, 0x7d, 0xe8, 0x11, 0x71, 0xa0, 0xab,
+	0xa9, 0x03, 0xa5, 0x30, 0x70, 0x9a, 0x00, 0xbd, 0x03, 0x8d, 0x84, 0x61, 0xb7, 0x43, 0xcf, 0x58,
+	0x98, 0x31, 0xaf, 0x8c, 0x81, 0xd3, 0xf8, 0xec, 0x56, 0x9a, 0xbb, 0x64, 0x62, 0x74, 0x3b, 0x4c,
+	0x01, 0x05, 0x1c, 0xc3, 0xe8, 0x21, 0x5c, 0x24, 0x4f, 0xcd, 0xf1, 0xd4, 0x22, 0x12, 0x8d, 0xc5,
+	0xec, 0x74, 0xec, 0x16, 0x79, 0x54, 0xfa, 0x9f, 0x15, 0xd9, 0x94, 0xc2, 0x27, 0xbf, 0x07, 0x97,
+	0xed, 0x3c, 0xcd, 0x88, 0x3b, 0xab, 0xe7, 0x2b, 0x42, 0xc6, 0xc4, 0xf9, 0x0c, 0xd0, 0xdd, 0xd8,
+	0x49, 0xf8, 0x15, 0xbe, 0x7e, 0x84, 0xb8, 0x19, 0x77, 0xd1, 0xa1, 0x60, 0x98, 0xd1, 0xe5, 0xd5,
+	0xd2, 0x8e, 0xd5, 0x7e, 0x88, 0xe9, 0xa2, 0xfe, 0x47, 0x05, 0x2e, 0x48, 0x41, 0x27, 0xf0, 0x5c,
+	0x27, 0x20, 0x67, 0x8d, 0x3a, 0x3d, 0x40, 0x56, 0x46, 0x3b, 0x24, 0xb2, 0xe6, 0x51, 0xb2, 0x8b,
+	0x60, 0x90, 0x43, 0x88, 0x10, 0x14, 0x27, 0xae, 0x45, 0x84, 0x49, 0xd9, 0x58, 0x7f, 0x0a, 0x17,
+	0xdb, 0xd2, 0x8d, 0xed, 0x91, 0x20, 0x30, 0x46, 0x67, 0x16, 0x3c, 0x1b, 0x1b, 0xd4, 0xd9, 0xd8,
+	0xa0, 0xff, 0x52, 0x81, 0xf3, 0x98, 0x58, 0x6e, 0x8f, 0x84, 0xc6, 0x9c, 0xb6, 0x3d, 0x29, 0xdc,
+	0x64, 0xc5, 0x2a, 0xe4, 0x88, 0xf5, 0x23, 0xb8, 0x4e, 0xa5, 0xc2, 0x31, 0xd5, 0x96, 0xef, 0x8e,
+	0x7c, 0x12, 0x04, 0x2f, 0x46, 0x46, 0xfd, 0x23, 0x58, 0x49, 0xef, 0xff, 0xae, 0xeb, 0x1f, 0x18,
+	0xbe, 0xf5, 0x82, 0xb6, 0xff, 0x6f, 0xea, 0x46, 0xb6, 0x5d, 0xe7, 0xb1, 0x3d, 0x42, 0x4d, 0x28,
+	0x06, 0x9e, 0xe1, 0x88, 0xbd, 0x96, 0xf2, 0xb3, 0x10, 0x66, 0x38, 0x34, 0xd7, 0x07, 0x34, 0x83,
+	0xc7, 0xdc, 0x23, 0x90, 0x4a, 0x6e, 0x49, 0x11, 0x41, 0xdc, 0xa7, 0x63, 0x42, 0x46, 0x0a, 0x9d,
+	0x06, 0xa5, 0x20, 0x0a, 0x4a, 0x45, 0x1e, 0x94, 0x22, 0x38, 0xf6, 0xec, 0x52, 0xe2, 0xd9, 0xa8,
+	0x09, 0x5a, 0xb0, 0x67, 0x7b, 0x9d, 0xde, 0x46, 0x2b, 0x18, 0x08, 0x89, 0xca, 0x2c, 0x10, 0xcf,
+	0xcc, 0xeb, 0xbf, 0x52, 0xe1, 0x25, 0x1a, 0xe1, 0xac, 0xe9, 0x58, 0x0a, 0x50, 0x73, 0xaa, 0x1d,
+	0xee, 0x42, 0xd9, 0x64, 0x7a, 0x3c, 0x21, 0xea, 0x70, 0x65, 0x63, 0x81, 0x8c, 0xda, 0xb0, 0x18,
+	0x08, 0x91, 0x78, 0x3c, 0x62, 0x0a, 0x5b, 0xbc, 0x73, 0x2d, 0x45, 0x3e, 0x48, 0xa1, 0xe0, 0x0c,
+	0x09, 0x15, 0xdd, 0xf5, 0x88, 0x6f, 0x84, 0xae, 0xcf, 0x72, 0x49, 0x91, 0xb1, 0x48, 0x8b, 0xbe,
+	0x29, 0x21, 0xe0, 0x14, 0xba, 0xfe, 0x3f, 0x05, 0x96, 0x7a, 0xc4, 0x1f, 0xcd, 0x5f, 0x29, 0xef,
+	0x40, 0xc3, 0x7a, 0xce, 0x1c, 0x95, 0xc2, 0x47, 0x5d, 0x40, 0x13, 0x2a, 0x99, 0xd5, 0x79, 0x2e,
+	0x9f, 0xca, 0x21, 0x8a, 0xbd, 0xa7, 0x28, 0xc5, 0xc5, 0x2d, 0xb8, 0xd8, 0x33, 0x6c, 0x27, 0x34,
+	0x6c, 0x87, 0xf8, 0x0f, 0x22, 0x6e, 0xe8, 0x9b, 0x52, 0x4d, 0xa6, 0xe4, 0xc4, 0xe1, 0x84, 0x26,
+	0x5b, 0x94, 0xe9, 0x9f, 0x2a, 0xd0, 0xe8, 0xf8, 0x86, 0xed, 0x44, 0x01, 0x05, 0xbd, 0x02, 0x8b,
+	0xa1, 0xe1, 0x8f, 0x48, 0x38, 0x74, 0x5c, 0x8b, 0x0c, 0x6d, 0x8b, 0x29, 0xb1, 0x86, 0x17, 0xf8,
+	0x6c, 0xdf, 0xb5, 0x48, 0xd7, 0x42, 0x2f, 0x83, 0x80, 0x87, 0xc4, 0x73, 0xcd, 0x5d, 0x71, 0xab,
+	0xea, 0x7c, 0xee, 0x3e, 0x9d, 0x42, 0x5f, 0x83, 0x2b, 0x02, 0x25, 0xd1, 0xd1, 0xd0, 0x74, 0xa7,
+	0xa2, 0x7e, 0x69, 0xe0, 0xcb, 0x7c, 0x59, 0xf6, 0xb5, 0xa9, 0x13, 0xa2, 0x77, 0x61, 0x4d, 0xd0,
+	0xd1, 0x7c, 0x69, 0x8f, 0x76, 0xc3, 0xa1, 0x45, 0x25, 0x1c, 0x4e, 0xdc, 0x7d, 0x22, 0x18, 0xf0,
+	0xfa, 0x7a, 0x85, 0xe3, 0x75, 0x05, 0x1a, 0x3b, 0x47, 0xcf, 0xdd, 0x27, 0x8c, 0x8f, 0xfe, 0x71,
+	0x01, 0xb4, 0xec, 0xc9, 0xcf, 0xea, 0x20, 0xd7, 0x01, 0xe8, 0x68, 0x48, 0xf5, 0x47, 0xd8, 0xa1,
+	0x6b, 0xb8, 0x46, 0x67, 0x28, 0x7b, 0x82, 0x6e, 0x43, 0x89, 0xaf, 0xe4, 0x5d, 0x8a, 0xb6, 0x3b,
+	0xf1, 0x5c, 0x87, 0x38, 0x21, 0xc3, 0xc5, 0x1c, 0x13, 0x7d, 0x01, 0x1a, 0x49, 0xa4, 0x1f, 0x86,
+	0x71, 0x6d, 0x99, 0xaa, 0x58, 0x45, 0x41, 0x5c, 0xca, 0xf1, 0xc6, 0x99, 0x82, 0x18, 0x7d, 0x11,
+	0x16, 0x77, 0x5c, 0x37, 0x0c, 0x42, 0xdf, 0xf0, 0x86, 0x96, 0xeb, 0x10, 0x11, 0x60, 0x1a, 0xf1,
+	0x6c, 0xc7, 0x75, 0xc8, 0x4c, 0x4d, 0x5b, 0x99, 0xad, 0x69, 0x51, 0x0b, 0x16, 0xb9, 0xea, 0x3d,
+	0xe1, 0x1d, 0xcb, 0x55, 0xa6, 0xaf, 0x74, 0xd9, 0x97, 0xf2, 0x1f, 0xdc, 0xb0, 0x64, 0x50, 0xff,
+	0x97, 0x02, 0x0d, 0xea, 0x33, 0x89, 0xb7, 0xde, 0x85, 0xea, 0xd8, 0xde, 0x27, 0x0e, 0x65, 0xa7,
+	0xe4, 0xdc, 0x7c, 0x8a, 0xbd, 0x21, 0x10, 0x70, 0x8c, 0x4a, 0x55, 0xcf, 0x1c, 0x52, 0xf6, 0xb7,
+	0x1a, 0x9d, 0xe1, 0xde, 0xd6, 0x81, 0x1b, 0x92, 0x9b, 0x71, 0xa9, 0x33, 0x7e, 0x5c, 0x60, 0xe6,
+	0xba, 0x96, 0xa0, 0x31, 0xc1, 0xb7, 0x65, 0xb7, 0x6e, 0xc1, 0xf5, 0xa3, 0xb8, 0xf0, 0x7d, 0xb9,
+	0x75, 0xae, 0xe6, 0xf2, 0x60, 0x82, 0xe8, 0x1f, 0xc2, 0xd2, 0x80, 0xf3, 0x8b, 0x0f, 0x21, 0x82,
+	0xd3, 0x6d, 0x28, 0x73, 0x5e, 0x27, 0x1f, 0x5b, 0x20, 0x9e, 0x70, 0x68, 0x7d, 0x02, 0x57, 0x66,
+	0xf6, 0x12, 0x45, 0xde, 0xeb, 0x50, 0x31, 0x3c, 0x6f, 0x6c, 0x13, 0xeb, 0xe4, 0xdd, 0x22, 0xcc,
+	0x93, 0xb6, 0xfb, 0x10, 0x6e, 0x0c, 0xe4, 0xfb, 0x2a, 0x9d, 0x3d, 0x3a, 0xe3, 0xbc, 0xa2, 0x87,
+	0xfe, 0x75, 0xb8, 0xd6, 0x76, 0x5d, 0xdf, 0xb2, 0x1d, 0x1a, 0xf7, 0xef, 0x45, 0xae, 0x1b, 0xed,
+	0xb3, 0x0c, 0x95, 0x7d, 0xe2, 0x07, 0xd1, 0xd3, 0xaa, 0x80, 0x23, 0x50, 0xff, 0x3e, 0xac, 0xe4,
+	0x13, 0x0a, 0xc5, 0x9c, 0x21, 0x58, 0xfe, 0x55, 0x81, 0x4b, 0x2d, 0xcb, 0x4a, 0x30, 0x22, 0x69,
+	0xbe, 0x0c, 0xaa, 0x38, 0xe9, 0xb1, 0xb1, 0x44, 0xb5, 0x2d, 0xb4, 0x94, 0xca, 0xbb, 0x0b, 0x71,
+	0x62, 0x9d, 0x89, 0x03, 0x39, 0x65, 0x20, 0x6a, 0xc2, 0x05, 0x3b, 0x18, 0x3a, 0xe4, 0x60, 0x98,
+	0x44, 0x25, 0xe6, 0x92, 0x55, 0x7c, 0xde, 0x0e, 0xfa, 0xe4, 0x20, 0xd9, 0x0e, 0xdd, 0x80, 0xfa,
+	0x9e, 0x68, 0x3f, 0x50, 0x33, 0x94, 0x78, 0x47, 0x22, 0x9a, 0xea, 0x5a, 0xfa, 0xaf, 0x15, 0xb8,
+	0x82, 0x09, 0x0d, 0xaa, 0x67, 0x3a, 0xd0, 0x32, 0x54, 0x4c, 0x23, 0x30, 0x0d, 0x8b, 0x88, 0x17,
+	0x65, 0x04, 0xd2, 0x15, 0x9f, 0xf1, 0xb7, 0xc4, 0x83, 0x35, 0x02, 0xb3, 0xb2, 0x15, 0x67, 0x64,
+	0xfb, 0x5d, 0x01, 0xae, 0x26, 0x52, 0xcd, 0x58, 0xff, 0x8c, 0x51, 0xfc, 0x28, 0x1b, 0xbc, 0xc4,
+	0x5c, 0xc3, 0x97, 0xd4, 0x1f, 0x97, 0x89, 0x26, 0xbc, 0x1c, 0xd2, 0x9a, 0x72, 0x18, 0xfa, 0xf6,
+	0x68, 0x44, 0xfc, 0x21, 0xd9, 0x27, 0x4e, 0x2a, 0xb3, 0xd9, 0xa7, 0x78, 0x6e, 0x5e, 0x67, 0x3c,
+	0xb6, 0x39, 0x8b, 0xfb, 0x94, 0x83, 0xfc, 0xf0, 0xcc, 0x37, 0x6f, 0x29, 0xdf, 0xbc, 0x06, 0xcd,
+	0x92, 0xb2, 0x40, 0x3e, 0xb1, 0xdc, 0x8c, 0x3c, 0xe5, 0x93, 0xe4, 0x59, 0x91, 0xe5, 0xa1, 0x05,
+	0x7e, 0x4a, 0x9c, 0x8c, 0x95, 0x2a, 0x33, 0x56, 0xfa, 0xbb, 0x0a, 0xd7, 0x72, 0xad, 0x34, 0x9f,
+	0x87, 0xe6, 0x5d, 0x28, 0xd1, 0xe2, 0x3d, 0xaa, 0xc2, 0x6e, 0xa4, 0xe8, 0xe2, 0xdd, 0x92, 0x52,
+	0x9f, 0x63, 0x47, 0xc9, 0xb2, 0x70, 0x9a, 0xee, 0xd1, 0xe9, 0xd2, 0xef, 0x6b, 0x80, 0x98, 0x76,
+	0xd3, 0x98, 0x25, 0x86, 0xa9, 0xd1, 0x15, 0xf9, 0xb1, 0x8a, 0x3a, 0x50, 0x8b, 0xca, 0x55, 0x5a,
+	0xdb, 0x53, 0xd1, 0xbf, 0x94, 0x5b, 0x1d, 0xcf, 0x94, 0xaf, 0x38, 0x21, 0xd4, 0xff, 0xa0, 0xc2,
+	0x6a, 0xa2, 0xdb, 0x2d, 0x37, 0x08, 0xe7, 0x7d, 0x0b, 0x4e, 0xe5, 0xd2, 0xea, 0x19, 0x5d, 0xfa,
+	0x36, 0x54, 0xf8, 0x7b, 0x88, 0xde, 0x28, 0xaa, 0x8a, 0x2b, 0x33, 0xaa, 0x98, 0x18, 0x5d, 0xe7,
+	0xb1, 0x8b, 0x23, 0x3c, 0xf4, 0x26, 0x2c, 0x30, 0x6d, 0x47, 0x74, 0xc5, 0xe3, 0xe9, 0xea, 0x14,
+	0x99, 0xc3, 0x81, 0xfe, 0x1f, 0x05, 0x6e, 0x1c, 0xa9, 0xb5, 0xf9, 0x78, 0xe5, 0x0b, 0x51, 0xdb,
+	0xf3, 0xf8, 0xb0, 0xfe, 0x14, 0x20, 0xd1, 0x47, 0xaa, 0x4d, 0xa6, 0x64, 0xda, 0x64, 0xab, 0x11,
+	0x66, 0xdf, 0x98, 0x44, 0xe5, 0xab, 0x34, 0x83, 0x6e, 0x42, 0x99, 0x5d, 0xa7, 0xc8, 0x58, 0x39,
+	0x8f, 0x6a, 0xa6, 0x73, 0x81, 0xa5, 0xb7, 0x45, 0x3f, 0x9d, 0x6d, 0x7c, 0x74, 0x3f, 0x7d, 0x45,
+	0xa0, 0x49, 0xbb, 0x26, 0x13, 0xfa, 0x9f, 0x54, 0x40, 0xb3, 0xb7, 0x99, 0xa6, 0xa0, 0x23, 0x8c,
+	0x93, 0x52, 0xa4, 0x2a, 0xfa, 0xf5, 0xd1, 0x91, 0xd5, 0xcc, 0x91, 0xa3, 0x2e, 0x41, 0xe1, 0x14,
+	0x5d, 0x82, 0x77, 0x41, 0x33, 0xa3, 0x22, 0x7d, 0xc8, 0xb3, 0xbe, 0x78, 0x9b, 0x1e, 0x5b, 0xc9,
+	0x9f, 0x37, 0x65, 0x78, 0x1a, 0xcc, 0x06, 0x95, 0x52, 0x4e, 0x50, 0x79, 0x1d, 0xea, 0x3b, 0x63,
+	0xd7, 0xdc, 0x13, 0x6f, 0x09, 0x1e, 0xab, 0x51, 0xda, 0xcb, 0x19, 0x7b, 0x60, 0x68, 0xfc, 0x81,
+	0x11, 0x3d, 0x0a, 0x2b, 0xd2, 0xa3, 0xf0, 0x09, 0x2c, 0x25, 0x2e, 0xdf, 0x1e, 0xbb, 0x01, 0x99,
+	0x53, 0x80, 0x90, 0xf2, 0xb7, 0x9a, 0xca, 0xdf, 0xba, 0x0f, 0x57, 0x66, 0xb6, 0x9c, 0xcf, 0xed,
+	0x5a, 0x86, 0x4a, 0x30, 0x35, 0x4d, 0xfa, 0x36, 0x10, 0x7b, 0x0a, 0x50, 0xff, 0x99, 0x02, 0x5a,
+	0xd2, 0x57, 0xe5, 0x0e, 0x38, 0x87, 0xb6, 0xf4, 0x55, 0xa8, 0x0a, 0x37, 0xe5, 0x79, 0xa6, 0x80,
+	0x63, 0xf8, 0xb8, 0x8e, 0xb3, 0xfe, 0x03, 0x28, 0x31, 0xbc, 0x13, 0x3e, 0x23, 0x1d, 0xe5, 0x96,
+	0x2b, 0x50, 0x1b, 0x78, 0x63, 0x9b, 0x45, 0x01, 0x51, 0x1d, 0x25, 0x13, 0xba, 0x03, 0x8b, 0x11,
+	0x26, 0xd7, 0xd5, 0x31, 0xbb, 0xac, 0x41, 0x7d, 0x73, 0x6c, 0x65, 0x36, 0x92, 0xa7, 0x28, 0x46,
+	0x9f, 0x1c, 0x64, 0x4e, 0x22, 0x4f, 0xe9, 0xbf, 0x2d, 0x40, 0x89, 0x3b, 0xd8, 0x0a, 0xd4, 0xba,
+	0xc1, 0x3d, 0xea, 0x70, 0xe2, 0xe1, 0x50, 0xc5, 0xc9, 0x04, 0x95, 0x82, 0x0d, 0x93, 0x36, 0x9a,
+	0x00, 0xd1, 0x3b, 0x50, 0xe7, 0xc3, 0x28, 0x7c, 0xcc, 0xf6, 0x94, 0xb2, 0xc6, 0xc3, 0x32, 0x05,
+	0x7a, 0x08, 0x17, 0xfa, 0x84, 0x58, 0x1d, 0xdf, 0xf5, 0xbc, 0x08, 0x43, 0x14, 0x54, 0x27, 0xb0,
+	0x99, 0xa5, 0x43, 0x6f, 0xc1, 0x79, 0x3a, 0xd9, 0xb2, 0xac, 0x98, 0x15, 0x7f, 0x3b, 0xa3, 0xd9,
+	0xfb, 0x8f, 0xb3, 0xa8, 0xa8, 0x0d, 0x8b, 0xef, 0x7b, 0x96, 0x11, 0x12, 0xa1, 0xc2, 0x28, 0x8b,
+	0x5f, 0xcb, 0x4b, 0x41, 0xc2, 0x40, 0x38, 0x43, 0x92, 0xfd, 0xd8, 0x52, 0x99, 0xf9, 0xd8, 0x82,
+	0xbe, 0xc2, 0x9a, 0x05, 0x23, 0xc2, 0xde, 0xd4, 0x8b, 0x99, 0x04, 0x77, 0x4f, 0xdc, 0xf9, 0x11,
+	0x6f, 0x14, 0x8c, 0x88, 0xfe, 0x63, 0xb8, 0x14, 0xc7, 0xab, 0x68, 0x95, 0x06, 0x9b, 0xe7, 0x88,
+	0x93, 0xeb, 0x51, 0x7b, 0x42, 0x3d, 0x32, 0xd8, 0x88, 0xae, 0x44, 0x5e, 0x53, 0xfe, 0xdf, 0x0a,
+	0x9c, 0xcf, 0x7c, 0xdd, 0x7b, 0x9e, 0xcd, 0xf3, 0x82, 0xab, 0x3a, 0x8f, 0xe0, 0x9a, 0xf7, 0x50,
+	0xba, 0x0d, 0x97, 0x79, 0x5a, 0x0e, 0xec, 0x67, 0x64, 0xe8, 0x11, 0x7f, 0x18, 0x10, 0xd3, 0x75,
+	0x78, 0x89, 0xae, 0x62, 0xc4, 0x16, 0x07, 0xf6, 0x33, 0xb2, 0x45, 0xfc, 0x01, 0x5b, 0xc9, 0xeb,
+	0xd6, 0xea, 0xbf, 0x57, 0x00, 0x49, 0xba, 0x9e, 0x53, 0x5c, 0x7d, 0x0f, 0x1a, 0x3b, 0x09, 0xd3,
+	0xf8, 0xdb, 0xc9, 0xcb, 0xf9, 0xb9, 0x49, 0xde, 0x3f, 0x4d, 0x97, 0x6b, 0x25, 0x0b, 0x16, 0xe4,
+	0x0a, 0x81, 0xe2, 0x84, 0xf6, 0x84, 0x88, 0x67, 0x38, 0x1b, 0xd3, 0x39, 0xfa, 0x3a, 0x17, 0xa9,
+	0x98, 0x8d, 0xe9, 0x9c, 0x19, 0xf1, 0xaa, 0x61, 0x36, 0xa6, 0xd7, 0x7d, 0xc2, 0x1b, 0xfc, 0x4c,
+	0x6f, 0x35, 0x1c, 0x81, 0xfa, 0x1b, 0xb0, 0x90, 0x6d, 0x56, 0xee, 0xda, 0xa3, 0x5d, 0xf1, 0xc9,
+	0x91, 0x8d, 0x91, 0x06, 0x85, 0xb1, 0x7b, 0x20, 0x02, 0x05, 0x1d, 0x52, 0xd9, 0x64, 0xb5, 0x9c,
+	0x8e, 0x8a, 0x49, 0x4b, 0x0b, 0x07, 0x21, 0x19, 0x1d, 0xd3, 0xd0, 0x1a, 0xbd, 0x43, 0x84, 0x68,
+	0x31, 0xac, 0xff, 0x10, 0x6e, 0x6c, 0xb8, 0x23, 0xa9, 0x07, 0x90, 0x7c, 0xb5, 0x98, 0x8f, 0x01,
+	0xf5, 0x9f, 0x28, 0xb0, 0x76, 0xf4, 0x16, 0xf3, 0x49, 0x84, 0x27, 0x7d, 0x12, 0x19, 0x53, 0x5d,
+	0x12, 0x73, 0x2f, 0x98, 0x4e, 0x7a, 0x24, 0x34, 0xd0, 0x57, 0xa3, 0xbb, 0x9d, 0x97, 0x01, 0x23,
+	0xcc, 0xd4, 0x1d, 0x6f, 0x82, 0x66, 0xca, 0xf3, 0x03, 0xf2, 0x44, 0xec, 0x33, 0x33, 0xaf, 0xff,
+	0x42, 0x81, 0xcb, 0xd2, 0xd7, 0x3c, 0x12, 0x46, 0x1c, 0xd1, 0x25, 0x28, 0xf1, 0x96, 0x2c, 0x37,
+	0x22, 0x07, 0xa8, 0xe7, 0x3c, 0x75, 0xfd, 0x07, 0xd4, 0xb8, 0x22, 0x51, 0x08, 0x90, 0xbe, 0xbd,
+	0x9f, 0xba, 0xfe, 0x86, 0x7b, 0x20, 0xee, 0xad, 0x80, 0x78, 0xe2, 0x9f, 0x30, 0x8a, 0xa2, 0x78,
+	0x7a, 0x73, 0x90, 0x52, 0x04, 0xd3, 0x09, 0xa5, 0xe0, 0x65, 0x94, 0x80, 0xf4, 0xdf, 0x28, 0xb0,
+	0x96, 0x2b, 0x53, 0xcb, 0xdc, 0x9b, 0x97, 0x15, 0x2e, 0x41, 0x49, 0xee, 0x50, 0x71, 0x20, 0xef,
+	0xde, 0x45, 0x3f, 0x0d, 0x14, 0xe3, 0x9f, 0x06, 0xf4, 0x7f, 0x28, 0xa0, 0xe7, 0xca, 0xc7, 0x33,
+	0xc5, 0x9c, 0x82, 0xc9, 0x19, 0x24, 0x44, 0x6f, 0x43, 0x35, 0xb2, 0x34, 0xd3, 0x6d, 0xf6, 0x33,
+	0x76, 0xae, 0xf4, 0x38, 0xa6, 0x69, 0x5e, 0x87, 0xb2, 0xf8, 0xa2, 0x53, 0x83, 0xd2, 0x23, 0xdf,
+	0x0e, 0x89, 0x76, 0x0e, 0x55, 0xa1, 0xb8, 0x65, 0x04, 0x81, 0xa6, 0x34, 0xd7, 0x79, 0x15, 0x23,
+	0x7d, 0xf8, 0x01, 0x28, 0xb7, 0x7d, 0x62, 0x30, 0x3c, 0x80, 0x32, 0xef, 0x3e, 0x69, 0x4a, 0xb3,
+	0x07, 0x0b, 0xf2, 0xf7, 0x1e, 0xca, 0x6e, 0x73, 0xd8, 0xb2, 0x2c, 0xed, 0x1c, 0x5a, 0x80, 0xea,
+	0xe6, 0x30, 0x42, 0xa4, 0x44, 0x9b, 0xc3, 0x1e, 0x1d, 0xab, 0xa8, 0x0e, 0x95, 0xcd, 0x21, 0xab,
+	0x99, 0xb4, 0x02, 0x07, 0xd8, 0x47, 0x21, 0xad, 0xd8, 0xbc, 0x0b, 0x0b, 0x72, 0x7f, 0x93, 0xb2,
+	0x6b, 0x6d, 0x74, 0xbf, 0x7b, 0x9f, 0xb3, 0xeb, 0xe0, 0x56, 0xb7, 0xdf, 0xed, 0xbf, 0xa7, 0x29,
+	0x14, 0x1a, 0x6c, 0x6f, 0x6e, 0x6d, 0x51, 0x48, 0x6d, 0xbe, 0x09, 0x90, 0xa4, 0x5d, 0x7a, 0x8e,
+	0xfe, 0x66, 0x9f, 0xd2, 0xd4, 0xa1, 0xf2, 0xa8, 0xd5, 0xdd, 0xe6, 0x24, 0x14, 0xc0, 0x1c, 0x50,
+	0x29, 0x4e, 0x87, 0xe2, 0x14, 0x9a, 0xaf, 0x65, 0x0a, 0x51, 0x54, 0x81, 0x42, 0x6b, 0x3c, 0xd6,
+	0xce, 0xa1, 0x32, 0xa8, 0x9d, 0x7b, 0x5c, 0xf4, 0xbe, 0xeb, 0x4f, 0x8c, 0xb1, 0xa6, 0x36, 0x9f,
+	0xc1, 0x62, 0x3a, 0xcd, 0x31, 0xb6, 0xae, 0xbf, 0x67, 0x3b, 0x23, 0xbe, 0xe1, 0x20, 0x64, 0xf5,
+	0x0c, 0xdf, 0x90, 0x1f, 0xdf, 0xd2, 0x54, 0xa4, 0xc1, 0x42, 0xd7, 0xb1, 0x43, 0xdb, 0x18, 0xdb,
+	0xcf, 0x28, 0x6e, 0x01, 0x35, 0xa0, 0xb6, 0xe5, 0x13, 0xcf, 0xf0, 0x29, 0x58, 0x44, 0x8b, 0x00,
+	0x4c, 0x0b, 0x98, 0x18, 0xd6, 0xa1, 0x56, 0xa2, 0x04, 0x8f, 0x0c, 0x3b, 0xb4, 0x9d, 0x11, 0x57,
+	0x4e, 0xb9, 0xf9, 0x2d, 0x68, 0xa4, 0xc2, 0x01, 0xba, 0x00, 0x8d, 0xf7, 0xfb, 0xdd, 0x7e, 0x77,
+	0xbb, 0xdb, 0xda, 0xe8, 0x7e, 0x70, 0xbf, 0xc3, 0xb5, 0xd4, 0xeb, 0x0e, 0x7a, 0xad, 0xed, 0xf6,
+	0x03, 0x4d, 0xa1, 0xea, 0xe3, 0x43, 0xf5, 0xde, 0xdb, 0x7f, 0xf9, 0x6c, 0x55, 0xf9, 0xe4, 0xb3,
+	0x55, 0xe5, 0x9f, 0x9f, 0xad, 0x2a, 0x3f, 0xff, 0x7c, 0xf5, 0xdc, 0x27, 0x9f, 0xaf, 0x9e, 0xfb,
+	0xf4, 0xf3, 0xd5, 0x73, 0x1f, 0xbc, 0x32, 0xb2, 0xc3, 0xdd, 0xe9, 0xce, 0x4d, 0xd3, 0x9d, 0xdc,
+	0xf2, 0x6c, 0x67, 0x64, 0x1a, 0xde, 0xad, 0xd0, 0x36, 0x2d, 0xf3, 0x96, 0xe4, 0x51, 0x3b, 0x65,
+	0xf6, 0x53, 0xd6, 0xeb, 0xff, 0x0f, 0x00, 0x00, 0xff, 0xff, 0x8a, 0x3a, 0x66, 0x9b, 0xb3, 0x25,
+	0x00, 0x00,
+>>>>>>> 0213a79b4 (maintainer,heartbeatpb: add drain target plumbing (#4759))
 }
 
 func (m *TableSpan) Marshal() (dAtA []byte, err error) {
@@ -4401,6 +5022,51 @@ func (m *MaintainerHeartbeat) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	return len(dAtA) - i, nil
 }
 
+func (m *DrainProgress) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *DrainProgress) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *DrainProgress) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.TargetInflightDrainMoveCount != 0 {
+		i = encodeVarintHeartbeat(dAtA, i, uint64(m.TargetInflightDrainMoveCount))
+		i--
+		dAtA[i] = 0x20
+	}
+	if m.TargetDispatcherCount != 0 {
+		i = encodeVarintHeartbeat(dAtA, i, uint64(m.TargetDispatcherCount))
+		i--
+		dAtA[i] = 0x18
+	}
+	if m.TargetEpoch != 0 {
+		i = encodeVarintHeartbeat(dAtA, i, uint64(m.TargetEpoch))
+		i--
+		dAtA[i] = 0x10
+	}
+	if len(m.TargetNodeId) > 0 {
+		i -= len(m.TargetNodeId)
+		copy(dAtA[i:], m.TargetNodeId)
+		i = encodeVarintHeartbeat(dAtA, i, uint64(len(m.TargetNodeId)))
+		i--
+		dAtA[i] = 0xa
+	}
+	return len(dAtA) - i, nil
+}
+
 func (m *MaintainerStatus) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
@@ -4421,6 +5087,18 @@ func (m *MaintainerStatus) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	_ = i
 	var l int
 	_ = l
+	if m.DrainProgress != nil {
+		{
+			size, err := m.DrainProgress.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintHeartbeat(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0x42
+	}
 	if m.LastSyncedTs != 0 {
 		i = encodeVarintHeartbeat(dAtA, i, uint64(m.LastSyncedTs))
 		i--
@@ -4482,6 +5160,155 @@ func (m *MaintainerStatus) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	return len(dAtA) - i, nil
 }
 
+<<<<<<< HEAD
+=======
+func (m *NodeHeartbeat) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *NodeHeartbeat) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *NodeHeartbeat) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.DispatcherDrainTargetEpoch != 0 {
+		i = encodeVarintHeartbeat(dAtA, i, uint64(m.DispatcherDrainTargetEpoch))
+		i--
+		dAtA[i] = 0x20
+	}
+	if len(m.DispatcherDrainTargetNodeId) > 0 {
+		i -= len(m.DispatcherDrainTargetNodeId)
+		copy(dAtA[i:], m.DispatcherDrainTargetNodeId)
+		i = encodeVarintHeartbeat(dAtA, i, uint64(len(m.DispatcherDrainTargetNodeId)))
+		i--
+		dAtA[i] = 0x1a
+	}
+	if m.NodeEpoch != 0 {
+		i = encodeVarintHeartbeat(dAtA, i, uint64(m.NodeEpoch))
+		i--
+		dAtA[i] = 0x10
+	}
+	if m.Liveness != 0 {
+		i = encodeVarintHeartbeat(dAtA, i, uint64(m.Liveness))
+		i--
+		dAtA[i] = 0x8
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *SetNodeLivenessRequest) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *SetNodeLivenessRequest) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *SetNodeLivenessRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.NodeEpoch != 0 {
+		i = encodeVarintHeartbeat(dAtA, i, uint64(m.NodeEpoch))
+		i--
+		dAtA[i] = 0x10
+	}
+	if m.Target != 0 {
+		i = encodeVarintHeartbeat(dAtA, i, uint64(m.Target))
+		i--
+		dAtA[i] = 0x8
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *SetNodeLivenessResponse) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *SetNodeLivenessResponse) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *SetNodeLivenessResponse) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.NodeEpoch != 0 {
+		i = encodeVarintHeartbeat(dAtA, i, uint64(m.NodeEpoch))
+		i--
+		dAtA[i] = 0x10
+	}
+	if m.Applied != 0 {
+		i = encodeVarintHeartbeat(dAtA, i, uint64(m.Applied))
+		i--
+		dAtA[i] = 0x8
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *SetDispatcherDrainTargetRequest) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *SetDispatcherDrainTargetRequest) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *SetDispatcherDrainTargetRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.TargetEpoch != 0 {
+		i = encodeVarintHeartbeat(dAtA, i, uint64(m.TargetEpoch))
+		i--
+		dAtA[i] = 0x10
+	}
+	if len(m.TargetNodeId) > 0 {
+		i -= len(m.TargetNodeId)
+		copy(dAtA[i:], m.TargetNodeId)
+		i = encodeVarintHeartbeat(dAtA, i, uint64(len(m.TargetNodeId)))
+		i--
+		dAtA[i] = 0xa
+	}
+	return len(dAtA) - i, nil
+}
+
+>>>>>>> 0213a79b4 (maintainer,heartbeatpb: add drain target plumbing (#4759))
 func (m *CoordinatorBootstrapRequest) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
@@ -6395,6 +7222,28 @@ func (m *MaintainerHeartbeat) Size() (n int) {
 	return n
 }
 
+func (m *DrainProgress) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	l = len(m.TargetNodeId)
+	if l > 0 {
+		n += 1 + l + sovHeartbeat(uint64(l))
+	}
+	if m.TargetEpoch != 0 {
+		n += 1 + sovHeartbeat(uint64(m.TargetEpoch))
+	}
+	if m.TargetDispatcherCount != 0 {
+		n += 1 + sovHeartbeat(uint64(m.TargetDispatcherCount))
+	}
+	if m.TargetInflightDrainMoveCount != 0 {
+		n += 1 + sovHeartbeat(uint64(m.TargetInflightDrainMoveCount))
+	}
+	return n
+}
+
 func (m *MaintainerStatus) Size() (n int) {
 	if m == nil {
 		return 0
@@ -6427,9 +7276,84 @@ func (m *MaintainerStatus) Size() (n int) {
 	if m.LastSyncedTs != 0 {
 		n += 1 + sovHeartbeat(uint64(m.LastSyncedTs))
 	}
+	if m.DrainProgress != nil {
+		l = m.DrainProgress.Size()
+		n += 1 + l + sovHeartbeat(uint64(l))
+	}
 	return n
 }
 
+<<<<<<< HEAD
+=======
+func (m *NodeHeartbeat) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.Liveness != 0 {
+		n += 1 + sovHeartbeat(uint64(m.Liveness))
+	}
+	if m.NodeEpoch != 0 {
+		n += 1 + sovHeartbeat(uint64(m.NodeEpoch))
+	}
+	l = len(m.DispatcherDrainTargetNodeId)
+	if l > 0 {
+		n += 1 + l + sovHeartbeat(uint64(l))
+	}
+	if m.DispatcherDrainTargetEpoch != 0 {
+		n += 1 + sovHeartbeat(uint64(m.DispatcherDrainTargetEpoch))
+	}
+	return n
+}
+
+func (m *SetNodeLivenessRequest) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.Target != 0 {
+		n += 1 + sovHeartbeat(uint64(m.Target))
+	}
+	if m.NodeEpoch != 0 {
+		n += 1 + sovHeartbeat(uint64(m.NodeEpoch))
+	}
+	return n
+}
+
+func (m *SetNodeLivenessResponse) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.Applied != 0 {
+		n += 1 + sovHeartbeat(uint64(m.Applied))
+	}
+	if m.NodeEpoch != 0 {
+		n += 1 + sovHeartbeat(uint64(m.NodeEpoch))
+	}
+	return n
+}
+
+func (m *SetDispatcherDrainTargetRequest) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	l = len(m.TargetNodeId)
+	if l > 0 {
+		n += 1 + l + sovHeartbeat(uint64(l))
+	}
+	if m.TargetEpoch != 0 {
+		n += 1 + sovHeartbeat(uint64(m.TargetEpoch))
+	}
+	return n
+}
+
+>>>>>>> 0213a79b4 (maintainer,heartbeatpb: add drain target plumbing (#4759))
 func (m *CoordinatorBootstrapRequest) Size() (n int) {
 	if m == nil {
 		return 0
@@ -9442,6 +10366,145 @@ func (m *MaintainerHeartbeat) Unmarshal(dAtA []byte) error {
 	}
 	return nil
 }
+func (m *DrainProgress) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowHeartbeat
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: DrainProgress: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: DrainProgress: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field TargetNodeId", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowHeartbeat
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthHeartbeat
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthHeartbeat
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.TargetNodeId = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 2:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field TargetEpoch", wireType)
+			}
+			m.TargetEpoch = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowHeartbeat
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.TargetEpoch |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 3:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field TargetDispatcherCount", wireType)
+			}
+			m.TargetDispatcherCount = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowHeartbeat
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.TargetDispatcherCount |= uint32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 4:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field TargetInflightDrainMoveCount", wireType)
+			}
+			m.TargetInflightDrainMoveCount = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowHeartbeat
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.TargetInflightDrainMoveCount |= uint32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		default:
+			iNdEx = preIndex
+			skippy, err := skipHeartbeat(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthHeartbeat
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
 func (m *MaintainerStatus) Unmarshal(dAtA []byte) error {
 	l := len(dAtA)
 	iNdEx := 0
@@ -9650,6 +10713,42 @@ func (m *MaintainerStatus) Unmarshal(dAtA []byte) error {
 					break
 				}
 			}
+		case 8:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field DrainProgress", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowHeartbeat
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthHeartbeat
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthHeartbeat
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if m.DrainProgress == nil {
+				m.DrainProgress = &DrainProgress{}
+			}
+			if err := m.DrainProgress.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
 		default:
 			iNdEx = preIndex
 			skippy, err := skipHeartbeat(dAtA[iNdEx:])
@@ -9671,6 +10770,425 @@ func (m *MaintainerStatus) Unmarshal(dAtA []byte) error {
 	}
 	return nil
 }
+<<<<<<< HEAD
+=======
+func (m *NodeHeartbeat) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowHeartbeat
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: NodeHeartbeat: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: NodeHeartbeat: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Liveness", wireType)
+			}
+			m.Liveness = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowHeartbeat
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.Liveness |= NodeLiveness(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 2:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field NodeEpoch", wireType)
+			}
+			m.NodeEpoch = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowHeartbeat
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.NodeEpoch |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 3:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field DispatcherDrainTargetNodeId", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowHeartbeat
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthHeartbeat
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthHeartbeat
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.DispatcherDrainTargetNodeId = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 4:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field DispatcherDrainTargetEpoch", wireType)
+			}
+			m.DispatcherDrainTargetEpoch = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowHeartbeat
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.DispatcherDrainTargetEpoch |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		default:
+			iNdEx = preIndex
+			skippy, err := skipHeartbeat(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthHeartbeat
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *SetNodeLivenessRequest) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowHeartbeat
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: SetNodeLivenessRequest: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: SetNodeLivenessRequest: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Target", wireType)
+			}
+			m.Target = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowHeartbeat
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.Target |= NodeLiveness(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 2:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field NodeEpoch", wireType)
+			}
+			m.NodeEpoch = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowHeartbeat
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.NodeEpoch |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		default:
+			iNdEx = preIndex
+			skippy, err := skipHeartbeat(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthHeartbeat
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *SetNodeLivenessResponse) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowHeartbeat
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: SetNodeLivenessResponse: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: SetNodeLivenessResponse: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Applied", wireType)
+			}
+			m.Applied = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowHeartbeat
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.Applied |= NodeLiveness(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 2:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field NodeEpoch", wireType)
+			}
+			m.NodeEpoch = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowHeartbeat
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.NodeEpoch |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		default:
+			iNdEx = preIndex
+			skippy, err := skipHeartbeat(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthHeartbeat
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *SetDispatcherDrainTargetRequest) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowHeartbeat
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: SetDispatcherDrainTargetRequest: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: SetDispatcherDrainTargetRequest: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field TargetNodeId", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowHeartbeat
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthHeartbeat
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthHeartbeat
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.TargetNodeId = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 2:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field TargetEpoch", wireType)
+			}
+			m.TargetEpoch = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowHeartbeat
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.TargetEpoch |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		default:
+			iNdEx = preIndex
+			skippy, err := skipHeartbeat(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthHeartbeat
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+>>>>>>> 0213a79b4 (maintainer,heartbeatpb: add drain target plumbing (#4759))
 func (m *CoordinatorBootstrapRequest) Unmarshal(dAtA []byte) error {
 	l := len(dAtA)
 	iNdEx := 0
