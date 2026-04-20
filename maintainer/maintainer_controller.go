@@ -211,17 +211,19 @@ func (c *Controller) HandleStatus(from node.ID, statusList []*heartbeatpb.TableS
 		//   rebound to a different node, we skip it, so late statuses from the old node won't trigger rescheduling.
 		// - MarkSpanAbsent is idempotent and only affects the scheduler state, so even if we get duplicate terminal
 		//   statuses, the worst case is an extra no-op absent mark.
-		if status.ComponentStatus == heartbeatpb.ComponentState_Stopped ||
-			status.ComponentStatus == heartbeatpb.ComponentState_Removed {
-			if op := operatorController.GetOperator(dispatcherID); op == nil {
-				log.Warn("dispatcher becomes non-working without operator, mark span absent for rescheduling",
-					zap.String("changefeed", c.changefeedID.Name()),
-					zap.String("from", from.String()),
-					zap.String("dispatcherID", dispatcherID.String()),
-					zap.Any("status", status))
-				spanController.MarkSpanAbsent(stm)
-			}
-		}
+		// TODO: temporarily comment out the fallback logic to avoid unexpected rescheduling, we will re-enable it
+		// after we have more confidence on the stability of the system in the failover scenario.
+		// if status.ComponentStatus == heartbeatpb.ComponentState_Stopped ||
+		// 	status.ComponentStatus == heartbeatpb.ComponentState_Removed {
+		// 	if op := operatorController.GetOperator(dispatcherID); op == nil {
+		// 		log.Warn("dispatcher becomes non-working without operator, mark span absent for rescheduling",
+		// 			zap.String("changefeed", c.changefeedID.Name()),
+		// 			zap.String("from", from.String()),
+		// 			zap.String("dispatcherID", dispatcherID.String()),
+		// 			zap.Any("status", status))
+		// 		spanController.MarkSpanAbsent(stm)
+		// 	}
+		// }
 	}
 }
 
