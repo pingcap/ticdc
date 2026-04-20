@@ -232,6 +232,29 @@ func (oc *Controller) OperatorSize() int {
 	return len(oc.operators)
 }
 
+// CountMoveMaintainerOperatorsFromNodes returns the number of in-flight move
+// operators whose origin is one of the given nodes.
+func (oc *Controller) CountMoveMaintainerOperatorsFromNodes(origins []node.ID) int {
+	oc.mu.RLock()
+	defer oc.mu.RUnlock()
+
+	count := 0
+	for _, op := range oc.operators {
+		moveOp, ok := op.OP.(*MoveMaintainerOperator)
+		if !ok {
+			continue
+		}
+		origin := moveOp.OriginNode()
+		for _, candidate := range origins {
+			if origin == candidate {
+				count++
+				break
+			}
+		}
+	}
+	return count
+}
+
 // CountOperatorsInvolvingNode returns the number of in-flight operators whose
 // affected nodes include n.
 func (oc *Controller) CountOperatorsInvolvingNode(n node.ID) int {

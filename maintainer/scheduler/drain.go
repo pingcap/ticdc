@@ -30,9 +30,9 @@ import (
 	"go.uber.org/zap"
 )
 
-// maxDrainMovePerRound is the minimum drain move limit for one drain session.
-// Larger targets may use a higher fixed limit derived from the dispatcher
-// count observed when the current drain epoch first becomes schedulable.
+// maxDrainMovePerRound is the minimum concurrent in-flight drain move limit
+// for one drain epoch. Larger targets may use a higher fixed limit derived from
+// the dispatcher count observed when the current epoch first becomes schedulable.
 const maxDrainMovePerRound = 10
 
 // drainScheduler evacuates dispatchers from the active drain target node.
@@ -91,16 +91,13 @@ func (s *drainScheduler) Execute() time.Time {
 	}
 	s.ensureDrainSessionLimit(target, targetEpoch)
 
-	availableSize := s.batchSize - s.operatorController.OperatorSize()
-	if availableSize <= 0 {
-		return time.Now().Add(time.Millisecond * 200)
-	}
 	drainSlots := s.fixedDrainMoveLimit - s.operatorController.CountInflightDrainMovesFromNode(target)
 	if drainSlots <= 0 {
 		return time.Now().Add(time.Millisecond * 200)
 	}
-	if availableSize > drainSlots {
-		availableSize = drainSlots
+	availableSize := drainSlots
+	if availableSize > s.batchSize {
+		availableSize = s.batchSize
 	}
 
 	destCandidates := filterNodeIDsByDrainTarget(
