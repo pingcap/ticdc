@@ -53,6 +53,8 @@ const (
 	// defaultSendResolvedTsInterval use to control whether to send a resolvedTs event to the dispatcher when its scan is skipped.
 	defaultSendResolvedTsInterval           = time.Second * 2
 	defaultRefreshMinSentResolvedTsInterval = time.Second * 1
+	defaultSyncPointLagSuppressThreshold    = 20 * time.Minute
+	defaultSyncPointLagResumeThreshold      = 15 * time.Minute
 )
 
 // eventBroker get event from the eventStore, and send the event to the dispatchers.
@@ -94,8 +96,10 @@ type eventBroker struct {
 	// metricsCollector handles all metrics collection and reporting
 	metricsCollector *metricsCollector
 
-	scanRateLimiter  *rate.Limiter
-	scanLimitInBytes uint64
+	scanRateLimiter               *rate.Limiter
+	scanLimitInBytes              uint64
+	syncPointLagSuppressThreshold time.Duration
+	syncPointLagResumeThreshold   time.Duration
 }
 
 func newEventBroker(
@@ -118,7 +122,19 @@ func newEventBroker(
 	scanTaskQueueSize := config.GetGlobalServerConfig().Debug.EventService.ScanTaskQueueSize / scanWorkerCount
 	sendMessageQueueSize := basicChannelSize * 4
 
-	scanLimitInBytes := config.GetGlobalServerConfig().Debug.EventService.ScanLimitInBytes
+	eventServiceConfig := config.GetGlobalServerConfig().Debug.EventService
+	scanLimitInBytes := eventServiceConfig.ScanLimitInBytes
+	syncPointLagSuppressThreshold := eventServiceConfig.SyncPointLagSuppressThreshold
+	if syncPointLagSuppressThreshold <= 0 {
+		syncPointLagSuppressThreshold = defaultSyncPointLagSuppressThreshold
+	}
+	syncPointLagResumeThreshold := eventServiceConfig.SyncPointLagResumeThreshold
+	if syncPointLagResumeThreshold <= 0 {
+		syncPointLagResumeThreshold = defaultSyncPointLagResumeThreshold
+	}
+	if syncPointLagResumeThreshold > syncPointLagSuppressThreshold {
+		syncPointLagResumeThreshold = syncPointLagSuppressThreshold
+	}
 
 	g, ctx := errgroup.WithContext(ctx)
 	ctx, cancel := context.WithCancel(ctx)
@@ -127,23 +143,25 @@ func newEventBroker(
 	// For now, since there is only one upstream, using the default pdClock is sufficient.
 	pdClock := appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock)
 	c := &eventBroker{
-		tidbClusterID:           id,
-		eventStore:              eventStore,
-		pdClock:                 pdClock,
-		mounter:                 event.NewMounter(tz, integrity),
-		timezone:                tz.String(),
-		schemaStore:             schemaStore,
-		changefeedMap:           sync.Map{},
-		dispatchers:             sync.Map{},
-		tableTriggerDispatchers: sync.Map{},
-		msgSender:               mc,
-		taskChan:                make([]chan scanTask, scanWorkerCount),
-		messageCh:               make([]chan *wrapEvent, sendMessageWorkerCount),
-		redoMessageCh:           make([]chan *wrapEvent, sendMessageWorkerCount),
-		cancel:                  cancel,
-		g:                       g,
-		scanRateLimiter:         rate.NewLimiter(rate.Limit(scanLimitInBytes), scanLimitInBytes),
-		scanLimitInBytes:        uint64(scanLimitInBytes),
+		tidbClusterID:                 id,
+		eventStore:                    eventStore,
+		pdClock:                       pdClock,
+		mounter:                       event.NewMounter(tz, integrity),
+		timezone:                      tz.String(),
+		schemaStore:                   schemaStore,
+		changefeedMap:                 sync.Map{},
+		dispatchers:                   sync.Map{},
+		tableTriggerDispatchers:       sync.Map{},
+		msgSender:                     mc,
+		taskChan:                      make([]chan scanTask, scanWorkerCount),
+		messageCh:                     make([]chan *wrapEvent, sendMessageWorkerCount),
+		redoMessageCh:                 make([]chan *wrapEvent, sendMessageWorkerCount),
+		cancel:                        cancel,
+		g:                             g,
+		scanRateLimiter:               rate.NewLimiter(rate.Limit(scanLimitInBytes), scanLimitInBytes),
+		scanLimitInBytes:              uint64(scanLimitInBytes),
+		syncPointLagSuppressThreshold: syncPointLagSuppressThreshold,
+		syncPointLagResumeThreshold:   syncPointLagResumeThreshold,
 	}
 
 	// Initialize metrics collector
@@ -188,7 +206,11 @@ func newEventBroker(
 		return c.refreshMinSentResolvedTs(ctx)
 	})
 
-	log.Info("new event broker created", zap.Uint64("id", id), zap.Uint64("scanLimitInBytes", c.scanLimitInBytes))
+	log.Info("new event broker created",
+		zap.Uint64("id", id),
+		zap.Uint64("scanLimitInBytes", c.scanLimitInBytes),
+		zap.Duration("syncPointLagSuppressThreshold", c.syncPointLagSuppressThreshold),
+		zap.Duration("syncPointLagResumeThreshold", c.syncPointLagResumeThreshold))
 	return c
 }
 
@@ -647,6 +669,7 @@ func (c *eventBroker) shouldSuppressSyncPointEmission(d *dispatcherStat) bool {
 	}
 	return false
 }
+
 // emitSyncPointEventIfNeeded emits a sync point event if the current ts is greater than the next sync point, and updates the next sync point.
 // We need call this function every time we send a event(whether dml/ddl/resolvedTs),
 // thus to ensure the sync point event is in correct order for each dispatcher.
