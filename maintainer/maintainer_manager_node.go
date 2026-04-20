@@ -38,9 +38,13 @@ type managerNodeState struct {
 	// must match it so stale requests from a previous process instance are ignored.
 	nodeEpoch uint64
 
-	// dispatcherDrainTarget caches the latest coordinator-issued dispatcher drain
-	// target at manager scope so this node can acknowledge activation and clear
-	// even when it temporarily hosts no maintainers.
+	// dispatcherDrainTarget stores the latest drain target for dispatcher
+	// evacuation already applied on this capture. Here "dispatcher" explains
+	// what is being drained: the dispatcher tasks currently hosted on the target
+	// node, not the maintainer itself and not the node-liveness state. It is
+	// capture-wide state, not per-changefeed state. Keeping it here lets the
+	// manager acknowledge "target set" and "target cleared" in node heartbeat
+	// even when this capture currently hosts no maintainers.
 	dispatcherDrainTarget struct {
 		sync.RWMutex
 		target node.ID

@@ -27296,7 +27296,7 @@
     ]
   },
   "timezone": "browser",
-  "title": "test-cluster-TiCDC-New-Arch",
+  "title": "${DS_TEST-CLUSTER}-TiCDC-New-Arch",
   "uid": "YiGL8hBZ0aac",
   "version": 40
 }
