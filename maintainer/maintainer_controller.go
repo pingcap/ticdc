@@ -21,6 +21,7 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/operator"
 	"github.com/pingcap/ticdc/maintainer/replica"
+	mscheduler "github.com/pingcap/ticdc/maintainer/scheduler"
 	"github.com/pingcap/ticdc/maintainer/span"
 	"github.com/pingcap/ticdc/maintainer/split"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -28,7 +29,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
-	"github.com/pingcap/ticdc/pkg/scheduler"
+	pkgscheduler "github.com/pingcap/ticdc/pkg/scheduler"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/threadpool"
@@ -43,7 +44,7 @@ type Controller struct {
 	bootstrapped bool
 	startTs      uint64
 
-	schedulerController    *scheduler.Controller
+	schedulerController    *pkgscheduler.Controller
 	operatorController     *operator.Controller
 	redoOperatorController *operator.Controller
 	spanController         *span.Controller
@@ -70,6 +71,10 @@ type Controller struct {
 
 	keyspaceMeta common.KeyspaceMeta
 	enableRedo   bool
+
+	// drainState keeps the latest dispatcher drain target visible to this
+	// maintainer even before drain-aware schedulers are introduced.
+	drainState *mscheduler.DrainState
 }
 
 func NewController(changefeedID common.ChangeFeedID,
@@ -135,6 +140,7 @@ func NewController(changefeedID common.ChangeFeedID,
 		splitter:               splitter,
 		keyspaceMeta:           keyspaceMeta,
 		enableRedo:             enableRedo,
+		drainState:             mscheduler.NewDrainState(),
 	}
 }
 
@@ -260,4 +266,16 @@ func (c *Controller) GetMinRedoCheckpointTs(minCheckpointTs uint64) uint64 {
 	minCheckpointTsForOperator := c.redoOperatorController.GetMinCheckpointTs(minCheckpointTs)
 	minCheckpointTsForSpan := c.redoSpanController.GetMinCheckpointTsForNonReplicatingSpans(minCheckpointTs)
 	return min(minCheckpointTsForOperator, minCheckpointTsForSpan)
+}
+
+// SetDispatcherDrainTarget applies the newest drain target visible to this
+// changefeed. Older epochs are ignored so local state does not regress.
+func (c *Controller) SetDispatcherDrainTarget(target node.ID, epoch uint64) {
+	c.drainState.SetDispatcherDrainTarget(target, epoch)
+}
+
+// getDispatcherDrainTarget returns the current drain target snapshot used by
+// status reporting and later drain-aware schedulers.
+func (c *Controller) getDispatcherDrainTarget() (node.ID, uint64) {
+	return c.drainState.DispatcherDrainTarget()
 }

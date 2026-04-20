@@ -105,9 +105,10 @@ const (
 	TypeDispatcherSetChecksumAckResponse   IOType = 41
 
 	// Node drain related
-	TypeNodeHeartbeatRequest    IOType = 42
-	TypeSetNodeLivenessRequest  IOType = 43
-	TypeSetNodeLivenessResponse IOType = 44
+	TypeNodeHeartbeatRequest            IOType = 42
+	TypeSetNodeLivenessRequest          IOType = 43
+	TypeSetNodeLivenessResponse         IOType = 44
+	TypeSetDispatcherDrainTargetRequest IOType = 45
 )
 
 func (t IOType) String() string {
@@ -200,6 +201,8 @@ func (t IOType) String() string {
 		return "SetNodeLivenessRequest"
 	case TypeSetNodeLivenessResponse:
 		return "SetNodeLivenessResponse"
+	case TypeSetDispatcherDrainTargetRequest:
+		return "SetDispatcherDrainTargetRequest"
 	default:
 	}
 	return "Unknown"
@@ -390,6 +393,8 @@ func decodeIOType(ioType IOType, value []byte) (IOTypeT, error) {
 		m = &heartbeatpb.SetNodeLivenessRequest{}
 	case TypeSetNodeLivenessResponse:
 		m = &heartbeatpb.SetNodeLivenessResponse{}
+	case TypeSetDispatcherDrainTargetRequest:
+		m = &heartbeatpb.SetDispatcherDrainTargetRequest{}
 	default:
 		log.Debug("Unimplemented IOType, ignore the message", zap.Stringer("Type", ioType))
 		return nil, errors.ErrUnimplementedIOType.GenWithStackByArgs(int(ioType))
@@ -508,6 +513,8 @@ func NewSingleTargetMessage(To node.ID, Topic string, Message IOTypeT, Group ...
 		ioType = TypeSetNodeLivenessRequest
 	case *heartbeatpb.SetNodeLivenessResponse:
 		ioType = TypeSetNodeLivenessResponse
+	case *heartbeatpb.SetDispatcherDrainTargetRequest:
+		ioType = TypeSetDispatcherDrainTargetRequest
 	default:
 		panic("unknown io type")
 	}
