@@ -61,13 +61,8 @@ func NewDrainScheduler(
 }
 
 // Execute schedules move operators from draining nodes to schedulable destination nodes.
-// It limits scheduling by available operator slots and returns the next run time.
+// It limits drain scheduling by drain move slots and returns the next run time.
 func (s *drainScheduler) Execute() time.Time {
-	availableSize := s.batchSize - s.operatorController.OperatorSize()
-	if availableSize <= 0 {
-		return time.Now().Add(time.Millisecond * 200)
-	}
-
 	if s.liveness == nil {
 		return time.Now().Add(time.Second)
 	}
@@ -78,6 +73,10 @@ func (s *drainScheduler) Execute() time.Time {
 		return now.Add(time.Second)
 	}
 	slices.Sort(drainingNodes)
+	availableSize := s.batchSize - s.operatorController.CountMoveMaintainerOperatorsFromNodes(drainingNodes)
+	if availableSize <= 0 {
+		return now.Add(time.Millisecond * 200)
+	}
 
 	destCandidates := filterSchedulableNodeIDs(s.nodeManager.GetAliveNodeIDs(), s.liveness)
 
