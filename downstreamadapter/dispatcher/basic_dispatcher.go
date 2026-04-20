@@ -165,9 +165,8 @@ type BasicDispatcher struct {
 	// Shared info containing all common configuration and resources
 	sharedInfo *SharedInfo
 
-	// the real batch defaults:
-	// normal event dispatchers set as the shared defaults.
-	// redo dispatchers set as the redo specific defaults.
+	// normal event dispatchers set them by the shared defaults.
+	// redo dispatchers set them by the redo specific defaults.
 	eventCollectorBatchCount int
 	eventCollectorBatchBytes int
 
