@@ -15,12 +15,10 @@ package scheduler
 
 import (
 	"math"
-	"slices"
 	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/maintainer/operator"
-	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/maintainer/span"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
@@ -39,18 +37,34 @@ const maxDrainMovePerRound = 10
 // It only creates move operators after the changefeed maintainer itself is no
 // longer hosted on the target node, which preserves the intended drain order.
 type drainScheduler struct {
+	// changefeedID is used in logs so drain activity can be tied back to one
+	// changefeed during node evacuation.
 	changefeedID common.ChangeFeedID
-	batchSize    int
+	// batchSize caps how many new drain move operators one Execute round may
+	// create even when the fixed drain concurrency limit is larger.
+	batchSize int
 
+	// operatorController owns move operator lifecycle and exposes the current
+	// in-flight drain move count for the target node.
 	operatorController *operator.Controller
-	spanController     *span.Controller
-	nodeManager        *watcher.NodeManager
-	mode               int64
+	// spanController provides the current dispatcher placement that drain
+	// scheduling reads and updates through move operators.
+	spanController *span.Controller
+	// nodeManager provides the current alive destination nodes.
+	nodeManager *watcher.NodeManager
+	// mode distinguishes default and redo schedulers in shared logs.
+	mode int64
 
+	// drainState is the shared per-changefeed drain snapshot maintained by the
+	// controller and read by all drain-aware schedulers.
 	drainState *DrainState
 
-	lastDrainTarget     node.ID
-	lastDrainEpoch      uint64
+	// lastDrainTarget and lastDrainEpoch identify the drain session whose fixed
+	// concurrency limit is cached below.
+	lastDrainTarget node.ID
+	lastDrainEpoch  uint64
+	// fixedDrainMoveLimit is computed once per drain epoch from the target size
+	// observed when the epoch first becomes schedulable.
 	fixedDrainMoveLimit int
 }
 
@@ -75,9 +89,18 @@ func NewDrainScheduler(
 	}
 }
 
-// Execute moves a bounded number of dispatchers away from the active drain
-// target. Destination selection excludes the target node and prefers the least
-// loaded alive node based on the current task count snapshot.
+// Execute advances drain in four steps:
+//  1. Read one consistent drain snapshot and exit early when drain is inactive
+//     or the maintainer still lives on the target node.
+//  2. Derive how many additional drain moves this round may create from the
+//     fixed per-epoch limit and the current in-flight drain move count.
+//  3. Select alive destination nodes excluding the drain target.
+//  4. Walk current target dispatchers and create move operators until the round
+//     budget is exhausted.
+//
+// Drain semantics only require bounded progress away from the target node. The
+// dispatcher iteration order is therefore not part of correctness and we keep
+// the hot path free of extra sorting work.
 func (s *drainScheduler) Execute() time.Time {
 	state := s.drainState.snapshot()
 	target, targetEpoch, active := activeDrainTarget(state)
@@ -112,17 +135,6 @@ func (s *drainScheduler) Execute() time.Time {
 	if len(replications) == 0 {
 		return time.Now().Add(time.Millisecond * 500)
 	}
-	slices.SortFunc(replications, func(a, b *replica.SpanReplication) int {
-		// Use a stable order so repeated drain rounds make deterministic progress
-		// even when multiple spans are otherwise equivalent candidates.
-		if a.ID.Less(b.ID) {
-			return -1
-		}
-		if b.ID.Less(a.ID) {
-			return 1
-		}
-		return 0
-	})
 
 	nodeTaskSize := s.spanController.GetTaskSizePerNode()
 	scheduled := 0
@@ -159,12 +171,16 @@ func (s *drainScheduler) Execute() time.Time {
 	return time.Now().Add(time.Millisecond * 200)
 }
 
+// resetDrainSessionLimit clears the cached fixed concurrency limit once drain
+// is no longer active for this scheduler.
 func (s *drainScheduler) resetDrainSessionLimit() {
 	s.lastDrainTarget = ""
 	s.lastDrainEpoch = 0
 	s.fixedDrainMoveLimit = 0
 }
 
+// ensureDrainSessionLimit initializes the fixed concurrency limit for a new
+// drain epoch and reuses the cached value while the same epoch remains active.
 func (s *drainScheduler) ensureDrainSessionLimit(target node.ID, epoch uint64) {
 	if s.lastDrainTarget == target && s.lastDrainEpoch == epoch && s.fixedDrainMoveLimit > 0 {
 		return
