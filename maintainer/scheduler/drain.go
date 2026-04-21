@@ -205,6 +205,9 @@ func (s *drainScheduler) ensureDrainSessionLimit(target node.ID, epoch uint64) {
 // 1% of the initial dispatcher count captured for the active drain epoch.
 // Execute still caps each scheduling round by batchSize.
 func calculateDrainMoveLimit(initialTargetDispatcherCount int) int {
+	// Add 99 before dividing by 100 so integer division computes ceil(n/100),
+	// which preserves roughly 1% concurrency once the target exceeds 1000
+	// dispatchers instead of rounding smaller fractions down to zero.
 	limit := (initialTargetDispatcherCount + 99) / 100
 	if limit < maxDrainMovePerRound {
 		return maxDrainMovePerRound
