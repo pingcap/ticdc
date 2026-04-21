@@ -52,6 +52,11 @@ func (t *TableName) GetTable() string {
 	return t.Table
 }
 
+// IsRouted returns whether table routing is enabled.
+func (t *TableName) IsRouted() bool {
+	return t.TargetSchema != "" || t.TargetTable != ""
+}
+
 // GetTargetSchema returns the target schema name for routing.
 // If TargetSchema is empty, returns Schema.
 func (t *TableName) GetTargetSchema() string {

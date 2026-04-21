@@ -289,14 +289,17 @@ func (b *BatchDMLEvent) AssembleRows(tableInfo *common.TableInfo) {
 
 	// For local events (same node), rows are already set.
 	if b.Rows != nil {
-		// table routing is enabled, reassign the TableInfo pointer to the passed tableInfo
-		// IMPORTANT: We modify the POINTER, not the object it points to, because the
-		// original TableInfo is shared from the schema store across all dispatchers.
-		if tableInfo.TableName.TargetSchema != "" || tableInfo.TableName.TargetTable != "" {
-			b.TableInfo = tableInfo
-			for _, dml := range b.DMLEvents {
-				dml.TableInfo = tableInfo
-			}
+		if !tableInfo.TableName.IsRouted() {
+			return
+		}
+		if b.TableInfo != nil && b.TableInfo.GetUpdateTS() != tableInfo.GetUpdateTS() {
+			log.Panic("table version mismatch when set routed table info",
+				zap.Uint64("originTableVersion", b.TableInfo.GetUpdateTS()),
+				zap.Uint64("routedTableVersion", tableInfo.GetUpdateTS()))
+		}
+		b.TableInfo = tableInfo
+		for _, dml := range b.DMLEvents {
+			dml.TableInfo = tableInfo
 		}
 		return
 	}
@@ -307,10 +310,9 @@ func (b *BatchDMLEvent) AssembleRows(tableInfo *common.TableInfo) {
 	}
 
 	if b.TableInfo != nil && b.TableInfo.GetUpdateTS() != tableInfo.GetUpdateTS() {
-		log.Panic("DMLEvent: TableInfoVersion mismatch",
-			zap.Uint64("dmlEventTableInfoVersion", b.TableInfo.GetUpdateTS()),
-			zap.Uint64("tableInfoVersion", tableInfo.GetUpdateTS()))
-		return
+		log.Panic("table version mismatch when decode remote raw rows",
+			zap.Uint64("originTableVersion", b.TableInfo.GetUpdateTS()),
+			zap.Uint64("routedTableVersion", tableInfo.GetUpdateTS()))
 	}
 
 	decoder := chunk.NewCodec(tableInfo.GetFieldSlice())

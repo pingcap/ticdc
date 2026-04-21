@@ -249,6 +249,7 @@ func (d *DDLEvent) GetTableID() int64 {
 	return 0
 }
 
+// GetEvents split the multi tables DDL into single table DDLs.
 func (d *DDLEvent) GetEvents() []*DDLEvent {
 	// Some ddl event may be multi-events, we need to split it into multiple messages.
 	// Such as rename table test.table1 to test.table10, test.table2 to test.table20
