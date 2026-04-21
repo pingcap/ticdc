@@ -29,6 +29,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	pkgcloudstorage "github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/util"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
@@ -194,6 +195,16 @@ func TestIgnoreCallsAfterRunError(t *testing.T) {
 	require.Error(t, err)
 	err = cloudStorageSink.WriteBlockEvent(ddlEvent)
 	require.Error(t, err)
+}
+
+func TestCloudStorageSinkBatchConfig(t *testing.T) {
+	sink := &sink{
+		cfg: &pkgcloudstorage.Config{
+			FileSize: 2048,
+		},
+	}
+	require.Equal(t, 4096, sink.BatchCount())
+	require.Equal(t, 2048, sink.BatchBytes())
 }
 
 func TestWriteDDLEvent(t *testing.T) {
@@ -543,7 +554,7 @@ func TestCloseBeforeRunDoesNotPanicAndCleansSpool(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NotPanics(t, func() {
-		cloudStorageSink.Close(false)
+		cloudStorageSink.Close()
 	})
 
 	_, err = os.Stat(spoolDir)

@@ -88,3 +88,10 @@ func TestBlacHoleSinkBasicFunctionality(t *testing.T) {
 
 	require.Equal(t, count.Load(), int32(3))
 }
+
+func TestBlackHoleSinkBatchConfig(t *testing.T) {
+	sink, err := New()
+	require.NoError(t, err)
+	require.Equal(t, 4096, sink.BatchCount())
+	require.Zero(t, sink.BatchBytes())
+}

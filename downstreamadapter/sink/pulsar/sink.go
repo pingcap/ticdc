@@ -569,9 +569,17 @@ func (s *sink) getAllTableNames(ts uint64) []*commonEvent.SchemaTableName {
 	return s.tableSchemaStore.GetAllTableNames(ts, true)
 }
 
-func (s *sink) Close(_ bool) {
+func (s *sink) Close() {
 	s.ddlProducer.close()
 	s.dmlProducer.close()
 	s.comp.close()
 	s.statistics.Close()
+}
+
+func (s *sink) BatchCount() int {
+	return 4096
+}
+
+func (s *sink) BatchBytes() int {
+	return 0
 }

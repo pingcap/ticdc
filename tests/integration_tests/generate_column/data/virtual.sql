@@ -42,3 +42,8 @@ update v6 set c = 9 where b = 102;
 update v6 set a = 3 where a = 2 and c = 1;
 delete from v6 where b = 101;
 delete from v6 where a = 3;
+
+create table v7 (a int not null, c int not null, b json default null, primary key (c), unique index ((cast(json_extract(b, '$[*]') as signed array)), c));
+insert into v7 (a, c) values (1, 1), (1, 2), (2, 3);
+update v7 set a = 3 where a = 2 and c = 3;
+delete from v7 where a = 3;

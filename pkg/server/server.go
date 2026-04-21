@@ -17,8 +17,8 @@ import (
 	"context"
 
 	"github.com/pingcap/ticdc/maintainer"
-	"github.com/pingcap/ticdc/pkg/api"
 	"github.com/pingcap/ticdc/pkg/etcd"
+	"github.com/pingcap/ticdc/pkg/liveness"
 	"github.com/pingcap/ticdc/pkg/node"
 	pd "github.com/tikv/pd/client"
 )
@@ -30,7 +30,7 @@ type Server interface {
 	Close()
 
 	SelfInfo() (*node.Info, error)
-	Liveness() api.Liveness
+	Liveness() liveness.Liveness
 
 	GetCoordinator() (Coordinator, error)
 	IsCoordinator() bool
