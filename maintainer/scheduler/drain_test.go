@@ -248,6 +248,45 @@ func TestDrainSchedulerSkipsWhenSelfIsTarget(t *testing.T) {
 	require.Equal(t, 0, oc.OperatorSize())
 }
 
+func TestCalculateDrainMoveLimit(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name                         string
+		initialTargetDispatcherCount int
+		expected                     int
+	}{
+		{
+			name:                         "zero dispatcher count keeps minimum",
+			initialTargetDispatcherCount: 0,
+			expected:                     maxDrainMovePerRound,
+		},
+		{
+			name:                         "small dispatcher count keeps minimum",
+			initialTargetDispatcherCount: 999,
+			expected:                     maxDrainMovePerRound,
+		},
+		{
+			name:                         "exact one percent boundary",
+			initialTargetDispatcherCount: 1000,
+			expected:                     maxDrainMovePerRound,
+		},
+		{
+			name:                         "larger target rounds up one percent",
+			initialTargetDispatcherCount: 1001,
+			expected:                     11,
+		},
+	}
+
+	for _, tc := range testCases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			require.Equal(t, tc.expected, calculateDrainMoveLimit(tc.initialTargetDispatcherCount))
+		})
+	}
+}
+
 func newDrainSchedulerTestHarness(
 	t *testing.T,
 ) (common.ChangeFeedID, *watcher.NodeManager, *operator.Controller, *span.Controller, *DrainState, node.ID) {

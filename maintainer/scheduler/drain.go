@@ -200,13 +200,11 @@ func (s *drainScheduler) ensureDrainSessionLimit(target node.ID, epoch uint64) {
 		zap.String("mode", common.StringMode(s.mode)))
 }
 
-// calculateDrainMoveLimit keeps a minimum concurrent in-flight drain move
-// limit for small targets, then scales at roughly 1% of the target's initial
-// dispatcher count. Execute still caps each scheduling round by batchSize.
+// calculateDrainMoveLimit keeps at least maxDrainMovePerRound concurrent
+// in-flight drain moves for small targets. Larger targets use the ceiling of
+// 1% of the initial dispatcher count captured for the active drain epoch.
+// Execute still caps each scheduling round by batchSize.
 func calculateDrainMoveLimit(initialTargetDispatcherCount int) int {
-	if initialTargetDispatcherCount <= 0 {
-		return maxDrainMovePerRound
-	}
 	limit := (initialTargetDispatcherCount + 99) / 100
 	if limit < maxDrainMovePerRound {
 		return maxDrainMovePerRound
