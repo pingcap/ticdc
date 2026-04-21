@@ -206,7 +206,7 @@ func (s *regionRequestWorker) run(ctx context.Context, credential *security.Cred
 	return isCanceled()
 }
 
-func normalizeSendRequestError(err error) error {
+func normalizeStreamError(err error) error {
 	if StatusIsEOF(grpcstatus.Convert(err)) {
 		return &sendRequestToStoreErr{}
 	}
@@ -223,10 +223,7 @@ func (s *regionRequestWorker) receiveAndDispatchChangeEvents(conn *ConnAndClient
 				zap.String("addr", s.store.storeAddr),
 				zap.String("code", grpcstatus.Code(err).String()),
 				zap.Error(err))
-			if StatusIsEOF(grpcstatus.Convert(err)) {
-				return nil
-			}
-			return errors.Trace(err)
+			return normalizeStreamError(err)
 		}
 		if len(changeEvent.Events) > 0 {
 			s.dispatchRegionChangeEvents(changeEvent.Events)
@@ -360,7 +357,7 @@ func (s *regionRequestWorker) processRegionSendTask(
 				zap.Uint64("regionID", req.RegionId),
 				zap.String("addr", s.store.storeAddr),
 				zap.Error(err))
-			return normalizeSendRequestError(err)
+			return normalizeStreamError(err)
 		}
 		// TODO: add a metric?
 		return nil

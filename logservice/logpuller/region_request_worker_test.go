@@ -34,10 +34,11 @@ import (
 
 type mockEventFeedV2Client struct {
 	sendErr error
+	recvErr error
 }
 
 func (m *mockEventFeedV2Client) Send(*cdcpb.ChangeDataRequest) error   { return m.sendErr }
-func (m *mockEventFeedV2Client) Recv() (*cdcpb.ChangeDataEvent, error) { return nil, nil }
+func (m *mockEventFeedV2Client) Recv() (*cdcpb.ChangeDataEvent, error) { return nil, m.recvErr }
 func (m *mockEventFeedV2Client) Header() (metadata.MD, error)          { return metadata.MD{}, nil }
 func (m *mockEventFeedV2Client) Trailer() metadata.MD                  { return metadata.MD{} }
 func (m *mockEventFeedV2Client) CloseSend() error                      { return nil }
@@ -389,6 +390,38 @@ func TestProcessRegionSendTaskSendEOFIsRetriable(t *testing.T) {
 
 			var storedErr *sendRequestToStoreErr
 			require.ErrorAs(t, state.takeError(), &storedErr)
+		})
+	}
+}
+
+func TestReceiveAndDispatchChangeEventsEOFIsRetriable(t *testing.T) {
+	testCases := []struct {
+		name    string
+		recvErr error
+	}{
+		{
+			name:    "io EOF",
+			recvErr: io.EOF,
+		},
+		{
+			name:    "grpc canceled",
+			recvErr: grpcstatus.Error(codes.Canceled, context.Canceled.Error()),
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			worker := &regionRequestWorker{
+				store: &requestedStore{storeAddr: "store-1"},
+			}
+			conn := &ConnAndClient{
+				Client: &mockEventFeedV2Client{recvErr: tc.recvErr},
+				Conn:   &grpc.ClientConn{},
+			}
+
+			err := worker.receiveAndDispatchChangeEvents(conn)
+			var streamErr *sendRequestToStoreErr
+			require.ErrorAs(t, err, &streamErr)
 		})
 	}
 }
