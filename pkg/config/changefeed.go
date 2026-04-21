@@ -191,8 +191,8 @@ type ChangefeedConfig struct {
 	ForceReplicate           bool          `json:"force_replicate" default:"false"`
 	Filter                   *FilterConfig `toml:"filter" json:"filter"`
 	MemoryQuota              uint64        `toml:"memory-quota" json:"memory-quota"`
-	EventCollectorBatchCount int           `json:"event_collector_batch_count"`
-	EventCollectorBatchBytes int           `json:"event_collector_batch_bytes"`
+	EventCollectorBatchCount *int          `json:"event_collector_batch_count"`
+	EventCollectorBatchBytes *int          `json:"event_collector_batch_bytes"`
 	// sync point related
 	// TODO: Is syncPointRetention|default can be removed?
 	EnableSyncPoint       bool          `json:"enable_sync_point" default:"false"`
@@ -280,8 +280,8 @@ func (info *ChangeFeedInfo) ToChangefeedConfig() *ChangefeedConfig {
 		SyncPointRetention:            util.GetOrZero(info.Config.SyncPointRetention),
 		EnableSplittableCheck:         util.GetOrZero(info.Config.Scheduler.EnableSplittableCheck),
 		MemoryQuota:                   util.GetOrZero(info.Config.MemoryQuota),
-		EventCollectorBatchCount:      util.GetOrZero(info.Config.EventCollectorBatchCount),
-		EventCollectorBatchBytes:      util.GetOrZero(info.Config.EventCollectorBatchBytes),
+		EventCollectorBatchCount:      info.Config.EventCollectorBatchCount,
+		EventCollectorBatchBytes:      info.Config.EventCollectorBatchBytes,
 		Epoch:                         info.Epoch,
 		BDRMode:                       util.GetOrZero(info.Config.BDRMode),
 		EnableActiveActive:            util.GetOrZero(info.Config.EnableActiveActive),

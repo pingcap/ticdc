@@ -21,17 +21,25 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestChangeFeedInfoToChangefeedConfigBatchFields ensures the maintainer-facing
+// changefeed config keeps the optional event collector batch overrides.
 func TestChangeFeedInfoToChangefeedConfigBatchFields(t *testing.T) {
-	replicaConfig := GetDefaultReplicaConfig()
-	replicaConfig.EventCollectorBatchCount = util.AddressOf(123)
-	replicaConfig.EventCollectorBatchBytes = util.AddressOf(456)
+	assertBatchFields := func(batchCount *int, batchBytes *int) {
+		replicaConfig := GetDefaultReplicaConfig()
+		replicaConfig.EventCollectorBatchCount = batchCount
+		replicaConfig.EventCollectorBatchBytes = batchBytes
 
-	info := &ChangeFeedInfo{
-		ChangefeedID: common.NewChangefeedID4Test("test", "test"),
-		Config:       replicaConfig,
+		info := &ChangeFeedInfo{
+			ChangefeedID: common.NewChangefeedID4Test("test", "test"),
+			Config:       replicaConfig,
+		}
+
+		changefeedConfig := info.ToChangefeedConfig()
+		require.Equal(t, batchCount, changefeedConfig.EventCollectorBatchCount)
+		require.Equal(t, batchBytes, changefeedConfig.EventCollectorBatchBytes)
 	}
 
-	changefeedConfig := info.ToChangefeedConfig()
-	require.Equal(t, 123, changefeedConfig.EventCollectorBatchCount)
-	require.Equal(t, 456, changefeedConfig.EventCollectorBatchBytes)
+	assertBatchFields(nil, nil)
+	assertBatchFields(util.AddressOf(0), util.AddressOf(0))
+	assertBatchFields(util.AddressOf(123), util.AddressOf(456))
 }

@@ -1,4 +1,4 @@
-// Copyright 2025 PingCAP, Inc.
+// Copyright 2026 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,127 +18,83 @@ import (
 
 	"github.com/golang/mock/gomock"
 	sinkmock "github.com/pingcap/ticdc/downstreamadapter/sink/mock"
+	redosink "github.com/pingcap/ticdc/downstreamadapter/sink/redo"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
 )
 
-func newBatchConfigSink(t *testing.T, sinkType common.SinkType, batchCount int, batchBytes int) *sinkmock.MockSink {
+func newBatchConfigSink(t *testing.T, batchCount int, batchBytes int) *sinkmock.MockSink {
 	t.Helper()
 	ctrl := gomock.NewController(t)
 	s := sinkmock.NewMockSink(ctrl)
-	s.EXPECT().SinkType().Return(sinkType).AnyTimes()
+	s.EXPECT().SinkType().Return(common.MysqlSinkType).AnyTimes()
 	s.EXPECT().BatchCount().Return(batchCount).AnyTimes()
 	s.EXPECT().BatchBytes().Return(batchBytes).AnyTimes()
 	return s
 }
 
+// TestDispatcherManagerBatchConfig ensures changefeed overrides take precedence
+// over sink-derived defaults while preserving explicit zero values.
 func TestDispatcherManagerBatchConfig(t *testing.T) {
-	cases := []struct {
-		name           string
-		sinkBatchCount int
-		sinkBatchBytes int
-		cfg            *config.ChangefeedConfig
-		wantCount      int
-		wantBytes      int
-	}{
-		{
-			name:           "uses sink defaults",
-			sinkBatchCount: 4096,
-			sinkBatchBytes: 0,
-			cfg:            &config.ChangefeedConfig{},
-			wantCount:      4096,
-			wantBytes:      0,
-		},
-		{
-			name:           "uses sink provided values",
-			sinkBatchCount: 2048,
-			sinkBatchBytes: 8192,
-			cfg:            &config.ChangefeedConfig{},
-			wantCount:      2048,
-			wantBytes:      8192,
-		},
-		{
-			name:           "overrides count only",
-			sinkBatchCount: 2048,
-			sinkBatchBytes: 8192,
-			cfg: &config.ChangefeedConfig{
-				EventCollectorBatchCount: 123,
-			},
-			wantCount: 123,
-			wantBytes: 8192,
-		},
-		{
-			name:           "overrides bytes only",
-			sinkBatchCount: 2048,
-			sinkBatchBytes: 8192,
-			cfg: &config.ChangefeedConfig{
-				EventCollectorBatchBytes: 456,
-			},
-			wantCount: 2048,
-			wantBytes: 456,
-		},
-		{
-			name:           "overrides both",
-			sinkBatchCount: 2048,
-			sinkBatchBytes: 8192,
-			cfg: &config.ChangefeedConfig{
-				EventCollectorBatchCount: 123,
-				EventCollectorBatchBytes: 456,
-			},
-			wantCount: 123,
-			wantBytes: 456,
-		},
+	assertBatchConfig := func(
+		sinkBatchCount int,
+		sinkBatchBytes int,
+		cfg *config.ChangefeedConfig,
+		wantCount int,
+		wantBytes int,
+	) {
+		sink := newBatchConfigSink(t, sinkBatchCount, sinkBatchBytes)
+		m := &DispatcherManager{
+			config: cfg,
+		}
+		gotCount, gotBytes := m.getEventCollectorBatchCountAndBytes(sink)
+		require.Equal(t, wantCount, gotCount)
+		require.Equal(t, wantBytes, gotBytes)
 	}
 
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			sink := newBatchConfigSink(t, common.MysqlSinkType, tc.sinkBatchCount, tc.sinkBatchBytes)
-			m := &DispatcherManager{
-				config: tc.cfg,
-			}
-			gotCount, gotBytes := m.getEventCollectorBatchCountAndBytes(sink)
-			require.Equal(t, tc.wantCount, gotCount)
-			require.Equal(t, tc.wantBytes, gotBytes)
-		})
-	}
+	assertBatchConfig(2048, 8192, &config.ChangefeedConfig{}, 2048, 8192)
+	assertBatchConfig(2048, 8192, &config.ChangefeedConfig{
+		EventCollectorBatchCount: util.AddressOf(0),
+		EventCollectorBatchBytes: util.AddressOf(0),
+	}, 0, 0)
+	assertBatchConfig(2048, 8192, &config.ChangefeedConfig{
+		EventCollectorBatchBytes: util.AddressOf(0),
+	}, 2048, 0)
+	assertBatchConfig(2048, 8192, &config.ChangefeedConfig{
+		EventCollectorBatchCount: util.AddressOf(0),
+	}, 0, 8192)
+	assertBatchConfig(2048, 8192, &config.ChangefeedConfig{
+		EventCollectorBatchCount: util.AddressOf(123),
+	}, 123, 8192)
+	assertBatchConfig(2048, 8192, &config.ChangefeedConfig{
+		EventCollectorBatchBytes: util.AddressOf(456),
+	}, 2048, 456)
+	assertBatchConfig(2048, 8192, &config.ChangefeedConfig{
+		EventCollectorBatchCount: util.AddressOf(123),
+		EventCollectorBatchBytes: util.AddressOf(456),
+	}, 123, 456)
 }
 
-func TestDispatcherManagerRedoBatchConfigUsesRedoSinkDefaults(t *testing.T) {
-	m := &DispatcherManager{
-		config: &config.ChangefeedConfig{},
+func TestDispatcherManagerRedoBatchConfig(t *testing.T) {
+	assertBatchConfig := func(cfg *config.ChangefeedConfig, wantCount int, wantBytes int) {
+		m := &DispatcherManager{
+			config: cfg,
+		}
+		gotCount, gotBytes := m.getRedoEventCollectorBatchCountAndBytes(&redosink.Sink{})
+		require.Equal(t, wantCount, gotCount)
+		require.Equal(t, wantBytes, gotBytes)
 	}
 
-	normalSink := newBatchConfigSink(t, common.MysqlSinkType, 2048, 8192)
-	redoSink := newBatchConfigSink(t, common.BlackHoleSinkType, 4096, 32<<20)
-
-	normalCount, normalBytes := m.getEventCollectorBatchCountAndBytes(normalSink)
-	require.Equal(t, 2048, normalCount)
-	require.Equal(t, 8192, normalBytes)
-
-	redoCount, redoBytes := m.getEventCollectorBatchCountAndBytes(redoSink)
-	require.Equal(t, 4096, redoCount)
-	require.Equal(t, 32<<20, redoBytes)
-}
-
-func TestDispatcherManagerRedoBatchConfigOverridePrecedence(t *testing.T) {
-	m := &DispatcherManager{
-		config: &config.ChangefeedConfig{
-			EventCollectorBatchCount: 111,
-			Consistent: &config.ConsistentConfig{
-				EventCollectorBatchCount: util.AddressOf(222),
-			},
+	assertBatchConfig(&config.ChangefeedConfig{}, 4096, 0)
+	assertBatchConfig(&config.ChangefeedConfig{
+		EventCollectorBatchCount: util.AddressOf(123),
+		EventCollectorBatchBytes: util.AddressOf(456),
+	}, 4096, 0)
+	assertBatchConfig(&config.ChangefeedConfig{
+		Consistent: &config.ConsistentConfig{
+			EventCollectorBatchCount: util.AddressOf(321),
 		},
-	}
-
-	redoSink := newBatchConfigSink(t, common.BlackHoleSinkType, 4096, 32<<20)
-
-	redoCount, redoBytes := m.getRedoEventCollectorBatchCountAndBytes(redoSink)
-	require.Equal(t, 222, redoCount)
-	require.Equal(t, 32<<20, redoBytes)
-
-	normalCount, normalBytes := m.getEventCollectorBatchCountAndBytes(redoSink)
-	require.Equal(t, 111, normalCount)
-	require.Equal(t, 32<<20, normalBytes)
+	}, 321, 0)
 }

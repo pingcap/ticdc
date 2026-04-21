@@ -23,6 +23,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/integrity"
+	"github.com/pingcap/ticdc/pkg/liveness"
 	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/pingcap/ticdc/pkg/util"
 )
@@ -1237,19 +1238,19 @@ type ColumnSelector struct {
 // ConsistentConfig represents replication consistency config for a changefeed
 // This is a duplicate of config.ConsistentConfig
 type ConsistentConfig struct {
-	Level                    *string `json:"level,omitempty"`
-	MaxLogSize               *int64  `json:"max_log_size,omitempty"`
-	FlushIntervalInMs        *int64  `json:"flush_interval,omitempty"`
-	MetaFlushIntervalInMs    *int64  `json:"meta_flush_interval,omitempty"`
-	EventCollectorBatchCount *int    `json:"event_collector_batch_count,omitempty"`
-	EncodingWorkerNum        *int    `json:"encoding_worker_num,omitempty"`
-	FlushWorkerNum           *int    `json:"flush_worker_num,omitempty"`
-	Storage                  *string `json:"storage,omitempty"`
-	UseFileBackend           *bool   `json:"use_file_backend,omitempty"`
-	Compression              *string `json:"compression,omitempty"`
-	FlushConcurrency         *int    `json:"flush_concurrency,omitempty"`
+	Level                 *string                `json:"level,omitempty"`
+	MaxLogSize            *int64                 `json:"max_log_size,omitempty"`
+	FlushIntervalInMs     *int64                 `json:"flush_interval,omitempty"`
+	MetaFlushIntervalInMs *int64                 `json:"meta_flush_interval,omitempty"`
+	EncodingWorkerNum     *int                   `json:"encoding_worker_num,omitempty"`
+	FlushWorkerNum        *int                   `json:"flush_worker_num,omitempty"`
+	Storage               *string                `json:"storage,omitempty"`
+	UseFileBackend        *bool                  `json:"use_file_backend,omitempty"`
+	Compression           *string                `json:"compression,omitempty"`
+	FlushConcurrency      *int                   `json:"flush_concurrency,omitempty"`
+	MemoryUsage           *ConsistentMemoryUsage `json:"memory_usage,omitempty"`
 
-	MemoryUsage *ConsistentMemoryUsage `json:"memory_usage,omitempty"`
+	EventCollectorBatchCount *int `json:"event_collector_batch_count,omitempty"`
 }
 
 // ConsistentMemoryUsage represents memory usage of Consistent module.
@@ -1402,13 +1403,13 @@ type ProcessorDetail struct {
 
 // ServerStatus holds some common information of a server
 type ServerStatus struct {
-	Version   string       `json:"version"`
-	GitHash   string       `json:"git_hash"`
-	ID        string       `json:"id"`
-	ClusterID string       `json:"cluster_id"`
-	Pid       int          `json:"pid"`
-	IsOwner   bool         `json:"is_owner"`
-	Liveness  api.Liveness `json:"liveness"`
+	Version   string            `json:"version"`
+	GitHash   string            `json:"git_hash"`
+	ID        string            `json:"id"`
+	ClusterID string            `json:"cluster_id"`
+	Pid       int               `json:"pid"`
+	IsOwner   bool              `json:"is_owner"`
+	Liveness  liveness.Liveness `json:"liveness"`
 }
 
 // Capture holds common information of a capture in cdc

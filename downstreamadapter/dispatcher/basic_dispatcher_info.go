@@ -54,6 +54,7 @@ type SharedInfo struct {
 	// will break the splittability of this table.
 	enableSplittableCheck bool
 
+	// Normal event dispatchers inherit these shared batch defaults.
 	eventCollectorBatchCount int
 	eventCollectorBatchBytes int
 
