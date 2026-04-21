@@ -384,10 +384,8 @@ func TestNormalBlockWithTableTrigger(t *testing.T) {
 	require.NotNil(t, msgs)
 	require.NotEmpty(t, msgs)
 	resp := msgs[0].Message[0].(*heartbeatpb.HeartBeatResponse)
-	require.Len(t, resp.DispatcherStatuses, 1)
-	require.True(t, resp.DispatcherStatuses[0].Ack.CommitTs == 10)
-	require.Len(t, resp.DispatcherStatuses[0].InfluencedDispatchers.DispatcherIDs, 1)
-	require.False(t, barrier.blockedEvents.m[eventKey{blockTs: 10, isSyncPoint: false}].tableTriggerDispatcherRelated)
+	require.Empty(t, resp.DispatcherStatuses)
+	require.Len(t, barrier.blockedEvents.m, 0)
 
 	// table trigger  block request
 	msgs = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
@@ -434,8 +432,33 @@ func TestNormalBlockWithTableTrigger(t *testing.T) {
 	}
 	event := barrier.blockedEvents.m[key]
 	require.Equal(t, uint64(10), event.commitTs)
-	require.True(t, event.writerDispatcher == tableTriggerEventDispatcherID)
-	// all dispatcher reported, the reported status is reset
+	require.False(t, event.rangeChecker.IsFullyCovered())
+	require.True(t, event.tableTriggerDispatcherRelated)
+
+	msgs = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
+		ChangefeedID: cfID.ToPB(),
+		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
+			{
+				ID: blockedDispatcherIDS[0],
+				State: &heartbeatpb.State{
+					IsBlocked: true,
+					BlockTs:   10,
+					BlockTables: &heartbeatpb.InfluencedTables{
+						InfluenceType: heartbeatpb.InfluenceType_Normal,
+						TableIDs:      []int64{0, 1, 2},
+					},
+					NeedDroppedTables: &heartbeatpb.InfluencedTables{
+						InfluenceType: heartbeatpb.InfluenceType_Normal,
+						TableIDs:      []int64{2},
+					},
+					NeedAddedTables: []*heartbeatpb.Table{newSpan},
+				},
+			},
+		},
+	})
+	require.NotNil(t, msgs)
+	// all dispatchers reported, the reported status is reset
+	require.Equal(t, tableTriggerEventDispatcherID, event.writerDispatcher)
 	require.False(t, event.rangeChecker.IsFullyCovered())
 	require.True(t, event.tableTriggerDispatcherRelated)
 
@@ -473,6 +496,96 @@ func TestNormalBlockWithTableTrigger(t *testing.T) {
 	event.resend(common.DefaultMode)
 	barrier.checkEventFinish(event)
 	require.Len(t, barrier.blockedEvents.m, 0)
+}
+
+func TestNormalBlockWithDDLSpanWaitsForTableTriggerReport(t *testing.T) {
+	testutil.SetUpTestServices(t)
+	tableTriggerEventDispatcherID := common.NewDispatcherID()
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
+		common.DDLSpanSchemaID,
+		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
+			ID:              tableTriggerEventDispatcherID.ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    1,
+		}, "node1", false)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
+	operatorController := operator.NewOperatorController(cfID, spanController, 1000, common.DefaultMode)
+
+	var blockedDispatcherIDs []*heartbeatpb.DispatcherID
+	for id := 1; id < 3; id++ {
+		spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: int64(id)}, 10)
+		stm := spanController.GetTasksByTableID(int64(id))[0]
+		blockedDispatcherIDs = append(blockedDispatcherIDs, stm.ID.ToPB())
+		spanController.BindSpanToNode("", "node1", stm)
+		spanController.MarkSpanReplicating(stm)
+	}
+
+	barrier := NewBarrier(spanController, operatorController, false, nil, common.DefaultMode)
+	blockState := &heartbeatpb.State{
+		IsBlocked: true,
+		BlockTs:   10,
+		BlockTables: &heartbeatpb.InfluencedTables{
+			InfluenceType: heartbeatpb.InfluenceType_Normal,
+			TableIDs:      []int64{0, 1, 2},
+		},
+		NeedDroppedTables: &heartbeatpb.InfluencedTables{
+			InfluenceType: heartbeatpb.InfluenceType_Normal,
+			TableIDs:      []int64{2},
+		},
+		NeedAddedTables: []*heartbeatpb.Table{{TableID: 10, SchemaID: 1}},
+	}
+
+	msgs := barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
+		ChangefeedID: cfID.ToPB(),
+		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
+			{
+				ID:    blockedDispatcherIDs[0],
+				State: blockState,
+			},
+		},
+	})
+	require.NotNil(t, msgs)
+	resp := msgs[0].Message[0].(*heartbeatpb.HeartBeatResponse)
+	require.Empty(t, resp.DispatcherStatuses)
+	require.Len(t, barrier.blockedEvents.m, 0)
+
+	msgs = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
+		ChangefeedID: cfID.ToPB(),
+		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
+			{
+				ID:    tableTriggerEventDispatcherID.ToPB(),
+				State: blockState,
+			},
+		},
+	})
+	require.NotNil(t, msgs)
+	resp = msgs[0].Message[0].(*heartbeatpb.HeartBeatResponse)
+	require.Len(t, resp.DispatcherStatuses, 1)
+	require.True(t, resp.DispatcherStatuses[0].Ack.CommitTs == 10)
+	event := barrier.blockedEvents.m[eventKey{blockTs: 10, isSyncPoint: false}]
+	require.NotNil(t, event)
+	require.True(t, event.tableTriggerDispatcherRelated)
+	require.False(t, event.selected.Load())
+
+	msgs = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
+		ChangefeedID: cfID.ToPB(),
+		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
+			{
+				ID:    blockedDispatcherIDs[0],
+				State: blockState,
+			},
+			{
+				ID:    blockedDispatcherIDs[1],
+				State: blockState,
+			},
+		},
+	})
+	require.NotNil(t, msgs)
+	resp = msgs[0].Message[0].(*heartbeatpb.HeartBeatResponse)
+	require.Len(t, resp.DispatcherStatuses, 2)
+	require.True(t, event.selected.Load())
+	require.Equal(t, tableTriggerEventDispatcherID, event.writerDispatcher)
 }
 
 func TestSchemaBlock(t *testing.T) {
@@ -1443,12 +1556,10 @@ func TestBarrierEventWithDispatcherScheduling(t *testing.T) {
 
 	require.NotNil(t, msgs)
 
-	// Verify the event is created but not selected for execution
+	// Verify the event is not tracked before the table trigger event dispatcher reports it.
 	event, ok := barrier.blockedEvents.Get(getEventKey(ddlTs, false))
-	require.True(t, ok)
-	require.NotNil(t, event)
-	require.False(t, event.selected.Load())
-	require.Contains(t, event.reportedDispatchers, dispatcherA.ID)
+	require.False(t, ok)
+	require.Nil(t, event)
 
 	// Phase 2: Dispatcher A enters scheduling state, table trigger event dispatcher reports DDL
 	// Move dispatcher A to scheduling state

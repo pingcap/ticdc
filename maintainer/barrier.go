@@ -77,6 +77,7 @@ func (b *Barrier) HandleStatus(from node.ID,
 	eventDispatcherIDsMap := make(map[*BarrierEvent][]*heartbeatpb.DispatcherID)
 	actions := map[node.ID][]*heartbeatpb.DispatcherStatus{}
 	var dispatcherStatus []*heartbeatpb.DispatcherStatus
+	deferredStatus := false
 	for _, status := range request.BlockStatuses {
 		// only receive block status from the replicating dispatcher
 		dispatcherID := common.NewDispatcherIDFromPB(status.ID)
@@ -121,6 +122,10 @@ func (b *Barrier) HandleStatus(from node.ID,
 		// e.g. TODO（truncate + create table)
 		event, action, targetID, needACK := b.handleOneStatus(request.ChangefeedID, status)
 		if event == nil {
+			if !needACK {
+				deferredStatus = true
+				continue
+			}
 			// should not happen
 			log.Error("handle block status failed, event is nil",
 				zap.String("from", from.String()),
@@ -147,7 +152,7 @@ func (b *Barrier) HandleStatus(from node.ID,
 		})
 	}
 	dispatcherStatus = append(dispatcherStatus, actions[from]...)
-	if len(dispatcherStatus) <= 0 {
+	if len(dispatcherStatus) <= 0 && !deferredStatus {
 		log.Warn("no dispatcher status to send",
 			zap.String("from", from.String()),
 			zap.String("changefeed", request.ChangefeedID.String()),
@@ -361,6 +366,24 @@ func (b *Barrier) handleBlockState(changefeedID common.ChangeFeedID,
 	blockState := status.State
 	if blockState.IsBlocked {
 		key := getEventKey(blockState.BlockTs, blockState.IsSyncPoint)
+		// Normal DDLs that also involve the DDL span need the table trigger dispatcher
+		// to participate. Under DDL-heavy workloads, table dispatchers can report many
+		// future barriers while the table trigger dispatcher is still executing earlier
+		// DDLs. If we tracked and ACKed those reports immediately, maintainer would keep
+		// one pending barrier per future DDL and each one would wait on tableID 0, causing
+		// barrier status memory to grow with the DDL backlog. Let table dispatchers resend
+		// until the table trigger dispatcher reaches this commitTs, then track the barrier
+		// normally from that report.
+		if _, ok := b.blockedEvents.Get(key); !ok &&
+			dispatcherID != b.spanController.GetDDLDispatcherID() &&
+			normalBlockEventIncludesDDLSpan(blockState.BlockTables) {
+			log.Debug("wait ddl dispatcher report before tracking normal block event",
+				zap.String("changefeed", changefeedID.Name()),
+				zap.String("dispatcher", dispatcherID.String()),
+				zap.Uint64("commitTs", blockState.BlockTs),
+				zap.Int64("mode", b.mode))
+			return nil, nil, "", false
+		}
 		// insert an event, or get the old one event check if the event is already tracked
 		event := b.getOrInsertNewEvent(changefeedID, dispatcherID, key, blockState)
 		if dispatcherID == b.spanController.GetDDLDispatcherID() {
@@ -444,6 +467,18 @@ func (b *Barrier) handleBlockState(changefeedID common.ChangeFeedID,
 	}
 	b.blockedEvents.Delete(getEventKey(event.commitTs, event.isSyncPoint))
 	return event, nil, "", true
+}
+
+func normalBlockEventIncludesDDLSpan(blockedTables *heartbeatpb.InfluencedTables) bool {
+	if blockedTables == nil || blockedTables.InfluenceType != heartbeatpb.InfluenceType_Normal {
+		return false
+	}
+	for _, tableID := range blockedTables.TableIDs {
+		if tableID == common.DDLSpanTableID {
+			return true
+		}
+	}
+	return false
 }
 
 // getOrInsertNewEvent get the block event from the map, if not found, create a new one
