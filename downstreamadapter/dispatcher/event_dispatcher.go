@@ -44,7 +44,7 @@ type EventDispatcher struct {
 	// cacheEvents is used to store events with a commit-ts greater than redoGlobalTs
 	cacheEvents struct {
 		sync.Mutex
-		events chan cacheEvents
+		events []cacheEvents
 	}
 }
 
@@ -85,22 +85,25 @@ func NewEventDispatcher(
 		redoEnable:   redoEnable,
 		redoGlobalTs: redoGlobalTs,
 	}
-	dispatcher.cacheEvents.events = make(chan cacheEvents, 1)
+	dispatcher.cacheEvents.events = make([]cacheEvents, 0, 1)
 	return dispatcher
 }
 
 // HandleCacheEvents called when redoGlobalTs is updated
 func (d *EventDispatcher) HandleCacheEvents() {
-	select {
-	case cacheEvents, ok := <-d.cacheEvents.events:
-		if !ok {
-			return
-		}
-		block := d.HandleEvents(cacheEvents.events, cacheEvents.wakeCallback)
-		if !block {
-			cacheEvents.wakeCallback()
-		}
-	default:
+	d.cacheEvents.Lock()
+	if len(d.cacheEvents.events) == 0 {
+		d.cacheEvents.Unlock()
+		return
+	}
+	cached := d.cacheEvents.events[0]
+	d.cacheEvents.events[0] = cacheEvents{}
+	d.cacheEvents.events = d.cacheEvents.events[1:]
+	d.cacheEvents.Unlock()
+
+	block := d.HandleEvents(cached.events, cached.wakeCallback)
+	if !block {
+		cached.wakeCallback()
 	}
 }
 
@@ -117,19 +120,16 @@ func (d *EventDispatcher) cache(dispatcherEvents []DispatcherEvent, wakeCallback
 		events:       append(make([]DispatcherEvent, 0, len(dispatcherEvents)), dispatcherEvents...),
 		wakeCallback: wakeCallback,
 	}
-	select {
-	case d.cacheEvents.events <- cacheEvents:
-		log.Debug("cache events",
-			zap.Stringer("dispatcher", d.id),
-			zap.Uint64("dispatcherResolvedTs", d.GetResolvedTs()),
-			zap.Int("length", len(dispatcherEvents)),
-			zap.Int("eventType", dispatcherEvents[len(dispatcherEvents)-1].Event.GetType()),
-			zap.Uint64("commitTs", dispatcherEvents[len(dispatcherEvents)-1].Event.GetCommitTs()),
-			zap.Uint64("redoGlobalTs", d.redoGlobalTs.Load()),
-		)
-	default:
-		log.Panic("dispatcher cache events is full", zap.Stringer("dispatcher", d.id), zap.Int("len", len(d.cacheEvents.events)))
-	}
+	d.cacheEvents.events = append(d.cacheEvents.events, cacheEvents)
+	log.Debug("cache events",
+		zap.Stringer("dispatcher", d.id),
+		zap.Uint64("dispatcherResolvedTs", d.GetResolvedTs()),
+		zap.Int("length", len(dispatcherEvents)),
+		zap.Int("eventType", dispatcherEvents[len(dispatcherEvents)-1].Event.GetType()),
+		zap.Uint64("commitTs", dispatcherEvents[len(dispatcherEvents)-1].Event.GetCommitTs()),
+		zap.Uint64("redoGlobalTs", d.redoGlobalTs.Load()),
+		zap.Int("cached", len(d.cacheEvents.events)),
+	)
 }
 
 func (d *EventDispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallback func()) bool {
@@ -148,7 +148,7 @@ func (d *EventDispatcher) Remove() {
 	if d.isRemoving.CompareAndSwap(false, true) {
 		d.cacheEvents.Lock()
 		defer d.cacheEvents.Unlock()
-		close(d.cacheEvents.events)
+		d.cacheEvents.events = nil
 	}
 	d.removeDispatcher()
 }
@@ -226,7 +226,7 @@ func (d *EventDispatcher) EmitBootstrap() bool {
 	return true
 }
 
-// cacheEvents cache the events which commit-ts is less than or equal the redoGlobalTs
+// cacheEvents caches events whose commit-ts is greater than redoGlobalTs.
 // it will be used when redoEnable is true
 type cacheEvents struct {
 	events       []DispatcherEvent
