@@ -99,6 +99,8 @@ func (c *Controller) DrainNode(_ context.Context, target node.ID) (int, error) {
 	}
 	c.maybeBroadcastDispatcherDrainTarget(true)
 
+	// Drain requests are idempotent. Reissuing the request on each poll keeps
+	// the liveness retry loop advancing even if a previous command was dropped.
 	c.drainController.RequestDrain(target)
 
 	observation := c.observeDrainNode(target, targetEpoch)
@@ -535,26 +537,16 @@ func drainRemainingEstimate(
 	targetInflightDrainMoveCount int,
 	pendingStatusCount int,
 ) int {
-	remaining := maintainersOnTarget
-	if inflightOpsInvolvingTarget > remaining {
-		remaining = inflightOpsInvolvingTarget
-	}
-	if dispatcherCountOnTarget > remaining {
-		remaining = dispatcherCountOnTarget
-	}
-	if targetInflightDrainMoveCount > remaining {
-		remaining = targetInflightDrainMoveCount
-	}
-	if pendingStatusCount > remaining {
-		remaining = pendingStatusCount
-	}
-	return remaining
+	return max(
+		maintainersOnTarget,
+		inflightOpsInvolvingTarget,
+		dispatcherCountOnTarget,
+		targetInflightDrainMoveCount,
+		pendingStatusCount,
+	)
 }
 
 // ensureDrainRemainingNonZero keeps v1 compatibility before completion is proven.
 func ensureDrainRemainingNonZero(remaining int) int {
-	if remaining == 0 {
-		return 1
-	}
-	return remaining
+	return max(remaining, 1)
 }
