@@ -101,9 +101,18 @@ func (d *EventDispatcher) HandleCacheEvents() {
 	d.cacheEvents.events = d.cacheEvents.events[1:]
 	d.cacheEvents.Unlock()
 
-	block := d.HandleEvents(cached.events, cached.wakeCallback)
+	wakeAndContinue := func() {
+		// Drain cached redo-gated batches before waking the live stream again so
+		// already-buffered older events keep their ordering priority.
+		d.HandleCacheEvents()
+		if cached.wakeCallback != nil {
+			cached.wakeCallback()
+		}
+	}
+
+	block := d.HandleEvents(cached.events, wakeAndContinue)
 	if !block {
-		cached.wakeCallback()
+		wakeAndContinue()
 	}
 }
 
