@@ -3,15 +3,12 @@
 mode = "fixed"
 
 tables = [
-  "test.sbtest1",
-  "test.sbtest2",
-  "test.sbtest3",
-  "test.sbtest4",
+  "^sbtest[0-9]+$",
 ]
 
 [rate_per_minute]
-truncate_table = 1
-add_column = 6
-drop_column = 6
-add_index = 3
-drop_index = 3
+truncate_table = 100
+add_column = 600
+drop_column = 600
+add_index = 300
+drop_index = 300

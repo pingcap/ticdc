@@ -17,6 +17,7 @@ import (
 	"context"
 	"database/sql"
 	"math/rand"
+	"regexp"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -72,6 +73,11 @@ func NewDDLRunner(app *WorkloadApp, cfg *DDLConfig) (*DDLRunner, error) {
 		if err != nil {
 			return nil, err
 		}
+		patternTables, err := r.resolvePatternTables(cfg.TablePatterns)
+		if err != nil {
+			return nil, err
+		}
+		tables = mergeTableNames(tables, patternTables)
 		r.selector = newFixedTableSelector(tables)
 	case ddlModeRandom:
 		if app.Config.DBPrefix != "" || app.Config.DBNum != 1 {
@@ -297,5 +303,74 @@ func parseTableList(rawTables []string, defaultSchema string) ([]TableName, erro
 		seen[key] = struct{}{}
 		out = append(out, table)
 	}
+	return out, nil
+}
+
+func mergeTableNames(left []TableName, right []TableName) []TableName {
+	seen := make(map[string]struct{}, len(left)+len(right))
+	out := make([]TableName, 0, len(left)+len(right))
+	for _, table := range left {
+		key := table.String()
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, table)
+	}
+	for _, table := range right {
+		key := table.String()
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, table)
+	}
+	return out
+}
+
+func (r *DDLRunner) resolvePatternTables(patterns []string) ([]TableName, error) {
+	if len(patterns) == 0 {
+		return nil, nil
+	}
+	if r.app.Config.DBPrefix != "" || r.app.Config.DBNum != 1 {
+		return nil, errors.New("ddl table_patterns only support single database connection")
+	}
+
+	dbs := r.app.DBManager.GetDBs()
+	if len(dbs) == 0 {
+		return nil, errors.New("no database connections available")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	tableNames, err := fetchBaseTables(ctx, dbs[0].DB, r.app.Config.DBName)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]TableName, 0)
+	for _, pattern := range patterns {
+		re, err := regexp.Compile(pattern)
+		if err != nil {
+			return nil, errors.Annotatef(err, "compile table pattern failed: %s", pattern)
+		}
+
+		matched := false
+		for _, name := range tableNames {
+			if !re.MatchString(name) {
+				continue
+			}
+			out = append(out, TableName{
+				Schema: r.app.Config.DBName,
+				Name:   name,
+			})
+			matched = true
+		}
+		if !matched {
+			return nil, errors.Errorf("table pattern matched no tables: %s", pattern)
+		}
+	}
+
 	return out, nil
 }

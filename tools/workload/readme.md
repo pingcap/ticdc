@@ -52,6 +52,23 @@ drop_index = 5
 truncate_table = 1
 ```
 
+`ddl.toml` example (fixed mode with regex-matched tables in one schema):
+
+```toml
+mode = "fixed"
+
+table_patterns = [
+  "^sbtest[0-9]+$",
+]
+
+[rate_per_minute]
+truncate_table = 60
+add_column = 120
+drop_column = 120
+add_index = 30
+drop_index = 30
+```
+
 `ddl.toml` example (random mode, omit `tables`):
 
 ```toml
@@ -69,6 +86,21 @@ Prebuilt examples:
 
 - `examples/ddl_truncate_table_mixed.toml`: periodically runs `TRUNCATE TABLE` while add/drop column and add/drop index continue in parallel.
 - `examples/ddl_partition_table_mixed.toml`: targets partitioned `bank4` tables and mixes `TRUNCATE TABLE`, add/drop column, and add/drop index.
+
+DDL table selection notes:
+
+- `tables = [...]` uses explicit table names.
+- `table_patterns = [...]` uses Go regular expressions to match table names inside `-database-db-name`.
+- `table_patterns` currently supports only a single database connection (`-db-num=1` and no `-db-prefix`).
+- You can mix `tables` and `table_patterns` in the same fixed-mode config.
+
+DDL rate notes:
+
+- `rate_per_minute` is the total rate for that DDL type across the selected table set, not a per-table rate.
+- In fixed mode, tasks are distributed round-robin across the matched tables.
+- Example: if you select 60 tables and set `truncate_table = 60`, each table will be truncated about once per minute on average.
+- Example: if you select 200 tables and want each table truncated about once every 5 minutes, set `truncate_table = 40`.
+- `add/drop column` and `add/drop index` may be skipped on some tables depending on current schema state, so scheduled rate and successful execution rate can differ.
 
 Truncate-table mixed DDL example:
 
