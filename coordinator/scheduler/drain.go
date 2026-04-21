@@ -73,6 +73,8 @@ func (s *drainScheduler) Execute() time.Time {
 		return now.Add(time.Second)
 	}
 	slices.Sort(drainingNodes)
+	// Drain moves get their own slot budget so unrelated operators do not stall
+	// evacuation progress while a node is draining.
 	availableSize := s.batchSize - s.operatorController.CountMoveMaintainerOperatorsFromNodes(drainingNodes)
 	if availableSize <= 0 {
 		return now.Add(time.Millisecond * 200)
