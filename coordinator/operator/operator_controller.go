@@ -238,18 +238,22 @@ func (oc *Controller) CountMoveMaintainerOperatorsFromNodes(origins []node.ID) i
 	oc.mu.RLock()
 	defer oc.mu.RUnlock()
 
+	if len(origins) == 0 {
+		return 0
+	}
+	originSet := make(map[node.ID]struct{}, len(origins))
+	for _, origin := range origins {
+		originSet[origin] = struct{}{}
+	}
+
 	count := 0
 	for _, op := range oc.operators {
 		moveOp, ok := op.OP.(*MoveMaintainerOperator)
 		if !ok {
 			continue
 		}
-		origin := moveOp.OriginNode()
-		for _, candidate := range origins {
-			if origin == candidate {
-				count++
-				break
-			}
+		if _, ok := originSet[moveOp.OriginNode()]; ok {
+			count++
 		}
 	}
 	return count
