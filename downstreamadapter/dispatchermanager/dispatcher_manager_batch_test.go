@@ -18,6 +18,7 @@ import (
 
 	"github.com/golang/mock/gomock"
 	sinkmock "github.com/pingcap/ticdc/downstreamadapter/sink/mock"
+	redosink "github.com/pingcap/ticdc/downstreamadapter/sink/redo"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/util"
@@ -74,4 +75,26 @@ func TestDispatcherManagerBatchConfig(t *testing.T) {
 		EventCollectorBatchCount: util.AddressOf(123),
 		EventCollectorBatchBytes: util.AddressOf(456),
 	}, 123, 456)
+}
+
+func TestDispatcherManagerRedoBatchConfig(t *testing.T) {
+	assertBatchConfig := func(cfg *config.ChangefeedConfig, wantCount int, wantBytes int) {
+		m := &DispatcherManager{
+			config: cfg,
+		}
+		gotCount, gotBytes := m.getRedoEventCollectorBatchCountAndBytes(&redosink.Sink{})
+		require.Equal(t, wantCount, gotCount)
+		require.Equal(t, wantBytes, gotBytes)
+	}
+
+	assertBatchConfig(&config.ChangefeedConfig{}, 4096, 0)
+	assertBatchConfig(&config.ChangefeedConfig{
+		EventCollectorBatchCount: util.AddressOf(123),
+		EventCollectorBatchBytes: util.AddressOf(456),
+	}, 4096, 0)
+	assertBatchConfig(&config.ChangefeedConfig{
+		Consistent: &config.ConsistentConfig{
+			EventCollectorBatchCount: util.AddressOf(321),
+		},
+	}, 321, 0)
 }

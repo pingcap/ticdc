@@ -55,6 +55,7 @@ type SharedInfo struct {
 	// will break the splittability of this table.
 	enableSplittableCheck bool
 
+	// Normal event dispatchers inherit these shared batch defaults.
 	eventCollectorBatchCount int
 	eventCollectorBatchBytes int
 
@@ -144,7 +145,7 @@ func (d *BasicDispatcher) GetChangefeedID() common.ChangeFeedID {
 }
 
 func (d *BasicDispatcher) GetEventCollectorBatchConfig() (batchCount int, batchBytes int) {
-	return d.sharedInfo.eventCollectorBatchCount, d.sharedInfo.eventCollectorBatchBytes
+	return d.eventCollectorBatchCount, d.eventCollectorBatchBytes
 }
 
 func (d *BasicDispatcher) GetComponentStatus() heartbeatpb.ComponentState {
