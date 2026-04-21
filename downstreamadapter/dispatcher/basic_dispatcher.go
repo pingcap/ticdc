@@ -468,8 +468,8 @@ func (d *BasicDispatcher) isFirstEvent(event commonEvent.Event) bool {
 			if event.GetCommitTs() > d.startTs {
 				return true
 			}
-		// the first syncpoint event can be same as startTs
-		case commonEvent.TypeResolvedEvent, commonEvent.TypeSyncPointEvent:
+		// the first syncpoint / resolved / handshake event can be same as startTs
+		case commonEvent.TypeResolvedEvent, commonEvent.TypeSyncPointEvent, commonEvent.TypeHandshakeEvent:
 			if event.GetCommitTs() >= d.startTs {
 				return true
 			}
@@ -709,9 +709,14 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 			})
 			d.DealWithBlockEvent(syncPoint)
 		case commonEvent.TypeHandshakeEvent:
-			log.Warn("Receive handshake event unexpectedly",
+			// Handshake means the event collector has registered/reset to the requested startTs and can
+			// safely consume this span. Idle tables may not receive a later resolved/DML promptly, so we
+			// treat handshake as the first live event and let the earlier updateDispatcherStatusToWorking()
+			// unblock the maintainer add operator.
+			log.Debug("dispatcher receive handshake event",
 				zap.Stringer("dispatcher", d.id),
-				zap.Any("event", event))
+				zap.Uint64("commitTs", event.GetCommitTs()),
+				zap.Uint64("seq", event.GetSeq()))
 		default:
 			log.Panic("Unexpected event type",
 				zap.Int("eventType", event.GetType()),

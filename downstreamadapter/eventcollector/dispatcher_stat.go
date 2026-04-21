@@ -697,6 +697,12 @@ func (d *dispatcherStat) handleHandshakeEvent(event dispatcher.DispatcherEvent) 
 	}
 	state.lastEventSeq.Store(handshakeEvent.Seq)
 	d.observeCurrentEpochMaxEventTs(state, handshakeEvent.GetCommitTs())
+
+	// Forward the handshake to the dispatcher so an idle table can still move from
+	// Initializing to Working after register/reset/handshake, even before any later
+	// resolved or DML event arrives. This unblocks maintainer add operators without
+	// advancing sink-side checkpoint beyond the collector-observed handshake ts.
+	_ = d.target.HandleEvents([]dispatcher.DispatcherEvent{event}, func() { d.wake() })
 }
 
 func (d *dispatcherStat) getHeartbeatProgressForEventService() (uint64, uint64) {

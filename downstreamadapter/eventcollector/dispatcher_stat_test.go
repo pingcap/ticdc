@@ -1448,6 +1448,28 @@ func TestCheckpointTsForEventServiceUsesCollectorObservedMaxTs(t *testing.T) {
 	require.Equal(t, uint64(210), getHeartbeatCheckpoint())
 }
 
+func TestHandleHandshakeEventForwardsToDispatcher(t *testing.T) {
+	t.Parallel()
+
+	dispatcherID := common.NewDispatcherID()
+	mockDisp := newMockDispatcher(dispatcherID, 100)
+	called := 0
+	mockDisp.handleEvents = func(events []dispatcher.DispatcherEvent, wakeCallback func()) (block bool) {
+		called++
+		require.Len(t, events, 1)
+		require.Equal(t, commonEvent.TypeHandshakeEvent, events[0].GetType())
+		return false
+	}
+	stat := newDispatcherStat(mockDisp, newTestEventCollector(node.ID("local")), nil)
+	stat.doReset(node.ID("event-service-1"), 100)
+
+	handshake := commonEvent.NewHandshakeEvent(dispatcherID, 100, 1, &common.TableInfo{})
+	stat.handleHandshakeEvent(dispatcher.DispatcherEvent{Event: &handshake})
+	require.Equal(t, 1, called)
+	require.Len(t, mockDisp.events, 1)
+	require.Equal(t, commonEvent.TypeHandshakeEvent, mockDisp.events[0].GetType())
+}
+
 func TestRegisterTo(t *testing.T) {
 	localServerID := node.ID("local-server")
 	remoteServerID := node.ID("remote-server")
