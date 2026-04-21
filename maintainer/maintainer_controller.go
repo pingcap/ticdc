@@ -73,7 +73,8 @@ type Controller struct {
 	enableRedo   bool
 
 	// drainState keeps the latest dispatcher drain target visible to this
-	// maintainer even before drain-aware schedulers are introduced.
+	// maintainer and is shared by drain-aware schedulers so each tick reads a
+	// consistent host/target snapshot.
 	drainState *mscheduler.DrainState
 }
 
@@ -86,6 +87,7 @@ func NewController(changefeedID common.ChangeFeedID,
 	refresher *replica.RegionCountRefresher,
 	keyspaceMeta common.KeyspaceMeta,
 	enableRedo bool,
+	balanceMoveBatchSize int,
 ) *Controller {
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 
@@ -118,15 +120,10 @@ func NewController(changefeedID common.ChangeFeedID,
 	// Create operator controller using spanController
 	oc := operator.NewOperatorController(changefeedID, spanController, batchSize, common.DefaultMode)
 
-	sc := NewScheduleController(
-		changefeedID, batchSize, oc, redoOC, spanController, redoSpanController, balanceInterval, splitter, schedulerCfg,
-	)
-
-	return &Controller{
+	controller := &Controller{
 		startTs:                checkpointTs,
 		changefeedID:           changefeedID,
 		bootstrapped:           false,
-		schedulerController:    sc,
 		operatorController:     oc,
 		redoOperatorController: redoOC,
 		spanController:         spanController,
@@ -142,6 +139,22 @@ func NewController(changefeedID common.ChangeFeedID,
 		enableRedo:             enableRedo,
 		drainState:             mscheduler.NewDrainState(),
 	}
+	// Scheduler instances share a dedicated drain state object so each tick can
+	// read a consistent snapshot without depending on the whole controller.
+	controller.schedulerController = NewScheduleController(
+		changefeedID,
+		batchSize,
+		oc,
+		redoOC,
+		spanController,
+		redoSpanController,
+		balanceInterval,
+		splitter,
+		schedulerCfg,
+		controller.drainState,
+		balanceMoveBatchSize,
+	)
+	return controller
 }
 
 // HandleStatus handle the status report from the node
@@ -266,6 +279,11 @@ func (c *Controller) GetMinRedoCheckpointTs(minCheckpointTs uint64) uint64 {
 	minCheckpointTsForOperator := c.redoOperatorController.GetMinCheckpointTs(minCheckpointTs)
 	minCheckpointTsForSpan := c.redoSpanController.GetMinCheckpointTsForNonReplicatingSpans(minCheckpointTs)
 	return min(minCheckpointTsForOperator, minCheckpointTsForSpan)
+}
+
+// SetSelfNodeID records the node currently hosting this maintainer.
+func (c *Controller) SetSelfNodeID(selfNodeID node.ID) {
+	c.drainState.SetSelfNodeID(selfNodeID)
 }
 
 // SetDispatcherDrainTarget applies the newest drain target visible to this
