@@ -13,8 +13,8 @@ table_patterns = [
 ]
 
 [rate_per_minute]
-truncate_table = 100
+truncate_table = 3000
 add_column = 1000
 drop_column = 1000
-add_index = 500
-drop_index = 500
+add_index = 1000
+drop_index = 1000
