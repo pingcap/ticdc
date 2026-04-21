@@ -570,20 +570,24 @@ func NewRoutedDDLEvent(
 		FinishedTs:            d.FinishedTs,
 		Seq:                   d.Seq,
 		Epoch:                 d.Epoch,
-		MultipleTableInfos:    multipleTableInfos,
-		BlockedTables:         d.BlockedTables,
-		BlockedTableNames:     blockedTableNames,
-		NeedDroppedTables:     d.NeedDroppedTables,
-		NeedAddedTables:       d.NeedAddedTables,
-		UpdatedSchemas:        d.UpdatedSchemas,
-		TableNameChange:       d.TableNameChange,
-		TiDBOnly:              d.TiDBOnly,
-		BDRMode:               d.BDRMode,
-		Err:                   d.Err,
-		PostTxnFlushed:        clonePostTxnFlushed(d.PostTxnFlushed),
-		eventSize:             d.eventSize,
-		IsBootstrap:           d.IsBootstrap,
-		NotSync:               d.NotSync,
+		// MultipleTableInfos and BlockedTableNames carry table names used by downstream
+		// execution paths, so the routed versions must be passed in explicitly.
+		MultipleTableInfos: multipleTableInfos,
+		BlockedTableNames:  blockedTableNames,
+		// The following fields do not participate in table route name rewriting,
+		// so the routed event keeps the original values from the source event.
+		BlockedTables:     d.BlockedTables,
+		NeedDroppedTables: d.NeedDroppedTables,
+		NeedAddedTables:   d.NeedAddedTables,
+		UpdatedSchemas:    d.UpdatedSchemas,
+		TableNameChange:   d.TableNameChange,
+		TiDBOnly:          d.TiDBOnly,
+		BDRMode:           d.BDRMode,
+		Err:               d.Err,
+		PostTxnFlushed:    clonePostTxnFlushed(d.PostTxnFlushed),
+		eventSize:         d.eventSize,
+		IsBootstrap:       d.IsBootstrap,
+		NotSync:           d.NotSync,
 	}
 }
 

@@ -19,7 +19,7 @@ import (
 
 //go:generate msgp
 
-// TableName represents name of a table, includes table name and schema name.
+// TableName represents name of a table, includes table name and schema name
 type TableName struct {
 	Schema string `toml:"db-name" msg:"db-name"`
 	Table  string `toml:"tbl-name" msg:"tbl-name"`
@@ -32,33 +32,33 @@ type TableName struct {
 	TargetTable  string `toml:"target-tbl-name" msg:"target-tbl-name"`
 }
 
-// String implements fmt.Stringer interface.
+// String implements fmt.Stringer interface
 func (t TableName) String() string {
 	return fmt.Sprintf("%s.%s", t.Schema, t.Table)
 }
 
-// QuoteString returns quoted full table name.
+// QuoteString returns quoted full table name
 func (t TableName) QuoteString() string {
 	return QuoteSchema(t.Schema, t.Table)
 }
 
-// GetSchema returns the schema name.
+// GetSchema returns the schema name
 func (t *TableName) GetSchema() string {
 	return t.Schema
 }
 
-// GetTable returns the table name.
+// GetTable returns the table name
 func (t *TableName) GetTable() string {
 	return t.Table
 }
 
-// IsRouted returns whether table routing is enabled.
+// IsRouted returns whether table routing is enabled
 func (t *TableName) IsRouted() bool {
 	return t.TargetSchema != "" || t.TargetTable != ""
 }
 
 // GetTargetSchema returns the target schema name for routing.
-// If TargetSchema is empty, returns Schema.
+// If TargetSchema is empty, returns Schema
 func (t *TableName) GetTargetSchema() string {
 	if t.TargetSchema != "" {
 		return t.TargetSchema
@@ -66,7 +66,7 @@ func (t *TableName) GetTargetSchema() string {
 	return t.Schema
 }
 
-// GetTargetTable returns the target table name for routing.
+// GetTargetTable returns the target table name for routing
 // If TargetTable is empty, returns Table.
 func (t *TableName) GetTargetTable() string {
 	if t.TargetTable != "" {
@@ -75,7 +75,7 @@ func (t *TableName) GetTargetTable() string {
 	return t.Table
 }
 
-// QuoteTargetString returns quoted full target table name for routing.
+// QuoteTargetString returns quoted full target table name for routing
 func (t TableName) QuoteTargetString() string {
 	return QuoteSchema(t.GetTargetSchema(), t.GetTargetTable())
 }
