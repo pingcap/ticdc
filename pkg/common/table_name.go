@@ -27,9 +27,11 @@ type TableName struct {
 	TableID     int64 `toml:"tbl-id" msg:"tbl-id"`
 	IsPartition bool  `toml:"is-partition" msg:"is-partition"`
 
-	// TargetSchema and TargetTable is not empty if table routing enabled
-	TargetSchema string `toml:"target-db-name" msg:"target-db-name"`
-	TargetTable  string `toml:"target-tbl-name" msg:"target-tbl-name"`
+	// TargetSchema and TargetTable are used as an in-memory routing overlay.
+	// They are intentionally excluded from msgpack serialization because redo
+	// persists routed names canonically in Schema/Table.
+	TargetSchema string `toml:"target-db-name" msg:"-"`
+	TargetTable  string `toml:"target-tbl-name" msg:"-"`
 }
 
 // String implements fmt.Stringer interface

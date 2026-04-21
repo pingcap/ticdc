@@ -88,7 +88,7 @@ func TestTableNameTargetAccessors(t *testing.T) {
 	})
 }
 
-func TestTableNameMsgpackRoundTrip(t *testing.T) {
+func TestTableNameMsgpackRoundTripDropsRoutingOverlay(t *testing.T) {
 	t.Parallel()
 
 	original := TableName{
@@ -107,5 +107,12 @@ func TestTableNameMsgpackRoundTrip(t *testing.T) {
 	rest, err := decoded.UnmarshalMsg(data)
 	require.NoError(t, err)
 	require.Empty(t, rest)
-	require.Equal(t, original, decoded)
+	require.Equal(t, original.Schema, decoded.Schema)
+	require.Equal(t, original.Table, decoded.Table)
+	require.Equal(t, original.TableID, decoded.TableID)
+	require.Equal(t, original.IsPartition, decoded.IsPartition)
+	require.Empty(t, decoded.TargetSchema)
+	require.Empty(t, decoded.TargetTable)
+	require.Equal(t, original.Schema, decoded.GetTargetSchema())
+	require.Equal(t, original.Table, decoded.GetTargetTable())
 }
