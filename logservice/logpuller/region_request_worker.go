@@ -115,13 +115,13 @@ func newRegionRequestWorker(
 				if cerror.Is(err, cerror.ErrGetAllStoresFailed) {
 					regionErr = &getStoreErr{}
 				} else {
-					regionErr = &sendRequestToStoreErr{}
+					regionErr = &storeStreamErr{}
 				}
 			} else {
 				if canceled := worker.run(ctx, credential); canceled {
 					return nil
 				}
-				regionErr = &sendRequestToStoreErr{}
+				regionErr = &storeStreamErr{}
 			}
 			for subID, m := range worker.clearRegionStates() {
 				for _, state := range m {
@@ -208,7 +208,7 @@ func (s *regionRequestWorker) run(ctx context.Context, credential *security.Cred
 
 func normalizeStreamError(err error) error {
 	if StatusIsEOF(grpcstatus.Convert(err)) {
-		return &sendRequestToStoreErr{}
+		return &storeStreamErr{}
 	}
 	return errors.Trace(err)
 }
@@ -414,7 +414,7 @@ func (s *regionRequestWorker) processRegionSendTask(
 			// It can be skipped directly because there must be no pending states from
 			// the stopped subscribedTable, or the special singleRegionInfo for stopping
 			// the table will be handled later.
-			s.client.onRegionFail(newRegionErrorInfo(region, &sendRequestToStoreErr{}))
+				s.client.onRegionFail(newRegionErrorInfo(region, &storeStreamErr{}))
 			s.requestCache.markDone()
 		} else {
 			state := newRegionFeedState(region, uint64(subID), s)
