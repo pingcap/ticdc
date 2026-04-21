@@ -188,6 +188,7 @@ func (p *persistentStorage) initialize(gcSafePoint uint64) error {
 			isDataReusable = false
 		}
 		if gcSafePoint < gcTs {
+			_ = db.Close()
 			return errors.New(fmt.Sprintf("gc safe point %d is smaller than gcTs %d on disk", gcSafePoint, gcTs))
 		}
 		upperBound, err := readUpperBoundMeta(db)
@@ -293,7 +294,7 @@ func (p *persistentStorage) getAllPhysicalTables(snapTs uint64, tableFilter filt
 	})
 	if snapTs < p.gcTs {
 		p.mu.Unlock()
-		return nil, errors.ErrSnapshotLostByGC.GenWithStackByArgs("snapTs %d is smaller than gcTs %d", snapTs, p.gcTs)
+		return nil, errors.ErrSnapshotLostByGC.GenWithStackByArgs(snapTs, p.gcTs)
 	}
 
 	gcTs := p.gcTs

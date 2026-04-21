@@ -301,23 +301,33 @@ func (s *regionRequestWorker) dispatchResolvedTsEvent(resolvedTsEvent *cdcpb.Res
 	// Avoid allocating a huge states slice when resolvedTsEvent.Regions is large.
 	// Push resolved-ts events in batches to reduce peak memory usage and improve GC behavior.
 	const resolvedTsStateBatchSize = 1024
-	resolvedStates := make([]*regionFeedState, 0, resolvedTsStateBatchSize)
+	capHint := len(resolvedTsEvent.Regions)
+	if capHint > resolvedTsStateBatchSize {
+		capHint = resolvedTsStateBatchSize
+	}
+	resolvedStates := make([]*regionFeedState, 0, capHint)
 	flush := func() {
 		if len(resolvedStates) == 0 {
 			return
 		}
-		states := resolvedStates
 		s.client.pushRegionEventToDS(subscriptionID, regionEvent{
 			resolvedTs: resolvedTsEvent.Ts,
-			states:     states,
+			states:     resolvedStates,
 		})
-		resolvedStates = make([]*regionFeedState, 0, resolvedTsStateBatchSize)
+		resolvedStates = nil
 	}
-	for _, regionID := range resolvedTsEvent.Regions {
+	for i, regionID := range resolvedTsEvent.Regions {
 		if state := s.getRegionState(subscriptionID, regionID); state != nil {
 			resolvedStates = append(resolvedStates, state)
 			if len(resolvedStates) >= resolvedTsStateBatchSize {
 				flush()
+				if i+1 < len(resolvedTsEvent.Regions) {
+					capHint = len(resolvedTsEvent.Regions) - (i + 1)
+					if capHint > resolvedTsStateBatchSize {
+						capHint = resolvedTsStateBatchSize
+					}
+					resolvedStates = make([]*regionFeedState, 0, capHint)
+				}
 			}
 			continue
 		}
@@ -406,11 +416,25 @@ func (s *regionRequestWorker) processRegionSendTask(
 			state := newRegionFeedState(region, uint64(subID), s)
 			state.start()
 			s.addRegionState(subID, region.verID.GetID(), state)
+			// Mark the request as sent before sending it.
+			// Otherwise there is a race with the receiver goroutine:
+			//  1. addRegionState makes the region visible to error handling.
+			//  2. doSend sends the request.
+			//  3. the receiver goroutine may receive a region error immediately.
+			//  4. markStopped runs before markSent, so requestCache.markStopped cannot
+			//     find the request in sentRequests.
+			//  5. the sender goroutine then calls markSent and leaves a stale sent
+			//     request behind, even though the region has already been
+			//     unlocked/rescheduled.
+			//
+			// Tracking the request before Send keeps requestedRegions and
+			// sentRequests visible in the same order and avoids leaving stale
+			// requests in cleanup.
+			s.requestCache.markSent(regionReq)
 			if err := doSend(s.createRegionRequest(region)); err != nil {
-				s.requestCache.markDone()
+				state.markStopped(err)
 				return err
 			}
-			s.requestCache.markSent(regionReq)
 		}
 		regionReq, err = fetchMoreReq()
 		if err != nil {
