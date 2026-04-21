@@ -15,6 +15,7 @@ package logpuller
 
 import (
 	"context"
+	"io"
 	"testing"
 
 	"github.com/pingcap/errors"
@@ -26,7 +27,9 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/tikv"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	grpcstatus "google.golang.org/grpc/status"
 )
 
 type mockEventFeedV2Client struct {
@@ -331,4 +334,61 @@ func TestProcessRegionSendTaskSendFailureCleansSentRequest(t *testing.T) {
 	require.Empty(t, worker.requestCache.sentRequests.regionReqs)
 	state := worker.getRegionState(req.regionInfo.subscribedSpan.subID, req.regionInfo.verID.GetID())
 	require.True(t, state == nil || state.isStale(), "region state should be removed or marked stale after send failure")
+}
+
+func TestProcessRegionSendTaskSendEOFIsRetriable(t *testing.T) {
+	testCases := []struct {
+		name    string
+		sendErr error
+	}{
+		{
+			name:    "io EOF",
+			sendErr: io.EOF,
+		},
+		{
+			name:    "grpc canceled",
+			sendErr: grpcstatus.Error(codes.Canceled, context.Canceled.Error()),
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			worker := &regionRequestWorker{
+				requestCache: newRequestCache(10),
+				store:        &requestedStore{storeAddr: "store-1"},
+				client:       &subscriptionClient{},
+			}
+			worker.requestedRegions.subscriptions = make(map[SubscriptionID]regionFeedStates)
+
+			ctx := context.Background()
+			region := prepareRegionForSendTest(createTestRegionInfo(1, 1))
+
+			ok, err := worker.requestCache.add(ctx, region, false)
+			require.NoError(t, err)
+			require.True(t, ok)
+
+			req, err := worker.requestCache.pop(ctx)
+			require.NoError(t, err)
+			worker.preFetchForConnecting = new(regionInfo)
+			*worker.preFetchForConnecting = req.regionInfo
+
+			conn := &ConnAndClient{
+				Client: &mockEventFeedV2Client{sendErr: tc.sendErr},
+				Conn:   &grpc.ClientConn{},
+			}
+
+			err = worker.processRegionSendTask(ctx, conn)
+			var sendRequestErr *sendRequestToStoreErr
+			require.ErrorAs(t, err, &sendRequestErr)
+			require.Equal(t, 0, worker.requestCache.getPendingCount())
+			require.Empty(t, worker.requestCache.sentRequests.regionReqs)
+
+			state := worker.getRegionState(req.regionInfo.subscribedSpan.subID, req.regionInfo.verID.GetID())
+			require.NotNil(t, state)
+			require.True(t, state.isStale())
+
+			var storedErr *sendRequestToStoreErr
+			require.ErrorAs(t, state.takeError(), &storedErr)
+		})
+	}
 }
