@@ -467,6 +467,46 @@ func TestDispatcherHandshakePromotesToWorking(t *testing.T) {
 	}
 }
 
+func TestDispatcherHandshakeBypassesRedoCache(t *testing.T) {
+	tableSpan, err := getCompleteTableSpan(getTestingKeyspaceID())
+	require.NoError(t, err)
+
+	var redoTs atomic.Uint64
+	redoTs.Store(0)
+	sharedInfo := newTestSharedInfo(false, false, newTestSyncPointConfig())
+	dispatcher := NewEventDispatcher(
+		common.NewDispatcherID(),
+		tableSpan,
+		common.Ts(100),
+		1,
+		NewSchemaIDToDispatchers(),
+		false,
+		false,
+		common.Ts(100),
+		newDispatcherTestSink(t, common.MysqlSinkType).Sink(),
+		sharedInfo,
+		true,
+		&redoTs,
+	)
+	require.Equal(t, heartbeatpb.ComponentState_Initializing, dispatcher.GetComponentStatus())
+
+	nodeID := node.NewID()
+	handshake := commonEvent.NewHandshakeEvent(dispatcher.GetId(), dispatcher.GetStartTs(), 1, &common.TableInfo{})
+	block := dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, &handshake)}, func() {})
+	require.False(t, block)
+	require.Equal(t, heartbeatpb.ComponentState_Working, dispatcher.GetComponentStatus())
+	require.Empty(t, dispatcher.cacheEvents.events)
+
+	select {
+	case status := <-dispatcher.sharedInfo.statusesChan:
+		require.Equal(t, dispatcher.GetId().ToPB(), status.ID)
+		require.Equal(t, heartbeatpb.ComponentState_Working, status.ComponentStatus)
+		require.Equal(t, dispatcher.GetCheckpointTs(), status.CheckpointTs)
+	default:
+		t.Fatal("expected dispatcher working status after handshake")
+	}
+}
+
 func TestDispatcherIgnoresStaleIgnoredBlockStatus(t *testing.T) {
 	tableSpan := getUncompleteTableSpan()
 	tableSpan.KeyspaceID = getTestingKeyspaceID()

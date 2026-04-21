@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec"
 	"go.uber.org/zap"
@@ -142,6 +143,14 @@ func (d *EventDispatcher) cache(dispatcherEvents []DispatcherEvent, wakeCallback
 }
 
 func (d *EventDispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallback func()) bool {
+	// Handshake has no downstream side effect. If we cache it behind redoGlobalTs,
+	// a recreated normal dispatcher can stay Initializing forever and keep the add
+	// operator from finishing, which in turn pins the global checkpoint.
+	if len(dispatcherEvents) == 1 &&
+		dispatcherEvents[0].Event.GetType() == commonEvent.TypeHandshakeEvent {
+		return d.handleEvents(dispatcherEvents, wakeCallback)
+	}
+
 	// if the commit-ts of last event of dispatcherEvents is greater than redoGlobalTs,
 	// the dispatcherEvents will be cached util the redoGlobalTs is updated.
 	if d.redoEnable && len(dispatcherEvents) > 0 && d.redoGlobalTs.Load() < dispatcherEvents[len(dispatcherEvents)-1].Event.GetCommitTs() {
