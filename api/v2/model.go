@@ -316,6 +316,9 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 		if c.Consistent.MetaFlushIntervalInMs != nil {
 			res.Consistent.MetaFlushIntervalInMs = c.Consistent.MetaFlushIntervalInMs
 		}
+		if c.Consistent.EventCollectorBatchCount != nil {
+			res.Consistent.EventCollectorBatchCount = c.Consistent.EventCollectorBatchCount
+		}
 		if c.Consistent.EncodingWorkerNum != nil {
 			res.Consistent.EncodingWorkerNum = c.Consistent.EncodingWorkerNum
 		}
@@ -959,6 +962,9 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 		if cloned.Consistent.MetaFlushIntervalInMs != nil {
 			res.Consistent.MetaFlushIntervalInMs = cloned.Consistent.MetaFlushIntervalInMs
 		}
+		if cloned.Consistent.EventCollectorBatchCount != nil {
+			res.Consistent.EventCollectorBatchCount = cloned.Consistent.EventCollectorBatchCount
+		}
 		if cloned.Consistent.EncodingWorkerNum != nil {
 			res.Consistent.EncodingWorkerNum = cloned.Consistent.EncodingWorkerNum
 		}
@@ -1232,18 +1238,19 @@ type ColumnSelector struct {
 // ConsistentConfig represents replication consistency config for a changefeed
 // This is a duplicate of config.ConsistentConfig
 type ConsistentConfig struct {
-	Level                 *string `json:"level,omitempty"`
-	MaxLogSize            *int64  `json:"max_log_size,omitempty"`
-	FlushIntervalInMs     *int64  `json:"flush_interval,omitempty"`
-	MetaFlushIntervalInMs *int64  `json:"meta_flush_interval,omitempty"`
-	EncodingWorkerNum     *int    `json:"encoding_worker_num,omitempty"`
-	FlushWorkerNum        *int    `json:"flush_worker_num,omitempty"`
-	Storage               *string `json:"storage,omitempty"`
-	UseFileBackend        *bool   `json:"use_file_backend,omitempty"`
-	Compression           *string `json:"compression,omitempty"`
-	FlushConcurrency      *int    `json:"flush_concurrency,omitempty"`
+	Level                 *string                `json:"level,omitempty"`
+	MaxLogSize            *int64                 `json:"max_log_size,omitempty"`
+	FlushIntervalInMs     *int64                 `json:"flush_interval,omitempty"`
+	MetaFlushIntervalInMs *int64                 `json:"meta_flush_interval,omitempty"`
+	EncodingWorkerNum     *int                   `json:"encoding_worker_num,omitempty"`
+	FlushWorkerNum        *int                   `json:"flush_worker_num,omitempty"`
+	Storage               *string                `json:"storage,omitempty"`
+	UseFileBackend        *bool                  `json:"use_file_backend,omitempty"`
+	Compression           *string                `json:"compression,omitempty"`
+	FlushConcurrency      *int                   `json:"flush_concurrency,omitempty"`
+	MemoryUsage           *ConsistentMemoryUsage `json:"memory_usage,omitempty"`
 
-	MemoryUsage *ConsistentMemoryUsage `json:"memory_usage,omitempty"`
+	EventCollectorBatchCount *int `json:"event_collector_batch_count,omitempty"`
 }
 
 // ConsistentMemoryUsage represents memory usage of Consistent module.

@@ -165,6 +165,11 @@ type BasicDispatcher struct {
 	// Shared info containing all common configuration and resources
 	sharedInfo *SharedInfo
 
+	// normal event dispatchers set them by the shared defaults.
+	// redo dispatchers set them by the redo specific defaults.
+	eventCollectorBatchCount int
+	eventCollectorBatchBytes int
+
 	// sink is the sink for this dispatcher
 	sink sink.Sink
 
@@ -232,31 +237,35 @@ func NewBasicDispatcher(
 	schemaIDToDispatchers *SchemaIDToDispatchers,
 	skipSyncpointAtStartTs bool,
 	skipDMLAsStartTs bool,
+	eventCollectorBatchCount int,
+	eventCollectorBatchBytes int,
 	currentPDTs uint64,
 	mode int64,
 	sink sink.Sink,
 	sharedInfo *SharedInfo,
 ) *BasicDispatcher {
 	dispatcher := &BasicDispatcher{
-		id:                     id,
-		tableSpan:              tableSpan,
-		isCompleteTable:        common.IsCompleteSpan(tableSpan),
-		startTs:                startTs,
-		skipSyncpointAtStartTs: skipSyncpointAtStartTs,
-		skipDMLAsStartTs:       skipDMLAsStartTs,
-		sharedInfo:             sharedInfo,
-		sink:                   sink,
-		componentStatus:        newComponentStateWithMutex(heartbeatpb.ComponentState_Initializing),
-		isRemoving:             atomic.Bool{},
-		duringHandleEvents:     atomic.Bool{},
-		blockEventStatus:       BlockEventStatus{blockPendingEvent: nil},
-		tableProgress:          NewTableProgress(),
-		schemaID:               schemaID,
-		schemaIDToDispatchers:  schemaIDToDispatchers,
-		resendTaskMap:          newResendTaskMap(),
-		creationPDTs:           currentPDTs,
-		mode:                   mode,
-		BootstrapState:         BootstrapFinished,
+		id:                       id,
+		tableSpan:                tableSpan,
+		isCompleteTable:          common.IsCompleteSpan(tableSpan),
+		startTs:                  startTs,
+		skipSyncpointAtStartTs:   skipSyncpointAtStartTs,
+		skipDMLAsStartTs:         skipDMLAsStartTs,
+		sharedInfo:               sharedInfo,
+		eventCollectorBatchCount: eventCollectorBatchCount,
+		eventCollectorBatchBytes: eventCollectorBatchBytes,
+		sink:                     sink,
+		componentStatus:          newComponentStateWithMutex(heartbeatpb.ComponentState_Initializing),
+		isRemoving:               atomic.Bool{},
+		duringHandleEvents:       atomic.Bool{},
+		blockEventStatus:         BlockEventStatus{blockPendingEvent: nil},
+		tableProgress:            NewTableProgress(),
+		schemaID:                 schemaID,
+		schemaIDToDispatchers:    schemaIDToDispatchers,
+		resendTaskMap:            newResendTaskMap(),
+		creationPDTs:             currentPDTs,
+		mode:                     mode,
+		BootstrapState:           BootstrapFinished,
 	}
 	dispatcher.resolvedTs.Store(startTs)
 
