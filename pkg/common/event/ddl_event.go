@@ -109,8 +109,8 @@ type DDLEvent struct {
 	// UnmarshalJSON compatibility so both `not_sync` and legacy `NotSync`
 	// are interoperable in mixed-version deployment.
 	NotSync bool `json:"not_sync"`
-  
-  // IndexIDs store the add index ids in SQL order for add index and multi schema change DDLs.
+
+	// IndexIDs store the add index ids in SQL order for add index and multi schema change DDLs.
 	// MySQL sink uses them to recover anonymous index names.
 	IndexIDs []int64 `json:"index_ids"`
 }
