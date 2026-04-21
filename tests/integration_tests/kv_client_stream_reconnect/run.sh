@@ -11,6 +11,13 @@ TABLE_COUNT=10
 FAILPOINT_API_TEST_NAME="github.com/pingcap/ticdc/utils/dynstream/FailpointAPITestValue"
 FAILPOINT_API_TEST_VALUE="kv_client_stream_reconnect"
 
+function check_changefeed_normal() {
+	local pd_addr=$1
+	local changefeed_id=$2
+
+	ensure 20 check_changefeed_state "$pd_addr" "$changefeed_id" "normal" "null" ""
+}
+
 function check_failpoint_log_value() {
 	local value=$1
 	local log_file="$WORK_DIR/cdc.log"
@@ -63,6 +70,7 @@ EOF
 		echo "" >$WORK_DIR/pulsar_test.toml
 	fi
 	changefeed_id=$(cdc_cli_changefeed create --pd=$pd_addr --sink-uri="$SINK_URI" --config $WORK_DIR/pulsar_test.toml | grep '^ID:' | head -n1 | awk '{print $2}')
+	check_changefeed_normal "$pd_addr" "$changefeed_id"
 	case $SINK_TYPE in
 	kafka) run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760" $WORK_DIR/pulsar_test.toml ;;
 	storage) run_storage_consumer $WORK_DIR $SINK_URI $WORK_DIR/pulsar_test.toml "" ;;
@@ -78,11 +86,15 @@ EOF
 	for i in $(seq 60); do
 		tbl="t$((1 + $RANDOM % $TABLE_COUNT))"
 		run_sql "insert into kv_client_stream_reconnect.$tbl values (),(),();" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+		if ((i % 10 == 0)); then
+			check_changefeed_normal "$pd_addr" "$changefeed_id"
+		fi
 		sleep 1
 	done
 
 	check_failpoint_log_value "$FAILPOINT_API_TEST_VALUE"
 	disable_failpoint --name "$FAILPOINT_API_TEST_NAME"
+	check_changefeed_normal "$pd_addr" "$changefeed_id"
 
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml
 	export GO_FAILPOINTS=''

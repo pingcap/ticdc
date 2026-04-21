@@ -206,6 +206,13 @@ func (s *regionRequestWorker) run(ctx context.Context, credential *security.Cred
 	return isCanceled()
 }
 
+func normalizeSendRequestError(err error) error {
+	if StatusIsEOF(grpcstatus.Convert(err)) {
+		return &sendRequestToStoreErr{}
+	}
+	return errors.Trace(err)
+}
+
 // receiveAndDispatchChangeEventsToProcessor receives events from the grpc stream and dispatches them to ds.
 func (s *regionRequestWorker) receiveAndDispatchChangeEvents(conn *ConnAndClient) error {
 	for {
@@ -353,7 +360,7 @@ func (s *regionRequestWorker) processRegionSendTask(
 				zap.Uint64("regionID", req.RegionId),
 				zap.String("addr", s.store.storeAddr),
 				zap.Error(err))
-			return errors.Trace(err)
+			return normalizeSendRequestError(err)
 		}
 		// TODO: add a metric?
 		return nil
