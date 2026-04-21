@@ -2,7 +2,7 @@
 # The scheduler spreads each rate evenly over a minute.
 mode = "fixed"
 
-tables = [
+table_patterns = [
   "^sbtest[0-9]+$",
 ]
 
