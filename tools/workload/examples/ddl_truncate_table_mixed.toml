@@ -1,0 +1,17 @@
+# Periodically run TRUNCATE TABLE while other DDLs keep changing schema.
+# The scheduler spreads each rate evenly over a minute.
+mode = "fixed"
+
+tables = [
+  "test.sbtest1",
+  "test.sbtest2",
+  "test.sbtest3",
+  "test.sbtest4",
+]
+
+[rate_per_minute]
+truncate_table = 1
+add_column = 6
+drop_column = 6
+add_index = 3
+drop_index = 3

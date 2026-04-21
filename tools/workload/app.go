@@ -30,6 +30,7 @@ import (
 	pbank "workload/schema/bank"
 	pbank2 "workload/schema/bank2"
 	pbank3 "workload/schema/bank3"
+	pbank4 "workload/schema/bank4"
 	"workload/schema/bankupdate"
 	pcrawler "workload/schema/crawler"
 	pdc "workload/schema/dc"
@@ -81,6 +82,7 @@ const (
 	crawler           = "crawler"
 	bank2             = "bank2"
 	bank3             = "bank3"
+	bank4             = "bank4"
 	bankUpdate        = "bank_update"
 	dc                = "dc"
 	wideTableWithJSON = "wide_table_with_json"
@@ -140,6 +142,8 @@ func (app *WorkloadApp) createWorkload() schema.Workload {
 		workload = pbank2.NewBank2Workload()
 	case bank3:
 		workload = pbank3.NewBankWorkload(app.Config.Partitioned)
+	case bank4:
+		workload = pbank4.NewBankWorkload(app.Config.Partitioned)
 	case bankUpdate:
 		workload = bankupdate.NewBankUpdateWorkload(app.Config.TotalRowCount, app.Config.UpdateLargeColumnSize)
 	case dc:

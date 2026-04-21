@@ -31,6 +31,9 @@ Run DDL workload based on a TOML config file:
     -ddl-timeout 2m
 ```
 
+Each DDL type is scheduled evenly across the minute instead of being burst-enqueued at the minute boundary.
+For example, `truncate_table = 1` runs about once every 60s, and `add_column = 6` runs about once every 10s.
+
 `ddl.toml` example (fixed mode):
 
 ```toml
@@ -60,6 +63,55 @@ drop_column = 10
 add_index = 5
 drop_index = 5
 truncate_table = 0
+```
+
+Prebuilt examples:
+
+- `examples/ddl_truncate_table_mixed.toml`: periodically runs `TRUNCATE TABLE` while add/drop column and add/drop index continue in parallel.
+- `examples/ddl_partition_table_mixed.toml`: targets partitioned `bank4` tables and mixes `TRUNCATE TABLE`, add/drop column, and add/drop index.
+
+Truncate-table mixed DDL example:
+
+```bash
+./bin/workload -action write \
+    -database-host 127.0.0.1 \
+    -database-port 4000 \
+    -database-db-name test \
+    -workload-type sysbench \
+    -table-count 4 \
+    -thread 32 \
+    -batch-size 64 \
+    -ddl-config ./examples/ddl_truncate_table_mixed.toml \
+    -ddl-worker 1 \
+    -ddl-timeout 2m
+```
+
+Partition-table mixed DDL example (prepare 126-partition `bank4` tables first):
+
+```bash
+./bin/workload -action prepare \
+    -database-host 127.0.0.1 \
+    -database-port 4000 \
+    -database-db-name partition_ddl \
+    -workload-type bank4 \
+    -partitioned=true \
+    -table-count 4 \
+    -total-row-count 0
+
+./bin/workload -action write \
+    -database-host 127.0.0.1 \
+    -database-port 4000 \
+    -database-db-name partition_ddl \
+    -workload-type bank4 \
+    -partitioned=true \
+    -table-count 4 \
+    -thread 16 \
+    -batch-size 64 \
+    -percentage-for-update 0.5 \
+    -percentage-for-delete 0.1 \
+    -ddl-config ./examples/ddl_partition_table_mixed.toml \
+    -ddl-worker 1 \
+    -ddl-timeout 2m
 ```
 
 ### 1. Sysbench-style Data Insertion
@@ -201,5 +253,6 @@ Generate writes for `wide_table_with_json_primary` and `wide_table_with_json_sec
 - Adjust the thread and batch-size parameters based on your needs.
 - Use `-batch-in-txn` to wrap each batch in a single explicit transaction (BEGIN/COMMIT).
 - `wide_table_with_json` always generates JSON-like payload data.
-- For workloads that support partitioned tables (e.g. bank3), set `-partitioned=false` to create non-partitioned tables.
+- For workloads that support partitioned tables (e.g. bank3, bank4), set `-partitioned=false` to create non-partitioned tables.
+- `bank4` partitioned mode creates 126 monthly partitions per table, which is suitable for partition-heavy DDL stress.
 - `-bank3-partitioned` is deprecated; use `-partitioned`.

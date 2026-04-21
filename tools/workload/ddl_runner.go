@@ -112,22 +112,38 @@ func (r *DDLRunner) startTypeScheduler(ddlType DDLType, perMinute int) {
 		return
 	}
 
+	interval := schedulerInterval(perMinute)
 	go func() {
-		ticker := time.NewTicker(time.Minute)
+		r.enqueueTask(ddlType)
+
+		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 
-		for {
-			for i := 0; i < perMinute; i++ {
-				table, ok := r.selector.Next()
-				if !ok {
-					r.app.Stats.DDLSkipped.Add(1)
-					continue
-				}
-				r.taskCh <- DDLTask{Type: ddlType, Table: table}
-			}
-			<-ticker.C
+		for range ticker.C {
+			r.enqueueTask(ddlType)
 		}
 	}()
+}
+
+func schedulerInterval(perMinute int) time.Duration {
+	if perMinute <= 0 {
+		return 0
+	}
+
+	interval := time.Minute / time.Duration(perMinute)
+	if interval <= 0 {
+		return time.Nanosecond
+	}
+	return interval
+}
+
+func (r *DDLRunner) enqueueTask(ddlType DDLType) {
+	table, ok := r.selector.Next()
+	if !ok {
+		r.app.Stats.DDLSkipped.Add(1)
+		return
+	}
+	r.taskCh <- DDLTask{Type: ddlType, Table: table}
 }
 
 func (r *DDLRunner) startRandomTableRefresh() {
