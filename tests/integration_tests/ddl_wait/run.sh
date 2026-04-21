@@ -11,16 +11,25 @@ SINK_TYPE=$1
 function check_downstream_indexes_match_upstream() {
 	schema_name=$1
 	table_name=$2
-	index_names=$(mysql -uroot -h${UP_TIDB_HOST} -P${UP_TIDB_PORT} --default-character-set utf8mb4 -N \
-		-e "SELECT DISTINCT INDEX_NAME FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA='${schema_name}' AND TABLE_NAME='${table_name}' ORDER BY INDEX_NAME;")
+	upstream_indexes=$(mysql -uroot -h${UP_TIDB_HOST} -P${UP_TIDB_PORT} --default-character-set utf8mb4 -N -B \
+		-e "SELECT INDEX_NAME, NON_UNIQUE, INDEX_TYPE, SEQ_IN_INDEX, IFNULL(COLUMN_NAME, ''), IFNULL(COLLATION, ''), IFNULL(SUB_PART, ''), IFNULL(NULLABLE, '') \
+		FROM INFORMATION_SCHEMA.STATISTICS \
+		WHERE TABLE_SCHEMA='${schema_name}' AND TABLE_NAME='${table_name}' \
+		ORDER BY INDEX_NAME, SEQ_IN_INDEX;")
+	downstream_indexes=$(mysql -uroot -h${DOWN_TIDB_HOST} -P${DOWN_TIDB_PORT} --default-character-set utf8mb4 -N -B \
+		-e "SELECT INDEX_NAME, NON_UNIQUE, INDEX_TYPE, SEQ_IN_INDEX, IFNULL(COLUMN_NAME, ''), IFNULL(COLLATION, ''), IFNULL(SUB_PART, ''), IFNULL(NULLABLE, '') \
+		FROM INFORMATION_SCHEMA.STATISTICS \
+		WHERE TABLE_SCHEMA='${schema_name}' AND TABLE_NAME='${table_name}' \
+		ORDER BY INDEX_NAME, SEQ_IN_INDEX;")
 
-	while IFS= read -r index_name; do
-		if [ -z "$index_name" ]; then
-			continue
-		fi
-		run_sql "SHOW INDEX FROM \`${schema_name}\`.\`${table_name}\` WHERE Key_name='${index_name}';" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
-		check_contains "Key_name: ${index_name}"
-	done <<<"${index_names}"
+	if [ "${upstream_indexes}" != "${downstream_indexes}" ]; then
+		echo "index metadata mismatch for ${schema_name}.${table_name}"
+		echo "upstream indexes:"
+		printf '%s\n' "${upstream_indexes}"
+		echo "downstream indexes:"
+		printf '%s\n' "${downstream_indexes}"
+		return 1
+	fi
 }
 
 # This test simulates DDL operations that take a long time.
