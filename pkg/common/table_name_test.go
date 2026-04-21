@@ -13,7 +13,11 @@
 
 package common
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
 
 func TestTableNameIsRouted(t *testing.T) {
 	t.Parallel()
@@ -54,4 +58,54 @@ func TestTableNameIsRouted(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestTableNameTargetAccessors(t *testing.T) {
+	t.Parallel()
+
+	t.Run("fallback to source names", func(t *testing.T) {
+		tableName := TableName{
+			Schema: "source_db",
+			Table:  "source_table",
+		}
+
+		require.Equal(t, "source_db", tableName.GetTargetSchema())
+		require.Equal(t, "source_table", tableName.GetTargetTable())
+		require.Equal(t, "`source_db`.`source_table`", tableName.QuoteTargetString())
+	})
+
+	t.Run("use routed names when present", func(t *testing.T) {
+		tableName := TableName{
+			Schema:       "source_db",
+			Table:        "source_table",
+			TargetSchema: "target_db",
+			TargetTable:  "target_table",
+		}
+
+		require.Equal(t, "target_db", tableName.GetTargetSchema())
+		require.Equal(t, "target_table", tableName.GetTargetTable())
+		require.Equal(t, "`target_db`.`target_table`", tableName.QuoteTargetString())
+	})
+}
+
+func TestTableNameMsgpackRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	original := TableName{
+		Schema:       "source_db",
+		Table:        "source_table",
+		TableID:      42,
+		IsPartition:  true,
+		TargetSchema: "target_db",
+		TargetTable:  "target_table",
+	}
+
+	data, err := original.MarshalMsg(nil)
+	require.NoError(t, err)
+
+	var decoded TableName
+	rest, err := decoded.UnmarshalMsg(data)
+	require.NoError(t, err)
+	require.Empty(t, rest)
+	require.Equal(t, original, decoded)
 }
