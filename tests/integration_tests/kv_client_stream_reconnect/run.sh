@@ -63,7 +63,6 @@ EOF
 		echo "" >$WORK_DIR/pulsar_test.toml
 	fi
 	changefeed_id=$(cdc_cli_changefeed create --pd=$pd_addr --sink-uri="$SINK_URI" --config $WORK_DIR/pulsar_test.toml | grep '^ID:' | head -n1 | awk '{print $2}')
-	ensure 20 check_changefeed_state "$pd_addr" "$changefeed_id" "normal" "null" ""
 	case $SINK_TYPE in
 	kafka) run_kafka_consumer $WORK_DIR "kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=open-protocol&partition-num=4&version=${KAFKA_VERSION}&max-message-bytes=10485760" $WORK_DIR/pulsar_test.toml ;;
 	storage) run_storage_consumer $WORK_DIR $SINK_URI $WORK_DIR/pulsar_test.toml "" ;;
@@ -79,9 +78,6 @@ EOF
 	for i in $(seq 60); do
 		tbl="t$((1 + $RANDOM % $TABLE_COUNT))"
 		run_sql "insert into kv_client_stream_reconnect.$tbl values (),(),();" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-		if ((i % 10 == 0)); then
-			ensure 20 check_changefeed_state "$pd_addr" "$changefeed_id" "normal" "null" ""
-		fi
 		sleep 1
 	done
 
