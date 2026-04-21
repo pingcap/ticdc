@@ -386,6 +386,9 @@ func (m *Maintainer) GetMaintainerStatus() *heartbeatpb.MaintainerStatus {
 		// Report drain progress against the controller snapshot that all local
 		// schedulers are using. Coordinator compares this status with its own
 		// drain epoch, so stale or cleared targets naturally stop contributing.
+		// DrainProgress is changefeed-scoped, so aggregate default and redo
+		// dispatchers into one target view instead of reporting mode-specific
+		// counters.
 		dispatcherCount := m.controller.spanController.GetTaskSizeByNodeID(drainTarget)
 		inflightDrainMoveCount := m.controller.operatorController.CountInflightDrainMovesFromNode(drainTarget)
 		if m.enableRedo {

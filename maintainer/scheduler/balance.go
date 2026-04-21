@@ -36,8 +36,8 @@ import (
 // 1. Split operations: splits the one large span for the whole table into smaller ones.
 // 2. Move operations: distributes spans across nodes for balance the span count in each node.
 type balanceScheduler struct {
-	changefeedID  common.ChangeFeedID
-	moveBatchSize int
+	changefeedID common.ChangeFeedID
+	batchSize    int
 
 	operatorController *operator.Controller
 	spanController     *span.Controller
@@ -65,7 +65,7 @@ func NewBalanceScheduler(
 ) *balanceScheduler {
 	return &balanceScheduler{
 		changefeedID:       changefeedID,
-		moveBatchSize:      moveBatchSize,
+		batchSize:          moveBatchSize,
 		random:             rand.New(rand.NewSource(time.Now().UnixNano())),
 		operatorController: oc,
 		spanController:     sc,
@@ -96,15 +96,15 @@ func (s *balanceScheduler) Execute() time.Time {
 
 	// 1. check whether we have spans in defaultGroupID need to be splitted.
 	//    we only consider the not splitted span here.
-	checkResults := s.spanController.CheckByGroup(pkgReplica.DefaultGroupID, s.moveBatchSize)
+	checkResults := s.spanController.CheckByGroup(pkgReplica.DefaultGroupID, s.batchSize)
 	count := s.doSplit(checkResults)
 
 	// to many split operators, do move operator later
-	if count >= s.moveBatchSize {
+	if count >= s.batchSize {
 		return time.Now().Add(time.Second * 5)
 	}
 
-	moveBudget := s.moveBatchSize - count
+	moveBudget := s.batchSize - count
 
 	// 2. do balance for the spans in defaultGroupID
 	s.schedulerDefaultGroup(moveBudget, state)
