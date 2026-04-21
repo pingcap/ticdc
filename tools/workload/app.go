@@ -37,6 +37,7 @@ import (
 	"workload/schema/largerow"
 	"workload/schema/shop"
 	psysbench "workload/schema/sysbench"
+	ptableinfosharing "workload/schema/table_info_sharing"
 	puuu "workload/schema/uuu"
 	pwidetablewithjson "workload/schema/wide_table_with_json"
 )
@@ -85,6 +86,7 @@ const (
 	bank4             = "bank4"
 	bankUpdate        = "bank_update"
 	dc                = "dc"
+	tableInfoSharing  = "table_info_sharing"
 	wideTableWithJSON = "wide_table_with_json"
 )
 
@@ -148,6 +150,8 @@ func (app *WorkloadApp) createWorkload() schema.Workload {
 		workload = bankupdate.NewBankUpdateWorkload(app.Config.TotalRowCount, app.Config.UpdateLargeColumnSize)
 	case dc:
 		workload = pdc.NewDCWorkload()
+	case tableInfoSharing:
+		workload = ptableinfosharing.NewTableInfoSharingWorkload(app.Config.TableCount, app.Config.TableStartIndex)
 	case wideTableWithJSON:
 		workload = pwidetablewithjson.NewWideTableWithJSONWorkload(app.Config.RowSize, app.Config.TableCount, app.Config.TableStartIndex, app.Config.TotalRowCount)
 	default:

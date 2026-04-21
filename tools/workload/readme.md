@@ -228,7 +228,24 @@ Run insert and update concurrently, and execute DDL in parallel:
     -ddl-timeout 2m
 ```
 
-### 7. Wide Table With JSON Workload
+### 7. Table Info Sharing Workload
+
+Generate multiple tables with the same column layout and index layout, while making selected default values differ by table index. This workload covers a broad set of column types including numeric, bit, string, binary, temporal, enum/set, and JSON.
+
+```bash
+./workload -action write \
+    -database-host 127.0.0.1 \
+    -database-port 4000 \
+    -database-db-name table_info \
+    -table-count 16 \
+    -workload-type table_info_sharing \
+    -thread 32 \
+    -batch-size 32 \
+    -percentage-for-update 0.5 \
+    -percentage-for-delete 0.1
+```
+
+### 8. Wide Table With JSON Workload
 
 Generate writes for `wide_table_with_json_primary` and `wide_table_with_json_secondary` (two tables per shard). Use `-row-size` to control payload width and `-table-count` to control shard count.
 
