@@ -379,8 +379,8 @@ func TestProcessRegionSendTaskSendEOFIsRetriable(t *testing.T) {
 			}
 
 			err = worker.processRegionSendTask(ctx, conn)
-				var streamErr *storeStreamErr
-				require.ErrorAs(t, err, &streamErr)
+			var streamErr *storeStreamErr
+			require.ErrorAs(t, err, &streamErr)
 			require.Equal(t, 0, worker.requestCache.getPendingCount())
 			require.Empty(t, worker.requestCache.sentRequests.regionReqs)
 
@@ -388,8 +388,8 @@ func TestProcessRegionSendTaskSendEOFIsRetriable(t *testing.T) {
 			require.NotNil(t, state)
 			require.True(t, state.isStale())
 
-				var storedErr *storeStreamErr
-				require.ErrorAs(t, state.takeError(), &storedErr)
+			var storedErr *storeStreamErr
+			require.ErrorAs(t, state.takeError(), &storedErr)
 		})
 	}
 }
