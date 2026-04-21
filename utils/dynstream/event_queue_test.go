@@ -15,7 +15,6 @@ package dynstream
 
 import (
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -102,7 +101,7 @@ func TestBlockAndWakePath(t *testing.T) {
 
 func TestBatchEvents(t *testing.T) {
 	handler := mockHandler{}
-	eq := newEventQueue(&handler, newTestBatchConfigRegistryWithDefault(NewBatchConfig(3, 0)))
+	eq := newEventQueue(&handler, newTestBatchConfigRegistryWithDefault(newBatchConfig(3, 0)))
 	b := newDefaultBatcher[*mockEvent]()
 
 	path := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", "test", nil)
@@ -130,7 +129,7 @@ func TestBatchEvents(t *testing.T) {
 
 func TestBatchableAndNonBatchableEvents(t *testing.T) {
 	handler := mockHandler{}
-	eq := newEventQueue(&handler, newTestBatchConfigRegistryWithDefault(NewBatchConfig(3, 0)))
+	eq := newEventQueue(&handler, newTestBatchConfigRegistryWithDefault(newBatchConfig(3, 0)))
 	b := newDefaultBatcher[*mockEvent]()
 
 	path := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", "test", nil)
@@ -244,7 +243,7 @@ func TestRemovePath(t *testing.T) {
 
 func TestAreaBatchCount(t *testing.T) {
 	handler := mockHandler{}
-	registry := newAreaBatchConfigRegistry[int](NewBatchConfig(10, 0))
+	registry := newAreaBatchConfigRegistry[int](newBatchConfig(10, 0))
 	eq := newEventQueue(&handler, registry)
 
 	path1 := newPathInfo[int, string, *mockEvent, any, *mockHandler](1, "test", "path1", nil)
@@ -252,7 +251,7 @@ func TestAreaBatchCount(t *testing.T) {
 	eq.initPath(path1)
 	eq.initPath(path2)
 
-	registry.onAddPath(1, batchConfig{softCount: 1})
+	registry.onAddPath(1, newBatchConfig(1, 0))
 	registry.onAddPath(2, batchConfig{})
 
 	appendEvent := func(path *pathInfo[int, string, *mockEvent, any, *mockHandler], value int) {
@@ -284,30 +283,4 @@ func TestAreaBatchCount(t *testing.T) {
 	events, path, _, _ = eq.popEvents(b)
 	require.Equal(t, path2, path)
 	require.Len(t, events, 2)
-}
-
-func TestPopEventsReturnsBatchResidenceDuration(t *testing.T) {
-	handler := mockHandler{}
-	eq := newEventQueue(&handler, newTestBatchConfigRegistry())
-	b := newDefaultBatcher[*mockEvent]()
-
-	path := newPathInfo[int, string, *mockEvent, any, *mockHandler](0, "test", "test", nil)
-	eq.initPath(path)
-
-	eq.appendEvent(eventWrap[int, string, *mockEvent, any, *mockHandler]{
-		pathInfo:  path,
-		event:     &mockEvent{value: 1},
-		queueTime: time.Now(),
-		eventType: EventType{
-			DataGroup: 1,
-			Property:  BatchableData,
-		},
-	})
-
-	time.Sleep(20 * time.Millisecond)
-
-	events, popPath, _, batchDuration := eq.popEvents(b)
-	require.Len(t, events, 1)
-	require.Equal(t, path, popPath)
-	require.GreaterOrEqual(t, batchDuration, 15*time.Millisecond)
 }

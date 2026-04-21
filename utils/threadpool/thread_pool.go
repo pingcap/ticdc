@@ -80,7 +80,11 @@ func (t *threadPoolImpl) executeTasks() {
 			if !task.isCanceled() {
 				next := task.task.Execute()
 				if !next.IsZero() {
-					t.reactor.newTaskChan <- taskAndTime{task, next}
+					select {
+					case <-t.reactor.stopSignal:
+						return
+					case t.reactor.newTaskChan <- taskAndTime{task, next}:
+					}
 				}
 			}
 		}

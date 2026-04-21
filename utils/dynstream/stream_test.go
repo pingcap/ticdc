@@ -212,29 +212,24 @@ func TestStreamCleansBatcherBufferAfterHandle(t *testing.T) {
 	stream := newStream(1, "test", &handler, Option{UseBuffer: false}, newTestBatchConfigRegistry())
 
 	stream.start()
-	defer stream.close()
 
 	path := newPathInfo[int, string, *mockEvent, any, *mockHandler](1, "test", "test/path", nil)
 	stream.addPath(path)
 
-	done := &sync.WaitGroup{}
+	var wg sync.WaitGroup
 	stream.addEvent(eventWrap[int, string, *mockEvent, any, *mockHandler]{
 		pathInfo: path,
-		event:    newMockEvent(1, path.path, 0, nil, nil, done),
+		event:    newMockEvent(1, path.path, 0, nil, nil, &wg),
 	})
 
-	done.Wait()
+	wg.Wait()
+	stream.close()
 
-	require.Eventually(t, func() bool {
-		if cap(stream.batcher.buf) == 0 {
-			return true
-		}
-		backing := stream.batcher.buf[:cap(stream.batcher.buf)]
-		for _, event := range backing {
-			if event != nil {
-				return false
-			}
-		}
-		return true
-	}, time.Second, 10*time.Millisecond)
+	if cap(stream.batcher.buf) == 0 {
+		return
+	}
+	backing := stream.batcher.buf[:cap(stream.batcher.buf)]
+	for _, event := range backing {
+		require.Nil(t, event)
+	}
 }

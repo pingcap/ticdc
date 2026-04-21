@@ -15,6 +15,8 @@ package dynstream
 
 import (
 	"time"
+
+	"github.com/pingcap/ticdc/pkg/config"
 )
 
 type batchConfig struct {
@@ -30,17 +32,20 @@ type batchConfig struct {
 	hardBytes int
 }
 
-const countCapMultiple = 8
+const countCapMultiple = 4
 
 func newDefaultBatchConfig() batchConfig {
 	// Keep the default behavior consistent with the legacy Option.BatchCount=1:
 	// no batching unless explicitly configured by the caller.
-	return NewBatchConfig(1, 0)
+	return newBatchConfig(1, 0)
 }
 
-func NewBatchConfig(count, bytes int) batchConfig {
+func newBatchConfig(count, bytes int) batchConfig {
 	if count <= 0 {
 		count = 1
+	}
+	if count > config.MaxEventCollectorBatchCount {
+		count = config.MaxEventCollectorBatchCount
 	}
 	if bytes < 0 {
 		bytes = 0
@@ -79,13 +84,10 @@ func (b *batcher[T]) setLimit(cfg batchConfig) {
 		b.buf = b.buf[:0]
 	}
 	b.nBytes = 0
-	b.start = time.Time{}
+	b.start = time.Now()
 }
 
 func (b *batcher[T]) addEvent(event T, size int) {
-	if len(b.buf) == 0 && b.start.IsZero() {
-		b.start = time.Now()
-	}
 	b.buf = append(b.buf, event)
 	b.nBytes += size
 }
@@ -109,7 +111,6 @@ func (b *batcher[T]) isFull() bool {
 }
 
 // flush returned events must be processed before adding more events to the batcher.
-// The third return value is the residence duration from the first event entering the batch to flush.
 func (b *batcher[T]) flush() ([]T, int, time.Duration) {
 	if len(b.buf) == 0 {
 		return nil, 0, 0
@@ -119,7 +120,5 @@ func (b *batcher[T]) flush() ([]T, int, time.Duration) {
 	b.buf = b.buf[:0]
 	nBytes := b.nBytes
 	b.nBytes = 0
-	duration := time.Since(b.start)
-	b.start = time.Time{}
-	return events, nBytes, duration
+	return events, nBytes, time.Since(b.start)
 }

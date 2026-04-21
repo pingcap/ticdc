@@ -30,13 +30,13 @@ type pendingMessageKey struct {
 // pendingMessageQueue de-duplicates messages by (changefeedID, messageType) to prevent
 // floods of retry messages from blocking or starving other requests.
 //
-// The queue keeps the first message while it is pending or being processed. Subsequent
-// messages with the same key are dropped. This is safe because the sender periodically
-// retries until it receives a response.
+// The queue keeps at most one queued request for each key.
+// Once Pop returns a message, the key leaves the pending set immediately, so the next
+// retry can queue one more request for the next processing round.
 //
 // For MaintainerCloseRequest, we treat removed=true as stronger semantics than removed=false.
-// If a pending removed=false request exists, a later removed=true request with the same key
-// will replace it to avoid missing removal-related cleanup.
+// While a request is still queued, a later removed=true request replaces removed=false in
+// that queued slot so the next execution still observes the stronger semantics.
 type pendingMessageQueue struct {
 	mu      sync.Mutex
 	pending map[pendingMessageKey]*messaging.TargetMessage
@@ -54,8 +54,8 @@ func newPendingMessageQueue() *pendingMessageQueue {
 // It returns true if the message is accepted, otherwise false.
 func (q *pendingMessageQueue) TryEnqueue(key pendingMessageKey, msg *messaging.TargetMessage) bool {
 	q.mu.Lock()
-	if oldMsg, ok := q.pending[key]; ok {
-		if shouldReplacePendingMessage(key, oldMsg, msg) {
+	if pendingMsg, ok := q.pending[key]; ok {
+		if shouldReplacePendingMessage(key, pendingMsg, msg) {
 			q.pending[key] = msg
 			q.mu.Unlock()
 			return true
@@ -63,6 +63,7 @@ func (q *pendingMessageQueue) TryEnqueue(key pendingMessageKey, msg *messaging.T
 		q.mu.Unlock()
 		return false
 	}
+
 	q.pending[key] = msg
 	q.mu.Unlock()
 
@@ -89,22 +90,19 @@ func shouldReplacePendingMessage(key pendingMessageKey, oldMsg, newMsg *messagin
 	return !oldReq.Removed && newReq.Removed
 }
 
-// Pop blocks until a key is available or the queue is closed.
-// The returned key is removed from the queue but remains pending until Done is called.
-func (q *pendingMessageQueue) Pop() (pendingMessageKey, bool) {
-	return q.queue.Get()
-}
+// Pop blocks until a message is available or the queue is closed.
+// The queue key stays internal because callers only need the dequeued message.
+func (q *pendingMessageQueue) Pop() (*messaging.TargetMessage, bool) {
+	key, ok := q.queue.Get()
+	if !ok {
+		return nil, false
+	}
 
-func (q *pendingMessageQueue) Get(key pendingMessageKey) *messaging.TargetMessage {
 	q.mu.Lock()
-	defer q.mu.Unlock()
-	return q.pending[key]
-}
-
-func (q *pendingMessageQueue) Done(key pendingMessageKey) {
-	q.mu.Lock()
+	msg := q.pending[key]
 	delete(q.pending, key)
 	q.mu.Unlock()
+	return msg, true
 }
 
 func (q *pendingMessageQueue) Close() {

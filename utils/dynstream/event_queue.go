@@ -116,8 +116,16 @@ func (q *eventQueue[A, P, T, D, H]) popEvents(b *batcher[T]) ([]T, *pathInfo[A, 
 
 		path := signal.pathInfo
 		pendingQueue := path.pendingQueue
-		if path.blocking.Load() || path.removed.Load() {
-			// The path is blocking or removed, we should ignore the signal completely.
+		if path.removed.Load() {
+			// A removed path can still receive stale in-flight signals/events.
+			// Clear the path queue and reconcile memory before dropping the signal.
+			q.releasePath(path)
+			q.totalPendingLength.Add(-int64(signal.eventCount))
+			q.signalQueue.PopFront()
+			continue
+		}
+		if path.blocking.Load() {
+			// The path is blocking, we should ignore the signal completely.
 			// Since when it is waked, a signal event will be added to the queue.
 			q.totalPendingLength.Add(-int64(signal.eventCount))
 			q.signalQueue.PopFront()
@@ -140,11 +148,6 @@ func (q *eventQueue[A, P, T, D, H]) popEvents(b *batcher[T]) ([]T, *pathInfo[A, 
 		b.setLimit(batchConfig)
 
 		var count int
-		// The batch residence duration is measured from when the first event enters the queue.
-		b.start = firstEvent.queueTime
-		if b.start.IsZero() {
-			b.start = time.Now()
-		}
 		b.addEvent(firstEvent.event, firstEvent.eventSize)
 		path.popEvent()
 		count++
