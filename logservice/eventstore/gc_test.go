@@ -17,9 +17,11 @@ import (
 	"bytes"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/cockroachdb/pebble"
 	"github.com/stretchr/testify/require"
+	"github.com/tikv/client-go/v2/oracle"
 )
 
 type mockDB struct {
@@ -69,7 +71,7 @@ func TestGCManager(t *testing.T) {
 	gcm.addGCItem(0, 1, 20, 300, 400) // Add a second table
 
 	{
-		ranges := gcm.fetchAllGCItems()
+		ranges := gcm.fetchGCItems(time.Now(), 0, 0)
 		require.Len(t, ranges, 2)
 		gcm.doGCJob(ranges)
 		gcm.updateCompactRanges(ranges)
@@ -133,7 +135,7 @@ func TestGCManager(t *testing.T) {
 	gcm.addGCItem(0, 1, 10, 200, 300) // Add new item for the first table
 
 	{
-		ranges := gcm.fetchAllGCItems()
+		ranges := gcm.fetchGCItems(time.Now(), 0, 0)
 		require.Len(t, ranges, 1)
 		gcm.doGCJob(ranges)
 		gcm.updateCompactRanges(ranges)
@@ -142,6 +144,74 @@ func TestGCManager(t *testing.T) {
 		compactCalls := mdb.getCompactCalls()
 		require.Len(t, compactCalls, 6)
 	}
+}
+
+func TestGCManagerDelaysSmallDeleteRanges(t *testing.T) {
+	gcm := newGCManager(nil, nil, nil)
+	now := time.Unix(100, 0)
+
+	startTs := oracle.ComposeTS(1_000, 0)
+	midTs := oracle.ComposeTS(2_000, 0)
+	endTs := oracle.ComposeTS(3_000, 0)
+
+	gcm.addGCItem(0, 1, 10, startTs, midTs)
+	gcm.addGCItem(0, 1, 10, midTs, endTs)
+
+	compactKey := compactItemKey{dbIndex: 0, uniqueKeyID: 1, tableID: 10}
+	gcm.mu.Lock()
+	state, ok := gcm.deleteRanges[compactKey]
+	require.True(t, ok)
+	state.firstEnqueueTime = now
+	gcm.mu.Unlock()
+
+	ranges := gcm.fetchGCItems(now.Add(time.Minute), 5*time.Minute, 30*time.Minute)
+	require.Empty(t, ranges)
+
+	gcm.mu.Lock()
+	state, ok = gcm.deleteRanges[compactKey]
+	require.True(t, ok)
+	require.Equal(t, startTs, state.item.startTs)
+	require.Equal(t, endTs, state.item.endTs)
+	gcm.mu.Unlock()
+
+	ranges = gcm.fetchGCItems(now.Add(31*time.Minute), 5*time.Minute, 30*time.Minute)
+	require.Len(t, ranges, 1)
+	require.Equal(t, gcRangeItem{
+		dbIndex:     0,
+		uniqueKeyID: 1,
+		tableID:     10,
+		startTs:     startTs,
+		endTs:       endTs,
+	}, ranges[0])
+	require.Equal(t, 0, gcm.pendingDeleteRangeCount())
+}
+
+func TestGCManagerFlushesLargeDeleteRangeImmediately(t *testing.T) {
+	gcm := newGCManager(nil, nil, nil)
+	now := time.Unix(100, 0)
+
+	startTs := oracle.ComposeTS(1_000, 0)
+	endTs := oracle.ComposeTS(1_000+6*60*1000, 0)
+
+	gcm.addGCItem(0, 1, 10, startTs, endTs)
+
+	compactKey := compactItemKey{dbIndex: 0, uniqueKeyID: 1, tableID: 10}
+	gcm.mu.Lock()
+	state, ok := gcm.deleteRanges[compactKey]
+	require.True(t, ok)
+	state.firstEnqueueTime = now
+	gcm.mu.Unlock()
+
+	ranges := gcm.fetchGCItems(now.Add(time.Minute), 5*time.Minute, 30*time.Minute)
+	require.Len(t, ranges, 1)
+	require.Equal(t, gcRangeItem{
+		dbIndex:     0,
+		uniqueKeyID: 1,
+		tableID:     10,
+		startTs:     startTs,
+		endTs:       endTs,
+	}, ranges[0])
+	require.Equal(t, 0, gcm.pendingDeleteRangeCount())
 }
 
 func TestMergeDeleteRanges(t *testing.T) {
