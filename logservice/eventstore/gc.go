@@ -161,6 +161,8 @@ func (d *gcManager) pendingDeleteRangeCount() int {
 }
 
 func shouldFlushDeleteRange(pending *pendingDeleteRange, now time.Time, minRangeInterval, maxDelay time.Duration) bool {
+	// addGCItem only records valid ranges, so this should not happen in normal flow.
+	// Keep the guard as a defensive check against unexpected state or future refactors.
 	if pending == nil || pending.item.endTs <= pending.item.startTs {
 		return false
 	}
