@@ -22,6 +22,7 @@ import (
 	"github.com/cockroachdb/pebble"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
 )
 
@@ -40,6 +41,11 @@ type gcRangeItem struct {
 	endTs   uint64
 }
 
+type deleteRangeState struct {
+	item             gcRangeItem
+	firstEnqueueTime time.Time
+}
+
 type compactItemKey struct {
 	dbIndex     int
 	uniqueKeyID uint64
@@ -54,12 +60,23 @@ type compactState struct {
 type gcManager struct {
 	mu            sync.Mutex
 	dbs           []*pebble.DB
-	ranges        []gcRangeItem
+	deleteRanges  map[compactItemKey]*deleteRangeState
 	compactRanges map[compactItemKey]*compactState
 
 	deleteDataRange  deleteDataRangeFunc
 	compactDataRange compactDataRangeFunc
 }
+
+const (
+	// Avoid issuing a Pebble DeleteRange for every tiny checkpoint movement. Small
+	// delete ranges accumulate a large number of tombstones and make iterator
+	// initialization expensive for scan-heavy workloads.
+	minDeleteRangeInterval = 5 * time.Minute
+	// Low-traffic subscriptions may not accumulate enough ts span to hit
+	// minDeleteRangeInterval quickly. Flush them eventually to avoid retaining old
+	// data forever.
+	maxPendingDeleteRangeDelay = 30 * time.Minute
+)
 
 func newGCManager(
 	dbs []*pebble.DB,
@@ -68,6 +85,7 @@ func newGCManager(
 ) *gcManager {
 	return &gcManager{
 		dbs:              dbs,
+		deleteRanges:     make(map[compactItemKey]*deleteRangeState),
 		compactRanges:    make(map[compactItemKey]*compactState),
 		deleteDataRange:  deleteDataRange,
 		compactDataRange: compactDataRange,
@@ -78,21 +96,77 @@ func newGCManager(
 func (d *gcManager) addGCItem(dbIndex int, uniqueKeyID uint64, tableID int64, startTS uint64, endTS uint64) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.ranges = append(d.ranges, gcRangeItem{
+
+	key := compactItemKey{
 		dbIndex:     dbIndex,
 		uniqueKeyID: uniqueKeyID,
 		tableID:     tableID,
-		startTs:     startTS,
-		endTs:       endTS,
-	})
+	}
+	state, ok := d.deleteRanges[key]
+	if !ok {
+		d.deleteRanges[key] = &deleteRangeState{
+			item: gcRangeItem{
+				dbIndex:     dbIndex,
+				uniqueKeyID: uniqueKeyID,
+				tableID:     tableID,
+				startTs:     startTS,
+				endTs:       endTS,
+			},
+			firstEnqueueTime: time.Now(),
+		}
+		return
+	}
+
+	if startTS < state.item.startTs {
+		state.item.startTs = startTS
+	}
+	if endTS > state.item.endTs {
+		state.item.endTs = endTS
+	}
 }
 
 func (d *gcManager) fetchAllGCItems() []gcRangeItem {
+	return d.fetchGCItems(time.Now(), minDeleteRangeInterval, maxPendingDeleteRangeDelay)
+}
+
+func (d *gcManager) fetchGCItems(now time.Time, minRangeInterval, maxDelay time.Duration) []gcRangeItem {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	ranges := d.ranges
-	d.ranges = nil
+
+	ranges := make([]gcRangeItem, 0, len(d.deleteRanges))
+	for key, state := range d.deleteRanges {
+		if !shouldFlushDeleteRange(state, now, minRangeInterval, maxDelay) {
+			continue
+		}
+		ranges = append(ranges, state.item)
+		delete(d.deleteRanges, key)
+	}
 	return ranges
+}
+
+func (d *gcManager) pendingDeleteRangeCount() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return len(d.deleteRanges)
+}
+
+func shouldFlushDeleteRange(state *deleteRangeState, now time.Time, minRangeInterval, maxDelay time.Duration) bool {
+	if state == nil || state.item.endTs <= state.item.startTs {
+		return false
+	}
+	if maxDelay > 0 && now.Sub(state.firstEnqueueTime) >= maxDelay {
+		return true
+	}
+	if minRangeInterval <= 0 {
+		return true
+	}
+
+	startPhysical := oracle.ExtractPhysical(state.item.startTs)
+	endPhysical := oracle.ExtractPhysical(state.item.endTs)
+	if endPhysical <= startPhysical {
+		return false
+	}
+	return time.Duration(endPhysical-startPhysical)*time.Millisecond >= minRangeInterval
 }
 
 func (d *gcManager) run(ctx context.Context) error {
@@ -127,6 +201,7 @@ func (d *gcManager) run(ctx context.Context) error {
 				zap.Duration("interval", now.Sub(windowStart)),
 				zap.Int("batchCount", windowBatchCount),
 				zap.Int("deletedRangeCount", windowRangeCount),
+				zap.Int("pendingRangeCount", d.pendingDeleteRangeCount()),
 				zap.Float64("avgRangesPerBatch", avgRangesPerBatch),
 				zap.Duration("avgBatchDuration", avgBatchDuration),
 				zap.Duration("maxBatchDuration", windowMaxBatchDuration))
