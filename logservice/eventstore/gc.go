@@ -143,7 +143,7 @@ func (d *gcManager) fetchGCItems(now time.Time, minRangeInterval, maxDelay time.
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	ranges := make([]gcRangeItem, 0, len(d.deleteRanges))
+	var ranges []gcRangeItem
 	for key, pending := range d.deleteRanges {
 		if !shouldFlushDeleteRange(pending, now, minRangeInterval, maxDelay) {
 			continue
