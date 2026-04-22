@@ -73,15 +73,15 @@ func NewBalanceScheduler(
 func (s *balanceScheduler) Execute() time.Time {
 	now := time.Now()
 	if hasDrainingOrStoppingNode(s.liveness) {
-		// Pause regular balance scheduling while any node is draining/stopping.
-		// Reuse the configured balance interval as the post-drain quiet period so
-		// operators can settle before regular rebalance resumes.
+		// Pause regular balance scheduling while any node is observed draining or
+		// stopping. Each observation extends the block window by one balance
+		// interval so regular rebalance does not race with evacuation progress.
 		s.drainBalanceBlockedUntil = now.Add(s.drainCooldown())
 		return now.Add(s.checkBalanceInterval)
 	}
 	if now.Before(s.drainBalanceBlockedUntil) {
-		// Keep a cooldown window after all draining/stopping nodes are gone
-		// to avoid immediate rebalance churn.
+		// If drain disappears before the previously extended block window expires,
+		// keep skipping regular rebalance until that window elapses.
 		return now.Add(s.checkBalanceInterval)
 	}
 	if !s.forceBalance && time.Since(s.lastRebalanceTime) < s.checkBalanceInterval {
