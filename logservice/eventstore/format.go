@@ -124,10 +124,14 @@ func getDMLOrder(rowKV *common.RawKVEntry) DMLOrder {
 }
 
 func deleteDataRange(db *pebble.DB, uniqueKeyID uint64, tableID int64, startTs uint64, endTs uint64) error {
-	start := EncodeKeyPrefix(uniqueKeyID, tableID, startTs)
-	end := EncodeKeyPrefix(uniqueKeyID, tableID, endTs)
+	// Temporarily disable DeleteRange to verify whether range tombstones are
+	// the root cause of periodic event-store scan regressions.
+	return nil
 
-	return db.DeleteRange(start, end, pebble.NoSync)
+	// start := EncodeKeyPrefix(uniqueKeyID, tableID, startTs)
+	// end := EncodeKeyPrefix(uniqueKeyID, tableID, endTs)
+	//
+	// return db.DeleteRange(start, end, pebble.NoSync)
 }
 
 func compactDataRange(db *pebble.DB, uniqueKeyID uint64, tableID int64, startTs uint64, endTs uint64) error {
