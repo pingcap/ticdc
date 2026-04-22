@@ -431,7 +431,7 @@ func (c *consumer) parseDMLFilePath(ctx context.Context, path string) error {
 	if err != nil {
 		return errors.Trace(err)
 	}
-	if dmlkey.TableVersion > c.globalCheckpointTs {
+if c.globalCheckpointTs > 0 && dmlkey.TableVersion > c.globalCheckpointTs {
 		log.Debug("skip dml index file by checkpoint",
 			zap.String("path", path),
 			zap.Uint64("tableVersion", dmlkey.TableVersion),
@@ -472,7 +472,7 @@ func (c *consumer) parseSchemaFilePath(ctx context.Context, path string) error {
 	if err != nil {
 		return errors.Trace(err)
 	}
-	if schemaKey.TableVersion > c.globalCheckpointTs {
+if c.globalCheckpointTs > 0 && schemaKey.TableVersion > c.globalCheckpointTs {
 		log.Debug("skip schema file by checkpoint",
 			zap.String("path", path),
 			zap.Uint64("tableVersion", schemaKey.TableVersion),
