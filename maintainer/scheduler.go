@@ -25,6 +25,10 @@ import (
 	pkgscheduler "github.com/pingcap/ticdc/pkg/scheduler"
 )
 
+// NewScheduleController wires the per-changefeed schedulers that share one
+// drain state snapshot. Basic scheduling still handles absent work during
+// drain, while drain and balance schedulers use the same snapshot to avoid
+// placing new work back onto the node being evacuated.
 func NewScheduleController(changefeedID common.ChangeFeedID,
 	batchSize int,
 	oc, redoOC *operator.Controller,
@@ -32,6 +36,8 @@ func NewScheduleController(changefeedID common.ChangeFeedID,
 	balanceInterval time.Duration,
 	splitter *split.Splitter,
 	schedulerCfg *config.ChangefeedSchedulerConfig,
+	drainState *scheduler.DrainState,
+	balanceMoveBatchSize int,
 ) *pkgscheduler.Controller {
 	schedulers := map[string]pkgscheduler.Scheduler{
 		pkgscheduler.BasicScheduler: scheduler.NewBasicScheduler(
@@ -42,15 +48,25 @@ func NewScheduleController(changefeedID common.ChangeFeedID,
 			redoSpanController,
 			schedulerCfg,
 			common.DefaultMode,
+			drainState,
+		),
+		pkgscheduler.DrainScheduler: scheduler.NewDrainScheduler(
+			changefeedID,
+			batchSize,
+			oc,
+			spanController,
+			common.DefaultMode,
+			drainState,
 		),
 		pkgscheduler.BalanceScheduler: scheduler.NewBalanceScheduler(
 			changefeedID,
-			batchSize,
 			splitter,
 			oc,
 			spanController,
 			balanceInterval,
 			common.DefaultMode,
+			drainState,
+			balanceMoveBatchSize,
 		),
 	}
 	if splitter != nil {
@@ -61,6 +77,7 @@ func NewScheduleController(changefeedID common.ChangeFeedID,
 			oc,
 			spanController,
 			common.DefaultMode,
+			drainState,
 		)
 	}
 	if redoOC != nil {
@@ -72,15 +89,25 @@ func NewScheduleController(changefeedID common.ChangeFeedID,
 			spanController,
 			schedulerCfg,
 			common.RedoMode,
+			drainState,
+		)
+		schedulers[pkgscheduler.RedoDrainScheduler] = scheduler.NewDrainScheduler(
+			changefeedID,
+			batchSize,
+			redoOC,
+			redoSpanController,
+			common.RedoMode,
+			drainState,
 		)
 		schedulers[pkgscheduler.RedoBalanceScheduler] = scheduler.NewBalanceScheduler(
 			changefeedID,
-			batchSize,
 			splitter,
 			redoOC,
 			redoSpanController,
 			balanceInterval,
 			common.RedoMode,
+			drainState,
+			balanceMoveBatchSize,
 		)
 		if splitter != nil {
 			schedulers[pkgscheduler.RedoBalanceSplitScheduler] = scheduler.NewBalanceSplitsScheduler(
@@ -90,6 +117,7 @@ func NewScheduleController(changefeedID common.ChangeFeedID,
 				redoOC,
 				redoSpanController,
 				common.RedoMode,
+				drainState,
 			)
 		}
 	}
