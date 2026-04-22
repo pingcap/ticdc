@@ -40,7 +40,11 @@ type gcRangeItem struct {
 	endTs   uint64
 }
 
-type deleteRangeState struct {
+// pendingDeleteRange tracks a coarse delete range for one (dbIndex, uniqueKeyID, tableID).
+// It is intentionally widened to [minStartTs, maxEndTs] across multiple checkpoint
+// updates. Event store retention is checkpoint-based, so deleting gaps inside the
+// widened range is safe and avoids issuing a large number of small DeleteRange calls.
+type pendingDeleteRange struct {
 	item             gcRangeItem
 	firstEnqueueTime time.Time
 }
@@ -59,7 +63,7 @@ type compactState struct {
 type gcManager struct {
 	mu            sync.Mutex
 	dbs           []*pebble.DB
-	deleteRanges  map[compactItemKey][]deleteRangeState
+	deleteRanges  map[compactItemKey]*pendingDeleteRange
 	compactRanges map[compactItemKey]*compactState
 
 	deleteDataRange  deleteDataRangeFunc
@@ -84,15 +88,18 @@ func newGCManager(
 ) *gcManager {
 	return &gcManager{
 		dbs:              dbs,
-		deleteRanges:     make(map[compactItemKey][]deleteRangeState),
+		deleteRanges:     make(map[compactItemKey]*pendingDeleteRange),
 		compactRanges:    make(map[compactItemKey]*compactState),
 		deleteDataRange:  deleteDataRange,
 		compactDataRange: compactDataRange,
 	}
 }
 
-// add an item to delete the data in range (startTS, endTS] for `tableID` with `uniqueID`.
-func (d *gcManager) addGCItem(dbIndex int, uniqueKeyID uint64, tableID int64, startTS uint64, endTS uint64) {
+// addDeleteRange records a coarse pending delete range for one subscription/table.
+// The range is widened to [minStartTs, maxEndTs] instead of tracking exact disjoint
+// intervals. Once checkpoint advances, any data below the newest endTs is safe to
+// delete, and deleting empty gaps is harmless for event store.
+func (d *gcManager) addDeleteRange(dbIndex int, uniqueKeyID uint64, tableID int64, startTS uint64, endTS uint64) {
 	if endTS <= startTS {
 		return
 	}
@@ -105,16 +112,27 @@ func (d *gcManager) addGCItem(dbIndex int, uniqueKeyID uint64, tableID int64, st
 		uniqueKeyID: uniqueKeyID,
 		tableID:     tableID,
 	}
-	d.deleteRanges[key] = insertDeleteRangeState(d.deleteRanges[key], deleteRangeState{
-		item: gcRangeItem{
-			dbIndex:     dbIndex,
-			uniqueKeyID: uniqueKeyID,
-			tableID:     tableID,
-			startTs:     startTS,
-			endTs:       endTS,
-		},
-		firstEnqueueTime: time.Now(),
-	})
+	pending, ok := d.deleteRanges[key]
+	if !ok {
+		d.deleteRanges[key] = &pendingDeleteRange{
+			item: gcRangeItem{
+				dbIndex:     dbIndex,
+				uniqueKeyID: uniqueKeyID,
+				tableID:     tableID,
+				startTs:     startTS,
+				endTs:       endTS,
+			},
+			firstEnqueueTime: time.Now(),
+		}
+		return
+	}
+
+	if startTS < pending.item.startTs {
+		pending.item.startTs = startTS
+	}
+	if endTS > pending.item.endTs {
+		pending.item.endTs = endTS
+	}
 }
 
 func (d *gcManager) fetchAllGCItems() []gcRangeItem {
@@ -125,26 +143,13 @@ func (d *gcManager) fetchGCItems(now time.Time, minRangeInterval, maxDelay time.
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	totalPendingRanges := 0
-	for _, states := range d.deleteRanges {
-		totalPendingRanges += len(states)
-	}
-
-	ranges := make([]gcRangeItem, 0, totalPendingRanges)
-	for key, states := range d.deleteRanges {
-		remaining := states[:0]
-		for _, state := range states {
-			if !shouldFlushDeleteRange(state, now, minRangeInterval, maxDelay) {
-				remaining = append(remaining, state)
-				continue
-			}
-			ranges = append(ranges, state.item)
-		}
-		if len(remaining) == 0 {
-			delete(d.deleteRanges, key)
+	ranges := make([]gcRangeItem, 0, len(d.deleteRanges))
+	for key, pending := range d.deleteRanges {
+		if !shouldFlushDeleteRange(pending, now, minRangeInterval, maxDelay) {
 			continue
 		}
-		d.deleteRanges[key] = remaining
+		ranges = append(ranges, pending.item)
+		delete(d.deleteRanges, key)
 	}
 	return ranges
 }
@@ -152,69 +157,22 @@ func (d *gcManager) fetchGCItems(now time.Time, minRangeInterval, maxDelay time.
 func (d *gcManager) pendingDeleteRangeCount() int {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-
-	count := 0
-	for _, states := range d.deleteRanges {
-		count += len(states)
-	}
-	return count
+	return len(d.deleteRanges)
 }
 
-func insertDeleteRangeState(states []deleteRangeState, newState deleteRangeState) []deleteRangeState {
-	if newState.item.endTs <= newState.item.startTs {
-		return states
-	}
-	if len(states) == 0 {
-		return append(states, newState)
-	}
-
-	result := make([]deleteRangeState, 0, len(states)+1)
-	inserted := false
-
-	for _, state := range states {
-		if state.item.endTs < newState.item.startTs {
-			result = append(result, state)
-			continue
-		}
-		if newState.item.endTs < state.item.startTs {
-			if !inserted {
-				result = append(result, newState)
-				inserted = true
-			}
-			result = append(result, state)
-			continue
-		}
-
-		if state.item.startTs < newState.item.startTs {
-			newState.item.startTs = state.item.startTs
-		}
-		if state.item.endTs > newState.item.endTs {
-			newState.item.endTs = state.item.endTs
-		}
-		if state.firstEnqueueTime.Before(newState.firstEnqueueTime) {
-			newState.firstEnqueueTime = state.firstEnqueueTime
-		}
-	}
-
-	if !inserted {
-		result = append(result, newState)
-	}
-	return result
-}
-
-func shouldFlushDeleteRange(state deleteRangeState, now time.Time, minRangeInterval, maxDelay time.Duration) bool {
-	if state.item.endTs <= state.item.startTs {
+func shouldFlushDeleteRange(pending *pendingDeleteRange, now time.Time, minRangeInterval, maxDelay time.Duration) bool {
+	if pending == nil || pending.item.endTs <= pending.item.startTs {
 		return false
 	}
-	if maxDelay > 0 && now.Sub(state.firstEnqueueTime) >= maxDelay {
+	if maxDelay > 0 && now.Sub(pending.firstEnqueueTime) >= maxDelay {
 		return true
 	}
 	if minRangeInterval <= 0 {
 		return true
 	}
 
-	startPhysical := oracle.ExtractPhysical(state.item.startTs)
-	endPhysical := oracle.ExtractPhysical(state.item.endTs)
+	startPhysical := oracle.ExtractPhysical(pending.item.startTs)
+	endPhysical := oracle.ExtractPhysical(pending.item.endTs)
 	if endPhysical <= startPhysical {
 		return false
 	}
