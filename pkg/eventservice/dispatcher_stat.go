@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
@@ -37,6 +38,12 @@ const (
 	minScanLimitInBytes     = 1024        // 1KB
 	maxScanLimitInBytes     = 1024 * 1024 // 1MB
 	updateScanLimitInterval = time.Second * 10
+
+	// Quick validation hack:
+	// if a dispatcher is already far behind when it receives the first resolved-ts,
+	// skip the tiny 1KB -> 2KB -> ... slow start and recover with a larger batch.
+	fastRecoveryStartLagThreshold = 30 * time.Second
+	fastRecoveryScanLimitInBytes  = 16 * 1024 * 1024 // 16MB
 )
 
 // Store the progress of the dispatcher, and the incremental events stats.
@@ -221,6 +228,17 @@ func (a *dispatcherStat) onResolvedTs(resolvedTs uint64) bool {
 		return false
 	}
 	if !a.hasReceivedFirstResolvedTs.Load() {
+		startLag := time.Duration(oracle.ExtractPhysical(resolvedTs)-oracle.ExtractPhysical(a.startTs)) * time.Millisecond
+		if startLag >= fastRecoveryStartLagThreshold {
+			a.currentScanLimitInBytes.Store(fastRecoveryScanLimitInBytes)
+			a.maxScanLimitInBytes.Store(fastRecoveryScanLimitInBytes)
+			a.availableMemoryQuota.Store(fastRecoveryScanLimitInBytes)
+			log.Info("enable fast recovery scan limit for dispatcher",
+				zap.Stringer("changefeedID", a.changefeedStat.changefeedID),
+				zap.Stringer("dispatcherID", a.id),
+				zap.Duration("startLag", startLag),
+				zap.Int64("scanLimitInBytes", fastRecoveryScanLimitInBytes))
+		}
 		log.Info("received first resolved ts from event store",
 			zap.Stringer("changefeedID", a.changefeedStat.changefeedID),
 			zap.Stringer("dispatcherID", a.id),
