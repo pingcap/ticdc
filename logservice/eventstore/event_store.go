@@ -743,7 +743,7 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 		if lastReceiveDMLTime > 0 {
 			oldCheckpointPhysicalTime := oracle.GetTimeFromTS(oldCheckpointTs)
 			if lastReceiveDMLTime >= oldCheckpointPhysicalTime.UnixMilli() {
-				e.gcManager.addGCItem(
+				e.gcManager.addDeleteRange(
 					subStat.dbIndex,
 					uint64(subStat.subID),
 					subStat.tableSpan.TableID,
