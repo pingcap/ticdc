@@ -304,20 +304,20 @@ func (d *gcManager) doCompaction() {
 	}
 	d.mu.Unlock()
 
-	startTime := time.Now()
-	log.Info("gc manager compacting ranges", zap.Int("rangeCount", len(toCompact)))
-	for key, endTs := range toCompact {
-		db := d.dbs[key.dbIndex]
-		if err := d.compactDataRange(db, key.uniqueKeyID, key.tableID, 0, endTs); err != nil {
-			log.Warn("gc manager failed to compact data range",
-				zap.Int("dbIndex", key.dbIndex),
-				zap.Uint64("uniqueKeyID", key.uniqueKeyID),
-				zap.Int64("tableID", key.tableID),
-				zap.Uint64("endTs", endTs),
-				zap.Error(err))
-		}
-	}
-	log.Info("gc manager compacting ranges done",
-		zap.Int("rangeCount", len(toCompact)),
-		zap.Duration("duration", time.Since(startTime)))
+	// startTime := time.Now()
+	// log.Info("gc manager compacting ranges", zap.Int("rangeCount", len(toCompact)))
+	// for key, endTs := range toCompact {
+	// 	db := d.dbs[key.dbIndex]
+	// 	if err := d.compactDataRange(db, key.uniqueKeyID, key.tableID, 0, endTs); err != nil {
+	// 		log.Warn("gc manager failed to compact data range",
+	// 			zap.Int("dbIndex", key.dbIndex),
+	// 			zap.Uint64("uniqueKeyID", key.uniqueKeyID),
+	// 			zap.Int64("tableID", key.tableID),
+	// 			zap.Uint64("endTs", endTs),
+	// 			zap.Error(err))
+	// 	}
+	// }
+	// log.Info("gc manager compacting ranges done",
+	// 	zap.Int("rangeCount", len(toCompact)),
+	// 	zap.Duration("duration", time.Since(startTime)))
 }
