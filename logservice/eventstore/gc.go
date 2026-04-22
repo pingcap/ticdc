@@ -60,7 +60,7 @@ type compactState struct {
 type gcManager struct {
 	mu            sync.Mutex
 	dbs           []*pebble.DB
-	deleteRanges  map[compactItemKey]*deleteRangeState
+	deleteRanges  map[compactItemKey][]deleteRangeState
 	compactRanges map[compactItemKey]*compactState
 
 	deleteDataRange  deleteDataRangeFunc
@@ -85,7 +85,7 @@ func newGCManager(
 ) *gcManager {
 	return &gcManager{
 		dbs:              dbs,
-		deleteRanges:     make(map[compactItemKey]*deleteRangeState),
+		deleteRanges:     make(map[compactItemKey][]deleteRangeState),
 		compactRanges:    make(map[compactItemKey]*compactState),
 		deleteDataRange:  deleteDataRange,
 		compactDataRange: compactDataRange,
@@ -94,6 +94,10 @@ func newGCManager(
 
 // add an item to delete the data in range (startTS, endTS] for `tableID` with `uniqueID`.
 func (d *gcManager) addGCItem(dbIndex int, uniqueKeyID uint64, tableID int64, startTS uint64, endTS uint64) {
+	if endTS <= startTS {
+		return
+	}
+
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
@@ -102,27 +106,16 @@ func (d *gcManager) addGCItem(dbIndex int, uniqueKeyID uint64, tableID int64, st
 		uniqueKeyID: uniqueKeyID,
 		tableID:     tableID,
 	}
-	state, ok := d.deleteRanges[key]
-	if !ok {
-		d.deleteRanges[key] = &deleteRangeState{
-			item: gcRangeItem{
-				dbIndex:     dbIndex,
-				uniqueKeyID: uniqueKeyID,
-				tableID:     tableID,
-				startTs:     startTS,
-				endTs:       endTS,
-			},
-			firstEnqueueTime: time.Now(),
-		}
-		return
-	}
-
-	if startTS < state.item.startTs {
-		state.item.startTs = startTS
-	}
-	if endTS > state.item.endTs {
-		state.item.endTs = endTS
-	}
+	d.deleteRanges[key] = insertDeleteRangeState(d.deleteRanges[key], deleteRangeState{
+		item: gcRangeItem{
+			dbIndex:     dbIndex,
+			uniqueKeyID: uniqueKeyID,
+			tableID:     tableID,
+			startTs:     startTS,
+			endTs:       endTS,
+		},
+		firstEnqueueTime: time.Now(),
+	})
 }
 
 func (d *gcManager) fetchAllGCItems() []gcRangeItem {
@@ -133,13 +126,26 @@ func (d *gcManager) fetchGCItems(now time.Time, minRangeInterval, maxDelay time.
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	ranges := make([]gcRangeItem, 0, len(d.deleteRanges))
-	for key, state := range d.deleteRanges {
-		if !shouldFlushDeleteRange(state, now, minRangeInterval, maxDelay) {
+	totalPendingRanges := 0
+	for _, states := range d.deleteRanges {
+		totalPendingRanges += len(states)
+	}
+
+	ranges := make([]gcRangeItem, 0, totalPendingRanges)
+	for key, states := range d.deleteRanges {
+		remaining := states[:0]
+		for _, state := range states {
+			if !shouldFlushDeleteRange(state, now, minRangeInterval, maxDelay) {
+				remaining = append(remaining, state)
+				continue
+			}
+			ranges = append(ranges, state.item)
+		}
+		if len(remaining) == 0 {
+			delete(d.deleteRanges, key)
 			continue
 		}
-		ranges = append(ranges, state.item)
-		delete(d.deleteRanges, key)
+		d.deleteRanges[key] = remaining
 	}
 	return ranges
 }
@@ -147,11 +153,58 @@ func (d *gcManager) fetchGCItems(now time.Time, minRangeInterval, maxDelay time.
 func (d *gcManager) pendingDeleteRangeCount() int {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	return len(d.deleteRanges)
+
+	count := 0
+	for _, states := range d.deleteRanges {
+		count += len(states)
+	}
+	return count
 }
 
-func shouldFlushDeleteRange(state *deleteRangeState, now time.Time, minRangeInterval, maxDelay time.Duration) bool {
-	if state == nil || state.item.endTs <= state.item.startTs {
+func insertDeleteRangeState(states []deleteRangeState, newState deleteRangeState) []deleteRangeState {
+	if newState.item.endTs <= newState.item.startTs {
+		return states
+	}
+	if len(states) == 0 {
+		return append(states, newState)
+	}
+
+	result := make([]deleteRangeState, 0, len(states)+1)
+	inserted := false
+
+	for _, state := range states {
+		if state.item.endTs < newState.item.startTs {
+			result = append(result, state)
+			continue
+		}
+		if newState.item.endTs < state.item.startTs {
+			if !inserted {
+				result = append(result, newState)
+				inserted = true
+			}
+			result = append(result, state)
+			continue
+		}
+
+		if state.item.startTs < newState.item.startTs {
+			newState.item.startTs = state.item.startTs
+		}
+		if state.item.endTs > newState.item.endTs {
+			newState.item.endTs = state.item.endTs
+		}
+		if state.firstEnqueueTime.Before(newState.firstEnqueueTime) {
+			newState.firstEnqueueTime = state.firstEnqueueTime
+		}
+	}
+
+	if !inserted {
+		result = append(result, newState)
+	}
+	return result
+}
+
+func shouldFlushDeleteRange(state deleteRangeState, now time.Time, minRangeInterval, maxDelay time.Duration) bool {
+	if state.item.endTs <= state.item.startTs {
 		return false
 	}
 	if maxDelay > 0 && now.Sub(state.firstEnqueueTime) >= maxDelay {

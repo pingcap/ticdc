@@ -159,19 +159,22 @@ func TestGCManagerDelaysSmallDeleteRanges(t *testing.T) {
 
 	compactKey := compactItemKey{dbIndex: 0, uniqueKeyID: 1, tableID: 10}
 	gcm.mu.Lock()
-	state, ok := gcm.deleteRanges[compactKey]
+	states, ok := gcm.deleteRanges[compactKey]
 	require.True(t, ok)
-	state.firstEnqueueTime = now
+	require.Len(t, states, 1)
+	states[0].firstEnqueueTime = now
+	gcm.deleteRanges[compactKey] = states
 	gcm.mu.Unlock()
 
 	ranges := gcm.fetchGCItems(now.Add(time.Minute), 5*time.Minute, 30*time.Minute)
 	require.Empty(t, ranges)
 
 	gcm.mu.Lock()
-	state, ok = gcm.deleteRanges[compactKey]
+	states, ok = gcm.deleteRanges[compactKey]
 	require.True(t, ok)
-	require.Equal(t, startTs, state.item.startTs)
-	require.Equal(t, endTs, state.item.endTs)
+	require.Len(t, states, 1)
+	require.Equal(t, startTs, states[0].item.startTs)
+	require.Equal(t, endTs, states[0].item.endTs)
 	gcm.mu.Unlock()
 
 	ranges = gcm.fetchGCItems(now.Add(31*time.Minute), 5*time.Minute, 30*time.Minute)
@@ -197,9 +200,11 @@ func TestGCManagerFlushesLargeDeleteRangeImmediately(t *testing.T) {
 
 	compactKey := compactItemKey{dbIndex: 0, uniqueKeyID: 1, tableID: 10}
 	gcm.mu.Lock()
-	state, ok := gcm.deleteRanges[compactKey]
+	states, ok := gcm.deleteRanges[compactKey]
 	require.True(t, ok)
-	state.firstEnqueueTime = now
+	require.Len(t, states, 1)
+	states[0].firstEnqueueTime = now
+	gcm.deleteRanges[compactKey] = states
 	gcm.mu.Unlock()
 
 	ranges := gcm.fetchGCItems(now.Add(time.Minute), 5*time.Minute, 30*time.Minute)
@@ -211,6 +216,47 @@ func TestGCManagerFlushesLargeDeleteRangeImmediately(t *testing.T) {
 		startTs:     startTs,
 		endTs:       endTs,
 	}, ranges[0])
+	require.Equal(t, 0, gcm.pendingDeleteRangeCount())
+}
+
+func TestGCManagerKeepsDisjointDeleteRangesSeparate(t *testing.T) {
+	gcm := newGCManager(nil, nil, nil)
+	now := time.Unix(100, 0)
+
+	firstStart := oracle.ComposeTS(1_000, 0)
+	firstEnd := oracle.ComposeTS(2_000, 0)
+	secondStart := oracle.ComposeTS(3_000, 0)
+	secondEnd := oracle.ComposeTS(4_000, 0)
+
+	gcm.addGCItem(0, 1, 10, firstStart, firstEnd)
+	gcm.addGCItem(0, 1, 10, secondStart, secondEnd)
+
+	compactKey := compactItemKey{dbIndex: 0, uniqueKeyID: 1, tableID: 10}
+	gcm.mu.Lock()
+	states, ok := gcm.deleteRanges[compactKey]
+	require.True(t, ok)
+	require.Len(t, states, 2)
+	states[0].firstEnqueueTime = now
+	states[1].firstEnqueueTime = now
+	gcm.deleteRanges[compactKey] = states
+	gcm.mu.Unlock()
+
+	ranges := gcm.fetchGCItems(now.Add(31*time.Minute), 5*time.Minute, 30*time.Minute)
+	require.Len(t, ranges, 2)
+	require.Equal(t, gcRangeItem{
+		dbIndex:     0,
+		uniqueKeyID: 1,
+		tableID:     10,
+		startTs:     firstStart,
+		endTs:       firstEnd,
+	}, ranges[0])
+	require.Equal(t, gcRangeItem{
+		dbIndex:     0,
+		uniqueKeyID: 1,
+		tableID:     10,
+		startTs:     secondStart,
+		endTs:       secondEnd,
+	}, ranges[1])
 	require.Equal(t, 0, gcm.pendingDeleteRangeCount())
 }
 
