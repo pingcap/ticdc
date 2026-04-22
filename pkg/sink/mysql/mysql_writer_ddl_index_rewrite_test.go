@@ -45,26 +45,31 @@ func disableDistTaskForTest(helper *commonEvent.EventTestHelper) {
 }
 
 func getIndexIDsFromJob(t *testing.T, job *timodel.Job) []int64 {
-	idxArgs, err := timodel.GetModifyIndexArgs(job)
-	if idxArgs != nil && err == nil {
-		indexIDs := make([]int64, 0, len(idxArgs.IndexArgs))
-		for _, indexArg := range idxArgs.IndexArgs {
-			indexIDs = append(indexIDs, indexArg.IndexID)
-		}
-		return indexIDs
+	if job.Type == timodel.ActionAddIndex {
+		return extractAddIndexIDsFromJob(job)
 	}
 
-	indexIDs := make([]int64, 0)
 	require.NotNil(t, job.MultiSchemaInfo)
+	indexIDs := make([]int64, 0)
 	for idx, subJob := range job.MultiSchemaInfo.SubJobs {
-		proxyJob := subJob.ToProxyJob(job, idx)
-		subIdxArgs, subErr := timodel.GetModifyIndexArgs(&proxyJob)
-		if subIdxArgs == nil || subErr != nil {
+		if subJob.Type != timodel.ActionAddIndex {
 			continue
 		}
-		for _, indexArg := range subIdxArgs.IndexArgs {
-			indexIDs = append(indexIDs, indexArg.IndexID)
-		}
+		proxyJob := subJob.ToProxyJob(job, idx)
+		indexIDs = append(indexIDs, extractAddIndexIDsFromJob(&proxyJob)...)
+	}
+	return indexIDs
+}
+
+func extractAddIndexIDsFromJob(job *timodel.Job) []int64 {
+	idxArgs, err := timodel.GetModifyIndexArgs(job)
+	if idxArgs == nil || err != nil {
+		return nil
+	}
+
+	indexIDs := make([]int64, 0, len(idxArgs.IndexArgs))
+	for _, indexArg := range idxArgs.IndexArgs {
+		indexIDs = append(indexIDs, indexArg.IndexID)
 	}
 	return indexIDs
 }
@@ -511,4 +516,36 @@ func TestCreateTableLikeKeepsAnonymousIndexNamesAfterDDLWaitCases(t *testing.T) 
 	require.NotNil(t, sourceTableInfo)
 	require.NotNil(t, likeTableInfo)
 	require.Equal(t, getSecondaryIndexNames(sourceTableInfo), getSecondaryIndexNames(likeTableInfo))
+}
+
+func TestRestoreAnonymousIndexToNamedIndexMultiSchemaChangeIgnoresNonAddIndexSubJobs(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+	disableDistTaskForTest(helper)
+
+	helper.Tk().MustExec("use test")
+
+	t.Run("drop index before anonymous add index", func(t *testing.T) {
+		helper.DDL2Event("create table t_drop_then_add (id int primary key, a int, key idx_old(id))")
+		assertRestoreAnonymousIndexToNamedIndex(
+			t,
+			helper,
+			"alter table t_drop_then_add drop index idx_old, add index (a)",
+			"ALTER TABLE `t_drop_then_add` DROP INDEX `idx_old`, ADD INDEX (`a`)",
+			true,
+			timodel.ActionMultiSchemaChange,
+		)
+	})
+
+	t.Run("add primary key before anonymous add index", func(t *testing.T) {
+		helper.DDL2Event("create table t_add_pk_then_add_idx (id int, a int)")
+		assertRestoreAnonymousIndexToNamedIndex(
+			t,
+			helper,
+			"alter table t_add_pk_then_add_idx add primary key(id), add index (a)",
+			"ALTER TABLE `t_add_pk_then_add_idx` ADD PRIMARY KEY(`id`), ADD INDEX (`a`)",
+			true,
+			timodel.ActionMultiSchemaChange,
+		)
+	})
 }

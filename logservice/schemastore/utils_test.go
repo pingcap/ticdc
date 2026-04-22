@@ -158,3 +158,57 @@ func TestGetIndexIDsReturnsAllAddIndexIDsInOrderForMultiSchemaChange(t *testing.
 	require.NotZero(t, anonymousIndexID)
 	require.Equal(t, []int64{namedIndexID, anonymousIndexID}, getIndexIDs(job))
 }
+
+func TestGetIndexIDsIgnoresDropIndexSubJobsForMultiSchemaChange(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	helper.DDL2Event("create table t (id int primary key, a int, key idx_old(id))")
+
+	job := helper.DDL2Job("alter table t drop index idx_old, add index (a)")
+	require.Equal(t, model.ActionMultiSchemaChange, job.Type)
+
+	tableInfo := helper.GetModelTableInfo(job)
+	require.NotNil(t, tableInfo)
+
+	var anonymousIndexID int64
+	for _, index := range tableInfo.Indices {
+		if index == nil || index.Primary || len(index.Columns) != 1 {
+			continue
+		}
+		if index.Columns[0].Name.L == "a" {
+			anonymousIndexID = index.ID
+			break
+		}
+	}
+	require.NotZero(t, anonymousIndexID)
+	require.Equal(t, []int64{anonymousIndexID}, getIndexIDs(job))
+}
+
+func TestGetIndexIDsIgnoresAddPrimaryKeySubJobsForMultiSchemaChange(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	helper.DDL2Event("create table t (id int, a int)")
+
+	job := helper.DDL2Job("alter table t add primary key(id), add index (a)")
+	require.Equal(t, model.ActionMultiSchemaChange, job.Type)
+
+	tableInfo := helper.GetModelTableInfo(job)
+	require.NotNil(t, tableInfo)
+
+	var anonymousIndexID int64
+	for _, index := range tableInfo.Indices {
+		if index == nil || index.Primary || len(index.Columns) != 1 {
+			continue
+		}
+		if index.Columns[0].Name.L == "a" {
+			anonymousIndexID = index.ID
+			break
+		}
+	}
+	require.NotZero(t, anonymousIndexID)
+	require.Equal(t, []int64{anonymousIndexID}, getIndexIDs(job))
+}
