@@ -95,11 +95,11 @@ func newGCManager(
 	}
 }
 
-// addDeleteRange records a coarse pending delete range for one subscription/table.
+// addGCItem records a coarse pending delete range for one subscription/table.
 // The range is widened to [minStartTs, maxEndTs] instead of tracking exact disjoint
 // intervals. Once checkpoint advances, any data below the newest endTs is safe to
 // delete, and deleting empty gaps is harmless for event store.
-func (d *gcManager) addDeleteRange(dbIndex int, uniqueKeyID uint64, tableID int64, startTS uint64, endTS uint64) {
+func (d *gcManager) addGCItem(dbIndex int, uniqueKeyID uint64, tableID int64, startTS uint64, endTS uint64) {
 	if endTS <= startTS {
 		return
 	}

@@ -67,8 +67,8 @@ func TestGCManager(t *testing.T) {
 	gcm := newGCManager([]*pebble.DB{nil}, deleteFn, compactFn)
 
 	// --- Test delete logic ---
-	gcm.addDeleteRange(0, 1, 10, 100, 200)
-	gcm.addDeleteRange(0, 1, 20, 300, 400) // Add a second table
+	gcm.addGCItem(0, 1, 10, 100, 200)
+	gcm.addGCItem(0, 1, 20, 300, 400) // Add a second table
 
 	{
 		ranges := gcm.fetchGCItems(time.Now(), 0, 0)
@@ -137,7 +137,7 @@ func TestGCManager(t *testing.T) {
 	require.Len(t, mdb.getCompactCalls(), 4, "should not compact again")
 
 	// --- Test re-compaction after new delete ---
-	gcm.addDeleteRange(0, 1, 10, 200, 300) // Add new item for the first table
+	gcm.addGCItem(0, 1, 10, 200, 300) // Add new item for the first table
 
 	{
 		ranges := gcm.fetchGCItems(time.Now(), 0, 0)
@@ -159,8 +159,8 @@ func TestGCManagerDelaysSmallDeleteRanges(t *testing.T) {
 	midTs := oracle.ComposeTS(2_000, 0)
 	endTs := oracle.ComposeTS(3_000, 0)
 
-	gcm.addDeleteRange(0, 1, 10, startTs, midTs)
-	gcm.addDeleteRange(0, 1, 10, midTs, endTs)
+	gcm.addGCItem(0, 1, 10, startTs, midTs)
+	gcm.addGCItem(0, 1, 10, midTs, endTs)
 
 	compactKey := compactItemKey{dbIndex: 0, uniqueKeyID: 1, tableID: 10}
 	gcm.mu.Lock()
@@ -198,7 +198,7 @@ func TestGCManagerFlushesLargeDeleteRangeImmediately(t *testing.T) {
 	startTs := oracle.ComposeTS(1_000, 0)
 	endTs := oracle.ComposeTS(1_000+6*60*1000, 0)
 
-	gcm.addDeleteRange(0, 1, 10, startTs, endTs)
+	gcm.addGCItem(0, 1, 10, startTs, endTs)
 
 	compactKey := compactItemKey{dbIndex: 0, uniqueKeyID: 1, tableID: 10}
 	gcm.mu.Lock()
@@ -228,8 +228,8 @@ func TestGCManagerWidensDisjointDeleteRanges(t *testing.T) {
 	secondStart := oracle.ComposeTS(3_000, 0)
 	secondEnd := oracle.ComposeTS(4_000, 0)
 
-	gcm.addDeleteRange(0, 1, 10, firstStart, firstEnd)
-	gcm.addDeleteRange(0, 1, 10, secondStart, secondEnd)
+	gcm.addGCItem(0, 1, 10, firstStart, firstEnd)
+	gcm.addGCItem(0, 1, 10, secondStart, secondEnd)
 
 	compactKey := compactItemKey{dbIndex: 0, uniqueKeyID: 1, tableID: 10}
 	gcm.mu.Lock()
