@@ -47,6 +47,7 @@ const (
 	defaultChangefeedName         = "storage-consumer"
 	defaultLogInterval            = 5 * time.Second
 	fakePartitionNumForSchemaFile = -1
+	metadataFileName              = "metadata"
 )
 
 type (
@@ -58,6 +59,10 @@ type (
 type indexRange struct {
 	start uint64
 	end   uint64
+}
+
+type storageMetadata struct {
+	CheckpointTs uint64 `json:"checkpoint-ts"`
 }
 
 type consumer struct {
@@ -79,6 +84,8 @@ type consumer struct {
 
 	dmlCount atomic.Int64
 	readSeq  atomic.Uint64
+
+	globalCheckpointTs uint64
 }
 
 func newConsumer(ctx context.Context) (*consumer, error) {
@@ -198,7 +205,30 @@ func diffDMLMaps(
 	return resMap
 }
 
-// getNewFiles returns newly created dml files in specific ranges
+func (c *consumer) getGlobalCheckpointTs(ctx context.Context) error {
+	exists, err := c.externalStorage.FileExists(ctx, metadataFileName)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	if !exists {
+		return nil
+	}
+
+	data, err := c.externalStorage.ReadFile(ctx, metadataFileName)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	var metadata storageMetadata
+	if err := json.Unmarshal(data, &metadata); err != nil {
+		return errors.Trace(err)
+	}
+	if metadata.CheckpointTs > c.globalCheckpointTs {
+		c.globalCheckpointTs = metadata.CheckpointTs
+	}
+	return nil
+}
+
+// getNewFiles returns newly created dml files in specific ranges that are visible under checkpointTs.
 func (c *consumer) getNewFiles(
 	ctx context.Context,
 ) (map[cloudstorage.DmlPathKey]fileIndexRange, error) {
@@ -401,6 +431,13 @@ func (c *consumer) parseDMLFilePath(ctx context.Context, path string) error {
 	if err != nil {
 		return errors.Trace(err)
 	}
+	if dmlkey.TableVersion > c.globalCheckpointTs {
+		log.Debug("skip dml index file by checkpoint",
+			zap.String("path", path),
+			zap.Uint64("tableVersion", dmlkey.TableVersion),
+			zap.Uint64("checkpointTs", c.globalCheckpointTs))
+		return nil
+	}
 	data, err := c.externalStorage.ReadFile(ctx, path)
 	if err != nil {
 		return errors.Trace(err)
@@ -434,6 +471,13 @@ func (c *consumer) parseSchemaFilePath(ctx context.Context, path string) error {
 	checksumInFile, err := schemaKey.ParseSchemaFilePath(path)
 	if err != nil {
 		return errors.Trace(err)
+	}
+	if schemaKey.TableVersion > c.globalCheckpointTs {
+		log.Debug("skip schema file by checkpoint",
+			zap.String("path", path),
+			zap.Uint64("tableVersion", schemaKey.TableVersion),
+			zap.Uint64("checkpointTs", c.globalCheckpointTs))
+		return nil
 	}
 	key := schemaKey.GetKey()
 	if tableDefs, ok := c.tableDefMap[key]; ok {
@@ -705,12 +749,17 @@ func (c *consumer) handle(ctx context.Context) error {
 		}
 
 		round++
+		err := c.getGlobalCheckpointTs(ctx)
+		if err != nil {
+			return errors.Trace(err)
+		}
 		dmlFileMap, err := c.getNewFiles(ctx)
 		if err != nil {
 			return errors.Trace(err)
 		}
 		log.Info("storage consumer scan done",
 			zap.Uint64("round", round),
+			zap.Uint64("checkpointTs", c.globalCheckpointTs),
 			zap.Int("dmlPathKeyCount", len(dmlFileMap)))
 
 		err = c.handleNewFiles(ctx, dmlFileMap, round)
