@@ -123,7 +123,7 @@ func newInc(num int64, inc *atomic.Int64, notify ...*sync.WaitGroup) *Inc {
 
 func TestStreamBasic(t *testing.T) {
 	handler := mockHandler{}
-	stream := newStream(1, "test", &handler, Option{UseBuffer: false})
+	stream := newStream(1, "test", &handler, Option{UseBuffer: false}, newTestBatchConfigRegistry())
 	require.Equal(t, 0, stream.getPendingSize())
 
 	stream.start()
@@ -162,7 +162,7 @@ func TestStreamBasic(t *testing.T) {
 
 func TestStreamBasicWithBuffer(t *testing.T) {
 	handler := mockHandler{}
-	stream := newStream(1, "test", &handler, Option{UseBuffer: true})
+	stream := newStream(1, "test", &handler, Option{UseBuffer: true}, newTestBatchConfigRegistry())
 	require.Equal(t, 0, stream.getPendingSize())
 
 	stream.start()
@@ -205,4 +205,31 @@ func TestPathInfo(t *testing.T) {
 	require.Equal(t, 1, pi.area)
 	require.Equal(t, "test/path", pi.path)
 	require.Equal(t, int64(0), pi.pendingSize.Load())
+}
+
+func TestStreamCleansBatcherBufferAfterHandle(t *testing.T) {
+	handler := mockHandler{}
+	stream := newStream(1, "test", &handler, Option{UseBuffer: false}, newTestBatchConfigRegistry())
+
+	stream.start()
+
+	path := newPathInfo[int, string, *mockEvent, any, *mockHandler](1, "test", "test/path", nil)
+	stream.addPath(path)
+
+	var wg sync.WaitGroup
+	stream.addEvent(eventWrap[int, string, *mockEvent, any, *mockHandler]{
+		pathInfo: path,
+		event:    newMockEvent(1, path.path, 0, nil, nil, &wg),
+	})
+
+	wg.Wait()
+	stream.close()
+
+	if cap(stream.batcher.buf) == 0 {
+		return
+	}
+	backing := stream.batcher.buf[:cap(stream.batcher.buf)]
+	for _, event := range backing {
+		require.Nil(t, event)
+	}
 }

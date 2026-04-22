@@ -60,6 +60,34 @@ func (mr *MockSinkMockRecorder) AddDMLEvent(event interface{}) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AddDMLEvent", reflect.TypeOf((*MockSink)(nil).AddDMLEvent), event)
 }
 
+// BatchBytes mocks base method.
+func (m *MockSink) BatchBytes() int {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "BatchBytes")
+	ret0, _ := ret[0].(int)
+	return ret0
+}
+
+// BatchBytes indicates an expected call of BatchBytes.
+func (mr *MockSinkMockRecorder) BatchBytes() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BatchBytes", reflect.TypeOf((*MockSink)(nil).BatchBytes))
+}
+
+// BatchCount mocks base method.
+func (m *MockSink) BatchCount() int {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "BatchCount")
+	ret0, _ := ret[0].(int)
+	return ret0
+}
+
+// BatchCount indicates an expected call of BatchCount.
+func (mr *MockSinkMockRecorder) BatchCount() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BatchCount", reflect.TypeOf((*MockSink)(nil).BatchCount))
+}
+
 // Close mocks base method.
 func (m *MockSink) Close(removeChangefeed bool) {
 	m.ctrl.T.Helper()

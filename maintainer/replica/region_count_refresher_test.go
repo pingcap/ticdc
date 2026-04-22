@@ -23,7 +23,7 @@ import (
 )
 
 func TestNewRegionCountRefresher(t *testing.T) {
-	testutil.SetUpTestServices()
+	testutil.SetUpTestServices(t)
 	changefeedID := common.NewChangefeedID4Test("keyspace", "test")
 
 	refresher := NewRegionCountRefresher(changefeedID, 0)

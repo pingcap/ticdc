@@ -98,6 +98,31 @@ func TestManagerCloseRemovesUpstreams(t *testing.T) {
 	require.False(t, ok)
 }
 
+func TestManagerAddUpstreamFailureClosesAndRemovesUpstream(t *testing.T) {
+	t.Parallel()
+
+	m := NewManager(context.Background(), NodeTopologyCfg{GCServiceID: "id"})
+
+	canceled := uatomic.NewBool(false)
+	m.initUpstreamFunc = func(_ context.Context, up *Upstream, _ *NodeTopologyCfg) error {
+		up.cancel = func() { canceled.Store(true) }
+		return errors.New("test")
+	}
+
+	up := m.AddUpstream(&UpstreamInfo{ID: 3})
+	require.NotNil(t, up)
+
+	require.Eventually(t, func() bool {
+		_, ok := m.Get(uint64(3))
+		return !ok
+	}, time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool {
+		return canceled.Load()
+	}, time.Second, 10*time.Millisecond)
+	require.True(t, up.IsClosed())
+	require.EqualError(t, up.Error(), "test")
+}
+
 func TestManagerVisit(t *testing.T) {
 	t.Parallel()
 

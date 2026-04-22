@@ -15,6 +15,7 @@ package testutil
 import (
 	"context"
 	"fmt"
+	"testing"
 	"unsafe"
 
 	"github.com/pingcap/kvproto/pkg/keyspacepb"
@@ -40,15 +41,22 @@ func GetTableSpanByID(id common.TableID) *heartbeatpb.TableSpan {
 	}
 }
 
-// InitializeTestServices sets up the node manager and message center for testing
-func SetUpTestServices() {
+// SetUpTestServices installs the shared test services and keeps them alive for the
+// whole test. The message center must stay open until cleanup because callers store
+// it in app context and use it after this helper returns.
+//
+// The returned node ID lets tests exercise the live local message center without
+// reaching into its internal state.
+func SetUpTestServices(t testing.TB) node.ID {
+	t.Helper()
+
 	n := node.NewInfo("", "")
 	mockPDClock := pdutil.NewClock4Test()
 	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
 
 	mc := messaging.NewMessageCenter(context.Background(), n.ID, config.NewDefaultMessageCenterConfig(n.AdvertiseAddr), nil)
 	mc.Run(context.Background())
-	defer mc.Close()
+	t.Cleanup(mc.Close)
 	appcontext.SetService(appcontext.MessageCenter, mc)
 
 	nodeManager := watcher.NewNodeManager(nil, nil)
@@ -59,6 +67,8 @@ func SetUpTestServices() {
 
 	pdAPIClient := NewMockPDAPIClient()
 	appcontext.SetService(appcontext.PDAPIClient, pdAPIClient)
+
+	return n.ID
 }
 
 type MockCache struct {

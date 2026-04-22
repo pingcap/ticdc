@@ -80,19 +80,39 @@ func New(
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
+	return newWithComponents(ctx, changefeedID, protocol, comp)
+}
+
+func newWithComponents(
+	ctx context.Context,
+	changefeedID commonType.ChangeFeedID,
+	protocol config.Protocol,
+	comp components,
+) (*sink, error) {
+	var (
+		err           error
+		asyncProducer kafka.AsyncProducer
+		syncProducer  kafka.SyncProducer
+	)
 	defer func() {
 		if err != nil {
+			if syncProducer != nil {
+				syncProducer.Close()
+			}
+			if asyncProducer != nil {
+				asyncProducer.Close()
+			}
 			comp.close()
 		}
 	}()
 
 	statistics := metrics.NewStatistics(changefeedID, "sink")
-	asyncProducer, err := comp.factory.AsyncProducer(ctx)
+	asyncProducer, err = comp.factory.AsyncProducer(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	syncProducer, err := comp.factory.SyncProducer(ctx)
+	syncProducer, err = comp.factory.SyncProducer(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -548,4 +568,12 @@ func (s *sink) Close(_ bool) {
 	s.dmlProducer.Close()
 	s.comp.close()
 	s.statistics.Close()
+}
+
+func (s *sink) BatchCount() int {
+	return 4096
+}
+
+func (s *sink) BatchBytes() int {
+	return 0
 }

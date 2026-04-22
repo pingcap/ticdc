@@ -19,6 +19,7 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -28,6 +29,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	pkgcloudstorage "github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/util"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
@@ -132,6 +134,77 @@ func TestBasicFunctionality(t *testing.T) {
 	ddlEvent2.PostFlush()
 
 	require.Equal(t, count.Load(), int64(3))
+}
+
+func TestIgnoreCallsAfterRunError(t *testing.T) {
+	uri := fmt.Sprintf("file:///%s?protocol=csv", t.TempDir())
+	sinkURI, err := url.Parse(uri)
+	require.NoError(t, err)
+
+	replicaConfig := config.GetDefaultReplicaConfig()
+	err = replicaConfig.ValidateAndAdjust(sinkURI)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	mockPDClock := pdutil.NewClock4Test()
+	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+
+	cloudStorageSink, err := newSinkForTest(ctx, replicaConfig, sinkURI, nil)
+	require.NoError(t, err)
+	cloudStorageSink.cfg.FileCleanupCronSpec = "invalid cron spec"
+
+	runDone := make(chan error, 1)
+	go func() {
+		runDone <- cloudStorageSink.Run(ctx)
+	}()
+
+	require.Eventually(t, func() bool {
+		return !cloudStorageSink.IsNormal()
+	}, 5*time.Second, 10*time.Millisecond)
+
+	select {
+	case err = <-runDone:
+		require.Error(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("sink.Run did not return after fatal error")
+	}
+
+	tableInfo := &common.TableInfo{
+		TableName: common.TableName{
+			Schema:  "test",
+			Table:   "t_ignore_after_error",
+			TableID: 100,
+		},
+	}
+	event := commonEvent.NewDMLEvent(common.NewDispatcherID(), tableInfo.TableName.TableID, 1, 1, tableInfo)
+	event.TableInfoVersion = 1
+	event.Length = 1
+	event.ApproximateSize = 1
+
+	require.Zero(t, cloudStorageSink.dmlWriters.msgCh.Len())
+	cloudStorageSink.AddDMLEvent(event)
+	require.Zero(t, cloudStorageSink.dmlWriters.msgCh.Len())
+
+	ddlEvent := &commonEvent.DDLEvent{
+		DispatcherID: common.NewDispatcherID(),
+		FinishedTs:   1,
+	}
+	err = cloudStorageSink.FlushDMLBeforeBlock(ddlEvent)
+	require.Error(t, err)
+	err = cloudStorageSink.WriteBlockEvent(ddlEvent)
+	require.Error(t, err)
+}
+
+func TestCloudStorageSinkBatchConfig(t *testing.T) {
+	sink := &sink{
+		cfg: &pkgcloudstorage.Config{
+			FileSize: 2048,
+		},
+	}
+	require.Equal(t, 4096, sink.BatchCount())
+	require.Equal(t, 2048, sink.BatchBytes())
 }
 
 func TestWriteDDLEvent(t *testing.T) {
@@ -386,15 +459,6 @@ func TestWriteDDLEventWithInvalidExchangePartitionEvent(t *testing.T) {
 	err = replicaConfig.ValidateAndAdjust(sinkURI)
 	require.NoError(t, err)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	mockPDClock := pdutil.NewClock4Test()
-	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
-
-	cloudStorageSink, err := newSinkForTest(ctx, replicaConfig, sinkURI, nil)
-	require.NoError(t, err)
-
 	tableInfo := common.WrapTableInfo("test", &timodel.TableInfo{
 		ID:   20,
 		Name: ast.NewCIStr("table1"),
@@ -408,6 +472,15 @@ func TestWriteDDLEventWithInvalidExchangePartitionEvent(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			mockPDClock := pdutil.NewClock4Test()
+			appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+
+			cloudStorageSink, err := newSinkForTest(ctx, replicaConfig, sinkURI, nil)
+			require.NoError(t, err)
+
 			ddlEvent := &commonEvent.DDLEvent{
 				Query:           "alter table test.table1 exchange partition p0 with table test.table2",
 				Type:            byte(timodel.ActionExchangeTablePartition),
@@ -456,6 +529,39 @@ func TestWriteCheckpointEvent(t *testing.T) {
 	require.JSONEq(t, `{"checkpoint-ts":100}`, string(metadata))
 }
 
+func TestCloseBeforeRunDoesNotPanicAndCleansSpool(t *testing.T) {
+	spoolBaseDir := t.TempDir()
+	uri := fmt.Sprintf("file:///%s?protocol=csv&spool-base-dir=%s", t.TempDir(), url.QueryEscape(spoolBaseDir))
+	sinkURI, err := url.Parse(uri)
+	require.NoError(t, err)
+
+	replicaConfig := config.GetDefaultReplicaConfig()
+	err = replicaConfig.ValidateAndAdjust(sinkURI)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	mockPDClock := pdutil.NewClock4Test()
+	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+
+	changefeedID := common.NewChangefeedID4Test("test", "close-before-run")
+	cloudStorageSink, err := New(ctx, changefeedID, sinkURI, replicaConfig.Sink, true, nil)
+	require.NoError(t, err)
+
+	spoolDir := filepath.Join(spoolBaseDir, changefeedID.Keyspace(), changefeedID.Name())
+	_, err = os.Stat(spoolDir)
+	require.NoError(t, err)
+
+	require.NotPanics(t, func() {
+		cloudStorageSink.Close(false)
+	})
+
+	_, err = os.Stat(spoolDir)
+	require.Error(t, err)
+	require.True(t, os.IsNotExist(err))
+}
+
 func TestCleanupExpiredFiles(t *testing.T) {
 	parentDir := t.TempDir()
 	uri := fmt.Sprintf("file:///%s?protocol=csv", parentDir)
@@ -489,4 +595,34 @@ func TestCleanupExpiredFiles(t *testing.T) {
 
 	time.Sleep(5 * time.Second)
 	require.LessOrEqual(t, int64(1), count.Load())
+}
+
+func TestRemoveEmptyDirsCleanupJobCanRunMultipleTimes(t *testing.T) {
+	parentDir := t.TempDir()
+	uri := fmt.Sprintf("file:///%s?protocol=csv", parentDir)
+	sinkURI, err := url.Parse(uri)
+	require.NoError(t, err)
+
+	replicaConfig := config.GetDefaultReplicaConfig()
+	err = replicaConfig.ValidateAndAdjust(sinkURI)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	cloudStorageSink, err := newSinkForTest(ctx, replicaConfig, sinkURI, nil)
+	require.NoError(t, err)
+
+	cleanupJobs := cloudStorageSink.genCleanupJob(ctx, sinkURI)
+	require.NotEmpty(t, cleanupJobs)
+
+	firstEmptyDir := filepath.Join(parentDir, "first")
+	require.NoError(t, os.MkdirAll(firstEmptyDir, 0o755))
+	cleanupJobs[0]()
+	_, err = os.Stat(firstEmptyDir)
+	require.ErrorIs(t, err, os.ErrNotExist)
+
+	secondEmptyDir := filepath.Join(parentDir, "second")
+	require.NoError(t, os.MkdirAll(secondEmptyDir, 0o755))
+	cleanupJobs[0]()
+	_, err = os.Stat(secondEmptyDir)
+	require.ErrorIs(t, err, os.ErrNotExist)
 }
