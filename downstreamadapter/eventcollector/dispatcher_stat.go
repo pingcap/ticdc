@@ -441,6 +441,7 @@ func (d *dispatcherStat) isFromCurrentEpoch(event dispatcher.DispatcherEvent, st
 //
 // 3. Finally: Forward valid events to target with wake callback
 func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEvent) bool {
+	log.Info("handle batch data events", zap.Int("eventCount", len(events)), zap.Stringer("changefeedID", d.target.GetChangefeedID()), zap.Stringer("dispatcher", d.getDispatcherID()))
 	var validEvents []dispatcher.DispatcherEvent
 	state := d.loadCurrentEpochState()
 	for _, event := range events {
