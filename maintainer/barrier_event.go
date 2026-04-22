@@ -32,6 +32,8 @@ import (
 	"go.uber.org/zap"
 )
 
+const fanoutPassResendQuietInterval = time.Second
+
 // BarrierEvent is a barrier event that reported by dispatchers, note is a block multiple dispatchers
 // all of these dispatchers should report the same event
 type BarrierEvent struct {
@@ -70,8 +72,10 @@ type BarrierEvent struct {
 	//    so only we use table trigger to create rangeChecker can ensure the coverage is correct.
 	reportedDispatchers map[common.DispatcherID]struct{}
 	// rangeChecker is used to check if all the dispatchers reported the block events
-	rangeChecker   range_checker.RangeChecker
-	lastResendTime time.Time
+	rangeChecker           range_checker.RangeChecker
+	lastResendTime         time.Time
+	lastStatusReceivedTime time.Time
+	passActionSent         bool
 
 	lastWarningLogTime time.Time
 }
@@ -106,7 +110,8 @@ func NewBlockEvent(cfID common.ChangeFeedID,
 		reportedDispatchers: make(map[common.DispatcherID]struct{}),
 		lastResendTime:      time.Time{},
 
-		lastWarningLogTime: time.Now(),
+		lastStatusReceivedTime: time.Now(),
+		lastWarningLogTime:     time.Now(),
 	}
 
 	if status.BlockTables != nil {
@@ -215,6 +220,7 @@ func (be *BarrierEvent) onAllDispatcherReportedBlockEvent(dispatcherID common.Di
 	be.selected.Store(true)
 	be.writerDispatcher = dispatcher
 	be.lastResendTime = time.Now()
+	be.passActionSent = false
 	log.Info("all dispatcher reported heartbeat, schedule it, and select one to write",
 		zap.String("changefeed", be.cfID.Name()),
 		zap.String("dispatcher", be.writerDispatcher.String()),
@@ -289,6 +295,10 @@ func (be *BarrierEvent) markTableDone(tableID int64) {
 	be.rangeChecker.AddSubRange(tableID, nil, nil)
 }
 
+func (be *BarrierEvent) markStatusReceived() {
+	be.lastStatusReceivedTime = time.Now()
+}
+
 func (be *BarrierEvent) addDispatchersToRangeChecker() {
 	for dispatcher := range be.reportedDispatchers {
 		replicaSpan := be.spanController.GetTaskByID(dispatcher)
@@ -304,6 +314,9 @@ func (be *BarrierEvent) addDispatchersToRangeChecker() {
 }
 
 func (be *BarrierEvent) markDispatcherEventDone(dispatcherID common.DispatcherID) {
+	if be.selected.Load() {
+		be.markStatusReceived()
+	}
 	replicaSpan := be.spanController.GetTaskByID(dispatcherID)
 	if replicaSpan == nil {
 		log.Warn("dispatcher not found, ignore",
@@ -580,7 +593,8 @@ func forwardBarrierEvent(replication *replica.SpanReplication, event *BarrierEve
 }
 
 func (be *BarrierEvent) resend(mode int64) []*messaging.TargetMessage {
-	if time.Since(be.lastResendTime) < time.Second {
+	now := time.Now()
+	if now.Sub(be.lastResendTime) < time.Second {
 		return nil
 	}
 	var msgs []*messaging.TargetMessage
@@ -629,9 +643,9 @@ func (be *BarrierEvent) resend(mode int64) []*messaging.TargetMessage {
 		be.checkBlockedDispatchers()
 		return nil
 	}
-	be.lastResendTime = time.Now()
 	// we select a dispatcher as the writer, still waiting for that dispatcher advance its checkpoint ts
 	if !be.writerDispatcherAdvanced {
+		be.lastResendTime = now
 		// resend write action
 		stm := be.spanController.GetTaskByID(be.writerDispatcher)
 		if stm == nil || stm.GetNodeID() == "" {
@@ -676,9 +690,23 @@ func (be *BarrierEvent) resend(mode int64) []*messaging.TargetMessage {
 		msgs = []*messaging.TargetMessage{be.newWriterActionMessage(stm.GetNodeID(), mode)}
 	} else {
 		// the writer dispatcher is advanced, resend pass action
+		if be.passActionSent && be.isFanoutPassAction() &&
+			now.Sub(be.lastStatusReceivedTime) < fanoutPassResendQuietInterval {
+			return nil
+		}
+		be.passActionSent = true
+		be.lastResendTime = now
 		return be.sendPassAction(mode)
 	}
 	return msgs
+}
+
+func (be *BarrierEvent) isFanoutPassAction() bool {
+	if be.blockedDispatchers == nil {
+		return false
+	}
+	return be.blockedDispatchers.InfluenceType == heartbeatpb.InfluenceType_All ||
+		be.blockedDispatchers.InfluenceType == heartbeatpb.InfluenceType_DB
 }
 
 func (be *BarrierEvent) newWriterActionMessage(capture node.ID, mode int64) *messaging.TargetMessage {

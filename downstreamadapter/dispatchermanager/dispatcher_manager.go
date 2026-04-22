@@ -45,6 +45,8 @@ import (
 	"go.uber.org/zap"
 )
 
+const maxBlockStatusesPerRequest = 2048
+
 /*
 DispatcherManager manages dispatchers for a changefeed instance with responsibilities including:
 
@@ -566,11 +568,19 @@ func (e *DispatcherManager) collectErrors(ctx context.Context) {
 // collectBlockStatusRequest collect the block status from the block status channel and report to the maintainer.
 func (e *DispatcherManager) collectBlockStatusRequest(ctx context.Context) {
 	enqueueBlockStatus := func(blockStatusMessage []*heartbeatpb.TableSpanBlockStatus, mode int64) {
-		var message heartbeatpb.BlockStatusRequest
-		message.ChangefeedID = e.changefeedID.ToPB()
-		message.BlockStatuses = blockStatusMessage
-		message.Mode = mode
-		e.blockStatusRequestQueue.Enqueue(&BlockStatusRequestWithTargetID{TargetID: e.GetMaintainerID(), Request: &message})
+		// Split oversized batches so one protobuf message does not monopolize
+		// serialization, transport, and maintainer-side processing.
+		for start := 0; start < len(blockStatusMessage); start += maxBlockStatusesPerRequest {
+			end := start + maxBlockStatusesPerRequest
+			if end > len(blockStatusMessage) {
+				end = len(blockStatusMessage)
+			}
+			var message heartbeatpb.BlockStatusRequest
+			message.ChangefeedID = e.changefeedID.ToPB()
+			message.BlockStatuses = blockStatusMessage[start:end]
+			message.Mode = mode
+			e.blockStatusRequestQueue.Enqueue(&BlockStatusRequestWithTargetID{TargetID: e.GetMaintainerID(), Request: &message})
+		}
 	}
 	for {
 		blockStatusMessage := make([]*heartbeatpb.TableSpanBlockStatus, 0)

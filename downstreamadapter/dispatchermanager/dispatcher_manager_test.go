@@ -125,6 +125,7 @@ func createTestManager(t *testing.T) *DispatcherManager {
 		metricResolvedTs:           metrics.DispatcherManagerResolvedTsGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
 		metricCheckpointTsLag:      metrics.DispatcherManagerCheckpointTsLagGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
 		metricResolvedTsLag:        metrics.DispatcherManagerResolvedTsLagGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
+		metricBlockStatusesChanLen: metrics.DispatcherManagerBlockStatusesChanLenGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
 	}
 
 	// Create shared info for the test manager
@@ -217,6 +218,66 @@ func TestCollectComponentStatusWhenChangedWatermarkSeqNoFallback(t *testing.T) {
 	require.Equal(t, uint64(200), req.Request.RedoWatermark.Seq)
 }
 
+func TestCollectBlockStatusRequestSplitsOversizedMessages(t *testing.T) {
+	manager := createTestManager(t)
+
+	for i := 0; i < maxBlockStatusesPerRequest+2; i++ {
+		manager.sharedInfo.OfferBlockStatus(newWaitingBlockStatus(common.DefaultMode, uint64(i+1)))
+	}
+	for i := 0; i < maxBlockStatusesPerRequest+1; i++ {
+		manager.sharedInfo.OfferBlockStatus(newWaitingBlockStatus(common.RedoMode, uint64(i+10000)))
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		manager.collectBlockStatusRequest(ctx)
+		close(done)
+	}()
+	defer func() {
+		cancel()
+		<-done
+	}()
+
+	dequeueRequest := func() *BlockStatusRequestWithTargetID {
+		t.Helper()
+		dequeueCtx, cancelDequeue := context.WithTimeout(context.Background(), time.Second)
+		defer cancelDequeue()
+		req := manager.blockStatusRequestQueue.Dequeue(dequeueCtx)
+		require.NotNil(t, req)
+		require.NotNil(t, req.Request)
+		return req
+	}
+
+	defaultFirst := dequeueRequest()
+	defaultSecond := dequeueRequest()
+	redoFirst := dequeueRequest()
+	redoSecond := dequeueRequest()
+
+	require.Equal(t, common.DefaultMode, defaultFirst.Request.Mode)
+	require.Len(t, defaultFirst.Request.BlockStatuses, maxBlockStatusesPerRequest)
+	require.Equal(t, uint64(1), defaultFirst.Request.BlockStatuses[0].State.BlockTs)
+	require.Equal(t, uint64(maxBlockStatusesPerRequest), defaultFirst.Request.BlockStatuses[maxBlockStatusesPerRequest-1].State.BlockTs)
+
+	require.Equal(t, common.DefaultMode, defaultSecond.Request.Mode)
+	require.Len(t, defaultSecond.Request.BlockStatuses, 2)
+	require.Equal(t, uint64(maxBlockStatusesPerRequest+1), defaultSecond.Request.BlockStatuses[0].State.BlockTs)
+	require.Equal(t, uint64(maxBlockStatusesPerRequest+2), defaultSecond.Request.BlockStatuses[1].State.BlockTs)
+
+	require.Equal(t, common.RedoMode, redoFirst.Request.Mode)
+	require.Len(t, redoFirst.Request.BlockStatuses, maxBlockStatusesPerRequest)
+	require.Equal(t, uint64(10000), redoFirst.Request.BlockStatuses[0].State.BlockTs)
+	require.Equal(t, uint64(10000+maxBlockStatusesPerRequest-1), redoFirst.Request.BlockStatuses[maxBlockStatusesPerRequest-1].State.BlockTs)
+
+	require.Equal(t, common.RedoMode, redoSecond.Request.Mode)
+	require.Len(t, redoSecond.Request.BlockStatuses, 1)
+	require.Equal(t, uint64(10000+maxBlockStatusesPerRequest), redoSecond.Request.BlockStatuses[0].State.BlockTs)
+
+	shortCtx, shortCancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer shortCancel()
+	require.Nil(t, manager.blockStatusRequestQueue.Dequeue(shortCtx))
+}
+
 func TestMergeDispatcherNormal(t *testing.T) {
 	manager := createTestManager(t)
 
@@ -248,6 +309,18 @@ func TestMergeDispatcherNormal(t *testing.T) {
 	require.Equal(t, heartbeatpb.ComponentState_Preparing, mergedDispatcher.GetComponentStatus())
 	require.Equal(t, []byte("a"), mergedDispatcher.GetTableSpan().StartKey)
 	require.Equal(t, []byte("z"), mergedDispatcher.GetTableSpan().EndKey)
+}
+
+func newWaitingBlockStatus(mode int64, blockTs uint64) *heartbeatpb.TableSpanBlockStatus {
+	return &heartbeatpb.TableSpanBlockStatus{
+		ID: common.NewDispatcherID().ToPB(),
+		State: &heartbeatpb.State{
+			IsBlocked: true,
+			BlockTs:   blockTs,
+			Stage:     heartbeatpb.BlockStage_WAITING,
+		},
+		Mode: mode,
+	}
 }
 
 func TestMergeDispatcherInvalidIDs(t *testing.T) {
