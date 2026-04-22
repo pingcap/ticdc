@@ -68,6 +68,9 @@ func (s *drainScheduler) Execute() time.Time {
 	}
 
 	now := time.Now()
+	// Snapshot the nodes that still need evacuation in this tick. Execute works
+	// from a stable, sorted slice so round-robin fairness is deterministic even
+	// if the backing drain state changes between ticks.
 	drainingNodes := s.liveness.GetDrainingOrStoppingNodes()
 	if len(drainingNodes) == 0 {
 		return now.Add(time.Second)
@@ -89,6 +92,11 @@ func (s *drainScheduler) Execute() time.Time {
 		return now.Add(time.Second)
 	}
 
+	// Build per-node snapshots once for this tick:
+	// - nodeTaskSize is mutated in memory after each accepted move so later picks
+	//   in the same tick observe the updated load distribution.
+	// - maintainersByNode avoids repeatedly querying ChangefeedDB while walking
+	//   the draining nodes in round-robin order.
 	nodeTaskSize := s.changefeedDB.GetTaskSizePerNode()
 	maintainersByNode := make(map[node.ID][]*changefeed.Changefeed, len(drainingNodes))
 	nextMaintainerIndex := make(map[node.ID]int, len(drainingNodes))
@@ -101,6 +109,9 @@ func (s *drainScheduler) Execute() time.Time {
 		s.rrCursor = 0
 	}
 
+	// Walk draining nodes in rounds until we either consume the dedicated move
+	// budget or make no progress. Each round starts from rrCursor so a busy node
+	// does not monopolize the first scheduling chance forever.
 	for scheduled < availableSize {
 		progress := false
 		for i := 0; i < len(drainingNodes) && scheduled < availableSize; i++ {
@@ -146,9 +157,14 @@ func (s *drainScheduler) scheduleOneFromNode(
 	for nextIndex < len(maintainers) {
 		cf := maintainers[nextIndex]
 		nextIndex++
+		// Skip changefeeds that are already being added, moved, or stopped by
+		// another operator. Drain scheduling only fills genuinely free slots.
 		if s.operatorController.HasOperator(cf.ID.DisplayName) {
 			continue
 		}
+		// Choose against the mutable nodeTaskSize snapshot so multiple moves
+		// created in the same tick spread across destinations instead of all
+		// targeting the same initially cold node.
 		dest, ok := chooseLeastLoadedDest(origin, destCandidates, nodeTaskSize)
 		if !ok {
 			return nextIndex, false
