@@ -20,13 +20,27 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config/kerneltype"
+	ticonfig "github.com/pingcap/tidb/pkg/config"
+	"github.com/pingcap/tidb/pkg/disttask/framework/handle"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/stretchr/testify/require"
 )
 
+func init() {
+	if kerneltype.IsNextGen() {
+		ticonfig.UpdateGlobal(func(conf *ticonfig.Config) {
+			conf.Instance.TiDBServiceScope = handle.NextGenTargetScope
+		})
+	}
+}
+
 func disableDistTaskForTest(helper *commonEvent.EventTestHelper) {
+	if kerneltype.IsNextGen() {
+		return
+	}
 	helper.Tk().MustExec("set @@global.tidb_enable_dist_task = off")
 }
 
