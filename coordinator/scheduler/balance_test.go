@@ -87,7 +87,7 @@ func TestBalanceSchedulerSkipsWhenDrainActive(t *testing.T) {
 	require.Equal(t, 0, oc.OperatorSize())
 }
 
-func TestBalanceSchedulerSkipsUntilAllDrainCompleteAndCooldownExpires(t *testing.T) {
+func TestBalanceSchedulerSkipsUntilObservedDrainBlockWindowExpires(t *testing.T) {
 	setupCoordinatorSchedulerTestServices()
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
@@ -122,11 +122,11 @@ func TestBalanceSchedulerSkipsUntilAllDrainCompleteAndCooldownExpires(t *testing
 	s := NewBalanceScheduler("test", 10, oc, db, 0, drainController)
 	s.drainBalanceBlockedUntil = time.Time{}
 
-	// Any draining node should block balance.
+	// Any observed draining node should block balance.
 	_ = s.Execute()
 	require.Equal(t, 0, oc.OperatorSize())
 
-	// One node remains draining, balance is still blocked.
+	// One node remains draining, so another observation keeps extending the block window.
 	drainController.ObserveHeartbeat(drainingA, &heartbeatpb.NodeHeartbeat{
 		Liveness:  heartbeatpb.NodeLiveness_ALIVE,
 		NodeEpoch: 2,
@@ -134,7 +134,7 @@ func TestBalanceSchedulerSkipsUntilAllDrainCompleteAndCooldownExpires(t *testing
 	_ = s.Execute()
 	require.Equal(t, 0, oc.OperatorSize())
 
-	// After all nodes leave draining, cooldown still blocks balance.
+	// After drain disappears, the previously extended block window still blocks balance.
 	drainController.ObserveHeartbeat(drainingB, &heartbeatpb.NodeHeartbeat{
 		Liveness:  heartbeatpb.NodeLiveness_ALIVE,
 		NodeEpoch: 2,
@@ -148,7 +148,7 @@ func TestBalanceSchedulerSkipsUntilAllDrainCompleteAndCooldownExpires(t *testing
 	require.Greater(t, oc.OperatorSize(), 0)
 }
 
-func TestBalanceSchedulerUsesBalanceIntervalAsDrainCooldown(t *testing.T) {
+func TestBalanceSchedulerUsesBalanceIntervalAsDrainBlockWindow(t *testing.T) {
 	setupCoordinatorSchedulerTestServices()
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
