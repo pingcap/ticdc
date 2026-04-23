@@ -42,8 +42,15 @@ import (
 )
 
 const (
+<<<<<<< HEAD
 	defaultChangefeedName = "storage-consumer"
 	defaultLogInterval    = 5 * time.Second
+=======
+	defaultChangefeedName         = "storage-consumer"
+	defaultLogInterval            = 5 * time.Second
+	fakePartitionNumForSchemaFile = -1
+	metadataFileName              = "metadata"
+>>>>>>> 170515398 (consumer: skip data file by global checkpointTs in storage consumer (#4886))
 )
 
 type (
@@ -55,6 +62,10 @@ type (
 type indexRange struct {
 	start uint64
 	end   uint64
+}
+
+type storageMetadata struct {
+	CheckpointTs uint64 `json:"checkpoint-ts"`
 }
 
 type consumer struct {
@@ -76,6 +87,8 @@ type consumer struct {
 
 	dmlCount atomic.Int64
 	readSeq  atomic.Uint64
+
+	globalCheckpointTs uint64
 }
 
 func newConsumer(ctx context.Context) (*consumer, error) {
@@ -195,7 +208,30 @@ func diffDMLMaps(
 	return resMap
 }
 
-// getNewFiles returns newly created dml files in specific ranges
+func (c *consumer) getGlobalCheckpointTs(ctx context.Context) error {
+	exists, err := c.externalStorage.FileExists(ctx, metadataFileName)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	if !exists {
+		return nil
+	}
+
+	data, err := c.externalStorage.ReadFile(ctx, metadataFileName)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	var metadata storageMetadata
+	if err := json.Unmarshal(data, &metadata); err != nil {
+		return errors.Trace(err)
+	}
+	if metadata.CheckpointTs > c.globalCheckpointTs {
+		c.globalCheckpointTs = metadata.CheckpointTs
+	}
+	return nil
+}
+
+// getNewFiles returns newly created dml files in specific ranges that are visible under checkpointTs.
 func (c *consumer) getNewFiles(
 	ctx context.Context,
 ) (map[cloudstorage.DMLPathKey]fileIndexRange, error) {
@@ -396,7 +432,26 @@ func (c *consumer) flushDMLEvents(ctx context.Context, tableID int64) error {
 	}
 }
 
+<<<<<<< HEAD
 func (c *consumer) parseDMLIndexFile(ctx context.Context, path string, dmlkey cloudstorage.DMLPathKey) {
+=======
+func (c *consumer) parseDMLFilePath(ctx context.Context, path string) error {
+	var dmlkey cloudstorage.DmlPathKey
+	dispatcherID, err := dmlkey.ParseIndexFilePath(
+		putil.GetOrZero(c.replicationCfg.Sink.DateSeparator),
+		path,
+	)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	if c.globalCheckpointTs > 0 && dmlkey.TableVersion > c.globalCheckpointTs {
+		log.Debug("skip dml index file by checkpoint",
+			zap.String("path", path),
+			zap.Uint64("tableVersion", dmlkey.TableVersion),
+			zap.Uint64("checkpointTs", c.globalCheckpointTs))
+		return nil
+	}
+>>>>>>> 170515398 (consumer: skip data file by global checkpointTs in storage consumer (#4886))
 	data, err := c.externalStorage.ReadFile(ctx, path)
 	if err != nil {
 		log.Panic("read dml index file failed",
@@ -423,7 +478,21 @@ func (c *consumer) parseDMLIndexFile(ctx context.Context, path string, dmlkey cl
 
 func (c *consumer) parseSchemaFilePath(ctx context.Context, path string) {
 	var schemaKey cloudstorage.SchemaPathKey
+<<<<<<< HEAD
 	schemaKey.Parse(path)
+=======
+	checksumInFile, err := schemaKey.ParseSchemaFilePath(path)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	if c.globalCheckpointTs > 0 && schemaKey.TableVersion > c.globalCheckpointTs {
+		log.Debug("skip schema file by checkpoint",
+			zap.String("path", path),
+			zap.Uint64("tableVersion", schemaKey.TableVersion),
+			zap.Uint64("checkpointTs", c.globalCheckpointTs))
+		return nil
+	}
+>>>>>>> 170515398 (consumer: skip data file by global checkpointTs in storage consumer (#4886))
 	key := schemaKey.GetKey()
 	if schemaFiles, ok := c.schemaFileMap[key]; ok {
 		if _, ok := schemaFiles[schemaKey.TableVersion]; ok {
@@ -641,12 +710,17 @@ func (c *consumer) handle(ctx context.Context) error {
 		}
 
 		round++
+		err := c.getGlobalCheckpointTs(ctx)
+		if err != nil {
+			return errors.Trace(err)
+		}
 		dmlFileMap, err := c.getNewFiles(ctx)
 		if err != nil {
 			return errors.Trace(err)
 		}
 		log.Info("storage consumer scan done",
 			zap.Uint64("round", round),
+			zap.Uint64("checkpointTs", c.globalCheckpointTs),
 			zap.Int("dmlPathKeyCount", len(dmlFileMap)))
 
 		err = c.handleNewFiles(ctx, dmlFileMap, round)
