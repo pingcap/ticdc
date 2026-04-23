@@ -35,8 +35,7 @@ const (
 	// we consider it is in-active and remove it.
 	heartbeatTimeout = time.Second * 3600
 
-	minScanLimitInBytes     = 1024        // 1KB
-	maxScanLimitInBytes     = 1024 * 1024 // 1MB
+	minScanLimitInBytes     = 1024 // 1KB
 	updateScanLimitInterval = time.Second * 10
 
 	// Quick validation hack:
@@ -45,6 +44,16 @@ const (
 	fastRecoveryStartLagThreshold = 30 * time.Second
 	fastRecoveryScanLimitInBytes  = 16 * 1024 * 1024 // 16MB
 )
+
+func getDispatcherMaxScanLimitInBytes() int64 {
+	// Hack: remove the per-dispatcher 1MB ceiling and let dispatcher scan
+	// grow until it is constrained by the broker-level scan limit or memory quota.
+	limit := int64(config.GetGlobalServerConfig().Debug.EventService.ScanLimitInBytes)
+	if limit < minScanLimitInBytes {
+		return minScanLimitInBytes
+	}
+	return limit
+}
 
 // Store the progress of the dispatcher, and the incremental events stats.
 // Those information will be used to decide when will the worker start to handle the push task of this dispatcher.
@@ -230,14 +239,22 @@ func (a *dispatcherStat) onResolvedTs(resolvedTs uint64) bool {
 	if !a.hasReceivedFirstResolvedTs.Load() {
 		startLag := time.Duration(oracle.ExtractPhysical(resolvedTs)-oracle.ExtractPhysical(a.startTs)) * time.Millisecond
 		if startLag >= fastRecoveryStartLagThreshold {
-			a.currentScanLimitInBytes.Store(fastRecoveryScanLimitInBytes)
-			a.maxScanLimitInBytes.Store(fastRecoveryScanLimitInBytes)
-			a.availableMemoryQuota.Store(fastRecoveryScanLimitInBytes)
+			fastRecoveryLimit := int64(fastRecoveryScanLimitInBytes)
+			maxScanLimit := a.maxScanLimitInBytes.Load()
+			if fastRecoveryLimit > maxScanLimit {
+				fastRecoveryLimit = maxScanLimit
+			}
+			if a.currentScanLimitInBytes.Load() < fastRecoveryLimit {
+				a.currentScanLimitInBytes.Store(fastRecoveryLimit)
+			}
+			if a.availableMemoryQuota.Load() < uint64(fastRecoveryLimit) {
+				a.availableMemoryQuota.Store(uint64(fastRecoveryLimit))
+			}
 			log.Info("enable fast recovery scan limit for dispatcher",
 				zap.Stringer("changefeedID", a.changefeedStat.changefeedID),
 				zap.Stringer("dispatcherID", a.id),
 				zap.Duration("startLag", startLag),
-				zap.Int64("scanLimitInBytes", fastRecoveryScanLimitInBytes))
+				zap.Int64("scanLimitInBytes", fastRecoveryLimit))
 		}
 		log.Info("received first resolved ts from event store",
 			zap.Stringer("changefeedID", a.changefeedStat.changefeedID),
@@ -281,11 +298,11 @@ func (a *dispatcherStat) getCurrentScanLimitInBytes() int64 {
 	res := a.currentScanLimitInBytes.Load()
 	if time.Since(a.lastUpdateScanLimitTime.Load()) > updateScanLimitInterval {
 		maxScanLimit := a.maxScanLimitInBytes.Load()
-		if res > maxScanLimit {
+		if res >= maxScanLimit {
 			return maxScanLimit
 		}
 		newLimit := res * 2
-		if newLimit > maxScanLimit {
+		if res > maxScanLimit/2 || newLimit > maxScanLimit {
 			newLimit = maxScanLimit
 		}
 		a.currentScanLimitInBytes.Store(newLimit)
@@ -296,7 +313,7 @@ func (a *dispatcherStat) getCurrentScanLimitInBytes() int64 {
 
 func (a *dispatcherStat) resetScanLimit() {
 	a.currentScanLimitInBytes.Store(minScanLimitInBytes)
-	a.maxScanLimitInBytes.Store(maxScanLimitInBytes)
+	a.maxScanLimitInBytes.Store(getDispatcherMaxScanLimitInBytes())
 	a.lastUpdateScanLimitTime.Store(time.Now())
 }
 
