@@ -62,6 +62,18 @@ type notifyMsg struct {
 	latestCommitTs uint64
 }
 
+func collectWrapEventTypes(ch chan *wrapEvent) []int {
+	eventTypes := make([]int, 0)
+	for {
+		select {
+		case e := <-ch:
+			eventTypes = append(eventTypes, e.msgType)
+		default:
+			return eventTypes
+		}
+	}
+}
+
 func TestCheckNeedScan(t *testing.T) {
 	broker, _, _, _ := newEventBrokerForTest()
 	// Close the broker, so we can catch all message in the test.
@@ -117,6 +129,64 @@ func TestGetOrSetChangefeedStatusInitializesFilter(t *testing.T) {
 	reused := broker.getOrSetChangefeedStatus(info)
 	require.Same(t, status, reused)
 	require.Same(t, status.filter, reused.filter)
+}
+
+func TestAddDispatcherSendsReadyImmediatelyAfterRegistration(t *testing.T) {
+	broker, _, _, _ := newEventBrokerForTest()
+	broker.close()
+
+	info := newMockDispatcherInfoForTest(t)
+	err := broker.addDispatcher(info)
+	require.NoError(t, err)
+
+	dispPtr := broker.getDispatcher(info.GetID())
+	require.NotNil(t, dispPtr)
+	disp := dispPtr.Load()
+	require.NotNil(t, disp)
+
+	eventTypes := collectWrapEventTypes(broker.messageCh[disp.messageWorkerIndex])
+	require.Equal(t, []int{event.TypeReadyEvent}, eventTypes)
+}
+
+func TestResetDispatcherSendsHandshakeImmediatelyAfterEpochSwitch(t *testing.T) {
+	broker, _, _, _ := newEventBrokerForTest()
+	broker.close()
+
+	info := newMockDispatcherInfoForTest(t)
+	err := broker.addDispatcher(info)
+	require.NoError(t, err)
+
+	disp := broker.getDispatcher(info.GetID()).Load()
+	require.NotNil(t, disp)
+	collectWrapEventTypes(broker.messageCh[disp.messageWorkerIndex])
+
+	resetInfo := newMockDispatcherInfo(t, 500, info.GetID(), info.GetTableSpan().GetTableID(), eventpb.ActionType_ACTION_TYPE_RESET)
+	resetInfo.epoch = 1
+	err = broker.resetDispatcher(resetInfo)
+	require.NoError(t, err)
+
+	newDisp := broker.getDispatcher(info.GetID()).Load()
+	require.NotNil(t, newDisp)
+	require.Equal(t, uint64(1), newDisp.epoch)
+
+	eventTypes := collectWrapEventTypes(broker.messageCh[newDisp.messageWorkerIndex])
+	require.Equal(t, []int{event.TypeHandshakeEvent}, eventTypes)
+}
+
+func TestAddTableTriggerDispatcherDoesNotSendReadyImmediately(t *testing.T) {
+	broker, _, _, _ := newEventBrokerForTest()
+	broker.close()
+
+	info := newMockDispatcherInfo(t, 300, common.NewDispatcherID(), 0, eventpb.ActionType_ACTION_TYPE_REGISTER)
+	info.span = common.KeyspaceDDLSpan(testTableTriggerKeyspaceID)
+	err := broker.addDispatcher(info)
+	require.NoError(t, err)
+
+	disp := broker.getDispatcher(info.GetID()).Load()
+	require.NotNil(t, disp)
+
+	eventTypes := collectWrapEventTypes(broker.messageCh[disp.messageWorkerIndex])
+	require.Empty(t, eventTypes)
 }
 
 func TestOnNotify(t *testing.T) {
@@ -704,19 +774,25 @@ func TestHandleDispatcherHeartbeat_InactiveDispatcherCleanup(t *testing.T) {
 	ctx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	// Verify that a response was sent indicating the dispatcher is removed
-	select {
-	case msg := <-outputCh:
-		require.Equal(t, messaging.TypeDispatcherHeartbeatResponse, msg.Type)
-		// The response should contain a dispatcher state indicating removal
-		require.Len(t, msg.Message, 1)
-		response := msg.Message[0].(*event.DispatcherHeartbeatResponse)
-		require.NotNil(t, response)
-		states := response.DispatcherStates
-		require.Len(t, states, 1)
-		require.Equal(t, dispInfo.GetID(), states[0].DispatcherID)
-		require.Equal(t, event.DSStateRemoved, states[0].State)
-	case <-ctx.Done():
-		require.Fail(t, "Expected to receive a dispatcher heartbeat response")
+	for {
+		select {
+		case msg := <-outputCh:
+			if msg.Type != messaging.TypeDispatcherHeartbeatResponse {
+				continue
+			}
+			// Ignore earlier ready/handshake traffic and verify the heartbeat response itself.
+			require.Len(t, msg.Message, 1)
+			response := msg.Message[0].(*event.DispatcherHeartbeatResponse)
+			require.NotNil(t, response)
+			states := response.DispatcherStates
+			require.Len(t, states, 1)
+			require.Equal(t, dispInfo.GetID(), states[0].DispatcherID)
+			require.Equal(t, event.DSStateRemoved, states[0].State)
+			return
+		case <-ctx.Done():
+			require.Fail(t, "Expected to receive a dispatcher heartbeat response")
+			return
+		}
 	}
 }
 
@@ -939,7 +1015,7 @@ func TestSendHandshakeUsesStartTs(t *testing.T) {
 
 func TestAddDispatcherFailure(t *testing.T) {
 	broker, _, ss, _ := newEventBrokerForTest()
-	defer broker.close()
+	broker.close()
 
 	// Simulate schema store failure
 	ss.registerTableError = errors.New("mock error")
@@ -950,4 +1026,8 @@ func TestAddDispatcherFailure(t *testing.T) {
 
 	_, ok := broker.changefeedMap.Load(dispInfo.GetChangefeedID())
 	require.False(t, ok, "changefeedStatus should be removed after failed registration")
+	require.Nil(t, broker.getDispatcher(dispInfo.GetID()))
+	for _, ch := range broker.messageCh {
+		require.Empty(t, collectWrapEventTypes(ch))
+	}
 }
