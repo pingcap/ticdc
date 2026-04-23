@@ -58,6 +58,12 @@ func (w *Writer) execDDL(event *commonEvent.DDLEvent) error {
 
 	switch event.GetDDLType() {
 	case timodel.ActionMultiSchemaChange, timodel.ActionAddIndex:
+		// TiDB may generate index names for anonymous ADD INDEX clauses. Rewrite
+		// the DDL to use the upstream-generated names so downstream schema stays
+		// deterministic across retries and CREATE TABLE LIKE replication.
+		// event.IndexIDs is pre-filtered to contain only ADD INDEX IDs in clause
+		// order, so restoreAnonymousIndexToNamedIndex can remap each anonymous
+		// secondary index to the exact upstream-generated name.
 		newQuery, changed, err := restoreAnonymousIndexToNamedIndex(event.Query, event.TableInfo, event.IndexIDs)
 		if err != nil {
 			log.Warn("failed to restore anonymous index name",

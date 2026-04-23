@@ -85,6 +85,10 @@ func getIndexIDs(job *model.Job) []int64 {
 		return nil
 	}
 
+	// Anonymous index rewrite only needs IDs for ADD INDEX clauses, and it
+	// consumes them in SQL order. Other modify-index subjobs such as DROP INDEX,
+	// RENAME INDEX, or ADD PRIMARY KEY would shift that positional mapping and
+	// make the downstream rewrite pick the wrong upstream name.
 	if job.Type == model.ActionAddIndex {
 		return extractAddIndexIDs(job)
 	}

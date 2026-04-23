@@ -42,6 +42,9 @@ func restoreAnonymousIndexToNamedIndex(query string, tableInfo *common.TableInfo
 		return query, false, nil
 	}
 
+	// TiDB generates names for anonymous ADD INDEX clauses. MySQL sink needs to
+	// restore those upstream-generated names before executing the DDL downstream,
+	// otherwise retries or CREATE TABLE LIKE may end up with different index names.
 	indexConstraints := make([]*ast.Constraint, 0)
 	for _, spec := range alterStmt.Specs {
 		if spec == nil || spec.Tp != ast.AlterTableAddConstraint || spec.Constraint == nil {
@@ -65,6 +68,10 @@ func restoreAnonymousIndexToNamedIndex(query string, tableInfo *common.TableInfo
 		if constraint.Name != "" {
 			continue
 		}
+		// getIndexIDs only keeps ADD INDEX IDs in SQL order, so the i-th anonymous
+		// index clause here maps to the i-th upstream-created secondary index.
+		// That avoids mixing in DROP/RENAME/ADD PRIMARY KEY subjobs and assigning
+		// an anonymous secondary index the wrong upstream name.
 		indexName, ok := indexNameByID[indexIDs[i]]
 		if !ok {
 			continue
