@@ -29,10 +29,43 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/stretchr/testify/require"
 )
 
 var defaultAtomicity = config.DefaultAtomicityLevel()
+
+func newTestSyncPointConfig() *syncpoint.SyncPointConfig {
+	return &syncpoint.SyncPointConfig{
+		SyncPointInterval:  5 * time.Second,
+		SyncPointRetention: 10 * time.Minute,
+	}
+}
+
+func newTestSharedInfo(
+	enableActiveActive bool,
+	enableSplittableCheck bool,
+	syncPointConfig *syncpoint.SyncPointConfig,
+) *SharedInfo {
+	return NewSharedInfo(
+		common.NewChangefeedID(common.DefaultKeyspaceName),
+		"system",
+		false,
+		enableActiveActive,
+		false,
+		nil,
+		nil,
+		syncPointConfig,
+		&defaultAtomicity,
+		enableSplittableCheck,
+		nil,
+		0,
+		0,
+		make(chan TableSpanStatusWithSeq, 128),
+		make(chan *heartbeatpb.TableSpanBlockStatus, 128),
+		make(chan error, 1),
+	)
+}
 
 func getCompleteTableSpanWithTableID(keyspaceID uint32, tableID int64) (*heartbeatpb.TableSpan, error) {
 	tableSpan := &heartbeatpb.TableSpan{
@@ -68,25 +101,7 @@ func getUncompleteTableSpan() *heartbeatpb.TableSpan {
 func newDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) *EventDispatcher {
 	var redoTs atomic.Uint64
 	redoTs.Store(math.MaxUint64)
-	sharedInfo := NewSharedInfo(
-		common.NewChangefeedID(common.DefaultKeyspaceName),
-		"system",
-		false,
-		false,
-		false,
-		nil,
-		nil,
-		&syncpoint.SyncPointConfig{
-			SyncPointInterval:  time.Duration(5 * time.Second),
-			SyncPointRetention: time.Duration(10 * time.Minute),
-		}, // syncPointConfig
-		&defaultAtomicity,
-		false, // enableSplittableCheck
-		nil,   // router
-		make(chan TableSpanStatusWithSeq, 128),
-		make(chan *heartbeatpb.TableSpanBlockStatus, 128),
-		make(chan error, 1),
-	)
+	sharedInfo := newTestSharedInfo(false, false, newTestSyncPointConfig())
 	return NewEventDispatcher(
 		common.NewDispatcherID(),
 		tableSpan,
@@ -428,6 +443,57 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	checkpointTs = dispatcher.GetCheckpointTs()
 	require.Equal(t, uint64(7), checkpointTs)
 	t.Run("cloud storage wake callback after batch enqueue", verifyDMLWakeCallbackStorageAfterBatchEnqueue)
+}
+
+func TestDispatcherIgnoresStaleIgnoredBlockStatus(t *testing.T) {
+	tableSpan := getUncompleteTableSpan()
+	tableSpan.KeyspaceID = getTestingKeyspaceID()
+	dispatcher := newDispatcherForTest(newDispatcherTestSink(t, common.MysqlSinkType).Sink(), tableSpan)
+
+	previousScheduler := GetDispatcherTaskScheduler()
+	taskScheduler := threadpool.NewThreadPool(1)
+	SetDispatcherTaskScheduler(taskScheduler)
+	defer func() {
+		SetDispatcherTaskScheduler(previousScheduler)
+		taskScheduler.Stop()
+	}()
+
+	ddlEvent := &commonEvent.DDLEvent{
+		FinishedTs: 30,
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{1},
+		},
+	}
+	dispatcher.blockEventStatus.setBlockEvent(ddlEvent, heartbeatpb.BlockStage_WRITING)
+	identifier := BlockEventIdentifier{CommitTs: ddlEvent.FinishedTs}
+	dispatcher.resendTaskMap.Set(identifier, newResendTask(&heartbeatpb.TableSpanBlockStatus{
+		ID: dispatcher.GetId().ToPB(),
+		State: &heartbeatpb.State{
+			IsBlocked: true,
+			BlockTs:   ddlEvent.FinishedTs,
+			BlockTables: &heartbeatpb.InfluencedTables{
+				InfluenceType: heartbeatpb.InfluenceType_Normal,
+				TableIDs:      []int64{1},
+			},
+			Stage: heartbeatpb.BlockStage_WAITING,
+		},
+		Mode: dispatcher.GetMode(),
+	}, dispatcher, nil))
+	defer dispatcher.cancelResendTask(identifier)
+
+	await := dispatcher.HandleDispatcherStatus(&heartbeatpb.DispatcherStatus{
+		IgnoredBlockStatus: &heartbeatpb.IgnoredBlockStatus{
+			CommitTs: ddlEvent.FinishedTs,
+		},
+	})
+	require.False(t, await)
+
+	select {
+	case msg := <-dispatcher.GetBlockStatusesChan():
+		require.FailNow(t, "unexpected fast retry for stale ignored block status", "msg=%v", msg)
+	case <-time.After(200 * time.Millisecond):
+	}
 }
 
 func TestBlockingDDLFlushBeforeWaitingAndWriteDoesNotFlushAgain(t *testing.T) {
@@ -990,25 +1056,7 @@ func TestDispatcherSplittableCheck(t *testing.T) {
 	tableSpan := getUncompleteTableSpan()
 
 	// Create shared info with enableSplittableCheck=true
-	sharedInfo := NewSharedInfo(
-		common.NewChangefeedID(common.DefaultKeyspaceName),
-		"system",
-		false,
-		false,
-		false,
-		nil,
-		nil,
-		&syncpoint.SyncPointConfig{
-			SyncPointInterval:  time.Duration(5 * time.Second),
-			SyncPointRetention: time.Duration(10 * time.Minute),
-		},
-		&defaultAtomicity,
-		true, // enableSplittableCheck = true
-		nil,  // router
-		make(chan TableSpanStatusWithSeq, 128),
-		make(chan *heartbeatpb.TableSpanBlockStatus, 128),
-		make(chan error, 1),
-	)
+	sharedInfo := newTestSharedInfo(false, true, newTestSyncPointConfig())
 
 	// Create dispatcher with the split table span
 	var redoTs atomic.Uint64
@@ -1101,25 +1149,7 @@ func TestDispatcher_SkipDMLAsStartTs_FilterCorrectly(t *testing.T) {
 	// - Need to skip DML at commitTs = 100 (already written before crash)
 	var redoTs atomic.Uint64
 	redoTs.Store(math.MaxUint64)
-	sharedInfo := NewSharedInfo(
-		common.NewChangefeedID(common.DefaultKeyspaceName),
-		"system",
-		false,
-		false,
-		false,
-		nil,
-		nil,
-		&syncpoint.SyncPointConfig{
-			SyncPointInterval:  time.Duration(5 * time.Second),
-			SyncPointRetention: time.Duration(10 * time.Minute),
-		},
-		&defaultAtomicity,
-		false,
-		nil, // router
-		make(chan TableSpanStatusWithSeq, 128),
-		make(chan *heartbeatpb.TableSpanBlockStatus, 128),
-		make(chan error, 1),
-	)
+	sharedInfo := newTestSharedInfo(false, false, newTestSyncPointConfig())
 
 	dispatcher := NewEventDispatcher(
 		common.NewDispatcherID(),
@@ -1182,25 +1212,7 @@ func TestDispatcher_SkipDMLAsStartTs_Disabled(t *testing.T) {
 	// Create dispatcher with skipDMLAsStartTs=false
 	var redoTs atomic.Uint64
 	redoTs.Store(math.MaxUint64)
-	sharedInfo := NewSharedInfo(
-		common.NewChangefeedID(common.DefaultKeyspaceName),
-		"system",
-		false,
-		false,
-		false,
-		nil,
-		nil,
-		&syncpoint.SyncPointConfig{
-			SyncPointInterval:  time.Duration(5 * time.Second),
-			SyncPointRetention: time.Duration(10 * time.Minute),
-		},
-		&defaultAtomicity,
-		false,
-		nil, // router
-		make(chan TableSpanStatusWithSeq, 128),
-		make(chan *heartbeatpb.TableSpanBlockStatus, 128),
-		make(chan error, 1),
-	)
+	sharedInfo := newTestSharedInfo(false, false, newTestSyncPointConfig())
 
 	dispatcher := NewEventDispatcher(
 		common.NewDispatcherID(),

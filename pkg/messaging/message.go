@@ -26,7 +26,6 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/util"
@@ -104,6 +103,12 @@ const (
 	TypeRedoResolvedTsForwardMessage       IOType = 39
 	TypeDispatcherSetChecksumUpdateRequest IOType = 40
 	TypeDispatcherSetChecksumAckResponse   IOType = 41
+
+	// Node drain related
+	TypeNodeHeartbeatRequest            IOType = 42
+	TypeSetNodeLivenessRequest          IOType = 43
+	TypeSetNodeLivenessResponse         IOType = 44
+	TypeSetDispatcherDrainTargetRequest IOType = 45
 )
 
 func (t IOType) String() string {
@@ -190,6 +195,14 @@ func (t IOType) String() string {
 		return "MergeDispatcherRequest"
 	case TypeLogCoordinatorChangefeedStates:
 		return "TypeLogCoordinatorChangefeedStates"
+	case TypeNodeHeartbeatRequest:
+		return "NodeHeartbeatRequest"
+	case TypeSetNodeLivenessRequest:
+		return "SetNodeLivenessRequest"
+	case TypeSetNodeLivenessResponse:
+		return "SetNodeLivenessResponse"
+	case TypeSetDispatcherDrainTargetRequest:
+		return "SetDispatcherDrainTargetRequest"
 	default:
 	}
 	return "Unknown"
@@ -235,15 +248,8 @@ func (r DispatcherRequest) GetChangefeedID() common.ChangeFeedID {
 	return common.NewChangefeedIDFromPB(r.ChangefeedId)
 }
 
-func (r DispatcherRequest) GetFilter() filter.Filter {
-	changefeedID := r.GetChangefeedID()
-	filter, err := filter.
-		GetSharedFilterStorage().
-		GetOrSetFilter(changefeedID, r.DispatcherRequest.FilterConfig, r.GetTimezone().String())
-	if err != nil {
-		log.Panic("create filter failed", zap.Error(err), zap.Any("filterConfig", r.DispatcherRequest.FilterConfig))
-	}
-	return filter
+func (r DispatcherRequest) GetFilterConfig() *eventpb.FilterConfig {
+	return r.DispatcherRequest.FilterConfig
 }
 
 func (r DispatcherRequest) SyncPointEnabled() bool {
@@ -277,14 +283,6 @@ func (r DispatcherRequest) GetIntegrity() *integrity.Config {
 		IntegrityCheckLevel:   util.AddressOf(r.DispatcherRequest.Integrity.IntegrityCheckLevel),
 		CorruptionHandleLevel: util.AddressOf(r.DispatcherRequest.Integrity.CorruptionHandleLevel),
 	}
-}
-
-func (r DispatcherRequest) GetTimezone() *time.Location {
-	tz, err := util.GetTimezone(r.DispatcherRequest.GetTimezone())
-	if err != nil {
-		log.Panic("Can't load time zone from dispatcher info", zap.Error(err))
-	}
-	return tz
 }
 
 func (r DispatcherRequest) GetEpoch() uint64 {
@@ -389,6 +387,14 @@ func decodeIOType(ioType IOType, value []byte) (IOTypeT, error) {
 		m = &heartbeatpb.LogCoordinatorResolvedTsRequest{}
 	case TypeLogCoordinatorResolvedTsResponse:
 		m = &heartbeatpb.LogCoordinatorResolvedTsResponse{}
+	case TypeNodeHeartbeatRequest:
+		m = &heartbeatpb.NodeHeartbeat{}
+	case TypeSetNodeLivenessRequest:
+		m = &heartbeatpb.SetNodeLivenessRequest{}
+	case TypeSetNodeLivenessResponse:
+		m = &heartbeatpb.SetNodeLivenessResponse{}
+	case TypeSetDispatcherDrainTargetRequest:
+		m = &heartbeatpb.SetDispatcherDrainTargetRequest{}
 	default:
 		log.Debug("Unimplemented IOType, ignore the message", zap.Stringer("Type", ioType))
 		return nil, errors.ErrUnimplementedIOType.GenWithStackByArgs(int(ioType))
@@ -501,6 +507,14 @@ func NewSingleTargetMessage(To node.ID, Topic string, Message IOTypeT, Group ...
 		ioType = TypeLogCoordinatorResolvedTsRequest
 	case *heartbeatpb.LogCoordinatorResolvedTsResponse:
 		ioType = TypeLogCoordinatorResolvedTsResponse
+	case *heartbeatpb.NodeHeartbeat:
+		ioType = TypeNodeHeartbeatRequest
+	case *heartbeatpb.SetNodeLivenessRequest:
+		ioType = TypeSetNodeLivenessRequest
+	case *heartbeatpb.SetNodeLivenessResponse:
+		ioType = TypeSetNodeLivenessResponse
+	case *heartbeatpb.SetDispatcherDrainTargetRequest:
+		ioType = TypeSetDispatcherDrainTargetRequest
 	default:
 		panic("unknown io type")
 	}

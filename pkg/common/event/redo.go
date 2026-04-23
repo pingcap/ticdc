@@ -77,10 +77,19 @@ type DDLEventInRedoLog struct {
 	StartTs           uint64            `msg:"start-ts"`
 	CommitTs          uint64            `msg:"commit-ts"`
 	Query             string            `msg:"query"`
+	Columns           []*ColumnInfo     `msg:"columns"`
 	BlockedTables     *InfluencedTables `msg:"blocked-tables"`
 	BlockedTableNames []SchemaTableName `msg:"blocked-table-names"`
 	NeedDroppedTables *InfluencedTables `msg:"need-dropped-tables"`
 	NeedAddedTables   []Table           `msg:"need_added_tables"`
+}
+
+// ColumnInfo is for column meta in DDL event
+type ColumnInfo struct {
+	Name               string `msg:"name"`
+	OriginDefaultValue any    `msg:"origin_default"`
+	Type               byte   `msg:"type"`
+	Version            uint64 `msg:"version"`
 }
 
 // RedoColumn is for column meta
@@ -94,7 +103,7 @@ type RedoColumn struct {
 // RedoColumnValue stores Column change
 type RedoColumnValue struct {
 	// Fields from Column and can't be marshaled directly in Column.
-	Value interface{} `msg:"column"`
+	Value any `msg:"column"`
 	// msgp transforms empty byte slice into nil, PTAL msgp#247.
 	ValueIsEmptyBytes bool   `msg:"value-is-empty-bytes"`
 	Flag              uint64 `msg:"flag"`
@@ -143,12 +152,10 @@ func (r *RedoRowEvent) ToRedoLog() *RedoLog {
 	}
 	if r.TableInfo != nil {
 		redoLog.RedoRow.Row.Table = &common.TableName{
-			Schema:       r.TableInfo.TableName.Schema,
-			Table:        r.TableInfo.TableName.Table,
-			TableID:      r.PhysicalTableID,
-			IsPartition:  r.TableInfo.TableName.IsPartition,
-			TargetSchema: r.TableInfo.TableName.TargetSchema,
-			TargetTable:  r.TableInfo.TableName.TargetTable,
+			Schema:      r.TableInfo.GetTargetSchemaName(),
+			Table:       r.TableInfo.GetTargetTableName(),
+			TableID:     r.PhysicalTableID,
+			IsPartition: r.TableInfo.TableName.IsPartition,
 		}
 		redoLog.RedoRow.Row.IndexColumns = getIndexColumns(r.TableInfo)
 
@@ -205,12 +212,25 @@ func (r *RedoRowEvent) ToRedoLog() *RedoLog {
 
 // ToRedoLog converts ddl event to redo log
 func (d *DDLEvent) ToRedoLog() *RedoLog {
+	var columns []*ColumnInfo
+	if d.TableInfo != nil {
+		columns = make([]*ColumnInfo, 0, len(d.TableInfo.GetColumns()))
+		for _, col := range d.TableInfo.GetColumns() {
+			columns = append(columns, &ColumnInfo{
+				Name:               col.Name.String(),
+				OriginDefaultValue: col.GetOriginDefaultValue(),
+				Type:               col.GetType(),
+				Version:            col.Version,
+			})
+		}
+	}
 	redoLog := &RedoLog{
 		RedoDDL: &RedoDDLEvent{
 			DDL: &DDLEventInRedoLog{
 				StartTs:           d.GetStartTs(),
 				CommitTs:          d.GetCommitTs(),
 				Query:             d.Query,
+				Columns:           columns,
 				BlockedTables:     d.BlockedTables,
 				BlockedTableNames: d.BlockedTableNames,
 				NeedDroppedTables: d.NeedDroppedTables,
@@ -221,7 +241,12 @@ func (d *DDLEvent) ToRedoLog() *RedoLog {
 		Type: RedoLogTypeDDL,
 	}
 	if d.TableInfo != nil {
-		redoLog.RedoDDL.TableName = d.TableInfo.TableName
+		redoLog.RedoDDL.TableName = common.TableName{
+			Schema:      d.TableInfo.GetTargetSchemaName(),
+			Table:       d.TableInfo.GetTargetTableName(),
+			TableID:     d.TableInfo.TableName.TableID,
+			IsPartition: d.TableInfo.TableName.IsPartition,
+		}
 	}
 
 	return redoLog
@@ -340,7 +365,7 @@ func (r *RedoDMLEvent) ToDMLEvent() *DMLEvent {
 		tableInfo.InitPrivateFields()
 	}
 	event := &DMLEvent{
-		TableInfo:       tableInfo,
+		TableInfo:       common.NewTableInfo4Decoder(r.Row.Table.Schema, tidbTableInfo),
 		CommitTs:        r.Row.CommitTs,
 		StartTs:         r.Row.StartTs,
 		Length:          1,
@@ -373,24 +398,40 @@ func (r *RedoDMLEvent) ToDMLEvent() *DMLEvent {
 func (r *RedoDDLEvent) ToDDLEvent() *DDLEvent {
 	blockedTables := r.DDL.BlockedTables
 	blockedTableNames := r.DDL.BlockedTableNames
-	sourceSchemaName := r.TableName.GetOriginSchema()
-	sourceTableName := r.TableName.GetOriginTable()
-	targetSchemaName := r.TableName.GetTargetSchema()
-	targetTableName := r.TableName.GetTargetTable()
+	schemaName := r.TableName.GetSchema()
+	tableName := r.TableName.GetTable()
 	if blockedTables == nil {
 		blockedTables = &InfluencedTables{InfluenceType: InfluenceTypeNormal}
-		blockedTableNames = []SchemaTableName{{SchemaName: targetSchemaName, TableName: targetTableName}}
+		blockedTableNames = []SchemaTableName{{SchemaName: schemaName, TableName: tableName}}
 	}
+	columns := make([]*timodel.ColumnInfo, 0, len(r.DDL.Columns))
+	for _, col := range r.DDL.Columns {
+		colInfo := &timodel.ColumnInfo{
+			Name:    ast.NewCIStr(col.Name),
+			State:   timodel.StatePublic,
+			Version: col.Version,
+		}
+		colInfo.SetType(col.Type)
+		if err := colInfo.SetOriginDefaultValue(col.OriginDefaultValue); err != nil {
+			log.Panic("set origin default value failed",
+				zap.String("column", col.Name),
+				zap.Any("originDefaultValue", col.OriginDefaultValue),
+				zap.Error(err))
+		}
+		columns = append(columns, colInfo)
+	}
+	tableInfo := common.WrapTableInfo(schemaName, &timodel.TableInfo{
+		ID:      r.TableName.TableID,
+		Name:    ast.NewCIStr(tableName),
+		Columns: columns,
+	})
+	tableInfo.TableName.IsPartition = r.TableName.IsPartition
 	return &DDLEvent{
-		TableInfo: &common.TableInfo{
-			TableName: r.TableName,
-		},
+		TableInfo:         tableInfo,
 		Query:             r.DDL.Query,
 		Type:              r.Type,
-		SchemaName:        sourceSchemaName,
-		TableName:         sourceTableName,
-		TargetSchemaName:  targetSchemaName,
-		TargetTableName:   targetTableName,
+		SchemaName:        schemaName,
+		TableName:         tableName,
 		FinishedTs:        r.DDL.CommitTs,
 		StartTs:           r.DDL.StartTs,
 		BlockedTables:     blockedTables,
@@ -475,7 +516,7 @@ func collectAllColumnsValue(data []RedoColumnValue, columns []*timodel.ColumnInf
 	}
 }
 
-func appendCol2Chunk(idx int, raw interface{}, ft tiTypes.FieldType, chk *chunk.Chunk) {
+func appendCol2Chunk(idx int, raw any, ft tiTypes.FieldType, chk *chunk.Chunk) {
 	if raw == nil {
 		chk.AppendNull(idx)
 		return

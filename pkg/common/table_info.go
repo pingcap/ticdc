@@ -254,6 +254,9 @@ func (ti *TableInfo) ShadowCopyColumnSchema() *columnSchema {
 }
 
 func (ti *TableInfo) GetColumns() []*model.ColumnInfo {
+	if ti == nil || ti.columnSchema == nil {
+		return nil
+	}
 	return ti.columnSchema.Columns
 }
 
@@ -394,12 +397,12 @@ func (ti *TableInfo) MustGetColumnOffsetByID(id int64) int {
 
 // GetSchemaName returns the source schema name carried by this TableInfo.
 func (ti *TableInfo) GetSchemaName() string {
-	return ti.TableName.GetOriginSchema()
+	return ti.TableName.GetSchema()
 }
 
 // GetTableName returns the source table name carried by this TableInfo.
 func (ti *TableInfo) GetTableName() string {
-	return ti.TableName.GetOriginTable()
+	return ti.TableName.GetTable()
 }
 
 func (ti *TableInfo) GetTableNameCIStr() ast.CIStr {
@@ -431,16 +434,6 @@ func (ti *TableInfo) GetTargetSchemaName() string {
 // If TargetTable is empty, returns Table.
 func (ti *TableInfo) GetTargetTableName() string {
 	return ti.TableName.GetTargetTable()
-}
-
-// GetSourceSchemaName returns the source schema name before routing.
-func (ti *TableInfo) GetSourceSchemaName() string {
-	return ti.TableName.GetOriginSchema()
-}
-
-// GetSourceTableName returns the source table name before routing.
-func (ti *TableInfo) GetSourceTableName() string {
-	return ti.TableName.GetOriginTable()
 }
 
 // IsView checks if TableInfo is a view.

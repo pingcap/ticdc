@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/eventcollector"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/mock"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
@@ -33,6 +34,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	mysqlcfg "github.com/pingcap/ticdc/pkg/sink/mysql"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/stretchr/testify/require"
@@ -53,7 +55,7 @@ func newDispatcherManagerTestSink(t *testing.T, sinkType common.SinkType) sink.S
 	}).AnyTimes()
 	mockSink.EXPECT().AddCheckpointTs(gomock.Any()).AnyTimes()
 	mockSink.EXPECT().SetTableSchemaStore(gomock.Any()).AnyTimes()
-	mockSink.EXPECT().Close(gomock.Any()).AnyTimes()
+	mockSink.EXPECT().Close().AnyTimes()
 	mockSink.EXPECT().Run(gomock.Any()).Return(nil).AnyTimes()
 	return mockSink
 }
@@ -80,6 +82,8 @@ func createTestDispatcher(t *testing.T, manager *DispatcherManager, id common.Di
 		&defaultAtomicity,
 		false,
 		nil, // router
+		0,
+		0,
 		make(chan dispatcher.TableSpanStatusWithSeq, 1),
 		make(chan *heartbeatpb.TableSpanBlockStatus, 1),
 		make(chan error, 1),
@@ -142,6 +146,8 @@ func createTestManager(t *testing.T) *DispatcherManager {
 		&defaultAtomicity,
 		false,
 		nil, // router
+		0,
+		0,
 		make(chan dispatcher.TableSpanStatusWithSeq, 8192),
 		make(chan *heartbeatpb.TableSpanBlockStatus, 1024*1024),
 		make(chan error, 1),
@@ -270,6 +276,36 @@ func TestMergeDispatcherInvalidIDs(t *testing.T) {
 	// Verify no new dispatcher is created
 	_, exists := manager.dispatcherMap.Get(mergedID)
 	require.False(t, exists)
+}
+
+func TestTryCloseRemovedRequestAfterClosedReturnsImmediatelyAndTriggersCleanup(t *testing.T) {
+	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	mysqlConfig := mysqlcfg.New()
+	mysqlConfig.EnableDDLTs = false
+	mysqlSink := mysql.NewMySQLSink(
+		context.Background(),
+		changefeedID,
+		mysqlConfig,
+		nil,
+		false,
+		false,
+		time.Minute,
+	)
+	manager := &DispatcherManager{
+		changefeedID: changefeedID,
+		sink:         mysqlSink,
+	}
+	manager.closed.Store(true)
+
+	// Preserve the historical close contract: once the manager is already closed,
+	// late remove requests should not delay TryClose success.
+	closed := manager.TryClose(true)
+	require.True(t, closed)
+	require.True(t, manager.removeChangefeedRequested.Load())
+	require.Eventually(t, func() bool {
+		return manager.removeChangefeedCleaned.Load()
+	}, time.Second, 10*time.Millisecond)
+	require.True(t, manager.TryClose(true))
 }
 
 func TestMergeDispatcherExistingID(t *testing.T) {

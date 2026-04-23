@@ -258,6 +258,7 @@ func TestNewWriter(t *testing.T) {
 		expectedLogFileName(ddlWriterCfg, redo.RedoDDLLogFileType, 0, "const-uuid"),
 		gomock.Any(),
 	).Return(nil).Times(1)
+	mockStorage.EXPECT().Close().Times(1)
 	w = &Writer{
 		logType:   redo.RedoDDLLogFileType,
 		cfg:       ddlWriterCfg,
@@ -337,6 +338,7 @@ func TestRotateFileWithFileAllocator(t *testing.T) {
 		expectedLogFileName(rowWriterCfg, redo.RedoRowLogFileType, 100, "uuid-2"),
 		gomock.Any(),
 	).Return(nil).Times(1)
+	mockStorage.EXPECT().Close().Times(1)
 	w := &Writer{
 		logType:   redo.RedoRowLogFileType,
 		cfg:       rowWriterCfg,
@@ -404,6 +406,7 @@ func TestRotateFileWithoutFileAllocator(t *testing.T) {
 		expectedLogFileName(ddlWriterCfg, redo.RedoDDLLogFileType, 100, "uuid-4"),
 		gomock.Any(),
 	).Return(nil).Times(1)
+	mockStorage.EXPECT().Close().Times(1)
 	w := &Writer{
 		logType:   redo.RedoDDLLogFileType,
 		cfg:       ddlWriterCfg,

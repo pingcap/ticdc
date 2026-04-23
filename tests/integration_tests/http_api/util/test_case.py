@@ -262,6 +262,23 @@ def pause_changefeed():
     assert data["error_code"] == "CDC:ErrChangeFeedNotExists"
 
 
+def check_keyspace_guidance():
+    url = BASE_URL0_V2 + "/changefeeds/missing-keyspace/pause"
+    resp = rq.post(url)
+    assert_status_code(resp, rq.codes.bad_request, url)
+    data = resp.json()
+    assert data["error_code"] == "CDC:ErrAPIInvalidParam"
+    assert "please specify --keyspace or -k" in data["error_msg"]
+
+    url = BASE_URL0_V2 + \
+        "/changefeeds/missing-keyspace/pause?keyspace=not-exist"
+    resp = rq.post(url)
+    assert_status_code(resp, rq.codes.bad_request, url)
+    data = resp.json()
+    assert data["error_code"] == "CDC:ErrAPIInvalidParam"
+    assert "does not exist, please check --keyspace or -k" in data["error_msg"]
+
+
 def update_changefeed():
     # update fail
     # can only update a stopped changefeed
@@ -481,6 +498,7 @@ if __name__ == "__main__":
         "list_changefeed": list_changefeed,
         "get_changefeed": get_changefeed,
         "pause_changefeed": pause_changefeed,
+        "check_keyspace_guidance": check_keyspace_guidance,
         "update_changefeed": update_changefeed,
         "resume_changefeed": resume_changefeed,
         "move_table": move_table,
