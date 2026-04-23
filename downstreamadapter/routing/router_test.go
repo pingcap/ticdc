@@ -231,6 +231,17 @@ func TestRouterRoute(t *testing.T) {
 		require.Empty(t, table)
 	})
 
+	t.Run("schema only routing uses schema matcher semantics", func(t *testing.T) {
+		router, err := NewRouter(true, []*config.DispatchRule{
+			{Matcher: []string{"db1.orders"}, TargetSchema: "db1_archive", TargetTable: "orders_archive"},
+		})
+		require.NoError(t, err)
+
+		schema, table := router.Route("db1", "")
+		require.Equal(t, "db1_archive", schema)
+		require.Empty(t, table)
+	})
+
 	t.Run("empty schema and table do not trigger routing", func(t *testing.T) {
 		router, err := NewRouter(true, []*config.DispatchRule{
 			{Matcher: []string{"*.*"}, TargetSchema: "fallback", TargetTable: "should_not_apply"},

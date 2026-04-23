@@ -365,7 +365,7 @@ func (r *RedoDMLEvent) ToDMLEvent() *DMLEvent {
 		tableInfo.InitPrivateFields()
 	}
 	event := &DMLEvent{
-		TableInfo:       common.NewTableInfo4Decoder(r.Row.Table.Schema, tidbTableInfo),
+		TableInfo:       tableInfo,
 		CommitTs:        r.Row.CommitTs,
 		StartTs:         r.Row.StartTs,
 		Length:          1,

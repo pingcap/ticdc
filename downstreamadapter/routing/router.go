@@ -21,6 +21,8 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	cdcfilter "github.com/pingcap/ticdc/pkg/filter"
+	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/util/filter"
 	tfilter "github.com/pingcap/tidb/pkg/util/table-filter"
@@ -48,6 +50,7 @@ type rule struct {
 }
 
 // NewRouter creates a new Router from dispatch rules.
+// When multiple rules match the same schema/table, the first matching rule wins.
 func NewRouter(caseSensitive bool, rules []*config.DispatchRule) (Router, error) {
 	routingRules := make([]rule, 0, len(rules))
 	for _, r := range rules {
@@ -75,6 +78,7 @@ func NewRouter(caseSensitive bool, rules []*config.DispatchRule) (Router, error)
 }
 
 // Route returns the target schema and table names for the given source schema/table.
+// When multiple rules match the same schema/table, the first matching rule wins.
 func (r Router) Route(originSchema, originTable string) (targetSchema, targetTable string) {
 	// Empty schema can appear on ExtraSchemaName/ExtraTableName for non-rename DDLs.
 	// Keep it unchanged and skip table route matching.
@@ -82,22 +86,19 @@ func (r Router) Route(originSchema, originTable string) (targetSchema, targetTab
 		return originSchema, originTable
 	}
 
-	for _, rule := range r.rules {
-		if !rule.filter.MatchTable(originSchema, originTable) {
-			continue
-		}
-
-		targetSchema = substituteExpression(rule.schemaExpr, originSchema, originTable, originSchema)
-		// Schema-level DDLs can rewrite the target schema, but must not synthesize a target table.
-		if originTable == "" {
-			return targetSchema, ""
-		}
-
-		targetTable = substituteExpression(rule.tableExpr, originSchema, originTable, originTable)
-		return targetSchema, targetTable
+	rule := r.matchRule(originSchema, originTable)
+	if rule == nil {
+		return originSchema, originTable
 	}
 
-	return originSchema, originTable
+	targetSchema = substituteExpression(rule.schemaExpr, originSchema, originTable, originSchema)
+	// Schema-level DDLs can rewrite the target schema, but must not synthesize a target table.
+	if originTable == "" {
+		return targetSchema, ""
+	}
+
+	targetTable = substituteExpression(rule.tableExpr, originSchema, originTable, originTable)
+	return targetSchema, targetTable
 }
 
 // ApplyToTableInfo returns the original TableInfo unless routing changes the target name.
@@ -137,8 +138,9 @@ func (r Router) ApplyToDDLEvent(ddl *commonEvent.DDLEvent, changefeedID common.C
 
 	targetSchemaName, targetTableName := r.Route(originSchema, originTable)
 	targetExtraSchemaName, targetExtraTableName := r.Route(originExtraSchema, originExtraTable)
-	tableInfo := r.ApplyToTableInfo(ddl.TableInfo)
-	multipleTableInfos := applyToMultipleTableInfos(r, ddl.MultipleTableInfos)
+	tableInfoCache := make(map[*common.TableInfo]*common.TableInfo, 1)
+	tableInfo := routeTableInfoWithCache(r, ddl.TableInfo, tableInfoCache)
+	multipleTableInfos := applyToMultipleTableInfos(r, ddl.MultipleTableInfos, tableInfoCache)
 	blockedTableNames := applyToBlockedTableNames(r, ddl.BlockedTableNames)
 	if query == ddl.Query &&
 		targetSchemaName == originSchema &&
@@ -183,35 +185,98 @@ func rewriteDDLQueryWithRouting(
 		return ddl.Query, nil
 	}
 
-	// Get the default schema for parsing. If TableInfo is nil (e.g., for
-	// database-level DDLs like CREATE DATABASE), FetchDDLTables will extract
-	// the schema name directly from the DDL statement itself.
-	var originSchema string
+	defaultSchema := ""
 	if ddl.TableInfo != nil {
-		originSchema = ddl.TableInfo.GetSchemaName()
+		defaultSchema = ddl.TableInfo.GetSchemaName()
 	}
 
+	if len(ddl.MultipleTableInfos) > 1 && strings.Contains(ddl.Query, ";") {
+		queries, err := commonEvent.SplitQueries(ddl.Query)
+		if err != nil {
+			log.Error("rewrite ddl failed due to split ddl queries",
+				zap.String("keyspace", changefeedID.Keyspace()),
+				zap.String("changefeed", changefeedID.Name()),
+				zap.String("query", ddl.Query), zap.Error(err))
+			return "", errors.WrapError(errors.ErrTableRoutingFailed, err)
+		}
+		if len(queries) > 1 {
+			defaultSchemas := make([]string, len(queries))
+			for i := range defaultSchemas {
+				defaultSchemas[i] = defaultSchema
+			}
+			if len(ddl.MultipleTableInfos) == len(queries) {
+				for i, info := range ddl.MultipleTableInfos {
+					if info != nil {
+						defaultSchemas[i] = info.GetSchemaName()
+					}
+				}
+			}
+
+			var (
+				builder strings.Builder
+				routed  bool
+			)
+			for i, query := range queries {
+				newQuery, changed, err := rewriteSingleDDLQueryWithRouting(
+					router, timodel.ActionType(ddl.Type), query, defaultSchemas[i], changefeedID,
+				)
+				if err != nil {
+					return "", err
+				}
+				if changed {
+					routed = true
+				}
+				builder.WriteString(newQuery)
+				if changed && !strings.HasSuffix(newQuery, ";") {
+					builder.WriteByte(';')
+				}
+			}
+			if routed {
+				newQuery := builder.String()
+				log.Info("DDL query rewritten with routing",
+					zap.String("keyspace", changefeedID.Keyspace()),
+					zap.String("changefeed", changefeedID.Name()),
+					zap.String("originalQuery", ddl.Query),
+					zap.String("newQuery", newQuery))
+				return newQuery, nil
+			}
+			return ddl.Query, nil
+		}
+	}
+
+	newQuery, _, err := rewriteSingleDDLQueryWithRouting(
+		router, timodel.ActionType(ddl.Type), ddl.Query, defaultSchema, changefeedID,
+	)
+	return newQuery, err
+}
+
+func rewriteSingleDDLQueryWithRouting(
+	router Router, actionType timodel.ActionType, query string, defaultSchema string, changefeedID common.ChangeFeedID,
+) (string, bool, error) {
 	p := parser.New()
-	stmt, err := p.ParseOneStmt(ddl.Query, "", "")
+	stmt, err := p.ParseOneStmt(query, "", "")
 	if err != nil {
+		if fallbackQuery, changed, ok := rewriteDDLQueryWithoutParser(router, actionType, query, defaultSchema); ok {
+			return fallbackQuery, changed, nil
+		}
 		log.Error("rewrite ddl failed due to parse ddl query",
 			zap.String("keyspace", changefeedID.Keyspace()),
 			zap.String("changefeed", changefeedID.Name()),
-			zap.String("query", ddl.Query), zap.Error(err))
-		return "", errors.WrapError(errors.ErrTableRoutingFailed, err)
+			zap.String("query", query), zap.Error(err))
+		return "", false, errors.WrapError(errors.ErrTableRoutingFailed, err)
 	}
 
-	sourceTables, err := fetchDDLTables(originSchema, stmt)
+	sourceTables, err := fetchDDLTables(defaultSchema, stmt)
 	if err != nil {
 		log.Error("rewrite ddl failed due to fetch ddl tables",
 			zap.String("keyspace", changefeedID.Keyspace()),
 			zap.String("changefeed", changefeedID.Name()),
-			zap.String("query", ddl.Query), zap.Error(err))
-		return "", errors.WrapError(errors.ErrTableRoutingFailed, err)
+			zap.String("query", query), zap.Error(err))
+		return "", false, errors.WrapError(errors.ErrTableRoutingFailed, err)
 	}
 
 	if len(sourceTables) == 0 {
-		return ddl.Query, nil
+		return query, false, nil
 	}
 
 	var (
@@ -230,7 +295,7 @@ func rewriteDDLQueryWithRouting(
 	}
 
 	if !routed {
-		return ddl.Query, nil
+		return query, false, nil
 	}
 
 	newQuery, err := rewriteDDLQuery(stmt, targetTables)
@@ -238,32 +303,137 @@ func rewriteDDLQueryWithRouting(
 		log.Error("rewrite ddl failed due to rewrite ddl query",
 			zap.String("keyspace", changefeedID.Keyspace()),
 			zap.String("changefeed", changefeedID.Name()),
-			zap.String("query", ddl.Query), zap.Any("targetTables", targetTables), zap.Error(err))
-		return "", errors.WrapError(errors.ErrTableRoutingFailed, err)
+			zap.String("query", query), zap.Any("targetTables", targetTables), zap.Error(err))
+		return "", false, errors.WrapError(errors.ErrTableRoutingFailed, err)
 	}
 
-	if newQuery != ddl.Query {
-		log.Info("DDL query rewritten with routing",
-			zap.String("keyspace", changefeedID.Keyspace()),
-			zap.String("changefeed", changefeedID.Name()),
-			zap.String("originalQuery", ddl.Query),
-			zap.String("newQuery", newQuery))
-	}
+	return newQuery, true, nil
+}
 
-	return newQuery, nil
+func rewriteDDLQueryWithoutParser(
+	router Router, actionType timodel.ActionType, query string, defaultSchema string,
+) (string, bool, bool) {
+	switch actionType {
+	case cdcfilter.ActionCreateHybridIndex:
+		trimmedQuery := strings.TrimSpace(query)
+		upperQuery := strings.ToUpper(trimmedQuery)
+		onIndex := strings.Index(upperQuery, " ON ")
+		if !strings.HasPrefix(upperQuery, "CREATE HYBRID INDEX ") || onIndex == -1 {
+			return "", false, false
+		}
+		prefix := trimmedQuery[:onIndex+4]
+		rest := trimmedQuery[onIndex+4:]
+		openParenIndex := strings.Index(rest, "(")
+		if openParenIndex == -1 {
+			return "", false, false
+		}
+		tableExpr := strings.TrimSpace(rest[:openParenIndex])
+		suffix := rest[openParenIndex:]
+
+		schema, table, ok := splitQualifiedIdentifier(tableExpr, defaultSchema)
+		if !ok {
+			return "", false, false
+		}
+		targetSchema, targetTable := router.Route(schema, table)
+		if targetSchema == schema && targetTable == table {
+			return query, false, true
+		}
+
+		var rewrittenTable string
+		if targetSchema == "" {
+			rewrittenTable = quoteIdentifier(targetTable)
+		} else {
+			rewrittenTable = quoteIdentifier(targetSchema) + "." + quoteIdentifier(targetTable)
+		}
+		return prefix + rewrittenTable + suffix, true, true
+	default:
+		return "", false, false
+	}
+}
+
+func splitQualifiedIdentifier(name string, defaultSchema string) (schema string, table string, ok bool) {
+	parts := make([]string, 0, 2)
+	last := 0
+	inBackticks := false
+	for i := 0; i < len(name); i++ {
+		switch name[i] {
+		case '`':
+			inBackticks = !inBackticks
+		case '.':
+			if !inBackticks {
+				parts = append(parts, strings.TrimSpace(name[last:i]))
+				last = i + 1
+			}
+		}
+	}
+	parts = append(parts, strings.TrimSpace(name[last:]))
+
+	switch len(parts) {
+	case 1:
+		return defaultSchema, unquoteIdentifier(parts[0]), true
+	case 2:
+		return unquoteIdentifier(parts[0]), unquoteIdentifier(parts[1]), true
+	default:
+		return "", "", false
+	}
+}
+
+func unquoteIdentifier(ident string) string {
+	if len(ident) >= 2 && ident[0] == '`' && ident[len(ident)-1] == '`' {
+		return strings.ReplaceAll(ident[1:len(ident)-1], "``", "`")
+	}
+	return ident
+}
+
+func quoteIdentifier(ident string) string {
+	return "`" + strings.ReplaceAll(ident, "`", "``") + "`"
+}
+
+// matchRule finds the first rule that matches the given schema/table.
+// Schema-only routing uses MatchSchema so schema DDLs follow the same first-match
+// semantics as table DDLs and DMLs.
+func (r Router) matchRule(schema, table string) *rule {
+	for i := range r.rules {
+		if table == "" {
+			if r.rules[i].filter.MatchSchema(schema) {
+				return &r.rules[i]
+			}
+			continue
+		}
+		if r.rules[i].filter.MatchTable(schema, table) {
+			return &r.rules[i]
+		}
+	}
+	return nil
+}
+
+func routeTableInfoWithCache(
+	r Router, tableInfo *common.TableInfo, cache map[*common.TableInfo]*common.TableInfo,
+) *common.TableInfo {
+	if tableInfo == nil {
+		return nil
+	}
+	if routedTableInfo, ok := cache[tableInfo]; ok {
+		return routedTableInfo
+	}
+	routedTableInfo := r.ApplyToTableInfo(tableInfo)
+	cache[tableInfo] = routedTableInfo
+	return routedTableInfo
 }
 
 // applyToMultipleTableInfos returns nil when no entry changes.
 // On the first routed entry, it clones the original slice once and only rewrites changed items,
 // so unchanged entries keep their original references and the source event slice is left untouched.
-func applyToMultipleTableInfos(r Router, tableInfos []*common.TableInfo) []*common.TableInfo {
+func applyToMultipleTableInfos(
+	r Router, tableInfos []*common.TableInfo, cache map[*common.TableInfo]*common.TableInfo,
+) []*common.TableInfo {
 	if len(tableInfos) == 0 {
 		return nil
 	}
 
 	var routedTableInfos []*common.TableInfo
 	for i, tableInfo := range tableInfos {
-		routedTableInfo := r.ApplyToTableInfo(tableInfo)
+		routedTableInfo := routeTableInfoWithCache(r, tableInfo, cache)
 		if routedTableInfo == tableInfo {
 			continue
 		}

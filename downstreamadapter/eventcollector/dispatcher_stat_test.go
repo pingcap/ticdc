@@ -42,6 +42,7 @@ type mockDispatcher struct {
 	id           common.DispatcherID
 	changefeedID common.ChangeFeedID
 	handleEvents func(events []dispatcher.DispatcherEvent, wakeCallback func()) (block bool)
+	handleError  func(err error)
 	events       []dispatcher.DispatcherEvent
 	checkPointTs uint64
 
@@ -135,6 +136,12 @@ func (m *mockDispatcher) IsOutputRawChangeEvent() bool {
 
 func (m *mockDispatcher) GetRouter() routing.Router {
 	return m.router
+}
+
+func (m *mockDispatcher) HandleError(err error) {
+	if m.handleError != nil {
+		m.handleError(err)
+	}
 }
 
 // mockEvent implements the Event interface for testing
@@ -1860,5 +1867,47 @@ func TestApplyRoutingToTableInfo(t *testing.T) {
 		// Should NOT be t_like
 		require.NotEqual(t, "t_like", storedTableInfo.TableName.Table)
 		require.NotEqual(t, int64(999), storedTableInfo.TableName.TableID)
+		require.Equal(t, uint64(0), stat.tableInfoVersion.Load())
+	})
+
+	t.Run("DDL routing failure is reported instead of being silently dropped", func(t *testing.T) {
+		var reportedErr error
+
+		mockDisp := newMockDispatcher(common.NewDispatcherID(), 0)
+		mockDisp.router = router
+		mockDisp.handleError = func(err error) {
+			reportedErr = err
+		}
+		mockDisp.handleEvents = func(events []dispatcher.DispatcherEvent, wakeCallback func()) bool {
+			t.Fatalf("ddl with routing error should not be forwarded")
+			return false
+		}
+
+		stat := newDispatcherStat(mockDisp, newTestEventCollector(localServerID), nil)
+		stat.connState.setEventServiceID(remoteServerID)
+		stat.currentEpoch.Store(newDispatcherEpochState(10, 1, stat.target.GetStartTs()))
+		stat.lastEventCommitTs.Store(50)
+
+		ddlEvent := &commonEvent.DDLEvent{
+			Version:    commonEvent.DDLEventVersion1,
+			Query:      "INVALID DDL",
+			FinishedTs: 100,
+			Epoch:      10,
+			Seq:        2,
+			TableInfo: &common.TableInfo{
+				TableName: common.TableName{
+					Schema:  "source_db",
+					Table:   "users",
+					TableID: 1,
+				},
+			},
+		}
+
+		events := []dispatcher.DispatcherEvent{
+			{From: &remoteServerID, Event: ddlEvent},
+		}
+
+		require.False(t, stat.handleDataEvents(events...))
+		require.Error(t, reportedErr)
 	})
 }

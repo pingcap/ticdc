@@ -164,7 +164,7 @@ func TestApplyToDDLEvent(t *testing.T) {
 			}(),
 			check: func(t *testing.T, original, routed *event.DDLEvent) {
 				require.Contains(t, routed.Query, "`target_db`.`target_table`")
-				require.Equal(t, "target_db", routed.GetSchemaName())
+				require.Equal(t, "source_db", routed.GetSchemaName())
 				require.Equal(t, "source_db", routed.SchemaName)
 				require.Equal(t, "source_table", routed.TableName)
 				require.Equal(t, "target_db", routed.GetTargetSchemaName())
@@ -177,6 +177,7 @@ func TestApplyToDDLEvent(t *testing.T) {
 				require.Equal(t, "target_db", routed.TableInfo.TableName.TargetSchema)
 				require.Equal(t, "target_table", routed.TableInfo.TableName.TargetTable)
 				require.NotSame(t, original.MultipleTableInfos[0], routed.MultipleTableInfos[0])
+				require.Same(t, routed.TableInfo, routed.MultipleTableInfos[0])
 				require.Equal(t, "source_db", routed.MultipleTableInfos[0].GetSchemaName())
 				require.Equal(t, "source_table", routed.MultipleTableInfos[0].GetTableName())
 				require.Equal(t, "target_db", routed.MultipleTableInfos[0].GetTargetSchemaName())
@@ -269,7 +270,7 @@ func TestApplyToDDLEvent(t *testing.T) {
 			check: func(t *testing.T, original, routed *event.DDLEvent) {
 				require.Equal(t, "source_db", routed.SchemaName)
 				require.Equal(t, "target_db", routed.GetTargetSchemaName())
-				require.Equal(t, "target_db", routed.GetSchemaName())
+				require.Equal(t, "source_db", routed.GetSchemaName())
 				require.Equal(t, "source_db", original.SchemaName)
 			},
 		},

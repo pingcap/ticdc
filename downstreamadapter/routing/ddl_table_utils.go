@@ -35,9 +35,6 @@ type tableNameExtractor struct {
 }
 
 func (tne *tableNameExtractor) Enter(in ast.Node) (ast.Node, bool) {
-	if _, ok := in.(*ast.ReferenceDef); ok {
-		return in, true
-	}
 	if t, ok := in.(*ast.TableName); ok {
 		tb := &filter.Table{Schema: t.Schema.O, Name: t.Name.O}
 		if tb.Schema == "" {
@@ -100,9 +97,6 @@ func (v *tableRenameVisitor) Enter(in ast.Node) (ast.Node, bool) {
 	if v.hasErr {
 		return in, true
 	}
-	if _, ok := in.(*ast.ReferenceDef); ok {
-		return in, true
-	}
 	if t, ok := in.(*ast.TableName); ok {
 		if v.i >= len(v.targetNames) {
 			v.hasErr = true
@@ -163,8 +157,7 @@ func rewriteDDLQuery(stmt ast.StmtNode, targetTables []*filter.Table) (string, e
 		}
 	}
 
-	var b []byte
-	bf := bytes.NewBuffer(b)
+	bf := &bytes.Buffer{}
 	err := stmt.Restore(&format.RestoreCtx{
 		Flags: format.DefaultRestoreFlags | format.RestoreTiDBSpecialComment | format.RestoreStringWithoutDefaultCharset,
 		In:    bf,

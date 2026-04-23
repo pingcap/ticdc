@@ -544,10 +544,12 @@ func (d *dispatcherStat) handleSingleDataEvents(events []dispatcher.DispatcherEv
 				zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 				zap.Stringer("dispatcher", d.getDispatcherID()),
 				zap.Error(err))
+			if target, ok := d.target.(dispatcher.Dispatcher); ok {
+				target.HandleError(err)
+			}
 			return false
 		}
 		events[0].Event = ddl
-		d.tableInfoVersion.Store(ddl.FinishedTs)
 		if ddl.TableInfo != nil {
 			// Check if this DDL's TableInfo is for a different table.
 			// This can happen with CREATE TABLE LIKE, where the DDL is added to the
@@ -563,6 +565,7 @@ func (d *dispatcherStat) handleSingleDataEvents(events []dispatcher.DispatcherEv
 					zap.Int64("ddlTableID", ddlTableID),
 					zap.String("ddlTableName", ddl.TableInfo.TableName.Table))
 			} else {
+				d.tableInfoVersion.Store(ddl.FinishedTs)
 				d.tableInfo.Store(ddl.TableInfo)
 			}
 		}
@@ -823,9 +826,11 @@ func (d *dispatcherStat) newDispatcherRemoveRequest(serverId string) *messaging.
 // results in same schema/table), returns the original tableInfo unchanged.
 // This avoids mutating shared TableInfo objects that may be used by multiple changefeeds.
 func (d *dispatcherStat) applyRoutingToTableInfo(tableInfo *common.TableInfo) *common.TableInfo {
-	return d.target.GetRouter().ApplyToTableInfo(tableInfo)
+	router := d.target.GetRouter()
+	return router.ApplyToTableInfo(tableInfo)
 }
 
 func (d *dispatcherStat) applyRoutingToDDLEvent(ddl *commonEvent.DDLEvent) (*commonEvent.DDLEvent, error) {
-	return d.target.GetRouter().ApplyToDDLEvent(ddl, d.target.GetChangefeedID())
+	router := d.target.GetRouter()
+	return router.ApplyToDDLEvent(ddl, d.target.GetChangefeedID())
 }
