@@ -402,10 +402,7 @@ func (e *DispatcherManager) InitalizeTableTriggerEventDispatcher(schemaInfo []*h
 	}
 
 	// table trigger event dispatcher can register to event collector to receive events after finish the initial table schema store from the maintainer.
-	appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).AddDispatcher(
-		e.GetTableTriggerEventDispatcher(),
-		e.sinkQuota,
-	)
+	appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).AddDispatcher(e.GetTableTriggerEventDispatcher(), e.sinkQuota)
 
 	// The table trigger event dispatcher needs changefeed-level checkpoint updates only
 	// when downstream components must maintain table names (for non-MySQL sinks), or
@@ -520,10 +517,7 @@ func (e *DispatcherManager) newEventDispatchers(infos map[common.DispatcherID]di
 			// we don't register table trigger event dispatcher in event collector, when created.
 			// Table trigger event dispatcher is a special dispatcher,
 			// it need to wait get the initial table schema store from the maintainer, then will register to event collector to receive events.
-			appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).AddDispatcher(
-				d,
-				e.sinkQuota,
-			)
+			appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).AddDispatcher(d, e.sinkQuota)
 		}
 
 		seq := e.dispatcherMap.Set(id, d)

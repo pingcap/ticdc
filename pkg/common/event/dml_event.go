@@ -278,8 +278,6 @@ func (b *BatchDMLEvent) encodeV1() ([]byte, error) {
 
 // AssembleRows assembles the Rows from the RawRows.
 // It also sets the TableInfo and clears the RawRows.
-// For local events (same node, b.Rows already set), it only applies routing
-// without replacing the TableInfo to preserve schema version compatibility.
 func (b *BatchDMLEvent) AssembleRows(tableInfo *common.TableInfo) {
 	if tableInfo == nil {
 		log.Panic("DMLEvent: TableInfo is nil")

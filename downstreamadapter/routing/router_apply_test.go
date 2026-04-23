@@ -164,7 +164,7 @@ func TestApplyToDDLEvent(t *testing.T) {
 			}(),
 			check: func(t *testing.T, original, routed *event.DDLEvent) {
 				require.Contains(t, routed.Query, "`target_db`.`target_table`")
-				require.Equal(t, "target_db", routed.GetDDLSchemaName())
+				require.Equal(t, "target_db", routed.GetSchemaName())
 				require.Equal(t, "source_db", routed.SchemaName)
 				require.Equal(t, "source_table", routed.TableName)
 				require.Equal(t, "target_db", routed.GetTargetSchemaName())
@@ -187,7 +187,7 @@ func TestApplyToDDLEvent(t *testing.T) {
 				}, routed.BlockedTableNames[0])
 
 				require.Equal(t, "ALTER TABLE `source_db`.`source_table` ADD INDEX idx_id(id)", original.Query)
-				require.Equal(t, "source_db", original.GetDDLSchemaName())
+				require.Equal(t, "source_db", original.GetSchemaName())
 				require.Empty(t, original.TableInfo.TableName.TargetSchema)
 				require.Empty(t, original.TableInfo.TableName.TargetTable)
 			},
@@ -269,7 +269,7 @@ func TestApplyToDDLEvent(t *testing.T) {
 			check: func(t *testing.T, original, routed *event.DDLEvent) {
 				require.Equal(t, "source_db", routed.SchemaName)
 				require.Equal(t, "target_db", routed.GetTargetSchemaName())
-				require.Equal(t, "target_db", routed.GetDDLSchemaName())
+				require.Equal(t, "target_db", routed.GetSchemaName())
 				require.Equal(t, "source_db", original.SchemaName)
 			},
 		},

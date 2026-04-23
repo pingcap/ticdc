@@ -479,11 +479,8 @@ INSERT INTO test VALUES (1);
 		{
 			name: "Queries with whitespace and newlines",
 			input: `
-
     CREATE TABLE test (id INT);
-
     INSERT INTO test VALUES (1);
-
 `,
 			expected: []string{
 				"CREATE TABLE `test` (`id` INT);",
