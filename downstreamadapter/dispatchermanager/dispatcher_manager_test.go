@@ -22,6 +22,7 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/downstreamadapter/eventcollector"
+	"github.com/pingcap/ticdc/downstreamadapter/routing"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/mock"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql"
@@ -81,7 +82,7 @@ func createTestDispatcher(t *testing.T, manager *DispatcherManager, id common.Di
 		nil,
 		&defaultAtomicity,
 		false,
-		nil, // router
+		routing.Router{},
 		0,
 		0,
 		make(chan dispatcher.TableSpanStatusWithSeq, 1),
@@ -145,7 +146,7 @@ func createTestManager(t *testing.T) *DispatcherManager {
 		nil,   // syncPointConfig
 		&defaultAtomicity,
 		false,
-		nil, // router
+		routing.Router{},
 		0,
 		0,
 		make(chan dispatcher.TableSpanStatusWithSeq, 8192),

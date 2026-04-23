@@ -141,8 +141,8 @@ func (m *mockEventDispatcher) IsOutputRawChangeEvent() bool {
 	return false
 }
 
-func (m *mockEventDispatcher) GetRouter() *routing.Router {
-	return nil
+func (m *mockEventDispatcher) GetRouter() routing.Router {
+	return routing.Router{}
 }
 
 func newMessage(id node.ID, msg messaging.IOTypeT) *messaging.TargetMessage {

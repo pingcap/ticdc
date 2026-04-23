@@ -243,7 +243,7 @@ func NewDispatcherManager(
 	}
 
 	var err error
-	var router *routing.Router
+	var router routing.Router
 	if manager.config.SinkConfig != nil {
 		router, err = routing.NewRouter(manager.config.CaseSensitive, manager.config.SinkConfig.DispatchRules)
 		if err != nil {

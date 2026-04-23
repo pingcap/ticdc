@@ -46,7 +46,7 @@ type mockDispatcher struct {
 	checkPointTs uint64
 
 	skipSyncpointAtStartTs bool
-	router                 *routing.Router
+	router                 routing.Router
 }
 
 func newMockDispatcher(id common.DispatcherID, startTs uint64) *mockDispatcher {
@@ -133,7 +133,7 @@ func (m *mockDispatcher) IsOutputRawChangeEvent() bool {
 	return false
 }
 
-func (m *mockDispatcher) GetRouter() *routing.Router {
+func (m *mockDispatcher) GetRouter() routing.Router {
 	return m.router
 }
 
@@ -1525,8 +1525,7 @@ func TestApplyRoutingToTableInfo(t *testing.T) {
 
 		stat := newDispatcherStat(mockDisp, newTestEventCollector(localServerID), nil)
 		stat.connState.setEventServiceID(remoteServerID)
-		stat.epoch.Store(10)
-		stat.lastEventSeq.Store(1)
+		stat.currentEpoch.Store(newDispatcherEpochState(10, 1, stat.target.GetStartTs()))
 		stat.lastEventCommitTs.Store(50)
 
 		// Create original TableInfo - should NOT be mutated
@@ -1585,8 +1584,7 @@ func TestApplyRoutingToTableInfo(t *testing.T) {
 
 		stat := newDispatcherStat(mockDisp, newTestEventCollector(localServerID), nil)
 		stat.connState.setEventServiceID(remoteServerID)
-		stat.epoch.Store(10)
-		stat.lastEventSeq.Store(1)
+		stat.currentEpoch.Store(newDispatcherEpochState(10, 1, stat.target.GetStartTs()))
 		stat.lastEventCommitTs.Store(50)
 
 		// This dispatcher's table - use TableID: 1 to match mockDispatcher's TableSpan.TableID
@@ -1652,15 +1650,14 @@ func TestApplyRoutingToTableInfo(t *testing.T) {
 	t.Run("DDL without routing configured passes through unchanged", func(t *testing.T) {
 		mockDisp := newMockDispatcher(common.NewDispatcherID(), 0)
 		// No router configured
-		mockDisp.router = nil
+		mockDisp.router = routing.Router{}
 		mockDisp.handleEvents = func(events []dispatcher.DispatcherEvent, wakeCallback func()) bool {
 			return false
 		}
 
 		stat := newDispatcherStat(mockDisp, newTestEventCollector(localServerID), nil)
 		stat.connState.setEventServiceID(remoteServerID)
-		stat.epoch.Store(10)
-		stat.lastEventSeq.Store(1)
+		stat.currentEpoch.Store(newDispatcherEpochState(10, 1, stat.target.GetStartTs()))
 		stat.lastEventCommitTs.Store(50)
 
 		tableInfo := &common.TableInfo{
@@ -1708,8 +1705,7 @@ func TestApplyRoutingToTableInfo(t *testing.T) {
 
 		stat := newDispatcherStat(mockDisp, newTestEventCollector(localServerID), nil)
 		stat.connState.setEventServiceID(remoteServerID)
-		stat.epoch.Store(10)
-		stat.lastEventSeq.Store(1)
+		stat.currentEpoch.Store(newDispatcherEpochState(10, 1, stat.target.GetStartTs()))
 		stat.lastEventCommitTs.Store(50)
 
 		originalTableInfo := &common.TableInfo{
@@ -1760,8 +1756,7 @@ func TestApplyRoutingToTableInfo(t *testing.T) {
 
 		stat := newDispatcherStat(mockDisp, newTestEventCollector(localServerID), nil)
 		stat.connState.setEventServiceID(remoteServerID)
-		stat.epoch.Store(10)
-		stat.lastEventSeq.Store(1)
+		stat.currentEpoch.Store(newDispatcherEpochState(10, 1, stat.target.GetStartTs()))
 		stat.lastEventCommitTs.Store(50)
 
 		originalTableInfo := &common.TableInfo{
@@ -1818,8 +1813,7 @@ func TestApplyRoutingToTableInfo(t *testing.T) {
 
 		stat := newDispatcherStat(mockDisp, newTestEventCollector(localServerID), nil)
 		stat.connState.setEventServiceID(remoteServerID)
-		stat.epoch.Store(10)
-		stat.lastEventSeq.Store(1)
+		stat.currentEpoch.Store(newDispatcherEpochState(10, 1, stat.target.GetStartTs()))
 		stat.lastEventCommitTs.Store(50)
 
 		// Set up initial tableInfo for the original table 't' (tableID=1, which matches mockDispatcher)

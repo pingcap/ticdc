@@ -45,7 +45,7 @@ type DispatcherService interface {
 	GetChangefeedID() common.ChangeFeedID
 	GetEventCollectorBatchConfig() (batchCount int, batchBytes int)
 	GetTableSpan() *heartbeatpb.TableSpan
-	GetRouter() *routing.Router
+	GetRouter() routing.Router
 	GetTimezone() string
 	GetIntegrityConfig() *eventpb.IntegrityConfig
 	GetFilterConfig() *eventpb.FilterConfig

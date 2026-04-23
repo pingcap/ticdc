@@ -537,9 +537,6 @@ func (d *dispatcherStat) handleSingleDataEvents(events []dispatcher.DispatcherEv
 		return false
 	}
 	if events[0].GetType() == commonEvent.TypeDDLEvent {
-		if !d.filterAndUpdateEventByCommitTs(events[0]) {
-			return false
-		}
 		originalDDL := events[0].Event.(*commonEvent.DDLEvent)
 		ddl, err := d.applyRoutingToDDLEvent(originalDDL)
 		if err != nil {

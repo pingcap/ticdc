@@ -57,8 +57,7 @@ type SharedInfo struct {
 
 	// router is used to route source schema/table names to target schema/table names.
 	// It is used to apply routing to TableInfo before storing it.
-	// May be nil if no routing rules are configured.
-	router *routing.Router
+	router routing.Router
 	// Normal event dispatchers inherit these shared batch defaults.
 	eventCollectorBatchCount int
 	eventCollectorBatchBytes int
@@ -96,7 +95,7 @@ func NewSharedInfo(
 	syncPointConfig *syncpoint.SyncPointConfig,
 	txnAtomicity *config.AtomicityLevel,
 	enableSplittableCheck bool,
-	router *routing.Router,
+	router routing.Router,
 	eventCollectorBatchCount int,
 	eventCollectorBatchBytes int,
 	statusesChan chan TableSpanStatusWithSeq,
@@ -195,9 +194,9 @@ func (d *BasicDispatcher) IsOutputRawChangeEvent() bool {
 	return d.sharedInfo.outputRawChangeEvent
 }
 
-func (d *BasicDispatcher) GetRouter() *routing.Router {
+func (d *BasicDispatcher) GetRouter() routing.Router {
 	if d.sharedInfo == nil {
-		return nil
+		return routing.Router{}
 	}
 	return d.sharedInfo.GetRouter()
 }
@@ -293,8 +292,8 @@ func (s *SharedInfo) GetBlockEventExecutor() *blockEventExecutor {
 }
 
 // GetRouter returns the router for schema/table name routing.
-// May return nil if no routing rules are configured.
-func (s *SharedInfo) GetRouter() *routing.Router {
+// The zero value router is a no-op router.
+func (s *SharedInfo) GetRouter() routing.Router {
 	return s.router
 }
 

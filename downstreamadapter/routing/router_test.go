@@ -77,16 +77,22 @@ func TestSubstituteExpression(t *testing.T) {
 func TestNewRouter(t *testing.T) {
 	t.Parallel()
 
-	t.Run("nil or empty rules return nil router", func(t *testing.T) {
+	t.Run("nil or empty rules return zero value router", func(t *testing.T) {
 		t.Parallel()
 
 		router, err := NewRouter(true, nil)
 		require.NoError(t, err)
-		require.Nil(t, router)
+		require.Empty(t, router.rules)
+		schema, table := router.Route("db1", "t1")
+		require.Equal(t, "db1", schema)
+		require.Equal(t, "t1", table)
 
 		router, err = NewRouter(true, []*config.DispatchRule{})
 		require.NoError(t, err)
-		require.Nil(t, router)
+		require.Empty(t, router.rules)
+		schema, table = router.Route("db1", "t1")
+		require.Equal(t, "db1", schema)
+		require.Equal(t, "t1", table)
 	})
 
 	t.Run("rules without routing targets are skipped", func(t *testing.T) {
@@ -96,7 +102,7 @@ func TestNewRouter(t *testing.T) {
 			{Matcher: []string{"db1.*"}},
 		})
 		require.NoError(t, err)
-		require.Nil(t, router)
+		require.Empty(t, router.rules)
 	})
 
 	t.Run("invalid matcher returns error", func(t *testing.T) {
@@ -113,7 +119,7 @@ func TestNewRouter(t *testing.T) {
 		code, ok := errors.RFCCode(err)
 		require.True(t, ok)
 		require.Equal(t, errors.ErrInvalidTableRoutingRule.RFCCode(), code)
-		require.Nil(t, router)
+		require.Empty(t, router.rules)
 	})
 
 	t.Run("builds router from rules with target fields and ignores pure dispatch rules", func(t *testing.T) {
@@ -136,7 +142,7 @@ func TestNewRouter(t *testing.T) {
 			},
 		})
 		require.NoError(t, err)
-		require.NotNil(t, router)
+		require.Len(t, router.rules, 2)
 
 		schema, table := router.Route("db1", "orders")
 		require.Equal(t, "db1", schema)
@@ -155,8 +161,8 @@ func TestNewRouter(t *testing.T) {
 func TestRouterRoute(t *testing.T) {
 	t.Parallel()
 
-	var nilRouter *Router
-	schema, table := nilRouter.Route("source_db", "source_table")
+	var zeroRouter Router
+	schema, table := zeroRouter.Route("source_db", "source_table")
 	require.Equal(t, "source_db", schema)
 	require.Equal(t, "source_table", table)
 
@@ -167,7 +173,7 @@ func TestRouterRoute(t *testing.T) {
 		{Matcher: []string{"*.*"}, TargetSchema: "fallback", TargetTable: TablePlaceholder},
 	})
 	require.NoError(t, err)
-	require.NotNil(t, router)
+	require.Len(t, router.rules, 4)
 
 	testCases := []struct {
 		name           string
@@ -213,6 +219,28 @@ func TestRouterRoute(t *testing.T) {
 			require.Equal(t, tc.expectedTable, gotTable)
 		})
 	}
+
+	t.Run("schema only routing does not produce target table", func(t *testing.T) {
+		router, err := NewRouter(true, []*config.DispatchRule{
+			{Matcher: []string{"db1.*"}, TargetSchema: "db1_archive", TargetTable: "should_not_apply"},
+		})
+		require.NoError(t, err)
+
+		schema, table := router.Route("db1", "")
+		require.Equal(t, "db1_archive", schema)
+		require.Empty(t, table)
+	})
+
+	t.Run("empty schema and table do not trigger routing", func(t *testing.T) {
+		router, err := NewRouter(true, []*config.DispatchRule{
+			{Matcher: []string{"*.*"}, TargetSchema: "fallback", TargetTable: "should_not_apply"},
+		})
+		require.NoError(t, err)
+
+		schema, table := router.Route("", "")
+		require.Empty(t, schema)
+		require.Empty(t, table)
+	})
 }
 
 func TestRouterFirstMatchWins(t *testing.T) {
@@ -224,7 +252,7 @@ func TestRouterFirstMatchWins(t *testing.T) {
 		{Matcher: []string{"db1.users"}, TargetSchema: "users_only", TargetTable: "users_bak"},
 	})
 	require.NoError(t, err)
-	require.NotNil(t, router)
+	require.Len(t, router.rules, 3)
 
 	schema, table := router.Route("db1", "users")
 	require.Equal(t, "catch_all", schema)
