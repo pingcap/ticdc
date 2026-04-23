@@ -133,15 +133,8 @@ func (d *EventDispatcher) cache(dispatcherEvents []DispatcherEvent, wakeCallback
 }
 
 func (d *EventDispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallback func()) bool {
-	log.Info("handle events", zap.Stringer("dispatcher", d.id), zap.Int("eventCount", len(dispatcherEvents)), zap.Uint64("redoGlobalTs", d.redoGlobalTs.Load()))
-	// if the commit-ts of last event of dispatcherEvents is greater than redoGlobalTs,
 	// the dispatcherEvents will be cached util the redoGlobalTs is updated.
 	if d.redoEnable && len(dispatcherEvents) > 0 && d.redoGlobalTs.Load() < dispatcherEvents[len(dispatcherEvents)-1].Event.GetCommitTs() {
-		log.Info("cache events because commitTs is greater than redoGlobalTs",
-			zap.Stringer("dispatcher", d.id),
-			zap.Uint64("dispatcherResolvedTs", d.GetResolvedTs()),
-			zap.Int("length", len(dispatcherEvents)),
-			zap.Int("eventType", dispatcherEvents[len(dispatcherEvents)-1].Event.GetType()))
 		d.cache(dispatcherEvents, wakeCallback)
 		return true
 	}

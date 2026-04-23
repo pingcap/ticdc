@@ -664,11 +664,6 @@ func (h *RedoResolvedTsForwardMessageHandler) Handle(dispatcherManager *Dispatch
 	ok := dispatcherManager.SetRedoResolvedTs(msg.ResolvedTs)
 	if ok {
 		dispatcherManager.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.EventDispatcher) {
-			log.Info("forward redo resolved ts to event dispatcher",
-				zap.String("changefeedID", dispatcherManager.changefeedID.String()),
-				zap.String("dispatcherID", id.String()),
-				zap.Uint64("resolvedTs", msg.ResolvedTs),
-			)
 			dispatcher.HandleCacheEvents()
 		})
 	}
