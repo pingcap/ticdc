@@ -33,8 +33,6 @@ import (
 const (
 	// JobTableID is the id of `tidb_ddl_job`.
 	JobTableID = metadef.TiDBDDLJobTableID
-	// JobHistoryID is the id of `tidb_ddl_history`
-	JobHistoryID = metadef.TiDBDDLHistoryTableID
 )
 
 // TableIDToComparableSpan converts a TableID to a Span whose

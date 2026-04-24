@@ -491,7 +491,7 @@ func (s *sink) genCleanupJob(ctx context.Context, uri *url.URL) []func() {
 	return ret
 }
 
-func (s *sink) Close(_ bool) {
+func (s *sink) Close() {
 	if s.dmlWriters != nil {
 		s.dmlWriters.close()
 	}

@@ -77,7 +77,8 @@ type BarrierEvent struct {
 	lastStatusReceivedTime time.Time
 	passActionSent         bool
 
-	lastWarningLogTime time.Time
+	lastWarningLogTime       time.Time
+	lastForwardReconcileTime time.Time
 }
 
 func NewBlockEvent(cfID common.ChangeFeedID,
@@ -110,8 +111,9 @@ func NewBlockEvent(cfID common.ChangeFeedID,
 		reportedDispatchers: make(map[common.DispatcherID]struct{}),
 		lastResendTime:      time.Time{},
 
-		lastStatusReceivedTime: time.Now(),
-		lastWarningLogTime:     time.Now(),
+		lastStatusReceivedTime:   time.Now(),
+		lastWarningLogTime:       time.Now(),
+		lastForwardReconcileTime: time.Time{},
 	}
 
 	if status.BlockTables != nil {
@@ -175,6 +177,92 @@ func (be *BarrierEvent) createRangeCheckerForTypeDB() {
 		be.rangeChecker = range_checker.NewTableCountChecker(tbls)
 	}
 	log.Info("create range checker for block event", zap.Any("influcenceType", be.blockedDispatchers.InfluenceType), zap.Any("commitTs", be.commitTs), zap.Int64("mode", be.mode))
+}
+
+func (be *BarrierEvent) ensureRangeCheckerForCurrentTasks() {
+	if be.rangeChecker != nil {
+		return
+	}
+
+	switch be.blockedDispatchers.InfluenceType {
+	case heartbeatpb.InfluenceType_Normal:
+		if be.dynamicSplitEnabled {
+			be.rangeChecker = range_checker.NewTableSpanRangeChecker(be.spanController.GetkeyspaceID(), be.blockedDispatchers.TableIDs)
+		} else {
+			be.rangeChecker = range_checker.NewTableCountChecker(be.blockedDispatchers.TableIDs)
+		}
+	case heartbeatpb.InfluenceType_DB:
+		be.createRangeCheckerForTypeDB()
+	case heartbeatpb.InfluenceType_All:
+		be.createRangeCheckerForTypeAll()
+	}
+}
+
+// shortcutSyncPointToPassPhase switches a syncpoint from the WAITING coverage phase
+// to the PASS/DONE coverage phase. The first phase tracks who has reached the barrier,
+// while the second phase tracks who has finished it. We must reset the first-phase
+// bookkeeping before reconciling forward progress, otherwise stale WAITING reports may
+// be mistaken for finished dispatchers and keep the event in an inconsistent state.
+func (be *BarrierEvent) shortcutSyncPointToPassPhase() {
+	be.ensureRangeCheckerForCurrentTasks()
+	if be.rangeChecker != nil {
+		be.rangeChecker.Reset()
+	}
+	be.reportedDispatchers = make(map[common.DispatcherID]struct{})
+	be.selected.Store(true)
+	be.writerDispatcherAdvanced = true
+	be.reconcileForwardedDispatchers()
+	be.lastForwardReconcileTime = time.Now()
+}
+
+func (be *BarrierEvent) reconcileForwardedDispatchers() {
+	for _, replication := range be.collectRelevantReplications() {
+		if forwardBarrierEvent(replication, be) {
+			be.markDispatcherEventDone(replication.ID)
+		}
+	}
+}
+
+func (be *BarrierEvent) collectRelevantReplications() []*replica.SpanReplication {
+	switch be.blockedDispatchers.InfluenceType {
+	case heartbeatpb.InfluenceType_DB:
+		replications := be.spanController.GetTasksBySchemaID(be.blockedDispatchers.SchemaID)
+		ddlDispatcher := be.spanController.GetDDLDispatcher()
+		if ddlDispatcher != nil {
+			replications = append(replications, ddlDispatcher)
+		}
+		return dedupReplications(replications)
+	case heartbeatpb.InfluenceType_All:
+		return be.spanController.GetAllTasks()
+	case heartbeatpb.InfluenceType_Normal:
+		replications := make([]*replica.SpanReplication, 0)
+		for _, tableID := range be.blockedDispatchers.TableIDs {
+			replications = append(replications, be.spanController.GetTasksByTableID(tableID)...)
+		}
+		return dedupReplications(replications)
+	default:
+		return nil
+	}
+}
+
+func dedupReplications(replications []*replica.SpanReplication) []*replica.SpanReplication {
+	if len(replications) <= 1 {
+		return replications
+	}
+
+	seen := make(map[common.DispatcherID]struct{}, len(replications))
+	result := make([]*replica.SpanReplication, 0, len(replications))
+	for _, replication := range replications {
+		if replication == nil {
+			continue
+		}
+		if _, ok := seen[replication.ID]; ok {
+			continue
+		}
+		seen[replication.ID] = struct{}{}
+		result = append(result, replication)
+	}
+	return result
 }
 
 func (be *BarrierEvent) checkEventAction(dispatcherID common.DispatcherID) (*heartbeatpb.DispatcherStatus, node.ID) {
@@ -511,17 +599,29 @@ func (be *BarrierEvent) checkBlockedDispatchers() {
 			replications := be.spanController.GetTasksByTableID(tableId)
 			for _, replication := range replications {
 				if forwardBarrierEvent(replication, be) {
-					// one related table has forward checkpointTs, means the block event can be advanced
-					be.selected.Store(true)
-					be.writerDispatcherAdvanced = true
-					log.Info("one related dispatcher has forward checkpointTs, means the block event can be advanced",
-						zap.String("changefeed", be.cfID.Name()),
-						zap.Uint64("commitTs", be.commitTs),
-						zap.Int64("tableId", tableId),
-						zap.Uint64("checkpointTs", replication.GetStatus().CheckpointTs),
-						zap.String("dispatcher", replication.ID.String()),
-						zap.Int64("mode", be.mode),
-					)
+					if be.isSyncPoint {
+						be.shortcutSyncPointToPassPhase()
+						log.Info("one related dispatcher has forward checkpointTs, shortcut syncpoint to pass phase",
+							zap.String("changefeed", be.cfID.Name()),
+							zap.Uint64("commitTs", be.commitTs),
+							zap.Int64("tableId", tableId),
+							zap.Uint64("checkpointTs", replication.GetStatus().CheckpointTs),
+							zap.String("dispatcher", replication.ID.String()),
+							zap.Int64("mode", be.mode),
+						)
+					} else {
+						// one related table has forward checkpointTs, means the block event can be advanced
+						be.selected.Store(true)
+						be.writerDispatcherAdvanced = true
+						log.Info("one related dispatcher has forward checkpointTs, means the block event can be advanced",
+							zap.String("changefeed", be.cfID.Name()),
+							zap.Uint64("commitTs", be.commitTs),
+							zap.Int64("tableId", tableId),
+							zap.Uint64("checkpointTs", replication.GetStatus().CheckpointTs),
+							zap.String("dispatcher", replication.ID.String()),
+							zap.Int64("mode", be.mode),
+						)
+					}
 					return
 				}
 			}
@@ -531,17 +631,29 @@ func (be *BarrierEvent) checkBlockedDispatchers() {
 		replications := be.spanController.GetTasksBySchemaID(schemaID)
 		for _, replication := range replications {
 			if forwardBarrierEvent(replication, be) {
-				// one related table has forward checkpointTs, means the block event can be advanced
-				be.selected.Store(true)
-				be.writerDispatcherAdvanced = true
-				log.Info("one related dispatcher has forward checkpointTs, means the block event can be advanced",
-					zap.String("changefeed", be.cfID.Name()),
-					zap.Uint64("commitTs", be.commitTs),
-					zap.Int64("schemaID", schemaID),
-					zap.Uint64("checkpointTs", replication.GetStatus().CheckpointTs),
-					zap.String("dispatcher", replication.ID.String()),
-					zap.Int64("mode", be.mode),
-				)
+				if be.isSyncPoint {
+					be.shortcutSyncPointToPassPhase()
+					log.Info("one related dispatcher has forward checkpointTs, shortcut syncpoint to pass phase",
+						zap.String("changefeed", be.cfID.Name()),
+						zap.Uint64("commitTs", be.commitTs),
+						zap.Int64("schemaID", schemaID),
+						zap.Uint64("checkpointTs", replication.GetStatus().CheckpointTs),
+						zap.String("dispatcher", replication.ID.String()),
+						zap.Int64("mode", be.mode),
+					)
+				} else {
+					// one related table has forward checkpointTs, means the block event can be advanced
+					be.selected.Store(true)
+					be.writerDispatcherAdvanced = true
+					log.Info("one related dispatcher has forward checkpointTs, means the block event can be advanced",
+						zap.String("changefeed", be.cfID.Name()),
+						zap.Uint64("commitTs", be.commitTs),
+						zap.Int64("schemaID", schemaID),
+						zap.Uint64("checkpointTs", replication.GetStatus().CheckpointTs),
+						zap.String("dispatcher", replication.ID.String()),
+						zap.Int64("mode", be.mode),
+					)
+				}
 				return
 			}
 		}
@@ -549,16 +661,27 @@ func (be *BarrierEvent) checkBlockedDispatchers() {
 		replications := be.spanController.GetAllTasks()
 		for _, replication := range replications {
 			if forwardBarrierEvent(replication, be) {
-				// one related table has forward checkpointTs, means the block event can be advanced
-				be.selected.Store(true)
-				be.writerDispatcherAdvanced = true
-				log.Info("one related dispatcher has forward checkpointTs, means the block event can be advanced",
-					zap.String("changefeed", be.cfID.Name()),
-					zap.Uint64("commitTs", be.commitTs),
-					zap.Uint64("checkpointTs", replication.GetStatus().CheckpointTs),
-					zap.String("dispatcher", replication.ID.String()),
-					zap.Int64("mode", be.mode),
-				)
+				if be.isSyncPoint {
+					be.shortcutSyncPointToPassPhase()
+					log.Info("one related dispatcher has forward checkpointTs, shortcut syncpoint to pass phase",
+						zap.String("changefeed", be.cfID.Name()),
+						zap.Uint64("commitTs", be.commitTs),
+						zap.Uint64("checkpointTs", replication.GetStatus().CheckpointTs),
+						zap.String("dispatcher", replication.ID.String()),
+						zap.Int64("mode", be.mode),
+					)
+				} else {
+					// one related table has forward checkpointTs, means the block event can be advanced
+					be.selected.Store(true)
+					be.writerDispatcherAdvanced = true
+					log.Info("one related dispatcher has forward checkpointTs, means the block event can be advanced",
+						zap.String("changefeed", be.cfID.Name()),
+						zap.Uint64("commitTs", be.commitTs),
+						zap.Uint64("checkpointTs", replication.GetStatus().CheckpointTs),
+						zap.String("dispatcher", replication.ID.String()),
+						zap.Int64("mode", be.mode),
+					)
+				}
 				return
 			}
 		}
@@ -689,6 +812,10 @@ func (be *BarrierEvent) resend(mode int64) []*messaging.TargetMessage {
 
 		msgs = []*messaging.TargetMessage{be.newWriterActionMessage(stm.GetNodeID(), mode)}
 	} else {
+		if be.isSyncPoint && time.Since(be.lastForwardReconcileTime) > time.Second*10 {
+			be.reconcileForwardedDispatchers()
+			be.lastForwardReconcileTime = time.Now()
+		}
 		// the writer dispatcher is advanced, resend pass action
 		if be.passActionSent && be.isFanoutPassAction() &&
 			now.Sub(be.lastStatusReceivedTime) < fanoutPassResendQuietInterval {

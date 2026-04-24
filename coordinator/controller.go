@@ -134,6 +134,14 @@ func NewController(
 				batchSize,
 				oc,
 				changefeedDB,
+				drainController,
+			),
+			scheduler.DrainScheduler: coscheduler.NewDrainScheduler(
+				selfNode.ID.String(),
+				batchSize,
+				oc,
+				changefeedDB,
+				drainController,
 			),
 			scheduler.BalanceScheduler: coscheduler.NewBalanceScheduler(
 				selfNode.ID.String(),
@@ -141,6 +149,7 @@ func NewController(
 				oc,
 				changefeedDB,
 				balanceInterval,
+				drainController,
 			),
 		}),
 		eventCh:            eventCh,
@@ -437,6 +446,7 @@ func (c *Controller) handleBootstrapResponses(ctx context.Context, responses map
 		}
 	}
 	c.finishBootstrap(ctx, runningCfs)
+	c.bootstrapper.ClearBootstrapResponses()
 }
 
 // handleMaintainerStatus handle the status report from the maintainers
