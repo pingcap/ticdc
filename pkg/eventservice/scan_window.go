@@ -254,11 +254,13 @@ func (c *changefeedStatus) updateMemoryUsage(now time.Time, usageRatio float64, 
 		return
 	}
 
+	normalizedUsageRatio := normalizeUsageRatio(usageRatio)
 	current := time.Duration(c.scanInterval.Load())
 	decision := c.scanWindowController.OnCongestionReport(now, current, c.maxScanInterval(), scanWindowReport{
-		usageRatio:         normalizeUsageRatio(usageRatio),
+		usageRatio:         normalizedUsageRatio,
 		memoryReleaseCount: memoryReleaseCount,
 	})
+	c.observeScanWindowControllerMetrics(normalizedUsageRatio, memoryReleaseCount, current, decision)
 	if decision.newInterval == current {
 		return
 	}
@@ -282,6 +284,61 @@ func (c *changefeedStatus) updateMemoryUsage(now time.Time, usageRatio float64, 
 		zap.Uint32("memoryReleaseCount", memoryReleaseCount),
 		zap.Bool("syncPointEnabled", c.isSyncpointEnabled()),
 		zap.Duration("syncPointInterval", c.syncPointInterval))
+}
+
+func initializeScanWindowMetrics(changefeed string) {
+	metrics.EventServiceScanWindowBaseTsGaugeVec.WithLabelValues(changefeed).Set(0)
+	metrics.EventServiceScanWindowIntervalGaugeVec.WithLabelValues(changefeed).Set(defaultScanInterval.Seconds())
+	metrics.EventServiceScanWindowUsageRatioGaugeVec.WithLabelValues(changefeed, "report").Set(0)
+	metrics.EventServiceScanWindowUsageRatioGaugeVec.WithLabelValues(changefeed, "avg").Set(0)
+	metrics.EventServiceScanWindowUsageRatioGaugeVec.WithLabelValues(changefeed, "max").Set(0)
+	metrics.EventServiceScanWindowUsageEMAGaugeVec.WithLabelValues(changefeed, "fast").Set(0)
+	metrics.EventServiceScanWindowUsageEMAGaugeVec.WithLabelValues(changefeed, "slow").Set(0)
+	metrics.EventServiceScanWindowPressureScoreGaugeVec.WithLabelValues(changefeed).Set(0)
+}
+
+func deleteScanWindowMetrics(changefeed string) {
+	metrics.EventServiceAvailableMemoryQuotaGaugeVec.DeleteLabelValues(changefeed)
+	metrics.EventServiceScanWindowBaseTsGaugeVec.DeleteLabelValues(changefeed)
+	metrics.EventServiceScanWindowIntervalGaugeVec.DeleteLabelValues(changefeed)
+	metrics.EventServiceScanWindowUsageRatioGaugeVec.DeleteLabelValues(changefeed, "report")
+	metrics.EventServiceScanWindowUsageRatioGaugeVec.DeleteLabelValues(changefeed, "avg")
+	metrics.EventServiceScanWindowUsageRatioGaugeVec.DeleteLabelValues(changefeed, "max")
+	metrics.EventServiceScanWindowUsageEMAGaugeVec.DeleteLabelValues(changefeed, "fast")
+	metrics.EventServiceScanWindowUsageEMAGaugeVec.DeleteLabelValues(changefeed, "slow")
+	metrics.EventServiceScanWindowPressureScoreGaugeVec.DeleteLabelValues(changefeed)
+	metrics.EventServiceScanWindowMemoryReleaseCount.DeleteLabelValues(changefeed)
+	for _, reason := range []scanWindowDecisionReason{
+		scanWindowDecisionNone,
+		scanWindowDecisionCriticalBrake,
+		scanWindowDecisionHighPressure,
+		scanWindowDecisionSustainedPressure,
+		scanWindowDecisionLowRecovery,
+		scanWindowDecisionVeryLowRecovery,
+	} {
+		metrics.EventServiceScanWindowAdjustCount.DeleteLabelValues(changefeed, string(reason))
+	}
+}
+
+func (c *changefeedStatus) observeScanWindowControllerMetrics(
+	usageRatio float64,
+	memoryReleaseCount uint32,
+	current time.Duration,
+	decision scanWindowDecision,
+) {
+	changefeed := c.changefeedID.String()
+	metrics.EventServiceScanWindowUsageRatioGaugeVec.WithLabelValues(changefeed, "report").Set(usageRatio)
+	metrics.EventServiceScanWindowUsageRatioGaugeVec.WithLabelValues(changefeed, "avg").Set(decision.usage.avg)
+	metrics.EventServiceScanWindowUsageRatioGaugeVec.WithLabelValues(changefeed, "max").Set(decision.usage.max)
+	metrics.EventServiceScanWindowUsageEMAGaugeVec.WithLabelValues(changefeed, "fast").Set(decision.fastUsageEMA)
+	metrics.EventServiceScanWindowUsageEMAGaugeVec.WithLabelValues(changefeed, "slow").Set(decision.slowUsageEMA)
+	metrics.EventServiceScanWindowPressureScoreGaugeVec.WithLabelValues(changefeed).Set(decision.pressureScore)
+	if memoryReleaseCount > 0 {
+		metrics.EventServiceScanWindowMemoryReleaseCount.WithLabelValues(changefeed).Add(float64(memoryReleaseCount))
+	}
+	if decision.newInterval != current {
+		metrics.EventServiceScanWindowAdjustCount.WithLabelValues(changefeed, string(decision.reason)).Inc()
+	}
 }
 
 const (

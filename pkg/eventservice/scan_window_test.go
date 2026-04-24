@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/atomic"
@@ -96,6 +98,44 @@ func TestUpdateMemoryUsageDoesNotResetScanIntervalOnMemoryRelease(t *testing.T) 
 
 	status.updateMemoryUsage(now, 0.5, 1)
 	require.Equal(t, int64(40*time.Second), status.scanInterval.Load())
+}
+
+func TestUpdateMemoryUsageRecordsScanWindowObservationMetrics(t *testing.T) {
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", t.Name()), 1*time.Minute)
+	changefeed := status.changefeedID.String()
+	t.Cleanup(func() {
+		deleteScanWindowMetrics(changefeed)
+	})
+
+	now := time.Now()
+	status.scanInterval.Store(int64(40 * time.Second))
+
+	status.updateMemoryUsage(now, 0.6, 1)
+
+	require.InDelta(t, 0.6, testutil.ToFloat64(metrics.EventServiceScanWindowUsageRatioGaugeVec.WithLabelValues(changefeed, "report")), 1e-9)
+	require.InDelta(t, 0.6, testutil.ToFloat64(metrics.EventServiceScanWindowUsageRatioGaugeVec.WithLabelValues(changefeed, "avg")), 1e-9)
+	require.InDelta(t, 0.6, testutil.ToFloat64(metrics.EventServiceScanWindowUsageRatioGaugeVec.WithLabelValues(changefeed, "max")), 1e-9)
+	require.InDelta(t, 0.6, testutil.ToFloat64(metrics.EventServiceScanWindowUsageEMAGaugeVec.WithLabelValues(changefeed, "fast")), 1e-9)
+	require.InDelta(t, 0.6, testutil.ToFloat64(metrics.EventServiceScanWindowUsageEMAGaugeVec.WithLabelValues(changefeed, "slow")), 1e-9)
+	require.InDelta(t, 0, testutil.ToFloat64(metrics.EventServiceScanWindowPressureScoreGaugeVec.WithLabelValues(changefeed)), 1e-9)
+	require.InDelta(t, 1, testutil.ToFloat64(metrics.EventServiceScanWindowMemoryReleaseCount.WithLabelValues(changefeed)), 1e-9)
+}
+
+func TestUpdateMemoryUsageRecordsScanWindowAdjustCount(t *testing.T) {
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", t.Name()), 1*time.Minute)
+	changefeed := status.changefeedID.String()
+	t.Cleanup(func() {
+		deleteScanWindowMetrics(changefeed)
+	})
+
+	now := time.Now()
+	markScanWindowReadyForDecrease(status, now)
+	status.scanInterval.Store(int64(40 * time.Second))
+
+	status.updateMemoryUsage(now.Add(memoryUsageWindowDuration), 0.8, 0)
+
+	require.Equal(t, int64(30*time.Second), status.scanInterval.Load())
+	require.InDelta(t, 1, testutil.ToFloat64(metrics.EventServiceScanWindowAdjustCount.WithLabelValues(changefeed, string(scanWindowDecisionHighPressure))), 1e-9)
 }
 
 func TestAdjustScanIntervalIncreaseWithJitteredSamples(t *testing.T) {
