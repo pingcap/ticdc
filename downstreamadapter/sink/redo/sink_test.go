@@ -103,6 +103,22 @@ func TestConsistentConfig(t *testing.T) {
 	}
 }
 
+func TestRedoSinkBatchConfig(t *testing.T) {
+	cfg := newTestConsistentConfig("blackhole://")
+	cfg.MaxLogSize = util.AddressOf(int64(32))
+
+	sink, err := New(
+		context.Background(),
+		common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName),
+		cfg,
+	)
+	require.NoError(t, err)
+	defer sink.Close()
+
+	require.Equal(t, 4096, sink.BatchCount())
+	require.Equal(t, int(32*redo.Megabyte), sink.BatchBytes())
+}
+
 // TestRedoSinkInProcessor tests how redo log manager is used in processor.
 func TestRedoSinkInProcessor(t *testing.T) {
 	helper := commonEvent.NewEventTestHelper(t)
@@ -130,7 +146,7 @@ func TestRedoSinkInProcessor(t *testing.T) {
 		cfg.UseFileBackend = util.AddressOf(useFileBackend)
 		dmlMgr, err := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), cfg)
 		require.NoError(t, err)
-		defer dmlMgr.Close(false)
+		defer dmlMgr.Close()
 
 		var eg errgroup.Group
 		eg.Go(func() error {
@@ -213,7 +229,7 @@ func TestRedoSinkError(t *testing.T) {
 	cfg := newTestConsistentConfig("blackhole-invalid://")
 	logMgr, err := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), cfg)
 	require.NoError(t, err)
-	defer logMgr.Close(false)
+	defer logMgr.Close()
 
 	var eg errgroup.Group
 	eg.Go(func() error {
@@ -267,7 +283,7 @@ func runBenchTest(b *testing.B, storage string, useFileBackend bool) {
 	cfg.UseFileBackend = util.AddressOf(useFileBackend)
 	dmlMgr, err := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), cfg)
 	require.NoError(b, err)
-	defer dmlMgr.Close(false)
+	defer dmlMgr.Close()
 
 	var eg errgroup.Group
 	eg.Go(func() error {
@@ -333,7 +349,7 @@ func TestRedoSinkSendMessagesInBatch(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
-	mockWriter := writer.NewMockRedoLogWriter(ctrl)
+	mockWriter := writer.NewMockRedoDMLWriter(ctrl)
 	expectWriteBatch := func(batchSize int) *gomock.Call {
 		args := make([]interface{}, 0, batchSize+1)
 		args = append(args, gomock.Any()) // context
@@ -341,8 +357,8 @@ func TestRedoSinkSendMessagesInBatch(t *testing.T) {
 			args = append(args, gomock.Any())
 		}
 		return mockWriter.EXPECT().
-			WriteEvents(args[0], args[1:]...).
-			DoAndReturn(func(_ context.Context, events ...writer.RedoEvent) error {
+			AddDMLEvents(args[0], args[1:]...).
+			DoAndReturn(func(_ context.Context, events ...*commonEvent.RedoRowEvent) error {
 				require.Len(t, events, batchSize)
 				return nil
 			})
@@ -356,7 +372,7 @@ func TestRedoSinkSendMessagesInBatch(t *testing.T) {
 
 	s := &Sink{
 		dmlWriter: mockWriter,
-		logBuffer: chann.NewUnlimitedChannelDefault[writer.RedoEvent](),
+		logBuffer: chann.NewUnlimitedChannelDefault[*commonEvent.RedoRowEvent](),
 	}
 
 	doneCh := make(chan error, 1)
@@ -365,7 +381,7 @@ func TestRedoSinkSendMessagesInBatch(t *testing.T) {
 	}()
 
 	totalEvents := redo.DefaultFlushBatchSize*2 + 17
-	events := make([]writer.RedoEvent, 0, totalEvents)
+	events := make([]*commonEvent.RedoRowEvent, 0, totalEvents)
 	for range totalEvents {
 		events = append(events, &commonEvent.RedoRowEvent{})
 	}

@@ -21,6 +21,7 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/operator"
 	"github.com/pingcap/ticdc/maintainer/replica"
+	mscheduler "github.com/pingcap/ticdc/maintainer/scheduler"
 	"github.com/pingcap/ticdc/maintainer/span"
 	"github.com/pingcap/ticdc/maintainer/split"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -28,7 +29,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
-	"github.com/pingcap/ticdc/pkg/scheduler"
+	pkgscheduler "github.com/pingcap/ticdc/pkg/scheduler"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/threadpool"
@@ -43,7 +44,7 @@ type Controller struct {
 	bootstrapped bool
 	startTs      uint64
 
-	schedulerController    *scheduler.Controller
+	schedulerController    *pkgscheduler.Controller
 	operatorController     *operator.Controller
 	redoOperatorController *operator.Controller
 	spanController         *span.Controller
@@ -70,6 +71,11 @@ type Controller struct {
 
 	keyspaceMeta common.KeyspaceMeta
 	enableRedo   bool
+
+	// drainState keeps the latest dispatcher drain target visible to this
+	// maintainer and is shared by drain-aware schedulers so each tick reads a
+	// consistent host/target snapshot.
+	drainState *mscheduler.DrainState
 }
 
 func NewController(changefeedID common.ChangeFeedID,
@@ -81,6 +87,7 @@ func NewController(changefeedID common.ChangeFeedID,
 	refresher *replica.RegionCountRefresher,
 	keyspaceMeta common.KeyspaceMeta,
 	enableRedo bool,
+	balanceMoveBatchSize int,
 ) *Controller {
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 
@@ -113,15 +120,10 @@ func NewController(changefeedID common.ChangeFeedID,
 	// Create operator controller using spanController
 	oc := operator.NewOperatorController(changefeedID, spanController, batchSize, common.DefaultMode)
 
-	sc := NewScheduleController(
-		changefeedID, batchSize, oc, redoOC, spanController, redoSpanController, balanceInterval, splitter, schedulerCfg,
-	)
-
-	return &Controller{
+	controller := &Controller{
 		startTs:                checkpointTs,
 		changefeedID:           changefeedID,
 		bootstrapped:           false,
-		schedulerController:    sc,
 		operatorController:     oc,
 		redoOperatorController: redoOC,
 		spanController:         spanController,
@@ -135,7 +137,24 @@ func NewController(changefeedID common.ChangeFeedID,
 		splitter:               splitter,
 		keyspaceMeta:           keyspaceMeta,
 		enableRedo:             enableRedo,
+		drainState:             mscheduler.NewDrainState(),
 	}
+	// Scheduler instances share a dedicated drain state object so each tick can
+	// read a consistent snapshot without depending on the whole controller.
+	controller.schedulerController = NewScheduleController(
+		changefeedID,
+		batchSize,
+		oc,
+		redoOC,
+		spanController,
+		redoSpanController,
+		balanceInterval,
+		splitter,
+		schedulerCfg,
+		controller.drainState,
+		balanceMoveBatchSize,
+	)
+	return controller
 }
 
 // HandleStatus handle the status report from the node
@@ -260,4 +279,21 @@ func (c *Controller) GetMinRedoCheckpointTs(minCheckpointTs uint64) uint64 {
 	minCheckpointTsForOperator := c.redoOperatorController.GetMinCheckpointTs(minCheckpointTs)
 	minCheckpointTsForSpan := c.redoSpanController.GetMinCheckpointTsForNonReplicatingSpans(minCheckpointTs)
 	return min(minCheckpointTsForOperator, minCheckpointTsForSpan)
+}
+
+// SetSelfNodeID records the node currently hosting this maintainer.
+func (c *Controller) SetSelfNodeID(selfNodeID node.ID) {
+	c.drainState.SetSelfNodeID(selfNodeID)
+}
+
+// SetDispatcherDrainTarget applies the newest drain target visible to this
+// changefeed. Older epochs are ignored so local state does not regress.
+func (c *Controller) SetDispatcherDrainTarget(target node.ID, epoch uint64) {
+	c.drainState.SetDispatcherDrainTarget(target, epoch)
+}
+
+// getDispatcherDrainTarget returns the current drain target snapshot used by
+// status reporting and later drain-aware schedulers.
+func (c *Controller) getDispatcherDrainTarget() (node.ID, uint64) {
+	return c.drainState.DispatcherDrainTarget()
 }
