@@ -384,10 +384,9 @@ func TestApplyToDDLEventSupportsParserUnsupportedIndexDDL(t *testing.T) {
 	}})
 
 	cases := []struct {
-		name              string
-		ddl               *event.DDLEvent
-		requiredFragments []string
-		forbiddenFragment string
+		name          string
+		ddl           *event.DDLEvent
+		expectedQuery string
 	}{
 		{
 			name: "add fulltext index without index name",
@@ -398,11 +397,7 @@ func TestApplyToDDLEventSupportsParserUnsupportedIndexDDL(t *testing.T) {
 				TableName:  "t1",
 				TableInfo:  newRoutingTestTableInfo("source_db", "t1"),
 			},
-			requiredFragments: []string{
-				"ALTER TABLE `target_db`.`t1_r` ADD FULLTEXT INDEX",
-				"WITH PARSER standard",
-			},
-			forbiddenFragment: "ALTER TABLE t1 ADD FULLTEXT INDEX",
+			expectedQuery: "ALTER TABLE `target_db`.`t1_r` ADD FULLTEXT INDEX (b) WITH PARSER standard;",
 		},
 		{
 			name: "add fulltext index with qualified table",
@@ -413,10 +408,7 @@ func TestApplyToDDLEventSupportsParserUnsupportedIndexDDL(t *testing.T) {
 				TableName:  "t1",
 				TableInfo:  newRoutingTestTableInfo("source_db", "t1"),
 			},
-			requiredFragments: []string{
-				"ALTER TABLE `target_db`.`t1_r` ADD FULLTEXT INDEX `ft_idx`",
-			},
-			forbiddenFragment: "`source_db`.`t1`",
+			expectedQuery: "ALTER TABLE `target_db`.`t1_r` ADD FULLTEXT INDEX `ft_idx`(`c1`)",
 		},
 		{
 			name: "create hybrid index",
@@ -427,11 +419,7 @@ func TestApplyToDDLEventSupportsParserUnsupportedIndexDDL(t *testing.T) {
 				TableName:  "t1",
 				TableInfo:  newRoutingTestTableInfo("source_db", "t1"),
 			},
-			requiredFragments: []string{
-				"CREATE HYBRID INDEX i_idx ON `target_db`.`t1_r`(",
-				"PARAMETER 'hybrid_index_param'",
-			},
-			forbiddenFragment: " ON t1(",
+			expectedQuery: "CREATE HYBRID INDEX i_idx ON `target_db`.`t1_r`(b, c, d, e, g) PARAMETER 'hybrid_index_param';",
 		},
 	}
 
@@ -441,10 +429,7 @@ func TestApplyToDDLEventSupportsParserUnsupportedIndexDDL(t *testing.T) {
 			routed, err := router.ApplyToDDLEvent(tc.ddl)
 			require.NoError(t, err)
 			require.NotSame(t, tc.ddl, routed)
-			for _, fragment := range tc.requiredFragments {
-				require.Contains(t, routed.Query, fragment)
-			}
-			require.NotContains(t, routed.Query, tc.forbiddenFragment)
+			require.Equal(t, tc.expectedQuery, routed.Query)
 		})
 	}
 }

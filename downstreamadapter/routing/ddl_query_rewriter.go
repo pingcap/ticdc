@@ -139,7 +139,7 @@ func (r Router) rewriteSingleDDLQuery(query string, defaultSchema string) (strin
 		return query, false
 	}
 
-	return mustRewriteDDLQuery(stmt, targetTables), true
+	return mustRewriteDDLStmtTables(stmt, targetTables), true
 }
 
 func (r Router) rewriteAddFullTextIndexQuery(query string, targetTableName string) string {
@@ -334,10 +334,10 @@ func (v *tableRenameVisitor) Leave(in ast.Node) (ast.Node, bool) {
 	return in, true
 }
 
-// mustRewriteDDLQuery renames tables in DDL by given `targetTables`.
+// mustRewriteDDLStmtTables renames tables in DDL by given `targetTables`.
 // Argument `targetTables` should have the same structure as the return value of fetchDDLTables.
 // Returned DDL is formatted like StringSingleQuotes, KeyWordUppercase and NameBackQuotes.
-func mustRewriteDDLQuery(stmt ast.StmtNode, targetTables []*filter.Table) string {
+func mustRewriteDDLStmtTables(stmt ast.StmtNode, targetTables []*filter.Table) string {
 	switch stmt.(type) {
 	case ast.DDLNode:
 	default:

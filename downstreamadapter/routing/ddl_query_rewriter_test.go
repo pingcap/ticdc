@@ -387,7 +387,7 @@ func TestResolveDDL(t *testing.T) {
 		require.NoError(t, err)
 
 		// Test RenameDDLTable
-		targetSQL := mustRewriteDDLQuery(stmts[0], ca.targetTableNames[0])
+		targetSQL := mustRewriteDDLStmtTables(stmts[0], ca.targetTableNames[0])
 		require.Equal(t, ca.targetSQLs[0], targetSQL, "RenameDDLTable failed for: %s", ca.sql)
 	}
 }
