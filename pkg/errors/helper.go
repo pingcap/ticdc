@@ -118,6 +118,7 @@ var changefeedUnRetryableErrors = []*errors.Error{
 	ErrMySQLInvalidConfig,
 	ErrStorageSinkInvalidConfig,
 	ErrInvalidTableRoutingRule,
+	ErrTableRoutingFailed,
 
 	// gc related errors
 	ErrGCTTLExceeded,

@@ -15,17 +15,12 @@ package routing
 
 import (
 	"bytes"
-	"fmt"
 
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/format"
 	"github.com/pingcap/tidb/pkg/util/filter"
 )
-
-func genTableName(schema string, table string) *filter.Table {
-	return &filter.Table{Schema: schema, Name: table}
-}
 
 // tableNameExtractor extracts table names from DDL AST nodes.
 // ref: https://github.com/pingcap/tidb/blob/09feccb529be2830944e11f5fed474020f50370f/server/sql_info_fetcher.go#L46
@@ -60,7 +55,7 @@ func fetchDDLTables(schema string, stmt ast.StmtNode) ([]*filter.Table, error) {
 	switch stmt.(type) {
 	case ast.DDLNode:
 	default:
-		return nil, fmt.Errorf("unknown DDL type: %T", stmt)
+		return nil, errors.ErrTableRoutingFailed.GenWithStack("unknown DDL type: %T", stmt)
 	}
 
 	// Special cases: schema related SQLs don't have tableName
@@ -124,23 +119,26 @@ func rewriteDDLQuery(stmt ast.StmtNode, targetTables []*filter.Table) (string, e
 	switch stmt.(type) {
 	case ast.DDLNode:
 	default:
-		return "", fmt.Errorf("unknown DDL type: %T", stmt)
+		return "", errors.ErrTableRoutingFailed.GenWithStack("unknown DDL type: %T", stmt)
 	}
 
 	switch v := stmt.(type) {
 	case *ast.AlterDatabaseStmt:
 		if len(targetTables) != 1 {
-			return "", fmt.Errorf("failed to rewrite DDL: expected 1 target table, got %d", len(targetTables))
+			return "", errors.ErrTableRoutingFailed.GenWithStack(
+				"failed to rewrite DDL: expected 1 target table, got %d", len(targetTables))
 		}
 		v.Name = ast.NewCIStr(targetTables[0].Schema)
 	case *ast.CreateDatabaseStmt:
 		if len(targetTables) != 1 {
-			return "", fmt.Errorf("failed to rewrite DDL: expected 1 target table, got %d", len(targetTables))
+			return "", errors.ErrTableRoutingFailed.GenWithStack(
+				"failed to rewrite DDL: expected 1 target table, got %d", len(targetTables))
 		}
 		v.Name = ast.NewCIStr(targetTables[0].Schema)
 	case *ast.DropDatabaseStmt:
 		if len(targetTables) != 1 {
-			return "", fmt.Errorf("failed to rewrite DDL: expected 1 target table, got %d", len(targetTables))
+			return "", errors.ErrTableRoutingFailed.GenWithStack(
+				"failed to rewrite DDL: expected 1 target table, got %d", len(targetTables))
 		}
 		v.Name = ast.NewCIStr(targetTables[0].Schema)
 	default:
@@ -149,11 +147,14 @@ func rewriteDDLQuery(stmt ast.StmtNode, targetTables []*filter.Table) (string, e
 		}
 		stmt.Accept(visitor)
 		if visitor.hasErr {
-			return "", fmt.Errorf("failed to rewrite DDL: not enough target tables for statement, got %d tables", len(targetTables))
+			return "", errors.ErrTableRoutingFailed.GenWithStack(
+				"failed to rewrite DDL: not enough target tables for statement, got %d tables", len(targetTables))
 		}
 		// Check if all target tables were consumed - extra targets indicate a configuration mismatch
 		if visitor.i < len(targetTables) {
-			return "", fmt.Errorf("failed to rewrite DDL: %d target tables provided but only %d were used in statement", len(targetTables), visitor.i)
+			return "", errors.ErrTableRoutingFailed.GenWithStack(
+				"failed to rewrite DDL: %d target tables provided but only %d were used in statement",
+				len(targetTables), visitor.i)
 		}
 	}
 
@@ -163,7 +164,7 @@ func rewriteDDLQuery(stmt ast.StmtNode, targetTables []*filter.Table) (string, e
 		In:    bf,
 	})
 	if err != nil {
-		return "", errors.Trace(err)
+		return "", errors.WrapError(errors.ErrTableRoutingFailed, err)
 	}
 
 	return bf.String(), nil

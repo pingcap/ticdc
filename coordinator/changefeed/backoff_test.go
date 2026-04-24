@@ -131,25 +131,47 @@ func TestErrorReportedWhenRetrying(t *testing.T) {
 	require.True(t, backoffInterval < backoff.backoffInterval)
 }
 
-func TestInvalidTableRoutingRuleFastFails(t *testing.T) {
-	backoff := NewBackoff(common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), time.Minute*30, 1)
-	require.True(t, backoff.ShouldRun())
-
-	changed, state, err := backoff.CheckStatus(&heartbeatpb.MaintainerStatus{
-		CheckpointTs: 1,
-		Err: []*heartbeatpb.RunningError{
-			{
-				Code:    string(errors.ErrInvalidTableRoutingRule.RFCCode()),
-				Message: "invalid table routing rule",
-			},
+func TestTableRoutingErrorsFastFail(t *testing.T) {
+	tests := []struct {
+		name    string
+		code    string
+		message string
+	}{
+		{
+			name:    "invalid table routing rule",
+			code:    string(errors.ErrInvalidTableRoutingRule.RFCCode()),
+			message: "invalid table routing rule",
 		},
-	})
+		{
+			name:    "table routing failed",
+			code:    string(errors.ErrTableRoutingFailed.RFCCode()),
+			message: "table routing failed",
+		},
+	}
 
-	require.True(t, changed)
-	require.Equal(t, config.StateFailed, state)
-	require.NotNil(t, err)
-	require.False(t, backoff.ShouldRun())
-	require.False(t, backoff.retrying.Load())
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			backoff := NewBackoff(common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), time.Minute*30, 1)
+			require.True(t, backoff.ShouldRun())
+
+			changed, state, err := backoff.CheckStatus(&heartbeatpb.MaintainerStatus{
+				CheckpointTs: 1,
+				Err: []*heartbeatpb.RunningError{
+					{
+						Code:    tc.code,
+						Message: tc.message,
+					},
+				},
+			})
+
+			require.True(t, changed)
+			require.Equal(t, config.StateFailed, state)
+			require.NotNil(t, err)
+			require.False(t, backoff.ShouldRun())
+			require.False(t, backoff.retrying.Load())
+		})
+	}
 }
 
 func TestFailedWhenRetry(t *testing.T) {

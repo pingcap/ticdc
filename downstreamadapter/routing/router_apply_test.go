@@ -20,6 +20,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/stretchr/testify/require"
 )
 
@@ -158,9 +159,6 @@ func TestApplyToDDLEvent(t *testing.T) {
 					SchemaName: "source_db",
 					TableName:  "source_table",
 					TableInfo:  originalTableInfo,
-					MultipleTableInfos: []*common.TableInfo{
-						originalTableInfo,
-					},
 					BlockedTableNames: []event.SchemaTableName{
 						{SchemaName: "source_db", TableName: "source_table"},
 					},
@@ -180,12 +178,6 @@ func TestApplyToDDLEvent(t *testing.T) {
 				require.Equal(t, "target_table", routed.TableInfo.GetTargetTableName())
 				require.Equal(t, "target_db", routed.TableInfo.TableName.TargetSchema)
 				require.Equal(t, "target_table", routed.TableInfo.TableName.TargetTable)
-				require.NotSame(t, original.MultipleTableInfos[0], routed.MultipleTableInfos[0])
-				require.Same(t, routed.TableInfo, routed.MultipleTableInfos[0])
-				require.Equal(t, "source_db", routed.MultipleTableInfos[0].GetSchemaName())
-				require.Equal(t, "source_table", routed.MultipleTableInfos[0].GetTableName())
-				require.Equal(t, "target_db", routed.MultipleTableInfos[0].GetTargetSchemaName())
-				require.Equal(t, "target_table", routed.MultipleTableInfos[0].GetTargetTableName())
 				require.Equal(t, event.SchemaTableName{
 					SchemaName: "target_db",
 					TableName:  "target_table",
@@ -447,6 +439,26 @@ func TestRewriteDDLQueryWithRouting(t *testing.T) {
 			requiredFragments: []string{"`target_db`"},
 			forbiddenFragment: "`source_db`",
 		},
+		{
+			name: "multi ddl keeps separator when only later query routes",
+			router: mustNewRouter(t, false, []*config.DispatchRule{{
+				Matcher:      []string{"source_db.*"},
+				TargetSchema: "target_db",
+				TargetTable:  "{table}_routed",
+			}}),
+			ddl: &event.DDLEvent{
+				Query: "CREATE TABLE `t1` (`id` INT PRIMARY KEY);CREATE TABLE `t2` (`id` INT PRIMARY KEY);",
+				MultipleTableInfos: []*common.TableInfo{
+					{TableName: common.TableName{Schema: "other_db", Table: "t1"}},
+					{TableName: common.TableName{Schema: "source_db", Table: "t2"}},
+				},
+			},
+			expectedChanged: true,
+			requiredFragments: []string{
+				"CREATE TABLE `t1`",
+				";CREATE TABLE `target_db`.`t2_routed`",
+			},
+		},
 	}
 
 	for _, tc := range tests {
@@ -484,6 +496,55 @@ func TestRewriteDDLQueryWithRoutingReturnsTypedParseError(t *testing.T) {
 	code, ok := errors.RFCCode(err)
 	require.True(t, ok)
 	require.Equal(t, errors.ErrTableRoutingFailed.RFCCode(), code)
+}
+
+func TestApplyToDDLEventSkipsQueryRewriteWhenRoutingNotNeeded(t *testing.T) {
+	t.Parallel()
+
+	router := mustNewRouter(t, false, []*config.DispatchRule{{
+		Matcher:      []string{"source_db.*"},
+		TargetSchema: "target_db",
+		TargetTable:  TablePlaceholder,
+	}})
+
+	ddl := &event.DDLEvent{
+		Type:       byte(timodel.ActionAddColumn),
+		Query:      "INVALID DDL",
+		SchemaName: "other_db",
+		TableName:  "t1",
+		TableInfo:  &common.TableInfo{TableName: common.TableName{Schema: "other_db", Table: "t1"}},
+	}
+
+	routed, err := router.ApplyToDDLEvent(ddl)
+	require.NoError(t, err)
+	require.Same(t, ddl, routed)
+}
+
+func TestApplyToDDLEventRewritesQueryOnlyTableReferences(t *testing.T) {
+	t.Parallel()
+
+	router := mustNewRouter(t, false, []*config.DispatchRule{{
+		Matcher:      []string{"source_db.*"},
+		TargetSchema: "target_db",
+		TargetTable:  "{table}_routed",
+	}})
+
+	ddl := &event.DDLEvent{
+		Type:       byte(timodel.ActionCreateView),
+		Query:      "CREATE VIEW `other_db`.`v1` AS SELECT * FROM `source_db`.`orders`",
+		SchemaName: "other_db",
+		TableName:  "v1",
+		TableInfo:  &common.TableInfo{TableName: common.TableName{Schema: "other_db", Table: "v1"}},
+	}
+
+	routed, err := router.ApplyToDDLEvent(ddl)
+	require.NoError(t, err)
+	require.NotSame(t, ddl, routed)
+	require.Contains(t, routed.Query, "`other_db`.`v1`")
+	require.Contains(t, routed.Query, "`target_db`.`orders_routed`")
+	require.NotContains(t, routed.Query, "`source_db`.`orders`")
+	require.Equal(t, "other_db", routed.GetTargetSchemaName())
+	require.Equal(t, "v1", routed.GetTargetTableName())
 }
 
 func mustNewRouter(t *testing.T, caseSensitive bool, rules []*config.DispatchRule) Router {

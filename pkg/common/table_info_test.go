@@ -94,6 +94,31 @@ func TestCloneWithRouting(t *testing.T) {
 		require.Equal(t, "target_db", cloned.GetTargetSchemaName())
 		require.Equal(t, "target_table", cloned.GetTargetTableName())
 	})
+
+	t.Run("pre sqls use routed target name", func(t *testing.T) {
+		idCol := &model.ColumnInfo{
+			ID:      1,
+			Name:    ast.NewCIStr("id"),
+			State:   model.StatePublic,
+			Version: model.CurrLatestColumnInfoVersion,
+		}
+		idCol.FieldType = *types.NewFieldType(mysql.TypeLonglong)
+		idCol.AddFlag(mysql.PriKeyFlag)
+
+		tableInfo := NewTableInfo4Decoder("source_db", &model.TableInfo{
+			ID:         123,
+			Name:       ast.NewCIStr("source_table"),
+			PKIsHandle: true,
+			Columns:    []*model.ColumnInfo{idCol},
+		})
+
+		cloned := tableInfo.CloneWithRouting("target_db", "target_table")
+
+		require.Contains(t, cloned.GetPreInsertSQL(), "`target_db`.`target_table`")
+		require.Contains(t, cloned.GetPreReplaceSQL(), "`target_db`.`target_table`")
+		require.Contains(t, cloned.GetPreUpdateSQL(), "`target_db`.`target_table`")
+		require.NotContains(t, cloned.GetPreInsertSQL(), "`source_db`.`source_table`")
+	})
 }
 
 func TestUnmarshalJSONToTableInfoInvalidData(t *testing.T) {

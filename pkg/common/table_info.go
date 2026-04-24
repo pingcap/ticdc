@@ -142,10 +142,10 @@ func (ti *TableInfo) InitPrivateFields() {
 
 // CloneWithRouting creates a shallow copy of TableInfo with routing applied.
 // The new TableInfo shares the same columnSchema, View, Sequence pointers
-// but has its own TableName (with TargetSchema/TargetTable set) and uninitialized preSQLs.
+// but has its own TableName and precomputed SQLs using the routed target name
+// when columnSchema is available.
 // This is safe because:
 // - columnSchema, View, Sequence are read-only after creation
-// - preSQLs will be initialized later via InitPrivateFields() using the new TableName
 // - TableName is a value type that gets copied
 func (ti *TableInfo) CloneWithRouting(targetSchema, targetTable string) *TableInfo {
 	if ti == nil {
@@ -164,7 +164,6 @@ func (ti *TableInfo) CloneWithRouting(targetSchema, targetTable string) *TableIn
 		UpdateTS:          ti.UpdateTS,
 		ActiveActiveTable: ti.ActiveActiveTable,
 		SoftDeleteTable:   ti.SoftDeleteTable,
-		// preSQLs is zero-initialized (uninitialized mutex/atomic, empty strings)
 	}
 	cloned.TableName.TargetSchema = targetSchema
 	cloned.TableName.TargetTable = targetTable
@@ -177,6 +176,7 @@ func (ti *TableInfo) CloneWithRouting(targetSchema, targetTable string) *TableIn
 		runtime.SetFinalizer(cloned, func(ti *TableInfo) {
 			GetSharedColumnSchemaStorage().tryReleaseColumnSchema(ti.columnSchema)
 		})
+		cloned.InitPrivateFields()
 	}
 
 	return cloned
