@@ -195,9 +195,6 @@ func (d *BasicDispatcher) IsOutputRawChangeEvent() bool {
 }
 
 func (d *BasicDispatcher) GetRouter() routing.Router {
-	if d.sharedInfo == nil {
-		return routing.Router{}
-	}
 	return d.sharedInfo.GetRouter()
 }
 
