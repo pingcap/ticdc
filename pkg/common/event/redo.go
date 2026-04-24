@@ -354,18 +354,8 @@ func (r *RedoDMLEvent) ToDMLEvent() *DMLEvent {
 		indexInfo.Primary = isPrimary
 		tidbTableInfo.Indices = append(tidbTableInfo.Indices, indexInfo)
 	}
-	tableInfo := common.NewTableInfo4Decoder(r.Row.Table.Schema, tidbTableInfo)
-	// Restore routing info from redo log (TargetSchema/TargetTable for table routing).
-	// We must use CloneWithRouting because NewTableInfo4Decoder already called InitPrivateFields()
-	// which pre-computed SQL statements using the source schema/table. CloneWithRouting creates
-	// a new TableInfo with routing applied and uninitialized preSQLs that will be computed
-	// correctly when InitPrivateFields() is called.
-	if r.Row.Table.TargetSchema != "" || r.Row.Table.TargetTable != "" {
-		tableInfo = tableInfo.CloneWithRouting(r.Row.Table.TargetSchema, r.Row.Table.TargetTable)
-		tableInfo.InitPrivateFields()
-	}
 	event := &DMLEvent{
-		TableInfo:       tableInfo,
+		TableInfo:       common.NewTableInfo4Decoder(r.Row.Table.Schema, tidbTableInfo),
 		CommitTs:        r.Row.CommitTs,
 		StartTs:         r.Row.StartTs,
 		Length:          1,
