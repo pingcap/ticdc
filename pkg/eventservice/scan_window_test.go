@@ -23,13 +23,22 @@ import (
 	"go.uber.org/atomic"
 )
 
+func markScanWindowReadyForIncrease(status *changefeedStatus, now time.Time) {
+	status.scanWindowController.setLastAdjustTimeForTest(now.Add(-scanIntervalAdjustCooldown - time.Second))
+	status.scanWindowController.setLastDownAdjustTimeForTest(now.Add(-scanWindowReleaseRecoveryCooldown - time.Second))
+}
+
+func markScanWindowReadyForDecrease(status *changefeedStatus, now time.Time) {
+	status.scanWindowController.setLastDownAdjustTimeForTest(now.Add(-scanWindowPressureAdjustCooldown - time.Second))
+}
+
 func TestAdjustScanIntervalVeryLowBypassesSyncPointCap(t *testing.T) {
 	t.Parallel()
 
 	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 1*time.Minute)
 
 	now := time.Now()
-	status.lastAdjustTime.Store(now.Add(-scanIntervalAdjustCooldown - time.Second))
+	markScanWindowReadyForIncrease(status, now)
 
 	// Start from the sync point capped max interval, then allow it to grow slowly.
 	status.scanInterval.Store(int64(1 * time.Minute))
@@ -47,7 +56,7 @@ func TestAdjustScanIntervalLowRespectsSyncPointCap(t *testing.T) {
 	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 1*time.Minute)
 
 	now := time.Now()
-	status.lastAdjustTime.Store(now.Add(-scanIntervalAdjustCooldown - time.Second))
+	markScanWindowReadyForIncrease(status, now)
 
 	status.scanInterval.Store(int64(40 * time.Second))
 
@@ -57,32 +66,28 @@ func TestAdjustScanIntervalLowRespectsSyncPointCap(t *testing.T) {
 	require.Equal(t, int64(50*time.Second), status.scanInterval.Load())
 }
 
-func TestAdjustScanIntervalDecreaseIgnoresCooldown(t *testing.T) {
+func TestAdjustScanIntervalHighPressureUsesBoundedReduction(t *testing.T) {
 	t.Parallel()
 
 	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 1*time.Minute)
 	now := time.Now()
-	status.lastAdjustTime.Store(now)
+	markScanWindowReadyForDecrease(status, now)
 
 	status.scanInterval.Store(int64(40 * time.Second))
 	status.updateMemoryUsage(now.Add(memoryUsageWindowDuration), 0.8, 0)
-	require.Equal(t, int64(20*time.Second), status.scanInterval.Load())
+	require.Equal(t, int64(30*time.Second), status.scanInterval.Load())
 }
 
 func TestAdjustScanIntervalCriticalPressure(t *testing.T) {
 	t.Parallel()
 
 	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 1*time.Minute)
-	now := time.Now()
-	status.lastAdjustTime.Store(now)
-
 	status.scanInterval.Store(int64(40 * time.Second))
-
-	status.updateMemoryUsage(now.Add(memoryUsageWindowDuration), 1, 0)
+	status.updateMemoryUsage(time.Now().Add(memoryUsageWindowDuration), 1, 0)
 	require.Equal(t, int64(10*time.Second), status.scanInterval.Load())
 }
 
-func TestUpdateMemoryUsageResetsScanIntervalOnMemoryRelease(t *testing.T) {
+func TestUpdateMemoryUsageDoesNotResetScanIntervalOnMemoryRelease(t *testing.T) {
 	t.Parallel()
 
 	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 1*time.Minute)
@@ -90,7 +95,7 @@ func TestUpdateMemoryUsageResetsScanIntervalOnMemoryRelease(t *testing.T) {
 	status.scanInterval.Store(int64(40 * time.Second))
 
 	status.updateMemoryUsage(now, 0.5, 1)
-	require.Equal(t, int64(defaultScanInterval), status.scanInterval.Load())
+	require.Equal(t, int64(40*time.Second), status.scanInterval.Load())
 }
 
 func TestAdjustScanIntervalIncreaseWithJitteredSamples(t *testing.T) {
@@ -99,7 +104,7 @@ func TestAdjustScanIntervalIncreaseWithJitteredSamples(t *testing.T) {
 	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 1*time.Minute)
 
 	start := time.Now()
-	status.lastAdjustTime.Store(start.Add(-scanIntervalAdjustCooldown - time.Second))
+	markScanWindowReadyForIncrease(status, start)
 
 	status.scanInterval.Store(int64(40 * time.Second))
 
@@ -112,37 +117,32 @@ func TestAdjustScanIntervalIncreaseWithJitteredSamples(t *testing.T) {
 	require.Equal(t, int64(50*time.Second), status.scanInterval.Load())
 }
 
-func TestAdjustScanIntervalDecreasesWhenUsageIncreasing(t *testing.T) {
+func TestAdjustScanIntervalReducesOnSustainedPressure(t *testing.T) {
 	t.Parallel()
 
 	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 1*time.Minute)
 	now := time.Now()
-	status.lastAdjustTime.Store(now)
+	markScanWindowReadyForDecrease(status, now)
 
 	status.scanInterval.Store(int64(40 * time.Second))
 
-	status.updateMemoryUsage(now, 0.10, 0)
-	status.updateMemoryUsage(now.Add(1*time.Second), 0.11, 0)
-	status.updateMemoryUsage(now.Add(2*time.Second), 0.12, 0)
-	status.updateMemoryUsage(now.Add(3*time.Second), 0.13, 0)
-	require.Equal(t, int64(40*time.Second), status.scanInterval.Load())
+	status.updateMemoryUsage(now, 0.60, 0)
+	status.updateMemoryUsage(now.Add(1*time.Second), 0.60, 0)
+	status.updateMemoryUsage(now.Add(2*time.Second), 0.60, 0)
+	require.Equal(t, int64(36*time.Second), status.scanInterval.Load())
 }
 
-func TestAdjustScanIntervalDecreasesWhenUsageIncreasingAboveThirtyPercent(t *testing.T) {
+func TestAdjustScanIntervalDoesNotIncreaseBeforeCooldown(t *testing.T) {
 	t.Parallel()
 
 	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 1*time.Minute)
 	now := time.Now()
-	status.lastAdjustTime.Store(now)
-	status.lastTrendAdjustTime.Store(now.Add(-scanTrendAdjustCooldown - time.Second))
-
 	status.scanInterval.Store(int64(40 * time.Second))
 
-	status.updateMemoryUsage(now, 0.31, 0)
-	status.updateMemoryUsage(now.Add(1*time.Second), 0.32, 0)
-	status.updateMemoryUsage(now.Add(2*time.Second), 0.33, 0)
-	status.updateMemoryUsage(now.Add(3*time.Second), 0.34, 0)
-	require.Equal(t, int64(36*time.Second), status.scanInterval.Load())
+	for i := 0; i < 10; i++ {
+		status.updateMemoryUsage(now.Add(time.Duration(i)*time.Second), 0.05, 0)
+	}
+	require.Equal(t, int64(40*time.Second), status.scanInterval.Load())
 }
 
 func TestRefreshMinSentResolvedTsMinAndSkipRules(t *testing.T) {
