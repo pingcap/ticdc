@@ -33,6 +33,7 @@ import (
 	"workload/schema/bankupdate"
 	pcrawler "workload/schema/crawler"
 	pdc "workload/schema/dc"
+	pfastslow "workload/schema/fastslow"
 	"workload/schema/largerow"
 	"workload/schema/shop"
 	psysbench "workload/schema/sysbench"
@@ -83,6 +84,7 @@ const (
 	bank3             = "bank3"
 	bankUpdate        = "bank_update"
 	dc                = "dc"
+	fastSlow          = "fast_slow"
 	wideTableWithJSON = "wide_table_with_json"
 )
 
@@ -144,12 +146,21 @@ func (app *WorkloadApp) createWorkload() schema.Workload {
 		workload = bankupdate.NewBankUpdateWorkload(app.Config.TotalRowCount, app.Config.UpdateLargeColumnSize)
 	case dc:
 		workload = pdc.NewDCWorkload()
+	case fastSlow:
+		workload = pfastslow.NewFastSlowWorkload(app.Config.RowSize, app.Config.TableCount, app.Config.TableStartIndex)
 	case wideTableWithJSON:
 		workload = pwidetablewithjson.NewWideTableWithJSONWorkload(app.Config.RowSize, app.Config.TableCount, app.Config.TableStartIndex, app.Config.TotalRowCount)
 	default:
 		plog.Panic("unsupported workload type", zap.String("workload", app.Config.WorkloadType))
 	}
 	return workload
+}
+
+func (app *WorkloadApp) pickTableIndex(op schema.OperationType) int {
+	if picker, ok := app.Workload.(schema.TablePicker); ok {
+		return picker.PickTable(op)
+	}
+	return rand.Intn(app.Config.TableCount) + app.Config.TableStartIndex
 }
 
 // Execute executes the workload
@@ -348,7 +359,7 @@ func (app *WorkloadApp) isConnectionError(err error) bool {
 }
 
 func (app *WorkloadApp) doInsertOnce(conn *sql.Conn) (uint64, error) {
-	tableIndex := rand.Intn(app.Config.TableCount) + app.Config.TableStartIndex
+	tableIndex := app.pickTableIndex(schema.OperationInsert)
 	var (
 		res sql.Result
 		err error

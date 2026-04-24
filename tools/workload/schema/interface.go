@@ -29,6 +29,20 @@ type DDLWorkload interface {
 	BuildDDLSql(opt DDLOption) string
 }
 
+type OperationType int
+
+const (
+	OperationInsert OperationType = iota
+	OperationUpdate
+	OperationDelete
+)
+
+// TablePicker is an optional interface implemented by workloads that want to
+// skew DML traffic to different table groups.
+type TablePicker interface {
+	PickTable(op OperationType) int
+}
+
 type Workload interface {
 	// BuildCreateTableStatement returns the create-table sql of the table n
 	BuildCreateTableStatement(n int) string

@@ -195,6 +195,29 @@ Generate writes for `wide_table_with_json_primary` and `wide_table_with_json_sec
     -percentage-for-delete 0.05
 ```
 
+### 8. Fast Table + Slow Table Workload
+
+Generate a mixed workload where fast tables stay narrow and insert-heavy, while
+slow tables use wider rows and heavier updates.
+
+```bash
+./workload -action write \
+    -database-host 127.0.0.1 \
+    -database-port 4000 \
+    -database-db-name progress_skew \
+    -table-count 4 \
+    -workload-type fast_slow \
+    -row-size 4096 \
+    -thread 16 \
+    -batch-size 16 \
+    -percentage-for-update 0.4
+```
+
+Notes:
+- The first half of tables are fast tables and the remaining tables are slow tables.
+- Inserts are biased toward fast tables; updates and deletes are biased toward slow tables.
+- To make slow tables even slower, combine this workload with `-ddl-config` in fixed mode and target only `slow_table_*`.
+
 ## Notes
 
 - Ensure the database is properly configured and has the necessary permissions.

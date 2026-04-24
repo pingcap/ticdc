@@ -17,7 +17,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"math/rand"
 	"sync"
 	"time"
 
@@ -119,7 +118,7 @@ func (app *WorkloadApp) executeUpdateWorkers(updateConcurrency int, wg *sync.Wai
 // genUpdateTask generates update tasks
 func (app *WorkloadApp) genUpdateTask(output chan updateTask) {
 	for {
-		tableIndex := rand.Intn(app.Config.TableCount) + app.Config.TableStartIndex
+		tableIndex := app.pickTableIndex(schema.OperationUpdate)
 		task := updateTask{
 			UpdateOption: schema.UpdateOption{
 				TableIndex: tableIndex,

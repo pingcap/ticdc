@@ -17,7 +17,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"math/rand"
 	"sync"
 	"time"
 
@@ -116,7 +115,7 @@ func (app *WorkloadApp) executeDeleteWorkers(deleteConcurrency int, wg *sync.Wai
 // genDeleteTask generates delete tasks
 func (app *WorkloadApp) genDeleteTask(output chan deleteTask) {
 	for {
-		tableIndex := rand.Intn(app.Config.TableCount) + app.Config.TableStartIndex
+		tableIndex := app.pickTableIndex(schema.OperationDelete)
 		task := deleteTask{
 			DeleteOption: schema.DeleteOption{
 				TableIndex: tableIndex,
