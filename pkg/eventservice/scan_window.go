@@ -81,9 +81,19 @@ const (
 	// previous interval changes have time to take effect.
 	scanWindowPressureAdjustCooldown = 10 * time.Second
 
+	// scanWindowCriticalBrakeCooldown deduplicates repeated critical brakes
+	// caused by the same short burst. Without this cooldown, one peak retained
+	// in the usage window can repeatedly trigger critical_brake on every report.
+	scanWindowCriticalBrakeCooldown = 10 * time.Second
+
 	// scanWindowReleaseRecoveryCooldown is the minimum time after a downward
 	// adjustment before the controller is allowed to recover upward again.
 	scanWindowReleaseRecoveryCooldown = 15 * time.Second
+
+	// scanWindowVeryLowRecoveryCooldown is the minimum time after a recent
+	// instability event before the controller can re-enter the aggressive
+	// very_low_recovery path.
+	scanWindowVeryLowRecoveryCooldown = 90 * time.Second
 
 	// scanWindowFastUsageAlpha controls the responsiveness of the short-term EMA.
 	scanWindowFastUsageAlpha = 0.4
@@ -168,8 +178,10 @@ type adaptiveScanWindowController struct {
 
 	usageWindow *memoryUsageWindow
 
-	lastAdjustTime     time.Time
-	lastDownAdjustTime time.Time
+	lastAdjustTime      time.Time
+	lastDownAdjustTime  time.Time
+	lastCriticalTime    time.Time
+	lastInstabilityTime time.Time
 
 	fastUsageEMA   float64
 	slowUsageEMA   float64
@@ -362,32 +374,8 @@ func (c *adaptiveScanWindowController) OnCongestionReport(now time.Time, current
 	usage := c.usageWindow.stats(now)
 	c.updateUsageEMALocked(report.usageRatio)
 
-	if usage.last > memoryUsageEmergencyThreshold || usage.max > memoryUsageEmergencyThreshold {
-		newInterval := max(current/4, minScanInterval)
-		c.noteAdjustmentLocked(now, true)
-		return scanWindowDecision{
-			newInterval:   newInterval,
-			maxInterval:   maxInterval,
-			reason:        scanWindowDecisionCriticalBrake,
-			usage:         usage,
-			fastUsageEMA:  c.fastUsageEMA,
-			slowUsageEMA:  c.slowUsageEMA,
-			pressureScore: c.pressureScore,
-		}
-	}
-
-	if usage.last > memoryUsageCriticalThreshold || usage.max > memoryUsageCriticalThreshold {
-		newInterval := max(current/2, minScanInterval)
-		c.noteAdjustmentLocked(now, true)
-		return scanWindowDecision{
-			newInterval:   newInterval,
-			maxInterval:   maxInterval,
-			reason:        scanWindowDecisionCriticalBrake,
-			usage:         usage,
-			fastUsageEMA:  c.fastUsageEMA,
-			slowUsageEMA:  c.slowUsageEMA,
-			pressureScore: c.pressureScore,
-		}
+	if decision, ok := c.tryCriticalBrakeLocked(now, current, maxInterval, usage); ok {
+		return decision
 	}
 
 	c.updatePressureScoreLocked(usage)
@@ -435,7 +423,7 @@ func (c *adaptiveScanWindowController) OnCongestionReport(now time.Time, current
 		}
 	}
 
-	if c.isVeryLowPressureLocked(usage) {
+	if c.isVeryLowPressureLocked(usage) && c.allowedToVeryLowRecoverLocked(now) {
 		effectiveMaxInterval := maxScanInterval
 		newInterval := min(scaleDuration(current, 3, 2), effectiveMaxInterval)
 		if newInterval > current {
@@ -476,6 +464,48 @@ func (c *adaptiveScanWindowController) OnCongestionReport(now time.Time, current
 		fastUsageEMA:  c.fastUsageEMA,
 		slowUsageEMA:  c.slowUsageEMA,
 		pressureScore: c.pressureScore,
+	}
+}
+
+func (c *adaptiveScanWindowController) tryCriticalBrakeLocked(
+	now time.Time,
+	current time.Duration,
+	maxInterval time.Duration,
+	usage memoryUsageStats,
+) (scanWindowDecision, bool) {
+	if now.Sub(c.lastCriticalTime) < scanWindowCriticalBrakeCooldown {
+		return scanWindowDecision{}, false
+	}
+
+	switch {
+	case usage.last > memoryUsageEmergencyThreshold:
+		newInterval := max(current/4, minScanInterval)
+		c.lastCriticalTime = now
+		c.noteAdjustmentLocked(now, true)
+		return scanWindowDecision{
+			newInterval:   newInterval,
+			maxInterval:   maxInterval,
+			reason:        scanWindowDecisionCriticalBrake,
+			usage:         usage,
+			fastUsageEMA:  c.fastUsageEMA,
+			slowUsageEMA:  c.slowUsageEMA,
+			pressureScore: c.pressureScore,
+		}, true
+	case usage.last > memoryUsageCriticalThreshold:
+		newInterval := max(current/2, minScanInterval)
+		c.lastCriticalTime = now
+		c.noteAdjustmentLocked(now, true)
+		return scanWindowDecision{
+			newInterval:   newInterval,
+			maxInterval:   maxInterval,
+			reason:        scanWindowDecisionCriticalBrake,
+			usage:         usage,
+			fastUsageEMA:  c.fastUsageEMA,
+			slowUsageEMA:  c.slowUsageEMA,
+			pressureScore: c.pressureScore,
+		}, true
+	default:
+		return scanWindowDecision{}, false
 	}
 }
 
@@ -543,6 +573,13 @@ func (c *adaptiveScanWindowController) allowedToIncreaseLocked(now time.Time, us
 		c.pressureScore < 1
 }
 
+func (c *adaptiveScanWindowController) allowedToVeryLowRecoverLocked(now time.Time) bool {
+	if c.lastInstabilityTime.IsZero() {
+		return true
+	}
+	return now.Sub(c.lastInstabilityTime) >= scanWindowVeryLowRecoveryCooldown
+}
+
 func (c *adaptiveScanWindowController) isVeryLowPressureLocked(usage memoryUsageStats) bool {
 	return usage.max < memoryUsageVeryLowThreshold &&
 		usage.avg < memoryUsageVeryLowThreshold &&
@@ -561,6 +598,7 @@ func (c *adaptiveScanWindowController) noteAdjustmentLocked(now time.Time, downw
 	c.lastAdjustTime = now
 	if downward {
 		c.lastDownAdjustTime = now
+		c.lastInstabilityTime = now
 	}
 }
 
@@ -588,6 +626,8 @@ func (c *adaptiveScanWindowController) resetForTest(now time.Time) {
 	c.usageWindow.reset()
 	c.lastAdjustTime = now
 	c.lastDownAdjustTime = now
+	c.lastCriticalTime = time.Time{}
+	c.lastInstabilityTime = time.Time{}
 	c.fastUsageEMA = 0
 	c.slowUsageEMA = 0
 	c.emaInitialized = false
