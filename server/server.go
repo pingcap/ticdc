@@ -283,13 +283,13 @@ func (c *server) setPreServices(ctx context.Context) error {
 	c.preServices = append(c.preServices, keyspaceManager)
 
 	conf := config.GetGlobalServerConfig()
-	if conf != nil && conf.Debug != nil && conf.Debug.Encryption != nil && conf.Debug.Encryption.EnableEncryption {
+	if conf != nil && conf.Encryption != nil && conf.Encryption.EnableEncryption {
 		tikvClient, err := encryption.NewTiKVEncryptionHTTPClient(c.pdClient, c.security)
 		if err != nil {
 			return errors.Trace(err)
 		}
 
-		kmsClient, err := kms.NewClient(conf.Debug.Encryption)
+		kmsClient, err := kms.NewClient(conf.Encryption)
 		if err != nil {
 			return errors.Trace(err)
 		}
