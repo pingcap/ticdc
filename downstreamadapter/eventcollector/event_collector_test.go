@@ -30,10 +30,44 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/ticdc/utils/dynstream"
 	"github.com/stretchr/testify/require"
 )
 
 var _ dispatcher.DispatcherService = (*mockEventDispatcher)(nil)
+var _ dynstream.DynamicStream[common.GID, common.DispatcherID, dispatcher.DispatcherEvent, *dispatcherStat, *EventsHandler] = (*mockDynamicStream)(nil)
+
+type mockDynamicStream struct {
+	metrics dynstream.Metrics[common.GID, common.DispatcherID]
+}
+
+func (m *mockDynamicStream) Start() {}
+
+func (m *mockDynamicStream) Close() {}
+
+func (m *mockDynamicStream) Push(common.DispatcherID, dispatcher.DispatcherEvent) {}
+
+func (m *mockDynamicStream) Wake(common.DispatcherID) {}
+
+func (m *mockDynamicStream) Feedback() <-chan dynstream.Feedback[common.GID, common.DispatcherID, *dispatcherStat] {
+	return nil
+}
+
+func (m *mockDynamicStream) AddPath(common.DispatcherID, *dispatcherStat, ...dynstream.AreaSettings) error {
+	return nil
+}
+
+func (m *mockDynamicStream) RemovePath(common.DispatcherID) error {
+	return nil
+}
+
+func (m *mockDynamicStream) Release(common.DispatcherID) {}
+
+func (m *mockDynamicStream) SetAreaSettings(common.GID, dynstream.AreaSettings) {}
+
+func (m *mockDynamicStream) GetMetrics() dynstream.Metrics[common.GID, common.DispatcherID] {
+	return m.metrics
+}
 
 type mockEventDispatcher struct {
 	id                       common.DispatcherID
@@ -584,4 +618,45 @@ func TestEventCollectorBatchByBytes(t *testing.T) {
 
 	require.Equal(t, totalDML, sumDML)
 	require.Equal(t, 1, maxBatch)
+}
+
+func TestNewCongestionControlMessagesSendZeroAvailableWithoutDispatcherMetrics(t *testing.T) {
+	changefeedID := common.NewChangefeedID4Test("default", t.Name())
+	dispatcherID := common.NewDispatcherID()
+	remoteID := node.ID("remote-event-service")
+	c := &EventCollector{
+		serverId: node.NewID(),
+		ds: &mockDynamicStream{
+			metrics: dynstream.Metrics[common.GID, common.DispatcherID]{
+				MemoryControl: dynstream.MemoryMetric[common.GID, common.DispatcherID]{
+					AreaMemoryMetrics: []dynstream.AreaMemoryMetric[common.GID, common.DispatcherID]{
+						{
+							AreaValue:           changefeedID.ID(),
+							PathAvailableMemory: map[common.DispatcherID]int64{},
+							UsedMemoryValue:     1024,
+							MaxMemoryValue:      1024,
+						},
+					},
+				},
+			},
+		},
+		redoDs: &mockDynamicStream{},
+	}
+
+	c.changefeedMap.Store(changefeedID.ID(), newChangefeedStat(changefeedID))
+	stat := newDispatcherStat(&mockEventDispatcher{
+		id:           dispatcherID,
+		tableSpan:    &heartbeatpb.TableSpan{TableID: 1},
+		changefeedID: changefeedID,
+	}, c, nil)
+	stat.connState.setEventServiceID(remoteID)
+	c.dispatcherMap.Store(dispatcherID, stat)
+
+	messages := c.newCongestionControlMessages()
+	message, ok := messages[remoteID]
+	require.True(t, ok)
+	require.Len(t, message.GetAvailables(), 1)
+	require.Equal(t, uint64(0), message.GetAvailables()[0].Available)
+	require.Equal(t, uint32(0), message.GetAvailables()[0].DispatcherCount)
+	require.Empty(t, message.GetAvailables()[0].DispatcherAvailable)
 }

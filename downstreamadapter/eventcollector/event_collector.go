@@ -738,10 +738,6 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 		congestionControl := event.NewCongestionControlWithVersion(event.CongestionControlVersion2)
 
 		for changefeedID, dispatcherMemory := range changefeedDispatchers {
-			if len(dispatcherMemory) == 0 {
-				continue
-			}
-
 			// get total available memory directly from AreaMemoryMetric
 			totalAvailable, ok := changefeedTotalMemory[changefeedID]
 			if !ok {
