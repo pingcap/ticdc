@@ -452,7 +452,7 @@ func TestRewriteDDLQueryWithRouting(t *testing.T) {
 	for _, tc := range tests {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			newQuery, err := tc.router.rewriteDDLQueryWithRouting(tc.ddl)
+			newQuery, err := tc.router.rewriteDDLQuery(tc.ddl)
 			require.NoError(t, err)
 			require.Equal(t, tc.expectedChanged, newQuery != tc.ddl.Query)
 			if tc.expectedQuery != "" || tc.ddl.Query == "" {
@@ -479,7 +479,7 @@ func TestRewriteDDLQueryWithRoutingReturnsTypedParseError(t *testing.T) {
 
 	ddl := &event.DDLEvent{Query: "INVALID DDL"}
 
-	_, err := router.rewriteDDLQueryWithRouting(ddl)
+	_, err := router.rewriteDDLQuery(ddl)
 	require.Error(t, err)
 	code, ok := errors.RFCCode(err)
 	require.True(t, ok)

@@ -87,21 +87,26 @@ func NewRouter(
 	}, nil
 }
 
-// route returns the target schema and table names for the given schema/table.
-func (r Router) route(originSchema, originTable string) (targetSchema, targetTable string) {
+// route returns the target schema/table names and whether routing changed them.
+func (r Router) route(originSchema, originTable string) (targetSchema, targetTable string, changed bool) {
+	// Empty schema means there is no routable table/schema name.
+	if originSchema == "" {
+		return originSchema, originTable, false
+	}
+
 	rule := r.matchRule(originSchema, originTable)
 	if rule == nil {
-		return originSchema, originTable
+		return originSchema, originTable, false
 	}
 
 	targetSchema = substituteExpression(rule.targetSchemaExpr, originSchema, originTable, originSchema)
 	// Schema-level DDLs can rewrite the target schema, but must not synthesize a target table.
 	if originTable == "" {
-		return targetSchema, ""
+		return targetSchema, "", targetSchema != originSchema
 	}
 
 	targetTable = substituteExpression(rule.targetTableExpr, originSchema, originTable, originTable)
-	return targetSchema, targetTable
+	return targetSchema, targetTable, targetSchema != originSchema || targetTable != originTable
 }
 
 // ApplyToTableInfo returns the original TableInfo unless routing changes the target name.
@@ -114,8 +119,8 @@ func (r Router) ApplyToTableInfo(tableInfo *common.TableInfo) *common.TableInfo 
 
 	originSchema := tableInfo.TableName.Schema
 	originTable := tableInfo.TableName.Table
-	targetSchema, targetTable := r.route(originSchema, originTable)
-	if targetSchema == originSchema && targetTable == originTable {
+	targetSchema, targetTable, changed := r.route(originSchema, originTable)
+	if !changed {
 		return tableInfo
 	}
 
@@ -134,22 +139,20 @@ func (r Router) ApplyToDDLEvent(ddl *commonEvent.DDLEvent) (*commonEvent.DDLEven
 	originExtraSchema := ddl.GetExtraSchemaName()
 	originExtraTable := ddl.GetExtraTableName()
 
-	query, err := r.rewriteDDLQueryWithRouting(ddl)
+	query, err := r.rewriteDDLQuery(ddl)
 	if err != nil {
 		return nil, err
 	}
 
-	targetSchemaName, targetTableName := r.route(originSchema, originTable)
-	targetExtraSchemaName, targetExtraTableName := r.route(originExtraSchema, originExtraTable)
+	targetSchemaName, targetTableName, nameChanged := r.route(originSchema, originTable)
+	targetExtraSchemaName, targetExtraTableName, extraNameChanged := r.route(originExtraSchema, originExtraTable)
 	tableInfoCache := make(map[*common.TableInfo]*common.TableInfo, 1)
 	tableInfo := r.routeTableInfoWithCache(ddl.TableInfo, tableInfoCache)
 	multipleTableInfos := r.applyToMultipleTableInfos(ddl.MultipleTableInfos, tableInfoCache)
 	blockedTableNames := r.applyToBlockedTableNames(ddl.BlockedTableNames)
 	if query == ddl.Query &&
-		targetSchemaName == originSchema &&
-		targetTableName == originTable &&
-		targetExtraSchemaName == originExtraSchema &&
-		targetExtraTableName == originExtraTable &&
+		!nameChanged &&
+		!extraNameChanged &&
 		tableInfo == ddl.TableInfo &&
 		multipleTableInfos == nil &&
 		blockedTableNames == nil {
@@ -176,12 +179,12 @@ func (r Router) ApplyToDDLEvent(ddl *commonEvent.DDLEvent) (*commonEvent.DDLEven
 	), nil
 }
 
-// rewriteDDLQueryWithRouting rewrites a DDL query by applying routing rules
+// rewriteDDLQuery rewrites a DDL query by applying routing rules
 // to transform source table names to target table names.
 //
 // It returns the final query string.
 // Canonical DDL schema/table fields are rewritten separately by ApplyToDDLEvent.
-func (r Router) rewriteDDLQueryWithRouting(ddl *commonEvent.DDLEvent) (string, error) {
+func (r Router) rewriteDDLQuery(ddl *commonEvent.DDLEvent) (string, error) {
 	if len(r.rules) == 0 {
 		return ddl.Query, nil
 	}
@@ -228,7 +231,7 @@ func (r Router) rewriteDDLQueryWithRouting(ddl *commonEvent.DDLEvent) (string, e
 				routed  bool
 			)
 			for i, query := range queries {
-				newQuery, changed, err := r.rewriteSingleDDLQueryWithRouting(query, defaultSchemas[i])
+				newQuery, changed, err := r.rewriteSingleDDLQuery(query, defaultSchemas[i])
 				if err != nil {
 					return "", err
 				}
@@ -253,11 +256,11 @@ func (r Router) rewriteDDLQueryWithRouting(ddl *commonEvent.DDLEvent) (string, e
 		}
 	}
 
-	newQuery, _, err := r.rewriteSingleDDLQueryWithRouting(ddl.Query, defaultSchema)
+	newQuery, _, err := r.rewriteSingleDDLQuery(ddl.Query, defaultSchema)
 	return newQuery, err
 }
 
-func (r Router) rewriteSingleDDLQueryWithRouting(query string, defaultSchema string) (string, bool, error) {
+func (r Router) rewriteSingleDDLQuery(query string, defaultSchema string) (string, bool, error) {
 	p := parser.New()
 	stmt, err := p.ParseOneStmt(query, "", "")
 	if err != nil {
@@ -286,8 +289,8 @@ func (r Router) rewriteSingleDDLQueryWithRouting(query string, defaultSchema str
 		targetTables = make([]*filter.Table, 0, len(sourceTables))
 	)
 	for _, srcTable := range sourceTables {
-		targetSchema, targetTable := r.route(srcTable.Schema, srcTable.Name)
-		if targetSchema != srcTable.Schema || targetTable != srcTable.Name {
+		targetSchema, targetTable, changed := r.route(srcTable.Schema, srcTable.Name)
+		if changed {
 			routed = true
 		}
 		targetTables = append(targetTables, &filter.Table{
@@ -350,8 +353,8 @@ func (r Router) tableInfoRequiresRouting(tableInfo *common.TableInfo) bool {
 }
 
 func (r Router) tableNameRequiresRouting(schema string, table string) bool {
-	targetSchema, targetTable := r.route(schema, table)
-	return targetSchema != schema || targetTable != table
+	_, _, changed := r.route(schema, table)
+	return changed
 }
 
 // matchRule finds the first rule that matches the given schema/table.
@@ -420,8 +423,8 @@ func (r Router) applyToBlockedTableNames(tableNames []commonEvent.SchemaTableNam
 
 	var routedTableNames []commonEvent.SchemaTableName
 	for i, tableName := range tableNames {
-		targetSchema, targetTable := r.route(tableName.SchemaName, tableName.TableName)
-		if targetSchema == tableName.SchemaName && targetTable == tableName.TableName {
+		targetSchema, targetTable, changed := r.route(tableName.SchemaName, tableName.TableName)
+		if !changed {
 			continue
 		}
 		if routedTableNames == nil {
