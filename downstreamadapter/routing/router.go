@@ -181,7 +181,17 @@ func (r Router) ApplyToDDLEvent(ddl *commonEvent.DDLEvent, changefeedID common.C
 func rewriteDDLQueryWithRouting(
 	router Router, ddl *commonEvent.DDLEvent, changefeedID common.ChangeFeedID,
 ) (string, error) {
-	if len(router.rules) == 0 || ddl.Query == "" {
+	if len(router.rules) == 0 {
+		return ddl.Query, nil
+	}
+	if isUnsupportedTableRoutingDDLAction(timodel.ActionType(ddl.Type)) {
+		if ddlEventRequiresRouting(router, ddl) {
+			return "", errors.ErrTableRoutingFailed.GenWithStack(
+				"DDL type %d is not supported by table routing", ddl.Type)
+		}
+		return ddl.Query, nil
+	}
+	if ddl.Query == "" {
 		return ddl.Query, nil
 	}
 
@@ -218,7 +228,7 @@ func rewriteDDLQueryWithRouting(
 			)
 			for i, query := range queries {
 				newQuery, changed, err := rewriteSingleDDLQueryWithRouting(
-					router, timodel.ActionType(ddl.Type), query, defaultSchemas[i], changefeedID,
+					router, query, defaultSchemas[i], changefeedID,
 				)
 				if err != nil {
 					return "", err
@@ -245,20 +255,17 @@ func rewriteDDLQueryWithRouting(
 	}
 
 	newQuery, _, err := rewriteSingleDDLQueryWithRouting(
-		router, timodel.ActionType(ddl.Type), ddl.Query, defaultSchema, changefeedID,
+		router, ddl.Query, defaultSchema, changefeedID,
 	)
 	return newQuery, err
 }
 
 func rewriteSingleDDLQueryWithRouting(
-	router Router, actionType timodel.ActionType, query string, defaultSchema string, changefeedID common.ChangeFeedID,
+	router Router, query string, defaultSchema string, changefeedID common.ChangeFeedID,
 ) (string, bool, error) {
 	p := parser.New()
 	stmt, err := p.ParseOneStmt(query, "", "")
 	if err != nil {
-		if fallbackQuery, changed, ok := rewriteDDLQueryWithoutParser(router, actionType, query, defaultSchema); ok {
-			return fallbackQuery, changed, nil
-		}
 		log.Error("rewrite ddl failed due to parse ddl query",
 			zap.String("keyspace", changefeedID.Keyspace()),
 			zap.String("changefeed", changefeedID.Name()),
@@ -310,83 +317,46 @@ func rewriteSingleDDLQueryWithRouting(
 	return newQuery, true, nil
 }
 
-func rewriteDDLQueryWithoutParser(
-	router Router, actionType timodel.ActionType, query string, defaultSchema string,
-) (string, bool, bool) {
+func isUnsupportedTableRoutingDDLAction(actionType timodel.ActionType) bool {
 	switch actionType {
-	case cdcfilter.ActionCreateHybridIndex:
-		trimmedQuery := strings.TrimSpace(query)
-		upperQuery := strings.ToUpper(trimmedQuery)
-		onIndex := strings.Index(upperQuery, " ON ")
-		if !strings.HasPrefix(upperQuery, "CREATE HYBRID INDEX ") || onIndex == -1 {
-			return "", false, false
-		}
-		prefix := trimmedQuery[:onIndex+4]
-		rest := trimmedQuery[onIndex+4:]
-		openParenIndex := strings.Index(rest, "(")
-		if openParenIndex == -1 {
-			return "", false, false
-		}
-		tableExpr := strings.TrimSpace(rest[:openParenIndex])
-		suffix := rest[openParenIndex:]
-
-		schema, table, ok := splitQualifiedIdentifier(tableExpr, defaultSchema)
-		if !ok {
-			return "", false, false
-		}
-		targetSchema, targetTable := router.Route(schema, table)
-		if targetSchema == schema && targetTable == table {
-			return query, false, true
-		}
-
-		var rewrittenTable string
-		if targetSchema == "" {
-			rewrittenTable = quoteIdentifier(targetTable)
-		} else {
-			rewrittenTable = quoteIdentifier(targetSchema) + "." + quoteIdentifier(targetTable)
-		}
-		return prefix + rewrittenTable + suffix, true, true
+	case cdcfilter.ActionAddFullTextIndex, cdcfilter.ActionCreateHybridIndex:
+		return true
 	default:
-		return "", false, false
+		return false
 	}
 }
 
-func splitQualifiedIdentifier(name string, defaultSchema string) (schema string, table string, ok bool) {
-	parts := make([]string, 0, 2)
-	last := 0
-	inBackticks := false
-	for i := 0; i < len(name); i++ {
-		switch name[i] {
-		case '`':
-			inBackticks = !inBackticks
-		case '.':
-			if !inBackticks {
-				parts = append(parts, strings.TrimSpace(name[last:i]))
-				last = i + 1
-			}
+func ddlEventRequiresRouting(r Router, ddl *commonEvent.DDLEvent) bool {
+	if tableNameRequiresRouting(r, ddl.GetSchemaName(), ddl.GetTableName()) ||
+		tableNameRequiresRouting(r, ddl.GetExtraSchemaName(), ddl.GetExtraTableName()) {
+		return true
+	}
+	if tableInfoRequiresRouting(r, ddl.TableInfo) {
+		return true
+	}
+	for _, tableInfo := range ddl.MultipleTableInfos {
+		if tableInfoRequiresRouting(r, tableInfo) {
+			return true
 		}
 	}
-	parts = append(parts, strings.TrimSpace(name[last:]))
-
-	switch len(parts) {
-	case 1:
-		return defaultSchema, unquoteIdentifier(parts[0]), true
-	case 2:
-		return unquoteIdentifier(parts[0]), unquoteIdentifier(parts[1]), true
-	default:
-		return "", "", false
+	for _, tableName := range ddl.BlockedTableNames {
+		if tableNameRequiresRouting(r, tableName.SchemaName, tableName.TableName) {
+			return true
+		}
 	}
+	return false
 }
 
-func unquoteIdentifier(ident string) string {
-	if len(ident) >= 2 && ident[0] == '`' && ident[len(ident)-1] == '`' {
-		return strings.ReplaceAll(ident[1:len(ident)-1], "``", "`")
+func tableInfoRequiresRouting(r Router, tableInfo *common.TableInfo) bool {
+	if tableInfo == nil {
+		return false
 	}
-	return ident
+	return tableNameRequiresRouting(r, tableInfo.TableName.Schema, tableInfo.TableName.Table)
 }
 
-func quoteIdentifier(ident string) string {
-	return "`" + strings.ReplaceAll(ident, "`", "``") + "`"
+func tableNameRequiresRouting(r Router, schema string, table string) bool {
+	targetSchema, targetTable := r.Route(schema, table)
+	return targetSchema != schema || targetTable != table
 }
 
 // matchRule finds the first rule that matches the given schema/table.

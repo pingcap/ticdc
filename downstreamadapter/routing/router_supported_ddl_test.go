@@ -32,7 +32,7 @@ type supportedDDLRewriteCase struct {
 	forbiddenFragments []string
 }
 
-func TestRewriteDDLQueryWithRoutingSupportsWhitelistedDDLTypes(t *testing.T) {
+func TestRewriteDDLQueryWithRoutingSupportsParserBackedDDLTypes(t *testing.T) {
 	t.Parallel()
 
 	router := mustNewRouter(t, false, []*config.DispatchRule{{
@@ -353,31 +353,9 @@ func TestRewriteDDLQueryWithRoutingSupportsWhitelistedDDLTypes(t *testing.T) {
 			"ALTER TABLE `source_db`.`t1` DROP COLUMN `c1`, DROP COLUMN `c2`",
 			"t1",
 		),
-		cdcfilter.ActionAddFullTextIndex: singleTableRewriteCase(
-			"add fulltext index",
-			cdcfilter.ActionAddFullTextIndex,
-			"ALTER TABLE `source_db`.`t1` ADD FULLTEXT INDEX `ft_idx`(`c1`)",
-			"t1",
-		),
-		cdcfilter.ActionCreateHybridIndex: {
-			name: "create hybrid index",
-			ddl: &event.DDLEvent{
-				Type:       byte(cdcfilter.ActionCreateHybridIndex),
-				Query:      "CREATE HYBRID INDEX i_idx ON t1(b, c, d, e, g) PARAMETER 'hybrid_index_param';",
-				SchemaName: "source_db",
-				TableName:  "t1",
-				TableInfo:  newRoutingTestTableInfo("source_db", "t1"),
-			},
-			requiredFragments: []string{
-				"`target_db`.`t1_r`",
-			},
-			forbiddenFragments: []string{
-				" ON t1(",
-			},
-		},
 	}
 
-	require.Len(t, cases, 41)
+	require.Len(t, cases, 39)
 
 	for action, tc := range cases {
 		action := action
@@ -393,6 +371,99 @@ func TestRewriteDDLQueryWithRoutingSupportsWhitelistedDDLTypes(t *testing.T) {
 			for _, fragment := range tc.forbiddenFragments {
 				require.NotContains(t, newQuery, fragment)
 			}
+		})
+	}
+}
+
+func TestApplyToDDLEventRejectsUnsupportedCustomDDLWhenRoutingRequired(t *testing.T) {
+	t.Parallel()
+
+	router := mustNewRouter(t, false, []*config.DispatchRule{{
+		Matcher:      []string{"source_db.*"},
+		TargetSchema: "target_db",
+		TargetTable:  "{table}_r",
+	}})
+	changefeedID := common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test-changefeed")
+
+	cases := []struct {
+		name string
+		ddl  *event.DDLEvent
+	}{
+		{
+			name: "add fulltext index",
+			ddl: &event.DDLEvent{
+				Type:       byte(cdcfilter.ActionAddFullTextIndex),
+				Query:      "ALTER TABLE `source_db`.`t1` ADD FULLTEXT INDEX `ft_idx`(`c1`)",
+				SchemaName: "source_db",
+				TableName:  "t1",
+				TableInfo:  newRoutingTestTableInfo("source_db", "t1"),
+			},
+		},
+		{
+			name: "create hybrid index",
+			ddl: &event.DDLEvent{
+				Type:       byte(cdcfilter.ActionCreateHybridIndex),
+				Query:      "CREATE HYBRID INDEX i_idx ON t1(b, c, d, e, g) PARAMETER 'hybrid_index_param';",
+				SchemaName: "source_db",
+				TableName:  "t1",
+				TableInfo:  newRoutingTestTableInfo("source_db", "t1"),
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			routed, err := router.ApplyToDDLEvent(tc.ddl, changefeedID)
+			require.Nil(t, routed)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "is not supported by table routing")
+		})
+	}
+}
+
+func TestApplyToDDLEventAllowsUnsupportedCustomDDLWhenNoRoutingApplies(t *testing.T) {
+	t.Parallel()
+
+	router := mustNewRouter(t, false, []*config.DispatchRule{{
+		Matcher:      []string{"other_db.*"},
+		TargetSchema: "target_db",
+		TargetTable:  "{table}_r",
+	}})
+	changefeedID := common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test-changefeed")
+
+	cases := []struct {
+		name string
+		ddl  *event.DDLEvent
+	}{
+		{
+			name: "add fulltext index",
+			ddl: &event.DDLEvent{
+				Type:       byte(cdcfilter.ActionAddFullTextIndex),
+				Query:      "ALTER TABLE `source_db`.`t1` ADD FULLTEXT INDEX `ft_idx`(`c1`)",
+				SchemaName: "source_db",
+				TableName:  "t1",
+				TableInfo:  newRoutingTestTableInfo("source_db", "t1"),
+			},
+		},
+		{
+			name: "create hybrid index",
+			ddl: &event.DDLEvent{
+				Type:       byte(cdcfilter.ActionCreateHybridIndex),
+				Query:      "CREATE HYBRID INDEX i_idx ON t1(b, c, d, e, g) PARAMETER 'hybrid_index_param';",
+				SchemaName: "source_db",
+				TableName:  "t1",
+				TableInfo:  newRoutingTestTableInfo("source_db", "t1"),
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			routed, err := router.ApplyToDDLEvent(tc.ddl, changefeedID)
+			require.NoError(t, err)
+			require.Same(t, tc.ddl, routed)
 		})
 	}
 }
