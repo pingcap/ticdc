@@ -302,7 +302,7 @@ func (c *server) setPreServices(ctx context.Context) error {
 			return errors.Trace(err)
 		}
 
-		appctx.SetService("EncryptionManager", encryption.NewEncryptionManager(metaManager))
+		appctx.SetService(appctx.EncryptionManager, encryption.NewEncryptionManager(metaManager))
 		if closeable, ok := metaManager.(common.Closeable); ok {
 			c.preServices = append(c.preServices, closeable)
 		}
