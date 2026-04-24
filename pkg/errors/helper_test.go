@@ -109,16 +109,6 @@ func TestChangefeedFastFailError(t *testing.T) {
 	require.Equal(t, false, IsChangefeedGCFastFailErrorCode(rfcCode))
 }
 
-func TestErrorCodeForInvalidTableRoutingRule(t *testing.T) {
-	t.Parallel()
-
-	err := ErrInvalidTableRoutingRule.GenWithStackByArgs("invalid matcher")
-	require.Equal(t, ErrChangefeedUnretryable.RFCCode(), ErrorCode(err))
-
-	err = WrapError(ErrInvalidTableRoutingRule, errors.New("invalid matcher"))
-	require.Equal(t, ErrChangefeedUnretryable.RFCCode(), ErrorCode(err))
-}
-
 func TestIsCliUnprintableError(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

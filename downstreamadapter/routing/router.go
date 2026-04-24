@@ -22,7 +22,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	cdcfilter "github.com/pingcap/ticdc/pkg/filter"
-	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/util/filter"
 	tfilter "github.com/pingcap/tidb/pkg/util/table-filter"
@@ -37,21 +37,24 @@ const (
 	TablePlaceholder = "{table}"
 )
 
-// Router routes source schema/table names to target schema/table names.
-type Router struct {
-	rules []rule
-}
-
 // rule represents a single routing rule.
 type rule struct {
-	filter     tfilter.Filter
-	schemaExpr string
-	tableExpr  string
+	filter           tfilter.Filter
+	targetSchemaExpr string
+	targetTableExpr  string
+}
+
+// Router routes origin schema/table names to target schema/table names.
+type Router struct {
+	changefeedID common.ChangeFeedID
+	rules        []rule
 }
 
 // NewRouter creates a new Router from dispatch rules.
 // When multiple rules match the same schema/table, the first matching rule wins.
-func NewRouter(caseSensitive bool, rules []*config.DispatchRule) (Router, error) {
+func NewRouter(
+	changefeedID common.ChangeFeedID, caseSensitive bool, rules []*config.DispatchRule,
+) (Router, error) {
 	routingRules := make([]rule, 0, len(rules))
 	for _, r := range rules {
 		if r.TargetSchema == "" && r.TargetTable == "" {
@@ -60,7 +63,11 @@ func NewRouter(caseSensitive bool, rules []*config.DispatchRule) (Router, error)
 
 		f, err := tfilter.Parse(r.Matcher)
 		if err != nil {
-			log.Warn("router failed to initialize", zap.Strings("matcher", r.Matcher), zap.Error(err))
+			log.Warn("router failed to initialize",
+				zap.String("keyspace", changefeedID.Keyspace()),
+				zap.String("changefeed", changefeedID.Name()),
+				zap.Strings("matcher", r.Matcher),
+				zap.Error(err))
 			return Router{}, errors.WrapError(errors.ErrInvalidTableRoutingRule, err)
 		}
 		if !caseSensitive {
@@ -68,36 +75,32 @@ func NewRouter(caseSensitive bool, rules []*config.DispatchRule) (Router, error)
 		}
 
 		routingRules = append(routingRules, rule{
-			filter:     f,
-			schemaExpr: r.TargetSchema,
-			tableExpr:  r.TargetTable,
+			filter:           f,
+			targetSchemaExpr: r.TargetSchema,
+			targetTableExpr:  r.TargetTable,
 		})
 	}
 
-	return Router{rules: routingRules}, nil
+	return Router{
+		changefeedID: changefeedID,
+		rules:        routingRules,
+	}, nil
 }
 
-// Route returns the target schema and table names for the given source schema/table.
-// When multiple rules match the same schema/table, the first matching rule wins.
-func (r Router) Route(originSchema, originTable string) (targetSchema, targetTable string) {
-	// Empty schema can appear on ExtraSchemaName/ExtraTableName for non-rename DDLs.
-	// Keep it unchanged and skip table route matching.
-	if len(r.rules) == 0 || originSchema == "" {
-		return originSchema, originTable
-	}
-
+// route returns the target schema and table names for the given schema/table.
+func (r Router) route(originSchema, originTable string) (targetSchema, targetTable string) {
 	rule := r.matchRule(originSchema, originTable)
 	if rule == nil {
 		return originSchema, originTable
 	}
 
-	targetSchema = substituteExpression(rule.schemaExpr, originSchema, originTable, originSchema)
+	targetSchema = substituteExpression(rule.targetSchemaExpr, originSchema, originTable, originSchema)
 	// Schema-level DDLs can rewrite the target schema, but must not synthesize a target table.
 	if originTable == "" {
 		return targetSchema, ""
 	}
 
-	targetTable = substituteExpression(rule.tableExpr, originSchema, originTable, originTable)
+	targetTable = substituteExpression(rule.targetTableExpr, originSchema, originTable, originTable)
 	return targetSchema, targetTable
 }
 
@@ -111,7 +114,7 @@ func (r Router) ApplyToTableInfo(tableInfo *common.TableInfo) *common.TableInfo 
 
 	originSchema := tableInfo.TableName.Schema
 	originTable := tableInfo.TableName.Table
-	targetSchema, targetTable := r.Route(originSchema, originTable)
+	targetSchema, targetTable := r.route(originSchema, originTable)
 	if targetSchema == originSchema && targetTable == originTable {
 		return tableInfo
 	}
@@ -121,7 +124,7 @@ func (r Router) ApplyToTableInfo(tableInfo *common.TableInfo) *common.TableInfo 
 
 // ApplyToDDLEvent returns the original DDL event unless routing changes the query or related
 // table metadata. When routing applies, it builds a routed DDL event once.
-func (r Router) ApplyToDDLEvent(ddl *commonEvent.DDLEvent, changefeedID common.ChangeFeedID) (*commonEvent.DDLEvent, error) {
+func (r Router) ApplyToDDLEvent(ddl *commonEvent.DDLEvent) (*commonEvent.DDLEvent, error) {
 	if len(r.rules) == 0 || ddl == nil {
 		return ddl, nil
 	}
@@ -131,17 +134,17 @@ func (r Router) ApplyToDDLEvent(ddl *commonEvent.DDLEvent, changefeedID common.C
 	originExtraSchema := ddl.GetExtraSchemaName()
 	originExtraTable := ddl.GetExtraTableName()
 
-	query, err := rewriteDDLQueryWithRouting(r, ddl, changefeedID)
+	query, err := r.rewriteDDLQueryWithRouting(ddl)
 	if err != nil {
 		return nil, err
 	}
 
-	targetSchemaName, targetTableName := r.Route(originSchema, originTable)
-	targetExtraSchemaName, targetExtraTableName := r.Route(originExtraSchema, originExtraTable)
+	targetSchemaName, targetTableName := r.route(originSchema, originTable)
+	targetExtraSchemaName, targetExtraTableName := r.route(originExtraSchema, originExtraTable)
 	tableInfoCache := make(map[*common.TableInfo]*common.TableInfo, 1)
-	tableInfo := routeTableInfoWithCache(r, ddl.TableInfo, tableInfoCache)
-	multipleTableInfos := applyToMultipleTableInfos(r, ddl.MultipleTableInfos, tableInfoCache)
-	blockedTableNames := applyToBlockedTableNames(r, ddl.BlockedTableNames)
+	tableInfo := r.routeTableInfoWithCache(ddl.TableInfo, tableInfoCache)
+	multipleTableInfos := r.applyToMultipleTableInfos(ddl.MultipleTableInfos, tableInfoCache)
+	blockedTableNames := r.applyToBlockedTableNames(ddl.BlockedTableNames)
 	if query == ddl.Query &&
 		targetSchemaName == originSchema &&
 		targetTableName == originTable &&
@@ -178,14 +181,12 @@ func (r Router) ApplyToDDLEvent(ddl *commonEvent.DDLEvent, changefeedID common.C
 //
 // It returns the final query string.
 // Canonical DDL schema/table fields are rewritten separately by ApplyToDDLEvent.
-func rewriteDDLQueryWithRouting(
-	router Router, ddl *commonEvent.DDLEvent, changefeedID common.ChangeFeedID,
-) (string, error) {
-	if len(router.rules) == 0 {
+func (r Router) rewriteDDLQueryWithRouting(ddl *commonEvent.DDLEvent) (string, error) {
+	if len(r.rules) == 0 {
 		return ddl.Query, nil
 	}
-	if isUnsupportedTableRoutingDDLAction(timodel.ActionType(ddl.Type)) {
-		if ddlEventRequiresRouting(router, ddl) {
+	if isUnsupportedTableRoutingDDLAction(model.ActionType(ddl.Type)) {
+		if r.ddlEventRequiresRouting(ddl) {
 			return "", errors.ErrTableRoutingFailed.GenWithStack(
 				"DDL type %d is not supported by table routing", ddl.Type)
 		}
@@ -204,8 +205,8 @@ func rewriteDDLQueryWithRouting(
 		queries, err := commonEvent.SplitQueries(ddl.Query)
 		if err != nil {
 			log.Error("rewrite ddl failed due to split ddl queries",
-				zap.String("keyspace", changefeedID.Keyspace()),
-				zap.String("changefeed", changefeedID.Name()),
+				zap.String("keyspace", r.changefeedID.Keyspace()),
+				zap.String("changefeed", r.changefeedID.Name()),
 				zap.String("query", ddl.Query), zap.Error(err))
 			return "", errors.WrapError(errors.ErrTableRoutingFailed, err)
 		}
@@ -227,9 +228,7 @@ func rewriteDDLQueryWithRouting(
 				routed  bool
 			)
 			for i, query := range queries {
-				newQuery, changed, err := rewriteSingleDDLQueryWithRouting(
-					router, query, defaultSchemas[i], changefeedID,
-				)
+				newQuery, changed, err := r.rewriteSingleDDLQueryWithRouting(query, defaultSchemas[i])
 				if err != nil {
 					return "", err
 				}
@@ -244,8 +243,8 @@ func rewriteDDLQueryWithRouting(
 			if routed {
 				newQuery := builder.String()
 				log.Info("DDL query rewritten with routing",
-					zap.String("keyspace", changefeedID.Keyspace()),
-					zap.String("changefeed", changefeedID.Name()),
+					zap.String("keyspace", r.changefeedID.Keyspace()),
+					zap.String("changefeed", r.changefeedID.Name()),
 					zap.String("originalQuery", ddl.Query),
 					zap.String("newQuery", newQuery))
 				return newQuery, nil
@@ -254,21 +253,17 @@ func rewriteDDLQueryWithRouting(
 		}
 	}
 
-	newQuery, _, err := rewriteSingleDDLQueryWithRouting(
-		router, ddl.Query, defaultSchema, changefeedID,
-	)
+	newQuery, _, err := r.rewriteSingleDDLQueryWithRouting(ddl.Query, defaultSchema)
 	return newQuery, err
 }
 
-func rewriteSingleDDLQueryWithRouting(
-	router Router, query string, defaultSchema string, changefeedID common.ChangeFeedID,
-) (string, bool, error) {
+func (r Router) rewriteSingleDDLQueryWithRouting(query string, defaultSchema string) (string, bool, error) {
 	p := parser.New()
 	stmt, err := p.ParseOneStmt(query, "", "")
 	if err != nil {
 		log.Error("rewrite ddl failed due to parse ddl query",
-			zap.String("keyspace", changefeedID.Keyspace()),
-			zap.String("changefeed", changefeedID.Name()),
+			zap.String("keyspace", r.changefeedID.Keyspace()),
+			zap.String("changefeed", r.changefeedID.Name()),
 			zap.String("query", query), zap.Error(err))
 		return "", false, errors.WrapError(errors.ErrTableRoutingFailed, err)
 	}
@@ -276,8 +271,8 @@ func rewriteSingleDDLQueryWithRouting(
 	sourceTables, err := fetchDDLTables(defaultSchema, stmt)
 	if err != nil {
 		log.Error("rewrite ddl failed due to fetch ddl tables",
-			zap.String("keyspace", changefeedID.Keyspace()),
-			zap.String("changefeed", changefeedID.Name()),
+			zap.String("keyspace", r.changefeedID.Keyspace()),
+			zap.String("changefeed", r.changefeedID.Name()),
 			zap.String("query", query), zap.Error(err))
 		return "", false, errors.WrapError(errors.ErrTableRoutingFailed, err)
 	}
@@ -291,7 +286,7 @@ func rewriteSingleDDLQueryWithRouting(
 		targetTables = make([]*filter.Table, 0, len(sourceTables))
 	)
 	for _, srcTable := range sourceTables {
-		targetSchema, targetTable := router.Route(srcTable.Schema, srcTable.Name)
+		targetSchema, targetTable := r.route(srcTable.Schema, srcTable.Name)
 		if targetSchema != srcTable.Schema || targetTable != srcTable.Name {
 			routed = true
 		}
@@ -308,8 +303,8 @@ func rewriteSingleDDLQueryWithRouting(
 	newQuery, err := rewriteDDLQuery(stmt, targetTables)
 	if err != nil {
 		log.Error("rewrite ddl failed due to rewrite ddl query",
-			zap.String("keyspace", changefeedID.Keyspace()),
-			zap.String("changefeed", changefeedID.Name()),
+			zap.String("keyspace", r.changefeedID.Keyspace()),
+			zap.String("changefeed", r.changefeedID.Name()),
 			zap.String("query", query), zap.Any("targetTables", targetTables), zap.Error(err))
 		return "", false, errors.WrapError(errors.ErrTableRoutingFailed, err)
 	}
@@ -317,7 +312,7 @@ func rewriteSingleDDLQueryWithRouting(
 	return newQuery, true, nil
 }
 
-func isUnsupportedTableRoutingDDLAction(actionType timodel.ActionType) bool {
+func isUnsupportedTableRoutingDDLAction(actionType model.ActionType) bool {
 	switch actionType {
 	case cdcfilter.ActionAddFullTextIndex, cdcfilter.ActionCreateHybridIndex:
 		return true
@@ -326,36 +321,36 @@ func isUnsupportedTableRoutingDDLAction(actionType timodel.ActionType) bool {
 	}
 }
 
-func ddlEventRequiresRouting(r Router, ddl *commonEvent.DDLEvent) bool {
-	if tableNameRequiresRouting(r, ddl.GetSchemaName(), ddl.GetTableName()) ||
-		tableNameRequiresRouting(r, ddl.GetExtraSchemaName(), ddl.GetExtraTableName()) {
+func (r Router) ddlEventRequiresRouting(ddl *commonEvent.DDLEvent) bool {
+	if r.tableNameRequiresRouting(ddl.GetSchemaName(), ddl.GetTableName()) ||
+		r.tableNameRequiresRouting(ddl.GetExtraSchemaName(), ddl.GetExtraTableName()) {
 		return true
 	}
-	if tableInfoRequiresRouting(r, ddl.TableInfo) {
+	if r.tableInfoRequiresRouting(ddl.TableInfo) {
 		return true
 	}
 	for _, tableInfo := range ddl.MultipleTableInfos {
-		if tableInfoRequiresRouting(r, tableInfo) {
+		if r.tableInfoRequiresRouting(tableInfo) {
 			return true
 		}
 	}
 	for _, tableName := range ddl.BlockedTableNames {
-		if tableNameRequiresRouting(r, tableName.SchemaName, tableName.TableName) {
+		if r.tableNameRequiresRouting(tableName.SchemaName, tableName.TableName) {
 			return true
 		}
 	}
 	return false
 }
 
-func tableInfoRequiresRouting(r Router, tableInfo *common.TableInfo) bool {
+func (r Router) tableInfoRequiresRouting(tableInfo *common.TableInfo) bool {
 	if tableInfo == nil {
 		return false
 	}
-	return tableNameRequiresRouting(r, tableInfo.TableName.Schema, tableInfo.TableName.Table)
+	return r.tableNameRequiresRouting(tableInfo.TableName.Schema, tableInfo.TableName.Table)
 }
 
-func tableNameRequiresRouting(r Router, schema string, table string) bool {
-	targetSchema, targetTable := r.Route(schema, table)
+func (r Router) tableNameRequiresRouting(schema string, table string) bool {
+	targetSchema, targetTable := r.route(schema, table)
 	return targetSchema != schema || targetTable != table
 }
 
@@ -377,8 +372,8 @@ func (r Router) matchRule(schema, table string) *rule {
 	return nil
 }
 
-func routeTableInfoWithCache(
-	r Router, tableInfo *common.TableInfo, cache map[*common.TableInfo]*common.TableInfo,
+func (r Router) routeTableInfoWithCache(
+	tableInfo *common.TableInfo, cache map[*common.TableInfo]*common.TableInfo,
 ) *common.TableInfo {
 	if tableInfo == nil {
 		return nil
@@ -394,8 +389,8 @@ func routeTableInfoWithCache(
 // applyToMultipleTableInfos returns nil when no entry changes.
 // On the first routed entry, it clones the original slice once and only rewrites changed items,
 // so unchanged entries keep their original references and the source event slice is left untouched.
-func applyToMultipleTableInfos(
-	r Router, tableInfos []*common.TableInfo, cache map[*common.TableInfo]*common.TableInfo,
+func (r Router) applyToMultipleTableInfos(
+	tableInfos []*common.TableInfo, cache map[*common.TableInfo]*common.TableInfo,
 ) []*common.TableInfo {
 	if len(tableInfos) == 0 {
 		return nil
@@ -403,7 +398,7 @@ func applyToMultipleTableInfos(
 
 	var routedTableInfos []*common.TableInfo
 	for i, tableInfo := range tableInfos {
-		routedTableInfo := routeTableInfoWithCache(r, tableInfo, cache)
+		routedTableInfo := r.routeTableInfoWithCache(tableInfo, cache)
 		if routedTableInfo == tableInfo {
 			continue
 		}
@@ -418,14 +413,14 @@ func applyToMultipleTableInfos(
 // applyToBlockedTableNames returns nil when no entry changes.
 // On the first routed entry, it clones the original slice once and only rewrites changed items,
 // so unchanged entries keep their original values and the source event slice is left untouched.
-func applyToBlockedTableNames(r Router, tableNames []commonEvent.SchemaTableName) []commonEvent.SchemaTableName {
+func (r Router) applyToBlockedTableNames(tableNames []commonEvent.SchemaTableName) []commonEvent.SchemaTableName {
 	if len(tableNames) == 0 {
 		return nil
 	}
 
 	var routedTableNames []commonEvent.SchemaTableName
 	for i, tableName := range tableNames {
-		targetSchema, targetTable := r.Route(tableName.SchemaName, tableName.TableName)
+		targetSchema, targetTable := r.route(tableName.SchemaName, tableName.TableName)
 		if targetSchema == tableName.SchemaName && targetTable == tableName.TableName {
 			continue
 		}

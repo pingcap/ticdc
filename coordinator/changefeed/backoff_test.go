@@ -21,7 +21,7 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
-	cerrors "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
 
@@ -139,7 +139,7 @@ func TestInvalidTableRoutingRuleFastFails(t *testing.T) {
 		CheckpointTs: 1,
 		Err: []*heartbeatpb.RunningError{
 			{
-				Code:    string(cerrors.ErrInvalidTableRoutingRule.RFCCode()),
+				Code:    string(errors.ErrInvalidTableRoutingRule.RFCCode()),
 				Message: "invalid table routing rule",
 			},
 		},

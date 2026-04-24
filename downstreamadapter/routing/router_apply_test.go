@@ -23,6 +23,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func newTestChangefeedID() common.ChangeFeedID {
+	return common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test-changefeed")
+}
+
 func TestApplyToTableInfo(t *testing.T) {
 	t.Parallel()
 
@@ -37,7 +41,7 @@ func TestApplyToTableInfo(t *testing.T) {
 	var zeroRouter Router
 	require.Same(t, tableInfo, zeroRouter.ApplyToTableInfo(tableInfo))
 
-	noOpRouter, err := NewRouter(false, []*config.DispatchRule{
+	noOpRouter, err := NewRouter(newTestChangefeedID(), false, []*config.DispatchRule{
 		{
 			Matcher:      []string{"other_db.*"},
 			TargetSchema: "target_db",
@@ -47,7 +51,7 @@ func TestApplyToTableInfo(t *testing.T) {
 	require.NoError(t, err)
 	require.Same(t, tableInfo, noOpRouter.ApplyToTableInfo(tableInfo))
 
-	router, err := NewRouter(false, []*config.DispatchRule{
+	router, err := NewRouter(newTestChangefeedID(), false, []*config.DispatchRule{
 		{
 			Matcher:      []string{"source_db.source_table"},
 			TargetSchema: "target_db",
@@ -87,14 +91,14 @@ func TestApplyToDDLEventReturnsOriginalWhenRoutingDoesNotChangeAnything(t *testi
 		},
 	}
 
-	router, err := NewRouter(false, []*config.DispatchRule{{
+	router, err := NewRouter(newTestChangefeedID(), false, []*config.DispatchRule{{
 		Matcher:      []string{"other_db.*"},
 		TargetSchema: "target_db",
 		TargetTable:  "target_table",
 	}})
 	require.NoError(t, err)
 
-	routed, err := router.ApplyToDDLEvent(ddl, common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test-changefeed"))
+	routed, err := router.ApplyToDDLEvent(ddl)
 	require.NoError(t, err)
 	require.Same(t, ddl, routed)
 }
@@ -116,7 +120,7 @@ func TestApplyToDDLEventWithZeroRouterReturnsOriginal(t *testing.T) {
 	}
 
 	var zeroRouter Router
-	routed, err := zeroRouter.ApplyToDDLEvent(ddl, common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test-changefeed"))
+	routed, err := zeroRouter.ApplyToDDLEvent(ddl)
 	require.NoError(t, err)
 	require.Same(t, ddl, routed)
 }
@@ -133,7 +137,7 @@ func TestApplyToDDLEvent(t *testing.T) {
 		{
 			name: "single table ddl",
 			router: func() Router {
-				router, err := NewRouter(false, []*config.DispatchRule{{
+				router, err := NewRouter(newTestChangefeedID(), false, []*config.DispatchRule{{
 					Matcher:      []string{"source_db.source_table"},
 					TargetSchema: "target_db",
 					TargetTable:  "target_table",
@@ -196,7 +200,7 @@ func TestApplyToDDLEvent(t *testing.T) {
 		{
 			name: "rename ddl",
 			router: func() Router {
-				router, err := NewRouter(false, []*config.DispatchRule{
+				router, err := NewRouter(newTestChangefeedID(), false, []*config.DispatchRule{
 					{
 						Matcher:      []string{"old_db.*"},
 						TargetSchema: "old_target_db",
@@ -256,7 +260,7 @@ func TestApplyToDDLEvent(t *testing.T) {
 		{
 			name: "database ddl",
 			router: func() Router {
-				router, err := NewRouter(false, []*config.DispatchRule{{
+				router, err := NewRouter(newTestChangefeedID(), false, []*config.DispatchRule{{
 					Matcher:      []string{"source_db.*"},
 					TargetSchema: "target_db",
 				}})
@@ -277,7 +281,7 @@ func TestApplyToDDLEvent(t *testing.T) {
 		{
 			name: "multiple table infos only",
 			router: func() Router {
-				router, err := NewRouter(false, []*config.DispatchRule{{
+				router, err := NewRouter(newTestChangefeedID(), false, []*config.DispatchRule{{
 					Matcher:      []string{"source_db.source_table"},
 					TargetSchema: "target_db",
 					TargetTable:  "target_table",
@@ -308,7 +312,7 @@ func TestApplyToDDLEvent(t *testing.T) {
 		{
 			name: "blocked table names only",
 			router: func() Router {
-				router, err := NewRouter(false, []*config.DispatchRule{{
+				router, err := NewRouter(newTestChangefeedID(), false, []*config.DispatchRule{{
 					Matcher:      []string{"source_db.source_table"},
 					TargetSchema: "target_db",
 					TargetTable:  "target_table",
@@ -339,7 +343,7 @@ func TestApplyToDDLEvent(t *testing.T) {
 	for _, tc := range tests {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			routed, err := tc.router.ApplyToDDLEvent(tc.ddl, common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test-changefeed"))
+			routed, err := tc.router.ApplyToDDLEvent(tc.ddl)
 			require.NoError(t, err)
 			require.NotSame(t, tc.ddl, routed)
 			tc.check(t, tc.ddl, routed)
@@ -349,8 +353,6 @@ func TestApplyToDDLEvent(t *testing.T) {
 
 func TestRewriteDDLQueryWithRouting(t *testing.T) {
 	t.Parallel()
-
-	changefeedID := common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test-changefeed")
 	tests := []struct {
 		name              string
 		router            Router
@@ -450,7 +452,7 @@ func TestRewriteDDLQueryWithRouting(t *testing.T) {
 	for _, tc := range tests {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			newQuery, err := rewriteDDLQueryWithRouting(tc.router, tc.ddl, changefeedID)
+			newQuery, err := tc.router.rewriteDDLQueryWithRouting(tc.ddl)
 			require.NoError(t, err)
 			require.Equal(t, tc.expectedChanged, newQuery != tc.ddl.Query)
 			if tc.expectedQuery != "" || tc.ddl.Query == "" {
@@ -477,9 +479,7 @@ func TestRewriteDDLQueryWithRoutingReturnsTypedParseError(t *testing.T) {
 
 	ddl := &event.DDLEvent{Query: "INVALID DDL"}
 
-	_, err := rewriteDDLQueryWithRouting(
-		router, ddl, common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test-changefeed"),
-	)
+	_, err := router.rewriteDDLQueryWithRouting(ddl)
 	require.Error(t, err)
 	code, ok := errors.RFCCode(err)
 	require.True(t, ok)
@@ -489,7 +489,7 @@ func TestRewriteDDLQueryWithRoutingReturnsTypedParseError(t *testing.T) {
 func mustNewRouter(t *testing.T, caseSensitive bool, rules []*config.DispatchRule) Router {
 	t.Helper()
 
-	router, err := NewRouter(caseSensitive, rules)
+	router, err := NewRouter(newTestChangefeedID(), caseSensitive, rules)
 	require.NoError(t, err)
 	return router
 }

@@ -257,7 +257,11 @@ func NewDispatcherManager(
 		outputRawChangeEvent = manager.config.SinkConfig.KafkaConfig.GetOutputRawChangeEvent()
 	}
 
-	router, err := routing.NewRouter(util.GetOrZero(manager.config.SinkConfig.CaseSensitive), manager.config.SinkConfig.DispatchRules)
+	router, err := routing.NewRouter(
+		manager.changefeedID,
+		util.GetOrZero(manager.config.SinkConfig.CaseSensitive),
+		manager.config.SinkConfig.DispatchRules,
+	)
 	if err != nil {
 		return nil, err
 	}

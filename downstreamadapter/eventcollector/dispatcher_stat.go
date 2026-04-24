@@ -832,5 +832,5 @@ func (d *dispatcherStat) applyRoutingToTableInfo(tableInfo *common.TableInfo) *c
 
 func (d *dispatcherStat) applyRoutingToDDLEvent(ddl *commonEvent.DDLEvent) (*commonEvent.DDLEvent, error) {
 	router := d.target.GetRouter()
-	return router.ApplyToDDLEvent(ddl, d.target.GetChangefeedID())
+	return router.ApplyToDDLEvent(ddl)
 }

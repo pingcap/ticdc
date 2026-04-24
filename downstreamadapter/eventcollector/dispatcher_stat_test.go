@@ -1513,7 +1513,7 @@ func TestApplyRoutingToTableInfo(t *testing.T) {
 	remoteServerID := node.ID("remote")
 
 	// Create a router that routes source_db.* -> target_db.*
-	router, err := routing.NewRouter(true, []*config.DispatchRule{
+	router, err := routing.NewRouter(mockChangefeedID, true, []*config.DispatchRule{
 		{Matcher: []string{"source_db.*"}, TargetSchema: "target_db", TargetTable: routing.TablePlaceholder},
 	})
 	require.NoError(t, err)
@@ -1699,7 +1699,7 @@ func TestApplyRoutingToTableInfo(t *testing.T) {
 
 	t.Run("DDL with table-only routing (schema unchanged)", func(t *testing.T) {
 		// Create a router that only renames the table, keeping schema the same
-		tableOnlyRouter, err := routing.NewRouter(true, []*config.DispatchRule{
+		tableOnlyRouter, err := routing.NewRouter(mockChangefeedID, true, []*config.DispatchRule{
 			{Matcher: []string{"mydb.old_users"}, TargetSchema: "{schema}", TargetTable: "new_users"},
 		})
 		require.NoError(t, err)
@@ -1750,7 +1750,7 @@ func TestApplyRoutingToTableInfo(t *testing.T) {
 
 	t.Run("DDL with both schema and table routing", func(t *testing.T) {
 		// Create a router that renames both schema and table
-		bothRouter, err := routing.NewRouter(true, []*config.DispatchRule{
+		bothRouter, err := routing.NewRouter(mockChangefeedID, true, []*config.DispatchRule{
 			{Matcher: []string{"staging.*"}, TargetSchema: "prod", TargetTable: "{schema}_{table}"},
 		})
 		require.NoError(t, err)

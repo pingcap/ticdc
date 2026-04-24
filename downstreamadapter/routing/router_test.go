@@ -80,17 +80,17 @@ func TestNewRouter(t *testing.T) {
 	t.Run("nil or empty rules return zero value router", func(t *testing.T) {
 		t.Parallel()
 
-		router, err := NewRouter(true, nil)
+		router, err := NewRouter(newTestChangefeedID(), true, nil)
 		require.NoError(t, err)
 		require.Empty(t, router.rules)
-		schema, table := router.Route("db1", "t1")
+		schema, table := router.route("db1", "t1")
 		require.Equal(t, "db1", schema)
 		require.Equal(t, "t1", table)
 
-		router, err = NewRouter(true, []*config.DispatchRule{})
+		router, err = NewRouter(newTestChangefeedID(), true, []*config.DispatchRule{})
 		require.NoError(t, err)
 		require.Empty(t, router.rules)
-		schema, table = router.Route("db1", "t1")
+		schema, table = router.route("db1", "t1")
 		require.Equal(t, "db1", schema)
 		require.Equal(t, "t1", table)
 	})
@@ -98,7 +98,7 @@ func TestNewRouter(t *testing.T) {
 	t.Run("rules without routing targets are skipped", func(t *testing.T) {
 		t.Parallel()
 
-		router, err := NewRouter(true, []*config.DispatchRule{
+		router, err := NewRouter(newTestChangefeedID(), true, []*config.DispatchRule{
 			{Matcher: []string{"db1.*"}},
 		})
 		require.NoError(t, err)
@@ -108,7 +108,7 @@ func TestNewRouter(t *testing.T) {
 	t.Run("invalid matcher returns error", func(t *testing.T) {
 		t.Parallel()
 
-		router, err := NewRouter(true, []*config.DispatchRule{
+		router, err := NewRouter(newTestChangefeedID(), true, []*config.DispatchRule{
 			{
 				Matcher:      []string{"[invalid"},
 				TargetSchema: "target",
@@ -125,7 +125,7 @@ func TestNewRouter(t *testing.T) {
 	t.Run("builds router from rules with target fields and ignores pure dispatch rules", func(t *testing.T) {
 		t.Parallel()
 
-		router, err := NewRouter(true, []*config.DispatchRule{
+		router, err := NewRouter(newTestChangefeedID(), true, []*config.DispatchRule{
 			{
 				Matcher:        []string{"db1.*"},
 				DispatcherRule: "ts",
@@ -144,15 +144,15 @@ func TestNewRouter(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, router.rules, 2)
 
-		schema, table := router.Route("db1", "orders")
+		schema, table := router.route("db1", "orders")
 		require.Equal(t, "db1", schema)
 		require.Equal(t, "orders", table)
 
-		schema, table = router.Route("db2", "orders")
+		schema, table = router.route("db2", "orders")
 		require.Equal(t, "archive", schema)
 		require.Equal(t, "orders", table)
 
-		schema, table = router.Route("db3", "users")
+		schema, table = router.route("db3", "users")
 		require.Equal(t, "db3", schema)
 		require.Equal(t, "users_bak", table)
 	})
@@ -162,11 +162,11 @@ func TestRouterRoute(t *testing.T) {
 	t.Parallel()
 
 	var zeroRouter Router
-	schema, table := zeroRouter.Route("source_db", "source_table")
+	schema, table := zeroRouter.route("source_db", "source_table")
 	require.Equal(t, "source_db", schema)
 	require.Equal(t, "source_table", table)
 
-	router, err := NewRouter(true, []*config.DispatchRule{
+	router, err := NewRouter(newTestChangefeedID(), true, []*config.DispatchRule{
 		{Matcher: []string{"db1.specific"}, TargetSchema: "specific_db", TargetTable: "specific_table"},
 		{Matcher: []string{"db1.*"}, TargetSchema: "db1_archive", TargetTable: TablePlaceholder},
 		{Matcher: []string{"staging.*"}, TargetSchema: "prod", TargetTable: SchemaPlaceholder + "_" + TablePlaceholder},
@@ -214,41 +214,41 @@ func TestRouterRoute(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			gotSchema, gotTable := router.Route(tc.sourceSchema, tc.sourceTable)
+			gotSchema, gotTable := router.route(tc.sourceSchema, tc.sourceTable)
 			require.Equal(t, tc.expectedSchema, gotSchema)
 			require.Equal(t, tc.expectedTable, gotTable)
 		})
 	}
 
 	t.Run("schema only routing does not produce target table", func(t *testing.T) {
-		router, err := NewRouter(true, []*config.DispatchRule{
+		router, err := NewRouter(newTestChangefeedID(), true, []*config.DispatchRule{
 			{Matcher: []string{"db1.*"}, TargetSchema: "db1_archive", TargetTable: "should_not_apply"},
 		})
 		require.NoError(t, err)
 
-		schema, table := router.Route("db1", "")
+		schema, table := router.route("db1", "")
 		require.Equal(t, "db1_archive", schema)
 		require.Empty(t, table)
 	})
 
 	t.Run("schema only routing uses schema matcher semantics", func(t *testing.T) {
-		router, err := NewRouter(true, []*config.DispatchRule{
+		router, err := NewRouter(newTestChangefeedID(), true, []*config.DispatchRule{
 			{Matcher: []string{"db1.orders"}, TargetSchema: "db1_archive", TargetTable: "orders_archive"},
 		})
 		require.NoError(t, err)
 
-		schema, table := router.Route("db1", "")
+		schema, table := router.route("db1", "")
 		require.Equal(t, "db1_archive", schema)
 		require.Empty(t, table)
 	})
 
 	t.Run("empty schema and table do not trigger routing", func(t *testing.T) {
-		router, err := NewRouter(true, []*config.DispatchRule{
+		router, err := NewRouter(newTestChangefeedID(), true, []*config.DispatchRule{
 			{Matcher: []string{"*.*"}, TargetSchema: "fallback", TargetTable: "should_not_apply"},
 		})
 		require.NoError(t, err)
 
-		schema, table := router.Route("", "")
+		schema, table := router.route("", "")
 		require.Empty(t, schema)
 		require.Empty(t, table)
 	})
@@ -257,7 +257,7 @@ func TestRouterRoute(t *testing.T) {
 func TestRouterFirstMatchWins(t *testing.T) {
 	t.Parallel()
 
-	router, err := NewRouter(true, []*config.DispatchRule{
+	router, err := NewRouter(newTestChangefeedID(), true, []*config.DispatchRule{
 		{Matcher: []string{"*.*"}, TargetSchema: "catch_all", TargetTable: TablePlaceholder},
 		{Matcher: []string{"db1.*"}, TargetSchema: "db1_only", TargetTable: TablePlaceholder},
 		{Matcher: []string{"db1.users"}, TargetSchema: "users_only", TargetTable: "users_bak"},
@@ -265,7 +265,7 @@ func TestRouterFirstMatchWins(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, router.rules, 3)
 
-	schema, table := router.Route("db1", "users")
+	schema, table := router.route("db1", "users")
 	require.Equal(t, "catch_all", schema)
 	require.Equal(t, "users", table)
 }
@@ -276,16 +276,16 @@ func TestRouterCaseSensitivity(t *testing.T) {
 	t.Run("case sensitive router requires exact match", func(t *testing.T) {
 		t.Parallel()
 
-		router, err := NewRouter(true, []*config.DispatchRule{
+		router, err := NewRouter(newTestChangefeedID(), true, []*config.DispatchRule{
 			{Matcher: []string{"MyDB.MyTable"}, TargetSchema: "target_db", TargetTable: "target_table"},
 		})
 		require.NoError(t, err)
 
-		schema, table := router.Route("MyDB", "MyTable")
+		schema, table := router.route("MyDB", "MyTable")
 		require.Equal(t, "target_db", schema)
 		require.Equal(t, "target_table", table)
 
-		schema, table = router.Route("mydb", "mytable")
+		schema, table = router.route("mydb", "mytable")
 		require.Equal(t, "mydb", schema)
 		require.Equal(t, "mytable", table)
 	})
@@ -293,12 +293,12 @@ func TestRouterCaseSensitivity(t *testing.T) {
 	t.Run("case insensitive router preserves source case in placeholders", func(t *testing.T) {
 		t.Parallel()
 
-		router, err := NewRouter(false, []*config.DispatchRule{
+		router, err := NewRouter(newTestChangefeedID(), false, []*config.DispatchRule{
 			{Matcher: []string{"MyDB.*"}, TargetSchema: "backup_" + SchemaPlaceholder, TargetTable: TablePlaceholder},
 		})
 		require.NoError(t, err)
 
-		schema, table := router.Route("mydb", "MyTable")
+		schema, table := router.route("mydb", "MyTable")
 		require.Equal(t, "backup_mydb", schema)
 		require.Equal(t, "MyTable", table)
 	})

@@ -40,7 +40,6 @@ func TestRewriteDDLQueryWithRoutingSupportsParserBackedDDLTypes(t *testing.T) {
 		TargetSchema: "target_db",
 		TargetTable:  "{table}_r",
 	}})
-	changefeedID := common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test-changefeed")
 
 	cases := map[timodel.ActionType]supportedDDLRewriteCase{
 		timodel.ActionCreateSchema: schemaRewriteCase(
@@ -363,7 +362,7 @@ func TestRewriteDDLQueryWithRoutingSupportsParserBackedDDLTypes(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			require.Equal(t, byte(action), tc.ddl.Type)
 
-			newQuery, err := rewriteDDLQueryWithRouting(router, tc.ddl, changefeedID)
+			newQuery, err := router.rewriteDDLQueryWithRouting(tc.ddl)
 			require.NoError(t, err)
 			for _, fragment := range tc.requiredFragments {
 				require.Contains(t, newQuery, fragment)
@@ -383,7 +382,6 @@ func TestApplyToDDLEventRejectsUnsupportedCustomDDLWhenRoutingRequired(t *testin
 		TargetSchema: "target_db",
 		TargetTable:  "{table}_r",
 	}})
-	changefeedID := common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test-changefeed")
 
 	cases := []struct {
 		name string
@@ -414,7 +412,7 @@ func TestApplyToDDLEventRejectsUnsupportedCustomDDLWhenRoutingRequired(t *testin
 	for _, tc := range cases {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			routed, err := router.ApplyToDDLEvent(tc.ddl, changefeedID)
+			routed, err := router.ApplyToDDLEvent(tc.ddl)
 			require.Nil(t, routed)
 			require.Error(t, err)
 			require.Contains(t, err.Error(), "is not supported by table routing")
@@ -430,7 +428,6 @@ func TestApplyToDDLEventAllowsUnsupportedCustomDDLWhenNoRoutingApplies(t *testin
 		TargetSchema: "target_db",
 		TargetTable:  "{table}_r",
 	}})
-	changefeedID := common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test-changefeed")
 
 	cases := []struct {
 		name string
@@ -461,7 +458,7 @@ func TestApplyToDDLEventAllowsUnsupportedCustomDDLWhenNoRoutingApplies(t *testin
 	for _, tc := range cases {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			routed, err := router.ApplyToDDLEvent(tc.ddl, changefeedID)
+			routed, err := router.ApplyToDDLEvent(tc.ddl)
 			require.NoError(t, err)
 			require.Same(t, tc.ddl, routed)
 		})
@@ -486,7 +483,7 @@ func TestApplyToDDLEventSupportsCreateTables(t *testing.T) {
 		},
 	}
 
-	routed, err := router.ApplyToDDLEvent(ddl, common.NewChangefeedID4Test(common.DefaultKeyspaceName, "test-changefeed"))
+	routed, err := router.ApplyToDDLEvent(ddl)
 	require.NoError(t, err)
 	require.Contains(t, routed.Query, "CREATE TABLE `target_db`.`t1_r`")
 	require.Contains(t, routed.Query, "CREATE TABLE `target_db`.`t2_r`")
