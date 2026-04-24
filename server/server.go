@@ -286,12 +286,12 @@ func (c *server) setPreServices(ctx context.Context) error {
 	if conf != nil && conf.Encryption != nil && conf.Encryption.EnableEncryption {
 		tikvClient, err := encryption.NewTiKVEncryptionHTTPClient(c.pdClient, c.security)
 		if err != nil {
-			return errors.Trace(err)
+			return err
 		}
 
 		kmsClient, err := kms.NewClient(conf.Encryption)
 		if err != nil {
-			return errors.Trace(err)
+			return err
 		}
 		if closeable, ok := kmsClient.(common.Closeable); ok {
 			c.preServices = append(c.preServices, closeable)
@@ -299,7 +299,7 @@ func (c *server) setPreServices(ctx context.Context) error {
 
 		metaManager := encryption.NewEncryptionMetaManager(tikvClient, kmsClient)
 		if err := metaManager.Start(ctx); err != nil {
-			return errors.Trace(err)
+			return err
 		}
 
 		appctx.SetService(appctx.EncryptionManager, encryption.NewEncryptionManager(metaManager))
