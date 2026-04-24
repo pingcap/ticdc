@@ -19,19 +19,24 @@ make
 
 ### 0. DDL Workload
 
-Run DDL workload based on a TOML config file:
+Run DDL workload directly from command line flags:
 
 ```bash
 ./bin/workload -action ddl \
     -database-host 127.0.0.1 \
     -database-port 4000 \
     -database-db-name test \
-    -ddl-config ./ddl.toml \
+    -enable-ddl \
+    -ddl-rate-add-column 10 \
+    -ddl-rate-drop-column 10 \
+    -ddl-rate-add-index 5 \
+    -ddl-rate-drop-index 5 \
+    -ddl-rate-truncate-table 1 \
     -ddl-worker 1 \
     -ddl-timeout 2m
 ```
 
-`ddl.toml` example (fixed mode):
+Equivalent TOML file mode is still supported:
 
 ```toml
 mode = "fixed"
@@ -49,7 +54,23 @@ drop_index = 5
 truncate_table = 1
 ```
 
-`ddl.toml` example (random mode, omit `tables`):
+Random mode from CLI for non-`fast_slow` workloads:
+
+```bash
+./bin/workload -action ddl \
+    -database-host 127.0.0.1 \
+    -database-port 4000 \
+    -database-db-name test \
+    -enable-ddl \
+    -ddl-rate-add-column 10 \
+    -ddl-rate-drop-column 10 \
+    -ddl-rate-add-index 5 \
+    -ddl-rate-drop-index 5 \
+    -ddl-worker 1 \
+    -ddl-timeout 2m
+```
+
+Equivalent TOML example (random mode, omit `tables`):
 
 ```toml
 mode = "random"
@@ -79,7 +100,9 @@ Insert test data using sysbench-compatible schema:
 ```
 
 Notes:
-- This example runs **DML only**. DDL is disabled by default unless `-ddl-config` is provided.
+- This example runs **DML only**. DDL is disabled by default unless `-ddl-config` or inline `-ddl-*` flags are provided.
+- For `fast_slow`, `-enable-ddl` automatically targets all `slow_table_*` tables in the current run.
+- For `fast_slow`, enabling DDL never targets `fast_table_*`.
 
 ### 2. Large Row Update Workload
 
@@ -133,7 +156,11 @@ Run DDL concurrently with DML by providing a DDL config:
     -workload-type sysbench \
     -thread 32 \
     -batch-size 64 \
-    -ddl-config ./ddl.toml \
+    -enable-ddl \
+    -ddl-rate-add-column 10 \
+    -ddl-rate-drop-column 10 \
+    -ddl-rate-add-index 5 \
+    -ddl-rate-drop-index 5 \
     -ddl-worker 1 \
     -ddl-timeout 2m
 ```
@@ -149,7 +176,11 @@ Run only DDL (useful for testing DDL concurrency/replication without DML):
     -database-db-name db1 \
     -table-count 1000 \
     -workload-type sysbench \
-    -ddl-config ./ddl.toml \
+    -enable-ddl \
+    -ddl-rate-add-column 10 \
+    -ddl-rate-drop-column 10 \
+    -ddl-rate-add-index 5 \
+    -ddl-rate-drop-index 5 \
     -ddl-worker 1 \
     -ddl-timeout 2m
 ```
@@ -171,7 +202,11 @@ Run insert and update concurrently, and execute DDL in parallel:
     -batch-size 64 \
     -percentage-for-update 0.5 \
     -percentage-for-delete 0 \
-    -ddl-config ./ddl.toml \
+    -enable-ddl \
+    -ddl-rate-add-column 10 \
+    -ddl-rate-drop-column 10 \
+    -ddl-rate-add-index 5 \
+    -ddl-rate-drop-index 5 \
     -ddl-worker 1 \
     -ddl-timeout 2m
 ```
@@ -216,7 +251,7 @@ slow tables use wider rows and heavier updates.
 Notes:
 - The first half of tables are fast tables and the remaining tables are slow tables.
 - Inserts are biased toward fast tables; updates and deletes are biased toward slow tables.
-- To make slow tables even slower, combine this workload with `-ddl-config` in fixed mode and target only `slow_table_*`.
+- To make slow tables even slower, combine this workload with `-enable-ddl`; the tool will automatically target all `slow_table_*` tables and never target `fast_table_*`.
 
 ## Notes
 

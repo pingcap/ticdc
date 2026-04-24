@@ -17,6 +17,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestParseTableName(t *testing.T) {
@@ -132,5 +134,80 @@ truncate_table = 0
 		if err == nil {
 			t.Fatalf("expected error")
 		}
+	})
+}
+
+func TestLoadDDLConfigFromWorkloadConfig(t *testing.T) {
+	t.Parallel()
+
+	t.Run("inline fixed mode", func(t *testing.T) {
+		cfg, err := LoadDDLConfigFromWorkloadConfig(&WorkloadConfig{
+			WorkloadType:    fastSlow,
+			DBName:          "test",
+			TableCount:      4,
+			TableStartIndex: 0,
+			EnableDDL:       true,
+			DDLRate: DDLRatePerMinute{
+				AddColumn: 1,
+				AddIndex:  2,
+			},
+		})
+		require.NoError(t, err)
+		require.Equal(t, ddlModeFixed, cfg.Mode)
+		require.Equal(t, []string{"test.slow_table_2", "test.slow_table_3"}, cfg.Tables)
+		require.Equal(t, 1, cfg.RatePerMinute.AddColumn)
+		require.Equal(t, 2, cfg.RatePerMinute.AddIndex)
+	})
+
+	t.Run("inline random mode by default", func(t *testing.T) {
+		cfg, err := LoadDDLConfigFromWorkloadConfig(&WorkloadConfig{
+			EnableDDL: true,
+			DDLRate: DDLRatePerMinute{
+				AddColumn: 1,
+			},
+		})
+		require.NoError(t, err)
+		require.Equal(t, ddlModeRandom, cfg.Mode)
+		require.Empty(t, cfg.Tables)
+	})
+
+	t.Run("mixed sources rejected", func(t *testing.T) {
+		_, err := LoadDDLConfigFromWorkloadConfig(&WorkloadConfig{
+			DDLConfigPath: "/tmp/ddl.toml",
+			EnableDDL:     true,
+			DDLRate: DDLRatePerMinute{
+				AddColumn: 1,
+			},
+		})
+		require.Error(t, err)
+	})
+
+	t.Run("non fast slow defaults to random mode", func(t *testing.T) {
+		cfg, err := LoadDDLConfigFromWorkloadConfig(&WorkloadConfig{
+			WorkloadType: "sysbench",
+			DBName:       "test",
+			TableCount:   4,
+			EnableDDL:    true,
+			DDLRate: DDLRatePerMinute{
+				AddColumn: 1,
+			},
+		})
+		require.NoError(t, err)
+		require.Equal(t, ddlModeRandom, cfg.Mode)
+		require.Empty(t, cfg.Tables)
+	})
+
+	t.Run("fast slow uses default rate when ddl enabled", func(t *testing.T) {
+		cfg, err := LoadDDLConfigFromWorkloadConfig(&WorkloadConfig{
+			WorkloadType:    fastSlow,
+			DBName:          "test",
+			TableCount:      4,
+			TableStartIndex: 0,
+			EnableDDL:       true,
+		})
+		require.NoError(t, err)
+		require.Equal(t, ddlModeFixed, cfg.Mode)
+		require.Equal(t, []string{"test.slow_table_2", "test.slow_table_3"}, cfg.Tables)
+		require.Equal(t, defaultInlineDDLRate, cfg.RatePerMinute)
 	})
 }

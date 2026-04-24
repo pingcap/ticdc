@@ -52,6 +52,8 @@ type WorkloadConfig struct {
 
 	// DDL related
 	DDLConfigPath string
+	EnableDDL     bool
+	DDLRate       DDLRatePerMinute
 	DDLWorker     int
 	DDLTimeout    time.Duration
 
@@ -103,6 +105,7 @@ func NewWorkloadConfig() *WorkloadConfig {
 
 		// Default ddl config
 		DDLConfigPath: "",
+		EnableDDL:     false,
 		DDLWorker:     1,
 		DDLTimeout:    2 * time.Minute,
 
@@ -149,6 +152,12 @@ func (c *WorkloadConfig) ParseFlags() error {
 	flag.BoolVar(&c.OnlyDDL, "only-ddl", c.OnlyDDL, "run only ddl workload (skip dml workers)")
 	flag.BoolVar(&c.OnlyDML, "only-dml", c.OnlyDML, "run only dml workload (skip ddl workers)")
 	flag.StringVar(&c.DDLConfigPath, "ddl-config", c.DDLConfigPath, "ddl config file path, must be .toml")
+	flag.BoolVar(&c.EnableDDL, "enable-ddl", c.EnableDDL, "enable ddl together with workload")
+	flag.IntVar(&c.DDLRate.AddColumn, "ddl-rate-add-column", c.DDLRate.AddColumn, "ddl add column rate per minute")
+	flag.IntVar(&c.DDLRate.DropColumn, "ddl-rate-drop-column", c.DDLRate.DropColumn, "ddl drop column rate per minute")
+	flag.IntVar(&c.DDLRate.AddIndex, "ddl-rate-add-index", c.DDLRate.AddIndex, "ddl add index rate per minute")
+	flag.IntVar(&c.DDLRate.DropIndex, "ddl-rate-drop-index", c.DDLRate.DropIndex, "ddl drop index rate per minute")
+	flag.IntVar(&c.DDLRate.TruncateTable, "ddl-rate-truncate-table", c.DDLRate.TruncateTable, "ddl truncate table rate per minute")
 	flag.IntVar(&c.DDLWorker, "ddl-worker", c.DDLWorker, "ddl worker concurrency")
 	flag.DurationVar(&c.DDLTimeout, "ddl-timeout", c.DDLTimeout, "timeout for each ddl statement")
 	flag.StringVar(&c.LogFile, "log-file", c.LogFile, "log file path")
@@ -191,10 +200,15 @@ func (c *WorkloadConfig) ParseFlags() error {
 	}
 
 	dDLConfigPath := strings.TrimSpace(c.DDLConfigPath)
-	dDLEnabled := !c.OnlyDML && (c.Action == "ddl" || dDLConfigPath != "")
+	hasInlineDDLConfig := c.HasInlineDDLConfig()
+	if dDLConfigPath != "" && hasInlineDDLConfig {
+		return fmt.Errorf("ddl-config cannot be used together with inline ddl flags")
+	}
+
+	dDLEnabled := !c.OnlyDML && (c.Action == "ddl" || dDLConfigPath != "" || hasInlineDDLConfig)
 	if dDLEnabled {
-		if dDLConfigPath == "" {
-			return fmt.Errorf("ddl requires -ddl-config")
+		if dDLConfigPath == "" && !hasInlineDDLConfig {
+			return fmt.Errorf("ddl requires -ddl-config or inline ddl flags")
 		}
 		if c.DDLWorker <= 0 {
 			return fmt.Errorf("ddl-worker must be > 0")
@@ -205,6 +219,10 @@ func (c *WorkloadConfig) ParseFlags() error {
 	}
 
 	return nil
+}
+
+func (c *WorkloadConfig) HasInlineDDLConfig() bool {
+	return c.EnableDDL || c.DDLRate.totalRate() > 0
 }
 
 // NewDBManager creates a new database manager.

@@ -22,7 +22,7 @@ import (
 )
 
 func (app *WorkloadApp) handleDDLExecution(wg *sync.WaitGroup) error {
-	cfg, err := LoadDDLConfig(app.Config.DDLConfigPath)
+	cfg, err := LoadDDLConfigFromWorkloadConfig(app.Config)
 	if err != nil {
 		return err
 	}

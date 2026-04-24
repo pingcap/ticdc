@@ -27,6 +27,14 @@ const (
 	ddlModeRandom = "random"
 )
 
+var defaultInlineDDLRate = DDLRatePerMinute{
+	AddColumn:     2,
+	DropColumn:    1,
+	AddIndex:      4,
+	DropIndex:     2,
+	TruncateTable: 0,
+}
+
 type DDLConfig struct {
 	Mode          string           `toml:"mode"`
 	RatePerMinute DDLRatePerMinute `toml:"rate_per_minute"`
@@ -63,6 +71,34 @@ func LoadDDLConfig(path string) (*DDLConfig, error) {
 		return nil, err
 	}
 	return &cfg, nil
+}
+
+func LoadDDLConfigFromWorkloadConfig(cfg *WorkloadConfig) (*DDLConfig, error) {
+	if cfg == nil {
+		return nil, errors.New("workload config is nil")
+	}
+
+	path := strings.TrimSpace(cfg.DDLConfigPath)
+	if path != "" {
+		if cfg.HasInlineDDLConfig() {
+			return nil, errors.New("ddl-config cannot be used together with inline ddl flags")
+		}
+		return LoadDDLConfig(path)
+	}
+
+	inlineCfg := &DDLConfig{
+		Mode:          chooseInlineDDLMode(cfg),
+		RatePerMinute: cfg.DDLRate,
+	}
+	if inlineCfg.RatePerMinute.totalRate() == 0 {
+		inlineCfg.RatePerMinute = defaultInlineDDLRate
+	}
+	inlineCfg.Tables = inferDDLTables(cfg, inlineCfg.Mode)
+	inlineCfg.normalize()
+	if err := inlineCfg.validate(); err != nil {
+		return nil, err
+	}
+	return inlineCfg, nil
 }
 
 func (c *DDLConfig) normalize() {
@@ -129,6 +165,50 @@ func (c *DDLConfig) totalRate() int {
 		c.RatePerMinute.AddIndex +
 		c.RatePerMinute.DropIndex +
 		c.RatePerMinute.TruncateTable
+}
+
+func (r DDLRatePerMinute) totalRate() int {
+	return r.AddColumn + r.DropColumn + r.AddIndex + r.DropIndex + r.TruncateTable
+}
+
+func inferDDLTables(cfg *WorkloadConfig, mode string) []string {
+	if cfg == nil {
+		return nil
+	}
+	if strings.ToLower(strings.TrimSpace(mode)) != ddlModeFixed {
+		return nil
+	}
+	if cfg.WorkloadType != fastSlow {
+		return nil
+	}
+
+	fastTableCount := cfg.TableCount / 2
+	if fastTableCount == 0 && cfg.TableCount > 1 {
+		fastTableCount = 1
+	}
+
+	slowStart := cfg.TableStartIndex + fastTableCount
+	slowCount := cfg.TableCount - fastTableCount
+	if slowCount <= 0 {
+		return nil
+	}
+
+	tables := make([]string, 0, slowCount)
+	for i := 0; i < slowCount; i++ {
+		tableIndex := slowStart + i
+		tables = append(tables, fmt.Sprintf("%s.slow_table_%d", strings.TrimSpace(cfg.DBName), tableIndex))
+	}
+	return tables
+}
+
+func chooseInlineDDLMode(cfg *WorkloadConfig) string {
+	if cfg == nil {
+		return ddlModeRandom
+	}
+	if cfg.WorkloadType == fastSlow {
+		return ddlModeFixed
+	}
+	return ddlModeRandom
 }
 
 type TableName struct {

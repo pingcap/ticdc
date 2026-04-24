@@ -44,18 +44,27 @@ Recommended usage:
 
 If you also want schema-change pressure only on slow tables, use fixed-mode DDL:
 
-```toml
-mode = "fixed"
-
-tables = [
-  "test.slow_table_2",
-  "test.slow_table_3",
-]
-
-[rate_per_minute]
-add_column = 4
-drop_column = 2
-add_index = 2
-drop_index = 1
-truncate_table = 0
+```bash
+./bin/workload -action write \
+  -database-host 127.0.0.1 \
+  -database-port 4000 \
+  -database-db-name test \
+  -workload-type fast_slow \
+  -table-count 4 \
+  -thread 16 \
+  -batch-size 16 \
+  -row-size 4096 \
+  -percentage-for-update 0.4 \
+  -enable-ddl \
+  -ddl-worker 1 \
+  -ddl-timeout 2m
 ```
+
+`-enable-ddl` always targets only `slow_table_*` in this workload. If you want to
+override the default DDL rates, you can still pass:
+
+- `-ddl-rate-add-column`
+- `-ddl-rate-drop-column`
+- `-ddl-rate-add-index`
+- `-ddl-rate-drop-index`
+- `-ddl-rate-truncate-table`
