@@ -21,10 +21,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-	cdcfilter "github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/tidb/pkg/meta/model"
-	"github.com/pingcap/tidb/pkg/parser"
-	"github.com/pingcap/tidb/pkg/util/filter"
 	tfilter "github.com/pingcap/tidb/pkg/util/table-filter"
 	"go.uber.org/zap"
 )
@@ -95,13 +92,10 @@ func (r Router) ApplyToTableInfo(tableInfo *common.TableInfo) *common.TableInfo 
 		return tableInfo
 	}
 
-	originSchema := tableInfo.TableName.Schema
-	originTable := tableInfo.TableName.Table
-	targetSchema, targetTable, changed := r.route(originSchema, originTable)
+	targetSchema, targetTable, changed := r.route(tableInfo.GetSchemaName(), tableInfo.GetTableName())
 	if !changed {
 		return tableInfo
 	}
-
 	return tableInfo.CloneWithRouting(targetSchema, targetTable)
 }
 
@@ -112,42 +106,20 @@ func (r Router) ApplyToDDLEvent(ddl *commonEvent.DDLEvent) (*commonEvent.DDLEven
 		return ddl, nil
 	}
 
-	originSchema := ddl.GetSchemaName()
-	originTable := ddl.GetTableName()
-	originExtraSchema := ddl.GetExtraSchemaName()
-	originExtraTable := ddl.GetExtraTableName()
-
-	targetSchemaName, targetTableName, nameChanged := r.route(originSchema, originTable)
-	targetExtraSchemaName, targetExtraTableName, extraNameChanged := r.route(originExtraSchema, originExtraTable)
+	targetSchemaName, targetTableName, nameChanged := r.route(ddl.GetSchemaName(), ddl.GetTableName())
+	targetExtraSchemaName, targetExtraTableName, extraNameChanged := r.route(ddl.GetExtraSchemaName(), ddl.GetExtraTableName())
 
 	tableInfo := r.ApplyToTableInfo(ddl.TableInfo)
 	multipleTableInfos := r.applyToMultipleTableInfos(ddl.MultipleTableInfos)
 	blockedTableNames := r.applyToBlockedTableNames(ddl.BlockedTableNames)
 
-	structuredChanged := nameChanged ||
-		extraNameChanged ||
-		tableInfo != ddl.TableInfo ||
-		multipleTableInfos != nil ||
-		blockedTableNames != nil
-	if isUnsupportedTableRoutingDDLAction(model.ActionType(ddl.Type)) {
-		if structuredChanged {
-			return nil, errors.ErrTableRoutingFailed.GenWithStack(
-				"DDL type %d is not supported by table routing", ddl.Type)
-		}
-		return ddl, nil
-	}
+	changed := nameChanged || extraNameChanged || tableInfo != ddl.TableInfo || multipleTableInfos != nil || blockedTableNames != nil
 
-	query := ddl.Query
-	shouldRewriteQuery := ddl.Query != "" &&
-		(structuredChanged || ddlQueryMayContainAdditionalTableRefs(model.ActionType(ddl.Type)))
-	if shouldRewriteQuery {
-		var err error
-		query, err = r.rewriteDDLQuery(ddl)
-		if err != nil {
-			return nil, err
-		}
+	newQuery := ddl.Query
+	if changed || ddlQueryMayContainMoreTableNames(model.ActionType(ddl.Type)) {
+		newQuery = r.mustRewriteDDLQuery(ddl)
 	}
-	if query == ddl.Query && !structuredChanged {
+	if newQuery == ddl.Query && !changed {
 		return ddl, nil
 	}
 
@@ -160,7 +132,7 @@ func (r Router) ApplyToDDLEvent(ddl *commonEvent.DDLEvent) (*commonEvent.DDLEven
 
 	return commonEvent.NewRoutedDDLEvent(
 		ddl,
-		query,
+		newQuery,
 		targetSchemaName,
 		targetTableName,
 		targetExtraSchemaName,
@@ -193,171 +165,6 @@ func (r Router) route(originSchema, originTable string) (targetSchema, targetTab
 
 	targetTable = substituteExpression(rule.targetTableExpr, originSchema, originTable, originTable)
 	return targetSchema, targetTable, targetSchema != originSchema || targetTable != originTable
-}
-
-// rewriteDDLQuery rewrites a DDL query by applying routing rules
-// to transform source table names to target table names.
-func (r Router) rewriteDDLQuery(ddl *commonEvent.DDLEvent) (string, error) {
-	if len(r.rules) == 0 || ddl.Query == "" {
-		return ddl.Query, nil
-	}
-
-	queries := []string{ddl.Query}
-	if strings.Contains(ddl.Query, ";") {
-		var err error
-		queries, err = commonEvent.SplitQueries(ddl.Query)
-		if err != nil {
-			log.Error("failed to split ddl query",
-				zap.String("keyspace", r.changefeedID.Keyspace()),
-				zap.String("changefeed", r.changefeedID.Name()),
-				zap.String("query", ddl.Query), zap.Error(err))
-			return "", errors.WrapError(errors.ErrTableRoutingFailed, err)
-		}
-		if len(queries) == 0 {
-			return ddl.Query, nil
-		}
-	}
-
-	defaultSchemas := ddlDefaultSchemas(ddl, len(queries))
-	var (
-		builder strings.Builder
-		routed  bool
-	)
-	for i := range queries {
-		query := queries[i]
-		newQuery, changed, err := r.rewriteSingleDDLQuery(query, defaultSchemas[i])
-		if err != nil {
-			return "", err
-		}
-		if changed {
-			routed = true
-			query = newQuery
-		}
-		appendDDLQuery(&builder, query, len(queries) > 1)
-	}
-	if !routed {
-		return ddl.Query, nil
-	}
-
-	newQuery := builder.String()
-	log.Info("ddl query rewritten with routing",
-		zap.String("keyspace", r.changefeedID.Keyspace()),
-		zap.String("changefeed", r.changefeedID.Name()),
-		zap.String("originalQuery", ddl.Query),
-		zap.String("newQuery", newQuery))
-	return newQuery, nil
-}
-
-func (r Router) rewriteSingleDDLQuery(query string, defaultSchema string) (string, bool, error) {
-	p := parser.New()
-	stmt, err := p.ParseOneStmt(query, "", "")
-	if err != nil {
-		log.Error("failed to parse ddl query",
-			zap.String("keyspace", r.changefeedID.Keyspace()),
-			zap.String("changefeed", r.changefeedID.Name()),
-			zap.String("query", query), zap.Error(err))
-		return "", false, errors.WrapError(errors.ErrTableRoutingFailed, err)
-	}
-
-	sourceTables, err := fetchDDLTables(defaultSchema, stmt)
-	if err != nil {
-		log.Error("failed to fetch ddl tables",
-			zap.String("keyspace", r.changefeedID.Keyspace()),
-			zap.String("changefeed", r.changefeedID.Name()),
-			zap.String("query", query), zap.Error(err))
-		return "", false, err
-	}
-
-	if len(sourceTables) == 0 {
-		return query, false, nil
-	}
-
-	var (
-		routed       bool
-		targetTables = make([]*filter.Table, 0, len(sourceTables))
-	)
-	for _, srcTable := range sourceTables {
-		targetSchema, targetTable, changed := r.route(srcTable.Schema, srcTable.Name)
-		if changed {
-			routed = true
-		}
-		targetTables = append(targetTables, &filter.Table{
-			Schema: targetSchema,
-			Name:   targetTable,
-		})
-	}
-
-	if !routed {
-		return query, false, nil
-	}
-
-	newQuery, err := rewriteDDLQuery(stmt, targetTables)
-	if err != nil {
-		log.Error("failed to rewrite ddl query",
-			zap.String("keyspace", r.changefeedID.Keyspace()),
-			zap.String("changefeed", r.changefeedID.Name()),
-			zap.String("query", query), zap.Any("targetTables", targetTables), zap.Error(err))
-		return "", false, err
-	}
-
-	return newQuery, true, nil
-}
-
-func ddlDefaultSchemas(ddl *commonEvent.DDLEvent, queryCount int) []string {
-	defaultSchema := ddlDefaultSchema(ddl)
-	defaultSchemas := make([]string, queryCount)
-	for i := range defaultSchemas {
-		defaultSchemas[i] = defaultSchema
-	}
-	if len(ddl.MultipleTableInfos) != queryCount {
-		return defaultSchemas
-	}
-	for i, info := range ddl.MultipleTableInfos {
-		if info != nil {
-			defaultSchemas[i] = info.GetSchemaName()
-		}
-	}
-	return defaultSchemas
-}
-
-func ddlDefaultSchema(ddl *commonEvent.DDLEvent) string {
-	if ddl.TableInfo != nil {
-		return ddl.TableInfo.GetSchemaName()
-	}
-	return ddl.GetSchemaName()
-}
-
-func appendDDLQuery(builder *strings.Builder, query string, ensureSemicolon bool) {
-	builder.WriteString(query)
-	if ensureSemicolon && !strings.HasSuffix(query, ";") {
-		builder.WriteByte(';')
-	}
-}
-
-func isUnsupportedTableRoutingDDLAction(actionType model.ActionType) bool {
-	switch actionType {
-	case cdcfilter.ActionAddFullTextIndex, cdcfilter.ActionCreateHybridIndex:
-		return true
-	default:
-	}
-	return false
-}
-
-func ddlQueryMayContainAdditionalTableRefs(actionType model.ActionType) bool {
-	switch actionType {
-	case model.ActionCreateTable,
-		model.ActionCreateTables,
-		model.ActionDropTable,
-		model.ActionRenameTable,
-		model.ActionRenameTables,
-		model.ActionCreateView,
-		model.ActionDropView,
-		model.ActionAddForeignKey,
-		model.ActionExchangeTablePartition:
-		return true
-	default:
-		return false
-	}
 }
 
 // matchRule finds the first rule that matches the given schema/table.

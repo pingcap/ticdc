@@ -19,7 +19,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/ticdc/pkg/errors"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/stretchr/testify/require"
 )
@@ -282,6 +281,7 @@ func TestApplyToDDLEvent(t *testing.T) {
 				return router
 			}(),
 			ddl: &event.DDLEvent{
+				Query: "ALTER TABLE `source_db`.`source_table` ADD COLUMN `c1` INT",
 				MultipleTableInfos: []*common.TableInfo{{
 					TableName: common.TableName{
 						Schema:  "source_db",
@@ -313,6 +313,7 @@ func TestApplyToDDLEvent(t *testing.T) {
 				return router
 			}(),
 			ddl: &event.DDLEvent{
+				Query: "ALTER TABLE `source_db`.`source_table` ADD INDEX `idx_id`(`id`)",
 				BlockedTableNames: []event.SchemaTableName{{
 					SchemaName: "source_db",
 					TableName:  "source_table",
@@ -359,12 +360,6 @@ func TestRewriteDDLQueryWithRouting(t *testing.T) {
 			ddl:             &event.DDLEvent{Query: "CREATE TABLE `source_db`.`test_table` (id INT PRIMARY KEY)", TableInfo: &common.TableInfo{TableName: common.TableName{Schema: "source_db", Table: "test_table"}}},
 			expectedChanged: false,
 			expectedQuery:   "CREATE TABLE `source_db`.`test_table` (id INT PRIMARY KEY)",
-		},
-		{
-			name:            "empty query stays empty",
-			ddl:             &event.DDLEvent{},
-			expectedChanged: false,
-			expectedQuery:   "",
 		},
 		{
 			name: "no matched rule keeps original query",
@@ -447,7 +442,7 @@ func TestRewriteDDLQueryWithRouting(t *testing.T) {
 				TargetTable:  "{table}_routed",
 			}}),
 			ddl: &event.DDLEvent{
-				Query: "CREATE TABLE `t1` (`id` INT PRIMARY KEY);CREATE TABLE `t2` (`id` INT PRIMARY KEY);",
+				Query: "CREATE TABLE `other_db`.`t1` (`id` INT PRIMARY KEY);CREATE TABLE `source_db`.`t2` (`id` INT PRIMARY KEY);",
 				MultipleTableInfos: []*common.TableInfo{
 					{TableName: common.TableName{Schema: "other_db", Table: "t1"}},
 					{TableName: common.TableName{Schema: "source_db", Table: "t2"}},
@@ -455,7 +450,7 @@ func TestRewriteDDLQueryWithRouting(t *testing.T) {
 			},
 			expectedChanged: true,
 			requiredFragments: []string{
-				"CREATE TABLE `t1`",
+				"CREATE TABLE `other_db`.`t1`",
 				";CREATE TABLE `target_db`.`t2_routed`",
 			},
 		},
@@ -464,10 +459,9 @@ func TestRewriteDDLQueryWithRouting(t *testing.T) {
 	for _, tc := range tests {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			newQuery, err := tc.router.rewriteDDLQuery(tc.ddl)
-			require.NoError(t, err)
+			newQuery := tc.router.mustRewriteDDLQuery(tc.ddl)
 			require.Equal(t, tc.expectedChanged, newQuery != tc.ddl.Query)
-			if tc.expectedQuery != "" || tc.ddl.Query == "" {
+			if tc.expectedQuery != "" {
 				require.Equal(t, tc.expectedQuery, newQuery)
 			}
 			for _, fragment := range tc.requiredFragments {
@@ -478,24 +472,6 @@ func TestRewriteDDLQueryWithRouting(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestRewriteDDLQueryWithRoutingReturnsTypedParseError(t *testing.T) {
-	t.Parallel()
-
-	router := mustNewRouter(t, false, []*config.DispatchRule{{
-		Matcher:      []string{"source_db.*"},
-		TargetSchema: "target_db",
-		TargetTable:  TablePlaceholder,
-	}})
-
-	ddl := &event.DDLEvent{Query: "INVALID DDL"}
-
-	_, err := router.rewriteDDLQuery(ddl)
-	require.Error(t, err)
-	code, ok := errors.RFCCode(err)
-	require.True(t, ok)
-	require.Equal(t, errors.ErrTableRoutingFailed.RFCCode(), code)
 }
 
 func TestApplyToDDLEventSkipsQueryRewriteWhenRoutingNotNeeded(t *testing.T) {

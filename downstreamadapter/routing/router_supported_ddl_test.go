@@ -66,8 +66,9 @@ func TestRewriteDDLQueryWithRoutingSupportsParserBackedDDLTypes(t *testing.T) {
 		timodel.ActionCreateTables: {
 			name: "create tables",
 			ddl: &event.DDLEvent{
-				Type:  byte(timodel.ActionCreateTables),
-				Query: "CREATE TABLE `t1` (`id` INT PRIMARY KEY);CREATE TABLE `t2` (`id` INT PRIMARY KEY);",
+				Type:       byte(timodel.ActionCreateTables),
+				Query:      "CREATE TABLE `t1` (`id` INT PRIMARY KEY);CREATE TABLE `t2` (`id` INT PRIMARY KEY);",
+				SchemaName: "source_db",
 				MultipleTableInfos: []*common.TableInfo{
 					newRoutingTestTableInfo("source_db", "t1"),
 					newRoutingTestTableInfo("source_db", "t2"),
@@ -362,8 +363,7 @@ func TestRewriteDDLQueryWithRoutingSupportsParserBackedDDLTypes(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			require.Equal(t, byte(action), tc.ddl.Type)
 
-			newQuery, err := router.rewriteDDLQuery(tc.ddl)
-			require.NoError(t, err)
+			newQuery := router.mustRewriteDDLQuery(tc.ddl)
 			for _, fragment := range tc.requiredFragments {
 				require.Contains(t, newQuery, fragment)
 			}
@@ -374,7 +374,7 @@ func TestRewriteDDLQueryWithRoutingSupportsParserBackedDDLTypes(t *testing.T) {
 	}
 }
 
-func TestApplyToDDLEventRejectsUnsupportedCustomDDLWhenRoutingRequired(t *testing.T) {
+func TestApplyToDDLEventSupportsParserUnsupportedIndexDDL(t *testing.T) {
 	t.Parallel()
 
 	router := mustNewRouter(t, false, []*config.DispatchRule{{
@@ -384,11 +384,28 @@ func TestApplyToDDLEventRejectsUnsupportedCustomDDLWhenRoutingRequired(t *testin
 	}})
 
 	cases := []struct {
-		name string
-		ddl  *event.DDLEvent
+		name              string
+		ddl               *event.DDLEvent
+		requiredFragments []string
+		forbiddenFragment string
 	}{
 		{
-			name: "add fulltext index",
+			name: "add fulltext index without index name",
+			ddl: &event.DDLEvent{
+				Type:       byte(cdcfilter.ActionAddFullTextIndex),
+				Query:      "ALTER TABLE t1 ADD FULLTEXT INDEX (b) WITH PARSER standard;",
+				SchemaName: "source_db",
+				TableName:  "t1",
+				TableInfo:  newRoutingTestTableInfo("source_db", "t1"),
+			},
+			requiredFragments: []string{
+				"ALTER TABLE `target_db`.`t1_r` ADD FULLTEXT INDEX",
+				"WITH PARSER standard",
+			},
+			forbiddenFragment: "ALTER TABLE t1 ADD FULLTEXT INDEX",
+		},
+		{
+			name: "add fulltext index with qualified table",
 			ddl: &event.DDLEvent{
 				Type:       byte(cdcfilter.ActionAddFullTextIndex),
 				Query:      "ALTER TABLE `source_db`.`t1` ADD FULLTEXT INDEX `ft_idx`(`c1`)",
@@ -396,6 +413,10 @@ func TestApplyToDDLEventRejectsUnsupportedCustomDDLWhenRoutingRequired(t *testin
 				TableName:  "t1",
 				TableInfo:  newRoutingTestTableInfo("source_db", "t1"),
 			},
+			requiredFragments: []string{
+				"ALTER TABLE `target_db`.`t1_r` ADD FULLTEXT INDEX `ft_idx`",
+			},
+			forbiddenFragment: "`source_db`.`t1`",
 		},
 		{
 			name: "create hybrid index",
@@ -406,6 +427,11 @@ func TestApplyToDDLEventRejectsUnsupportedCustomDDLWhenRoutingRequired(t *testin
 				TableName:  "t1",
 				TableInfo:  newRoutingTestTableInfo("source_db", "t1"),
 			},
+			requiredFragments: []string{
+				"CREATE HYBRID INDEX i_idx ON `target_db`.`t1_r`(",
+				"PARAMETER 'hybrid_index_param'",
+			},
+			forbiddenFragment: " ON t1(",
 		},
 	}
 
@@ -413,14 +439,17 @@ func TestApplyToDDLEventRejectsUnsupportedCustomDDLWhenRoutingRequired(t *testin
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			routed, err := router.ApplyToDDLEvent(tc.ddl)
-			require.Nil(t, routed)
-			require.Error(t, err)
-			require.Contains(t, err.Error(), "is not supported by table routing")
+			require.NoError(t, err)
+			require.NotSame(t, tc.ddl, routed)
+			for _, fragment := range tc.requiredFragments {
+				require.Contains(t, routed.Query, fragment)
+			}
+			require.NotContains(t, routed.Query, tc.forbiddenFragment)
 		})
 	}
 }
 
-func TestApplyToDDLEventAllowsUnsupportedCustomDDLWhenNoRoutingApplies(t *testing.T) {
+func TestApplyToDDLEventKeepsParserUnsupportedIndexDDLWhenNoRoutingApplies(t *testing.T) {
 	t.Parallel()
 
 	router := mustNewRouter(t, false, []*config.DispatchRule{{
@@ -475,8 +504,9 @@ func TestApplyToDDLEventSupportsCreateTables(t *testing.T) {
 	}})
 
 	ddl := &event.DDLEvent{
-		Type:  byte(timodel.ActionCreateTables),
-		Query: "CREATE TABLE `t1` (`id` INT PRIMARY KEY);CREATE TABLE `t2` (`id` INT PRIMARY KEY);",
+		Type:       byte(timodel.ActionCreateTables),
+		Query:      "CREATE TABLE `t1` (`id` INT PRIMARY KEY);CREATE TABLE `t2` (`id` INT PRIMARY KEY);",
+		SchemaName: "source_db",
 		MultipleTableInfos: []*common.TableInfo{
 			newRoutingTestTableInfo("source_db", "t1"),
 			newRoutingTestTableInfo("source_db", "t2"),

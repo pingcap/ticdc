@@ -368,39 +368,6 @@ var testCases = []testCase{
 	},
 }
 
-var nonDDLs = []string{
-	"GRANT CREATE TABLESPACE ON *.* TO `root`@`%` WITH GRANT OPTION",
-}
-
-func TestError(t *testing.T) {
-	t.Parallel()
-	p := parser.New()
-
-	// DML will report ErrUnknownTypeDDL
-	dml := "INSERT INTO `t1` VALUES (1)"
-
-	stmts, _, err := p.Parse(dml, "", "")
-	require.NoError(t, err)
-	_, err = fetchDDLTables("test", stmts[0])
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "unknown DDL type")
-
-	_, err = rewriteDDLQuery(stmts[0], nil)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "unknown DDL type")
-
-	// tableRenameVisitor with less `targetNames` won't panic
-	ddl := "create table `s1`.`t1` (id int)"
-	stmts, _, err = p.Parse(ddl, "", "")
-	require.NoError(t, err)
-	_, err = rewriteDDLQuery(stmts[0], nil)
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "not enough target tables")
-
-	_, _, err = p.Parse("alter table bar ADD SPATIAL INDEX (`g`)", "", "")
-	require.Error(t, err)
-}
-
 // TestResolveDDL tests FetchDDLTables and RenameDDLTable
 func TestResolveDDL(t *testing.T) {
 	t.Parallel()
@@ -412,8 +379,7 @@ func TestResolveDDL(t *testing.T) {
 		require.Len(t, stmts, 1)
 
 		// Test FetchDDLTables
-		tableNames, err := fetchDDLTables("test", stmts[0])
-		require.NoError(t, err)
+		tableNames := fetchDDLTables("test", stmts[0])
 		require.Equal(t, ca.expectedTableNames[0], tableNames, "FetchDDLTables failed for: %s", ca.sql)
 
 		// Re-parse for RenameDDLTable since it modifies AST in place
@@ -421,8 +387,7 @@ func TestResolveDDL(t *testing.T) {
 		require.NoError(t, err)
 
 		// Test RenameDDLTable
-		targetSQL, err := rewriteDDLQuery(stmts[0], ca.targetTableNames[0])
-		require.NoError(t, err)
+		targetSQL := mustRewriteDDLQuery(stmts[0], ca.targetTableNames[0])
 		require.Equal(t, ca.targetSQLs[0], targetSQL, "RenameDDLTable failed for: %s", ca.sql)
 	}
 }
