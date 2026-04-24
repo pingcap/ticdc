@@ -233,3 +233,81 @@ func TestRemoveLastDispatcher(t *testing.T) {
 	_, ok = c.changefeedMap.Load(cfID2.ID())
 	require.True(t, ok, "changefeedStat for cfID2 should not be affected")
 }
+
+func TestNewCongestionControlMessagesSendZeroAvailable(t *testing.T) {
+	localServerID := node.NewID()
+	remoteID := node.ID("remote-event-service")
+	c := newTestEventCollector(localServerID)
+	defer c.ds.Close()
+	defer c.redoDs.Close()
+
+	dispatcherID := common.NewDispatcherID()
+	mockDisp := newMockDispatcher(dispatcherID, 100)
+	mockDisp.changefeedID = common.NewChangefeedID4Test("default", t.Name())
+	blocked := make(chan struct{}, 1)
+	mockDisp.handleEvents = func(events []dispatcher.DispatcherEvent, wakeCallback func()) (block bool) {
+		select {
+		case blocked <- struct{}{}:
+		default:
+		}
+		return true
+	}
+	c.AddDispatcher(mockDisp, 1024)
+
+	stat := c.getDispatcherStatByID(dispatcherID)
+	require.NotNil(t, stat)
+	stat.connState.setEventServiceID(remoteID)
+
+	handshake := commonEvent.NewHandshakeEvent(dispatcherID, 99, 0, nil)
+	from := remoteID
+	c.ds.Push(dispatcherID, dispatcher.NewDispatcherEvent(&from, &handshake))
+
+	firstDML := &mockEvent{
+		eventType:    commonEvent.TypeDMLEvent,
+		seq:          2,
+		epoch:        0,
+		dispatcherID: dispatcherID,
+		commitTs:     101,
+		size:         64,
+		len:          1,
+	}
+	c.ds.Push(dispatcherID, dispatcher.NewDispatcherEvent(&from, firstDML))
+
+	require.Eventually(t, func() bool {
+		select {
+		case <-blocked:
+			return true
+		default:
+			return false
+		}
+	}, 5*time.Second, 10*time.Millisecond)
+
+	secondDML := &mockEvent{
+		eventType:    commonEvent.TypeDMLEvent,
+		seq:          3,
+		epoch:        0,
+		dispatcherID: dispatcherID,
+		commitTs:     102,
+		size:         2048,
+		len:          1,
+	}
+	c.ds.Push(dispatcherID, dispatcher.NewDispatcherEvent(&from, secondDML))
+
+	require.Eventually(t, func() bool {
+		metrics := c.ds.GetMetrics().MemoryControl.AreaMemoryMetrics
+		if len(metrics) != 1 {
+			return false
+		}
+		return metrics[0].Area() == mockDisp.changefeedID.ID() && metrics[0].AvailableMemory() == 0
+	}, 5*time.Second, 10*time.Millisecond)
+
+	messages := c.newCongestionControlMessages()
+	message, ok := messages[remoteID]
+	require.True(t, ok)
+	require.Len(t, message.GetAvailables(), 1)
+	require.Equal(t, uint64(0), message.GetAvailables()[0].Available)
+	require.Equal(t, uint32(1), message.GetAvailables()[0].DispatcherCount)
+	dispatcherAvailable, ok := message.GetAvailables()[0].DispatcherAvailable[dispatcherID]
+	require.True(t, ok)
+	require.Greater(t, dispatcherAvailable, uint64(0))
+}
