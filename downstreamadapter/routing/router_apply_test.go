@@ -459,7 +459,7 @@ func TestRewriteDDLQueryWithRouting(t *testing.T) {
 	for _, tc := range tests {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			newQuery := tc.router.mustRewriteDDLQuery(tc.ddl)
+			newQuery := tc.router.mustRewriteParserBackedDDLQuery(tc.ddl)
 			require.Equal(t, tc.expectedChanged, newQuery != tc.ddl.Query)
 			if tc.expectedQuery != "" {
 				require.Equal(t, tc.expectedQuery, newQuery)

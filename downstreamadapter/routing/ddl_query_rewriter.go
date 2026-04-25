@@ -19,8 +19,6 @@ import (
 
 	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	cdcfilter "github.com/pingcap/ticdc/pkg/filter"
-	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/format"
@@ -28,39 +26,10 @@ import (
 	"go.uber.org/zap"
 )
 
-// mustRewriteDDLQuery rewrites a DDL query by applying routing rules
-// to transform source table names to target table names.
-func (r Router) mustRewriteDDLQuery(ddl *commonEvent.DDLEvent) string {
+// mustRewriteParserBackedDDLQuery rewrites a parser-supported DDL query by applying routing rules.
+func (r Router) mustRewriteParserBackedDDLQuery(ddl *commonEvent.DDLEvent) string {
 	if len(r.rules) == 0 {
 		return ddl.Query
-	}
-
-	switch model.ActionType(ddl.Type) {
-	case cdcfilter.ActionAddFullTextIndex:
-		targetSchema, targetTable, changed := r.route(ddl.GetSchemaName(), ddl.GetTableName())
-		if !changed {
-			return ddl.Query
-		}
-		newQuery := r.rewriteAddFullTextIndexQuery(ddl.Query, formatQualifiedTableName(targetSchema, targetTable))
-		log.Info("ddl query rewritten with routing",
-			zap.String("keyspace", r.changefeedID.Keyspace()),
-			zap.String("changefeed", r.changefeedID.Name()),
-			zap.String("originalQuery", ddl.Query),
-			zap.String("newQuery", newQuery))
-		return newQuery
-	case cdcfilter.ActionCreateHybridIndex:
-		targetSchema, targetTable, changed := r.route(ddl.GetSchemaName(), ddl.GetTableName())
-		if !changed {
-			return ddl.Query
-		}
-		newQuery := r.rewriteCreateHybridIndexQuery(ddl.Query, formatQualifiedTableName(targetSchema, targetTable))
-		log.Info("ddl query rewritten with routing",
-			zap.String("keyspace", r.changefeedID.Keyspace()),
-			zap.String("changefeed", r.changefeedID.Name()),
-			zap.String("originalQuery", ddl.Query),
-			zap.String("newQuery", newQuery))
-		return newQuery
-	default:
 	}
 
 	queries := []string{ddl.Query}
@@ -96,13 +65,7 @@ func (r Router) mustRewriteDDLQuery(ddl *commonEvent.DDLEvent) string {
 		return ddl.Query
 	}
 
-	newQuery := builder.String()
-	log.Info("ddl query rewritten with routing",
-		zap.String("keyspace", r.changefeedID.Keyspace()),
-		zap.String("changefeed", r.changefeedID.Name()),
-		zap.String("originalQuery", ddl.Query),
-		zap.String("newQuery", newQuery))
-	return newQuery
+	return builder.String()
 }
 
 func (r Router) rewriteSingleDDLQuery(query string, defaultSchema string) (string, bool) {
@@ -142,12 +105,18 @@ func (r Router) rewriteSingleDDLQuery(query string, defaultSchema string) (strin
 	return mustRewriteDDLStmtTables(stmt, targetTables), true
 }
 
-func (r Router) rewriteAddFullTextIndexQuery(query string, targetTableName string) string {
+func (r Router) mustRewriteAddFullTextIndexQuery(query, targetSchema, targetTable string) string {
 	const (
 		alterTable       = "ALTER TABLE"
 		addFullTextIndex = "ADD FULLTEXT INDEX"
 	)
 
+	// The TiDB parser used here does not recognize this DDL yet.
+	// CDC receives normalized SQL like:
+	//   ALTER TABLE `source_db`.`t1` ADD FULLTEXT INDEX `ft_idx`(`c1`)
+	// We only replace the table after ALTER TABLE:
+	//   ALTER TABLE `target_db`.`t1_r` ADD FULLTEXT INDEX `ft_idx`(`c1`)
+	targetTableName := quoteDDLIdentifier(targetSchema) + "." + quoteDDLIdentifier(targetTable)
 	upperQuery := strings.ToUpper(query)
 	if !strings.HasPrefix(upperQuery, alterTable) {
 		log.Panic("rewrite parser unsupported ddl query failed",
@@ -166,14 +135,19 @@ func (r Router) rewriteAddFullTextIndexQuery(query string, targetTableName strin
 	}
 	addIndexStart += tableStart
 
-	return query[:tableStart] + " " +
-		targetTableName + " " +
-		strings.TrimLeft(query[addIndexStart:], " \n\r\t\f")
+	suffix := strings.TrimLeft(query[addIndexStart:], " \n\r\t\f")
+	return query[:tableStart] + " " + targetTableName + " " + suffix
 }
 
-func (r Router) rewriteCreateHybridIndexQuery(query string, targetTableName string) string {
+func (r Router) mustRewriteCreateHybridIndexQuery(query, targetSchema, targetTable string) string {
 	const createHybridIndex = "CREATE HYBRID INDEX"
 
+	// The TiDB parser used here does not recognize this DDL yet.
+	// CDC receives normalized SQL like:
+	//   CREATE HYBRID INDEX i_idx ON `source_db`.`t1`(b, c) PARAMETER '...'
+	// We only replace the table after ON:
+	//   CREATE HYBRID INDEX i_idx ON `target_db`.`t1_r`(b, c) PARAMETER '...'
+	targetTableName := quoteDDLIdentifier(targetSchema) + "." + quoteDDLIdentifier(targetTable)
 	upperQuery := strings.ToUpper(query)
 	columnListStart := strings.IndexByte(query, '(')
 	onStart := -1
@@ -190,21 +164,11 @@ func (r Router) rewriteCreateHybridIndexQuery(query string, targetTableName stri
 			zap.String("changefeed", r.changefeedID.Name()),
 			zap.String("query", query))
 	}
-	return query[:tableStart] +
-		targetTableName +
-		strings.TrimLeft(query[columnListStart:], " \n\r\t\f")
+	suffix := strings.TrimLeft(query[columnListStart:], " \n\r\t\f")
+	return query[:tableStart] + targetTableName + suffix
 }
 
-func formatQualifiedTableName(schema, table string) string {
-	if schema == "" {
-		return quoteDDLIdentifier(table)
-	}
-	if table == "" {
-		return quoteDDLIdentifier(schema)
-	}
-	return quoteDDLIdentifier(schema) + "." + quoteDDLIdentifier(table)
-}
-
+// quoteDDLIdentifier quotes routed target names so route-generated identifiers are always valid SQL.
 func quoteDDLIdentifier(name string) string {
 	return "`" + strings.ReplaceAll(name, "`", "``") + "`"
 }

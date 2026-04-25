@@ -21,6 +21,8 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	cdcfilter "github.com/pingcap/ticdc/pkg/filter"
+	"github.com/pingcap/tidb/pkg/meta/model"
 	tfilter "github.com/pingcap/tidb/pkg/util/table-filter"
 	"go.uber.org/zap"
 )
@@ -40,7 +42,8 @@ type rule struct {
 	targetTableExpr  string
 }
 
-// Router routes origin schema/table names to target schema/table names.
+// Router is used to support the table route functionality,
+// which map the origin schema/table names to target schema/table names based on the given rules.
 type Router struct {
 	changefeedID common.ChangeFeedID
 	rules        []rule
@@ -106,18 +109,36 @@ func (r Router) ApplyToDDLEvent(ddl *commonEvent.DDLEvent) (*commonEvent.DDLEven
 	}
 
 	targetSchemaName, targetTableName, nameChanged := r.route(ddl.GetSchemaName(), ddl.GetTableName())
-	targetExtraSchemaName, targetExtraTableName, extraNameChanged := r.route(ddl.GetExtraSchemaName(), ddl.GetExtraTableName())
+
+	newQuery := ddl.Query
+	switch model.ActionType(ddl.Type) {
+	case cdcfilter.ActionAddFullTextIndex:
+		if nameChanged {
+			newQuery = r.mustRewriteAddFullTextIndexQuery(ddl.Query, targetSchemaName, targetTableName)
+		}
+	case cdcfilter.ActionCreateHybridIndex:
+		if nameChanged {
+			newQuery = r.mustRewriteCreateHybridIndexQuery(ddl.Query, targetSchemaName, targetTableName)
+		}
+	default:
+		newQuery = r.mustRewriteParserBackedDDLQuery(ddl)
+	}
+
+	if newQuery == ddl.Query {
+		return ddl, nil
+	}
+
+	log.Info("ddl query rewritten with routing",
+		zap.String("keyspace", r.changefeedID.Keyspace()),
+		zap.String("changefeed", r.changefeedID.Name()),
+		zap.String("originalQuery", ddl.Query),
+		zap.String("newQuery", newQuery))
+
+	targetExtraSchemaName, targetExtraTableName, _ := r.route(ddl.GetExtraSchemaName(), ddl.GetExtraTableName())
 
 	tableInfo := r.ApplyToTableInfo(ddl.TableInfo)
 	multipleTableInfos := r.applyToMultipleTableInfos(ddl.MultipleTableInfos)
 	blockedTableNames := r.applyToBlockedTableNames(ddl.BlockedTableNames)
-
-	changed := nameChanged || extraNameChanged || tableInfo != ddl.TableInfo || multipleTableInfos != nil || blockedTableNames != nil
-
-	newQuery := r.mustRewriteDDLQuery(ddl)
-	if newQuery == ddl.Query && !changed {
-		return ddl, nil
-	}
 
 	if multipleTableInfos == nil {
 		multipleTableInfos = ddl.MultipleTableInfos
