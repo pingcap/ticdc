@@ -209,41 +209,6 @@ func quoteDDLIdentifier(name string) string {
 	return "`" + strings.ReplaceAll(name, "`", "``") + "`"
 }
 
-func ddlQueryMayContainMoreTableNames(actionType model.ActionType) bool {
-	switch actionType {
-	case model.ActionCreateTable:
-		// CREATE TABLE `target_db`.`new_t` LIKE `source_db`.`old_t`
-		// CREATE TABLE `source_db`.`child` (... REFERENCES `source_db`.`parent`(`id`))
-		return true
-	case model.ActionCreateTables:
-		// CREATE TABLE `source_db`.`t1`(...);CREATE TABLE `source_db`.`t2`(...)
-		return true
-	case model.ActionDropTable:
-		// DROP TABLE `source_db`.`t1`, `source_db`.`t2`
-		return true
-	case model.ActionRenameTable:
-		// RENAME TABLE `source_db`.`old_t` TO `source_db`.`new_t`
-		return true
-	case model.ActionRenameTables:
-		// RENAME TABLE `source_db`.`a` TO `source_db`.`b`, `source_db`.`c` TO `source_db`.`d`
-		return true
-	case model.ActionCreateView:
-		// CREATE VIEW `other_db`.`v` AS SELECT * FROM `source_db`.`orders`
-		return true
-	case model.ActionDropView:
-		// DROP VIEW `source_db`.`v1`, `source_db`.`v2`
-		return true
-	case model.ActionAddForeignKey:
-		// ALTER TABLE `source_db`.`child` ADD FOREIGN KEY (`pid`) REFERENCES `source_db`.`parent`(`id`)
-		return true
-	case model.ActionExchangeTablePartition:
-		// ALTER TABLE `source_db`.`pt` EXCHANGE PARTITION `p0` WITH TABLE `source_db`.`normal_t`
-		return true
-	default:
-	}
-	return false
-}
-
 // tableNameExtractor extracts table names from DDL AST nodes.
 // ref: https://github.com/pingcap/tidb/blob/09feccb529be2830944e11f5fed474020f50370f/server/sql_info_fetcher.go#L46
 type tableNameExtractor struct {

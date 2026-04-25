@@ -474,7 +474,7 @@ func TestRewriteDDLQueryWithRouting(t *testing.T) {
 	}
 }
 
-func TestApplyToDDLEventSkipsQueryRewriteWhenRoutingNotNeeded(t *testing.T) {
+func TestApplyToDDLEventReturnsOriginalWhenQueryDoesNotRoute(t *testing.T) {
 	t.Parallel()
 
 	router := mustNewRouter(t, false, []*config.DispatchRule{{
@@ -485,7 +485,7 @@ func TestApplyToDDLEventSkipsQueryRewriteWhenRoutingNotNeeded(t *testing.T) {
 
 	ddl := &event.DDLEvent{
 		Type:       byte(timodel.ActionAddColumn),
-		Query:      "INVALID DDL",
+		Query:      "ALTER TABLE `other_db`.`t1` ADD COLUMN `c1` INT",
 		SchemaName: "other_db",
 		TableName:  "t1",
 		TableInfo:  &common.TableInfo{TableName: common.TableName{Schema: "other_db", Table: "t1"}},

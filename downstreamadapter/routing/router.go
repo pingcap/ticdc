@@ -21,7 +21,6 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/tidb/pkg/meta/model"
 	tfilter "github.com/pingcap/tidb/pkg/util/table-filter"
 	"go.uber.org/zap"
 )
@@ -115,10 +114,7 @@ func (r Router) ApplyToDDLEvent(ddl *commonEvent.DDLEvent) (*commonEvent.DDLEven
 
 	changed := nameChanged || extraNameChanged || tableInfo != ddl.TableInfo || multipleTableInfos != nil || blockedTableNames != nil
 
-	newQuery := ddl.Query
-	if changed || ddlQueryMayContainMoreTableNames(model.ActionType(ddl.Type)) {
-		newQuery = r.mustRewriteDDLQuery(ddl)
-	}
+	newQuery := r.mustRewriteDDLQuery(ddl)
 	if newQuery == ddl.Query && !changed {
 		return ddl, nil
 	}
