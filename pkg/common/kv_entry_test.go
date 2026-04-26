@@ -88,7 +88,7 @@ func TestCompareEncodedSize(t *testing.T) {
 	jsonEncoded, err := json.Marshal(entry)
 	require.NoError(t, err)
 
-	require.Equal(t, len(encoded), entry.EncodedSize())
+	require.Equal(t, len(encoded), int(entry.GetSize()))
 	require.Less(t, len(encoded), len(jsonEncoded))
 }
 
