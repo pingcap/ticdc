@@ -76,35 +76,41 @@ func EncodeKeyPrefix(uniqueID uint64, tableID int64, CRTs uint64, startTs ...uin
 	return buf
 }
 
-// EncodeKey encodes a key according to event.
+func encodedKeyLen(event *common.RawKVEntry) int {
+	return 8 + 8 + 8 + 8 + 1 + 1 + len(event.Key)
+}
+
+// EncodeKeyTo appends an encoded event-store key to buf.
 // Format: uniqueID, tableID, CRTs, startTs, delete/update/insert, Key.
-func EncodeKey(uniqueID uint64, tableID int64, event *common.RawKVEntry, compressionType CompressionType) []byte {
+func EncodeKeyTo(
+	buf []byte,
+	uniqueID uint64,
+	tableID int64,
+	event *common.RawKVEntry,
+	compressionType CompressionType,
+) []byte {
 	if event == nil {
 		log.Panic("rawkv must not be nil", zap.Any("event", event))
 	}
-	// uniqueID, tableID, CRTs, startTs, Put/Delete, CompressionType, Key
-	length := 8 + 8 + 8 + 8 + 1 + 1 + len(event.Key)
-	buf := make([]byte, 0, length)
-	uint64Buf := [8]byte{}
 	// unique ID
-	binary.BigEndian.PutUint64(uint64Buf[:], uniqueID)
-	buf = append(buf, uint64Buf[:]...)
+	buf = binary.BigEndian.AppendUint64(buf, uniqueID)
 	// table ID
-	binary.BigEndian.PutUint64(uint64Buf[:], uint64(tableID))
-	buf = append(buf, uint64Buf[:]...)
+	buf = binary.BigEndian.AppendUint64(buf, uint64(tableID))
 	// CRTs
-	binary.BigEndian.PutUint64(uint64Buf[:], event.CRTs)
-	buf = append(buf, uint64Buf[:]...)
+	buf = binary.BigEndian.AppendUint64(buf, event.CRTs)
 	// startTs
-	binary.BigEndian.PutUint64(uint64Buf[:], event.StartTs)
-	buf = append(buf, uint64Buf[:]...)
+	buf = binary.BigEndian.AppendUint64(buf, event.StartTs)
 	// Let Delete < Update < Insert
 	dmlOrder := getDMLOrder(event)
 	combinedOrder := uint16(compressionType) | (uint16(dmlOrder) << dmlOrderShift)
-	binary.BigEndian.PutUint16(uint64Buf[:], combinedOrder)
-	buf = append(buf, uint64Buf[:2]...)
+	buf = binary.BigEndian.AppendUint16(buf, combinedOrder)
 	// key
 	return append(buf, event.Key...)
+}
+
+// EncodeKey encodes a key according to event.
+func EncodeKey(uniqueID uint64, tableID int64, event *common.RawKVEntry, compressionType CompressionType) []byte {
+	return EncodeKeyTo(make([]byte, 0, encodedKeyLen(event)), uniqueID, tableID, event, compressionType)
 }
 
 // DecodeKeyMetas decodes compression type and dml order from the key.
