@@ -17,19 +17,18 @@ import (
 	"bytes"
 	"strings"
 
-	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/format"
 	"github.com/pingcap/tidb/pkg/util/filter"
-	"go.uber.org/zap"
 )
 
-// mustRewriteParserBackedDDLQuery rewrites a parser-supported DDL query by applying routing rules.
-func (r Router) mustRewriteParserBackedDDLQuery(ddl *commonEvent.DDLEvent) string {
+// rewriteParserBackedDDLQuery rewrites a parser-supported DDL query by applying routing rules.
+func (r Router) rewriteParserBackedDDLQuery(ddl *commonEvent.DDLEvent) (string, error) {
 	if len(r.rules) == 0 {
-		return ddl.Query
+		return ddl.Query, nil
 	}
 
 	queries := []string{ddl.Query}
@@ -37,10 +36,7 @@ func (r Router) mustRewriteParserBackedDDLQuery(ddl *commonEvent.DDLEvent) strin
 		var err error
 		queries, err = commonEvent.SplitQueries(ddl.Query)
 		if err != nil {
-			log.Panic("split ddl query failed when rewriting",
-				zap.String("keyspace", r.changefeedID.Keyspace()),
-				zap.String("changefeed", r.changefeedID.Name()),
-				zap.String("query", ddl.Query), zap.Error(err))
+			return "", errors.WrapError(errors.ErrTableRoutingFailed, err)
 		}
 	}
 
@@ -51,7 +47,10 @@ func (r Router) mustRewriteParserBackedDDLQuery(ddl *commonEvent.DDLEvent) strin
 	)
 	for i := range queries {
 		query := queries[i]
-		newQuery, changed := r.rewriteSingleDDLQuery(query, defaultSchema)
+		newQuery, changed, err := r.rewriteSingleDDLQuery(query, defaultSchema)
+		if err != nil {
+			return "", err
+		}
 		if changed {
 			routed = true
 			query = newQuery
@@ -62,25 +61,25 @@ func (r Router) mustRewriteParserBackedDDLQuery(ddl *commonEvent.DDLEvent) strin
 		}
 	}
 	if !routed {
-		return ddl.Query
+		return ddl.Query, nil
 	}
 
-	return builder.String()
+	return builder.String(), nil
 }
 
-func (r Router) rewriteSingleDDLQuery(query string, defaultSchema string) (string, bool) {
+func (r Router) rewriteSingleDDLQuery(query string, defaultSchema string) (string, bool, error) {
 	p := parser.New()
 	stmt, err := p.ParseOneStmt(query, "", "")
 	if err != nil {
-		log.Panic("parse ddl failed when rewriting",
-			zap.String("keyspace", r.changefeedID.Keyspace()),
-			zap.String("changefeed", r.changefeedID.Name()),
-			zap.String("query", query), zap.Error(err))
+		return "", false, errors.WrapError(errors.ErrTableRoutingFailed, err)
 	}
 
-	sourceTables := fetchDDLTables(defaultSchema, stmt)
+	sourceTables, err := fetchDDLTables(defaultSchema, stmt)
+	if err != nil {
+		return "", false, err
+	}
 	if len(sourceTables) == 0 {
-		return query, false
+		return query, false, nil
 	}
 
 	var (
@@ -99,13 +98,17 @@ func (r Router) rewriteSingleDDLQuery(query string, defaultSchema string) (strin
 	}
 
 	if !routed {
-		return query, false
+		return query, false, nil
 	}
 
-	return mustRewriteDDLStmtTables(stmt, targetTables), true
+	rewritten, err := rewriteDDLStmtTables(stmt, targetTables)
+	if err != nil {
+		return "", false, err
+	}
+	return rewritten, true, nil
 }
 
-func (r Router) mustRewriteAddFullTextIndexQuery(query, targetSchema, targetTable string) string {
+func (r Router) rewriteAddFullTextIndexQuery(query, targetSchema, targetTable string) (string, error) {
 	const (
 		alterTable       = "ALTER TABLE"
 		addFullTextIndex = "ADD FULLTEXT INDEX"
@@ -119,27 +122,23 @@ func (r Router) mustRewriteAddFullTextIndexQuery(query, targetSchema, targetTabl
 	targetTableName := quoteDDLIdentifier(targetSchema) + "." + quoteDDLIdentifier(targetTable)
 	upperQuery := strings.ToUpper(query)
 	if !strings.HasPrefix(upperQuery, alterTable) {
-		log.Panic("rewrite parser unsupported ddl query failed",
-			zap.String("keyspace", r.changefeedID.Keyspace()),
-			zap.String("changefeed", r.changefeedID.Name()),
-			zap.String("query", query))
+		return "", errors.ErrTableRoutingFailed.GenWithStack(
+			"rewrite parser unsupported ddl query failed, query: %s", query)
 	}
 
 	tableStart := len(alterTable)
 	addIndexStart := strings.Index(upperQuery[tableStart:], addFullTextIndex)
 	if addIndexStart < 0 || strings.TrimSpace(query[tableStart:tableStart+addIndexStart]) == "" {
-		log.Panic("rewrite parser unsupported ddl query failed",
-			zap.String("keyspace", r.changefeedID.Keyspace()),
-			zap.String("changefeed", r.changefeedID.Name()),
-			zap.String("query", query))
+		return "", errors.ErrTableRoutingFailed.GenWithStack(
+			"rewrite parser unsupported ddl query failed, query: %s", query)
 	}
 	addIndexStart += tableStart
 
 	suffix := strings.TrimLeft(query[addIndexStart:], " \n\r\t\f")
-	return query[:tableStart] + " " + targetTableName + " " + suffix
+	return query[:tableStart] + " " + targetTableName + " " + suffix, nil
 }
 
-func (r Router) mustRewriteCreateHybridIndexQuery(query, targetSchema, targetTable string) string {
+func (r Router) rewriteCreateHybridIndexQuery(query, targetSchema, targetTable string) (string, error) {
 	const createHybridIndex = "CREATE HYBRID INDEX"
 
 	// The TiDB parser used here does not recognize this DDL yet.
@@ -159,13 +158,11 @@ func (r Router) mustRewriteCreateHybridIndexQuery(query, targetSchema, targetTab
 		columnListStart < 0 ||
 		onStart < 0 ||
 		strings.TrimSpace(query[tableStart:columnListStart]) == "" {
-		log.Panic("rewrite parser unsupported ddl query failed",
-			zap.String("keyspace", r.changefeedID.Keyspace()),
-			zap.String("changefeed", r.changefeedID.Name()),
-			zap.String("query", query))
+		return "", errors.ErrTableRoutingFailed.GenWithStack(
+			"rewrite parser unsupported ddl query failed, query: %s", query)
 	}
 	suffix := strings.TrimLeft(query[columnListStart:], " \n\r\t\f")
-	return query[:tableStart] + targetTableName + suffix
+	return query[:tableStart] + targetTableName + suffix, nil
 }
 
 // quoteDDLIdentifier quotes routed target names so route-generated identifiers are always valid SQL.
@@ -202,11 +199,12 @@ func (tne *tableNameExtractor) Leave(in ast.Node) (ast.Node, bool) {
 //   - for `CREATE TABLE ... LIKE` DDL, result contains [sourceTable, sourceRefTable]
 //   - for RENAME TABLE DDL, result contains [old1, new1, old2, new2, old3, new3, ...] because of TiDB parser
 //   - for other DDL, order of tableName is the node visit order.
-func fetchDDLTables(schema string, stmt ast.StmtNode) []*filter.Table {
+func fetchDDLTables(schema string, stmt ast.StmtNode) ([]*filter.Table, error) {
 	switch stmt.(type) {
 	case ast.DDLNode:
 	default:
-		log.Panic("fetch ddl tables got non ddl statement", zap.Any("stmt", stmt))
+		return nil, errors.ErrTableRoutingFailed.GenWithStack(
+			"fetch ddl tables got non ddl statement: %T", stmt)
 	}
 
 	// Special cases: schema related SQLs don't have tableName
@@ -216,11 +214,11 @@ func fetchDDLTables(schema string, stmt ast.StmtNode) []*filter.Table {
 		if dbName == "" {
 			dbName = schema
 		}
-		return []*filter.Table{{Schema: dbName, Name: ""}}
+		return []*filter.Table{{Schema: dbName, Name: ""}}, nil
 	case *ast.CreateDatabaseStmt:
-		return []*filter.Table{{Schema: v.Name.O, Name: ""}}
+		return []*filter.Table{{Schema: v.Name.O, Name: ""}}, nil
 	case *ast.DropDatabaseStmt:
-		return []*filter.Table{{Schema: v.Name.O, Name: ""}}
+		return []*filter.Table{{Schema: v.Name.O, Name: ""}}, nil
 	}
 
 	e := &tableNameExtractor{
@@ -229,7 +227,7 @@ func fetchDDLTables(schema string, stmt ast.StmtNode) []*filter.Table {
 	}
 	stmt.Accept(e)
 
-	return e.names
+	return e.names, nil
 }
 
 // tableRenameVisitor renames tables in DDL AST nodes.
@@ -263,36 +261,34 @@ func (v *tableRenameVisitor) Leave(in ast.Node) (ast.Node, bool) {
 	return in, true
 }
 
-// mustRewriteDDLStmtTables renames tables in DDL by given `targetTables`.
+// rewriteDDLStmtTables renames tables in DDL by given `targetTables`.
 // Argument `targetTables` should have the same structure as the return value of fetchDDLTables.
 // Returned DDL is formatted like StringSingleQuotes, KeyWordUppercase and NameBackQuotes.
-func mustRewriteDDLStmtTables(stmt ast.StmtNode, targetTables []*filter.Table) string {
+func rewriteDDLStmtTables(stmt ast.StmtNode, targetTables []*filter.Table) (string, error) {
 	switch stmt.(type) {
 	case ast.DDLNode:
 	default:
-		log.Panic("rewrite ddl query got non ddl statement", zap.Any("stmt", stmt))
+		return "", errors.ErrTableRoutingFailed.GenWithStack(
+			"rewrite ddl query got non ddl statement: %T", stmt)
 	}
 
 	switch v := stmt.(type) {
 	case *ast.AlterDatabaseStmt:
 		if len(targetTables) != 1 {
-			log.Panic("rewrite ddl query got unexpected target table count",
-				zap.Int("expected", 1),
-				zap.Int("actual", len(targetTables)))
+			return "", errors.ErrTableRoutingFailed.GenWithStack(
+				"rewrite ddl query got unexpected target table count: expected 1, got %d", len(targetTables))
 		}
 		v.Name = ast.NewCIStr(targetTables[0].Schema)
 	case *ast.CreateDatabaseStmt:
 		if len(targetTables) != 1 {
-			log.Panic("rewrite ddl query got unexpected target table count",
-				zap.Int("expected", 1),
-				zap.Int("actual", len(targetTables)))
+			return "", errors.ErrTableRoutingFailed.GenWithStack(
+				"rewrite ddl query got unexpected target table count: expected 1, got %d", len(targetTables))
 		}
 		v.Name = ast.NewCIStr(targetTables[0].Schema)
 	case *ast.DropDatabaseStmt:
 		if len(targetTables) != 1 {
-			log.Panic("rewrite ddl query got unexpected target table count",
-				zap.Int("expected", 1),
-				zap.Int("actual", len(targetTables)))
+			return "", errors.ErrTableRoutingFailed.GenWithStack(
+				"rewrite ddl query got unexpected target table count: expected 1, got %d", len(targetTables))
 		}
 		v.Name = ast.NewCIStr(targetTables[0].Schema)
 	default:
@@ -301,14 +297,13 @@ func mustRewriteDDLStmtTables(stmt ast.StmtNode, targetTables []*filter.Table) s
 		}
 		stmt.Accept(visitor)
 		if visitor.hasErr {
-			log.Panic("rewrite ddl query got too few target tables",
-				zap.Int("targetTableCount", len(targetTables)))
+			return "", errors.ErrTableRoutingFailed.GenWithStack(
+				"rewrite ddl query got too few target tables: count=%d", len(targetTables))
 		}
 		// Check if all target tables were consumed - extra targets indicate a configuration mismatch
 		if visitor.i < len(targetTables) {
-			log.Panic("rewrite ddl query got too many target tables",
-				zap.Int("targetTableCount", len(targetTables)),
-				zap.Int("usedTableCount", visitor.i))
+			return "", errors.ErrTableRoutingFailed.GenWithStack(
+				"rewrite ddl query got too many target tables: count=%d, used=%d", len(targetTables), visitor.i)
 		}
 	}
 
@@ -318,8 +313,8 @@ func mustRewriteDDLStmtTables(stmt ast.StmtNode, targetTables []*filter.Table) s
 		In:    bf,
 	})
 	if err != nil {
-		log.Panic("restore ddl query failed", zap.Error(err))
+		return "", errors.WrapError(errors.ErrTableRoutingFailed, err)
 	}
 
-	return bf.String()
+	return bf.String(), nil
 }

@@ -363,7 +363,8 @@ func TestRewriteDDLQueryWithRoutingSupportsParserBackedDDLTypes(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			require.Equal(t, byte(action), tc.ddl.Type)
 
-			newQuery := router.mustRewriteParserBackedDDLQuery(tc.ddl)
+			newQuery, err := router.rewriteParserBackedDDLQuery(tc.ddl)
+			require.NoError(t, err)
 			for _, fragment := range tc.requiredFragments {
 				require.Contains(t, newQuery, fragment)
 			}

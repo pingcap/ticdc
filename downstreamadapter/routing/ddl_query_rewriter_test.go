@@ -16,6 +16,7 @@ package routing
 import (
 	"testing"
 
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/util/filter"
 	"github.com/stretchr/testify/require"
@@ -378,16 +379,65 @@ func TestResolveDDL(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, stmts, 1)
 
-		// Test FetchDDLTables
-		tableNames := fetchDDLTables("test", stmts[0])
-		require.Equal(t, ca.expectedTableNames[0], tableNames, "FetchDDLTables failed for: %s", ca.sql)
+		// Test fetchDDLTables
+		tableNames, err := fetchDDLTables("test", stmts[0])
+		require.NoError(t, err, "fetchDDLTables failed for: %s", ca.sql)
+		require.Equal(t, ca.expectedTableNames[0], tableNames, "fetchDDLTables failed for: %s", ca.sql)
 
-		// Re-parse for RenameDDLTable since it modifies AST in place
+		// Re-parse for rewriteDDLStmtTables since it modifies AST in place
 		stmts, _, err = p.Parse(ca.sql, "", "")
 		require.NoError(t, err)
 
-		// Test RenameDDLTable
-		targetSQL := mustRewriteDDLStmtTables(stmts[0], ca.targetTableNames[0])
-		require.Equal(t, ca.targetSQLs[0], targetSQL, "RenameDDLTable failed for: %s", ca.sql)
+		// Test rewriteDDLStmtTables
+		targetSQL, err := rewriteDDLStmtTables(stmts[0], ca.targetTableNames[0])
+		require.NoError(t, err, "rewriteDDLStmtTables failed for: %s", ca.sql)
+		require.Equal(t, ca.targetSQLs[0], targetSQL, "rewriteDDLStmtTables failed for: %s", ca.sql)
 	}
+}
+
+func TestFetchDDLTablesError(t *testing.T) {
+	t.Parallel()
+
+	p := parser.New()
+	// SELECT is not a DDL statement
+	stmts, _, err := p.Parse("SELECT 1", "", "")
+	require.NoError(t, err)
+	require.Len(t, stmts, 1)
+
+	_, err = fetchDDLTables("test", stmts[0])
+	require.True(t, errors.ErrTableRoutingFailed.Equal(err))
+}
+
+func TestRewriteDDLStmtTablesError(t *testing.T) {
+	t.Parallel()
+
+	p := parser.New()
+
+	t.Run("non ddl statement", func(t *testing.T) {
+		stmts, _, err := p.Parse("SELECT 1", "", "")
+		require.NoError(t, err)
+		_, err = rewriteDDLStmtTables(stmts[0], []*filter.Table{})
+		require.True(t, errors.ErrTableRoutingFailed.Equal(err))
+	})
+
+	t.Run("unexpected target table count for alter database", func(t *testing.T) {
+		stmts, _, err := p.Parse("ALTER DATABASE `test` CHARACTER SET utf8mb4", "", "")
+		require.NoError(t, err)
+		_, err = rewriteDDLStmtTables(stmts[0], []*filter.Table{{}, {}})
+		require.True(t, errors.ErrTableRoutingFailed.Equal(err))
+	})
+
+	t.Run("too few target tables", func(t *testing.T) {
+		stmts, _, err := p.Parse("RENAME TABLE `db1`.`t1` TO `db2`.`t2`", "", "")
+		require.NoError(t, err)
+		_, err = rewriteDDLStmtTables(stmts[0], []*filter.Table{{Schema: "db1", Name: "t1"}})
+		require.True(t, errors.ErrTableRoutingFailed.Equal(err))
+	})
+
+	t.Run("too many target tables", func(t *testing.T) {
+		stmts, _, err := p.Parse("CREATE TABLE `t1` (id INT)", "", "")
+		require.NoError(t, err)
+		_, err = rewriteDDLStmtTables(stmts[0], []*filter.Table{{}, {}, {}})
+		require.True(t, errors.ErrTableRoutingFailed.Equal(err))
+	})
 }

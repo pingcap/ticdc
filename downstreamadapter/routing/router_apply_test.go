@@ -19,6 +19,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/stretchr/testify/require"
 )
@@ -459,7 +460,8 @@ func TestRewriteDDLQueryWithRouting(t *testing.T) {
 	for _, tc := range tests {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			newQuery := tc.router.mustRewriteParserBackedDDLQuery(tc.ddl)
+			newQuery, err := tc.router.rewriteParserBackedDDLQuery(tc.ddl)
+			require.NoError(t, err)
 			require.Equal(t, tc.expectedChanged, newQuery != tc.ddl.Query)
 			if tc.expectedQuery != "" {
 				require.Equal(t, tc.expectedQuery, newQuery)
@@ -529,4 +531,50 @@ func mustNewRouter(t *testing.T, caseSensitive bool, rules []*config.DispatchRul
 	router, err := NewRouter(newTestChangefeedID(), caseSensitive, rules)
 	require.NoError(t, err)
 	return router
+}
+
+func TestRewriteParserBackedDDLQueryError(t *testing.T) {
+	t.Parallel()
+
+	router := mustNewRouter(t, false, []*config.DispatchRule{{
+		Matcher:      []string{"source_db.*"},
+		TargetSchema: "target_db",
+		TargetTable:  TablePlaceholder,
+	}})
+
+	ddl := &event.DDLEvent{
+		Query:      "INVALID SQL !!!",
+		SchemaName: "source_db",
+	}
+
+	_, err := router.rewriteParserBackedDDLQuery(ddl)
+	code, ok := errors.RFCCode(err)
+	require.True(t, ok)
+	require.Equal(t, errors.ErrTableRoutingFailed.RFCCode(), code)
+}
+
+func TestRewriteAddFullTextIndexQueryError(t *testing.T) {
+	t.Parallel()
+
+	router := mustNewRouter(t, false, []*config.DispatchRule{{
+		Matcher:      []string{"source_db.*"},
+		TargetSchema: "target_db",
+		TargetTable:  "{table}_r",
+	}})
+
+	_, err := router.rewriteAddFullTextIndexQuery("NOT AN ALTER TABLE", "target_db", "t1_r")
+	require.True(t, errors.ErrTableRoutingFailed.Equal(err))
+}
+
+func TestRewriteCreateHybridIndexQueryError(t *testing.T) {
+	t.Parallel()
+
+	router := mustNewRouter(t, false, []*config.DispatchRule{{
+		Matcher:      []string{"source_db.*"},
+		TargetSchema: "target_db",
+		TargetTable:  "{table}_r",
+	}})
+
+	_, err := router.rewriteCreateHybridIndexQuery("NOT A CREATE HYBRID INDEX", "target_db", "t1_r")
+	require.True(t, errors.ErrTableRoutingFailed.Equal(err))
 }

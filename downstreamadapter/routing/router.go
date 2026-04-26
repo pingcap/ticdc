@@ -101,8 +101,8 @@ func (r Router) ApplyToTableInfo(tableInfo *common.TableInfo) *common.TableInfo 
 	return tableInfo.CloneWithRouting(targetSchema, targetTable)
 }
 
-// ApplyToDDLEvent returns the original DDL event unless routing changes the query or related
-// table metadata. When routing applies, it builds a routed DDL event once.
+// ApplyToDDLEvent returns the original DDL event unless routing changes the DDL query;
+// when query changes, it also routes related metadata.
 func (r Router) ApplyToDDLEvent(ddl *commonEvent.DDLEvent) (*commonEvent.DDLEvent, error) {
 	if len(r.rules) == 0 || ddl == nil {
 		return ddl, nil
@@ -110,18 +110,22 @@ func (r Router) ApplyToDDLEvent(ddl *commonEvent.DDLEvent) (*commonEvent.DDLEven
 
 	targetSchemaName, targetTableName, nameChanged := r.route(ddl.GetSchemaName(), ddl.GetTableName())
 
+	var err error
 	newQuery := ddl.Query
 	switch model.ActionType(ddl.Type) {
 	case cdcfilter.ActionAddFullTextIndex:
 		if nameChanged {
-			newQuery = r.mustRewriteAddFullTextIndexQuery(ddl.Query, targetSchemaName, targetTableName)
+			newQuery, err = r.rewriteAddFullTextIndexQuery(ddl.Query, targetSchemaName, targetTableName)
 		}
 	case cdcfilter.ActionCreateHybridIndex:
 		if nameChanged {
-			newQuery = r.mustRewriteCreateHybridIndexQuery(ddl.Query, targetSchemaName, targetTableName)
+			newQuery, err = r.rewriteCreateHybridIndexQuery(ddl.Query, targetSchemaName, targetTableName)
 		}
 	default:
-		newQuery = r.mustRewriteParserBackedDDLQuery(ddl)
+		newQuery, err = r.rewriteParserBackedDDLQuery(ddl)
+	}
+	if err != nil {
+		return nil, err
 	}
 
 	if newQuery == ddl.Query {
