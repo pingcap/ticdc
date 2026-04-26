@@ -36,6 +36,14 @@ const (
 	CompressTypeZstd
 )
 
+const (
+	rawKVEntryOpTypeSize = 4
+	rawKVEntryUint32Size = 4
+	rawKVEntryUint64Size = 8
+
+	rawKVEntryHeaderSize = rawKVEntryOpTypeSize + 3*rawKVEntryUint64Size + 3*rawKVEntryUint32Size
+)
+
 // RawKVEntry represents a kv change or a resolved ts event
 // TODO: use a different struct
 type RawKVEntry struct {
@@ -127,12 +135,12 @@ func (v *RawKVEntry) String() string {
 
 // GetSize return the size of the RawKVEntry in bytes
 func (v *RawKVEntry) GetSize() int64 {
-	return int64(len(v.Key)+len(v.Value)+len(v.OldValue)) + 40 // 4*uint32 + 3*uint64
+	return int64(rawKVEntryHeaderSize + len(v.Key) + len(v.Value) + len(v.OldValue))
 }
 
 // EncodedSize returns the byte length produced by Encode.
 func (v *RawKVEntry) EncodedSize() int {
-	return 4*5 + 8*3 + len(v.Key) + len(v.Value) + len(v.OldValue)
+	return rawKVEntryHeaderSize + len(v.Key) + len(v.Value) + len(v.OldValue)
 }
 
 // Encode serializes the RawKVEntry into a byte slice.
@@ -166,7 +174,7 @@ func (v *RawKVEntry) EncodeTo(buf []byte) []byte {
 // Decode deserializes a byte slice into a RawKVEntry
 // Note: the `data` slice may be changed after calling this function, so do not keep reference to it.
 func (v *RawKVEntry) Decode(data []byte) error {
-	if len(data) < 36 { // Minimum size for fixed-length fields
+	if len(data) < rawKVEntryHeaderSize {
 		return fmt.Errorf("insufficient data length")
 	}
 
@@ -187,23 +195,25 @@ func (v *RawKVEntry) Decode(data []byte) error {
 	v.OldValueLen = binary.LittleEndian.Uint32(data[offset : offset+4])
 	offset += 4
 
-	totalLen := int(v.KeyLen + v.ValueLen + v.OldValueLen)
+	keyLen := int(v.KeyLen)
+	valueLen := int(v.ValueLen)
+	oldValueLen := int(v.OldValueLen)
+	totalLen := keyLen + valueLen + oldValueLen
 	if len(data[offset:]) < totalLen {
 		return fmt.Errorf("insufficient data for variable-length fields")
 	}
 
-	// the `data` slice may be changed, so we copy it here
-	v.Key = make([]byte, v.KeyLen)
-	copy(v.Key, data[offset:offset+int(v.KeyLen)])
-	offset += int(v.KeyLen)
+	// The `data` slice may be changed, so keep all variable-length fields in an owned buffer.
+	valueBuf := make([]byte, totalLen)
+	copy(valueBuf, data[offset:offset+totalLen])
+	keyEnd := keyLen
+	valueEnd := keyEnd + valueLen
+	oldValueEnd := valueEnd + oldValueLen
 
-	v.Value = make([]byte, v.ValueLen)
-	copy(v.Value, data[offset:offset+int(v.ValueLen)])
-	offset += int(v.ValueLen)
-
-	if v.OldValueLen > 0 {
-		v.OldValue = make([]byte, v.OldValueLen)
-		copy(v.OldValue, data[offset:offset+int(v.OldValueLen)])
+	v.Key = valueBuf[:keyEnd:keyEnd]
+	v.Value = valueBuf[keyEnd:valueEnd:valueEnd]
+	if oldValueLen > 0 {
+		v.OldValue = valueBuf[valueEnd:oldValueEnd:oldValueEnd]
 	} else {
 		v.OldValue = nil
 	}

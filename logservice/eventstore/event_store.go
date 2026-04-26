@@ -16,7 +16,6 @@ package eventstore
 import (
 	"bytes"
 	"context"
-	"encoding/binary"
 	"fmt"
 	"math"
 	"os"
@@ -1381,51 +1380,6 @@ type eventStoreIter struct {
 	decodeBuf   []byte
 }
 
-func decodeRawKVEntry(data []byte, v *common.RawKVEntry) error {
-	if len(data) < 36 {
-		return fmt.Errorf("insufficient data length")
-	}
-
-	offset := 0
-	v.OpType = common.OpType(binary.LittleEndian.Uint32(data[offset : offset+4]))
-	offset += 4
-	v.CRTs = binary.LittleEndian.Uint64(data[offset : offset+8])
-	offset += 8
-	v.StartTs = binary.LittleEndian.Uint64(data[offset : offset+8])
-	offset += 8
-	v.RegionID = binary.LittleEndian.Uint64(data[offset : offset+8])
-	offset += 8
-
-	v.KeyLen = binary.LittleEndian.Uint32(data[offset : offset+4])
-	offset += 4
-	v.ValueLen = binary.LittleEndian.Uint32(data[offset : offset+4])
-	offset += 4
-	v.OldValueLen = binary.LittleEndian.Uint32(data[offset : offset+4])
-	offset += 4
-
-	keyLen := int(v.KeyLen)
-	valueLen := int(v.ValueLen)
-	oldValueLen := int(v.OldValueLen)
-	totalLen := keyLen + valueLen + oldValueLen
-	if len(data[offset:]) < totalLen {
-		return fmt.Errorf("insufficient data for variable length fields")
-	}
-
-	valueBuf := make([]byte, totalLen)
-	copy(valueBuf, data[offset:offset+totalLen])
-	keyEnd := keyLen
-	valueEnd := keyEnd + valueLen
-	oldValueEnd := valueEnd + oldValueLen
-	v.Key = valueBuf[:keyEnd:keyEnd]
-	v.Value = valueBuf[keyEnd:valueEnd:valueEnd]
-	if oldValueLen > 0 {
-		v.OldValue = valueBuf[valueEnd:oldValueEnd:oldValueEnd]
-	} else {
-		v.OldValue = nil
-	}
-	return nil
-}
-
 func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
 	rawKV := &common.RawKVEntry{}
 	for {
@@ -1452,7 +1406,7 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
 			decodedValue = value
 		}
 
-		err := decodeRawKVEntry(decodedValue, rawKV)
+		err := rawKV.Decode(decodedValue)
 		if err != nil {
 			log.Panic("fail to decode raw kv entry", zap.Error(err))
 		}
