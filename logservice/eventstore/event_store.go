@@ -1309,10 +1309,10 @@ func (e *eventStore) writeEvents(
 			}
 
 			compressionType := CompressionNone
-			valueBytesBefore := int64(kv.EncodedSize())
+			valueBytesBefore := kv.GetSize()
 			valueBytesAfter := valueBytesBefore
 			keyLen := encodedKeyLen(kv)
-			if e.enableZstdCompression && int(valueBytesBefore) > e.compressionThreshold {
+			if e.enableZstdCompression && valueBytesBefore > int64(e.compressionThreshold) {
 				rawValue := kv.Encode()
 				maxEncodedSize := encoder.MaxEncodedSize(len(rawValue))
 				if cap(dstBuf) < maxEncodedSize {

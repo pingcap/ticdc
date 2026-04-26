@@ -41,6 +41,10 @@ const (
 	rawKVEntryUint32Size = 4
 	rawKVEntryUint64Size = 8
 
+	// rawKVEntryHeaderSize contains OpType (rawKVEntryOpTypeSize),
+	// CRTs (rawKVEntryUint64Size), StartTs (rawKVEntryUint64Size),
+	// RegionID (rawKVEntryUint64Size), KeyLen (rawKVEntryUint32Size),
+	// ValueLen (rawKVEntryUint32Size), and OldValueLen (rawKVEntryUint32Size).
 	rawKVEntryHeaderSize = rawKVEntryOpTypeSize + 3*rawKVEntryUint64Size + 3*rawKVEntryUint32Size
 )
 
@@ -138,14 +142,9 @@ func (v *RawKVEntry) GetSize() int64 {
 	return int64(rawKVEntryHeaderSize + len(v.Key) + len(v.Value) + len(v.OldValue))
 }
 
-// EncodedSize returns the byte length produced by Encode.
-func (v *RawKVEntry) EncodedSize() int {
-	return rawKVEntryHeaderSize + len(v.Key) + len(v.Value) + len(v.OldValue)
-}
-
 // Encode serializes the RawKVEntry into a byte slice.
 func (v *RawKVEntry) Encode() []byte {
-	return v.EncodeTo(make([]byte, 0, v.EncodedSize()))
+	return v.EncodeTo(make([]byte, 0, int(v.GetSize())))
 }
 
 // EncodeTo serializes the RawKVEntry by appending to buf.
