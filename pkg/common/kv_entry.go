@@ -130,11 +130,18 @@ func (v *RawKVEntry) GetSize() int64 {
 	return int64(len(v.Key)+len(v.Value)+len(v.OldValue)) + 40 // 4*uint32 + 3*uint64
 }
 
-// Encode serializes the RawKVEntry into a byte slice
+// EncodedSize returns the byte length produced by Encode.
+func (v *RawKVEntry) EncodedSize() int {
+	return 4*5 + 8*3 + len(v.Key) + len(v.Value) + len(v.OldValue)
+}
+
+// Encode serializes the RawKVEntry into a byte slice.
 func (v *RawKVEntry) Encode() []byte {
-	// Calculate total size
-	totalSize := 4*5 + 8*3 + len(v.Key) + len(v.Value) + len(v.OldValue)
-	buf := make([]byte, 0, totalSize)
+	return v.EncodeTo(make([]byte, 0, v.EncodedSize()))
+}
+
+// EncodeTo serializes the RawKVEntry by appending to buf.
+func (v *RawKVEntry) EncodeTo(buf []byte) []byte {
 	// Use binary.LittleEndian.PutUint32/64 to write directly to the buffer
 	buf = binary.LittleEndian.AppendUint32(buf, uint32(v.OpType))
 	buf = binary.LittleEndian.AppendUint64(buf, v.CRTs)

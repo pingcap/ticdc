@@ -16,6 +16,7 @@ package eventstore
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"fmt"
 	"math"
 	"os"
@@ -194,7 +195,7 @@ type eventWithCallback struct {
 func eventWithCallbackSizer(e eventWithCallback) int {
 	size := 0
 	for _, kv := range e.kvs {
-		size += int(kv.KeyLen + kv.ValueLen + kv.OldValueLen)
+		size += len(kv.Key) + len(kv.Value) + len(kv.OldValue)
 	}
 	return size
 }
@@ -1297,7 +1298,8 @@ func (e *eventStore) writeEvents(
 	}
 	for _, event := range events {
 		kvCount += len(event.kvs)
-		for _, kv := range event.kvs {
+		for i := range event.kvs {
+			kv := &event.kvs[i]
 			if kv.CRTs <= event.currentResolvedTs {
 				log.Warn("event store received kv with commitTs less than resolvedTs",
 					zap.Uint64("commitTs", kv.CRTs),
@@ -1308,32 +1310,39 @@ func (e *eventStore) writeEvents(
 			}
 
 			compressionType := CompressionNone
-			rawValue := kv.Encode()
-			valueBytesBefore := int64(len(rawValue))
+			valueBytesBefore := int64(kv.EncodedSize())
 			valueBytesAfter := valueBytesBefore
-			value := rawValue
-			if e.enableZstdCompression && len(rawValue) > e.compressionThreshold {
+			keyLen := encodedKeyLen(kv)
+			if e.enableZstdCompression && int(valueBytesBefore) > e.compressionThreshold {
+				rawValue := kv.Encode()
 				maxEncodedSize := encoder.MaxEncodedSize(len(rawValue))
 				if cap(dstBuf) < maxEncodedSize {
 					dstBuf = make([]byte, 0, maxEncodedSize)
 				} else {
 					dstBuf = dstBuf[:0]
 				}
-				value = encoder.EncodeAll(rawValue, dstBuf)
+				value := encoder.EncodeAll(rawValue, dstBuf)
 				valueBytesAfter = int64(len(value))
 				compressionType = CompressionZSTD
 				metrics.EventStoreCompressedRowsCount.Inc()
+				op := batch.SetDeferred(keyLen, len(value))
+				EncodeKeyTo(op.Key[:0], uint64(event.subID), event.tableID, kv, compressionType)
+				copy(op.Value, value)
+				if err := op.Finish(); err != nil {
+					return err
+				}
+				dstBuf = dstBuf[:0]
+			} else {
+				op := batch.SetDeferred(keyLen, int(valueBytesBefore))
+				EncodeKeyTo(op.Key[:0], uint64(event.subID), event.tableID, kv, compressionType)
+				kv.EncodeTo(op.Value[:0])
+				if err := op.Finish(); err != nil {
+					return err
+				}
 			}
 
-			key := EncodeKey(uint64(event.subID), event.tableID, &kv, compressionType)
-			if err := batch.Set(key, value, pebble.NoSync); err != nil {
-				log.Panic("failed to update pebble batch", zap.Error(err))
-			}
 			totalValueBytesBefore += valueBytesBefore
 			totalValueBytesAfter += valueBytesAfter
-			if compressionType == CompressionZSTD {
-				dstBuf = dstBuf[:0]
-			}
 		}
 	}
 	if compressionBuf != nil {
@@ -1372,6 +1381,51 @@ type eventStoreIter struct {
 	decodeBuf   []byte
 }
 
+func decodeRawKVEntry(data []byte, v *common.RawKVEntry) error {
+	if len(data) < 36 {
+		return fmt.Errorf("insufficient data length")
+	}
+
+	offset := 0
+	v.OpType = common.OpType(binary.LittleEndian.Uint32(data[offset : offset+4]))
+	offset += 4
+	v.CRTs = binary.LittleEndian.Uint64(data[offset : offset+8])
+	offset += 8
+	v.StartTs = binary.LittleEndian.Uint64(data[offset : offset+8])
+	offset += 8
+	v.RegionID = binary.LittleEndian.Uint64(data[offset : offset+8])
+	offset += 8
+
+	v.KeyLen = binary.LittleEndian.Uint32(data[offset : offset+4])
+	offset += 4
+	v.ValueLen = binary.LittleEndian.Uint32(data[offset : offset+4])
+	offset += 4
+	v.OldValueLen = binary.LittleEndian.Uint32(data[offset : offset+4])
+	offset += 4
+
+	keyLen := int(v.KeyLen)
+	valueLen := int(v.ValueLen)
+	oldValueLen := int(v.OldValueLen)
+	totalLen := keyLen + valueLen + oldValueLen
+	if len(data[offset:]) < totalLen {
+		return fmt.Errorf("insufficient data for variable length fields")
+	}
+
+	valueBuf := make([]byte, totalLen)
+	copy(valueBuf, data[offset:offset+totalLen])
+	keyEnd := keyLen
+	valueEnd := keyEnd + valueLen
+	oldValueEnd := valueEnd + oldValueLen
+	v.Key = valueBuf[:keyEnd:keyEnd]
+	v.Value = valueBuf[keyEnd:valueEnd:valueEnd]
+	if oldValueLen > 0 {
+		v.OldValue = valueBuf[valueEnd:oldValueEnd:oldValueEnd]
+	} else {
+		v.OldValue = nil
+	}
+	return nil
+}
+
 func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
 	rawKV := &common.RawKVEntry{}
 	for {
@@ -1398,7 +1452,7 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
 			decodedValue = value
 		}
 
-		err := rawKV.Decode(decodedValue)
+		err := decodeRawKVEntry(decodedValue, rawKV)
 		if err != nil {
 			log.Panic("fail to decode raw kv entry", zap.Error(err))
 		}

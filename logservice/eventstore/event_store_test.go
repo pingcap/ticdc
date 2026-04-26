@@ -1153,6 +1153,21 @@ func TestEventStoreGetIteratorConcurrently(t *testing.T) {
 	wg.Wait()
 }
 
+func TestEventWithCallbackSizerUsesCurrentKVBytes(t *testing.T) {
+	event := eventWithCallback{
+		kvs: []common.RawKVEntry{{
+			Key:         []byte("key"),
+			Value:       []byte("value"),
+			OldValue:    []byte("old"),
+			KeyLen:      1,
+			ValueLen:    1,
+			OldValueLen: 1,
+		}},
+	}
+
+	require.Equal(t, len("key")+len("value")+len("old"), eventWithCallbackSizer(event))
+}
+
 func TestEventStoreIter_NextWithFiltering(t *testing.T) {
 	t.Parallel()
 
