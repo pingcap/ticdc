@@ -98,6 +98,9 @@ func TestRawKVEntryDecodeRejectsTruncatedHeader(t *testing.T) {
 	require.ErrorContains(t, err, "insufficient data length")
 }
 
+// TestRawKVEntryDecodeFieldsDoNotShareAppendCapacity verifies that decoded
+// fields can share one backing buffer without letting append on one field
+// overwrite the next field.
 func TestRawKVEntryDecodeFieldsDoNotShareAppendCapacity(t *testing.T) {
 	original := RawKVEntry{
 		OpType:   OpTypePut,
