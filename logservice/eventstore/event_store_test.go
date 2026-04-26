@@ -875,7 +875,8 @@ func TestWriteToEventStore(t *testing.T) {
 	defer encoder.Close()
 
 	var compressionBuf []byte
-	err = store.writeEvents(store.dbs[0], events, encoder, &compressionBuf)
+	var rawValueBuf []byte
+	err = store.writeEvents(store.dbs[0], events, encoder, &compressionBuf, &rawValueBuf)
 	require.NoError(t, err)
 
 	// Read events back and verify.
@@ -956,7 +957,8 @@ func TestWriteToEventStoreZstdCompressionDisabled(t *testing.T) {
 	defer encoder.Close()
 
 	var compressionBuf []byte
-	err = store.writeEvents(store.dbs[0], events, encoder, &compressionBuf)
+	var rawValueBuf []byte
+	err = store.writeEvents(store.dbs[0], events, encoder, &compressionBuf, &rawValueBuf)
 	require.NoError(t, err)
 
 	iter, err := store.dbs[0].NewIter(&pebble.IterOptions{})
@@ -1015,7 +1017,8 @@ func TestEventStoreCompressionAndIterDecodeBufferReuse(t *testing.T) {
 	require.NoError(t, err)
 	defer encoder.Close()
 	var compressionBuf []byte
-	err = store.writeEvents(store.dbs[0], events, encoder, &compressionBuf)
+	var rawValueBuf []byte
+	err = store.writeEvents(store.dbs[0], events, encoder, &compressionBuf, &rawValueBuf)
 	require.NoError(t, err)
 	afterMetric := testutil.ToFloat64(metrics.EventStoreCompressedRowsCount)
 	require.InDelta(t, float64(len(expectedValues)), afterMetric-beforeMetric, 1e-9)
@@ -1108,7 +1111,8 @@ func TestEventStoreGetIteratorConcurrently(t *testing.T) {
 	require.NoError(t, err)
 	defer encoder.Close()
 	var compressionBuf []byte
-	err = store.(*eventStore).writeEvents(store.(*eventStore).dbs[0], events, encoder, &compressionBuf)
+	var rawValueBuf []byte
+	err = store.(*eventStore).writeEvents(store.(*eventStore).dbs[0], events, encoder, &compressionBuf, &rawValueBuf)
 	require.NoError(t, err)
 
 	// 3. Advance resolved ts for the subscription.

@@ -319,6 +319,7 @@ func (p *writeTaskPool) run(ctx context.Context) {
 		go func(workerID int) {
 			defer p.store.wg.Done()
 			var compressionBuf []byte
+			var rawValueBuf []byte
 			encodeOpt := zstd.WithEncoderLevel(zstd.SpeedFastest)
 			encoder, err := zstd.NewWriter(nil, encodeOpt)
 			if err != nil {
@@ -344,7 +345,7 @@ func (p *writeTaskPool) run(ctx context.Context) {
 						queueDuration.Observe(float64(time.Now().UnixNano()-events[0].enqueueTimeNano) / float64(time.Second))
 					}
 					start := time.Now()
-					if err = p.store.writeEvents(p.db, events, encoder, &compressionBuf); err != nil {
+					if err = p.store.writeEvents(p.db, events, encoder, &compressionBuf, &rawValueBuf); err != nil {
 						log.Panic("write events failed", zap.Error(err))
 					}
 					ioWriteDuration.Observe(time.Since(start).Seconds())
@@ -1283,6 +1284,7 @@ func (e *eventStore) writeEvents(
 	events []eventWithCallback,
 	encoder *zstd.Encoder,
 	compressionBuf *[]byte,
+	rawValueBuf *[]byte,
 ) error {
 	metrics.EventStoreWriteRequestsCount.Inc()
 	prepareStart := time.Now()
@@ -1294,6 +1296,10 @@ func (e *eventStore) writeEvents(
 	var dstBuf []byte
 	if compressionBuf != nil {
 		dstBuf = *compressionBuf
+	}
+	var rawBuf []byte
+	if rawValueBuf != nil {
+		rawBuf = *rawValueBuf
 	}
 	for _, event := range events {
 		kvCount += len(event.kvs)
@@ -1313,7 +1319,12 @@ func (e *eventStore) writeEvents(
 			valueBytesAfter := valueBytesBefore
 			keyLen := encodedKeyLen(kv)
 			if e.enableZstdCompression && valueBytesBefore > int64(e.compressionThreshold) {
-				rawValue := kv.Encode()
+				if cap(rawBuf) < int(valueBytesBefore) {
+					rawBuf = make([]byte, 0, int(valueBytesBefore))
+				} else {
+					rawBuf = rawBuf[:0]
+				}
+				rawValue := kv.EncodeTo(rawBuf)
 				maxEncodedSize := encoder.MaxEncodedSize(len(rawValue))
 				if cap(dstBuf) < maxEncodedSize {
 					dstBuf = make([]byte, 0, maxEncodedSize)
@@ -1330,6 +1341,7 @@ func (e *eventStore) writeEvents(
 				if err := op.Finish(); err != nil {
 					return err
 				}
+				rawBuf = rawValue[:0]
 				dstBuf = dstBuf[:0]
 			} else {
 				op := batch.SetDeferred(keyLen, int(valueBytesBefore))
@@ -1346,6 +1358,9 @@ func (e *eventStore) writeEvents(
 	}
 	if compressionBuf != nil {
 		*compressionBuf = dstBuf
+	}
+	if rawValueBuf != nil {
+		*rawValueBuf = rawBuf
 	}
 	kvEventCount.Add(float64(kvCount))
 	metrics.EventStoreWriteBatchEventsCountHist.Observe(float64(kvCount))
