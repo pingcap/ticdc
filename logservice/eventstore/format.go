@@ -77,6 +77,7 @@ func EncodeKeyPrefix(uniqueID uint64, tableID int64, CRTs uint64, startTs ...uin
 }
 
 func encodedKeyLen(event *common.RawKVEntry) int {
+	// uniqueID, tableID, CRTs, startTs, Put/Delete, CompressionType, Key
 	return 8 + 8 + 8 + 8 + 1 + 1 + len(event.Key)
 }
 

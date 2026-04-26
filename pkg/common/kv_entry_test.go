@@ -88,7 +88,38 @@ func TestCompareEncodedSize(t *testing.T) {
 	jsonEncoded, err := json.Marshal(entry)
 	require.NoError(t, err)
 
+	require.Equal(t, len(encoded), entry.EncodedSize())
 	require.Less(t, len(encoded), len(jsonEncoded))
+}
+
+func TestRawKVEntryDecodeRejectsTruncatedHeader(t *testing.T) {
+	var entry RawKVEntry
+	err := entry.Decode(make([]byte, rawKVEntryHeaderSize-1))
+	require.ErrorContains(t, err, "insufficient data length")
+}
+
+func TestRawKVEntryDecodeFieldsDoNotShareAppendCapacity(t *testing.T) {
+	original := RawKVEntry{
+		OpType:   OpTypePut,
+		CRTs:     1234567890,
+		StartTs:  9876543210,
+		RegionID: 42,
+		Key:      []byte("key"),
+		Value:    []byte("value"),
+		OldValue: []byte("old"),
+	}
+
+	var decoded RawKVEntry
+	err := decoded.Decode(original.Encode())
+	require.NoError(t, err)
+
+	key := append(decoded.Key, 'x')
+	value := append(decoded.Value, 'x')
+
+	require.Equal(t, []byte("keyx"), key)
+	require.Equal(t, []byte("valuex"), value)
+	require.Equal(t, []byte("value"), decoded.Value)
+	require.Equal(t, []byte("old"), decoded.OldValue)
 }
 
 func TestRawKVEntry_SplitUpdate_UpdateOperation(t *testing.T) {
