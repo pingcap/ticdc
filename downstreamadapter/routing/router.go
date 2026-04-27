@@ -128,6 +128,8 @@ func (r Router) ApplyToDDLEvent(ddl *commonEvent.DDLEvent) (*commonEvent.DDLEven
 		return nil, err
 	}
 
+	// In CDC DDL events, routed DDL metadata should correspond to names in Query.
+	// If Query is unchanged, no routed DDL event is needed.
 	if newQuery == ddl.Query {
 		return ddl, nil
 	}
