@@ -1318,6 +1318,7 @@ func (e *eventStore) writeEvents(
 			valueBytesBefore := kv.GetSize()
 			valueBytesAfter := valueBytesBefore
 			keyLen := encodedKeyLen(kv)
+
 			if e.enableZstdCompression && valueBytesBefore > int64(e.compressionThreshold) {
 				if cap(rawBuf) < int(valueBytesBefore) {
 					rawBuf = make([]byte, 0, int(valueBytesBefore))
@@ -1335,6 +1336,10 @@ func (e *eventStore) writeEvents(
 				valueBytesAfter = int64(len(value))
 				compressionType = CompressionZSTD
 				metrics.EventStoreCompressedRowsCount.Inc()
+				// SetDeferred is a write path optimization. Now that the compressed
+				// value length is known, reserve the exact key/value space in the
+				// Pebble batch, encode the key directly into op.Key, and copy the
+				// compressed value into op.Value without building a temporary key.
 				op := batch.SetDeferred(keyLen, len(value))
 				op.Key = EncodeKeyTo(op.Key[:0], uint64(event.subID), event.tableID, kv, compressionType)
 				if len(op.Key) != keyLen {
@@ -1353,6 +1358,9 @@ func (e *eventStore) writeEvents(
 				rawBuf = rawValue[:0]
 				dstBuf = value[:0]
 			} else {
+				// SetDeferred reserves the final Pebble batch space up front, so
+				// the uncompressed raw KV can be encoded directly into op.Value
+				// without allocating a separate value slice and copying it later.
 				op := batch.SetDeferred(keyLen, int(valueBytesBefore))
 				op.Key = EncodeKeyTo(op.Key[:0], uint64(event.subID), event.tableID, kv, compressionType)
 				if len(op.Key) != keyLen {
