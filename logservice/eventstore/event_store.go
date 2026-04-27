@@ -1336,20 +1336,33 @@ func (e *eventStore) writeEvents(
 				compressionType = CompressionZSTD
 				metrics.EventStoreCompressedRowsCount.Inc()
 				op := batch.SetDeferred(keyLen, len(value))
-				EncodeKeyTo(op.Key[:0], uint64(event.subID), event.tableID, kv, compressionType)
-				copy(op.Value, value)
+				op.Key = EncodeKeyTo(op.Key[:0], uint64(event.subID), event.tableID, kv, compressionType)
+				if len(op.Key) != keyLen {
+					return fmt.Errorf("encoded event store key size mismatch, expected %d, got %d",
+						keyLen, len(op.Key))
+				}
+				copiedValueLen := copy(op.Value, value)
+				op.Value = op.Value[:copiedValueLen]
+				if copiedValueLen != len(value) {
+					return fmt.Errorf("compressed raw kv entry size mismatch, expected %d, got %d",
+						len(value), copiedValueLen)
+				}
 				if err := op.Finish(); err != nil {
 					return err
 				}
 				rawBuf = rawValue[:0]
-				dstBuf = dstBuf[:0]
+				dstBuf = value[:0]
 			} else {
 				op := batch.SetDeferred(keyLen, int(valueBytesBefore))
-				EncodeKeyTo(op.Key[:0], uint64(event.subID), event.tableID, kv, compressionType)
-				encodedValue := kv.EncodeTo(op.Value[:0])
-				if len(encodedValue) != int(valueBytesBefore) {
+				op.Key = EncodeKeyTo(op.Key[:0], uint64(event.subID), event.tableID, kv, compressionType)
+				if len(op.Key) != keyLen {
+					return fmt.Errorf("encoded event store key size mismatch, expected %d, got %d",
+						keyLen, len(op.Key))
+				}
+				op.Value = kv.EncodeTo(op.Value[:0])
+				if len(op.Value) != int(valueBytesBefore) {
 					return fmt.Errorf("encoded raw kv entry size mismatch, expected %d, got %d",
-						valueBytesBefore, len(encodedValue))
+						valueBytesBefore, len(op.Value))
 				}
 				if err := op.Finish(); err != nil {
 					return err
