@@ -537,8 +537,8 @@ func (d *dispatcherStat) handleSingleDataEvents(events []dispatcher.DispatcherEv
 		return false
 	}
 	if events[0].GetType() == commonEvent.TypeDDLEvent {
-		originalDDL := events[0].Event.(*commonEvent.DDLEvent)
-		ddl, err := d.applyRoutingToDDLEvent(originalDDL)
+		ddl := events[0].Event.(*commonEvent.DDLEvent)
+		ddl, err := d.target.GetRouter().ApplyToDDLEvent(ddl)
 		if err != nil {
 			log.Error("failed to apply routing to DDL event",
 				zap.Stringer("changefeedID", d.target.GetChangefeedID()),
@@ -551,23 +551,8 @@ func (d *dispatcherStat) handleSingleDataEvents(events []dispatcher.DispatcherEv
 		}
 		events[0].Event = ddl
 		if ddl.TableInfo != nil {
-			// Check if this DDL's TableInfo is for a different table.
-			// This can happen with CREATE TABLE LIKE, where the DDL is added to the
-			// reference table's history for blocking purposes, but the TableInfo is
-			// for the new table. In this case, we should NOT update the stored tableInfo.
-			dispatcherTableID := d.target.GetTableSpan().TableID
-			ddlTableID := ddl.TableInfo.TableName.TableID
-			if ddlTableID != dispatcherTableID {
-				log.Debug("DDL TableInfo is for a different table, skipping tableInfo update",
-					zap.Stringer("changefeedID", d.target.GetChangefeedID()),
-					zap.Stringer("dispatcher", d.getDispatcherID()),
-					zap.Int64("dispatcherTableID", dispatcherTableID),
-					zap.Int64("ddlTableID", ddlTableID),
-					zap.String("ddlTableName", ddl.TableInfo.TableName.Table))
-			} else {
-				d.tableInfoVersion.Store(ddl.FinishedTs)
-				d.tableInfo.Store(ddl.TableInfo)
-			}
+			d.tableInfoVersion.Store(ddl.FinishedTs)
+			d.tableInfo.Store(ddl.TableInfo)
 		}
 	}
 	d.updateCommitTsStateByEvents(state, events)
@@ -720,7 +705,8 @@ func (d *dispatcherStat) handleHandshakeEvent(event dispatcher.DispatcherEvent) 
 	}
 	tableInfo := handshakeEvent.TableInfo
 	if tableInfo != nil {
-		d.tableInfo.Store(d.applyRoutingToTableInfo(tableInfo))
+		tableInfo := d.target.GetRouter().ApplyToTableInfo(tableInfo)
+		d.tableInfo.Store(tableInfo)
 	}
 	state.lastEventSeq.Store(handshakeEvent.Seq)
 	d.observeCurrentEpochMaxEventTs(state, handshakeEvent.GetCommitTs())
@@ -819,18 +805,4 @@ func (d *dispatcherStat) newDispatcherRemoveRequest(serverId string) *messaging.
 			Mode:       d.target.GetMode(),
 		},
 	}
-}
-
-// applyRoutingToTableInfo applies routing rules to the TableInfo and returns a new TableInfo
-// with TargetSchema/TargetTable set. If no routing is needed (no router configured, or routing
-// results in same schema/table), returns the original tableInfo unchanged.
-// This avoids mutating shared TableInfo objects that may be used by multiple changefeeds.
-func (d *dispatcherStat) applyRoutingToTableInfo(tableInfo *common.TableInfo) *common.TableInfo {
-	router := d.target.GetRouter()
-	return router.ApplyToTableInfo(tableInfo)
-}
-
-func (d *dispatcherStat) applyRoutingToDDLEvent(ddl *commonEvent.DDLEvent) (*commonEvent.DDLEvent, error) {
-	router := d.target.GetRouter()
-	return router.ApplyToDDLEvent(ddl)
 }

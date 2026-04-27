@@ -1512,7 +1512,7 @@ func TestHandleDDLEventTableInfoUpdate(t *testing.T) {
 	localServerID := node.ID("local")
 	remoteServerID := node.ID("remote")
 
-	t.Run("stores table info when ddl table matches dispatcher", func(t *testing.T) {
+	t.Run("stores ddl table info", func(t *testing.T) {
 		var capturedEvent *commonEvent.DDLEvent
 		mockDisp := newMockDispatcher(common.NewDispatcherID(), 0)
 		mockDisp.handleEvents = func(events []dispatcher.DispatcherEvent, wakeCallback func()) bool {
@@ -1560,58 +1560,4 @@ func TestHandleDDLEventTableInfoUpdate(t *testing.T) {
 		require.NotNil(t, capturedEvent)
 		require.Same(t, ddlEvent, capturedEvent)
 	})
-
-	t.Run("keeps current table info when ddl table belongs to another table", func(t *testing.T) {
-		mockDisp := newMockDispatcher(common.NewDispatcherID(), 0)
-		mockDisp.handleEvents = func(events []dispatcher.DispatcherEvent, wakeCallback func()) bool {
-			return false
-		}
-
-		stat := newDispatcherStat(mockDisp, newTestEventCollector(localServerID), nil)
-		stat.connState.setEventServiceID(remoteServerID)
-		stat.currentEpoch.Store(newDispatcherEpochState(10, 1, stat.target.GetStartTs()))
-		stat.lastEventCommitTs.Store(50)
-
-		originalTableInfo := &common.TableInfo{
-			TableName: common.TableName{
-				Schema:  "test",
-				Table:   "t",
-				TableID: 1,
-			},
-		}
-		stat.tableInfo.Store(originalTableInfo)
-
-		newTableInfo := &common.TableInfo{
-			TableName: common.TableName{
-				Schema:  "test",
-				Table:   "t_like",
-				TableID: 999,
-			},
-		}
-
-		ddlEvent := &commonEvent.DDLEvent{
-			Version:    commonEvent.DDLEventVersion1,
-			Query:      "CREATE TABLE `test`.`t_like` LIKE `test`.`t`",
-			FinishedTs: 100,
-			Epoch:      10,
-			Seq:        2,
-			TableInfo:  newTableInfo,
-		}
-
-		events := []dispatcher.DispatcherEvent{
-			{From: &remoteServerID, Event: ddlEvent},
-		}
-
-		stat.handleDataEvents(events...)
-
-		storedTableInfo := stat.tableInfo.Load().(*common.TableInfo)
-		require.NotNil(t, storedTableInfo)
-		require.Same(t, originalTableInfo, storedTableInfo)
-		require.Equal(t, "t", storedTableInfo.TableName.Table)
-		require.Equal(t, int64(1), storedTableInfo.TableName.TableID)
-		require.NotEqual(t, "t_like", storedTableInfo.TableName.Table)
-		require.NotEqual(t, int64(999), storedTableInfo.TableName.TableID)
-		require.Equal(t, uint64(0), stat.tableInfoVersion.Load())
-	})
-
 }

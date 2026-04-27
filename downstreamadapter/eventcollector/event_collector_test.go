@@ -192,9 +192,6 @@ func TestProcessMessage(t *testing.T) {
 		dml.Seq = seq.Add(1)
 		dml.Epoch = 1
 		dml.CommitTs = ddl.FinishedTs + uint64(i)
-		// eventcollector sets TableInfoVersion from the latest DDL version when
-		// expanding BatchDMLEvent into individual DMLEvents.
-		dml.TableInfoVersion = ddl.FinishedTs
 		events[dml.Seq] = dml
 	}
 

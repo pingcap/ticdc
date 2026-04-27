@@ -207,7 +207,7 @@ func (m *Backoff) HandleError(errs []*heartbeatpb.RunningError) (bool, *heartbea
 
 	// check if we exceed the maxElapsedTime
 	if m.shouldFailWhenRetry() {
-		log.Error("the changefeed won't be restarted as it has been experiencing failures for "+
+		log.Error("The changefeed won't be restarted as it has been experiencing failures for "+
 			"an extended duration",
 			zap.Duration("maxElapsedTime", m.errBackoff.MaxElapsedTime),
 			zap.Stringer("changefeed", m.id),
