@@ -40,7 +40,9 @@ func TestApplyToTableInfo(t *testing.T) {
 	}
 
 	var zeroRouter Router
-	require.Same(t, tableInfo, zeroRouter.ApplyToTableInfo(tableInfo))
+	routed, err := zeroRouter.ApplyToTableInfo(tableInfo)
+	require.NoError(t, err)
+	require.Same(t, tableInfo, routed)
 
 	noOpRouter, err := NewRouter(newTestChangefeedID(), false, []*config.DispatchRule{
 		{
@@ -50,7 +52,9 @@ func TestApplyToTableInfo(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	require.Same(t, tableInfo, noOpRouter.ApplyToTableInfo(tableInfo))
+	routed, err = noOpRouter.ApplyToTableInfo(tableInfo)
+	require.NoError(t, err)
+	require.Same(t, tableInfo, routed)
 
 	router, err := NewRouter(newTestChangefeedID(), false, []*config.DispatchRule{
 		{
@@ -61,7 +65,8 @@ func TestApplyToTableInfo(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	routed := router.ApplyToTableInfo(tableInfo)
+	routed, err = router.ApplyToTableInfo(tableInfo)
+	require.NoError(t, err)
 	require.NotSame(t, tableInfo, routed)
 	require.Equal(t, "source_db", routed.GetSchemaName())
 	require.Equal(t, "source_table", routed.GetTableName())
@@ -74,6 +79,33 @@ func TestApplyToTableInfo(t *testing.T) {
 
 	require.Empty(t, tableInfo.TableName.TargetSchema)
 	require.Empty(t, tableInfo.TableName.TargetTable)
+}
+
+func TestApplyToTableInfoReturnsAmbiguousSchemaRoutingError(t *testing.T) {
+	t.Parallel()
+
+	router := newTestRouter(t, false, []*config.DispatchRule{
+		{
+			Matcher:      []string{"source_db.orders"},
+			TargetSchema: "orders_db",
+			TargetTable:  TablePlaceholder,
+		},
+		{
+			Matcher:      []string{"source_db.users"},
+			TargetSchema: "users_db",
+			TargetTable:  TablePlaceholder,
+		},
+	})
+	tableInfo := &common.TableInfo{
+		TableName: common.TableName{
+			Schema: "source_db",
+		},
+	}
+
+	_, err := router.ApplyToTableInfo(tableInfo)
+	require.Error(t, err)
+	require.True(t, errors.ErrTableRoutingFailed.Equal(err))
+	require.Contains(t, err.Error(), "ambiguous schema routing")
 }
 
 func TestApplyToDDLEventReturnsOriginalWhenRoutingDoesNotChangeAnything(t *testing.T) {
@@ -343,6 +375,33 @@ func TestApplyToDDLEvent(t *testing.T) {
 			tc.check(t, tc.ddl, routed)
 		})
 	}
+}
+
+func TestApplyToDDLEventRejectsAmbiguousSchemaRouting(t *testing.T) {
+	t.Parallel()
+
+	router := newTestRouter(t, false, []*config.DispatchRule{
+		{
+			Matcher:      []string{"source_db.orders"},
+			TargetSchema: "orders_db",
+			TargetTable:  TablePlaceholder,
+		},
+		{
+			Matcher:      []string{"source_db.users"},
+			TargetSchema: "users_db",
+			TargetTable:  TablePlaceholder,
+		},
+	})
+
+	ddl := &event.DDLEvent{
+		Query:      "CREATE DATABASE `source_db`",
+		SchemaName: "source_db",
+	}
+
+	_, err := router.ApplyToDDLEvent(ddl)
+	require.Error(t, err)
+	require.True(t, errors.ErrTableRoutingFailed.Equal(err))
+	require.Contains(t, err.Error(), "ambiguous schema routing")
 }
 
 func TestRewriteDDLQueryWithRouting(t *testing.T) {
