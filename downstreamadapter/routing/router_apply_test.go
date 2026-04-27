@@ -364,7 +364,7 @@ func TestRewriteDDLQueryWithRouting(t *testing.T) {
 		},
 		{
 			name: "no matched rule keeps original query",
-			router: mustNewRouter(t, false, []*config.DispatchRule{{
+			router: newTestRouter(t, false, []*config.DispatchRule{{
 				Matcher:      []string{"source_db.*"},
 				TargetSchema: "target_db",
 				TargetTable:  TablePlaceholder,
@@ -380,7 +380,7 @@ func TestRewriteDDLQueryWithRouting(t *testing.T) {
 		},
 		{
 			name: "matched table ddl rewrites target table",
-			router: mustNewRouter(t, false, []*config.DispatchRule{{
+			router: newTestRouter(t, false, []*config.DispatchRule{{
 				Matcher:      []string{"source_db.*"},
 				TargetSchema: "target_db",
 				TargetTable:  "{table}_routed",
@@ -397,7 +397,7 @@ func TestRewriteDDLQueryWithRouting(t *testing.T) {
 		},
 		{
 			name: "rename ddl rewrites both tables",
-			router: mustNewRouter(t, false, []*config.DispatchRule{
+			router: newTestRouter(t, false, []*config.DispatchRule{
 				{
 					Matcher:      []string{"db1.*"},
 					TargetSchema: "target1",
@@ -424,7 +424,7 @@ func TestRewriteDDLQueryWithRouting(t *testing.T) {
 		},
 		{
 			name: "database ddl rewrites schema",
-			router: mustNewRouter(t, false, []*config.DispatchRule{{
+			router: newTestRouter(t, false, []*config.DispatchRule{{
 				Matcher:      []string{"source_db.*"},
 				TargetSchema: "target_db",
 			}}),
@@ -437,7 +437,7 @@ func TestRewriteDDLQueryWithRouting(t *testing.T) {
 		},
 		{
 			name: "multi ddl keeps separator when only later query routes",
-			router: mustNewRouter(t, false, []*config.DispatchRule{{
+			router: newTestRouter(t, false, []*config.DispatchRule{{
 				Matcher:      []string{"source_db.*"},
 				TargetSchema: "target_db",
 				TargetTable:  "{table}_routed",
@@ -479,7 +479,7 @@ func TestRewriteDDLQueryWithRouting(t *testing.T) {
 func TestApplyToDDLEventReturnsOriginalWhenQueryDoesNotRoute(t *testing.T) {
 	t.Parallel()
 
-	router := mustNewRouter(t, false, []*config.DispatchRule{{
+	router := newTestRouter(t, false, []*config.DispatchRule{{
 		Matcher:      []string{"source_db.*"},
 		TargetSchema: "target_db",
 		TargetTable:  TablePlaceholder,
@@ -501,7 +501,7 @@ func TestApplyToDDLEventReturnsOriginalWhenQueryDoesNotRoute(t *testing.T) {
 func TestApplyToDDLEventRewritesQueryOnlyTableReferences(t *testing.T) {
 	t.Parallel()
 
-	router := mustNewRouter(t, false, []*config.DispatchRule{{
+	router := newTestRouter(t, false, []*config.DispatchRule{{
 		Matcher:      []string{"source_db.*"},
 		TargetSchema: "target_db",
 		TargetTable:  "{table}_routed",
@@ -525,7 +525,7 @@ func TestApplyToDDLEventRewritesQueryOnlyTableReferences(t *testing.T) {
 	require.Equal(t, "v1", routed.GetTargetTableName())
 }
 
-func mustNewRouter(t *testing.T, caseSensitive bool, rules []*config.DispatchRule) Router {
+func newTestRouter(t *testing.T, caseSensitive bool, rules []*config.DispatchRule) Router {
 	t.Helper()
 
 	router, err := NewRouter(newTestChangefeedID(), caseSensitive, rules)
@@ -536,7 +536,7 @@ func mustNewRouter(t *testing.T, caseSensitive bool, rules []*config.DispatchRul
 func TestRewriteParserBackedDDLQueryError(t *testing.T) {
 	t.Parallel()
 
-	router := mustNewRouter(t, false, []*config.DispatchRule{{
+	router := newTestRouter(t, false, []*config.DispatchRule{{
 		Matcher:      []string{"source_db.*"},
 		TargetSchema: "target_db",
 		TargetTable:  TablePlaceholder,
@@ -556,7 +556,7 @@ func TestRewriteParserBackedDDLQueryError(t *testing.T) {
 func TestRewriteAddFullTextIndexQueryError(t *testing.T) {
 	t.Parallel()
 
-	router := mustNewRouter(t, false, []*config.DispatchRule{{
+	router := newTestRouter(t, false, []*config.DispatchRule{{
 		Matcher:      []string{"source_db.*"},
 		TargetSchema: "target_db",
 		TargetTable:  "{table}_r",
@@ -569,7 +569,7 @@ func TestRewriteAddFullTextIndexQueryError(t *testing.T) {
 func TestRewriteCreateHybridIndexQueryError(t *testing.T) {
 	t.Parallel()
 
-	router := mustNewRouter(t, false, []*config.DispatchRule{{
+	router := newTestRouter(t, false, []*config.DispatchRule{{
 		Matcher:      []string{"source_db.*"},
 		TargetSchema: "target_db",
 		TargetTable:  "{table}_r",

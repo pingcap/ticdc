@@ -35,7 +35,7 @@ type supportedDDLRewriteCase struct {
 func TestRewriteDDLQueryWithRoutingSupportsParserBackedDDLTypes(t *testing.T) {
 	t.Parallel()
 
-	router := mustNewRouter(t, false, []*config.DispatchRule{{
+	router := newTestRouter(t, false, []*config.DispatchRule{{
 		Matcher:      []string{"source_db.*"},
 		TargetSchema: "target_db",
 		TargetTable:  "{table}_r",
@@ -378,7 +378,7 @@ func TestRewriteDDLQueryWithRoutingSupportsParserBackedDDLTypes(t *testing.T) {
 func TestApplyToDDLEventSupportsParserUnsupportedIndexDDL(t *testing.T) {
 	t.Parallel()
 
-	router := mustNewRouter(t, false, []*config.DispatchRule{{
+	router := newTestRouter(t, false, []*config.DispatchRule{{
 		Matcher:      []string{"source_db.*"},
 		TargetSchema: "target_db",
 		TargetTable:  "{table}_r",
@@ -438,7 +438,7 @@ func TestApplyToDDLEventSupportsParserUnsupportedIndexDDL(t *testing.T) {
 func TestApplyToDDLEventKeepsParserUnsupportedIndexDDLWhenNoRoutingApplies(t *testing.T) {
 	t.Parallel()
 
-	router := mustNewRouter(t, false, []*config.DispatchRule{{
+	router := newTestRouter(t, false, []*config.DispatchRule{{
 		Matcher:      []string{"other_db.*"},
 		TargetSchema: "target_db",
 		TargetTable:  "{table}_r",
@@ -483,7 +483,7 @@ func TestApplyToDDLEventKeepsParserUnsupportedIndexDDLWhenNoRoutingApplies(t *te
 func TestApplyToDDLEventSupportsCreateTables(t *testing.T) {
 	t.Parallel()
 
-	router := mustNewRouter(t, false, []*config.DispatchRule{{
+	router := newTestRouter(t, false, []*config.DispatchRule{{
 		Matcher:      []string{"source_db.*"},
 		TargetSchema: "target_db",
 		TargetTable:  "{table}_r",
