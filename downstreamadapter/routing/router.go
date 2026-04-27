@@ -139,12 +139,6 @@ func (r Router) ApplyToDDLEvent(ddl *commonEvent.DDLEvent) (*commonEvent.DDLEven
 		return ddl, nil
 	}
 
-	log.Info("ddl query rewritten with routing",
-		zap.String("keyspace", r.changefeedID.Keyspace()),
-		zap.String("changefeed", r.changefeedID.Name()),
-		zap.String("originalQuery", ddl.Query),
-		zap.String("newQuery", newQuery))
-
 	targetExtraSchemaName, targetExtraTableName, _, err := r.route(ddl.GetExtraSchemaName(), ddl.GetExtraTableName())
 	if err != nil {
 		return nil, err
@@ -169,6 +163,12 @@ func (r Router) ApplyToDDLEvent(ddl *commonEvent.DDLEvent) (*commonEvent.DDLEven
 	if blockedTableNames == nil {
 		blockedTableNames = ddl.BlockedTableNames
 	}
+
+	log.Info("ddl query rewritten with routing",
+		zap.String("keyspace", r.changefeedID.Keyspace()),
+		zap.String("changefeed", r.changefeedID.Name()),
+		zap.String("originalQuery", ddl.Query),
+		zap.String("newQuery", newQuery))
 
 	return commonEvent.NewRoutedDDLEvent(
 		ddl,

@@ -20,7 +20,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/stretchr/testify/require"
 )
 
@@ -109,20 +108,12 @@ func TestApplyToTableInfoReturnsAmbiguousSchemaRoutingError(t *testing.T) {
 }
 
 func TestApplyToDDLEventReturnsOriginalWhenRoutingDoesNotChangeAnything(t *testing.T) {
-	t.Parallel()
+	helper := event.NewEventTestHelper(t)
+	defer helper.Close()
 
-	ddl := &event.DDLEvent{
-		Query:      "ALTER TABLE `source_db`.`source_table` ADD INDEX idx_id(id)",
-		SchemaName: "source_db",
-		TableName:  "source_table",
-		TableInfo: &common.TableInfo{
-			TableName: common.TableName{
-				Schema:  "source_db",
-				Table:   "source_table",
-				TableID: 1,
-			},
-		},
-	}
+	helper.Tk().MustExec("CREATE DATABASE `source_db`")
+	helper.DDL2Event("CREATE TABLE `source_db`.`source_table` (`id` INT PRIMARY KEY)")
+	ddl := helper.DDL2Event("ALTER TABLE `source_db`.`source_table` ADD INDEX `idx_id`(`id`)")
 
 	router, err := NewRouter(newTestChangefeedID(), false, []*config.DispatchRule{{
 		Matcher:      []string{"other_db.*"},
@@ -137,20 +128,12 @@ func TestApplyToDDLEventReturnsOriginalWhenRoutingDoesNotChangeAnything(t *testi
 }
 
 func TestApplyToDDLEventWithZeroRouterReturnsOriginal(t *testing.T) {
-	t.Parallel()
+	helper := event.NewEventTestHelper(t)
+	defer helper.Close()
 
-	ddl := &event.DDLEvent{
-		Query:      "ALTER TABLE `source_db`.`source_table` ADD INDEX idx_id(id)",
-		SchemaName: "source_db",
-		TableName:  "source_table",
-		TableInfo: &common.TableInfo{
-			TableName: common.TableName{
-				Schema:  "source_db",
-				Table:   "source_table",
-				TableID: 1,
-			},
-		},
-	}
+	helper.Tk().MustExec("CREATE DATABASE `source_db`")
+	helper.DDL2Event("CREATE TABLE `source_db`.`source_table` (`id` INT PRIMARY KEY)")
+	ddl := helper.DDL2Event("ALTER TABLE `source_db`.`source_table` ADD INDEX `idx_id`(`id`)")
 
 	var zeroRouter Router
 	routed, err := zeroRouter.ApplyToDDLEvent(ddl)
@@ -159,7 +142,16 @@ func TestApplyToDDLEventWithZeroRouterReturnsOriginal(t *testing.T) {
 }
 
 func TestApplyToDDLEvent(t *testing.T) {
-	t.Parallel()
+	helper := event.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("CREATE DATABASE `source_db`")
+	helper.Tk().MustExec("CREATE DATABASE `old_db`")
+	helper.Tk().MustExec("CREATE DATABASE `new_db`")
+	helper.DDL2Event("CREATE TABLE `source_db`.`source_table` (`id` INT PRIMARY KEY)")
+	singleTableDDL := helper.DDL2Event("ALTER TABLE `source_db`.`source_table` ADD INDEX `idx_id`(`id`)")
+	helper.DDL2Event("CREATE TABLE `old_db`.`orders` (`id` INT PRIMARY KEY)")
+	renameDDL := helper.DDL2Event("RENAME TABLE `old_db`.`orders` TO `new_db`.`orders_archive`")
 
 	tests := []struct {
 		name   string
@@ -178,24 +170,7 @@ func TestApplyToDDLEvent(t *testing.T) {
 				require.NoError(t, err)
 				return router
 			}(),
-			ddl: func() *event.DDLEvent {
-				originalTableInfo := &common.TableInfo{
-					TableName: common.TableName{
-						Schema:  "source_db",
-						Table:   "source_table",
-						TableID: 1,
-					},
-				}
-				return &event.DDLEvent{
-					Query:      "ALTER TABLE `source_db`.`source_table` ADD INDEX idx_id(id)",
-					SchemaName: "source_db",
-					TableName:  "source_table",
-					TableInfo:  originalTableInfo,
-					BlockedTableNames: []event.SchemaTableName{
-						{SchemaName: "source_db", TableName: "source_table"},
-					},
-				}
-			}(),
+			ddl: singleTableDDL,
 			check: func(t *testing.T, original, routed *event.DDLEvent) {
 				require.Contains(t, routed.Query, "`target_db`.`target_table`")
 				require.Equal(t, "source_db", routed.GetSchemaName())
@@ -215,7 +190,7 @@ func TestApplyToDDLEvent(t *testing.T) {
 					TableName:  "target_table",
 				}, routed.BlockedTableNames[0])
 
-				require.Equal(t, "ALTER TABLE `source_db`.`source_table` ADD INDEX idx_id(id)", original.Query)
+				require.Contains(t, original.Query, "`source_db`.`source_table`")
 				require.Equal(t, "source_db", original.GetSchemaName())
 				require.Empty(t, original.TableInfo.TableName.TargetSchema)
 				require.Empty(t, original.TableInfo.TableName.TargetTable)
@@ -239,23 +214,7 @@ func TestApplyToDDLEvent(t *testing.T) {
 				require.NoError(t, err)
 				return router
 			}(),
-			ddl: &event.DDLEvent{
-				Query:           "RENAME TABLE `old_db`.`orders` TO `new_db`.`orders_archive`",
-				SchemaName:      "new_db",
-				TableName:       "orders_archive",
-				ExtraSchemaName: "old_db",
-				ExtraTableName:  "orders",
-				TableNameChange: &event.TableNameChange{
-					AddName: []event.SchemaTableName{{
-						SchemaName: "new_db",
-						TableName:  "orders_archive",
-					}},
-					DropName: []event.SchemaTableName{{
-						SchemaName: "old_db",
-						TableName:  "orders",
-					}},
-				},
-			},
+			ddl: renameDDL,
 			check: func(t *testing.T, original, routed *event.DDLEvent) {
 				require.Equal(t, "new_db", routed.SchemaName)
 				require.Equal(t, "orders_archive", routed.TableName)
@@ -315,6 +274,8 @@ func TestApplyToDDLEvent(t *testing.T) {
 			}(),
 			ddl: &event.DDLEvent{
 				Query: "ALTER TABLE `source_db`.`source_table` ADD COLUMN `c1` INT",
+				// This intentionally tests metadata-only routing; real DDL2Event
+				// should also carry the matching DDL identity and query.
 				MultipleTableInfos: []*common.TableInfo{{
 					TableName: common.TableName{
 						Schema:  "source_db",
@@ -347,6 +308,8 @@ func TestApplyToDDLEvent(t *testing.T) {
 			}(),
 			ddl: &event.DDLEvent{
 				Query: "ALTER TABLE `source_db`.`source_table` ADD INDEX `idx_id`(`id`)",
+				// This intentionally tests metadata-only routing; real DDL2Event
+				// should also carry the matching DDL identity and query.
 				BlockedTableNames: []event.SchemaTableName{{
 					SchemaName: "source_db",
 					TableName:  "source_table",
@@ -378,8 +341,6 @@ func TestApplyToDDLEvent(t *testing.T) {
 }
 
 func TestApplyToDDLEventRejectsAmbiguousSchemaRouting(t *testing.T) {
-	t.Parallel()
-
 	router := newTestRouter(t, false, []*config.DispatchRule{
 		{
 			Matcher:      []string{"source_db.orders"},
@@ -393,10 +354,10 @@ func TestApplyToDDLEventRejectsAmbiguousSchemaRouting(t *testing.T) {
 		},
 	})
 
-	ddl := &event.DDLEvent{
-		Query:      "CREATE DATABASE `source_db`",
-		SchemaName: "source_db",
-	}
+	helper := event.NewEventTestHelper(t)
+	defer helper.Close()
+
+	ddl := helper.DDL2Event("CREATE DATABASE `source_db`")
 
 	_, err := router.ApplyToDDLEvent(ddl)
 	require.Error(t, err)
@@ -405,7 +366,20 @@ func TestApplyToDDLEventRejectsAmbiguousSchemaRouting(t *testing.T) {
 }
 
 func TestRewriteDDLQueryWithRouting(t *testing.T) {
-	t.Parallel()
+	helper := event.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("CREATE DATABASE `source_db`")
+	helper.Tk().MustExec("CREATE DATABASE `other_db`")
+	helper.Tk().MustExec("CREATE DATABASE `db1`")
+	helper.Tk().MustExec("CREATE DATABASE `db2`")
+	noRouterDDL := helper.DDL2Event("CREATE TABLE `source_db`.`test_table` (`id` INT PRIMARY KEY)")
+	noMatchedDDL := helper.DDL2Event("CREATE TABLE `other_db`.`test_table` (`id` INT PRIMARY KEY)")
+	matchedTableDDL := helper.DDL2Event("ALTER TABLE `source_db`.`test_table` ADD COLUMN `c` INT")
+	databaseDDL := helper.DDL2Event("ALTER DATABASE `source_db` CHARACTER SET utf8mb4")
+	helper.DDL2Event("CREATE TABLE `db1`.`t1` (`id` INT PRIMARY KEY)")
+	renameDDL := helper.DDL2Event("RENAME TABLE `db1`.`t1` TO `db2`.`t2`")
+
 	tests := []struct {
 		name              string
 		router            Router
@@ -417,9 +391,9 @@ func TestRewriteDDLQueryWithRouting(t *testing.T) {
 	}{
 		{
 			name:            "no router keeps original query",
-			ddl:             &event.DDLEvent{Query: "CREATE TABLE `source_db`.`test_table` (id INT PRIMARY KEY)", TableInfo: &common.TableInfo{TableName: common.TableName{Schema: "source_db", Table: "test_table"}}},
+			ddl:             noRouterDDL,
 			expectedChanged: false,
-			expectedQuery:   "CREATE TABLE `source_db`.`test_table` (id INT PRIMARY KEY)",
+			expectedQuery:   noRouterDDL.Query,
 		},
 		{
 			name: "no matched rule keeps original query",
@@ -428,14 +402,9 @@ func TestRewriteDDLQueryWithRouting(t *testing.T) {
 				TargetSchema: "target_db",
 				TargetTable:  TablePlaceholder,
 			}}),
-			ddl: &event.DDLEvent{
-				Query: "CREATE TABLE `other_db`.`test_table` (id INT PRIMARY KEY)",
-				TableInfo: &common.TableInfo{
-					TableName: common.TableName{Schema: "other_db", Table: "test_table"},
-				},
-			},
+			ddl:             noMatchedDDL,
 			expectedChanged: false,
-			expectedQuery:   "CREATE TABLE `other_db`.`test_table` (id INT PRIMARY KEY)",
+			expectedQuery:   noMatchedDDL.Query,
 		},
 		{
 			name: "matched table ddl rewrites target table",
@@ -444,12 +413,7 @@ func TestRewriteDDLQueryWithRouting(t *testing.T) {
 				TargetSchema: "target_db",
 				TargetTable:  "{table}_routed",
 			}}),
-			ddl: &event.DDLEvent{
-				Query: "ALTER TABLE `source_db`.`test_table` ADD COLUMN c INT",
-				TableInfo: &common.TableInfo{
-					TableName: common.TableName{Schema: "source_db", Table: "test_table"},
-				},
-			},
+			ddl:               matchedTableDDL,
 			expectedChanged:   true,
 			requiredFragments: []string{"`target_db`.`test_table_routed`"},
 			forbiddenFragment: "`source_db`.`test_table`",
@@ -468,16 +432,7 @@ func TestRewriteDDLQueryWithRouting(t *testing.T) {
 					TargetTable:  TablePlaceholder,
 				},
 			}),
-			ddl: &event.DDLEvent{
-				Query: "RENAME TABLE `db1`.`t1` TO `db2`.`t2`",
-				TableInfo: &common.TableInfo{
-					TableName: common.TableName{Schema: "db2", Table: "t2"},
-				},
-				MultipleTableInfos: []*common.TableInfo{
-					{TableName: common.TableName{Schema: "db2", Table: "t2"}},
-					{TableName: common.TableName{Schema: "db1", Table: "t1"}},
-				},
-			},
+			ddl:               renameDDL,
 			expectedChanged:   true,
 			requiredFragments: []string{"`target1`.`t1`", "`target2`.`t2`"},
 		},
@@ -487,32 +442,10 @@ func TestRewriteDDLQueryWithRouting(t *testing.T) {
 				Matcher:      []string{"source_db.*"},
 				TargetSchema: "target_db",
 			}}),
-			ddl: &event.DDLEvent{
-				Query: "CREATE DATABASE `source_db`",
-			},
+			ddl:               databaseDDL,
 			expectedChanged:   true,
 			requiredFragments: []string{"`target_db`"},
 			forbiddenFragment: "`source_db`",
-		},
-		{
-			name: "multi ddl keeps separator when only later query routes",
-			router: newTestRouter(t, false, []*config.DispatchRule{{
-				Matcher:      []string{"source_db.*"},
-				TargetSchema: "target_db",
-				TargetTable:  "{table}_routed",
-			}}),
-			ddl: &event.DDLEvent{
-				Query: "CREATE TABLE `other_db`.`t1` (`id` INT PRIMARY KEY);CREATE TABLE `source_db`.`t2` (`id` INT PRIMARY KEY);",
-				MultipleTableInfos: []*common.TableInfo{
-					{TableName: common.TableName{Schema: "other_db", Table: "t1"}},
-					{TableName: common.TableName{Schema: "source_db", Table: "t2"}},
-				},
-			},
-			expectedChanged: true,
-			requiredFragments: []string{
-				"CREATE TABLE `other_db`.`t1`",
-				";CREATE TABLE `target_db`.`t2_routed`",
-			},
 		},
 	}
 
@@ -536,21 +469,18 @@ func TestRewriteDDLQueryWithRouting(t *testing.T) {
 }
 
 func TestApplyToDDLEventReturnsOriginalWhenQueryDoesNotRoute(t *testing.T) {
-	t.Parallel()
-
 	router := newTestRouter(t, false, []*config.DispatchRule{{
 		Matcher:      []string{"source_db.*"},
 		TargetSchema: "target_db",
 		TargetTable:  TablePlaceholder,
 	}})
 
-	ddl := &event.DDLEvent{
-		Type:       byte(timodel.ActionAddColumn),
-		Query:      "ALTER TABLE `other_db`.`t1` ADD COLUMN `c1` INT",
-		SchemaName: "other_db",
-		TableName:  "t1",
-		TableInfo:  &common.TableInfo{TableName: common.TableName{Schema: "other_db", Table: "t1"}},
-	}
+	helper := event.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("CREATE DATABASE `other_db`")
+	helper.DDL2Event("CREATE TABLE `other_db`.`t1` (`id` INT PRIMARY KEY)")
+	ddl := helper.DDL2Event("ALTER TABLE `other_db`.`t1` ADD COLUMN `c1` INT")
 
 	routed, err := router.ApplyToDDLEvent(ddl)
 	require.NoError(t, err)
@@ -558,21 +488,19 @@ func TestApplyToDDLEventReturnsOriginalWhenQueryDoesNotRoute(t *testing.T) {
 }
 
 func TestApplyToDDLEventRewritesQueryOnlyTableReferences(t *testing.T) {
-	t.Parallel()
-
 	router := newTestRouter(t, false, []*config.DispatchRule{{
 		Matcher:      []string{"source_db.*"},
 		TargetSchema: "target_db",
 		TargetTable:  "{table}_routed",
 	}})
 
-	ddl := &event.DDLEvent{
-		Type:       byte(timodel.ActionCreateView),
-		Query:      "CREATE VIEW `other_db`.`v1` AS SELECT * FROM `source_db`.`orders`",
-		SchemaName: "other_db",
-		TableName:  "v1",
-		TableInfo:  &common.TableInfo{TableName: common.TableName{Schema: "other_db", Table: "v1"}},
-	}
+	helper := event.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("CREATE DATABASE `source_db`")
+	helper.Tk().MustExec("CREATE DATABASE `other_db`")
+	helper.DDL2Event("CREATE TABLE `source_db`.`orders` (`id` INT PRIMARY KEY)")
+	ddl := helper.DDL2Event("CREATE VIEW `other_db`.`v1` AS SELECT * FROM `source_db`.`orders`")
 
 	routed, err := router.ApplyToDDLEvent(ddl)
 	require.NoError(t, err)

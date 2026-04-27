@@ -27,6 +27,7 @@ import (
 	ticonfig "github.com/pingcap/tidb/pkg/config"
 	tiddl "github.com/pingcap/tidb/pkg/ddl"
 	"github.com/pingcap/tidb/pkg/domain"
+	tidbexecutor "github.com/pingcap/tidb/pkg/executor"
 	"github.com/pingcap/tidb/pkg/kv"
 	"github.com/pingcap/tidb/pkg/meta"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
@@ -93,6 +94,15 @@ func NewEventTestHelper(t testing.TB) *EventTestHelper {
 }
 
 func (s *EventTestHelper) ApplyJob(job *timodel.Job) {
+	if job.BinlogInfo != nil && len(job.BinlogInfo.MultipleTableInfos) > 0 {
+		for _, tableInfo := range job.BinlogInfo.MultipleTableInfos {
+			s.storeTableInfo(job.SchemaName, tableInfo)
+		}
+		if job.BinlogInfo.TableInfo == nil {
+			return
+		}
+	}
+
 	var tableInfo *timodel.TableInfo
 	if job.BinlogInfo != nil && job.BinlogInfo.TableInfo != nil {
 		tableInfo = job.BinlogInfo.TableInfo
@@ -105,7 +115,14 @@ func (s *EventTestHelper) ApplyJob(job *timodel.Job) {
 		}
 	}
 
-	info := common.WrapTableInfo(job.SchemaName, tableInfo)
+	s.storeTableInfo(job.SchemaName, tableInfo)
+}
+
+func (s *EventTestHelper) storeTableInfo(schemaName string, tableInfo *timodel.TableInfo) {
+	info := common.WrapTableInfo(schemaName, tableInfo)
+	if info == nil {
+		return
+	}
 	info.InitPrivateFields()
 	key := toTableInfosKey(info.GetSchemaName(), info.GetTableName())
 	if tableInfo.Partition != nil {
@@ -116,7 +133,7 @@ func (s *EventTestHelper) ApplyJob(job *timodel.Job) {
 			s.partitionIDs[key][partition.Name.O] = partition.ID
 		}
 	}
-	log.Info("apply job", zap.String("jobKey", key), zap.Any("job", job))
+	log.Info("store table info", zap.String("jobKey", key))
 	s.tableInfos[key] = info
 }
 
@@ -136,6 +153,8 @@ func (s *EventTestHelper) GetTableInfo(job *timodel.Job) *common.TableInfo {
 
 // DDL2Job executes the DDL stmt and returns the DDL job
 func (s *EventTestHelper) DDL2Job(ddl string) *timodel.Job {
+	requireSingleDDLStmt(s.t, ddl)
+
 	s.tk.MustExec(ddl)
 	jobs, err := tiddl.GetLastNHistoryDDLJobs(s.GetCurrentMeta(), 1)
 	require.Nil(s.t, err)
@@ -203,8 +222,54 @@ func (s *EventTestHelper) DDL2Job(ddl string) *timodel.Job {
 
 func (s *EventTestHelper) DDL2Event(ddl string) *DDLEvent {
 	job := s.DDL2Job(ddl)
-	info := s.GetTableInfo(job)
-	return &DDLEvent{
+	return s.job2Event(job)
+}
+
+// BatchCreateTableDDLs2Event executes CREATE TABLE DDLs through TiDB's batch
+// create table path and returns the resulting ActionCreateTables event.
+func (s *EventTestHelper) BatchCreateTableDDLs2Event(schema string, ddls ...string) *DDLEvent {
+	require.NotEmpty(s.t, ddls)
+
+	tableInfos := make([]*timodel.TableInfo, 0, len(ddls))
+	for _, ddl := range ddls {
+		requireSingleDDLStmt(s.t, ddl)
+
+		stmt, err := parser.New().ParseOneStmt(ddl, "", "")
+		require.NoError(s.t, err)
+		createStmt, ok := stmt.(*ast.CreateTableStmt)
+		require.True(s.t, ok)
+
+		tableSchema := createStmt.Table.Schema.O
+		if tableSchema != "" {
+			require.Equal(s.t, schema, tableSchema)
+		}
+		tableInfo, err := tiddl.MockTableInfo(s.tk.Session(), createStmt, 0)
+		require.NoError(s.t, err)
+		tableInfos = append(tableInfos, tableInfo)
+	}
+
+	err := tidbexecutor.BRIECreateTables(s.tk.Session(), map[string][]*timodel.TableInfo{
+		schema: tableInfos,
+	}, "")
+	require.NoError(s.t, err)
+
+	jobs, err := tiddl.GetLastNHistoryDDLJobs(s.GetCurrentMeta(), 1)
+	require.Nil(s.t, err)
+	require.Len(s.t, jobs, 1)
+	jobs[0].State = timodel.JobStateDone
+	require.Equal(s.t, timodel.ActionCreateTables, jobs[0].Type)
+
+	s.ApplyJob(jobs[0])
+	return s.job2Event(jobs[0])
+}
+
+func (s *EventTestHelper) job2Event(job *timodel.Job) *DDLEvent {
+	var info *common.TableInfo
+	if job.BinlogInfo != nil && job.BinlogInfo.TableInfo != nil {
+		info = s.GetTableInfo(job)
+	}
+	ddlEvent := &DDLEvent{
+		Version:    DDLEventVersion1,
 		SchemaID:   job.SchemaID,
 		SchemaName: job.SchemaName,
 		TableName:  job.TableName,
@@ -214,6 +279,193 @@ func (s *EventTestHelper) DDL2Event(ddl string) *DDLEvent {
 		StartTs:    job.StartTS,
 		FinishedTs: job.BinlogInfo.FinishedTS,
 	}
+	s.fillDDLEventMetadata(ddlEvent, job)
+	return ddlEvent
+}
+
+func requireSingleDDLStmt(t testing.TB, ddl string) {
+	stmts, _, err := parser.New().Parse(ddl, "", "")
+	require.NoError(t, err)
+	require.Len(t, stmts, 1)
+}
+
+func (s *EventTestHelper) fillDDLEventMetadata(ddlEvent *DDLEvent, job *timodel.Job) {
+	switch job.Type {
+	case timodel.ActionDropSchema:
+		ddlEvent.TableNameChange = &TableNameChange{DropDatabaseName: ddlEvent.SchemaName}
+	case timodel.ActionCreateTable:
+		ddlEvent.TableNameChange = &TableNameChange{
+			AddName: []SchemaTableName{{SchemaName: ddlEvent.SchemaName, TableName: ddlEvent.TableName}},
+		}
+		s.fillCreateTableLikeBlockedTableNames(ddlEvent)
+	case timodel.ActionRecoverTable:
+		ddlEvent.TableNameChange = &TableNameChange{
+			AddName: []SchemaTableName{{SchemaName: ddlEvent.SchemaName, TableName: ddlEvent.TableName}},
+		}
+	case timodel.ActionCreateTables:
+		s.fillCreateTablesEventMetadata(ddlEvent, job)
+	case timodel.ActionDropTable:
+		ddlEvent.TableNameChange = &TableNameChange{
+			DropName: []SchemaTableName{{SchemaName: ddlEvent.SchemaName, TableName: ddlEvent.TableName}},
+		}
+		ddlEvent.BlockedTableNames = []SchemaTableName{{SchemaName: ddlEvent.SchemaName, TableName: ddlEvent.TableName}}
+	case timodel.ActionRenameTable:
+		s.fillRenameTableEventMetadata(ddlEvent)
+	case timodel.ActionRenameTables:
+		s.fillRenameTablesEventMetadata(ddlEvent, job)
+	case timodel.ActionCreateSchema, timodel.ActionModifySchemaCharsetAndCollate,
+		timodel.ActionCreateView, timodel.ActionDropView:
+	default:
+		if ddlEvent.SchemaName != "" && ddlEvent.TableName != "" {
+			ddlEvent.BlockedTableNames = []SchemaTableName{{SchemaName: ddlEvent.SchemaName, TableName: ddlEvent.TableName}}
+		}
+	}
+}
+
+func (s *EventTestHelper) fillCreateTableLikeBlockedTableNames(ddlEvent *DDLEvent) {
+	stmt, err := parser.New().ParseOneStmt(ddlEvent.Query, "", "")
+	require.NoError(s.t, err)
+
+	createStmt, ok := stmt.(*ast.CreateTableStmt)
+	if !ok || createStmt.ReferTable == nil {
+		return
+	}
+
+	refSchema := createStmt.ReferTable.Schema.O
+	if refSchema == "" {
+		refSchema = ddlEvent.SchemaName
+	}
+	ddlEvent.BlockedTableNames = []SchemaTableName{{
+		SchemaName: refSchema,
+		TableName:  createStmt.ReferTable.Name.O,
+	}}
+}
+
+func (s *EventTestHelper) fillCreateTablesEventMetadata(ddlEvent *DDLEvent, job *timodel.Job) {
+	tableInfos := wrapMultipleTableInfos(job.SchemaName, job.BinlogInfo.MultipleTableInfos)
+	ddlEvent.MultipleTableInfos = tableInfos
+	ddlEvent.TableNameChange = &TableNameChange{
+		AddName: make([]SchemaTableName, 0, len(tableInfos)),
+	}
+	for _, tableInfo := range tableInfos {
+		ddlEvent.TableNameChange.AddName = append(ddlEvent.TableNameChange.AddName, SchemaTableName{
+			SchemaName: tableInfo.GetSchemaName(),
+			TableName:  tableInfo.GetTableName(),
+		})
+	}
+}
+
+func (s *EventTestHelper) fillRenameTableEventMetadata(ddlEvent *DDLEvent) {
+	pairs := s.parseRenameTablePairs(ddlEvent.Query, ddlEvent.SchemaName)
+	require.Len(s.t, pairs, 1)
+
+	pair := pairs[0]
+	ddlEvent.ExtraSchemaName = pair.oldSchemaName
+	ddlEvent.ExtraTableName = pair.oldTableName
+	ddlEvent.SchemaName = pair.newSchemaName
+	ddlEvent.TableName = pair.newTableName
+	ddlEvent.BlockedTableNames = []SchemaTableName{{SchemaName: pair.oldSchemaName, TableName: pair.oldTableName}}
+	ddlEvent.TableNameChange = &TableNameChange{
+		AddName:  []SchemaTableName{{SchemaName: pair.newSchemaName, TableName: pair.newTableName}},
+		DropName: []SchemaTableName{{SchemaName: pair.oldSchemaName, TableName: pair.oldTableName}},
+	}
+}
+
+func (s *EventTestHelper) fillRenameTablesEventMetadata(ddlEvent *DDLEvent, job *timodel.Job) {
+	pairs := s.parseRenameTablePairs(ddlEvent.Query, ddlEvent.SchemaName)
+	require.Len(s.t, pairs, len(job.BinlogInfo.MultipleTableInfos))
+
+	ddlEvent.MultipleTableInfos = make([]*common.TableInfo, 0, len(job.BinlogInfo.MultipleTableInfos))
+	ddlEvent.BlockedTableNames = make([]SchemaTableName, 0, len(pairs))
+	ddlEvent.TableNameChange = &TableNameChange{
+		AddName:  make([]SchemaTableName, 0, len(pairs)),
+		DropName: make([]SchemaTableName, 0, len(pairs)),
+	}
+	for i, pair := range pairs {
+		ddlEvent.MultipleTableInfos = append(
+			ddlEvent.MultipleTableInfos,
+			common.WrapTableInfo(pair.newSchemaName, job.BinlogInfo.MultipleTableInfos[i]),
+		)
+		ddlEvent.BlockedTableNames = append(ddlEvent.BlockedTableNames, SchemaTableName{
+			SchemaName: pair.oldSchemaName,
+			TableName:  pair.oldTableName,
+		})
+		ddlEvent.TableNameChange.AddName = append(ddlEvent.TableNameChange.AddName, SchemaTableName{
+			SchemaName: pair.newSchemaName,
+			TableName:  pair.newTableName,
+		})
+		ddlEvent.TableNameChange.DropName = append(ddlEvent.TableNameChange.DropName, SchemaTableName{
+			SchemaName: pair.oldSchemaName,
+			TableName:  pair.oldTableName,
+		})
+	}
+}
+
+type renameTableNamePair struct {
+	oldSchemaName string
+	oldTableName  string
+	newSchemaName string
+	newTableName  string
+}
+
+func (s *EventTestHelper) parseRenameTablePairs(query string, defaultSchema string) []renameTableNamePair {
+	stmt, err := parser.New().ParseOneStmt(query, "", "")
+	require.NoError(s.t, err)
+
+	switch renameStmt := stmt.(type) {
+	case *ast.RenameTableStmt:
+		pairs := make([]renameTableNamePair, 0, len(renameStmt.TableToTables))
+		for _, tableToTable := range renameStmt.TableToTables {
+			pairs = append(pairs, buildRenameTableNamePair(
+				tableToTable.OldTable,
+				tableToTable.NewTable,
+				defaultSchema,
+			))
+		}
+		return pairs
+	case *ast.AlterTableStmt:
+		pairs := make([]renameTableNamePair, 0, 1)
+		for _, spec := range renameStmt.Specs {
+			if spec.Tp != ast.AlterTableRenameTable {
+				continue
+			}
+			pairs = append(pairs, buildRenameTableNamePair(renameStmt.Table, spec.NewTable, defaultSchema))
+		}
+		require.NotEmpty(s.t, pairs)
+		return pairs
+	default:
+		require.Failf(s.t, "unexpected rename table statement", "query: %s, stmt: %T", query, stmt)
+		return nil
+	}
+}
+
+func buildRenameTableNamePair(oldTable, newTable *ast.TableName, defaultSchema string) renameTableNamePair {
+	oldSchemaName := oldTable.Schema.O
+	if oldSchemaName == "" {
+		oldSchemaName = defaultSchema
+	}
+	newSchemaName := newTable.Schema.O
+	if newSchemaName == "" {
+		newSchemaName = oldSchemaName
+	}
+	return renameTableNamePair{
+		oldSchemaName: oldSchemaName,
+		oldTableName:  oldTable.Name.O,
+		newSchemaName: newSchemaName,
+		newTableName:  newTable.Name.O,
+	}
+}
+
+func wrapMultipleTableInfos(schemaName string, tableInfos []*timodel.TableInfo) []*common.TableInfo {
+	if len(tableInfos) == 0 {
+		return nil
+	}
+
+	wrapped := make([]*common.TableInfo, 0, len(tableInfos))
+	for _, tableInfo := range tableInfos {
+		wrapped = append(wrapped, common.WrapTableInfo(schemaName, tableInfo))
+	}
+	return wrapped
 }
 
 func (s *EventTestHelper) DML2BatchEvent(schema, table string, dmls ...string) *BatchDMLEvent {

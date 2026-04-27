@@ -33,13 +33,19 @@ type supportedDDLRewriteCase struct {
 }
 
 func TestRewriteDDLQueryWithRoutingSupportsParserBackedDDLTypes(t *testing.T) {
-	t.Parallel()
-
 	router := newTestRouter(t, false, []*config.DispatchRule{{
 		Matcher:      []string{"source_db.*"},
 		TargetSchema: "target_db",
 		TargetTable:  "{table}_r",
 	}})
+
+	helper := event.NewEventTestHelper(t)
+	defer helper.Close()
+	helper.Tk().MustExec("CREATE DATABASE `source_db`")
+	createTablesDDL := helper.BatchCreateTableDDLs2Event("source_db",
+		"CREATE TABLE `source_db`.`t1` (`id` INT PRIMARY KEY)",
+		"CREATE TABLE `source_db`.`t2` (`id` INT PRIMARY KEY)",
+	)
 
 	cases := map[timodel.ActionType]supportedDDLRewriteCase{
 		timodel.ActionCreateSchema: schemaRewriteCase(
@@ -65,15 +71,7 @@ func TestRewriteDDLQueryWithRoutingSupportsParserBackedDDLTypes(t *testing.T) {
 		),
 		timodel.ActionCreateTables: {
 			name: "create tables",
-			ddl: &event.DDLEvent{
-				Type:       byte(timodel.ActionCreateTables),
-				Query:      "CREATE TABLE `t1` (`id` INT PRIMARY KEY);CREATE TABLE `t2` (`id` INT PRIMARY KEY);",
-				SchemaName: "source_db",
-				MultipleTableInfos: []*common.TableInfo{
-					newRoutingTestTableInfo("source_db", "t1"),
-					newRoutingTestTableInfo("source_db", "t2"),
-				},
-			},
+			ddl:  createTablesDDL,
 			requiredFragments: []string{
 				"CREATE TABLE `target_db`.`t1_r`",
 				"CREATE TABLE `target_db`.`t2_r`",
@@ -363,13 +361,13 @@ func TestRewriteDDLQueryWithRoutingSupportsParserBackedDDLTypes(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			require.Equal(t, byte(action), tc.ddl.Type)
 
-			newQuery, err := router.rewriteParserBackedDDLQuery(tc.ddl)
+			routed, err := router.ApplyToDDLEvent(tc.ddl)
 			require.NoError(t, err)
 			for _, fragment := range tc.requiredFragments {
-				require.Contains(t, newQuery, fragment)
+				require.Contains(t, routed.Query, fragment)
 			}
 			for _, fragment := range tc.forbiddenFragments {
-				require.NotContains(t, newQuery, fragment)
+				require.NotContains(t, routed.Query, fragment)
 			}
 		})
 	}
@@ -481,23 +479,19 @@ func TestApplyToDDLEventKeepsParserUnsupportedIndexDDLWhenNoRoutingApplies(t *te
 }
 
 func TestApplyToDDLEventSupportsCreateTables(t *testing.T) {
-	t.Parallel()
-
 	router := newTestRouter(t, false, []*config.DispatchRule{{
 		Matcher:      []string{"source_db.*"},
 		TargetSchema: "target_db",
 		TargetTable:  "{table}_r",
 	}})
 
-	ddl := &event.DDLEvent{
-		Type:       byte(timodel.ActionCreateTables),
-		Query:      "CREATE TABLE `t1` (`id` INT PRIMARY KEY);CREATE TABLE `t2` (`id` INT PRIMARY KEY);",
-		SchemaName: "source_db",
-		MultipleTableInfos: []*common.TableInfo{
-			newRoutingTestTableInfo("source_db", "t1"),
-			newRoutingTestTableInfo("source_db", "t2"),
-		},
-	}
+	helper := event.NewEventTestHelper(t)
+	defer helper.Close()
+	helper.Tk().MustExec("CREATE DATABASE `source_db`")
+	ddl := helper.BatchCreateTableDDLs2Event("source_db",
+		"CREATE TABLE `source_db`.`t1` (`id` INT PRIMARY KEY)",
+		"CREATE TABLE `source_db`.`t2` (`id` INT PRIMARY KEY)",
+	)
 
 	routed, err := router.ApplyToDDLEvent(ddl)
 	require.NoError(t, err)
