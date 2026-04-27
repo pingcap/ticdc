@@ -262,14 +262,14 @@ Run insert and update concurrently, and execute DDL in parallel:
 
 ### 7. Table Info Sharing Workload
 
-Generate multiple tables with the same column layout and index layout, while making selected default values differ by table index. This workload covers a broad set of column types including numeric, bit, string, binary, temporal, enum/set, and JSON.
+Generate multiple table-info variants. Tables in the same variant should be shareable, while different variants intentionally differ by defaults, type attributes, nullability, index layout, generated columns, or extra columns so they should not share table info. This workload covers a broad set of column types including numeric, bit, string, binary, temporal, enum/set, generated columns, and JSON.
 
 ```bash
 ./workload -action write \
     -database-host 127.0.0.1 \
     -database-port 4000 \
-    -database-db-name table_info \
-    -table-count 16 \
+    -database-db-name table_info_sharing \
+    -table-count 14 \
     -workload-type table_info_sharing \
     -thread 32 \
     -batch-size 32 \

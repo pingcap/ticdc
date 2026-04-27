@@ -25,48 +25,26 @@ import (
 	"workload/schema"
 )
 
-const createTableFormat = `
-CREATE TABLE IF NOT EXISTS %s (
-  id BIGINT NOT NULL,
-  c_tinyint TINYINT NOT NULL DEFAULT %d,
-  c_smallint SMALLINT NOT NULL DEFAULT %d,
-  c_mediumint MEDIUMINT NOT NULL DEFAULT %d,
-  c_int INT NOT NULL DEFAULT %d,
-  c_bigint BIGINT NOT NULL DEFAULT %d,
-  c_unsigned BIGINT UNSIGNED NOT NULL DEFAULT %d,
-  c_decimal DECIMAL(20,6) NOT NULL DEFAULT %s,
-  c_float FLOAT NOT NULL DEFAULT %s,
-  c_double DOUBLE NOT NULL DEFAULT %s,
-  c_bool BOOLEAN NOT NULL DEFAULT %d,
-  c_bit BIT(8) NOT NULL DEFAULT b'%s',
-  c_char CHAR(8) NOT NULL DEFAULT '%s',
-  c_varchar VARCHAR(64) NOT NULL DEFAULT '%s',
-  c_date DATE NOT NULL DEFAULT '%s',
-  c_datetime DATETIME NOT NULL DEFAULT '%s',
-  c_timestamp TIMESTAMP NOT NULL DEFAULT '%s',
-  c_time TIME NOT NULL DEFAULT '%s',
-  c_year YEAR NOT NULL DEFAULT %d,
-  c_enum ENUM('red','green','blue') NOT NULL DEFAULT '%s',
-  c_set SET('x','y','z') NOT NULL DEFAULT '%s',
-  c_json JSON NULL,
-  c_text TEXT NULL,
-  c_blob BLOB NULL,
-  c_binary BINARY(8) NULL,
-  c_varbinary VARBINARY(16) NULL,
-  uk_token VARCHAR(64) NOT NULL,
-  PRIMARY KEY (id),
-  UNIQUE KEY uk_token (uk_token),
-  KEY idx_temporal (c_date, c_datetime),
-  KEY idx_enum_set (c_enum, c_set)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin
-`
-
 const (
 	defaultRecentRowWindow = 256
+	tableInfoVariantCount  = 7
+)
+
+type tableVariant int
+
+const (
+	tableVariantBase tableVariant = iota
+	tableVariantDifferentDefaults
+	tableVariantTypeAttrs
+	tableVariantNullableAttrs
+	tableVariantIndexLayout
+	tableVariantGeneratedColumn
+	tableVariantExtraColumn
 )
 
 type tableSpec struct {
 	tableIndex int
+	variant    tableVariant
 }
 
 type TableInfoSharingWorkload struct {
@@ -86,29 +64,11 @@ func NewTableInfoSharingWorkload(tableCount int, tableStartIndex int) schema.Wor
 
 func (w *TableInfoSharingWorkload) BuildCreateTableStatement(n int) string {
 	spec := newTableSpec(n)
+	definitions := append(spec.columnDefinitions(), spec.indexDefinitions()...)
 	return fmt.Sprintf(
-		createTableFormat,
+		"\nCREATE TABLE IF NOT EXISTS %s (\n%s\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin\n",
 		tableName(n),
-		spec.tinyintDefault(),
-		spec.smallintDefault(),
-		spec.mediumintDefault(),
-		spec.intDefault(),
-		spec.bigintDefault(),
-		spec.unsignedDefault(),
-		spec.decimalDefault(),
-		spec.floatDefault(),
-		spec.doubleDefault(),
-		spec.boolDefault(),
-		spec.bitDefault(),
-		spec.charDefault(),
-		spec.varcharDefault(),
-		spec.dateDefault(),
-		spec.datetimeDefault(),
-		spec.timestampDefault(),
-		spec.timeDefault(),
-		spec.yearDefault(),
-		spec.enumDefault(),
-		spec.setDefault(),
+		strings.Join(definitions, ",\n"),
 	)
 }
 
@@ -254,71 +214,170 @@ func (w *TableInfoSharingWorkload) slot(tableN int) (int, bool) {
 }
 
 func newTableSpec(tableIndex int) tableSpec {
-	return tableSpec{tableIndex: tableIndex}
+	return tableSpec{
+		tableIndex: tableIndex,
+		variant:    tableVariant(absInt(tableIndex) % tableInfoVariantCount),
+	}
+}
+
+func (s tableSpec) columnDefinitions() []string {
+	decimalType := "DECIMAL(20,6)"
+	charType := "CHAR(8)"
+	varcharType := "VARCHAR(64)"
+	enumType := "ENUM('red','green','blue')"
+	setType := "SET('x','y','z')"
+	textType := "TEXT"
+	blobType := "BLOB"
+	binaryType := "BINARY(8)"
+	varbinaryType := "VARBINARY(16)"
+
+	if s.variant == tableVariantTypeAttrs {
+		decimalType = "DECIMAL(30,10)"
+		charType = "CHAR(12)"
+		varcharType = "VARCHAR(96)"
+		enumType = "ENUM('red','green','blue','yellow')"
+		setType = "SET('x','y','z','w')"
+		textType = "MEDIUMTEXT"
+		blobType = "MEDIUMBLOB"
+		binaryType = "BINARY(12)"
+		varbinaryType = "VARBINARY(24)"
+	}
+
+	intNullability := "NOT NULL"
+	stringNullability := "NOT NULL"
+	if s.variant == tableVariantNullableAttrs {
+		intNullability = "NULL"
+		stringNullability = "NULL"
+	}
+
+	columns := []string{
+		"  id BIGINT NOT NULL",
+		fmt.Sprintf("  c_tinyint TINYINT %s DEFAULT %d", intNullability, s.tinyintDefault()),
+		fmt.Sprintf("  c_smallint SMALLINT NOT NULL DEFAULT %d", s.smallintDefault()),
+		fmt.Sprintf("  c_mediumint MEDIUMINT NOT NULL DEFAULT %d", s.mediumintDefault()),
+		fmt.Sprintf("  c_int INT NOT NULL DEFAULT %d", s.intDefault()),
+		fmt.Sprintf("  c_bigint BIGINT NOT NULL DEFAULT %d", s.bigintDefault()),
+		fmt.Sprintf("  c_unsigned BIGINT UNSIGNED NOT NULL DEFAULT %d", s.unsignedDefault()),
+		fmt.Sprintf("  c_decimal %s NOT NULL DEFAULT %s", decimalType, s.decimalDefault()),
+		fmt.Sprintf("  c_float FLOAT NOT NULL DEFAULT %s", s.floatDefault()),
+		fmt.Sprintf("  c_double DOUBLE NOT NULL DEFAULT %s", s.doubleDefault()),
+		fmt.Sprintf("  c_bool BOOLEAN %s DEFAULT %d", intNullability, s.boolDefault()),
+		fmt.Sprintf("  c_bit BIT(8) NOT NULL DEFAULT b'%s'", s.bitDefault()),
+		fmt.Sprintf("  c_char %s %s DEFAULT '%s'", charType, stringNullability, s.charDefault()),
+		fmt.Sprintf("  c_varchar %s NOT NULL DEFAULT '%s'", varcharType, s.varcharDefault()),
+		fmt.Sprintf("  c_date DATE NOT NULL DEFAULT '%s'", s.dateDefault()),
+		fmt.Sprintf("  c_datetime DATETIME NOT NULL DEFAULT '%s'", s.datetimeDefault()),
+		fmt.Sprintf("  c_timestamp TIMESTAMP NOT NULL DEFAULT '%s'", s.timestampDefault()),
+		fmt.Sprintf("  c_time TIME NOT NULL DEFAULT '%s'", s.timeDefault()),
+		fmt.Sprintf("  c_year YEAR NOT NULL DEFAULT %d", s.yearDefault()),
+		fmt.Sprintf("  c_enum %s NOT NULL DEFAULT '%s'", enumType, s.enumDefault()),
+		fmt.Sprintf("  c_set %s NOT NULL DEFAULT '%s'", setType, s.setDefault()),
+		"  c_json JSON NULL",
+		fmt.Sprintf("  c_text %s NULL", textType),
+		fmt.Sprintf("  c_blob %s NULL", blobType),
+		fmt.Sprintf("  c_binary %s NULL", binaryType),
+		fmt.Sprintf("  c_varbinary %s NULL", varbinaryType),
+	}
+
+	if s.variant == tableVariantGeneratedColumn {
+		columns = append(columns, "  c_generated_sum BIGINT GENERATED ALWAYS AS (c_int + c_tinyint) STORED")
+	}
+	if s.variant == tableVariantExtraColumn {
+		columns = append(
+			columns,
+			fmt.Sprintf("  c_extra_tag VARCHAR(32) NOT NULL DEFAULT 'extra-%02d'", s.defaultSeed()),
+			fmt.Sprintf("  c_extra_score INT NOT NULL DEFAULT %d", s.defaultSeed()*100+7),
+		)
+	}
+
+	return append(columns, "  uk_token VARCHAR(64) NOT NULL")
+}
+
+func (s tableSpec) indexDefinitions() []string {
+	if s.variant == tableVariantIndexLayout {
+		return []string{
+			"  PRIMARY KEY (id)",
+			"  UNIQUE KEY uk_token (uk_token)",
+			"  KEY idx_temporal_reverse (c_datetime, c_date)",
+			"  KEY idx_varchar_prefix (c_varchar(16))",
+			"  KEY idx_enum_set_reverse (c_set, c_enum)",
+		}
+	}
+
+	return []string{
+		"  PRIMARY KEY (id)",
+		"  UNIQUE KEY uk_token (uk_token)",
+		"  KEY idx_temporal (c_date, c_datetime)",
+		"  KEY idx_enum_set (c_enum, c_set)",
+	}
+}
+
+func (s tableSpec) defaultSeed() int {
+	return int(s.variant)
 }
 
 func (s tableSpec) tinyintDefault() int {
-	return (s.tableIndex % 63) + 1
+	return (s.defaultSeed() % 63) + 1
 }
 
 func (s tableSpec) smallintDefault() int {
-	return s.tableIndex*10 + 1
+	return s.defaultSeed()*10 + 1
 }
 
 func (s tableSpec) mediumintDefault() int {
-	return s.tableIndex*100 + 1
+	return s.defaultSeed()*100 + 1
 }
 
 func (s tableSpec) intDefault() int {
-	return s.tableIndex*1000 + 1
+	return s.defaultSeed()*1000 + 1
 }
 
 func (s tableSpec) bigintDefault() int64 {
-	return int64(s.tableIndex)*10000 + 1
+	return int64(s.defaultSeed())*10000 + 1
 }
 
 func (s tableSpec) unsignedDefault() uint64 {
-	return uint64(s.tableIndex)*100000 + 1
+	return uint64(s.defaultSeed())*100000 + 1
 }
 
 func (s tableSpec) decimalDefault() string {
-	return fmt.Sprintf("%d.%06d", s.tableIndex, (s.tableIndex*111111)%1000000)
+	return fmt.Sprintf("%d.%06d", s.defaultSeed(), (s.defaultSeed()*111111)%1000000)
 }
 
 func (s tableSpec) floatDefault() string {
-	return fmt.Sprintf("%d.25", s.tableIndex)
+	return fmt.Sprintf("%d.25", s.defaultSeed())
 }
 
 func (s tableSpec) doubleDefault() string {
-	return fmt.Sprintf("%d.125", s.tableIndex)
+	return fmt.Sprintf("%d.125", s.defaultSeed())
 }
 
 func (s tableSpec) boolDefault() int {
-	return s.tableIndex % 2
+	return s.defaultSeed() % 2
 }
 
 func (s tableSpec) bitDefault() string {
-	return rotateBits(s.tableIndex)
+	return rotateBits(s.defaultSeed())
 }
 
 func (s tableSpec) charDefault() string {
-	return fmt.Sprintf("c%07d", s.tableIndex%10000000)
+	return fmt.Sprintf("c%07d", s.defaultSeed()%10000000)
 }
 
 func (s tableSpec) varcharDefault() string {
-	return fmt.Sprintf("varchar-%02d", s.tableIndex)
+	return fmt.Sprintf("varchar-%02d", s.defaultSeed())
 }
 
 func (s tableSpec) dateDefault() string {
-	month := monthValue(s.tableIndex)
-	day := dayValue(s.tableIndex)
+	month := monthValue(s.defaultSeed())
+	day := dayValue(s.defaultSeed())
 	return fmt.Sprintf("2026-%02d-%02d", month, day)
 }
 
 func (s tableSpec) datetimeDefault() string {
-	month := monthValue(s.tableIndex)
-	day := dayValue(s.tableIndex)
-	hour, minute, second := clockValue(s.tableIndex)
+	month := monthValue(s.defaultSeed())
+	day := dayValue(s.defaultSeed())
+	hour, minute, second := clockValue(s.defaultSeed())
 	return fmt.Sprintf("2026-%02d-%02d %02d:%02d:%02d", month, day, hour, minute, second)
 }
 
@@ -327,34 +386,34 @@ func (s tableSpec) timestampDefault() string {
 }
 
 func (s tableSpec) timeDefault() string {
-	hour, minute, second := clockValue(s.tableIndex)
+	hour, minute, second := clockValue(s.defaultSeed())
 	return fmt.Sprintf("%02d:%02d:%02d", hour, minute, second)
 }
 
 func (s tableSpec) yearDefault() int {
-	return 2020 + (s.tableIndex % 10)
+	return 2020 + (s.defaultSeed() % 10)
 }
 
 func (s tableSpec) enumDefault() string {
 	values := []string{"red", "green", "blue"}
-	return values[s.tableIndex%len(values)]
+	return values[s.defaultSeed()%len(values)]
 }
 
 func (s tableSpec) setDefault() string {
 	values := []string{"x", "x,y", "y,z", "x,z"}
-	return values[s.tableIndex%len(values)]
+	return values[s.defaultSeed()%len(values)]
 }
 
 func (s tableSpec) updateDateValue() string {
-	month := monthValue(s.tableIndex + 5)
-	day := dayValue(s.tableIndex + 7)
+	month := monthValue(s.defaultSeed() + 5)
+	day := dayValue(s.defaultSeed() + 7)
 	return fmt.Sprintf("2027-%02d-%02d", month, day)
 }
 
 func (s tableSpec) updateDatetimeValue() string {
-	month := monthValue(s.tableIndex + 5)
-	day := dayValue(s.tableIndex + 7)
-	hour, minute, second := clockValue(s.tableIndex + 9)
+	month := monthValue(s.defaultSeed() + 5)
+	day := dayValue(s.defaultSeed() + 7)
+	hour, minute, second := clockValue(s.defaultSeed() + 9)
 	return fmt.Sprintf("2027-%02d-%02d %02d:%02d:%02d", month, day, hour, minute, second)
 }
 
@@ -363,22 +422,22 @@ func (s tableSpec) updateTimestampValue() string {
 }
 
 func (s tableSpec) updateTimeValue() string {
-	hour, minute, second := clockValue(s.tableIndex + 9)
+	hour, minute, second := clockValue(s.defaultSeed() + 9)
 	return fmt.Sprintf("%02d:%02d:%02d", hour, minute, second)
 }
 
 func (s tableSpec) updateYearValue() int {
-	return 2030 + (s.tableIndex % 10)
+	return 2030 + (s.defaultSeed() % 10)
 }
 
 func (s tableSpec) updateEnumValue() string {
 	values := []string{"green", "blue", "red"}
-	return values[s.tableIndex%len(values)]
+	return values[s.defaultSeed()%len(values)]
 }
 
 func (s tableSpec) updateSetValue() string {
 	values := []string{"y", "x,z", "x,y", "y,z"}
-	return values[s.tableIndex%len(values)]
+	return values[s.defaultSeed()%len(values)]
 }
 
 func (s tableSpec) updateBitValue(marker int64) string {
@@ -445,4 +504,11 @@ func minInt(a int, b int) int {
 		return a
 	}
 	return b
+}
+
+func absInt(v int) int {
+	if v < 0 {
+		return -v
+	}
+	return v
 }
