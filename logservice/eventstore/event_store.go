@@ -1346,7 +1346,11 @@ func (e *eventStore) writeEvents(
 			} else {
 				op := batch.SetDeferred(keyLen, int(valueBytesBefore))
 				EncodeKeyTo(op.Key[:0], uint64(event.subID), event.tableID, kv, compressionType)
-				kv.EncodeTo(op.Value[:0])
+				encodedValue := kv.EncodeTo(op.Value[:0])
+				if len(encodedValue) != int(valueBytesBefore) {
+					return fmt.Errorf("encoded raw kv entry size mismatch, expected %d, got %d",
+						valueBytesBefore, len(encodedValue))
+				}
 				if err := op.Finish(); err != nil {
 					return err
 				}
