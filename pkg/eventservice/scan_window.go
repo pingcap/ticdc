@@ -95,6 +95,12 @@ const (
 	// very_low_recovery path.
 	scanWindowVeryLowRecoveryCooldown = 90 * time.Second
 
+	// scanWindowFloorRecoveryCooldown allows the controller to escape from the
+	// default floor faster once the observed pressure has clearly fallen. This
+	// specifically mitigates feedback-lag cases where a late critical report
+	// pushes the interval to the floor after the real pressure has already eased.
+	scanWindowFloorRecoveryCooldown = 5 * time.Second
+
 	// scanWindowFastUsageAlpha controls the responsiveness of the short-term EMA.
 	scanWindowFastUsageAlpha = 0.4
 
@@ -111,6 +117,11 @@ const (
 	// scanWindowPressureReliefPerRelease is the amount of accumulated pressure
 	// cleared by one downstream release pulse.
 	scanWindowPressureReliefPerRelease = 2.0
+
+	// scanWindowTargetBandLower and scanWindowTargetBandUpper define the desired
+	// operating region for observed pressure related signals.
+	scanWindowTargetBandLower = 0.30
+	scanWindowTargetBandUpper = 0.50
 
 	// scanWindowStaleDispatcherHeartbeatThreshold is the duration after which a
 	// dispatcher is treated as stale for scan window base ts calculation if it
@@ -168,6 +179,15 @@ type scanWindowDecision struct {
 	slowUsageEMA  float64
 	pressureScore float64
 }
+
+type scanWindowBandState int32
+
+const (
+	scanWindowBandUnknown scanWindowBandState = iota
+	scanWindowBandBelow
+	scanWindowBandIn
+	scanWindowBandAbove
+)
 
 type scanWindowController interface {
 	OnCongestionReport(now time.Time, currentInterval time.Duration, maxInterval time.Duration, report scanWindowReport) scanWindowDecision
@@ -306,6 +326,9 @@ func initializeScanWindowMetrics(changefeed string) {
 	metrics.EventServiceScanWindowUsageRatioGaugeVec.WithLabelValues(changefeed, "max").Set(0)
 	metrics.EventServiceScanWindowUsageEMAGaugeVec.WithLabelValues(changefeed, "fast").Set(0)
 	metrics.EventServiceScanWindowUsageEMAGaugeVec.WithLabelValues(changefeed, "slow").Set(0)
+	metrics.EventServiceScanWindowTargetBandGaugeVec.WithLabelValues(changefeed, "report").Set(0)
+	metrics.EventServiceScanWindowTargetBandGaugeVec.WithLabelValues(changefeed, "fast").Set(0)
+	metrics.EventServiceScanWindowTargetBandGaugeVec.WithLabelValues(changefeed, "slow").Set(0)
 	metrics.EventServiceScanWindowPressureScoreGaugeVec.WithLabelValues(changefeed).Set(0)
 }
 
@@ -318,6 +341,12 @@ func deleteScanWindowMetrics(changefeed string) {
 	metrics.EventServiceScanWindowUsageRatioGaugeVec.DeleteLabelValues(changefeed, "max")
 	metrics.EventServiceScanWindowUsageEMAGaugeVec.DeleteLabelValues(changefeed, "fast")
 	metrics.EventServiceScanWindowUsageEMAGaugeVec.DeleteLabelValues(changefeed, "slow")
+	metrics.EventServiceScanWindowTargetBandGaugeVec.DeleteLabelValues(changefeed, "report")
+	metrics.EventServiceScanWindowTargetBandGaugeVec.DeleteLabelValues(changefeed, "fast")
+	metrics.EventServiceScanWindowTargetBandGaugeVec.DeleteLabelValues(changefeed, "slow")
+	metrics.EventServiceScanWindowTargetBandCrossCount.DeleteLabelValues(changefeed, "report")
+	metrics.EventServiceScanWindowTargetBandCrossCount.DeleteLabelValues(changefeed, "fast")
+	metrics.EventServiceScanWindowTargetBandCrossCount.DeleteLabelValues(changefeed, "slow")
 	metrics.EventServiceScanWindowPressureScoreGaugeVec.DeleteLabelValues(changefeed)
 	metrics.EventServiceScanWindowMemoryReleaseCount.DeleteLabelValues(changefeed)
 	for _, reason := range []scanWindowDecisionReason{
@@ -344,12 +373,46 @@ func (c *changefeedStatus) observeScanWindowControllerMetrics(
 	metrics.EventServiceScanWindowUsageRatioGaugeVec.WithLabelValues(changefeed, "max").Set(decision.usage.max)
 	metrics.EventServiceScanWindowUsageEMAGaugeVec.WithLabelValues(changefeed, "fast").Set(decision.fastUsageEMA)
 	metrics.EventServiceScanWindowUsageEMAGaugeVec.WithLabelValues(changefeed, "slow").Set(decision.slowUsageEMA)
+	c.observeScanWindowTargetBandMetrics(changefeed, "report", usageRatio, &c.reportBandState)
+	c.observeScanWindowTargetBandMetrics(changefeed, "fast", decision.fastUsageEMA, &c.fastBandState)
+	c.observeScanWindowTargetBandMetrics(changefeed, "slow", decision.slowUsageEMA, &c.slowBandState)
 	metrics.EventServiceScanWindowPressureScoreGaugeVec.WithLabelValues(changefeed).Set(decision.pressureScore)
 	if memoryReleaseCount > 0 {
 		metrics.EventServiceScanWindowMemoryReleaseCount.WithLabelValues(changefeed).Add(float64(memoryReleaseCount))
 	}
 	if decision.newInterval != current {
 		metrics.EventServiceScanWindowAdjustCount.WithLabelValues(changefeed, string(decision.reason)).Inc()
+	}
+}
+
+func (c *changefeedStatus) observeScanWindowTargetBandMetrics(
+	changefeed string,
+	metricType string,
+	value float64,
+	state *atomic.Int32,
+) {
+	currentState := classifyScanWindowBandState(value)
+	if currentState == scanWindowBandIn {
+		metrics.EventServiceScanWindowTargetBandGaugeVec.WithLabelValues(changefeed, metricType).Set(1)
+	} else {
+		metrics.EventServiceScanWindowTargetBandGaugeVec.WithLabelValues(changefeed, metricType).Set(0)
+	}
+
+	previousState := scanWindowBandState(state.Load())
+	if previousState != scanWindowBandUnknown && previousState != currentState {
+		metrics.EventServiceScanWindowTargetBandCrossCount.WithLabelValues(changefeed, metricType).Inc()
+	}
+	state.Store(int32(currentState))
+}
+
+func classifyScanWindowBandState(value float64) scanWindowBandState {
+	switch {
+	case value < scanWindowTargetBandLower:
+		return scanWindowBandBelow
+	case value > scanWindowTargetBandUpper:
+		return scanWindowBandAbove
+	default:
+		return scanWindowBandIn
 	}
 }
 
@@ -411,6 +474,22 @@ func (c *adaptiveScanWindowController) OnCongestionReport(now time.Time, current
 		}
 	}
 
+	if c.shouldRecoverFromFloorLocked(now, current, usage) {
+		newInterval := min(scaleDuration(current, 5, 4), maxInterval)
+		if newInterval > current {
+			c.noteAdjustmentLocked(now, false)
+			return scanWindowDecision{
+				newInterval:   newInterval,
+				maxInterval:   maxInterval,
+				reason:        scanWindowDecisionLowRecovery,
+				usage:         usage,
+				fastUsageEMA:  c.fastUsageEMA,
+				slowUsageEMA:  c.slowUsageEMA,
+				pressureScore: c.pressureScore,
+			}
+		}
+	}
+
 	if !c.allowedToIncreaseLocked(now, usage) {
 		return scanWindowDecision{
 			newInterval:   current,
@@ -425,7 +504,8 @@ func (c *adaptiveScanWindowController) OnCongestionReport(now time.Time, current
 
 	if c.isVeryLowPressureLocked(usage) && c.allowedToVeryLowRecoverLocked(now) {
 		effectiveMaxInterval := maxScanInterval
-		newInterval := min(scaleDuration(current, 3, 2), effectiveMaxInterval)
+		numerator, denominator := scanWindowVeryLowRecoveryScale(current)
+		newInterval := min(scaleDuration(current, numerator, denominator), effectiveMaxInterval)
 		if newInterval > current {
 			c.noteAdjustmentLocked(now, false)
 			return scanWindowDecision{
@@ -441,7 +521,8 @@ func (c *adaptiveScanWindowController) OnCongestionReport(now time.Time, current
 	}
 
 	if current < maxInterval && c.isLowPressureLocked(usage) {
-		newInterval := min(scaleDuration(current, 5, 4), maxInterval)
+		numerator, denominator := scanWindowLowRecoveryScale(current)
+		newInterval := min(scaleDuration(current, numerator, denominator), maxInterval)
 		if newInterval > current {
 			c.noteAdjustmentLocked(now, false)
 			return scanWindowDecision{
@@ -467,6 +548,35 @@ func (c *adaptiveScanWindowController) OnCongestionReport(now time.Time, current
 	}
 }
 
+func scanWindowVeryLowRecoveryScale(current time.Duration) (numerator int64, denominator int64) {
+	switch {
+	case current >= 120*time.Second:
+		return 11, 10
+	case current >= 60*time.Second:
+		return 6, 5
+	default:
+		return 3, 2
+	}
+}
+
+func scanWindowEmergencyBrakeInterval(current time.Duration) time.Duration {
+	if current <= 6*defaultScanInterval {
+		return max(current/2, defaultScanInterval)
+	}
+	return max(current/4, minScanInterval)
+}
+
+func scanWindowLowRecoveryScale(current time.Duration) (numerator int64, denominator int64) {
+	switch {
+	case current >= 120*time.Second:
+		return 21, 20
+	case current >= 60*time.Second:
+		return 11, 10
+	default:
+		return 5, 4
+	}
+}
+
 func (c *adaptiveScanWindowController) tryCriticalBrakeLocked(
 	now time.Time,
 	current time.Duration,
@@ -479,7 +589,7 @@ func (c *adaptiveScanWindowController) tryCriticalBrakeLocked(
 
 	switch {
 	case usage.last > memoryUsageEmergencyThreshold:
-		newInterval := max(current/4, minScanInterval)
+		newInterval := scanWindowEmergencyBrakeInterval(current)
 		c.lastCriticalTime = now
 		c.noteAdjustmentLocked(now, true)
 		return scanWindowDecision{
@@ -492,7 +602,10 @@ func (c *adaptiveScanWindowController) tryCriticalBrakeLocked(
 			pressureScore: c.pressureScore,
 		}, true
 	case usage.last > memoryUsageCriticalThreshold:
-		newInterval := max(current/2, minScanInterval)
+		if c.shouldGraceCriticalBrakeLocked(usage) {
+			return scanWindowDecision{}, false
+		}
+		newInterval := max(current/2, defaultScanInterval)
 		c.lastCriticalTime = now
 		c.noteAdjustmentLocked(now, true)
 		return scanWindowDecision{
@@ -507,6 +620,38 @@ func (c *adaptiveScanWindowController) tryCriticalBrakeLocked(
 	default:
 		return scanWindowDecision{}, false
 	}
+}
+
+func (c *adaptiveScanWindowController) shouldGraceCriticalBrakeLocked(usage memoryUsageStats) bool {
+	return usage.last < memoryUsageEmergencyThreshold &&
+		c.fastUsageEMA < 0.85 &&
+		c.slowUsageEMA < scanWindowHighPressureThreshold &&
+		usage.max < memoryUsageEmergencyThreshold
+}
+
+func (c *adaptiveScanWindowController) shouldRecoverFromFloorLocked(
+	now time.Time,
+	current time.Duration,
+	usage memoryUsageStats,
+) bool {
+	if current > defaultScanInterval {
+		return false
+	}
+	if now.Sub(c.lastAdjustTime) < scanWindowFloorRecoveryCooldown {
+		return false
+	}
+	if now.Sub(c.lastDownAdjustTime) < scanWindowFloorRecoveryCooldown {
+		return false
+	}
+	if usage.cnt < 3 {
+		return false
+	}
+
+	return usage.last < 0.35 &&
+		usage.avg < scanWindowModeratePressureThreshold &&
+		c.fastUsageEMA < 0.45 &&
+		c.slowUsageEMA < 0.40 &&
+		c.pressureScore < 1.5
 }
 
 func (c *adaptiveScanWindowController) updateUsageEMALocked(value float64) {

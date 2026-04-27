@@ -122,5 +122,51 @@ func TestAdaptiveScanWindowControllerBlocksVeryLowRecoveryAfterRecentCriticalBra
 	result := runScanWindowControllerTrace(controller, start, 4*time.Second, maxScanInterval, trace)
 
 	require.Zero(t, countScanWindowDecisionReasons(result.reasons, scanWindowDecisionVeryLowRecovery))
-	require.LessOrEqual(t, result.finalInterval, scaleDuration(defaultScanInterval, 5, 4))
+	require.LessOrEqual(t, result.finalInterval, 8*time.Second)
+}
+
+func TestAdaptiveScanWindowControllerSingleReleaseAfterRampDoesNotResetWindow(t *testing.T) {
+	t.Parallel()
+
+	start := time.Unix(0, 0)
+	adaptive := newAdaptiveScanWindowController(start)
+	legacy := newLegacyScanWindowController(start)
+
+	trace := []scanWindowControllerTracePoint{
+		{offset: 0, usageRatio: 0.58},
+		{offset: 4 * time.Second, usageRatio: 0.60},
+		{offset: 8 * time.Second, usageRatio: 0.61},
+		{offset: 11 * time.Second, usageRatio: 0.55, memoryReleaseCount: 1},
+		{offset: 12 * time.Second, usageRatio: 0.48},
+		{offset: 13 * time.Second, usageRatio: 0.42},
+	}
+
+	adaptiveResult := runScanWindowControllerTrace(adaptive, start, 80*time.Second, maxScanInterval, trace)
+	legacyResult := runScanWindowControllerTrace(legacy, start, 80*time.Second, maxScanInterval, trace)
+
+	require.Equal(t, defaultScanInterval, legacyResult.finalInterval)
+	require.Greater(t, adaptiveResult.finalInterval, 60*time.Second)
+	require.NotEqual(t, defaultScanInterval, adaptiveResult.finalInterval)
+	require.NotEqual(t, minScanInterval, adaptiveResult.finalInterval)
+}
+
+func TestAdaptiveScanWindowControllerRecoversFromFloorBeforeNormalIncreaseCooldown(t *testing.T) {
+	t.Parallel()
+
+	start := time.Unix(0, 0)
+	controller := newAdaptiveScanWindowController(start)
+	controller.setLastAdjustTimeForTest(start.Add(-scanWindowFloorRecoveryCooldown - time.Second))
+	controller.setLastDownAdjustTimeForTest(start.Add(-scanWindowFloorRecoveryCooldown - time.Second))
+
+	trace := []scanWindowControllerTracePoint{
+		{offset: 0, usageRatio: 0.30},
+		{offset: 1 * time.Second, usageRatio: 0.25},
+		{offset: 2 * time.Second, usageRatio: 0.20},
+		{offset: 3 * time.Second, usageRatio: 0.18},
+		{offset: 4 * time.Second, usageRatio: 0.15},
+	}
+
+	result := runScanWindowControllerTrace(controller, start, defaultScanInterval, maxScanInterval, trace)
+
+	require.Greater(t, result.finalInterval, defaultScanInterval)
 }

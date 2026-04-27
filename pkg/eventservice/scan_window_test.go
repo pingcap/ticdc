@@ -68,6 +68,36 @@ func TestAdjustScanIntervalLowRespectsSyncPointCap(t *testing.T) {
 	require.Equal(t, int64(50*time.Second), status.scanInterval.Load())
 }
 
+func TestAdjustScanIntervalLowPressureSlowsRecoveryForLargeWindow(t *testing.T) {
+	t.Parallel()
+
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 10*time.Minute)
+
+	now := time.Now()
+	markScanWindowReadyForIncrease(status, now)
+	status.scanInterval.Store(int64(80 * time.Second))
+
+	for i := 0; i <= int(memoryUsageWindowDuration/time.Second); i++ {
+		status.updateMemoryUsage(now.Add(time.Duration(i)*time.Second), 0.15, 0)
+	}
+	require.Equal(t, int64(88*time.Second), status.scanInterval.Load())
+}
+
+func TestAdjustScanIntervalVeryLowPressureSlowsRecoveryForVeryLargeWindow(t *testing.T) {
+	t.Parallel()
+
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 10*time.Minute)
+
+	now := time.Now()
+	markScanWindowReadyForIncrease(status, now)
+	status.scanInterval.Store(int64(150 * time.Second))
+
+	for i := 0; i <= int(memoryUsageWindowDuration/time.Second); i++ {
+		status.updateMemoryUsage(now.Add(time.Duration(i)*time.Second), 0, 0)
+	}
+	require.Equal(t, int64(165*time.Second), status.scanInterval.Load())
+}
+
 func TestAdjustScanIntervalHighPressureUsesBoundedReduction(t *testing.T) {
 	t.Parallel()
 
@@ -87,6 +117,39 @@ func TestAdjustScanIntervalCriticalPressure(t *testing.T) {
 	status.scanInterval.Store(int64(40 * time.Second))
 	status.updateMemoryUsage(time.Now().Add(memoryUsageWindowDuration), 1, 0)
 	require.Equal(t, int64(10*time.Second), status.scanInterval.Load())
+}
+
+func TestAdjustScanIntervalCriticalPressureUsesDefaultFloor(t *testing.T) {
+	t.Parallel()
+
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 10*time.Minute)
+	status.scanInterval.Store(int64(8 * time.Second))
+	status.updateMemoryUsage(time.Now().Add(memoryUsageWindowDuration), 0.95, 0)
+	require.Equal(t, int64(defaultScanInterval), status.scanInterval.Load())
+}
+
+func TestAdjustScanIntervalEmergencyPressureUsesModerateBrakeForSmallWindow(t *testing.T) {
+	t.Parallel()
+
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 10*time.Minute)
+	status.scanInterval.Store(int64(20 * time.Second))
+	status.updateMemoryUsage(time.Now().Add(memoryUsageWindowDuration), 1, 0)
+	require.Equal(t, int64(10*time.Second), status.scanInterval.Load())
+}
+
+func TestAdjustScanIntervalRecoversFromFloorBeforeNormalIncreaseCooldown(t *testing.T) {
+	t.Parallel()
+
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 10*time.Minute)
+	now := time.Now()
+	status.scanInterval.Store(int64(defaultScanInterval))
+	status.scanWindowController.setLastAdjustTimeForTest(now.Add(-scanWindowFloorRecoveryCooldown - time.Second))
+	status.scanWindowController.setLastDownAdjustTimeForTest(now.Add(-scanWindowFloorRecoveryCooldown - time.Second))
+
+	for i, usage := range []float64{0.30, 0.25, 0.20, 0.18, 0.15} {
+		status.updateMemoryUsage(now.Add(time.Duration(i)*time.Second), usage, 0)
+	}
+	require.Greater(t, status.scanInterval.Load(), int64(defaultScanInterval))
 }
 
 func TestUpdateMemoryUsageDoesNotResetScanIntervalOnMemoryRelease(t *testing.T) {
@@ -117,6 +180,9 @@ func TestUpdateMemoryUsageRecordsScanWindowObservationMetrics(t *testing.T) {
 	require.InDelta(t, 0.6, testutil.ToFloat64(metrics.EventServiceScanWindowUsageRatioGaugeVec.WithLabelValues(changefeed, "max")), 1e-9)
 	require.InDelta(t, 0.6, testutil.ToFloat64(metrics.EventServiceScanWindowUsageEMAGaugeVec.WithLabelValues(changefeed, "fast")), 1e-9)
 	require.InDelta(t, 0.6, testutil.ToFloat64(metrics.EventServiceScanWindowUsageEMAGaugeVec.WithLabelValues(changefeed, "slow")), 1e-9)
+	require.InDelta(t, 0, testutil.ToFloat64(metrics.EventServiceScanWindowTargetBandGaugeVec.WithLabelValues(changefeed, "report")), 1e-9)
+	require.InDelta(t, 0, testutil.ToFloat64(metrics.EventServiceScanWindowTargetBandGaugeVec.WithLabelValues(changefeed, "fast")), 1e-9)
+	require.InDelta(t, 0, testutil.ToFloat64(metrics.EventServiceScanWindowTargetBandGaugeVec.WithLabelValues(changefeed, "slow")), 1e-9)
 	require.InDelta(t, 0, testutil.ToFloat64(metrics.EventServiceScanWindowPressureScoreGaugeVec.WithLabelValues(changefeed)), 1e-9)
 	require.InDelta(t, 1, testutil.ToFloat64(metrics.EventServiceScanWindowMemoryReleaseCount.WithLabelValues(changefeed)), 1e-9)
 }
@@ -136,6 +202,26 @@ func TestUpdateMemoryUsageRecordsScanWindowAdjustCount(t *testing.T) {
 
 	require.Equal(t, int64(30*time.Second), status.scanInterval.Load())
 	require.InDelta(t, 1, testutil.ToFloat64(metrics.EventServiceScanWindowAdjustCount.WithLabelValues(changefeed, string(scanWindowDecisionHighPressure))), 1e-9)
+}
+
+func TestUpdateMemoryUsageRecordsScanWindowTargetBandMetrics(t *testing.T) {
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", t.Name()), 10*time.Minute)
+	changefeed := status.changefeedID.String()
+	t.Cleanup(func() {
+		deleteScanWindowMetrics(changefeed)
+	})
+
+	start := time.Now()
+	status.updateMemoryUsage(start, 0.20, 0)
+	status.updateMemoryUsage(start.Add(time.Second), 0.40, 0)
+	status.updateMemoryUsage(start.Add(2*time.Second), 0.60, 0)
+
+	require.InDelta(t, 0, testutil.ToFloat64(metrics.EventServiceScanWindowTargetBandGaugeVec.WithLabelValues(changefeed, "report")), 1e-9)
+	require.InDelta(t, 1, testutil.ToFloat64(metrics.EventServiceScanWindowTargetBandGaugeVec.WithLabelValues(changefeed, "fast")), 1e-9)
+	require.InDelta(t, 1, testutil.ToFloat64(metrics.EventServiceScanWindowTargetBandGaugeVec.WithLabelValues(changefeed, "slow")), 1e-9)
+	require.InDelta(t, 2, testutil.ToFloat64(metrics.EventServiceScanWindowTargetBandCrossCount.WithLabelValues(changefeed, "report")), 1e-9)
+	require.InDelta(t, 1, testutil.ToFloat64(metrics.EventServiceScanWindowTargetBandCrossCount.WithLabelValues(changefeed, "fast")), 1e-9)
+	require.InDelta(t, 1, testutil.ToFloat64(metrics.EventServiceScanWindowTargetBandCrossCount.WithLabelValues(changefeed, "slow")), 1e-9)
 }
 
 func TestAdjustScanIntervalIncreaseWithJitteredSamples(t *testing.T) {
