@@ -79,6 +79,9 @@ type Config struct {
 	Catalog           CatalogType
 	CatalogURI        string
 	AWSRegion         string
+	AccessKey         string
+	SecretAccessKey   string
+	SessionToken      string
 	GlueDatabase      string
 	Mode              Mode
 	Broker            string
@@ -160,6 +163,15 @@ func (c *Config) Apply(_ context.Context, sinkURI *url.URL, _ *config.SinkConfig
 	}
 	if v := strings.TrimSpace(query.Get("region")); v != "" {
 		c.AWSRegion = v
+	}
+	if v := strings.TrimSpace(query.Get("access-key")); v != "" {
+		c.AccessKey = v
+	}
+	if v := strings.TrimSpace(query.Get("secret-access-key")); v != "" {
+		c.SecretAccessKey = v
+	}
+	if v := strings.TrimSpace(query.Get("session-token")); v != "" {
+		c.SessionToken = v
 	}
 	if v := strings.TrimSpace(query.Get("database")); v != "" {
 		c.GlueDatabase = v
@@ -283,6 +295,12 @@ func (c *Config) Apply(_ context.Context, sinkURI *url.URL, _ *config.SinkConfig
 	}
 	if !catalogSpecified && isS3Warehouse(c.WarehouseURI) {
 		c.Catalog = CatalogGlue
+	}
+	if (c.AccessKey == "") != (c.SecretAccessKey == "") {
+		return cerror.ErrSinkURIInvalid.GenWithStackByArgs("access-key and secret-access-key must be set together")
+	}
+	if c.SessionToken != "" && c.AccessKey == "" {
+		return cerror.ErrSinkURIInvalid.GenWithStackByArgs("session-token requires access-key and secret-access-key")
 	}
 	if c.Catalog == CatalogRest && strings.TrimSpace(c.CatalogURI) == "" {
 		return cerror.ErrSinkURIInvalid.GenWithStackByArgs("missing required parameter: catalog-uri")

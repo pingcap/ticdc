@@ -21,6 +21,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/glue"
 	gluetypes "github.com/aws/aws-sdk-go-v2/service/glue/types"
 	"github.com/aws/smithy-go"
@@ -433,15 +434,7 @@ func (w *TableWriter) getGlueClient(ctx context.Context) (*glue.Client, error) {
 	}
 
 	w.glueOnce.Do(func() {
-		var (
-			awsCfg aws.Config
-			err    error
-		)
-		if strings.TrimSpace(w.cfg.AWSRegion) != "" {
-			awsCfg, err = awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(w.cfg.AWSRegion))
-		} else {
-			awsCfg, err = awsconfig.LoadDefaultConfig(ctx)
-		}
+		awsCfg, err := w.resolveGlueAWSConfig(ctx)
 		if err != nil {
 			w.glueErr = cerror.Trace(err)
 			return
@@ -463,6 +456,32 @@ func (w *TableWriter) getGlueClient(ctx context.Context) (*glue.Client, error) {
 		return nil, cerror.ErrSinkURIInvalid.GenWithStackByArgs("glue client is nil")
 	}
 	return client, nil
+}
+
+func (w *TableWriter) resolveGlueAWSConfig(ctx context.Context) (aws.Config, error) {
+	if w == nil || w.cfg == nil {
+		return aws.Config{}, cerror.ErrSinkURIInvalid.GenWithStackByArgs("iceberg config is nil")
+	}
+
+	opts := make([]func(*awsconfig.LoadOptions) error, 0, 2)
+	if strings.TrimSpace(w.cfg.AWSRegion) != "" {
+		opts = append(opts, awsconfig.WithRegion(w.cfg.AWSRegion))
+	}
+	if strings.TrimSpace(w.cfg.AccessKey) != "" {
+		opts = append(opts, awsconfig.WithCredentialsProvider(
+			credentials.NewStaticCredentialsProvider(
+				w.cfg.AccessKey,
+				w.cfg.SecretAccessKey,
+				w.cfg.SessionToken,
+			),
+		))
+	}
+
+	awsCfg, err := awsconfig.LoadDefaultConfig(ctx, opts...)
+	if err != nil {
+		return aws.Config{}, cerror.Trace(err)
+	}
+	return awsCfg, nil
 }
 
 func (w *TableWriter) glueDatabaseName(schemaName string) string {
