@@ -2,6 +2,7 @@
 
 !source ../procedures/sp_discover_control_files.sql
 !source ../procedures/sp_load_ddl_manifests.sql
+!source ../procedures/sp_register_incremental_objects.sql
 !source ../procedures/sp_register_snapshot_tables.sql
 !source ../procedures/sp_bootstrap_one_table.sql
 !source ../procedures/sp_bootstrap_all_tables.sql

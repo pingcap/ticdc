@@ -15,7 +15,7 @@ DECLARE
       FROM TICDC_META.OBJECT_REGISTRY
      WHERE integration_id = ?
        AND COALESCE(is_enabled, TRUE)
-       AND COALESCE(materialization_status, 'ACTIVE') NOT IN ('PAUSED_FOR_REBUILD', 'REBUILDING')
+       AND COALESCE(materialization_status, 'ACTIVE') NOT IN ('PENDING_DDL', 'PAUSED_FOR_REBUILD', 'REBUILDING')
      ORDER BY source_db, source_table, object_id;
 BEGIN
   CREATE TABLE IF NOT EXISTS TICDC_META.PROCEDURE_ERROR_LOG (

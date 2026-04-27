@@ -16,6 +16,7 @@ DECLARE
   v_need_rebuild BOOLEAN DEFAULT FALSE;
   v_rebuild_from_ts NUMBER(20, 0) DEFAULT NULL;
   v_ddl_sql STRING DEFAULT NULL;
+  v_table_version_after NUMBER(20, 0) DEFAULT 0;
 BEGIN
   CREATE TABLE IF NOT EXISTS TICDC_META.PROCEDURE_ERROR_LOG (
     run_uuid STRING,
@@ -54,6 +55,18 @@ BEGIN
     applied_at TIMESTAMP_NTZ(6)
   );
 
+  CREATE TABLE IF NOT EXISTS TICDC_META.TABLE_SYNC_STATE (
+    integration_id STRING,
+    object_id STRING,
+    generation STRING,
+    bootstrap_ts NUMBER(20, 0),
+    table_version NUMBER(20, 0),
+    last_applied_commit_ts NUMBER(20, 0),
+    last_apply_time TIMESTAMP_NTZ(6),
+    status STRING,
+    updated_at TIMESTAMP_NTZ(6)
+  );
+
   SELECT
     COUNT(*),
     MAX(object_id),
@@ -62,7 +75,8 @@ BEGIN
     MAX(ddl_apply_class),
     BOOLOR_AGG(COALESCE(need_rebuild, FALSE)),
     MAX(rebuild_from_ts),
-    MAX(ddl_query)
+    MAX(ddl_query),
+    COALESCE(MAX(table_version_after), 0)
     INTO
       :v_exists,
       :v_object_id,
@@ -71,7 +85,8 @@ BEGIN
       :v_apply_class,
       :v_need_rebuild,
       :v_rebuild_from_ts,
-      :v_ddl_sql
+      :v_ddl_sql,
+      :v_table_version_after
     FROM TICDC_META.DDL_EVENT_QUEUE
    WHERE integration_id = :p_integration_id
      AND event_id = :p_event_id;
@@ -173,7 +188,66 @@ BEGIN
     );
   END IF;
 
-  IF (LOWER(COALESCE(v_apply_class, '')) = 'direct_replay' AND v_ddl_sql IS NOT NULL AND v_ddl_sql <> '') THEN
+  IF (LOWER(COALESCE(v_ddl_type, '')) = 'create table') THEN
+    CALL TICDC_META.SP_ENSURE_RAW_CHANGE_TABLE(:p_integration_id, :v_object_id);
+    CALL TICDC_META.SP_ENSURE_TARGET_TABLE(:p_integration_id, :v_object_id);
+
+    UPDATE TICDC_META.OBJECT_REGISTRY
+       SET bootstrap_ts = COALESCE(bootstrap_ts, :v_commit_ts),
+           table_version = COALESCE(table_version, :v_table_version_after),
+           materialization_status = 'ACTIVE',
+           is_enabled = TRUE,
+           updated_at = CURRENT_TIMESTAMP()
+     WHERE integration_id = :p_integration_id
+       AND object_id = :v_object_id;
+
+    MERGE INTO TICDC_META.TABLE_SYNC_STATE t
+    USING (
+      SELECT
+        :p_integration_id AS integration_id,
+        :v_object_id AS object_id,
+        MAX(generation) AS generation,
+        COALESCE(MAX(bootstrap_ts), :v_commit_ts) AS bootstrap_ts,
+        COALESCE(MAX(table_version), :v_table_version_after) AS table_version,
+        :v_commit_ts AS last_applied_commit_ts
+      FROM TICDC_META.OBJECT_REGISTRY
+      WHERE integration_id = :p_integration_id
+        AND object_id = :v_object_id
+    ) s
+    ON t.integration_id = s.integration_id AND t.object_id = s.object_id
+    WHEN MATCHED THEN
+      UPDATE SET
+        generation = COALESCE(s.generation, t.generation),
+        bootstrap_ts = COALESCE(s.bootstrap_ts, t.bootstrap_ts),
+        table_version = GREATEST(COALESCE(t.table_version, 0), COALESCE(s.table_version, 0)),
+        last_applied_commit_ts = GREATEST(COALESCE(t.last_applied_commit_ts, 0), s.last_applied_commit_ts),
+        last_apply_time = CURRENT_TIMESTAMP(),
+        status = 'DDL_APPLIED',
+        updated_at = CURRENT_TIMESTAMP()
+    WHEN NOT MATCHED THEN
+      INSERT (
+        integration_id,
+        object_id,
+        generation,
+        bootstrap_ts,
+        table_version,
+        last_applied_commit_ts,
+        last_apply_time,
+        status,
+        updated_at
+      )
+      VALUES (
+        s.integration_id,
+        s.object_id,
+        s.generation,
+        s.bootstrap_ts,
+        s.table_version,
+        s.last_applied_commit_ts,
+        CURRENT_TIMESTAMP(),
+        'DDL_APPLIED',
+        CURRENT_TIMESTAMP()
+      );
+  ELSEIF (LOWER(COALESCE(v_apply_class, '')) = 'direct_replay' AND v_ddl_sql IS NOT NULL AND v_ddl_sql <> '') THEN
     EXECUTE IMMEDIATE v_ddl_sql;
   END IF;
 

@@ -111,28 +111,28 @@ BEGIN
      AND COALESCE(is_deleted, FALSE) = FALSE;
 
   v_sql := 'DELETE FROM ' || v_target_base_table || ' t USING (' ||
-    'SELECT DISTINCT COALESCE(_tidb_old_row_identity, _tidb_row_identity) AS identity_key ' ||
+    'SELECT DISTINCT COALESCE("_tidb_old_row_identity", "_tidb_row_identity") AS identity_key ' ||
     'FROM ' || v_change_external_table || ' ' ||
-    'WHERE _tidb_commit_ts > :1 AND _tidb_commit_ts <= :2 ' ||
-    'AND (_tidb_op = ''D'' OR NVL(_tidb_old_row_identity, _tidb_row_identity) <> _tidb_row_identity)' ||
+    'WHERE "_tidb_commit_ts" > :1 AND "_tidb_commit_ts" <= :2 ' ||
+    'AND ("_tidb_op" = ''D'' OR NVL("_tidb_old_row_identity", "_tidb_row_identity") <> "_tidb_row_identity")' ||
     ') s WHERE t.__ticdc_row_identity = s.identity_key';
   EXECUTE IMMEDIATE v_sql USING (v_last_watermark, p_upper_ts);
 
   v_sql := 'MERGE INTO ' || v_target_base_table || ' t USING (' ||
     'SELECT * FROM (' ||
-    'SELECT r.*, ROW_NUMBER() OVER (PARTITION BY _tidb_row_identity ORDER BY _tidb_commit_ts DESC) AS rn ' ||
+    'SELECT r.*, ROW_NUMBER() OVER (PARTITION BY "_tidb_row_identity" ORDER BY "_tidb_commit_ts" DESC) AS rn ' ||
     'FROM ' || v_change_external_table || ' r ' ||
-    'WHERE r._tidb_commit_ts > :1 AND r._tidb_commit_ts <= :2 AND r._tidb_op IN (''I'', ''U'')' ||
+    'WHERE r."_tidb_commit_ts" > :1 AND r."_tidb_commit_ts" <= :2 AND r."_tidb_op" IN (''I'', ''U'')' ||
     ') WHERE rn = 1' ||
-    ') s ON t.__ticdc_row_identity = s._tidb_row_identity ' ||
+    ') s ON t.__ticdc_row_identity = s."_tidb_row_identity" ' ||
     'WHEN MATCHED THEN UPDATE SET ' ||
-    '__ticdc_last_commit_ts = s._tidb_commit_ts, ' ||
-    '__ticdc_last_commit_time = s._tidb_commit_time, ' ||
+    '__ticdc_last_commit_ts = s."_tidb_commit_ts", ' ||
+    '__ticdc_last_commit_time = s."_tidb_commit_time", ' ||
     '__ticdc_table_version = :3' ||
     IFF(v_update_assignments = '', '', ', ' || v_update_assignments) ||
     ' WHEN NOT MATCHED THEN INSERT (__ticdc_row_identity, __ticdc_last_commit_ts, __ticdc_last_commit_time, __ticdc_table_version' ||
     IFF(v_insert_columns = '', '', ', ' || v_insert_columns) ||
-    ') VALUES (s._tidb_row_identity, s._tidb_commit_ts, s._tidb_commit_time, :3' ||
+    ') VALUES (s."_tidb_row_identity", s."_tidb_commit_ts", s."_tidb_commit_time", :3' ||
     IFF(v_insert_values = '', '', ', ' || v_insert_values) ||
     ')';
   EXECUTE IMMEDIATE v_sql USING (v_last_watermark, p_upper_ts, v_table_version);

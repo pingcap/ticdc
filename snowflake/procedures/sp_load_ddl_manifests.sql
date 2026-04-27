@@ -183,7 +183,7 @@ BEGIN
         :p_integration_id AS integration_id,
         $1:event_id::STRING AS event_id,
         $1:ddl_group_id::STRING AS ddl_group_id,
-        COALESCE($1:object_id::STRING, $1:table_id_after::STRING, CONCAT($1:source_db::STRING, '.', $1:source_table::STRING)) AS object_id,
+        COALESCE($1:object_id::STRING, CONCAT($1:source_db::STRING, '.', $1:source_table::STRING), $1:table_id_after::STRING) AS object_id,
         $1:commit_ts::NUMBER(20, 0) AS commit_ts,
         COALESCE($1:seq::NUMBER(20, 0), 0) AS seq,
         $1:source_db::STRING AS source_db,

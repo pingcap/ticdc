@@ -37,6 +37,7 @@ BEGIN
     FROM TICDC_META.GLOBAL_CHECKPOINT_STATE
    WHERE integration_id = :p_integration_id;
 
+  CALL TICDC_META.SP_REGISTER_INCREMENTAL_OBJECTS(:p_integration_id, :v_upper_ts);
   CALL TICDC_META.SP_APPLY_DDL_UP_TO(:p_integration_id, :v_upper_ts);
   CALL TICDC_META.SP_SYNC_ALL_TABLES(:p_integration_id, :v_upper_ts);
   CALL TICDC_META.SP_PROCESS_REBUILD_QUEUE(:p_integration_id);

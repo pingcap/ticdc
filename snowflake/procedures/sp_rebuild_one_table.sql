@@ -26,22 +26,47 @@ BEGIN
     error_time TIMESTAMP_NTZ(6)
   );
 
-  SELECT
-    MAX(event_id),
-    COALESCE(MIN(rebuild_from_ts), 0)
-    INTO :v_event_id, :v_rebuild_from_ts
+  SELECT MAX(event_id)
+    INTO :v_event_id
     FROM TICDC_META.REBUILD_QUEUE
    WHERE integration_id = :p_integration_id
      AND object_id = :p_object_id
      AND status IN ('PENDING', 'RUNNING');
 
-  SELECT
-    COALESCE(MAX(generation), (SELECT MAX(generation) FROM TICDC_META.OBJECT_REGISTRY WHERE integration_id = :p_integration_id AND object_id = :p_object_id)),
-    COALESCE(MAX(bootstrap_ts), (SELECT MAX(bootstrap_ts) FROM TICDC_META.OBJECT_REGISTRY WHERE integration_id = :p_integration_id AND object_id = :p_object_id), 0)
-    INTO :v_generation, :v_bootstrap_ts
+  SELECT COALESCE(MIN(rebuild_from_ts), 0)
+    INTO :v_rebuild_from_ts
+    FROM TICDC_META.REBUILD_QUEUE
+   WHERE integration_id = :p_integration_id
+     AND object_id = :p_object_id
+     AND status IN ('PENDING', 'RUNNING');
+
+  SELECT MAX(generation)
+    INTO :v_generation
     FROM TICDC_META.TABLE_SYNC_STATE
    WHERE integration_id = :p_integration_id
      AND object_id = :p_object_id;
+
+  IF (v_generation IS NULL) THEN
+    SELECT MAX(generation)
+      INTO :v_generation
+      FROM TICDC_META.OBJECT_REGISTRY
+     WHERE integration_id = :p_integration_id
+       AND object_id = :p_object_id;
+  END IF;
+
+  SELECT COALESCE(MAX(bootstrap_ts), 0)
+    INTO :v_bootstrap_ts
+    FROM TICDC_META.TABLE_SYNC_STATE
+   WHERE integration_id = :p_integration_id
+     AND object_id = :p_object_id;
+
+  IF (v_bootstrap_ts = 0) THEN
+    SELECT COALESCE(MAX(bootstrap_ts), 0)
+      INTO :v_bootstrap_ts
+      FROM TICDC_META.OBJECT_REGISTRY
+     WHERE integration_id = :p_integration_id
+       AND object_id = :p_object_id;
+  END IF;
 
   SELECT COALESCE(MAX(resolved_ts), :v_bootstrap_ts)
     INTO :v_upper_ts

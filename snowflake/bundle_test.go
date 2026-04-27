@@ -40,6 +40,7 @@ func TestProcedureBundleLayout(t *testing.T) {
 	expected := []procedureSpec{
 		{Name: "SP_DISCOVER_CONTROL_FILES", File: "sp_discover_control_files.sql"},
 		{Name: "SP_LOAD_DDL_MANIFESTS", File: "sp_load_ddl_manifests.sql"},
+		{Name: "SP_REGISTER_INCREMENTAL_OBJECTS", File: "sp_register_incremental_objects.sql"},
 		{Name: "SP_REGISTER_SNAPSHOT_TABLES", File: "sp_register_snapshot_tables.sql"},
 		{Name: "SP_BOOTSTRAP_ONE_TABLE", File: "sp_bootstrap_one_table.sql"},
 		{Name: "SP_BOOTSTRAP_ALL_TABLES", File: "sp_bootstrap_all_tables.sql"},
@@ -117,6 +118,18 @@ func TestControlProceduresConsumeS3Manifests(t *testing.T) {
 	require.Contains(t, loadSQL, "REGEXP_LIKE(METADATA$FILENAME")
 	require.Contains(t, loadSQL, "PATTERN => '.*\\\\/CONTROL\\\\/DDL\\\\/.*\\\\.JSON'")
 	require.Contains(t, loadSQL, "PATTERN => '.*\\\\/CONTROL\\\\/CHECKPOINT\\\\/GLOBAL\\\\/.*\\\\.JSON'")
+
+	registerPath := filepath.Join(baseDir, "procedures", "sp_register_incremental_objects.sql")
+	registerBytes, err := os.ReadFile(registerPath)
+	require.NoError(t, err)
+	registerSQL := strings.ToUpper(string(registerBytes))
+	require.NotContains(t, registerSQL, "TODO")
+	require.Contains(t, registerSQL, "SP_REGISTER_INCREMENTAL_OBJECTS(P_INTEGRATION_ID STRING, P_UPPER_TS NUMBER(20, 0))")
+	require.Contains(t, registerSQL, "MERGE INTO TICDC_META.OBJECT_REGISTRY")
+	require.Contains(t, registerSQL, "MERGE INTO TICDC_META.COLUMN_REGISTRY")
+	require.Contains(t, registerSQL, "CHANGE_METADATA_FILE_PATH")
+	require.Contains(t, registerSQL, "FROM DIRECTORY(@TICDC_META.CTL_STAGE)")
+	require.Contains(t, registerSQL, "PENDING_DDL")
 }
 
 func TestAllProceduresAreTenantScoped(t *testing.T) {
@@ -151,6 +164,7 @@ func TestOrchestratePropagatesIntegrationID(t *testing.T) {
 	require.Contains(t, orchestrateSQL, "SP_ORCHESTRATE(P_INTEGRATION_ID STRING)")
 	require.Contains(t, orchestrateSQL, "CALL TICDC_META.SP_DISCOVER_CONTROL_FILES(:P_INTEGRATION_ID)")
 	require.Contains(t, orchestrateSQL, "CALL TICDC_META.SP_LOAD_DDL_MANIFESTS(:P_INTEGRATION_ID)")
+	require.Contains(t, orchestrateSQL, "CALL TICDC_META.SP_REGISTER_INCREMENTAL_OBJECTS(:P_INTEGRATION_ID, :V_UPPER_TS)")
 	require.Contains(t, orchestrateSQL, "CALL TICDC_META.SP_APPLY_DDL_UP_TO(:P_INTEGRATION_ID, :V_UPPER_TS)")
 	require.Contains(t, orchestrateSQL, "CALL TICDC_META.SP_SYNC_ALL_TABLES(:P_INTEGRATION_ID, :V_UPPER_TS)")
 	require.Contains(t, orchestrateSQL, "CALL TICDC_META.SP_PROCESS_REBUILD_QUEUE(:P_INTEGRATION_ID)")
@@ -234,6 +248,12 @@ func TestCoreProceduresImplementBootstrapDDLAndDML(t *testing.T) {
 	applyOneSQL := readProcedure("sp_apply_one_ddl.sql")
 	require.Contains(t, applyOneSQL, "TICDC_META.REBUILD_QUEUE")
 	require.Contains(t, applyOneSQL, "TICDC_META.DDL_APPLY_LOG")
+	require.Contains(t, applyOneSQL, "LOWER(COALESCE(V_DDL_TYPE, '')) = 'CREATE TABLE'")
+	require.Contains(t, applyOneSQL, "CALL TICDC_META.SP_ENSURE_RAW_CHANGE_TABLE(:P_INTEGRATION_ID, :V_OBJECT_ID)")
+	require.Contains(t, applyOneSQL, "CALL TICDC_META.SP_ENSURE_TARGET_TABLE(:P_INTEGRATION_ID, :V_OBJECT_ID)")
+	require.Contains(t, applyOneSQL, "MERGE INTO TICDC_META.TABLE_SYNC_STATE")
+	require.Contains(t, applyOneSQL, "MATERIALIZATION_STATUS = 'ACTIVE'")
+	require.Contains(t, applyOneSQL, "LAST_APPLIED_COMMIT_TS")
 	require.Contains(t, applyOneSQL, "EXECUTE IMMEDIATE V_DDL_SQL")
 	require.Contains(t, applyOneSQL, "APPLY_STATUS = 'REBUILD_REQUIRED'")
 	require.Contains(t, applyOneSQL, "APPLY_STATUS = 'APPLIED'")
@@ -250,6 +270,9 @@ func TestCoreProceduresImplementBootstrapDDLAndDML(t *testing.T) {
 	require.Contains(t, syncSQL, "MERGE INTO")
 	require.Contains(t, syncSQL, "_TIDB_ROW_IDENTITY")
 	require.Contains(t, syncSQL, "TICDC_META.TABLE_SYNC_STATE")
+
+	syncAllSQL := readProcedure("sp_sync_all_tables.sql")
+	require.Contains(t, syncAllSQL, "PENDING_DDL")
 
 	rebuildSQL := readProcedure("sp_rebuild_one_table.sql")
 	require.Contains(t, rebuildSQL, "PAUSED_FOR_REBUILD")
