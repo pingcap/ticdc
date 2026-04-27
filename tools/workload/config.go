@@ -38,6 +38,7 @@ type WorkloadConfig struct {
 	TableStartIndex int
 	Thread          int
 	BatchSize       int
+	DeleteBatchSize int
 	// BatchInTxn wraps each batch in one explicit transaction (BEGIN/COMMIT).
 	BatchInTxn          bool
 	TotalRowCount       uint64
@@ -90,6 +91,7 @@ func NewWorkloadConfig() *WorkloadConfig {
 		TableStartIndex:     0,
 		Thread:              16,
 		BatchSize:           10,
+		DeleteBatchSize:     0,
 		BatchInTxn:          false,
 		TotalRowCount:       1000000000,
 		PercentageForUpdate: 0,
@@ -133,14 +135,15 @@ func (c *WorkloadConfig) ParseFlags() error {
 	flag.IntVar(&c.TableCount, "table-count", c.TableCount, "table count of the workload")
 	flag.IntVar(&c.TableStartIndex, "table-start-index", c.TableStartIndex, "table start index, sbtest<index>")
 	flag.IntVar(&c.Thread, "thread", c.Thread, "total thread of the workload")
-	flag.IntVar(&c.BatchSize, "batch-size", c.BatchSize, "batch size of each insert/update/delete")
+	flag.IntVar(&c.BatchSize, "batch-size", c.BatchSize, "batch size of each insert/update, and delete when delete-batch-size <= 0")
+	flag.IntVar(&c.DeleteBatchSize, "delete-batch-size", c.DeleteBatchSize, "batch size of each delete; use batch-size when <= 0")
 	flag.BoolVar(&c.BatchInTxn, "batch-in-txn", c.BatchInTxn, "wrap each batch in one explicit transaction")
 	flag.Uint64Var(&c.TotalRowCount, "total-row-count", c.TotalRowCount, "the total row count of the workload, default is 1 billion")
 	flag.Float64Var(&c.PercentageForUpdate, "percentage-for-update", c.PercentageForUpdate, "percentage for update: [0, 1.0]")
 	flag.Float64Var(&c.PercentageForDelete, "percentage-for-delete", c.PercentageForDelete, "percentage for delete: [0, 1.0]")
 	flag.BoolVar(&c.SkipCreateTable, "skip-create-table", c.SkipCreateTable, "do not create tables")
 	flag.StringVar(&c.Action, "action", c.Action, "action of the workload: [prepare, insert, update, delete, write, ddl, cleanup]")
-	flag.StringVar(&c.WorkloadType, "workload-type", c.WorkloadType, "workload type: [bank, sysbench, large_row, shop_item, uuu, bank2, bank3, bank_update, crawler, dc, wide_table_with_json]")
+	flag.StringVar(&c.WorkloadType, "workload-type", c.WorkloadType, "workload type: [bank, sysbench, large_row, shop_item, uuu, bank2, bank3, batch_delete, bank_update, crawler, dc, wide_table_with_json]")
 	flag.StringVar(&c.DBHost, "database-host", c.DBHost, "database host")
 	flag.StringVar(&c.DBUser, "database-user", c.DBUser, "database user")
 	flag.StringVar(&c.DBPassword, "database-password", c.DBPassword, "database password")
@@ -205,6 +208,14 @@ func (c *WorkloadConfig) ParseFlags() error {
 	}
 
 	return nil
+}
+
+// EffectiveDeleteBatchSize returns the configured delete batch size.
+func (c *WorkloadConfig) EffectiveDeleteBatchSize() int {
+	if c.DeleteBatchSize > 0 {
+		return c.DeleteBatchSize
+	}
+	return c.BatchSize
 }
 
 // NewDBManager creates a new database manager.

@@ -195,6 +195,33 @@ Generate writes for `wide_table_with_json_primary` and `wide_table_with_json_sec
     -percentage-for-delete 0.05
 ```
 
+### 8. Batch Delete Workload
+
+Continuously execute single-statement batch deletes on upstream. Run it in `write` mode so insert workers keep replenishing rows while delete workers remove rows in batches:
+
+```bash
+./workload -action write \
+    -database-host 127.0.0.1 \
+    -database-port 4000 \
+    -database-db-name batch_delete_test \
+    -table-count 1 \
+    -workload-type batch_delete \
+    -thread 64 \
+    -batch-size 1000 \
+    -delete-batch-size 10000 \
+    -row-size 8192 \
+    -percentage-for-delete 0.5 \
+    -total-row-count 100000000000
+```
+
+Each delete worker executes SQL in this shape:
+
+```sql
+DELETE FROM batch_deleteN ORDER BY id LIMIT <delete-batch-size>
+```
+
+Use `-batch-size` for insert batch size, `-delete-batch-size` for rows deleted by each DELETE statement, and `-row-size` for payload bytes per inserted row.
+
 ## Notes
 
 - Ensure the database is properly configured and has the necessary permissions.

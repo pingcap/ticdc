@@ -120,7 +120,7 @@ func (app *WorkloadApp) genDeleteTask(output chan deleteTask) {
 		task := deleteTask{
 			DeleteOption: schema.DeleteOption{
 				TableIndex: tableIndex,
-				Batch:      app.Config.BatchSize,
+				Batch:      app.Config.EffectiveDeleteBatchSize(),
 				RangeNum:   app.Config.RangeNum,
 			},
 		}

@@ -31,6 +31,7 @@ import (
 	pbank2 "workload/schema/bank2"
 	pbank3 "workload/schema/bank3"
 	"workload/schema/bankupdate"
+	"workload/schema/batchdelete"
 	pcrawler "workload/schema/crawler"
 	pdc "workload/schema/dc"
 	"workload/schema/largerow"
@@ -81,6 +82,7 @@ const (
 	crawler           = "crawler"
 	bank2             = "bank2"
 	bank3             = "bank3"
+	batchDelete       = "batch_delete"
 	bankUpdate        = "bank_update"
 	dc                = "dc"
 	wideTableWithJSON = "wide_table_with_json"
@@ -140,6 +142,8 @@ func (app *WorkloadApp) createWorkload() schema.Workload {
 		workload = pbank2.NewBank2Workload()
 	case bank3:
 		workload = pbank3.NewBankWorkload(app.Config.Partitioned)
+	case batchDelete:
+		workload = batchdelete.NewBatchDeleteWorkload(app.Config.RowSize)
 	case bankUpdate:
 		workload = bankupdate.NewBankUpdateWorkload(app.Config.TotalRowCount, app.Config.UpdateLargeColumnSize)
 	case dc:
@@ -240,6 +244,7 @@ func (app *WorkloadApp) handleWorkloadExecution(insertConcurrency, updateConcurr
 		zap.Int("ddlWorker", app.Config.DDLWorker),
 		zap.String("ddlTimeout", app.Config.DDLTimeout.String()),
 		zap.Int("batchSize", app.Config.BatchSize),
+		zap.Int("deleteBatchSize", app.Config.EffectiveDeleteBatchSize()),
 		zap.Bool("batchInTxn", app.Config.BatchInTxn),
 		zap.String("action", app.Config.Action),
 	)
