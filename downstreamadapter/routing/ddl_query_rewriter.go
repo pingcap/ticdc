@@ -250,6 +250,11 @@ func (v *tableRenameVisitor) Leave(in ast.Node) (ast.Node, bool) {
 // Argument `targetTables` should have the same structure as the return value of extractTableNames.
 // Returned DDL is formatted like StringSingleQuotes, KeyWordUppercase and NameBackQuotes.
 func rewriteDDLStmtTables(stmt ast.StmtNode, targetTables []commonEvent.SchemaTableName) (string, error) {
+	if _, ok := stmt.(ast.DDLNode); !ok {
+		return "", errors.ErrTableRoutingFailed.GenWithStack(
+			"rewrite ddl query got non ddl statement: %T", stmt)
+	}
+
 	switch v := stmt.(type) {
 	case *ast.AlterDatabaseStmt:
 		if len(targetTables) != 1 {

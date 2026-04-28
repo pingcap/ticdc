@@ -112,9 +112,26 @@ func TestDDL2EventFillsSingleTableMetadata(t *testing.T) {
 	defer helper.Close()
 
 	helper.Tk().MustExec("CREATE DATABASE `test_db`")
-	helper.DDL2Event("CREATE TABLE `test_db`.`t1` (`id` INT PRIMARY KEY)")
+	helper.Tk().MustExec("CREATE TABLE `test_db`.`t1` (`id` INT PRIMARY KEY)")
 	ddlEvent := helper.DDL2Event("ALTER TABLE `test_db`.`t1` ADD COLUMN `c1` INT")
 
+	require.Equal(t, []SchemaTableName{{SchemaName: "test_db", TableName: "t1"}}, ddlEvent.BlockedTableNames)
+	require.NotNil(t, ddlEvent.TableInfo)
+	require.Equal(t, "test_db", ddlEvent.TableInfo.GetSchemaName())
+	require.Equal(t, "t1", ddlEvent.TableInfo.GetTableName())
+}
+
+func TestDDL2EventFillsAddIndexMetadata(t *testing.T) {
+	helper := NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("CREATE DATABASE `test_db`")
+	helper.Tk().MustExec("CREATE TABLE `test_db`.`t1` (`id` INT PRIMARY KEY)")
+	ddlEvent := helper.DDL2Event("ALTER TABLE `test_db`.`t1` ADD INDEX `idx_id`(`id`)")
+
+	require.Equal(t, byte(timodel.ActionAddIndex), ddlEvent.Type)
+	require.Equal(t, "test_db", ddlEvent.SchemaName)
+	require.Equal(t, "t1", ddlEvent.TableName)
 	require.Equal(t, []SchemaTableName{{SchemaName: "test_db", TableName: "t1"}}, ddlEvent.BlockedTableNames)
 	require.NotNil(t, ddlEvent.TableInfo)
 	require.Equal(t, "test_db", ddlEvent.TableInfo.GetSchemaName())
@@ -126,7 +143,7 @@ func TestDDL2EventFillsCreateTableLikeMetadata(t *testing.T) {
 	defer helper.Close()
 
 	helper.Tk().MustExec("CREATE DATABASE `test_db`")
-	helper.DDL2Event("CREATE TABLE `test_db`.`src` (`id` INT PRIMARY KEY)")
+	helper.Tk().MustExec("CREATE TABLE `test_db`.`src` (`id` INT PRIMARY KEY)")
 	ddlEvent := helper.DDL2Event("CREATE TABLE `test_db`.`dst` LIKE `test_db`.`src`")
 
 	require.Equal(t, []SchemaTableName{{SchemaName: "test_db", TableName: "src"}}, ddlEvent.BlockedTableNames)
@@ -139,7 +156,7 @@ func TestDDL2EventFillsRenameTableMetadata(t *testing.T) {
 
 	helper.Tk().MustExec("CREATE DATABASE `old_db`")
 	helper.Tk().MustExec("CREATE DATABASE `new_db`")
-	helper.DDL2Event("CREATE TABLE `old_db`.`orders` (`id` INT PRIMARY KEY)")
+	helper.Tk().MustExec("CREATE TABLE `old_db`.`orders` (`id` INT PRIMARY KEY)")
 	ddlEvent := helper.DDL2Event("RENAME TABLE `old_db`.`orders` TO `new_db`.`orders_archive`")
 
 	require.Equal(t, "old_db", ddlEvent.ExtraSchemaName)
@@ -156,8 +173,8 @@ func TestDDL2EventFillsRenameTablesMetadata(t *testing.T) {
 	defer helper.Close()
 
 	helper.Tk().MustExec("CREATE DATABASE `test_db`")
-	helper.DDL2Event("CREATE TABLE `test_db`.`t1` (`id` INT PRIMARY KEY)")
-	helper.DDL2Event("CREATE TABLE `test_db`.`t2` (`id` INT PRIMARY KEY)")
+	helper.Tk().MustExec("CREATE TABLE `test_db`.`t1` (`id` INT PRIMARY KEY)")
+	helper.Tk().MustExec("CREATE TABLE `test_db`.`t2` (`id` INT PRIMARY KEY)")
 	ddlEvent := helper.DDL2Event("RENAME TABLE `test_db`.`t1` TO `test_db`.`t1_new`, `test_db`.`t2` TO `test_db`.`t2_new`")
 
 	require.Len(t, ddlEvent.MultipleTableInfos, 2)

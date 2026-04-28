@@ -107,70 +107,132 @@ func TestApplyToTableInfoReturnsAmbiguousSchemaRoutingError(t *testing.T) {
 	require.Contains(t, err.Error(), "ambiguous schema routing")
 }
 
-func TestApplyToDDLEventReturnsOriginalWhenRoutingDoesNotChangeAnything(t *testing.T) {
-	helper := event.NewEventTestHelper(t)
-	defer helper.Close()
-
-	helper.Tk().MustExec("CREATE DATABASE `source_db`")
-	helper.DDL2Event("CREATE TABLE `source_db`.`source_table` (`id` INT PRIMARY KEY)")
-	ddl := helper.DDL2Event("ALTER TABLE `source_db`.`source_table` ADD INDEX `idx_id`(`id`)")
-
-	router, err := NewRouter(newTestChangefeedID(), false, []*config.DispatchRule{{
-		Matcher:      []string{"other_db.*"},
-		TargetSchema: "target_db",
-		TargetTable:  "target_table",
-	}})
-	require.NoError(t, err)
-
-	routed, err := router.ApplyToDDLEvent(ddl)
-	require.NoError(t, err)
-	require.Same(t, ddl, routed)
-}
-
-func TestApplyToDDLEventWithZeroRouterReturnsOriginal(t *testing.T) {
-	helper := event.NewEventTestHelper(t)
-	defer helper.Close()
-
-	helper.Tk().MustExec("CREATE DATABASE `source_db`")
-	helper.DDL2Event("CREATE TABLE `source_db`.`source_table` (`id` INT PRIMARY KEY)")
-	ddl := helper.DDL2Event("ALTER TABLE `source_db`.`source_table` ADD INDEX `idx_id`(`id`)")
-
-	var zeroRouter Router
-	routed, err := zeroRouter.ApplyToDDLEvent(ddl)
-	require.NoError(t, err)
-	require.Same(t, ddl, routed)
-}
-
 func TestApplyToDDLEvent(t *testing.T) {
 	helper := event.NewEventTestHelper(t)
 	defer helper.Close()
 
-	helper.Tk().MustExec("CREATE DATABASE `source_db`")
-	helper.Tk().MustExec("CREATE DATABASE `old_db`")
-	helper.Tk().MustExec("CREATE DATABASE `new_db`")
-	helper.DDL2Event("CREATE TABLE `source_db`.`source_table` (`id` INT PRIMARY KEY)")
+	sourceDBDDL := helper.DDL2Event("CREATE DATABASE `source_db`")
+	oldDBDDL := helper.DDL2Event("CREATE DATABASE `old_db`")
+	newDBDDL := helper.DDL2Event("CREATE DATABASE `new_db`")
+	multiDBDDL := helper.DDL2Event("CREATE DATABASE `multi_db`")
+	sourceTableDDL := helper.DDL2Event("CREATE TABLE `source_db`.`source_table` (`id` INT PRIMARY KEY)")
 	singleTableDDL := helper.DDL2Event("ALTER TABLE `source_db`.`source_table` ADD INDEX `idx_id`(`id`)")
-	helper.DDL2Event("CREATE TABLE `old_db`.`orders` (`id` INT PRIMARY KEY)")
+	multiT1DDL := helper.DDL2Event("CREATE TABLE `multi_db`.`t1` (`id` INT PRIMARY KEY)")
+	multiT2DDL := helper.DDL2Event("CREATE TABLE `multi_db`.`t2` (`id` INT PRIMARY KEY)")
+	renameTablesDDL := helper.DDL2Event("RENAME TABLE `multi_db`.`t1` TO `multi_db`.`t1_new`, `multi_db`.`t2` TO `multi_db`.`t2_new`")
+	oldOrdersDDL := helper.DDL2Event("CREATE TABLE `old_db`.`orders` (`id` INT PRIMARY KEY)")
 	renameDDL := helper.DDL2Event("RENAME TABLE `old_db`.`orders` TO `new_db`.`orders_archive`")
 
+	var zeroRouter Router
+	noMatchedRouter := newTestRouter(t, false, []*config.DispatchRule{{
+		Matcher:      []string{"other_db.*"},
+		TargetSchema: "target_db",
+		TargetTable:  "target_table",
+	}})
+	sourceRouter := newTestRouter(t, false, []*config.DispatchRule{{
+		Matcher:      []string{"source_db.source_table"},
+		TargetSchema: "target_db",
+		TargetTable:  "target_table",
+	}})
+	sourceSchemaRouter := newTestRouter(t, false, []*config.DispatchRule{{
+		Matcher:      []string{"source_db.*"},
+		TargetSchema: "target_db",
+		TargetTable:  "target_table",
+	}})
+	renameRouter := newTestRouter(t, false, []*config.DispatchRule{
+		{
+			Matcher:      []string{"old_db.*"},
+			TargetSchema: "old_target_db",
+			TargetTable:  "{table}_old",
+		},
+		{
+			Matcher:      []string{"new_db.*"},
+			TargetSchema: "new_target_db",
+			TargetTable:  "{table}_new",
+		},
+	})
+	multiRouter := newTestRouter(t, false, []*config.DispatchRule{{
+		Matcher:      []string{"multi_db.*"},
+		TargetSchema: "target_multi_db",
+		TargetTable:  "{table}_routed",
+	}})
+
 	tests := []struct {
-		name   string
-		router Router
-		ddl    *event.DDLEvent
-		check  func(t *testing.T, original, routed *event.DDLEvent)
+		name       string
+		router     Router
+		ddl        *event.DDLEvent
+		expectSame bool
+		check      func(t *testing.T, original, routed *event.DDLEvent)
 	}{
 		{
-			name: "single table ddl",
-			router: func() Router {
-				router, err := NewRouter(newTestChangefeedID(), false, []*config.DispatchRule{{
-					Matcher:      []string{"source_db.source_table"},
-					TargetSchema: "target_db",
-					TargetTable:  "target_table",
-				}})
-				require.NoError(t, err)
-				return router
-			}(),
-			ddl: singleTableDDL,
+			name:       "zero router keeps original",
+			router:     zeroRouter,
+			ddl:        singleTableDDL,
+			expectSame: true,
+		},
+		{
+			name:       "no matched rule keeps original",
+			router:     noMatchedRouter,
+			ddl:        singleTableDDL,
+			expectSame: true,
+		},
+		{
+			name:   "source database ddl",
+			router: sourceSchemaRouter,
+			ddl:    sourceDBDDL,
+			check: func(t *testing.T, original, routed *event.DDLEvent) {
+				require.Contains(t, routed.Query, "`target_db`")
+				require.NotContains(t, routed.Query, "`source_db`")
+				require.Equal(t, "source_db", routed.SchemaName)
+				require.Equal(t, "target_db", routed.GetTargetSchemaName())
+				require.Equal(t, "source_db", original.SchemaName)
+			},
+		},
+		{
+			name:   "old database ddl",
+			router: renameRouter,
+			ddl:    oldDBDDL,
+			check: func(t *testing.T, original, routed *event.DDLEvent) {
+				require.Contains(t, routed.Query, "`old_target_db`")
+				require.Equal(t, "old_db", routed.SchemaName)
+				require.Equal(t, "old_target_db", routed.GetTargetSchemaName())
+			},
+		},
+		{
+			name:   "new database ddl",
+			router: renameRouter,
+			ddl:    newDBDDL,
+			check: func(t *testing.T, original, routed *event.DDLEvent) {
+				require.Contains(t, routed.Query, "`new_target_db`")
+				require.Equal(t, "new_db", routed.SchemaName)
+				require.Equal(t, "new_target_db", routed.GetTargetSchemaName())
+			},
+		},
+		{
+			name:   "multi database ddl",
+			router: multiRouter,
+			ddl:    multiDBDDL,
+			check: func(t *testing.T, original, routed *event.DDLEvent) {
+				require.Contains(t, routed.Query, "`target_multi_db`")
+				require.Equal(t, "multi_db", routed.SchemaName)
+				require.Equal(t, "target_multi_db", routed.GetTargetSchemaName())
+			},
+		},
+		{
+			name:   "create source table ddl",
+			router: sourceRouter,
+			ddl:    sourceTableDDL,
+			check: func(t *testing.T, original, routed *event.DDLEvent) {
+				require.Contains(t, routed.Query, "`target_db`.`target_table`")
+				require.NotSame(t, original.TableInfo, routed.TableInfo)
+				require.Equal(t, "target_db", routed.TableInfo.GetTargetSchemaName())
+				require.Equal(t, "target_table", routed.TableInfo.GetTargetTableName())
+			},
+		},
+		{
+			name:   "single table ddl",
+			router: sourceRouter,
+			ddl:    singleTableDDL,
 			check: func(t *testing.T, original, routed *event.DDLEvent) {
 				require.Contains(t, routed.Query, "`target_db`.`target_table`")
 				require.Equal(t, "source_db", routed.GetSchemaName())
@@ -197,24 +259,20 @@ func TestApplyToDDLEvent(t *testing.T) {
 			},
 		},
 		{
-			name: "rename ddl",
-			router: func() Router {
-				router, err := NewRouter(newTestChangefeedID(), false, []*config.DispatchRule{
-					{
-						Matcher:      []string{"old_db.*"},
-						TargetSchema: "old_target_db",
-						TargetTable:  "{table}_old",
-					},
-					{
-						Matcher:      []string{"new_db.*"},
-						TargetSchema: "new_target_db",
-						TargetTable:  "{table}_new",
-					},
-				})
-				require.NoError(t, err)
-				return router
-			}(),
-			ddl: renameDDL,
+			name:   "old table create ddl",
+			router: renameRouter,
+			ddl:    oldOrdersDDL,
+			check: func(t *testing.T, original, routed *event.DDLEvent) {
+				require.Contains(t, routed.Query, "`old_target_db`.`orders_old`")
+				require.NotSame(t, original.TableInfo, routed.TableInfo)
+				require.Equal(t, "old_target_db", routed.TableInfo.GetTargetSchemaName())
+				require.Equal(t, "orders_old", routed.TableInfo.GetTargetTableName())
+			},
+		},
+		{
+			name:   "rename ddl",
+			router: renameRouter,
+			ddl:    renameDDL,
 			check: func(t *testing.T, original, routed *event.DDLEvent) {
 				require.Equal(t, "new_db", routed.SchemaName)
 				require.Equal(t, "orders_archive", routed.TableName)
@@ -241,80 +299,55 @@ func TestApplyToDDLEvent(t *testing.T) {
 			},
 		},
 		{
-			name: "database ddl",
-			router: func() Router {
-				router, err := NewRouter(newTestChangefeedID(), false, []*config.DispatchRule{{
-					Matcher:      []string{"source_db.*"},
-					TargetSchema: "target_db",
-				}})
-				require.NoError(t, err)
-				return router
-			}(),
-			ddl: &event.DDLEvent{
-				Query:      "CREATE DATABASE `source_db`",
-				SchemaName: "source_db",
-			},
+			name:   "multi table t1 create ddl",
+			router: multiRouter,
+			ddl:    multiT1DDL,
 			check: func(t *testing.T, original, routed *event.DDLEvent) {
-				require.Equal(t, "source_db", routed.SchemaName)
-				require.Equal(t, "target_db", routed.GetTargetSchemaName())
-				require.Equal(t, "source_db", routed.GetSchemaName())
-				require.Equal(t, "source_db", original.SchemaName)
+				require.Contains(t, routed.Query, "`target_multi_db`.`t1_routed`")
+				require.NotSame(t, original.TableInfo, routed.TableInfo)
+				require.Equal(t, "target_multi_db", routed.TableInfo.GetTargetSchemaName())
+				require.Equal(t, "t1_routed", routed.TableInfo.GetTargetTableName())
 			},
 		},
 		{
-			name: "multiple table infos only",
-			router: func() Router {
-				router, err := NewRouter(newTestChangefeedID(), false, []*config.DispatchRule{{
-					Matcher:      []string{"source_db.source_table"},
-					TargetSchema: "target_db",
-					TargetTable:  "target_table",
-				}})
-				require.NoError(t, err)
-				return router
-			}(),
-			ddl: &event.DDLEvent{
-				Query: "ALTER TABLE `source_db`.`source_table` ADD COLUMN `c1` INT",
-				// This intentionally tests metadata-only routing; real DDL2Event
-				// should also carry the matching DDL identity and query.
-				MultipleTableInfos: []*common.TableInfo{{
-					TableName: common.TableName{
-						Schema:  "source_db",
-						Table:   "source_table",
-						TableID: 1,
-					},
-				}},
-			},
+			name:   "multi table t2 create ddl",
+			router: multiRouter,
+			ddl:    multiT2DDL,
 			check: func(t *testing.T, original, routed *event.DDLEvent) {
-				require.True(t, &original.MultipleTableInfos[0] != &routed.MultipleTableInfos[0])
+				require.Contains(t, routed.Query, "`target_multi_db`.`t2_routed`")
+				require.NotSame(t, original.TableInfo, routed.TableInfo)
+				require.Equal(t, "target_multi_db", routed.TableInfo.GetTargetSchemaName())
+				require.Equal(t, "t2_routed", routed.TableInfo.GetTargetTableName())
+			},
+		},
+		{
+			name:   "rename tables routes multiple table infos",
+			router: multiRouter,
+			ddl:    renameTablesDDL,
+			check: func(t *testing.T, original, routed *event.DDLEvent) {
+				require.Len(t, routed.MultipleTableInfos, 2)
+				require.Contains(t, routed.Query, "`target_multi_db`.`t1_routed`")
+				require.Contains(t, routed.Query, "`target_multi_db`.`t1_new_routed`")
+				require.Contains(t, routed.Query, "`target_multi_db`.`t2_routed`")
+				require.Contains(t, routed.Query, "`target_multi_db`.`t2_new_routed`")
 				require.NotSame(t, original.MultipleTableInfos[0], routed.MultipleTableInfos[0])
-				require.Equal(t, "source_db", routed.MultipleTableInfos[0].GetSchemaName())
-				require.Equal(t, "source_table", routed.MultipleTableInfos[0].GetTableName())
-				require.Equal(t, "target_db", routed.MultipleTableInfos[0].GetTargetSchemaName())
-				require.Equal(t, "target_table", routed.MultipleTableInfos[0].GetTargetTableName())
+				require.NotSame(t, original.MultipleTableInfos[1], routed.MultipleTableInfos[1])
+				require.Equal(t, "multi_db", routed.MultipleTableInfos[0].GetSchemaName())
+				require.Equal(t, "t1_new", routed.MultipleTableInfos[0].GetTableName())
+				require.Equal(t, "target_multi_db", routed.MultipleTableInfos[0].GetTargetSchemaName())
+				require.Equal(t, "t1_new_routed", routed.MultipleTableInfos[0].GetTargetTableName())
+				require.Equal(t, "multi_db", routed.MultipleTableInfos[1].GetSchemaName())
+				require.Equal(t, "t2_new", routed.MultipleTableInfos[1].GetTableName())
+				require.Equal(t, "target_multi_db", routed.MultipleTableInfos[1].GetTargetSchemaName())
+				require.Equal(t, "t2_new_routed", routed.MultipleTableInfos[1].GetTargetTableName())
 				require.Empty(t, original.MultipleTableInfos[0].TableName.TargetSchema)
 				require.Empty(t, original.MultipleTableInfos[0].TableName.TargetTable)
 			},
 		},
 		{
-			name: "blocked table names only",
-			router: func() Router {
-				router, err := NewRouter(newTestChangefeedID(), false, []*config.DispatchRule{{
-					Matcher:      []string{"source_db.source_table"},
-					TargetSchema: "target_db",
-					TargetTable:  "target_table",
-				}})
-				require.NoError(t, err)
-				return router
-			}(),
-			ddl: &event.DDLEvent{
-				Query: "ALTER TABLE `source_db`.`source_table` ADD INDEX `idx_id`(`id`)",
-				// This intentionally tests metadata-only routing; real DDL2Event
-				// should also carry the matching DDL identity and query.
-				BlockedTableNames: []event.SchemaTableName{{
-					SchemaName: "source_db",
-					TableName:  "source_table",
-				}},
-			},
+			name:   "single table ddl routes blocked table names",
+			router: sourceRouter,
+			ddl:    singleTableDDL,
 			check: func(t *testing.T, original, routed *event.DDLEvent) {
 				require.True(t, &original.BlockedTableNames[0] != &routed.BlockedTableNames[0])
 				require.Equal(t, event.SchemaTableName{
@@ -334,6 +367,10 @@ func TestApplyToDDLEvent(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			routed, err := tc.router.ApplyToDDLEvent(tc.ddl)
 			require.NoError(t, err)
+			if tc.expectSame {
+				require.Same(t, tc.ddl, routed)
+				return
+			}
 			require.NotSame(t, tc.ddl, routed)
 			tc.check(t, tc.ddl, routed)
 		})
@@ -369,15 +406,15 @@ func TestRewriteDDLQueryWithRouting(t *testing.T) {
 	helper := event.NewEventTestHelper(t)
 	defer helper.Close()
 
-	helper.Tk().MustExec("CREATE DATABASE `source_db`")
-	helper.Tk().MustExec("CREATE DATABASE `other_db`")
-	helper.Tk().MustExec("CREATE DATABASE `db1`")
-	helper.Tk().MustExec("CREATE DATABASE `db2`")
+	sourceDBDDL := helper.DDL2Event("CREATE DATABASE `source_db`")
+	otherDBDDL := helper.DDL2Event("CREATE DATABASE `other_db`")
+	db1DDL := helper.DDL2Event("CREATE DATABASE `db1`")
+	db2DDL := helper.DDL2Event("CREATE DATABASE `db2`")
 	noRouterDDL := helper.DDL2Event("CREATE TABLE `source_db`.`test_table` (`id` INT PRIMARY KEY)")
 	noMatchedDDL := helper.DDL2Event("CREATE TABLE `other_db`.`test_table` (`id` INT PRIMARY KEY)")
 	matchedTableDDL := helper.DDL2Event("ALTER TABLE `source_db`.`test_table` ADD COLUMN `c` INT")
 	databaseDDL := helper.DDL2Event("ALTER DATABASE `source_db` CHARACTER SET utf8mb4")
-	helper.DDL2Event("CREATE TABLE `db1`.`t1` (`id` INT PRIMARY KEY)")
+	db1TableDDL := helper.DDL2Event("CREATE TABLE `db1`.`t1` (`id` INT PRIMARY KEY)")
 	renameDDL := helper.DDL2Event("RENAME TABLE `db1`.`t1` TO `db2`.`t2`")
 
 	tests := []struct {
@@ -389,6 +426,46 @@ func TestRewriteDDLQueryWithRouting(t *testing.T) {
 		requiredFragments []string
 		forbiddenFragment string
 	}{
+		{
+			name: "source database ddl rewrites schema",
+			router: newTestRouter(t, false, []*config.DispatchRule{{
+				Matcher:      []string{"source_db.*"},
+				TargetSchema: "target_db",
+			}}),
+			ddl:               sourceDBDDL,
+			expectedChanged:   true,
+			requiredFragments: []string{"`target_db`"},
+			forbiddenFragment: "`source_db`",
+		},
+		{
+			name:            "other database ddl keeps original query",
+			router:          newTestRouter(t, false, []*config.DispatchRule{{Matcher: []string{"source_db.*"}, TargetSchema: "target_db"}}),
+			ddl:             otherDBDDL,
+			expectedChanged: false,
+			expectedQuery:   otherDBDDL.Query,
+		},
+		{
+			name: "db1 database ddl rewrites schema",
+			router: newTestRouter(t, false, []*config.DispatchRule{{
+				Matcher:      []string{"db1.*"},
+				TargetSchema: "target1",
+			}}),
+			ddl:               db1DDL,
+			expectedChanged:   true,
+			requiredFragments: []string{"`target1`"},
+			forbiddenFragment: "`db1`",
+		},
+		{
+			name: "db2 database ddl rewrites schema",
+			router: newTestRouter(t, false, []*config.DispatchRule{{
+				Matcher:      []string{"db2.*"},
+				TargetSchema: "target2",
+			}}),
+			ddl:               db2DDL,
+			expectedChanged:   true,
+			requiredFragments: []string{"`target2`"},
+			forbiddenFragment: "`db2`",
+		},
 		{
 			name:            "no router keeps original query",
 			ddl:             noRouterDDL,
@@ -417,6 +494,18 @@ func TestRewriteDDLQueryWithRouting(t *testing.T) {
 			expectedChanged:   true,
 			requiredFragments: []string{"`target_db`.`test_table_routed`"},
 			forbiddenFragment: "`source_db`.`test_table`",
+		},
+		{
+			name: "db1 table create ddl rewrites table",
+			router: newTestRouter(t, false, []*config.DispatchRule{{
+				Matcher:      []string{"db1.*"},
+				TargetSchema: "target1",
+				TargetTable:  TablePlaceholder,
+			}}),
+			ddl:               db1TableDDL,
+			expectedChanged:   true,
+			requiredFragments: []string{"`target1`.`t1`"},
+			forbiddenFragment: "`db1`.`t1`",
 		},
 		{
 			name: "rename ddl rewrites both tables",
@@ -478,11 +567,19 @@ func TestApplyToDDLEventReturnsOriginalWhenQueryDoesNotRoute(t *testing.T) {
 	helper := event.NewEventTestHelper(t)
 	defer helper.Close()
 
-	helper.Tk().MustExec("CREATE DATABASE `other_db`")
-	helper.DDL2Event("CREATE TABLE `other_db`.`t1` (`id` INT PRIMARY KEY)")
+	otherDBDDL := helper.DDL2Event("CREATE DATABASE `other_db`")
+	otherTableDDL := helper.DDL2Event("CREATE TABLE `other_db`.`t1` (`id` INT PRIMARY KEY)")
 	ddl := helper.DDL2Event("ALTER TABLE `other_db`.`t1` ADD COLUMN `c1` INT")
 
-	routed, err := router.ApplyToDDLEvent(ddl)
+	routed, err := router.ApplyToDDLEvent(otherDBDDL)
+	require.NoError(t, err)
+	require.Same(t, otherDBDDL, routed)
+
+	routed, err = router.ApplyToDDLEvent(otherTableDDL)
+	require.NoError(t, err)
+	require.Same(t, otherTableDDL, routed)
+
+	routed, err = router.ApplyToDDLEvent(ddl)
 	require.NoError(t, err)
 	require.Same(t, ddl, routed)
 }
@@ -497,12 +594,24 @@ func TestApplyToDDLEventRewritesQueryOnlyTableReferences(t *testing.T) {
 	helper := event.NewEventTestHelper(t)
 	defer helper.Close()
 
-	helper.Tk().MustExec("CREATE DATABASE `source_db`")
-	helper.Tk().MustExec("CREATE DATABASE `other_db`")
-	helper.DDL2Event("CREATE TABLE `source_db`.`orders` (`id` INT PRIMARY KEY)")
+	sourceDBDDL := helper.DDL2Event("CREATE DATABASE `source_db`")
+	otherDBDDL := helper.DDL2Event("CREATE DATABASE `other_db`")
+	sourceOrdersDDL := helper.DDL2Event("CREATE TABLE `source_db`.`orders` (`id` INT PRIMARY KEY)")
 	ddl := helper.DDL2Event("CREATE VIEW `other_db`.`v1` AS SELECT * FROM `source_db`.`orders`")
 
-	routed, err := router.ApplyToDDLEvent(ddl)
+	routed, err := router.ApplyToDDLEvent(sourceDBDDL)
+	require.NoError(t, err)
+	require.Contains(t, routed.Query, "`target_db`")
+
+	routed, err = router.ApplyToDDLEvent(otherDBDDL)
+	require.NoError(t, err)
+	require.Same(t, otherDBDDL, routed)
+
+	routed, err = router.ApplyToDDLEvent(sourceOrdersDDL)
+	require.NoError(t, err)
+	require.Contains(t, routed.Query, "`target_db`.`orders_routed`")
+
+	routed, err = router.ApplyToDDLEvent(ddl)
 	require.NoError(t, err)
 	require.NotSame(t, ddl, routed)
 	require.Contains(t, routed.Query, "`other_db`.`v1`")
@@ -529,12 +638,7 @@ func TestRewriteParserBackedDDLQueryError(t *testing.T) {
 		TargetTable:  TablePlaceholder,
 	}})
 
-	ddl := &event.DDLEvent{
-		Query:      "INVALID SQL !!!",
-		SchemaName: "source_db",
-	}
-
-	_, err := router.rewriteParserBackedDDLQuery(ddl)
+	_, _, err := router.rewriteSingleDDLQuery("INVALID SQL !!!")
 	code, ok := errors.RFCCode(err)
 	require.True(t, ok)
 	require.Equal(t, errors.ErrTableRoutingFailed.RFCCode(), code)

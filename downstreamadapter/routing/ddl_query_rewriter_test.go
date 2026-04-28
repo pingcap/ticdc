@@ -380,8 +380,8 @@ func TestResolveDDL(t *testing.T) {
 		require.Len(t, stmts, 1)
 
 		// Test extractTableNames
-			tableNames := extractTableNames(stmts[0])
-			require.Equal(t, ca.expectedTableNames[0], tableNames, "extractTableNames failed for: %s", ca.sql)
+		tableNames := extractTableNames(stmts[0])
+		require.Equal(t, ca.expectedTableNames[0], tableNames, "extractTableNames failed for: %s", ca.sql)
 
 		// Re-parse for rewriteDDLStmtTables since it modifies AST in place
 		stmts, _, err = p.Parse(ca.sql, "", "")

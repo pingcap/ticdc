@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -47,6 +48,8 @@ import (
 	"go.uber.org/zap"
 )
 
+const disableTiDBDistTaskFailpoint = "github.com/pingcap/tidb/pkg/domain/MockDisableDistTask"
+
 // CAUTION:
 // ALL METHODS IN THIS FILE ARE FOR TESTING ONLY!!!
 // DO NOT USE THEM IN OTHER PLACES.
@@ -58,6 +61,8 @@ type EventTestHelper struct {
 	storage kv.Storage
 	domain  *domain.Domain
 	mounter Mounter
+
+	originalEnableDistTask bool
 
 	tableInfos map[string]*common.TableInfo
 	// each partition table's partition ID, Name -> ID.
@@ -73,18 +78,30 @@ func NewEventTestHelperWithTimeZone(t testing.TB, tz *time.Location) *EventTestH
 	})
 	vardef.SetSchemaLease(time.Second)
 	session.DisableStats4Test()
+
+	// EventTestHelper executes TiDB DDL only to synthesize CDC test events.
+	// mockstore does not provide managed dist task nodes, so prevent bootstrap
+	// from starting the dist task framework and keep reorg DDLs on the local path.
+	originalEnableDistTask := vardef.EnableDistTask.Load()
+	vardef.EnableDistTask.Store(false)
+	require.NoError(t, failpoint.Enable(disableTiDBDistTaskFailpoint, "return(true)"))
+	defer func() {
+		require.NoError(t, failpoint.Disable(disableTiDBDistTaskFailpoint))
+	}()
+
 	domain, err := session.BootstrapSession(store)
 	require.NoError(t, err)
 	domain.SetStatsUpdating(true)
 	tk := testkit.NewTestKit(t, store)
 	return &EventTestHelper{
-		t:            t,
-		tk:           tk,
-		storage:      store,
-		domain:       domain,
-		mounter:      NewMounter(tz, config.GetDefaultReplicaConfig().Integrity),
-		tableInfos:   make(map[string]*common.TableInfo),
-		partitionIDs: make(map[string]map[string]int64),
+		t:                      t,
+		tk:                     tk,
+		storage:                store,
+		domain:                 domain,
+		mounter:                NewMounter(tz, config.GetDefaultReplicaConfig().Integrity),
+		originalEnableDistTask: originalEnableDistTask,
+		tableInfos:             make(map[string]*common.TableInfo),
+		partitionIDs:           make(map[string]map[string]int64),
 	}
 }
 
@@ -155,6 +172,7 @@ func (s *EventTestHelper) GetTableInfo(job *timodel.Job) *common.TableInfo {
 func (s *EventTestHelper) DDL2Job(ddl string) *timodel.Job {
 	requireSingleDDLStmt(s.t, ddl)
 
+	vardef.EnableDistTask.Store(false)
 	s.tk.MustExec(ddl)
 	jobs, err := tiddl.GetLastNHistoryDDLJobs(s.GetCurrentMeta(), 1)
 	require.Nil(s.t, err)
@@ -231,6 +249,8 @@ func (s *EventTestHelper) BatchCreateTableDDLs2Event(schema string, ddls ...stri
 	require.NotEmpty(s.t, ddls)
 
 	tableInfos := make([]*timodel.TableInfo, 0, len(ddls))
+	queries, err := SplitQueries(strings.Join(ddls, ";"))
+	require.NoError(s.t, err)
 	for _, ddl := range ddls {
 		requireSingleDDLStmt(s.t, ddl)
 
@@ -248,7 +268,7 @@ func (s *EventTestHelper) BatchCreateTableDDLs2Event(schema string, ddls ...stri
 		tableInfos = append(tableInfos, tableInfo)
 	}
 
-	err := tidbexecutor.BRIECreateTables(s.tk.Session(), map[string][]*timodel.TableInfo{
+	err = tidbexecutor.BRIECreateTables(s.tk.Session(), map[string][]*timodel.TableInfo{
 		schema: tableInfos,
 	}, "")
 	require.NoError(s.t, err)
@@ -258,6 +278,7 @@ func (s *EventTestHelper) BatchCreateTableDDLs2Event(schema string, ddls ...stri
 	require.Len(s.t, jobs, 1)
 	jobs[0].State = timodel.JobStateDone
 	require.Equal(s.t, timodel.ActionCreateTables, jobs[0].Type)
+	jobs[0].Query = strings.Join(queries, "")
 
 	s.ApplyJob(jobs[0])
 	return s.job2Event(jobs[0])
@@ -682,6 +703,7 @@ func (s *EventTestHelper) GetCurrentMeta() meta.Reader {
 func (s *EventTestHelper) Close() {
 	s.domain.Close()
 	s.storage.Close() //nolint:errcheck
+	vardef.EnableDistTask.Store(s.originalEnableDistTask)
 }
 
 func toTableInfosKey(schema, table string) string {
