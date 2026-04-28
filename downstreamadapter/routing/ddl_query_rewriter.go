@@ -22,7 +22,6 @@ import (
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/format"
-	"github.com/pingcap/tidb/pkg/util/filter"
 )
 
 // rewriteParserBackedDDLQuery rewrites a parser-supported DDL query by applying routing rules.
@@ -40,14 +39,13 @@ func (r Router) rewriteParserBackedDDLQuery(ddl *commonEvent.DDLEvent) (string, 
 		}
 	}
 
-	defaultSchema := ddl.GetSchemaName()
 	var (
 		builder strings.Builder
 		routed  bool
 	)
 	for i := range queries {
 		query := queries[i]
-		newQuery, changed, err := r.rewriteSingleDDLQuery(query, defaultSchema)
+		newQuery, changed, err := r.rewriteSingleDDLQuery(query)
 		if err != nil {
 			return "", err
 		}
@@ -67,36 +65,33 @@ func (r Router) rewriteParserBackedDDLQuery(ddl *commonEvent.DDLEvent) (string, 
 	return builder.String(), nil
 }
 
-func (r Router) rewriteSingleDDLQuery(query string, defaultSchema string) (string, bool, error) {
+func (r Router) rewriteSingleDDLQuery(query string) (string, bool, error) {
 	p := parser.New()
 	stmt, err := p.ParseOneStmt(query, "", "")
 	if err != nil {
 		return "", false, errors.WrapError(errors.ErrTableRoutingFailed, err)
 	}
 
-	sourceTables, err := fetchDDLTables(defaultSchema, stmt)
-	if err != nil {
-		return "", false, err
-	}
+	sourceTables := extractTableNames(stmt)
 	if len(sourceTables) == 0 {
 		return query, false, nil
 	}
 
 	var (
 		routed       bool
-		targetTables = make([]*filter.Table, 0, len(sourceTables))
+		targetTables = make([]commonEvent.SchemaTableName, 0, len(sourceTables))
 	)
 	for _, srcTable := range sourceTables {
-		targetSchema, targetTable, changed, err := r.route(srcTable.Schema, srcTable.Name)
+		targetSchema, targetTable, changed, err := r.route(srcTable.SchemaName, srcTable.TableName)
 		if err != nil {
 			return "", false, err
 		}
 		if changed {
 			routed = true
 		}
-		targetTables = append(targetTables, &filter.Table{
-			Schema: targetSchema,
-			Name:   targetTable,
+		targetTables = append(targetTables, commonEvent.SchemaTableName{
+			SchemaName: targetSchema,
+			TableName:  targetTable,
 		})
 	}
 
@@ -104,11 +99,11 @@ func (r Router) rewriteSingleDDLQuery(query string, defaultSchema string) (strin
 		return query, false, nil
 	}
 
-	rewritten, err := rewriteDDLStmtTables(stmt, targetTables)
+	newQuery, err := rewriteDDLStmtTables(stmt, targetTables)
 	if err != nil {
 		return "", false, err
 	}
-	return rewritten, true, nil
+	return newQuery, true, nil
 }
 
 func (r Router) rewriteAddFullTextIndexQuery(query, targetSchema, targetTable string) (string, error) {
@@ -137,8 +132,7 @@ func (r Router) rewriteAddFullTextIndexQuery(query, targetSchema, targetTable st
 	}
 	addIndexStart += tableStart
 
-	suffix := strings.TrimLeft(query[addIndexStart:], " \n\r\t\f")
-	return query[:tableStart] + " " + targetTableName + " " + suffix, nil
+	return query[:tableStart] + " " + targetTableName + " " + query[addIndexStart:], nil
 }
 
 func (r Router) rewriteCreateHybridIndexQuery(query, targetSchema, targetTable string) (string, error) {
@@ -164,8 +158,7 @@ func (r Router) rewriteCreateHybridIndexQuery(query, targetSchema, targetTable s
 		return "", errors.ErrTableRoutingFailed.GenWithStack(
 			"rewrite parser unsupported ddl query failed, query: %s", query)
 	}
-	suffix := strings.TrimLeft(query[columnListStart:], " \n\r\t\f")
-	return query[:tableStart] + targetTableName + suffix, nil
+	return query[:tableStart] + targetTableName + query[columnListStart:], nil
 }
 
 // quoteDDLIdentifier quotes routed target names so route-generated identifiers are always valid SQL.
@@ -176,17 +169,12 @@ func quoteDDLIdentifier(name string) string {
 // tableNameExtractor extracts table names from DDL AST nodes.
 // ref: https://github.com/pingcap/tidb/blob/09feccb529be2830944e11f5fed474020f50370f/server/sql_info_fetcher.go#L46
 type tableNameExtractor struct {
-	curDB string
-	names []*filter.Table
+	names []commonEvent.SchemaTableName
 }
 
 func (tne *tableNameExtractor) Enter(in ast.Node) (ast.Node, bool) {
 	if t, ok := in.(*ast.TableName); ok {
-		tb := &filter.Table{Schema: t.Schema.O, Name: t.Name.O}
-		if tb.Schema == "" {
-			tb.Schema = tne.curDB
-		}
-		tne.names = append(tne.names, tb)
+		tne.names = append(tne.names, commonEvent.SchemaTableName{SchemaName: t.Schema.O, TableName: t.Name.O})
 		return in, true
 	}
 	return in, false
@@ -196,48 +184,42 @@ func (tne *tableNameExtractor) Leave(in ast.Node) (ast.Node, bool) {
 	return in, true
 }
 
-// fetchDDLTables returns tables in DDL statement.
+// extractTableNames returns tables in DDL statement.
 // Because we use visitor pattern, first tableName is always upper-most table in AST.
 // Specifically:
 //   - for `CREATE TABLE ... LIKE` DDL, result contains [sourceTable, sourceRefTable]
 //   - for RENAME TABLE DDL, result contains [old1, new1, old2, new2, old3, new3, ...] because of TiDB parser
 //   - for other DDL, order of tableName is the node visit order.
-func fetchDDLTables(schema string, stmt ast.StmtNode) ([]*filter.Table, error) {
-	switch stmt.(type) {
-	case ast.DDLNode:
-	default:
-		return nil, errors.ErrTableRoutingFailed.GenWithStack(
-			"fetch ddl tables got non ddl statement: %T", stmt)
-	}
-
+func extractTableNames(stmt ast.StmtNode) []commonEvent.SchemaTableName {
 	// Special cases: schema related SQLs don't have tableName
 	switch v := stmt.(type) {
 	case *ast.AlterDatabaseStmt:
-		dbName := v.Name.O
-		if dbName == "" {
-			dbName = schema
-		}
-		return []*filter.Table{{Schema: dbName, Name: ""}}, nil
+		return []commonEvent.SchemaTableName{{SchemaName: v.Name.O, TableName: ""}}
 	case *ast.CreateDatabaseStmt:
-		return []*filter.Table{{Schema: v.Name.O, Name: ""}}, nil
+		return []commonEvent.SchemaTableName{{SchemaName: v.Name.O, TableName: ""}}
 	case *ast.DropDatabaseStmt:
-		return []*filter.Table{{Schema: v.Name.O, Name: ""}}, nil
+		return []commonEvent.SchemaTableName{{SchemaName: v.Name.O, TableName: ""}}
 	}
 
 	e := &tableNameExtractor{
-		curDB: schema,
-		names: make([]*filter.Table, 0),
+		names: make([]commonEvent.SchemaTableName, 0),
 	}
 	stmt.Accept(e)
 
-	return e.names, nil
+	return e.names
 }
 
-// tableRenameVisitor renames tables in DDL AST nodes.
+// tableRenameVisitor rewrites *ast.TableName nodes in the same traversal order
+// used by tableNameExtractor. Each visited table consumes one entry from
+// targetNames, so the caller can detect too few or too many target names after
+// traversal.
 type tableRenameVisitor struct {
-	targetNames []*filter.Table
-	i           int
-	hasErr      bool
+	// targetNames contains routed names aligned with tableNameExtractor output.
+	targetNames []commonEvent.SchemaTableName
+	// i is the next targetNames index to consume.
+	i int
+	// hasErr records targetNames exhaustion because ast.Visitor cannot return an error.
+	hasErr bool
 }
 
 func (v *tableRenameVisitor) Enter(in ast.Node) (ast.Node, bool) {
@@ -249,8 +231,8 @@ func (v *tableRenameVisitor) Enter(in ast.Node) (ast.Node, bool) {
 			v.hasErr = true
 			return in, true
 		}
-		t.Schema = ast.NewCIStr(v.targetNames[v.i].Schema)
-		t.Name = ast.NewCIStr(v.targetNames[v.i].Name)
+		t.Schema = ast.NewCIStr(v.targetNames[v.i].SchemaName)
+		t.Name = ast.NewCIStr(v.targetNames[v.i].TableName)
 		v.i++
 		return in, true
 	}
@@ -265,35 +247,28 @@ func (v *tableRenameVisitor) Leave(in ast.Node) (ast.Node, bool) {
 }
 
 // rewriteDDLStmtTables renames tables in DDL by given `targetTables`.
-// Argument `targetTables` should have the same structure as the return value of fetchDDLTables.
+// Argument `targetTables` should have the same structure as the return value of extractTableNames.
 // Returned DDL is formatted like StringSingleQuotes, KeyWordUppercase and NameBackQuotes.
-func rewriteDDLStmtTables(stmt ast.StmtNode, targetTables []*filter.Table) (string, error) {
-	switch stmt.(type) {
-	case ast.DDLNode:
-	default:
-		return "", errors.ErrTableRoutingFailed.GenWithStack(
-			"rewrite ddl query got non ddl statement: %T", stmt)
-	}
-
+func rewriteDDLStmtTables(stmt ast.StmtNode, targetTables []commonEvent.SchemaTableName) (string, error) {
 	switch v := stmt.(type) {
 	case *ast.AlterDatabaseStmt:
 		if len(targetTables) != 1 {
 			return "", errors.ErrTableRoutingFailed.GenWithStack(
 				"rewrite ddl query got unexpected target table count: expected 1, got %d", len(targetTables))
 		}
-		v.Name = ast.NewCIStr(targetTables[0].Schema)
+		v.Name = ast.NewCIStr(targetTables[0].SchemaName)
 	case *ast.CreateDatabaseStmt:
 		if len(targetTables) != 1 {
 			return "", errors.ErrTableRoutingFailed.GenWithStack(
 				"rewrite ddl query got unexpected target table count: expected 1, got %d", len(targetTables))
 		}
-		v.Name = ast.NewCIStr(targetTables[0].Schema)
+		v.Name = ast.NewCIStr(targetTables[0].SchemaName)
 	case *ast.DropDatabaseStmt:
 		if len(targetTables) != 1 {
 			return "", errors.ErrTableRoutingFailed.GenWithStack(
 				"rewrite ddl query got unexpected target table count: expected 1, got %d", len(targetTables))
 		}
-		v.Name = ast.NewCIStr(targetTables[0].Schema)
+		v.Name = ast.NewCIStr(targetTables[0].SchemaName)
 	default:
 		visitor := &tableRenameVisitor{
 			targetNames: targetTables,
@@ -312,6 +287,13 @@ func rewriteDDLStmtTables(stmt ast.StmtNode, targetTables []*filter.Table) (stri
 
 	bf := &bytes.Buffer{}
 	err := stmt.Restore(&format.RestoreCtx{
+		// TiDB stores the original SQL in sessionctx.QueryString and copies it into
+		// DDL job.Query:
+		// https://github.com/pingcap/tidb/blob/8f2630e53d5d/pkg/session/session.go#L2905
+		// https://github.com/pingcap/tidb/blob/8f2630e53d5d/pkg/ddl/executor.go#L6952-L6957
+		// After routing mutates the AST, CDC must serialize it again. Keep the
+		// parser's standard restore style, TiDB special comments, and default
+		// charset handling consistent with CDC's DDL query normalization.
 		Flags: format.DefaultRestoreFlags | format.RestoreTiDBSpecialComment | format.RestoreStringWithoutDefaultCharset,
 		In:    bf,
 	})

@@ -46,6 +46,7 @@ func TestRewriteDDLQueryWithRoutingSupportsParserBackedDDLTypes(t *testing.T) {
 		"CREATE TABLE `source_db`.`t1` (`id` INT PRIMARY KEY)",
 		"CREATE TABLE `source_db`.`t2` (`id` INT PRIMARY KEY)",
 	)
+	createTablesDDL.Query = "CREATE TABLE `source_db`.`t1` (`id` INT PRIMARY KEY);CREATE TABLE `source_db`.`t2` (`id` INT PRIMARY KEY);"
 
 	cases := map[timodel.ActionType]supportedDDLRewriteCase{
 		timodel.ActionCreateSchema: schemaRewriteCase(
@@ -77,8 +78,8 @@ func TestRewriteDDLQueryWithRoutingSupportsParserBackedDDLTypes(t *testing.T) {
 				"CREATE TABLE `target_db`.`t2_r`",
 			},
 			forbiddenFragments: []string{
-				"CREATE TABLE `t1`",
-				"CREATE TABLE `t2`",
+				"`source_db`.`t1`",
+				"`source_db`.`t2`",
 			},
 		},
 		timodel.ActionDropTable: singleTableRewriteCase(
@@ -492,6 +493,7 @@ func TestApplyToDDLEventSupportsCreateTables(t *testing.T) {
 		"CREATE TABLE `source_db`.`t1` (`id` INT PRIMARY KEY)",
 		"CREATE TABLE `source_db`.`t2` (`id` INT PRIMARY KEY)",
 	)
+	ddl.Query = "CREATE TABLE `source_db`.`t1` (`id` INT PRIMARY KEY);CREATE TABLE `source_db`.`t2` (`id` INT PRIMARY KEY);"
 
 	routed, err := router.ApplyToDDLEvent(ddl)
 	require.NoError(t, err)
