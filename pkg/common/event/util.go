@@ -39,6 +39,7 @@ import (
 	// For details, refer to: https://github.com/pingcap/parser/issues/43
 	_ "github.com/pingcap/tidb/pkg/parser/test_driver"
 	"github.com/pingcap/tidb/pkg/session"
+	"github.com/pingcap/tidb/pkg/sessionctx"
 	"github.com/pingcap/tidb/pkg/sessionctx/vardef"
 	"github.com/pingcap/tidb/pkg/store/mockstore"
 	"github.com/pingcap/tidb/pkg/testkit"
@@ -80,8 +81,8 @@ func NewEventTestHelperWithTimeZone(t testing.TB, tz *time.Location) *EventTestH
 	session.DisableStats4Test()
 
 	// EventTestHelper executes TiDB DDL only to synthesize CDC test events.
-	// mockstore does not provide managed dist task nodes, so prevent bootstrap
-	// from starting the dist task framework and keep reorg DDLs on the local path.
+	// mockstore does not provide managed dist task nodes, so keep reorg DDLs
+	// off the dist task path and skip the bootstrap DXF loop when failpoints are active.
 	originalEnableDistTask := vardef.EnableDistTask.Load()
 	vardef.EnableDistTask.Store(false)
 	require.NoError(t, failpoint.Enable(disableTiDBDistTaskFailpoint, "return(true)"))
@@ -172,6 +173,13 @@ func (s *EventTestHelper) GetTableInfo(job *timodel.Job) *common.TableInfo {
 func (s *EventTestHelper) DDL2Job(ddl string) *timodel.Job {
 	requireSingleDDLStmt(s.t, ddl)
 
+	// EventTestHelper uses mockstore only to synthesize CDC test events from TiDB DDL jobs.
+	// In TiDB NextGen, reorg DDLs such as ADD INDEX and REORGANIZE PARTITION calculate
+	// DXF resources through managed dist task nodes. mockstore has no such nodes, so run
+	// the helper DDL in TiDB's bootstrap/upgrade test mode. TiDB upstream uses the same
+	// sessionctx.Initing marker in bootstrap tests to avoid NextGen resource calculation.
+	s.tk.Session().SetValue(sessionctx.Initing, true)
+	defer s.tk.Session().ClearValue(sessionctx.Initing)
 	vardef.EnableDistTask.Store(false)
 	s.tk.MustExec(ddl)
 	jobs, err := tiddl.GetLastNHistoryDDLJobs(s.GetCurrentMeta(), 1)
@@ -268,6 +276,8 @@ func (s *EventTestHelper) BatchCreateTableDDLs2Event(schema string, ddls ...stri
 		tableInfos = append(tableInfos, tableInfo)
 	}
 
+	s.tk.Session().SetValue(sessionctx.Initing, true)
+	defer s.tk.Session().ClearValue(sessionctx.Initing)
 	err = tidbexecutor.BRIECreateTables(s.tk.Session(), map[string][]*timodel.TableInfo{
 		schema: tableInfos,
 	}, "")

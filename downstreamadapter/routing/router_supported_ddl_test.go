@@ -1007,52 +1007,6 @@ func TestRewriteDDLQueryWithRoutingSupportsParserBackedDDLTypes(t *testing.T) {
 	}
 }
 
-func TestRewriteParserUnsupportedIndexDDLQuery(t *testing.T) {
-	t.Parallel()
-
-	var router Router
-	cases := []struct {
-		name          string
-		query         string
-		rewrite       func(string) (string, error)
-		expectedQuery string
-	}{
-		{
-			name:  "add fulltext index without index name",
-			query: "ALTER TABLE t1 ADD FULLTEXT INDEX (b) WITH PARSER standard;",
-			rewrite: func(query string) (string, error) {
-				return router.rewriteAddFullTextIndexQuery(query, "target_db", "t1_r")
-			},
-			expectedQuery: "ALTER TABLE `target_db`.`t1_r` ADD FULLTEXT INDEX (b) WITH PARSER standard;",
-		},
-		{
-			name:  "add fulltext index with qualified table",
-			query: "ALTER TABLE `source_db`.`t1` ADD FULLTEXT INDEX `ft_idx`(`c1`)",
-			rewrite: func(query string) (string, error) {
-				return router.rewriteAddFullTextIndexQuery(query, "target_db", "t1_r")
-			},
-			expectedQuery: "ALTER TABLE `target_db`.`t1_r` ADD FULLTEXT INDEX `ft_idx`(`c1`)",
-		},
-		{
-			name:  "create hybrid index",
-			query: "CREATE HYBRID INDEX i_idx ON t1(b, c, d, e, g) PARAMETER 'hybrid_index_param';",
-			rewrite: func(query string) (string, error) {
-				return router.rewriteCreateHybridIndexQuery(query, "target_db", "t1_r")
-			},
-			expectedQuery: "CREATE HYBRID INDEX i_idx ON `target_db`.`t1_r`(b, c, d, e, g) PARAMETER 'hybrid_index_param';",
-		},
-	}
-
-	for _, tc := range cases {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			newQuery, err := tc.rewrite(tc.query)
-			require.NoError(t, err)
-			require.Equal(t, tc.expectedQuery, newQuery)
-		})
-	}
-}
-
 func TestApplyToDDLEventSupportsCreateTables(t *testing.T) {
 	router := newTestRouter(t, false, []*config.DispatchRule{{
 		Matcher:      []string{"source_db.*"},

@@ -111,24 +111,18 @@ func (r Router) ApplyToDDLEvent(ddl *commonEvent.DDLEvent) (*commonEvent.DDLEven
 		return ddl, nil
 	}
 
-	targetSchemaName, targetTableName, nameChanged, err := r.route(ddl.GetSchemaName(), ddl.GetTableName())
+	switch model.ActionType(ddl.Type) {
+	case cdcfilter.ActionAddFullTextIndex, cdcfilter.ActionCreateHybridIndex:
+		return nil, errors.ErrTableRoutingFailed.GenWithStack(
+			"table routing does not support ddl type %d, query: %s", ddl.Type, ddl.Query)
+	}
+
+	targetSchemaName, targetTableName, _, err := r.route(ddl.GetSchemaName(), ddl.GetTableName())
 	if err != nil {
 		return nil, err
 	}
 
-	newQuery := ddl.Query
-	switch model.ActionType(ddl.Type) {
-	case cdcfilter.ActionAddFullTextIndex:
-		if nameChanged {
-			newQuery, err = r.rewriteAddFullTextIndexQuery(ddl.Query, targetSchemaName, targetTableName)
-		}
-	case cdcfilter.ActionCreateHybridIndex:
-		if nameChanged {
-			newQuery, err = r.rewriteCreateHybridIndexQuery(ddl.Query, targetSchemaName, targetTableName)
-		}
-	default:
-		newQuery, err = r.rewriteParserBackedDDLQuery(ddl)
-	}
+	newQuery, err := r.rewriteParserBackedDDLQuery(ddl)
 	if err != nil {
 		return nil, err
 	}

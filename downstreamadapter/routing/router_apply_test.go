@@ -20,6 +20,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	cdcfilter "github.com/pingcap/ticdc/pkg/filter"
 	"github.com/stretchr/testify/require"
 )
 
@@ -644,7 +645,7 @@ func TestRewriteParserBackedDDLQueryError(t *testing.T) {
 	require.Equal(t, errors.ErrTableRoutingFailed.RFCCode(), code)
 }
 
-func TestRewriteAddFullTextIndexQueryError(t *testing.T) {
+func TestApplyToDDLEventRejectsParserUnsupportedIndexDDL(t *testing.T) {
 	t.Parallel()
 
 	router := newTestRouter(t, false, []*config.DispatchRule{{
@@ -653,19 +654,38 @@ func TestRewriteAddFullTextIndexQueryError(t *testing.T) {
 		TargetTable:  "{table}_r",
 	}})
 
-	_, err := router.rewriteAddFullTextIndexQuery("NOT AN ALTER TABLE", "target_db", "t1_r")
-	require.True(t, errors.ErrTableRoutingFailed.Equal(err))
-}
+	cases := []struct {
+		name      string
+		action    byte
+		tableName string
+	}{
+		{
+			name:      "add fulltext index",
+			action:    byte(cdcfilter.ActionAddFullTextIndex),
+			tableName: "t1",
+		},
+		{
+			name:      "create hybrid index",
+			action:    byte(cdcfilter.ActionCreateHybridIndex),
+			tableName: "t2",
+		},
+	}
 
-func TestRewriteCreateHybridIndexQueryError(t *testing.T) {
-	t.Parallel()
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-	router := newTestRouter(t, false, []*config.DispatchRule{{
-		Matcher:      []string{"source_db.*"},
-		TargetSchema: "target_db",
-		TargetTable:  "{table}_r",
-	}})
-
-	_, err := router.rewriteCreateHybridIndexQuery("NOT A CREATE HYBRID INDEX", "target_db", "t1_r")
-	require.True(t, errors.ErrTableRoutingFailed.Equal(err))
+			// These CDC-local action types are derived from parser-unsupported DDLs,
+			// so EventTestHelper cannot synthesize them through TiDB parser execution.
+			ddl := &event.DDLEvent{
+				Type:       tc.action,
+				SchemaName: "source_db",
+				TableName:  tc.tableName,
+			}
+			_, err := router.ApplyToDDLEvent(ddl)
+			require.True(t, errors.ErrTableRoutingFailed.Equal(err))
+			require.Contains(t, err.Error(), "table routing does not support ddl type")
+		})
+	}
 }

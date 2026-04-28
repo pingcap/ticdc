@@ -106,66 +106,6 @@ func (r Router) rewriteSingleDDLQuery(query string) (string, bool, error) {
 	return newQuery, true, nil
 }
 
-func (r Router) rewriteAddFullTextIndexQuery(query, targetSchema, targetTable string) (string, error) {
-	const (
-		alterTable       = "ALTER TABLE"
-		addFullTextIndex = "ADD FULLTEXT INDEX"
-	)
-
-	// The TiDB parser used here does not recognize this DDL yet.
-	// CDC receives normalized SQL like:
-	//   ALTER TABLE `source_db`.`t1` ADD FULLTEXT INDEX `ft_idx`(`c1`)
-	// We only replace the table after ALTER TABLE:
-	//   ALTER TABLE `target_db`.`t1_r` ADD FULLTEXT INDEX `ft_idx`(`c1`)
-	targetTableName := quoteDDLIdentifier(targetSchema) + "." + quoteDDLIdentifier(targetTable)
-	upperQuery := strings.ToUpper(query)
-	if !strings.HasPrefix(upperQuery, alterTable) {
-		return "", errors.ErrTableRoutingFailed.GenWithStack(
-			"rewrite parser unsupported ddl query failed, query: %s", query)
-	}
-
-	tableStart := len(alterTable)
-	addIndexStart := strings.Index(upperQuery[tableStart:], addFullTextIndex)
-	if addIndexStart < 0 || strings.TrimSpace(query[tableStart:tableStart+addIndexStart]) == "" {
-		return "", errors.ErrTableRoutingFailed.GenWithStack(
-			"rewrite parser unsupported ddl query failed, query: %s", query)
-	}
-	addIndexStart += tableStart
-
-	return query[:tableStart] + " " + targetTableName + " " + query[addIndexStart:], nil
-}
-
-func (r Router) rewriteCreateHybridIndexQuery(query, targetSchema, targetTable string) (string, error) {
-	const createHybridIndex = "CREATE HYBRID INDEX"
-
-	// The TiDB parser used here does not recognize this DDL yet.
-	// CDC receives normalized SQL like:
-	//   CREATE HYBRID INDEX i_idx ON `source_db`.`t1`(b, c) PARAMETER '...'
-	// We only replace the table after ON:
-	//   CREATE HYBRID INDEX i_idx ON `target_db`.`t1_r`(b, c) PARAMETER '...'
-	targetTableName := quoteDDLIdentifier(targetSchema) + "." + quoteDDLIdentifier(targetTable)
-	upperQuery := strings.ToUpper(query)
-	columnListStart := strings.IndexByte(query, '(')
-	onStart := -1
-	if columnListStart >= 0 {
-		onStart = strings.LastIndex(upperQuery[:columnListStart], " ON ")
-	}
-	tableStart := onStart + len(" ON ")
-	if !strings.HasPrefix(upperQuery, createHybridIndex) ||
-		columnListStart < 0 ||
-		onStart < 0 ||
-		strings.TrimSpace(query[tableStart:columnListStart]) == "" {
-		return "", errors.ErrTableRoutingFailed.GenWithStack(
-			"rewrite parser unsupported ddl query failed, query: %s", query)
-	}
-	return query[:tableStart] + targetTableName + query[columnListStart:], nil
-}
-
-// quoteDDLIdentifier quotes routed target names so route-generated identifiers are always valid SQL.
-func quoteDDLIdentifier(name string) string {
-	return "`" + strings.ReplaceAll(name, "`", "``") + "`"
-}
-
 // tableNameExtractor extracts table names from DDL AST nodes.
 // ref: https://github.com/pingcap/tidb/blob/09feccb529be2830944e11f5fed474020f50370f/server/sql_info_fetcher.go#L46
 type tableNameExtractor struct {
