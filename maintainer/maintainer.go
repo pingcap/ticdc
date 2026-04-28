@@ -47,7 +47,8 @@ import (
 )
 
 const (
-	periodEventInterval = time.Millisecond * 100
+	//periodEventInterval = time.Millisecond * 100
+	periodEventInterval = time.Second * 120
 	periodRedoInterval  = time.Second * 1
 )
 
