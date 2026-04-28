@@ -21,6 +21,10 @@ import (
 )
 
 func TestCheckBalanceStatus(t *testing.T) {
+	require.Equal(t, 0, CheckBalanceStatus(map[node.ID]int{
+		"node1": 2,
+	}, map[node.ID]*node.Info{}))
+
 	// 4 tasks assigned 2 servers,and an empty server
 	require.Equal(t, 1, CheckBalanceStatus(map[node.ID]int{
 		"node1": 2,
