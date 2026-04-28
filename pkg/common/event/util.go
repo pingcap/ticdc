@@ -253,6 +253,8 @@ func (s *EventTestHelper) DDL2Event(ddl string) *DDLEvent {
 
 // BatchCreateTableDDLs2Event executes CREATE TABLE DDLs through TiDB's batch
 // create table path and returns the resulting ActionCreateTables event.
+// TiDB only merges CREATE TABLE jobs in the same schema:
+// https://github.com/pingcap/tidb/blob/8f2630e53d5d/pkg/ddl/job_submitter.go#L152-L159
 func (s *EventTestHelper) BatchCreateTableDDLs2Event(schema string, ddls ...string) *DDLEvent {
 	require.NotEmpty(s.t, ddls)
 

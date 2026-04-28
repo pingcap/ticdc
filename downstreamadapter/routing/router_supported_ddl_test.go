@@ -1017,6 +1017,8 @@ func TestApplyToDDLEventSupportsCreateTables(t *testing.T) {
 	helper := event.NewEventTestHelper(t)
 	defer helper.Close()
 	schemaDDL := helper.DDL2Event("CREATE DATABASE `source_db`")
+	// TiDB ActionCreateTables is same-schema only. Cross-schema CREATE TABLE
+	// statements are emitted as separate DDL jobs upstream, not one ActionCreateTables event.
 	ddl := helper.BatchCreateTableDDLs2Event("source_db",
 		"CREATE TABLE `source_db`.`t1` (`id` INT PRIMARY KEY)",
 		"CREATE TABLE `source_db`.`t2` (`id` INT PRIMARY KEY)",

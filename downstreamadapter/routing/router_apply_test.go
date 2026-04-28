@@ -598,7 +598,9 @@ func TestApplyToDDLEventRewritesQueryOnlyTableReferences(t *testing.T) {
 	sourceDBDDL := helper.DDL2Event("CREATE DATABASE `source_db`")
 	otherDBDDL := helper.DDL2Event("CREATE DATABASE `other_db`")
 	sourceOrdersDDL := helper.DDL2Event("CREATE TABLE `source_db`.`orders` (`id` INT PRIMARY KEY)")
+	otherChildDDL := helper.DDL2Event("CREATE TABLE `other_db`.`child` (`id` INT PRIMARY KEY, `order_id` INT)")
 	ddl := helper.DDL2Event("CREATE VIEW `other_db`.`v1` AS SELECT * FROM `source_db`.`orders`")
+	fkDDL := helper.DDL2Event("ALTER TABLE `other_db`.`child` ADD CONSTRAINT `fk_order` FOREIGN KEY (`order_id`) REFERENCES `source_db`.`orders`(`id`)")
 
 	routed, err := router.ApplyToDDLEvent(sourceDBDDL)
 	require.NoError(t, err)
@@ -612,6 +614,10 @@ func TestApplyToDDLEventRewritesQueryOnlyTableReferences(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, routed.Query, "`target_db`.`orders_routed`")
 
+	routed, err = router.ApplyToDDLEvent(otherChildDDL)
+	require.NoError(t, err)
+	require.Same(t, otherChildDDL, routed)
+
 	routed, err = router.ApplyToDDLEvent(ddl)
 	require.NoError(t, err)
 	require.NotSame(t, ddl, routed)
@@ -620,6 +626,103 @@ func TestApplyToDDLEventRewritesQueryOnlyTableReferences(t *testing.T) {
 	require.NotContains(t, routed.Query, "`source_db`.`orders`")
 	require.Equal(t, "other_db", routed.GetTargetSchemaName())
 	require.Equal(t, "v1", routed.GetTargetTableName())
+
+	routed, err = router.ApplyToDDLEvent(fkDDL)
+	require.NoError(t, err)
+	require.NotSame(t, fkDDL, routed)
+	require.Contains(t, routed.Query, "REFERENCES `target_db`.`orders_routed`")
+	require.NotContains(t, routed.Query, "REFERENCES `source_db`.`orders`")
+	require.Equal(t, "other_db", routed.GetTargetSchemaName())
+	require.Equal(t, "child", routed.GetTargetTableName())
+}
+
+func TestApplyToDDLEventRewritesCrossDatabaseDDLReferences(t *testing.T) {
+	router := newTestRouter(t, false, []*config.DispatchRule{
+		{
+			Matcher:      []string{"cross_src.*"},
+			TargetSchema: "routed_src",
+			TargetTable:  "{table}_r",
+		},
+		{
+			Matcher:      []string{"cross_dst.*"},
+			TargetSchema: "routed_dst",
+			TargetTable:  "{table}_r",
+		},
+	})
+
+	helper := event.NewEventTestHelper(t)
+	defer helper.Close()
+
+	routed, err := router.ApplyToDDLEvent(helper.DDL2Event("CREATE DATABASE `cross_src`"))
+	require.NoError(t, err)
+	require.Contains(t, routed.Query, "`routed_src`")
+
+	routed, err = router.ApplyToDDLEvent(helper.DDL2Event("CREATE DATABASE `cross_dst`"))
+	require.NoError(t, err)
+	require.Contains(t, routed.Query, "`routed_dst`")
+
+	routed, err = router.ApplyToDDLEvent(helper.DDL2Event("CREATE TABLE `cross_src`.`src` (`id` INT PRIMARY KEY)"))
+	require.NoError(t, err)
+	require.Contains(t, routed.Query, "`routed_src`.`src_r`")
+
+	routed, err = router.ApplyToDDLEvent(helper.DDL2Event("CREATE TABLE `cross_dst`.`dst` LIKE `cross_src`.`src`"))
+	require.NoError(t, err)
+	require.Contains(t, routed.Query, "CREATE TABLE `routed_dst`.`dst_r` LIKE `routed_src`.`src_r`")
+	require.NotContains(t, routed.Query, "`cross_dst`.`dst`")
+	require.NotContains(t, routed.Query, "`cross_src`.`src`")
+	require.Equal(t, "routed_dst", routed.GetTargetSchemaName())
+	require.Equal(t, "dst_r", routed.GetTargetTableName())
+	require.Equal(t, []event.SchemaTableName{{SchemaName: "routed_src", TableName: "src_r"}}, routed.BlockedTableNames)
+
+	routed, err = router.ApplyToDDLEvent(helper.DDL2Event("ALTER TABLE `cross_dst`.`dst` RENAME TO `cross_src`.`dst_moved`"))
+	require.NoError(t, err)
+	require.Contains(t, routed.Query, "`routed_dst`.`dst_r`")
+	require.Contains(t, routed.Query, "`routed_src`.`dst_moved_r`")
+	require.NotContains(t, routed.Query, "`cross_dst`.`dst`")
+	require.NotContains(t, routed.Query, "`cross_src`.`dst_moved`")
+	require.Equal(t, "routed_src", routed.GetTargetSchemaName())
+	require.Equal(t, "dst_moved_r", routed.GetTargetTableName())
+	require.Equal(t, "routed_dst", routed.GetTargetExtraSchemaName())
+	require.Equal(t, "dst_r", routed.GetTargetExtraTableName())
+
+	routed, err = router.ApplyToDDLEvent(helper.DDL2Event("CREATE TABLE `cross_dst`.`drop_me` (`id` INT PRIMARY KEY)"))
+	require.NoError(t, err)
+	require.Contains(t, routed.Query, "`routed_dst`.`drop_me_r`")
+
+	routed, err = router.ApplyToDDLEvent(helper.DDL2Event("DROP TABLE `cross_src`.`dst_moved`, `cross_dst`.`drop_me`"))
+	require.NoError(t, err)
+	require.Contains(t, routed.Query, "`routed_src`.`dst_moved_r`")
+	require.Contains(t, routed.Query, "`routed_dst`.`drop_me_r`")
+	require.NotContains(t, routed.Query, "`cross_src`.`dst_moved`")
+	require.NotContains(t, routed.Query, "`cross_dst`.`drop_me`")
+
+	routed, err = router.ApplyToDDLEvent(helper.DDL2Event("CREATE TABLE `cross_src`.`rename_a` (`id` INT PRIMARY KEY)"))
+	require.NoError(t, err)
+	require.Contains(t, routed.Query, "`routed_src`.`rename_a_r`")
+
+	routed, err = router.ApplyToDDLEvent(helper.DDL2Event("CREATE TABLE `cross_dst`.`rename_b` (`id` INT PRIMARY KEY)"))
+	require.NoError(t, err)
+	require.Contains(t, routed.Query, "`routed_dst`.`rename_b_r`")
+
+	routed, err = router.ApplyToDDLEvent(helper.DDL2Event("RENAME TABLE `cross_src`.`rename_a` TO `cross_dst`.`rename_a_new`, `cross_dst`.`rename_b` TO `cross_src`.`rename_b_new`"))
+	require.NoError(t, err)
+	require.Contains(t, routed.Query, "`routed_src`.`rename_a_r`")
+	require.Contains(t, routed.Query, "`routed_dst`.`rename_a_new_r`")
+	require.Contains(t, routed.Query, "`routed_dst`.`rename_b_r`")
+	require.Contains(t, routed.Query, "`routed_src`.`rename_b_new_r`")
+	require.NotContains(t, routed.Query, "`cross_src`.`rename_a`")
+	require.NotContains(t, routed.Query, "`cross_dst`.`rename_a_new`")
+	require.NotContains(t, routed.Query, "`cross_dst`.`rename_b`")
+	require.NotContains(t, routed.Query, "`cross_src`.`rename_b_new`")
+	require.Len(t, routed.MultipleTableInfos, 2)
+	require.Equal(t, "routed_dst", routed.MultipleTableInfos[0].GetTargetSchemaName())
+	require.Equal(t, "rename_a_new_r", routed.MultipleTableInfos[0].GetTargetTableName())
+	require.Equal(t, "routed_src", routed.MultipleTableInfos[1].GetTargetSchemaName())
+	require.Equal(t, "rename_b_new_r", routed.MultipleTableInfos[1].GetTargetTableName())
+	require.Equal(t, []event.SchemaTableName{
+		{SchemaName: "routed_src", TableName: "rename_a_r"},
+		{SchemaName: "routed_dst", TableName: "rename_b_r"},
+	}, routed.BlockedTableNames)
 }
 
 func newTestRouter(t *testing.T, caseSensitive bool, rules []*config.DispatchRule) Router {
@@ -639,7 +742,7 @@ func TestRewriteParserBackedDDLQueryError(t *testing.T) {
 		TargetTable:  TablePlaceholder,
 	}})
 
-	_, _, err := router.rewriteSingleDDLQuery("INVALID SQL !!!")
+	_, err := router.rewriteSingleDDLQuery("INVALID SQL !!!")
 	code, ok := errors.RFCCode(err)
 	require.True(t, ok)
 	require.Equal(t, errors.ErrTableRoutingFailed.RFCCode(), code)

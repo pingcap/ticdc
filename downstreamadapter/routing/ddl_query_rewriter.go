@@ -45,11 +45,11 @@ func (r Router) rewriteParserBackedDDLQuery(ddl *commonEvent.DDLEvent) (string, 
 	)
 	for i := range queries {
 		query := queries[i]
-		newQuery, changed, err := r.rewriteSingleDDLQuery(query)
+		newQuery, err := r.rewriteSingleDDLQuery(query)
 		if err != nil {
 			return "", err
 		}
-		if changed {
+		if newQuery != query {
 			routed = true
 			query = newQuery
 		}
@@ -65,16 +65,16 @@ func (r Router) rewriteParserBackedDDLQuery(ddl *commonEvent.DDLEvent) (string, 
 	return builder.String(), nil
 }
 
-func (r Router) rewriteSingleDDLQuery(query string) (string, bool, error) {
+func (r Router) rewriteSingleDDLQuery(query string) (string, error) {
 	p := parser.New()
 	stmt, err := p.ParseOneStmt(query, "", "")
 	if err != nil {
-		return "", false, errors.WrapError(errors.ErrTableRoutingFailed, err)
+		return "", errors.WrapError(errors.ErrTableRoutingFailed, err)
 	}
 
 	sourceTables := extractTableNames(stmt)
 	if len(sourceTables) == 0 {
-		return query, false, nil
+		return query, nil
 	}
 
 	var (
@@ -84,7 +84,7 @@ func (r Router) rewriteSingleDDLQuery(query string) (string, bool, error) {
 	for _, srcTable := range sourceTables {
 		targetSchema, targetTable, changed, err := r.route(srcTable.SchemaName, srcTable.TableName)
 		if err != nil {
-			return "", false, err
+			return "", err
 		}
 		if changed {
 			routed = true
@@ -96,14 +96,14 @@ func (r Router) rewriteSingleDDLQuery(query string) (string, bool, error) {
 	}
 
 	if !routed {
-		return query, false, nil
+		return query, nil
 	}
 
 	newQuery, err := rewriteDDLStmtTables(stmt, targetTables)
 	if err != nil {
-		return "", false, err
+		return "", err
 	}
-	return newQuery, true, nil
+	return newQuery, nil
 }
 
 // tableNameExtractor extracts table names from DDL AST nodes.

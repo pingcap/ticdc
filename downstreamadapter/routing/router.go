@@ -117,11 +117,23 @@ func (r Router) ApplyToDDLEvent(ddl *commonEvent.DDLEvent) (*commonEvent.DDLEven
 			"table routing does not support ddl type %d, query: %s", ddl.Type, ddl.Query)
 	}
 
-	targetSchemaName, targetTableName, _, err := r.route(ddl.GetSchemaName(), ddl.GetTableName())
-	if err != nil {
-		return nil, err
-	}
-
+	// Do not decide whether a DDL needs routing only from DDLEvent.SchemaName/TableName.
+	// Some DDL queries contain extra table references that are not the event's primary table.
+	// For example:
+	//
+	//	CREATE VIEW `other_db`.`v1` AS SELECT * FROM `source_db`.`orders`
+	//
+	// The event primary table is `other_db`.`v1`, but table route may need to rewrite
+	// the referenced table `source_db`.`orders`.
+	//
+	// Another example is:
+	//
+	//	ALTER TABLE `other_db`.`child` ADD CONSTRAINT `fk_order`
+	//	  FOREIGN KEY (`order_id`) REFERENCES `source_db`.`orders`(`id`)
+	//
+	// The event primary table is `other_db`.`child`, but the FOREIGN KEY reference can
+	// still match table route rules. So when table route is enabled, inspect the query
+	// through TiDB parser and let the AST visitor find all table names.
 	newQuery, err := r.rewriteParserBackedDDLQuery(ddl)
 	if err != nil {
 		return nil, err
@@ -131,6 +143,11 @@ func (r Router) ApplyToDDLEvent(ddl *commonEvent.DDLEvent) (*commonEvent.DDLEven
 	// If Query is unchanged, no routed DDL event is needed.
 	if newQuery == ddl.Query {
 		return ddl, nil
+	}
+
+	targetSchemaName, targetTableName, _, err := r.route(ddl.GetSchemaName(), ddl.GetTableName())
+	if err != nil {
+		return nil, err
 	}
 
 	targetExtraSchemaName, targetExtraTableName, _, err := r.route(ddl.GetExtraSchemaName(), ddl.GetExtraTableName())
