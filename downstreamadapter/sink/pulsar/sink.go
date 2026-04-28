@@ -71,15 +71,83 @@ func New(
 	if err != nil {
 		return nil, err
 	}
+<<<<<<< HEAD
 	defer func() {
 		if err != nil {
+=======
+	return newWithComponent(
+		ctx,
+		changefeedID,
+		sinkConfig,
+		comp,
+		protocol,
+		newPulsarDMLProducer,
+		newPulsarDDLProducer,
+	)
+}
+
+func newPulsarDMLProducer(
+	changefeedID commonType.ChangeFeedID,
+	comp component,
+	failpointCh chan error,
+) (dmlProducer, error) {
+	producer, err := newDMLProducers(changefeedID, comp, failpointCh)
+	if err != nil {
+		return nil, err
+	}
+	return producer, nil
+}
+
+func newPulsarDDLProducer(
+	changefeedID commonType.ChangeFeedID,
+	comp component,
+	sinkConfig *config.SinkConfig,
+) (ddlProducer, error) {
+	producer, err := newDDLProducers(changefeedID, comp, sinkConfig)
+	if err != nil {
+		return nil, err
+	}
+	return producer, nil
+}
+
+func newWithComponent(
+	ctx context.Context,
+	changefeedID commonType.ChangeFeedID,
+	sinkConfig *config.SinkConfig,
+	comp component,
+	protocol config.Protocol,
+	newDMLProducer newPulsarDMLProducerFunc,
+	newDDLProducer newPulsarDDLProducerFunc,
+) (_ *sink, err error) {
+	var (
+		dmlProducer dmlProducer
+		ddlProducer ddlProducer
+		statistics  *metrics.Statistics
+	)
+	defer func() {
+		if err != nil {
+			if ddlProducer != nil {
+				ddlProducer.close()
+			}
+			if dmlProducer != nil {
+				dmlProducer.close()
+			}
+			if statistics != nil {
+				statistics.Close()
+			}
+>>>>>>> 35f308fb1 (sink: fix a panic when closing pulsar sink (#4938))
 			comp.close()
 		}
 	}()
 
 	failpointCh := make(chan error, 1)
+<<<<<<< HEAD
 	statistics := metrics.NewStatistics(changefeedID, "pulsar")
 	dmlProducer, err := newDMLProducers(changefeedID, comp, failpointCh)
+=======
+	statistics = metrics.NewStatistics(changefeedID, "pulsar")
+	dmlProducer, err = newDMLProducer(changefeedID, comp, failpointCh)
+>>>>>>> 35f308fb1 (sink: fix a panic when closing pulsar sink (#4938))
 	if err != nil {
 		return nil, err
 	}
