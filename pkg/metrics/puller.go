@@ -68,6 +68,14 @@ var (
 		},
 		// actions: wait, run.
 		[]string{"type", "action"})
+	LockResolveLockCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "kvclient",
+			Name:      "lock_resolve_lock_count",
+			Help:      "The number of locks scanned and handled by lock resolver",
+		},
+		[]string{"status"})
 
 	regionWorkerQueueDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -113,5 +121,6 @@ func initPullerMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(PullerEventCounter)
 	registry.MustRegister(clientChannelSize)
 	registry.MustRegister(LockResolveDuration)
+	registry.MustRegister(LockResolveLockCounter)
 	registry.MustRegister(regionWorkerQueueDuration)
 }

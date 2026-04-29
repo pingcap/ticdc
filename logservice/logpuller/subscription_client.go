@@ -62,6 +62,19 @@ const (
 	resolveLastRunGCThreshold = 1024
 )
 
+const (
+	resolveLockMetricScanned              = "scanned"
+	resolveLockMetricEnqueued             = "enqueued"
+	resolveLockMetricDropped              = "dropped"
+	resolveLockMetricSkippedResolved      = "skipped_resolved"
+	resolveLockMetricSkippedUninitialized = "skipped_uninitialized"
+	resolveLockMetricSkippedThrottled     = "skipped_throttled"
+	resolveLockMetricSuccess              = "success"
+	resolveLockMetricFailed               = "failed"
+	resolveLockMetricQueue                = "queue"
+	resolveLockMetricRun                  = "run"
+)
+
 var (
 	metricFeedNotLeaderCounter        = metrics.EventFeedErrorCounter.WithLabelValues("NotLeader")
 	metricFeedEpochNotMatchCounter    = metrics.EventFeedErrorCounter.WithLabelValues("EpochNotMatch")
@@ -996,19 +1009,72 @@ func gcResolveLastRunMap(resolveLastRun map[uint64]time.Time, now time.Time) map
 func (s *subscriptionClient) handleResolveLockTasks(ctx context.Context) error {
 	resolveLastRun := make(map[uint64]time.Time)
 
-	doResolve := func(keyspaceID uint32, regionID uint64, state *regionlock.LockedRangeState, targetTs uint64) {
-		if state.ResolvedTs.Load() > targetTs || !state.Initialized.Load() {
+	observeQueueDuration := func(task resolveLockTask, status string) {
+		if task.create.IsZero() {
+			return
+		}
+		metrics.SubscriptionClientResolveLockTaskDuration.
+			WithLabelValues(resolveLockMetricQueue, status).
+			Observe(time.Since(task.create).Seconds())
+	}
+
+	doResolve := func(task resolveLockTask) {
+		keyspaceID := task.keyspaceID
+		regionID := task.regionID
+		state := task.state
+		targetTs := task.targetTs
+		if state == nil {
+			observeQueueDuration(task, resolveLockMetricFailed)
+			metrics.SubscriptionClientResolveLockTaskCounter.WithLabelValues(resolveLockMetricFailed).Inc()
+			log.Warn("subscription client receives resolve lock task without state",
+				zap.Uint32("keyspaceID", keyspaceID),
+				zap.Uint64("regionID", regionID),
+				zap.Uint64("targetTs", targetTs))
+			return
+		}
+		if state.ResolvedTs.Load() >= targetTs || !state.Initialized.Load() {
+			status := resolveLockMetricSkippedResolved
+			if !state.Initialized.Load() {
+				status = resolveLockMetricSkippedUninitialized
+			}
+			observeQueueDuration(task, status)
+			metrics.SubscriptionClientResolveLockTaskCounter.WithLabelValues(status).Inc()
 			return
 		}
 
 		lastRun, ok := resolveLastRun[regionID]
 		if ok {
 			if time.Since(lastRun) < resolveLockMinInterval {
+				observeQueueDuration(task, resolveLockMetricSkippedThrottled)
+				metrics.SubscriptionClientResolveLockTaskCounter.
+					WithLabelValues(resolveLockMetricSkippedThrottled).Inc()
 				return
 			}
 		}
 
-		if err := s.lockResolver.Resolve(ctx, keyspaceID, regionID, targetTs); err != nil {
+		observeQueueDuration(task, resolveLockMetricRun)
+		start := time.Now()
+		if s.lockResolver == nil {
+			metrics.SubscriptionClientResolveLockTaskDuration.
+				WithLabelValues(resolveLockMetricRun, resolveLockMetricFailed).
+				Observe(time.Since(start).Seconds())
+			metrics.SubscriptionClientResolveLockTaskCounter.WithLabelValues(resolveLockMetricFailed).Inc()
+			log.Warn("subscription client lock resolver is nil",
+				zap.Uint32("keyspaceID", keyspaceID),
+				zap.Uint64("regionID", regionID),
+				zap.Uint64("targetTs", targetTs))
+			return
+		}
+		err := s.lockResolver.Resolve(ctx, keyspaceID, regionID, targetTs)
+		status := resolveLockMetricSuccess
+		if err != nil {
+			status = resolveLockMetricFailed
+		}
+		metrics.SubscriptionClientResolveLockTaskDuration.
+			WithLabelValues(resolveLockMetricRun, status).
+			Observe(time.Since(start).Seconds())
+		metrics.SubscriptionClientResolveLockTaskCounter.WithLabelValues(status).Inc()
+		if err != nil {
 			log.Warn("subscription client resolve lock fail",
 				zap.Uint32("keyspaceID", keyspaceID),
 				zap.Uint64("regionID", regionID),
@@ -1029,7 +1095,7 @@ func (s *subscriptionClient) handleResolveLockTasks(ctx context.Context) error {
 		case <-gcTicker.C:
 			resolveLastRun = gcResolveLastRunMap(resolveLastRun, time.Now())
 		case task := <-s.resolveLockTaskCh:
-			doResolve(task.keyspaceID, task.regionID, task.state, task.targetTs)
+			doResolve(task)
 		}
 	}
 }
@@ -1104,20 +1170,34 @@ func (s *subscriptionClient) newSubscribedSpan(
 
 	rt.tryResolveLock = func(regionID uint64, state *regionlock.LockedRangeState) {
 		targetTs := rt.staleLocksTargetTs.Load()
-		if state.ResolvedTs.Load() < targetTs && state.Initialized.Load() {
-			select {
-			case <-s.ctx.Done():
-			case s.resolveLockTaskCh <- resolveLockTask{
-				keyspaceID: span.KeyspaceID,
-				regionID:   regionID,
-				targetTs:   targetTs,
-				state:      state,
-				create:     time.Now(),
-			}:
-			// it is ok to ignore resolve lock task when the channel is full
-			default:
-				metrics.SubscriptionClientResolveLockTaskDropCounter.Inc()
-			}
+		if !state.Initialized.Load() {
+			metrics.SubscriptionClientResolveLockRangeCounter.
+				WithLabelValues(resolveLockMetricSkippedUninitialized).Inc()
+			return
+		}
+		if state.ResolvedTs.Load() >= targetTs {
+			metrics.SubscriptionClientResolveLockRangeCounter.
+				WithLabelValues(resolveLockMetricSkippedResolved).Inc()
+			return
+		}
+		select {
+		case <-s.ctx.Done():
+		case s.resolveLockTaskCh <- resolveLockTask{
+			keyspaceID: span.KeyspaceID,
+			regionID:   regionID,
+			targetTs:   targetTs,
+			state:      state,
+			create:     time.Now(),
+		}:
+			metrics.SubscriptionClientResolveLockRangeCounter.
+				WithLabelValues(resolveLockMetricEnqueued).Inc()
+		// it is ok to ignore resolve lock task when the channel is full
+		default:
+			metrics.SubscriptionClientResolveLockTaskDropCounter.Inc()
+			metrics.SubscriptionClientResolveLockRangeCounter.
+				WithLabelValues(resolveLockMetricDropped).Inc()
+			metrics.SubscriptionClientResolveLockTaskCounter.
+				WithLabelValues(resolveLockMetricDropped).Inc()
 		}
 	}
 	return rt
@@ -1145,6 +1225,9 @@ func (s *subscriptionClient) GetResolvedTsLag() float64 {
 func (r *subscribedSpan) resolveStaleLocks(targetTs uint64) {
 	util.MustCompareAndMonotonicIncrease(&r.staleLocksTargetTs, targetTs)
 	res := r.rangeLock.IterAll(r.tryResolveLock)
+	metrics.SubscriptionClientResolveLockRangeCounter.
+		WithLabelValues(resolveLockMetricScanned).
+		Add(float64(res.LockedRegionCount))
 	log.Debug("subscription client finds slow locked ranges",
 		zap.Uint64("subscriptionID", uint64(r.subID)),
 		zap.Any("ranges", res))

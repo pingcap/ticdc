@@ -8249,7 +8249,7 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "Dropped resolve lock tasks when resolveLockTaskCh is full.",
+          "description": "Resolve lock task state transitions, including success, failure, skipped, throttled, and dropped tasks.",
           "fieldConfig": {
             "defaults": {},
             "overrides": []
@@ -8292,10 +8292,10 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_subscription_client_resolve_lock_task_drop_count{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (instance)",
+              "expr": "sum(rate(ticdc_subscription_client_resolve_lock_task_count{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (instance, status)",
               "hide": false,
               "interval": "",
-              "legendFormat": "{{instance}}",
+              "legendFormat": "{{instance}} {{status}}",
               "refId": "A"
             }
           ],
@@ -8303,7 +8303,7 @@
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Dropped Resolve Lock Tasks / s",
+          "title": "Resolve Lock Tasks / s",
           "tooltip": {
             "shared": true,
             "sort": 0,

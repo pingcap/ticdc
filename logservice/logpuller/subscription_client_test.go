@@ -16,6 +16,7 @@ package logpuller
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -36,6 +37,20 @@ import (
 	"github.com/tikv/client-go/v2/testutils"
 	"github.com/tikv/client-go/v2/tikv"
 )
+
+type mockLockResolver struct {
+	calls atomic.Int32
+}
+
+func (r *mockLockResolver) Resolve(
+	_ context.Context,
+	_ uint32,
+	_ uint64,
+	_ uint64,
+) error {
+	r.calls.Add(1)
+	return nil
+}
 
 func TestGenerateResolveLockTask(t *testing.T) {
 	client := &subscriptionClient{
@@ -102,6 +117,81 @@ func TestGenerateResolveLockTask(t *testing.T) {
 	require.Equal(t, 0, len(client.resolveLockTaskCh))
 
 	close(client.resolveLockTaskCh)
+}
+
+func TestHandleResolveLockTasksMetrics(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	resolver := &mockLockResolver{}
+	client := &subscriptionClient{
+		lockResolver:      resolver,
+		resolveLockTaskCh: make(chan resolveLockTask, 4),
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- client.handleResolveLockTasks(ctx)
+	}()
+
+	state := &regionlock.LockedRangeState{}
+	state.Initialized.Store(true)
+	state.ResolvedTs.Store(100)
+
+	successBefore := testutil.ToFloat64(
+		metrics.SubscriptionClientResolveLockTaskCounter.WithLabelValues(resolveLockMetricSuccess))
+	throttledBefore := testutil.ToFloat64(
+		metrics.SubscriptionClientResolveLockTaskCounter.WithLabelValues(resolveLockMetricSkippedThrottled))
+	skippedResolvedBefore := testutil.ToFloat64(
+		metrics.SubscriptionClientResolveLockTaskCounter.WithLabelValues(resolveLockMetricSkippedResolved))
+
+	client.resolveLockTaskCh <- resolveLockTask{
+		keyspaceID: 1,
+		regionID:   1,
+		targetTs:   200,
+		state:      state,
+		create:     time.Now(),
+	}
+	require.Eventually(t, func() bool {
+		return resolver.calls.Load() == 1 &&
+			testutil.ToFloat64(metrics.SubscriptionClientResolveLockTaskCounter.
+				WithLabelValues(resolveLockMetricSuccess)) >= successBefore+1
+	}, time.Second, 10*time.Millisecond)
+
+	client.resolveLockTaskCh <- resolveLockTask{
+		keyspaceID: 1,
+		regionID:   1,
+		targetTs:   300,
+		state:      state,
+		create:     time.Now(),
+	}
+	require.Eventually(t, func() bool {
+		return resolver.calls.Load() == 1 &&
+			testutil.ToFloat64(metrics.SubscriptionClientResolveLockTaskCounter.
+				WithLabelValues(resolveLockMetricSkippedThrottled)) >= throttledBefore+1
+	}, time.Second, 10*time.Millisecond)
+
+	state.ResolvedTs.Store(300)
+	client.resolveLockTaskCh <- resolveLockTask{
+		keyspaceID: 1,
+		regionID:   2,
+		targetTs:   300,
+		state:      state,
+		create:     time.Now(),
+	}
+	require.Eventually(t, func() bool {
+		return resolver.calls.Load() == 1 &&
+			testutil.ToFloat64(metrics.SubscriptionClientResolveLockTaskCounter.
+				WithLabelValues(resolveLockMetricSkippedResolved)) >= skippedResolvedBefore+1
+	}, time.Second, 10*time.Millisecond)
+
+	cancel()
+	select {
+	case err := <-errCh:
+		require.Equal(t, context.Canceled, errors.Cause(err))
+	case <-time.After(time.Second):
+		t.Fatal("resolve lock task handler did not exit")
+	}
 }
 
 func TestResolveLockTaskDroppedWhenChannelFull(t *testing.T) {

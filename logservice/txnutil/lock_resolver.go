@@ -23,7 +23,9 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/keyspace"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	tikverr "github.com/tikv/client-go/v2/error"
+	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv"
@@ -44,12 +46,46 @@ func NewLockerResolver() LockResolver {
 
 const scanLockLimit = 1024
 
+const (
+	lockResolveMetricScanned              = "scanned"
+	lockResolveMetricTTLExpired           = "ttl_expired"
+	lockResolveMetricTTLNotExpired        = "ttl_not_expired"
+	lockResolveMetricResolved             = "resolved"
+	lockResolveMetricWaitTTL              = "wait_ttl"
+	lockResolveMetricFailed               = "failed"
+	lockResolveMetricTTLExpiredUnresolved = "ttl_expired_unresolved"
+)
+
+func recordLockResolveLockCount(status string, count int) {
+	if count <= 0 {
+		return
+	}
+	metrics.LockResolveLockCounter.WithLabelValues(status).Add(float64(count))
+}
+
+func countLocksByTTL(kvStorage tikv.Storage, locks []*txnkv.Lock) (expired, notExpired int) {
+	for _, lock := range locks {
+		if lock.TTL == 0 ||
+			kvStorage.GetOracle().UntilExpired(lock.TxnID, lock.TTL, &oracle.Option{
+				TxnScope: oracle.GlobalTxnScope,
+			}) <= 0 {
+			expired++
+			continue
+		}
+		notExpired++
+	}
+	return
+}
+
 func (r *resolver) Resolve(ctx context.Context, keyspaceID uint32, regionID uint64, maxVersion uint64) (err error) {
 	var totalLocks []*txnkv.Lock
 
 	start := time.Now()
 
 	defer func() {
+		metrics.LockResolveDuration.
+			WithLabelValues("txn_resolver", "run").
+			Observe(float64(time.Since(start)) / float64(time.Millisecond))
 		// Only log when there are locks or error to avoid log flooding.
 		if len(totalLocks) != 0 || err != nil {
 			cost := time.Since(start)
@@ -137,10 +173,21 @@ func (r *resolver) Resolve(ctx context.Context, keyspaceID uint32, regionID uint
 			locks[i] = txnkv.NewLock(locksInfo[i])
 		}
 		totalLocks = append(totalLocks, locks...)
+		recordLockResolveLockCount(lockResolveMetricScanned, len(locks))
+		expiredLockCount, notExpiredLockCount := countLocksByTTL(kvStorage, locks)
+		recordLockResolveLockCount(lockResolveMetricTTLExpired, expiredLockCount)
+		recordLockResolveLockCount(lockResolveMetricTTLNotExpired, notExpiredLockCount)
 
-		_, err1 := kvStorage.GetLockResolver().ResolveLocks(bo, 0, locks)
+		msBeforeTxnExpired, err1 := kvStorage.GetLockResolver().ResolveLocks(bo, 0, locks)
 		if err1 != nil {
+			recordLockResolveLockCount(lockResolveMetricFailed, len(locks))
+			recordLockResolveLockCount(lockResolveMetricTTLExpiredUnresolved, expiredLockCount)
 			return errors.Trace(err1)
+		}
+		if msBeforeTxnExpired > 0 {
+			recordLockResolveLockCount(lockResolveMetricWaitTTL, len(locks))
+		} else {
+			recordLockResolveLockCount(lockResolveMetricResolved, len(locks))
 		}
 		if len(locks) < scanLockLimit {
 			key = loc.EndKey
