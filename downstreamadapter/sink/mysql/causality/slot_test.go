@@ -19,21 +19,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestGetSlotByMask(t *testing.T) {
+func TestNewGetSlotFunc(t *testing.T) {
 	t.Parallel()
 
-	// numSlots=16 => mask=15
-	require.Equal(t, uint64(11), getSlotByMask(11, 15))
-	require.Equal(t, uint64(14), getSlotByMask(14, 15))
-	require.Equal(t, uint64(3), getSlotByMask(19, 15))
-}
+	powerOfTwoGetSlot := newGetSlotFunc(16)
+	require.Equal(t, uint64(11), powerOfTwoGetSlot(11))
+	require.Equal(t, uint64(14), powerOfTwoGetSlot(14))
+	require.Equal(t, uint64(3), powerOfTwoGetSlot(19))
 
-func TestGetSlotByModulo(t *testing.T) {
-	t.Parallel()
-
-	require.Equal(t, uint64(5), getSlotByModulo(11, 6))
-	require.Equal(t, uint64(2), getSlotByModulo(14, 6))
-	require.Equal(t, uint64(1), getSlotByModulo(19, 6))
+	nonPowerOfTwoGetSlot := newGetSlotFunc(6)
+	require.Equal(t, uint64(5), nonPowerOfTwoGetSlot(11))
+	require.Equal(t, uint64(2), nonPowerOfTwoGetSlot(14))
+	require.Equal(t, uint64(1), nonPowerOfTwoGetSlot(19))
 }
 
 func TestNewSlotIndexFunc(t *testing.T) {

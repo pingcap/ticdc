@@ -34,7 +34,7 @@ func BenchmarkSlotIndex(b *testing.B) {
 
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
-			result += getSlotByModulo(hashes[i&(len(hashes)-1)], numSlots)
+			result += hashes[i&(len(hashes)-1)] % numSlots
 		}
 		benchmarkSlotIndexResult = result
 	})
@@ -45,7 +45,7 @@ func BenchmarkSlotIndex(b *testing.B) {
 
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
-			result += getSlotByMask(hashes[i&(len(hashes)-1)], mask)
+			result += hashes[i&(len(hashes)-1)] & mask
 		}
 		benchmarkSlotIndexResult = result
 	})
@@ -76,37 +76,20 @@ func BenchmarkSlotIndex(b *testing.B) {
 func BenchmarkSortHashesBySlot(b *testing.B) {
 	for _, hashCount := range []int{8, 64, 1024} {
 		b.Run(fmt.Sprintf("hashes_%d", hashCount), func(b *testing.B) {
-			for _, tc := range []struct {
-				name   string
-				source []uint64
-			}{
-				{
-					name:   "unique",
-					source: makeBenchmarkSlotHashes(hashCount),
-				},
-				{
-					name:   "with_duplicates",
-					source: makeBenchmarkSlotHashesWithDuplicates(hashCount),
-				},
-			} {
-				b.Run(tc.name, func(b *testing.B) {
-					b.Run("old_modulo_dedup", func(b *testing.B) {
-						benchmarkSortHashesByOldModuloAndDedup(b, tc.source, benchmarkDefaultSlotCount)
-					})
+			source := makeBenchmarkSlotHashes(hashCount)
 
-					b.Run("selected_mapper_dedup", func(b *testing.B) {
-						benchmarkSortHashesByFuncAndDedup(b, tc.source, newGetSlotFunc(benchmarkDefaultSlotCount))
-					})
+			b.Run("old_modulo_dedup", func(b *testing.B) {
+				benchmarkSortHashesByOldModuloAndDedup(b, source, benchmarkDefaultSlotCount)
+			})
 
-					sourceMap := make(map[uint64]struct{})
-					for _, hash := range tc.source {
-						sourceMap[hash] = struct{}{}
-					}
-					b.Run("selected_mapper_no_dedup", func(b *testing.B) {
-						benchmarkSortHashesByFunc(b, sourceMap, newGetSlotFunc(benchmarkDefaultSlotCount))
-					})
-				})
-			}
+			b.Run("selected_mapper_dedup", func(b *testing.B) {
+				benchmarkSortHashesByFuncAndDedup(b, source, newGetSlotFunc(benchmarkDefaultSlotCount))
+			})
+
+			sourceMap := makeBenchmarkSlotHashMap(source)
+			b.Run("selected_mapper_map_input", func(b *testing.B) {
+				benchmarkSortHashesByMap(b, len(source), sourceMap, newGetSlotFunc(benchmarkDefaultSlotCount))
+			})
 		})
 	}
 }
@@ -116,7 +99,7 @@ func benchmarkSortHashesByOldModuloAndDedup(b *testing.B, source []uint64, numSl
 	sample := sortHashesByOldModuloAndDedup(append([]uint64(nil), source...), numSlots)
 	b.ResetTimer()
 	b.ReportAllocs()
-	b.ReportMetric(float64(len(source)), "hashes/op")
+	b.ReportMetric(float64(len(source)), "input_hashes/op")
 	b.ReportMetric(float64(len(sample)), "out_hashes/op")
 
 	for i := 0; i < b.N; i++ {
@@ -125,12 +108,13 @@ func benchmarkSortHashesByOldModuloAndDedup(b *testing.B, source []uint64, numSl
 	}
 }
 
-func benchmarkSortHashesByFunc(b *testing.B, source map[uint64]struct{}, getSlot getSlotFunc) {
+func benchmarkSortHashesByMap(b *testing.B, inputCount int, source map[uint64]struct{}, getSlot getSlotFunc) {
 	b.Helper()
 	sample := sortHashes(source, getSlot)
 	b.ResetTimer()
 	b.ReportAllocs()
-	b.ReportMetric(float64(len(source)), "hashes/op")
+	b.ReportMetric(float64(inputCount), "input_hashes/op")
+	b.ReportMetric(float64(len(source)), "unique_hashes/op")
 	b.ReportMetric(float64(len(sample)), "out_hashes/op")
 
 	for i := 0; i < b.N; i++ {
@@ -143,7 +127,7 @@ func benchmarkSortHashesByFuncAndDedup(b *testing.B, source []uint64, getSlot ge
 	sample := sortHashesByFuncAndDedup(append([]uint64(nil), source...), getSlot)
 	b.ResetTimer()
 	b.ReportAllocs()
-	b.ReportMetric(float64(len(source)), "hashes/op")
+	b.ReportMetric(float64(len(source)), "input_hashes/op")
 	b.ReportMetric(float64(len(sample)), "out_hashes/op")
 
 	for i := 0; i < b.N; i++ {
@@ -206,18 +190,10 @@ func makeBenchmarkSlotHashes(count int) []uint64 {
 	return hashes
 }
 
-func makeBenchmarkSlotHashesWithDuplicates(count int) []uint64 {
-	if count == 0 {
-		return nil
-	}
-	distinctCount := count / 4
-	if distinctCount == 0 {
-		distinctCount = 1
-	}
-	distinctHashes := makeBenchmarkSlotHashes(distinctCount)
-	hashes := make([]uint64, count)
-	for i := range hashes {
-		hashes[i] = distinctHashes[i%distinctCount]
+func makeBenchmarkSlotHashMap(source []uint64) map[uint64]struct{} {
+	hashes := make(map[uint64]struct{}, len(source))
+	for _, hash := range source {
+		hashes[hash] = struct{}{}
 	}
 	return hashes
 }
