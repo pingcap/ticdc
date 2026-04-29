@@ -390,6 +390,7 @@ func (d DateSeparator) String() string {
 // For MQ sinks, rules control topic / partition dispatching.
 // TargetSchema and TargetTable configure table routing.
 type DispatchRule struct {
+	// Rules are evaluated in order, and the first matching rule wins.
 	Matcher []string `toml:"matcher" json:"matcher"`
 	// Deprecated, please use PartitionRule.
 	DispatcherRule string `toml:"dispatcher" json:"dispatcher"`

@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common"
+	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/stretchr/testify/require"
 )
 
@@ -104,4 +105,117 @@ func TestIsSplitable(t *testing.T) {
 				"Test case: %s - %s", tc.name, tc.description)
 		})
 	}
+}
+
+func TestDDL2EventFillsSingleTableMetadata(t *testing.T) {
+	helper := NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("CREATE DATABASE `test_db`")
+	helper.Tk().MustExec("CREATE TABLE `test_db`.`t1` (`id` INT PRIMARY KEY)")
+	ddlEvent := helper.DDL2Event("ALTER TABLE `test_db`.`t1` ADD COLUMN `c1` INT")
+
+	require.Equal(t, []SchemaTableName{{SchemaName: "test_db", TableName: "t1"}}, ddlEvent.BlockedTableNames)
+	require.NotNil(t, ddlEvent.TableInfo)
+	require.Equal(t, "test_db", ddlEvent.TableInfo.GetSchemaName())
+	require.Equal(t, "t1", ddlEvent.TableInfo.GetTableName())
+}
+
+func TestDDL2EventFillsAddIndexMetadata(t *testing.T) {
+	helper := NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("CREATE DATABASE `test_db`")
+	helper.Tk().MustExec("CREATE TABLE `test_db`.`t1` (`id` INT PRIMARY KEY)")
+	ddlEvent := helper.DDL2Event("ALTER TABLE `test_db`.`t1` ADD INDEX `idx_id`(`id`)")
+
+	require.Equal(t, byte(timodel.ActionAddIndex), ddlEvent.Type)
+	require.Equal(t, "test_db", ddlEvent.SchemaName)
+	require.Equal(t, "t1", ddlEvent.TableName)
+	require.Equal(t, []SchemaTableName{{SchemaName: "test_db", TableName: "t1"}}, ddlEvent.BlockedTableNames)
+	require.NotNil(t, ddlEvent.TableInfo)
+	require.Equal(t, "test_db", ddlEvent.TableInfo.GetSchemaName())
+	require.Equal(t, "t1", ddlEvent.TableInfo.GetTableName())
+}
+
+func TestDDL2EventFillsCreateTableLikeMetadata(t *testing.T) {
+	helper := NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("CREATE DATABASE `test_db`")
+	helper.Tk().MustExec("CREATE TABLE `test_db`.`src` (`id` INT PRIMARY KEY)")
+	ddlEvent := helper.DDL2Event("CREATE TABLE `test_db`.`dst` LIKE `test_db`.`src`")
+
+	require.Equal(t, []SchemaTableName{{SchemaName: "test_db", TableName: "src"}}, ddlEvent.BlockedTableNames)
+	require.Equal(t, []SchemaTableName{{SchemaName: "test_db", TableName: "dst"}}, ddlEvent.TableNameChange.AddName)
+}
+
+func TestDDL2EventFillsRenameTableMetadata(t *testing.T) {
+	helper := NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("CREATE DATABASE `old_db`")
+	helper.Tk().MustExec("CREATE DATABASE `new_db`")
+	helper.Tk().MustExec("CREATE TABLE `old_db`.`orders` (`id` INT PRIMARY KEY)")
+	ddlEvent := helper.DDL2Event("RENAME TABLE `old_db`.`orders` TO `new_db`.`orders_archive`")
+
+	require.Equal(t, "old_db", ddlEvent.ExtraSchemaName)
+	require.Equal(t, "orders", ddlEvent.ExtraTableName)
+	require.Equal(t, "new_db", ddlEvent.SchemaName)
+	require.Equal(t, "orders_archive", ddlEvent.TableName)
+	require.Equal(t, []SchemaTableName{{SchemaName: "old_db", TableName: "orders"}}, ddlEvent.BlockedTableNames)
+	require.Equal(t, []SchemaTableName{{SchemaName: "new_db", TableName: "orders_archive"}}, ddlEvent.TableNameChange.AddName)
+	require.Equal(t, []SchemaTableName{{SchemaName: "old_db", TableName: "orders"}}, ddlEvent.TableNameChange.DropName)
+}
+
+func TestDDL2EventFillsRenameTablesMetadata(t *testing.T) {
+	helper := NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("CREATE DATABASE `test_db`")
+	helper.Tk().MustExec("CREATE TABLE `test_db`.`t1` (`id` INT PRIMARY KEY)")
+	helper.Tk().MustExec("CREATE TABLE `test_db`.`t2` (`id` INT PRIMARY KEY)")
+	ddlEvent := helper.DDL2Event("RENAME TABLE `test_db`.`t1` TO `test_db`.`t1_new`, `test_db`.`t2` TO `test_db`.`t2_new`")
+
+	require.Len(t, ddlEvent.MultipleTableInfos, 2)
+	require.Equal(t, "test_db", ddlEvent.MultipleTableInfos[0].GetSchemaName())
+	require.Equal(t, "t1_new", ddlEvent.MultipleTableInfos[0].GetTableName())
+	require.Equal(t, "test_db", ddlEvent.MultipleTableInfos[1].GetSchemaName())
+	require.Equal(t, "t2_new", ddlEvent.MultipleTableInfos[1].GetTableName())
+	require.Equal(t, []SchemaTableName{
+		{SchemaName: "test_db", TableName: "t1"},
+		{SchemaName: "test_db", TableName: "t2"},
+	}, ddlEvent.BlockedTableNames)
+	require.Equal(t, []SchemaTableName{
+		{SchemaName: "test_db", TableName: "t1_new"},
+		{SchemaName: "test_db", TableName: "t2_new"},
+	}, ddlEvent.TableNameChange.AddName)
+	require.Equal(t, []SchemaTableName{
+		{SchemaName: "test_db", TableName: "t1"},
+		{SchemaName: "test_db", TableName: "t2"},
+	}, ddlEvent.TableNameChange.DropName)
+}
+
+func TestBatchCreateTableDDLs2EventFillsMetadata(t *testing.T) {
+	helper := NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("CREATE DATABASE `test_db`")
+	ddlEvent := helper.BatchCreateTableDDLs2Event("test_db",
+		"CREATE TABLE `test_db`.`t1` (`id` INT PRIMARY KEY)",
+		"CREATE TABLE `test_db`.`t2` (`id` INT PRIMARY KEY)",
+	)
+
+	require.Equal(t, byte(timodel.ActionCreateTables), ddlEvent.Type)
+	require.Equal(t, "test_db", ddlEvent.SchemaName)
+	require.Nil(t, ddlEvent.TableInfo)
+	require.Len(t, ddlEvent.MultipleTableInfos, 2)
+	require.Equal(t, "test_db", ddlEvent.MultipleTableInfos[0].GetSchemaName())
+	require.Equal(t, "t1", ddlEvent.MultipleTableInfos[0].GetTableName())
+	require.Equal(t, "test_db", ddlEvent.MultipleTableInfos[1].GetSchemaName())
+	require.Equal(t, "t2", ddlEvent.MultipleTableInfos[1].GetTableName())
+	require.Equal(t, []SchemaTableName{
+		{SchemaName: "test_db", TableName: "t1"},
+		{SchemaName: "test_db", TableName: "t2"},
+	}, ddlEvent.TableNameChange.AddName)
 }

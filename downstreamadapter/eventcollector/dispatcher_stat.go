@@ -538,6 +538,18 @@ func (d *dispatcherStat) handleSingleDataEvents(events []dispatcher.DispatcherEv
 	}
 	if events[0].GetType() == commonEvent.TypeDDLEvent {
 		ddl := events[0].Event.(*commonEvent.DDLEvent)
+		ddl, err := d.target.GetRouter().ApplyToDDLEvent(ddl)
+		if err != nil {
+			log.Error("failed to apply routing to DDL event",
+				zap.Stringer("changefeedID", d.target.GetChangefeedID()),
+				zap.Stringer("dispatcher", d.getDispatcherID()),
+				zap.Error(err))
+			if target, ok := d.target.(dispatcher.Dispatcher); ok {
+				target.HandleError(err)
+			}
+			return false
+		}
+		events[0].Event = ddl
 		d.tableInfoVersion.Store(ddl.FinishedTs)
 		if ddl.TableInfo != nil {
 			d.tableInfo.Store(ddl.TableInfo)
@@ -693,6 +705,17 @@ func (d *dispatcherStat) handleHandshakeEvent(event dispatcher.DispatcherEvent) 
 	}
 	tableInfo := handshakeEvent.TableInfo
 	if tableInfo != nil {
+		tableInfo, err := d.target.GetRouter().ApplyToTableInfo(tableInfo)
+		if err != nil {
+			log.Error("failed to apply routing to handshake table info",
+				zap.Stringer("changefeedID", d.target.GetChangefeedID()),
+				zap.Stringer("dispatcher", d.getDispatcherID()),
+				zap.Error(err))
+			if target, ok := d.target.(dispatcher.Dispatcher); ok {
+				target.HandleError(err)
+			}
+			return
+		}
 		d.tableInfo.Store(tableInfo)
 	}
 	state.lastEventSeq.Store(handshakeEvent.Seq)

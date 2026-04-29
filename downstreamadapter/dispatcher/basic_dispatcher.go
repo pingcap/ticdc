@@ -21,6 +21,7 @@ import (
 
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/routing"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -44,6 +45,7 @@ type DispatcherService interface {
 	GetChangefeedID() common.ChangeFeedID
 	GetEventCollectorBatchConfig() (batchCount int, batchBytes int)
 	GetTableSpan() *heartbeatpb.TableSpan
+	GetRouter() routing.Router
 	GetTimezone() string
 	GetIntegrityConfig() *eventpb.IntegrityConfig
 	GetFilterConfig() *eventpb.FilterConfig

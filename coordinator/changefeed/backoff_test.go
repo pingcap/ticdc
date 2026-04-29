@@ -21,6 +21,7 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
 
@@ -128,6 +129,49 @@ func TestErrorReportedWhenRetrying(t *testing.T) {
 	require.True(t, backoff.isRestarting.Load())
 	// the interval is increased, todo: maybe we should ignore the error when retrying
 	require.True(t, backoffInterval < backoff.backoffInterval)
+}
+
+func TestTableRoutingErrorsFastFail(t *testing.T) {
+	tests := []struct {
+		name    string
+		code    string
+		message string
+	}{
+		{
+			name:    "invalid table routing rule",
+			code:    string(errors.ErrInvalidTableRoutingRule.RFCCode()),
+			message: "invalid table routing rule",
+		},
+		{
+			name:    "table routing failed",
+			code:    string(errors.ErrTableRoutingFailed.RFCCode()),
+			message: "table routing failed",
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			backoff := NewBackoff(common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), time.Minute*30, 1)
+			require.True(t, backoff.ShouldRun())
+
+			changed, state, err := backoff.CheckStatus(&heartbeatpb.MaintainerStatus{
+				CheckpointTs: 1,
+				Err: []*heartbeatpb.RunningError{
+					{
+						Code:    tc.code,
+						Message: tc.message,
+					},
+				},
+			})
+
+			require.True(t, changed)
+			require.Equal(t, config.StateFailed, state)
+			require.NotNil(t, err)
+			require.False(t, backoff.ShouldRun())
+			require.False(t, backoff.retrying.Load())
+		})
+	}
 }
 
 func TestFailedWhenRetry(t *testing.T) {

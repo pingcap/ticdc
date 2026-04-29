@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/pingcap/failpoint"
+	"github.com/pingcap/ticdc/downstreamadapter/routing"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/downstreamadapter/syncpoint"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -58,6 +59,7 @@ func newTestSharedInfo(
 		syncPointConfig,
 		&defaultAtomicity,
 		enableSplittableCheck,
+		routing.Router{},
 		0,
 		0,
 		make(chan TableSpanStatusWithSeq, 128),

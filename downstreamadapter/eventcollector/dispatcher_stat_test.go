@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
+	"github.com/pingcap/ticdc/downstreamadapter/routing"
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -41,10 +42,12 @@ type mockDispatcher struct {
 	id           common.DispatcherID
 	changefeedID common.ChangeFeedID
 	handleEvents func(events []dispatcher.DispatcherEvent, wakeCallback func()) (block bool)
+	handleError  func(err error)
 	events       []dispatcher.DispatcherEvent
 	checkPointTs uint64
 
 	skipSyncpointAtStartTs bool
+	router                 routing.Router
 }
 
 func newMockDispatcher(id common.DispatcherID, startTs uint64) *mockDispatcher {
@@ -129,6 +132,16 @@ func (m *mockDispatcher) GetIntegrityConfig() *eventpb.IntegrityConfig {
 
 func (m *mockDispatcher) IsOutputRawChangeEvent() bool {
 	return false
+}
+
+func (m *mockDispatcher) GetRouter() routing.Router {
+	return m.router
+}
+
+func (m *mockDispatcher) HandleError(err error) {
+	if m.handleError != nil {
+		m.handleError(err)
+	}
 }
 
 // mockEvent implements the Event interface for testing
@@ -1490,5 +1503,61 @@ func TestRegisterTo(t *testing.T) {
 		case <-time.After(1 * time.Second):
 			require.Fail(t, "timed out waiting for message")
 		}
+	})
+}
+
+func TestHandleDDLEventTableInfoUpdate(t *testing.T) {
+	t.Parallel()
+
+	localServerID := node.ID("local")
+	remoteServerID := node.ID("remote")
+
+	t.Run("stores ddl table info", func(t *testing.T) {
+		var capturedEvent *commonEvent.DDLEvent
+		mockDisp := newMockDispatcher(common.NewDispatcherID(), 0)
+		mockDisp.handleEvents = func(events []dispatcher.DispatcherEvent, wakeCallback func()) bool {
+			if len(events) > 0 {
+				capturedEvent = events[0].Event.(*commonEvent.DDLEvent)
+			}
+			return false
+		}
+
+		stat := newDispatcherStat(mockDisp, newTestEventCollector(localServerID), nil)
+		stat.connState.setEventServiceID(remoteServerID)
+		stat.currentEpoch.Store(newDispatcherEpochState(10, 1, stat.target.GetStartTs()))
+		stat.lastEventCommitTs.Store(50)
+
+		tableInfo := &common.TableInfo{
+			TableName: common.TableName{
+				Schema:  "source_db",
+				Table:   "users",
+				TableID: 1,
+			},
+		}
+
+		ddlEvent := &commonEvent.DDLEvent{
+			Version:    commonEvent.DDLEventVersion1,
+			Query:      "ALTER TABLE `source_db`.`users` ADD COLUMN `c1` INT",
+			FinishedTs: 100,
+			Epoch:      10,
+			Seq:        2,
+			TableInfo:  tableInfo,
+		}
+
+		events := []dispatcher.DispatcherEvent{
+			{From: &remoteServerID, Event: ddlEvent},
+		}
+
+		stat.handleDataEvents(events...)
+
+		storedTableInfo := stat.tableInfo.Load().(*common.TableInfo)
+		require.NotNil(t, storedTableInfo)
+		require.Same(t, tableInfo, storedTableInfo)
+		require.Equal(t, "source_db", storedTableInfo.TableName.Schema)
+		require.Equal(t, "users", storedTableInfo.TableName.Table)
+		require.Equal(t, int64(1), storedTableInfo.TableName.TableID)
+		require.Equal(t, uint64(100), stat.tableInfoVersion.Load())
+		require.NotNil(t, capturedEvent)
+		require.Same(t, ddlEvent, capturedEvent)
 	})
 }

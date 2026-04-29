@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/downstreamadapter/eventcollector"
+	"github.com/pingcap/ticdc/downstreamadapter/routing"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/redo"
@@ -256,6 +257,15 @@ func NewDispatcherManager(
 		outputRawChangeEvent = manager.config.SinkConfig.KafkaConfig.GetOutputRawChangeEvent()
 	}
 
+	router, err := routing.NewRouter(
+		manager.changefeedID,
+		util.GetOrZero(manager.config.SinkConfig.CaseSensitive),
+		manager.config.SinkConfig.DispatchRules,
+	)
+	if err != nil {
+		return nil, err
+	}
+
 	batchCounts, batchBytes := manager.getEventCollectorBatchCountAndBytes(manager.sink)
 	// Create shared info for all dispatchers
 	manager.sharedInfo = dispatcher.NewSharedInfo(
@@ -269,6 +279,7 @@ func NewDispatcherManager(
 		syncPointConfig,
 		manager.config.SinkConfig.TxnAtomicity,
 		manager.config.EnableSplittableCheck,
+		router,
 		batchCounts,
 		batchBytes,
 		make(chan dispatcher.TableSpanStatusWithSeq, 8192),
