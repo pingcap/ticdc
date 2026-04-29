@@ -49,6 +49,11 @@ import (
 const (
 	periodEventInterval = time.Millisecond * 100
 	periodRedoInterval  = time.Second * 1
+
+	checkpointNormalInterval          = periodEventInterval
+	checkpointSlowInterval            = time.Second * 5
+	checkpointSlowOperatorThreshold   = 3000
+	checkpointResumeOperatorThreshold = 1500
 )
 
 // Maintainer is response for handle changefeed replication tasks. Maintainer should:
@@ -155,10 +160,11 @@ type Maintainer struct {
 	resolvedTsLagGauge prometheus.Gauge
 	eventChLenGauge    prometheus.Gauge
 
-	scheduledTaskGauge  prometheus.Gauge
-	spanCountGauge      prometheus.Gauge
-	tableCountGauge     prometheus.Gauge
-	handleEventDuration prometheus.Observer
+	scheduledTaskGauge     prometheus.Gauge
+	spanCountGauge         prometheus.Gauge
+	tableCountGauge        prometheus.Gauge
+	handleEventDuration    prometheus.Observer
+	checkpointCalcDuration prometheus.Observer
 
 	redoScheduledTaskGauge prometheus.Gauge
 	redoSpanCountGauge     prometheus.Gauge
@@ -226,6 +232,8 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		spanCountGauge:      metrics.SpanCountGauge.WithLabelValues(keyspaceName, name, "default"),
 		tableCountGauge:     metrics.TableCountGauge.WithLabelValues(keyspaceName, name, "default"),
 		handleEventDuration: metrics.MaintainerHandleEventDuration.WithLabelValues(keyspaceName, name),
+		checkpointCalcDuration: metrics.MaintainerCheckpointCalculateDuration.WithLabelValues(
+			keyspaceName, name),
 
 		redoScheduledTaskGauge: metrics.ScheduleTaskGauge.WithLabelValues(keyspaceName, name, "redo"),
 		redoSpanCountGauge:     metrics.SpanCountGauge.WithLabelValues(keyspaceName, name, "redo"),
@@ -464,6 +472,7 @@ func (m *Maintainer) cleanupMetrics() {
 	metrics.MaintainerCheckpointTsGauge.DeleteLabelValues(keyspace, name)
 	metrics.MaintainerCheckpointTsLagGauge.DeleteLabelValues(keyspace, name)
 	metrics.MaintainerHandleEventDuration.DeleteLabelValues(keyspace, name)
+	metrics.MaintainerCheckpointCalculateDuration.DeleteLabelValues(keyspace, name)
 	metrics.MaintainerEventChLenGauge.DeleteLabelValues(keyspace, name)
 	metrics.MaintainerResolvedTsGauge.DeleteLabelValues(keyspace, name)
 	metrics.MaintainerResolvedTsLagGauge.DeleteLabelValues(keyspace, name)
@@ -649,25 +658,38 @@ func (m *Maintainer) handleRedoMetaTsMessage(ctx context.Context) {
 	}
 }
 
+func checkpointCalculateInterval(operatorSize int, current time.Duration) time.Duration {
+	if operatorSize > checkpointSlowOperatorThreshold {
+		return checkpointSlowInterval
+	}
+	if operatorSize < checkpointResumeOperatorThreshold {
+		return checkpointNormalInterval
+	}
+	return current
+}
+
 // calCheckpointTs will be a little expensive when there are a large number of operators or absent tasks
 // so we use a single goroutine to calculate the checkpointTs, instead of blocking event handling
 func (m *Maintainer) calCheckpointTs(ctx context.Context) {
-	ticker := time.NewTicker(periodEventInterval)
-	defer ticker.Stop()
+	interval := checkpointNormalInterval
+	timer := time.NewTimer(interval)
+	defer timer.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		case <-timer.C:
 			if !m.initialized.Load() {
 				log.Warn("can not advance checkpointTs since not bootstrapped",
 					zap.Stringer("changefeedID", m.changefeedID),
 					zap.Uint64("checkpointTs", m.getWatermark().CheckpointTs),
 					zap.Uint64("resolvedTs", m.getWatermark().ResolvedTs))
+				timer.Reset(interval)
 				break
 			}
 
+			start := time.Now()
 			// first check the online/offline nodes
 			// we need to check node changed before calculating checkpointTs
 			// to avoid the case when a node is offline, the node's heartbeat is missing
@@ -682,6 +704,9 @@ func (m *Maintainer) calCheckpointTs(ctx context.Context) {
 				m.setWatermark(*newWatermark)
 				m.updateMetrics()
 			}
+			m.checkpointCalcDuration.Observe(time.Since(start).Seconds())
+			interval = checkpointCalculateInterval(m.controller.operatorController.OperatorSize(), interval)
+			timer.Reset(interval)
 		}
 	}
 }
