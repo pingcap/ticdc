@@ -173,13 +173,18 @@ func (r *SpanReplication) GetMode() int64 {
 //
 //	The new status is only stored if its checkpointTs is greater than or equal to
 //	the current status's checkpointTs.
-func (r *SpanReplication) UpdateStatus(newStatus *heartbeatpb.TableSpanStatus) {
-	if newStatus != nil {
-		oldStatus := r.status.Load()
-		if newStatus.CheckpointTs >= oldStatus.CheckpointTs {
-			r.status.Store(newStatus)
-		}
+//
+// It returns true when the stored checkpointTs changes.
+func (r *SpanReplication) UpdateStatus(newStatus *heartbeatpb.TableSpanStatus) bool {
+	if newStatus == nil {
+		return false
 	}
+	oldStatus := r.status.Load()
+	if newStatus.CheckpointTs < oldStatus.CheckpointTs {
+		return false
+	}
+	r.status.Store(newStatus)
+	return newStatus.CheckpointTs != oldStatus.CheckpointTs
 }
 
 // ShouldRun always returns true.

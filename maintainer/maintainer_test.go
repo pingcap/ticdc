@@ -542,6 +542,9 @@ func newMaintainerForCheckpointCalculationTest(t testing.TB) (*Maintainer, node.
 		resolvedTsLagGauge: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "test_resolved_ts_lag",
 		}),
+		checkpointCalcDuration: prometheus.NewHistogram(prometheus.HistogramOpts{
+			Name: "test_checkpoint_calculate_duration",
+		}),
 	}
 	m.watermark.Watermark = heartbeatpb.NewMaxWatermark()
 	return m, selfNode.ID
@@ -602,6 +605,9 @@ func newMaintainerForRedoCheckpointCalculationTest(t testing.TB) (*Maintainer, n
 		}),
 		resolvedTsLagGauge: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "test_redo_resolved_ts_lag",
+		}),
+		checkpointCalcDuration: prometheus.NewHistogram(prometheus.HistogramOpts{
+			Name: "test_redo_checkpoint_calculate_duration",
 		}),
 	}
 	m.watermark.Watermark = heartbeatpb.NewMaxWatermark()
