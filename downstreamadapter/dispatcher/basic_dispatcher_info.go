@@ -111,7 +111,6 @@ func NewSharedInfo(
 		eventCollectorBatchCount: eventCollectorBatchCount,
 		eventCollectorBatchBytes: eventCollectorBatchBytes,
 		statusesChan:             statusesChan,
-		blockStatusesChan:        blockStatusesChan,
 		blockExecutor:            newBlockEventExecutor(),
 		errCh:                    errCh,
 		metricHandleDDLHis:       metrics.HandleDDLHistogram.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
