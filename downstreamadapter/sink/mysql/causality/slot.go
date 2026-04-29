@@ -59,17 +59,17 @@ func NewSlots(numSlots uint64) *Slots {
 // The reason is a node can step functions `assignTo`, `Remove`, `free`, then `assignTo`.
 // again. In the last `assignTo`, it can never know whether the node has been reused
 // or not.
-func (s *Slots) AllocNode(hashes []uint64) *Node {
+func (s *Slots) AllocNode(hashes map[uint64]struct{}) *Node {
 	return &Node{
-		id:                  genNextNodeID(),
-		sortedDedupKeysHash: sortHashes(hashes, s.getSlot),
-		assignedTo:          unassigned,
+		id:             genNextNodeID(),
+		sortedKeysHash: sortHashes(hashes, s.getSlot),
+		assignedTo:     unassigned,
 	}
 }
 
 // Add adds an elem to the slots and calls DependOn for elem.
 func (s *Slots) Add(elem *Node) {
-	hashes := elem.sortedDedupKeysHash
+	hashes := elem.sortedKeysHash
 	dependencyNodes := make(map[int64]*Node, len(hashes))
 
 	var lastSlot uint64 = math.MaxUint64
@@ -115,7 +115,7 @@ func (s *Slots) Add(elem *Node) {
 // Remove removes an element from the Slots.
 func (s *Slots) Remove(elem *Node) {
 	elem.remove()
-	hashes := elem.sortedDedupKeysHash
+	hashes := elem.sortedKeysHash
 	for _, hash := range hashes {
 		slotIdx := s.getSlot(hash)
 		s.slots[slotIdx].mu.Lock()
@@ -167,14 +167,19 @@ func getSlotByModulo(hash, numSlots uint64) uint64 {
 // order and therefore cannot deadlock each other. The slot mapper is selected
 // once when the Slots object is created, so sorting and later lock acquisition
 // always use the same mapping rule.
-func sortHashes(hashes []uint64, getSlot getSlotFunc) []uint64 {
+func sortHashes(hashes map[uint64]struct{}, getSlot getSlotFunc) []uint64 {
 	if len(hashes) == 0 {
 		return nil
 	}
 
-	sort.Slice(hashes, func(i, j int) bool {
-		return getSlot(hashes[i]) < getSlot(hashes[j])
+	hashList := make([]uint64, 0, len(hashes))
+	for hash := range hashes {
+		hashList = append(hashList, hash)
+	}
+
+	sort.Slice(hashList, func(i, j int) bool {
+		return getSlot(hashList[i]) < getSlot(hashList[j])
 	})
 
-	return hashes
+	return hashList
 }
