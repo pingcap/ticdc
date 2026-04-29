@@ -889,7 +889,27 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 		e.dispatcherMeta.Unlock()
 	}
 
-	// convert range before pass it to pebble: (startTs, endTs] is equal to [startTs + 1, endTs + 1)
+	// dataRange fields:
+	// CommitTsStart and CommitTsEnd define the commit-ts scan window.
+	// LastScannedTxnStartTs records how far the previous scan progressed inside
+	// CommitTsStart. It is zero if there is no unfinished scan at CommitTsStart.
+	//
+	// Iterator key bounds:
+	// Pebble uses [LowerBound, UpperBound), so end is always encoded as
+	// CommitTsEnd+1.
+	//
+	// If LastScannedTxnStartTs is zero, scan commit ts in
+	// (CommitTsStart, CommitTsEnd], and use CommitTsStart+1 as LowerBound.
+	//
+	// If LastScannedTxnStartTs is non-zero, continue scanning commit ts
+	// CommitTsStart with start ts greater than LastScannedTxnStartTs, then scan
+	// later commit ts up to CommitTsEnd.
+	//
+	// Table filter bounds:
+	// lowerTs is the commit-ts lower bound for TableFilter. It skips SSTs whose
+	// collected CRTs range does not overlap [lowerTs, CommitTsEnd]. Therefore
+	// lowerTs is CommitTsStart+1 in the first case, and CommitTsStart in the
+	// second case.
 	var start []byte
 	lowerTs := dataRange.CommitTsStart + 1
 	if dataRange.LastScannedTxnStartTs != 0 {
