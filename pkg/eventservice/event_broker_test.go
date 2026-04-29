@@ -380,7 +380,7 @@ func TestGetScanTaskDataRangeCappedByCheckpointWithSyncPoint(t *testing.T) {
 	info.syncPointInterval = 10 * time.Second
 	info.nextSyncPoint = ts120
 
-	changefeedStatus := broker.getOrSetChangefeedStatus(info.GetChangefeedID(), info.GetSyncPointInterval())
+	changefeedStatus := broker.getOrSetChangefeedStatus(info)
 	changefeedStatus.scanInterval.Store(int64(5 * time.Minute))
 	changefeedStatus.minSentTs.Store(ts100)
 
@@ -419,7 +419,7 @@ func TestGetScanTaskDataRangePendingDDLWithCheckpointCapCanAdvance(t *testing.T)
 	info.syncPointInterval = time.Second
 	info.nextSyncPoint = ts110
 
-	changefeedStatus := broker.getOrSetChangefeedStatus(info.GetChangefeedID(), info.GetSyncPointInterval())
+	changefeedStatus := broker.getOrSetChangefeedStatus(info)
 	changefeedStatus.scanInterval.Store(int64(time.Second))
 	changefeedStatus.minSentTs.Store(ts100)
 
@@ -457,7 +457,7 @@ func TestGetScanTaskDataRangePendingDDLBypassesCheckpointCapLock(t *testing.T) {
 	info.syncPointInterval = time.Second
 	info.nextSyncPoint = ts110
 
-	changefeedStatus := broker.getOrSetChangefeedStatus(info.GetChangefeedID(), info.GetSyncPointInterval())
+	changefeedStatus := broker.getOrSetChangefeedStatus(info)
 	changefeedStatus.scanInterval.Store(int64(time.Second))
 	changefeedStatus.minSentTs.Store(ts100)
 
@@ -497,7 +497,7 @@ func TestEmitSyncPointEventIfNeededSuppressesWhenLagging(t *testing.T) {
 	info.syncPointInterval = 10 * time.Second
 	info.nextSyncPoint = ts110
 
-	changefeedStatus := broker.getOrSetChangefeedStatus(info.GetChangefeedID(), info.GetSyncPointInterval())
+	changefeedStatus := broker.getOrSetChangefeedStatus(info)
 	disp := newDispatcherStat(info, 1, 1, nil, changefeedStatus)
 	disp.seq.Store(1)
 	disp.checkpointTs.Store(ts100)
@@ -536,7 +536,7 @@ func TestEmitSyncPointEventIfNeededSuppressesByMinChangefeedCheckpoint(t *testin
 	info.syncPointInterval = 10 * time.Second
 	info.nextSyncPoint = ts110
 
-	changefeedStatus := broker.getOrSetChangefeedStatus(info.GetChangefeedID(), info.GetSyncPointInterval())
+	changefeedStatus := broker.getOrSetChangefeedStatus(info)
 	disp := newDispatcherStat(info, 1, 1, nil, changefeedStatus)
 	disp.seq.Store(1)
 	disp.receivedResolvedTs.Store(ts130)
@@ -583,7 +583,7 @@ func TestEmitSyncPointEventIfNeededResumesAfterLagRecovers(t *testing.T) {
 	info.syncPointInterval = 10 * time.Second
 	info.nextSyncPoint = ts110
 
-	changefeedStatus := broker.getOrSetChangefeedStatus(info.GetChangefeedID(), info.GetSyncPointInterval())
+	changefeedStatus := broker.getOrSetChangefeedStatus(info)
 	disp := newDispatcherStat(info, 1, 1, nil, changefeedStatus)
 	disp.seq.Store(1)
 	disp.syncPointSendSuppressed.Store(true)
@@ -629,7 +629,7 @@ func TestEmitSyncPointEventIfNeededResumesWhenStaleCheckpointIsIgnored(t *testin
 	info.syncPointInterval = 10 * time.Second
 	info.nextSyncPoint = ts110
 
-	changefeedStatus := broker.getOrSetChangefeedStatus(info.GetChangefeedID(), info.GetSyncPointInterval())
+	changefeedStatus := broker.getOrSetChangefeedStatus(info)
 	disp := newDispatcherStat(info, 1, 1, nil, changefeedStatus)
 	disp.seq.Store(1)
 	disp.syncPointSendSuppressed.Store(true)
@@ -682,7 +682,7 @@ func TestEmitSyncPointEventIfNeededNoSuppressWhenCheckpointAhead(t *testing.T) {
 	info.syncPointInterval = 10 * time.Second
 	info.nextSyncPoint = ts110
 
-	changefeedStatus := broker.getOrSetChangefeedStatus(info.GetChangefeedID(), info.GetSyncPointInterval())
+	changefeedStatus := broker.getOrSetChangefeedStatus(info)
 	disp := newDispatcherStat(info, 1, 1, nil, changefeedStatus)
 	disp.seq.Store(1)
 	disp.receivedResolvedTs.Store(ts100)

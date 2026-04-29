@@ -144,7 +144,7 @@ func NewDefaultEventServiceConfig() *EventServiceConfig {
 		ScanTaskQueueSize:                1024 * 8,
 		ScanLimitInBytes:                 1024 * 1024 * 256, // 256MB
 		SyncPointCheckpointCapMultiplier: 2,
-		SyncPointLagSuppressThreshold:    20 * time.Minute,
+		SyncPointLagSuppressThreshold:    0,
 		SyncPointLagResumeThreshold:      15 * time.Minute,
 		DMLEventMaxRows:                  256,
 		DMLEventMaxBytes:                 1024 * 1024 * 1, // 1MB

@@ -131,14 +131,9 @@ func newEventBroker(
 	if syncPointCheckpointCapMultiplier <= 0 {
 		syncPointCheckpointCapMultiplier = defaultSyncPointCheckpointCapMultiplier
 	}
+	// If syncPointLagSuppressThreshold <= 0, disable sync point lag suppression function.
 	syncPointLagSuppressThreshold := eventServiceConfig.SyncPointLagSuppressThreshold
-	if syncPointLagSuppressThreshold <= 0 {
-		syncPointLagSuppressThreshold = defaultSyncPointLagSuppressThreshold
-	}
 	syncPointLagResumeThreshold := eventServiceConfig.SyncPointLagResumeThreshold
-	if syncPointLagResumeThreshold <= 0 {
-		syncPointLagResumeThreshold = defaultSyncPointLagResumeThreshold
-	}
 	if syncPointLagResumeThreshold > syncPointLagSuppressThreshold {
 		syncPointLagResumeThreshold = syncPointLagSuppressThreshold
 	}
