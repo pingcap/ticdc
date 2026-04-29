@@ -47,26 +47,32 @@ type balanceScheduler struct {
 
 	random *rand.Rand
 	mode   int64
+
+	drainState *DrainState
+
+	drainBalanceBlockedUntil time.Time
 }
 
 func NewBalanceScheduler(
 	changefeedID common.ChangeFeedID,
-	batchSize int,
 	splitter *split.Splitter,
 	oc *operator.Controller,
 	sc *span.Controller,
 	_ time.Duration,
 	mode int64,
+	drainState *DrainState,
+	moveBatchSize int,
 ) *balanceScheduler {
 	return &balanceScheduler{
 		changefeedID:       changefeedID,
-		batchSize:          batchSize,
+		batchSize:          moveBatchSize,
 		random:             rand.New(rand.NewSource(time.Now().UnixNano())),
 		operatorController: oc,
 		spanController:     sc,
 		nodeManager:        appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
 		splitter:           splitter,
 		mode:               mode,
+		drainState:         drainState,
 	}
 }
 
@@ -74,6 +80,13 @@ func (s *balanceScheduler) Execute() time.Time {
 	failpoint.Inject("StopBalanceScheduler", func() {
 		failpoint.Return(time.Now().Add(time.Second * 5))
 	})
+	now := time.Now()
+	state := s.drainState.snapshot()
+	if shouldPauseBalanceForDrain(state, now, &s.drainBalanceBlockedUntil) {
+		// Pause regular balance scheduling while dispatcher drain is active
+		// and keep a cooldown window after drain completion to avoid churn.
+		return time.Now().Add(time.Second * 5)
+	}
 
 	// TODO: consider to ignore split tables' dispatcher basic schedule operator to decide whether we can make balance schedule
 	if s.operatorController.OperatorSize() > 0 || s.spanController.GetAbsentSize() > 0 {
@@ -91,8 +104,10 @@ func (s *balanceScheduler) Execute() time.Time {
 		return time.Now().Add(time.Second * 5)
 	}
 
+	moveBudget := s.batchSize - count
+
 	// 2. do balance for the spans in defaultGroupID
-	s.schedulerDefaultGroup(s.batchSize - count)
+	s.schedulerDefaultGroup(moveBudget, state)
 
 	return time.Now().Add(time.Second * 5)
 }
@@ -104,8 +119,15 @@ func (s *balanceScheduler) Name() string {
 	return pkgScheduler.BalanceScheduler
 }
 
-func (s *balanceScheduler) schedulerDefaultGroup(maxSize int) int {
+func (s *balanceScheduler) schedulerDefaultGroup(
+	maxSize int,
+	state drainStateSnapshot,
+) int {
 	nodes := s.nodeManager.GetAliveNodes()
+	nodes = filterAliveNodesByDrainTarget(nodes, state)
+	if len(nodes) == 0 {
+		return 0
+	}
 	group := pkgreplica.DefaultGroupID
 	// fast path, check the balance status
 	moveSize := pkgScheduler.CheckBalanceStatus(s.spanController.GetTaskSizePerNodeByGroup(group), nodes)

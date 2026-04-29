@@ -34,6 +34,7 @@ const (
 	DispatcherDynamicStream = "DispatcherDynamicStream"
 	MaintainerManager       = "MaintainerManager"
 	DispatcherOrchestrator  = "DispatcherOrchestrator"
+	EncryptionManager       = "EncryptionManager"
 	DefaultPDClock          = "PDClock-0"
 	PDAPIClient             = "PDAPIClient"
 	RegionCache             = "RegionCache"
@@ -62,4 +63,16 @@ func SetService[T any](name string, t T) { GetGlobalContext().serviceMap.Store(n
 func GetService[T any](name string) T {
 	v, _ := GetGlobalContext().serviceMap.Load(name)
 	return v.(T)
+}
+
+// TryGetService attempts to get a service by name.
+// Returns the service and true if found, or zero value and false if not found.
+func TryGetService[T any](name string) (T, bool) {
+	v, ok := GetGlobalContext().serviceMap.Load(name)
+	if !ok {
+		var zero T
+		return zero, false
+	}
+	t, ok := v.(T)
+	return t, ok
 }

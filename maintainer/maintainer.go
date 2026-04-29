@@ -201,7 +201,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		eventCh:           chann.NewAutoDrainChann[*Event](),
 		startCheckpointTs: checkpointTs,
 		controller: NewController(cfID, checkpointTs, taskScheduler,
-			info.Config, ddlSpan, redoDDLSpan, conf.AddTableBatchSize, time.Duration(conf.CheckBalanceInterval), refresher, keyspaceMeta, enableRedo),
+			info.Config, ddlSpan, redoDDLSpan, conf.AddTableBatchSize, time.Duration(conf.CheckBalanceInterval), refresher, keyspaceMeta, enableRedo, conf.BalanceMoveBatchSize),
 		mc:                    mc,
 		removed:               atomic.NewBool(false),
 		nodeManager:           nodeManager,
@@ -231,6 +231,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		redoSpanCountGauge:     metrics.SpanCountGauge.WithLabelValues(keyspaceName, name, "redo"),
 		redoTableCountGauge:    metrics.TableCountGauge.WithLabelValues(keyspaceName, name, "redo"),
 	}
+	m.controller.SetSelfNodeID(selfNode.ID)
 	m.nodeChanged.changed = false
 	m.runningErrors.m = make(map[node.ID]*heartbeatpb.RunningError)
 
@@ -380,7 +381,46 @@ func (m *Maintainer) GetMaintainerStatus() *heartbeatpb.MaintainerStatus {
 		BootstrapDone: m.initialized.Load(),
 		LastSyncedTs:  m.getWatermark().LastSyncedTs,
 	}
+	drainTarget, drainEpoch := m.controller.getDispatcherDrainTarget()
+	if !drainTarget.IsEmpty() && drainEpoch > 0 {
+		// Report drain progress against the controller snapshot that all local
+		// schedulers are using. Coordinator compares this status with its own
+		// drain epoch, so stale or cleared targets naturally stop contributing.
+		// DrainProgress is changefeed-scoped, so aggregate default and redo
+		// dispatchers into one target view instead of reporting mode-specific
+		// counters.
+		dispatcherCount := m.controller.spanController.GetTaskSizeByNodeID(drainTarget)
+		inflightDrainMoveCount := m.controller.operatorController.CountInflightDrainMovesFromNode(drainTarget)
+		if m.enableRedo {
+			dispatcherCount += m.controller.redoSpanController.GetTaskSizeByNodeID(drainTarget)
+			inflightDrainMoveCount += m.controller.redoOperatorController.CountInflightDrainMovesFromNode(drainTarget)
+		}
+		status.DrainProgress = &heartbeatpb.DrainProgress{
+			TargetNodeId:                 drainTarget.String(),
+			TargetEpoch:                  drainEpoch,
+			TargetDispatcherCount:        clampIntToUint32(dispatcherCount),
+			TargetInflightDrainMoveCount: clampIntToUint32(inflightDrainMoveCount),
+		}
+	}
 	return status
+}
+
+// clampIntToUint32 converts local int counters to heartbeat protobuf counters.
+func clampIntToUint32(v int) uint32 {
+	if v <= 0 {
+		return 0
+	}
+	if uint64(v) > uint64(math.MaxUint32) {
+		return math.MaxUint32
+	}
+	return uint32(v)
+}
+
+// SetDispatcherDrainTarget applies the newest drain target to this maintainer
+// and marks its status dirty so coordinator observes the new epoch promptly.
+func (m *Maintainer) SetDispatcherDrainTarget(target node.ID, epoch uint64) {
+	m.controller.SetDispatcherDrainTarget(target, epoch)
+	m.statusChanged.Store(true)
 }
 
 func (m *Maintainer) initialize() error {
@@ -570,39 +610,14 @@ func (m *Maintainer) handleRedoMetaTsMessage(ctx context.Context) {
 				break
 			}
 			needUpdate := false
-			updateCheckpointTs := true
-
-			newWatermark := heartbeatpb.NewMaxWatermark()
-			// Calculate operator and barrier constraints first to ensure atomicity.
-			// This prevents a race condition where checkpointTsByCapture contains old heartbeat data
-			// while operators have completed based on newer heartbeat processing.
-			// For more detailed comments, please refer to `calculateNewCheckpointTs`.
-			minRedoCheckpointTsForScheduler := m.controller.GetMinRedoCheckpointTs(newWatermark.CheckpointTs)
-			minRedoCheckpointTsForBarrier := m.controller.redoBarrier.GetMinBlockedCheckpointTsForNewTables(newWatermark.CheckpointTs)
-
-			// if there is no tables, there must be a table trigger redo dispatcher
-			for _, id := range m.bootstrapper.GetAllNodeIDs() {
-				// maintainer node has the table trigger redo dispatcher
-				if id != m.selfNode.ID && m.controller.redoSpanController.GetTaskSizeByNodeID(id) <= 0 {
-					continue
-				}
-				// node level watermark reported, ignore this round
-				watermark, ok := m.redoTsByCapture.Get(id)
-				if !ok {
-					updateCheckpointTs = false
-					log.Warn("redo checkpointTs can not be advanced, since missing capture heartbeat",
-						zap.Stringer("changefeedID", m.changefeedID),
-						zap.Any("node", id))
-					continue
-				}
-				newWatermark.UpdateMin(watermark)
+			redoWatermark, canUpdate := m.calculateNewRedoCheckpointTs()
+			if canUpdate {
+				// Keep the redo scheduling baseline aligned with the redo pipeline checkpoint.
+				// Recreated redo dispatchers clamp their startTs to this controller owned value.
+				m.controller.redoSpanController.AdvanceMaintainerCommittedCheckpointTs(redoWatermark.CheckpointTs)
 			}
-
-			newWatermark.UpdateMin(heartbeatpb.Watermark{CheckpointTs: minRedoCheckpointTsForScheduler, ResolvedTs: minRedoCheckpointTsForScheduler})
-			newWatermark.UpdateMin(heartbeatpb.Watermark{CheckpointTs: minRedoCheckpointTsForBarrier, ResolvedTs: minRedoCheckpointTsForBarrier})
-
-			if m.redoMetaTs.ResolvedTs < newWatermark.CheckpointTs && updateCheckpointTs {
-				m.redoMetaTs.ResolvedTs = newWatermark.CheckpointTs
+			if canUpdate && m.redoMetaTs.ResolvedTs < redoWatermark.CheckpointTs {
+				m.redoMetaTs.ResolvedTs = redoWatermark.CheckpointTs
 				needUpdate = true
 			}
 			if m.redoMetaTs.CheckpointTs < m.getWatermark().CheckpointTs {
@@ -613,7 +628,13 @@ func (m *Maintainer) handleRedoMetaTsMessage(ctx context.Context) {
 				zap.Any("needUpdate", needUpdate),
 				zap.Any("redoMetaTs", m.redoMetaTs),
 				zap.Any("checkpointTs", m.getWatermark().CheckpointTs),
-				zap.Any("resolvedTs", newWatermark.CheckpointTs),
+				zap.Bool("canUpdateRedoCheckpointTs", canUpdate),
+				zap.Uint64("redoCheckpointTs", func() uint64 {
+					if !canUpdate {
+						return 0
+					}
+					return redoWatermark.CheckpointTs
+				}()),
 			)
 			if needUpdate {
 				m.sendMessages([]*messaging.TargetMessage{
@@ -658,10 +679,6 @@ func (m *Maintainer) calCheckpointTs(ctx context.Context) {
 			newWatermark, canUpdate := m.calculateNewCheckpointTs()
 			if canUpdate {
 				m.controller.spanController.AdvanceMaintainerCommittedCheckpointTs(newWatermark.CheckpointTs)
-				if m.enableRedo && m.controller.redoSpanController != nil {
-					// Redo dispatchers must not start below the changefeed committed checkpoint.
-					m.controller.redoSpanController.AdvanceMaintainerCommittedCheckpointTs(newWatermark.CheckpointTs)
-				}
 				m.setWatermark(*newWatermark)
 				m.updateMetrics()
 			}
@@ -725,6 +742,18 @@ func (m *Maintainer) calculateNewCheckpointTs() (*heartbeatpb.Watermark, bool) {
 	newWatermark.UpdateMin(heartbeatpb.Watermark{CheckpointTs: minCheckpointTsForBarrier, ResolvedTs: minCheckpointTsForBarrier})
 	newWatermark.UpdateMin(heartbeatpb.Watermark{CheckpointTs: minCheckpointTsForScheduler, ResolvedTs: minCheckpointTsForScheduler})
 
+	// MaxUint64 means this round still has no effective global checkpoint.
+	// Skipping the update keeps the committed checkpoint from being poisoned.
+	// Only all the heartbeat from dispatcherManager contains no dispatcher span (eg. all dispatchers are in absent state), will cause MaxUint64.
+	if newWatermark.CheckpointTs == math.MaxUint64 {
+		log.Debug("checkpointTs can not be advanced, since global checkpoint is invalid",
+			zap.Stringer("changefeedID", m.changefeedID),
+			zap.Uint64("resolvedTs", newWatermark.ResolvedTs),
+			zap.Uint64("minCheckpointTsForScheduler", minCheckpointTsForScheduler),
+			zap.Uint64("minCheckpointTsForBarrier", minCheckpointTsForBarrier))
+		return nil, false
+	}
+
 	log.Debug("can advance checkpointTs",
 		zap.Stringer("changefeedID", m.changefeedID),
 		zap.Uint64("newCheckpointTs", newWatermark.CheckpointTs),
@@ -733,6 +762,57 @@ func (m *Maintainer) calculateNewCheckpointTs() (*heartbeatpb.Watermark, bool) {
 		zap.Uint64("minCheckpointTsForBarrier", minCheckpointTsForBarrier),
 	)
 
+	return newWatermark, true
+}
+
+func (m *Maintainer) calculateNewRedoCheckpointTs() (*heartbeatpb.Watermark, bool) {
+	if !m.enableRedo || m.controller == nil || m.controller.redoSpanController == nil || m.controller.redoBarrier == nil {
+		return nil, false
+	}
+
+	newWatermark := heartbeatpb.NewMaxWatermark()
+	minRedoCheckpointTsForScheduler := m.controller.GetMinRedoCheckpointTs(newWatermark.CheckpointTs)
+	minRedoCheckpointTsForBarrier := m.controller.redoBarrier.GetMinBlockedCheckpointTsForNewTables(newWatermark.CheckpointTs)
+
+	updateCheckpointTs := true
+	for _, id := range m.bootstrapper.GetAllNodeIDs() {
+		// The maintainer node hosts the table trigger redo dispatcher.
+		if id != m.selfNode.ID && m.controller.redoSpanController.GetTaskSizeByNodeID(id) <= 0 {
+			continue
+		}
+		watermark, ok := m.redoTsByCapture.Get(id)
+		if !ok {
+			updateCheckpointTs = false
+			log.Warn("redo checkpointTs can not be advanced, since missing capture heartbeat",
+				zap.Stringer("changefeedID", m.changefeedID),
+				zap.Any("node", id))
+			continue
+		}
+		newWatermark.UpdateMin(watermark)
+	}
+
+	if !updateCheckpointTs {
+		return nil, false
+	}
+
+	newWatermark.UpdateMin(heartbeatpb.Watermark{CheckpointTs: minRedoCheckpointTsForBarrier, ResolvedTs: minRedoCheckpointTsForBarrier})
+	newWatermark.UpdateMin(heartbeatpb.Watermark{CheckpointTs: minRedoCheckpointTsForScheduler, ResolvedTs: minRedoCheckpointTsForScheduler})
+
+	if newWatermark.CheckpointTs == math.MaxUint64 {
+		log.Debug("redo checkpointTs can not be advanced, since redo global checkpoint is invalid",
+			zap.Stringer("changefeedID", m.changefeedID),
+			zap.Uint64("resolvedTs", newWatermark.ResolvedTs),
+			zap.Uint64("minCheckpointTsForScheduler", minRedoCheckpointTsForScheduler),
+			zap.Uint64("minCheckpointTsForBarrier", minRedoCheckpointTsForBarrier))
+		return nil, false
+	}
+
+	log.Debug("can advance redo checkpointTs",
+		zap.Stringer("changefeedID", m.changefeedID),
+		zap.Uint64("newCheckpointTs", newWatermark.CheckpointTs),
+		zap.Uint64("newResolvedTs", newWatermark.ResolvedTs),
+		zap.Uint64("minCheckpointTsForScheduler", minRedoCheckpointTsForScheduler),
+		zap.Uint64("minCheckpointTsForBarrier", minRedoCheckpointTsForBarrier))
 	return newWatermark, true
 }
 
@@ -1071,20 +1151,18 @@ func (m *Maintainer) createBootstrapMessageFactory() bootstrap.NewBootstrapReque
 
 		// only send dispatcher targetNodeID to dispatcher manager on the same node
 		if targetNodeID == m.selfNode.ID {
-			msg.TableTriggerEventDispatcherId = m.ddlSpan.ID.ToPB()
-			if m.enableRedo {
-				msg.TableTriggerRedoDispatcherId = m.redoDDLSpan.ID.ToPB()
-			}
-			msg.IsNewChangefeed = m.newChangefeed
 			log.Info("create table event trigger dispatcher bootstrap message",
 				zap.Stringer("changefeedID", m.changefeedID),
 				zap.String("nodeAddr", targetAddr),
 				zap.Any("nodeID", targetNodeID),
 				zap.String("dispatcherID", m.ddlSpan.ID.String()),
-				zap.Bool("enableRedo", m.enableRedo),
-				zap.Bool("newChangefeed", m.newChangefeed),
 				zap.Uint64("startTs", m.startCheckpointTs),
 			)
+			msg.TableTriggerEventDispatcherId = m.ddlSpan.ID.ToPB()
+			if m.enableRedo {
+				msg.TableTriggerRedoDispatcherId = m.redoDDLSpan.ID.ToPB()
+			}
+			msg.IsNewChangefeed = m.newChangefeed
 		}
 
 		log.Info("maintainer new bootstrap message to dispatcher orchestrator",

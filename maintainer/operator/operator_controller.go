@@ -212,6 +212,29 @@ func (oc *Controller) OperatorSize() int {
 	return len(oc.operators)
 }
 
+// CountInflightDrainMovesFromNode returns the number of unfinished move
+// operators that are still draining dispatchers away from the given origin.
+func (oc *Controller) CountInflightDrainMovesFromNode(origin node.ID) int {
+	oc.mu.RLock()
+	defer oc.mu.RUnlock()
+
+	count := 0
+	for _, op := range oc.operators {
+		moveOp, ok := op.OP.(*MoveDispatcherOperator)
+		if !ok {
+			continue
+		}
+		if moveOp.IsFinished() {
+			continue
+		}
+		if moveOp.OriginNode() != origin {
+			continue
+		}
+		count++
+	}
+	return count
+}
+
 func (oc *Controller) GetMinCheckpointTs(minCheckpointTs uint64) uint64 {
 	ops := oc.GetAllOperators()
 

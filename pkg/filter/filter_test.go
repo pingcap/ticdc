@@ -773,6 +773,27 @@ func TestSharedFilterStorage_DifferentConfigCreatesNewFilter(t *testing.T) {
 	assertFilterInstancesDifferent(t, filter1, filter2)
 }
 
+func TestSharedFilterStorageRemoveFilter(t *testing.T) {
+	storage := &SharedFilterStorage{
+		m: make(map[common.ChangeFeedID]FilterWithConfig),
+	}
+
+	changeFeedID := createTestChangeFeedID("test-changefeed")
+	cfg := createTestFilterConfig()
+	timeZone := "UTC"
+
+	filter1, err := storage.GetOrSetFilter(changeFeedID, cfg, timeZone)
+	require.NoError(t, err)
+	require.NotNil(t, filter1)
+
+	storage.RemoveFilter(changeFeedID)
+
+	filter2, err := storage.GetOrSetFilter(changeFeedID, cfg, timeZone)
+	require.NoError(t, err)
+	require.NotNil(t, filter2)
+	require.NotSame(t, filter1, filter2)
+}
+
 func TestSharedFilterStorage_DifferentChangeFeedIDCreatesIndependentFilter(t *testing.T) {
 	storage := &SharedFilterStorage{
 		m: make(map[common.ChangeFeedID]FilterWithConfig),
