@@ -430,22 +430,21 @@ type changefeedStatus struct {
 	availableMemoryQuota sync.Map // nodeID -> atomic.Uint64 (memory quota in bytes)
 	minSentTs            atomic.Uint64
 	scanInterval         atomic.Int64
+	reportBandState      atomic.Int32
+	fastBandState        atomic.Int32
+	slowBandState        atomic.Int32
 
-	lastAdjustTime      atomic.Time
-	lastTrendAdjustTime atomic.Time
-	usageWindow         *memoryUsageWindow
-	syncPointInterval   time.Duration
+	scanWindowController *adaptiveScanWindowController
+	syncPointInterval    time.Duration
 }
 
 func newChangefeedStatus(changefeedID common.ChangeFeedID, syncPointInterval time.Duration) *changefeedStatus {
 	status := &changefeedStatus{
-		changefeedID:      changefeedID,
-		usageWindow:       newMemoryUsageWindow(memoryUsageWindowDuration),
-		syncPointInterval: syncPointInterval,
+		changefeedID:         changefeedID,
+		scanWindowController: newAdaptiveScanWindowController(time.Now()),
+		syncPointInterval:    syncPointInterval,
 	}
 	status.scanInterval.Store(int64(defaultScanInterval))
-	status.lastAdjustTime.Store(time.Now())
-	status.lastTrendAdjustTime.Store(time.Now())
 
 	return status
 }
