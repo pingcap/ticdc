@@ -876,18 +876,18 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 
 	// convert range before pass it to pebble: (startTs, endTs] is equal to [startTs + 1, endTs + 1)
 	var start []byte
+	lowerCRTs := dataRange.CommitTsStart
 	if dataRange.LastScannedTxnStartTs != 0 {
 		start = EncodeKeyPrefix(uint64(subStat.subID), stat.tableSpan.TableID, dataRange.CommitTsStart, dataRange.LastScannedTxnStartTs+1)
 	} else {
 		start = EncodeKeyPrefix(uint64(subStat.subID), stat.tableSpan.TableID, dataRange.CommitTsStart+1)
+		lowerCRTs = dataRange.CommitTsStart + 1
 	}
 	end := EncodeKeyPrefix(uint64(subStat.subID), stat.tableSpan.TableID, dataRange.CommitTsEnd+1)
-	// TODO: optimize read performance
-	// it's impossible return error here
-	iter, _ := db.NewIter(&pebble.IterOptions{
-		LowerBound: start,
-		UpperBound: end,
-	})
+	iter, err := db.NewIter(newEventStoreIterOptions(start, end, lowerCRTs, dataRange.CommitTsEnd))
+	if err != nil {
+		log.Panic("new event store iterator failed", zap.Error(err))
+	}
 	decoder := e.decoderPool.Get().(*zstd.Decoder)
 	startTime := time.Now()
 	// todo: what happens if iter.First() returns false?

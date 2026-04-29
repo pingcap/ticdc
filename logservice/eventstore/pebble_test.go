@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"math"
 	"os"
 	"testing"
 
@@ -24,6 +25,87 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/stretchr/testify/require"
 )
+
+func TestEventStoreTableCRTsCollector(t *testing.T) {
+	t.Parallel()
+
+	collector := &tableCRTsCollector{minTs: math.MaxUint64}
+	require.NoError(t, collector.Add(pebble.InternalKey{
+		UserKey: EncodeKey(1, 1, &common.RawKVEntry{
+			OpType:  common.OpTypePut,
+			StartTs: 10,
+			CRTs:    20,
+			Key:     []byte("a"),
+		}, CompressionNone),
+	}, nil))
+	require.NoError(t, collector.Add(pebble.InternalKey{
+		UserKey: EncodeKey(1, 1, &common.RawKVEntry{
+			OpType:  common.OpTypePut,
+			StartTs: 30,
+			CRTs:    40,
+			Key:     []byte("b"),
+		}, CompressionNone),
+	}, nil))
+
+	userProps := make(map[string]string)
+	require.NoError(t, collector.Finish(userProps))
+	require.Equal(t, "20", userProps[minTableCRTsLabel])
+	require.Equal(t, "40", userProps[maxTableCRTsLabel])
+}
+
+func TestEventStoreIteratorWithTableFilter(t *testing.T) {
+	t.Parallel()
+
+	opts := newPebbleOptions(1)
+	opts.DisableAutomaticCompactions = true
+	db, err := pebble.Open(t.TempDir(), opts)
+	require.NoError(t, err)
+	defer db.Close()
+
+	writeKeys := func(maxTableID int64, crts uint64) {
+		for tableID := int64(1); tableID <= maxTableID; tableID++ {
+			key := EncodeKey(1, tableID, &common.RawKVEntry{
+				OpType:  common.OpTypePut,
+				StartTs: 0,
+				CRTs:    crts,
+				Key:     []byte{byte(tableID)},
+			}, CompressionNone)
+			require.NoError(t, db.Set(key, []byte{'x'}, pebble.NoSync))
+		}
+		require.NoError(t, db.Flush())
+	}
+
+	writeKeys(7, 1)
+	writeKeys(9, 3)
+
+	for _, tc := range []struct {
+		lowerCRTs uint64
+		upperCRTs uint64
+		expected  int
+	}{
+		{lowerCRTs: 0, upperCRTs: 1, expected: 7},
+		{lowerCRTs: 1, upperCRTs: 2, expected: 7},
+		{lowerCRTs: 2, upperCRTs: 3, expected: 9},
+		{lowerCRTs: 3, upperCRTs: 4, expected: 9},
+		{lowerCRTs: 0, upperCRTs: 10, expected: 16},
+		{lowerCRTs: 10, upperCRTs: 20, expected: 0},
+	} {
+		t.Run(fmt.Sprintf("%d-%d", tc.lowerCRTs, tc.upperCRTs), func(t *testing.T) {
+			count := 0
+			for tableID := int64(0); tableID <= 9; tableID++ {
+				start := EncodeKeyPrefix(1, tableID, tc.lowerCRTs)
+				end := EncodeKeyPrefix(1, tableID, tc.upperCRTs+1)
+				iter, err := db.NewIter(newEventStoreIterOptions(start, end, tc.lowerCRTs, tc.upperCRTs))
+				require.NoError(t, err)
+				for iter.First(); iter.Valid(); iter.Next() {
+					count++
+				}
+				require.NoError(t, iter.Close())
+			}
+			require.Equal(t, tc.expected, count)
+		})
+	}
+}
 
 func TestWriteAndReadRawKVEntry(t *testing.T) {
 	dbPath := fmt.Sprintf("/tmp/testdb-%s", t.Name())

@@ -32,7 +32,85 @@ const (
 	cacheSize         = 1 << 30  // 1GB
 	memTableTotalSize = 1 << 30  // 1GB
 	memTableSize      = 64 << 20 // 64MB
+
+	minTableCRTsLabel      = "minCRTs"
+	maxTableCRTsLabel      = "maxCRTs"
+	tableCRTsCollectorName = "table-crts-collector"
 )
+
+type tableCRTsCollector struct {
+	minTs  uint64
+	maxTs  uint64
+	hasKey bool
+}
+
+func (t *tableCRTsCollector) Add(key pebble.InternalKey, value []byte) error {
+	crts, ok := decodeCRTsFromKey(key.UserKey)
+	if !ok {
+		return nil
+	}
+	if crts > t.maxTs {
+		t.maxTs = crts
+	}
+	if crts < t.minTs {
+		t.minTs = crts
+	}
+	t.hasKey = true
+	return nil
+}
+
+func (t *tableCRTsCollector) Finish(userProps map[string]string) error {
+	if !t.hasKey {
+		return nil
+	}
+	userProps[minTableCRTsLabel] = strconv.FormatUint(t.minTs, 10)
+	userProps[maxTableCRTsLabel] = strconv.FormatUint(t.maxTs, 10)
+	return nil
+}
+
+func (t *tableCRTsCollector) Name() string {
+	return tableCRTsCollectorName
+}
+
+func newEventStoreIterOptions(
+	lowerBound []byte,
+	upperBound []byte,
+	lowerCRTs uint64,
+	upperCRTs uint64,
+) *pebble.IterOptions {
+	return &pebble.IterOptions{
+		LowerBound: lowerBound,
+		UpperBound: upperBound,
+		TableFilter: func(userProps map[string]string) bool {
+			tableMinCRTs, tableMaxCRTs, ok := parseTableCRTs(userProps)
+			if !ok {
+				return true
+			}
+			return tableMaxCRTs >= lowerCRTs && tableMinCRTs <= upperCRTs
+		},
+		UseL6Filters: true,
+	}
+}
+
+func parseTableCRTs(userProps map[string]string) (uint64, uint64, bool) {
+	minCRTs, ok := userProps[minTableCRTsLabel]
+	if !ok {
+		return 0, 0, false
+	}
+	maxCRTs, ok := userProps[maxTableCRTsLabel]
+	if !ok {
+		return 0, 0, false
+	}
+	tableMinCRTs, err := strconv.ParseUint(minCRTs, 10, 64)
+	if err != nil {
+		return 0, 0, false
+	}
+	tableMaxCRTs, err := strconv.ParseUint(maxCRTs, 10, 64)
+	if err != nil {
+		return 0, 0, false
+	}
+	return tableMinCRTs, tableMaxCRTs, true
+}
 
 func newPebbleOptions(dbNum int) *pebble.Options {
 	opts := &pebble.Options{
@@ -56,6 +134,12 @@ func newPebbleOptions(dbNum int) *pebble.Options {
 
 		// Configure options to optimize read/write performance
 		Levels: make([]pebble.LevelOptions, 7),
+
+		TablePropertyCollectors: []func() pebble.TablePropertyCollector{
+			func() pebble.TablePropertyCollector {
+				return &tableCRTsCollector{minTs: math.MaxUint64}
+			},
+		},
 	}
 
 	for i := 0; i < len(opts.Levels); i++ {
