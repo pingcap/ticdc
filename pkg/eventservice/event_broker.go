@@ -342,10 +342,9 @@ func (c *eventBroker) tickTableTriggerDispatchers(ctx context.Context) error {
 		case <-ticker.C:
 			c.tableTriggerDispatchers.Range(func(key, value interface{}) bool {
 				stat := value.(*atomic.Pointer[dispatcherStat]).Load()
-				if !c.checkAndSendReady(stat) {
+				if !c.activateDispatcherControlPlane(stat) {
 					return true
 				}
-				c.sendHandshakeIfNeed(stat)
 				startTs := stat.sentResolvedTs.Load()
 				remoteID := node.ID(stat.info.GetServerID())
 				keyspaceMeta := common.KeyspaceMeta{
@@ -357,6 +356,7 @@ func (c *eventBroker) tickTableTriggerDispatchers(ctx context.Context) error {
 					log.Error("table trigger ddl events fetch failed", zap.Uint32("keyspaceID", stat.info.GetTableSpan().KeyspaceID), zap.Stringer("dispatcherID", stat.id), zap.Error(err))
 					return true
 				}
+				// Keep the raw resolved-ts from schema store for scan readiness/lag visibility.
 				stat.receivedResolvedTs.Store(endTs)
 				for _, e := range ddlEvents {
 					ep := &e
@@ -505,23 +505,31 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 // Note: A true return value only indicates potential scanning need,
 // final determination occurs when the scanTask is actully processed.
 func (c *eventBroker) scanReady(task scanTask) bool {
-	if task.isRemoved.Load() {
-		return false
-	}
-
 	if task.isTaskScanning.Load() {
 		return false
 	}
 
-	// If the dispatcher is not ready, we don't need do the scan.
+	if !c.activateDispatcherControlPlane(task) {
+		return false
+	}
+
+	ok, _ := c.getScanTaskDataRange(task)
+	return ok
+}
+
+// activateDispatcherControlPlane advances the dispatcher through ready/handshake
+// without coupling it to scan task generation.
+func (c *eventBroker) activateDispatcherControlPlane(task scanTask) bool {
+	if task.isRemoved.Load() {
+		return false
+	}
+
 	if !c.checkAndSendReady(task) {
 		return false
 	}
 
 	c.sendHandshakeIfNeed(task)
-
-	ok, _ := c.getScanTaskDataRange(task)
-	return ok
+	return true
 }
 
 func (c *eventBroker) checkAndSendReady(task scanTask) bool {
@@ -1070,6 +1078,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 	}
 	c.dispatchers.Store(id, dispatcherPtr)
 	c.metricsCollector.metricDispatcherCount.Inc()
+	c.activateDispatcherControlPlane(dispatcher)
 	log.Info("register dispatcher",
 		zap.Uint64("clusterID", c.tidbClusterID),
 		zap.Stringer("changefeedID", changefeedID),
@@ -1233,6 +1242,7 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 		zap.Uint64("newStartTs", dispatcherInfo.GetStartTs()),
 		zap.Uint64("newEpoch", newStat.epoch),
 		zap.Duration("resetTime", time.Since(start)))
+	c.activateDispatcherControlPlane(newStat)
 
 	return nil
 }
