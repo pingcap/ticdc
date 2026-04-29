@@ -47,11 +47,11 @@ import (
 )
 
 const (
-	periodEventInterval = time.Millisecond * 100
+	periodEventInterval = time.Millisecond * 500
 	periodRedoInterval  = time.Second * 1
 
-	checkpointNormalInterval          = periodEventInterval
-	checkpointSlowInterval            = time.Second * 5
+	checkpointNormalInterval          = 200 * time.Millisecond
+	checkpointSlowInterval            = time.Second * 30
 	checkpointSlowOperatorThreshold   = 3000
 	checkpointResumeOperatorThreshold = 200
 )
@@ -659,6 +659,11 @@ func (m *Maintainer) handleRedoMetaTsMessage(ctx context.Context) {
 }
 
 func checkpointCalculateInterval(operatorSize int, current time.Duration) time.Duration {
+	defer func() {
+		log.Info("checkpoint calculate interval",
+			zap.Int("operatorSize", operatorSize),
+			zap.Duration("currentInterval", current))
+	}()
 	if operatorSize > checkpointSlowOperatorThreshold {
 		return checkpointSlowInterval
 	}
