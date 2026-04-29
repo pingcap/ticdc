@@ -483,11 +483,6 @@ func TestErrCacheDispatchWithFullChannelAndCanceledContext(t *testing.T) {
 }
 
 func TestErrCacheDispatchBatch(t *testing.T) {
-	errCache := &errCache{
-		cache:  make([]regionErrorInfo, 0, 10),
-		errCh:  make(chan regionErrorInfo, 10),
-		notify: make(chan struct{}, 1),
-	}
 	mockErrInfo := regionErrorInfo{
 		regionInfo: regionInfo{
 			verID: tikv.NewRegionVerID(1, 1, 1),
@@ -496,15 +491,82 @@ func TestErrCacheDispatchBatch(t *testing.T) {
 		err: errors.New("test error"),
 	}
 
-	for i := 0; i < 5; i++ {
-		errCache.add(mockErrInfo)
+	tests := []struct {
+		name          string
+		cacheLen      int
+		limit         int
+		expectedN     int
+		expectedCache int
+		expectedErrCh int
+	}{
+		{
+			name:          "dispatch all when limit equals cache length",
+			cacheLen:      5,
+			limit:         5,
+			expectedN:     5,
+			expectedCache: 0,
+			expectedErrCh: 5,
+		},
+		{
+			name:          "keep remaining cache when limit is smaller",
+			cacheLen:      5,
+			limit:         2,
+			expectedN:     2,
+			expectedCache: 3,
+			expectedErrCh: 2,
+		},
+		{
+			name:          "dispatch all when limit is larger",
+			cacheLen:      5,
+			limit:         10,
+			expectedN:     5,
+			expectedCache: 0,
+			expectedErrCh: 5,
+		},
+		{
+			name:          "dispatch all when limit is zero",
+			cacheLen:      5,
+			limit:         0,
+			expectedN:     5,
+			expectedCache: 0,
+			expectedErrCh: 5,
+		},
+		{
+			name:          "dispatch all when limit is negative",
+			cacheLen:      5,
+			limit:         -1,
+			expectedN:     5,
+			expectedCache: 0,
+			expectedErrCh: 5,
+		},
+		{
+			name:          "empty cache",
+			cacheLen:      0,
+			limit:         5,
+			expectedN:     0,
+			expectedCache: 0,
+			expectedErrCh: 0,
+		},
 	}
 
-	n, err := errCache.dispatchBatch(context.Background(), 5)
-	require.NoError(t, err)
-	require.Equal(t, 5, n)
-	require.Empty(t, errCache.cache)
-	require.Len(t, errCache.errCh, 5)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			errCache := &errCache{
+				cache:  make([]regionErrorInfo, 0, 10),
+				errCh:  make(chan regionErrorInfo, 10),
+				notify: make(chan struct{}, 1),
+			}
+			for i := 0; i < tc.cacheLen; i++ {
+				errCache.add(mockErrInfo)
+			}
+
+			n, err := errCache.dispatchBatch(context.Background(), tc.limit)
+			require.NoError(t, err)
+			require.Equal(t, tc.expectedN, n)
+			require.Len(t, errCache.cache, tc.expectedCache)
+			require.Len(t, errCache.errCh, tc.expectedErrCh)
+		})
+	}
 }
 
 func TestGCResolveLastRunMap(t *testing.T) {
