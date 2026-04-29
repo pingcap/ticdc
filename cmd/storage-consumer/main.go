@@ -56,6 +56,11 @@ func init() {
 		config.DefaultFileIndexWidth, "file index width")
 	flag.BoolVar(&enableProfiling, "enable-profiling", false, "whether to enable profiling")
 	flag.StringVar(&timezone, "tz", "System", "Specify time zone of storage consumer")
+
+	if strings.HasSuffix(os.Args[0], ".test") {
+		return
+	}
+
 	flag.Parse()
 
 	err := logger.InitLogger(&logger.Config{
