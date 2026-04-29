@@ -310,8 +310,9 @@ func (c *Controller) handleTableHoles(
 ) {
 	holes := findHoles(tableSpans, tableSpan)
 	if c.splitter != nil {
+		ctx := context.Background()
 		for _, hole := range holes {
-			spans := c.splitter.Split(context.Background(), hole, 0, split.SplitTypeRegionCount)
+			spans := c.splitter.Split(ctx, hole, 0, split.SplitTypeRegionCount)
 			spanController.AddNewSpans(table.SchemaID, spans, c.startTs, splitEnabled)
 		}
 	} else {
