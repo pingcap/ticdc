@@ -115,6 +115,31 @@ func TestControllerCheckpointTsTrackerBindSpanToNode(t *testing.T) {
 	require.Equal(t, uint64(1000), controller.GetMinCheckpointTsForNonReplicatingSpans(1000))
 }
 
+func TestControllerCheckpointTsTrackerDirectScheduling(t *testing.T) {
+	controller := newControllerForCheckpointTsTrackerTest(t)
+	span := newSpanReplicationForCheckpointTsTrackerTest(controller, 1, 100, 90)
+	controller.AddSchedulingReplicaSet(span, "node1")
+
+	require.Equal(t, uint64(90), controller.GetMinCheckpointTsForNonReplicatingSpans(1000))
+
+	controller.UpdateStatus(span, &heartbeatpb.TableSpanStatus{
+		ID:              span.ID.ToPB(),
+		ComponentStatus: heartbeatpb.ComponentState_Working,
+		CheckpointTs:    80,
+	})
+	require.Equal(t, uint64(90), controller.GetMinCheckpointTsForNonReplicatingSpans(1000))
+
+	controller.UpdateStatus(controller.GetDDLDispatcher(), &heartbeatpb.TableSpanStatus{
+		ID:              controller.GetDDLDispatcherID().ToPB(),
+		ComponentStatus: heartbeatpb.ComponentState_Working,
+		CheckpointTs:    1,
+	})
+	require.Equal(t, uint64(90), controller.GetMinCheckpointTsForNonReplicatingSpans(1000))
+
+	controller.MarkSpanReplicating(span)
+	require.Equal(t, uint64(1000), controller.GetMinCheckpointTsForNonReplicatingSpans(1000))
+}
+
 func TestControllerCheckpointTsTrackerReplaceAndRemove(t *testing.T) {
 	controller := newControllerForCheckpointTsTrackerTest(t)
 	oldSpan := newSpanReplicationForCheckpointTsTrackerTest(controller, 1, 100, 50)
@@ -140,6 +165,33 @@ func TestControllerCheckpointTsTrackerReplaceAndRemove(t *testing.T) {
 	require.Equal(t, uint64(50), controller.GetMinCheckpointTsForNonReplicatingSpans(1000))
 
 	controller.RemoveByTableIDs(101)
+	require.Equal(t, uint64(1000), controller.GetMinCheckpointTsForNonReplicatingSpans(1000))
+}
+
+func TestControllerCheckpointTsTrackerReplaceIntoScheduling(t *testing.T) {
+	controller := newControllerForCheckpointTsTrackerTest(t)
+	oldSpan := newSpanReplicationForCheckpointTsTrackerTest(controller, 1, 100, 50)
+	controller.AddAbsentReplicaSet(oldSpan)
+	newSpan := common.TableIDToComparableSpan(common.DefaultKeyspaceID, 101)
+	newTableSpan := &heartbeatpb.TableSpan{
+		TableID:    101,
+		StartKey:   newSpan.StartKey,
+		EndKey:     newSpan.EndKey,
+		KeyspaceID: common.DefaultKeyspaceID,
+	}
+
+	newSpans, inScheduling := controller.ReplaceReplicaSet(
+		[]*replica.SpanReplication{oldSpan},
+		[]*heartbeatpb.TableSpan{newTableSpan},
+		80,
+		[]node.ID{"node1"},
+	)
+
+	require.True(t, inScheduling)
+	require.Len(t, newSpans, 1)
+	require.Equal(t, uint64(50), controller.GetMinCheckpointTsForNonReplicatingSpans(1000))
+
+	controller.MarkSpanReplicating(newSpans[0])
 	require.Equal(t, uint64(1000), controller.GetMinCheckpointTsForNonReplicatingSpans(1000))
 }
 

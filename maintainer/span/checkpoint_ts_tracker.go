@@ -64,6 +64,8 @@ func (t *checkpointTsTracker) remove(id common.DispatcherID) {
 	delete(t.byID, id)
 	t.decrement(old)
 	if len(t.byID) == 0 {
+		// Release large maps after a bootstrap wave drains. A 1M-table changefeed
+		// can otherwise retain the tracker backing storage for its whole lifetime.
 		t.reset()
 	}
 }

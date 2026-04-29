@@ -31,6 +31,7 @@ type testReplication struct {
 	id             testReplicationID
 	groupID        GroupID
 	nodeID         node.ID
+	shouldRun      bool
 	shouldRunCalls *atomic.Int64
 }
 
@@ -54,7 +55,7 @@ func (r *testReplication) ShouldRun() bool {
 	if r.shouldRunCalls != nil {
 		r.shouldRunCalls.Add(1)
 	}
-	return true
+	return r.shouldRun
 }
 
 func TestIMapLenTracksOverwriteAndDelete(t *testing.T) {
@@ -94,6 +95,7 @@ func TestGetAbsentByGroupStopsAtBatch(t *testing.T) {
 		db.AddAbsentWithoutLock(&testReplication{
 			id:             id,
 			groupID:        DefaultGroupID,
+			shouldRun:      true,
 			shouldRunCalls: &shouldRunCalls,
 		})
 	}
@@ -104,5 +106,32 @@ func TestGetAbsentByGroupStopsAtBatch(t *testing.T) {
 	}
 	if got := shouldRunCalls.Load(); got != 3 {
 		t.Fatalf("GetAbsentByGroup() called ShouldRun %d times, want 3", got)
+	}
+}
+
+func TestGetAbsentByGroupSkipsNotRunnableTasks(t *testing.T) {
+	t.Parallel()
+
+	var shouldRunCalls atomic.Int64
+	db := NewReplicationDB[testReplicationID, *testReplication](
+		"test",
+		func(action func()) { action() },
+		NewEmptyChecker[testReplicationID, *testReplication],
+	)
+	for i := 0; i < 100; i++ {
+		id := testReplicationID(fmt.Sprintf("r%d", i))
+		db.AddAbsentWithoutLock(&testReplication{
+			id:             id,
+			groupID:        DefaultGroupID,
+			shouldRunCalls: &shouldRunCalls,
+		})
+	}
+
+	absent := db.GetAbsentByGroup(DefaultGroupID, 3)
+	if got := len(absent); got != 0 {
+		t.Fatalf("GetAbsentByGroup() returned %d tasks, want 0", got)
+	}
+	if got := shouldRunCalls.Load(); got != 100 {
+		t.Fatalf("GetAbsentByGroup() called ShouldRun %d times, want 100", got)
 	}
 }
