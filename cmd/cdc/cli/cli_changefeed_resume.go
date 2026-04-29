@@ -15,6 +15,7 @@ package cli
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -161,6 +162,11 @@ func (o *resumeChangefeedOptions) validateParams(ctx context.Context) error {
 		return err
 	}
 	o.changefeedDetail = detail
+	if !detail.State.IsResumable() {
+		return cerror.ErrChangefeedUpdateRefused.GenWithStackByArgs(
+			fmt.Sprintf("can only resume changefeed when it is stopped, failed, or finished, but current state is %s", detail.State),
+		)
+	}
 
 	tso, err := o.getTSO(ctx)
 	if err != nil {
