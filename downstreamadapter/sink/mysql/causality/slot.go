@@ -61,15 +61,15 @@ func newSlots(numSlots uint64) *Slots {
 // or not.
 func (s *Slots) AllocNode(hashes []uint64) *Node {
 	return &Node{
-		id:                  genNextNodeID(),
-		sortedDedupKeysHash: sortHashes(hashes, s.getSlot),
-		assignedTo:          unassigned,
+		id:             genNextNodeID(),
+		sortedKeysHash: sortHashes(hashes, s.getSlot),
+		assignedTo:     unassigned,
 	}
 }
 
 // Add adds an elem to the slots and calls DependOn for elem.
 func (s *Slots) Add(elem *Node) {
-	hashes := elem.sortedDedupKeysHash
+	hashes := elem.sortedKeysHash
 	dependencyNodes := make(map[int64]*Node, len(hashes))
 
 	var lastSlot uint64 = math.MaxUint64
@@ -115,7 +115,7 @@ func (s *Slots) Add(elem *Node) {
 // Remove removes an element from the Slots.
 func (s *Slots) Remove(elem *Node) {
 	elem.remove()
-	hashes := elem.sortedDedupKeysHash
+	hashes := elem.sortedKeysHash
 	for _, hash := range hashes {
 		slotIdx := s.getSlot(hash)
 		s.slots[slotIdx].mu.Lock()
@@ -133,34 +133,17 @@ func newGetSlotFunc(numSlots uint64) getSlotFunc {
 	if isPowerOfTwo(numSlots) {
 		mask := numSlots - 1
 		return func(hash uint64) uint64 {
-			return getSlotByMask(hash, mask)
+			return hash & mask
 		}
 	}
 
 	return func(hash uint64) uint64 {
-		return getSlotByModulo(hash, numSlots)
+		return hash % numSlots
 	}
 }
 
 func isPowerOfTwo(n uint64) bool {
 	return n != 0 && n&(n-1) == 0
-}
-
-// getSlotByMask maps a hashed conflict key to one slot with a bitmask.
-//
-// This is only correct when the original slot count is a power of two, because
-// only then does `hash & (numSlots-1)` equal `hash % numSlots`. We choose this
-// version on the hot path for the fixed MySQL sink default because it is
-// branchless and slightly cheaper than modulo.
-func getSlotByMask(hash, numSlotsMask uint64) uint64 {
-	return hash & numSlotsMask
-}
-
-// getSlotByModulo maps a hashed conflict key to one slot for arbitrary slot
-// counts. It is the correctness fallback when the slot count is not a power of
-// two.
-func getSlotByModulo(hash, numSlots uint64) uint64 {
-	return hash % numSlots
 }
 
 // Sort hashes by slot index to ensure all transactions lock slots in the same
