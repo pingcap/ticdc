@@ -98,12 +98,13 @@ func (m *MoveMaintainerOperator) OnNodeRemove(n node.ID) {
 	m.lck.Lock()
 	defer m.lck.Unlock()
 
-	if m.finished || m.canceled {
+	if m.canceled {
 		return
 	}
 
 	if n == m.dest {
-		// the origin node is finished, we must mark the maintainer as absent to reschedule it again
+		// Node removal must win over a just-finished move. Otherwise PostFinish can still
+		// mark the changefeed replicating on a node that has already been removed.
 		if m.originNodeStopped {
 			log.Info("dest node is stopped, mark changefeed absent",
 				zap.String("changefeed", m.changefeed.ID.String()),
@@ -123,6 +124,10 @@ func (m *MoveMaintainerOperator) OnNodeRemove(n node.ID) {
 		m.db.BindChangefeedToNode(m.dest, m.origin, m.changefeed)
 		m.bind = true
 		m.originNodeStopped = true
+		return
+	}
+	if m.finished {
+		return
 	}
 	if n == m.origin {
 		log.Info("origin node is stopped",
@@ -137,6 +142,14 @@ func (m *MoveMaintainerOperator) AffectedNodes() []node.ID {
 	defer m.lck.Unlock()
 
 	return []node.ID{m.origin, m.dest}
+}
+
+// OriginNode returns the source node of the move.
+func (m *MoveMaintainerOperator) OriginNode() node.ID {
+	m.lck.Lock()
+	defer m.lck.Unlock()
+
+	return m.origin
 }
 
 func (m *MoveMaintainerOperator) ID() common.ChangeFeedID {

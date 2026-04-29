@@ -40,7 +40,7 @@ func (s *blockingFlushSink) WriteBlockEvent(commonEvent.BlockEvent) error { retu
 func (s *blockingFlushSink) AddCheckpointTs(uint64)                       {}
 func (s *blockingFlushSink) SetTableSchemaStore(*commonEvent.TableSchemaStore) {
 }
-func (s *blockingFlushSink) Close(bool)                {}
+func (s *blockingFlushSink) Close()                    {}
 func (s *blockingFlushSink) Run(context.Context) error { return nil }
 func (s *blockingFlushSink) BatchCount() int           { return 0 }
 func (s *blockingFlushSink) BatchBytes() int           { return 0 }
