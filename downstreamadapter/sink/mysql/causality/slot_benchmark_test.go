@@ -98,8 +98,12 @@ func BenchmarkSortHashesBySlot(b *testing.B) {
 						benchmarkSortHashesByFuncAndDedup(b, tc.source, newGetSlotFunc(benchmarkDefaultSlotCount))
 					})
 
+					sourceMap := make(map[uint64]struct{})
+					for _, hash := range tc.source {
+						sourceMap[hash] = struct{}{}
+					}
 					b.Run("selected_mapper_no_dedup", func(b *testing.B) {
-						benchmarkSortHashesByFunc(b, tc.source, newGetSlotFunc(benchmarkDefaultSlotCount))
+						benchmarkSortHashesByFunc(b, sourceMap, newGetSlotFunc(benchmarkDefaultSlotCount))
 					})
 				})
 			}
@@ -121,17 +125,16 @@ func benchmarkSortHashesByOldModuloAndDedup(b *testing.B, source []uint64, numSl
 	}
 }
 
-func benchmarkSortHashesByFunc(b *testing.B, source []uint64, getSlot getSlotFunc) {
+func benchmarkSortHashesByFunc(b *testing.B, source map[uint64]struct{}, getSlot getSlotFunc) {
 	b.Helper()
-	sample := sortHashes(append([]uint64(nil), source...), getSlot)
+	sample := sortHashes(source, getSlot)
 	b.ResetTimer()
 	b.ReportAllocs()
 	b.ReportMetric(float64(len(source)), "hashes/op")
 	b.ReportMetric(float64(len(sample)), "out_hashes/op")
 
 	for i := 0; i < b.N; i++ {
-		hashes := append([]uint64(nil), source...)
-		benchmarkSlotHashesResult = sortHashes(hashes, getSlot)
+		benchmarkSlotHashesResult = sortHashes(source, getSlot)
 	}
 }
 
