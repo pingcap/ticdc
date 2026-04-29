@@ -25,6 +25,15 @@ var (
 			Buckets:   prometheus.ExponentialBuckets(0.01 /* 10 ms */, 2, 18),
 		}, []string{getKeyspaceLabel(), "changefeed"})
 
+	MaintainerCheckpointCalculateDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "ticdc",
+			Subsystem: "maintainer",
+			Name:      "checkpoint_calculate_duration_seconds",
+			Help:      "Bucketed histogram of maintainer checkpoint calculation time (s).",
+			Buckets:   prometheus.ExponentialBuckets(0.001 /* 1 ms */, 2, 20),
+		}, []string{getKeyspaceLabel(), "changefeed"})
+
 	MaintainerEventChLenGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
@@ -61,6 +70,7 @@ var (
 
 func initMaintainerMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(MaintainerHandleEventDuration)
+	registry.MustRegister(MaintainerCheckpointCalculateDuration)
 	registry.MustRegister(MaintainerEventChLenGauge)
 	registry.MustRegister(OperatorCount)
 	registry.MustRegister(OperatorDuration)
