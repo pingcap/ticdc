@@ -884,10 +884,8 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 		lowerCRTs = dataRange.CommitTsStart + 1
 	}
 	end := EncodeKeyPrefix(uint64(subStat.subID), stat.tableSpan.TableID, dataRange.CommitTsEnd+1)
-	iter, err := db.NewIter(newEventStoreIterOptions(start, end, lowerCRTs, dataRange.CommitTsEnd))
-	if err != nil {
-		log.Panic("new event store iterator failed", zap.Error(err))
-	}
+	// it's impossible return error here
+	iter, _ := db.NewIter(newEventStoreIterOptions(start, end, lowerCRTs, dataRange.CommitTsEnd))
 	decoder := e.decoderPool.Get().(*zstd.Decoder)
 	startTime := time.Now()
 	// todo: what happens if iter.First() returns false?
