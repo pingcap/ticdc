@@ -305,13 +305,12 @@ func (m *Maintainer) HandleEvent(event *Event) bool {
 		if duration > time.Second {
 			// add a log for debug an occasional slow bootstrap problem
 			if event.eventType == EventMessage {
-				fields := []zap.Field{
+				log.Info("maintainer is too slow",
 					zap.Stringer("changefeedID", m.changefeedID),
 					zap.Int("eventType", event.eventType),
 					zap.Duration("duration", duration),
-				}
-				fields = append(fields, slowMessageFields(event.message)...)
-				log.Info("maintainer is too slow", fields...)
+					zap.Any("MessageType", event.message.Type),
+				)
 			} else {
 				log.Info("maintainer is too slow",
 					zap.Stringer("changefeedID", m.changefeedID),
@@ -344,44 +343,6 @@ func (m *Maintainer) HandleEvent(event *Event) bool {
 		m.onPeriodTask()
 	}
 	return false
-}
-
-func slowMessageFields(msg *messaging.TargetMessage) []zap.Field {
-	if msg == nil {
-		return []zap.Field{zap.String("message", "nil")}
-	}
-	fields := []zap.Field{
-		zap.Stringer("from", msg.From),
-		zap.Stringer("to", msg.To),
-		zap.Stringer("messageType", msg.Type),
-		zap.String("topic", msg.Topic),
-		zap.Int("messageCount", len(msg.Message)),
-		zap.Uint64("sequence", msg.Sequence),
-	}
-	if msg.Type != messaging.TypeHeartBeatRequest || len(msg.Message) == 0 {
-		return fields
-	}
-	req, ok := msg.Message[0].(*heartbeatpb.HeartBeatRequest)
-	if !ok {
-		return fields
-	}
-	fields = append(fields,
-		zap.Int("statusCount", len(req.Statuses)),
-		zap.Bool("completeStatus", req.CompeleteStatus),
-	)
-	if watermark := req.GetWatermark(); watermark != nil {
-		fields = append(fields,
-			zap.Uint64("heartbeatCheckpointTs", watermark.CheckpointTs),
-			zap.Uint64("heartbeatResolvedTs", watermark.ResolvedTs),
-		)
-	}
-	if watermark := req.GetRedoWatermark(); watermark != nil {
-		fields = append(fields,
-			zap.Uint64("redoHeartbeatCheckpointTs", watermark.CheckpointTs),
-			zap.Uint64("redoHeartbeatResolvedTs", watermark.ResolvedTs),
-		)
-	}
-	return fields
 }
 
 func (m *Maintainer) checkNodeChanged() {
