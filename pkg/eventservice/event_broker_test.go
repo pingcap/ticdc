@@ -365,6 +365,342 @@ func TestGetScanTaskDataRangeRingWaitWithThreeDispatchersCanAdvancePendingDDL(t 
 	require.Equal(t, ts103, dataRange.CommitTsEnd)
 }
 
+func TestGetScanTaskDataRangeCappedByCheckpointWithSyncPoint(t *testing.T) {
+	broker, _, ss, _ := newEventBrokerForTest()
+	broker.close()
+
+	base := time.Unix(0, 0)
+	ts100 := oracle.GoTimeToTS(base.Add(100 * time.Second))
+	ts120 := oracle.GoTimeToTS(base.Add(120 * time.Second))
+	ts200 := oracle.GoTimeToTS(base.Add(200 * time.Second))
+
+	info := newMockDispatcherInfoForTest(t)
+	info.epoch = 1
+	info.enableSyncPoint = true
+	info.syncPointInterval = 10 * time.Second
+	info.nextSyncPoint = ts120
+
+	changefeedStatus := broker.getOrSetChangefeedStatus(info)
+	changefeedStatus.scanInterval.Store(int64(5 * time.Minute))
+	changefeedStatus.minSentTs.Store(ts100)
+
+	disp := newDispatcherStat(info, 1, 1, nil, changefeedStatus)
+	disp.seq.Store(1)
+	disp.checkpointTs.Store(ts100)
+	disp.sentResolvedTs.Store(ts100)
+	disp.lastScannedCommitTs.Store(ts100)
+	disp.lastScannedStartTs.Store(0)
+	disp.receivedResolvedTs.Store(ts200)
+	disp.eventStoreCommitTs.Store(ts200)
+
+	ss.resolvedTs = ts200
+	ss.maxDDLCommitTs = ts200
+
+	needScan, dataRange := broker.getScanTaskDataRange(disp)
+	require.True(t, needScan)
+	require.Equal(t, ts100, dataRange.CommitTsStart)
+	require.Equal(t, ts120, dataRange.CommitTsEnd)
+}
+
+func TestGetScanTaskDataRangePendingDDLWithCheckpointCapCanAdvance(t *testing.T) {
+	broker, _, ss, _ := newEventBrokerForTest()
+	broker.close()
+
+	base := time.Unix(0, 0)
+	ts100 := oracle.GoTimeToTS(base.Add(100 * time.Second))
+	ts101 := oracle.GoTimeToTS(base.Add(101 * time.Second))
+	ts102 := oracle.GoTimeToTS(base.Add(102 * time.Second))
+	ts103 := oracle.GoTimeToTS(base.Add(103 * time.Second))
+	ts110 := oracle.GoTimeToTS(base.Add(110 * time.Second))
+
+	info := newMockDispatcherInfoForTest(t)
+	info.epoch = 1
+	info.enableSyncPoint = true
+	info.syncPointInterval = time.Second
+	info.nextSyncPoint = ts110
+
+	changefeedStatus := broker.getOrSetChangefeedStatus(info)
+	changefeedStatus.scanInterval.Store(int64(time.Second))
+	changefeedStatus.minSentTs.Store(ts100)
+
+	disp := newDispatcherStat(info, 1, 1, nil, changefeedStatus)
+	disp.seq.Store(1)
+	disp.checkpointTs.Store(ts100)
+	disp.sentResolvedTs.Store(ts101)
+	disp.lastScannedCommitTs.Store(ts101)
+	disp.lastScannedStartTs.Store(ts101 - 1)
+	disp.receivedResolvedTs.Store(ts110)
+	disp.eventStoreCommitTs.Store(ts103)
+
+	ss.resolvedTs = ts110
+	ss.maxDDLCommitTs = ts103
+
+	needScan, dataRange := broker.getScanTaskDataRange(disp)
+	require.True(t, needScan)
+	require.Equal(t, ts101, dataRange.CommitTsStart)
+	require.Equal(t, ts102, dataRange.CommitTsEnd)
+}
+
+func TestGetScanTaskDataRangePendingDDLBypassesCheckpointCapLock(t *testing.T) {
+	broker, _, ss, _ := newEventBrokerForTest()
+	broker.close()
+
+	base := time.Unix(0, 0)
+	ts100 := oracle.GoTimeToTS(base.Add(100 * time.Second))
+	ts102 := oracle.GoTimeToTS(base.Add(102 * time.Second))
+	ts103 := oracle.GoTimeToTS(base.Add(103 * time.Second))
+	ts110 := oracle.GoTimeToTS(base.Add(110 * time.Second))
+
+	info := newMockDispatcherInfoForTest(t)
+	info.epoch = 1
+	info.enableSyncPoint = true
+	info.syncPointInterval = time.Second
+	info.nextSyncPoint = ts110
+
+	changefeedStatus := broker.getOrSetChangefeedStatus(info)
+	changefeedStatus.scanInterval.Store(int64(time.Second))
+	changefeedStatus.minSentTs.Store(ts100)
+
+	disp := newDispatcherStat(info, 1, 1, nil, changefeedStatus)
+	disp.seq.Store(1)
+	disp.checkpointTs.Store(ts100)
+	disp.sentResolvedTs.Store(ts102)
+	disp.lastScannedCommitTs.Store(ts102)
+	disp.lastScannedStartTs.Store(ts102 - 1)
+	disp.receivedResolvedTs.Store(ts110)
+	disp.eventStoreCommitTs.Store(ts103)
+
+	ss.resolvedTs = ts110
+	ss.maxDDLCommitTs = ts103
+
+	needScan, dataRange := broker.getScanTaskDataRange(disp)
+	require.True(t, needScan)
+	require.Equal(t, ts102, dataRange.CommitTsStart)
+	require.Equal(t, ts103, dataRange.CommitTsEnd)
+}
+
+func TestEmitSyncPointEventIfNeededSuppressesWhenLagging(t *testing.T) {
+	broker, _, _, _ := newEventBrokerForTest()
+	broker.close()
+	broker.syncPointLagSuppressThreshold = 20 * time.Second
+	broker.syncPointLagResumeThreshold = 10 * time.Second
+
+	base := time.Unix(0, 0)
+	ts100 := oracle.GoTimeToTS(base.Add(100 * time.Second))
+	ts110 := oracle.GoTimeToTS(base.Add(110 * time.Second))
+	ts130 := oracle.GoTimeToTS(base.Add(130 * time.Second))
+	ts180 := oracle.GoTimeToTS(base.Add(180 * time.Second))
+
+	info := newMockDispatcherInfoForTest(t)
+	info.epoch = 1
+	info.enableSyncPoint = true
+	info.syncPointInterval = 10 * time.Second
+	info.nextSyncPoint = ts110
+
+	changefeedStatus := broker.getOrSetChangefeedStatus(info)
+	disp := newDispatcherStat(info, 1, 1, nil, changefeedStatus)
+	disp.seq.Store(1)
+	disp.checkpointTs.Store(ts100)
+	disp.receivedResolvedTs.Store(ts180)
+	disp.lastReceivedHeartbeatTime.Store(time.Now().Unix())
+
+	dispPtr := &atomic.Pointer[dispatcherStat]{}
+	dispPtr.Store(disp)
+	changefeedStatus.addDispatcher(disp.id, dispPtr)
+	changefeedStatus.refreshMinSentResolvedTs()
+
+	broker.emitSyncPointEventIfNeeded(ts130, disp, node.ID(info.GetServerID()))
+
+	require.True(t, disp.syncPointSendSuppressed.Load())
+	require.Equal(t, ts130, disp.nextSyncPoint.Load())
+	require.Equal(t, 0, len(broker.messageCh[disp.messageWorkerIndex]))
+}
+
+func TestEmitSyncPointEventIfNeededSuppressesByMinChangefeedCheckpoint(t *testing.T) {
+	broker, _, _, _ := newEventBrokerForTest()
+	broker.close()
+	broker.syncPointLagSuppressThreshold = 20 * time.Second
+	broker.syncPointLagResumeThreshold = 10 * time.Second
+
+	base := time.Unix(0, 0)
+	ts100 := oracle.GoTimeToTS(base.Add(100 * time.Second))
+	ts110 := oracle.GoTimeToTS(base.Add(110 * time.Second))
+	ts115 := oracle.GoTimeToTS(base.Add(115 * time.Second))
+	ts120 := oracle.GoTimeToTS(base.Add(120 * time.Second))
+	ts125 := oracle.GoTimeToTS(base.Add(125 * time.Second))
+	ts130 := oracle.GoTimeToTS(base.Add(130 * time.Second))
+
+	info := newMockDispatcherInfoForTest(t)
+	info.epoch = 1
+	info.enableSyncPoint = true
+	info.syncPointInterval = 10 * time.Second
+	info.nextSyncPoint = ts110
+
+	changefeedStatus := broker.getOrSetChangefeedStatus(info)
+	disp := newDispatcherStat(info, 1, 1, nil, changefeedStatus)
+	disp.seq.Store(1)
+	disp.receivedResolvedTs.Store(ts130)
+	disp.checkpointTs.Store(ts125)
+	disp.lastReceivedHeartbeatTime.Store(time.Now().Unix())
+
+	dispPtr := &atomic.Pointer[dispatcherStat]{}
+	dispPtr.Store(disp)
+	changefeedStatus.addDispatcher(disp.id, dispPtr)
+
+	lagging := newDispatcherStat(newMockDispatcherInfoForTest(t), 1, 1, nil, changefeedStatus)
+	lagging.seq.Store(1)
+	lagging.checkpointTs.Store(ts100)
+	lagging.lastReceivedHeartbeatTime.Store(time.Now().Unix())
+
+	laggingPtr := &atomic.Pointer[dispatcherStat]{}
+	laggingPtr.Store(lagging)
+	changefeedStatus.addDispatcher(lagging.id, laggingPtr)
+	changefeedStatus.refreshMinSentResolvedTs()
+
+	broker.emitSyncPointEventIfNeeded(ts115, disp, node.ID(info.GetServerID()))
+
+	require.True(t, disp.syncPointSendSuppressed.Load())
+	require.Equal(t, ts120, disp.nextSyncPoint.Load())
+	require.Equal(t, 0, len(broker.messageCh[disp.messageWorkerIndex]))
+}
+
+func TestEmitSyncPointEventIfNeededResumesAfterLagRecovers(t *testing.T) {
+	broker, _, _, _ := newEventBrokerForTest()
+	broker.close()
+	broker.syncPointLagSuppressThreshold = 20 * time.Second
+	broker.syncPointLagResumeThreshold = 10 * time.Second
+
+	base := time.Unix(0, 0)
+	ts110 := oracle.GoTimeToTS(base.Add(110 * time.Second))
+	ts115 := oracle.GoTimeToTS(base.Add(115 * time.Second))
+	ts120 := oracle.GoTimeToTS(base.Add(120 * time.Second))
+	ts125 := oracle.GoTimeToTS(base.Add(125 * time.Second))
+	ts130 := oracle.GoTimeToTS(base.Add(130 * time.Second))
+
+	info := newMockDispatcherInfoForTest(t)
+	info.epoch = 1
+	info.enableSyncPoint = true
+	info.syncPointInterval = 10 * time.Second
+	info.nextSyncPoint = ts110
+
+	changefeedStatus := broker.getOrSetChangefeedStatus(info)
+	disp := newDispatcherStat(info, 1, 1, nil, changefeedStatus)
+	disp.seq.Store(1)
+	disp.syncPointSendSuppressed.Store(true)
+	disp.receivedResolvedTs.Store(ts130)
+	disp.checkpointTs.Store(ts125)
+	disp.lastReceivedHeartbeatTime.Store(time.Now().Unix())
+
+	dispPtr := &atomic.Pointer[dispatcherStat]{}
+	dispPtr.Store(disp)
+	changefeedStatus.addDispatcher(disp.id, dispPtr)
+	changefeedStatus.refreshMinSentResolvedTs()
+
+	broker.emitSyncPointEventIfNeeded(ts115, disp, node.ID(info.GetServerID()))
+
+	require.False(t, disp.syncPointSendSuppressed.Load())
+	require.Equal(t, ts120, disp.nextSyncPoint.Load())
+	require.Equal(t, 1, len(broker.messageCh[disp.messageWorkerIndex]))
+
+	msg := <-broker.messageCh[disp.messageWorkerIndex]
+	require.Equal(t, event.TypeSyncPointEvent, msg.msgType)
+	syncPointEvent, ok := msg.e.(*event.SyncPointEvent)
+	require.True(t, ok)
+	require.Equal(t, ts110, syncPointEvent.GetCommitTs())
+}
+
+func TestEmitSyncPointEventIfNeededResumesWhenStaleCheckpointIsIgnored(t *testing.T) {
+	broker, _, _, _ := newEventBrokerForTest()
+	broker.close()
+	broker.syncPointLagSuppressThreshold = 20 * time.Second
+	broker.syncPointLagResumeThreshold = 10 * time.Second
+
+	base := time.Unix(0, 0)
+	ts100 := oracle.GoTimeToTS(base.Add(100 * time.Second))
+	ts110 := oracle.GoTimeToTS(base.Add(110 * time.Second))
+	ts115 := oracle.GoTimeToTS(base.Add(115 * time.Second))
+	ts120 := oracle.GoTimeToTS(base.Add(120 * time.Second))
+	ts125 := oracle.GoTimeToTS(base.Add(125 * time.Second))
+	ts130 := oracle.GoTimeToTS(base.Add(130 * time.Second))
+
+	info := newMockDispatcherInfoForTest(t)
+	info.epoch = 1
+	info.enableSyncPoint = true
+	info.syncPointInterval = 10 * time.Second
+	info.nextSyncPoint = ts110
+
+	changefeedStatus := broker.getOrSetChangefeedStatus(info)
+	disp := newDispatcherStat(info, 1, 1, nil, changefeedStatus)
+	disp.seq.Store(1)
+	disp.syncPointSendSuppressed.Store(true)
+	disp.receivedResolvedTs.Store(ts130)
+	disp.checkpointTs.Store(ts125)
+	disp.lastReceivedHeartbeatTime.Store(time.Now().Unix())
+
+	dispPtr := &atomic.Pointer[dispatcherStat]{}
+	dispPtr.Store(disp)
+	changefeedStatus.addDispatcher(disp.id, dispPtr)
+
+	stale := newDispatcherStat(newMockDispatcherInfoForTest(t), 1, 1, nil, changefeedStatus)
+	stale.seq.Store(1)
+	stale.checkpointTs.Store(ts100)
+	stale.lastReceivedHeartbeatTime.Store(time.Now().Add(-scanWindowStaleDispatcherHeartbeatThreshold - time.Second).Unix())
+
+	stalePtr := &atomic.Pointer[dispatcherStat]{}
+	stalePtr.Store(stale)
+	changefeedStatus.addDispatcher(stale.id, stalePtr)
+	changefeedStatus.refreshMinSentResolvedTs()
+
+	broker.emitSyncPointEventIfNeeded(ts115, disp, node.ID(info.GetServerID()))
+
+	require.False(t, disp.syncPointSendSuppressed.Load())
+	require.Equal(t, ts120, disp.nextSyncPoint.Load())
+	require.Equal(t, 1, len(broker.messageCh[disp.messageWorkerIndex]))
+
+	msg := <-broker.messageCh[disp.messageWorkerIndex]
+	require.Equal(t, event.TypeSyncPointEvent, msg.msgType)
+	syncPointEvent, ok := msg.e.(*event.SyncPointEvent)
+	require.True(t, ok)
+	require.Equal(t, ts110, syncPointEvent.GetCommitTs())
+}
+
+func TestEmitSyncPointEventIfNeededNoSuppressWhenCheckpointAhead(t *testing.T) {
+	broker, _, _, _ := newEventBrokerForTest()
+	broker.close()
+	broker.syncPointLagSuppressThreshold = time.Second
+	broker.syncPointLagResumeThreshold = time.Second
+
+	base := time.Unix(0, 0)
+	ts100 := oracle.GoTimeToTS(base.Add(100 * time.Second))
+	ts110 := oracle.GoTimeToTS(base.Add(110 * time.Second))
+	ts115 := oracle.GoTimeToTS(base.Add(115 * time.Second))
+	ts120 := oracle.GoTimeToTS(base.Add(120 * time.Second))
+
+	info := newMockDispatcherInfoForTest(t)
+	info.epoch = 1
+	info.enableSyncPoint = true
+	info.syncPointInterval = 10 * time.Second
+	info.nextSyncPoint = ts110
+
+	changefeedStatus := broker.getOrSetChangefeedStatus(info)
+	disp := newDispatcherStat(info, 1, 1, nil, changefeedStatus)
+	disp.seq.Store(1)
+	disp.receivedResolvedTs.Store(ts100)
+	disp.checkpointTs.Store(ts120)
+	disp.lastReceivedHeartbeatTime.Store(time.Now().Unix())
+
+	dispPtr := &atomic.Pointer[dispatcherStat]{}
+	dispPtr.Store(disp)
+	changefeedStatus.addDispatcher(disp.id, dispPtr)
+	changefeedStatus.refreshMinSentResolvedTs()
+
+	broker.emitSyncPointEventIfNeeded(ts115, disp, node.ID(info.GetServerID()))
+
+	require.False(t, disp.syncPointSendSuppressed.Load())
+	require.Equal(t, ts120, disp.nextSyncPoint.Load())
+	require.Equal(t, 1, len(broker.messageCh[disp.messageWorkerIndex]))
+}
+
 func TestHandleCongestionControlV2AdjustsScanInterval(t *testing.T) {
 	broker, _, _, _ := newEventBrokerForTest()
 	defer broker.close()

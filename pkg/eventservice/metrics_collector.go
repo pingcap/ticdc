@@ -132,6 +132,8 @@ func (d *dispatcherHeapItem) LessThan(other *dispatcherHeapItem) bool {
 type metricsSnapshot struct {
 	receivedMinResolvedTs uint64
 	sentMinResolvedTs     uint64
+	receivedMinDispatcher *dispatcherStat
+	sentMinDispatcher     *dispatcherStat
 	dispatcherCount       int
 	pendingTaskCount      int
 	slowestDispatchers    []*dispatcherStat // top 10 dispatchers with slowest checkpointTs
@@ -222,11 +224,13 @@ func (mc *metricsCollector) collectDispatcherMetrics(snapshot *metricsSnapshot) 
 		resolvedTs := dispatcher.receivedResolvedTs.Load()
 		if resolvedTs < snapshot.receivedMinResolvedTs {
 			snapshot.receivedMinResolvedTs = resolvedTs
+			snapshot.receivedMinDispatcher = dispatcher
 		}
 
 		watermark := dispatcher.sentResolvedTs.Load()
 		if watermark < snapshot.sentMinResolvedTs {
 			snapshot.sentMinResolvedTs = watermark
+			snapshot.sentMinDispatcher = dispatcher
 		}
 
 		// Maintain a min-heap of size 10 for the slowest dispatchers
@@ -301,7 +305,9 @@ func (mc *metricsCollector) updateMetricsFromSnapshot(snapshot *metricsSnapshot)
 
 // logSlowDispatchers logs warnings for dispatchers that are too slow
 func (mc *metricsCollector) logSlowDispatchers(snapshot *metricsSnapshot) {
-	if len(snapshot.slowestDispatchers) == 0 {
+	if len(snapshot.slowestDispatchers) == 0 &&
+		snapshot.receivedMinDispatcher == nil &&
+		snapshot.sentMinDispatcher == nil {
 		return
 	}
 
@@ -310,6 +316,16 @@ func (mc *metricsCollector) logSlowDispatchers(snapshot *metricsSnapshot) {
 	}
 
 	mc.lastLogSlowDispatchersTime = time.Now()
+
+	if snapshot.receivedMinDispatcher != nil && snapshot.sentMinDispatcher != nil {
+		log.Warn("event service min resolved ts snapshot",
+			zap.Stringer("receivedMinDispatcherID", snapshot.receivedMinDispatcher.id),
+			zap.Stringer("receivedMinChangefeedID", snapshot.receivedMinDispatcher.changefeedStat.changefeedID),
+			zap.Uint64("receivedMinResolvedTs", snapshot.receivedMinResolvedTs),
+			zap.Stringer("sentMinDispatcherID", snapshot.sentMinDispatcher.id),
+			zap.Stringer("sentMinChangefeedID", snapshot.sentMinDispatcher.changefeedStat.changefeedID),
+			zap.Uint64("sentMinResolvedTs", snapshot.sentMinResolvedTs))
+	}
 
 	for _, dispatcher := range snapshot.slowestDispatchers {
 		checkpointTs := dispatcher.checkpointTs.Load()
