@@ -710,7 +710,7 @@ func (m *Maintainer) calCheckpointTs(ctx context.Context) {
 				m.updateMetrics()
 			}
 			m.checkpointCalcDuration.Observe(time.Since(start).Seconds())
-			interval = checkpointCalculateInterval(m.controller.operatorController.OperatorSize(), interval)
+			interval = checkpointCalculateInterval(m.controller.spanController.GetAbsentSize(), interval)
 			timer.Reset(interval)
 		}
 	}
