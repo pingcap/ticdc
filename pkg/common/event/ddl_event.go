@@ -120,6 +120,10 @@ type DDLEvent struct {
 	// UnmarshalJSON compatibility so both `not_sync` and legacy `NotSync`
 	// are interoperable in mixed-version deployment.
 	NotSync bool `json:"not_sync"`
+
+	// IndexIDs store the add index ids in SQL order for add index and multi schema change DDLs.
+	// MySQL sink uses them to recover anonymous index names.
+	IndexIDs []int64 `json:"index_ids"`
 }
 
 type ddlEventJSONAlias DDLEvent
@@ -440,7 +444,6 @@ func (t DDLEvent) encodeV1() ([]byte, error) {
 	multipleTableInfosDataSize := make([]byte, 8)
 	binary.BigEndian.PutUint64(multipleTableInfosDataSize, uint64(len(t.MultipleTableInfos)))
 	data = append(data, multipleTableInfosDataSize...)
-
 	return data, nil
 }
 
