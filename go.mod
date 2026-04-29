@@ -84,40 +84,16 @@ require (
 	go.uber.org/goleak v1.3.0
 	go.uber.org/mock v0.5.2
 	go.uber.org/multierr v1.11.0
-<<<<<<< HEAD
 	go.uber.org/zap v1.27.0
 	golang.org/x/net v0.47.0
 	golang.org/x/oauth2 v0.33.0
 	golang.org/x/sync v0.18.0
-	golang.org/x/sys v0.38.0
+	golang.org/x/sys v0.42.0
 	golang.org/x/term v0.37.0
 	golang.org/x/text v0.31.0
 	golang.org/x/time v0.14.0
 	google.golang.org/grpc v1.65.0
 	google.golang.org/protobuf v1.36.10
-=======
-	go.uber.org/zap v1.27.1
-	golang.org/x/net v0.43.0
-	golang.org/x/oauth2 v0.30.0
-	golang.org/x/sync v0.17.0
-	golang.org/x/sys v0.42.0
-	golang.org/x/term v0.34.0
-	golang.org/x/text v0.29.0
-	golang.org/x/time v0.12.0
-	google.golang.org/api v0.170.0
-	google.golang.org/grpc v1.67.1
-	google.golang.org/protobuf v1.36.6
-)
-
-replace (
-	// Following modules are replaced to use grpc v1.65.0
-	// We can remove these replacements after upgrading grpc to > 1.65
-	cloud.google.com/go/kms => cloud.google.com/go/kms v1.15.8
-	cloud.google.com/go/pubsub => cloud.google.com/go/pubsub v1.37.0
-	cloud.google.com/go/storage => cloud.google.com/go/storage v1.39.1
-	google.golang.org/api => google.golang.org/api v0.170.0
-	google.golang.org/grpc => google.golang.org/grpc v1.65.0
->>>>>>> dd501c84b (*: bump go.opentelemetry.io/otel/sdk to v1.43.0 to fix CVE-2026-24051 (#4884))
 )
 
 require (
