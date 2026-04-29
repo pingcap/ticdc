@@ -29,6 +29,12 @@ type DDLWorkload interface {
 	BuildDDLSql(opt DDLOption) string
 }
 
+// TableLifecycleAwareWorkload is an optional interface implemented by workloads
+// that need to react to DDL side effects such as TRUNCATE TABLE.
+type TableLifecycleAwareWorkload interface {
+	OnTableTruncated(schemaName string, tableName string)
+}
+
 type Workload interface {
 	// BuildCreateTableStatement returns the create-table sql of the table n
 	BuildCreateTableStatement(n int) string

@@ -1,0 +1,20 @@
+# Use this with a dedicated database that contains 1000 partitioned bank4 tables.
+# Run workload with -workload-type bank4 -partitioned=true -table-count 1000.
+# bank4 creates 126 monthly partitions per table (2021-07 through 2031-12).
+# rate_per_minute is the total rate across all matched tables.
+# Current values target approximately:
+# - truncate_table: each table once every 10 minutes
+# - add/drop column: each table once per minute
+# - add/drop index: each table once every 2 minutes
+mode = "fixed"
+
+table_patterns = [
+  "^bank4_[0-9]+$",
+]
+
+[rate_per_minute]
+truncate_table = 3000
+add_column = 1000
+drop_column = 1000
+add_index = 1000
+drop_index = 1000

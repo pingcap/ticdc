@@ -26,6 +26,7 @@ import (
 	"github.com/pingcap/errors"
 	plog "github.com/pingcap/log"
 	"go.uber.org/zap"
+	"workload/schema"
 )
 
 const (
@@ -135,11 +136,25 @@ func (r *DDLRunner) executeTask(conn *sql.Conn, task DDLTask) error {
 	}
 
 	r.app.Stats.DDLSucceeded.Add(1)
+	r.onDDLExecuted(task)
 	plog.Debug("ddl executed",
 		zap.String("ddlType", task.Type.String()),
 		zap.String("table", task.Table.String()),
 		zap.Duration("cost", time.Since(start)))
 	return nil
+}
+
+func (r *DDLRunner) onDDLExecuted(task DDLTask) {
+	if task.Type != ddlTruncateTable {
+		return
+	}
+
+	workload, ok := r.app.Workload.(schema.TableLifecycleAwareWorkload)
+	if !ok {
+		return
+	}
+
+	workload.OnTableTruncated(task.Table.Schema, task.Table.Name)
 }
 
 func (r *DDLRunner) buildDDL(ctx context.Context, conn *sql.Conn, task DDLTask) (sqlStr string, skipped bool, reason string, err error) {
