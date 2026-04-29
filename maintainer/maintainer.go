@@ -53,7 +53,7 @@ const (
 	checkpointNormalInterval          = periodEventInterval
 	checkpointSlowInterval            = time.Second * 5
 	checkpointSlowOperatorThreshold   = 3000
-	checkpointResumeOperatorThreshold = 1500
+	checkpointResumeOperatorThreshold = 200
 )
 
 // Maintainer is response for handle changefeed replication tasks. Maintainer should:

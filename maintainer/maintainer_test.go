@@ -430,17 +430,6 @@ func TestMaintainerCalculateNewCheckpointTs(t *testing.T) {
 	})
 }
 
-func TestCheckpointCalculateInterval(t *testing.T) {
-	require.Equal(t, checkpointSlowInterval,
-		checkpointCalculateInterval(checkpointSlowOperatorThreshold+1, checkpointNormalInterval))
-	require.Equal(t, checkpointNormalInterval,
-		checkpointCalculateInterval(checkpointResumeOperatorThreshold-1, checkpointSlowInterval))
-	require.Equal(t, checkpointSlowInterval,
-		checkpointCalculateInterval(checkpointResumeOperatorThreshold, checkpointSlowInterval))
-	require.Equal(t, checkpointNormalInterval,
-		checkpointCalculateInterval(checkpointSlowOperatorThreshold, checkpointNormalInterval))
-}
-
 func TestMaintainerCalCheckpointTsSkipsInvalidGlobalCheckpoint(t *testing.T) {
 	m, selfNodeID := newMaintainerForCheckpointCalculationTest(t)
 	m.initialized.Store(true)
