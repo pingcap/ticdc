@@ -143,3 +143,61 @@ func TestCompressionAndKeyOrder(t *testing.T) {
 	require.Less(t, bytes.Compare(keyDelete, keyUpdate), 0, "Delete should come before Update")
 	require.Less(t, bytes.Compare(keyUpdate, keyInsert), 0, "Update should come before Insert")
 }
+
+func TestEventStoreCRTsCollector(t *testing.T) {
+	t.Parallel()
+
+	collector := newEventStoreCRTsCollector()
+	event := &common.RawKVEntry{
+		OpType:  common.OpTypePut,
+		StartTs: 1,
+		CRTs:    10,
+		Key:     []byte("key"),
+	}
+	require.NoError(t, collector.Add(pebble.InternalKey{
+		UserKey: EncodeKey(1, 1, event, CompressionNone),
+		Trailer: uint64(pebble.InternalKeyKindSet),
+	}, nil))
+	require.NoError(t, collector.Add(pebble.InternalKey{
+		UserKey: EncodeKeyPrefix(1, 1, 100),
+		Trailer: uint64(pebble.InternalKeyKindRangeDelete),
+	}, EncodeKeyPrefix(1, 1, 200)))
+
+	props := make(map[string]string)
+	require.NoError(t, collector.Finish(props))
+	require.Equal(t, "10", props[eventStoreMinCRTsTableProperty])
+	require.Equal(t, "200", props[eventStoreMaxCRTsTableProperty])
+
+	require.True(t, newEventStoreTableFilter(9, 10)(props))
+	require.True(t, newEventStoreTableFilter(150, 150)(props))
+	require.False(t, newEventStoreTableFilter(201, 300)(props))
+	require.True(t, newEventStoreTableFilter(201, 300)(nil))
+}
+
+func TestEventStoreTableFilterKeepsRangeDeletionTables(t *testing.T) {
+	t.Parallel()
+
+	db, err := pebble.Open(t.TempDir(), newPebbleOptions(1))
+	require.NoError(t, err)
+	defer db.Close()
+
+	event := &common.RawKVEntry{
+		OpType:  common.OpTypePut,
+		StartTs: 1,
+		CRTs:    80,
+		Key:     []byte("key"),
+	}
+	require.NoError(t, db.Set(EncodeKey(1, 1, event, CompressionNone), []byte("value"), pebble.NoSync))
+	require.NoError(t, db.Flush())
+	require.NoError(t, deleteDataRange(db, 1, 1, 0, 100))
+	require.NoError(t, db.Flush())
+
+	iter, err := db.NewIter(&pebble.IterOptions{
+		LowerBound:  EncodeKeyPrefix(1, 1, 80),
+		UpperBound:  EncodeKeyPrefix(1, 1, 81),
+		TableFilter: newEventStoreTableFilter(80, 80),
+	})
+	require.NoError(t, err)
+	defer iter.Close()
+	require.False(t, iter.First())
+}
