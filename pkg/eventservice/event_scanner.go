@@ -190,7 +190,14 @@ func (s *eventScanner) scanAndMergeEvents(
 ) (bool, error) {
 	tableID := session.dataRange.Span.TableID
 	dispatcher := session.dispatcherStat
-	processor := newDMLProcessor(s.mounter, s.schemaGetter, dispatcher.filter, dispatcher.info.IsOutputRawChangeEvent(), s.mode)
+	processor := newDMLProcessor(
+		s.mounter,
+		s.schemaGetter,
+		dispatcher.filter,
+		dispatcher.info.IsOutputRawChangeEvent(),
+		s.mode,
+		dispatcher.info.GetSinkType(),
+	)
 
 	for {
 		shouldStop, err := s.checkScanConditions(session)
@@ -612,6 +619,7 @@ type TxnEvent struct {
 	DMLEventMaxRows  int32
 	DMLEventMaxBytes int64
 	shouldSplitTxn   bool
+	sinkType         common.SinkType
 }
 
 func newTxnEvent(
@@ -622,6 +630,7 @@ func newTxnEvent(
 	startTs uint64,
 	commitTs uint64,
 	shouldSplitTxn bool,
+	sinkType common.SinkType,
 ) (*TxnEvent, error) {
 	serverConfig := config.GetGlobalServerConfig()
 	txn := &TxnEvent{
@@ -630,6 +639,7 @@ func newTxnEvent(
 		DMLEventMaxRows:  serverConfig.Debug.EventService.DMLEventMaxRows,
 		DMLEventMaxBytes: serverConfig.Debug.EventService.DMLEventMaxBytes,
 		shouldSplitTxn:   shouldSplitTxn,
+		sinkType:         sinkType,
 	}
 	return txn, txn.BatchDML.AppendDMLEvent(txn.CurrentDMLEvent)
 }
@@ -656,7 +666,7 @@ func (t *TxnEvent) AppendRow(
 			return err
 		}
 	}
-	return t.CurrentDMLEvent.AppendRow(rawEvent, decode, filter)
+	return t.CurrentDMLEvent.AppendRow(rawEvent, decode, filter, t.sinkType)
 }
 
 // dmlProcessor handles DML event processing and batching
@@ -677,12 +687,13 @@ type dmlProcessor struct {
 	batchDML             *event.BatchDMLEvent
 	outputRawChangeEvent bool
 	mode                 int64
+	sinkType             common.SinkType
 }
 
 // newDMLProcessor creates a new DML processor
 func newDMLProcessor(
 	mounter event.Mounter, schemaGetter schemaGetter,
-	filter filter.Filter, outputRawChangeEvent bool, mode int64,
+	filter filter.Filter, outputRawChangeEvent bool, mode int64, sinkType common.SinkType,
 ) *dmlProcessor {
 	return &dmlProcessor{
 		mounter:              mounter,
@@ -692,6 +703,7 @@ func newDMLProcessor(
 		insertRowCache:       make([]*common.RawKVEntry, 0),
 		outputRawChangeEvent: outputRawChangeEvent,
 		mode:                 mode,
+		sinkType:             sinkType,
 	}
 }
 
@@ -708,7 +720,7 @@ func (p *dmlProcessor) startTxn(
 		log.Panic("there is a transaction not flushed yet")
 	}
 	var err error
-	p.currentTxn, err = newTxnEvent(p.batchDML, dispatcherID, tableID, tableInfo, startTs, commitTs, shouldSplitTxn)
+	p.currentTxn, err = newTxnEvent(p.batchDML, dispatcherID, tableID, tableInfo, startTs, commitTs, shouldSplitTxn, p.sinkType)
 	return err
 }
 

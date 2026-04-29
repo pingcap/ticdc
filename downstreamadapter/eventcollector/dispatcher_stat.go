@@ -743,6 +743,7 @@ func (d *dispatcherStat) newDispatcherRegisterRequest(serverId string, onlyReuse
 			Integrity:            d.target.GetIntegrityConfig(),
 			OutputRawChangeEvent: d.target.IsOutputRawChangeEvent(),
 			TxnAtomicity:         string(d.target.GetTxnAtomicity()),
+			SinkType:             int64(d.target.GetSinkType()),
 		},
 	}
 }

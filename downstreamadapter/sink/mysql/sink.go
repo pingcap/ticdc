@@ -35,7 +35,12 @@ import (
 )
 
 const (
-	// defaultConflictDetectorSlots indicates the default slot count of conflict detector. TODO:check this
+	// defaultConflictDetectorSlots is intentionally fixed to a power of two.
+	//
+	// The causality slot mapper uses `hash & (numSlots-1)` instead of `% numSlots`
+	// on the hot path, so changing this constant to a non power-of-two value would
+	// break slot distribution. Keep it as a power of two unless the slot mapping
+	// logic is changed accordingly.
 	defaultConflictDetectorSlots uint64 = 16 * 1024
 )
 

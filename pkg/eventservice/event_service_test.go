@@ -394,6 +394,7 @@ type mockDispatcherInfo struct {
 	integrity         *integrity.Config
 	mode              int64
 	epoch             uint64
+	sinkType          common.SinkType
 	enableSyncPoint   bool
 	nextSyncPoint     uint64
 	syncPointInterval time.Duration
@@ -420,6 +421,7 @@ func newMockDispatcherInfo(t *testing.T, startTs uint64, dispatcherID common.Dis
 		},
 		bdrMode:   false,
 		integrity: config.GetDefaultReplicaConfig().Integrity,
+		sinkType:  common.BlackHoleSinkType,
 	}
 }
 
@@ -489,6 +491,10 @@ func (m *mockDispatcherInfo) GetMode() int64 {
 
 func (m *mockDispatcherInfo) GetEpoch() uint64 {
 	return m.epoch
+}
+
+func (m *mockDispatcherInfo) GetSinkType() common.SinkType {
+	return m.sinkType
 }
 
 func (m *mockDispatcherInfo) IsOutputRawChangeEvent() bool {

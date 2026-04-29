@@ -11,13 +11,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package causality
+package event
 
 import (
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common"
-	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
@@ -143,7 +142,7 @@ func TestGenRowKeysStableAcrossUpdateAndDeleteWithVirtualGeneratedColumn(t *test
 	updateChunk.AppendNull(1)
 	updateChunk.AppendNull(2)
 	updateChunk.AppendInt64(3, 1)
-	update := commonEvent.RowChange{
+	update := RowChange{
 		PreRow:  updateChunk.GetRow(0),
 		Row:     updateChunk.GetRow(1),
 		RowType: common.RowTypeUpdate,
@@ -155,7 +154,7 @@ func TestGenRowKeysStableAcrossUpdateAndDeleteWithVirtualGeneratedColumn(t *test
 	delChunk.AppendNull(1)
 	delChunk.AppendNull(2)
 	delChunk.AppendInt64(3, 1)
-	del := commonEvent.RowChange{
+	del := RowChange{
 		PreRow:  delChunk.GetRow(0),
 		RowType: common.RowTypeDelete,
 	}

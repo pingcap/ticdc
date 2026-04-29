@@ -289,6 +289,10 @@ func (r DispatcherRequest) GetEpoch() uint64 {
 	return r.Epoch
 }
 
+func (r DispatcherRequest) GetSinkType() common.SinkType {
+	return common.SinkType(r.SinkType)
+}
+
 func (r DispatcherRequest) IsOutputRawChangeEvent() bool {
 	return r.OutputRawChangeEvent
 }

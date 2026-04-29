@@ -116,6 +116,10 @@ func (m *mockEventDispatcher) GetCheckpointTs() uint64 {
 	return m.checkpointTs
 }
 
+func (m *mockEventDispatcher) GetSinkType() common.SinkType {
+	return common.BlackHoleSinkType
+}
+
 func (m *mockEventDispatcher) HandleEvents(dispatcherEvents []dispatcher.DispatcherEvent, wakeCallback func()) (block bool) {
 	if m.batchRecords != nil && len(dispatcherEvents) > 0 {
 		m.batchRecords <- batchRecord{

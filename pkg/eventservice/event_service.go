@@ -58,6 +58,7 @@ type DispatcherInfo interface {
 	GetIntegrity() *integrity.Config
 	GetMode() int64
 	GetEpoch() uint64
+	GetSinkType() common.SinkType
 	IsOutputRawChangeEvent() bool
 }
 
