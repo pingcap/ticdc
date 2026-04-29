@@ -15,6 +15,7 @@ package replica
 
 import (
 	"sync"
+	"sync/atomic"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -224,6 +225,24 @@ func (g *replicationGroup[T, R]) GetAbsent() []R {
 	return res
 }
 
+func (g *replicationGroup[T, R]) GetAbsentBatch(batch int) []R {
+	if batch <= 0 {
+		return nil
+	}
+	capacity := batch
+	if absentSize := g.absent.Len(); absentSize < capacity {
+		capacity = absentSize
+	}
+	res := make([]R, 0, capacity)
+	g.absent.Range(func(_ T, r R) bool {
+		if r.ShouldRun() {
+			res = append(res, r)
+		}
+		return len(res) < batch
+	})
+	return res
+}
+
 func (g *replicationGroup[T, R]) GetSchedulingSize() int {
 	return g.scheduling.Len()
 }
@@ -268,6 +287,7 @@ func (g *replicationGroup[T, R]) IsReplicating(replica R) bool {
 
 type iMap[T ReplicationID, R Replication[T]] struct {
 	inner sync.Map
+	size  atomic.Int64
 }
 
 func newIMap[T ReplicationID, R Replication[T]]() *iMap[T, R] {
@@ -289,20 +309,21 @@ func (m *iMap[T, R]) Get(key T) (R, bool) {
 }
 
 func (m *iMap[T, R]) Set(key T, value R) {
-	m.inner.Store(key, value)
+	if _, loaded := m.inner.LoadOrStore(key, value); loaded {
+		m.inner.Store(key, value)
+		return
+	}
+	m.size.Add(1)
 }
 
 func (m *iMap[T, R]) Delete(key T) {
-	m.inner.Delete(key)
+	if _, loaded := m.inner.LoadAndDelete(key); loaded {
+		m.size.Add(-1)
+	}
 }
 
 func (m *iMap[T, R]) Len() int {
-	var count int
-	m.inner.Range(func(_, _ interface{}) bool {
-		count++
-		return true
-	})
-	return count
+	return int(m.size.Load())
 }
 
 func (m *iMap[T, R]) Range(f func(T, R) bool) {
