@@ -1164,7 +1164,7 @@ const errCacheDispatchBatchSize = 1024
 func newErrCache() *errCache {
 	return &errCache{
 		cache:  make([]regionErrorInfo, 0, 1024),
-		errCh:  make(chan regionErrorInfo, 1024),
+		errCh:  make(chan regionErrorInfo, 4096),
 		notify: make(chan struct{}, 1024),
 	}
 }
