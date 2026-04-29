@@ -14,7 +14,6 @@
 package eventstore
 
 import (
-	"encoding/binary"
 	"strconv"
 
 	"github.com/cockroachdb/pebble"
@@ -24,9 +23,6 @@ const (
 	eventStoreMinCRTsTableProperty = "event-store-min-crts"
 	eventStoreMaxCRTsTableProperty = "event-store-max-crts"
 	eventStoreCRTsCollectorName    = "event-store-crts-collector"
-
-	encodedKeyCRTsOffset = 16
-	encodedKeyCRTsEnd    = encodedKeyCRTsOffset + 8
 )
 
 type eventStoreCRTsCollector struct {
@@ -39,11 +35,12 @@ func newEventStoreCRTsCollector() pebble.TablePropertyCollector {
 	return &eventStoreCRTsCollector{}
 }
 
-func (c *eventStoreCRTsCollector) Add(key pebble.InternalKey, value []byte) error {
+func (c *eventStoreCRTsCollector) Add(key pebble.InternalKey, _ []byte) error {
+	// Event store DeleteRange is GC-only: it removes data that should already be
+	// below the future scan range. Do not widen table properties with the range
+	// tombstone end key. For example, a cleanup tombstone [CRTs=100, CRTs=1000)
+	// would make this cleanup-only SST overlap scans like [500,600].
 	c.recordEncodedKey(key.UserKey)
-	if key.Kind() == pebble.InternalKeyKindRangeDelete {
-		c.recordEncodedKey(value)
-	}
 	return nil
 }
 
@@ -72,13 +69,6 @@ func (c *eventStoreCRTsCollector) recordEncodedKey(key []byte) {
 		c.maxTs = crts
 	}
 	c.hasTs = true
-}
-
-func decodeCRTsFromEncodedKey(key []byte) (uint64, bool) {
-	if len(key) < encodedKeyCRTsEnd {
-		return 0, false
-	}
-	return binary.BigEndian.Uint64(key[encodedKeyCRTsOffset:encodedKeyCRTsEnd]), true
 }
 
 func newEventStoreTableFilter(lowerTs uint64, upperTs uint64) func(map[string]string) bool {

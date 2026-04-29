@@ -166,38 +166,10 @@ func TestEventStoreCRTsCollector(t *testing.T) {
 	props := make(map[string]string)
 	require.NoError(t, collector.Finish(props))
 	require.Equal(t, "10", props[eventStoreMinCRTsTableProperty])
-	require.Equal(t, "200", props[eventStoreMaxCRTsTableProperty])
+	require.Equal(t, "100", props[eventStoreMaxCRTsTableProperty])
 
 	require.True(t, newEventStoreTableFilter(9, 10)(props))
-	require.True(t, newEventStoreTableFilter(150, 150)(props))
-	require.False(t, newEventStoreTableFilter(201, 300)(props))
-	require.True(t, newEventStoreTableFilter(201, 300)(nil))
-}
-
-func TestEventStoreTableFilterKeepsRangeDeletionTables(t *testing.T) {
-	t.Parallel()
-
-	db, err := pebble.Open(t.TempDir(), newPebbleOptions(1))
-	require.NoError(t, err)
-	defer db.Close()
-
-	event := &common.RawKVEntry{
-		OpType:  common.OpTypePut,
-		StartTs: 1,
-		CRTs:    80,
-		Key:     []byte("key"),
-	}
-	require.NoError(t, db.Set(EncodeKey(1, 1, event, CompressionNone), []byte("value"), pebble.NoSync))
-	require.NoError(t, db.Flush())
-	require.NoError(t, deleteDataRange(db, 1, 1, 0, 100))
-	require.NoError(t, db.Flush())
-
-	iter, err := db.NewIter(&pebble.IterOptions{
-		LowerBound:  EncodeKeyPrefix(1, 1, 80),
-		UpperBound:  EncodeKeyPrefix(1, 1, 81),
-		TableFilter: newEventStoreTableFilter(80, 80),
-	})
-	require.NoError(t, err)
-	defer iter.Close()
-	require.False(t, iter.First())
+	require.True(t, newEventStoreTableFilter(100, 100)(props))
+	require.False(t, newEventStoreTableFilter(101, 300)(props))
+	require.True(t, newEventStoreTableFilter(101, 300)(nil))
 }

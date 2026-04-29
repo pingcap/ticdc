@@ -39,6 +39,20 @@ const (
 )
 
 const (
+	encodedKeyUint64Len = 8
+	encodedKeyOrderLen  = 2
+
+	encodedKeyUniqueIDOffset = 0
+	encodedKeyTableIDOffset  = encodedKeyUniqueIDOffset + encodedKeyUint64Len
+	encodedKeyCRTsOffset     = encodedKeyTableIDOffset + encodedKeyUint64Len
+	encodedKeyCRTsEnd        = encodedKeyCRTsOffset + encodedKeyUint64Len
+	encodedKeyStartTsOffset  = encodedKeyCRTsEnd
+	encodedKeyStartTsEnd     = encodedKeyStartTsOffset + encodedKeyUint64Len
+	encodedKeyMetasOffset    = encodedKeyStartTsEnd
+	encodedKeyMetasEnd       = encodedKeyMetasOffset + encodedKeyOrderLen
+)
+
+const (
 	// Bitmask for DML order and compression type.
 	dmlOrderMask    = 0xFF00 // DML order is stored in the high 8 bits for sorting.
 	compressionMask = 0x00FF // Compression type is stored in the low 8 bits.
@@ -53,9 +67,9 @@ func EncodeKeyPrefix(uniqueID uint64, tableID int64, CRTs uint64, startTs ...uin
 		log.Panic("startTs should be at most one")
 	}
 	// uniqueID, tableID, CRTs.
-	keySize := 8 + 8 + 8
+	keySize := encodedKeyCRTsEnd
 	if len(startTs) > 0 {
-		keySize += 8
+		keySize = encodedKeyStartTsEnd
 	}
 	buf := make([]byte, 0, keySize)
 	uint64Buf := [8]byte{}
@@ -78,7 +92,7 @@ func EncodeKeyPrefix(uniqueID uint64, tableID int64, CRTs uint64, startTs ...uin
 
 func encodedKeyLen(event *common.RawKVEntry) int {
 	// uniqueID, tableID, CRTs, startTs, Put/Delete, CompressionType, Key
-	return 8 + 8 + 8 + 8 + 1 + 1 + len(event.Key)
+	return encodedKeyMetasEnd + len(event.Key)
 }
 
 // EncodeKeyTo appends an encoded event-store key to buf.
@@ -116,8 +130,18 @@ func EncodeKey(uniqueID uint64, tableID int64, event *common.RawKVEntry, compres
 
 // DecodeKeyMetas decodes compression type and dml order from the key.
 func DecodeKeyMetas(key []byte) (DMLOrder, CompressionType) {
-	combinedOrder := binary.BigEndian.Uint16(key[32:34]) // The combined order is at offset 32 for 2 bytes.
+	combinedOrder := binary.BigEndian.Uint16(key[encodedKeyMetasOffset:encodedKeyMetasEnd])
 	return DMLOrder((combinedOrder & dmlOrderMask) >> dmlOrderShift), CompressionType(combinedOrder & compressionMask)
+}
+
+// decodeCRTsFromEncodedKey decodes CRTs from an event-store key prefix.
+// It works for both full event keys and DeleteRange boundary keys because both
+// contain uniqueID, tableID, and CRTs as the first three fields.
+func decodeCRTsFromEncodedKey(key []byte) (uint64, bool) {
+	if len(key) < encodedKeyCRTsEnd {
+		return 0, false
+	}
+	return binary.BigEndian.Uint64(key[encodedKeyCRTsOffset:encodedKeyCRTsEnd]), true
 }
 
 // getDMLOrder returns the order of the dml types: delete<update<insert
