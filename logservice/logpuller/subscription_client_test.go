@@ -182,6 +182,77 @@ func TestStopTaskUsesSubscribedSpanFilterLoop(t *testing.T) {
 	require.True(t, region.filterLoop)
 }
 
+func TestOnRegionFailQueuesCanceledErrorCache(t *testing.T) {
+	client := &subscriptionClient{
+		errCache: newErrCache(),
+		ds:       &mockDynamicStream{},
+	}
+	rawSpan := heartbeatpb.TableSpan{
+		TableID:  1,
+		StartKey: []byte("a"),
+		EndKey:   []byte("z"),
+	}
+	span := &subscribedSpan{
+		subID:     SubscriptionID(1),
+		span:      rawSpan,
+		rangeLock: regionlock.NewRangeLock(1, rawSpan.StartKey, rawSpan.EndKey, 100),
+	}
+	client.totalSpans.spanMap = map[SubscriptionID]*subscribedSpan{span.subID: span}
+
+	res1 := span.rangeLock.LockRange(context.Background(), []byte("a"), []byte("m"), 1, 1)
+	require.Equal(t, regionlock.LockRangeStatusSuccess, res1.Status)
+	res2 := span.rangeLock.LockRange(context.Background(), []byte("m"), []byte("z"), 2, 1)
+	require.Equal(t, regionlock.LockRangeStatusSuccess, res2.Status)
+	require.False(t, span.rangeLock.Stop())
+
+	client.onRegionFail(newRegionErrorInfo(regionInfo{
+		verID:            tikv.NewRegionVerID(1, 1, 1),
+		span:             heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("a"), EndKey: []byte("m")},
+		subscribedSpan:   span,
+		lockedRangeState: res1.LockedRangeState,
+	}, &requestCancelledErr{}))
+
+	require.Len(t, client.errCache.cache, 1)
+	require.Len(t, span.rangeLock.IterAll(nil).UnLockedRanges, 1)
+
+	client.onRegionFail(newRegionErrorInfo(regionInfo{
+		verID:            tikv.NewRegionVerID(2, 1, 1),
+		span:             heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("m"), EndKey: []byte("z")},
+		subscribedSpan:   span,
+		lockedRangeState: res2.LockedRangeState,
+	}, &requestCancelledErr{}))
+
+	require.Len(t, client.errCache.cache, 1)
+	require.NotContains(t, client.totalSpans.spanMap, span.subID)
+}
+
+func TestOnRegionFailQueuesNonCanceledError(t *testing.T) {
+	client := &subscriptionClient{
+		errCache: newErrCache(),
+	}
+	rawSpan := heartbeatpb.TableSpan{
+		TableID:  1,
+		StartKey: []byte("a"),
+		EndKey:   []byte("z"),
+	}
+	span := &subscribedSpan{
+		subID:     SubscriptionID(1),
+		span:      rawSpan,
+		rangeLock: regionlock.NewRangeLock(1, rawSpan.StartKey, rawSpan.EndKey, 100),
+	}
+
+	res := span.rangeLock.LockRange(context.Background(), rawSpan.StartKey, rawSpan.EndKey, 1, 1)
+	require.Equal(t, regionlock.LockRangeStatusSuccess, res.Status)
+	client.onRegionFail(newRegionErrorInfo(regionInfo{
+		verID:            tikv.NewRegionVerID(1, 1, 1),
+		span:             rawSpan,
+		subscribedSpan:   span,
+		lockedRangeState: res.LockedRangeState,
+	}, &sendRequestToStoreErr{}))
+
+	require.Len(t, client.errCache.cache, 1)
+}
+
 type mockDynamicStream struct{}
 
 func (s *mockDynamicStream) Start() {}
@@ -436,6 +507,31 @@ func TestErrCacheDispatchWithFullChannelAndCanceledContext(t *testing.T) {
 		// If we timeout here, it means dispatch is stuck
 		t.Fatal("dispatch method is stuck and didn't return after context cancellation")
 	}
+}
+
+func TestErrCacheDispatchBatch(t *testing.T) {
+	errCache := &errCache{
+		cache:  make([]regionErrorInfo, 0, 10),
+		errCh:  make(chan regionErrorInfo, 10),
+		notify: make(chan struct{}, 1),
+	}
+	mockErrInfo := regionErrorInfo{
+		regionInfo: regionInfo{
+			verID: tikv.NewRegionVerID(1, 1, 1),
+			span:  heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("a"), EndKey: []byte("b")},
+		},
+		err: errors.New("test error"),
+	}
+
+	for i := 0; i < 5; i++ {
+		errCache.add(mockErrInfo)
+	}
+
+	n, err := errCache.dispatchBatch(context.Background(), 5)
+	require.NoError(t, err)
+	require.Equal(t, 5, n)
+	require.Empty(t, errCache.cache)
+	require.Len(t, errCache.errCh, 5)
 }
 
 func TestGCResolveLastRunMap(t *testing.T) {

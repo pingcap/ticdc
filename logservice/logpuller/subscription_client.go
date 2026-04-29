@@ -517,20 +517,30 @@ func (s *subscriptionClient) onTableDrained(rt *subscribedSpan) {
 
 // Note: don't block the caller, otherwise there may be deadlock
 func (s *subscriptionClient) onRegionFail(errInfo regionErrorInfo) {
+	err := errors.Cause(errInfo.err)
+	_, canceled := err.(*requestCancelledErr)
+
 	// unlock the range early to prevent blocking the range.
-	fields := regionInfoLogFields(errInfo.regionInfo)
-	fields = append(fields, zap.Error(errors.Cause(errInfo.err)))
-	log.Info("unlock range after region error", fields...)
+	var fields []zap.Field
+	if !canceled {
+		fields = regionInfoLogFields(errInfo.regionInfo)
+		fields = append(fields, zap.Error(err))
+		log.Info("unlock range after region error", fields...)
+	}
 	if errInfo.subscribedSpan.rangeLock.UnlockRange(
 		errInfo.span.StartKey, errInfo.span.EndKey,
 		errInfo.verID.GetID(), errInfo.verID.GetVer(), errInfo.resolvedTs()) {
-		log.Info("range drained after region error", fields...)
+		if !canceled {
+			log.Info("range drained after region error", fields...)
+		}
 		s.onTableDrained(errInfo.subscribedSpan)
 		return
 	}
 	cacheLen := s.errCache.add(errInfo)
-	fields = append(fields, zap.Int("errorCacheLen", cacheLen))
-	log.Info("region error queued after unlock", fields...)
+	if !canceled {
+		fields = append(fields, zap.Int("errorCacheLen", cacheLen))
+		log.Info("region error queued after unlock", fields...)
+	}
 }
 
 func regionInfoLogFields(region regionInfo) []zap.Field {
@@ -914,6 +924,11 @@ func (s *subscriptionClient) handleErrors(ctx context.Context) error {
 
 func (s *subscriptionClient) doHandleError(ctx context.Context, errInfo regionErrorInfo) error {
 	err := errors.Cause(errInfo.err)
+	if _, canceled := err.(*requestCancelledErr); canceled {
+		// The corresponding subscription has been unsubscribed, just ignore.
+		return nil
+	}
+
 	fields := regionInfoLogFields(errInfo.regionInfo)
 	fields = append(fields, zap.Error(err))
 	log.Info("handle region error", fields...)
@@ -990,9 +1005,6 @@ func (s *subscriptionClient) doHandleError(ctx context.Context, errInfo regionEr
 		s.regionCache.OnSendFail(bo, errInfo.rpcCtx, regionScheduleReload, err)
 		log.Info("reschedule region for send request error", fields...)
 		s.scheduleRegionRequest(ctx, errInfo.regionInfo, TaskHighPrior)
-		return nil
-	case *requestCancelledErr:
-		// the corresponding subscription has been unsubscribed, just ignore.
 		return nil
 	default:
 		// TODO(qupeng): for some errors it's better to just deregister the region from TiKVs.
@@ -1235,6 +1247,8 @@ type errCache struct {
 	notify chan struct{}
 }
 
+const errCacheDispatchBatchSize = 1024
+
 func newErrCache() *errCache {
 	return &errCache{
 		cache:  make([]regionErrorInfo, 0, 1024),
@@ -1255,21 +1269,51 @@ func (e *errCache) add(errInfo regionErrorInfo) int {
 	return cacheLen
 }
 
-func (e *errCache) dispatch(ctx context.Context) error {
-	ticker := time.NewTicker(10 * time.Millisecond)
-	sendToErrCh := func() {
-		e.Lock()
-		if len(e.cache) == 0 {
-			e.Unlock()
-			return
-		}
-		errInfo := e.cache[0]
-		e.cache = e.cache[1:]
-		e.Unlock()
+func (e *errCache) popBatch(limit int) []regionErrorInfo {
+	e.Lock()
+	defer e.Unlock()
+	if len(e.cache) == 0 {
+		return nil
+	}
+	if limit <= 0 || limit > len(e.cache) {
+		limit = len(e.cache)
+	}
+	batch := make([]regionErrorInfo, limit)
+	copy(batch, e.cache[:limit])
+	clear(e.cache[:limit])
+	if limit == len(e.cache) {
+		e.cache = e.cache[:0]
+	} else {
+		e.cache = e.cache[limit:]
+	}
+	return batch
+}
+
+func (e *errCache) dispatchBatch(ctx context.Context, limit int) (int, error) {
+	batch := e.popBatch(limit)
+	for _, errInfo := range batch {
 		select {
 		case <-ctx.Done():
 			log.Info("subscription client dispatch err cache done")
+			return 0, ctx.Err()
 		case e.errCh <- errInfo:
+		}
+	}
+	return len(batch), nil
+}
+
+func (e *errCache) dispatch(ctx context.Context) error {
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	sendToErrCh := func() error {
+		for {
+			n, err := e.dispatchBatch(ctx, errCacheDispatchBatchSize)
+			if err != nil {
+				return err
+			}
+			if n < errCacheDispatchBatchSize {
+				return nil
+			}
 		}
 	}
 	for {
@@ -1277,9 +1321,13 @@ func (e *errCache) dispatch(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			sendToErrCh()
+			if err := sendToErrCh(); err != nil {
+				return err
+			}
 		case <-e.notify:
-			sendToErrCh()
+			if err := sendToErrCh(); err != nil {
+				return err
+			}
 		}
 	}
 }
