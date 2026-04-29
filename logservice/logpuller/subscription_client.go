@@ -844,10 +844,12 @@ func (s *subscriptionClient) handleErrors(ctx context.Context) error {
 
 func (s *subscriptionClient) doHandleError(ctx context.Context, errInfo regionErrorInfo) error {
 	err := errors.Cause(errInfo.err)
-	log.Debug("cdc region error",
-		zap.Uint64("subscriptionID", uint64(errInfo.subscribedSpan.subID)),
-		zap.Uint64("regionID", errInfo.verID.GetID()),
-		zap.Error(err))
+	if _, canceled := err.(*requestCancelledErr); !canceled {
+		log.Debug("cdc region error",
+			zap.Uint64("subscriptionID", uint64(errInfo.subscribedSpan.subID)),
+			zap.Uint64("regionID", errInfo.verID.GetID()),
+			zap.Error(err))
+	}
 
 	switch eerr := err.(type) {
 	case *eventError:
@@ -1157,6 +1159,8 @@ type errCache struct {
 	notify chan struct{}
 }
 
+const errCacheDispatchBatchSize = 1024
+
 func newErrCache() *errCache {
 	return &errCache{
 		cache:  make([]regionErrorInfo, 0, 1024),
@@ -1175,21 +1179,51 @@ func (e *errCache) add(errInfo regionErrorInfo) {
 	}
 }
 
-func (e *errCache) dispatch(ctx context.Context) error {
-	ticker := time.NewTicker(10 * time.Millisecond)
-	sendToErrCh := func() {
-		e.Lock()
-		if len(e.cache) == 0 {
-			e.Unlock()
-			return
-		}
-		errInfo := e.cache[0]
-		e.cache = e.cache[1:]
-		e.Unlock()
+func (e *errCache) popBatch(limit int) []regionErrorInfo {
+	e.Lock()
+	defer e.Unlock()
+	if len(e.cache) == 0 {
+		return nil
+	}
+	if limit <= 0 || limit > len(e.cache) {
+		limit = len(e.cache)
+	}
+	batch := make([]regionErrorInfo, limit)
+	copy(batch, e.cache[:limit])
+	clear(e.cache[:limit])
+	if limit == len(e.cache) {
+		e.cache = e.cache[:0]
+	} else {
+		e.cache = e.cache[limit:]
+	}
+	return batch
+}
+
+func (e *errCache) dispatchBatch(ctx context.Context, limit int) (int, error) {
+	batch := e.popBatch(limit)
+	for _, errInfo := range batch {
 		select {
 		case <-ctx.Done():
 			log.Info("subscription client dispatch err cache done")
+			return 0, ctx.Err()
 		case e.errCh <- errInfo:
+		}
+	}
+	return len(batch), nil
+}
+
+func (e *errCache) dispatch(ctx context.Context) error {
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	sendToErrCh := func() error {
+		for {
+			n, err := e.dispatchBatch(ctx, errCacheDispatchBatchSize)
+			if err != nil {
+				return err
+			}
+			if n < errCacheDispatchBatchSize {
+				return nil
+			}
 		}
 	}
 	for {
@@ -1197,9 +1231,13 @@ func (e *errCache) dispatch(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			sendToErrCh()
+			if err := sendToErrCh(); err != nil {
+				return err
+			}
 		case <-e.notify:
-			sendToErrCh()
+			if err := sendToErrCh(); err != nil {
+				return err
+			}
 		}
 	}
 }
