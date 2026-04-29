@@ -518,13 +518,44 @@ func (s *subscriptionClient) onTableDrained(rt *subscribedSpan) {
 // Note: don't block the caller, otherwise there may be deadlock
 func (s *subscriptionClient) onRegionFail(errInfo regionErrorInfo) {
 	// unlock the range early to prevent blocking the range.
+	fields := regionInfoLogFields(errInfo.regionInfo)
+	fields = append(fields, zap.Error(errors.Cause(errInfo.err)))
+	log.Info("unlock range after region error", fields...)
 	if errInfo.subscribedSpan.rangeLock.UnlockRange(
 		errInfo.span.StartKey, errInfo.span.EndKey,
 		errInfo.verID.GetID(), errInfo.verID.GetVer(), errInfo.resolvedTs()) {
+		log.Info("range drained after region error", fields...)
 		s.onTableDrained(errInfo.subscribedSpan)
 		return
 	}
-	s.errCache.add(errInfo)
+	cacheLen := s.errCache.add(errInfo)
+	fields = append(fields, zap.Int("errorCacheLen", cacheLen))
+	log.Info("region error queued after unlock", fields...)
+}
+
+func regionInfoLogFields(region regionInfo) []zap.Field {
+	fields := []zap.Field{
+		zap.Uint64("regionID", region.verID.GetID()),
+		zap.Uint64("regionVersion", region.verID.GetVer()),
+		zap.Uint64("regionConfVer", region.verID.GetConfVer()),
+		zap.Int64("tableID", region.span.TableID),
+		zap.String("span", common.FormatTableSpan(&region.span)),
+	}
+	if region.subscribedSpan != nil {
+		fields = append(fields,
+			zap.Uint64("subscriptionID", uint64(region.subscribedSpan.subID)),
+			zap.Bool("subscriptionStopped", region.subscribedSpan.stopped.Load()))
+	}
+	if region.lockedRangeState != nil {
+		fields = append(fields,
+			zap.Uint64("resolvedTs", region.lockedRangeState.ResolvedTs.Load()),
+			zap.Bool("initialized", region.lockedRangeState.Initialized.Load()),
+			zap.Time("created", region.lockedRangeState.Created))
+	}
+	if region.rpcCtx != nil {
+		fields = append(fields, zap.String("storeAddr", region.rpcCtx.Addr))
+	}
+	return fields
 }
 
 // requestedStore represents a store that has been connected.
@@ -636,6 +667,15 @@ func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 		}
 
 		if !ok {
+			fields := regionInfoLogFields(region)
+			priority := "unknown"
+			if task, ok := regionTask.(*regionPriorityTask); ok {
+				priority = task.taskType.String()
+			}
+			fields = append(fields,
+				zap.Bool("force", force),
+				zap.String("priority", priority))
+			log.Info("region request worker queue full retry later", fields...)
 			s.regionTaskQueue.Push(regionTask)
 			continue
 		}
@@ -800,18 +840,38 @@ func (s *subscriptionClient) scheduleRegionRequest(ctx context.Context, region r
 		ctx, region.span.StartKey, region.span.EndKey, region.verID.GetID(), region.verID.GetVer())
 
 	if lockRangeResult.Status == regionlock.LockRangeStatusWait {
+		fields := regionInfoLogFields(region)
+		fields = append(fields, zap.String("priority", priority.String()))
+		log.Info("range lock waits for overlapping region", fields...)
 		lockRangeResult = lockRangeResult.WaitFn()
 	}
 
 	switch lockRangeResult.Status {
 	case regionlock.LockRangeStatusSuccess:
 		region.lockedRangeState = lockRangeResult.LockedRangeState
+		if priority == TaskHighPrior {
+			fields := regionInfoLogFields(region)
+			fields = append(fields,
+				zap.String("priority", priority.String()),
+				zap.Uint64("lockResolvedTs", lockRangeResult.LockedRangeState.ResolvedTs.Load()))
+			log.Info("range relocked after region error", fields...)
+		}
 		s.regionTaskQueue.Push(NewRegionPriorityTask(priority, region, s.pdClock.CurrentTS()))
 	case regionlock.LockRangeStatusStale:
+		fields := regionInfoLogFields(region)
+		fields = append(fields,
+			zap.String("priority", priority.String()),
+			zap.Any("retryRanges", lockRangeResult.RetryRanges))
+		log.Info("range lock stale retry uncovered ranges", fields...)
 		for _, r := range lockRangeResult.RetryRanges {
 			s.scheduleRangeRequest(ctx, r, region.subscribedSpan, region.filterLoop, priority)
 		}
 	default:
+		fields := regionInfoLogFields(region)
+		fields = append(fields,
+			zap.String("priority", priority.String()),
+			zap.Int("lockStatus", lockRangeResult.Status))
+		log.Info("range lock canceled", fields...)
 		return
 	}
 }
@@ -822,9 +882,19 @@ func (s *subscriptionClient) scheduleRangeRequest(
 	filterLoop bool,
 	priority TaskType,
 ) {
+	fields := []zap.Field{
+		zap.Uint64("subscriptionID", uint64(subscribedSpan.subID)),
+		zap.Int64("tableID", span.TableID),
+		zap.String("span", common.FormatTableSpan(&span)),
+		zap.String("priority", priority.String()),
+	}
 	select {
 	case <-ctx.Done():
+		log.Info("range request skipped because context done", fields...)
 	case s.rangeTaskCh <- rangeTask{span: span, subscribedSpan: subscribedSpan, filterLoop: filterLoop, priority: priority}:
+		if priority == TaskHighPrior {
+			log.Info("range request scheduled after region error", fields...)
+		}
 	}
 }
 
@@ -844,10 +914,9 @@ func (s *subscriptionClient) handleErrors(ctx context.Context) error {
 
 func (s *subscriptionClient) doHandleError(ctx context.Context, errInfo regionErrorInfo) error {
 	err := errors.Cause(errInfo.err)
-	log.Debug("cdc region error",
-		zap.Uint64("subscriptionID", uint64(errInfo.subscribedSpan.subID)),
-		zap.Uint64("regionID", errInfo.verID.GetID()),
-		zap.Error(err))
+	fields := regionInfoLogFields(errInfo.regionInfo)
+	fields = append(fields, zap.Error(err))
+	log.Info("handle region error", fields...)
 
 	switch eerr := err.(type) {
 	case *eventError:
@@ -855,26 +924,31 @@ func (s *subscriptionClient) doHandleError(ctx context.Context, errInfo regionEr
 		if notLeader := innerErr.GetNotLeader(); notLeader != nil {
 			metricFeedNotLeaderCounter.Inc()
 			s.regionCache.UpdateLeader(errInfo.verID, notLeader.GetLeader(), errInfo.rpcCtx.AccessIdx)
+			log.Info("reschedule region for not leader", fields...)
 			s.scheduleRegionRequest(ctx, errInfo.regionInfo, TaskHighPrior)
 			return nil
 		}
 		if innerErr.GetEpochNotMatch() != nil {
 			metricFeedEpochNotMatchCounter.Inc()
+			log.Info("reschedule range for epoch not match", fields...)
 			s.scheduleRangeRequest(ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, TaskHighPrior)
 			return nil
 		}
 		if innerErr.GetRegionNotFound() != nil {
 			metricFeedRegionNotFoundCounter.Inc()
+			log.Info("reschedule range for region not found", fields...)
 			s.scheduleRangeRequest(ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, TaskHighPrior)
 			return nil
 		}
 		if innerErr.GetCongested() != nil {
 			metricKvCongestedCounter.Inc()
+			log.Info("reschedule region for kv congested", fields...)
 			s.scheduleRegionRequest(ctx, errInfo.regionInfo, TaskLowPrior)
 			return nil
 		}
 		if innerErr.GetServerIsBusy() != nil {
 			metricKvIsBusyCounter.Inc()
+			log.Info("reschedule region for kv busy", fields...)
 			s.scheduleRegionRequest(ctx, errInfo.regionInfo, TaskLowPrior)
 			return nil
 		}
@@ -894,10 +968,12 @@ func (s *subscriptionClient) doHandleError(ctx context.Context, errInfo regionEr
 			zap.Uint64("subscriptionID", uint64(errInfo.subscribedSpan.subID)),
 			zap.Stringer("error", innerErr))
 		metricFeedUnknownErrorCounter.Inc()
+		log.Info("reschedule region for unknown cdc error", fields...)
 		s.scheduleRegionRequest(ctx, errInfo.regionInfo, TaskHighPrior)
 		return nil
 	case *rpcCtxUnavailableErr:
 		metricFeedRPCCtxUnavailable.Inc()
+		log.Info("reschedule range for rpc context unavailable", fields...)
 		s.scheduleRangeRequest(ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, TaskHighPrior)
 		return nil
 	case *getStoreErr:
@@ -905,12 +981,14 @@ func (s *subscriptionClient) doHandleError(ctx context.Context, errInfo regionEr
 		bo := tikv.NewBackoffer(ctx, tikvRequestMaxBackoff)
 		// cannot get the store the region belongs to, so we need to reload the region.
 		s.regionCache.OnSendFail(bo, errInfo.rpcCtx, true, err)
+		log.Info("reschedule range for store lookup error", fields...)
 		s.scheduleRangeRequest(ctx, errInfo.span, errInfo.subscribedSpan, errInfo.filterLoop, TaskHighPrior)
 		return nil
 	case *sendRequestToStoreErr:
 		metricStoreSendRequestErr.Inc()
 		bo := tikv.NewBackoffer(ctx, tikvRequestMaxBackoff)
 		s.regionCache.OnSendFail(bo, errInfo.rpcCtx, regionScheduleReload, err)
+		log.Info("reschedule region for send request error", fields...)
 		s.scheduleRegionRequest(ctx, errInfo.regionInfo, TaskHighPrior)
 		return nil
 	case *requestCancelledErr:
@@ -1165,14 +1243,16 @@ func newErrCache() *errCache {
 	}
 }
 
-func (e *errCache) add(errInfo regionErrorInfo) {
+func (e *errCache) add(errInfo regionErrorInfo) int {
 	e.Lock()
 	defer e.Unlock()
 	e.cache = append(e.cache, errInfo)
+	cacheLen := len(e.cache)
 	select {
 	case e.notify <- struct{}{}:
 	default:
 	}
+	return cacheLen
 }
 
 func (e *errCache) dispatch(ctx context.Context) error {

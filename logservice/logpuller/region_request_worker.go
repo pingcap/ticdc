@@ -123,7 +123,19 @@ func newRegionRequestWorker(
 				}
 				regionErr = &sendRequestToStoreErr{}
 			}
-			for subID, m := range worker.clearRegionStates() {
+			stoppedStates := worker.clearRegionStates()
+			stoppedRegionCount := 0
+			for _, m := range stoppedStates {
+				stoppedRegionCount += len(m)
+			}
+			pendingRegions := worker.clearPendingRegions()
+			log.Warn("region request worker reschedules regions after stream failure",
+				zap.Uint64("workerID", worker.workerID),
+				zap.String("addr", worker.store.storeAddr),
+				zap.Int("stoppedRegionCount", stoppedRegionCount),
+				zap.Int("pendingRegionCount", len(pendingRegions)),
+				zap.Error(regionErr))
+			for subID, m := range stoppedStates {
 				for _, state := range m {
 					state.markStopped(regionErr)
 					regionEvent := regionEvent{
@@ -133,7 +145,7 @@ func newRegionRequestWorker(
 				}
 			}
 			// The store may fail forever, so we need try to re-schedule all pending regions.
-			for _, region := range worker.clearPendingRegions() {
+			for _, region := range pendingRegions {
 				if region.isStopped() {
 					// It means it's a special task for stopping the table.
 					continue
