@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec"
 	"go.uber.org/zap"
@@ -44,7 +45,7 @@ type EventDispatcher struct {
 	// cacheEvents is used to store events with a commit-ts greater than redoGlobalTs
 	cacheEvents struct {
 		sync.Mutex
-		events chan cacheEvents
+		events []cacheEvents
 	}
 }
 
@@ -87,22 +88,34 @@ func NewEventDispatcher(
 		redoEnable:   redoEnable,
 		redoGlobalTs: redoGlobalTs,
 	}
-	dispatcher.cacheEvents.events = make(chan cacheEvents, 1)
+	dispatcher.cacheEvents.events = make([]cacheEvents, 0, 1)
 	return dispatcher
 }
 
 // HandleCacheEvents called when redoGlobalTs is updated
 func (d *EventDispatcher) HandleCacheEvents() {
-	select {
-	case cacheEvents, ok := <-d.cacheEvents.events:
-		if !ok {
-			return
+	d.cacheEvents.Lock()
+	if len(d.cacheEvents.events) == 0 {
+		d.cacheEvents.Unlock()
+		return
+	}
+	cached := d.cacheEvents.events[0]
+	d.cacheEvents.events[0] = cacheEvents{}
+	d.cacheEvents.events = d.cacheEvents.events[1:]
+	d.cacheEvents.Unlock()
+
+	wakeAndContinue := func() {
+		// Drain cached redo-gated batches before waking the live stream again so
+		// already-buffered older events keep their ordering priority.
+		d.HandleCacheEvents()
+		if cached.wakeCallback != nil {
+			cached.wakeCallback()
 		}
-		block := d.HandleEvents(cacheEvents.events, cacheEvents.wakeCallback)
-		if !block {
-			cacheEvents.wakeCallback()
-		}
-	default:
+	}
+
+	block := d.HandleEvents(cached.events, wakeAndContinue)
+	if !block {
+		wakeAndContinue()
 	}
 }
 
@@ -119,22 +132,27 @@ func (d *EventDispatcher) cache(dispatcherEvents []DispatcherEvent, wakeCallback
 		events:       append(make([]DispatcherEvent, 0, len(dispatcherEvents)), dispatcherEvents...),
 		wakeCallback: wakeCallback,
 	}
-	select {
-	case d.cacheEvents.events <- cacheEvents:
-		log.Debug("cache events",
-			zap.Stringer("dispatcher", d.id),
-			zap.Uint64("dispatcherResolvedTs", d.GetResolvedTs()),
-			zap.Int("length", len(dispatcherEvents)),
-			zap.Int("eventType", dispatcherEvents[len(dispatcherEvents)-1].Event.GetType()),
-			zap.Uint64("commitTs", dispatcherEvents[len(dispatcherEvents)-1].Event.GetCommitTs()),
-			zap.Uint64("redoGlobalTs", d.redoGlobalTs.Load()),
-		)
-	default:
-		log.Panic("dispatcher cache events is full", zap.Stringer("dispatcher", d.id), zap.Int("len", len(d.cacheEvents.events)))
-	}
+	d.cacheEvents.events = append(d.cacheEvents.events, cacheEvents)
+	log.Debug("cache events",
+		zap.Stringer("dispatcher", d.id),
+		zap.Uint64("dispatcherResolvedTs", d.GetResolvedTs()),
+		zap.Int("length", len(dispatcherEvents)),
+		zap.Int("eventType", dispatcherEvents[len(dispatcherEvents)-1].Event.GetType()),
+		zap.Uint64("commitTs", dispatcherEvents[len(dispatcherEvents)-1].Event.GetCommitTs()),
+		zap.Uint64("redoGlobalTs", d.redoGlobalTs.Load()),
+		zap.Int("cached", len(d.cacheEvents.events)),
+	)
 }
 
 func (d *EventDispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallback func()) bool {
+	// Handshake has no downstream side effect. If we cache it behind redoGlobalTs,
+	// a recreated normal dispatcher can stay Initializing forever and keep the add
+	// operator from finishing, which in turn pins the global checkpoint.
+	if len(dispatcherEvents) == 1 &&
+		dispatcherEvents[0].Event.GetType() == commonEvent.TypeHandshakeEvent {
+		return d.handleEvents(dispatcherEvents, wakeCallback)
+	}
+
 	// if the commit-ts of last event of dispatcherEvents is greater than redoGlobalTs,
 	// the dispatcherEvents will be cached util the redoGlobalTs is updated.
 	if d.redoEnable && len(dispatcherEvents) > 0 && d.redoGlobalTs.Load() < dispatcherEvents[len(dispatcherEvents)-1].Event.GetCommitTs() {
@@ -150,7 +168,7 @@ func (d *EventDispatcher) Remove() {
 	if d.isRemoving.CompareAndSwap(false, true) {
 		d.cacheEvents.Lock()
 		defer d.cacheEvents.Unlock()
-		close(d.cacheEvents.events)
+		d.cacheEvents.events = nil
 	}
 	d.removeDispatcher()
 }
@@ -228,7 +246,7 @@ func (d *EventDispatcher) EmitBootstrap() bool {
 	return true
 }
 
-// cacheEvents cache the events which commit-ts is less than or equal the redoGlobalTs
+// cacheEvents caches events whose commit-ts is greater than redoGlobalTs.
 // it will be used when redoEnable is true
 type cacheEvents struct {
 	events       []DispatcherEvent

@@ -444,6 +444,69 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	t.Run("cloud storage wake callback after batch enqueue", verifyDMLWakeCallbackStorageAfterBatchEnqueue)
 }
 
+func TestDispatcherHandshakePromotesToWorking(t *testing.T) {
+	tableSpan, err := getCompleteTableSpan(getTestingKeyspaceID())
+	require.NoError(t, err)
+
+	dispatcher := newDispatcherForTest(newDispatcherTestSink(t, common.MysqlSinkType).Sink(), tableSpan)
+	require.Equal(t, heartbeatpb.ComponentState_Initializing, dispatcher.GetComponentStatus())
+
+	nodeID := node.NewID()
+	handshake := commonEvent.NewHandshakeEvent(dispatcher.GetId(), dispatcher.GetStartTs(), 1, &common.TableInfo{})
+	block := dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, &handshake)}, func() {})
+	require.False(t, block)
+	require.Equal(t, heartbeatpb.ComponentState_Working, dispatcher.GetComponentStatus())
+
+	select {
+	case status := <-dispatcher.sharedInfo.statusesChan:
+		require.Equal(t, dispatcher.GetId().ToPB(), status.ID)
+		require.Equal(t, heartbeatpb.ComponentState_Working, status.ComponentStatus)
+		require.Equal(t, dispatcher.GetCheckpointTs(), status.CheckpointTs)
+	default:
+		t.Fatal("expected dispatcher working status after handshake")
+	}
+}
+
+func TestDispatcherHandshakeBypassesRedoCache(t *testing.T) {
+	tableSpan, err := getCompleteTableSpan(getTestingKeyspaceID())
+	require.NoError(t, err)
+
+	var redoTs atomic.Uint64
+	redoTs.Store(0)
+	sharedInfo := newTestSharedInfo(false, false, newTestSyncPointConfig())
+	dispatcher := NewEventDispatcher(
+		common.NewDispatcherID(),
+		tableSpan,
+		common.Ts(100),
+		1,
+		NewSchemaIDToDispatchers(),
+		false,
+		false,
+		common.Ts(100),
+		newDispatcherTestSink(t, common.MysqlSinkType).Sink(),
+		sharedInfo,
+		true,
+		&redoTs,
+	)
+	require.Equal(t, heartbeatpb.ComponentState_Initializing, dispatcher.GetComponentStatus())
+
+	nodeID := node.NewID()
+	handshake := commonEvent.NewHandshakeEvent(dispatcher.GetId(), dispatcher.GetStartTs(), 1, &common.TableInfo{})
+	block := dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, &handshake)}, func() {})
+	require.False(t, block)
+	require.Equal(t, heartbeatpb.ComponentState_Working, dispatcher.GetComponentStatus())
+	require.Empty(t, dispatcher.cacheEvents.events)
+
+	select {
+	case status := <-dispatcher.sharedInfo.statusesChan:
+		require.Equal(t, dispatcher.GetId().ToPB(), status.ID)
+		require.Equal(t, heartbeatpb.ComponentState_Working, status.ComponentStatus)
+		require.Equal(t, dispatcher.GetCheckpointTs(), status.CheckpointTs)
+	default:
+		t.Fatal("expected dispatcher working status after handshake")
+	}
+}
+
 func TestDispatcherIgnoresStaleIgnoredBlockStatus(t *testing.T) {
 	tableSpan := getUncompleteTableSpan()
 	tableSpan.KeyspaceID = getTestingKeyspaceID()
@@ -1234,6 +1297,145 @@ func TestDispatcher_SkipDMLAsStartTs_Disabled(t *testing.T) {
 	block := dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, dmlEvent100)}, func() {})
 	require.True(t, block)
 	require.Equal(t, 1, len(mockSink.GetDMLs()), "DML at commitTs=100 should be processed when skipDMLAsStartTs=false")
+}
+
+func TestEventDispatcherRedoCachesMultipleBlockedDDLEvents(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	helper.DDL2Job("create table t(id int primary key, v int)")
+	dmlEvent := helper.DML2Event("test", "t", "insert into t values(1, 1)")
+	require.NotNil(t, dmlEvent)
+
+	testSink := newDispatcherTestSink(t, common.MysqlSinkType)
+	tableSpan, err := getCompleteTableSpan(getTestingKeyspaceID())
+	require.NoError(t, err)
+
+	var redoTs atomic.Uint64
+	redoTs.Store(1)
+	sharedInfo := newTestSharedInfo(false, false, newTestSyncPointConfig())
+	dispatcher := NewEventDispatcher(
+		common.NewDispatcherID(),
+		tableSpan,
+		common.Ts(0),
+		1,
+		NewSchemaIDToDispatchers(),
+		false,
+		false,
+		common.Ts(0),
+		testSink.Sink(),
+		sharedInfo,
+		true,
+		&redoTs,
+	)
+
+	ddlEvent1 := &commonEvent.DDLEvent{
+		FinishedTs: 5,
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{0},
+		},
+		TableInfo: dmlEvent.TableInfo,
+		Query:     "alter table t add column c1 int",
+	}
+	ddlEvent2 := &commonEvent.DDLEvent{
+		FinishedTs: 6,
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{0},
+		},
+		TableInfo: dmlEvent.TableInfo,
+		Query:     "alter table t add column c2 int",
+	}
+
+	nodeID := node.NewID()
+	var wakeCount atomic.Int32
+	wake := func() {
+		wakeCount.Add(1)
+	}
+
+	block := dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddlEvent1)}, wake)
+	require.True(t, block)
+	require.Equal(t, 1, len(dispatcher.cacheEvents.events))
+
+	require.NotPanics(t, func() {
+		block = dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, ddlEvent2)}, wake)
+	})
+	require.True(t, block)
+	require.Equal(t, 2, len(dispatcher.cacheEvents.events))
+	require.Equal(t, int32(0), wakeCount.Load())
+
+	redoTs.Store(math.MaxUint64)
+	dispatcher.HandleCacheEvents()
+	dispatcher.HandleCacheEvents()
+
+	require.Eventually(t, func() bool {
+		return wakeCount.Load() == 2
+	}, 5*time.Second, 50*time.Millisecond)
+	require.Equal(t, 0, len(dispatcher.cacheEvents.events))
+}
+
+func TestEventDispatcherRedoDrainsAllReleasableCachedEvents(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	helper.DDL2Job("create table t(id int primary key, v int)")
+	dmlEvent := helper.DML2Event("test", "t", "insert into t values(1, 1)")
+	require.NotNil(t, dmlEvent)
+
+	testSink := newDispatcherTestSink(t, common.MysqlSinkType)
+	tableSpan, err := getCompleteTableSpan(getTestingKeyspaceID())
+	require.NoError(t, err)
+
+	var redoTs atomic.Uint64
+	redoTs.Store(1)
+	sharedInfo := newTestSharedInfo(false, false, newTestSyncPointConfig())
+	dispatcher := NewEventDispatcher(
+		common.NewDispatcherID(),
+		tableSpan,
+		common.Ts(0),
+		1,
+		NewSchemaIDToDispatchers(),
+		false,
+		false,
+		common.Ts(0),
+		testSink.Sink(),
+		sharedInfo,
+		true,
+		&redoTs,
+	)
+
+	nodeID := node.NewID()
+	makeDDL := func(commitTs uint64, query string) *commonEvent.DDLEvent {
+		return &commonEvent.DDLEvent{
+			FinishedTs: commitTs,
+			BlockedTables: &commonEvent.InfluencedTables{
+				InfluenceType: commonEvent.InfluenceTypeNormal,
+				TableIDs:      []int64{0},
+			},
+			TableInfo: dmlEvent.TableInfo,
+			Query:     query,
+		}
+	}
+
+	var wakeCount atomic.Int32
+	wake := func() {
+		wakeCount.Add(1)
+	}
+
+	require.True(t, dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, makeDDL(5, "alter table t add column c1 int"))}, wake))
+	require.True(t, dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, makeDDL(6, "alter table t add column c2 int"))}, wake))
+	require.Equal(t, 2, len(dispatcher.cacheEvents.events))
+
+	redoTs.Store(math.MaxUint64)
+	dispatcher.HandleCacheEvents()
+
+	require.Eventually(t, func() bool {
+		return wakeCount.Load() == 2
+	}, 5*time.Second, 50*time.Millisecond)
+	require.Equal(t, 0, len(dispatcher.cacheEvents.events))
 }
 
 func TestHoldBlockEventUntilNoResendTasks(t *testing.T) {
