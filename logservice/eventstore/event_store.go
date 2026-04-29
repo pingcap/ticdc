@@ -1357,11 +1357,6 @@ func (e *eventStore) writeEvents(
 				// Encrypt if encryption is enabled (after compression)
 				encryptedValue, err := e.encryptionManager.EncryptData(context.Background(), event.keyspaceID, value)
 				if err != nil {
-					log.Error("encrypt event value failed",
-						zap.Uint32("keyspaceID", event.keyspaceID),
-						zap.Uint64("subID", uint64(event.subID)),
-						zap.Int64("tableID", event.tableID),
-						zap.Error(err))
 					return err
 				}
 
