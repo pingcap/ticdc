@@ -77,7 +77,7 @@ type Dispatcher interface {
 	GetHeartBeatInfo(h *HeartBeatInfo)
 	GetComponentStatus() heartbeatpb.ComponentState
 	GetBlockEventStatus() *heartbeatpb.State
-	GetBlockStatusesChan() chan *heartbeatpb.TableSpanBlockStatus
+	OfferBlockStatus(status *heartbeatpb.TableSpanBlockStatus)
 	GetEventSizePerSecond() float32
 	IsTableTriggerDispatcher() bool
 	DealWithBlockEvent(event commonEvent.BlockEvent)
@@ -864,16 +864,7 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 		}
 
 		// Step4: whether the outdate message or not, we need to return message show we have finished the event.
-		d.sharedInfo.blockStatusesChan <- &heartbeatpb.TableSpanBlockStatus{
-			ID: d.id.ToPB(),
-			State: &heartbeatpb.State{
-				IsBlocked:   true,
-				BlockTs:     action.CommitTs,
-				IsSyncPoint: action.IsSyncPoint,
-				Stage:       heartbeatpb.BlockStage_DONE,
-			},
-			Mode: d.GetMode(),
-		}
+		d.OfferDoneBlockStatus(action.CommitTs, action.IsSyncPoint)
 	}
 	return false
 }
@@ -909,16 +900,7 @@ func (d *BasicDispatcher) reportBlockedEventDone(
 	actionCommitTs uint64,
 	actionIsSyncPoint bool,
 ) {
-	d.sharedInfo.blockStatusesChan <- &heartbeatpb.TableSpanBlockStatus{
-		ID: d.id.ToPB(),
-		State: &heartbeatpb.State{
-			IsBlocked:   true,
-			BlockTs:     actionCommitTs,
-			IsSyncPoint: actionIsSyncPoint,
-			Stage:       heartbeatpb.BlockStage_DONE,
-		},
-		Mode: d.GetMode(),
-	}
+	d.OfferDoneBlockStatus(actionCommitTs, actionIsSyncPoint)
 	GetDispatcherStatusDynamicStream().Wake(d.id)
 }
 
@@ -1070,7 +1052,7 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 		} else {
 			d.resendTaskMap.Set(identifier, newResendTask(message, d, nil))
 		}
-		d.sharedInfo.blockStatusesChan <- message
+		d.OfferBlockStatus(message)
 	})
 
 	// dealing with events which update schema ids
@@ -1194,7 +1176,7 @@ func (d *BasicDispatcher) reportBlockedEventToMaintainer(event commonEvent.Block
 		IsSyncPoint: event.GetType() == commonEvent.TypeSyncPointEvent,
 	}
 	d.resendTaskMap.Set(identifier, newResendTask(message, d, nil))
-	d.sharedInfo.blockStatusesChan <- message
+	d.OfferBlockStatus(message)
 }
 
 func (d *BasicDispatcher) flushBlockedEventAndReportToMaintainer(event commonEvent.BlockEvent) {

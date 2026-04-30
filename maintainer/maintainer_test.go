@@ -36,6 +36,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/server/watcher"
+	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
@@ -258,6 +259,189 @@ func (m *mockDispatcherManager) sendHeartbeat() {
 		m.checkpointTs++
 		m.sendMessages(response)
 	}
+}
+
+func TestMaintainerPushEventDropsStatusRequestBeforeInitialized(t *testing.T) {
+	m := &Maintainer{
+		changefeedID:          common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName),
+		eventCh:               chann.NewAutoDrainChann[*Event](chann.Cap(8)),
+		statusRequestNotifyCh: make(chan struct{}, 1),
+		removed:               atomic.NewBool(false),
+	}
+
+	pushed := m.pushEvent(&Event{
+		changefeedID: m.changefeedID,
+		eventType:    EventMessage,
+		message:      &messaging.TargetMessage{Type: messaging.TypeBlockStatusRequest},
+	})
+
+	require.False(t, pushed)
+	require.Equal(t, 0, m.eventCh.Len())
+}
+
+func TestMaintainerPushEventBuffersBlockStatusRequest(t *testing.T) {
+	dispatcherID := common.NewDispatcherID()
+	from := node.ID("node-1")
+	m := &Maintainer{
+		changefeedID:          common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName),
+		eventCh:               chann.NewAutoDrainChann[*Event](chann.Cap(8)),
+		statusRequestNotifyCh: make(chan struct{}, 1),
+		removed:               atomic.NewBool(false),
+	}
+	m.initialized.Store(true)
+
+	req := &heartbeatpb.BlockStatusRequest{
+		ChangefeedID: m.changefeedID.ToPB(),
+		Mode:         common.DefaultMode,
+		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
+			{
+				ID: dispatcherID.ToPB(),
+				State: &heartbeatpb.State{
+					IsBlocked:   true,
+					BlockTs:     100,
+					IsSyncPoint: true,
+					Stage:       heartbeatpb.BlockStage_WAITING,
+				},
+				Mode: common.DefaultMode,
+			},
+		},
+	}
+
+	require.True(t, m.pushEvent(&Event{
+		changefeedID: m.changefeedID,
+		eventType:    EventMessage,
+		message: &messaging.TargetMessage{
+			From:    from,
+			Type:    messaging.TypeBlockStatusRequest,
+			Message: []messaging.IOTypeT{req},
+		},
+	}))
+	require.True(t, m.pushEvent(&Event{
+		changefeedID: m.changefeedID,
+		eventType:    EventMessage,
+		message: &messaging.TargetMessage{
+			From:    from,
+			Type:    messaging.TypeBlockStatusRequest,
+			Message: []messaging.IOTypeT{req},
+		},
+	}))
+
+	require.Equal(t, 0, m.eventCh.Len())
+	require.Equal(t, 1, len(m.statusRequestNotifyCh))
+
+	events := m.takeBufferedStatusRequestEvents()
+	require.Len(t, events, 1)
+	bufferedReq := events[0].message.Message[0].(*heartbeatpb.BlockStatusRequest)
+	require.Len(t, bufferedReq.BlockStatuses, 1)
+	require.Equal(t, from, events[0].message.From)
+}
+
+func TestMaintainerPushEventBuffersBlockStatusRequestByModeAndBlockTs(t *testing.T) {
+	from := node.ID("node-1")
+	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	defaultDispatcherID := common.NewDispatcherID()
+	redoDispatcherID := common.NewDispatcherID()
+
+	newBlockStatus := func(dispatcherID common.DispatcherID, blockTs uint64, mode int64) *heartbeatpb.TableSpanBlockStatus {
+		return &heartbeatpb.TableSpanBlockStatus{
+			ID: dispatcherID.ToPB(),
+			State: &heartbeatpb.State{
+				IsBlocked:   true,
+				BlockTs:     blockTs,
+				IsSyncPoint: true,
+				Stage:       heartbeatpb.BlockStage_WAITING,
+			},
+			Mode: mode,
+		}
+	}
+
+	m := &Maintainer{
+		changefeedID:          changefeedID,
+		eventCh:               chann.NewAutoDrainChann[*Event](chann.Cap(8)),
+		statusRequestNotifyCh: make(chan struct{}, 1),
+		removed:               atomic.NewBool(false),
+	}
+	m.initialized.Store(true)
+
+	newBlockStatusRequest := func(mode int64, statuses ...*heartbeatpb.TableSpanBlockStatus) *heartbeatpb.BlockStatusRequest {
+		return &heartbeatpb.BlockStatusRequest{
+			ChangefeedID:  changefeedID.ToPB(),
+			Mode:          mode,
+			BlockStatuses: statuses,
+		}
+	}
+
+	require.True(t, m.pushEvent(&Event{
+		changefeedID: m.changefeedID,
+		eventType:    EventMessage,
+		message: &messaging.TargetMessage{
+			From: from,
+			Type: messaging.TypeBlockStatusRequest,
+			Message: []messaging.IOTypeT{
+				newBlockStatusRequest(common.DefaultMode,
+					newBlockStatus(defaultDispatcherID, 100, common.DefaultMode)),
+			},
+		},
+	}))
+	require.True(t, m.pushEvent(&Event{
+		changefeedID: m.changefeedID,
+		eventType:    EventMessage,
+		message: &messaging.TargetMessage{
+			From: from,
+			Type: messaging.TypeBlockStatusRequest,
+			Message: []messaging.IOTypeT{
+				newBlockStatusRequest(common.DefaultMode,
+					newBlockStatus(defaultDispatcherID, 200, common.DefaultMode)),
+			},
+		},
+	}))
+	require.True(t, m.pushEvent(&Event{
+		changefeedID: m.changefeedID,
+		eventType:    EventMessage,
+		message: &messaging.TargetMessage{
+			From: from,
+			Type: messaging.TypeBlockStatusRequest,
+			Message: []messaging.IOTypeT{
+				newBlockStatusRequest(common.RedoMode,
+					newBlockStatus(redoDispatcherID, 300, common.RedoMode)),
+			},
+		},
+	}))
+
+	events := m.takeBufferedStatusRequestEvents()
+	require.Len(t, events, 2)
+
+	blockTsByMode := make(map[int64][]uint64, 2)
+	for _, event := range events {
+		require.Equal(t, from, event.message.From)
+		req := event.message.Message[0].(*heartbeatpb.BlockStatusRequest)
+		for _, status := range req.BlockStatuses {
+			blockTsByMode[req.Mode] = append(blockTsByMode[req.Mode], status.State.BlockTs)
+		}
+	}
+
+	require.ElementsMatch(t, []uint64{100, 200}, blockTsByMode[common.DefaultMode])
+	require.ElementsMatch(t, []uint64{300}, blockTsByMode[common.RedoMode])
+}
+
+func TestMaintainerPushEventKeepsBootstrapResponseOutsideStatusBuffer(t *testing.T) {
+	m := &Maintainer{
+		changefeedID:          common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName),
+		eventCh:               chann.NewAutoDrainChann[*Event](chann.Cap(8)),
+		statusRequestNotifyCh: make(chan struct{}, 1),
+		removed:               atomic.NewBool(false),
+	}
+	m.initialized.Store(true)
+
+	pushed := m.pushEvent(&Event{
+		changefeedID: m.changefeedID,
+		eventType:    EventMessage,
+		message:      &messaging.TargetMessage{Type: messaging.TypeMaintainerBootstrapResponse},
+	})
+
+	require.True(t, pushed)
+	require.Equal(t, 1, m.eventCh.Len())
+	require.Equal(t, 0, len(m.statusRequestNotifyCh))
 }
 
 func TestMaintainerSchedule(t *testing.T) {

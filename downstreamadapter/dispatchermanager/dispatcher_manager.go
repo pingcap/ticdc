@@ -45,6 +45,8 @@ import (
 	"go.uber.org/zap"
 )
 
+const maxBlockStatusesPerRequest = 2048
+
 /*
 DispatcherManager manages dispatchers for a changefeed instance with responsibilities including:
 
@@ -272,7 +274,7 @@ func NewDispatcherManager(
 		batchCounts,
 		batchBytes,
 		make(chan dispatcher.TableSpanStatusWithSeq, 8192),
-		make(chan *heartbeatpb.TableSpanBlockStatus, 1024*1024),
+		1024*1024,
 		make(chan error, 1),
 	)
 
@@ -593,49 +595,57 @@ func (e *DispatcherManager) collectErrors(ctx context.Context) {
 
 // collectBlockStatusRequest collect the block status from the block status channel and report to the maintainer.
 func (e *DispatcherManager) collectBlockStatusRequest(ctx context.Context) {
-	delay := time.NewTimer(0)
-	defer delay.Stop()
 	enqueueBlockStatus := func(blockStatusMessage []*heartbeatpb.TableSpanBlockStatus, mode int64) {
-		var message heartbeatpb.BlockStatusRequest
-		message.ChangefeedID = e.changefeedID.ToPB()
-		message.BlockStatuses = blockStatusMessage
-		message.Mode = mode
-		e.blockStatusRequestQueue.Enqueue(&BlockStatusRequestWithTargetID{TargetID: e.GetMaintainerID(), Request: &message})
+		// Split oversized batches so one protobuf message does not monopolize
+		// serialization, transport, and maintainer-side processing.
+		for start := 0; start < len(blockStatusMessage); start += maxBlockStatusesPerRequest {
+			end := start + maxBlockStatusesPerRequest
+			if end > len(blockStatusMessage) {
+				end = len(blockStatusMessage)
+			}
+			var message heartbeatpb.BlockStatusRequest
+			message.ChangefeedID = e.changefeedID.ToPB()
+			message.BlockStatuses = blockStatusMessage[start:end]
+			message.Mode = mode
+			e.blockStatusRequestQueue.Enqueue(&BlockStatusRequestWithTargetID{TargetID: e.GetMaintainerID(), Request: &message})
+		}
 	}
 	for {
 		blockStatusMessage := make([]*heartbeatpb.TableSpanBlockStatus, 0)
 		redoBlockStatusMessage := make([]*heartbeatpb.TableSpanBlockStatus, 0)
-		select {
-		case <-ctx.Done():
+		blockStatus := e.sharedInfo.TakeBlockStatus(ctx)
+		if blockStatus == nil {
 			return
-		case blockStatus := <-e.sharedInfo.GetBlockStatusesChan():
+		}
+		if common.IsDefaultMode(blockStatus.Mode) {
+			blockStatusMessage = append(blockStatusMessage, blockStatus)
+		} else {
+			redoBlockStatusMessage = append(redoBlockStatusMessage, blockStatus)
+		}
+
+		batchCtx, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
+		for {
+			blockStatus = e.sharedInfo.TakeBlockStatus(batchCtx)
+			if blockStatus == nil {
+				break
+			}
 			if common.IsDefaultMode(blockStatus.Mode) {
 				blockStatusMessage = append(blockStatusMessage, blockStatus)
 			} else {
 				redoBlockStatusMessage = append(redoBlockStatusMessage, blockStatus)
 			}
-			delay.Reset(10 * time.Millisecond)
-		loop:
-			for {
-				select {
-				case blockStatus := <-e.sharedInfo.GetBlockStatusesChan():
-					if common.IsDefaultMode(blockStatus.Mode) {
-						blockStatusMessage = append(blockStatusMessage, blockStatus)
-					} else {
-						redoBlockStatusMessage = append(redoBlockStatusMessage, blockStatus)
-					}
-				case <-delay.C:
-					break loop
-				}
-			}
+		}
+		cancel()
+		if ctx.Err() != nil {
+			return
+		}
 
-			e.metricBlockStatusesChanLen.Set(float64(len(e.sharedInfo.GetBlockStatusesChan())))
-			if len(blockStatusMessage) != 0 {
-				enqueueBlockStatus(blockStatusMessage, common.DefaultMode)
-			}
-			if len(redoBlockStatusMessage) != 0 {
-				enqueueBlockStatus(redoBlockStatusMessage, common.RedoMode)
-			}
+		e.metricBlockStatusesChanLen.Set(float64(e.sharedInfo.BlockStatusLen()))
+		if len(blockStatusMessage) != 0 {
+			enqueueBlockStatus(blockStatusMessage, common.DefaultMode)
+		}
+		if len(redoBlockStatusMessage) != 0 {
+			enqueueBlockStatus(redoBlockStatusMessage, common.RedoMode)
 		}
 	}
 }
