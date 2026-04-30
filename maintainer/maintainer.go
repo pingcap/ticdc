@@ -69,8 +69,9 @@ type Maintainer struct {
 	selfNode     *node.Info
 	controller   *Controller
 
-	pdClock pdutil.Clock
-	eventCh *chann.DrainableChann[*Event]
+	pdClock               pdutil.Clock
+	eventCh               *chann.DrainableChann[*Event]
+	statusRequestNotifyCh chan struct{}
 
 	mc messaging.MessageCenter
 
@@ -163,6 +164,14 @@ type Maintainer struct {
 	redoScheduledTaskGauge prometheus.Gauge
 	redoSpanCountGauge     prometheus.Gauge
 	redoTableCountGauge    prometheus.Gauge
+
+	bufferedStatusRequests bufferedStatusRequestBuffer
+
+	droppedStatusRequests struct {
+		sync.Mutex
+		count       uint64
+		lastLogTime time.Time
+	}
 }
 
 // NewMaintainer create the maintainer for the changefeed
@@ -196,10 +205,11 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		Name: keyspaceName,
 	}
 	m := &Maintainer{
-		changefeedID:      cfID,
-		selfNode:          selfNode,
-		eventCh:           chann.NewAutoDrainChann[*Event](),
-		startCheckpointTs: checkpointTs,
+		changefeedID:          cfID,
+		selfNode:              selfNode,
+		eventCh:               chann.NewAutoDrainChann[*Event](),
+		statusRequestNotifyCh: make(chan struct{}, 1),
+		startCheckpointTs:     checkpointTs,
 		controller: NewController(cfID, checkpointTs, taskScheduler,
 			info.Config, ddlSpan, redoDDLSpan, conf.AddTableBatchSize, time.Duration(conf.CheckBalanceInterval), refresher, keyspaceMeta, enableRedo),
 		mc:                    mc,
@@ -1160,6 +1170,8 @@ func (m *Maintainer) runHandleEvents(ctx context.Context) {
 			return
 		case event := <-m.eventCh.Out():
 			m.HandleEvent(event)
+		case <-m.statusRequestNotifyCh:
+			m.handleBufferedStatusRequests()
 		case <-ticker.C:
 			m.HandleEvent(&Event{
 				changefeedID: m.changefeedID,
@@ -1171,8 +1183,31 @@ func (m *Maintainer) runHandleEvents(ctx context.Context) {
 
 // pushEvent is used to push event to maintainer's event channel
 // event will be handled by maintainer's main loop
-func (m *Maintainer) pushEvent(event *Event) {
+func (m *Maintainer) pushEvent(event *Event) bool {
+	if handled, accepted := m.tryBufferStatusRequestEvent(event); handled {
+		return accepted
+	}
 	m.eventCh.In() <- event
+	return true
+}
+
+func (m *Maintainer) recordDroppedStatusRequest(msgType messaging.IOType, reason string) {
+	m.droppedStatusRequests.Lock()
+	defer m.droppedStatusRequests.Unlock()
+
+	m.droppedStatusRequests.count++
+	now := time.Now()
+	if !m.droppedStatusRequests.lastLogTime.IsZero() && now.Sub(m.droppedStatusRequests.lastLogTime) < 5*time.Second {
+		return
+	}
+	m.droppedStatusRequests.lastLogTime = now
+
+	log.Warn("drop maintainer status request",
+		zap.Stringer("changefeedID", m.changefeedID),
+		zap.String("type", msgType.String()),
+		zap.String("reason", reason),
+		zap.Int("eventChLen", m.eventCh.Len()),
+		zap.Uint64("droppedCount", m.droppedStatusRequests.count))
 }
 
 func (m *Maintainer) getWatermark() heartbeatpb.Watermark {

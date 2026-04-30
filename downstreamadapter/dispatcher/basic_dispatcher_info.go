@@ -60,7 +60,7 @@ type SharedInfo struct {
 	// and push to heartbeatRequestQueue
 	statusesChan chan TableSpanStatusWithSeq
 	// blockStatusBuffer keeps block statuses for the dispatcher manager.
-	// Identical DONE statuses are coalesced while pending to reduce local memory amplification.
+	// Identical WAITING and DONE statuses are coalesced while pending to reduce local memory amplification.
 	blockStatusBuffer *BlockStatusBuffer
 
 	// blockExecutor is used to execute block events such as DDL and sync point events asynchronously

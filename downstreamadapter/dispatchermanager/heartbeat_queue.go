@@ -65,18 +65,18 @@ type BlockStatusRequestWithTargetID struct {
 type BlockStatusRequestQueue struct {
 	queue chan *BlockStatusRequestWithTargetID
 
-	mu              sync.Mutex
-	requestDoneKeys map[*BlockStatusRequestWithTargetID][]blockStatusRequestDedupeKey
-	queuedDone      map[blockStatusRequestDedupeKey]struct{}
-	inFlightDone    map[blockStatusRequestDedupeKey]struct{}
+	mu                sync.Mutex
+	requestStatusKeys map[*BlockStatusRequestWithTargetID][]blockStatusRequestDedupeKey
+	queuedStatuses    map[blockStatusRequestDedupeKey]struct{}
+	inFlightStatuses  map[blockStatusRequestDedupeKey]struct{}
 }
 
 func NewBlockStatusRequestQueue() *BlockStatusRequestQueue {
 	return &BlockStatusRequestQueue{
-		queue:           make(chan *BlockStatusRequestWithTargetID, 10000),
-		requestDoneKeys: make(map[*BlockStatusRequestWithTargetID][]blockStatusRequestDedupeKey),
-		queuedDone:      make(map[blockStatusRequestDedupeKey]struct{}),
-		inFlightDone:    make(map[blockStatusRequestDedupeKey]struct{}),
+		queue:             make(chan *BlockStatusRequestWithTargetID, 10000),
+		requestStatusKeys: make(map[*BlockStatusRequestWithTargetID][]blockStatusRequestDedupeKey),
+		queuedStatuses:    make(map[blockStatusRequestDedupeKey]struct{}),
+		inFlightStatuses:  make(map[blockStatusRequestDedupeKey]struct{}),
 	}
 }
 
@@ -84,7 +84,7 @@ func (q *BlockStatusRequestQueue) Enqueue(request *BlockStatusRequestWithTargetI
 	if request == nil || request.Request == nil {
 		return
 	}
-	if !q.trackPendingDone(request) {
+	if !q.trackPendingStatuses(request) {
 		metrics.HeartbeatCollectorBlockStatusRequestQueueLenGauge.Set(float64(len(q.queue)))
 		return
 	}
@@ -110,10 +110,10 @@ func (q *BlockStatusRequestQueue) OnSendComplete(request *BlockStatusRequestWith
 
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	for _, key := range q.requestDoneKeys[request] {
-		delete(q.inFlightDone, key)
+	for _, key := range q.requestStatusKeys[request] {
+		delete(q.inFlightStatuses, key)
 	}
-	delete(q.requestDoneKeys, request)
+	delete(q.requestStatusKeys, request)
 }
 
 func (q *BlockStatusRequestQueue) Close() {
@@ -126,18 +126,19 @@ type blockStatusRequestDedupeKey struct {
 	blockTs      uint64
 	mode         int64
 	isSyncPoint  bool
+	stage        heartbeatpb.BlockStage
 }
 
-func (q *BlockStatusRequestQueue) trackPendingDone(request *BlockStatusRequestWithTargetID) bool {
+func (q *BlockStatusRequestQueue) trackPendingStatuses(request *BlockStatusRequestWithTargetID) bool {
 	statuses := request.Request.BlockStatuses
 	filtered := statuses[:0]
-	doneKeys := make([]blockStatusRequestDedupeKey, 0)
+	statusKeys := make([]blockStatusRequestDedupeKey, 0)
 
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
 	for _, status := range statuses {
-		if !isDoneRequestStatus(status) {
+		if !shouldDeduplicateRequestStatus(status) {
 			filtered = append(filtered, status)
 			continue
 		}
@@ -148,22 +149,23 @@ func (q *BlockStatusRequestQueue) trackPendingDone(request *BlockStatusRequestWi
 			blockTs:      status.State.BlockTs,
 			mode:         status.Mode,
 			isSyncPoint:  status.State.IsSyncPoint,
+			stage:        status.State.Stage,
 		}
-		if _, ok := q.queuedDone[key]; ok {
+		if _, ok := q.queuedStatuses[key]; ok {
 			continue
 		}
-		if _, ok := q.inFlightDone[key]; ok {
+		if _, ok := q.inFlightStatuses[key]; ok {
 			continue
 		}
 
 		filtered = append(filtered, status)
-		q.queuedDone[key] = struct{}{}
-		doneKeys = append(doneKeys, key)
+		q.queuedStatuses[key] = struct{}{}
+		statusKeys = append(statusKeys, key)
 	}
 
 	request.Request.BlockStatuses = filtered
-	if len(doneKeys) > 0 {
-		q.requestDoneKeys[request] = doneKeys
+	if len(statusKeys) > 0 {
+		q.requestStatusKeys[request] = statusKeys
 	}
 	return len(filtered) > 0
 }
@@ -171,10 +173,21 @@ func (q *BlockStatusRequestQueue) trackPendingDone(request *BlockStatusRequestWi
 func (q *BlockStatusRequestQueue) markInFlight(request *BlockStatusRequestWithTargetID) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	for _, key := range q.requestDoneKeys[request] {
-		delete(q.queuedDone, key)
-		q.inFlightDone[key] = struct{}{}
+	for _, key := range q.requestStatusKeys[request] {
+		delete(q.queuedStatuses, key)
+		q.inFlightStatuses[key] = struct{}{}
 	}
+}
+
+func isWaitingRequestStatus(status *heartbeatpb.TableSpanBlockStatus) bool {
+	return status != nil &&
+		status.State != nil &&
+		status.State.IsBlocked &&
+		status.State.Stage == heartbeatpb.BlockStage_WAITING
+}
+
+func shouldDeduplicateRequestStatus(status *heartbeatpb.TableSpanBlockStatus) bool {
+	return isDoneRequestStatus(status) || isWaitingRequestStatus(status)
 }
 
 func isDoneRequestStatus(status *heartbeatpb.TableSpanBlockStatus) bool {
