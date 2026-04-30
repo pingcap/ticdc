@@ -81,6 +81,9 @@ func newEventStoreTableFilter(lowerTs uint64, upperTs uint64) func(map[string]st
 		if !ok {
 			return true
 		}
+		if minTs > maxTs {
+			return true
+		}
 		return maxTs >= lowerTs && minTs <= upperTs
 	}
 }

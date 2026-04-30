@@ -172,4 +172,10 @@ func TestEventStoreCRTsCollector(t *testing.T) {
 	require.True(t, newEventStoreTableFilter(100, 100)(props))
 	require.False(t, newEventStoreTableFilter(101, 300)(props))
 	require.True(t, newEventStoreTableFilter(101, 300)(nil))
+
+	corruptedProps := map[string]string{
+		eventStoreMinCRTsTableProperty: "300",
+		eventStoreMaxCRTsTableProperty: "100",
+	}
+	require.True(t, newEventStoreTableFilter(101, 200)(corruptedProps))
 }
