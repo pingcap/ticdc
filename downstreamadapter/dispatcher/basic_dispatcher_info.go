@@ -55,6 +55,10 @@ type SharedInfo struct {
 	// will break the splittability of this table.
 	enableSplittableCheck bool
 
+	// Normal event dispatchers inherit these shared batch defaults.
+	eventCollectorBatchCount int
+	eventCollectorBatchBytes int
+
 	// Shared resources
 	// statusesChan is used to store the status of dispatchers when status changed
 	// and push to heartbeatRequestQueue
@@ -88,6 +92,8 @@ func NewSharedInfo(
 	syncPointConfig *syncpoint.SyncPointConfig,
 	txnAtomicity *config.AtomicityLevel,
 	enableSplittableCheck bool,
+	eventCollectorBatchCount int,
+	eventCollectorBatchBytes int,
 	statusesChan chan TableSpanStatusWithSeq,
 	blockStatusBufferSize int,
 	errCh chan error,
@@ -131,6 +137,10 @@ func (d *BasicDispatcher) GetMode() int64 {
 
 func (d *BasicDispatcher) GetChangefeedID() common.ChangeFeedID {
 	return d.sharedInfo.changefeedID
+}
+
+func (d *BasicDispatcher) GetEventCollectorBatchConfig() (batchCount int, batchBytes int) {
+	return d.eventCollectorBatchCount, d.eventCollectorBatchBytes
 }
 
 func (d *BasicDispatcher) GetComponentStatus() heartbeatpb.ComponentState {

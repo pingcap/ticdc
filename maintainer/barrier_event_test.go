@@ -188,11 +188,8 @@ func TestResendAction(t *testing.T) {
 	require.Equal(t, resp.DispatcherStatuses[0].Action.CommitTs, uint64(10))
 }
 
-func TestFanoutPassResendWaitsForQuietStatus(t *testing.T) {
+func TestShortcutSyncPointToPassPhaseResetsWaitingCoverage(t *testing.T) {
 	testutil.SetUpTestServices(t)
-	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
-	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
-
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
@@ -204,83 +201,66 @@ func TestFanoutPassResendWaitsForQuietStatus(t *testing.T) {
 		}, "node1", false)
 	spanController := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
 	operatorController := operator.NewOperatorController(cfID, spanController, 1000, common.DefaultMode)
+
 	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 1)
 	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 2}, 1)
-	for _, stm := range spanController.GetAbsentForTest(100) {
-		spanController.BindSpanToNode("", "node1", stm)
-		spanController.MarkSpanReplicating(stm)
-	}
 
-	for _, influenceType := range []heartbeatpb.InfluenceType{
-		heartbeatpb.InfluenceType_All,
-		heartbeatpb.InfluenceType_DB,
-	} {
-		event := NewBlockEvent(cfID, tableTriggerEventDispatcherID, spanController, operatorController, &heartbeatpb.State{
-			IsBlocked: true,
-			BlockTs:   10,
-			BlockTables: &heartbeatpb.InfluencedTables{
-				InfluenceType: influenceType,
-				SchemaID:      1,
-			},
-		}, false, common.DefaultMode)
-		event.selected.Store(true)
-		event.writerDispatcherAdvanced = true
-		event.lastResendTime = time.Now().Add(-2 * time.Second)
-
-		msgs := event.resend(common.DefaultMode)
-		require.Len(t, msgs, 1)
-
-		event.lastResendTime = time.Now().Add(-2 * time.Second)
-		event.markStatusReceived()
-		msgs = event.resend(common.DefaultMode)
-		require.Len(t, msgs, 0)
-
-		event.lastResendTime = time.Now().Add(-2 * time.Second)
-		event.lastStatusReceivedTime = time.Now().Add(-2 * time.Second)
-		msgs = event.resend(common.DefaultMode)
-		require.Len(t, msgs, 1)
-	}
-}
-
-func TestNormalPassResendDoesNotWaitForQuietStatus(t *testing.T) {
-	testutil.SetUpTestServices(t)
-	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
-	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
-
-	tableTriggerEventDispatcherID := common.NewDispatcherID()
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
-	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
-		common.DDLSpanSchemaID,
-		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
-			ID:              tableTriggerEventDispatcherID.ToPB(),
-			ComponentStatus: heartbeatpb.ComponentState_Working,
-			CheckpointTs:    1,
-		}, "node1", false)
-	spanController := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
-	operatorController := operator.NewOperatorController(cfID, spanController, 1000, common.DefaultMode)
-	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 1)
-	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 2}, 1)
-	for _, stm := range spanController.GetAbsentForTest(100) {
-		spanController.BindSpanToNode("", "node1", stm)
-		spanController.MarkSpanReplicating(stm)
+	dispatcher1 := spanController.GetTasksByTableID(1)[0]
+	dispatcher2 := spanController.GetTasksByTableID(2)[0]
+	for _, dispatcher := range []*replica.SpanReplication{dispatcher1, dispatcher2} {
+		spanController.BindSpanToNode("", "node1", dispatcher)
+		spanController.MarkSpanReplicating(dispatcher)
 	}
 
 	event := NewBlockEvent(cfID, tableTriggerEventDispatcherID, spanController, operatorController, &heartbeatpb.State{
 		IsBlocked: true,
 		BlockTs:   10,
 		BlockTables: &heartbeatpb.InfluencedTables{
-			InfluenceType: heartbeatpb.InfluenceType_Normal,
-			TableIDs:      []int64{1, 2},
+			InfluenceType: heartbeatpb.InfluenceType_All,
 		},
+		IsSyncPoint: true,
 	}, false, common.DefaultMode)
-	event.selected.Store(true)
-	event.writerDispatcherAdvanced = true
-	event.passActionSent = true
-	event.lastResendTime = time.Now().Add(-2 * time.Second)
-	event.markStatusReceived()
 
-	msgs := event.resend(common.DefaultMode)
-	require.Len(t, msgs, 1)
+	// First-phase bookkeeping tracks who has reached WAITING. These entries must be
+	// discarded once the syncpoint is shortcut directly to the PASS/DONE phase.
+	event.markDispatcherEventDone(dispatcher1.ID)
+	event.markDispatcherEventDone(spanController.GetDDLDispatcherID())
+	require.Contains(t, event.reportedDispatchers, dispatcher1.ID)
+	require.Contains(t, event.reportedDispatchers, spanController.GetDDLDispatcherID())
+	require.False(t, event.rangeChecker.IsFullyCovered())
+
+	dispatcher2.UpdateStatus(&heartbeatpb.TableSpanStatus{
+		ID:              dispatcher2.ID.ToPB(),
+		ComponentStatus: heartbeatpb.ComponentState_Working,
+		CheckpointTs:    11,
+		Mode:            common.DefaultMode,
+	})
+
+	event.checkBlockedDispatchers()
+	require.True(t, event.selected.Load())
+	require.True(t, event.writerDispatcherAdvanced)
+	require.True(t, event.writerDispatcher.IsZero())
+	require.Contains(t, event.reportedDispatchers, dispatcher2.ID)
+	require.NotContains(t, event.reportedDispatchers, dispatcher1.ID)
+	require.NotContains(t, event.reportedDispatchers, spanController.GetDDLDispatcherID())
+	require.False(t, event.rangeChecker.IsFullyCovered())
+	require.False(t, event.allDispatcherReported())
+
+	dispatcher1.UpdateStatus(&heartbeatpb.TableSpanStatus{
+		ID:              dispatcher1.ID.ToPB(),
+		ComponentStatus: heartbeatpb.ComponentState_Working,
+		CheckpointTs:    11,
+		Mode:            common.DefaultMode,
+	})
+	ddlSpan.UpdateStatus(&heartbeatpb.TableSpanStatus{
+		ID:              spanController.GetDDLDispatcherID().ToPB(),
+		ComponentStatus: heartbeatpb.ComponentState_Working,
+		CheckpointTs:    11,
+		Mode:            common.DefaultMode,
+	})
+
+	event.reconcileForwardedDispatchers()
+	require.True(t, event.allDispatcherReported())
 }
 
 func TestSendPassActionTypeDBIncludesWriterNode(t *testing.T) {

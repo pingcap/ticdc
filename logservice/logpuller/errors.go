@@ -45,9 +45,9 @@ type getStoreErr struct{}
 
 func (e *getStoreErr) Error() string { return "get store error" }
 
-type sendRequestToStoreErr struct{}
+type storeStreamErr struct{}
 
-func (e *sendRequestToStoreErr) Error() string { return "send request to store error" }
+func (e *storeStreamErr) Error() string { return "store stream error" }
 
 type requestCancelledErr struct{}
 
