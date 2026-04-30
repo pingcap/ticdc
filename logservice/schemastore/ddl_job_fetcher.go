@@ -206,20 +206,6 @@ func (p *ddlJobFetcher) initDDLTableInfo(ctx context.Context, kvStorage kv.Stora
 	p.ddlTableInfo.DDLJobTable = common.WrapTableInfo(db.Name.L, tableInfo)
 	p.ddlTableInfo.JobMetaColumnIDinJobTable = col.ID
 
-	// for tidb_ddl_history
-	historyTableInfo, err := findTableByName(tbls, "tidb_ddl_history")
-	if err != nil {
-		return errors.Trace(err)
-	}
-
-	historyTableCol, err := findColumnByName(historyTableInfo.Columns, "job_meta")
-	if err != nil {
-		return errors.Trace(err)
-	}
-
-	p.ddlTableInfo.DDLHistoryTable = common.WrapTableInfo(db.Name.L, historyTableInfo)
-	p.ddlTableInfo.JobMetaColumnIDinHistoryTable = historyTableCol.ID
-
 	return nil
 }
 
@@ -257,6 +243,7 @@ func findColumnByName(cols []*model.ColumnInfo, name string) (*model.ColumnInfo,
 		errors.Errorf("can't find column %s", name))
 }
 
+<<<<<<< HEAD
 const (
 	// JobTableID is the id of `tidb_ddl_job`.
 	JobTableID = ddl.JobTableID
@@ -264,32 +251,22 @@ const (
 	JobHistoryID = ddl.HistoryTableID
 )
 
+=======
+>>>>>>> 895bb89bc (logservice,event: stop capturing tidb_ddl_history (#4766))
 func getAllDDLSpan(keyspaceID uint32) ([]heartbeatpb.TableSpan, error) {
-	spans := make([]heartbeatpb.TableSpan, 0, 2)
-
-	start, end, err := common.GetKeyspaceTableRange(keyspaceID, JobTableID)
+	// TiDB v8.3+ emits create-table jobs through tidb_ddl_job again, so the
+	// schema store only needs to subscribe to the job table.
+	start, end, err := common.GetKeyspaceTableRange(keyspaceID, common.JobTableID)
 	if err != nil {
 		return nil, err
 	}
 
-	spans = append(spans, heartbeatpb.TableSpan{
-		TableID:    JobTableID,
+	return []heartbeatpb.TableSpan{{
+		TableID:    common.JobTableID,
 		StartKey:   common.ToComparableKey(start),
 		EndKey:     common.ToComparableKey(end),
 		KeyspaceID: keyspaceID,
-	})
-
-	start, end, err = common.GetKeyspaceTableRange(keyspaceID, JobHistoryID)
-	if err != nil {
-		return nil, err
-	}
-	spans = append(spans, heartbeatpb.TableSpan{
-		TableID:    JobHistoryID,
-		StartKey:   common.ToComparableKey(start),
-		EndKey:     common.ToComparableKey(end),
-		KeyspaceID: keyspaceID,
-	})
-	return spans, nil
+	}}, nil
 }
 
 type resolvedTsItem struct {
