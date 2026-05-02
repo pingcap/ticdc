@@ -27,6 +27,7 @@ import (
 
 	"github.com/cockroachdb/pebble"
 	"github.com/klauspost/compress/zstd"
+	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller"
@@ -87,8 +88,8 @@ type EventStore interface {
 
 	UpdateDispatcherCheckpointTs(dispatcherID common.DispatcherID, checkpointTs uint64)
 
-	// GetIterator return an iterator which scan the data in ts range (dataRange.CommitTsStart, dataRange.CommitTsEnd]
-	GetIterator(dispatcherID common.DispatcherID, dataRange common.DataRange) EventIterator
+	// GetIterator returns an iterator which scans data in ts range (dataRange.CommitTsStart, dataRange.CommitTsEnd].
+	GetIterator(dispatcherID common.DispatcherID, dataRange common.DataRange) (EventIterator, error)
 
 	GetLogCoordinatorNodeID() node.ID
 }
@@ -104,7 +105,8 @@ type EventIterator interface {
 	Next() (*common.RawKVEntry, bool)
 
 	// Close closes the iterator.
-	// It returns the number of events that are read from the iterator.
+	// It returns the number of events that are read from the iterator and any
+	// accumulated iterator error.
 	Close() (eventCnt int64, err error)
 }
 
@@ -789,9 +791,9 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 	updateSubStatCheckpoint(dispatcherStat.removingSubStat)
 }
 
-func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange common.DataRange) EventIterator {
+func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange common.DataRange) (EventIterator, error) {
 	if e.closed.Load() {
-		return nil
+		return nil, nil
 	}
 
 	e.dispatcherMeta.RLock()
@@ -799,7 +801,7 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 	if !ok {
 		log.Warn("fail to find dispatcher", zap.Stringer("dispatcherID", dispatcherID))
 		e.dispatcherMeta.RUnlock()
-		return nil
+		return nil, nil
 	}
 
 	tryGetDB := func(subStat *subscriptionStat, force bool) *pebble.DB {
@@ -917,17 +919,26 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 		start = encodeTxnCommitTsBoundaryKey(uint64(subStat.subID), stat.tableSpan.TableID, dataRange.CommitTsStart+1)
 	}
 	end := encodeTxnCommitTsBoundaryKey(uint64(subStat.subID), stat.tableSpan.TableID, dataRange.CommitTsEnd+1)
-	// it's impossible return error here
-	iter, _ := db.NewIter(&pebble.IterOptions{
+	iter, err := db.NewIter(&pebble.IterOptions{
 		LowerBound: start,
 		UpperBound: end,
 	})
-	decoder := e.decoderPool.Get().(*zstd.Decoder)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+
 	startTime := time.Now()
-	// todo: what happens if iter.First() returns false?
-	_ = iter.First()
+	if ok := iter.First(); !ok {
+		if err := iter.Error(); err != nil {
+			if closeErr := iter.Close(); closeErr != nil {
+				return nil, errors.Trace(closeErr)
+			}
+			return nil, errors.Trace(err)
+		}
+	}
 	metricEventStoreFirstReadDurationHistogram.Observe(time.Since(startTime).Seconds())
 	metrics.EventStoreScanRequestsCount.Inc()
+	decoder := e.decoderPool.Get().(*zstd.Decoder)
 
 	needCheckSpan := true
 	if stat.tableSpan.Equal(subStat.tableSpan) {
@@ -945,7 +956,7 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 		rowCount:      0,
 		decoder:       decoder,
 		decoderPool:   e.decoderPool,
-	}
+	}, nil
 }
 
 func (e *eventStore) GetLogCoordinatorNodeID() node.ID {
@@ -1535,7 +1546,7 @@ func (iter *eventStoreIter) Close() (int64, error) {
 	iter.decoderPool.Put(iter.decoder)
 	iter.innerIter = nil
 	metricEventStoreCloseReadDurationHistogram.Observe(time.Since(startTime).Seconds())
-	return iter.rowCount, err
+	return iter.rowCount, errors.Trace(err)
 }
 
 func (e *eventStore) handleMessage(_ context.Context, targetMessage *messaging.TargetMessage) error {
