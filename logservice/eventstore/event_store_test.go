@@ -104,6 +104,15 @@ func newEventStoreForTest(path string) (logpuller.SubscriptionClient, EventStore
 	return subClient, store
 }
 
+func requireEventIterator(
+	t testing.TB, store EventStore, dispatcherID common.DispatcherID, dataRange common.DataRange,
+) EventIterator {
+	t.Helper()
+	iter, err := store.GetIterator(dispatcherID, dataRange)
+	require.NoError(t, err)
+	return iter
+}
+
 func setDataSharingForTest(t *testing.T, enable bool) func() {
 	t.Helper()
 	originalCfg := config.GetGlobalServerConfig().Clone()
@@ -718,7 +727,7 @@ func TestEventStoreSwitchSubStat(t *testing.T) {
 	// case 1: dispatcher 2 use data from subStat 1
 	updateSubStatResolvedTs(1, 200)
 	{
-		iter := store.GetIterator(dispatcherID2, common.DataRange{
+		iter := requireEventIterator(t, store, dispatcherID2, common.DataRange{
 			Span: &heartbeatpb.TableSpan{
 				TableID:  tableID,
 				StartKey: []byte("b"),
@@ -734,7 +743,7 @@ func TestEventStoreSwitchSubStat(t *testing.T) {
 	// case 2: subStat 2 is ready, dispatcher 2 read data from subStat 2 and stop listen subStat 1
 	updateSubStatResolvedTs(2, 200)
 	{
-		iter := store.GetIterator(dispatcherID2, common.DataRange{
+		iter := requireEventIterator(t, store, dispatcherID2, common.DataRange{
 			Span: &heartbeatpb.TableSpan{
 				TableID:  tableID,
 				StartKey: []byte("b"),
@@ -762,7 +771,7 @@ func TestEventStoreSwitchSubStat(t *testing.T) {
 	// case 3: subStat 1 advance quicker than subStat 2, dispatcher 2 can still read data from subStat 1
 	updateSubStatResolvedTs(1, 220)
 	{
-		iter := store.GetIterator(dispatcherID2, common.DataRange{
+		iter := requireEventIterator(t, store, dispatcherID2, common.DataRange{
 			Span: &heartbeatpb.TableSpan{
 				TableID:  tableID,
 				StartKey: []byte("b"),
@@ -796,7 +805,7 @@ func TestEventStoreSwitchSubStat(t *testing.T) {
 	// dispatcher 2 read data from subStat 2 and totally remove itself from the subsriber list of subStat 1
 	updateSubStatResolvedTs(2, 220)
 	{
-		iter := store.GetIterator(dispatcherID2, common.DataRange{
+		iter := requireEventIterator(t, store, dispatcherID2, common.DataRange{
 			Span: &heartbeatpb.TableSpan{
 				TableID:  tableID,
 				StartKey: []byte("b"),
@@ -1135,7 +1144,7 @@ func TestEventStoreGetIteratorConcurrently(t *testing.T) {
 					CommitTsStart: startTs,
 					CommitTsEnd:   lastCommitTs + 1,
 				}
-				iter := store.GetIterator(dispatcherID, dataRange)
+				iter := requireEventIterator(t, store, dispatcherID, dataRange)
 				require.NotNil(t, iter, "iterator should not be nil")
 
 				var receivedEvents []*common.RawKVEntry

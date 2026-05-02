@@ -34,7 +34,7 @@ import (
 // eventGetter is the interface for getting iterator of events
 // The implementation of eventGetter is eventstore.EventStore
 type eventGetter interface {
-	GetIterator(dispatcherID common.DispatcherID, dataRange common.DataRange) eventstore.EventIterator
+	GetIterator(dispatcherID common.DispatcherID, dataRange common.DataRange) (eventstore.EventIterator, error)
 }
 
 // schemaGetter is the interface for getting schema info and ddl events
@@ -65,7 +65,7 @@ type eventScanner struct {
 
 // newEventScanner creates a new EventScanner
 func newEventScanner(
-	eventStore eventstore.EventStore,
+	eventStore eventGetter,
 	schemaStore schemastore.SchemaStore,
 	mounter event.Mounter,
 	mode int64,
@@ -129,19 +129,33 @@ func (s *eventScanner) scan(
 	}
 	metrics.EventServiceGetDDLEventDuration.Observe(time.Since(start).Seconds())
 
-	iter := s.eventGetter.GetIterator(dispatcherStat.info.GetID(), dataRange)
+	iter, err := s.eventGetter.GetIterator(dispatcherStat.info.GetID(), dataRange)
+	if err != nil {
+		return 0, nil, false, err
+	}
 	if iter == nil {
 		resolved := event.NewResolvedEvent(dataRange.CommitTsEnd, dispatcherStat.id, dispatcherStat.epoch)
 		events = append(events, resolved)
 		sess.appendEvents(events)
 		return 0, sess.events, false, nil
 	}
-	defer s.closeIterator(iter)
 
 	// Execute event scanning and merging
 	merger := newEventMerger(events)
-	interrupted, err := s.scanAndMergeEvents(sess, merger, iter)
-	return sess.eventBytes, sess.events, interrupted, err
+	interrupted, scanErr := s.scanAndMergeEvents(sess, merger, iter)
+	_, closeErr := s.closeIterator(iter)
+	if scanErr != nil {
+		if closeErr != nil {
+			log.Warn("event store iterator close returned error after scan error",
+				zap.Stringer("dispatcherID", dispatcherStat.info.GetID()),
+				zap.Error(closeErr))
+		}
+		return sess.eventBytes, sess.events, interrupted, scanErr
+	}
+	if closeErr != nil {
+		return 0, nil, false, closeErr
+	}
+	return sess.eventBytes, sess.events, interrupted, nil
 }
 
 // fetchDDLEvents retrieves DDL events which finishedTs are within the range (start, end]
@@ -172,14 +186,16 @@ func (s *eventScanner) fetchDDLEvents(stat *dispatcherStat, dataRange common.Dat
 	return result, nil
 }
 
-// closeIterator closes the event iterator and records metrics
-func (s *eventScanner) closeIterator(iter eventstore.EventIterator) {
-	if iter != nil {
-		eventCount, _ := iter.Close()
-		if eventCount != 0 {
-			updateMetricEventStoreOutputKv(s.mode, float64(eventCount))
-		}
+// closeIterator closes the event iterator and records metrics.
+func (s *eventScanner) closeIterator(iter eventstore.EventIterator) (int64, error) {
+	if iter == nil {
+		return 0, nil
 	}
+	eventCount, err := iter.Close()
+	if eventCount != 0 {
+		updateMetricEventStoreOutputKv(s.mode, float64(eventCount))
+	}
+	return eventCount, err
 }
 
 // scanAndMergeEvents performs the main scanning and merging logic
