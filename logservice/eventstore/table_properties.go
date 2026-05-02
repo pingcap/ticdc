@@ -21,75 +21,75 @@ import (
 )
 
 const (
-	eventStoreMinCRTsTableProperty = "event-store-min-crts"
-	eventStoreMaxCRTsTableProperty = "event-store-max-crts"
-	eventStoreLogicalBytesProperty = "event-store-logical-bytes"
-	eventStoreCRTsCollectorName    = "event-store-crts-collector"
+	eventStoreMinTxnCommitTsProperty   = "event-store-min-txn-commit-ts"
+	eventStoreMaxTxnCommitTsProperty   = "event-store-max-txn-commit-ts"
+	eventStoreLogicalBytesProperty     = "event-store-logical-bytes"
+	eventStoreTxnCommitTsCollectorName = "event-store-txn-commit-ts-collector"
 )
 
-type eventStoreCRTsCollector struct {
+type eventStoreTxnCommitTsCollector struct {
 	minTs        uint64
 	maxTs        uint64
 	logicalBytes uint64
 	hasTs        bool
 }
 
-func newEventStoreCRTsCollector() pebble.TablePropertyCollector {
-	return &eventStoreCRTsCollector{}
+func newEventStoreTxnCommitTsCollector() pebble.TablePropertyCollector {
+	return &eventStoreTxnCommitTsCollector{}
 }
 
-func (c *eventStoreCRTsCollector) Add(key pebble.InternalKey, value []byte) error {
+func (c *eventStoreTxnCommitTsCollector) Add(key pebble.InternalKey, value []byte) error {
 	// Event store DeleteRange is GC-only: it removes data that should already be
 	// below the future scan range. Do not widen table properties with the range
-	// tombstone end key. For example, a cleanup tombstone [CRTs=100, CRTs=1000)
+	// tombstone end key. For example, a cleanup tombstone [commit-ts=100, commit-ts=1000)
 	// would make this cleanup-only SST overlap scans like [500,600].
 	c.recordEncodedKey(key.UserKey)
 	c.logicalBytes += uint64(len(key.UserKey) + len(value))
 	return nil
 }
 
-func (c *eventStoreCRTsCollector) Finish(userProps map[string]string) error {
+func (c *eventStoreTxnCommitTsCollector) Finish(userProps map[string]string) error {
 	if !c.hasTs {
 		return nil
 	}
-	userProps[eventStoreMinCRTsTableProperty] = strconv.FormatUint(c.minTs, 10)
-	userProps[eventStoreMaxCRTsTableProperty] = strconv.FormatUint(c.maxTs, 10)
+	userProps[eventStoreMinTxnCommitTsProperty] = strconv.FormatUint(c.minTs, 10)
+	userProps[eventStoreMaxTxnCommitTsProperty] = strconv.FormatUint(c.maxTs, 10)
 	userProps[eventStoreLogicalBytesProperty] = strconv.FormatUint(c.logicalBytes, 10)
 	return nil
 }
 
-func (c *eventStoreCRTsCollector) Name() string {
-	return eventStoreCRTsCollectorName
+func (c *eventStoreTxnCommitTsCollector) Name() string {
+	return eventStoreTxnCommitTsCollectorName
 }
 
-func (c *eventStoreCRTsCollector) recordEncodedKey(key []byte) {
-	crts, ok := decodeCRTsFromEncodedKey(key)
+func (c *eventStoreTxnCommitTsCollector) recordEncodedKey(key []byte) {
+	txnCommitTs, ok := decodeTxnCommitTsFromEncodedKey(key)
 	if !ok {
 		return
 	}
-	if !c.hasTs || crts < c.minTs {
-		c.minTs = crts
+	if !c.hasTs || txnCommitTs < c.minTs {
+		c.minTs = txnCommitTs
 	}
-	if !c.hasTs || crts > c.maxTs {
-		c.maxTs = crts
+	if !c.hasTs || txnCommitTs > c.maxTs {
+		c.maxTs = txnCommitTs
 	}
 	c.hasTs = true
 }
 
-func newEventStoreTableFilter(lowerTs uint64, upperTs uint64) func(map[string]string) bool {
+func newEventStoreSSTFileFilter(lowerTs uint64, upperTs uint64) func(map[string]string) bool {
 	return func(userProps map[string]string) bool {
-		shouldScan := eventStoreTableMayContainCRTs(userProps, lowerTs, upperTs)
-		recordEventStoreTableFilterMetrics(userProps, shouldScan)
+		shouldScan := eventStoreSSTFileMayContainTxnCommitTs(userProps, lowerTs, upperTs)
+		recordEventStoreSSTFileFilterMetrics(userProps, shouldScan)
 		return shouldScan
 	}
 }
 
-func eventStoreTableMayContainCRTs(userProps map[string]string, lowerTs uint64, upperTs uint64) bool {
-	minTs, ok := parseEventStoreUint64TableProperty(userProps, eventStoreMinCRTsTableProperty)
+func eventStoreSSTFileMayContainTxnCommitTs(userProps map[string]string, lowerTs uint64, upperTs uint64) bool {
+	minTs, ok := parseEventStoreUint64TableProperty(userProps, eventStoreMinTxnCommitTsProperty)
 	if !ok {
 		return true
 	}
-	maxTs, ok := parseEventStoreUint64TableProperty(userProps, eventStoreMaxCRTsTableProperty)
+	maxTs, ok := parseEventStoreUint64TableProperty(userProps, eventStoreMaxTxnCommitTsProperty)
 	if !ok {
 		return true
 	}
@@ -99,14 +99,14 @@ func eventStoreTableMayContainCRTs(userProps map[string]string, lowerTs uint64, 
 	return maxTs >= lowerTs && minTs <= upperTs
 }
 
-func recordEventStoreTableFilterMetrics(userProps map[string]string, shouldScan bool) {
+func recordEventStoreSSTFileFilterMetrics(userProps map[string]string, shouldScan bool) {
 	result := "scanned"
 	if !shouldScan {
 		result = "skipped"
 	}
-	metrics.EventStoreTableFilterCount.WithLabelValues(result).Inc()
+	metrics.EventStoreSSTFileFilterCount.WithLabelValues(result).Inc()
 	if logicalBytes, ok := parseEventStoreUint64TableProperty(userProps, eventStoreLogicalBytesProperty); ok {
-		metrics.EventStoreTableFilterLogicalBytes.WithLabelValues(result).Add(float64(logicalBytes))
+		metrics.EventStoreSSTFileFilterLogicalBytes.WithLabelValues(result).Add(float64(logicalBytes))
 	}
 }
 

@@ -891,7 +891,7 @@ func TestWriteToEventStore(t *testing.T) {
 		key := iter.Key()
 		value := iter.Value()
 
-		_, compressionType := DecodeKeyMetas(key)
+		_, compressionType := DecodeKeyAttributes(key)
 
 		var decodedValue []byte
 		if compressionType == CompressionZSTD {
@@ -965,7 +965,7 @@ func TestWriteToEventStoreZstdCompressionDisabled(t *testing.T) {
 
 	count := 0
 	for iter.First(); iter.Valid(); iter.Next() {
-		_, compressionType := DecodeKeyMetas(iter.Key())
+		_, compressionType := DecodeKeyAttributes(iter.Key())
 		require.Equal(t, CompressionNone, compressionType)
 
 		readEntry := &common.RawKVEntry{}
@@ -1248,8 +1248,8 @@ func TestEventStoreIter_NextWithFiltering(t *testing.T) {
 
 			// Create iterator with a wider range to ensure it sees all keys,
 			// so we can test the internal filtering logic.
-			start := EncodeKeyPrefix(subID, tableID, 0)
-			end := EncodeKeyPrefix(subID, tableID, 500)
+			start := EncodeTxnCommitTsBoundaryKey(subID, tableID, 0)
+			end := EncodeTxnCommitTsBoundaryKey(subID, tableID, 500)
 			innerIter, err := db.NewIter(&pebble.IterOptions{
 				LowerBound: start,
 				UpperBound: end,

@@ -921,14 +921,14 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 		)
 		lowerTs = dataRange.CommitTsStart
 	} else {
-		start = EncodeKeyPrefix(uint64(subStat.subID), stat.tableSpan.TableID, dataRange.CommitTsStart+1)
+		start = EncodeTxnCommitTsBoundaryKey(uint64(subStat.subID), stat.tableSpan.TableID, dataRange.CommitTsStart+1)
 	}
-	end := EncodeKeyPrefix(uint64(subStat.subID), stat.tableSpan.TableID, dataRange.CommitTsEnd+1)
+	end := EncodeTxnCommitTsBoundaryKey(uint64(subStat.subID), stat.tableSpan.TableID, dataRange.CommitTsEnd+1)
 	// it's impossible return error here
 	iter, _ := db.NewIter(&pebble.IterOptions{
 		LowerBound: start,
 		UpperBound: end,
-		TableFilter: newEventStoreTableFilter(
+		TableFilter: newEventStoreSSTFileFilter(
 			lowerTs,
 			dataRange.CommitTsEnd,
 		),
@@ -1474,7 +1474,7 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
 		key := iter.innerIter.Key()
 		value := iter.innerIter.Value()
 
-		_, compressionType := DecodeKeyMetas(key)
+		_, compressionType := DecodeKeyAttributes(key)
 		var decodedValue []byte
 		if compressionType == CompressionZSTD {
 			var err error

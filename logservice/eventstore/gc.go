@@ -26,24 +26,29 @@ import (
 )
 
 type (
-	deleteDataRangeFunc  func(db *pebble.DB, uniqueKeyID uint64, tableID int64, startTs uint64, endTs uint64) error
-	compactDataRangeFunc func(db *pebble.DB, uniqueKeyID uint64, tableID int64, startTs uint64, endTs uint64) error
+	deleteDataRangeFunc func(
+		db *pebble.DB, uniqueKeyID uint64, tableID int64, startTxnCommitTs uint64, endTxnCommitTs uint64,
+	) error
+	compactDataRangeFunc func(
+		db *pebble.DB, uniqueKeyID uint64, tableID int64, startTxnCommitTs uint64, endTxnCommitTs uint64,
+	) error
 )
 
 type gcRangeItem struct {
 	dbIndex     int
 	uniqueKeyID uint64
 	tableID     int64
-	// TODO: startCommitTS may be not needed now(just use 0 for every delete range maybe ok),
-	// but after split table range, it may be essential?
-	startTs uint64
-	endTs   uint64
+	// TODO: startTxnCommitTs may be unnecessary now because delete ranges can
+	// start from 0, but it may be useful after table range splitting.
+	startTxnCommitTs uint64
+	endTxnCommitTs   uint64
 }
 
 // pendingDeleteRange tracks a coarse delete range for one (dbIndex, uniqueKeyID, tableID).
-// It is intentionally widened to [minStartTs, maxEndTs] across multiple checkpoint
-// updates. Event store retention is checkpoint-based, so deleting gaps inside the
-// widened range is safe and avoids issuing a large number of small DeleteRange calls.
+// It is intentionally widened to [minStartTxnCommitTs, maxEndTxnCommitTs]
+// across multiple checkpoint updates. Event store retention is checkpoint-based,
+// so deleting gaps inside the widened range is safe and avoids issuing a large
+// number of small DeleteRange calls.
 type pendingDeleteRange struct {
 	item             gcRangeItem
 	firstEnqueueTime time.Time
@@ -56,8 +61,8 @@ type compactItemKey struct {
 }
 
 type compactState struct {
-	endTs     uint64
-	compacted bool
+	endTxnCommitTs uint64
+	compacted      bool
 }
 
 type gcManager struct {
@@ -96,11 +101,14 @@ func newGCManager(
 }
 
 // addGCItem records a coarse pending delete range for one subscription/table.
-// The range is widened to [minStartTs, maxEndTs] instead of tracking exact disjoint
-// intervals. Once checkpoint advances, any data below the newest endTs is safe to
-// delete, and deleting empty gaps is harmless for event store.
-func (d *gcManager) addGCItem(dbIndex int, uniqueKeyID uint64, tableID int64, startTS uint64, endTS uint64) {
-	if endTS <= startTS {
+// The range is widened to [minStartTxnCommitTs, maxEndTxnCommitTs] instead of
+// tracking exact disjoint intervals. Once checkpoint advances, any data below
+// the newest endTxnCommitTs is safe to delete, and deleting empty gaps is
+// harmless for event store.
+func (d *gcManager) addGCItem(
+	dbIndex int, uniqueKeyID uint64, tableID int64, startTxnCommitTs uint64, endTxnCommitTs uint64,
+) {
+	if endTxnCommitTs <= startTxnCommitTs {
 		return
 	}
 
@@ -116,22 +124,22 @@ func (d *gcManager) addGCItem(dbIndex int, uniqueKeyID uint64, tableID int64, st
 	if !ok {
 		d.deleteRanges[key] = &pendingDeleteRange{
 			item: gcRangeItem{
-				dbIndex:     dbIndex,
-				uniqueKeyID: uniqueKeyID,
-				tableID:     tableID,
-				startTs:     startTS,
-				endTs:       endTS,
+				dbIndex:          dbIndex,
+				uniqueKeyID:      uniqueKeyID,
+				tableID:          tableID,
+				startTxnCommitTs: startTxnCommitTs,
+				endTxnCommitTs:   endTxnCommitTs,
 			},
 			firstEnqueueTime: time.Now(),
 		}
 		return
 	}
 
-	if startTS < pending.item.startTs {
-		pending.item.startTs = startTS
+	if startTxnCommitTs < pending.item.startTxnCommitTs {
+		pending.item.startTxnCommitTs = startTxnCommitTs
 	}
-	if endTS > pending.item.endTs {
-		pending.item.endTs = endTS
+	if endTxnCommitTs > pending.item.endTxnCommitTs {
+		pending.item.endTxnCommitTs = endTxnCommitTs
 	}
 }
 
@@ -163,7 +171,7 @@ func (d *gcManager) pendingDeleteRangeCount() int {
 func shouldFlushDeleteRange(pending *pendingDeleteRange, now time.Time, minRangeInterval, maxDelay time.Duration) bool {
 	// addGCItem only records valid ranges, so this should not happen in normal flow.
 	// Keep the guard as a defensive check against unexpected state or future refactors.
-	if pending == nil || pending.item.endTs <= pending.item.startTs {
+	if pending == nil || pending.item.endTxnCommitTs <= pending.item.startTxnCommitTs {
 		return false
 	}
 	if maxDelay > 0 && now.Sub(pending.firstEnqueueTime) >= maxDelay {
@@ -173,8 +181,8 @@ func shouldFlushDeleteRange(pending *pendingDeleteRange, now time.Time, minRange
 		return true
 	}
 
-	startPhysical := oracle.ExtractPhysical(pending.item.startTs)
-	endPhysical := oracle.ExtractPhysical(pending.item.endTs)
+	startPhysical := oracle.ExtractPhysical(pending.item.startTxnCommitTs)
+	endPhysical := oracle.ExtractPhysical(pending.item.endTxnCommitTs)
 	if endPhysical <= startPhysical {
 		return false
 	}
@@ -290,7 +298,7 @@ func (d *gcManager) run(ctx context.Context) error {
 func (d *gcManager) doGCJob(ranges []gcRangeItem) {
 	for _, r := range ranges {
 		db := d.dbs[r.dbIndex]
-		if err := d.deleteDataRange(db, r.uniqueKeyID, r.tableID, r.startTs, r.endTs); err != nil {
+		if err := d.deleteDataRange(db, r.uniqueKeyID, r.tableID, r.startTxnCommitTs, r.endTxnCommitTs); err != nil {
 			log.Warn("gc manager failed to delete data range", zap.Error(err))
 		}
 	}
@@ -306,8 +314,8 @@ func (d *gcManager) updateCompactRanges(ranges []gcRangeItem) {
 			state = &compactState{}
 			d.compactRanges[key] = state
 		}
-		if state.endTs < r.endTs {
-			state.endTs = r.endTs
+		if state.endTxnCommitTs < r.endTxnCommitTs {
+			state.endTxnCommitTs = r.endTxnCommitTs
 			state.compacted = false
 		}
 	}
@@ -318,7 +326,7 @@ func (d *gcManager) doCompaction() {
 	d.mu.Lock()
 	for key, state := range d.compactRanges {
 		if !state.compacted {
-			toCompact[key] = state.endTs
+			toCompact[key] = state.endTxnCommitTs
 			state.compacted = true
 		}
 	}
@@ -326,14 +334,14 @@ func (d *gcManager) doCompaction() {
 
 	startTime := time.Now()
 	log.Info("gc manager compacting ranges", zap.Int("rangeCount", len(toCompact)))
-	for key, endTs := range toCompact {
+	for key, endTxnCommitTs := range toCompact {
 		db := d.dbs[key.dbIndex]
-		if err := d.compactDataRange(db, key.uniqueKeyID, key.tableID, 0, endTs); err != nil {
+		if err := d.compactDataRange(db, key.uniqueKeyID, key.tableID, 0, endTxnCommitTs); err != nil {
 			log.Warn("gc manager failed to compact data range",
 				zap.Int("dbIndex", key.dbIndex),
 				zap.Uint64("uniqueKeyID", key.uniqueKeyID),
 				zap.Int64("tableID", key.tableID),
-				zap.Uint64("endTs", endTs),
+				zap.Uint64("endTxnCommitTs", endTxnCommitTs),
 				zap.Error(err))
 		}
 	}

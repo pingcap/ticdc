@@ -39,11 +39,11 @@ const (
 )
 
 const (
-	encodedKeyUint64Len   = 8
-	encodedKeyCRTsOffset  = 2 * encodedKeyUint64Len
-	encodedKeyCRTsEnd     = encodedKeyCRTsOffset + encodedKeyUint64Len
-	encodedKeyMetasOffset = 4 * encodedKeyUint64Len
-	encodedKeyMetasEnd    = encodedKeyMetasOffset + 2
+	encodedKeyUint64Len        = 8
+	encodedKeyTxnCommitTsStart = 2 * encodedKeyUint64Len
+	encodedKeyTxnCommitTsEnd   = encodedKeyTxnCommitTsStart + encodedKeyUint64Len
+	encodedKeyAttributesOffset = 4 * encodedKeyUint64Len
+	encodedKeyAttributesEnd    = encodedKeyAttributesOffset + 2
 )
 
 const (
@@ -53,34 +53,33 @@ const (
 	dmlOrderShift   = 8
 )
 
-// EncodeKeyPrefix encodes uniqueID, tableID, and txnCommitTs.
-// The result is a prefix of a full event-store key.
-func EncodeKeyPrefix(uniqueID uint64, tableID int64, txnCommitTs uint64) []byte {
-	buf := make([]byte, encodedKeyCRTsEnd)
-	encodeKeyPrefixTo(buf, uniqueID, tableID, txnCommitTs)
+// EncodeTxnCommitTsBoundaryKey encodes the event-store key boundary up to txnCommitTs.
+func EncodeTxnCommitTsBoundaryKey(uniqueID uint64, tableID int64, txnCommitTs uint64) []byte {
+	buf := make([]byte, encodedKeyTxnCommitTsEnd)
+	encodeTxnCommitTsBoundaryKeyTo(buf, uniqueID, tableID, txnCommitTs)
 	return buf
 }
 
-func encodeScanLowerBound(uniqueID uint64, tableID int64, txnCommitTs uint64, startTs uint64) []byte {
-	buf := make([]byte, encodedKeyMetasOffset)
-	encodeKeyPrefixTo(buf, uniqueID, tableID, txnCommitTs)
-	binary.BigEndian.PutUint64(buf[encodedKeyCRTsEnd:encodedKeyMetasOffset], startTs)
+func encodeScanLowerBound(uniqueID uint64, tableID int64, txnCommitTs uint64, txnStartTs uint64) []byte {
+	buf := make([]byte, encodedKeyAttributesOffset)
+	encodeTxnCommitTsBoundaryKeyTo(buf, uniqueID, tableID, txnCommitTs)
+	binary.BigEndian.PutUint64(buf[encodedKeyTxnCommitTsEnd:encodedKeyAttributesOffset], txnStartTs)
 	return buf
 }
 
-func encodeKeyPrefixTo(buf []byte, uniqueID uint64, tableID int64, txnCommitTs uint64) {
+func encodeTxnCommitTsBoundaryKeyTo(buf []byte, uniqueID uint64, tableID int64, txnCommitTs uint64) {
 	binary.BigEndian.PutUint64(buf[:encodedKeyUint64Len], uniqueID)
-	binary.BigEndian.PutUint64(buf[encodedKeyUint64Len:encodedKeyCRTsOffset], uint64(tableID))
-	binary.BigEndian.PutUint64(buf[encodedKeyCRTsOffset:encodedKeyCRTsEnd], txnCommitTs)
+	binary.BigEndian.PutUint64(buf[encodedKeyUint64Len:encodedKeyTxnCommitTsStart], uint64(tableID))
+	binary.BigEndian.PutUint64(buf[encodedKeyTxnCommitTsStart:encodedKeyTxnCommitTsEnd], txnCommitTs)
 }
 
 func encodedKeyLen(event *common.RawKVEntry) int {
-	// uniqueID, tableID, CRTs, startTs, Put/Delete, CompressionType, Key
-	return encodedKeyMetasEnd + len(event.Key)
+	// uniqueID, tableID, txnCommitTs, txnStartTs, Put/Delete, CompressionType, Key
+	return encodedKeyAttributesEnd + len(event.Key)
 }
 
 // EncodeKeyTo appends an encoded event-store key to buf.
-// Format: uniqueID, tableID, CRTs, startTs, delete/update/insert, Key.
+// Format: uniqueID, tableID, txnCommitTs, txnStartTs, delete/update/insert, Key.
 func EncodeKeyTo(
 	buf []byte,
 	uniqueID uint64,
@@ -95,9 +94,9 @@ func EncodeKeyTo(
 	buf = binary.BigEndian.AppendUint64(buf, uniqueID)
 	// table ID
 	buf = binary.BigEndian.AppendUint64(buf, uint64(tableID))
-	// CRTs
+	// txn commit ts
 	buf = binary.BigEndian.AppendUint64(buf, event.CRTs)
-	// startTs
+	// txn start ts
 	buf = binary.BigEndian.AppendUint64(buf, event.StartTs)
 	// Let Delete < Update < Insert
 	dmlOrder := getDMLOrder(event)
@@ -112,20 +111,20 @@ func EncodeKey(uniqueID uint64, tableID int64, event *common.RawKVEntry, compres
 	return EncodeKeyTo(make([]byte, 0, encodedKeyLen(event)), uniqueID, tableID, event, compressionType)
 }
 
-// DecodeKeyMetas decodes compression type and dml order from the key.
-func DecodeKeyMetas(key []byte) (DMLOrder, CompressionType) {
-	combinedOrder := binary.BigEndian.Uint16(key[encodedKeyMetasOffset:encodedKeyMetasEnd])
+// DecodeKeyAttributes decodes compression type and dml order from the key.
+func DecodeKeyAttributes(key []byte) (DMLOrder, CompressionType) {
+	combinedOrder := binary.BigEndian.Uint16(key[encodedKeyAttributesOffset:encodedKeyAttributesEnd])
 	return DMLOrder((combinedOrder & dmlOrderMask) >> dmlOrderShift), CompressionType(combinedOrder & compressionMask)
 }
 
-// decodeCRTsFromEncodedKey decodes CRTs from an event-store key prefix.
+// decodeTxnCommitTsFromEncodedKey decodes txnCommitTs from an event-store key boundary.
 // It works for both full event keys and DeleteRange boundary keys because both
-// contain uniqueID, tableID, and CRTs as the first three fields.
-func decodeCRTsFromEncodedKey(key []byte) (uint64, bool) {
-	if len(key) < encodedKeyCRTsEnd {
+// contain uniqueID, tableID, and txnCommitTs as the first three fields.
+func decodeTxnCommitTsFromEncodedKey(key []byte) (uint64, bool) {
+	if len(key) < encodedKeyTxnCommitTsEnd {
 		return 0, false
 	}
-	return binary.BigEndian.Uint64(key[encodedKeyCRTsOffset:encodedKeyCRTsEnd]), true
+	return binary.BigEndian.Uint64(key[encodedKeyTxnCommitTsStart:encodedKeyTxnCommitTsEnd]), true
 }
 
 // getDMLOrder returns the order of the dml types: delete<update<insert
@@ -138,16 +137,20 @@ func getDMLOrder(rowKV *common.RawKVEntry) DMLOrder {
 	return DMLOrderInsert
 }
 
-func deleteDataRange(db *pebble.DB, uniqueKeyID uint64, tableID int64, startTs uint64, endTs uint64) error {
-	start := EncodeKeyPrefix(uniqueKeyID, tableID, startTs)
-	end := EncodeKeyPrefix(uniqueKeyID, tableID, endTs)
+func deleteDataRange(
+	db *pebble.DB, uniqueKeyID uint64, tableID int64, startTxnCommitTs uint64, endTxnCommitTs uint64,
+) error {
+	start := EncodeTxnCommitTsBoundaryKey(uniqueKeyID, tableID, startTxnCommitTs)
+	end := EncodeTxnCommitTsBoundaryKey(uniqueKeyID, tableID, endTxnCommitTs)
 
 	return db.DeleteRange(start, end, pebble.NoSync)
 }
 
-func compactDataRange(db *pebble.DB, uniqueKeyID uint64, tableID int64, startTs uint64, endTs uint64) error {
-	start := EncodeKeyPrefix(uniqueKeyID, tableID, startTs)
-	end := EncodeKeyPrefix(uniqueKeyID, tableID, endTs)
+func compactDataRange(
+	db *pebble.DB, uniqueKeyID uint64, tableID int64, startTxnCommitTs uint64, endTxnCommitTs uint64,
+) error {
+	start := EncodeTxnCommitTsBoundaryKey(uniqueKeyID, tableID, startTxnCommitTs)
+	end := EncodeTxnCommitTsBoundaryKey(uniqueKeyID, tableID, endTxnCommitTs)
 
 	return db.Compact(start, end, false)
 }

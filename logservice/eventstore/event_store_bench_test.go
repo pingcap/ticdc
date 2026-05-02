@@ -181,8 +181,8 @@ func BenchmarkEventStoreIteratorNext(b *testing.B) {
 		StartKey: []byte{},
 		EndKey:   []byte{0xff},
 	}
-	lower := EncodeKeyPrefix(1, 1, 1)
-	upper := EncodeKeyPrefix(1, 1, 1<<63)
+	lower := EncodeTxnCommitTsBoundaryKey(1, 1, 1)
+	upper := EncodeTxnCommitTsBoundaryKey(1, 1, 1<<63)
 
 	b.ReportAllocs()
 	b.ResetTimer()

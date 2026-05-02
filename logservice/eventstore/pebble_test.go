@@ -122,12 +122,12 @@ func TestCompressionAndKeyOrder(t *testing.T) {
 		Key:     []byte("test-key"),
 	}
 	keyWithZstd := EncodeKey(1, 1, ev, CompressionZSTD)
-	dmlOrder, compressionType := DecodeKeyMetas(keyWithZstd)
+	dmlOrder, compressionType := DecodeKeyAttributes(keyWithZstd)
 	require.Equal(t, DMLOrderInsert, dmlOrder)
 	require.Equal(t, CompressionZSTD, compressionType)
 
 	keyWithNone := EncodeKey(1, 1, ev, CompressionNone)
-	dmlOrder, compressionType = DecodeKeyMetas(keyWithNone)
+	dmlOrder, compressionType = DecodeKeyAttributes(keyWithNone)
 	require.Equal(t, DMLOrderInsert, dmlOrder)
 	require.Equal(t, CompressionNone, compressionType)
 
@@ -155,12 +155,12 @@ func TestEventStoreKeyBounds(t *testing.T) {
 		Key:     []byte("key"),
 	}
 	key := EncodeKey(1, 1, event, CompressionNone)
-	prefix := EncodeKeyPrefix(1, 1, event.CRTs)
-	require.Len(t, prefix, encodedKeyCRTsEnd)
-	require.True(t, bytes.HasPrefix(key, prefix))
+	commitTsBoundaryKey := EncodeTxnCommitTsBoundaryKey(1, 1, event.CRTs)
+	require.Len(t, commitTsBoundaryKey, encodedKeyTxnCommitTsEnd)
+	require.True(t, bytes.HasPrefix(key, commitTsBoundaryKey))
 
 	lowerBound := encodeScanLowerBound(1, 1, event.CRTs, event.StartTs)
-	require.Len(t, lowerBound, encodedKeyMetasOffset)
+	require.Len(t, lowerBound, encodedKeyAttributesOffset)
 	require.True(t, bytes.HasPrefix(key, lowerBound))
 
 	previousEvent := &common.RawKVEntry{
@@ -172,10 +172,10 @@ func TestEventStoreKeyBounds(t *testing.T) {
 	require.Less(t, bytes.Compare(EncodeKey(1, 1, previousEvent, CompressionNone), lowerBound), 0)
 }
 
-func TestEventStoreCRTsCollector(t *testing.T) {
+func TestEventStoreTxnCommitTsCollector(t *testing.T) {
 	t.Parallel()
 
-	collector := newEventStoreCRTsCollector()
+	collector := newEventStoreTxnCommitTsCollector()
 	event := &common.RawKVEntry{
 		OpType:  common.OpTypePut,
 		StartTs: 1,
@@ -188,8 +188,8 @@ func TestEventStoreCRTsCollector(t *testing.T) {
 		UserKey: eventKey,
 		Trailer: uint64(pebble.InternalKeyKindSet),
 	}, eventValue))
-	deleteStart := EncodeKeyPrefix(1, 1, 100)
-	deleteEnd := EncodeKeyPrefix(1, 1, 200)
+	deleteStart := EncodeTxnCommitTsBoundaryKey(1, 1, 100)
+	deleteEnd := EncodeTxnCommitTsBoundaryKey(1, 1, 200)
 	require.NoError(t, collector.Add(pebble.InternalKey{
 		UserKey: deleteStart,
 		Trailer: uint64(pebble.InternalKeyKindRangeDelete),
@@ -197,19 +197,19 @@ func TestEventStoreCRTsCollector(t *testing.T) {
 
 	props := make(map[string]string)
 	require.NoError(t, collector.Finish(props))
-	require.Equal(t, "10", props[eventStoreMinCRTsTableProperty])
-	require.Equal(t, "100", props[eventStoreMaxCRTsTableProperty])
+	require.Equal(t, "10", props[eventStoreMinTxnCommitTsProperty])
+	require.Equal(t, "100", props[eventStoreMaxTxnCommitTsProperty])
 	require.Equal(t, strconv.Itoa(len(eventKey)+len(eventValue)+len(deleteStart)+len(deleteEnd)),
 		props[eventStoreLogicalBytesProperty])
 
-	require.True(t, newEventStoreTableFilter(9, 10)(props))
-	require.True(t, newEventStoreTableFilter(100, 100)(props))
-	require.False(t, newEventStoreTableFilter(101, 300)(props))
-	require.True(t, newEventStoreTableFilter(101, 300)(nil))
+	require.True(t, newEventStoreSSTFileFilter(9, 10)(props))
+	require.True(t, newEventStoreSSTFileFilter(100, 100)(props))
+	require.False(t, newEventStoreSSTFileFilter(101, 300)(props))
+	require.True(t, newEventStoreSSTFileFilter(101, 300)(nil))
 
 	corruptedProps := map[string]string{
-		eventStoreMinCRTsTableProperty: "300",
-		eventStoreMaxCRTsTableProperty: "100",
+		eventStoreMinTxnCommitTsProperty: "300",
+		eventStoreMaxTxnCommitTsProperty: "100",
 	}
-	require.True(t, newEventStoreTableFilter(101, 200)(corruptedProps))
+	require.True(t, newEventStoreSSTFileFilter(101, 200)(corruptedProps))
 }
