@@ -198,13 +198,14 @@ func TestEventStoreTxnCommitTsCollector(t *testing.T) {
 	props := make(map[string]string)
 	require.NoError(t, collector.Finish(props))
 	require.Equal(t, "10", props[eventStoreMinTxnCommitTsProperty])
-	require.Equal(t, "100", props[eventStoreMaxTxnCommitTsProperty])
+	require.Equal(t, "200", props[eventStoreMaxTxnCommitTsProperty])
 	require.Equal(t, strconv.Itoa(len(eventKey)+len(eventValue)+len(deleteStart)+len(deleteEnd)),
 		props[eventStoreLogicalBytesProperty])
 
 	require.True(t, newEventStoreSSTFileFilter(9, 10)(props))
 	require.True(t, newEventStoreSSTFileFilter(100, 100)(props))
-	require.False(t, newEventStoreSSTFileFilter(101, 300)(props))
+	require.True(t, newEventStoreSSTFileFilter(101, 300)(props))
+	require.False(t, newEventStoreSSTFileFilter(201, 300)(props))
 	require.True(t, newEventStoreSSTFileFilter(101, 300)(nil))
 
 	corruptedProps := map[string]string{

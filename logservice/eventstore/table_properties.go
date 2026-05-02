@@ -44,11 +44,18 @@ func newEventStoreTxnCommitTsCollector() pebble.TablePropertyCollector {
 }
 
 func (c *eventStoreTxnCommitTsCollector) Add(key pebble.InternalKey, value []byte) error {
-	// Event store DeleteRange is GC-only: it removes data that should already be
-	// below the future scan range. Do not widen table properties with the range
-	// tombstone end key. For example, a cleanup tombstone [commit-ts=100, commit-ts=1000)
-	// would make this cleanup-only SST overlap scans like [500,600].
+	// Range deletion handling:
+	// 1. Pebble passes the tombstone start key in key.UserKey and the exclusive
+	//    end key in value.
+	// 2. Event store uses DeleteRange only for GC, so normal event scans should
+	//    not encounter these tombstones.
+	// 3. Recording both boundaries keeps the SST property consistent with
+	//    Pebble's [start, end) range deletion format. This affects only SST
+	//    metadata and does not affect scan correctness or filtering precision.
 	c.recordEncodedKey(key.UserKey)
+	if key.Kind() == pebble.InternalKeyKindRangeDelete {
+		c.recordEncodedKey(value)
+	}
 	c.logicalBytes += uint64(len(key.UserKey) + len(value))
 	return nil
 }
