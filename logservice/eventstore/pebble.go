@@ -57,9 +57,6 @@ func newPebbleOptions(dbNum int) *pebble.Options {
 
 		// Configure options to optimize read/write performance
 		Levels: make([]pebble.LevelOptions, 7),
-		TablePropertyCollectors: []func() pebble.TablePropertyCollector{
-			newEventStoreTxnCommitTsCollector,
-		},
 	}
 
 	for i := 0; i < len(opts.Levels); i++ {
