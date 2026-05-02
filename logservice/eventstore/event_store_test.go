@@ -1248,8 +1248,8 @@ func TestEventStoreIter_NextWithFiltering(t *testing.T) {
 
 			// Create iterator with a wider range to ensure it sees all keys,
 			// so we can test the internal filtering logic.
-			start := EncodeTxnCommitTsBoundaryKey(subID, tableID, 0)
-			end := EncodeTxnCommitTsBoundaryKey(subID, tableID, 500)
+			start := encodeTxnCommitTsBoundaryKey(subID, tableID, 0)
+			end := encodeTxnCommitTsBoundaryKey(subID, tableID, 500)
 			innerIter, err := db.NewIter(&pebble.IterOptions{
 				LowerBound: start,
 				UpperBound: end,

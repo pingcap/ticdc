@@ -154,7 +154,7 @@ func TestEventStoreKeyBounds(t *testing.T) {
 		Key:     []byte("key"),
 	}
 	key := EncodeKey(1, 1, event, CompressionNone)
-	commitTsBoundaryKey := EncodeTxnCommitTsBoundaryKey(1, 1, event.CRTs)
+	commitTsBoundaryKey := encodeTxnCommitTsBoundaryKey(1, 1, event.CRTs)
 	require.Len(t, commitTsBoundaryKey, encodedKeyTxnCommitTsEnd)
 	require.True(t, bytes.HasPrefix(key, commitTsBoundaryKey))
 

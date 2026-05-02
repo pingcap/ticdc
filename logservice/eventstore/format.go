@@ -53,8 +53,8 @@ const (
 	dmlOrderShift   = 8
 )
 
-// EncodeTxnCommitTsBoundaryKey encodes the event-store key boundary up to txnCommitTs.
-func EncodeTxnCommitTsBoundaryKey(uniqueID uint64, tableID int64, txnCommitTs uint64) []byte {
+// encodeTxnCommitTsBoundaryKey encodes the event-store key boundary up to txnCommitTs.
+func encodeTxnCommitTsBoundaryKey(uniqueID uint64, tableID int64, txnCommitTs uint64) []byte {
 	buf := make([]byte, encodedKeyTxnCommitTsEnd)
 	encodeTxnCommitTsBoundaryKeyTo(buf, uniqueID, tableID, txnCommitTs)
 	return buf
@@ -140,8 +140,8 @@ func getDMLOrder(rowKV *common.RawKVEntry) DMLOrder {
 func deleteDataRange(
 	db *pebble.DB, uniqueKeyID uint64, tableID int64, startTxnCommitTs uint64, endTxnCommitTs uint64,
 ) error {
-	start := EncodeTxnCommitTsBoundaryKey(uniqueKeyID, tableID, startTxnCommitTs)
-	end := EncodeTxnCommitTsBoundaryKey(uniqueKeyID, tableID, endTxnCommitTs)
+	start := encodeTxnCommitTsBoundaryKey(uniqueKeyID, tableID, startTxnCommitTs)
+	end := encodeTxnCommitTsBoundaryKey(uniqueKeyID, tableID, endTxnCommitTs)
 
 	return db.DeleteRange(start, end, pebble.NoSync)
 }
@@ -149,8 +149,8 @@ func deleteDataRange(
 func compactDataRange(
 	db *pebble.DB, uniqueKeyID uint64, tableID int64, startTxnCommitTs uint64, endTxnCommitTs uint64,
 ) error {
-	start := EncodeTxnCommitTsBoundaryKey(uniqueKeyID, tableID, startTxnCommitTs)
-	end := EncodeTxnCommitTsBoundaryKey(uniqueKeyID, tableID, endTxnCommitTs)
+	start := encodeTxnCommitTsBoundaryKey(uniqueKeyID, tableID, startTxnCommitTs)
+	end := encodeTxnCommitTsBoundaryKey(uniqueKeyID, tableID, endTxnCommitTs)
 
 	return db.Compact(start, end, false)
 }

@@ -914,9 +914,9 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 			dataRange.LastScannedTxnStartTs+1,
 		)
 	} else {
-		start = EncodeTxnCommitTsBoundaryKey(uint64(subStat.subID), stat.tableSpan.TableID, dataRange.CommitTsStart+1)
+		start = encodeTxnCommitTsBoundaryKey(uint64(subStat.subID), stat.tableSpan.TableID, dataRange.CommitTsStart+1)
 	}
-	end := EncodeTxnCommitTsBoundaryKey(uint64(subStat.subID), stat.tableSpan.TableID, dataRange.CommitTsEnd+1)
+	end := encodeTxnCommitTsBoundaryKey(uint64(subStat.subID), stat.tableSpan.TableID, dataRange.CommitTsEnd+1)
 	// it's impossible return error here
 	iter, _ := db.NewIter(&pebble.IterOptions{
 		LowerBound: start,

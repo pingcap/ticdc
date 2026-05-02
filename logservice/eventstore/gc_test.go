@@ -62,16 +62,16 @@ func TestGCManager(t *testing.T) {
 		db *pebble.DB, uniqueKeyID uint64, tableID int64, startTxnCommitTs uint64, endTxnCommitTs uint64,
 	) error {
 		return mdb.DeleteRange(
-			EncodeTxnCommitTsBoundaryKey(uniqueKeyID, tableID, startTxnCommitTs),
-			EncodeTxnCommitTsBoundaryKey(uniqueKeyID, tableID, endTxnCommitTs),
+			encodeTxnCommitTsBoundaryKey(uniqueKeyID, tableID, startTxnCommitTs),
+			encodeTxnCommitTsBoundaryKey(uniqueKeyID, tableID, endTxnCommitTs),
 			nil)
 	}
 	compactFn := func(
 		db *pebble.DB, uniqueKeyID uint64, tableID int64, startTxnCommitTs uint64, endTxnCommitTs uint64,
 	) error {
 		return mdb.Compact(
-			EncodeTxnCommitTsBoundaryKey(uniqueKeyID, tableID, startTxnCommitTs),
-			EncodeTxnCommitTsBoundaryKey(uniqueKeyID, tableID, endTxnCommitTs),
+			encodeTxnCommitTsBoundaryKey(uniqueKeyID, tableID, startTxnCommitTs),
+			encodeTxnCommitTsBoundaryKey(uniqueKeyID, tableID, endTxnCommitTs),
 			false)
 	}
 	gcm := newGCManager([]*pebble.DB{nil}, deleteFn, compactFn)
@@ -93,15 +93,15 @@ func TestGCManager(t *testing.T) {
 		deleteCalls := mdb.getDeleteCalls()
 		require.Len(t, deleteCalls, 4)
 		// The order of delete ranges is not guaranteed because it iterates over a map.
-		if bytes.Equal(deleteCalls[0], EncodeTxnCommitTsBoundaryKey(1, 10, 100)) {
-			require.Equal(t, EncodeTxnCommitTsBoundaryKey(1, 10, 200), deleteCalls[1])
-			require.Equal(t, EncodeTxnCommitTsBoundaryKey(1, 20, 300), deleteCalls[2])
-			require.Equal(t, EncodeTxnCommitTsBoundaryKey(1, 20, 400), deleteCalls[3])
+		if bytes.Equal(deleteCalls[0], encodeTxnCommitTsBoundaryKey(1, 10, 100)) {
+			require.Equal(t, encodeTxnCommitTsBoundaryKey(1, 10, 200), deleteCalls[1])
+			require.Equal(t, encodeTxnCommitTsBoundaryKey(1, 20, 300), deleteCalls[2])
+			require.Equal(t, encodeTxnCommitTsBoundaryKey(1, 20, 400), deleteCalls[3])
 		} else {
-			require.Equal(t, EncodeTxnCommitTsBoundaryKey(1, 20, 300), deleteCalls[0])
-			require.Equal(t, EncodeTxnCommitTsBoundaryKey(1, 20, 400), deleteCalls[1])
-			require.Equal(t, EncodeTxnCommitTsBoundaryKey(1, 10, 100), deleteCalls[2])
-			require.Equal(t, EncodeTxnCommitTsBoundaryKey(1, 10, 200), deleteCalls[3])
+			require.Equal(t, encodeTxnCommitTsBoundaryKey(1, 20, 300), deleteCalls[0])
+			require.Equal(t, encodeTxnCommitTsBoundaryKey(1, 20, 400), deleteCalls[1])
+			require.Equal(t, encodeTxnCommitTsBoundaryKey(1, 10, 100), deleteCalls[2])
+			require.Equal(t, encodeTxnCommitTsBoundaryKey(1, 10, 200), deleteCalls[3])
 		}
 
 		// Check internal state for compaction
@@ -122,15 +122,15 @@ func TestGCManager(t *testing.T) {
 		compactCalls := mdb.getCompactCalls()
 		require.Len(t, compactCalls, 4)
 		// The order of compaction is not guaranteed because it iterates over a map.
-		if bytes.Equal(compactCalls[0], EncodeTxnCommitTsBoundaryKey(1, 10, 0)) {
-			require.Equal(t, EncodeTxnCommitTsBoundaryKey(1, 10, 200), compactCalls[1])
-			require.Equal(t, EncodeTxnCommitTsBoundaryKey(1, 20, 0), compactCalls[2])
-			require.Equal(t, EncodeTxnCommitTsBoundaryKey(1, 20, 400), compactCalls[3])
+		if bytes.Equal(compactCalls[0], encodeTxnCommitTsBoundaryKey(1, 10, 0)) {
+			require.Equal(t, encodeTxnCommitTsBoundaryKey(1, 10, 200), compactCalls[1])
+			require.Equal(t, encodeTxnCommitTsBoundaryKey(1, 20, 0), compactCalls[2])
+			require.Equal(t, encodeTxnCommitTsBoundaryKey(1, 20, 400), compactCalls[3])
 		} else {
-			require.Equal(t, EncodeTxnCommitTsBoundaryKey(1, 20, 0), compactCalls[0])
-			require.Equal(t, EncodeTxnCommitTsBoundaryKey(1, 20, 400), compactCalls[1])
-			require.Equal(t, EncodeTxnCommitTsBoundaryKey(1, 10, 0), compactCalls[2])
-			require.Equal(t, EncodeTxnCommitTsBoundaryKey(1, 10, 200), compactCalls[3])
+			require.Equal(t, encodeTxnCommitTsBoundaryKey(1, 20, 0), compactCalls[0])
+			require.Equal(t, encodeTxnCommitTsBoundaryKey(1, 20, 400), compactCalls[1])
+			require.Equal(t, encodeTxnCommitTsBoundaryKey(1, 10, 0), compactCalls[2])
+			require.Equal(t, encodeTxnCommitTsBoundaryKey(1, 10, 200), compactCalls[3])
 		}
 		// Verify internal state is now compacted
 		gcm.mu.Lock()
