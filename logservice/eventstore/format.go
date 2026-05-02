@@ -39,17 +39,11 @@ const (
 )
 
 const (
-	encodedKeyUint64Len = 8
-	encodedKeyOrderLen  = 2
-
-	encodedKeyUniqueIDOffset = 0
-	encodedKeyTableIDOffset  = encodedKeyUniqueIDOffset + encodedKeyUint64Len
-	encodedKeyCRTsOffset     = encodedKeyTableIDOffset + encodedKeyUint64Len
-	encodedKeyCRTsEnd        = encodedKeyCRTsOffset + encodedKeyUint64Len
-	encodedKeyStartTsOffset  = encodedKeyCRTsEnd
-	encodedKeyStartTsEnd     = encodedKeyStartTsOffset + encodedKeyUint64Len
-	encodedKeyMetasOffset    = encodedKeyStartTsEnd
-	encodedKeyMetasEnd       = encodedKeyMetasOffset + encodedKeyOrderLen
+	encodedKeyUint64Len   = 8
+	encodedKeyCRTsOffset  = 2 * encodedKeyUint64Len
+	encodedKeyCRTsEnd     = encodedKeyCRTsOffset + encodedKeyUint64Len
+	encodedKeyMetasOffset = 4 * encodedKeyUint64Len
+	encodedKeyMetasEnd    = encodedKeyMetasOffset + 2
 )
 
 const (
@@ -59,35 +53,25 @@ const (
 	dmlOrderShift   = 8
 )
 
-// EncodeKeyPrefix encodes uniqueID, tableID, CRTs and StartTs.
-// StartTs is optional.
-// The result should be a prefix of normal key. (TODO: add a unit test)
-func EncodeKeyPrefix(uniqueID uint64, tableID int64, CRTs uint64, startTs ...uint64) []byte {
-	if len(startTs) > 1 {
-		log.Panic("startTs should be at most one")
-	}
-	// uniqueID, tableID, CRTs.
-	keySize := encodedKeyCRTsEnd
-	if len(startTs) > 0 {
-		keySize = encodedKeyStartTsEnd
-	}
-	buf := make([]byte, 0, keySize)
-	uint64Buf := [8]byte{}
-	// uniqueID
-	binary.BigEndian.PutUint64(uint64Buf[:], uniqueID)
-	buf = append(buf, uint64Buf[:]...)
-	// tableID
-	binary.BigEndian.PutUint64(uint64Buf[:], uint64(tableID))
-	buf = append(buf, uint64Buf[:]...)
-	// CRTs
-	binary.BigEndian.PutUint64(uint64Buf[:], CRTs)
-	buf = append(buf, uint64Buf[:]...)
-	if len(startTs) > 0 {
-		// startTs
-		binary.BigEndian.PutUint64(uint64Buf[:], startTs[0])
-		buf = append(buf, uint64Buf[:]...)
-	}
+// EncodeKeyPrefix encodes uniqueID, tableID, and txnCommitTs.
+// The result is a prefix of a full event-store key.
+func EncodeKeyPrefix(uniqueID uint64, tableID int64, txnCommitTs uint64) []byte {
+	buf := make([]byte, encodedKeyCRTsEnd)
+	encodeKeyPrefixTo(buf, uniqueID, tableID, txnCommitTs)
 	return buf
+}
+
+func encodeScanLowerBound(uniqueID uint64, tableID int64, txnCommitTs uint64, startTs uint64) []byte {
+	buf := make([]byte, encodedKeyMetasOffset)
+	encodeKeyPrefixTo(buf, uniqueID, tableID, txnCommitTs)
+	binary.BigEndian.PutUint64(buf[encodedKeyCRTsEnd:encodedKeyMetasOffset], startTs)
+	return buf
+}
+
+func encodeKeyPrefixTo(buf []byte, uniqueID uint64, tableID int64, txnCommitTs uint64) {
+	binary.BigEndian.PutUint64(buf[:encodedKeyUint64Len], uniqueID)
+	binary.BigEndian.PutUint64(buf[encodedKeyUint64Len:encodedKeyCRTsOffset], uint64(tableID))
+	binary.BigEndian.PutUint64(buf[encodedKeyCRTsOffset:encodedKeyCRTsEnd], txnCommitTs)
 }
 
 func encodedKeyLen(event *common.RawKVEntry) int {

@@ -18,6 +18,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"os"
+	"strconv"
 	"testing"
 
 	"github.com/cockroachdb/pebble"
@@ -144,6 +145,33 @@ func TestCompressionAndKeyOrder(t *testing.T) {
 	require.Less(t, bytes.Compare(keyUpdate, keyInsert), 0, "Update should come before Insert")
 }
 
+func TestEventStoreKeyBounds(t *testing.T) {
+	t.Parallel()
+
+	event := &common.RawKVEntry{
+		OpType:  common.OpTypePut,
+		StartTs: 20,
+		CRTs:    10,
+		Key:     []byte("key"),
+	}
+	key := EncodeKey(1, 1, event, CompressionNone)
+	prefix := EncodeKeyPrefix(1, 1, event.CRTs)
+	require.Len(t, prefix, encodedKeyCRTsEnd)
+	require.True(t, bytes.HasPrefix(key, prefix))
+
+	lowerBound := encodeScanLowerBound(1, 1, event.CRTs, event.StartTs)
+	require.Len(t, lowerBound, encodedKeyMetasOffset)
+	require.True(t, bytes.HasPrefix(key, lowerBound))
+
+	previousEvent := &common.RawKVEntry{
+		OpType:  common.OpTypePut,
+		StartTs: event.StartTs - 1,
+		CRTs:    event.CRTs,
+		Key:     []byte("key"),
+	}
+	require.Less(t, bytes.Compare(EncodeKey(1, 1, previousEvent, CompressionNone), lowerBound), 0)
+}
+
 func TestEventStoreCRTsCollector(t *testing.T) {
 	t.Parallel()
 
@@ -154,19 +182,25 @@ func TestEventStoreCRTsCollector(t *testing.T) {
 		CRTs:    10,
 		Key:     []byte("key"),
 	}
+	eventKey := EncodeKey(1, 1, event, CompressionNone)
+	eventValue := []byte("value")
 	require.NoError(t, collector.Add(pebble.InternalKey{
-		UserKey: EncodeKey(1, 1, event, CompressionNone),
+		UserKey: eventKey,
 		Trailer: uint64(pebble.InternalKeyKindSet),
-	}, nil))
+	}, eventValue))
+	deleteStart := EncodeKeyPrefix(1, 1, 100)
+	deleteEnd := EncodeKeyPrefix(1, 1, 200)
 	require.NoError(t, collector.Add(pebble.InternalKey{
-		UserKey: EncodeKeyPrefix(1, 1, 100),
+		UserKey: deleteStart,
 		Trailer: uint64(pebble.InternalKeyKindRangeDelete),
-	}, EncodeKeyPrefix(1, 1, 200)))
+	}, deleteEnd))
 
 	props := make(map[string]string)
 	require.NoError(t, collector.Finish(props))
 	require.Equal(t, "10", props[eventStoreMinCRTsTableProperty])
 	require.Equal(t, "100", props[eventStoreMaxCRTsTableProperty])
+	require.Equal(t, strconv.Itoa(len(eventKey)+len(eventValue)+len(deleteStart)+len(deleteEnd)),
+		props[eventStoreLogicalBytesProperty])
 
 	require.True(t, newEventStoreTableFilter(9, 10)(props))
 	require.True(t, newEventStoreTableFilter(100, 100)(props))

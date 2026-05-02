@@ -913,7 +913,12 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 	var start []byte
 	lowerTs := dataRange.CommitTsStart + 1
 	if dataRange.LastScannedTxnStartTs != 0 {
-		start = EncodeKeyPrefix(uint64(subStat.subID), stat.tableSpan.TableID, dataRange.CommitTsStart, dataRange.LastScannedTxnStartTs+1)
+		start = encodeScanLowerBound(
+			uint64(subStat.subID),
+			stat.tableSpan.TableID,
+			dataRange.CommitTsStart,
+			dataRange.LastScannedTxnStartTs+1,
+		)
 		lowerTs = dataRange.CommitTsStart
 	} else {
 		start = EncodeKeyPrefix(uint64(subStat.subID), stat.tableSpan.TableID, dataRange.CommitTsStart+1)
