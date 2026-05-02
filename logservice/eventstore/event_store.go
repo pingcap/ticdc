@@ -907,9 +907,9 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 	//
 	// Table filter bounds:
 	// lowerTs is the commit-ts lower bound for TableFilter. It skips SSTs whose
-	// collected CRTs range does not overlap [lowerTs, CommitTsEnd]. Therefore
-	// lowerTs is CommitTsStart+1 in the first case, and CommitTsStart in the
-	// second case.
+	// collected txn commit ts range does not overlap [lowerTs, CommitTsEnd].
+	// Therefore lowerTs is CommitTsStart+1 in the first case, and CommitTsStart
+	// in the second case.
 	var start []byte
 	lowerTs := dataRange.CommitTsStart + 1
 	if dataRange.LastScannedTxnStartTs != 0 {

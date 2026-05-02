@@ -20,6 +20,11 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 )
 
+// Pebble table properties are per-SST metadata generated when Pebble writes an
+// SST file. Event store stores the txn commit ts range of each SST here, and
+// passes a TableFilter during scans so Pebble can skip SST files that cannot
+// contain events in the requested commit-ts range.
+
 const (
 	eventStoreMinTxnCommitTsProperty   = "event-store-min-txn-commit-ts"
 	eventStoreMaxTxnCommitTsProperty   = "event-store-max-txn-commit-ts"
