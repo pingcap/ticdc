@@ -86,14 +86,14 @@ var (
 		Subsystem: "event_store",
 		Name:      "sst_file_filter_count",
 		Help:      "The number of SST file filter decisions by event store.",
-	}, []string{"result"})
+	}, []string{"decision"})
 
 	EventStoreSSTFileFilterLogicalBytes = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: "ticdc",
 		Subsystem: "event_store",
 		Name:      "sst_file_filter_logical_bytes",
 		Help:      "The estimated logical bytes in SST files scanned or skipped by event store.",
-	}, []string{"result"})
+	}, []string{"decision"})
 
 	EventStoreDeleteRangeCount = prometheus.NewCounter(
 		prometheus.CounterOpts{

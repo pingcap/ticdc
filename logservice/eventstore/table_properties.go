@@ -18,6 +18,7 @@ import (
 
 	"github.com/cockroachdb/pebble"
 	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 // Pebble table properties are per-SST metadata generated when Pebble writes an
@@ -94,9 +95,20 @@ func (c *eventStoreTxnCommitTsCollector) recordEncodedKey(key []byte) {
 }
 
 func newEventStoreSSTFileFilter(lowerTs uint64, upperTs uint64) func(map[string]string) bool {
+	scannedCount := metrics.EventStoreSSTFileFilterCount.WithLabelValues("scanned")
+	skippedCount := metrics.EventStoreSSTFileFilterCount.WithLabelValues("skipped")
+	scannedLogicalBytes := metrics.EventStoreSSTFileFilterLogicalBytes.WithLabelValues("scanned")
+	skippedLogicalBytes := metrics.EventStoreSSTFileFilterLogicalBytes.WithLabelValues("skipped")
 	return func(userProps map[string]string) bool {
 		shouldScan := eventStoreSSTFileMayContainTxnCommitTs(userProps, lowerTs, upperTs)
-		recordEventStoreSSTFileFilterMetrics(userProps, shouldScan)
+		recordEventStoreSSTFileFilterMetrics(
+			userProps,
+			shouldScan,
+			scannedCount,
+			skippedCount,
+			scannedLogicalBytes,
+			skippedLogicalBytes,
+		)
 		return shouldScan
 	}
 }
@@ -120,14 +132,23 @@ func eventStoreSSTFileMayContainTxnCommitTs(userProps map[string]string, lowerTs
 	return maxTs >= lowerTs && minTs <= upperTs
 }
 
-func recordEventStoreSSTFileFilterMetrics(userProps map[string]string, shouldScan bool) {
-	result := "scanned"
+func recordEventStoreSSTFileFilterMetrics(
+	userProps map[string]string,
+	shouldScan bool,
+	scannedCount prometheus.Counter,
+	skippedCount prometheus.Counter,
+	scannedLogicalBytes prometheus.Counter,
+	skippedLogicalBytes prometheus.Counter,
+) {
+	count := scannedCount
+	logicalBytesCounter := scannedLogicalBytes
 	if !shouldScan {
-		result = "skipped"
+		count = skippedCount
+		logicalBytesCounter = skippedLogicalBytes
 	}
-	metrics.EventStoreSSTFileFilterCount.WithLabelValues(result).Inc()
+	count.Inc()
 	if logicalBytes, ok := parseEventStoreUint64TableProperty(userProps, eventStoreLogicalBytesProperty); ok {
-		metrics.EventStoreSSTFileFilterLogicalBytes.WithLabelValues(result).Add(float64(logicalBytes))
+		logicalBytesCounter.Add(float64(logicalBytes))
 	}
 }
 
