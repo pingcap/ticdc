@@ -72,13 +72,18 @@ func (c *eventStoreTxnCommitTsCollector) recordEncodedKey(key []byte) {
 	if !ok {
 		return
 	}
-	if !c.hasTs || txnCommitTs < c.minTs {
+	if !c.hasTs {
+		c.minTs = txnCommitTs
+		c.maxTs = txnCommitTs
+		c.hasTs = true
+		return
+	}
+	if txnCommitTs < c.minTs {
 		c.minTs = txnCommitTs
 	}
-	if !c.hasTs || txnCommitTs > c.maxTs {
+	if txnCommitTs > c.maxTs {
 		c.maxTs = txnCommitTs
 	}
-	c.hasTs = true
 }
 
 func newEventStoreSSTFileFilter(lowerTs uint64, upperTs uint64) func(map[string]string) bool {
@@ -99,8 +104,12 @@ func eventStoreSSTFileMayContainTxnCommitTs(userProps map[string]string, lowerTs
 		return true
 	}
 	if minTs > maxTs {
+		// Corrupted or incompatible properties should not make Pebble skip data.
 		return true
 	}
+	// Two inclusive ranges [minTs, maxTs] and [lowerTs, upperTs] overlap iff
+	// each range starts before or at the other range's end. Equal boundaries are
+	// included because commit-ts scan ranges are inclusive here.
 	return maxTs >= lowerTs && minTs <= upperTs
 }
 
