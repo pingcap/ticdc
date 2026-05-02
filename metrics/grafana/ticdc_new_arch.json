@@ -8249,7 +8249,7 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "Resolve lock task state transitions, including success, failure, skipped, throttled, and dropped tasks.",
+          "description": "Resolve lock execution rate and the number of locks found/resolved by the resolver.",
           "fieldConfig": {
             "defaults": {},
             "overrides": []
@@ -8292,18 +8292,26 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_subscription_client_resolve_lock_task_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (instance, status)",
+              "expr": "sum(rate(ticdc_subscription_client_resolve_lock_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (instance, result)",
               "hide": false,
               "interval": "",
-              "legendFormat": "{{instance}} {{status}}",
+              "legendFormat": "resolve {{instance}} {{result}}",
               "refId": "A"
+            },
+            {
+              "exemplar": true,
+              "expr": "sum(rate(ticdc_kvclient_lock_resolve_lock_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (instance, status)",
+              "hide": false,
+              "interval": "",
+              "legendFormat": "lock {{instance}} {{status}}",
+              "refId": "B"
             }
           ],
           "thresholds": [],
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Resolve Lock Tasks / s",
+          "title": "Resolve Lock / s",
           "tooltip": {
             "shared": true,
             "sort": 0,

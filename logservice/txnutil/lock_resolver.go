@@ -47,13 +47,8 @@ func NewLockerResolver() LockResolver {
 const scanLockLimit = 1024
 
 const (
-	lockResolveMetricScanned              = "scanned"
-	lockResolveMetricTTLExpired           = "ttl_expired"
-	lockResolveMetricTTLNotExpired        = "ttl_not_expired"
-	lockResolveMetricResolved             = "resolved"
-	lockResolveMetricWaitTTL              = "wait_ttl"
-	lockResolveMetricFailed               = "failed"
-	lockResolveMetricTTLExpiredUnresolved = "ttl_expired_unresolved"
+	lockResolveMetricFound    = "found"
+	lockResolveMetricResolved = "resolved"
 )
 
 func recordLockResolveLockCount(status string, count int) {
@@ -63,18 +58,17 @@ func recordLockResolveLockCount(status string, count int) {
 	metrics.LockResolveLockCounter.WithLabelValues(status).Add(float64(count))
 }
 
-func countLocksByTTL(kvStorage tikv.Storage, locks []*txnkv.Lock) (expired, notExpired int) {
+func countExpiredLocks(kvStorage tikv.Storage, locks []*txnkv.Lock) int {
+	expired := 0
 	for _, lock := range locks {
 		if lock.TTL == 0 ||
 			kvStorage.GetOracle().UntilExpired(lock.TxnID, lock.TTL, &oracle.Option{
 				TxnScope: oracle.GlobalTxnScope,
 			}) <= 0 {
 			expired++
-			continue
 		}
-		notExpired++
 	}
-	return
+	return expired
 }
 
 func (r *resolver) Resolve(ctx context.Context, keyspaceID uint32, regionID uint64, maxVersion uint64) (err error) {
@@ -173,22 +167,19 @@ func (r *resolver) Resolve(ctx context.Context, keyspaceID uint32, regionID uint
 			locks[i] = txnkv.NewLock(locksInfo[i])
 		}
 		totalLocks = append(totalLocks, locks...)
-		recordLockResolveLockCount(lockResolveMetricScanned, len(locks))
-		expiredLockCount, notExpiredLockCount := countLocksByTTL(kvStorage, locks)
-		recordLockResolveLockCount(lockResolveMetricTTLExpired, expiredLockCount)
-		recordLockResolveLockCount(lockResolveMetricTTLNotExpired, notExpiredLockCount)
+		recordLockResolveLockCount(lockResolveMetricFound, len(locks))
 
 		msBeforeTxnExpired, err1 := kvStorage.GetLockResolver().ResolveLocks(bo, 0, locks)
 		if err1 != nil {
-			recordLockResolveLockCount(lockResolveMetricFailed, len(locks))
-			recordLockResolveLockCount(lockResolveMetricTTLExpiredUnresolved, expiredLockCount)
 			return errors.Trace(err1)
 		}
+		resolvedLockCount := len(locks)
 		if msBeforeTxnExpired > 0 {
-			recordLockResolveLockCount(lockResolveMetricWaitTTL, len(locks))
-		} else {
-			recordLockResolveLockCount(lockResolveMetricResolved, len(locks))
+			// ResolveLocks only reports remaining TTL, so use expired locks as the
+			// best available lower bound when a batch is only partially resolved.
+			resolvedLockCount = countExpiredLocks(kvStorage, locks)
 		}
+		recordLockResolveLockCount(lockResolveMetricResolved, resolvedLockCount)
 		if len(locks) < scanLockLimit {
 			key = loc.EndKey
 		} else {

@@ -82,6 +82,14 @@ func TestGenerateResolveLockTask(t *testing.T) {
 		require.True(t, false, "must get a resolve lock task")
 	}
 
+	// The same region should not be enqueued repeatedly within resolveLockMinInterval.
+	span.resolveStaleLocks(200)
+	select {
+	case <-client.resolveLockTaskCh:
+		require.True(t, false, "shouldn't get a duplicate resolve lock task")
+	case <-time.After(100 * time.Millisecond):
+	}
+
 	worker := &regionRequestWorker{
 		requestCache: &requestCache{},
 	}
@@ -111,8 +119,8 @@ func TestGenerateResolveLockTask(t *testing.T) {
 	}
 	select {
 	case <-client.resolveLockTaskCh:
+		require.True(t, false, "shouldn't get a duplicate resolve lock task")
 	case <-time.After(100 * time.Millisecond):
-		require.True(t, false, "must get a resolve lock task")
 	}
 	require.Equal(t, 0, len(client.resolveLockTaskCh))
 
@@ -139,22 +147,17 @@ func TestHandleResolveLockTasksMetrics(t *testing.T) {
 	state.ResolvedTs.Store(100)
 
 	successBefore := testutil.ToFloat64(
-		metrics.SubscriptionClientResolveLockTaskCounter.WithLabelValues(resolveLockMetricSuccess))
-	throttledBefore := testutil.ToFloat64(
-		metrics.SubscriptionClientResolveLockTaskCounter.WithLabelValues(resolveLockMetricSkippedThrottled))
-	skippedResolvedBefore := testutil.ToFloat64(
-		metrics.SubscriptionClientResolveLockTaskCounter.WithLabelValues(resolveLockMetricSkippedResolved))
+		metrics.SubscriptionClientResolveLockCounter.WithLabelValues(resolveLockMetricSuccess))
 
 	client.resolveLockTaskCh <- resolveLockTask{
 		keyspaceID: 1,
 		regionID:   1,
 		targetTs:   200,
 		state:      state,
-		create:     time.Now(),
 	}
 	require.Eventually(t, func() bool {
 		return resolver.calls.Load() == 1 &&
-			testutil.ToFloat64(metrics.SubscriptionClientResolveLockTaskCounter.
+			testutil.ToFloat64(metrics.SubscriptionClientResolveLockCounter.
 				WithLabelValues(resolveLockMetricSuccess)) >= successBefore+1
 	}, time.Second, 10*time.Millisecond)
 
@@ -163,13 +166,11 @@ func TestHandleResolveLockTasksMetrics(t *testing.T) {
 		regionID:   1,
 		targetTs:   300,
 		state:      state,
-		create:     time.Now(),
 	}
 	require.Eventually(t, func() bool {
-		return resolver.calls.Load() == 1 &&
-			testutil.ToFloat64(metrics.SubscriptionClientResolveLockTaskCounter.
-				WithLabelValues(resolveLockMetricSkippedThrottled)) >= throttledBefore+1
+		return len(client.resolveLockTaskCh) == 0
 	}, time.Second, 10*time.Millisecond)
+	require.Equal(t, int32(1), resolver.calls.Load())
 
 	state.ResolvedTs.Store(300)
 	client.resolveLockTaskCh <- resolveLockTask{
@@ -177,13 +178,11 @@ func TestHandleResolveLockTasksMetrics(t *testing.T) {
 		regionID:   2,
 		targetTs:   300,
 		state:      state,
-		create:     time.Now(),
 	}
 	require.Eventually(t, func() bool {
-		return resolver.calls.Load() == 1 &&
-			testutil.ToFloat64(metrics.SubscriptionClientResolveLockTaskCounter.
-				WithLabelValues(resolveLockMetricSkippedResolved)) >= skippedResolvedBefore+1
+		return len(client.resolveLockTaskCh) == 0
 	}, time.Second, 10*time.Millisecond)
+	require.Equal(t, int32(1), resolver.calls.Load())
 
 	cancel()
 	select {

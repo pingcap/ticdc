@@ -85,28 +85,13 @@ var (
 			Name:      "resolve_lock_task_drop_count",
 			Help:      "The number of resolve lock tasks dropped before being processed",
 		})
-	SubscriptionClientResolveLockRangeCounter = prometheus.NewCounterVec(
+	SubscriptionClientResolveLockCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "ticdc",
 			Subsystem: "subscription_client",
-			Name:      "resolve_lock_range_count",
-			Help:      "The number of locked ranges scanned by resolve lock checker",
-		}, []string{"status"})
-	SubscriptionClientResolveLockTaskCounter = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: "ticdc",
-			Subsystem: "subscription_client",
-			Name:      "resolve_lock_task_count",
-			Help:      "The number of resolve lock tasks by status",
-		}, []string{"status"})
-	SubscriptionClientResolveLockTaskDuration = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Namespace: "ticdc",
-			Subsystem: "subscription_client",
-			Name:      "resolve_lock_task_duration",
-			Help:      "duration (s) for resolve lock task queueing and execution",
-			Buckets:   prometheus.ExponentialBuckets(0.00004, 2.0, 28), // 40us to 1.5h
-		}, []string{"type", "status"})
+			Name:      "resolve_lock_count",
+			Help:      "The number of resolve lock executions by result",
+		}, []string{"result"})
 
 	SubscriptionClientRegionEventHandleDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -136,9 +121,7 @@ func initLogPullerMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(RegionRequestFinishScanDuration)
 	registry.MustRegister(SubscriptionClientSubscribedRegionCount)
 	registry.MustRegister(SubscriptionClientResolveLockTaskDropCounter)
-	registry.MustRegister(SubscriptionClientResolveLockRangeCounter)
-	registry.MustRegister(SubscriptionClientResolveLockTaskCounter)
-	registry.MustRegister(SubscriptionClientResolveLockTaskDuration)
+	registry.MustRegister(SubscriptionClientResolveLockCounter)
 	registry.MustRegister(SubscriptionClientRegionEventHandleDuration)
 	registry.MustRegister(SubscriptionClientConsumeKVEventsCallbackDuration)
 }

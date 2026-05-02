@@ -73,7 +73,7 @@ var (
 			Namespace: "ticdc",
 			Subsystem: "kvclient",
 			Name:      "lock_resolve_lock_count",
-			Help:      "The number of locks scanned and handled by lock resolver",
+			Help:      "The number of locks found and resolved by lock resolver",
 		},
 		[]string{"status"})
 
