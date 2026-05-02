@@ -18,6 +18,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"os"
+	"strconv"
 	"testing"
 
 	"github.com/cockroachdb/pebble"
@@ -169,4 +170,47 @@ func TestEventStoreKeyBounds(t *testing.T) {
 		Key:     []byte("key"),
 	}
 	require.Less(t, bytes.Compare(EncodeKey(1, 1, previousEvent, CompressionNone), lowerBound), 0)
+}
+
+func TestEventStoreTxnCommitTsCollector(t *testing.T) {
+	t.Parallel()
+
+	collector := newEventStoreTxnCommitTsCollector()
+	event := &common.RawKVEntry{
+		OpType:  common.OpTypePut,
+		StartTs: 1,
+		CRTs:    10,
+		Key:     []byte("key"),
+	}
+	eventKey := EncodeKey(1, 1, event, CompressionNone)
+	eventValue := []byte("value")
+	require.NoError(t, collector.Add(pebble.InternalKey{
+		UserKey: eventKey,
+		Trailer: uint64(pebble.InternalKeyKindSet),
+	}, eventValue))
+	deleteStart := encodeTxnCommitTsBoundaryKey(1, 1, 100)
+	deleteEnd := encodeTxnCommitTsBoundaryKey(1, 1, 200)
+	require.NoError(t, collector.Add(pebble.InternalKey{
+		UserKey: deleteStart,
+		Trailer: uint64(pebble.InternalKeyKindRangeDelete),
+	}, deleteEnd))
+
+	props := make(map[string]string)
+	require.NoError(t, collector.Finish(props))
+	require.Equal(t, "10", props[eventStoreMinTxnCommitTsProperty])
+	require.Equal(t, "200", props[eventStoreMaxTxnCommitTsProperty])
+	require.Equal(t, strconv.Itoa(len(eventKey)+len(eventValue)+len(deleteStart)+len(deleteEnd)),
+		props[eventStoreLogicalBytesProperty])
+
+	require.True(t, newEventStoreSSTFileFilter(9, 10)(props))
+	require.True(t, newEventStoreSSTFileFilter(100, 100)(props))
+	require.True(t, newEventStoreSSTFileFilter(101, 300)(props))
+	require.False(t, newEventStoreSSTFileFilter(201, 300)(props))
+	require.True(t, newEventStoreSSTFileFilter(101, 300)(nil))
+
+	corruptedProps := map[string]string{
+		eventStoreMinTxnCommitTsProperty: "300",
+		eventStoreMaxTxnCommitTsProperty: "100",
+	}
+	require.True(t, newEventStoreSSTFileFilter(101, 200)(corruptedProps))
 }
