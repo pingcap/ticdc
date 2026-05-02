@@ -35,11 +35,9 @@ type (
 )
 
 type gcRangeItem struct {
-	dbIndex     int
-	uniqueKeyID uint64
-	tableID     int64
-	// TODO: startTxnCommitTs may be unnecessary now because delete ranges can
-	// start from 0, but it may be useful after table range splitting.
+	dbIndex          int
+	uniqueKeyID      uint64
+	tableID          int64
 	startTxnCommitTs uint64
 	endTxnCommitTs   uint64
 }

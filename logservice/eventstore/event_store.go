@@ -432,7 +432,7 @@ func (e *eventStore) Close(_ context.Context) error {
 	}
 	if e.tableCache != nil {
 		if err := e.tableCache.Unref(); err != nil {
-			log.Error("failed to unref pebble table cache", zap.Error(err))
+			log.Warn("failed to unref pebble table cache", zap.Error(err))
 		}
 		e.tableCache = nil
 	}
