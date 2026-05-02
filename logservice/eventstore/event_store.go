@@ -931,7 +931,7 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 	if ok := iter.First(); !ok {
 		if err := iter.Error(); err != nil {
 			if closeErr := iter.Close(); closeErr != nil {
-				return nil, errors.Trace(closeErr)
+				log.Warn("close iterator failed after first read error", zap.Error(closeErr))
 			}
 			return nil, errors.Trace(err)
 		}
