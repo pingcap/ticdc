@@ -37,15 +37,15 @@ func newResolveLockRateLimiter() *resolveLockRateLimiter {
 	}
 }
 
-func (l *resolveLockRateLimiter) allow(regionID uint64, now time.Time) (time.Time, bool) {
+func (l *resolveLockRateLimiter) allow(regionID uint64, now time.Time) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
 	lastRun, ok := l.lastRun[regionID]
 	if ok && now.Sub(lastRun) < l.minInterval {
-		return lastRun, false
+		return false
 	}
-	return lastRun, true
+	return true
 }
 
 func (l *resolveLockRateLimiter) mark(regionID uint64, now time.Time) {

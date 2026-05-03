@@ -989,9 +989,7 @@ func (s *subscriptionClient) handleResolveLockTasks(ctx context.Context) error {
 		if state.ResolvedTs.Load() >= targetTs || !state.Initialized.Load() {
 			return
 		}
-
-		lastRun, ok := resolveLimiter.allow(regionID, time.Now())
-		if !ok {
+		if !resolveLimiter.allow(regionID, time.Now()) {
 			return
 		}
 
@@ -1006,7 +1004,6 @@ func (s *subscriptionClient) handleResolveLockTasks(ctx context.Context) error {
 				zap.Uint32("keyspaceID", keyspaceID),
 				zap.Uint64("regionID", regionID),
 				zap.Uint64("targetTs", targetTs),
-				zap.Time("lastRun", lastRun),
 				zap.Any("state", state),
 				zap.Error(err))
 		}
