@@ -43,14 +43,6 @@ var (
 			Help:      "The number of region in one batch resolved ts event",
 			Buckets:   prometheus.ExponentialBuckets(1, 2, 16),
 		}, []string{"type"})
-	LockResolveLockCounter = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Namespace: "ticdc",
-			Subsystem: "kvclient",
-			Name:      "lock_resolve_lock_count",
-			Help:      "The number of locks found and resolved by lock resolver",
-		}, []string{"status"})
-
 	LogPullerPrewriteCacheRowNum = prometheus.NewGauge(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
@@ -154,7 +146,6 @@ func initLogPullerMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(EventFeedErrorCounter)
 	registry.MustRegister(PullerEventCounter)
 	registry.MustRegister(BatchResolvedEventSize)
-	registry.MustRegister(LockResolveLockCounter)
 	registry.MustRegister(LogPullerPrewriteCacheRowNum)
 	registry.MustRegister(LogPullerMatcherCount)
 	registry.MustRegister(LogPullerResolvedTsLag)

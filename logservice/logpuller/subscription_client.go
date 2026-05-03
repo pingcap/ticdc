@@ -57,9 +57,6 @@ const (
 	resolveLockMinInterval  time.Duration = 10 * time.Second
 	resolveLockTickInterval time.Duration = 2 * time.Second
 	resolveLockFence        time.Duration = 4 * time.Second
-
-	// resolveLastRunGCThreshold is the size threshold to GC resolveLastRun and drop stale entries.
-	resolveLastRunGCThreshold = 1024
 )
 
 var (
@@ -138,8 +135,7 @@ type subscribedSpan struct {
 	// To handle stale lock resolvings.
 	tryResolveLock     func(regionID uint64, state *regionlock.LockedRangeState)
 	staleLocksTargetTs atomic.Uint64
-	resolveLockMu      sync.Mutex
-	resolveLockLastRun map[uint64]time.Time
+	resolveLockLimiter *resolveLockRateLimiter
 
 	lastAdvanceTime atomic.Int64
 
@@ -982,44 +978,21 @@ func (s *subscriptionClient) runResolveLockChecker(ctx context.Context) error {
 	}
 }
 
-func gcResolveLastRunMap(resolveLastRun map[uint64]time.Time, now time.Time) map[uint64]time.Time {
-	if len(resolveLastRun) <= resolveLastRunGCThreshold {
-		return resolveLastRun
-	}
-
-	copied := make(map[uint64]time.Time, len(resolveLastRun))
-	for regionID, lastRun := range resolveLastRun {
-		if now.Sub(lastRun) < resolveLockMinInterval {
-			copied[regionID] = lastRun
-		}
-	}
-	return copied
-}
-
 func (s *subscriptionClient) handleResolveLockTasks(ctx context.Context) error {
-	resolveLastRun := make(map[uint64]time.Time)
+	resolveLimiter := newResolveLockRateLimiter()
 
 	doResolve := func(task resolveLockTask) {
 		keyspaceID := task.keyspaceID
 		regionID := task.regionID
 		state := task.state
 		targetTs := task.targetTs
-		if state == nil {
-			log.Warn("subscription client receives resolve lock task without state",
-				zap.Uint32("keyspaceID", keyspaceID),
-				zap.Uint64("regionID", regionID),
-				zap.Uint64("targetTs", targetTs))
-			return
-		}
 		if state.ResolvedTs.Load() >= targetTs || !state.Initialized.Load() {
 			return
 		}
 
-		lastRun, ok := resolveLastRun[regionID]
-		if ok {
-			if time.Since(lastRun) < resolveLockMinInterval {
-				return
-			}
+		lastRun, ok := resolveLimiter.allow(regionID, time.Now())
+		if !ok {
+			return
 		}
 
 		err := s.lockResolver.Resolve(ctx, keyspaceID, regionID, targetTs)
@@ -1037,7 +1010,7 @@ func (s *subscriptionClient) handleResolveLockTasks(ctx context.Context) error {
 				zap.Any("state", state),
 				zap.Error(err))
 		}
-		resolveLastRun[regionID] = time.Now()
+		resolveLimiter.mark(regionID, time.Now())
 	}
 
 	gcTicker := time.NewTicker(resolveLockMinInterval * 3 / 2)
@@ -1047,7 +1020,7 @@ func (s *subscriptionClient) handleResolveLockTasks(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-gcTicker.C:
-			resolveLastRun = gcResolveLastRunMap(resolveLastRun, time.Now())
+			resolveLimiter.gc(time.Now())
 		case task := <-s.resolveLockTaskCh:
 			doResolve(task)
 		}
@@ -1114,27 +1087,26 @@ func (s *subscriptionClient) newSubscribedSpan(
 		filterLoop: filterLoop,
 		rangeLock:  rangeLock,
 
-		consumeKVEvents:   consumeKVEvents,
-		advanceResolvedTs: advanceResolvedTs,
-		advanceInterval:   advanceInterval,
+		consumeKVEvents:    consumeKVEvents,
+		advanceResolvedTs:  advanceResolvedTs,
+		advanceInterval:    advanceInterval,
+		resolveLockLimiter: newResolveLockRateLimiter(),
 	}
 	rt.initialized.Store(false)
 	rt.resolvedTsUpdated.Store(time.Now().Unix())
 	rt.resolvedTs.Store(startTs)
-	rt.resolveLockLastRun = make(map[uint64]time.Time)
 
 	rt.tryResolveLock = func(regionID uint64, state *regionlock.LockedRangeState) {
 		targetTs := rt.staleLocksTargetTs.Load()
 		if !state.Initialized.Load() || state.ResolvedTs.Load() >= targetTs {
 			return
 		}
-		now := time.Now()
-		if !rt.tryMarkResolveLockRun(regionID, now) {
+		if !rt.resolveLockLimiter.tryMark(regionID, time.Now()) {
 			return
 		}
 		select {
 		case <-s.ctx.Done():
-			rt.unmarkResolveLockRun(regionID)
+			rt.resolveLockLimiter.unmark(regionID)
 		case s.resolveLockTaskCh <- resolveLockTask{
 			keyspaceID: span.KeyspaceID,
 			regionID:   regionID,
@@ -1143,7 +1115,7 @@ func (s *subscriptionClient) newSubscribedSpan(
 		}:
 		// it is ok to ignore resolve lock task when the channel is full
 		default:
-			rt.unmarkResolveLockRun(regionID)
+			rt.resolveLockLimiter.unmark(regionID)
 			metrics.SubscriptionClientResolveLockTaskDropCounter.Inc()
 		}
 	}
@@ -1175,37 +1147,6 @@ func (r *subscribedSpan) resolveStaleLocks(targetTs uint64) {
 	log.Debug("subscription client finds slow locked ranges",
 		zap.Uint64("subscriptionID", uint64(r.subID)),
 		zap.Any("ranges", res))
-}
-
-func (r *subscribedSpan) tryMarkResolveLockRun(regionID uint64, now time.Time) bool {
-	r.resolveLockMu.Lock()
-	defer r.resolveLockMu.Unlock()
-
-	lastRun, ok := r.resolveLockLastRun[regionID]
-	if ok && now.Sub(lastRun) < resolveLockMinInterval {
-		return false
-	}
-
-	if r.resolveLockLastRun == nil {
-		r.resolveLockLastRun = make(map[uint64]time.Time)
-	}
-	r.resolveLockLastRun[regionID] = now
-	if len(r.resolveLockLastRun) <= resolveLastRunGCThreshold {
-		return true
-	}
-	for regionID, lastRun := range r.resolveLockLastRun {
-		if now.Sub(lastRun) >= resolveLockMinInterval {
-			delete(r.resolveLockLastRun, regionID)
-		}
-	}
-	return true
-}
-
-func (r *subscribedSpan) unmarkResolveLockRun(regionID uint64) {
-	r.resolveLockMu.Lock()
-	defer r.resolveLockMu.Unlock()
-
-	delete(r.resolveLockLastRun, regionID)
 }
 
 type errCache struct {

@@ -8308,10 +8308,10 @@
             },
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_kvclient_lock_resolve_lock_count{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (instance, status)",
+              "expr": "sum(rate(ticdc_subscription_client_resolve_lock_task_drop_count{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (instance)",
               "hide": false,
               "interval": "",
-              "legendFormat": "lock {{instance}} {{status}}",
+              "legendFormat": "drop {{instance}}",
               "refId": "C"
             }
           ],

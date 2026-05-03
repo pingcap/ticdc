@@ -23,9 +23,7 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/keyspace"
-	"github.com/pingcap/ticdc/pkg/metrics"
 	tikverr "github.com/tikv/client-go/v2/error"
-	"github.com/tikv/client-go/v2/oracle"
 	"github.com/tikv/client-go/v2/tikv"
 	"github.com/tikv/client-go/v2/tikvrpc"
 	"github.com/tikv/client-go/v2/txnkv"
@@ -45,24 +43,6 @@ func NewLockerResolver() LockResolver {
 }
 
 const scanLockLimit = 1024
-
-var (
-	metricLockResolveFoundCounter    = metrics.LockResolveLockCounter.WithLabelValues("found")
-	metricLockResolveResolvedCounter = metrics.LockResolveLockCounter.WithLabelValues("resolved")
-)
-
-func countExpiredLocks(kvStorage tikv.Storage, locks []*txnkv.Lock) int {
-	expired := 0
-	for _, lock := range locks {
-		if lock.TTL == 0 ||
-			kvStorage.GetOracle().UntilExpired(lock.TxnID, lock.TTL, &oracle.Option{
-				TxnScope: oracle.GlobalTxnScope,
-			}) <= 0 {
-			expired++
-		}
-	}
-	return expired
-}
 
 func (r *resolver) Resolve(ctx context.Context, keyspaceID uint32, regionID uint64, maxVersion uint64) (err error) {
 	var totalLocks []*txnkv.Lock
@@ -160,24 +140,10 @@ func (r *resolver) Resolve(ctx context.Context, keyspaceID uint32, regionID uint
 			locks[i] = txnkv.NewLock(locksInfo[i])
 		}
 		totalLocks = append(totalLocks, locks...)
-		if len(locks) > 0 {
-			metricLockResolveFoundCounter.Add(float64(len(locks)))
-		}
 
-		msBeforeTxnExpired, err1 := kvStorage.GetLockResolver().ResolveLocks(bo, 0, locks)
+		_, err1 := kvStorage.GetLockResolver().ResolveLocks(bo, 0, locks)
 		if err1 != nil {
 			return errors.Trace(err1)
-		}
-		resolvedLockCount := len(locks)
-		expiredLockCount := len(locks)
-		if msBeforeTxnExpired > 0 {
-			// ResolveLocks only returns the shortest remaining TTL in the batch.
-			// Use the scanned lock TTL to keep partial expired batches visible.
-			expiredLockCount = countExpiredLocks(kvStorage, locks)
-			resolvedLockCount = expiredLockCount
-		}
-		if resolvedLockCount > 0 {
-			metricLockResolveResolvedCounter.Add(float64(resolvedLockCount))
 		}
 		if len(locks) < scanLockLimit {
 			key = loc.EndKey
