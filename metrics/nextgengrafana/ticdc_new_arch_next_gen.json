@@ -8292,7 +8292,7 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_subscription_client_resolve_lock_success_count{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (instance)",
+              "expr": "sum(rate(ticdc_subscription_client_resolve_lock_count{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\", status=\"success\"}[1m])) by (instance)",
               "hide": false,
               "interval": "",
               "legendFormat": "resolve {{instance}} success",
@@ -8300,7 +8300,7 @@
             },
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_subscription_client_resolve_lock_failure_count{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (instance)",
+              "expr": "sum(rate(ticdc_subscription_client_resolve_lock_count{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\", status=\"failure\"}[1m])) by (instance)",
               "hide": false,
               "interval": "",
               "legendFormat": "resolve {{instance}} failure",

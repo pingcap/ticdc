@@ -31,7 +31,6 @@ func InitMetrics(registry *prometheus.Registry) {
 	initDispatcherMetrics(registry)
 	initMessagingMetrics(registry)
 	initSinkMetrics(registry)
-	initPullerMetrics(registry)
 	initEventStoreMetrics(registry)
 	initSchemaStoreMetrics(registry)
 	initEventServiceMetrics(registry)

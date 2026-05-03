@@ -73,6 +73,8 @@ var (
 	metricStoreSendRequestErr         = metrics.EventFeedErrorCounter.WithLabelValues("SendRequestToStore")
 	metricKvIsBusyCounter             = metrics.EventFeedErrorCounter.WithLabelValues("KvIsBusy")
 	metricKvCongestedCounter          = metrics.EventFeedErrorCounter.WithLabelValues("KvCongested")
+	metricResolveLockSuccessCounter   = metrics.SubscriptionClientResolveLockCounter.WithLabelValues("success")
+	metricResolveLockFailureCounter   = metrics.SubscriptionClientResolveLockCounter.WithLabelValues("failure")
 
 	metricSubscriptionClientDSChannelSize     = metrics.DynamicStreamEventChanSize.WithLabelValues("event-store")
 	metricSubscriptionClientDSPendingQueueLen = metrics.DynamicStreamPendingQueueLen.WithLabelValues("event-store")
@@ -1022,9 +1024,9 @@ func (s *subscriptionClient) handleResolveLockTasks(ctx context.Context) error {
 
 		err := s.lockResolver.Resolve(ctx, keyspaceID, regionID, targetTs)
 		if err != nil {
-			metrics.SubscriptionClientResolveLockFailureCounter.Inc()
+			metricResolveLockFailureCounter.Inc()
 		} else {
-			metrics.SubscriptionClientResolveLockSuccessCounter.Inc()
+			metricResolveLockSuccessCounter.Inc()
 		}
 		if err != nil {
 			log.Warn("subscription client resolve lock fail",

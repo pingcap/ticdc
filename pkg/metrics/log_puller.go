@@ -14,10 +14,53 @@
 package metrics
 
 import (
+	grpc_prometheus "github.com/grpc-ecosystem/go-grpc-prometheus"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
 var (
+	grpcMetrics = grpc_prometheus.NewClientMetrics()
+
+	EventFeedErrorCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "kvclient",
+			Name:      "event_feed_error_count",
+			Help:      "The number of error return by tikv",
+		}, []string{"type"})
+	PullerEventCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "kvclient",
+			Name:      "pull_event_count",
+			Help:      "event count received by this puller",
+		}, []string{"type"})
+	BatchResolvedEventSize = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "ticdc",
+			Subsystem: "kvclient",
+			Name:      "batch_resolved_event_size",
+			Help:      "The number of region in one batch resolved ts event",
+			Buckets:   prometheus.ExponentialBuckets(1, 2, 16),
+		}, []string{"type"})
+	LockResolveDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "ticdc",
+			Subsystem: "kvclient",
+			Name:      "lock_resolve_duration",
+			Help:      "time of lock resolve in ms",
+			Buckets:   prometheus.ExponentialBuckets(1, 2, 20),
+		},
+		// actions: wait, run.
+		[]string{"type", "action"})
+	LockResolveLockCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "kvclient",
+			Name:      "lock_resolve_lock_count",
+			Help:      "The number of locks found and resolved by lock resolver",
+		}, []string{"status"})
+
 	LogPullerPrewriteCacheRowNum = prometheus.NewGauge(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
@@ -85,20 +128,13 @@ var (
 			Name:      "resolve_lock_task_drop_count",
 			Help:      "The number of resolve lock tasks dropped before being processed",
 		})
-	SubscriptionClientResolveLockSuccessCounter = prometheus.NewCounter(
+	SubscriptionClientResolveLockCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "ticdc",
 			Subsystem: "subscription_client",
-			Name:      "resolve_lock_success_count",
-			Help:      "The number of successful resolve lock executions",
-		})
-	SubscriptionClientResolveLockFailureCounter = prometheus.NewCounter(
-		prometheus.CounterOpts{
-			Namespace: "ticdc",
-			Subsystem: "subscription_client",
-			Name:      "resolve_lock_failure_count",
-			Help:      "The number of failed resolve lock executions",
-		})
+			Name:      "resolve_lock_count",
+			Help:      "The number of resolve lock executions",
+		}, []string{"status"})
 
 	SubscriptionClientRegionEventHandleDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -119,7 +155,17 @@ var (
 		}, []string{"type"})
 )
 
+func GetGlobalGrpcMetrics() *grpc_prometheus.ClientMetrics {
+	return grpcMetrics
+}
+
 func initLogPullerMetrics(registry *prometheus.Registry) {
+	registry.MustRegister(grpcMetrics)
+	registry.MustRegister(EventFeedErrorCounter)
+	registry.MustRegister(PullerEventCounter)
+	registry.MustRegister(BatchResolvedEventSize)
+	registry.MustRegister(LockResolveDuration)
+	registry.MustRegister(LockResolveLockCounter)
 	registry.MustRegister(LogPullerPrewriteCacheRowNum)
 	registry.MustRegister(LogPullerMatcherCount)
 	registry.MustRegister(LogPullerResolvedTsLag)
@@ -128,8 +174,7 @@ func initLogPullerMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(RegionRequestFinishScanDuration)
 	registry.MustRegister(SubscriptionClientSubscribedRegionCount)
 	registry.MustRegister(SubscriptionClientResolveLockTaskDropCounter)
-	registry.MustRegister(SubscriptionClientResolveLockSuccessCounter)
-	registry.MustRegister(SubscriptionClientResolveLockFailureCounter)
+	registry.MustRegister(SubscriptionClientResolveLockCounter)
 	registry.MustRegister(SubscriptionClientRegionEventHandleDuration)
 	registry.MustRegister(SubscriptionClientConsumeKVEventsCallbackDuration)
 }
