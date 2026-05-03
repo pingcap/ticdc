@@ -195,11 +195,31 @@ Generate writes for `wide_table_with_json_primary` and `wide_table_with_json_sec
     -percentage-for-delete 0.05
 ```
 
+### 8. `content_metadata_wide` Workload
+
+Generate write-heavy traffic for a wide content metadata table. This workload biases updates toward the observed hot SQL shapes, and the first three update forms account for about 96% of generated updates.
+
+```bash
+./workload -action write \
+    -database-host 127.0.0.1 \
+    -database-port 4000 \
+    -database-db-name content_bench \
+    -total-row-count 5000000 \
+    -table-count 1 \
+    -workload-type content_metadata_wide \
+    -row-size $((32 * 1024)) \
+    -thread 64 \
+    -batch-size 32 \
+    -percentage-for-update 0.9 \
+    -percentage-for-delete 0
+```
+
 ## Notes
 
 - Ensure the database is properly configured and has the necessary permissions.
 - Adjust the thread and batch-size parameters based on your needs.
 - Use `-batch-in-txn` to wrap each batch in a single explicit transaction (BEGIN/COMMIT).
 - `wide_table_with_json` always generates JSON-like payload data.
+- `content_metadata_wide` keeps the update hot path on large mutable blob/varbinary columns such as `page_image_data`, `raw_image_data`, `image_probe_result`, and `body_data`.
 - For workloads that support partitioned tables (e.g. bank3), set `-partitioned=false` to create non-partitioned tables.
 - `-bank3-partitioned` is deprecated; use `-partitioned`.
