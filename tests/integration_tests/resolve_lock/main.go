@@ -84,7 +84,7 @@ func prepare(sourceDB *sql.DB) error {
 	sqls := []string{
 		"use test;",
 		"create table t1 (a int primary key);",
-		"split table t1 between (0) and (1000) regions 10;",
+		"split table t1 between (0) and (10000) regions 10;",
 	}
 	for _, sql := range sqls {
 		_, err := sourceDB.Exec(sql)
@@ -96,7 +96,7 @@ func prepare(sourceDB *sql.DB) error {
 }
 
 func splitLockedTable(sourceDB *sql.DB) error {
-	_, err := sourceDB.Exec("split table test.t1 between (0) and (1000) regions 20;")
+	_, err := sourceDB.Exec("split table test.t1 between (0) and (20000) regions 20;")
 	return errors.Trace(err)
 }
 
@@ -139,7 +139,7 @@ func addLock(ctx context.Context, cfg *util.Config) error {
 
 	locker := Locker{
 		tableID:   tableID,
-		tableSize: 1000,
+		tableSize: 10000,
 		lockTTL:   10 * time.Second,
 		pdcli:     pdcli,
 		kv:        store.(tikv.Storage),
