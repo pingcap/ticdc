@@ -73,6 +73,8 @@ var (
 	metricStoreSendRequestErr         = metrics.EventFeedErrorCounter.WithLabelValues("SendRequestToStore")
 	metricKvIsBusyCounter             = metrics.EventFeedErrorCounter.WithLabelValues("KvIsBusy")
 	metricKvCongestedCounter          = metrics.EventFeedErrorCounter.WithLabelValues("KvCongested")
+	metricResolveLockSuccessCounter   = metrics.SubscriptionClientResolveLockCounter.WithLabelValues("success")
+	metricResolveLockFailureCounter   = metrics.SubscriptionClientResolveLockCounter.WithLabelValues("failure")
 
 	metricSubscriptionClientDSChannelSize     = metrics.DynamicStreamEventChanSize.WithLabelValues("event-store")
 	metricSubscriptionClientDSPendingQueueLen = metrics.DynamicStreamPendingQueueLen.WithLabelValues("event-store")
@@ -92,7 +94,6 @@ type resolveLockTask struct {
 	regionID   uint64
 	targetTs   uint64
 	state      *regionlock.LockedRangeState
-	create     time.Time
 }
 
 // rangeTask represents a task to subscribe a range span of a table.
@@ -137,6 +138,8 @@ type subscribedSpan struct {
 	// To handle stale lock resolvings.
 	tryResolveLock     func(regionID uint64, state *regionlock.LockedRangeState)
 	staleLocksTargetTs atomic.Uint64
+	resolveLockMu      sync.Mutex
+	resolveLockLastRun map[uint64]time.Time
 
 	lastAdvanceTime atomic.Int64
 
@@ -998,8 +1001,19 @@ func gcResolveLastRunMap(resolveLastRun map[uint64]time.Time, now time.Time) map
 func (s *subscriptionClient) handleResolveLockTasks(ctx context.Context) error {
 	resolveLastRun := make(map[uint64]time.Time)
 
-	doResolve := func(keyspaceID uint32, regionID uint64, state *regionlock.LockedRangeState, targetTs uint64) {
-		if state.ResolvedTs.Load() > targetTs || !state.Initialized.Load() {
+	doResolve := func(task resolveLockTask) {
+		keyspaceID := task.keyspaceID
+		regionID := task.regionID
+		state := task.state
+		targetTs := task.targetTs
+		if state == nil {
+			log.Warn("subscription client receives resolve lock task without state",
+				zap.Uint32("keyspaceID", keyspaceID),
+				zap.Uint64("regionID", regionID),
+				zap.Uint64("targetTs", targetTs))
+			return
+		}
+		if state.ResolvedTs.Load() >= targetTs || !state.Initialized.Load() {
 			return
 		}
 
@@ -1010,7 +1024,13 @@ func (s *subscriptionClient) handleResolveLockTasks(ctx context.Context) error {
 			}
 		}
 
-		if err := s.lockResolver.Resolve(ctx, keyspaceID, regionID, targetTs); err != nil {
+		err := s.lockResolver.Resolve(ctx, keyspaceID, regionID, targetTs)
+		if err != nil {
+			metricResolveLockFailureCounter.Inc()
+		} else {
+			metricResolveLockSuccessCounter.Inc()
+		}
+		if err != nil {
 			log.Warn("subscription client resolve lock fail",
 				zap.Uint32("keyspaceID", keyspaceID),
 				zap.Uint64("regionID", regionID),
@@ -1031,7 +1051,7 @@ func (s *subscriptionClient) handleResolveLockTasks(ctx context.Context) error {
 		case <-gcTicker.C:
 			resolveLastRun = gcResolveLastRunMap(resolveLastRun, time.Now())
 		case task := <-s.resolveLockTaskCh:
-			doResolve(task.keyspaceID, task.regionID, task.state, task.targetTs)
+			doResolve(task)
 		}
 	}
 }
@@ -1103,23 +1123,30 @@ func (s *subscriptionClient) newSubscribedSpan(
 	rt.initialized.Store(false)
 	rt.resolvedTsUpdated.Store(time.Now().Unix())
 	rt.resolvedTs.Store(startTs)
+	rt.resolveLockLastRun = make(map[uint64]time.Time)
 
 	rt.tryResolveLock = func(regionID uint64, state *regionlock.LockedRangeState) {
 		targetTs := rt.staleLocksTargetTs.Load()
-		if state.ResolvedTs.Load() < targetTs && state.Initialized.Load() {
-			select {
-			case <-s.ctx.Done():
-			case s.resolveLockTaskCh <- resolveLockTask{
-				keyspaceID: span.KeyspaceID,
-				regionID:   regionID,
-				targetTs:   targetTs,
-				state:      state,
-				create:     time.Now(),
-			}:
-			// it is ok to ignore resolve lock task when the channel is full
-			default:
-				metrics.SubscriptionClientResolveLockTaskDropCounter.Inc()
-			}
+		if !state.Initialized.Load() || state.ResolvedTs.Load() >= targetTs {
+			return
+		}
+		now := time.Now()
+		if !rt.tryMarkResolveLockRun(regionID, now) {
+			return
+		}
+		select {
+		case <-s.ctx.Done():
+			rt.unmarkResolveLockRun(regionID)
+		case s.resolveLockTaskCh <- resolveLockTask{
+			keyspaceID: span.KeyspaceID,
+			regionID:   regionID,
+			targetTs:   targetTs,
+			state:      state,
+		}:
+		// it is ok to ignore resolve lock task when the channel is full
+		default:
+			rt.unmarkResolveLockRun(regionID)
+			metrics.SubscriptionClientResolveLockTaskDropCounter.Inc()
 		}
 	}
 	return rt
@@ -1150,6 +1177,37 @@ func (r *subscribedSpan) resolveStaleLocks(targetTs uint64) {
 	log.Debug("subscription client finds slow locked ranges",
 		zap.Uint64("subscriptionID", uint64(r.subID)),
 		zap.Any("ranges", res))
+}
+
+func (r *subscribedSpan) tryMarkResolveLockRun(regionID uint64, now time.Time) bool {
+	r.resolveLockMu.Lock()
+	defer r.resolveLockMu.Unlock()
+
+	lastRun, ok := r.resolveLockLastRun[regionID]
+	if ok && now.Sub(lastRun) < resolveLockMinInterval {
+		return false
+	}
+
+	if r.resolveLockLastRun == nil {
+		r.resolveLockLastRun = make(map[uint64]time.Time)
+	}
+	r.resolveLockLastRun[regionID] = now
+	if len(r.resolveLockLastRun) <= resolveLastRunGCThreshold {
+		return true
+	}
+	for regionID, lastRun := range r.resolveLockLastRun {
+		if now.Sub(lastRun) >= resolveLockMinInterval {
+			delete(r.resolveLockLastRun, regionID)
+		}
+	}
+	return true
+}
+
+func (r *subscribedSpan) unmarkResolveLockRun(regionID uint64) {
+	r.resolveLockMu.Lock()
+	defer r.resolveLockMu.Unlock()
+
+	delete(r.resolveLockLastRun, regionID)
 }
 
 type errCache struct {

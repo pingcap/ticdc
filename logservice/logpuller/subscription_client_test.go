@@ -16,6 +16,7 @@ package logpuller
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -36,6 +37,20 @@ import (
 	"github.com/tikv/client-go/v2/testutils"
 	"github.com/tikv/client-go/v2/tikv"
 )
+
+type mockLockResolver struct {
+	calls atomic.Int32
+}
+
+func (r *mockLockResolver) Resolve(
+	_ context.Context,
+	_ uint32,
+	_ uint64,
+	_ uint64,
+) error {
+	r.calls.Add(1)
+	return nil
+}
 
 func TestGenerateResolveLockTask(t *testing.T) {
 	client := &subscriptionClient{
@@ -67,6 +82,14 @@ func TestGenerateResolveLockTask(t *testing.T) {
 		require.True(t, false, "must get a resolve lock task")
 	}
 
+	// The same region should not be enqueued repeatedly within resolveLockMinInterval.
+	span.resolveStaleLocks(200)
+	select {
+	case <-client.resolveLockTaskCh:
+		require.True(t, false, "shouldn't get a duplicate resolve lock task")
+	case <-time.After(100 * time.Millisecond):
+	}
+
 	worker := &regionRequestWorker{
 		requestCache: &requestCache{},
 	}
@@ -96,12 +119,77 @@ func TestGenerateResolveLockTask(t *testing.T) {
 	}
 	select {
 	case <-client.resolveLockTaskCh:
+		require.True(t, false, "shouldn't get a duplicate resolve lock task")
 	case <-time.After(100 * time.Millisecond):
-		require.True(t, false, "must get a resolve lock task")
 	}
 	require.Equal(t, 0, len(client.resolveLockTaskCh))
 
 	close(client.resolveLockTaskCh)
+}
+
+func TestHandleResolveLockTasksMetrics(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	resolver := &mockLockResolver{}
+	client := &subscriptionClient{
+		lockResolver:      resolver,
+		resolveLockTaskCh: make(chan resolveLockTask, 4),
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- client.handleResolveLockTasks(ctx)
+	}()
+
+	state := &regionlock.LockedRangeState{}
+	state.Initialized.Store(true)
+	state.ResolvedTs.Store(100)
+
+	successBefore := testutil.ToFloat64(
+		metricResolveLockSuccessCounter)
+
+	client.resolveLockTaskCh <- resolveLockTask{
+		keyspaceID: 1,
+		regionID:   1,
+		targetTs:   200,
+		state:      state,
+	}
+	require.Eventually(t, func() bool {
+		return resolver.calls.Load() == 1 &&
+			testutil.ToFloat64(metricResolveLockSuccessCounter) >= successBefore+1
+	}, time.Second, 10*time.Millisecond)
+
+	client.resolveLockTaskCh <- resolveLockTask{
+		keyspaceID: 1,
+		regionID:   1,
+		targetTs:   300,
+		state:      state,
+	}
+	require.Eventually(t, func() bool {
+		return len(client.resolveLockTaskCh) == 0
+	}, time.Second, 10*time.Millisecond)
+	require.Equal(t, int32(1), resolver.calls.Load())
+
+	state.ResolvedTs.Store(300)
+	client.resolveLockTaskCh <- resolveLockTask{
+		keyspaceID: 1,
+		regionID:   2,
+		targetTs:   300,
+		state:      state,
+	}
+	require.Eventually(t, func() bool {
+		return len(client.resolveLockTaskCh) == 0
+	}, time.Second, 10*time.Millisecond)
+	require.Equal(t, int32(1), resolver.calls.Load())
+
+	cancel()
+	select {
+	case err := <-errCh:
+		require.Equal(t, context.Canceled, errors.Cause(err))
+	case <-time.After(time.Second):
+		t.Fatal("resolve lock task handler did not exit")
+	}
 }
 
 func TestResolveLockTaskDroppedWhenChannelFull(t *testing.T) {
