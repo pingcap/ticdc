@@ -1,0 +1,5 @@
+[scheduler]
+enable-table-across-nodes=false
+
+[sink.csv]
+include-commit-ts = true
