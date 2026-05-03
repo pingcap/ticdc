@@ -37,25 +37,6 @@ func newResolveLockRateLimiter() *resolveLockRateLimiter {
 	}
 }
 
-func (l *resolveLockRateLimiter) allow(regionID uint64, now time.Time) bool {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	lastRun, ok := l.lastRun[regionID]
-	if ok && now.Sub(lastRun) < l.minInterval {
-		return false
-	}
-	return true
-}
-
-func (l *resolveLockRateLimiter) mark(regionID uint64, now time.Time) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	l.lastRun[regionID] = now
-	l.gcLocked(now)
-}
-
 func (l *resolveLockRateLimiter) tryMark(regionID uint64, now time.Time) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -64,6 +45,7 @@ func (l *resolveLockRateLimiter) tryMark(regionID uint64, now time.Time) bool {
 	if ok && now.Sub(lastRun) < l.minInterval {
 		return false
 	}
+
 	l.lastRun[regionID] = now
 	l.gcLocked(now)
 	return true

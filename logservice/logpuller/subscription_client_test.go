@@ -99,11 +99,6 @@ func TestGenerateResolveLockTask(t *testing.T) {
 	state := newRegionFeedState(regionInfo{lockedRangeState: res.LockedRangeState, subscribedSpan: span}, 1, worker)
 	span.resolveStaleLocks(200)
 	select {
-	case task := <-client.resolveLockTaskCh:
-		require.Equal(t, uint64(1), task.regionID)
-	case <-time.After(100 * time.Millisecond):
-	}
-	select {
 	case <-client.resolveLockTaskCh:
 		require.True(t, false, "shouldn't get a resolve lock task")
 	case <-time.After(100 * time.Millisecond):
@@ -113,10 +108,12 @@ func TestGenerateResolveLockTask(t *testing.T) {
 	state.setInitialized()
 	span.resolveStaleLocks(200)
 	select {
-	case <-client.resolveLockTaskCh:
+	case task := <-client.resolveLockTaskCh:
+		require.Equal(t, uint64(2), task.regionID)
 	case <-time.After(100 * time.Millisecond):
 		require.True(t, false, "must get a resolve lock task")
 	}
+	span.resolveStaleLocks(200)
 	select {
 	case <-client.resolveLockTaskCh:
 		require.True(t, false, "shouldn't get a duplicate resolve lock task")
@@ -167,9 +164,8 @@ func TestHandleResolveLockTasksMetrics(t *testing.T) {
 		state:      state,
 	}
 	require.Eventually(t, func() bool {
-		return len(client.resolveLockTaskCh) == 0
+		return resolver.calls.Load() == 2
 	}, time.Second, 10*time.Millisecond)
-	require.Equal(t, int32(1), resolver.calls.Load())
 
 	state.ResolvedTs.Store(300)
 	client.resolveLockTaskCh <- resolveLockTask{
@@ -179,9 +175,8 @@ func TestHandleResolveLockTasksMetrics(t *testing.T) {
 		state:      state,
 	}
 	require.Eventually(t, func() bool {
-		return len(client.resolveLockTaskCh) == 0
+		return resolver.calls.Load() == 3
 	}, time.Second, 10*time.Millisecond)
-	require.Equal(t, int32(1), resolver.calls.Load())
 
 	cancel()
 	select {

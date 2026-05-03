@@ -979,19 +979,11 @@ func (s *subscriptionClient) runResolveLockChecker(ctx context.Context) error {
 }
 
 func (s *subscriptionClient) handleResolveLockTasks(ctx context.Context) error {
-	resolveLimiter := newResolveLockRateLimiter()
-
 	doResolve := func(task resolveLockTask) {
 		keyspaceID := task.keyspaceID
 		regionID := task.regionID
 		state := task.state
 		targetTs := task.targetTs
-		if state.ResolvedTs.Load() >= targetTs || !state.Initialized.Load() {
-			return
-		}
-		if !resolveLimiter.allow(regionID, time.Now()) {
-			return
-		}
 
 		err := s.lockResolver.Resolve(ctx, keyspaceID, regionID, targetTs)
 		if err != nil {
@@ -1007,17 +999,12 @@ func (s *subscriptionClient) handleResolveLockTasks(ctx context.Context) error {
 				zap.Any("state", state),
 				zap.Error(err))
 		}
-		resolveLimiter.mark(regionID, time.Now())
 	}
 
-	gcTicker := time.NewTicker(resolveLockMinInterval * 3 / 2)
-	defer gcTicker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-gcTicker.C:
-			resolveLimiter.gc(time.Now())
 		case task := <-s.resolveLockTaskCh:
 			doResolve(task)
 		}

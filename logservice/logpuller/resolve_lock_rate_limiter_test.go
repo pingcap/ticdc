@@ -20,6 +20,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestResolveLockRateLimiterTryMark(t *testing.T) {
+	now := time.Now()
+	limiter := newResolveLockRateLimiter()
+
+	require.True(t, limiter.tryMark(1, now))
+	require.False(t, limiter.tryMark(1, now.Add(resolveLockMinInterval/2)))
+	require.True(t, limiter.tryMark(1, now.Add(resolveLockMinInterval)))
+}
+
 func TestResolveLockRateLimiterGC(t *testing.T) {
 	now := time.Now()
 	limiter := newResolveLockRateLimiter()
@@ -29,7 +38,7 @@ func TestResolveLockRateLimiterGC(t *testing.T) {
 		if i < keep {
 			lastRunTime = now.Add(-resolveLockMinInterval / 2)
 		}
-		limiter.mark(uint64(i), lastRunTime)
+		limiter.lastRun[uint64(i)] = lastRunTime
 	}
 
 	limiter.gc(now)
