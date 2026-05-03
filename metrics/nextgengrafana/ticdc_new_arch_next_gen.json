@@ -8249,7 +8249,7 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "Resolve lock execution rate, task drop rate, and the number of locks found/resolved by the resolver.",
+          "description": "Resolve lock execution and task drop rate.",
           "fieldConfig": {
             "defaults": {},
             "overrides": []
@@ -8295,7 +8295,7 @@
               "expr": "sum(rate(ticdc_subscription_client_resolve_lock_count{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\", status=\"success\"}[1m])) by (instance)",
               "hide": false,
               "interval": "",
-              "legendFormat": "resolve {{instance}} success",
+              "legendFormat": "{{instance}}-success",
               "refId": "A"
             },
             {
@@ -8303,7 +8303,7 @@
               "expr": "sum(rate(ticdc_subscription_client_resolve_lock_count{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\", status=\"failure\"}[1m])) by (instance)",
               "hide": false,
               "interval": "",
-              "legendFormat": "resolve {{instance}} failure",
+              "legendFormat": "{{instance}}-failure",
               "refId": "B"
             },
             {
@@ -8311,24 +8311,8 @@
               "expr": "sum(rate(ticdc_subscription_client_resolve_lock_task_drop_count{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (instance)",
               "hide": false,
               "interval": "",
-              "legendFormat": "drop {{instance}}",
+              "legendFormat": "{{instance}}-drop",
               "refId": "C"
-            },
-            {
-              "exemplar": true,
-              "expr": "sum(rate(ticdc_subscription_client_resolve_lock_processed_lock_count{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\", status=\"found\"}[1m])) by (instance)",
-              "hide": false,
-              "interval": "",
-              "legendFormat": "lock {{instance}} found",
-              "refId": "D"
-            },
-            {
-              "exemplar": true,
-              "expr": "sum(rate(ticdc_subscription_client_resolve_lock_processed_lock_count{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\", status=\"resolved\"}[1m])) by (instance)",
-              "hide": false,
-              "interval": "",
-              "legendFormat": "lock {{instance}} resolved",
-              "refId": "E"
             }
           ],
           "thresholds": [],
@@ -8336,6 +8320,105 @@
           "timeRegions": [],
           "timeShift": null,
           "title": "Resolve Lock / s",
+          "tooltip": {
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "format": "ops",
+              "logBase": 1,
+              "min": "0",
+              "show": true
+            },
+            {
+              "format": "short",
+              "logBase": 1,
+              "show": false
+            }
+          ],
+          "yaxis": {
+            "align": false
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "The number of locks found and resolved by resolve lock.",
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          },
+          "fill": 1,
+          "fillGradient": 0,
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 41
+          },
+          "hiddenSeries": false,
+          "id": 22361,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "max": true,
+            "min": false,
+            "show": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "nullPointMode": "null",
+          "options": {
+            "alertThreshold": true
+          },
+          "percentage": false,
+          "pluginVersion": "7.5.17",
+          "pointradius": 2,
+          "points": false,
+          "renderer": "flot",
+          "seriesOverrides": [],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "exemplar": true,
+              "expr": "sum(rate(ticdc_subscription_client_resolve_lock_processed_lock_count{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\", status=\"found\"}[1m])) by (instance)",
+              "hide": false,
+              "interval": "",
+              "legendFormat": "lock {{instance}} found",
+              "refId": "A"
+            },
+            {
+              "exemplar": true,
+              "expr": "sum(rate(ticdc_subscription_client_resolve_lock_processed_lock_count{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", instance=~\"$ticdc_instance\", status=\"resolved\"}[1m])) by (instance)",
+              "hide": false,
+              "interval": "",
+              "legendFormat": "lock {{instance}} resolved",
+              "refId": "B"
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "Resolve Lock Processed Locks / s",
           "tooltip": {
             "shared": true,
             "sort": 0,
