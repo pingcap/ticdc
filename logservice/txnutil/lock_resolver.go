@@ -70,9 +70,6 @@ func (r *resolver) Resolve(ctx context.Context, keyspaceID uint32, regionID uint
 	start := time.Now()
 
 	defer func() {
-		metrics.LockResolveDuration.
-			WithLabelValues("txn_resolver", "run").
-			Observe(float64(time.Since(start)) / float64(time.Millisecond))
 		// Only log when there are locks or error to avoid log flooding.
 		if len(totalLocks) != 0 || err != nil {
 			cost := time.Since(start)

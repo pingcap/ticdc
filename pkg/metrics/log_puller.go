@@ -43,16 +43,6 @@ var (
 			Help:      "The number of region in one batch resolved ts event",
 			Buckets:   prometheus.ExponentialBuckets(1, 2, 16),
 		}, []string{"type"})
-	LockResolveDuration = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Namespace: "ticdc",
-			Subsystem: "kvclient",
-			Name:      "lock_resolve_duration",
-			Help:      "time of lock resolve in ms",
-			Buckets:   prometheus.ExponentialBuckets(1, 2, 20),
-		},
-		// actions: wait, run.
-		[]string{"type", "action"})
 	LockResolveLockCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "ticdc",
@@ -164,7 +154,6 @@ func initLogPullerMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(EventFeedErrorCounter)
 	registry.MustRegister(PullerEventCounter)
 	registry.MustRegister(BatchResolvedEventSize)
-	registry.MustRegister(LockResolveDuration)
 	registry.MustRegister(LockResolveLockCounter)
 	registry.MustRegister(LogPullerPrewriteCacheRowNum)
 	registry.MustRegister(LogPullerMatcherCount)
