@@ -8402,7 +8402,7 @@
               "expr": "sum(rate(ticdc_subscription_client_resolve_lock_processed_lock_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\", status=\"found\"}[1m])) by (instance)",
               "hide": false,
               "interval": "",
-              "legendFormat": "lock {{instance}} found",
+              "legendFormat": "{{instance}}-found",
               "refId": "A"
             },
             {
@@ -8410,7 +8410,7 @@
               "expr": "sum(rate(ticdc_subscription_client_resolve_lock_processed_lock_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\", status=\"resolved\"}[1m])) by (instance)",
               "hide": false,
               "interval": "",
-              "legendFormat": "lock {{instance}} resolved",
+              "legendFormat": "{{instance}}-resolved",
               "refId": "B"
             }
           ],
