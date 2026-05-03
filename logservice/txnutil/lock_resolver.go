@@ -76,10 +76,14 @@ func (r *resolver) Resolve(ctx context.Context, keyspaceID uint32, regionID uint
 		// Only log when there are locks or error to avoid log flooding.
 		if len(totalLocks) != 0 || err != nil {
 			cost := time.Since(start)
+			locks := totalLocks
+			if len(locks) > 5 {
+				locks = locks[:5]
+			}
 			log.Debug("resolve lock finishes",
 				zap.Uint64("regionID", regionID),
 				zap.Int("lockCount", len(totalLocks)),
-				zap.Any("locks", totalLocks),
+				zap.Any("sampleLocks", locks),
 				zap.Uint64("maxVersion", maxVersion),
 				zap.Duration("duration", cost),
 				zap.Error(err))
