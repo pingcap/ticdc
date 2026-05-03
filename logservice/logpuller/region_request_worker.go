@@ -61,6 +61,25 @@ type regionRequestWorker struct {
 	}
 }
 
+func (s *regionRequestWorker) runtimeRegistry() *regionRuntimeRegistry {
+	if s.client == nil {
+		return nil
+	}
+	return s.client.regionRuntimeRegistry
+}
+
+func (s *regionRequestWorker) markRegionRuntimeEnqueued(region regionInfo, now time.Time) {
+	if registry := s.runtimeRegistry(); registry != nil && region.runtimeKey.isValid() {
+		registry.setRequestEnqueueTime(region.runtimeKey, now)
+	}
+}
+
+func (s *regionRequestWorker) markRegionRuntimeSent(region regionInfo, now time.Time) {
+	if registry := s.runtimeRegistry(); registry != nil && region.runtimeKey.isValid() {
+		registry.markWaitInitialized(region.runtimeKey, s.workerID, now)
+	}
+}
+
 func newRegionRequestWorker(
 	ctx context.Context,
 	client *subscriptionClient,
@@ -435,6 +454,7 @@ func (s *regionRequestWorker) processRegionSendTask(
 			// sentRequests visible in the same order and avoids leaving stale
 			// requests in cleanup.
 			s.requestCache.markSent(regionReq)
+			s.markRegionRuntimeSent(region, time.Now())
 			if err := doSend(s.createRegionRequest(region)); err != nil {
 				state.markStopped(err)
 				return err
@@ -515,7 +535,11 @@ func (s *regionRequestWorker) clearRegionStates() map[SubscriptionID]regionFeedS
 // add adds a region request to the worker's cache
 // It blocks if the cache is full until there's space or ctx is cancelled
 func (s *regionRequestWorker) add(ctx context.Context, region regionInfo, force bool) (bool, error) {
-	return s.requestCache.add(ctx, region, force)
+	ok, err := s.requestCache.add(ctx, region, force)
+	if ok && err == nil {
+		s.markRegionRuntimeEnqueued(region, time.Now())
+	}
+	return ok, err
 }
 
 func (s *regionRequestWorker) clearPendingRegions() []regionInfo {
