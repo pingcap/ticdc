@@ -10,6 +10,29 @@ WORK_DIR=$OUT_DIR/$TEST_NAME
 CDC_BINARY=cdc.test
 SINK_TYPE=$1
 
+function skip_if_not_tidb_8_5() {
+	local tidbReleaseVersion
+	tidbReleaseVersion=$(get_tidb_release_version || true)
+	if [ -z "$tidbReleaseVersion" ]; then
+		echo "[$(date)] failed to parse TiDB release version, continue test case $TEST_NAME"
+		return
+	fi
+
+	local versionTriplet
+	if ! versionTriplet=$(normalize_tidb_semver_triplet "$tidbReleaseVersion"); then
+		echo "[$(date)] failed to normalize TiDB release version ${tidbReleaseVersion}, continue test case $TEST_NAME"
+		return
+	fi
+
+	local major minor patch
+	read -r major minor patch <<<"$versionTriplet"
+	if [ "$major" != "8" ] || [ "$minor" != "5" ]; then
+		stop_tidb_cluster
+		echo "[$(date)] <<<<<< skip test case $TEST_NAME, TiDB version ${tidbReleaseVersion} is not in 8.5.x >>>>>>"
+		exit 0
+	fi
+}
+
 function run() {
 	# Only meaningful for MySQL/TiDB sink.
 	if [ "$SINK_TYPE" != "mysql" ]; then
@@ -19,6 +42,7 @@ function run() {
 	rm -rf $WORK_DIR && mkdir -p $WORK_DIR
 
 	start_tidb_cluster --workdir $WORK_DIR
+	skip_if_not_tidb_8_5
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
 
 	UP_SINK_URI="mysql://root@${UP_TIDB_HOST}:${UP_TIDB_PORT}/"
