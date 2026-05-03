@@ -178,6 +178,9 @@ func (m *mockMaintainerManager) handleMessage(msg *messaging.TargetMessage) {
 				m.sendMessages(response)
 			}
 		}
+	case messaging.TypeSetDispatcherDrainTargetRequest:
+		// mock maintainer manager does not emulate dispatcher scheduling.
+		// this command is accepted and ignored for coordinator tests.
 	}
 }
 
@@ -198,7 +201,8 @@ func (m *mockMaintainerManager) recvMessages(ctx context.Context, msg *messaging
 	// receive message from coordinator
 	case messaging.TypeAddMaintainerRequest, messaging.TypeRemoveMaintainerRequest:
 		fallthrough
-	case messaging.TypeCoordinatorBootstrapRequest:
+	case messaging.TypeCoordinatorBootstrapRequest,
+		messaging.TypeSetDispatcherDrainTargetRequest:
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
