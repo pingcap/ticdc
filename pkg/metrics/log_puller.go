@@ -117,6 +117,13 @@ var (
 			Name:      "resolve_lock_count",
 			Help:      "The number of resolve lock executions",
 		}, []string{"status"})
+	SubscriptionClientResolveLockProcessedLockCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "subscription_client",
+			Name:      "resolve_lock_processed_lock_count",
+			Help:      "The number of locks found or resolved by resolve lock",
+		}, []string{"status"})
 
 	SubscriptionClientRegionEventHandleDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -155,6 +162,7 @@ func initLogPullerMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(SubscriptionClientSubscribedRegionCount)
 	registry.MustRegister(SubscriptionClientResolveLockTaskDropCounter)
 	registry.MustRegister(SubscriptionClientResolveLockCounter)
+	registry.MustRegister(SubscriptionClientResolveLockProcessedLockCounter)
 	registry.MustRegister(SubscriptionClientRegionEventHandleDuration)
 	registry.MustRegister(SubscriptionClientConsumeKVEventsCallbackDuration)
 }

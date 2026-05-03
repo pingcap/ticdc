@@ -8249,7 +8249,7 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "Resolve lock execution rate and the number of locks found/resolved by the resolver.",
+          "description": "Resolve lock execution rate, task drop rate, and the number of locks found/resolved by the resolver.",
           "fieldConfig": {
             "defaults": {},
             "overrides": []
@@ -8313,6 +8313,22 @@
               "interval": "",
               "legendFormat": "drop {{instance}}",
               "refId": "C"
+            },
+            {
+              "exemplar": true,
+              "expr": "sum(rate(ticdc_subscription_client_resolve_lock_processed_lock_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\", status=\"found\"}[1m])) by (instance)",
+              "hide": false,
+              "interval": "",
+              "legendFormat": "lock {{instance}} found",
+              "refId": "D"
+            },
+            {
+              "exemplar": true,
+              "expr": "sum(rate(ticdc_subscription_client_resolve_lock_processed_lock_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\", status=\"resolved\"}[1m])) by (instance)",
+              "hide": false,
+              "interval": "",
+              "legendFormat": "lock {{instance}} resolved",
+              "refId": "E"
             }
           ],
           "thresholds": [],
