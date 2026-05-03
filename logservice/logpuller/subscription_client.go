@@ -62,11 +62,6 @@ const (
 	resolveLastRunGCThreshold = 1024
 )
 
-const (
-	resolveLockMetricSuccess = "success"
-	resolveLockMetricFailed  = "failed"
-)
-
 var (
 	metricFeedNotLeaderCounter        = metrics.EventFeedErrorCounter.WithLabelValues("NotLeader")
 	metricFeedEpochNotMatchCounter    = metrics.EventFeedErrorCounter.WithLabelValues("EpochNotMatch")
@@ -1025,20 +1020,12 @@ func (s *subscriptionClient) handleResolveLockTasks(ctx context.Context) error {
 			}
 		}
 
-		if s.lockResolver == nil {
-			metrics.SubscriptionClientResolveLockCounter.WithLabelValues(resolveLockMetricFailed).Inc()
-			log.Warn("subscription client lock resolver is nil",
-				zap.Uint32("keyspaceID", keyspaceID),
-				zap.Uint64("regionID", regionID),
-				zap.Uint64("targetTs", targetTs))
-			return
-		}
 		err := s.lockResolver.Resolve(ctx, keyspaceID, regionID, targetTs)
-		status := resolveLockMetricSuccess
 		if err != nil {
-			status = resolveLockMetricFailed
+			metrics.SubscriptionClientResolveLockFailureCounter.Inc()
+		} else {
+			metrics.SubscriptionClientResolveLockSuccessCounter.Inc()
 		}
-		metrics.SubscriptionClientResolveLockCounter.WithLabelValues(status).Inc()
 		if err != nil {
 			log.Warn("subscription client resolve lock fail",
 				zap.Uint32("keyspaceID", keyspaceID),
@@ -1140,20 +1127,21 @@ func (s *subscriptionClient) newSubscribedSpan(
 			return
 		}
 		now := time.Now()
-		if !rt.shouldRunResolveLock(regionID, now) {
+		if !rt.tryMarkResolveLockRun(regionID, now) {
 			return
 		}
 		select {
 		case <-s.ctx.Done():
+			rt.unmarkResolveLockRun(regionID)
 		case s.resolveLockTaskCh <- resolveLockTask{
 			keyspaceID: span.KeyspaceID,
 			regionID:   regionID,
 			targetTs:   targetTs,
 			state:      state,
 		}:
-			rt.markResolveLockRun(regionID, now)
 		// it is ok to ignore resolve lock task when the channel is full
 		default:
+			rt.unmarkResolveLockRun(regionID)
 			metrics.SubscriptionClientResolveLockTaskDropCounter.Inc()
 		}
 	}
@@ -1187,30 +1175,35 @@ func (r *subscribedSpan) resolveStaleLocks(targetTs uint64) {
 		zap.Any("ranges", res))
 }
 
-func (r *subscribedSpan) shouldRunResolveLock(regionID uint64, now time.Time) bool {
+func (r *subscribedSpan) tryMarkResolveLockRun(regionID uint64, now time.Time) bool {
 	r.resolveLockMu.Lock()
 	defer r.resolveLockMu.Unlock()
 
 	lastRun, ok := r.resolveLockLastRun[regionID]
-	return !ok || now.Sub(lastRun) >= resolveLockMinInterval
-}
-
-func (r *subscribedSpan) markResolveLockRun(regionID uint64, now time.Time) {
-	r.resolveLockMu.Lock()
-	defer r.resolveLockMu.Unlock()
+	if ok && now.Sub(lastRun) < resolveLockMinInterval {
+		return false
+	}
 
 	if r.resolveLockLastRun == nil {
 		r.resolveLockLastRun = make(map[uint64]time.Time)
 	}
 	r.resolveLockLastRun[regionID] = now
 	if len(r.resolveLockLastRun) <= resolveLastRunGCThreshold {
-		return
+		return true
 	}
 	for regionID, lastRun := range r.resolveLockLastRun {
 		if now.Sub(lastRun) >= resolveLockMinInterval {
 			delete(r.resolveLockLastRun, regionID)
 		}
 	}
+	return true
+}
+
+func (r *subscribedSpan) unmarkResolveLockRun(regionID uint64) {
+	r.resolveLockMu.Lock()
+	defer r.resolveLockMu.Unlock()
+
+	delete(r.resolveLockLastRun, regionID)
 }
 
 type errCache struct {

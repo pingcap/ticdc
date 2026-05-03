@@ -147,7 +147,7 @@ func TestHandleResolveLockTasksMetrics(t *testing.T) {
 	state.ResolvedTs.Store(100)
 
 	successBefore := testutil.ToFloat64(
-		metrics.SubscriptionClientResolveLockCounter.WithLabelValues(resolveLockMetricSuccess))
+		metrics.SubscriptionClientResolveLockSuccessCounter)
 
 	client.resolveLockTaskCh <- resolveLockTask{
 		keyspaceID: 1,
@@ -157,8 +157,7 @@ func TestHandleResolveLockTasksMetrics(t *testing.T) {
 	}
 	require.Eventually(t, func() bool {
 		return resolver.calls.Load() == 1 &&
-			testutil.ToFloat64(metrics.SubscriptionClientResolveLockCounter.
-				WithLabelValues(resolveLockMetricSuccess)) >= successBefore+1
+			testutil.ToFloat64(metrics.SubscriptionClientResolveLockSuccessCounter) >= successBefore+1
 	}, time.Second, 10*time.Millisecond)
 
 	client.resolveLockTaskCh <- resolveLockTask{

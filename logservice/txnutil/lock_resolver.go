@@ -46,17 +46,10 @@ func NewLockerResolver() LockResolver {
 
 const scanLockLimit = 1024
 
-const (
-	lockResolveMetricFound    = "found"
-	lockResolveMetricResolved = "resolved"
+var (
+	metricLockResolveFoundCounter    = metrics.LockResolveLockCounter.WithLabelValues("found")
+	metricLockResolveResolvedCounter = metrics.LockResolveLockCounter.WithLabelValues("resolved")
 )
-
-func recordLockResolveLockCount(status string, count int) {
-	if count <= 0 {
-		return
-	}
-	metrics.LockResolveLockCounter.WithLabelValues(status).Add(float64(count))
-}
 
 func countExpiredLocks(kvStorage tikv.Storage, locks []*txnkv.Lock) int {
 	expired := 0
@@ -93,7 +86,6 @@ func (r *resolver) Resolve(ctx context.Context, keyspaceID uint32, regionID uint
 		}
 	}()
 
-	// TODO test whether this function will kill active transaction
 	req := tikvrpc.NewRequest(tikvrpc.CmdScanLock, &kvrpcpb.ScanLockRequest{
 		MaxVersion: maxVersion,
 		Limit:      scanLockLimit,
@@ -115,7 +107,7 @@ func (r *resolver) Resolve(ctx context.Context, keyspaceID uint32, regionID uint
 	var loc *tikv.KeyLocation
 	var key []byte
 	var endKey []byte
-	flushRegion := func() error {
+	reloadRegion := func() error {
 		var err error
 		loc, err = kvStorage.GetRegionCache().LocateRegionByID(bo, regionID)
 		if err != nil {
@@ -125,7 +117,7 @@ func (r *resolver) Resolve(ctx context.Context, keyspaceID uint32, regionID uint
 		endKey = loc.EndKey
 		return nil
 	}
-	if err = flushRegion(); err != nil {
+	if err = reloadRegion(); err != nil {
 		return errors.Trace(err)
 	}
 	for {
@@ -149,7 +141,7 @@ func (r *resolver) Resolve(ctx context.Context, keyspaceID uint32, regionID uint
 			if err != nil {
 				return errors.Trace(err)
 			}
-			if err := flushRegion(); err != nil {
+			if err := reloadRegion(); err != nil {
 				return errors.Trace(err)
 			}
 			continue
@@ -167,7 +159,9 @@ func (r *resolver) Resolve(ctx context.Context, keyspaceID uint32, regionID uint
 			locks[i] = txnkv.NewLock(locksInfo[i])
 		}
 		totalLocks = append(totalLocks, locks...)
-		recordLockResolveLockCount(lockResolveMetricFound, len(locks))
+		if len(locks) > 0 {
+			metricLockResolveFoundCounter.Add(float64(len(locks)))
+		}
 
 		msBeforeTxnExpired, err1 := kvStorage.GetLockResolver().ResolveLocks(bo, 0, locks)
 		if err1 != nil {
@@ -175,11 +169,13 @@ func (r *resolver) Resolve(ctx context.Context, keyspaceID uint32, regionID uint
 		}
 		resolvedLockCount := len(locks)
 		if msBeforeTxnExpired > 0 {
-			// ResolveLocks only reports remaining TTL, so use expired locks as the
-			// best available lower bound when a batch is only partially resolved.
+			// ResolveLocks only returns the shortest remaining TTL in the batch.
+			// Use the scanned lock TTL to keep partial expired batches visible.
 			resolvedLockCount = countExpiredLocks(kvStorage, locks)
 		}
-		recordLockResolveLockCount(lockResolveMetricResolved, resolvedLockCount)
+		if resolvedLockCount > 0 {
+			metricLockResolveResolvedCounter.Add(float64(resolvedLockCount))
+		}
 		if len(locks) < scanLockLimit {
 			key = loc.EndKey
 		} else {

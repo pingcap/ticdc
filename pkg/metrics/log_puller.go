@@ -85,13 +85,20 @@ var (
 			Name:      "resolve_lock_task_drop_count",
 			Help:      "The number of resolve lock tasks dropped before being processed",
 		})
-	SubscriptionClientResolveLockCounter = prometheus.NewCounterVec(
+	SubscriptionClientResolveLockSuccessCounter = prometheus.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: "ticdc",
 			Subsystem: "subscription_client",
-			Name:      "resolve_lock_count",
-			Help:      "The number of resolve lock executions by result",
-		}, []string{"result"})
+			Name:      "resolve_lock_success_count",
+			Help:      "The number of successful resolve lock executions",
+		})
+	SubscriptionClientResolveLockFailureCounter = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "subscription_client",
+			Name:      "resolve_lock_failure_count",
+			Help:      "The number of failed resolve lock executions",
+		})
 
 	SubscriptionClientRegionEventHandleDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -121,7 +128,8 @@ func initLogPullerMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(RegionRequestFinishScanDuration)
 	registry.MustRegister(SubscriptionClientSubscribedRegionCount)
 	registry.MustRegister(SubscriptionClientResolveLockTaskDropCounter)
-	registry.MustRegister(SubscriptionClientResolveLockCounter)
+	registry.MustRegister(SubscriptionClientResolveLockSuccessCounter)
+	registry.MustRegister(SubscriptionClientResolveLockFailureCounter)
 	registry.MustRegister(SubscriptionClientRegionEventHandleDuration)
 	registry.MustRegister(SubscriptionClientConsumeKVEventsCallbackDuration)
 }
