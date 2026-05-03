@@ -64,19 +64,6 @@ func countExpiredLocks(kvStorage tikv.Storage, locks []*txnkv.Lock) int {
 	return expired
 }
 
-func sampleLocks(locks []*txnkv.Lock) []string {
-	const sampleLimit = 5
-	limit := len(locks)
-	if limit > sampleLimit {
-		limit = sampleLimit
-	}
-	samples := make([]string, 0, limit)
-	for _, lock := range locks[:limit] {
-		samples = append(samples, lock.String())
-	}
-	return samples
-}
-
 func (r *resolver) Resolve(ctx context.Context, keyspaceID uint32, regionID uint64, maxVersion uint64) (err error) {
 	var totalLocks []*txnkv.Lock
 
@@ -174,14 +161,6 @@ func (r *resolver) Resolve(ctx context.Context, keyspaceID uint32, regionID uint
 		totalLocks = append(totalLocks, locks...)
 		if len(locks) > 0 {
 			metricLockResolveFoundCounter.Add(float64(len(locks)))
-			log.Info("resolve lock scans locks",
-				zap.Uint64("regionID", regionID),
-				zap.Uint64("maxVersion", maxVersion),
-				zap.Int("lockCount", len(locks)),
-				zap.Uint64("scanRegionID", loc.Region.GetID()),
-				zap.Binary("scanStartKey", req.ScanLock().StartKey),
-				zap.Binary("scanEndKey", req.ScanLock().EndKey),
-				zap.Strings("sampleLocks", sampleLocks(locks)))
 		}
 
 		msBeforeTxnExpired, err1 := kvStorage.GetLockResolver().ResolveLocks(bo, 0, locks)
@@ -198,15 +177,6 @@ func (r *resolver) Resolve(ctx context.Context, keyspaceID uint32, regionID uint
 		}
 		if resolvedLockCount > 0 {
 			metricLockResolveResolvedCounter.Add(float64(resolvedLockCount))
-		}
-		if len(locks) > 0 {
-			log.Info("resolve lock resolves locks",
-				zap.Uint64("regionID", regionID),
-				zap.Uint64("maxVersion", maxVersion),
-				zap.Int("lockCount", len(locks)),
-				zap.Int("expiredLockCount", expiredLockCount),
-				zap.Int("resolvedLockCount", resolvedLockCount),
-				zap.Int64("msBeforeTxnExpired", msBeforeTxnExpired))
 		}
 		if len(locks) < scanLockLimit {
 			key = loc.EndKey
