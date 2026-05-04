@@ -56,6 +56,14 @@ type WorkloadConfig struct {
 	DDLWorker     int
 	DDLTimeout    time.Duration
 
+	// Residual lock workload related
+	PDAddr         string
+	DBStatusPort   int
+	LockDuration   time.Duration
+	LockTTL        time.Duration
+	LockRowCount   int64
+	LockMaxTxnSize int
+
 	// Special workload config
 	RowSize       int
 	LargeRowSize  int
@@ -110,6 +118,14 @@ func NewWorkloadConfig() *WorkloadConfig {
 		DDLWorker:     1,
 		DDLTimeout:    2 * time.Minute,
 
+		// Default residual lock workload config
+		PDAddr:         "127.0.0.1:2379",
+		DBStatusPort:   10080,
+		LockDuration:   10 * time.Second,
+		LockTTL:        10 * time.Second,
+		LockRowCount:   1000,
+		LockMaxTxnSize: 1000,
+
 		// For large row workload
 		RowSize:       10240,
 		LargeRowSize:  1024 * 1024,
@@ -146,7 +162,7 @@ func (c *WorkloadConfig) ParseFlags() error {
 	flag.Float64Var(&c.PercentageForUpdate, "percentage-for-update", c.PercentageForUpdate, "percentage for update: [0, 1.0]")
 	flag.Float64Var(&c.PercentageForDelete, "percentage-for-delete", c.PercentageForDelete, "percentage for delete: [0, 1.0]")
 	flag.BoolVar(&c.SkipCreateTable, "skip-create-table", c.SkipCreateTable, "do not create tables")
-	flag.StringVar(&c.Action, "action", c.Action, "action of the workload: [prepare, insert, update, delete, write, ddl, cleanup]")
+	flag.StringVar(&c.Action, "action", c.Action, "action of the workload: [prepare, insert, update, delete, write, ddl, lock, cleanup]")
 	flag.StringVar(&c.WorkloadType, "workload-type", c.WorkloadType, "workload type: [bank, sysbench, large_row, shop_item, uuu, bank2, bank3, bank_update, crawler, dc, wide_table_with_json, hotspot]")
 	flag.StringVar(&c.DBHost, "database-host", c.DBHost, "database host")
 	flag.StringVar(&c.DBUser, "database-user", c.DBUser, "database user")
@@ -158,6 +174,12 @@ func (c *WorkloadConfig) ParseFlags() error {
 	flag.StringVar(&c.DDLConfigPath, "ddl-config", c.DDLConfigPath, "ddl config file path, must be .toml")
 	flag.IntVar(&c.DDLWorker, "ddl-worker", c.DDLWorker, "ddl worker concurrency")
 	flag.DurationVar(&c.DDLTimeout, "ddl-timeout", c.DDLTimeout, "timeout for each ddl statement")
+	flag.StringVar(&c.PDAddr, "pd-addr", c.PDAddr, "PD address for residual lock workload")
+	flag.IntVar(&c.DBStatusPort, "database-status-port", c.DBStatusPort, "TiDB status port for querying table IDs")
+	flag.DurationVar(&c.LockDuration, "lock-duration", c.LockDuration, "how long to generate residual locks")
+	flag.DurationVar(&c.LockTTL, "lock-ttl", c.LockTTL, "TTL of generated residual locks")
+	flag.Int64Var(&c.LockRowCount, "lock-row-count", c.LockRowCount, "number of row handles used by residual lock workload")
+	flag.IntVar(&c.LockMaxTxnSize, "lock-max-txn-size", c.LockMaxTxnSize, "maximum keys in one generated residual lock transaction")
 	flag.StringVar(&c.LogFile, "log-file", c.LogFile, "log file path")
 	flag.StringVar(&c.LogLevel, "log-level", c.LogLevel, "log file path")
 	// For large row workload
@@ -197,6 +219,26 @@ func (c *WorkloadConfig) ParseFlags() error {
 	}
 	if c.HotRowCount <= 0 {
 		return fmt.Errorf("hot-row-count must be > 0")
+	}
+	if c.Action == "lock" {
+		if c.PDAddr == "" {
+			return fmt.Errorf("pd-addr is required for lock action")
+		}
+		if c.DBStatusPort <= 0 {
+			return fmt.Errorf("database-status-port must be > 0")
+		}
+		if c.LockDuration <= 0 {
+			return fmt.Errorf("lock-duration must be > 0")
+		}
+		if c.LockTTL <= 0 {
+			return fmt.Errorf("lock-ttl must be > 0")
+		}
+		if c.LockRowCount <= 0 {
+			return fmt.Errorf("lock-row-count must be > 0")
+		}
+		if c.LockMaxTxnSize <= 0 {
+			return fmt.Errorf("lock-max-txn-size must be > 0")
+		}
 	}
 
 	// Convenience mode:

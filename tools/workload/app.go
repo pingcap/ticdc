@@ -181,6 +181,10 @@ func (app *WorkloadApp) executeWorkload(wg *sync.WaitGroup) error {
 		return app.handleDDLExecution(wg)
 	}
 
+	if app.Config.Action == "lock" {
+		return app.handleLockAction()
+	}
+
 	if app.Config.Action == "prepare" {
 		return app.handlePrepareAction(insertConcurrency, wg)
 	}

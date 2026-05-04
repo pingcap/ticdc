@@ -195,36 +195,39 @@ Generate writes for `wide_table_with_json_primary` and `wide_table_with_json_sec
     -percentage-for-delete 0.05
 ```
 
-### 8. Hotspot Write Conflict Workload
+### 8. Residual Lock Workload
 
-Generate high write contention on a small set of primary keys. This is useful for
-stress testing lock resolution and write conflict handling on a TiDB cluster.
+Generate unresolved TiKV prewrite locks for TiCDC lock resolution testing. This
+action creates the target table, encodes row keys by table ID, sends TiKV
+`Prewrite` requests directly, and intentionally does not commit or roll back.
 
 ```bash
-./workload -action update \
+./workload -action lock \
     -database-host 127.0.0.1 \
     -database-port 4000 \
+    -database-status-port 10080 \
+    -pd-addr 127.0.0.1:2379 \
     -database-db-name conflict_lock \
     -table-count 1 \
     -workload-type hotspot \
-    -thread 128 \
-    -batch-size 16 \
-    -percentage-for-update 1 \
-    -hot-row-count 16 \
-    -batch-in-txn \
-    -txn-hold-duration 100ms
+    -lock-duration 10s \
+    -lock-ttl 10s \
+    -lock-row-count 1000 \
+    -lock-max-txn-size 1000
 ```
 
-Use a smaller `-hot-row-count` and a larger `-txn-hold-duration` to increase lock
-contention. The update path uses `INSERT ... ON DUPLICATE KEY UPDATE`, so it can
-initialize missing hot rows while workers contend on the same keys.
+The `lock` action is different from high conflict SQL updates: it bypasses TiDB
+transaction commit and leaves locks for CDC to resolve. It currently supports
+`hotspot` and `sysbench`, which use integer row handles.
 
 ## Notes
 
 - Ensure the database is properly configured and has the necessary permissions.
+- The workload tool creates the target database automatically if it does not exist.
 - Adjust the thread and batch-size parameters based on your needs.
 - Use `-batch-in-txn` to wrap each batch in a single explicit transaction (BEGIN/COMMIT).
 - Use `-txn-hold-duration` together with `-batch-in-txn` to hold row locks before commit.
+- Use `-action lock` when the goal is to leave unresolved TiKV locks for CDC to resolve.
 - `wide_table_with_json` always generates JSON-like payload data.
 - For workloads that support partitioned tables (e.g. bank3), set `-partitioned=false` to create non-partitioned tables.
 - `-bank3-partitioned` is deprecated; use `-partitioned`.

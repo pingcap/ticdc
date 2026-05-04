@@ -16,6 +16,7 @@ package main
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -55,20 +56,24 @@ func (m *DBManager) SetupConnections() error {
 
 // setupMultipleDatabases sets up connections to multiple databases
 func (m *DBManager) setupMultipleDatabases() error {
-	m.DBs = make([]*DBWrapper, m.Config.DBNum)
+	m.DBs = make([]*DBWrapper, 0, m.Config.DBNum)
 	for i := 0; i < m.Config.DBNum; i++ {
 		dbName := fmt.Sprintf("%s%d", m.Config.DBPrefix, i+1)
+		if err := m.createDatabaseIfNotExists(dbName); err != nil {
+			plog.Info("create database failed", zap.String("dbName", dbName), zap.Error(err))
+			continue
+		}
 		db, err := m.createDBConnection(dbName)
 		if err != nil {
 			plog.Info("create the sql client failed", zap.Error(err))
 			continue
 		}
 		m.configureDBConnection(db)
-		m.DBs[i] = &DBWrapper{
+		m.DBs = append(m.DBs, &DBWrapper{
 			DB:         db,
 			Name:       dbName,
 			UsageCount: 0,
-		}
+		})
 	}
 
 	if len(m.DBs) == 0 {
@@ -81,6 +86,9 @@ func (m *DBManager) setupMultipleDatabases() error {
 // setupSingleDatabase sets up connection to a single database
 func (m *DBManager) setupSingleDatabase() error {
 	m.DBs = make([]*DBWrapper, 1)
+	if err := m.createDatabaseIfNotExists(m.Config.DBName); err != nil {
+		return fmt.Errorf("create database failed: %w", err)
+	}
 	db, err := m.createDBConnection(m.Config.DBName)
 	if err != nil {
 		return fmt.Errorf("create the sql client failed: %w", err)
@@ -92,6 +100,28 @@ func (m *DBManager) setupSingleDatabase() error {
 		UsageCount: 0,
 	}
 	return nil
+}
+
+func (m *DBManager) createDatabaseIfNotExists(dbName string) error {
+	plog.Info("create database if not exists", zap.String("dbName", dbName))
+	db, err := m.createServerConnection()
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	_, err = db.Exec("CREATE DATABASE IF NOT EXISTS " + quoteIdentifier(dbName))
+	return err
+}
+
+func (m *DBManager) createServerConnection() (*sql.DB, error) {
+	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/?charset=utf8mb4&parseTime=True&loc=Local&maxAllowedPacket=1073741824&multiStatements=true",
+		m.Config.DBUser, m.Config.DBPassword, m.Config.DBHost, m.Config.DBPort)
+	return sql.Open("mysql", dsn)
+}
+
+func quoteIdentifier(identifier string) string {
+	return "`" + strings.ReplaceAll(identifier, "`", "``") + "`"
 }
 
 // GetDB returns a database connection using Round Robin algorithm
