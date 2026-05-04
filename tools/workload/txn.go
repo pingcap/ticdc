@@ -16,6 +16,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"time"
 
 	plog "github.com/pingcap/log"
 	"go.uber.org/zap"
@@ -34,6 +35,10 @@ func (app *WorkloadApp) runTransaction(conn *sql.Conn, doOne func() (uint64, err
 	if err != nil {
 		app.rollbackTransaction(conn)
 		return 0, err
+	}
+
+	if app.Config.TxnHoldDuration > 0 {
+		time.Sleep(app.Config.TxnHoldDuration)
 	}
 
 	if err := app.commitTransaction(conn); err != nil {

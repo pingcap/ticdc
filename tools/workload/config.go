@@ -40,6 +40,7 @@ type WorkloadConfig struct {
 	BatchSize       int
 	// BatchInTxn wraps each batch in one explicit transaction (BEGIN/COMMIT).
 	BatchInTxn          bool
+	TxnHoldDuration     time.Duration
 	TotalRowCount       uint64
 	PercentageForUpdate float64
 	PercentageForDelete float64
@@ -63,6 +64,8 @@ type WorkloadConfig struct {
 	UpdateLargeColumnSize int
 	// For sysbench workload
 	RangeNum int
+	// For hotspot workload
+	HotRowCount int
 
 	// Partition related
 	Partitioned bool
@@ -91,6 +94,7 @@ func NewWorkloadConfig() *WorkloadConfig {
 		Thread:              16,
 		BatchSize:           10,
 		BatchInTxn:          false,
+		TxnHoldDuration:     0,
 		TotalRowCount:       1000000000,
 		PercentageForUpdate: 0,
 		PercentageForDelete: 0,
@@ -116,6 +120,8 @@ func NewWorkloadConfig() *WorkloadConfig {
 
 		// For sysbench workload
 		RangeNum: 5,
+		// For hotspot workload
+		HotRowCount: 16,
 
 		// Partition related
 		Partitioned: true,
@@ -135,12 +141,13 @@ func (c *WorkloadConfig) ParseFlags() error {
 	flag.IntVar(&c.Thread, "thread", c.Thread, "total thread of the workload")
 	flag.IntVar(&c.BatchSize, "batch-size", c.BatchSize, "batch size of each insert/update/delete")
 	flag.BoolVar(&c.BatchInTxn, "batch-in-txn", c.BatchInTxn, "wrap each batch in one explicit transaction")
+	flag.DurationVar(&c.TxnHoldDuration, "txn-hold-duration", c.TxnHoldDuration, "hold locks for this duration before committing each explicit transaction")
 	flag.Uint64Var(&c.TotalRowCount, "total-row-count", c.TotalRowCount, "the total row count of the workload, default is 1 billion")
 	flag.Float64Var(&c.PercentageForUpdate, "percentage-for-update", c.PercentageForUpdate, "percentage for update: [0, 1.0]")
 	flag.Float64Var(&c.PercentageForDelete, "percentage-for-delete", c.PercentageForDelete, "percentage for delete: [0, 1.0]")
 	flag.BoolVar(&c.SkipCreateTable, "skip-create-table", c.SkipCreateTable, "do not create tables")
 	flag.StringVar(&c.Action, "action", c.Action, "action of the workload: [prepare, insert, update, delete, write, ddl, cleanup]")
-	flag.StringVar(&c.WorkloadType, "workload-type", c.WorkloadType, "workload type: [bank, sysbench, large_row, shop_item, uuu, bank2, bank3, bank_update, crawler, dc, wide_table_with_json]")
+	flag.StringVar(&c.WorkloadType, "workload-type", c.WorkloadType, "workload type: [bank, sysbench, large_row, shop_item, uuu, bank2, bank3, bank_update, crawler, dc, wide_table_with_json, hotspot]")
 	flag.StringVar(&c.DBHost, "database-host", c.DBHost, "database host")
 	flag.StringVar(&c.DBUser, "database-user", c.DBUser, "database user")
 	flag.StringVar(&c.DBPassword, "database-password", c.DBPassword, "database password")
@@ -160,6 +167,8 @@ func (c *WorkloadConfig) ParseFlags() error {
 	flag.IntVar(&c.UpdateLargeColumnSize, "update-large-column-size", c.UpdateLargeColumnSize, "the size of the large column to update")
 	// For sysbench workload
 	flag.IntVar(&c.RangeNum, "range-num", c.RangeNum, "the number of ranges for sysbench workload")
+	// For hotspot workload
+	flag.IntVar(&c.HotRowCount, "hot-row-count", c.HotRowCount, "the number of hot rows for hotspot workload")
 	// Partition related
 	flag.BoolVar(&c.Partitioned, "partitioned", c.Partitioned, "whether to create tables as partitioned tables when the workload supports it")
 	flag.BoolVar(&c.Partitioned, "bank3-partitioned", c.Partitioned, "deprecated: use -partitioned")
@@ -182,6 +191,12 @@ func (c *WorkloadConfig) ParseFlags() error {
 	}
 	if c.OnlyDML && c.Action == "ddl" {
 		return fmt.Errorf("only-dml cannot be used with -action=ddl")
+	}
+	if c.TxnHoldDuration < 0 {
+		return fmt.Errorf("txn-hold-duration must be >= 0")
+	}
+	if c.HotRowCount <= 0 {
+		return fmt.Errorf("hot-row-count must be > 0")
 	}
 
 	// Convenience mode:

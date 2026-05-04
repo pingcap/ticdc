@@ -195,11 +195,36 @@ Generate writes for `wide_table_with_json_primary` and `wide_table_with_json_sec
     -percentage-for-delete 0.05
 ```
 
+### 8. Hotspot Write Conflict Workload
+
+Generate high write contention on a small set of primary keys. This is useful for
+stress testing lock resolution and write conflict handling on a TiDB cluster.
+
+```bash
+./workload -action update \
+    -database-host 127.0.0.1 \
+    -database-port 4000 \
+    -database-db-name conflict_lock \
+    -table-count 1 \
+    -workload-type hotspot \
+    -thread 128 \
+    -batch-size 16 \
+    -percentage-for-update 1 \
+    -hot-row-count 16 \
+    -batch-in-txn \
+    -txn-hold-duration 100ms
+```
+
+Use a smaller `-hot-row-count` and a larger `-txn-hold-duration` to increase lock
+contention. The update path uses `INSERT ... ON DUPLICATE KEY UPDATE`, so it can
+initialize missing hot rows while workers contend on the same keys.
+
 ## Notes
 
 - Ensure the database is properly configured and has the necessary permissions.
 - Adjust the thread and batch-size parameters based on your needs.
 - Use `-batch-in-txn` to wrap each batch in a single explicit transaction (BEGIN/COMMIT).
+- Use `-txn-hold-duration` together with `-batch-in-txn` to hold row locks before commit.
 - `wide_table_with_json` always generates JSON-like payload data.
 - For workloads that support partitioned tables (e.g. bank3), set `-partitioned=false` to create non-partitioned tables.
 - `-bank3-partitioned` is deprecated; use `-partitioned`.

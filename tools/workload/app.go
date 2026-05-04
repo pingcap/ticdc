@@ -33,6 +33,7 @@ import (
 	"workload/schema/bankupdate"
 	pcrawler "workload/schema/crawler"
 	pdc "workload/schema/dc"
+	"workload/schema/hotspot"
 	"workload/schema/largerow"
 	"workload/schema/shop"
 	psysbench "workload/schema/sysbench"
@@ -84,6 +85,7 @@ const (
 	bankUpdate        = "bank_update"
 	dc                = "dc"
 	wideTableWithJSON = "wide_table_with_json"
+	hotspotWorkload   = "hotspot"
 )
 
 // stmtCacheKey is used as the key for statement cache
@@ -146,6 +148,8 @@ func (app *WorkloadApp) createWorkload() schema.Workload {
 		workload = pdc.NewDCWorkload()
 	case wideTableWithJSON:
 		workload = pwidetablewithjson.NewWideTableWithJSONWorkload(app.Config.RowSize, app.Config.TableCount, app.Config.TableStartIndex, app.Config.TotalRowCount)
+	case hotspotWorkload:
+		workload = hotspot.NewHotspotWorkload(app.Config.HotRowCount)
 	default:
 		plog.Panic("unsupported workload type", zap.String("workload", app.Config.WorkloadType))
 	}
@@ -241,6 +245,7 @@ func (app *WorkloadApp) handleWorkloadExecution(insertConcurrency, updateConcurr
 		zap.String("ddlTimeout", app.Config.DDLTimeout.String()),
 		zap.Int("batchSize", app.Config.BatchSize),
 		zap.Bool("batchInTxn", app.Config.BatchInTxn),
+		zap.String("txnHoldDuration", app.Config.TxnHoldDuration.String()),
 		zap.String("action", app.Config.Action),
 	)
 
