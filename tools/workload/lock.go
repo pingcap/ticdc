@@ -44,8 +44,14 @@ type lockGenerator struct {
 	lockTTL       time.Duration
 	maxTxnSize    int
 	pdcli         pd.Client
-	tikvStorage   tikv.Storage
+	tikvStorage   *simpleTiKVStorage
 	generatedKeys uint64
+}
+
+type simpleTiKVStorage struct {
+	pdClient    pd.Client
+	regionCache *tikv.RegionCache
+	rpcClient   tikv.Client
 }
 
 func (app *WorkloadApp) handleLockAction() error {
@@ -91,7 +97,7 @@ func (app *WorkloadApp) handleLockAction() error {
 	return nil
 }
 
-func openTiKVStorage(ctx context.Context, pdAddr string) (pd.Client, *tikv.KVStore, error) {
+func openTiKVStorage(ctx context.Context, pdAddr string) (pd.Client, *simpleTiKVStorage, error) {
 	pdAddrs := strings.Split(pdAddr, ",")
 	pdcli, err := pd.NewClientWithContext(
 		ctx, "ticdc-workload-residual-lock", pdAddrs, pd.SecurityOption{})
@@ -99,24 +105,34 @@ func openTiKVStorage(ctx context.Context, pdAddr string) (pd.Client, *tikv.KVSto
 		return nil, nil, errors.Trace(err)
 	}
 
-	spkv, err := tikv.NewEtcdSafePointKV(pdAddrs, nil)
-	if err != nil {
-		pdcli.Close()
-		return nil, nil, errors.Trace(err)
-	}
-
 	codecPDClient := tikv.NewCodecPDClient(tikv.ModeTxn, pdcli)
-	store, err := tikv.NewKVStore(
-		fmt.Sprintf("ticdc-workload-%d", pdcli.GetClusterID(ctx)),
-		codecPDClient,
-		spkv,
-		tikv.NewRPCClient(),
-	)
-	if err != nil {
-		pdcli.Close()
-		return nil, nil, errors.Trace(err)
+	rpcClient := tikv.NewRPCClient()
+	store := &simpleTiKVStorage{
+		pdClient:    codecPDClient,
+		regionCache: tikv.NewRegionCache(codecPDClient),
+		rpcClient:   rpcClient,
 	}
 	return codecPDClient, store, nil
+}
+
+func (s *simpleTiKVStorage) Close() {
+	s.regionCache.Close()
+	if err := s.rpcClient.Close(); err != nil {
+		plog.Info("close TiKV RPC client failed", zap.Error(err))
+	}
+	s.pdClient.Close()
+}
+
+func (s *simpleTiKVStorage) GetRegionCache() *tikv.RegionCache {
+	return s.regionCache
+}
+
+func (s *simpleTiKVStorage) SendReq(
+	bo *tikv.Backoffer, req *tikvrpc.Request, regionID tikv.RegionVerID, timeout time.Duration,
+) (*tikvrpc.Response, error) {
+	sender := tikv.NewRegionRequestSender(s.regionCache, s.rpcClient, oracle.NoopReadTSValidator{})
+	resp, _, err := sender.SendReq(bo, req, regionID, timeout)
+	return resp, err
 }
 
 func (app *WorkloadApp) prepareLockTables() error {
