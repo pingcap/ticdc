@@ -59,11 +59,11 @@ mysql_groups=(
 	# ds_memory_control
 	'row_format tiflash multi_rocks fail_over_ddl_M correctness_for_shared_column_schema partial_index'
 	# G13
-	'cli_tls_with_auth cli_with_auth fail_over_ddl_N maintainer_failover_when_operator'
+	'cli_tls_with_auth cli_with_auth fail_over_ddl_N maintainer_failover_when_operator cli_missing_keyspace_error'
 	# G14
 	'batch_add_table batch_update_to_no_batch fail_over_ddl_O update_changefeed_check_config pause_changefeed_with_long_time_ddl'
 	# G15
-	'split_region changefeed_resume_with_checkpoint_ts autorandom gc_safepoint foreign_key_check old_arch_compatibility'
+	'split_region changefeed_resume_with_checkpoint_ts autorandom gc_safepoint foreign_key_check old_arch_compatibility bootstrap_retry_after_error'
 )
 
 # Resource allocation for kafka light integration tests in CI pipelines:

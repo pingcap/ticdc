@@ -51,6 +51,18 @@ import (
 	"go.uber.org/zap"
 )
 
+// validateChangefeedIDParam extracts and validates the changefeed ID from the
+// URL path parameter. On failure it writes the error to c and returns false.
+func validateChangefeedIDParam(c *gin.Context) (common.ChangeFeedDisplayName, bool) {
+	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), GetKeyspaceValueWithDefault(c))
+	if err := common.ValidateChangefeedID(changefeedDisplayName.Name); err != nil {
+		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("invalid changefeed_id: %s, %s",
+			changefeedDisplayName.Name, err.Error()))
+		return common.ChangeFeedDisplayName{}, false
+	}
+	return changefeedDisplayName, true
+}
+
 // CreateChangefeed handles create changefeed request,
 // it returns the changefeed's changefeedInfo that it just created
 // CreateChangefeed creates a changefeed
@@ -86,7 +98,7 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 	}
 	// verify changefeedID
 	if err = common.ValidateChangefeedID(changefeedID.Name()); err != nil {
-		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("invalid changefeed_id: %s", cfg.ID))
+		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("invalid changefeed_id: %s, %s", changefeedID.Name(), err.Error()))
 		return
 	}
 
@@ -599,10 +611,8 @@ func CfInfoToAPIModel(
 // @Router	/api/v2/changefeeds/{changefeed_id} [delete]
 func (h *OpenAPIV2) DeleteChangefeed(c *gin.Context) {
 	ctx := c.Request.Context()
-	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), GetKeyspaceValueWithDefault(c))
-	if err := common.ValidateChangefeedID(changefeedDisplayName.Name); err != nil {
-		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("invalid changefeed_id: %s",
-			changefeedDisplayName.Name))
+	changefeedDisplayName, ok := validateChangefeedIDParam(c)
+	if !ok {
 		return
 	}
 	co, err := h.server.GetCoordinator()
@@ -611,7 +621,7 @@ func (h *OpenAPIV2) DeleteChangefeed(c *gin.Context) {
 		return
 	}
 
-	ok, err := isInitialized(co)
+	ok, err = isInitialized(co)
 	if err != nil || !ok {
 		_ = c.Error(err)
 		return
@@ -648,10 +658,8 @@ func (h *OpenAPIV2) DeleteChangefeed(c *gin.Context) {
 // @Router /api/v2/changefeeds/{changefeed_id}/pause [post]
 func (h *OpenAPIV2) PauseChangefeed(c *gin.Context) {
 	ctx := c.Request.Context()
-	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), GetKeyspaceValueWithDefault(c))
-	if err := common.ValidateChangefeedID(changefeedDisplayName.Name); err != nil {
-		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("invalid changefeed_id: %s",
-			changefeedDisplayName.Name))
+	changefeedDisplayName, ok := validateChangefeedIDParam(c)
+	if !ok {
 		return
 	}
 
@@ -661,7 +669,7 @@ func (h *OpenAPIV2) PauseChangefeed(c *gin.Context) {
 		return
 	}
 
-	ok, err := isInitialized(co)
+	ok, err = isInitialized(co)
 	if err != nil || !ok {
 		_ = c.Error(err)
 		return
@@ -697,11 +705,8 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 	ctx := c.Request.Context()
 
 	var err error
-	keyspaceName := GetKeyspaceValueWithDefault(c)
-	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), keyspaceName)
-	if err = common.ValidateChangefeedID(changefeedDisplayName.Name); err != nil {
-		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("invalid changefeed_id: %s",
-			changefeedDisplayName.Name))
+	changefeedDisplayName, ok := validateChangefeedIDParam(c)
+	if !ok {
 		return
 	}
 
@@ -729,7 +734,7 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 		return
 	}
 
-	ok, err := isInitialized(co)
+	ok, err = isInitialized(co)
 	if err != nil || !ok {
 		_ = c.Error(err)
 		return
@@ -836,7 +841,7 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 
 		var kvStorage tidbkv.Storage
 		keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
-		kvStorage, err = keyspaceManager.GetStorage(ctx, keyspaceName)
+		kvStorage, err = keyspaceManager.GetStorage(ctx, changefeedDisplayName.Keyspace)
 		if err != nil {
 			_ = c.Error(err)
 			return
@@ -896,10 +901,8 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 		return
 	}
 
-	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), keyspaceName)
-	if err := common.ValidateChangefeedID(changefeedDisplayName.Name); err != nil {
-		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("invalid changefeed_id: %s",
-			changefeedDisplayName.Name))
+	changefeedDisplayName, ok := validateChangefeedIDParam(c)
+	if !ok {
 		return
 	}
 	co, err := h.server.GetCoordinator()
@@ -908,7 +911,7 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 		return
 	}
 
-	ok, err := isInitialized(co)
+	ok, err = isInitialized(co)
 	if err != nil || !ok {
 		_ = c.Error(err)
 		return
@@ -1119,10 +1122,8 @@ func (h *OpenAPIV2) MoveTable(c *gin.Context) {
 		return
 	}
 
-	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), GetKeyspaceValueWithDefault(c))
-	if err := common.ValidateChangefeedID(changefeedDisplayName.Name); err != nil {
-		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("invalid changefeed_id: %s",
-			changefeedDisplayName.Name))
+	changefeedDisplayName, ok := validateChangefeedIDParam(c)
+	if !ok {
 		return
 	}
 
@@ -1203,10 +1204,8 @@ func (h *OpenAPIV2) MoveSplitTable(c *gin.Context) {
 		return
 	}
 
-	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), GetKeyspaceValueWithDefault(c))
-	if err := common.ValidateChangefeedID(changefeedDisplayName.Name); err != nil {
-		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("invalid changefeed_id: %s",
-			changefeedDisplayName.Name))
+	changefeedDisplayName, ok := validateChangefeedIDParam(c)
+	if !ok {
 		return
 	}
 
@@ -1277,10 +1276,8 @@ func (h *OpenAPIV2) SplitTableByRegionCount(c *gin.Context) {
 		return
 	}
 
-	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), GetKeyspaceValueWithDefault(c))
-	if err := common.ValidateChangefeedID(changefeedDisplayName.Name); err != nil {
-		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("invalid changefeed_id: %s",
-			changefeedDisplayName.Name))
+	changefeedDisplayName, ok := validateChangefeedIDParam(c)
+	if !ok {
 		return
 	}
 
@@ -1353,10 +1350,8 @@ func (h *OpenAPIV2) MergeTable(c *gin.Context) {
 		return
 	}
 
-	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), GetKeyspaceValueWithDefault(c))
-	if err := common.ValidateChangefeedID(changefeedDisplayName.Name); err != nil {
-		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("invalid changefeed_id: %s",
-			changefeedDisplayName.Name))
+	changefeedDisplayName, ok := validateChangefeedIDParam(c)
+	if !ok {
 		return
 	}
 
@@ -1414,10 +1409,8 @@ func (h *OpenAPIV2) MergeTable(c *gin.Context) {
 // curl -X GET http://127.0.0.1:8300/api/v2/changefeeds/changefeed-test1/tables
 // Note: This api is for inner test use, not public use. It may be changed or removed in the future.
 func (h *OpenAPIV2) ListTables(c *gin.Context) {
-	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), GetKeyspaceValueWithDefault(c))
-	if err := common.ValidateChangefeedID(changefeedDisplayName.Name); err != nil {
-		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("invalid changefeed_id: %s",
-			changefeedDisplayName.Name))
+	changefeedDisplayName, ok := validateChangefeedIDParam(c)
+	if !ok {
 		return
 	}
 
@@ -1485,10 +1478,8 @@ func (h *OpenAPIV2) ListTables(c *gin.Context) {
 // getDispatcherCount returns the count of dispatcher.
 // getDispatcherCount is just for inner test use, not public use.
 func (h *OpenAPIV2) getDispatcherCount(c *gin.Context) {
-	changefeedDisplayName := common.NewChangeFeedDisplayName(c.Param(api.APIOpVarChangefeedID), GetKeyspaceValueWithDefault(c))
-	if err := common.ValidateChangefeedID(changefeedDisplayName.Name); err != nil {
-		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("invalid changefeed_id: %s",
-			changefeedDisplayName.Name))
+	changefeedDisplayName, ok := validateChangefeedIDParam(c)
+	if !ok {
 		return
 	}
 

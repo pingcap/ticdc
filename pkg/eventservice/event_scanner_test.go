@@ -61,7 +61,7 @@ func TestEventScanner(t *testing.T) {
 
 	disInfo := newMockDispatcherInfoForTest(t)
 	disInfo.startTs = uint64(100)
-	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo.GetChangefeedID(), disInfo.GetSyncPointInterval())
+	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo)
 	tableID := disInfo.GetTableSpan().TableID
 	dispatcherID := disInfo.GetID()
 
@@ -371,7 +371,7 @@ func TestEventScannerWithDeleteTable(t *testing.T) {
 
 	disInfo := newMockDispatcherInfoForTest(t)
 	disInfo.startTs = uint64(100)
-	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo.GetChangefeedID(), disInfo.GetSyncPointInterval())
+	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo)
 	tableID := disInfo.GetTableSpan().TableID
 	dispatcherID := disInfo.GetID()
 
@@ -449,7 +449,7 @@ func TestEventScannerWithDDL(t *testing.T) {
 
 	disInfo := newMockDispatcherInfoForTest(t)
 	disInfo.startTs = uint64(100)
-	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo.GetChangefeedID(), disInfo.GetSyncPointInterval())
+	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo)
 	tableID := disInfo.GetTableSpan().TableID
 	dispatcherID := disInfo.GetID()
 
@@ -1537,7 +1537,7 @@ func TestGetTableInfo4Txn(t *testing.T) {
 
 	disInfo := newMockDispatcherInfoForTest(t)
 	disInfo.startTs = uint64(100)
-	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo.GetChangefeedID(), disInfo.GetSyncPointInterval())
+	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo)
 	tableID := disInfo.GetTableSpan().TableID
 
 	disp := newDispatcherStat(disInfo, 1, 1, nil, changefeedStatus)

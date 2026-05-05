@@ -484,13 +484,44 @@ func TestFilterAndUpdateEventByCommitTs(t *testing.T) {
 			stat.gotDDLOnTs.Store(tt.gotDDLOnTs)
 			stat.gotSyncpointOnTS.Store(tt.gotSyncpointOnTS)
 
-			result := stat.filterAndUpdateEventByCommitTs(tt.event, stat.loadCurrentEpochState())
+			result := stat.shouldForwardEventByCommitTs(tt.event)
 			require.Equal(t, tt.expectedResult, result)
-			require.Equal(t, tt.expectedDDLOnTs, stat.gotDDLOnTs.Load())
-			require.Equal(t, tt.expectedSyncOnTs, stat.gotSyncpointOnTS.Load())
-			require.Equal(t, tt.expectedCommitTs, stat.lastEventCommitTs.Load())
+			require.Equal(t, tt.gotDDLOnTs, stat.gotDDLOnTs.Load())
+			require.Equal(t, tt.gotSyncpointOnTS, stat.gotSyncpointOnTS.Load())
+			require.Equal(t, tt.lastEventCommitTs, stat.lastEventCommitTs.Load())
 		})
 	}
+}
+
+func TestUpdateCommitTsStateByEvents(t *testing.T) {
+	t.Parallel()
+
+	stat := newDispatcherStat(newMockDispatcher(common.NewDispatcherID(), 0), nil, nil)
+	stat.lastEventCommitTs.Store(100)
+	stat.gotDDLOnTs.Store(true)
+	stat.gotSyncpointOnTS.Store(true)
+	state := stat.loadCurrentEpochState()
+	state.maxEventTs.Store(100)
+
+	stat.updateCommitTsStateByEvents(state, []dispatcher.DispatcherEvent{
+		{
+			Event: &mockEvent{
+				eventType: commonEvent.TypeResolvedEvent,
+				commitTs:  105,
+			},
+		},
+		{
+			Event: &mockEvent{
+				eventType: commonEvent.TypeDMLEvent,
+				commitTs:  110,
+			},
+		},
+	})
+
+	require.Equal(t, uint64(110), stat.lastEventCommitTs.Load())
+	require.False(t, stat.gotDDLOnTs.Load())
+	require.False(t, stat.gotSyncpointOnTS.Load())
+	require.Equal(t, uint64(110), state.maxEventTs.Load())
 }
 
 func TestHandleSignalEvent(t *testing.T) {

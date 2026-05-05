@@ -5,6 +5,8 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
     branches:
       - master
+      - "release-[0-9].[0-9]*"
+      - "release-nextgen-[0-9]*"
     paths:
       - '**'
       - '!**/*.md'
@@ -28,20 +30,77 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build_and_test:
+  check:
+    name: Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Setup Go environment
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Cache Tools
+        id: cache-tools
+        uses: actions/cache@v4
+        with:
+          path: tools/bin
+          key: ubuntu-latest-ticdc-tools-${{ hashFiles('tools/check/go.sum') }}
+
+      - name: Check
+        run: make check
+
+  classic_build_and_test:
+    if: >-
+      ${{
+        github.base_ref == 'master' ||
+        startsWith(github.base_ref, 'release-') &&
+        !startsWith(github.base_ref, 'release-nextgen-')
+      }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: true
       matrix:
         task:
-          - name: Check
-            command: make check
           - name: Build Classic CDC
             command: make cdc
-          - name: Build Next Gen CDC
-            command: NEXT_GEN=1 make cdc
           - name: Classic Unit Tests
             command: make unit_test_in_verify_ci
+    name: ${{ matrix.task.name }}
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Setup Go environment
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Cache Tools
+        id: cache-tools
+        uses: actions/cache@v4
+        with:
+          path: tools/bin
+          key: ubuntu-latest-ticdc-tools-${{ hashFiles('tools/check/go.sum') }}
+
+      - name: ${{ matrix.task.name }}
+        run: ${{ matrix.task.command }}
+
+  nextgen_build_and_test:
+    if: >-
+      ${{
+        github.base_ref == 'master' ||
+        startsWith(github.base_ref, 'release-nextgen-')
+      }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        task:
+          - name: Build Next Gen CDC
+            command: NEXT_GEN=1 make cdc
           - name: Next Gen Unit Tests
             command: make unit_test_in_verify_ci_next_gen
     name: ${{ matrix.task.name }}

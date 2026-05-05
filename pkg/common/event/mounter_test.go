@@ -14,6 +14,7 @@
 package event
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -26,6 +27,84 @@ import (
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
 )
+
+func TestParseJobFromDDLJob(t *testing.T) {
+	t.Run("accepts done create table jobs from tidb_ddl_job", func(t *testing.T) {
+		// Scenario: TiDB writes create-table jobs through tidb_ddl_job in the
+		// normalized Done state.
+		// Steps: marshal a Done create-table job, parse it, and verify the parser
+		// keeps the job while filling StartTS and FinishedTS from the KV metadata.
+		raw, err := json.Marshal(&timodel.Job{
+			Type:       timodel.ActionCreateTable,
+			State:      timodel.JobStateDone,
+			BinlogInfo: &timodel.HistoryInfo{},
+		})
+		require.NoError(t, err)
+
+		job, err := parseJob(raw, 101, 202)
+		require.NoError(t, err)
+		require.NotNil(t, job)
+		require.Equal(t, uint64(101), job.StartTS)
+		require.Equal(t, uint64(202), job.BinlogInfo.FinishedTS)
+	})
+
+	t.Run("accepts done batch create table jobs from tidb_ddl_job", func(t *testing.T) {
+		// Scenario: batch create tables now follows the same tidb_ddl_job Done
+		// lifecycle as other DDLs.
+		// Steps: marshal a Done create-tables job, parse it, and verify the job
+		// is kept with the KV metadata mapped onto StartTS and FinishedTS.
+		raw, err := json.Marshal(&timodel.Job{
+			Type:       timodel.ActionCreateTables,
+			State:      timodel.JobStateDone,
+			BinlogInfo: &timodel.HistoryInfo{},
+		})
+		require.NoError(t, err)
+
+		job, err := parseJob(raw, 303, 404)
+		require.NoError(t, err)
+		require.NotNil(t, job)
+		require.Equal(t, timodel.ActionCreateTables, job.Type)
+		require.Equal(t, uint64(303), job.StartTS)
+		require.Equal(t, uint64(404), job.BinlogInfo.FinishedTS)
+	})
+
+	t.Run("keeps non create table done jobs", func(t *testing.T) {
+		// Scenario: removing tidb_ddl_history support must not filter unrelated
+		// DDLs that already come from tidb_ddl_job in Done state.
+		// Steps: marshal a Done non-create-table job, parse it, and verify it is
+		// still accepted.
+		raw, err := json.Marshal(&timodel.Job{
+			Type:       timodel.ActionDropTable,
+			State:      timodel.JobStateDone,
+			BinlogInfo: &timodel.HistoryInfo{},
+		})
+		require.NoError(t, err)
+
+		job, err := parseJob(raw, 505, 606)
+		require.NoError(t, err)
+		require.NotNil(t, job)
+		require.Equal(t, timodel.ActionDropTable, job.Type)
+		require.Equal(t, uint64(505), job.StartTS)
+		require.Equal(t, uint64(606), job.BinlogInfo.FinishedTS)
+	})
+
+	t.Run("ignores synced create table compatibility jobs", func(t *testing.T) {
+		// Scenario: TiCDC no longer consumes tidb_ddl_history, so synced-only
+		// create-table jobs must not be replayed into schema storage.
+		// Steps: marshal a Synced create-table job, parse it, and verify the
+		// parser drops it instead of rewriting it to Done.
+		raw, err := json.Marshal(&timodel.Job{
+			Type:       timodel.ActionCreateTable,
+			State:      timodel.JobStateSynced,
+			BinlogInfo: &timodel.HistoryInfo{},
+		})
+		require.NoError(t, err)
+
+		job, err := parseJob(raw, 101, 202)
+		require.NoError(t, err)
+		require.Nil(t, job)
+	})
+}
 
 var createTableSQL = `create table t (
 	id          int primary key auto_increment,
