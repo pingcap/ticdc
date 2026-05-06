@@ -79,7 +79,11 @@ func TestEncryptDataAllowDegradeOnError(t *testing.T) {
 
 	output, err := manager.EncryptData(context.Background(), 1, input)
 	require.NoError(t, err)
-	require.Equal(t, input, output)
+	require.Equal(t, EncodeUnencryptedData(input), output)
+
+	decrypted, err := manager.DecryptData(context.Background(), 1, output)
+	require.NoError(t, err)
+	require.Equal(t, input, decrypted)
 }
 
 func TestEncryptDataDisallowDegradeOnError(t *testing.T) {
@@ -104,7 +108,11 @@ func TestEncryptDataDisabledSkipsEncryption(t *testing.T) {
 
 	output, err := manager.EncryptData(context.Background(), 1, input)
 	require.NoError(t, err)
-	require.Equal(t, input, output)
+	require.Equal(t, EncodeUnencryptedData(input), output)
+
+	decrypted, err := manager.DecryptData(context.Background(), 1, output)
+	require.NoError(t, err)
+	require.Equal(t, input, decrypted)
 }
 
 func TestEncryptDecryptRoundTrip(t *testing.T) {

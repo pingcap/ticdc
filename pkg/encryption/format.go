@@ -68,14 +68,27 @@ func DecodeEncryptedData(data []byte) (byte, string, []byte, error) {
 	return version, string(dataKeyID[:]), encryptedData, nil
 }
 
+func dataKeyIDIsZero(data []byte) bool {
+	return data[1] == 0 && data[2] == 0 && data[3] == 0
+}
+
 // IsEncrypted checks if data is encrypted by examining the version byte
-// Data is considered encrypted if version != 0 (VersionUnencrypted)
+// Data is considered encrypted if version != 0 (VersionUnencrypted) and the
+// 3-byte data key ID is non-zero.
 // The caller should validate that the version matches expected versions from TiKV metadata
 func IsEncrypted(data []byte) bool {
 	if len(data) < EncryptionHeaderSize {
 		return false
 	}
-	return data[0] != VersionUnencrypted
+	return data[0] != VersionUnencrypted && !dataKeyIDIsZero(data)
+}
+
+// HasUnencryptedHeader checks whether data uses the 4-byte plaintext wrapper.
+func HasUnencryptedHeader(data []byte) bool {
+	if len(data) < EncryptionHeaderSize {
+		return false
+	}
+	return data[0] == VersionUnencrypted && dataKeyIDIsZero(data)
 }
 
 // IsEncryptedWithVersion checks if data is encrypted with a specific version
@@ -117,10 +130,7 @@ func DecodeUnencryptedData(data []byte) ([]byte, error) {
 	}
 
 	version := data[0]
-	dataKeyID1, dataKeyID2, dataKeyID3 := data[1], data[2], data[3]
-	dataKeyIDIsZero := dataKeyID1 == 0 && dataKeyID2 == 0 && dataKeyID3 == 0
-
-	if version == VersionUnencrypted && dataKeyIDIsZero {
+	if version == VersionUnencrypted && dataKeyIDIsZero(data) {
 		// New-format unencrypted data with header, remove header
 		return data[4:], nil
 	}
@@ -140,13 +150,11 @@ func ExtractDataKeyID(data []byte) (string, error) {
 	}
 
 	version := data[0]
-	dataKeyID1, dataKeyID2, dataKeyID3 := data[1], data[2], data[3]
-	dataKeyIDIsZero := dataKeyID1 == 0 && dataKeyID2 == 0 && dataKeyID3 == 0
 
 	// Only extract key ID from data that definitively looks like new-format encrypted:
 	// - version != 0 (encrypted data has non-zero version)
 	// - DataKeyID is non-zero (encrypted data always has a valid key ID)
-	if version != VersionUnencrypted && !dataKeyIDIsZero {
+	if version != VersionUnencrypted && !dataKeyIDIsZero(data) {
 		var keyID [3]byte
 		copy(keyID[:], data[1:4])
 		return string(keyID[:]), nil

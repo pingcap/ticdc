@@ -1379,7 +1379,7 @@ func (e *eventStore) writeEvents(
 				}
 
 				op := batch.SetDeferred(keyLen, len(encryptedValue))
-				op.Key = EncodeKeyTo(op.Key[:0], uint64(event.subID), event.tableID, kv, compressionType)
+				op.Key = encodeKeyToWithEncryptionLayer(op.Key[:0], uint64(event.subID), event.tableID, kv, compressionType)
 				if len(op.Key) != keyLen {
 					return fmt.Errorf("encoded event store key size mismatch, expected %d, got %d",
 						keyLen, len(op.Key))
@@ -1491,8 +1491,11 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
 		key := iter.innerIter.Key()
 		value := iter.innerIter.Value()
 
-		// Decrypt if encrypted data is detected and encryption manager is available
-		if encryption.IsEncrypted(value) && iter.encryptionManager != nil {
+		if KeyUsesEncryptionLayer(key) {
+			if iter.encryptionManager == nil {
+				log.Panic("encountered encryption-layer value but no encryption manager is configured",
+					zap.Uint32("keyspaceID", iter.keyspaceID))
+			}
 			decryptedValue, err := iter.encryptionManager.DecryptData(context.Background(), iter.keyspaceID, value)
 			if err != nil {
 				log.Panic("failed to decrypt value", zap.Error(err))

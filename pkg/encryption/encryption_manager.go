@@ -25,11 +25,12 @@ import (
 // EncryptionManager is the main interface for encryption/decryption operations
 type EncryptionManager interface {
 	// EncryptData encrypts data for a keyspace
-	// Returns encrypted data with header, or original data if encryption is not enabled
+	// Returns data wrapped with a 4-byte header. The payload is encrypted when a
+	// data key is available, or left plaintext with a version-0 header otherwise.
 	EncryptData(ctx context.Context, keyspaceID uint32, data []byte) ([]byte, error)
 
 	// DecryptData decrypts data for a keyspace
-	// Automatically detects if data is encrypted and handles accordingly
+	// Automatically unwraps plaintext headers and decrypts encrypted payloads.
 	DecryptData(ctx context.Context, keyspaceID uint32, encryptedData []byte) ([]byte, error)
 }
 
@@ -59,7 +60,7 @@ func (m *encryptionManager) EncryptData(ctx context.Context, keyspaceID uint32, 
 			log.Warn("failed to get current data key, degrade to plaintext",
 				zap.Uint32("keyspaceID", keyspaceID),
 				zap.Error(err))
-			return data, nil
+			return EncodeUnencryptedData(data), nil
 		}
 		log.Error("failed to get current data key",
 			zap.Uint32("keyspaceID", keyspaceID),
@@ -70,7 +71,7 @@ func (m *encryptionManager) EncryptData(ctx context.Context, keyspaceID uint32, 
 	if len(dataKey) == 0 {
 		log.Debug("encryption not enabled for keyspace",
 			zap.Uint32("keyspaceID", keyspaceID))
-		return data, nil
+		return EncodeUnencryptedData(data), nil
 	}
 
 	cipherImpl := NewAES256CTRCipher()
@@ -120,6 +121,18 @@ func (m *encryptionManager) EncryptData(ctx context.Context, keyspaceID uint32, 
 
 // DecryptData decrypts data for a keyspace
 func (m *encryptionManager) DecryptData(ctx context.Context, keyspaceID uint32, encryptedData []byte) ([]byte, error) {
+	if HasUnencryptedHeader(encryptedData) {
+		plaintext, err := DecodeUnencryptedData(encryptedData)
+		if err != nil {
+			log.Warn("failed to decode unencrypted data header",
+				zap.Uint32("keyspaceID", keyspaceID),
+				zap.Int("encryptedSize", len(encryptedData)),
+				zap.Error(err))
+			return nil, cerrors.ErrDecryptionFailed.Wrap(err)
+		}
+		return plaintext, nil
+	}
+
 	// Check if data is encrypted
 	if !IsEncrypted(encryptedData) {
 		// Data is not encrypted, return as-is (backward compatibility)

@@ -32,6 +32,7 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/encryption"
+	cerrors "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/pdutil"
@@ -56,6 +57,24 @@ type spyEncryptionManager struct {
 	encryptCalls      int
 	decryptCalls      int
 }
+
+type unencryptedMetaManager struct{}
+
+func (m *unencryptedMetaManager) IsEncryptionEnabled(ctx context.Context, keyspaceID uint32) bool {
+	return false
+}
+
+func (m *unencryptedMetaManager) GetCurrentDataKey(ctx context.Context, keyspaceID uint32) ([]byte, string, byte, error) {
+	return nil, "", 0, nil
+}
+
+func (m *unencryptedMetaManager) GetDataKey(ctx context.Context, keyspaceID uint32, dataKeyID string) ([]byte, error) {
+	return nil, cerrors.ErrDataKeyNotFound.GenWithStackByArgs("data key not found")
+}
+
+func (m *unencryptedMetaManager) Start(ctx context.Context) error { return nil }
+
+func (m *unencryptedMetaManager) Stop() {}
 
 func (m *spyEncryptionManager) EncryptData(ctx context.Context, keyspaceID uint32, data []byte) ([]byte, error) {
 	m.encryptKeyspaceID = keyspaceID
@@ -293,6 +312,94 @@ func TestEventStoreUsesKeyspaceIDForEncryption(t *testing.T) {
 	require.Equal(t, largeKV.Value, readValues[string(largeKV.Key)])
 	require.Equal(t, uint32(42), spy.decryptKeyspaceID)
 	require.Equal(t, 2, spy.decryptCalls)
+
+	_, err = iter.Close()
+	require.NoError(t, err)
+	subClient.(*mockSubscriptionClient).Unsubscribe(subStat.subID)
+}
+
+func TestEventStoreHandlesUnencryptedValuesFromEncryptionLayer(t *testing.T) {
+	restoreCompression := setZstdCompressionForTest(t, true)
+	defer restoreCompression()
+
+	subClient, store := newEventStoreForTest(t.TempDir())
+	es := store.(*eventStore)
+	defer es.Close(context.Background())
+
+	es.encryptionManager = encryption.NewEncryptionManager(&unencryptedMetaManager{})
+
+	dispatcherID := common.NewDispatcherID()
+	cfID := common.NewChangefeedID4Test("default", "test-cf")
+	span := &heartbeatpb.TableSpan{
+		TableID:    1,
+		StartKey:   []byte("a"),
+		EndKey:     []byte("z"),
+		KeyspaceID: 42,
+	}
+	ok := store.RegisterDispatcher(cfID, dispatcherID, span, 0, func(uint64, uint64) {}, false, false)
+	require.True(t, ok)
+
+	es.dispatcherMeta.RLock()
+	stat := es.dispatcherMeta.dispatcherStats[dispatcherID]
+	subStat := stat.subStat
+	if subStat == nil {
+		subStat = stat.pendingSubStat
+	}
+	es.dispatcherMeta.RUnlock()
+	require.NotNil(t, subStat)
+
+	smallKV := common.RawKVEntry{
+		OpType:  common.OpTypePut,
+		CRTs:    10,
+		StartTs: 5,
+		Key:     []byte("k-small"),
+		Value:   []byte("v"),
+	}
+	largeKV := common.RawKVEntry{
+		OpType:  common.OpTypePut,
+		CRTs:    11,
+		StartTs: 6,
+		Key:     []byte("k-large"),
+		Value:   bytes.Repeat([]byte("v"), es.compressionThreshold+1),
+	}
+	encoder, err := zstd.NewWriter(nil)
+	require.NoError(t, err)
+	defer encoder.Close()
+
+	events := []eventWithCallback{
+		{
+			subID:             subStat.subID,
+			tableID:           subStat.tableSpan.TableID,
+			keyspaceID:        subStat.tableSpan.KeyspaceID,
+			kvs:               []common.RawKVEntry{smallKV, largeKV},
+			currentResolvedTs: 0,
+			callback:          func() {},
+		},
+	}
+	var compressionBuf []byte
+	var rawValueBuf []byte
+	err = es.writeEvents(es.dbs[subStat.dbIndex], events, encoder, &compressionBuf, &rawValueBuf)
+	require.NoError(t, err)
+
+	subStat.resolvedTs.Store(largeKV.CRTs)
+	iter := es.GetIterator(dispatcherID, common.DataRange{
+		Span:          span,
+		CommitTsStart: 0,
+		CommitTsEnd:   largeKV.CRTs,
+	})
+	require.NotNil(t, iter)
+
+	readValues := make(map[string][]byte)
+	for {
+		entry, ok := iter.Next()
+		if !ok {
+			break
+		}
+		readValues[string(entry.Key)] = entry.Value
+	}
+	require.Len(t, readValues, 2)
+	require.Equal(t, smallKV.Value, readValues[string(smallKV.Key)])
+	require.Equal(t, largeKV.Value, readValues[string(largeKV.Key)])
 
 	_, err = iter.Close()
 	require.NoError(t, err)
