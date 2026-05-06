@@ -54,7 +54,7 @@ mysql_groups=(
 	# G11
 	'multi_changefeeds ddl_wait ddl_reentrant force_replicate_table multi_source'
 	# G12
-	'ddl_with_random_move_table'
+	'ddl_with_random_move_table http_api_tls'
 	# G13
 	'tidb_mysql_test fail_over region_merge fail_over_ddl_mix_random_delay'
 	# G14
