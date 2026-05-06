@@ -53,14 +53,14 @@ type changefeedErrorMetricLabels struct {
 	message    string
 }
 
-func shouldPersistRuntimeState(info *config.ChangeFeedInfo, state config.FeedState, err *config.RunningError) bool {
+func isUnchangedRuntimeState(info *config.ChangeFeedInfo, state config.FeedState, err *config.RunningError) bool {
 	if info == nil {
-		return false
-	}
-	if info.State != state {
 		return true
 	}
-	return !sameRunningErrorSignature(info.Error, err)
+	if info.State != state {
+		return false
+	}
+	return sameRunningErrorSignature(info.Error, err)
 }
 
 func sameRunningErrorSignature(lhs *config.RunningError, rhs *config.RunningError) bool {

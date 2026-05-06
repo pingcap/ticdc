@@ -766,7 +766,7 @@ func TestConcurrentStopAndSendEvents(t *testing.T) {
 	require.True(t, co.closed.Load())
 }
 
-func TestShouldPersistRuntimeStateIgnoresRunningErrorTime(t *testing.T) {
+func TestIsUnchangedRuntimeStateIgnoresRunningErrorTime(t *testing.T) {
 	errTime := time.Unix(1, 0)
 	info := &config.ChangeFeedInfo{
 		State: config.StateWarning,
@@ -791,8 +791,8 @@ func TestShouldPersistRuntimeStateIgnoresRunningErrorTime(t *testing.T) {
 		Code:    "CDC:ErrSinkURIInvalid",
 		Message: "another sink error",
 	}))
-	require.True(t, isUnchangedRuntimeState(info, config.StateFailed, info.Error))
-	require.True(t, isUnchangedRuntimeState(info, config.StateWarning, nil))
+	require.False(t, isUnchangedRuntimeState(info, config.StateFailed, info.Error))
+	require.False(t, isUnchangedRuntimeState(info, config.StateWarning, nil))
 }
 
 func TestHandleStateChangeSkipsDuplicateRuntimeStatePersistence(t *testing.T) {
