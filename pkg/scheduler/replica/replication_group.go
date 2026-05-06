@@ -309,11 +309,9 @@ func (m *iMap[T, R]) Get(key T) (R, bool) {
 }
 
 func (m *iMap[T, R]) Set(key T, value R) {
-	if _, loaded := m.inner.LoadOrStore(key, value); loaded {
-		m.inner.Store(key, value)
-		return
+	if _, loaded := m.inner.Swap(key, value); !loaded {
+		m.size.Add(1)
 	}
-	m.size.Add(1)
 }
 
 func (m *iMap[T, R]) Delete(key T) {

@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/stretchr/testify/require"
 )
 
 type testReplicationID string
@@ -66,19 +67,13 @@ func TestIMapLenTracksOverwriteAndDelete(t *testing.T) {
 
 	replicaMap.Set(id, &testReplication{id: id})
 	replicaMap.Set(id, &testReplication{id: id})
-	if got := replicaMap.Len(); got != 1 {
-		t.Fatalf("iMap.Len() after overwrite = %d, want 1", got)
-	}
+	require.Equal(t, 1, replicaMap.Len())
 
 	replicaMap.Delete(testReplicationID("missing"))
-	if got := replicaMap.Len(); got != 1 {
-		t.Fatalf("iMap.Len() after deleting missing key = %d, want 1", got)
-	}
+	require.Equal(t, 1, replicaMap.Len())
 
 	replicaMap.Delete(id)
-	if got := replicaMap.Len(); got != 0 {
-		t.Fatalf("iMap.Len() after delete = %d, want 0", got)
-	}
+	require.Equal(t, 0, replicaMap.Len())
 }
 
 func TestGetAbsentByGroupStopsAtBatch(t *testing.T) {
@@ -101,12 +96,8 @@ func TestGetAbsentByGroupStopsAtBatch(t *testing.T) {
 	}
 
 	absent := db.GetAbsentByGroup(DefaultGroupID, 3)
-	if got := len(absent); got != 3 {
-		t.Fatalf("GetAbsentByGroup() returned %d tasks, want 3", got)
-	}
-	if got := shouldRunCalls.Load(); got != 3 {
-		t.Fatalf("GetAbsentByGroup() called ShouldRun %d times, want 3", got)
-	}
+	require.Len(t, absent, 3)
+	require.Equal(t, int64(3), shouldRunCalls.Load())
 }
 
 func TestGetAbsentByGroupSkipsNotRunnableTasks(t *testing.T) {
@@ -128,10 +119,6 @@ func TestGetAbsentByGroupSkipsNotRunnableTasks(t *testing.T) {
 	}
 
 	absent := db.GetAbsentByGroup(DefaultGroupID, 3)
-	if got := len(absent); got != 0 {
-		t.Fatalf("GetAbsentByGroup() returned %d tasks, want 0", got)
-	}
-	if got := shouldRunCalls.Load(); got != 100 {
-		t.Fatalf("GetAbsentByGroup() called ShouldRun %d times, want 100", got)
-	}
+	require.Len(t, absent, 0)
+	require.Equal(t, int64(100), shouldRunCalls.Load())
 }
