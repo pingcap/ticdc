@@ -28,30 +28,30 @@ func TestCheckpointTsTrackerMin(t *testing.T) {
 	id2 := common.NewDispatcherID()
 	id3 := common.NewDispatcherID()
 
-	tracker.addOrUpdate(id1, 100)
-	tracker.addOrUpdate(id2, 80)
-	tracker.addOrUpdate(id3, 80)
+	tracker.trackSpan(id1, 100)
+	tracker.trackSpan(id2, 80)
+	tracker.trackSpan(id3, 80)
 
 	got, ok := tracker.min()
 	require.True(t, ok)
 	require.Equal(t, uint64(80), got)
 
-	tracker.update(id2, 120)
+	tracker.updateTrackedSpan(id2, 120)
 	got, ok = tracker.min()
 	require.True(t, ok)
 	require.Equal(t, uint64(80), got)
 
-	tracker.remove(id3)
+	tracker.untrackSpan(id3)
 	got, ok = tracker.min()
 	require.True(t, ok)
 	require.Equal(t, uint64(100), got)
 
-	tracker.remove(id1)
+	tracker.untrackSpan(id1)
 	got, ok = tracker.min()
 	require.True(t, ok)
 	require.Equal(t, uint64(120), got)
 
-	tracker.remove(id2)
+	tracker.untrackSpan(id2)
 	got, ok = tracker.min()
 	require.False(t, ok)
 	require.Equal(t, uint64(0), got)
@@ -62,8 +62,8 @@ func TestCheckpointTsTrackerIgnoresMissingUpdate(t *testing.T) {
 
 	tracker := newCheckpointTsTracker()
 	id := common.NewDispatcherID()
-	tracker.update(id, 100)
-	tracker.remove(id)
+	tracker.updateTrackedSpan(id, 100)
+	tracker.untrackSpan(id)
 
 	got, ok := tracker.min()
 	require.False(t, ok)
@@ -76,16 +76,16 @@ func TestCheckpointTsTrackerRemovesStaleCheckpointTs(t *testing.T) {
 	tracker := newCheckpointTsTracker()
 	blockingID := common.NewDispatcherID()
 	movingID := common.NewDispatcherID()
-	tracker.addOrUpdate(blockingID, 1)
-	tracker.addOrUpdate(movingID, 2)
+	tracker.trackSpan(blockingID, 1)
+	tracker.trackSpan(movingID, 2)
 
 	for checkpointTs := uint64(3); checkpointTs < 100; checkpointTs++ {
-		tracker.update(movingID, checkpointTs)
+		tracker.updateTrackedSpan(movingID, checkpointTs)
 	}
 
-	require.Equal(t, 2, tracker.heap.Len())
+	require.Equal(t, 2, tracker.minCheckpointTsHeap.Len())
 
-	tracker.remove(blockingID)
+	tracker.untrackSpan(blockingID)
 	got, ok := tracker.min()
 	require.True(t, ok)
 	require.Equal(t, uint64(99), got)

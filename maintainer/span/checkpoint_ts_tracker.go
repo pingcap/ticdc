@@ -19,89 +19,109 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 )
 
+// checkpointTsTracker maintains the minimum checkpointTs among non-DDL spans
+// that are not replicating yet. The owning SpanController must hold its mutex
+// when accessing this tracker.
 type checkpointTsTracker struct {
-	// byID contains exactly the non-DDL spans that are absent or scheduling.
-	// The owning Controller must hold its mutex when accessing this tracker.
-	byID   map[common.DispatcherID]uint64
-	counts map[uint64]int
-	heap   checkpointTsHeap
+	// checkpointTsBySpanID contains exactly the non-DDL spans that are absent or
+	// scheduling. Replicating spans are removed because they no longer block the
+	// non-replicating minimum checkpoint.
+	checkpointTsBySpanID map[common.DispatcherID]uint64
+
+	// checkpointTsRefCounts tracks how many spans currently hold each checkpointTs.
+	// The heap stores each checkpointTs once, so the count keeps duplicate values
+	// from being removed too early.
+	checkpointTsRefCounts map[uint64]int
+
+	// minCheckpointTsHeap stores unique checkpointTs values and gives O(1) access
+	// to the current minimum. Insertions and removals are O(log n).
+	minCheckpointTsHeap checkpointTsHeap
 }
 
 func newCheckpointTsTracker() *checkpointTsTracker {
 	return &checkpointTsTracker{
-		byID:   make(map[common.DispatcherID]uint64),
-		counts: make(map[uint64]int),
-		heap:   newCheckpointTsHeap(),
+		checkpointTsBySpanID:  make(map[common.DispatcherID]uint64),
+		checkpointTsRefCounts: make(map[uint64]int),
+		minCheckpointTsHeap:   newCheckpointTsHeap(),
 	}
 }
 
-func (t *checkpointTsTracker) addOrUpdate(id common.DispatcherID, checkpointTs uint64) {
-	if old, ok := t.byID[id]; ok {
+// trackSpan records a span that has entered a non-replicating state. It also
+// handles duplicate calls for the same span by replacing the old checkpointTs.
+func (t *checkpointTsTracker) trackSpan(id common.DispatcherID, checkpointTs uint64) {
+	if old, ok := t.checkpointTsBySpanID[id]; ok {
 		if old == checkpointTs {
 			return
 		}
 		t.decrement(old)
 	}
-	t.byID[id] = checkpointTs
+	t.checkpointTsBySpanID[id] = checkpointTs
 	t.increment(checkpointTs)
 }
 
-func (t *checkpointTsTracker) update(id common.DispatcherID, checkpointTs uint64) {
-	old, ok := t.byID[id]
+// updateTrackedSpan updates checkpointTs only for spans that are already
+// tracked. Missing spans are ignored because DDL or replicating spans are not
+// part of the non-replicating minimum.
+func (t *checkpointTsTracker) updateTrackedSpan(id common.DispatcherID, checkpointTs uint64) {
+	old, ok := t.checkpointTsBySpanID[id]
 	if !ok || old == checkpointTs {
 		return
 	}
 	t.decrement(old)
-	t.byID[id] = checkpointTs
+	t.checkpointTsBySpanID[id] = checkpointTs
 	t.increment(checkpointTs)
 }
 
-func (t *checkpointTsTracker) remove(id common.DispatcherID) {
-	old, ok := t.byID[id]
+// untrackSpan removes a span after it becomes replicating or leaves the
+// controller. Missing spans are ignored for the same reason as updateTrackedSpan.
+func (t *checkpointTsTracker) untrackSpan(id common.DispatcherID) {
+	old, ok := t.checkpointTsBySpanID[id]
 	if !ok {
 		return
 	}
-	delete(t.byID, id)
+	delete(t.checkpointTsBySpanID, id)
 	t.decrement(old)
-	if len(t.byID) == 0 {
+	if len(t.checkpointTsBySpanID) == 0 {
 		// Release large maps after a bootstrap wave drains. A 1M-table changefeed
 		// can otherwise retain the tracker backing storage for its whole lifetime.
 		t.reset()
 	}
 }
 
+// min returns the current minimum checkpointTs among tracked spans.
 func (t *checkpointTsTracker) min() (uint64, bool) {
-	if t.heap.Len() == 0 {
+	if t.minCheckpointTsHeap.Len() == 0 {
 		return 0, false
 	}
-	return t.heap.peek(), true
+	return t.minCheckpointTsHeap.peek(), true
 }
 
 func (t *checkpointTsTracker) increment(checkpointTs uint64) {
-	if t.counts[checkpointTs] > 0 {
-		t.counts[checkpointTs]++
+	if t.checkpointTsRefCounts[checkpointTs] > 0 {
+		t.checkpointTsRefCounts[checkpointTs]++
 		return
 	}
-	t.counts[checkpointTs] = 1
-	heap.Push(&t.heap, checkpointTs)
+	t.checkpointTsRefCounts[checkpointTs] = 1
+	heap.Push(&t.minCheckpointTsHeap, checkpointTs)
 }
 
 func (t *checkpointTsTracker) decrement(checkpointTs uint64) {
-	count := t.counts[checkpointTs]
+	count := t.checkpointTsRefCounts[checkpointTs]
 	if count <= 1 {
-		delete(t.counts, checkpointTs)
-		t.heap.remove(checkpointTs)
+		delete(t.checkpointTsRefCounts, checkpointTs)
+		t.minCheckpointTsHeap.remove(checkpointTs)
 		return
 	}
-	t.counts[checkpointTs] = count - 1
+	t.checkpointTsRefCounts[checkpointTs] = count - 1
 }
 
 func (t *checkpointTsTracker) reset() {
-	t.byID = make(map[common.DispatcherID]uint64)
-	t.counts = make(map[uint64]int)
-	t.heap = newCheckpointTsHeap()
+	t.checkpointTsBySpanID = make(map[common.DispatcherID]uint64)
+	t.checkpointTsRefCounts = make(map[uint64]int)
+	t.minCheckpointTsHeap = newCheckpointTsHeap()
 }
 
+// checkpointTsHeap is a removable min-heap for unique checkpointTs values.
 type checkpointTsHeap struct {
 	values  []uint64
 	indexes map[uint64]int

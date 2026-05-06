@@ -364,7 +364,7 @@ func (c *Controller) UpdateStatus(span *replica.SpanReplication, status *heartbe
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if span.UpdateStatus(status) {
-		c.nonReplicatingCheckpointTs.update(span.ID, span.GetStatus().CheckpointTs)
+		c.nonReplicatingCheckpointTs.updateTrackedSpan(span.ID, span.GetStatus().CheckpointTs)
 	}
 	checker.UpdateStatus(span)
 }
@@ -611,11 +611,11 @@ func (c *Controller) trackNonReplicatingSpan(span *replica.SpanReplication) {
 	if span == c.ddlSpan {
 		return
 	}
-	c.nonReplicatingCheckpointTs.addOrUpdate(span.ID, span.GetStatus().CheckpointTs)
+	c.nonReplicatingCheckpointTs.trackSpan(span.ID, span.GetStatus().CheckpointTs)
 }
 
 func (c *Controller) untrackNonReplicatingSpan(span *replica.SpanReplication) {
-	c.nonReplicatingCheckpointTs.remove(span.ID)
+	c.nonReplicatingCheckpointTs.untrackSpan(span.ID)
 }
 
 // addToSchemaAndTableMap adds the span to the schema and table map
