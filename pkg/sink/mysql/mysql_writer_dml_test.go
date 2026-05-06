@@ -1059,9 +1059,9 @@ func TestPrepareDMLsWithExpressionIndex(t *testing.T) {
 	helper.Tk().MustExec("use test")
 
 	createTableSQL := `CREATE TABLE tb1 (
-		id INT PRIMARY KEY,
-		j JSON,
-		UNIQUE KEY j_index ((cast(json_extract(j,'$[*]') as signed array)), id))`
+    	id INT PRIMARY KEY,
+    	j JSON,
+    	UNIQUE KEY j_index ((cast(json_extract(j,'$[*]') as signed array)), id))`
 	job := helper.DDL2Job(createTableSQL)
 	require.NotNil(t, job)
 
