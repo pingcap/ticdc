@@ -81,6 +81,7 @@ func (m *spyEncryptionManager) EncryptData(ctx context.Context, keyspaceID uint3
 	m.encryptCalls++
 	encrypted := make([]byte, encryption.EncryptionHeaderSize+len(data))
 	encrypted[0] = 0x01
+	encrypted[3] = 0x01
 	copy(encrypted[encryption.EncryptionHeaderSize:], data)
 	return encrypted, nil
 }
@@ -1288,6 +1289,65 @@ func TestEventStoreCompressionAndIterDecodeBufferReuse(t *testing.T) {
 	rowCount, err := iter.Close()
 	require.NoError(t, err)
 	require.Equal(t, int64(len(expectedValues)), rowCount)
+}
+
+func TestEventStoreIterReadsLegacyCompressedValuesWithEncryptionManager(t *testing.T) {
+	restoreCfg := setZstdCompressionForTest(t, true)
+	defer restoreCfg()
+
+	dir := t.TempDir()
+	_, storeInt := newEventStoreForTest(dir)
+	store := storeInt.(*eventStore)
+	defer store.Close(context.Background())
+
+	entry := common.RawKVEntry{
+		OpType:  common.OpTypePut,
+		StartTs: 100,
+		CRTs:    200,
+		Key:     []byte("legacy-compressed"),
+		Value:   bytes.Repeat([]byte("value"), store.compressionThreshold),
+	}
+	events := []eventWithCallback{{
+		subID:    1,
+		tableID:  1,
+		kvs:      []common.RawKVEntry{entry},
+		callback: func() {},
+	}}
+
+	encoder, err := zstd.NewWriter(nil)
+	require.NoError(t, err)
+	defer encoder.Close()
+
+	var compressionBuf []byte
+	var rawValueBuf []byte
+	err = store.writeEvents(store.dbs[0], events, encoder, &compressionBuf, &rawValueBuf)
+	require.NoError(t, err)
+
+	innerIter, err := store.dbs[0].NewIter(&pebble.IterOptions{})
+	require.NoError(t, err)
+	decoder := store.decoderPool.Get().(*zstd.Decoder)
+	iter := &eventStoreIter{
+		tableSpan: &heartbeatpb.TableSpan{
+			TableID:  1,
+			StartKey: []byte{},
+			EndKey:   []byte{0xFF},
+		},
+		innerIter:         innerIter,
+		decoder:           decoder,
+		decoderPool:       store.decoderPool,
+		encryptionManager: encryption.NewEncryptionManager(&unencryptedMetaManager{}),
+		keyspaceID:        42,
+	}
+	require.True(t, iter.innerIter.First())
+
+	readEntry, ok := iter.Next()
+	require.True(t, ok)
+	require.Equal(t, entry.Key, readEntry.Key)
+	require.Equal(t, entry.Value, readEntry.Value)
+
+	rowCount, err := iter.Close()
+	require.NoError(t, err)
+	require.Equal(t, int64(1), rowCount)
 }
 
 func TestEventStoreGetIteratorConcurrently(t *testing.T) {

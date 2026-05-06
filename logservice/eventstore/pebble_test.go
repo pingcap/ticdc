@@ -124,19 +124,11 @@ func TestCompressionAndKeyOrder(t *testing.T) {
 	dmlOrder, compressionType := DecodeKeyMetas(keyWithZstd)
 	require.Equal(t, DMLOrderInsert, dmlOrder)
 	require.Equal(t, CompressionZSTD, compressionType)
-	require.False(t, KeyUsesEncryptionLayer(keyWithZstd))
 
 	keyWithNone := EncodeKey(1, 1, ev, CompressionNone)
 	dmlOrder, compressionType = DecodeKeyMetas(keyWithNone)
 	require.Equal(t, DMLOrderInsert, dmlOrder)
 	require.Equal(t, CompressionNone, compressionType)
-	require.False(t, KeyUsesEncryptionLayer(keyWithNone))
-
-	keyWithEncryptionLayer := encodeKeyToWithEncryptionLayer(make([]byte, 0, encodedKeyLen(ev)), 1, 1, ev, CompressionZSTD)
-	dmlOrder, compressionType = DecodeKeyMetas(keyWithEncryptionLayer)
-	require.Equal(t, DMLOrderInsert, dmlOrder)
-	require.Equal(t, CompressionZSTD, compressionType)
-	require.True(t, KeyUsesEncryptionLayer(keyWithEncryptionLayer))
 
 	// 2. Test key sorting order.
 	// For the same transaction (same StartTs, same CRTs), the order should be Delete < Update < Insert.

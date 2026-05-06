@@ -146,7 +146,7 @@ func TestEncryptDecryptRoundTripWithAES128Key(t *testing.T) {
 	meta := &mockMetaManager{
 		currentKey:   key,
 		currentKeyID: "K02",
-		version:      0x01,
+		version:      0x7F,
 	}
 	manager := NewEncryptionManager(meta)
 

@@ -72,15 +72,18 @@ func dataKeyIDIsZero(data []byte) bool {
 	return data[1] == 0 && data[2] == 0 && data[3] == 0
 }
 
+func hasEncryptedHeader(data []byte) bool {
+	return data[0] != VersionUnencrypted && !dataKeyIDIsZero(data)
+}
+
 // IsEncrypted checks if data is encrypted by examining the version byte
 // Data is considered encrypted if version != 0 (VersionUnencrypted) and the
 // 3-byte data key ID is non-zero.
-// The caller should validate that the version matches expected versions from TiKV metadata
 func IsEncrypted(data []byte) bool {
 	if len(data) < EncryptionHeaderSize {
 		return false
 	}
-	return data[0] != VersionUnencrypted && !dataKeyIDIsZero(data)
+	return hasEncryptedHeader(data)
 }
 
 // HasUnencryptedHeader checks whether data uses the 4-byte plaintext wrapper.
@@ -97,7 +100,7 @@ func IsEncryptedWithVersion(data []byte, expectedVersion byte) bool {
 	if len(data) < EncryptionHeaderSize {
 		return false
 	}
-	return data[0] == expectedVersion
+	return hasEncryptedHeader(data) && data[0] == expectedVersion
 }
 
 // GetVersion extracts the version byte from data
@@ -149,12 +152,10 @@ func ExtractDataKeyID(data []byte) (string, error) {
 		return "", cerrors.ErrDecodeFailed.GenWithStackByArgs("data too short")
 	}
 
-	version := data[0]
-
-	// Only extract key ID from data that definitively looks like new-format encrypted:
+	// Only extract key ID from data that definitely looks like new-format encrypted:
 	// - version != 0 (encrypted data has non-zero version)
-	// - DataKeyID is non-zero (encrypted data always has a valid key ID)
-	if version != VersionUnencrypted && !dataKeyIDIsZero(data) {
+	// - data key ID is non-zero
+	if hasEncryptedHeader(data) {
 		var keyID [3]byte
 		copy(keyID[:], data[1:4])
 		return string(keyID[:]), nil

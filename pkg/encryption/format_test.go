@@ -39,7 +39,7 @@ func TestEncodeEncryptedDataInvalidVersion(t *testing.T) {
 
 func TestEncodeDecodeEncryptedData(t *testing.T) {
 	data := []byte("payload")
-	keyID := "abc" // 3 bytes
+	keyID := "abc"
 	version := byte(0x01)
 
 	encoded, err := EncodeEncryptedData(data, version, keyID)
@@ -58,12 +58,12 @@ func TestEncodeDecodeEncryptedData(t *testing.T) {
 
 func TestEncodeDecodeWithDifferentVersions(t *testing.T) {
 	data := []byte("payload")
-	keyID := "xyz"
 
 	// Test with different version values that might come from TiKV
 	versions := []byte{0x01, 0x02, 0x10, 0xFF}
 
 	for _, version := range versions {
+		keyID := string([]byte{0xAA, 0xBB, version ^ 0xFF})
 		encoded, err := EncodeEncryptedData(data, version, keyID)
 		require.NoError(t, err)
 		require.True(t, IsEncrypted(encoded))
@@ -103,13 +103,13 @@ func TestIsEncryptedWithLegacyData(t *testing.T) {
 }
 
 func TestIsEncryptedWithVersionByte(t *testing.T) {
-	// Data with non-zero version byte should be detected as encrypted
+	// Data with a non-zero version and non-zero data key ID should be detected as encrypted.
 	encryptedData := []byte{0x01, 'a', 'b', 'c', 'd', 'a', 't', 'a'}
 	require.True(t, IsEncrypted(encryptedData))
 
-	// Data with different version values
+	// Version and data key ID are independent fields.
 	for _, v := range []byte{0x01, 0x02, 0x10, 0xFF} {
-		data := []byte{v, 'a', 'b', 'c', 'd', 'a', 't', 'a'}
+		data := []byte{v, 'a', 'b', v ^ 0xFF, 'd', 'a', 't', 'a'}
 		require.True(t, IsEncrypted(data))
 	}
 
