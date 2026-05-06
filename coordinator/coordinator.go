@@ -256,22 +256,29 @@ func (c *coordinator) handleStateChange(
 		log.Warn("changefeed not found", zap.String("changefeed", event.changefeedID.String()))
 		return nil
 	}
-	cfInfo, err := cf.GetInfo().Clone()
-	if err != nil {
-		return errors.Trace(err)
+	currentInfo := cf.GetInfo()
+	if shouldPersistRuntimeState(currentInfo, event.state, event.err) {
+		cfInfo, err := currentInfo.Clone()
+		if err != nil {
+			return errors.Trace(err)
+		}
+		cfInfo.State = event.state
+		cfInfo.Error = event.err
+		progress := config.ProgressNone
+		if event.state == config.StateFailed || event.state == config.StateFinished {
+			progress = config.ProgressStopping
+		}
+		if err = c.backend.UpdateChangefeed(ctx, cfInfo, cf.GetStatus().CheckpointTs, progress); err != nil {
+			log.Error("failed to update changefeed state",
+				zap.Error(err))
+			return errors.Trace(err)
+		}
+		cf.SetInfo(cfInfo)
+	} else {
+		log.Debug("skip persisting unchanged changefeed runtime state",
+			zap.String("changefeed", event.changefeedID.String()),
+			zap.String("state", string(event.state)))
 	}
-	cfInfo.State = event.state
-	cfInfo.Error = event.err
-	progress := config.ProgressNone
-	if event.state == config.StateFailed || event.state == config.StateFinished {
-		progress = config.ProgressStopping
-	}
-	if err = c.backend.UpdateChangefeed(ctx, cfInfo, cf.GetStatus().CheckpointTs, progress); err != nil {
-		log.Error("failed to update changefeed state",
-			zap.Error(err))
-		return errors.Trace(err)
-	}
-	cf.SetInfo(cfInfo)
 
 	switch event.state {
 	case config.StateWarning:
