@@ -479,7 +479,7 @@ func (c *eventBroker) getScanTaskDataRange(task scanTask) (bool, common.DataRang
 		// Scan range can become empty after applying capping (for example, scan window).
 		// Send a signal resolved-ts event (rate limited) to keep downstream responsive,
 		// but do not advance the watermark here.
-		c.sendSignalResolvedTs(task)
+		//c.sendSignalResolvedTs(task)
 		return false, common.DataRange{}
 	}
 
