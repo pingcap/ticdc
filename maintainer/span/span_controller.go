@@ -358,14 +358,15 @@ func (c *Controller) UpdateStatus(span *replica.SpanReplication, status *heartbe
 		span.UpdateStatus(status)
 		return
 	}
+	if span.UpdateStatus(status) {
+		c.nonReplicatingCheckpointTs.updateTrackedSpan(span.ID, span.GetStatus().CheckpointTs)
+	}
+
 	// Note: a read lock is required inside the `GetGroupChecker` method.
 	checker := c.GetGroupChecker(span.GetGroupID())
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if span.UpdateStatus(status) {
-		c.nonReplicatingCheckpointTs.updateTrackedSpan(span.ID, span.GetStatus().CheckpointTs)
-	}
 	checker.UpdateStatus(span)
 }
 
