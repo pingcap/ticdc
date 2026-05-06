@@ -329,8 +329,6 @@ func (c *changefeedStatus) maxScanInterval() time.Duration {
 }
 
 func (c *changefeedStatus) refreshMinSentResolvedTs() {
-	// fizz for test
-	return
 	now := time.Now()
 	minSentResolvedTs := ^uint64(0)
 	minSentResolvedTsWithStale := ^uint64(0)

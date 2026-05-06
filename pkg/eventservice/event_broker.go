@@ -270,6 +270,8 @@ func (c *eventBroker) refreshMinSentResolvedTs(ctx context.Context) error {
 		case <-ctx.Done():
 			return context.Cause(ctx)
 		case <-ticker.C:
+			// for test
+			continue
 			c.changefeedMap.Range(func(key, value interface{}) bool {
 				status := value.(*changefeedStatus)
 				status.refreshMinSentResolvedTs()
