@@ -43,6 +43,7 @@ func TestShouldPersistRuntimeStateIgnoresRunningErrorTime(t *testing.T) {
 		},
 	}
 
+	require.False(t, shouldPersistRuntimeState(nil, config.StateWarning, info.Error))
 	require.False(t, shouldPersistRuntimeState(info, config.StateWarning, &config.RunningError{
 		Time:    errTime.Add(time.Hour),
 		Addr:    "127.0.0.1:8300",
@@ -99,6 +100,7 @@ func TestHandleStateChangeSkipsDuplicateRuntimeStatePersistence(t *testing.T) {
 		State:        config.StateWarning,
 		Error:        storedError,
 		SinkURI:      "mysql://127.0.0.1:3306",
+		Epoch:        233,
 	}, 1, false)
 	changefeedDB.AddReplicatingMaintainer(cf, self.ID)
 
@@ -112,7 +114,43 @@ func TestHandleStateChangeSkipsDuplicateRuntimeStatePersistence(t *testing.T) {
 	require.NoError(t, co.handleStateChange(context.Background(), event))
 
 	require.True(t, cf.GetInfo().Error.Time.Equal(storedError.Time))
-	require.Equal(t, 1, controller.operatorController.OperatorSize())
+	require.Equal(t, uint64(233), cf.GetInfo().Epoch)
+	require.Equal(t, 0, controller.operatorController.OperatorSize())
+	require.Equal(t, 1, changefeedDB.GetReplicatingSize())
+}
+
+func TestHandleStateChangeSkipsNilChangefeedInfo(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	t.Cleanup(ctrl.Finish)
+
+	backend := mock_changefeed.NewMockBackend(ctrl)
+	changefeedDB := changefeed.NewChangefeedDB(1216)
+	controller := &Controller{
+		backend:      backend,
+		changefeedDB: changefeedDB,
+	}
+	co := &coordinator{
+		backend:    backend,
+		controller: controller,
+	}
+
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		Config:       config.GetDefaultReplicaConfig(),
+		State:        config.StateNormal,
+		SinkURI:      "mysql://127.0.0.1:3306",
+	}, 1, false)
+	changefeedDB.AddAbsentChangefeed(cf)
+	cf.SetInfo(nil)
+
+	event := newChangefeedChange(cf, config.StateWarning, ChangeState, &config.RunningError{
+		Time:    time.Unix(1, 0),
+		Addr:    "127.0.0.1:8300",
+		Code:    "CDC:ErrSinkURIInvalid",
+		Message: "sink uri invalid",
+	})
+	require.NoError(t, co.handleStateChange(context.Background(), event))
 }
 
 func TestHandleStateChangePersistsRuntimeStateWhenStateChanges(t *testing.T) {

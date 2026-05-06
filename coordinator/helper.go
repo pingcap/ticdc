@@ -55,7 +55,7 @@ type changefeedErrorMetricLabels struct {
 
 func shouldPersistRuntimeState(info *config.ChangeFeedInfo, state config.FeedState, err *config.RunningError) bool {
 	if info == nil {
-		return true
+		return false
 	}
 	if info.State != state {
 		return true
