@@ -1293,6 +1293,124 @@ func (e *eventStore) collectAndReportStoreMetrics() {
 	metrics.EventStoreResolvedTsLagGauge.Set(eventStoreResolvedTsLagInSec)
 }
 
+type preparedValueForWrite struct {
+	value           []byte
+	compressionType CompressionType
+	valueBytesAfter int64
+	rawBuf          []byte
+	compressionBuf  []byte
+	directWrite     bool
+}
+
+func (e *eventStore) prepareValueForWrite(
+	encoder *zstd.Encoder,
+	keyspaceID uint32,
+	kv *common.RawKVEntry,
+	rawBuf []byte,
+	compressionBuf []byte,
+) (preparedValueForWrite, error) {
+	valueBytesBefore := kv.GetSize()
+	needCompress := e.enableZstdCompression && valueBytesBefore > int64(e.compressionThreshold)
+	if e.encryptionManager == nil && !needCompress {
+		return preparedValueForWrite{
+			compressionType: CompressionNone,
+			valueBytesAfter: valueBytesBefore,
+			rawBuf:          rawBuf,
+			compressionBuf:  compressionBuf,
+			directWrite:     true,
+		}, nil
+	}
+
+	if cap(rawBuf) < int(valueBytesBefore) {
+		rawBuf = make([]byte, 0, int(valueBytesBefore))
+	} else {
+		rawBuf = rawBuf[:0]
+	}
+	rawValue := kv.EncodeTo(rawBuf)
+	value := rawValue
+	prepared := preparedValueForWrite{
+		compressionType: CompressionNone,
+		valueBytesAfter: valueBytesBefore,
+		rawBuf:          rawValue[:0],
+		compressionBuf:  compressionBuf,
+	}
+
+	if needCompress {
+		maxEncodedSize := encoder.MaxEncodedSize(len(rawValue))
+		if cap(compressionBuf) < maxEncodedSize {
+			compressionBuf = make([]byte, 0, maxEncodedSize)
+		} else {
+			compressionBuf = compressionBuf[:0]
+		}
+		compressedValue := encoder.EncodeAll(rawValue, compressionBuf)
+		value = compressedValue
+		prepared.compressionType = CompressionZSTD
+		prepared.valueBytesAfter = int64(len(compressedValue))
+		prepared.compressionBuf = compressedValue[:0]
+		metrics.EventStoreCompressedRowsCount.Inc()
+	}
+
+	if e.encryptionManager != nil {
+		encryptedValue, err := e.encryptionManager.EncryptData(context.Background(), keyspaceID, value)
+		if err != nil {
+			return preparedValueForWrite{}, err
+		}
+		value = encryptedValue
+	}
+
+	prepared.value = value
+	return prepared, nil
+}
+
+func writePreparedValueToBatch(
+	batch *pebble.Batch,
+	subID logpuller.SubscriptionID,
+	tableID int64,
+	kv *common.RawKVEntry,
+	keyLen int,
+	compressionType CompressionType,
+	value []byte,
+) error {
+	op := batch.SetDeferred(keyLen, len(value))
+	op.Key = EncodeKeyTo(op.Key[:0], uint64(subID), tableID, kv, compressionType)
+	if len(op.Key) != keyLen {
+		return fmt.Errorf("encoded event store key size mismatch, expected %d, got %d",
+			keyLen, len(op.Key))
+	}
+	copiedValueLen := copy(op.Value, value)
+	op.Value = op.Value[:copiedValueLen]
+	if copiedValueLen != len(value) {
+		return fmt.Errorf("prepared raw kv entry size mismatch, expected %d, got %d",
+			len(value), copiedValueLen)
+	}
+	return op.Finish()
+}
+
+func writeRawValueToBatch(
+	batch *pebble.Batch,
+	subID logpuller.SubscriptionID,
+	tableID int64,
+	kv *common.RawKVEntry,
+	keyLen int,
+	valueBytesBefore int64,
+) error {
+	// SetDeferred reserves the final Pebble batch space up front, so the
+	// uncompressed raw KV can be encoded directly into op.Value without
+	// allocating a separate value slice and copying it later.
+	op := batch.SetDeferred(keyLen, int(valueBytesBefore))
+	op.Key = EncodeKeyTo(op.Key[:0], uint64(subID), tableID, kv, CompressionNone)
+	if len(op.Key) != keyLen {
+		return fmt.Errorf("encoded event store key size mismatch, expected %d, got %d",
+			keyLen, len(op.Key))
+	}
+	op.Value = kv.EncodeTo(op.Value[:0])
+	if len(op.Value) != int(valueBytesBefore) {
+		return fmt.Errorf("encoded raw kv entry size mismatch, expected %d, got %d",
+			valueBytesBefore, len(op.Value))
+	}
+	return op.Finish()
+}
+
 func (e *eventStore) writeEvents(
 	db *pebble.DB,
 	events []eventWithCallback,
@@ -1329,115 +1447,26 @@ func (e *eventStore) writeEvents(
 			}
 
 			valueBytesBefore := kv.GetSize()
-			valueBytesAfter := valueBytesBefore
 			keyLen := encodedKeyLen(kv)
-			compressionType := CompressionNone
-			needCompress := e.enableZstdCompression && valueBytesBefore > int64(e.compressionThreshold)
-			if e.encryptionManager == nil && !needCompress {
-				// SetDeferred reserves the final Pebble batch space up front, so
-				// the uncompressed raw KV can be encoded directly into op.Value
-				// without allocating a separate value slice and copying it later.
-				op := batch.SetDeferred(keyLen, int(valueBytesBefore))
-				op.Key = EncodeKeyTo(op.Key[:0], uint64(event.subID), event.tableID, kv, CompressionNone)
-				if len(op.Key) != keyLen {
-					return fmt.Errorf("encoded event store key size mismatch, expected %d, got %d",
-						keyLen, len(op.Key))
-				}
-				op.Value = kv.EncodeTo(op.Value[:0])
-				if len(op.Value) != int(valueBytesBefore) {
-					return fmt.Errorf("encoded raw kv entry size mismatch, expected %d, got %d",
-						valueBytesBefore, len(op.Value))
-				}
-				if err := op.Finish(); err != nil {
+			prepared, err := e.prepareValueForWrite(encoder, event.keyspaceID, kv, rawBuf, dstBuf)
+			if err != nil {
+				return err
+			}
+			rawBuf = prepared.rawBuf
+			dstBuf = prepared.compressionBuf
+			if prepared.directWrite {
+				if err := writeRawValueToBatch(batch, event.subID, event.tableID, kv, keyLen, valueBytesBefore); err != nil {
 					return err
-				}
-			} else if e.encryptionManager != nil {
-				if cap(rawBuf) < int(valueBytesBefore) {
-					rawBuf = make([]byte, 0, int(valueBytesBefore))
-				} else {
-					rawBuf = rawBuf[:0]
-				}
-				rawValue := kv.EncodeTo(rawBuf)
-				value := rawValue
-				if needCompress {
-					maxEncodedSize := encoder.MaxEncodedSize(len(rawValue))
-					if cap(dstBuf) < maxEncodedSize {
-						dstBuf = make([]byte, 0, maxEncodedSize)
-					} else {
-						dstBuf = dstBuf[:0]
-					}
-					value = encoder.EncodeAll(rawValue, dstBuf)
-					valueBytesAfter = int64(len(value))
-					compressionType = CompressionZSTD
-					metrics.EventStoreCompressedRowsCount.Inc()
-				}
-
-				// Encrypt if encryption is enabled (after compression)
-				encryptedValue, err := e.encryptionManager.EncryptData(context.Background(), event.keyspaceID, value)
-				if err != nil {
-					return err
-				}
-
-				op := batch.SetDeferred(keyLen, len(encryptedValue))
-				op.Key = EncodeKeyTo(op.Key[:0], uint64(event.subID), event.tableID, kv, compressionType)
-				if len(op.Key) != keyLen {
-					return fmt.Errorf("encoded event store key size mismatch, expected %d, got %d",
-						keyLen, len(op.Key))
-				}
-				copiedValueLen := copy(op.Value, encryptedValue)
-				op.Value = op.Value[:copiedValueLen]
-				if copiedValueLen != len(encryptedValue) {
-					return fmt.Errorf("encrypted raw kv entry size mismatch, expected %d, got %d",
-						len(encryptedValue), copiedValueLen)
-				}
-				if err := op.Finish(); err != nil {
-					return err
-				}
-				rawBuf = rawValue[:0]
-				if needCompress {
-					dstBuf = value[:0]
 				}
 			} else {
-				if cap(rawBuf) < int(valueBytesBefore) {
-					rawBuf = make([]byte, 0, int(valueBytesBefore))
-				} else {
-					rawBuf = rawBuf[:0]
-				}
-				rawValue := kv.EncodeTo(rawBuf)
-				maxEncodedSize := encoder.MaxEncodedSize(len(rawValue))
-				if cap(dstBuf) < maxEncodedSize {
-					dstBuf = make([]byte, 0, maxEncodedSize)
-				} else {
-					dstBuf = dstBuf[:0]
-				}
-				value := encoder.EncodeAll(rawValue, dstBuf)
-				valueBytesAfter = int64(len(value))
-				compressionType = CompressionZSTD
-				metrics.EventStoreCompressedRowsCount.Inc()
-				// SetDeferred is a write path optimization. Now that the compressed
-				// value length is known, reserve the exact key/value space in the
-				// Pebble batch, encode the key directly into op.Key, and copy the
-				// compressed value into op.Value without building a temporary key.
-				op := batch.SetDeferred(keyLen, len(value))
-				op.Key = EncodeKeyTo(op.Key[:0], uint64(event.subID), event.tableID, kv, compressionType)
-				if len(op.Key) != keyLen {
-					return fmt.Errorf("encoded event store key size mismatch, expected %d, got %d",
-						keyLen, len(op.Key))
-				}
-				copiedValueLen := copy(op.Value, value)
-				op.Value = op.Value[:copiedValueLen]
-				if copiedValueLen != len(value) {
-					return fmt.Errorf("compressed raw kv entry size mismatch, expected %d, got %d",
-						len(value), copiedValueLen)
-				}
-				if err := op.Finish(); err != nil {
+				if err := writePreparedValueToBatch(
+					batch, event.subID, event.tableID, kv, keyLen, prepared.compressionType, prepared.value,
+				); err != nil {
 					return err
 				}
-				rawBuf = rawValue[:0]
-				dstBuf = value[:0]
 			}
 			totalValueBytesBefore += valueBytesBefore
-			totalValueBytesAfter += valueBytesAfter
+			totalValueBytesAfter += prepared.valueBytesAfter
 		}
 	}
 	if compressionBuf != nil {
