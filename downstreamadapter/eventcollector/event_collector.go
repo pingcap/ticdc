@@ -39,7 +39,7 @@ import (
 const (
 	receiveChanSize               = 1024 * 8
 	commonMsgRetryQuota           = 3 // The number of retries for most droppable dispatcher requests.
-	eventServiceHeartbeatInterval = time.Second
+	eventServiceHeartbeatInterval = time.Second * 10
 )
 
 // DispatcherMessage is the message send to EventService.
