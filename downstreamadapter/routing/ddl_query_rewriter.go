@@ -30,13 +30,9 @@ func (r Router) rewriteParserBackedDDLQuery(ddl *commonEvent.DDLEvent) (string, 
 		return ddl.Query, nil
 	}
 
-	queries := []string{ddl.Query}
-	if strings.Contains(ddl.Query, ";") {
-		var err error
-		queries, err = commonEvent.SplitQueries(ddl.Query)
-		if err != nil {
-			return "", errors.WrapError(errors.ErrTableRoutingFailed, err)
-		}
+	queries, err := splitMultiStmtDDLQuery(ddl.Query)
+	if err != nil {
+		return "", errors.WrapError(errors.ErrTableRoutingFailed, err)
 	}
 
 	var (
@@ -63,6 +59,23 @@ func (r Router) rewriteParserBackedDDLQuery(ddl *commonEvent.DDLEvent) (string, 
 	}
 
 	return builder.String(), nil
+}
+
+func splitMultiStmtDDLQuery(query string) ([]string, error) {
+	if !strings.Contains(query, ";") {
+		return []string{query}, nil
+	}
+
+	// SplitQueries is parser-backed. Use its statement count to distinguish a
+	// real multi-statement query from semicolons inside strings or comments.
+	queries, err := commonEvent.SplitQueries(query)
+	if err != nil {
+		return nil, err
+	}
+	if len(queries) <= 1 {
+		return []string{query}, nil
+	}
+	return queries, nil
 }
 
 func (r Router) rewriteSingleDDLQuery(query string) (string, error) {

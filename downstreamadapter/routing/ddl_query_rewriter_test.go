@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/stretchr/testify/require"
@@ -438,4 +439,64 @@ func TestRewriteDDLStmtTablesError(t *testing.T) {
 		_, err = rewriteDDLStmtTables(stmts[0], []commonEvent.SchemaTableName{{}, {}, {}})
 		require.True(t, errors.ErrTableRoutingFailed.Equal(err))
 	})
+}
+
+func TestRewriteParserBackedDDLQueryWithSemicolonsInLiteralsAndComments(t *testing.T) {
+	t.Parallel()
+
+	router := newTestRouter(t, false, []*config.DispatchRule{{
+		Matcher:      []string{"source_db.*"},
+		TargetSchema: "target_db",
+		TargetTable:  "{table}_routed",
+	}})
+
+	tests := []struct {
+		name              string
+		query             string
+		requiredFragments []string
+		forbiddenFragment string
+	}{
+		{
+			name:  "semicolon inside default string",
+			query: "CREATE TABLE `source_db`.`semi_table` (`c` VARCHAR(100) DEFAULT 'a;b;c');",
+			requiredFragments: []string{
+				"`target_db`.`semi_table_routed`",
+				"DEFAULT 'a;b;c'",
+			},
+			forbiddenFragment: "`source_db`.`semi_table`",
+		},
+		{
+			name:  "semicolon inside block comment",
+			query: "/* comment; not a statement */ CREATE TABLE `source_db`.`comment_table` (`c` INT);",
+			requiredFragments: []string{
+				"`target_db`.`comment_table_routed`",
+			},
+			forbiddenFragment: "`source_db`.`comment_table`",
+		},
+		{
+			name: "multi statement with semicolons inside default string and comment",
+			query: "CREATE TABLE `source_db`.`t1` (`c` VARCHAR(100) DEFAULT 'a;b'); " +
+				"/* comment; not a statement */ CREATE TABLE `source_db`.`t2` (`c` INT);",
+			requiredFragments: []string{
+				"`target_db`.`t1_routed`",
+				"DEFAULT 'a;b'",
+				"`target_db`.`t2_routed`",
+			},
+			forbiddenFragment: "`source_db`",
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			newQuery, err := router.rewriteParserBackedDDLQuery(&commonEvent.DDLEvent{Query: tc.query})
+			require.NoError(t, err)
+			for _, fragment := range tc.requiredFragments {
+				require.Contains(t, newQuery, fragment)
+			}
+			require.NotContains(t, newQuery, tc.forbiddenFragment)
+		})
+	}
 }
