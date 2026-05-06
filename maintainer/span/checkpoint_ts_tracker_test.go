@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/stretchr/testify/require"
 )
 
 func TestCheckpointTsTrackerMin(t *testing.T) {
@@ -27,38 +28,33 @@ func TestCheckpointTsTrackerMin(t *testing.T) {
 	id2 := common.NewDispatcherID()
 	id3 := common.NewDispatcherID()
 
-	tracker.addOrUpdate(id1, 100)
-	tracker.addOrUpdate(id2, 80)
-	tracker.addOrUpdate(id3, 80)
+	tracker.trackSpan(id1, 100)
+	tracker.trackSpan(id2, 80)
+	tracker.trackSpan(id3, 80)
 
 	got, ok := tracker.min()
-	if !ok || got != 80 {
-		t.Fatalf("checkpointTsTracker.min() = %d, %v, want 80, true", got, ok)
-	}
+	require.True(t, ok)
+	require.Equal(t, uint64(80), got)
 
-	tracker.update(id2, 120)
+	tracker.updateTrackedSpan(id2, 120)
 	got, ok = tracker.min()
-	if !ok || got != 80 {
-		t.Fatalf("checkpointTsTracker.min() after one duplicate update = %d, %v, want 80, true", got, ok)
-	}
+	require.True(t, ok)
+	require.Equal(t, uint64(80), got)
 
-	tracker.remove(id3)
+	tracker.untrackSpan(id3)
 	got, ok = tracker.min()
-	if !ok || got != 100 {
-		t.Fatalf("checkpointTsTracker.min() after removing duplicate min = %d, %v, want 100, true", got, ok)
-	}
+	require.True(t, ok)
+	require.Equal(t, uint64(100), got)
 
-	tracker.remove(id1)
+	tracker.untrackSpan(id1)
 	got, ok = tracker.min()
-	if !ok || got != 120 {
-		t.Fatalf("checkpointTsTracker.min() after removing current min = %d, %v, want 120, true", got, ok)
-	}
+	require.True(t, ok)
+	require.Equal(t, uint64(120), got)
 
-	tracker.remove(id2)
+	tracker.untrackSpan(id2)
 	got, ok = tracker.min()
-	if ok || got != 0 {
-		t.Fatalf("checkpointTsTracker.min() after removing all = %d, %v, want 0, false", got, ok)
-	}
+	require.False(t, ok)
+	require.Equal(t, uint64(0), got)
 }
 
 func TestCheckpointTsTrackerIgnoresMissingUpdate(t *testing.T) {
@@ -66,13 +62,12 @@ func TestCheckpointTsTrackerIgnoresMissingUpdate(t *testing.T) {
 
 	tracker := newCheckpointTsTracker()
 	id := common.NewDispatcherID()
-	tracker.update(id, 100)
-	tracker.remove(id)
+	tracker.updateTrackedSpan(id, 100)
+	tracker.untrackSpan(id)
 
 	got, ok := tracker.min()
-	if ok || got != 0 {
-		t.Fatalf("checkpointTsTracker.min() after missing update = %d, %v, want 0, false", got, ok)
-	}
+	require.False(t, ok)
+	require.Equal(t, uint64(0), got)
 }
 
 func TestCheckpointTsTrackerRemovesStaleCheckpointTs(t *testing.T) {
@@ -81,20 +76,17 @@ func TestCheckpointTsTrackerRemovesStaleCheckpointTs(t *testing.T) {
 	tracker := newCheckpointTsTracker()
 	blockingID := common.NewDispatcherID()
 	movingID := common.NewDispatcherID()
-	tracker.addOrUpdate(blockingID, 1)
-	tracker.addOrUpdate(movingID, 2)
+	tracker.trackSpan(blockingID, 1)
+	tracker.trackSpan(movingID, 2)
 
 	for checkpointTs := uint64(3); checkpointTs < 100; checkpointTs++ {
-		tracker.update(movingID, checkpointTs)
+		tracker.updateTrackedSpan(movingID, checkpointTs)
 	}
 
-	if got := tracker.heap.Len(); got != 2 {
-		t.Fatalf("checkpointTsTracker heap size = %d, want 2", got)
-	}
+	require.Equal(t, 2, tracker.minCheckpointTsHeap.Len())
 
-	tracker.remove(blockingID)
+	tracker.untrackSpan(blockingID)
 	got, ok := tracker.min()
-	if !ok || got != 99 {
-		t.Fatalf("checkpointTsTracker.min() after removing blocker = %d, %v, want 99, true", got, ok)
-	}
+	require.True(t, ok)
+	require.Equal(t, uint64(99), got)
 }
