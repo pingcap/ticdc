@@ -365,8 +365,12 @@ func (c *Controller) initializeComponents(
 	// Initialize barrier
 	if c.enableRedo {
 		c.redoBarrier = NewBarrier(c.redoSpanController, c.redoOperatorController, util.GetOrZero(c.replicaConfig.Scheduler.EnableTableAcrossNodes), allNodesResp, common.RedoMode)
+		c.redoBarrier.SetSyncPointDirectPassDecider(c.syncPointDirectPassDecider)
+		c.redoBarrier.SetSyncPointSkipDecider(c.syncPointSkipDecider)
 	}
 	c.barrier = NewBarrier(c.spanController, c.operatorController, util.GetOrZero(c.replicaConfig.Scheduler.EnableTableAcrossNodes), allNodesResp, common.DefaultMode)
+	c.barrier.SetSyncPointDirectPassDecider(c.syncPointDirectPassDecider)
+	c.barrier.SetSyncPointSkipDecider(c.syncPointSkipDecider)
 
 	// Start scheduler
 	c.taskHandlesMu.Lock()

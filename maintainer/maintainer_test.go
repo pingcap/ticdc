@@ -35,22 +35,25 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
+	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
 
 type mockDispatcherManager struct {
-	mc           messaging.MessageCenter
-	self         node.ID
-	dispatchers  []*heartbeatpb.TableSpanStatus
-	msgCh        chan *messaging.TargetMessage
-	maintainerID node.ID
-	checkpointTs uint64
-	changefeedID *heartbeatpb.ChangefeedID
+	mc               messaging.MessageCenter
+	self             node.ID
+	dispatchers      []*heartbeatpb.TableSpanStatus
+	msgCh            chan *messaging.TargetMessage
+	maintainerID     node.ID
+	checkpointTs     uint64
+	changefeedID     *heartbeatpb.ChangefeedID
+	syncPointControl *heartbeatpb.SyncPointControl
 
 	bootstrapTables []*heartbeatpb.BootstrapTableSpan
 	dispatchersMap  map[heartbeatpb.DispatcherID]*heartbeatpb.TableSpanStatus
@@ -98,6 +101,8 @@ func (m *mockDispatcherManager) handleMessage(msg *messaging.TargetMessage) {
 		m.onDispatchRequest(msg)
 	case messaging.TypeMaintainerCloseRequest:
 		m.onMaintainerCloseRequest(msg)
+	case messaging.TypeSyncPointControlMessage:
+		m.onSyncPointControlMessage(msg)
 	default:
 		log.Panic("unknown msg type", zap.Any("msg", msg))
 	}
@@ -121,7 +126,8 @@ func (m *mockDispatcherManager) recvMessages(ctx context.Context, msg *messaging
 	case messaging.TypeScheduleDispatcherRequest,
 		messaging.TypeMaintainerBootstrapRequest,
 		messaging.TypeMaintainerPostBootstrapRequest,
-		messaging.TypeMaintainerCloseRequest:
+		messaging.TypeMaintainerCloseRequest,
+		messaging.TypeSyncPointControlMessage:
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -138,12 +144,14 @@ func (m *mockDispatcherManager) onBootstrapRequest(msg *messaging.TargetMessage)
 	req := msg.Message[0].(*heartbeatpb.MaintainerBootstrapRequest)
 	m.maintainerID = msg.From
 	response := &heartbeatpb.MaintainerBootstrapResponse{
-		ChangefeedID: req.ChangefeedID,
-		Spans:        m.bootstrapTables,
-		CheckpointTs: req.StartTs,
+		ChangefeedID:     req.ChangefeedID,
+		Spans:            m.bootstrapTables,
+		CheckpointTs:     req.StartTs,
+		SyncPointControl: m.syncPointControl,
 	}
 	m.changefeedID = req.ChangefeedID
 	m.checkpointTs = req.StartTs
+	m.syncPointControl = req.SyncPointControl
 	if req.TableTriggerEventDispatcherId != nil {
 		m.dispatchersMap[*req.TableTriggerEventDispatcherId] = &heartbeatpb.TableSpanStatus{
 			ID:              req.TableTriggerEventDispatcherId,
@@ -245,6 +253,11 @@ func (m *mockDispatcherManager) onMaintainerCloseRequest(msg *messaging.TargetMe
 		}))
 }
 
+func (m *mockDispatcherManager) onSyncPointControlMessage(msg *messaging.TargetMessage) {
+	req := msg.Message[0].(*heartbeatpb.SyncPointControlMessage)
+	m.syncPointControl = req.Control
+}
+
 func (m *mockDispatcherManager) sendHeartbeat() {
 	if m.maintainerID.String() != "" {
 		response := &heartbeatpb.HeartBeatRequest{
@@ -253,7 +266,8 @@ func (m *mockDispatcherManager) sendHeartbeat() {
 				CheckpointTs: m.checkpointTs,
 				ResolvedTs:   m.checkpointTs,
 			},
-			Statuses: m.dispatchers,
+			Statuses:         m.dispatchers,
+			SyncPointControl: m.syncPointControl,
 		}
 		m.checkpointTs++
 		m.sendMessages(response)
@@ -470,6 +484,66 @@ func TestMaintainerCalCheckpointTsSkipsInvalidGlobalCheckpoint(t *testing.T) {
 
 	cancel()
 	wg.Wait()
+}
+
+func TestMaintainerShouldDirectPassSyncPoint(t *testing.T) {
+	m, _ := newMaintainerForCheckpointCalculationTest(t)
+	clock := m.pdClock.(*pdutil.Clock4Test)
+	m.syncPointDirectPassThreshold = 20 * time.Minute
+	m.syncPointDirectPassResume = 15 * time.Minute
+
+	checkpointTs := oracle.GoTimeToTS(time.Unix(0, 0).Add(10 * time.Minute))
+	m.watermark.Watermark = &heartbeatpb.Watermark{
+		CheckpointTs: checkpointTs,
+		ResolvedTs:   checkpointTs,
+	}
+
+	clock.SetTS(oracle.GoTimeToTS(time.Unix(0, 0).Add(31 * time.Minute)))
+	require.True(t, m.shouldDirectPassSyncPoint())
+	require.True(t, m.syncPointDirectPassActive.Load())
+
+	clock.SetTS(oracle.GoTimeToTS(time.Unix(0, 0).Add(26 * time.Minute)))
+	require.True(t, m.shouldDirectPassSyncPoint())
+	require.True(t, m.syncPointDirectPassActive.Load())
+
+	clock.SetTS(oracle.GoTimeToTS(time.Unix(0, 0).Add(24 * time.Minute)))
+	require.False(t, m.shouldDirectPassSyncPoint())
+	require.False(t, m.syncPointDirectPassActive.Load())
+}
+
+func TestMaintainerReconcileSyncPointControl(t *testing.T) {
+	m, selfNodeID := newMaintainerForCheckpointCalculationTest(t)
+	replicaConfig := config.GetDefaultReplicaConfig()
+	replicaConfig.EnableSyncPoint = util.AddressOf(true)
+	replicaConfig.SyncPointInterval = util.AddressOf(time.Minute)
+	m.info = &config.ChangeFeedInfo{Config: replicaConfig}
+	m.nodeAppliedSyncPointControl = make(map[node.ID]common.SyncPointControl)
+	m.syncPointControlReady = true
+	m.syncPointDirectPassThreshold = 20 * time.Minute
+	m.syncPointDirectPassResume = 15 * time.Minute
+	m.watermark.Watermark = &heartbeatpb.Watermark{
+		CheckpointTs: oracle.GoTimeToTS(time.Unix(0, 0).Add(10 * time.Minute)),
+		ResolvedTs:   oracle.GoTimeToTS(time.Unix(0, 0).Add(10 * time.Minute)),
+	}
+
+	clock := m.pdClock.(*pdutil.Clock4Test)
+	clock.SetTS(oracle.GoTimeToTS(time.Unix(0, 0).Add(31 * time.Minute)))
+	m.reconcileSyncPointControl()
+	require.True(t, m.authoritativeSyncPointControl.IsOpenEnded())
+	require.True(t, m.desiredSyncPointControl.Equal(m.authoritativeSyncPointControl))
+
+	m.watermark.Watermark = &heartbeatpb.Watermark{
+		CheckpointTs: oracle.GoTimeToTS(time.Unix(0, 0).Add(40 * time.Minute)),
+		ResolvedTs:   oracle.GoTimeToTS(time.Unix(0, 0).Add(40 * time.Minute)),
+	}
+	clock.SetTS(oracle.GoTimeToTS(time.Unix(0, 0).Add(54 * time.Minute)))
+	m.reconcileSyncPointControl()
+	require.True(t, m.authoritativeSyncPointControl.IsOpenEnded())
+	require.False(t, m.desiredSyncPointControl.IsOpenEnded())
+
+	m.nodeAppliedSyncPointControl[selfNodeID] = m.desiredSyncPointControl
+	m.reconcileSyncPointControl()
+	require.True(t, m.authoritativeSyncPointControl.Equal(m.desiredSyncPointControl))
 }
 
 func TestMaintainerHandleRedoMetaTsMessageUsesRedoCheckpointForRedoController(t *testing.T) {

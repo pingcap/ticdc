@@ -629,6 +629,63 @@ func (h *CheckpointTsMessageHandler) OnDrop(event CheckpointTsMessage) interface
 	return nil
 }
 
+func newSyncPointControlMessageDynamicStream() dynstream.DynamicStream[int, common.GID, SyncPointControlMessage, *DispatcherManager, *SyncPointControlMessageHandler] {
+	ds := dynstream.NewParallelDynamicStream("syncpoint-control",
+		&SyncPointControlMessageHandler{})
+	ds.Start()
+	return ds
+}
+
+type SyncPointControlMessage struct {
+	*heartbeatpb.SyncPointControlMessage
+}
+
+func NewSyncPointControlMessage(msg *heartbeatpb.SyncPointControlMessage) SyncPointControlMessage {
+	return SyncPointControlMessage{msg}
+}
+
+type SyncPointControlMessageHandler struct{}
+
+func (h *SyncPointControlMessageHandler) Path(msg SyncPointControlMessage) common.GID {
+	return common.NewChangefeedGIDFromPB(msg.ChangefeedID)
+}
+
+func (h *SyncPointControlMessageHandler) Handle(dispatcherManager *DispatcherManager, messages ...SyncPointControlMessage) bool {
+	if len(messages) != 1 {
+		panic("invalid message count")
+	}
+	dispatcherManager.SetSyncPointControl(messages[0].Control)
+	return false
+}
+
+func (h *SyncPointControlMessageHandler) GetSize(event SyncPointControlMessage) int {
+	return 0
+}
+
+func (h *SyncPointControlMessageHandler) IsPaused(event SyncPointControlMessage) bool {
+	return false
+}
+
+func (h *SyncPointControlMessageHandler) GetArea(path common.GID, dest *DispatcherManager) int {
+	return 0
+}
+
+func (h *SyncPointControlMessageHandler) GetMetricLabel(dest *DispatcherManager) string {
+	return dest.changefeedID.String()
+}
+
+func (h *SyncPointControlMessageHandler) GetTimestamp(event SyncPointControlMessage) dynstream.Timestamp {
+	return 0
+}
+
+func (h *SyncPointControlMessageHandler) GetType(event SyncPointControlMessage) dynstream.EventType {
+	return dynstream.DefaultEventType
+}
+
+func (h *SyncPointControlMessageHandler) OnDrop(event SyncPointControlMessage) interface{} {
+	return nil
+}
+
 // RedoResolvedTsForwardMessageDynamicStream is responsible for push RedoResolvedTsForwardMessage to the corresponding table trigger event dispatcher.
 func newRedoResolvedTsForwardMessageDynamicStream() dynstream.DynamicStream[int, common.GID, RedoResolvedTsForwardMessage, *DispatcherManager, *RedoResolvedTsForwardMessageHandler] {
 	ds := dynstream.NewParallelDynamicStream("redo-resolved-ts",
