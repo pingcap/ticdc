@@ -1328,12 +1328,30 @@ func (e *eventStore) writeEvents(
 				continue
 			}
 
-			compressionType := CompressionNone
 			valueBytesBefore := kv.GetSize()
 			valueBytesAfter := valueBytesBefore
 			keyLen := encodedKeyLen(kv)
-
-			if e.encryptionManager != nil {
+			compressionType := CompressionNone
+			needCompress := e.enableZstdCompression && valueBytesBefore > int64(e.compressionThreshold)
+			if e.encryptionManager == nil && !needCompress {
+				// SetDeferred reserves the final Pebble batch space up front, so
+				// the uncompressed raw KV can be encoded directly into op.Value
+				// without allocating a separate value slice and copying it later.
+				op := batch.SetDeferred(keyLen, int(valueBytesBefore))
+				op.Key = EncodeKeyTo(op.Key[:0], uint64(event.subID), event.tableID, kv, CompressionNone)
+				if len(op.Key) != keyLen {
+					return fmt.Errorf("encoded event store key size mismatch, expected %d, got %d",
+						keyLen, len(op.Key))
+				}
+				op.Value = kv.EncodeTo(op.Value[:0])
+				if len(op.Value) != int(valueBytesBefore) {
+					return fmt.Errorf("encoded raw kv entry size mismatch, expected %d, got %d",
+						valueBytesBefore, len(op.Value))
+				}
+				if err := op.Finish(); err != nil {
+					return err
+				}
+			} else if e.encryptionManager != nil {
 				if cap(rawBuf) < int(valueBytesBefore) {
 					rawBuf = make([]byte, 0, int(valueBytesBefore))
 				} else {
@@ -1341,7 +1359,7 @@ func (e *eventStore) writeEvents(
 				}
 				rawValue := kv.EncodeTo(rawBuf)
 				value := rawValue
-				if e.enableZstdCompression && valueBytesBefore > int64(e.compressionThreshold) {
+				if needCompress {
 					maxEncodedSize := encoder.MaxEncodedSize(len(rawValue))
 					if cap(dstBuf) < maxEncodedSize {
 						dstBuf = make([]byte, 0, maxEncodedSize)
@@ -1376,10 +1394,10 @@ func (e *eventStore) writeEvents(
 					return err
 				}
 				rawBuf = rawValue[:0]
-				if compressionType == CompressionZSTD {
+				if needCompress {
 					dstBuf = value[:0]
 				}
-			} else if e.enableZstdCompression && valueBytesBefore > int64(e.compressionThreshold) {
+			} else {
 				if cap(rawBuf) < int(valueBytesBefore) {
 					rawBuf = make([]byte, 0, int(valueBytesBefore))
 				} else {
@@ -1417,24 +1435,6 @@ func (e *eventStore) writeEvents(
 				}
 				rawBuf = rawValue[:0]
 				dstBuf = value[:0]
-			} else {
-				// SetDeferred reserves the final Pebble batch space up front, so
-				// the uncompressed raw KV can be encoded directly into op.Value
-				// without allocating a separate value slice and copying it later.
-				op := batch.SetDeferred(keyLen, int(valueBytesBefore))
-				op.Key = EncodeKeyTo(op.Key[:0], uint64(event.subID), event.tableID, kv, compressionType)
-				if len(op.Key) != keyLen {
-					return fmt.Errorf("encoded event store key size mismatch, expected %d, got %d",
-						keyLen, len(op.Key))
-				}
-				op.Value = kv.EncodeTo(op.Value[:0])
-				if len(op.Value) != int(valueBytesBefore) {
-					return fmt.Errorf("encoded raw kv entry size mismatch, expected %d, got %d",
-						valueBytesBefore, len(op.Value))
-				}
-				if err := op.Finish(); err != nil {
-					return err
-				}
 			}
 			totalValueBytesBefore += valueBytesBefore
 			totalValueBytesAfter += valueBytesAfter
