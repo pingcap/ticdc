@@ -263,7 +263,7 @@ func (c *coordinator) handleStateChange(
 			zap.String("state", string(event.state)))
 		return nil
 	}
-	if !shouldPersistRuntimeState(currentInfo, event.state, event.err) {
+	if isUnchangedRuntimeState(currentInfo, event.state, event.err) {
 		log.Debug("skip persisting unchanged changefeed runtime state",
 			zap.String("changefeed", event.changefeedID.String()),
 			zap.String("state", string(event.state)))

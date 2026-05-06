@@ -778,21 +778,21 @@ func TestShouldPersistRuntimeStateIgnoresRunningErrorTime(t *testing.T) {
 		},
 	}
 
-	require.False(t, shouldPersistRuntimeState(nil, config.StateWarning, info.Error))
-	require.False(t, shouldPersistRuntimeState(info, config.StateWarning, &config.RunningError{
+	require.True(t, isUnchangedRuntimeState(nil, config.StateWarning, info.Error))
+	require.True(t, isUnchangedRuntimeState(info, config.StateWarning, &config.RunningError{
 		Time:    errTime.Add(time.Hour),
 		Addr:    "127.0.0.1:8300",
 		Code:    "CDC:ErrSinkURIInvalid",
 		Message: "sink uri invalid",
 	}))
-	require.True(t, shouldPersistRuntimeState(info, config.StateWarning, &config.RunningError{
+	require.False(t, isUnchangedRuntimeState(info, config.StateWarning, &config.RunningError{
 		Time:    errTime.Add(time.Hour),
 		Addr:    "127.0.0.1:8300",
 		Code:    "CDC:ErrSinkURIInvalid",
 		Message: "another sink error",
 	}))
-	require.True(t, shouldPersistRuntimeState(info, config.StateFailed, info.Error))
-	require.True(t, shouldPersistRuntimeState(info, config.StateWarning, nil))
+	require.True(t, isUnchangedRuntimeState(info, config.StateFailed, info.Error))
+	require.True(t, isUnchangedRuntimeState(info, config.StateWarning, nil))
 }
 
 func TestHandleStateChangeSkipsDuplicateRuntimeStatePersistence(t *testing.T) {
