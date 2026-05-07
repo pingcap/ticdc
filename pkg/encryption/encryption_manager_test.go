@@ -160,3 +160,27 @@ func TestEncryptDecryptRoundTripWithAES128Key(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, input, decrypted)
 }
+
+func TestDecryptDataRejectsValueWithoutEncryptionLayerHeader(t *testing.T) {
+	manager := NewEncryptionManager(&mockMetaManager{})
+
+	_, err := manager.DecryptData(context.Background(), 1, []byte("abc"))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "decryption failed")
+}
+
+func TestDecryptDataRejectsInvalidUnencryptedHeader(t *testing.T) {
+	manager := NewEncryptionManager(&mockMetaManager{})
+
+	_, err := manager.DecryptData(context.Background(), 1, []byte{0x00, 0x01, 0x02, 0x03, 'x'})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "decryption failed")
+}
+
+func TestDecryptDataRejectsInvalidEncryptedHeader(t *testing.T) {
+	manager := NewEncryptionManager(&mockMetaManager{})
+
+	_, err := manager.DecryptData(context.Background(), 1, []byte{0x01, 0x00, 0x00, 0x00, 'x'})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "decryption failed")
+}

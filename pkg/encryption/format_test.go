@@ -139,31 +139,23 @@ func TestGetVersion(t *testing.T) {
 	require.Equal(t, byte(0x00), GetVersion(shortData))
 }
 
-func TestDecodeUnencryptedDataBackwardCompatibility(t *testing.T) {
-	// Legacy data without header should be returned as-is
-	// Use data that is too short to have a header (length < 4)
+func TestDecodeUnencryptedDataPanicsWithoutUnencryptedHeader(t *testing.T) {
 	legacyData := []byte("legacy")
-	decoded, err := DecodeUnencryptedData(legacyData)
-	require.NoError(t, err)
-	require.Equal(t, legacyData, decoded)
+	require.Panics(t, func() {
+		_, _ = DecodeUnencryptedData(legacyData)
+	})
 
-	// Also test with data that has non-zero DataKeyID pattern
-	// This can't be confused with new-format encrypted data (which would have non-zero key ID)
-	// and can't be confused with new-format unencrypted (which has zero key ID)
 	legacyData2 := []byte{0x00, 0x01, 0x02, 0x03, 0x04, 0x05}
-	decoded2, err := DecodeUnencryptedData(legacyData2)
-	require.NoError(t, err)
-	require.Equal(t, legacyData2, decoded2)
+	require.Panics(t, func() {
+		_, _ = DecodeUnencryptedData(legacyData2)
+	})
 }
 
-func TestDecodeUnencryptedDataWithEncryptedData(t *testing.T) {
-	// For backward compatibility, DecodeUnencryptedData treats any format as legacy unencrypted data
-	// and returns the data as-is. It does not return an error even for encrypted-looking data.
-	// The caller is responsible for ensuring data is not actually encrypted.
+func TestDecodeUnencryptedDataPanicsWithEncryptedData(t *testing.T) {
 	encryptedData := []byte{0x01, 'a', 'b', 'c', 'd', 'a', 't', 'a'}
-	decoded, err := DecodeUnencryptedData(encryptedData)
-	require.NoError(t, err)
-	require.Equal(t, encryptedData, decoded)
+	require.Panics(t, func() {
+		_, _ = DecodeUnencryptedData(encryptedData)
+	})
 }
 
 func TestExtractDataKeyID(t *testing.T) {

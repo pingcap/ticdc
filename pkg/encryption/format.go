@@ -14,7 +14,9 @@
 package encryption
 
 import (
+	"github.com/pingcap/log"
 	cerrors "github.com/pingcap/ticdc/pkg/errors"
+	"go.uber.org/zap"
 )
 
 const (
@@ -125,25 +127,15 @@ func EncodeUnencryptedData(data []byte) []byte {
 	return result
 }
 
-// DecodeUnencryptedData decodes unencrypted data (removes header if present)
+// DecodeUnencryptedData decodes unencrypted data by removing the 4-byte plaintext header.
+// Callers must guarantee the value is marked as passing through the encryption layer
+// and uses the unencrypted header format.
 func DecodeUnencryptedData(data []byte) ([]byte, error) {
-	if len(data) < EncryptionHeaderSize {
-		// No header, return as-is (backward compatibility)
-		return data, nil
+	if !HasUnencryptedHeader(data) {
+		log.Panic("unexpected data without unencrypted header",
+			zap.Int("dataLen", len(data)))
 	}
-
-	version := data[0]
-	if version == VersionUnencrypted && dataKeyIDIsZero(data) {
-		// New-format unencrypted data with header, remove header
-		return data[4:], nil
-	}
-
-	// For backward compatibility, treat any other format as legacy unencrypted data
-	// This includes:
-	// - Legacy data without header (any pattern)
-	// - Data that might look like encrypted but is actually legacy
-	// The caller is responsible for ensuring data is not actually encrypted
-	return data, nil
+	return data[EncryptionHeaderSize:], nil
 }
 
 // ExtractDataKeyID extracts the data key ID from encrypted data
