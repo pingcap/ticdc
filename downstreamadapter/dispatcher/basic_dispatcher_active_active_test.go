@@ -13,6 +13,7 @@
 package dispatcher
 
 import (
+	"github.com/pingcap/ticdc/downstreamadapter/routing"
 	"testing"
 
 	"github.com/pingcap/ticdc/heartbeatpb"

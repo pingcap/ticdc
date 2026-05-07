@@ -14,6 +14,7 @@
 package dispatcher
 
 import (
+	"github.com/pingcap/ticdc/downstreamadapter/routing"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -47,6 +48,7 @@ func newRedoDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) 
 		nil, // redo dispatcher doesn't need syncPointConfig
 		&defaultAtomicity,
 		false, // enableSplittableCheck
+		routing.Router{},
 		make(chan TableSpanStatusWithSeq, 128),
 		make(chan *heartbeatpb.TableSpanBlockStatus, 128),
 		make(chan error, 1),
