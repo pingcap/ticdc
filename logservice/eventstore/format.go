@@ -104,6 +104,10 @@ func encodedKeyLen(event *common.RawKVEntry) int {
 	return encodedKeyAttributesEnd + len(event.Key)
 }
 
+// encodeKeyTo appends an encoded event-store key to buf.
+//
+//	| uniqueID | tableID | txnCommitTs | txnStartTs | dmlOrder | compressionType | mask | key |
+//	|   8B     |   8B    |     8B      |     8B     |    1B    |       1B        |  8B  | ... |
 func encodeKeyTo(
 	buf []byte,
 	uniqueID uint64,
@@ -137,9 +141,6 @@ func encodeKeyTo(
 }
 
 // EncodeKeyTo appends an encoded event-store key to buf.
-//
-//	| uniqueID | tableID | txnCommitTs | txnStartTs | dmlOrder | compressionType | mask | key |
-//	|   8B     |   8B    |     8B      |     8B     |    1B    |       1B        |  8B  | ... |
 func EncodeKeyTo(
 	buf []byte,
 	uniqueID uint64,
