@@ -117,6 +117,8 @@ var changefeedUnRetryableErrors = []*errors.Error{
 	ErrKafkaInvalidConfig,
 	ErrMySQLInvalidConfig,
 	ErrStorageSinkInvalidConfig,
+	ErrInvalidTableRoutingRule,
+	ErrTableRoutingFailed,
 
 	// gc related errors
 	ErrGCTTLExceeded,

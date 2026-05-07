@@ -164,9 +164,7 @@ func (ti *TableInfo) CloneWithRouting(targetSchema, targetTable string) *TableIn
 		UpdateTS:          ti.UpdateTS,
 		ActiveActiveTable: ti.ActiveActiveTable,
 		SoftDeleteTable:   ti.SoftDeleteTable,
-		// preSQLs is zero-initialized (uninitialized mutex/atomic, empty strings)
 	}
-	// Apply routing to the cloned TableName while keeping Schema/Table as source names.
 	cloned.TableName.TargetSchema = targetSchema
 	cloned.TableName.TargetTable = targetTable
 
