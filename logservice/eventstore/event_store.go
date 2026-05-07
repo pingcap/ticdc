@@ -208,6 +208,8 @@ type eventStore struct {
 	subClient logpuller.SubscriptionClient
 
 	dbs            []*pebble.DB
+	pebbleCache    *pebble.Cache
+	tableCache     *pebble.TableCache
 	chs            []*chann.UnlimitedChannel[eventWithCallback, uint64]
 	writeTaskPools []*writeTaskPool
 
@@ -266,12 +268,14 @@ func New(
 
 	// Try to get encryption manager from appcontext (optional)
 	encMgr, _ := appcontext.TryGetService[encryption.EncryptionManager](appcontext.EncryptionManager)
-
+	dbs, pebbleCache, tableCache := createPebbleDBs(dbPath, dbCount)
 	store := &eventStore{
 		pdClock:   appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
 		subClient: subClient,
 
-		dbs:            createPebbleDBs(dbPath, dbCount),
+		dbs:            dbs,
+		pebbleCache:    pebbleCache,
+		tableCache:     tableCache,
 		chs:            make([]*chann.UnlimitedChannel[eventWithCallback, uint64], 0, dbCount),
 		writeTaskPools: make([]*writeTaskPool, 0, dbCount),
 
@@ -434,6 +438,16 @@ func (e *eventStore) Close(_ context.Context) error {
 		if err := db.Close(); err != nil {
 			log.Error("failed to close pebble db", zap.Error(err))
 		}
+	}
+	if e.tableCache != nil {
+		if err := e.tableCache.Unref(); err != nil {
+			log.Warn("failed to unref pebble table cache", zap.Error(err))
+		}
+		e.tableCache = nil
+	}
+	if e.pebbleCache != nil {
+		e.pebbleCache.Unref()
+		e.pebbleCache = nil
 	}
 
 	return nil
@@ -886,15 +900,34 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 		e.dispatcherMeta.Unlock()
 	}
 
-	// convert range before pass it to pebble: (startTs, endTs] is equal to [startTs + 1, endTs + 1)
+	// dataRange fields:
+	// CommitTsStart and CommitTsEnd define the commit-ts scan window.
+	// LastScannedTxnStartTs records how far the previous scan progressed inside
+	// CommitTsStart. It is zero if there is no unfinished scan at CommitTsStart.
+	//
+	// Iterator key bounds:
+	// Pebble uses [LowerBound, UpperBound), so end is always encoded as
+	// CommitTsEnd+1.
+	//
+	// If LastScannedTxnStartTs is zero, scan commit ts in
+	// (CommitTsStart, CommitTsEnd], and use CommitTsStart+1 as LowerBound.
+	//
+	// If LastScannedTxnStartTs is non-zero, continue scanning commit ts
+	// CommitTsStart with start ts greater than LastScannedTxnStartTs, then scan
+	// later commit ts up to CommitTsEnd.
+	//
 	var start []byte
 	if dataRange.LastScannedTxnStartTs != 0 {
-		start = EncodeKeyPrefix(uint64(subStat.subID), stat.tableSpan.TableID, dataRange.CommitTsStart, dataRange.LastScannedTxnStartTs+1)
+		start = encodeScanLowerBound(
+			uint64(subStat.subID),
+			stat.tableSpan.TableID,
+			dataRange.CommitTsStart,
+			dataRange.LastScannedTxnStartTs+1,
+		)
 	} else {
-		start = EncodeKeyPrefix(uint64(subStat.subID), stat.tableSpan.TableID, dataRange.CommitTsStart+1)
+		start = encodeTxnCommitTsBoundaryKey(uint64(subStat.subID), stat.tableSpan.TableID, dataRange.CommitTsStart+1)
 	}
-	end := EncodeKeyPrefix(uint64(subStat.subID), stat.tableSpan.TableID, dataRange.CommitTsEnd+1)
-	// TODO: optimize read performance
+	end := encodeTxnCommitTsBoundaryKey(uint64(subStat.subID), stat.tableSpan.TableID, dataRange.CommitTsEnd+1)
 	// it's impossible return error here
 	iter, _ := db.NewIter(&pebble.IterOptions{
 		LowerBound: start,
@@ -1502,8 +1535,7 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
 			}
 			value = decryptedValue
 		}
-
-		_, compressionType := DecodeKeyMetas(key)
+		_, compressionType := DecodeKeyAttributes(key)
 		var decodedValue []byte
 		if compressionType == CompressionZSTD {
 			var err error
