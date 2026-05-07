@@ -928,18 +928,21 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 	}
 
 	startTime := time.Now()
-	if ok := iter.First(); !ok {
-		if err := iter.Error(); err != nil {
-			if closeErr := iter.Close(); closeErr != nil {
-				log.Warn("close iterator failed after first read error", zap.Error(closeErr))
-			}
-			return nil, errors.Trace(err)
-		}
-		// Empty range. Return the iterator so the scanner can finish the scan
-		// through the normal Next and Close path.
-	}
+	hasFirstEvent := iter.First()
 	metricEventStoreFirstReadDurationHistogram.Observe(time.Since(startTime).Seconds())
 	metrics.EventStoreScanRequestsCount.Inc()
+	if !hasFirstEvent {
+		// Empty range or first-read error. Close returns any accumulated
+		// iterator error while also releasing Pebble resources.
+		closeStartTime := time.Now()
+		err := iter.Close()
+		metricEventStoreCloseReadDurationHistogram.Observe(time.Since(closeStartTime).Seconds())
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
+		return nil, nil
+	}
+
 	decoder := e.decoderPool.Get().(*zstd.Decoder)
 
 	needCheckSpan := true
