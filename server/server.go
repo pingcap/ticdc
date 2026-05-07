@@ -32,6 +32,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appctx "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/encryption"
+	"github.com/pingcap/ticdc/pkg/encryption/kms"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/eventservice"
@@ -279,6 +281,32 @@ func (c *server) setPreServices(ctx context.Context) error {
 	keyspaceManager := keyspace.NewManager(c.pdEndpoints)
 	appctx.SetService(appctx.KeyspaceManager, keyspaceManager)
 	c.preServices = append(c.preServices, keyspaceManager)
+
+	conf := config.GetGlobalServerConfig()
+	if conf != nil && conf.Encryption != nil && conf.Encryption.EnableEncryption {
+		tikvClient, err := encryption.NewTiKVEncryptionHTTPClient(c.pdClient, c.security)
+		if err != nil {
+			return err
+		}
+
+		kmsClient, err := kms.NewClient(conf.Encryption)
+		if err != nil {
+			return err
+		}
+		if closeable, ok := kmsClient.(common.Closeable); ok {
+			c.preServices = append(c.preServices, closeable)
+		}
+
+		metaManager := encryption.NewEncryptionMetaManager(tikvClient, kmsClient)
+		if err := metaManager.Start(ctx); err != nil {
+			return err
+		}
+
+		appctx.SetService(appctx.EncryptionManager, encryption.NewEncryptionManager(metaManager))
+		if closeable, ok := metaManager.(common.Closeable); ok {
+			c.preServices = append(c.preServices, closeable)
+		}
+	}
 
 	log.Info("pre services all set", zap.Any("preServicesNum", len(c.preServices)))
 	return nil

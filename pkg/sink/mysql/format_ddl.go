@@ -14,12 +14,10 @@
 package mysql
 
 import (
-	"bytes"
-
 	"github.com/pingcap/log"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/ast"
-	"github.com/pingcap/tidb/pkg/parser/format"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"go.uber.org/zap"
 )
@@ -55,10 +53,9 @@ func formatQuery(sql string) string {
 	}
 	stmt.Accept(&visiter{})
 
-	buf := new(bytes.Buffer)
-	restoreCtx := format.NewRestoreCtx(format.DefaultRestoreFlags, buf)
-	if err = stmt.Restore(restoreCtx); err != nil {
+	query, err := commonEvent.Restore(stmt)
+	if err != nil {
 		log.Error("format query restore failed", zap.Error(err))
 	}
-	return buf.String()
+	return query
 }

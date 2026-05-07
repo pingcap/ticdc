@@ -182,6 +182,50 @@ func TestStopTaskUsesSubscribedSpanFilterLoop(t *testing.T) {
 	require.True(t, region.filterLoop)
 }
 
+func TestOnRegionFailQueuesCanceledErrorCache(t *testing.T) {
+	client := &subscriptionClient{
+		errCache: newErrCache(),
+		ds:       &mockDynamicStream{},
+	}
+	rawSpan := heartbeatpb.TableSpan{
+		TableID:  1,
+		StartKey: []byte("a"),
+		EndKey:   []byte("z"),
+	}
+	span := &subscribedSpan{
+		subID:     SubscriptionID(1),
+		span:      rawSpan,
+		rangeLock: regionlock.NewRangeLock(1, rawSpan.StartKey, rawSpan.EndKey, 100),
+	}
+	client.totalSpans.spanMap = map[SubscriptionID]*subscribedSpan{span.subID: span}
+
+	res1 := span.rangeLock.LockRange(context.Background(), []byte("a"), []byte("m"), 1, 1)
+	require.Equal(t, regionlock.LockRangeStatusSuccess, res1.Status)
+	res2 := span.rangeLock.LockRange(context.Background(), []byte("m"), []byte("z"), 2, 1)
+	require.Equal(t, regionlock.LockRangeStatusSuccess, res2.Status)
+	require.False(t, span.rangeLock.Stop())
+
+	client.onRegionFail(newRegionErrorInfo(regionInfo{
+		verID:            tikv.NewRegionVerID(1, 1, 1),
+		span:             heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("a"), EndKey: []byte("m")},
+		subscribedSpan:   span,
+		lockedRangeState: res1.LockedRangeState,
+	}, &requestCancelledErr{}))
+
+	require.Len(t, client.errCache.cache, 1)
+	require.Len(t, span.rangeLock.IterAll(nil).UnLockedRanges, 1)
+
+	client.onRegionFail(newRegionErrorInfo(regionInfo{
+		verID:            tikv.NewRegionVerID(2, 1, 1),
+		span:             heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("m"), EndKey: []byte("z")},
+		subscribedSpan:   span,
+		lockedRangeState: res2.LockedRangeState,
+	}, &requestCancelledErr{}))
+
+	require.Len(t, client.errCache.cache, 1)
+	require.NotContains(t, client.totalSpans.spanMap, span.subID)
+}
+
 type mockDynamicStream struct{}
 
 func (s *mockDynamicStream) Start() {}
@@ -435,6 +479,93 @@ func TestErrCacheDispatchWithFullChannelAndCanceledContext(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		// If we timeout here, it means dispatch is stuck
 		t.Fatal("dispatch method is stuck and didn't return after context cancellation")
+	}
+}
+
+func TestErrCacheDispatchBatch(t *testing.T) {
+	mockErrInfo := regionErrorInfo{
+		regionInfo: regionInfo{
+			verID: tikv.NewRegionVerID(1, 1, 1),
+			span:  heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("a"), EndKey: []byte("b")},
+		},
+		err: errors.New("test error"),
+	}
+
+	tests := []struct {
+		name          string
+		cacheLen      int
+		limit         int
+		expectedN     int
+		expectedCache int
+		expectedErrCh int
+	}{
+		{
+			name:          "dispatch all when limit equals cache length",
+			cacheLen:      5,
+			limit:         5,
+			expectedN:     5,
+			expectedCache: 0,
+			expectedErrCh: 5,
+		},
+		{
+			name:          "keep remaining cache when limit is smaller",
+			cacheLen:      5,
+			limit:         2,
+			expectedN:     2,
+			expectedCache: 3,
+			expectedErrCh: 2,
+		},
+		{
+			name:          "dispatch all when limit is larger",
+			cacheLen:      5,
+			limit:         10,
+			expectedN:     5,
+			expectedCache: 0,
+			expectedErrCh: 5,
+		},
+		{
+			name:          "dispatch all when limit is zero",
+			cacheLen:      5,
+			limit:         0,
+			expectedN:     5,
+			expectedCache: 0,
+			expectedErrCh: 5,
+		},
+		{
+			name:          "dispatch all when limit is negative",
+			cacheLen:      5,
+			limit:         -1,
+			expectedN:     5,
+			expectedCache: 0,
+			expectedErrCh: 5,
+		},
+		{
+			name:          "empty cache",
+			cacheLen:      0,
+			limit:         5,
+			expectedN:     0,
+			expectedCache: 0,
+			expectedErrCh: 0,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			errCache := &errCache{
+				cache:  make([]regionErrorInfo, 0, 10),
+				errCh:  make(chan regionErrorInfo, 10),
+				notify: make(chan struct{}, 1),
+			}
+			for i := 0; i < tc.cacheLen; i++ {
+				errCache.add(mockErrInfo)
+			}
+
+			n, err := errCache.dispatchBatch(context.Background(), tc.limit)
+			require.NoError(t, err)
+			require.Equal(t, tc.expectedN, n)
+			require.Len(t, errCache.cache, tc.expectedCache)
+			require.Len(t, errCache.errCh, tc.expectedErrCh)
+		})
 	}
 }
 
