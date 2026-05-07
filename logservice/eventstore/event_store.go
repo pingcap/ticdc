@@ -1371,10 +1371,8 @@ func (e *eventStore) writeEvents(
 				// the uncompressed raw KV can be encoded directly into op.Value
 				// without allocating a separate value slice and copying it later.
 				op := batch.SetDeferred(keyLen, int(valueBytesBefore))
-				op.Key = EncodeKeyTo(op.Key[:0], uint64(event.subID), event.tableID, kv, CompressionNone)
-				if len(op.Key) != keyLen {
-					return fmt.Errorf("encoded event store key size mismatch, expected %d, got %d",
-						keyLen, len(op.Key))
+				if err := encodeDeferredEventKey(op, keyLen, uint64(event.subID), event.tableID, kv, CompressionNone, false); err != nil {
+					return err
 				}
 				op.Value = kv.EncodeTo(op.Value[:0])
 				if len(op.Value) != int(valueBytesBefore) {
@@ -1385,25 +1383,9 @@ func (e *eventStore) writeEvents(
 					return err
 				}
 			} else if e.encryptionManager != nil {
-				if cap(rawBuf) < int(valueBytesBefore) {
-					rawBuf = make([]byte, 0, int(valueBytesBefore))
-				} else {
-					rawBuf = rawBuf[:0]
-				}
-				rawValue := kv.EncodeTo(rawBuf)
-				value := rawValue
-				if needCompress {
-					maxEncodedSize := encoder.MaxEncodedSize(len(rawValue))
-					if cap(dstBuf) < maxEncodedSize {
-						dstBuf = make([]byte, 0, maxEncodedSize)
-					} else {
-						dstBuf = dstBuf[:0]
-					}
-					value = encoder.EncodeAll(rawValue, dstBuf)
-					valueBytesAfter = int64(len(value))
-					compressionType = CompressionZSTD
-					metrics.EventStoreCompressedRowsCount.Inc()
-				}
+				var value []byte
+				_, value, compressionType, rawBuf, dstBuf = encodeAndMaybeCompressValue(kv, encoder, rawBuf, dstBuf, needCompress)
+				valueBytesAfter = int64(len(value))
 
 				// Encrypt if encryption is enabled (after compression)
 				encryptedValue, err := e.encryptionManager.EncryptData(context.Background(), event.keyspaceID, value)
@@ -1412,10 +1394,8 @@ func (e *eventStore) writeEvents(
 				}
 
 				op := batch.SetDeferred(keyLen, len(encryptedValue))
-				op.Key = encodeKeyToWithEncryptionLayer(op.Key[:0], uint64(event.subID), event.tableID, kv, compressionType)
-				if len(op.Key) != keyLen {
-					return fmt.Errorf("encoded event store key size mismatch, expected %d, got %d",
-						keyLen, len(op.Key))
+				if err := encodeDeferredEventKey(op, keyLen, uint64(event.subID), event.tableID, kv, compressionType, true); err != nil {
+					return err
 				}
 				copiedValueLen := copy(op.Value, encryptedValue)
 				op.Value = op.Value[:copiedValueLen]
@@ -1426,36 +1406,17 @@ func (e *eventStore) writeEvents(
 				if err := op.Finish(); err != nil {
 					return err
 				}
-				rawBuf = rawValue[:0]
-				if needCompress {
-					dstBuf = value[:0]
-				}
 			} else {
-				if cap(rawBuf) < int(valueBytesBefore) {
-					rawBuf = make([]byte, 0, int(valueBytesBefore))
-				} else {
-					rawBuf = rawBuf[:0]
-				}
-				rawValue := kv.EncodeTo(rawBuf)
-				maxEncodedSize := encoder.MaxEncodedSize(len(rawValue))
-				if cap(dstBuf) < maxEncodedSize {
-					dstBuf = make([]byte, 0, maxEncodedSize)
-				} else {
-					dstBuf = dstBuf[:0]
-				}
-				value := encoder.EncodeAll(rawValue, dstBuf)
+				var value []byte
+				_, value, compressionType, rawBuf, dstBuf = encodeAndMaybeCompressValue(kv, encoder, rawBuf, dstBuf, true)
 				valueBytesAfter = int64(len(value))
-				compressionType = CompressionZSTD
-				metrics.EventStoreCompressedRowsCount.Inc()
 				// SetDeferred is a write path optimization. Now that the compressed
 				// value length is known, reserve the exact key/value space in the
 				// Pebble batch, encode the key directly into op.Key, and copy the
 				// compressed value into op.Value without building a temporary key.
 				op := batch.SetDeferred(keyLen, len(value))
-				op.Key = EncodeKeyTo(op.Key[:0], uint64(event.subID), event.tableID, kv, compressionType)
-				if len(op.Key) != keyLen {
-					return fmt.Errorf("encoded event store key size mismatch, expected %d, got %d",
-						keyLen, len(op.Key))
+				if err := encodeDeferredEventKey(op, keyLen, uint64(event.subID), event.tableID, kv, compressionType, false); err != nil {
+					return err
 				}
 				copiedValueLen := copy(op.Value, value)
 				op.Value = op.Value[:copiedValueLen]
@@ -1466,8 +1427,6 @@ func (e *eventStore) writeEvents(
 				if err := op.Finish(); err != nil {
 					return err
 				}
-				rawBuf = rawValue[:0]
-				dstBuf = value[:0]
 			}
 			totalValueBytesBefore += valueBytesBefore
 			totalValueBytesAfter += valueBytesAfter
@@ -1491,6 +1450,60 @@ func (e *eventStore) writeEvents(
 	err := batch.Commit(pebble.NoSync)
 	metrics.EventStoreWriteDurationHistogram.Observe(time.Since(start).Seconds())
 	return err
+}
+
+func encodeAndMaybeCompressValue(
+	kv *common.RawKVEntry,
+	encoder *zstd.Encoder,
+	rawBuf []byte,
+	dstBuf []byte,
+	needCompress bool,
+) (rawValue []byte, value []byte, compressionType CompressionType, nextRawBuf []byte, nextDstBuf []byte) {
+	rawValue = ensureValueBuffer(rawBuf, int(kv.GetSize()))
+	rawValue = kv.EncodeTo(rawValue)
+	value = rawValue
+	compressionType = CompressionNone
+	nextRawBuf = rawValue[:0]
+	nextDstBuf = dstBuf
+	if !needCompress {
+		return rawValue, value, compressionType, nextRawBuf, nextDstBuf
+	}
+
+	maxEncodedSize := encoder.MaxEncodedSize(len(rawValue))
+	value = ensureValueBuffer(dstBuf, maxEncodedSize)
+	value = encoder.EncodeAll(rawValue, value)
+	compressionType = CompressionZSTD
+	nextDstBuf = value[:0]
+	metrics.EventStoreCompressedRowsCount.Inc()
+	return rawValue, value, compressionType, nextRawBuf, nextDstBuf
+}
+
+func ensureValueBuffer(buf []byte, minCap int) []byte {
+	if cap(buf) < minCap {
+		return make([]byte, 0, minCap)
+	}
+	return buf[:0]
+}
+
+func encodeDeferredEventKey(
+	op *pebble.DeferredBatchOp,
+	keyLen int,
+	subID uint64,
+	tableID int64,
+	kv *common.RawKVEntry,
+	compressionType CompressionType,
+	usesEncryptionLayer bool,
+) error {
+	if usesEncryptionLayer {
+		op.Key = encodeKeyToWithEncryptionLayer(op.Key[:0], subID, tableID, kv, compressionType)
+	} else {
+		op.Key = EncodeKeyTo(op.Key[:0], subID, tableID, kv, compressionType)
+	}
+	if len(op.Key) != keyLen {
+		return fmt.Errorf("encoded event store key size mismatch, expected %d, got %d",
+			keyLen, len(op.Key))
+	}
+	return nil
 }
 
 type eventStoreIter struct {
