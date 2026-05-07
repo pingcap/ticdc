@@ -21,8 +21,8 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-	"github.com/pingcap/tidb/pkg/parser"
-	"github.com/pingcap/tidb/pkg/util/filter"
+	cdcfilter "github.com/pingcap/ticdc/pkg/filter"
+	"github.com/pingcap/tidb/pkg/meta/model"
 	tfilter "github.com/pingcap/tidb/pkg/util/table-filter"
 	"go.uber.org/zap"
 )
@@ -35,21 +35,26 @@ const (
 	TablePlaceholder = "{table}"
 )
 
-// Router routes source schema/table names to target schema/table names.
-type Router struct {
-	rules []rule
-}
-
 // rule represents a single routing rule.
 type rule struct {
-	filter     tfilter.Filter
-	schemaExpr string
-	tableExpr  string
+	filter           tfilter.Filter
+	targetSchemaExpr string
+	targetTableExpr  string
+}
+
+// Router is used to support the table route functionality,
+// which map the origin schema/table names to target schema/table names based on the given rules.
+type Router struct {
+	changefeedID common.ChangeFeedID
+	rules        []rule
 }
 
 // NewRouter creates a new Router from dispatch rules.
-func NewRouter(caseSensitive bool, rules []*config.DispatchRule) (Router, error) {
-	var routingRules []rule
+// When multiple rules match the same table, the first matching rule wins.
+func NewRouter(
+	changefeedID common.ChangeFeedID, caseSensitive bool, rules []*config.DispatchRule,
+) (Router, error) {
+	routingRules := make([]rule, 0, len(rules))
 	for _, r := range rules {
 		if r.TargetSchema == "" && r.TargetTable == "" {
 			continue
@@ -57,7 +62,11 @@ func NewRouter(caseSensitive bool, rules []*config.DispatchRule) (Router, error)
 
 		f, err := tfilter.Parse(r.Matcher)
 		if err != nil {
-			log.Warn("router failed to initialize", zap.Strings("matcher", r.Matcher), zap.Error(err))
+			log.Warn("router failed to initialize",
+				zap.String("keyspace", changefeedID.Keyspace()),
+				zap.String("changefeed", changefeedID.Name()),
+				zap.Strings("matcher", r.Matcher),
+				zap.Error(err))
 			return Router{}, errors.WrapError(errors.ErrInvalidTableRoutingRule, err)
 		}
 		if !caseSensitive {
@@ -65,90 +74,98 @@ func NewRouter(caseSensitive bool, rules []*config.DispatchRule) (Router, error)
 		}
 
 		routingRules = append(routingRules, rule{
-			filter:     f,
-			schemaExpr: r.TargetSchema,
-			tableExpr:  r.TargetTable,
+			filter:           f,
+			targetSchemaExpr: r.TargetSchema,
+			targetTableExpr:  r.TargetTable,
 		})
 	}
 
-	return Router{rules: routingRules}, nil
-}
-
-// Route returns the target schema and table names for the given source schema/table.
-func (r Router) Route(originSchema, originTable string) (targetSchema, targetTable string) {
-	// Empty schema can appear on ExtraSchemaName/ExtraTableName for non-rename DDLs.
-	// Keep it unchanged and skip table route matching.
-	if len(r.rules) == 0 || originSchema == "" {
-		return originSchema, originTable
-	}
-
-	for _, rule := range r.rules {
-		if !rule.filter.MatchTable(originSchema, originTable) {
-			continue
-		}
-
-		targetSchema = substituteExpression(rule.schemaExpr, originSchema, originTable, originSchema)
-		// Schema-level DDLs can rewrite the target schema, but must not synthesize a target table.
-		if originTable == "" {
-			return targetSchema, ""
-		}
-
-		targetTable = substituteExpression(rule.tableExpr, originSchema, originTable, originTable)
-		return targetSchema, targetTable
-	}
-
-	return originSchema, originTable
+	return Router{
+		changefeedID: changefeedID,
+		rules:        routingRules,
+	}, nil
 }
 
 // ApplyToTableInfo returns the original TableInfo unless routing changes the target name.
 // When routing changes the target, it clones the TableInfo so the caller can safely reuse
 // routed metadata without mutating the shared source TableInfo.
-func (r Router) ApplyToTableInfo(tableInfo *common.TableInfo) *common.TableInfo {
+func (r Router) ApplyToTableInfo(tableInfo *common.TableInfo) (*common.TableInfo, error) {
 	if len(r.rules) == 0 || tableInfo == nil {
-		return tableInfo
+		return tableInfo, nil
 	}
 
-	originSchema := tableInfo.TableName.Schema
-	originTable := tableInfo.TableName.Table
-	targetSchema, targetTable := r.Route(originSchema, originTable)
-	if targetSchema == originSchema && targetTable == originTable {
-		return tableInfo
+	targetSchema, targetTable, changed, err := r.route(tableInfo.GetSchemaName(), tableInfo.GetTableName())
+	if err != nil {
+		return nil, err
 	}
-
-	return tableInfo.CloneWithRouting(targetSchema, targetTable)
+	if !changed {
+		return tableInfo, nil
+	}
+	return tableInfo.CloneWithRouting(targetSchema, targetTable), nil
 }
 
-// ApplyToDDLEvent returns the original DDL event unless routing changes the query or related
-// table metadata. When routing applies, it builds a routed DDL event once.
-func (r Router) ApplyToDDLEvent(ddl *commonEvent.DDLEvent, changefeedID common.ChangeFeedID) (*commonEvent.DDLEvent, error) {
+// ApplyToDDLEvent returns the original DDL event unless routing changes the DDL query;
+// when query changes, it also routes related metadata.
+func (r Router) ApplyToDDLEvent(ddl *commonEvent.DDLEvent) (*commonEvent.DDLEvent, error) {
 	if len(r.rules) == 0 || ddl == nil {
 		return ddl, nil
 	}
 
-	originSchema := ddl.GetSchemaName()
-	originTable := ddl.GetTableName()
-	originExtraSchema := ddl.GetExtraSchemaName()
-	originExtraTable := ddl.GetExtraTableName()
+	switch model.ActionType(ddl.Type) {
+	case cdcfilter.ActionAddFullTextIndex, cdcfilter.ActionCreateHybridIndex:
+		return nil, errors.ErrTableRoutingFailed.GenWithStack(
+			"table routing does not support ddl type %d, query: %s", ddl.Type, ddl.Query)
+	}
 
-	query, err := rewriteDDLQueryWithRouting(r, ddl, changefeedID)
+	// Do not decide whether a DDL needs routing only from DDLEvent.SchemaName/TableName.
+	// Some DDL queries contain extra table references that are not the event's primary table.
+	// For example:
+	//
+	//	CREATE VIEW `other_db`.`v1` AS SELECT * FROM `source_db`.`orders`
+	//
+	// The event primary table is `other_db`.`v1`, but table route may need to rewrite
+	// the referenced table `source_db`.`orders`.
+	//
+	// Another example is:
+	//
+	//	ALTER TABLE `other_db`.`child` ADD CONSTRAINT `fk_order`
+	//	  FOREIGN KEY (`order_id`) REFERENCES `source_db`.`orders`(`id`)
+	//
+	// The event primary table is `other_db`.`child`, but the FOREIGN KEY reference can
+	// still match table route rules. So when table route is enabled, inspect the query
+	// through TiDB parser and let the AST visitor find all table names.
+	newQuery, err := r.rewriteParserBackedDDLQuery(ddl)
 	if err != nil {
 		return nil, err
 	}
 
-	targetSchemaName, targetTableName := r.Route(originSchema, originTable)
-	targetExtraSchemaName, targetExtraTableName := r.Route(originExtraSchema, originExtraTable)
-	tableInfo := r.ApplyToTableInfo(ddl.TableInfo)
-	multipleTableInfos := applyToMultipleTableInfos(r, ddl.MultipleTableInfos)
-	blockedTableNames := applyToBlockedTableNames(r, ddl.BlockedTableNames)
-	if query == ddl.Query &&
-		targetSchemaName == originSchema &&
-		targetTableName == originTable &&
-		targetExtraSchemaName == originExtraSchema &&
-		targetExtraTableName == originExtraTable &&
-		tableInfo == ddl.TableInfo &&
-		multipleTableInfos == nil &&
-		blockedTableNames == nil {
+	// In CDC DDL events, routed DDL metadata should correspond to names in Query.
+	// If Query is unchanged, no routed DDL event is needed.
+	if newQuery == ddl.Query {
 		return ddl, nil
+	}
+
+	targetSchemaName, targetTableName, _, err := r.route(ddl.GetSchemaName(), ddl.GetTableName())
+	if err != nil {
+		return nil, err
+	}
+
+	targetExtraSchemaName, targetExtraTableName, _, err := r.route(ddl.GetExtraSchemaName(), ddl.GetExtraTableName())
+	if err != nil {
+		return nil, err
+	}
+
+	tableInfo, err := r.ApplyToTableInfo(ddl.TableInfo)
+	if err != nil {
+		return nil, err
+	}
+	multipleTableInfos, err := r.applyToMultipleTableInfos(ddl.MultipleTableInfos)
+	if err != nil {
+		return nil, err
+	}
+	blockedTableNames, err := r.applyToBlockedTableNames(ddl.BlockedTableNames)
+	if err != nil {
+		return nil, err
 	}
 
 	if multipleTableInfos == nil {
@@ -158,9 +175,15 @@ func (r Router) ApplyToDDLEvent(ddl *commonEvent.DDLEvent, changefeedID common.C
 		blockedTableNames = ddl.BlockedTableNames
 	}
 
+	log.Info("ddl query rewritten with routing",
+		zap.String("keyspace", r.changefeedID.Keyspace()),
+		zap.String("changefeed", r.changefeedID.Name()),
+		zap.String("originalQuery", ddl.Query),
+		zap.String("newQuery", newQuery))
+
 	return commonEvent.NewRoutedDDLEvent(
 		ddl,
-		query,
+		newQuery,
 		targetSchemaName,
 		targetTableName,
 		targetExtraSchemaName,
@@ -171,133 +194,121 @@ func (r Router) ApplyToDDLEvent(ddl *commonEvent.DDLEvent, changefeedID common.C
 	), nil
 }
 
-// rewriteDDLQueryWithRouting rewrites a DDL query by applying routing rules
-// to transform source table names to target table names.
-//
-// It returns the final query string.
-// Canonical DDL schema/table fields are rewritten separately by ApplyToDDLEvent.
-func rewriteDDLQueryWithRouting(
-	router Router, ddl *commonEvent.DDLEvent, changefeedID common.ChangeFeedID,
-) (string, error) {
-	if len(router.rules) == 0 || ddl.Query == "" {
-		return ddl.Query, nil
+// route returns the target schema/table names and whether routing changed them.
+func (r Router) route(originSchema, originTable string) (targetSchema, targetTable string, changed bool, err error) {
+	// In CDC runtime, table names should always carry schema.
+	// Empty schema means this name pair is absent, so keep it unchanged.
+	// This also prevents wildcard rules like *.* from matching it.
+	if originSchema == "" {
+		return originSchema, originTable, false, nil
 	}
 
-	// Get the default schema for parsing. If TableInfo is nil (e.g., for
-	// database-level DDLs like CREATE DATABASE), FetchDDLTables will extract
-	// the schema name directly from the DDL statement itself.
-	var originSchema string
-	if ddl.TableInfo != nil {
-		originSchema = ddl.TableInfo.GetSchemaName()
-	}
-
-	p := parser.New()
-	stmt, err := p.ParseOneStmt(ddl.Query, "", "")
+	rule, err := r.matchRule(originSchema, originTable)
 	if err != nil {
-		log.Error("rewrite ddl failed due to parse ddl query",
-			zap.String("keyspace", changefeedID.Keyspace()),
-			zap.String("changefeed", changefeedID.Name()),
-			zap.String("query", ddl.Query), zap.Error(err))
-		return "", errors.WrapError(errors.ErrTableRoutingFailed, err)
+		return "", "", false, err
+	}
+	if rule == nil {
+		return originSchema, originTable, false, nil
 	}
 
-	sourceTables, err := fetchDDLTables(originSchema, stmt)
-	if err != nil {
-		log.Error("rewrite ddl failed due to fetch ddl tables",
-			zap.String("keyspace", changefeedID.Keyspace()),
-			zap.String("changefeed", changefeedID.Name()),
-			zap.String("query", ddl.Query), zap.Error(err))
-		return "", errors.WrapError(errors.ErrTableRoutingFailed, err)
+	targetSchema = substituteExpression(rule.targetSchemaExpr, originSchema, originTable, originSchema)
+	// Schema-level DDLs can rewrite the target schema, but must not synthesize a target table.
+	if originTable == "" {
+		return targetSchema, "", targetSchema != originSchema, nil
 	}
 
-	if len(sourceTables) == 0 {
-		return ddl.Query, nil
-	}
+	targetTable = substituteExpression(rule.targetTableExpr, originSchema, originTable, originTable)
+	return targetSchema, targetTable, targetSchema != originSchema || targetTable != originTable, nil
+}
 
-	var (
-		routed       bool
-		targetTables = make([]*filter.Table, 0, len(sourceTables))
-	)
-	for _, srcTable := range sourceTables {
-		targetSchema, targetTable := router.Route(srcTable.Schema, srcTable.Name)
-		if targetSchema != srcTable.Schema || targetTable != srcTable.Name {
-			routed = true
+// matchRule finds the first rule that matches the given schema/table.
+// Table routing keeps first-match semantics. Schema-only routing rejects fan-out
+// to different target schemas because there is no table name to choose a rule.
+func (r Router) matchRule(schema, table string) (*rule, error) {
+	if table == "" {
+		var (
+			matched      *rule
+			targetSchema string
+		)
+		for i := range r.rules {
+			if !r.rules[i].filter.MatchSchema(schema) {
+				continue
+			}
+
+			currentTargetSchema := substituteExpression(r.rules[i].targetSchemaExpr, schema, "", schema)
+			if matched == nil {
+				matched = &r.rules[i]
+				targetSchema = currentTargetSchema
+				continue
+			}
+			if currentTargetSchema != targetSchema {
+				return nil, errors.ErrTableRoutingFailed.GenWithStack(
+					"ambiguous schema routing for schema %s: target schema %s conflicts with %s",
+					schema, currentTargetSchema, targetSchema)
+			}
 		}
-		targetTables = append(targetTables, &filter.Table{
-			Schema: targetSchema,
-			Name:   targetTable,
-		})
+		return matched, nil
 	}
 
-	if !routed {
-		return ddl.Query, nil
+	for i := range r.rules {
+		if r.rules[i].filter.MatchTable(schema, table) {
+			return &r.rules[i], nil
+		}
 	}
-
-	newQuery, err := rewriteDDLQuery(stmt, targetTables)
-	if err != nil {
-		log.Error("rewrite ddl failed due to rewrite ddl query",
-			zap.String("keyspace", changefeedID.Keyspace()),
-			zap.String("changefeed", changefeedID.Name()),
-			zap.String("query", ddl.Query), zap.Any("targetTables", targetTables), zap.Error(err))
-		return "", errors.WrapError(errors.ErrTableRoutingFailed, err)
-	}
-
-	if newQuery != ddl.Query {
-		log.Info("DDL query rewritten with routing",
-			zap.String("keyspace", changefeedID.Keyspace()),
-			zap.String("changefeed", changefeedID.Name()),
-			zap.String("originalQuery", ddl.Query),
-			zap.String("newQuery", newQuery))
-	}
-
-	return newQuery, nil
+	return nil, nil
 }
 
 // applyToMultipleTableInfos returns nil when no entry changes.
 // On the first routed entry, it clones the original slice once and only rewrites changed items,
 // so unchanged entries keep their original references and the source event slice is left untouched.
-func applyToMultipleTableInfos(r Router, tableInfos []*common.TableInfo) []*common.TableInfo {
+func (r Router) applyToMultipleTableInfos(tableInfos []*common.TableInfo) ([]*common.TableInfo, error) {
 	if len(tableInfos) == 0 {
-		return nil
+		return nil, nil
 	}
 
-	var routedTableInfos []*common.TableInfo
+	var result []*common.TableInfo
 	for i, tableInfo := range tableInfos {
-		routedTableInfo := r.ApplyToTableInfo(tableInfo)
+		routedTableInfo, err := r.ApplyToTableInfo(tableInfo)
+		if err != nil {
+			return nil, err
+		}
 		if routedTableInfo == tableInfo {
 			continue
 		}
-		if routedTableInfos == nil {
-			routedTableInfos = append([]*common.TableInfo(nil), tableInfos...)
+		if result == nil {
+			result = append([]*common.TableInfo(nil), tableInfos...)
 		}
-		routedTableInfos[i] = routedTableInfo
+		result[i] = routedTableInfo
 	}
-	return routedTableInfos
+	return result, nil
 }
 
 // applyToBlockedTableNames returns nil when no entry changes.
 // On the first routed entry, it clones the original slice once and only rewrites changed items,
 // so unchanged entries keep their original values and the source event slice is left untouched.
-func applyToBlockedTableNames(r Router, tableNames []commonEvent.SchemaTableName) []commonEvent.SchemaTableName {
+func (r Router) applyToBlockedTableNames(tableNames []commonEvent.SchemaTableName) ([]commonEvent.SchemaTableName, error) {
 	if len(tableNames) == 0 {
-		return nil
+		return nil, nil
 	}
 
-	var routedTableNames []commonEvent.SchemaTableName
+	var result []commonEvent.SchemaTableName
 	for i, tableName := range tableNames {
-		targetSchema, targetTable := r.Route(tableName.SchemaName, tableName.TableName)
-		if targetSchema == tableName.SchemaName && targetTable == tableName.TableName {
+		targetSchema, targetTable, changed, err := r.route(tableName.SchemaName, tableName.TableName)
+		if err != nil {
+			return nil, err
+		}
+		if !changed {
 			continue
 		}
-		if routedTableNames == nil {
-			routedTableNames = append([]commonEvent.SchemaTableName(nil), tableNames...)
+		if result == nil {
+			result = append([]commonEvent.SchemaTableName(nil), tableNames...)
 		}
-		routedTableNames[i] = commonEvent.SchemaTableName{
+		result[i] = commonEvent.SchemaTableName{
 			SchemaName: targetSchema,
 			TableName:  targetTable,
 		}
 	}
-	return routedTableNames
+	return result, nil
 }
 
 // substituteExpression replaces {schema} and {table} placeholders with actual values.

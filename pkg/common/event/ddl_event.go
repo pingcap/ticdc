@@ -40,16 +40,17 @@ type DDLEvent struct {
 	// Type is the type of the DDL.
 	Type byte `json:"type"`
 	// SchemaID is from upstream job.SchemaID
-	SchemaID int64 `json:"schema_id"`
-	// SchemaName and TableName carry the origin upstream names.
+	SchemaID   int64  `json:"schema_id"`
 	SchemaName string `json:"schema_name"`
 	TableName  string `json:"table_name"`
-	// ExtraSchemaName and ExtraTableName carry the origin old names for RenameTable.
+
+	// the following two fields are just used for RenameTable,
+	// they are the old schema/table name of the table
 	ExtraSchemaName string `json:"extra_schema_name"`
 	ExtraTableName  string `json:"extra_table_name"`
 
-	// target related fields carry routed names for sink output paths.
-	// They are runtime-only fields and are not serialized.
+	// target related fields carry routed names.
+	// They are set after the unmarshal, so no need to be serialized.
 	targetSchemaName      string `json:"-"`
 	targetTableName       string `json:"-"`
 	targetExtraSchemaName string `json:"-"`
@@ -119,6 +120,10 @@ type DDLEvent struct {
 	// UnmarshalJSON compatibility so both `not_sync` and legacy `NotSync`
 	// are interoperable in mixed-version deployment.
 	NotSync bool `json:"not_sync"`
+
+	// IndexIDs store the add index ids in SQL order for add index and multi schema change DDLs.
+	// MySQL sink uses them to recover anonymous index names.
+	IndexIDs []int64 `json:"index_ids"`
 }
 
 type ddlEventJSONAlias DDLEvent
@@ -248,6 +253,7 @@ func (d *DDLEvent) GetTableID() int64 {
 	return 0
 }
 
+// GetEvents split the multi tables DDL into single table DDLs.
 func (d *DDLEvent) GetEvents() []*DDLEvent {
 	// Some ddl event may be multi-events, we need to split it into multiple messages.
 	// Such as rename table test.table1 to test.table10, test.table2 to test.table20
@@ -355,13 +361,6 @@ func (e *DDLEvent) GetDDLQuery() string {
 	return e.Query
 }
 
-func (e *DDLEvent) GetDDLSchemaName() string {
-	if e == nil {
-		return ""
-	}
-	return e.GetTargetSchemaName()
-}
-
 func (e *DDLEvent) GetDDLType() model.ActionType {
 	return model.ActionType(e.Type)
 }
@@ -445,7 +444,6 @@ func (t DDLEvent) encodeV1() ([]byte, error) {
 	multipleTableInfosDataSize := make([]byte, 8)
 	binary.BigEndian.PutUint64(multipleTableInfosDataSize, uint64(len(t.MultipleTableInfos)))
 	data = append(data, multipleTableInfosDataSize...)
-
 	return data, nil
 }
 
@@ -575,20 +573,24 @@ func NewRoutedDDLEvent(
 		FinishedTs:            d.FinishedTs,
 		Seq:                   d.Seq,
 		Epoch:                 d.Epoch,
-		MultipleTableInfos:    multipleTableInfos,
-		BlockedTables:         d.BlockedTables,
-		BlockedTableNames:     blockedTableNames,
-		NeedDroppedTables:     d.NeedDroppedTables,
-		NeedAddedTables:       d.NeedAddedTables,
-		UpdatedSchemas:        d.UpdatedSchemas,
-		TableNameChange:       d.TableNameChange,
-		TiDBOnly:              d.TiDBOnly,
-		BDRMode:               d.BDRMode,
-		Err:                   d.Err,
-		PostTxnFlushed:        clonePostTxnFlushed(d.PostTxnFlushed),
-		eventSize:             d.eventSize,
-		IsBootstrap:           d.IsBootstrap,
-		NotSync:               d.NotSync,
+		// MultipleTableInfos and BlockedTableNames carry table names used by downstream
+		// execution paths, so the routed versions must be passed in explicitly.
+		MultipleTableInfos: multipleTableInfos,
+		BlockedTableNames:  blockedTableNames,
+		// The following fields do not participate in table route name rewriting,
+		// so the routed event keeps the original values from the source event.
+		BlockedTables:     d.BlockedTables,
+		NeedDroppedTables: d.NeedDroppedTables,
+		NeedAddedTables:   d.NeedAddedTables,
+		UpdatedSchemas:    d.UpdatedSchemas,
+		TableNameChange:   d.TableNameChange,
+		TiDBOnly:          d.TiDBOnly,
+		BDRMode:           d.BDRMode,
+		Err:               d.Err,
+		PostTxnFlushed:    clonePostTxnFlushed(d.PostTxnFlushed),
+		eventSize:         d.eventSize,
+		IsBootstrap:       d.IsBootstrap,
+		NotSync:           d.NotSync,
 	}
 }
 

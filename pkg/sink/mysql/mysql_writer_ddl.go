@@ -56,6 +56,28 @@ func (w *Writer) execDDL(event *commonEvent.DDLEvent) error {
 	ctx := w.ctx
 	shouldSwitchDB := needSwitchDB(event)
 
+	switch event.GetDDLType() {
+	case timodel.ActionMultiSchemaChange, timodel.ActionAddIndex:
+		// TiDB may generate index names for anonymous ADD INDEX clauses. Rewrite
+		// the DDL to use the upstream-generated names so downstream schema stays
+		// deterministic across retries and CREATE TABLE LIKE replication.
+		// event.IndexIDs is pre-filtered to contain only ADD INDEX IDs in clause
+		// order, so restoreAnonymousIndexToNamedIndex can remap each anonymous
+		// secondary index to the exact upstream-generated name.
+		newQuery, changed, err := restoreAnonymousIndexToNamedIndex(event.Query, event.TableInfo, event.IndexIDs)
+		if err != nil {
+			log.Warn("failed to restore anonymous index name",
+				zap.String("changefeed", w.ChangefeedID.String()),
+				zap.String("query", event.Query),
+				zap.Error(err))
+		} else if changed {
+			log.Info("restore anonymous index to named index",
+				zap.String("changefeed", w.ChangefeedID.String()),
+				zap.String("query", event.Query),
+				zap.String("newQuery", newQuery))
+			event.Query = newQuery
+		}
+	}
 	// Convert vector type to string type for unsupport database
 	if w.cfg.HasVectorType {
 		if newQuery := formatQuery(event.Query); newQuery != event.Query {
@@ -84,7 +106,7 @@ func (w *Writer) execDDL(event *commonEvent.DDLEvent) error {
 	}
 
 	if shouldSwitchDB {
-		_, err = tx.ExecContext(ctx, "USE "+common.QuoteName(event.GetDDLSchemaName())+";")
+		_, err = tx.ExecContext(ctx, "USE "+common.QuoteName(event.GetTargetSchemaName())+";")
 		if err != nil {
 			if rbErr := tx.Rollback(); rbErr != nil {
 				log.Error("Failed to rollback", zap.Error(err))

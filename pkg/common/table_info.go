@@ -125,14 +125,6 @@ func (ti *TableInfo) InitPrivateFields() {
 		return
 	}
 
-	// columnSchema may be nil for minimal TableInfo instances (e.g., in tests).
-	// In production, columnSchema is always set via WrapTableInfo or similar.
-	// Early return here without marking as initialized, so if columnSchema is
-	// set later, InitPrivateFields can be called again to properly initialize.
-	if ti.columnSchema == nil {
-		return
-	}
-
 	ti.preSQLs.mutex.Lock()
 	defer ti.preSQLs.mutex.Unlock()
 
@@ -172,9 +164,7 @@ func (ti *TableInfo) CloneWithRouting(targetSchema, targetTable string) *TableIn
 		UpdateTS:          ti.UpdateTS,
 		ActiveActiveTable: ti.ActiveActiveTable,
 		SoftDeleteTable:   ti.SoftDeleteTable,
-		// preSQLs is zero-initialized (uninitialized mutex/atomic, empty strings)
 	}
-	// Apply routing to the cloned TableName while keeping Schema/Table as source names.
 	cloned.TableName.TargetSchema = targetSchema
 	cloned.TableName.TargetTable = targetTable
 
@@ -254,6 +244,9 @@ func (ti *TableInfo) ShadowCopyColumnSchema() *columnSchema {
 }
 
 func (ti *TableInfo) GetColumns() []*model.ColumnInfo {
+	if ti == nil || ti.columnSchema == nil {
+		return nil
+	}
 	return ti.columnSchema.Columns
 }
 
@@ -392,26 +385,26 @@ func (ti *TableInfo) MustGetColumnOffsetByID(id int64) int {
 	return offset
 }
 
-// GetSchemaName returns the origin schema name carried by this TableInfo.
+// GetSchemaName returns the schema name of the table
 func (ti *TableInfo) GetSchemaName() string {
-	return ti.TableName.GetOriginSchema()
+	return ti.TableName.GetSchema()
 }
 
-// GetTableName returns the origin table name carried by this TableInfo.
+// GetTableName returns the table name of the table
 func (ti *TableInfo) GetTableName() string {
-	return ti.TableName.GetOriginTable()
+	return ti.TableName.GetTable()
 }
 
 func (ti *TableInfo) GetTableNameCIStr() ast.CIStr {
 	return ast.NewCIStr(ti.GetTableName())
 }
 
-// GetSchemaNamePtr returns the pointer to the origin schema name.
+// GetSchemaNamePtr returns the pointer to the schema name of the table
 func (ti *TableInfo) GetSchemaNamePtr() *string {
 	return &ti.TableName.Schema
 }
 
-// GetTableNamePtr returns the pointer to the origin table name.
+// GetTableNamePtr returns the pointer to the table name of the table
 func (ti *TableInfo) GetTableNamePtr() *string {
 	return &ti.TableName.Table
 }

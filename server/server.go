@@ -29,14 +29,16 @@ import (
 	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/logservice/txnutil"
 	"github.com/pingcap/ticdc/maintainer"
-	"github.com/pingcap/ticdc/pkg/api"
 	"github.com/pingcap/ticdc/pkg/common"
 	appctx "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/encryption"
+	"github.com/pingcap/ticdc/pkg/encryption/kms"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/eventservice"
 	"github.com/pingcap/ticdc/pkg/keyspace"
+	"github.com/pingcap/ticdc/pkg/liveness"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
@@ -85,7 +87,7 @@ type server struct {
 
 	info *node.Info
 
-	liveness api.Liveness
+	liveness liveness.Liveness
 
 	pdClient      pd.Client
 	pdAPIClient   pdutil.PDAPIClient
@@ -161,6 +163,8 @@ func New(conf *config.ServerConfig, pdEndpoints []string) (tiserver.Server, erro
 		pdEndpoints: pdEndpoints,
 		tcpServer:   tcpServer,
 		security:    conf.Security,
+		// Initialize liveness explicitly to make the default node state obvious.
+		liveness:    liveness.CaptureAlive,
 		preServices: make([]common.Closeable, 0),
 	}
 	return s, nil
@@ -219,7 +223,7 @@ func (c *server) initialize(ctx context.Context) error {
 		subscriptionClient,
 		schemaStore,
 		eventStore,
-		maintainer.NewMaintainerManager(c.info, conf.Debug.Scheduler),
+		maintainer.NewMaintainerManager(c.info, conf.Debug.Scheduler, &c.liveness),
 		eventService,
 	}
 	// register it into global var
@@ -277,6 +281,32 @@ func (c *server) setPreServices(ctx context.Context) error {
 	keyspaceManager := keyspace.NewManager(c.pdEndpoints)
 	appctx.SetService(appctx.KeyspaceManager, keyspaceManager)
 	c.preServices = append(c.preServices, keyspaceManager)
+
+	conf := config.GetGlobalServerConfig()
+	if conf != nil && conf.Encryption != nil && conf.Encryption.EnableEncryption {
+		tikvClient, err := encryption.NewTiKVEncryptionHTTPClient(c.pdClient, c.security)
+		if err != nil {
+			return err
+		}
+
+		kmsClient, err := kms.NewClient(conf.Encryption)
+		if err != nil {
+			return err
+		}
+		if closeable, ok := kmsClient.(common.Closeable); ok {
+			c.preServices = append(c.preServices, closeable)
+		}
+
+		metaManager := encryption.NewEncryptionMetaManager(tikvClient, kmsClient)
+		if err := metaManager.Start(ctx); err != nil {
+			return err
+		}
+
+		appctx.SetService(appctx.EncryptionManager, encryption.NewEncryptionManager(metaManager))
+		if closeable, ok := metaManager.(common.Closeable); ok {
+			c.preServices = append(c.preServices, closeable)
+		}
+	}
 
 	log.Info("pre services all set", zap.Any("preServicesNum", len(c.preServices)))
 	return nil
@@ -502,7 +532,7 @@ func (c *server) closePreServices() {
 }
 
 // Liveness returns liveness of the server.
-func (c *server) Liveness() api.Liveness {
+func (c *server) Liveness() liveness.Liveness {
 	return c.liveness.Load()
 }
 

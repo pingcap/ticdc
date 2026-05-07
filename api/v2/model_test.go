@@ -20,6 +20,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestReplicaConfigConversion verifies API/internal replica config conversion,
+// including round-tripping the optional event collector batch overrides.
 func TestReplicaConfigConversion(t *testing.T) {
 	t.Parallel()
 
@@ -96,4 +98,106 @@ func TestReplicaConfigConversion(t *testing.T) {
 	require.True(t, *apiCfgBack.Scheduler.EnableTableAcrossNodes)
 	require.Equal(t, "correctness", *apiCfgBack.Integrity.IntegrityCheckLevel)
 	require.Equal(t, "eventual", *apiCfgBack.Consistent.Level)
+
+	// Test case 4: batch fields round trip and nil preservation
+	apiBatchCfg := &ReplicaConfig{
+		EventCollectorBatchCount: util.AddressOf(4096),
+		EventCollectorBatchBytes: util.AddressOf(2048),
+	}
+	internalBatchCfg := apiBatchCfg.ToInternalReplicaConfig()
+	require.NotNil(t, internalBatchCfg.EventCollectorBatchCount)
+	require.NotNil(t, internalBatchCfg.EventCollectorBatchBytes)
+	require.Equal(t, 4096, *internalBatchCfg.EventCollectorBatchCount)
+	require.Equal(t, 2048, *internalBatchCfg.EventCollectorBatchBytes)
+
+	apiBatchCfgBack := ToAPIReplicaConfig(internalBatchCfg)
+	require.NotNil(t, apiBatchCfgBack.EventCollectorBatchCount)
+	require.NotNil(t, apiBatchCfgBack.EventCollectorBatchBytes)
+	require.Equal(t, 4096, *apiBatchCfgBack.EventCollectorBatchCount)
+	require.Equal(t, 2048, *apiBatchCfgBack.EventCollectorBatchBytes)
+
+	apiBatchZeroCfg := &ReplicaConfig{
+		EventCollectorBatchCount: util.AddressOf(0),
+		EventCollectorBatchBytes: util.AddressOf(0),
+	}
+	internalBatchZeroCfg := apiBatchZeroCfg.ToInternalReplicaConfig()
+	require.NotNil(t, internalBatchZeroCfg.EventCollectorBatchCount)
+	require.NotNil(t, internalBatchZeroCfg.EventCollectorBatchBytes)
+	require.Equal(t, 0, *internalBatchZeroCfg.EventCollectorBatchCount)
+	require.Equal(t, 0, *internalBatchZeroCfg.EventCollectorBatchBytes)
+
+	apiBatchZeroCfgBack := ToAPIReplicaConfig(internalBatchZeroCfg)
+	require.NotNil(t, apiBatchZeroCfgBack.EventCollectorBatchCount)
+	require.NotNil(t, apiBatchZeroCfgBack.EventCollectorBatchBytes)
+	require.Equal(t, 0, *apiBatchZeroCfgBack.EventCollectorBatchCount)
+	require.Equal(t, 0, *apiBatchZeroCfgBack.EventCollectorBatchBytes)
+
+	internalCfgNoBatch := (&ReplicaConfig{}).ToInternalReplicaConfig()
+	require.Nil(t, internalCfgNoBatch.EventCollectorBatchCount)
+	require.Nil(t, internalCfgNoBatch.EventCollectorBatchBytes)
+
+	internalCfgNoBatchBack := config.GetDefaultReplicaConfig()
+	internalCfgNoBatchBack.EventCollectorBatchCount = nil
+	internalCfgNoBatchBack.EventCollectorBatchBytes = nil
+	apiNoBatch := ToAPIReplicaConfig(internalCfgNoBatchBack)
+	require.Nil(t, apiNoBatch.EventCollectorBatchCount)
+	require.Nil(t, apiNoBatch.EventCollectorBatchBytes)
+}
+
+func TestReplicaConfigConversionBatchFields(t *testing.T) {
+	t.Parallel()
+
+	apiCfg := &ReplicaConfig{
+		EventCollectorBatchCount: util.AddressOf(4096),
+		EventCollectorBatchBytes: util.AddressOf(2048),
+	}
+	internalCfg := apiCfg.ToInternalReplicaConfig()
+	require.Equal(t, 4096, util.GetOrZero(internalCfg.EventCollectorBatchCount))
+	require.Equal(t, 2048, util.GetOrZero(internalCfg.EventCollectorBatchBytes))
+
+	apiCfgBack := ToAPIReplicaConfig(internalCfg)
+	require.NotNil(t, apiCfgBack.EventCollectorBatchCount)
+	require.NotNil(t, apiCfgBack.EventCollectorBatchBytes)
+	require.Equal(t, 4096, *apiCfgBack.EventCollectorBatchCount)
+	require.Equal(t, 2048, *apiCfgBack.EventCollectorBatchBytes)
+
+	apiCfgNil := &ReplicaConfig{}
+	internalCfgNil := apiCfgNil.ToInternalReplicaConfig()
+	defaultCfg := config.GetDefaultReplicaConfig()
+	require.Equal(
+		t,
+		util.GetOrZero(defaultCfg.EventCollectorBatchCount),
+		util.GetOrZero(internalCfgNil.EventCollectorBatchCount),
+	)
+	require.Equal(
+		t,
+		util.GetOrZero(defaultCfg.EventCollectorBatchBytes),
+		util.GetOrZero(internalCfgNil.EventCollectorBatchBytes),
+	)
+
+	internalCfgNoBatch := config.GetDefaultReplicaConfig()
+	internalCfgNoBatch.EventCollectorBatchCount = nil
+	internalCfgNoBatch.EventCollectorBatchBytes = nil
+	apiNoBatch := ToAPIReplicaConfig(internalCfgNoBatch)
+	require.Nil(t, apiNoBatch.EventCollectorBatchCount)
+	require.Nil(t, apiNoBatch.EventCollectorBatchBytes)
+}
+
+func TestReplicaConfigConversionRedoBatchField(t *testing.T) {
+	t.Parallel()
+
+	apiCfg := &ReplicaConfig{
+		Consistent: &ConsistentConfig{
+			EventCollectorBatchCount: util.AddressOf(4096),
+		},
+	}
+
+	internalCfg := apiCfg.ToInternalReplicaConfig()
+	require.NotNil(t, internalCfg.Consistent)
+	require.Equal(t, 4096, util.GetOrZero(internalCfg.Consistent.EventCollectorBatchCount))
+
+	apiCfgBack := ToAPIReplicaConfig(internalCfg)
+	require.NotNil(t, apiCfgBack.Consistent)
+	require.NotNil(t, apiCfgBack.Consistent.EventCollectorBatchCount)
+	require.Equal(t, 4096, *apiCfgBack.Consistent.EventCollectorBatchCount)
 }

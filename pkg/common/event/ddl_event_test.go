@@ -420,6 +420,14 @@ INSERT INTO test VALUES ('This; is; a test');
 			expectedError: false,
 		},
 		{
+			name:  "DDL with semicolons inside default string",
+			input: "CREATE TABLE test (c VARCHAR(100) DEFAULT 'a;b;c');",
+			expected: []string{
+				"CREATE TABLE `test` (`c` VARCHAR(100) DEFAULT _UTF8MB4'a;b;c');",
+			},
+			expectedError: false,
+		},
+		{
 			name: "Query with escaped quotes inside strings",
 			input: `
 CREATE TABLE test (name VARCHAR(50));
@@ -477,13 +485,23 @@ INSERT INTO test VALUES (1);
 			expectedError: false,
 		},
 		{
+			name: "Queries with semicolons inside comments",
+			input: `
+/* comment; not a statement */
+CREATE TABLE test1 (id INT); -- inline; comment
+CREATE TABLE test2 (id INT);
+`,
+			expected: []string{
+				"CREATE TABLE `test1` (`id` INT);",
+				"CREATE TABLE `test2` (`id` INT);",
+			},
+			expectedError: false,
+		},
+		{
 			name: "Queries with whitespace and newlines",
 			input: `
-    
     CREATE TABLE test (id INT);
-    
     INSERT INTO test VALUES (1);
-    
 `,
 			expected: []string{
 				"CREATE TABLE `test` (`id` INT);",
@@ -552,7 +570,6 @@ func TestNewRoutedDDLEvent(t *testing.T) {
 		multipleTableInfo2.CloneWithRouting("routed_schema2", "table2"),
 	}
 
-	// Build the routed event with final routed state.
 	routed := NewRoutedDDLEvent(
 		original,
 		"CREATE TABLE routed_schema.test ...",
@@ -616,7 +633,7 @@ func TestNewRoutedDDLEvent(t *testing.T) {
 	require.True(t, routed.MultipleTableInfos[0] == routedMultipleTableInfos[0])
 	require.True(t, routed.MultipleTableInfos[1] == routedMultipleTableInfos[1])
 
-	// Test nil origin event
+	// Test nil origin event.
 	var nilEvent *DDLEvent
 	routedNil := NewRoutedDDLEvent(nilEvent, "", "", "", "", "", nil, nil, nil)
 	require.Nil(t, routedNil)

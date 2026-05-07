@@ -20,32 +20,16 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
+	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/utils/chann"
-	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/atomic"
 )
-
-type staticTopicManager struct {
-	partitionNum int32
-}
-
-func (m staticTopicManager) GetPartitionNum(context.Context, string) (int32, error) {
-	return m.partitionNum, nil
-}
-
-func (m staticTopicManager) CreateTopicAndWaitUntilVisible(context.Context, string) (int32, error) {
-	return m.partitionNum, nil
-}
-
-func (m staticTopicManager) Close() {}
 
 func newPulsarSinkForTest(t *testing.T) (*sink, error) {
 	sinkURL := "pulsar://127.0.0.1:6650/persistent://public/default/test?" +
@@ -150,83 +134,63 @@ func TestPulsarSinkBasicFunctionality(t *testing.T) {
 	require.Equal(t, count.Load(), int64(3))
 }
 
-func TestCalculateKeyPartitionsUsesSourceIdentityForColumnSelector(t *testing.T) {
-	t.Parallel()
-
-	helper := commonEvent.NewEventTestHelper(t)
-	defer helper.Close()
-
-	helper.Tk().MustExec("create database source_db")
-	helper.DDL2Job("create table source_db.orders (id int primary key, name varchar(32))")
-
-	dmlEvent := helper.DML2Event("source_db", "orders", "insert into source_db.orders values (1, 'alice')")
-	dmlEvent.TableInfo = dmlEvent.TableInfo.CloneWithRouting("target_db", "orders_routed")
-
-	sinkConfig := &config.SinkConfig{
-		DispatchRules: []*config.DispatchRule{
-			{
-				Matcher:       []string{"source_db.orders"},
-				PartitionRule: "table",
-				TopicRule:     "source_topic",
-			},
-			{
-				Matcher:       []string{"target_db.orders_routed"},
-				PartitionRule: "ts",
-				TopicRule:     "target_topic",
-			},
-		},
-		ColumnSelectors: []*config.ColumnSelector{
-			{
-				Matcher: []string{"source_db.orders"},
-				Columns: []string{"id"},
-			},
-			{
-				Matcher: []string{"target_db.orders_routed"},
-				Columns: []string{"id", "name"},
-			},
-		},
-	}
-
-	router, err := eventrouter.NewEventRouter(sinkConfig, "default_topic", true, false)
-	require.NoError(t, err)
-	selectors, err := columnselector.New(sinkConfig)
-	require.NoError(t, err)
-
-	s := &sink{
-		changefeedID: common.NewChangefeedID4Test("test", "test"),
-		comp: component{
-			eventRouter:    router,
-			columnSelector: selectors,
-			topicManager:   staticTopicManager{partitionNum: 4},
-		},
-		eventChan: chann.NewUnlimitedChannelDefault[*commonEvent.DMLEvent](),
-		rowChan:   chann.NewUnlimitedChannelDefault[*commonEvent.MQRowEvent](),
-	}
-
-	s.eventChan.Push(dmlEvent)
-	s.eventChan.Close()
-
-	require.NoError(t, s.calculateKeyPartitions(context.Background()))
-
-	mqEvent, ok := s.rowChan.Get()
-	require.True(t, ok)
-	require.Equal(t, "source_topic", mqEvent.Key.Topic)
-
-	idCol := mustGetColumnByName(t, dmlEvent.TableInfo, "id")
-	nameCol := mustGetColumnByName(t, dmlEvent.TableInfo, "name")
-	require.True(t, mqEvent.RowEvent.ColumnSelector.Select(idCol))
-	require.False(t, mqEvent.RowEvent.ColumnSelector.Select(nameCol))
+func TestPulsarSinkBatchConfig(t *testing.T) {
+	sink := &sink{}
+	require.Equal(t, 4096, sink.BatchCount())
+	require.Zero(t, sink.BatchBytes())
 }
 
-func mustGetColumnByName(t *testing.T, tableInfo *common.TableInfo, name string) *timodel.ColumnInfo {
-	t.Helper()
+func TestPulsarSinkNewWithComponentReturnsDMLProducerError(t *testing.T) {
+	changefeedID := common.NewChangefeedID4Test("test", "test")
+	expectedErr := cerror.ErrPulsarNewProducer.GenWithStackByArgs()
+	ddlProducerCreated := false
+	var err error
 
-	for _, col := range tableInfo.GetColumns() {
-		if col != nil && col.Name.O == name {
-			return col
-		}
-	}
+	require.NotPanics(t, func() {
+		_, err = newWithComponent(
+			context.Background(),
+			changefeedID,
+			&config.SinkConfig{},
+			component{},
+			config.ProtocolCanalJSON,
+			func(common.ChangeFeedID, component, chan error) (dmlProducer, error) {
+				var producer *dmlProducers
+				return producer, expectedErr
+			},
+			func(common.ChangeFeedID, component, *config.SinkConfig) (ddlProducer, error) {
+				ddlProducerCreated = true
+				return newMockDDLProducer(), nil
+			},
+		)
+	})
 
-	t.Fatalf("column %s not found", name)
-	return nil
+	require.Error(t, err)
+	require.EqualError(t, err, expectedErr.Error())
+	require.False(t, ddlProducerCreated)
+}
+
+func TestPulsarSinkNewWithComponentReturnsDDLProducerError(t *testing.T) {
+	changefeedID := common.NewChangefeedID4Test("test", "test")
+	expectedErr := cerror.ErrPulsarNewProducer.GenWithStackByArgs()
+	var err error
+
+	require.NotPanics(t, func() {
+		_, err = newWithComponent(
+			context.Background(),
+			changefeedID,
+			&config.SinkConfig{},
+			component{},
+			config.ProtocolCanalJSON,
+			func(common.ChangeFeedID, component, chan error) (dmlProducer, error) {
+				return newMockDMLProducer(), nil
+			},
+			func(common.ChangeFeedID, component, *config.SinkConfig) (ddlProducer, error) {
+				var producer *ddlProducers
+				return producer, expectedErr
+			},
+		)
+	})
+
+	require.Error(t, err)
+	require.EqualError(t, err, expectedErr.Error())
 }

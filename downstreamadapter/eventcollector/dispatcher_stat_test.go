@@ -42,6 +42,7 @@ type mockDispatcher struct {
 	id           common.DispatcherID
 	changefeedID common.ChangeFeedID
 	handleEvents func(events []dispatcher.DispatcherEvent, wakeCallback func()) (block bool)
+	handleError  func(err error)
 	events       []dispatcher.DispatcherEvent
 	checkPointTs uint64
 
@@ -135,6 +136,12 @@ func (m *mockDispatcher) IsOutputRawChangeEvent() bool {
 
 func (m *mockDispatcher) GetRouter() routing.Router {
 	return m.router
+}
+
+func (m *mockDispatcher) HandleError(err error) {
+	if m.handleError != nil {
+		m.handleError(err)
+	}
 }
 
 // mockEvent implements the Event interface for testing
@@ -335,11 +342,10 @@ func TestVerifyEventSequence(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			stat := &dispatcherStat{
-				target: newMockDispatcher(common.NewDispatcherID(), 0),
-			}
-			stat.lastEventSeq.Store(tt.lastEventSeq)
-			result := stat.verifyEventSequence(tt.event)
+			stat := newDispatcherStat(newMockDispatcher(common.NewDispatcherID(), 0), nil, nil)
+			state := stat.loadCurrentEpochState()
+			state.lastEventSeq.Store(tt.lastEventSeq)
+			result := stat.verifyEventSequence(tt.event, state)
 			require.Equal(t, tt.expectedResult, result)
 		})
 	}
@@ -459,9 +465,7 @@ func TestShouldForwardEventByCommitTs(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			stat := &dispatcherStat{
-				target: newMockDispatcher(common.NewDispatcherID(), 0),
-			}
+			stat := newDispatcherStat(newMockDispatcher(common.NewDispatcherID(), 0), nil, nil)
 			stat.lastEventCommitTs.Store(tt.lastEventCommitTs)
 			stat.gotDDLOnTs.Store(tt.gotDDLOnTs)
 			stat.gotSyncpointOnTS.Store(tt.gotSyncpointOnTS)
@@ -478,14 +482,14 @@ func TestShouldForwardEventByCommitTs(t *testing.T) {
 func TestUpdateCommitTsStateByEvents(t *testing.T) {
 	t.Parallel()
 
-	stat := &dispatcherStat{
-		target: newMockDispatcher(common.NewDispatcherID(), 0),
-	}
+	stat := newDispatcherStat(newMockDispatcher(common.NewDispatcherID(), 0), nil, nil)
 	stat.lastEventCommitTs.Store(100)
 	stat.gotDDLOnTs.Store(true)
 	stat.gotSyncpointOnTS.Store(true)
+	state := stat.loadCurrentEpochState()
+	state.maxEventTs.Store(100)
 
-	stat.updateCommitTsStateByEvents([]dispatcher.DispatcherEvent{
+	stat.updateCommitTsStateByEvents(state, []dispatcher.DispatcherEvent{
 		{
 			Event: &mockEvent{
 				eventType: commonEvent.TypeResolvedEvent,
@@ -503,6 +507,7 @@ func TestUpdateCommitTsStateByEvents(t *testing.T) {
 	require.Equal(t, uint64(110), stat.lastEventCommitTs.Load())
 	require.False(t, stat.gotDDLOnTs.Load())
 	require.False(t, stat.gotSyncpointOnTS.Load())
+	require.Equal(t, uint64(110), state.maxEventTs.Load())
 }
 
 func TestHandleSignalEvent(t *testing.T) {
@@ -648,10 +653,7 @@ func TestHandleSignalEvent(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			stat := &dispatcherStat{
-				target:         newMockDispatcher(common.NewDispatcherID(), 0),
-				eventCollector: newTestEventCollector(localServerID),
-			}
+			stat := newDispatcherStat(newMockDispatcher(common.NewDispatcherID(), 0), newTestEventCollector(localServerID), nil)
 			if tt.initialState != nil {
 				tt.initialState(stat)
 			}
@@ -746,12 +748,10 @@ func TestIsFromCurrentEpoch(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			stat := &dispatcherStat{
-				target: newMockDispatcher(common.NewDispatcherID(), 0),
-			}
-			stat.epoch.Store(tt.epoch)
-			stat.lastEventSeq.Store(tt.lastEventSeq)
-			result := stat.isFromCurrentEpoch(tt.event)
+			stat := newDispatcherStat(newMockDispatcher(common.NewDispatcherID(), 0), nil, nil)
+			state := newDispatcherEpochState(tt.epoch, tt.lastEventSeq, stat.target.GetStartTs())
+			stat.currentEpoch.Store(state)
+			result := stat.isFromCurrentEpoch(tt.event, state)
 			require.Equal(t, tt.expectedResult, result)
 		})
 	}
@@ -787,8 +787,7 @@ func TestHandleDataEvents(t *testing.T) {
 			},
 			initialState: func(stat *dispatcherStat) {
 				stat.connState.setEventServiceID(remoteServerID)
-				stat.lastEventSeq.Store(1)
-				stat.epoch.Store(2)
+				stat.currentEpoch.Store(newDispatcherEpochState(2, 1, stat.target.GetStartTs()))
 			},
 			handleEvents:   normalHandleEvents,
 			expectedResult: false,
@@ -808,8 +807,7 @@ func TestHandleDataEvents(t *testing.T) {
 			},
 			initialState: func(stat *dispatcherStat) {
 				stat.connState.setEventServiceID(remoteServerID)
-				stat.epoch.Store(2)
-				stat.lastEventSeq.Store(1)
+				stat.currentEpoch.Store(newDispatcherEpochState(2, 1, stat.target.GetStartTs()))
 				stat.lastEventCommitTs.Store(50)
 			},
 			handleEvents:   normalHandleEvents,
@@ -830,8 +828,7 @@ func TestHandleDataEvents(t *testing.T) {
 			},
 			initialState: func(stat *dispatcherStat) {
 				stat.connState.setEventServiceID(remoteServerID)
-				stat.lastEventSeq.Store(1)
-				stat.epoch.Store(10)
+				stat.currentEpoch.Store(newDispatcherEpochState(10, 1, stat.target.GetStartTs()))
 				stat.lastEventCommitTs.Store(50)
 			},
 			handleEvents:   normalHandleEvents,
@@ -853,8 +850,7 @@ func TestHandleDataEvents(t *testing.T) {
 			},
 			initialState: func(stat *dispatcherStat) {
 				stat.connState.setEventServiceID(remoteServerID)
-				stat.epoch.Store(10)
-				stat.lastEventSeq.Store(1)
+				stat.currentEpoch.Store(newDispatcherEpochState(10, 1, stat.target.GetStartTs()))
 				stat.lastEventCommitTs.Store(50)
 			},
 			handleEvents:   normalHandleEvents,
@@ -885,8 +881,7 @@ func TestHandleDataEvents(t *testing.T) {
 			},
 			initialState: func(stat *dispatcherStat) {
 				stat.connState.setEventServiceID(remoteServerID)
-				stat.epoch.Store(10)
-				stat.lastEventSeq.Store(1)
+				stat.currentEpoch.Store(newDispatcherEpochState(10, 1, stat.target.GetStartTs()))
 				stat.lastEventCommitTs.Store(50)
 				stat.tableInfo.Store(&common.TableInfo{})
 			},
@@ -908,8 +903,7 @@ func TestHandleDataEvents(t *testing.T) {
 			},
 			initialState: func(stat *dispatcherStat) {
 				stat.connState.setEventServiceID(remoteServerID)
-				stat.epoch.Store(10)
-				stat.lastEventSeq.Store(1)
+				stat.currentEpoch.Store(newDispatcherEpochState(10, 1, stat.target.GetStartTs()))
 				stat.lastEventCommitTs.Store(50)
 			},
 			handleEvents:   normalHandleEvents,
@@ -930,8 +924,7 @@ func TestHandleDataEvents(t *testing.T) {
 			},
 			initialState: func(stat *dispatcherStat) {
 				stat.connState.setEventServiceID(remoteServerID)
-				stat.epoch.Store(20)
-				stat.lastEventSeq.Store(1)
+				stat.currentEpoch.Store(newDispatcherEpochState(20, 1, stat.target.GetStartTs()))
 				stat.lastEventCommitTs.Store(50)
 			},
 			handleEvents:   normalHandleEvents,
@@ -941,10 +934,7 @@ func TestHandleDataEvents(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			stat := &dispatcherStat{
-				target:         newMockDispatcher(common.NewDispatcherID(), 0),
-				eventCollector: newTestEventCollector(localServerID),
-			}
+			stat := newDispatcherStat(newMockDispatcher(common.NewDispatcherID(), 0), newTestEventCollector(localServerID), nil)
 			stat.target.(*mockDispatcher).handleEvents = tt.handleEvents
 
 			if tt.initialState != nil {
@@ -1038,9 +1028,10 @@ func TestHandleBatchDataEvents(t *testing.T) {
 			mockDisp.handleEvents = normalHandleEvents
 			mockEventCollector := newTestEventCollector(tt.currentService)
 			stat := newDispatcherStat(mockDisp, mockEventCollector, nil)
-			stat.lastEventSeq.Store(tt.lastSeq)
+			stat.loadCurrentEpochState().lastEventSeq.Store(tt.lastSeq)
 			stat.lastEventCommitTs.Store(tt.lastCommitTs)
-			stat.epoch.Store(tt.epoch)
+			state := stat.loadCurrentEpochState()
+			stat.currentEpoch.Store(newDispatcherEpochState(tt.epoch, state.lastEventSeq.Load(), state.maxEventTs.Load()))
 			stat.connState.setEventServiceID(tt.currentService)
 			stat.connState.readyEventReceived.Store(true)
 
@@ -1126,9 +1117,10 @@ func TestHandleSingleDataEvents(t *testing.T) {
 			mockDisp.handleEvents = normalHandleEvents
 			mockEventCollector := newTestEventCollector(tt.currentService)
 			stat := newDispatcherStat(mockDisp, mockEventCollector, nil)
-			stat.lastEventSeq.Store(tt.lastSeq)
+			stat.loadCurrentEpochState().lastEventSeq.Store(tt.lastSeq)
 			stat.lastEventCommitTs.Store(tt.lastCommitTs)
-			stat.epoch.Store(tt.epoch)
+			state := stat.loadCurrentEpochState()
+			stat.currentEpoch.Store(newDispatcherEpochState(tt.epoch, state.lastEventSeq.Load(), state.maxEventTs.Load()))
 			stat.connState.setEventServiceID(tt.currentService)
 			stat.connState.readyEventReceived.Store(true)
 
@@ -1155,9 +1147,8 @@ func TestHandleSingleDataEventsUpdatesDDLStateAndDedupsSameTsDDL(t *testing.T) {
 
 	currentService := node.ID("service1")
 	stat := newDispatcherStat(mockDisp, newTestEventCollector(currentService), nil)
-	stat.lastEventSeq.Store(1)
 	stat.lastEventCommitTs.Store(99)
-	stat.epoch.Store(10)
+	stat.currentEpoch.Store(newDispatcherEpochState(10, 1, stat.target.GetStartTs()))
 	stat.connState.setEventServiceID(currentService)
 	stat.connState.readyEventReceived.Store(true)
 
@@ -1201,9 +1192,8 @@ func TestHandleSingleDataEventsUpdatesSyncPointStateAndDedupsSameTsSyncPoint(t *
 
 	currentService := node.ID("service1")
 	stat := newDispatcherStat(mockDisp, newTestEventCollector(currentService), nil)
-	stat.lastEventSeq.Store(1)
 	stat.lastEventCommitTs.Store(199)
-	stat.epoch.Store(10)
+	stat.currentEpoch.Store(newDispatcherEpochState(10, 1, stat.target.GetStartTs()))
 	stat.connState.setEventServiceID(currentService)
 	stat.connState.readyEventReceived.Store(true)
 
@@ -1332,8 +1322,7 @@ func TestHandleBatchDMLEvent(t *testing.T) {
 			mockDisp.handleEvents = normalHandleEvents
 			stat := newDispatcherStat(mockDisp, nil, nil)
 			stat.lastEventCommitTs.Store(tt.lastCommitTs)
-			stat.epoch.Store(tt.epoch)
-			stat.lastEventSeq.Store(tt.lastSeq)
+			stat.currentEpoch.Store(newDispatcherEpochState(tt.epoch, tt.lastSeq, stat.target.GetStartTs()))
 			if tt.tableInfo != nil {
 				stat.tableInfo.Store(tt.tableInfo)
 			}
@@ -1359,8 +1348,7 @@ func TestHandleBatchDataEventsDoesNotAdvanceCommitTsWhenNoValidEvents(t *testing
 
 	stat := newDispatcherStat(mockDisp, nil, nil)
 	stat.lastEventCommitTs.Store(50)
-	stat.lastEventSeq.Store(1)
-	stat.epoch.Store(10)
+	stat.currentEpoch.Store(newDispatcherEpochState(10, 1, stat.target.GetStartTs()))
 
 	events := []dispatcher.DispatcherEvent{
 		{
@@ -1426,6 +1414,53 @@ func TestNewDispatcherResetRequest(t *testing.T) {
 	}
 }
 
+func TestCheckpointTsForEventServiceUsesCollectorObservedMaxTs(t *testing.T) {
+	t.Parallel()
+
+	dispatcherID := common.NewDispatcherID()
+	mockDisp := newMockDispatcher(dispatcherID, 100)
+	mockDisp.checkPointTs = 220
+	stat := newDispatcherStat(mockDisp, newTestEventCollector(node.ID("local")), nil)
+	getHeartbeatCheckpoint := func() uint64 {
+		checkpointTs, _ := stat.getHeartbeatProgressForEventService()
+		return checkpointTs
+	}
+
+	require.Equal(t, uint64(100), stat.loadCurrentEpochState().maxEventTs.Load())
+	require.Equal(t, uint64(100), getHeartbeatCheckpoint())
+
+	stat.doReset(node.ID("event-service-1"), 150)
+	require.Equal(t, uint64(150), stat.loadCurrentEpochState().maxEventTs.Load())
+	require.Equal(t, uint64(150), getHeartbeatCheckpoint())
+
+	handshake := commonEvent.NewHandshakeEvent(dispatcherID, 180, 1, &common.TableInfo{})
+	stat.handleHandshakeEvent(dispatcher.DispatcherEvent{
+		Event: &handshake,
+	})
+	require.Equal(t, uint64(180), stat.loadCurrentEpochState().maxEventTs.Load())
+	require.Equal(t, uint64(180), getHeartbeatCheckpoint())
+
+	mockDisp.checkPointTs = 170
+	require.Equal(t, uint64(170), getHeartbeatCheckpoint())
+
+	mockDisp.checkPointTs = 220
+	resolved := commonEvent.NewResolvedEvent(200, dispatcherID, 1)
+	resolved.Seq = 1
+	stat.handleDataEvents(dispatcher.DispatcherEvent{Event: resolved})
+	require.Equal(t, uint64(200), stat.loadCurrentEpochState().maxEventTs.Load())
+	require.Equal(t, uint64(200), getHeartbeatCheckpoint())
+
+	dml := &mockEvent{
+		eventType: commonEvent.TypeDMLEvent,
+		seq:       2,
+		epoch:     1,
+		commitTs:  210,
+	}
+	stat.handleDataEvents(dispatcher.DispatcherEvent{Event: dml})
+	require.Equal(t, uint64(210), stat.loadCurrentEpochState().maxEventTs.Load())
+	require.Equal(t, uint64(210), getHeartbeatCheckpoint())
+}
+
 func TestRegisterTo(t *testing.T) {
 	localServerID := node.ID("local-server")
 	remoteServerID := node.ID("remote-server")
@@ -1471,23 +1506,15 @@ func TestRegisterTo(t *testing.T) {
 	})
 }
 
-func TestApplyRoutingToTableInfo(t *testing.T) {
+func TestHandleDDLEventTableInfoUpdate(t *testing.T) {
 	t.Parallel()
 
 	localServerID := node.ID("local")
 	remoteServerID := node.ID("remote")
 
-	// Create a router that routes source_db.* -> target_db.*
-	router, err := routing.NewRouter(true, []*config.DispatchRule{
-		{Matcher: []string{"source_db.*"}, TargetSchema: "target_db", TargetTable: routing.TablePlaceholder},
-	})
-	require.NoError(t, err)
-
-	t.Run("DDL with TableInfo gets routing applied and stored", func(t *testing.T) {
-		// Capture the event passed to HandleEvents to verify routing was applied
+	t.Run("stores ddl table info", func(t *testing.T) {
 		var capturedEvent *commonEvent.DDLEvent
 		mockDisp := newMockDispatcher(common.NewDispatcherID(), 0)
-		mockDisp.router = router
 		mockDisp.handleEvents = func(events []dispatcher.DispatcherEvent, wakeCallback func()) bool {
 			if len(events) > 0 {
 				capturedEvent = events[0].Event.(*commonEvent.DDLEvent)
@@ -1497,142 +1524,7 @@ func TestApplyRoutingToTableInfo(t *testing.T) {
 
 		stat := newDispatcherStat(mockDisp, newTestEventCollector(localServerID), nil)
 		stat.connState.setEventServiceID(remoteServerID)
-		stat.epoch.Store(10)
-		stat.lastEventSeq.Store(1)
-		stat.lastEventCommitTs.Store(50)
-
-		// Create original TableInfo - should NOT be mutated
-		// Use TableID: 1 to match the mockDispatcher's TableSpan.TableID
-		originalTableInfo := &common.TableInfo{
-			TableName: common.TableName{
-				Schema:  "source_db",
-				Table:   "users",
-				TableID: 1,
-			},
-		}
-
-		ddlEvent := &commonEvent.DDLEvent{
-			Version:    commonEvent.DDLEventVersion1,
-			FinishedTs: 100,
-			Epoch:      10,
-			Seq:        2,
-			TableInfo:  originalTableInfo,
-		}
-
-		events := []dispatcher.DispatcherEvent{
-			{From: &remoteServerID, Event: ddlEvent},
-		}
-
-		stat.handleDataEvents(events...)
-
-		// Verify the stored tableInfo has routing applied
-		storedTableInfo := stat.tableInfo.Load().(*common.TableInfo)
-		require.NotNil(t, storedTableInfo)
-		require.Equal(t, "target_db", storedTableInfo.TableName.TargetSchema)
-		require.Equal(t, "users", storedTableInfo.TableName.TargetTable)
-
-		// Verify original TableInfo was NOT mutated
-		require.Equal(t, "", originalTableInfo.TableName.TargetSchema)
-		require.Equal(t, "", originalTableInfo.TableName.TargetTable)
-
-		// Verify original ddlEvent was NOT mutated.
-		require.Equal(t, "", ddlEvent.TableInfo.TableName.TargetSchema)
-
-		// Verify the routed event passed to HandleEvents has routing applied.
-		require.NotNil(t, capturedEvent)
-		require.Equal(t, "target_db", capturedEvent.TableInfo.TableName.TargetSchema)
-	})
-
-	t.Run("DDL with MultipleTableInfos gets routing applied but only TableInfo stored", func(t *testing.T) {
-		// Capture the event passed to HandleEvents to verify routing was applied
-		var capturedEvent *commonEvent.DDLEvent
-		mockDisp := newMockDispatcher(common.NewDispatcherID(), 0)
-		mockDisp.router = router
-		mockDisp.handleEvents = func(events []dispatcher.DispatcherEvent, wakeCallback func()) bool {
-			if len(events) > 0 {
-				capturedEvent = events[0].Event.(*commonEvent.DDLEvent)
-			}
-			return false
-		}
-
-		stat := newDispatcherStat(mockDisp, newTestEventCollector(localServerID), nil)
-		stat.connState.setEventServiceID(remoteServerID)
-		stat.epoch.Store(10)
-		stat.lastEventSeq.Store(1)
-		stat.lastEventCommitTs.Store(50)
-
-		// This dispatcher's table - use TableID: 1 to match mockDispatcher's TableSpan.TableID
-		primaryTableInfo := &common.TableInfo{
-			TableName: common.TableName{
-				Schema:  "source_db",
-				Table:   "orders",
-				TableID: 1,
-			},
-		}
-
-		// Other tables in a multi-table DDL (e.g., RENAME TABLE)
-		otherTableInfo1 := &common.TableInfo{
-			TableName: common.TableName{
-				Schema:  "source_db",
-				Table:   "old_name",
-				TableID: 200,
-			},
-		}
-		otherTableInfo2 := &common.TableInfo{
-			TableName: common.TableName{
-				Schema:  "source_db",
-				Table:   "new_name",
-				TableID: 201,
-			},
-		}
-
-		ddlEvent := &commonEvent.DDLEvent{
-			Version:            commonEvent.DDLEventVersion1,
-			FinishedTs:         100,
-			Epoch:              10,
-			Seq:                2,
-			TableInfo:          primaryTableInfo,
-			MultipleTableInfos: []*common.TableInfo{otherTableInfo1, otherTableInfo2},
-		}
-
-		events := []dispatcher.DispatcherEvent{
-			{From: &remoteServerID, Event: ddlEvent},
-		}
-
-		stat.handleDataEvents(events...)
-
-		// Verify only the primary TableInfo is stored
-		storedTableInfo := stat.tableInfo.Load().(*common.TableInfo)
-		require.NotNil(t, storedTableInfo)
-		require.Equal(t, "orders", storedTableInfo.TableName.Table)
-		require.Equal(t, "target_db", storedTableInfo.TableName.TargetSchema)
-
-		// Verify original ddlEvent was NOT mutated.
-		require.Equal(t, "", ddlEvent.MultipleTableInfos[0].TableName.TargetSchema)
-		require.Equal(t, "", ddlEvent.MultipleTableInfos[1].TableName.TargetSchema)
-
-		// Verify the routed event passed to HandleEvents has routing applied.
-		require.NotNil(t, capturedEvent)
-		require.Equal(t, "target_db", capturedEvent.MultipleTableInfos[0].TableName.TargetSchema)
-		require.Equal(t, "target_db", capturedEvent.MultipleTableInfos[1].TableName.TargetSchema)
-
-		// Verify originals were NOT mutated
-		require.Equal(t, "", otherTableInfo1.TableName.TargetSchema)
-		require.Equal(t, "", otherTableInfo2.TableName.TargetSchema)
-	})
-
-	t.Run("DDL without routing configured passes through unchanged", func(t *testing.T) {
-		mockDisp := newMockDispatcher(common.NewDispatcherID(), 0)
-		// No router configured
-		mockDisp.router = routing.Router{}
-		mockDisp.handleEvents = func(events []dispatcher.DispatcherEvent, wakeCallback func()) bool {
-			return false
-		}
-
-		stat := newDispatcherStat(mockDisp, newTestEventCollector(localServerID), nil)
-		stat.connState.setEventServiceID(remoteServerID)
-		stat.epoch.Store(10)
-		stat.lastEventSeq.Store(1)
+		stat.currentEpoch.Store(newDispatcherEpochState(10, 1, stat.target.GetStartTs()))
 		stat.lastEventCommitTs.Store(50)
 
 		tableInfo := &common.TableInfo{
@@ -1645,6 +1537,7 @@ func TestApplyRoutingToTableInfo(t *testing.T) {
 
 		ddlEvent := &commonEvent.DDLEvent{
 			Version:    commonEvent.DDLEventVersion1,
+			Query:      "ALTER TABLE `source_db`.`users` ADD COLUMN `c1` INT",
 			FinishedTs: 100,
 			Epoch:      10,
 			Seq:        2,
@@ -1657,186 +1550,14 @@ func TestApplyRoutingToTableInfo(t *testing.T) {
 
 		stat.handleDataEvents(events...)
 
-		// Verify tableInfo is stored (same object since no routing)
 		storedTableInfo := stat.tableInfo.Load().(*common.TableInfo)
 		require.NotNil(t, storedTableInfo)
-		// No routing applied, so TargetSchema/TargetTable should be empty
-		require.Equal(t, "", storedTableInfo.TableName.TargetSchema)
-		require.Equal(t, "", storedTableInfo.TableName.TargetTable)
-	})
-
-	t.Run("DDL with table-only routing (schema unchanged)", func(t *testing.T) {
-		// Create a router that only renames the table, keeping schema the same
-		tableOnlyRouter, err := routing.NewRouter(true, []*config.DispatchRule{
-			{Matcher: []string{"mydb.old_users"}, TargetSchema: "{schema}", TargetTable: "new_users"},
-		})
-		require.NoError(t, err)
-
-		mockDisp := newMockDispatcher(common.NewDispatcherID(), 0)
-		mockDisp.router = tableOnlyRouter
-		mockDisp.handleEvents = func(events []dispatcher.DispatcherEvent, wakeCallback func()) bool {
-			return false
-		}
-
-		stat := newDispatcherStat(mockDisp, newTestEventCollector(localServerID), nil)
-		stat.connState.setEventServiceID(remoteServerID)
-		stat.epoch.Store(10)
-		stat.lastEventSeq.Store(1)
-		stat.lastEventCommitTs.Store(50)
-
-		originalTableInfo := &common.TableInfo{
-			TableName: common.TableName{
-				Schema:  "mydb",
-				Table:   "old_users",
-				TableID: 1,
-			},
-		}
-
-		ddlEvent := &commonEvent.DDLEvent{
-			Version:    commonEvent.DDLEventVersion1,
-			FinishedTs: 100,
-			Epoch:      10,
-			Seq:        2,
-			TableInfo:  originalTableInfo,
-		}
-
-		events := []dispatcher.DispatcherEvent{
-			{From: &remoteServerID, Event: ddlEvent},
-		}
-
-		stat.handleDataEvents(events...)
-
-		// Verify schema is unchanged but table is renamed
-		storedTableInfo := stat.tableInfo.Load().(*common.TableInfo)
-		require.NotNil(t, storedTableInfo)
-		require.Equal(t, "mydb", storedTableInfo.TableName.TargetSchema)
-		require.Equal(t, "new_users", storedTableInfo.TableName.TargetTable)
-
-		// Verify original was NOT mutated
-		require.Equal(t, "", originalTableInfo.TableName.TargetSchema)
-		require.Equal(t, "", originalTableInfo.TableName.TargetTable)
-	})
-
-	t.Run("DDL with both schema and table routing", func(t *testing.T) {
-		// Create a router that renames both schema and table
-		bothRouter, err := routing.NewRouter(true, []*config.DispatchRule{
-			{Matcher: []string{"staging.*"}, TargetSchema: "prod", TargetTable: "{schema}_{table}"},
-		})
-		require.NoError(t, err)
-
-		mockDisp := newMockDispatcher(common.NewDispatcherID(), 0)
-		mockDisp.router = bothRouter
-		mockDisp.handleEvents = func(events []dispatcher.DispatcherEvent, wakeCallback func()) bool {
-			return false
-		}
-
-		stat := newDispatcherStat(mockDisp, newTestEventCollector(localServerID), nil)
-		stat.connState.setEventServiceID(remoteServerID)
-		stat.epoch.Store(10)
-		stat.lastEventSeq.Store(1)
-		stat.lastEventCommitTs.Store(50)
-
-		originalTableInfo := &common.TableInfo{
-			TableName: common.TableName{
-				Schema:  "staging",
-				Table:   "events",
-				TableID: 1,
-			},
-		}
-
-		ddlEvent := &commonEvent.DDLEvent{
-			Version:    commonEvent.DDLEventVersion1,
-			FinishedTs: 100,
-			Epoch:      10,
-			Seq:        2,
-			TableInfo:  originalTableInfo,
-		}
-
-		events := []dispatcher.DispatcherEvent{
-			{From: &remoteServerID, Event: ddlEvent},
-		}
-
-		stat.handleDataEvents(events...)
-
-		// Verify both schema and table are renamed
-		storedTableInfo := stat.tableInfo.Load().(*common.TableInfo)
-		require.NotNil(t, storedTableInfo)
-		require.Equal(t, "prod", storedTableInfo.TableName.TargetSchema)
-		require.Equal(t, "staging_events", storedTableInfo.TableName.TargetTable)
-
-		// Verify original was NOT mutated
-		require.Equal(t, "", originalTableInfo.TableName.TargetSchema)
-		require.Equal(t, "", originalTableInfo.TableName.TargetTable)
-	})
-
-	t.Run("CREATE TABLE LIKE DDL does not overwrite original table's tableInfo", func(t *testing.T) {
-		// This test verifies the fix for a bug where CREATE TABLE t_like LIKE t
-		// would cause the dispatcher for table 't' to incorrectly store t_like's
-		// tableInfo, leading to DMLs being written to the wrong table.
-		//
-		// The bug scenario:
-		// 1. CREATE TABLE t_like LIKE t adds the DDL to t's DDL history (for blocking)
-		// 2. When t's dispatcher processes this DDL, it would store t_like's TableInfo
-		// 3. Subsequent DMLs on t would use wrong tableInfo and go to t_like
-		//
-		// The fix: Check if DDL's tableInfo.TableID matches dispatcher's TableID
-		// before storing. If they don't match, skip the tableInfo update.
-
-		mockDisp := newMockDispatcher(common.NewDispatcherID(), 0)
-		mockDisp.router = router
-		mockDisp.handleEvents = func(events []dispatcher.DispatcherEvent, wakeCallback func()) bool {
-			return false
-		}
-
-		stat := newDispatcherStat(mockDisp, newTestEventCollector(localServerID), nil)
-		stat.connState.setEventServiceID(remoteServerID)
-		stat.epoch.Store(10)
-		stat.lastEventSeq.Store(1)
-		stat.lastEventCommitTs.Store(50)
-
-		// Set up initial tableInfo for the original table 't' (tableID=1, which matches mockDispatcher)
-		originalTableInfo := &common.TableInfo{
-			TableName: common.TableName{
-				Schema:  "test",
-				Table:   "t",
-				TableID: 1, // This is the dispatcher's table
-			},
-		}
-		stat.tableInfo.Store(originalTableInfo)
-
-		// CREATE TABLE t_like LIKE t generates a DDL event where:
-		// - TableInfo is for the new table (t_like, tableID=999)
-		// - This DDL is added to t's DDL history for blocking purposes
-		newTableInfo := &common.TableInfo{
-			TableName: common.TableName{
-				Schema:  "test",
-				Table:   "t_like",
-				TableID: 999, // Different from dispatcher's tableID!
-			},
-		}
-
-		ddlEvent := &commonEvent.DDLEvent{
-			Version:    commonEvent.DDLEventVersion1,
-			FinishedTs: 100,
-			Epoch:      10,
-			Seq:        2,
-			TableInfo:  newTableInfo,
-		}
-
-		events := []dispatcher.DispatcherEvent{
-			{From: &remoteServerID, Event: ddlEvent},
-		}
-
-		stat.handleDataEvents(events...)
-
-		// Verify the stored tableInfo was NOT overwritten with t_like's tableInfo
-		storedTableInfo := stat.tableInfo.Load().(*common.TableInfo)
-		require.NotNil(t, storedTableInfo)
-		// Should still be the original table 't', not 't_like'
-		require.Equal(t, "t", storedTableInfo.TableName.Table)
+		require.Same(t, tableInfo, storedTableInfo)
+		require.Equal(t, "source_db", storedTableInfo.TableName.Schema)
+		require.Equal(t, "users", storedTableInfo.TableName.Table)
 		require.Equal(t, int64(1), storedTableInfo.TableName.TableID)
-		// Should NOT be t_like
-		require.NotEqual(t, "t_like", storedTableInfo.TableName.Table)
-		require.NotEqual(t, int64(999), storedTableInfo.TableName.TableID)
+		require.Equal(t, uint64(100), stat.tableInfoVersion.Load())
+		require.NotNil(t, capturedEvent)
+		require.Same(t, ddlEvent, capturedEvent)
 	})
 }

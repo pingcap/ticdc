@@ -47,6 +47,9 @@ type SpanReplication struct {
 	groupID     replica.GroupID
 	status      *atomic.Pointer[heartbeatpb.TableSpanStatus]
 	blockState  *atomic.Pointer[heartbeatpb.State]
+	// committedCheckpointTs points to the controller owned committed checkpoint for this mode.
+	// It provides a monotonic lower bound for any recreated dispatcher StartTs.
+	committedCheckpointTs *atomic.Uint64
 }
 
 func NewSpanReplication(cfID common.ChangeFeedID,
@@ -234,6 +237,18 @@ func (r *SpanReplication) GetGroupID() replica.GroupID {
 	return r.groupID
 }
 
+// BindCommittedCheckpointTs attaches the controller owned committed checkpoint to this span.
+func (r *SpanReplication) BindCommittedCheckpointTs(committedCheckpointTs *atomic.Uint64) {
+	r.committedCheckpointTs = committedCheckpointTs
+}
+
+func (r *SpanReplication) getCommittedCheckpointTs() uint64 {
+	if r.committedCheckpointTs == nil {
+		return 0
+	}
+	return r.committedCheckpointTs.Load()
+}
+
 // NewAddDispatcherMessage creates a ScheduleDispatcherRequest(Create) for this span.
 //
 // The StartTs in the request is usually the span checkpoint. However, when a dispatcher is being
@@ -243,6 +258,7 @@ func (r *SpanReplication) GetGroupID() replica.GroupID {
 func (r *SpanReplication) NewAddDispatcherMessage(server node.ID, operatorType heartbeatpb.OperatorType) *messaging.TargetMessage {
 	startTs := r.status.Load().CheckpointTs
 	skipDMLAsStartTs := false
+	ddlBarrierBlockTs := uint64(0)
 	if state := r.blockState.Load(); state != nil && state.IsBlocked &&
 		(state.Stage == heartbeatpb.BlockStage_WAITING || state.Stage == heartbeatpb.BlockStage_WRITING) && state.BlockTs > 0 {
 		if state.IsSyncPoint {
@@ -256,6 +272,7 @@ func (r *SpanReplication) NewAddDispatcherMessage(server node.ID, operatorType h
 				startTs = state.BlockTs
 			}
 		} else {
+			ddlBarrierBlockTs = state.BlockTs
 			// For an in-flight DDL barrier, a recreated dispatcher must start from (blockTs-1) so that it can
 			// replay the DDL at blockTs. At the same time, it should skip DML events at blockTs to avoid potential
 			// duplicate DML writes when the dispatcher is moved/recreated during the barrier.
@@ -267,6 +284,34 @@ func (r *SpanReplication) NewAddDispatcherMessage(server node.ID, operatorType h
 				skipDMLAsStartTs = true
 			}
 		}
+	}
+	committedCheckpointTs := r.getCommittedCheckpointTs()
+	if committedCheckpointTs > startTs {
+		originalStartTs := startTs
+		if ddlBarrierBlockTs > 0 {
+			// A stale DDL barrier state may survive maintainer failover or dispatcher recreation.
+			// Once the controller committed checkpoint has advanced beyond the replay point, replaying the
+			// DDL is no longer correct. Recreate the dispatcher from the committed checkpoint instead.
+			log.Debug("use committed checkpoint for stale ddl barrier",
+				zap.Stringer("changefeedID", r.ChangefeedID),
+				zap.String("dispatcherID", r.ID.String()),
+				zap.Int64("tableID", r.Span.TableID),
+				zap.String("operatorType", operatorType.String()),
+				zap.Uint64("ddlBarrierBlockTs", ddlBarrierBlockTs),
+				zap.Uint64("originalStartTs", originalStartTs),
+				zap.Uint64("committedCheckpointTs", committedCheckpointTs))
+			skipDMLAsStartTs = false
+		} else {
+			log.Debug("clamp dispatcher start ts to committed checkpoint",
+				zap.Stringer("changefeedID", r.ChangefeedID),
+				zap.String("dispatcherID", r.ID.String()),
+				zap.Int64("tableID", r.Span.TableID),
+				zap.String("operatorType", operatorType.String()),
+				zap.Uint64("originalStartTs", originalStartTs),
+				zap.Uint64("committedCheckpointTs", committedCheckpointTs),
+				zap.Uint64("finalStartTs", committedCheckpointTs))
+		}
+		startTs = committedCheckpointTs
 	}
 	return messaging.NewSingleTargetMessage(server,
 		messaging.HeartbeatCollectorTopic,

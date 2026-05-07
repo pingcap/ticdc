@@ -466,6 +466,40 @@ func TestEventStoreRegisterDispatcherWithoutDataSharing(t *testing.T) {
 	mockSubClient.mu.Unlock()
 }
 
+func TestGetIteratorPanicWhenStartLessThanCheckpoint(t *testing.T) {
+	dir := t.TempDir()
+	_, storeInterface := newEventStoreForTest(dir)
+	store := storeInterface.(*eventStore)
+	defer func() {
+		require.NoError(t, store.Close(context.Background()))
+	}()
+
+	cfID := common.NewChangefeedID4Test("default", "test")
+	dispatcherID := common.NewDispatcherID()
+	span := &heartbeatpb.TableSpan{
+		TableID:  1,
+		StartKey: []byte("a"),
+		EndKey:   []byte("z"),
+	}
+
+	require.True(t, store.RegisterDispatcher(cfID, dispatcherID, span, 100, func(uint64, uint64) {}, false, false))
+
+	stat := store.dispatcherMeta.dispatcherStats[dispatcherID]
+	require.NotNil(t, stat)
+	require.NotNil(t, stat.subStat)
+	stat.subStat.resolvedTs.Store(200)
+
+	store.UpdateDispatcherCheckpointTs(dispatcherID, 120)
+
+	require.Panics(t, func() {
+		store.GetIterator(dispatcherID, common.DataRange{
+			Span:          span,
+			CommitTsStart: 110,
+			CommitTsEnd:   150,
+		})
+	})
+}
+
 func TestEventStoreUnregisterDispatcherWithoutDataSharingRemovesSubscription(t *testing.T) {
 	restoreCfg := setDataSharingForTest(t, false)
 	defer restoreCfg()
@@ -793,11 +827,9 @@ func TestEventStoreSwitchSubStat(t *testing.T) {
 }
 
 func TestWriteToEventStore(t *testing.T) {
-	mockPDClock := pdutil.NewClock4Test()
-	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
-
 	dir := t.TempDir()
-	store := New(dir, nil).(*eventStore)
+	_, storeInt := newEventStoreForTest(dir)
+	store := storeInt.(*eventStore)
 	defer store.Close(context.Background())
 
 	smallEntryKey := []byte("small-key")
@@ -841,7 +873,8 @@ func TestWriteToEventStore(t *testing.T) {
 	defer encoder.Close()
 
 	var compressionBuf []byte
-	err = store.writeEvents(store.dbs[0], events, encoder, &compressionBuf)
+	var rawValueBuf []byte
+	err = store.writeEvents(store.dbs[0], events, encoder, &compressionBuf, &rawValueBuf)
 	require.NoError(t, err)
 
 	// Read events back and verify.
@@ -858,7 +891,7 @@ func TestWriteToEventStore(t *testing.T) {
 		key := iter.Key()
 		value := iter.Value()
 
-		_, compressionType := DecodeKeyMetas(key)
+		_, compressionType := DecodeKeyAttributes(key)
 
 		var decodedValue []byte
 		if compressionType == CompressionZSTD {
@@ -922,7 +955,8 @@ func TestWriteToEventStoreZstdCompressionDisabled(t *testing.T) {
 	defer encoder.Close()
 
 	var compressionBuf []byte
-	err = store.writeEvents(store.dbs[0], events, encoder, &compressionBuf)
+	var rawValueBuf []byte
+	err = store.writeEvents(store.dbs[0], events, encoder, &compressionBuf, &rawValueBuf)
 	require.NoError(t, err)
 
 	iter, err := store.dbs[0].NewIter(&pebble.IterOptions{})
@@ -931,7 +965,7 @@ func TestWriteToEventStoreZstdCompressionDisabled(t *testing.T) {
 
 	count := 0
 	for iter.First(); iter.Valid(); iter.Next() {
-		_, compressionType := DecodeKeyMetas(iter.Key())
+		_, compressionType := DecodeKeyAttributes(iter.Key())
 		require.Equal(t, CompressionNone, compressionType)
 
 		readEntry := &common.RawKVEntry{}
@@ -981,7 +1015,8 @@ func TestEventStoreCompressionAndIterDecodeBufferReuse(t *testing.T) {
 	require.NoError(t, err)
 	defer encoder.Close()
 	var compressionBuf []byte
-	err = store.writeEvents(store.dbs[0], events, encoder, &compressionBuf)
+	var rawValueBuf []byte
+	err = store.writeEvents(store.dbs[0], events, encoder, &compressionBuf, &rawValueBuf)
 	require.NoError(t, err)
 	afterMetric := testutil.ToFloat64(metrics.EventStoreCompressedRowsCount)
 	require.InDelta(t, float64(len(expectedValues)), afterMetric-beforeMetric, 1e-9)
@@ -1074,7 +1109,8 @@ func TestEventStoreGetIteratorConcurrently(t *testing.T) {
 	require.NoError(t, err)
 	defer encoder.Close()
 	var compressionBuf []byte
-	err = store.(*eventStore).writeEvents(store.(*eventStore).dbs[0], events, encoder, &compressionBuf)
+	var rawValueBuf []byte
+	err = store.(*eventStore).writeEvents(store.(*eventStore).dbs[0], events, encoder, &compressionBuf, &rawValueBuf)
 	require.NoError(t, err)
 
 	// 3. Advance resolved ts for the subscription.
@@ -1117,6 +1153,21 @@ func TestEventStoreGetIteratorConcurrently(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+func TestEventWithCallbackSizerUsesCurrentKVBytes(t *testing.T) {
+	event := eventWithCallback{
+		kvs: []common.RawKVEntry{{
+			Key:         []byte("key"),
+			Value:       []byte("value"),
+			OldValue:    []byte("old"),
+			KeyLen:      1,
+			ValueLen:    1,
+			OldValueLen: 1,
+		}},
+	}
+
+	require.Equal(t, len("key")+len("value")+len("old"), eventWithCallbackSizer(event))
 }
 
 func TestEventStoreIter_NextWithFiltering(t *testing.T) {
@@ -1197,8 +1248,8 @@ func TestEventStoreIter_NextWithFiltering(t *testing.T) {
 
 			// Create iterator with a wider range to ensure it sees all keys,
 			// so we can test the internal filtering logic.
-			start := EncodeKeyPrefix(subID, tableID, 0)
-			end := EncodeKeyPrefix(subID, tableID, 500)
+			start := encodeTxnCommitTsBoundaryKey(subID, tableID, 0)
+			end := encodeTxnCommitTsBoundaryKey(subID, tableID, 500)
 			innerIter, err := db.NewIter(&pebble.IterOptions{
 				LowerBound: start,
 				UpperBound: end,

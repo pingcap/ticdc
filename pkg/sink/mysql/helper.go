@@ -405,7 +405,7 @@ func CreateMysqlDBConn(dsnStr string) (*sql.DB, error) {
 }
 
 func needSwitchDB(ddlEvent *event.DDLEvent) bool {
-	if len(ddlEvent.GetDDLSchemaName()) == 0 {
+	if len(ddlEvent.GetTargetSchemaName()) == 0 {
 		return false
 	}
 	if ddlEvent.GetDDLType() == timodel.ActionCreateSchema || ddlEvent.GetDDLType() == timodel.ActionDropSchema {

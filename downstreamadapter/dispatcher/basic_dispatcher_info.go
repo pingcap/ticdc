@@ -58,6 +58,9 @@ type SharedInfo struct {
 	// router is used to route source schema/table names to target schema/table names.
 	// It is used to apply routing to TableInfo before storing it.
 	router routing.Router
+	// Normal event dispatchers inherit these shared batch defaults.
+	eventCollectorBatchCount int
+	eventCollectorBatchBytes int
 
 	// Shared resources
 	// statusesChan is used to store the status of dispatchers when status changed
@@ -93,26 +96,30 @@ func NewSharedInfo(
 	txnAtomicity *config.AtomicityLevel,
 	enableSplittableCheck bool,
 	router routing.Router,
+	eventCollectorBatchCount int,
+	eventCollectorBatchBytes int,
 	statusesChan chan TableSpanStatusWithSeq,
 	blockStatusesChan chan *heartbeatpb.TableSpanBlockStatus,
 	errCh chan error,
 ) *SharedInfo {
 	sharedInfo := &SharedInfo{
-		changefeedID:          changefeedID,
-		timezone:              timezone,
-		bdrMode:               bdrMode,
-		enableActiveActive:    enableActiveActive,
-		outputRawChangeEvent:  outputRawChangeEvent,
-		integrityConfig:       integrityConfig,
-		filterConfig:          filterConfig,
-		syncPointConfig:       syncPointConfig,
-		enableSplittableCheck: enableSplittableCheck,
-		router:                router,
-		statusesChan:          statusesChan,
-		blockStatusesChan:     blockStatusesChan,
-		blockExecutor:         newBlockEventExecutor(),
-		errCh:                 errCh,
-		metricHandleDDLHis:    metrics.HandleDDLHistogram.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
+		changefeedID:             changefeedID,
+		timezone:                 timezone,
+		bdrMode:                  bdrMode,
+		enableActiveActive:       enableActiveActive,
+		outputRawChangeEvent:     outputRawChangeEvent,
+		integrityConfig:          integrityConfig,
+		filterConfig:             filterConfig,
+		syncPointConfig:          syncPointConfig,
+		enableSplittableCheck:    enableSplittableCheck,
+		router:                   router,
+		eventCollectorBatchCount: eventCollectorBatchCount,
+		eventCollectorBatchBytes: eventCollectorBatchBytes,
+		statusesChan:             statusesChan,
+		blockStatusesChan:        blockStatusesChan,
+		blockExecutor:            newBlockEventExecutor(),
+		errCh:                    errCh,
+		metricHandleDDLHis:       metrics.HandleDDLHistogram.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
 	}
 
 	if txnAtomicity != nil {
@@ -137,6 +144,10 @@ func (d *BasicDispatcher) GetMode() int64 {
 
 func (d *BasicDispatcher) GetChangefeedID() common.ChangeFeedID {
 	return d.sharedInfo.changefeedID
+}
+
+func (d *BasicDispatcher) GetEventCollectorBatchConfig() (batchCount int, batchBytes int) {
+	return d.eventCollectorBatchCount, d.eventCollectorBatchBytes
 }
 
 func (d *BasicDispatcher) GetComponentStatus() heartbeatpb.ComponentState {
@@ -184,9 +195,6 @@ func (d *BasicDispatcher) IsOutputRawChangeEvent() bool {
 }
 
 func (d *BasicDispatcher) GetRouter() routing.Router {
-	if d.sharedInfo == nil {
-		return routing.Router{}
-	}
 	return d.sharedInfo.GetRouter()
 }
 

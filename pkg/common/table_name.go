@@ -19,7 +19,7 @@ import (
 
 //go:generate msgp
 
-// TableName represents name of a table, includes table name and schema name.
+// TableName represents name of a table, includes table name and schema name
 type TableName struct {
 	Schema string `toml:"db-name" msg:"db-name"`
 	Table  string `toml:"tbl-name" msg:"tbl-name"`
@@ -27,43 +27,40 @@ type TableName struct {
 	TableID     int64 `toml:"tbl-id" msg:"tbl-id"`
 	IsPartition bool  `toml:"is-partition" msg:"is-partition"`
 
-	// TargetSchema and TargetTable is not empty if table routing enabled
-	TargetSchema string `toml:"target-db-name" msg:"target-db-name"`
-	TargetTable  string `toml:"target-tbl-name" msg:"target-tbl-name"`
+	// TargetSchema and TargetTable are used as an in-memory routing overlay.
+	// They are intentionally excluded from msgpack serialization because redo
+	// persists routed names canonically in Schema/Table.
+	TargetSchema string `toml:"target-db-name" msg:"-"`
+	TargetTable  string `toml:"target-tbl-name" msg:"-"`
 }
 
-// String implements fmt.Stringer interface.
+// String implements fmt.Stringer interface
 func (t TableName) String() string {
-	return t.OriginString()
+	return fmt.Sprintf("%s.%s", t.Schema, t.Table)
 }
 
-// OriginString returns the source schema.table string.
-func (t TableName) OriginString() string {
-	return fmt.Sprintf("%s.%s", t.GetOriginSchema(), t.GetOriginTable())
-}
-
-// QuoteString returns quoted full canonical table name.
+// QuoteString returns quoted full table name
 func (t TableName) QuoteString() string {
-	return t.QuoteOriginString()
+	return QuoteSchema(t.Schema, t.Table)
 }
 
-// QuoteOriginString returns quoted full source table name.
-func (t TableName) QuoteOriginString() string {
-	return QuoteSchema(t.GetOriginSchema(), t.GetOriginTable())
-}
-
-// GetOriginSchema returns the source schema name.
-func (t *TableName) GetOriginSchema() string {
+// GetSchema returns the schema name
+func (t *TableName) GetSchema() string {
 	return t.Schema
 }
 
-// GetOriginTable returns the source table name.
-func (t *TableName) GetOriginTable() string {
+// GetTable returns the table name
+func (t *TableName) GetTable() string {
 	return t.Table
 }
 
+// IsRouted returns whether table routing is enabled
+func (t *TableName) IsRouted() bool {
+	return t.TargetSchema != "" || t.TargetTable != ""
+}
+
 // GetTargetSchema returns the target schema name for routing.
-// If TargetSchema is empty, returns Schema.
+// If TargetSchema is empty, returns Schema
 func (t *TableName) GetTargetSchema() string {
 	if t.TargetSchema != "" {
 		return t.TargetSchema
@@ -71,7 +68,7 @@ func (t *TableName) GetTargetSchema() string {
 	return t.Schema
 }
 
-// GetTargetTable returns the target table name for routing.
+// GetTargetTable returns the target table name for routing
 // If TargetTable is empty, returns Table.
 func (t *TableName) GetTargetTable() string {
 	if t.TargetTable != "" {
@@ -80,12 +77,7 @@ func (t *TableName) GetTargetTable() string {
 	return t.Table
 }
 
-// TargetString returns the target schema.table string for routing.
-func (t TableName) TargetString() string {
-	return fmt.Sprintf("%s.%s", t.GetTargetSchema(), t.GetTargetTable())
-}
-
-// QuoteTargetString returns quoted full target table name for routing.
+// QuoteTargetString returns quoted full target table name for routing
 func (t TableName) QuoteTargetString() string {
 	return QuoteSchema(t.GetTargetSchema(), t.GetTargetTable())
 }
