@@ -143,7 +143,7 @@ func (s *eventScanner) scan(
 	// Execute event scanning and merging
 	merger := newEventMerger(events)
 	interrupted, scanErr := s.scanAndMergeEvents(sess, merger, iter)
-	_, closeErr := s.closeIterator(iter)
+	closeErr := s.closeIterator(iter)
 	if scanErr != nil {
 		if closeErr != nil {
 			log.Warn("event store iterator close returned error after scan error",
@@ -187,15 +187,15 @@ func (s *eventScanner) fetchDDLEvents(stat *dispatcherStat, dataRange common.Dat
 }
 
 // closeIterator closes the event iterator and records metrics.
-func (s *eventScanner) closeIterator(iter eventstore.EventIterator) (int64, error) {
+func (s *eventScanner) closeIterator(iter eventstore.EventIterator) error {
 	if iter == nil {
-		return 0, nil
+		return nil
 	}
 	eventCount, err := iter.Close()
 	if eventCount != 0 {
 		updateMetricEventStoreOutputKv(s.mode, float64(eventCount))
 	}
-	return eventCount, err
+	return err
 }
 
 // scanAndMergeEvents performs the main scanning and merging logic
