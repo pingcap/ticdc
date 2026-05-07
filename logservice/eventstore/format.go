@@ -40,9 +40,10 @@ const (
 
 const (
 	// Bitmask for DML order and compression type.
-	dmlOrderMask    = 0xFF00 // DML order is stored in the high 8 bits for sorting.
-	compressionMask = 0x00FF // Compression type is stored in the low 8 bits.
-	dmlOrderShift   = 8
+	dmlOrderMask        = 0xFF00 // DML order is stored in the high 8 bits for sorting.
+	compressionMask     = 0x000F // Compression type is stored in the low 4 bits.
+	encryptionLayerMask = 0x0010 // Value went through encryption layer and carries a 4-byte header.
+	dmlOrderShift       = 8
 )
 
 // EncodeKeyPrefix encodes uniqueID, tableID, CRTs and StartTs.
@@ -81,14 +82,13 @@ func encodedKeyLen(event *common.RawKVEntry) int {
 	return 8 + 8 + 8 + 8 + 1 + 1 + len(event.Key)
 }
 
-// EncodeKeyTo appends an encoded event-store key to buf.
-// Format: uniqueID, tableID, CRTs, startTs, delete/update/insert, Key.
-func EncodeKeyTo(
+func encodeKeyTo(
 	buf []byte,
 	uniqueID uint64,
 	tableID int64,
 	event *common.RawKVEntry,
 	compressionType CompressionType,
+	usesEncryptionLayer bool,
 ) []byte {
 	if event == nil {
 		log.Panic("rawkv must not be nil", zap.Any("event", event))
@@ -104,9 +104,34 @@ func EncodeKeyTo(
 	// Let Delete < Update < Insert
 	dmlOrder := getDMLOrder(event)
 	combinedOrder := uint16(compressionType) | (uint16(dmlOrder) << dmlOrderShift)
+	if usesEncryptionLayer {
+		combinedOrder |= encryptionLayerMask
+	}
 	buf = binary.BigEndian.AppendUint16(buf, combinedOrder)
 	// key
 	return append(buf, event.Key...)
+}
+
+// EncodeKeyTo appends an encoded event-store key to buf.
+// Format: uniqueID, tableID, CRTs, startTs, delete/update/insert, Key.
+func EncodeKeyTo(
+	buf []byte,
+	uniqueID uint64,
+	tableID int64,
+	event *common.RawKVEntry,
+	compressionType CompressionType,
+) []byte {
+	return encodeKeyTo(buf, uniqueID, tableID, event, compressionType, false)
+}
+
+func encodeKeyToWithEncryptionLayer(
+	buf []byte,
+	uniqueID uint64,
+	tableID int64,
+	event *common.RawKVEntry,
+	compressionType CompressionType,
+) []byte {
+	return encodeKeyTo(buf, uniqueID, tableID, event, compressionType, true)
 }
 
 // EncodeKey encodes a key according to event.
@@ -118,6 +143,11 @@ func EncodeKey(uniqueID uint64, tableID int64, event *common.RawKVEntry, compres
 func DecodeKeyMetas(key []byte) (DMLOrder, CompressionType) {
 	combinedOrder := binary.BigEndian.Uint16(key[32:34]) // The combined order is at offset 32 for 2 bytes.
 	return DMLOrder((combinedOrder & dmlOrderMask) >> dmlOrderShift), CompressionType(combinedOrder & compressionMask)
+}
+
+func KeyUsesEncryptionLayer(key []byte) bool {
+	combinedOrder := binary.BigEndian.Uint16(key[32:34])
+	return combinedOrder&encryptionLayerMask != 0
 }
 
 // getDMLOrder returns the order of the dml types: delete<update<insert

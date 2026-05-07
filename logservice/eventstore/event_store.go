@@ -58,7 +58,6 @@ var (
 	metricEventStoreFirstReadDurationHistogram = metrics.EventStoreReadDurationHistogram.WithLabelValues("first")
 	metricEventStoreNextReadDurationHistogram  = metrics.EventStoreReadDurationHistogram.WithLabelValues("next")
 	metricEventStoreCloseReadDurationHistogram = metrics.EventStoreReadDurationHistogram.WithLabelValues("close")
-	legacyZSTDFrameMagic                       = []byte{0x28, 0xB5, 0x2F, 0xFD}
 )
 
 const subscriptionIdleTTL = time.Minute
@@ -1380,7 +1379,7 @@ func (e *eventStore) writeEvents(
 				}
 
 				op := batch.SetDeferred(keyLen, len(encryptedValue))
-				op.Key = EncodeKeyTo(op.Key[:0], uint64(event.subID), event.tableID, kv, compressionType)
+				op.Key = encodeKeyToWithEncryptionLayer(op.Key[:0], uint64(event.subID), event.tableID, kv, compressionType)
 				if len(op.Key) != keyLen {
 					return fmt.Errorf("encoded event store key size mismatch, expected %d, got %d",
 						keyLen, len(op.Key))
@@ -1491,13 +1490,12 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
 		}
 		key := iter.innerIter.Key()
 		value := iter.innerIter.Value()
-		_, compressionType := DecodeKeyMetas(key)
 
-		shouldDecrypt := iter.encryptionManager != nil
-		if shouldDecrypt && compressionType == CompressionZSTD && iter.isLegacyCompressedRawKV(value) {
-			shouldDecrypt = false
-		}
-		if shouldDecrypt {
+		if KeyUsesEncryptionLayer(key) {
+			if iter.encryptionManager == nil {
+				log.Panic("encountered encryption-layer value but no encryption manager is configured",
+					zap.Uint32("keyspaceID", iter.keyspaceID))
+			}
 			decryptedValue, err := iter.encryptionManager.DecryptData(context.Background(), iter.keyspaceID, value)
 			if err != nil {
 				log.Panic("failed to decrypt value", zap.Error(err))
@@ -1505,6 +1503,7 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
 			value = decryptedValue
 		}
 
+		_, compressionType := DecodeKeyMetas(key)
 		var decodedValue []byte
 		if compressionType == CompressionZSTD {
 			var err error
@@ -1560,22 +1559,6 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
 	iter.innerIter.Next()
 	metricEventStoreNextReadDurationHistogram.Observe(time.Since(startTime).Seconds())
 	return rawKV, isNewTxn
-}
-
-// Legacy compressed values were written without the 4-byte encryption-layer
-// header, so they still begin with a plain ZSTD frame.
-func (iter *eventStoreIter) isLegacyCompressedRawKV(value []byte) bool {
-	if len(value) < len(legacyZSTDFrameMagic) || !bytes.Equal(value[:len(legacyZSTDFrameMagic)], legacyZSTDFrameMagic) {
-		return false
-	}
-
-	decodedValue, err := iter.decoder.DecodeAll(value, nil)
-	if err != nil {
-		return false
-	}
-
-	probe := &common.RawKVEntry{}
-	return probe.Decode(decodedValue) == nil
 }
 
 func (iter *eventStoreIter) Close() (int64, error) {
