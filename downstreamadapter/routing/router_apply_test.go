@@ -742,7 +742,7 @@ func TestRewriteParserBackedDDLQueryError(t *testing.T) {
 		TargetTable:  TablePlaceholder,
 	}})
 
-	_, err := router.rewriteSingleDDLQuery("INVALID SQL !!!")
+	_, err := router.rewriteSingleDDLQuery("INVALID SQL !!!", "")
 	code, ok := errors.RFCCode(err)
 	require.True(t, ok)
 	require.Equal(t, errors.ErrTableRoutingFailed.RFCCode(), code)

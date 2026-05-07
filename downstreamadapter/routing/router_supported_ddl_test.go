@@ -1024,7 +1024,8 @@ func TestApplyToDDLEventRoutesDDLEventMetadata(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, routedSchema.Query, "`target_db`")
 
-	singleCreateDDL := helper.DDL2Event("CREATE TABLE `source_db`.`source_table` (`id` INT PRIMARY KEY)")
+	helper.Tk().MustExec("USE `source_db`")
+	singleCreateDDL := helper.DDL2Event("CREATE TABLE `source_table` (`id` INT PRIMARY KEY)")
 	singleCreateDDL.DispatcherID = common.NewDispatcherID()
 	singleCreateDDL.Seq = 1
 	singleCreateDDL.Epoch = 2
@@ -1034,6 +1035,8 @@ func TestApplyToDDLEventRoutesDDLEventMetadata(t *testing.T) {
 
 	originalQuery := singleCreateDDL.Query
 	originalTableInfo := singleCreateDDL.TableInfo
+	require.Equal(t, "source_db", singleCreateDDL.SchemaName)
+	require.NotContains(t, originalQuery, "`source_db`")
 	routedSingleCreate, err := router.ApplyToDDLEvent(singleCreateDDL)
 	require.NoError(t, err)
 	require.NotSame(t, singleCreateDDL, routedSingleCreate)
@@ -1055,6 +1058,7 @@ func TestApplyToDDLEventRoutesDDLEventMetadata(t *testing.T) {
 	require.Equal(t, "target_db", routedSingleCreate.GetTargetSchemaName())
 	require.Equal(t, "source_table_r", routedSingleCreate.GetTargetTableName())
 	require.Contains(t, routedSingleCreate.Query, "`target_db`.`source_table_r`")
+	require.NotContains(t, routedSingleCreate.Query, "`source_db`")
 	require.NotSame(t, originalTableInfo, routedSingleCreate.TableInfo)
 	require.Equal(t, "target_db", routedSingleCreate.TableInfo.GetTargetSchemaName())
 	require.Equal(t, "source_table_r", routedSingleCreate.TableInfo.GetTargetTableName())

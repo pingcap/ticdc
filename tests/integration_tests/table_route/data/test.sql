@@ -128,9 +128,10 @@ DROP VIEW `source_db`.`transient_view`;
 -- DDL: PARTITION TABLE
 -- ============================================
 CREATE TABLE partitioned_events (
-    id INT PRIMARY KEY,
+    id INT,
     bucket INT NOT NULL,
-    value VARCHAR(50)
+    value VARCHAR(50),
+    PRIMARY KEY (id, bucket)
 ) PARTITION BY RANGE (bucket) (
     PARTITION p0 VALUES LESS THAN (10),
     PARTITION p1 VALUES LESS THAN (20)

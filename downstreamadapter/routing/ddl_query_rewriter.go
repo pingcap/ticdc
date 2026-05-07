@@ -41,7 +41,7 @@ func (r Router) rewriteParserBackedDDLQuery(ddl *commonEvent.DDLEvent) (string, 
 	)
 	for i := range queries {
 		query := queries[i]
-		newQuery, err := r.rewriteSingleDDLQuery(query)
+		newQuery, err := r.rewriteSingleDDLQuery(query, ddl.GetSchemaName())
 		if err != nil {
 			return "", err
 		}
@@ -78,7 +78,7 @@ func splitMultiStmtDDLQuery(query string) ([]string, error) {
 	return queries, nil
 }
 
-func (r Router) rewriteSingleDDLQuery(query string) (string, error) {
+func (r Router) rewriteSingleDDLQuery(query string, defaultSchema string) (string, error) {
 	p := parser.New()
 	stmt, err := p.ParseOneStmt(query, "", "")
 	if err != nil {
@@ -89,6 +89,7 @@ func (r Router) rewriteSingleDDLQuery(query string) (string, error) {
 	if len(sourceTables) == 0 {
 		return query, nil
 	}
+	fillDefaultSchema(sourceTables, defaultSchema)
 
 	var (
 		routed       bool
@@ -117,6 +118,18 @@ func (r Router) rewriteSingleDDLQuery(query string) (string, error) {
 		return "", err
 	}
 	return newQuery, nil
+}
+
+func fillDefaultSchema(tables []commonEvent.SchemaTableName, defaultSchema string) {
+	if defaultSchema == "" {
+		return
+	}
+
+	for i := range tables {
+		if tables[i].SchemaName == "" && tables[i].TableName != "" {
+			tables[i].SchemaName = defaultSchema
+		}
+	}
 }
 
 // tableNameExtractor extracts table names from DDL AST nodes.
