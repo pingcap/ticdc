@@ -31,15 +31,28 @@ const (
 	// It is negative to avoid conflicting with any real table_id (including DDLSpanTableID=0).
 	syncPointMetaTableID int64 = -1
 
+	// ddlTsTableExistsQuery checks only TiCDC's own ddl_ts metadata table.
+	// It is used after a failed ddl_ts operation when the downstream does not
+	// return standard MySQL/TiDB missing table error codes.
 	ddlTsTableExistsQuery = "SELECT COUNT(1) FROM information_schema.tables WHERE table_schema = '" +
 		filter.TiCDCSystemSchema + "' AND table_name = '" + filter.DDLTsTable + "'"
 )
 
+// ddlTsTableErrorAction tells the caller how to proceed after a failed
+// ddl_ts metadata query or cleanup operation.
 type ddlTsTableErrorAction int
 
 const (
+	// ddlTsTableErrorReport means the ddl_ts table exists or could not be
+	// prepared, so the caller should return an error to its own caller.
 	ddlTsTableErrorReport ddlTsTableErrorAction = iota
+	// ddlTsTableErrorIgnore means the ddl_ts table is absent. This is expected
+	// before the first DDL or syncpoint, so the caller can treat it as empty
+	// recovery metadata.
 	ddlTsTableErrorIgnore
+	// ddlTsTableErrorRetry means the metadata lookup was unavailable, but
+	// TiCDC has successfully created ddl_ts_v1 and the caller should retry the
+	// original operation once.
 	ddlTsTableErrorRetry
 )
 
@@ -546,6 +559,14 @@ func (w *Writer) removeDDLTsItemWithQuery(query string) error {
 	return nil
 }
 
+// handleDDLTsTableQueryError classifies a failed ddl_ts table operation.
+//
+// The ddl_ts table is created lazily, so missing tidb_cdc.ddl_ts_v1 is a valid
+// first-sync state. Standard MySQL/TiDB missing table errors are accepted
+// directly. For MySQL-compatible downstreams that use nonstandard error codes,
+// the function verifies table existence through information_schema.tables. If
+// that metadata check is unavailable, it creates the ddl_ts table and asks the
+// caller to retry the original operation exactly once.
 func (w *Writer) handleDDLTsTableQueryError(queryErr error) (ddlTsTableErrorAction, error) {
 	if errors.IsTableNotExistsErr(queryErr) {
 		return ddlTsTableErrorIgnore, nil
@@ -568,12 +589,16 @@ func (w *Writer) handleDDLTsTableQueryError(queryErr error) (ddlTsTableErrorActi
 		return ddlTsTableErrorReport, err
 	}
 
+	// createDDLTsTable bypasses the lazy-init cache on purpose. Mark the table
+	// initialized only after the forced create succeeds.
 	w.ddlTsTableInitMutex.Lock()
 	w.ddlTsTableInit = true
 	w.ddlTsTableInitMutex.Unlock()
 	return ddlTsTableErrorRetry, nil
 }
 
+// ddlTsTableExists returns whether tidb_cdc.ddl_ts_v1 is visible in the
+// downstream metadata tables.
 func (w *Writer) ddlTsTableExists() (bool, error) {
 	row := w.db.QueryRowContext(w.ctx, ddlTsTableExistsQuery)
 	var count int
