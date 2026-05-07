@@ -47,6 +47,7 @@ func (h *intEventHandler) Handle(dest D, events ...intEvent) (await bool) {
 
 func (h *intEventHandler) GetSize(event intEvent) int            { return 0 }
 func (h *intEventHandler) GetArea(path int, dest D) int          { return 0 }
+func (h *intEventHandler) GetMetricLabel(dest D) string          { return "test" }
 func (h *intEventHandler) GetTimestamp(event intEvent) Timestamp { return 0 }
 func (h *intEventHandler) GetType(event intEvent) EventType      { return DefaultEventType }
 func (h *intEventHandler) IsPaused(event intEvent) bool          { return false }
@@ -63,7 +64,7 @@ func prepareDynamicStream(pathCount int, eventCount int, times int) (DynamicStre
 		wg:    wg,
 	}
 
-	ds := NewParallelDynamicStream(handler)
+	ds := NewParallelDynamicStream("test", handler)
 	ds.Start()
 
 	for i := 0; i < pathCount; i++ {

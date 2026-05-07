@@ -18,6 +18,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 
@@ -124,6 +125,10 @@ func hashTableInfo(tableInfo *model.TableInfo) Digest {
 		sha256Hasher.Write(buf)
 		for _, col := range idx.Columns {
 			binary.BigEndian.PutUint64(buf, uint64(col.Offset))
+			sha256Hasher.Write(buf)
+			// Prefix length changes handle decode behavior for clustered primary key.
+			// Include the length to prevent sharing schema across incompatible tables.
+			binary.BigEndian.PutUint64(buf, uint64(col.Length))
 			sha256Hasher.Write(buf)
 		}
 		// unique
@@ -254,6 +259,11 @@ func (s *columnSchema) sameColumnsAndIndices(columns []*model.ColumnInfo, indice
 			if col.Offset != indices[i].Columns[j].Offset {
 				return false
 			}
+			// Prefix length affects whether a primary key column is partially indexed.
+			// This directly impacts handle decoding and must be part of schema equality.
+			if col.Length != indices[i].Columns[j].Length {
+				return false
+			}
 		}
 		if idx.Unique != indices[i].Unique {
 			return false
@@ -377,7 +387,7 @@ func (s *SharedColumnSchemaStorage) tryReleaseColumnSchema(columnSchema *columnS
 			if s.m[columnSchema.Digest][idx].count == 0 {
 				// release the columnSchema object
 				SharedColumnSchemaCountGauge.Dec()
-				s.m[columnSchema.Digest] = append(s.m[columnSchema.Digest][:idx], s.m[columnSchema.Digest][idx+1:]...)
+				s.m[columnSchema.Digest] = slices.Delete(s.m[columnSchema.Digest], idx, idx+1)
 				if len(s.m[columnSchema.Digest]) == 0 {
 					delete(s.m, columnSchema.Digest)
 				}
@@ -480,7 +490,7 @@ func unmarshalJsonToColumnSchema(data []byte) (*columnSchema, error) {
 
 // newColumnSchema4Decoder should only be used by the codec decoder for the test purpose,
 // do not call this method in the TiCDC code.
-func newColumnSchema4Decoder(tableInfo *model.TableInfo) *columnSchema {
+func NewColumnSchema4Decoder(tableInfo *model.TableInfo) *columnSchema {
 	return newColumnSchema(tableInfo, Digest{})
 }
 
@@ -683,11 +693,7 @@ func (s *columnSchema) initIndexColumns() {
 			indexColOffset := make([]int64, 0, len(idx.Columns))
 			for _, idxCol := range idx.Columns {
 				colInfo := s.Columns[idxCol.Offset]
-				if IsColCDCVisible(colInfo) {
-					indexColOffset = append(indexColOffset, colInfo.ID)
-				} else {
-					hasNotNullUK = false
-				}
+				indexColOffset = append(indexColOffset, colInfo.ID)
 				if !mysql.HasNotNullFlag(colInfo.GetFlag()) {
 					hasNotNullUK = false
 				}

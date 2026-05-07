@@ -45,11 +45,14 @@ func GetExternalStorageWithDefaultTimeout(ctx context.Context, uri string) (stor
 	// total retry time is [1<<7, 1<<8] = [128, 256] + 30*6 = [308, 436] seconds
 	r := NewS3Retryer(7, 1*time.Second, 2*time.Second)
 	s, err := getExternalStorage(ctx, uri, nil, r)
+	if err != nil {
+		return nil, err
+	}
 
 	return &extStorageWithTimeout{
 		ExternalStorage: s,
 		timeout:         defaultTimeout,
-	}, err
+	}, nil
 }
 
 // getExternalStorage creates a new storage.ExternalStorage based on the uri and options.
@@ -68,15 +71,18 @@ func getExternalStorage(
 		S3Retryer:       retryer,
 	})
 	if err != nil {
-		retErr := errors.ErrFailToCreateExternalStorage.Wrap(errors.Trace(err))
-		return nil, retErr.GenWithStackByArgs("creating ExternalStorage for s3")
+		return nil, errors.WrapError(errors.ErrFailToCreateExternalStorage, err)
 	}
+	defer func() {
+		if err != nil {
+			ret.Close()
+		}
+	}()
 
 	// Check the connection and ignore the returned bool value, since we don't care if the file exists.
 	_, err = ret.FileExists(ctx, "test")
 	if err != nil {
-		retErr := errors.ErrFailToCreateExternalStorage.Wrap(errors.Trace(err))
-		return nil, retErr.GenWithStackByArgs("creating ExternalStorage for s3")
+		return nil, errors.WrapError(errors.ErrFailToCreateExternalStorage, err)
 	}
 	return ret, nil
 }
@@ -164,10 +170,7 @@ func (s *extStorageWithTimeout) WriteFile(ctx context.Context, name string, data
 	ctx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
 	err := s.ExternalStorage.WriteFile(ctx, name, data)
-	if err != nil {
-		err = errors.ErrExternalStorageAPI.Wrap(err).GenWithStackByArgs("WriteFile")
-	}
-	return err
+	return errors.WrapError(errors.ErrExternalStorageAPI, err)
 }
 
 // ReadFile reads a complete file from storage, similar to os.ReadFile
@@ -175,10 +178,7 @@ func (s *extStorageWithTimeout) ReadFile(ctx context.Context, name string) ([]by
 	ctx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
 	data, err := s.ExternalStorage.ReadFile(ctx, name)
-	if err != nil {
-		err = errors.ErrExternalStorageAPI.Wrap(err).GenWithStackByArgs("ReadFile")
-	}
-	return data, err
+	return data, errors.WrapError(errors.ErrExternalStorageAPI, err)
 }
 
 // FileExists return true if file exists
@@ -186,10 +186,7 @@ func (s *extStorageWithTimeout) FileExists(ctx context.Context, name string) (bo
 	ctx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
 	exists, err := s.ExternalStorage.FileExists(ctx, name)
-	if err != nil {
-		err = errors.ErrExternalStorageAPI.Wrap(err).GenWithStackByArgs("FileExists")
-	}
-	return exists, err
+	return exists, errors.WrapError(errors.ErrExternalStorageAPI, err)
 }
 
 // DeleteFile delete the file in storage
@@ -197,10 +194,7 @@ func (s *extStorageWithTimeout) DeleteFile(ctx context.Context, name string) err
 	ctx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
 	err := s.ExternalStorage.DeleteFile(ctx, name)
-	if err != nil {
-		err = errors.ErrExternalStorageAPI.Wrap(err).GenWithStackByArgs("DeleteFile")
-	}
-	return err
+	return errors.WrapError(errors.ErrExternalStorageAPI, err)
 }
 
 // Open a Reader by file path. path is relative path to storage base path
@@ -238,27 +232,100 @@ func (s *extStorageWithTimeout) WalkDir(
 	ctx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
 	err := s.ExternalStorage.WalkDir(ctx, opt, fn)
-	if err != nil {
-		err = errors.ErrExternalStorageAPI.Wrap(err).GenWithStackByArgs("WalkDir")
+	return errors.WrapError(errors.ErrExternalStorageAPI, err)
+}
+
+func withTimeoutIfNoDeadline(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	// Some call sites pass context.Background() down to external storage APIs.
+	// For cloud providers, that can translate into "wait forever" on network stalls.
+	// We only apply a default timeout when the caller didn't set a deadline.
+	if _, ok := ctx.Deadline(); ok {
+		return ctx, nil
 	}
-	return err
+	return context.WithTimeout(ctx, timeout)
 }
 
 // Create opens a file writer by path. path is relative path to storage base path
 func (s *extStorageWithTimeout) Create(
 	ctx context.Context, path string, option *storage.WriterOption,
 ) (storage.ExternalFileWriter, error) {
-	if option.Concurrency <= 1 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, s.timeout)
-		defer cancel()
+	// Some backends (notably S3 multipart uploads) spawn background goroutines which
+	// are bound to the context passed to Create(). If the caller uses a context
+	// without deadline, those goroutines can hang indefinitely on network stalls.
+	//
+	// To keep callers simple and avoid hidden goroutine leaks, we:
+	// - wrap Write/Close calls with a default timeout if the caller didn't set one;
+	// - for multipart uploads (Concurrency > 1), pass a cancellable context to Create()
+	//   and cancel it when Write/Close times out/cancels.
+	concurrency := 1
+	if option != nil && option.Concurrency > 0 {
+		concurrency = option.Concurrency
 	}
-	// multipart uploading spawns a background goroutine, can't set timeout
+
+	var cancelCreate context.CancelFunc
+	if concurrency > 1 {
+		ctx, cancelCreate = context.WithCancel(ctx)
+	}
+
 	writer, err := s.ExternalStorage.Create(ctx, path, option)
 	if err != nil {
-		err = errors.ErrExternalStorageAPI.Wrap(err).GenWithStackByArgs("Create")
+		if cancelCreate != nil {
+			cancelCreate()
+		}
+		return nil, errors.WrapError(errors.ErrExternalStorageAPI, err)
 	}
-	return writer, err
+	return &writerWithCancelAndTimeout{
+		ExternalFileWriter: writer,
+		timeout:            s.timeout,
+		cancelCreate:       cancelCreate,
+	}, nil
+}
+
+type writerWithCancelAndTimeout struct {
+	storage.ExternalFileWriter
+	timeout      time.Duration
+	cancelCreate context.CancelFunc
+}
+
+func (w *writerWithCancelAndTimeout) Write(ctx context.Context, p []byte) (int, error) {
+	ctx, cancel := withTimeoutIfNoDeadline(ctx, w.timeout)
+	var stop func() bool
+	if w.cancelCreate != nil {
+		// If the backend binds background uploads to the Create() context, ensure a
+		// Write timeout/cancel also aborts the background work so the call unblocks.
+		stop = context.AfterFunc(ctx, w.cancelCreate)
+	}
+
+	n, err := w.ExternalFileWriter.Write(ctx, p)
+
+	if stop != nil {
+		stop()
+	}
+	if cancel != nil {
+		cancel()
+	}
+	return n, errors.WrapError(errors.ErrExternalStorageAPI, err)
+}
+
+func (w *writerWithCancelAndTimeout) Close(ctx context.Context) error {
+	ctx, cancel := withTimeoutIfNoDeadline(ctx, w.timeout)
+	var stop func() bool
+	if w.cancelCreate != nil {
+		// Same rationale as Write(): on multipart backends the ctx argument is often
+		// ignored in Close(), so we must cancel the Create() context to abort uploads.
+		stop = context.AfterFunc(ctx, w.cancelCreate)
+		defer w.cancelCreate()
+	}
+
+	err := w.ExternalFileWriter.Close(ctx)
+
+	if stop != nil {
+		stop()
+	}
+	if cancel != nil {
+		cancel()
+	}
+	return errors.WrapError(errors.ErrExternalStorageAPI, err)
 }
 
 // Rename file name from oldFileName to newFileName
@@ -268,10 +335,7 @@ func (s *extStorageWithTimeout) Rename(
 	ctx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
 	err := s.ExternalStorage.Rename(ctx, oldFileName, newFileName)
-	if err != nil {
-		err = errors.ErrExternalStorageAPI.Wrap(err).GenWithStackByArgs("Rename")
-	}
-	return err
+	return errors.WrapError(errors.ErrExternalStorageAPI, err)
 }
 
 // IsNotExistInExtStorage checks if the error is caused by the file not exist in external storage.
@@ -320,7 +384,7 @@ func RemoveFilesIf(
 		return nil
 	})
 	if err != nil {
-		return errors.ErrExternalStorageAPI.Wrap(err).GenWithStackByArgs("RemoveTemporaryFiles")
+		return errors.WrapError(errors.ErrExternalStorageAPI, err)
 	}
 
 	log.Debug("Removing files", zap.Any("toRemoveFiles", toRemoveFiles))
@@ -351,7 +415,7 @@ func DeleteFilesInExtStorage(
 			err := extStorage.DeleteFiles(egCtx, files)
 			if err != nil && !IsNotExistInExtStorage(err) {
 				// if fail then retry, may end up with notExit err, ignore the error
-				return errors.ErrExternalStorageAPI.Wrap(err)
+				return errors.WrapError(errors.ErrExternalStorageAPI, err)
 			}
 			return nil
 		})

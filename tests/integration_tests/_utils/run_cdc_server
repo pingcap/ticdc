@@ -3,10 +3,16 @@
 # --workdir: work directory
 # --tlsdir: work directory
 # --cert-allowed-cn: cert allowed cn
-# --binary: path to cdc test binary
+# --binary: path to cdc binary (cdc.test is preferred for integration coverage)
 # --logsuffix: log suffix
 # --addr: address
 # --pd: pd address
+# --redact-info-log: log redaction mode (false|true|marker)
+#                    Generates a config file with [security] redact-info-log setting
+#                    Values: false (OFF, no redaction), true (ON, full redaction),
+#                            marker (MARKER, wraps sensitive data with ‹› markers)
+#                    Security note: Once enabled via API at runtime, redaction
+#                    cannot be disabled to prevent accidental data exposure
 
 set -e
 
@@ -22,6 +28,9 @@ addr_url="127.0.0.1:8300"
 pd_addr=
 pwd=$pwd
 log_level=debug
+# Security feature: Log redaction mode (off|on|marker)
+# Can be set at startup via config file. Once enabled via API at runtime, it cannot be disabled.
+redact_log_mode=
 restart=
 failpoint=$GO_FAILPOINTS
 config_path=
@@ -68,6 +77,10 @@ while [[ ${1} ]]; do
 		log_level=${2}
 		shift
 		;;
+	--redact-info-log)
+		redact_log_mode="${2}"
+		shift
+		;;
 	--restart)
 		restart=${2}
 		shift
@@ -112,9 +125,50 @@ if [ -z "$data_dir" ]; then
 	data_dir=${workdir}/cdc_data${logsuffix}
 fi
 
+# If redact_log_mode is set, generate a config file with security settings
+if [ -n "$redact_log_mode" ]; then
+	redact_config_file="${workdir}/cdc_redact${logsuffix}.toml"
+	# Convert to recommended TOML format:
+	# - "off" -> false (boolean)
+	# - "on" -> true (boolean)
+	# - "marker" -> "marker" (string, the only string-only option)
+	case "$redact_log_mode" in
+	off | OFF | false | 0)
+		redact_toml_value="false"
+		;;
+	on | ON | true | 1)
+		redact_toml_value="true"
+		;;
+	marker | MARKER)
+		redact_toml_value="\"marker\""
+		;;
+	*)
+		# Pass through as quoted string for other values (may be invalid, will be caught at runtime)
+		redact_toml_value="\"$redact_log_mode\""
+		;;
+	esac
+	cat >"$redact_config_file" <<EOF
+[security]
+redact-info-log = $redact_toml_value
+EOF
+	# If config_path is already set, we need to merge, otherwise just use this one
+	if [ -z "$config_path" ]; then
+		config_path="--config $redact_config_file"
+	else
+		# Append security config to existing config
+		existing_config=$(echo "$config_path" | sed 's/--config //')
+		cat "$existing_config" >>"$redact_config_file"
+		config_path="--config $redact_config_file"
+	fi
+fi
+
 echo "[$(date)] <<<<<< START cdc server in $TEST_NAME case >>>>>>"
 cd $workdir
 pid=$$
+coverprofile_arg=
+if [[ $(basename "$binary") == "cdc.test" ]]; then
+	coverprofile_arg="-test.coverprofile=$OUT_DIR/cov.$TEST_NAME.$pid.out"
+fi
 # Uncomment to turn on grpc versbose log.
 # GRPC_GO_LOG_VERBOSITY_LEVEL=99 GRPC_GO_LOG_SEVERITY_LEVEL=debug \
 
@@ -122,7 +176,7 @@ set -x
 
 if [[ "$restart" == "true" ]]; then
 	while true; do
-		GO_FAILPOINTS=$failpoint $binary -test.coverprofile="$OUT_DIR/cov.$TEST_NAME.$pid.out" server $newarch \
+		GO_FAILPOINTS=$failpoint $binary $coverprofile_arg server $newarch \
 			--log-file $workdir/cdc$logsuffix.log \
 			--log-level $log_level \
 			--data-dir "$data_dir" \
@@ -138,7 +192,7 @@ if [[ "$restart" == "true" ]]; then
 		sleep 1
 	done &
 else
-	GO_FAILPOINTS=$failpoint $binary -test.coverprofile="$OUT_DIR/cov.$TEST_NAME.$pid.out" server \
+	GO_FAILPOINTS=$failpoint $binary $coverprofile_arg server \
 		--log-file $workdir/cdc$logsuffix.log \
 		--log-level $log_level \
 		--data-dir "$data_dir" \

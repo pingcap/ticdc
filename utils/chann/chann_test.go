@@ -304,6 +304,11 @@ func TestNonblockSelectRace2(t *testing.T) {
 		c1.In() <- 1
 		time.Sleep(time.Millisecond)
 		go func() {
+			// Yield to the main goroutine to ensure c2.Close() is called
+			// before the select. Without this, the goroutine may execute
+			// the select before c2 is closed, causing both channels to be
+			// not ready and hitting the default branch unexpectedly.
+			runtime.Gosched()
 			select {
 			case <-c1.Out():
 			case <-c2.Out():

@@ -26,10 +26,21 @@ import (
 	"go.uber.org/zap"
 )
 
+type saramaSyncClient interface {
+	Brokers() []*sarama.Broker
+	Close() error
+}
+
+type saramaSyncProducerClient interface {
+	SendMessage(msg *sarama.ProducerMessage) (partition int32, offset int64, err error)
+	SendMessages(msgs []*sarama.ProducerMessage) error
+	Close() error
+}
+
 type saramaSyncProducer struct {
 	id       commonType.ChangeFeedID
-	client   sarama.Client
-	producer sarama.SyncProducer
+	client   saramaSyncClient
+	producer saramaSyncProducerClient
 	closed   *atomic.Bool
 }
 
@@ -110,15 +121,26 @@ func (p *saramaSyncProducer) Close() {
 
 	p.closed.Store(true)
 	start := time.Now()
-	// this also close the client.
-	err := p.producer.Close()
-	if err != nil {
-		log.Error("Close Kafka DDL producer with error",
-			zap.String("keyspace", p.id.Keyspace()),
-			zap.String("changefeed", p.id.Name()),
-			zap.Duration("duration", time.Since(start)),
-			zap.Error(err))
-		return
+	// sarama.NewSyncProducerFromClient wraps the provided client with a nopCloserClient,
+	// so producer.Close() alone won't release the underlying client resources.
+	if p.client != nil {
+		if err := p.client.Close(); err != nil {
+			log.Warn("Close Kafka DDL producer client with error",
+				zap.String("keyspace", p.id.Keyspace()),
+				zap.String("changefeed", p.id.Name()),
+				zap.Duration("duration", time.Since(start)),
+				zap.Error(err))
+		}
+	}
+	if p.producer != nil {
+		if err := p.producer.Close(); err != nil {
+			log.Error("Close Kafka DDL producer with error",
+				zap.String("keyspace", p.id.Keyspace()),
+				zap.String("changefeed", p.id.Name()),
+				zap.Duration("duration", time.Since(start)),
+				zap.Error(err))
+			return
+		}
 	}
 	log.Info("Kafka DDL producer closed",
 		zap.String("keyspace", p.id.Keyspace()),

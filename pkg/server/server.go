@@ -17,8 +17,8 @@ import (
 	"context"
 
 	"github.com/pingcap/ticdc/maintainer"
-	"github.com/pingcap/ticdc/pkg/api"
 	"github.com/pingcap/ticdc/pkg/etcd"
+	"github.com/pingcap/ticdc/pkg/liveness"
 	"github.com/pingcap/ticdc/pkg/node"
 	pd "github.com/tikv/pd/client"
 )
@@ -27,10 +27,10 @@ import (
 // information in etcd and schedules Task on it.
 type Server interface {
 	Run(ctx context.Context) error
-	Close(ctx context.Context)
+	Close()
 
 	SelfInfo() (*node.Info, error)
-	Liveness() api.Liveness
+	Liveness() liveness.Liveness
 
 	GetCoordinator() (Coordinator, error)
 	IsCoordinator() bool

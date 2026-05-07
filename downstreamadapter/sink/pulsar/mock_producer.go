@@ -45,15 +45,15 @@ func newMockDMLProducer() dmlProducer {
 }
 
 // SyncBroadcastMessage pulsar consume all partitions
-func (p *mockProducer) syncBroadcastMessage(ctx context.Context, topic string, message *common.Message,
+func (p *mockProducer) syncBroadcastMessage(ctx context.Context, topic string, message *common.Message, messageType common.MessageType,
 ) error {
-	return p.syncSendMessage(ctx, topic, message)
+	return p.syncSendMessage(ctx, topic, message, messageType)
 }
 
 // SyncSendMessage sends a message
 // partitionNum is not used,pulsar consume all partitions
 func (p *mockProducer) syncSendMessage(ctx context.Context, topic string,
-	message *common.Message,
+	message *common.Message, messageType common.MessageType,
 ) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()

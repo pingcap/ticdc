@@ -55,6 +55,54 @@ func TestGenerateDSNByConfig(t *testing.T) {
 		require.False(t, strings.Contains(dsnStr, "time_zone"))
 	}
 
+	testActiveActiveDefaultTiDBTxnMode := func() {
+		dsn, err := dmysql.ParseDSN("root:123456@tcp(127.0.0.1:4000)/")
+		require.Nil(t, err)
+
+		checkTxnMode := func(cfg *Config, expectedTxnMode string) {
+			db, mock, err := sqlmock.New()
+			require.Nil(t, err)
+			columns := []string{"Variable_name", "Value"}
+			mock.ExpectQuery("show session variables like 'allow_auto_random_explicit_insert';").WillReturnRows(
+				sqlmock.NewRows(columns).AddRow("allow_auto_random_explicit_insert", "0"),
+			)
+			mock.ExpectQuery("show session variables like 'tidb_txn_mode';").WillReturnRows(
+				sqlmock.NewRows(columns).AddRow("tidb_txn_mode", expectedTxnMode),
+			)
+			mock.ExpectQuery("show session variables like 'transaction_isolation';").WillReturnRows(
+				sqlmock.NewRows(columns).AddRow("transaction_isolation", "REPEATED-READ"),
+			)
+			mock.ExpectQuery("show session variables like 'tidb_placement_mode';").
+				WillReturnRows(
+					sqlmock.NewRows(columns).
+						AddRow("tidb_placement_mode", "IGNORE"),
+				)
+			mock.ExpectQuery("show session variables like 'tidb_enable_external_ts_read';").
+				WillReturnRows(
+					sqlmock.NewRows(columns).
+						AddRow("tidb_enable_external_ts_read", "OFF"),
+				)
+			mock.ExpectClose()
+
+			dsnStr, err := generateDSNByConfig(dsn, cfg, db)
+			require.Nil(t, err)
+			require.Contains(t, dsnStr, "tidb_txn_mode="+expectedTxnMode)
+			require.Nil(t, db.Close())
+			require.Nil(t, mock.ExpectationsWereMet())
+		}
+
+		cfg := New()
+		cfg.IsTiDB = true
+		cfg.EnableActiveActive = true
+		checkTxnMode(cfg, txnModePessimistic)
+
+		cfg = New()
+		cfg.IsTiDB = true
+		cfg.EnableActiveActive = true
+		cfg.tidbTxnModeSpecified = true
+		checkTxnMode(cfg, txnModeOptimistic)
+	}
+
 	testTimezoneParam := func() {
 		db, err := MockTestDB(false)
 		require.Nil(t, err)
@@ -177,6 +225,7 @@ func TestGenerateDSNByConfig(t *testing.T) {
 	}
 
 	testDefaultConfig()
+	testActiveActiveDefaultTiDBTxnMode()
 	testTimezoneParam()
 	testTimeoutConfig()
 	testIsolationConfig()
@@ -196,6 +245,7 @@ func TestApplySinkURIParamsToConfig(t *testing.T) {
 	expected.SafeMode = false
 	expected.Timezone = `"UTC"`
 	expected.TidbTxnMode = "pessimistic"
+	expected.tidbTxnModeSpecified = true
 	// expected.EnableOldValue = true
 	uriStr := "mysql://127.0.0.1:3306/?time-zone=UTC&worker-count=64&max-txn-row=20" +
 		"&max-multi-update-row=80&max-multi-update-row-size=512" +

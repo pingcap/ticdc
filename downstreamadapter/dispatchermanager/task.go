@@ -327,6 +327,8 @@ func buildMergedStartTsCandidate(minCheckpointTs uint64, pendingStates []*heartb
 	}
 
 	if len(pendingStates) == 0 {
+		// Defensive: without per-dispatcher pending barrier states, we can only fall back to the
+		// conservative choice (min checkpointTs) and avoid inferring anything about barriers.
 		candidate.allSamePending = false
 		return candidate
 	}
@@ -335,6 +337,7 @@ func buildMergedStartTsCandidate(minCheckpointTs uint64, pendingStates []*heartb
 	var pendingIsSyncPoint bool
 	for idx, state := range pendingStates {
 		if state == nil {
+			// If any source dispatcher is not waiting on a barrier, we can't derive a barrier-aligned startTs.
 			candidate.allSamePending = false
 			break
 		}
@@ -344,6 +347,7 @@ func buildMergedStartTsCandidate(minCheckpointTs uint64, pendingStates []*heartb
 			continue
 		}
 		if state.BlockTs != pendingCommitTs || state.IsSyncPoint != pendingIsSyncPoint {
+			// Mixed barrier states imply the merged dispatcher should start from minCheckpointTs.
 			candidate.allSamePending = false
 			break
 		}
@@ -352,6 +356,9 @@ func buildMergedStartTsCandidate(minCheckpointTs uint64, pendingStates []*heartb
 	candidate.pendingIsSyncPoint = pendingIsSyncPoint
 
 	if candidate.allSamePending {
+		// When all source dispatchers are blocked by the same barrier, pick a startTs that can replay it safely:
+		// - Syncpoint: start from commitTs.
+		// - DDL: start from (commitTs-1) to replay the DDL at commitTs and skip duplicate DML at commitTs.
 		if pendingIsSyncPoint {
 			candidate.startTs = pendingCommitTs
 		} else if pendingCommitTs > 0 {
@@ -368,6 +375,7 @@ func mergeMergedStartTsCandidateWithMySQLRecovery(t *MergeCheckTask, candidate m
 	finalSkipDMLAsStartTs := candidate.skipDMLAsStartTs
 
 	if !common.IsDefaultMode(t.mergedDispatcher.GetMode()) || t.manager.sink.SinkType() != common.MysqlSinkType {
+		// Only default-mode MySQL needs ddl_ts-based crash recovery; other sinks/modes keep the candidate decision.
 		return finalStartTs, finalSkipSyncpointAtStartTs, finalSkipDMLAsStartTs
 	}
 

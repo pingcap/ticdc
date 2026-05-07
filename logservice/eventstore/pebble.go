@@ -16,10 +16,14 @@ package eventstore
 import (
 	"fmt"
 	"math"
+	"strconv"
+	"sync/atomic"
+	"time"
 
 	"github.com/cockroachdb/pebble"
 	"github.com/cockroachdb/pebble/bloom"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"go.uber.org/zap"
 )
 
@@ -28,6 +32,7 @@ const (
 	cacheSize         = 1 << 30  // 1GB
 	memTableTotalSize = 1 << 30  // 1GB
 	memTableSize      = 64 << 20 // 64MB
+	maxOpenFilesPerDB = 10000
 )
 
 func newPebbleOptions(dbNum int) *pebble.Options {
@@ -35,7 +40,7 @@ func newPebbleOptions(dbNum int) *pebble.Options {
 		// Disable WAL to decrease io
 		DisableWAL: true,
 
-		MaxOpenFiles: 10000,
+		MaxOpenFiles: maxOpenFilesPerDB,
 
 		MaxConcurrentCompactions: func() int { return 6 },
 
@@ -70,19 +75,50 @@ func newPebbleOptions(dbNum int) *pebble.Options {
 	return opts
 }
 
-func createPebbleDBs(rootDir string, dbNum int) []*pebble.DB {
+func createPebbleDBs(rootDir string, dbNum int) ([]*pebble.DB, *pebble.Cache, *pebble.TableCache) {
 	cache := pebble.NewCache(cacheSize)
-	tableCache := pebble.NewTableCache(cache, dbNum, int(cache.MaxSize()))
+	tableCacheSize := dbNum * pebble.TableCacheSize(maxOpenFilesPerDB)
+	tableCache := pebble.NewTableCache(cache, dbNum, tableCacheSize)
 	dbs := make([]*pebble.DB, dbNum)
 	for i := 0; i < dbNum; i++ {
+		id := strconv.Itoa(i + 1)
+		var writeStallState atomic.Pointer[eventStoreWriteStallState]
+
 		opts := newPebbleOptions(dbNum)
 		opts.Cache = cache
 		opts.TableCache = tableCache
+		opts.EventListener = &pebble.EventListener{
+			BackgroundError: func(err error) {
+				log.Warn("pebble background error", zap.String("id", id), zap.Error(err))
+			},
+			CompactionEnd: func(info pebble.CompactionInfo) {
+				metrics.EventStorePebbleCompactionDurationHistogram.WithLabelValues(id).Observe(info.TotalDuration.Seconds())
+			},
+			FlushEnd: func(info pebble.FlushInfo) {
+				metrics.EventStorePebbleFlushDurationHistogram.WithLabelValues(id).Observe(info.TotalDuration.Seconds())
+			},
+			WriteStallBegin: func(info pebble.WriteStallBeginInfo) {
+				metrics.EventStorePebbleWriteStallCount.WithLabelValues(id, info.Reason).Inc()
+				writeStallState.CompareAndSwap(nil, &eventStoreWriteStallState{startAt: time.Now(), reason: info.Reason})
+			},
+			WriteStallEnd: func() {
+				state := writeStallState.Swap(nil)
+				if state == nil {
+					return
+				}
+				metrics.EventStorePebbleWriteStallDuration.WithLabelValues(id, state.reason).Add(time.Since(state.startAt).Seconds())
+			},
+		}
 		db, err := pebble.Open(fmt.Sprintf("%s/%04d", rootDir, i), opts)
 		if err != nil {
 			log.Fatal("open db failed", zap.Error(err))
 		}
 		dbs[i] = db
 	}
-	return dbs
+	return dbs, cache, tableCache
+}
+
+type eventStoreWriteStallState struct {
+	startAt time.Time
+	reason  string
 }

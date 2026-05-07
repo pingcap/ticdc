@@ -28,11 +28,16 @@ import (
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/codec"
 	misc "github.com/pingcap/ticdc/pkg/redo/common"
+	"github.com/pingcap/ticdc/pkg/redo/testutil"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/redo/writer/file"
+	"github.com/pingcap/ticdc/pkg/util"
+	mockstorage "github.com/pingcap/tidb/br/pkg/mock/storage"
+	"github.com/pingcap/tidb/br/pkg/storage"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/mock/gomock"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -41,10 +46,13 @@ func genLogFile(
 	dir string, logType string,
 	minCommitTs, maxCommitTs uint64,
 ) {
-	cfg := &writer.LogWriterConfig{
-		MaxLogSizeInBytes: 100000,
-		Dir:               dir,
-	}
+	consistentCfg := testutil.NewConsistentConfig("file://" + dir)
+	consistentCfg.MaxLogSize = util.AddressOf(int64(1))
+	cfg, err := writer.NewConfig(
+		common.NewChangeFeedIDWithName("reader-test", common.DefaultKeyspaceName),
+		consistentCfg,
+	)
+	require.NoError(t, err)
 	fileName := fmt.Sprintf(redo.RedoLogFileFormatV2, "capture", "default",
 		"changefeed", logType, maxCommitTs, uuid.NewString(), redo.LogEXT)
 	w, err := file.NewFileWriter(ctx, cfg, logType, writer.WithLogFileName(func() string {
@@ -85,7 +93,7 @@ func TestReadLogs(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx := context.Background()
 
 	meta := &misc.LogMeta{
 		CheckpointTs: 11,
@@ -102,7 +110,8 @@ func TestReadLogs(t *testing.T) {
 
 	uri, err := url.Parse(fmt.Sprintf("file://%s", dir))
 	require.NoError(t, err)
-	r := &LogReader{
+
+	rowReader := &LogReader{
 		cfg: &LogReaderConfig{
 			Dir:                t.TempDir(),
 			URI:                *uri,
@@ -110,26 +119,29 @@ func TestReadLogs(t *testing.T) {
 		},
 		meta:  meta,
 		rowCh: make(chan *pevent.RedoDMLEvent, defaultReaderChanSize),
+	}
+	require.NoError(t, rowReader.runRowReader(ctx))
+	var actualRows []uint64
+	for row := range rowReader.rowCh {
+		actualRows = append(actualRows, row.Row.CommitTs)
+	}
+	require.Equal(t, expectedRows, actualRows)
+
+	ddlReader := &LogReader{
+		cfg: &LogReaderConfig{
+			Dir:                t.TempDir(),
+			URI:                *uri,
+			UseExternalStorage: true,
+		},
+		meta:  meta,
 		ddlCh: make(chan *pevent.RedoDDLEvent, defaultReaderChanSize),
 	}
-	eg, egCtx := errgroup.WithContext(ctx)
-	eg.Go(func() error {
-		return r.Run(egCtx)
-	})
-
-	for _, ts := range expectedRows {
-		row, err := r.ReadNextRow(egCtx)
-		require.NoError(t, err)
-		require.Equal(t, ts, row.Row.CommitTs)
+	require.NoError(t, ddlReader.runDDLReader(ctx))
+	var actualDDLs []uint64
+	for ddl := range ddlReader.ddlCh {
+		actualDDLs = append(actualDDLs, ddl.DDL.CommitTs)
 	}
-	for _, ts := range expectedDDLs {
-		ddl, err := r.ReadNextDDL(egCtx)
-		require.NoError(t, err)
-		require.Equal(t, ts, ddl.DDL.CommitTs)
-	}
-
-	cancel()
-	require.ErrorIs(t, eg.Wait(), nil)
+	require.Equal(t, expectedDDLs, actualDDLs)
 }
 
 func TestLogReaderClose(t *testing.T) {
@@ -166,7 +178,9 @@ func TestLogReaderClose(t *testing.T) {
 		return r.Run(egCtx)
 	})
 
-	time.Sleep(2 * time.Second)
+	require.Eventually(t, func() bool {
+		return len(r.rowCh) > 0 && len(r.ddlCh) > 0
+	}, time.Second, 10*time.Millisecond)
 	cancel()
 	require.ErrorIs(t, eg.Wait(), context.Canceled)
 }
@@ -239,6 +253,43 @@ func TestNewLogReaderAndReadMeta(t *testing.T) {
 			require.Equal(t, tt.wantResolvedTs, rts, tt.name)
 		}
 	}
+}
+
+func TestInitMetaClosesExternalStorage(t *testing.T) {
+	controller := gomock.NewController(t)
+	mockStorage := mockstorage.NewMockExternalStorage(controller)
+	meta := misc.NewMeta(11, 22)
+	data, err := meta.MarshalMsg(nil)
+	require.NoError(t, err)
+
+	metaPath := fmt.Sprintf(redo.RedoMetaFileFormat, "capture", "default", "changefeed", redo.RedoMetaFileType, "uuid", redo.MetaEXT)
+	mockStorage.EXPECT().WalkDir(gomock.Any(), gomock.Any(), gomock.Any()).
+		DoAndReturn(func(ctx context.Context, opt *storage.WalkOption, fn func(string, int64) error) error {
+			return fn(metaPath, int64(len(data)))
+		})
+	mockStorage.EXPECT().ReadFile(gomock.Any(), metaPath).Return(data, nil)
+	mockStorage.EXPECT().Close().Times(1)
+
+	oldInitExternalStorage := redo.InitExternalStorage
+	defer func() {
+		redo.InitExternalStorage = oldInitExternalStorage
+	}()
+	uri, err := url.Parse("file:///tmp/redo-test")
+	require.NoError(t, err)
+	redo.InitExternalStorage = func(context.Context, url.URL) (storage.ExternalStorage, error) {
+		return mockStorage, nil
+	}
+
+	reader := &LogReader{
+		cfg: &LogReaderConfig{
+			Dir:                t.TempDir(),
+			URI:                *uri,
+			UseExternalStorage: true,
+		},
+	}
+	require.NoError(t, reader.initMeta(context.Background()))
+	require.Equal(t, uint64(11), reader.meta.CheckpointTs)
+	require.Equal(t, uint64(22), reader.meta.ResolvedTs)
 }
 
 func genMetaFile(t *testing.T, dir string, meta *misc.LogMeta) {

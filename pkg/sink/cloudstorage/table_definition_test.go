@@ -488,14 +488,54 @@ func TestTableDefinitionGenFilePath(t *testing.T) {
 		Version:      defaultTableDefinitionVersion,
 		TableVersion: 100,
 	}
-	schemaPath, err := schemaDef.GenerateSchemaFilePath()
+	schemaPath, err := schemaDef.GenerateSchemaFilePath(false, 0)
+	require.NoError(t, err)
+	require.Equal(t, "schema1/meta/schema_100_3233644819.json", schemaPath)
+
+	schemaPath, err = schemaDef.GenerateSchemaFilePath(true, 0)
 	require.NoError(t, err)
 	require.Equal(t, "schema1/meta/schema_100_3233644819.json", schemaPath)
 
 	def, _ := generateTableDef()
-	tablePath, err := def.GenerateSchemaFilePath()
+	tablePath, err := def.GenerateSchemaFilePath(false, 0)
 	require.NoError(t, err)
 	require.Equal(t, "schema1/table1/meta/schema_100_3752767265.json", tablePath)
+
+	tablePath, err = def.GenerateSchemaFilePath(true, 12345)
+	require.NoError(t, err)
+	require.Equal(t, "12345/meta/schema_100_3752767265.json", tablePath)
+}
+
+func TestGenerateSchemaFilePathValidation(t *testing.T) {
+	t.Parallel()
+
+	def, _ := generateTableDef()
+
+	// empty schema
+	emptySchemaDef := &TableDefinition{Schema: "", Table: "t1", TableVersion: 100, TotalColumns: 1, Columns: []TableCol{{}}}
+	_, err := emptySchemaDef.GenerateSchemaFilePath(false, 0)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "schema cannot be empty")
+
+	// zero table version
+	zeroVersionDef := &TableDefinition{Schema: "s1", Table: "t1", TableVersion: 0, TotalColumns: 1, Columns: []TableCol{{}}}
+	_, err = zeroVersionDef.GenerateSchemaFilePath(false, 0)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "table version cannot be zero")
+
+	// use-table-id-as-path with invalid tableID
+	_, err = def.GenerateSchemaFilePath(true, 0)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid table id for table-id path")
+	_, err = def.GenerateSchemaFilePath(true, -1)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid table id for table-id path")
+
+	// invalid table definition
+	invalidDef := &TableDefinition{Schema: "s1", Table: "t1", TableVersion: 100, TotalColumns: 1, Columns: nil}
+	_, err = invalidDef.GenerateSchemaFilePath(false, 0)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid table definition")
 }
 
 func TestTableDefinitionSum32(t *testing.T) {

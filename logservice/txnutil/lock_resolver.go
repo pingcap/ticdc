@@ -84,6 +84,7 @@ func (r *resolver) Resolve(ctx context.Context, keyspaceID uint32, regionID uint
 	bo := tikv.NewGcResolveLockMaxBackoffer(ctx)
 	var loc *tikv.KeyLocation
 	var key []byte
+	var endKey []byte
 	flushRegion := func() error {
 		var err error
 		loc, err = kvStorage.GetRegionCache().LocateRegionByID(bo, regionID)
@@ -91,6 +92,7 @@ func (r *resolver) Resolve(ctx context.Context, keyspaceID uint32, regionID uint
 			return err
 		}
 		key = loc.StartKey
+		endKey = loc.EndKey
 		return nil
 	}
 	if err = flushRegion(); err != nil {
@@ -103,6 +105,7 @@ func (r *resolver) Resolve(ctx context.Context, keyspaceID uint32, regionID uint
 		default:
 		}
 		req.ScanLock().StartKey = key
+		req.ScanLock().EndKey = endKey
 		resp, err := kvStorage.SendReq(bo, req, loc.Region, tikv.ReadTimeoutMedium)
 		if err != nil {
 			return errors.Trace(err)

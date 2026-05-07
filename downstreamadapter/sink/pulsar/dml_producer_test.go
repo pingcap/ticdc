@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
 )
 
@@ -29,7 +30,7 @@ func TestPulsarSyncAsyncSendMessage(t *testing.T) {
 	p := newMockDMLProducer()
 	err := p.asyncSendMessage(ctx, "test", &common.Message{
 		Value:        []byte("this value for test input data"),
-		PartitionKey: str2Pointer("test_key"),
+		PartitionKey: util.AddressOf("test_key"),
 	})
 	require.NoError(t, err)
 }

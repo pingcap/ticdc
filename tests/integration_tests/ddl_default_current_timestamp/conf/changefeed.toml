@@ -1,0 +1,3 @@
+[consistent]
+level = "eventual"
+storage = "file:///tmp/tidb_cdc_test/ddl_default_current_timestamp/redo"

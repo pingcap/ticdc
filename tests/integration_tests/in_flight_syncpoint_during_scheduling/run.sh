@@ -34,6 +34,11 @@ run() {
 		return
 	fi
 
+	# TODO tenfyzhong 2026-02-26 16:17:25 Need to be compatible with next gen mode
+	if [ "${NEXT_GEN:-0}" = "1" ]; then
+		return
+	fi
+
 	rm -rf $WORK_DIR && mkdir -p $WORK_DIR
 
 	start_tidb_cluster --workdir $WORK_DIR
@@ -131,6 +136,8 @@ EOF
 
 	kill $dml_pid || true
 	wait $dml_pid || true
+
+	sleep 15
 
 	table_id=$(get_table_id "$DB_NAME" "$TABLE_NAME")
 	move_table_with_retry "127.0.0.1:8301" $table_id "$CHANGEFEED_ID" 10

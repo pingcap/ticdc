@@ -145,7 +145,7 @@ func newDispatcherStat(
 		scanWorkerIndex:    (common.GID)(id).Hash(scanWorkerCount),
 		messageWorkerIndex: (common.GID)(id).Hash(messageWorkerCount),
 		info:               info,
-		filter:             info.GetFilter(),
+		filter:             changefeedStatus.filter,
 		startTs:            info.GetStartTs(),
 		epoch:              info.GetEpoch(),
 		startTableInfo:     startTableInfo,
@@ -423,16 +423,31 @@ func (c *resolvedTsCache) reset() {
 
 type changefeedStatus struct {
 	changefeedID common.ChangeFeedID
+	filter       filter.Filter
 
 	dispatchers sync.Map // common.DispatcherID -> *atomic.Pointer[dispatcherStat]
 
 	availableMemoryQuota sync.Map // nodeID -> atomic.Uint64 (memory quota in bytes)
+	minSentTs            atomic.Uint64
+	scanInterval         atomic.Int64
+
+	lastAdjustTime      atomic.Time
+	lastTrendAdjustTime atomic.Time
+	usageWindow         *memoryUsageWindow
+	syncPointInterval   time.Duration
 }
 
-func newChangefeedStatus(changefeedID common.ChangeFeedID) *changefeedStatus {
-	return &changefeedStatus{
-		changefeedID: changefeedID,
+func newChangefeedStatus(changefeedID common.ChangeFeedID, syncPointInterval time.Duration) *changefeedStatus {
+	status := &changefeedStatus{
+		changefeedID:      changefeedID,
+		usageWindow:       newMemoryUsageWindow(memoryUsageWindowDuration),
+		syncPointInterval: syncPointInterval,
 	}
+	status.scanInterval.Store(int64(defaultScanInterval))
+	status.lastAdjustTime.Store(time.Now())
+	status.lastTrendAdjustTime.Store(time.Now())
+
+	return status
 }
 
 func (c *changefeedStatus) addDispatcher(id common.DispatcherID, dispatcher *atomic.Pointer[dispatcherStat]) {
@@ -450,4 +465,8 @@ func (c *changefeedStatus) isEmpty() bool {
 		return false // stop iteration
 	})
 	return empty
+}
+
+func (c *changefeedStatus) isSyncpointEnabled() bool {
+	return c.syncPointInterval > 0
 }
