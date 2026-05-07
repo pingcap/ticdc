@@ -39,14 +39,30 @@ const (
 )
 
 const (
-	encodedKeyUint64Len         = 8
-	encodedKeyTxnCommitTsStart  = 2 * encodedKeyUint64Len
-	encodedKeyTxnCommitTsEnd    = encodedKeyTxnCommitTsStart + encodedKeyUint64Len
-	encodedKeyAttributesOffset  = 4 * encodedKeyUint64Len
-	encodedKeyDMLOrderOffset    = encodedKeyAttributesOffset
+	// Encoded event-store key layout:
+	//
+	//   byte offset
+	//   0                   8                  16                 24                 32 33 34                 42
+	//   |-------------------|------------------|------------------|------------------|--|--|------------------|
+	//   | uniqueID (8B)     | tableID (8B)     | txnCommitTs (8B) | txnStartTs (8B)  |DO|CT| mask (8B)       | key...
+	//   |-------------------|------------------|------------------|------------------|--|--|------------------|
+	//
+	//   DO: DMLOrder (1 byte)
+	//   CT: CompressionType (1 byte)
+	//
+	// Mask bits:
+	//   bit 0: value passed through the encryption layer
+	//   bit 1+: reserved
+	encodedKeyUniqueIDOffset    = 0
+	encodedKeyTableIDOffset     = encodedKeyUniqueIDOffset + 8
+	encodedKeyTxnCommitTsOffset = encodedKeyTableIDOffset + 8
+	encodedKeyTxnStartTsOffset  = encodedKeyTxnCommitTsOffset + 8
+	encodedKeyDMLOrderOffset    = encodedKeyTxnStartTsOffset + 8
 	encodedKeyCompressionOffset = encodedKeyDMLOrderOffset + 1
 	encodedKeyMaskOffset        = encodedKeyCompressionOffset + 1
-	encodedKeyAttributesEnd     = encodedKeyMaskOffset + encodedKeyUint64Len
+
+	encodedKeyAttributesOffset = encodedKeyDMLOrderOffset
+	encodedKeyAttributesEnd    = encodedKeyMaskOffset + 8
 )
 
 const (
@@ -56,7 +72,7 @@ const (
 
 // encodeTxnCommitTsBoundaryKey encodes the event-store key boundary up to txnCommitTs.
 func encodeTxnCommitTsBoundaryKey(uniqueID uint64, tableID int64, txnCommitTs uint64) []byte {
-	buf := make([]byte, encodedKeyTxnCommitTsEnd)
+	buf := make([]byte, encodedKeyTxnStartTsOffset)
 	encodeTxnCommitTsBoundaryKeyTo(buf, uniqueID, tableID, txnCommitTs)
 	return buf
 }
@@ -64,14 +80,14 @@ func encodeTxnCommitTsBoundaryKey(uniqueID uint64, tableID int64, txnCommitTs ui
 func encodeScanLowerBound(uniqueID uint64, tableID int64, txnCommitTs uint64, txnStartTs uint64) []byte {
 	buf := make([]byte, encodedKeyAttributesOffset)
 	encodeTxnCommitTsBoundaryKeyTo(buf, uniqueID, tableID, txnCommitTs)
-	binary.BigEndian.PutUint64(buf[encodedKeyTxnCommitTsEnd:encodedKeyAttributesOffset], txnStartTs)
+	binary.BigEndian.PutUint64(buf[encodedKeyTxnStartTsOffset:encodedKeyDMLOrderOffset], txnStartTs)
 	return buf
 }
 
 func encodeTxnCommitTsBoundaryKeyTo(buf []byte, uniqueID uint64, tableID int64, txnCommitTs uint64) {
-	binary.BigEndian.PutUint64(buf[:encodedKeyUint64Len], uniqueID)
-	binary.BigEndian.PutUint64(buf[encodedKeyUint64Len:encodedKeyTxnCommitTsStart], uint64(tableID))
-	binary.BigEndian.PutUint64(buf[encodedKeyTxnCommitTsStart:encodedKeyTxnCommitTsEnd], txnCommitTs)
+	binary.BigEndian.PutUint64(buf[encodedKeyUniqueIDOffset:encodedKeyTableIDOffset], uniqueID)
+	binary.BigEndian.PutUint64(buf[encodedKeyTableIDOffset:encodedKeyTxnCommitTsOffset], uint64(tableID))
+	binary.BigEndian.PutUint64(buf[encodedKeyTxnCommitTsOffset:encodedKeyTxnStartTsOffset], txnCommitTs)
 }
 
 func encodedKeyLen(event *common.RawKVEntry) int {
@@ -112,7 +128,9 @@ func encodeKeyTo(
 }
 
 // EncodeKeyTo appends an encoded event-store key to buf.
-// Format: uniqueID, tableID, txnCommitTs, txnStartTs, delete/update/insert, Key.
+//
+//	| uniqueID | tableID | txnCommitTs | txnStartTs | dmlOrder | compressionType | mask | key |
+//	|   8B     |   8B    |     8B      |     8B     |    1B    |       1B        |  8B  | ... |
 func EncodeKeyTo(
 	buf []byte,
 	uniqueID uint64,
@@ -152,10 +170,10 @@ func KeyUsesEncryptionLayer(key []byte) bool {
 // It works for both full event keys and DeleteRange boundary keys because both
 // contain uniqueID, tableID, and txnCommitTs as the first three fields.
 func decodeTxnCommitTsFromEncodedKey(key []byte) (uint64, bool) {
-	if len(key) < encodedKeyTxnCommitTsEnd {
+	if len(key) < encodedKeyTxnStartTsOffset {
 		return 0, false
 	}
-	return binary.BigEndian.Uint64(key[encodedKeyTxnCommitTsStart:encodedKeyTxnCommitTsEnd]), true
+	return binary.BigEndian.Uint64(key[encodedKeyTxnCommitTsOffset:encodedKeyTxnStartTsOffset]), true
 }
 
 // getDMLOrder returns the order of the dml types: delete<update<insert

@@ -163,7 +163,7 @@ func TestEventStoreKeyBounds(t *testing.T) {
 	}
 	key := EncodeKey(1, 1, event, CompressionNone)
 	commitTsBoundaryKey := encodeTxnCommitTsBoundaryKey(1, 1, event.CRTs)
-	require.Len(t, commitTsBoundaryKey, encodedKeyTxnCommitTsEnd)
+	require.Len(t, commitTsBoundaryKey, encodedKeyTxnStartTsOffset)
 	require.True(t, bytes.HasPrefix(key, commitTsBoundaryKey))
 
 	lowerBound := encodeScanLowerBound(1, 1, event.CRTs, event.StartTs)
