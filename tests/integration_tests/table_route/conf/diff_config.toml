@@ -24,6 +24,8 @@ check-struct-only = false
         "target_db.partitioned_events_routed",
         "target_db.truncate_test_routed",
         "target_db.finish_mark_routed",
+        "target_extra_db.external_users_routed",
+        "target_extra_db.cross_move_target_routed",
     ]
 
 [data-sources]
@@ -43,6 +45,8 @@ check-struct-only = false
         "partitioned_events",
         "truncate_test",
         "finish_mark",
+        "external_users",
+        "cross_move_target",
     ]
 
 [data-sources.mysql1]
@@ -110,3 +114,15 @@ schema-pattern = "source_db"
 table-pattern = "finish_mark"
 target-schema = "target_db"
 target-table = "finish_mark_routed"
+
+[routes.external_users]
+schema-pattern = "source_extra_db"
+table-pattern = "external_users"
+target-schema = "target_extra_db"
+target-table = "external_users_routed"
+
+[routes.cross_move_target]
+schema-pattern = "source_extra_db"
+table-pattern = "cross_move_target"
+target-schema = "target_extra_db"
+target-table = "cross_move_target_routed"

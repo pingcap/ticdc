@@ -1,6 +1,8 @@
 -- Test mixed DDL and DML operations for table route.
 DROP DATABASE IF EXISTS source_db;
+DROP DATABASE IF EXISTS source_extra_db;
 CREATE DATABASE source_db;
+CREATE DATABASE source_extra_db;
 USE source_db;
 
 -- ============================================
@@ -76,6 +78,22 @@ ALTER TABLE users DROP COLUMN created_at;
 -- DDL: ALTER TABLE ADD INDEX
 -- ============================================
 ALTER TABLE orders ADD INDEX idx_user_id (user_id);
+
+-- ============================================
+-- DDL: CROSS DATABASE
+-- ============================================
+CREATE TABLE `source_extra_db`.`external_users` LIKE `source_db`.`users`;
+INSERT INTO `source_extra_db`.`external_users`
+    SELECT `id`, `name`, `email` FROM `source_db`.`users` WHERE `id` <= 2;
+UPDATE `source_extra_db`.`external_users` SET `email` = 'external_alice@example.com' WHERE `id` = 1;
+
+CREATE TABLE `source_db`.`cross_move_source` (
+    id INT PRIMARY KEY,
+    value VARCHAR(50)
+);
+INSERT INTO `source_db`.`cross_move_source` VALUES (1, 'move_source');
+RENAME TABLE `source_db`.`cross_move_source` TO `source_extra_db`.`cross_move_target`;
+INSERT INTO `source_extra_db`.`cross_move_target` VALUES (2, 'move_target');
 
 -- ============================================
 -- DDL: RENAME TABLE
