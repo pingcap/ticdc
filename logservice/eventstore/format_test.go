@@ -69,7 +69,7 @@ func TestEventStoreKeyFormatGolden(t *testing.T) {
 
 	require.Equal(t, expectedKey[:encodedKeyTxnCommitTsOffset+encodedKeyTxnCommitTsLen],
 		encodeTxnCommitTsBoundaryKey(uniqueID, tableID, txnCommitTs))
-	require.Equal(t, expectedKey[:encodedKeyAttributesOffset],
+	require.Equal(t, expectedKey[:encodedKeyTxnStartTsOffset+encodedKeyTxnStartTsLen],
 		encodeScanLowerBound(uniqueID, tableID, txnCommitTs, txnStartTs))
 
 	decodedTxnCommitTs, ok := decodeTxnCommitTsFromEncodedKey(key)

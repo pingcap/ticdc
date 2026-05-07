@@ -81,13 +81,13 @@ const (
 
 // encodeTxnCommitTsBoundaryKey encodes the event-store key boundary up to txnCommitTs.
 func encodeTxnCommitTsBoundaryKey(uniqueID uint64, tableID int64, txnCommitTs uint64) []byte {
-	buf := make([]byte, encodedKeyTxnStartTsOffset)
+	buf := make([]byte, encodedKeyTxnCommitTsOffset+encodedKeyTxnCommitTsLen)
 	encodeTxnCommitTsBoundaryKeyTo(buf, uniqueID, tableID, txnCommitTs)
 	return buf
 }
 
 func encodeScanLowerBound(uniqueID uint64, tableID int64, txnCommitTs uint64, txnStartTs uint64) []byte {
-	buf := make([]byte, encodedKeyAttributesOffset)
+	buf := make([]byte, encodedKeyTxnStartTsOffset+encodedKeyTxnStartTsLen)
 	encodeTxnCommitTsBoundaryKeyTo(buf, uniqueID, tableID, txnCommitTs)
 	binary.BigEndian.PutUint64(buf[encodedKeyTxnStartTsOffset:encodedKeyTxnStartTsOffset+encodedKeyTxnStartTsLen], txnStartTs)
 	return buf
@@ -180,7 +180,7 @@ func KeyUsesEncryptionLayer(key []byte) bool {
 // It works for both full event keys and DeleteRange boundary keys because both
 // contain uniqueID, tableID, and txnCommitTs as the first three fields.
 func decodeTxnCommitTsFromEncodedKey(key []byte) (uint64, bool) {
-	if len(key) < encodedKeyTxnStartTsOffset {
+	if len(key) < encodedKeyTxnCommitTsOffset+encodedKeyTxnCommitTsLen {
 		return 0, false
 	}
 	return binary.BigEndian.Uint64(key[encodedKeyTxnCommitTsOffset : encodedKeyTxnCommitTsOffset+encodedKeyTxnCommitTsLen]), true
