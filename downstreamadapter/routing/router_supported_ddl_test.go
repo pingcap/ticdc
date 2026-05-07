@@ -1083,30 +1083,4 @@ func TestApplyToDDLEventRoutesDDLEventMetadata(t *testing.T) {
 	require.Equal(t, "t1_r", routedCreateTables.MultipleTableInfos[0].GetTargetTableName())
 	require.Equal(t, "target_db", routedCreateTables.MultipleTableInfos[1].GetTargetSchemaName())
 	require.Equal(t, "t2_r", routedCreateTables.MultipleTableInfos[1].GetTargetTableName())
-
-	renameDDL := helper.DDL2Event(
-		"RENAME TABLE `source_db`.`t1` TO `source_db`.`t1_new`, `source_db`.`t2` TO `source_db`.`t2_new`")
-	routedRename, err := router.ApplyToDDLEvent(renameDDL)
-	require.NoError(t, err)
-
-	events := routedRename.GetEvents()
-	require.Len(t, events, 2)
-
-	require.Equal(t, "source_db", events[0].SchemaName)
-	require.Equal(t, "t1_new", events[0].TableName)
-	require.Equal(t, "target_db", events[0].GetTargetSchemaName())
-	require.Equal(t, "t1_new_r", events[0].GetTargetTableName())
-	require.Equal(t, "source_db", events[0].ExtraSchemaName)
-	require.Equal(t, "t1", events[0].ExtraTableName)
-	require.Equal(t, "target_db", events[0].GetTargetExtraSchemaName())
-	require.Equal(t, "t1_r", events[0].GetTargetExtraTableName())
-
-	require.Equal(t, "source_db", events[1].SchemaName)
-	require.Equal(t, "t2_new", events[1].TableName)
-	require.Equal(t, "target_db", events[1].GetTargetSchemaName())
-	require.Equal(t, "t2_new_r", events[1].GetTargetTableName())
-	require.Equal(t, "source_db", events[1].ExtraSchemaName)
-	require.Equal(t, "t2", events[1].ExtraTableName)
-	require.Equal(t, "target_db", events[1].GetTargetExtraSchemaName())
-	require.Equal(t, "t2_r", events[1].GetTargetExtraTableName())
 }

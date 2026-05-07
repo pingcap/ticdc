@@ -257,23 +257,19 @@ func (d *DDLEvent) GetTableID() int64 {
 func (d *DDLEvent) GetEvents() []*DDLEvent {
 	// Some ddl event may be multi-events, we need to split it into multiple messages.
 	// Such as rename table test.table1 to test.table10, test.table2 to test.table20
-	actionType := model.ActionType(d.Type)
-	switch actionType {
+	switch model.ActionType(d.Type) {
 	case model.ActionCreateTables, model.ActionRenameTables:
 		events := make([]*DDLEvent, 0, len(d.MultipleTableInfos))
 		queries, err := SplitQueries(d.Query)
 		if err != nil {
 			log.Panic("split queries failed", zap.Error(err))
 		}
-		if actionType == model.ActionRenameTables && len(queries) == 1 && len(d.MultipleTableInfos) > 1 {
-			queries = splitRenameTablesQuery(queries[0])
-		}
 		if len(queries) != len(d.MultipleTableInfos) {
 			log.Panic("queries length should be equal to multipleTableInfos length", zap.String("query", d.Query), zap.Any("multipleTableInfos", d.MultipleTableInfos))
 		}
 
 		t := model.ActionCreateTable
-		if actionType == model.ActionRenameTables {
+		if model.ActionType(d.Type) == model.ActionRenameTables {
 			t = model.ActionRenameTable
 		}
 		for i, info := range d.MultipleTableInfos {
@@ -289,7 +285,7 @@ func (d *DDLEvent) GetEvents() []*DDLEvent {
 				StartTs:          d.StartTs,
 				FinishedTs:       d.FinishedTs,
 			}
-			if actionType == model.ActionRenameTables {
+			if model.ActionType(d.Type) == model.ActionRenameTables {
 				event.ExtraSchemaName = d.TableNameChange.DropName[i].SchemaName
 				event.ExtraTableName = d.TableNameChange.DropName[i].TableName
 				targetExtraSchemaName, targetExtraTableName := extractRenameTargetExtraFromQuery(queries[i])
@@ -302,28 +298,6 @@ func (d *DDLEvent) GetEvents() []*DDLEvent {
 	default:
 	}
 	return []*DDLEvent{d}
-}
-
-func splitRenameTablesQuery(query string) []string {
-	stmt, err := parser.New().ParseOneStmt(query, "", "")
-	if err != nil {
-		log.Panic("parse rename tables query failed", zap.String("query", query), zap.Error(err))
-	}
-	renameStmt, ok := stmt.(*ast.RenameTableStmt)
-	if !ok || len(renameStmt.TableToTables) == 0 {
-		log.Panic("unexpected rename tables query", zap.String("query", query), zap.Any("stmt", stmt))
-	}
-
-	queries := make([]string, 0, len(renameStmt.TableToTables))
-	for _, tableToTable := range renameStmt.TableToTables {
-		singleStmt := &ast.RenameTableStmt{TableToTables: []*ast.TableToTable{tableToTable}}
-		restoredQuery, err := Restore(singleStmt)
-		if err != nil {
-			log.Panic("restore split rename query failed", zap.String("query", query), zap.Error(err))
-		}
-		queries = append(queries, restoredQuery+";")
-	}
-	return queries
 }
 
 func extractRenameTargetExtraFromQuery(query string) (string, string) {

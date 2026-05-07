@@ -42,6 +42,8 @@ func TestGenDeleteMultiRows(t *testing.T) {
 }
 
 func TestGenMultiRowSQLUsesRoutedTargetTable(t *testing.T) {
+	t.Parallel()
+
 	sourceTableInfo, routedTableInfo := mockRoutedTableInfo(
 		t,
 		"CREATE TABLE tb1 (id INT PRIMARY KEY, name INT)",
