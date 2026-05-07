@@ -1,0 +1,8 @@
+case-sensitive = true
+
+[filter]
+  rules = ["test_db_not_exist.*"]
+
+[scheduler]
+  enable-table-across-nodes = true
+  region-threshold = 1000
