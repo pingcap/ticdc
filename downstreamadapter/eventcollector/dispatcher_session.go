@@ -117,7 +117,6 @@ type dispatcherSession struct {
 	// two-phase add flow. A non-nil callback defers committing the dispatcher
 	// until CommitAddDispatcher is called.
 	readyCallback func()
-
 	// connState tracks which EventService this session is currently talking to.
 	connState dispatcherConnState
 }
