@@ -261,6 +261,10 @@ var (
 		"invalid table routing rule",
 		errors.RFCCodeText("CDC:ErrInvalidTableRoutingRule"),
 	)
+	ErrTableRoutingFailed = errors.Normalize(
+		"table routing failed",
+		errors.RFCCodeText("CDC:ErrTableRoutingFailed"),
+	)
 	ErrMessageTooLarge = errors.Normalize(
 		"message is too large. table:%s, length:%d, maxMessageBytes:%d",
 		errors.RFCCodeText("CDC:ErrMessageTooLarge"),
