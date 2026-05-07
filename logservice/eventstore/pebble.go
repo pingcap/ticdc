@@ -32,6 +32,7 @@ const (
 	cacheSize         = 1 << 30  // 1GB
 	memTableTotalSize = 1 << 30  // 1GB
 	memTableSize      = 64 << 20 // 64MB
+	maxOpenFilesPerDB = 10000
 )
 
 func newPebbleOptions(dbNum int) *pebble.Options {
@@ -39,7 +40,7 @@ func newPebbleOptions(dbNum int) *pebble.Options {
 		// Disable WAL to decrease io
 		DisableWAL: true,
 
-		MaxOpenFiles: 10000,
+		MaxOpenFiles: maxOpenFilesPerDB,
 
 		MaxConcurrentCompactions: func() int { return 6 },
 
@@ -74,9 +75,10 @@ func newPebbleOptions(dbNum int) *pebble.Options {
 	return opts
 }
 
-func createPebbleDBs(rootDir string, dbNum int) []*pebble.DB {
+func createPebbleDBs(rootDir string, dbNum int) ([]*pebble.DB, *pebble.Cache, *pebble.TableCache) {
 	cache := pebble.NewCache(cacheSize)
-	tableCache := pebble.NewTableCache(cache, dbNum, int(cache.MaxSize()))
+	tableCacheSize := dbNum * pebble.TableCacheSize(maxOpenFilesPerDB)
+	tableCache := pebble.NewTableCache(cache, dbNum, tableCacheSize)
 	dbs := make([]*pebble.DB, dbNum)
 	for i := 0; i < dbNum; i++ {
 		id := strconv.Itoa(i + 1)
@@ -113,7 +115,7 @@ func createPebbleDBs(rootDir string, dbNum int) []*pebble.DB {
 		}
 		dbs[i] = db
 	}
-	return dbs
+	return dbs, cache, tableCache
 }
 
 type eventStoreWriteStallState struct {
