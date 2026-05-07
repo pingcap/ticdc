@@ -360,7 +360,7 @@ func (w *Writer) GetTableRecoveryInfo(tableIDs []int64) ([]int64, []bool, []bool
 
 	query := selectDDLTsQuery(tableIDs, ticdcClusterID, changefeedID)
 	log.Info("query ddl ts table", zap.String("query", query))
-	rows, err := w.db.Query(query)
+	rows, err := w.db.QueryContext(w.ctx, query)
 	if err != nil {
 		action, handleErr := w.handleDDLTsTableQueryError(err)
 		if handleErr != nil {
@@ -375,7 +375,7 @@ func (w *Writer) GetTableRecoveryInfo(tableIDs []int64) ([]int64, []bool, []bool
 			return retStartTsList, skipSyncpointAtStartTs, skipDMLAsStartTsList, nil
 		}
 		if action == ddlTsTableErrorRetry {
-			rows, err = w.db.Query(query)
+			rows, err = w.db.QueryContext(w.ctx, query)
 		}
 		if err != nil {
 			return retStartTsList, skipSyncpointAtStartTs, skipDMLAsStartTsList, errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to check ddl ts table; Query is %s", query)))
@@ -523,7 +523,7 @@ func (w *Writer) RemoveDDLTsItem() error {
 	_, err = tx.Exec(query)
 	if err != nil {
 		if rbErr := tx.Rollback(); rbErr != nil {
-			log.Error("failed to rollback", zap.Error(rbErr))
+			log.Warn("failed to rollback ddl ts cleanup transaction", zap.Error(rbErr))
 		}
 		action, handleErr := w.handleDDLTsTableQueryError(err)
 		if handleErr != nil {
@@ -540,12 +540,13 @@ func (w *Writer) RemoveDDLTsItem() error {
 		if action == ddlTsTableErrorRetry {
 			return w.removeDDLTsItemWithQuery(query)
 		}
-		log.Error("failed to delete ddl ts item ", zap.Error(err))
 		return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to delete ddl ts item; Query is %s", query)))
 	}
 
-	err = tx.Commit()
-	return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to delete ddl ts item; Query is %s", query)))
+	if err = tx.Commit(); err != nil {
+		return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to delete ddl ts item; Query is %s", query)))
+	}
+	return nil
 }
 
 func (w *Writer) removeDDLTsItemWithQuery(query string) error {
@@ -556,16 +557,17 @@ func (w *Writer) removeDDLTsItemWithQuery(query string) error {
 
 	_, err = tx.Exec(query)
 	if err != nil {
-		log.Error("failed to delete ddl ts item ", zap.Error(err))
 		err2 := tx.Rollback()
 		if err2 != nil {
-			log.Error("failed to delete ddl ts item", zap.Error(err2))
+			log.Warn("failed to rollback ddl ts cleanup transaction", zap.Error(err2))
 		}
 		return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to delete ddl ts item; Query is %s", query)))
 	}
 
-	err = tx.Commit()
-	return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to delete ddl ts item; Query is %s", query)))
+	if err = tx.Commit(); err != nil {
+		return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to delete ddl ts item; Query is %s", query)))
+	}
+	return nil
 }
 
 func (w *Writer) handleDDLTsTableQueryError(queryErr error) (ddlTsTableErrorAction, error) {
