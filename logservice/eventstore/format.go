@@ -43,14 +43,14 @@ const (
 	encodedKeyTxnCommitTsStart = 2 * encodedKeyUint64Len
 	encodedKeyTxnCommitTsEnd   = encodedKeyTxnCommitTsStart + encodedKeyUint64Len
 	encodedKeyAttributesOffset = 4 * encodedKeyUint64Len
-	encodedKeyAttributesEnd    = encodedKeyAttributesOffset + 2
+	encodedKeyAttributesEnd    = encodedKeyAttributesOffset + 4
 )
 
 const (
 	// Bitmask for DML order and compression type.
 	dmlOrderMask        = 0xFF00 // DML order is stored in the high 8 bits for sorting.
-	compressionMask     = 0x000F // Compression type is stored in the low 4 bits.
-	encryptionLayerMask = 0x0010 // Value went through encryption layer and carries a 4-byte header.
+	compressionMask     = 0x00FF // Compression type is stored in the low 8 bits.
+	encryptionLayerMask = 0x10000
 	dmlOrderShift       = 8
 )
 
@@ -100,11 +100,11 @@ func encodeKeyTo(
 	buf = binary.BigEndian.AppendUint64(buf, event.StartTs)
 	// Let Delete < Update < Insert
 	dmlOrder := getDMLOrder(event)
-	combinedOrder := uint16(compressionType) | (uint16(dmlOrder) << dmlOrderShift)
+	combinedOrder := uint32(compressionType) | (uint32(dmlOrder) << dmlOrderShift)
 	if usesEncryptionLayer {
 		combinedOrder |= encryptionLayerMask
 	}
-	buf = binary.BigEndian.AppendUint16(buf, combinedOrder)
+	buf = binary.BigEndian.AppendUint32(buf, combinedOrder)
 	// key
 	return append(buf, event.Key...)
 }
@@ -138,12 +138,12 @@ func EncodeKey(uniqueID uint64, tableID int64, event *common.RawKVEntry, compres
 
 // DecodeKeyAttributes decodes compression type and dml order from the key.
 func DecodeKeyAttributes(key []byte) (DMLOrder, CompressionType) {
-	combinedOrder := binary.BigEndian.Uint16(key[encodedKeyAttributesOffset:encodedKeyAttributesEnd])
+	combinedOrder := binary.BigEndian.Uint32(key[encodedKeyAttributesOffset:encodedKeyAttributesEnd])
 	return DMLOrder((combinedOrder & dmlOrderMask) >> dmlOrderShift), CompressionType(combinedOrder & compressionMask)
 }
 
 func KeyUsesEncryptionLayer(key []byte) bool {
-	combinedOrder := binary.BigEndian.Uint16(key[encodedKeyAttributesOffset:encodedKeyAttributesEnd])
+	combinedOrder := binary.BigEndian.Uint32(key[encodedKeyAttributesOffset:encodedKeyAttributesEnd])
 	return combinedOrder&encryptionLayerMask != 0
 }
 
