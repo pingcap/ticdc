@@ -53,16 +53,25 @@ const (
 	// Mask bits:
 	//   bit 0: value passed through the encryption layer
 	//   bit 1+: reserved
-	encodedKeyUniqueIDOffset    = 0
-	encodedKeyTableIDOffset     = encodedKeyUniqueIDOffset + 8
-	encodedKeyTxnCommitTsOffset = encodedKeyTableIDOffset + 8
-	encodedKeyTxnStartTsOffset  = encodedKeyTxnCommitTsOffset + 8
-	encodedKeyDMLOrderOffset    = encodedKeyTxnStartTsOffset + 8
-	encodedKeyCompressionOffset = encodedKeyDMLOrderOffset + 1
-	encodedKeyMaskOffset        = encodedKeyCompressionOffset + 1
+	encodedKeyUniqueIDLen    = 8
+	encodedKeyTableIDLen     = 8
+	encodedKeyTxnCommitTsLen = 8
+	encodedKeyTxnStartTsLen  = 8
+	encodedKeyDMLOrderLen    = 1
+	encodedKeyCompressionLen = 1
+	encodedKeyMaskLen        = 8
 
+	encodedKeyUniqueIDOffset    = 0
+	encodedKeyTableIDOffset     = encodedKeyUniqueIDOffset + encodedKeyUniqueIDLen
+	encodedKeyTxnCommitTsOffset = encodedKeyTableIDOffset + encodedKeyTableIDLen
+	encodedKeyTxnStartTsOffset  = encodedKeyTxnCommitTsOffset + encodedKeyTxnCommitTsLen
+	encodedKeyDMLOrderOffset    = encodedKeyTxnStartTsOffset + encodedKeyTxnStartTsLen
+	encodedKeyCompressionOffset = encodedKeyDMLOrderOffset + encodedKeyDMLOrderLen
+	encodedKeyMaskOffset        = encodedKeyCompressionOffset + encodedKeyCompressionLen
+
+	encodedKeyAttributesLen    = encodedKeyDMLOrderLen + encodedKeyCompressionLen + encodedKeyMaskLen
 	encodedKeyAttributesOffset = encodedKeyDMLOrderOffset
-	encodedKeyAttributesEnd    = encodedKeyMaskOffset + 8
+	encodedKeyAttributesEnd    = encodedKeyAttributesOffset + encodedKeyAttributesLen
 )
 
 const (
@@ -80,14 +89,14 @@ func encodeTxnCommitTsBoundaryKey(uniqueID uint64, tableID int64, txnCommitTs ui
 func encodeScanLowerBound(uniqueID uint64, tableID int64, txnCommitTs uint64, txnStartTs uint64) []byte {
 	buf := make([]byte, encodedKeyAttributesOffset)
 	encodeTxnCommitTsBoundaryKeyTo(buf, uniqueID, tableID, txnCommitTs)
-	binary.BigEndian.PutUint64(buf[encodedKeyTxnStartTsOffset:encodedKeyDMLOrderOffset], txnStartTs)
+	binary.BigEndian.PutUint64(buf[encodedKeyTxnStartTsOffset:encodedKeyTxnStartTsOffset+encodedKeyTxnStartTsLen], txnStartTs)
 	return buf
 }
 
 func encodeTxnCommitTsBoundaryKeyTo(buf []byte, uniqueID uint64, tableID int64, txnCommitTs uint64) {
-	binary.BigEndian.PutUint64(buf[encodedKeyUniqueIDOffset:encodedKeyTableIDOffset], uniqueID)
-	binary.BigEndian.PutUint64(buf[encodedKeyTableIDOffset:encodedKeyTxnCommitTsOffset], uint64(tableID))
-	binary.BigEndian.PutUint64(buf[encodedKeyTxnCommitTsOffset:encodedKeyTxnStartTsOffset], txnCommitTs)
+	binary.BigEndian.PutUint64(buf[encodedKeyUniqueIDOffset:encodedKeyUniqueIDOffset+encodedKeyUniqueIDLen], uniqueID)
+	binary.BigEndian.PutUint64(buf[encodedKeyTableIDOffset:encodedKeyTableIDOffset+encodedKeyTableIDLen], uint64(tableID))
+	binary.BigEndian.PutUint64(buf[encodedKeyTxnCommitTsOffset:encodedKeyTxnCommitTsOffset+encodedKeyTxnCommitTsLen], txnCommitTs)
 }
 
 func encodedKeyLen(event *common.RawKVEntry) int {
@@ -162,7 +171,7 @@ func DecodeKeyAttributes(key []byte) (DMLOrder, CompressionType) {
 }
 
 func KeyUsesEncryptionLayer(key []byte) bool {
-	mask := binary.BigEndian.Uint64(key[encodedKeyMaskOffset:encodedKeyAttributesEnd])
+	mask := binary.BigEndian.Uint64(key[encodedKeyMaskOffset : encodedKeyMaskOffset+encodedKeyMaskLen])
 	return mask&encodedKeyMaskEncryption != 0
 }
 
@@ -173,7 +182,7 @@ func decodeTxnCommitTsFromEncodedKey(key []byte) (uint64, bool) {
 	if len(key) < encodedKeyTxnStartTsOffset {
 		return 0, false
 	}
-	return binary.BigEndian.Uint64(key[encodedKeyTxnCommitTsOffset:encodedKeyTxnStartTsOffset]), true
+	return binary.BigEndian.Uint64(key[encodedKeyTxnCommitTsOffset : encodedKeyTxnCommitTsOffset+encodedKeyTxnCommitTsLen]), true
 }
 
 // getDMLOrder returns the order of the dml types: delete<update<insert

@@ -42,6 +42,16 @@ func TestEventStoreKeyFormatGolden(t *testing.T) {
 	require.Equal(t, expectedKey, key)
 	require.Equal(t, len(expectedKey), encodedKeyLen(event))
 
+	require.Equal(t, 8, encodedKeyUniqueIDLen)
+	require.Equal(t, 8, encodedKeyTableIDLen)
+	require.Equal(t, 8, encodedKeyTxnCommitTsLen)
+	require.Equal(t, 8, encodedKeyTxnStartTsLen)
+	require.Equal(t, 1, encodedKeyDMLOrderLen)
+	require.Equal(t, 1, encodedKeyCompressionLen)
+	require.Equal(t, 8, encodedKeyMaskLen)
+
+	require.Equal(t, 0, encodedKeyUniqueIDOffset)
+	require.Equal(t, 8, encodedKeyTableIDOffset)
 	require.Equal(t, 16, encodedKeyTxnCommitTsOffset)
 	require.Equal(t, 24, encodedKeyTxnStartTsOffset)
 	require.Equal(t, 32, encodedKeyDMLOrderOffset)
@@ -49,8 +59,15 @@ func TestEventStoreKeyFormatGolden(t *testing.T) {
 	require.Equal(t, 33, encodedKeyCompressionOffset)
 	require.Equal(t, 34, encodedKeyMaskOffset)
 	require.Equal(t, 42, encodedKeyAttributesEnd)
+	require.Equal(t, encodedKeyTableIDOffset, encodedKeyUniqueIDOffset+encodedKeyUniqueIDLen)
+	require.Equal(t, encodedKeyTxnCommitTsOffset, encodedKeyTableIDOffset+encodedKeyTableIDLen)
+	require.Equal(t, encodedKeyTxnStartTsOffset, encodedKeyTxnCommitTsOffset+encodedKeyTxnCommitTsLen)
+	require.Equal(t, encodedKeyDMLOrderOffset, encodedKeyTxnStartTsOffset+encodedKeyTxnStartTsLen)
+	require.Equal(t, encodedKeyCompressionOffset, encodedKeyDMLOrderOffset+encodedKeyDMLOrderLen)
+	require.Equal(t, encodedKeyMaskOffset, encodedKeyCompressionOffset+encodedKeyCompressionLen)
+	require.Equal(t, encodedKeyAttributesEnd, encodedKeyMaskOffset+encodedKeyMaskLen)
 
-	require.Equal(t, expectedKey[:encodedKeyTxnStartTsOffset],
+	require.Equal(t, expectedKey[:encodedKeyTxnCommitTsOffset+encodedKeyTxnCommitTsLen],
 		encodeTxnCommitTsBoundaryKey(uniqueID, tableID, txnCommitTs))
 	require.Equal(t, expectedKey[:encodedKeyAttributesOffset],
 		encodeScanLowerBound(uniqueID, tableID, txnCommitTs, txnStartTs))
