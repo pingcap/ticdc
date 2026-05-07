@@ -22,7 +22,7 @@ import (
 	"go.uber.org/zap"
 )
 
-type DMLOrder uint16
+type DMLOrder uint8
 
 const (
 	// DML type order, used for sorting.
@@ -31,7 +31,7 @@ const (
 	DMLOrderInsert
 )
 
-type CompressionType uint16
+type CompressionType uint8
 
 const (
 	CompressionNone CompressionType = iota
@@ -39,19 +39,19 @@ const (
 )
 
 const (
-	encodedKeyUint64Len        = 8
-	encodedKeyTxnCommitTsStart = 2 * encodedKeyUint64Len
-	encodedKeyTxnCommitTsEnd   = encodedKeyTxnCommitTsStart + encodedKeyUint64Len
-	encodedKeyAttributesOffset = 4 * encodedKeyUint64Len
-	encodedKeyAttributesEnd    = encodedKeyAttributesOffset + 4
+	encodedKeyUint64Len         = 8
+	encodedKeyTxnCommitTsStart  = 2 * encodedKeyUint64Len
+	encodedKeyTxnCommitTsEnd    = encodedKeyTxnCommitTsStart + encodedKeyUint64Len
+	encodedKeyAttributesOffset  = 4 * encodedKeyUint64Len
+	encodedKeyDMLOrderOffset    = encodedKeyAttributesOffset
+	encodedKeyCompressionOffset = encodedKeyDMLOrderOffset + 1
+	encodedKeyMaskOffset        = encodedKeyCompressionOffset + 1
+	encodedKeyAttributesEnd     = encodedKeyMaskOffset + encodedKeyUint64Len
 )
 
 const (
-	// Bitmask for DML order and compression type.
-	dmlOrderMask        = 0xFF00 // DML order is stored in the high 8 bits for sorting.
-	compressionMask     = 0x00FF // Compression type is stored in the low 8 bits.
-	encryptionLayerMask = 0x10000
-	dmlOrderShift       = 8
+	// encodedKeyMaskEncryption indicates the value passed through the encryption layer.
+	encodedKeyMaskEncryption uint64 = 1 << iota
 )
 
 // encodeTxnCommitTsBoundaryKey encodes the event-store key boundary up to txnCommitTs.
@@ -75,7 +75,7 @@ func encodeTxnCommitTsBoundaryKeyTo(buf []byte, uniqueID uint64, tableID int64, 
 }
 
 func encodedKeyLen(event *common.RawKVEntry) int {
-	// uniqueID, tableID, txnCommitTs, txnStartTs, Put/Delete, CompressionType, Key
+	// uniqueID, tableID, txnCommitTs, txnStartTs, DMLOrder, CompressionType, Mask, Key
 	return encodedKeyAttributesEnd + len(event.Key)
 }
 
@@ -100,11 +100,13 @@ func encodeKeyTo(
 	buf = binary.BigEndian.AppendUint64(buf, event.StartTs)
 	// Let Delete < Update < Insert
 	dmlOrder := getDMLOrder(event)
-	combinedOrder := uint32(compressionType) | (uint32(dmlOrder) << dmlOrderShift)
+	buf = append(buf, byte(dmlOrder))
+	buf = append(buf, byte(compressionType))
+	mask := uint64(0)
 	if usesEncryptionLayer {
-		combinedOrder |= encryptionLayerMask
+		mask |= encodedKeyMaskEncryption
 	}
-	buf = binary.BigEndian.AppendUint32(buf, combinedOrder)
+	buf = binary.BigEndian.AppendUint64(buf, mask)
 	// key
 	return append(buf, event.Key...)
 }
@@ -138,13 +140,12 @@ func EncodeKey(uniqueID uint64, tableID int64, event *common.RawKVEntry, compres
 
 // DecodeKeyAttributes decodes compression type and dml order from the key.
 func DecodeKeyAttributes(key []byte) (DMLOrder, CompressionType) {
-	combinedOrder := binary.BigEndian.Uint32(key[encodedKeyAttributesOffset:encodedKeyAttributesEnd])
-	return DMLOrder((combinedOrder & dmlOrderMask) >> dmlOrderShift), CompressionType(combinedOrder & compressionMask)
+	return DMLOrder(key[encodedKeyDMLOrderOffset]), CompressionType(key[encodedKeyCompressionOffset])
 }
 
 func KeyUsesEncryptionLayer(key []byte) bool {
-	combinedOrder := binary.BigEndian.Uint32(key[encodedKeyAttributesOffset:encodedKeyAttributesEnd])
-	return combinedOrder&encryptionLayerMask != 0
+	mask := binary.BigEndian.Uint64(key[encodedKeyMaskOffset:encodedKeyAttributesEnd])
+	return mask&encodedKeyMaskEncryption != 0
 }
 
 // decodeTxnCommitTsFromEncodedKey decodes txnCommitTs from an event-store key boundary.
