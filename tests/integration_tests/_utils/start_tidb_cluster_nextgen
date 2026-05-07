@@ -95,6 +95,9 @@ if [ -z "$OUT_DIR" ]; then
 	exit 1
 fi
 
+echo "Checking TiKV version information..."
+tikv-server -V
+
 # start minio
 echo "Starting MinIO server..."
 mkdir -p "$TEST_DATA_DIR/minio"
@@ -215,11 +218,8 @@ s3-secret-key = "$MINIO_ROOT_PASSWORD"
 s3-bucket = "cse-test-up"
 s3-region = "local"
 
-[rfengine]
-wal-sync-dir = "$TEST_DATA_DIR/wal-sync/upstream/tikv/raft-wal"
-lightweight-backup = true
-target-file-size = "512MB"
-wal-chunk-target-file-size = "128MB"
+[cdc]
+enable = true
 EOF
 
 touch "$OUT_DIR/downstream-tikv.toml"
@@ -244,23 +244,35 @@ wal-sync-dir = "$TEST_DATA_DIR/wal-sync/downstream/tikv/raft-wal"
 lightweight-backup = true
 target-file-size = "512MB"
 wal-chunk-target-file-size = "128MB"
+
+[cdc]
+enable = true
 EOF
 
 echo "Starting upstream TiKV..."
 mkdir -p "$TEST_DATA_DIR/upstream"
 mkdir -p "$OUT_DIR/log/upstream/tikv"
-tikv-server --version
 for idx in $(seq 1 3); do
 	host="UP_TIKV_HOST_$idx"
 	port="UP_TIKV_PORT_$idx"
 	status_port="UP_TIKV_STATUS_PORT_$idx"
+	upstream_tikv_config="$OUT_DIR/upstream-tikv$idx.toml"
+	cp "$OUT_DIR/upstream-tikv.toml" "$upstream_tikv_config"
+	cat >>"$upstream_tikv_config" <<EOF
+[rfengine]
+wal-sync-dir = "$TEST_DATA_DIR/wal-sync/upstream/tikv$idx/raft-wal"
+lightweight-backup = true
+target-file-size = "512MB"
+wal-chunk-target-file-size = "128MB"
+EOF
+	mkdir -p "$TEST_DATA_DIR/wal-sync/upstream/tikv$idx/raft-wal"
 	tikv-server \
 		--pd "${UP_PD_HOST_1}:${UP_PD_PORT_1}" \
 		-A "${!host}:${!port}" \
 		--status-addr "${!host}:${!status_port}" \
 		--log-file "$OUT_DIR/log/upstream/tikv/tikv$idx.log" \
 		--log-level info \
-		-C "$OUT_DIR/upstream-tikv.toml" \
+		-C "$upstream_tikv_config" \
 		-s "$TEST_DATA_DIR/upstream/tikv$idx" \
 		>"$OUT_DIR/log/upstream/tikv/tikv$idx-stdout.log" \
 		2>"$OUT_DIR/log/upstream/tikv/tikv$idx-stderr.log" &
@@ -269,7 +281,6 @@ done
 echo "Starting downstream TiKV..."
 mkdir -p "$TEST_DATA_DIR/downstream"
 mkdir -p "$OUT_DIR/log/downstream/tikv"
-tikv-server --version
 tikv-server \
 	--pd "${DOWN_PD_HOST}:${DOWN_PD_PORT}" \
 	-A "${DOWN_TIKV_HOST}:${DOWN_TIKV_PORT}" \
@@ -341,14 +352,6 @@ tikv-worker --addr "$DOWN_TIKV_WORKER_HOST:$DOWN_TIKV_WORKER_PORT" \
 
 check_port_available "$UP_TIKV_WORKER_HOST" "$UP_TIKV_WORKER_PORT" "Upstream TiKV-Worker is not ready yet"
 check_port_available "$DOWN_TIKV_WORKER_HOST" "$DOWN_TIKV_WORKER_PORT" "Downstream TiKV-Worker is not ready yet"
-
-####################start TiDB####################
-# TODO: replace this fixed delay with an explicit keyspace readiness check.
-# PD health only guarantees the service is up. In next-gen bootstrap we also
-# rely on PD finishing keyspace pre-allocation before the SYSTEM TiDB starts.
-# Giving PD a short quiet window here reduces flaky startup failures in CI.
-echo "Waiting for next-gen keyspace pre-allocation to settle..."
-sleep 30
 
 touch "$OUT_DIR/upstream-tidb-system.toml"
 if [ -f "$tidb_config" ]; then

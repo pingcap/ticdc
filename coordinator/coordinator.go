@@ -36,7 +36,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/pingcap/ticdc/utils/chann"
-	"github.com/tikv/client-go/v2/oracle"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -280,6 +279,7 @@ func (c *coordinator) handleStateChange(
 		c.controller.updateChangefeedEpoch(ctx, event.changefeedID)
 		c.controller.moveChangefeedToSchedulingQueue(event.changefeedID, false, false)
 	case config.StateFailed, config.StateFinished:
+		failpoint.Inject("BlockBeforeStopChangefeed", func() {})
 		c.controller.operatorController.StopChangefeed(ctx, event.changefeedID, false)
 	default:
 	}
@@ -363,7 +363,23 @@ func (c *coordinator) CreateChangefeed(ctx context.Context, info *config.ChangeF
 }
 
 func (c *coordinator) RemoveChangefeed(ctx context.Context, id common.ChangeFeedID) (uint64, error) {
-	return c.controller.RemoveChangefeed(ctx, id)
+	checkpointTs, err := c.controller.RemoveChangefeed(ctx, id)
+	if err != nil {
+		return 0, err
+	}
+	if c.controller.calculateGlobalGCSafepoint() != math.MaxUint64 {
+		return checkpointTs, nil
+	}
+
+	// Delete the cluster-level safepoint as soon as the last changefeed is gone.
+	// This closes the window where the final coordinator could exit before the
+	// next periodic GC reconcile tick gets a chance to clean it up.
+	if err := c.tryDeleteGlobalGCSafepoint(ctx); err != nil {
+		log.Warn("failed to delete global gc safepoint after removing last changefeed",
+			zap.String("changefeed", id.String()),
+			zap.Error(err))
+	}
+	return checkpointTs, nil
 }
 
 func (c *coordinator) PauseChangefeed(ctx context.Context, id common.ChangeFeedID) error {
@@ -425,12 +441,19 @@ func (c *coordinator) sendMessages(msgs []*messaging.TargetMessage) {
 	}
 }
 
+func (c *coordinator) tryDeleteGlobalGCSafepoint(ctx context.Context) error {
+	if !kerneltype.IsClassic() {
+		return nil
+	}
+	return errors.Trace(c.gcManager.TryDeleteServiceGCSafepoint(ctx))
+}
+
 func (c *coordinator) updateGlobalGcSafepoint(ctx context.Context) error {
 	minCheckpointTs := c.controller.calculateGlobalGCSafepoint()
-	// check if the upstream has a changefeed, if not we should update the gc safepoint
 	if minCheckpointTs == math.MaxUint64 {
-		ts := c.pdClock.CurrentTime()
-		minCheckpointTs = oracle.GoTimeToTS(ts)
+		// Once there is no changefeed left, TiCDC should remove the cluster-level
+		// service safepoint instead of refreshing it to "now - 1".
+		return c.tryDeleteGlobalGCSafepoint(ctx)
 	}
 	// When the changefeed starts up, CDC will do a snapshot read at
 	// (checkpointTs - 1) from TiKV, so (checkpointTs - 1) should be an upper

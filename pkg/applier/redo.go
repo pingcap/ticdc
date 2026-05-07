@@ -478,7 +478,7 @@ func (ra *RedoApplier) Apply(egCtx context.Context) (err error) {
 	ra.updateSplitter = newUpdateEventSplitter(ra.rd, ra.cfg.Dir)
 
 	eg.Go(func() error {
-		defer ra.mysqlSink.Close(false)
+		defer ra.mysqlSink.Close()
 		return ra.consumeLogs(egCtx)
 	})
 

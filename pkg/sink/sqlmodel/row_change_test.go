@@ -280,13 +280,13 @@ func (s *dpanicSuite) TestExpressionIndex() {
     	UNIQUE KEY j_index ((cast(json_extract(j,'$[*]') as signed array)), id)
 )`
 	ti := mockTableInfo(s.T(), sql)
-	change := NewRowChange(source, nil, nil, []interface{}{1, `[1,2,3]`}, ti, nil, nil)
+	change := NewRowChange(source, nil, nil, []interface{}{1, `[1,2,3]`, nil}, ti, nil, nil)
 	sql, args := change.GenSQL(DMLInsert)
 	s.Equal("INSERT INTO `db`.`tb1` (`id`,`j`) VALUES (?,?)", sql)
 	s.Equal([]interface{}{1, `[1,2,3]`}, args)
-	require.Equal(s.T(), 2, change.ColumnCount())
+	require.Equal(s.T(), 3, len(change.sourceTableInfo.GetColumns()))
 
-	change2 := NewRowChange(source, nil, []interface{}{1, `[1,2,3]`}, []interface{}{1, `[1,2,3,4]`}, ti, nil, nil)
+	change2 := NewRowChange(source, nil, []interface{}{1, `[1,2,3]`, nil}, []interface{}{1, `[1,2,3,4]`, nil}, ti, nil, nil)
 	sql, args = change2.GenSQL(DMLUpdate)
 	s.Equal("UPDATE `db`.`tb1` SET `id` = ?, `j` = ? WHERE `id` = ? LIMIT 1", sql)
 	s.Equal([]interface{}{1, `[1,2,3,4]`, 1}, args)

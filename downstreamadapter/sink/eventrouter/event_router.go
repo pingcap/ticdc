@@ -89,17 +89,17 @@ func (s *EventRouter) GetTopicForDDL(ddl *event.DDLEvent) string {
 	var schema, table string
 
 	if ddl.GetSourceExtraSchemaName() != "" {
-		if ddl.GetSourceExtraTableName() == "" {
+		if ddl.GetExtraTableName() == "" {
 			return s.defaultTopic
 		}
 		schema = ddl.GetSourceExtraSchemaName()
-		table = ddl.GetSourceExtraTableName()
+		table = ddl.GetExtraTableName()
 	} else {
-		if ddl.GetSourceTableName() == "" {
+		if ddl.GetTableName() == "" {
 			return s.defaultTopic
 		}
-		schema = ddl.GetSourceSchemaName()
-		table = ddl.GetSourceTableName()
+		schema = ddl.GetSchemaName()
+		table = ddl.GetTableName()
 	}
 
 	topicGenerator := s.matchTopicGenerator(schema, table)

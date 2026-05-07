@@ -121,12 +121,12 @@ func TestCompressionAndKeyOrder(t *testing.T) {
 		Key:     []byte("test-key"),
 	}
 	keyWithZstd := EncodeKey(1, 1, ev, CompressionZSTD)
-	dmlOrder, compressionType := DecodeKeyMetas(keyWithZstd)
+	dmlOrder, compressionType := DecodeKeyAttributes(keyWithZstd)
 	require.Equal(t, DMLOrderInsert, dmlOrder)
 	require.Equal(t, CompressionZSTD, compressionType)
 
 	keyWithNone := EncodeKey(1, 1, ev, CompressionNone)
-	dmlOrder, compressionType = DecodeKeyMetas(keyWithNone)
+	dmlOrder, compressionType = DecodeKeyAttributes(keyWithNone)
 	require.Equal(t, DMLOrderInsert, dmlOrder)
 	require.Equal(t, CompressionNone, compressionType)
 
@@ -142,4 +142,31 @@ func TestCompressionAndKeyOrder(t *testing.T) {
 
 	require.Less(t, bytes.Compare(keyDelete, keyUpdate), 0, "Delete should come before Update")
 	require.Less(t, bytes.Compare(keyUpdate, keyInsert), 0, "Update should come before Insert")
+}
+
+func TestEventStoreKeyBounds(t *testing.T) {
+	t.Parallel()
+
+	event := &common.RawKVEntry{
+		OpType:  common.OpTypePut,
+		StartTs: 20,
+		CRTs:    10,
+		Key:     []byte("key"),
+	}
+	key := EncodeKey(1, 1, event, CompressionNone)
+	commitTsBoundaryKey := encodeTxnCommitTsBoundaryKey(1, 1, event.CRTs)
+	require.Len(t, commitTsBoundaryKey, encodedKeyTxnCommitTsEnd)
+	require.True(t, bytes.HasPrefix(key, commitTsBoundaryKey))
+
+	lowerBound := encodeScanLowerBound(1, 1, event.CRTs, event.StartTs)
+	require.Len(t, lowerBound, encodedKeyAttributesOffset)
+	require.True(t, bytes.HasPrefix(key, lowerBound))
+
+	previousEvent := &common.RawKVEntry{
+		OpType:  common.OpTypePut,
+		StartTs: event.StartTs - 1,
+		CRTs:    event.CRTs,
+		Key:     []byte("key"),
+	}
+	require.Less(t, bytes.Compare(EncodeKey(1, 1, previousEvent, CompressionNone), lowerBound), 0)
 }

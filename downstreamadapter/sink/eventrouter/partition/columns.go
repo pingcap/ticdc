@@ -46,7 +46,7 @@ func (r *ColumnsPartitionGenerator) GeneratePartitionIndexAndKey(row *commonEven
 	defer r.lock.Unlock()
 	r.hasher.Reset()
 
-	r.hasher.Write([]byte(tableInfo.GetSourceSchemaName()), []byte(tableInfo.GetSourceTableName()))
+	r.hasher.Write([]byte(tableInfo.GetSchemaName()), []byte(tableInfo.GetTableName()))
 
 	rowData := row.Row
 	if rowData.IsEmpty() {

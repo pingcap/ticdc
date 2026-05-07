@@ -1191,130 +1191,6 @@
             "align": false,
             "alignLevel": null
           }
-        },
-        {
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "Current warning or failed reason of each changefeed. The metric message is normalized to a single line and truncated to 256 characters.",
-          "fieldConfig": {
-            "defaults": {
-              "custom": {
-                "align": null,
-                "filterable": false
-              },
-              "links": [],
-              "mappings": [],
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "green",
-                    "value": null
-                  },
-                  {
-                    "color": "red",
-                    "value": 80
-                  }
-                ]
-              }
-            },
-            "overrides": [
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "keyspace_name"
-                },
-                "properties": [
-                  {
-                    "id": "custom.width",
-                    "value": 120
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "changefeed"
-                },
-                "properties": [
-                  {
-                    "id": "custom.width",
-                    "value": 180
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "state"
-                },
-                "properties": [
-                  {
-                    "id": "custom.width",
-                    "value": 100
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "code"
-                },
-                "properties": [
-                  {
-                    "id": "custom.width",
-                    "value": 180
-                  }
-                ]
-              }
-            ]
-          },
-          "gridPos": {
-            "h": 8,
-            "w": 24,
-            "x": 0,
-            "y": 32
-          },
-          "id": 62010,
-          "options": {
-            "showHeader": true,
-            "sortBy": []
-          },
-          "pluginVersion": "7.5.17",
-          "targets": [
-            {
-              "expr": "max by (keyspace_name, changefeed, state, code, message) (ticdc_owner_changefeed_error_info{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"})",
-              "format": "time_series",
-              "instant": true,
-              "refId": "A"
-            }
-          ],
-          "title": "Changefeed Error Details",
-          "transformations": [
-            {
-              "id": "labelsToFields",
-              "options": {}
-            },
-            {
-              "id": "organize",
-              "options": {
-                "excludeByName": {
-                  "Metric": true,
-                  "Time": true,
-                  "Value": true,
-                  "__name__": true
-                },
-                "indexByName": {
-                  "changefeed": 1,
-                  "code": 3,
-                  "message": 4,
-                  "keyspace_name": 0,
-                  "state": 2
-                },
-                "renameByName": {}
-              }
-            }
-          ],
-          "type": "table"
         }
       ],
       "title": "Summary",
@@ -4715,6 +4591,130 @@
             "align": false,
             "alignLevel": null
           }
+        },
+        {
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "Current warning or failed reason of each changefeed. The metric message is normalized to a single line and truncated to 256 characters.",
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "align": null,
+                "filterable": false
+              },
+              "links": [],
+              "mappings": [],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": 80
+                  }
+                ]
+              }
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "keyspace_name"
+                },
+                "properties": [
+                  {
+                    "id": "custom.width",
+                    "value": 120
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "changefeed"
+                },
+                "properties": [
+                  {
+                    "id": "custom.width",
+                    "value": 180
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "state"
+                },
+                "properties": [
+                  {
+                    "id": "custom.width",
+                    "value": 100
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "code"
+                },
+                "properties": [
+                  {
+                    "id": "custom.width",
+                    "value": 180
+                  }
+                ]
+              }
+            ]
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 24,
+            "x": 0,
+            "y": 26
+          },
+          "id": 62010,
+          "options": {
+            "showHeader": true,
+            "sortBy": []
+          },
+          "pluginVersion": "7.5.17",
+          "targets": [
+            {
+              "expr": "max by (keyspace_name, changefeed, state, code, message) (ticdc_owner_changefeed_error_info{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"})",
+              "format": "time_series",
+              "instant": true,
+              "refId": "A"
+            }
+          ],
+          "title": "Changefeed Error Details",
+          "transformations": [
+            {
+              "id": "labelsToFields",
+              "options": {}
+            },
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": {
+                  "Metric": true,
+                  "Time": true,
+                  "Value": true,
+                  "__name__": true
+                },
+                "indexByName": {
+                  "changefeed": 1,
+                  "code": 3,
+                  "message": 4,
+                  "keyspace_name": 0,
+                  "state": 2
+                },
+                "renameByName": {}
+              }
+            }
+          ],
+          "type": "table"
         }
       ],
       "title": "Changefeed",
@@ -27296,7 +27296,7 @@
     ]
   },
   "timezone": "browser",
-  "title": "test-cluster-TiCDC-New-Arch",
+  "title": "${DS_TEST-CLUSTER}-TiCDC-New-Arch",
   "uid": "YiGL8hBZ0aac",
   "version": 40
 }

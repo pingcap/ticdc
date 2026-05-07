@@ -37,8 +37,9 @@ import (
 )
 
 const (
-	receiveChanSize     = 1024 * 8
-	commonMsgRetryQuota = 3 // The number of retries for most droppable dispatcher requests.
+	receiveChanSize               = 1024 * 8
+	commonMsgRetryQuota           = 3 // The number of retries for most droppable dispatcher requests.
+	eventServiceHeartbeatInterval = time.Second
 )
 
 // DispatcherMessage is the message send to EventService.
@@ -218,6 +219,10 @@ func (c *EventCollector) Run(ctx context.Context) {
 	})
 
 	g.Go(func() error {
+		return c.sendEventServiceHeartbeats(ctx)
+	})
+
+	g.Go(func() error {
 		return c.updateMetrics(ctx)
 	})
 
@@ -268,7 +273,15 @@ func (c *EventCollector) PrepareAddDispatcher(
 	cfStat.dispatcherCount.Add(1)
 
 	ds := c.getDynamicStream(target.GetMode())
-	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(memoryQuota, dynstream.MemoryControlForEventCollector, "eventCollector")
+
+	batchCount, batchBytes := target.GetEventCollectorBatchConfig()
+	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSizeAndBatchConfig(
+		memoryQuota,
+		dynstream.MemoryControlForEventCollector,
+		"eventCollector",
+		batchCount,
+		batchBytes,
+	)
 	err := ds.AddPath(target.GetId(), stat, areaSetting)
 	if err != nil {
 		log.Warn("add dispatcher to dynamic stream failed", zap.Error(err))
@@ -376,39 +389,53 @@ func (c *EventCollector) getDispatcherStatByID(dispatcherID common.DispatcherID)
 	return value.(*dispatcherStat)
 }
 
-func (c *EventCollector) SendDispatcherHeartbeat(heartbeat *event.DispatcherHeartbeat) {
-	groupedHeartbeats := c.groupHeartbeat(heartbeat)
+func (c *EventCollector) sendEventServiceHeartbeats(ctx context.Context) error {
+	ticker := time.NewTicker(eventServiceHeartbeatInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		case <-ticker.C:
+			c.sendDispatcherHeartbeat()
+		}
+	}
+}
+
+func (c *EventCollector) sendDispatcherHeartbeat() {
+	groupedHeartbeats := c.groupHeartbeat()
 	for serverID, heartbeat := range groupedHeartbeats {
 		msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, heartbeat)
 		c.enqueueMessageForSend(msg)
 	}
 }
 
-// TODO(dongmen): add unit test for this function.
 // groupHeartbeat groups the heartbeat by the dispatcherStat's serverID.
-func (c *EventCollector) groupHeartbeat(heartbeat *event.DispatcherHeartbeat) map[node.ID]*event.DispatcherHeartbeat {
+func (c *EventCollector) groupHeartbeat() map[node.ID]*event.DispatcherHeartbeat {
 	groupedHeartbeats := make(map[node.ID]*event.DispatcherHeartbeat)
-	group := func(target node.ID, dp event.DispatcherProgress) {
+	group := func(target node.ID, dispatcherID common.DispatcherID, checkpointTs uint64, epoch uint64) {
 		heartbeat, ok := groupedHeartbeats[target]
 		if !ok {
-			heartbeat = &event.DispatcherHeartbeat{
-				Version:              event.DispatcherHeartbeatVersion1,
-				DispatcherProgresses: make([]event.DispatcherProgress, 0, 32),
-			}
+			heartbeat = event.NewDispatcherHeartbeat()
 			groupedHeartbeats[target] = heartbeat
 		}
-		heartbeat.Append(dp)
+		heartbeat.AddDispatcherProgress(dispatcherID, checkpointTs, epoch)
 	}
 
-	for _, dp := range heartbeat.DispatcherProgresses {
-		stat, ok := c.dispatcherMap.Load(dp.DispatcherID)
-		if !ok {
-			continue
+	c.dispatcherMap.Range(func(_, value interface{}) bool {
+		stat := value.(*dispatcherStat)
+		if !stat.connState.isReceivingDataEvent() {
+			return true
 		}
-		if stat.(*dispatcherStat).connState.isReceivingDataEvent() {
-			group(stat.(*dispatcherStat).connState.getEventServiceID(), dp)
-		}
-	}
+		checkpointTs, epoch := stat.getHeartbeatProgressForEventService()
+		group(
+			stat.connState.getEventServiceID(),
+			stat.getDispatcherID(),
+			checkpointTs,
+			epoch,
+		)
+		return true
+	})
 
 	return groupedHeartbeats
 }
