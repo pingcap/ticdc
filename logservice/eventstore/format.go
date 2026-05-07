@@ -44,7 +44,7 @@ const (
 	//   byte offset
 	//   0                   8                  16                 24                 32 33 34                 42
 	//   |-------------------|------------------|------------------|------------------|--|--|------------------|
-	//   | uniqueID (8B)     | tableID (8B)     | txnCommitTs (8B) | txnStartTs (8B)  |DO|CT| mask (8B)       | key...
+	//   | uniqueID (8B)     | tableID (8B)     | txnCommitTs (8B) | txnStartTs (8B)  |DO|CT| mask (8B)        | key...
 	//   |-------------------|------------------|------------------|------------------|--|--|------------------|
 	//
 	//   DO: DMLOrder (1 byte)
