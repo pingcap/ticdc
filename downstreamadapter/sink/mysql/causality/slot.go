@@ -17,8 +17,6 @@ import (
 	"math"
 	"sort"
 	"sync"
-
-	"github.com/pingcap/log"
 )
 
 type slot struct {
@@ -39,8 +37,8 @@ type Slots struct {
 
 // NewSlots creates a new Slots.
 func NewSlots(numSlots uint64) *Slots {
-	if numSlots == 0 {
-		log.Panic("causality slot count must be positive")
+	if numSlots <= 0 {
+		numSlots = 1
 	}
 
 	slots := make([]slot, numSlots)
