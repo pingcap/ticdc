@@ -113,7 +113,9 @@ type dispatcherSession struct {
 	sendMessage func(*messaging.TargetMessage)
 	// nextResetEpoch advances the dispatcher's epoch and returns the new value.
 	nextResetEpoch func(resetTs uint64) uint64
-	// readyCallback is only set during the initial local registration path.
+	// readyCallback is called when the local EventService is ready in the
+	// two-phase add flow. A non-nil callback defers committing the dispatcher
+	// until CommitAddDispatcher is called.
 	readyCallback func()
 
 	// connState tracks which EventService this session is currently talking to.
@@ -247,9 +249,9 @@ func (s *dispatcherSession) handleReadyEvent(event dispatcher.DispatcherEvent) {
 
 func (s *dispatcherSession) handleLocalReadyEvent() {
 	if s.readyCallback != nil {
-		// If readyCallback is set, this dispatcher is performing its initial
-		// registration with the local event service. Therefore, no deregistration
-		// from a previous service is necessary.
+		// A non-nil readyCallback means this dispatcher is in the prepare phase
+		// of a two-phase add. Record the local EventService as ready and let
+		// the caller decide when to commit the dispatcher.
 		s.connState.setEventServiceID(s.localServerID)
 		s.connState.readyEventReceived.Store(true)
 		s.readyCallback()
