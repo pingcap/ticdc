@@ -16,10 +16,12 @@ package routing
 import (
 	"testing"
 
+	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	ddlutil "github.com/pingcap/tidb/pkg/ddl/util"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/stretchr/testify/require"
 )
 
@@ -1033,8 +1035,126 @@ func TestApplyToDDLEventSupportsCreateTables(t *testing.T) {
 	require.Contains(t, routed.Query, "CREATE TABLE `target_db`.`t1_r`")
 	require.Contains(t, routed.Query, "CREATE TABLE `target_db`.`t2_r`")
 	require.Len(t, routed.MultipleTableInfos, 2)
+	require.Len(t, ddl.MultipleTableInfos, 2)
+	require.Equal(t, "source_db", ddl.MultipleTableInfos[0].GetTargetSchemaName())
+	require.Equal(t, "t1", ddl.MultipleTableInfos[0].GetTargetTableName())
+	require.Equal(t, "source_db", ddl.MultipleTableInfos[1].GetTargetSchemaName())
+	require.Equal(t, "t2", ddl.MultipleTableInfos[1].GetTargetTableName())
 	require.Equal(t, "target_db", routed.MultipleTableInfos[0].GetTargetSchemaName())
 	require.Equal(t, "t1_r", routed.MultipleTableInfos[0].GetTargetTableName())
 	require.Equal(t, "target_db", routed.MultipleTableInfos[1].GetTargetSchemaName())
 	require.Equal(t, "t2_r", routed.MultipleTableInfos[1].GetTargetTableName())
+}
+
+func TestApplyToDDLEventCopiesRoutedEventWithoutMutatingOrigin(t *testing.T) {
+	router := newTestRouter(t, false, []*config.DispatchRule{{
+		Matcher:      []string{"source_db.*"},
+		TargetSchema: "target_db",
+		TargetTable:  "{table}_r",
+	}})
+
+	helper := event.NewEventTestHelper(t)
+	defer helper.Close()
+
+	schemaDDL := helper.DDL2Event("CREATE DATABASE `source_db`")
+	routedSchema, err := router.ApplyToDDLEvent(schemaDDL)
+	require.NoError(t, err)
+	require.Contains(t, routedSchema.Query, "`target_db`")
+
+	ddl := helper.DDL2Event("CREATE TABLE `source_db`.`source_table` (`id` INT PRIMARY KEY)")
+	ddl.DispatcherID = common.NewDispatcherID()
+	ddl.Seq = 1
+	ddl.Epoch = 2
+	ddl.TiDBOnly = true
+	ddl.BDRMode = string(ast.BDRRolePrimary)
+	ddl.PostTxnFlushed = []func(){func() {}, func() {}}
+
+	originalQuery := ddl.Query
+	originalTableInfo := ddl.TableInfo
+	routed, err := router.ApplyToDDLEvent(ddl)
+	require.NoError(t, err)
+	require.NotSame(t, ddl, routed)
+
+	require.Equal(t, ddl.Version, routed.Version)
+	require.Equal(t, ddl.DispatcherID, routed.DispatcherID)
+	require.Equal(t, ddl.Type, routed.Type)
+	require.Equal(t, ddl.SchemaID, routed.SchemaID)
+	require.Equal(t, ddl.SchemaName, routed.SchemaName)
+	require.Equal(t, ddl.TableName, routed.TableName)
+	require.Equal(t, ddl.FinishedTs, routed.FinishedTs)
+	require.Equal(t, ddl.Seq, routed.Seq)
+	require.Equal(t, ddl.Epoch, routed.Epoch)
+	require.Equal(t, ddl.TiDBOnly, routed.TiDBOnly)
+	require.Equal(t, ddl.BDRMode, routed.BDRMode)
+
+	require.Equal(t, originalQuery, ddl.Query)
+	require.Same(t, originalTableInfo, ddl.TableInfo)
+	require.Equal(t, "source_db", ddl.GetTargetSchemaName())
+	require.Equal(t, "source_table", ddl.GetTargetTableName())
+
+	require.Equal(t, "target_db", routed.GetTargetSchemaName())
+	require.Equal(t, "source_table_r", routed.GetTargetTableName())
+	require.Contains(t, routed.Query, "`target_db`.`source_table_r`")
+	require.NotSame(t, originalTableInfo, routed.TableInfo)
+	require.Equal(t, "target_db", routed.TableInfo.GetTargetSchemaName())
+	require.Equal(t, "source_table_r", routed.TableInfo.GetTargetTableName())
+
+	require.Len(t, routed.PostTxnFlushed, 2)
+	require.Len(t, ddl.PostTxnFlushed, 2)
+	require.NotEqual(t, &ddl.PostTxnFlushed[0], &routed.PostTxnFlushed[0])
+	routed.AddPostFlushFunc(func() {})
+	require.Len(t, routed.PostTxnFlushed, 3)
+	require.Len(t, ddl.PostTxnFlushed, 2)
+}
+
+func TestApplyToDDLEventRenameTablesGetEventsPreserveSourceAndTargetNames(t *testing.T) {
+	router := newTestRouter(t, false, []*config.DispatchRule{{
+		Matcher:      []string{"source_db.*"},
+		TargetSchema: "target_db",
+		TargetTable:  "{table}_r",
+	}})
+
+	helper := event.NewEventTestHelper(t)
+	defer helper.Close()
+
+	schemaDDL := helper.DDL2Event("CREATE DATABASE `source_db`")
+	routedSchema, err := router.ApplyToDDLEvent(schemaDDL)
+	require.NoError(t, err)
+	require.Contains(t, routedSchema.Query, "`target_db`")
+
+	table1DDL := helper.DDL2Event("CREATE TABLE `source_db`.`old_table1` (`id` INT PRIMARY KEY)")
+	routedTable1, err := router.ApplyToDDLEvent(table1DDL)
+	require.NoError(t, err)
+	require.Contains(t, routedTable1.Query, "`target_db`.`old_table1_r`")
+
+	table2DDL := helper.DDL2Event("CREATE TABLE `source_db`.`old_table2` (`id` INT PRIMARY KEY)")
+	routedTable2, err := router.ApplyToDDLEvent(table2DDL)
+	require.NoError(t, err)
+	require.Contains(t, routedTable2.Query, "`target_db`.`old_table2_r`")
+
+	renameDDL := helper.DDL2Event(
+		"RENAME TABLE `source_db`.`old_table1` TO `source_db`.`new_table1`, `source_db`.`old_table2` TO `source_db`.`new_table2`")
+	routed, err := router.ApplyToDDLEvent(renameDDL)
+	require.NoError(t, err)
+
+	events := routed.GetEvents()
+	require.Len(t, events, 2)
+
+	require.Equal(t, "source_db", events[0].SchemaName)
+	require.Equal(t, "new_table1", events[0].TableName)
+	require.Equal(t, "target_db", events[0].GetTargetSchemaName())
+	require.Equal(t, "new_table1_r", events[0].GetTargetTableName())
+	require.Equal(t, "source_db", events[0].ExtraSchemaName)
+	require.Equal(t, "old_table1", events[0].ExtraTableName)
+	require.Equal(t, "target_db", events[0].GetTargetExtraSchemaName())
+	require.Equal(t, "old_table1_r", events[0].GetTargetExtraTableName())
+
+	require.Equal(t, "source_db", events[1].SchemaName)
+	require.Equal(t, "new_table2", events[1].TableName)
+	require.Equal(t, "target_db", events[1].GetTargetSchemaName())
+	require.Equal(t, "new_table2_r", events[1].GetTargetTableName())
+	require.Equal(t, "source_db", events[1].ExtraSchemaName)
+	require.Equal(t, "old_table2", events[1].ExtraTableName)
+	require.Equal(t, "target_db", events[1].GetTargetExtraSchemaName())
+	require.Equal(t, "old_table2_r", events[1].GetTargetExtraTableName())
 }
