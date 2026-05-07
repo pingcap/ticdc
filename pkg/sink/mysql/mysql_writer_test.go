@@ -354,6 +354,66 @@ func TestMysqlWriter_Flush_EmptyEvents(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestMysqlWriterExecDDLUsesRoutedSchemaName(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("CREATE DATABASE `source_db`")
+	helper.Tk().MustExec("CREATE TABLE `source_db`.`source_table` (`id` INT PRIMARY KEY)")
+	alterDDL := helper.DDL2Event("ALTER TABLE `source_db`.`source_table` ADD COLUMN age INT")
+	require.Equal(t, "source_db", alterDDL.GetTargetSchemaName())
+	require.Equal(t, "source_table", alterDDL.GetTargetTableName())
+	routedAlterDDL := commonEvent.NewRoutedDDLEvent(
+		alterDDL,
+		"ALTER TABLE `target_db`.`target_table` ADD COLUMN age INT",
+		"target_db",
+		"target_table",
+		"",
+		"",
+		alterDDL.TableInfo.CloneWithRouting("target_db", "target_table"),
+		nil,
+		nil,
+	)
+
+	writer, db, mock := newTestMysqlWriter(t)
+	defer db.Close()
+	mock.ExpectBegin()
+	mock.ExpectExec("USE `target_db`;").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("SET TIMESTAMP = DEFAULT").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("ALTER TABLE `target_db`.`target_table` ADD COLUMN age INT").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+	require.NoError(t, writer.execDDL(routedAlterDDL))
+	require.NoError(t, mock.ExpectationsWereMet())
+
+	helper.Tk().MustExec("CREATE TABLE `source_db`.`orders_old` (`id` INT PRIMARY KEY)")
+	renameDDL := helper.DDL2Event("RENAME TABLE `source_db`.`orders_old` TO `source_db`.`orders_new`")
+	require.Equal(t, "source_db", renameDDL.GetTargetSchemaName())
+	require.Equal(t, "orders_new", renameDDL.GetTargetTableName())
+	require.Equal(t, "source_db", renameDDL.GetTargetExtraSchemaName())
+	require.Equal(t, "orders_old", renameDDL.GetTargetExtraTableName())
+	routedRenameDDL := commonEvent.NewRoutedDDLEvent(
+		renameDDL,
+		"RENAME TABLE `old_target_db`.`orders_old` TO `new_target_db`.`orders_new`",
+		"new_target_db",
+		"orders_new",
+		"old_target_db",
+		"orders_old",
+		renameDDL.TableInfo.CloneWithRouting("new_target_db", "orders_new"),
+		nil,
+		nil,
+	)
+
+	writer, db, mock = newTestMysqlWriter(t)
+	defer db.Close()
+	mock.ExpectBegin()
+	mock.ExpectExec("USE `new_target_db`;").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("SET TIMESTAMP = DEFAULT").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("RENAME TABLE `old_target_db`.`orders_old` TO `new_target_db`.`orders_new`").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+	require.NoError(t, writer.execDDL(routedRenameDDL))
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestMysqlWriter_FlushSyncPointEvent(t *testing.T) {
 	writer, db, mock := newTestMysqlWriter(t)
 	defer db.Close()

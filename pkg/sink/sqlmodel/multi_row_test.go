@@ -41,6 +41,67 @@ func TestGenDeleteMultiRows(t *testing.T) {
 	require.Equal(t, []interface{}{1, 3}, args)
 }
 
+func TestGenMultiRowSQLUsesRoutedTargetTable(t *testing.T) {
+	sourceTableInfo, routedTableInfo := mockRoutedTableInfo(
+		t,
+		"CREATE TABLE tb1 (id INT PRIMARY KEY, name INT)",
+		"target_db",
+		"target_tb",
+	)
+
+	sourceTable := &sourceTableInfo.TableName
+	targetTable := &routedTableInfo.TableName
+
+	insertChanges := []*RowChange{
+		NewRowChange(sourceTable, targetTable, nil, []interface{}{1, 2}, sourceTableInfo, routedTableInfo, nil),
+		NewRowChange(sourceTable, targetTable, nil, []interface{}{3, 4}, sourceTableInfo, routedTableInfo, nil),
+	}
+	insertSQL, _ := GenInsertSQL(DMLInsert, insertChanges...)
+	require.Contains(t, insertSQL, "INSERT INTO `target_db`.`target_tb`")
+	require.NotContains(t, insertSQL, "`db`.`tb1`")
+
+	deleteV2Changes := []*RowChange{
+		NewRowChange(sourceTable, targetTable, []interface{}{1, 2}, nil, sourceTableInfo, routedTableInfo, nil),
+		NewRowChange(sourceTable, targetTable, []interface{}{3, 4}, nil, sourceTableInfo, routedTableInfo, nil),
+	}
+	deleteV2SQL, _ := GenDeleteSQL(DefaultWhereClause, deleteV2Changes...)
+	require.Contains(t, deleteV2SQL, "DELETE FROM `target_db`.`target_tb`")
+	require.NotContains(t, deleteV2SQL, "`db`.`tb1`")
+
+	updateV2Changes := []*RowChange{
+		NewRowChange(sourceTable, targetTable, []interface{}{1, 2}, []interface{}{1, 20}, sourceTableInfo, routedTableInfo, nil),
+		NewRowChange(sourceTable, targetTable, []interface{}{3, 4}, []interface{}{3, 40}, sourceTableInfo, routedTableInfo, nil),
+	}
+	updateV2SQL, _ := GenUpdateSQL(DefaultWhereClause, updateV2Changes...)
+	require.Contains(t, updateV2SQL, "UPDATE `target_db`.`target_tb`")
+	require.NotContains(t, updateV2SQL, "`db`.`tb1`")
+
+	nullSourceTableInfo, nullRoutedTableInfo := mockRoutedTableInfo(
+		t,
+		"CREATE TABLE tb2 (id INT, name INT)",
+		"target_db",
+		"target_tb_v1",
+	)
+	nullSourceTable := &nullSourceTableInfo.TableName
+	nullTargetTable := &nullRoutedTableInfo.TableName
+
+	deleteV1Changes := []*RowChange{
+		NewRowChange(nullSourceTable, nullTargetTable, []interface{}{1, nil}, nil, nullSourceTableInfo, nullRoutedTableInfo, nil),
+		NewRowChange(nullSourceTable, nullTargetTable, []interface{}{3, 4}, nil, nullSourceTableInfo, nullRoutedTableInfo, nil),
+	}
+	deleteV1SQL, _ := GenDeleteSQL(DefaultWhereClause, deleteV1Changes...)
+	require.Contains(t, deleteV1SQL, "DELETE FROM `target_db`.`target_tb_v1`")
+	require.NotContains(t, deleteV1SQL, "`db`.`tb2`")
+
+	updateV1Changes := []*RowChange{
+		NewRowChange(nullSourceTable, nullTargetTable, []interface{}{1, nil}, []interface{}{1, 20}, nullSourceTableInfo, nullRoutedTableInfo, nil),
+		NewRowChange(nullSourceTable, nullTargetTable, []interface{}{3, 4}, []interface{}{3, 40}, nullSourceTableInfo, nullRoutedTableInfo, nil),
+	}
+	updateV1SQL, _ := GenUpdateSQL(DefaultWhereClause, updateV1Changes...)
+	require.Contains(t, updateV1SQL, "UPDATE `target_db`.`target_tb_v1`")
+	require.NotContains(t, updateV1SQL, "`db`.`tb2`")
+}
+
 func TestGenDeleteMultiRowsWithNullFallbackToV1(t *testing.T) {
 	t.Parallel()
 
