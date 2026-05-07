@@ -712,7 +712,6 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	}
 
 	if err != nil {
-
 		log.Error("scan events failed",
 			zap.Stringer("changefeedID", task.changefeedStat.changefeedID),
 			zap.Stringer("dispatcherID", task.id), zap.Int64("tableID", task.info.GetTableSpan().GetTableID()),

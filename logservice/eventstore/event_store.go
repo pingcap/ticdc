@@ -935,6 +935,8 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 			}
 			return nil, errors.Trace(err)
 		}
+		// Empty range. Return the iterator so the scanner can finish the scan
+		// through the normal Next and Close path.
 	}
 	metricEventStoreFirstReadDurationHistogram.Observe(time.Since(startTime).Seconds())
 	metrics.EventStoreScanRequestsCount.Inc()
