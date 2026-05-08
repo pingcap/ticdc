@@ -119,8 +119,9 @@ cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" -c "$CHANG
 
 "$WORK_DIR/random_ddl_test_runner" --config "$WORK_DIR/runner_config.json" --phase workload
 
-check_sync_diff $WORK_DIR "$WORK_DIR/diff_config.toml" 500
-
+# Disable external-ts reads before sync_diff_inspector to avoid fallback reads at a later syncpoint.
 run_sql "SET GLOBAL tidb_enable_external_ts_read = off;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+
+check_sync_diff $WORK_DIR "$WORK_DIR/diff_config.toml" 500
 
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"

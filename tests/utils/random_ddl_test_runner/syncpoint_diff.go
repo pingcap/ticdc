@@ -119,7 +119,7 @@ func (r *runner) runSyncpointDiffChecks(
 		}
 
 		logPath := filepath.Join(r.cfg.Workdir, fmt.Sprintf("sync_diff_inspector_syncpoint_%d.log", p))
-		diag, err := runSyncDiffInspector(ctx, confPath, logPath, 3)
+		diag, err := r.runSyncDiffInspectorWithSnapshotGuard(ctx, confPath, logPath, 3)
 		if err != nil {
 			if ctx.Err() != nil {
 				return checked, nil
@@ -348,6 +348,76 @@ func isSkippableSyncDiffFailure(outputTail string) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+const (
+	tidbEnableExternalTSReadVar = "tidb_enable_external_ts_read"
+	externalTSReadOffParam      = tidbEnableExternalTSReadVar + "=OFF"
+)
+
+func (r *runner) runSyncDiffInspectorWithSnapshotGuard(ctx context.Context, confPath, logPath string, retries int) (string, error) {
+	// sync_diff_inspector should compare only the snapshot pair from the config.
+	// Keep downstream external-ts reads disabled during the diff so any connection
+	// that misses its configured snapshot cannot fall back to a later syncpoint.
+	downstream, err := openMySQLWithExtraParams(ctx, r.cfg.Downstream, externalTSReadOffParam)
+	if err != nil {
+		return "", err
+	}
+	defer func() {
+		_ = downstream.Close()
+	}()
+
+	original, err := queryGlobalExternalTSRead(ctx, downstream)
+	if err != nil {
+		return "", err
+	}
+	if err := setGlobalExternalTSRead(ctx, downstream, "OFF"); err != nil {
+		return "", err
+	}
+
+	diag, runErr := runSyncDiffInspector(ctx, confPath, logPath, retries)
+	if original == "OFF" {
+		return diag, runErr
+	}
+
+	restoreCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	restoreErr := setGlobalExternalTSRead(restoreCtx, downstream, original)
+	cancel()
+	if restoreErr != nil {
+		r.logger.Printf("syncpoint diff: failed to restore %s=%s: err=%v", tidbEnableExternalTSReadVar, original, restoreErr)
+		if runErr == nil {
+			return diag, restoreErr
+		}
+	}
+	return diag, runErr
+}
+
+func queryGlobalExternalTSRead(ctx context.Context, downstream *sql.DB) (string, error) {
+	var value string
+	if err := downstream.QueryRowContext(ctx, "SELECT @@global."+tidbEnableExternalTSReadVar).Scan(&value); err != nil {
+		return "", err
+	}
+	return normalizeExternalTSReadValue(value)
+}
+
+func setGlobalExternalTSRead(ctx context.Context, downstream *sql.DB, value string) error {
+	normalized, err := normalizeExternalTSReadValue(value)
+	if err != nil {
+		return err
+	}
+	_, err = downstream.ExecContext(ctx, "SET GLOBAL "+tidbEnableExternalTSReadVar+" = "+normalized)
+	return err
+}
+
+func normalizeExternalTSReadValue(value string) (string, error) {
+	switch strings.ToUpper(strings.TrimSpace(value)) {
+	case "ON", "1", "TRUE":
+		return "ON", nil
+	case "OFF", "0", "FALSE":
+		return "OFF", nil
+	default:
+		return "", fmt.Errorf("unexpected %s value: %q", tidbEnableExternalTSReadVar, value)
 	}
 }
 
