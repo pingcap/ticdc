@@ -1293,12 +1293,12 @@ func (c *eventBroker) handleDispatcherHeartbeat(heartbeat *DispatcherHeartBeatWi
 				zap.Uint64("dispatcherEpoch", dispatcher.epoch),
 				zap.Uint64("checkpointTs", checkpointTs),
 			}
-			// Dispatcher reset requests and heartbeat messages are routed through
-			// different EventService queues, so a heartbeat from the next epoch can
-			// be handled before the corresponding reset request is applied.
 			if heartbeatEpoch < dispatcher.epoch {
 				log.Warn("ignore dispatcher heartbeat from stale epoch", fields...)
 			} else {
+				// Dispatcher reset requests and heartbeat messages are routed through
+				// different EventService queues, so a heartbeat from the next epoch can
+				// be handled before the corresponding reset request is applied.
 				log.Debug("ignore dispatcher heartbeat before reset is applied", fields...)
 			}
 			return
