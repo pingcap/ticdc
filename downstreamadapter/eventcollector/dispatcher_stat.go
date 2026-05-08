@@ -550,13 +550,38 @@ func (d *dispatcherStat) handleSingleDataEvents(events []dispatcher.DispatcherEv
 			return false
 		}
 		events[0].Event = ddl
-		d.tableInfoVersion.Store(ddl.FinishedTs)
-		if ddl.TableInfo != nil {
-			d.tableInfo.Store(ddl.TableInfo)
-		}
+		d.updateTableInfoByDDL(ddl)
 	}
 	d.updateCommitTsStateByEvents(state, events)
 	return d.target.HandleEvents(events, func() { d.wake() })
+}
+
+func (d *dispatcherStat) updateTableInfoByDDL(ddl *commonEvent.DDLEvent) {
+	if ddl.TableInfo == nil {
+		return
+	}
+
+	tableSpan := d.target.GetTableSpan()
+	if tableSpan == nil || tableSpan.TableID == common.DDLSpanTableID {
+		return
+	}
+
+	// A table dispatcher can receive DDLs unrelated to its own table for barrier
+	// coordination, for example CREATE VIEW is tracked in every table's DDL history.
+	// The cached table info is used to assemble subsequent DML rows. For partition
+	// tables, the dispatcher span ID is a physical partition ID while TableInfo
+	// carries the logical table ID, so compare with the cached table info first.
+	expectedTableID := tableSpan.TableID
+	current := d.tableInfo.Load()
+	if current != nil {
+		expectedTableID = current.(*common.TableInfo).TableName.TableID
+	}
+	if ddl.TableInfo.TableName.TableID != expectedTableID {
+		return
+	}
+
+	d.tableInfoVersion.Store(ddl.FinishedTs)
+	d.tableInfo.Store(ddl.TableInfo)
 }
 
 func (d *dispatcherStat) handleDataEvents(events ...dispatcher.DispatcherEvent) bool {
