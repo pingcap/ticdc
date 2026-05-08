@@ -78,11 +78,6 @@ func newDispatcherStat(
 	eventCollector *EventCollector,
 	readyCallback func(),
 ) *dispatcherStat {
-	if eventCollector == nil {
-		log.Panic("event collector must not be nil when creating dispatcher stat",
-			zap.Stringer("changefeedID", target.GetChangefeedID()),
-			zap.Stringer("dispatcher", target.GetId()))
-	}
 	return newDispatcherStatInternal(
 		target,
 		eventCollector,
@@ -109,7 +104,7 @@ func newDispatcherStatInternal(
 		target,
 		localServerID,
 		sendMessage,
-		stat.nextResetEpoch,
+		stat.advanceEpochForReset,
 		readyCallback,
 	)
 	return stat
@@ -153,7 +148,7 @@ func (d *dispatcherStat) doReset(serverID node.ID, resetTs uint64) {
 	d.session.doReset(serverID, resetTs)
 }
 
-func (d *dispatcherStat) nextResetEpoch(resetTs uint64) uint64 {
+func (d *dispatcherStat) advanceEpochForReset(resetTs uint64) uint64 {
 	for {
 		currentState := d.loadCurrentEpochState()
 		nextState := newDispatcherEpochState(currentState.epoch+1, 0, resetTs)
