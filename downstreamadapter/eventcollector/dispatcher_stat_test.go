@@ -59,9 +59,9 @@ func newMockDispatcher(id common.DispatcherID, startTs uint64) *mockDispatcher {
 	}
 }
 
-// newDispatcherStatForStateTest is for tests that only exercise dispatcherStat state.
+// newDispatcherStatForTest is for tests that only exercise dispatcherStat state.
 // Tests that assert EventService requests should create a real EventCollector instead.
-func newDispatcherStatForStateTest(target dispatcher.DispatcherService) *dispatcherStat {
+func newDispatcherStatForTest(target dispatcher.DispatcherService) *dispatcherStat {
 	return newDispatcherStatInternal(
 		target,
 		nil,
@@ -354,7 +354,7 @@ func TestVerifyEventSequence(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			stat := newDispatcherStatForStateTest(newMockDispatcher(common.NewDispatcherID(), 0))
+			stat := newDispatcherStatForTest(newMockDispatcher(common.NewDispatcherID(), 0))
 			state := stat.loadCurrentEpochState()
 			state.lastEventSeq.Store(tt.lastEventSeq)
 			result := stat.verifyEventSequence(tt.event, state)
@@ -504,7 +504,7 @@ func TestFilterAndUpdateEventByCommitTs(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			stat := newDispatcherStatForStateTest(newMockDispatcher(common.NewDispatcherID(), 0))
+			stat := newDispatcherStatForTest(newMockDispatcher(common.NewDispatcherID(), 0))
 			stat.lastEventCommitTs.Store(tt.lastEventCommitTs)
 			stat.gotDDLOnTs.Store(tt.gotDDLOnTs)
 			stat.gotSyncpointOnTS.Store(tt.gotSyncpointOnTS)
@@ -524,7 +524,7 @@ func TestFilterAndUpdateEventByCommitTs(t *testing.T) {
 func TestUpdateCommitTsStateByEvents(t *testing.T) {
 	t.Parallel()
 
-	stat := newDispatcherStatForStateTest(newMockDispatcher(common.NewDispatcherID(), 0))
+	stat := newDispatcherStatForTest(newMockDispatcher(common.NewDispatcherID(), 0))
 	stat.lastEventCommitTs.Store(100)
 	stat.gotDDLOnTs.Store(true)
 	stat.gotSyncpointOnTS.Store(true)
@@ -790,7 +790,7 @@ func TestIsFromCurrentEpoch(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			stat := newDispatcherStatForStateTest(newMockDispatcher(common.NewDispatcherID(), 0))
+			stat := newDispatcherStatForTest(newMockDispatcher(common.NewDispatcherID(), 0))
 			state := newDispatcherEpochState(tt.epoch, tt.lastEventSeq, stat.target.GetStartTs())
 			stat.currentEpoch.Store(state)
 			result := stat.isFromCurrentEpoch(tt.event, state)
@@ -1188,7 +1188,7 @@ func TestHandleSingleDataEventsUpdatesDDLStateAndDedupsSameTsDDL(t *testing.T) {
 	}
 
 	currentService := node.ID("service1")
-	stat := newDispatcherStatForStateTest(mockDisp)
+	stat := newDispatcherStatForTest(mockDisp)
 	stat.lastEventCommitTs.Store(99)
 	stat.currentEpoch.Store(newDispatcherEpochState(10, 1, stat.target.GetStartTs()))
 	stat.session.connState.setEventServiceID(currentService)
@@ -1233,7 +1233,7 @@ func TestHandleSingleDataEventsUpdatesSyncPointStateAndDedupsSameTsSyncPoint(t *
 	}
 
 	currentService := node.ID("service1")
-	stat := newDispatcherStatForStateTest(mockDisp)
+	stat := newDispatcherStatForTest(mockDisp)
 	stat.lastEventCommitTs.Store(199)
 	stat.currentEpoch.Store(newDispatcherEpochState(10, 1, stat.target.GetStartTs()))
 	stat.session.connState.setEventServiceID(currentService)
@@ -1362,7 +1362,7 @@ func TestHandleBatchDMLEvent(t *testing.T) {
 			t.Parallel()
 			mockDisp := newMockDispatcher(common.NewDispatcherID(), 0)
 			mockDisp.handleEvents = normalHandleEvents
-			stat := newDispatcherStatForStateTest(mockDisp)
+			stat := newDispatcherStatForTest(mockDisp)
 			stat.lastEventCommitTs.Store(tt.lastCommitTs)
 			stat.currentEpoch.Store(newDispatcherEpochState(tt.epoch, tt.lastSeq, stat.target.GetStartTs()))
 			if tt.tableInfo != nil {
@@ -1388,7 +1388,7 @@ func TestHandleBatchDataEventsDoesNotAdvanceCommitTsWhenNoValidEvents(t *testing
 		return false
 	}
 
-	stat := newDispatcherStatForStateTest(mockDisp)
+	stat := newDispatcherStatForTest(mockDisp)
 	stat.lastEventCommitTs.Store(50)
 	stat.currentEpoch.Store(newDispatcherEpochState(10, 1, stat.target.GetStartTs()))
 
@@ -1450,7 +1450,7 @@ func TestNewDispatcherResetRequest(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			mockDisp := newMockDispatcher(common.NewDispatcherID(), startTs)
 			mockDisp.skipSyncpointAtStartTs = tc.skipSyncpointAtStartTs
-			stat := newDispatcherStatForStateTest(mockDisp)
+			stat := newDispatcherStatForTest(mockDisp)
 			resetReq := stat.newDispatcherResetRequest("local", tc.resetTs, 1)
 			require.Equal(t, tc.expectedSyncPointTs, resetReq.SyncPointTs)
 		})
