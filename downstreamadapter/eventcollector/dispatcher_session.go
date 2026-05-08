@@ -355,6 +355,7 @@ func (s *dispatcherSession) newDispatcherResetRequest(serverID string, resetTs u
 			Timezone:             s.target.GetTimezone(),
 			Integrity:            s.target.GetIntegrityConfig(),
 			OutputRawChangeEvent: s.target.IsOutputRawChangeEvent(),
+			TxnAtomicity:         string(s.target.GetTxnAtomicity()),
 		},
 	}
 }
