@@ -24647,7 +24647,7 @@
           "linewidth": 1,
           "links": [],
           "maxPerRow": 3,
-          "nullPointMode": "null",
+          "nullPointMode": "null as zero",
           "options": {
             "alertThreshold": true
           },
