@@ -1583,7 +1583,7 @@ func TestHandleDDLEventTableInfoUpdate(t *testing.T) {
 
 	storedTableInfo = stat.tableInfo.Load().(*common.TableInfo)
 	require.Same(t, tableDDL.TableInfo, storedTableInfo)
-	require.Equal(t, tableDDL.FinishedTs, stat.tableInfoVersion.Load())
+	require.Equal(t, viewDDL.FinishedTs, stat.tableInfoVersion.Load())
 	require.Len(t, mockDisp.events, 2)
 	require.Same(t, viewDDL, mockDisp.events[1].Event)
 }

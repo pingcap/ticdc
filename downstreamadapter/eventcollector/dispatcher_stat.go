@@ -70,8 +70,8 @@ type dispatcherStat struct {
 	gotSyncpointOnTS atomic.Bool
 	// tableInfo is the latest table info of the dispatcher's corresponding table.
 	tableInfo atomic.Value
-	// tableInfoVersion is the latest table info version of the dispatcher's corresponding table.
-	// It should be updated together with tableInfo, because following DMLs use them as one schema snapshot.
+	// tableInfoVersion is the latest schema version delivered to this dispatcher.
+	// It may advance even when tableInfo is not replaced.
 	tableInfoVersion atomic.Uint64
 }
 
@@ -440,12 +440,20 @@ func (d *dispatcherStat) handleSingleDataEvents(events []dispatcher.DispatcherEv
 }
 
 func (d *dispatcherStat) updateTableInfoByDDL(ddl *commonEvent.DDLEvent) {
-	if ddl.TableInfo == nil {
+	tableSpan := d.target.GetTableSpan()
+	if tableSpan == nil || tableSpan.TableID == common.DDLSpanTableID {
 		return
 	}
 
-	tableSpan := d.target.GetTableSpan()
-	if tableSpan == nil || tableSpan.TableID == common.DDLSpanTableID {
+	// EXCHANGE PARTITION can change the schema version of a physical table dispatcher
+	// while ddl.TableInfo carries another logical table. The storage sink uses
+	// tableInfoVersion to decide whether a DML belongs to an old schema, so advance
+	// it for every DDL delivered to this dispatcher.
+	// TODO: Revisit whether the storage sink should discard DML solely by comparing
+	// tableInfoVersion with existing schema files.
+	d.tableInfoVersion.Store(ddl.FinishedTs)
+
+	if ddl.TableInfo == nil {
 		return
 	}
 
@@ -463,7 +471,6 @@ func (d *dispatcherStat) updateTableInfoByDDL(ddl *commonEvent.DDLEvent) {
 		return
 	}
 
-	d.tableInfoVersion.Store(ddl.FinishedTs)
 	d.tableInfo.Store(ddl.TableInfo)
 }
 
