@@ -147,7 +147,14 @@ trap 'cleanup' EXIT
 
 rm -rf $WORK_DIR && mkdir -p $WORK_DIR
 
-start_tidb_cluster --workdir $WORK_DIR
+# start_tidb_cluster --workdir $WORK_DIR
+cat >"$WORK_DIR/tidb_config.toml" <<EOF
+  split-table = true
+  new_collations_enabled_on_first_bootstrap = true
+  temp-dir = "${TIDB_TEMP_DIR:-/DATA/disk1/tidb-tmp}"
+EOF
+
+start_tidb_cluster --workdir $WORK_DIR --tidb-config "$WORK_DIR/tidb_config.toml"
 
 build_runner
 write_runner_config
