@@ -5,6 +5,7 @@
 	cdc kafka_consumer storage_consumer pulsar_consumer filter_helper \
 	prepare_test_binaries \
 	unit_test_in_verify_ci integration_test_build integration_test_build_fast integration_test_mysql integration_test_kafka integration_test_storage integration_test_pulsar \
+	integration_test_weekly_rand_ddl_mysql \
 	generate-next-gen-grafana
 
 
@@ -242,6 +243,9 @@ integration_test_storage: check_third_party_binary
 
 integration_test_pulsar: check_third_party_binary
 	tests/integration_tests/run.sh pulsar "$(CASE)" "$(START_AT)"
+
+integration_test_weekly_rand_ddl_mysql: check_third_party_binary
+	tests/integration_tests/run_weekly_rand_ddl_it_in_ci.sh mysql
 
 unit_test: check_failpoint_ctl generate-protobuf
 	mkdir -p "$(TEST_DIR)"
