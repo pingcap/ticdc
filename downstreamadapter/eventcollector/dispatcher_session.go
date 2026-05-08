@@ -291,10 +291,7 @@ func (s *dispatcherSession) handleRemoteReadyEvent(serverID node.ID) {
 	s.commitReady(serverID)
 }
 
-func (s *dispatcherSession) handleNotReusableEvent(event dispatcher.DispatcherEvent) {
-	if *event.From == s.localServerID {
-		log.Panic("should not happen: local event service should not send not reusable event")
-	}
+func (s *dispatcherSession) handleNotReusableEvent(_ dispatcher.DispatcherEvent) {
 	candidate := s.connState.getNextRemoteCandidate()
 	if candidate != "" {
 		s.registerTo(candidate)
