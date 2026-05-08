@@ -1203,6 +1203,54 @@ func TestWriteToEventStoreZstdCompressionDisabled(t *testing.T) {
 	require.Equal(t, 1, count)
 }
 
+func TestEncodeAndMaybeCompressValue(t *testing.T) {
+	entry := &common.RawKVEntry{
+		OpType:  common.OpTypePut,
+		StartTs: 100,
+		CRTs:    200,
+		Key:     []byte("encode-key"),
+		Value:   bytes.Repeat([]byte("value"), 32),
+	}
+
+	encoder, err := zstd.NewWriter(nil)
+	require.NoError(t, err)
+	defer encoder.Close()
+
+	expectedRawValue := entry.Encode()
+
+	t.Run("withoutCompression", func(t *testing.T) {
+		dstBuf := make([]byte, 0, 8)
+		value, compressionType, nextRawBuf, nextDstBuf := encodeAndMaybeCompressValue(
+			entry, encoder, nil, dstBuf, false,
+		)
+		require.Equal(t, CompressionNone, compressionType)
+		require.Equal(t, expectedRawValue, value)
+		require.Len(t, nextRawBuf, 0)
+		require.GreaterOrEqual(t, cap(nextRawBuf), len(expectedRawValue))
+		require.Empty(t, nextDstBuf)
+		require.Equal(t, cap(dstBuf), cap(nextDstBuf))
+	})
+
+	t.Run("withCompression", func(t *testing.T) {
+		value, compressionType, nextRawBuf, nextDstBuf := encodeAndMaybeCompressValue(
+			entry, encoder, nil, nil, true,
+		)
+		require.Equal(t, CompressionZSTD, compressionType)
+		require.Len(t, nextRawBuf, 0)
+		require.GreaterOrEqual(t, cap(nextRawBuf), len(expectedRawValue))
+		require.Empty(t, nextDstBuf)
+		require.GreaterOrEqual(t, cap(nextDstBuf), len(value))
+
+		decoder, err := zstd.NewReader(nil)
+		require.NoError(t, err)
+		defer decoder.Close()
+
+		decodedValue, err := decoder.DecodeAll(value, nil)
+		require.NoError(t, err)
+		require.Equal(t, expectedRawValue, decodedValue)
+	})
+}
+
 func TestEventStoreCompressionAndIterDecodeBufferReuse(t *testing.T) {
 	restoreCfg := setZstdCompressionForTest(t, true)
 	defer restoreCfg()

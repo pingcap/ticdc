@@ -1384,7 +1384,7 @@ func (e *eventStore) writeEvents(
 				}
 			} else if e.encryptionManager != nil {
 				var value []byte
-				_, value, compressionType, rawBuf, dstBuf = encodeAndMaybeCompressValue(kv, encoder, rawBuf, dstBuf, needCompress)
+				value, compressionType, rawBuf, dstBuf = encodeAndMaybeCompressValue(kv, encoder, rawBuf, dstBuf, needCompress)
 				valueBytesAfter = int64(len(value))
 
 				// Encrypt if encryption is enabled (after compression)
@@ -1408,7 +1408,7 @@ func (e *eventStore) writeEvents(
 				}
 			} else {
 				var value []byte
-				_, value, compressionType, rawBuf, dstBuf = encodeAndMaybeCompressValue(kv, encoder, rawBuf, dstBuf, true)
+				value, compressionType, rawBuf, dstBuf = encodeAndMaybeCompressValue(kv, encoder, rawBuf, dstBuf, true)
 				valueBytesAfter = int64(len(value))
 				// SetDeferred is a write path optimization. Now that the compressed
 				// value length is known, reserve the exact key/value space in the
@@ -1458,15 +1458,15 @@ func encodeAndMaybeCompressValue(
 	rawBuf []byte,
 	dstBuf []byte,
 	needCompress bool,
-) (rawValue []byte, value []byte, compressionType CompressionType, nextRawBuf []byte, nextDstBuf []byte) {
-	rawValue = ensureValueBuffer(rawBuf, int(kv.GetSize()))
+) (value []byte, compressionType CompressionType, nextRawBuf []byte, nextDstBuf []byte) {
+	rawValue := ensureValueBuffer(rawBuf, int(kv.GetSize()))
 	rawValue = kv.EncodeTo(rawValue)
 	value = rawValue
 	compressionType = CompressionNone
 	nextRawBuf = rawValue[:0]
 	nextDstBuf = dstBuf
 	if !needCompress {
-		return rawValue, value, compressionType, nextRawBuf, nextDstBuf
+		return value, compressionType, nextRawBuf, nextDstBuf
 	}
 
 	maxEncodedSize := encoder.MaxEncodedSize(len(rawValue))
@@ -1475,7 +1475,7 @@ func encodeAndMaybeCompressValue(
 	compressionType = CompressionZSTD
 	nextDstBuf = value[:0]
 	metrics.EventStoreCompressedRowsCount.Inc()
-	return rawValue, value, compressionType, nextRawBuf, nextDstBuf
+	return value, compressionType, nextRawBuf, nextDstBuf
 }
 
 func ensureValueBuffer(buf []byte, minCap int) []byte {
