@@ -71,7 +71,7 @@ type dispatcherStat struct {
 	// tableInfo is the latest table info of the dispatcher's corresponding table.
 	tableInfo atomic.Value
 	// tableInfoVersion is the latest table info version of the dispatcher's corresponding table.
-	// It is updated by ddl event
+	// It should be updated together with tableInfo, because following DMLs use them as one schema snapshot.
 	tableInfoVersion atomic.Uint64
 }
 
