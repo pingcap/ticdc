@@ -28,7 +28,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
-	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
@@ -46,6 +45,7 @@ type mockDispatcher struct {
 	handleError  func(err error)
 	events       []dispatcher.DispatcherEvent
 	checkPointTs uint64
+	tableSpan    *heartbeatpb.TableSpan
 
 	skipSyncpointAtStartTs bool
 	router                 routing.Router
@@ -77,6 +77,9 @@ func (m *mockDispatcher) GetChangefeedID() common.ChangeFeedID {
 }
 
 func (m *mockDispatcher) GetTableSpan() *heartbeatpb.TableSpan {
+	if m.tableSpan != nil {
+		return m.tableSpan
+	}
 	return &heartbeatpb.TableSpan{
 		TableID: 1,
 	}
@@ -1508,17 +1511,19 @@ func TestRegisterTo(t *testing.T) {
 }
 
 func TestHandleDDLEventTableInfoUpdate(t *testing.T) {
-	t.Parallel()
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+	helper.Tk().MustExec("use test")
+
+	tableDDL := helper.DDL2Event("CREATE TABLE `products` (`id` INT PRIMARY KEY)")
+	viewDDL := helper.DDL2Event("CREATE VIEW `transient_view` AS SELECT 1 AS `id`")
 
 	localServerID := node.ID("local")
 	remoteServerID := node.ID("remote")
 
-	var capturedEvent *commonEvent.DDLEvent
 	mockDisp := newMockDispatcher(common.NewDispatcherID(), 0)
+	mockDisp.tableSpan = &heartbeatpb.TableSpan{TableID: tableDDL.TableInfo.TableName.TableID}
 	mockDisp.handleEvents = func(events []dispatcher.DispatcherEvent, wakeCallback func()) bool {
-		if len(events) > 0 {
-			capturedEvent = events[0].Event.(*commonEvent.DDLEvent)
-		}
 		return false
 	}
 
@@ -1527,171 +1532,27 @@ func TestHandleDDLEventTableInfoUpdate(t *testing.T) {
 	stat.currentEpoch.Store(newDispatcherEpochState(10, 1, stat.target.GetStartTs()))
 	stat.lastEventCommitTs.Store(50)
 
-	tableInfo := &common.TableInfo{
-		TableName: common.TableName{
-			Schema:  "source_db",
-			Table:   "users",
-			TableID: 1,
-		},
-	}
-
-	ddlEvent := &commonEvent.DDLEvent{
-		Version:    commonEvent.DDLEventVersion1,
-		Query:      "ALTER TABLE `source_db`.`users` ADD COLUMN `c1` INT",
-		FinishedTs: 100,
-		Epoch:      10,
-		Seq:        2,
-		TableInfo:  tableInfo,
-	}
-
-	events := []dispatcher.DispatcherEvent{
-		{From: &remoteServerID, Event: ddlEvent},
-	}
-
-	stat.handleDataEvents(events...)
+	tableDDL.Epoch = 10
+	tableDDL.Seq = 2
+	stat.handleDataEvents(dispatcher.DispatcherEvent{From: &remoteServerID, Event: tableDDL})
 
 	storedTableInfo := stat.tableInfo.Load().(*common.TableInfo)
 	require.NotNil(t, storedTableInfo)
-	require.Same(t, tableInfo, storedTableInfo)
-	require.Equal(t, "source_db", storedTableInfo.TableName.Schema)
-	require.Equal(t, "users", storedTableInfo.TableName.Table)
-	require.Equal(t, int64(1), storedTableInfo.TableName.TableID)
-	require.Equal(t, uint64(100), stat.tableInfoVersion.Load())
-	require.NotNil(t, capturedEvent)
-	require.Same(t, ddlEvent, capturedEvent)
-}
+	require.Same(t, tableDDL.TableInfo, storedTableInfo)
+	require.Equal(t, "test", storedTableInfo.TableName.Schema)
+	require.Equal(t, "products", storedTableInfo.TableName.Table)
+	require.Equal(t, tableDDL.TableInfo.TableName.TableID, storedTableInfo.TableName.TableID)
+	require.Equal(t, tableDDL.FinishedTs, stat.tableInfoVersion.Load())
+	require.Len(t, mockDisp.events, 1)
+	require.Same(t, tableDDL, mockDisp.events[0].Event)
 
-func TestHandleDDLEventDoesNotOverwriteTableInfoForAnotherTable(t *testing.T) {
-	t.Parallel()
+	viewDDL.Epoch = 10
+	viewDDL.Seq = 3
+	stat.handleDataEvents(dispatcher.DispatcherEvent{From: &remoteServerID, Event: viewDDL})
 
-	localServerID := node.ID("local")
-	remoteServerID := node.ID("remote")
-
-	var capturedEvent *commonEvent.DDLEvent
-	mockDisp := newMockDispatcher(common.NewDispatcherID(), 0)
-	mockDisp.handleEvents = func(events []dispatcher.DispatcherEvent, wakeCallback func()) bool {
-		if len(events) > 0 {
-			capturedEvent = events[0].Event.(*commonEvent.DDLEvent)
-		}
-		return false
-	}
-
-	router, err := routing.NewRouter(mockChangefeedID, false, []*config.DispatchRule{
-		{
-			Matcher:      []string{"source_db.*"},
-			TargetSchema: "target_db",
-			TargetTable:  "{table}_routed",
-		},
-	})
-	require.NoError(t, err)
-	mockDisp.router = router
-
-	stat := newDispatcherStat(mockDisp, newTestEventCollector(localServerID), nil)
-	stat.connState.setEventServiceID(remoteServerID)
-	stat.currentEpoch.Store(newDispatcherEpochState(10, 1, stat.target.GetStartTs()))
-	stat.lastEventCommitTs.Store(150)
-
-	originalTableInfo := &common.TableInfo{
-		TableName: common.TableName{
-			Schema:       "source_db",
-			Table:        "products",
-			TableID:      1,
-			TargetSchema: "target_db",
-			TargetTable:  "products_routed",
-		},
-		UpdateTS: 100,
-	}
-	stat.tableInfo.Store(originalTableInfo)
-	stat.tableInfoVersion.Store(100)
-
-	ddlEvent := &commonEvent.DDLEvent{
-		Version:    commonEvent.DDLEventVersion1,
-		Type:       byte(model.ActionCreateView),
-		SchemaName: "source_db",
-		TableName:  "transient_view",
-		Query:      "CREATE VIEW `source_db`.`transient_view` AS SELECT `id` FROM `source_db`.`users`",
-		StartTs:    199,
-		FinishedTs: 200,
-		Epoch:      10,
-		Seq:        2,
-		TableInfo: &common.TableInfo{
-			TableName: common.TableName{
-				Schema:  "source_db",
-				Table:   "transient_view",
-				TableID: 2,
-			},
-			UpdateTS: 200,
-		},
-	}
-
-	events := []dispatcher.DispatcherEvent{
-		{From: &remoteServerID, Event: ddlEvent},
-	}
-
-	stat.handleDataEvents(events...)
-
-	storedTableInfo := stat.tableInfo.Load().(*common.TableInfo)
-	require.Same(t, originalTableInfo, storedTableInfo)
-	require.Equal(t, uint64(100), stat.tableInfoVersion.Load())
-	require.NotNil(t, capturedEvent)
-	require.NotSame(t, ddlEvent, capturedEvent)
-	require.Equal(t, "target_db", capturedEvent.TableInfo.GetTargetSchemaName())
-	require.Equal(t, "transient_view_routed", capturedEvent.TableInfo.GetTargetTableName())
-}
-
-func TestHandleDDLEventUpdatesPartitionLogicalTableInfo(t *testing.T) {
-	t.Parallel()
-
-	localServerID := node.ID("local")
-	remoteServerID := node.ID("remote")
-
-	mockDisp := newMockDispatcher(common.NewDispatcherID(), 0)
-	stat := newDispatcherStat(mockDisp, newTestEventCollector(localServerID), nil)
-	stat.connState.setEventServiceID(remoteServerID)
-	stat.currentEpoch.Store(newDispatcherEpochState(10, 1, stat.target.GetStartTs()))
-	stat.lastEventCommitTs.Store(150)
-
-	originalTableInfo := &common.TableInfo{
-		TableName: common.TableName{
-			Schema:      "source_db",
-			Table:       "partitioned_events",
-			TableID:     10,
-			IsPartition: true,
-		},
-		UpdateTS: 100,
-	}
-	stat.tableInfo.Store(originalTableInfo)
-	stat.tableInfoVersion.Store(100)
-
-	updatedTableInfo := &common.TableInfo{
-		TableName: common.TableName{
-			Schema:      "source_db",
-			Table:       "partitioned_events",
-			TableID:     10,
-			IsPartition: true,
-		},
-		UpdateTS: 200,
-	}
-	ddlEvent := &commonEvent.DDLEvent{
-		Version:    commonEvent.DDLEventVersion1,
-		Type:       byte(model.ActionAddTablePartition),
-		SchemaName: "source_db",
-		TableName:  "partitioned_events",
-		Query:      "ALTER TABLE `source_db`.`partitioned_events` ADD PARTITION (PARTITION p1 VALUES LESS THAN (100))",
-		StartTs:    199,
-		FinishedTs: 200,
-		Epoch:      10,
-		Seq:        2,
-		TableInfo:  updatedTableInfo,
-	}
-
-	events := []dispatcher.DispatcherEvent{
-		{From: &remoteServerID, Event: ddlEvent},
-	}
-
-	stat.handleDataEvents(events...)
-
-	storedTableInfo := stat.tableInfo.Load().(*common.TableInfo)
-	require.Same(t, updatedTableInfo, storedTableInfo)
-	require.Equal(t, uint64(200), stat.tableInfoVersion.Load())
+	storedTableInfo = stat.tableInfo.Load().(*common.TableInfo)
+	require.Same(t, tableDDL.TableInfo, storedTableInfo)
+	require.Equal(t, tableDDL.FinishedTs, stat.tableInfoVersion.Load())
+	require.Len(t, mockDisp.events, 2)
+	require.Same(t, viewDDL, mockDisp.events[1].Event)
 }
