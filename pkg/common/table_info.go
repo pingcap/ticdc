@@ -117,7 +117,7 @@ type TableInfo struct {
 }
 
 func (ti *TableInfo) InitPrivateFields() {
-	if ti == nil {
+	if ti == nil || ti.columnSchema == nil {
 		return
 	}
 
@@ -142,10 +142,10 @@ func (ti *TableInfo) InitPrivateFields() {
 
 // CloneWithRouting creates a shallow copy of TableInfo with routing applied.
 // The new TableInfo shares the same columnSchema, View, Sequence pointers
-// but has its own TableName (with TargetSchema/TargetTable set) and uninitialized preSQLs.
+// but has its own TableName (with TargetSchema/TargetTable set) and preSQLs.
 // This is safe because:
 // - columnSchema, View, Sequence are read-only after creation
-// - preSQLs will be initialized later via InitPrivateFields() using the new TableName
+// - preSQLs is initialized using the new TableName before the clone is returned
 // - TableName is a value type that gets copied
 func (ti *TableInfo) CloneWithRouting(targetSchema, targetTable string) *TableInfo {
 	if ti == nil {
@@ -178,6 +178,7 @@ func (ti *TableInfo) CloneWithRouting(targetSchema, targetTable string) *TableIn
 		})
 	}
 
+	cloned.InitPrivateFields()
 	return cloned
 }
 
@@ -230,6 +231,7 @@ func UnmarshalJSONToTableInfo(data []byte) (*TableInfo, error) {
 	if err != nil {
 		return nil, err
 	}
+	ti.InitPrivateFields()
 
 	// when this tableInfo is released, we need to cut down the reference count of the columnSchema
 	// This function should be appear when tableInfo is created as a pair.
@@ -673,6 +675,7 @@ func newTableInfo(schema string, table string, tableID int64, isPartition bool, 
 
 func NewTableInfo(schemaName string, tableName string, tableID int64, isPartition bool, columnSchema *columnSchema, tableInfo *model.TableInfo) *TableInfo {
 	ti := newTableInfo(schemaName, tableName, tableID, isPartition, columnSchema, tableInfo)
+	ti.InitPrivateFields()
 
 	// when this tableInfo is released, we need to cut down the reference count of the columnSchema
 	// This function should be appeared when tableInfo is created as a pair.
@@ -698,7 +701,5 @@ func WrapTableInfo(schemaName string, info *model.TableInfo) *TableInfo {
 // do not call this method on the production code.
 func NewTableInfo4Decoder(schema string, tableInfo *model.TableInfo) *TableInfo {
 	cs := NewColumnSchema4Decoder(tableInfo)
-	result := newTableInfo(schema, tableInfo.Name.O, tableInfo.ID, tableInfo.GetPartitionInfo() != nil, cs, tableInfo)
-	result.InitPrivateFields()
-	return result
+	return NewTableInfo(schema, tableInfo.Name.O, tableInfo.ID, tableInfo.GetPartitionInfo() != nil, cs, tableInfo)
 }

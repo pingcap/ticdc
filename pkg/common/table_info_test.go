@@ -162,6 +162,10 @@ func TestUnmarshalJSONToTableInfoRoundTrip(t *testing.T) {
 		Columns:    []*model.ColumnInfo{idCol, nameCol},
 	})
 	require.NotNil(t, source)
+	require.Contains(t, source.GetPreInsertSQL(), QuoteSchema("test", "t_roundtrip"))
+
+	routed := source.CloneWithRouting("target_db", "target_table")
+	require.Contains(t, routed.GetPreInsertSQL(), QuoteSchema("target_db", "target_table"))
 
 	data, err := source.Marshal()
 	require.NoError(t, err)
@@ -176,6 +180,7 @@ func TestUnmarshalJSONToTableInfoRoundTrip(t *testing.T) {
 	require.Equal(t, len(source.GetColumns()), len(decoded.GetColumns()))
 	require.Equal(t, source.GetColumns()[0].Name.O, decoded.GetColumns()[0].Name.O)
 	require.Equal(t, source.GetColumns()[1].Name.O, decoded.GetColumns()[1].Name.O)
+	require.Contains(t, decoded.GetPreInsertSQL(), QuoteSchema("test", "t_roundtrip"))
 }
 
 func TestUnquoteName(t *testing.T) {

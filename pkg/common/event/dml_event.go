@@ -283,10 +283,6 @@ func (b *BatchDMLEvent) AssembleRows(tableInfo *common.TableInfo) {
 		log.Panic("DMLEvent: TableInfo is nil")
 	}
 
-	defer func() {
-		b.TableInfo.InitPrivateFields()
-	}()
-
 	// For local events (same node), rows are already set.
 	if b.Rows != nil {
 		if !tableInfo.TableName.IsRouted() {
@@ -296,6 +292,9 @@ func (b *BatchDMLEvent) AssembleRows(tableInfo *common.TableInfo) {
 			originVersion := b.TableInfo.GetUpdateTS()
 			routedVersion := tableInfo.GetUpdateTS()
 			if originVersion != routedVersion {
+				// TODO: Analyze partition DDL cases where local rows can be
+				// decoded with a source TableInfo version different from the
+				// routed TableInfo cached in the dispatcher.
 				log.Panic("table version mismatch when set routed table info",
 					zap.Uint64("originTableVersion", originVersion),
 					zap.Uint64("routedTableVersion", routedVersion))
