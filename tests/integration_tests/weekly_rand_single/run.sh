@@ -153,6 +153,11 @@ start_consumer_if_needed
 
 "$WORK_DIR/random_ddl_test_runner" --config "$WORK_DIR/runner_config.json" --phase workload
 
+# Disable external-ts reads before sync_diff_inspector to avoid fallback reads at a later syncpoint.
+if [ "$SINK_TYPE" == "mysql" ]; then
+	run_sql "SET GLOBAL tidb_enable_external_ts_read = off;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+fi
+
 DIFF_CHECK_TIME=${DIFF_CHECK_TIME:-300}
 check_sync_diff $WORK_DIR "$WORK_DIR/diff_config.toml" $DIFF_CHECK_TIME
 
@@ -163,10 +168,6 @@ if command -v rg >/dev/null 2>&1; then
 		rg -n -i "panic|fatal|data race" "$WORK_DIR"/runner.log "$WORK_DIR"/ddl_trace.log "$WORK_DIR"/stdout*.log "$WORK_DIR"/cdc*.log "$WORK_DIR"/cdc_*_consumer*.log "$WORK_DIR"/cdc_*_consumer_stdout*.log 2>/dev/null | head -n 50 || true
 		exit 1
 	fi
-fi
-
-if [ "$SINK_TYPE" == "mysql" ]; then
-	run_sql "SET GLOBAL tidb_enable_external_ts_read = off;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 fi
 
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"

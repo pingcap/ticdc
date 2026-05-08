@@ -9,7 +9,19 @@ import (
 )
 
 func openMySQL(ctx context.Context, cfg mysqlConnConfig) (*sql.DB, error) {
-	db, err := sql.Open("mysql", cfg.dsn(""))
+	return openMySQLWithExtraParams(ctx, cfg, "")
+}
+
+func openMySQLWithExtraParams(ctx context.Context, cfg mysqlConnConfig, extraParams string) (*sql.DB, error) {
+	dsn := cfg.dsn("")
+	if extraParams != "" {
+		dsn += "&" + extraParams
+	}
+	return openMySQLWithDSN(ctx, dsn)
+}
+
+func openMySQLWithDSN(ctx context.Context, dsn string) (*sql.DB, error) {
+	db, err := sql.Open("mysql", dsn)
 	if err != nil {
 		return nil, err
 	}
