@@ -26,10 +26,10 @@ type resolveLockKey struct {
 	regionID   uint64
 }
 
-// resolveLockRateLimiter limits how frequently resolve-lock can be attempted
-// for the same keyspace and region. Pending tasks are tracked separately from
-// actual execution time, so queued tasks are deduplicated without moving the
-// execution throttle window forward.
+// resolveLockRateLimiter deduplicates and throttles resolve-lock tasks by
+// (keyspaceID, regionID). A key in pending means a task is already queued or
+// running. lastRun records the last actual resolve completion time, so new
+// tasks are blocked until minInterval has passed after the previous execution.
 type resolveLockRateLimiter struct {
 	mu          sync.Mutex
 	pending     map[resolveLockKey]struct{}
