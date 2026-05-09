@@ -71,7 +71,10 @@ func main() {
 	if err := addLock(ctx, cfg); err != nil {
 		log.S().Fatal(err)
 	}
-	time.Sleep(5 * time.Second)
+	if err := splitLockedTable(sourceDB); err != nil {
+		log.S().Fatal(err)
+	}
+	time.Sleep(12 * time.Second)
 	if err := finishMark(sourceDB); err != nil {
 		log.S().Fatal(err)
 	}
@@ -81,6 +84,7 @@ func prepare(sourceDB *sql.DB) error {
 	sqls := []string{
 		"use test;",
 		"create table t1 (a int primary key);",
+		"split table t1 between (0) and (10000) regions 10;",
 	}
 	for _, sql := range sqls {
 		_, err := sourceDB.Exec(sql)
@@ -91,10 +95,16 @@ func prepare(sourceDB *sql.DB) error {
 	return nil
 }
 
+func splitLockedTable(sourceDB *sql.DB) error {
+	_, err := sourceDB.Exec("split table test.t1 between (0) and (20000) regions 20;")
+	return errors.Trace(err)
+}
+
 func finishMark(sourceDB *sql.DB) error {
 	sqls := []string{
 		"use test;",
-		"insert into t1 value (1);",
+		"create table finish_mark (a int primary key);",
+		"insert into finish_mark value (1);",
 		"create table t2 (a int primary key);",
 	}
 	for _, sql := range sqls {
@@ -129,12 +139,12 @@ func addLock(ctx context.Context, cfg *util.Config) error {
 
 	locker := Locker{
 		tableID:   tableID,
-		tableSize: 1000,
+		tableSize: 10000,
 		lockTTL:   10 * time.Second,
 		pdcli:     pdcli,
 		kv:        store.(tikv.Storage),
 	}
-	err = locker.generateLocks(ctx, 10*time.Second)
+	err = locker.generateLocks(ctx)
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -181,7 +191,7 @@ type Locker struct {
 }
 
 // generateLocks sends Prewrite requests to TiKV to generate locks, without committing and rolling back.
-func (c *Locker) generateLocks(ctx context.Context, genDur time.Duration) error {
+func (c *Locker) generateLocks(ctx context.Context) error {
 	log.Info("genLock started")
 
 	const maxTxnSize = 1000
@@ -189,42 +199,25 @@ func (c *Locker) generateLocks(ctx context.Context, genDur time.Duration) error 
 	// How many keys should be in the next transaction.
 	nextTxnSize := rand.Intn(maxTxnSize) + 1 // 0 is not allowed.
 
-	// How many keys has been scanned since last time sending request.
-	scannedKeys := 0
 	var batch []int64
 
-	// Send lock for 10 seconds
-	timer := time.After(genDur)
-	for rowID := int64(0); ; rowID = (rowID + 1) % c.tableSize {
-		select {
-		case <-timer:
-			log.Info("genLock done")
-			return nil
-		default:
-		}
-
-		scannedKeys++
-
-		// Randomly decide whether to lock current key.
-		lockThis := rand.Intn(2) == 0
-
-		if lockThis {
-			batch = append(batch, rowID)
-
-			if len(batch) >= nextTxnSize {
-				// The batch is large enough to start the transaction
-				err := c.lockKeys(ctx, batch)
-				if err != nil {
-					return errors.Annotate(err, "lock keys failed")
-				}
-
-				// Start the next loop
-				batch = batch[:0]
-				scannedKeys = 0
-				nextTxnSize = rand.Intn(maxTxnSize) + 1
+	for rowID := int64(0); rowID < c.tableSize; rowID++ {
+		batch = append(batch, rowID)
+		if len(batch) >= nextTxnSize {
+			if err := c.lockKeys(ctx, batch); err != nil {
+				return errors.Annotate(err, "lock keys failed")
 			}
+			batch = batch[:0]
+			nextTxnSize = rand.Intn(maxTxnSize) + 1
 		}
 	}
+	if len(batch) > 0 {
+		if err := c.lockKeys(ctx, batch); err != nil {
+			return errors.Annotate(err, "lock keys failed")
+		}
+	}
+	log.Info("genLock done")
+	return nil
 }
 
 func (c *Locker) lockKeys(ctx context.Context, rowIDs []int64) error {
@@ -330,8 +323,9 @@ func (c *Locker) lockBatch(ctx context.Context, keys [][]byte, primary []byte) (
 		if prewriteResp == nil {
 			return 0, errors.Errorf("response body missing")
 		}
-
-		// Ignore key errors since we never commit the transaction and we don't need to keep consistency here.
+		if keyErrs := prewriteResp.(*kvrpcpb.PrewriteResponse).GetErrors(); len(keyErrs) > 0 {
+			return 0, errors.Errorf("prewrite failed with key errors: %v", keyErrs)
+		}
 		return lockedKeys, nil
 	}
 }
