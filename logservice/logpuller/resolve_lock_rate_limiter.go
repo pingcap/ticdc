@@ -45,6 +45,8 @@ func newResolveLockRateLimiter() *resolveLockRateLimiter {
 	}
 }
 
+// tryEnqueue is called before sending a resolve-lock task to the queue.
+// It rejects duplicate pending tasks and tasks still inside the cooldown window.
 func (l *resolveLockRateLimiter) tryEnqueue(key resolveLockKey, now time.Time) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -61,6 +63,7 @@ func (l *resolveLockRateLimiter) tryEnqueue(key resolveLockKey, now time.Time) b
 	return true
 }
 
+// cancel clears the pending mark when a task cannot be queued or no longer needs to run.
 func (l *resolveLockRateLimiter) cancel(key resolveLockKey) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -68,6 +71,8 @@ func (l *resolveLockRateLimiter) cancel(key resolveLockKey) {
 	delete(l.pending, key)
 }
 
+// tryStart is called by the resolve-lock worker right before executing Resolve.
+// It rechecks the cooldown window in case the task waited in the queue.
 func (l *resolveLockRateLimiter) tryStart(key resolveLockKey, now time.Time) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -83,6 +88,7 @@ func (l *resolveLockRateLimiter) tryStart(key resolveLockKey, now time.Time) boo
 	return true
 }
 
+// finish is called after Resolve returns to clear pending and start the cooldown window.
 func (l *resolveLockRateLimiter) finish(key resolveLockKey, now time.Time) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -92,6 +98,7 @@ func (l *resolveLockRateLimiter) finish(key resolveLockKey, now time.Time) {
 	l.gcLocked(now)
 }
 
+// gc removes old cooldown records after the map grows beyond the threshold.
 func (l *resolveLockRateLimiter) gc(now time.Time) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -99,11 +106,13 @@ func (l *resolveLockRateLimiter) gc(now time.Time) {
 	l.gcLocked(now)
 }
 
+// canRunLocked reports whether a key is outside its cooldown window.
 func (l *resolveLockRateLimiter) canRunLocked(key resolveLockKey, now time.Time) bool {
 	lastRun, ok := l.lastRun[key]
 	return !ok || now.Sub(lastRun) >= l.minInterval
 }
 
+// gcLocked drops expired last-run entries while keeping pending tasks intact.
 func (l *resolveLockRateLimiter) gcLocked(now time.Time) {
 	if len(l.lastRun) <= resolveLastRunGCThreshold {
 		return
