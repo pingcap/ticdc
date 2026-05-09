@@ -1,5 +1,32 @@
 # Repository Guidelines
 
+## Agent Implementation
+
+### Purpose & Boundaries
+
+- Purpose: help implement, review, and document focused changes in this repository.
+- Boundaries: follow the user's task, keep changes minimal, and avoid unrelated refactors or cleanup.
+- If requirements conflict or are unclear, surface the ambiguity before changing code.
+
+### Integration Points (Inputs/Outputs/Hooks)
+
+- Inputs: user request, repository files, tests, build scripts, and applicable `AGENTS.md` instructions.
+- Outputs: code or documentation changes, validation results, and a concise final summary.
+- Hooks/callbacks: use Make targets, scripts, generated-code commands, and tests provided by the repository; no separate callback interface is defined here.
+
+### Capabilities & Limitations
+
+- Can inspect code, edit files, run local commands, add focused tests, and update generated files when required.
+- Can validate changes with targeted tests or checks when practical.
+- Must not introduce unrelated behavior changes, broad rewrites, or speculative abstractions.
+- Must not commit, branch, or publish changes unless explicitly asked.
+
+### Example: End-to-End Usage
+
+- Input: "Fix a sink config validation bug and add coverage."
+- Agent action: inspect the config path, patch the minimal validation logic, add or reuse a focused unit test, and run the narrow test target.
+- Expected output: a small diff, passing validation result, and a final summary listing changed files and tests run.
+
 ## Agent Change Discipline
 
 - Make surgical changes: touch only files required by the task.
@@ -40,10 +67,11 @@
 
 - Use predefined errors from the repository error package; keep the local import name consistent with surrounding code.
 - When an error comes from a third-party or library call, wrap it immediately at the boundary with `errors.WrapError(predefinedError, err, args...)`.
-- After an error has been wrapped with `errors.WrapError`, propagate it directly; do not call `errors.Trace` again on later paths.
+- For new or changed code, do not use `errors.Trace` as the initial wrapper for third-party or library errors. If no predefined error fits, choose an existing predefined error or add an appropriate one, then use `errors.WrapError`.
+- After an error has been wrapped with `errors.WrapError`, propagate it directly; do not call `errors.Trace` on later paths.
 - When creating a TiCDC error, use `GenWithStack...` or `GenWithStackByArgs...` on a predefined error and pass concrete details through arguments when needed.
 - Decide whether a newly generated error needs stack information. If a stack is unnecessary, especially on hot paths, use `FastGen...` or `FastGenByArgs...`.
-- Avoid other error creation or wrapping styles, including `errors.New`, bare `fmt.Errorf`, and adding stack information multiple times.
+- Avoid other error creation or wrapping styles in new or changed code, including `errors.New`, bare `fmt.Errorf`, and adding stack information multiple times.
 
 ## Logging
 
