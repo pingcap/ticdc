@@ -116,7 +116,7 @@ type TableInfo struct {
 	} `json:"-"`
 }
 
-func (ti *TableInfo) InitPrivateFields() {
+func (ti *TableInfo) initPreSQLs() {
 	if ti == nil || ti.columnSchema == nil {
 		return
 	}
@@ -178,7 +178,7 @@ func (ti *TableInfo) CloneWithRouting(targetSchema, targetTable string) *TableIn
 		})
 	}
 
-	cloned.InitPrivateFields()
+	cloned.initPreSQLs()
 	return cloned
 }
 
@@ -231,7 +231,7 @@ func UnmarshalJSONToTableInfo(data []byte) (*TableInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	ti.InitPrivateFields()
+	ti.initPreSQLs()
 
 	// when this tableInfo is released, we need to cut down the reference count of the columnSchema
 	// This function should be appear when tableInfo is created as a pair.
@@ -675,7 +675,7 @@ func newTableInfo(schema string, table string, tableID int64, isPartition bool, 
 
 func NewTableInfo(schemaName string, tableName string, tableID int64, isPartition bool, columnSchema *columnSchema, tableInfo *model.TableInfo) *TableInfo {
 	ti := newTableInfo(schemaName, tableName, tableID, isPartition, columnSchema, tableInfo)
-	ti.InitPrivateFields()
+	ti.initPreSQLs()
 
 	// when this tableInfo is released, we need to cut down the reference count of the columnSchema
 	// This function should be appeared when tableInfo is created as a pair.
