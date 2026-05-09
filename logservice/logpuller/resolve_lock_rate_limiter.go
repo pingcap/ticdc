@@ -37,6 +37,7 @@ type resolveLockRateLimiter struct {
 	minInterval time.Duration
 }
 
+// newResolveLockRateLimiter creates the shared rate limiter owned by a subscriptionClient.
 func newResolveLockRateLimiter() *resolveLockRateLimiter {
 	return &resolveLockRateLimiter{
 		pending:     make(map[resolveLockKey]struct{}),
@@ -45,9 +46,9 @@ func newResolveLockRateLimiter() *resolveLockRateLimiter {
 	}
 }
 
-// tryEnqueue is called before sending a resolve-lock task to the queue.
+// trySchedule is called before sending a resolve-lock task to the queue.
 // It rejects duplicate pending tasks and tasks still inside the cooldown window.
-func (l *resolveLockRateLimiter) tryEnqueue(key resolveLockKey, now time.Time) bool {
+func (l *resolveLockRateLimiter) trySchedule(key resolveLockKey, now time.Time) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
@@ -69,23 +70,6 @@ func (l *resolveLockRateLimiter) cancel(key resolveLockKey) {
 	defer l.mu.Unlock()
 
 	delete(l.pending, key)
-}
-
-// tryStart is called by the resolve-lock worker right before executing Resolve.
-// It rechecks the cooldown window in case the task waited in the queue.
-func (l *resolveLockRateLimiter) tryStart(key resolveLockKey, now time.Time) bool {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	if !l.canRunLocked(key, now) {
-		delete(l.pending, key)
-		l.gcLocked(now)
-		return false
-	}
-
-	l.pending[key] = struct{}{}
-	l.gcLocked(now)
-	return true
 }
 
 // finish is called after Resolve returns to clear pending and start the cooldown window.

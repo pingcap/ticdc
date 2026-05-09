@@ -989,11 +989,8 @@ func (s *subscriptionClient) handleResolveLockTasks(ctx context.Context) error {
 		targetTs := task.targetTs
 		key := resolveLockKey{keyspaceID: keyspaceID, regionID: regionID}
 
-		if state.ResolvedTs.Load() > targetTs || !state.Initialized.Load() {
+		if state.ResolvedTs.Load() >= targetTs || !state.Initialized.Load() {
 			s.resolveLockRateLimiter.cancel(key)
-			return
-		}
-		if !s.resolveLockRateLimiter.tryStart(key, time.Now()) {
 			return
 		}
 
@@ -1098,7 +1095,7 @@ func (s *subscriptionClient) newSubscribedSpan(
 			return
 		}
 		key := resolveLockKey{keyspaceID: span.KeyspaceID, regionID: regionID}
-		if !s.resolveLockRateLimiter.tryEnqueue(key, time.Now()) {
+		if !s.resolveLockRateLimiter.trySchedule(key, time.Now()) {
 			return
 		}
 		select {

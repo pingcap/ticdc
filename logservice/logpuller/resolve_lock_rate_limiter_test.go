@@ -25,21 +25,21 @@ func TestResolveLockRateLimiterDedupAndThrottle(t *testing.T) {
 	limiter := newResolveLockRateLimiter()
 	key := resolveLockKey{keyspaceID: 1, regionID: 1}
 
-	require.True(t, limiter.tryEnqueue(key, now))
-	require.False(t, limiter.tryEnqueue(key, now.Add(2*resolveLockMinInterval)))
+	require.True(t, limiter.trySchedule(key, now))
+	require.False(t, limiter.trySchedule(key, now.Add(2*resolveLockMinInterval)))
 
 	limiter.finish(key, now.Add(time.Second))
-	require.False(t, limiter.tryEnqueue(key, now.Add(time.Second+resolveLockMinInterval/2)))
-	require.True(t, limiter.tryEnqueue(key, now.Add(time.Second+resolveLockMinInterval)))
+	require.False(t, limiter.trySchedule(key, now.Add(time.Second+resolveLockMinInterval/2)))
+	require.True(t, limiter.trySchedule(key, now.Add(time.Second+resolveLockMinInterval)))
 }
 
 func TestResolveLockRateLimiterKeyedByKeyspaceAndRegion(t *testing.T) {
 	now := time.Now()
 	limiter := newResolveLockRateLimiter()
 
-	require.True(t, limiter.tryEnqueue(resolveLockKey{keyspaceID: 1, regionID: 1}, now))
-	require.True(t, limiter.tryEnqueue(resolveLockKey{keyspaceID: 2, regionID: 1}, now))
-	require.True(t, limiter.tryEnqueue(resolveLockKey{keyspaceID: 1, regionID: 2}, now))
+	require.True(t, limiter.trySchedule(resolveLockKey{keyspaceID: 1, regionID: 1}, now))
+	require.True(t, limiter.trySchedule(resolveLockKey{keyspaceID: 2, regionID: 1}, now))
+	require.True(t, limiter.trySchedule(resolveLockKey{keyspaceID: 1, regionID: 2}, now))
 }
 
 func TestResolveLockRateLimiterGC(t *testing.T) {

@@ -192,6 +192,8 @@ func TestHandleResolveLockTasksMetrics(t *testing.T) {
 	successBefore := testutil.ToFloat64(
 		metricResolveLockSuccessCounter)
 
+	key := resolveLockKey{keyspaceID: 1, regionID: 1}
+	require.True(t, client.resolveLockRateLimiter.trySchedule(key, time.Now()))
 	client.resolveLockTaskCh <- resolveLockTask{
 		keyspaceID: 1,
 		regionID:   1,
@@ -202,23 +204,15 @@ func TestHandleResolveLockTasksMetrics(t *testing.T) {
 		return resolver.calls.Load() == 1 &&
 			testutil.ToFloat64(metricResolveLockSuccessCounter) >= successBefore+1
 	}, time.Second, 10*time.Millisecond)
-
-	client.resolveLockTaskCh <- resolveLockTask{
-		keyspaceID: 1,
-		regionID:   1,
-		targetTs:   300,
-		state:      state,
-	}
-	require.Eventually(t, func() bool {
-		return len(client.resolveLockTaskCh) == 0
-	}, time.Second, 10*time.Millisecond)
-	require.Equal(t, int32(1), resolver.calls.Load())
+	require.False(t, client.resolveLockRateLimiter.trySchedule(key, time.Now()))
 
 	state.ResolvedTs.Store(300)
+	key = resolveLockKey{keyspaceID: 1, regionID: 2}
+	require.True(t, client.resolveLockRateLimiter.trySchedule(key, time.Now()))
 	client.resolveLockTaskCh <- resolveLockTask{
 		keyspaceID: 1,
 		regionID:   2,
-		targetTs:   300,
+		targetTs:   400,
 		state:      state,
 	}
 	require.Eventually(t, func() bool {
@@ -612,6 +606,7 @@ func TestErrCacheDispatchWithFullChannelAndCanceledContext(t *testing.T) {
 		t.Fatal("dispatch method is stuck and didn't return after context cancellation")
 	}
 }
+
 func TestErrCacheDispatchBatch(t *testing.T) {
 	mockErrInfo := regionErrorInfo{
 		regionInfo: regionInfo{
