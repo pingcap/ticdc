@@ -252,7 +252,9 @@ func (m *mockEventStore) UnregisterDispatcher(changefeedID common.ChangeFeedID, 
 	m.unregisterCount.Add(1)
 }
 
-func (m *mockEventStore) GetIterator(dispatcherID common.DispatcherID, dataRange common.DataRange) eventstore.EventIterator {
+func (m *mockEventStore) GetIterator(
+	dispatcherID common.DispatcherID, dataRange common.DataRange,
+) (eventstore.EventIterator, error) {
 	span, ok := m.dispatcherMap.Load(dispatcherID)
 	if !ok {
 		log.Panic("dispatcher not found", zap.Stringer("dispatcherID", dispatcherID))
@@ -277,7 +279,7 @@ func (m *mockEventStore) GetIterator(dispatcherID common.DispatcherID, dataRange
 	if len(entries) != 0 {
 		iter = &mockEventIterator{events: entries}
 	}
-	return iter
+	return iter, nil
 }
 
 func (m *mockEventStore) GetLogCoordinatorNodeID() node.ID {
@@ -312,6 +314,7 @@ type mockEventIterator struct {
 	prevStartTS  uint64
 	prevCommitTS uint64
 	rowCount     int
+	closeErr     error
 }
 
 func (iter *mockEventIterator) Next() (*common.RawKVEntry, bool) {
@@ -332,7 +335,7 @@ func (iter *mockEventIterator) Next() (*common.RawKVEntry, bool) {
 }
 
 func (m *mockEventIterator) Close() (int64, error) {
-	return 0, nil
+	return int64(m.rowCount), m.closeErr
 }
 
 var _ schemastore.SchemaStore = &mockSchemaStore{}
