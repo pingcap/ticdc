@@ -16,6 +16,7 @@ package mysql
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"testing"
 	"time"
 
@@ -78,6 +79,54 @@ func newTestMockDBForDDLTs(t *testing.T) (db *sql.DB, mock sqlmock.Sqlmock) {
 	return
 }
 
+func nonstandardDDLTsTableMissingErr() *mysql.MySQLError {
+	return &mysql.MySQLError{
+		Number:  9999,
+		Message: "ddl_ts_v1 is missing",
+	}
+}
+
+func standardDDLTsDatabaseMissingErr() *mysql.MySQLError {
+	return &mysql.MySQLError{
+		Number:  1049, // ER_BAD_DB_ERROR
+		Message: "Unknown database 'tidb_cdc'",
+	}
+}
+
+func expectDDLTsTableMetadataCount(mock sqlmock.Sqlmock, count int) {
+	mock.ExpectQuery(ddlTsTableExistsQuery).
+		WillReturnRows(sqlmock.NewRows([]string{"COUNT(1)"}).AddRow(count))
+}
+
+func expectDDLTsTableMetadataError(mock sqlmock.Sqlmock) {
+	mock.ExpectQuery(ddlTsTableExistsQuery).
+		WillReturnError(errors.New("information schema is unavailable"))
+}
+
+func expectCreateDDLTsTable(mock sqlmock.Sqlmock) {
+	mock.ExpectBegin()
+	mock.ExpectExec("CREATE DATABASE IF NOT EXISTS tidb_cdc").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("USE tidb_cdc").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec(`CREATE TABLE IF NOT EXISTS ddl_ts_v1
+	(
+		ticdc_cluster_id varchar (255),
+		changefeed varchar(255),
+		ddl_ts varchar(18),
+		table_id bigint(21),
+		finished bool,
+		is_syncpoint bool,
+		INDEX (ticdc_cluster_id, changefeed, table_id),
+		PRIMARY KEY (ticdc_cluster_id, changefeed, table_id)
+	);`).WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+}
+
+func expectCreateDDLTsTableError(mock sqlmock.Sqlmock) {
+	mock.ExpectBegin()
+	mock.ExpectExec("CREATE DATABASE IF NOT EXISTS tidb_cdc").WillReturnError(errors.New("create database failed"))
+	mock.ExpectRollback()
+}
+
 // TestGetTableRecoveryInfo_Comprehensive - Comprehensive end-to-end test for GetTableRecoveryInfo
 func TestGetTableRecoveryInfo_Comprehensive(t *testing.T) {
 	// Test scenarios:
@@ -113,6 +162,97 @@ func TestGetTableRecoveryInfo_Comprehensive(t *testing.T) {
 			require.False(t, skipDMLAsStartTsList[i])
 		}
 
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("TableMissingByMetadata", func(t *testing.T) {
+		writer, db, mock := newTestMysqlWriterForDDLTs(t)
+		defer db.Close()
+
+		tableIDs := []int64{1}
+		expectedQuery := "SELECT table_id, ddl_ts, finished, is_syncpoint FROM tidb_cdc.ddl_ts_v1 WHERE (ticdc_cluster_id, changefeed, table_id) IN (('default', 'test/test', 1), ('default', 'test/test', -1))"
+
+		mock.ExpectQuery(expectedQuery).WillReturnError(nonstandardDDLTsTableMissingErr())
+		expectDDLTsTableMetadataCount(mock, 0)
+
+		startTsList, skipSyncpointAtStartTs, skipDMLAsStartTsList, err := writer.GetTableRecoveryInfo(tableIDs)
+
+		require.NoError(t, err)
+		require.Equal(t, []int64{0}, startTsList)
+		require.Equal(t, []bool{false}, skipSyncpointAtStartTs)
+		require.Equal(t, []bool{false}, skipDMLAsStartTsList)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("TableExistsReportsOriginalError", func(t *testing.T) {
+		writer, db, mock := newTestMysqlWriterForDDLTs(t)
+		defer db.Close()
+
+		tableIDs := []int64{1}
+		expectedQuery := "SELECT table_id, ddl_ts, finished, is_syncpoint FROM tidb_cdc.ddl_ts_v1 WHERE (ticdc_cluster_id, changefeed, table_id) IN (('default', 'test/test', 1), ('default', 'test/test', -1))"
+
+		mock.ExpectQuery(expectedQuery).WillReturnError(nonstandardDDLTsTableMissingErr())
+		expectDDLTsTableMetadataCount(mock, 1)
+
+		_, _, _, err := writer.GetTableRecoveryInfo(tableIDs)
+
+		require.Error(t, err)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("MetadataUnavailableCreateAndRetry", func(t *testing.T) {
+		writer, db, mock := newTestMysqlWriterForDDLTs(t)
+		defer db.Close()
+
+		tableIDs := []int64{1}
+		expectedQuery := "SELECT table_id, ddl_ts, finished, is_syncpoint FROM tidb_cdc.ddl_ts_v1 WHERE (ticdc_cluster_id, changefeed, table_id) IN (('default', 'test/test', 1), ('default', 'test/test', -1))"
+
+		mock.ExpectQuery(expectedQuery).WillReturnError(nonstandardDDLTsTableMissingErr())
+		expectDDLTsTableMetadataError(mock)
+		expectCreateDDLTsTable(mock)
+		mock.ExpectQuery(expectedQuery).WillReturnRows(sqlmock.NewRows([]string{"table_id", "ddl_ts", "finished", "is_syncpoint"}))
+
+		startTsList, skipSyncpointAtStartTs, skipDMLAsStartTsList, err := writer.GetTableRecoveryInfo(tableIDs)
+
+		require.NoError(t, err)
+		require.Equal(t, []int64{0}, startTsList)
+		require.Equal(t, []bool{false}, skipSyncpointAtStartTs)
+		require.Equal(t, []bool{false}, skipDMLAsStartTsList)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("MetadataUnavailableCreateFailed", func(t *testing.T) {
+		writer, db, mock := newTestMysqlWriterForDDLTs(t)
+		defer db.Close()
+
+		tableIDs := []int64{1}
+		expectedQuery := "SELECT table_id, ddl_ts, finished, is_syncpoint FROM tidb_cdc.ddl_ts_v1 WHERE (ticdc_cluster_id, changefeed, table_id) IN (('default', 'test/test', 1), ('default', 'test/test', -1))"
+
+		mock.ExpectQuery(expectedQuery).WillReturnError(nonstandardDDLTsTableMissingErr())
+		expectDDLTsTableMetadataError(mock)
+		expectCreateDDLTsTableError(mock)
+
+		_, _, _, err := writer.GetTableRecoveryInfo(tableIDs)
+
+		require.Error(t, err)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("MetadataUnavailableRetryFailed", func(t *testing.T) {
+		writer, db, mock := newTestMysqlWriterForDDLTs(t)
+		defer db.Close()
+
+		tableIDs := []int64{1}
+		expectedQuery := "SELECT table_id, ddl_ts, finished, is_syncpoint FROM tidb_cdc.ddl_ts_v1 WHERE (ticdc_cluster_id, changefeed, table_id) IN (('default', 'test/test', 1), ('default', 'test/test', -1))"
+
+		mock.ExpectQuery(expectedQuery).WillReturnError(nonstandardDDLTsTableMissingErr())
+		expectDDLTsTableMetadataError(mock)
+		expectCreateDDLTsTable(mock)
+		mock.ExpectQuery(expectedQuery).WillReturnError(errors.New("retry query failed"))
+
+		_, _, _, err := writer.GetTableRecoveryInfo(tableIDs)
+
+		require.Error(t, err)
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 
@@ -400,6 +540,118 @@ func TestGetTableRecoveryInfo_Comprehensive(t *testing.T) {
 		require.Equal(t, int64(200), startTsList[2])
 		require.False(t, skipSyncpointAtStartTs[2])
 
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+}
+
+func TestRemoveDDLTsItem_TableMissingFallback(t *testing.T) {
+	t.Run("StandardErrorCode", func(t *testing.T) {
+		writer, db, mock := newTestMysqlWriterForDDLTs(t)
+		defer db.Close()
+
+		query := "DELETE FROM tidb_cdc.ddl_ts_v1 WHERE (ticdc_cluster_id, changefeed) IN (('default', 'test/test'))"
+
+		mock.ExpectBegin()
+		mock.ExpectExec(query).WillReturnError(standardDDLTsDatabaseMissingErr())
+		mock.ExpectRollback()
+
+		err := writer.RemoveDDLTsItem()
+
+		require.NoError(t, err)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("TableMissingByMetadata", func(t *testing.T) {
+		writer, db, mock := newTestMysqlWriterForDDLTs(t)
+		defer db.Close()
+
+		query := "DELETE FROM tidb_cdc.ddl_ts_v1 WHERE (ticdc_cluster_id, changefeed) IN (('default', 'test/test'))"
+
+		mock.ExpectBegin()
+		mock.ExpectExec(query).WillReturnError(nonstandardDDLTsTableMissingErr())
+		mock.ExpectRollback()
+		expectDDLTsTableMetadataCount(mock, 0)
+
+		err := writer.RemoveDDLTsItem()
+
+		require.NoError(t, err)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("TableExistsReportsOriginalError", func(t *testing.T) {
+		writer, db, mock := newTestMysqlWriterForDDLTs(t)
+		defer db.Close()
+
+		query := "DELETE FROM tidb_cdc.ddl_ts_v1 WHERE (ticdc_cluster_id, changefeed) IN (('default', 'test/test'))"
+
+		mock.ExpectBegin()
+		mock.ExpectExec(query).WillReturnError(nonstandardDDLTsTableMissingErr())
+		mock.ExpectRollback()
+		expectDDLTsTableMetadataCount(mock, 1)
+
+		err := writer.RemoveDDLTsItem()
+
+		require.Error(t, err)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("MetadataUnavailableCreateFailed", func(t *testing.T) {
+		writer, db, mock := newTestMysqlWriterForDDLTs(t)
+		defer db.Close()
+
+		query := "DELETE FROM tidb_cdc.ddl_ts_v1 WHERE (ticdc_cluster_id, changefeed) IN (('default', 'test/test'))"
+
+		mock.ExpectBegin()
+		mock.ExpectExec(query).WillReturnError(nonstandardDDLTsTableMissingErr())
+		mock.ExpectRollback()
+		expectDDLTsTableMetadataError(mock)
+		expectCreateDDLTsTableError(mock)
+
+		err := writer.RemoveDDLTsItem()
+
+		require.Error(t, err)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("MetadataUnavailableRetryFailed", func(t *testing.T) {
+		writer, db, mock := newTestMysqlWriterForDDLTs(t)
+		defer db.Close()
+
+		query := "DELETE FROM tidb_cdc.ddl_ts_v1 WHERE (ticdc_cluster_id, changefeed) IN (('default', 'test/test'))"
+
+		mock.ExpectBegin()
+		mock.ExpectExec(query).WillReturnError(nonstandardDDLTsTableMissingErr())
+		mock.ExpectRollback()
+		expectDDLTsTableMetadataError(mock)
+		expectCreateDDLTsTable(mock)
+		mock.ExpectBegin()
+		mock.ExpectExec(query).WillReturnError(errors.New("retry delete failed"))
+		mock.ExpectRollback()
+
+		err := writer.RemoveDDLTsItem()
+
+		require.Error(t, err)
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("MetadataUnavailableCreateAndRetry", func(t *testing.T) {
+		writer, db, mock := newTestMysqlWriterForDDLTs(t)
+		defer db.Close()
+
+		query := "DELETE FROM tidb_cdc.ddl_ts_v1 WHERE (ticdc_cluster_id, changefeed) IN (('default', 'test/test'))"
+
+		mock.ExpectBegin()
+		mock.ExpectExec(query).WillReturnError(nonstandardDDLTsTableMissingErr())
+		mock.ExpectRollback()
+		expectDDLTsTableMetadataError(mock)
+		expectCreateDDLTsTable(mock)
+		mock.ExpectBegin()
+		mock.ExpectExec(query).WillReturnResult(sqlmock.NewResult(1, 1))
+		mock.ExpectCommit()
+
+		err := writer.RemoveDDLTsItem()
+
+		require.NoError(t, err)
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 }
