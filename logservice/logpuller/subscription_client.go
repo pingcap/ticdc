@@ -989,7 +989,7 @@ func (s *subscriptionClient) handleResolveLockTasks(ctx context.Context) error {
 		targetTs := task.targetTs
 		key := resolveLockKey{keyspaceID: keyspaceID, regionID: regionID}
 
-		if state.ResolvedTs.Load() >= targetTs || !state.Initialized.Load() {
+		if !state.Initialized.Load() || state.ResolvedTs.Load() >= targetTs {
 			s.resolveLockRateLimiter.cancel(key)
 			return
 		}
@@ -998,16 +998,14 @@ func (s *subscriptionClient) handleResolveLockTasks(ctx context.Context) error {
 		s.resolveLockRateLimiter.finish(key, time.Now())
 		if err != nil {
 			metricResolveLockFailureCounter.Inc()
-		} else {
-			metricResolveLockSuccessCounter.Inc()
-		}
-		if err != nil {
 			log.Warn("subscription client resolve lock fail",
 				zap.Uint32("keyspaceID", keyspaceID),
 				zap.Uint64("regionID", regionID),
 				zap.Uint64("targetTs", targetTs),
 				zap.Any("state", state),
 				zap.Error(err))
+		} else {
+			metricResolveLockSuccessCounter.Inc()
 		}
 	}
 
