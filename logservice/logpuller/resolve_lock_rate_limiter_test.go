@@ -20,13 +20,26 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestResolveLockRateLimiterTryMark(t *testing.T) {
+func TestResolveLockRateLimiterDedupAndThrottle(t *testing.T) {
+	now := time.Now()
+	limiter := newResolveLockRateLimiter()
+	key := resolveLockKey{keyspaceID: 1, regionID: 1}
+
+	require.True(t, limiter.tryEnqueue(key, now))
+	require.False(t, limiter.tryEnqueue(key, now.Add(2*resolveLockMinInterval)))
+
+	limiter.finish(key, now.Add(time.Second))
+	require.False(t, limiter.tryEnqueue(key, now.Add(time.Second+resolveLockMinInterval/2)))
+	require.True(t, limiter.tryEnqueue(key, now.Add(time.Second+resolveLockMinInterval)))
+}
+
+func TestResolveLockRateLimiterKeyedByKeyspaceAndRegion(t *testing.T) {
 	now := time.Now()
 	limiter := newResolveLockRateLimiter()
 
-	require.True(t, limiter.tryMark(1, now))
-	require.False(t, limiter.tryMark(1, now.Add(resolveLockMinInterval/2)))
-	require.True(t, limiter.tryMark(1, now.Add(resolveLockMinInterval)))
+	require.True(t, limiter.tryEnqueue(resolveLockKey{keyspaceID: 1, regionID: 1}, now))
+	require.True(t, limiter.tryEnqueue(resolveLockKey{keyspaceID: 2, regionID: 1}, now))
+	require.True(t, limiter.tryEnqueue(resolveLockKey{keyspaceID: 1, regionID: 2}, now))
 }
 
 func TestResolveLockRateLimiterGC(t *testing.T) {
@@ -38,13 +51,13 @@ func TestResolveLockRateLimiterGC(t *testing.T) {
 		if i < keep {
 			lastRunTime = now.Add(-resolveLockMinInterval / 2)
 		}
-		limiter.lastRun[uint64(i)] = lastRunTime
+		limiter.lastRun[resolveLockKey{keyspaceID: 1, regionID: uint64(i)}] = lastRunTime
 	}
 
 	limiter.gc(now)
 	require.Len(t, limiter.lastRun, keep)
 	for i := 0; i < keep; i++ {
-		_, ok := limiter.lastRun[uint64(i)]
+		_, ok := limiter.lastRun[resolveLockKey{keyspaceID: 1, regionID: uint64(i)}]
 		require.True(t, ok)
 	}
 }

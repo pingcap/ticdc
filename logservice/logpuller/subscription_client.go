@@ -135,7 +135,6 @@ type subscribedSpan struct {
 	// To handle stale lock resolvings.
 	tryResolveLock     func(regionID uint64, state *regionlock.LockedRangeState)
 	staleLocksTargetTs atomic.Uint64
-	resolveLockLimiter *resolveLockRateLimiter
 
 	lastAdvanceTime atomic.Int64
 
@@ -217,7 +216,8 @@ type subscriptionClient struct {
 	regionTaskQueue *PriorityQueue
 	// resolveLockTaskCh is used to receive resolve lock tasks.
 	// The tasks will be handled in `handleResolveLockTasks` goroutine.
-	resolveLockTaskCh chan resolveLockTask
+	resolveLockTaskCh      chan resolveLockTask
+	resolveLockRateLimiter *resolveLockRateLimiter
 	// errCh is used to receive region errors.
 	// The errors will be handled in `handleErrors` goroutine.
 	errCache *errCache
@@ -241,10 +241,11 @@ func NewSubscriptionClient(
 
 		credential: credential,
 
-		rangeTaskCh:       make(chan rangeTask, 1024),
-		regionTaskQueue:   NewPriorityQueue(),
-		resolveLockTaskCh: make(chan resolveLockTask, 1024),
-		errCache:          newErrCache(),
+		rangeTaskCh:            make(chan rangeTask, 1024),
+		regionTaskQueue:        NewPriorityQueue(),
+		resolveLockTaskCh:      make(chan resolveLockTask, 1024),
+		resolveLockRateLimiter: newResolveLockRateLimiter(),
+		errCache:               newErrCache(),
 	}
 	subClient.ctx, subClient.cancel = context.WithCancel(context.Background())
 	subClient.totalSpans.spanMap = make(map[SubscriptionID]*subscribedSpan)
@@ -986,8 +987,18 @@ func (s *subscriptionClient) handleResolveLockTasks(ctx context.Context) error {
 		regionID := task.regionID
 		state := task.state
 		targetTs := task.targetTs
+		key := resolveLockKey{keyspaceID: keyspaceID, regionID: regionID}
+
+		if state.ResolvedTs.Load() > targetTs || !state.Initialized.Load() {
+			s.resolveLockRateLimiter.cancel(key)
+			return
+		}
+		if !s.resolveLockRateLimiter.tryStart(key, time.Now()) {
+			return
+		}
 
 		err := s.lockResolver.Resolve(ctx, keyspaceID, regionID, targetTs)
+		s.resolveLockRateLimiter.finish(key, time.Now())
 		if err != nil {
 			metricResolveLockFailureCounter.Inc()
 		} else {
@@ -1073,10 +1084,9 @@ func (s *subscriptionClient) newSubscribedSpan(
 		filterLoop: filterLoop,
 		rangeLock:  rangeLock,
 
-		consumeKVEvents:    consumeKVEvents,
-		advanceResolvedTs:  advanceResolvedTs,
-		advanceInterval:    advanceInterval,
-		resolveLockLimiter: newResolveLockRateLimiter(),
+		consumeKVEvents:   consumeKVEvents,
+		advanceResolvedTs: advanceResolvedTs,
+		advanceInterval:   advanceInterval,
 	}
 	rt.initialized.Store(false)
 	rt.resolvedTsUpdated.Store(time.Now().Unix())
@@ -1087,12 +1097,13 @@ func (s *subscriptionClient) newSubscribedSpan(
 		if !state.Initialized.Load() || state.ResolvedTs.Load() >= targetTs {
 			return
 		}
-		if !rt.resolveLockLimiter.tryMark(regionID, time.Now()) {
+		key := resolveLockKey{keyspaceID: span.KeyspaceID, regionID: regionID}
+		if !s.resolveLockRateLimiter.tryEnqueue(key, time.Now()) {
 			return
 		}
 		select {
 		case <-s.ctx.Done():
-			rt.resolveLockLimiter.unmark(regionID)
+			s.resolveLockRateLimiter.cancel(key)
 		case s.resolveLockTaskCh <- resolveLockTask{
 			keyspaceID: span.KeyspaceID,
 			regionID:   regionID,
@@ -1101,7 +1112,7 @@ func (s *subscriptionClient) newSubscribedSpan(
 		}:
 		// it is ok to ignore resolve lock task when the channel is full
 		default:
-			rt.resolveLockLimiter.unmark(regionID)
+			s.resolveLockRateLimiter.cancel(key)
 			metrics.SubscriptionClientResolveLockTaskDropCounter.Inc()
 		}
 	}

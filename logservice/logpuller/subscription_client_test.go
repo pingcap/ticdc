@@ -54,7 +54,8 @@ func (r *mockLockResolver) Resolve(
 
 func TestGenerateResolveLockTask(t *testing.T) {
 	client := &subscriptionClient{
-		resolveLockTaskCh: make(chan resolveLockTask, 10),
+		resolveLockTaskCh:      make(chan resolveLockTask, 10),
+		resolveLockRateLimiter: newResolveLockRateLimiter(),
 	}
 	client.ctx, client.cancel = context.WithCancel(context.Background())
 	rawSpan := heartbeatpb.TableSpan{
@@ -124,14 +125,59 @@ func TestGenerateResolveLockTask(t *testing.T) {
 	close(client.resolveLockTaskCh)
 }
 
+func TestResolveLockTaskDeduplicatedAcrossSubscribedSpans(t *testing.T) {
+	client := &subscriptionClient{
+		resolveLockTaskCh:      make(chan resolveLockTask, 10),
+		resolveLockRateLimiter: newResolveLockRateLimiter(),
+	}
+	client.ctx, client.cancel = context.WithCancel(context.Background())
+	defer client.cancel()
+
+	consumeKVEvents := func(_ []common.RawKVEntry, _ func()) bool { return false }
+	advanceResolvedTs := func(ts uint64) {}
+	span1 := client.newSubscribedSpan(SubscriptionID(1), heartbeatpb.TableSpan{
+		TableID:  1,
+		StartKey: []byte{'a'},
+		EndKey:   []byte{'z'},
+	}, 100, consumeKVEvents, advanceResolvedTs, 0, false)
+	span2 := client.newSubscribedSpan(SubscriptionID(2), heartbeatpb.TableSpan{
+		TableID:  2,
+		StartKey: []byte{'a'},
+		EndKey:   []byte{'z'},
+	}, 100, consumeKVEvents, advanceResolvedTs, 0, false)
+
+	res := span1.rangeLock.LockRange(context.Background(), []byte{'b'}, []byte{'c'}, 1, 100)
+	require.Equal(t, regionlock.LockRangeStatusSuccess, res.Status)
+	res.LockedRangeState.Initialized.Store(true)
+	res = span2.rangeLock.LockRange(context.Background(), []byte{'b'}, []byte{'c'}, 1, 100)
+	require.Equal(t, regionlock.LockRangeStatusSuccess, res.Status)
+	res.LockedRangeState.Initialized.Store(true)
+
+	span1.resolveStaleLocks(200)
+	select {
+	case task := <-client.resolveLockTaskCh:
+		require.Equal(t, uint64(1), task.regionID)
+	case <-time.After(100 * time.Millisecond):
+		require.True(t, false, "must get a resolve lock task")
+	}
+
+	span2.resolveStaleLocks(200)
+	select {
+	case <-client.resolveLockTaskCh:
+		require.True(t, false, "shouldn't get a duplicate resolve lock task")
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
 func TestHandleResolveLockTasksMetrics(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	resolver := &mockLockResolver{}
 	client := &subscriptionClient{
-		lockResolver:      resolver,
-		resolveLockTaskCh: make(chan resolveLockTask, 4),
+		lockResolver:           resolver,
+		resolveLockTaskCh:      make(chan resolveLockTask, 4),
+		resolveLockRateLimiter: newResolveLockRateLimiter(),
 	}
 
 	errCh := make(chan error, 1)
@@ -164,8 +210,9 @@ func TestHandleResolveLockTasksMetrics(t *testing.T) {
 		state:      state,
 	}
 	require.Eventually(t, func() bool {
-		return resolver.calls.Load() == 2
+		return len(client.resolveLockTaskCh) == 0
 	}, time.Second, 10*time.Millisecond)
+	require.Equal(t, int32(1), resolver.calls.Load())
 
 	state.ResolvedTs.Store(300)
 	client.resolveLockTaskCh <- resolveLockTask{
@@ -175,7 +222,7 @@ func TestHandleResolveLockTasksMetrics(t *testing.T) {
 		state:      state,
 	}
 	require.Eventually(t, func() bool {
-		return resolver.calls.Load() == 3
+		return resolver.calls.Load() == 2
 	}, time.Second, 10*time.Millisecond)
 
 	cancel()
@@ -189,7 +236,8 @@ func TestHandleResolveLockTasksMetrics(t *testing.T) {
 
 func TestResolveLockTaskDroppedWhenChannelFull(t *testing.T) {
 	client := &subscriptionClient{
-		resolveLockTaskCh: make(chan resolveLockTask, 1),
+		resolveLockTaskCh:      make(chan resolveLockTask, 1),
+		resolveLockRateLimiter: newResolveLockRateLimiter(),
 	}
 	client.ctx, client.cancel = context.WithCancel(context.Background())
 	defer client.cancel()
