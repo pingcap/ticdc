@@ -47,12 +47,10 @@ func NewLockerResolver() LockResolver {
 const scanLockLimit = 1024
 
 var (
-	metricResolveLockFoundCounter    = metrics.SubscriptionClientResolveLockProcessedLockCounter.WithLabelValues("found")
-	metricResolveLockResolvedCounter = metrics.SubscriptionClientResolveLockProcessedLockCounter.WithLabelValues("resolved")
-	metricScanLockSuccessDuration    = metrics.SubscriptionClientResolveLockOperationDuration.WithLabelValues("scan", "success")
-	metricScanLockFailureDuration    = metrics.SubscriptionClientResolveLockOperationDuration.WithLabelValues("scan", "failure")
-	metricResolveLockSuccessDuration = metrics.SubscriptionClientResolveLockOperationDuration.WithLabelValues("resolve", "success")
-	metricResolveLockFailureDuration = metrics.SubscriptionClientResolveLockOperationDuration.WithLabelValues("resolve", "failure")
+	metricResolveLockFoundCounter      = metrics.SubscriptionClientResolveLockProcessedLockCounter.WithLabelValues("found")
+	metricResolveLockResolvedCounter   = metrics.SubscriptionClientResolveLockProcessedLockCounter.WithLabelValues("resolved")
+	metricScanLockOperationDuration    = metrics.SubscriptionClientResolveLockOperationDuration.WithLabelValues("scan")
+	metricResolveLockOperationDuration = metrics.SubscriptionClientResolveLockOperationDuration.WithLabelValues("resolve")
 )
 
 func (r *resolver) Resolve(ctx context.Context, keyspaceID uint32, regionID uint64, maxVersion uint64) (err error) {
@@ -123,16 +121,13 @@ func (r *resolver) Resolve(ctx context.Context, keyspaceID uint32, regionID uint
 		scanLockStart := time.Now()
 		resp, err := kvStorage.SendReq(bo, req, loc.Region, tikv.ReadTimeoutMedium)
 		if err != nil {
-			metricScanLockFailureDuration.Observe(time.Since(scanLockStart).Seconds())
 			return errors.Trace(err)
 		}
 		regionErr, err := resp.GetRegionError()
 		if err != nil {
-			metricScanLockFailureDuration.Observe(time.Since(scanLockStart).Seconds())
 			return errors.Trace(err)
 		}
 		if regionErr != nil {
-			metricScanLockFailureDuration.Observe(time.Since(scanLockStart).Seconds())
 			err = bo.Backoff(tikv.BoRegionMiss(), errors.New(regionErr.String()))
 			if err != nil {
 				return errors.Trace(err)
@@ -143,15 +138,13 @@ func (r *resolver) Resolve(ctx context.Context, keyspaceID uint32, regionID uint
 			continue
 		}
 		if resp.Resp == nil {
-			metricScanLockFailureDuration.Observe(time.Since(scanLockStart).Seconds())
 			return errors.Trace(tikverr.ErrBodyMissing)
 		}
 		locksResp := resp.Resp.(*kvrpcpb.ScanLockResponse)
 		if locksResp.GetError() != nil {
-			metricScanLockFailureDuration.Observe(time.Since(scanLockStart).Seconds())
 			return errors.Errorf("unexpected scanlock error: %s", locksResp)
 		}
-		metricScanLockSuccessDuration.Observe(time.Since(scanLockStart).Seconds())
+		metricScanLockOperationDuration.Observe(time.Since(scanLockStart).Seconds())
 		locksInfo := locksResp.GetLocks()
 		locks := make([]*txnkv.Lock, len(locksInfo))
 		for i := range locksInfo {
@@ -164,10 +157,9 @@ func (r *resolver) Resolve(ctx context.Context, keyspaceID uint32, regionID uint
 			resolveLockStart := time.Now()
 			msBeforeTxnExpired, err := kvStorage.GetLockResolver().ResolveLocks(bo, 0, locks)
 			if err != nil {
-				metricResolveLockFailureDuration.Observe(time.Since(resolveLockStart).Seconds())
 				return errors.Trace(err)
 			}
-			metricResolveLockSuccessDuration.Observe(time.Since(resolveLockStart).Seconds())
+			metricResolveLockOperationDuration.Observe(time.Since(resolveLockStart).Seconds())
 			resolvedLockCount := len(locks)
 			if msBeforeTxnExpired > 0 {
 				resolvedLockCount = countExpiredLocks(kvStorage, locks)

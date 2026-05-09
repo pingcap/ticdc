@@ -8455,7 +8455,7 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "Scan lock and resolve lock operation duration.",
+          "description": "Successful scan lock and resolve lock operation duration.",
           "fieldConfig": {
             "defaults": {},
             "overrides": []
@@ -8464,7 +8464,7 @@
           "fillGradient": 0,
           "gridPos": {
             "h": 8,
-            "w": 24,
+            "w": 12,
             "x": 0,
             "y": 49
           },
@@ -8498,20 +8498,20 @@
           "targets": [
             {
               "exemplar": true,
-              "expr": "histogram_quantile(0.99, sum(rate(ticdc_subscription_client_resolve_lock_operation_duration_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (le, instance, type, status))",
+              "expr": "histogram_quantile(0.99, sum(rate(ticdc_subscription_client_resolve_lock_operation_duration_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (le, instance, type))",
               "format": "heatmap",
               "instant": false,
               "interval": "",
               "intervalFactor": 2,
-              "legendFormat": "{{instance}}-{{type}}-{{status}}-p99",
+              "legendFormat": "{{instance}}-{{type}}-p99",
               "refId": "A"
             },
             {
               "exemplar": true,
-              "expr": "sum(rate(ticdc_subscription_client_resolve_lock_operation_duration_sum{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (instance,type,status)\n/\nsum(rate(ticdc_subscription_client_resolve_lock_operation_duration_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (instance,type,status)",
+              "expr": "sum(rate(ticdc_subscription_client_resolve_lock_operation_duration_sum{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (instance,type)\n/\nsum(rate(ticdc_subscription_client_resolve_lock_operation_duration_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (instance,type)",
               "hide": false,
               "interval": "",
-              "legendFormat": "{{instance}}-{{type}}-{{status}}-avg",
+              "legendFormat": "{{instance}}-{{type}}-avg",
               "refId": "B"
             }
           ],

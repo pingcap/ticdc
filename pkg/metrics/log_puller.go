@@ -129,9 +129,9 @@ var (
 			Namespace: "ticdc",
 			Subsystem: "subscription_client",
 			Name:      "resolve_lock_operation_duration",
-			Help:      "duration (s) for scan lock and resolve lock operations",
+			Help:      "duration (s) for successful scan lock and resolve lock operations",
 			Buckets:   prometheus.ExponentialBuckets(0.00004, 2.0, 28), // 40us to 1.5h
-		}, []string{"type", "status"})
+		}, []string{"type"})
 
 	SubscriptionClientRegionEventHandleDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
