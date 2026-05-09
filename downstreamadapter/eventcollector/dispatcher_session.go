@@ -217,7 +217,13 @@ func (s *dispatcherSession) handleSignalEvent(event dispatcher.DispatcherEvent) 
 	case commonEvent.TypeReadyEvent:
 		s.handleReadyEvent(event)
 	case commonEvent.TypeNotReusableEvent:
-		s.handleNotReusableEvent(event)
+		if *event.From == s.localServerID {
+			log.Panic("should not happen: local event service should not send not reusable event")
+		}
+		candidate := s.connState.getNextRemoteCandidate()
+		if candidate != "" {
+			s.registerTo(candidate)
+		}
 	default:
 		log.Panic("should not happen: unknown signal event type", zap.Int("eventType", event.GetType()))
 	}
@@ -289,16 +295,6 @@ func (s *dispatcherSession) handleRemoteReadyEvent(serverID node.ID) {
 		zap.Stringer("eventServiceID", serverID))
 	s.connState.readyEventReceived.Store(true)
 	s.commitReady(serverID)
-}
-
-func (s *dispatcherSession) handleNotReusableEvent(event dispatcher.DispatcherEvent) {
-	if *event.From == s.localServerID {
-		log.Panic("should not happen: local event service should not send not reusable event")
-	}
-	candidate := s.connState.getNextRemoteCandidate()
-	if candidate != "" {
-		s.registerTo(candidate)
-	}
 }
 
 func (s *dispatcherSession) newDispatcherRegisterRequest(serverID string, onlyReuse bool) *messaging.DispatcherRequest {
