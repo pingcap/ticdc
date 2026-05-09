@@ -175,11 +175,12 @@ func (r *resolver) Resolve(ctx context.Context, keyspaceID uint32, regionID uint
 func countExpiredLocks(kvStorage tikv.Storage, locks []*txnkv.Lock) int {
 	resolvedLockCount := 0
 	oracleClient := kvStorage.GetOracle()
+	oracleOption := &oracle.Option{TxnScope: oracle.GlobalTxnScope}
 	for _, lock := range locks {
 		msBeforeLockExpired := oracleClient.UntilExpired(
 			lock.TxnID,
 			lock.TTL,
-			&oracle.Option{TxnScope: oracle.GlobalTxnScope},
+			oracleOption,
 		)
 		if msBeforeLockExpired <= 0 {
 			resolvedLockCount++
