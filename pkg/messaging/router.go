@@ -70,11 +70,11 @@ func (r *router) runDispatch(ctx context.Context, out <-chan *TargetMessage) {
 				// Rate limit logging: only log once every 10 seconds
 				if now.Sub(lastSlowLogTime) >= 10*time.Second {
 					lastSlowLogTime = now
-					log.Warn("slow message handling detected",
-						zap.String("topic", msg.Topic),
-						zap.String("type", msg.Type.String()),
-						zap.Duration("duration", now.Sub(start)),
-						zap.String("from", msg.From.String()))
+					// log.Warn("slow message handling detected",
+					// 	zap.String("topic", msg.Topic),
+					// 	zap.String("type", msg.Type.String()),
+					// 	zap.Duration("duration", now.Sub(start)),
+					// 	zap.String("from", msg.From.String()))
 				}
 
 				// Always increment metrics counter for slow message handling
