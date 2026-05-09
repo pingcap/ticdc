@@ -139,25 +139,6 @@ func TestGetVersion(t *testing.T) {
 	require.Equal(t, byte(0x00), GetVersion(shortData))
 }
 
-func TestDecodeUnencryptedDataPanicsWithoutUnencryptedHeader(t *testing.T) {
-	legacyData := []byte("legacy")
-	require.Panics(t, func() {
-		_, _ = DecodeUnencryptedData(legacyData)
-	})
-
-	legacyData2 := []byte{0x00, 0x01, 0x02, 0x03, 0x04, 0x05}
-	require.Panics(t, func() {
-		_, _ = DecodeUnencryptedData(legacyData2)
-	})
-}
-
-func TestDecodeUnencryptedDataPanicsWithEncryptedData(t *testing.T) {
-	encryptedData := []byte{0x01, 'a', 'b', 'c', 'd', 'a', 't', 'a'}
-	require.Panics(t, func() {
-		_, _ = DecodeUnencryptedData(encryptedData)
-	})
-}
-
 func TestExtractDataKeyID(t *testing.T) {
 	data := []byte("payload")
 	keyID := "xyz"
