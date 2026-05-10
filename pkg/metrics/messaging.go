@@ -72,6 +72,47 @@ var (
 			Name:      "slow_handle_counter",
 			Help:      "The counter of messages that took more than 100ms to handle",
 		}, []string{"type"}) // type: message type
+
+	MessagingHandleDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: "ticdc",
+			Subsystem: "messaging",
+			Name:      "handle_duration_seconds",
+			Help:      "The duration of handling messages in a message center",
+			Buckets:   prometheus.ExponentialBuckets(0.0005, 2, 20), // 0.5ms ~ 262s
+		}, []string{"stream"}) // stream: event, command
+
+	MessagingHandleErrorCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "messaging",
+			Name:      "handle_error_counter",
+			Help:      "The counter of message handling errors in a message center",
+		}, []string{"stream", "reason"}) // stream: event, command. reason: handler_error, no_handler
+
+	MessagingConnectCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "messaging",
+			Name:      "connect_counter",
+			Help:      "The counter of remote target connection attempts in a message center",
+		}, []string{"result"}) // result: success, fail
+
+	MessagingResetCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "ticdc",
+			Subsystem: "messaging",
+			Name:      "reset_counter",
+			Help:      "The counter of remote target reset attempts in a message center",
+		}, []string{"result", "reason"}) // result: success, fail. reason: app error type
+
+	MessagingSendChannelLength = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "messaging",
+			Name:      "send_channel_length",
+			Help:      "The aggregated length of remote target send channels in a message center",
+		}, []string{"type", "aggregation"}) // type: event, command. aggregation: total, max
 )
 
 // InitMetrics registers all metrics used in owner
@@ -83,4 +124,9 @@ func initMessagingMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(MessagingStreamGauge)
 	registry.Register(MessagingReceiveChannelLength)
 	registry.MustRegister(MessagingSlowHandleCounter)
+	registry.MustRegister(MessagingHandleDuration)
+	registry.MustRegister(MessagingHandleErrorCounter)
+	registry.MustRegister(MessagingConnectCounter)
+	registry.MustRegister(MessagingResetCounter)
+	registry.MustRegister(MessagingSendChannelLength)
 }

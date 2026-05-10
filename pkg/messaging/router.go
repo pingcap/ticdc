@@ -48,8 +48,11 @@ func (r *router) deRegisterHandler(topic string) {
 	delete(r.handlers, topic)
 }
 
-func (r *router) runDispatch(ctx context.Context, out <-chan *TargetMessage) {
+func (r *router) runDispatch(ctx context.Context, streamType StreamType, out <-chan *TargetMessage) {
 	lastSlowLogTime := time.Now()
+	handleDuration := metrics.MessagingHandleDuration.WithLabelValues(string(streamType))
+	handleErrorCounter := metrics.MessagingHandleErrorCounter.WithLabelValues(string(streamType), "handler_error")
+	noHandlerCounter := metrics.MessagingHandleErrorCounter.WithLabelValues(string(streamType), "no_handler")
 	for {
 		select {
 		case <-ctx.Done():
@@ -60,12 +63,14 @@ func (r *router) runDispatch(ctx context.Context, out <-chan *TargetMessage) {
 			handler, ok := r.handlers[msg.Topic]
 			r.mu.RUnlock()
 			if !ok {
+				noHandlerCounter.Inc()
 				log.Debug("no handler for message, drop it", zap.Any("msg", msg))
 				continue
 			}
 			start := time.Now()
 			err := handler(ctx, msg)
 			now := time.Now()
+			handleDuration.Observe(now.Sub(start).Seconds())
 			if now.Sub(start) > 100*time.Millisecond {
 				// Rate limit logging: only log once every 10 seconds
 				if now.Sub(lastSlowLogTime) >= 10*time.Second {
@@ -81,6 +86,7 @@ func (r *router) runDispatch(ctx context.Context, out <-chan *TargetMessage) {
 				metrics.MessagingSlowHandleCounter.WithLabelValues(msg.Type.String()).Inc()
 			}
 			if err != nil {
+				handleErrorCounter.Inc()
 				log.Error("Handle message failed", zap.Error(err), zap.Any("msg", msg))
 			}
 		}

@@ -71,7 +71,7 @@ func TestRunDispatchSuccessful(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
 
-	r.runDispatch(ctx, msgChan)
+	r.runDispatch(ctx, EventStreamType, msgChan)
 
 	assert.Len(t, handledMsg, 1)
 	assert.Equal(t, "topic1", handledMsg[0].Topic)
@@ -90,7 +90,7 @@ func TestRunDispatchWithError(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
 
-	r.runDispatch(ctx, msgChan)
+	r.runDispatch(ctx, EventStreamType, msgChan)
 }
 
 func TestRunDispatchNoHandler(t *testing.T) {
@@ -102,7 +102,7 @@ func TestRunDispatchNoHandler(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
 
-	r.runDispatch(ctx, msgChan)
+	r.runDispatch(ctx, EventStreamType, msgChan)
 }
 
 func TestConcurrentAccess(t *testing.T) {
