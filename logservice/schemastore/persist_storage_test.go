@@ -29,6 +29,7 @@ import (
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/charset"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -3773,6 +3774,47 @@ func TestBuildDDLEventForNewTableDDL_CreateTableLikeBlockedTables(t *testing.T) 
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.ElementsMatch(t, []int64{common.DDLSpanTableID, 111, 112}, ddlEvent.BlockedTables.TableIDs)
+}
+
+func TestBuildDDLEventForCreateTablesQueryCountMismatch(t *testing.T) {
+	tableInfo1 := newEligibleTableInfoForTest(201, "t_26")
+	tableInfo2 := newEligibleTableInfoForTest(202, "t_27")
+	tableInfo1.State = model.StatePublic
+	tableInfo2.State = model.StatePublic
+	tableInfo1.Columns[0].AddFlag(mysql.NotNullFlag)
+	tableInfo2.Columns[0].AddFlag(mysql.NotNullFlag)
+	for _, column := range tableInfo1.Columns {
+		column.State = model.StatePublic
+	}
+	for _, column := range tableInfo2.Columns {
+		column.State = model.StatePublic
+	}
+
+	job := &model.Job{
+		Type:     model.ActionCreateTables,
+		SchemaID: 100,
+		Query:    "CREATE TABLE `t_26` (`a` INT PRIMARY KEY,`b` INT)",
+		BinlogInfo: &model.HistoryInfo{
+			MultipleTableInfos: []*model.TableInfo{
+				tableInfo1,
+				tableInfo2,
+			},
+		},
+	}
+	originalQueries, err := commonEvent.SplitQueries(job.Query)
+	require.NoError(t, err)
+	require.Len(t, originalQueries, 1)
+
+	rawEvent := buildPersistedDDLEventForCreateTables(buildPersistedDDLEventFuncArgs{
+		job:         job,
+		databaseMap: map[int64]*BasicDatabaseInfo{100: {Name: "test"}},
+	})
+	require.Equal(t, job.Query, rawEvent.Query)
+
+	ddlEvent, ok, err := buildDDLEventForCreateTables(&rawEvent, nil, 0)
+	require.Error(t, err)
+	require.False(t, ok)
+	require.Equal(t, commonEvent.DDLEvent{}, ddlEvent)
 }
 
 func TestUpdateDDLHistoryForAddDropTable_CreateTableLikeAddsReferTable(t *testing.T) {

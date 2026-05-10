@@ -12,6 +12,7 @@ function run() {
 	rm -rf $WORK_DIR && mkdir -p $WORK_DIR
 
 	start_tidb_cluster --workdir $WORK_DIR
+	skip_if_tidb_version_less_than "v8.5.0"
 
 	cd $WORK_DIR
 
