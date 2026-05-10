@@ -761,6 +761,10 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 		c.Abort()
 		return
 	}
+	if err = validateResumeChangefeedState(cfInfo.State); err != nil {
+		_ = c.Error(err)
+		return
+	}
 
 	// Reject a changefeed if the downstream is the same TiDB logical cluster as the upstream.
 	isSame, err := check.IsSameUpstreamDownstream(ctx, h.server.GetPdClient(), cfInfo.ToChangefeedConfig())
@@ -1057,6 +1061,15 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 	)
 
 	c.JSON(getStatus(c), CfInfoToAPIModel(oldCfInfo, status, nil))
+}
+
+func validateResumeChangefeedState(state config.FeedState) error {
+	if state.IsResumable() {
+		return nil
+	}
+	return errors.ErrChangefeedUpdateRefused.GenWithStackByArgs(
+		fmt.Sprintf("can only resume changefeed when it is stopped, failed, or finished, but current state is %s", state),
+	)
 }
 
 // verifyResumeChangefeedConfig verifies the changefeed config before resuming a changefeed

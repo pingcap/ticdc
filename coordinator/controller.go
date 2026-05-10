@@ -15,6 +15,7 @@ package coordinator
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -795,12 +796,13 @@ func (c *Controller) ResumeChangefeed(
 	}
 
 	state := cf.GetInfo().State
-	switch state {
-	case config.StateFailed, config.StateStopped, config.StateFinished:
-	default:
-		log.Warn("ignore resume the changefeed",
+	if !state.IsResumable() {
+		err := errors.ErrChangefeedUpdateRefused.GenWithStackByArgs(
+			fmt.Sprintf("can only resume changefeed when it is stopped, failed, or finished, but current state is %s", state),
+		)
+		log.Warn("refuse to resume the changefeed",
 			zap.Stringer("changefeedID", id), zap.Any("state", state))
-		return nil
+		return err
 	}
 
 	if err := c.backend.ResumeChangefeed(ctx, id, newCheckpointTs); err != nil {
