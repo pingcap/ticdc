@@ -21,6 +21,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/cockroachdb/pebble"
 	"github.com/klauspost/compress/zstd"
@@ -32,6 +33,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/stretchr/testify/require"
+	"github.com/tikv/client-go/v2/oracle"
 )
 
 type mockSubscriptionStat struct {
@@ -1006,4 +1008,53 @@ func TestEventStoreIter_NextWithFiltering(t *testing.T) {
 		require.NoError(t, db.Close())
 		require.NoError(t, os.RemoveAll(dir))
 	}
+}
+
+func TestEventStoreAutoUnregisterDispatcherByResolvedLag(t *testing.T) {
+	restoreCfg := setDataSharingForTest(t, true)
+	defer restoreCfg()
+
+	mockPDClock := &pdutil.Clock4Test{}
+	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+	mc := messaging.NewMockMessageCenter()
+	appcontext.SetService(appcontext.MessageCenter, mc)
+
+	subClient := NewMockSubscriptionClient()
+	store := New(fmt.Sprintf("/tmp/%s", t.Name()), subClient)
+	es := store.(*eventStore)
+
+	cfID := common.NewChangefeedID4Test("default", "test-cf")
+	dispatcherID := common.NewDispatcherID()
+	span := &heartbeatpb.TableSpan{TableID: 1, StartKey: []byte("a"), EndKey: []byte("e")}
+
+	nowMs := time.Now().UnixMilli()
+	mockPDClock.SetTS(oracle.ComposeTS(nowMs, 0))
+	startTs := oracle.ComposeTS(nowMs, 0)
+	ok := store.RegisterDispatcher(cfID, dispatcherID, span, startTs, func(uint64, uint64) {}, false, false)
+	require.True(t, ok)
+
+	es.dispatcherMeta.RLock()
+	stat := es.dispatcherMeta.dispatcherStats[dispatcherID]
+	es.dispatcherMeta.RUnlock()
+	require.NotNil(t, stat)
+
+	es.collectAndReportStoreMetrics()
+
+	// Move time forward and advance resolved ts accordingly to keep lag < threshold.
+	newNowMs := nowMs + int64(dispatcherResolvedLagSustain/time.Millisecond) + 1000
+	mockPDClock.SetTS(oracle.ComposeTS(newNowMs, 0))
+	stat.resolvedTs.Store(oracle.ComposeTS(newNowMs-1000, 0))
+	es.collectAndReportStoreMetrics()
+
+	es.dispatcherMeta.RLock()
+	_, exists := es.dispatcherMeta.dispatcherStats[dispatcherID]
+	subStats := es.dispatcherMeta.tableStats[int64(span.TableID)]
+	es.dispatcherMeta.RUnlock()
+	require.False(t, exists)
+	require.Len(t, subStats, 1, "subscription should not be deleted when dispatcher is unregistered")
+
+	mockSubClient := subClient.(*mockSubscriptionClient)
+	mockSubClient.mu.Lock()
+	require.Len(t, mockSubClient.subscriptions, 1, "subscription client should still keep the subscription")
+	mockSubClient.mu.Unlock()
 }
