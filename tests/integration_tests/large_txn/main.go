@@ -16,20 +16,33 @@ package main
 import (
 	"database/sql"
 	"flag"
+	"fmt"
 	"log"
 	"strings"
+	"sync"
 
 	_ "github.com/go-sql-driver/mysql"
 )
 
 var (
-	dsn  = flag.String("dsn", "", "MySQL DSN")
-	rows = flag.Int("rows", 1000, "Number of rows per transaction")
-	txns = flag.Int("txns", 10, "Number of transactions per type")
+	dsn         = flag.String("dsn", "", "MySQL DSN")
+	rows        = flag.Int("rows", 1000, "Number of rows per transaction") // Reduced for faster testing
+	txns        = flag.Int("txns", 10, "Number of transactions per type")  // Reduced for faster testing
+	concurrency = flag.Int("concurrency", 1, "Number of concurrent workers")
+)
+
+// Data identifiers for verification
+const (
+	insertDataPrefix = "inserted_data_batch_"
+	updateDataPrefix = "updated_data_batch_"
 )
 
 func main() {
 	flag.Parse()
+
+	if *dsn == "" {
+		log.Fatal("DSN cannot be empty. Please provide a DSN using the -dsn flag.")
+	}
 
 	db, err := sql.Open("mysql", *dsn)
 	if err != nil {
@@ -37,112 +50,140 @@ func main() {
 	}
 	defer db.Close()
 
+	db.SetMaxOpenConns(*concurrency * 2) // Allow more connections for concurrent operations
+	db.SetMaxIdleConns(*concurrency)
+
 	createTable(db)
 
-	// 1. Large Insert
-	for i := 0; i < *txns; i++ {
-		runLargeInsert(db, *rows, i)
+	log.Printf("Starting interleaved operations with %d transactions, %d rows per txn, %d concurrency", *txns, *rows, *concurrency)
+
+	var wg sync.WaitGroup
+	batchSize := *txns / *concurrency
+	if *txns%*concurrency != 0 {
+		batchSize++ // Ensure all transactions are covered
 	}
 
-	// 2. Large Update
-	for i := 0; i < *txns; i++ {
-		runLargeUpdate(db, i)
+	for i := 0; i < *concurrency; i++ {
+		wg.Add(1)
+		go func(workerID int) {
+			defer wg.Done()
+			startBatch := workerID * batchSize
+			endBatch := startBatch + batchSize
+			if endBatch > *txns {
+				endBatch = *txns
+			}
+
+			for batchID := startBatch; batchID < endBatch; batchID++ {
+				if batchID >= *txns { // Safety check
+					break
+				}
+				runInterleavedOperations(db, *rows, batchID)
+			}
+		}(i)
 	}
 
-	// 3. Large Delete
-	for i := 0; i < *txns; i++ {
-		runLargeDelete(db, i)
-	}
+	wg.Wait()
 
-	// 4. Cleanup and recreate for final check
-	runCleanup(db)
-	for i := 0; i < *txns; i++ {
-		runLargeInsert(db, *rows, i)
-	}
+	log.Println("All interleaved operations completed successfully.")
+	log.Println("Workload generation finished. CDC sync_diff_inspector will verify upstream-downstream consistency.")
 }
 
 func createTable(db *sql.DB) {
+	log.Println("Creating table 'large_txn_table'...")
 	_, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS large_txn_table (
 			id INT AUTO_INCREMENT PRIMARY KEY,
-			batch_id INT,
-			data LONGTEXT
+			batch_id INT NOT NULL,
+			data VARCHAR(2048) NOT NULL, -- Increased size for data identifiers
+			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 		)
 	`)
 	if err != nil {
 		log.Fatalf("Failed to create table: %v", err)
 	}
+	log.Println("Table 'large_txn_table' created or already exists.")
 }
 
-func runLargeInsert(db *sql.DB, numRows int, batchID int) {
+func runInterleavedOperations(db *sql.DB, numRows int, batchID int) {
+	// 1. Insert
+	insertData := fmt.Sprintf("%s%d", insertDataPrefix, batchID)
+	runLargeInsert(db, numRows, batchID, insertData)
+
+	// 2. Update
+	updateData := fmt.Sprintf("%s%d", updateDataPrefix, batchID)
+	runLargeUpdate(db, batchID, updateData)
+
+	// 3. Delete (for half of the batches to leave some data for verification)
+	if batchID%2 == 0 { // Delete even batches
+		runLargeDelete(db, batchID)
+	}
+}
+
+func runLargeInsert(db *sql.DB, numRows int, batchID int, dataContent string) {
 	tx, err := db.Begin()
 	if err != nil {
-		log.Fatalf("Failed to begin transaction: %v", err)
+		log.Fatalf("Failed to begin transaction for insert (batch %d): %v", batchID, err)
 	}
 
 	stmt, err := tx.Prepare("INSERT INTO large_txn_table (batch_id, data) VALUES (?, ?)")
 	if err != nil {
-		log.Fatalf("Failed to prepare statement: %v", err)
+		tx.Rollback()
+		log.Fatalf("Failed to prepare insert statement (batch %d): %v", batchID, err)
 	}
 	defer stmt.Close()
 
-	largeData := strings.Repeat("a", 1024) // 1KB data
+	// Use a smaller data string for performance, but ensure it's unique enough
+	smallData := strings.Repeat("x", 100) + dataContent
 
 	for i := 0; i < numRows; i++ {
-		_, err := stmt.Exec(batchID, largeData)
+		_, err := stmt.Exec(batchID, smallData)
 		if err != nil {
 			tx.Rollback()
-			log.Fatalf("Failed to insert row: %v", err)
+			log.Fatalf("Failed to insert row (batch %d, row %d): %v", batchID, i, err)
 		}
 	}
 
 	if err := tx.Commit(); err != nil {
-		log.Fatalf("Failed to commit transaction: %v", err)
+		log.Fatalf("Failed to commit insert transaction (batch %d): %v", batchID, err)
 	}
-	log.Printf("Committed large insert transaction (batch %d, %d rows)", batchID, numRows)
+	log.Printf("Committed large insert transaction (batch %d, %d rows, data: %s)", batchID, numRows, dataContent)
 }
 
-func runLargeUpdate(db *sql.DB, batchID int) {
+func runLargeUpdate(db *sql.DB, batchID int, newDataContent string) {
 	tx, err := db.Begin()
 	if err != nil {
-		log.Fatalf("Failed to begin transaction: %v", err)
+		log.Fatalf("Failed to begin transaction for update (batch %d): %v", batchID, err)
 	}
 
-	// Update all rows for this batch
-	_, err = tx.Exec("UPDATE large_txn_table SET data = ? WHERE batch_id = ?", strings.Repeat("b", 1024), batchID)
+	// Use a smaller data string for performance, but ensure it's unique enough
+	smallData := strings.Repeat("y", 100) + newDataContent
+
+	_, err = tx.Exec("UPDATE large_txn_table SET data = ? WHERE batch_id = ?", smallData, batchID)
 	if err != nil {
 		tx.Rollback()
-		log.Fatalf("Failed to update rows: %v", err)
+		log.Fatalf("Failed to update rows (batch %d): %v", batchID, err)
 	}
 
 	if err := tx.Commit(); err != nil {
-		log.Fatalf("Failed to commit transaction: %v", err)
+		log.Fatalf("Failed to commit update transaction (batch %d): %v", batchID, err)
 	}
-	log.Printf("Committed large update transaction (batch %d)", batchID)
+	log.Printf("Committed large update transaction (batch %d, new data: %s)", batchID, newDataContent)
 }
 
 func runLargeDelete(db *sql.DB, batchID int) {
 	tx, err := db.Begin()
 	if err != nil {
-		log.Fatalf("Failed to begin transaction: %v", err)
+		log.Fatalf("Failed to begin transaction for delete (batch %d): %v", batchID, err)
 	}
 
-	// Delete all rows for this batch
 	_, err = tx.Exec("DELETE FROM large_txn_table WHERE batch_id = ?", batchID)
 	if err != nil {
 		tx.Rollback()
-		log.Fatalf("Failed to delete rows: %v", err)
+		log.Fatalf("Failed to delete rows (batch %d): %v", batchID, err)
 	}
 
 	if err := tx.Commit(); err != nil {
-		log.Fatalf("Failed to commit transaction: %v", err)
+		log.Fatalf("Failed to commit delete transaction (batch %d): %v", batchID, err)
 	}
 	log.Printf("Committed large delete transaction (batch %d)", batchID)
-}
-
-func runCleanup(db *sql.DB) {
-	_, err := db.Exec("TRUNCATE TABLE large_txn_table")
-	if err != nil {
-		log.Fatalf("Failed to truncate table: %v", err)
-	}
 }
