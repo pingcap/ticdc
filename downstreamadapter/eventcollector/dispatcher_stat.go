@@ -18,8 +18,6 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
-	"github.com/pingcap/ticdc/downstreamadapter/syncpoint"
-	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/messaging"
@@ -80,13 +78,35 @@ func newDispatcherStat(
 	eventCollector *EventCollector,
 	readyCallback func(),
 ) *dispatcherStat {
+	return newDispatcherStatInternal(
+		target,
+		eventCollector,
+		eventCollector.getLocalServerID(),
+		eventCollector.enqueueMessageForSend,
+		readyCallback,
+	)
+}
+
+func newDispatcherStatInternal(
+	target dispatcher.DispatcherService,
+	eventCollector *EventCollector,
+	localServerID node.ID,
+	sendMessage func(*messaging.TargetMessage),
+	readyCallback func(),
+) *dispatcherStat {
 	stat := &dispatcherStat{
 		target:         target,
 		eventCollector: eventCollector,
 	}
-	stat.session = newDispatcherSession(stat, readyCallback)
 	stat.currentEpoch.Store(newDispatcherEpochState(0, 0, target.GetStartTs()))
 	stat.lastEventCommitTs.Store(target.GetStartTs())
+	stat.session = newDispatcherSession(
+		target,
+		localServerID,
+		sendMessage,
+		stat.advanceEpochForReset,
+		readyCallback,
+	)
 	return stat
 }
 
@@ -128,10 +148,14 @@ func (d *dispatcherStat) doReset(serverID node.ID, resetTs uint64) {
 	d.session.doReset(serverID, resetTs)
 }
 
-// getResetTs is used to get the resetTs of the dispatcher.
-// resetTs must be larger than the startTs, otherwise it will cause panic in eventStore.
-func (d *dispatcherStat) getResetTs() uint64 {
-	return d.target.GetCheckpointTs()
+func (d *dispatcherStat) advanceEpochForReset(resetTs uint64) uint64 {
+	for {
+		currentState := d.loadCurrentEpochState()
+		nextState := newDispatcherEpochState(currentState.epoch+1, 0, resetTs)
+		if d.currentEpoch.CompareAndSwap(currentState, nextState) {
+			return nextState.epoch
+		}
+	}
 }
 
 // remove is used to remove the dispatcher from the event service.
@@ -558,76 +582,13 @@ func (d *dispatcherStat) isReceivingDataEvent() bool {
 }
 
 func (d *dispatcherStat) newDispatcherRegisterRequest(serverId string, onlyReuse bool) *messaging.DispatcherRequest {
-	startTs := d.target.GetStartTs()
-	syncPointInterval := d.target.GetSyncPointInterval()
-	return &messaging.DispatcherRequest{
-		DispatcherRequest: &eventpb.DispatcherRequest{
-			ChangefeedId: d.target.GetChangefeedID().ToPB(),
-			DispatcherId: d.target.GetId().ToPB(),
-			TableSpan:    d.target.GetTableSpan(),
-			StartTs:      startTs,
-			// ServerId is the id of the request sender.
-			ServerId:             serverId,
-			ActionType:           eventpb.ActionType_ACTION_TYPE_REGISTER,
-			FilterConfig:         d.target.GetFilterConfig(),
-			EnableSyncPoint:      d.target.EnableSyncPoint(),
-			SyncPointInterval:    uint64(syncPointInterval.Seconds()),
-			SyncPointTs:          syncpoint.CalculateStartSyncPointTs(startTs, syncPointInterval, d.target.GetSkipSyncpointAtStartTs()),
-			OnlyReuse:            onlyReuse,
-			BdrMode:              d.target.GetBDRMode(),
-			Mode:                 d.target.GetMode(),
-			Epoch:                0,
-			Timezone:             d.target.GetTimezone(),
-			Integrity:            d.target.GetIntegrityConfig(),
-			OutputRawChangeEvent: d.target.IsOutputRawChangeEvent(),
-			TxnAtomicity:         string(d.target.GetTxnAtomicity()),
-		},
-	}
+	return d.session.newDispatcherRegisterRequest(serverId, onlyReuse)
 }
 
 func (d *dispatcherStat) newDispatcherResetRequest(serverId string, resetTs uint64, epoch uint64) *messaging.DispatcherRequest {
-	syncPointInterval := d.target.GetSyncPointInterval()
-
-	// after reset during normal run time, we can filter reduduant syncpoint at event collector side
-	// so we just take care of the case that resetTs is same as startTs
-	skipSyncpointSameAsResetTs := false
-	if resetTs == d.target.GetStartTs() {
-		skipSyncpointSameAsResetTs = d.target.GetSkipSyncpointAtStartTs()
-	}
-	return &messaging.DispatcherRequest{
-		DispatcherRequest: &eventpb.DispatcherRequest{
-			ChangefeedId: d.target.GetChangefeedID().ToPB(),
-			DispatcherId: d.target.GetId().ToPB(),
-			TableSpan:    d.target.GetTableSpan(),
-			StartTs:      resetTs,
-			// ServerId is the id of the request sender.
-			ServerId:          serverId,
-			ActionType:        eventpb.ActionType_ACTION_TYPE_RESET,
-			FilterConfig:      d.target.GetFilterConfig(),
-			EnableSyncPoint:   d.target.EnableSyncPoint(),
-			SyncPointInterval: uint64(syncPointInterval.Seconds()),
-			SyncPointTs:       syncpoint.CalculateStartSyncPointTs(resetTs, syncPointInterval, skipSyncpointSameAsResetTs),
-			// OnlyReuse:         false,
-			BdrMode:              d.target.GetBDRMode(),
-			Mode:                 d.target.GetMode(),
-			Epoch:                epoch,
-			Timezone:             d.target.GetTimezone(),
-			Integrity:            d.target.GetIntegrityConfig(),
-			OutputRawChangeEvent: d.target.IsOutputRawChangeEvent(),
-		},
-	}
+	return d.session.newDispatcherResetRequest(serverId, resetTs, epoch)
 }
 
 func (d *dispatcherStat) newDispatcherRemoveRequest(serverId string) *messaging.DispatcherRequest {
-	return &messaging.DispatcherRequest{
-		DispatcherRequest: &eventpb.DispatcherRequest{
-			ChangefeedId: d.target.GetChangefeedID().ToPB(),
-			DispatcherId: d.target.GetId().ToPB(),
-			TableSpan:    d.target.GetTableSpan(),
-			// ServerId is the id of the request sender.
-			ServerId:   serverId,
-			ActionType: eventpb.ActionType_ACTION_TYPE_REMOVE,
-			Mode:       d.target.GetMode(),
-		},
-	}
+	return d.session.newDispatcherRemoveRequest(serverId)
 }
