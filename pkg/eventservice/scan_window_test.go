@@ -137,6 +137,52 @@ func TestAdjustScanIntervalEmergencyPressureUsesModerateBrakeForSmallWindow(t *t
 	require.Equal(t, int64(10*time.Second), status.scanInterval.Load())
 }
 
+func TestScanWindowEmergencyBrakeIntervalIsContinuousAtThirtySeconds(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, 15*time.Second, scanWindowEmergencyBrakeInterval(30*time.Second, false))
+	require.Equal(t, 15*time.Second, scanWindowEmergencyBrakeInterval(31*time.Second, false))
+	require.Equal(t, 15*time.Second, scanWindowEmergencyBrakeInterval(60*time.Second, false))
+}
+
+func TestScanWindowEmergencyBrakeIntervalUsesStrongBrakeForLargeWindow(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, 20*time.Second, scanWindowEmergencyBrakeInterval(80*time.Second, false))
+}
+
+func TestAdjustScanIntervalEmergencyPressureUsesDefaultFloorForVerySmallWindow(t *testing.T) {
+	t.Parallel()
+
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 10*time.Minute)
+	status.scanInterval.Store(int64(8 * time.Second))
+	status.updateMemoryUsage(time.Now().Add(memoryUsageWindowDuration), 1, 0)
+	require.Equal(t, int64(defaultScanInterval), status.scanInterval.Load())
+}
+
+func TestAdjustScanIntervalEmergencyPressureDoesNotImmediatelyDropBelowDefaultFloor(t *testing.T) {
+	t.Parallel()
+
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 10*time.Minute)
+	status.scanInterval.Store(int64(defaultScanInterval))
+	status.updateMemoryUsage(time.Now().Add(memoryUsageWindowDuration), 1, 0)
+	require.Equal(t, int64(defaultScanInterval), status.scanInterval.Load())
+}
+
+func TestAdjustScanIntervalEmergencyPressureCanReachMinFloorWhenSustained(t *testing.T) {
+	t.Parallel()
+
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 10*time.Minute)
+	status.scanInterval.Store(int64(defaultScanInterval))
+	start := time.Now()
+
+	for i := 0; i <= 30; i++ {
+		status.updateMemoryUsage(start.Add(time.Duration(i)*time.Second), 1, 0)
+	}
+
+	require.Equal(t, int64(minScanInterval), status.scanInterval.Load())
+}
+
 func TestAdjustScanIntervalRecoversFromFloorBeforeNormalIncreaseCooldown(t *testing.T) {
 	t.Parallel()
 

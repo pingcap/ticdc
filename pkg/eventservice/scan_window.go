@@ -109,6 +109,16 @@ const (
 	// pushes the interval to the floor after the real pressure has already eased.
 	scanWindowFloorRecoveryCooldown = 5 * time.Second
 
+	// scanWindowEmergencyBrakePlateauInterval keeps the emergency brake
+	// continuous when transitioning from the small-window moderate brake path to
+	// the large-window strong brake path.
+	scanWindowEmergencyBrakePlateauInterval = 3 * defaultScanInterval
+
+	// scanWindowEmergencyMinIntervalUnlockSamples is the minimum number of
+	// observed samples before emergency pressure is allowed to drive the scan
+	// window below the default floor toward the minimum interval.
+	scanWindowEmergencyMinIntervalUnlockSamples = 3
+
 	// scanWindowFastUsageAlpha controls the responsiveness of the short-term EMA.
 	scanWindowFastUsageAlpha = 0.4
 
@@ -567,11 +577,14 @@ func scanWindowVeryLowRecoveryScale(current time.Duration) (numerator int64, den
 	}
 }
 
-func scanWindowEmergencyBrakeInterval(current time.Duration) time.Duration {
+func scanWindowEmergencyBrakeInterval(current time.Duration, allowMinInterval bool) time.Duration {
+	if current <= defaultScanInterval && allowMinInterval {
+		return max(current/2, minScanInterval)
+	}
 	if current <= 6*defaultScanInterval {
 		return max(current/2, defaultScanInterval)
 	}
-	return max(current/4, minScanInterval)
+	return max(current/4, scanWindowEmergencyBrakePlateauInterval)
 }
 
 func scanWindowLowRecoveryScale(current time.Duration) (numerator int64, denominator int64) {
@@ -597,7 +610,7 @@ func (c *adaptiveScanWindowController) tryCriticalBrakeLocked(
 
 	switch {
 	case usage.last > memoryUsageEmergencyThreshold:
-		newInterval := scanWindowEmergencyBrakeInterval(current)
+		newInterval := scanWindowEmergencyBrakeInterval(current, c.shouldAllowEmergencyMinIntervalLocked(current, usage))
 		c.lastCriticalTime = now
 		c.noteAdjustmentLocked(now, true)
 		return scanWindowDecision{
@@ -635,6 +648,15 @@ func (c *adaptiveScanWindowController) shouldGraceCriticalBrakeLocked(usage memo
 		c.fastUsageEMA < 0.85 &&
 		c.slowUsageEMA < scanWindowHighPressureThreshold &&
 		usage.max < memoryUsageEmergencyThreshold
+}
+
+func (c *adaptiveScanWindowController) shouldAllowEmergencyMinIntervalLocked(
+	current time.Duration,
+	usage memoryUsageStats,
+) bool {
+	return current <= defaultScanInterval &&
+		usage.cnt >= scanWindowEmergencyMinIntervalUnlockSamples &&
+		c.fastUsageEMA >= memoryUsageCriticalThreshold
 }
 
 func (c *adaptiveScanWindowController) shouldRecoverFromFloorLocked(
