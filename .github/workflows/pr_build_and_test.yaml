@@ -50,7 +50,7 @@ jobs:
           key: ubuntu-latest-ticdc-tools-${{ hashFiles('tools/check/go.sum') }}
 
       - name: Check
-        run: make check
+        run: make check LINT_NEW_FROM_REV="${{ github.event.pull_request.base.sha }}"
 
   classic_build_and_test:
     if: >-
