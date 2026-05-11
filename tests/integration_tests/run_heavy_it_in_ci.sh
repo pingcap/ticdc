@@ -89,7 +89,7 @@ kafka_groups=(
 	# G10
 	'kafka_column_selector kafka_column_selector_avro ddl_with_random_move_table'
 	# G11
-	'fail_over region_merge multi_changefeeds'
+	'fail_over region_merge multi_changefeeds split_table_check'
 	# G12
 	'ddl_for_split_tables_random_schedule'
 	# G13
