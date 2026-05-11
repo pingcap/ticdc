@@ -712,7 +712,6 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	}
 
 	if err != nil {
-
 		log.Error("scan events failed",
 			zap.Stringer("changefeedID", task.changefeedStat.changefeedID),
 			zap.Stringer("dispatcherID", task.id), zap.Int64("tableID", task.info.GetTableSpan().GetTableID()),
@@ -998,7 +997,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 	span := info.GetTableSpan()
 	changefeedID := info.GetChangefeedID()
 
-	status := c.getOrSetChangefeedStatusFromInfo(info)
+	status := c.getOrSetChangefeedStatus(info)
 	dispatcher := newDispatcherStat(info, uint64(len(c.taskChan)), uint64(len(c.messageCh)), nil, status)
 	dispatcherPtr := &atomic.Pointer[dispatcherStat]{}
 	dispatcherPtr.Store(dispatcher)
@@ -1197,7 +1196,7 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 			return err
 		}
 	}
-	status := c.getOrSetChangefeedStatusFromInfo(dispatcherInfo)
+	status := c.getOrSetChangefeedStatus(dispatcherInfo)
 
 	newStat := newDispatcherStat(dispatcherInfo, uint64(len(c.taskChan)), uint64(len(c.messageCh)), tableInfo, status)
 	newStat.copyStatistics(oldStat)
@@ -1237,35 +1236,7 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 	return nil
 }
 
-func (c *eventBroker) getOrSetChangefeedStatus(arg interface{}, syncPointInterval ...time.Duration) *changefeedStatus {
-	switch v := arg.(type) {
-	case DispatcherInfo:
-		return c.getOrSetChangefeedStatusFromInfo(v)
-	case common.ChangeFeedID:
-		if len(syncPointInterval) != 1 {
-			log.Panic("sync point interval is required when creating changefeed status by id",
-				zap.Stringer("changefeedID", v))
-		}
-		return c.getOrSetChangefeedStatusByID(v, syncPointInterval[0])
-	default:
-		log.Panic("unsupported changefeed status argument", zap.Any("arg", arg))
-	}
-	return nil
-}
-
-func (c *eventBroker) getOrSetChangefeedStatusByID(changefeedID common.ChangeFeedID, syncPointInterval time.Duration) *changefeedStatus {
-	stat, ok := c.changefeedMap.Load(changefeedID)
-	if !ok {
-		stat = newChangefeedStatus(changefeedID, syncPointInterval)
-		log.Info("new changefeed status", zap.Stringer("changefeedID", changefeedID))
-		c.changefeedMap.Store(changefeedID, stat)
-		metrics.EventServiceScanWindowBaseTsGaugeVec.WithLabelValues(changefeedID.String()).Set(0)
-		metrics.EventServiceScanWindowIntervalGaugeVec.WithLabelValues(changefeedID.String()).Set(defaultScanInterval.Seconds())
-	}
-	return stat.(*changefeedStatus)
-}
-
-func (c *eventBroker) getOrSetChangefeedStatusFromInfo(info DispatcherInfo) *changefeedStatus {
+func (c *eventBroker) getOrSetChangefeedStatus(info DispatcherInfo) *changefeedStatus {
 	changefeedID := info.GetChangefeedID()
 	if stat, ok := c.changefeedMap.Load(changefeedID); ok {
 		return stat.(*changefeedStatus)
