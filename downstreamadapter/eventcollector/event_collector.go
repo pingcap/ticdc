@@ -39,7 +39,7 @@ import (
 const (
 	receiveChanSize               = 1024 * 8
 	commonMsgRetryQuota           = 3 // The number of retries for most droppable dispatcher requests.
-	eventServiceHeartbeatInterval = time.Second
+	eventServiceHeartbeatInterval = 10 * time.Second
 )
 
 // DispatcherMessage is the message send to EventService.
@@ -273,7 +273,14 @@ func (c *EventCollector) PrepareAddDispatcher(
 	cfStat.dispatcherCount.Add(1)
 
 	ds := c.getDynamicStream(target.GetMode())
-	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(memoryQuota, dynstream.MemoryControlForEventCollector, "eventCollector")
+	batchCount, batchBytes := target.GetEventCollectorBatchConfig()
+	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSizeAndBatchConfig(
+		memoryQuota,
+		dynstream.MemoryControlForEventCollector,
+		"eventCollector",
+		batchCount,
+		batchBytes,
+	)
 	err := ds.AddPath(target.GetId(), stat, areaSetting)
 	if err != nil {
 		log.Warn("add dispatcher to dynamic stream failed", zap.Error(err))

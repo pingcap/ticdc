@@ -106,7 +106,9 @@ func NewRowChange(
 		sourceTableInfo: sourceTableInfo,
 	}
 
-	colCount := ret.ColumnCount()
+	// The values should contain expression indexes,
+	// because whereColumnsAndValues relies on the order of values to match the columns
+	colCount := len(sourceTableInfo.GetColumns())
 	if preValues != nil && len(preValues) != colCount {
 		log.Panic("preValues length not equal to sourceTableInfo columns",
 			zap.Int("preValues", len(preValues)),
@@ -174,19 +176,6 @@ func (r *RowChange) TargetTableID() string {
 	return r.targetTable.QuoteString()
 }
 
-// ColumnCount returns the number of columns of this RowChange.
-// TiDB TableInfo contains some internal columns like expression index, they
-// are not included in this count.
-func (r *RowChange) ColumnCount() int {
-	c := 0
-	for _, col := range r.sourceTableInfo.GetColumns() {
-		if !col.Hidden {
-			c++
-		}
-	}
-	return c
-}
-
 // SourceTableInfo returns the TableInfo of source table.
 func (r *RowChange) SourceTableInfo() *common.TableInfo {
 	return r.sourceTableInfo
@@ -239,10 +228,11 @@ func (r *RowChange) whereColumnsAndValues() ([]string, []interface{}) {
 	}
 
 	failpoint.Inject("DownstreamTrackerWhereCheck", func() {
-		if r.tp == RowChangeUpdate {
+		switch r.tp {
+		case RowChangeUpdate:
 			log.Info("UpdateWhereColumnsCheck",
 				zap.String("Columns", fmt.Sprintf("%v", columnNames)))
-		} else if r.tp == RowChangeDelete {
+		case RowChangeDelete:
 			log.Info("DeleteWhereColumnsCheck",
 				zap.String("Columns", fmt.Sprintf("%v", columnNames)))
 		}

@@ -104,6 +104,15 @@ func newEventStoreForTest(path string) (logpuller.SubscriptionClient, EventStore
 	return subClient, store
 }
 
+func requireEventIterator(
+	t testing.TB, store EventStore, dispatcherID common.DispatcherID, dataRange common.DataRange,
+) EventIterator {
+	t.Helper()
+	iter, err := store.GetIterator(dispatcherID, dataRange)
+	require.NoError(t, err)
+	return iter
+}
+
 func setDataSharingForTest(t *testing.T, enable bool) func() {
 	t.Helper()
 	originalCfg := config.GetGlobalServerConfig().Clone()
@@ -686,6 +695,22 @@ func TestEventStoreSwitchSubStat(t *testing.T) {
 		require.NotNil(t, subStat)
 		subStat.resolvedTs.Store(ts)
 	}
+	getIterator := func() {
+		iter, err := store.GetIterator(dispatcherID2, common.DataRange{
+			Span: &heartbeatpb.TableSpan{
+				TableID:  tableID,
+				StartKey: []byte("b"),
+				EndKey:   []byte("h"),
+			},
+			CommitTsStart: 100,
+			CommitTsEnd:   150,
+		})
+		require.NoError(t, err)
+		if iter != nil {
+			_, err = iter.Close()
+			require.NoError(t, err)
+		}
+	}
 	// ============ prepare two subscriptions ============
 	// add a dispatcher to create an subscription
 	{
@@ -718,33 +743,23 @@ func TestEventStoreSwitchSubStat(t *testing.T) {
 	// case 1: dispatcher 2 use data from subStat 1
 	updateSubStatResolvedTs(1, 200)
 	{
-		iter := store.GetIterator(dispatcherID2, common.DataRange{
-			Span: &heartbeatpb.TableSpan{
-				TableID:  tableID,
-				StartKey: []byte("b"),
-				EndKey:   []byte("h"),
-			},
-			CommitTsStart: 100,
-			CommitTsEnd:   150,
-		})
-		iterImpl := iter.(*eventStoreIter)
-		require.True(t, iterImpl.needCheckSpan)
+		getIterator()
+		dispatcherStat := store.(*eventStore).dispatcherMeta.dispatcherStats[dispatcherID2]
+		require.NotNil(t, dispatcherStat)
+		require.Equal(t, logpuller.SubscriptionID(1), dispatcherStat.subStat.subID)
+		require.Equal(t, logpuller.SubscriptionID(2), dispatcherStat.pendingSubStat.subID)
+		require.Nil(t, dispatcherStat.removingSubStat)
 	}
 
 	// case 2: subStat 2 is ready, dispatcher 2 read data from subStat 2 and stop listen subStat 1
 	updateSubStatResolvedTs(2, 200)
 	{
-		iter := store.GetIterator(dispatcherID2, common.DataRange{
-			Span: &heartbeatpb.TableSpan{
-				TableID:  tableID,
-				StartKey: []byte("b"),
-				EndKey:   []byte("h"),
-			},
-			CommitTsStart: 100,
-			CommitTsEnd:   150,
-		})
-		iterImpl := iter.(*eventStoreIter)
-		require.False(t, iterImpl.needCheckSpan)
+		getIterator()
+		dispatcherStat := store.(*eventStore).dispatcherMeta.dispatcherStats[dispatcherID2]
+		require.NotNil(t, dispatcherStat)
+		require.Equal(t, logpuller.SubscriptionID(2), dispatcherStat.subStat.subID)
+		require.Nil(t, dispatcherStat.pendingSubStat)
+		require.Equal(t, logpuller.SubscriptionID(1), dispatcherStat.removingSubStat.subID)
 	}
 	// check dispatcher 2 is no longer receive event from subStat 1
 	{
@@ -762,7 +777,7 @@ func TestEventStoreSwitchSubStat(t *testing.T) {
 	// case 3: subStat 1 advance quicker than subStat 2, dispatcher 2 can still read data from subStat 1
 	updateSubStatResolvedTs(1, 220)
 	{
-		iter := store.GetIterator(dispatcherID2, common.DataRange{
+		iter, err := store.GetIterator(dispatcherID2, common.DataRange{
 			Span: &heartbeatpb.TableSpan{
 				TableID:  tableID,
 				StartKey: []byte("b"),
@@ -771,8 +786,11 @@ func TestEventStoreSwitchSubStat(t *testing.T) {
 			CommitTsStart: 100,
 			CommitTsEnd:   220,
 		})
-		iterImpl := iter.(*eventStoreIter)
-		require.True(t, iterImpl.needCheckSpan)
+		require.NoError(t, err)
+		if iter != nil {
+			_, err = iter.Close()
+			require.NoError(t, err)
+		}
 	}
 	{
 		subStats := store.(*eventStore).dispatcherMeta.tableStats[tableID]
@@ -796,7 +814,7 @@ func TestEventStoreSwitchSubStat(t *testing.T) {
 	// dispatcher 2 read data from subStat 2 and totally remove itself from the subsriber list of subStat 1
 	updateSubStatResolvedTs(2, 220)
 	{
-		iter := store.GetIterator(dispatcherID2, common.DataRange{
+		iter, err := store.GetIterator(dispatcherID2, common.DataRange{
 			Span: &heartbeatpb.TableSpan{
 				TableID:  tableID,
 				StartKey: []byte("b"),
@@ -805,8 +823,11 @@ func TestEventStoreSwitchSubStat(t *testing.T) {
 			CommitTsStart: 100,
 			CommitTsEnd:   220,
 		})
-		iterImpl := iter.(*eventStoreIter)
-		require.False(t, iterImpl.needCheckSpan)
+		require.NoError(t, err)
+		if iter != nil {
+			_, err = iter.Close()
+			require.NoError(t, err)
+		}
 	}
 	{
 		subStats := store.(*eventStore).dispatcherMeta.tableStats[tableID]
@@ -827,11 +848,9 @@ func TestEventStoreSwitchSubStat(t *testing.T) {
 }
 
 func TestWriteToEventStore(t *testing.T) {
-	mockPDClock := pdutil.NewClock4Test()
-	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
-
 	dir := t.TempDir()
-	store := New(dir, nil).(*eventStore)
+	_, storeInt := newEventStoreForTest(dir)
+	store := storeInt.(*eventStore)
 	defer store.Close(context.Background())
 
 	smallEntryKey := []byte("small-key")
@@ -875,7 +894,8 @@ func TestWriteToEventStore(t *testing.T) {
 	defer encoder.Close()
 
 	var compressionBuf []byte
-	err = store.writeEvents(store.dbs[0], events, encoder, &compressionBuf)
+	var rawValueBuf []byte
+	err = store.writeEvents(store.dbs[0], events, encoder, &compressionBuf, &rawValueBuf)
 	require.NoError(t, err)
 
 	// Read events back and verify.
@@ -892,7 +912,7 @@ func TestWriteToEventStore(t *testing.T) {
 		key := iter.Key()
 		value := iter.Value()
 
-		_, compressionType := DecodeKeyMetas(key)
+		_, compressionType := DecodeKeyAttributes(key)
 
 		var decodedValue []byte
 		if compressionType == CompressionZSTD {
@@ -956,7 +976,8 @@ func TestWriteToEventStoreZstdCompressionDisabled(t *testing.T) {
 	defer encoder.Close()
 
 	var compressionBuf []byte
-	err = store.writeEvents(store.dbs[0], events, encoder, &compressionBuf)
+	var rawValueBuf []byte
+	err = store.writeEvents(store.dbs[0], events, encoder, &compressionBuf, &rawValueBuf)
 	require.NoError(t, err)
 
 	iter, err := store.dbs[0].NewIter(&pebble.IterOptions{})
@@ -965,7 +986,7 @@ func TestWriteToEventStoreZstdCompressionDisabled(t *testing.T) {
 
 	count := 0
 	for iter.First(); iter.Valid(); iter.Next() {
-		_, compressionType := DecodeKeyMetas(iter.Key())
+		_, compressionType := DecodeKeyAttributes(iter.Key())
 		require.Equal(t, CompressionNone, compressionType)
 
 		readEntry := &common.RawKVEntry{}
@@ -1015,7 +1036,8 @@ func TestEventStoreCompressionAndIterDecodeBufferReuse(t *testing.T) {
 	require.NoError(t, err)
 	defer encoder.Close()
 	var compressionBuf []byte
-	err = store.writeEvents(store.dbs[0], events, encoder, &compressionBuf)
+	var rawValueBuf []byte
+	err = store.writeEvents(store.dbs[0], events, encoder, &compressionBuf, &rawValueBuf)
 	require.NoError(t, err)
 	afterMetric := testutil.ToFloat64(metrics.EventStoreCompressedRowsCount)
 	require.InDelta(t, float64(len(expectedValues)), afterMetric-beforeMetric, 1e-9)
@@ -1108,7 +1130,8 @@ func TestEventStoreGetIteratorConcurrently(t *testing.T) {
 	require.NoError(t, err)
 	defer encoder.Close()
 	var compressionBuf []byte
-	err = store.(*eventStore).writeEvents(store.(*eventStore).dbs[0], events, encoder, &compressionBuf)
+	var rawValueBuf []byte
+	err = store.(*eventStore).writeEvents(store.(*eventStore).dbs[0], events, encoder, &compressionBuf, &rawValueBuf)
 	require.NoError(t, err)
 
 	// 3. Advance resolved ts for the subscription.
@@ -1133,7 +1156,7 @@ func TestEventStoreGetIteratorConcurrently(t *testing.T) {
 					CommitTsStart: startTs,
 					CommitTsEnd:   lastCommitTs + 1,
 				}
-				iter := store.GetIterator(dispatcherID, dataRange)
+				iter := requireEventIterator(t, store, dispatcherID, dataRange)
 				require.NotNil(t, iter, "iterator should not be nil")
 
 				var receivedEvents []*common.RawKVEntry
@@ -1151,6 +1174,21 @@ func TestEventStoreGetIteratorConcurrently(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+func TestEventWithCallbackSizerUsesCurrentKVBytes(t *testing.T) {
+	event := eventWithCallback{
+		kvs: []common.RawKVEntry{{
+			Key:         []byte("key"),
+			Value:       []byte("value"),
+			OldValue:    []byte("old"),
+			KeyLen:      1,
+			ValueLen:    1,
+			OldValueLen: 1,
+		}},
+	}
+
+	require.Equal(t, len("key")+len("value")+len("old"), eventWithCallbackSizer(event))
 }
 
 func TestEventStoreIter_NextWithFiltering(t *testing.T) {
@@ -1231,8 +1269,8 @@ func TestEventStoreIter_NextWithFiltering(t *testing.T) {
 
 			// Create iterator with a wider range to ensure it sees all keys,
 			// so we can test the internal filtering logic.
-			start := EncodeKeyPrefix(subID, tableID, 0)
-			end := EncodeKeyPrefix(subID, tableID, 500)
+			start := encodeTxnCommitTsBoundaryKey(subID, tableID, 0)
+			end := encodeTxnCommitTsBoundaryKey(subID, tableID, 500)
 			innerIter, err := db.NewIter(&pebble.IterOptions{
 				LowerBound: start,
 				UpperBound: end,

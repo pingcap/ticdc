@@ -14,7 +14,10 @@
 package operator
 
 import (
+	"fmt"
+	"runtime"
 	"testing"
+	"time"
 
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/replica"
@@ -93,6 +96,43 @@ func setupMergeTestEnvironmentWithCheckpointTs(
 	occupyOperators := []operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus]{
 		occupyOp1,
 		occupyOp2,
+	}
+
+	return spanController, toMergedReplicaSets, occupyOperators, nodeA
+}
+
+func setupLargeMergeTestEnvironment(
+	t *testing.T,
+	spanCount int,
+) (*span.Controller, []*replica.SpanReplication, []operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus], node.ID) {
+	spanController, changefeedID, _, nodeA, _ := setupTestEnvironment(t)
+
+	toMergedReplicaSets := make([]*replica.SpanReplication, 0, spanCount)
+	occupyOperators := make([]operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus], 0, spanCount)
+	for index := 0; index < spanCount; index++ {
+		dispatcherID := common.NewDispatcherID()
+		tableSpan := &heartbeatpb.TableSpan{
+			TableID:  100,
+			StartKey: []byte(fmt.Sprintf("%08d", index)),
+			EndKey:   []byte(fmt.Sprintf("%08d", index+1)),
+		}
+		status := &heartbeatpb.TableSpanStatus{
+			ID:              dispatcherID.ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    uint64(1000 + index),
+		}
+		replicaSet := replica.NewWorkingSpanReplication(
+			changefeedID,
+			dispatcherID,
+			1,
+			tableSpan,
+			status,
+			nodeA,
+			false,
+		)
+		spanController.AddReplicatingSpan(replicaSet)
+		toMergedReplicaSets = append(toMergedReplicaSets, replicaSet)
+		occupyOperators = append(occupyOperators, NewOccupyDispatcherOperator(spanController, replicaSet))
 	}
 
 	return spanController, toMergedReplicaSets, occupyOperators, nodeA
@@ -214,6 +254,51 @@ func TestMergeOperator_SuccessfulMerge(t *testing.T) {
 	require.Equal(t, 0, spanController.GetSchedulingSize())
 	require.Equal(t, 1, spanController.GetReplicatingSize())
 
+	for _, occupyOp := range occupyOperators {
+		require.True(t, occupyOp.IsFinished())
+	}
+}
+
+func TestMergeOperator_PostFinishReleasesOccupyAfterRemovingOldReplicas(t *testing.T) {
+	previousMaxProcs := runtime.GOMAXPROCS(2)
+	t.Cleanup(func() {
+		runtime.GOMAXPROCS(previousMaxProcs)
+	})
+
+	spanController, toMergedReplicaSets, occupyOperators, nodeA := setupLargeMergeTestEnvironment(t, 4096)
+
+	op := NewMergeDispatcherOperator(spanController, toMergedReplicaSets, occupyOperators)
+	require.NotNil(t, op)
+
+	op.Start()
+	op.Check(nodeA, &heartbeatpb.TableSpanStatus{
+		ID:              op.ID().ToPB(),
+		ComponentStatus: heartbeatpb.ComponentState_Working,
+		CheckpointTs:    5000,
+	})
+	require.True(t, op.IsFinished())
+
+	lastReplicaID := toMergedReplicaSets[len(toMergedReplicaSets)-1].ID
+	windowObservedCh := make(chan bool, 1)
+	observerReadyCh := make(chan struct{})
+	go func() {
+		close(observerReadyCh)
+		for !occupyOperators[0].IsFinished() {
+			runtime.Gosched()
+		}
+		windowObservedCh <- spanController.GetTaskByID(lastReplicaID) != nil
+	}()
+	<-observerReadyCh
+
+	op.PostFinish()
+
+	select {
+	case observedOldReplica := <-windowObservedCh:
+		require.False(t, observedOldReplica)
+	case <-time.After(5 * time.Second):
+		t.Fatal("observer did not observe occupy operator completion")
+	}
+	require.Nil(t, spanController.GetTaskByID(lastReplicaID))
 	for _, occupyOp := range occupyOperators {
 		require.True(t, occupyOp.IsFinished())
 	}

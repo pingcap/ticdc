@@ -16,6 +16,7 @@ package redo
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 	"testing"
@@ -29,9 +30,12 @@ import (
 	"github.com/pingcap/ticdc/pkg/redo/testutil"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/uuid"
+	mockstorage "github.com/pingcap/tidb/br/pkg/mock/storage"
+	"github.com/pingcap/tidb/br/pkg/storage"
 	promtestutil "github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
+	"go.uber.org/mock/gomock"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -77,12 +81,10 @@ func TestInitAndWriteMeta(t *testing.T) {
 	startTs := uint64(10)
 	cfg := testutil.NewConsistentConfig(uri.String())
 	m := NewRedoMeta(changefeedID, startTs, cfg)
+	require.NoError(t, m.PreStart(ctx))
 
 	var eg errgroup.Group
 	eg.Go(func() error {
-		if err := m.PreStart(ctx); err != nil {
-			return err
-		}
 		return m.Run(ctx)
 	})
 
@@ -153,12 +155,10 @@ func TestPreCleanupAndWriteMeta(t *testing.T) {
 	startTs := uint64(10)
 	cfg := testutil.NewConsistentConfig(uri.String())
 	m := NewRedoMeta(changefeedID, startTs, cfg)
+	require.NoError(t, m.PreStart(ctx))
 
 	var eg errgroup.Group
 	eg.Go(func() error {
-		if err := m.PreStart(ctx); err != nil {
-			return err
-		}
 		return m.Run(ctx)
 	})
 
@@ -365,4 +365,31 @@ func TestRedoMetaMetrics(t *testing.T) {
 
 	cancel()
 	require.ErrorIs(t, eg.Wait(), context.Canceled)
+}
+
+func TestPreStartClosesExternalStorageOnFailure(t *testing.T) {
+	controller := gomock.NewController(t)
+	mockStorage := mockstorage.NewMockExternalStorage(controller)
+	mockStorage.EXPECT().FileExists(gomock.Any(), gomock.Any()).Return(false, context.DeadlineExceeded)
+	mockStorage.EXPECT().Close().Times(1)
+
+	oldInitExternalStorage := redo.InitExternalStorage
+	defer func() {
+		redo.InitExternalStorage = oldInitExternalStorage
+	}()
+	redo.InitExternalStorage = func(context.Context, url.URL) (storage.ExternalStorage, error) {
+		return mockStorage, nil
+	}
+
+	storageURI, err := url.Parse("file:///tmp/redo-meta-test")
+	require.NoError(t, err)
+
+	cfg := &config.ConsistentConfig{
+		Storage:               util.AddressOf(storageURI.String()),
+		MetaFlushIntervalInMs: util.AddressOf(int64(redo.MinFlushIntervalInMs)),
+	}
+	m := NewRedoMeta(common.NewChangeFeedIDWithName("test-changefeed", common.DefaultKeyspaceName), 1, cfg)
+	err = m.PreStart(context.Background())
+	require.Error(t, err)
+	require.Nil(t, m.extStorage)
 }

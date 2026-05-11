@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
+	"github.com/pingcap/ticdc/downstreamadapter/routing"
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -82,10 +83,18 @@ func (m *mockDispatcher) GetChangefeedID() common.ChangeFeedID {
 	return m.changefeedID
 }
 
+func (m *mockDispatcher) GetEventCollectorBatchConfig() (batchCount int, batchBytes int) {
+	return 0, 0
+}
+
 func (m *mockDispatcher) GetTableSpan() *heartbeatpb.TableSpan {
 	return &heartbeatpb.TableSpan{
 		TableID: 1,
 	}
+}
+
+func (m *mockDispatcher) GetRouter() routing.Router {
+	return routing.Router{}
 }
 
 func (m *mockDispatcher) GetBDRMode() bool {
@@ -494,7 +503,11 @@ func TestFilterAndUpdateEventByCommitTs(t *testing.T) {
 			stat.gotDDLOnTs.Store(tt.gotDDLOnTs)
 			stat.gotSyncpointOnTS.Store(tt.gotSyncpointOnTS)
 
-			result := stat.filterAndUpdateEventByCommitTs(tt.event, stat.loadCurrentEpochState())
+			state := stat.loadCurrentEpochState()
+			result := stat.shouldForwardEventByCommitTs(tt.event)
+			if result {
+				stat.updateCommitTsStateByEvents(state, []dispatcher.DispatcherEvent{tt.event})
+			}
 			require.Equal(t, tt.expectedResult, result)
 			require.Equal(t, tt.expectedDDLOnTs, stat.gotDDLOnTs.Load())
 			require.Equal(t, tt.expectedSyncOnTs, stat.gotSyncpointOnTS.Load())

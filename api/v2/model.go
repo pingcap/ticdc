@@ -23,6 +23,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/integrity"
+	"github.com/pingcap/ticdc/pkg/liveness"
 	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/pingcap/ticdc/pkg/util"
 )
@@ -198,14 +199,16 @@ func (d *JSONDuration) UnmarshalJSON(b []byte) error {
 
 // ReplicaConfig is a duplicate of  config.ReplicaConfig
 type ReplicaConfig struct {
-	MemoryQuota           *uint64 `json:"memory_quota,omitempty"`
-	CaseSensitive         *bool   `json:"case_sensitive,omitempty"`
-	ForceReplicate        *bool   `json:"force_replicate,omitempty"`
-	IgnoreIneligibleTable *bool   `json:"ignore_ineligible_table,omitempty"`
-	CheckGCSafePoint      *bool   `json:"check_gc_safe_point,omitempty"`
-	EnableSyncPoint       *bool   `json:"enable_sync_point,omitempty"`
-	EnableTableMonitor    *bool   `json:"enable_table_monitor,omitempty"`
-	BDRMode               *bool   `json:"bdr_mode,omitempty"`
+	MemoryQuota              *uint64 `json:"memory_quota,omitempty"`
+	EventCollectorBatchCount *int    `json:"event_collector_batch_count,omitempty"`
+	EventCollectorBatchBytes *int    `json:"event_collector_batch_bytes,omitempty"`
+	CaseSensitive            *bool   `json:"case_sensitive,omitempty"`
+	ForceReplicate           *bool   `json:"force_replicate,omitempty"`
+	IgnoreIneligibleTable    *bool   `json:"ignore_ineligible_table,omitempty"`
+	CheckGCSafePoint         *bool   `json:"check_gc_safe_point,omitempty"`
+	EnableSyncPoint          *bool   `json:"enable_sync_point,omitempty"`
+	EnableTableMonitor       *bool   `json:"enable_table_monitor,omitempty"`
+	BDRMode                  *bool   `json:"bdr_mode,omitempty"`
 	// EnableActiveActive enables active-active replication mode on top of BDR.
 	// It requires BDRMode to be true and is only supported by TiDB and storage sinks.
 	EnableActiveActive *bool `json:"enable_active_active,omitempty"`
@@ -245,6 +248,12 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 ) *config.ReplicaConfig {
 	if c.MemoryQuota != nil {
 		res.MemoryQuota = c.MemoryQuota
+	}
+	if c.EventCollectorBatchCount != nil {
+		res.EventCollectorBatchCount = c.EventCollectorBatchCount
+	}
+	if c.EventCollectorBatchBytes != nil {
+		res.EventCollectorBatchBytes = c.EventCollectorBatchBytes
 	}
 	if c.CaseSensitive != nil {
 		res.CaseSensitive = c.CaseSensitive
@@ -307,6 +316,9 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 		if c.Consistent.MetaFlushIntervalInMs != nil {
 			res.Consistent.MetaFlushIntervalInMs = c.Consistent.MetaFlushIntervalInMs
 		}
+		if c.Consistent.EventCollectorBatchCount != nil {
+			res.Consistent.EventCollectorBatchCount = c.Consistent.EventCollectorBatchCount
+		}
 		if c.Consistent.EncodingWorkerNum != nil {
 			res.Consistent.EncodingWorkerNum = c.Consistent.EncodingWorkerNum
 		}
@@ -342,6 +354,8 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 				IndexName:      rule.IndexName,
 				Columns:        rule.Columns,
 				TopicRule:      rule.TopicRule,
+				TargetSchema:   rule.TargetSchema,
+				TargetTable:    rule.TargetTable,
 			})
 		}
 		var columnSelectors []*config.ColumnSelector
@@ -654,15 +668,17 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 	cloned := c.Clone()
 
 	res := &ReplicaConfig{
-		MemoryQuota:           cloned.MemoryQuota,
-		CaseSensitive:         cloned.CaseSensitive,
-		ForceReplicate:        cloned.ForceReplicate,
-		IgnoreIneligibleTable: cloned.IgnoreIneligibleTable,
-		CheckGCSafePoint:      cloned.CheckGCSafePoint,
-		EnableSyncPoint:       cloned.EnableSyncPoint,
-		EnableTableMonitor:    cloned.EnableTableMonitor,
-		BDRMode:               cloned.BDRMode,
-		EnableActiveActive:    cloned.EnableActiveActive,
+		MemoryQuota:              cloned.MemoryQuota,
+		EventCollectorBatchCount: cloned.EventCollectorBatchCount,
+		EventCollectorBatchBytes: cloned.EventCollectorBatchBytes,
+		CaseSensitive:            cloned.CaseSensitive,
+		ForceReplicate:           cloned.ForceReplicate,
+		IgnoreIneligibleTable:    cloned.IgnoreIneligibleTable,
+		CheckGCSafePoint:         cloned.CheckGCSafePoint,
+		EnableSyncPoint:          cloned.EnableSyncPoint,
+		EnableTableMonitor:       cloned.EnableTableMonitor,
+		BDRMode:                  cloned.BDRMode,
+		EnableActiveActive:       cloned.EnableActiveActive,
 	}
 
 	if cloned.SyncPointInterval != nil {
@@ -700,6 +716,8 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 				IndexName:     rule.IndexName,
 				Columns:       rule.Columns,
 				TopicRule:     rule.TopicRule,
+				TargetSchema:  rule.TargetSchema,
+				TargetTable:   rule.TargetTable,
 			})
 		}
 		var columnSelectors []*ColumnSelector
@@ -943,6 +961,9 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 		}
 		if cloned.Consistent.MetaFlushIntervalInMs != nil {
 			res.Consistent.MetaFlushIntervalInMs = cloned.Consistent.MetaFlushIntervalInMs
+		}
+		if cloned.Consistent.EventCollectorBatchCount != nil {
+			res.Consistent.EventCollectorBatchCount = cloned.Consistent.EventCollectorBatchCount
 		}
 		if cloned.Consistent.EncodingWorkerNum != nil {
 			res.Consistent.EncodingWorkerNum = cloned.Consistent.EncodingWorkerNum
@@ -1190,6 +1211,21 @@ type DispatchRule struct {
 	IndexName     string   `json:"index,omitempty"`
 	Columns       []string `json:"columns,omitempty"`
 	TopicRule     string   `json:"topic,omitempty"`
+
+	// TargetSchema sets the routed downstream schema name.
+	// Leave it empty to keep the source schema name.
+	// For example, if the source table is `sales`.`orders`, `target-schema = "sales_bak"`
+	// writes to `sales_bak`.`orders`.
+	// You can also use placeholders. For example, `target-schema = "{schema}_bak"`
+	// the target schema becomes `sales_bak`.
+	TargetSchema string `json:"target-schema,omitempty"`
+	// TargetTable sets the routed downstream table name.
+	// Leave it empty to keep the source table name.
+	// For example, if the source table is `sales`.`orders`, `target-table = "orders_bak"`
+	// writes to `sales`.`orders_bak`.
+	// You can also use placeholders. For example, `target-table = "{schema}_{table}"`
+	// becomes `sales_orders`.
+	TargetTable string `json:"target-table,omitempty"`
 }
 
 // ColumnSelector represents a column selector for a table.
@@ -1202,18 +1238,19 @@ type ColumnSelector struct {
 // ConsistentConfig represents replication consistency config for a changefeed
 // This is a duplicate of config.ConsistentConfig
 type ConsistentConfig struct {
-	Level                 *string `json:"level,omitempty"`
-	MaxLogSize            *int64  `json:"max_log_size,omitempty"`
-	FlushIntervalInMs     *int64  `json:"flush_interval,omitempty"`
-	MetaFlushIntervalInMs *int64  `json:"meta_flush_interval,omitempty"`
-	EncodingWorkerNum     *int    `json:"encoding_worker_num,omitempty"`
-	FlushWorkerNum        *int    `json:"flush_worker_num,omitempty"`
-	Storage               *string `json:"storage,omitempty"`
-	UseFileBackend        *bool   `json:"use_file_backend,omitempty"`
-	Compression           *string `json:"compression,omitempty"`
-	FlushConcurrency      *int    `json:"flush_concurrency,omitempty"`
+	Level                 *string                `json:"level,omitempty"`
+	MaxLogSize            *int64                 `json:"max_log_size,omitempty"`
+	FlushIntervalInMs     *int64                 `json:"flush_interval,omitempty"`
+	MetaFlushIntervalInMs *int64                 `json:"meta_flush_interval,omitempty"`
+	EncodingWorkerNum     *int                   `json:"encoding_worker_num,omitempty"`
+	FlushWorkerNum        *int                   `json:"flush_worker_num,omitempty"`
+	Storage               *string                `json:"storage,omitempty"`
+	UseFileBackend        *bool                  `json:"use_file_backend,omitempty"`
+	Compression           *string                `json:"compression,omitempty"`
+	FlushConcurrency      *int                   `json:"flush_concurrency,omitempty"`
+	MemoryUsage           *ConsistentMemoryUsage `json:"memory_usage,omitempty"`
 
-	MemoryUsage *ConsistentMemoryUsage `json:"memory_usage,omitempty"`
+	EventCollectorBatchCount *int `json:"event_collector_batch_count,omitempty"`
 }
 
 // ConsistentMemoryUsage represents memory usage of Consistent module.
@@ -1366,13 +1403,13 @@ type ProcessorDetail struct {
 
 // ServerStatus holds some common information of a server
 type ServerStatus struct {
-	Version   string       `json:"version"`
-	GitHash   string       `json:"git_hash"`
-	ID        string       `json:"id"`
-	ClusterID string       `json:"cluster_id"`
-	Pid       int          `json:"pid"`
-	IsOwner   bool         `json:"is_owner"`
-	Liveness  api.Liveness `json:"liveness"`
+	Version   string            `json:"version"`
+	GitHash   string            `json:"git_hash"`
+	ID        string            `json:"id"`
+	ClusterID string            `json:"cluster_id"`
+	Pid       int               `json:"pid"`
+	IsOwner   bool              `json:"is_owner"`
+	Liveness  liveness.Liveness `json:"liveness"`
 }
 
 // Capture holds common information of a capture in cdc

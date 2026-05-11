@@ -16,6 +16,7 @@ package coordinator
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/coordinator/changefeed"
@@ -147,4 +148,145 @@ func TestUpdateGCSafepointCallsGCManagerUpdate(t *testing.T) {
 	require.NotNil(t, cf)
 	require.Equal(t, config.StateNormal, cf.GetInfo().State)
 	require.Nil(t, cf.GetInfo().Error)
+}
+
+func TestUpdateGCSafepointDeletesServiceSafepointWhenNoChangefeed(t *testing.T) {
+	if !kerneltype.IsClassic() {
+		t.Skip("classic mode only")
+	}
+
+	ctrl := gomock.NewController(t)
+	backend := mock_changefeed.NewMockBackend(ctrl)
+	gcManager := gc.NewMockManager(ctrl)
+
+	co, _ := newTestCoordinatorWithGCManager(t, backend, gcManager)
+
+	gcManager.EXPECT().
+		TryDeleteServiceGCSafepoint(gomock.Any()).
+		Return(nil).
+		Times(1)
+	gcManager.EXPECT().
+		TryUpdateServiceGCSafepoint(gomock.Any(), gomock.Any()).
+		Times(0)
+
+	require.NoError(t, co.updateGCSafepoint(context.Background()))
+}
+
+func TestRemoveLastChangefeedDeletesServiceSafepointImmediately(t *testing.T) {
+	if !kerneltype.IsClassic() {
+		t.Skip("classic mode only")
+	}
+
+	ctrl := gomock.NewController(t)
+	backend := mock_changefeed.NewMockBackend(ctrl)
+	gcManager := gc.NewMockManager(ctrl)
+
+	co, changefeedDB := newTestCoordinatorWithGCManager(t, backend, gcManager)
+
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		Config:       config.GetDefaultReplicaConfig(),
+		State:        config.StateNormal,
+		SinkURI:      "mysql://127.0.0.1:3306",
+	}, 101, true)
+	changefeedDB.AddReplicatingMaintainer(cf, "node1")
+
+	backend.EXPECT().
+		SetChangefeedProgress(gomock.Any(), cfID, config.ProgressRemoving).
+		Return(nil).
+		Times(1)
+	gcManager.EXPECT().
+		TryDeleteServiceGCSafepoint(gomock.Any()).
+		Return(nil).
+		Times(1)
+
+	cpCh := make(chan uint64, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		cp, err := co.RemoveChangefeed(context.Background(), cfID)
+		cpCh <- cp
+		errCh <- err
+	}()
+
+	var op interface{ OnTaskRemoved() }
+	require.Eventually(t, func() bool {
+		op = co.controller.operatorController.GetOperator(cfID)
+		return op != nil
+	}, 5*time.Second, 10*time.Millisecond)
+	op.OnTaskRemoved()
+
+	require.NoError(t, <-errCh)
+	require.Equal(t, uint64(101), <-cpCh)
+}
+
+func TestConcurrentDeleteLastChangefeedAndCreateNewOneKeepsExpectedGCSafepoint(t *testing.T) {
+	if !kerneltype.IsClassic() {
+		t.Skip("classic mode only")
+	}
+
+	for i := 0; i < 5; i++ {
+		ctrl := gomock.NewController(t)
+		backend := mock_changefeed.NewMockBackend(ctrl)
+		gcManager := gc.NewMockManager(ctrl)
+
+		co, changefeedDB := newTestCoordinatorWithGCManager(t, backend, gcManager)
+
+		oldID := common.NewChangeFeedIDWithName("old", common.DefaultKeyspaceName)
+		oldCF := changefeed.NewChangefeed(oldID, &config.ChangeFeedInfo{
+			ChangefeedID: oldID,
+			Config:       config.GetDefaultReplicaConfig(),
+			State:        config.StateNormal,
+			SinkURI:      "mysql://127.0.0.1:3306",
+		}, 101, true)
+		changefeedDB.AddReplicatingMaintainer(oldCF, "node1")
+
+		newID := common.NewChangeFeedIDWithName("new", common.DefaultKeyspaceName)
+		newInfo := &config.ChangeFeedInfo{
+			ChangefeedID: newID,
+			StartTs:      205,
+			State:        config.StateNormal,
+			Config:       config.GetDefaultReplicaConfig(),
+			SinkURI:      "kafka://127.0.0.1:9092",
+			KeyspaceID:   1,
+		}
+
+		backend.EXPECT().
+			SetChangefeedProgress(gomock.Any(), oldID, config.ProgressRemoving).
+			Return(nil).
+			Times(1)
+		backend.EXPECT().
+			CreateChangefeed(gomock.Any(), gomock.Any()).
+			Return(nil).
+			Times(1)
+		gcManager.EXPECT().
+			TryDeleteServiceGCSafepoint(gomock.Any()).
+			Times(0)
+		gcManager.EXPECT().
+			TryUpdateServiceGCSafepoint(gomock.Any(), common.Ts(newInfo.StartTs-1)).
+			Return(nil).
+			Times(1)
+
+		cpCh := make(chan uint64, 1)
+		errCh := make(chan error, 1)
+		go func() {
+			cp, err := co.RemoveChangefeed(context.Background(), oldID)
+			cpCh <- cp
+			errCh <- err
+		}()
+
+		var op interface{ OnTaskRemoved() }
+		require.Eventually(t, func() bool {
+			op = co.controller.operatorController.GetOperator(oldID)
+			return op != nil
+		}, 5*time.Second, 10*time.Millisecond)
+
+		require.NoError(t, co.CreateChangefeed(context.Background(), newInfo))
+		op.OnTaskRemoved()
+
+		require.NoError(t, <-errCh)
+		require.Equalf(t, uint64(101), <-cpCh, "iteration %d", i)
+
+		require.NoError(t, co.updateGCSafepoint(context.Background()))
+	}
 }

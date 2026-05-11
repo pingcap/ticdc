@@ -57,6 +57,54 @@ func TestMemControlAddRemovePath(t *testing.T) {
 	require.Empty(t, mc.areaStatMap)
 }
 
+func TestRemovePathLateAppendDoesNotPolluteAreaPendingSize(t *testing.T) {
+	mc, path := setupTestComponents()
+	settings := AreaSettings{
+		maxPendingSize:   1000,
+		feedbackInterval: time.Second,
+		algorithm:        MemoryControlForPuller,
+	}
+	feedbackChan := make(chan Feedback[int, string, any], 10)
+	mc.addPathToArea(path, settings, feedbackChan)
+
+	handler := &mockHandler{}
+	eq := newEventQueue(handler, newTestBatchConfigRegistryWithDefault(newBatchConfig(4, 0)))
+	b := newDefaultBatcher[*mockEvent]()
+	eq.initPath(path)
+
+	appendEvent := func(id int, size int) {
+		eq.appendEvent(eventWrap[int, string, *mockEvent, any, *mockHandler]{
+			pathInfo:  path,
+			event:     &mockEvent{id: id, path: path.path},
+			eventType: DefaultEventType,
+			eventSize: size,
+		})
+	}
+
+	// Append one event before path removal.
+	appendEvent(1, 10)
+	require.Equal(t, int64(10), path.areaMemStat.totalPendingSize.Load())
+	require.Equal(t, int64(10), path.pendingSize.Load())
+
+	// Remove path and deduct the current pending size immediately.
+	path.removed.Store(true)
+	mc.removePathFromArea(path)
+	require.Equal(t, int64(0), path.areaMemStat.totalPendingSize.Load())
+	require.Equal(t, int64(0), path.pendingSize.Load())
+
+	// Simulate a stale in-flight append that races with RemovePath.
+	appendEvent(2, 7)
+
+	events, _, _, _ := eq.popEvents(b)
+	require.Len(t, events, 0)
+
+	// Removed-path events must not leave stale memory accounting behind.
+	require.Equal(t, int64(0), path.areaMemStat.totalPendingSize.Load())
+	require.Equal(t, int64(0), path.pendingSize.Load())
+	require.Equal(t, 0, path.pendingQueue.Length())
+	require.Equal(t, int64(0), eq.totalPendingLength.Load())
+}
+
 func TestAreaMemStatAppendEvent(t *testing.T) {
 	mc, path1 := setupTestComponents()
 	settings := AreaSettings{

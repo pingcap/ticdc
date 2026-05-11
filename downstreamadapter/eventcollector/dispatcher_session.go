@@ -179,6 +179,18 @@ func (d *dispatcherConnState) beginRemove(localServerID node.ID) ([]node.ID, boo
 	return cleanupTargets, false
 }
 
+func (d *dispatcherConnState) clear() {
+	d.Lock()
+	defer d.Unlock()
+	if d.removed {
+		return
+	}
+	d.currentEventServiceID = ""
+	d.localReadyPending = false
+	d.pendingRegisterTarget = ""
+	d.remoteCandidates = nil
+}
+
 // Read-only state queries used by session orchestration and other collector
 // components.
 func (d *dispatcherConnState) getCurrentEventServiceID() node.ID {
@@ -353,6 +365,10 @@ func (s *dispatcherSession) remove() {
 	}
 }
 
+func (s *dispatcherSession) clear() {
+	s.connState.clear()
+}
+
 func (s *dispatcherSession) removeFrom(serverID node.ID) {
 	log.Info("send remove dispatcher request to event service",
 		zap.Stringer("changefeedID", s.target.GetChangefeedID()),
@@ -512,6 +528,7 @@ func (s *dispatcherSession) newDispatcherResetRequest(serverID string, resetTs u
 			Timezone:             s.target.GetTimezone(),
 			Integrity:            s.target.GetIntegrityConfig(),
 			OutputRawChangeEvent: s.target.IsOutputRawChangeEvent(),
+			TxnAtomicity:         string(s.target.GetTxnAtomicity()),
 		},
 	}
 }

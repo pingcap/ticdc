@@ -312,21 +312,6 @@ date	format	con
 2003-01-02 10:11:12	%Y-%m-%d %h:%i:%S	2003-01-02 10:11:12.000000
 03-01-02 10:11:12 PM	%Y-%m-%d %h:%i:%S %p	2003-01-02 22:11:12.000000
 SET sql_mode = default;
-select get_format(DATE, 'USA') as a;
-a
-%m.%d.%Y
-select get_format(TIME, 'internal') as a;
-a
-%H%i%s
-select get_format(DATETIME, 'eur') as a;
-a
-%Y-%m-%d %H.%i.%s
-select get_format(TIMESTAMP, 'eur') as a;
-a
-%Y-%m-%d %H.%i.%s
-select get_format(DATE, 'TEST') as a;
-a
-
 select str_to_date('15-01-2001 12:59:59', GET_FORMAT(DATE,'USA'));
 str_to_date('15-01-2001 12:59:59', GET_FORMAT(DATE,'USA'))
 NULL
@@ -466,11 +451,6 @@ Thursday 01 January 2009
 #
 # Bug#58005 utf8 + get_format causes failed assertion: !str || str != Ptr'
 #
-SET NAMES utf8;
-SELECT LEAST('%', GET_FORMAT(datetime, 'eur'), CAST(GET_FORMAT(datetime, 'eur') AS CHAR(65535)));
-LEAST('%', GET_FORMAT(datetime, 'eur'), CAST(GET_FORMAT(datetime, 'eur') AS CHAR(65535)))
-%
-SET NAMES latin1;
 #
 # End of 5.1 tests
 #

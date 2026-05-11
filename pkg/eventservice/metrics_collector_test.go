@@ -42,7 +42,7 @@ func TestCollectSlowestDispatchersByCheckpointTs(t *testing.T) {
 	for i := 0; i < 20; i++ {
 		checkpointTs := uint64(100 + i*10)
 		info := newMockDispatcherInfo(t, checkpointTs, common.NewDispatcherID(), int64(i+1), eventpb.ActionType_ACTION_TYPE_REGISTER)
-		status := newChangefeedStatus(info.GetChangefeedID(), info.GetSyncPointInterval())
+		status := newChangefeedStatusForTest(t, info)
 		stat := newDispatcherStat(info, 1, 1, nil, status)
 		stat.checkpointTs.Store(checkpointTs)
 		stat.receivedResolvedTs.Store(checkpointTs + 10)
@@ -104,7 +104,7 @@ func TestCollectSlowestDispatchersLessThan10(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		checkpointTs := uint64(100 + i*10)
 		info := newMockDispatcherInfo(t, checkpointTs, common.NewDispatcherID(), int64(i+1), eventpb.ActionType_ACTION_TYPE_REGISTER)
-		status := newChangefeedStatus(info.GetChangefeedID(), info.GetSyncPointInterval())
+		status := newChangefeedStatusForTest(t, info)
 		stat := newDispatcherStat(info, 1, 1, nil, status)
 		stat.checkpointTs.Store(checkpointTs)
 		stat.receivedResolvedTs.Store(checkpointTs + 10)
@@ -147,12 +147,12 @@ func TestDispatcherHeapItem(t *testing.T) {
 
 	// Create two dispatchers with different checkpointTs
 	info1 := newMockDispatcherInfo(t, 100, common.NewDispatcherID(), 1, eventpb.ActionType_ACTION_TYPE_REGISTER)
-	status1 := newChangefeedStatus(info1.GetChangefeedID(), info1.GetSyncPointInterval())
+	status1 := newChangefeedStatusForTest(t, info1)
 	stat1 := newDispatcherStat(info1, 1, 1, nil, status1)
 	stat1.checkpointTs.Store(100)
 
 	info2 := newMockDispatcherInfo(t, 200, common.NewDispatcherID(), 2, eventpb.ActionType_ACTION_TYPE_REGISTER)
-	status2 := newChangefeedStatus(info2.GetChangefeedID(), info2.GetSyncPointInterval())
+	status2 := newChangefeedStatusForTest(t, info2)
 	stat2 := newDispatcherStat(info2, 1, 1, nil, status2)
 	stat2.checkpointTs.Store(200)
 

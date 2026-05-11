@@ -703,6 +703,24 @@ func TestHandleDispatcherHeartbeatEpochFilter(t *testing.T) {
 	require.Equal(t, uint64(100), dispatcher.checkpointTs.Load())
 	require.Equal(t, int64(0), dispatcher.lastReceivedHeartbeatTime.Load())
 
+	futureHeartbeat := &DispatcherHeartBeatWithServerID{
+		serverID: "test-server-1",
+		heartbeat: &event.DispatcherHeartbeat{
+			Version:         event.DispatcherHeartbeatVersion2,
+			ClusterID:       0,
+			DispatcherCount: 1,
+			DispatcherProgresses: []event.DispatcherProgress{{
+				Version:      event.DispatcherProgressVersion1,
+				DispatcherID: dispInfo.GetID(),
+				CheckpointTs: 220,
+				Epoch:        4,
+			}},
+		},
+	}
+	broker.handleDispatcherHeartbeat(futureHeartbeat)
+	require.Equal(t, uint64(100), dispatcher.checkpointTs.Load())
+	require.Equal(t, int64(0), dispatcher.lastReceivedHeartbeatTime.Load())
+
 	v1Heartbeat := &DispatcherHeartBeatWithServerID{
 		serverID: "test-server-1",
 		heartbeat: &event.DispatcherHeartbeat{

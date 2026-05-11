@@ -161,6 +161,9 @@ func (p *ddlProducers) getProducerByTopic(topicName string) (producer pulsarClie
 
 // Close all producers
 func (p *ddlProducers) close() {
+	if p == nil {
+		return
+	}
 	keys := p.producers.Keys()
 
 	p.producersMutex.Lock()

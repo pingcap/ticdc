@@ -179,10 +179,11 @@ func (b *Bootstrapper[T]) AllNodesReady() bool {
 	return b.allNodesReady
 }
 
-// collectBootstrapResponses return all cached bootstrapped responses after make sure all nodes responses received.
-// Returns:
-//   - newly added nodes responses if all they are initialized, and clear all cached responses.
-//   - else nil
+// collectBootstrapResponses returns all cached bootstrapped responses after
+// making sure every tracked node has reported once.
+//
+// The responses are kept until the caller explicitly acknowledges that the
+// higher level bootstrap phase finished successfully via ClearBootstrapResponses.
 //
 // Note: this method must be called after lock.
 func (b *Bootstrapper[T]) collectBootstrapResponses() map[node.ID]*T {
@@ -209,6 +210,17 @@ func (b *Bootstrapper[T]) collectBootstrapResponses() map[node.ID]*T {
 		}
 	}
 	return responses
+}
+
+// ClearBootstrapResponses drops all cached bootstrap responses after the caller
+// has successfully finished its own bootstrap phase.
+func (b *Bootstrapper[T]) ClearBootstrapResponses() {
+	b.mutex.Lock()
+	defer b.mutex.Unlock()
+
+	for _, status := range b.nodes {
+		status.ClearResponse()
+	}
 }
 
 type NewBootstrapRequestFn func(id node.ID, addr string) *messaging.TargetMessage
