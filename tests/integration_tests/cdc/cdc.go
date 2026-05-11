@@ -14,6 +14,7 @@
 package main
 
 import (
+	stderrors "errors"
 	"flag"
 	"os"
 
@@ -27,9 +28,9 @@ import (
 func main() {
 	cfg := util.NewConfig()
 	err := cfg.Parse(os.Args[1:])
-	switch errors.Cause(err) {
-	case nil:
-	case flag.ErrHelp:
+	switch {
+	case errors.Cause(err) == nil:
+	case stderrors.Is(errors.Cause(err), flag.ErrHelp):
 		os.Exit(0)
 	default:
 		log.S().Errorf("parse cmd flags err %s\n", err)

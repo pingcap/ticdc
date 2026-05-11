@@ -15,6 +15,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"net/http"
 	"net/url"
@@ -103,7 +104,7 @@ func main() {
 		if consumer != nil {
 			consumer.sink.Close()
 		}
-		if err != nil && err != context.Canceled {
+		if err != nil && !errors.Is(err, context.Canceled) {
 			return 1
 		}
 		return 0

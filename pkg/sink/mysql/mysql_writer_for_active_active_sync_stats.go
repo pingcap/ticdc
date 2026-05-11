@@ -17,6 +17,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	stderrors "errors"
 	"sync"
 
 	dmysql "github.com/go-sql-driver/mysql"
@@ -41,7 +42,8 @@ func CheckActiveActiveSyncStatsSupported(ctx context.Context, db *sql.DB) (bool,
 	row := db.QueryRowContext(ctx, "SELECT @@tidb_cdc_active_active_sync_stats;")
 	var v sql.NullString
 	if err := row.Scan(&v); err != nil {
-		if mysqlErr, ok := errors.Cause(err).(*dmysql.MySQLError); ok &&
+		mysqlErr := &dmysql.MySQLError{}
+		if stderrors.As(errors.Cause(err), &mysqlErr) &&
 			mysqlErr.Number == tidbmysql.ErrUnknownSystemVariable {
 			return false, nil
 		}

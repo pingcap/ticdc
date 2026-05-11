@@ -17,6 +17,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/base64"
+	stderrors "errors"
 	"fmt"
 	"net"
 	"strconv"
@@ -70,8 +71,8 @@ func CheckIfBDRModeIsSupported(ctx context.Context, db *sql.DB) (bool, error) {
 	query := "SET SESSION tidb_cdc_write_source = 1"
 	_, err := db.ExecContext(ctx, query)
 	if err != nil {
-		if mysqlErr, ok := errors.Cause(err).(*dmysql.MySQLError); ok &&
-			mysqlErr.Number == mysql.ErrUnknownSystemVariable {
+		mysqlErr := &dmysql.MySQLError{}
+		if stderrors.As(errors.Cause(err), &mysqlErr) {
 			return false, nil
 		}
 		return false, err
@@ -189,7 +190,8 @@ func GetTestDB(dbConfig *dmysql.Config) (*sql.DB, error) {
 	testDB, err := CreateMysqlDBConn(dbConfig.FormatDSN())
 	if err != nil {
 		// If access is denied and password is encoded by base64, try to decoded password.
-		if mysqlErr, ok := errors.Cause(err).(*dmysql.MySQLError); ok && mysqlErr.Number == mysql.ErrAccessDenied {
+		mysqlErr := &dmysql.MySQLError{}
+		if stderrors.As(errors.Cause(err), &mysqlErr) {
 			if dePassword, decodeErr := base64.StdEncoding.DecodeString(password); decodeErr == nil && string(dePassword) != password {
 				dbConfig.Passwd = string(dePassword)
 				testDB, err = CreateMysqlDBConn(dbConfig.FormatDSN())
@@ -309,7 +311,7 @@ func checkCharsetSupport(db *sql.DB, charsetName string) (bool, error) {
 	querySQL := "select character_set_name from information_schema.character_sets " +
 		"where character_set_name = '" + charsetName + "';"
 	err = db.QueryRowContext(context.Background(), querySQL).Scan(&characterSetName)
-	if err != nil && err != sql.ErrNoRows {
+	if err != nil && !stderrors.Is(err, sql.ErrNoRows) {
 		return false, cerror.WrapError(cerror.ErrMySQLQueryError, err)
 	}
 	if err != nil {
@@ -470,7 +472,8 @@ func isRetryableDMLError(err error) bool {
 }
 
 func getSQLErrCode(err error) (errors.ErrCode, bool) {
-	mysqlErr, ok := errors.Cause(err).(*dmysql.MySQLError)
+	mysqlErr := &dmysql.MySQLError{}
+	ok := stderrors.As(errors.Cause(err), &mysqlErr)
 	if !ok {
 		return -1, false
 	}

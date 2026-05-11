@@ -16,6 +16,7 @@ package coordinator
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"net"
@@ -682,7 +683,7 @@ func TestConcurrentStopAndSendEvents(t *testing.T) {
 	ctxRun, cancelRun := context.WithCancel(ctx)
 	go func() {
 		err := cr.Run(ctxRun)
-		if err != nil && err != context.Canceled {
+		if err != nil && !errors.Is(err, context.Canceled) {
 			t.Errorf("Coordinator Run returned unexpected error: %v", err)
 		}
 	}()
@@ -715,7 +716,7 @@ func TestConcurrentStopAndSendEvents(t *testing.T) {
 
 				// Use recvMessages to send event to channel
 				err := co.recvMessages(ctx, msg)
-				if err != nil && err != context.Canceled {
+				if err != nil && !errors.Is(err, context.Canceled) {
 					t.Logf("Failed to send event in goroutine %d: %v", id, err)
 				}
 

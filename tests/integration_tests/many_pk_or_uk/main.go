@@ -15,6 +15,7 @@ package main
 
 import (
 	"database/sql"
+	stderrors "errors"
 	"flag"
 	"fmt"
 	"math"
@@ -29,9 +30,9 @@ import (
 func main() {
 	cfg := util.NewConfig()
 	err := cfg.Parse(os.Args[1:])
-	switch errors.Cause(err) {
-	case nil:
-	case flag.ErrHelp:
+	switch {
+	case errors.Cause(err) == nil:
+	case stderrors.Is(errors.Cause(err), flag.ErrHelp):
 		os.Exit(0)
 	default:
 		log.S().Errorf("parse cmd flags err %s\n", err)
@@ -108,7 +109,7 @@ func runPKorUKcases(db *sql.DB) {
 		for j, pkOrUK := range []string{"UNIQUE NOT NULL", "PRIMARY KEY"} {
 			g.Add(1)
 			tableName := fmt.Sprintf("pk_or_uk_%d_%d", i, j)
-			pkOrUK := pkOrUK
+
 			c := c
 			go func() {
 				sql := fmt.Sprintf("CREATE TABLE %s(id %s %s)", tableName, c.Tp, pkOrUK)

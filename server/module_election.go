@@ -156,7 +156,7 @@ func (e *elector) campaignCoordinator(ctx context.Context) error {
 			// use a new context to prevent the context from being cancelled.
 			resignCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			if resignErr := e.resign(resignCtx); resignErr != nil {
-				if errors.Cause(resignErr) != context.DeadlineExceeded {
+				if !errors.Is(errors.Cause(resignErr), context.DeadlineExceeded) {
 					log.Info("coordinator resign failed", zap.String("nodeID", nodeID),
 						zap.Error(resignErr), zap.Int64("coordinatorVersion", coordinatorVersion))
 					cancel()
@@ -176,7 +176,7 @@ func (e *elector) campaignCoordinator(ctx context.Context) error {
 		// we should keep the loop running to try to election coordinator again.
 		// So, regardless of the cause of the context.Canceled, we should not exit here.
 		// We should proceed to the next iteration of the loop, allowing subsequent logic to make the determination.
-		if err != nil && err != context.Canceled {
+		if err != nil && !errors.Is(err, context.Canceled) {
 			log.Warn("coordinator exited report error",
 				zap.String("nodeID", nodeID), zap.Int64("coordinatorVersion", coordinatorVersion),
 				zap.Error(err))
@@ -203,7 +203,7 @@ func (e *elector) campaignLogCoordinator(ctx context.Context) error {
 		}
 		err := rl.Wait(ctx)
 		if err != nil {
-			if errors.Cause(err) == context.Canceled {
+			if errors.Is(errors.Cause(err), context.Canceled) {
 				return nil
 			}
 			return errors.Trace(err)

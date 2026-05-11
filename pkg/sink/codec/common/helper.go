@@ -16,6 +16,7 @@ package common
 import (
 	"context"
 	"database/sql"
+	stderrors "errors"
 	"fmt"
 	"math"
 	"strconv"
@@ -268,7 +269,8 @@ func queryRowChecksumAux(
 	query := fmt.Sprintf("set @@tidb_snapshot=%d", commitTs)
 	_, err := conn.ExecContext(ctx, query)
 	if err != nil {
-		mysqlErr, ok := errors.Cause(err).(*mysqlDriver.MySQLError)
+		mysqlErr := &mysqlDriver.MySQLError{}
+		ok := stderrors.As(errors.Cause(err), &mysqlErr)
 		if ok {
 			// Error 8055 (HY000): snapshot is older than GC safe point
 			if mysqlErr.Number == 8055 {
@@ -324,7 +326,8 @@ func MustSnapshotQuery(
 	query := fmt.Sprintf("set @@tidb_snapshot=%d", commitTs)
 	_, err = conn.ExecContext(ctx, query)
 	if err != nil {
-		mysqlErr, ok := errors.Cause(err).(*mysqlDriver.MySQLError)
+		mysqlErr := &mysqlDriver.MySQLError{}
+		ok := stderrors.As(errors.Cause(err), &mysqlErr)
 		if ok {
 			// Error 8055 (HY000): snapshot is older than GC safe point
 			if mysqlErr.Number == 8055 {

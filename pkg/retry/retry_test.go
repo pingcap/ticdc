@@ -15,6 +15,7 @@ package retry
 
 import (
 	"context"
+	stderrors "errors"
 	"math"
 	"testing"
 	"time"
@@ -64,8 +65,8 @@ func TestIsRetryable(t *testing.T) {
 	}
 
 	err := Do(context.Background(), f, WithMaxTries(3), WithIsRetryableErr(func(err error) bool {
-		switch errors.Cause(err) {
-		case context.Canceled:
+		switch {
+		case stderrors.Is(errors.Cause(err), context.Canceled):
 			return false
 		}
 		return true

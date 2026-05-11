@@ -16,6 +16,7 @@ package logger
 import (
 	"bytes"
 	"context"
+	stderrors "errors"
 	"io"
 	"os"
 	"strconv"
@@ -232,7 +233,7 @@ func initOptionalComponent(op *loggerOp, cfg *Config) error {
 func ZapErrorFilter(err error, filterErrors ...error) zap.Field {
 	cause := errors.Cause(err)
 	for _, ferr := range filterErrors {
-		if cause == ferr {
+		if stderrors.Is(cause, ferr) {
 			return zap.Error(nil)
 		}
 	}
@@ -334,7 +335,7 @@ func ErrorFilterContextCanceled(logger *zap.Logger, msg string, fields ...zap.Fi
 			}
 		case zapcore.ErrorType:
 			err, ok := field.Interface.(error)
-			if ok && errors.Cause(err) == context.Canceled {
+			if ok && stderrors.Is(errors.Cause(err), context.Canceled) {
 				return
 			}
 		}

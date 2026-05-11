@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"math"
 	"strings"
 	"time"
@@ -379,7 +380,7 @@ func tryReadLogicalTableID(snap *pebble.Snapshot, tableID int64, version uint64)
 		return 0
 	}
 	val, closer, err := snap.Get(key)
-	if err == pebble.ErrNotFound {
+	if errors.Is(err, pebble.ErrNotFound) {
 		return 0
 	}
 	if err != nil {
@@ -402,7 +403,7 @@ func readTableInfoInKVSnap(snap *pebble.Snapshot, tableID int64, version uint64)
 			log.Fatal("generate table info failed", zap.Error(err))
 		}
 		value, closer, err := snap.Get(targetKey)
-		if err == pebble.ErrNotFound {
+		if errors.Is(err, pebble.ErrNotFound) {
 			return "", nil
 		}
 		if err != nil {

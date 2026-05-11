@@ -16,6 +16,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	stderrors "errors"
 	"flag"
 	"fmt"
 	"os"
@@ -36,9 +37,9 @@ import (
 func main() {
 	cfg := util.NewConfig()
 	err := cfg.Parse(os.Args[1:])
-	switch errors.Cause(err) {
-	case nil:
-	case flag.ErrHelp:
+	switch {
+	case errors.Cause(err) == nil:
+	case stderrors.Is(errors.Cause(err), flag.ErrHelp):
 		os.Exit(0)
 	default:
 		log.S().Errorf("parse cmd flags err %s\n", err)
@@ -210,7 +211,7 @@ func DropWithRecoverDDL(ctx context.Context, db *sql.DB) {
 			return
 		default:
 		}
-		// get a rand number bewteen 0 and 1
+		// get a rand number between 0 and 1
 		rand := time.Now().UnixNano() % 2
 		if rand == 0 {
 			util.MustExec(db, drop_sql)
@@ -343,14 +344,15 @@ func addDropColumnDDL(ctx context.Context, db *sql.DB) {
 		var notNULL string
 		var defaultValue interface{}
 
-		if value%5 == 0 {
+		switch value % 5 {
+		case 0:
 			// use default <value> not null
 			notNULL = "not null"
 			defaultValue = value
-		} else if value%5 == 1 {
+		case 1:
 			// use default null
 			defaultValue = nil
-		} else {
+		default:
 			// use default <value>
 			defaultValue = value
 		}
@@ -386,13 +388,14 @@ func addDropColumnDDL2(ctx context.Context, db *sql.DB) {
 		var defaultValue interface{}
 
 		strValue := strconv.Itoa(value)
-		if value%5 == 0 {
+		switch value % 5 {
+		case 0:
 			// use default <value>
 			defaultValue = strValue
-		} else if value%5 == 1 {
+		case 1:
 			// use default null
 			defaultValue = nil
-		} else {
+		default:
 			// use default <value> not null
 			notNULL = "not null"
 			defaultValue = strValue

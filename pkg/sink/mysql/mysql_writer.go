@@ -16,6 +16,7 @@ package mysql
 import (
 	"context"
 	"database/sql"
+	stderrors "errors"
 	"strings"
 	"sync"
 	"time"
@@ -260,7 +261,7 @@ func (w *Writer) checkIsDuplicateEntryError(err error) bool {
 	if err == nil {
 		return false
 	}
-	if errors.Cause(err) == cerror.ErrMySQLDuplicateEntry ||
+	if stderrors.Is(errors.Cause(err), cerror.ErrMySQLDuplicateEntry) ||
 		strings.Contains(err.Error(), "Duplicate entry") {
 		if !w.isInErrorCausedSafeMode {
 			w.isInErrorCausedSafeMode = true

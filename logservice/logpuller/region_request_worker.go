@@ -15,6 +15,7 @@ package logpuller
 
 import (
 	"context"
+	stderrors "errors"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -105,7 +106,7 @@ func newRegionRequestWorker(
 			}
 			var regionErr error
 			if err := version.CheckStoreVersion(ctx, worker.client.pd); err != nil {
-				if errors.Cause(err) == context.Canceled {
+				if stderrors.Is(errors.Cause(err), context.Canceled) {
 					return nil
 				}
 				log.Error("event feed check store version fails",

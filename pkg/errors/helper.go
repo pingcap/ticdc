@@ -41,8 +41,8 @@ func IsRetryableError(err error) bool {
 		return false
 	}
 
-	switch errors.Cause(err) {
-	case context.Canceled, context.DeadlineExceeded:
+	switch {
+	case Is(errors.Cause(err), context.Canceled), Is(errors.Cause(err), context.DeadlineExceeded):
 		return false
 	}
 	return true
@@ -52,8 +52,8 @@ func IsRetryableError(err error) bool {
 // Return true also means caller can retry sql safely.
 func IsConnectionError(err error) bool {
 	err = errors.Cause(err)
-	switch err {
-	case driver.ErrBadConn, tmysql.ErrBadConn, gmysql.ErrBadConn:
+	switch {
+	case Is(err, driver.ErrBadConn), Is(err, tmysql.ErrBadConn), Is(err, gmysql.ErrBadConn):
 		return true
 	}
 	return false
@@ -63,7 +63,7 @@ func IsConnectionError(err error) bool {
 func IsUnretryableConnectionError(err error) bool {
 	// Can't ensure whether the last write has reached the downstream or not.
 	// If the last write isn't idempotent, retry it may cause problems.
-	return errors.Cause(err) == dmysql.ErrInvalidConn
+	return Is(errors.Cause(err), dmysql.ErrInvalidConn)
 }
 
 // ChangeFeedGCFastFailError is read only.

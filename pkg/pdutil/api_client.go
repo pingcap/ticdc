@@ -19,6 +19,7 @@ import (
 	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
+	stderrors "errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -187,8 +188,8 @@ func (pc *pdAPIClient) UpdateMetaLabel(ctx context.Context) error {
 		retry.WithBackoffBaseDelay(200),
 		retry.WithBackoffMaxDelay(4000),
 		retry.WithIsRetryableErr(func(err error) bool {
-			switch errors.Cause(err) {
-			case context.Canceled:
+			switch {
+			case stderrors.Is(errors.Cause(err), context.Canceled):
 				return false
 			}
 			return true
@@ -364,8 +365,8 @@ func (pc *pdAPIClient) ListGcServiceSafePoint(
 		}
 		return nil
 	}, retry.WithMaxTries(defaultMaxRetry), retry.WithIsRetryableErr(func(err error) bool {
-		switch errors.Cause(err) {
-		case context.Canceled:
+		switch {
+		case stderrors.Is(errors.Cause(err), context.Canceled):
 			return false
 		}
 		return true

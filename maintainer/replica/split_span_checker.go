@@ -106,7 +106,8 @@ func (b *BalanceCondition) updateScore(minTrafficNodeID node.ID,
 	if b.balanceScore == 0 {
 		b.initFirstScore(minTrafficNodeID, maxTrafficNodeID, balanceCauseByMinNode, balanceCauseByMaxNode)
 	} else {
-		if b.balanceCause == BalanceCauseByBoth {
+		switch b.balanceCause {
+		case BalanceCauseByBoth:
 			if b.minTrafficNodeID == minTrafficNodeID && b.maxTrafficNodeID == maxTrafficNodeID {
 				b.balanceScore += 1
 			} else if b.minTrafficNodeID == minTrafficNodeID {
@@ -118,13 +119,13 @@ func (b *BalanceCondition) updateScore(minTrafficNodeID node.ID,
 			} else {
 				b.initFirstScore(minTrafficNodeID, maxTrafficNodeID, balanceCauseByMinNode, balanceCauseByMaxNode)
 			}
-		} else if b.balanceCause == BalanceCauseByMaxNode {
+		case BalanceCauseByMaxNode:
 			if b.maxTrafficNodeID == maxTrafficNodeID {
 				b.balanceScore += 1
 			} else {
 				b.initFirstScore(minTrafficNodeID, maxTrafficNodeID, balanceCauseByMinNode, balanceCauseByMaxNode)
 			}
-		} else if b.balanceCause == BalanceCauseByMinNode {
+		case BalanceCauseByMinNode:
 			if b.minTrafficNodeID == minTrafficNodeID {
 				b.balanceScore += 1
 			} else {
@@ -242,7 +243,7 @@ func (s *SplitSpanChecker) UpdateStatus(replica *SpanReplication) {
 			log.Debug("update traffic score",
 				zap.String("changefeed", s.changefeedID.String()),
 				zap.Int64("group", s.groupID),
-				zap.String("span", status.SpanReplication.ID.String()),
+				zap.String("span", status.ID.String()),
 				zap.Any("trafficScore", status.trafficScore),
 				zap.Any("eventSizePerSecond", status.GetStatus().EventSizePerSecond),
 			)
@@ -976,7 +977,7 @@ func (s *SplitSpanChecker) chooseSplitSpans(
 				log.Info("chooseSplitSpans split span by traffic",
 					zap.String("changefeed", s.changefeedID.String()),
 					zap.Int64("group", s.groupID),
-					zap.String("splitSpan", status.SpanReplication.ID.String()),
+					zap.String("splitSpan", status.ID.String()),
 					zap.Any("splitTargetNodes", status.GetNodeID()),
 				)
 				spanNum := int(math.Ceil(status.lastThreeTraffic[latestTrafficIndex] / float64(s.writeThreshold)))
@@ -1000,7 +1001,7 @@ func (s *SplitSpanChecker) chooseSplitSpans(
 			if status.regionCount > s.regionThreshold {
 				log.Info("chooseSplitSpans split span by region",
 					zap.String("changefeed", s.changefeedID.String()),
-					zap.String("splitSpan", status.SpanReplication.ID.String()),
+					zap.String("splitSpan", status.ID.String()),
 					zap.Int64("group", s.groupID),
 					zap.Any("splitTargetNodes", status.GetNodeID()),
 				)
@@ -1211,7 +1212,7 @@ func (s *SplitSpanChecker) checkBalanceTraffic(
 
 	log.Info("checkBalanceTraffic split span",
 		zap.Stringer("changefeed", s.changefeedID),
-		zap.String("splitSpan", span.SpanReplication.ID.String()),
+		zap.String("splitSpan", span.ID.String()),
 		zap.Int64("group", s.groupID),
 		zap.Any("splitTargetNodes", []node.ID{minTrafficNodeID, maxTrafficNodeID}),
 	)
@@ -1247,13 +1248,13 @@ func (s *SplitSpanChecker) Stat() string {
 		res.WriteString("traffic infos:")
 		// record all the latest three traffic of tasks
 		for _, status := range s.allTasks {
-			res.WriteString(fmt.Sprintf("[task: %s, traffic: %f, %f, %f];", status.ID, status.lastThreeTraffic[0], status.lastThreeTraffic[1], status.lastThreeTraffic[2]))
+			fmt.Fprintf(&res, "[task: %s, traffic: %f, %f, %f];", status.ID, status.lastThreeTraffic[0], status.lastThreeTraffic[1], status.lastThreeTraffic[2])
 		}
 	}
 	if s.regionThreshold > 0 {
 		res.WriteString("region infos:")
 		for _, status := range s.allTasks {
-			res.WriteString(fmt.Sprintf("[task: %s, region: %d];", status.ID, status.regionCount))
+			fmt.Fprintf(&res, "[task: %s, region: %d];", status.ID, status.regionCount)
 		}
 	}
 	return res.String()

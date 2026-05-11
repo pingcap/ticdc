@@ -15,6 +15,7 @@ package logpuller
 
 import (
 	"context"
+	stderrors "errors"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -844,7 +845,8 @@ func (s *subscriptionClient) handleErrors(ctx context.Context) error {
 
 func (s *subscriptionClient) doHandleError(ctx context.Context, errInfo regionErrorInfo) error {
 	err := errors.Cause(errInfo.err)
-	if _, requestCancelled := err.(*requestCancelledErr); !requestCancelled {
+	var rcErr *requestCancelledErr
+	if !stderrors.As(err, &rcErr) {
 		log.Debug("cdc region error",
 			zap.Uint64("subscriptionID", uint64(errInfo.subscribedSpan.subID)),
 			zap.Uint64("regionID", errInfo.verID.GetID()),

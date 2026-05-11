@@ -16,6 +16,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	stderrors "errors"
 	"flag"
 	"fmt"
 	"os"
@@ -52,9 +53,9 @@ var finishIdx atomic.Int32
 func main() {
 	cfg := util.NewConfig()
 	err := cfg.Parse(os.Args[1:])
-	switch errors.Cause(err) {
-	case nil:
-	case flag.ErrHelp:
+	switch {
+	case errors.Cause(err) == nil:
+	case stderrors.Is(errors.Cause(err), flag.ErrHelp):
 		os.Exit(0)
 	default:
 		log.S().Errorf("parse cmd flags err %s\n", err)
@@ -875,7 +876,7 @@ func testMultiDDLs(srcs []*sql.DB, wg *sync.WaitGroup) {
 	}()
 
 	var wg1 sync.WaitGroup
-	// seperate every case to different table
+	// separate every case to different table
 	for i, unit := range Units {
 		wg1.Add(1)
 

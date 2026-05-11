@@ -16,6 +16,7 @@ package util
 import (
 	"context"
 	"database/sql"
+	stderrors "errors"
 	"fmt"
 	"net/url"
 	"time"
@@ -152,7 +153,7 @@ func MustExec(db *sql.DB, sql string, args ...interface{}) {
 func MustExecWithConn(ctx context.Context, conn *sql.Conn, sql string, args ...interface{}) {
 	var err error
 	_, err = conn.ExecContext(ctx, sql, args...)
-	if err != nil && errors.Cause(err) == context.DeadlineExceeded && errors.Cause(err) == context.Canceled {
+	if err != nil && stderrors.Is(errors.Cause(err), context.DeadlineExceeded) && stderrors.Is(errors.Cause(err), context.Canceled) {
 		log.S().Fatal(err)
 	}
 }

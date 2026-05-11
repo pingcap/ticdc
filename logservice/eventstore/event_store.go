@@ -945,10 +945,7 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 
 	decoder := e.decoderPool.Get().(*zstd.Decoder)
 
-	needCheckSpan := true
-	if stat.tableSpan.Equal(subStat.tableSpan) {
-		needCheckSpan = false
-	}
+	needCheckSpan := !stat.tableSpan.Equal(subStat.tableSpan)
 
 	return &eventStoreIter{
 		tableSpan:     stat.tableSpan,
@@ -1520,14 +1517,12 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
 		skippedBytesMetrics.Add(float64(len(value)))
 		iter.innerIter.Next()
 	}
-	isNewTxn := false
+	isNewTxn := iter.prevCommitTs == 0 || (rawKV.StartTs != iter.prevStartTs || rawKV.CRTs != iter.prevCommitTs)
 	// 2 PC transactions have different startTs and commitTs.
 	// async-commit transactions have different startTs and may have the same commitTs.
 	// at the moment, use commit-ts determine whether it is a new transaction, even though multiple
 	// different transactions may be grouped together, to satisfy the resolved-ts semantics.
-	if iter.prevCommitTs == 0 || (rawKV.StartTs != iter.prevStartTs || rawKV.CRTs != iter.prevCommitTs) {
-		isNewTxn = true
-	}
+
 	iter.prevCommitTs = rawKV.CRTs
 	iter.prevStartTs = rawKV.StartTs
 	iter.rowCount++

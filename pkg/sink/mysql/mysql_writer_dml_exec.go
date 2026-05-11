@@ -17,6 +17,7 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	stderrors "errors"
 	"fmt"
 	"strings"
 	"time"
@@ -158,7 +159,7 @@ func (w *Writer) sequenceExecute(
 		if execError != nil {
 			log.Error("ExecContext", zap.Error(execError), zap.Any("dmls", dmls), zap.Int("writerID", w.id))
 			if rbErr := tx.Rollback(); rbErr != nil {
-				if errors.Cause(rbErr) != context.Canceled {
+				if !stderrors.Is(errors.Cause(rbErr), context.Canceled) {
 					log.Warn("failed to rollback txn", zap.Error(rbErr), zap.Int("writerID", w.id))
 				}
 			}

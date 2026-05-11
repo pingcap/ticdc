@@ -15,6 +15,7 @@ package workerpool
 
 import (
 	"context"
+	stderrors "errors"
 	"math/rand"
 	"sync"
 	"sync/atomic"
@@ -124,7 +125,7 @@ func runForDuration(ctx context.Context, duration time.Duration, f func(ctx cont
 	case <-ctx.Done():
 		return ctx.Err()
 	case err := <-errCh:
-		if errors.Cause(err) == context.DeadlineExceeded {
+		if stderrors.Is(errors.Cause(err), context.DeadlineExceeded) {
 			return nil
 		}
 		return errors.Trace(err)

@@ -16,6 +16,7 @@ package tcpserver
 import (
 	"context"
 	"crypto/tls"
+	stderrors "errors"
 	"net"
 	"strings"
 	"time"
@@ -127,7 +128,7 @@ func (s *tcpServerImpl) Run(ctx context.Context) (err error) {
 
 	errg.Go(func() error {
 		err := s.mux.Serve()
-		if err == cmux.ErrServerClosed {
+		if stderrors.Is(err, cmux.ErrServerClosed) {
 			return cerror.ErrTCPServerClosed.GenWithStackByArgs()
 		}
 		if err != nil && strings.Contains(err.Error(), "use of closed network connection") {

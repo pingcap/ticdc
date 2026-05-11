@@ -14,6 +14,7 @@
 package schemastore
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common"
@@ -221,7 +222,8 @@ func TestBuildVersionedTableInfoStore(t *testing.T) {
 					}
 				} else {
 					require.Nil(t, tableInfo)
-					if _, ok := err.(*TableDeletedError); !ok {
+					var tableDeletedError *TableDeletedError
+					if !errors.As(err, &tableDeletedError) {
 						t.Error("expect TableDeletedError, but got", err)
 					}
 				}

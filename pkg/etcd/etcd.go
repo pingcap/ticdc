@@ -404,7 +404,11 @@ func (c *CDCEtcdClientImpl) RevokeAllLeases(ctx context.Context, leases map[stri
 		_, err := c.Client.Revoke(ctx, clientv3.LeaseID(lease))
 		if err == nil {
 			continue
-		} else if etcdErr := err.(rpctypes.EtcdError); etcdErr.Code() == codes.NotFound {
+		} else if etcdErr := func() rpctypes.EtcdError {
+			var target rpctypes.EtcdError
+			_ = errors.As(err, &target)
+			return target
+		}(); etcdErr.Code() == codes.NotFound {
 			// it means the etcd lease is already expired or revoked
 			continue
 		}
