@@ -63,6 +63,14 @@ const (
 	// by 25% when both max and average memory usage are below this level.
 	memoryUsageLowThreshold = 0.2
 
+	// scanWindowLowPressureFastEMAOffset widens the fast EMA threshold slightly
+	// for low-pressure recovery decisions.
+	scanWindowLowPressureFastEMAOffset = 0.03
+
+	// scanWindowLowPressureSlowEMAOffset widens the slow EMA threshold slightly
+	// for low-pressure recovery decisions.
+	scanWindowLowPressureSlowEMAOffset = 0.02
+
 	// memoryUsageVeryLowThreshold (10%) allows the scan interval to be increased
 	// by 50% when both max and average memory usage are below this level. This
 	// increase may exceed the normal sync point interval cap.
@@ -676,15 +684,15 @@ func (c *adaptiveScanWindowController) updatePressureScoreLocked(usage memoryUsa
 		usage.avg >= scanWindowModeratePressureThreshold:
 		c.pressureScore = min(c.pressureScore+1, scanWindowPressureScoreCeiling)
 	case c.fastUsageEMA < 0.30 && c.slowUsageEMA < 0.25 && usage.last < 0.30:
-		c.pressureScore = maxFloat64(0, c.pressureScore-1.5)
+		c.pressureScore = max(0.0, c.pressureScore-1.5)
 	default:
-		c.pressureScore = maxFloat64(0, c.pressureScore-0.5)
+		c.pressureScore = max(0.0, c.pressureScore-0.5)
 	}
 }
 
 func (c *adaptiveScanWindowController) relievePressureLocked(memoryReleaseCount uint32) {
 	relief := min(float64(memoryReleaseCount)*scanWindowPressureReliefPerRelease, scanWindowPressureScoreCeiling)
-	c.pressureScore = maxFloat64(0, c.pressureScore-relief)
+	c.pressureScore = max(0.0, c.pressureScore-relief)
 }
 
 func (c *adaptiveScanWindowController) shouldReduceForHighPressureLocked(now time.Time, usage memoryUsageStats) bool {
@@ -735,8 +743,8 @@ func (c *adaptiveScanWindowController) isVeryLowPressureLocked(usage memoryUsage
 func (c *adaptiveScanWindowController) isLowPressureLocked(usage memoryUsageStats) bool {
 	return usage.max < memoryUsageLowThreshold &&
 		usage.avg < memoryUsageLowThreshold &&
-		c.fastUsageEMA < memoryUsageLowThreshold+0.03 &&
-		c.slowUsageEMA < memoryUsageLowThreshold+0.02
+		c.fastUsageEMA < memoryUsageLowThreshold+scanWindowLowPressureFastEMAOffset &&
+		c.slowUsageEMA < memoryUsageLowThreshold+scanWindowLowPressureSlowEMAOffset
 }
 
 func (c *adaptiveScanWindowController) noteAdjustmentLocked(now time.Time, downward bool) {
@@ -791,13 +799,6 @@ func normalizeUsageRatio(usageRatio float64) float64 {
 
 func ema(previous float64, value float64, alpha float64) float64 {
 	return previous + alpha*(value-previous)
-}
-
-func maxFloat64(a float64, b float64) float64 {
-	if a > b {
-		return a
-	}
-	return b
 }
 
 func (c *changefeedStatus) maxScanInterval() time.Duration {
