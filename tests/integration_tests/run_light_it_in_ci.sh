@@ -99,7 +99,7 @@ kafka_groups=(
 	# G13
 	'cli_tls_with_auth cli_with_auth fail_over_ddl_N maintainer_failover_when_operator'
 	# G14
-	'kafka_simple_basic avro_basic debezium_basic fail_over_ddl_O update_changefeed_check_config'
+	'kafka_simple_basic avro_basic fail_over_ddl_O update_changefeed_check_config'
 	# G15
 	'kafka_simple_basic_avro split_region autorandom gc_safepoint kafka_log_info'
 )
@@ -137,7 +137,7 @@ pulsar_groups=(
 	# G13
 	'cli_tls_with_auth cli_with_auth fail_over_ddl_N maintainer_failover_when_operator'
 	# G14
-	'avro_basic debezium_basic fail_over_ddl_O update_changefeed_check_config'
+	'avro_basic fail_over_ddl_O update_changefeed_check_config'
 	# G15
 	'split_region autorandom gc_safepoint'
 )

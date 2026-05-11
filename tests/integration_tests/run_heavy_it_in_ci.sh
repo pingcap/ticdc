@@ -95,7 +95,7 @@ kafka_groups=(
 	# G13
 	'debezium01 fail_over_ddl_mix'
 	# G14
-	'debezium02'
+	'debezium_basic debezium02'
 	# G15
 	'debezium03'
 )
@@ -131,7 +131,7 @@ pulsar_groups=(
 	# G13
 	'debezium01 fail_over_ddl_mix'
 	# G14
-	'debezium02'
+	'debezium_basic debezium02'
 	# G15
 	'debezium03'
 )
