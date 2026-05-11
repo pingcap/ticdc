@@ -550,6 +550,8 @@ func (rs *requestedStore) getRequestWorker() *regionRequestWorker {
 // handleRegions receives regionInfo from regionTaskQueue and attach rpcCtx to them,
 // then send them to corresponding requestedStore.
 func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Group) error {
+	config := config.GetGlobalServerConfig()
+	pendingRegionRequestQueueSize := config.Debug.Puller.PendingRegionRequestQueueSize
 	getStore := func(storeAddr string) *requestedStore {
 		var rs *requestedStore
 		if v, ok := s.stores.Load(storeAddr); ok {
@@ -558,21 +560,21 @@ func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 		}
 
 		rs = &requestedStore{storeAddr: storeAddr}
+		rs.requestWorkers.s = make([]*regionRequestWorker, 0, s.config.RegionRequestWorkerPerStore)
 		s.stores.Store(storeAddr, rs)
 
-		config := config.GetGlobalServerConfig()
-		perWorkerQueueSize := config.Debug.Puller.PendingRegionRequestQueueSize / int(s.config.RegionRequestWorkerPerStore)
+		perWorkerQueueSize := pendingRegionRequestQueueSize / int(s.config.RegionRequestWorkerPerStore)
 		if perWorkerQueueSize <= 0 {
 			log.Warn("pending region request queue size is smaller than the number of workers, adjust per worker queue size to 1", zap.Int("pendingRegionRequestQueueSize", config.Debug.Puller.PendingRegionRequestQueueSize), zap.Uint("regionRequestWorkerPerStore", s.config.RegionRequestWorkerPerStore))
 			perWorkerQueueSize = 1
 		}
 
+		rs.requestWorkers.Lock()
 		for i := uint(0); i < s.config.RegionRequestWorkerPerStore; i++ {
 			requestWorker := newRegionRequestWorker(ctx, s, s.credential, eg, rs, perWorkerQueueSize)
-			rs.requestWorkers.Lock()
 			rs.requestWorkers.s = append(rs.requestWorkers.s, requestWorker)
-			rs.requestWorkers.Unlock()
 		}
+		rs.requestWorkers.Unlock()
 		return rs
 	}
 
