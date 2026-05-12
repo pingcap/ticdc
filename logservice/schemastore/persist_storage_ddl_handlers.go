@@ -707,7 +707,7 @@ func resolveCreateTableLikeReferSchema(
 		return createTableLikeReferSchemaInfo{
 			schemaName:   refSchema,
 			schemaID:     schemaID,
-			qualifyQuery: true,
+			qualifyQuery: !strings.EqualFold(refSchema, getSchemaName(args.databaseMap, args.job.SchemaID)),
 		}, true
 	}
 
