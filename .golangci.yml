@@ -1,0 +1,141 @@
+# golangci-lint v2 configuration for TiCDC.
+# Docs: https://golangci-lint.run/usage/configuration/
+version: "2"
+
+linters:
+  # standard enables: errcheck, govet, ineffassign, staticcheck, unused.
+  default: standard
+
+  enable:
+    # bodyclose: checks HTTP response bodies are closed.
+    - bodyclose
+    # copyloopvar: detects redundant "x := x" in Go 1.22+ loop variables.
+    - copyloopvar
+    # durationcheck: checks for suspicious duration multiplication.
+    - durationcheck
+    # errname: checks sentinel error naming (Err prefix, Error suffix).
+    - errname
+    # errorlint: checks Go 1.13 error wrapping conventions.
+    - errorlint
+    # gosec: inspects source code for security problems.
+    - gosec
+    # misspell: finds commonly misspelled English words.
+    - misspell
+    # nilerr: finds code that returns nil even if err is not nil.
+    - nilerr
+    # noctx: finds http requests without context.Context.
+    - noctx
+    # nosprintfhostport: finds misuse of Sprintf for host:port construction.
+    - nosprintfhostport
+    # prealloc: finds slices that can be preallocated.
+    - prealloc
+    # revive: drop-in replacement for golint with many rules.
+    - revive
+    # unconvert: finds unnecessary type conversions.
+    - unconvert
+
+  settings:
+    revive:
+      rules:
+        - name: blank-imports
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: dot-imports
+        - name: empty-block
+        - name: error-naming
+        - name: error-return
+        - name: error-strings
+        - name: errorf
+        - name: exported
+        - name: if-return
+        - name: increment-decrement
+        - name: indent-error-flow
+        - name: range
+        - name: receiver-naming
+        - name: redefines-builtin-id
+        - name: superfluous-else
+        - name: time-naming
+        - name: unexported-return
+        - name: unreachable-code
+        - name: unused-parameter
+        - name: var-declaration
+        - name: var-naming
+
+    # G104: Audit errors not checked (duplicates errcheck).
+    gosec:
+      excludes:
+        - G104
+
+    # ST1000: don't require package comments.
+    staticcheck:
+      checks:
+        - all
+        - -ST1000
+
+  exclusions:
+    # Strict: exclude all known generated file patterns.
+    generated: strict
+
+    # Standard presets reduce noise from common false positives.
+    # Docs: https://golangci-lint.run/usage/false-positives/
+    presets:
+      - comments
+      - common-false-positives
+
+    rules:
+      # Relax certain linters for test files. Test helpers that are
+      # intentionally unused / unchecked / low-context are expected.
+      - path: _test\.go
+        linters:
+          - errcheck
+          - gosec
+          - noctx
+          - prealloc
+          - unused
+          - revive
+          - ineffassign
+
+      # Exclude the integration test directory entirely.
+      # Replaces golangci-lint v1's --exclude-dirs "^tests/".
+      - path: tests/
+        linters:
+          - all
+
+      # Exclude generated protobuf files.
+      - path: (.*\.)?(pb|pb\.gw)\.go
+        linters:
+          - all
+
+      # Exclude generated mocks.
+      - path: _mock\.go
+        linters:
+          - all
+
+      # Exclude msgp generated files.
+      - path: _gen\.go
+        linters:
+          - all
+
+formatters:
+  enable:
+    - gofmt
+
+  settings:
+    gofmt:
+      simplify: true
+
+run:
+  timeout: 10m
+  tests: true
+  concurrency: 4
+
+output:
+  formats:
+    text:
+      path: stdout
+      print-linter-name: true
+      colors: true
+  sort-order:
+    - linter
+    - severity
+    - file
