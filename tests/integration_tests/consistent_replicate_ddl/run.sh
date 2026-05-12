@@ -38,6 +38,9 @@ function run() {
 	run_sql "CREATE TABLE consistent_replicate_ddl.usertable2 like consistent_replicate_ddl.usertable" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "CREATE TABLE consistent_replicate_ddl.usertable3 like consistent_replicate_ddl.usertable" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "CREATE TABLE consistent_replicate_ddl.usertable_bak like consistent_replicate_ddl.usertable" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	run_sql "CREATE DATABASE consistent_replicate_ddl_like_src" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	run_sql "CREATE TABLE consistent_replicate_ddl_like_src.src (id INT PRIMARY KEY, value VARCHAR(32))" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
+	run_sql "USE consistent_replicate_ddl_like_src; CREATE TABLE consistent_replicate_ddl.table_cross_db_like_dst LIKE src" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	for i in {1..100}; do
 		run_sql "CREATE TABLE IF NOT EXISTS consistent_replicate_ddl.table_$i (id INT AUTO_INCREMENT PRIMARY KEY, data VARCHAR(255));" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	done
@@ -45,6 +48,7 @@ function run() {
 	check_table_exists "consistent_replicate_ddl.usertable2" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 120
 	check_table_exists "consistent_replicate_ddl.usertable3" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 120
 	check_table_exists "consistent_replicate_ddl.usertable_bak" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 120
+	check_table_exists "consistent_replicate_ddl.table_cross_db_like_dst" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 120
 	for i in {1..100}; do
 		check_table_exists "consistent_replicate_ddl.table_$i" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT} 120
 	done
