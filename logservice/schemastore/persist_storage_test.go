@@ -3758,11 +3758,11 @@ func TestBuildPersistedDDLEventForCreateTableLikeSetsReferTableID(t *testing.T) 
 }
 
 func TestBuildPersistedDDLEventForCreateTableLikeUsesInvolvingReferSchema(t *testing.T) {
-	job := buildCreateTableJobForTest(100, 200, "dst", 1010)
-	job.Query = "CREATE TABLE `dst_db`.`dst` LIKE `src`"
+	job := buildCreateTableJobForTest(100, 200, "t", 1010)
+	job.Query = "CREATE TABLE `dst_db`.`t` LIKE `t`"
 	job.InvolvingSchemaInfo = []model.InvolvingSchemaInfo{
-		{Database: "dst_db", Table: "dst"},
-		{Database: "src_db", Table: "src", Mode: model.SharedInvolving},
+		{Database: "dst_db", Table: "t"},
+		{Database: "src_db", Table: "t", Mode: model.SharedInvolving},
 	}
 
 	ddl := buildPersistedDDLEventForCreateTable(buildPersistedDDLEventFuncArgs{
@@ -3772,13 +3772,13 @@ func TestBuildPersistedDDLEventForCreateTableLikeUsesInvolvingReferSchema(t *tes
 			101: {Name: "src_db", Tables: map[int64]bool{201: true}},
 		},
 		tableMap: map[int64]*BasicTableInfo{
-			200: {SchemaID: 100, Name: "dst"},
-			201: {SchemaID: 101, Name: "src"},
+			200: {SchemaID: 100, Name: "t"},
+			201: {SchemaID: 101, Name: "t"},
 		},
 	})
 
 	require.Equal(t, int64(201), ddl.ExtraTableID)
-	require.Equal(t, "CREATE TABLE `dst_db`.`dst` LIKE `src_db`.`src`", ddl.Query)
+	require.Equal(t, "CREATE TABLE `dst_db`.`t` LIKE `src_db`.`t`", ddl.Query)
 }
 
 func TestBuildDDLEventForNewTableDDL_CreateTableLikeBlockedTables(t *testing.T) {

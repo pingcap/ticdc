@@ -612,6 +612,13 @@ func buildPersistedDDLEventForCreateTable(args buildPersistedDDLEventFuncArgs) P
 	return event
 }
 
+type createTableLikeReferSchemaInfo struct {
+	schemaName string
+	schemaID   int64
+	// true when the source schema was inferred and should be written back to query.
+	qualifyQuery bool
+}
+
 func setReferTableForCreateTableLike(event *PersistedDDLEvent, args buildPersistedDDLEventFuncArgs) {
 	if event.Query == "" {
 		return
@@ -628,18 +635,34 @@ func setReferTableForCreateTableLike(event *PersistedDDLEvent, args buildPersist
 		return
 	}
 	refTable := createStmt.ReferTable.Name.O
-	refSchema, refSchemaID, ok := resolveCreateTableLikeReferSchema(createStmt, event, args)
+	// refSchema is the schema name of the table referenced by
+	// CREATE TABLE ... LIKE. It can be absent in the original query.
+	refSchemaInQuery := createStmt.ReferTable.Schema.O
+	referSchema, ok := resolveCreateTableLikeReferSchema(
+		args, event.SchemaName, refSchemaInQuery, refTable)
 	if !ok {
 		log.Warn("refer schema not found for create table like",
-			zap.String("schema", refSchema),
+			zap.String("schema", referSchema.schemaName),
 			zap.String("table", refTable),
 			zap.String("query", event.Query))
 		return
 	}
-	refTableID, ok := findTableIDByName(args.tableMap, refSchemaID, refTable)
+	if referSchema.qualifyQuery {
+		createStmt.ReferTable.Schema = ast.NewCIStr(referSchema.schemaName)
+		query, err := commonEvent.Restore(createStmt)
+		if err != nil {
+			log.Warn("restore create table like ddl failed",
+				zap.String("schema", referSchema.schemaName),
+				zap.String("query", event.Query),
+				zap.Error(err))
+			return
+		}
+		event.Query = query
+	}
+	refTableID, ok := findTableIDByName(args.tableMap, referSchema.schemaID, refTable)
 	if !ok {
 		log.Warn("refer table not found for create table like",
-			zap.String("schema", refSchema),
+			zap.String("schema", referSchema.schemaName),
 			zap.String("table", refTable),
 			zap.String("query", event.Query))
 		return
@@ -654,22 +677,19 @@ func setReferTableForCreateTableLike(event *PersistedDDLEvent, args buildPersist
 }
 
 func resolveCreateTableLikeReferSchema(
-	createStmt *ast.CreateTableStmt,
-	event *PersistedDDLEvent,
 	args buildPersistedDDLEventFuncArgs,
-) (string, int64, bool) {
-	// refSchema is the schema name of the table referenced by
-	// CREATE TABLE ... LIKE. It can be absent in the original query.
-	refSchema := createStmt.ReferTable.Schema.O
-	if refSchema != "" {
-		schemaID, ok := findSchemaIDByName(args.databaseMap, refSchema)
-		if !ok {
-			return refSchema, 0, false
-		}
-		return refSchema, schemaID, true
+	eventSchema string,
+	refSchemaInQuery string,
+	refTable string,
+) (createTableLikeReferSchemaInfo, bool) {
+	if refSchemaInQuery != "" {
+		schemaID, ok := findSchemaIDByName(args.databaseMap, refSchemaInQuery)
+		return createTableLikeReferSchemaInfo{
+			schemaName: refSchemaInQuery,
+			schemaID:   schemaID,
+		}, ok
 	}
 
-	refTable := createStmt.ReferTable.Name.O
 	for _, info := range args.job.InvolvingSchemaInfo {
 		// TiDB records the LIKE source table as a shared involving table.
 		// For CREATE TABLE db2.t LIKE db1.t, the target db2.t is also in
@@ -685,32 +705,24 @@ func resolveCreateTableLikeReferSchema(
 		if !ok {
 			continue
 		}
-		refSchema = getSchemaName(args.databaseMap, schemaID)
-		qualifyCreateTableLikeReferSchema(createStmt, event, refSchema)
-		return refSchema, schemaID, true
+		refSchema := getSchemaName(args.databaseMap, schemaID)
+		return createTableLikeReferSchemaInfo{
+			schemaName:   refSchema,
+			schemaID:     schemaID,
+			qualifyQuery: true,
+		}, true
 	}
 
 	// If TiDB does not provide the referenced schema, fall back to the schema
 	// that the CREATE TABLE event belongs to, matching MySQL/TiDB resolution.
-	schemaID, ok := findSchemaIDByName(args.databaseMap, event.SchemaName)
+	schemaID, ok := findSchemaIDByName(args.databaseMap, eventSchema)
 	if !ok {
-		return event.SchemaName, 0, false
+		return createTableLikeReferSchemaInfo{schemaName: eventSchema}, false
 	}
-	refSchema = getSchemaName(args.databaseMap, schemaID)
-	return refSchema, schemaID, true
-}
-
-func qualifyCreateTableLikeReferSchema(createStmt *ast.CreateTableStmt, event *PersistedDDLEvent, refSchema string) {
-	createStmt.ReferTable.Schema = ast.NewCIStr(refSchema)
-	query, err := commonEvent.Restore(createStmt)
-	if err != nil {
-		log.Warn("restore create table like ddl failed",
-			zap.String("schema", refSchema),
-			zap.String("query", event.Query),
-			zap.Error(err))
-		return
-	}
-	event.Query = query
+	return createTableLikeReferSchemaInfo{
+		schemaName: getSchemaName(args.databaseMap, schemaID),
+		schemaID:   schemaID,
+	}, true
 }
 
 func buildPersistedDDLEventForDropTable(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
