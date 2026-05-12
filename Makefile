@@ -1,6 +1,6 @@
 # Phony targets are targets that are not associated with files.
 # Add new phony targets here to make them available in the `make` command.
-.PHONY: clean fmt check tidy \
+.PHONY: clean fmt check check-static tidy \
 	generate-protobuf generate_mock \
 	cdc kafka_consumer storage_consumer pulsar_consumer filter_helper \
 	prepare_test_binaries \
@@ -336,7 +336,8 @@ check-makefiles: format-makefiles
 format-makefiles: $(MAKE_FILES)
 	$(SED_IN_PLACE) -e 's/^\(\t*\)  /\1\t/g' -e 's/^\(\t*\) /\1/' -- $?
 
-check: check-copyright fmt tidy generate_mock go-generate check-diff-line-width check-ticdc-dashboard check-makefiles check-static
+# TODO: add check-static back once CI workflows pass LINT_NEW_FROM_REV
+check: check-copyright fmt tidy generate_mock go-generate check-diff-line-width check-ticdc-dashboard check-makefiles
 	@git --no-pager diff --exit-code || (echo "Please add changed files!" && false)
 
 clean:
