@@ -1169,6 +1169,103 @@ func TestSyncPointBlockPerf(t *testing.T) {
 	log.Info("duration", zap.Duration("duration", time.Since(now)))
 }
 
+func TestSkippedSyncPointEventIsRemovedByReconcile(t *testing.T) {
+	testutil.SetUpTestServices(t)
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+	nodeManager.GetAliveNodes()["node1"] = &node.Info{ID: "node1"}
+
+	tableTriggerEventDispatcherID := common.NewDispatcherID()
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
+		common.DDLSpanSchemaID,
+		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
+			ID:              tableTriggerEventDispatcherID.ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    1,
+		}, "node1", false)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
+	operatorController := operator.NewOperatorController(cfID, spanController, 1000, common.DefaultMode)
+
+	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 1)
+	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 2}, 1)
+
+	dispatcher1 := spanController.GetTasksByTableID(1)[0]
+	dispatcher2 := spanController.GetTasksByTableID(2)[0]
+	for _, dispatcher := range []*replica.SpanReplication{dispatcher1, dispatcher2} {
+		spanController.BindSpanToNode("", "node1", dispatcher)
+		spanController.MarkSpanReplicating(dispatcher)
+	}
+
+	barrier := NewBarrier(spanController, operatorController, false, nil, common.DefaultMode)
+	_ = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
+		ChangefeedID: cfID.ToPB(),
+		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
+			{
+				ID: spanController.GetDDLDispatcherID().ToPB(),
+				State: &heartbeatpb.State{
+					IsBlocked: true,
+					BlockTs:   10,
+					BlockTables: &heartbeatpb.InfluencedTables{
+						InfluenceType: heartbeatpb.InfluenceType_All,
+					},
+					IsSyncPoint: true,
+				},
+			},
+			{
+				ID: dispatcher1.ID.ToPB(),
+				State: &heartbeatpb.State{
+					IsBlocked: true,
+					BlockTs:   10,
+					BlockTables: &heartbeatpb.InfluencedTables{
+						InfluenceType: heartbeatpb.InfluenceType_All,
+					},
+					IsSyncPoint: true,
+				},
+			},
+		},
+	})
+
+	key := getEventKey(10, true)
+	event, ok := barrier.blockedEvents.Get(key)
+	require.True(t, ok)
+	require.False(t, event.selected.Load())
+
+	// dispatcher2 recreates/skips this syncpoint and moves directly beyond it. The
+	// maintainer should switch the event to the PASS/DONE phase without selecting a writer.
+	dispatcher2.UpdateStatus(&heartbeatpb.TableSpanStatus{
+		ID:              dispatcher2.ID.ToPB(),
+		ComponentStatus: heartbeatpb.ComponentState_Working,
+		CheckpointTs:    11,
+		Mode:            common.DefaultMode,
+	})
+
+	_ = barrier.Resend()
+	event, ok = barrier.blockedEvents.Get(key)
+	require.True(t, ok)
+	require.True(t, event.selected.Load())
+	require.True(t, event.writerDispatcherAdvanced)
+	require.True(t, event.writerDispatcher.IsZero())
+
+	// The remaining dispatchers eventually move beyond the skipped syncpoint as well.
+	dispatcher1.UpdateStatus(&heartbeatpb.TableSpanStatus{
+		ID:              dispatcher1.ID.ToPB(),
+		ComponentStatus: heartbeatpb.ComponentState_Working,
+		CheckpointTs:    11,
+		Mode:            common.DefaultMode,
+	})
+	ddlSpan.UpdateStatus(&heartbeatpb.TableSpanStatus{
+		ID:              spanController.GetDDLDispatcherID().ToPB(),
+		ComponentStatus: heartbeatpb.ComponentState_Working,
+		CheckpointTs:    11,
+		Mode:            common.DefaultMode,
+	})
+	event.lastForwardReconcileTime = time.Now().Add(-11 * time.Second)
+
+	_ = barrier.Resend()
+	_, ok = barrier.blockedEvents.Get(key)
+	require.False(t, ok)
+}
+
 // TestBarrierEventWithDispatcherReallocation tests the barrier's behavior when dispatchers are reallocated
 // during a blocking event. The test verifies that:
 // 1. When dispatchers are removed and new ones are created to replace them
