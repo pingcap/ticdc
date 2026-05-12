@@ -141,7 +141,6 @@ func (s *EventTestHelper) storeTableInfo(schemaName string, tableInfo *timodel.T
 	if info == nil {
 		return
 	}
-	info.InitPrivateFields()
 	key := toTableInfosKey(info.GetSchemaName(), info.GetTableName())
 	if tableInfo.Partition != nil {
 		if _, ok := s.partitionIDs[key]; !ok {
