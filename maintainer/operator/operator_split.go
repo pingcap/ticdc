@@ -147,7 +147,7 @@ func (m *SplitDispatcherOperator) Schedule() *messaging.TargetMessage {
 	if !m.sendThrottler.shouldSend() {
 		return nil
 	}
-	return m.replicaSet.NewRemoveDispatcherMessage(m.originNode)
+	return m.replicaSet.NewRemoveDispatcherMessage(m.originNode, heartbeatpb.OperatorType_O_Split)
 }
 
 // OnTaskRemoved is called when the task is removed by ddl
@@ -171,9 +171,17 @@ func (m *SplitDispatcherOperator) PostFinish() {
 		return
 	}
 
-	newReplicaSets := m.spanController.ReplaceReplicaSet([]*replica.SpanReplication{m.replicaSet}, m.splitSpans, m.checkpointTs, m.splitTargetNodes)
+	newReplicaSets, replicasInScheduling := m.spanController.ReplaceReplicaSet(
+		[]*replica.SpanReplication{m.replicaSet},
+		m.splitSpans,
+		m.checkpointTs,
+		m.splitTargetNodes,
+	)
 
-	if m.postFinish != nil {
+	// Only invoke postFinish when ReplaceReplicaSet places the new replicas in scheduling state.
+	// If the target nodes are not aligned with the actual split result, ReplaceReplicaSet falls back
+	// to absent replicas so that the basic scheduler can schedule them, avoiding racing add operators.
+	if m.postFinish != nil && replicasInScheduling {
 		for idx, span := range newReplicaSets {
 			ret := m.postFinish(span, m.splitTargetNodes[idx])
 			if !ret {
@@ -184,6 +192,12 @@ func (m *SplitDispatcherOperator) PostFinish() {
 				m.spanController.MarkSpanAbsent(span)
 			}
 		}
+	} else if m.postFinish != nil && !replicasInScheduling {
+		log.Warn("skip post finish because split target nodes are not aligned with actual split result",
+			zap.String("id", m.replicaSet.ID.String()),
+			zap.Int("targetNodeCount", len(m.splitTargetNodes)),
+			zap.Int("newReplicaCount", len(newReplicaSets)),
+			zap.String("splitSpans", m.splitSpanInfo))
 	}
 
 	log.Info("split dispatcher operator post finish finished", zap.String("dispatcherID", m.replicaSet.ID.String()))

@@ -152,9 +152,9 @@ func (m *MoveDispatcherOperator) Schedule() *messaging.TargetMessage {
 
 	switch m.state {
 	case moveStateAddDest:
-		return m.replicaSet.NewAddDispatcherMessage(m.dest)
+		return m.replicaSet.NewAddDispatcherMessage(m.dest, heartbeatpb.OperatorType_O_Move)
 	case moveStateRemoveOrigin, moveStateAbortRemoveOrigin:
-		return m.replicaSet.NewRemoveDispatcherMessage(m.origin)
+		return m.replicaSet.NewRemoveDispatcherMessage(m.origin, heartbeatpb.OperatorType_O_Move)
 	default:
 		return nil
 	}
@@ -213,6 +213,11 @@ func (m *MoveDispatcherOperator) OnNodeRemove(n node.ID) {
 // AffectedNodes returns the nodes affected by the operator
 func (m *MoveDispatcherOperator) AffectedNodes() []node.ID {
 	return []node.ID{m.origin, m.dest}
+}
+
+// OriginNode returns the source node of the move.
+func (m *MoveDispatcherOperator) OriginNode() node.ID {
+	return m.origin
 }
 
 func (m *MoveDispatcherOperator) ID() common.DispatcherID {

@@ -20,6 +20,7 @@ import (
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
 )
 
@@ -48,7 +49,7 @@ func TestPulsarSyncSendMessage(t *testing.T) {
 				changefeedID: commonType.NewChangefeedID4Test("test_keyspace", "test"),
 				message: &common.Message{
 					Value:        []byte("this value for test input data"),
-					PartitionKey: str2Pointer("test_key"),
+					PartitionKey: util.AddressOf("test_key"),
 				},
 				errCh: make(chan error),
 			},
@@ -56,7 +57,7 @@ func TestPulsarSyncSendMessage(t *testing.T) {
 	}
 	for _, tt := range tests {
 		p := newMockDDLProducer()
-		err := p.syncSendMessage(tt.args.ctx, tt.args.topic, tt.args.message)
+		err := p.syncSendMessage(tt.args.ctx, tt.args.topic, tt.args.message, common.MessageTypeDDL)
 		require.NoError(t, err)
 		require.Len(t, p.(*mockProducer).GetEvents(tt.args.topic), 1)
 
@@ -91,7 +92,7 @@ func TestPulsarSyncBroadcastMessage(t *testing.T) {
 				changefeedID: commonType.NewChangefeedID4Test("test_keyspace", "test"),
 				message: &common.Message{
 					Value:        []byte("this value for test input data"),
-					PartitionKey: str2Pointer("test_key"),
+					PartitionKey: util.AddressOf("test_key"),
 				},
 				errCh: make(chan error),
 			},
@@ -99,7 +100,7 @@ func TestPulsarSyncBroadcastMessage(t *testing.T) {
 	}
 	for _, tt := range tests {
 		p := newMockDDLProducer()
-		err := p.syncSendMessage(tt.args.ctx, tt.args.topic, tt.args.message)
+		err := p.syncSendMessage(tt.args.ctx, tt.args.topic, tt.args.message, common.MessageTypeDDL)
 		require.NoError(t, err)
 		require.Len(t, p.(*mockProducer).GetEvents(tt.args.topic), 1)
 

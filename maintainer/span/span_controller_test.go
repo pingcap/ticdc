@@ -30,7 +30,7 @@ import (
 )
 
 func TestNewController(t *testing.T) {
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	ddlDispatcherID := common.NewDispatcherID()
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, ddlDispatcherID,
 		common.DDLSpanSchemaID,
@@ -47,7 +47,7 @@ func TestNewController(t *testing.T) {
 }
 
 func TestController_AddNewTable(t *testing.T) {
-	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	ddlDispatcherID := common.NewDispatcherID()
 	ddlSpan := replica.NewWorkingSpanReplication(changefeedID, ddlDispatcherID,
 		common.DDLSpanSchemaID,
@@ -85,7 +85,7 @@ func TestController_AddNewTable(t *testing.T) {
 }
 
 func TestController_GetTaskByID(t *testing.T) {
-	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	ddlDispatcherID := common.NewDispatcherID()
 	ddlSpan := replica.NewWorkingSpanReplication(changefeedID, ddlDispatcherID,
 		common.DDLSpanSchemaID,
@@ -140,7 +140,7 @@ func TestController_GetTaskByID(t *testing.T) {
 }
 
 func TestController_GetTasksByTableID(t *testing.T) {
-	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	ddlDispatcherID := common.NewDispatcherID()
 	ddlSpan := replica.NewWorkingSpanReplication(changefeedID, ddlDispatcherID,
 		common.DDLSpanSchemaID,
@@ -178,7 +178,7 @@ func TestController_GetTasksByTableID(t *testing.T) {
 }
 
 func TestController_GetTasksBySchemaID(t *testing.T) {
-	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	ddlDispatcherID := common.NewDispatcherID()
 	ddlSpan := replica.NewWorkingSpanReplication(changefeedID, ddlDispatcherID,
 		common.DDLSpanSchemaID,
@@ -220,7 +220,7 @@ func TestController_GetTasksBySchemaID(t *testing.T) {
 }
 
 func TestController_UpdateSchemaID(t *testing.T) {
-	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	ddlDispatcherID := common.NewDispatcherID()
 	ddlSpan := replica.NewWorkingSpanReplication(changefeedID, ddlDispatcherID,
 		common.DDLSpanSchemaID,
@@ -263,7 +263,7 @@ func TestController_UpdateSchemaID(t *testing.T) {
 }
 
 func TestController_Statistics(t *testing.T) {
-	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	ddlDispatcherID := common.NewDispatcherID()
 	ddlSpan := replica.NewWorkingSpanReplication(changefeedID, ddlDispatcherID,
 		common.DDLSpanSchemaID,
@@ -299,10 +299,35 @@ func TestController_Statistics(t *testing.T) {
 	require.Equal(t, 0, controller.GetTaskSizeBySchemaID(3))
 }
 
-// TestBasicFunction tests the basic functionality of the controller
-func TestBasicFunction(t *testing.T) {
+func TestController_MaintainerCommittedCheckpointMonotonic(t *testing.T) {
 	t.Parallel()
 
+	controller := newControllerWithCheckerForTest(t)
+	require.Equal(t, uint64(1), controller.GetMaintainerCommittedCheckpointTs())
+
+	controller.AdvanceMaintainerCommittedCheckpointTs(10)
+	require.Equal(t, uint64(10), controller.GetMaintainerCommittedCheckpointTs())
+
+	controller.AdvanceMaintainerCommittedCheckpointTs(5)
+	require.Equal(t, uint64(10), controller.GetMaintainerCommittedCheckpointTs())
+}
+
+func TestController_BindCommittedCheckpointToManagedSpan(t *testing.T) {
+	t.Parallel()
+
+	controller := newControllerWithCheckerForTest(t)
+	controller.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 100}, 5)
+
+	task := controller.GetTasksByTableID(100)[0]
+	controller.AdvanceMaintainerCommittedCheckpointTs(20)
+
+	msg := task.NewAddDispatcherMessage("node1", heartbeatpb.OperatorType_O_Add)
+	req := msg.Message[0].(*heartbeatpb.ScheduleDispatcherRequest)
+	require.Equal(t, uint64(20), req.Config.StartTs)
+}
+
+// TestBasicFunction tests the basic functionality of the controller
+func TestBasicFunction(t *testing.T) {
 	controller := newControllerWithCheckerForTest(t)
 	absent := replica.NewSpanReplication(controller.changefeedID, common.NewDispatcherID(), 1, testutil.GetTableSpanByID(4), 1, common.DefaultMode, false)
 	controller.AddAbsentReplicaSet(absent)
@@ -377,8 +402,6 @@ func TestBasicFunction(t *testing.T) {
 
 // TestReplaceReplicaSet tests the ReplaceReplicaSet functionality
 func TestReplaceReplicaSet(t *testing.T) {
-	t.Parallel()
-
 	controller := newControllerWithCheckerForTest(t)
 	// replicating and scheduling will be returned
 	replicaSpanID := common.NewDispatcherID()
@@ -405,8 +428,6 @@ func TestReplaceReplicaSet(t *testing.T) {
 
 // TestMarkSpanAbsent tests the MarkSpanAbsent functionality
 func TestMarkSpanAbsent(t *testing.T) {
-	t.Parallel()
-
 	controller := newControllerWithCheckerForTest(t)
 	// replicating and scheduling will be returned
 	replicaSpanID := common.NewDispatcherID()
@@ -424,8 +445,8 @@ func TestMarkSpanAbsent(t *testing.T) {
 }
 
 func newControllerWithCheckerForTest(t *testing.T) *Controller {
-	testutil.SetUpTestServices()
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	testutil.SetUpTestServices(t)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
 		common.DDLSpanSchemaID,

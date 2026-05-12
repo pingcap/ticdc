@@ -415,8 +415,8 @@ func (l *RangeLock) getOverlappedLockEntries(startKey, endKey []byte, regionID u
 
 // UpdateLockedRangeStateHeap should be called when the resolvedTs of a locked range is updated.
 func (l *RangeLock) UpdateLockedRangeStateHeap(lockedRangeState *LockedRangeState) {
-	l.mu.RLock()
-	defer l.mu.RUnlock()
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	l.lockedRangeStateHeap.AddOrUpdate(lockedRangeState)
 }
 

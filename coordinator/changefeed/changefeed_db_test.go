@@ -28,7 +28,7 @@ import (
 
 func TestAddAbsentChangefeed(t *testing.T) {
 	db := NewChangefeedDB(1216)
-	cf := &Changefeed{ID: common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)}
+	cf := &Changefeed{ID: common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)}
 	cf.backoff = NewBackoff(cf.ID, 0, 0)
 
 	db.AddAbsentChangefeed(cf)
@@ -39,7 +39,7 @@ func TestAddAbsentChangefeed(t *testing.T) {
 
 func TestAddStoppedChangefeed(t *testing.T) {
 	db := NewChangefeedDB(1216)
-	cf := &Changefeed{ID: common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)}
+	cf := &Changefeed{ID: common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)}
 
 	db.AddStoppedChangefeed(cf)
 
@@ -49,7 +49,7 @@ func TestAddStoppedChangefeed(t *testing.T) {
 
 func TestAddReplicatingMaintainer(t *testing.T) {
 	db := NewChangefeedDB(1216)
-	cf := &Changefeed{ID: common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)}
+	cf := &Changefeed{ID: common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)}
 	nodeID := node.ID("node-1")
 
 	db.AddReplicatingMaintainer(cf, nodeID)
@@ -61,7 +61,7 @@ func TestAddReplicatingMaintainer(t *testing.T) {
 
 func TestStopByChangefeedID(t *testing.T) {
 	db := NewChangefeedDB(1216)
-	cf := &Changefeed{ID: common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)}
+	cf := &Changefeed{ID: common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)}
 	db.AddReplicatingMaintainer(cf, node.ID("node-1"))
 	require.Contains(t, db.GetByNodeID("node-1"), cf)
 
@@ -77,12 +77,12 @@ func TestStopByChangefeedID(t *testing.T) {
 	_, ok := sizeMap["node-1"]
 	require.False(t, ok)
 
-	require.Equal(t, "", db.StopByChangefeedID(common.NewChangeFeedIDWithName("a", common.DefaultKeyspaceNamme), false).String())
+	require.Equal(t, "", db.StopByChangefeedID(common.NewChangeFeedIDWithName("a", common.DefaultKeyspaceName), false).String())
 }
 
 func TestMoveToSchedulingQueue(t *testing.T) {
 	db := NewChangefeedDB(1216)
-	cf := &Changefeed{ID: common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)}
+	cf := &Changefeed{ID: common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)}
 	db.AddStoppedChangefeed(cf)
 	cf.backoff = NewBackoff(cf.ID, 0, 0)
 	cf.status = atomic.NewPointer(&heartbeatpb.MaintainerStatus{
@@ -95,9 +95,23 @@ func TestMoveToSchedulingQueue(t *testing.T) {
 	require.NotContains(t, db.stopped, cf.ID)
 }
 
+func TestMoveToSchedulingQueueResetBackoffAlsoResetsCheckpointBaseline(t *testing.T) {
+	db := NewChangefeedDB(1216)
+	cf := &Changefeed{ID: common.NewChangeFeedIDWithName("test-baseline", common.DefaultKeyspaceName)}
+	db.AddStoppedChangefeed(cf)
+	cf.backoff = NewBackoff(cf.ID, 0, 200)
+	cf.status = atomic.NewPointer(&heartbeatpb.MaintainerStatus{
+		CheckpointTs: 120,
+	})
+
+	db.MoveToSchedulingQueue(cf.ID, true, false)
+
+	require.Equal(t, uint64(120), cf.backoff.checkpointTs)
+}
+
 func TestRemoveChangefeed(t *testing.T) {
 	db := NewChangefeedDB(1216)
-	cf := &Changefeed{ID: common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)}
+	cf := &Changefeed{ID: common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)}
 	db.AddAbsentChangefeed(cf)
 
 	db.StopByChangefeedID(cf.ID, false)
@@ -105,7 +119,7 @@ func TestRemoveChangefeed(t *testing.T) {
 	require.Contains(t, db.changefeeds, cf.ID)
 	require.Contains(t, db.stopped, cf.ID)
 
-	cf2 := &Changefeed{ID: common.NewChangeFeedIDWithName("test2", common.DefaultKeyspaceNamme)}
+	cf2 := &Changefeed{ID: common.NewChangeFeedIDWithName("test2", common.DefaultKeyspaceName)}
 	db.AddReplicatingMaintainer(cf2, "node1")
 	require.Contains(t, db.GetByNodeID("node1"), cf2)
 	require.Equal(t, node.ID("node1"), db.StopByChangefeedID(cf2.ID, true))
@@ -121,7 +135,7 @@ func TestRemoveChangefeed(t *testing.T) {
 
 func TestGetByID(t *testing.T) {
 	db := NewChangefeedDB(1216)
-	cf := &Changefeed{ID: common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)}
+	cf := &Changefeed{ID: common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)}
 	db.AddStoppedChangefeed(cf)
 
 	result := db.GetByID(cf.ID)
@@ -130,8 +144,8 @@ func TestGetByID(t *testing.T) {
 
 func TestChangefeedDBGetAllChangefeeds(t *testing.T) {
 	db := NewChangefeedDB(1216)
-	cf1 := &Changefeed{ID: common.NewChangeFeedIDWithName("test1", common.DefaultKeyspaceNamme)}
-	cf2 := &Changefeed{ID: common.NewChangeFeedIDWithName("test2", common.DefaultKeyspaceNamme)}
+	cf1 := &Changefeed{ID: common.NewChangeFeedIDWithName("test1", common.DefaultKeyspaceName)}
+	cf2 := &Changefeed{ID: common.NewChangeFeedIDWithName("test2", common.DefaultKeyspaceName)}
 	db.AddAbsentChangefeed(cf1)
 	db.AddAbsentChangefeed(cf2)
 
@@ -143,14 +157,14 @@ func TestChangefeedDBGetAllChangefeeds(t *testing.T) {
 
 func TestGetWaitingSchedulingChangefeeds(t *testing.T) {
 	db := NewChangefeedDB(1216)
-	cf1 := &Changefeed{ID: common.NewChangeFeedIDWithName("test1", common.DefaultKeyspaceNamme)}
-	cf2 := &Changefeed{ID: common.NewChangeFeedIDWithName("test2", common.DefaultKeyspaceNamme)}
+	cf1 := &Changefeed{ID: common.NewChangeFeedIDWithName("test1", common.DefaultKeyspaceName)}
+	cf2 := &Changefeed{ID: common.NewChangeFeedIDWithName("test2", common.DefaultKeyspaceName)}
 	cf1.backoff = NewBackoff(cf1.ID, 0, 0)
 	cf1.backoff.failed.Store(true)
 	cf2.backoff = NewBackoff(cf2.ID, 0, 0)
 	db.AddAbsentChangefeed(cf1)
 	db.AddReplicatingMaintainer(cf2, "node1")
-	cf3 := &Changefeed{ID: common.NewChangeFeedIDWithName("test3", common.DefaultKeyspaceNamme)}
+	cf3 := &Changefeed{ID: common.NewChangeFeedIDWithName("test3", common.DefaultKeyspaceName)}
 	cf3.backoff = NewBackoff(cf3.ID, 0, 0)
 	db.AddAbsentChangefeed(cf3)
 
@@ -167,8 +181,8 @@ func TestGetWaitingSchedulingChangefeeds(t *testing.T) {
 
 func TestGetAllStoppedChangefeeds(t *testing.T) {
 	db := NewChangefeedDB(1216)
-	cf1 := &Changefeed{ID: common.NewChangeFeedIDWithName("test1", common.DefaultKeyspaceNamme)}
-	cf2 := &Changefeed{ID: common.NewChangeFeedIDWithName("test2", common.DefaultKeyspaceNamme)}
+	cf1 := &Changefeed{ID: common.NewChangeFeedIDWithName("test1", common.DefaultKeyspaceName)}
+	cf2 := &Changefeed{ID: common.NewChangeFeedIDWithName("test2", common.DefaultKeyspaceName)}
 	db.AddStoppedChangefeed(cf1)
 	db.AddStoppedChangefeed(cf2)
 
@@ -177,8 +191,8 @@ func TestGetAllStoppedChangefeeds(t *testing.T) {
 
 func TestGetAllReplicatingMaintainers(t *testing.T) {
 	db := NewChangefeedDB(1216)
-	cf1 := &Changefeed{ID: common.NewChangeFeedIDWithName("test1", common.DefaultKeyspaceNamme)}
-	cf2 := &Changefeed{ID: common.NewChangeFeedIDWithName("test2", common.DefaultKeyspaceNamme)}
+	cf1 := &Changefeed{ID: common.NewChangeFeedIDWithName("test1", common.DefaultKeyspaceName)}
+	cf2 := &Changefeed{ID: common.NewChangeFeedIDWithName("test2", common.DefaultKeyspaceName)}
 	nodeID1 := node.ID("node-1")
 	nodeID2 := node.ID("node-2")
 	db.AddReplicatingMaintainer(cf1, nodeID1)
@@ -191,11 +205,11 @@ func TestGetAllReplicatingMaintainers(t *testing.T) {
 
 func TestGetSize(t *testing.T) {
 	db := NewChangefeedDB(1216)
-	cf1 := &Changefeed{ID: common.NewChangeFeedIDWithName("test1", common.DefaultKeyspaceNamme)}
-	cf2 := &Changefeed{ID: common.NewChangeFeedIDWithName("test2", common.DefaultKeyspaceNamme)}
+	cf1 := &Changefeed{ID: common.NewChangeFeedIDWithName("test1", common.DefaultKeyspaceName)}
+	cf2 := &Changefeed{ID: common.NewChangeFeedIDWithName("test2", common.DefaultKeyspaceName)}
 	db.AddReplicatingMaintainer(cf1, "node-1")
 	db.AddAbsentChangefeed(cf2)
-	db.AddStoppedChangefeed(&Changefeed{ID: common.NewChangeFeedIDWithName("test2", common.DefaultKeyspaceNamme)})
+	db.AddStoppedChangefeed(&Changefeed{ID: common.NewChangeFeedIDWithName("test2", common.DefaultKeyspaceName)})
 	require.Equal(t, 1, db.GetReplicatingSize())
 	require.Equal(t, 1, db.GetStoppedSize())
 	require.Equal(t, 1, db.GetAbsentSize())
@@ -223,7 +237,7 @@ func TestGetSize(t *testing.T) {
 
 func TestReplaceStoppedChangefeed(t *testing.T) {
 	db := NewChangefeedDB(1216)
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	cf := &Changefeed{
 		ID: cfID,
 		info: atomic.NewPointer(&config.ChangeFeedInfo{
@@ -247,7 +261,7 @@ func TestReplaceStoppedChangefeed(t *testing.T) {
 	cf3 := db.GetByID(cf.ID)
 	require.Equal(t, true, cf3.NeedCheckpointTsMessage())
 
-	cf4ID := common.NewChangeFeedIDWithName("test4", common.DefaultKeyspaceNamme)
+	cf4ID := common.NewChangeFeedIDWithName("test4", common.DefaultKeyspaceName)
 	cf4 := &config.ChangeFeedInfo{
 		ChangefeedID: cf4ID,
 		SinkURI:      "kafka://127.0.0.1:9092",
@@ -259,7 +273,7 @@ func TestReplaceStoppedChangefeed(t *testing.T) {
 
 func TestScheduleChangefeed(t *testing.T) {
 	db := NewChangefeedDB(1216)
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	cf := NewChangefeed(cfID, &config.ChangeFeedInfo{
 		ChangefeedID: cfID,
 		Config:       config.GetDefaultReplicaConfig(),
@@ -289,7 +303,7 @@ func TestCalculateGCSafepoint(t *testing.T) {
 	db := NewChangefeedDB(1216)
 	require.True(t, math.MaxUint64 == db.CalculateGlobalGCSafepoint())
 
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	cf1 := NewChangefeed(cfID,
 		&config.ChangeFeedInfo{
 			ChangefeedID: cfID,
@@ -299,7 +313,7 @@ func TestCalculateGCSafepoint(t *testing.T) {
 	db.AddStoppedChangefeed(cf1)
 	require.Equal(t, uint64(11), db.CalculateGlobalGCSafepoint())
 
-	cf2ID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cf2ID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	cf2 := NewChangefeed(cf2ID,
 		&config.ChangeFeedInfo{
 			ChangefeedID: cf2ID,
@@ -309,7 +323,7 @@ func TestCalculateGCSafepoint(t *testing.T) {
 	db.AddStoppedChangefeed(cf2)
 	require.Equal(t, uint64(11), db.CalculateGlobalGCSafepoint())
 
-	cf3ID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cf3ID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	cf3 := NewChangefeed(cf3ID,
 		&config.ChangeFeedInfo{
 			ChangefeedID: cf3ID,
@@ -319,7 +333,7 @@ func TestCalculateGCSafepoint(t *testing.T) {
 	db.AddStoppedChangefeed(cf3)
 	require.Equal(t, uint64(10), db.CalculateGlobalGCSafepoint())
 
-	cf4ID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cf4ID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	cf4 := NewChangefeed(cf4ID,
 		&config.ChangeFeedInfo{
 			ChangefeedID: cf4ID,
@@ -332,7 +346,7 @@ func TestCalculateGCSafepoint(t *testing.T) {
 	db.AddStoppedChangefeed(cf4)
 	require.Equal(t, uint64(10), db.CalculateGlobalGCSafepoint())
 
-	cf5ID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	cf5ID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	cf5 := NewChangefeed(cf5ID,
 		&config.ChangeFeedInfo{
 			ChangefeedID: cf5ID,

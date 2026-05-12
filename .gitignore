@@ -4,13 +4,18 @@ tools/bin
 tools/include
 tools/workload/bin
 
+.issue
 .vscode
 .idea
 *.log
 .DS_Store
 .test
+.codex
 
 # Unit test reports
 cdc-junit-report.xml
 
 /tests/integration_tests/*/test_out_data
+
+# temp files
+*.tmp

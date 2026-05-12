@@ -22,7 +22,7 @@ import (
 	"go.uber.org/zap"
 )
 
-type DMLOrder uint16
+type DMLOrder uint8
 
 const (
 	// DML type order, used for sorting.
@@ -31,7 +31,7 @@ const (
 	DMLOrderInsert
 )
 
-type CompressionType uint16
+type CompressionType uint8
 
 const (
 	CompressionNone CompressionType = iota
@@ -39,78 +39,151 @@ const (
 )
 
 const (
-	// Bitmask for DML order and compression type.
-	dmlOrderMask    = 0xFF00 // DML order is stored in the high 8 bits for sorting.
-	compressionMask = 0x00FF // Compression type is stored in the low 8 bits.
-	dmlOrderShift   = 8
+	// Encoded event-store key layout:
+	//
+	//   byte offset
+	//   0                   8                  16                 24                 32 33 34                 42
+	//   |-------------------|------------------|------------------|------------------|--|--|------------------|
+	//   | uniqueID (8B)     | tableID (8B)     | txnCommitTs (8B) | txnStartTs (8B)  |DO|CT| mask (8B)        | key...
+	//   |-------------------|------------------|------------------|------------------|--|--|------------------|
+	//
+	//   DO: DMLOrder (1 byte)
+	//   CT: CompressionType (1 byte)
+	//
+	// Mask bits:
+	//   bit 0: value passed through the encryption layer
+	//   bit 1+: reserved
+	encodedKeyUniqueIDLen    = 8
+	encodedKeyTableIDLen     = 8
+	encodedKeyTxnCommitTsLen = 8
+	encodedKeyTxnStartTsLen  = 8
+	encodedKeyDMLOrderLen    = 1
+	encodedKeyCompressionLen = 1
+	encodedKeyMaskLen        = 8
+
+	encodedKeyUniqueIDOffset    = 0
+	encodedKeyTableIDOffset     = encodedKeyUniqueIDOffset + encodedKeyUniqueIDLen
+	encodedKeyTxnCommitTsOffset = encodedKeyTableIDOffset + encodedKeyTableIDLen
+	encodedKeyTxnStartTsOffset  = encodedKeyTxnCommitTsOffset + encodedKeyTxnCommitTsLen
+	encodedKeyDMLOrderOffset    = encodedKeyTxnStartTsOffset + encodedKeyTxnStartTsLen
+	encodedKeyCompressionOffset = encodedKeyDMLOrderOffset + encodedKeyDMLOrderLen
+	encodedKeyMaskOffset        = encodedKeyCompressionOffset + encodedKeyCompressionLen
+
+	encodedKeyAttributesLen    = encodedKeyDMLOrderLen + encodedKeyCompressionLen + encodedKeyMaskLen
+	encodedKeyAttributesOffset = encodedKeyDMLOrderOffset
+	encodedKeyAttributesEnd    = encodedKeyAttributesOffset + encodedKeyAttributesLen
 )
 
-// EncodeKeyPrefix encodes uniqueID, tableID, CRTs and StartTs.
-// StartTs is optional.
-// The result should be a prefix of normal key. (TODO: add a unit test)
-func EncodeKeyPrefix(uniqueID uint64, tableID int64, CRTs uint64, startTs ...uint64) []byte {
-	if len(startTs) > 1 {
-		log.Panic("startTs should be at most one")
-	}
-	// uniqueID, tableID, CRTs.
-	keySize := 8 + 8 + 8
-	if len(startTs) > 0 {
-		keySize += 8
-	}
-	buf := make([]byte, 0, keySize)
-	uint64Buf := [8]byte{}
-	// uniqueID
-	binary.BigEndian.PutUint64(uint64Buf[:], uniqueID)
-	buf = append(buf, uint64Buf[:]...)
-	// tableID
-	binary.BigEndian.PutUint64(uint64Buf[:], uint64(tableID))
-	buf = append(buf, uint64Buf[:]...)
-	// CRTs
-	binary.BigEndian.PutUint64(uint64Buf[:], CRTs)
-	buf = append(buf, uint64Buf[:]...)
-	if len(startTs) > 0 {
-		// startTs
-		binary.BigEndian.PutUint64(uint64Buf[:], startTs[0])
-		buf = append(buf, uint64Buf[:]...)
-	}
+const (
+	// encodedKeyMaskEncryption indicates the value passed through the encryption layer.
+	encodedKeyMaskEncryption uint64 = 1 << iota
+)
+
+// encodeTxnCommitTsBoundaryKey encodes the event-store key boundary up to txnCommitTs.
+func encodeTxnCommitTsBoundaryKey(uniqueID uint64, tableID int64, txnCommitTs uint64) []byte {
+	buf := make([]byte, encodedKeyTxnCommitTsOffset+encodedKeyTxnCommitTsLen)
+	encodeTxnCommitTsBoundaryKeyTo(buf, uniqueID, tableID, txnCommitTs)
 	return buf
 }
 
-// EncodeKey encodes a key according to event.
-// Format: uniqueID, tableID, CRTs, startTs, delete/update/insert, Key.
-func EncodeKey(uniqueID uint64, tableID int64, event *common.RawKVEntry, compressionType CompressionType) []byte {
+func encodeScanLowerBound(uniqueID uint64, tableID int64, txnCommitTs uint64, txnStartTs uint64) []byte {
+	buf := make([]byte, encodedKeyTxnStartTsOffset+encodedKeyTxnStartTsLen)
+	encodeTxnCommitTsBoundaryKeyTo(buf, uniqueID, tableID, txnCommitTs)
+	binary.BigEndian.PutUint64(buf[encodedKeyTxnStartTsOffset:encodedKeyTxnStartTsOffset+encodedKeyTxnStartTsLen], txnStartTs)
+	return buf
+}
+
+func encodeTxnCommitTsBoundaryKeyTo(buf []byte, uniqueID uint64, tableID int64, txnCommitTs uint64) {
+	binary.BigEndian.PutUint64(buf[encodedKeyUniqueIDOffset:encodedKeyUniqueIDOffset+encodedKeyUniqueIDLen], uniqueID)
+	binary.BigEndian.PutUint64(buf[encodedKeyTableIDOffset:encodedKeyTableIDOffset+encodedKeyTableIDLen], uint64(tableID))
+	binary.BigEndian.PutUint64(buf[encodedKeyTxnCommitTsOffset:encodedKeyTxnCommitTsOffset+encodedKeyTxnCommitTsLen], txnCommitTs)
+}
+
+func encodedKeyLen(event *common.RawKVEntry) int {
+	// uniqueID, tableID, txnCommitTs, txnStartTs, DMLOrder, CompressionType, Mask, Key
+	return encodedKeyAttributesEnd + len(event.Key)
+}
+
+// encodeKeyTo appends an encoded event-store key to buf.
+//
+//	| uniqueID | tableID | txnCommitTs | txnStartTs | dmlOrder | compressionType | mask | key |
+//	|   8B     |   8B    |     8B      |     8B     |    1B    |       1B        |  8B  | ... |
+func encodeKeyTo(
+	buf []byte,
+	uniqueID uint64,
+	tableID int64,
+	event *common.RawKVEntry,
+	compressionType CompressionType,
+	usesEncryptionLayer bool,
+) []byte {
 	if event == nil {
 		log.Panic("rawkv must not be nil", zap.Any("event", event))
 	}
-	// uniqueID, tableID, CRTs, startTs, Put/Delete, CompressionType, Key
-	length := 8 + 8 + 8 + 8 + 1 + 1 + len(event.Key)
-	buf := make([]byte, 0, length)
-	uint64Buf := [8]byte{}
 	// unique ID
-	binary.BigEndian.PutUint64(uint64Buf[:], uniqueID)
-	buf = append(buf, uint64Buf[:]...)
+	buf = binary.BigEndian.AppendUint64(buf, uniqueID)
 	// table ID
-	binary.BigEndian.PutUint64(uint64Buf[:], uint64(tableID))
-	buf = append(buf, uint64Buf[:]...)
-	// CRTs
-	binary.BigEndian.PutUint64(uint64Buf[:], event.CRTs)
-	buf = append(buf, uint64Buf[:]...)
-	// startTs
-	binary.BigEndian.PutUint64(uint64Buf[:], event.StartTs)
-	buf = append(buf, uint64Buf[:]...)
+	buf = binary.BigEndian.AppendUint64(buf, uint64(tableID))
+	// txn commit ts
+	buf = binary.BigEndian.AppendUint64(buf, event.CRTs)
+	// txn start ts
+	buf = binary.BigEndian.AppendUint64(buf, event.StartTs)
 	// Let Delete < Update < Insert
 	dmlOrder := getDMLOrder(event)
-	combinedOrder := uint16(compressionType) | (uint16(dmlOrder) << dmlOrderShift)
-	binary.BigEndian.PutUint16(uint64Buf[:], combinedOrder)
-	buf = append(buf, uint64Buf[:2]...)
+	buf = append(buf, byte(dmlOrder))
+	buf = append(buf, byte(compressionType))
+	mask := uint64(0)
+	if usesEncryptionLayer {
+		mask |= encodedKeyMaskEncryption
+	}
+	buf = binary.BigEndian.AppendUint64(buf, mask)
 	// key
 	return append(buf, event.Key...)
 }
 
-// DecodeKeyMetas decodes compression type and dml order from the key.
-func DecodeKeyMetas(key []byte) (DMLOrder, CompressionType) {
-	combinedOrder := binary.BigEndian.Uint16(key[32:34]) // The combined order is at offset 32 for 2 bytes.
-	return DMLOrder((combinedOrder & dmlOrderMask) >> dmlOrderShift), CompressionType(combinedOrder & compressionMask)
+// EncodeKeyTo appends an encoded event-store key to buf.
+func EncodeKeyTo(
+	buf []byte,
+	uniqueID uint64,
+	tableID int64,
+	event *common.RawKVEntry,
+	compressionType CompressionType,
+) []byte {
+	return encodeKeyTo(buf, uniqueID, tableID, event, compressionType, false)
+}
+
+func encodeKeyToWithEncryptionLayer(
+	buf []byte,
+	uniqueID uint64,
+	tableID int64,
+	event *common.RawKVEntry,
+	compressionType CompressionType,
+) []byte {
+	return encodeKeyTo(buf, uniqueID, tableID, event, compressionType, true)
+}
+
+// EncodeKey encodes a key according to event.
+func EncodeKey(uniqueID uint64, tableID int64, event *common.RawKVEntry, compressionType CompressionType) []byte {
+	return EncodeKeyTo(make([]byte, 0, encodedKeyLen(event)), uniqueID, tableID, event, compressionType)
+}
+
+// DecodeKeyAttributes decodes compression type and dml order from the key.
+func DecodeKeyAttributes(key []byte) (DMLOrder, CompressionType) {
+	return DMLOrder(key[encodedKeyDMLOrderOffset]), CompressionType(key[encodedKeyCompressionOffset])
+}
+
+func KeyUsesEncryptionLayer(key []byte) bool {
+	mask := binary.BigEndian.Uint64(key[encodedKeyMaskOffset : encodedKeyMaskOffset+encodedKeyMaskLen])
+	return mask&encodedKeyMaskEncryption != 0
+}
+
+// decodeTxnCommitTsFromEncodedKey decodes txnCommitTs from an event-store key boundary.
+// It works for both full event keys and DeleteRange boundary keys because both
+// contain uniqueID, tableID, and txnCommitTs as the first three fields.
+func decodeTxnCommitTsFromEncodedKey(key []byte) (uint64, bool) {
+	if len(key) < encodedKeyTxnCommitTsOffset+encodedKeyTxnCommitTsLen {
+		return 0, false
+	}
+	return binary.BigEndian.Uint64(key[encodedKeyTxnCommitTsOffset : encodedKeyTxnCommitTsOffset+encodedKeyTxnCommitTsLen]), true
 }
 
 // getDMLOrder returns the order of the dml types: delete<update<insert
@@ -123,16 +196,20 @@ func getDMLOrder(rowKV *common.RawKVEntry) DMLOrder {
 	return DMLOrderInsert
 }
 
-func deleteDataRange(db *pebble.DB, uniqueKeyID uint64, tableID int64, startTs uint64, endTs uint64) error {
-	start := EncodeKeyPrefix(uniqueKeyID, tableID, startTs)
-	end := EncodeKeyPrefix(uniqueKeyID, tableID, endTs)
+func deleteDataRange(
+	db *pebble.DB, uniqueKeyID uint64, tableID int64, startTxnCommitTs uint64, endTxnCommitTs uint64,
+) error {
+	start := encodeTxnCommitTsBoundaryKey(uniqueKeyID, tableID, startTxnCommitTs)
+	end := encodeTxnCommitTsBoundaryKey(uniqueKeyID, tableID, endTxnCommitTs)
 
 	return db.DeleteRange(start, end, pebble.NoSync)
 }
 
-func compactDataRange(db *pebble.DB, uniqueKeyID uint64, tableID int64, startTs uint64, endTs uint64) error {
-	start := EncodeKeyPrefix(uniqueKeyID, tableID, startTs)
-	end := EncodeKeyPrefix(uniqueKeyID, tableID, endTs)
+func compactDataRange(
+	db *pebble.DB, uniqueKeyID uint64, tableID int64, startTxnCommitTs uint64, endTxnCommitTs uint64,
+) error {
+	start := encodeTxnCommitTsBoundaryKey(uniqueKeyID, tableID, startTxnCommitTs)
+	end := encodeTxnCommitTsBoundaryKey(uniqueKeyID, tableID, endTxnCommitTs)
 
 	return db.Compact(start, end, false)
 }

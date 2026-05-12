@@ -46,6 +46,12 @@ func newPendingScheduleEventMap() *pendingScheduleEventMap {
 	}
 }
 
+func (m *pendingScheduleEventMap) Len() int {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	return len(m.events)
+}
+
 func (m *pendingScheduleEventMap) add(event *BarrierEvent) {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
@@ -124,7 +130,7 @@ func (b *BlockedEventMap) Range(f func(key eventKey, value *BarrierEvent) bool) 
 	}
 }
 
-func (b *BlockedEventMap) RangeWoLock(f func(key eventKey, value *BarrierEvent) bool) {
+func (b *BlockedEventMap) RangeWithoutLock(f func(key eventKey, value *BarrierEvent) bool) {
 	for k, v := range b.m {
 		if !f(k, v) {
 			break
@@ -149,6 +155,12 @@ func (b *BlockedEventMap) Delete(key eventKey) {
 	b.mutex.Lock()
 	defer b.mutex.Unlock()
 	delete(b.m, key)
+}
+
+func (b *BlockedEventMap) Len() int {
+	b.mutex.Lock()
+	defer b.mutex.Unlock()
+	return len(b.m)
 }
 
 // eventKey is the key of the block event,

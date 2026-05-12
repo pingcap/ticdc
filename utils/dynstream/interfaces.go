@@ -119,6 +119,10 @@ type Handler[A Area, P Path, T Event, D Dest] interface {
 	// Used in deciding the handle priority of the events from different areas.
 	GetArea(path P, dest D) A
 
+	// GetMetricLabel returns the prometheus "module" label value for dynamic stream batch metrics.
+	// Returning an empty string uses the default label (fmt.Sprint(area)).
+	GetMetricLabel(dest D) string
+
 	// GetTimestamp Get the timestamp of the event. This method is called once for each event.
 	// Events are processed in the order of the timestamps.
 	// Return zero by default implementation. In this case, the events are processed
@@ -135,7 +139,7 @@ type Handler[A Area, P Path, T Event, D Dest] interface {
 
 	// OnDrop is called when an event is dropped. Could be caused by the memory control or cannot find the path.
 	// Do nothing by default implementation.
-	OnDrop(event T) interface{}
+	OnDrop(event T) any
 }
 
 type PathAndDest[P Path, D Dest] struct {
@@ -207,8 +211,8 @@ type Option struct {
 	ReportInterval    time.Duration // The interval of reporting the status of stream, the status is used by the scheduler.
 
 	StreamCount int // The count of streams. I.e. the count of goroutines to handle events. By default 0, means runtime.NumCPU().
-	BatchCount  int // The batch count of handling events. <= 1 means no batch. By default 1.
-	BatchBytes  int // The max bytes of the batch. <= 1 means no limit. By default 0.
+	BatchCount  int // The batch count limit of handling events. <= 0 means 1.
+	BatchBytes  int // The batch bytes limit of handling events. < 0 means 0.
 
 	EnableMemoryControl bool // Enable the memory control. By default false.
 
@@ -223,6 +227,7 @@ func NewOption() Option {
 		ReportInterval:    DefaultReportInterval,
 		StreamCount:       0,
 		BatchCount:        1,
+		BatchBytes:        0,
 		UseBuffer:         false,
 	}
 }
@@ -237,6 +242,9 @@ func (o *Option) fix() {
 	if o.BatchCount <= 0 {
 		o.BatchCount = 1
 	}
+	if o.BatchBytes < 0 {
+		o.BatchBytes = 0
+	}
 }
 
 type AreaSettings struct {
@@ -244,8 +252,13 @@ type AreaSettings struct {
 	maxPendingSize     uint64        // The max memory usage of the pending events of the area. Must be larger than 0. By default 1GB.
 	pathMaxPendingSize uint64        // The max memory usage of the pending events of the path. Must be larger than 0. By default 10% of the area max pending size.
 	feedbackInterval   time.Duration // The interval of the feedback. By default 1000ms.
+
 	// Remove it when we determine the v2 is working well.
-	algorithm int // The algorithm of the memory control.
+	// The algorithm of the memory control.
+	algorithm int
+
+	// control how to batch events
+	batchConfig batchConfig
 }
 
 func (s *AreaSettings) fix() {
@@ -258,17 +271,27 @@ func (s *AreaSettings) fix() {
 	}
 }
 
-func NewAreaSettingsWithMaxPendingSize(size uint64, memoryControlAlgorithm int, component string) AreaSettings {
+func NewAreaSettingsWithMaxPendingSize(
+	quota uint64, algorithm int, component string,
+) AreaSettings {
 	// The path max pending size is at least 1MB.
-	pathMaxPendingSize := max(size/10, 1*1024*1024)
-
+	pathMaxPendingSize := max(quota/10, 1*1024*1024)
 	return AreaSettings{
 		component:          component,
 		feedbackInterval:   DefaultFeedbackInterval,
-		maxPendingSize:     size,
+		maxPendingSize:     quota,
 		pathMaxPendingSize: pathMaxPendingSize,
-		algorithm:          memoryControlAlgorithm,
+		algorithm:          algorithm,
+		batchConfig:        batchConfig{},
 	}
+}
+
+func NewAreaSettingsWithMaxPendingSizeAndBatchConfig(
+	quota uint64, algorithm int, component string, batchCount int, batchBytes int,
+) AreaSettings {
+	s := NewAreaSettingsWithMaxPendingSize(quota, algorithm, component)
+	s.batchConfig = newBatchConfig(batchCount, batchBytes)
+	return s
 }
 
 type FeedbackType int
@@ -307,12 +330,15 @@ func (f *Feedback[A, P, D]) String() string {
 	return fmt.Sprintf("DynamicStream Feedback{Area: %v, Path: %v, FeedbackType: %s}", f.Area, f.Path, f.FeedbackType.String())
 }
 
-func NewParallelDynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](handler H, option ...Option) DynamicStream[A, P, T, D, H] {
+func NewParallelDynamicStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
+	component string,
+	handler H, option ...Option,
+) DynamicStream[A, P, T, D, H] {
 	opt := NewOption()
 	if len(option) > 0 {
 		opt = option[0]
 	}
-	return newParallelDynamicStream(handler, opt)
+	return newParallelDynamicStream(component, handler, opt)
 }
 
 type Metrics[A Area, P Path] struct {

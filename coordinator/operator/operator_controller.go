@@ -232,6 +232,48 @@ func (oc *Controller) OperatorSize() int {
 	return len(oc.operators)
 }
 
+// CountMoveMaintainerOperatorsFromNodes returns the number of in-flight move
+// operators whose origin is one of the given nodes.
+func (oc *Controller) CountMoveMaintainerOperatorsFromNodes(origins []node.ID) int {
+	oc.mu.RLock()
+	defer oc.mu.RUnlock()
+
+	if len(origins) == 0 {
+		return 0
+	}
+	originSet := make(map[node.ID]struct{}, len(origins))
+	for _, origin := range origins {
+		originSet[origin] = struct{}{}
+	}
+
+	count := 0
+	for _, op := range oc.operators {
+		moveOp, ok := op.OP.(*MoveMaintainerOperator)
+		if !ok {
+			continue
+		}
+		if _, ok := originSet[moveOp.OriginNode()]; ok {
+			count++
+		}
+	}
+	return count
+}
+
+// HasOperatorInvolvingNode returns true if any in-flight operator affects n.
+func (oc *Controller) HasOperatorInvolvingNode(n node.ID) bool {
+	oc.mu.RLock()
+	defer oc.mu.RUnlock()
+
+	for _, op := range oc.operators {
+		for _, affected := range op.OP.AffectedNodes() {
+			if affected == n {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // pollQueueingOperator returns the operator need to be executed,
 // "next" is true to indicate that it may exist in next attempt,
 // and false is the end for the poll.

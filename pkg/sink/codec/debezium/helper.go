@@ -117,11 +117,11 @@ func parseBit(s string, n int) string {
 }
 
 func getValueFromDefault(defaultVal any, tp *types.FieldType) any {
-	// defaultValue shoul be string
+	// defaultValue should be string
 	// see https://github.com/pingcap/tidb/blob/72b1b7c564c301de33a4bd335a05770c78528db4/pkg/ddl/add_column.go#L791
 	val, ok := defaultVal.(string)
 	if !ok {
-		log.Debug("default value is not string", zap.Any("defaultValue", defaultVal))
+		log.Warn("default value is not string", zap.Any("defaultValue", defaultVal))
 		return defaultVal
 	}
 	// TODO: more data types need be consider

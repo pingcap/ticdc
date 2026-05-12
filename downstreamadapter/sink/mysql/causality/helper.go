@@ -27,7 +27,7 @@ import (
 )
 
 // ConflictKeys implements causality.txnEvent interface.
-func ConflictKeys(event *commonEvent.DMLEvent) []uint64 {
+func ConflictKeys(event *commonEvent.DMLEvent) map[uint64]struct{} {
 	if event.Len() == 0 {
 		return nil
 	}
@@ -51,11 +51,7 @@ func ConflictKeys(event *commonEvent.DMLEvent) []uint64 {
 		}
 	}
 
-	keys := make([]uint64, 0, len(hashRes))
-	for key := range hashRes {
-		keys = append(keys, key)
-	}
-	return keys
+	return hashRes
 }
 
 func genRowKeys(row commonEvent.RowChange, tableInfo *common.TableInfo, dispatcherID common.DispatcherID) [][]byte {
@@ -95,17 +91,18 @@ func genKeyList(
 ) []byte {
 	var key []byte
 	for _, colID := range idxColID {
-		info, ok := tableInfo.GetColumnInfo(colID)
-		// If the index contain generated column, we can't use this key to detect conflict with other DML,
-		if !ok || info == nil || info.IsGenerated() {
+		// chunk.Row is laid out in schema column order (TableInfo.GetColumns()).
+		// RowColumnsOffset is based on CDC-visible columns and may skip virtual generated columns,
+		// which would cause extracting a different column value and break causality ordering.
+		// Thus, we should not use RowColumnsOffset here.
+		offsetIdx := tableInfo.MustGetColumnOffsetByID(colID)
+		info := tableInfo.GetColumns()[offsetIdx]
+		// If the index contains a generated column, we can't use this key to detect conflicts with other DML.
+		if info == nil || info.ID != colID || info.IsGenerated() {
 			return nil
 		}
-		offset, ok := tableInfo.GetRowColumnsOffset()[colID]
-		if !ok {
-			log.Warn("can't find column offset", zap.Int64("colID", colID), zap.String("colName", info.Name.O))
-			return nil
-		}
-		value := common.ExtractColVal(row, info, offset)
+		value := common.ExtractColVal(row, info, offsetIdx)
+
 		// if a column value is null, we can ignore this index
 		if value == nil {
 			return nil

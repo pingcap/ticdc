@@ -14,6 +14,8 @@
 package dispatchermanager
 
 import (
+	"sync"
+
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -27,6 +29,11 @@ type dispatcherCreateInfo struct {
 	TableSpan *heartbeatpb.TableSpan
 	StartTs   uint64
 	SchemaID  int64
+	// SkipDMLAsStartTs indicates whether to skip DML events at (StartTs+1).
+	// It is used when a dispatcher is recreated during an in-flight DDL barrier:
+	// we need to replay the DDL by starting from (blockTs-1), while avoiding
+	// potential duplicate DML writes at blockTs.
+	SkipDMLAsStartTs bool
 }
 
 type cleanMap struct {
@@ -84,4 +91,22 @@ func (e *DispatcherManager) GetAllDispatchers(schemaID int64) []common.Dispatche
 		dispatcherIDs = append(dispatcherIDs, e.GetTableTriggerEventDispatcher().GetId())
 	}
 	return dispatcherIDs
+}
+
+func (e *DispatcherManager) GetCurrentOperatorMap() *sync.Map {
+	return &e.currentOperatorMap
+}
+
+// IsRedoEnabled reports whether redo is configured for the changefeed.
+func (e *DispatcherManager) IsRedoEnabled() bool {
+	return e.redoEnabled
+}
+
+// IsRedoReady reports whether redo is configured and its runtime components are fully initialized.
+func (e *DispatcherManager) IsRedoReady() bool {
+	return e.IsRedoEnabled() &&
+		e.redoReady.Load() &&
+		e.redoSink != nil &&
+		e.redoDispatcherMap != nil &&
+		e.redoSchemaIDToDispatchers != nil
 }

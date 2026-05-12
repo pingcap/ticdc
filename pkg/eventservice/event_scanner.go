@@ -34,7 +34,7 @@ import (
 // eventGetter is the interface for getting iterator of events
 // The implementation of eventGetter is eventstore.EventStore
 type eventGetter interface {
-	GetIterator(dispatcherID common.DispatcherID, dataRange common.DataRange) eventstore.EventIterator
+	GetIterator(dispatcherID common.DispatcherID, dataRange common.DataRange) (eventstore.EventIterator, error)
 }
 
 // schemaGetter is the interface for getting schema info and ddl events
@@ -65,7 +65,7 @@ type eventScanner struct {
 
 // newEventScanner creates a new EventScanner
 func newEventScanner(
-	eventStore eventstore.EventStore,
+	eventStore eventGetter,
 	schemaStore schemastore.SchemaStore,
 	mounter event.Mounter,
 	mode int64,
@@ -129,19 +129,33 @@ func (s *eventScanner) scan(
 	}
 	metrics.EventServiceGetDDLEventDuration.Observe(time.Since(start).Seconds())
 
-	iter := s.eventGetter.GetIterator(dispatcherStat.info.GetID(), dataRange)
+	iter, err := s.eventGetter.GetIterator(dispatcherStat.info.GetID(), dataRange)
+	if err != nil {
+		return 0, nil, false, err
+	}
 	if iter == nil {
 		resolved := event.NewResolvedEvent(dataRange.CommitTsEnd, dispatcherStat.id, dispatcherStat.epoch)
 		events = append(events, resolved)
 		sess.appendEvents(events)
 		return 0, sess.events, false, nil
 	}
-	defer s.closeIterator(iter)
 
 	// Execute event scanning and merging
 	merger := newEventMerger(events)
-	interrupted, err := s.scanAndMergeEvents(sess, merger, iter)
-	return sess.eventBytes, sess.events, interrupted, err
+	interrupted, scanErr := s.scanAndMergeEvents(sess, merger, iter)
+	closeErr := s.closeIterator(iter)
+	if scanErr != nil {
+		if closeErr != nil {
+			log.Warn("event store iterator close returned error after scan error",
+				zap.Stringer("dispatcherID", dispatcherStat.info.GetID()),
+				zap.Error(closeErr))
+		}
+		return sess.eventBytes, sess.events, interrupted, scanErr
+	}
+	if closeErr != nil {
+		return 0, nil, false, closeErr
+	}
+	return sess.eventBytes, sess.events, interrupted, nil
 }
 
 // fetchDDLEvents retrieves DDL events which finishedTs are within the range (start, end]
@@ -161,7 +175,7 @@ func (s *eventScanner) fetchDDLEvents(stat *dispatcherStat, dataRange common.Dat
 	)
 	if err != nil {
 		log.Error("get ddl events failed", zap.Stringer("dispatcherID", dispatcherID),
-			zap.Int64("tableID", dataRange.Span.TableID), zap.Error(err))
+			zap.Int64("tableID", dataRange.Span.TableID), zap.Error(err), zap.Int64("mode", s.mode))
 		return nil, err
 	}
 
@@ -172,14 +186,16 @@ func (s *eventScanner) fetchDDLEvents(stat *dispatcherStat, dataRange common.Dat
 	return result, nil
 }
 
-// closeIterator closes the event iterator and records metrics
-func (s *eventScanner) closeIterator(iter eventstore.EventIterator) {
-	if iter != nil {
-		eventCount, _ := iter.Close()
-		if eventCount != 0 {
-			updateMetricEventStoreOutputKv(s.mode, float64(eventCount))
-		}
+// closeIterator closes the event iterator and records metrics.
+func (s *eventScanner) closeIterator(iter eventstore.EventIterator) error {
+	if iter == nil {
+		return nil
 	}
+	eventCount, err := iter.Close()
+	if eventCount != 0 {
+		updateMetricEventStoreOutputKv(s.mode, float64(eventCount))
+	}
+	return err
 }
 
 // scanAndMergeEvents performs the main scanning and merging logic
@@ -190,7 +206,7 @@ func (s *eventScanner) scanAndMergeEvents(
 ) (bool, error) {
 	tableID := session.dataRange.Span.TableID
 	dispatcher := session.dispatcherStat
-	processor := newDMLProcessor(s.mounter, s.schemaGetter, dispatcher.filter, dispatcher.info.IsOutputRawChangeEvent())
+	processor := newDMLProcessor(s.mounter, s.schemaGetter, dispatcher.filter, dispatcher.info.IsOutputRawChangeEvent(), s.mode)
 
 	for {
 		shouldStop, err := s.checkScanConditions(session)
@@ -240,7 +256,8 @@ func (s *eventScanner) scanAndMergeEvents(
 				zap.Stringer("dispatcherID", session.dispatcherStat.id),
 				zap.Int64("tableID", tableID),
 				zap.Uint64("startTs", rawEvent.StartTs),
-				zap.Uint64("commitTs", rawEvent.CRTs))
+				zap.Uint64("commitTs", rawEvent.CRTs),
+				zap.Int64("mode", s.mode))
 			return false, err
 		}
 	}
@@ -269,20 +286,20 @@ func (s *eventScanner) getTableInfo4Txn(dispatcher *dispatcherStat, tableID int6
 	if dispatcher.isRemoved.Load() {
 		log.Warn("get table info failed, but the dispatcher is removed from the event service",
 			zap.Stringer("dispatcherID", dispatcher.id), zap.Int64("tableID", tableID),
-			zap.Uint64("ts", ts), zap.Error(err))
+			zap.Uint64("ts", ts), zap.Error(err), zap.Int64("mode", s.mode))
 		return nil, nil
 	}
 
 	if errors.Is(err, &schemastore.TableDeletedError{}) {
 		log.Warn("get table info failed, since the table is deleted",
 			zap.Stringer("dispatcherID", dispatcher.id), zap.Int64("tableID", tableID),
-			zap.Uint64("ts", ts))
+			zap.Uint64("ts", ts), zap.Int64("mode", s.mode))
 		return nil, nil
 	}
 
 	log.Error("get table info failed, unknown reason",
 		zap.Stringer("dispatcherID", dispatcher.id), zap.Int64("tableID", tableID),
-		zap.Uint64("ts", ts), zap.Error(err))
+		zap.Uint64("ts", ts), zap.Error(err), zap.Int64("mode", s.mode))
 	return nil, err
 }
 
@@ -675,12 +692,13 @@ type dmlProcessor struct {
 
 	batchDML             *event.BatchDMLEvent
 	outputRawChangeEvent bool
+	mode                 int64
 }
 
 // newDMLProcessor creates a new DML processor
 func newDMLProcessor(
 	mounter event.Mounter, schemaGetter schemaGetter,
-	filter filter.Filter, outputRawChangeEvent bool,
+	filter filter.Filter, outputRawChangeEvent bool, mode int64,
 ) *dmlProcessor {
 	return &dmlProcessor{
 		mounter:              mounter,
@@ -689,6 +707,7 @@ func newDMLProcessor(
 		batchDML:             event.NewBatchDMLEvent(),
 		insertRowCache:       make([]*common.RawKVEntry, 0),
 		outputRawChangeEvent: outputRawChangeEvent,
+		mode:                 mode,
 	}
 }
 
@@ -754,7 +773,9 @@ func (p *dmlProcessor) appendRow(rawEvent *common.RawKVEntry) error {
 
 	rawEvent.Key = event.RemoveKeyspacePrefix(rawEvent.Key)
 
+	rawType := rawEvent.GetType()
 	if !rawEvent.IsUpdate() {
+		updateMetricEventServiceSendDMLTypeCount(p.mode, rawType, false)
 		return p.currentTxn.AppendRow(rawEvent, p.mounter.DecodeToChunk, p.filter)
 	}
 
@@ -768,6 +789,8 @@ func (p *dmlProcessor) appendRow(rawEvent *common.RawKVEntry) error {
 			return err
 		}
 	}
+
+	updateMetricEventServiceSendDMLTypeCount(p.mode, rawType, shouldSplit)
 
 	if !shouldSplit {
 		return p.currentTxn.AppendRow(rawEvent, p.mounter.DecodeToChunk, p.filter)

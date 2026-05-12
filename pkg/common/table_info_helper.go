@@ -17,6 +17,8 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
+	"reflect"
+	"slices"
 	"strings"
 	"sync"
 
@@ -68,6 +70,10 @@ func hashTableInfo(tableInfo *model.TableInfo) Digest {
 		sha256Hasher.Write(buf)
 		// column name
 		sha256Hasher.Write([]byte(col.Name.O))
+		// state
+		// Column state affects the visible schema during DDL.
+		binary.BigEndian.PutUint64(buf, uint64(col.State))
+		sha256Hasher.Write(buf)
 		// column type
 		columnType := col.FieldType
 		sha256Hasher.Write([]byte{columnType.GetType()})
@@ -90,21 +96,39 @@ func hashTableInfo(tableInfo *model.TableInfo) Digest {
 		}
 		binary.BigEndian.PutUint64(buf, uint64(boolToInt(columnType.IsArray())))
 		sha256Hasher.Write(buf)
+
+		binary.BigEndian.PutUint64(buf, uint64(boolToInt(col.DefaultIsExpr)))
+		sha256Hasher.Write(buf)
+		binary.BigEndian.PutUint64(buf, uint64(boolToInt(col.GeneratedStored)))
+		sha256Hasher.Write(buf)
+		binary.BigEndian.PutUint64(buf, uint64(boolToInt(col.Hidden)))
+		sha256Hasher.Write(buf)
+		binary.BigEndian.PutUint64(buf, col.Version)
+		sha256Hasher.Write(buf)
 	}
 	// idx info
 	sha256Hasher.Write([]byte("idxInfo"))
 	binary.BigEndian.PutUint64(buf, uint64(len(tableInfo.Indices)))
+	sha256Hasher.Write(buf)
 	for _, idx := range tableInfo.Indices {
 		// ID
 		binary.BigEndian.PutUint64(buf, uint64(idx.ID))
 		sha256Hasher.Write(buf)
 		// name
 		sha256Hasher.Write([]byte(idx.Name.O))
+		// state
+		// Index state affects how downstream chooses usable keys during DDL.
+		binary.BigEndian.PutUint64(buf, uint64(idx.State))
+		sha256Hasher.Write(buf)
 		// columns offset
 		binary.BigEndian.PutUint64(buf, uint64(len(idx.Columns)))
 		sha256Hasher.Write(buf)
 		for _, col := range idx.Columns {
 			binary.BigEndian.PutUint64(buf, uint64(col.Offset))
+			sha256Hasher.Write(buf)
+			// Prefix length changes handle decode behavior for clustered primary key.
+			// Include the length to prevent sharing schema across incompatible tables.
+			binary.BigEndian.PutUint64(buf, uint64(col.Length))
 			sha256Hasher.Write(buf)
 		}
 		// unique
@@ -114,6 +138,13 @@ func hashTableInfo(tableInfo *model.TableInfo) Digest {
 		binary.BigEndian.PutUint64(buf, uint64(boolToInt(idx.Primary)))
 		sha256Hasher.Write(buf)
 	}
+	// Handle-related flags affect how rows are decoded and how handle keys are built.
+	// Include them in the hash to avoid incorrectly sharing schemas across tables.
+	sha256Hasher.Write([]byte("handleFlags"))
+	binary.BigEndian.PutUint64(buf, uint64(boolToInt(tableInfo.PKIsHandle)))
+	sha256Hasher.Write(buf)
+	binary.BigEndian.PutUint64(buf, uint64(boolToInt(tableInfo.IsCommonHandle)))
+	sha256Hasher.Write(buf)
 	hash := sha256Hasher.Sum(nil)
 	return ToDigest(hash)
 }
@@ -158,7 +189,13 @@ type SharedColumnSchemaStorage struct {
 	mutex sync.Mutex
 }
 
-func (s *columnSchema) sameColumnsAndIndices(columns []*model.ColumnInfo, indices []*model.IndexInfo) bool {
+func (s *columnSchema) sameColumnsAndIndices(columns []*model.ColumnInfo, indices []*model.IndexInfo, pkIsHandle bool, isCommonHandle bool) bool {
+	// Handle-related flags affect how rows are decoded and how handle keys are built.
+	// They must be part of schema equality.
+	if s.PKIsHandle != pkIsHandle || s.IsCommonHandle != isCommonHandle {
+		return false
+	}
+
 	if len(s.Columns) != len(columns) {
 		return false
 	}
@@ -170,10 +207,33 @@ func (s *columnSchema) sameColumnsAndIndices(columns []*model.ColumnInfo, indice
 		if !col.FieldType.Equal(&columns[i].FieldType) {
 			return false
 		}
+		if col.State != columns[i].State {
+			return false
+		}
 		if col.ID != columns[i].ID {
 			return false
 		}
-		if col.GetDefaultValue() != columns[i].GetDefaultValue() {
+		if !reflect.DeepEqual(col.GetDefaultValue(), columns[i].GetDefaultValue()) {
+			return false
+		}
+
+		if !reflect.DeepEqual(col.GetOriginDefaultValue(), columns[i].GetOriginDefaultValue()) {
+			return false
+		}
+
+		if col.DefaultIsExpr != columns[i].DefaultIsExpr {
+			return false
+		}
+		if col.GeneratedStored != columns[i].GeneratedStored {
+			return false
+		}
+		if col.Hidden != columns[i].Hidden {
+			return false
+		}
+		if col.GeneratedExprString != columns[i].GeneratedExprString {
+			return false
+		}
+		if col.Version != columns[i].Version {
 			return false
 		}
 	}
@@ -189,11 +249,19 @@ func (s *columnSchema) sameColumnsAndIndices(columns []*model.ColumnInfo, indice
 		if idx.Name.O != indices[i].Name.O {
 			return false
 		}
+		if idx.State != indices[i].State {
+			return false
+		}
 		if len(idx.Columns) != len(indices[i].Columns) {
 			return false
 		}
 		for j, col := range idx.Columns {
 			if col.Offset != indices[i].Columns[j].Offset {
+				return false
+			}
+			// Prefix length affects whether a primary key column is partially indexed.
+			// This directly impacts handle decoding and must be part of schema equality.
+			if col.Length != indices[i].Columns[j].Length {
 				return false
 			}
 		}
@@ -208,12 +276,12 @@ func (s *columnSchema) sameColumnsAndIndices(columns []*model.ColumnInfo, indice
 }
 
 func (s *columnSchema) SameWithTableInfo(tableInfo *model.TableInfo) bool {
-	return s.sameColumnsAndIndices(tableInfo.Columns, tableInfo.Indices)
+	return s.sameColumnsAndIndices(tableInfo.Columns, tableInfo.Indices, tableInfo.PKIsHandle, tableInfo.IsCommonHandle)
 }
 
 // compare the item calculated in hashTableInfo
 func (s *columnSchema) equal(columnSchema *columnSchema) bool {
-	return s.sameColumnsAndIndices(columnSchema.Columns, columnSchema.Indices)
+	return s.sameColumnsAndIndices(columnSchema.Columns, columnSchema.Indices, columnSchema.PKIsHandle, columnSchema.IsCommonHandle)
 }
 
 func (s *SharedColumnSchemaStorage) incColumnSchemaCount(columnSchema *columnSchema) {
@@ -319,7 +387,7 @@ func (s *SharedColumnSchemaStorage) tryReleaseColumnSchema(columnSchema *columnS
 			if s.m[columnSchema.Digest][idx].count == 0 {
 				// release the columnSchema object
 				SharedColumnSchemaCountGauge.Dec()
-				s.m[columnSchema.Digest] = append(s.m[columnSchema.Digest][:idx], s.m[columnSchema.Digest][idx+1:]...)
+				s.m[columnSchema.Digest] = slices.Delete(s.m[columnSchema.Digest], idx, idx+1)
 				if len(s.m[columnSchema.Digest]) == 0 {
 					delete(s.m, columnSchema.Digest)
 				}
@@ -422,7 +490,7 @@ func unmarshalJsonToColumnSchema(data []byte) (*columnSchema, error) {
 
 // newColumnSchema4Decoder should only be used by the codec decoder for the test purpose,
 // do not call this method in the TiCDC code.
-func newColumnSchema4Decoder(tableInfo *model.TableInfo) *columnSchema {
+func NewColumnSchema4Decoder(tableInfo *model.TableInfo) *columnSchema {
 	return newColumnSchema(tableInfo, Digest{})
 }
 
@@ -625,11 +693,7 @@ func (s *columnSchema) initIndexColumns() {
 			indexColOffset := make([]int64, 0, len(idx.Columns))
 			for _, idxCol := range idx.Columns {
 				colInfo := s.Columns[idxCol.Offset]
-				if IsColCDCVisible(colInfo) {
-					indexColOffset = append(indexColOffset, colInfo.ID)
-				} else {
-					hasNotNullUK = false
-				}
+				indexColOffset = append(indexColOffset, colInfo.ID)
 				if !mysql.HasNotNullFlag(colInfo.GetFlag()) {
 					hasNotNullUK = false
 				}

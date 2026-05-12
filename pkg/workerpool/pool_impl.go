@@ -369,7 +369,7 @@ func (w *worker) run(ctx context.Context) error {
 			if task.doneCh != nil {
 				close(task.doneCh)
 				if task.f != nil {
-					log.L().DPanic("unexpected message handler func in cancellation task", zap.Stack("stack"))
+					log.Panic("unexpected message handler func in cancellation task", zap.Stack("stack"))
 				}
 				continue
 			}

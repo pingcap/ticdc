@@ -50,17 +50,17 @@ func genKeyList(row *chunk.Row, tableInfo *common.TableInfo) []byte {
 		return nil
 	}
 	for _, colID := range keyColumns {
-		info, ok := tableInfo.GetColumnInfo(colID)
-		if !ok || info == nil {
-			return nil
-		}
-		i, ok1 := tableInfo.GetRowColumnsOffset()[colID]
-		if !ok1 {
-			log.Warn("can't find column offset", zap.Int64("colID", colID), zap.String("colName", info.Name.O))
+		// chunk.Row is laid out in schema column order (TableInfo.GetColumns()).
+		// RowColumnsOffset is based on CDC-visible columns and may skip virtual generated columns,
+		// which would cause extracting a different column value and break row identity.
+		//  Thus, we should not use RowColumnsOffset here.
+		schemaIdx := tableInfo.MustGetColumnOffsetByID(colID)
+		info := tableInfo.GetColumns()[schemaIdx]
+		if info == nil || info.ID != colID {
 			return nil
 		}
 
-		value := common.ExtractColVal(row, info, i)
+		value := common.ExtractColVal(row, info, schemaIdx)
 		// if a column value is null, we can ignore this index
 		if value == nil {
 			return nil

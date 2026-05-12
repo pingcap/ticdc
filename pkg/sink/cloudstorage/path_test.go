@@ -80,9 +80,6 @@ func TestGenerateDataFilePath(t *testing.T) {
 	path, err := f.GenerateDataFilePath(ctx, table, date)
 	require.NoError(t, err)
 	require.Equal(t, fmt.Sprintf("test/table1/5/CDC_%s_000001.json", table.DispatcherID.String()), path)
-	path, err = f.GenerateDataFilePath(ctx, table, date)
-	require.NoError(t, err)
-	require.Equal(t, fmt.Sprintf("test/table1/5/CDC_%s_000002.json", table.DispatcherID.String()), path)
 
 	// date-separator: year
 	mockClock := clock.NewMock()
@@ -95,18 +92,12 @@ func TestGenerateDataFilePath(t *testing.T) {
 	path, err = f.GenerateDataFilePath(ctx, table, date)
 	require.NoError(t, err)
 	require.Equal(t, fmt.Sprintf("test/table1/5/2022/CDC_%s_000001.json", table.DispatcherID.String()), path)
-	path, err = f.GenerateDataFilePath(ctx, table, date)
-	require.NoError(t, err)
-	require.Equal(t, fmt.Sprintf("test/table1/5/2022/CDC_%s_000002.json", table.DispatcherID.String()), path)
 	// year changed
 	mockClock.Set(time.Date(2023, 1, 1, 0, 0, 20, 0, time.UTC))
 	date = f.GenerateDateStr()
 	path, err = f.GenerateDataFilePath(ctx, table, date)
 	require.NoError(t, err)
 	require.Equal(t, fmt.Sprintf("test/table1/5/2023/CDC_%s_000001.json", table.DispatcherID.String()), path)
-	path, err = f.GenerateDataFilePath(ctx, table, date)
-	require.NoError(t, err)
-	require.Equal(t, fmt.Sprintf("test/table1/5/2023/CDC_%s_000002.json", table.DispatcherID.String()), path)
 
 	// date-separator: month
 	mockClock = clock.NewMock()
@@ -120,18 +111,12 @@ func TestGenerateDataFilePath(t *testing.T) {
 	path, err = f.GenerateDataFilePath(ctx, table, date)
 	require.NoError(t, err)
 	require.Equal(t, fmt.Sprintf("test/table1/5/2022-12/CDC_%s_000001.json", table.DispatcherID.String()), path)
-	path, err = f.GenerateDataFilePath(ctx, table, date)
-	require.NoError(t, err)
-	require.Equal(t, fmt.Sprintf("test/table1/5/2022-12/CDC_%s_000002.json", table.DispatcherID.String()), path)
 	// month changed
 	mockClock.Set(time.Date(2023, 1, 1, 0, 0, 20, 0, time.UTC))
 	date = f.GenerateDateStr()
 	path, err = f.GenerateDataFilePath(ctx, table, date)
 	require.NoError(t, err)
 	require.Equal(t, fmt.Sprintf("test/table1/5/2023-01/CDC_%s_000001.json", table.DispatcherID.String()), path)
-	path, err = f.GenerateDataFilePath(ctx, table, date)
-	require.NoError(t, err)
-	require.Equal(t, fmt.Sprintf("test/table1/5/2023-01/CDC_%s_000002.json", table.DispatcherID.String()), path)
 
 	// date-separator: day
 	mockClock = clock.NewMock()
@@ -145,18 +130,39 @@ func TestGenerateDataFilePath(t *testing.T) {
 	path, err = f.GenerateDataFilePath(ctx, table, date)
 	require.NoError(t, err)
 	require.Equal(t, fmt.Sprintf("test/table1/5/2022-12-31/CDC_%s_000001.json", table.DispatcherID.String()), path)
-	path, err = f.GenerateDataFilePath(ctx, table, date)
-	require.NoError(t, err)
-	require.Equal(t, fmt.Sprintf("test/table1/5/2022-12-31/CDC_%s_000002.json", table.DispatcherID.String()), path)
 	// day changed
 	mockClock.Set(time.Date(2023, 1, 1, 0, 0, 20, 0, time.UTC))
 	date = f.GenerateDateStr()
 	path, err = f.GenerateDataFilePath(ctx, table, date)
 	require.NoError(t, err)
 	require.Equal(t, fmt.Sprintf("test/table1/5/2023-01-01/CDC_%s_000001.json", table.DispatcherID.String()), path)
-	path, err = f.GenerateDataFilePath(ctx, table, date)
+}
+
+func TestGenerateDataFilePathWithTableIDAsPath(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.TODO())
+	defer cancel()
+
+	table := VersionedTableName{
+		TableNameWithPhysicTableID: commonType.TableName{
+			Schema:  "test",
+			Table:   "table1",
+			TableID: 12345,
+		},
+		TableInfoVersion: 5,
+		DispatcherID:     commonType.NewDispatcherID(),
+	}
+
+	dir := t.TempDir()
+	f := testFilePathGenerator(ctx, t, dir)
+	f.config.UseTableIDAsPath = true
+	f.versionMap[table] = table.TableInfoVersion
+
+	date := f.GenerateDateStr()
+	path, err := f.GenerateDataFilePath(ctx, table, date)
 	require.NoError(t, err)
-	require.Equal(t, fmt.Sprintf("test/table1/5/2023-01-01/CDC_%s_000002.json", table.DispatcherID.String()), path)
+	require.Equal(t, fmt.Sprintf("12345/5/CDC_%s_000001.json", table.DispatcherID.String()), path)
 }
 
 func TestFetchIndexFromFileName(t *testing.T) {
@@ -198,7 +204,7 @@ func TestFetchIndexFromFileName(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		_, err := f.fetchIndexFromFileName("", tc.fileName)
+		_, err := FetchIndexFromFileName(tc.fileName, f.extension)
 		if len(tc.wantErr) != 0 {
 			require.Contains(t, err.Error(), tc.wantErr)
 		} else {
@@ -231,32 +237,66 @@ func TestGenerateDataFilePathWithIndexFile(t *testing.T) {
 	}
 	f.versionMap[table] = table.TableInfoVersion
 	date := f.GenerateDateStr()
-	indexFilePath := f.GenerateIndexFilePath(table, date)
-	err := f.storage.WriteFile(ctx, indexFilePath, []byte(fmt.Sprintf("CDC_%s_000005.json\n", dispatcherID.String())))
+	indexFilePath, err := f.GenerateIndexFilePath(table, date)
+	require.NoError(t, err)
+	err = f.storage.WriteFile(ctx, indexFilePath, []byte(fmt.Sprintf("CDC_%s_000005.json\n", dispatcherID.String())))
 	require.NoError(t, err)
 
-	// index file exists, but the file is not exist
 	dataFilePath, err := f.GenerateDataFilePath(ctx, table, date)
 	require.NoError(t, err)
-	require.Equal(t, fmt.Sprintf("test/table1/5/2023-03-09/CDC_%s_000005.json", dispatcherID.String()), dataFilePath)
-
-	// cleanup cached file index
-	delete(f.fileIndex, table)
-	// index file exists, and the file is empty
-	err = f.storage.WriteFile(ctx, dataFilePath, []byte(""))
-	require.NoError(t, err)
-	dataFilePath, err = f.GenerateDataFilePath(ctx, table, date)
-	require.NoError(t, err)
-	require.Equal(t, fmt.Sprintf("test/table1/5/2023-03-09/CDC_%s_000005.json", dispatcherID.String()), dataFilePath)
-
-	// cleanup cached file index
-	delete(f.fileIndex, table)
-	// index file exists, and the file is not empty
-	err = f.storage.WriteFile(ctx, dataFilePath, []byte("test"))
-	require.NoError(t, err)
-	dataFilePath, err = f.GenerateDataFilePath(ctx, table, date)
-	require.NoError(t, err)
 	require.Equal(t, fmt.Sprintf("test/table1/5/2023-03-09/CDC_%s_000006.json", dispatcherID.String()), dataFilePath)
+}
+
+func TestGenerateDataFilePathResyncIndexFile(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.TODO())
+	defer cancel()
+
+	dir := t.TempDir()
+	f1 := testFilePathGenerator(ctx, t, dir)
+	f2 := testFilePathGenerator(ctx, t, dir)
+
+	dispatcherID := commonType.NewDispatcherID()
+	table := VersionedTableName{
+		TableNameWithPhysicTableID: commonType.TableName{
+			Schema: "test",
+			Table:  "table1",
+		},
+		TableInfoVersion: 5,
+		DispatcherID:     dispatcherID,
+	}
+	f1.versionMap[table] = table.TableInfoVersion
+	f2.versionMap[table] = table.TableInfoVersion
+
+	date := ""
+	indexFilePath, err := f1.GenerateIndexFilePath(table, date)
+	require.NoError(t, err)
+
+	// Simulate dispatcher moved between captures:
+	// 1) f1 generates CDC_..._000001 and writes index file.
+	dataFilePath, err := f1.GenerateDataFilePath(ctx, table, date)
+	require.NoError(t, err)
+	require.Equal(t, fmt.Sprintf("test/table1/5/CDC_%s_000001.json", dispatcherID.String()), dataFilePath)
+	err = f1.storage.WriteFile(ctx, dataFilePath, []byte("test1"))
+	require.NoError(t, err)
+	err = f1.storage.WriteFile(ctx, indexFilePath, []byte(fmt.Sprintf("CDC_%s_000001.json\n", dispatcherID.String())))
+	require.NoError(t, err)
+
+	// 2) f2 continues from index file and generates CDC_..._000002, then updates index file.
+	dataFilePath, err = f2.GenerateDataFilePath(ctx, table, date)
+	require.NoError(t, err)
+	err = f2.storage.WriteFile(ctx, dataFilePath, []byte("test2"))
+	require.NoError(t, err)
+	require.Equal(t, fmt.Sprintf("test/table1/5/CDC_%s_000002.json", dispatcherID.String()), dataFilePath)
+	err = f2.storage.WriteFile(ctx, indexFilePath, []byte(fmt.Sprintf("CDC_%s_000002.json\n", dispatcherID.String())))
+	require.NoError(t, err)
+
+	// 3) f1 generates again after being scheduled back. It must reconcile with index file and
+	//    generate CDC_..._000003 instead of overwriting CDC_..._000002.
+	dataFilePath, err = f1.GenerateDataFilePath(ctx, table, date)
+	require.NoError(t, err)
+	require.Equal(t, fmt.Sprintf("test/table1/5/CDC_%s_000003.json", dispatcherID.String()), dataFilePath)
 }
 
 func TestIsSchemaFile(t *testing.T) {

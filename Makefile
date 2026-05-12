@@ -5,10 +5,10 @@
 	cdc kafka_consumer storage_consumer pulsar_consumer filter_helper \
 	prepare_test_binaries \
 	unit_test_in_verify_ci integration_test_build integration_test_build_fast integration_test_mysql integration_test_kafka integration_test_storage integration_test_pulsar \
-	generate-next-gen-grafana
+	generate-next-gen-grafana check-next-gen-grafana
 
 
-FAIL_ON_STDOUT := awk '{ print } END { if (NR > 0) { exit 1  }  }'
+FAIL_ON_STDOUT := awk "{ print } END { if (NR > 0) { exit 1  }  }"
 
 PROJECT=ticdc
 .DEFAULT_GOAL := cdc
@@ -336,7 +336,7 @@ check-makefiles: format-makefiles
 format-makefiles: $(MAKE_FILES)
 	$(SED_IN_PLACE) -e 's/^\(\t*\)  /\1\t/g' -e 's/^\(\t*\) /\1/' -- $?
 
-check: check-copyright fmt tidy generate_mock go-generate check-diff-line-width check-ticdc-dashboard check-makefiles generate-next-gen-grafana check-static
+check: check-copyright fmt tidy generate_mock go-generate check-diff-line-width check-ticdc-dashboard check-makefiles check-static
 	@git --no-pager diff --exit-code || (echo "Please add changed files!" && false)
 
 clean:
@@ -350,3 +350,6 @@ workload: tools/bin/workload
 
 generate-next-gen-grafana:
 	./scripts/generate-next-gen-metrics.sh
+
+check-next-gen-grafana: generate-next-gen-grafana
+	@git --no-pager diff --exit-code -- metrics/nextgengrafana || (echo "Please run 'make generate-next-gen-grafana' and add changed files!" && false)

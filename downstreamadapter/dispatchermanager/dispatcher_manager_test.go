@@ -13,14 +13,19 @@
 package dispatchermanager
 
 import (
+	"context"
 	"math"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/downstreamadapter/eventcollector"
+	"github.com/pingcap/ticdc/downstreamadapter/routing"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/mock"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
@@ -30,15 +35,36 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	mysqlcfg "github.com/pingcap/ticdc/pkg/sink/mysql"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/stretchr/testify/require"
 )
 
-var mockSink = sink.NewMockSink(common.BlackHoleSinkType)
+func newDispatcherManagerTestSink(t *testing.T, sinkType common.SinkType) sink.Sink {
+	t.Helper()
+
+	ctrl := gomock.NewController(t)
+	mockSink := mock.NewMockSink(ctrl)
+	mockSink.EXPECT().SinkType().Return(sinkType).AnyTimes()
+	mockSink.EXPECT().IsNormal().Return(true).AnyTimes()
+	mockSink.EXPECT().AddDMLEvent(gomock.Any()).AnyTimes()
+	mockSink.EXPECT().FlushDMLBeforeBlock(gomock.Any()).Return(nil).AnyTimes()
+	mockSink.EXPECT().WriteBlockEvent(gomock.Any()).DoAndReturn(func(blockEvent event.BlockEvent) error {
+		blockEvent.PostFlush()
+		return nil
+	}).AnyTimes()
+	mockSink.EXPECT().AddCheckpointTs(gomock.Any()).AnyTimes()
+	mockSink.EXPECT().SetTableSchemaStore(gomock.Any()).AnyTimes()
+	mockSink.EXPECT().Close().AnyTimes()
+	mockSink.EXPECT().Run(gomock.Any()).Return(nil).AnyTimes()
+	return mockSink
+}
 
 // createTestDispatcher creates a test dispatcher with given parameters
 func createTestDispatcher(t *testing.T, manager *DispatcherManager, id common.DispatcherID, tableID int64, startKey, endKey []byte) *dispatcher.EventDispatcher {
+	t.Helper()
+
 	span := &heartbeatpb.TableSpan{
 		TableID:  tableID,
 		StartKey: startKey,
@@ -46,21 +72,7 @@ func createTestDispatcher(t *testing.T, manager *DispatcherManager, id common.Di
 	}
 	var redoTs atomic.Uint64
 	redoTs.Store(math.MaxUint64)
-	defaultAtomicity := config.DefaultAtomicityLevel()
-	sharedInfo := dispatcher.NewSharedInfo(
-		manager.changefeedID,
-		"system",
-		false,
-		false,
-		nil,
-		nil,
-		nil,
-		&defaultAtomicity,
-		false,
-		make(chan dispatcher.TableSpanStatusWithSeq, 1),
-		make(chan *heartbeatpb.TableSpanBlockStatus, 1),
-		make(chan error, 1),
-	)
+	require.NotNil(t, manager.sharedInfo)
 	d := dispatcher.NewEventDispatcher(
 		id,
 		span,
@@ -70,8 +82,8 @@ func createTestDispatcher(t *testing.T, manager *DispatcherManager, id common.Di
 		false, // skipSyncpointAtStartTs
 		false, // skipDMLAsStartTs
 		0,     // currentPDTs
-		mockSink,
-		sharedInfo,
+		manager.sink,
+		manager.sharedInfo,
 		false,
 		&redoTs,
 	)
@@ -81,16 +93,18 @@ func createTestDispatcher(t *testing.T, manager *DispatcherManager, id common.Di
 
 // createTestManager creates a test DispatcherManager
 func createTestManager(t *testing.T) *DispatcherManager {
-	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme)
+	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	testSink := newDispatcherManagerTestSink(t, common.BlackHoleSinkType)
 	manager := &DispatcherManager{
 		changefeedID:            changefeedID,
 		dispatcherMap:           newDispatcherMap[*dispatcher.EventDispatcher](),
 		heartbeatRequestQueue:   NewHeartbeatRequestQueue(),
 		blockStatusRequestQueue: NewBlockStatusRequestQueue(),
-		sink:                    mockSink,
+		sink:                    testSink,
 		schemaIDToDispatchers:   dispatcher.NewSchemaIDToDispatchers(),
 		sinkQuota:               util.GetOrZero(config.GetDefaultReplicaConfig().MemoryQuota),
 		latestWatermark:         NewWatermark(0),
+		latestRedoWatermark:     NewWatermark(0),
 		closing:                 atomic.Bool{},
 		pdClock:                 pdutil.NewClock4Test(),
 		config: &config.ChangefeedConfig{
@@ -109,12 +123,16 @@ func createTestManager(t *testing.T) *DispatcherManager {
 		manager.changefeedID,
 		"system",
 		manager.config.BDRMode,
+		manager.config.EnableActiveActive,
 		false, // outputRawChangeEvent
 		nil,   // integrityConfig
 		nil,   // filterConfig
 		nil,   // syncPointConfig
 		&defaultAtomicity,
 		false,
+		routing.Router{},
+		0,
+		0,
 		make(chan dispatcher.TableSpanStatusWithSeq, 8192),
 		make(chan *heartbeatpb.TableSpanBlockStatus, 1024*1024),
 		make(chan error, 1),
@@ -125,6 +143,71 @@ func createTestManager(t *testing.T) *DispatcherManager {
 	ec := eventcollector.New(nodeID)
 	appcontext.SetService(appcontext.EventCollector, ec)
 	return manager
+}
+
+func TestCollectComponentStatusWhenChangedWatermarkSeqNoFallback(t *testing.T) {
+	manager := createTestManager(t)
+
+	manager.latestWatermark.Set(&heartbeatpb.Watermark{
+		CheckpointTs: 1000,
+		ResolvedTs:   1000,
+		Seq:          100,
+	})
+	manager.latestRedoWatermark.Set(&heartbeatpb.Watermark{
+		CheckpointTs: 1000,
+		ResolvedTs:   1000,
+		Seq:          200,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		manager.collectComponentStatusWhenChanged(ctx)
+		close(done)
+	}()
+	defer func() {
+		cancel()
+		<-done
+	}()
+
+	statusesChan := manager.sharedInfo.GetStatusesChan()
+	statusesChan <- dispatcher.TableSpanStatusWithSeq{
+		TableSpanStatus: &heartbeatpb.TableSpanStatus{
+			ID:              common.NewDispatcherID().ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    900,
+			Mode:            common.DefaultMode,
+		},
+		Seq: 10,
+	}
+
+	dequeueCtx, cancelDequeue := context.WithTimeout(context.Background(), time.Second)
+	req := manager.heartbeatRequestQueue.Dequeue(dequeueCtx)
+	cancelDequeue()
+
+	require.NotNil(t, req)
+	require.NotNil(t, req.Request)
+	require.NotNil(t, req.Request.Watermark)
+	require.Equal(t, uint64(100), req.Request.Watermark.Seq)
+
+	statusesChan <- dispatcher.TableSpanStatusWithSeq{
+		TableSpanStatus: &heartbeatpb.TableSpanStatus{
+			ID:              common.NewDispatcherID().ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    800,
+			Mode:            common.RedoMode,
+		},
+		Seq: 20,
+	}
+
+	dequeueCtx, cancelDequeue = context.WithTimeout(context.Background(), time.Second)
+	req = manager.heartbeatRequestQueue.Dequeue(dequeueCtx)
+	cancelDequeue()
+
+	require.NotNil(t, req)
+	require.NotNil(t, req.Request)
+	require.NotNil(t, req.Request.RedoWatermark)
+	require.Equal(t, uint64(200), req.Request.RedoWatermark.Seq)
 }
 
 func TestMergeDispatcherNormal(t *testing.T) {
@@ -178,6 +261,36 @@ func TestMergeDispatcherInvalidIDs(t *testing.T) {
 	// Verify no new dispatcher is created
 	_, exists := manager.dispatcherMap.Get(mergedID)
 	require.False(t, exists)
+}
+
+func TestTryCloseRemovedRequestAfterClosedReturnsImmediatelyAndTriggersCleanup(t *testing.T) {
+	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	mysqlConfig := mysqlcfg.New()
+	mysqlConfig.EnableDDLTs = false
+	mysqlSink := mysql.NewMySQLSink(
+		context.Background(),
+		changefeedID,
+		mysqlConfig,
+		nil,
+		false,
+		false,
+		time.Minute,
+	)
+	manager := &DispatcherManager{
+		changefeedID: changefeedID,
+		sink:         mysqlSink,
+	}
+	manager.closed.Store(true)
+
+	// Preserve the historical close contract: once the manager is already closed,
+	// late remove requests should not delay TryClose success.
+	closed := manager.TryClose(true)
+	require.True(t, closed)
+	require.True(t, manager.removeChangefeedRequested.Load())
+	require.Eventually(t, func() bool {
+		return manager.removeChangefeedCleaned.Load()
+	}, time.Second, 10*time.Millisecond)
+	require.True(t, manager.TryClose(true))
 }
 
 func TestMergeDispatcherExistingID(t *testing.T) {

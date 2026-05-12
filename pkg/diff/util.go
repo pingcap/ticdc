@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/dbutil"
@@ -38,25 +39,36 @@ func ignoreColumns(tableInfo *model.TableInfo, columns []string) *model.TableInf
 	}
 
 	removeColMap := sliceToMap(columns)
-	for i := 0; i < len(tableInfo.Indices); i++ {
-		index := tableInfo.Indices[i]
+	n := 0
+	needRemove := false
+	for _, index := range tableInfo.Indices {
+		needRemove = false
 		for j := 0; j < len(index.Columns); j++ {
 			col := index.Columns[j]
 			if _, ok := removeColMap[col.Name.O]; ok {
-				tableInfo.Indices = append(tableInfo.Indices[:i], tableInfo.Indices[i+1:]...)
-				i--
+				needRemove = true
 				break
 			}
 		}
-	}
-
-	for j := 0; j < len(tableInfo.Columns); j++ {
-		col := tableInfo.Columns[j]
-		if _, ok := removeColMap[col.Name.O]; ok {
-			tableInfo.Columns = append(tableInfo.Columns[:j], tableInfo.Columns[j+1:]...)
-			j--
+		if !needRemove {
+			tableInfo.Indices[n] = index
+			n++
 		}
 	}
+	// To avoid memory leaks, nil out the rest.
+	clear(tableInfo.Indices[n:])
+	tableInfo.Indices = tableInfo.Indices[:n]
+
+	n = 0
+	for _, col := range tableInfo.Columns {
+		if _, ok := removeColMap[col.Name.O]; !ok {
+			tableInfo.Columns[n] = col
+			n++
+		}
+	}
+	// To avoid memory leaks, nil out the rest.
+	clear(tableInfo.Columns[n:])
+	tableInfo.Columns = tableInfo.Columns[:n]
 
 	// calculate column offset
 	colMap := make(map[string]int, len(tableInfo.Columns))
@@ -106,14 +118,19 @@ func rowContainsCols(row map[string]*dbutil.ColumnData, cols []*model.ColumnInfo
 	return true
 }
 
-func rowToString(row map[string]*dbutil.ColumnData) string {
+// redactRowToString converts a database row to a string representation for logging.
+// Column names are preserved (not redacted), but column values are redacted according
+// to the current redaction mode. This allows debugging logs to show which columns
+// are involved while protecting the actual data values.
+// Format: "{ col1: <redacted_value>, col2: IsNull,  }"
+func redactRowToString(row map[string]*dbutil.ColumnData) string {
 	var s strings.Builder
 	s.WriteString("{ ")
 	for key, val := range row {
 		if val.IsNull {
 			s.WriteString(fmt.Sprintf("%s: IsNull, ", key))
 		} else {
-			s.WriteString(fmt.Sprintf("%s: %s, ", key, val.Data))
+			s.WriteString(fmt.Sprintf("%s: %s, ", key, util.RedactValue(string(val.Data))))
 		}
 	}
 	s.WriteString(" }")

@@ -36,7 +36,7 @@ func setupTestEnvironment(t *testing.T) (*span.Controller, common.ChangeFeedID, 
 	regionCache := testutil.NewMockRegionCache()
 	appcontext.SetService(appcontext.RegionCache, regionCache)
 
-	changefeedID := common.NewChangeFeedIDWithName("test-changefeed", common.DefaultKeyspaceNamme)
+	changefeedID := common.NewChangeFeedIDWithName("test-changefeed", common.DefaultKeyspaceName)
 	dispatcherID := common.NewDispatcherID()
 
 	tableSpan := testutil.GetTableSpanByID(100)

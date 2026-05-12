@@ -66,25 +66,21 @@ var (
 			Help:      "Total count of DML events.",
 		}, []string{getKeyspaceLabel(), "changefeed"})
 
-	// ExecDDLHistogram records the exexution time of a DDL.
-	ExecDDLHistogram = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
+	ExecDMLEventRowsAffectedCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
 			Namespace: "ticdc",
 			Subsystem: "sink",
-			Name:      "ddl_exec_duration",
-			Help:      "Bucketed histogram of processing time (s) of a ddl.",
-			Buckets:   prometheus.ExponentialBuckets(0.01, 2, 18),
-		}, []string{getKeyspaceLabel(), "changefeed", "type"}) // type is for `sinkType`
+			Name:      "dml_event_affected_row_count",
+			Help:      "Total count of affected rows.",
+		}, []string{getKeyspaceLabel(), "changefeed", "count_type", "row_type"})
 
-	// ExecDDLRunningGauge records the count of running DDL.
-	ExecDDLRunningGauge = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
+	ActiveActiveConflictSkipRowsCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
 			Namespace: "ticdc",
 			Subsystem: "sink",
-			Name:      "ddl_exec_running",
-			Help:      "Total count of running ddl.",
-		}, []string{getKeyspaceLabel(), "changefeed", "type"}) // type is for `sinkType`
-
+			Name:      "active_active_conflict_skip_rows_total",
+			Help:      "Total number of rows skipped due to last-write-wins conflict resolution in TiDB active-active replication.",
+		}, []string{getKeyspaceLabel(), "changefeed"})
 	// ExecutionErrorCounter is the counter of execution errors.
 	ExecutionErrorCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
@@ -92,7 +88,7 @@ var (
 			Subsystem: "sink",
 			Name:      "execution_error",
 			Help:      "Total count of execution errors.",
-		}, []string{getKeyspaceLabel(), "changefeed", "type"}) // type is for `sinkType`
+		}, []string{getKeyspaceLabel(), "changefeed", "event_type"})
 )
 
 // ---------- Metrics for txn sink and backends. ---------- //
@@ -241,11 +237,11 @@ func initSinkMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(ExecBatchHistogram)
 	registry.MustRegister(ExecBatchWriteBytesHistogram)
 	registry.MustRegister(TotalWriteBytesCounter)
-	registry.MustRegister(ExecDDLHistogram)
-	registry.MustRegister(ExecDDLRunningGauge)
 	registry.MustRegister(EventSizeHistogram)
-	registry.MustRegister(ExecutionErrorCounter)
 	registry.MustRegister(ExecDMLEventCounter)
+	registry.MustRegister(ExecDMLEventRowsAffectedCounter)
+	registry.MustRegister(ActiveActiveConflictSkipRowsCounter)
+	registry.MustRegister(ExecutionErrorCounter)
 
 	// txn sink metrics
 	registry.MustRegister(ConflictDetectDuration)
@@ -265,4 +261,7 @@ func initSinkMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(WorkerBatchDuration)
 	registry.MustRegister(CheckpointTsMessageDuration)
 	registry.MustRegister(CheckpointTsMessageCount)
+
+	// pulsar sink metrics
+	initPulsarMetrics(registry)
 }

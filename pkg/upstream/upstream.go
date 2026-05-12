@@ -55,7 +55,7 @@ const (
 	closed
 
 	maxIdleDuration = time.Minute * 30
-	defaultMaxRetry = 5
+	defaultMaxRetry = 50
 )
 
 // Upstream holds resources of a TiDB cluster, it can be shared by many changefeeds
@@ -129,11 +129,7 @@ func CreateTiStore(ctx context.Context, urls string, credential *security.Creden
 		retry.WithBackoffBaseDelay(200),
 		retry.WithBackoffMaxDelay(4000),
 		retry.WithIsRetryableErr(func(err error) bool {
-			switch errors.Cause(err) {
-			case context.Canceled:
-				return false
-			}
-			return true
+			return isCreateTiStoreRetryable(ctx, err)
 		}))
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrNewStore, err)
@@ -141,12 +137,21 @@ func CreateTiStore(ctx context.Context, urls string, credential *security.Creden
 	return tiStore, nil
 }
 
+func isCreateTiStoreRetryable(ctx context.Context, err error) bool {
+	switch errors.Cause(err) {
+	case context.Canceled:
+		// Only stop retrying if the caller's context is canceled.
+		// Otherwise treat it as transient (e.g. internal client cancellation).
+		return ctx.Err() == nil
+	}
+	return true
+}
+
 // init initializes the upstream
-func initUpstream(ctx context.Context, up *Upstream, cfg *NodeTopologyCfg) error {
+func initUpstream(ctx context.Context, up *Upstream, cfg *NodeTopologyCfg) (err error) {
 	ctx, up.cancel = context.WithCancel(ctx)
 	grpcTLSOption, err := up.SecurityConfig.ToGRPCDialOption()
 	if err != nil {
-		up.err.Store(err)
 		return errors.Trace(err)
 	}
 	// init the tikv client tls global config
@@ -171,7 +176,6 @@ func initUpstream(ctx context.Context, up *Upstream, cfg *NodeTopologyCfg) error
 				}),
 			))
 		if err != nil {
-			up.err.Store(err)
 			return errors.Trace(err)
 		}
 
@@ -185,14 +189,12 @@ func initUpstream(ctx context.Context, up *Upstream, cfg *NodeTopologyCfg) error
 	if up.ID != 0 && up.ID != clusterID {
 		err := fmt.Errorf("upstream id missmatch expected %d, actual: %d",
 			up.ID, clusterID)
-		up.err.Store(err)
 		return errors.Trace(err)
 	}
 	up.ID = clusterID
 
 	up.KVStorage, err = CreateTiStore(ctx, strings.Join(up.PdEndpoints, ","), up.SecurityConfig, "")
 	if err != nil {
-		up.err.Store(err)
 		return errors.Trace(err)
 	}
 
@@ -200,7 +202,6 @@ func initUpstream(ctx context.Context, up *Upstream, cfg *NodeTopologyCfg) error
 
 	up.PDClock, err = pdutil.NewClock(ctx, up.PDClient)
 	if err != nil {
-		up.err.Store(err)
 		return errors.Trace(err)
 	}
 
@@ -254,7 +255,9 @@ func initGlobalConfig(secCfg *security.Credential) {
 func (up *Upstream) Close() {
 	up.mu.Lock()
 	defer up.mu.Unlock()
-	up.cancel()
+	if up.cancel != nil {
+		up.cancel()
+	}
 	if atomic.LoadInt32(&up.status) == closed ||
 		atomic.LoadInt32(&up.status) == closing {
 		return

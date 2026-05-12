@@ -156,10 +156,34 @@ func InitLogger(cfg *Config, opts ...LoggerOpt) error {
 
 	var lg *zap.Logger
 	var err error
-	if op.output == nil {
+	if op.output == nil && cfg.File == "" {
 		lg, globalP, err = log.InitLogger(pclogConfig)
 	} else {
-		lg, globalP, err = log.InitLoggerWithWriteSyncer(pclogConfig, op.output, nil)
+		var outputSyncer zapcore.WriteSyncer
+		var errSyncer zapcore.WriteSyncer
+		if op.output != nil {
+			outputSyncer = op.output
+			errSyncer = op.output
+		} else {
+			_, props, initErr := log.InitLogger(pclogConfig)
+			if initErr != nil {
+				return initErr
+			}
+			outputSyncer = props.Syncer
+			errSyncer = props.ErrSyncer
+		}
+
+		// Wrap output sink to record log write throughput.
+		// We only care about log-file mode (cfg.File != ""), as requested.
+		if cfg.File != "" {
+			errSinkIsOutput := errSyncer == outputSyncer
+			outputSyncer = newCountingWriteSyncer(outputSyncer)
+			if errSinkIsOutput {
+				errSyncer = outputSyncer
+			}
+		}
+
+		lg, globalP, err = log.InitLoggerWithWriteSyncer(pclogConfig, outputSyncer, errSyncer)
 	}
 	if err != nil {
 		return err

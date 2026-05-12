@@ -21,11 +21,12 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
 
 func TestRetry(t *testing.T) {
-	backoff := NewBackoff(common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme), time.Minute*30, 1)
+	backoff := NewBackoff(common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), time.Minute*30, 1)
 	require.True(t, backoff.ShouldRun())
 
 	// stop the backoff
@@ -98,7 +99,7 @@ func TestRetry(t *testing.T) {
 }
 
 func TestErrorReportedWhenRetrying(t *testing.T) {
-	backoff := NewBackoff(common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme), time.Minute*30, 1)
+	backoff := NewBackoff(common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), time.Minute*30, 1)
 	require.True(t, backoff.ShouldRun())
 
 	changefeed, state, err := backoff.CheckStatus(&heartbeatpb.MaintainerStatus{
@@ -130,8 +131,51 @@ func TestErrorReportedWhenRetrying(t *testing.T) {
 	require.True(t, backoffInterval < backoff.backoffInterval)
 }
 
+func TestTableRoutingErrorsFastFail(t *testing.T) {
+	tests := []struct {
+		name    string
+		code    string
+		message string
+	}{
+		{
+			name:    "invalid table routing rule",
+			code:    string(errors.ErrInvalidTableRoutingRule.RFCCode()),
+			message: "invalid table routing rule",
+		},
+		{
+			name:    "table routing failed",
+			code:    string(errors.ErrTableRoutingFailed.RFCCode()),
+			message: "table routing failed",
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			backoff := NewBackoff(common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), time.Minute*30, 1)
+			require.True(t, backoff.ShouldRun())
+
+			changed, state, err := backoff.CheckStatus(&heartbeatpb.MaintainerStatus{
+				CheckpointTs: 1,
+				Err: []*heartbeatpb.RunningError{
+					{
+						Code:    tc.code,
+						Message: tc.message,
+					},
+				},
+			})
+
+			require.True(t, changed)
+			require.Equal(t, config.StateFailed, state)
+			require.NotNil(t, err)
+			require.False(t, backoff.ShouldRun())
+			require.False(t, backoff.retrying.Load())
+		})
+	}
+}
+
 func TestFailedWhenRetry(t *testing.T) {
-	backoff := NewBackoff(common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme), time.Second*30, 1)
+	backoff := NewBackoff(common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), time.Second*30, 1)
 	require.True(t, backoff.ShouldRun())
 
 	mc := clock.NewMock()
@@ -168,7 +212,7 @@ func TestFailedWhenRetry(t *testing.T) {
 }
 
 func TestNormal(t *testing.T) {
-	backoff := NewBackoff(common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceNamme), time.Second*10, 1)
+	backoff := NewBackoff(common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), time.Second*10, 1)
 	require.True(t, backoff.ShouldRun())
 
 	changefeed, state, err := backoff.CheckStatus(&heartbeatpb.MaintainerStatus{

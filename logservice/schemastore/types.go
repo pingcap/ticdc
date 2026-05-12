@@ -61,6 +61,9 @@ type PersistedDDLEvent struct {
 	// the following fields are only set when the ddl job involves a partition table
 	// it is the partition info of the table before this ddl
 	PrevPartitions []int64 `msg:"prev_partitions"`
+	// ReferTablePartitionIDs is only set for CREATE TABLE ... LIKE ... when the referenced table is partitioned.
+	// It records the physical partition IDs of the referenced table.
+	ReferTablePartitionIDs []int64 `msg:"refer_table_partitions"`
 
 	Query         string `msg:"query"`
 	SchemaVersion int64  `msg:"schema_version"`
@@ -85,6 +88,10 @@ type PersistedDDLEvent struct {
 	// TODO: do we need the following two fields?
 	BDRRole        string `msg:"bdr_role"`
 	CDCWriteSource uint64 `msg:"cdc_write_source"`
+
+	// IndexIDs store the add index ids in SQL order for add index and multi schema change DDLs.
+	// MySQL sink uses them to recover anonymous index names.
+	IndexIDs []int64 `msg:"index_ids"`
 }
 
 // TODO: use msgp.Raw to do version management

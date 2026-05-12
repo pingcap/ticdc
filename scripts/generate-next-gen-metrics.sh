@@ -16,8 +16,8 @@ set -euo pipefail
 
 ORIGIN_FILE="metrics/grafana/ticdc_new_arch.json"
 
-NEXT_GEN_SHARED_FILE="${1:-metrics/grafana/ticdc_new_arch_next_gen.json}"
-NEXT_GEN_USER_FILE="${2:-metrics/grafana/ticdc_new_arch_with_keyspace_name.json}"
+NEXT_GEN_SHARED_FILE="${1:-metrics/nextgengrafana/ticdc_new_arch_next_gen.json}"
+NEXT_GEN_USER_FILE="${2:-metrics/nextgengrafana/ticdc_new_arch_with_keyspace_name.json}"
 
 # Determine sed command and in-place edit syntax.
 SED_CMD="${SED_CMD:-sed}"
@@ -40,6 +40,16 @@ if [ ! -f "$NEXT_GEN_SHARED_FILE" ]; then
 	echo "Error: Input file not found at '$NEXT_GEN_SHARED_FILE'" >&2
 	exit 1
 fi
+
+require_file_contains() {
+	local file="$1"
+	local expected="$2"
+
+	if ! grep -Fq -- "$expected" "$file"; then
+		echo "Error: Generated file '$file' must contain '$expected'" >&2
+		exit 1
+	fi
+}
 
 # This jq script filters the panels in the Grafana dashboard.
 # It defines a recursive function `filter_panels` that:
@@ -64,9 +74,11 @@ jq '
 
 "$SED_CMD" "${SED_INPLACE_ARGS[@]}" "s/\${DS_TEST-CLUSTER}-TiCDC-New-Arch/&-KeyspaceName/" "$NEXT_GEN_USER_FILE"
 "$SED_CMD" "${SED_INPLACE_ARGS[@]}" "s/YiGL8hBZ0aac/lGT5hED6vqTn/" "$NEXT_GEN_USER_FILE"
+require_file_contains "$NEXT_GEN_USER_FILE" "-KeyspaceName"
 
 echo "Userscope dashboard created at '$NEXT_GEN_USER_FILE'"
 
 "$SED_CMD" "${SED_INPLACE_ARGS[@]}" 's/\([^$]\)tidb_cluster/\1sharedpool_id/g' "$NEXT_GEN_SHARED_FILE"
+require_file_contains "$NEXT_GEN_SHARED_FILE" "sharedpool_id"
 
 echo "Sharedscope dashboard created at '$NEXT_GEN_SHARED_FILE'"

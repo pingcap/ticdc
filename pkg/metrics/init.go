@@ -24,13 +24,13 @@ import (
 
 func InitMetrics(registry *prometheus.Registry) {
 	initServerMetrics(registry)
+	initLoggerMetrics(registry)
 	initSchedulerMetrics(registry)
 	initChangefeedMetrics(registry)
 	initLogCoordinatorMetrics(registry)
 	initDispatcherMetrics(registry)
 	initMessagingMetrics(registry)
 	initSinkMetrics(registry)
-	initPullerMetrics(registry)
 	initEventStoreMetrics(registry)
 	initSchemaStoreMetrics(registry)
 	initEventServiceMetrics(registry)
@@ -43,7 +43,8 @@ func InitMetrics(registry *prometheus.Registry) {
 	kafka.InitMetrics(registry)
 	gc.InitMetrics(registry)
 	metrics.InitCloudStorageMetrics(registry)
-	InitRedoMetrics(registry)
+	initRedoMetrics(registry)
+	initDDLMetrics(registry)
 }
 
 func getKeyspaceLabel() string {

@@ -3,7 +3,8 @@
 # parameter 2: changefeed id
 # parameter 3: retry count
 
-set -ex
+set -euo pipefail
+set -x
 
 tableID=${1}
 changefeedID=${2}
@@ -14,15 +15,24 @@ echo "split table with retry"
 count=0
 
 while [[ $count -lt $retryCount ]]; do
-	result=$(cdc_cli_changefeed split-table-by-region-count -c "$changefeedID" -t $tableID --mode $mode)
-	echo $result
-	success=$(echo $result | sed 's/ PASS.*//' | sed 's/^=== Command to ticdc(new arch). //' | jq -r '.success')
+	# cdc cli may output logs or other non-JSON content; extract the last JSON object with "success".
+	result=$(cdc_cli_changefeed split-table-by-region-count -c "$changefeedID" -t "$tableID" --mode "$mode" 2>&1 || true)
+	echo "$result"
+	success=$(
+		printf '%s' "$result" |
+			jq -Rrs '
+				# scan returns a *stream* (not an array) in jq, and its regex flags do not support dotall.
+				# Use "[\\s\\S]" to match across newlines so pretty-printed JSON objects are detected.
+				([scan("\\{[\\s\\S]*?\\}") | try (fromjson | select(type=="object" and has("success"))) catch empty] | last | .success) // false
+			'
+	)
 
-	if [ "$success" == "true" ]; then
+	if [ "$success" = "true" ]; then
 		exit 0
 	fi
 
 	count=$((count + 1))
+	sleep 1
 done
 
 echo "split table $tableID failed after $retryCount retries"

@@ -73,6 +73,14 @@ var (
 			Help:      "The status of changefeeds",
 		}, []string{getKeyspaceLabel(), "changefeed"})
 
+	ChangefeedErrorInfoGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "owner",
+			Name:      "changefeed_error_info",
+			Help:      "The current warning or failed reason of changefeeds",
+		}, []string{getKeyspaceLabel(), "changefeed", "state", "code", "message"})
+
 	ChangefeedCheckpointTsLagGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
@@ -99,6 +107,7 @@ func initChangefeedMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(CoordinatorCounter)
 	registry.MustRegister(MaintainerGauge)
 	registry.MustRegister(ChangefeedStatusGauge)
+	registry.MustRegister(ChangefeedErrorInfoGauge)
 	registry.MustRegister(ChangefeedCheckpointTsLagGauge)
 	registry.MustRegister(ChangefeedCheckpointTsGauge)
 }

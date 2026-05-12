@@ -113,13 +113,16 @@ func TestChangefeedResumeWithNewCheckpointTs(t *testing.T) {
 		UpstreamID:     1,
 		Keyspace:       "default",
 		ID:             "abc",
+		Config:         &v2.ReplicaConfig{},
+		CheckpointTs:   2,
 		CheckpointTime: api.JSONTime{},
 		Error:          nil,
-	}, nil)
+	}, nil).Times(2)
 	tso := &v2.Tso{
 		Timestamp: time.Now().Unix() * 1000,
 	}
 	f.tso.EXPECT().Query(gomock.Any(), gomock.Any()).Return(tso, nil).AnyTimes()
+	f.changefeeds.EXPECT().GetAllTables(gomock.Any(), gomock.Any(), gomock.Any()).Return(&v2.Tables{}, nil)
 	f.changefeeds.EXPECT().Resume(gomock.Any(), &v2.ResumeChangefeedConfig{
 		OverwriteCheckpointTs: oracle.ComposeTS(tso.Timestamp, tso.LogicTime),
 	}, gomock.Any(), "abc").Return(nil)
@@ -160,13 +163,16 @@ func TestChangefeedResumeWithNewCheckpointTs(t *testing.T) {
 		UpstreamID:     1,
 		Keyspace:       "default",
 		ID:             "abc",
+		Config:         &v2.ReplicaConfig{},
+		CheckpointTs:   2,
 		CheckpointTime: api.JSONTime{},
 		Error:          nil,
-	}, nil)
+	}, nil).Times(2)
 	tso = &v2.Tso{
 		Timestamp: 1,
 	}
 	f.tso.EXPECT().Query(gomock.Any(), gomock.Any()).Return(tso, nil).AnyTimes()
+	f.changefeeds.EXPECT().GetAllTables(gomock.Any(), gomock.Any(), gomock.Any()).Return(&v2.Tables{}, nil)
 	f.changefeeds.EXPECT().Resume(gomock.Any(), &v2.ResumeChangefeedConfig{
 		OverwriteCheckpointTs: 262144,
 	}, gomock.Any(), "abc").

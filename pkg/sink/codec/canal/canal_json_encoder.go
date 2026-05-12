@@ -33,7 +33,7 @@ var bytesDecoder = charmap.ISO8859_1.NewDecoder()
 
 // TODO: we need to reorg this code later, including use util.jsonWriter and other unreasonable code
 func fillColumns(
-	valueMap map[int64]string,
+	valueMap map[int64]optionalString,
 	tableInfo *commonType.TableInfo,
 	onlyHandleKeyColumn bool,
 	out *jwriter.Writer,
@@ -47,10 +47,10 @@ func fillColumns(
 	out.RawByte('{')
 	isFirst := true
 	for _, col := range tableInfo.GetColumns() {
-		if col.IsVirtualGenerated() || !columnSelector.Select(col) {
-			continue
-		}
 		if col != nil {
+			if col.IsVirtualGenerated() || !columnSelector.Select(col) {
+				continue
+			}
 			colID := col.ID
 			if onlyHandleKeyColumn && !tableInfo.IsHandleKey(col.ID) {
 				continue
@@ -62,10 +62,11 @@ func fillColumns(
 			}
 			out.String(col.Name.O)
 			out.RawByte(':')
-			if valueMap[colID] == "null" {
+			optionalStr := valueMap[colID]
+			if optionalStr.isNull {
 				out.RawString("null")
 			} else {
-				out.String(valueMap[colID])
+				out.String(optionalStr.value)
 			}
 		}
 	}
@@ -75,12 +76,12 @@ func fillColumns(
 }
 
 func fillUpdateColumns(
-	newValueMap map[int64]string,
-	oldValueMap map[int64]string,
+	newValueMap, oldValueMap map[int64]optionalString,
 	tableInfo *commonType.TableInfo,
 	onlyHandleKeyColumn bool,
 	onlyOutputUpdatedColumn bool,
 	out *jwriter.Writer,
+	columnSelector commonEvent.Selector,
 ) error {
 	if len(tableInfo.GetColumns()) == 0 {
 		out.RawString("null")
@@ -90,7 +91,10 @@ func fillUpdateColumns(
 	out.RawByte('{')
 	isFirst := true
 	for _, col := range tableInfo.GetColumns() {
-		if col != nil && !col.IsVirtualGenerated() {
+		if col != nil {
+			if col.IsVirtualGenerated() || !columnSelector.Select(col) {
+				continue
+			}
 			colID := col.ID
 			// column equal, do not output it
 			if onlyOutputUpdatedColumn && newValueMap[colID] == oldValueMap[colID] {
@@ -106,10 +110,11 @@ func fillUpdateColumns(
 			}
 			out.String(col.Name.O)
 			out.RawByte(':')
-			if oldValueMap[colID] == "null" {
+			optionalStr := oldValueMap[colID]
+			if optionalStr.isNull {
 				out.RawString("null")
 			} else {
-				out.String(oldValueMap[colID])
+				out.String(optionalStr.value)
 			}
 		}
 	}
@@ -133,7 +138,7 @@ func newJSONMessageForDML(
 
 	columnLen := 0
 	for _, col := range e.TableInfo.GetColumns() {
-		if e.ColumnSelector.Select(col) {
+		if col != nil && !col.IsVirtualGenerated() && e.ColumnSelector.Select(col) {
 			columnLen += 1
 		}
 	}
@@ -203,7 +208,7 @@ func newJSONMessageForDML(
 		out.String("")
 	}
 
-	valueMap := make(map[int64]string, columnLen)                // colId -> value
+	valueMap := make(map[int64]optionalString, columnLen)        // colId -> value
 	javaTypeMap := make(map[int64]common.JavaSQLType, columnLen) // colId -> javaType
 
 	row := e.GetRows()
@@ -287,10 +292,10 @@ func newJSONMessageForDML(
 	} else if e.IsUpdate() {
 		out.RawString(",\"old\":")
 
-		oldValueMap := make(map[int64]string, 0) // colId -> value
+		oldValueMap := make(map[int64]optionalString, 0) // colId -> value
 		preRow := e.GetPreRows()
 		for idx, col := range e.TableInfo.GetColumns() {
-			if !e.ColumnSelector.Select(col) {
+			if col == nil || col.IsVirtualGenerated() || !e.ColumnSelector.Select(col) {
 				continue
 			}
 			value, _ := formatColumnValue(preRow, idx, col)
@@ -298,7 +303,7 @@ func newJSONMessageForDML(
 		}
 
 		if err := fillUpdateColumns(valueMap, oldValueMap, e.TableInfo, onlyHandleKey,
-			config.OnlyOutputUpdatedColumns, out); err != nil {
+			config.OnlyOutputUpdatedColumns, out, e.ColumnSelector); err != nil {
 			return nil, err
 		}
 		out.RawString(",\"data\":")

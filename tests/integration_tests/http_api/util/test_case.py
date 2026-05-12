@@ -262,18 +262,47 @@ def pause_changefeed():
     assert data["error_code"] == "CDC:ErrChangeFeedNotExists"
 
 
+def check_keyspace_guidance():
+    url = BASE_URL0_V2 + "/changefeeds/missing-keyspace/pause"
+    resp = rq.post(url)
+    assert_status_code(resp, rq.codes.bad_request, url)
+    data = resp.json()
+    assert data["error_code"] == "CDC:ErrAPIInvalidParam"
+    assert "please specify --keyspace or -k" in data["error_msg"]
+
+    url = BASE_URL0_V2 + \
+        "/changefeeds/missing-keyspace/pause?keyspace=not-exist"
+    resp = rq.post(url)
+    assert_status_code(resp, rq.codes.bad_request, url)
+    data = resp.json()
+    assert data["error_code"] == "CDC:ErrAPIInvalidParam"
+    assert "does not exist, please check --keyspace or -k" in data["error_msg"]
+
+
 def update_changefeed():
     # update fail
     # can only update a stopped changefeed
     url = BASE_URL0_V2+"/changefeeds/changefeed-test1?keyspace=keyspace1"
-    data = json.dumps({"mounter_worker_num": 32})
+    data = json.dumps({
+        "replica_config": {
+            "mounter": {
+                "worker_num": 32
+            }
+        }
+    })
     headers = {"Content-Type": "application/json"}
     resp = rq.put(url, data=data, headers=headers)
     assert_status_code(resp, rq.codes.bad_request, url)
 
     # update success
     url = BASE_URL0_V2+"/changefeeds/changefeed-test2?keyspace=keyspace1"
-    data = json.dumps({"mounter_worker_num": 32})
+    data = json.dumps({
+        "replica_config": {
+            "mounter": {
+                "worker_num": 32
+            }
+        }
+    })
     headers = {"Content-Type": "application/json"}
     resp = rq.put(url, data=data, headers=headers)
     assert_status_code(resp, rq.codes.ok, url)
@@ -312,7 +341,9 @@ def update_changefeed():
 def resume_changefeed():
     # resume changefeed
     url = BASE_URL1_V2+"/changefeeds/changefeed-test2/resume?keyspace=keyspace1"
-    resp = rq.post(url)
+    data = json.dumps({})
+    headers = {"Content-Type": "application/json"}
+    resp = rq.post(url, data=data, headers=headers)
     assert_status_code(resp, rq.codes.ok, url)
 
     # check if resume changefeed success
@@ -467,6 +498,7 @@ if __name__ == "__main__":
         "list_changefeed": list_changefeed,
         "get_changefeed": get_changefeed,
         "pause_changefeed": pause_changefeed,
+        "check_keyspace_guidance": check_keyspace_guidance,
         "update_changefeed": update_changefeed,
         "resume_changefeed": resume_changefeed,
         "move_table": move_table,

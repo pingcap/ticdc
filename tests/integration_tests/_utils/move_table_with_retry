@@ -11,6 +11,7 @@ tableID=${2}
 changefeedID=${3}
 retryCount=${4}
 mode=${5:-0}
+wait=${6:-true}
 
 echo "move table with retry"
 count=0
@@ -24,7 +25,7 @@ for ((count = 0; count < retryCount; count++)); do
 	fi
 
 	# move table 1 to node2
-	result=$(cdc_cli_changefeed move-table -c "$changefeedID" -t $tableID -d "$node2ID" --mode $mode)
+	result=$(cdc_cli_changefeed move-table -c "$changefeedID" -t $tableID -d "$node2ID" --mode $mode --wait=$wait)
 	echo $result
 	success=$(echo $result | sed 's/ PASS.*//' | sed 's/^=== Command to ticdc(new arch). //' | jq -r '.success')
 

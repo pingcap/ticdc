@@ -115,6 +115,8 @@ func (s *GlobalReactorState) Update(key util.EtcdKey, value []byte, _ bool) erro
 		}
 
 		log.Info("remote capture online", zap.Any("info", newCaptureInfo), zap.String("role", s.Role))
+		// A fresh online event supersedes any pending delayed removal for the same capture.
+		delete(s.toRemoveCaptures, k.CaptureID)
 		if s.onCaptureAdded != nil {
 			s.onCaptureAdded(k.CaptureID, newCaptureInfo.AdvertiseAddr)
 		}

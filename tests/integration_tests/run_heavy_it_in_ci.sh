@@ -30,17 +30,17 @@ group_num=${group#G}
 # 12 CPU cores will be allocated to run each mysql heavy group in CI pipelines.
 mysql_groups=(
 	# G00
-	'api_v2 generate_column many_pk_or_uk multi_source large_txn'
+	'api_v2 generate_column many_pk_or_uk multi_source'
 	# G01
 	'ddl_for_split_tables_with_random_move_table'
 	# G02
 	'ddl_for_split_tables_with_failover'
 	# G03
-	'cdc move_table checkpoint_race_ddl_crash'
+	'cdc move_table in_flight_ddl_during_scheduling checkpoint_race_ddl_crash'
 	# G04
-	'complex_transaction syncpoint syncpoint_check_ts random_drop_message'
+	'complex_transaction http_api_tls_with_user_auth'
 	# G05
-	'ddl_for_split_tables_with_merge_and_split'
+	'ddl_for_split_tables_with_merge_and_split syncpoint in_flight_syncpoint_during_scheduling syncpoint_check_ts random_drop_message'
 	# G06
 	'ddl_for_split_tables_with_random_merge_and_split'
 	# G07
@@ -54,7 +54,7 @@ mysql_groups=(
 	# G11
 	'multi_changefeeds ddl_wait ddl_reentrant force_replicate_table multi_source'
 	# G12
-	'ddl_with_random_move_table'
+	'ddl_with_random_move_table http_api_tls'
 	# G13
 	'tidb_mysql_test fail_over region_merge fail_over_ddl_mix_random_delay'
 	# G14
@@ -72,7 +72,8 @@ kafka_groups=(
 	# G02
 	'canal_json_handle_key_only ddl_for_split_tables_with_failover'
 	# G03
-	'canal_json_adapter_compatibility ddl_for_split_tables_with_merge_and_split'
+	# 'canal_json_adapter_compatibility ddl_for_split_tables_with_merge_and_split'
+	'ddl_for_split_tables_with_merge_and_split'
 	# G04
 	'open_protocol_claim_check open_protocol_handle_key_only random_drop_message'
 	# G05
@@ -88,13 +89,13 @@ kafka_groups=(
 	# G10
 	'kafka_column_selector kafka_column_selector_avro ddl_with_random_move_table'
 	# G11
-	'fail_over region_merge multi_changefeeds'
+	'fail_over region_merge multi_changefeeds split_table_check'
 	# G12
 	'ddl_for_split_tables_random_schedule'
 	# G13
 	'debezium01 fail_over_ddl_mix'
 	# G14
-	'debezium02'
+	'debezium_basic debezium02'
 	# G15
 	'debezium03'
 )
@@ -130,7 +131,7 @@ pulsar_groups=(
 	# G13
 	'debezium01 fail_over_ddl_mix'
 	# G14
-	'debezium02'
+	'debezium_basic debezium02'
 	# G15
 	'debezium03'
 )

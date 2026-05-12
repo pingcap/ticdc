@@ -23,10 +23,85 @@ import (
 	"strings"
 
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/util"
 	pd "github.com/tikv/pd/client"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 )
+
+// RedactInfoLogType represents log redaction mode with support for boolean and string values.
+// This type enables PD/TiKV-compatible boolean configs while maintaining TiCDC's permissive string parsing.
+//
+// Supported values in TOML/JSON:
+//   - Boolean: true (ON), false (OFF)
+//   - String: "off", "on", "marker" (case-insensitive), plus aliases "true"/"false", "enable"/"disable", "1"/"0"
+//
+// The value is stored as a string internally using canonical forms: "OFF", "ON", "MARKER" (empty string for unset).
+type RedactInfoLogType string
+
+// UnmarshalTOML implements toml.Unmarshaler interface for RedactInfoLogType.
+// Accepts boolean (true→ON, false→OFF) or string values.
+// String values are validated and converted to canonical form (OFF/ON/MARKER).
+func (r *RedactInfoLogType) UnmarshalTOML(data interface{}) error {
+	switch v := data.(type) {
+	case bool:
+		if v {
+			*r = "ON"
+		} else {
+			*r = "OFF"
+		}
+		return nil
+	case string:
+		parsed, err := util.ParseRedactMode(v)
+		if err != nil {
+			return err
+		}
+		*r = RedactInfoLogType(parsed)
+		return nil
+	default:
+		return errors.Errorf("invalid redact-info-log value type: %T, expected bool or string", data)
+	}
+}
+
+// UnmarshalJSON implements json.Unmarshaler interface for RedactInfoLogType.
+// Accepts boolean (true→ON, false→OFF) or string values.
+// String values are validated and converted to canonical form (OFF/ON/MARKER).
+func (r *RedactInfoLogType) UnmarshalJSON(data []byte) error {
+	// Try boolean first
+	var boolVal bool
+	if err := json.Unmarshal(data, &boolVal); err == nil {
+		if boolVal {
+			*r = "ON"
+		} else {
+			*r = "OFF"
+		}
+		return nil
+	}
+
+	// Try string
+	var strVal string
+	if err := json.Unmarshal(data, &strVal); err == nil {
+		parsed, err := util.ParseRedactMode(strVal)
+		if err != nil {
+			return err
+		}
+		*r = RedactInfoLogType(parsed)
+		return nil
+	}
+
+	return errors.Errorf("invalid redact-info-log value: %s, expected bool or string", string(data))
+}
+
+// MarshalJSON implements json.Marshaler interface for RedactInfoLogType.
+// Returns the string value or omits if empty (when used with omitempty tag).
+func (r RedactInfoLogType) MarshalJSON() ([]byte, error) {
+	return json.Marshal(string(r))
+}
+
+// String returns the string representation of the redaction mode.
+func (r RedactInfoLogType) String() string {
+	return string(r)
+}
 
 // Credential holds necessary path parameter to build a tls.Config
 type Credential struct {
@@ -46,6 +121,12 @@ type Credential struct {
 
 	ClientUserRequired bool     `toml:"client-user-required" json:"client-user-required"`
 	ClientAllowedUser  []string `toml:"client-allowed-user" json:"client-allowed-user"`
+
+	// RedactInfoLog controls log redaction to prevent sensitive data from appearing in logs.
+	// Accepts boolean (true→ON, false→OFF) or string values ("off", "on", "marker").
+	// Default: OFF (no redaction). The omitempty tag ensures backward compatibility by
+	// omitting this field from JSON output when unset.
+	RedactInfoLog RedactInfoLogType `toml:"redact-info-log" json:"redact-info-log,omitempty"`
 }
 
 // Value implements the driver.Valuer interface

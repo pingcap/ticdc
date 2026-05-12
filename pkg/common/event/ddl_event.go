@@ -22,6 +22,8 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser"
+	"github.com/pingcap/tidb/pkg/parser/ast"
 	"go.uber.org/zap"
 )
 
@@ -41,14 +43,23 @@ type DDLEvent struct {
 	SchemaID   int64  `json:"schema_id"`
 	SchemaName string `json:"schema_name"`
 	TableName  string `json:"table_name"`
+
 	// the following two fields are just used for RenameTable,
 	// they are the old schema/table name of the table
-	ExtraSchemaName string            `json:"extra_schema_name"`
-	ExtraTableName  string            `json:"extra_table_name"`
-	Query           string            `json:"query"`
-	TableInfo       *common.TableInfo `json:"-"`
-	StartTs         uint64            `json:"start_ts"`
-	FinishedTs      uint64            `json:"finished_ts"`
+	ExtraSchemaName string `json:"extra_schema_name"`
+	ExtraTableName  string `json:"extra_table_name"`
+
+	// target related fields carry routed names.
+	// They are set after the unmarshal, so no need to be serialized.
+	targetSchemaName      string `json:"-"`
+	targetTableName       string `json:"-"`
+	targetExtraSchemaName string `json:"-"`
+	targetExtraTableName  string `json:"-"`
+
+	Query      string            `json:"query"`
+	TableInfo  *common.TableInfo `json:"-"`
+	StartTs    uint64            `json:"start_ts"`
+	FinishedTs uint64            `json:"finished_ts"`
 	// The seq of the event. It is set by event service.
 	Seq uint64 `json:"seq"`
 	// The epoch of the event. It is set by event service.
@@ -92,7 +103,7 @@ type DDLEvent struct {
 	eventSize int64 `json:"-"`
 
 	// for simple protocol
-	IsBootstrap bool `msg:"-"`
+	IsBootstrap bool `json:"-"`
 	// NotSync is used to indicate whether the event should be synced to downstream.
 	// If it is true, sink should not sync this event to downstream.
 	// It is used for some special DDL events that do not need to be synced,
@@ -104,7 +115,55 @@ type DDLEvent struct {
 	// to ensure the new truncated table can be handled correctly.
 	// If the DDL involves multiple tables, this field is not effective.
 	// The multiple table DDL event will be handled by filtering querys and table infos.
-	NotSync bool `msg:"not_sync"`
+	// NOTE: DDLEventVersion1 still marshals the struct with encoding/json.
+	// We use json:"not_sync" as the canonical key and keep custom MarshalJSON/
+	// UnmarshalJSON compatibility so both `not_sync` and legacy `NotSync`
+	// are interoperable in mixed-version deployment.
+	NotSync bool `json:"not_sync"`
+
+	// IndexIDs store the add index ids in SQL order for add index and multi schema change DDLs.
+	// MySQL sink uses them to recover anonymous index names.
+	IndexIDs []int64 `json:"index_ids"`
+}
+
+type ddlEventJSONAlias DDLEvent
+
+type ddlEventJSONCompat struct {
+	ddlEventJSONAlias
+	NotSyncLegacy bool `json:"NotSync"`
+}
+
+type ddlEventJSONDecodeCompat struct {
+	*ddlEventJSONAlias
+	NotSyncLegacy *bool `json:"NotSync"`
+	NotSyncNew    *bool `json:"not_sync"`
+}
+
+// MarshalJSON encodes both new and legacy NotSync keys for mixed-version compatibility.
+func (d DDLEvent) MarshalJSON() ([]byte, error) {
+	return json.Marshal(ddlEventJSONCompat{
+		ddlEventJSONAlias: ddlEventJSONAlias(d),
+		NotSyncLegacy:     d.NotSync,
+	})
+}
+
+// UnmarshalJSON accepts both `not_sync` and legacy `NotSync` keys.
+// If both keys are present, `not_sync` takes precedence.
+func (d *DDLEvent) UnmarshalJSON(data []byte) error {
+	compat := ddlEventJSONDecodeCompat{
+		ddlEventJSONAlias: (*ddlEventJSONAlias)(d),
+	}
+	if err := json.Unmarshal(data, &compat); err != nil {
+		return err
+	}
+	if compat.NotSyncNew != nil {
+		d.NotSync = *compat.NotSyncNew
+		return nil
+	}
+	if compat.NotSyncLegacy != nil {
+		d.NotSync = *compat.NotSyncLegacy
+	}
+	return nil
 }
 
 func (d *DDLEvent) String() string {
@@ -157,6 +216,34 @@ func (d *DDLEvent) GetExtraTableName() string {
 	return d.ExtraTableName
 }
 
+func (d *DDLEvent) GetTargetSchemaName() string {
+	if d.targetSchemaName != "" {
+		return d.targetSchemaName
+	}
+	return d.SchemaName
+}
+
+func (d *DDLEvent) GetTargetTableName() string {
+	if d.targetTableName != "" {
+		return d.targetTableName
+	}
+	return d.TableName
+}
+
+func (d *DDLEvent) GetTargetExtraSchemaName() string {
+	if d.targetExtraSchemaName != "" {
+		return d.targetExtraSchemaName
+	}
+	return d.ExtraSchemaName
+}
+
+func (d *DDLEvent) GetTargetExtraTableName() string {
+	if d.targetExtraTableName != "" {
+		return d.targetExtraTableName
+	}
+	return d.ExtraTableName
+}
+
 // GetTableID returns the logic table ID of the event.
 // it returns 0 when there is no tableinfo
 func (d *DDLEvent) GetTableID() int64 {
@@ -166,6 +253,7 @@ func (d *DDLEvent) GetTableID() int64 {
 	return 0
 }
 
+// GetEvents split the multi tables DDL into single table DDLs.
 func (d *DDLEvent) GetEvents() []*DDLEvent {
 	// Some ddl event may be multi-events, we need to split it into multiple messages.
 	// Such as rename table test.table1 to test.table10, test.table2 to test.table20
@@ -186,18 +274,23 @@ func (d *DDLEvent) GetEvents() []*DDLEvent {
 		}
 		for i, info := range d.MultipleTableInfos {
 			event := &DDLEvent{
-				Version:    d.Version,
-				Type:       byte(t),
-				SchemaName: info.GetSchemaName(),
-				TableName:  info.GetTableName(),
-				TableInfo:  info,
-				Query:      queries[i],
-				StartTs:    d.StartTs,
-				FinishedTs: d.FinishedTs,
+				Version:          d.Version,
+				Type:             byte(t),
+				SchemaName:       info.GetSchemaName(),
+				TableName:        info.GetTableName(),
+				targetSchemaName: info.GetTargetSchemaName(),
+				targetTableName:  info.GetTargetTableName(),
+				TableInfo:        info,
+				Query:            queries[i],
+				StartTs:          d.StartTs,
+				FinishedTs:       d.FinishedTs,
 			}
 			if model.ActionType(d.Type) == model.ActionRenameTables {
 				event.ExtraSchemaName = d.TableNameChange.DropName[i].SchemaName
 				event.ExtraTableName = d.TableNameChange.DropName[i].TableName
+				targetExtraSchemaName, targetExtraTableName := extractRenameTargetExtraFromQuery(queries[i])
+				event.targetExtraSchemaName = targetExtraSchemaName
+				event.targetExtraTableName = targetExtraTableName
 			}
 			events = append(events, event)
 		}
@@ -205,6 +298,19 @@ func (d *DDLEvent) GetEvents() []*DDLEvent {
 	default:
 	}
 	return []*DDLEvent{d}
+}
+
+func extractRenameTargetExtraFromQuery(query string) (string, string) {
+	stmt, err := parser.New().ParseOneStmt(query, "", "")
+	if err != nil {
+		log.Panic("parse split rename query failed", zap.String("query", query), zap.Error(err))
+	}
+	renameStmt, ok := stmt.(*ast.RenameTableStmt)
+	if !ok || len(renameStmt.TableToTables) == 0 {
+		log.Panic("unexpected split rename query", zap.String("query", query), zap.Any("stmt", stmt))
+	}
+	oldTable := renameStmt.TableToTables[0].OldTable
+	return oldTable.Schema.O, oldTable.Name.O
 }
 
 func (d *DDLEvent) GetSeq() uint64 {
@@ -338,7 +444,6 @@ func (t DDLEvent) encodeV1() ([]byte, error) {
 	multipleTableInfosDataSize := make([]byte, 8)
 	binary.BigEndian.PutUint64(multipleTableInfosDataSize, uint64(len(t.MultipleTableInfos)))
 	data = append(data, multipleTableInfosDataSize...)
-
 	return data, nil
 }
 
@@ -347,35 +452,72 @@ func (t *DDLEvent) decodeV1(data []byte) error {
 	t.eventSize = int64(len(data))
 
 	end := len(data)
-	multipleTableInfosDataSize := binary.BigEndian.Uint64(data[end-8 : end])
-	for i := 0; i < int(multipleTableInfosDataSize); i++ {
-		tableInfoDataSize := binary.BigEndian.Uint64(data[end-8 : end])
+	if end < 8 {
+		return fmt.Errorf("invalid DDLEvent data: length %d is too short", len(data))
+	}
+
+	multipleTableInfoCount := binary.BigEndian.Uint64(data[end-8 : end])
+	if multipleTableInfoCount > uint64((end-8)/8) {
+		return fmt.Errorf("invalid DDLEvent data: too many multiple table infos, count=%d", multipleTableInfoCount)
+	}
+	end -= 8
+
+	t.MultipleTableInfos = t.MultipleTableInfos[:0]
+	if multipleTableInfoCount > 0 {
+		multipleTableInfos := make([]*common.TableInfo, int(multipleTableInfoCount))
+		for i := int(multipleTableInfoCount) - 1; i >= 0; i-- {
+			if end < 8 {
+				return fmt.Errorf("invalid DDLEvent data: missing table info size for multiple table infos")
+			}
+			tableInfoDataSize := binary.BigEndian.Uint64(data[end-8 : end])
+			if tableInfoDataSize > uint64(end-8) {
+				return fmt.Errorf("invalid DDLEvent data: invalid multiple table info size=%d", tableInfoDataSize)
+			}
+			tableInfoData := data[end-8-int(tableInfoDataSize) : end-8]
+			info, err := common.UnmarshalJSONToTableInfo(tableInfoData)
+			if err != nil {
+				return err
+			}
+			multipleTableInfos[i] = info
+			end -= 8 + int(tableInfoDataSize)
+		}
+		t.MultipleTableInfos = append(t.MultipleTableInfos, multipleTableInfos...)
+	}
+
+	if end < 8 {
+		return fmt.Errorf("invalid DDLEvent data: missing tableInfoDataSize")
+	}
+	tableInfoDataSize := binary.BigEndian.Uint64(data[end-8 : end])
+	if tableInfoDataSize > uint64(end-8) {
+		return fmt.Errorf("invalid DDLEvent data: invalid table info size=%d", tableInfoDataSize)
+	}
+	var err error
+	t.TableInfo = nil
+	if tableInfoDataSize > 0 {
 		tableInfoData := data[end-8-int(tableInfoDataSize) : end-8]
 		info, err := common.UnmarshalJSONToTableInfo(tableInfoData)
 		if err != nil {
 			return err
 		}
-		t.MultipleTableInfos = append(t.MultipleTableInfos, info)
-		end -= 8 + int(tableInfoDataSize)
-	}
-	end -= 8 + int(multipleTableInfosDataSize)
-	tableInfoDataSize := binary.BigEndian.Uint64(data[end-8 : end])
-	var err error
-	if tableInfoDataSize > 0 {
-		tableInfoData := data[end-8-int(tableInfoDataSize) : end-8]
-		t.TableInfo, err = common.UnmarshalJSONToTableInfo(tableInfoData)
-		if err != nil {
-			return err
-		}
+		t.TableInfo = info
 	}
 	end -= 8 + int(tableInfoDataSize)
+
+	if end < 8 {
+		return fmt.Errorf("invalid DDLEvent data: missing dispatcherIDDataSize")
+	}
 	dispatcherIDDatSize := binary.BigEndian.Uint64(data[end-8 : end])
+	if dispatcherIDDatSize > uint64(end-8) {
+		return fmt.Errorf("invalid DDLEvent data: invalid dispatcher ID size=%d", dispatcherIDDatSize)
+	}
 	dispatcherIDData := data[end-8-int(dispatcherIDDatSize) : end-8]
 	err = t.DispatcherID.Unmarshal(dispatcherIDData)
 	if err != nil {
 		return err
 	}
-	err = json.Unmarshal(data[:end-8-int(dispatcherIDDatSize)], t)
+
+	restDataEnd := end - 8 - int(dispatcherIDDatSize)
+	err = json.Unmarshal(data[:restDataEnd], t)
 	if err != nil {
 		return err
 	}
@@ -398,13 +540,72 @@ func (t *DDLEvent) IsPaused() bool {
 	return false
 }
 
-func (t *DDLEvent) Len() int32 {
-	return 1
+// NewRoutedDDLEvent builds a routed DDL event from the origin event and final routed fields.
+func NewRoutedDDLEvent(
+	d *DDLEvent,
+	query string,
+	targetSchemaName, targetTableName string,
+	targetExtraSchemaName, targetExtraTableName string,
+	tableInfo *common.TableInfo,
+	multipleTableInfos []*common.TableInfo,
+	blockedTableNames []SchemaTableName,
+) *DDLEvent {
+	if d == nil {
+		return nil
+	}
+
+	return &DDLEvent{
+		Version:               d.Version,
+		DispatcherID:          d.DispatcherID,
+		Type:                  d.Type,
+		SchemaID:              d.SchemaID,
+		SchemaName:            d.SchemaName,
+		TableName:             d.TableName,
+		ExtraSchemaName:       d.ExtraSchemaName,
+		ExtraTableName:        d.ExtraTableName,
+		targetSchemaName:      targetSchemaName,
+		targetTableName:       targetTableName,
+		targetExtraSchemaName: targetExtraSchemaName,
+		targetExtraTableName:  targetExtraTableName,
+		Query:                 query,
+		TableInfo:             tableInfo,
+		StartTs:               d.StartTs,
+		FinishedTs:            d.FinishedTs,
+		Seq:                   d.Seq,
+		Epoch:                 d.Epoch,
+		// MultipleTableInfos and BlockedTableNames carry table names used by downstream
+		// execution paths, so the routed versions must be passed in explicitly.
+		MultipleTableInfos: multipleTableInfos,
+		BlockedTableNames:  blockedTableNames,
+		// The following fields do not participate in table route name rewriting,
+		// so the routed event keeps the original values from the source event.
+		BlockedTables:     d.BlockedTables,
+		NeedDroppedTables: d.NeedDroppedTables,
+		NeedAddedTables:   d.NeedAddedTables,
+		UpdatedSchemas:    d.UpdatedSchemas,
+		TableNameChange:   d.TableNameChange,
+		TiDBOnly:          d.TiDBOnly,
+		BDRMode:           d.BDRMode,
+		Err:               d.Err,
+		PostTxnFlushed:    clonePostTxnFlushed(d.PostTxnFlushed),
+		eventSize:         d.eventSize,
+		IsBootstrap:       d.IsBootstrap,
+		NotSync:           d.NotSync,
+	}
 }
 
-type SchemaTableName struct {
-	SchemaName string
-	TableName  string
+func clonePostTxnFlushed(postTxnFlushed []func()) []func() {
+	if postTxnFlushed == nil {
+		return nil
+	}
+
+	cloned := make([]func(), len(postTxnFlushed))
+	copy(cloned, postTxnFlushed)
+	return cloned
+}
+
+func (t *DDLEvent) Len() int32 {
+	return 1
 }
 
 type DB struct {

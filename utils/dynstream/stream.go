@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/utils/deque"
 	"go.uber.org/zap"
 )
@@ -31,7 +32,8 @@ const BlockLenInPendingQueue = 32
 // The handleLoop handles the events.
 // While if UseBuffer is false, the receiver is not needed, and the handleLoop directly receives the events.
 type stream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
-	id int
+	module string
+	id     int
 
 	handler Handler[A, P, T, D]
 
@@ -46,6 +48,7 @@ type stream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 
 	// The queue to store the pending events of this stream.
 	eventQueue eventQueue[A, P, T, D, H]
+	batcher    *batcher[T]
 
 	option Option
 
@@ -60,13 +63,17 @@ type stream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 
 func newStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
 	id int,
+	component string,
 	handler H,
 	option Option,
+	batchConfigRegistry *areaBatchConfigRegistry[A],
 ) *stream[A, P, T, D, H] {
 	s := &stream[A, P, T, D, H]{
+		module:     component,
 		id:         id,
 		handler:    handler,
-		eventQueue: newEventQueue(option, handler),
+		eventQueue: newEventQueue(handler, batchConfigRegistry),
+		batcher:    newDefaultBatcher[T](),
 		option:     option,
 		startTime:  time.Now(),
 	}
@@ -105,7 +112,6 @@ func (s *stream[A, P, T, D, H]) addEvent(event eventWrap[A, P, T, D, H]) {
 	// Fast path: try direct send without blocking to avoid context check
 	select {
 	case eventChan <- event:
-		return
 	default:
 		// Slow path: with close check while waiting
 		select {
@@ -157,10 +163,10 @@ func (s *stream[A, P, T, D, H]) receiver() {
 	}()
 
 	for {
-		event, ok := buffer.FrontRef()
 		if s.closed.Load() {
 			return
 		}
+		event, ok := buffer.FrontRef()
 		if !ok {
 			select {
 			case <-s.ctx.Done():
@@ -227,15 +233,17 @@ func (s *stream[A, P, T, D, H]) handleLoop() {
 	// Declared here to avoid repeated allocation.
 	var (
 		eventQueueEmpty = false
-		eventBuf        = make([]T, 0, s.option.BatchCount)
+		eventBuf        []T
 		zeroT           T
 		cleanUpEventBuf = func() {
 			for i := range eventBuf {
 				eventBuf[i] = zeroT
 			}
-			eventBuf = eventBuf[:0]
+			eventBuf = nil
 		}
-		path *pathInfo[A, P, T, D, H]
+		path     *pathInfo[A, P, T, D, H]
+		nBytes   int
+		duration time.Duration
 	)
 
 	// For testing. Don't handle events until this wait group is done.
@@ -278,7 +286,7 @@ Loop:
 				handleEvent(e)
 				eventQueueEmpty = false
 			default:
-				eventBuf, path = s.eventQueue.popEvents(eventBuf)
+				eventBuf, path, nBytes, duration = s.eventQueue.popEvents(s.batcher)
 				if len(eventBuf) == 0 {
 					eventQueueEmpty = true
 					continue Loop
@@ -288,8 +296,11 @@ Loop:
 					continue Loop
 				}
 
-				path.lastHandleEventTs.Store(uint64(s.handler.GetTimestamp(eventBuf[0])))
+				metrics.DynamicStreamBatchDuration.WithLabelValues(s.module, path.metricLabel).Observe(float64(duration.Seconds()))
+				metrics.DynamicStreamBatchCount.WithLabelValues(s.module, path.metricLabel).Observe(float64(len(eventBuf)))
+				metrics.DynamicStreamBatchBytes.WithLabelValues(s.module, path.metricLabel).Observe(float64(nBytes))
 
+				path.lastHandleEventTs.Store(uint64(s.handler.GetTimestamp(eventBuf[0])))
 				path.blocking.Store(s.handler.Handle(path.dest, eventBuf...))
 
 				if path.blocking.Load() {
@@ -315,6 +326,8 @@ type pathInfo[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 	path P
 	dest D
 
+	metricLabel string
+
 	// The current stream this path belongs to.
 	stream *stream[A, P, T, D, H]
 	// This field is used to mark the path as removed, so that the handle goroutine can ignore it.
@@ -336,9 +349,12 @@ type pathInfo[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 	lastHandleEventTs atomic.Uint64
 }
 
-func newPathInfo[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](area A, path P, dest D) *pathInfo[A, P, T, D, H] {
+func newPathInfo[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
+	area A, metricLabel string, path P, dest D,
+) *pathInfo[A, P, T, D, H] {
 	pi := &pathInfo[A, P, T, D, H]{
 		area:         area,
+		metricLabel:  metricLabel,
 		path:         path,
 		dest:         dest,
 		pendingQueue: deque.NewDeque[eventWrap[A, P, T, D, H]](BlockLenInPendingQueue),

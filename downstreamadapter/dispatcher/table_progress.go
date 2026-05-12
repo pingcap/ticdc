@@ -193,8 +193,8 @@ func (p *TableProgress) GetLastSyncedTs() uint64 {
 // GetEventSizePerSecond returns the sum-dml-event-size/s between the last query time and now.
 // Besides, it clears the cumulateEventSize and update lastQueryTime to prepare for the next query.
 func (p *TableProgress) GetEventSizePerSecond() float32 {
-	p.rwMutex.RLock()
-	defer p.rwMutex.RUnlock()
+	p.rwMutex.Lock()
+	defer p.rwMutex.Unlock()
 
 	eventSizePerSecond := float32(p.cumulateEventSize) / float32(time.Since(p.lastQueryTime).Seconds())
 	p.cumulateEventSize = 0
