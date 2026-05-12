@@ -104,8 +104,19 @@ func (s *EventTestHelper) ApplyJob(job *timodel.Job) {
 		}
 	}
 
+<<<<<<< HEAD
 	info := common.WrapTableInfo(job.SchemaName, tableInfo)
 	info.InitPrivateFields()
+=======
+	s.storeTableInfo(job.SchemaName, tableInfo)
+}
+
+func (s *EventTestHelper) storeTableInfo(schemaName string, tableInfo *timodel.TableInfo) {
+	info := common.WrapTableInfo(schemaName, tableInfo)
+	if info == nil {
+		return
+	}
+>>>>>>> 5521ba376 (tableInfo: init the private sql lazily (#5029))
 	key := toTableInfosKey(info.GetSchemaName(), info.GetTableName())
 	if tableInfo.Partition != nil {
 		if _, ok := s.partitionIDs[key]; !ok {
