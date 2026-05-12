@@ -41,8 +41,7 @@ func (r Router) rewriteParserBackedDDLQuery(ddl *commonEvent.DDLEvent) (string, 
 	)
 	for i := range queries {
 		query := queries[i]
-		newQuery, err := r.rewriteSingleDDLQueryWithBlockedTableNames(
-			query, ddl.GetSchemaName(), ddl.BlockedTableNames)
+		newQuery, err := r.rewriteSingleDDLQuery(query, ddl.GetSchemaName(), ddl.BlockedTableNames)
 		if err != nil {
 			return "", err
 		}
@@ -79,11 +78,7 @@ func splitMultiStmtDDLQuery(query string) ([]string, error) {
 	return queries, nil
 }
 
-func (r Router) rewriteSingleDDLQuery(query string, defaultSchema string) (string, error) {
-	return r.rewriteSingleDDLQueryWithBlockedTableNames(query, defaultSchema, nil)
-}
-
-func (r Router) rewriteSingleDDLQueryWithBlockedTableNames(
+func (r Router) rewriteSingleDDLQuery(
 	query string,
 	defaultSchema string,
 	blockedTableNames []commonEvent.SchemaTableName,
@@ -144,26 +139,60 @@ func fillDefaultSchema(tables []commonEvent.SchemaTableName, defaultSchema strin
 	}
 }
 
-// resolveUnqualifiedReferences fills schemas only when the DDL event carries
-// exact metadata. It rejects unqualified read dependencies that would otherwise
-// be wrongly resolved with the DDL primary table schema.
+// resolveUnqualifiedReferences ensures every table reference extracted from
+// the DDL AST carries a non-empty schema name before the router applies
+// routing rules. Without this, fillDefaultSchema would later assign the DDL
+// event's own schema to every unqualified table, which is wrong when a table
+// belongs to a different schema than the DDL target.
+//
+// It handles two DDL patterns where the parser sees multiple tables and at
+// least one reference may lack a schema qualifier:
+//
+// CREATE TABLE LIKE (ast.CreateTableStmt with non-nil ReferTable):
+//
+//	The ReferTable is the LIKE source. If it has no schema, the router needs
+//	to know which schema the source table lives in. The blockedTableNames
+//	parameter carries upstream metadata (e.g. from job.InvolvingSchemaInfo)
+//	that maps the unqualified table name to its real schema.
+//
+//	Example:
+//	  -- Session is in source_extra_db, DDL creates a table in source_extra_db
+//	  -- but the LIKE source "users" belongs to source_db.
+//	  CREATE TABLE `source_extra_db`.`external_users` LIKE `users`
+//	  -> extractTableNames -> [{source_extra_db, external_users}, {"", users}]
+//	  -> fillDefaultSchema would wrongly set users' schema to source_extra_db
+//	  -> blockedTableNames carries {source_db, users} from upstream metadata
+//	  -> this function patches sourceTables[1].SchemaName = "source_db"
+//
+// CREATE TABLE AS SELECT / CREATE VIEW (ast.CreateTableStmt with non-nil
+//
+//	Select, or ast.CreateViewStmt):
+//	The SELECT body may reference tables from other schemas without
+//	qualifiers. Without upstream schema metadata for every referenced table,
+//	the router cannot safely determine the correct schema and must reject
+//	the rewrite.
+//
+//	Example:
+//	  CREATE VIEW `target_db`.`v` AS SELECT `id` FROM `users`
+//	  -> extractTableNames -> [{target_db, v}, {"", users}]
+//	  -> fillDefaultSchema would set users' schema to "target_db" (wrong)
+//	  -> no metadata available to resolve, return ErrTableRoutingFailed
+//
+// For DDLs where the target table itself has no schema qualifier (e.g. USE
+// db + CREATE TABLE t LIKE u), fillDefaultSchema handles both the target
+// and source correctly because they all belong to the same session schema.
 func resolveUnqualifiedReferences(
 	stmt ast.StmtNode,
 	sourceTables []commonEvent.SchemaTableName,
 	blockedTableNames []commonEvent.SchemaTableName,
 ) error {
-	errUnqualifiedReference := func() error {
-		return errors.ErrTableRoutingFailed.GenWithStack(
-			"table routing cannot rewrite ddl with unqualified referenced table because upstream default schema is unavailable: %T",
-			stmt)
-	}
-
 	switch s := stmt.(type) {
 	case *ast.CreateTableStmt:
 		if s.Table == nil || s.Table.Schema.O == "" {
 			return nil
 		}
-		if isUnqualifiedTableName(s.ReferTable) {
+
+		if s.ReferTable != nil && s.ReferTable.Schema.O != "" && s.ReferTable.Name.O != "" {
 			for _, blockedTableName := range blockedTableNames {
 				if blockedTableName.SchemaName != "" &&
 					strings.EqualFold(blockedTableName.TableName, s.ReferTable.Name.O) &&
@@ -173,25 +202,27 @@ func resolveUnqualifiedReferences(
 				}
 			}
 			if len(sourceTables) <= 1 || sourceTables[1].SchemaName == "" {
-				return errUnqualifiedReference()
+				return errors.ErrTableRoutingFailed.GenWithStack(
+					"table routing cannot rewrite ddl with unqualified referenced table because upstream default schema is unavailable: %T",
+					stmt)
 			}
 		}
 		if s.Select != nil && hasUnqualifiedTableName(sourceTables[1:]) {
-			return errUnqualifiedReference()
+			return errors.ErrTableRoutingFailed.GenWithStack(
+				"table routing cannot rewrite ddl with unqualified referenced table because upstream default schema is unavailable: %T",
+				stmt)
 		}
 	case *ast.CreateViewStmt:
 		if s.ViewName == nil || s.ViewName.Schema.O == "" {
 			return nil
 		}
 		if hasUnqualifiedTableName(sourceTables[1:]) {
-			return errUnqualifiedReference()
+			return errors.ErrTableRoutingFailed.GenWithStack(
+				"table routing cannot rewrite ddl with unqualified referenced table because upstream default schema is unavailable: %T",
+				stmt)
 		}
 	}
 	return nil
-}
-
-func isUnqualifiedTableName(table *ast.TableName) bool {
-	return table != nil && table.Schema.O == "" && table.Name.O != ""
 }
 
 func hasUnqualifiedTableName(tables []commonEvent.SchemaTableName) bool {
