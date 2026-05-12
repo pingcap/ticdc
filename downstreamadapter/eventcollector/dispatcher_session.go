@@ -28,19 +28,22 @@ import (
 
 type dispatcherConnState struct {
 	sync.RWMutex
-	// removed marks the session as terminal. Once set, control-plane state is no
-	// longer mutated and late signal events are ignored.
+	// removed marks the session as terminal after removal starts. New
+	// registrations, resets, and late signal events are ignored once it is set.
 	removed bool
-	// currentEventServiceID is the event service currently used to receive data.
-	// It is set only after a ready signal has been accepted.
+	// currentEventServiceID is the event service whose ready signal has been
+	// accepted and whose data or heartbeat progress is currently trusted.
 	currentEventServiceID node.ID
-	// localReadyPending is set after a local register request is sent and remains
-	// true until local ready is accepted or the session is cleared.
+	// localReadyPending means the local register request has been sent but local
+	// ready has not been accepted. It may be true while a remote service is
+	// already current; local ready wins when it arrives later.
 	localReadyPending bool
-	// pendingRemoteTarget tracks the remote event service currently being probed.
-	// It is non-empty only while waiting for ready/not reusable from that remote.
+	// pendingRegisterTarget is the remote event service with an in-flight reuse
+	// probe. It waits for either ready or not reusable, and only one remote probe
+	// is active at a time.
 	pendingRegisterTarget node.ID
-	// the remote event services which may contain data this dispatcher needed
+	// remoteCandidates are the remaining remote services to probe after the
+	// current pending remote reports not reusable.
 	remoteCandidates []string
 }
 
@@ -67,11 +70,12 @@ func appendCleanupTarget(cleanupTargets []node.ID, target node.ID, skip node.ID)
 // It does not send messages. Its job is to apply atomic state transitions and
 // return the side-effect inputs that dispatcherSession should execute.
 //
-// The state machine tracks three orthogonal pieces of control-plane state:
-// 1. currentEventServiceID: which event service is currently serving data.
-// 2. localReadyPending: whether local register has been sent but local ready has
-//    not been accepted yet.
-// 3. pendingRegisterTarget: which remote candidate is currently being probed.
+// The state machine tracks three independent control-plane facts:
+// 1. currentEventServiceID: the event service currently trusted for data.
+// 2. localReadyPending: whether the local registration is still waiting for
+//    local ready.
+// 3. pendingRegisterTarget: the remote reuse probe currently waiting for ready
+//    or not reusable.
 //
 // This lets the collector represent the common startup path correctly:
 // - after add: current="", localReadyPending=true, pendingRemote=""
@@ -82,8 +86,9 @@ func appendCleanupTarget(cleanupTargets []node.ID, target node.ID, skip node.ID)
 // - after local ready later: current="<local>", localReadyPending=false,
 //   pendingRemote=""
 //
-// In other words, waiting for local ready and waiting for remote ready are not
-// mutually exclusive states.
+// This means local registration and remote probing can overlap. A remote service
+// may serve data first, but a later local ready still moves the dispatcher back
+// to local and cleans up remote registrations.
 
 // Registration state transitions.
 func (d *dispatcherConnState) beginRegisterToLocal() bool {
