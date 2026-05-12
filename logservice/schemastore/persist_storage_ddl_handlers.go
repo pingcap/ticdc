@@ -628,11 +628,7 @@ func setReferTableForCreateTableLike(event *PersistedDDLEvent, args buildPersist
 		return
 	}
 	refTable := createStmt.ReferTable.Name.O
-	refSchema := createStmt.ReferTable.Schema.O
-	if refSchema == "" {
-		refSchema = event.SchemaName
-	}
-	refSchemaID, ok := findSchemaIDByName(args.databaseMap, refSchema)
+	refSchema, refSchemaID, ok := resolveCreateTableLikeReferSchema(createStmt, event, args)
 	if !ok {
 		log.Warn("refer schema not found for create table like",
 			zap.String("schema", refSchema),
@@ -655,6 +651,59 @@ func setReferTableForCreateTableLike(event *PersistedDDLEvent, args buildPersist
 			event.ReferTablePartitionIDs = append(event.ReferTablePartitionIDs, id)
 		}
 	}
+}
+
+func resolveCreateTableLikeReferSchema(
+	createStmt *ast.CreateTableStmt,
+	event *PersistedDDLEvent,
+	args buildPersistedDDLEventFuncArgs,
+) (string, int64, bool) {
+	refSchema := createStmt.ReferTable.Schema.O
+	if refSchema != "" {
+		schemaID, ok := findSchemaIDByName(args.databaseMap, refSchema)
+		if !ok {
+			return refSchema, 0, false
+		}
+		return getSchemaName(args.databaseMap, schemaID), schemaID, true
+	}
+
+	refTable := createStmt.ReferTable.Name.O
+	for _, info := range args.job.InvolvingSchemaInfo {
+		if info.Mode != model.SharedInvolving ||
+			info.Database == "" ||
+			!strings.EqualFold(info.Table, refTable) {
+			continue
+		}
+		schemaID, ok := findSchemaIDByName(args.databaseMap, info.Database)
+		if !ok {
+			continue
+		}
+		if _, ok := findTableIDByName(args.tableMap, schemaID, refTable); ok {
+			refSchema = getSchemaName(args.databaseMap, schemaID)
+			qualifyCreateTableLikeReferSchema(createStmt, event, refSchema)
+			return refSchema, schemaID, true
+		}
+	}
+
+	schemaID, ok := findSchemaIDByName(args.databaseMap, event.SchemaName)
+	if !ok {
+		return event.SchemaName, 0, false
+	}
+	refSchema = getSchemaName(args.databaseMap, schemaID)
+	return refSchema, schemaID, true
+}
+
+func qualifyCreateTableLikeReferSchema(createStmt *ast.CreateTableStmt, event *PersistedDDLEvent, refSchema string) {
+	createStmt.ReferTable.Schema = ast.NewCIStr(refSchema)
+	query, err := commonEvent.Restore(createStmt)
+	if err != nil {
+		log.Warn("restore create table like ddl failed",
+			zap.String("schema", refSchema),
+			zap.String("query", event.Query),
+			zap.Error(err))
+		return
+	}
+	event.Query = query
 }
 
 func buildPersistedDDLEventForDropTable(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
