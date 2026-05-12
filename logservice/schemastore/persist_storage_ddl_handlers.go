@@ -658,17 +658,24 @@ func resolveCreateTableLikeReferSchema(
 	event *PersistedDDLEvent,
 	args buildPersistedDDLEventFuncArgs,
 ) (string, int64, bool) {
+	// refSchema is the schema name of the table referenced by
+	// CREATE TABLE ... LIKE. It can be absent in the original query.
 	refSchema := createStmt.ReferTable.Schema.O
 	if refSchema != "" {
 		schemaID, ok := findSchemaIDByName(args.databaseMap, refSchema)
 		if !ok {
 			return refSchema, 0, false
 		}
-		return getSchemaName(args.databaseMap, schemaID), schemaID, true
+		return refSchema, schemaID, true
 	}
 
 	refTable := createStmt.ReferTable.Name.O
 	for _, info := range args.job.InvolvingSchemaInfo {
+		// TiDB records the LIKE source table as a shared involving table.
+		// For CREATE TABLE db2.t LIKE db1.t, the target db2.t is also in
+		// InvolvingSchemaInfo, but it is exclusive. Without this mode check,
+		// the target table may be mistaken as the referenced table.
+		// https://github.com/pingcap/tidb/blob/8f2630e53d5d/pkg/ddl/executor.go#L1009-L1023
 		if info.Mode != model.SharedInvolving ||
 			info.Database == "" ||
 			!strings.EqualFold(info.Table, refTable) {
@@ -678,13 +685,13 @@ func resolveCreateTableLikeReferSchema(
 		if !ok {
 			continue
 		}
-		if _, ok := findTableIDByName(args.tableMap, schemaID, refTable); ok {
-			refSchema = getSchemaName(args.databaseMap, schemaID)
-			qualifyCreateTableLikeReferSchema(createStmt, event, refSchema)
-			return refSchema, schemaID, true
-		}
+		refSchema = getSchemaName(args.databaseMap, schemaID)
+		qualifyCreateTableLikeReferSchema(createStmt, event, refSchema)
+		return refSchema, schemaID, true
 	}
 
+	// If TiDB does not provide the referenced schema, fall back to the schema
+	// that the CREATE TABLE event belongs to, matching MySQL/TiDB resolution.
 	schemaID, ok := findSchemaIDByName(args.databaseMap, event.SchemaName)
 	if !ok {
 		return event.SchemaName, 0, false

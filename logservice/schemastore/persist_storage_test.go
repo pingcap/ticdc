@@ -3694,6 +3694,7 @@ func TestBuildPersistedDDLEventForCreateTableLikeSetsReferTableID(t *testing.T) 
 		query           string
 		partitionIDs    []int64
 		expectedReferID int64
+		expectedQuery   string
 	}{
 		{
 			name:            "non partition refer table",
@@ -3718,6 +3719,7 @@ func TestBuildPersistedDDLEventForCreateTableLikeSetsReferTableID(t *testing.T) 
 			query:           "CREATE TABLE `b` LIKE `TeSt`.`A`",
 			partitionIDs:    nil,
 			expectedReferID: 101,
+			expectedQuery:   "CREATE TABLE `b` LIKE `TeSt`.`A`",
 		},
 	}
 
@@ -3744,6 +3746,9 @@ func TestBuildPersistedDDLEventForCreateTableLikeSetsReferTableID(t *testing.T) 
 			partitionMap: partitionMap,
 		})
 		require.Equal(t, tc.expectedReferID, ddl.ExtraTableID, tc.name)
+		if tc.expectedQuery != "" {
+			require.Equal(t, tc.expectedQuery, ddl.Query, tc.name)
+		}
 		if len(tc.partitionIDs) > 0 {
 			require.ElementsMatch(t, tc.partitionIDs, ddl.ReferTablePartitionIDs, tc.name)
 		} else {
