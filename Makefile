@@ -354,3 +354,4 @@ generate-next-gen-grafana:
 
 check-next-gen-grafana: generate-next-gen-grafana
 	@git --no-pager diff --exit-code -- metrics/nextgengrafana || (echo "Please run 'make generate-next-gen-grafana' and add changed files!" && false)
+
