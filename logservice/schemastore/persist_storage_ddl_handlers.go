@@ -639,7 +639,7 @@ func setReferTableForCreateTableLike(event *PersistedDDLEvent, args buildPersist
 	// CREATE TABLE ... LIKE. It can be absent in the original query.
 	refSchemaInQuery := createStmt.ReferTable.Schema.O
 	referSchema, ok := resolveCreateTableLikeReferSchema(
-		args, event.SchemaName, refSchemaInQuery, refTable)
+		args, refSchemaInQuery, refTable)
 	if !ok {
 		log.Warn("refer schema not found for create table like",
 			zap.String("schema", referSchema.schemaName),
@@ -678,7 +678,6 @@ func setReferTableForCreateTableLike(event *PersistedDDLEvent, args buildPersist
 
 func resolveCreateTableLikeReferSchema(
 	args buildPersistedDDLEventFuncArgs,
-	eventSchema string,
 	refSchemaInQuery string,
 	refTable string,
 ) (createTableLikeReferSchemaInfo, bool) {
@@ -715,13 +714,9 @@ func resolveCreateTableLikeReferSchema(
 
 	// If TiDB does not provide the referenced schema, fall back to the schema
 	// that the CREATE TABLE event belongs to, matching MySQL/TiDB resolution.
-	schemaID, ok := findSchemaIDByName(args.databaseMap, eventSchema)
-	if !ok {
-		return createTableLikeReferSchemaInfo{schemaName: eventSchema}, false
-	}
 	return createTableLikeReferSchemaInfo{
-		schemaName: getSchemaName(args.databaseMap, schemaID),
-		schemaID:   schemaID,
+		schemaName: getSchemaName(args.databaseMap, args.job.SchemaID),
+		schemaID:   args.job.SchemaID,
 	}, true
 }
 
