@@ -614,7 +614,7 @@ func buildPersistedDDLEventForDropView(args buildPersistedDDLEventFuncArgs) Pers
 // Value assignment in CREATE VIEW:
 // https://github.com/pingcap/tidb/blob/8f2630e53d5d/pkg/ddl/create_table.go#L1668-L1678
 func normalizeCreateViewQueryWithStoredSelect(event *PersistedDDLEvent) {
-	if event == nil || event.Query == "" || event.TableInfo == nil || event.TableInfo.View == nil || event.TableInfo.View.SelectStmt == "" {
+	if event.Query == "" || event.TableInfo == nil || event.TableInfo.View == nil || event.TableInfo.View.SelectStmt == "" {
 		return
 	}
 
@@ -638,6 +638,7 @@ func normalizeCreateViewQueryWithStoredSelect(event *PersistedDDLEvent) {
 			zap.Error(err))
 		return
 	}
+	// Keep the original CREATE VIEW text when the stored SELECT only qualifies tables in the view's own schema.
 	if createViewSelectUsesCurrentSchemaOnly(selectStmt, event.SchemaName) {
 		return
 	}
