@@ -43,5 +43,8 @@ jobs:
           path: tools/bin
           key: ubuntu-latest-ticdc-tools-${{ hashFiles('tools/check/go.sum') }}
 
+      - name: Build
+        run: make tools/bin/golangci-lint
+
       - name: Check
-        run: make check LINT_NEW_FROM_REV="${{ github.event.pull_request.base.sha }}"
+        run: make check-static LINT_NEW_FROM_REV="${{ github.event.pull_request.base.sha }}"
