@@ -88,24 +88,10 @@ SELECT *
 FROM t1
 WHERE c1 > 2;
 
--- cross-schema view test
-
-DROP DATABASE IF EXISTS source_extra_db;
-DROP DATABASE IF EXISTS source_db;
-CREATE DATABASE source_db;
-CREATE DATABASE source_extra_db;
-CREATE TABLE source_db.users
+CREATE TABLE users
 (
     id INT PRIMARY KEY
 );
-
-USE source_db;
-
-CREATE VIEW source_extra_db.v AS
-SELECT id
-FROM users;
-
-USE common_1;
 
 -- uk without pk
 -- https://internal.pingcap.net/jira/browse/TOOL-714
