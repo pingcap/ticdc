@@ -210,10 +210,11 @@ func buildDelete(tableInfo *common.TableInfo, row commonEvent.RowChange) (string
 
 func buildUpdate(tableInfo *common.TableInfo, row commonEvent.RowChange) (string, []interface{}) {
 	var builder strings.Builder
-	if tableInfo.GetPreUpdateSQL() == "" {
+	preUpdateSQL := tableInfo.GetPreUpdateSQL()
+	if preUpdateSQL == "" {
 		log.Panic("PreUpdateSQL should not be empty")
 	}
-	builder.WriteString(tableInfo.GetPreUpdateSQL())
+	builder.WriteString(preUpdateSQL)
 
 	args := getArgs(&row.Row, tableInfo)
 	if len(args) == 0 {
