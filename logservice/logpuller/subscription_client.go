@@ -550,8 +550,8 @@ func (rs *requestedStore) getRequestWorker() *regionRequestWorker {
 // handleRegions receives regionInfo from regionTaskQueue and attach rpcCtx to them,
 // then send them to corresponding requestedStore.
 func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Group) error {
-	config := config.GetGlobalServerConfig()
-	pendingRegionRequestQueueSize := config.Debug.Puller.PendingRegionRequestQueueSize
+	cfg := config.GetGlobalServerConfig()
+	pendingRegionRequestQueueSize := cfg.Debug.Puller.PendingRegionRequestQueueSize
 	getStore := func(storeAddr string) *requestedStore {
 		var rs *requestedStore
 		if v, ok := s.stores.Load(storeAddr); ok {
@@ -565,7 +565,9 @@ func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 
 		perWorkerQueueSize := pendingRegionRequestQueueSize / int(s.config.RegionRequestWorkerPerStore)
 		if perWorkerQueueSize <= 0 {
-			log.Warn("pending region request queue size is smaller than the number of workers, adjust per worker queue size to 1", zap.Int("pendingRegionRequestQueueSize", config.Debug.Puller.PendingRegionRequestQueueSize), zap.Uint("regionRequestWorkerPerStore", s.config.RegionRequestWorkerPerStore))
+			log.Warn("pending region request queue size is smaller than the number of workers, adjust per worker queue size to 1",
+				zap.Int("pendingRegionRequestQueueSize", pendingRegionRequestQueueSize),
+				zap.Uint("regionRequestWorkerPerStore", s.config.RegionRequestWorkerPerStore))
 			perWorkerQueueSize = 1
 		}
 
