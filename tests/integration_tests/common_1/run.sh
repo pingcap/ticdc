@@ -65,6 +65,8 @@ EOF
 
 	# sync_diff can't check non-exist table, so we check expected tables are created in downstream first
 	check_table_exists common_1.v1 ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+	check_table_exists source_db.users ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
+	check_table_exists source_extra_db.v ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 	check_table_exists common_1.recover_and_insert ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 	check_table_exists common_1.finish_mark ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
 	check_sync_diff $WORK_DIR $CUR/conf/diff_config.toml
