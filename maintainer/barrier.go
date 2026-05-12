@@ -467,7 +467,7 @@ func (b *Barrier) checkEventFinish(be *BarrierEvent) {
 	if be.selected.Load() {
 		log.Info("all dispatchers reported event done, remove event",
 			zap.String("changefeed", be.cfID.Name()),
-			zap.Uint64("commits", be.commitTs),
+			zap.Uint64("commitTs", be.commitTs),
 			zap.Int64("mode", b.mode))
 		// already selected a dispatcher to write, now all dispatchers reported the block event
 		b.blockedEvents.Delete(getEventKey(be.commitTs, be.isSyncPoint))
