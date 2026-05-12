@@ -309,8 +309,16 @@ check-copyright:
 	@echo "check-copyright"
 	@./scripts/check-copyright.sh
 
+# LINT_NEW_FROM_REV: when set (e.g. to a base commit SHA), only checks lines
+# that changed since that revision. Used in CI to avoid flagging pre-existing
+# issues. If unset, checks all files.
+# Directory exclusions (e.g. tests/) are configured in .golangci.yml.
 check-static: tools/bin/golangci-lint
-	tools/bin/golangci-lint run --timeout 10m0s --exclude-dirs "^tests/"
+ifneq ($(LINT_NEW_FROM_REV),)
+	tools/bin/golangci-lint run --timeout 10m0s --new-from-rev=$(LINT_NEW_FROM_REV)
+else
+	tools/bin/golangci-lint run --timeout 10m0s
+endif
 
 check-ticdc-dashboard:
 	@echo "check-ticdc-dashboard"
@@ -328,7 +336,7 @@ check-makefiles: format-makefiles
 format-makefiles: $(MAKE_FILES)
 	$(SED_IN_PLACE) -e 's/^\(\t*\)  /\1\t/g' -e 's/^\(\t*\) /\1/' -- $?
 
-check: check-copyright fmt tidy generate_mock go-generate check-diff-line-width check-ticdc-dashboard check-makefiles generate-next-gen-grafana
+check: check-copyright fmt tidy generate_mock go-generate check-diff-line-width check-ticdc-dashboard check-makefiles generate-next-gen-grafana check-static
 	@git --no-pager diff --exit-code || (echo "Please add changed files!" && false)
 
 clean:

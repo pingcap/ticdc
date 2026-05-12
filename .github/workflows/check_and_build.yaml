@@ -28,6 +28,30 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  check:
+    name: Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go environment
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Cache Tools
+        id: cache-tools
+        uses: actions/cache@v4
+        with:
+          path: tools/bin
+          key: ubuntu-latest-ticdc-tools-${{ hashFiles('tools/check/go.sum') }}
+
+      - name: Check
+        run: make check LINT_NEW_FROM_REV="${{ github.event.pull_request.base.sha }}"
+
   mac_build:
     name: Mac OS Build
     runs-on: macos-latest
