@@ -86,22 +86,24 @@ func appendCleanupTarget(cleanupTargets []node.ID, target node.ID, skip node.ID)
 // mutually exclusive states.
 
 // Registration state transitions.
-func (d *dispatcherConnState) beginRegisterToLocal() {
+func (d *dispatcherConnState) beginRegisterToLocal() bool {
 	d.Lock()
 	defer d.Unlock()
 	if d.removed {
-		return
+		return false
 	}
 	d.localReadyPending = true
+	return true
 }
 
-func (d *dispatcherConnState) beginRegisterToRemote(serverID node.ID) {
+func (d *dispatcherConnState) beginRegisterToRemote(serverID node.ID) bool {
 	d.Lock()
 	defer d.Unlock()
 	if d.removed {
-		return
+		return false
 	}
 	d.pendingRegisterTarget = serverID
+	return true
 }
 
 // Signal-event state transitions.
@@ -224,7 +226,8 @@ func (d *dispatcherConnState) beginRemoteProbing(nodes []string) (node.ID, bool)
 	if d.removed {
 		return "", false
 	}
-	// reading from a event service or checking remotes already, ignore
+	// If the dispatcher is already reading from an event service or checking
+	// remotes, ignore the new candidates.
 	if !d.currentEventServiceID.IsEmpty() || !d.pendingRegisterTarget.IsEmpty() {
 		return "", false
 	}
@@ -260,6 +263,8 @@ func (d *dispatcherConnState) advanceRemoteProbeAfterNotReusable(from node.ID) (
 // dispatcherConnState to apply atomic state transitions, then turns the results
 // into register/remove/reset requests.
 type dispatcherSession struct {
+	requestMu sync.Mutex
+
 	// target provides immutable dispatcher metadata used by control-plane requests.
 	target dispatcher.DispatcherService
 	// localServerID identifies the collector side when talking to EventService.
@@ -296,7 +301,11 @@ func newDispatcherSession(
 // registerTo records the in-flight register state, then sends the register
 // request to the target event service.
 func (s *dispatcherSession) registerTo(serverID node.ID) {
-	s.beginRegister(serverID)
+	s.requestMu.Lock()
+	defer s.requestMu.Unlock()
+	if !s.beginRegister(serverID) {
+		return
+	}
 	s.sendRegisterRequest(serverID)
 }
 
@@ -317,12 +326,11 @@ func (s *dispatcherSession) sendRegisterRequest(serverID node.ID) {
 // is sent. Local and remote registration are tracked independently because a
 // dispatcher may wait for local ready and a remote reusable candidate at the
 // same time.
-func (s *dispatcherSession) beginRegister(serverID node.ID) {
+func (s *dispatcherSession) beginRegister(serverID node.ID) bool {
 	if serverID == s.localServerID {
-		s.connState.beginRegisterToLocal()
-		return
+		return s.connState.beginRegisterToLocal()
 	}
-	s.connState.beginRegisterToRemote(serverID)
+	return s.connState.beginRegisterToRemote(serverID)
 }
 
 // commitReady is used to notify the event service to start sending events.
@@ -337,6 +345,15 @@ func (s *dispatcherSession) reset(serverID node.ID) {
 }
 
 func (s *dispatcherSession) doReset(serverID node.ID, resetTs uint64) {
+	s.requestMu.Lock()
+	defer s.requestMu.Unlock()
+	if s.connState.isRemoved() {
+		return
+	}
+	s.doResetLocked(serverID, resetTs)
+}
+
+func (s *dispatcherSession) doResetLocked(serverID node.ID, resetTs uint64) {
 	epoch := s.advanceEpochForReset(resetTs)
 	resetRequest := s.newDispatcherResetRequest(
 		s.localServerID.String(),
@@ -356,12 +373,14 @@ func (s *dispatcherSession) doReset(serverID node.ID, resetTs uint64) {
 // remove marks the session as terminal, snapshots all cleanup targets, then
 // sends remove requests outside the state lock.
 func (s *dispatcherSession) remove() {
+	s.requestMu.Lock()
+	defer s.requestMu.Unlock()
 	cleanupTargets, alreadyRemoved := s.connState.beginRemove(s.localServerID)
 	if alreadyRemoved {
 		return
 	}
 	for _, target := range cleanupTargets {
-		s.removeFrom(target)
+		s.removeFromLocked(target)
 	}
 }
 
@@ -370,6 +389,12 @@ func (s *dispatcherSession) clear() {
 }
 
 func (s *dispatcherSession) removeFrom(serverID node.ID) {
+	s.requestMu.Lock()
+	defer s.requestMu.Unlock()
+	s.removeFromLocked(serverID)
+}
+
+func (s *dispatcherSession) removeFromLocked(serverID node.ID) {
 	log.Info("send remove dispatcher request to event service",
 		zap.Stringer("changefeedID", s.target.GetChangefeedID()),
 		zap.Stringer("dispatcher", s.target.GetId()),
@@ -405,23 +430,25 @@ func (s *dispatcherSession) handleSignalEvent(event dispatcher.DispatcherEvent) 
 // handleReadyEvent applies the ready decision produced by connState: clean up
 // any stale registrations, then commit whichever target won the ready race.
 func (s *dispatcherSession) handleReadyEvent(from node.ID) {
+	s.requestMu.Lock()
+	defer s.requestMu.Unlock()
 	// connState decides whether this ready should be accepted and which stale
 	// registrations must be cleaned up. Session only applies the side effects.
 	accepted := s.connState.acceptReady(from, s.localServerID)
 	for _, target := range accepted.cleanupTargets {
-		s.removeFrom(target)
+		s.removeFromLocked(target)
 	}
 	if accepted.commitTarget.IsEmpty() {
 		return
 	}
 	if accepted.commitTarget == s.localServerID {
-		s.handleAcceptedLocalReady()
+		s.handleAcceptedLocalReadyLocked()
 		return
 	}
-	s.handleAcceptedRemoteReady(accepted.commitTarget)
+	s.handleAcceptedRemoteReadyLocked(accepted.commitTarget)
 }
 
-func (s *dispatcherSession) handleAcceptedLocalReady() {
+func (s *dispatcherSession) handleAcceptedLocalReadyLocked() {
 	if s.readyCallback != nil {
 		// This path is used during the initial add flow before the dispatcher is
 		// committed. Local is still authoritative, so any speculative remote
@@ -432,10 +459,10 @@ func (s *dispatcherSession) handleAcceptedLocalReady() {
 	log.Info("received ready signal from local event service, prepare to reset the dispatcher",
 		zap.Stringer("changefeedID", s.target.GetChangefeedID()),
 		zap.Stringer("dispatcher", s.target.GetId()))
-	s.commitReady(s.localServerID)
+	s.doResetLocked(s.localServerID, s.target.GetCheckpointTs())
 }
 
-func (s *dispatcherSession) handleAcceptedRemoteReady(serverID node.ID) {
+func (s *dispatcherSession) handleAcceptedRemoteReadyLocked(serverID node.ID) {
 	if s.readyCallback != nil {
 		log.Panic("ready callback should be nil when accepting remote ready",
 			zap.Stringer("changefeedID", s.target.GetChangefeedID()),
@@ -446,7 +473,7 @@ func (s *dispatcherSession) handleAcceptedRemoteReady(serverID node.ID) {
 		zap.Stringer("changefeedID", s.target.GetChangefeedID()),
 		zap.Stringer("dispatcher", s.target.GetId()),
 		zap.Stringer("eventServiceID", serverID))
-	s.commitReady(serverID)
+	s.doResetLocked(serverID, s.target.GetCheckpointTs())
 }
 
 // handleNotReusableEvent applies the remote-probing decision produced by
@@ -455,6 +482,8 @@ func (s *dispatcherSession) handleNotReusableEvent(from node.ID) {
 	if from == s.localServerID {
 		log.Panic("should not happen: local event service should not send not reusable event")
 	}
+	s.requestMu.Lock()
+	defer s.requestMu.Unlock()
 	// connState decides whether this not reusable matches the active probe and
 	// returns the next candidate, if any.
 	nextCandidate, accepted := s.connState.advanceRemoteProbeAfterNotReusable(from)
@@ -502,8 +531,9 @@ func (s *dispatcherSession) newDispatcherRegisterRequest(serverID string, onlyRe
 func (s *dispatcherSession) newDispatcherResetRequest(serverID string, resetTs uint64, epoch uint64) *messaging.DispatcherRequest {
 	syncPointInterval := s.target.GetSyncPointInterval()
 
-	// after reset during normal run time, we can filter reduduant syncpoint at event collector side
-	// so we just take care of the case that resetTs is same as startTs
+	// After reset during normal runtime, redundant syncpoints can be filtered at
+	// the event collector side, so only the case that resetTs equals startTs
+	// needs special handling.
 	skipSyncpointSameAsResetTs := false
 	if resetTs == s.target.GetStartTs() {
 		skipSyncpointSameAsResetTs = s.target.GetSkipSyncpointAtStartTs()
@@ -549,6 +579,8 @@ func (s *dispatcherSession) newDispatcherRemoveRequest(serverID string) *messagi
 
 // Auxiliary control-plane entry point used by the log coordinator callback.
 func (s *dispatcherSession) setRemoteCandidates(nodes []string) {
+	s.requestMu.Lock()
+	defer s.requestMu.Unlock()
 	candidate, ok := s.connState.beginRemoteProbing(nodes)
 	if !ok {
 		return

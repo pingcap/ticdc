@@ -15,6 +15,7 @@ package eventcollector
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -514,6 +515,37 @@ func TestFilterAndUpdateEventByCommitTs(t *testing.T) {
 			require.Equal(t, tt.expectedCommitTs, stat.lastEventCommitTs.Load())
 		})
 	}
+}
+
+func TestUpdateCommitTsStateByEvents(t *testing.T) {
+	t.Parallel()
+
+	stat := newDispatcherStatForTest(newMockDispatcher(common.NewDispatcherID(), 0), nil)
+	stat.lastEventCommitTs.Store(100)
+	stat.gotDDLOnTs.Store(true)
+	stat.gotSyncpointOnTS.Store(true)
+	state := stat.loadCurrentEpochState()
+	state.maxEventTs.Store(100)
+
+	stat.updateCommitTsStateByEvents(state, []dispatcher.DispatcherEvent{
+		{
+			Event: &mockEvent{
+				eventType: commonEvent.TypeResolvedEvent,
+				commitTs:  105,
+			},
+		},
+		{
+			Event: &mockEvent{
+				eventType: commonEvent.TypeDMLEvent,
+				commitTs:  110,
+			},
+		},
+	})
+
+	require.Equal(t, uint64(110), stat.lastEventCommitTs.Load())
+	require.False(t, stat.gotDDLOnTs.Load())
+	require.False(t, stat.gotSyncpointOnTS.Load())
+	require.Equal(t, uint64(110), state.maxEventTs.Load())
 }
 
 func TestHandleSignalEvent(t *testing.T) {
@@ -1228,6 +1260,94 @@ func TestHandleSingleDataEvents(t *testing.T) {
 	}
 }
 
+func TestHandleSingleDataEventsUpdatesDDLStateAndDedupsSameTsDDL(t *testing.T) {
+	t.Parallel()
+
+	mockDisp := newMockDispatcher(common.NewDispatcherID(), 0)
+	mockDisp.handleEvents = func(events []dispatcher.DispatcherEvent, wakeCallback func()) (block bool) {
+		return len(events) > 0
+	}
+
+	currentService := node.ID("service1")
+	stat := newDispatcherStatForTest(mockDisp, nil)
+	stat.lastEventCommitTs.Store(99)
+	stat.currentEpoch.Store(newDispatcherEpochState(10, 1, stat.target.GetStartTs()))
+	markSessionReceiving(stat.session, currentService)
+
+	firstDDL := dispatcher.DispatcherEvent{
+		From: createNodeID("service1"),
+		Event: &commonEvent.DDLEvent{
+			Seq:        2,
+			Epoch:      10,
+			FinishedTs: 100,
+		},
+	}
+	secondDDL := dispatcher.DispatcherEvent{
+		From: createNodeID("service1"),
+		Event: &commonEvent.DDLEvent{
+			Seq:        3,
+			Epoch:      10,
+			FinishedTs: 100,
+		},
+	}
+
+	require.True(t, stat.handleSingleDataEvents([]dispatcher.DispatcherEvent{firstDDL}))
+	require.Equal(t, uint64(100), stat.lastEventCommitTs.Load())
+	require.True(t, stat.gotDDLOnTs.Load())
+	require.False(t, stat.gotSyncpointOnTS.Load())
+	require.Len(t, mockDisp.events, 1)
+
+	require.False(t, stat.handleSingleDataEvents([]dispatcher.DispatcherEvent{secondDDL}))
+	require.Equal(t, uint64(100), stat.lastEventCommitTs.Load())
+	require.True(t, stat.gotDDLOnTs.Load())
+	require.False(t, stat.gotSyncpointOnTS.Load())
+	require.Len(t, mockDisp.events, 1)
+}
+
+func TestHandleSingleDataEventsUpdatesSyncPointStateAndDedupsSameTsSyncPoint(t *testing.T) {
+	t.Parallel()
+
+	mockDisp := newMockDispatcher(common.NewDispatcherID(), 0)
+	mockDisp.handleEvents = func(events []dispatcher.DispatcherEvent, wakeCallback func()) (block bool) {
+		return len(events) > 0
+	}
+
+	currentService := node.ID("service1")
+	stat := newDispatcherStatForTest(mockDisp, nil)
+	stat.lastEventCommitTs.Store(199)
+	stat.currentEpoch.Store(newDispatcherEpochState(10, 1, stat.target.GetStartTs()))
+	markSessionReceiving(stat.session, currentService)
+
+	firstSyncPoint := dispatcher.DispatcherEvent{
+		From: createNodeID("service1"),
+		Event: &commonEvent.SyncPointEvent{
+			Seq:      2,
+			Epoch:    10,
+			CommitTs: 200,
+		},
+	}
+	secondSyncPoint := dispatcher.DispatcherEvent{
+		From: createNodeID("service1"),
+		Event: &commonEvent.SyncPointEvent{
+			Seq:      3,
+			Epoch:    10,
+			CommitTs: 200,
+		},
+	}
+
+	require.True(t, stat.handleSingleDataEvents([]dispatcher.DispatcherEvent{firstSyncPoint}))
+	require.Equal(t, uint64(200), stat.lastEventCommitTs.Load())
+	require.False(t, stat.gotDDLOnTs.Load())
+	require.True(t, stat.gotSyncpointOnTS.Load())
+	require.Len(t, mockDisp.events, 1)
+
+	require.False(t, stat.handleSingleDataEvents([]dispatcher.DispatcherEvent{secondSyncPoint}))
+	require.Equal(t, uint64(200), stat.lastEventCommitTs.Load())
+	require.False(t, stat.gotDDLOnTs.Load())
+	require.True(t, stat.gotSyncpointOnTS.Load())
+	require.Len(t, mockDisp.events, 1)
+}
+
 func TestHandleBatchDMLEvent(t *testing.T) {
 	normalHandleEvents := func(events []dispatcher.DispatcherEvent, wakeCallback func()) (block bool) {
 		return len(events) > 0
@@ -1337,6 +1457,35 @@ func TestHandleBatchDMLEvent(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestHandleBatchDataEventsDoesNotAdvanceCommitTsWhenNoValidEvents(t *testing.T) {
+	t.Parallel()
+
+	mockDisp := newMockDispatcher(common.NewDispatcherID(), 0)
+	mockDisp.handleEvents = func(events []dispatcher.DispatcherEvent, wakeCallback func()) (block bool) {
+		return false
+	}
+
+	stat := newDispatcherStatForTest(mockDisp, nil)
+	stat.lastEventCommitTs.Store(50)
+	stat.currentEpoch.Store(newDispatcherEpochState(10, 1, stat.target.GetStartTs()))
+
+	events := []dispatcher.DispatcherEvent{
+		{
+			Event: &mockEvent{
+				eventType: commonEvent.TypeDMLEvent,
+				seq:       2,
+				epoch:     10,
+				commitTs:  40,
+			},
+			From: createNodeID("service1"),
+		},
+	}
+
+	require.False(t, stat.handleBatchDataEvents(events))
+	require.Equal(t, uint64(50), stat.lastEventCommitTs.Load())
+	require.Empty(t, mockDisp.events)
 }
 
 func TestNewDispatcherResetRequest(t *testing.T) {
@@ -1476,6 +1625,139 @@ func TestRegisterTo(t *testing.T) {
 		case <-time.After(1 * time.Second):
 			require.Fail(t, "timed out waiting for message")
 		}
+	})
+}
+
+func TestRegisterAndRemoveRequestOrder(t *testing.T) {
+	localServerID := node.ID("local-server")
+	remoteServerID := node.ID("remote-server")
+	dispatcherID := common.NewDispatcherID()
+
+	registerStarted := make(chan struct{})
+	allowRegister := make(chan struct{})
+	var closeRegisterStarted sync.Once
+	var mu sync.Mutex
+	var requests []dispatcherRequestRecord
+	sendMessage := func(msg *messaging.TargetMessage) {
+		req, ok := msg.Message[0].(*messaging.DispatcherRequest)
+		require.True(t, ok)
+		if req.ActionType == eventpb.ActionType_ACTION_TYPE_REGISTER {
+			closeRegisterStarted.Do(func() {
+				close(registerStarted)
+			})
+			<-allowRegister
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		requests = append(requests, dispatcherRequestRecord{
+			to:     msg.To,
+			action: req.ActionType,
+		})
+	}
+	stat := newDispatcherStatInternal(
+		newMockDispatcher(dispatcherID, 0),
+		nil,
+		localServerID,
+		sendMessage,
+		nil,
+	)
+
+	registerDone := make(chan struct{})
+	go func() {
+		stat.registerTo(remoteServerID)
+		close(registerDone)
+	}()
+
+	select {
+	case <-registerStarted:
+	case <-time.After(1 * time.Second):
+		require.FailNow(t, "timed out waiting for register request")
+	}
+
+	removeDone := make(chan struct{})
+	go func() {
+		stat.remove()
+		close(removeDone)
+	}()
+
+	select {
+	case <-removeDone:
+		require.FailNow(t, "remove should wait for in-flight register request")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(allowRegister)
+	select {
+	case <-registerDone:
+	case <-time.After(1 * time.Second):
+		require.FailNow(t, "timed out waiting for register to finish")
+	}
+	select {
+	case <-removeDone:
+	case <-time.After(1 * time.Second):
+		require.FailNow(t, "timed out waiting for remove to finish")
+	}
+
+	require.Equal(t, []dispatcherRequestRecord{
+		{to: remoteServerID, action: eventpb.ActionType_ACTION_TYPE_REGISTER},
+		{to: localServerID, action: eventpb.ActionType_ACTION_TYPE_REMOVE},
+		{to: remoteServerID, action: eventpb.ActionType_ACTION_TYPE_REMOVE},
+	}, requests)
+}
+
+func TestHandleDDLEventTableInfoUpdate(t *testing.T) {
+	t.Parallel()
+
+	remoteServerID := node.ID("remote")
+
+	t.Run("stores ddl table info", func(t *testing.T) {
+		var capturedEvent *commonEvent.DDLEvent
+		mockDisp := newMockDispatcher(common.NewDispatcherID(), 0)
+		mockDisp.handleEvents = func(events []dispatcher.DispatcherEvent, wakeCallback func()) bool {
+			if len(events) > 0 {
+				capturedEvent = events[0].Event.(*commonEvent.DDLEvent)
+			}
+			return false
+		}
+
+		stat := newDispatcherStatForTest(mockDisp, nil)
+		markSessionReceiving(stat.session, remoteServerID)
+		stat.currentEpoch.Store(newDispatcherEpochState(10, 1, stat.target.GetStartTs()))
+		stat.lastEventCommitTs.Store(50)
+
+		tableInfo := &common.TableInfo{
+			TableName: common.TableName{
+				Schema:  "source_db",
+				Table:   "users",
+				TableID: 1,
+			},
+		}
+
+		ddlEvent := &commonEvent.DDLEvent{
+			Version:    commonEvent.DDLEventVersion1,
+			Query:      "ALTER TABLE `source_db`.`users` ADD COLUMN `c1` INT",
+			FinishedTs: 100,
+			Epoch:      10,
+			Seq:        2,
+			TableInfo:  tableInfo,
+		}
+
+		events := []dispatcher.DispatcherEvent{
+			{From: &remoteServerID, Event: ddlEvent},
+		}
+
+		stat.handleDataEvents(events...)
+
+		stored := stat.tableInfo.Load()
+		require.NotNil(t, stored)
+		storedTableInfo := stored.(*common.TableInfo)
+		require.Same(t, tableInfo, storedTableInfo)
+		require.Equal(t, "source_db", storedTableInfo.TableName.Schema)
+		require.Equal(t, "users", storedTableInfo.TableName.Table)
+		require.Equal(t, int64(1), storedTableInfo.TableName.TableID)
+		require.Equal(t, uint64(100), stat.tableInfoVersion.Load())
+		require.NotNil(t, capturedEvent)
+		require.Same(t, ddlEvent, capturedEvent)
 	})
 }
 

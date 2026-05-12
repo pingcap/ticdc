@@ -409,12 +409,11 @@ func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEve
 	return d.target.HandleEvents(validEvents, func() { d.wake() })
 }
 
-// handleSingleDataEvents processes single DDL, SyncPoint or BatchDML events with the following algorithm:
+// handleSingleDataEvents processes a single DDL or SyncPoint event with the following algorithm:
 // 1. Validate event count (must be exactly 1)
 // 2. Check if event comes from current epoch
 // 3. Verify event sequence number
 // 4. Process event based on type:
-//   - BatchDML: Split into individual DML events
 //   - DDL: Update table info if present
 //   - SyncPoint: Forward directly
 //
@@ -582,14 +581,14 @@ func (d *dispatcherStat) isReceivingDataEvent() bool {
 	return d.session.isReceivingDataEvent()
 }
 
-func (d *dispatcherStat) newDispatcherRegisterRequest(serverId string, onlyReuse bool) *messaging.DispatcherRequest {
-	return d.session.newDispatcherRegisterRequest(serverId, onlyReuse)
+func (d *dispatcherStat) newDispatcherRegisterRequest(serverID string, onlyReuse bool) *messaging.DispatcherRequest {
+	return d.session.newDispatcherRegisterRequest(serverID, onlyReuse)
 }
 
-func (d *dispatcherStat) newDispatcherResetRequest(serverId string, resetTs uint64, epoch uint64) *messaging.DispatcherRequest {
-	return d.session.newDispatcherResetRequest(serverId, resetTs, epoch)
+func (d *dispatcherStat) newDispatcherResetRequest(serverID string, resetTs uint64, epoch uint64) *messaging.DispatcherRequest {
+	return d.session.newDispatcherResetRequest(serverID, resetTs, epoch)
 }
 
-func (d *dispatcherStat) newDispatcherRemoveRequest(serverId string) *messaging.DispatcherRequest {
-	return d.session.newDispatcherRemoveRequest(serverId)
+func (d *dispatcherStat) newDispatcherRemoveRequest(serverID string) *messaging.DispatcherRequest {
+	return d.session.newDispatcherRemoveRequest(serverID)
 }
