@@ -364,7 +364,7 @@ func TestApplyToDDLEvent(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
+
 		t.Run(tc.name, func(t *testing.T) {
 			routed, err := tc.router.ApplyToDDLEvent(tc.ddl)
 			require.NoError(t, err)
@@ -540,7 +540,7 @@ func TestRewriteDDLQueryWithRouting(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
+
 		t.Run(tc.name, func(t *testing.T) {
 			newQuery, err := tc.router.rewriteParserBackedDDLQuery(tc.ddl)
 			require.NoError(t, err)
@@ -775,7 +775,7 @@ func TestApplyToDDLEventRejectsParserUnsupportedIndexDDL(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		tc := tc
+
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 

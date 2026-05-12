@@ -87,7 +87,7 @@ func TestContinusStop(t *testing.T) {
 		require.Nil(t, err)
 	}
 	for i := 0; i < n; i++ {
-		i := i
+
 		go func() {
 			for {
 				select {

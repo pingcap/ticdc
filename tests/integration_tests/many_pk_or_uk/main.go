@@ -108,7 +108,7 @@ func runPKorUKcases(db *sql.DB) {
 		for j, pkOrUK := range []string{"UNIQUE NOT NULL", "PRIMARY KEY"} {
 			g.Add(1)
 			tableName := fmt.Sprintf("pk_or_uk_%d_%d", i, j)
-			pkOrUK := pkOrUK
+
 			c := c
 			go func() {
 				sql := fmt.Sprintf("CREATE TABLE %s(id %s %s)", tableName, c.Tp, pkOrUK)

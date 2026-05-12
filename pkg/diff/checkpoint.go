@@ -224,9 +224,10 @@ func updateTableSummary(ctx context.Context, db *sql.DB, instanceID, schema, tab
 
 	checkedNum := successNum + failedNum + ignoreNum
 	state := checkingState
-	if checkedNum == 0 {
+	switch checkedNum {
+	case 0:
 		state = notCheckedState
-	} else if checkedNum == total {
+	case total:
 		if total == successNum+ignoreNum {
 			state = successState
 		} else {

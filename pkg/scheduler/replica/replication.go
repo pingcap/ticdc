@@ -357,7 +357,7 @@ func (db *replicationDB[T, R]) GetCheckerStat() string {
 				stat.WriteString(" ")
 			}
 			stat.WriteString(GetGroupName(groupID))
-			stat.WriteString(fmt.Sprintf("(%s)", group.checker.Name()))
+			fmt.Fprintf(&stat, "(%s)", group.checker.Name())
 			stat.WriteString(": [")
 			stat.WriteString(group.checker.Stat())
 			stat.WriteString("] ")

@@ -561,8 +561,7 @@ func getRenameTableOldTableKey(tableDef cloudstorage.TableDefinition) (string, b
 	if tableDef.Type != byte(timodel.ActionRenameTable) {
 		return "", false
 	}
-	schemaName := tableDef.Schema
-	tableName := tableDef.Table
+	var schemaName, tableName string
 	stmt, err := parser.New().ParseOneStmt(tableDef.Query, "", "")
 	if err != nil {
 		log.Panic("parse statement failed", zap.Any("DDL", tableDef.Query), zap.Error(err))

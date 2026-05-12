@@ -497,10 +497,8 @@ func (s *remoteMessageTarget) runSendMessages(ctx context.Context, streamType st
 	}()
 
 	// wait stream ready
-	for {
-		if s.isReadyToSend() {
-			break
-		}
+	for !s.isReadyToSend() {
+
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -573,10 +571,8 @@ func (s *remoteMessageTarget) runReceiveMessages(ctx context.Context, streamType
 	}()
 
 	// wait stream ready
-	for {
-		if s.isReadyToSend() {
-			break
-		}
+	for !s.isReadyToSend() {
+
 		select {
 		case <-ctx.Done():
 			return ctx.Err()

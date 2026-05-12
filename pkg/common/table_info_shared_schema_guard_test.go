@@ -128,7 +128,7 @@ func TestLatestTiDBTableInfoSharedSchemaGuard(t *testing.T) {
 	moduleCache := make(map[string]*moduleInfo)
 	packageCache := make(map[packageKey]map[string][]string)
 	for _, tc := range cases {
-		tc := tc
+
 		t.Run(tc.name, func(t *testing.T) {
 			mod, ok := moduleCache[tc.modulePath]
 			if !ok {

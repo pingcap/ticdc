@@ -397,11 +397,9 @@ func (m *RedoMeta) prepareForFlushMeta() (bool, misc.LogMeta) {
 	unflushed.CheckpointTs = m.metaCheckpointTs.getUnflushed()
 	unflushed.ResolvedTs = m.metaResolvedTs.getUnflushed()
 
-	hasChange := false
-	if flushed.CheckpointTs < unflushed.CheckpointTs ||
-		flushed.ResolvedTs < unflushed.ResolvedTs {
-		hasChange = true
-	}
+	hasChange := flushed.CheckpointTs < unflushed.CheckpointTs ||
+		flushed.ResolvedTs < unflushed.ResolvedTs
+
 	return hasChange, unflushed
 }
 
