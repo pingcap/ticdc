@@ -185,7 +185,6 @@ func (ra *RedoApplier) consumeLogs(ctx context.Context) error {
 		return err
 	}
 	for row != nil || ddl != nil {
-
 		if shouldApplyDDL(row, ddl) {
 			if err := ra.applyDDL(ctx, ddl, checkpointTs); err != nil {
 				return err

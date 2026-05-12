@@ -50,7 +50,6 @@ func TestTableNameIsRouted(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			if got := tt.tableName.IsRouted(); got != tt.expected {

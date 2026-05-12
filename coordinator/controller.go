@@ -724,7 +724,6 @@ func (c *Controller) RemoveChangefeed(ctx context.Context, id common.ChangeFeedI
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 	for !op.IsFinished() {
-
 		select {
 		case <-ctx.Done():
 			return 0, errors.Trace(ctx.Err())
@@ -763,7 +762,6 @@ func (c *Controller) PauseChangefeed(ctx context.Context, id common.ChangeFeedID
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 	for !op.IsFinished() {
-
 		select {
 		case <-ctx.Done():
 			return errors.Trace(ctx.Err())

@@ -55,7 +55,6 @@ func TestFormatBlockStatusRequest(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			result := FormatBlockStatusRequest(tc.input)
@@ -89,7 +88,6 @@ func TestFormatTableSpanBlockStatus(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			result := FormatTableSpanBlockStatus(tc.input)
@@ -123,7 +121,6 @@ func TestFormatDispatcherStatus(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			result := FormatDispatcherStatus(tc.input)
@@ -156,7 +153,6 @@ func TestFormatInfluencedDispatchers(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			result := FormatInfluencedDispatchers(tc.input)
@@ -190,7 +186,6 @@ func TestFormatTableSpan(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			result := FormatTableSpan(tc.input)
@@ -226,7 +221,6 @@ func TestFormatMaintainerStatus(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			result := FormatMaintainerStatus(tc.input)

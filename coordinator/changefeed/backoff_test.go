@@ -150,7 +150,6 @@ func TestTableRoutingErrorsFastFail(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-
 		t.Run(tc.name, func(t *testing.T) {
 			backoff := NewBackoff(common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), time.Minute*30, 1)
 			require.True(t, backoff.ShouldRun())
