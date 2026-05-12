@@ -38,18 +38,38 @@ func TestEventStoreKeyFormatGolden(t *testing.T) {
 	}
 
 	key := EncodeKey(uniqueID, tableID, event, CompressionZSTD)
-	expectedKey := mustDecodeHex(t, "010203040506070811121314151617182122232425262728313233343536373803014142")
+	expectedKey := mustDecodeHex(t, "0102030405060708111213141516171821222324252627283132333435363738030100000000000000004142")
 	require.Equal(t, expectedKey, key)
 	require.Equal(t, len(expectedKey), encodedKeyLen(event))
 
-	require.Equal(t, 16, encodedKeyTxnCommitTsStart)
-	require.Equal(t, 24, encodedKeyTxnCommitTsEnd)
-	require.Equal(t, 32, encodedKeyAttributesOffset)
-	require.Equal(t, 34, encodedKeyAttributesEnd)
+	require.Equal(t, 8, encodedKeyUniqueIDLen)
+	require.Equal(t, 8, encodedKeyTableIDLen)
+	require.Equal(t, 8, encodedKeyTxnCommitTsLen)
+	require.Equal(t, 8, encodedKeyTxnStartTsLen)
+	require.Equal(t, 1, encodedKeyDMLOrderLen)
+	require.Equal(t, 1, encodedKeyCompressionLen)
+	require.Equal(t, 8, encodedKeyMaskLen)
 
-	require.Equal(t, expectedKey[:encodedKeyTxnCommitTsEnd],
+	require.Equal(t, 0, encodedKeyUniqueIDOffset)
+	require.Equal(t, 8, encodedKeyTableIDOffset)
+	require.Equal(t, 16, encodedKeyTxnCommitTsOffset)
+	require.Equal(t, 24, encodedKeyTxnStartTsOffset)
+	require.Equal(t, 32, encodedKeyDMLOrderOffset)
+	require.Equal(t, 32, encodedKeyAttributesOffset)
+	require.Equal(t, 33, encodedKeyCompressionOffset)
+	require.Equal(t, 34, encodedKeyMaskOffset)
+	require.Equal(t, 42, encodedKeyAttributesEnd)
+	require.Equal(t, encodedKeyTableIDOffset, encodedKeyUniqueIDOffset+encodedKeyUniqueIDLen)
+	require.Equal(t, encodedKeyTxnCommitTsOffset, encodedKeyTableIDOffset+encodedKeyTableIDLen)
+	require.Equal(t, encodedKeyTxnStartTsOffset, encodedKeyTxnCommitTsOffset+encodedKeyTxnCommitTsLen)
+	require.Equal(t, encodedKeyDMLOrderOffset, encodedKeyTxnStartTsOffset+encodedKeyTxnStartTsLen)
+	require.Equal(t, encodedKeyCompressionOffset, encodedKeyDMLOrderOffset+encodedKeyDMLOrderLen)
+	require.Equal(t, encodedKeyMaskOffset, encodedKeyCompressionOffset+encodedKeyCompressionLen)
+	require.Equal(t, encodedKeyAttributesEnd, encodedKeyMaskOffset+encodedKeyMaskLen)
+
+	require.Equal(t, expectedKey[:encodedKeyTxnCommitTsOffset+encodedKeyTxnCommitTsLen],
 		encodeTxnCommitTsBoundaryKey(uniqueID, tableID, txnCommitTs))
-	require.Equal(t, expectedKey[:encodedKeyAttributesOffset],
+	require.Equal(t, expectedKey[:encodedKeyTxnStartTsOffset+encodedKeyTxnStartTsLen],
 		encodeScanLowerBound(uniqueID, tableID, txnCommitTs, txnStartTs))
 
 	decodedTxnCommitTs, ok := decodeTxnCommitTsFromEncodedKey(key)
@@ -59,6 +79,12 @@ func TestEventStoreKeyFormatGolden(t *testing.T) {
 	dmlOrder, compressionType := DecodeKeyAttributes(key)
 	require.Equal(t, DMLOrderInsert, dmlOrder)
 	require.Equal(t, CompressionZSTD, compressionType)
+	require.False(t, KeyUsesEncryptionLayer(key))
+
+	keyWithEncryptionLayer := encodeKeyToWithEncryptionLayer(make([]byte, 0, encodedKeyLen(event)), uniqueID, tableID, event, CompressionZSTD)
+	expectedKeyWithEncryptionLayer := mustDecodeHex(t, "0102030405060708111213141516171821222324252627283132333435363738030100000000000000014142")
+	require.Equal(t, expectedKeyWithEncryptionLayer, keyWithEncryptionLayer)
+	require.True(t, KeyUsesEncryptionLayer(keyWithEncryptionLayer))
 }
 
 func mustDecodeHex(t *testing.T, s string) []byte {
