@@ -19,9 +19,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pingcap/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/log"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
 )
@@ -57,7 +56,7 @@ type HTTPError struct {
 
 // NewHTTPError wrap a err into HTTPError
 func NewHTTPError(err error) HTTPError {
-	errCode, _ := cerror.RFCCode(err)
+	errCode, _ := errors.RFCCode(err)
 	return HTTPError{
 		Error: err.Error(),
 		Code:  string(errCode),
@@ -66,11 +65,11 @@ func NewHTTPError(err error) HTTPError {
 
 // httpBadRequestError is some errors that will cause a BadRequestError in http handler
 var httpBadRequestError = []*errors.Error{
-	cerror.ErrAPIInvalidParam, cerror.ErrSinkURIInvalid, cerror.ErrStartTsBeforeGC,
-	cerror.ErrChangeFeedNotExists, cerror.ErrTargetTsBeforeStartTs, cerror.ErrTableIneligible,
-	cerror.ErrFilterRuleInvalid, cerror.ErrChangefeedUpdateRefused, cerror.ErrMySQLConnectionError,
-	cerror.ErrMySQLInvalidConfig, cerror.ErrCaptureNotExist, cerror.ErrSchedulerRequestFailed,
-	cerror.ErrActiveActiveTSOIndexIncompatible,
+	errors.ErrAPIInvalidParam, errors.ErrSinkURIInvalid, errors.ErrStartTsBeforeGC,
+	errors.ErrChangeFeedNotExists, errors.ErrTargetTsBeforeStartTs, errors.ErrTableIneligible,
+	errors.ErrFilterRuleInvalid, errors.ErrChangefeedUpdateRefused, errors.ErrMySQLConnectionError,
+	errors.ErrMySQLInvalidConfig, errors.ErrCaptureNotExist, errors.ErrSchedulerRequestFailed,
+	errors.ErrActiveActiveTSOIndexIncompatible,
 }
 
 const (
@@ -107,7 +106,7 @@ func IsHTTPBadRequestError(err error) bool {
 			return true
 		}
 
-		rfcCode, ok := cerror.RFCCode(err)
+		rfcCode, ok := errors.RFCCode(err)
 		if ok && e.RFCCode() == rfcCode {
 			return true
 		}

@@ -16,8 +16,8 @@ package mysql
 import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/errors"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/sqlmodel"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/util/chunk"
@@ -273,7 +273,7 @@ func (w *Writer) buildRowChangesForUnSafeBatch(
 					rowKey := rowLists[i].rowKeys
 					if nextRowType == common.RowTypeInsert {
 						if compareKeys(rowKey, rowLists[j].rowKeys) {
-							return nil, nil, cerror.ErrUnexpected.FastGenByArgs("duplicate insert rows with same key")
+							return nil, nil, errors.ErrUnexpected.FastGenByArgs("duplicate insert rows with same key")
 						}
 					} else if nextRowType == common.RowTypeDelete {
 						if compareKeys(rowKey, rowLists[j].preRowKeys) {
@@ -283,7 +283,7 @@ func (w *Writer) buildRowChangesForUnSafeBatch(
 						}
 					} else if nextRowType == common.RowTypeUpdate {
 						if !compareKeys(rowLists[j].preRowKeys, rowLists[j].rowKeys) {
-							return nil, nil, cerror.ErrUnexpected.FastGenByArgs("update row key mismatch")
+							return nil, nil, errors.ErrUnexpected.FastGenByArgs("update row key mismatch")
 						}
 						if compareKeys(rowKey, rowLists[j].preRowKeys) {
 							flagList[i] = false
@@ -304,11 +304,11 @@ func (w *Writer) buildRowChangesForUnSafeBatch(
 				case common.RowTypeUpdate:
 					rowKey := rowLists[i].rowKeys
 					if !compareKeys(rowKey, rowLists[i].preRowKeys) {
-						return nil, nil, cerror.ErrUnexpected.FastGenByArgs("update row key mismatch")
+						return nil, nil, errors.ErrUnexpected.FastGenByArgs("update row key mismatch")
 					}
 					if nextRowType == common.RowTypeInsert {
 						if compareKeys(rowKey, rowLists[j].rowKeys) {
-							return nil, nil, cerror.ErrUnexpected.FastGenByArgs("duplicate rows for update and insert")
+							return nil, nil, errors.ErrUnexpected.FastGenByArgs("duplicate rows for update and insert")
 						}
 					} else if nextRowType == common.RowTypeDelete {
 						if compareKeys(rowKey, rowLists[j].preRowKeys) {
@@ -329,7 +329,7 @@ func (w *Writer) buildRowChangesForUnSafeBatch(
 					} else if nextRowType == common.RowTypeUpdate {
 						if compareKeys(rowKey, rowLists[j].preRowKeys) {
 							if !compareKeys(rowLists[j].preRowKeys, rowLists[j].rowKeys) {
-								return nil, nil, cerror.ErrUnexpected.FastGenByArgs("update row key mismatch")
+								return nil, nil, errors.ErrUnexpected.FastGenByArgs("update row key mismatch")
 							}
 							newRowChange := commonEvent.RowChange{
 								PreRow:  rowLists[j].rowChange.PreRow,

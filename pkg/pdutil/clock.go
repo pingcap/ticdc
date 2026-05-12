@@ -18,7 +18,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pingcap/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/log"
 	pclock "github.com/pingcap/ticdc/pkg/clock"
 	"github.com/pingcap/ticdc/pkg/retry"

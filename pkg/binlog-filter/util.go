@@ -16,7 +16,7 @@ package filter
 import (
 	"strings"
 
-	"github.com/pingcap/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 )
 

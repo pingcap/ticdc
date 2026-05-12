@@ -46,11 +46,8 @@ func getPartitionNum(o *option) (int32, error) {
 	for i := 0; i <= 30; i++ {
 		resp, err := admin.GetMetadata(&o.topic, false, timeout)
 		if err != nil {
-			if func() kafka.Error {
-				var target kafka.Error
-				_ = errors.As(err, &target)
-				return target
-			}().Code() == kafka.ErrTransport {
+			var target kafka.Error
+			if errors.As(err, &target) && target.Code() == kafka.ErrTransport {
 				log.Info("retry get partition number", zap.Int("retryTime", i), zap.Int("timeout", timeout))
 				timeout += 100
 				continue

@@ -16,7 +16,7 @@ package common
 import (
 	"errors"
 
-	perrors "github.com/pingcap/errors"
+	perrors "github.com/pingcap/ticdc/pkg/errors"
 	commonPkg "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 )

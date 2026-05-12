@@ -23,7 +23,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
-	cerrors "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/mysql"
 	"github.com/pingcap/ticdc/pkg/util"
 	pd "github.com/tikv/pd/client"
@@ -50,10 +50,10 @@ func IsSameUpstreamDownstream(
 	ctx context.Context, upPD pd.Client, changefeedCfg *config.ChangefeedConfig,
 ) (bool, error) {
 	if upPD == nil {
-		return false, cerrors.New("pd client is nil")
+		return false, errors.New("pd client is nil")
 	}
 	if changefeedCfg == nil {
-		return false, cerrors.New("changefeed config is nil")
+		return false, errors.New("changefeed config is nil")
 	}
 
 	upID := upPD.GetClusterID(ctx)
@@ -74,7 +74,7 @@ func IsSameUpstreamDownstream(
 		log.Error("failed to get cluster ID from sink URI",
 			zap.String("sinkURI", util.MaskSensitiveDataInURI(changefeedCfg.SinkURI)),
 			zap.Error(err))
-		return false, cerrors.Trace(err)
+		return false, errors.Trace(err)
 	}
 	if !isTiDB {
 		return false, nil
@@ -103,7 +103,7 @@ func getClusterIDBySinkURI(
 ) (uint64, string, bool, error) {
 	uri, err := url.Parse(sinkURI)
 	if err != nil {
-		return 0, "", false, cerrors.WrapError(cerrors.ErrSinkURIInvalid, err, sinkURI)
+		return 0, "", false, errors.WrapError(errors.ErrSinkURIInvalid, err, sinkURI)
 	}
 
 	scheme := config.GetScheme(uri)
@@ -113,7 +113,7 @@ func getClusterIDBySinkURI(
 
 	_, db, err := newMySQLConfigAndDBFn(ctx, changefeedCfg.ChangefeedID, uri, changefeedCfg)
 	if err != nil {
-		return 0, "", true, cerrors.Trace(err)
+		return 0, "", true, errors.Trace(err)
 	}
 	defer func() { _ = db.Close() }()
 
@@ -133,7 +133,7 @@ func getClusterIDBySinkURI(
 	}
 	clusterID, err := strconv.ParseUint(clusterIDStr, 10, 64)
 	if err != nil {
-		return 0, "", true, cerrors.Trace(err)
+		return 0, "", true, errors.Trace(err)
 	}
 
 	keyspace, err := getTiDBKeyspaceName(ctx, db)
@@ -154,7 +154,7 @@ func getTiDBKeyspaceName(ctx context.Context, db *sql.DB) (string, error) {
 	rows, err := db.QueryContext(ctx,
 		"show config where type = 'tidb' and name = 'keyspace-name'")
 	if err != nil {
-		return "", cerrors.Trace(err)
+		return "", errors.Trace(err)
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -164,7 +164,7 @@ func getTiDBKeyspaceName(ctx context.Context, db *sql.DB) (string, error) {
 		// Columns: Type | Instance | Name | Value
 		var typ, instance, name, value string
 		if err := rows.Scan(&typ, &instance, &name, &value); err != nil {
-			return "", cerrors.Trace(err)
+			return "", errors.Trace(err)
 		}
 		if !hasRow {
 			keyspace = value
@@ -172,14 +172,14 @@ func getTiDBKeyspaceName(ctx context.Context, db *sql.DB) (string, error) {
 			continue
 		}
 		if value != keyspace {
-			return "", cerrors.New("downstream TiDB reports inconsistent keyspace-name across instances")
+			return "", errors.New("downstream TiDB reports inconsistent keyspace-name across instances")
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return "", cerrors.Trace(err)
+		return "", errors.Trace(err)
 	}
 	if !hasRow {
-		return "", cerrors.Trace(sql.ErrNoRows)
+		return "", errors.Trace(sql.ErrNoRows)
 	}
 	return keyspace, nil
 }

@@ -16,15 +16,14 @@ package check
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"net/url"
 	"regexp"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/config"
-	cerrors "github.com/pingcap/ticdc/pkg/errors"
 	mysqlsink "github.com/pingcap/ticdc/pkg/sink/mysql"
 	"github.com/stretchr/testify/require"
 	pd "github.com/tikv/pd/client"
@@ -79,9 +78,9 @@ func TestValidateActiveActiveTSOIndexes_DownstreamMissingKey(t *testing.T) {
 		EnableActiveActive: true,
 	})
 	require.Error(t, err)
-	code, ok := cerrors.RFCCode(err)
+	code, ok := errors.RFCCode(err)
 	require.True(t, ok)
-	require.Equal(t, cerrors.ErrActiveActiveTSOIndexIncompatible.RFCCode(), code)
+	require.Equal(t, errors.ErrActiveActiveTSOIndexIncompatible.RFCCode(), code)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -105,9 +104,9 @@ func TestValidateActiveActiveTSOIndexes_DownstreamInconsistentAcrossInstances(t 
 		EnableActiveActive: true,
 	})
 	require.Error(t, err)
-	code, ok := cerrors.RFCCode(err)
+	code, ok := errors.RFCCode(err)
 	require.True(t, ok)
-	require.Equal(t, cerrors.ErrActiveActiveTSOIndexIncompatible.RFCCode(), code)
+	require.Equal(t, errors.ErrActiveActiveTSOIndexIncompatible.RFCCode(), code)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -131,9 +130,9 @@ func TestValidateActiveActiveTSOIndexes_UpstreamReadError(t *testing.T) {
 		EnableActiveActive: true,
 	})
 	require.Error(t, err)
-	code, ok := cerrors.RFCCode(err)
+	code, ok := errors.RFCCode(err)
 	require.True(t, ok)
-	require.Equal(t, cerrors.ErrActiveActiveTSOIndexIncompatible.RFCCode(), code)
+	require.Equal(t, errors.ErrActiveActiveTSOIndexIncompatible.RFCCode(), code)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -159,9 +158,9 @@ func TestValidateActiveActiveTSOIndexes_UpstreamMissingKey(t *testing.T) {
 		EnableActiveActive: true,
 	})
 	require.Error(t, err)
-	code, ok := cerrors.RFCCode(err)
+	code, ok := errors.RFCCode(err)
 	require.True(t, ok)
-	require.Equal(t, cerrors.ErrActiveActiveTSOIndexIncompatible.RFCCode(), code)
+	require.Equal(t, errors.ErrActiveActiveTSOIndexIncompatible.RFCCode(), code)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -188,9 +187,9 @@ func TestValidateActiveActiveTSOIndexes_Mismatch(t *testing.T) {
 		EnableActiveActive: true,
 	})
 	require.Error(t, err)
-	code, ok := cerrors.RFCCode(err)
+	code, ok := errors.RFCCode(err)
 	require.True(t, ok)
-	require.Equal(t, cerrors.ErrActiveActiveTSOIndexIncompatible.RFCCode(), code)
+	require.Equal(t, errors.ErrActiveActiveTSOIndexIncompatible.RFCCode(), code)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -217,9 +216,9 @@ func TestValidateActiveActiveTSOIndexes_MaxIndexMismatch(t *testing.T) {
 		EnableActiveActive: true,
 	})
 	require.Error(t, err)
-	code, ok := cerrors.RFCCode(err)
+	code, ok := errors.RFCCode(err)
 	require.True(t, ok)
-	require.Equal(t, cerrors.ErrActiveActiveTSOIndexIncompatible.RFCCode(), code)
+	require.Equal(t, errors.ErrActiveActiveTSOIndexIncompatible.RFCCode(), code)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 

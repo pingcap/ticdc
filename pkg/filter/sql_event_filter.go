@@ -16,12 +16,11 @@ package filter
 import (
 	"fmt"
 
-	"github.com/pingcap/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/log"
 	bf "github.com/pingcap/ticdc/pkg/binlog-filter"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	tfilter "github.com/pingcap/tidb/pkg/util/table-filter"
 	"go.uber.org/zap"
@@ -52,7 +51,7 @@ type sqlEventRule struct {
 func newSQLEventFilterRule(cfg *config.EventFilterRule, caseSensitive bool) (*sqlEventRule, error) {
 	tf, err := tfilter.Parse(cfg.Matcher)
 	if err != nil {
-		return nil, cerror.WrapError(cerror.ErrFilterRuleInvalid, err, cfg.Matcher)
+		return nil, errors.WrapError(errors.ErrFilterRuleInvalid, err, cfg.Matcher)
 	}
 
 	if !caseSensitive {
@@ -76,7 +75,7 @@ func newSQLEventFilterRule(cfg *config.EventFilterRule, caseSensitive bool) (*sq
 
 	res.bf, err = bf.NewBinlogEvent(caseSensitive, []*bf.BinlogEventRule{bfRule})
 	if err != nil {
-		return nil, cerror.WrapError(cerror.ErrFilterRuleInvalid, err, "failed to create binlog event filter")
+		return nil, errors.WrapError(errors.ErrFilterRuleInvalid, err, "failed to create binlog event filter")
 	}
 
 	return res, nil
@@ -89,7 +88,7 @@ func verifyIgnoreEvents(types []bf.EventType) error {
 	}
 	for _, et := range types {
 		if _, ok := typesMap[et]; !ok {
-			return cerror.ErrInvalidIgnoreEventType.GenWithStackByArgs(string(et))
+			return errors.ErrInvalidIgnoreEventType.GenWithStackByArgs(string(et))
 		}
 	}
 	return nil
@@ -202,7 +201,7 @@ func (f *sqlEventFilter) shouldSkipDML(schema, table string, dmlType common.RowT
 	for _, rule := range rules {
 		action, err := rule.bf.Filter(binlogFilterSchemaPlaceholder, binlogFilterTablePlaceholder, et, dmlQuery)
 		if err != nil {
-			return false, cerror.WrapError(cerror.ErrFailedToFilterDML, err, fmt.Sprintf("%s.%s, %d", schema, table, dmlType))
+			return false, errors.WrapError(errors.ErrFailedToFilterDML, err, fmt.Sprintf("%s.%s, %d", schema, table, dmlType))
 		}
 		if action == bf.Ignore {
 			return true, nil

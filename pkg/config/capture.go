@@ -15,9 +15,8 @@ package config
 import (
 	"encoding/json"
 
-	"github.com/pingcap/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/common"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
 )
 
 type CaptureID = string
@@ -56,7 +55,7 @@ type CaptureInfo struct {
 func (c *CaptureInfo) Marshal() ([]byte, error) {
 	data, err := json.Marshal(c)
 	if err != nil {
-		return nil, cerror.WrapError(cerror.ErrMarshalFailed, err)
+		return nil, errors.WrapError(errors.ErrMarshalFailed, err)
 	}
 
 	return data, nil
@@ -65,7 +64,7 @@ func (c *CaptureInfo) Marshal() ([]byte, error) {
 // Unmarshal from binary data.
 func (c *CaptureInfo) Unmarshal(data []byte) error {
 	err := json.Unmarshal(data, c)
-	return errors.Annotatef(cerror.WrapError(cerror.ErrUnmarshalFailed, err),
+	return errors.Annotatef(errors.WrapError(errors.ErrUnmarshalFailed, err),
 		"unmarshal data: %v", data)
 }
 
@@ -93,14 +92,14 @@ type TaskPosition struct {
 // Marshal returns the json marshal format of a TaskStatus
 func (tp *TaskPosition) Marshal() (string, error) {
 	data, err := json.Marshal(tp)
-	return string(data), cerror.WrapError(cerror.ErrMarshalFailed, err)
+	return string(data), errors.WrapError(errors.ErrMarshalFailed, err)
 }
 
 // Unmarshal unmarshals into *TaskStatus from json marshal byte slice
 func (tp *TaskPosition) Unmarshal(data []byte) error {
 	err := json.Unmarshal(data, tp)
 	return errors.Annotatef(
-		cerror.WrapError(cerror.ErrUnmarshalFailed, err), "Unmarshal data: %v", data)
+		errors.WrapError(errors.ErrUnmarshalFailed, err), "Unmarshal data: %v", data)
 }
 
 // String implements fmt.Stringer interface.

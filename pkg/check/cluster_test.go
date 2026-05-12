@@ -16,15 +16,14 @@ package check
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"net/url"
 	"regexp"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/config"
-	cerrors "github.com/pingcap/ticdc/pkg/errors"
 	mysqlsink "github.com/pingcap/ticdc/pkg/sink/mysql"
 	"github.com/stretchr/testify/require"
 	pd "github.com/tikv/pd/client"
@@ -68,9 +67,9 @@ func TestGetClusterIDBySinkURI(t *testing.T) {
 	t.Run("invalid uri", func(t *testing.T) {
 		id, keyspace, isTiDB, err := getClusterIDBySinkURI(context.Background(), "mysql://[::1", changefeedCfg)
 		require.Error(t, err)
-		code, ok := cerrors.RFCCode(err)
+		code, ok := errors.RFCCode(err)
 		require.True(t, ok)
-		require.Equal(t, cerrors.ErrSinkURIInvalid.RFCCode(), code)
+		require.Equal(t, errors.ErrSinkURIInvalid.RFCCode(), code)
 		require.False(t, isTiDB)
 		require.Equal(t, uint64(0), id)
 		require.Equal(t, "", keyspace)

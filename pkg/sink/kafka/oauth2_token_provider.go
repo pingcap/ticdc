@@ -18,7 +18,7 @@ import (
 	"net/url"
 
 	"github.com/IBM/sarama"
-	"github.com/pingcap/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/clientcredentials"
 )

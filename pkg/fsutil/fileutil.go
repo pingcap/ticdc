@@ -18,8 +18,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/pingcap/errors"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 )
 
 const (
@@ -30,10 +29,10 @@ const (
 func IsDirAndWritable(path string) error {
 	st, err := os.Stat(path)
 	if err != nil {
-		return cerror.WrapError(cerror.ErrCheckDirWritable, err)
+		return errors.WrapError(errors.ErrCheckDirWritable, err)
 	}
 	if !st.IsDir() {
-		return cerror.WrapError(cerror.ErrCheckDirWritable, errors.Errorf("%s is not a directory", path))
+		return errors.WrapError(errors.ErrCheckDirWritable, errors.Errorf("%s is not a directory", path))
 	}
 	return IsDirWritable(path)
 }
@@ -42,23 +41,23 @@ func IsDirAndWritable(path string) error {
 func IsDirWritable(dir string) error {
 	f := filepath.Join(dir, ".writable.test")
 	if err := os.WriteFile(f, []byte(""), 0o600); err != nil {
-		return cerror.WrapError(cerror.ErrCheckDirWritable, err)
+		return errors.WrapError(errors.ErrCheckDirWritable, err)
 	}
-	return cerror.WrapError(cerror.ErrCheckDirWritable, os.Remove(f))
+	return errors.WrapError(errors.ErrCheckDirWritable, os.Remove(f))
 }
 
 // IsDirReadWritable check if the dir is writable and readable by cdc server
 func IsDirReadWritable(dir string) error {
 	f := filepath.Join(dir, "file.test")
 	if err := os.WriteFile(f, []byte(""), 0o600); err != nil {
-		return cerror.WrapError(cerror.ErrCheckDirValid, err)
+		return errors.WrapError(errors.ErrCheckDirValid, err)
 	}
 
 	if _, err := os.ReadFile(f); err != nil {
-		return cerror.WrapError(cerror.ErrCheckDirValid, err)
+		return errors.WrapError(errors.ErrCheckDirValid, err)
 	}
 
-	return cerror.WrapError(cerror.ErrCheckDirValid, os.Remove(f))
+	return errors.WrapError(errors.ErrCheckDirValid, os.Remove(f))
 }
 
 // DiskInfo present the disk amount information, in gb

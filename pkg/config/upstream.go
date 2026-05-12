@@ -15,8 +15,7 @@ package config
 import (
 	"encoding/json"
 
-	"github.com/pingcap/errors"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 )
 
 // UpstreamID is the type for upstream ID
@@ -36,7 +35,7 @@ type UpstreamInfo struct {
 func (c *UpstreamInfo) Marshal() ([]byte, error) {
 	data, err := json.Marshal(c)
 	if err != nil {
-		return nil, cerror.WrapError(cerror.ErrMarshalFailed, err)
+		return nil, errors.WrapError(errors.ErrMarshalFailed, err)
 	}
 
 	return data, nil
@@ -45,7 +44,7 @@ func (c *UpstreamInfo) Marshal() ([]byte, error) {
 // Unmarshal from binary data.
 func (c *UpstreamInfo) Unmarshal(data []byte) error {
 	err := json.Unmarshal(data, c)
-	return errors.Annotatef(cerror.WrapError(cerror.ErrUnmarshalFailed, err),
+	return errors.Annotatef(errors.WrapError(errors.ErrUnmarshalFailed, err),
 		"unmarshal data: %v", data)
 }
 

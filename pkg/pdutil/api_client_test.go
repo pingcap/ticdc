@@ -23,8 +23,8 @@ import (
 	"testing"
 
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/common"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/httputil"
 	"github.com/pingcap/tidb/pkg/tablecodec"
 	"github.com/pingcap/tidb/pkg/util/codec"
@@ -101,7 +101,7 @@ func TestMetaLabelFail(t *testing.T) {
 	require.Regexp(t, ".*404.*", err)
 
 	err = pc.UpdateMetaLabel(ctx)
-	require.ErrorIs(t, err, cerror.ErrReachMaxTry)
+	require.ErrorIs(t, err, errors.ErrReachMaxTry)
 	mockClient.testServer.Close()
 }
 

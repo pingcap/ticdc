@@ -20,7 +20,7 @@ import (
 	"github.com/pingcap/log"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -124,7 +124,7 @@ func TestGetAllPhysicalTablesReturnsSnapshotLostByGCError(t *testing.T) {
 
 	_, err := pstorage.getAllPhysicalTables(99, nil)
 	require.Error(t, err)
-	require.True(t, cerror.ErrSnapshotLostByGC.Equal(err))
+	require.True(t, errors.ErrSnapshotLostByGC.Equal(err))
 	require.Contains(t, err.Error(), "checkpoint-ts 99 is earlier than or equal to GC safepoint at 100")
 	require.NotContains(t, err.Error(), "%!d")
 }

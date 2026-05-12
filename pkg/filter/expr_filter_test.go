@@ -18,7 +18,7 @@ import (
 
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
@@ -52,5 +52,5 @@ func TestDmlExprFilterInvalidConfig(t *testing.T) {
 
 	_, err = f.shouldSkipDML(common.RowTypeInsert, emptyRow, chunkRow, ti)
 	require.Error(t, err)
-	require.True(t, cerror.ErrExpressionParseFailed.Equal(err))
+	require.True(t, errors.ErrExpressionParseFailed.Equal(err))
 }

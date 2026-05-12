@@ -22,9 +22,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/pingcap/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/log"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/security"
 	"go.uber.org/zap"
 )
@@ -173,7 +172,7 @@ type ServerConfig struct {
 func (c *ServerConfig) Marshal() (string, error) {
 	cfg, err := json.Marshal(c)
 	if err != nil {
-		return "", cerror.WrapError(cerror.ErrEncodeFailed, errors.Annotatef(err, "Unmarshal data: %v", c))
+		return "", errors.WrapError(errors.ErrEncodeFailed, errors.Annotatef(err, "Unmarshal data: %v", c))
 	}
 	return string(cfg), nil
 }
@@ -182,7 +181,7 @@ func (c *ServerConfig) Marshal() (string, error) {
 func (c *ServerConfig) Unmarshal(data []byte) error {
 	err := json.Unmarshal(data, c)
 	if err != nil {
-		return cerror.WrapError(cerror.ErrDecodeFailed, err)
+		return errors.WrapError(errors.ErrDecodeFailed, err)
 	}
 	return nil
 }
@@ -198,13 +197,13 @@ func (c *ServerConfig) Clone() *ServerConfig {
 	str, err := c.Marshal()
 	if err != nil {
 		log.Panic("failed to marshal replica config",
-			zap.Error(cerror.WrapError(cerror.ErrDecodeFailed, err)))
+			zap.Error(errors.WrapError(errors.ErrDecodeFailed, err)))
 	}
 	clone := new(ServerConfig)
 	err = clone.Unmarshal([]byte(str))
 	if err != nil {
 		log.Panic("failed to unmarshal replica config",
-			zap.Error(cerror.WrapError(cerror.ErrDecodeFailed, err)))
+			zap.Error(errors.WrapError(errors.ErrDecodeFailed, err)))
 	}
 	return clone
 }
@@ -212,13 +211,13 @@ func (c *ServerConfig) Clone() *ServerConfig {
 // ValidateAndAdjust validates and adjusts the server configuration
 func (c *ServerConfig) ValidateAndAdjust() error {
 	if !isValidClusterID(c.ClusterID) {
-		return cerror.ErrInvalidServerOption.GenWithStack(fmt.Sprintf("bad cluster-id"+
+		return errors.ErrInvalidServerOption.GenWithStack(fmt.Sprintf("bad cluster-id"+
 			"please match the pattern \"^[a-zA-Z0-9]+(\\-[a-zA-Z0-9]+)*$\", and not the list of"+
 			" following reserved world: %s"+
 			"eg, \"simple-cluster-id\"", strings.Join(ReservedClusterIDs, ",")))
 	}
 	if c.Addr == "" {
-		return cerror.ErrInvalidServerOption.GenWithStack("empty address")
+		return errors.ErrInvalidServerOption.GenWithStack("empty address")
 	}
 	if c.AdvertiseAddr == "" {
 		c.AdvertiseAddr = c.Addr
@@ -228,13 +227,13 @@ func (c *ServerConfig) ValidateAndAdjust() error {
 		ip := net.ParseIP(c.AdvertiseAddr[:idx])
 		// Skip nil as it could be a domain name.
 		if ip != nil && ip.IsUnspecified() {
-			return cerror.ErrInvalidServerOption.GenWithStack("advertise address must be specified as a valid IP")
+			return errors.ErrInvalidServerOption.GenWithStack("advertise address must be specified as a valid IP")
 		}
 	} else {
-		return cerror.ErrInvalidServerOption.GenWithStack("advertise address or address does not contain a port")
+		return errors.ErrInvalidServerOption.GenWithStack("advertise address or address does not contain a port")
 	}
 	if c.GcTTL == 0 {
-		return cerror.ErrInvalidServerOption.GenWithStack("empty GC TTL is not allowed")
+		return errors.ErrInvalidServerOption.GenWithStack("empty GC TTL is not allowed")
 	}
 	// 5s is minimum lease ttl in etcd(PD)
 	if c.CaptureSessionTTL < 5 {
@@ -246,7 +245,7 @@ func (c *ServerConfig) ValidateAndAdjust() error {
 		if c.Security.ClientUserRequired {
 			if len(c.Security.ClientAllowedUser) == 0 {
 				log.Error("client-allowed-user should not be empty when client-user-required is true")
-				return cerror.ErrInvalidServerOption.GenWithStack("client-allowed-user should not be empty when client-user-required is true")
+				return errors.ErrInvalidServerOption.GenWithStack("client-allowed-user should not be empty when client-user-required is true")
 			}
 			if !c.Security.IsTLSEnabled() {
 				log.Warn("client-allowed-user is true, but tls is not enabled." +

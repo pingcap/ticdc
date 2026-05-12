@@ -21,7 +21,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/encryption/kms"
-	cerrors "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"go.uber.org/zap"
 )
 
@@ -131,7 +131,7 @@ func (c *MockTiKVClient) GetKeyspaceEncryptionMeta(ctx context.Context, keyspace
 	if c.notFoundKeyspaces[keyspaceID] {
 		log.Debug("mock TiKV client: encryption meta not found",
 			zap.Uint32("keyspaceID", keyspaceID))
-		return nil, cerrors.ErrEncryptionMetaNotFound
+		return nil, errors.ErrEncryptionMetaNotFound
 	}
 
 	// Return mock metadata if available
@@ -146,7 +146,7 @@ func (c *MockTiKVClient) GetKeyspaceEncryptionMeta(ctx context.Context, keyspace
 	// This simulates classic architecture or unconfigured encryption
 	log.Debug("mock TiKV client: encryption meta not found (unknown keyspace)",
 		zap.Uint32("keyspaceID", keyspaceID))
-	return nil, cerrors.ErrEncryptionMetaNotFound
+	return nil, errors.ErrEncryptionMetaNotFound
 }
 
 // SetKeyspaceMeta sets mock encryption metadata for a keyspace (for testing)
@@ -154,7 +154,7 @@ func (c *MockTiKVClient) SetKeyspaceMeta(keyspaceID uint32, meta *EncryptionMeta
 	c.metaMap[keyspaceID] = meta
 }
 
-// SetKeyspaceNotFound sets a keyspace to return cerrors.ErrEncryptionMetaNotFound (for testing)
+// SetKeyspaceNotFound sets a keyspace to return errors.ErrEncryptionMetaNotFound (for testing)
 func (c *MockTiKVClient) SetKeyspaceNotFound(keyspaceID uint32) {
 	c.notFoundKeyspaces[keyspaceID] = true
 }

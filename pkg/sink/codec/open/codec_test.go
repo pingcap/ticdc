@@ -19,7 +19,7 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/util/chunk"
@@ -111,7 +111,7 @@ func TestRowChanged2MsgOnlyHandleKeyColumns(t *testing.T) {
 		CommitTs:       insertEventNoHandleKey.CommitTs,
 		ColumnSelector: columnselector.NewDefaultColumnSelector(),
 	}, columnFlags, config, true, "")
-	require.Error(t, err, cerror.ErrOpenProtocolCodecInvalidData)
+	require.Error(t, err, errors.ErrOpenProtocolCodecInvalidData)
 
 	row, ok = insertEvent.GetNextRow()
 	insertEvent.Rewind()
@@ -151,7 +151,7 @@ func TestRowChanged2MsgOnlyHandleKeyColumns(t *testing.T) {
 		CommitTs:       insertEventNoHandleKey.CommitTs,
 		ColumnSelector: columnselector.NewDefaultColumnSelector(),
 	}, columnFlags, config, true, "")
-	require.Error(t, err, cerror.ErrOpenProtocolCodecInvalidData)
+	require.Error(t, err, errors.ErrOpenProtocolCodecInvalidData)
 
 	row, ok = insertEvent.GetNextRow()
 	insertEvent.Rewind()
@@ -205,5 +205,5 @@ func TestRowChanged2MsgOnlyHandleKeyColumns(t *testing.T) {
 		CommitTs:       insertEventNoHandleKey.CommitTs,
 		ColumnSelector: columnselector.NewDefaultColumnSelector(),
 	}, columnFlags, config, true, "")
-	require.Error(t, err, cerror.ErrOpenProtocolCodecInvalidData)
+	require.Error(t, err, errors.ErrOpenProtocolCodecInvalidData)
 }

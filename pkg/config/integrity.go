@@ -16,7 +16,7 @@ package config
 import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/eventpb"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"go.uber.org/zap"
 )
 
@@ -45,11 +45,11 @@ const (
 func (c *IntegrityConfig) Validate() error {
 	if c.IntegrityCheckLevel != CheckLevelNone &&
 		c.IntegrityCheckLevel != CheckLevelCorrectness {
-		return cerror.ErrInvalidReplicaConfig.GenWithStackByArgs()
+		return errors.ErrInvalidReplicaConfig.GenWithStackByArgs()
 	}
 	if c.CorruptionHandleLevel != CorruptionHandleLevelWarn &&
 		c.CorruptionHandleLevel != CorruptionHandleLevelError {
-		return cerror.ErrInvalidReplicaConfig.GenWithStackByArgs()
+		return errors.ErrInvalidReplicaConfig.GenWithStackByArgs()
 	}
 
 	if c.Enabled() {

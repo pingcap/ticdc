@@ -22,7 +22,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/applier"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/logger"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/spf13/cobra"
@@ -59,7 +59,7 @@ func (o *applyRedoOptions) complete(cmd *cobra.Command) error {
 	// parse sinkURI as a URI
 	sinkURI, err := url.Parse(o.sinkURI)
 	if err != nil {
-		return cerror.WrapError(cerror.ErrSinkURIInvalid, err)
+		return errors.WrapError(errors.ErrSinkURIInvalid, err)
 	}
 	rawQuery := sinkURI.Query()
 	// set safe-mode to true if not set

@@ -24,10 +24,9 @@ import (
 
 	"github.com/IBM/sarama"
 	"github.com/aws/aws-sdk-go/aws"
-	"github.com/pingcap/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/stretchr/testify/require"
 )
@@ -108,7 +107,7 @@ func TestCompleteOptions(t *testing.T) {
 	require.NoError(t, err)
 	options = NewOptions()
 	err = options.Apply(commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "test"), sinkURI, config.GetDefaultReplicaConfig().Sink)
-	require.True(t, cerror.ErrKafkaInvalidClientID.Equal(err))
+	require.True(t, errors.ErrKafkaInvalidClientID.Equal(err))
 }
 
 func TestSetPartitionNum(t *testing.T) {
@@ -124,7 +123,7 @@ func TestSetPartitionNum(t *testing.T) {
 
 	options.PartitionNum = 3
 	err = options.setPartitionNum(2)
-	require.True(t, cerror.ErrKafkaInvalidPartitionNum.Equal(err))
+	require.True(t, errors.ErrKafkaInvalidPartitionNum.Equal(err))
 }
 
 func TestClientID(t *testing.T) {
@@ -833,7 +832,7 @@ func TestAdjustOptionsKeepAlive(t *testing.T) {
 		require.Error(t, err)
 		// The error should be a type conversion error.
 		numError := &strconv.NumError{}
-		ok := cerror.As(errors.Cause(err), &numError)
+		ok := errors.As(errors.Cause(err), &numError)
 		require.True(t, ok, "error should be of type strconv.NumError")
 	})
 

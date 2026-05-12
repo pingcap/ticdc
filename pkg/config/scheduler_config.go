@@ -14,12 +14,11 @@
 package config
 
 import (
-	"errors"
 	"net/url"
 	"time"
 
 	"github.com/pingcap/log"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
 )
@@ -205,27 +204,27 @@ func NewDefaultSchedulerConfig() *SchedulerConfig {
 // ValidateAndAdjust verifies that each parameter is valid.
 func (c *SchedulerConfig) ValidateAndAdjust() error {
 	if c.HeartbeatTick <= 0 {
-		return cerror.ErrInvalidServerOption.GenWithStackByArgs(
+		return errors.ErrInvalidServerOption.GenWithStackByArgs(
 			"heartbeat-tick must be larger than 0")
 	}
 	if c.CollectStatsTick <= 0 {
-		return cerror.ErrInvalidServerOption.GenWithStackByArgs(
+		return errors.ErrInvalidServerOption.GenWithStackByArgs(
 			"collect-stats-tick must be larger than 0")
 	}
 	if c.MaxTaskConcurrency <= 0 {
-		return cerror.ErrInvalidServerOption.GenWithStackByArgs(
+		return errors.ErrInvalidServerOption.GenWithStackByArgs(
 			"max-task-concurrency must be larger than 0")
 	}
 	if time.Duration(c.CheckBalanceInterval) <= time.Second {
-		return cerror.ErrInvalidServerOption.GenWithStackByArgs(
+		return errors.ErrInvalidServerOption.GenWithStackByArgs(
 			"check-balance-interval must be larger than 1s")
 	}
 	if c.AddTableBatchSize <= 0 {
-		return cerror.ErrInvalidServerOption.GenWithStackByArgs(
+		return errors.ErrInvalidServerOption.GenWithStackByArgs(
 			"add-table-batch-size must be large than 0")
 	}
 	if c.BalanceMoveBatchSize <= 0 {
-		return cerror.ErrInvalidServerOption.GenWithStackByArgs(
+		return errors.ErrInvalidServerOption.GenWithStackByArgs(
 			"balance-move-batch-size must be larger than 0")
 	}
 	return nil

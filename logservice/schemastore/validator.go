@@ -18,10 +18,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/pingcap/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
 	tidbkv "github.com/pingcap/tidb/pkg/kv"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
@@ -177,7 +176,7 @@ func VerifyTables(f filter.Filter, storage tidbkv.Storage, startTs uint64) (
 	meta := getSnapshotMeta(storage, startTs)
 	dbinfos, err := meta.ListDatabases()
 	if err != nil {
-		return nil, nil, nil, nil, cerror.WrapError(cerror.ErrMetaListDatabases, err)
+		return nil, nil, nil, nil, errors.WrapError(errors.ErrMetaListDatabases, err)
 	}
 
 	verifier := newTableVerifier(f, tableWorkers)
@@ -198,7 +197,7 @@ dbLoop:
 
 		rawTables, err := meta.GetMetasByDBID(dbinfo.ID)
 		if err != nil {
-			verifier.setErr(cerror.WrapError(cerror.ErrMetaListDatabases, err))
+			verifier.setErr(errors.WrapError(errors.ErrMetaListDatabases, err))
 			break
 		}
 

@@ -20,7 +20,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/config"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/tikv/client-go/v2/oracle"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
@@ -39,7 +39,7 @@ func GetSourceID(ctx context.Context, pdClient pd.Client) (uint64, error) {
 	sourceID := uint64(1)
 	sourceIDConfig, _, err := pdClient.LoadGlobalConfig(ctx, []string{sourceIDName}, "")
 	if err != nil {
-		return 0, cerror.WrapError(cerror.ErrPDEtcdAPIError, err)
+		return 0, errors.WrapError(errors.ErrPDEtcdAPIError, err)
 	}
 	if len(sourceIDConfig) != 0 && sourceIDConfig[0].Value != "" {
 		sourceID, err = strconv.ParseUint(sourceIDConfig[0].Value, 10, 64)
@@ -47,7 +47,7 @@ func GetSourceID(ctx context.Context, pdClient pd.Client) (uint64, error) {
 			log.Error("fail to parse sourceID from PD",
 				zap.String("sourceID", sourceIDConfig[0].Value),
 				zap.Error(err))
-			return 0, cerror.WrapError(cerror.ErrPDEtcdAPIError, err)
+			return 0, errors.WrapError(errors.ErrPDEtcdAPIError, err)
 		}
 	}
 	return sourceID, nil

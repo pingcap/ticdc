@@ -21,9 +21,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pingcap/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/log"
-	cerrors "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 )
@@ -125,7 +124,7 @@ func runForDuration(ctx context.Context, duration time.Duration, f func(ctx cont
 	case <-ctx.Done():
 		return ctx.Err()
 	case err := <-errCh:
-		if cerrors.Is(errors.Cause(err), context.DeadlineExceeded) {
+		if errors.Is(errors.Cause(err), context.DeadlineExceeded) {
 			return nil
 		}
 		return errors.Trace(err)

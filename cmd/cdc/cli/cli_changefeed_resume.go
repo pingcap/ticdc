@@ -22,7 +22,7 @@ import (
 	"github.com/pingcap/ticdc/cmd/cdc/factory"
 	"github.com/pingcap/ticdc/cmd/util"
 	apiClient "github.com/pingcap/ticdc/pkg/api/v2"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	putil "github.com/pingcap/ticdc/pkg/util"
 	"github.com/spf13/cobra"
 	"github.com/tikv/client-go/v2/oracle"
@@ -180,15 +180,15 @@ func (o *resumeChangefeedOptions) validateParams(ctx context.Context) error {
 
 	checkpointTs, err := strconv.ParseUint(o.overwriteCheckpointTs, 10, 64)
 	if err != nil {
-		return cerror.ErrCliInvalidCheckpointTs.GenWithStackByArgs(o.overwriteCheckpointTs)
+		return errors.ErrCliInvalidCheckpointTs.GenWithStackByArgs(o.overwriteCheckpointTs)
 	}
 
 	if checkpointTs == 0 {
-		return cerror.ErrCliInvalidCheckpointTs.GenWithStackByArgs(o.overwriteCheckpointTs)
+		return errors.ErrCliInvalidCheckpointTs.GenWithStackByArgs(o.overwriteCheckpointTs)
 	}
 
 	if checkpointTs > oracle.ComposeTS(tso.Timestamp, tso.LogicTime) {
-		return cerror.ErrCliCheckpointTsIsInFuture.GenWithStackByArgs(checkpointTs)
+		return errors.ErrCliCheckpointTsIsInFuture.GenWithStackByArgs(checkpointTs)
 	}
 
 	o.checkpointTs = checkpointTs

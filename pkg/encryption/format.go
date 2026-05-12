@@ -14,7 +14,7 @@
 package encryption
 
 import (
-	cerrors "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 )
 
 const (
@@ -38,11 +38,11 @@ type EncryptionHeader struct {
 // The version byte comes from the encryption metadata obtained from TiKV
 func EncodeEncryptedData(data []byte, version byte, dataKeyID string) ([]byte, error) {
 	if len(dataKeyID) != 3 {
-		return nil, cerrors.ErrInvalidDataKeyID.GenWithStackByArgs("data key ID must be 3 bytes")
+		return nil, errors.ErrInvalidDataKeyID.GenWithStackByArgs("data key ID must be 3 bytes")
 	}
 
 	if version == VersionUnencrypted {
-		return nil, cerrors.ErrEncryptionFailed.GenWithStackByArgs("version cannot be 0 for encrypted data")
+		return nil, errors.ErrEncryptionFailed.GenWithStackByArgs("version cannot be 0 for encrypted data")
 	}
 
 	result := make([]byte, EncryptionHeaderSize+len(data))
@@ -57,7 +57,7 @@ func EncodeEncryptedData(data []byte, version byte, dataKeyID string) ([]byte, e
 // Returns: (version, dataKeyID, encryptedData, error)
 func DecodeEncryptedData(data []byte) (byte, string, []byte, error) {
 	if len(data) < EncryptionHeaderSize {
-		return 0, "", nil, cerrors.ErrDecodeFailed.GenWithStackByArgs("data too short for encryption header")
+		return 0, "", nil, errors.ErrDecodeFailed.GenWithStackByArgs("data too short for encryption header")
 	}
 
 	version := data[0]
@@ -136,7 +136,7 @@ func DecodeUnencryptedData(data []byte) ([]byte, error) {
 // ExtractDataKeyID extracts the data key ID from encrypted data
 func ExtractDataKeyID(data []byte) (string, error) {
 	if len(data) < EncryptionHeaderSize {
-		return "", cerrors.ErrDecodeFailed.GenWithStackByArgs("data too short")
+		return "", errors.ErrDecodeFailed.GenWithStackByArgs("data too short")
 	}
 
 	version := data[0]
@@ -153,5 +153,5 @@ func ExtractDataKeyID(data []byte) (string, error) {
 	}
 
 	// Otherwise, this is not encrypted data (legacy data or new-format unencrypted)
-	return "", cerrors.ErrDecodeFailed.GenWithStackByArgs("data is not encrypted")
+	return "", errors.ErrDecodeFailed.GenWithStackByArgs("data is not encrypted")
 }

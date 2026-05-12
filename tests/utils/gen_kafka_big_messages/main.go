@@ -20,7 +20,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/pingcap/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 )
 
 // See: https://docs.pingcap.com/tidb/stable/tidb-limitations/#limitations-on-string-types

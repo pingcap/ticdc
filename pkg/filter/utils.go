@@ -19,7 +19,7 @@ import (
 
 	bf "github.com/pingcap/ticdc/pkg/binlog-filter"
 	"github.com/pingcap/ticdc/pkg/config"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	tifilter "github.com/pingcap/tidb/pkg/util/filter"
 	tfilter "github.com/pingcap/tidb/pkg/util/table-filter"
@@ -57,7 +57,7 @@ func VerifyTableRules(cfg *config.FilterConfig) (tfilter.Filter, error) {
 	}
 	f, err := tfilter.Parse(rules)
 	if err != nil {
-		return nil, cerror.WrapError(cerror.ErrFilterRuleInvalid, err, cfg)
+		return nil, errors.WrapError(errors.ErrFilterRuleInvalid, err, cfg)
 	}
 
 	return f, nil

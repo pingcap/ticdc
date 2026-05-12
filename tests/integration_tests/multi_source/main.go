@@ -27,9 +27,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/pingcap/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/log"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/tests/integration_tests/util"
 	"go.uber.org/zap"
 )
@@ -39,7 +38,7 @@ func main() {
 	err := cfg.Parse(os.Args[1:])
 	switch {
 	case errors.Cause(err) == nil:
-	case cerror.Is(errors.Cause(err), flag.ErrHelp):
+	case errors.Is(errors.Cause(err), flag.ErrHelp):
 		os.Exit(0)
 	default:
 		log.S().Errorf("parse cmd flags err %s\n", err)

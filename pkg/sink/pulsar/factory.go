@@ -20,7 +20,7 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"go.uber.org/zap"
 )
 
@@ -58,7 +58,7 @@ func NewCreatorFactory(config *config.PulsarConfig, changefeedID commonType.Chan
 		if sinkConfig.PulsarConfig != nil && sinkConfig.PulsarConfig.TLSTrustCertsFilePath != nil {
 			option.TLSTrustCertsFilePath = *sinkConfig.PulsarConfig.TLSTrustCertsFilePath
 		} else {
-			return nil, cerror.ErrPulsarInvalidConfig.
+			return nil, errors.ErrPulsarInvalidConfig.
 				GenWithStackByArgs("pulsar tls trust certs file path is not set when mTLS authentication is enabled")
 		}
 	}

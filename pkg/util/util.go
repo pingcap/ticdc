@@ -19,7 +19,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/pingcap/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 )
 
 // ParseHostAndPortFromAddress parse an address in format `host:port` like `127.0.0.1:2379`.

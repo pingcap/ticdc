@@ -17,8 +17,7 @@ import (
 	"os"
 	"syscall"
 
-	"github.com/pingcap/errors"
-	cerrors "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 )
 
 // FileLock represents a file lock created by `flock`.
@@ -44,7 +43,7 @@ func (fl *FileLock) Lock() error {
 	err := syscall.Flock(int(fdInt), syscall.LOCK_EX|syscall.LOCK_NB)
 	if err != nil {
 		if err == syscall.EAGAIN {
-			return cerrors.ErrConflictingFileLocks.Wrap(err).GenWithStackByArgs(fl.fd.Name())
+			return errors.ErrConflictingFileLocks.Wrap(err).GenWithStackByArgs(fl.fd.Name())
 		}
 		return errors.Trace(err)
 	}

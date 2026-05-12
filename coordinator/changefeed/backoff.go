@@ -17,12 +17,11 @@ import (
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
-	"github.com/pingcap/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
-	cerrors "github.com/pingcap/ticdc/pkg/errors"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
@@ -182,13 +181,13 @@ func (m *Backoff) StartFinished() {
 
 // ShouldFailChangefeed return true if a running error contains a changefeed not retry error.
 func ShouldFailChangefeed(e *heartbeatpb.RunningError) bool {
-	return cerrors.ShouldFailChangefeed(errors.New(e.Message + e.Code))
+	return errors.ShouldFailChangefeed(errors.New(e.Message + e.Code))
 }
 
 func (m *Backoff) HandleError(errs []*heartbeatpb.RunningError) (bool, *heartbeatpb.RunningError) {
 	// if there are a fastFail error in errs, we can just fastFail the changefeed
 	for _, err := range errs {
-		if cerrors.IsChangefeedGCFastFailErrorCode(errors.RFCErrorCode(err.Code)) ||
+		if errors.IsChangefeedGCFastFailErrorCode(errors.RFCErrorCode(err.Code)) ||
 			ShouldFailChangefeed(err) {
 			return true, err
 		}

@@ -20,10 +20,9 @@ import (
 	"time"
 
 	"github.com/golang/mock/gomock"
-	"github.com/pingcap/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	v2 "github.com/pingcap/ticdc/api/v2"
 	"github.com/pingcap/ticdc/pkg/api"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
 )
@@ -176,7 +175,7 @@ func TestChangefeedResumeWithNewCheckpointTs(t *testing.T) {
 	f.changefeeds.EXPECT().Resume(gomock.Any(), &v2.ResumeChangefeedConfig{
 		OverwriteCheckpointTs: 262144,
 	}, gomock.Any(), "abc").
-		Return(cerror.ErrStartTsBeforeGC)
+		Return(errors.ErrStartTsBeforeGC)
 	o.overwriteCheckpointTs = "262144"
 	require.NotNil(t, o.run(cmd))
 }

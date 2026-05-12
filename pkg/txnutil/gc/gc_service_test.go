@@ -19,10 +19,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pingcap/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config/kerneltype"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/stretchr/testify/require"
 	pd "github.com/tikv/pd/client"
 	pdgc "github.com/tikv/pd/client/clients/gc"
@@ -112,7 +111,7 @@ func TestCheckSafetyOfStartTs(t *testing.T) {
 		"ticdc-creating-",
 		0,
 		common.NewChangeFeedIDWithName("changefeed1", "default"), TTL, 50)
-	require.True(t, cerror.ErrStartTsBeforeGC.Equal(errors.Cause(err)))
+	require.True(t, errors.ErrStartTsBeforeGC.Equal(errors.Cause(err)))
 
 	err = EnsureChangefeedStartTsSafety(ctx, pdCli,
 		"ticdc-creating-",
@@ -145,7 +144,7 @@ func TestCheckSafetyOfStartTs(t *testing.T) {
 		"ticdc-creating-",
 		0,
 		common.NewChangeFeedIDWithName("changefeed2", "default"), TTL, 65)
-	require.True(t, cerror.ErrStartTsBeforeGC.Equal(errors.Cause(err)))
+	require.True(t, errors.ErrStartTsBeforeGC.Equal(errors.Cause(err)))
 
 	pdCli.retryThreshold = 3
 	pdCli.retryCount = 0
@@ -153,7 +152,7 @@ func TestCheckSafetyOfStartTs(t *testing.T) {
 		"ticdc-creating-",
 		0,
 		common.NewChangeFeedIDWithName("changefeed1", "default"), TTL, 50)
-	require.True(t, cerror.ErrStartTsBeforeGC.Equal(errors.Cause(err)))
+	require.True(t, errors.ErrStartTsBeforeGC.Equal(errors.Cause(err)))
 }
 
 type mockPdClientForServiceGCSafePoint struct {

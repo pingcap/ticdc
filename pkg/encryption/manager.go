@@ -22,7 +22,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/encryption/kms"
-	cerrors "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"go.uber.org/zap"
 )
 
@@ -117,7 +117,7 @@ func (m *encryptionMetaManager) GetCurrentDataKey(ctx context.Context, keyspaceI
 	if meta.Current == nil || meta.Current.DataKeyId == 0 {
 		log.Warn("encryption meta current data key ID is empty",
 			zap.Uint32("keyspaceID", keyspaceID))
-		return nil, "", 0, cerrors.ErrDataKeyNotFound.GenWithStackByArgs("current data key ID is empty")
+		return nil, "", 0, errors.ErrDataKeyNotFound.GenWithStackByArgs("current data key ID is empty")
 	}
 
 	currentKeyID, err := encodeDataKeyID24BE(meta.Current.DataKeyId)
@@ -134,7 +134,7 @@ func (m *encryptionMetaManager) GetCurrentDataKey(ctx context.Context, keyspaceI
 		log.Warn("invalid encryption meta version derived from current data key ID",
 			zap.Uint32("keyspaceID", keyspaceID),
 			zap.Uint32("dataKeyID", meta.Current.DataKeyId))
-		return nil, "", 0, cerrors.ErrEncryptionFailed.GenWithStackByArgs("version must be non-zero")
+		return nil, "", 0, errors.ErrEncryptionFailed.GenWithStackByArgs("version must be non-zero")
 	}
 
 	// Check cache first.
@@ -156,7 +156,7 @@ func (m *encryptionMetaManager) GetCurrentDataKey(ctx context.Context, keyspaceI
 		log.Warn("current data key not found in encryption meta",
 			zap.Uint32("keyspaceID", keyspaceID),
 			zap.Uint32("dataKeyID", meta.Current.DataKeyId))
-		return nil, "", 0, cerrors.ErrDataKeyNotFound.GenWithStackByArgs("current data key not found")
+		return nil, "", 0, errors.ErrDataKeyNotFound.GenWithStackByArgs("current data key not found")
 	}
 
 	plaintextKey, err := m.decryptDataKey(ctx, meta.MasterKey, dataKey.Ciphertext)
@@ -215,7 +215,7 @@ func (m *encryptionMetaManager) GetDataKey(ctx context.Context, keyspaceID uint3
 		log.Warn("encryption not enabled when looking up data key",
 			zap.Uint32("keyspaceID", keyspaceID),
 			zap.Binary("dataKeyID", []byte(dataKeyID)))
-		return nil, cerrors.ErrDataKeyNotFound.GenWithStackByArgs("encryption not enabled")
+		return nil, errors.ErrDataKeyNotFound.GenWithStackByArgs("encryption not enabled")
 	}
 
 	id, err := decodeDataKeyID24BE(dataKeyID)
@@ -233,7 +233,7 @@ func (m *encryptionMetaManager) GetDataKey(ctx context.Context, keyspaceID uint3
 			zap.Uint32("keyspaceID", keyspaceID),
 			zap.Uint32("dataKeyID", id),
 			zap.Binary("dataKeyIDBytes", []byte(dataKeyID)))
-		return nil, cerrors.ErrDataKeyNotFound.GenWithStackByArgs("data key not found: " + dataKeyID)
+		return nil, errors.ErrDataKeyNotFound.GenWithStackByArgs("data key not found: " + dataKeyID)
 	}
 
 	// Decrypt the data key using master key
@@ -292,7 +292,7 @@ func (m *encryptionMetaManager) getMeta(ctx context.Context, keyspaceID uint32) 
 	meta, err := m.tikvClient.GetKeyspaceEncryptionMeta(ctx, keyspaceID)
 	if err != nil {
 		// If we get ErrEncryptionMetaNotFound, cache nil to avoid repeated lookups
-		if cerrors.ErrEncryptionMetaNotFound.Equal(err) {
+		if errors.ErrEncryptionMetaNotFound.Equal(err) {
 			log.Info("encryption meta not found for keyspace",
 				zap.Uint32("keyspaceID", keyspaceID))
 			m.metaMu.Lock()
@@ -340,7 +340,7 @@ func (m *encryptionMetaManager) getMeta(ctx context.Context, keyspaceID uint32) 
 func (m *encryptionMetaManager) decryptDataKey(ctx context.Context, masterKey *MasterKey, dataKeyCiphertext []byte) ([]byte, error) {
 	if masterKey == nil {
 		log.Warn("failed to decrypt data key: master key is nil")
-		return nil, cerrors.ErrDecodeFailed.GenWithStackByArgs("master key is nil")
+		return nil, errors.ErrDecodeFailed.GenWithStackByArgs("master key is nil")
 	}
 
 	// Decrypt master key from KMS
@@ -359,13 +359,13 @@ func (m *encryptionMetaManager) decryptDataKey(ctx context.Context, masterKey *M
 			zap.String("region", masterKey.Region),
 			zap.String("endpoint", masterKey.Endpoint),
 			zap.Error(err))
-		return nil, cerrors.ErrDecodeFailed.Wrap(err)
+		return nil, errors.ErrDecodeFailed.Wrap(err)
 	}
 
 	if len(masterKeyPlaintext) != 32 {
 		log.Warn("invalid master key plaintext length",
 			zap.Int("length", len(masterKeyPlaintext)))
-		return nil, cerrors.ErrDecodeFailed.GenWithStackByArgs("master key plaintext must be 32 bytes")
+		return nil, errors.ErrDecodeFailed.GenWithStackByArgs("master key plaintext must be 32 bytes")
 	}
 
 	// Decrypt data key using master key (AES-CTR).
@@ -373,7 +373,7 @@ func (m *encryptionMetaManager) decryptDataKey(ctx context.Context, masterKey *M
 	if err != nil {
 		log.Warn("failed to initialize AES cipher for data key decryption",
 			zap.Error(err))
-		return nil, cerrors.ErrDecodeFailed.Wrap(err)
+		return nil, errors.ErrDecodeFailed.Wrap(err)
 	}
 
 	// New format: [iv(16)][ciphertext(payload)].
@@ -406,7 +406,7 @@ func (m *encryptionMetaManager) decryptDataKey(ctx context.Context, masterKey *M
 		log.Warn("invalid data key ciphertext",
 			zap.Int("length", len(dataKeyCiphertext)),
 			zap.Error(err))
-		return nil, cerrors.ErrDecodeFailed.Wrap(err)
+		return nil, errors.ErrDecodeFailed.Wrap(err)
 	}
 	fields := []zap.Field{
 		zap.String("format", "legacy_zero_iv"),
@@ -422,7 +422,7 @@ func (m *encryptionMetaManager) decryptDataKey(ctx context.Context, masterKey *M
 
 func decryptDataKeyPayload(block cipher.Block, iv []byte, ciphertext []byte, requireMethodPrefix bool) ([]byte, byte, bool, error) {
 	if len(iv) != aes.BlockSize {
-		return nil, 0, false, cerrors.ErrDecodeFailed.GenWithStackByArgs("iv must be 16 bytes")
+		return nil, 0, false, errors.ErrDecodeFailed.GenWithStackByArgs("iv must be 16 bytes")
 	}
 	stream := cipher.NewCTR(block, iv)
 	plaintext := make([]byte, len(ciphertext))
@@ -444,7 +444,7 @@ func parsePlaintextDataKey(plaintext []byte, requireMethodPrefix bool) ([]byte, 
 			copy(key, plaintext[1:])
 			return key, method, true, nil
 		default:
-			return nil, 0, false, cerrors.ErrDecodeFailed.GenWithStackByArgs("invalid data key plaintext length")
+			return nil, 0, false, errors.ErrDecodeFailed.GenWithStackByArgs("invalid data key plaintext length")
 		}
 	}
 
@@ -454,7 +454,7 @@ func parsePlaintextDataKey(plaintext []byte, requireMethodPrefix bool) ([]byte, 
 		copy(key, plaintext)
 		return key, 0, false, nil
 	default:
-		return nil, 0, false, cerrors.ErrDecodeFailed.GenWithStackByArgs("invalid data key plaintext length")
+		return nil, 0, false, errors.ErrDecodeFailed.GenWithStackByArgs("invalid data key plaintext length")
 	}
 }
 

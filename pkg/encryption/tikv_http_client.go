@@ -22,9 +22,8 @@ import (
 	"time"
 
 	"github.com/gogo/protobuf/proto"
-	"github.com/pingcap/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/log"
-	cerrors "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/httputil"
 	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/pingcap/tidb/pkg/util/engine"
@@ -83,7 +82,7 @@ func (c *tikvEncryptionHTTPClient) GetKeyspaceEncryptionMeta(ctx context.Context
 		if err == nil {
 			return meta, nil
 		}
-		if cerrors.ErrEncryptionMetaNotFound.Equal(err) {
+		if errors.ErrEncryptionMetaNotFound.Equal(err) {
 			lastErr = err
 			continue
 		}
@@ -91,7 +90,7 @@ func (c *tikvEncryptionHTTPClient) GetKeyspaceEncryptionMeta(ctx context.Context
 	}
 
 	if lastErr == nil {
-		lastErr = cerrors.ErrEncryptionMetaNotFound
+		lastErr = errors.ErrEncryptionMetaNotFound
 	}
 	return nil, lastErr
 }
@@ -133,7 +132,7 @@ func (c *tikvEncryptionHTTPClient) getEncryptionMetaFromStore(ctx context.Contex
 			zap.String("statusAddr", statusAddr),
 			zap.Uint32("keyspaceID", keyspaceID),
 			zap.String("url", storeURL))
-		return nil, cerrors.ErrEncryptionMetaNotFound
+		return nil, errors.ErrEncryptionMetaNotFound
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		log.Warn("unexpected encryption meta response status",
@@ -285,7 +284,7 @@ func decodeEncryptionMetaResponseFromProtobuf(body []byte) (*encryptionMetaRespo
 		return nil, errors.Trace(err)
 	}
 	if metaPB.Current == nil && metaPB.MasterKey == nil && len(metaPB.DataKeys) == 0 && len(metaPB.History) == 0 && metaPB.KeyspaceId == 0 {
-		return nil, cerrors.ErrDecodeFailed.GenWithStackByArgs("protobuf payload does not contain encryption meta fields")
+		return nil, errors.ErrDecodeFailed.GenWithStackByArgs("protobuf payload does not contain encryption meta fields")
 	}
 	return metaPB.toEncryptionMetaResponse(), nil
 }
@@ -342,7 +341,7 @@ func (r *encryptionMetaResponse) toEncryptionMeta() (*EncryptionMeta, error) {
 	if r.Current.DataKeyId == 0 {
 		log.Warn("invalid encryption meta from TiKV: current data key ID is empty",
 			zap.Uint32("metaKeyspaceID", r.KeyspaceId))
-		return nil, cerrors.ErrEncryptionMetaNotFound
+		return nil, errors.ErrEncryptionMetaNotFound
 	}
 
 	version := byte(r.Current.DataKeyId & 0xFF)
@@ -350,7 +349,7 @@ func (r *encryptionMetaResponse) toEncryptionMeta() (*EncryptionMeta, error) {
 		log.Warn("invalid encryption meta from TiKV: version must be non-zero",
 			zap.Uint32("metaKeyspaceID", r.KeyspaceId),
 			zap.Uint32("currentDataKeyID", r.Current.DataKeyId))
-		return nil, cerrors.ErrEncryptionFailed.GenWithStackByArgs("version must be non-zero")
+		return nil, errors.ErrEncryptionFailed.GenWithStackByArgs("version must be non-zero")
 	}
 
 	dataKeys := make(map[uint32]*DataKey, len(r.DataKeys))
@@ -363,7 +362,7 @@ func (r *encryptionMetaResponse) toEncryptionMeta() (*EncryptionMeta, error) {
 			zap.Uint32("metaKeyspaceID", r.KeyspaceId),
 			zap.Uint32("currentDataKeyID", r.Current.DataKeyId),
 			zap.Int("dataKeyCount", len(dataKeys)))
-		return nil, cerrors.ErrDataKeyNotFound.GenWithStackByArgs("current data key not found")
+		return nil, errors.ErrDataKeyNotFound.GenWithStackByArgs("current data key not found")
 	}
 
 	history := make([]*EncryptionEpoch, 0, len(r.History))

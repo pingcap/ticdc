@@ -16,7 +16,7 @@ package filter
 import (
 	"testing"
 
-	"github.com/pingcap/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	selector "github.com/pingcap/tidb/pkg/util/table-rule-selector"
 	"github.com/stretchr/testify/require"
 )

@@ -15,7 +15,7 @@ package config
 
 import (
 	"github.com/pingcap/ticdc/pkg/compression"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 )
 
 const (
@@ -55,7 +55,7 @@ func (c *LargeMessageHandleConfig) AdjustAndValidate(protocol Protocol, enableTi
 
 	// compression can be enabled independently
 	if !compression.Supported(c.LargeMessageHandleCompression) {
-		return cerror.ErrInvalidReplicaConfig.GenWithStack(
+		return errors.ErrInvalidReplicaConfig.GenWithStack(
 			"large message handle compression is not supported, got %s", c.LargeMessageHandleCompression)
 	}
 	if c.LargeMessageHandleOption == LargeMessageHandleOptionNone {
@@ -66,23 +66,23 @@ func (c *LargeMessageHandleConfig) AdjustAndValidate(protocol Protocol, enableTi
 	case ProtocolOpen, ProtocolSimple:
 	case ProtocolCanalJSON:
 		if !enableTiDBExtension {
-			return cerror.ErrInvalidReplicaConfig.GenWithStack(
+			return errors.ErrInvalidReplicaConfig.GenWithStack(
 				"large message handle is set to %s, protocol is %s, but enable-tidb-extension is false",
 				c.LargeMessageHandleOption, protocol.String())
 		}
 	default:
-		return cerror.ErrInvalidReplicaConfig.GenWithStack(
+		return errors.ErrInvalidReplicaConfig.GenWithStack(
 			"large message handle is set to %s, protocol is %s, it's not supported",
 			c.LargeMessageHandleOption, protocol.String())
 	}
 
 	if c.LargeMessageHandleOption == LargeMessageHandleOptionClaimCheck {
 		if c.ClaimCheckStorageURI == "" {
-			return cerror.ErrInvalidReplicaConfig.GenWithStack(
+			return errors.ErrInvalidReplicaConfig.GenWithStack(
 				"large message handle is set to claim-check, but the claim-check-storage-uri is empty")
 		}
 		if c.ClaimCheckRawValue && protocol == ProtocolOpen {
-			return cerror.ErrInvalidReplicaConfig.GenWithStack(
+			return errors.ErrInvalidReplicaConfig.GenWithStack(
 				"large message handle is set to claim-check, raw value is not supported for the open protocol")
 		}
 	}

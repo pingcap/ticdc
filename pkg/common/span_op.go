@@ -16,12 +16,11 @@ package common
 import (
 	"bytes"
 
-	"github.com/pingcap/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/config/kerneltype"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tidb/pkg/kv"
 	"github.com/pingcap/tidb/pkg/meta/metadef"
 	"github.com/pingcap/tidb/pkg/tablecodec"
@@ -115,7 +114,7 @@ func GetKeyspaceTableRange(keyspaceID uint32, tableID int64) (startKey, endKey [
 
 	// DefaultKeyspaceID is not a valid keyspaceID on Next Gen
 	if keyspaceID == DefaultKeyspaceID {
-		return startKey, endKey, errors.Trace(cerror.ErrKeyspaceIDInvalid)
+		return startKey, endKey, errors.Trace(errors.ErrKeyspaceIDInvalid)
 	}
 
 	// The tikv.NewCodecV2 method requires a keyspace meta

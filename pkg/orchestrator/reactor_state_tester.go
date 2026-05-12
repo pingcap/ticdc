@@ -16,8 +16,7 @@ package orchestrator
 import (
 	"testing"
 
-	"github.com/pingcap/errors"
-	cerrors "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/orchestrator/util"
 	"github.com/stretchr/testify/require"
 )
@@ -82,9 +81,9 @@ RetryLoop:
 		changedSet := make(map[util.EtcdKey]struct{})
 		for _, patch := range patches {
 			err := patch.Patch(tmpKVEntries, changedSet)
-			if cerrors.ErrEtcdIgnore.Equal(errors.Cause(err)) {
+			if errors.ErrEtcdIgnore.Equal(errors.Cause(err)) {
 				continue
-			} else if cerrors.ErrEtcdTryAgain.Equal(errors.Cause(err)) {
+			} else if errors.ErrEtcdTryAgain.Equal(errors.Cause(err)) {
 				continue RetryLoop
 			} else if err != nil {
 				return errors.Trace(err)

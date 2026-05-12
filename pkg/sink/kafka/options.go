@@ -26,11 +26,10 @@ import (
 
 	"github.com/gin-gonic/gin/binding"
 	"github.com/imdario/mergo"
-	"github.com/pingcap/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/security"
 	"go.uber.org/zap"
 )
@@ -110,7 +109,7 @@ func requireAcksFromString(acks int) (RequiredAcks, error) {
 	case int(NoResponse):
 		return NoResponse, nil
 	default:
-		return Unknown, cerror.ErrKafkaInvalidRequiredAcks.GenWithStackByArgs(acks)
+		return Unknown, errors.ErrKafkaInvalidRequiredAcks.GenWithStackByArgs(acks)
 	}
 }
 
@@ -219,7 +218,7 @@ func (o *options) setPartitionNum(realPartitionCount int32) error {
 	// the real partition count, since messages would be dispatched to different
 	// partitions, this could prevent potential correctness problems.
 	if o.PartitionNum > realPartitionCount {
-		return cerror.ErrKafkaInvalidPartitionNum.GenWithStack(
+		return errors.ErrKafkaInvalidPartitionNum.GenWithStack(
 			"the number of partition (%d) specified in sink-uri is more than that of actual topic (%d)",
 			o.PartitionNum, realPartitionCount)
 	}
@@ -236,7 +235,7 @@ func (o *options) Apply(changefeedID common.ChangeFeedID,
 	req := &http.Request{URL: sinkURI}
 	urlParameter := &urlConfig{}
 	if err = binding.Query.Bind(req, urlParameter); err != nil {
-		return cerror.WrapError(cerror.ErrMySQLInvalidConfig, err)
+		return errors.WrapError(errors.ErrMySQLInvalidConfig, err)
 	}
 	if urlParameter, err = mergeConfig(sinkConfig, urlParameter); err != nil {
 		return err
@@ -244,7 +243,7 @@ func (o *options) Apply(changefeedID common.ChangeFeedID,
 	if urlParameter.PartitionNum != nil {
 		o.PartitionNum = *urlParameter.PartitionNum
 		if o.PartitionNum <= 0 {
-			return cerror.ErrKafkaInvalidPartitionNum.GenWithStackByArgs(o.PartitionNum)
+			return errors.ErrKafkaInvalidPartitionNum.GenWithStackByArgs(o.PartitionNum)
 		}
 	}
 
@@ -383,7 +382,7 @@ func (o *options) applyTLS(params *urlConfig) error {
 
 	if o.Credential != nil && !o.Credential.IsEmpty() &&
 		!o.Credential.IsTLSEnabled() {
-		return cerror.WrapError(cerror.ErrKafkaInvalidConfig,
+		return errors.WrapError(errors.ErrKafkaInvalidConfig,
 			errors.New("ca, cert and key files should all be supplied"))
 	}
 
@@ -397,7 +396,7 @@ func (o *options) applyTLS(params *urlConfig) error {
 		enableTLS := *params.EnableTLS
 
 		if o.Credential != nil && o.Credential.IsTLSEnabled() && !enableTLS {
-			return cerror.WrapError(cerror.ErrKafkaInvalidConfig,
+			return errors.WrapError(errors.ErrKafkaInvalidConfig,
 				errors.New("credential files are supplied, but 'enable-tls' is set to false"))
 		}
 		o.EnableTLS = enableTLS
@@ -427,7 +426,7 @@ func (o *options) applySASL(urlParameter *urlConfig, sinkConfig *config.SinkConf
 	if urlParameter.SASLMechanism != nil && *urlParameter.SASLMechanism != "" {
 		mechanism, err := security.SASLMechanismFromString(*urlParameter.SASLMechanism)
 		if err != nil {
-			return cerror.WrapError(cerror.ErrKafkaInvalidConfig, err)
+			return errors.WrapError(errors.ErrKafkaInvalidConfig, err)
 		}
 		o.SASL.SASLMechanism = mechanism
 	}
@@ -435,7 +434,7 @@ func (o *options) applySASL(urlParameter *urlConfig, sinkConfig *config.SinkConf
 	if urlParameter.SASLGssAPIAuthType != nil && *urlParameter.SASLGssAPIAuthType != "" {
 		authType, err := security.AuthTypeFromString(*urlParameter.SASLGssAPIAuthType)
 		if err != nil {
-			return cerror.WrapError(cerror.ErrKafkaInvalidConfig, err)
+			return errors.WrapError(errors.ErrKafkaInvalidConfig, err)
 		}
 		o.SASL.GSSAPI.AuthType = authType
 	}
@@ -473,7 +472,7 @@ func (o *options) applySASL(urlParameter *urlConfig, sinkConfig *config.SinkConf
 		if sinkConfig.KafkaConfig.SASLOAuthClientID != nil {
 			clientID := *sinkConfig.KafkaConfig.SASLOAuthClientID
 			if clientID == "" {
-				return cerror.ErrKafkaInvalidConfig.GenWithStack("OAuth2 client ID cannot be empty")
+				return errors.ErrKafkaInvalidConfig.GenWithStack("OAuth2 client ID cannot be empty")
 			}
 			o.SASL.OAuth2.ClientID = clientID
 		}
@@ -481,7 +480,7 @@ func (o *options) applySASL(urlParameter *urlConfig, sinkConfig *config.SinkConf
 		if sinkConfig.KafkaConfig.SASLOAuthClientSecret != nil {
 			clientSecret := *sinkConfig.KafkaConfig.SASLOAuthClientSecret
 			if clientSecret == "" {
-				return cerror.ErrKafkaInvalidConfig.GenWithStack(
+				return errors.ErrKafkaInvalidConfig.GenWithStack(
 					"OAuth2 client secret cannot be empty")
 			}
 
@@ -489,7 +488,7 @@ func (o *options) applySASL(urlParameter *urlConfig, sinkConfig *config.SinkConf
 			decodedClientSecret, err := base64.StdEncoding.DecodeString(clientSecret)
 			if err != nil {
 				log.Error("OAuth2 client secret is not base64 encoded", zap.Error(err))
-				return cerror.ErrKafkaInvalidConfig.GenWithStack(
+				return errors.ErrKafkaInvalidConfig.GenWithStack(
 					"OAuth2 client secret is not base64 encoded")
 			}
 			o.SASL.OAuth2.ClientSecret = string(decodedClientSecret)
@@ -498,7 +497,7 @@ func (o *options) applySASL(urlParameter *urlConfig, sinkConfig *config.SinkConf
 		if sinkConfig.KafkaConfig.SASLOAuthTokenURL != nil {
 			tokenURL := *sinkConfig.KafkaConfig.SASLOAuthTokenURL
 			if tokenURL == "" {
-				return cerror.ErrKafkaInvalidConfig.GenWithStack(
+				return errors.ErrKafkaInvalidConfig.GenWithStack(
 					"OAuth2 token URL cannot be empty")
 			}
 			o.SASL.OAuth2.TokenURL = tokenURL
@@ -506,13 +505,13 @@ func (o *options) applySASL(urlParameter *urlConfig, sinkConfig *config.SinkConf
 
 		if o.SASL.OAuth2.IsEnable() {
 			if o.SASL.SASLMechanism != security.OAuthMechanism {
-				return cerror.ErrKafkaInvalidConfig.GenWithStack(
+				return errors.ErrKafkaInvalidConfig.GenWithStack(
 					"OAuth2 is only supported with SASL mechanism type OAUTHBEARER, but got %s",
 					o.SASL.SASLMechanism)
 			}
 
 			if err := o.SASL.OAuth2.Validate(); err != nil {
-				return cerror.ErrKafkaInvalidConfig.Wrap(err)
+				return errors.ErrKafkaInvalidConfig.Wrap(err)
 			}
 			o.SASL.OAuth2.SetDefault()
 		}
@@ -566,7 +565,7 @@ func NewKafkaClientID(captureAddr string,
 		clientID = commonInvalidChar.ReplaceAllString(clientID, "_")
 	}
 	if !validClientID.MatchString(clientID) {
-		return "", cerror.ErrKafkaInvalidClientID.GenWithStackByArgs(clientID)
+		return "", errors.ErrKafkaInvalidClientID.GenWithStackByArgs(clientID)
 	}
 	return
 }
@@ -722,7 +721,7 @@ func validateMinInsyncReplicas(
 	minInsyncReplicasStr, exists, err := minInsyncReplicasConfigGetter()
 	if err != nil {
 		// 'min.insync.replica' is invisible to us in Confluent Cloud Kafka.
-		if cerror.ErrKafkaConfigNotFound.Equal(err) {
+		if errors.ErrKafkaConfigNotFound.Equal(err) {
 			log.Warn("TiCDC cannot find `min.insync.replicas` from broker's configuration, " +
 				"please make sure that the replication factor is greater than or equal " +
 				"to the minimum number of in-sync replicas" +
@@ -747,7 +746,7 @@ func validateMinInsyncReplicas(
 			MinInsyncReplicasConfigName, configFrom)
 		log.Error(msg, zap.Int("replication-factor", replicationFactor),
 			zap.Int("min.insync.replicas", minInsyncReplicas))
-		return cerror.ErrKafkaInvalidConfig.GenWithStack(
+		return errors.ErrKafkaInvalidConfig.GenWithStack(
 			"TiCDC Kafka sink's `request.required.acks` defaults to -1, "+
 				"TiCDC cannot deliver messages when the `replication-factor` %d "+
 				"is smaller than the `min.insync.replicas` %d of %s",

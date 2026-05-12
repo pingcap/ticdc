@@ -19,10 +19,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pingcap/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/retry"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
 	"go.uber.org/zap"
@@ -66,7 +65,7 @@ func GetTopicManagerAndTryCreateTopic(
 	)
 
 	if _, err := topicManager.CreateTopicAndWaitUntilVisible(ctx, topic); err != nil {
-		return nil, cerror.WrapError(cerror.ErrKafkaCreateTopic, err)
+		return nil, errors.WrapError(errors.ErrKafkaCreateTopic, err)
 	}
 
 	return topicManager, nil
@@ -248,7 +247,7 @@ func (m *kafkaTopicManager) createTopic(
 	topicName string,
 ) (int32, error) {
 	if !m.cfg.AutoCreate {
-		return 0, cerror.ErrKafkaInvalidConfig.GenWithStack(
+		return 0, errors.ErrKafkaInvalidConfig.GenWithStack(
 			fmt.Sprintf("`auto-create-topic` is false, "+
 				"and %s not found", topicName))
 	}
@@ -270,7 +269,7 @@ func (m *kafkaTopicManager) createTopic(
 			zap.Error(err),
 			zap.Duration("duration", time.Since(start)),
 		)
-		return 0, cerror.WrapError(cerror.ErrKafkaCreateTopic, err)
+		return 0, errors.WrapError(errors.ErrKafkaCreateTopic, err)
 	}
 
 	log.Info(

@@ -19,10 +19,11 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/pingcap/ticdc/pkg/errors"
+
 	"github.com/gin-gonic/gin"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/ticdc/pkg/api"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
 )
 
 type FailpointRequest struct {
@@ -74,13 +75,13 @@ var failpointState = newFailpointRegistry()
 func (h *OpenAPIV2) EnableFailpoint(c *gin.Context) {
 	req := &FailpointRequest{}
 	if err := c.BindJSON(req); err != nil {
-		_ = c.Error(cerror.ErrAPIInvalidParam.GenWithStack("invalid request: %s", err.Error()))
+		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("invalid request: %s", err.Error()))
 		return
 	}
 	req.Name = strings.TrimSpace(req.Name)
 	req.Expr = strings.TrimSpace(req.Expr)
 	if req.Name == "" || req.Expr == "" {
-		_ = c.Error(cerror.ErrAPIInvalidParam.GenWithStackByArgs("name and expr are required"))
+		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStackByArgs("name and expr are required"))
 		return
 	}
 
@@ -98,13 +99,13 @@ func (h *OpenAPIV2) DisableFailpoint(c *gin.Context) {
 	if name == "" {
 		req := &FailpointRequest{}
 		if err := c.BindJSON(req); err != nil {
-			_ = c.Error(cerror.ErrAPIInvalidParam.GenWithStack("invalid request: %s", err.Error()))
+			_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("invalid request: %s", err.Error()))
 			return
 		}
 		name = strings.TrimSpace(req.Name)
 	}
 	if name == "" {
-		_ = c.Error(cerror.ErrAPIInvalidParam.GenWithStackByArgs("name is required"))
+		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStackByArgs("name is required"))
 		return
 	}
 
