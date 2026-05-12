@@ -19,7 +19,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/glue"
 	"github.com/aws/aws-sdk-go-v2/service/glue/types"
 	"github.com/google/uuid"
-	"github.com/pingcap/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 )
 
 // glueClient is a partial interface of glue client, used to mock glue client in unit test

@@ -18,7 +18,7 @@ import (
 	"strings"
 	"testing"
 
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
 
@@ -141,7 +141,7 @@ func TestIsNormalServerShutdown(t *testing.T) {
 		},
 		{
 			name:      "wrapped context canceled by shutdown",
-			err:       cerror.Trace(context.Canceled),
+			err:       errors.Trace(context.Canceled),
 			cancelCtx: true,
 			expected:  true,
 		},
@@ -152,12 +152,12 @@ func TestIsNormalServerShutdown(t *testing.T) {
 		},
 		{
 			name:     "wrapped context canceled without shutdown",
-			err:      cerror.Trace(context.Canceled),
+			err:      errors.Trace(context.Canceled),
 			expected: false,
 		},
 		{
 			name:     "other error",
-			err:      cerror.New("boom"),
+			err:      errors.New("boom"),
 			expected: false,
 		},
 	}

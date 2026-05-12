@@ -32,9 +32,9 @@ func FormatBlockStatusRequest(r *heartbeatpb.BlockStatusRequest) string {
 		return ""
 	}
 	sb := strings.Builder{}
-	sb.WriteString(fmt.Sprintf("changefeed: %s, changefeedID: %s",
+	fmt.Fprintf(&sb, "changefeed: %s, changefeedID: %s",
 		r.ChangefeedID.GetName(),
-		NewChangefeedGIDFromPB(r.ChangefeedID).String()))
+		NewChangefeedGIDFromPB(r.ChangefeedID).String())
 	for _, status := range r.BlockStatuses {
 		sb.WriteString(FormatTableSpanBlockStatus(status))
 	}
@@ -51,9 +51,9 @@ func FormatTableSpanBlockStatus(s *heartbeatpb.TableSpanBlockStatus) string {
 		return ""
 	}
 	sb := strings.Builder{}
-	sb.WriteString(fmt.Sprintf("[ dispatcherID: %s, state: %s ]",
+	fmt.Fprintf(&sb, "[ dispatcherID: %s, state: %s ]",
 		NewDispatcherIDFromPB(s.ID).String(),
-		s.State.String()))
+		s.State.String())
 	sb.WriteString("\n")
 	return sb.String()
 }
@@ -63,10 +63,10 @@ func FormatDispatcherStatus(d *heartbeatpb.DispatcherStatus) string {
 		return ""
 	}
 	sb := strings.Builder{}
-	sb.WriteString(fmt.Sprintf("action: %s, ack: %s, influencedDispatchers: %s",
+	fmt.Fprintf(&sb, "action: %s, ack: %s, influencedDispatchers: %s",
 		d.Action.String(),
 		d.Ack.String(),
-		FormatInfluencedDispatchers(d.InfluencedDispatchers)))
+		FormatInfluencedDispatchers(d.InfluencedDispatchers))
 	sb.WriteString("\n")
 	return sb.String()
 }
@@ -76,18 +76,18 @@ func FormatInfluencedDispatchers(d *heartbeatpb.InfluencedDispatchers) string {
 		return ""
 	}
 	sb := strings.Builder{}
-	sb.WriteString(fmt.Sprintf("schemaID: %d, influenceType: %s",
+	fmt.Fprintf(&sb, "schemaID: %d, influenceType: %s",
 		d.SchemaID,
-		d.InfluenceType.String()))
+		d.InfluenceType.String())
 	sb.WriteString("dispatcherIDs: [")
 	for _, dispatcherID := range d.DispatcherIDs {
-		sb.WriteString(fmt.Sprintf("%s, ",
-			NewDispatcherIDFromPB(dispatcherID).String()))
+		fmt.Fprintf(&sb, "%s, ",
+			NewDispatcherIDFromPB(dispatcherID).String())
 	}
 	sb.WriteString("]")
 	if d.ExcludeDispatcherId != nil {
-		sb.WriteString(fmt.Sprintf(", excludeDispatcherID: %s",
-			NewDispatcherIDFromPB(d.ExcludeDispatcherId).String()))
+		fmt.Fprintf(&sb, ", excludeDispatcherID: %s",
+			NewDispatcherIDFromPB(d.ExcludeDispatcherId).String())
 	}
 	sb.WriteString("\n")
 	return sb.String()
@@ -98,11 +98,11 @@ func FormatTableSpan(s *heartbeatpb.TableSpan) string {
 		return ""
 	}
 	sb := strings.Builder{}
-	sb.WriteString(fmt.Sprintf("tableID: %d, startKey: %s, endKey: %s, keyspaceID: %d",
+	fmt.Fprintf(&sb, "tableID: %d, startKey: %s, endKey: %s, keyspaceID: %d",
 		s.TableID,
 		hex.EncodeToString(s.StartKey),
 		hex.EncodeToString(s.EndKey),
-		s.KeyspaceID))
+		s.KeyspaceID)
 	return sb.String()
 }
 
@@ -111,14 +111,12 @@ func FormatMaintainerStatus(s *heartbeatpb.MaintainerStatus) string {
 		return ""
 	}
 	sb := strings.Builder{}
-	sb.WriteString(fmt.Sprintf(
-		"changefeed: %s, feedState: %s, state: %s, checkpointTs: %d, bootstrapDone: %t, errs: [",
+	fmt.Fprintf(&sb, "changefeed: %s, feedState: %s, state: %s, checkpointTs: %d, bootstrapDone: %t, errs: [",
 		s.ChangefeedID.GetName(),
 		s.FeedState,
 		s.State.String(),
 		s.CheckpointTs,
-		s.BootstrapDone,
-	))
+		s.BootstrapDone)
 	for _, err := range s.Err {
 		sb.WriteString(err.String())
 	}

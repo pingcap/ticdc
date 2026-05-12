@@ -18,7 +18,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/config"
-	cerrors "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"go.uber.org/zap"
 )
 
@@ -67,7 +67,7 @@ func (m *encryptionManager) EncryptData(ctx context.Context, keyspaceID uint32, 
 		log.Error("failed to get current data key",
 			zap.Uint32("keyspaceID", keyspaceID),
 			zap.Error(err))
-		return nil, cerrors.ErrEncryptionFailed.Wrap(err)
+		return nil, errors.ErrEncryptionFailed.Wrap(err)
 	}
 
 	if len(dataKey) == 0 {
@@ -84,7 +84,7 @@ func (m *encryptionManager) EncryptData(ctx context.Context, keyspaceID uint32, 
 		log.Error("failed to generate IV",
 			zap.Uint32("keyspaceID", keyspaceID),
 			zap.Error(err))
-		return nil, cerrors.ErrEncryptionFailed.Wrap(err)
+		return nil, errors.ErrEncryptionFailed.Wrap(err)
 	}
 
 	// Encrypt data
@@ -93,7 +93,7 @@ func (m *encryptionManager) EncryptData(ctx context.Context, keyspaceID uint32, 
 		log.Error("failed to encrypt data",
 			zap.Uint32("keyspaceID", keyspaceID),
 			zap.Error(err))
-		return nil, cerrors.ErrEncryptionFailed.Wrap(err)
+		return nil, errors.ErrEncryptionFailed.Wrap(err)
 	}
 
 	// Prepend IV to encrypted data
@@ -109,7 +109,7 @@ func (m *encryptionManager) EncryptData(ctx context.Context, keyspaceID uint32, 
 			zap.Uint8("version", version),
 			zap.Binary("dataKeyID", []byte(currentDataKeyID)),
 			zap.Error(err))
-		return nil, cerrors.ErrEncryptionFailed.Wrap(err)
+		return nil, errors.ErrEncryptionFailed.Wrap(err)
 	}
 
 	log.Debug("data encrypted successfully",
@@ -149,7 +149,7 @@ func (m *encryptionManager) DecryptData(ctx context.Context, keyspaceID uint32, 
 			zap.Uint32("keyspaceID", keyspaceID),
 			zap.Int("valueSize", len(layerData)),
 			zap.Error(err))
-		return nil, cerrors.ErrDecryptionFailed.Wrap(err)
+		return nil, errors.ErrDecryptionFailed.Wrap(err)
 	}
 
 	if version == VersionUnencrypted {
@@ -163,7 +163,7 @@ func (m *encryptionManager) DecryptData(ctx context.Context, keyspaceID uint32, 
 			zap.Uint8("version", version),
 			zap.Binary("dataKeyID", []byte(dataKeyID)),
 			zap.Error(err))
-		return nil, cerrors.ErrDecryptionFailed.Wrap(err)
+		return nil, errors.ErrDecryptionFailed.Wrap(err)
 	}
 
 	if len(dataKey) == 0 {
@@ -171,7 +171,7 @@ func (m *encryptionManager) DecryptData(ctx context.Context, keyspaceID uint32, 
 			zap.Uint32("keyspaceID", keyspaceID),
 			zap.Uint8("version", version),
 			zap.Binary("dataKeyID", []byte(dataKeyID)))
-		return nil, cerrors.ErrDecryptionFailed.GenWithStackByArgs("data key is empty")
+		return nil, errors.ErrDecryptionFailed.GenWithStackByArgs("data key is empty")
 	}
 
 	cipherImpl := NewAES256CTRCipher()
@@ -185,7 +185,7 @@ func (m *encryptionManager) DecryptData(ctx context.Context, keyspaceID uint32, 
 			zap.Binary("dataKeyID", []byte(dataKeyID)),
 			zap.Int("dataWithIVSize", len(payload)),
 			zap.Int("expectedIVSize", ivSize))
-		return nil, cerrors.ErrDecryptionFailed.GenWithStackByArgs("data too short for IV")
+		return nil, errors.ErrDecryptionFailed.GenWithStackByArgs("data too short for IV")
 	}
 
 	iv := payload[:ivSize]
@@ -199,7 +199,7 @@ func (m *encryptionManager) DecryptData(ctx context.Context, keyspaceID uint32, 
 			zap.Uint8("version", version),
 			zap.Binary("dataKeyID", []byte(dataKeyID)),
 			zap.Error(err))
-		return nil, cerrors.ErrDecryptionFailed.Wrap(err)
+		return nil, errors.ErrDecryptionFailed.Wrap(err)
 	}
 
 	log.Debug("data decrypted successfully",

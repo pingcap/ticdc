@@ -16,7 +16,7 @@ package encryption
 import (
 	"testing"
 
-	cerrors "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
 
@@ -24,11 +24,11 @@ func TestEncodeEncryptedDataInvalidKey(t *testing.T) {
 	// Key ID must be exactly 3 bytes
 	_, err := EncodeEncryptedData([]byte("payload"), 0x01, "ab")
 	require.Error(t, err)
-	require.True(t, cerrors.ErrInvalidDataKeyID.Equal(err))
+	require.True(t, errors.ErrInvalidDataKeyID.Equal(err))
 
 	_, err = EncodeEncryptedData([]byte("payload"), 0x01, "abcd")
 	require.Error(t, err)
-	require.True(t, cerrors.ErrInvalidDataKeyID.Equal(err))
+	require.True(t, errors.ErrInvalidDataKeyID.Equal(err))
 }
 
 func TestEncodeEncryptedDataInvalidVersion(t *testing.T) {

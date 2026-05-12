@@ -20,7 +20,7 @@ import (
 	"time"
 
 	"github.com/benbjohnson/clock"
-	"github.com/pingcap/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/prometheus/client_golang/prometheus"

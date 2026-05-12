@@ -21,7 +21,7 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
-	perrors "github.com/pingcap/errors"
+	perrors "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
 

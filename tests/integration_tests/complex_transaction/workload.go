@@ -21,8 +21,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"go.uber.org/zap"
 )
 
@@ -204,7 +204,7 @@ func (w *WorkloadExecutor) cancelOrderTxn(ctx context.Context) error {
 	err = tx.QueryRowContext(ctx,
 		`SELECT order_id, user_id, total_amount FROM orders
 		 WHERE status = 0 ORDER BY RAND() LIMIT 1`).Scan(&orderID, &userID, &totalAmount)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		// No active orders to cancel
 		return tx.Commit()
 	}
@@ -488,7 +488,7 @@ func (w *WorkloadExecutor) socialInteractTxn(ctx context.Context) error {
 		err = tx.QueryRowContext(ctx,
 			`SELECT post_id, user_id FROM posts WHERE status = 0 ORDER BY RAND() LIMIT 1`).
 			Scan(&postID, &postUserID)
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return tx.Commit()
 		}
 		if err != nil {
@@ -521,7 +521,7 @@ func (w *WorkloadExecutor) socialInteractTxn(ctx context.Context) error {
 		err = tx.QueryRowContext(ctx,
 			`SELECT post_id FROM posts WHERE status = 0 ORDER BY RAND() LIMIT 1`).
 			Scan(&postID)
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return tx.Commit()
 		}
 		if err != nil {

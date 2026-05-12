@@ -16,12 +16,11 @@ package common
 import (
 	"bytes"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/config/kerneltype"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tidb/pkg/kv"
 	"github.com/pingcap/tidb/pkg/meta/metadef"
 	"github.com/pingcap/tidb/pkg/tablecodec"
@@ -41,7 +40,7 @@ func TableIDToComparableSpan(keyspaceID uint32, tableID int64) heartbeatpb.Table
 	startKey, endKey, err := GetKeyspaceTableRange(keyspaceID, tableID)
 	if err != nil {
 		// This block should never be reached
-		// The error only happends when the keyspaceID is greater than 0xFFFFFF, which is an invalid keyspaceID
+		// The error only happens when the keyspaceID is greater than 0xFFFFFF, which is an invalid keyspaceID
 		log.Error("GetKeyspaceTableRange failed", zap.Uint32("keyspaceID", keyspaceID), zap.Int64("tableID", tableID), zap.Error(err))
 	}
 	return heartbeatpb.TableSpan{
@@ -68,7 +67,7 @@ func IsCompleteSpan(tableSpan *heartbeatpb.TableSpan) bool {
 	startKey, endKey, err := GetKeyspaceTableRange(tableSpan.KeyspaceID, tableSpan.TableID)
 	if err != nil {
 		// This block should never be reached
-		// The error only happends when the keyspaceID is greater than 0xFFFFFF, which is an invalid keyspaceID
+		// The error only happens when the keyspaceID is greater than 0xFFFFFF, which is an invalid keyspaceID
 		log.Error("IsCompleteSpan GetKeyspaceTableRange failed", zap.Uint32("keyspaceID", tableSpan.KeyspaceID), zap.Error(err))
 	}
 	if StartCompare(ToComparableKey(startKey), tableSpan.StartKey) == 0 && EndCompare(ToComparableKey(endKey), tableSpan.EndKey) == 0 {
@@ -115,7 +114,7 @@ func GetKeyspaceTableRange(keyspaceID uint32, tableID int64) (startKey, endKey [
 
 	// DefaultKeyspaceID is not a valid keyspaceID on Next Gen
 	if keyspaceID == DefaultKeyspaceID {
-		return startKey, endKey, errors.Trace(cerror.ErrKeyspaceIDInvalid)
+		return startKey, endKey, errors.Trace(errors.ErrKeyspaceIDInvalid)
 	}
 
 	// The tikv.NewCodecV2 method requires a keyspace meta

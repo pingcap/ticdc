@@ -21,10 +21,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/config/outdated"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/util"
@@ -226,7 +225,7 @@ func (c *ReplicaConfig) Scan(value interface{}) error {
 func (c *ReplicaConfig) Marshal() (string, error) {
 	cfg, err := json.Marshal(c)
 	if err != nil {
-		return "", cerror.WrapError(cerror.ErrEncodeFailed, errors.Annotatef(err, "Unmarshal data: %v", c))
+		return "", errors.WrapError(errors.ErrEncodeFailed, errors.Annotatef(err, "Unmarshal data: %v", c))
 	}
 	return string(cfg), nil
 }
@@ -238,12 +237,12 @@ func (c *ReplicaConfig) UnmarshalJSON(data []byte) error {
 	r := (*replicaConfig)(c)
 	err := json.Unmarshal(data, &r)
 	if err != nil {
-		return cerror.WrapError(cerror.ErrDecodeFailed, err)
+		return errors.WrapError(errors.ErrDecodeFailed, err)
 	}
 	v1 := outdated.ReplicaConfigV1{}
 	err = v1.Unmarshal(data)
 	if err != nil {
-		return cerror.WrapError(cerror.ErrDecodeFailed, err)
+		return errors.WrapError(errors.ErrDecodeFailed, err)
 	}
 	r.fillFromV1(&v1)
 	return nil
@@ -254,13 +253,13 @@ func (c *ReplicaConfig) Clone() *ReplicaConfig {
 	str, err := c.Marshal()
 	if err != nil {
 		log.Panic("failed to marshal replica config",
-			zap.Error(cerror.WrapError(cerror.ErrDecodeFailed, err)))
+			zap.Error(errors.WrapError(errors.ErrDecodeFailed, err)))
 	}
 	clone := new(ReplicaConfig)
 	err = clone.UnmarshalJSON([]byte(str))
 	if err != nil {
 		log.Panic("failed to unmarshal replica config",
-			zap.Error(cerror.WrapError(cerror.ErrDecodeFailed, err)))
+			zap.Error(errors.WrapError(errors.ErrDecodeFailed, err)))
 	}
 	if c.EnableRedoIOCheck != nil {
 		clone.EnableRedoIOCheck = util.AddressOf(*c.EnableRedoIOCheck)
@@ -304,12 +303,12 @@ func (c *ReplicaConfig) ValidateAndAdjust(sinkURI *url.URL) error { // check sin
 	// check sync point config
 	if util.GetOrZero(c.EnableSyncPoint) {
 		if !IsMySQLCompatibleScheme(GetScheme(sinkURI)) {
-			return cerror.ErrInvalidReplicaConfig.
+			return errors.ErrInvalidReplicaConfig.
 				FastGenByArgs("The SyncPoint must be disabled when the downstream is not tidb or mysql")
 		}
 		if c.SyncPointInterval != nil &&
 			*c.SyncPointInterval < minSyncPointInterval {
-			return cerror.ErrInvalidReplicaConfig.
+			return errors.ErrInvalidReplicaConfig.
 				FastGenByArgs(
 					fmt.Sprintf("The SyncPointInterval:%s must be larger than %s",
 						c.SyncPointInterval.String(),
@@ -317,7 +316,7 @@ func (c *ReplicaConfig) ValidateAndAdjust(sinkURI *url.URL) error { // check sin
 		}
 		if c.SyncPointRetention != nil &&
 			*c.SyncPointRetention < minSyncPointRetention {
-			return cerror.ErrInvalidReplicaConfig.
+			return errors.ErrInvalidReplicaConfig.
 				FastGenByArgs(
 					fmt.Sprintf("The SyncPointRetention:%s must be larger than %s",
 						c.SyncPointRetention.String(),
@@ -352,7 +351,7 @@ func (c *ReplicaConfig) ValidateAndAdjust(sinkURI *url.URL) error { // check sin
 
 		if c.Integrity.Enabled() && len(c.Sink.ColumnSelectors) != 0 {
 			log.Error("it's not allowed to enable the integrity check and column selector at the same time")
-			return cerror.ErrInvalidReplicaConfig.GenWithStack(
+			return errors.ErrInvalidReplicaConfig.GenWithStack(
 				"integrity check enabled and column selector set, not allowed")
 
 		}
@@ -360,7 +359,7 @@ func (c *ReplicaConfig) ValidateAndAdjust(sinkURI *url.URL) error { // check sin
 
 	if c.ChangefeedErrorStuckDuration != nil &&
 		*c.ChangefeedErrorStuckDuration < minChangeFeedErrorStuckDuration {
-		return cerror.ErrInvalidReplicaConfig.
+		return errors.ErrInvalidReplicaConfig.
 			FastGenByArgs(
 				fmt.Sprintf("The ChangefeedErrorStuckDuration:%f must be larger than %f Seconds",
 					c.ChangefeedErrorStuckDuration.Seconds(),
@@ -369,22 +368,22 @@ func (c *ReplicaConfig) ValidateAndAdjust(sinkURI *url.URL) error { // check sin
 
 	// allow the batch count and batch bytes set to 0, to disable the batch mechanism
 	if c.EventCollectorBatchCount != nil && *c.EventCollectorBatchCount < 0 {
-		return cerror.ErrInvalidReplicaConfig.FastGenByArgs("event-collector-batch-count must be set not smaller than 0")
+		return errors.ErrInvalidReplicaConfig.FastGenByArgs("event-collector-batch-count must be set not smaller than 0")
 	}
 	if c.EventCollectorBatchCount != nil && *c.EventCollectorBatchCount > MaxEventCollectorBatchCount {
-		return cerror.ErrInvalidReplicaConfig.FastGenByArgs(
+		return errors.ErrInvalidReplicaConfig.FastGenByArgs(
 			"event-collector-batch-count must be set not larger than %d", MaxEventCollectorBatchCount,
 		)
 	}
 	if c.EventCollectorBatchBytes != nil && *c.EventCollectorBatchBytes < 0 {
-		return cerror.ErrInvalidReplicaConfig.FastGenByArgs("event-collector-batch-bytes must be set not smaller than 0")
+		return errors.ErrInvalidReplicaConfig.FastGenByArgs("event-collector-batch-bytes must be set not smaller than 0")
 	}
 	if c.ActiveActiveProgressInterval == nil {
 		interval := defaultActiveActiveProgressInterval
 		c.ActiveActiveProgressInterval = util.AddressOf(interval)
 	}
 	if *c.ActiveActiveProgressInterval <= 0 {
-		return cerror.ErrInvalidReplicaConfig.
+		return errors.ErrInvalidReplicaConfig.
 			FastGenByArgs("the active-active-progress-interval must be larger than 0")
 	}
 
@@ -393,7 +392,7 @@ func (c *ReplicaConfig) ValidateAndAdjust(sinkURI *url.URL) error { // check sin
 		c.ActiveActiveSyncStatsInterval = util.AddressOf(interval)
 	}
 	if *c.ActiveActiveSyncStatsInterval < 0 {
-		return cerror.ErrInvalidReplicaConfig.
+		return errors.ErrInvalidReplicaConfig.
 			FastGenByArgs("the active-active-sync-stats-interval must be larger than or equal to 0")
 	}
 
@@ -401,15 +400,15 @@ func (c *ReplicaConfig) ValidateAndAdjust(sinkURI *url.URL) error { // check sin
 		scheme := GetScheme(sinkURI)
 		if IsMySQLCompatibleScheme(scheme) {
 			if !util.GetOrZero(c.BDRMode) {
-				return cerror.ErrInvalidReplicaConfig.
+				return errors.ErrInvalidReplicaConfig.
 					FastGenByArgs("enable-active-active with mysql-class downstream requires bdr-mode to be true")
 			}
 		} else if !IsStorageScheme(scheme) {
-			return cerror.ErrInvalidReplicaConfig.
+			return errors.ErrInvalidReplicaConfig.
 				FastGenByArgs("enable-active-active only supports tidb sink and storage sink")
 		}
 		if c.Consistent != nil && redo.IsConsistentEnabled(util.GetOrZero(c.Consistent.Level)) {
-			return cerror.ErrInvalidReplicaConfig.
+			return errors.ErrInvalidReplicaConfig.
 				FastGenByArgs("enable-active-active is incompatible with redo log/consistency feature, please disable redo")
 		}
 	}

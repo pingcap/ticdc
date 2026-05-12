@@ -20,7 +20,7 @@ import (
 	"crypto/rand"
 
 	"github.com/pingcap/log"
-	cerrors "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"go.uber.org/zap"
 )
 
@@ -56,7 +56,7 @@ func NewMockKMSClient() *MockKMSClient {
 // In a real implementation, this would call the actual KMS service
 func (c *MockKMSClient) DecryptMasterKey(ctx context.Context, ciphertext []byte, keyID string, vendor string, region string, endpoint string) ([]byte, error) {
 	if len(ciphertext) < aes.BlockSize {
-		return nil, cerrors.ErrDecodeFailed.GenWithStackByArgs("ciphertext too short")
+		return nil, errors.ErrDecodeFailed.GenWithStackByArgs("ciphertext too short")
 	}
 
 	log.Debug("mock KMS client: decrypting master key",
@@ -69,7 +69,7 @@ func (c *MockKMSClient) DecryptMasterKey(ctx context.Context, ciphertext []byte,
 	// The ciphertext is encrypted with the mock key
 	block, err := aes.NewCipher(c.mockKey)
 	if err != nil {
-		return nil, cerrors.ErrDecodeFailed.Wrap(err)
+		return nil, errors.ErrDecodeFailed.Wrap(err)
 	}
 
 	// Extract IV from the beginning of ciphertext
@@ -89,13 +89,13 @@ func (c *MockKMSClient) DecryptMasterKey(ctx context.Context, ciphertext []byte,
 func (c *MockKMSClient) EncryptMasterKey(plaintext []byte) ([]byte, error) {
 	block, err := aes.NewCipher(c.mockKey)
 	if err != nil {
-		return nil, cerrors.ErrEncodeFailed.Wrap(err)
+		return nil, errors.ErrEncodeFailed.Wrap(err)
 	}
 
 	// Generate random IV
 	iv := make([]byte, aes.BlockSize)
 	if _, err := rand.Read(iv); err != nil {
-		return nil, cerrors.ErrEncodeFailed.Wrap(err)
+		return nil, errors.ErrEncodeFailed.Wrap(err)
 	}
 
 	// Encrypt using CTR mode

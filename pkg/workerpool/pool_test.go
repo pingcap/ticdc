@@ -20,10 +20,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -475,7 +474,7 @@ func TestGracefulUnregister(t *testing.T) {
 		var maxEventIdx int64
 		for i := int64(0); ; i++ {
 			err := handle.AddEvent(ctx, i+1)
-			if cerror.ErrWorkerPoolHandleCancelled.Equal(err) {
+			if errors.ErrWorkerPoolHandleCancelled.Equal(err) {
 				maxEventIdx = i
 				break
 			}
@@ -497,7 +496,7 @@ func TestGracefulUnregister(t *testing.T) {
 
 	err = handle.AddEvent(ctx, int64(0))
 	require.Error(t, err)
-	require.True(t, cerror.ErrWorkerPoolHandleCancelled.Equal(err))
+	require.True(t, errors.ErrWorkerPoolHandleCancelled.Equal(err))
 	require.Equal(t, handleCancelled, handle.(*defaultEventHandle).status)
 
 	wg.Wait()
@@ -535,7 +534,7 @@ func TestGracefulUnregisterTimeout(t *testing.T) {
 	}()
 	err = handle.GracefulUnregister(ctx, time.Millisecond*10)
 	require.Error(t, err)
-	require.Truef(t, cerror.ErrWorkerPoolGracefulUnregisterTimedOut.Equal(err), "%s", err.Error())
+	require.Truef(t, errors.ErrWorkerPoolGracefulUnregisterTimedOut.Equal(err), "%s", err.Error())
 }
 
 func TestSynchronizeLog(t *testing.T) {

@@ -20,8 +20,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/pingcap/errors"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 )
 
 // Operation is the action need to retry
@@ -65,14 +64,14 @@ func run(ctx context.Context, op Operation, retryOption *retryOptions) error {
 
 		try++
 		if try >= retryOption.maxTries {
-			return cerror.ErrReachMaxTry.
+			return errors.ErrReachMaxTry.
 				Wrap(err).GenWithStackByArgs(strconv.Itoa(int(retryOption.maxTries)), err)
 		}
 		if retryOption.totalRetryDuration > 0 {
 			if start.IsZero() {
 				start = time.Now()
 			} else if time.Since(start) > retryOption.totalRetryDuration {
-				return cerror.ErrReachMaxTry.
+				return errors.ErrReachMaxTry.
 					Wrap(err).GenWithStackByArgs(retryOption.totalRetryDuration, err)
 			}
 		}

@@ -21,8 +21,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/errors"
 )
 
 var casePKAddDuplicateUK = []string{
@@ -275,7 +275,7 @@ func caseUpdateWhileDroppingCol(db *sql.DB) {
 		if i != 0 {
 			builder.WriteRune(',')
 		}
-		builder.WriteString(fmt.Sprintf("col%d VARCHAR(50) NOT NULL", i))
+		fmt.Fprintf(&builder, "col%d VARCHAR(50) NOT NULL", i)
 	}
 	createSQL := fmt.Sprintf(`
 CREATE TABLE many_cols (
@@ -290,7 +290,7 @@ CREATE TABLE many_cols (
 		if i != 0 {
 			builder.WriteRune(',')
 		}
-		builder.WriteString(fmt.Sprintf("col%d", i))
+		fmt.Fprintf(&builder, "col%d", i)
 	}
 	cols := builder.String()
 

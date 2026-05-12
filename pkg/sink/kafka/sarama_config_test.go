@@ -21,8 +21,8 @@ import (
 
 	"github.com/IBM/sarama"
 	"github.com/gin-gonic/gin/binding"
-	"github.com/pingcap/errors"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/stretchr/testify/require"
 )
@@ -257,7 +257,6 @@ func TestApplySASL(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			options := NewOptions()
@@ -328,7 +327,6 @@ func TestApplyTLS(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			options := NewOptions()

@@ -19,10 +19,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
-	cerrors "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/notify"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -129,7 +128,7 @@ type defaultEventHandle struct {
 func (h *defaultEventHandle) AddEvent(ctx context.Context, event interface{}) error {
 	status := atomic.LoadInt32(&h.status)
 	if status != handleRunning {
-		return cerrors.ErrWorkerPoolHandleCancelled.GenWithStackByArgs()
+		return errors.ErrWorkerPoolHandleCancelled.GenWithStackByArgs()
 	}
 
 	failpoint.Inject("addEventDelayPoint", func() {})
@@ -152,7 +151,7 @@ func (h *defaultEventHandle) AddEvent(ctx context.Context, event interface{}) er
 func (h *defaultEventHandle) AddEvents(ctx context.Context, events []interface{}) error {
 	status := atomic.LoadInt32(&h.status)
 	if status != handleRunning {
-		return cerrors.ErrWorkerPoolHandleCancelled.GenWithStackByArgs()
+		return errors.ErrWorkerPoolHandleCancelled.GenWithStackByArgs()
 	}
 
 	failpoint.Inject("addEventDelayPoint", func() {})
@@ -209,7 +208,7 @@ func (h *defaultEventHandle) Unregister() {
 	// linearized BEFORE Unregister.
 	h.worker.synchronize()
 
-	h.doCancel(cerrors.ErrWorkerPoolHandleCancelled.GenWithStackByArgs())
+	h.doCancel(errors.ErrWorkerPoolHandleCancelled.GenWithStackByArgs())
 }
 
 func (h *defaultEventHandle) GracefulUnregister(ctx context.Context, timeout time.Duration) error {
@@ -227,7 +226,7 @@ func (h *defaultEventHandle) GracefulUnregister(ctx context.Context, timeout tim
 		// call synchronize so that all function executions related to this handle will be
 		// linearized BEFORE Unregister.
 		h.worker.synchronize()
-		h.doCancel(cerrors.ErrWorkerPoolHandleCancelled.GenWithStackByArgs())
+		h.doCancel(errors.ErrWorkerPoolHandleCancelled.GenWithStackByArgs())
 	}()
 
 	ctx, cancel := context.WithTimeout(ctx, timeout)
@@ -236,7 +235,7 @@ func (h *defaultEventHandle) GracefulUnregister(ctx context.Context, timeout tim
 	doneCh := make(chan struct{})
 	select {
 	case <-ctx.Done():
-		return cerrors.ErrWorkerPoolGracefulUnregisterTimedOut.GenWithStackByArgs()
+		return errors.ErrWorkerPoolGracefulUnregisterTimedOut.GenWithStackByArgs()
 	case h.worker.taskCh <- task{
 		handle: h,
 		doneCh: doneCh,
@@ -245,7 +244,7 @@ func (h *defaultEventHandle) GracefulUnregister(ctx context.Context, timeout tim
 
 	select {
 	case <-ctx.Done():
-		return cerrors.ErrWorkerPoolGracefulUnregisterTimedOut.GenWithStackByArgs()
+		return errors.ErrWorkerPoolGracefulUnregisterTimedOut.GenWithStackByArgs()
 	case <-doneCh:
 	}
 
@@ -418,7 +417,7 @@ func (w *worker) synchronize() {
 
 	receiver, err := w.stopNotifier.NewReceiver(time.Millisecond * 100)
 	if err != nil {
-		if cerrors.ErrOperateOnClosedNotifier.Equal(errors.Cause(err)) {
+		if errors.ErrOperateOnClosedNotifier.Equal(errors.Cause(err)) {
 			return
 		}
 		log.Panic("unexpected error", zap.Error(err))

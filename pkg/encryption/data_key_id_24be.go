@@ -13,11 +13,11 @@
 
 package encryption
 
-import cerrors "github.com/pingcap/ticdc/pkg/errors"
+import "github.com/pingcap/ticdc/pkg/errors"
 
 func encodeDataKeyID24BE(id uint32) (string, error) {
 	if id > 0xFFFFFF {
-		return "", cerrors.ErrInvalidDataKeyID.GenWithStackByArgs("data key ID exceeds 24-bit range")
+		return "", errors.ErrInvalidDataKeyID.GenWithStackByArgs("data key ID exceeds 24-bit range")
 	}
 	b := [3]byte{byte(id >> 16), byte(id >> 8), byte(id)}
 	return string(b[:]), nil
@@ -25,7 +25,7 @@ func encodeDataKeyID24BE(id uint32) (string, error) {
 
 func decodeDataKeyID24BE(id string) (uint32, error) {
 	if len(id) != 3 {
-		return 0, cerrors.ErrInvalidDataKeyID.GenWithStackByArgs("data key ID must be 3 bytes")
+		return 0, errors.ErrInvalidDataKeyID.GenWithStackByArgs("data key ID must be 3 bytes")
 	}
 	b := []byte(id)
 	return uint32(b[0])<<16 | uint32(b[1])<<8 | uint32(b[2]), nil

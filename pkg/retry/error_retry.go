@@ -19,7 +19,7 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"go.uber.org/zap"
 )
 
@@ -92,7 +92,7 @@ func (r *ErrorRetry) GetRetryBackoff(err error) (time.Duration, error) {
 			zap.Time("firstRetryTime", r.firstRetryTime),
 			zap.Time("lastErrorRetryTime", r.lastErrorRetryTime),
 			zap.Time("now", time.Now()))
-		return 0, cerror.WrapChangefeedUnretryableErr(err)
+		return 0, errors.WrapChangefeedUnretryableErr(err)
 	}
 
 	r.lastInternalError = err

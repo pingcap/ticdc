@@ -19,6 +19,15 @@ import (
 	perrors "github.com/pingcap/errors"
 )
 
+// Type aliases expose github.com/pingcap/errors types so callers don't need to
+// import it directly.
+type (
+	Error        = perrors.Error
+	RFCErrorCode = perrors.RFCErrorCode
+	ErrCode      = perrors.ErrCode
+	ErrCodeText  = perrors.ErrCodeText
+)
+
 var (
 	// Is is a shortcut for errors.Is.
 	Is = errors.Is
@@ -38,4 +47,41 @@ var (
 	Annotatef = perrors.Annotatef
 	// WithMessage is a shortcut for github.com/pingcap/errors.WithMessage.
 	WithMessage = perrors.WithMessage
+	// WithStack is a shortcut for github.com/pingcap/errors.WithStack.
+	WithStack = perrors.WithStack
+	// Wrap is a shortcut for github.com/pingcap/errors.Wrap.
+	Wrap = perrors.Wrap
+	// Wrapf is a shortcut for github.com/pingcap/errors.Wrapf.
+	Wrapf = perrors.Wrapf
+	// ErrorStack is a shortcut for github.com/pingcap/errors.ErrorStack.
+	ErrorStack = perrors.ErrorStack
+	// ErrorEqual is a shortcut for github.com/pingcap/errors.ErrorEqual.
+	ErrorEqual = perrors.ErrorEqual
+	// NewNoStackError is a shortcut for github.com/pingcap/errors.NewNoStackError.
+	NewNoStackError = perrors.NewNoStackError
+	// NotFoundf is a shortcut for github.com/pingcap/errors.NotFoundf.
+	NotFoundf = perrors.NotFoundf
+	// NotValidf is a shortcut for github.com/pingcap/errors.NotValidf.
+	NotValidf = perrors.NotValidf
+	// Normalize is a shortcut for github.com/pingcap/errors.Normalize.
+	Normalize = perrors.Normalize
+	// RFCCodeText is a shortcut for github.com/pingcap/errors.RFCCodeText.
+	RFCCodeText = perrors.RFCCodeText
+	// Unwrap is a shortcut for github.com/pingcap/errors.Unwrap.
+	Unwrap = perrors.Unwrap
+	// Find is a shortcut for github.com/pingcap/errors.Find.
+	Find = perrors.Find
+	// HasStack is a shortcut for github.com/pingcap/errors.HasStack.
+	HasStack = perrors.HasStack
+	// GetErrStackMsg is a shortcut for github.com/pingcap/errors.GetErrStackMsg.
+	GetErrStackMsg = perrors.GetErrStackMsg
+
+	// RedactLogEnabled controls log redaction. See github.com/pingcap/errors.
+	RedactLogEnabled = &perrors.RedactLogEnabled
+	// RedactLogEnable is the redact mode "ON".
+	RedactLogEnable = perrors.RedactLogEnable
+	// RedactLogDisable is the redact mode "OFF".
+	RedactLogDisable = perrors.RedactLogDisable
+	// RedactLogMarker is the redact mode "MARKER".
+	RedactLogMarker = perrors.RedactLogMarker
 )

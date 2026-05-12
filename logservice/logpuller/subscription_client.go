@@ -19,7 +19,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -28,7 +27,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/security"
@@ -844,7 +843,8 @@ func (s *subscriptionClient) handleErrors(ctx context.Context) error {
 
 func (s *subscriptionClient) doHandleError(ctx context.Context, errInfo regionErrorInfo) error {
 	err := errors.Cause(errInfo.err)
-	if _, requestCancelled := err.(*requestCancelledErr); !requestCancelled {
+	var rcErr *requestCancelledErr
+	if !errors.As(err, &rcErr) {
 		log.Debug("cdc region error",
 			zap.Uint64("subscriptionID", uint64(errInfo.subscribedSpan.subID)),
 			zap.Uint64("regionID", errInfo.verID.GetID()),
@@ -886,10 +886,10 @@ func (s *subscriptionClient) doHandleError(ctx context.Context, errInfo regionEr
 			return errors.New("duplicate request")
 		}
 		if compatibility := innerErr.GetCompatibility(); compatibility != nil {
-			return cerror.ErrVersionIncompatible.GenWithStackByArgs(compatibility)
+			return errors.ErrVersionIncompatible.GenWithStackByArgs(compatibility)
 		}
 		if mismatch := innerErr.GetClusterIdMismatch(); mismatch != nil {
-			return cerror.ErrClusterIDMismatch.GenWithStackByArgs(mismatch.Current, mismatch.Request)
+			return errors.ErrClusterIDMismatch.GenWithStackByArgs(mismatch.Current, mismatch.Request)
 		}
 
 		log.Warn("empty or unknown cdc error",

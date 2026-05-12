@@ -24,7 +24,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/stretchr/testify/require"
@@ -142,7 +142,7 @@ func TestPulsarSinkBatchConfig(t *testing.T) {
 
 func TestPulsarSinkNewWithComponentReturnsDMLProducerError(t *testing.T) {
 	changefeedID := common.NewChangefeedID4Test("test", "test")
-	expectedErr := cerror.ErrPulsarNewProducer.GenWithStackByArgs()
+	expectedErr := errors.ErrPulsarNewProducer.GenWithStackByArgs()
 	ddlProducerCreated := false
 	var err error
 
@@ -171,7 +171,7 @@ func TestPulsarSinkNewWithComponentReturnsDMLProducerError(t *testing.T) {
 
 func TestPulsarSinkNewWithComponentReturnsDDLProducerError(t *testing.T) {
 	changefeedID := common.NewChangefeedID4Test("test", "test")
-	expectedErr := cerror.ErrPulsarNewProducer.GenWithStackByArgs()
+	expectedErr := errors.ErrPulsarNewProducer.GenWithStackByArgs()
 	var err error
 
 	require.NotPanics(t, func() {

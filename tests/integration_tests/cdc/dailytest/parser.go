@@ -18,8 +18,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/types"
@@ -56,7 +56,8 @@ func (col *column) parseRule(kvs []string) {
 
 	key := strings.TrimSpace(kvs[0])
 	value := strings.TrimSpace(kvs[1])
-	if key == "range" {
+	switch key {
+	case "range":
 		fields := strings.Split(value, ",")
 		if len(fields) == 1 {
 			col.min = strings.TrimSpace(fields[0])
@@ -64,13 +65,13 @@ func (col *column) parseRule(kvs []string) {
 			col.min = strings.TrimSpace(fields[0])
 			col.max = strings.TrimSpace(fields[1])
 		}
-	} else if key == "step" {
+	case "step":
 		var err error
 		col.step, err = strconv.ParseInt(value, 10, 64)
 		if err != nil {
 			log.S().Fatal(err)
 		}
-	} else if key == "set" {
+	case "set":
 		fields := strings.Split(value, ",")
 		for _, field := range fields {
 			col.set = append(col.set, strings.TrimSpace(field))

@@ -18,8 +18,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/pingcap/errors"
-	cerrors "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/retry"
 	"golang.org/x/sync/errgroup"
 )
@@ -61,7 +60,7 @@ func (p *defaultAsyncPoolImpl) Go(ctx context.Context, f func()) error {
 }
 
 func isRetryable(err error) bool {
-	return cerrors.IsRetryableError(err) && cerrors.ErrAsyncPoolExited.Equal(err)
+	return errors.IsRetryableError(err) && errors.ErrAsyncPoolExited.Equal(err)
 }
 
 func (p *defaultAsyncPoolImpl) doGo(ctx context.Context, f func()) error {
@@ -69,7 +68,7 @@ func (p *defaultAsyncPoolImpl) doGo(ctx context.Context, f func()) error {
 	defer p.runningLock.RUnlock()
 
 	if atomic.LoadInt32(&p.isRunning) == 0 {
-		return cerrors.ErrAsyncPoolExited.GenWithStackByArgs()
+		return errors.ErrAsyncPoolExited.GenWithStackByArgs()
 	}
 
 	task := &asyncTask{f: f}
@@ -79,7 +78,7 @@ func (p *defaultAsyncPoolImpl) doGo(ctx context.Context, f func()) error {
 	defer worker.chLock.RUnlock()
 
 	if atomic.LoadInt32(&worker.isClosed) == 1 {
-		return cerrors.ErrAsyncPoolExited.GenWithStackByArgs()
+		return errors.ErrAsyncPoolExited.GenWithStackByArgs()
 	}
 
 	select {
@@ -112,7 +111,7 @@ func (p *defaultAsyncPoolImpl) Run(ctx context.Context) error {
 		workerFinal := worker
 		errg.Go(func() error {
 			err := workerFinal.run()
-			if err != nil && cerrors.ErrAsyncPoolExited.NotEqual(errors.Cause(err)) {
+			if err != nil && errors.ErrAsyncPoolExited.NotEqual(errors.Cause(err)) {
 				errCh <- err
 			}
 			return nil
@@ -161,7 +160,7 @@ func (w *asyncWorker) run() error {
 	for {
 		task := <-w.inputCh
 		if task == nil {
-			return cerrors.ErrAsyncPoolExited.GenWithStackByArgs()
+			return errors.ErrAsyncPoolExited.GenWithStackByArgs()
 		}
 		task.f()
 	}

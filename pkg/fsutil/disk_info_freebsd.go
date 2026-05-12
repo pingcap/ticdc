@@ -19,8 +19,6 @@ import (
 	"os"
 	"path/filepath"
 	"syscall"
-
-	cerror "github.com/pingcap/ticdc/pkg/errors"
 )
 
 // GetDiskInfo return the disk space information of the given directory
@@ -28,12 +26,12 @@ import (
 func GetDiskInfo(dir string) (*DiskInfo, error) {
 	f := filepath.Join(dir, "file.test")
 	if err := os.WriteFile(f, []byte(""), 0o600); err != nil {
-		return nil, cerror.WrapError(cerror.ErrGetDiskInfo, err)
+		return nil, errors.WrapError(errors.ErrGetDiskInfo, err)
 	}
 
 	fs := syscall.Statfs_t{}
 	if err := syscall.Statfs(dir, &fs); err != nil {
-		return nil, cerror.WrapError(cerror.ErrGetDiskInfo, err)
+		return nil, errors.WrapError(errors.ErrGetDiskInfo, err)
 	}
 
 	info := &DiskInfo{
@@ -46,7 +44,7 @@ func GetDiskInfo(dir string) (*DiskInfo, error) {
 
 	if err := os.Remove(f); err != nil {
 		if !os.IsNotExist(err) {
-			return info, cerror.WrapError(cerror.ErrGetDiskInfo, err)
+			return info, errors.WrapError(errors.ErrGetDiskInfo, err)
 		}
 	}
 

@@ -19,8 +19,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"go.uber.org/zap"
 )
 

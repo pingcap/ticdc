@@ -1063,7 +1063,6 @@ func TestHandleBatchDataEvents(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			mockDisp := newMockDispatcher(common.NewDispatcherID(), 0)
@@ -1152,7 +1151,6 @@ func TestHandleSingleDataEvents(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			mockDisp := newMockDispatcher(common.NewDispatcherID(), 0)
@@ -1357,7 +1355,6 @@ func TestHandleBatchDMLEvent(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			mockDisp := newMockDispatcher(common.NewDispatcherID(), 0)

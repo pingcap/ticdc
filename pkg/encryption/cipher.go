@@ -18,7 +18,7 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 
-	cerrors "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 )
 
 // Cipher is the interface for encryption/decryption operations
@@ -58,15 +58,15 @@ func isValidAESKeySize(key []byte) bool {
 // Encrypt encrypts data using AES-CTR.
 func (c *AES256CTRCipher) Encrypt(data, key, iv []byte) ([]byte, error) {
 	if !isValidAESKeySize(key) {
-		return nil, cerrors.ErrEncryptionFailed.GenWithStackByArgs("key must be 16, 24, or 32 bytes for AES-CTR")
+		return nil, errors.ErrEncryptionFailed.GenWithStackByArgs("key must be 16, 24, or 32 bytes for AES-CTR")
 	}
 	if len(iv) != c.IVSize() {
-		return nil, cerrors.ErrEncryptionFailed.GenWithStackByArgs("IV must be 16 bytes")
+		return nil, errors.ErrEncryptionFailed.GenWithStackByArgs("IV must be 16 bytes")
 	}
 
 	block, err := aes.NewCipher(key)
 	if err != nil {
-		return nil, cerrors.ErrEncryptionFailed.Wrap(err)
+		return nil, errors.ErrEncryptionFailed.Wrap(err)
 	}
 
 	stream := cipher.NewCTR(block, iv)
@@ -79,15 +79,15 @@ func (c *AES256CTRCipher) Encrypt(data, key, iv []byte) ([]byte, error) {
 // Decrypt decrypts data using AES-CTR.
 func (c *AES256CTRCipher) Decrypt(data, key, iv []byte) ([]byte, error) {
 	if !isValidAESKeySize(key) {
-		return nil, cerrors.ErrDecryptionFailed.GenWithStackByArgs("key must be 16, 24, or 32 bytes for AES-CTR")
+		return nil, errors.ErrDecryptionFailed.GenWithStackByArgs("key must be 16, 24, or 32 bytes for AES-CTR")
 	}
 	if len(iv) != c.IVSize() {
-		return nil, cerrors.ErrDecryptionFailed.GenWithStackByArgs("IV must be 16 bytes")
+		return nil, errors.ErrDecryptionFailed.GenWithStackByArgs("IV must be 16 bytes")
 	}
 
 	block, err := aes.NewCipher(key)
 	if err != nil {
-		return nil, cerrors.ErrDecryptionFailed.Wrap(err)
+		return nil, errors.ErrDecryptionFailed.Wrap(err)
 	}
 
 	stream := cipher.NewCTR(block, iv)
@@ -101,7 +101,7 @@ func (c *AES256CTRCipher) Decrypt(data, key, iv []byte) ([]byte, error) {
 func GenerateIV(size int) ([]byte, error) {
 	iv := make([]byte, size)
 	if _, err := rand.Read(iv); err != nil {
-		return nil, cerrors.ErrEncryptionFailed.Wrap(err)
+		return nil, errors.ErrEncryptionFailed.Wrap(err)
 	}
 	return iv, nil
 }

@@ -19,7 +19,7 @@ import (
 	"fmt"
 	"strings"
 
-	perrors "github.com/pingcap/errors"
+	perrors "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tidb/pkg/util/redact"
 )
 

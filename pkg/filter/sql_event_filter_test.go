@@ -17,11 +17,10 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/pingcap/errors"
 	bf "github.com/pingcap/ticdc/pkg/binlog-filter"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/stretchr/testify/require"
@@ -542,7 +541,7 @@ func TestShouldSkipDDL(t *testing.T) {
 				},
 			},
 		},
-		err: cerror.ErrInvalidIgnoreEventType,
+		err: errors.ErrInvalidIgnoreEventType,
 	}
 	_, err := newSQLEventFilter(case4.cfg, false)
 	require.True(t, errors.ErrorEqual(err, case4.err), "case: %+s", err)
@@ -579,7 +578,7 @@ func TestVerifyIgnoreEvents(t *testing.T) {
 
 	cases = append(cases, testCase{
 		ignoreEvent: []bf.EventType{bf.EventType("unknown")},
-		err:         cerror.ErrInvalidIgnoreEventType,
+		err:         errors.ErrInvalidIgnoreEventType,
 	})
 
 	cases = append(cases, testCase{

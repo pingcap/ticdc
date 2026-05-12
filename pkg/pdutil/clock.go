@@ -18,9 +18,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	pclock "github.com/pingcap/ticdc/pkg/clock"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/retry"
 	"github.com/tikv/client-go/v2/oracle"
 	pd "github.com/tikv/pd/client"

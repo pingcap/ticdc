@@ -17,9 +17,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/migrate"
 	"github.com/pingcap/ticdc/pkg/orchestrator"
@@ -65,18 +64,18 @@ func (w *EtcdWatcher) RunEtcdWorker(
 		// 1/3 of session ttl that `session.Done` can't be triggered even
 		// the lease is already revoked.
 		switch {
-		case cerror.ErrEtcdSessionDone.Equal(err),
-			cerror.ErrLeaseExpired.Equal(err):
+		case errors.ErrEtcdSessionDone.Equal(err),
+			errors.ErrLeaseExpired.Equal(err):
 			log.Warn("session is disconnected", zap.Error(err))
-			return cerror.ErrCaptureSuicide.GenWithStackByArgs()
+			return errors.ErrCaptureSuicide.GenWithStackByArgs()
 		}
 		lease, inErr := w.etcdClient.GetEtcdClient().TimeToLive(ctx, w.session.Lease())
 		if inErr != nil {
-			return cerror.WrapError(cerror.ErrPDEtcdAPIError, inErr)
+			return errors.WrapError(errors.ErrPDEtcdAPIError, inErr)
 		}
 		if lease.TTL == int64(-1) {
 			log.Warn("session is disconnected", zap.Error(err))
-			return cerror.ErrCaptureSuicide.GenWithStackByArgs()
+			return errors.ErrCaptureSuicide.GenWithStackByArgs()
 		}
 		return errors.Trace(err)
 	}

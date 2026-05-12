@@ -184,10 +184,7 @@ func (ra *RedoApplier) consumeLogs(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	for {
-		if row == nil && ddl == nil {
-			break
-		}
+	for row != nil || ddl != nil {
 		if shouldApplyDDL(row, ddl) {
 			if err := ra.applyDDL(ctx, ddl, checkpointTs); err != nil {
 				return err
@@ -483,7 +480,7 @@ func (ra *RedoApplier) Apply(egCtx context.Context) (err error) {
 	})
 
 	err = eg.Wait()
-	if errors.Cause(err) != errApplyFinished {
+	if !errors.Is(errors.Cause(err), errApplyFinished) {
 		return err
 	}
 	return nil

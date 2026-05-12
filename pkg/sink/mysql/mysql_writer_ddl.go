@@ -228,7 +228,7 @@ func (w *Writer) execDDLWithMaxRetries(event *commonEvent.DDLEvent) error {
 				// If the error is ignorable, we will ignore the error directly.
 				return nil
 			}
-			if w.cfg.IsTiDB && ddlCreateTime != "" && errors.Cause(err) == mysql.ErrInvalidConn {
+			if w.cfg.IsTiDB && ddlCreateTime != "" && errors.Is(errors.Cause(err), mysql.ErrInvalidConn) {
 				log.Warn("Wait the asynchronous ddl to synchronize", zap.String("ddl", event.Query), zap.String("ddlCreateTime", ddlCreateTime),
 					zap.Uint64("startTs", event.GetStartTs()), zap.Uint64("commitTs", event.GetCommitTs()),
 					zap.String("readTimeout", w.cfg.ReadTimeout), zap.Error(err))

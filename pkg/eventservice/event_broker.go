@@ -206,10 +206,8 @@ func (c *eventBroker) sendDML(remoteID node.ID, batchEvent *event.BatchDMLEvent,
 		lastStartTs  uint64
 		lastCommitTs uint64
 	)
-	for {
-		if idx >= len(batchEvent.DMLEvents) {
-			break
-		}
+	for idx < len(batchEvent.DMLEvents) {
+
 		dml := batchEvent.DMLEvents[idx]
 		if c.hasSyncPointEventsBeforeTs(dml.GetCommitTs(), d) {
 			events := batchEvent.PopHeadDMLEvents(idx)
@@ -877,7 +875,8 @@ func (c *eventBroker) sendMsg(ctx context.Context, tMsg *messaging.TargetMessage
 		// Send the message to the dispatcher.
 		err := c.msgSender.SendEvent(tMsg)
 		if err != nil {
-			_, ok := err.(errors.AppError)
+			var appError errors.AppError
+			ok := errors.As(err, &appError)
 			log.Debug("send msg failed, retry it later", zap.Error(err), zap.Stringer("tMsg", tMsg), zap.Bool("castOk", ok))
 			if strings.Contains(err.Error(), "congested") {
 				log.Debug("send message failed since the message is congested, retry it laster", zap.Error(err))

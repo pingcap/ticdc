@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
@@ -2881,7 +2882,8 @@ func TestRegisterTable(t *testing.T) {
 				tableInfo, err := pStorage.getTableInfo(testCase.tableID, testCase.snapTs)
 				if testCase.deleted {
 					require.Nil(t, tableInfo)
-					if _, ok := err.(*TableDeletedError); !ok {
+					var tableDeletedError *TableDeletedError
+					if !errors.As(err, &tableDeletedError) {
 						t.Error("expect TableDeletedError, but got", err)
 					}
 				} else {

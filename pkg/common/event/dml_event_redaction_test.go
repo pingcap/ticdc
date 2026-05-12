@@ -16,7 +16,7 @@ package event
 import (
 	"testing"
 
-	"github.com/pingcap/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"

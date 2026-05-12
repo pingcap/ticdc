@@ -24,7 +24,7 @@ import (
 
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/httputil"
 	"github.com/pingcap/tidb/pkg/tablecodec"
 	"github.com/pingcap/tidb/pkg/util/codec"
@@ -101,7 +101,7 @@ func TestMetaLabelFail(t *testing.T) {
 	require.Regexp(t, ".*404.*", err)
 
 	err = pc.UpdateMetaLabel(ctx)
-	require.ErrorIs(t, err, cerror.ErrReachMaxTry)
+	require.ErrorIs(t, err, errors.ErrReachMaxTry)
 	mockClient.testServer.Close()
 }
 
@@ -241,13 +241,14 @@ func TestScanRegions(t *testing.T) {
 
 	i = 0
 	handler = func() RegionsInfo {
-		if i == 0 {
+		switch i {
+		case 0:
 			i++
 			return RegionsInfo{Regions: regions[2:3]}
-		} else if i == 1 {
+		case 1:
 			i++
 			return RegionsInfo{Regions: regions[3:4]}
-		} else if i == 2 {
+		case 2:
 			i++
 			return RegionsInfo{Regions: regions[4:5]}
 		}

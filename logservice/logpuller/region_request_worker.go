@@ -19,12 +19,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	"github.com/pingcap/log"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/version"
@@ -105,14 +104,14 @@ func newRegionRequestWorker(
 			}
 			var regionErr error
 			if err := version.CheckStoreVersion(ctx, worker.client.pd); err != nil {
-				if errors.Cause(err) == context.Canceled {
+				if errors.Is(errors.Cause(err), context.Canceled) {
 					return nil
 				}
 				log.Error("event feed check store version fails",
 					zap.Uint64("workerID", worker.workerID),
 					zap.String("addr", worker.store.storeAddr),
 					zap.Error(err))
-				if cerror.Is(err, cerror.ErrGetAllStoresFailed) {
+				if errors.Is(err, errors.ErrGetAllStoresFailed) {
 					regionErr = &getStoreErr{}
 				} else {
 					regionErr = &storeStreamErr{}

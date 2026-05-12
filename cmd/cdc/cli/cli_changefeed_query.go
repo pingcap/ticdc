@@ -14,14 +14,13 @@
 package cli
 
 import (
-	"github.com/pingcap/errors"
 	v2 "github.com/pingcap/ticdc/api/v2"
 	"github.com/pingcap/ticdc/cmd/cdc/factory"
 	"github.com/pingcap/ticdc/cmd/util"
 	"github.com/pingcap/ticdc/pkg/api"
 	apiv2client "github.com/pingcap/ticdc/pkg/api/v2"
 	"github.com/pingcap/ticdc/pkg/config"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/spf13/cobra"
 )
 
@@ -91,7 +90,7 @@ func (o *queryChangefeedOptions) run(cmd *cobra.Command) error {
 				return util.JSONPrint(cmd, info)
 			}
 		}
-		return cerror.ErrChangeFeedNotExists.GenWithStackByArgs(o.changefeedID)
+		return errors.ErrChangeFeedNotExists.GenWithStackByArgs(o.changefeedID)
 	}
 
 	detail, err := o.apiClientV2.Changefeeds().Get(ctx, o.keyspace, o.changefeedID)

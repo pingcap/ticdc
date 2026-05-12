@@ -18,14 +18,13 @@ package gc
 
 import (
 	"context"
-	stderrors "errors"
 	"math"
 	"testing"
 	"time"
 
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
-	cerrors "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/stretchr/testify/require"
 )
@@ -37,7 +36,7 @@ func TestTryUpdateServiceGCSafepointReturnsErrorOnUpdateFailure(t *testing.T) {
 	pdClient := &MockPDClient{
 		UpdateServiceGCSafePointFunc: func(ctx context.Context, serviceID string, ttl int64, safePoint uint64) (uint64, error) {
 			updateCalls++
-			return 0, stderrors.New("pd is unstable")
+			return 0, errors.New("pd is unstable")
 		},
 	}
 
@@ -48,9 +47,9 @@ func TestTryUpdateServiceGCSafepointReturnsErrorOnUpdateFailure(t *testing.T) {
 
 	err := m.TryUpdateServiceGCSafepoint(ctx, common.Ts(100))
 	require.Error(t, err)
-	errCode, ok := cerrors.RFCCode(err)
+	errCode, ok := errors.RFCCode(err)
 	require.True(t, ok)
-	require.Equal(t, cerrors.ErrUpdateServiceSafepointFailed.RFCCode(), errCode)
+	require.Equal(t, errors.ErrUpdateServiceSafepointFailed.RFCCode(), errCode)
 	require.Equal(t, 1, updateCalls)
 }
 
@@ -93,9 +92,9 @@ func TestTryUpdateServiceGCSafepointDoesNotReturnSnapshotLost(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test-changefeed", "test")
 	err := m.CheckStaleCheckpointTs(0, cfID, checkpointTs)
 	require.Error(t, err)
-	errCode, ok := cerrors.RFCCode(err)
+	errCode, ok := errors.RFCCode(err)
 	require.True(t, ok)
-	require.Equal(t, cerrors.ErrSnapshotLostByGC.RFCCode(), errCode)
+	require.Equal(t, errors.ErrSnapshotLostByGC.RFCCode(), errCode)
 }
 
 func TestTryDeleteServiceGCSafepointClearsCachedState(t *testing.T) {

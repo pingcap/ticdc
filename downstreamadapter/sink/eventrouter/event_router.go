@@ -20,7 +20,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/util"
 	tableFilter "github.com/pingcap/tidb/pkg/util/table-filter"
 )
@@ -55,7 +55,7 @@ func NewEventRouter(
 	for _, ruleConfig := range ruleConfigs {
 		f, err := tableFilter.Parse(ruleConfig.Matcher)
 		if err != nil {
-			return nil, cerror.WrapError(cerror.ErrFilterRuleInvalid, err, ruleConfig.Matcher)
+			return nil, errors.WrapError(errors.ErrFilterRuleInvalid, err, ruleConfig.Matcher)
 		}
 		if !util.GetOrZero(sinkConfig.CaseSensitive) {
 			f = tableFilter.CaseInsensitive(f)
@@ -163,14 +163,14 @@ func (s *EventRouter) VerifyTables(infos []*common.TableInfo) error {
 			if v.IndexName != "" {
 				index := table.GetIndex(v.IndexName)
 				if index == nil {
-					return cerror.ErrDispatcherFailed.GenWithStack(
+					return errors.ErrDispatcherFailed.GenWithStack(
 						"index not found when verify the table, table: %v, index: %s", table.TableName, v.IndexName)
 				}
 				// only allow the unique index to be set.
 				// For the non-unique index, if any column belongs to the index is updated,
 				// the event is not split, it may cause incorrect data consumption.
 				if !index.Unique {
-					return cerror.ErrDispatcherFailed.GenWithStack(
+					return errors.ErrDispatcherFailed.GenWithStack(
 						"index is not unique when verify the table, table: %v, index: %s", table.TableName, v.IndexName)
 				}
 			}

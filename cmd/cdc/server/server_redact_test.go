@@ -16,7 +16,7 @@ package server
 import (
 	"testing"
 
-	perrors "github.com/pingcap/errors"
+	perrors "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"

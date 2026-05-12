@@ -18,9 +18,8 @@ import (
 	"testing"
 
 	"github.com/golang/mock/gomock"
-	"github.com/pingcap/errors"
 	"github.com/pingcap/ticdc/pkg/common"
-	cerrors "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/stretchr/testify/require"
 	"go.etcd.io/etcd/api/v3/etcdserverpb"
 	"go.etcd.io/etcd/api/v3/mvccpb"
@@ -333,7 +332,7 @@ func TestCDCEtcdClientImpl_CheckMultipleCDCClusterExist(t *testing.T) {
 				{Key: []byte("/tidb/cdc/default-index/default/changefeed/info/changefeed1")},
 			},
 			assertion: func(t require.TestingT, err error, _ ...any) {
-				require.True(t, cerrors.ErrMultipleCDCClustersExist.Equal(err))
+				require.True(t, errors.ErrMultipleCDCClustersExist.Equal(err))
 			},
 		},
 		{
@@ -342,7 +341,7 @@ func TestCDCEtcdClientImpl_CheckMultipleCDCClusterExist(t *testing.T) {
 				{Key: []byte("/tidb/cdc/owner-index/default/changefeed/info/changefeed1")},
 			},
 			assertion: func(t require.TestingT, err error, _ ...any) {
-				require.True(t, cerrors.ErrMultipleCDCClustersExist.Equal(err))
+				require.True(t, errors.ErrMultipleCDCClustersExist.Equal(err))
 			},
 		},
 	}
@@ -393,7 +392,7 @@ func TestCDCEtcdClientImpl_GetLogCoordinatorRevision(t *testing.T) {
 
 		etcdClient := &CDCEtcdClientImpl{Client: client, ClusterID: clusterID}
 		_, err := etcdClient.GetLogCoordinatorRevision(ctx, captureID)
-		require.True(t, cerrors.ErrOwnerNotFound.Equal(err))
+		require.True(t, errors.ErrOwnerNotFound.Equal(err))
 	})
 
 	t.Run("not the log coordinator", func(t *testing.T) {
@@ -410,7 +409,7 @@ func TestCDCEtcdClientImpl_GetLogCoordinatorRevision(t *testing.T) {
 
 		etcdClient := &CDCEtcdClientImpl{Client: client, ClusterID: clusterID}
 		_, err := etcdClient.GetLogCoordinatorRevision(ctx, captureID)
-		require.True(t, cerrors.ErrNotOwner.Equal(err))
+		require.True(t, errors.ErrNotOwner.Equal(err))
 	})
 
 	t.Run("success", func(t *testing.T) {

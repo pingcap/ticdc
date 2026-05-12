@@ -17,11 +17,10 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/expression"
 	"github.com/pingcap/tidb/pkg/meta/model"
@@ -62,7 +61,7 @@ func newExprFilterRule(
 ) (*dmlExprFilterRule, error) {
 	tf, err := tfilter.Parse(cfg.Matcher)
 	if err != nil {
-		return nil, cerror.WrapError(cerror.ErrFilterRuleInvalid, err, cfg.Matcher)
+		return nil, errors.WrapError(errors.ErrFilterRuleInvalid, err, cfg.Matcher)
 	}
 
 	ret := &dmlExprFilterRule{
@@ -88,25 +87,25 @@ func newExprFilterRule(
 // 	_, _, err := p.ParseSQL(completeExpression(r.config.IgnoreInsertValueExpr))
 // 	if err != nil {
 // 		log.Error("failed to parse expression", zap.Error(err))
-// 		return cerror.ErrExpressionParseFailed.
+// 		return errors.ErrExpressionParseFailed.
 // 			FastGenByArgs(r.config.IgnoreInsertValueExpr)
 // 	}
 // 	_, _, err = p.ParseSQL(completeExpression(r.config.IgnoreUpdateNewValueExpr))
 // 	if err != nil {
 // 		log.Error("failed to parse expression", zap.Error(err))
-// 		return cerror.ErrExpressionParseFailed.
+// 		return errors.ErrExpressionParseFailed.
 // 			FastGenByArgs(r.config.IgnoreUpdateNewValueExpr)
 // 	}
 // 	_, _, err = p.ParseSQL(completeExpression(r.config.IgnoreUpdateOldValueExpr))
 // 	if err != nil {
 // 		log.Error("failed to parse expression", zap.Error(err))
-// 		return cerror.ErrExpressionParseFailed.
+// 		return errors.ErrExpressionParseFailed.
 // 			FastGenByArgs(r.config.IgnoreUpdateOldValueExpr)
 // 	}
 // 	_, _, err = p.ParseSQL(completeExpression(r.config.IgnoreDeleteValueExpr))
 // 	if err != nil {
 // 		log.Error("failed to parse expression", zap.Error(err))
-// 		return cerror.ErrExpressionParseFailed.
+// 		return errors.ErrExpressionParseFailed.
 // 			FastGenByArgs(r.config.IgnoreDeleteValueExpr)
 // 	}
 // verify expression filter rule.
@@ -240,11 +239,11 @@ func (r *dmlExprFilterRule) getSimpleExprOfTable(
 			log.Error("meet unknown column when generating expression",
 				zap.String("expression", expr),
 				zap.Error(err))
-			return nil, cerror.ErrExpressionColumnNotFound.
+			return nil, errors.ErrExpressionColumnNotFound.
 				FastGenByArgs(getColumnFromError(err), tableInfo.Name.String(), expr)
 		}
 		log.Error("failed to parse expression", zap.Error(err))
-		return nil, cerror.ErrExpressionParseFailed.FastGenByArgs(err, expr)
+		return nil, errors.ErrExpressionParseFailed.FastGenByArgs(err, expr)
 	}
 	return e, nil
 }
@@ -468,10 +467,10 @@ func (f *dmlExprFilter) shouldSkipDML(
 	for _, rule := range rules {
 		ignore, err := rule.shouldSkipDML(dmlType, preRow, row, tableInfo)
 		if err != nil {
-			if cerror.ShouldFailChangefeed(err) {
+			if errors.ShouldFailChangefeed(err) {
 				return false, err
 			}
-			return false, cerror.WrapError(cerror.ErrFailedToFilterDML, err, row)
+			return false, errors.WrapError(errors.ErrFailedToFilterDML, err, row)
 		}
 		if ignore {
 			return true, nil

@@ -19,9 +19,9 @@ import (
 	"testing"
 
 	"github.com/golang/mock/gomock"
-	"github.com/pingcap/errors"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/stretchr/testify/require"
 	"go.etcd.io/etcd/api/v3/mvccpb"
@@ -58,7 +58,7 @@ func TestGetAllChangefeeds(t *testing.T) {
 	require.Nil(t, err)
 	require.Len(t, resp, 0)
 
-	// status unmarshal failed, changefeed will not be ignored, and the checkpiont ts will be the start ts
+	// status unmarshal failed, changefeed will not be ignored, and the checkpoint ts will be the start ts
 	// the old version of changefeed without gid
 	cdcClient.EXPECT().GetChangefeedInfoAndStatus(gomock.Any()).Return(
 		int64(0),

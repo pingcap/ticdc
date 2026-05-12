@@ -22,7 +22,7 @@ import (
 
 	oldproto "github.com/gogo/protobuf/proto"
 	"github.com/pingcap/kvproto/pkg/metapb"
-	cerrors "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/stretchr/testify/require"
 	pd "github.com/tikv/pd/client"
 	pdopt "github.com/tikv/pd/client/opt"
@@ -200,7 +200,7 @@ func TestTiKVEncryptionHTTPClientNotFoundReturnsErrEncryptionMetaNotFound(t *tes
 	require.NoError(t, err)
 
 	_, err = client.GetKeyspaceEncryptionMeta(context.Background(), 1)
-	require.True(t, cerrors.ErrEncryptionMetaNotFound.Equal(err), "err=%v", err)
+	require.True(t, errors.ErrEncryptionMetaNotFound.Equal(err), "err=%v", err)
 }
 
 func TestTiKVEncryptionHTTPClientRejectsVersionZeroMeta(t *testing.T) {
@@ -246,7 +246,7 @@ func TestTiKVEncryptionHTTPClientRejectsVersionZeroMeta(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = client.GetKeyspaceEncryptionMeta(context.Background(), 1)
-	require.True(t, cerrors.ErrEncryptionFailed.Equal(err), "err=%v", err)
+	require.True(t, errors.ErrEncryptionFailed.Equal(err), "err=%v", err)
 }
 
 func TestTiKVEncryptionHTTPClientRejectsMetaMissingCurrentDataKey(t *testing.T) {
@@ -292,7 +292,7 @@ func TestTiKVEncryptionHTTPClientRejectsMetaMissingCurrentDataKey(t *testing.T) 
 	require.NoError(t, err)
 
 	_, err = client.GetKeyspaceEncryptionMeta(context.Background(), 1)
-	require.True(t, cerrors.ErrDataKeyNotFound.Equal(err), "err=%v", err)
+	require.True(t, errors.ErrDataKeyNotFound.Equal(err), "err=%v", err)
 }
 
 type testKeyspaceEncryptionMetaPB struct {

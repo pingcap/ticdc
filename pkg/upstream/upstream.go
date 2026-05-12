@@ -138,10 +138,8 @@ func CreateTiStore(ctx context.Context, urls string, credential *security.Creden
 }
 
 func isCreateTiStoreRetryable(ctx context.Context, err error) bool {
-	switch errors.Cause(err) {
-	case context.Canceled:
-		// Only stop retrying if the caller's context is canceled.
-		// Otherwise treat it as transient (e.g. internal client cancellation).
+	switch {
+	case errors.Is(errors.Cause(err), context.Canceled):
 		return ctx.Err() == nil
 	}
 	return true
@@ -374,7 +372,7 @@ func (up *Upstream) registerTopologyInfo(ctx context.Context, cfg *NodeTopologyC
 	}
 	// register capture info to upstream pd
 	key := fmt.Sprintf(topologyTiCDC, cfg.GCServiceID, cfg.AdvertiseAddr)
-	value, err := cfg.Info.Marshal()
+	value, err := cfg.Marshal()
 	if err != nil {
 		return errors.Trace(err)
 	}

@@ -20,10 +20,10 @@ import (
 	"time"
 
 	"github.com/golang/mock/gomock"
-	"github.com/pingcap/errors"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/config/kerneltype"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
 	"github.com/stretchr/testify/require"
 	pdgc "github.com/tikv/pd/client/clients/gc"

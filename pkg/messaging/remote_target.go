@@ -19,10 +19,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	. "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/messaging/proto"
 	"github.com/pingcap/ticdc/pkg/metrics"
@@ -497,10 +497,7 @@ func (s *remoteMessageTarget) runSendMessages(ctx context.Context, streamType st
 	}()
 
 	// wait stream ready
-	for {
-		if s.isReadyToSend() {
-			break
-		}
+	for !s.isReadyToSend() {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -573,10 +570,7 @@ func (s *remoteMessageTarget) runReceiveMessages(ctx context.Context, streamType
 	}()
 
 	// wait stream ready
-	for {
-		if s.isReadyToSend() {
-			break
-		}
+	for !s.isReadyToSend() {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()

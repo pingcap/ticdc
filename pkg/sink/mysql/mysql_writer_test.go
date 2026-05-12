@@ -23,13 +23,12 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/go-sql-driver/mysql"
 	lru "github.com/hashicorp/golang-lru"
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config/kerneltype"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/tidb/br/pkg/version"
 	ticonfig "github.com/pingcap/tidb/pkg/config"
@@ -646,7 +645,7 @@ func TestMysqlWriter_AsyncDDL(t *testing.T) {
 	}
 
 	{
-		// ensure the dml can be writen succesfully before add index finished
+		// ensure the dml can be written successfully before add index finished
 		dmlEvent := helper.DML2Event("test", "t", "insert into t values (3, 'test3');")
 		dmlEvent.CommitTs = 3
 		dmlEvent.ReplicatingTs = 4
@@ -736,7 +735,7 @@ func TestCheckIsDuplicateEntryError(t *testing.T) {
 	// Test case 3: Wrap Error with "Duplicate entry" in message should return true
 	beforeTime = time.Now()
 	stringErr2 := fmt.Errorf("Error 1062: Duplicate entry 'test' for key 'PRIMARY'")
-	testErr := cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(stringErr2, fmt.Sprintf("Failed to execute DMLs, query info:%s, args:%v; ", "test sql", "test args")))
+	testErr := errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(stringErr2, fmt.Sprintf("Failed to execute DMLs, query info:%s, args:%v; ", "test sql", "test args")))
 	result = writer.checkIsDuplicateEntryError(testErr)
 
 	require.True(t, result)

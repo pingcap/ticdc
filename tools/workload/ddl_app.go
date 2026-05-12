@@ -16,8 +16,8 @@ package main
 import (
 	"sync"
 
-	"github.com/pingcap/errors"
 	plog "github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"go.uber.org/zap"
 )
 

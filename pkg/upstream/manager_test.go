@@ -20,7 +20,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pingcap/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/stretchr/testify/require"
 	uatomic "go.uber.org/atomic"

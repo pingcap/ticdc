@@ -21,10 +21,8 @@ import (
 	"time"
 
 	"github.com/benbjohnson/clock"
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
-	pkgerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/retry"
 	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/pingcap/ticdc/pkg/util"
@@ -140,7 +138,7 @@ func retryRPC(rpcName string, metric prometheus.Counter, etcdRPC func() error) e
 	// 16s = \sum_{n=0}^{6} 0.5*1.5^n
 	return retry.Do(context.Background(), func() error {
 		err := etcdRPC()
-		if err != nil && errors.Cause(err) != context.Canceled {
+		if err != nil && !errors.Is(errors.Cause(err), context.Canceled) {
 			log.Warn("etcd RPC failed", zap.String("RPC", rpcName), zap.Error(err))
 		}
 		if metric != nil {
@@ -345,18 +343,19 @@ func (c *ClientImpl) RequestProgress(ctx context.Context) error {
 
 func isRetryableError(rpcName string) retry.IsRetryable {
 	return func(err error) bool {
-		if !cerror.IsRetryableError(err) {
+		if !errors.IsRetryableError(err) {
 			return false
 		}
 
 		switch rpcName {
 		case EtcdRevoke:
-			if etcdErr, ok := err.(v3rpc.EtcdError); ok && etcdErr.Code() == codes.NotFound {
+			var etcdErr v3rpc.EtcdError
+			if errors.As(err, &etcdErr) && etcdErr.Code() == codes.NotFound {
 				// It means the etcd lease is already expired or revoked
 				return false
 			}
 		case EtcdTxn:
-			return pkgerror.IsRetryableEtcdError(err)
+			return errors.IsRetryableEtcdError(err)
 		default:
 			// For other types of operation, we retry directly without handling errors
 		}
@@ -566,8 +565,8 @@ func (checker *healthyChecker) update(eps []string) {
 			}
 			if time.Since(lastHealthy) > etcdServerDisconnectedTimeout {
 				// try to reset client endpoint to trigger reconnect
-				client.(*healthyClient).Client.SetEndpoints([]string{}...)
-				client.(*healthyClient).Client.SetEndpoints(ep)
+				client.(*healthyClient).SetEndpoints([]string{}...)
+				client.(*healthyClient).SetEndpoints(ep)
 			}
 			continue
 		}
@@ -614,5 +613,5 @@ func IsHealthy(ctx context.Context, client *clientv3.Client) bool {
 	_, err := client.Get(ctx, healthyPath)
 	// permission denied is OK since proposal goes through consensus to get it
 	// See: https://github.com/etcd-io/etcd/blob/85b640cee793e25f3837c47200089d14a8392dc7/etcdctl/ctlv3/command/ep_command.go#L124
-	return err == nil || err == rpctypes.ErrPermissionDenied
+	return err == nil || errors.Is(err, rpctypes.ErrPermissionDenied)
 }

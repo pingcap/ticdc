@@ -16,9 +16,9 @@ package common
 import (
 	"errors"
 
-	perrors "github.com/pingcap/errors"
 	commonPkg "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	perrors "github.com/pingcap/ticdc/pkg/errors"
 )
 
 // AttachMessageLogInfo binds row event diagnostic info onto sink messages.

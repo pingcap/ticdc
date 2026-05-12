@@ -27,9 +27,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/util/dbutil"
@@ -883,7 +883,7 @@ func generateDML(tp string, data map[string]*dbutil.ColumnData, table *model.Tab
 			}
 
 			if needQuotes(col.FieldType) {
-				values = append(values, fmt.Sprintf("'%s'", strings.Replace(string(data[col.Name.O].Data), "'", "\\'", -1)))
+				values = append(values, fmt.Sprintf("'%s'", strings.ReplaceAll(string(data[col.Name.O].Data), "'", "\\'")))
 			} else {
 				values = append(values, string(data[col.Name.O].Data))
 			}
@@ -906,7 +906,7 @@ func generateDML(tp string, data map[string]*dbutil.ColumnData, table *model.Tab
 			if needQuotes(col.FieldType) {
 				kvs = append(kvs, fmt.Sprintf("%s = '%s'",
 					dbutil.ColumnName(col.Name.O),
-					strings.Replace(string(data[col.Name.O].Data), "'", "\\'", -1)))
+					strings.ReplaceAll(string(data[col.Name.O].Data), "'", "\\'")))
 			} else {
 				kvs = append(kvs,
 					fmt.Sprintf("%s = %s", dbutil.ColumnName(col.Name.O), string(data[col.Name.O].Data)))

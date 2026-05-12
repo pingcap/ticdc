@@ -17,7 +17,7 @@ import (
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/compression"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
 
@@ -30,7 +30,7 @@ func TestLargeMessageHandle4Compression(t *testing.T) {
 	largeMessageHandle.LargeMessageHandleCompression = "zstd"
 
 	err := largeMessageHandle.AdjustAndValidate(ProtocolCanalJSON, false)
-	require.ErrorIs(t, err, cerror.ErrInvalidReplicaConfig)
+	require.ErrorIs(t, err, errors.ErrInvalidReplicaConfig)
 
 	largeMessageHandle.LargeMessageHandleCompression = compression.LZ4
 	err = largeMessageHandle.AdjustAndValidate(ProtocolCanalJSON, false)
@@ -55,7 +55,7 @@ func TestLargeMessageHandle4NotSupportedProtocol(t *testing.T) {
 
 	largeMessageHandle.LargeMessageHandleOption = LargeMessageHandleOptionHandleKeyOnly
 	err = largeMessageHandle.AdjustAndValidate(ProtocolCanal, true)
-	require.ErrorIs(t, err, cerror.ErrInvalidReplicaConfig)
+	require.ErrorIs(t, err, errors.ErrInvalidReplicaConfig)
 }
 
 func TestHandleKeyOnly4CanalJSON(t *testing.T) {
@@ -72,7 +72,7 @@ func TestHandleKeyOnly4CanalJSON(t *testing.T) {
 
 	// `enable-tidb-extension` is false, return error
 	err = largeMessageHandle.AdjustAndValidate(ProtocolCanalJSON, false)
-	require.ErrorIs(t, err, cerror.ErrInvalidReplicaConfig)
+	require.ErrorIs(t, err, errors.ErrInvalidReplicaConfig)
 
 	// `enable-tidb-extension` is true, no error
 	err = largeMessageHandle.AdjustAndValidate(ProtocolCanalJSON, true)
@@ -97,7 +97,7 @@ func TestClaimCheck4CanalJSON(t *testing.T) {
 		largeMessageHandle.ClaimCheckRawValue = rawValue
 		// `enable-tidb-extension` is false, return error
 		err = largeMessageHandle.AdjustAndValidate(ProtocolCanalJSON, false)
-		require.ErrorIs(t, err, cerror.ErrInvalidReplicaConfig)
+		require.ErrorIs(t, err, errors.ErrInvalidReplicaConfig)
 
 		// `enable-tidb-extension` is true, no error
 		err = largeMessageHandle.AdjustAndValidate(ProtocolCanalJSON, true)
@@ -151,7 +151,7 @@ func TestClaimCheck4OpenProtocol(t *testing.T) {
 
 	largeMessageHandle.ClaimCheckRawValue = true
 	err = largeMessageHandle.AdjustAndValidate(ProtocolOpen, true)
-	require.ErrorIs(t, err, cerror.ErrInvalidReplicaConfig)
+	require.ErrorIs(t, err, errors.ErrInvalidReplicaConfig)
 }
 
 func TestHandleKeyOnly4SimpleProtocol(t *testing.T) {

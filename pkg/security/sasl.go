@@ -17,7 +17,7 @@ import (
 	"strings"
 
 	"github.com/IBM/sarama"
-	"github.com/pingcap/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 )
 
 // SASLMechanism defines SASL mechanism.

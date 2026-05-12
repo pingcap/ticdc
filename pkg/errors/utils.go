@@ -29,7 +29,8 @@ import (
 // IsTableNotExistsErr is used to check if the error is a table not exists error.
 func IsTableNotExistsErr(err error) bool {
 	err = errors.Cause(err)
-	mysqlErr, ok := err.(*gmysql.MySQLError)
+	mysqlErr := &gmysql.MySQLError{}
+	ok := As(err, &mysqlErr)
 	if !ok {
 		return false
 	}
@@ -45,7 +46,8 @@ func IsTableNotExistsErr(err error) bool {
 // tidb/mysql error code definition: https://github.com/pingcap/tidb/blob/master/mysql/errcode.go
 func IsIgnorableMySQLDDLError(err error) bool {
 	err = errors.Cause(err)
-	mysqlErr, ok := err.(*gmysql.MySQLError)
+	mysqlErr := &gmysql.MySQLError{}
+	ok := As(err, &mysqlErr)
 	if !ok {
 		return false
 	}
@@ -94,7 +96,8 @@ func IsRetryableDDLError(err error) bool {
 	}
 
 	err = errors.Cause(err)
-	mysqlErr, ok := err.(*gmysql.MySQLError)
+	mysqlErr := &gmysql.MySQLError{}
+	ok := As(err, &mysqlErr)
 	if !ok {
 		return false
 	}
@@ -122,7 +125,8 @@ func IsRetryableDDLError(err error) bool {
 // IsAccessDeniedError checks if the error is an access denied error.
 func IsAccessDeniedError(err error) bool {
 	err = errors.Cause(err)
-	mysqlErr, ok := err.(*gmysql.MySQLError)
+	mysqlErr := &gmysql.MySQLError{}
+	ok := As(err, &mysqlErr)
 	if !ok {
 		return false
 	}
@@ -133,7 +137,8 @@ func IsAccessDeniedError(err error) bool {
 // IsSyncPointIgnoreError returns whether the error is ignorable for syncpoint.
 func IsSyncPointIgnoreError(err error) bool {
 	err = errors.Cause(err)
-	mysqlErr, ok := err.(*gmysql.MySQLError)
+	mysqlErr := &gmysql.MySQLError{}
+	ok := As(err, &mysqlErr)
 	if !ok {
 		return false
 	}
@@ -149,18 +154,10 @@ func IsRetryableEtcdError(err error) bool {
 	}
 	etcdErr := errors.Cause(err)
 
-	switch etcdErr {
-	// Etcd ResourceExhausted errors, may recover after some time
-	case v3rpc.ErrNoSpace, v3rpc.ErrTooManyRequests:
+	switch {
+	case Is(etcdErr, v3rpc.ErrNoSpace), Is(etcdErr, v3rpc.ErrTooManyRequests):
 		return true
-	// Etcd Unavailable errors, may be available after some time
-	// https://github.com/etcd-io/etcd/pull/9934/files#diff-6d8785d0c9eaf96bc3e2b29c36493c04R162-R167
-	// ErrStopped:
-	// one of the etcd nodes stopped from failure injection
-	// ErrNotCapable:
-	// capability check has not been done (in the beginning)
-	case v3rpc.ErrNoLeader, v3rpc.ErrLeaderChanged, v3rpc.ErrNotCapable, v3rpc.ErrStopped, v3rpc.ErrTimeout,
-		v3rpc.ErrTimeoutDueToLeaderFail, v3rpc.ErrGRPCTimeoutDueToConnectionLost, v3rpc.ErrUnhealthy:
+	case Is(etcdErr, v3rpc.ErrNoLeader), Is(etcdErr, v3rpc.ErrLeaderChanged), Is(etcdErr, v3rpc.ErrNotCapable), Is(etcdErr, v3rpc.ErrStopped), Is(etcdErr, v3rpc.ErrTimeout), Is(etcdErr, v3rpc.ErrTimeoutDueToLeaderFail), Is(etcdErr, v3rpc.ErrGRPCTimeoutDueToConnectionLost), Is(etcdErr, v3rpc.ErrUnhealthy):
 		return true
 	default:
 	}

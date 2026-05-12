@@ -17,7 +17,7 @@ import (
 	"context"
 	"testing"
 
-	cerrors "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
 
@@ -25,7 +25,7 @@ func TestMockTiKVClientNotFound(t *testing.T) {
 	cli := NewMockTiKVClient()
 	meta, err := cli.GetKeyspaceEncryptionMeta(context.Background(), 999)
 	require.Nil(t, meta)
-	require.True(t, cerrors.ErrEncryptionMetaNotFound.Equal(err))
+	require.True(t, errors.ErrEncryptionMetaNotFound.Equal(err))
 }
 
 func TestMockTiKVClientEnabledKeyspace(t *testing.T) {

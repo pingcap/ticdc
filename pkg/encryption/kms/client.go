@@ -20,7 +20,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/config"
-	cerrors "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"go.uber.org/zap"
 )
 
@@ -116,7 +116,7 @@ func (c *client) DecryptMasterKey(ctx context.Context, ciphertext []byte, keyID 
 				zap.String("vendor", vendor),
 				zap.String("keyID", keyID),
 				zap.String("endpoint", awsCfg.Endpoint))
-			return nil, cerrors.ErrDecodeFailed.GenWithStackByArgs("aws kms region is empty")
+			return nil, errors.ErrDecodeFailed.GenWithStackByArgs("aws kms region is empty")
 		}
 		decryptor, err := c.getAWSDecryptor(ctx, awsCfg)
 		if err != nil {
@@ -126,7 +126,7 @@ func (c *client) DecryptMasterKey(ctx context.Context, ciphertext []byte, keyID 
 				zap.String("region", awsCfg.Region),
 				zap.String("endpoint", awsCfg.Endpoint),
 				zap.Error(err))
-			return nil, cerrors.ErrDecodeFailed.Wrap(err)
+			return nil, errors.ErrDecodeFailed.Wrap(err)
 		}
 		plaintext, err := decryptor.Decrypt(ctx, keyID, ciphertext)
 		if err != nil {
@@ -136,7 +136,7 @@ func (c *client) DecryptMasterKey(ctx context.Context, ciphertext []byte, keyID 
 				zap.String("region", awsCfg.Region),
 				zap.String("endpoint", awsCfg.Endpoint),
 				zap.Error(err))
-			return nil, cerrors.ErrDecodeFailed.Wrap(err)
+			return nil, errors.ErrDecodeFailed.Wrap(err)
 		}
 		return plaintext, nil
 	case vendorGCP:
@@ -148,7 +148,7 @@ func (c *client) DecryptMasterKey(ctx context.Context, ciphertext []byte, keyID 
 				zap.String("keyID", keyID),
 				zap.String("endpoint", gcpCfg.Endpoint),
 				zap.Error(err))
-			return nil, cerrors.ErrDecodeFailed.Wrap(err)
+			return nil, errors.ErrDecodeFailed.Wrap(err)
 		}
 		plaintext, err := decryptor.Decrypt(ctx, keyID, ciphertext)
 		if err != nil {
@@ -157,7 +157,7 @@ func (c *client) DecryptMasterKey(ctx context.Context, ciphertext []byte, keyID 
 				zap.String("keyID", keyID),
 				zap.String("endpoint", gcpCfg.Endpoint),
 				zap.Error(err))
-			return nil, cerrors.ErrDecodeFailed.Wrap(err)
+			return nil, errors.ErrDecodeFailed.Wrap(err)
 		}
 		return plaintext, nil
 	default:
@@ -165,7 +165,7 @@ func (c *client) DecryptMasterKey(ctx context.Context, ciphertext []byte, keyID 
 			zap.String("vendor", vendor),
 			zap.String("normalizedVendor", normalizedVendor),
 			zap.String("keyID", keyID))
-		return nil, cerrors.ErrDecodeFailed.GenWithStackByArgs("unsupported KMS vendor: " + vendor)
+		return nil, errors.ErrDecodeFailed.GenWithStackByArgs("unsupported KMS vendor: " + vendor)
 	}
 }
 
@@ -206,10 +206,10 @@ func (c *client) validateConfig() error {
 		awsCfg := c.cfg.KMS.AWS
 		if awsCfg.AccessKey != "" || awsCfg.SecretAccessKey != "" || awsCfg.SessionToken != "" {
 			if awsCfg.AccessKey == "" || awsCfg.SecretAccessKey == "" {
-				return cerrors.ErrEncryptionFailed.GenWithStackByArgs("aws kms access-key and secret-access-key must be set together")
+				return errors.ErrEncryptionFailed.GenWithStackByArgs("aws kms access-key and secret-access-key must be set together")
 			}
 			if awsCfg.Profile != "" {
-				return cerrors.ErrEncryptionFailed.GenWithStackByArgs("aws kms profile and static credentials are mutually exclusive")
+				return errors.ErrEncryptionFailed.GenWithStackByArgs("aws kms profile and static credentials are mutually exclusive")
 			}
 		}
 	}
@@ -217,7 +217,7 @@ func (c *client) validateConfig() error {
 	if c.cfg.KMS.GCP != nil {
 		gcpCfg := c.cfg.KMS.GCP
 		if gcpCfg.CredentialsFile != "" && gcpCfg.CredentialsJSON != "" {
-			return cerrors.ErrEncryptionFailed.GenWithStackByArgs("gcp kms credentials-file and credentials-json are mutually exclusive")
+			return errors.ErrEncryptionFailed.GenWithStackByArgs("gcp kms credentials-file and credentials-json are mutually exclusive")
 		}
 	}
 
@@ -267,7 +267,7 @@ func (c *client) resolveGCP(metaEndpoint string) gcpClientConfig {
 func (c *client) getAWSDecryptor(ctx context.Context, cfg awsClientConfig) (awsDecryptor, error) {
 	if c.awsFactory == nil {
 		log.Warn("aws kms decryptor factory is nil")
-		return nil, cerrors.ErrEncryptionFailed.GenWithStackByArgs("aws kms decryptor factory is nil")
+		return nil, errors.ErrEncryptionFailed.GenWithStackByArgs("aws kms decryptor factory is nil")
 	}
 
 	key := awsClientKey{region: cfg.Region, endpoint: cfg.Endpoint}
@@ -302,7 +302,7 @@ func (c *client) getAWSDecryptor(ctx context.Context, cfg awsClientConfig) (awsD
 func (c *client) getGCPDecryptor(ctx context.Context, cfg gcpClientConfig) (gcpDecryptor, error) {
 	if c.gcpFactory == nil {
 		log.Warn("gcp kms decryptor factory is nil")
-		return nil, cerrors.ErrEncryptionFailed.GenWithStackByArgs("gcp kms decryptor factory is nil")
+		return nil, errors.ErrEncryptionFailed.GenWithStackByArgs("gcp kms decryptor factory is nil")
 	}
 
 	key := gcpClientKey{endpoint: cfg.Endpoint}

@@ -19,11 +19,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"go.uber.org/zap"
 )
@@ -47,7 +46,7 @@ func (w *Writer) createSyncTable() error {
 func (w *Writer) SendSyncPointEvent(event *commonEvent.SyncPointEvent) error {
 	tx, err := w.db.BeginTx(w.ctx, nil)
 	if err != nil {
-		return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, "sync table: begin Tx fail;"))
+		return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, "sync table: begin Tx fail;"))
 	}
 	row := tx.QueryRow("select @@tidb_current_ts")
 	var secondaryTs string
@@ -58,7 +57,7 @@ func (w *Writer) SendSyncPointEvent(event *commonEvent.SyncPointEvent) error {
 		if err2 != nil {
 			log.Error("failed to write syncpoint table", zap.Error(err))
 		}
-		return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, "failed to write syncpoint table; Failed to get tidb_current_ts;"))
+		return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, "failed to write syncpoint table; Failed to get tidb_current_ts;"))
 	}
 
 	commitTs := event.GetCommitTs()
@@ -79,7 +78,7 @@ func (w *Writer) SendSyncPointEvent(event *commonEvent.SyncPointEvent) error {
 		if err2 != nil {
 			log.Error("failed to write syncpoint table", zap.Error(err2))
 		}
-		return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to write syncpoint table; Exec Failed; Query is %s", query)))
+		return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to write syncpoint table; Exec Failed; Query is %s", query)))
 	}
 
 	log.Info("exec syncpoint ts query", zap.String("query", query))
@@ -89,7 +88,7 @@ func (w *Writer) SendSyncPointEvent(event *commonEvent.SyncPointEvent) error {
 	query = fmt.Sprintf("set global tidb_external_ts = %s", secondaryTs)
 	_, err = tx.Exec(query)
 	if err != nil {
-		if cerror.IsSyncPointIgnoreError(err) {
+		if errors.IsSyncPointIgnoreError(err) {
 			// TODO(dongmen): to confirm if we need to log this error.
 			log.Warn("set global external ts failed, ignore this error", zap.Error(err))
 		} else {
@@ -97,7 +96,7 @@ func (w *Writer) SendSyncPointEvent(event *commonEvent.SyncPointEvent) error {
 			if err2 != nil {
 				log.Error("failed to write syncpoint table", zap.Error(err2))
 			}
-			return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to write syncpoint table; Exec Failed; Query is %s", query)))
+			return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to write syncpoint table; Exec Failed; Query is %s", query)))
 		}
 	}
 
@@ -113,7 +112,7 @@ func (w *Writer) SendSyncPointEvent(event *commonEvent.SyncPointEvent) error {
 		builder.WriteString("' and changefeed = '")
 		builder.WriteString(w.ChangefeedID.String())
 		builder.WriteString("' and created_at < (NOW() - INTERVAL ")
-		builder.WriteString(fmt.Sprintf("%.2f", w.cfg.SyncPointRetention.Seconds()))
+		fmt.Fprintf(&builder, "%.2f", w.cfg.SyncPointRetention.Seconds())
 		builder.WriteString(" SECOND)")
 		query := builder.String()
 
@@ -121,12 +120,12 @@ func (w *Writer) SendSyncPointEvent(event *commonEvent.SyncPointEvent) error {
 		if err != nil {
 			// It is ok to ignore the error, since it will not affect the correctness of the system,
 			// and no any business logic depends on this behavior, so we just log the error.
-			log.Error("failed to clean syncpoint table", zap.Error(cerror.WrapError(cerror.ErrMySQLTxnError, err)), zap.Any("query", query))
+			log.Error("failed to clean syncpoint table", zap.Error(errors.WrapError(errors.ErrMySQLTxnError, err)), zap.Any("query", query))
 		} else {
 			w.lastCleanSyncPointTime = time.Now()
 		}
 	}
 
 	err = tx.Commit()
-	return cerror.WrapError(cerror.ErrMySQLTxnError, errors.WithMessage(err, "failed to write syncpoint table; Commit Fail;"))
+	return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, "failed to write syncpoint table; Commit Fail;"))
 }

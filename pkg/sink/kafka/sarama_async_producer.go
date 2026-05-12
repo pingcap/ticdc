@@ -18,11 +18,10 @@ import (
 	"time"
 
 	"github.com/IBM/sarama"
-	"github.com/pingcap/errors"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -143,7 +142,7 @@ func (p *saramaAsyncProducer) handleProducerError(err *sarama.ProducerError) err
 		extractLogInfo(err.Msg),
 		err.Err,
 	)
-	return cerror.WrapError(cerror.ErrKafkaAsyncSendMessage, errWithInfo)
+	return errors.WrapError(errors.ErrKafkaAsyncSendMessage, errWithInfo)
 }
 
 func (p *saramaAsyncProducer) Heartbeat() {
@@ -159,7 +158,7 @@ func (p *saramaAsyncProducer) AsyncSend(
 	ctx context.Context, topic string, partition int32, message *common.Message,
 ) error {
 	if p.closed.Load() {
-		return cerror.ErrKafkaProducerClosed.GenWithStackByArgs()
+		return errors.ErrKafkaProducerClosed.GenWithStackByArgs()
 	}
 	failpoint.Inject("KafkaSinkAsyncSendError", func() {
 		// simulate sending message to input channel successfully but flushing

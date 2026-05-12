@@ -21,8 +21,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/tests/integration_tests/util"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"go.uber.org/zap/zapcore"
