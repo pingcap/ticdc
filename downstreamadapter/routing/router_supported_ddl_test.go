@@ -1069,6 +1069,15 @@ func TestApplyToDDLEventRoutesDDLEventMetadata(t *testing.T) {
 	require.Len(t, routedSingleCreate.PostTxnFlushed, 3)
 	require.Len(t, singleCreateDDL.PostTxnFlushed, 2)
 
+	addIndexDDL := helper.DDL2Event("ALTER TABLE `source_table` ADD INDEX (`id`)")
+	addIndexDDL.IndexIDs = []int64{101}
+	routedAddIndex, err := router.ApplyToDDLEvent(addIndexDDL)
+	require.NoError(t, err)
+	require.NotSame(t, addIndexDDL, routedAddIndex)
+	require.Equal(t, []int64{101}, routedAddIndex.IndexIDs)
+	addIndexDDL.IndexIDs[0] = 202
+	require.Equal(t, []int64{101}, routedAddIndex.IndexIDs)
+
 	createTablesDDL := helper.BatchCreateTableDDLs2Event("source_db",
 		"CREATE TABLE `source_db`.`t1` (`id` INT PRIMARY KEY)",
 		"CREATE TABLE `source_db`.`t2` (`id` INT PRIMARY KEY)",
