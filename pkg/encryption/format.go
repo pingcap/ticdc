@@ -14,7 +14,9 @@
 package encryption
 
 import (
+	"github.com/pingcap/log"
 	cerrors "github.com/pingcap/ticdc/pkg/errors"
+	"go.uber.org/zap"
 )
 
 const (
@@ -68,14 +70,30 @@ func DecodeEncryptedData(data []byte) (byte, string, []byte, error) {
 	return version, string(dataKeyID[:]), encryptedData, nil
 }
 
+func dataKeyIDIsZero(data []byte) bool {
+	return data[1] == 0 && data[2] == 0 && data[3] == 0
+}
+
+func hasEncryptedHeader(data []byte) bool {
+	return data[0] != VersionUnencrypted && !dataKeyIDIsZero(data)
+}
+
 // IsEncrypted checks if data is encrypted by examining the version byte
-// Data is considered encrypted if version != 0 (VersionUnencrypted)
-// The caller should validate that the version matches expected versions from TiKV metadata
+// Data is considered encrypted if version != 0 (VersionUnencrypted) and the
+// 3-byte data key ID is non-zero.
 func IsEncrypted(data []byte) bool {
 	if len(data) < EncryptionHeaderSize {
 		return false
 	}
-	return data[0] != VersionUnencrypted
+	return hasEncryptedHeader(data)
+}
+
+// HasUnencryptedHeader checks whether data uses the 4-byte plaintext wrapper.
+func HasUnencryptedHeader(data []byte) bool {
+	if len(data) < EncryptionHeaderSize {
+		return false
+	}
+	return data[0] == VersionUnencrypted && dataKeyIDIsZero(data)
 }
 
 // IsEncryptedWithVersion checks if data is encrypted with a specific version
@@ -84,7 +102,7 @@ func IsEncryptedWithVersion(data []byte, expectedVersion byte) bool {
 	if len(data) < EncryptionHeaderSize {
 		return false
 	}
-	return data[0] == expectedVersion
+	return hasEncryptedHeader(data) && data[0] == expectedVersion
 }
 
 // GetVersion extracts the version byte from data
@@ -109,28 +127,15 @@ func EncodeUnencryptedData(data []byte) []byte {
 	return result
 }
 
-// DecodeUnencryptedData decodes unencrypted data (removes header if present)
+// DecodeUnencryptedData decodes unencrypted data by removing the 4-byte plaintext header.
+// Callers must guarantee the value is marked as passing through the encryption layer
+// and uses the unencrypted header format.
 func DecodeUnencryptedData(data []byte) ([]byte, error) {
-	if len(data) < EncryptionHeaderSize {
-		// No header, return as-is (backward compatibility)
-		return data, nil
+	if !HasUnencryptedHeader(data) {
+		log.Panic("unexpected data without unencrypted header",
+			zap.Int("dataLen", len(data)))
 	}
-
-	version := data[0]
-	dataKeyID1, dataKeyID2, dataKeyID3 := data[1], data[2], data[3]
-	dataKeyIDIsZero := dataKeyID1 == 0 && dataKeyID2 == 0 && dataKeyID3 == 0
-
-	if version == VersionUnencrypted && dataKeyIDIsZero {
-		// New-format unencrypted data with header, remove header
-		return data[4:], nil
-	}
-
-	// For backward compatibility, treat any other format as legacy unencrypted data
-	// This includes:
-	// - Legacy data without header (any pattern)
-	// - Data that might look like encrypted but is actually legacy
-	// The caller is responsible for ensuring data is not actually encrypted
-	return data, nil
+	return data[EncryptionHeaderSize:], nil
 }
 
 // ExtractDataKeyID extracts the data key ID from encrypted data
@@ -139,14 +144,10 @@ func ExtractDataKeyID(data []byte) (string, error) {
 		return "", cerrors.ErrDecodeFailed.GenWithStackByArgs("data too short")
 	}
 
-	version := data[0]
-	dataKeyID1, dataKeyID2, dataKeyID3 := data[1], data[2], data[3]
-	dataKeyIDIsZero := dataKeyID1 == 0 && dataKeyID2 == 0 && dataKeyID3 == 0
-
-	// Only extract key ID from data that definitively looks like new-format encrypted:
+	// Only extract key ID from data that definitely looks like new-format encrypted:
 	// - version != 0 (encrypted data has non-zero version)
-	// - DataKeyID is non-zero (encrypted data always has a valid key ID)
-	if version != VersionUnencrypted && !dataKeyIDIsZero {
+	// - data key ID is non-zero
+	if hasEncryptedHeader(data) {
 		var keyID [3]byte
 		copy(keyID[:], data[1:4])
 		return string(keyID[:]), nil

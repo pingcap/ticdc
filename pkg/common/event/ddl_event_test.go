@@ -240,8 +240,6 @@ func TestDDLEvent(t *testing.T) {
 		},
 		Err: errors.ErrDDLEventError.GenWithStackByArgs("test").Error(),
 	}
-	ddlEvent.TableInfo.InitPrivateFields()
-
 	// Test normal marshal/unmarshal
 	data, err := ddlEvent.Marshal()
 	require.Nil(t, err)

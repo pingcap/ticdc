@@ -135,6 +135,57 @@ func TestUnmarshalJSONToTableInfoInvalidData(t *testing.T) {
 func TestUnmarshalJSONToTableInfoRoundTrip(t *testing.T) {
 	t.Parallel()
 
+	source := WrapTableInfo("test", newPreSQLTestModelTableInfo("t_roundtrip"))
+	require.NotNil(t, source)
+	require.Contains(t, source.GetPreInsertSQL(), QuoteSchema("test", "t_roundtrip"))
+
+	routed := source.CloneWithRouting("target_db", "target_table")
+	require.Contains(t, routed.GetPreInsertSQL(), QuoteSchema("target_db", "target_table"))
+
+	data, err := source.Marshal()
+	require.NoError(t, err)
+
+	decoded, err := UnmarshalJSONToTableInfo(data)
+	require.NoError(t, err)
+	require.NotNil(t, decoded)
+
+	require.Equal(t, source.TableName.Schema, decoded.TableName.Schema)
+	require.Equal(t, source.TableName.Table, decoded.TableName.Table)
+	require.Equal(t, source.TableName.TableID, decoded.TableName.TableID)
+	require.Equal(t, len(source.GetColumns()), len(decoded.GetColumns()))
+	require.Equal(t, source.GetColumns()[0].Name.O, decoded.GetColumns()[0].Name.O)
+	require.Equal(t, source.GetColumns()[1].Name.O, decoded.GetColumns()[1].Name.O)
+	require.Contains(t, decoded.GetPreInsertSQL(), QuoteSchema("test", "t_roundtrip"))
+}
+
+func TestPreSQLsAreInitializedLazily(t *testing.T) {
+	t.Parallel()
+
+	source := WrapTableInfo("source_db", newPreSQLTestModelTableInfo("source_table"))
+	require.NotNil(t, source)
+	require.False(t, source.preSQLs.isInitialized.Load())
+
+	routed := source.CloneWithRouting("target_db", "target_table")
+	require.False(t, source.preSQLs.isInitialized.Load())
+	require.False(t, routed.preSQLs.isInitialized.Load())
+
+	require.Contains(t, routed.GetPreInsertSQL(), QuoteSchema("target_db", "target_table"))
+	require.True(t, routed.preSQLs.isInitialized.Load())
+	require.False(t, source.preSQLs.isInitialized.Load())
+
+	data, err := source.Marshal()
+	require.NoError(t, err)
+	require.False(t, source.preSQLs.isInitialized.Load())
+
+	decoded, err := UnmarshalJSONToTableInfo(data)
+	require.NoError(t, err)
+	require.False(t, decoded.preSQLs.isInitialized.Load())
+
+	require.Contains(t, decoded.GetPreUpdateSQL(), QuoteSchema("source_db", "source_table"))
+	require.True(t, decoded.preSQLs.isInitialized.Load())
+}
+
+func newPreSQLTestModelTableInfo(table string) *model.TableInfo {
 	idCol := &model.ColumnInfo{
 		ID:      1,
 		Name:    ast.NewCIStr("id"),
@@ -154,27 +205,12 @@ func TestUnmarshalJSONToTableInfoRoundTrip(t *testing.T) {
 	}
 	nameCol.FieldType = *types.NewFieldType(mysql.TypeVarchar)
 
-	source := WrapTableInfo("test", &model.TableInfo{
+	return &model.TableInfo{
 		ID:         1001,
-		Name:       ast.NewCIStr("t_roundtrip"),
+		Name:       ast.NewCIStr(table),
 		PKIsHandle: true,
 		Columns:    []*model.ColumnInfo{idCol, nameCol},
-	})
-	require.NotNil(t, source)
-
-	data, err := source.Marshal()
-	require.NoError(t, err)
-
-	decoded, err := UnmarshalJSONToTableInfo(data)
-	require.NoError(t, err)
-	require.NotNil(t, decoded)
-
-	require.Equal(t, source.TableName.Schema, decoded.TableName.Schema)
-	require.Equal(t, source.TableName.Table, decoded.TableName.Table)
-	require.Equal(t, source.TableName.TableID, decoded.TableName.TableID)
-	require.Equal(t, len(source.GetColumns()), len(decoded.GetColumns()))
-	require.Equal(t, source.GetColumns()[0].Name.O, decoded.GetColumns()[0].Name.O)
-	require.Equal(t, source.GetColumns()[1].Name.O, decoded.GetColumns()[1].Name.O)
+	}
 }
 
 func TestUnquoteName(t *testing.T) {
