@@ -701,5 +701,5 @@ func WrapTableInfo(schemaName string, info *model.TableInfo) *TableInfo {
 // do not call this method on the production code.
 func NewTableInfo4Decoder(schema string, tableInfo *model.TableInfo) *TableInfo {
 	cs := NewColumnSchema4Decoder(tableInfo)
-	return NewTableInfo(schema, tableInfo.Name.O, tableInfo.ID, tableInfo.GetPartitionInfo() != nil, cs, tableInfo)
+	return newTableInfo(schema, tableInfo.Name.O, tableInfo.ID, tableInfo.GetPartitionInfo() != nil, cs, tableInfo)
 }
