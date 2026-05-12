@@ -34,6 +34,7 @@ const (
 	DispatcherDynamicStream = "DispatcherDynamicStream"
 	MaintainerManager       = "MaintainerManager"
 	DispatcherOrchestrator  = "DispatcherOrchestrator"
+	EncryptionManager       = "EncryptionManager"
 	DefaultPDClock          = "PDClock-0"
 	PDAPIClient             = "PDAPIClient"
 	RegionCache             = "RegionCache"

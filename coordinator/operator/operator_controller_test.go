@@ -30,19 +30,28 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestController_StopChangefeed(t *testing.T) {
-	changefeedDB := changefeed.NewChangefeedDB(1216)
-	ctrl := gomock.NewController(t)
-	backend := mock_changefeed.NewMockBackend(ctrl)
+func newOperatorControllerForTest(
+	t *testing.T,
+	changefeedDB *changefeed.ChangefeedDB,
+	backend changefeed.Backend,
+) (*Controller, *node.Info, *watcher.NodeManager) {
+	t.Helper()
+
 	self := node.NewInfo("localhost:8300", "")
 	nodeManager := watcher.NewNodeManager(nil, nil)
 	nodeManager.GetAliveNodes()[self.ID] = self
 
-	mc := messaging.NewMockMessageCenter()
-	appcontext.SetService(appcontext.MessageCenter, mc)
+	appcontext.SetService(appcontext.MessageCenter, messaging.NewMockMessageCenter())
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)
 
-	oc := NewOperatorController(self, changefeedDB, backend, 10)
+	return NewOperatorController(self, changefeedDB, backend, 10), self, nodeManager
+}
+
+func TestController_StopChangefeed(t *testing.T) {
+	changefeedDB := changefeed.NewChangefeedDB(1216)
+	ctrl := gomock.NewController(t)
+	backend := mock_changefeed.NewMockBackend(ctrl)
+	oc, self, _ := newOperatorControllerForTest(t, changefeedDB, backend)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
 		ChangefeedID: cfID,
@@ -50,7 +59,7 @@ func TestController_StopChangefeed(t *testing.T) {
 		SinkURI:      "mysql://127.0.0.1:3306",
 	},
 		1, true)
-	changefeedDB.AddReplicatingMaintainer(cf, "n1")
+	changefeedDB.AddReplicatingMaintainer(cf, self.ID)
 
 	oc.StopChangefeed(context.Background(), cfID, false)
 	require.Len(t, oc.operators, 1)
@@ -66,10 +75,9 @@ func TestController_AddOperator(t *testing.T) {
 	changefeedDB := changefeed.NewChangefeedDB(1216)
 	ctrl := gomock.NewController(t)
 	backend := mock_changefeed.NewMockBackend(ctrl)
-	self := node.NewInfo("localhost:8300", "")
-	nodeManager := watcher.NewNodeManager(nil, nil)
-	nodeManager.GetAliveNodes()[self.ID] = self
-	oc := NewOperatorController(self, changefeedDB, backend, 10)
+	oc, self, nodeManager := newOperatorControllerForTest(t, changefeedDB, backend)
+	target := node.NewInfo("localhost:8301", "")
+	nodeManager.GetAliveNodes()[target.ID] = target
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
 		ChangefeedID: cfID,
@@ -77,10 +85,10 @@ func TestController_AddOperator(t *testing.T) {
 		SinkURI:      "mysql://127.0.0.1:3306",
 	},
 		1, true)
-	changefeedDB.AddReplicatingMaintainer(cf, "n1")
+	changefeedDB.AddReplicatingMaintainer(cf, self.ID)
 
-	require.True(t, oc.AddOperator(NewAddMaintainerOperator(changefeedDB, cf, "n2")))
-	require.False(t, oc.AddOperator(NewAddMaintainerOperator(changefeedDB, cf, "n2")))
+	require.True(t, oc.AddOperator(NewAddMaintainerOperator(changefeedDB, cf, target.ID)))
+	require.False(t, oc.AddOperator(NewAddMaintainerOperator(changefeedDB, cf, target.ID)))
 	cf2ID := common.NewChangeFeedIDWithName("test2", common.DefaultKeyspaceName)
 	cf2 := changefeed.NewChangefeed(cf2ID, &config.ChangeFeedInfo{
 		ChangefeedID: cf2ID,
@@ -88,7 +96,7 @@ func TestController_AddOperator(t *testing.T) {
 		SinkURI:      "mysql://127.0.0.1:3306",
 	},
 		1, true)
-	require.False(t, oc.AddOperator(NewAddMaintainerOperator(changefeedDB, cf2, "n2")))
+	require.False(t, oc.AddOperator(NewAddMaintainerOperator(changefeedDB, cf2, target.ID)))
 
 	require.NotNil(t, oc.GetOperator(cfID))
 	require.Nil(t, oc.GetOperator(cf2ID))
@@ -97,15 +105,58 @@ func TestController_AddOperator(t *testing.T) {
 	require.False(t, oc.HasOperator(cf2ID.DisplayName))
 }
 
+func TestController_HasOperatorInvolvingNode(t *testing.T) {
+	changefeedDB := changefeed.NewChangefeedDB(1216)
+	ctrl := gomock.NewController(t)
+	backend := mock_changefeed.NewMockBackend(ctrl)
+	oc, self, nodeManager := newOperatorControllerForTest(t, changefeedDB, backend)
+	target := node.NewInfo("localhost:8301", "")
+	nodeManager.GetAliveNodes()[target.ID] = target
+
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		Config:       config.GetDefaultReplicaConfig(),
+		SinkURI:      "mysql://127.0.0.1:3306",
+	}, 1, true)
+	changefeedDB.AddReplicatingMaintainer(cf, self.ID)
+
+	require.True(t, oc.AddOperator(NewAddMaintainerOperator(changefeedDB, cf, target.ID)))
+
+	require.True(t, oc.HasOperatorInvolvingNode(target.ID))
+	require.False(t, oc.HasOperatorInvolvingNode("n3"))
+}
+
+func TestController_CountMoveMaintainerOperatorsFromNodes(t *testing.T) {
+	changefeedDB := changefeed.NewChangefeedDB(1216)
+	ctrl := gomock.NewController(t)
+	backend := mock_changefeed.NewMockBackend(ctrl)
+	oc, self, nodeManager := newOperatorControllerForTest(t, changefeedDB, backend)
+	dest := node.NewInfo("localhost:8301", "")
+	nodeManager.GetAliveNodes()[dest.ID] = dest
+
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		Config:       config.GetDefaultReplicaConfig(),
+		SinkURI:      "mysql://127.0.0.1:3306",
+	}, 1, true)
+	changefeedDB.AddReplicatingMaintainer(cf, self.ID)
+
+	require.True(t, oc.AddOperator(NewMoveMaintainerOperator(changefeedDB, cf, self.ID, dest.ID)))
+
+	require.Equal(t, 1, oc.CountMoveMaintainerOperatorsFromNodes([]node.ID{self.ID}))
+	require.Equal(t, 0, oc.CountMoveMaintainerOperatorsFromNodes([]node.ID{"n3"}))
+}
+
 func TestController_StopChangefeedDuringAddOperator(t *testing.T) {
 	// Setup test environment
 	changefeedDB := changefeed.NewChangefeedDB(1216)
 	ctrl := gomock.NewController(t)
 	backend := mock_changefeed.NewMockBackend(ctrl)
-	self := node.NewInfo("localhost:8300", "")
-	nodeManager := watcher.NewNodeManager(nil, nil)
-	nodeManager.GetAliveNodes()[self.ID] = self
-	oc := NewOperatorController(self, changefeedDB, backend, 10)
+	oc, _, nodeManager := newOperatorControllerForTest(t, changefeedDB, backend)
+	target := node.NewInfo("localhost:8301", "")
+	nodeManager.GetAliveNodes()[target.ID] = target
 
 	// Create changefeed and add it to absent state (simulating a newly created changefeed)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
@@ -121,7 +172,7 @@ func TestController_StopChangefeedDuringAddOperator(t *testing.T) {
 	require.Equal(t, 1, changefeedDB.GetSize())
 
 	// Add AddMaintainerOperator (simulating starting to schedule the changefeed)
-	addOp := NewAddMaintainerOperator(changefeedDB, cf, "n1")
+	addOp := NewAddMaintainerOperator(changefeedDB, cf, target.ID)
 	require.True(t, oc.AddOperator(addOp))
 
 	// Verify operator has been added
@@ -146,7 +197,7 @@ func TestController_StopChangefeedDuringAddOperator(t *testing.T) {
 
 	// Simulate StopChangefeedOperator completion (by calling Check method)
 	// First simulate maintainer reporting non-working status
-	stopOp.Check("n1", &heartbeatpb.MaintainerStatus{
+	stopOp.Check(target.ID, &heartbeatpb.MaintainerStatus{
 		State: heartbeatpb.ComponentState_Stopped,
 	})
 

@@ -43,8 +43,10 @@ type Sink interface {
 	AddCheckpointTs(ts uint64)
 
 	SetTableSchemaStore(tableSchemaStore *commonEvent.TableSchemaStore)
-	Close(removeChangefeed bool)
+	Close()
 	Run(ctx context.Context) error
+	BatchCount() int
+	BatchBytes() int
 }
 
 func New(ctx context.Context, cfg *config.ChangefeedConfig, changefeedID common.ChangeFeedID) (Sink, error) {
