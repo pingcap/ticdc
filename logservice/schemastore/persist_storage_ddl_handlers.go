@@ -655,28 +655,8 @@ func normalizeCreateViewQueryWithStoredSelect(event *PersistedDDLEvent) {
 	event.Query = normalizedQuery
 }
 
-type tableSchemaExtractor struct {
-	schemas []string
-}
-
-func (e *tableSchemaExtractor) Enter(in ast.Node) (ast.Node, bool) {
-	if t, ok := in.(*ast.TableName); ok {
-		e.schemas = append(e.schemas, t.Schema.O)
-		return in, true
-	}
-	return in, false
-}
-
-func (e *tableSchemaExtractor) Leave(in ast.Node) (ast.Node, bool) {
-	return in, true
-}
-
 func createViewSelectUsesCurrentSchemaOnly(selectStmt ast.StmtNode, currentSchema string) bool {
-	extractor := &tableSchemaExtractor{
-		schemas: make([]string, 0),
-	}
-	selectStmt.Accept(extractor)
-	for _, schema := range extractor.schemas {
+	for _, schema := range extractTableSchemas(selectStmt) {
 		if schema != "" && !strings.EqualFold(schema, currentSchema) {
 			return false
 		}
