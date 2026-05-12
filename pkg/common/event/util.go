@@ -329,7 +329,7 @@ func (s *EventTestHelper) fillDDLEventMetadata(ddlEvent *DDLEvent, job *timodel.
 		ddlEvent.TableNameChange = &TableNameChange{
 			AddName: []SchemaTableName{{SchemaName: ddlEvent.SchemaName, TableName: ddlEvent.TableName}},
 		}
-		s.fillCreateTableLikeBlockedTableNames(ddlEvent)
+		s.fillCreateTableLikeBlockedTableNames(ddlEvent, job)
 	case timodel.ActionRecoverTable:
 		ddlEvent.TableNameChange = &TableNameChange{
 			AddName: []SchemaTableName{{SchemaName: ddlEvent.SchemaName, TableName: ddlEvent.TableName}},
@@ -354,7 +354,7 @@ func (s *EventTestHelper) fillDDLEventMetadata(ddlEvent *DDLEvent, job *timodel.
 	}
 }
 
-func (s *EventTestHelper) fillCreateTableLikeBlockedTableNames(ddlEvent *DDLEvent) {
+func (s *EventTestHelper) fillCreateTableLikeBlockedTableNames(ddlEvent *DDLEvent, job *timodel.Job) {
 	stmt, err := parser.New().ParseOneStmt(ddlEvent.Query, "", "")
 	require.NoError(s.t, err)
 
@@ -365,12 +365,36 @@ func (s *EventTestHelper) fillCreateTableLikeBlockedTableNames(ddlEvent *DDLEven
 
 	refSchema := createStmt.ReferTable.Schema.O
 	if refSchema == "" {
+		refSchema = findCreateTableLikeReferSchema(job, ddlEvent.SchemaName, ddlEvent.TableName, createStmt.ReferTable.Name.O)
+	}
+	if refSchema == "" && createStmt.Table != nil && createStmt.Table.Schema.O == "" {
 		refSchema = ddlEvent.SchemaName
+	}
+	if refSchema == "" {
+		return
 	}
 	ddlEvent.BlockedTableNames = []SchemaTableName{{
 		SchemaName: refSchema,
 		TableName:  createStmt.ReferTable.Name.O,
 	}}
+}
+
+func findCreateTableLikeReferSchema(job *timodel.Job, targetSchema, targetTable, referTable string) string {
+	for _, info := range job.InvolvingSchemaInfo {
+		if info.Mode == timodel.SharedInvolving && strings.EqualFold(info.Table, referTable) {
+			return info.Database
+		}
+	}
+	for _, info := range job.InvolvingSchemaInfo {
+		if !strings.EqualFold(info.Table, referTable) {
+			continue
+		}
+		if strings.EqualFold(info.Database, targetSchema) && strings.EqualFold(info.Table, targetTable) {
+			continue
+		}
+		return info.Database
+	}
+	return ""
 }
 
 func (s *EventTestHelper) fillCreateTablesEventMetadata(ddlEvent *DDLEvent, job *timodel.Job) {

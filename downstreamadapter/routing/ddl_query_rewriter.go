@@ -41,7 +41,8 @@ func (r Router) rewriteParserBackedDDLQuery(ddl *commonEvent.DDLEvent) (string, 
 	)
 	for i := range queries {
 		query := queries[i]
-		newQuery, err := r.rewriteSingleDDLQuery(query, ddl.GetSchemaName())
+		newQuery, err := r.rewriteSingleDDLQueryWithBlockedTableNames(
+			query, ddl.GetSchemaName(), ddl.BlockedTableNames)
 		if err != nil {
 			return "", err
 		}
@@ -79,6 +80,14 @@ func splitMultiStmtDDLQuery(query string) ([]string, error) {
 }
 
 func (r Router) rewriteSingleDDLQuery(query string, defaultSchema string) (string, error) {
+	return r.rewriteSingleDDLQueryWithBlockedTableNames(query, defaultSchema, nil)
+}
+
+func (r Router) rewriteSingleDDLQueryWithBlockedTableNames(
+	query string,
+	defaultSchema string,
+	blockedTableNames []commonEvent.SchemaTableName,
+) (string, error) {
 	p := parser.New()
 	stmt, err := p.ParseOneStmt(query, "", "")
 	if err != nil {
@@ -88,6 +97,9 @@ func (r Router) rewriteSingleDDLQuery(query string, defaultSchema string) (strin
 	sourceTables := extractTableNames(stmt)
 	if len(sourceTables) == 0 {
 		return query, nil
+	}
+	if err := resolveUnqualifiedReferences(stmt, sourceTables, blockedTableNames); err != nil {
+		return "", err
 	}
 	fillDefaultSchema(sourceTables, defaultSchema)
 
@@ -130,6 +142,65 @@ func fillDefaultSchema(tables []commonEvent.SchemaTableName, defaultSchema strin
 			tables[i].SchemaName = defaultSchema
 		}
 	}
+}
+
+// resolveUnqualifiedReferences fills schemas only when the DDL event carries
+// exact metadata. It rejects unqualified read dependencies that would otherwise
+// be wrongly resolved with the DDL primary table schema.
+func resolveUnqualifiedReferences(
+	stmt ast.StmtNode,
+	sourceTables []commonEvent.SchemaTableName,
+	blockedTableNames []commonEvent.SchemaTableName,
+) error {
+	errUnqualifiedReference := func() error {
+		return errors.ErrTableRoutingFailed.GenWithStack(
+			"table routing cannot rewrite ddl with unqualified referenced table because upstream default schema is unavailable: %T",
+			stmt)
+	}
+
+	switch s := stmt.(type) {
+	case *ast.CreateTableStmt:
+		if s.Table == nil || s.Table.Schema.O == "" {
+			return nil
+		}
+		if isUnqualifiedTableName(s.ReferTable) {
+			for _, blockedTableName := range blockedTableNames {
+				if blockedTableName.SchemaName != "" &&
+					strings.EqualFold(blockedTableName.TableName, s.ReferTable.Name.O) &&
+					len(sourceTables) > 1 {
+					sourceTables[1].SchemaName = blockedTableName.SchemaName
+					break
+				}
+			}
+			if len(sourceTables) <= 1 || sourceTables[1].SchemaName == "" {
+				return errUnqualifiedReference()
+			}
+		}
+		if s.Select != nil && hasUnqualifiedTableName(sourceTables[1:]) {
+			return errUnqualifiedReference()
+		}
+	case *ast.CreateViewStmt:
+		if s.ViewName == nil || s.ViewName.Schema.O == "" {
+			return nil
+		}
+		if hasUnqualifiedTableName(sourceTables[1:]) {
+			return errUnqualifiedReference()
+		}
+	}
+	return nil
+}
+
+func isUnqualifiedTableName(table *ast.TableName) bool {
+	return table != nil && table.Schema.O == "" && table.Name.O != ""
+}
+
+func hasUnqualifiedTableName(tables []commonEvent.SchemaTableName) bool {
+	for _, table := range tables {
+		if table.SchemaName == "" && table.TableName != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // tableNameExtractor extracts table names from DDL AST nodes.

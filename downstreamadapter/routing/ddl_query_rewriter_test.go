@@ -500,3 +500,79 @@ func TestRewriteParserBackedDDLQueryWithSemicolonsInLiteralsAndComments(t *testi
 		})
 	}
 }
+
+func TestRewriteParserBackedDDLQueryRejectsAmbiguousUnqualifiedReferences(t *testing.T) {
+	t.Parallel()
+
+	router := newTestRouter(t, false, []*config.DispatchRule{
+		{
+			Matcher:      []string{"source_db.*"},
+			TargetSchema: "target_db",
+			TargetTable:  TablePlaceholder,
+		},
+		{
+			Matcher:      []string{"source_extra_db.*"},
+			TargetSchema: "target_extra_db",
+			TargetTable:  TablePlaceholder,
+		},
+	})
+
+	tests := []struct {
+		name  string
+		query string
+	}{
+		{
+			name:  "create table like",
+			query: "CREATE TABLE `source_extra_db`.`external_users` LIKE `users`",
+		},
+		{
+			name:  "create table as select",
+			query: "CREATE TABLE `source_extra_db`.`external_users` AS SELECT * FROM `users`",
+		},
+		{
+			name:  "create view as select",
+			query: "CREATE VIEW `source_extra_db`.`external_users` AS SELECT * FROM `users`",
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := router.rewriteParserBackedDDLQuery(&commonEvent.DDLEvent{
+				SchemaName: "source_extra_db",
+				TableName:  "external_users",
+				Query:      tc.query,
+			})
+			require.True(t, errors.ErrTableRoutingFailed.Equal(err))
+			require.Contains(t, err.Error(), "unqualified referenced table")
+		})
+	}
+}
+
+func TestRewriteParserBackedDDLQueryUsesBlockedTableNamesForCreateTableLike(t *testing.T) {
+	t.Parallel()
+
+	router := newTestRouter(t, false, []*config.DispatchRule{
+		{
+			Matcher:      []string{"source_db.*"},
+			TargetSchema: "target_db",
+			TargetTable:  TablePlaceholder,
+		},
+		{
+			Matcher:      []string{"source_extra_db.*"},
+			TargetSchema: "target_extra_db",
+			TargetTable:  TablePlaceholder,
+		},
+	})
+
+	newQuery, err := router.rewriteParserBackedDDLQuery(&commonEvent.DDLEvent{
+		SchemaName:        "source_extra_db",
+		TableName:         "external_users",
+		Query:             "CREATE TABLE `source_extra_db`.`external_users` LIKE `users`",
+		BlockedTableNames: []commonEvent.SchemaTableName{{SchemaName: "source_db", TableName: "users"}},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "CREATE TABLE `target_extra_db`.`external_users` LIKE `target_db`.`users`", newQuery)
+}

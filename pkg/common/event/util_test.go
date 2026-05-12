@@ -148,6 +148,13 @@ func TestDDL2EventFillsCreateTableLikeMetadata(t *testing.T) {
 
 	require.Equal(t, []SchemaTableName{{SchemaName: "test_db", TableName: "src"}}, ddlEvent.BlockedTableNames)
 	require.Equal(t, []SchemaTableName{{SchemaName: "test_db", TableName: "dst"}}, ddlEvent.TableNameChange.AddName)
+
+	helper.Tk().MustExec("CREATE DATABASE `extra_db`")
+	helper.Tk().MustExec("USE `test_db`")
+	ddlEvent = helper.DDL2Event("CREATE TABLE `extra_db`.`dst` LIKE `src`")
+
+	require.Equal(t, []SchemaTableName{{SchemaName: "test_db", TableName: "src"}}, ddlEvent.BlockedTableNames)
+	require.Equal(t, []SchemaTableName{{SchemaName: "extra_db", TableName: "dst"}}, ddlEvent.TableNameChange.AddName)
 }
 
 func TestDDL2EventFillsRenameTableMetadata(t *testing.T) {

@@ -725,6 +725,46 @@ func TestApplyToDDLEventRewritesCrossDatabaseDDLReferences(t *testing.T) {
 	}, routed.BlockedTableNames)
 }
 
+func TestApplyToDDLEventRewritesCreateTableLikeWithSessionDefaultSchema(t *testing.T) {
+	router := newTestRouter(t, false, []*config.DispatchRule{
+		{
+			Matcher:      []string{"source_db.*"},
+			TargetSchema: "target_db",
+			TargetTable:  TablePlaceholder,
+		},
+		{
+			Matcher:      []string{"source_extra_db.*"},
+			TargetSchema: "target_extra_db",
+			TargetTable:  TablePlaceholder,
+		},
+	})
+
+	helper := event.NewEventTestHelper(t)
+	defer helper.Close()
+
+	require.Contains(t, mustRouteDDL(t, router, helper.DDL2Event("CREATE DATABASE `source_db`")).Query, "`target_db`")
+	require.Contains(t, mustRouteDDL(t, router, helper.DDL2Event("CREATE DATABASE `source_extra_db`")).Query, "`target_extra_db`")
+	require.Contains(t,
+		mustRouteDDL(t, router, helper.DDL2Event("CREATE TABLE `source_db`.`users` (`id` INT PRIMARY KEY)")).Query,
+		"`target_db`.`users`")
+
+	helper.Tk().MustExec("USE `source_db`")
+	ddl := helper.DDL2Event("CREATE TABLE `source_extra_db`.`external_users` LIKE `users`")
+	require.Equal(t, []event.SchemaTableName{{SchemaName: "source_db", TableName: "users"}}, ddl.BlockedTableNames)
+
+	routed := mustRouteDDL(t, router, ddl)
+	require.Equal(t, "CREATE TABLE `target_extra_db`.`external_users` LIKE `target_db`.`users`", routed.Query)
+	require.Equal(t, []event.SchemaTableName{{SchemaName: "target_db", TableName: "users"}}, routed.BlockedTableNames)
+}
+
+func mustRouteDDL(t *testing.T, router Router, ddl *event.DDLEvent) *event.DDLEvent {
+	t.Helper()
+
+	routed, err := router.ApplyToDDLEvent(ddl)
+	require.NoError(t, err)
+	return routed
+}
+
 func newTestRouter(t *testing.T, caseSensitive bool, rules []*config.DispatchRule) Router {
 	t.Helper()
 
