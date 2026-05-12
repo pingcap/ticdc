@@ -638,31 +638,30 @@ func setReferTableForCreateTableLike(event *PersistedDDLEvent, args buildPersist
 	// refSchema is the schema name of the table referenced by
 	// CREATE TABLE ... LIKE. It can be absent in the original query.
 	refSchemaInQuery := createStmt.ReferTable.Schema.O
-	referSchema, ok := resolveCreateTableLikeReferSchema(
-		args, refSchemaInQuery, refTable)
+	referSchemaInfo, ok := resolveCreateTableLikeReferSchema(args, refSchemaInQuery, refTable)
 	if !ok {
 		log.Warn("refer schema not found for create table like",
-			zap.String("schema", referSchema.schemaName),
+			zap.String("schema", referSchemaInfo.schemaName),
 			zap.String("table", refTable),
 			zap.String("query", event.Query))
 		return
 	}
-	if referSchema.qualifyQuery {
-		createStmt.ReferTable.Schema = ast.NewCIStr(referSchema.schemaName)
+	if referSchemaInfo.qualifyQuery {
+		createStmt.ReferTable.Schema = ast.NewCIStr(referSchemaInfo.schemaName)
 		query, err := commonEvent.Restore(createStmt)
 		if err != nil {
 			log.Warn("restore create table like ddl failed",
-				zap.String("schema", referSchema.schemaName),
+				zap.String("schema", referSchemaInfo.schemaName),
 				zap.String("query", event.Query),
 				zap.Error(err))
 			return
 		}
 		event.Query = query
 	}
-	refTableID, ok := findTableIDByName(args.tableMap, referSchema.schemaID, refTable)
+	refTableID, ok := findTableIDByName(args.tableMap, referSchemaInfo.schemaID, refTable)
 	if !ok {
 		log.Warn("refer table not found for create table like",
-			zap.String("schema", referSchema.schemaName),
+			zap.String("schema", referSchemaInfo.schemaName),
 			zap.String("table", refTable),
 			zap.String("query", event.Query))
 		return
