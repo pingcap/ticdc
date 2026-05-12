@@ -16,7 +16,6 @@ package messaging
 import (
 	"context"
 	"encoding/json"
-	stderrors "errors"
 	"fmt"
 	"sync"
 	"time"
@@ -474,7 +473,7 @@ func (s *grpcServer) handleConnect(stream proto.MessageService_StreamMessagesSer
 		}
 		return nil
 	}, retry.WithIsRetryableErr(func(err error) bool {
-		return !stderrors.Is(err, context.DeadlineExceeded)
+		return !pkgerror.Is(err, context.DeadlineExceeded)
 	}), retry.WithMaxTries(10))
 	if err != nil {
 		log.Error("Failed to get remote target", zap.Error(err))

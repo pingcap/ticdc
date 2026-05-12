@@ -14,10 +14,10 @@
 package schemastore
 
 import (
-	"errors"
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
 

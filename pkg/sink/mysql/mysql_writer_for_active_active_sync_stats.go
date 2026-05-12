@@ -17,13 +17,13 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	stderrors "errors"
 	"sync"
 
 	dmysql "github.com/go-sql-driver/mysql"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
+	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	tidbmysql "github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/prometheus/client_golang/prometheus"
@@ -43,7 +43,7 @@ func CheckActiveActiveSyncStatsSupported(ctx context.Context, db *sql.DB) (bool,
 	var v sql.NullString
 	if err := row.Scan(&v); err != nil {
 		mysqlErr := &dmysql.MySQLError{}
-		if stderrors.As(errors.Cause(err), &mysqlErr) &&
+		if cerror.As(errors.Cause(err), &mysqlErr) &&
 			mysqlErr.Number == tidbmysql.ErrUnknownSystemVariable {
 			return false, nil
 		}

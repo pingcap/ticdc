@@ -17,7 +17,6 @@ import (
 	"bufio"
 	"context"
 	"database/sql"
-	stderrors "errors"
 	"fmt"
 	"io"
 	"math/rand"
@@ -562,7 +561,7 @@ func run(
 					return ctx.Err()
 				default:
 					err := workload()
-					if err != nil && !stderrors.Is(errors.Cause(err), context.Canceled) {
+					if err != nil && !cerror.Is(errors.Cause(err), context.Canceled) {
 						log.Warn("workload failed", zap.Error(err))
 					}
 

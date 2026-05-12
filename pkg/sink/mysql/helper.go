@@ -17,7 +17,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/base64"
-	stderrors "errors"
 	"fmt"
 	"net"
 	"strconv"
@@ -72,7 +71,7 @@ func CheckIfBDRModeIsSupported(ctx context.Context, db *sql.DB) (bool, error) {
 	_, err := db.ExecContext(ctx, query)
 	if err != nil {
 		mysqlErr := &dmysql.MySQLError{}
-		if stderrors.As(errors.Cause(err), &mysqlErr) {
+		if cerror.As(errors.Cause(err), &mysqlErr) {
 			return false, nil
 		}
 		return false, err
@@ -191,7 +190,7 @@ func GetTestDB(dbConfig *dmysql.Config) (*sql.DB, error) {
 	if err != nil {
 		// If access is denied and password is encoded by base64, try to decoded password.
 		mysqlErr := &dmysql.MySQLError{}
-		if stderrors.As(errors.Cause(err), &mysqlErr) {
+		if cerror.As(errors.Cause(err), &mysqlErr) {
 			if dePassword, decodeErr := base64.StdEncoding.DecodeString(password); decodeErr == nil && string(dePassword) != password {
 				dbConfig.Passwd = string(dePassword)
 				testDB, err = CreateMysqlDBConn(dbConfig.FormatDSN())
@@ -311,7 +310,7 @@ func checkCharsetSupport(db *sql.DB, charsetName string) (bool, error) {
 	querySQL := "select character_set_name from information_schema.character_sets " +
 		"where character_set_name = '" + charsetName + "';"
 	err = db.QueryRowContext(context.Background(), querySQL).Scan(&characterSetName)
-	if err != nil && !stderrors.Is(err, sql.ErrNoRows) {
+	if err != nil && !cerror.Is(err, sql.ErrNoRows) {
 		return false, cerror.WrapError(cerror.ErrMySQLQueryError, err)
 	}
 	if err != nil {
@@ -473,7 +472,7 @@ func isRetryableDMLError(err error) bool {
 
 func getSQLErrCode(err error) (errors.ErrCode, bool) {
 	mysqlErr := &dmysql.MySQLError{}
-	ok := stderrors.As(errors.Cause(err), &mysqlErr)
+	ok := cerror.As(errors.Cause(err), &mysqlErr)
 	if !ok {
 		return -1, false
 	}

@@ -15,12 +15,12 @@ package retry
 
 import (
 	"context"
-	stderrors "errors"
 	"math"
 	"testing"
 	"time"
 
 	"github.com/pingcap/errors"
+	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
 
@@ -66,7 +66,7 @@ func TestIsRetryable(t *testing.T) {
 
 	err := Do(context.Background(), f, WithMaxTries(3), WithIsRetryableErr(func(err error) bool {
 		switch {
-		case stderrors.Is(errors.Cause(err), context.Canceled):
+		case cerror.Is(errors.Cause(err), context.Canceled):
 			return false
 		}
 		return true

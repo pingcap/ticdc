@@ -16,7 +16,6 @@ package util
 import (
 	"context"
 	"database/sql"
-	stderrors "errors"
 	"fmt"
 	"net/url"
 	"time"
@@ -24,6 +23,7 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/diff"
+	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tidb/pkg/util/dbutil"
 	"go.uber.org/zap"
 )
@@ -153,7 +153,7 @@ func MustExec(db *sql.DB, sql string, args ...interface{}) {
 func MustExecWithConn(ctx context.Context, conn *sql.Conn, sql string, args ...interface{}) {
 	var err error
 	_, err = conn.ExecContext(ctx, sql, args...)
-	if err != nil && stderrors.Is(errors.Cause(err), context.DeadlineExceeded) && stderrors.Is(errors.Cause(err), context.Canceled) {
+	if err != nil && cerror.Is(errors.Cause(err), context.DeadlineExceeded) && cerror.Is(errors.Cause(err), context.Canceled) {
 		log.S().Fatal(err)
 	}
 }

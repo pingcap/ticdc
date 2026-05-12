@@ -16,7 +16,6 @@ package etcd
 import (
 	"context"
 	"crypto/tls"
-	stderrors "errors"
 	"fmt"
 	"sync"
 	"time"
@@ -141,7 +140,7 @@ func retryRPC(rpcName string, metric prometheus.Counter, etcdRPC func() error) e
 	// 16s = \sum_{n=0}^{6} 0.5*1.5^n
 	return retry.Do(context.Background(), func() error {
 		err := etcdRPC()
-		if err != nil && !stderrors.Is(errors.Cause(err), context.Canceled) {
+		if err != nil && !cerror.Is(errors.Cause(err), context.Canceled) {
 			log.Warn("etcd RPC failed", zap.String("RPC", rpcName), zap.Error(err))
 		}
 		if metric != nil {
@@ -353,7 +352,7 @@ func isRetryableError(rpcName string) retry.IsRetryable {
 		switch rpcName {
 		case EtcdRevoke:
 			var etcdErr v3rpc.EtcdError
-			if stderrors.As(err, &etcdErr) && etcdErr.Code() == codes.NotFound {
+			if cerror.As(err, &etcdErr) && etcdErr.Code() == codes.NotFound {
 				// It means the etcd lease is already expired or revoked
 				return false
 			}
@@ -616,5 +615,5 @@ func IsHealthy(ctx context.Context, client *clientv3.Client) bool {
 	_, err := client.Get(ctx, healthyPath)
 	// permission denied is OK since proposal goes through consensus to get it
 	// See: https://github.com/etcd-io/etcd/blob/85b640cee793e25f3837c47200089d14a8392dc7/etcdctl/ctlv3/command/ep_command.go#L124
-	return err == nil || stderrors.Is(err, rpctypes.ErrPermissionDenied)
+	return err == nil || cerror.Is(err, rpctypes.ErrPermissionDenied)
 }

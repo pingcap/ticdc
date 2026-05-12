@@ -15,7 +15,6 @@ package kafka
 
 import (
 	"context"
-	stderrors "errors"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -834,7 +833,7 @@ func TestAdjustOptionsKeepAlive(t *testing.T) {
 		require.Error(t, err)
 		// The error should be a type conversion error.
 		numError := &strconv.NumError{}
-		ok := stderrors.As(errors.Cause(err), &numError)
+		ok := cerror.As(errors.Cause(err), &numError)
 		require.True(t, ok, "error should be of type strconv.NumError")
 	})
 

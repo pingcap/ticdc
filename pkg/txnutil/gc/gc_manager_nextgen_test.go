@@ -18,13 +18,12 @@ package gc
 
 import (
 	"context"
-	stderrors "errors"
 	"testing"
 	"time"
 
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
-	cerrors "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/stretchr/testify/require"
 	pdgc "github.com/tikv/pd/client/clients/gc"
@@ -53,7 +52,7 @@ func TestTryUpdateKeyspaceGCBarrierDoesNotReturnSnapshotLost(t *testing.T) {
 			return gcStatesClient
 		},
 		UpdateServiceGCSafePointFunc: func(ctx context.Context, serviceID string, ttl int64, safePoint uint64) (uint64, error) {
-			return 0, stderrors.New("not used")
+			return 0, errors.New("not used")
 		},
 	}
 
@@ -67,7 +66,7 @@ func TestTryUpdateKeyspaceGCBarrierDoesNotReturnSnapshotLost(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test-changefeed", keyspaceName)
 	err := m.CheckStaleCheckpointTs(keyspaceID, cfID, checkpointTs)
 	require.Error(t, err)
-	errCode, ok := cerrors.RFCCode(err)
+	errCode, ok := errors.RFCCode(err)
 	require.True(t, ok)
-	require.Equal(t, cerrors.ErrSnapshotLostByGC.RFCCode(), errCode)
+	require.Equal(t, errors.ErrSnapshotLostByGC.RFCCode(), errCode)
 }

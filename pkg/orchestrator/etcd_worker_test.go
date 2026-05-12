@@ -16,7 +16,6 @@ package orchestrator
 import (
 	"context"
 	"encoding/json"
-	stderrors "errors"
 	"regexp"
 	"strconv"
 	"strings"
@@ -273,8 +272,8 @@ func TestEtcdSum(t *testing.T) {
 	}
 
 	err = errg.Wait()
-	if err != nil && (stderrors.Is(errors.Cause(err), context.DeadlineExceeded) ||
-		stderrors.Is(errors.Cause(err), context.Canceled) ||
+	if err != nil && (cerrors.Is(errors.Cause(err), context.DeadlineExceeded) ||
+		cerrors.Is(errors.Cause(err), context.Canceled) ||
 		strings.Contains(err.Error(), "etcdserver: request timeout")) {
 		return
 	}

@@ -20,7 +20,6 @@ import (
 	"container/heap"
 	"context"
 	"encoding/binary"
-	stderrors "errors"
 	"io"
 	"math"
 	"net/url"
@@ -226,7 +225,7 @@ func readAllFromBuffer(buf []byte) (logHeap, error) {
 	for {
 		rl, err := r.Read()
 		if err != nil {
-			if !stderrors.Is(err, io.EOF) {
+			if !cerror.Is(err, io.EOF) {
 				return nil, err
 			}
 			break
@@ -328,7 +327,7 @@ func (r *reader) Read() (*pevent.RedoLog, error) {
 
 	lenField, err := readInt64(r.br)
 	if err != nil {
-		if stderrors.Is(err, io.EOF) {
+		if cerror.Is(err, io.EOF) {
 			return nil, err
 		}
 		return nil, cerror.WrapError(cerror.ErrRedoFileOp, err)
@@ -338,7 +337,7 @@ func (r *reader) Read() (*pevent.RedoLog, error) {
 	data := make([]byte, recBytes+padBytes)
 	_, err = io.ReadFull(r.br, data)
 	if err != nil {
-		if stderrors.Is(err, io.EOF) || stderrors.Is(err, io.ErrUnexpectedEOF) {
+		if cerror.Is(err, io.EOF) || cerror.Is(err, io.ErrUnexpectedEOF) {
 			log.Warn("read redo log have unexpected io error",
 				zap.String("fileName", r.fileName),
 				zap.Error(err))
