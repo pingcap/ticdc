@@ -630,7 +630,7 @@ func setReferTableForCreateTableLike(event *PersistedDDLEvent, args buildPersist
 	refTable := createStmt.ReferTable.Name.O
 	refSchema := createStmt.ReferTable.Schema.O
 	if refSchema == "" {
-		refSchema = findCreateTableLikeReferSchema(args.job, event.SchemaName, event.TableName, refTable)
+		refSchema = commonEvent.FindCreateTableLikeReferSchema(args.job, event.SchemaName, event.TableName, refTable)
 	}
 	if refSchema == "" && createStmt.Table != nil && createStmt.Table.Schema.O == "" {
 		refSchema = event.SchemaName
@@ -666,24 +666,6 @@ func setReferTableForCreateTableLike(event *PersistedDDLEvent, args buildPersist
 			event.ReferTablePartitionIDs = append(event.ReferTablePartitionIDs, id)
 		}
 	}
-}
-
-func findCreateTableLikeReferSchema(job *model.Job, targetSchema, targetTable, referTable string) string {
-	for _, info := range job.InvolvingSchemaInfo {
-		if info.Mode == model.SharedInvolving && strings.EqualFold(info.Table, referTable) {
-			return info.Database
-		}
-	}
-	for _, info := range job.InvolvingSchemaInfo {
-		if !strings.EqualFold(info.Table, referTable) {
-			continue
-		}
-		if strings.EqualFold(info.Database, targetSchema) && strings.EqualFold(info.Table, targetTable) {
-			continue
-		}
-		return info.Database
-	}
-	return ""
 }
 
 func buildPersistedDDLEventForDropTable(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {

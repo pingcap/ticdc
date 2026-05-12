@@ -169,10 +169,15 @@ func (r Router) ApplyToDDLEvent(ddl *commonEvent.DDLEvent) (*commonEvent.DDLEven
 	}
 
 	if multipleTableInfos == nil {
-		multipleTableInfos = ddl.MultipleTableInfos
+		// Clone the slice to avoid sharing the underlying array with
+		// the source event. TableInfo objects are immutable after
+		// creation, so a shallow slice copy is sufficient.
+		multipleTableInfos = append([]*common.TableInfo(nil), ddl.MultipleTableInfos...)
 	}
 	if blockedTableNames == nil {
-		blockedTableNames = ddl.BlockedTableNames
+		// SchemaTableName is a value type, so a shallow slice copy
+		// fully isolates the routed event from the source event.
+		blockedTableNames = append([]commonEvent.SchemaTableName(nil), ddl.BlockedTableNames...)
 	}
 
 	log.Info("ddl query rewritten with routing",

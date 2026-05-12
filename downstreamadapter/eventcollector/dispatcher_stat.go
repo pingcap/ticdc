@@ -463,6 +463,12 @@ func (d *dispatcherStat) handleSingleDataEvents(events []dispatcher.DispatcherEv
 	return d.target.HandleEvents(events, func() { d.wake() })
 }
 
+// updateTableInfoByDDL advances the table schema version and, when the DDL
+// event carries a TableInfo matching the dispatcher's table, refreshes the
+// cached TableInfo used for DML row assembly.
+//
+// Must be called from the per-dispatcher event loop (handleSingleDataEvents),
+// which guarantees serial access to dispatcherStat fields for a given table.
 func (d *dispatcherStat) updateTableInfoByDDL(ddl *commonEvent.DDLEvent) {
 	tableSpan := d.target.GetTableSpan()
 	if tableSpan == nil || tableSpan.TableID == common.DDLSpanTableID {

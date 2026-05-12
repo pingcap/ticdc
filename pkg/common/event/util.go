@@ -366,7 +366,7 @@ func (s *EventTestHelper) fillCreateTableLikeBlockedTableNames(ddlEvent *DDLEven
 
 	refSchema := createStmt.ReferTable.Schema.O
 	if refSchema == "" {
-		refSchema = findCreateTableLikeReferSchema(job, ddlEvent.SchemaName, ddlEvent.TableName, createStmt.ReferTable.Name.O)
+		refSchema = FindCreateTableLikeReferSchema(job, ddlEvent.SchemaName, ddlEvent.TableName, createStmt.ReferTable.Name.O)
 	}
 	if refSchema == "" && createStmt.Table != nil && createStmt.Table.Schema.O == "" {
 		refSchema = ddlEvent.SchemaName
@@ -380,7 +380,11 @@ func (s *EventTestHelper) fillCreateTableLikeBlockedTableNames(ddlEvent *DDLEven
 	}}
 }
 
-func findCreateTableLikeReferSchema(job *timodel.Job, targetSchema, targetTable, referTable string) string {
+// FindCreateTableLikeReferSchema resolves the schema of the table referenced by a
+// CREATE TABLE LIKE statement. It inspects job.InvolvingSchemaInfo to find the
+// schema name, preferring SharedInvolving entries first, then falling back to
+// other entries that reference the same table name (excluding the target table).
+func FindCreateTableLikeReferSchema(job *timodel.Job, targetSchema, targetTable, referTable string) string {
 	for _, info := range job.InvolvingSchemaInfo {
 		if info.Mode == timodel.SharedInvolving && strings.EqualFold(info.Table, referTable) {
 			return info.Database
