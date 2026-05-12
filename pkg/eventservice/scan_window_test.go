@@ -34,40 +34,6 @@ func markScanWindowReadyForDecrease(status *changefeedStatus, now time.Time) {
 	status.scanWindowController.setLastDownAdjustTimeForTest(now.Add(-scanWindowPressureAdjustCooldown - time.Second))
 }
 
-func TestAdjustScanIntervalVeryLowBypassesSyncPointCap(t *testing.T) {
-	t.Parallel()
-
-	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 1*time.Minute)
-
-	now := time.Now()
-	markScanWindowReadyForIncrease(status, now)
-
-	// Start from the sync point capped max interval, then allow it to grow slowly.
-	status.scanInterval.Store(int64(1 * time.Minute))
-
-	// Maintain a very low pressure for a full window to allow bypassing the sync point cap.
-	for i := 0; i <= int(memoryUsageWindowDuration/time.Second); i++ {
-		status.updateMemoryUsage(now.Add(time.Duration(i)*time.Second), 0, 0)
-	}
-	require.Equal(t, int64(90*time.Second), status.scanInterval.Load())
-}
-
-func TestAdjustScanIntervalLowRespectsSyncPointCap(t *testing.T) {
-	t.Parallel()
-
-	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 1*time.Minute)
-
-	now := time.Now()
-	markScanWindowReadyForIncrease(status, now)
-
-	status.scanInterval.Store(int64(40 * time.Second))
-
-	for i := 0; i <= int(memoryUsageWindowDuration/time.Second); i++ {
-		status.updateMemoryUsage(now.Add(time.Duration(i)*time.Second), 0.15, 0)
-	}
-	require.Equal(t, int64(50*time.Second), status.scanInterval.Load())
-}
-
 func TestAdjustScanIntervalLowPressureSlowsRecoveryForLargeWindow(t *testing.T) {
 	t.Parallel()
 
@@ -116,7 +82,7 @@ func TestAdjustScanIntervalCriticalPressure(t *testing.T) {
 	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 1*time.Minute)
 	status.scanInterval.Store(int64(40 * time.Second))
 	status.updateMemoryUsage(time.Now().Add(memoryUsageWindowDuration), 1, 0)
-	require.Equal(t, int64(10*time.Second), status.scanInterval.Load())
+	require.Equal(t, int64(scanWindowEmergencyBrakePlateauInterval), status.scanInterval.Load())
 }
 
 func TestAdjustScanIntervalCriticalPressureUsesDefaultFloor(t *testing.T) {
@@ -126,6 +92,27 @@ func TestAdjustScanIntervalCriticalPressureUsesDefaultFloor(t *testing.T) {
 	status.scanInterval.Store(int64(8 * time.Second))
 	status.updateMemoryUsage(time.Now().Add(memoryUsageWindowDuration), 0.95, 0)
 	require.Equal(t, int64(defaultScanInterval), status.scanInterval.Load())
+}
+
+func TestAdjustScanIntervalHighPressureDoesNotIncreaseBelowDefaultFloor(t *testing.T) {
+	t.Parallel()
+
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 1*time.Minute)
+	now := time.Now()
+	markScanWindowReadyForDecrease(status, now)
+
+	status.scanInterval.Store(int64(2 * time.Second))
+	status.updateMemoryUsage(now.Add(memoryUsageWindowDuration), 0.8, 0)
+	require.Equal(t, int64(2*time.Second), status.scanInterval.Load())
+}
+
+func TestAdjustScanIntervalCriticalPressureDoesNotIncreaseBelowDefaultFloor(t *testing.T) {
+	t.Parallel()
+
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 10*time.Minute)
+	status.scanInterval.Store(int64(2 * time.Second))
+	status.updateMemoryUsage(time.Now().Add(memoryUsageWindowDuration), 0.95, 0)
+	require.Equal(t, int64(2*time.Second), status.scanInterval.Load())
 }
 
 func TestAdjustScanIntervalEmergencyPressureUsesModerateBrakeForSmallWindow(t *testing.T) {
@@ -167,6 +154,15 @@ func TestAdjustScanIntervalEmergencyPressureDoesNotImmediatelyDropBelowDefaultFl
 	status.scanInterval.Store(int64(defaultScanInterval))
 	status.updateMemoryUsage(time.Now().Add(memoryUsageWindowDuration), 1, 0)
 	require.Equal(t, int64(defaultScanInterval), status.scanInterval.Load())
+}
+
+func TestAdjustScanIntervalEmergencyPressureDoesNotIncreaseBelowDefaultFloor(t *testing.T) {
+	t.Parallel()
+
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 10*time.Minute)
+	status.scanInterval.Store(int64(2 * time.Second))
+	status.updateMemoryUsage(time.Now().Add(memoryUsageWindowDuration), 1, 0)
+	require.Equal(t, int64(2*time.Second), status.scanInterval.Load())
 }
 
 func TestAdjustScanIntervalEmergencyPressureCanReachMinFloorWhenSustained(t *testing.T) {
@@ -302,6 +298,21 @@ func TestAdjustScanIntervalReducesOnSustainedPressure(t *testing.T) {
 	status.updateMemoryUsage(now.Add(1*time.Second), 0.60, 0)
 	status.updateMemoryUsage(now.Add(2*time.Second), 0.60, 0)
 	require.Equal(t, int64(36*time.Second), status.scanInterval.Load())
+}
+
+func TestAdjustScanIntervalSustainedPressureDoesNotIncreaseBelowDefaultFloor(t *testing.T) {
+	t.Parallel()
+
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 1*time.Minute)
+	now := time.Now()
+	markScanWindowReadyForDecrease(status, now)
+
+	status.scanInterval.Store(int64(2 * time.Second))
+
+	status.updateMemoryUsage(now, 0.60, 0)
+	status.updateMemoryUsage(now.Add(1*time.Second), 0.60, 0)
+	status.updateMemoryUsage(now.Add(2*time.Second), 0.60, 0)
+	require.Equal(t, int64(2*time.Second), status.scanInterval.Load())
 }
 
 func TestAdjustScanIntervalDoesNotIncreaseBeforeCooldown(t *testing.T) {

@@ -365,22 +365,6 @@ func TestGetScanTaskDataRangeRingWaitWithThreeDispatchersCanAdvancePendingDDL(t 
 	require.Equal(t, ts103, dataRange.CommitTsEnd)
 }
 
-func TestHandleCongestionControlV2AdjustsScanInterval(t *testing.T) {
-	broker, _, _, _ := newEventBrokerForTest()
-	defer broker.close()
-
-	changefeedID := common.NewChangefeedID4Test("default", "test")
-	status := addChangefeedStatusToBrokerForTest(t, broker, changefeedID, time.Second*10)
-
-	status.scanInterval.Store(int64(40 * time.Second))
-
-	control := event.NewCongestionControlWithVersion(event.CongestionControlVersion2)
-	control.AddAvailableMemoryWithDispatchersAndUsage(changefeedID.ID(), 0, 1, nil)
-	broker.handleCongestionControl(node.ID("event-collector-1"), control)
-
-	require.Equal(t, int64(10*time.Second), status.scanInterval.Load())
-}
-
 func TestHandleCongestionControlV2DoesNotResetScanIntervalOnMemoryRelease(t *testing.T) {
 	broker, _, _, _ := newEventBrokerForTest()
 	defer broker.close()

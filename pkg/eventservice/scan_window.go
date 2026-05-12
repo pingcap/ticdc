@@ -465,7 +465,7 @@ func (c *adaptiveScanWindowController) OnCongestionReport(now time.Time, current
 	}
 
 	if c.shouldReduceForHighPressureLocked(now, usage) {
-		newInterval := max(scaleDuration(current, 3, 4), defaultScanInterval)
+		newInterval := scanWindowPressureInterval(current, max(scaleDuration(current, 3, 4), defaultScanInterval))
 		c.noteAdjustmentLocked(now, true)
 		return scanWindowDecision{
 			newInterval:   newInterval,
@@ -479,7 +479,7 @@ func (c *adaptiveScanWindowController) OnCongestionReport(now time.Time, current
 	}
 
 	if c.shouldReduceForSustainedPressureLocked(now, usage) {
-		newInterval := max(scaleDuration(current, 9, 10), defaultScanInterval)
+		newInterval := scanWindowPressureInterval(current, max(scaleDuration(current, 9, 10), defaultScanInterval))
 		c.noteAdjustmentLocked(now, true)
 		return scanWindowDecision{
 			newInterval:   newInterval,
@@ -582,9 +582,13 @@ func scanWindowEmergencyBrakeInterval(current time.Duration, allowMinInterval bo
 		return max(current/2, minScanInterval)
 	}
 	if current <= 6*defaultScanInterval {
-		return max(current/2, defaultScanInterval)
+		return scanWindowPressureInterval(current, max(current/2, defaultScanInterval))
 	}
 	return max(current/4, scanWindowEmergencyBrakePlateauInterval)
+}
+
+func scanWindowPressureInterval(current time.Duration, next time.Duration) time.Duration {
+	return min(next, current)
 }
 
 func scanWindowLowRecoveryScale(current time.Duration) (numerator int64, denominator int64) {
@@ -626,7 +630,7 @@ func (c *adaptiveScanWindowController) tryCriticalBrakeLocked(
 		if c.shouldGraceCriticalBrakeLocked(usage) {
 			return scanWindowDecision{}, false
 		}
-		newInterval := max(current/2, defaultScanInterval)
+		newInterval := scanWindowPressureInterval(current, max(current/2, defaultScanInterval))
 		c.lastCriticalTime = now
 		c.noteAdjustmentLocked(now, true)
 		return scanWindowDecision{
