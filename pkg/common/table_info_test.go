@@ -136,31 +136,7 @@ func TestUnmarshalJSONToTableInfoInvalidData(t *testing.T) {
 func TestUnmarshalJSONToTableInfoRoundTrip(t *testing.T) {
 	t.Parallel()
 
-	idCol := &model.ColumnInfo{
-		ID:      1,
-		Name:    ast.NewCIStr("id"),
-		Offset:  0,
-		State:   model.StatePublic,
-		Version: model.CurrLatestColumnInfoVersion,
-	}
-	idCol.FieldType = *types.NewFieldType(mysql.TypeLong)
-	idCol.AddFlag(mysql.PriKeyFlag | mysql.NotNullFlag)
-
-	nameCol := &model.ColumnInfo{
-		ID:      2,
-		Name:    ast.NewCIStr("name"),
-		Offset:  1,
-		State:   model.StatePublic,
-		Version: model.CurrLatestColumnInfoVersion,
-	}
-	nameCol.FieldType = *types.NewFieldType(mysql.TypeVarchar)
-
-	source := WrapTableInfo("test", &model.TableInfo{
-		ID:         1001,
-		Name:       ast.NewCIStr("t_roundtrip"),
-		PKIsHandle: true,
-		Columns:    []*model.ColumnInfo{idCol, nameCol},
-	})
+	source := WrapTableInfo("test", newPreSQLTestModelTableInfo("t_roundtrip"))
 	require.NotNil(t, source)
 	require.Contains(t, source.GetPreInsertSQL(), QuoteSchema("test", "t_roundtrip"))
 
@@ -181,6 +157,61 @@ func TestUnmarshalJSONToTableInfoRoundTrip(t *testing.T) {
 	require.Equal(t, source.GetColumns()[0].Name.O, decoded.GetColumns()[0].Name.O)
 	require.Equal(t, source.GetColumns()[1].Name.O, decoded.GetColumns()[1].Name.O)
 	require.Contains(t, decoded.GetPreInsertSQL(), QuoteSchema("test", "t_roundtrip"))
+}
+
+func TestPreSQLsAreInitializedLazily(t *testing.T) {
+	t.Parallel()
+
+	source := WrapTableInfo("source_db", newPreSQLTestModelTableInfo("source_table"))
+	require.NotNil(t, source)
+	require.False(t, source.preSQLs.isInitialized.Load())
+
+	routed := source.CloneWithRouting("target_db", "target_table")
+	require.False(t, source.preSQLs.isInitialized.Load())
+	require.False(t, routed.preSQLs.isInitialized.Load())
+
+	require.Contains(t, routed.GetPreInsertSQL(), QuoteSchema("target_db", "target_table"))
+	require.True(t, routed.preSQLs.isInitialized.Load())
+	require.False(t, source.preSQLs.isInitialized.Load())
+
+	data, err := source.Marshal()
+	require.NoError(t, err)
+	require.False(t, source.preSQLs.isInitialized.Load())
+
+	decoded, err := UnmarshalJSONToTableInfo(data)
+	require.NoError(t, err)
+	require.False(t, decoded.preSQLs.isInitialized.Load())
+
+	require.Contains(t, decoded.GetPreUpdateSQL(), QuoteSchema("source_db", "source_table"))
+	require.True(t, decoded.preSQLs.isInitialized.Load())
+}
+
+func newPreSQLTestModelTableInfo(table string) *model.TableInfo {
+	idCol := &model.ColumnInfo{
+		ID:      1,
+		Name:    ast.NewCIStr("id"),
+		Offset:  0,
+		State:   model.StatePublic,
+		Version: model.CurrLatestColumnInfoVersion,
+	}
+	idCol.FieldType = *types.NewFieldType(mysql.TypeLong)
+	idCol.AddFlag(mysql.PriKeyFlag | mysql.NotNullFlag)
+
+	nameCol := &model.ColumnInfo{
+		ID:      2,
+		Name:    ast.NewCIStr("name"),
+		Offset:  1,
+		State:   model.StatePublic,
+		Version: model.CurrLatestColumnInfoVersion,
+	}
+	nameCol.FieldType = *types.NewFieldType(mysql.TypeVarchar)
+
+	return &model.TableInfo{
+		ID:         1001,
+		Name:       ast.NewCIStr(table),
+		PKIsHandle: true,
+		Columns:    []*model.ColumnInfo{idCol, nameCol},
+	}
 }
 
 func TestUnquoteName(t *testing.T) {

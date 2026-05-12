@@ -25,6 +25,7 @@ check-struct-only = false
         "target_db.truncate_test_routed",
         "target_db.finish_mark_routed",
         "target_extra_db.external_users_routed",
+        "target_extra_db.external_users_from_default_routed",
         "target_extra_db.cross_move_target_routed",
     ]
 
@@ -46,6 +47,7 @@ check-struct-only = false
         "truncate_test",
         "finish_mark",
         "external_users",
+        "external_users_from_default",
         "cross_move_target",
     ]
 
@@ -120,6 +122,12 @@ schema-pattern = "source_extra_db"
 table-pattern = "external_users"
 target-schema = "target_extra_db"
 target-table = "external_users_routed"
+
+[routes.external_users_from_default]
+schema-pattern = "source_extra_db"
+table-pattern = "external_users_from_default"
+target-schema = "target_extra_db"
+target-table = "external_users_from_default_routed"
 
 [routes.cross_move_target]
 schema-pattern = "source_extra_db"

@@ -87,6 +87,14 @@ INSERT INTO `source_extra_db`.`external_users`
     SELECT `id`, `name`, `email` FROM `source_db`.`users` WHERE `id` <= 2;
 UPDATE `source_extra_db`.`external_users` SET `email` = 'external_alice@example.com' WHERE `id` = 1;
 
+-- The referenced table `users` is unqualified. It must be resolved with the
+-- session default schema `source_db`, not the explicit target table schema
+-- `source_extra_db`.
+CREATE TABLE `source_extra_db`.`external_users_from_default` LIKE `users`;
+INSERT INTO `source_extra_db`.`external_users_from_default`
+    SELECT `id`, `name`, `email` FROM `source_db`.`users` WHERE `id` IN (1, 3);
+UPDATE `source_extra_db`.`external_users_from_default` SET `email` = 'default_charlie@example.com' WHERE `id` = 3;
+
 CREATE TABLE `source_db`.`cross_move_source` (
     id INT PRIMARY KEY,
     value VARCHAR(50)

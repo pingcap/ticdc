@@ -145,7 +145,7 @@ func (ti *TableInfo) initPreSQLs() {
 // but has its own TableName (with TargetSchema/TargetTable set) and preSQLs.
 // This is safe because:
 // - columnSchema, View, Sequence are read-only after creation
-// - preSQLs is initialized using the new TableName before the clone is returned
+// - preSQLs will be initialized lazily using the new TableName
 // - TableName is a value type that gets copied
 func (ti *TableInfo) CloneWithRouting(targetSchema, targetTable string) *TableInfo {
 	if ti == nil {
@@ -178,7 +178,6 @@ func (ti *TableInfo) CloneWithRouting(targetSchema, targetTable string) *TableIn
 		})
 	}
 
-	cloned.initPreSQLs()
 	return cloned
 }
 
@@ -231,8 +230,6 @@ func UnmarshalJSONToTableInfo(data []byte) (*TableInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	ti.initPreSQLs()
-
 	// when this tableInfo is released, we need to cut down the reference count of the columnSchema
 	// This function should be appear when tableInfo is created as a pair.
 	runtime.SetFinalizer(ti, func(ti *TableInfo) {
@@ -291,6 +288,7 @@ func (ti *TableInfo) GetUpdateTS() uint64 {
 }
 
 func (ti *TableInfo) GetPreInsertSQL() string {
+	ti.initPreSQLs()
 	if ti.preSQLs.m[preSQLInsert] == "" {
 		log.Panic("preSQLs[preSQLInsert] is not initialized")
 	}
@@ -298,6 +296,7 @@ func (ti *TableInfo) GetPreInsertSQL() string {
 }
 
 func (ti *TableInfo) GetPreReplaceSQL() string {
+	ti.initPreSQLs()
 	if ti.preSQLs.m[preSQLReplace] == "" {
 		log.Panic("preSQLs[preSQLReplace] is not initialized")
 	}
@@ -305,6 +304,7 @@ func (ti *TableInfo) GetPreReplaceSQL() string {
 }
 
 func (ti *TableInfo) GetPreUpdateSQL() string {
+	ti.initPreSQLs()
 	if ti.preSQLs.m[preSQLUpdate] == "" {
 		log.Panic("preSQLs[preSQLUpdate] is not initialized")
 	}
@@ -675,7 +675,6 @@ func newTableInfo(schema string, table string, tableID int64, isPartition bool, 
 
 func NewTableInfo(schemaName string, tableName string, tableID int64, isPartition bool, columnSchema *columnSchema, tableInfo *model.TableInfo) *TableInfo {
 	ti := newTableInfo(schemaName, tableName, tableID, isPartition, columnSchema, tableInfo)
-	ti.initPreSQLs()
 
 	// when this tableInfo is released, we need to cut down the reference count of the columnSchema
 	// This function should be appeared when tableInfo is created as a pair.
