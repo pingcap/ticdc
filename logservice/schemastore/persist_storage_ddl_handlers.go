@@ -591,6 +591,7 @@ func buildPersistedDDLEventForCreateView(args buildPersistedDDLEventFuncArgs) Pe
 	event := buildPersistedDDLEventCommon(args)
 	event.SchemaName = getSchemaName(args.databaseMap, event.SchemaID)
 	event.TableName = args.job.TableName
+	normalizeCreateViewQueryWithStoredSelect(&event)
 	return event
 }
 
@@ -602,6 +603,44 @@ func buildPersistedDDLEventForDropView(args buildPersistedDDLEventFuncArgs) Pers
 	// The query in job maybe "DROP VIEW test1.view1, test2.view2", we need rebuild it here.
 	event.Query = fmt.Sprintf("DROP VIEW %s", common.QuoteSchema(event.SchemaName, event.TableName))
 	return event
+}
+
+func normalizeCreateViewQueryWithStoredSelect(event *PersistedDDLEvent) {
+	if event == nil || event.Query == "" || event.TableInfo == nil || event.TableInfo.View == nil || event.TableInfo.View.SelectStmt == "" {
+		return
+	}
+
+	stmt, err := parser.New().ParseOneStmt(event.Query, "", "")
+	if err != nil {
+		log.Warn("parse create view query failed when normalizing select statement",
+			zap.String("query", event.Query),
+			zap.Error(err))
+		return
+	}
+	createViewStmt, ok := stmt.(*ast.CreateViewStmt)
+	if !ok {
+		return
+	}
+
+	selectStmt, err := parser.New().ParseOneStmt(event.TableInfo.View.SelectStmt, "", "")
+	if err != nil {
+		log.Warn("parse stored create view select statement failed",
+			zap.String("selectStmt", event.TableInfo.View.SelectStmt),
+			zap.String("query", event.Query),
+			zap.Error(err))
+		return
+	}
+
+	createViewStmt.Select = selectStmt
+	normalizedQuery, err := commonEvent.Restore(createViewStmt)
+	if err != nil {
+		log.Warn("restore normalized create view query failed",
+			zap.String("query", event.Query),
+			zap.String("selectStmt", event.TableInfo.View.SelectStmt),
+			zap.Error(err))
+		return
+	}
+	event.Query = normalizedQuery
 }
 
 func buildPersistedDDLEventForCreateTable(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
