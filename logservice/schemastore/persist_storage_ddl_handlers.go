@@ -605,6 +605,14 @@ func buildPersistedDDLEventForDropView(args buildPersistedDDLEventFuncArgs) Pers
 	return event
 }
 
+// TiDB persists the normalized SELECT body of a view in
+// event.TableInfo.View.SelectStmt when executing CREATE VIEW, so this field can
+// carry fully resolved source-table references even if job.Query keeps the
+// original session-level text.
+// Field definition:
+// https://github.com/pingcap/tidb/blob/8f2630e53d5d/pkg/meta/model/table.go#L762-L770
+// Value assignment in CREATE VIEW:
+// https://github.com/pingcap/tidb/blob/8f2630e53d5d/pkg/ddl/create_table.go#L1668-L1678
 func normalizeCreateViewQueryWithStoredSelect(event *PersistedDDLEvent) {
 	if event == nil || event.Query == "" || event.TableInfo == nil || event.TableInfo.View == nil || event.TableInfo.View.SelectStmt == "" {
 		return
@@ -630,6 +638,9 @@ func normalizeCreateViewQueryWithStoredSelect(event *PersistedDDLEvent) {
 			zap.Error(err))
 		return
 	}
+	if createViewSelectUsesCurrentSchemaOnly(selectStmt, event.SchemaName) {
+		return
+	}
 
 	createViewStmt.Select = selectStmt
 	normalizedQuery, err := commonEvent.Restore(createViewStmt)
@@ -641,6 +652,35 @@ func normalizeCreateViewQueryWithStoredSelect(event *PersistedDDLEvent) {
 		return
 	}
 	event.Query = normalizedQuery
+}
+
+type tableSchemaExtractor struct {
+	schemas []string
+}
+
+func (e *tableSchemaExtractor) Enter(in ast.Node) (ast.Node, bool) {
+	if t, ok := in.(*ast.TableName); ok {
+		e.schemas = append(e.schemas, t.Schema.O)
+		return in, true
+	}
+	return in, false
+}
+
+func (e *tableSchemaExtractor) Leave(in ast.Node) (ast.Node, bool) {
+	return in, true
+}
+
+func createViewSelectUsesCurrentSchemaOnly(selectStmt ast.StmtNode, currentSchema string) bool {
+	extractor := &tableSchemaExtractor{
+		schemas: make([]string, 0),
+	}
+	selectStmt.Accept(extractor)
+	for _, schema := range extractor.schemas {
+		if schema != "" && !strings.EqualFold(schema, currentSchema) {
+			return false
+		}
+	}
+	return true
 }
 
 func buildPersistedDDLEventForCreateTable(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {

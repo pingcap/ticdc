@@ -3673,6 +3673,31 @@ func TestBuildPersistedDDLEventForCreateViewUsesStoredSelectStmt(t *testing.T) {
 	require.Equal(t, "v", ddl.TableName)
 }
 
+func TestBuildPersistedDDLEventForCreateViewKeepsOriginalQueryForSameSchemaSelect(t *testing.T) {
+	job := buildCreateViewJobForTest(101, 100)
+	job.TableName = "v"
+	job.Query = "CREATE ALGORITHM = UNDEFINED DEFINER = CURRENT_USER SQL SECURITY DEFINER VIEW `target_db`.`v` AS SELECT `id` FROM `users`"
+	job.BinlogInfo.TableInfo = &model.TableInfo{
+		Name: ast.NewCIStr("v"),
+		View: &model.ViewInfo{
+			SelectStmt: "SELECT `id` FROM `target_db`.`users`",
+		},
+	}
+
+	ddl := buildPersistedDDLEventForCreateView(buildPersistedDDLEventFuncArgs{
+		job: job,
+		databaseMap: map[int64]*BasicDatabaseInfo{
+			101: {Name: "target_db", Tables: map[int64]bool{}},
+		},
+	})
+
+	require.Equal(t,
+		"CREATE ALGORITHM = UNDEFINED DEFINER = CURRENT_USER SQL SECURITY DEFINER VIEW `target_db`.`v` AS SELECT `id` FROM `users`",
+		ddl.Query)
+	require.Equal(t, "target_db", ddl.SchemaName)
+	require.Equal(t, "v", ddl.TableName)
+}
+
 func TestBuildDDLEventForNewTableDDL_CreateTableLikeBlockedTableNames(t *testing.T) {
 	cases := []struct {
 		name     string
