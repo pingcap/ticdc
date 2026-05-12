@@ -866,7 +866,7 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 		}
 
 		// Step4: whether the outdate message or not, we need to return message show we have finished the event.
-		d.OfferDoneBlockStatus(action.CommitTs, action.IsSyncPoint)
+		d.OfferBlockStatus(newDoneBlockStatus(d.id, action.CommitTs, action.IsSyncPoint, d.GetMode()))
 	}
 	return false
 }
@@ -902,7 +902,7 @@ func (d *BasicDispatcher) reportBlockedEventDone(
 	actionCommitTs uint64,
 	actionIsSyncPoint bool,
 ) {
-	d.OfferDoneBlockStatus(actionCommitTs, actionIsSyncPoint)
+	d.OfferBlockStatus(newDoneBlockStatus(d.id, actionCommitTs, actionIsSyncPoint, d.GetMode()))
 	GetDispatcherStatusDynamicStream().Wake(d.id)
 }
 

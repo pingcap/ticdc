@@ -27,8 +27,8 @@ func TestBlockStatusBufferDeduplicatesPendingDone(t *testing.T) {
 	buffer := NewBlockStatusBuffer(4)
 	dispatcherID := common.NewDispatcherID()
 
-	buffer.OfferDone(dispatcherID, 100, false, common.DefaultMode)
-	buffer.OfferDone(dispatcherID, 100, false, common.DefaultMode)
+	buffer.Offer(newDoneBlockStatus(dispatcherID, 100, false, common.DefaultMode))
+	buffer.Offer(newDoneBlockStatus(dispatcherID, 100, false, common.DefaultMode))
 
 	require.Equal(t, 1, buffer.Len())
 
@@ -107,6 +107,28 @@ func TestBlockStatusBufferAllowsWaitingAgainAfterTake(t *testing.T) {
 	require.False(t, ok)
 }
 
+func TestBlockStatusBufferAllowsDoneAgainAfterTake(t *testing.T) {
+	buffer := NewBlockStatusBuffer(4)
+	dispatcherID := common.NewDispatcherID()
+
+	buffer.Offer(newDoneBlockStatus(dispatcherID, 190, false, common.DefaultMode))
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	first := buffer.Take(ctx)
+	require.NotNil(t, first)
+	require.Equal(t, heartbeatpb.BlockStage_DONE, first.State.Stage)
+
+	buffer.Offer(newDoneBlockStatus(dispatcherID, 190, false, common.DefaultMode))
+
+	second := buffer.Take(ctx)
+	require.NotNil(t, second)
+	require.Equal(t, heartbeatpb.BlockStage_DONE, second.State.Stage)
+
+	_, ok := buffer.TryTake()
+	require.False(t, ok)
+}
+
 func TestBlockStatusBufferKeepsWaitingBeforeDone(t *testing.T) {
 	buffer := NewBlockStatusBuffer(4)
 	dispatcherID := common.NewDispatcherID()
@@ -120,8 +142,8 @@ func TestBlockStatusBufferKeepsWaitingBeforeDone(t *testing.T) {
 		},
 		Mode: common.DefaultMode,
 	})
-	buffer.OfferDone(dispatcherID, 200, false, common.DefaultMode)
-	buffer.OfferDone(dispatcherID, 200, false, common.DefaultMode)
+	buffer.Offer(newDoneBlockStatus(dispatcherID, 200, false, common.DefaultMode))
+	buffer.Offer(newDoneBlockStatus(dispatcherID, 200, false, common.DefaultMode))
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -141,9 +163,9 @@ func TestBlockStatusBufferKeepsDistinctDoneKeys(t *testing.T) {
 	buffer := NewBlockStatusBuffer(4)
 	dispatcherID := common.NewDispatcherID()
 
-	buffer.OfferDone(dispatcherID, 300, false, common.DefaultMode)
-	buffer.OfferDone(dispatcherID, 300, true, common.DefaultMode)
-	buffer.OfferDone(dispatcherID, 300, false, common.RedoMode)
+	buffer.Offer(newDoneBlockStatus(dispatcherID, 300, false, common.DefaultMode))
+	buffer.Offer(newDoneBlockStatus(dispatcherID, 300, true, common.DefaultMode))
+	buffer.Offer(newDoneBlockStatus(dispatcherID, 300, false, common.RedoMode))
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()

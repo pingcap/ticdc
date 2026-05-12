@@ -246,10 +246,6 @@ func (d *BasicDispatcher) OfferBlockStatus(status *heartbeatpb.TableSpanBlockSta
 	d.sharedInfo.OfferBlockStatus(status)
 }
 
-func (d *BasicDispatcher) OfferDoneBlockStatus(blockTs uint64, isSyncPoint bool) {
-	d.sharedInfo.OfferDoneBlockStatus(d.id, blockTs, isSyncPoint, d.GetMode())
-}
-
 func (d *BasicDispatcher) TakeBlockStatus(ctx context.Context) *heartbeatpb.TableSpanBlockStatus {
 	return d.sharedInfo.TakeBlockStatus(ctx)
 }
@@ -291,10 +287,6 @@ func (s *SharedInfo) EnableActiveActive() bool {
 
 func (s *SharedInfo) OfferBlockStatus(status *heartbeatpb.TableSpanBlockStatus) {
 	s.blockStatusBuffer.Offer(status)
-}
-
-func (s *SharedInfo) OfferDoneBlockStatus(dispatcherID common.DispatcherID, blockTs uint64, isSyncPoint bool, mode int64) {
-	s.blockStatusBuffer.OfferDone(dispatcherID, blockTs, isSyncPoint, mode)
 }
 
 func (s *SharedInfo) TakeBlockStatus(ctx context.Context) *heartbeatpb.TableSpanBlockStatus {
