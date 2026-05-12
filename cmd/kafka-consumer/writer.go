@@ -64,7 +64,7 @@ func (p *partitionProgress) updateWatermark(newWatermark uint64, offset kafka.Of
 			zap.Uint64("watermark", newWatermark))
 		return
 	}
-	readOldOffset := !(offset > p.watermarkOffset)
+	readOldOffset := offset <= p.watermarkOffset
 
 	log.Warn("partition resolved ts fall back, ignore it",
 		zap.Bool("readOldOffset", readOldOffset),
