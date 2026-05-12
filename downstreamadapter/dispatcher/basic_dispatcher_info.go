@@ -242,16 +242,12 @@ func (d *BasicDispatcher) GetTxnAtomicity() config.AtomicityLevel {
 	return d.sharedInfo.txnAtomicity
 }
 
-func (d *BasicDispatcher) OfferBlockStatus(status *heartbeatpb.TableSpanBlockStatus) {
+func (d *BasicDispatcher) OfferBlockStatus(status BlockStatusEntry) {
 	d.sharedInfo.OfferBlockStatus(status)
 }
 
 func (d *BasicDispatcher) TakeBlockStatus(ctx context.Context) *heartbeatpb.TableSpanBlockStatus {
 	return d.sharedInfo.TakeBlockStatus(ctx)
-}
-
-func (d *BasicDispatcher) TakeBlockStatusWithTimeout(timeout time.Duration) (*heartbeatpb.TableSpanBlockStatus, bool) {
-	return d.sharedInfo.TakeBlockStatusWithTimeout(timeout)
 }
 
 func (d *BasicDispatcher) GetEventSizePerSecond() float32 {
@@ -285,26 +281,12 @@ func (s *SharedInfo) EnableActiveActive() bool {
 	return s.enableActiveActive
 }
 
-func (s *SharedInfo) OfferBlockStatus(status *heartbeatpb.TableSpanBlockStatus) {
+func (s *SharedInfo) OfferBlockStatus(status BlockStatusEntry) {
 	s.blockStatusBuffer.Offer(status)
 }
 
 func (s *SharedInfo) TakeBlockStatus(ctx context.Context) *heartbeatpb.TableSpanBlockStatus {
 	return s.blockStatusBuffer.Take(ctx)
-}
-
-func (s *SharedInfo) TakeBlockStatusWithTimeout(timeout time.Duration) (*heartbeatpb.TableSpanBlockStatus, bool) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-	status := s.TakeBlockStatus(ctx)
-	if status == nil {
-		return nil, false
-	}
-	return status, true
-}
-
-func (s *SharedInfo) TryTakeBlockStatus() (*heartbeatpb.TableSpanBlockStatus, bool) {
-	return s.blockStatusBuffer.TryTake()
 }
 
 func (s *SharedInfo) BlockStatusLen() int {

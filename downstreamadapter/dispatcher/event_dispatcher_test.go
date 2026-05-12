@@ -14,6 +14,7 @@
 package dispatcher
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"sync/atomic"
@@ -35,6 +36,22 @@ import (
 )
 
 var defaultAtomicity = config.DefaultAtomicityLevel()
+
+func takeBlockStatusWithTimeout(
+	t *testing.T,
+	dispatcher *EventDispatcher,
+	timeout time.Duration,
+) (*heartbeatpb.TableSpanBlockStatus, bool) {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	status := dispatcher.TakeBlockStatus(ctx)
+	if status == nil {
+		return nil, false
+	}
+	return status, true
+}
 
 func newTestSyncPointConfig() *syncpoint.SyncPointConfig {
 	return &syncpoint.SyncPointConfig{
@@ -468,19 +485,20 @@ func TestDispatcherIgnoresStaleIgnoredBlockStatus(t *testing.T) {
 	}
 	dispatcher.blockEventStatus.setBlockEvent(ddlEvent, heartbeatpb.BlockStage_WRITING)
 	identifier := BlockEventIdentifier{CommitTs: ddlEvent.FinishedTs}
-	dispatcher.resendTaskMap.Set(identifier, newResendTask(&heartbeatpb.TableSpanBlockStatus{
-		ID: dispatcher.GetId().ToPB(),
-		State: &heartbeatpb.State{
-			IsBlocked: true,
-			BlockTs:   ddlEvent.FinishedTs,
-			BlockTables: &heartbeatpb.InfluencedTables{
-				InfluenceType: heartbeatpb.InfluenceType_Normal,
-				TableIDs:      []int64{1},
-			},
-			Stage: heartbeatpb.BlockStage_WAITING,
-		},
-		Mode: dispatcher.GetMode(),
-	}, dispatcher, nil))
+	dispatcher.resendTaskMap.Set(identifier, newResendTask(
+		NewWaitingBlockStatusEntry(
+			dispatcher.GetId(),
+			ddlEvent.FinishedTs,
+			ddlEvent.BlockedTables,
+			nil,
+			nil,
+			nil,
+			false,
+			dispatcher.GetMode(),
+		),
+		dispatcher,
+		nil,
+	))
 	defer dispatcher.cancelResendTask(identifier)
 
 	await := dispatcher.HandleDispatcherStatus(&heartbeatpb.DispatcherStatus{
@@ -490,7 +508,7 @@ func TestDispatcherIgnoresStaleIgnoredBlockStatus(t *testing.T) {
 	})
 	require.False(t, await)
 
-	if msg, ok := dispatcher.TakeBlockStatusWithTimeout(200 * time.Millisecond); ok {
+	if msg, ok := takeBlockStatusWithTimeout(t, dispatcher, 200*time.Millisecond); ok {
 		require.FailNow(t, "unexpected fast retry for stale ignored block status", "msg=%v", msg)
 	}
 }
@@ -542,12 +560,12 @@ func TestBlockingDDLFlushBeforeWaitingAndWriteDoesNotFlushAgain(t *testing.T) {
 	require.Nil(t, pendingEvent)
 	require.Equal(t, heartbeatpb.BlockStage_NONE, blockStage)
 
-	msg, ok := dispatcher.TakeBlockStatusWithTimeout(200 * time.Millisecond)
+	msg, ok := takeBlockStatusWithTimeout(t, dispatcher, 200*time.Millisecond)
 	require.False(t, ok, "unexpected block status before local flush finishes: %v", msg)
 
 	close(flushRelease)
 
-	msg, ok = dispatcher.TakeBlockStatusWithTimeout(time.Second)
+	msg, ok = takeBlockStatusWithTimeout(t, dispatcher, time.Second)
 	require.True(t, ok, "expected blocking DDL to enter WAITING after local flush")
 	require.True(t, msg.State.IsBlocked)
 	require.Equal(t, uint64(10), msg.State.BlockTs)
@@ -567,7 +585,7 @@ func TestBlockingDDLFlushBeforeWaitingAndWriteDoesNotFlushAgain(t *testing.T) {
 	})
 	require.True(t, await)
 
-	msg, ok = dispatcher.TakeBlockStatusWithTimeout(time.Second)
+	msg, ok = takeBlockStatusWithTimeout(t, dispatcher, time.Second)
 	require.True(t, ok, "expected DONE after write action")
 	require.True(t, msg.State.IsBlocked)
 	require.Equal(t, uint64(10), msg.State.BlockTs)
@@ -1264,7 +1282,7 @@ func TestHoldBlockEventUntilNoResendTasks(t *testing.T) {
 	block := dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, createTableDDL)}, func() {})
 	require.True(t, block)
 
-	msg, ok := dispatcher.TakeBlockStatusWithTimeout(time.Second)
+	msg, ok := takeBlockStatusWithTimeout(t, dispatcher, time.Second)
 	require.True(t, ok, "expected add-table block status")
 	require.False(t, msg.State.IsBlocked)
 	require.False(t, msg.State.IsSyncPoint)
@@ -1284,7 +1302,7 @@ func TestHoldBlockEventUntilNoResendTasks(t *testing.T) {
 	block = dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, dropDBDDL)}, func() {})
 	require.True(t, block)
 
-	msg, ok = dispatcher.TakeBlockStatusWithTimeout(200 * time.Millisecond)
+	msg, ok = takeBlockStatusWithTimeout(t, dispatcher, 200*time.Millisecond)
 	require.False(t, ok, "unexpected block status: %v", msg)
 
 	// Simulate maintainer ACK for the create table scheduling message.
@@ -1301,12 +1319,12 @@ func TestHoldBlockEventUntilNoResendTasks(t *testing.T) {
 		require.FailNow(t, "expected deferred DB-level flush to start")
 	}
 
-	msg, ok = dispatcher.TakeBlockStatusWithTimeout(200 * time.Millisecond)
+	msg, ok = takeBlockStatusWithTimeout(t, dispatcher, 200*time.Millisecond)
 	require.False(t, ok, "unexpected block status before local flush finishes: %v", msg)
 
 	close(flushRelease)
 
-	msg, ok = dispatcher.TakeBlockStatusWithTimeout(time.Second)
+	msg, ok = takeBlockStatusWithTimeout(t, dispatcher, time.Second)
 	require.True(t, ok, "expected deferred DB-level block status")
 	require.True(t, msg.State.IsBlocked)
 	require.False(t, msg.State.IsSyncPoint)

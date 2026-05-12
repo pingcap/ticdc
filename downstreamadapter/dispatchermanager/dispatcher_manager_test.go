@@ -215,10 +215,10 @@ func TestCollectBlockStatusRequestSplitsOversizedMessages(t *testing.T) {
 	manager := createTestManager(t)
 
 	for i := 0; i < maxBlockStatusesPerRequest+2; i++ {
-		manager.sharedInfo.OfferBlockStatus(newWaitingBlockStatus(common.DefaultMode, uint64(i+1)))
+		manager.sharedInfo.OfferBlockStatus(newWaitingBlockStatusEntry(common.DefaultMode, uint64(i+1)))
 	}
 	for i := 0; i < maxBlockStatusesPerRequest+1; i++ {
-		manager.sharedInfo.OfferBlockStatus(newWaitingBlockStatus(common.RedoMode, uint64(i+10000)))
+		manager.sharedInfo.OfferBlockStatus(newWaitingBlockStatusEntry(common.RedoMode, uint64(i+10000)))
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -304,16 +304,17 @@ func TestMergeDispatcherNormal(t *testing.T) {
 	require.Equal(t, []byte("z"), mergedDispatcher.GetTableSpan().EndKey)
 }
 
-func newWaitingBlockStatus(mode int64, blockTs uint64) *heartbeatpb.TableSpanBlockStatus {
-	return &heartbeatpb.TableSpanBlockStatus{
-		ID: common.NewDispatcherID().ToPB(),
-		State: &heartbeatpb.State{
-			IsBlocked: true,
-			BlockTs:   blockTs,
-			Stage:     heartbeatpb.BlockStage_WAITING,
-		},
-		Mode: mode,
-	}
+func newWaitingBlockStatusEntry(mode int64, blockTs uint64) dispatcher.BlockStatusEntry {
+	return dispatcher.NewWaitingBlockStatusEntry(
+		common.NewDispatcherID(),
+		blockTs,
+		nil,
+		nil,
+		nil,
+		nil,
+		false,
+		mode,
+	)
 }
 
 func TestMergeDispatcherInvalidIDs(t *testing.T) {

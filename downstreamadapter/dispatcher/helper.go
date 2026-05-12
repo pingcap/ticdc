@@ -261,10 +261,10 @@ type HeartBeatInfo struct {
 	IsRemoving      bool
 }
 
-// ResendTask is responsible for periodically resending the TableSpanBlockStatus message to the maintainer.
+// ResendTask is responsible for periodically resending the block status to the maintainer.
 // The task will be cancelled when the dispatcher receives the ACK message from the maintainer.
 type ResendTask struct {
-	message      *heartbeatpb.TableSpanBlockStatus
+	message      BlockStatusEntry
 	dispatcher   Dispatcher
 	callback     func() // function need to be called when the task is cancelled
 	taskHandle   *threadpool.TaskHandle
@@ -273,7 +273,7 @@ type ResendTask struct {
 
 const resendTimeInterval = 5 * time.Second
 
-func newResendTask(message *heartbeatpb.TableSpanBlockStatus, dispatcher Dispatcher, callback func()) *ResendTask {
+func newResendTask(message BlockStatusEntry, dispatcher Dispatcher, callback func()) *ResendTask {
 	taskScheduler := GetDispatcherTaskScheduler()
 	t := &ResendTask{
 		message:    message,
