@@ -485,18 +485,14 @@ func TestDispatcherIgnoresStaleIgnoredBlockStatus(t *testing.T) {
 	}
 	dispatcher.blockEventStatus.setBlockEvent(ddlEvent, heartbeatpb.BlockStage_WRITING)
 	identifier := BlockEventIdentifier{CommitTs: ddlEvent.FinishedTs}
-	dispatcher.resendTaskMap.Set(identifier, newResendTask(
-		NewWaitingBlockStatusEntry(
-			dispatcher.GetId(),
-			ddlEvent.FinishedTs,
-			ddlEvent.BlockedTables,
-			nil,
-			nil,
-			nil,
-			false,
-			dispatcher.GetMode(),
-		),
+	dispatcher.resendTaskMap.Set(identifier, newWaitingBlockStatusResendTask(
 		dispatcher,
+		ddlEvent.FinishedTs,
+		ddlEvent.BlockedTables,
+		nil,
+		nil,
+		nil,
+		false,
 		nil,
 	))
 	defer dispatcher.cancelResendTask(identifier)

@@ -261,38 +261,97 @@ type HeartBeatInfo struct {
 	IsRemoving      bool
 }
 
+type resendBlockStatusStage int
+
+const (
+	resendNoneBlockStatus resendBlockStatusStage = iota
+	resendWaitingBlockStatus
+)
+
 // ResendTask is responsible for periodically resending the block status to the maintainer.
 // The task will be cancelled when the dispatcher receives the ACK message from the maintainer.
 type ResendTask struct {
-	message      BlockStatusEntry
-	dispatcher   Dispatcher
-	callback     func() // function need to be called when the task is cancelled
-	taskHandle   *threadpool.TaskHandle
-	executeCount uint64
+	dispatcher        Dispatcher
+	stage             resendBlockStatusStage
+	blockTs           uint64
+	blockTables       *commonEvent.InfluencedTables
+	needDroppedTables *commonEvent.InfluencedTables
+	needAddedTables   []commonEvent.Table
+	updatedSchemas    []commonEvent.SchemaIDChange
+	isSyncPoint       bool
+	callback          func() // function need to be called when the task is cancelled
+	taskHandle        *threadpool.TaskHandle
+	executeCount      uint64
 }
 
 const resendTimeInterval = 5 * time.Second
 
-func newResendTask(message BlockStatusEntry, dispatcher Dispatcher, callback func()) *ResendTask {
+func newNoneBlockStatusResendTask(
+	dispatcher Dispatcher,
+	blockTs uint64,
+	needDroppedTables *commonEvent.InfluencedTables,
+	needAddedTables []commonEvent.Table,
+	callback func(),
+) *ResendTask {
 	taskScheduler := GetDispatcherTaskScheduler()
 	t := &ResendTask{
-		message:    message,
-		dispatcher: dispatcher,
-		callback:   callback,
+		dispatcher:        dispatcher,
+		stage:             resendNoneBlockStatus,
+		blockTs:           blockTs,
+		needDroppedTables: needDroppedTables,
+		needAddedTables:   needAddedTables,
+		callback:          callback,
+	}
+	t.taskHandle = taskScheduler.Submit(t, time.Now().Add(resendTimeInterval))
+	return t
+}
+
+func newWaitingBlockStatusResendTask(
+	dispatcher Dispatcher,
+	blockTs uint64,
+	blockTables *commonEvent.InfluencedTables,
+	needDroppedTables *commonEvent.InfluencedTables,
+	needAddedTables []commonEvent.Table,
+	updatedSchemas []commonEvent.SchemaIDChange,
+	isSyncPoint bool,
+	callback func(),
+) *ResendTask {
+	taskScheduler := GetDispatcherTaskScheduler()
+	t := &ResendTask{
+		dispatcher:        dispatcher,
+		stage:             resendWaitingBlockStatus,
+		blockTs:           blockTs,
+		blockTables:       blockTables,
+		needDroppedTables: needDroppedTables,
+		needAddedTables:   needAddedTables,
+		updatedSchemas:    updatedSchemas,
+		isSyncPoint:       isSyncPoint,
+		callback:          callback,
 	}
 	t.taskHandle = taskScheduler.Submit(t, time.Now().Add(resendTimeInterval))
 	return t
 }
 
 func (t *ResendTask) Execute() time.Time {
-	log.Debug("resend task", zap.Any("message", t.message), zap.Any("dispatcherID", t.dispatcher.GetId()))
-	t.dispatcher.OfferBlockStatus(t.message)
+	log.Debug("resend task", zap.Any("dispatcherID", t.dispatcher.GetId()))
+	switch t.stage {
+	case resendNoneBlockStatus:
+		t.dispatcher.OfferNoneBlockStatus(t.blockTs, t.needDroppedTables, t.needAddedTables)
+	case resendWaitingBlockStatus:
+		t.dispatcher.OfferWaitingBlockStatus(
+			t.blockTs,
+			t.blockTables,
+			t.needDroppedTables,
+			t.needAddedTables,
+			t.updatedSchemas,
+			t.isSyncPoint,
+		)
+	}
 
 	executeCount := atomic.AddUint64(&t.executeCount, 1)
 	if executeCount%10 == 0 {
 		log.Info("resend task periodic resend",
 			zap.Any("dispatcherID", t.dispatcher.GetId()),
-			zap.Any("message", t.message),
 			zap.Uint64("executeCount", executeCount))
 	}
 	return time.Now().Add(resendTimeInterval)

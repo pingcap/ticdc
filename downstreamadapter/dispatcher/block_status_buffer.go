@@ -30,13 +30,14 @@ type blockStatusKey struct {
 	stage        heartbeatpb.BlockStage
 }
 
-// BlockStatusEntry stores the minimal dispatcher block-status data before the
+// blockStatusEntry stores the minimal dispatcher block-status data before the
 // dispatcher manager materializes a heartbeatpb.TableSpanBlockStatus.
 //
 // The dispatcher resend path can offer the same WAITING or DONE status many
-// times before the dispatcher manager drains it. Keeping this internal payload
-// avoids repeatedly allocating protobuf messages that may be coalesced locally.
-type BlockStatusEntry struct {
+// times before the dispatcher manager drains it. Keeping this private payload
+// inside BlockStatusBuffer avoids repeatedly allocating protobuf messages that
+// may be coalesced locally.
+type blockStatusEntry struct {
 	dispatcherID      common.DispatcherID
 	blockTs           uint64
 	mode              int64
@@ -49,70 +50,7 @@ type BlockStatusEntry struct {
 	updatedSchemas    []commonEvent.SchemaIDChange
 }
 
-// NewWaitingBlockStatusEntry creates a WAITING status entry for a dispatcher
-// that is blocked by a DDL or sync point event.
-func NewWaitingBlockStatusEntry(
-	dispatcherID common.DispatcherID,
-	blockTs uint64,
-	blockTables *commonEvent.InfluencedTables,
-	needDroppedTables *commonEvent.InfluencedTables,
-	needAddedTables []commonEvent.Table,
-	updatedSchemas []commonEvent.SchemaIDChange,
-	isSyncPoint bool,
-	mode int64,
-) BlockStatusEntry {
-	return BlockStatusEntry{
-		dispatcherID:      dispatcherID,
-		blockTs:           blockTs,
-		mode:              mode,
-		isBlocked:         true,
-		isSyncPoint:       isSyncPoint,
-		stage:             heartbeatpb.BlockStage_WAITING,
-		blockTables:       blockTables,
-		needDroppedTables: needDroppedTables,
-		needAddedTables:   needAddedTables,
-		updatedSchemas:    updatedSchemas,
-	}
-}
-
-// NewNoneBlockStatusEntry creates a scheduling status entry for a non-blocking
-// DDL whose add/drop-table metadata still needs maintainer coordination.
-func NewNoneBlockStatusEntry(
-	dispatcherID common.DispatcherID,
-	blockTs uint64,
-	needDroppedTables *commonEvent.InfluencedTables,
-	needAddedTables []commonEvent.Table,
-	mode int64,
-) BlockStatusEntry {
-	return BlockStatusEntry{
-		dispatcherID:      dispatcherID,
-		blockTs:           blockTs,
-		mode:              mode,
-		needDroppedTables: needDroppedTables,
-		needAddedTables:   needAddedTables,
-		stage:             heartbeatpb.BlockStage_NONE,
-	}
-}
-
-// NewDoneBlockStatusEntry creates a DONE status entry after a dispatcher has
-// written or passed a block event.
-func NewDoneBlockStatusEntry(
-	dispatcherID common.DispatcherID,
-	blockTs uint64,
-	isSyncPoint bool,
-	mode int64,
-) BlockStatusEntry {
-	return BlockStatusEntry{
-		dispatcherID: dispatcherID,
-		blockTs:      blockTs,
-		mode:         mode,
-		isBlocked:    true,
-		isSyncPoint:  isSyncPoint,
-		stage:        heartbeatpb.BlockStage_DONE,
-	}
-}
-
-func (e BlockStatusEntry) toPB() *heartbeatpb.TableSpanBlockStatus {
+func (e blockStatusEntry) toPB() *heartbeatpb.TableSpanBlockStatus {
 	return &heartbeatpb.TableSpanBlockStatus{
 		ID: e.dispatcherID.ToPB(),
 		State: &heartbeatpb.State{
@@ -129,7 +67,7 @@ func (e BlockStatusEntry) toPB() *heartbeatpb.TableSpanBlockStatus {
 	}
 }
 
-func (e BlockStatusEntry) key() blockStatusKey {
+func (e blockStatusEntry) key() blockStatusKey {
 	return blockStatusKey{
 		dispatcherID: e.dispatcherID,
 		blockTs:      e.blockTs,
@@ -139,7 +77,7 @@ func (e BlockStatusEntry) key() blockStatusKey {
 	}
 }
 
-func (e BlockStatusEntry) shouldDeduplicate() bool {
+func (e blockStatusEntry) shouldDeduplicate() bool {
 	return e.isBlocked &&
 		(e.stage == heartbeatpb.BlockStage_WAITING ||
 			e.stage == heartbeatpb.BlockStage_DONE)
@@ -154,7 +92,7 @@ func (e BlockStatusEntry) shouldDeduplicate() bool {
 // The later BlockStatusRequestQueue still deduplicates queued and in-flight
 // protobuf requests until the heartbeat collector finishes sending them.
 type BlockStatusBuffer struct {
-	queue chan BlockStatusEntry
+	queue chan blockStatusEntry
 
 	mu      sync.Mutex
 	pending map[blockStatusKey]struct{}
@@ -167,14 +105,77 @@ func NewBlockStatusBuffer(size int) *BlockStatusBuffer {
 		size = 1
 	}
 	return &BlockStatusBuffer{
-		queue:   make(chan BlockStatusEntry, size),
+		queue:   make(chan blockStatusEntry, size),
 		pending: make(map[blockStatusKey]struct{}),
 	}
 }
 
-// Offer enqueues a block-status entry unless an identical WAITING or DONE entry
+// OfferWaiting enqueues a WAITING status for a dispatcher that is blocked by a
+// DDL or sync point event.
+func (b *BlockStatusBuffer) OfferWaiting(
+	dispatcherID common.DispatcherID,
+	blockTs uint64,
+	blockTables *commonEvent.InfluencedTables,
+	needDroppedTables *commonEvent.InfluencedTables,
+	needAddedTables []commonEvent.Table,
+	updatedSchemas []commonEvent.SchemaIDChange,
+	isSyncPoint bool,
+	mode int64,
+) {
+	b.offer(blockStatusEntry{
+		dispatcherID:      dispatcherID,
+		blockTs:           blockTs,
+		mode:              mode,
+		isBlocked:         true,
+		isSyncPoint:       isSyncPoint,
+		stage:             heartbeatpb.BlockStage_WAITING,
+		blockTables:       blockTables,
+		needDroppedTables: needDroppedTables,
+		needAddedTables:   needAddedTables,
+		updatedSchemas:    updatedSchemas,
+	})
+}
+
+// OfferNone enqueues a scheduling status for a non-blocking DDL whose
+// add/drop-table metadata still needs maintainer coordination.
+func (b *BlockStatusBuffer) OfferNone(
+	dispatcherID common.DispatcherID,
+	blockTs uint64,
+	needDroppedTables *commonEvent.InfluencedTables,
+	needAddedTables []commonEvent.Table,
+	mode int64,
+) {
+	b.offer(blockStatusEntry{
+		dispatcherID:      dispatcherID,
+		blockTs:           blockTs,
+		mode:              mode,
+		needDroppedTables: needDroppedTables,
+		needAddedTables:   needAddedTables,
+		stage:             heartbeatpb.BlockStage_NONE,
+	})
+}
+
+// OfferDone enqueues a DONE status after a dispatcher has written or passed a
+// block event.
+func (b *BlockStatusBuffer) OfferDone(
+	dispatcherID common.DispatcherID,
+	blockTs uint64,
+	isSyncPoint bool,
+	mode int64,
+) {
+	b.offer(blockStatusEntry{
+		dispatcherID: dispatcherID,
+		blockTs:      blockTs,
+		mode:         mode,
+		isBlocked:    true,
+		isSyncPoint:  isSyncPoint,
+		stage:        heartbeatpb.BlockStage_DONE,
+	})
+}
+
+// offer enqueues a block-status entry unless an identical WAITING or DONE entry
 // is already pending in this buffer.
-func (b *BlockStatusBuffer) Offer(status BlockStatusEntry) {
+func (b *BlockStatusBuffer) offer(status blockStatusEntry) {
 	if !status.shouldDeduplicate() {
 		b.queue <- status
 		return
@@ -214,7 +215,7 @@ func (b *BlockStatusBuffer) reserve(key blockStatusKey) bool {
 	return true
 }
 
-func (b *BlockStatusBuffer) release(status BlockStatusEntry) {
+func (b *BlockStatusBuffer) release(status blockStatusEntry) {
 	if !status.shouldDeduplicate() {
 		return
 	}

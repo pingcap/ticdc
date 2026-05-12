@@ -79,7 +79,20 @@ type Dispatcher interface {
 	GetHeartBeatInfo(h *HeartBeatInfo)
 	GetComponentStatus() heartbeatpb.ComponentState
 	GetBlockEventStatus() *heartbeatpb.State
-	OfferBlockStatus(status BlockStatusEntry)
+	OfferNoneBlockStatus(
+		blockTs uint64,
+		needDroppedTables *commonEvent.InfluencedTables,
+		needAddedTables []commonEvent.Table,
+	)
+	OfferWaitingBlockStatus(
+		blockTs uint64,
+		blockTables *commonEvent.InfluencedTables,
+		needDroppedTables *commonEvent.InfluencedTables,
+		needAddedTables []commonEvent.Table,
+		updatedSchemas []commonEvent.SchemaIDChange,
+		isSyncPoint bool,
+	)
+	OfferDoneBlockStatus(blockTs uint64, isSyncPoint bool)
 	GetEventSizePerSecond() float32
 	IsTableTriggerDispatcher() bool
 	DealWithBlockEvent(event commonEvent.BlockEvent)
@@ -866,7 +879,7 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 		}
 
 		// Step4: whether the outdate message or not, we need to return message show we have finished the event.
-		d.OfferBlockStatus(NewDoneBlockStatusEntry(d.id, action.CommitTs, action.IsSyncPoint, d.GetMode()))
+		d.OfferDoneBlockStatus(action.CommitTs, action.IsSyncPoint)
 	}
 	return false
 }
@@ -902,7 +915,7 @@ func (d *BasicDispatcher) reportBlockedEventDone(
 	actionCommitTs uint64,
 	actionIsSyncPoint bool,
 ) {
-	d.OfferBlockStatus(NewDoneBlockStatusEntry(d.id, actionCommitTs, actionIsSyncPoint, d.GetMode()))
+	d.OfferDoneBlockStatus(actionCommitTs, actionIsSyncPoint)
 	GetDispatcherStatusDynamicStream().Wake(d.id)
 }
 
@@ -1016,13 +1029,6 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 			return
 		}
 
-		message := NewNoneBlockStatusEntry(
-			d.id,
-			event.GetCommitTs(),
-			event.GetNeedDroppedTables(),
-			event.GetNeedAddedTables(),
-			d.GetMode(),
-		)
 		identifier := BlockEventIdentifier{
 			CommitTs:    event.GetCommitTs(),
 			IsSyncPoint: false,
@@ -1045,11 +1051,27 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 			// Thus, we add the event to tableProgress again, and call event postFunc when the ack is received from maintainer.
 			event.ClearPostFlushFunc()
 			d.tableProgress.Add(event)
-			d.resendTaskMap.Set(identifier, newResendTask(message, d, event.PostFlush))
+			d.resendTaskMap.Set(identifier, newNoneBlockStatusResendTask(
+				d,
+				event.GetCommitTs(),
+				event.GetNeedDroppedTables(),
+				event.GetNeedAddedTables(),
+				event.PostFlush,
+			))
 		} else {
-			d.resendTaskMap.Set(identifier, newResendTask(message, d, nil))
+			d.resendTaskMap.Set(identifier, newNoneBlockStatusResendTask(
+				d,
+				event.GetCommitTs(),
+				event.GetNeedDroppedTables(),
+				event.GetNeedAddedTables(),
+				nil,
+			))
 		}
-		d.OfferBlockStatus(message)
+		d.OfferNoneBlockStatus(
+			event.GetCommitTs(),
+			event.GetNeedDroppedTables(),
+			event.GetNeedAddedTables(),
+		)
 	})
 
 	// dealing with events which update schema ids
@@ -1154,22 +1176,29 @@ func (d *BasicDispatcher) reportBlockedEventToMaintainer(event commonEvent.Block
 		d.pendingACKCount.Add(1)
 	}
 	d.blockEventStatus.setBlockEvent(event, heartbeatpb.BlockStage_WAITING)
-	message := NewWaitingBlockStatusEntry(
-		d.id,
+	identifier := BlockEventIdentifier{
+		CommitTs:    event.GetCommitTs(),
+		IsSyncPoint: event.GetType() == commonEvent.TypeSyncPointEvent,
+	}
+	isSyncPoint := event.GetType() == commonEvent.TypeSyncPointEvent
+	d.resendTaskMap.Set(identifier, newWaitingBlockStatusResendTask(
+		d,
 		event.GetCommitTs(),
 		event.GetBlockedTables(),
 		event.GetNeedDroppedTables(),
 		event.GetNeedAddedTables(),
 		event.GetUpdatedSchemas(),
-		event.GetType() == commonEvent.TypeSyncPointEvent,
-		d.GetMode(),
+		isSyncPoint,
+		nil,
+	))
+	d.OfferWaitingBlockStatus(
+		event.GetCommitTs(),
+		event.GetBlockedTables(),
+		event.GetNeedDroppedTables(),
+		event.GetNeedAddedTables(),
+		event.GetUpdatedSchemas(),
+		isSyncPoint,
 	)
-	identifier := BlockEventIdentifier{
-		CommitTs:    event.GetCommitTs(),
-		IsSyncPoint: event.GetType() == commonEvent.TypeSyncPointEvent,
-	}
-	d.resendTaskMap.Set(identifier, newResendTask(message, d, nil))
-	d.OfferBlockStatus(message)
 }
 
 func (d *BasicDispatcher) flushBlockedEventAndReportToMaintainer(event commonEvent.BlockEvent) {

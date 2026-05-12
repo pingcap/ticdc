@@ -27,8 +27,8 @@ func TestBlockStatusBufferDeduplicatesPendingDone(t *testing.T) {
 	buffer := NewBlockStatusBuffer(4)
 	dispatcherID := common.NewDispatcherID()
 
-	buffer.Offer(NewDoneBlockStatusEntry(dispatcherID, 100, false, common.DefaultMode))
-	buffer.Offer(NewDoneBlockStatusEntry(dispatcherID, 100, false, common.DefaultMode))
+	buffer.OfferDone(dispatcherID, 100, false, common.DefaultMode)
+	buffer.OfferDone(dispatcherID, 100, false, common.DefaultMode)
 
 	require.Equal(t, 1, buffer.Len())
 
@@ -49,19 +49,21 @@ func TestBlockStatusBufferDeduplicatesPendingWaiting(t *testing.T) {
 	buffer := NewBlockStatusBuffer(4)
 	dispatcherID := common.NewDispatcherID()
 
-	waiting := NewWaitingBlockStatusEntry(
-		dispatcherID,
-		150,
-		nil,
-		nil,
-		nil,
-		nil,
-		false,
-		common.DefaultMode,
-	)
+	offerWaiting := func() {
+		buffer.OfferWaiting(
+			dispatcherID,
+			150,
+			nil,
+			nil,
+			nil,
+			nil,
+			false,
+			common.DefaultMode,
+		)
+	}
 
-	buffer.Offer(waiting)
-	buffer.Offer(waiting)
+	offerWaiting()
+	offerWaiting()
 
 	require.Equal(t, 1, buffer.Len())
 
@@ -78,18 +80,20 @@ func TestBlockStatusBufferAllowsWaitingAgainAfterTake(t *testing.T) {
 	buffer := NewBlockStatusBuffer(4)
 	dispatcherID := common.NewDispatcherID()
 
-	waiting := NewWaitingBlockStatusEntry(
-		dispatcherID,
-		180,
-		nil,
-		nil,
-		nil,
-		nil,
-		false,
-		common.DefaultMode,
-	)
+	offerWaiting := func() {
+		buffer.OfferWaiting(
+			dispatcherID,
+			180,
+			nil,
+			nil,
+			nil,
+			nil,
+			false,
+			common.DefaultMode,
+		)
+	}
 
-	buffer.Offer(waiting)
+	offerWaiting()
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -97,7 +101,7 @@ func TestBlockStatusBufferAllowsWaitingAgainAfterTake(t *testing.T) {
 	require.NotNil(t, first)
 	require.Equal(t, heartbeatpb.BlockStage_WAITING, first.State.Stage)
 
-	buffer.Offer(waiting)
+	offerWaiting()
 
 	second := buffer.Take(ctx)
 	require.NotNil(t, second)
@@ -110,7 +114,7 @@ func TestBlockStatusBufferAllowsDoneAgainAfterTake(t *testing.T) {
 	buffer := NewBlockStatusBuffer(4)
 	dispatcherID := common.NewDispatcherID()
 
-	buffer.Offer(NewDoneBlockStatusEntry(dispatcherID, 190, false, common.DefaultMode))
+	buffer.OfferDone(dispatcherID, 190, false, common.DefaultMode)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -118,7 +122,7 @@ func TestBlockStatusBufferAllowsDoneAgainAfterTake(t *testing.T) {
 	require.NotNil(t, first)
 	require.Equal(t, heartbeatpb.BlockStage_DONE, first.State.Stage)
 
-	buffer.Offer(NewDoneBlockStatusEntry(dispatcherID, 190, false, common.DefaultMode))
+	buffer.OfferDone(dispatcherID, 190, false, common.DefaultMode)
 
 	second := buffer.Take(ctx)
 	require.NotNil(t, second)
@@ -131,7 +135,7 @@ func TestBlockStatusBufferKeepsWaitingBeforeDone(t *testing.T) {
 	buffer := NewBlockStatusBuffer(4)
 	dispatcherID := common.NewDispatcherID()
 
-	buffer.Offer(NewWaitingBlockStatusEntry(
+	buffer.OfferWaiting(
 		dispatcherID,
 		200,
 		nil,
@@ -140,9 +144,9 @@ func TestBlockStatusBufferKeepsWaitingBeforeDone(t *testing.T) {
 		nil,
 		false,
 		common.DefaultMode,
-	))
-	buffer.Offer(NewDoneBlockStatusEntry(dispatcherID, 200, false, common.DefaultMode))
-	buffer.Offer(NewDoneBlockStatusEntry(dispatcherID, 200, false, common.DefaultMode))
+	)
+	buffer.OfferDone(dispatcherID, 200, false, common.DefaultMode)
+	buffer.OfferDone(dispatcherID, 200, false, common.DefaultMode)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -161,9 +165,9 @@ func TestBlockStatusBufferKeepsDistinctDoneKeys(t *testing.T) {
 	buffer := NewBlockStatusBuffer(4)
 	dispatcherID := common.NewDispatcherID()
 
-	buffer.Offer(NewDoneBlockStatusEntry(dispatcherID, 300, false, common.DefaultMode))
-	buffer.Offer(NewDoneBlockStatusEntry(dispatcherID, 300, true, common.DefaultMode))
-	buffer.Offer(NewDoneBlockStatusEntry(dispatcherID, 300, false, common.RedoMode))
+	buffer.OfferDone(dispatcherID, 300, false, common.DefaultMode)
+	buffer.OfferDone(dispatcherID, 300, true, common.DefaultMode)
+	buffer.OfferDone(dispatcherID, 300, false, common.RedoMode)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
