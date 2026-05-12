@@ -21,9 +21,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/config/outdated"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/util"

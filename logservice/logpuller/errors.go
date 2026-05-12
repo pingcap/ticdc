@@ -16,8 +16,8 @@ package logpuller
 import (
 	"fmt"
 
-	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/kvproto/pkg/cdcpb"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/tikv/client-go/v2/tikv"
 )
 

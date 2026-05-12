@@ -23,9 +23,9 @@ import (
 	"unsafe"
 
 	mysqlDriver "github.com/go-sql-driver/mysql"
-	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"

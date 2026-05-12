@@ -18,10 +18,10 @@ import (
 	"time"
 
 	"github.com/IBM/sarama"
-	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"

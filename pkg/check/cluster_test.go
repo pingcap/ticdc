@@ -22,8 +22,8 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	mysqlsink "github.com/pingcap/ticdc/pkg/sink/mysql"
 	"github.com/stretchr/testify/require"
 	pd "github.com/tikv/pd/client"

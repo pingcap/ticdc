@@ -18,10 +18,10 @@ import (
 	"io"
 	"testing"
 
-	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/ticdc/logservice/logpuller/regionlock"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/utils/dynstream"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"

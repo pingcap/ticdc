@@ -15,8 +15,8 @@ package config
 import (
 	"encoding/json"
 
-	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/errors"
 )
 
 type CaptureID = string

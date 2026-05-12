@@ -21,10 +21,10 @@ import (
 	"time"
 
 	lru "github.com/hashicorp/golang-lru"
-	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"go.uber.org/zap"
 )

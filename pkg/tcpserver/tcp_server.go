@@ -20,8 +20,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/soheilhy/cmux"
 	"go.uber.org/atomic"

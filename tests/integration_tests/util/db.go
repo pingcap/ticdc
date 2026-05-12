@@ -20,9 +20,9 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/diff"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tidb/pkg/util/dbutil"
 	"go.uber.org/zap"
 )

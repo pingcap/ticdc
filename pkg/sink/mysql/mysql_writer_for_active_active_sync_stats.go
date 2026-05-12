@@ -20,9 +20,9 @@ import (
 	"sync"
 
 	dmysql "github.com/go-sql-driver/mysql"
-	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	tidbmysql "github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/prometheus/client_golang/prometheus"

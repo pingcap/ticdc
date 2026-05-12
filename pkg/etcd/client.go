@@ -21,8 +21,8 @@ import (
 	"time"
 
 	"github.com/benbjohnson/clock"
-	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/retry"
 	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/pingcap/ticdc/pkg/util"

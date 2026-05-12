@@ -29,8 +29,8 @@ import (
 	"time"
 
 	_ "github.com/go-sql-driver/mysql" // MySQL driver
-	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/retry"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"

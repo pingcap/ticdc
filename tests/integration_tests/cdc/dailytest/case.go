@@ -21,8 +21,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/errors"
 )
 
 var casePKAddDuplicateUK = []string{

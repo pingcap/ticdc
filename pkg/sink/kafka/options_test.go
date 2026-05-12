@@ -24,9 +24,9 @@ import (
 
 	"github.com/IBM/sarama"
 	"github.com/aws/aws-sdk-go/aws"
-	"github.com/pingcap/ticdc/pkg/errors"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/stretchr/testify/require"
 )

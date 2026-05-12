@@ -22,9 +22,9 @@ import (
 	"time"
 
 	dmysql "github.com/go-sql-driver/mysql"
-	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/retry"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/parser/mysql"

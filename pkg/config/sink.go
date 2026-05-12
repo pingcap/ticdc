@@ -23,8 +23,8 @@ import (
 
 	"github.com/apache/pulsar-client-go/pulsar"
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
 )

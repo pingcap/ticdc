@@ -17,8 +17,8 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/errors"
 	selector "github.com/pingcap/tidb/pkg/util/table-rule-selector"
 	"go.uber.org/zap"
 )

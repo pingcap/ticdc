@@ -25,10 +25,10 @@ import (
 
 	"github.com/coreos/go-semver/semver"
 	dmysql "github.com/go-sql-driver/mysql"
-	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/retry"
 	"github.com/pingcap/tidb/br/pkg/version"
 	"github.com/pingcap/tidb/dumpling/export"

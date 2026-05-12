@@ -27,8 +27,8 @@ import (
 	"time"
 
 	guuid "github.com/google/uuid"
-	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/workerpool"
 	"github.com/pingcap/ticdc/tests/integration_tests/util"
 	"go.uber.org/zap"

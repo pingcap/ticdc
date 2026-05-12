@@ -16,11 +16,11 @@ package cli
 import (
 	"strings"
 
-	"github.com/pingcap/ticdc/pkg/errors"
 	v2 "github.com/pingcap/ticdc/api/v2"
 	"github.com/pingcap/ticdc/cmd/cdc/factory"
 	"github.com/pingcap/ticdc/cmd/util"
 	apiv2client "github.com/pingcap/ticdc/pkg/api/v2"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/spf13/cobra"
 )
 

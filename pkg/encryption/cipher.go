@@ -19,7 +19,6 @@ import (
 	"crypto/rand"
 
 	"github.com/pingcap/ticdc/pkg/errors"
-
 )
 
 // Cipher is the interface for encryption/decryption operations

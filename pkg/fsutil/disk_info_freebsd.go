@@ -19,7 +19,6 @@ import (
 	"os"
 	"path/filepath"
 	"syscall"
-
 )
 
 // GetDiskInfo return the disk space information of the given directory

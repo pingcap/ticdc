@@ -19,11 +19,10 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/pingcap/ticdc/pkg/errors"
-
 	"github.com/gin-gonic/gin"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/ticdc/pkg/api"
+	"github.com/pingcap/ticdc/pkg/errors"
 )
 
 type FailpointRequest struct {
