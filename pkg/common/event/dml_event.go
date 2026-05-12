@@ -283,6 +283,10 @@ func (b *BatchDMLEvent) AssembleRows(tableInfo *common.TableInfo) {
 		log.Panic("DMLEvent: TableInfo is nil")
 	}
 
+	defer func() {
+		b.TableInfo.InitPrivateFields()
+	}()
+
 	// For local events (same node), rows are already set.
 	if b.Rows != nil {
 		if !tableInfo.TableName.IsRouted() {

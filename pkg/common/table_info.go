@@ -116,8 +116,8 @@ type TableInfo struct {
 	} `json:"-"`
 }
 
-func (ti *TableInfo) initPreSQLs() {
-	if ti == nil || ti.columnSchema == nil {
+func (ti *TableInfo) InitPrivateFields() {
+	if ti == nil {
 		return
 	}
 
@@ -142,10 +142,10 @@ func (ti *TableInfo) initPreSQLs() {
 
 // CloneWithRouting creates a shallow copy of TableInfo with routing applied.
 // The new TableInfo shares the same columnSchema, View, Sequence pointers
-// but has its own TableName (with TargetSchema/TargetTable set) and preSQLs.
+// but has its own TableName (with TargetSchema/TargetTable set) and uninitialized preSQLs.
 // This is safe because:
 // - columnSchema, View, Sequence are read-only after creation
-// - preSQLs will be initialized lazily using the new TableName
+// - preSQLs will be initialized later via InitPrivateFields() using the new TableName
 // - TableName is a value type that gets copied
 func (ti *TableInfo) CloneWithRouting(targetSchema, targetTable string) *TableInfo {
 	if ti == nil {
@@ -230,6 +230,7 @@ func UnmarshalJSONToTableInfo(data []byte) (*TableInfo, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	// when this tableInfo is released, we need to cut down the reference count of the columnSchema
 	// This function should be appear when tableInfo is created as a pair.
 	runtime.SetFinalizer(ti, func(ti *TableInfo) {
@@ -288,7 +289,6 @@ func (ti *TableInfo) GetUpdateTS() uint64 {
 }
 
 func (ti *TableInfo) GetPreInsertSQL() string {
-	ti.initPreSQLs()
 	if ti.preSQLs.m[preSQLInsert] == "" {
 		log.Panic("preSQLs[preSQLInsert] is not initialized")
 	}
@@ -296,7 +296,6 @@ func (ti *TableInfo) GetPreInsertSQL() string {
 }
 
 func (ti *TableInfo) GetPreReplaceSQL() string {
-	ti.initPreSQLs()
 	if ti.preSQLs.m[preSQLReplace] == "" {
 		log.Panic("preSQLs[preSQLReplace] is not initialized")
 	}
@@ -304,7 +303,6 @@ func (ti *TableInfo) GetPreReplaceSQL() string {
 }
 
 func (ti *TableInfo) GetPreUpdateSQL() string {
-	ti.initPreSQLs()
 	if ti.preSQLs.m[preSQLUpdate] == "" {
 		log.Panic("preSQLs[preSQLUpdate] is not initialized")
 	}
@@ -700,5 +698,7 @@ func WrapTableInfo(schemaName string, info *model.TableInfo) *TableInfo {
 // do not call this method on the production code.
 func NewTableInfo4Decoder(schema string, tableInfo *model.TableInfo) *TableInfo {
 	cs := NewColumnSchema4Decoder(tableInfo)
-	return NewTableInfo(schema, tableInfo.Name.O, tableInfo.ID, tableInfo.GetPartitionInfo() != nil, cs, tableInfo)
+	result := newTableInfo(schema, tableInfo.Name.O, tableInfo.ID, tableInfo.GetPartitionInfo() != nil, cs, tableInfo)
+	result.InitPrivateFields()
+	return result
 }

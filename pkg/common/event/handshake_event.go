@@ -205,5 +205,8 @@ func (e *HandshakeEvent) decodeV1(data []byte) error {
 		return err
 	}
 
+	// Initialize private fields after unmarshaling
+	e.TableInfo.InitPrivateFields()
+
 	return nil
 }

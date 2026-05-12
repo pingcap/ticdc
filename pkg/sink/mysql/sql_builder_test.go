@@ -185,6 +185,7 @@ func TestBuildInsert(t *testing.T) {
 func TestBuildDMLUsesRoutedTargetTable(t *testing.T) {
 	insert, deleteRow, updateRow, tableInfo := getRowForTest(t)
 	routedTableInfo := tableInfo.CloneWithRouting("target_db", "target_table")
+	routedTableInfo.InitPrivateFields()
 
 	insertSQL, _ := buildInsert(routedTableInfo, insert, false)
 	require.Contains(t, insertSQL, "INSERT INTO `target_db`.`target_table`")

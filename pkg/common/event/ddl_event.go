@@ -522,6 +522,13 @@ func (t *DDLEvent) decodeV1(data []byte) error {
 		return err
 	}
 
+	for _, info := range t.MultipleTableInfos {
+		info.InitPrivateFields()
+	}
+	if t.TableInfo != nil {
+		t.TableInfo.InitPrivateFields()
+	}
+
 	return nil
 }
 
