@@ -127,7 +127,6 @@ formatters:
 run:
   timeout: 10m
   tests: true
-  go: "1.25"
   concurrency: 4
 
 output:
