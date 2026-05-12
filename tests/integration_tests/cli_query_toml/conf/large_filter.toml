@@ -1,0 +1,15 @@
+[filter]
+  rules = [
+    "db_alpha.*",
+    "db_bravo.*",
+    "db_charlie.*",
+    "db_delta.*",
+    "db_echo.*",
+    "db_foxtrot.*",
+    "db_golf.*",
+    "db_hotel.*",
+    "db_india.*",
+    "db_juliet.*",
+    "db_kilo.*",
+    "db_lima.*",
+  ]

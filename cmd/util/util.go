@@ -23,6 +23,7 @@ import (
 	"syscall"
 
 	"github.com/BurntSushi/toml"
+	pelletier "github.com/pelletier/go-toml/v2"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/spf13/cobra"
@@ -151,6 +152,54 @@ func JSONPrint(cmd *cobra.Command, v interface{}) error {
 	}
 	cmd.Printf("%s\n", data)
 	return nil
+}
+
+// OutputFormat represents the output format type.
+type OutputFormat string
+
+const (
+	// OutputFormatJSON is the JSON output format.
+	OutputFormatJSON OutputFormat = "json"
+	// OutputFormatTOML is the TOML output format.
+	OutputFormatTOML OutputFormat = "toml"
+)
+
+// ParseOutputFormat parses an output format string (case-insensitive).
+func ParseOutputFormat(s string) (OutputFormat, error) {
+	switch strings.ToLower(s) {
+	case "json":
+		return OutputFormatJSON, nil
+	case "toml":
+		return OutputFormatTOML, nil
+	default:
+		return "", errors.Errorf("invalid output format '%s', must be 'json' or 'toml'", s)
+	}
+}
+
+// TOMLPrint outputs data in TOML format with indented tables and multi-line
+// arrays.
+func TOMLPrint(cmd *cobra.Command, v interface{}) error {
+	var buf strings.Builder
+	enc := pelletier.NewEncoder(&buf)
+	enc.SetArraysMultiline(true)
+	enc.SetIndentTables(true)
+	if err := enc.Encode(v); err != nil {
+		return errors.Trace(err)
+	}
+	cmd.Printf("%s", buf.String())
+	return nil
+}
+
+// FormatPrint outputs data in the specified format (JSON or TOML).
+func FormatPrint(cmd *cobra.Command, v interface{}, format OutputFormat) error {
+	switch format {
+	case OutputFormatJSON:
+		return JSONPrint(cmd, v)
+	case OutputFormatTOML:
+		return TOMLPrint(cmd, v)
+	default:
+		return errors.Errorf("unsupported output format: %s", format)
+	}
 }
 
 // Endpoint schemes.

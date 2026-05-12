@@ -1,0 +1,7 @@
+case-sensitive = true
+
+[mounter]
+  worker-num = 8
+
+[filter]
+  rules = ["test_db.*"]
