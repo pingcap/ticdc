@@ -2,6 +2,10 @@
 USE common_1;
 
 create database common;
+CREATE VIEW common.v AS
+SELECT id
+FROM users;
+
 create table a (a bigint primary key, b int);
 create table b like a;
 rename table a to common.c, b to a, common.c to b;
