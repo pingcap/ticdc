@@ -40,7 +40,7 @@ func (m *MockPDClient) UpdateServiceGCSafePoint(ctx context.Context, serviceID s
 }
 
 // GetTS implements pd.Client.GetTS.
-func (m *MockPDClient) GetTS(ctx context.Context) (int64, int64, error) {
+func (m *MockPDClient) GetTS(_ context.Context) (int64, int64, error) {
 	return oracle.GetPhysical(time.Now()), 0, nil
 }
 
@@ -49,7 +49,7 @@ func (m *MockPDClient) GetTS(ctx context.Context) (int64, int64, error) {
 func (m *MockPDClient) Close() {}
 
 // GetClusterID gets the cluster ID from PD.
-func (m *MockPDClient) GetClusterID(ctx context.Context) uint64 {
+func (m *MockPDClient) GetClusterID(_ context.Context) uint64 {
 	return m.ClusterID
 }
 
@@ -62,8 +62,8 @@ func (m *MockPDClient) GetAllStores(
 
 // LoadGlobalConfig loads global config from PD.
 func (m *MockPDClient) LoadGlobalConfig(
-	ctx context.Context,
-	names []string, configPath string,
+	_ context.Context,
+	_ []string, configPath string,
 ) ([]pd.GlobalConfigItem, int64, error) {
 	return []pd.GlobalConfigItem{
 		{

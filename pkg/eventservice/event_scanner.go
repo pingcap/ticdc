@@ -490,7 +490,7 @@ func (s *session) appendEvents(events []event.Event) {
 			batchDML := item.(*event.BatchDMLEvent)
 			s.eventBytes += int64(len(batchDML.DMLEvents))
 		} else {
-			s.eventBytes += 1
+			s.eventBytes++
 		}
 	}
 }

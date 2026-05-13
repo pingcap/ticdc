@@ -1047,7 +1047,7 @@ func (s *subscriptionClient) logSlowRegions(ctx context.Context) error {
 						zap.Any("slowRegion", attr.SlowestRegion))
 				}
 			} else if currTime.Sub(attr.SlowestRegion.Created) > 10*time.Minute {
-				slowInitializeRegion += 1
+				slowInitializeRegion++
 				log.Info("subscription client initializes a region too slow",
 					zap.Uint64("subscriptionID", uint64(subscriptionID)),
 					zap.Any("slowRegion", attr.SlowestRegion))

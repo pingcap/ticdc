@@ -27,8 +27,8 @@ type pulsarTopicManagerMock struct {
 
 // NewMockPulsarTopicManager creates a new topic manager.
 func NewMockPulsarTopicManager(
-	cfg *config.PulsarConfig,
-	client pulsar.Client,
+	_ *config.PulsarConfig,
+	_ pulsar.Client,
 ) (TopicManager, error) {
 	mgr := &pulsarTopicManagerMock{}
 	return mgr, nil

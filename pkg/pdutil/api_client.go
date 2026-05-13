@@ -188,9 +188,9 @@ func (pc *pdAPIClient) UpdateMetaLabel(ctx context.Context) error {
 		retry.WithBackoffMaxDelay(4000),
 		retry.WithIsRetryableErr(func(err error) bool {
 			if cerror.Is(errors.Cause(err), context.Canceled) {
-			return false
-		}
-		return true
+				return false
+			}
+			return true
 		}))
 	return err
 }

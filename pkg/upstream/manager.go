@@ -186,7 +186,7 @@ func (m *Manager) Close() {
 // Visit on each upstream, return error on the first
 func (m *Manager) Visit(visitor func(up *Upstream) error) error {
 	var err error
-	m.ups.Range(func(k, v interface{}) bool {
+	m.ups.Range(func(_, v interface{}) bool {
 		err = visitor(v.(*Upstream))
 		return err == nil
 	})

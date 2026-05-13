@@ -239,7 +239,7 @@ func csvMsg2RowChangedEvent(csvConfig *common.Config, csvMsg *csvMessage, tableI
 		e.RowTypes = append(e.RowTypes, commonType.RowTypeInsert)
 	}
 	e.Rows = chk
-	e.Length += 1
+	e.Length++
 	return e, nil
 }
 

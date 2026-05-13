@@ -271,7 +271,7 @@ func (t *TableDefinition) ToTableInfo() (*common.TableInfo, error) {
 			tidbTableInfo.PKIsHandle = true
 		}
 		tidbTableInfo.Columns = append(tidbTableInfo.Columns, tiCol)
-		nextMockID += 1
+		nextMockID++
 	}
 	info := common.NewTableInfo4Decoder(t.Schema, tidbTableInfo)
 	return info, nil

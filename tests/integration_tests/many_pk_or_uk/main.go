@@ -22,8 +22,8 @@ import (
 	"sync"
 
 	"github.com/pingcap/errors"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/log"
+	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/tests/integration_tests/util"
 )
 

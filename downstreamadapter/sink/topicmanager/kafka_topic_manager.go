@@ -173,7 +173,7 @@ func (m *kafkaTopicManager) fetchAllTopicsPartitionsNum(
 	ctx context.Context,
 ) (map[string]int32, error) {
 	var topics []string
-	m.topics.Range(func(key, value any) bool {
+	m.topics.Range(func(key, _ any) bool {
 		topics = append(topics, key.(string))
 		return true
 	})
