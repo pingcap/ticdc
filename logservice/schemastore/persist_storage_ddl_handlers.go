@@ -726,8 +726,8 @@ func setReferTableForCreateTableLike(event *PersistedDDLEvent, args buildPersist
 			zap.String("query", event.Query))
 		return
 	}
-	event.ExtraSchemaID = refSchemaID
-	event.ExtraSchemaName = refSchema
+	event.ExtraSchemaID = referSchemaInfo.schemaID
+	event.ExtraSchemaName = referSchemaInfo.schemaName
 	event.ExtraTableID = refTableID
 	if partitions, ok := args.partitionMap[refTableID]; ok {
 		event.ReferTablePartitionIDs = event.ReferTablePartitionIDs[:0]

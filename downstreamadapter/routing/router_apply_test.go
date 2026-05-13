@@ -748,6 +748,7 @@ func TestApplyToDDLEventRewritesCreateTableLikeWithSessionDefaultSchema(t *testi
 
 	helper.Tk().MustExec("USE `source_db`")
 	ddl := helper.DDL2Event("CREATE TABLE `source_extra_db`.`external_users` LIKE `users`")
+	require.Equal(t, "CREATE TABLE `source_extra_db`.`external_users` LIKE `source_db`.`users`", ddl.Query)
 	require.Equal(t, []event.SchemaTableName{{SchemaName: "source_db", TableName: "users"}}, ddl.BlockedTableNames)
 
 	routed := mustRouteDDL(t, router, ddl)
@@ -780,7 +781,7 @@ func TestRewriteParserBackedDDLQueryError(t *testing.T) {
 		TargetTable:  TablePlaceholder,
 	}})
 
-	_, err := router.rewriteSingleDDLQuery("INVALID SQL !!!", "", nil)
+	_, err := router.rewriteSingleDDLQuery("INVALID SQL !!!", "")
 	code, ok := errors.RFCCode(err)
 	require.True(t, ok)
 	require.Equal(t, errors.ErrTableRoutingFailed.RFCCode(), code)

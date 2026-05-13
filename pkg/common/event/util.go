@@ -345,8 +345,10 @@ func (s *EventTestHelper) fillDDLEventMetadata(ddlEvent *DDLEvent, job *timodel.
 		s.fillRenameTableEventMetadata(ddlEvent)
 	case timodel.ActionRenameTables:
 		s.fillRenameTablesEventMetadata(ddlEvent, job)
+	case timodel.ActionCreateView:
+		s.normalizeCreateViewQueryWithStoredSelect(ddlEvent)
 	case timodel.ActionCreateSchema, timodel.ActionModifySchemaCharsetAndCollate,
-		timodel.ActionCreateView, timodel.ActionDropView:
+		timodel.ActionDropView:
 	default:
 		if ddlEvent.SchemaName != "" && ddlEvent.TableName != "" {
 			ddlEvent.BlockedTableNames = []SchemaTableName{{SchemaName: ddlEvent.SchemaName, TableName: ddlEvent.TableName}}
@@ -373,10 +375,78 @@ func (s *EventTestHelper) fillCreateTableLikeBlockedTableNames(ddlEvent *DDLEven
 	if refSchema == "" {
 		return
 	}
+	if createStmt.ReferTable.Schema.O == "" && !strings.EqualFold(refSchema, ddlEvent.SchemaName) {
+		createStmt.ReferTable.Schema = ast.NewCIStr(refSchema)
+		query, err := Restore(createStmt)
+		require.NoError(s.t, err)
+		ddlEvent.Query = query
+	}
 	ddlEvent.BlockedTableNames = []SchemaTableName{{
 		SchemaName: refSchema,
 		TableName:  createStmt.ReferTable.Name.O,
 	}}
+}
+
+func (s *EventTestHelper) normalizeCreateViewQueryWithStoredSelect(ddlEvent *DDLEvent) {
+	if ddlEvent.Query == "" || ddlEvent.TableInfo == nil ||
+		ddlEvent.TableInfo.View == nil || ddlEvent.TableInfo.View.SelectStmt == "" {
+		return
+	}
+
+	stmt, err := parser.New().ParseOneStmt(ddlEvent.Query, "", "")
+	require.NoError(s.t, err)
+	createViewStmt, ok := stmt.(*ast.CreateViewStmt)
+	if !ok {
+		return
+	}
+
+	selectStmt, err := parser.New().ParseOneStmt(ddlEvent.TableInfo.View.SelectStmt, "", "")
+	require.NoError(s.t, err)
+	if createViewSelectUsesCurrentSchemaOnly(selectStmt, ddlEvent.SchemaName) {
+		return
+	}
+
+	createViewStmt.Select = selectStmt
+	query, err := Restore(createViewStmt)
+	require.NoError(s.t, err)
+	ddlEvent.Query = query
+}
+
+func createViewSelectUsesCurrentSchemaOnly(selectStmt ast.StmtNode, currentSchema string) bool {
+	for _, schema := range extractTableSchemas(selectStmt) {
+		if schema != "" && !strings.EqualFold(schema, currentSchema) {
+			return false
+		}
+	}
+	return true
+}
+
+type tableSchemaExtractor struct {
+	schemas []string
+}
+
+func (e *tableSchemaExtractor) Enter(in ast.Node) (ast.Node, bool) {
+	if t, ok := in.(*ast.TableName); ok {
+		e.schemas = append(e.schemas, t.Schema.O)
+		return in, true
+	}
+	return in, false
+}
+
+func (e *tableSchemaExtractor) Leave(in ast.Node) (ast.Node, bool) {
+	return in, true
+}
+
+func extractTableSchemas(node ast.Node) []string {
+	if node == nil {
+		return nil
+	}
+
+	extractor := &tableSchemaExtractor{
+		schemas: make([]string, 0),
+	}
+	node.Accept(extractor)
+	return extractor.schemas
 }
 
 // FindCreateTableLikeReferSchema resolves the schema of the table referenced by a

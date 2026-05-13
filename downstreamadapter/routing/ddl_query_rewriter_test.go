@@ -388,7 +388,7 @@ func TestResolveDDL(t *testing.T) {
 		require.NoError(t, err)
 
 		// Test rewriteDDLStmtTables
-		targetSQL, err := rewriteDDLStmtTables(stmts[0], ca.targetTableNames[0])
+		targetSQL, err := rewriteDDLStmtTables(stmts[0], ca.expectedTableNames[0], ca.targetTableNames[0])
 		require.NoError(t, err, "rewriteDDLStmtTables failed for: %s", ca.sql)
 		require.Equal(t, ca.targetSQLs[0], targetSQL, "rewriteDDLStmtTables failed for: %s", ca.sql)
 	}
@@ -415,28 +415,28 @@ func TestRewriteDDLStmtTablesError(t *testing.T) {
 	t.Run("non ddl statement", func(t *testing.T) {
 		stmts, _, err := p.Parse("SELECT 1", "", "")
 		require.NoError(t, err)
-		_, err = rewriteDDLStmtTables(stmts[0], []commonEvent.SchemaTableName{})
+		_, err = rewriteDDLStmtTables(stmts[0], extractTableNames(stmts[0]), []commonEvent.SchemaTableName{})
 		require.True(t, errors.ErrTableRoutingFailed.Equal(err))
 	})
 
 	t.Run("unexpected target table count for alter database", func(t *testing.T) {
 		stmts, _, err := p.Parse("ALTER DATABASE `test` CHARACTER SET utf8mb4", "", "")
 		require.NoError(t, err)
-		_, err = rewriteDDLStmtTables(stmts[0], []commonEvent.SchemaTableName{{}, {}})
+		_, err = rewriteDDLStmtTables(stmts[0], extractTableNames(stmts[0]), []commonEvent.SchemaTableName{{}, {}})
 		require.True(t, errors.ErrTableRoutingFailed.Equal(err))
 	})
 
 	t.Run("too few target tables", func(t *testing.T) {
 		stmts, _, err := p.Parse("RENAME TABLE `db1`.`t1` TO `db2`.`t2`", "", "")
 		require.NoError(t, err)
-		_, err = rewriteDDLStmtTables(stmts[0], []commonEvent.SchemaTableName{{SchemaName: "db1", TableName: "t1"}})
+		_, err = rewriteDDLStmtTables(stmts[0], extractTableNames(stmts[0]), []commonEvent.SchemaTableName{{SchemaName: "db1", TableName: "t1"}})
 		require.True(t, errors.ErrTableRoutingFailed.Equal(err))
 	})
 
 	t.Run("too many target tables", func(t *testing.T) {
 		stmts, _, err := p.Parse("CREATE TABLE `t1` (id INT)", "", "")
 		require.NoError(t, err)
-		_, err = rewriteDDLStmtTables(stmts[0], []commonEvent.SchemaTableName{{}, {}, {}})
+		_, err = rewriteDDLStmtTables(stmts[0], extractTableNames(stmts[0]), []commonEvent.SchemaTableName{{}, {}, {}})
 		require.True(t, errors.ErrTableRoutingFailed.Equal(err))
 	})
 }
@@ -500,7 +500,7 @@ func TestRewriteParserBackedDDLQueryWithSemicolonsInLiteralsAndComments(t *testi
 	}
 }
 
-func TestRewriteParserBackedDDLQueryRejectsAmbiguousUnqualifiedReferences(t *testing.T) {
+func TestRewriteParserBackedDDLQueryUsesEventSchemaForUnqualifiedReferences(t *testing.T) {
 	t.Parallel()
 
 	router := newTestRouter(t, false, []*config.DispatchRule{
@@ -517,20 +517,24 @@ func TestRewriteParserBackedDDLQueryRejectsAmbiguousUnqualifiedReferences(t *tes
 	})
 
 	tests := []struct {
-		name  string
-		query string
+		name     string
+		query    string
+		expected string
 	}{
 		{
-			name:  "create table like",
-			query: "CREATE TABLE `source_extra_db`.`external_users` LIKE `users`",
+			name:     "create table like",
+			query:    "CREATE TABLE `source_db`.`external_users` LIKE `users`",
+			expected: "CREATE TABLE `target_db`.`external_users` LIKE `target_db`.`users`",
 		},
 		{
-			name:  "create table as select",
-			query: "CREATE TABLE `source_extra_db`.`external_users` AS SELECT * FROM `users`",
+			name:     "create table as select",
+			query:    "CREATE TABLE `source_db`.`external_users` AS SELECT * FROM `users`",
+			expected: "CREATE TABLE `target_db`.`external_users` AS SELECT * FROM `target_db`.`users`",
 		},
 		{
-			name:  "create view as select",
-			query: "CREATE VIEW `source_extra_db`.`external_users` AS SELECT * FROM `users`",
+			name:     "create view as select",
+			query:    "CREATE VIEW `source_db`.`external_users` AS SELECT * FROM `users`",
+			expected: "CREATE ALGORITHM = UNDEFINED DEFINER = CURRENT_USER SQL SECURITY DEFINER VIEW `target_db`.`external_users` AS SELECT * FROM `target_db`.`users`",
 		},
 	}
 
@@ -539,18 +543,18 @@ func TestRewriteParserBackedDDLQueryRejectsAmbiguousUnqualifiedReferences(t *tes
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			_, err := router.rewriteParserBackedDDLQuery(&commonEvent.DDLEvent{
-				SchemaName: "source_extra_db",
+			newQuery, err := router.rewriteParserBackedDDLQuery(&commonEvent.DDLEvent{
+				SchemaName: "source_db",
 				TableName:  "external_users",
 				Query:      tc.query,
 			})
-			require.True(t, errors.ErrTableRoutingFailed.Equal(err))
-			require.Contains(t, err.Error(), "unqualified referenced table")
+			require.NoError(t, err)
+			require.Equal(t, tc.expected, newQuery)
 		})
 	}
 }
 
-func TestRewriteParserBackedDDLQueryUsesBlockedTableNamesForCreateTableLike(t *testing.T) {
+func TestRewriteParserBackedDDLQueryUsesQuerySchemaForCreateTableLike(t *testing.T) {
 	t.Parallel()
 
 	router := newTestRouter(t, false, []*config.DispatchRule{
@@ -569,8 +573,8 @@ func TestRewriteParserBackedDDLQueryUsesBlockedTableNamesForCreateTableLike(t *t
 	newQuery, err := router.rewriteParserBackedDDLQuery(&commonEvent.DDLEvent{
 		SchemaName:        "source_extra_db",
 		TableName:         "external_users",
-		Query:             "CREATE TABLE `source_extra_db`.`external_users` LIKE `users`",
-		BlockedTableNames: []commonEvent.SchemaTableName{{SchemaName: "source_db", TableName: "users"}},
+		Query:             "CREATE TABLE `source_extra_db`.`external_users` LIKE `source_db`.`users`",
+		BlockedTableNames: []commonEvent.SchemaTableName{{SchemaName: "source_extra_db", TableName: "users"}},
 	})
 	require.NoError(t, err)
 	require.Equal(t, "CREATE TABLE `target_extra_db`.`external_users` LIKE `target_db`.`users`", newQuery)

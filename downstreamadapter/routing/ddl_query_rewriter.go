@@ -41,7 +41,7 @@ func (r Router) rewriteParserBackedDDLQuery(ddl *commonEvent.DDLEvent) (string, 
 	)
 	for i := range queries {
 		query := queries[i]
-		newQuery, err := r.rewriteSingleDDLQuery(query, ddl.GetSchemaName(), ddl.BlockedTableNames)
+		newQuery, err := r.rewriteSingleDDLQuery(query, ddl.GetSchemaName())
 		if err != nil {
 			return "", err
 		}
@@ -81,7 +81,6 @@ func splitMultiStmtDDLQuery(query string) ([]string, error) {
 func (r Router) rewriteSingleDDLQuery(
 	query string,
 	defaultSchema string,
-	blockedTableNames []commonEvent.SchemaTableName,
 ) (string, error) {
 	p := parser.New()
 	stmt, err := p.ParseOneStmt(query, "", "")
@@ -92,9 +91,6 @@ func (r Router) rewriteSingleDDLQuery(
 	sourceTables := extractTableNames(stmt)
 	if len(sourceTables) == 0 {
 		return query, nil
-	}
-	if err := resolveUnqualifiedReferences(stmt, sourceTables, blockedTableNames); err != nil {
-		return "", err
 	}
 	fillDefaultSchema(sourceTables, defaultSchema)
 
@@ -120,7 +116,7 @@ func (r Router) rewriteSingleDDLQuery(
 		return query, nil
 	}
 
-	newQuery, err := rewriteDDLStmtTables(stmt, targetTables)
+	newQuery, err := rewriteDDLStmtTables(stmt, sourceTables, targetTables)
 	if err != nil {
 		return "", err
 	}
@@ -137,101 +133,6 @@ func fillDefaultSchema(tables []commonEvent.SchemaTableName, defaultSchema strin
 			tables[i].SchemaName = defaultSchema
 		}
 	}
-}
-
-// resolveUnqualifiedReferences ensures every table reference extracted from
-// the DDL AST carries a non-empty schema name before the router applies
-// routing rules. Without this, fillDefaultSchema would later assign the DDL
-// event's own schema to every unqualified table, which is wrong when a table
-// belongs to a different schema than the DDL target.
-//
-// It handles two DDL patterns where the parser sees multiple tables and at
-// least one reference may lack a schema qualifier:
-//
-// CREATE TABLE LIKE (ast.CreateTableStmt with non-nil ReferTable):
-//
-//	The ReferTable is the LIKE source. If it has no schema, the router needs
-//	to know which schema the source table lives in. The blockedTableNames
-//	parameter carries upstream metadata (e.g. from job.InvolvingSchemaInfo)
-//	that maps the unqualified table name to its real schema.
-//
-//	Example:
-//	  -- Session is in source_extra_db, DDL creates a table in source_extra_db
-//	  -- but the LIKE source "users" belongs to source_db.
-//	  CREATE TABLE `source_extra_db`.`external_users` LIKE `users`
-//	  -> extractTableNames -> [{source_extra_db, external_users}, {"", users}]
-//	  -> fillDefaultSchema would wrongly set users' schema to source_extra_db
-//	  -> blockedTableNames carries {source_db, users} from upstream metadata
-//	  -> this function patches sourceTables[1].SchemaName = "source_db"
-//
-// CREATE TABLE AS SELECT / CREATE VIEW (ast.CreateTableStmt with non-nil
-//
-//	Select, or ast.CreateViewStmt):
-//	The SELECT body may reference tables from other schemas without
-//	qualifiers. Without upstream schema metadata for every referenced table,
-//	the router cannot safely determine the correct schema and must reject
-//	the rewrite.
-//
-//	Example:
-//	  CREATE VIEW `target_db`.`v` AS SELECT `id` FROM `users`
-//	  -> extractTableNames -> [{target_db, v}, {"", users}]
-//	  -> fillDefaultSchema would set users' schema to "target_db" (wrong)
-//	  -> no metadata available to resolve, return ErrTableRoutingFailed
-//
-// For DDLs where the target table itself has no schema qualifier (e.g. USE
-// db + CREATE TABLE t LIKE u), fillDefaultSchema handles both the target
-// and source correctly because they all belong to the same session schema.
-func resolveUnqualifiedReferences(
-	stmt ast.StmtNode,
-	sourceTables []commonEvent.SchemaTableName,
-	blockedTableNames []commonEvent.SchemaTableName,
-) error {
-	switch s := stmt.(type) {
-	case *ast.CreateTableStmt:
-		if s.Table == nil || s.Table.Schema.O == "" {
-			return nil
-		}
-
-		if s.ReferTable != nil && s.ReferTable.Schema.O == "" && s.ReferTable.Name.O != "" {
-			for _, blockedTableName := range blockedTableNames {
-				if blockedTableName.SchemaName != "" &&
-					strings.EqualFold(blockedTableName.TableName, s.ReferTable.Name.O) &&
-					len(sourceTables) > 1 {
-					sourceTables[1].SchemaName = blockedTableName.SchemaName
-					break
-				}
-			}
-			if len(sourceTables) <= 1 || sourceTables[1].SchemaName == "" {
-				return errors.ErrTableRoutingFailed.GenWithStack(
-					"table routing cannot rewrite ddl with unqualified referenced table because upstream default schema is unavailable: %T",
-					stmt)
-			}
-		}
-		if s.Select != nil && hasUnqualifiedTableName(sourceTables[1:]) {
-			return errors.ErrTableRoutingFailed.GenWithStack(
-				"table routing cannot rewrite ddl with unqualified referenced table because upstream default schema is unavailable: %T",
-				stmt)
-		}
-	case *ast.CreateViewStmt:
-		if s.ViewName == nil || s.ViewName.Schema.O == "" {
-			return nil
-		}
-		if hasUnqualifiedTableName(sourceTables[1:]) {
-			return errors.ErrTableRoutingFailed.GenWithStack(
-				"table routing cannot rewrite ddl with unqualified referenced table because upstream default schema is unavailable: %T",
-				stmt)
-		}
-	}
-	return nil
-}
-
-func hasUnqualifiedTableName(tables []commonEvent.SchemaTableName) bool {
-	for _, table := range tables {
-		if table.SchemaName == "" && table.TableName != "" {
-			return true
-		}
-	}
-	return false
 }
 
 // tableNameExtractor extracts table names from DDL AST nodes.
@@ -284,6 +185,12 @@ func extractTableNames(stmt ast.StmtNode) []commonEvent.SchemaTableName {
 type tableRenameVisitor struct {
 	// targetNames contains routed names aligned with tableNameExtractor output.
 	targetNames []commonEvent.SchemaTableName
+	// targetByQualifiedSource maps qualified source table names to routed names.
+	targetByQualifiedSource map[string]commonEvent.SchemaTableName
+	// targetByTable maps unambiguous source table names to routed names.
+	targetByTable map[string]commonEvent.SchemaTableName
+	// ambiguousTables records source table names that appear under multiple schemas.
+	ambiguousTables map[string]struct{}
 	// i is the next targetNames index to consume.
 	i int
 	// hasErr records targetNames exhaustion because ast.Visitor cannot return an error.
@@ -304,6 +211,10 @@ func (v *tableRenameVisitor) Enter(in ast.Node) (ast.Node, bool) {
 		v.i++
 		return in, true
 	}
+	if c, ok := in.(*ast.ColumnName); ok {
+		v.rewriteColumnName(c)
+		return in, true
+	}
 	return in, false
 }
 
@@ -314,10 +225,80 @@ func (v *tableRenameVisitor) Leave(in ast.Node) (ast.Node, bool) {
 	return in, true
 }
 
+func (v *tableRenameVisitor) rewriteColumnName(c *ast.ColumnName) {
+	if c == nil || c.Table.O == "" {
+		return
+	}
+
+	if c.Schema.O != "" {
+		target, ok := v.targetByQualifiedSource[qualifiedTableKey(c.Schema.O, c.Table.O)]
+		if !ok {
+			return
+		}
+		c.Schema = ast.NewCIStr(target.SchemaName)
+		c.Table = ast.NewCIStr(target.TableName)
+		return
+	}
+
+	tableKey := strings.ToLower(c.Table.O)
+	if _, ambiguous := v.ambiguousTables[tableKey]; ambiguous {
+		return
+	}
+	target, ok := v.targetByTable[tableKey]
+	if !ok {
+		return
+	}
+	c.Schema = ast.NewCIStr(target.SchemaName)
+	c.Table = ast.NewCIStr(target.TableName)
+}
+
+func newTableRenameVisitor(
+	sourceTables []commonEvent.SchemaTableName,
+	targetTables []commonEvent.SchemaTableName,
+) *tableRenameVisitor {
+	visitor := &tableRenameVisitor{
+		targetNames:             targetTables,
+		targetByQualifiedSource: make(map[string]commonEvent.SchemaTableName, len(sourceTables)),
+		targetByTable:           make(map[string]commonEvent.SchemaTableName, len(sourceTables)),
+		ambiguousTables:         make(map[string]struct{}),
+	}
+
+	for i, source := range sourceTables {
+		if i >= len(targetTables) || source.TableName == "" {
+			continue
+		}
+		target := targetTables[i]
+		if source.SchemaName != "" {
+			visitor.targetByQualifiedSource[qualifiedTableKey(source.SchemaName, source.TableName)] = target
+		}
+
+		tableKey := strings.ToLower(source.TableName)
+		if existing, ok := visitor.targetByTable[tableKey]; ok &&
+			(!strings.EqualFold(existing.SchemaName, target.SchemaName) ||
+				!strings.EqualFold(existing.TableName, target.TableName)) {
+			visitor.ambiguousTables[tableKey] = struct{}{}
+			delete(visitor.targetByTable, tableKey)
+			continue
+		}
+		if _, ambiguous := visitor.ambiguousTables[tableKey]; !ambiguous {
+			visitor.targetByTable[tableKey] = target
+		}
+	}
+	return visitor
+}
+
+func qualifiedTableKey(schema, table string) string {
+	return strings.ToLower(schema) + "\x00" + strings.ToLower(table)
+}
+
 // rewriteDDLStmtTables renames tables in DDL by given `targetTables`.
-// Argument `targetTables` should have the same structure as the return value of extractTableNames.
+// Arguments `sourceTables` and `targetTables` should have the same structure as the return value of extractTableNames.
 // Returned DDL is formatted like StringSingleQuotes, KeyWordUppercase and NameBackQuotes.
-func rewriteDDLStmtTables(stmt ast.StmtNode, targetTables []commonEvent.SchemaTableName) (string, error) {
+func rewriteDDLStmtTables(
+	stmt ast.StmtNode,
+	sourceTables []commonEvent.SchemaTableName,
+	targetTables []commonEvent.SchemaTableName,
+) (string, error) {
 	if _, ok := stmt.(ast.DDLNode); !ok {
 		return "", errors.ErrTableRoutingFailed.GenWithStack(
 			"rewrite ddl query got non ddl statement: %T", stmt)
@@ -343,9 +324,7 @@ func rewriteDDLStmtTables(stmt ast.StmtNode, targetTables []commonEvent.SchemaTa
 		}
 		v.Name = ast.NewCIStr(targetTables[0].SchemaName)
 	default:
-		visitor := &tableRenameVisitor{
-			targetNames: targetTables,
-		}
+		visitor := newTableRenameVisitor(sourceTables, targetTables)
 		stmt.Accept(visitor)
 		if visitor.hasErr {
 			return "", errors.ErrTableRoutingFailed.GenWithStack(

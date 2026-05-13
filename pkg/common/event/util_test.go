@@ -153,8 +153,22 @@ func TestDDL2EventFillsCreateTableLikeMetadata(t *testing.T) {
 	helper.Tk().MustExec("USE `test_db`")
 	ddlEvent = helper.DDL2Event("CREATE TABLE `extra_db`.`dst` LIKE `src`")
 
+	require.Equal(t, "CREATE TABLE `extra_db`.`dst` LIKE `test_db`.`src`", ddlEvent.Query)
 	require.Equal(t, []SchemaTableName{{SchemaName: "test_db", TableName: "src"}}, ddlEvent.BlockedTableNames)
 	require.Equal(t, []SchemaTableName{{SchemaName: "extra_db", TableName: "dst"}}, ddlEvent.TableNameChange.AddName)
+}
+
+func TestDDL2EventNormalizesCrossSchemaCreateView(t *testing.T) {
+	helper := NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("CREATE DATABASE `test_db`")
+	helper.Tk().MustExec("CREATE DATABASE `extra_db`")
+	helper.Tk().MustExec("CREATE TABLE `test_db`.`src` (`id` INT PRIMARY KEY)")
+	helper.Tk().MustExec("USE `test_db`")
+	ddlEvent := helper.DDL2Event("CREATE VIEW `extra_db`.`v` AS SELECT `id` FROM `src`")
+
+	require.Contains(t, ddlEvent.Query, "FROM `test_db`.`src`")
 }
 
 func TestDDL2EventFillsRenameTableMetadata(t *testing.T) {
