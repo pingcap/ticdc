@@ -23,6 +23,7 @@ import (
 	"os/signal"
 	"runtime/debug"
 	"syscall"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/pingcap/log"
@@ -61,6 +62,9 @@ func main() {
 	flag.StringVar(&consumerOption.ca, "ca", "", "CA certificate path for Kafka SSL connection")
 	flag.StringVar(&consumerOption.cert, "cert", "", "Certificate path for Kafka SSL connection")
 	flag.StringVar(&consumerOption.key, "key", "", "Private key path for Kafka SSL connection")
+	flag.BoolVar(&consumerOption.enableSyncpoint, "enable-syncpoint", false, "enable periodic aligned syncpoint records in downstream")
+	flag.DurationVar(&consumerOption.syncpointInterval, "syncpoint-interval", 10*time.Minute, "interval used to align downstream syncpoint records")
+	flag.DurationVar(&consumerOption.syncpointRetention, "syncpoint-retention", 24*time.Hour, "retention used to clean old downstream syncpoint records")
 	flag.Parse()
 
 	err := logger.InitLogger(&logger.Config{

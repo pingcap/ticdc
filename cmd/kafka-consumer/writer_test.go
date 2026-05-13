@@ -15,7 +15,9 @@ package main
 
 import (
 	"context"
+	"strconv"
 	"testing"
+	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/golang/mock/gomock"
@@ -29,6 +31,7 @@ import (
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
+	"github.com/tikv/client-go/v2/oracle"
 )
 
 func newMockSink(t *testing.T) (*sinkmock.MockSink, *[]string) {
@@ -47,6 +50,42 @@ func newMockSink(t *testing.T) (*sinkmock.MockSink, *[]string) {
 	}).AnyTimes()
 
 	return s, &ddls
+}
+
+type recordingSyncpointStore struct {
+	writes  []uint64
+	actions *[]string
+}
+
+func (s *recordingSyncpointStore) Init(ctx context.Context) (uint64, error) {
+	return 0, nil
+}
+
+func (s *recordingSyncpointStore) Write(ctx context.Context, primaryTs uint64) error {
+	s.writes = append(s.writes, primaryTs)
+	if s.actions != nil {
+		*s.actions = append(*s.actions, "syncpoint:"+strconv.FormatUint(primaryTs, 10))
+	}
+	return nil
+}
+
+func (s *recordingSyncpointStore) Close() error {
+	return nil
+}
+
+func newActionMockSink(t *testing.T, actions *[]string) *sinkmock.MockSink {
+	t.Helper()
+
+	ctrl := gomock.NewController(t)
+	s := sinkmock.NewMockSink(ctrl)
+	s.EXPECT().AddDMLEvent(gomock.Any()).AnyTimes()
+	s.EXPECT().WriteBlockEvent(gomock.Any()).DoAndReturn(func(event commonEvent.BlockEvent) error {
+		if ddl, ok := event.(*commonEvent.DDLEvent); ok {
+			*actions = append(*actions, "ddl:"+ddl.Query)
+		}
+		return nil
+	}).AnyTimes()
+	return s
 }
 
 func TestWriterWrite_executesIndependentCreateTableWithoutWatermark(t *testing.T) {
@@ -266,6 +305,83 @@ func TestWriterWrite_handlesOutOfOrderDDLsByCommitTs(t *testing.T) {
 	}, *ddls)
 	require.Len(t, w.ddlList, 1)
 	require.Equal(t, "CREATE TABLE `common_1`.`a` (`a` BIGINT PRIMARY KEY,`b` INT)", w.ddlList[0].Query)
+}
+
+func TestWriterWrite_consumerSyncpointWritesOnceAtAlignedWatermark(t *testing.T) {
+	ctx := context.Background()
+	actions := make([]string, 0)
+	store := &recordingSyncpointStore{actions: &actions}
+	s := newActionMockSink(t, &actions)
+	syncpointTs := oracle.GoTimeToTS(time.Unix(10, 0))
+	w := &writer{
+		progresses: []*partitionProgress{
+			{partition: 0, watermark: syncpointTs},
+			{partition: 1, watermark: syncpointTs},
+		},
+		mysqlSink:              s,
+		syncpointEnabled:       true,
+		syncpointInterval:      time.Second,
+		nextSyncpointTs:        syncpointTs,
+		consumerSyncpointStore: store,
+		lastSyncedSyncpointTs:  0,
+		ddlList:                make([]*commonEvent.DDLEvent, 0),
+		ddlWithMaxCommitTs:     make(map[int64]uint64),
+		enableTableAcrossNodes: false,
+		partitionTableAccessor: codecCommon.NewPartitionTableAccessor(),
+	}
+
+	w.Write(ctx, codecCommon.MessageTypeResolved)
+	w.Write(ctx, codecCommon.MessageTypeResolved)
+
+	require.Equal(t, []uint64{syncpointTs}, store.writes)
+	require.Equal(t, []string{"syncpoint:" + strconv.FormatUint(syncpointTs, 10)}, actions)
+	require.Equal(t, syncpointTs, w.lastSyncedSyncpointTs)
+	require.Greater(t, w.nextSyncpointTs, syncpointTs)
+}
+
+func TestWriterWrite_consumerSyncpointPreservesDDLOrdering(t *testing.T) {
+	ctx := context.Background()
+	actions := make([]string, 0)
+	store := &recordingSyncpointStore{actions: &actions}
+	s := newActionMockSink(t, &actions)
+	firstSyncpointTs := oracle.GoTimeToTS(time.Unix(10, 0))
+	ddlTs := oracle.GoTimeToTS(time.Unix(10, int64(500*time.Millisecond)))
+	secondSyncpointTs := oracle.GoTimeToTS(time.Unix(11, 0))
+	w := &writer{
+		progresses: []*partitionProgress{
+			{partition: 0, watermark: secondSyncpointTs},
+			{partition: 1, watermark: secondSyncpointTs},
+		},
+		mysqlSink:              s,
+		syncpointEnabled:       true,
+		syncpointInterval:      time.Second,
+		nextSyncpointTs:        firstSyncpointTs,
+		consumerSyncpointStore: store,
+		ddlList: []*commonEvent.DDLEvent{
+			{
+				Query:      "ALTER TABLE `test`.`t` ADD COLUMN `c` INT",
+				SchemaName: "test",
+				TableName:  "t",
+				Type:       byte(timodel.ActionAddColumn),
+				FinishedTs: ddlTs,
+				BlockedTables: &commonEvent.InfluencedTables{
+					InfluenceType: commonEvent.InfluenceTypeNormal,
+					TableIDs:      []int64{1},
+				},
+			},
+		},
+		ddlWithMaxCommitTs: make(map[int64]uint64),
+	}
+
+	w.Write(ctx, codecCommon.MessageTypeResolved)
+
+	require.Equal(t, []string{
+		"syncpoint:" + strconv.FormatUint(firstSyncpointTs, 10),
+		"ddl:ALTER TABLE `test`.`t` ADD COLUMN `c` INT",
+		"syncpoint:" + strconv.FormatUint(secondSyncpointTs, 10),
+	}, actions)
+	require.Empty(t, w.ddlList)
+	require.Equal(t, []uint64{firstSyncpointTs, secondSyncpointTs}, store.writes)
 }
 
 func TestAppendRow2Group_DoesNotDropCommitTsFallbackBeforeApplied(t *testing.T) {

@@ -35,6 +35,7 @@ import (
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/ast"
+	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
@@ -89,6 +90,12 @@ type writer struct {
 	maxBatchSize           int
 	mysqlSink              sink.Sink
 	enableTableAcrossNodes bool
+
+	syncpointEnabled       bool
+	syncpointInterval      time.Duration
+	nextSyncpointTs        uint64
+	lastSyncedSyncpointTs  uint64
+	consumerSyncpointStore consumerSyncpointStore
 }
 
 func newWriter(ctx context.Context, o *option) *writer {
@@ -101,6 +108,8 @@ func newWriter(ctx context.Context, o *option) *writer {
 		ddlList:                make([]*commonEvent.DDLEvent, 0),
 		ddlWithMaxCommitTs:     make(map[int64]uint64),
 		enableTableAcrossNodes: o.enableTableAcrossNodes,
+		syncpointEnabled:       o.enableSyncpoint,
+		syncpointInterval:      o.syncpointInterval,
 	}
 	var (
 		db  *sql.DB
@@ -141,10 +150,41 @@ func newWriter(ctx context.Context, o *option) *writer {
 	if err != nil {
 		log.Panic("cannot create the mysql sink", zap.Error(err))
 	}
+	if o.enableSyncpoint {
+		store, err := newMySQLConsumerSyncpointStore(ctx, consumerSyncpointStoreConfig{
+			downstreamURI: o.downstreamURI,
+			consumerID:    o.groupID,
+			topic:         o.topic,
+			retention:     o.syncpointRetention,
+		})
+		if err != nil {
+			log.Panic("cannot create consumer syncpoint store", zap.Error(err))
+		}
+		lastSyncpointTs, err := store.Init(ctx)
+		if err != nil {
+			log.Panic("cannot initialize consumer syncpoint store", zap.Error(err))
+		}
+		w.consumerSyncpointStore = store
+		w.lastSyncedSyncpointTs = lastSyncpointTs
+		if lastSyncpointTs > 0 {
+			w.nextSyncpointTs = nextAlignedSyncpointTs(lastSyncpointTs, o.syncpointInterval)
+		}
+		log.Info("consumer syncpoint initialized",
+			zap.Uint64("lastSyncedSyncpointTs", w.lastSyncedSyncpointTs),
+			zap.Uint64("nextSyncpointTs", w.nextSyncpointTs),
+			zap.Duration("syncpointInterval", o.syncpointInterval))
+	}
 	return w
 }
 
 func (w *writer) run(ctx context.Context) error {
+	if w.consumerSyncpointStore != nil {
+		defer func() {
+			if err := w.consumerSyncpointStore.Close(); err != nil {
+				log.Warn("close consumer syncpoint store failed", zap.Error(err))
+			}
+		}()
+	}
 	return w.mysqlSink.Run(ctx)
 }
 
@@ -286,6 +326,10 @@ func (w *writer) globalWatermark() uint64 {
 }
 
 func (w *writer) flushDMLEventsByWatermark(ctx context.Context) error {
+	return w.flushDMLEventsByTargetTs(ctx, w.globalWatermark())
+}
+
+func (w *writer) flushDMLEventsByTargetTs(ctx context.Context, targetTs uint64) error {
 	var (
 		done = make(chan struct{}, 1)
 
@@ -293,7 +337,6 @@ func (w *writer) flushDMLEventsByWatermark(ctx context.Context) error {
 		flushed atomic.Int64
 	)
 
-	watermark := w.globalWatermark()
 	resolvedEvents := make([]*commonEvent.DMLEvent, 0)
 	// resolvedGroups records which EventsGroup has flushed events so we can
 	// advance its AppliedWatermark after the flush is fully finished.
@@ -304,7 +347,7 @@ func (w *writer) flushDMLEventsByWatermark(ctx context.Context) error {
 	for _, p := range w.progresses {
 		for _, group := range p.eventsGroup {
 			before := len(resolvedEvents)
-			resolvedEvents = group.ResolveInto(watermark, resolvedEvents)
+			resolvedEvents = group.ResolveInto(targetTs, resolvedEvents)
 			resolvedCount := len(resolvedEvents) - before
 			if resolvedCount == 0 {
 				continue
@@ -334,7 +377,7 @@ func (w *writer) flushDMLEventsByWatermark(ctx context.Context) error {
 			zap.Uint64("commitTs", e.GetCommitTs()), zap.Any("startTs", e.GetStartTs()))
 	}
 
-	log.Info("flush DML events by watermark", zap.Uint64("watermark", watermark), zap.Int("total", total))
+	log.Info("flush DML events by watermark", zap.Uint64("watermark", targetTs), zap.Int("total", total))
 	start := time.Now()
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
@@ -343,7 +386,7 @@ func (w *writer) flushDMLEventsByWatermark(ctx context.Context) error {
 		case <-ctx.Done():
 			return context.Cause(ctx)
 		case <-done:
-			log.Info("flush DML events done", zap.Uint64("watermark", watermark),
+			log.Info("flush DML events done", zap.Uint64("watermark", targetTs),
 				zap.Int("total", total), zap.Duration("duration", time.Since(start)))
 			for _, item := range resolvedGroups {
 				if item.maxCommitTs > item.group.AppliedWatermark {
@@ -352,10 +395,62 @@ func (w *writer) flushDMLEventsByWatermark(ctx context.Context) error {
 			}
 			return nil
 		case <-ticker.C:
-			log.Warn("DML events cannot be flushed in time", zap.Uint64("watermark", watermark),
+			log.Warn("DML events cannot be flushed in time", zap.Uint64("watermark", targetTs),
 				zap.Int("total", total), zap.Int64("flushed", flushed.Load()))
 		}
 	}
+}
+
+func (w *writer) flushDDLEventsUpTo(ctx context.Context, targetTs uint64) {
+	if len(w.ddlList) > 1 {
+		sort.SliceStable(w.ddlList, func(i, j int) bool {
+			return w.ddlList[i].GetCommitTs() < w.ddlList[j].GetCommitTs()
+		})
+	}
+	remaining := make([]*commonEvent.DDLEvent, 0, len(w.ddlList))
+	for _, ddl := range w.ddlList {
+		if ddl.GetCommitTs() > targetTs {
+			remaining = append(remaining, ddl)
+			continue
+		}
+		if err := w.flushDDLEvent(ctx, ddl); err != nil {
+			log.Panic("write DDL event failed", zap.Error(err),
+				zap.String("DDL", ddl.Query), zap.Uint64("commitTs", ddl.GetCommitTs()))
+		}
+	}
+	w.ddlList = remaining
+}
+
+func (w *writer) maybeFlushConsumerSyncpoint(ctx context.Context, watermark uint64) error {
+	if !w.syncpointEnabled || w.consumerSyncpointStore == nil || w.syncpointInterval <= 0 || watermark == 0 {
+		return nil
+	}
+	if w.nextSyncpointTs == 0 {
+		w.nextSyncpointTs = calculateFloorAlignedSyncpointTs(watermark, w.syncpointInterval)
+		if w.nextSyncpointTs == 0 {
+			return nil
+		}
+	}
+	for w.nextSyncpointTs != 0 && w.nextSyncpointTs <= watermark {
+		targetTs := w.nextSyncpointTs
+		if targetTs <= w.lastSyncedSyncpointTs {
+			w.nextSyncpointTs = nextAlignedSyncpointTs(targetTs, w.syncpointInterval)
+			continue
+		}
+		w.flushDDLEventsUpTo(ctx, targetTs)
+		if err := w.flushDMLEventsByTargetTs(ctx, targetTs); err != nil {
+			return err
+		}
+		if err := w.consumerSyncpointStore.Write(ctx, targetTs); err != nil {
+			return err
+		}
+		w.lastSyncedSyncpointTs = targetTs
+		w.nextSyncpointTs = nextAlignedSyncpointTs(targetTs, w.syncpointInterval)
+		log.Info("consumer syncpoint flushed",
+			zap.Uint64("syncpointTs", targetTs),
+			zap.Uint64("nextSyncpointTs", w.nextSyncpointTs))
+	}
+	return nil
 }
 
 // WriteMessage is to decode kafka message to event.
@@ -477,6 +572,11 @@ func (w *writer) Write(ctx context.Context, messageType common.MessageType) bool
 	}
 
 	watermark := w.globalWatermark()
+	if messageType == common.MessageTypeResolved && w.syncpointEnabled {
+		if err := w.maybeFlushConsumerSyncpoint(ctx, watermark); err != nil {
+			log.Panic("flush consumer syncpoint failed", zap.Error(err), zap.Uint64("watermark", watermark))
+		}
+	}
 	ddlList := make([]*commonEvent.DDLEvent, 0)
 	for i, todoDDL := range w.ddlList {
 		// DDL ordering must follow commitTs (see appendDDL). Traditionally we wait until the global
@@ -534,6 +634,34 @@ func (w *writer) Write(ctx context.Context, messageType common.MessageType) bool
 		return false
 	}
 	return true
+}
+
+func calculateAlignedSyncpointTs(ts uint64, interval time.Duration, skipSyncpointAtTs bool) uint64 {
+	if interval <= 0 {
+		return 0
+	}
+	k := oracle.GetTimeFromTS(ts).Sub(time.Unix(0, 0)) / interval
+	if oracle.GetTimeFromTS(ts).Sub(time.Unix(0, 0))%interval != 0 || oracle.ExtractLogical(ts) != 0 {
+		k++
+	} else if skipSyncpointAtTs {
+		k++
+	}
+	return oracle.GoTimeToTS(time.Unix(0, 0).Add(k * interval))
+}
+
+func nextAlignedSyncpointTs(ts uint64, interval time.Duration) uint64 {
+	return calculateAlignedSyncpointTs(ts, interval, true)
+}
+
+func calculateFloorAlignedSyncpointTs(ts uint64, interval time.Duration) uint64 {
+	if interval <= 0 {
+		return 0
+	}
+	k := oracle.GetTimeFromTS(ts).Sub(time.Unix(0, 0)) / interval
+	if k <= 0 {
+		return 0
+	}
+	return oracle.GoTimeToTS(time.Unix(0, 0).Add(k * interval))
 }
 
 func (w *writer) onDDL(ddl *commonEvent.DDLEvent) {
