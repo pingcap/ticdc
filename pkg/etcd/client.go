@@ -566,8 +566,8 @@ func (checker *healthyChecker) update(eps []string) {
 			}
 			if time.Since(lastHealthy) > etcdServerDisconnectedTimeout {
 				// try to reset client endpoint to trigger reconnect
-				client.(*healthyClient).Client.SetEndpoints([]string{}...)
-				client.(*healthyClient).Client.SetEndpoints(ep)
+				client.(*healthyClient).SetEndpoints([]string{}...)
+				client.(*healthyClient).SetEndpoints(ep)
 			}
 			continue
 		}

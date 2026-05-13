@@ -190,7 +190,7 @@ func (s *Sink) SetTableSchemaStore(tableSchemaStore *commonEvent.TableSchemaStor
 	s.ddlWriter.SetTableSchemaStore(tableSchemaStore)
 }
 
-func (s *Sink) Close(_ bool) {
+func (s *Sink) Close() {
 	if !s.isClosed.CompareAndSwap(false, true) {
 		return
 	}

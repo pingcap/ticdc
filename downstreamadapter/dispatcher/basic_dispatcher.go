@@ -21,6 +21,7 @@ import (
 
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/routing"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -44,6 +45,7 @@ type DispatcherService interface {
 	GetChangefeedID() common.ChangeFeedID
 	GetEventCollectorBatchConfig() (batchCount int, batchBytes int)
 	GetTableSpan() *heartbeatpb.TableSpan
+	GetRouter() routing.Router
 	GetTimezone() string
 	GetIntegrityConfig() *eventpb.IntegrityConfig
 	GetFilterConfig() *eventpb.FilterConfig
@@ -165,6 +167,11 @@ type BasicDispatcher struct {
 	// Shared info containing all common configuration and resources
 	sharedInfo *SharedInfo
 
+	// normal event dispatchers set them by the shared defaults.
+	// redo dispatchers set them by the redo specific defaults.
+	eventCollectorBatchCount int
+	eventCollectorBatchBytes int
+
 	// sink is the sink for this dispatcher
 	sink sink.Sink
 
@@ -232,31 +239,35 @@ func NewBasicDispatcher(
 	schemaIDToDispatchers *SchemaIDToDispatchers,
 	skipSyncpointAtStartTs bool,
 	skipDMLAsStartTs bool,
+	eventCollectorBatchCount int,
+	eventCollectorBatchBytes int,
 	currentPDTs uint64,
 	mode int64,
 	sink sink.Sink,
 	sharedInfo *SharedInfo,
 ) *BasicDispatcher {
 	dispatcher := &BasicDispatcher{
-		id:                     id,
-		tableSpan:              tableSpan,
-		isCompleteTable:        common.IsCompleteSpan(tableSpan),
-		startTs:                startTs,
-		skipSyncpointAtStartTs: skipSyncpointAtStartTs,
-		skipDMLAsStartTs:       skipDMLAsStartTs,
-		sharedInfo:             sharedInfo,
-		sink:                   sink,
-		componentStatus:        newComponentStateWithMutex(heartbeatpb.ComponentState_Initializing),
-		isRemoving:             atomic.Bool{},
-		duringHandleEvents:     atomic.Bool{},
-		blockEventStatus:       BlockEventStatus{blockPendingEvent: nil},
-		tableProgress:          NewTableProgress(),
-		schemaID:               schemaID,
-		schemaIDToDispatchers:  schemaIDToDispatchers,
-		resendTaskMap:          newResendTaskMap(),
-		creationPDTs:           currentPDTs,
-		mode:                   mode,
-		BootstrapState:         BootstrapFinished,
+		id:                       id,
+		tableSpan:                tableSpan,
+		isCompleteTable:          common.IsCompleteSpan(tableSpan),
+		startTs:                  startTs,
+		skipSyncpointAtStartTs:   skipSyncpointAtStartTs,
+		skipDMLAsStartTs:         skipDMLAsStartTs,
+		sharedInfo:               sharedInfo,
+		eventCollectorBatchCount: eventCollectorBatchCount,
+		eventCollectorBatchBytes: eventCollectorBatchBytes,
+		sink:                     sink,
+		componentStatus:          newComponentStateWithMutex(heartbeatpb.ComponentState_Initializing),
+		isRemoving:               atomic.Bool{},
+		duringHandleEvents:       atomic.Bool{},
+		blockEventStatus:         BlockEventStatus{blockPendingEvent: nil},
+		tableProgress:            NewTableProgress(),
+		schemaID:                 schemaID,
+		schemaIDToDispatchers:    schemaIDToDispatchers,
+		resendTaskMap:            newResendTaskMap(),
+		creationPDTs:             currentPDTs,
+		mode:                     mode,
+		BootstrapState:           BootstrapFinished,
 	}
 	dispatcher.resolvedTs.Store(startTs)
 
@@ -479,9 +490,9 @@ func (d *BasicDispatcher) isFirstEvent(event commonEvent.Event) bool {
 }
 
 func (d *BasicDispatcher) GetHeartBeatInfo(h *HeartBeatInfo) {
-	h.Watermark.CheckpointTs = d.GetCheckpointTs()
-	h.Watermark.ResolvedTs = d.GetResolvedTs()
-	h.Watermark.LastSyncedTs = d.GetLastSyncedTs()
+	h.CheckpointTs = d.GetCheckpointTs()
+	h.ResolvedTs = d.GetResolvedTs()
+	h.LastSyncedTs = d.GetLastSyncedTs()
 	h.Id = d.GetId()
 	h.ComponentStatus = d.GetComponentStatus()
 	h.IsRemoving = d.GetRemovingStatus()
@@ -580,7 +591,7 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 		if log.GetLevel() == zapcore.DebugLevel {
 			log.Debug("dispatcher receive all event",
 				zap.Stringer("dispatcher", d.id), zap.Int64("mode", d.mode),
-				zap.String("eventType", commonEvent.TypeToString(dispatcherEvent.Event.GetType())),
+				zap.String("eventType", commonEvent.TypeToString(dispatcherEvent.GetType())),
 				zap.Any("event", dispatcherEvent.Event))
 		}
 
@@ -739,8 +750,9 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 }
 
 // HandleDispatcherStatus handles the dispatcher status from the maintainer to process block events.
-// Each dispatcher status may contain an ACK info or a dispatcher action or both.
+// Each dispatcher status may contain an ACK info, an ignored-block hint, or a dispatcher action.
 // If we get an ack info, we need to check whether the ack is for the ddl event in resend task map. If so, we can cancel the resend task.
+// If we get an ignored-block hint for the current waiting event, we schedule one fast retry while keeping the slow fallback resend task.
 // If we get a dispatcher action, we need to check whether the action is for the current pending ddl event. If so, we can deal the ddl event based on the action.
 // 1. If the action is a write, we need to add the ddl event to the sink for writing to downstream.
 // 2. If the action is a pass, we just need to pass the event
@@ -768,7 +780,22 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 		d.cancelResendTask(identifier)
 	}
 
-	// Step2: deal with the dispatcher action
+	// Step2: deal with the ignored block status
+	ignoredBlockStatus := dispatcherStatus.GetIgnoredBlockStatus()
+	if ignoredBlockStatus != nil && d.blockEventStatus.ignoredStatusMatches(ignoredBlockStatus) {
+		identifier := BlockEventIdentifier{
+			CommitTs:    ignoredBlockStatus.CommitTs,
+			IsSyncPoint: ignoredBlockStatus.IsSyncPoint,
+		}
+		if task := d.resendTaskMap.Get(identifier); task != nil {
+			_ = task.Execute()
+		} else {
+			log.Info("resendTask not found; fast resend path cannot be executed.", zap.Uint64("CommitTs", ignoredBlockStatus.CommitTs), zap.Bool("IsSyncPoint", ignoredBlockStatus.IsSyncPoint))
+		}
+		return false
+	}
+
+	// Step3: deal with the dispatcher action
 	action := dispatcherStatus.GetAction()
 	if action != nil {
 		pendingEvent := d.blockEventStatus.getEvent()
@@ -838,7 +865,7 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 			}
 		}
 
-		// Step3: whether the outdate message or not, we need to return message show we have finished the event.
+		// Step4: whether the outdate message or not, we need to return message show we have finished the event.
 		d.sharedInfo.blockStatusesChan <- &heartbeatpb.TableSpanBlockStatus{
 			ID: d.id.ToPB(),
 			State: &heartbeatpb.State{

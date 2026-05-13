@@ -134,6 +134,14 @@ func NewController(
 				batchSize,
 				oc,
 				changefeedDB,
+				drainController,
+			),
+			scheduler.DrainScheduler: coscheduler.NewDrainScheduler(
+				selfNode.ID.String(),
+				batchSize,
+				oc,
+				changefeedDB,
+				drainController,
 			),
 			scheduler.BalanceScheduler: coscheduler.NewBalanceScheduler(
 				selfNode.ID.String(),
@@ -141,6 +149,7 @@ func NewController(
 				oc,
 				changefeedDB,
 				balanceInterval,
+				drainController,
 			),
 		}),
 		eventCh:            eventCh,
@@ -714,10 +723,7 @@ func (c *Controller) RemoveChangefeed(ctx context.Context, id common.ChangeFeedI
 	count := 0
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
-	for {
-		if op.IsFinished() {
-			break
-		}
+	for !op.IsFinished() {
 		select {
 		case <-ctx.Done():
 			return 0, errors.Trace(ctx.Err())
@@ -755,10 +761,7 @@ func (c *Controller) PauseChangefeed(ctx context.Context, id common.ChangeFeedID
 	count := 0
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
-	for {
-		if op.IsFinished() {
-			break
-		}
+	for !op.IsFinished() {
 		select {
 		case <-ctx.Done():
 			return errors.Trace(ctx.Err())

@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/downstreamadapter/eventcollector"
+	"github.com/pingcap/ticdc/downstreamadapter/routing"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/redo"
@@ -133,8 +134,19 @@ type DispatcherManager struct {
 
 	closing atomic.Bool
 	closed  atomic.Bool
-	cancel  context.CancelFunc
-	wg      sync.WaitGroup
+	// removeChangefeedRequested is sticky once any close request asks for removed=true.
+	// A later removed=false request must not downgrade the final cleanup semantics.
+	removeChangefeedRequested atomic.Bool
+	// removeChangefeedCleaned records whether the best-effort remove-only cleanup has finished.
+	// It is intentionally not part of the TryClose success condition so the close contract
+	// stays compatible with the historical behavior.
+	removeChangefeedCleaned atomic.Bool
+	// removeChangefeedCleanupRunning prevents duplicate background cleanup runs
+	// while late remove requests or retries keep asking for remove semantics after
+	// the base close path ends.
+	removeChangefeedCleanupRunning atomic.Bool
+	cancel                         context.CancelFunc
+	wg                             sync.WaitGroup
 
 	// removeTaskHandles stores the task handles for async dispatcher removal
 	// map[common.DispatcherID]*threadpool.TaskHandle
@@ -245,6 +257,15 @@ func NewDispatcherManager(
 		outputRawChangeEvent = manager.config.SinkConfig.KafkaConfig.GetOutputRawChangeEvent()
 	}
 
+	router, err := routing.NewRouter(
+		manager.changefeedID,
+		util.GetOrZero(manager.config.SinkConfig.CaseSensitive),
+		manager.config.SinkConfig.DispatchRules,
+	)
+	if err != nil {
+		return nil, err
+	}
+
 	batchCounts, batchBytes := manager.getEventCollectorBatchCountAndBytes(manager.sink)
 	// Create shared info for all dispatchers
 	manager.sharedInfo = dispatcher.NewSharedInfo(
@@ -258,6 +279,7 @@ func NewDispatcherManager(
 		syncPointConfig,
 		manager.config.SinkConfig.TxnAtomicity,
 		manager.config.EnableSplittableCheck,
+		router,
 		batchCounts,
 		batchBytes,
 		make(chan dispatcher.TableSpanStatusWithSeq, 8192),
@@ -809,7 +831,7 @@ func (e *DispatcherManager) MergeDispatcher(dispatcherIDs []common.DispatcherID,
 	return e.mergeEventDispatcher(dispatcherIDs, mergedDispatcherID)
 }
 
-// mergeEventDispatcher merges the mulitple event dispatchers belonging to the same table with consecutive ranges.
+// mergeEventDispatcher merges the multiple event dispatchers belonging to the same table with consecutive ranges.
 func (e *DispatcherManager) mergeEventDispatcher(dispatcherIDs []common.DispatcherID, mergedDispatcherID common.DispatcherID) *MergeCheckTask {
 	// Step 1: check the dispatcherIDs and mergedDispatcherID are valid:
 	//         1. whether the mergedDispatcherID is not exist in the dispatcherMap
@@ -855,7 +877,11 @@ func (e *DispatcherManager) mergeEventDispatcher(dispatcherIDs []common.Dispatch
 // ==== remove and clean related functions ====
 
 func (e *DispatcherManager) TryClose(removeChangefeed bool) bool {
+	if removeChangefeed {
+		e.removeChangefeedRequested.Store(true)
+	}
 	if e.closed.Load() {
+		e.tryScheduleRemoveChangefeedCleanup()
 		return true
 	}
 	if e.closing.Load() {
@@ -863,11 +889,11 @@ func (e *DispatcherManager) TryClose(removeChangefeed bool) bool {
 	}
 
 	e.closing.Store(true)
-	go e.close(removeChangefeed)
+	go e.close()
 	return false
 }
 
-func (e *DispatcherManager) close(removeChangefeed bool) {
+func (e *DispatcherManager) close() {
 	log.Info("closing event dispatcher manager",
 		zap.Stringer("changefeedID", e.changefeedID))
 
@@ -919,11 +945,9 @@ func (e *DispatcherManager) close(removeChangefeed bool) {
 	log.Info("shared info closed", zap.Stringer("changefeedID", e.changefeedID))
 
 	if e.IsRedoEnabled() {
-		e.redoSink.Close(removeChangefeed)
-		// FIXME: cleanup redo log when remove the changefeed
-		e.closeRedoMeta(removeChangefeed)
+		e.redoSink.Close()
 	}
-	e.sink.Close(removeChangefeed)
+	e.sink.Close()
 	log.Info("sink closed", zap.Stringer("changefeedID", e.changefeedID))
 
 	e.wg.Wait()
@@ -937,8 +961,56 @@ func (e *DispatcherManager) close(removeChangefeed bool) {
 	e.cleanMetrics()
 
 	e.closed.Store(true)
+	e.tryScheduleRemoveChangefeedCleanup()
 	log.Info("event dispatcher manager closed",
 		zap.Stringer("changefeedID", e.changefeedID))
+}
+
+func (e *DispatcherManager) tryScheduleRemoveChangefeedCleanup() {
+	if !e.removeChangefeedRequested.Load() {
+		return
+	}
+	if e.removeChangefeedCleaned.Load() {
+		return
+	}
+	if !e.removeChangefeedCleanupRunning.CompareAndSwap(false, true) {
+		return
+	}
+
+	go func() {
+		defer e.removeChangefeedCleanupRunning.Store(false)
+
+		if err := e.runRemoveChangefeedCleanup(); err != nil {
+			log.Warn("failed to cleanup removed changefeed",
+				zap.Stringer("changefeedID", e.changefeedID),
+				zap.Error(err))
+			return
+		}
+		e.removeChangefeedCleaned.Store(true)
+	}()
+}
+
+func (e *DispatcherManager) runRemoveChangefeedCleanup() error {
+	if !e.removeChangefeedRequested.Load() || e.removeChangefeedCleaned.Load() {
+		return nil
+	}
+
+	if e.IsRedoEnabled() {
+		// Redo meta cleanup is the remove-only step for redo mode. It is safe to retry
+		// because removeChangefeedCleaned is only set after all remove-only cleanup succeeds.
+		if err := e.closeRedoMeta(true); err != nil {
+			return errors.Trace(err)
+		}
+	}
+
+	if mysqlSink, ok := e.sink.(*mysql.Sink); ok {
+		// MySQL sink may still need ddl_ts cleanup after the base close path has already
+		// released the long-lived DB connection, so keep the retryable remove step here.
+		if err := mysqlSink.CleanupRemovedChangefeed(); err != nil {
+			return errors.Trace(err)
+		}
+	}
+	return nil
 }
 
 // cleanEventDispatcher is called when the event dispatcher is removed successfully.

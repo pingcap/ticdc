@@ -73,6 +73,8 @@ func NewEventDispatcher(
 		schemaIDToDispatchers,
 		skipSyncpointAtStartTs,
 		skipDMLAsStartTs,
+		sharedInfo.eventCollectorBatchCount,
+		sharedInfo.eventCollectorBatchBytes,
 		currentPdTs,
 		common.DefaultMode,
 		sink,
@@ -123,8 +125,8 @@ func (d *EventDispatcher) cache(dispatcherEvents []DispatcherEvent, wakeCallback
 			zap.Stringer("dispatcher", d.id),
 			zap.Uint64("dispatcherResolvedTs", d.GetResolvedTs()),
 			zap.Int("length", len(dispatcherEvents)),
-			zap.Int("eventType", dispatcherEvents[len(dispatcherEvents)-1].Event.GetType()),
-			zap.Uint64("commitTs", dispatcherEvents[len(dispatcherEvents)-1].Event.GetCommitTs()),
+			zap.Int("eventType", dispatcherEvents[len(dispatcherEvents)-1].GetType()),
+			zap.Uint64("commitTs", dispatcherEvents[len(dispatcherEvents)-1].GetCommitTs()),
 			zap.Uint64("redoGlobalTs", d.redoGlobalTs.Load()),
 		)
 	default:
@@ -135,7 +137,7 @@ func (d *EventDispatcher) cache(dispatcherEvents []DispatcherEvent, wakeCallback
 func (d *EventDispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeCallback func()) bool {
 	// if the commit-ts of last event of dispatcherEvents is greater than redoGlobalTs,
 	// the dispatcherEvents will be cached util the redoGlobalTs is updated.
-	if d.redoEnable && len(dispatcherEvents) > 0 && d.redoGlobalTs.Load() < dispatcherEvents[len(dispatcherEvents)-1].Event.GetCommitTs() {
+	if d.redoEnable && len(dispatcherEvents) > 0 && d.redoGlobalTs.Load() < dispatcherEvents[len(dispatcherEvents)-1].GetCommitTs() {
 		d.cache(dispatcherEvents, wakeCallback)
 		return true
 	}

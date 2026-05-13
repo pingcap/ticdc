@@ -113,7 +113,7 @@ func TestRedoSinkBatchConfig(t *testing.T) {
 		cfg,
 	)
 	require.NoError(t, err)
-	defer sink.Close(false)
+	defer sink.Close()
 
 	require.Equal(t, 4096, sink.BatchCount())
 	require.Equal(t, int(32*redo.Megabyte), sink.BatchBytes())
@@ -146,7 +146,7 @@ func TestRedoSinkInProcessor(t *testing.T) {
 		cfg.UseFileBackend = util.AddressOf(useFileBackend)
 		dmlMgr, err := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), cfg)
 		require.NoError(t, err)
-		defer dmlMgr.Close(false)
+		defer dmlMgr.Close()
 
 		var eg errgroup.Group
 		eg.Go(func() error {
@@ -229,7 +229,7 @@ func TestRedoSinkError(t *testing.T) {
 	cfg := newTestConsistentConfig("blackhole-invalid://")
 	logMgr, err := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), cfg)
 	require.NoError(t, err)
-	defer logMgr.Close(false)
+	defer logMgr.Close()
 
 	var eg errgroup.Group
 	eg.Go(func() error {
@@ -283,7 +283,7 @@ func runBenchTest(b *testing.B, storage string, useFileBackend bool) {
 	cfg.UseFileBackend = util.AddressOf(useFileBackend)
 	dmlMgr, err := New(ctx, common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName), cfg)
 	require.NoError(b, err)
-	defer dmlMgr.Close(false)
+	defer dmlMgr.Close()
 
 	var eg errgroup.Group
 	eg.Go(func() error {

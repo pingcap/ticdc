@@ -293,7 +293,7 @@ func (s *SharedColumnSchemaStorage) incColumnSchemaCount(columnSchema *columnSch
 		log.Error("inc column schema count failed, column schema not found", zap.Any("columnSchema", columnSchema))
 	}
 	for idx, colSchemaWithCount := range colSchemas {
-		if colSchemaWithCount.columnSchema.equal(columnSchema) {
+		if colSchemaWithCount.equal(columnSchema) {
 			s.m[columnSchema.Digest][idx].count++
 			return
 		}
@@ -326,7 +326,7 @@ func (s *SharedColumnSchemaStorage) GetOrSetColumnSchema(tableInfo *model.TableI
 	} else {
 		for idx, colSchemaWithCount := range colSchemas {
 			// compare tableInfo to check whether the column schema is the same
-			if colSchemaWithCount.columnSchema.SameWithTableInfo(tableInfo) {
+			if colSchemaWithCount.SameWithTableInfo(tableInfo) {
 				s.m[digest][idx].count++
 				return colSchemaWithCount.columnSchema
 			}
@@ -352,7 +352,7 @@ func (s *SharedColumnSchemaStorage) getOrSetColumnSchemaByColumnSchema(columnSch
 	} else {
 		for idx, colSchemaWithCount := range colSchemas {
 			// compare tableInfo to check whether the column schema is the same
-			if colSchemaWithCount.columnSchema.equal(columnSchema) {
+			if colSchemaWithCount.equal(columnSchema) {
 				s.m[digest][idx].count++
 				return colSchemaWithCount.columnSchema
 			}
@@ -400,7 +400,7 @@ func (s *SharedColumnSchemaStorage) tryReleaseColumnSchema(columnSchema *columnS
 // columnSchema is shared across multiple tableInfos with the same schema, in order to reduce memory usage.
 // we make columnSchema as a private struct, in order to avoid other method to directly create a columnSchema object.
 // we only want user to get columnSchema by the function we provide, which will increase the reference count of columnSchema.(GetOrSetColumnSchema)
-// If user want to copy columnSchema(shaddow copy), they should use Clone method.
+// If user want to copy columnSchema(shadow copy), they should use Clone method.
 type columnSchema struct {
 	// digest of the table info
 	Digest Digest `json:"digest"`
@@ -469,7 +469,7 @@ func (s *columnSchema) Marshal() ([]byte, error) {
 	return json.Marshal(s)
 }
 
-// If you want to copy columnSchema(shaddow copy), you should use Clone method.
+// If you want to copy columnSchema(shadow copy), you should use Clone method.
 // This function will increase the reference count of the columnSchema object.
 func (s *columnSchema) Clone() *columnSchema {
 	GetSharedColumnSchemaStorage().incColumnSchemaCount(s)

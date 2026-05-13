@@ -59,7 +59,8 @@ func genLogFile(
 		return fileName
 	}))
 	require.Nil(t, err)
-	if logType == redo.RedoRowLogFileType {
+	switch logType {
+	case redo.RedoRowLogFileType:
 		// generate unsorted logs
 		for ts := maxCommitTs; ts >= minCommitTs; ts-- {
 			event := &pevent.RedoRowEvent{
@@ -74,7 +75,7 @@ func genLogFile(
 			_, err = w.Write(rawData)
 			require.Nil(t, err)
 		}
-	} else if logType == redo.RedoDDLLogFileType {
+	case redo.RedoDDLLogFileType:
 		event := &pevent.DDLEvent{
 			FinishedTs: maxCommitTs,
 			TableInfo:  &common.TableInfo{},

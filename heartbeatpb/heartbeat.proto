@@ -46,6 +46,11 @@ message ACK {
     bool IsSyncPoint = 2;  // sync point Event and ddl Event could have the same CommitTs, so we need to distinguish them.
 }
 
+message IgnoredBlockStatus {
+    uint64 CommitTs = 1;
+    bool IsSyncPoint = 2;
+}
+
 message InfluencedDispatchers {
     InfluenceType InfluenceType = 1;
     // only exist when type is normal
@@ -60,6 +65,7 @@ message DispatcherStatus {
     InfluencedDispatchers influencedDispatchers = 1;
     DispatcherAction action = 2;
     ACK ack = 3;
+    IgnoredBlockStatus ignoredBlockStatus = 4;
 }
 
 message HeartBeatResponse {

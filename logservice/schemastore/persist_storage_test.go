@@ -3648,6 +3648,56 @@ func TestParseRenameTablesQueryInfos(t *testing.T) {
 	}
 }
 
+func TestBuildPersistedDDLEventForCreateViewUsesStoredSelectStmt(t *testing.T) {
+	job := buildCreateViewJobForTest(101, 100)
+	job.TableName = "v"
+	job.Query = "CREATE ALGORITHM = UNDEFINED DEFINER = CURRENT_USER SQL SECURITY DEFINER VIEW `target_db`.`v` AS SELECT `id` FROM `users`"
+	job.BinlogInfo.TableInfo = &model.TableInfo{
+		Name: ast.NewCIStr("v"),
+		View: &model.ViewInfo{
+			SelectStmt: "SELECT `id` FROM `source_db`.`users`",
+		},
+	}
+
+	ddl := buildPersistedDDLEventForCreateView(buildPersistedDDLEventFuncArgs{
+		job: job,
+		databaseMap: map[int64]*BasicDatabaseInfo{
+			101: {Name: "target_db", Tables: map[int64]bool{}},
+		},
+	})
+
+	require.Equal(t,
+		"CREATE ALGORITHM = UNDEFINED DEFINER = CURRENT_USER SQL SECURITY DEFINER VIEW `target_db`.`v` AS SELECT `id` FROM `source_db`.`users`",
+		ddl.Query)
+	require.Equal(t, "target_db", ddl.SchemaName)
+	require.Equal(t, "v", ddl.TableName)
+}
+
+func TestBuildPersistedDDLEventForCreateViewKeepsOriginalQueryForSameSchemaSelect(t *testing.T) {
+	job := buildCreateViewJobForTest(101, 100)
+	job.TableName = "v"
+	job.Query = "CREATE ALGORITHM = UNDEFINED DEFINER = CURRENT_USER SQL SECURITY DEFINER VIEW `target_db`.`v` AS SELECT `id` FROM `users`"
+	job.BinlogInfo.TableInfo = &model.TableInfo{
+		Name: ast.NewCIStr("v"),
+		View: &model.ViewInfo{
+			SelectStmt: "SELECT `id` FROM `target_db`.`users`",
+		},
+	}
+
+	ddl := buildPersistedDDLEventForCreateView(buildPersistedDDLEventFuncArgs{
+		job: job,
+		databaseMap: map[int64]*BasicDatabaseInfo{
+			101: {Name: "target_db", Tables: map[int64]bool{}},
+		},
+	})
+
+	require.Equal(t,
+		"CREATE ALGORITHM = UNDEFINED DEFINER = CURRENT_USER SQL SECURITY DEFINER VIEW `target_db`.`v` AS SELECT `id` FROM `users`",
+		ddl.Query)
+	require.Equal(t, "target_db", ddl.SchemaName)
+	require.Equal(t, "v", ddl.TableName)
+}
+
 func TestBuildDDLEventForNewTableDDL_CreateTableLikeBlockedTableNames(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -3694,6 +3744,7 @@ func TestBuildPersistedDDLEventForCreateTableLikeSetsReferTableID(t *testing.T) 
 		query           string
 		partitionIDs    []int64
 		expectedReferID int64
+		expectedQuery   string
 	}{
 		{
 			name:            "non partition refer table",
@@ -3718,6 +3769,7 @@ func TestBuildPersistedDDLEventForCreateTableLikeSetsReferTableID(t *testing.T) 
 			query:           "CREATE TABLE `b` LIKE `TeSt`.`A`",
 			partitionIDs:    nil,
 			expectedReferID: 101,
+			expectedQuery:   "CREATE TABLE `b` LIKE `TeSt`.`A`",
 		},
 	}
 
@@ -3744,12 +3796,62 @@ func TestBuildPersistedDDLEventForCreateTableLikeSetsReferTableID(t *testing.T) 
 			partitionMap: partitionMap,
 		})
 		require.Equal(t, tc.expectedReferID, ddl.ExtraTableID, tc.name)
+		if tc.expectedQuery != "" {
+			require.Equal(t, tc.expectedQuery, ddl.Query, tc.name)
+		}
 		if len(tc.partitionIDs) > 0 {
 			require.ElementsMatch(t, tc.partitionIDs, ddl.ReferTablePartitionIDs, tc.name)
 		} else {
 			require.Empty(t, ddl.ReferTablePartitionIDs, tc.name)
 		}
 	}
+}
+
+func TestBuildPersistedDDLEventForCreateTableLikeUsesInvolvingReferSchema(t *testing.T) {
+	job := buildCreateTableJobForTest(100, 200, "t", 1010)
+	job.Query = "CREATE TABLE `dst_db`.`t` LIKE `t`"
+	job.InvolvingSchemaInfo = []model.InvolvingSchemaInfo{
+		{Database: "dst_db", Table: "t"},
+		{Database: "src_db", Table: "t", Mode: model.SharedInvolving},
+	}
+
+	ddl := buildPersistedDDLEventForCreateTable(buildPersistedDDLEventFuncArgs{
+		job: job,
+		databaseMap: map[int64]*BasicDatabaseInfo{
+			100: {Name: "dst_db", Tables: map[int64]bool{200: true}},
+			101: {Name: "src_db", Tables: map[int64]bool{201: true}},
+		},
+		tableMap: map[int64]*BasicTableInfo{
+			200: {SchemaID: 100, Name: "t"},
+			201: {SchemaID: 101, Name: "t"},
+		},
+	})
+
+	require.Equal(t, int64(201), ddl.ExtraTableID)
+	require.Equal(t, "CREATE TABLE `dst_db`.`t` LIKE `src_db`.`t`", ddl.Query)
+}
+
+func TestBuildPersistedDDLEventForCreateTableLikeKeepsOriginalQueryInSameSchema(t *testing.T) {
+	job := buildCreateTableJobForTest(100, 200, "dst", 1010)
+	job.Query = "CREATE TABLE `dst` LIKE `src`"
+	job.InvolvingSchemaInfo = []model.InvolvingSchemaInfo{
+		{Database: "test", Table: "dst"},
+		{Database: "test", Table: "src", Mode: model.SharedInvolving},
+	}
+
+	ddl := buildPersistedDDLEventForCreateTable(buildPersistedDDLEventFuncArgs{
+		job: job,
+		databaseMap: map[int64]*BasicDatabaseInfo{
+			100: {Name: "test", Tables: map[int64]bool{101: true, 200: true}},
+		},
+		tableMap: map[int64]*BasicTableInfo{
+			101: {SchemaID: 100, Name: "src"},
+			200: {SchemaID: 100, Name: "dst"},
+		},
+	})
+
+	require.Equal(t, int64(101), ddl.ExtraTableID)
+	require.Equal(t, "CREATE TABLE `dst` LIKE `src`", ddl.Query)
 }
 
 func TestBuildDDLEventForNewTableDDL_CreateTableLikeBlockedTables(t *testing.T) {
