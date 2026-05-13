@@ -599,6 +599,7 @@ func TestApplyToDDLEventRewritesQueryOnlyTableReferences(t *testing.T) {
 	otherChildDDL := helper.DDL2Event("CREATE TABLE `other_db`.`child` (`id` INT PRIMARY KEY, `order_id` INT)")
 	ddl := helper.DDL2Event("CREATE VIEW `other_db`.`v1` AS SELECT * FROM `source_db`.`orders`")
 	qualifiedColumnDDL := helper.DDL2Event("CREATE VIEW `other_db`.`v2` AS SELECT `source_db`.`orders`.`id` FROM `source_db`.`orders`")
+	aliasedColumnDDL := helper.DDL2Event("CREATE VIEW `other_db`.`v3` AS SELECT `orders`.`id` FROM `source_db`.`orders` AS `orders`")
 	fkDDL := helper.DDL2Event("ALTER TABLE `other_db`.`child` ADD CONSTRAINT `fk_order` FOREIGN KEY (`order_id`) REFERENCES `source_db`.`orders`(`id`)")
 
 	routed, err := router.ApplyToDDLEvent(sourceDBDDL)
@@ -634,6 +635,15 @@ func TestApplyToDDLEventRewritesQueryOnlyTableReferences(t *testing.T) {
 		routed.Query)
 	require.Equal(t, "other_db", routed.GetTargetSchemaName())
 	require.Equal(t, "v2", routed.GetTargetTableName())
+
+	routed, err = router.ApplyToDDLEvent(aliasedColumnDDL)
+	require.NoError(t, err)
+	require.NotSame(t, aliasedColumnDDL, routed)
+	require.Equal(t,
+		"CREATE ALGORITHM = UNDEFINED DEFINER = CURRENT_USER SQL SECURITY DEFINER VIEW `other_db`.`v3` AS SELECT `orders`.`id` AS `id` FROM `target_db`.`orders_routed` AS `orders`",
+		routed.Query)
+	require.Equal(t, "other_db", routed.GetTargetSchemaName())
+	require.Equal(t, "v3", routed.GetTargetTableName())
 
 	routed, err = router.ApplyToDDLEvent(fkDDL)
 	require.NoError(t, err)

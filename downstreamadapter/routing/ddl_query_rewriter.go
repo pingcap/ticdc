@@ -190,11 +190,13 @@ func extractTableNames(stmt ast.StmtNode) []commonEvent.SchemaTableName {
 	return e.names
 }
 
-// tableRenameVisitor rewrites table names and column qualifiers in a DDL AST.
+// tableRenameVisitor rewrites table names in a DDL AST.
 //
 // TableName nodes are rewritten positionally in the same traversal order as
-// extractTableNames. ColumnName qualifiers like `t`.`col` in CREATE VIEW are
-// rewritten via lookup maps (see newTableRenameVisitor).
+// extractTableNames. For CREATE VIEW, TiDB represents `db`.`table`.`column` as
+// a ColumnName node, so the visitor also rewrites the schema/table qualifier
+// when it is explicitly schema-qualified. Unqualified qualifiers such as
+// `table`.`column` may be aliases and are left unchanged.
 //
 // Example for a CREATE VIEW with routing rule source_db.* → target_db.{table}_r:
 //
@@ -205,7 +207,7 @@ func extractTableNames(stmt ast.StmtNode) []commonEvent.SchemaTableName {
 //	Positional: {source_db, v} → {target_db, v_r}
 //	            {source_db, t} → {target_db, t_r}
 //
-//	Column qualifier: `source_db`.`t`.`id`
+//	Schema-qualified column reference: `source_db`.`t`.`id`
 //	    qualified lookup: {source_db, t} → {target_db, t_r}
 //	    → `target_db`.`t_r`.`id`
 //
@@ -216,11 +218,7 @@ type tableRenameVisitor struct {
 	// targetNames contains routed names aligned with tableNameExtractor output.
 	targetNames []commonEvent.SchemaTableName
 	// targetByQualifiedSource maps qualified source table names to routed names.
-	targetByQualifiedSource map[string]commonEvent.SchemaTableName
-	// targetByTable maps unambiguous source table names to routed names.
-	targetByTable map[string]commonEvent.SchemaTableName
-	// ambiguousTables records source table names that appear under multiple schemas.
-	ambiguousTables map[string]struct{}
+	targetByQualifiedSource map[commonEvent.SchemaTableName]commonEvent.SchemaTableName
 	// i is the next targetNames index to consume.
 	i int
 	// hasErr records targetNames exhaustion because ast.Visitor cannot return an error.
@@ -255,29 +253,14 @@ func (v *tableRenameVisitor) Leave(in ast.Node) (ast.Node, bool) {
 	return in, true
 }
 
-// rewriteColumnName rewrites column qualifiers (e.g. `db`.`t`.`col`) to match
-// routed table names. Qualified references use the qualified lookup;
-// unqualified references use the table-only lookup when unambiguous.
+// rewriteColumnName rewrites only schema-qualified column references
+// (e.g. `db`.`t`.`col`) to match routed table names.
 func (v *tableRenameVisitor) rewriteColumnName(c *ast.ColumnName) {
-	if c == nil || c.Table.O == "" {
+	if c == nil || c.Schema.O == "" || c.Table.O == "" {
 		return
 	}
 
-	if c.Schema.O != "" {
-		target, ok := v.targetByQualifiedSource[qualifiedTableKey(c.Schema.O, c.Table.O)]
-		if !ok {
-			return
-		}
-		c.Schema = ast.NewCIStr(target.SchemaName)
-		c.Table = ast.NewCIStr(target.TableName)
-		return
-	}
-
-	tableKey := strings.ToLower(c.Table.O)
-	if _, ambiguous := v.ambiguousTables[tableKey]; ambiguous {
-		return
-	}
-	target, ok := v.targetByTable[tableKey]
+	target, ok := v.targetByQualifiedSource[normalizedSchemaTableName(c.Schema.O, c.Table.O)]
 	if !ok {
 		return
 	}
@@ -285,23 +268,15 @@ func (v *tableRenameVisitor) rewriteColumnName(c *ast.ColumnName) {
 	c.Table = ast.NewCIStr(target.TableName)
 }
 
-// newTableRenameVisitor builds lookup maps for column qualifier rewriting.
-// It pairs each source table with its routed target and populates:
-//   - targetByQualifiedSource: <schema, table> → target (fully qualified column refs)
-//   - targetByTable: table → target (unqualified column refs, only when unambiguous)
-//
-// A table name is ambiguous when it appears under multiple schemas and each
-// schema routes to a different target. Ambiguous tables are skipped during
-// column rewriting because the correct target cannot be determined.
+// newTableRenameVisitor builds the lookup map used for schema-qualified column
+// references. It pairs each source table with its routed target.
 func newTableRenameVisitor(
 	sourceTables []commonEvent.SchemaTableName,
 	targetTables []commonEvent.SchemaTableName,
 ) *tableRenameVisitor {
 	visitor := &tableRenameVisitor{
 		targetNames:             targetTables,
-		targetByQualifiedSource: make(map[string]commonEvent.SchemaTableName, len(sourceTables)),
-		targetByTable:           make(map[string]commonEvent.SchemaTableName, len(sourceTables)),
-		ambiguousTables:         make(map[string]struct{}),
+		targetByQualifiedSource: make(map[commonEvent.SchemaTableName]commonEvent.SchemaTableName, len(sourceTables)),
 	}
 
 	for i, source := range sourceTables {
@@ -310,35 +285,24 @@ func newTableRenameVisitor(
 		}
 		target := targetTables[i]
 		if source.SchemaName != "" {
-			visitor.targetByQualifiedSource[qualifiedTableKey(source.SchemaName, source.TableName)] = target
-		}
-
-		tableKey := strings.ToLower(source.TableName)
-		if existing, ok := visitor.targetByTable[tableKey]; ok &&
-			(!strings.EqualFold(existing.SchemaName, target.SchemaName) ||
-				!strings.EqualFold(existing.TableName, target.TableName)) {
-			visitor.ambiguousTables[tableKey] = struct{}{}
-			delete(visitor.targetByTable, tableKey)
-			continue
-		}
-		if _, ambiguous := visitor.ambiguousTables[tableKey]; !ambiguous {
-			visitor.targetByTable[tableKey] = target
+			visitor.targetByQualifiedSource[normalizedSchemaTableName(source.SchemaName, source.TableName)] = target
 		}
 	}
 	return visitor
 }
 
-// qualifiedTableKey returns a canonical lookup key for a schema-qualified table.
-// It joins with a null byte to prevent collisions (e.g. "a"+"bc" vs "ab"+"c").
-func qualifiedTableKey(schema, table string) string {
-	return strings.ToLower(schema) + "\x00" + strings.ToLower(table)
+func normalizedSchemaTableName(schema, table string) commonEvent.SchemaTableName {
+	return commonEvent.SchemaTableName{
+		SchemaName: strings.ToLower(schema),
+		TableName:  strings.ToLower(table),
+	}
 }
 
-// rewriteDDLStmtTables rewrites table names and column qualifiers in a DDL AST.
+// rewriteDDLStmtTables rewrites table names in a DDL AST.
 // sourceTables and targetTables must have matching lengths and follow the
 // traversal order produced by extractTableNames. TableName nodes are rewritten
-// positionally; ColumnName qualifiers are rewritten via lookup maps built from
-// the source/target table pairs (see newTableRenameVisitor).
+// positionally. For CREATE VIEW, schema-qualified column references are also
+// updated so `db`.`table`.`column` keeps pointing at the routed table.
 //
 // Returned DDL uses StringSingleQuotes, KeyWordUppercase and NameBackQuotes.
 func rewriteDDLStmtTables(
