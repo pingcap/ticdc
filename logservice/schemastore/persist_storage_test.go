@@ -3723,6 +3723,24 @@ func TestBuildPersistedDDLEventForCreateViewQualifiesTableColumnReferences(t *te
 			selectStmt: "SELECT `orders`.`id` AS `id` FROM `source_db`.`orders` AS `orders`",
 			expected:   "CREATE ALGORITHM = UNDEFINED DEFINER = CURRENT_USER SQL SECURITY DEFINER VIEW `target_db`.`v` AS SELECT `orders`.`id` AS `id` FROM `source_db`.`orders` AS `orders`",
 		},
+		{
+			name:       "ambiguous table qualifier is preserved",
+			query:      "CREATE ALGORITHM = UNDEFINED DEFINER = CURRENT_USER SQL SECURITY DEFINER VIEW `target_db`.`v` AS SELECT `t`.`id` FROM `t`",
+			selectStmt: "SELECT `t`.`id` AS `id` FROM `db1`.`t`, `db2`.`t`",
+			expected:   "CREATE ALGORITHM = UNDEFINED DEFINER = CURRENT_USER SQL SECURITY DEFINER VIEW `target_db`.`v` AS SELECT `t`.`id` AS `id` FROM (`db1`.`t`) JOIN `db2`.`t`",
+		},
+		{
+			name:       "subquery scopes are independent",
+			query:      "CREATE ALGORITHM = UNDEFINED DEFINER = CURRENT_USER SQL SECURITY DEFINER VIEW `target_db`.`v` AS SELECT `q`.`id` FROM (SELECT `t`.`id` FROM `t`) AS `q`",
+			selectStmt: "SELECT `q`.`id` AS `id` FROM (SELECT `t`.`id` AS `id` FROM `source_db`.`t`) AS `q`",
+			expected:   "CREATE ALGORITHM = UNDEFINED DEFINER = CURRENT_USER SQL SECURITY DEFINER VIEW `target_db`.`v` AS SELECT `q`.`id` AS `id` FROM (SELECT `source_db`.`t`.`id` AS `id` FROM `source_db`.`t`) AS `q`",
+		},
+		{
+			name:       "join table qualifier",
+			query:      "CREATE ALGORITHM = UNDEFINED DEFINER = CURRENT_USER SQL SECURITY DEFINER VIEW `target_db`.`v` AS SELECT `orders`.`id`, `customers`.`name` FROM `orders` JOIN `customers` ON `orders`.`customer_id` = `customers`.`id`",
+			selectStmt: "SELECT `orders`.`id` AS `id`, `customers`.`name` AS `name` FROM `source_db`.`orders` JOIN `crm_db`.`customers` ON `orders`.`customer_id` = `customers`.`id`",
+			expected:   "CREATE ALGORITHM = UNDEFINED DEFINER = CURRENT_USER SQL SECURITY DEFINER VIEW `target_db`.`v` AS SELECT `source_db`.`orders`.`id` AS `id`,`crm_db`.`customers`.`name` AS `name` FROM `source_db`.`orders` JOIN `crm_db`.`customers` ON `source_db`.`orders`.`customer_id`=`crm_db`.`customers`.`id`",
+		},
 	}
 
 	for _, tc := range cases {
