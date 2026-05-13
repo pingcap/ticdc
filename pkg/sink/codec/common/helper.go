@@ -270,7 +270,7 @@ func queryRowChecksumAux(
 	_, err := conn.ExecContext(ctx, query)
 	if err != nil {
 		var mysqlErr *mysqlDriver.MySQLError
-		ok := cerror.As(errors.Cause(err), &mysqlErr)
+		ok := cerror.As(err, &mysqlErr)
 		if ok {
 			// Error 8055 (HY000): snapshot is older than GC safe point
 			if mysqlErr.Number == 8055 {
