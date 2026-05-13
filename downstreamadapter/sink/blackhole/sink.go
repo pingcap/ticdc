@@ -101,7 +101,7 @@ func (s *sink) Run(ctx context.Context) error {
 				return nil
 			}
 			s.statistics.RecordBatchExecution(func() (int, int64, error) {
-				return int(event.Length), event.ApproximateSize, nil
+				return int(event.Len()), event.GetSize(), nil
 			})
 			event.PostFlush()
 		}
