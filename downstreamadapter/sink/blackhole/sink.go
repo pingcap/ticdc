@@ -122,6 +122,7 @@ func (s *sink) flush(ctx context.Context) error {
 		}
 	}
 }
+
 func (s *sink) BatchCount() int {
 	return s.eventCh.Len()
 }
