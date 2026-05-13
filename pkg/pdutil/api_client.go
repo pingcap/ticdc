@@ -187,10 +187,7 @@ func (pc *pdAPIClient) UpdateMetaLabel(ctx context.Context) error {
 		retry.WithBackoffBaseDelay(200),
 		retry.WithBackoffMaxDelay(4000),
 		retry.WithIsRetryableErr(func(err error) bool {
-			if cerror.Is(errors.Cause(err), context.Canceled) {
-				return false
-			}
-			return true
+			return !cerror.Is(errors.Cause(err), context.Canceled)
 		}))
 	return err
 }
@@ -363,10 +360,7 @@ func (pc *pdAPIClient) ListGcServiceSafePoint(
 		}
 		return nil
 	}, retry.WithMaxTries(defaultMaxRetry), retry.WithIsRetryableErr(func(err error) bool {
-		if cerror.Is(errors.Cause(err), context.Canceled) {
-			return false
-		}
-		return true
+		return !cerror.Is(errors.Cause(err), context.Canceled)
 	}))
 	return resp, err
 }

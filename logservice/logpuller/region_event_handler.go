@@ -169,7 +169,7 @@ func (h *regionEventHandler) GetSize(event regionEvent) int {
 	return event.getSize()
 }
 
-func (h *regionEventHandler) GetArea(_ SubscriptionID, dest *subscribedSpan) int {
+func (h *regionEventHandler) GetArea(_ SubscriptionID, _ *subscribedSpan) int {
 	return 0
 }
 

@@ -36,6 +36,6 @@ func NewMockPulsarTopicManager(
 
 // GetPartitionNum spend more time,but no use.
 // mock 3 partitions
-func (m *pulsarTopicManagerMock) GetPartitionNum(_ context.Context, topic string) (int32, error) {
+func (m *pulsarTopicManagerMock) GetPartitionNum(_ context.Context, _ string) (int32, error) {
 	return 3, nil
 }

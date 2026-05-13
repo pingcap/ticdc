@@ -63,7 +63,7 @@ func (m *MockPDClient) GetAllStores(
 // LoadGlobalConfig loads global config from PD.
 func (m *MockPDClient) LoadGlobalConfig(
 	_ context.Context,
-	_ []string, configPath string,
+	_ []string, _ string,
 ) ([]pd.GlobalConfigItem, int64, error) {
 	return []pd.GlobalConfigItem{
 		{
