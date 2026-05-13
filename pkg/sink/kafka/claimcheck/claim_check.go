@@ -31,8 +31,6 @@ import (
 	"go.uber.org/zap"
 )
 
-const ()
-
 // ClaimCheck manage send message to the claim-check external storage.
 type ClaimCheck struct {
 	storage  storage.ExternalStorage

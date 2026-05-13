@@ -252,6 +252,7 @@ func (n *Node) getOrCreateDependers() *btree.BTreeG[*Node] {
 	}
 	return n.dependers
 }
+
 func genNextNodeID() int64 {
 	return nextNodeID.Add(1)
 }
