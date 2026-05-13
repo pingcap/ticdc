@@ -618,7 +618,7 @@ func normalizeCreateViewQueryWithStoredSelect(event *PersistedDDLEvent) {
 		return
 	}
 
-	query, changed, err := commonEvent.NormalizeCreateViewQueryWithStoredSelect(
+	query, err := commonEvent.NormalizeCreateViewQueryWithStoredSelect(
 		event.Query,
 		event.TableInfo.View.SelectStmt,
 		event.SchemaName,
@@ -630,9 +630,7 @@ func normalizeCreateViewQueryWithStoredSelect(event *PersistedDDLEvent) {
 			zap.Error(err))
 		return
 	}
-	if changed {
-		event.Query = query
-	}
+	event.Query = query
 }
 
 func buildPersistedDDLEventForCreateTable(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
@@ -650,28 +648,6 @@ type createTableLikeReferSchemaInfo struct {
 	qualifyQuery bool
 }
 
-// setReferTableForCreateTableLike resolves the LIKE source table and records
-// its ID for DDL history coordination. When the source table belongs to a
-// different schema than the target, it rewrites the query to include the
-// resolved schema qualifier.
-//
-// Example — cross-schema LIKE:
-//
-//	job.SchemaID   = 200 (dst_db)
-//	job.Query      = "CREATE TABLE `dst_db`.`t` LIKE `t`"
-//	InvolvingSchemaInfo = [{dst_db, t}, {src_db, t, SharedInvolving}]
-//
-//	resolveCreateTableLikeReferSchema finds the SharedInvolving entry for
-//	table `t` in schema `src_db`. Because `src_db` != `dst_db`,
-//	qualifyQuery = true and the query is rewritten:
-//
-//	→ "CREATE TABLE `dst_db`.`t` LIKE `src_db`.`t`"
-//
-// Example — same-schema LIKE (no rewrite):
-//
-//	job.Query      = "CREATE TABLE `t2` LIKE `t1`"
-//	Both tables are in job.SchemaID's schema. qualifyQuery = false.
-//	The query is kept as-is.
 func setReferTableForCreateTableLike(event *PersistedDDLEvent, args buildPersistedDDLEventFuncArgs) {
 	if event.Query == "" {
 		return
@@ -728,16 +704,6 @@ func setReferTableForCreateTableLike(event *PersistedDDLEvent, args buildPersist
 	}
 }
 
-// resolveCreateTableLikeReferSchema resolves the source schema for a
-// CREATE TABLE ... LIKE statement.
-//
-// Resolution order:
-//  1. refSchemaInQuery (from ReferTable.Schema.O) — explicit in the query
-//  2. job.InvolvingSchemaInfo with SharedInvolving mode — TiDB's metadata
-//  3. job.SchemaID (the DDL's own schema) — MySQL/TiDB default resolution
-//
-// It sets qualifyQuery=true when the inferred schema differs from the DDL
-// target schema, signaling that the query should be rewritten.
 func resolveCreateTableLikeReferSchema(
 	args buildPersistedDDLEventFuncArgs,
 	refSchemaInQuery string,
@@ -2182,15 +2148,16 @@ func buildDDLEventForNewTableDDL(rawEvent *PersistedDDLEvent, tableFilter filter
 		}
 
 		if createStmt, ok := stmt.(*ast.CreateTableStmt); ok && createStmt.ReferTable != nil {
+			refTable := createStmt.ReferTable.Name.O
 			refSchema := createStmt.ReferTable.Schema.O
 			if refSchema == "" {
 				refSchema = rawEvent.SchemaName
 			}
-			if refSchema != "" {
-				ddlEvent.BlockedTableNames = []commonEvent.SchemaTableName{{
+			ddlEvent.BlockedTableNames = []commonEvent.SchemaTableName{
+				{
 					SchemaName: refSchema,
-					TableName:  createStmt.ReferTable.Name.O,
-				}}
+					TableName:  refTable,
+				},
 			}
 		}
 

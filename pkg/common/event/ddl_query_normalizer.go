@@ -16,15 +16,14 @@ package event
 import (
 	"strings"
 
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 )
 
 // NormalizeCreateViewQueryWithStoredSelect replaces the SELECT body in a
 // CREATE VIEW query with TiDB's stored View.SelectStmt when the stored SELECT
-// carries cross-schema table references. It returns changed=false when the
-// original query can be kept.
+// carries cross-schema table references.
 //
 // Example — cross-schema reference:
 //
@@ -47,39 +46,35 @@ import (
 //	currentSchema    = "db"
 //
 //	All referenced tables are in the view's own schema, so the original query
-//	is kept as-is. changed = false.
-func NormalizeCreateViewQueryWithStoredSelect(
-	query string,
-	storedSelectStmt string,
-	currentSchema string,
-) (normalizedQuery string, changed bool, err error) {
+//	is kept as-is.
+func NormalizeCreateViewQueryWithStoredSelect(query string, storedSelectStmt string, currentSchema string) (string, error) {
 	if query == "" || storedSelectStmt == "" {
-		return query, false, nil
+		return query, nil
 	}
 
 	stmt, err := parser.New().ParseOneStmt(query, "", "")
 	if err != nil {
-		return "", false, cerror.WrapError(cerror.ErrDDLEventError, err)
+		return query, errors.WrapError(errors.ErrDDLEventError, err)
 	}
 	createViewStmt, ok := stmt.(*ast.CreateViewStmt)
 	if !ok {
-		return query, false, nil
+		return query, nil
 	}
 
 	selectStmt, err := parser.New().ParseOneStmt(storedSelectStmt, "", "")
 	if err != nil {
-		return "", false, cerror.WrapError(cerror.ErrDDLEventError, err)
+		return query, errors.WrapError(errors.ErrDDLEventError, err)
 	}
 	if createViewSelectUsesCurrentSchemaOnly(selectStmt, currentSchema) {
-		return query, false, nil
+		return query, nil
 	}
 
 	createViewStmt.Select = selectStmt
-	normalizedQuery, err = Restore(createViewStmt)
+	query, err = Restore(createViewStmt)
 	if err != nil {
-		return "", false, cerror.WrapError(cerror.ErrDDLEventError, err)
+		return query, errors.WrapError(errors.ErrDDLEventError, err)
 	}
-	return normalizedQuery, true, nil
+	return query, nil
 }
 
 func createViewSelectUsesCurrentSchemaOnly(selectStmt ast.StmtNode, currentSchema string) bool {

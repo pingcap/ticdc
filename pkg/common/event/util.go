@@ -399,15 +399,13 @@ func (s *EventTestHelper) normalizeCreateViewQueryWithStoredSelect(ddlEvent *DDL
 		return
 	}
 
-	query, changed, err := NormalizeCreateViewQueryWithStoredSelect(
+	query, err := NormalizeCreateViewQueryWithStoredSelect(
 		ddlEvent.Query,
 		ddlEvent.TableInfo.View.SelectStmt,
 		ddlEvent.SchemaName,
 	)
 	require.NoError(s.t, err)
-	if changed {
-		ddlEvent.Query = query
-	}
+	ddlEvent.Query = query
 }
 
 // findCreateTableLikeReferSchema resolves the source schema for CREATE TABLE

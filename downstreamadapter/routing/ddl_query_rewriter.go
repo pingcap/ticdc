@@ -79,27 +79,15 @@ func splitMultiStmtDDLQuery(query string) ([]string, error) {
 }
 
 // rewriteSingleDDLQuery routes a single DDL statement.
-//
-// It parses the query, extracts all table references, fills the upstream
-// session schema into unqualified names, applies routing rules, and restores
-// the AST when any table name changed.
-//
-// Example — same schema (no unqualified cross-schema refs):
+// If the schema is not qualified, fill it with the default schema.
+// Cross schema scenario must be qualified before enter the router.
+// Example:
 //
 //	defaultSchema = "source_db"
 //	query         = "ALTER TABLE t ADD COLUMN c INT"
 //	fillDefaultSchema → [{source_db, t}]
 //	route({source_db, t}) with rule source_db.* → target_db.{table}_r
 //	→ "ALTER TABLE `target_db`.`t_r` ADD COLUMN `c` INT"
-//
-// Example — cross-schema (pre-qualified by persist storage):
-//
-//	defaultSchema = "source_extra_db"
-//	query         = "CREATE TABLE `source_extra_db`.`t2` LIKE `source_db`.`t1`"
-//	fillDefaultSchema → (nothing to fill, all tables already qualified)
-//	route({source_extra_db, t2}) → {target_extra_db, t2_r}
-//	route({source_db, t1})       → {target_db, t1_r}
-//	→ "CREATE TABLE `target_extra_db`.`t2_r` LIKE `target_db`.`t1_r`"
 func (r Router) rewriteSingleDDLQuery(query string, defaultSchema string) (string, error) {
 	p := parser.New()
 	stmt, err := p.ParseOneStmt(query, "", "")
@@ -142,23 +130,6 @@ func (r Router) rewriteSingleDDLQuery(query string, defaultSchema string) (strin
 	return newQuery, nil
 }
 
-// fillDefaultSchema fills empty schema names in the extracted table list with
-// defaultSchema (the upstream session database). It is only correct when the
-// unqualified table belongs to the same schema as the DDL target.
-//
-// Limitation — fillDefaultSchema cannot distinguish between:
-//
-//	(a) ALTER TABLE t ADD COLUMN c INT       — t is in the same schema   ✓
-//	(b) CREATE TABLE extra.t2 LIKE t1        — t1 is in another schema   ✗
-//
-// Both produce an unqualified "t" in the AST, but (b) needs the true source
-// schema, not the DDL target schema. The persist storage layer handles this
-// by rewriting the query before it reaches the router:
-//
-//	CREATE TABLE `source_extra_db`.`t2` LIKE `source_db`.`t1`
-//
-// A router that receives an unqualified cross-schema reference means upstream
-// normalization did not happen, and the result would be incorrect.
 func fillDefaultSchema(tables []commonEvent.SchemaTableName, defaultSchema string) {
 	if defaultSchema == "" {
 		return
