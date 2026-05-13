@@ -21,9 +21,8 @@ import (
 	"os"
 	"sync"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/tests/integration_tests/util"
 )
 
@@ -32,7 +31,7 @@ func main() {
 	err := cfg.Parse(os.Args[1:])
 	switch {
 	case err == nil:
-	case cerror.Is(err, flag.ErrHelp):
+	case errors.Is(err, flag.ErrHelp):
 		os.Exit(0)
 	default:
 		log.S().Errorf("parse cmd flags err %s\n", err)
@@ -58,8 +57,8 @@ func main() {
 func runPKorUKcases(db *sql.DB) {
 	cases := []struct {
 		Tp     string
-		Value  interface{}
-		Update interface{}
+		Value  any
+		Update any
 	}{
 		{
 			Tp:     "BIGINT UNSIGNED",
