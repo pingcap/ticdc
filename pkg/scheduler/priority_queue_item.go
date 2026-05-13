@@ -49,13 +49,15 @@ type priorityQueue[T replica.ReplicationID, R replica.Replication[T]] struct {
 	rand *rand.Rand
 }
 
-func (q *priorityQueue[T, R]) InitItem(node node.ID, load int, tasks []R) {
-	q.AddOrUpdate(&item[T, R]{
+func (q *priorityQueue[T, R]) InitItem(node node.ID, load int, tasks []R) *item[T, R] {
+	item := &item[T, R]{
 		Node:  node,
 		Tasks: tasks,
 		Load:  load,
 		less:  q.less,
-	})
+	}
+	q.AddOrUpdate(item)
+	return item
 }
 
 func (q *priorityQueue[T, R]) AddOrUpdate(item *item[T, R]) {
