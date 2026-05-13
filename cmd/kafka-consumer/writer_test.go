@@ -384,6 +384,50 @@ func TestWriterWrite_consumerSyncpointPreservesDDLOrdering(t *testing.T) {
 	require.Equal(t, []uint64{firstSyncpointTs, secondSyncpointTs}, store.writes)
 }
 
+func TestWriterWrite_consumerSyncpointDispatchesDMLWithoutWaitingBeforeBarrier(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	s := sinkmock.NewMockSink(ctrl)
+	dispatched := make([]uint64, 0)
+	s.EXPECT().AddDMLEvent(gomock.Any()).DoAndReturn(func(event *commonEvent.DMLEvent) {
+		dispatched = append(dispatched, event.GetCommitTs())
+	}).AnyTimes()
+	s.EXPECT().WriteBlockEvent(gomock.Any()).AnyTimes()
+
+	watermark := oracle.GoTimeToTS(time.Unix(10, int64(500*time.Millisecond)))
+	nextSyncpointTs := oracle.GoTimeToTS(time.Unix(11, 0))
+	group := util.NewEventsGroup(0, 1)
+	group.Append(&commonEvent.DMLEvent{
+		PhysicalTableID: 1,
+		CommitTs:        oracle.GoTimeToTS(time.Unix(10, 0)),
+		RowTypes:        []common.RowType{common.RowTypeInsert},
+		Rows:            chunk.NewChunkWithCapacity(nil, 0),
+		TableInfo: &common.TableInfo{
+			TableName: common.TableName{Schema: "test", Table: "t"},
+		},
+	}, false)
+
+	w := &writer{
+		progresses: []*partitionProgress{
+			{partition: 0, watermark: watermark, eventsGroup: map[int64]*util.EventsGroup{1: group}},
+		},
+		mysqlSink:              s,
+		syncpointEnabled:       true,
+		syncpointInterval:      time.Second,
+		nextSyncpointTs:        nextSyncpointTs,
+		consumerSyncpointStore: &recordingSyncpointStore{},
+		ddlList:                make([]*commonEvent.DDLEvent, 0),
+		ddlWithMaxCommitTs:     make(map[int64]uint64),
+	}
+
+	needCommit := w.Write(ctx, codecCommon.MessageTypeResolved)
+
+	require.False(t, needCommit)
+	require.Equal(t, []uint64{oracle.GoTimeToTS(time.Unix(10, 0))}, dispatched)
+	require.Len(t, w.pendingDMLFlushes, 1)
+	require.Empty(t, group.GetAllEvents())
+}
+
 func TestAppendRow2Group_DoesNotDropCommitTsFallbackBeforeApplied(t *testing.T) {
 	// Scenario:
 	// 1) TiCDC writes DML messages to Kafka in commitTs order.
