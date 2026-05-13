@@ -3700,49 +3700,39 @@ func TestBuildPersistedDDLEventForCreateViewKeepsOriginalQueryForSameSchemaSelec
 
 func TestBuildDDLEventForNewTableDDL_CreateTableLikeBlockedTableNames(t *testing.T) {
 	cases := []struct {
-		name            string
-		query           string
-		schemaName      string
-		extraSchemaName string
-		extraTableName  string
-		expected        []commonEvent.SchemaTableName
+		name       string
+		query      string
+		schemaName string
+		expected   []commonEvent.SchemaTableName
 	}{
 		{
-			name:            "default schema",
-			query:           "CREATE TABLE `b` LIKE `a`",
-			schemaName:      "test",
-			extraSchemaName: "test",
-			extraTableName:  "a",
+			name:       "default schema",
+			query:      "CREATE TABLE `b` LIKE `a`",
+			schemaName: "test",
 			expected: []commonEvent.SchemaTableName{
 				{SchemaName: "test", TableName: "a"},
 			},
 		},
 		{
-			name:            "explicit schema",
-			query:           "CREATE TABLE `b` LIKE `other`.`a`",
-			schemaName:      "test",
-			extraSchemaName: "other",
-			extraTableName:  "a",
+			name:       "explicit schema",
+			query:      "CREATE TABLE `b` LIKE `other`.`a`",
+			schemaName: "test",
 			expected: []commonEvent.SchemaTableName{
 				{SchemaName: "other", TableName: "a"},
 			},
 		},
 		{
-			name:            "explicit target schema with persisted refer table",
-			query:           "CREATE TABLE `extra`.`b` LIKE `test`.`a`",
-			schemaName:      "extra",
-			extraSchemaName: "test",
-			extraTableName:  "a",
+			name:       "explicit target schema with persisted refer table",
+			query:      "CREATE TABLE `extra`.`b` LIKE `test`.`a`",
+			schemaName: "extra",
 			expected: []commonEvent.SchemaTableName{
 				{SchemaName: "test", TableName: "a"},
 			},
 		},
 		{
-			name:            "explicit target schema in same schema",
-			query:           "CREATE TABLE `test`.`b` LIKE `a`",
-			schemaName:      "test",
-			extraSchemaName: "test",
-			extraTableName:  "a",
+			name:       "explicit target schema in same schema",
+			query:      "CREATE TABLE `test`.`b` LIKE `a`",
+			schemaName: "test",
 			expected: []commonEvent.SchemaTableName{
 				{SchemaName: "test", TableName: "a"},
 			},
@@ -3751,15 +3741,13 @@ func TestBuildDDLEventForNewTableDDL_CreateTableLikeBlockedTableNames(t *testing
 
 	for _, tc := range cases {
 		rawEvent := &PersistedDDLEvent{
-			Type:            byte(model.ActionCreateTable),
-			SchemaID:        1,
-			TableID:         2,
-			SchemaName:      tc.schemaName,
-			TableName:       "b",
-			Query:           tc.query,
-			TableInfo:       &model.TableInfo{},
-			ExtraSchemaName: tc.extraSchemaName,
-			ExtraTableName:  tc.extraTableName,
+			Type:       byte(model.ActionCreateTable),
+			SchemaID:   1,
+			TableID:    2,
+			SchemaName: tc.schemaName,
+			TableName:  "b",
+			Query:      tc.query,
+			TableInfo:  &model.TableInfo{},
 		}
 
 		ddlEvent, ok, err := buildDDLEventForNewTableDDL(rawEvent, nil, 0)
@@ -3854,10 +3842,7 @@ func TestBuildPersistedDDLEventForCreateTableLikeSetsReferTableID(t *testing.T) 
 			300: {SchemaID: 200, Name: "b"},
 		},
 	})
-	require.Equal(t, int64(100), ddl.ExtraSchemaID)
-	require.Equal(t, "test", ddl.ExtraSchemaName)
 	require.Equal(t, int64(101), ddl.ExtraTableID)
-	require.Equal(t, "a", ddl.ExtraTableName)
 }
 
 func TestBuildPersistedDDLEventForCreateTableLikeUsesInvolvingReferSchema(t *testing.T) {
@@ -3881,8 +3866,6 @@ func TestBuildPersistedDDLEventForCreateTableLikeUsesInvolvingReferSchema(t *tes
 	})
 
 	require.Equal(t, int64(201), ddl.ExtraTableID)
-	require.Equal(t, "src_db", ddl.ExtraSchemaName)
-	require.Equal(t, "t", ddl.ExtraTableName)
 	require.Equal(t, "CREATE TABLE `dst_db`.`t` LIKE `src_db`.`t`", ddl.Query)
 }
 
@@ -3921,8 +3904,6 @@ func TestBuildPersistedDDLEventForCreateTableLikeKeepsOriginalQueryInSameSchema(
 		})
 
 		require.Equal(t, int64(101), ddl.ExtraTableID, tc.name)
-		require.Equal(t, "test", ddl.ExtraSchemaName, tc.name)
-		require.Equal(t, "src", ddl.ExtraTableName, tc.name)
 		require.Equal(t, tc.query, ddl.Query, tc.name)
 	}
 }

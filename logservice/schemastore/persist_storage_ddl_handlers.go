@@ -614,54 +614,25 @@ func buildPersistedDDLEventForDropView(args buildPersistedDDLEventFuncArgs) Pers
 // Value assignment in CREATE VIEW:
 // https://github.com/pingcap/tidb/blob/8f2630e53d5d/pkg/ddl/create_table.go#L1668-L1678
 func normalizeCreateViewQueryWithStoredSelect(event *PersistedDDLEvent) {
-	if event.Query == "" || event.TableInfo == nil || event.TableInfo.View == nil || event.TableInfo.View.SelectStmt == "" {
+	if event.TableInfo == nil || event.TableInfo.View == nil {
 		return
 	}
 
-	stmt, err := parser.New().ParseOneStmt(event.Query, "", "")
+	query, changed, err := commonEvent.NormalizeCreateViewQueryWithStoredSelect(
+		event.Query,
+		event.TableInfo.View.SelectStmt,
+		event.SchemaName,
+	)
 	if err != nil {
-		log.Warn("parse create view query failed when normalizing select statement",
-			zap.String("query", event.Query),
-			zap.Error(err))
-		return
-	}
-	createViewStmt, ok := stmt.(*ast.CreateViewStmt)
-	if !ok {
-		return
-	}
-
-	selectStmt, err := parser.New().ParseOneStmt(event.TableInfo.View.SelectStmt, "", "")
-	if err != nil {
-		log.Warn("parse stored create view select statement failed",
-			zap.String("selectStmt", event.TableInfo.View.SelectStmt),
-			zap.String("query", event.Query),
-			zap.Error(err))
-		return
-	}
-	// Keep the original CREATE VIEW text when the stored SELECT only qualifies tables in the view's own schema.
-	if createViewSelectUsesCurrentSchemaOnly(selectStmt, event.SchemaName) {
-		return
-	}
-
-	createViewStmt.Select = selectStmt
-	normalizedQuery, err := commonEvent.Restore(createViewStmt)
-	if err != nil {
-		log.Warn("restore normalized create view query failed",
+		log.Warn("normalize create view query with stored select failed",
 			zap.String("query", event.Query),
 			zap.String("selectStmt", event.TableInfo.View.SelectStmt),
 			zap.Error(err))
 		return
 	}
-	event.Query = normalizedQuery
-}
-
-func createViewSelectUsesCurrentSchemaOnly(selectStmt ast.StmtNode, currentSchema string) bool {
-	for _, schema := range extractTableSchemas(selectStmt) {
-		if schema != "" && !strings.EqualFold(schema, currentSchema) {
-			return false
-		}
+	if changed {
+		event.Query = query
 	}
-	return true
 }
 
 func buildPersistedDDLEventForCreateTable(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
@@ -679,6 +650,28 @@ type createTableLikeReferSchemaInfo struct {
 	qualifyQuery bool
 }
 
+// setReferTableForCreateTableLike resolves the LIKE source table and records
+// its ID for DDL history coordination. When the source table belongs to a
+// different schema than the target, it rewrites the query to include the
+// resolved schema qualifier.
+//
+// Example — cross-schema LIKE:
+//
+//	job.SchemaID   = 200 (dst_db)
+//	job.Query      = "CREATE TABLE `dst_db`.`t` LIKE `t`"
+//	InvolvingSchemaInfo = [{dst_db, t}, {src_db, t, SharedInvolving}]
+//
+//	resolveCreateTableLikeReferSchema finds the SharedInvolving entry for
+//	table `t` in schema `src_db`. Because `src_db` != `dst_db`,
+//	qualifyQuery = true and the query is rewritten:
+//
+//	→ "CREATE TABLE `dst_db`.`t` LIKE `src_db`.`t`"
+//
+// Example — same-schema LIKE (no rewrite):
+//
+//	job.Query      = "CREATE TABLE `t2` LIKE `t1`"
+//	Both tables are in job.SchemaID's schema. qualifyQuery = false.
+//	The query is kept as-is.
 func setReferTableForCreateTableLike(event *PersistedDDLEvent, args buildPersistedDDLEventFuncArgs) {
 	if event.Query == "" {
 		return
@@ -726,10 +719,7 @@ func setReferTableForCreateTableLike(event *PersistedDDLEvent, args buildPersist
 			zap.String("query", event.Query))
 		return
 	}
-	event.ExtraSchemaID = referSchemaInfo.schemaID
-	event.ExtraSchemaName = referSchemaInfo.schemaName
 	event.ExtraTableID = refTableID
-	event.ExtraTableName = refTable
 	if partitions, ok := args.partitionMap[refTableID]; ok {
 		event.ReferTablePartitionIDs = event.ReferTablePartitionIDs[:0]
 		for id := range partitions {
@@ -738,6 +728,16 @@ func setReferTableForCreateTableLike(event *PersistedDDLEvent, args buildPersist
 	}
 }
 
+// resolveCreateTableLikeReferSchema resolves the source schema for a
+// CREATE TABLE ... LIKE statement.
+//
+// Resolution order:
+//  1. refSchemaInQuery (from ReferTable.Schema.O) — explicit in the query
+//  2. job.InvolvingSchemaInfo with SharedInvolving mode — TiDB's metadata
+//  3. job.SchemaID (the DDL's own schema) — MySQL/TiDB default resolution
+//
+// It sets qualifyQuery=true when the inferred schema differs from the DDL
+// target schema, signaling that the query should be rewritten.
 func resolveCreateTableLikeReferSchema(
 	args buildPersistedDDLEventFuncArgs,
 	refSchemaInQuery string,
@@ -2120,38 +2120,6 @@ func ignoreParseErrorForActiveActiveSyntax(err error, query string) bool {
 	return false
 }
 
-// createTableLikeBlockedTableName returns the table referenced by
-// CREATE TABLE ... LIKE. New persisted events store this reference in
-// ExtraSchemaName/ExtraTableName, so DDLEvent construction uses the same
-// resolution result as query normalization.
-func createTableLikeBlockedTableName(
-	rawEvent *PersistedDDLEvent,
-	createStmt *ast.CreateTableStmt,
-) (commonEvent.SchemaTableName, bool) {
-	if rawEvent.ExtraSchemaName != "" && rawEvent.ExtraTableName != "" {
-		return commonEvent.SchemaTableName{
-			SchemaName: rawEvent.ExtraSchemaName,
-			TableName:  rawEvent.ExtraTableName,
-		}, true
-	}
-
-	if createStmt == nil || createStmt.ReferTable == nil {
-		return commonEvent.SchemaTableName{}, false
-	}
-
-	refSchema := createStmt.ReferTable.Schema.O
-	if refSchema == "" {
-		refSchema = rawEvent.SchemaName
-	}
-	if refSchema == "" {
-		return commonEvent.SchemaTableName{}, false
-	}
-	return commonEvent.SchemaTableName{
-		SchemaName: refSchema,
-		TableName:  createStmt.ReferTable.Name.O,
-	}, true
-}
-
 func buildDDLEventForNewTableDDL(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error) {
 	ddlEvent, ok, err := buildDDLEventCommon(rawEvent, tableFilter, WithoutTiDBOnly)
 	if err != nil {
@@ -2214,8 +2182,15 @@ func buildDDLEventForNewTableDDL(rawEvent *PersistedDDLEvent, tableFilter filter
 		}
 
 		if createStmt, ok := stmt.(*ast.CreateTableStmt); ok && createStmt.ReferTable != nil {
-			if blockedTableName, ok := createTableLikeBlockedTableName(rawEvent, createStmt); ok {
-				ddlEvent.BlockedTableNames = []commonEvent.SchemaTableName{blockedTableName}
+			refSchema := createStmt.ReferTable.Schema.O
+			if refSchema == "" {
+				refSchema = rawEvent.SchemaName
+			}
+			if refSchema != "" {
+				ddlEvent.BlockedTableNames = []commonEvent.SchemaTableName{{
+					SchemaName: refSchema,
+					TableName:  createStmt.ReferTable.Name.O,
+				}}
 			}
 		}
 

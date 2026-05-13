@@ -78,6 +78,28 @@ func splitMultiStmtDDLQuery(query string) ([]string, error) {
 	return queries, nil
 }
 
+// rewriteSingleDDLQuery routes a single DDL statement.
+//
+// It parses the query, extracts all table references, fills the upstream
+// session schema into unqualified names, applies routing rules, and restores
+// the AST when any table name changed.
+//
+// Example — same schema (no unqualified cross-schema refs):
+//
+//	defaultSchema = "source_db"
+//	query         = "ALTER TABLE t ADD COLUMN c INT"
+//	fillDefaultSchema → [{source_db, t}]
+//	route({source_db, t}) with rule source_db.* → target_db.{table}_r
+//	→ "ALTER TABLE `target_db`.`t_r` ADD COLUMN `c` INT"
+//
+// Example — cross-schema (pre-qualified by persist storage):
+//
+//	defaultSchema = "source_extra_db"
+//	query         = "CREATE TABLE `source_extra_db`.`t2` LIKE `source_db`.`t1`"
+//	fillDefaultSchema → (nothing to fill, all tables already qualified)
+//	route({source_extra_db, t2}) → {target_extra_db, t2_r}
+//	route({source_db, t1})       → {target_db, t1_r}
+//	→ "CREATE TABLE `target_extra_db`.`t2_r` LIKE `target_db`.`t1_r`"
 func (r Router) rewriteSingleDDLQuery(query string, defaultSchema string) (string, error) {
 	p := parser.New()
 	stmt, err := p.ParseOneStmt(query, "", "")
@@ -120,11 +142,23 @@ func (r Router) rewriteSingleDDLQuery(query string, defaultSchema string) (strin
 	return newQuery, nil
 }
 
-// fillDefaultSchema qualifies table names that are legitimately unqualified in
-// the DDL event. For example, an event with SchemaName `source_db` and
-// `ALTER TABLE t ADD COLUMN c INT` should route `t` as `source_db`.`t`.
-// Cross-schema references, for example `CREATE VIEW source_db.v AS SELECT *
-// FROM other_db.t`, must already be qualified before the event reaches router.
+// fillDefaultSchema fills empty schema names in the extracted table list with
+// defaultSchema (the upstream session database). It is only correct when the
+// unqualified table belongs to the same schema as the DDL target.
+//
+// Limitation — fillDefaultSchema cannot distinguish between:
+//
+//	(a) ALTER TABLE t ADD COLUMN c INT       — t is in the same schema   ✓
+//	(b) CREATE TABLE extra.t2 LIKE t1        — t1 is in another schema   ✗
+//
+// Both produce an unqualified "t" in the AST, but (b) needs the true source
+// schema, not the DDL target schema. The persist storage layer handles this
+// by rewriting the query before it reaches the router:
+//
+//	CREATE TABLE `source_extra_db`.`t2` LIKE `source_db`.`t1`
+//
+// A router that receives an unqualified cross-schema reference means upstream
+// normalization did not happen, and the result would be incorrect.
 func fillDefaultSchema(tables []commonEvent.SchemaTableName, defaultSchema string) {
 	if defaultSchema == "" {
 		return
@@ -155,12 +189,17 @@ func (tne *tableNameExtractor) Leave(in ast.Node) (ast.Node, bool) {
 	return in, true
 }
 
-// extractTableNames returns tables in DDL statement.
-// Because we use visitor pattern, first tableName is always upper-most table in AST.
-// Specifically:
-//   - for `CREATE TABLE ... LIKE` DDL, result contains [sourceTable, sourceRefTable]
-//   - for RENAME TABLE DDL, result contains [old1, new1, old2, new2, old3, new3, ...] because of TiDB parser
-//   - for other DDL, order of tableName is the node visit order.
+// extractTableNames returns the tables in a DDL statement in AST visit order.
+// The first element is always the topmost table (the DDL target).
+//
+// Examples (sourceTables returned):
+//
+//	CREATE TABLE `db`.`t1` LIKE `db`.`t2`
+//	    → [{db, t1}, {db, t2}]
+//	RENAME TABLE `db`.`a` TO `db`.`b`, `db`.`c` TO `db`.`d`
+//	    → [{db, a}, {db, b}, {db, c}, {db, d}]
+//	ALTER TABLE `db`.`t` ADD COLUMN `c` INT
+//	    → [{db, t}]
 func extractTableNames(stmt ast.StmtNode) []commonEvent.SchemaTableName {
 	// Special cases: schema related SQLs don't have tableName
 	switch v := stmt.(type) {
@@ -180,10 +219,28 @@ func extractTableNames(stmt ast.StmtNode) []commonEvent.SchemaTableName {
 	return e.names
 }
 
-// tableRenameVisitor rewrites *ast.TableName nodes in the same traversal order
-// used by tableNameExtractor. Each visited table consumes one entry from
-// targetNames, so the caller can detect too few or too many target names after
-// traversal.
+// tableRenameVisitor rewrites table names and column qualifiers in a DDL AST.
+//
+// TableName nodes are rewritten positionally in the same traversal order as
+// extractTableNames. ColumnName qualifiers like `t`.`col` in CREATE VIEW are
+// rewritten via lookup maps (see newTableRenameVisitor).
+//
+// Example for a CREATE VIEW with routing rule source_db.* → target_db.{table}_r:
+//
+//	Source AST:
+//	  CREATE VIEW `source_db`.`v` AS
+//	    SELECT `source_db`.`t`.`id` FROM `source_db`.`t`
+//
+//	Positional: {source_db, v} → {target_db, v_r}
+//	            {source_db, t} → {target_db, t_r}
+//
+//	Column qualifier: `source_db`.`t`.`id`
+//	    qualified lookup: {source_db, t} → {target_db, t_r}
+//	    → `target_db`.`t_r`.`id`
+//
+//	Rewritten AST:
+//	  CREATE VIEW `target_db`.`v_r` AS
+//	    SELECT `target_db`.`t_r`.`id` FROM `target_db`.`t_r`
 type tableRenameVisitor struct {
 	// targetNames contains routed names aligned with tableNameExtractor output.
 	targetNames []commonEvent.SchemaTableName
@@ -227,6 +284,9 @@ func (v *tableRenameVisitor) Leave(in ast.Node) (ast.Node, bool) {
 	return in, true
 }
 
+// rewriteColumnName rewrites column qualifiers (e.g. `db`.`t`.`col`) to match
+// routed table names. Qualified references use the qualified lookup;
+// unqualified references use the table-only lookup when unambiguous.
 func (v *tableRenameVisitor) rewriteColumnName(c *ast.ColumnName) {
 	if c == nil || c.Table.O == "" {
 		return
@@ -254,6 +314,14 @@ func (v *tableRenameVisitor) rewriteColumnName(c *ast.ColumnName) {
 	c.Table = ast.NewCIStr(target.TableName)
 }
 
+// newTableRenameVisitor builds lookup maps for column qualifier rewriting.
+// It pairs each source table with its routed target and populates:
+//   - targetByQualifiedSource: <schema, table> → target (fully qualified column refs)
+//   - targetByTable: table → target (unqualified column refs, only when unambiguous)
+//
+// A table name is ambiguous when it appears under multiple schemas and each
+// schema routes to a different target. Ambiguous tables are skipped during
+// column rewriting because the correct target cannot be determined.
 func newTableRenameVisitor(
 	sourceTables []commonEvent.SchemaTableName,
 	targetTables []commonEvent.SchemaTableName,
@@ -289,17 +357,19 @@ func newTableRenameVisitor(
 	return visitor
 }
 
+// qualifiedTableKey returns a canonical lookup key for a schema-qualified table.
+// It joins with a null byte to prevent collisions (e.g. "a"+"bc" vs "ab"+"c").
 func qualifiedTableKey(schema, table string) string {
 	return strings.ToLower(schema) + "\x00" + strings.ToLower(table)
 }
 
-// rewriteDDLStmtTables renames tables in DDL by given `targetTables`.
-// Arguments `sourceTables` and `targetTables` should have the same structure as the return value of extractTableNames.
-// sourceTables is also used to route column qualifiers. For example,
-// `CREATE VIEW source_db.v AS SELECT source_db.t.id FROM source_db.t` must
-// rewrite both the FROM table and the `source_db`.`t`.`id` qualifier.
-// Column references do not have positional correspondence with visited TableName nodes.
-// Returned DDL is formatted like StringSingleQuotes, KeyWordUppercase and NameBackQuotes.
+// rewriteDDLStmtTables rewrites table names and column qualifiers in a DDL AST.
+// sourceTables and targetTables must have matching lengths and follow the
+// traversal order produced by extractTableNames. TableName nodes are rewritten
+// positionally; ColumnName qualifiers are rewritten via lookup maps built from
+// the source/target table pairs (see newTableRenameVisitor).
+//
+// Returned DDL uses StringSingleQuotes, KeyWordUppercase and NameBackQuotes.
 func rewriteDDLStmtTables(
 	stmt ast.StmtNode,
 	sourceTables []commonEvent.SchemaTableName,
