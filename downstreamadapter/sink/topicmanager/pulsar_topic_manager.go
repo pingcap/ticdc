@@ -32,7 +32,6 @@ type pulsarTopicManager struct {
 func GetPulsarTopicManagerAndTryCreateTopic(
 	ctx context.Context,
 	cfg *config.PulsarConfig,
-	_ string,
 	client pulsar.Client,
 ) (TopicManager, error) {
 	topicManager := newPulsarTopicManager(cfg, client)

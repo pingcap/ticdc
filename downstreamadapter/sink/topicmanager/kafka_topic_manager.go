@@ -130,7 +130,7 @@ func (m *kafkaTopicManager) backgroundRefreshMeta(ctx context.Context) {
 		case <-m.metaRefreshTicker.C:
 			// We ignore the error here, because the error may be caused by the
 			// network problem, and we can try to get the metadata next time.
-			topicPartitionNums, _ := m.fetchAllTopicsPartitionsNum(ctx)
+			topicPartitionNums, _ := m.fetchAllTopicsPartitionsNum()
 			for topic, partitionNum := range topicPartitionNums {
 				m.tryUpdatePartitionsAndLogging(topic, partitionNum)
 			}
@@ -169,9 +169,7 @@ func (m *kafkaTopicManager) tryUpdatePartitionsAndLogging(topic string, partitio
 // The error returned by this method could be a transient error that is fixable by the underlying logic.
 // When handling this error, please be cautious.
 // If you simply throw the error to the caller, it may impact the robustness of your program.
-func (m *kafkaTopicManager) fetchAllTopicsPartitionsNum(
-	_ context.Context,
-) (map[string]int32, error) {
+func (m *kafkaTopicManager) fetchAllTopicsPartitionsNum() (map[string]int32, error) {
 	var topics []string
 	m.topics.Range(func(key, _ any) bool {
 		topics = append(topics, key.(string))

@@ -27,13 +27,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config/kerneltype"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/httputil"
 	"github.com/pingcap/ticdc/pkg/retry"
 	"github.com/pingcap/ticdc/pkg/security"
@@ -187,7 +186,7 @@ func (pc *pdAPIClient) UpdateMetaLabel(ctx context.Context) error {
 		retry.WithBackoffBaseDelay(200),
 		retry.WithBackoffMaxDelay(4000),
 		retry.WithIsRetryableErr(func(err error) bool {
-			return !cerror.Is(errors.Cause(err), context.Canceled)
+			return !errors.Is(errors.Cause(err), context.Canceled)
 		}))
 	return err
 }
@@ -279,8 +278,7 @@ func (pc *pdAPIClient) scanRegions(
 				// Because start key is less than end key, there must be some regions.
 				log.Error("fail to scan region, missing region",
 					zap.String("endpoint", endpoint))
-				return nil, cerror.WrapError(cerror.ErrInternalServerError,
-					fmt.Errorf("fail to scan region, missing region"))
+				return nil, errors.ErrInternalServerError.GenWithStack("fail to scan region, missing region")
 			}
 			if r[0].StartKey != startKeyHex {
 				r[0].StartKey = strings.ToUpper(hex.EncodeToString(startKey))
@@ -360,7 +358,7 @@ func (pc *pdAPIClient) ListGcServiceSafePoint(
 		}
 		return nil
 	}, retry.WithMaxTries(defaultMaxRetry), retry.WithIsRetryableErr(func(err error) bool {
-		return !cerror.Is(errors.Cause(err), context.Canceled)
+		return !errors.Is(errors.Cause(err), context.Canceled)
 	}))
 	return resp, err
 }
