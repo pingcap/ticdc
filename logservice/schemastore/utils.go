@@ -21,7 +21,10 @@ import (
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/ast"
+<<<<<<< HEAD
 	"github.com/pingcap/tidb/pkg/parser/format"
+=======
+>>>>>>> 5745770ea (schemastore: fix cross-schema create view with unqualified source table (#5027))
 	"go.uber.org/zap"
 )
 
@@ -98,3 +101,77 @@ func isSplitable(tableInfo *model.TableInfo) bool {
 	}
 	return true
 }
+<<<<<<< HEAD
+=======
+
+func getIndexIDs(job *model.Job) []int64 {
+	if job == nil {
+		return nil
+	}
+
+	// Anonymous index rewrite only needs IDs for ADD INDEX clauses, and it
+	// consumes them in SQL order. Other modify-index subjobs such as DROP INDEX,
+	// RENAME INDEX, or ADD PRIMARY KEY would shift that positional mapping and
+	// make the downstream rewrite pick the wrong upstream name.
+	if job.Type == model.ActionAddIndex {
+		return extractAddIndexIDs(job)
+	}
+
+	if job.MultiSchemaInfo == nil {
+		return nil
+	}
+
+	res := make([]int64, 0)
+	for idx, subJob := range job.MultiSchemaInfo.SubJobs {
+		if subJob.Type != model.ActionAddIndex {
+			continue
+		}
+		proxyJob := subJob.ToProxyJob(job, idx)
+		res = append(res, extractAddIndexIDs(&proxyJob)...)
+	}
+	return res
+}
+
+func extractAddIndexIDs(job *model.Job) []int64 {
+	idxArgs, err := model.GetModifyIndexArgs(job)
+	if idxArgs == nil || err != nil {
+		return nil
+	}
+
+	res := make([]int64, 0, len(idxArgs.IndexArgs))
+	for _, indexArg := range idxArgs.IndexArgs {
+		res = append(res, indexArg.IndexID)
+	}
+	return res
+}
+
+type tableSchemaExtractor struct {
+	schemas []string
+}
+
+func (e *tableSchemaExtractor) Enter(in ast.Node) (ast.Node, bool) {
+	if t, ok := in.(*ast.TableName); ok {
+		e.schemas = append(e.schemas, t.Schema.O)
+		return in, true
+	}
+	return in, false
+}
+
+func (e *tableSchemaExtractor) Leave(in ast.Node) (ast.Node, bool) {
+	return in, true
+}
+
+// extractTableSchemas returns schema qualifiers from all *ast.TableName nodes in
+// AST visit order. Unqualified tables contribute an empty schema name.
+func extractTableSchemas(node ast.Node) []string {
+	if node == nil {
+		return nil
+	}
+
+	extractor := &tableSchemaExtractor{
+		schemas: make([]string, 0),
+	}
+	node.Accept(extractor)
+	return extractor.schemas
+}
+>>>>>>> 5745770ea (schemastore: fix cross-schema create view with unqualified source table (#5027))

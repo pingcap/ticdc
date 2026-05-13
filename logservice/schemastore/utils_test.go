@@ -17,6 +17,14 @@ import (
 	"testing"
 
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+<<<<<<< HEAD
+=======
+	"github.com/pingcap/ticdc/pkg/config/kerneltype"
+	ticonfig "github.com/pingcap/tidb/pkg/config"
+	"github.com/pingcap/tidb/pkg/disttask/framework/handle"
+	"github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser"
+>>>>>>> 5745770ea (schemastore: fix cross-schema create view with unqualified source table (#5027))
 	"github.com/stretchr/testify/require"
 )
 
@@ -60,3 +68,192 @@ func TestIsSplitable(t *testing.T) {
 	tableInfo = helper.GetModelTableInfo(job)
 	require.False(t, isSplitable(tableInfo))
 }
+<<<<<<< HEAD
+=======
+
+func TestBuildPersistedDDLEventForMultiSchemaChangeContainsIndexIDs(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	helper.DDL2Event("create table t (id int primary key, c1 int)")
+
+	job := helper.DDL2Job("alter table t add column c2 int, add index (c1)")
+	require.Equal(t, model.ActionMultiSchemaChange, job.Type)
+
+	args := buildPersistedDDLEventFuncArgs{
+		job: job,
+		databaseMap: map[int64]*BasicDatabaseInfo{
+			job.SchemaID: {
+				Name: "test",
+				Tables: map[int64]bool{
+					job.TableID: true,
+				},
+			},
+		},
+		tableMap: map[int64]*BasicTableInfo{
+			job.TableID: {
+				SchemaID: job.SchemaID,
+				Name:     "t",
+			},
+		},
+	}
+
+	event := buildPersistedDDLEventForMultiSchemaChange(args)
+	expectedIndexIDs := getIndexIDs(job)
+	require.Len(t, expectedIndexIDs, 1)
+	require.Equal(t, expectedIndexIDs, event.IndexIDs)
+	require.Equal(t, "test", event.SchemaName)
+	require.Equal(t, "t", event.TableName)
+}
+
+func TestGetIndexIDsReturnsAllAddIndexIDsInOrder(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	helper.DDL2Event("create table t (id int primary key, c1 int)")
+
+	job := helper.DDL2Job("alter table t add index idx_c1(c1), add index (c1)")
+	tableInfo := helper.GetModelTableInfo(job)
+	require.NotNil(t, tableInfo)
+
+	var namedIndexID int64
+	var anonymousIndexID int64
+	for _, index := range tableInfo.Indices {
+		if index == nil {
+			continue
+		}
+		if index.Name.O == "idx_c1" {
+			namedIndexID = index.ID
+			continue
+		}
+		if len(index.Columns) == 1 && index.Columns[0].Name.L == "c1" {
+			anonymousIndexID = index.ID
+		}
+	}
+	require.NotZero(t, namedIndexID)
+	require.NotZero(t, anonymousIndexID)
+	require.Equal(t, []int64{namedIndexID, anonymousIndexID}, getIndexIDs(job))
+}
+
+func TestGetIndexIDsReturnsAllAddIndexIDsInOrderForMultiSchemaChange(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	helper.DDL2Event("create table t (id int primary key, c1 int)")
+
+	job := helper.DDL2Job("alter table t add column c2 int, add index idx_c1(c1), add index (c1)")
+	require.Equal(t, model.ActionMultiSchemaChange, job.Type)
+	tableInfo := helper.GetModelTableInfo(job)
+	require.NotNil(t, tableInfo)
+
+	var namedIndexID int64
+	var anonymousIndexID int64
+	for _, index := range tableInfo.Indices {
+		if index == nil {
+			continue
+		}
+		if index.Name.O == "idx_c1" {
+			namedIndexID = index.ID
+			continue
+		}
+		if len(index.Columns) == 1 && index.Columns[0].Name.L == "c1" {
+			anonymousIndexID = index.ID
+		}
+	}
+	require.NotZero(t, namedIndexID)
+	require.NotZero(t, anonymousIndexID)
+	require.Equal(t, []int64{namedIndexID, anonymousIndexID}, getIndexIDs(job))
+}
+
+func TestGetIndexIDsIgnoresDropIndexSubJobsForMultiSchemaChange(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	helper.DDL2Event("create table t (id int primary key, a int, key idx_old(id))")
+
+	job := helper.DDL2Job("alter table t drop index idx_old, add index (a)")
+	require.Equal(t, model.ActionMultiSchemaChange, job.Type)
+
+	tableInfo := helper.GetModelTableInfo(job)
+	require.NotNil(t, tableInfo)
+
+	var anonymousIndexID int64
+	for _, index := range tableInfo.Indices {
+		if index == nil || index.Primary || len(index.Columns) != 1 {
+			continue
+		}
+		if index.Columns[0].Name.L == "a" {
+			anonymousIndexID = index.ID
+			break
+		}
+	}
+	require.NotZero(t, anonymousIndexID)
+	require.Equal(t, []int64{anonymousIndexID}, getIndexIDs(job))
+}
+
+func TestGetIndexIDsIgnoresAddPrimaryKeySubJobsForMultiSchemaChange(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	helper.DDL2Event("create table t (id int, a int)")
+
+	job := helper.DDL2Job("alter table t add primary key(id), add index (a)")
+	require.Equal(t, model.ActionMultiSchemaChange, job.Type)
+
+	tableInfo := helper.GetModelTableInfo(job)
+	require.NotNil(t, tableInfo)
+
+	var anonymousIndexID int64
+	for _, index := range tableInfo.Indices {
+		if index == nil || index.Primary || len(index.Columns) != 1 {
+			continue
+		}
+		if index.Columns[0].Name.L == "a" {
+			anonymousIndexID = index.ID
+			break
+		}
+	}
+	require.NotZero(t, anonymousIndexID)
+	require.Equal(t, []int64{anonymousIndexID}, getIndexIDs(job))
+}
+
+func TestExtractTableSchemas(t *testing.T) {
+	cases := []struct {
+		name     string
+		query    string
+		expected []string
+	}{
+		{
+			name:     "unqualified table",
+			query:    "SELECT * FROM `t`",
+			expected: []string{""},
+		},
+		{
+			name:     "mixed qualified tables",
+			query:    "SELECT * FROM `db1`.`t1` JOIN `t2` ON `db1`.`t1`.`id` = `t2`.`id`",
+			expected: []string{"db1", ""},
+		},
+		{
+			name:     "subquery preserves visit order",
+			query:    "SELECT * FROM `db1`.`t1` WHERE EXISTS (SELECT 1 FROM `db2`.`t2`)",
+			expected: []string{"db1", "db2"},
+		},
+	}
+
+	p := parser.New()
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := p.ParseOneStmt(tc.query, "", "")
+			require.NoError(t, err)
+			require.Equal(t, tc.expected, extractTableSchemas(stmt))
+		})
+	}
+
+	require.Nil(t, extractTableSchemas(nil))
+}
+>>>>>>> 5745770ea (schemastore: fix cross-schema create view with unqualified source table (#5027))
