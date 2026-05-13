@@ -234,12 +234,19 @@ func (d *BasicDispatcher) OfferBlockStatus(status *heartbeatpb.TableSpanBlockSta
 	d.sharedInfo.OfferBlockStatus(status)
 }
 
+// OfferDoneBlockStatus is a small helper so DONE reporting stays canonical at
+// all call sites while still using the same buffer path as every other status.
 func (d *BasicDispatcher) OfferDoneBlockStatus(blockTs uint64, isSyncPoint bool) {
-	d.sharedInfo.OfferDoneBlockStatus(d.id, blockTs, isSyncPoint, d.GetMode())
-}
-
-func (d *BasicDispatcher) TakeBlockStatus(ctx context.Context) *heartbeatpb.TableSpanBlockStatus {
-	return d.sharedInfo.TakeBlockStatus(ctx)
+	d.OfferBlockStatus(&heartbeatpb.TableSpanBlockStatus{
+		ID: d.id.ToPB(),
+		State: &heartbeatpb.State{
+			IsBlocked:   true,
+			BlockTs:     blockTs,
+			IsSyncPoint: isSyncPoint,
+			Stage:       heartbeatpb.BlockStage_DONE,
+		},
+		Mode: d.GetMode(),
+	})
 }
 
 func (d *BasicDispatcher) TakeBlockStatusWithTimeout(timeout time.Duration) (*heartbeatpb.TableSpanBlockStatus, bool) {
@@ -281,10 +288,6 @@ func (s *SharedInfo) OfferBlockStatus(status *heartbeatpb.TableSpanBlockStatus) 
 	s.blockStatusBuffer.Offer(status)
 }
 
-func (s *SharedInfo) OfferDoneBlockStatus(dispatcherID common.DispatcherID, blockTs uint64, isSyncPoint bool, mode int64) {
-	s.blockStatusBuffer.OfferDone(dispatcherID, blockTs, isSyncPoint, mode)
-}
-
 func (s *SharedInfo) TakeBlockStatus(ctx context.Context) *heartbeatpb.TableSpanBlockStatus {
 	return s.blockStatusBuffer.Take(ctx)
 }
@@ -297,10 +300,6 @@ func (s *SharedInfo) TakeBlockStatusWithTimeout(timeout time.Duration) (*heartbe
 		return nil, false
 	}
 	return status, true
-}
-
-func (s *SharedInfo) TryTakeBlockStatus() (*heartbeatpb.TableSpanBlockStatus, bool) {
-	return s.blockStatusBuffer.TryTake()
 }
 
 func (s *SharedInfo) BlockStatusLen() int {

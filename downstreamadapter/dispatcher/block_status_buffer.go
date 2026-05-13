@@ -21,40 +21,40 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 )
 
+// blockStatusKey identifies a pending WAITING or DONE status in the local
+// mailbox. Stage is part of the key so the same block event can keep both
+// WAITING and DONE in order when they are pending at the same time.
 type blockStatusKey struct {
 	dispatcherID common.DispatcherID
 	blockTs      uint64
 	mode         int64
 	isSyncPoint  bool
-}
-
-type blockStatusQueueEntry struct {
-	status  *heartbeatpb.TableSpanBlockStatus
-	doneKey *blockStatusKey
+	stage        heartbeatpb.BlockStage
 }
 
 // BlockStatusBuffer keeps block statuses ordered while coalescing identical
-// WAITING and DONE statuses that are still pending locally. Other statuses keep
-// the original protobuf object and ordering.
+// WAITING and DONE statuses that are still pending locally.
+//
+// The key stays reserved until the status is drained by the dispatcher manager.
+// This collapses repeated resends in the local mailbox while preserving the
+// original enqueue order for the first pending status of each key.
 type BlockStatusBuffer struct {
-	queue chan blockStatusQueueEntry
+	queue chan *heartbeatpb.TableSpanBlockStatus
 
-	mu             sync.Mutex
-	pendingDone    map[blockStatusKey]struct{}
-	pendingWaiting map[blockStatusKey]struct{}
+	mu      sync.Mutex
+	pending map[blockStatusKey]struct{}
 }
 
 // NewBlockStatusBuffer creates a bounded local mailbox for dispatcher block
 // statuses. The buffer keeps enqueue order while coalescing identical pending
-// WAITING and DONE statuses before protobuf materialization.
+// WAITING and DONE statuses.
 func NewBlockStatusBuffer(size int) *BlockStatusBuffer {
 	if size <= 0 {
 		size = 1
 	}
 	return &BlockStatusBuffer{
-		queue:          make(chan blockStatusQueueEntry, size),
-		pendingDone:    make(map[blockStatusKey]struct{}),
-		pendingWaiting: make(map[blockStatusKey]struct{}),
+		queue:   make(chan *heartbeatpb.TableSpanBlockStatus, size),
+		pending: make(map[blockStatusKey]struct{}),
 	}
 }
 
@@ -62,57 +62,28 @@ func (b *BlockStatusBuffer) Offer(status *heartbeatpb.TableSpanBlockStatus) {
 	if status == nil {
 		return
 	}
-	if isWaitingBlockStatus(status) {
-		key := newBlockStatusKey(status)
-		if !b.reserveWaiting(key) {
-			return
-		}
-		b.queue <- blockStatusQueueEntry{status: status}
+	key, ok := newDeduplicatedBlockStatusKey(status)
+	if ok && !b.reserve(key) {
 		return
 	}
-	if !isDoneBlockStatus(status) {
-		b.queue <- blockStatusQueueEntry{status: status}
-		return
-	}
-
-	key := newBlockStatusKey(status)
-	if !b.reserveDone(key) {
-		return
-	}
-	b.queue <- blockStatusQueueEntry{doneKey: &key}
-}
-
-func (b *BlockStatusBuffer) OfferDone(
-	dispatcherID common.DispatcherID,
-	blockTs uint64,
-	isSyncPoint bool,
-	mode int64,
-) {
-	key := blockStatusKey{
-		dispatcherID: dispatcherID,
-		blockTs:      blockTs,
-		mode:         mode,
-		isSyncPoint:  isSyncPoint,
-	}
-	if !b.reserveDone(key) {
-		return
-	}
-	b.queue <- blockStatusQueueEntry{doneKey: &key}
+	b.queue <- status
 }
 
 func (b *BlockStatusBuffer) Take(ctx context.Context) *heartbeatpb.TableSpanBlockStatus {
 	select {
 	case <-ctx.Done():
 		return nil
-	case entry := <-b.queue:
-		return b.materialize(entry)
+	case status := <-b.queue:
+		b.release(status)
+		return status
 	}
 }
 
 func (b *BlockStatusBuffer) TryTake() (*heartbeatpb.TableSpanBlockStatus, bool) {
 	select {
-	case entry := <-b.queue:
-		return b.materialize(entry), true
+	case status := <-b.queue:
+		b.release(status)
+		return status, true
 	default:
 		return nil, false
 	}
@@ -122,73 +93,45 @@ func (b *BlockStatusBuffer) Len() int {
 	return len(b.queue)
 }
 
-func (b *BlockStatusBuffer) reserveWaiting(key blockStatusKey) bool {
+func (b *BlockStatusBuffer) reserve(key blockStatusKey) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if _, ok := b.pendingWaiting[key]; ok {
+	if _, ok := b.pending[key]; ok {
 		return false
 	}
-	b.pendingWaiting[key] = struct{}{}
+	b.pending[key] = struct{}{}
 	return true
 }
 
-func (b *BlockStatusBuffer) reserveDone(key blockStatusKey) bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if _, ok := b.pendingDone[key]; ok {
-		return false
+func (b *BlockStatusBuffer) release(status *heartbeatpb.TableSpanBlockStatus) {
+	key, ok := newDeduplicatedBlockStatusKey(status)
+	if !ok {
+		return
 	}
-	b.pendingDone[key] = struct{}{}
-	return true
-}
-
-func (b *BlockStatusBuffer) materialize(entry blockStatusQueueEntry) *heartbeatpb.TableSpanBlockStatus {
-	if entry.status != nil {
-		if isWaitingBlockStatus(entry.status) {
-			key := newBlockStatusKey(entry.status)
-			b.mu.Lock()
-			delete(b.pendingWaiting, key)
-			b.mu.Unlock()
-		}
-		return entry.status
-	}
-
-	key := *entry.doneKey
 	b.mu.Lock()
-	delete(b.pendingDone, key)
+	delete(b.pending, key)
 	b.mu.Unlock()
-
-	return &heartbeatpb.TableSpanBlockStatus{
-		ID: key.dispatcherID.ToPB(),
-		State: &heartbeatpb.State{
-			IsBlocked:   true,
-			BlockTs:     key.blockTs,
-			IsSyncPoint: key.isSyncPoint,
-			Stage:       heartbeatpb.BlockStage_DONE,
-		},
-		Mode: key.mode,
-	}
 }
 
-func newBlockStatusKey(status *heartbeatpb.TableSpanBlockStatus) blockStatusKey {
+// newDeduplicatedBlockStatusKey returns the dedupe key for statuses whose
+// repeated copies are expected during resend or repeated maintainer actions.
+func newDeduplicatedBlockStatusKey(status *heartbeatpb.TableSpanBlockStatus) (blockStatusKey, bool) {
+	if !shouldDeduplicateBlockStatus(status) {
+		return blockStatusKey{}, false
+	}
 	return blockStatusKey{
 		dispatcherID: common.NewDispatcherIDFromPB(status.ID),
 		blockTs:      status.State.BlockTs,
 		mode:         status.Mode,
 		isSyncPoint:  status.State.IsSyncPoint,
-	}
+		stage:        status.State.Stage,
+	}, true
 }
 
-func isWaitingBlockStatus(status *heartbeatpb.TableSpanBlockStatus) bool {
+func shouldDeduplicateBlockStatus(status *heartbeatpb.TableSpanBlockStatus) bool {
 	return status != nil &&
 		status.State != nil &&
 		status.State.IsBlocked &&
-		status.State.Stage == heartbeatpb.BlockStage_WAITING
-}
-
-func isDoneBlockStatus(status *heartbeatpb.TableSpanBlockStatus) bool {
-	return status != nil &&
-		status.State != nil &&
-		status.State.IsBlocked &&
-		status.State.Stage == heartbeatpb.BlockStage_DONE
+		(status.State.Stage == heartbeatpb.BlockStage_WAITING ||
+			status.State.Stage == heartbeatpb.BlockStage_DONE)
 }

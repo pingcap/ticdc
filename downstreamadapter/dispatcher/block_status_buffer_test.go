@@ -26,9 +26,11 @@ import (
 func TestBlockStatusBufferDeduplicatesPendingDone(t *testing.T) {
 	buffer := NewBlockStatusBuffer(4)
 	dispatcherID := common.NewDispatcherID()
+	firstDone := newBlockStatus(dispatcherID, 100, heartbeatpb.BlockStage_DONE, false, common.DefaultMode)
+	secondDone := newBlockStatus(dispatcherID, 100, heartbeatpb.BlockStage_DONE, false, common.DefaultMode)
 
-	buffer.OfferDone(dispatcherID, 100, false, common.DefaultMode)
-	buffer.OfferDone(dispatcherID, 100, false, common.DefaultMode)
+	buffer.Offer(firstDone)
+	buffer.Offer(secondDone)
 
 	require.Equal(t, 1, buffer.Len())
 
@@ -48,17 +50,7 @@ func TestBlockStatusBufferDeduplicatesPendingDone(t *testing.T) {
 
 func TestBlockStatusBufferDeduplicatesPendingWaiting(t *testing.T) {
 	buffer := NewBlockStatusBuffer(4)
-	dispatcherID := common.NewDispatcherID()
-
-	waiting := &heartbeatpb.TableSpanBlockStatus{
-		ID: dispatcherID.ToPB(),
-		State: &heartbeatpb.State{
-			IsBlocked: true,
-			BlockTs:   150,
-			Stage:     heartbeatpb.BlockStage_WAITING,
-		},
-		Mode: common.DefaultMode,
-	}
+	waiting := newBlockStatus(common.NewDispatcherID(), 150, heartbeatpb.BlockStage_WAITING, false, common.DefaultMode)
 
 	buffer.Offer(waiting)
 	buffer.Offer(waiting)
@@ -75,53 +67,42 @@ func TestBlockStatusBufferDeduplicatesPendingWaiting(t *testing.T) {
 	require.False(t, ok)
 }
 
-func TestBlockStatusBufferAllowsWaitingAgainAfterTake(t *testing.T) {
-	buffer := NewBlockStatusBuffer(4)
-	dispatcherID := common.NewDispatcherID()
+func TestBlockStatusBufferAllowsStatusAgainAfterTake(t *testing.T) {
+	for _, stage := range []heartbeatpb.BlockStage{
+		heartbeatpb.BlockStage_WAITING,
+		heartbeatpb.BlockStage_DONE,
+	} {
+		t.Run(stage.String(), func(t *testing.T) {
+			buffer := NewBlockStatusBuffer(4)
+			status := newBlockStatus(common.NewDispatcherID(), 180, stage, false, common.DefaultMode)
 
-	waiting := &heartbeatpb.TableSpanBlockStatus{
-		ID: dispatcherID.ToPB(),
-		State: &heartbeatpb.State{
-			IsBlocked: true,
-			BlockTs:   180,
-			Stage:     heartbeatpb.BlockStage_WAITING,
-		},
-		Mode: common.DefaultMode,
+			buffer.Offer(status)
+
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			first := buffer.Take(ctx)
+			require.NotNil(t, first)
+			require.Equal(t, stage, first.State.Stage)
+
+			buffer.Offer(status)
+
+			second := buffer.Take(ctx)
+			require.NotNil(t, second)
+			require.Equal(t, stage, second.State.Stage)
+
+			_, ok := buffer.TryTake()
+			require.False(t, ok)
+		})
 	}
-
-	buffer.Offer(waiting)
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	first := buffer.Take(ctx)
-	require.NotNil(t, first)
-	require.Equal(t, heartbeatpb.BlockStage_WAITING, first.State.Stage)
-
-	buffer.Offer(waiting)
-
-	second := buffer.Take(ctx)
-	require.NotNil(t, second)
-	require.Equal(t, heartbeatpb.BlockStage_WAITING, second.State.Stage)
-
-	_, ok := buffer.TryTake()
-	require.False(t, ok)
 }
 
-func TestBlockStatusBufferKeepsWaitingBeforeDone(t *testing.T) {
+func TestBlockStatusBufferKeepsStageOrderForSameBlockEvent(t *testing.T) {
 	buffer := NewBlockStatusBuffer(4)
 	dispatcherID := common.NewDispatcherID()
 
-	buffer.Offer(&heartbeatpb.TableSpanBlockStatus{
-		ID: dispatcherID.ToPB(),
-		State: &heartbeatpb.State{
-			IsBlocked: true,
-			BlockTs:   200,
-			Stage:     heartbeatpb.BlockStage_WAITING,
-		},
-		Mode: common.DefaultMode,
-	})
-	buffer.OfferDone(dispatcherID, 200, false, common.DefaultMode)
-	buffer.OfferDone(dispatcherID, 200, false, common.DefaultMode)
+	buffer.Offer(newBlockStatus(dispatcherID, 200, heartbeatpb.BlockStage_WAITING, false, common.DefaultMode))
+	buffer.Offer(newBlockStatus(dispatcherID, 200, heartbeatpb.BlockStage_DONE, false, common.DefaultMode))
+	buffer.Offer(newBlockStatus(dispatcherID, 200, heartbeatpb.BlockStage_DONE, false, common.DefaultMode))
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -137,13 +118,13 @@ func TestBlockStatusBufferKeepsWaitingBeforeDone(t *testing.T) {
 	require.False(t, ok)
 }
 
-func TestBlockStatusBufferKeepsDistinctDoneKeys(t *testing.T) {
+func TestBlockStatusBufferKeepsDistinctKeys(t *testing.T) {
 	buffer := NewBlockStatusBuffer(4)
 	dispatcherID := common.NewDispatcherID()
 
-	buffer.OfferDone(dispatcherID, 300, false, common.DefaultMode)
-	buffer.OfferDone(dispatcherID, 300, true, common.DefaultMode)
-	buffer.OfferDone(dispatcherID, 300, false, common.RedoMode)
+	buffer.Offer(newBlockStatus(dispatcherID, 300, heartbeatpb.BlockStage_DONE, false, common.DefaultMode))
+	buffer.Offer(newBlockStatus(dispatcherID, 300, heartbeatpb.BlockStage_DONE, true, common.DefaultMode))
+	buffer.Offer(newBlockStatus(dispatcherID, 300, heartbeatpb.BlockStage_DONE, false, common.RedoMode))
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -165,4 +146,23 @@ func TestBlockStatusBufferKeepsDistinctDoneKeys(t *testing.T) {
 
 	_, ok := buffer.TryTake()
 	require.False(t, ok)
+}
+
+func newBlockStatus(
+	dispatcherID common.DispatcherID,
+	blockTs uint64,
+	stage heartbeatpb.BlockStage,
+	isSyncPoint bool,
+	mode int64,
+) *heartbeatpb.TableSpanBlockStatus {
+	return &heartbeatpb.TableSpanBlockStatus{
+		ID: dispatcherID.ToPB(),
+		State: &heartbeatpb.State{
+			IsBlocked:   true,
+			BlockTs:     blockTs,
+			IsSyncPoint: isSyncPoint,
+			Stage:       stage,
+		},
+		Mode: mode,
+	}
 }

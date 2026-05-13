@@ -61,30 +61,31 @@ type BlockStatusRequestWithTargetID struct {
 	Request  *heartbeatpb.BlockStatusRequest
 }
 
-// BlockStatusRequestQueue is a channel for all event dispatcher managers to send block status requests to HeartBeatCollector
+// BlockStatusRequestQueue forwards already-batched block status requests to the
+// heartbeat collector.
+//
+// Dispatcher-side dedupe removes local mailbox amplification before batching,
+// while this queue keeps a single reservation map from enqueue until send
+// attempt completion so collector backlog cannot re-introduce duplicate WAITING
+// or DONE requests.
 type BlockStatusRequestQueue struct {
 	queue chan *BlockStatusRequestWithTargetID
 
-	mu                sync.Mutex
-	requestStatusKeys map[*BlockStatusRequestWithTargetID][]blockStatusRequestDedupeKey
-	queuedStatuses    map[blockStatusRequestDedupeKey]struct{}
-	inFlightStatuses  map[blockStatusRequestDedupeKey]struct{}
+	mu          sync.Mutex
+	pending     map[blockStatusRequestDedupeKey]struct{}
+	requestKeys map[*BlockStatusRequestWithTargetID][]blockStatusRequestDedupeKey
 }
 
 func NewBlockStatusRequestQueue() *BlockStatusRequestQueue {
 	return &BlockStatusRequestQueue{
-		queue:             make(chan *BlockStatusRequestWithTargetID, 10000),
-		requestStatusKeys: make(map[*BlockStatusRequestWithTargetID][]blockStatusRequestDedupeKey),
-		queuedStatuses:    make(map[blockStatusRequestDedupeKey]struct{}),
-		inFlightStatuses:  make(map[blockStatusRequestDedupeKey]struct{}),
+		queue:       make(chan *BlockStatusRequestWithTargetID, 10000),
+		pending:     make(map[blockStatusRequestDedupeKey]struct{}),
+		requestKeys: make(map[*BlockStatusRequestWithTargetID][]blockStatusRequestDedupeKey),
 	}
 }
 
 func (q *BlockStatusRequestQueue) Enqueue(request *BlockStatusRequestWithTargetID) {
-	if request == nil || request.Request == nil {
-		return
-	}
-	if !q.trackPendingStatuses(request) {
+	if !q.reserveRequestStatuses(request) {
 		metrics.HeartbeatCollectorBlockStatusRequestQueueLenGauge.Set(float64(len(q.queue)))
 		return
 	}
@@ -97,23 +98,23 @@ func (q *BlockStatusRequestQueue) Dequeue(ctx context.Context) *BlockStatusReque
 	case <-ctx.Done():
 		return nil
 	case request := <-q.queue:
-		q.markInFlight(request)
 		metrics.HeartbeatCollectorBlockStatusRequestQueueLenGauge.Set(float64(len(q.queue)))
 		return request
 	}
 }
 
-func (q *BlockStatusRequestQueue) OnSendComplete(request *BlockStatusRequestWithTargetID) {
-	if request == nil {
-		return
-	}
-
+// OnSendAttemptFinished releases the reservation for statuses carried by one
+// queued request after the collector finishes its send attempt.
+//
+// The collector does not retry failed requests in place. Any later resend from
+// the dispatcher will enqueue a fresh request and reserve the key again.
+func (q *BlockStatusRequestQueue) OnSendAttemptFinished(request *BlockStatusRequestWithTargetID) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	for _, key := range q.requestStatusKeys[request] {
-		delete(q.inFlightStatuses, key)
+	for _, key := range q.requestKeys[request] {
+		delete(q.pending, key)
 	}
-	delete(q.requestStatusKeys, request)
+	delete(q.requestKeys, request)
 }
 
 func (q *BlockStatusRequestQueue) Close() {
@@ -129,10 +130,14 @@ type blockStatusRequestDedupeKey struct {
 	stage        heartbeatpb.BlockStage
 }
 
-func (q *BlockStatusRequestQueue) trackPendingStatuses(request *BlockStatusRequestWithTargetID) bool {
+func (q *BlockStatusRequestQueue) reserveRequestStatuses(request *BlockStatusRequestWithTargetID) bool {
+	if request == nil || request.Request == nil {
+		return false
+	}
+
 	statuses := request.Request.BlockStatuses
 	filtered := statuses[:0]
-	statusKeys := make([]blockStatusRequestDedupeKey, 0)
+	keys := make([]blockStatusRequestDedupeKey, 0)
 
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -151,48 +156,26 @@ func (q *BlockStatusRequestQueue) trackPendingStatuses(request *BlockStatusReque
 			isSyncPoint:  status.State.IsSyncPoint,
 			stage:        status.State.Stage,
 		}
-		if _, ok := q.queuedStatuses[key]; ok {
-			continue
-		}
-		if _, ok := q.inFlightStatuses[key]; ok {
+		if _, ok := q.pending[key]; ok {
 			continue
 		}
 
 		filtered = append(filtered, status)
-		q.queuedStatuses[key] = struct{}{}
-		statusKeys = append(statusKeys, key)
+		q.pending[key] = struct{}{}
+		keys = append(keys, key)
 	}
 
 	request.Request.BlockStatuses = filtered
-	if len(statusKeys) > 0 {
-		q.requestStatusKeys[request] = statusKeys
+	if len(keys) > 0 {
+		q.requestKeys[request] = keys
 	}
 	return len(filtered) > 0
 }
 
-func (q *BlockStatusRequestQueue) markInFlight(request *BlockStatusRequestWithTargetID) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	for _, key := range q.requestStatusKeys[request] {
-		delete(q.queuedStatuses, key)
-		q.inFlightStatuses[key] = struct{}{}
-	}
-}
-
-func isWaitingRequestStatus(status *heartbeatpb.TableSpanBlockStatus) bool {
-	return status != nil &&
-		status.State != nil &&
-		status.State.IsBlocked &&
-		status.State.Stage == heartbeatpb.BlockStage_WAITING
-}
-
 func shouldDeduplicateRequestStatus(status *heartbeatpb.TableSpanBlockStatus) bool {
-	return isDoneRequestStatus(status) || isWaitingRequestStatus(status)
-}
-
-func isDoneRequestStatus(status *heartbeatpb.TableSpanBlockStatus) bool {
 	return status != nil &&
 		status.State != nil &&
 		status.State.IsBlocked &&
-		status.State.Stage == heartbeatpb.BlockStage_DONE
+		(status.State.Stage == heartbeatpb.BlockStage_WAITING ||
+			status.State.Stage == heartbeatpb.BlockStage_DONE)
 }

@@ -248,7 +248,7 @@ func (c *HeartBeatCollector) sendBlockStatusMessages(ctx context.Context) error 
 					messaging.MaintainerManagerTopic,
 					blockStatusRequestWithTargetID.Request,
 				))
-			c.blockStatusReqQueue.OnSendComplete(blockStatusRequestWithTargetID)
+			c.blockStatusReqQueue.OnSendAttemptFinished(blockStatusRequestWithTargetID)
 			if err != nil {
 				log.Error("failed to send block status request message", zap.Error(err))
 			}
