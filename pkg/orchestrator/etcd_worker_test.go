@@ -272,8 +272,8 @@ func TestEtcdSum(t *testing.T) {
 	}
 
 	err = errg.Wait()
-	if err != nil && (cerrors.Is(errors.Cause(err), context.DeadlineExceeded) ||
-		cerrors.Is(errors.Cause(err), context.Canceled) ||
+	if err != nil && (cerrors.Is(err, context.DeadlineExceeded) ||
+		cerrors.Is(err, context.Canceled) ||
 		strings.Contains(err.Error(), "etcdserver: request timeout")) {
 		return
 	}
