@@ -21,6 +21,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser"
+	"github.com/pingcap/tidb/pkg/parser/ast"
 	"go.uber.org/zap"
 )
 
@@ -119,4 +120,34 @@ func extractAddIndexIDs(job *model.Job) []int64 {
 		res = append(res, indexArg.IndexID)
 	}
 	return res
+}
+
+type tableSchemaExtractor struct {
+	schemas []string
+}
+
+func (e *tableSchemaExtractor) Enter(in ast.Node) (ast.Node, bool) {
+	if t, ok := in.(*ast.TableName); ok {
+		e.schemas = append(e.schemas, t.Schema.O)
+		return in, true
+	}
+	return in, false
+}
+
+func (e *tableSchemaExtractor) Leave(in ast.Node) (ast.Node, bool) {
+	return in, true
+}
+
+// extractTableSchemas returns schema qualifiers from all *ast.TableName nodes in
+// AST visit order. Unqualified tables contribute an empty schema name.
+func extractTableSchemas(node ast.Node) []string {
+	if node == nil {
+		return nil
+	}
+
+	extractor := &tableSchemaExtractor{
+		schemas: make([]string, 0),
+	}
+	node.Accept(extractor)
+	return extractor.schemas
 }
