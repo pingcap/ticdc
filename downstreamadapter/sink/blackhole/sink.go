@@ -22,6 +22,11 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/utils/chann"
 	"go.uber.org/zap"
+	"golang.org/x/sync/errgroup"
+)
+
+const (
+	defaultFlushConcurrency = 8
 )
 
 // sink is responsible for writing data to blackhole.
@@ -90,6 +95,16 @@ func (s *sink) Close() {
 }
 
 func (s *sink) Run(ctx context.Context) error {
+	eg, ctx := errgroup.WithContext(ctx)
+	for range defaultFlushConcurrency {
+		eg.Go(func() error {
+			return s.flush(ctx)
+		})
+	}
+	return eg.Wait()
+}
+
+func (s *sink) flush(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
@@ -107,7 +122,6 @@ func (s *sink) Run(ctx context.Context) error {
 		}
 	}
 }
-
 func (s *sink) BatchCount() int {
 	return s.eventCh.Len()
 }
