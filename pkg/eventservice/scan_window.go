@@ -207,10 +207,6 @@ const (
 	scanWindowBandAbove
 )
 
-type scanWindowController interface {
-	OnCongestionReport(now time.Time, currentInterval time.Duration, maxInterval time.Duration, report scanWindowReport) scanWindowDecision
-}
-
 type adaptiveScanWindowController struct {
 	mu sync.Mutex
 
