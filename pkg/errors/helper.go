@@ -20,14 +20,15 @@ import (
 
 	gmysql "github.com/go-mysql-org/go-mysql/mysql"
 	dmysql "github.com/go-sql-driver/mysql"
+	"github.com/pingcap/errors"
 	tmysql "github.com/pingcap/tidb/pkg/parser/mysql"
 )
 
-// WrapError generates a new error based on given `*Error`, wraps the err
+// WrapError generates a new error based on given `*errors.Error`, wraps the err
 // as cause error.
 // If given `err` is nil, returns a nil error, which a the different behavior
 // against `Wrap` function in pingcap/errors.
-func WrapError(rfcError *Error, err error, args ...interface{}) error {
+func WrapError(rfcError *errors.Error, err error, args ...interface{}) error {
 	if err == nil {
 		return nil
 	}

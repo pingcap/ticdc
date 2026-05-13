@@ -15,7 +15,6 @@ package eventservice
 
 import (
 	"context"
-	"errors"
 	"time"
 
 	"github.com/pingcap/log"
@@ -24,6 +23,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/metrics"
