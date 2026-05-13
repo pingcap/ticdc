@@ -374,7 +374,7 @@ func (up *Upstream) registerTopologyInfo(ctx context.Context, cfg *NodeTopologyC
 	}
 	// register capture info to upstream pd
 	key := fmt.Sprintf(topologyTiCDC, cfg.GCServiceID, cfg.AdvertiseAddr)
-	value, err := cfg.Info.Marshal()
+	value, err := cfg.Marshal()
 	if err != nil {
 		return errors.Trace(err)
 	}

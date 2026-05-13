@@ -255,7 +255,7 @@ func (c *changefeedStatus) adjustScanInterval(now time.Time, usage memoryUsageSt
 	allowedToIncrease := now.Sub(c.lastAdjustTime.Load()) >= scanIntervalAdjustCooldown &&
 		usage.cnt >= minIncreaseSamples &&
 		usage.span >= minIncreaseSpan &&
-		!(isAboveTrendStart && isIncreasing)
+		(!isAboveTrendStart || !isIncreasing)
 
 	// Determine the new interval based on memory pressure levels.
 	// Priority order: critical > high > trend damping > very low > low

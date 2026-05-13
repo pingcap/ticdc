@@ -646,7 +646,7 @@ func TestMysqlWriter_AsyncDDL(t *testing.T) {
 	}
 
 	{
-		// ensure the dml can be writen succesfully before add index finished
+		// ensure the dml can be written successfully before add index finished
 		dmlEvent := helper.DML2Event("test", "t", "insert into t values (3, 'test3');")
 		dmlEvent.CommitTs = 3
 		dmlEvent.ReplicatingTs = 4

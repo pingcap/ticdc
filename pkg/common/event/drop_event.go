@@ -158,8 +158,6 @@ func (e *DropEvent) encodeV1() ([]byte, error) {
 
 	// DroppedEpoch
 	binary.BigEndian.PutUint64(data[offset:], e.DroppedEpoch)
-	offset += 8
-
 	return data, nil
 }
 
@@ -185,7 +183,5 @@ func (e *DropEvent) decodeV1(data []byte) error {
 
 	// DroppedEpoch
 	e.DroppedEpoch = binary.BigEndian.Uint64(data[offset:])
-	offset += 8
-
 	return nil
 }

@@ -45,12 +45,12 @@ func (d *preparedDMLs) LogWithoutValues() string {
 	// Calculate total count
 	totalCount := len(d.sqls)
 	var logBuilder strings.Builder
-	logBuilder.WriteString(fmt.Sprintf("Total SQL Count: %d, Row Count: %d,", totalCount, d.rowCount))
+	fmt.Fprintf(&logBuilder, "Total SQL Count: %d, Row Count: %d,", totalCount, d.rowCount)
 
 	// Build SQL statements and arguments section
 	for i, sql := range d.sqls {
 		// Add formatted SQL and args to log content
-		logBuilder.WriteString(fmt.Sprintf("[%03d] Query: %s,", i+1, sql))
+		fmt.Fprintf(&logBuilder, "[%03d] Query: %s,", i+1, sql)
 	}
 	logBuilder.WriteString("End")
 
@@ -72,7 +72,7 @@ func (d *preparedDMLs) LogDebug(events []*commonEvent.DMLEvent, writerID int) {
 
 	// Build complete log content in a single string
 	var logBuilder strings.Builder
-	logBuilder.WriteString(fmt.Sprintf("Total SQL Count: %d, Row Count: %d, Writer ID: %d :", totalCount, d.rowCount, writerID))
+	fmt.Fprintf(&logBuilder, "Total SQL Count: %d, Row Count: %d, Writer ID: %d :", totalCount, d.rowCount, writerID)
 
 	// Build SQL statements and arguments section
 	for i, sql := range d.sqls {
@@ -81,8 +81,8 @@ func (d *preparedDMLs) LogDebug(events []*commonEvent.DMLEvent, writerID int) {
 			args = d.values[i]
 		}
 
-		logBuilder.WriteString(fmt.Sprintf("[%03d] Query: %s,", i+1, sql))
-		logBuilder.WriteString(fmt.Sprintf("      Args: %s,", util.RedactArgs(args)))
+		fmt.Fprintf(&logBuilder, "[%03d] Query: %s,", i+1, sql)
+		fmt.Fprintf(&logBuilder, "      Args: %s,", util.RedactArgs(args))
 	}
 
 	// Build timestamp information
@@ -93,8 +93,8 @@ func (d *preparedDMLs) LogDebug(events []*commonEvent.DMLEvent, writerID int) {
 		startTsList[i] = event.GetStartTs()
 	}
 
-	logBuilder.WriteString(fmt.Sprintf("CommitTs: %v,", commitTsList))
-	logBuilder.WriteString(fmt.Sprintf("StartTs:  %v,", startTsList))
+	fmt.Fprintf(&logBuilder, "CommitTs: %v,", commitTsList)
+	fmt.Fprintf(&logBuilder, "StartTs:  %v,", startTsList)
 	logBuilder.WriteString("End")
 
 	// Output the complete log content in a single call
@@ -355,7 +355,7 @@ func buildActiveActiveUpsertSQL(
 		if i > 0 {
 			builder.WriteString(",")
 		}
-		builder.WriteString(fmt.Sprintf("%s = IF((%s), VALUES(%s), %s)", quoted, cond, quoted, quoted))
+		fmt.Fprintf(&builder, "%s = IF((%s), VALUES(%s), %s)", quoted, cond, quoted, quoted)
 	}
 
 	return builder.String(), args, common.RowTypeInsert

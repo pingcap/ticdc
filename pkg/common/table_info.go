@@ -58,7 +58,7 @@ func UnquoteName(name string) string {
 
 // EscapeName replaces all "`" in name with double "`"
 func EscapeName(name string) string {
-	return strings.Replace(name, "`", "``", -1)
+	return strings.ReplaceAll(name, "`", "``")
 }
 
 const (

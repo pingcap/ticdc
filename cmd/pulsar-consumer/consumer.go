@@ -115,7 +115,7 @@ func (c *consumer) readMessage(ctx context.Context) error {
 			if !needCommit {
 				continue
 			}
-			err := c.pulsarConsumer.AckID(consumerMsg.Message.ID())
+			err := c.pulsarConsumer.AckID(consumerMsg.ID())
 			if err != nil {
 				log.Panic("Error ack message", zap.Error(err))
 			}

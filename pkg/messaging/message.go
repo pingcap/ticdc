@@ -249,7 +249,7 @@ func (r DispatcherRequest) GetChangefeedID() common.ChangeFeedID {
 }
 
 func (r DispatcherRequest) GetFilterConfig() *eventpb.FilterConfig {
-	return r.DispatcherRequest.FilterConfig
+	return r.FilterConfig
 }
 
 func (r DispatcherRequest) SyncPointEnabled() bool {
@@ -273,15 +273,15 @@ func (r DispatcherRequest) GetBdrMode() bool {
 }
 
 func (r DispatcherRequest) GetIntegrity() *integrity.Config {
-	if r.DispatcherRequest.Integrity == nil {
+	if r.Integrity == nil {
 		return &integrity.Config{
 			IntegrityCheckLevel:   util.AddressOf(integrity.CheckLevelNone),
 			CorruptionHandleLevel: util.AddressOf(integrity.CorruptionHandleLevelWarn),
 		}
 	}
 	return &integrity.Config{
-		IntegrityCheckLevel:   util.AddressOf(r.DispatcherRequest.Integrity.IntegrityCheckLevel),
-		CorruptionHandleLevel: util.AddressOf(r.DispatcherRequest.Integrity.CorruptionHandleLevel),
+		IntegrityCheckLevel:   util.AddressOf(r.Integrity.IntegrityCheckLevel),
+		CorruptionHandleLevel: util.AddressOf(r.Integrity.CorruptionHandleLevel),
 	}
 }
 
