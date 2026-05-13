@@ -1,6 +1,6 @@
 # Phony targets are targets that are not associated with files.
 # Add new phony targets here to make them available in the `make` command.
-.PHONY: clean fmt check check-static tidy \
+.PHONY: clean fmt check check-static local-static-check tidy \
 	generate-protobuf generate_mock \
 	cdc kafka_consumer storage_consumer pulsar_consumer filter_helper \
 	prepare_test_binaries \
@@ -319,6 +319,14 @@ ifneq ($(LINT_NEW_FROM_REV),)
 else
 	tools/bin/golangci-lint run --timeout 10m0s
 endif
+
+# Lint only code changed on the current branch (vs upstream/master by default).
+# Override base with LINT_BASE=<ref>.
+#   make local-static-check
+#   make local-static-check LINT_BASE=HEAD~3
+local-static-check: tools/bin/golangci-lint
+	$(eval BASE := $(if $(LINT_BASE),$(LINT_BASE),upstream/master))
+	tools/bin/golangci-lint run --timeout 10m0s --new-from-rev=$(BASE)
 
 check-ticdc-dashboard:
 	@echo "check-ticdc-dashboard"

@@ -26,23 +26,23 @@ type (
 )
 
 var (
-	Is              = errors.Is
-	As              = errors.As
-	New             = perrors.New
-	Errorf          = perrors.Errorf
-	Trace           = perrors.Trace
-	Cause           = perrors.Cause
-	Annotate        = perrors.Annotate
-	Annotatef       = perrors.Annotatef
-	WithMessage     = perrors.WithMessage
-	WithStack       = perrors.WithStack
-	ErrorStack      = perrors.ErrorStack
-	ErrorEqual      = perrors.ErrorEqual
-	NewNoStackError = perrors.NewNoStackError
-	NotFoundf       = perrors.NotFoundf
-	NotValidf       = perrors.NotValidf
-	Normalize       = perrors.Normalize
-	RFCCodeText     = perrors.RFCCodeText
-	Unwrap          = perrors.Unwrap
+	Is               = errors.Is
+	As               = errors.As
+	New              = perrors.New
+	Errorf           = perrors.Errorf
+	Trace            = perrors.Trace
+	Cause            = perrors.Cause
+	Annotate         = perrors.Annotate
+	Annotatef        = perrors.Annotatef
+	WithMessage      = perrors.WithMessage
+	WithStack        = perrors.WithStack
+	ErrorStack       = perrors.ErrorStack
+	ErrorEqual       = perrors.ErrorEqual
+	NewNoStackError  = perrors.NewNoStackError
+	NotFoundf        = perrors.NotFoundf
+	NotValidf        = perrors.NotValidf
+	Normalize        = perrors.Normalize
+	RFCCodeText      = perrors.RFCCodeText
+	Unwrap           = perrors.Unwrap
 	RedactLogEnabled = &perrors.RedactLogEnabled
 )
