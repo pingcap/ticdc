@@ -19,18 +19,19 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/utils/chann"
 	"go.uber.org/zap"
 )
 
 // sink is responsible for writing data to blackhole.
 // Including DDL and DML.
 type sink struct {
-	eventCh chan *commonEvent.DMLEvent
+	eventCh *chann.UnlimitedChannel[*commonEvent.DMLEvent, any]
 }
 
 func New() (*sink, error) {
 	return &sink{
-		eventCh: make(chan *commonEvent.DMLEvent, 4096),
+		eventCh: chann.NewUnlimitedChannelDefault[*commonEvent.DMLEvent](),
 	}, nil
 }
 
@@ -50,7 +51,7 @@ func (s *sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	// ref: https://github.com/pingcap/ticdc/blob/da834db76e0662ff15ef12645d1f37bfa6506d83/tests/integration_tests/lossy_ddl/run.sh#L23
 	// Use zap.Stringer to call String() method which applies log redaction
 	log.Debug("BlackHoleSink: WriteEvents", zap.Stringer("dml", event))
-	s.eventCh <- event
+	s.eventCh.Push(event)
 }
 
 func (s *sink) FlushDMLBeforeBlock(_ commonEvent.BlockEvent) error {
@@ -84,14 +85,19 @@ func (s *sink) Run(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return nil
-		case event := <-s.eventCh:
+		default:
+			event, ok := s.eventCh.Get()
+			if !ok {
+				log.Info("blackhole sink event channel closed")
+				return nil
+			}
 			event.PostFlush()
 		}
 	}
 }
 
 func (s *sink) BatchCount() int {
-	return 4096
+	return s.eventCh.Len()
 }
 
 func (s *sink) BatchBytes() int {
