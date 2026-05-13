@@ -14,7 +14,6 @@
 package filter
 
 import (
-	"fmt"
 	"strings"
 
 	bf "github.com/pingcap/ticdc/pkg/binlog-filter"
@@ -148,11 +147,4 @@ func SupportedEventTypes() []bf.EventType {
 		supportedEventTypes = append(supportedEventTypes, ddlType)
 	}
 	return supportedEventTypes
-}
-
-func completeExpression(suffix string) string {
-	if suffix == "" {
-		return suffix
-	}
-	return fmt.Sprintf("select * from t where %s", suffix)
 }

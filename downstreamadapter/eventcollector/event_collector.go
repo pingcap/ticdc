@@ -770,14 +770,6 @@ func updateMinUint64MapValue(m map[common.ChangeFeedID]uint64, key common.Change
 	}
 }
 
-func updateMaxUint64MapValue(m map[common.ChangeFeedID]uint64, key common.ChangeFeedID, value uint64) {
-	if existing, exists := m[key]; exists {
-		m[key] = max(existing, value)
-	} else {
-		m[key] = value
-	}
-}
-
 func calcUsageRatio(usedMemory int64, maxMemory int64) float64 {
 	if maxMemory <= 0 {
 		return 0

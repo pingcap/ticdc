@@ -14,9 +14,7 @@
 package cli
 
 import (
-	"bufio"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
@@ -31,15 +29,6 @@ const (
 	// 1 day in milliseconds
 	tsGapWarning = 86400 * 1000
 )
-
-func readInput() (string, error) {
-	reader := bufio.NewReader(os.Stdin)
-	msg, err := reader.ReadString('\n')
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(msg), nil
-}
 
 func readYOrN(cmd *cobra.Command) bool {
 	var yOrN string

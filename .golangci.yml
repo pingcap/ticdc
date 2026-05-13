@@ -67,10 +67,12 @@ linters:
         - G104
 
     # ST1000: don't require package comments.
+    # ST1003: don't enforce naming conventions on legacy identifiers.
     staticcheck:
       checks:
         - all
         - -ST1000
+        - -ST1003
 
   exclusions:
     # Strict: exclude all known generated file patterns.
