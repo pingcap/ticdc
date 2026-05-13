@@ -729,6 +729,7 @@ func setReferTableForCreateTableLike(event *PersistedDDLEvent, args buildPersist
 	event.ExtraSchemaID = referSchemaInfo.schemaID
 	event.ExtraSchemaName = referSchemaInfo.schemaName
 	event.ExtraTableID = refTableID
+	event.ExtraTableName = refTable
 	if partitions, ok := args.partitionMap[refTableID]; ok {
 		event.ReferTablePartitionIDs = event.ReferTablePartitionIDs[:0]
 		for id := range partitions {
@@ -2119,6 +2120,38 @@ func ignoreParseErrorForActiveActiveSyntax(err error, query string) bool {
 	return false
 }
 
+// createTableLikeBlockedTableName returns the table referenced by
+// CREATE TABLE ... LIKE. New persisted events store this reference in
+// ExtraSchemaName/ExtraTableName, so DDLEvent construction uses the same
+// resolution result as query normalization.
+func createTableLikeBlockedTableName(
+	rawEvent *PersistedDDLEvent,
+	createStmt *ast.CreateTableStmt,
+) (commonEvent.SchemaTableName, bool) {
+	if rawEvent.ExtraSchemaName != "" && rawEvent.ExtraTableName != "" {
+		return commonEvent.SchemaTableName{
+			SchemaName: rawEvent.ExtraSchemaName,
+			TableName:  rawEvent.ExtraTableName,
+		}, true
+	}
+
+	if createStmt == nil || createStmt.ReferTable == nil {
+		return commonEvent.SchemaTableName{}, false
+	}
+
+	refSchema := createStmt.ReferTable.Schema.O
+	if refSchema == "" {
+		refSchema = rawEvent.SchemaName
+	}
+	if refSchema == "" {
+		return commonEvent.SchemaTableName{}, false
+	}
+	return commonEvent.SchemaTableName{
+		SchemaName: refSchema,
+		TableName:  createStmt.ReferTable.Name.O,
+	}, true
+}
+
 func buildDDLEventForNewTableDDL(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error) {
 	ddlEvent, ok, err := buildDDLEventCommon(rawEvent, tableFilter, WithoutTiDBOnly)
 	if err != nil {
@@ -2181,22 +2214,8 @@ func buildDDLEventForNewTableDDL(rawEvent *PersistedDDLEvent, tableFilter filter
 		}
 
 		if createStmt, ok := stmt.(*ast.CreateTableStmt); ok && createStmt.ReferTable != nil {
-			refTable := createStmt.ReferTable.Name.O
-			refSchema := createStmt.ReferTable.Schema.O
-			if refSchema == "" {
-				refSchema = rawEvent.ExtraSchemaName
-			}
-			if refSchema == "" && createStmt.Table != nil && createStmt.Table.Schema.O == "" {
-				refSchema = rawEvent.SchemaName
-			}
-			if refSchema == "" {
-				return ddlEvent, true, nil
-			}
-			ddlEvent.BlockedTableNames = []commonEvent.SchemaTableName{
-				{
-					SchemaName: refSchema,
-					TableName:  refTable,
-				},
+			if blockedTableName, ok := createTableLikeBlockedTableName(rawEvent, createStmt); ok {
+				ddlEvent.BlockedTableNames = []commonEvent.SchemaTableName{blockedTableName}
 			}
 		}
 

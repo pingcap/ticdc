@@ -35,6 +35,7 @@ import (
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/format"
+
 	// NOTE: Do not remove the `test_driver` import.
 	// For details, refer to: https://github.com/pingcap/parser/issues/43
 	_ "github.com/pingcap/tidb/pkg/parser/test_driver"
@@ -367,7 +368,7 @@ func (s *EventTestHelper) fillCreateTableLikeBlockedTableNames(ddlEvent *DDLEven
 
 	refSchema := createStmt.ReferTable.Schema.O
 	if refSchema == "" {
-		refSchema = FindCreateTableLikeReferSchema(job, ddlEvent.SchemaName, ddlEvent.TableName, createStmt.ReferTable.Name.O)
+		refSchema = findCreateTableLikeReferSchema(job, ddlEvent.SchemaName, ddlEvent.TableName, createStmt.ReferTable.Name.O)
 	}
 	if refSchema == "" && createStmt.Table != nil && createStmt.Table.Schema.O == "" {
 		refSchema = ddlEvent.SchemaName
@@ -449,11 +450,7 @@ func extractTableSchemas(node ast.Node) []string {
 	return extractor.schemas
 }
 
-// FindCreateTableLikeReferSchema resolves the schema of the table referenced by a
-// CREATE TABLE LIKE statement. It inspects job.InvolvingSchemaInfo to find the
-// schema name, preferring SharedInvolving entries first, then falling back to
-// other entries that reference the same table name (excluding the target table).
-func FindCreateTableLikeReferSchema(job *timodel.Job, targetSchema, targetTable, referTable string) string {
+func findCreateTableLikeReferSchema(job *timodel.Job, targetSchema, targetTable, referTable string) string {
 	for _, info := range job.InvolvingSchemaInfo {
 		if info.Mode == timodel.SharedInvolving && strings.EqualFold(info.Table, referTable) {
 			return info.Database

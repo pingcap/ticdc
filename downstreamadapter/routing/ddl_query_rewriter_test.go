@@ -539,7 +539,6 @@ func TestRewriteParserBackedDDLQueryUsesEventSchemaForUnqualifiedReferences(t *t
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -571,10 +570,9 @@ func TestRewriteParserBackedDDLQueryUsesQuerySchemaForCreateTableLike(t *testing
 	})
 
 	newQuery, err := router.rewriteParserBackedDDLQuery(&commonEvent.DDLEvent{
-		SchemaName:        "source_extra_db",
-		TableName:         "external_users",
-		Query:             "CREATE TABLE `source_extra_db`.`external_users` LIKE `source_db`.`users`",
-		BlockedTableNames: []commonEvent.SchemaTableName{{SchemaName: "source_extra_db", TableName: "users"}},
+		SchemaName: "source_extra_db",
+		TableName:  "external_users",
+		Query:      "CREATE TABLE `source_extra_db`.`external_users` LIKE `source_db`.`users`",
 	})
 	require.NoError(t, err)
 	require.Equal(t, "CREATE TABLE `target_extra_db`.`external_users` LIKE `target_db`.`users`", newQuery)

@@ -78,10 +78,7 @@ func splitMultiStmtDDLQuery(query string) ([]string, error) {
 	return queries, nil
 }
 
-func (r Router) rewriteSingleDDLQuery(
-	query string,
-	defaultSchema string,
-) (string, error) {
+func (r Router) rewriteSingleDDLQuery(query string, defaultSchema string) (string, error) {
 	p := parser.New()
 	stmt, err := p.ParseOneStmt(query, "", "")
 	if err != nil {
@@ -123,6 +120,11 @@ func (r Router) rewriteSingleDDLQuery(
 	return newQuery, nil
 }
 
+// fillDefaultSchema qualifies table names that are legitimately unqualified in
+// the DDL event. For example, an event with SchemaName `source_db` and
+// `ALTER TABLE t ADD COLUMN c INT` should route `t` as `source_db`.`t`.
+// Cross-schema references, for example `CREATE VIEW source_db.v AS SELECT *
+// FROM other_db.t`, must already be qualified before the event reaches router.
 func fillDefaultSchema(tables []commonEvent.SchemaTableName, defaultSchema string) {
 	if defaultSchema == "" {
 		return
@@ -293,6 +295,10 @@ func qualifiedTableKey(schema, table string) string {
 
 // rewriteDDLStmtTables renames tables in DDL by given `targetTables`.
 // Arguments `sourceTables` and `targetTables` should have the same structure as the return value of extractTableNames.
+// sourceTables is also used to route column qualifiers. For example,
+// `CREATE VIEW source_db.v AS SELECT source_db.t.id FROM source_db.t` must
+// rewrite both the FROM table and the `source_db`.`t`.`id` qualifier.
+// Column references do not have positional correspondence with visited TableName nodes.
 // Returned DDL is formatted like StringSingleQuotes, KeyWordUppercase and NameBackQuotes.
 func rewriteDDLStmtTables(
 	stmt ast.StmtNode,
