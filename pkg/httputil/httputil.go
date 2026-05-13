@@ -111,7 +111,9 @@ func (c *Client) DoRequest(
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 
 	content, err := io.ReadAll(resp.Body)
 	if err != nil {

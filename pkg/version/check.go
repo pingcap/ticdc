@@ -25,7 +25,6 @@ import (
 	"github.com/coreos/go-semver/semver"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/pkg/errors"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/httputil"
 	"github.com/pingcap/ticdc/pkg/retry"
@@ -158,7 +157,9 @@ func checkPDVersion(ctx context.Context, pdAddr string, credential *security.Cre
 	if err != nil {
 		return cerror.ErrCheckClusterVersionFromPD.GenWithStackByArgs(err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 
 	content, err := io.ReadAll(resp.Body)
 	if err != nil || resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -178,7 +179,7 @@ func checkPDVersion(ctx context.Context, pdAddr string, credential *security.Cre
 
 	ver, err := semver.NewVersion(SanitizeVersion(pdVer.Version))
 	if err != nil {
-		err = errors.Annotate(err, "invalid PD version")
+		err = cerror.Annotate(err, "invalid PD version")
 		return cerror.WrapError(cerror.ErrNewSemVersion, err)
 	}
 
@@ -215,7 +216,7 @@ func CheckStoreVersion(ctx context.Context, client pd.Client) error {
 
 		ver, err := semver.NewVersion(SanitizeVersion(s.Version))
 		if err != nil {
-			err = errors.Annotate(err, "invalid TiKV version")
+			err = cerror.Annotate(err, "invalid TiKV version")
 			return cerror.WrapError(cerror.ErrNewSemVersion, err)
 		}
 		minOrd := ver.Compare(*MinTiKVVersion)
@@ -267,7 +268,7 @@ func GetTiCDCClusterVersion(captureVersion []string) (TiCDCClusterVersion, error
 			ver = defaultTiCDCVersion
 		}
 		if err != nil {
-			err = errors.Annotate(err, "invalid CDC cluster version")
+			err = cerror.Annotate(err, "invalid CDC cluster version")
 			return ticdcClusterVersionUnknown, cerror.WrapError(cerror.ErrNewSemVersion, err)
 		}
 		if minVer == nil || ver.Compare(*minVer) < 0 {

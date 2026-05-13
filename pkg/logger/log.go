@@ -26,6 +26,7 @@ import (
 	"github.com/go-sql-driver/mysql"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
+	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"google.golang.org/grpc/grpclog"
@@ -232,7 +233,7 @@ func initOptionalComponent(op *loggerOp, cfg *Config) error {
 func ZapErrorFilter(err error, filterErrors ...error) zap.Field {
 	cause := errors.Cause(err)
 	for _, ferr := range filterErrors {
-		if cause == ferr {
+		if cerror.Is(cause, ferr) {
 			return zap.Error(nil)
 		}
 	}
@@ -334,7 +335,7 @@ func ErrorFilterContextCanceled(logger *zap.Logger, msg string, fields ...zap.Fi
 			}
 		case zapcore.ErrorType:
 			err, ok := field.Interface.(error)
-			if ok && errors.Cause(err) == context.Canceled {
+			if ok && cerror.Is(errors.Cause(err), context.Canceled) {
 				return
 			}
 		}

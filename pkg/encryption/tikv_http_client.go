@@ -113,7 +113,9 @@ func (c *tikvEncryptionHTTPClient) getEncryptionMetaFromStore(ctx context.Contex
 			zap.Error(err))
 		return nil, errors.Trace(err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {

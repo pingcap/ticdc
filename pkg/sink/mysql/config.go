@@ -385,7 +385,9 @@ func NewMysqlConfigAndDB(
 	if cachePrepStmts {
 		cfg.stmtCache, err = lru.NewWithEvict(prepStmtCacheSize, func(key, value interface{}) {
 			stmt := value.(*sql.Stmt)
-			stmt.Close()
+			if err := stmt.Close(); err != nil {
+				log.Warn("failed to close cached prepared statement", zap.Error(err))
+			}
 		})
 		if err != nil {
 			return nil, nil, err

@@ -713,7 +713,9 @@ func (c *consumer) handleNewFiles(
 				}
 			}
 		}
-		c.flushDMLEvents(ctx, tableID)
+		if err := c.flushDMLEvents(ctx, tableID); err != nil {
+			return err
+		}
 	}
 
 	return nil

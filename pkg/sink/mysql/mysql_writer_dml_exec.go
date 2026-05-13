@@ -93,7 +93,7 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 		failpoint.Inject("MySQLSinkTxnRandomError", func() {
 			log.Warn("inject MySQLSinkTxnRandomError")
 			err := errors.Trace(driver.ErrBadConn)
-			w.logDMLTxnErr(err, time.Now(), w.ChangefeedID.String(), dmls)
+			err = w.logDMLTxnErr(err, time.Now(), w.ChangefeedID.String(), dmls)
 			failpoint.Return(err)
 		})
 
@@ -105,14 +105,13 @@ func (w *Writer) execDMLWithMaxRetries(dmls *preparedDMLs) error {
 				Number:  uint16(mysql.ErrDupEntry),
 				Message: "Duplicate entry",
 			})
-			w.logDMLTxnErr(err, time.Now(), w.ChangefeedID.String(), dmls)
+			err = w.logDMLTxnErr(err, time.Now(), w.ChangefeedID.String(), dmls)
 			failpoint.Return(err)
 		})
 
 		err := w.statistics.RecordBatchExecution(tryExec)
 		if err != nil {
-			w.logDMLTxnErr(err, time.Now(), w.ChangefeedID.String(), dmls)
-			return errors.Trace(err)
+			return errors.Trace(w.logDMLTxnErr(err, time.Now(), w.ChangefeedID.String(), dmls))
 		}
 		return nil
 	}, retry.WithBackoffBaseDelay(BackoffBaseDelay.Milliseconds()),
@@ -158,7 +157,7 @@ func (w *Writer) sequenceExecute(
 		if execError != nil {
 			log.Error("ExecContext", zap.Error(execError), zap.Any("dmls", dmls), zap.Int("writerID", w.id))
 			if rbErr := tx.Rollback(); rbErr != nil {
-				if errors.Cause(rbErr) != context.Canceled {
+				if !cerror.Is(errors.Cause(rbErr), context.Canceled) {
 					log.Warn("failed to rollback txn", zap.Error(rbErr), zap.Int("writerID", w.id))
 				}
 			}

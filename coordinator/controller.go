@@ -355,9 +355,14 @@ func (c *Controller) RequestResolvedTsFromLogCoordinator(ctx context.Context, ch
 	changefeedID := c.changefeedDB.GetChangefeedIDByName(changefeedDisplayName)
 	ids := c.nodeManager.GetAliveNodeIDs()
 	for _, id := range ids {
-		c.messageCenter.SendEvent(messaging.NewSingleTargetMessage(id, messaging.LogCoordinatorTopic, &heartbeatpb.LogCoordinatorResolvedTsRequest{
+		if err := c.messageCenter.SendEvent(messaging.NewSingleTargetMessage(id, messaging.LogCoordinatorTopic, &heartbeatpb.LogCoordinatorResolvedTsRequest{
 			ChangefeedID: changefeedID.ToPB(),
-		}))
+		})); err != nil {
+			log.Warn("failed to request resolved ts from log coordinator",
+				zap.Stringer("target", id),
+				zap.String("changefeed", changefeedID.DisplayName.String()),
+				zap.Error(err))
+		}
 	}
 
 	// wait for some time to get the resolved ts

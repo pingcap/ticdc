@@ -218,7 +218,9 @@ func readAllFromBuffer(buf []byte) (logHeap, error) {
 	r := &reader{
 		br: bytes.NewReader(buf),
 	}
-	defer r.Close()
+	defer func() {
+		_ = r.Close()
+	}()
 
 	h := logHeap{}
 	for {
@@ -326,7 +328,7 @@ func (r *reader) Read() (*pevent.RedoLog, error) {
 
 	lenField, err := readInt64(r.br)
 	if err != nil {
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return nil, err
 		}
 		return nil, errors.WrapError(errors.ErrRedoFileOp, err)
@@ -336,7 +338,7 @@ func (r *reader) Read() (*pevent.RedoLog, error) {
 	data := make([]byte, recBytes+padBytes)
 	_, err = io.ReadFull(r.br, data)
 	if err != nil {
-		if err == io.EOF || err == io.ErrUnexpectedEOF {
+		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 			log.Warn("read redo log have unexpected io error",
 				zap.String("fileName", r.fileName),
 				zap.Error(err))
