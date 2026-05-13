@@ -31,9 +31,7 @@ import (
 	"go.uber.org/zap"
 )
 
-const (
-	defaultTimeout = 5 * time.Minute
-)
+const ()
 
 // ClaimCheck manage send message to the claim-check external storage.
 type ClaimCheck struct {

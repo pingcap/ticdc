@@ -170,7 +170,7 @@ func (m *kafkaTopicManager) tryUpdatePartitionsAndLogging(topic string, partitio
 // When handling this error, please be cautious.
 // If you simply throw the error to the caller, it may impact the robustness of your program.
 func (m *kafkaTopicManager) fetchAllTopicsPartitionsNum(
-	ctx context.Context,
+	_ context.Context,
 ) (map[string]int32, error) {
 	var topics []string
 	m.topics.Range(func(key, _ any) bool {
@@ -244,7 +244,7 @@ func (m *kafkaTopicManager) waitUntilTopicVisible(
 // createTopic creates a topic with the given name
 // and returns the number of partitions.
 func (m *kafkaTopicManager) createTopic(
-	ctx context.Context,
+	_ context.Context,
 	topicName string,
 ) (int32, error) {
 	if !m.cfg.AutoCreate {

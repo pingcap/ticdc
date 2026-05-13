@@ -39,12 +39,6 @@ const (
 	reconnectInterval = 2 * time.Second
 	streamTypeEvent   = "event"
 	streamTypeCommand = "command"
-
-	eventRecvCh   = "eventRecvCh"
-	commandRecvCh = "commandRecvCh"
-
-	eventSendCh   = "eventSendCh"
-	commandSendCh = "commandSendCh"
 )
 
 type streamSession struct {

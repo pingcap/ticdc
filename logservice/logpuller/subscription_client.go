@@ -319,7 +319,7 @@ func (s *subscriptionClient) updateMetrics(ctx context.Context) error {
 			}
 
 			pendingRegionReqCount := 0
-			s.stores.Range(func(key, value any) bool {
+			s.stores.Range(func(_, value any) bool {
 				store := value.(*requestedStore)
 				store.requestWorkers.RLock()
 				for _, worker := range store.requestWorkers.s {
@@ -581,7 +581,7 @@ func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 	}
 
 	defer func() {
-		s.stores.Range(func(key, value any) bool {
+		s.stores.Range(func(_, value any) bool {
 			rs := value.(*requestedStore)
 
 			rs.requestWorkers.RLock()
