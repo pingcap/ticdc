@@ -116,6 +116,12 @@ func (b *Barrier) HandleStatus(from node.ID,
 			}
 		}
 
+		// Only replicating non-DDL dispatchers can reach handleOneStatus.
+		// handleOneStatus updates SpanReplication directly instead of going
+		// through spanController.UpdateStatus, so admitting absent or scheduling
+		// spans here would bypass nonReplicatingCheckpointTs maintenance.
+		// Keep the filter above in sync with that invariant.
+		//
 		// deal with block status, and check whether need to return action.
 		// we need to deal with the block status in order, otherwise scheduler may have problem
 		// e.g. TODO（truncate + create table)
