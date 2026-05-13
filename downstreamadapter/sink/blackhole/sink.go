@@ -15,6 +15,7 @@ package blackhole
 
 import (
 	"context"
+	"sync/atomic"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -32,13 +33,18 @@ const (
 // sink is responsible for writing data to blackhole.
 // Including DDL and DML.
 type sink struct {
-	eventCh    *chann.UnlimitedChannel[*commonEvent.DMLEvent, any]
+	eventChs   []*chann.UnlimitedChannel[*commonEvent.DMLEvent, any]
 	statistics *metrics.Statistics
+	seq        atomic.Uint64
 }
 
 func New(changefeedID common.ChangeFeedID) (*sink, error) {
+	eventChs := make([]*chann.UnlimitedChannel[*commonEvent.DMLEvent, any], 0, defaultFlushConcurrency)
+	for range defaultFlushConcurrency {
+		eventChs = append(eventChs, chann.NewUnlimitedChannelDefault[*commonEvent.DMLEvent]())
+	}
 	return &sink{
-		eventCh:    chann.NewUnlimitedChannelDefault[*commonEvent.DMLEvent](),
+		eventChs:   eventChs,
 		statistics: metrics.NewStatistics(changefeedID, "sink"),
 	}, nil
 }
@@ -59,7 +65,8 @@ func (s *sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 	// ref: https://github.com/pingcap/ticdc/blob/da834db76e0662ff15ef12645d1f37bfa6506d83/tests/integration_tests/lossy_ddl/run.sh#L23
 	// Use zap.Stringer to call String() method which applies log redaction
 	log.Debug("BlackHoleSink: WriteEvents", zap.Stringer("dml", event))
-	s.eventCh.Push(event)
+	idx := s.seq.Add(1) % defaultFlushConcurrency
+	s.eventChs[idx].Push(event)
 }
 
 func (s *sink) FlushDMLBeforeBlock(_ commonEvent.BlockEvent) error {
@@ -90,27 +97,29 @@ func (s *sink) AddCheckpointTs(ts uint64) {
 }
 
 func (s *sink) Close() {
-	s.eventCh.Close()
+	for _, ch := range s.eventChs {
+		ch.Close()
+	}
 	s.statistics.Close()
 }
 
 func (s *sink) Run(ctx context.Context) error {
 	eg, ctx := errgroup.WithContext(ctx)
-	for range defaultFlushConcurrency {
+	for idx := range defaultFlushConcurrency {
 		eg.Go(func() error {
-			return s.flush(ctx)
+			return s.flush(ctx, idx)
 		})
 	}
 	return eg.Wait()
 }
 
-func (s *sink) flush(ctx context.Context) error {
+func (s *sink) flush(ctx context.Context, idx int) error {
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
 		default:
-			event, ok := s.eventCh.Get()
+			event, ok := s.eventChs[idx].Get()
 			if !ok {
 				log.Info("blackhole sink event channel closed")
 				return nil
@@ -124,7 +133,11 @@ func (s *sink) flush(ctx context.Context) error {
 }
 
 func (s *sink) BatchCount() int {
-	return s.eventCh.Len()
+	count := 0
+	for _, ch := range s.eventChs {
+		count += ch.Len()
+	}
+	return count
 }
 
 func (s *sink) BatchBytes() int {
