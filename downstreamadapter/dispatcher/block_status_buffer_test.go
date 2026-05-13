@@ -20,6 +20,7 @@ import (
 
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/stretchr/testify/require"
 )
 
@@ -27,8 +28,8 @@ func TestBlockStatusBufferDeduplicatesPendingDone(t *testing.T) {
 	buffer := NewBlockStatusBuffer(4)
 	dispatcherID := common.NewDispatcherID()
 
-	buffer.OfferDone(dispatcherID, 100, false, common.DefaultMode)
-	buffer.OfferDone(dispatcherID, 100, false, common.DefaultMode)
+	buffer.Offer(NewDoneBlockStatusEntry(dispatcherID, 100, false, common.DefaultMode))
+	buffer.Offer(NewDoneBlockStatusEntry(dispatcherID, 100, false, common.DefaultMode))
 
 	require.Equal(t, 1, buffer.Len())
 
@@ -50,7 +51,7 @@ func TestBlockStatusBufferDeduplicatesPendingWaiting(t *testing.T) {
 	dispatcherID := common.NewDispatcherID()
 
 	offerWaiting := func() {
-		buffer.OfferWaiting(
+		buffer.Offer(NewWaitingBlockStatusEntry(
 			dispatcherID,
 			150,
 			nil,
@@ -59,7 +60,7 @@ func TestBlockStatusBufferDeduplicatesPendingWaiting(t *testing.T) {
 			nil,
 			false,
 			common.DefaultMode,
-		)
+		))
 	}
 
 	offerWaiting()
@@ -81,7 +82,7 @@ func TestBlockStatusBufferAllowsWaitingAgainAfterTake(t *testing.T) {
 	dispatcherID := common.NewDispatcherID()
 
 	offerWaiting := func() {
-		buffer.OfferWaiting(
+		buffer.Offer(NewWaitingBlockStatusEntry(
 			dispatcherID,
 			180,
 			nil,
@@ -90,7 +91,7 @@ func TestBlockStatusBufferAllowsWaitingAgainAfterTake(t *testing.T) {
 			nil,
 			false,
 			common.DefaultMode,
-		)
+		))
 	}
 
 	offerWaiting()
@@ -114,7 +115,7 @@ func TestBlockStatusBufferAllowsDoneAgainAfterTake(t *testing.T) {
 	buffer := NewBlockStatusBuffer(4)
 	dispatcherID := common.NewDispatcherID()
 
-	buffer.OfferDone(dispatcherID, 190, false, common.DefaultMode)
+	buffer.Offer(NewDoneBlockStatusEntry(dispatcherID, 190, false, common.DefaultMode))
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -122,7 +123,7 @@ func TestBlockStatusBufferAllowsDoneAgainAfterTake(t *testing.T) {
 	require.NotNil(t, first)
 	require.Equal(t, heartbeatpb.BlockStage_DONE, first.State.Stage)
 
-	buffer.OfferDone(dispatcherID, 190, false, common.DefaultMode)
+	buffer.Offer(NewDoneBlockStatusEntry(dispatcherID, 190, false, common.DefaultMode))
 
 	second := buffer.Take(ctx)
 	require.NotNil(t, second)
@@ -135,7 +136,7 @@ func TestBlockStatusBufferKeepsWaitingBeforeDone(t *testing.T) {
 	buffer := NewBlockStatusBuffer(4)
 	dispatcherID := common.NewDispatcherID()
 
-	buffer.OfferWaiting(
+	buffer.Offer(NewWaitingBlockStatusEntry(
 		dispatcherID,
 		200,
 		nil,
@@ -144,9 +145,9 @@ func TestBlockStatusBufferKeepsWaitingBeforeDone(t *testing.T) {
 		nil,
 		false,
 		common.DefaultMode,
-	)
-	buffer.OfferDone(dispatcherID, 200, false, common.DefaultMode)
-	buffer.OfferDone(dispatcherID, 200, false, common.DefaultMode)
+	))
+	buffer.Offer(NewDoneBlockStatusEntry(dispatcherID, 200, false, common.DefaultMode))
+	buffer.Offer(NewDoneBlockStatusEntry(dispatcherID, 200, false, common.DefaultMode))
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -165,9 +166,9 @@ func TestBlockStatusBufferKeepsDistinctDoneKeys(t *testing.T) {
 	buffer := NewBlockStatusBuffer(4)
 	dispatcherID := common.NewDispatcherID()
 
-	buffer.OfferDone(dispatcherID, 300, false, common.DefaultMode)
-	buffer.OfferDone(dispatcherID, 300, true, common.DefaultMode)
-	buffer.OfferDone(dispatcherID, 300, false, common.RedoMode)
+	buffer.Offer(NewDoneBlockStatusEntry(dispatcherID, 300, false, common.DefaultMode))
+	buffer.Offer(NewDoneBlockStatusEntry(dispatcherID, 300, true, common.DefaultMode))
+	buffer.Offer(NewDoneBlockStatusEntry(dispatcherID, 300, false, common.RedoMode))
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -188,6 +189,49 @@ func TestBlockStatusBufferKeepsDistinctDoneKeys(t *testing.T) {
 	require.Equal(t, common.RedoMode, third.Mode)
 
 	requireNoBlockStatus(t, buffer)
+}
+
+func TestWaitingBlockStatusEntryClonesMutableMetadata(t *testing.T) {
+	dispatcherID := common.NewDispatcherID()
+	blockTables := &commonEvent.InfluencedTables{
+		InfluenceType: commonEvent.InfluenceTypeNormal,
+		TableIDs:      []int64{11, 12},
+	}
+	needDroppedTables := &commonEvent.InfluencedTables{
+		InfluenceType: commonEvent.InfluenceTypeDB,
+		SchemaID:      99,
+		TableIDs:      []int64{21, 22},
+	}
+	needAddedTables := []commonEvent.Table{
+		{SchemaID: 31, TableID: 32, Splitable: true},
+	}
+	updatedSchemas := []commonEvent.SchemaIDChange{
+		{TableID: 41, OldSchemaID: 42, NewSchemaID: 43},
+	}
+
+	entry := NewWaitingBlockStatusEntry(
+		dispatcherID,
+		500,
+		blockTables,
+		needDroppedTables,
+		needAddedTables,
+		updatedSchemas,
+		false,
+		common.DefaultMode,
+	)
+
+	blockTables.TableIDs[0] = 101
+	needDroppedTables.TableIDs[0] = 202
+	needAddedTables[0].TableID = 303
+	updatedSchemas[0].NewSchemaID = 404
+
+	msg := entry.toPB()
+	require.Equal(t, []int64{11, 12}, msg.State.BlockTables.TableIDs)
+	require.Equal(t, []int64{21, 22}, msg.State.NeedDroppedTables.TableIDs)
+	require.Len(t, msg.State.NeedAddedTables, 1)
+	require.Equal(t, int64(32), msg.State.NeedAddedTables[0].TableID)
+	require.Len(t, msg.State.UpdatedSchemas, 1)
+	require.Equal(t, int64(43), msg.State.UpdatedSchemas[0].NewSchemaID)
 }
 
 func requireNoBlockStatus(t *testing.T, buffer *BlockStatusBuffer) {

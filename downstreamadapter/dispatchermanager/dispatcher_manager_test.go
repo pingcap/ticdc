@@ -135,7 +135,7 @@ func createTestManager(t *testing.T) *DispatcherManager {
 		0,
 		0,
 		make(chan dispatcher.TableSpanStatusWithSeq, 8192),
-		1024*1024,
+		blockStatusBufferSize,
 		make(chan error, 1),
 	)
 	nodeID := node.NewID()
@@ -215,7 +215,7 @@ func TestCollectBlockStatusRequestSplitsOversizedMessages(t *testing.T) {
 	manager := createTestManager(t)
 
 	for i := 0; i < maxBlockStatusesPerRequest+2; i++ {
-		manager.sharedInfo.OfferWaitingBlockStatus(
+		manager.sharedInfo.OfferBlockStatus(dispatcher.NewWaitingBlockStatusEntry(
 			common.NewDispatcherID(),
 			uint64(i+1),
 			nil,
@@ -224,10 +224,10 @@ func TestCollectBlockStatusRequestSplitsOversizedMessages(t *testing.T) {
 			nil,
 			false,
 			common.DefaultMode,
-		)
+		))
 	}
 	for i := 0; i < maxBlockStatusesPerRequest+1; i++ {
-		manager.sharedInfo.OfferWaitingBlockStatus(
+		manager.sharedInfo.OfferBlockStatus(dispatcher.NewWaitingBlockStatusEntry(
 			common.NewDispatcherID(),
 			uint64(i+10000),
 			nil,
@@ -236,7 +236,7 @@ func TestCollectBlockStatusRequestSplitsOversizedMessages(t *testing.T) {
 			nil,
 			false,
 			common.RedoMode,
-		)
+		))
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())

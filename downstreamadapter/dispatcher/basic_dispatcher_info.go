@@ -23,7 +23,6 @@ import (
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
-	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/prometheus/client_golang/prometheus"
@@ -243,42 +242,8 @@ func (d *BasicDispatcher) GetTxnAtomicity() config.AtomicityLevel {
 	return d.sharedInfo.txnAtomicity
 }
 
-func (d *BasicDispatcher) OfferNoneBlockStatus(
-	blockTs uint64,
-	needDroppedTables *commonEvent.InfluencedTables,
-	needAddedTables []commonEvent.Table,
-) {
-	d.sharedInfo.OfferNoneBlockStatus(
-		d.id,
-		blockTs,
-		needDroppedTables,
-		needAddedTables,
-		d.GetMode(),
-	)
-}
-
-func (d *BasicDispatcher) OfferWaitingBlockStatus(
-	blockTs uint64,
-	blockTables *commonEvent.InfluencedTables,
-	needDroppedTables *commonEvent.InfluencedTables,
-	needAddedTables []commonEvent.Table,
-	updatedSchemas []commonEvent.SchemaIDChange,
-	isSyncPoint bool,
-) {
-	d.sharedInfo.OfferWaitingBlockStatus(
-		d.id,
-		blockTs,
-		blockTables,
-		needDroppedTables,
-		needAddedTables,
-		updatedSchemas,
-		isSyncPoint,
-		d.GetMode(),
-	)
-}
-
-func (d *BasicDispatcher) OfferDoneBlockStatus(blockTs uint64, isSyncPoint bool) {
-	d.sharedInfo.OfferDoneBlockStatus(d.id, blockTs, isSyncPoint, d.GetMode())
+func (d *BasicDispatcher) offerBlockStatus(status *BlockStatusEntry) {
+	d.sharedInfo.OfferBlockStatus(status)
 }
 
 func (d *BasicDispatcher) TakeBlockStatus(ctx context.Context) *heartbeatpb.TableSpanBlockStatus {
@@ -316,51 +281,10 @@ func (s *SharedInfo) EnableActiveActive() bool {
 	return s.enableActiveActive
 }
 
-func (s *SharedInfo) OfferNoneBlockStatus(
-	dispatcherID common.DispatcherID,
-	blockTs uint64,
-	needDroppedTables *commonEvent.InfluencedTables,
-	needAddedTables []commonEvent.Table,
-	mode int64,
-) {
-	s.blockStatusBuffer.OfferNone(
-		dispatcherID,
-		blockTs,
-		needDroppedTables,
-		needAddedTables,
-		mode,
-	)
-}
-
-func (s *SharedInfo) OfferWaitingBlockStatus(
-	dispatcherID common.DispatcherID,
-	blockTs uint64,
-	blockTables *commonEvent.InfluencedTables,
-	needDroppedTables *commonEvent.InfluencedTables,
-	needAddedTables []commonEvent.Table,
-	updatedSchemas []commonEvent.SchemaIDChange,
-	isSyncPoint bool,
-	mode int64,
-) {
-	s.blockStatusBuffer.OfferWaiting(
-		dispatcherID,
-		blockTs,
-		blockTables,
-		needDroppedTables,
-		needAddedTables,
-		updatedSchemas,
-		isSyncPoint,
-		mode,
-	)
-}
-
-func (s *SharedInfo) OfferDoneBlockStatus(
-	dispatcherID common.DispatcherID,
-	blockTs uint64,
-	isSyncPoint bool,
-	mode int64,
-) {
-	s.blockStatusBuffer.OfferDone(dispatcherID, blockTs, isSyncPoint, mode)
+// OfferBlockStatus appends a canonical block status to the local dispatcher
+// manager buffer. WAITING and DONE entries may be coalesced while pending.
+func (s *SharedInfo) OfferBlockStatus(status *BlockStatusEntry) {
+	s.blockStatusBuffer.Offer(status)
 }
 
 func (s *SharedInfo) TakeBlockStatus(ctx context.Context) *heartbeatpb.TableSpanBlockStatus {

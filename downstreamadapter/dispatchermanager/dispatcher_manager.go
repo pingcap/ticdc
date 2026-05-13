@@ -46,7 +46,14 @@ import (
 	"go.uber.org/zap"
 )
 
-const maxBlockStatusesPerRequest = 2048
+const (
+	maxBlockStatusesPerRequest = 2048
+	// The local buffer only needs to cover the short gap before dispatcher
+	// manager batching drains it. Longer retries are absorbed by the request
+	// queue dedupe, so keeping this queue modest avoids preallocating a large
+	// value-retention window in front of the manager.
+	blockStatusBufferSize = 16 * 1024
+)
 
 /*
 DispatcherManager manages dispatchers for a changefeed instance with responsibilities including:
@@ -285,7 +292,7 @@ func NewDispatcherManager(
 		batchCounts,
 		batchBytes,
 		make(chan dispatcher.TableSpanStatusWithSeq, 8192),
-		1024*1024,
+		blockStatusBufferSize,
 		make(chan error, 1),
 	)
 
@@ -614,9 +621,11 @@ func (e *DispatcherManager) collectBlockStatusRequest(ctx context.Context) {
 			if end > len(blockStatusMessage) {
 				end = len(blockStatusMessage)
 			}
+			chunk := make([]*heartbeatpb.TableSpanBlockStatus, end-start)
+			copy(chunk, blockStatusMessage[start:end])
 			var message heartbeatpb.BlockStatusRequest
 			message.ChangefeedID = e.changefeedID.ToPB()
-			message.BlockStatuses = blockStatusMessage[start:end]
+			message.BlockStatuses = chunk
 			message.Mode = mode
 			e.blockStatusRequestQueue.Enqueue(&BlockStatusRequestWithTargetID{TargetID: e.GetMaintainerID(), Request: &message})
 		}
