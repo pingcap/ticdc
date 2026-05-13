@@ -54,7 +54,7 @@ func (m *mockPDClient) ServeHTTP(resp http.ResponseWriter, _ *http.Request) {
 	}
 
 	if m.getPDVersion != nil {
-		_, _ = resp.Write([]byte(fmt.Sprintf(`{"version":"%s"}`, m.getPDVersion())))
+		_, _ = fmt.Fprintf(resp, `{"version":"%s"}`, m.getPDVersion())
 	}
 }
 

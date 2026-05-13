@@ -206,10 +206,8 @@ func (c *eventBroker) sendDML(remoteID node.ID, batchEvent *event.BatchDMLEvent,
 		lastStartTs  uint64
 		lastCommitTs uint64
 	)
-	for {
-		if idx >= len(batchEvent.DMLEvents) {
-			break
-		}
+	for idx < len(batchEvent.DMLEvents) {
+
 		dml := batchEvent.DMLEvents[idx]
 		if c.hasSyncPointEventsBeforeTs(dml.GetCommitTs(), d) {
 			events := batchEvent.PopHeadDMLEvents(idx)

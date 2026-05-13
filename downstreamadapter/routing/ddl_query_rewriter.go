@@ -192,7 +192,7 @@ func resolveUnqualifiedReferences(
 			return nil
 		}
 
-		if s.ReferTable != nil && s.ReferTable.Schema.O != "" && s.ReferTable.Name.O != "" {
+		if s.ReferTable != nil && s.ReferTable.Schema.O == "" && s.ReferTable.Name.O != "" {
 			for _, blockedTableName := range blockedTableNames {
 				if blockedTableName.SchemaName != "" &&
 					strings.EqualFold(blockedTableName.TableName, s.ReferTable.Name.O) &&

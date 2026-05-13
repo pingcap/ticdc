@@ -241,13 +241,14 @@ func TestScanRegions(t *testing.T) {
 
 	i = 0
 	handler = func() RegionsInfo {
-		if i == 0 {
+		switch i {
+		case 0:
 			i++
 			return RegionsInfo{Regions: regions[2:3]}
-		} else if i == 1 {
+		case 1:
 			i++
 			return RegionsInfo{Regions: regions[3:4]}
-		} else if i == 2 {
+		case 2:
 			i++
 			return RegionsInfo{Regions: regions[4:5]}
 		}
