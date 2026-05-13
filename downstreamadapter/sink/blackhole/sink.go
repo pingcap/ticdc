@@ -19,6 +19,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/utils/chann"
 	"go.uber.org/zap"
 )
@@ -26,12 +27,14 @@ import (
 // sink is responsible for writing data to blackhole.
 // Including DDL and DML.
 type sink struct {
-	eventCh *chann.UnlimitedChannel[*commonEvent.DMLEvent, any]
+	eventCh    *chann.UnlimitedChannel[*commonEvent.DMLEvent, any]
+	statistics *metrics.Statistics
 }
 
-func New() (*sink, error) {
+func New(changefeedID common.ChangeFeedID) (*sink, error) {
 	return &sink{
-		eventCh: chann.NewUnlimitedChannelDefault[*commonEvent.DMLEvent](),
+		eventCh:    chann.NewUnlimitedChannelDefault[*commonEvent.DMLEvent](),
+		statistics: metrics.NewStatistics(changefeedID, "sink"),
 	}, nil
 }
 
@@ -65,12 +68,15 @@ func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 		// NOTE: don't change the log, integration test `lossy_ddl` depends on it.
 		// ref: https://github.com/pingcap/ticdc/blob/da834db76e0662ff15ef12645d1f37bfa6506d83/tests/integration_tests/lossy_ddl/run.sh#L17
 		log.Debug("BlackHoleSink: DDL Event", zap.Any("ddl", e))
+		ddlType := e.GetDDLType().String()
+		s.statistics.RecordDDLExecution(func() (string, error) {
+			return ddlType, nil
+		})
 	case commonEvent.TypeSyncPointEvent:
 	default:
 		log.Error("unknown event type",
 			zap.Any("event", event))
 	}
-	event.PostFlush()
 	return nil
 }
 
@@ -80,6 +86,7 @@ func (s *sink) AddCheckpointTs(ts uint64) {
 
 func (s *sink) Close() {
 	s.eventCh.Close()
+	s.statistics.Close()
 }
 
 func (s *sink) Run(ctx context.Context) error {
@@ -93,6 +100,9 @@ func (s *sink) Run(ctx context.Context) error {
 				log.Info("blackhole sink event channel closed")
 				return nil
 			}
+			s.statistics.RecordBatchExecution(func() (int, int64, error) {
+				return int(event.Length), event.ApproximateSize, nil
+			})
 			event.PostFlush()
 		}
 	}
