@@ -561,7 +561,7 @@ func run(
 					return ctx.Err()
 				default:
 					err := workload()
-					if err != nil && errors.Cause(err) != context.Canceled {
+					if err != nil && !cerror.Is(errors.Cause(err), context.Canceled) {
 						log.Warn("workload failed", zap.Error(err))
 					}
 

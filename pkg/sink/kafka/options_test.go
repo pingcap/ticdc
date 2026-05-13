@@ -832,7 +832,8 @@ func TestAdjustOptionsKeepAlive(t *testing.T) {
 		err := adjustOptions(ctx, adminClient, o, adminClient.GetDefaultMockTopicName())
 		require.Error(t, err)
 		// The error should be a type conversion error.
-		_, ok := errors.Cause(err).(*strconv.NumError)
+		var numError *strconv.NumError
+		ok := cerror.As(errors.Cause(err), &numError)
 		require.True(t, ok, "error should be of type strconv.NumError")
 	})
 

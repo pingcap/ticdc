@@ -341,8 +341,6 @@ func (r *dmlExprFilterRule) buildRowWithVirtualColumns(
 
 	vColOffsets, vColFts := collectVirtualColumnOffsetsAndTypes(r.sessCtx.GetExprCtx().GetEvalCtx(), columns)
 	err = table.FillVirtualColumnValue(vColFts, vColOffsets, columns, tableInfo.GetColumns(), r.sessCtx.GetExprCtx(), row.Chunk())
-
-	err = table.FillVirtualColumnValue(vColFts, vColOffsets, columns, tableInfo.GetColumns(), r.sessCtx.GetExprCtx(), row.Chunk())
 	if err != nil {
 		return chunk.Row{}, err
 	}

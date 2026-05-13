@@ -855,6 +855,7 @@ func (s *subscriptionClient) doHandleError(ctx context.Context, errInfo regionEr
 			zap.Error(err))
 	}
 
+	//nolint:errorlint // converting large type switch to errors.As is a significant refactor
 	switch eerr := err.(type) {
 	case *eventError:
 		innerErr := eerr.err

@@ -225,7 +225,7 @@ func readAllFromBuffer(buf []byte) (logHeap, error) {
 	for {
 		rl, err := r.Read()
 		if err != nil {
-			if err != io.EOF {
+			if !cerror.Is(err, io.EOF) {
 				return nil, err
 			}
 			break
