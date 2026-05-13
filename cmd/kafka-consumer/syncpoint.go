@@ -132,14 +132,6 @@ func (s *mysqlConsumerSyncpointStore) createTable(ctx context.Context) error {
 }
 
 func (s *mysqlConsumerSyncpointStore) Write(ctx context.Context, primaryTs uint64) error {
-	secondaryTs := "0"
-	gotSecondaryTs := true
-	if err := s.db.QueryRowContext(ctx, "select @@tidb_current_ts").Scan(&secondaryTs); err != nil {
-		gotSecondaryTs = false
-		log.Warn("get downstream tidb current ts failed, use zero secondary ts",
-			zap.Uint64("primaryTs", primaryTs), zap.Error(err))
-	}
-
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return cerrors.WrapError(cerrors.ErrMySQLTxnError, errors.Trace(err))
@@ -152,6 +144,14 @@ func (s *mysqlConsumerSyncpointStore) Write(ctx context.Context, primaryTs uint6
 			}
 		}
 	}()
+
+	secondaryTs := "0"
+	gotSecondaryTs := true
+	if err = tx.QueryRowContext(ctx, "select @@tidb_current_ts").Scan(&secondaryTs); err != nil {
+		gotSecondaryTs = false
+		log.Warn("get downstream tidb current ts failed, use zero secondary ts",
+			zap.Uint64("primaryTs", primaryTs), zap.Error(err))
+	}
 
 	insertQuery := fmt.Sprintf(
 		"INSERT IGNORE INTO %s.%s (ticdc_cluster_id, consumer_id, topic, primary_ts, secondary_ts) VALUES (?, ?, ?, ?, ?)",
