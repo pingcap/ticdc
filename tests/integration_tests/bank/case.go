@@ -29,9 +29,8 @@ import (
 	"time"
 
 	_ "github.com/go-sql-driver/mysql" // MySQL driver
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/retry"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
@@ -194,7 +193,7 @@ func (*sequenceTest) verify(ctx context.Context, db *sql.DB, accounts, tableID i
 		}
 
 		return nil
-	}, retry.WithBackoffMaxDelay(500), retry.WithBackoffMaxDelay(120*1000), retry.WithMaxTries(10), retry.WithIsRetryableErr(cerror.IsRetryableError))
+	}, retry.WithBackoffMaxDelay(500), retry.WithBackoffMaxDelay(120*1000), retry.WithMaxTries(10), retry.WithIsRetryableErr(errors.IsRetryableError))
 }
 
 // tryDropDB will drop table if data incorrect and panic error likes bad connect.
@@ -320,7 +319,7 @@ func (*bankTest) verify(ctx context.Context, db *sql.DB, accounts, tableID int, 
 			}
 
 			return nil
-		}, retry.WithBackoffBaseDelay(int64(retryInterval)), retry.WithBackoffMaxDelay(120*1000), retry.WithMaxTries(20), retry.WithIsRetryableErr(cerror.IsRetryableError))
+		}, retry.WithBackoffBaseDelay(int64(retryInterval)), retry.WithBackoffMaxDelay(120*1000), retry.WithMaxTries(20), retry.WithIsRetryableErr(errors.IsRetryableError))
 }
 
 // tryDropDB will drop table if data incorrect and panic error likes bad connect.
@@ -561,7 +560,7 @@ func run(
 					return ctx.Err()
 				default:
 					err := workload()
-					if err != nil && !cerror.Is(errors.Cause(err), context.Canceled) {
+					if err != nil && !errors.Is(errors.Cause(err), context.Canceled) {
 						log.Warn("workload failed", zap.Error(err))
 					}
 

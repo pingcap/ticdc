@@ -25,7 +25,7 @@ import (
 	"github.com/coreos/go-semver/semver"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/httputil"
 	"github.com/pingcap/ticdc/pkg/retry"
 	"github.com/pingcap/ticdc/pkg/security"
@@ -98,7 +98,7 @@ func CheckClusterVersion(
 		}, retry.WithBackoffBaseDelay(time.Millisecond.Milliseconds()*10),
 			retry.WithBackoffMaxDelay(time.Second.Milliseconds()),
 			retry.WithMaxTries(uint64(checkClusterVersionRetryTimes)),
-			retry.WithIsRetryableErr(cerror.IsRetryableError))
+			retry.WithIsRetryableErr(errors.IsRetryableError))
 		if err == nil {
 			break
 		}
@@ -117,23 +117,23 @@ func CheckTiCDCVersion(versions map[string]struct{}) error {
 	if len(versions) >= 3 {
 		arg := fmt.Sprintf("all running cdc instance belong to %d different versions, "+
 			"it's not allowed", len(versions))
-		return cerror.ErrVersionIncompatible.GenWithStackByArgs(arg)
+		return errors.ErrVersionIncompatible.GenWithStackByArgs(arg)
 	}
 
 	ver := &semver.Version{}
 	for v := range versions {
 		if err := ver.Set(SanitizeVersion(v)); err != nil {
-			return cerror.WrapError(cerror.ErrNewSemVersion, err)
+			return errors.WrapError(errors.ErrNewSemVersion, err)
 		}
 		if ver.Compare(*MinTiCDCVersion) < 0 {
 			arg := fmt.Sprintf("TiCDC %s is not supported, the minimal compatible version is %s",
 				SanitizeVersion(v), MinTiCDCVersion)
-			return cerror.ErrVersionIncompatible.GenWithStackByArgs(arg)
+			return errors.ErrVersionIncompatible.GenWithStackByArgs(arg)
 		}
 		if ver.Compare(*MaxTiCDCVersion) >= 0 {
 			arg := fmt.Sprintf("TiCDC %s is not supported, only support version less than %s",
 				SanitizeVersion(v), MaxTiCDCVersion)
-			return cerror.ErrVersionIncompatible.GenWithStackByArgs(arg)
+			return errors.ErrVersionIncompatible.GenWithStackByArgs(arg)
 		}
 	}
 	return nil
@@ -155,7 +155,7 @@ func checkPDVersion(ctx context.Context, pdAddr string, credential *security.Cre
 	defer cancel()
 	resp, err := httpClient.Get(ctx, fmt.Sprintf("%s/pd/api/v1/version", pdAddr))
 	if err != nil {
-		return cerror.ErrCheckClusterVersionFromPD.GenWithStackByArgs(err)
+		return errors.ErrCheckClusterVersionFromPD.GenWithStackByArgs(err)
 	}
 	defer func() {
 		_ = resp.Body.Close()
@@ -169,31 +169,31 @@ func checkPDVersion(ctx context.Context, pdAddr string, credential *security.Cre
 		} else {
 			arg = fmt.Sprintf("%s %s", resp.Status, content)
 		}
-		return cerror.ErrCheckClusterVersionFromPD.GenWithStackByArgs(arg)
+		return errors.ErrCheckClusterVersionFromPD.GenWithStackByArgs(arg)
 	}
 
 	err = json.Unmarshal(content, &pdVer)
 	if err != nil {
-		return cerror.ErrCheckClusterVersionFromPD.GenWithStackByArgs(err)
+		return errors.ErrCheckClusterVersionFromPD.GenWithStackByArgs(err)
 	}
 
 	ver, err := semver.NewVersion(SanitizeVersion(pdVer.Version))
 	if err != nil {
-		err = cerror.Annotate(err, "invalid PD version")
-		return cerror.WrapError(cerror.ErrNewSemVersion, err)
+		err = errors.Annotate(err, "invalid PD version")
+		return errors.WrapError(errors.ErrNewSemVersion, err)
 	}
 
 	minOrd := ver.Compare(*minPDVersion)
 	if minOrd < 0 {
 		arg := fmt.Sprintf("PD %s is not supported, the minimal compatible version is %s",
 			SanitizeVersion(pdVer.Version), minPDVersion)
-		return cerror.ErrVersionIncompatible.GenWithStackByArgs(arg)
+		return errors.ErrVersionIncompatible.GenWithStackByArgs(arg)
 	}
 	maxOrd := ver.Compare(*maxPDVersion)
 	if maxOrd >= 0 {
 		arg := fmt.Sprintf("PD %s is not supported, only support version less than %s",
 			SanitizeVersion(pdVer.Version), maxPDVersion)
-		return cerror.ErrVersionIncompatible.GenWithStackByArgs(arg)
+		return errors.ErrVersionIncompatible.GenWithStackByArgs(arg)
 	}
 	return nil
 }
@@ -202,11 +202,11 @@ func checkPDVersion(ctx context.Context, pdAddr string, credential *security.Cre
 // If storeID is 0, it checks all TiKV.
 func CheckStoreVersion(ctx context.Context, client pd.Client) error {
 	failpoint.Inject("GetStoreFailed", func() {
-		failpoint.Return(cerror.WrapError(cerror.ErrGetAllStoresFailed, fmt.Errorf("unknown store")))
+		failpoint.Return(errors.WrapError(errors.ErrGetAllStoresFailed, fmt.Errorf("unknown store")))
 	})
 	stores, err := client.GetAllStores(ctx, pdopt.WithExcludeTombstone())
 	if err != nil {
-		return cerror.WrapError(cerror.ErrGetAllStoresFailed, err)
+		return errors.WrapError(errors.ErrGetAllStoresFailed, err)
 	}
 
 	for _, s := range stores {
@@ -216,20 +216,20 @@ func CheckStoreVersion(ctx context.Context, client pd.Client) error {
 
 		ver, err := semver.NewVersion(SanitizeVersion(s.Version))
 		if err != nil {
-			err = cerror.Annotate(err, "invalid TiKV version")
-			return cerror.WrapError(cerror.ErrNewSemVersion, err)
+			err = errors.Annotate(err, "invalid TiKV version")
+			return errors.WrapError(errors.ErrNewSemVersion, err)
 		}
 		minOrd := ver.Compare(*MinTiKVVersion)
 		if minOrd < 0 {
 			arg := fmt.Sprintf("TiKV %s is not supported, the minimal compatible version is %s",
 				SanitizeVersion(s.Version), MinTiKVVersion)
-			return cerror.ErrVersionIncompatible.GenWithStackByArgs(arg)
+			return errors.ErrVersionIncompatible.GenWithStackByArgs(arg)
 		}
 		maxOrd := ver.Compare(*maxTiKVVersion)
 		if maxOrd >= 0 {
 			arg := fmt.Sprintf("TiKV %s is not supported, only support version less than %s",
 				SanitizeVersion(s.Version), maxTiKVVersion)
-			return cerror.ErrVersionIncompatible.GenWithStackByArgs(arg)
+			return errors.ErrVersionIncompatible.GenWithStackByArgs(arg)
 		}
 	}
 	return nil
@@ -268,8 +268,8 @@ func GetTiCDCClusterVersion(captureVersion []string) (TiCDCClusterVersion, error
 			ver = defaultTiCDCVersion
 		}
 		if err != nil {
-			err = cerror.Annotate(err, "invalid CDC cluster version")
-			return ticdcClusterVersionUnknown, cerror.WrapError(cerror.ErrNewSemVersion, err)
+			err = errors.Annotate(err, "invalid CDC cluster version")
+			return ticdcClusterVersionUnknown, errors.WrapError(errors.ErrNewSemVersion, err)
 		}
 		if minVer == nil || ver.Compare(*minVer) < 0 {
 			minVer = ver

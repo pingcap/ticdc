@@ -20,15 +20,14 @@ import (
 
 	gmysql "github.com/go-mysql-org/go-mysql/mysql"
 	dmysql "github.com/go-sql-driver/mysql"
-	"github.com/pingcap/errors"
 	tmysql "github.com/pingcap/tidb/pkg/parser/mysql"
 )
 
-// WrapError generates a new error based on given `*errors.Error`, wraps the err
+// WrapError generates a new error based on given `*Error`, wraps the err
 // as cause error.
 // If given `err` is nil, returns a nil error, which a the different behavior
 // against `Wrap` function in pingcap/errors.
-func WrapError(rfcError *errors.Error, err error, args ...interface{}) error {
+func WrapError(rfcError *Error, err error, args ...interface{}) error {
 	if err == nil {
 		return nil
 	}
@@ -41,7 +40,7 @@ func IsRetryableError(err error) bool {
 		return false
 	}
 
-	if Is(errors.Cause(err), context.Canceled) || Is(errors.Cause(err), context.DeadlineExceeded) {
+	if Is(Cause(err), context.Canceled) || Is(Cause(err), context.DeadlineExceeded) {
 		return false
 	}
 	return true
@@ -50,7 +49,7 @@ func IsRetryableError(err error) bool {
 // IsConnectionError tells whether this error should reconnect to Database.
 // Return true also means caller can retry sql safely.
 func IsConnectionError(err error) bool {
-	err = errors.Cause(err)
+	err = Cause(err)
 	if Is(err, driver.ErrBadConn) || Is(err, tmysql.ErrBadConn) || Is(err, gmysql.ErrBadConn) {
 		return true
 	}
@@ -61,7 +60,7 @@ func IsConnectionError(err error) bool {
 func IsUnretryableConnectionError(err error) bool {
 	// Can't ensure whether the last write has reached the downstream or not.
 	// If the last write isn't idempotent, retry it may cause problems.
-	return Is(errors.Cause(err), dmysql.ErrInvalidConn)
+	return Is(Cause(err), dmysql.ErrInvalidConn)
 }
 
 // ChangeFeedGCFastFailError is read only.

@@ -21,7 +21,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pingcap/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/security"
 )
 

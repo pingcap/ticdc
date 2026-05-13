@@ -26,7 +26,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/config"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/logger"
 	"github.com/pingcap/ticdc/pkg/version"
 	"go.uber.org/zap"
@@ -104,7 +104,7 @@ func main() {
 		if consumer != nil {
 			consumer.sink.Close()
 		}
-		if err != nil && !cerror.Is(err, context.Canceled) {
+		if err != nil && !errors.Is(err, context.Canceled) {
 			return 1
 		}
 		return 0

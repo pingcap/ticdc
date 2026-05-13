@@ -17,7 +17,6 @@ import (
 	"strings"
 
 	gmysql "github.com/go-sql-driver/mysql"
-	"github.com/pingcap/errors"
 	"github.com/pingcap/tidb/pkg/errno"
 	"github.com/pingcap/tidb/pkg/infoschema"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
@@ -28,14 +27,14 @@ import (
 
 // IsTableNotExistsErr is used to check if the error is a table not exists error.
 func IsTableNotExistsErr(err error) bool {
-	err = errors.Cause(err)
+	err = Cause(err)
 	var mysqlErr *gmysql.MySQLError
 	ok := As(err, &mysqlErr)
 	if !ok {
 		return false
 	}
 
-	errCode := errors.ErrCode(mysqlErr.Number)
+	errCode := ErrCode(mysqlErr.Number)
 	return errCode == infoschema.ErrTableNotExists.Code() || errCode == infoschema.ErrDatabaseNotExists.Code()
 }
 
@@ -45,14 +44,14 @@ func IsTableNotExistsErr(err error) bool {
 // DDL's error definition: https://github.com/pingcap/tidb/blob/master/ddl/ddl.go
 // tidb/mysql error code definition: https://github.com/pingcap/tidb/blob/master/mysql/errcode.go
 func IsIgnorableMySQLDDLError(err error) bool {
-	err = errors.Cause(err)
+	err = Cause(err)
 	var mysqlErr *gmysql.MySQLError
 	ok := As(err, &mysqlErr)
 	if !ok {
 		return false
 	}
 
-	errCode := errors.ErrCode(mysqlErr.Number)
+	errCode := ErrCode(mysqlErr.Number)
 	switch errCode {
 	case infoschema.ErrDatabaseExists.Code(), infoschema.ErrDatabaseDropExists.Code(),
 		infoschema.ErrTableExists.Code(), infoschema.ErrTableDropExists.Code(),
@@ -95,7 +94,7 @@ func IsRetryableDDLError(err error) bool {
 		return true
 	}
 
-	err = errors.Cause(err)
+	err = Cause(err)
 	var mysqlErr *gmysql.MySQLError
 	ok := As(err, &mysqlErr)
 	if !ok {
@@ -124,7 +123,7 @@ func IsRetryableDDLError(err error) bool {
 
 // IsAccessDeniedError checks if the error is an access denied error.
 func IsAccessDeniedError(err error) bool {
-	err = errors.Cause(err)
+	err = Cause(err)
 	var mysqlErr *gmysql.MySQLError
 	ok := As(err, &mysqlErr)
 	if !ok {
@@ -136,7 +135,7 @@ func IsAccessDeniedError(err error) bool {
 
 // IsSyncPointIgnoreError returns whether the error is ignorable for syncpoint.
 func IsSyncPointIgnoreError(err error) bool {
-	err = errors.Cause(err)
+	err = Cause(err)
 	var mysqlErr *gmysql.MySQLError
 	ok := As(err, &mysqlErr)
 	if !ok {
@@ -152,7 +151,7 @@ func IsRetryableEtcdError(err error) bool {
 	if err == nil {
 		return false
 	}
-	etcdErr := errors.Cause(err)
+	etcdErr := Cause(err)
 
 	if Is(etcdErr, v3rpc.ErrNoSpace) || Is(etcdErr, v3rpc.ErrTooManyRequests) {
 		return true
