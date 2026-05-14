@@ -1804,8 +1804,6 @@ func TestLargeTableInitialization(t *testing.T) {
 
 	require.Equal(t, 10, controller.spanController.GetAbsentSize())
 
-	spanIDList := []common.DispatcherID{}
-
 	controller.schedulerController.GetScheduler(scheduler.BalanceScheduler).Execute()
 	controller.schedulerController.GetScheduler(scheduler.BalanceSplitScheduler).Execute()
 	require.Equal(t, 0, controller.operatorController.OperatorSize())
@@ -1818,7 +1816,6 @@ func TestLargeTableInitialization(t *testing.T) {
 
 	for _, op := range controller.operatorController.GetAllOperators() {
 		require.Equal(t, "add", op.Type())
-		spanIDList = append(spanIDList, op.ID())
 		op.Start()
 		op.PostFinish()
 		controller.operatorController.RemoveOp(op.ID())
@@ -1837,7 +1834,6 @@ func TestLargeTableInitialization(t *testing.T) {
 	require.Equal(t, 4, controller.operatorController.OperatorSize())
 	for _, op := range controller.operatorController.GetAllOperators() {
 		require.Equal(t, "add", op.Type())
-		spanIDList = append(spanIDList, op.ID())
 		op.Start()
 		op.PostFinish()
 		controller.operatorController.RemoveOp(op.ID())

@@ -159,7 +159,7 @@ func TestActiveActiveDropRowsWithNonNullOriginTsForTiDBDownstream(t *testing.T) 
 	event := helper.DML2Event("test", "t",
 		"insert into t values (1, 'a', 10, NULL)",
 	)
-	sqls, args, rowTypes := writer.generateActiveActiveNormalSQLs([]*commonEvent.DMLEvent{event})
+	sqls, args, _ := writer.generateActiveActiveNormalSQLs([]*commonEvent.DMLEvent{event})
 	require.Len(t, sqls, 0)
 	require.Len(t, args, 0)
 
@@ -167,7 +167,7 @@ func TestActiveActiveDropRowsWithNonNullOriginTsForTiDBDownstream(t *testing.T) 
 		"insert into t values (2, 'b', 11, NULL)",
 		"insert into t values (3, 'c', 12, NULL)",
 	)
-	sqls, args, rowTypes = writer.generateActiveActiveBatchSQLForPerEvent([]*commonEvent.DMLEvent{event})
+	sqls, args, rowTypes := writer.generateActiveActiveBatchSQLForPerEvent([]*commonEvent.DMLEvent{event})
 	require.Len(t, sqls, 0)
 	require.Len(t, args, 0)
 	require.Len(t, rowTypes, 0)

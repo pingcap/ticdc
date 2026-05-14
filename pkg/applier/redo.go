@@ -480,7 +480,7 @@ func (ra *RedoApplier) Apply(egCtx context.Context) (err error) {
 	})
 
 	err = eg.Wait()
-	if errors.Cause(err) != errApplyFinished {
+	if !errors.Is(errors.Cause(err), errApplyFinished) {
 		return err
 	}
 	return nil

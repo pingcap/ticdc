@@ -311,14 +311,13 @@ func TestAppendRow2Group_DoesNotDropCommitTsFallbackBeforeApplied(t *testing.T) 
 	group := progress.eventsGroup[1]
 	require.NotNil(t, group)
 
-	resolvedEvents := make([]*commonEvent.DMLEvent, 0)
 	// Expect: commitTs=100 is still kept and can be resolved.
 	resolved := group.ResolveInto(150, nil)
 	require.Len(t, resolved, 1)
 	require.Equal(t, uint64(100), resolved[0].CommitTs)
 
 	// Step 3: once downstream has flushed beyond commitTs=100, the replay is safe to ignore.
-	resolvedEvents = make([]*commonEvent.DMLEvent, 0)
+	resolvedEvents := make([]*commonEvent.DMLEvent, 0)
 	group.AppliedWatermark = 200
 	w.appendRow2Group(newDMLEvent(1, 100), progress, kafka.Offset(12))
 	resolved = group.ResolveInto(150, resolvedEvents)

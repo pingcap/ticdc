@@ -26,7 +26,6 @@ import (
 	"github.com/phayes/freeport"
 	dmysql "github.com/pingcap/ticdc/downstreamadapter/sink/mysql"
 	"github.com/pingcap/ticdc/pkg/common"
-	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	misc "github.com/pingcap/ticdc/pkg/redo/common"
@@ -94,8 +93,8 @@ func (br *MockReader) ReadMeta(ctx context.Context) (checkpointTs, resolvedTs ui
 }
 
 // GetChangefeedID implements LogReader.GetChangefeedID
-func (br *MockReader) GetChangefeedID() commonType.ChangeFeedID {
-	return commonType.ChangeFeedID{}
+func (br *MockReader) GetChangefeedID() common.ChangeFeedID {
+	return common.ChangeFeedID{}
 }
 
 // GetVersion implements LogReader.GetVersion
@@ -104,7 +103,7 @@ func (br *MockReader) GetVersion() int {
 }
 
 func newFlag(flag uint) uint64 {
-	var result commonType.ColumnFlagType
+	var result common.ColumnFlagType
 	if flag == pmysql.PriKeyFlag {
 		result.SetIsHandleKey()
 		result.SetIsPrimaryKey()

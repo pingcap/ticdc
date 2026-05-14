@@ -44,5 +44,6 @@ func TestDDLRedoConvert(t *testing.T) {
 	require.Zero(t, len(data))
 
 	data2, err := MarshalRedoLog(redoLog2, nil)
+	require.Nil(t, err)
 	require.Equal(t, data1, data2)
 }

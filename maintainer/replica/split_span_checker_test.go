@@ -305,8 +305,6 @@ func TestSplitSpanChecker_UpdateStatus_Region(t *testing.T) {
 	replica := replicas[0]
 	checker.AddReplica(replica)
 
-	spanStatus := checker.allTasks[replica.ID]
-
 	status := &heartbeatpb.TableSpanStatus{
 		ID:                 replica.ID.ToPB(),
 		ComponentStatus:    heartbeatpb.ComponentState_Working,
@@ -318,7 +316,7 @@ func TestSplitSpanChecker_UpdateStatus_Region(t *testing.T) {
 	checker.UpdateStatus(replica)
 
 	// Test region count above threshold
-	spanStatus = checker.allTasks[replica.ID]
+	spanStatus := checker.allTasks[replica.ID]
 	require.Equal(t, 6, spanStatus.regionCount)
 
 	// Test region check interval enforcement

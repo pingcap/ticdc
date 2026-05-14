@@ -141,6 +141,7 @@ func TestIntegerTypes(t *testing.T) {
 	9223372036854775807, 18446744073709551615)`
 	maxValues := helper.DML2Event("test", "t", sql)
 	maxRow, ok := maxValues.GetNextRow()
+	require.True(t, ok)
 
 	maxValueEvent := &commonEvent.RowEvent{
 		TableInfo:      tableInfo,

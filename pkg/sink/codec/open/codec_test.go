@@ -105,7 +105,7 @@ func TestRowChanged2MsgOnlyHandleKeyColumns(t *testing.T) {
 	insertEventNoHandleKey.Rewind()
 	require.True(t, ok)
 	require.NotNil(t, row)
-	key, value, _, err = encodeRowChangedEvent(&commonEvent.RowEvent{
+	_, _, _, err = encodeRowChangedEvent(&commonEvent.RowEvent{
 		TableInfo:      insertEventNoHandleKey.TableInfo,
 		Event:          row,
 		CommitTs:       insertEventNoHandleKey.CommitTs,
@@ -119,7 +119,7 @@ func TestRowChanged2MsgOnlyHandleKeyColumns(t *testing.T) {
 	require.NotNil(t, row)
 	row.PreRow = row.Row
 	config.DeleteOnlyHandleKeyColumns = true
-	key, value, _, err = encodeRowChangedEvent(&commonEvent.RowEvent{
+	_, value, _, err = encodeRowChangedEvent(&commonEvent.RowEvent{
 		TableInfo:      insertEvent.TableInfo,
 		Event:          row,
 		CommitTs:       insertEvent.CommitTs,
@@ -145,7 +145,7 @@ func TestRowChanged2MsgOnlyHandleKeyColumns(t *testing.T) {
 	require.True(t, ok)
 	require.NotNil(t, row)
 	row.PreRow = row.Row
-	key, value, _, err = encodeRowChangedEvent(&commonEvent.RowEvent{
+	_, _, _, err = encodeRowChangedEvent(&commonEvent.RowEvent{
 		TableInfo:      insertEventNoHandleKey.TableInfo,
 		Event:          row,
 		CommitTs:       insertEventNoHandleKey.CommitTs,
@@ -160,7 +160,7 @@ func TestRowChanged2MsgOnlyHandleKeyColumns(t *testing.T) {
 	row.PreRow = row.Row
 	row.Row = chunk.Row{}
 	config.DeleteOnlyHandleKeyColumns = true
-	key, value, _, err = encodeRowChangedEvent(&commonEvent.RowEvent{
+	_, value, _, err = encodeRowChangedEvent(&commonEvent.RowEvent{
 		TableInfo:      insertEvent.TableInfo,
 		Event:          row,
 		CommitTs:       insertEvent.CommitTs,
@@ -171,7 +171,7 @@ func TestRowChanged2MsgOnlyHandleKeyColumns(t *testing.T) {
 	require.NotContains(t, string(value), "a")
 
 	config.DeleteOnlyHandleKeyColumns = false
-	key, value, _, err = encodeRowChangedEvent(&commonEvent.RowEvent{
+	_, value, _, err = encodeRowChangedEvent(&commonEvent.RowEvent{
 		TableInfo:      insertEvent.TableInfo,
 		Event:          row,
 		CommitTs:       insertEvent.CommitTs,
@@ -199,7 +199,7 @@ func TestRowChanged2MsgOnlyHandleKeyColumns(t *testing.T) {
 	require.NotNil(t, row)
 	row.PreRow = row.Row
 	row.Row = chunk.Row{}
-	key, value, _, err = encodeRowChangedEvent(&commonEvent.RowEvent{
+	_, _, _, err = encodeRowChangedEvent(&commonEvent.RowEvent{
 		TableInfo:      insertEventNoHandleKey.TableInfo,
 		Event:          row,
 		CommitTs:       insertEventNoHandleKey.CommitTs,
