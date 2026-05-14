@@ -46,8 +46,10 @@ var (
 	minTrafficBalanceThreshold         = float64(1024 * 1024) // 1MB
 	maxMoveSpansCountForTrafficBalance = 4
 	maxMoveSpansCountForMerge          = 16
-	maxLagThreshold                    = float64(30) // 30s
-	mergeThreshold                     = 5
+	// maxMergeOperatorsPerGroup limits how many merge operators one split-table group can create per check.
+	maxMergeOperatorsPerGroup = 8
+	maxLagThreshold           = float64(30) // 30s
+	mergeThreshold            = 5
 )
 
 type BalanceCause string
@@ -765,6 +767,7 @@ func (s *SplitSpanChecker) isTrafficBalanceMaintained(
 func (s *SplitSpanChecker) chooseMergedSpans(batchSize int) ([]SplitSpanCheckResult, []*splitSpanStatus) {
 	log.Debug("chooseMergedSpans try to choose merge spans", zap.Any("changefeedID", s.changefeedID), zap.Any("groupID", s.groupID))
 	results := make([]SplitSpanCheckResult, 0)
+	mergeBatchSize := min(batchSize, maxMergeOperatorsPerGroup)
 
 	sortedSpanByStartKey := make([]*splitSpanStatus, 0, len(s.allTasks))
 	for _, status := range s.allTasks {
@@ -782,19 +785,28 @@ func (s *SplitSpanChecker) chooseMergedSpans(batchSize int) ([]SplitSpanCheckRes
 	traffic := prev.lastThreeTraffic[latestTrafficIndex]
 	mergeSpans = append(mergeSpans, prev.SpanReplication)
 
-	submitAndClear := func(cur *splitSpanStatus) {
-		if len(mergeSpans) > 1 {
-			log.Info("chooseMergedSpans merge spans",
-				zap.String("changefeed", s.changefeedID.String()),
-				zap.Int64("group", int64(s.groupID)),
-				zap.Any("mergeSpans", mergeSpans),
-				zap.Any("node", mergeSpans[0].GetNodeID()),
-			)
-			results = append(results, SplitSpanCheckResult{
-				OpType:     OpMerge,
-				MergeSpans: append([]*SpanReplication{}, mergeSpans...),
-			})
+	appendMergeResult := func() bool {
+		if len(mergeSpans) <= 1 {
+			return len(results) >= mergeBatchSize
 		}
+		if len(results) >= mergeBatchSize {
+			return true
+		}
+		log.Info("chooseMergedSpans merge spans",
+			zap.String("changefeed", s.changefeedID.String()),
+			zap.Int64("group", int64(s.groupID)),
+			zap.Any("mergeSpans", mergeSpans),
+			zap.Any("node", mergeSpans[0].GetNodeID()),
+		)
+		results = append(results, SplitSpanCheckResult{
+			OpType:     OpMerge,
+			MergeSpans: append([]*SpanReplication{}, mergeSpans...),
+		})
+		return len(results) >= mergeBatchSize
+	}
+
+	submitAndClear := func(cur *splitSpanStatus) {
+		appendMergeResult()
 		mergeSpans = mergeSpans[:0]
 		mergeSpans = append(mergeSpans, cur.SpanReplication)
 		regionCount = cur.regionCount
@@ -817,6 +829,9 @@ func (s *SplitSpanChecker) chooseMergedSpans(batchSize int) ([]SplitSpanCheckRes
 		// not in the same node, can't merge
 		if prev.GetNodeID() != cur.GetNodeID() {
 			submitAndClear(cur)
+			if len(results) >= mergeBatchSize {
+				return results, sortedSpanByStartKey
+			}
 			prev = cur
 			idx++
 			continue
@@ -825,6 +840,9 @@ func (s *SplitSpanChecker) chooseMergedSpans(batchSize int) ([]SplitSpanCheckRes
 		// we can't merge if beyond the threshold
 		if s.regionThreshold > 0 && regionCount+cur.regionCount > s.regionThreshold/4*3 {
 			submitAndClear(cur)
+			if len(results) >= mergeBatchSize {
+				return results, sortedSpanByStartKey
+			}
 			prev = cur
 			idx++
 			continue
@@ -832,6 +850,9 @@ func (s *SplitSpanChecker) chooseMergedSpans(batchSize int) ([]SplitSpanCheckRes
 
 		if s.writeThreshold > 0 && traffic+cur.lastThreeTraffic[latestTrafficIndex] > float64(s.writeThreshold)/4*3 {
 			submitAndClear(cur)
+			if len(results) >= mergeBatchSize {
+				return results, sortedSpanByStartKey
+			}
 			prev = cur
 			idx++
 			continue
@@ -845,23 +866,12 @@ func (s *SplitSpanChecker) chooseMergedSpans(batchSize int) ([]SplitSpanCheckRes
 		prev = cur
 		idx++
 
-		if len(results) >= batchSize {
+		if len(results) >= mergeBatchSize {
 			return results, sortedSpanByStartKey
 		}
 	}
 
-	if len(mergeSpans) > 1 {
-		log.Info("chooseMergedSpans merge spans",
-			zap.String("changefeed", s.changefeedID.String()),
-			zap.Int64("group", s.groupID),
-			zap.Any("mergeSpans", mergeSpans),
-			zap.Any("node", mergeSpans[0].GetNodeID()),
-		)
-		results = append(results, SplitSpanCheckResult{
-			OpType:     OpMerge,
-			MergeSpans: mergeSpans,
-		})
-	}
+	appendMergeResult()
 
 	return results, sortedSpanByStartKey
 }
