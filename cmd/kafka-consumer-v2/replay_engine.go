@@ -286,17 +286,26 @@ func (e *replayEngine) appendDML(
 	if e.syncpoint != nil && e.syncpoint.enabled {
 		e.syncpoint.EnsureNextTs(commitTs)
 	}
-	appliedWatermark := group.AppliedWatermark()
-	if e.syncpoint != nil && e.syncpoint.enabled && e.syncpoint.lastSyncedTs > appliedWatermark {
-		appliedWatermark = e.syncpoint.lastSyncedTs
+	groupAppliedWatermark := group.AppliedWatermark()
+	syncedWatermark := uint64(0)
+	if e.syncpoint != nil && e.syncpoint.enabled {
+		syncedWatermark = e.syncpoint.lastSyncedTs
 	}
-	if commitTs <= appliedWatermark {
-		log.Warn("DML event replayed after applied, ignore it",
+	skipReason := ""
+	if syncedWatermark != 0 && commitTs <= syncedWatermark {
+		skipReason = "synced-syncpoint"
+	} else if groupAppliedWatermark != 0 && commitTs < groupAppliedWatermark {
+		skipReason = "table-applied-watermark"
+	}
+	if skipReason != "" {
+		log.Debug("DML event replayed after applied, ignore it",
+			zap.String("reason", skipReason),
 			zap.Int64("tableID", tableID),
 			zap.Int32("partition", group.partition),
 			zap.Uint64("commitTs", commitTs),
 			zap.Any("offset", offset),
-			zap.Uint64("appliedWatermark", appliedWatermark),
+			zap.Uint64("groupAppliedWatermark", groupAppliedWatermark),
+			zap.Uint64("syncedWatermark", syncedWatermark),
 			zap.Uint64("highWatermark", group.HighWatermark()),
 			zap.Uint64("partitionWatermark", progress.watermark))
 		return nil

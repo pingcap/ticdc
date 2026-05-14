@@ -109,6 +109,48 @@ func TestAppendDMLBuffersFutureSyncpointData(t *testing.T) {
 	require.Empty(t, progress.groups[1].events)
 }
 
+func TestAppendDMLDoesNotSkipSameCommitTsAsAppliedWatermark(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	s := sinkmock.NewMockSink(ctrl)
+	flushed := 0
+	s.EXPECT().AddDMLEvent(gomock.Any()).DoAndReturn(func(event *commonEvent.DMLEvent) {
+		flushed++
+		event.PostFlush()
+	}).AnyTimes()
+
+	cfg := config.GetDefaultReplicaConfig()
+	router, err := eventrouter.NewEventRouter(cfg.Sink, "topic", false, false)
+	require.NoError(t, err)
+
+	group := newDMLGroup(0, 1)
+	group.MarkApplied(100)
+	engine := &replayEngine{
+		partitions: []*partitionState{
+			{
+				partition: 0,
+				groups: map[int64]*dmlGroup{
+					1: group,
+				},
+			},
+		},
+		eventRouter: router,
+		protocol:    config.ProtocolCanalJSON,
+		mysqlSink:   s,
+		offsets:     newOffsetTracker(),
+		inflight:    newInflightTracker(),
+	}
+
+	source99 := engine.offsets.NewSource("topic", 0, kafka.Offset(1))
+	require.NoError(t, engine.appendDML(newTestDMLEvent(1, 99), engine.partitions[0], source99, kafka.Offset(1)))
+	source99.Close()
+	require.Equal(t, 0, flushed)
+
+	source100 := engine.offsets.NewSource("topic", 0, kafka.Offset(2))
+	require.NoError(t, engine.appendDML(newTestDMLEvent(1, 100), engine.partitions[0], source100, kafka.Offset(2)))
+	source100.Close()
+	require.Equal(t, 1, flushed)
+}
+
 func newTestDMLEvent(tableID int64, commitTs uint64) *commonEvent.DMLEvent {
 	return &commonEvent.DMLEvent{
 		PhysicalTableID: tableID,
