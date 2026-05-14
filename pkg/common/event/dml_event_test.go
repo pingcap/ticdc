@@ -145,7 +145,7 @@ func TestBatchDMLEvent(t *testing.T) {
 
 	// case 2: unsupported version
 	batchDMLEvent.Version = 100
-	data, err = batchDMLEvent.Marshal()
+	_, err = batchDMLEvent.Marshal()
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unsupported BatchDMLEvent version")
 }

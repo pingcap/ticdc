@@ -21,10 +21,8 @@ import (
 	"time"
 
 	"github.com/benbjohnson/clock"
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
-	pkgerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/retry"
 	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/pingcap/ticdc/pkg/util"
@@ -344,7 +342,7 @@ func (c *ClientImpl) RequestProgress(ctx context.Context) error {
 
 func isRetryableError(rpcName string) retry.IsRetryable {
 	return func(err error) bool {
-		if !cerror.IsRetryableError(err) {
+		if !errors.IsRetryableError(err) {
 			return false
 		}
 
@@ -355,7 +353,7 @@ func isRetryableError(rpcName string) retry.IsRetryable {
 				return false
 			}
 		case EtcdTxn:
-			return pkgerror.IsRetryableEtcdError(err)
+			return errors.IsRetryableEtcdError(err)
 		default:
 			// For other types of operation, we retry directly without handling errors
 		}
@@ -613,5 +611,5 @@ func IsHealthy(ctx context.Context, client *clientv3.Client) bool {
 	_, err := client.Get(ctx, healthyPath)
 	// permission denied is OK since proposal goes through consensus to get it
 	// See: https://github.com/etcd-io/etcd/blob/85b640cee793e25f3837c47200089d14a8392dc7/etcdctl/ctlv3/command/ep_command.go#L124
-	return err == nil || cerror.Is(err, v3rpc.ErrPermissionDenied)
+	return err == nil || errors.Is(err, v3rpc.ErrPermissionDenied)
 }
