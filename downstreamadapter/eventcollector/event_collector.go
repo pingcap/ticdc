@@ -726,7 +726,7 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 
 		// get available memory for this dispatcher
 		if pathMemory, exists := changefeedPathMemory[changefeedID][dispatcherID]; exists {
-			nodeDispatcherMemory[eventServiceID][changefeedID][dispatcherID] = uint64(pathMemory)
+			nodeDispatcherMemory[eventServiceID][changefeedID][dispatcherID] = pathMemory
 		}
 		return true
 	})

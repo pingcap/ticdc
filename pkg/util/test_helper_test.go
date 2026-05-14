@@ -15,11 +15,11 @@ package util
 
 import (
 	"context"
-	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
 

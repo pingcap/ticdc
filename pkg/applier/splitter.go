@@ -18,9 +18,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
-	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
-	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/redo/reader"
 	"go.uber.org/zap"
 )
@@ -125,10 +123,10 @@ func (u *updateEventSplitter) readNextRow(ctx context.Context) (*event.RedoDMLEv
 
 // processEvent return (event to emit, pending event)
 func processEvent(
-	event *commonEvent.RedoDMLEvent,
-	prevTxnStartTs commonType.Ts,
+	event *event.RedoDMLEvent,
+	prevTxnStartTs common.Ts,
 	tempStorage *tempTxnInsertEventStorage,
-) (*commonEvent.RedoDMLEvent, *commonEvent.RedoDMLEvent, error) {
+) (*event.RedoDMLEvent, *event.RedoDMLEvent, error) {
 	if event == nil {
 		log.Panic("event should not be nil")
 	}

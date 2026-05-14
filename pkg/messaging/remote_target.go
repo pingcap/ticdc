@@ -265,7 +265,7 @@ func (s *remoteMessageTarget) connect() error {
 		zap.Stringer("remoteID", s.targetId),
 		zap.String("remoteAddr", s.targetAddr))
 
-	conn, err := conn.Connect(string(s.targetAddr), s.security)
+	conn, err := conn.Connect(s.targetAddr, s.security)
 	if err != nil {
 		log.Info("Cannot create grpc client",
 			zap.Any("localID", s.messageCenterID),
@@ -669,7 +669,7 @@ func (s *remoteMessageTarget) newMessage(msg ...*TargetMessage) *proto.Message {
 	protoMsg := &proto.Message{
 		From:    string(s.messageCenterID),
 		To:      string(s.targetId),
-		Topic:   string(msg[0].Topic),
+		Topic:   msg[0].Topic,
 		Type:    int32(msg[0].Type),
 		Payload: msgBytes,
 	}

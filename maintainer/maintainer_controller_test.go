@@ -29,7 +29,7 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
-	cerrors "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/eventservice"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
@@ -662,7 +662,7 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 			ID:                 spanReplica.ID.ToPB(),
 			ComponentStatus:    heartbeatpb.ComponentState_Working,
 			EventSizePerSecond: 200,
-			CheckpointTs:       oracle.ComposeTS(int64(currentTime.Add(-5*time.Second).UnixMilli()), 0),
+			CheckpointTs:       oracle.ComposeTS(currentTime.Add(-5*time.Second).UnixMilli(), 0),
 		}
 		// provide the last three traffic status
 		for i := 0; i < 3; i++ {
@@ -692,13 +692,13 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 		ID:                 spanReplica3.ID.ToPB(),
 		ComponentStatus:    heartbeatpb.ComponentState_Working,
 		EventSizePerSecond: 600,
-		CheckpointTs:       oracle.ComposeTS(int64(currentTime.Add(-5*time.Second).UnixMilli()), 0),
+		CheckpointTs:       oracle.ComposeTS(currentTime.Add(-5*time.Second).UnixMilli(), 0),
 	}
 	status4 := &heartbeatpb.TableSpanStatus{
 		ID:                 spanReplica4.ID.ToPB(),
 		ComponentStatus:    heartbeatpb.ComponentState_Working,
 		EventSizePerSecond: 500,
-		CheckpointTs:       oracle.ComposeTS(int64(currentTime.Add(-5*time.Second).UnixMilli()), 0),
+		CheckpointTs:       oracle.ComposeTS(currentTime.Add(-5*time.Second).UnixMilli(), 0),
 	}
 	// provide the last three traffic status
 	for i := 0; i < 2; i++ {
@@ -791,13 +791,13 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 		ID:                 spanReplicaID7.ToPB(),
 		ComponentStatus:    heartbeatpb.ComponentState_Working,
 		EventSizePerSecond: float32(trafficForSpanReplica7),
-		CheckpointTs:       oracle.ComposeTS(int64(currentTime.Add(-5*time.Second).UnixMilli()), 0),
+		CheckpointTs:       oracle.ComposeTS(currentTime.Add(-5*time.Second).UnixMilli(), 0),
 	}
 	status8 := &heartbeatpb.TableSpanStatus{
 		ID:                 spanReplicaID8.ToPB(),
 		ComponentStatus:    heartbeatpb.ComponentState_Working,
 		EventSizePerSecond: float32(trafficForSpanReplica8),
-		CheckpointTs:       oracle.ComposeTS(int64(currentTime.Add(-5*time.Second).UnixMilli()), 0),
+		CheckpointTs:       oracle.ComposeTS(currentTime.Add(-5*time.Second).UnixMilli(), 0),
 	}
 
 	// provide the last three traffic status
@@ -864,13 +864,13 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 		ID:                 spanReplicaID9.ToPB(),
 		ComponentStatus:    heartbeatpb.ComponentState_Working,
 		EventSizePerSecond: 100,
-		CheckpointTs:       oracle.ComposeTS(int64(currentTime.Add(-5*time.Second).UnixMilli()), 0),
+		CheckpointTs:       oracle.ComposeTS(currentTime.Add(-5*time.Second).UnixMilli(), 0),
 	}
 	status10 := &heartbeatpb.TableSpanStatus{
 		ID:                 spanReplicaID10.ToPB(),
 		ComponentStatus:    heartbeatpb.ComponentState_Working,
 		EventSizePerSecond: 50,
-		CheckpointTs:       oracle.ComposeTS(int64(currentTime.Add(-5*time.Second).UnixMilli()), 0),
+		CheckpointTs:       oracle.ComposeTS(currentTime.Add(-5*time.Second).UnixMilli(), 0),
 	}
 
 	// provide the last three traffic status
@@ -914,7 +914,7 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 		ID:                 spanReplicaID11.ToPB(),
 		ComponentStatus:    heartbeatpb.ComponentState_Working,
 		EventSizePerSecond: 150,
-		CheckpointTs:       oracle.ComposeTS(int64(currentTime.Add(-5*time.Second).UnixMilli()), 0),
+		CheckpointTs:       oracle.ComposeTS(currentTime.Add(-5*time.Second).UnixMilli(), 0),
 	}
 
 	// provide the last three traffic status
@@ -1042,7 +1042,7 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 		ID:                 spanReplicaID12.ToPB(),
 		ComponentStatus:    heartbeatpb.ComponentState_Working,
 		EventSizePerSecond: 400,
-		CheckpointTs:       oracle.ComposeTS(int64(currentTime.Add(-5*time.Second).UnixMilli()), 0),
+		CheckpointTs:       oracle.ComposeTS(currentTime.Add(-5*time.Second).UnixMilli(), 0),
 	}
 
 	// provide the last three traffic status
@@ -1054,7 +1054,7 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 		ID:                 spanReplicaID13.ToPB(),
 		ComponentStatus:    heartbeatpb.ComponentState_Working,
 		EventSizePerSecond: 700,
-		CheckpointTs:       oracle.ComposeTS(int64(currentTime.Add(-5*time.Second).UnixMilli()), 0),
+		CheckpointTs:       oracle.ComposeTS(currentTime.Add(-5*time.Second).UnixMilli(), 0),
 	}
 	for i := 0; i < 3; i++ {
 		controller.spanController.UpdateStatus(spanReplica13, status13)
@@ -1462,9 +1462,9 @@ func TestFinishBootstrapReturnsErrorWhenCheckpointMissing(t *testing.T) {
 	}, false)
 	require.Nil(t, postBootstrapRequest)
 	require.Error(t, err)
-	code, ok := cerrors.RFCCode(err)
+	code, ok := errors.RFCCode(err)
 	require.True(t, ok)
-	require.Equal(t, cerrors.ErrChangefeedInitTableTriggerDispatcherFailed.RFCCode(), code)
+	require.Equal(t, errors.ErrChangefeedInitTableTriggerDispatcherFailed.RFCCode(), code)
 	require.Contains(t, err.Error(), "all bootstrap responses reported empty checkpointTs")
 	require.False(t, controller.bootstrapped)
 }
@@ -1804,8 +1804,6 @@ func TestLargeTableInitialization(t *testing.T) {
 
 	require.Equal(t, 10, controller.spanController.GetAbsentSize())
 
-	spanIDList := []common.DispatcherID{}
-
 	controller.schedulerController.GetScheduler(scheduler.BalanceScheduler).Execute()
 	controller.schedulerController.GetScheduler(scheduler.BalanceSplitScheduler).Execute()
 	require.Equal(t, 0, controller.operatorController.OperatorSize())
@@ -1818,7 +1816,6 @@ func TestLargeTableInitialization(t *testing.T) {
 
 	for _, op := range controller.operatorController.GetAllOperators() {
 		require.Equal(t, "add", op.Type())
-		spanIDList = append(spanIDList, op.ID())
 		op.Start()
 		op.PostFinish()
 		controller.operatorController.RemoveOp(op.ID())
@@ -1837,7 +1834,6 @@ func TestLargeTableInitialization(t *testing.T) {
 	require.Equal(t, 4, controller.operatorController.OperatorSize())
 	for _, op := range controller.operatorController.GetAllOperators() {
 		require.Equal(t, "add", op.Type())
-		spanIDList = append(spanIDList, op.ID())
 		op.Start()
 		op.PostFinish()
 		controller.operatorController.RemoveOp(op.ID())

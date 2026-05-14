@@ -182,8 +182,6 @@ func TestDefaultSpanSplitChecker_UpdateStatus_RegionCheck(t *testing.T) {
 
 	checker.AddReplica(replica)
 
-	spanStatus := checker.allTasks[replica.ID]
-
 	status := &heartbeatpb.TableSpanStatus{
 		ID:                 replica.ID.ToPB(),
 		ComponentStatus:    heartbeatpb.ComponentState_Working,
@@ -194,7 +192,7 @@ func TestDefaultSpanSplitChecker_UpdateStatus_RegionCheck(t *testing.T) {
 
 	// Test region count update
 	checker.UpdateStatus(replica)
-	spanStatus = checker.allTasks[replica.ID]
+	spanStatus := checker.allTasks[replica.ID]
 	require.Equal(t, 6, spanStatus.regionCount)
 	require.Contains(t, checker.splitReadyTasks, replica.ID)
 }
@@ -227,10 +225,8 @@ func TestDefaultSpanSplitChecker_UpdateStatus_RegionCheckError(t *testing.T) {
 	}
 	replica.UpdateStatus(status)
 
-	spanStatus := checker.allTasks[replica.ID]
-
 	// Test region check error handling
-	spanStatus = checker.allTasks[replica.ID]
+	spanStatus := checker.allTasks[replica.ID]
 	require.Equal(t, 0, spanStatus.regionCount) // Should remain 0 due to error
 }
 

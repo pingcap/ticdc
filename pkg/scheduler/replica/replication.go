@@ -391,7 +391,7 @@ func (db *replicationDB[T, R]) maybeRemoveGroup(g *replicationGroup[T, R]) {
 	log.Info("scheduler: remove task group", zap.String("schedulerID", db.id),
 		zap.String("group", GetGroupName(g.groupID)),
 		zap.Stringer("groupType", GroupType(g.groupID>>56)))
-	zap.Int64("groupID", int64(g.groupID))
+	zap.Int64("groupID", g.groupID)
 }
 
 func (db *replicationDB[T, R]) mustGetGroup(groupID GroupID) *replicationGroup[T, R] {

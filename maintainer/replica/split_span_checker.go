@@ -316,7 +316,7 @@ func (s *SplitSpanChecker) Check(batch int) replica.GroupCheckResult {
 	if !s.checkAllTaskAvailableLocked() {
 		log.Debug("some task is not available, skip check",
 			zap.String("changefeed", s.changefeedID.String()),
-			zap.Int64("group", int64(s.groupID)),
+			zap.Int64("group", s.groupID),
 		)
 		return results
 	}
@@ -388,7 +388,7 @@ func (s *SplitSpanChecker) Check(batch int) replica.GroupCheckResult {
 	if s.regionThreshold > 0 {
 		countByRegion := int(math.Ceil(float64(totalRegionCount) / float64(s.regionThreshold)))
 		if countByRegion > upperSpanCount {
-			upperSpanCount = int(countByRegion)
+			upperSpanCount = countByRegion
 		}
 	}
 
@@ -786,7 +786,7 @@ func (s *SplitSpanChecker) chooseMergedSpans(batchSize int) ([]SplitSpanCheckRes
 		if len(mergeSpans) > 1 {
 			log.Info("chooseMergedSpans merge spans",
 				zap.String("changefeed", s.changefeedID.String()),
-				zap.Int64("group", int64(s.groupID)),
+				zap.Int64("group", s.groupID),
 				zap.Any("mergeSpans", mergeSpans),
 				zap.Any("node", mergeSpans[0].GetNodeID()),
 			)

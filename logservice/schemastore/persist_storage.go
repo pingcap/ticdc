@@ -761,7 +761,7 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 		for _, tableID := range tableIDs {
 			if store, ok := p.tableInfoStoreMap[tableID]; ok {
 				// do some safety check
-				switch model.ActionType(job.Type) {
+				switch job.Type {
 				case model.ActionCreateTable, model.ActionCreateTables:
 					// newly created tables should not be registered before this ddl are handled
 					log.Panic("should not be registered", zap.Int64("tableID", tableID))
@@ -776,7 +776,7 @@ func (p *persistentStorage) handleDDLJob(job *model.Job) error {
 }
 
 func shouldSkipDDL(job *model.Job, tableMap map[int64]*BasicTableInfo) bool {
-	switch model.ActionType(job.Type) {
+	switch job.Type {
 	// Skipping ActionCreateTable and ActionCreateTables when the table already exists:
 	// 1. It is possible to receive ActionCreateTable and ActionCreateTables multiple times,
 	//    and filtering duplicates in a generic way is challenging.

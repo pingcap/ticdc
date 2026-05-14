@@ -18,11 +18,10 @@ import (
 	"time"
 
 	"github.com/goccy/go-json"
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
-	cerrors "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/orchestrator/util"
 	"go.uber.org/zap"
@@ -111,7 +110,7 @@ func (s *GlobalReactorState) Update(key util.EtcdKey, value []byte, _ bool) erro
 		var newCaptureInfo config.CaptureInfo
 		err := newCaptureInfo.Unmarshal(value)
 		if err != nil {
-			return cerrors.ErrUnmarshalFailed.Wrap(err).GenWithStackByArgs()
+			return errors.ErrUnmarshalFailed.Wrap(err).GenWithStackByArgs()
 		}
 
 		log.Info("remote capture online", zap.Any("info", newCaptureInfo), zap.String("role", s.Role))
@@ -151,7 +150,7 @@ func (s *GlobalReactorState) Update(key util.EtcdKey, value []byte, _ bool) erro
 		var newUpstreamInfo config.UpstreamInfo
 		err := newUpstreamInfo.Unmarshal(value)
 		if err != nil {
-			return cerrors.ErrUnmarshalFailed.Wrap(err).GenWithStackByArgs()
+			return errors.ErrUnmarshalFailed.Wrap(err).GenWithStackByArgs()
 		}
 		log.Info("new upstream is add", zap.Uint64("upstream", k.UpstreamID),
 			zap.Any("info", newUpstreamInfo), zap.String("role", s.Role))
@@ -521,7 +520,7 @@ func (s *ChangefeedReactorState) CheckCaptureAlive(captureID config.CaptureID) {
 			// The key-value pair of capture info is written with lease,
 			// so if the capture info is not exist, the lease is expired
 			if len(v) == 0 {
-				return v, false, cerrors.ErrLeaseExpired.GenWithStackByArgs()
+				return v, false, errors.ErrLeaseExpired.GenWithStackByArgs()
 			}
 			return v, false, nil
 		},
@@ -537,7 +536,7 @@ func (s *ChangefeedReactorState) CheckChangefeedNormal() {
 	s.PatchInfo(func(info *config.ChangeFeedInfo) (*config.ChangeFeedInfo, bool, error) {
 		if info == nil || info.AdminJobType.IsStopState() {
 			s.skipPatchesInThisTick = true
-			return info, false, cerrors.ErrEtcdTryAgain.GenWithStackByArgs()
+			return info, false, errors.ErrEtcdTryAgain.GenWithStackByArgs()
 		}
 		return info, false, nil
 	})
@@ -547,7 +546,7 @@ func (s *ChangefeedReactorState) CheckChangefeedNormal() {
 		}
 		if status.AdminJobType.IsStopState() {
 			s.skipPatchesInThisTick = true
-			return status, false, cerrors.ErrEtcdTryAgain.GenWithStackByArgs()
+			return status, false, errors.ErrEtcdTryAgain.GenWithStackByArgs()
 		}
 		return status, false, nil
 	})
@@ -613,7 +612,7 @@ func (s *ChangefeedReactorState) patchAny(key string, tpi interface{}, fn func(i
 		Key: util.NewEtcdKey(key),
 		Func: func(v []byte) ([]byte, bool, error) {
 			if s.skipPatchesInThisTick {
-				return v, false, cerrors.ErrEtcdIgnore.GenWithStackByArgs()
+				return v, false, errors.ErrEtcdIgnore.GenWithStackByArgs()
 			}
 			var e interface{}
 			if v != nil {

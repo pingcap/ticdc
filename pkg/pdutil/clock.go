@@ -186,7 +186,7 @@ func (c *clockWithValue4Test) CurrentTime() time.Time {
 }
 
 func (c *clockWithValue4Test) CurrentTS() uint64 {
-	return oracle.ComposeTS(int64(c.value.UnixNano()), 0)
+	return oracle.ComposeTS(c.value.UnixNano(), 0)
 }
 
 func (c *clockWithValue4Test) Run(ctx context.Context) {

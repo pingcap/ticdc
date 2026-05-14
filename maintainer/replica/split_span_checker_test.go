@@ -305,8 +305,6 @@ func TestSplitSpanChecker_UpdateStatus_Region(t *testing.T) {
 	replica := replicas[0]
 	checker.AddReplica(replica)
 
-	spanStatus := checker.allTasks[replica.ID]
-
 	status := &heartbeatpb.TableSpanStatus{
 		ID:                 replica.ID.ToPB(),
 		ComponentStatus:    heartbeatpb.ComponentState_Working,
@@ -318,7 +316,7 @@ func TestSplitSpanChecker_UpdateStatus_Region(t *testing.T) {
 	checker.UpdateStatus(replica)
 
 	// Test region count above threshold
-	spanStatus = checker.allTasks[replica.ID]
+	spanStatus := checker.allTasks[replica.ID]
 	require.Equal(t, 6, spanStatus.regionCount)
 
 	// Test region check interval enforcement
@@ -664,7 +662,7 @@ func TestSplitSpanChecker_CheckBalanceTraffic_Balance(t *testing.T) {
 	// Set region counts
 	for _, spanStatus := range []*splitSpanStatus{spanStatus1, spanStatus2, spanStatus3, spanStatus4} {
 		spanStatus.regionCount = 3
-		spanStatus.GetStatus().CheckpointTs = oracle.ComposeTS(int64(time.Now().Add(-10*time.Second).UnixMilli()), 0)
+		spanStatus.GetStatus().CheckpointTs = oracle.ComposeTS(time.Now().Add(-10*time.Second).UnixMilli(), 0)
 	}
 	checker.balanceCondition.statusUpdated = true
 
@@ -766,9 +764,9 @@ func TestSplitSpanChecker_CheckBalanceTraffic_SplitIfNoMove(t *testing.T) {
 
 	// Set region counts
 	spanStatus1.regionCount = 5
-	spanStatus1.GetStatus().CheckpointTs = oracle.ComposeTS(int64(time.Now().Add(-10*time.Second).UnixMilli()), 0)
+	spanStatus1.GetStatus().CheckpointTs = oracle.ComposeTS(time.Now().Add(-10*time.Second).UnixMilli(), 0)
 	spanStatus2.regionCount = 5
-	spanStatus2.GetStatus().CheckpointTs = oracle.ComposeTS(int64(time.Now().Add(-10*time.Second).UnixMilli()), 0)
+	spanStatus2.GetStatus().CheckpointTs = oracle.ComposeTS(time.Now().Add(-10*time.Second).UnixMilli(), 0)
 
 	checker.balanceCondition.statusUpdated = true
 
@@ -977,7 +975,7 @@ func TestSplitSpanChecker_ChooseMergedSpans_Continuous(t *testing.T) {
 			ID:                 replica.ID.ToPB(),
 			ComponentStatus:    heartbeatpb.ComponentState_Working,
 			EventSizePerSecond: 200,
-			CheckpointTs:       oracle.ComposeTS(int64(currentTime.Add(-10*time.Second).UnixMilli()), 0),
+			CheckpointTs:       oracle.ComposeTS(currentTime.Add(-10*time.Second).UnixMilli(), 0),
 		}
 		replica.UpdateStatus(status)
 	}
@@ -1047,7 +1045,7 @@ func TestSplitSpanChecker_ChooseMoveSpans_SimpleMove(t *testing.T) {
 			ID:                 replica.ID.ToPB(),
 			ComponentStatus:    heartbeatpb.ComponentState_Working,
 			EventSizePerSecond: 200,
-			CheckpointTs:       oracle.ComposeTS(int64(currentTime.Add(-10*time.Second).UnixMilli()), 0),
+			CheckpointTs:       oracle.ComposeTS(currentTime.Add(-10*time.Second).UnixMilli(), 0),
 		}
 		replica.UpdateStatus(status)
 	}
@@ -1109,7 +1107,7 @@ func TestSplitSpanChecker_ChooseMoveSpans_ExchangeMove(t *testing.T) {
 			ID:                 replica.ID.ToPB(),
 			ComponentStatus:    heartbeatpb.ComponentState_Working,
 			EventSizePerSecond: 100,
-			CheckpointTs:       oracle.ComposeTS(int64(currentTime.Add(-10*time.Second).UnixMilli()), 0),
+			CheckpointTs:       oracle.ComposeTS(currentTime.Add(-10*time.Second).UnixMilli(), 0),
 		}
 		replica.UpdateStatus(status)
 	}
@@ -1187,7 +1185,7 @@ func TestSplitSpanChecker_Check_FullFlow(t *testing.T) {
 			ID:                 replica.ID.ToPB(),
 			ComponentStatus:    heartbeatpb.ComponentState_Working,
 			EventSizePerSecond: 200,
-			CheckpointTs:       oracle.ComposeTS(int64(currentTime.Add(-10*time.Second).UnixMilli()), 0),
+			CheckpointTs:       oracle.ComposeTS(currentTime.Add(-10*time.Second).UnixMilli(), 0),
 		}
 		replica.UpdateStatus(status)
 	}
@@ -1263,7 +1261,7 @@ func TestSplitSpanChecker_Check_FullFlow_WriteThresholdZero(t *testing.T) {
 			ID:                 replica.ID.ToPB(),
 			ComponentStatus:    heartbeatpb.ComponentState_Working,
 			EventSizePerSecond: 200,
-			CheckpointTs:       oracle.ComposeTS(int64(currentTime.Add(-10*time.Second).UnixMilli()), 0),
+			CheckpointTs:       oracle.ComposeTS(currentTime.Add(-10*time.Second).UnixMilli(), 0),
 		}
 		replica.UpdateStatus(status)
 	}
@@ -1339,7 +1337,7 @@ func TestSplitSpanChecker_Check_FullFlow_RegionThresholdZero(t *testing.T) {
 			ID:                 replica.ID.ToPB(),
 			ComponentStatus:    heartbeatpb.ComponentState_Working,
 			EventSizePerSecond: 0,
-			CheckpointTs:       oracle.ComposeTS(int64(currentTime.Add(-10*time.Second).UnixMilli()), 0),
+			CheckpointTs:       oracle.ComposeTS(currentTime.Add(-10*time.Second).UnixMilli(), 0),
 		}
 		replica.UpdateStatus(status)
 	}

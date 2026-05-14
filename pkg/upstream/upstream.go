@@ -138,8 +138,7 @@ func CreateTiStore(ctx context.Context, urls string, credential *security.Creden
 }
 
 func isCreateTiStoreRetryable(ctx context.Context, err error) bool {
-	switch errors.Cause(err) {
-	case context.Canceled:
+	if errors.Is(errors.Cause(err), context.Canceled) {
 		// Only stop retrying if the caller's context is canceled.
 		// Otherwise treat it as transient (e.g. internal client cancellation).
 		return ctx.Err() == nil

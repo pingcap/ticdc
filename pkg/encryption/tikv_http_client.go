@@ -356,7 +356,7 @@ func (r *encryptionMetaResponse) toEncryptionMeta() (*EncryptionMeta, error) {
 
 	dataKeys := make(map[uint32]*DataKey, len(r.DataKeys))
 	for id, dk := range r.DataKeys {
-		dataKeys[id] = &DataKey{Ciphertext: []byte(dk.Ciphertext)}
+		dataKeys[id] = &DataKey{Ciphertext: dk.Ciphertext}
 	}
 
 	if _, ok := dataKeys[r.Current.DataKeyId]; !ok {
@@ -395,7 +395,7 @@ func (r *masterKeyResponse) toMasterKey() *MasterKey {
 		CmekId:     r.CmekId,
 		Region:     r.Region,
 		Endpoint:   r.Endpoint,
-		Ciphertext: []byte(r.Ciphertext),
+		Ciphertext: r.Ciphertext,
 	}
 }
 

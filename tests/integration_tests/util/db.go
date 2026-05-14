@@ -20,9 +20,9 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/diff"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tidb/pkg/util/dbutil"
 	"go.uber.org/zap"
 )
@@ -152,7 +152,7 @@ func MustExec(db *sql.DB, sql string, args ...interface{}) {
 func MustExecWithConn(ctx context.Context, conn *sql.Conn, sql string, args ...interface{}) {
 	var err error
 	_, err = conn.ExecContext(ctx, sql, args...)
-	if err != nil && errors.Cause(err) == context.DeadlineExceeded && errors.Cause(err) == context.Canceled {
+	if err != nil && errors.Is(errors.Cause(err), context.DeadlineExceeded) && errors.Is(errors.Cause(err), context.Canceled) {
 		log.S().Fatal(err)
 	}
 }

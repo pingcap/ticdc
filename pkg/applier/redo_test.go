@@ -26,7 +26,6 @@ import (
 	"github.com/phayes/freeport"
 	dmysql "github.com/pingcap/ticdc/downstreamadapter/sink/mysql"
 	"github.com/pingcap/ticdc/pkg/common"
-	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	misc "github.com/pingcap/ticdc/pkg/redo/common"
@@ -94,8 +93,8 @@ func (br *MockReader) ReadMeta(ctx context.Context) (checkpointTs, resolvedTs ui
 }
 
 // GetChangefeedID implements LogReader.GetChangefeedID
-func (br *MockReader) GetChangefeedID() commonType.ChangeFeedID {
-	return commonType.ChangeFeedID{}
+func (br *MockReader) GetChangefeedID() common.ChangeFeedID {
+	return common.ChangeFeedID{}
 }
 
 // GetVersion implements LogReader.GetVersion
@@ -104,7 +103,7 @@ func (br *MockReader) GetVersion() int {
 }
 
 func newFlag(flag uint) uint64 {
-	var result commonType.ColumnFlagType
+	var result common.ColumnFlagType
 	if flag == pmysql.PriKeyFlag {
 		result.SetIsHandleKey()
 		result.SetIsPrimaryKey()
@@ -619,7 +618,7 @@ func getMockDB(t *testing.T) *sql.DB {
 
 	mock.ExpectBegin()
 	mock.ExpectExec("INSERT INTO `test`.`t1` (`a`,`b`) VALUES (?,?)").
-		WithArgs(1, []byte([]byte("20"))).
+		WithArgs(1, []byte("20")).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
@@ -631,7 +630,7 @@ func getMockDB(t *testing.T) *sql.DB {
 
 	mock.ExpectBegin()
 	mock.ExpectExec("INSERT INTO `test`.`t1` (`a`,`b`) VALUES (?,?)").
-		WithArgs(10, []byte([]byte("20"))).
+		WithArgs(10, []byte("20")).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec("INSERT INTO `test`.`t1` (`a`,`b`) VALUES (?,?)").
 		WithArgs(100, []byte("200")).

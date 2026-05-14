@@ -207,7 +207,7 @@ func (as *areaMemStat[A, P, T, D, H]) releaseMemory() {
 			continue
 		}
 
-		releasedSize += int64(path.pendingSize.Load())
+		releasedSize += path.pendingSize.Load()
 		releasedPaths = append(releasedPaths, path)
 	}
 
@@ -286,7 +286,7 @@ func (as *areaMemStat[A, P, T, D, H]) updateAreaPauseState(path *pathInfo[A, P, 
 }
 
 func (as *areaMemStat[A, P, T, D, H]) decPendingSize(path *pathInfo[A, P, T, D, H], size int64) {
-	as.totalPendingSize.Add(int64(-size))
+	as.totalPendingSize.Add(-size)
 	if as.totalPendingSize.Load() < 0 {
 		log.Debug("Total pending size is less than 0, reset it to 0", zap.Int64("totalPendingSize", as.totalPendingSize.Load()), zap.String("component", as.settings.Load().component))
 		as.totalPendingSize.Store(0)

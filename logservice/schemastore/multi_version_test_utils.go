@@ -61,12 +61,6 @@ func buildRecoverTableEventForTest(schemaID, tableID int64, schemaName, tableNam
 }
 
 func buildCreatePartitionTableEventForTest(schemaID, tableID int64, schemaName, tableName string, partitionIDs []int64, finishedTs uint64) *PersistedDDLEvent {
-	partitionDefinitions := make([]model.PartitionDefinition, 0, len(partitionIDs))
-	for _, partitionID := range partitionIDs {
-		partitionDefinitions = append(partitionDefinitions, model.PartitionDefinition{
-			ID: partitionID,
-		})
-	}
 	return &PersistedDDLEvent{
 		Type:       byte(model.ActionCreateTable),
 		SchemaID:   schemaID,

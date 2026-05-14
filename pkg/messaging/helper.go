@@ -57,5 +57,5 @@ func NewMessageCenterForTest(t *testing.T) (*messageCenter, string, func()) {
 		cancel()
 		wg.Wait()
 	}
-	return mc, string(addr), stop
+	return mc, addr, stop
 }

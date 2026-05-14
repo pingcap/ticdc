@@ -470,7 +470,7 @@ func TestCreateTableLikeKeepsAnonymousIndexNamesAfterDDLWaitCases(t *testing.T) 
 		true,
 		timodel.ActionMultiSchemaChange,
 	)
-	sourceTableInfo = assertRestoreAnonymousIndexToNamedIndex(
+	_ = assertRestoreAnonymousIndexToNamedIndex(
 		t,
 		helper,
 		"alter table t_anon_idx add column e int, add index (a)",
@@ -486,7 +486,7 @@ func TestCreateTableLikeKeepsAnonymousIndexNamesAfterDDLWaitCases(t *testing.T) 
 		false,
 		timodel.ActionAddIndex,
 	)
-	sourceTableInfo = assertRestoreAnonymousIndexToNamedIndex(
+	_ = assertRestoreAnonymousIndexToNamedIndex(
 		t,
 		helper,
 		"alter table t_anon_idx add index (a)",
@@ -494,7 +494,7 @@ func TestCreateTableLikeKeepsAnonymousIndexNamesAfterDDLWaitCases(t *testing.T) 
 		true,
 		timodel.ActionAddIndex,
 	)
-	sourceTableInfo = assertRestoreAnonymousIndexToNamedIndex(
+	_ = assertRestoreAnonymousIndexToNamedIndex(
 		t,
 		helper,
 		"alter table t_anon_idx add index (a)",
@@ -502,7 +502,7 @@ func TestCreateTableLikeKeepsAnonymousIndexNamesAfterDDLWaitCases(t *testing.T) 
 		true,
 		timodel.ActionAddIndex,
 	)
-	sourceTableInfo = assertRestoreAnonymousIndexToNamedIndex(
+	_ = assertRestoreAnonymousIndexToNamedIndex(
 		t,
 		helper,
 		"alter table t_anon_idx add index (a)",

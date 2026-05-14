@@ -275,7 +275,7 @@ func filterDMLEventSlowPath(
 					log.Info("received hard delete row",
 						zap.Stringer("dispatcherID", event.DispatcherID),
 						zap.Int64("tableID", tableInfo.TableName.TableID),
-						zap.Uint64("commitTs", uint64(event.CommitTs)))
+						zap.Uint64("commitTs", event.CommitTs))
 				}
 			}
 			filtered = true

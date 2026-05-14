@@ -64,11 +64,11 @@ func (m *mockSchemaStore) Close(ctx context.Context) error {
 
 func (m *mockSchemaStore) DeleteTable(id common.TableID, ts common.Ts) {
 	if info, ok := m.TableInfo[id]; ok {
-		info.deleteVersion = uint64(ts)
+		info.deleteVersion = ts
 	} else {
 		m.TableInfo[id] = &mockVersionTableInfo{
 			tableInfos:    make([]*common.TableInfo, 0),
-			deleteVersion: uint64(ts),
+			deleteVersion: ts,
 		}
 	}
 }
@@ -92,12 +92,12 @@ func (m *mockSchemaStore) SetTables(tables []commonEvent.Table) {
 
 func (m *mockSchemaStore) GetTableInfo(keyspaceMeta common.KeyspaceMeta, tableID common.TableID, ts common.Ts) (*common.TableInfo, error) {
 	if info, ok := m.TableInfo[tableID]; ok {
-		if info.deleteVersion <= uint64(ts) {
+		if info.deleteVersion <= ts {
 			return nil, &schemastore.TableDeletedError{}
 		}
 		infos := m.TableInfo[tableID].tableInfos
 		idx := sort.Search(len(infos), func(i int) bool {
-			return infos[i].GetUpdateTS() > uint64(ts)
+			return infos[i].GetUpdateTS() > ts
 		})
 		if idx == 0 {
 			return nil, nil
