@@ -29,7 +29,7 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
-	cerrors "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/eventservice"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
@@ -1462,9 +1462,9 @@ func TestFinishBootstrapReturnsErrorWhenCheckpointMissing(t *testing.T) {
 	}, false)
 	require.Nil(t, postBootstrapRequest)
 	require.Error(t, err)
-	code, ok := cerrors.RFCCode(err)
+	code, ok := errors.RFCCode(err)
 	require.True(t, ok)
-	require.Equal(t, cerrors.ErrChangefeedInitTableTriggerDispatcherFailed.RFCCode(), code)
+	require.Equal(t, errors.ErrChangefeedInitTableTriggerDispatcherFailed.RFCCode(), code)
 	require.Contains(t, err.Error(), "all bootstrap responses reported empty checkpointTs")
 	require.False(t, controller.bootstrapped)
 }

@@ -15,11 +15,11 @@ package util
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"testing"
 	"time"
 
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	"github.com/stretchr/testify/require"
 )

@@ -15,10 +15,10 @@ package blackhole
 
 import (
 	"context"
-	"errors"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"go.uber.org/zap"
 )
