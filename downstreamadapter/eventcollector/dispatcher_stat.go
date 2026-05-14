@@ -128,8 +128,8 @@ type dispatcherStat struct {
 	gotSyncpointOnTS atomic.Bool
 	// tableInfo is the latest table info of the dispatcher's corresponding table.
 	tableInfo atomic.Value
-	// tableInfoVersion is the latest table info version of the dispatcher's corresponding table.
-	// It is updated by ddl event
+	// tableInfoVersion is the latest schema version delivered to this dispatcher.
+	// It may advance even when tableInfo is not replaced.
 	tableInfoVersion atomic.Uint64
 }
 
@@ -493,13 +493,70 @@ func (d *dispatcherStat) handleSingleDataEvents(events []dispatcher.DispatcherEv
 	}
 	if events[0].GetType() == commonEvent.TypeDDLEvent {
 		ddl := events[0].Event.(*commonEvent.DDLEvent)
+<<<<<<< HEAD
 		d.tableInfoVersion.Store(ddl.FinishedTs)
 		if ddl.TableInfo != nil {
 			d.tableInfo.Store(ddl.TableInfo)
 		}
+=======
+		ddl, err := d.target.GetRouter().ApplyToDDLEvent(ddl)
+		if err != nil {
+			log.Error("failed to apply routing to DDL event",
+				zap.Stringer("changefeedID", d.target.GetChangefeedID()),
+				zap.Stringer("dispatcher", d.getDispatcherID()),
+				zap.Error(err))
+			if target, ok := d.target.(dispatcher.Dispatcher); ok {
+				target.HandleError(err)
+			}
+			return false
+		}
+		events[0].Event = ddl
+		d.updateTableInfoByDDL(ddl)
+>>>>>>> 21f52e04a (mysql,sqlmodel: support table route in mysql sink (#5006))
 	}
 	d.updateCommitTsStateByEvents(events)
 	return d.target.HandleEvents(events, func() { d.wake() })
+}
+
+// updateTableInfoByDDL advances the table schema version and, when the DDL
+// event carries a TableInfo matching the dispatcher's table, refreshes the
+// cached TableInfo used for DML row assembly.
+//
+// Must be called from the per-dispatcher event loop (handleSingleDataEvents),
+// which guarantees serial access to dispatcherStat fields for a given table.
+func (d *dispatcherStat) updateTableInfoByDDL(ddl *commonEvent.DDLEvent) {
+	tableSpan := d.target.GetTableSpan()
+	if tableSpan == nil || tableSpan.TableID == common.DDLSpanTableID {
+		return
+	}
+
+	// EXCHANGE PARTITION can change the schema version of a physical table dispatcher
+	// while ddl.TableInfo carries another logical table. The storage sink uses
+	// tableInfoVersion to decide whether a DML belongs to an old schema, so advance
+	// it for every DDL delivered to this dispatcher.
+	// TODO: Revisit whether the storage sink should discard DML solely by comparing
+	// tableInfoVersion with existing schema files.
+	d.tableInfoVersion.Store(ddl.FinishedTs)
+
+	if ddl.TableInfo == nil {
+		return
+	}
+
+	// A table dispatcher can receive DDLs unrelated to its own table for barrier
+	// coordination, for example CREATE VIEW is tracked in every table's DDL history.
+	// The cached table info is used to assemble subsequent DML rows. For partition
+	// tables, the dispatcher span ID is a physical partition ID while TableInfo
+	// carries the logical table ID, so compare with the cached table info first.
+	expectedTableID := tableSpan.TableID
+	current := d.tableInfo.Load()
+	if current != nil {
+		expectedTableID = current.(*common.TableInfo).TableName.TableID
+	}
+	if ddl.TableInfo.TableName.TableID != expectedTableID {
+		return
+	}
+
+	d.tableInfo.Store(ddl.TableInfo)
 }
 
 func (d *dispatcherStat) handleDataEvents(events ...dispatcher.DispatcherEvent) bool {

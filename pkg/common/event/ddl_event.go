@@ -479,6 +479,84 @@ func (t *DDLEvent) IsPaused() bool {
 	return false
 }
 
+<<<<<<< HEAD
+=======
+// NewRoutedDDLEvent builds a routed DDL event from the origin event and final routed fields.
+func NewRoutedDDLEvent(
+	d *DDLEvent,
+	query string,
+	targetSchemaName, targetTableName string,
+	targetExtraSchemaName, targetExtraTableName string,
+	tableInfo *common.TableInfo,
+	multipleTableInfos []*common.TableInfo,
+	blockedTableNames []SchemaTableName,
+) *DDLEvent {
+	if d == nil {
+		return nil
+	}
+
+	return &DDLEvent{
+		Version:               d.Version,
+		DispatcherID:          d.DispatcherID,
+		Type:                  d.Type,
+		SchemaID:              d.SchemaID,
+		SchemaName:            d.SchemaName,
+		TableName:             d.TableName,
+		ExtraSchemaName:       d.ExtraSchemaName,
+		ExtraTableName:        d.ExtraTableName,
+		targetSchemaName:      targetSchemaName,
+		targetTableName:       targetTableName,
+		targetExtraSchemaName: targetExtraSchemaName,
+		targetExtraTableName:  targetExtraTableName,
+		Query:                 query,
+		TableInfo:             tableInfo,
+		StartTs:               d.StartTs,
+		FinishedTs:            d.FinishedTs,
+		Seq:                   d.Seq,
+		Epoch:                 d.Epoch,
+		// MultipleTableInfos and BlockedTableNames carry table names used by downstream
+		// execution paths, so the routed versions must be passed in explicitly.
+		MultipleTableInfos: multipleTableInfos,
+		BlockedTableNames:  blockedTableNames,
+		// The following fields do not participate in table route name rewriting,
+		// so the routed event keeps the original values from the source event.
+		BlockedTables:     d.BlockedTables,
+		NeedDroppedTables: d.NeedDroppedTables,
+		NeedAddedTables:   d.NeedAddedTables,
+		UpdatedSchemas:    d.UpdatedSchemas,
+		TableNameChange:   d.TableNameChange,
+		TiDBOnly:          d.TiDBOnly,
+		BDRMode:           d.BDRMode,
+		Err:               d.Err,
+		PostTxnFlushed:    clonePostTxnFlushed(d.PostTxnFlushed),
+		IndexIDs:          cloneIndexIDs(d.IndexIDs),
+		eventSize:         d.eventSize,
+		IsBootstrap:       d.IsBootstrap,
+		NotSync:           d.NotSync,
+	}
+}
+
+func cloneIndexIDs(indexIDs []int64) []int64 {
+	if indexIDs == nil {
+		return nil
+	}
+
+	cloned := make([]int64, len(indexIDs))
+	copy(cloned, indexIDs)
+	return cloned
+}
+
+func clonePostTxnFlushed(postTxnFlushed []func()) []func() {
+	if postTxnFlushed == nil {
+		return nil
+	}
+
+	cloned := make([]func(), len(postTxnFlushed))
+	copy(cloned, postTxnFlushed)
+	return cloned
+}
+
+>>>>>>> 21f52e04a (mysql,sqlmodel: support table route in mysql sink (#5006))
 func (t *DDLEvent) Len() int32 {
 	return 1
 }

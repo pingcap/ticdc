@@ -33,7 +33,46 @@ func (t TableName) String() string {
 	return fmt.Sprintf("%s.%s", t.Schema, t.Table)
 }
 
+<<<<<<< HEAD
 // QuoteString returns quoted full table name
 func (t TableName) QuoteString() string {
 	return QuoteSchema(t.Schema, t.Table)
+=======
+// GetSchema returns the schema name
+func (t *TableName) GetSchema() string {
+	return t.Schema
+}
+
+// GetTable returns the table name
+func (t *TableName) GetTable() string {
+	return t.Table
+}
+
+// IsRouted returns whether table routing is enabled
+func (t *TableName) IsRouted() bool {
+	return t.TargetSchema != "" || t.TargetTable != ""
+}
+
+// GetTargetSchema returns the target schema name for routing.
+// If TargetSchema is empty, returns Schema
+func (t *TableName) GetTargetSchema() string {
+	if t.TargetSchema != "" {
+		return t.TargetSchema
+	}
+	return t.Schema
+}
+
+// GetTargetTable returns the target table name for routing
+// If TargetTable is empty, returns Table.
+func (t *TableName) GetTargetTable() string {
+	if t.TargetTable != "" {
+		return t.TargetTable
+	}
+	return t.Table
+}
+
+// QuoteTargetString returns quoted full target table name for routing
+func (t TableName) QuoteTargetString() string {
+	return QuoteSchema(t.GetTargetSchema(), t.GetTargetTable())
+>>>>>>> 21f52e04a (mysql,sqlmodel: support table route in mysql sink (#5006))
 }

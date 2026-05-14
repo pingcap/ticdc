@@ -213,6 +213,262 @@ func (s *EventTestHelper) DDL2Event(ddl string) *DDLEvent {
 		StartTs:    job.StartTS,
 		FinishedTs: job.BinlogInfo.FinishedTS,
 	}
+<<<<<<< HEAD
+=======
+	s.fillDDLEventMetadata(ddlEvent, job)
+	return ddlEvent
+}
+
+func requireSingleDDLStmt(t testing.TB, ddl string) {
+	stmts, _, err := parser.New().Parse(ddl, "", "")
+	require.NoError(t, err)
+	require.Len(t, stmts, 1)
+}
+
+func (s *EventTestHelper) fillDDLEventMetadata(ddlEvent *DDLEvent, job *timodel.Job) {
+	switch job.Type {
+	case timodel.ActionDropSchema:
+		ddlEvent.TableNameChange = &TableNameChange{DropDatabaseName: ddlEvent.SchemaName}
+	case timodel.ActionCreateTable:
+		ddlEvent.TableNameChange = &TableNameChange{
+			AddName: []SchemaTableName{{SchemaName: ddlEvent.SchemaName, TableName: ddlEvent.TableName}},
+		}
+		s.fillCreateTableLikeBlockedTableNames(ddlEvent, job)
+	case timodel.ActionRecoverTable:
+		ddlEvent.TableNameChange = &TableNameChange{
+			AddName: []SchemaTableName{{SchemaName: ddlEvent.SchemaName, TableName: ddlEvent.TableName}},
+		}
+	case timodel.ActionCreateTables:
+		s.fillCreateTablesEventMetadata(ddlEvent, job)
+	case timodel.ActionDropTable:
+		ddlEvent.TableNameChange = &TableNameChange{
+			DropName: []SchemaTableName{{SchemaName: ddlEvent.SchemaName, TableName: ddlEvent.TableName}},
+		}
+		ddlEvent.BlockedTableNames = []SchemaTableName{{SchemaName: ddlEvent.SchemaName, TableName: ddlEvent.TableName}}
+	case timodel.ActionRenameTable:
+		s.fillRenameTableEventMetadata(ddlEvent)
+	case timodel.ActionRenameTables:
+		s.fillRenameTablesEventMetadata(ddlEvent, job)
+	case timodel.ActionCreateView:
+		s.normalizeCreateViewQueryWithStoredSelect(ddlEvent)
+	case timodel.ActionCreateSchema, timodel.ActionModifySchemaCharsetAndCollate,
+		timodel.ActionDropView:
+	default:
+		if ddlEvent.SchemaName != "" && ddlEvent.TableName != "" {
+			ddlEvent.BlockedTableNames = []SchemaTableName{{SchemaName: ddlEvent.SchemaName, TableName: ddlEvent.TableName}}
+		}
+	}
+}
+
+// fillCreateTableLikeBlockedTableNames populates BlockedTableNames for a
+// CREATE TABLE ... LIKE event. It first checks the query for an explicit
+// refer schema, then falls back to job.InvolvingSchemaInfo, and finally to
+// the event SchemaName. When the refer schema differs from the event schema,
+// it rewrites the query to include the qualified schema name so that
+// downstream routing can correctly resolve the cross-schema reference.
+func (s *EventTestHelper) fillCreateTableLikeBlockedTableNames(ddlEvent *DDLEvent, job *timodel.Job) {
+	stmt, err := parser.New().ParseOneStmt(ddlEvent.Query, "", "")
+	require.NoError(s.t, err)
+
+	createStmt, ok := stmt.(*ast.CreateTableStmt)
+	if !ok || createStmt.ReferTable == nil {
+		return
+	}
+
+	refSchema := createStmt.ReferTable.Schema.O
+	if refSchema == "" {
+		refSchema = findCreateTableLikeReferSchema(job, ddlEvent.SchemaName, ddlEvent.TableName, createStmt.ReferTable.Name.O)
+	}
+	if refSchema == "" && createStmt.Table != nil && createStmt.Table.Schema.O == "" {
+		refSchema = ddlEvent.SchemaName
+	}
+	if refSchema == "" {
+		return
+	}
+	if createStmt.ReferTable.Schema.O == "" && !strings.EqualFold(refSchema, ddlEvent.SchemaName) {
+		createStmt.ReferTable.Schema = ast.NewCIStr(refSchema)
+		query, err := Restore(createStmt)
+		require.NoError(s.t, err)
+		ddlEvent.Query = query
+	}
+	ddlEvent.BlockedTableNames = []SchemaTableName{{
+		SchemaName: refSchema,
+		TableName:  createStmt.ReferTable.Name.O,
+	}}
+}
+
+func (s *EventTestHelper) normalizeCreateViewQueryWithStoredSelect(ddlEvent *DDLEvent) {
+	if ddlEvent.TableInfo == nil || ddlEvent.TableInfo.View == nil {
+		return
+	}
+
+	query, err := NormalizeCreateViewQueryWithStoredSelect(
+		ddlEvent.Query,
+		ddlEvent.TableInfo.View.SelectStmt,
+		ddlEvent.SchemaName,
+	)
+	require.NoError(s.t, err)
+	ddlEvent.Query = query
+}
+
+// findCreateTableLikeReferSchema resolves the source schema for CREATE TABLE
+// ... LIKE by inspecting job.InvolvingSchemaInfo.
+//
+// Example — "CREATE TABLE extra.t2 LIKE t1" with session in db1:
+//
+//	InvolvingSchemaInfo = [
+//	    {Database: "extra", Table: "t2"},               // target (exclusive)
+//	    {Database: "db1",   Table: "t1", SharedInvolving}, // refer source
+//	]
+//	→ returns "db1" (SharedInvolving match on table "t1")
+//
+// SharedInvolving entries are preferred because TiDB marks the LIKE source
+// table with this mode. Without the mode check, the DDL target table may be
+// mistaken for the refer table when both happen to share the same name.
+func findCreateTableLikeReferSchema(job *timodel.Job, targetSchema, targetTable, referTable string) string {
+	for _, info := range job.InvolvingSchemaInfo {
+		if info.Mode == timodel.SharedInvolving && strings.EqualFold(info.Table, referTable) {
+			return info.Database
+		}
+	}
+	for _, info := range job.InvolvingSchemaInfo {
+		if !strings.EqualFold(info.Table, referTable) {
+			continue
+		}
+		if strings.EqualFold(info.Database, targetSchema) && strings.EqualFold(info.Table, targetTable) {
+			continue
+		}
+		return info.Database
+	}
+	return ""
+}
+
+func (s *EventTestHelper) fillCreateTablesEventMetadata(ddlEvent *DDLEvent, job *timodel.Job) {
+	tableInfos := wrapMultipleTableInfos(job.SchemaName, job.BinlogInfo.MultipleTableInfos)
+	ddlEvent.MultipleTableInfos = tableInfos
+	ddlEvent.TableNameChange = &TableNameChange{
+		AddName: make([]SchemaTableName, 0, len(tableInfos)),
+	}
+	for _, tableInfo := range tableInfos {
+		ddlEvent.TableNameChange.AddName = append(ddlEvent.TableNameChange.AddName, SchemaTableName{
+			SchemaName: tableInfo.GetSchemaName(),
+			TableName:  tableInfo.GetTableName(),
+		})
+	}
+}
+
+func (s *EventTestHelper) fillRenameTableEventMetadata(ddlEvent *DDLEvent) {
+	pairs := s.parseRenameTablePairs(ddlEvent.Query, ddlEvent.SchemaName)
+	require.Len(s.t, pairs, 1)
+
+	pair := pairs[0]
+	ddlEvent.ExtraSchemaName = pair.oldSchemaName
+	ddlEvent.ExtraTableName = pair.oldTableName
+	ddlEvent.SchemaName = pair.newSchemaName
+	ddlEvent.TableName = pair.newTableName
+	ddlEvent.BlockedTableNames = []SchemaTableName{{SchemaName: pair.oldSchemaName, TableName: pair.oldTableName}}
+	ddlEvent.TableNameChange = &TableNameChange{
+		AddName:  []SchemaTableName{{SchemaName: pair.newSchemaName, TableName: pair.newTableName}},
+		DropName: []SchemaTableName{{SchemaName: pair.oldSchemaName, TableName: pair.oldTableName}},
+	}
+}
+
+func (s *EventTestHelper) fillRenameTablesEventMetadata(ddlEvent *DDLEvent, job *timodel.Job) {
+	pairs := s.parseRenameTablePairs(ddlEvent.Query, ddlEvent.SchemaName)
+	require.Len(s.t, pairs, len(job.BinlogInfo.MultipleTableInfos))
+
+	ddlEvent.MultipleTableInfos = make([]*common.TableInfo, 0, len(job.BinlogInfo.MultipleTableInfos))
+	ddlEvent.BlockedTableNames = make([]SchemaTableName, 0, len(pairs))
+	ddlEvent.TableNameChange = &TableNameChange{
+		AddName:  make([]SchemaTableName, 0, len(pairs)),
+		DropName: make([]SchemaTableName, 0, len(pairs)),
+	}
+	for i, pair := range pairs {
+		ddlEvent.MultipleTableInfos = append(
+			ddlEvent.MultipleTableInfos,
+			common.WrapTableInfo(pair.newSchemaName, job.BinlogInfo.MultipleTableInfos[i]),
+		)
+		ddlEvent.BlockedTableNames = append(ddlEvent.BlockedTableNames, SchemaTableName{
+			SchemaName: pair.oldSchemaName,
+			TableName:  pair.oldTableName,
+		})
+		ddlEvent.TableNameChange.AddName = append(ddlEvent.TableNameChange.AddName, SchemaTableName{
+			SchemaName: pair.newSchemaName,
+			TableName:  pair.newTableName,
+		})
+		ddlEvent.TableNameChange.DropName = append(ddlEvent.TableNameChange.DropName, SchemaTableName{
+			SchemaName: pair.oldSchemaName,
+			TableName:  pair.oldTableName,
+		})
+	}
+}
+
+type renameTableNamePair struct {
+	oldSchemaName string
+	oldTableName  string
+	newSchemaName string
+	newTableName  string
+}
+
+func (s *EventTestHelper) parseRenameTablePairs(query string, defaultSchema string) []renameTableNamePair {
+	stmt, err := parser.New().ParseOneStmt(query, "", "")
+	require.NoError(s.t, err)
+
+	switch renameStmt := stmt.(type) {
+	case *ast.RenameTableStmt:
+		pairs := make([]renameTableNamePair, 0, len(renameStmt.TableToTables))
+		for _, tableToTable := range renameStmt.TableToTables {
+			pairs = append(pairs, buildRenameTableNamePair(
+				tableToTable.OldTable,
+				tableToTable.NewTable,
+				defaultSchema,
+			))
+		}
+		return pairs
+	case *ast.AlterTableStmt:
+		pairs := make([]renameTableNamePair, 0, 1)
+		for _, spec := range renameStmt.Specs {
+			if spec.Tp != ast.AlterTableRenameTable {
+				continue
+			}
+			pairs = append(pairs, buildRenameTableNamePair(renameStmt.Table, spec.NewTable, defaultSchema))
+		}
+		require.NotEmpty(s.t, pairs)
+		return pairs
+	default:
+		require.Failf(s.t, "unexpected rename table statement", "query: %s, stmt: %T", query, stmt)
+		return nil
+	}
+}
+
+func buildRenameTableNamePair(oldTable, newTable *ast.TableName, defaultSchema string) renameTableNamePair {
+	oldSchemaName := oldTable.Schema.O
+	if oldSchemaName == "" {
+		oldSchemaName = defaultSchema
+	}
+	newSchemaName := newTable.Schema.O
+	if newSchemaName == "" {
+		newSchemaName = oldSchemaName
+	}
+	return renameTableNamePair{
+		oldSchemaName: oldSchemaName,
+		oldTableName:  oldTable.Name.O,
+		newSchemaName: newSchemaName,
+		newTableName:  newTable.Name.O,
+	}
+}
+
+func wrapMultipleTableInfos(schemaName string, tableInfos []*timodel.TableInfo) []*common.TableInfo {
+	if len(tableInfos) == 0 {
+		return nil
+	}
+
+	wrapped := make([]*common.TableInfo, 0, len(tableInfos))
+	for _, tableInfo := range tableInfos {
+		wrapped = append(wrapped, common.WrapTableInfo(schemaName, tableInfo))
+	}
+	return wrapped
+>>>>>>> 21f52e04a (mysql,sqlmodel: support table route in mysql sink (#5006))
 }
 
 func (s *EventTestHelper) DML2BatchEvent(schema, table string, dmls ...string) *BatchDMLEvent {
