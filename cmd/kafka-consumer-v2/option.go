@@ -51,10 +51,13 @@ type option struct {
 	upstreamTiDBDSN   string
 	generatedGroupID  string
 
-	enableSyncpoint     bool
-	syncpointInterval   time.Duration
-	syncpointRetention  time.Duration
-	downstreamURIParsed *url.URL
+	enableSyncpoint       bool
+	syncpointInterval     time.Duration
+	syncpointRetention    time.Duration
+	enableSyncpointSet    bool
+	syncpointIntervalSet  bool
+	syncpointRetentionSet bool
+	downstreamURIParsed   *url.URL
 
 	enableTableAcrossNodes bool
 }
@@ -155,9 +158,7 @@ func (o *option) adjust(upstreamURIStr string, configFile string) error {
 		return errors.WrapError(errors.ErrSinkURIInvalid, err)
 	}
 	o.downstreamURIParsed = downstreamURI
-	o.enableSyncpoint = putil.GetOrZero(replicaConfig.EnableSyncPoint)
-	o.syncpointInterval = putil.GetOrZero(replicaConfig.SyncPointInterval)
-	o.syncpointRetention = putil.GetOrZero(replicaConfig.SyncPointRetention)
+	o.applySyncpointConfig(replicaConfig)
 	if o.enableSyncpoint {
 		if o.groupID == "" || o.groupID == o.generatedGroupID {
 			return errors.New("consumer-group-id must be explicitly set when syncpoint is enabled")
@@ -194,4 +195,24 @@ func (o *option) adjust(upstreamURIStr string, configFile string) error {
 		zap.String("upstreamURI", upstreamURI.String()),
 		zap.String("downstreamURI", o.downstreamURI))
 	return nil
+}
+
+func (o *option) applySyncpointConfig(replicaConfig *config.ReplicaConfig) {
+	enableSyncpoint := putil.GetOrZero(replicaConfig.EnableSyncPoint)
+	syncpointInterval := putil.GetOrZero(replicaConfig.SyncPointInterval)
+	syncpointRetention := putil.GetOrZero(replicaConfig.SyncPointRetention)
+
+	if o.enableSyncpointSet {
+		enableSyncpoint = o.enableSyncpoint
+	}
+	if o.syncpointIntervalSet {
+		syncpointInterval = o.syncpointInterval
+	}
+	if o.syncpointRetentionSet {
+		syncpointRetention = o.syncpointRetention
+	}
+
+	o.enableSyncpoint = enableSyncpoint
+	o.syncpointInterval = syncpointInterval
+	o.syncpointRetention = syncpointRetention
 }

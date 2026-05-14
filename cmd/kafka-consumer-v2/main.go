@@ -61,10 +61,23 @@ func main() {
 	flag.StringVar(&o.upstreamTiDBDSN, "upstream-tidb-dsn", "", "upstream TiDB DSN")
 	flag.StringVar(&o.groupID, "consumer-group-id", groupID, "consumer group id")
 	flag.StringVar(&o.timezone, "tz", "System", "Specify time zone of Kafka consumer")
+	flag.BoolVar(&o.enableSyncpoint, "enable-sync-point", false, "enable consumer syncpoint")
+	flag.DurationVar(&o.syncpointInterval, "sync-point-interval", 0, "consumer syncpoint interval")
+	flag.DurationVar(&o.syncpointRetention, "sync-point-retention", 0, "consumer syncpoint retention")
 	flag.StringVar(&o.ca, "ca", "", "CA certificate path for Kafka SSL connection")
 	flag.StringVar(&o.cert, "cert", "", "Certificate path for Kafka SSL connection")
 	flag.StringVar(&o.key, "key", "", "Private key path for Kafka SSL connection")
 	flag.Parse()
+	flag.Visit(func(f *flag.Flag) {
+		switch f.Name {
+		case "enable-sync-point":
+			o.enableSyncpointSet = true
+		case "sync-point-interval":
+			o.syncpointIntervalSet = true
+		case "sync-point-retention":
+			o.syncpointRetentionSet = true
+		}
+	})
 
 	if err := logger.InitLogger(&logger.Config{
 		Level: logLevel,
