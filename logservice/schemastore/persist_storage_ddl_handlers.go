@@ -614,157 +614,23 @@ func buildPersistedDDLEventForDropView(args buildPersistedDDLEventFuncArgs) Pers
 // Value assignment in CREATE VIEW:
 // https://github.com/pingcap/tidb/blob/8f2630e53d5d/pkg/ddl/create_table.go#L1668-L1678
 func normalizeCreateViewQueryWithStoredSelect(event *PersistedDDLEvent) {
-	if event.Query == "" || event.TableInfo == nil || event.TableInfo.View == nil || event.TableInfo.View.SelectStmt == "" {
+	if event.TableInfo == nil || event.TableInfo.View == nil {
 		return
 	}
 
-	stmt, err := parser.New().ParseOneStmt(event.Query, "", "")
+	query, err := commonEvent.NormalizeCreateViewQueryWithStoredSelect(
+		event.Query,
+		event.TableInfo.View.SelectStmt,
+		event.SchemaName,
+	)
 	if err != nil {
-		log.Warn("parse create view query failed when normalizing select statement",
-			zap.String("query", event.Query),
-			zap.Error(err))
-		return
-	}
-	createViewStmt, ok := stmt.(*ast.CreateViewStmt)
-	if !ok {
-		return
-	}
-
-	selectStmt, err := parser.New().ParseOneStmt(event.TableInfo.View.SelectStmt, "", "")
-	if err != nil {
-		log.Warn("parse stored create view select statement failed",
-			zap.String("selectStmt", event.TableInfo.View.SelectStmt),
-			zap.String("query", event.Query),
-			zap.Error(err))
-		return
-	}
-	if !normalizeCreateViewSelect(selectStmt, event.SchemaName) {
-		return
-	}
-
-	createViewStmt.Select = selectStmt
-	normalizedQuery, err := commonEvent.Restore(createViewStmt)
-	if err != nil {
-		log.Warn("restore normalized create view query failed",
+		log.Warn("normalize create view query with stored select failed",
 			zap.String("query", event.Query),
 			zap.String("selectStmt", event.TableInfo.View.SelectStmt),
 			zap.Error(err))
 		return
 	}
-	event.Query = normalizedQuery
-}
-
-type createViewSelectNormalizer struct {
-	currentSchema     string
-	currentSchemaOnly bool
-	changed           bool
-	scopes            []createViewSelectScope
-}
-
-type createViewSelectScope struct {
-	aliases         map[string]struct{}
-	tableByName     map[string]string
-	ambiguousTables map[string]struct{}
-}
-
-// normalizeCreateViewSelect returns true when CREATE VIEW should use the stored
-// SELECT body. It also turns unaliased table-qualified column references into
-// schema-qualified references: `orders`.`id` with FROM `source_db`.`orders`
-// becomes `source_db`.`orders`.`id`. Explicit alias references are preserved.
-func normalizeCreateViewSelect(selectStmt ast.StmtNode, currentSchema string) bool {
-	normalizer := &createViewSelectNormalizer{
-		currentSchema:     currentSchema,
-		currentSchemaOnly: true,
-		scopes:            make([]createViewSelectScope, 0),
-	}
-	selectStmt.Accept(normalizer)
-	return !normalizer.currentSchemaOnly || normalizer.changed
-}
-
-func (n *createViewSelectNormalizer) Enter(in ast.Node) (ast.Node, bool) {
-	switch v := in.(type) {
-	case *ast.SelectStmt:
-		n.scopes = append(n.scopes, buildCreateViewSelectScope(v))
-	case *ast.TableName:
-		if v.Schema.O != "" && !strings.EqualFold(v.Schema.O, n.currentSchema) {
-			n.currentSchemaOnly = false
-		}
-	case *ast.ColumnName:
-		n.qualifyColumnName(v)
-	}
-	return in, false
-}
-
-func (n *createViewSelectNormalizer) Leave(in ast.Node) (ast.Node, bool) {
-	if _, ok := in.(*ast.SelectStmt); ok {
-		n.scopes = n.scopes[:len(n.scopes)-1]
-	}
-	return in, true
-}
-
-func (n *createViewSelectNormalizer) qualifyColumnName(c *ast.ColumnName) {
-	if len(n.scopes) == 0 || c == nil || c.Schema.O != "" || c.Table.O == "" {
-		return
-	}
-
-	scope := n.scopes[len(n.scopes)-1]
-	tableKey := strings.ToLower(c.Table.O)
-	if _, ok := scope.aliases[tableKey]; ok {
-		return
-	}
-	if _, ok := scope.ambiguousTables[tableKey]; ok {
-		return
-	}
-	schema, ok := scope.tableByName[tableKey]
-	if !ok {
-		return
-	}
-	c.Schema = ast.NewCIStr(schema)
-	n.changed = true
-}
-
-func buildCreateViewSelectScope(selectStmt *ast.SelectStmt) createViewSelectScope {
-	scope := createViewSelectScope{
-		aliases:         make(map[string]struct{}),
-		tableByName:     make(map[string]string),
-		ambiguousTables: make(map[string]struct{}),
-	}
-	if selectStmt == nil || selectStmt.From == nil || selectStmt.From.TableRefs == nil {
-		return scope
-	}
-	collectCreateViewSelectTables(selectStmt.From.TableRefs, &scope)
-	return scope
-}
-
-func collectCreateViewSelectTables(node ast.ResultSetNode, scope *createViewSelectScope) {
-	switch v := node.(type) {
-	case *ast.Join:
-		if v.Left != nil {
-			collectCreateViewSelectTables(v.Left, scope)
-		}
-		if v.Right != nil {
-			collectCreateViewSelectTables(v.Right, scope)
-		}
-	case *ast.TableSource:
-		if v.AsName.O != "" {
-			scope.aliases[strings.ToLower(v.AsName.O)] = struct{}{}
-			return
-		}
-		tableName, ok := v.Source.(*ast.TableName)
-		if !ok || tableName.Schema.O == "" || tableName.Name.O == "" {
-			return
-		}
-		tableKey := strings.ToLower(tableName.Name.O)
-		if _, ambiguous := scope.ambiguousTables[tableKey]; ambiguous {
-			return
-		}
-		if _, exists := scope.tableByName[tableKey]; exists {
-			delete(scope.tableByName, tableKey)
-			scope.ambiguousTables[tableKey] = struct{}{}
-			return
-		}
-		scope.tableByName[tableKey] = tableName.Schema.O
-	}
+	event.Query = query
 }
 
 func buildPersistedDDLEventForCreateTable(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
