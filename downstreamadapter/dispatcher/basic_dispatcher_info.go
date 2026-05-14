@@ -242,10 +242,14 @@ func (d *BasicDispatcher) GetTxnAtomicity() config.AtomicityLevel {
 	return d.sharedInfo.txnAtomicity
 }
 
+// offerBlockStatus is the common path for WAITING/NONE protobufs that are
+// constructed once and then reused by resend tasks.
 func (d *BasicDispatcher) offerBlockStatus(status *heartbeatpb.TableSpanBlockStatus) {
 	d.sharedInfo.OfferBlockStatus(status)
 }
 
+// offerDoneBlockStatus keeps DONE on the dedicated minimal-key path so
+// duplicate completions are filtered before another protobuf allocation.
 func (d *BasicDispatcher) offerDoneBlockStatus(blockTs uint64, isSyncPoint bool) {
 	d.sharedInfo.OfferDoneBlockStatus(d.id, blockTs, isSyncPoint, d.GetMode())
 }
@@ -303,10 +307,14 @@ func (s *SharedInfo) OfferDoneBlockStatus(
 	s.blockStatusBuffer.OfferDone(dispatcherID, blockTs, isSyncPoint, mode)
 }
 
+// TakeBlockStatus blocks until a local status entry is available or the caller
+// cancels the wait.
 func (s *SharedInfo) TakeBlockStatus(ctx context.Context) *heartbeatpb.TableSpanBlockStatus {
 	return s.blockStatusBuffer.Take(ctx)
 }
 
+// TryTakeBlockStatus drains a ready entry without extending the current batch
+// window with another blocking wait.
 func (s *SharedInfo) TryTakeBlockStatus() (*heartbeatpb.TableSpanBlockStatus, bool) {
 	return s.blockStatusBuffer.TryTake()
 }

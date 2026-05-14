@@ -261,6 +261,8 @@ type HeartBeatInfo struct {
 	IsRemoving      bool
 }
 
+// blockStatusOfferer is the minimal dispatcher surface needed by resend tasks.
+// Keeping it narrow avoids reintroducing a broader unified block-status API.
 type blockStatusOfferer interface {
 	GetId() common.DispatcherID
 	offerBlockStatus(status *heartbeatpb.TableSpanBlockStatus)
@@ -278,6 +280,8 @@ type ResendTask struct {
 
 const resendTimeInterval = 5 * time.Second
 
+// newResendTask registers a periodic resend immediately so the first retry is
+// scheduled with the same immutable protobuf object the initial send used.
 func newResendTask(dispatcher blockStatusOfferer, message *heartbeatpb.TableSpanBlockStatus, callback func()) *ResendTask {
 	taskScheduler := GetDispatcherTaskScheduler()
 	t := &ResendTask{
@@ -289,6 +293,8 @@ func newResendTask(dispatcher blockStatusOfferer, message *heartbeatpb.TableSpan
 	return t
 }
 
+// Execute resends the original protobuf object without rebuilding payload so
+// WAITING/NONE retries stay allocation-light and byte-for-byte consistent.
 func (t *ResendTask) Execute() time.Time {
 	log.Debug("resend task", zap.Any("dispatcherID", t.dispatcher.GetId()))
 	t.dispatcher.offerBlockStatus(t.message)
@@ -302,6 +308,7 @@ func (t *ResendTask) Execute() time.Time {
 	return time.Now().Add(resendTimeInterval)
 }
 
+// Cancel stops future retries and runs the optional completion callback once.
 func (t *ResendTask) Cancel() {
 	if t.callback != nil {
 		t.callback()

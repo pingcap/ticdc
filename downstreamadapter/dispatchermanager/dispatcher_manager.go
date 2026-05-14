@@ -643,6 +643,9 @@ func (e *DispatcherManager) collectBlockStatusRequest(ctx context.Context) {
 			redoBlockStatusMessage = append(redoBlockStatusMessage, blockStatus)
 		}
 
+		// Batch from the first observed status for up to 10ms. We drain ready
+		// entries first, then keep waiting until the same deadline so late arrivals
+		// still join the current request instead of being delayed to the next batch.
 		deadline := time.Now().Add(10 * time.Millisecond)
 	loop:
 		for {

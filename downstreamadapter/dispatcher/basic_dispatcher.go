@@ -1027,6 +1027,8 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 			return
 		}
 
+		// This protobuf may be resent for a long time, so every slice-backed field
+		// must be detached from the mutable source event before we enqueue it.
 		status := &heartbeatpb.TableSpanBlockStatus{
 			ID: d.id.ToPB(),
 			State: &heartbeatpb.State{
@@ -1172,6 +1174,8 @@ func (d *BasicDispatcher) reportBlockedEventToMaintainer(event commonEvent.Block
 		CommitTs:    event.GetCommitTs(),
 		IsSyncPoint: event.GetType() == commonEvent.TypeSyncPointEvent,
 	}
+	// WAITING retries reuse this protobuf object, so clone mutable metadata once
+	// here and keep resend on the same immutable payload.
 	status := &heartbeatpb.TableSpanBlockStatus{
 		ID: d.id.ToPB(),
 		State: &heartbeatpb.State{

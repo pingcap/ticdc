@@ -21,6 +21,9 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 )
 
+// blockStatusKey is the local dedupe identity. WAITING and DONE for the same
+// barrier intentionally use different keys because stage is part of the state
+// machine that maintainer must observe in order.
 type blockStatusKey struct {
 	dispatcherID common.DispatcherID
 	blockTs      uint64
@@ -29,6 +32,8 @@ type blockStatusKey struct {
 	stage        heartbeatpb.BlockStage
 }
 
+// blockStatusQueueEntry stores either a ready-to-send WAITING/NONE protobuf or
+// a minimal DONE key that will be materialized when the manager drains it.
 type blockStatusQueueEntry struct {
 	status  *heartbeatpb.TableSpanBlockStatus
 	doneKey *blockStatusKey
@@ -124,6 +129,8 @@ func (b *BlockStatusBuffer) Len() int {
 	return len(b.queue)
 }
 
+// offerDoneKey keeps the DONE fast path lightweight: duplicates are filtered by
+// key before another protobuf object is allocated.
 func (b *BlockStatusBuffer) offerDoneKey(key blockStatusKey) {
 	if !b.reserve(key) {
 		return
@@ -131,6 +138,8 @@ func (b *BlockStatusBuffer) offerDoneKey(key blockStatusKey) {
 	b.queue <- blockStatusQueueEntry{doneKey: &key}
 }
 
+// reserve records a pending WAITING/DONE key until the corresponding entry is
+// drained from the local queue.
 func (b *BlockStatusBuffer) reserve(key blockStatusKey) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -141,12 +150,16 @@ func (b *BlockStatusBuffer) reserve(key blockStatusKey) bool {
 	return true
 }
 
+// release makes a dedupe key eligible again after the manager has taken its
+// representative entry.
 func (b *BlockStatusBuffer) release(key blockStatusKey) {
 	b.mu.Lock()
 	delete(b.pending, key)
 	b.mu.Unlock()
 }
 
+// materialize converts the queued representation back to a protobuf message and
+// releases the corresponding dedupe key exactly once when the entry is drained.
 func (b *BlockStatusBuffer) materialize(entry blockStatusQueueEntry) *heartbeatpb.TableSpanBlockStatus {
 	if entry.status != nil {
 		if isWaitingBlockStatus(entry.status) {
@@ -169,6 +182,8 @@ func (b *BlockStatusBuffer) materialize(entry blockStatusQueueEntry) *heartbeatp
 	}
 }
 
+// newBlockStatusKey extracts the dedupe identity shared by the local mailbox
+// and the request queue.
 func newBlockStatusKey(status *heartbeatpb.TableSpanBlockStatus) blockStatusKey {
 	return blockStatusKey{
 		dispatcherID: common.NewDispatcherIDFromPB(status.ID),
@@ -179,6 +194,8 @@ func newBlockStatusKey(status *heartbeatpb.TableSpanBlockStatus) blockStatusKey 
 	}
 }
 
+// isWaitingBlockStatus identifies the only protobuf form that participates in
+// local pending dedupe while still reusing a full payload object.
 func isWaitingBlockStatus(status *heartbeatpb.TableSpanBlockStatus) bool {
 	return status != nil &&
 		status.State != nil &&
@@ -186,6 +203,8 @@ func isWaitingBlockStatus(status *heartbeatpb.TableSpanBlockStatus) bool {
 		status.State.Stage == heartbeatpb.BlockStage_WAITING
 }
 
+// isDoneBlockStatus identifies statuses that should be redirected to the
+// minimal-key fast path before another protobuf is kept in memory.
 func isDoneBlockStatus(status *heartbeatpb.TableSpanBlockStatus) bool {
 	return status != nil &&
 		status.State != nil &&
