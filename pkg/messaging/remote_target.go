@@ -19,11 +19,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/config"
-	. "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/messaging/proto"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -39,12 +38,6 @@ const (
 	reconnectInterval = 2 * time.Second
 	streamTypeEvent   = "event"
 	streamTypeCommand = "command"
-
-	eventRecvCh   = "eventRecvCh"
-	commandRecvCh = "commandRecvCh"
-
-	eventSendCh   = "eventSendCh"
-	commandSendCh = "commandSendCh"
 )
 
 type streamSession struct {
@@ -117,7 +110,7 @@ func (s *remoteMessageTarget) isReadyToSend() bool {
 func (s *remoteMessageTarget) sendEvent(msg ...*TargetMessage) error {
 	if !s.isReadyToSend() {
 		s.errorCounter.Inc()
-		return AppError{Type: ErrorTypeConnectionNotFound, Reason: genSendErrorMsg("Stream not ready", string(s.messageCenterID), s.localAddr, string(s.targetId), s.targetAddr)}
+		return errors.AppError{Type: errors.ErrorTypeConnectionNotFound, Reason: genSendErrorMsg("Stream not ready", string(s.messageCenterID), s.localAddr, string(s.targetId), s.targetAddr)}
 	}
 
 	// Create message with EVENT type
@@ -126,13 +119,13 @@ func (s *remoteMessageTarget) sendEvent(msg ...*TargetMessage) error {
 	select {
 	case <-s.ctx.Done():
 		s.errorCounter.Inc()
-		return AppError{Type: ErrorTypeConnectionNotFound, Reason: genSendErrorMsg("Stream has been closed", string(s.messageCenterID), s.localAddr, string(s.targetId), s.targetAddr)}
+		return errors.AppError{Type: errors.ErrorTypeConnectionNotFound, Reason: genSendErrorMsg("Stream has been closed", string(s.messageCenterID), s.localAddr, string(s.targetId), s.targetAddr)}
 	case s.sendEventCh <- protoMsg:
 		s.sendEventCounter.Add(float64(len(msg)))
 		return nil
 	default:
 		s.congestedEventErrorCounter.Inc()
-		return AppError{Type: ErrorTypeMessageCongested, Reason: genSendErrorMsg("Send event message is congested", string(s.messageCenterID), s.localAddr, string(s.targetId), s.targetAddr)}
+		return errors.AppError{Type: errors.ErrorTypeMessageCongested, Reason: genSendErrorMsg("Send event message is congested", string(s.messageCenterID), s.localAddr, string(s.targetId), s.targetAddr)}
 	}
 }
 
@@ -140,7 +133,7 @@ func (s *remoteMessageTarget) sendEvent(msg ...*TargetMessage) error {
 func (s *remoteMessageTarget) sendCommand(msg ...*TargetMessage) error {
 	if !s.isReadyToSend() {
 		s.errorCounter.Inc()
-		return AppError{Type: ErrorTypeConnectionNotFound, Reason: genSendErrorMsg("Stream not ready", string(s.messageCenterID), s.localAddr, string(s.targetId), s.targetAddr)}
+		return errors.AppError{Type: errors.ErrorTypeConnectionNotFound, Reason: genSendErrorMsg("Stream not ready", string(s.messageCenterID), s.localAddr, string(s.targetId), s.targetAddr)}
 	}
 
 	// Create message with COMMAND type
@@ -149,13 +142,13 @@ func (s *remoteMessageTarget) sendCommand(msg ...*TargetMessage) error {
 	select {
 	case <-s.ctx.Done():
 		s.errorCounter.Inc()
-		return AppError{Type: ErrorTypeConnectionNotFound, Reason: genSendErrorMsg("Stream has been closed", string(s.messageCenterID), s.localAddr, string(s.targetId), s.targetAddr)}
+		return errors.AppError{Type: errors.ErrorTypeConnectionNotFound, Reason: genSendErrorMsg("Stream has been closed", string(s.messageCenterID), s.localAddr, string(s.targetId), s.targetAddr)}
 	case s.sendCmdCh <- protoMsg:
 		s.sendCmdCounter.Add(float64(len(msg)))
 		return nil
 	default:
 		s.congestedCmdErrorCounter.Inc()
-		return AppError{Type: ErrorTypeMessageCongested, Reason: genSendErrorMsg("Send command message is congested", string(s.messageCenterID), s.localAddr, string(s.targetId), s.targetAddr)}
+		return errors.AppError{Type: errors.ErrorTypeMessageCongested, Reason: genSendErrorMsg("Send command message is congested", string(s.messageCenterID), s.localAddr, string(s.targetId), s.targetAddr)}
 	}
 }
 
@@ -280,8 +273,8 @@ func (s *remoteMessageTarget) connect() error {
 			zap.Any("remoteID", s.targetId),
 			zap.Error(err))
 
-		return AppError{
-			Type:   ErrorTypeConnectionFailed,
+		return errors.AppError{
+			Type:   errors.ErrorTypeConnectionFailed,
 			Reason: fmt.Sprintf("Cannot create grpc client on address %s, error: %s", s.targetAddr, err.Error()),
 		}
 	}
@@ -312,8 +305,8 @@ func (s *remoteMessageTarget) connect() error {
 				zap.String("remoteAddr", s.targetAddr),
 				zap.Error(err))
 
-			err = AppError{
-				Type:   ErrorTypeConnectionFailed,
+			err = errors.AppError{
+				Type:   errors.ErrorTypeConnectionFailed,
 				Reason: fmt.Sprintf("Cannot open bidirectional grpc stream, error: %s", errors.Trace(err).Error()),
 			}
 			outerErr = err
@@ -334,7 +327,7 @@ func (s *remoteMessageTarget) connect() error {
 		hsBytes, err := handshake.Marshal()
 		if err != nil {
 			log.Error("Failed to marshal handshake message", zap.Error(err))
-			err = AppError{Type: ErrorTypeMessageSendFailed, Reason: errors.Trace(err).Error()}
+			err = errors.AppError{Type: errors.ErrorTypeMessageSendFailed, Reason: errors.Trace(err).Error()}
 			outerErr = err
 			return false
 		}
@@ -354,8 +347,8 @@ func (s *remoteMessageTarget) connect() error {
 				zap.Any("remoteID", s.targetId),
 				zap.String("remoteAddr", s.targetAddr),
 				zap.Error(err))
-			err = AppError{
-				Type:   ErrorTypeMessageSendFailed,
+			err = errors.AppError{
+				Type:   errors.ErrorTypeMessageSendFailed,
 				Reason: fmt.Sprintf("Failed to send handshake, error: %s", errors.Trace(err).Error()),
 			}
 			outerErr = err
@@ -547,7 +540,7 @@ func (s *remoteMessageTarget) runSendMessages(ctx context.Context, streamType st
 					zap.String("remoteAddr", s.targetAddr),
 					zap.String("streamType", streamType),
 					zap.Stringer("message", msg))
-				err = AppError{Type: ErrorTypeMessageSendFailed, Reason: errors.Trace(err).Error()}
+				err = errors.AppError{Type: errors.ErrorTypeMessageSendFailed, Reason: errors.Trace(err).Error()}
 				return err
 			}
 		}
@@ -622,7 +615,7 @@ func (s *remoteMessageTarget) handleIncomingMessage(ctx context.Context, stream 
 				zap.String("localAddr", s.localAddr),
 				zap.Stringer("remoteID", s.targetId),
 				zap.String("remoteAddr", s.targetAddr))
-			err = AppError{Type: ErrorTypeMessageReceiveFailed, Reason: errors.Trace(err).Error()}
+			err = errors.AppError{Type: errors.ErrorTypeMessageReceiveFailed, Reason: errors.Trace(err).Error()}
 			return err
 		}
 

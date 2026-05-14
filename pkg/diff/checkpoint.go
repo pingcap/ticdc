@@ -22,8 +22,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tidb/pkg/util/dbutil"
 	"go.uber.org/zap"
 )
@@ -166,7 +166,9 @@ func loadChunks(ctx context.Context, db *sql.DB, instanceID, schema, table strin
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	for rows.Next() {
 		fields, err1 := dbutil.ScanRow(rows)
@@ -327,7 +329,9 @@ func loadFromCheckPoint(ctx context.Context, db *sql.DB, schema, table, configHa
 	if err != nil {
 		return false, errors.Trace(err)
 	}
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	var state, cfgHash sql.NullString
 

@@ -327,14 +327,6 @@ func (w *wrapEvent) reset() {
 	wrapEventPool.Put(w)
 }
 
-func (w *wrapEvent) getDispatcherID() common.DispatcherID {
-	e, ok := w.e.(pevent.Event)
-	if !ok {
-		log.Panic("cast event failed", zap.Any("event", w.e))
-	}
-	return e.GetDispatcherID()
-}
-
 func newWrapHandshakeEvent(serverID node.ID, e pevent.HandshakeEvent) *wrapEvent {
 	w := getWrapEvent()
 	w.serverID = serverID

@@ -25,11 +25,10 @@ import (
 
 	"github.com/coreos/go-semver/semver"
 	dmysql "github.com/go-sql-driver/mysql"
-	"github.com/pingcap/errors"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/retry"
 	"github.com/pingcap/tidb/br/pkg/version"
 	"github.com/pingcap/tidb/dumpling/export"
@@ -70,8 +69,8 @@ func CheckIfBDRModeIsSupported(ctx context.Context, db *sql.DB) (bool, error) {
 	query := "SET SESSION tidb_cdc_write_source = 1"
 	_, err := db.ExecContext(ctx, query)
 	if err != nil {
-		if mysqlErr, ok := errors.Cause(err).(*dmysql.MySQLError); ok &&
-			mysqlErr.Number == mysql.ErrUnknownSystemVariable {
+		var mysqlErr *dmysql.MySQLError
+		if errors.As(errors.Cause(err), &mysqlErr) && mysqlErr.Number == mysql.ErrUnknownSystemVariable {
 			return false, nil
 		}
 		return false, err
@@ -189,7 +188,8 @@ func GetTestDB(dbConfig *dmysql.Config) (*sql.DB, error) {
 	testDB, err := CreateMysqlDBConn(dbConfig.FormatDSN())
 	if err != nil {
 		// If access is denied and password is encoded by base64, try to decoded password.
-		if mysqlErr, ok := errors.Cause(err).(*dmysql.MySQLError); ok && mysqlErr.Number == mysql.ErrAccessDenied {
+		var mysqlErr *dmysql.MySQLError
+		if errors.As(errors.Cause(err), &mysqlErr) && mysqlErr.Number == mysql.ErrAccessDenied {
 			if dePassword, decodeErr := base64.StdEncoding.DecodeString(password); decodeErr == nil && string(dePassword) != password {
 				dbConfig.Passwd = string(dePassword)
 				testDB, err = CreateMysqlDBConn(dbConfig.FormatDSN())
@@ -204,9 +204,8 @@ func checkTiDBVariable(db *sql.DB, variableName, defaultValue string) (string, e
 	var value string
 	querySQL := fmt.Sprintf("show session variables like '%s';", variableName)
 	err := db.QueryRowContext(context.Background(), querySQL).Scan(&name, &value)
-	if err != nil && err != sql.ErrNoRows {
-		errMsg := "fail to query session variable " + variableName
-		return "", cerror.ErrMySQLQueryError.Wrap(err).GenWithStack(errMsg)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return "", errors.WrapError(errors.ErrMySQLQueryError, err, "fail to query session variable %s", variableName)
 	}
 	// session variable works, use given default value
 	if err == nil {
@@ -309,10 +308,10 @@ func checkCharsetSupport(db *sql.DB, charsetName string) (bool, error) {
 	querySQL := "select character_set_name from information_schema.character_sets " +
 		"where character_set_name = '" + charsetName + "';"
 	err = db.QueryRowContext(context.Background(), querySQL).Scan(&characterSetName)
-	if err != nil && err != sql.ErrNoRows {
-		return false, cerror.WrapError(cerror.ErrMySQLQueryError, err)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return false, errors.WrapError(errors.ErrMySQLQueryError, err)
 	}
-	if err != nil {
+	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
 
@@ -331,7 +330,9 @@ func GenerateDSN(ctx context.Context, cfg *Config) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer testDB.Close()
+	defer func() {
+		_ = testDB.Close()
+	}()
 
 	// we use default sql mode for downstream because all dmls generated and ddls in ticdc
 	// are based on default sql mode.
@@ -344,7 +345,7 @@ func GenerateDSN(ctx context.Context, cfg *Config) (string, error) {
 
 	cfg.IsTiDB = CheckIsTiDB(ctx, testDB)
 	if cfg.EnableActiveActive && !cfg.IsTiDB {
-		return "", cerror.ErrMySQLInvalidConfig.GenWithStack(
+		return "", errors.ErrMySQLInvalidConfig.GenWithStack(
 			"enable-active-active requires downstream TiDB")
 	}
 
@@ -391,7 +392,7 @@ func GenerateDSN(ctx context.Context, cfg *Config) (string, error) {
 func CreateMysqlDBConn(dsnStr string) (*sql.DB, error) {
 	db, err := sql.Open("mysql", dsnStr)
 	if err != nil {
-		return nil, cerror.ErrMySQLConnectionError.Wrap(err).GenWithStack("fail to open MySQL connection")
+		return nil, errors.ErrMySQLConnectionError.Wrap(err).GenWithStack("fail to open MySQL connection")
 	}
 
 	err = db.PingContext(context.Background())
@@ -400,7 +401,7 @@ func CreateMysqlDBConn(dsnStr string) (*sql.DB, error) {
 		if closeErr := db.Close(); closeErr != nil {
 			log.Warn("close db failed", zap.Error(err))
 		}
-		return nil, cerror.ErrMySQLConnectionError.Wrap(err).GenWithStack("fail to open MySQL connection")
+		return nil, errors.ErrMySQLConnectionError.Wrap(err).GenWithStack("fail to open MySQL connection")
 	}
 	return db, nil
 }
@@ -452,7 +453,7 @@ func getCheckRunningAddIndexSQL(cfg *Config) string {
 }
 
 func isRetryableDMLError(err error) bool {
-	if !cerror.IsRetryableError(err) {
+	if !errors.IsRetryableError(err) {
 		return false
 	}
 
@@ -470,7 +471,8 @@ func isRetryableDMLError(err error) bool {
 }
 
 func getSQLErrCode(err error) (errors.ErrCode, bool) {
-	mysqlErr, ok := errors.Cause(err).(*dmysql.MySQLError)
+	var mysqlErr *dmysql.MySQLError
+	ok := errors.As(errors.Cause(err), &mysqlErr)
 	if !ok {
 		return -1, false
 	}
@@ -484,7 +486,7 @@ func queryMaxPreparedStmtCount(ctx context.Context, db *sql.DB) (int, error) {
 	var maxPreparedStmtCount sql.NullInt32
 	err := row.Scan(&maxPreparedStmtCount)
 	if err != nil {
-		err = cerror.WrapError(cerror.ErrMySQLQueryError, err)
+		err = errors.WrapError(errors.ErrMySQLQueryError, err)
 	}
 	return int(maxPreparedStmtCount.Int32), err
 }
@@ -494,7 +496,7 @@ func queryMaxAllowedPacket(ctx context.Context, db *sql.DB) (int64, error) {
 	row := db.QueryRowContext(ctx, "select @@global.max_allowed_packet;")
 	var maxAllowedPacket sql.NullInt64
 	if err := row.Scan(&maxAllowedPacket); err != nil {
-		return 0, cerror.WrapError(cerror.ErrMySQLQueryError, err)
+		return 0, errors.WrapError(errors.ErrMySQLQueryError, err)
 	}
 	return maxAllowedPacket.Int64, nil
 }
