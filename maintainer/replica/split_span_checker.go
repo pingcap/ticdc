@@ -805,12 +805,13 @@ func (s *SplitSpanChecker) chooseMergedSpans(batchSize int) ([]SplitSpanCheckRes
 		return len(results) >= mergeBatchSize
 	}
 
-	submitAndClear := func(cur *splitSpanStatus) {
-		appendMergeResult()
+	submitAndClear := func(cur *splitSpanStatus) bool {
+		reachedLimit := appendMergeResult()
 		mergeSpans = mergeSpans[:0]
 		mergeSpans = append(mergeSpans, cur.SpanReplication)
 		regionCount = cur.regionCount
 		traffic = cur.lastThreeTraffic[latestTrafficIndex]
+		return reachedLimit
 	}
 
 	idx := 1
@@ -828,8 +829,7 @@ func (s *SplitSpanChecker) chooseMergedSpans(batchSize int) ([]SplitSpanCheckRes
 		}
 		// not in the same node, can't merge
 		if prev.GetNodeID() != cur.GetNodeID() {
-			submitAndClear(cur)
-			if len(results) >= mergeBatchSize {
+			if submitAndClear(cur) {
 				return results, sortedSpanByStartKey
 			}
 			prev = cur
@@ -839,8 +839,7 @@ func (s *SplitSpanChecker) chooseMergedSpans(batchSize int) ([]SplitSpanCheckRes
 
 		// we can't merge if beyond the threshold
 		if s.regionThreshold > 0 && regionCount+cur.regionCount > s.regionThreshold/4*3 {
-			submitAndClear(cur)
-			if len(results) >= mergeBatchSize {
+			if submitAndClear(cur) {
 				return results, sortedSpanByStartKey
 			}
 			prev = cur
@@ -849,8 +848,7 @@ func (s *SplitSpanChecker) chooseMergedSpans(batchSize int) ([]SplitSpanCheckRes
 		}
 
 		if s.writeThreshold > 0 && traffic+cur.lastThreeTraffic[latestTrafficIndex] > float64(s.writeThreshold)/4*3 {
-			submitAndClear(cur)
-			if len(results) >= mergeBatchSize {
+			if submitAndClear(cur) {
 				return results, sortedSpanByStartKey
 			}
 			prev = cur
@@ -865,10 +863,6 @@ func (s *SplitSpanChecker) chooseMergedSpans(batchSize int) ([]SplitSpanCheckRes
 
 		prev = cur
 		idx++
-
-		if len(results) >= mergeBatchSize {
-			return results, sortedSpanByStartKey
-		}
 	}
 
 	appendMergeResult()
