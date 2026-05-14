@@ -95,6 +95,16 @@ INSERT INTO `source_extra_db`.`external_users_from_default`
     SELECT `id`, `name`, `email` FROM `source_db`.`users` WHERE `id` IN (1, 3);
 UPDATE `source_extra_db`.`external_users_from_default` SET `email` = 'default_charlie@example.com' WHERE `id` = 3;
 
+-- The view target is in `source_extra_db`, but the unqualified source table
+-- must be resolved from the session default schema `source_db`.
+CREATE VIEW `source_extra_db`.`users_view_from_default` AS
+    SELECT `id`, `name`, `email` FROM `users` WHERE `id` <= 2;
+
+-- TiDB stores the FROM table as `source_db`.`orders`, but keeps the table
+-- qualifier `orders`.`id` unless CDC normalizes it before table routing.
+CREATE VIEW `source_extra_db`.`orders_column_view_from_default` AS
+    SELECT `orders`.`id`, `orders`.`amount` FROM `orders` WHERE `orders`.`id` IN (1, 3);
+
 CREATE TABLE `source_db`.`cross_move_source` (
     id INT PRIMARY KEY,
     value VARCHAR(50)
@@ -171,6 +181,12 @@ ALTER TABLE partitioned_events TRUNCATE PARTITION p0;
 INSERT INTO partitioned_events VALUES (4, 6, 'p0_after_truncate');
 ALTER TABLE partitioned_events DROP PARTITION p1;
 INSERT INTO partitioned_events VALUES (5, 26, 'p2_more');
+
+-- Partitioned CREATE TABLE ... LIKE with an unqualified source table should
+-- resolve the LIKE source from `source_db`, not from `source_extra_db`.
+CREATE TABLE `source_extra_db`.`partitioned_events_like_from_default` LIKE `partitioned_events`;
+INSERT INTO `source_extra_db`.`partitioned_events_like_from_default` VALUES (6, 6, 'like_p0');
+INSERT INTO `source_extra_db`.`partitioned_events_like_from_default` VALUES (7, 27, 'like_p2');
 
 -- ============================================
 -- DDL: TRUNCATE TABLE

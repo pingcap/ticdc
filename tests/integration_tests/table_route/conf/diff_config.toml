@@ -27,6 +27,7 @@ check-struct-only = false
         "target_extra_db.external_users_routed",
         "target_extra_db.external_users_from_default_routed",
         "target_extra_db.cross_move_target_routed",
+        "target_extra_db.partitioned_events_like_from_default_routed",
     ]
 
 [data-sources]
@@ -49,6 +50,7 @@ check-struct-only = false
         "external_users",
         "external_users_from_default",
         "cross_move_target",
+        "partitioned_events_like_from_default",
     ]
 
 [data-sources.mysql1]
@@ -134,3 +136,9 @@ schema-pattern = "source_extra_db"
 table-pattern = "cross_move_target"
 target-schema = "target_extra_db"
 target-table = "cross_move_target_routed"
+
+[routes.partitioned_events_like_from_default]
+schema-pattern = "source_extra_db"
+table-pattern = "partitioned_events_like_from_default"
+target-schema = "target_extra_db"
+target-table = "partitioned_events_like_from_default_routed"
