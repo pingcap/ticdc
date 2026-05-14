@@ -456,7 +456,7 @@ func (e *eventStore) Close(_ context.Context) error {
 }
 
 func (e *eventStore) RegisterDispatcher(
-	changefeedID common.ChangeFeedID,
+	_ common.ChangeFeedID,
 	dispatcherID common.DispatcherID,
 	dispatcherSpan *heartbeatpb.TableSpan,
 	startTs uint64,

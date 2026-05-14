@@ -95,7 +95,7 @@ var csvTestColumnsGroup = [][]*csvTestColumnTuple{
 			},
 			model.ColumnInfo{
 				ID:        6,
-				FieldType: *setFlag(types.NewFieldType(mysql.TypeTiny), uint(mysql.UnsignedFlag)),
+				FieldType: *setFlag(types.NewFieldType(mysql.TypeTiny), mysql.UnsignedFlag),
 			},
 			uint64(1),
 			config.BinaryEncodingBase64,

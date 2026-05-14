@@ -122,7 +122,7 @@ func (d *preparedDMLs) RowsAffected() int64 {
 	for _, rowType := range d.rowTypes {
 		switch rowType {
 		case common.RowTypeInsert, common.RowTypeDelete:
-			count += 1
+			count++
 		case common.RowTypeUpdate:
 			count += 2
 		default:

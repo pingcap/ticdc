@@ -628,7 +628,7 @@ func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 			copy(keyCopy, raw.Key)
 			t.RowKeys = append(t.RowKeys, keyCopy)
 		}
-		t.Length += 1
+		t.Length++
 		t.ApproximateSize += raw.GetSize()
 		if checksum != nil {
 			t.Checksum = append(t.Checksum, checksum)

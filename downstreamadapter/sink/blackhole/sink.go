@@ -46,7 +46,7 @@ func (s *sink) SinkType() common.SinkType {
 	return common.BlackHoleSinkType
 }
 
-func (s *sink) SetTableSchemaStore(tableSchemaStore *commonEvent.TableSchemaStore) {
+func (s *sink) SetTableSchemaStore(_ *commonEvent.TableSchemaStore) {
 }
 
 func (s *sink) AddDMLEvent(event *commonEvent.DMLEvent) {

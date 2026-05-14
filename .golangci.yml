@@ -11,6 +11,8 @@ linters:
     - bodyclose
     # copyloopvar: detects redundant "x := x" in Go 1.22+ loop variables.
     - copyloopvar
+    # depguard: forbids direct imports that bypass repository wrappers.
+    - depguard
     # durationcheck: checks for suspicious duration multiplication.
     - durationcheck
     # errname: checks sentinel error naming (Err prefix, Error suffix).
@@ -19,6 +21,8 @@ linters:
     - errorlint
     # gosec: inspects source code for security problems.
     - gosec
+    # importas: enforces consistent import aliases.
+    - importas
     # misspell: finds commonly misspelled English words.
     - misspell
     # nilerr: finds code that returns nil even if err is not nil.
@@ -35,6 +39,23 @@ linters:
     - unconvert
 
   settings:
+    depguard:
+      rules:
+        no-direct-errors:
+          files:
+            - $all
+            - '!pkg/errors/**'
+          deny:
+            - pkg: errors$
+              desc: use github.com/pingcap/ticdc/pkg/errors outside pkg/errors
+            - pkg: github.com/pingcap/errors$
+              desc: use github.com/pingcap/ticdc/pkg/errors outside pkg/errors
+
+    importas:
+      alias:
+        - pkg: github.com/pingcap/ticdc/pkg/errors
+          alias: ""
+
     revive:
       rules:
         - name: blank-imports
@@ -67,10 +88,12 @@ linters:
         - G104
 
     # ST1000: don't require package comments.
+    # ST1003: don't enforce naming conventions on legacy identifiers.
     staticcheck:
       checks:
         - all
         - -ST1000
+        - -ST1003
 
   exclusions:
     # Strict: exclude all known generated file patterns.
