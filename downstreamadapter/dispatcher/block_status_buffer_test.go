@@ -164,7 +164,7 @@ func TestBlockStatusBufferKeepsDistinctDoneKeys(t *testing.T) {
 	requireNoBlockStatus(t, buffer)
 }
 
-func TestNewWaitingBlockStatusClonesMutableMetadata(t *testing.T) {
+func TestWaitingBlockStatusClonesMutableMetadata(t *testing.T) {
 	dispatcherID := common.NewDispatcherID()
 	event := &commonEvent.DDLEvent{
 		FinishedTs: 100,
@@ -184,7 +184,19 @@ func TestNewWaitingBlockStatusClonesMutableMetadata(t *testing.T) {
 		},
 	}
 
-	status := newWaitingBlockStatus(dispatcherID, event, common.DefaultMode)
+	status := &heartbeatpb.TableSpanBlockStatus{
+		ID: dispatcherID.ToPB(),
+		State: &heartbeatpb.State{
+			IsBlocked:         true,
+			BlockTs:           event.GetCommitTs(),
+			BlockTables:       cloneInfluencedTablesPB(event.GetBlockedTables()),
+			NeedDroppedTables: cloneInfluencedTablesPB(event.GetNeedDroppedTables()),
+			NeedAddedTables:   commonEvent.ToTablesPB(event.GetNeedAddedTables()),
+			UpdatedSchemas:    commonEvent.ToSchemaIDChangePB(event.GetUpdatedSchemas()),
+			Stage:             heartbeatpb.BlockStage_WAITING,
+		},
+		Mode: common.DefaultMode,
+	}
 	require.Equal(t, []int64{1, 2}, status.State.BlockTables.TableIDs)
 	require.Equal(t, []int64{3, 4}, status.State.NeedDroppedTables.TableIDs)
 	require.Equal(t, int64(11), status.State.NeedAddedTables[0].TableID)
@@ -201,7 +213,7 @@ func TestNewWaitingBlockStatusClonesMutableMetadata(t *testing.T) {
 	require.Equal(t, int64(14), status.State.UpdatedSchemas[0].NewSchemaID)
 }
 
-func TestNewNoneBlockStatusClonesMutableMetadata(t *testing.T) {
+func TestNoneBlockStatusClonesMutableMetadata(t *testing.T) {
 	dispatcherID := common.NewDispatcherID()
 	event := &commonEvent.DDLEvent{
 		FinishedTs: 200,
@@ -214,7 +226,16 @@ func TestNewNoneBlockStatusClonesMutableMetadata(t *testing.T) {
 		},
 	}
 
-	status := newNoneBlockStatus(dispatcherID, event, common.DefaultMode)
+	status := &heartbeatpb.TableSpanBlockStatus{
+		ID: dispatcherID.ToPB(),
+		State: &heartbeatpb.State{
+			BlockTs:           event.GetCommitTs(),
+			NeedDroppedTables: cloneInfluencedTablesPB(event.GetNeedDroppedTables()),
+			NeedAddedTables:   commonEvent.ToTablesPB(event.GetNeedAddedTables()),
+			Stage:             heartbeatpb.BlockStage_NONE,
+		},
+		Mode: common.DefaultMode,
+	}
 	require.Equal(t, []int64{5, 6}, status.State.NeedDroppedTables.TableIDs)
 	require.Equal(t, int64(21), status.State.NeedAddedTables[0].TableID)
 

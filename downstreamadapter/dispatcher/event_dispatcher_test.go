@@ -487,7 +487,17 @@ func TestDispatcherIgnoresStaleIgnoredBlockStatus(t *testing.T) {
 	identifier := BlockEventIdentifier{CommitTs: ddlEvent.FinishedTs}
 	dispatcher.resendTaskMap.Set(identifier, newResendTask(
 		dispatcher,
-		newWaitingBlockStatus(dispatcher.id, ddlEvent, dispatcher.GetMode()),
+		&heartbeatpb.TableSpanBlockStatus{
+			ID: dispatcher.id.ToPB(),
+			State: &heartbeatpb.State{
+				IsBlocked:   true,
+				BlockTs:     ddlEvent.GetCommitTs(),
+				BlockTables: cloneInfluencedTablesPB(ddlEvent.GetBlockedTables()),
+				IsSyncPoint: false,
+				Stage:       heartbeatpb.BlockStage_WAITING,
+			},
+			Mode: dispatcher.GetMode(),
+		},
 		nil,
 	))
 	defer dispatcher.cancelResendTask(identifier)
