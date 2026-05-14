@@ -118,6 +118,12 @@ func TestApplyToDDLEvent(t *testing.T) {
 	multiDBDDL := helper.DDL2Event("CREATE DATABASE `multi_db`")
 	sourceTableDDL := helper.DDL2Event("CREATE TABLE `source_db`.`source_table` (`id` INT PRIMARY KEY)")
 	singleTableDDL := helper.DDL2Event("ALTER TABLE `source_db`.`source_table` ADD INDEX `idx_id`(`id`)")
+	helper.DDL2Event("CREATE DATABASE `other_db`")
+	queryOnlyRouteDDL := helper.DDL2Event("CREATE VIEW `other_db`.`source_view` AS SELECT * FROM `source_db`.`source_table`")
+	queryOnlyRouteDDL.BlockedTableNames = []event.SchemaTableName{{SchemaName: "other_db", TableName: "source_view"}}
+	queryOnlyRouteDDL.MultipleTableInfos = []*common.TableInfo{{
+		TableName: common.TableName{Schema: "other_db", Table: "source_view"},
+	}}
 	multiT1DDL := helper.DDL2Event("CREATE TABLE `multi_db`.`t1` (`id` INT PRIMARY KEY)")
 	multiT2DDL := helper.DDL2Event("CREATE TABLE `multi_db`.`t2` (`id` INT PRIMARY KEY)")
 	renameTablesDDL := helper.DDL2Event("RENAME TABLE `multi_db`.`t1` TO `multi_db`.`t1_new`, `multi_db`.`t2` TO `multi_db`.`t2_new`")
@@ -359,6 +365,19 @@ func TestApplyToDDLEvent(t *testing.T) {
 					SchemaName: "source_db",
 					TableName:  "source_table",
 				}, original.BlockedTableNames[0])
+			},
+		},
+		{
+			name:   "query-only routing clones unchanged metadata slices",
+			router: sourceSchemaRouter,
+			ddl:    queryOnlyRouteDDL,
+			check: func(t *testing.T, original, routed *event.DDLEvent) {
+				require.Contains(t, routed.Query, "`target_db`.`target_table`")
+				require.Equal(t, original.BlockedTableNames, routed.BlockedTableNames)
+				require.True(t, &original.BlockedTableNames[0] != &routed.BlockedTableNames[0])
+				require.Equal(t, original.MultipleTableInfos, routed.MultipleTableInfos)
+				require.Same(t, original.MultipleTableInfos[0], routed.MultipleTableInfos[0])
+				require.True(t, &original.MultipleTableInfos[0] != &routed.MultipleTableInfos[0])
 			},
 		},
 	}
