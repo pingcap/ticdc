@@ -19,6 +19,7 @@ import (
 	"math"
 	"sort"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
@@ -52,6 +53,10 @@ type queuedDDL struct {
 type replayEngine struct {
 	partitions []*partitionState
 
+	watermarkMu sync.RWMutex
+	consumerID  string
+	topic       string
+
 	ddlQueue           []queuedDDL
 	ddlWithMaxCommitTs map[int64]uint64
 	seenDDLs           map[string]struct{}
@@ -78,6 +83,8 @@ func newReplayEngine(ctx context.Context, o *option) (*replayEngine, error) {
 		maxMessageBytes:        o.maxMessageBytes,
 		maxBatchSize:           o.maxBatchSize,
 		enableTableAcrossNodes: o.enableTableAcrossNodes,
+		consumerID:             o.groupID,
+		topic:                  o.topic,
 		offsets:                newOffsetTracker(),
 		inflight:               newInflightTracker(),
 	}
@@ -240,21 +247,26 @@ func (e *replayEngine) handleMessage(ctx context.Context, message *kafka.Message
 }
 
 func (e *replayEngine) updateWatermark(progress *partitionState, newWatermark uint64, offset kafka.Offset) {
-	if newWatermark >= progress.watermark {
+	e.watermarkMu.Lock()
+	currentWatermark := progress.watermark
+	currentWatermarkOffset := progress.watermarkOffset
+	if newWatermark >= currentWatermark {
 		progress.watermark = newWatermark
 		progress.watermarkOffset = offset
+		e.watermarkMu.Unlock()
 		log.Debug("watermark received",
 			zap.Int32("partition", progress.partition),
 			zap.Any("offset", offset),
 			zap.Uint64("watermark", newWatermark))
 		return
 	}
+	e.watermarkMu.Unlock()
 	log.Warn("partition resolved ts fall back, ignore it",
 		zap.Int32("partition", progress.partition),
 		zap.Uint64("newWatermark", newWatermark),
 		zap.Any("offset", offset),
-		zap.Uint64("watermark", progress.watermark),
-		zap.Any("watermarkOffset", progress.watermarkOffset))
+		zap.Uint64("watermark", currentWatermark),
+		zap.Any("watermarkOffset", currentWatermarkOffset))
 }
 
 func (e *replayEngine) appendDML(
@@ -392,6 +404,9 @@ func (e *replayEngine) checkPartition(row *commonEvent.DMLEvent, partition int32
 }
 
 func (e *replayEngine) globalWatermark() uint64 {
+	e.watermarkMu.RLock()
+	defer e.watermarkMu.RUnlock()
+
 	watermark := uint64(math.MaxUint64)
 	for _, progress := range e.partitions {
 		if progress.watermark < watermark {

@@ -159,6 +159,9 @@ func (c *consumer) Run(ctx context.Context) error {
 		return c.engine.Run(ctx)
 	})
 	g.Go(func() error {
+		return c.engine.runLatencyReporter(ctx)
+	})
+	g.Go(func() error {
 		return c.readMessage(ctx)
 	})
 	return g.Wait()
