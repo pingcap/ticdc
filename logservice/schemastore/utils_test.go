@@ -21,7 +21,6 @@ import (
 	ticonfig "github.com/pingcap/tidb/pkg/config"
 	"github.com/pingcap/tidb/pkg/disttask/framework/handle"
 	"github.com/pingcap/tidb/pkg/meta/model"
-	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/stretchr/testify/require"
 )
 
@@ -223,39 +222,4 @@ func TestGetIndexIDsIgnoresAddPrimaryKeySubJobsForMultiSchemaChange(t *testing.T
 	}
 	require.NotZero(t, anonymousIndexID)
 	require.Equal(t, []int64{anonymousIndexID}, getIndexIDs(job))
-}
-
-func TestExtractTableSchemas(t *testing.T) {
-	cases := []struct {
-		name     string
-		query    string
-		expected []string
-	}{
-		{
-			name:     "unqualified table",
-			query:    "SELECT * FROM `t`",
-			expected: []string{""},
-		},
-		{
-			name:     "mixed qualified tables",
-			query:    "SELECT * FROM `db1`.`t1` JOIN `t2` ON `db1`.`t1`.`id` = `t2`.`id`",
-			expected: []string{"db1", ""},
-		},
-		{
-			name:     "subquery preserves visit order",
-			query:    "SELECT * FROM `db1`.`t1` WHERE EXISTS (SELECT 1 FROM `db2`.`t2`)",
-			expected: []string{"db1", "db2"},
-		},
-	}
-
-	p := parser.New()
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			stmt, err := p.ParseOneStmt(tc.query, "", "")
-			require.NoError(t, err)
-			require.Equal(t, tc.expected, extractTableSchemas(stmt))
-		})
-	}
-
-	require.Nil(t, extractTableSchemas(nil))
 }

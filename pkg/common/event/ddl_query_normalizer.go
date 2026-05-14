@@ -23,7 +23,17 @@ import (
 
 // NormalizeCreateViewQueryWithStoredSelect replaces the SELECT body in a
 // CREATE VIEW query with TiDB's stored View.SelectStmt when the stored SELECT
-// carries cross-schema table references.
+// carries information that the original query text does not carry. It covers
+// both cross-schema table references in the SELECT's FROM clause and unaliased
+// table-qualified column references that can be resolved from the SELECT's own
+// FROM scope.
+//
+// TiDB may persist a SELECT body as `SELECT orders.id FROM source_db.orders`:
+// the FROM table is schema-qualified, but the column qualifier remains
+// table-only. This function normalizes it to
+// `SELECT source_db.orders.id FROM source_db.orders`, so later table routing can
+// rewrite the column qualifier consistently with the routed source table.
+// Explicit aliases and ambiguous table names are preserved.
 //
 // Example — cross-schema reference:
 //
@@ -65,16 +75,40 @@ func NormalizeCreateViewQueryWithStoredSelect(query string, storedSelectStmt str
 	if err != nil {
 		return query, errors.WrapError(errors.ErrDDLEventError, err)
 	}
-	if createViewSelectUsesCurrentSchemaOnly(selectStmt, currentSchema) {
+	if !normalizeCreateViewSelect(selectStmt, currentSchema) {
 		return query, nil
 	}
 
 	createViewStmt.Select = selectStmt
-	query, err = Restore(createViewStmt)
+	normalizedQuery, err := Restore(createViewStmt)
 	if err != nil {
 		return query, errors.WrapError(errors.ErrDDLEventError, err)
 	}
-	return query, nil
+	return normalizedQuery, nil
+}
+
+type createViewSelectNormalizer struct {
+	changed bool
+	scopes  []createViewSelectScope
+}
+
+type createViewSelectScope struct {
+	aliases         map[string]struct{}
+	tableByName     map[string]string
+	ambiguousTables map[string]struct{}
+}
+
+// normalizeCreateViewSelect returns true when CREATE VIEW should use the stored
+// SELECT body. It also turns unaliased table-qualified column references into
+// schema-qualified references: `orders`.`id` with FROM `source_db`.`orders`
+// becomes `source_db`.`orders`.`id`. Explicit alias references are preserved.
+func normalizeCreateViewSelect(selectStmt ast.StmtNode, currentSchema string) bool {
+	currentSchemaOnly := createViewSelectUsesCurrentSchemaOnly(selectStmt, currentSchema)
+	normalizer := &createViewSelectNormalizer{
+		scopes: make([]createViewSelectScope, 0),
+	}
+	selectStmt.Accept(normalizer)
+	return !currentSchemaOnly || normalizer.changed
 }
 
 func createViewSelectUsesCurrentSchemaOnly(selectStmt ast.StmtNode, currentSchema string) bool {
@@ -84,6 +118,88 @@ func createViewSelectUsesCurrentSchemaOnly(selectStmt ast.StmtNode, currentSchem
 		}
 	}
 	return true
+}
+
+func (n *createViewSelectNormalizer) Enter(in ast.Node) (ast.Node, bool) {
+	switch v := in.(type) {
+	case *ast.SelectStmt:
+		n.scopes = append(n.scopes, buildCreateViewSelectScope(v))
+	case *ast.ColumnName:
+		n.qualifyColumnName(v)
+	}
+	return in, false
+}
+
+func (n *createViewSelectNormalizer) Leave(in ast.Node) (ast.Node, bool) {
+	if _, ok := in.(*ast.SelectStmt); ok {
+		n.scopes = n.scopes[:len(n.scopes)-1]
+	}
+	return in, true
+}
+
+func (n *createViewSelectNormalizer) qualifyColumnName(c *ast.ColumnName) {
+	if len(n.scopes) == 0 || c == nil || c.Schema.O != "" || c.Table.O == "" {
+		return
+	}
+
+	scope := n.scopes[len(n.scopes)-1]
+	tableKey := strings.ToLower(c.Table.O)
+	if _, ok := scope.aliases[tableKey]; ok {
+		return
+	}
+	if _, ok := scope.ambiguousTables[tableKey]; ok {
+		return
+	}
+	schema, ok := scope.tableByName[tableKey]
+	if !ok {
+		return
+	}
+	c.Schema = ast.NewCIStr(schema)
+	n.changed = true
+}
+
+func buildCreateViewSelectScope(selectStmt *ast.SelectStmt) createViewSelectScope {
+	scope := createViewSelectScope{
+		aliases:         make(map[string]struct{}),
+		tableByName:     make(map[string]string),
+		ambiguousTables: make(map[string]struct{}),
+	}
+	if selectStmt == nil || selectStmt.From == nil || selectStmt.From.TableRefs == nil {
+		return scope
+	}
+	collectCreateViewSelectTables(selectStmt.From.TableRefs, &scope)
+	return scope
+}
+
+func collectCreateViewSelectTables(node ast.ResultSetNode, scope *createViewSelectScope) {
+	switch v := node.(type) {
+	case *ast.Join:
+		if v.Left != nil {
+			collectCreateViewSelectTables(v.Left, scope)
+		}
+		if v.Right != nil {
+			collectCreateViewSelectTables(v.Right, scope)
+		}
+	case *ast.TableSource:
+		if v.AsName.O != "" {
+			scope.aliases[strings.ToLower(v.AsName.O)] = struct{}{}
+			return
+		}
+		tableName, ok := v.Source.(*ast.TableName)
+		if !ok || tableName.Schema.O == "" || tableName.Name.O == "" {
+			return
+		}
+		tableKey := strings.ToLower(tableName.Name.O)
+		if _, ambiguous := scope.ambiguousTables[tableKey]; ambiguous {
+			return
+		}
+		if _, exists := scope.tableByName[tableKey]; exists {
+			delete(scope.tableByName, tableKey)
+			scope.ambiguousTables[tableKey] = struct{}{}
+			return
+		}
+		scope.tableByName[tableKey] = tableName.Schema.O
+	}
 }
 
 type tableSchemaExtractor struct {
@@ -102,6 +218,8 @@ func (e *tableSchemaExtractor) Leave(in ast.Node) (ast.Node, bool) {
 	return in, true
 }
 
+// extractTableSchemas returns schema qualifiers from all *ast.TableName nodes in
+// AST visit order. Unqualified tables contribute an empty schema name.
 func extractTableSchemas(node ast.Node) []string {
 	if node == nil {
 		return nil
