@@ -28,8 +28,8 @@ func TestBlockStatusBufferDeduplicatesPendingDone(t *testing.T) {
 	buffer := NewBlockStatusBuffer(4)
 	dispatcherID := common.NewDispatcherID()
 
-	buffer.Offer(NewDoneBlockStatusEntry(dispatcherID, 100, false, common.DefaultMode))
-	buffer.Offer(NewDoneBlockStatusEntry(dispatcherID, 100, false, common.DefaultMode))
+	buffer.OfferDone(dispatcherID, 100, false, common.DefaultMode)
+	buffer.OfferDone(dispatcherID, 100, false, common.DefaultMode)
 
 	require.Equal(t, 1, buffer.Len())
 
@@ -51,16 +51,7 @@ func TestBlockStatusBufferDeduplicatesPendingWaiting(t *testing.T) {
 	dispatcherID := common.NewDispatcherID()
 
 	offerWaiting := func() {
-		buffer.Offer(NewWaitingBlockStatusEntry(
-			dispatcherID,
-			150,
-			nil,
-			nil,
-			nil,
-			nil,
-			false,
-			common.DefaultMode,
-		))
+		buffer.OfferStatus(newTestWaitingBlockStatus(dispatcherID, 150, common.DefaultMode))
 	}
 
 	offerWaiting()
@@ -82,16 +73,7 @@ func TestBlockStatusBufferAllowsWaitingAgainAfterTake(t *testing.T) {
 	dispatcherID := common.NewDispatcherID()
 
 	offerWaiting := func() {
-		buffer.Offer(NewWaitingBlockStatusEntry(
-			dispatcherID,
-			180,
-			nil,
-			nil,
-			nil,
-			nil,
-			false,
-			common.DefaultMode,
-		))
+		buffer.OfferStatus(newTestWaitingBlockStatus(dispatcherID, 180, common.DefaultMode))
 	}
 
 	offerWaiting()
@@ -115,7 +97,7 @@ func TestBlockStatusBufferAllowsDoneAgainAfterTake(t *testing.T) {
 	buffer := NewBlockStatusBuffer(4)
 	dispatcherID := common.NewDispatcherID()
 
-	buffer.Offer(NewDoneBlockStatusEntry(dispatcherID, 190, false, common.DefaultMode))
+	buffer.OfferDone(dispatcherID, 190, false, common.DefaultMode)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -123,7 +105,7 @@ func TestBlockStatusBufferAllowsDoneAgainAfterTake(t *testing.T) {
 	require.NotNil(t, first)
 	require.Equal(t, heartbeatpb.BlockStage_DONE, first.State.Stage)
 
-	buffer.Offer(NewDoneBlockStatusEntry(dispatcherID, 190, false, common.DefaultMode))
+	buffer.OfferDone(dispatcherID, 190, false, common.DefaultMode)
 
 	second := buffer.Take(ctx)
 	require.NotNil(t, second)
@@ -136,18 +118,9 @@ func TestBlockStatusBufferKeepsWaitingBeforeDone(t *testing.T) {
 	buffer := NewBlockStatusBuffer(4)
 	dispatcherID := common.NewDispatcherID()
 
-	buffer.Offer(NewWaitingBlockStatusEntry(
-		dispatcherID,
-		200,
-		nil,
-		nil,
-		nil,
-		nil,
-		false,
-		common.DefaultMode,
-	))
-	buffer.Offer(NewDoneBlockStatusEntry(dispatcherID, 200, false, common.DefaultMode))
-	buffer.Offer(NewDoneBlockStatusEntry(dispatcherID, 200, false, common.DefaultMode))
+	buffer.OfferStatus(newTestWaitingBlockStatus(dispatcherID, 200, common.DefaultMode))
+	buffer.OfferDone(dispatcherID, 200, false, common.DefaultMode)
+	buffer.OfferDone(dispatcherID, 200, false, common.DefaultMode)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -166,9 +139,9 @@ func TestBlockStatusBufferKeepsDistinctDoneKeys(t *testing.T) {
 	buffer := NewBlockStatusBuffer(4)
 	dispatcherID := common.NewDispatcherID()
 
-	buffer.Offer(NewDoneBlockStatusEntry(dispatcherID, 300, false, common.DefaultMode))
-	buffer.Offer(NewDoneBlockStatusEntry(dispatcherID, 300, true, common.DefaultMode))
-	buffer.Offer(NewDoneBlockStatusEntry(dispatcherID, 300, false, common.RedoMode))
+	buffer.OfferDone(dispatcherID, 300, false, common.DefaultMode)
+	buffer.OfferDone(dispatcherID, 300, true, common.DefaultMode)
+	buffer.OfferDone(dispatcherID, 300, false, common.RedoMode)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -191,53 +164,87 @@ func TestBlockStatusBufferKeepsDistinctDoneKeys(t *testing.T) {
 	requireNoBlockStatus(t, buffer)
 }
 
-func TestWaitingBlockStatusEntryClonesMutableMetadata(t *testing.T) {
+func TestNewWaitingBlockStatusClonesMutableMetadata(t *testing.T) {
 	dispatcherID := common.NewDispatcherID()
-	blockTables := &commonEvent.InfluencedTables{
-		InfluenceType: commonEvent.InfluenceTypeNormal,
-		TableIDs:      []int64{11, 12},
-	}
-	needDroppedTables := &commonEvent.InfluencedTables{
-		InfluenceType: commonEvent.InfluenceTypeDB,
-		SchemaID:      99,
-		TableIDs:      []int64{21, 22},
-	}
-	needAddedTables := []commonEvent.Table{
-		{SchemaID: 31, TableID: 32, Splitable: true},
-	}
-	updatedSchemas := []commonEvent.SchemaIDChange{
-		{TableID: 41, OldSchemaID: 42, NewSchemaID: 43},
+	event := &commonEvent.DDLEvent{
+		FinishedTs: 100,
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{1, 2},
+		},
+		NeedDroppedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{3, 4},
+		},
+		NeedAddedTables: []commonEvent.Table{
+			{SchemaID: 10, TableID: 11, Splitable: true},
+		},
+		UpdatedSchemas: []commonEvent.SchemaIDChange{
+			{TableID: 12, OldSchemaID: 13, NewSchemaID: 14},
+		},
 	}
 
-	entry := NewWaitingBlockStatusEntry(
-		dispatcherID,
-		500,
-		blockTables,
-		needDroppedTables,
-		needAddedTables,
-		updatedSchemas,
-		false,
-		common.DefaultMode,
-	)
+	status := newWaitingBlockStatus(dispatcherID, event, common.DefaultMode)
+	require.Equal(t, []int64{1, 2}, status.State.BlockTables.TableIDs)
+	require.Equal(t, []int64{3, 4}, status.State.NeedDroppedTables.TableIDs)
+	require.Equal(t, int64(11), status.State.NeedAddedTables[0].TableID)
+	require.Equal(t, int64(14), status.State.UpdatedSchemas[0].NewSchemaID)
 
-	blockTables.TableIDs[0] = 101
-	needDroppedTables.TableIDs[0] = 202
-	needAddedTables[0].TableID = 303
-	updatedSchemas[0].NewSchemaID = 404
+	event.BlockedTables.TableIDs[0] = 101
+	event.NeedDroppedTables.TableIDs[0] = 102
+	event.NeedAddedTables[0].TableID = 103
+	event.UpdatedSchemas[0].NewSchemaID = 104
 
-	msg := entry.toPB()
-	require.Equal(t, []int64{11, 12}, msg.State.BlockTables.TableIDs)
-	require.Equal(t, []int64{21, 22}, msg.State.NeedDroppedTables.TableIDs)
-	require.Len(t, msg.State.NeedAddedTables, 1)
-	require.Equal(t, int64(32), msg.State.NeedAddedTables[0].TableID)
-	require.Len(t, msg.State.UpdatedSchemas, 1)
-	require.Equal(t, int64(43), msg.State.UpdatedSchemas[0].NewSchemaID)
+	require.Equal(t, []int64{1, 2}, status.State.BlockTables.TableIDs)
+	require.Equal(t, []int64{3, 4}, status.State.NeedDroppedTables.TableIDs)
+	require.Equal(t, int64(11), status.State.NeedAddedTables[0].TableID)
+	require.Equal(t, int64(14), status.State.UpdatedSchemas[0].NewSchemaID)
+}
+
+func TestNewNoneBlockStatusClonesMutableMetadata(t *testing.T) {
+	dispatcherID := common.NewDispatcherID()
+	event := &commonEvent.DDLEvent{
+		FinishedTs: 200,
+		NeedDroppedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{5, 6},
+		},
+		NeedAddedTables: []commonEvent.Table{
+			{SchemaID: 20, TableID: 21, Splitable: true},
+		},
+	}
+
+	status := newNoneBlockStatus(dispatcherID, event, common.DefaultMode)
+	require.Equal(t, []int64{5, 6}, status.State.NeedDroppedTables.TableIDs)
+	require.Equal(t, int64(21), status.State.NeedAddedTables[0].TableID)
+
+	event.NeedDroppedTables.TableIDs[0] = 201
+	event.NeedAddedTables[0].TableID = 202
+
+	require.Equal(t, []int64{5, 6}, status.State.NeedDroppedTables.TableIDs)
+	require.Equal(t, int64(21), status.State.NeedAddedTables[0].TableID)
 }
 
 func requireNoBlockStatus(t *testing.T, buffer *BlockStatusBuffer) {
 	t.Helper()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
-	defer cancel()
-	require.Nil(t, buffer.Take(ctx))
+	status, ok := buffer.TryTake()
+	require.False(t, ok)
+	require.Nil(t, status)
+}
+
+func newTestWaitingBlockStatus(
+	dispatcherID common.DispatcherID,
+	blockTs uint64,
+	mode int64,
+) *heartbeatpb.TableSpanBlockStatus {
+	return &heartbeatpb.TableSpanBlockStatus{
+		ID: dispatcherID.ToPB(),
+		State: &heartbeatpb.State{
+			IsBlocked: true,
+			BlockTs:   blockTs,
+			Stage:     heartbeatpb.BlockStage_WAITING,
+		},
+		Mode: mode,
+	}
 }

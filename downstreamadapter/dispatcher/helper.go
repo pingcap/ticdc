@@ -263,14 +263,14 @@ type HeartBeatInfo struct {
 
 type blockStatusOfferer interface {
 	GetId() common.DispatcherID
-	offerBlockStatus(status *BlockStatusEntry)
+	offerBlockStatus(status *heartbeatpb.TableSpanBlockStatus)
 }
 
 // ResendTask is responsible for periodically resending the block status to the maintainer.
 // The task will be cancelled when the dispatcher receives the ACK message from the maintainer.
 type ResendTask struct {
 	dispatcher   blockStatusOfferer
-	status       *BlockStatusEntry
+	message      *heartbeatpb.TableSpanBlockStatus
 	callback     func() // function need to be called when the task is cancelled
 	taskHandle   *threadpool.TaskHandle
 	executeCount uint64
@@ -278,11 +278,11 @@ type ResendTask struct {
 
 const resendTimeInterval = 5 * time.Second
 
-func newResendTask(dispatcher blockStatusOfferer, status *BlockStatusEntry, callback func()) *ResendTask {
+func newResendTask(dispatcher blockStatusOfferer, message *heartbeatpb.TableSpanBlockStatus, callback func()) *ResendTask {
 	taskScheduler := GetDispatcherTaskScheduler()
 	t := &ResendTask{
 		dispatcher: dispatcher,
-		status:     status,
+		message:    message,
 		callback:   callback,
 	}
 	t.taskHandle = taskScheduler.Submit(t, time.Now().Add(resendTimeInterval))
@@ -291,7 +291,7 @@ func newResendTask(dispatcher blockStatusOfferer, status *BlockStatusEntry, call
 
 func (t *ResendTask) Execute() time.Time {
 	log.Debug("resend task", zap.Any("dispatcherID", t.dispatcher.GetId()))
-	t.dispatcher.offerBlockStatus(t.status)
+	t.dispatcher.offerBlockStatus(t.message)
 
 	executeCount := atomic.AddUint64(&t.executeCount, 1)
 	if executeCount%10 == 0 {

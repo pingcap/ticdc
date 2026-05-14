@@ -242,8 +242,12 @@ func (d *BasicDispatcher) GetTxnAtomicity() config.AtomicityLevel {
 	return d.sharedInfo.txnAtomicity
 }
 
-func (d *BasicDispatcher) offerBlockStatus(status *BlockStatusEntry) {
+func (d *BasicDispatcher) offerBlockStatus(status *heartbeatpb.TableSpanBlockStatus) {
 	d.sharedInfo.OfferBlockStatus(status)
+}
+
+func (d *BasicDispatcher) offerDoneBlockStatus(blockTs uint64, isSyncPoint bool) {
+	d.sharedInfo.OfferDoneBlockStatus(d.id, blockTs, isSyncPoint, d.GetMode())
 }
 
 func (d *BasicDispatcher) TakeBlockStatus(ctx context.Context) *heartbeatpb.TableSpanBlockStatus {
@@ -281,14 +285,30 @@ func (s *SharedInfo) EnableActiveActive() bool {
 	return s.enableActiveActive
 }
 
-// OfferBlockStatus appends a canonical block status to the local dispatcher
-// manager buffer. WAITING and DONE entries may be coalesced while pending.
-func (s *SharedInfo) OfferBlockStatus(status *BlockStatusEntry) {
-	s.blockStatusBuffer.Offer(status)
+// OfferBlockStatus appends a protobuf block status to the dispatcher-local
+// buffer. WAITING keeps a single pending protobuf object while NONE preserves
+// original ordering without deduplication.
+func (s *SharedInfo) OfferBlockStatus(status *heartbeatpb.TableSpanBlockStatus) {
+	s.blockStatusBuffer.OfferStatus(status)
+}
+
+// OfferDoneBlockStatus appends a DONE status through the dedicated minimal-key
+// path so duplicates are suppressed before another protobuf allocation.
+func (s *SharedInfo) OfferDoneBlockStatus(
+	dispatcherID common.DispatcherID,
+	blockTs uint64,
+	isSyncPoint bool,
+	mode int64,
+) {
+	s.blockStatusBuffer.OfferDone(dispatcherID, blockTs, isSyncPoint, mode)
 }
 
 func (s *SharedInfo) TakeBlockStatus(ctx context.Context) *heartbeatpb.TableSpanBlockStatus {
 	return s.blockStatusBuffer.Take(ctx)
+}
+
+func (s *SharedInfo) TryTakeBlockStatus() (*heartbeatpb.TableSpanBlockStatus, bool) {
+	return s.blockStatusBuffer.TryTake()
 }
 
 func (s *SharedInfo) BlockStatusLen() int {

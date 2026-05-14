@@ -215,28 +215,10 @@ func TestCollectBlockStatusRequestSplitsOversizedMessages(t *testing.T) {
 	manager := createTestManager(t)
 
 	for i := 0; i < maxBlockStatusesPerRequest+2; i++ {
-		manager.sharedInfo.OfferBlockStatus(dispatcher.NewWaitingBlockStatusEntry(
-			common.NewDispatcherID(),
-			uint64(i+1),
-			nil,
-			nil,
-			nil,
-			nil,
-			false,
-			common.DefaultMode,
-		))
+		manager.sharedInfo.OfferBlockStatus(newWaitingBlockStatus(common.DefaultMode, uint64(i+1)))
 	}
 	for i := 0; i < maxBlockStatusesPerRequest+1; i++ {
-		manager.sharedInfo.OfferBlockStatus(dispatcher.NewWaitingBlockStatusEntry(
-			common.NewDispatcherID(),
-			uint64(i+10000),
-			nil,
-			nil,
-			nil,
-			nil,
-			false,
-			common.RedoMode,
-		))
+		manager.sharedInfo.OfferBlockStatus(newWaitingBlockStatus(common.RedoMode, uint64(i+10000)))
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -287,6 +269,53 @@ func TestCollectBlockStatusRequestSplitsOversizedMessages(t *testing.T) {
 	shortCtx, shortCancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer shortCancel()
 	require.Nil(t, manager.blockStatusRequestQueue.Dequeue(shortCtx))
+}
+
+func TestCollectBlockStatusRequestKeepsLateArrivalInSameBatch(t *testing.T) {
+	manager := createTestManager(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		manager.collectBlockStatusRequest(ctx)
+		close(done)
+	}()
+	defer func() {
+		cancel()
+		<-done
+	}()
+
+	manager.sharedInfo.OfferBlockStatus(newWaitingBlockStatus(common.DefaultMode, 1))
+	require.Eventually(t, func() bool {
+		return manager.sharedInfo.BlockStatusLen() == 0
+	}, time.Second, time.Millisecond)
+	manager.sharedInfo.OfferBlockStatus(newWaitingBlockStatus(common.DefaultMode, 2))
+
+	dequeueCtx, cancelDequeue := context.WithTimeout(context.Background(), time.Second)
+	defer cancelDequeue()
+	req := manager.blockStatusRequestQueue.Dequeue(dequeueCtx)
+	require.NotNil(t, req)
+	require.NotNil(t, req.Request)
+	require.Equal(t, common.DefaultMode, req.Request.Mode)
+	require.Len(t, req.Request.BlockStatuses, 2)
+	require.Equal(t, uint64(1), req.Request.BlockStatuses[0].State.BlockTs)
+	require.Equal(t, uint64(2), req.Request.BlockStatuses[1].State.BlockTs)
+
+	shortCtx, shortCancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer shortCancel()
+	require.Nil(t, manager.blockStatusRequestQueue.Dequeue(shortCtx))
+}
+
+func newWaitingBlockStatus(mode int64, blockTs uint64) *heartbeatpb.TableSpanBlockStatus {
+	return &heartbeatpb.TableSpanBlockStatus{
+		ID: common.NewDispatcherID().ToPB(),
+		State: &heartbeatpb.State{
+			IsBlocked: true,
+			BlockTs:   blockTs,
+			Stage:     heartbeatpb.BlockStage_WAITING,
+		},
+		Mode: mode,
+	}
 }
 
 func TestMergeDispatcherNormal(t *testing.T) {

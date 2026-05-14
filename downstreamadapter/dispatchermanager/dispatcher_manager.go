@@ -643,21 +643,29 @@ func (e *DispatcherManager) collectBlockStatusRequest(ctx context.Context) {
 			redoBlockStatusMessage = append(redoBlockStatusMessage, blockStatus)
 		}
 
-		batchCtx, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
+		deadline := time.Now().Add(10 * time.Millisecond)
+	loop:
 		for {
-			blockStatus = e.sharedInfo.TakeBlockStatus(batchCtx)
-			if blockStatus == nil {
-				break
+			var ok bool
+			blockStatus, ok = e.sharedInfo.TryTakeBlockStatus()
+			if !ok {
+				// Once the local queue is drained, keep waiting until the batch
+				// deadline so late arrivals can still join the current request.
+				waitCtx, cancel := context.WithDeadline(ctx, deadline)
+				blockStatus = e.sharedInfo.TakeBlockStatus(waitCtx)
+				cancel()
+				if blockStatus == nil {
+					if ctx.Err() != nil {
+						return
+					}
+					break loop
+				}
 			}
 			if common.IsDefaultMode(blockStatus.Mode) {
 				blockStatusMessage = append(blockStatusMessage, blockStatus)
 			} else {
 				redoBlockStatusMessage = append(redoBlockStatusMessage, blockStatus)
 			}
-		}
-		cancel()
-		if ctx.Err() != nil {
-			return
 		}
 
 		e.metricBlockStatusesChanLen.Set(float64(e.sharedInfo.BlockStatusLen()))

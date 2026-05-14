@@ -865,7 +865,7 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 		}
 
 		// Step4: whether the outdate message or not, we need to return message show we have finished the event.
-		d.offerBlockStatus(NewDoneBlockStatusEntry(d.id, action.CommitTs, action.IsSyncPoint, d.GetMode()))
+		d.offerDoneBlockStatus(action.CommitTs, action.IsSyncPoint)
 	}
 	return false
 }
@@ -901,8 +901,56 @@ func (d *BasicDispatcher) reportBlockedEventDone(
 	actionCommitTs uint64,
 	actionIsSyncPoint bool,
 ) {
-	d.offerBlockStatus(NewDoneBlockStatusEntry(d.id, actionCommitTs, actionIsSyncPoint, d.GetMode()))
+	d.offerDoneBlockStatus(actionCommitTs, actionIsSyncPoint)
 	GetDispatcherStatusDynamicStream().Wake(d.id)
+}
+
+func newBlockStatusInfluencedTables(
+	influencedTables *commonEvent.InfluencedTables,
+) *heartbeatpb.InfluencedTables {
+	status := influencedTables.ToPB()
+	if status != nil && status.TableIDs != nil {
+		status.TableIDs = append([]int64(nil), status.TableIDs...)
+	}
+	return status
+}
+
+func newNoneBlockStatus(
+	dispatcherID common.DispatcherID,
+	event commonEvent.BlockEvent,
+	mode int64,
+) *heartbeatpb.TableSpanBlockStatus {
+	return &heartbeatpb.TableSpanBlockStatus{
+		ID: dispatcherID.ToPB(),
+		State: &heartbeatpb.State{
+			BlockTs:           event.GetCommitTs(),
+			NeedDroppedTables: newBlockStatusInfluencedTables(event.GetNeedDroppedTables()),
+			NeedAddedTables:   commonEvent.ToTablesPB(event.GetNeedAddedTables()),
+			Stage:             heartbeatpb.BlockStage_NONE,
+		},
+		Mode: mode,
+	}
+}
+
+func newWaitingBlockStatus(
+	dispatcherID common.DispatcherID,
+	event commonEvent.BlockEvent,
+	mode int64,
+) *heartbeatpb.TableSpanBlockStatus {
+	return &heartbeatpb.TableSpanBlockStatus{
+		ID: dispatcherID.ToPB(),
+		State: &heartbeatpb.State{
+			IsBlocked:         true,
+			BlockTs:           event.GetCommitTs(),
+			BlockTables:       newBlockStatusInfluencedTables(event.GetBlockedTables()),
+			NeedDroppedTables: newBlockStatusInfluencedTables(event.GetNeedDroppedTables()),
+			NeedAddedTables:   commonEvent.ToTablesPB(event.GetNeedAddedTables()),
+			UpdatedSchemas:    commonEvent.ToSchemaIDChangePB(event.GetUpdatedSchemas()),
+			IsSyncPoint:       event.GetType() == commonEvent.TypeSyncPointEvent,
+			Stage:             heartbeatpb.BlockStage_WAITING,
+		},
+		Mode: mode,
+	}
 }
 
 // shouldBlock check whether the event should be blocked(to wait maintainer response)
@@ -1015,13 +1063,7 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 			return
 		}
 
-		status := NewNoneBlockStatusEntry(
-			d.id,
-			event.GetCommitTs(),
-			event.GetNeedDroppedTables(),
-			event.GetNeedAddedTables(),
-			d.GetMode(),
-		)
+		status := newNoneBlockStatus(d.id, event, d.GetMode())
 		identifier := BlockEventIdentifier{
 			CommitTs:    event.GetCommitTs(),
 			IsSyncPoint: false,
@@ -1157,17 +1199,7 @@ func (d *BasicDispatcher) reportBlockedEventToMaintainer(event commonEvent.Block
 		CommitTs:    event.GetCommitTs(),
 		IsSyncPoint: event.GetType() == commonEvent.TypeSyncPointEvent,
 	}
-	isSyncPoint := event.GetType() == commonEvent.TypeSyncPointEvent
-	status := NewWaitingBlockStatusEntry(
-		d.id,
-		event.GetCommitTs(),
-		event.GetBlockedTables(),
-		event.GetNeedDroppedTables(),
-		event.GetNeedAddedTables(),
-		event.GetUpdatedSchemas(),
-		isSyncPoint,
-		d.GetMode(),
-	)
+	status := newWaitingBlockStatus(d.id, event, d.GetMode())
 	d.resendTaskMap.Set(identifier, newResendTask(d, status, nil))
 	d.offerBlockStatus(status)
 }
