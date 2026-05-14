@@ -204,8 +204,8 @@ func checkTiDBVariable(db *sql.DB, variableName, defaultValue string) (string, e
 	var value string
 	querySQL := fmt.Sprintf("show session variables like '%s';", variableName)
 	err := db.QueryRowContext(context.Background(), querySQL).Scan(&name, &value)
-	if err != nil && err != sql.ErrNoRows {
-		return "", errors.ErrMySQLQueryError.Wrap(err).GenWithStack("fail to query session variable %s", variableName)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return "", errors.WrapError(errors.ErrMySQLQueryError, err, "fail to query session variable %s", variableName)
 	}
 	// session variable works, use given default value
 	if err == nil {
