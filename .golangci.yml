@@ -52,7 +52,6 @@ linters:
               desc: use github.com/pingcap/ticdc/pkg/errors outside pkg/errors
 
     importas:
-      no-extra-aliases: true
       alias:
         - pkg: github.com/pingcap/ticdc/pkg/errors
           alias: ""
