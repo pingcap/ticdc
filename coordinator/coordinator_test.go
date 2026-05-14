@@ -355,7 +355,7 @@ func newMockEtcdClient(ownerID string) *mockEtcdClient {
 }
 
 func (m *mockEtcdClient) GetOwnerID(ctx context.Context) (config.CaptureID, error) {
-	return config.CaptureID(m.ownerID), nil
+	return m.ownerID, nil
 }
 
 func TestCoordinatorScheduling(t *testing.T) {

@@ -691,7 +691,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 	}
 
 	if uint64(sl.maxDMLBytes) > task.availableMemoryQuota.Load() {
-		log.Debug("dispatcher available memory quota is not enough, skip scan", zap.Stringer("dispatcher", task.id), zap.Uint64("available", task.availableMemoryQuota.Load()), zap.Int64("required", int64(sl.maxDMLBytes)))
+		log.Debug("dispatcher available memory quota is not enough, skip scan", zap.Stringer("dispatcher", task.id), zap.Uint64("available", task.availableMemoryQuota.Load()), zap.Int64("required", sl.maxDMLBytes))
 		c.sendSignalResolvedTs(task)
 		metrics.EventServiceSkipScanCount.WithLabelValues("dispatcher_quota").Inc()
 		return

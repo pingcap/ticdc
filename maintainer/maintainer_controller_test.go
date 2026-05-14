@@ -662,7 +662,7 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 			ID:                 spanReplica.ID.ToPB(),
 			ComponentStatus:    heartbeatpb.ComponentState_Working,
 			EventSizePerSecond: 200,
-			CheckpointTs:       oracle.ComposeTS(int64(currentTime.Add(-5*time.Second).UnixMilli()), 0),
+			CheckpointTs:       oracle.ComposeTS(currentTime.Add(-5*time.Second).UnixMilli(), 0),
 		}
 		// provide the last three traffic status
 		for i := 0; i < 3; i++ {
@@ -692,13 +692,13 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 		ID:                 spanReplica3.ID.ToPB(),
 		ComponentStatus:    heartbeatpb.ComponentState_Working,
 		EventSizePerSecond: 600,
-		CheckpointTs:       oracle.ComposeTS(int64(currentTime.Add(-5*time.Second).UnixMilli()), 0),
+		CheckpointTs:       oracle.ComposeTS(currentTime.Add(-5*time.Second).UnixMilli(), 0),
 	}
 	status4 := &heartbeatpb.TableSpanStatus{
 		ID:                 spanReplica4.ID.ToPB(),
 		ComponentStatus:    heartbeatpb.ComponentState_Working,
 		EventSizePerSecond: 500,
-		CheckpointTs:       oracle.ComposeTS(int64(currentTime.Add(-5*time.Second).UnixMilli()), 0),
+		CheckpointTs:       oracle.ComposeTS(currentTime.Add(-5*time.Second).UnixMilli(), 0),
 	}
 	// provide the last three traffic status
 	for i := 0; i < 2; i++ {
@@ -791,13 +791,13 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 		ID:                 spanReplicaID7.ToPB(),
 		ComponentStatus:    heartbeatpb.ComponentState_Working,
 		EventSizePerSecond: float32(trafficForSpanReplica7),
-		CheckpointTs:       oracle.ComposeTS(int64(currentTime.Add(-5*time.Second).UnixMilli()), 0),
+		CheckpointTs:       oracle.ComposeTS(currentTime.Add(-5*time.Second).UnixMilli(), 0),
 	}
 	status8 := &heartbeatpb.TableSpanStatus{
 		ID:                 spanReplicaID8.ToPB(),
 		ComponentStatus:    heartbeatpb.ComponentState_Working,
 		EventSizePerSecond: float32(trafficForSpanReplica8),
-		CheckpointTs:       oracle.ComposeTS(int64(currentTime.Add(-5*time.Second).UnixMilli()), 0),
+		CheckpointTs:       oracle.ComposeTS(currentTime.Add(-5*time.Second).UnixMilli(), 0),
 	}
 
 	// provide the last three traffic status
@@ -864,13 +864,13 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 		ID:                 spanReplicaID9.ToPB(),
 		ComponentStatus:    heartbeatpb.ComponentState_Working,
 		EventSizePerSecond: 100,
-		CheckpointTs:       oracle.ComposeTS(int64(currentTime.Add(-5*time.Second).UnixMilli()), 0),
+		CheckpointTs:       oracle.ComposeTS(currentTime.Add(-5*time.Second).UnixMilli(), 0),
 	}
 	status10 := &heartbeatpb.TableSpanStatus{
 		ID:                 spanReplicaID10.ToPB(),
 		ComponentStatus:    heartbeatpb.ComponentState_Working,
 		EventSizePerSecond: 50,
-		CheckpointTs:       oracle.ComposeTS(int64(currentTime.Add(-5*time.Second).UnixMilli()), 0),
+		CheckpointTs:       oracle.ComposeTS(currentTime.Add(-5*time.Second).UnixMilli(), 0),
 	}
 
 	// provide the last three traffic status
@@ -914,7 +914,7 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 		ID:                 spanReplicaID11.ToPB(),
 		ComponentStatus:    heartbeatpb.ComponentState_Working,
 		EventSizePerSecond: 150,
-		CheckpointTs:       oracle.ComposeTS(int64(currentTime.Add(-5*time.Second).UnixMilli()), 0),
+		CheckpointTs:       oracle.ComposeTS(currentTime.Add(-5*time.Second).UnixMilli(), 0),
 	}
 
 	// provide the last three traffic status
@@ -1042,7 +1042,7 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 		ID:                 spanReplicaID12.ToPB(),
 		ComponentStatus:    heartbeatpb.ComponentState_Working,
 		EventSizePerSecond: 400,
-		CheckpointTs:       oracle.ComposeTS(int64(currentTime.Add(-5*time.Second).UnixMilli()), 0),
+		CheckpointTs:       oracle.ComposeTS(currentTime.Add(-5*time.Second).UnixMilli(), 0),
 	}
 
 	// provide the last three traffic status
@@ -1054,7 +1054,7 @@ func TestSplitTableBalanceWhenTrafficUnbalanced(t *testing.T) {
 		ID:                 spanReplicaID13.ToPB(),
 		ComponentStatus:    heartbeatpb.ComponentState_Working,
 		EventSizePerSecond: 700,
-		CheckpointTs:       oracle.ComposeTS(int64(currentTime.Add(-5*time.Second).UnixMilli()), 0),
+		CheckpointTs:       oracle.ComposeTS(currentTime.Add(-5*time.Second).UnixMilli(), 0),
 	}
 	for i := 0; i < 3; i++ {
 		controller.spanController.UpdateStatus(spanReplica13, status13)

@@ -104,7 +104,7 @@ func newWriter(ctx context.Context, o *option) *writer {
 	o.replicaConfig.Sink.TiDBSourceID = 1
 	o.replicaConfig.Sink.Protocol = putil.AddressOf(o.protocol.String())
 
-	for i := 0; i < int(o.partitionNum); i++ {
+	for i := 0; i < o.partitionNum; i++ {
 		decoder, err := codec.NewEventDecoder(ctx, i, codecConfig, o.topic, db)
 		if err != nil {
 			log.Panic("cannot create the decoder", zap.Error(err))

@@ -145,7 +145,7 @@ func setAliveNodes(nodeManager *watcher.NodeManager, alive map[node.ID]*node.Inf
 	type nodeMap = map[node.ID]*node.Info
 	v := reflect.ValueOf(nodeManager).Elem().FieldByName("nodes")
 	ptr := (*syncatomic.Pointer[nodeMap])(unsafe.Pointer(v.UnsafeAddr()))
-	aliveCopy := nodeMap(alive)
+	aliveCopy := alive
 	ptr.Store(&aliveCopy)
 }
 

@@ -26,7 +26,7 @@ func TestReadyEvent(t *testing.T) {
 	e := NewReadyEvent(did)
 	data, err := e.Marshal()
 	require.NoError(t, err)
-	require.Len(t, data, int(e.GetSize())+int(GetEventHeaderSize()))
+	require.Len(t, data, int(e.GetSize())+GetEventHeaderSize())
 
 	var e2 ReadyEvent
 	err = e2.Unmarshal(data)

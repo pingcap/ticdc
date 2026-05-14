@@ -106,7 +106,7 @@ func (h *EventsHandler) Handle(stat *dispatcherStat, events ...dispatcher.Dispat
 		stat.handleHandshakeEvent(events[0])
 		return false
 	default:
-		log.Panic("unknown event type", zap.Int("type", int(events[0].GetType())))
+		log.Panic("unknown event type", zap.Int("type", events[0].GetType()))
 	}
 	return false
 }
@@ -145,7 +145,7 @@ func (h *EventsHandler) GetType(event dispatcher.DispatcherEvent) dynstream.Even
 	case commonEvent.TypeDropEvent:
 		return dynstream.EventType{DataGroup: DataGroupDrop, Property: dynstream.NonBatchable, Droppable: false}
 	default:
-		log.Panic("unknown event type", zap.Int("type", int(event.GetType())))
+		log.Panic("unknown event type", zap.Int("type", event.GetType()))
 	}
 	return dynstream.DefaultEventType
 }

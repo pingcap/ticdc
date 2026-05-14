@@ -1177,7 +1177,7 @@ func (h *OpenAPIV2) MoveTable(c *gin.Context) {
 			return
 		}
 	}
-	err = maintainer.MoveTable(int64(tableId), node.ID(targetNodeID), mode, wait)
+	err = maintainer.MoveTable(tableId, node.ID(targetNodeID), mode, wait)
 	if err != nil {
 		log.Error("failed to move table", zap.Error(err), zap.Int64("tableID", tableId), zap.String("targetNodeID", targetNodeID))
 		_ = c.Error(err)
@@ -1250,7 +1250,7 @@ func (h *OpenAPIV2) MoveSplitTable(c *gin.Context) {
 
 	targetNodeID := c.Query("targetNodeID")
 	mode, _ := strconv.ParseInt(c.Query("mode"), 10, 64)
-	err = maintainer.MoveSplitTable(int64(tableId), node.ID(targetNodeID), mode)
+	err = maintainer.MoveSplitTable(tableId, node.ID(targetNodeID), mode)
 	if err != nil {
 		log.Error("failed to move split table", zap.Error(err), zap.Int64("tableID", tableId), zap.String("targetNodeID", targetNodeID))
 		_ = c.Error(err)
@@ -1325,7 +1325,7 @@ func (h *OpenAPIV2) SplitTableByRegionCount(c *gin.Context) {
 		return
 	}
 	mode, _ := strconv.ParseInt(c.Query("mode"), 10, 64)
-	err = maintainer.SplitTableByRegionCount(int64(tableId), mode)
+	err = maintainer.SplitTableByRegionCount(tableId, mode)
 	if err != nil {
 		log.Error("failed to split table by region count", zap.Error(err), zap.Int64("tableID", tableId))
 		_ = c.Error(err)
@@ -1395,7 +1395,7 @@ func (h *OpenAPIV2) MergeTable(c *gin.Context) {
 	}
 
 	mode, _ := strconv.ParseInt(c.Query("mode"), 10, 64)
-	err = maintainer.MergeTable(int64(tableId), mode)
+	err = maintainer.MergeTable(tableId, mode)
 	if err != nil {
 		log.Error("failed to merge table", zap.Error(err), zap.Int64("tableID", tableId))
 		_ = c.Error(err)

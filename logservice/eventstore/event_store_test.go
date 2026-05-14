@@ -1104,7 +1104,7 @@ func TestWriteToEventStore(t *testing.T) {
 		CRTs:     211, // Note: must be different from smallEntry's CRTs to avoid key collision if key is same
 		KeyLen:   uint32(len(largeEntryKey)),
 		ValueLen: uint32(len(largeEntryValue)) * uint32(store.compressionThreshold/10),
-		Key:      []byte(largeEntryKey),
+		Key:      largeEntryKey,
 		Value:    bytes.Repeat(largeEntryValue, store.compressionThreshold/10),
 		OldValue: nil,
 	}

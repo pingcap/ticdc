@@ -25,7 +25,7 @@ func TestDropEvent(t *testing.T) {
 	e := NewDropEvent(did, 123, 100, 456)
 	data, err := e.Marshal()
 	require.NoError(t, err)
-	require.Len(t, data, int(e.GetSize())+int(GetEventHeaderSize()))
+	require.Len(t, data, int(e.GetSize())+GetEventHeaderSize())
 
 	var e2 DropEvent
 	err = e2.Unmarshal(data)
@@ -110,7 +110,7 @@ func TestDropEventMarshalUnmarshal(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
-			require.Len(t, data, int(tc.event.GetSize())+int(GetEventHeaderSize()))
+			require.Len(t, data, int(tc.event.GetSize())+GetEventHeaderSize())
 
 			// Test Unmarshal
 			var e2 DropEvent

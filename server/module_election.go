@@ -23,7 +23,6 @@ import (
 	"github.com/pingcap/ticdc/coordinator/changefeed"
 	logcoordinator "github.com/pingcap/ticdc/logservice/coordinator"
 	"github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/liveness"
@@ -126,7 +125,7 @@ func (e *elector) campaignCoordinator(ctx context.Context) error {
 			return nil
 		}
 
-		coordinatorVersion, err := e.svr.EtcdClient.GetOwnerRevision(ctx, config.CaptureID(nodeID))
+		coordinatorVersion, err := e.svr.EtcdClient.GetOwnerRevision(ctx, nodeID)
 		if err != nil {
 			return errors.Trace(err)
 		}
@@ -247,7 +246,7 @@ func (e *elector) campaignLogCoordinator(ctx context.Context) error {
 			return nil
 		}
 
-		logCoordinatorVersion, err := e.svr.EtcdClient.GetLogCoordinatorRevision(ctx, config.CaptureID(nodeID))
+		logCoordinatorVersion, err := e.svr.EtcdClient.GetLogCoordinatorRevision(ctx, nodeID)
 		if err != nil {
 			return errors.Trace(err)
 		}

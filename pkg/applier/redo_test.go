@@ -618,7 +618,7 @@ func getMockDB(t *testing.T) *sql.DB {
 
 	mock.ExpectBegin()
 	mock.ExpectExec("INSERT INTO `test`.`t1` (`a`,`b`) VALUES (?,?)").
-		WithArgs(1, []byte([]byte("20"))).
+		WithArgs(1, []byte("20")).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
@@ -630,7 +630,7 @@ func getMockDB(t *testing.T) *sql.DB {
 
 	mock.ExpectBegin()
 	mock.ExpectExec("INSERT INTO `test`.`t1` (`a`,`b`) VALUES (?,?)").
-		WithArgs(10, []byte([]byte("20"))).
+		WithArgs(10, []byte("20")).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec("INSERT INTO `test`.`t1` (`a`,`b`) VALUES (?,?)").
 		WithArgs(100, []byte("200")).

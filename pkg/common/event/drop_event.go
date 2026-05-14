@@ -153,7 +153,7 @@ func (e *DropEvent) encodeV1() ([]byte, error) {
 	offset += 8
 
 	// DroppedCommitTs
-	binary.BigEndian.PutUint64(data[offset:], uint64(e.DroppedCommitTs))
+	binary.BigEndian.PutUint64(data[offset:], e.DroppedCommitTs)
 	offset += 8
 
 	// DroppedEpoch
@@ -178,7 +178,7 @@ func (e *DropEvent) decodeV1(data []byte) error {
 	offset += 8
 
 	// DroppedCommitTs
-	e.DroppedCommitTs = common.Ts(binary.BigEndian.Uint64(data[offset:]))
+	e.DroppedCommitTs = binary.BigEndian.Uint64(data[offset:])
 	offset += 8
 
 	// DroppedEpoch

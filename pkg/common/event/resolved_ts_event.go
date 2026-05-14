@@ -237,7 +237,7 @@ func (e ResolvedEvent) encodeV1() ([]byte, error) {
 	offset := 0
 
 	// ResolvedTs
-	binary.BigEndian.PutUint64(data[offset:], uint64(e.ResolvedTs))
+	binary.BigEndian.PutUint64(data[offset:], e.ResolvedTs)
 	offset += 8
 
 	// Epoch
@@ -259,7 +259,7 @@ func (e *ResolvedEvent) decodeV1(data []byte) error {
 	offset := 0
 
 	// ResolvedTs
-	e.ResolvedTs = common.Ts(binary.BigEndian.Uint64(data[offset:]))
+	e.ResolvedTs = binary.BigEndian.Uint64(data[offset:])
 	offset += 8
 
 	// Epoch

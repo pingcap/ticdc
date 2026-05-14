@@ -167,7 +167,7 @@ func (e SyncPointEvent) encodeV1() ([]byte, error) {
 	offset := 0
 
 	// Seq
-	binary.BigEndian.PutUint64(data[offset:], uint64(e.Seq))
+	binary.BigEndian.PutUint64(data[offset:], e.Seq)
 	offset += 8
 
 	// Epoch

@@ -124,8 +124,8 @@ func collectDiskTotalUsedBytes(path string) (totalBytes, usedBytes uint64) {
 	if err := syscall.Statfs(path, &st); err != nil {
 		return 0, 0
 	}
-	totalBytes = uint64(st.Blocks) * uint64(st.Bsize)
-	freeBytes := uint64(st.Bfree) * uint64(st.Bsize)
+	totalBytes = st.Blocks * uint64(st.Bsize)
+	freeBytes := st.Bfree * uint64(st.Bsize)
 	usedBytes = totalBytes - freeBytes
 	return totalBytes, usedBytes
 }
