@@ -23,40 +23,27 @@ import (
 
 // NormalizeCreateViewQueryWithStoredSelect replaces the SELECT body in a
 // CREATE VIEW query with TiDB's stored View.SelectStmt when the stored SELECT
-// carries information that the original query text does not carry. It covers
-// both cross-schema table references in the SELECT's FROM clause and unaliased
-// table-qualified column references that can be resolved from the SELECT's own
-// FROM scope.
+// carries information that the original query text does not carry.
 //
-// TiDB may persist a SELECT body as `SELECT orders.id FROM source_db.orders`:
-// the FROM table is schema-qualified, but the column qualifier remains
-// table-only. This function normalizes it to
-// `SELECT source_db.orders.id FROM source_db.orders`, so later table routing can
-// rewrite the column qualifier consistently with the routed source table.
-// Explicit aliases and ambiguous table names are preserved.
+// TiDB persists the normalized SELECT body of a view in TableInfo.View.SelectStmt
+// when executing CREATE VIEW, so this field can carry resolved source-table
+// references even if job.Query keeps the original session-level text.
 //
-// Example — cross-schema reference:
+// Example:
 //
 //	query            = "CREATE VIEW `target_db`.`v` AS SELECT `id` FROM `users`"
 //	storedSelectStmt = "SELECT `id` FROM `source_db`.`users`"
 //	currentSchema    = "target_db"
 //
-//	The original query omits the schema for `users`. In MySQL/TiDB, `users`
-//	resolves to the session database, which is `source_db`. TiDB records this
-//	resolution in View.SelectStmt with the fully qualified table name.
-//	Because `source_db` != `target_db` (the view's own schema), the function
-//	replaces the SELECT body:
+//					 → "CREATE VIEW `target_db`.`v` AS SELECT `id` FROM `source_db`.`users`"
 //
-//	→ "CREATE VIEW `target_db`.`v` AS SELECT `id` FROM `source_db`.`users`"
+// Example:
 //
-// Example — same-schema reference (no change):
+//	query            = "CREATE VIEW `other_db`.`v` AS SELECT `orders`.`id` FROM `orders`"
+//	storedSelectStmt = "SELECT `orders`.`id` AS `id` FROM `source_db`.`orders`"
+//	currentSchema    = "other_db"
 //
-//	query            = "CREATE VIEW `db`.`v` AS SELECT `id` FROM `t`"
-//	storedSelectStmt = "SELECT `id` FROM `db`.`t`"
-//	currentSchema    = "db"
-//
-//	All referenced tables are in the view's own schema, so the original query
-//	is kept as-is.
+//	                 → "CREATE VIEW `other_db`.`v` AS SELECT `source_db`.`orders`.`id` AS `id` FROM `source_db`.`orders`"
 func NormalizeCreateViewQueryWithStoredSelect(query string, storedSelectStmt string, currentSchema string) (string, error) {
 	if query == "" || storedSelectStmt == "" {
 		return query, nil
