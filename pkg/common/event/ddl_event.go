@@ -581,10 +581,21 @@ func NewRoutedDDLEvent(
 		BDRMode:           d.BDRMode,
 		Err:               d.Err,
 		PostTxnFlushed:    clonePostTxnFlushed(d.PostTxnFlushed),
+		IndexIDs:          cloneIndexIDs(d.IndexIDs),
 		eventSize:         d.eventSize,
 		IsBootstrap:       d.IsBootstrap,
 		NotSync:           d.NotSync,
 	}
+}
+
+func cloneIndexIDs(indexIDs []int64) []int64 {
+	if indexIDs == nil {
+		return nil
+	}
+
+	cloned := make([]int64, len(indexIDs))
+	copy(cloned, indexIDs)
+	return cloned
 }
 
 func clonePostTxnFlushed(postTxnFlushed []func()) []func() {

@@ -38,7 +38,7 @@ func genDeleteSQLV1(changes ...*RowChange) (string, []interface{}) {
 	var buf strings.Builder
 	buf.Grow(1024)
 	buf.WriteString("DELETE FROM ")
-	buf.WriteString(first.targetTable.QuoteString())
+	buf.WriteString(first.targetTable.QuoteTargetString())
 	buf.WriteString(" WHERE (")
 
 	allArgs := make([]interface{}, 0, len(changes)*CommonIndexColumnsCount)
@@ -67,7 +67,7 @@ func genUpdateSQLV1(changes ...*RowChange) (string, []any) {
 	// Generate UPDATE `db`.`table` SET
 	first := changes[0]
 	buf.WriteString("UPDATE ")
-	buf.WriteString(first.targetTable.QuoteString())
+	buf.WriteString(first.targetTable.QuoteTargetString())
 	buf.WriteString(" SET ")
 
 	// Pre-generate essential sub statements used after WHEN and in the final WHERE.
