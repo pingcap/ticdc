@@ -244,7 +244,7 @@ func (c *consumer) getNewFiles(
 		origDMLIdxMap[k] = m
 	}
 
-	err := c.externalStorage.WalkDir(ctx, opt, func(path string, size int64) error {
+	err := c.externalStorage.WalkDir(ctx, opt, func(path string, _ int64) error {
 		if cloudstorage.IsSchemaFile(path) {
 			err := c.parseSchemaFilePath(ctx, path)
 			if err != nil {

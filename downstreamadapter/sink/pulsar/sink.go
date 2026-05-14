@@ -493,7 +493,7 @@ func (s *sink) batchEncodeRun(ctx context.Context) error {
 
 // batch collects a batch of messages from w.msgChan into buffer.
 // Note: It will block until at least one message is received.
-func (s *sink) batch(ctx context.Context, buffer []*commonEvent.MQRowEvent, ticker *time.Ticker) ([]*commonEvent.MQRowEvent, error) {
+func (s *sink) batch(ctx context.Context, buffer []*commonEvent.MQRowEvent, _ *time.Ticker) ([]*commonEvent.MQRowEvent, error) {
 	// We need to receive at least one message or be interrupted,
 	// otherwise it will lead to idling.
 	select {
