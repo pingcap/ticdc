@@ -604,6 +604,37 @@ func buildPersistedDDLEventForDropView(args buildPersistedDDLEventFuncArgs) Pers
 	return event
 }
 
+<<<<<<< HEAD
+=======
+// TiDB persists the normalized SELECT body of a view in
+// event.TableInfo.View.SelectStmt when executing CREATE VIEW, so this field can
+// carry fully resolved source-table references even if job.Query keeps the
+// original session-level text.
+// Field definition:
+// https://github.com/pingcap/tidb/blob/8f2630e53d5d/pkg/meta/model/table.go#L762-L770
+// Value assignment in CREATE VIEW:
+// https://github.com/pingcap/tidb/blob/8f2630e53d5d/pkg/ddl/create_table.go#L1668-L1678
+func normalizeCreateViewQueryWithStoredSelect(event *PersistedDDLEvent) {
+	if event.TableInfo == nil || event.TableInfo.View == nil {
+		return
+	}
+
+	query, err := commonEvent.NormalizeCreateViewQueryWithStoredSelect(
+		event.Query,
+		event.TableInfo.View.SelectStmt,
+		event.SchemaName,
+	)
+	if err != nil {
+		log.Warn("normalize create view query with stored select failed",
+			zap.String("query", event.Query),
+			zap.String("selectStmt", event.TableInfo.View.SelectStmt),
+			zap.Error(err))
+		return
+	}
+	event.Query = query
+}
+
+>>>>>>> 136d2d392 (logservice: qualify CREATE VIEW column references (#5044))
 func buildPersistedDDLEventForCreateTable(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
 	event := buildPersistedDDLEventCommon(args)
 	event.SchemaName = getSchemaName(args.databaseMap, event.SchemaID)
