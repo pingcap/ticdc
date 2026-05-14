@@ -28,6 +28,22 @@ import (
 // TiDB persists the normalized SELECT body of a view in TableInfo.View.SelectStmt
 // when executing CREATE VIEW, so this field can carry resolved source-table
 // references even if job.Query keeps the original session-level text.
+//
+// Example:
+//
+//	query            = "CREATE VIEW `target_db`.`v` AS SELECT `id` FROM `users`"
+//	storedSelectStmt = "SELECT `id` FROM `source_db`.`users`"
+//	currentSchema    = "target_db"
+//
+//					 → "CREATE VIEW `target_db`.`v` AS SELECT `id` FROM `source_db`.`users`"
+//
+// Example:
+//
+//	query            = "CREATE VIEW `other_db`.`v` AS SELECT `orders`.`id` FROM `orders`"
+//	storedSelectStmt = "SELECT `orders`.`id` AS `id` FROM `source_db`.`orders`"
+//	currentSchema    = "other_db"
+//
+//	                 → "CREATE VIEW `other_db`.`v` AS SELECT `source_db`.`orders`.`id` AS `id` FROM `source_db`.`orders`"
 func NormalizeCreateViewQueryWithStoredSelect(query string, storedSelectStmt string, currentSchema string) (string, error) {
 	if query == "" || storedSelectStmt == "" {
 		return query, nil

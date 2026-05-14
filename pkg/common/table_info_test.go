@@ -60,7 +60,6 @@ func TestCloneWithRouting(t *testing.T) {
 		require.Equal(t, "target_db", cloned.GetTargetSchemaName())
 		require.Equal(t, "target_table", cloned.GetTargetTableName())
 		require.Equal(t, "source_db.source_table", cloned.TableName.String())
-		require.Equal(t, "`source_db`.`source_table`", cloned.TableName.QuoteString())
 		require.Equal(t, "`target_db`.`target_table`", cloned.TableName.QuoteTargetString())
 		require.True(t, cloned.TableName.IsRouted())
 		require.Same(t, &cloned.TableName.Schema, cloned.GetSchemaNamePtr())

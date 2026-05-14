@@ -169,10 +169,10 @@ func (r Router) ApplyToDDLEvent(ddl *commonEvent.DDLEvent) (*commonEvent.DDLEven
 	}
 
 	if multipleTableInfos == nil {
-		multipleTableInfos = ddl.MultipleTableInfos
+		multipleTableInfos = append([]*common.TableInfo(nil), ddl.MultipleTableInfos...)
 	}
 	if blockedTableNames == nil {
-		blockedTableNames = ddl.BlockedTableNames
+		blockedTableNames = append([]commonEvent.SchemaTableName(nil), ddl.BlockedTableNames...)
 	}
 
 	log.Info("ddl query rewritten with routing",
