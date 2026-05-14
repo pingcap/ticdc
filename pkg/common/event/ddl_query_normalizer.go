@@ -59,10 +59,8 @@ func NormalizeCreateViewQueryWithStoredSelect(query string, storedSelectStmt str
 }
 
 type createViewSelectNormalizer struct {
-	currentSchema     string
-	currentSchemaOnly bool
-	changed           bool
-	scopes            []createViewSelectScope
+	changed bool
+	scopes  []createViewSelectScope
 }
 
 type createViewSelectScope struct {
@@ -76,23 +74,27 @@ type createViewSelectScope struct {
 // schema-qualified references: `orders`.`id` with FROM `source_db`.`orders`
 // becomes `source_db`.`orders`.`id`. Explicit alias references are preserved.
 func normalizeCreateViewSelect(selectStmt ast.StmtNode, currentSchema string) bool {
+	currentSchemaOnly := createViewSelectUsesCurrentSchemaOnly(selectStmt, currentSchema)
 	normalizer := &createViewSelectNormalizer{
-		currentSchema:     currentSchema,
-		currentSchemaOnly: true,
-		scopes:            make([]createViewSelectScope, 0),
+		scopes: make([]createViewSelectScope, 0),
 	}
 	selectStmt.Accept(normalizer)
-	return !normalizer.currentSchemaOnly || normalizer.changed
+	return !currentSchemaOnly || normalizer.changed
+}
+
+func createViewSelectUsesCurrentSchemaOnly(selectStmt ast.StmtNode, currentSchema string) bool {
+	for _, schema := range extractTableSchemas(selectStmt) {
+		if schema != "" && !strings.EqualFold(schema, currentSchema) {
+			return false
+		}
+	}
+	return true
 }
 
 func (n *createViewSelectNormalizer) Enter(in ast.Node) (ast.Node, bool) {
 	switch v := in.(type) {
 	case *ast.SelectStmt:
 		n.scopes = append(n.scopes, buildCreateViewSelectScope(v))
-	case *ast.TableName:
-		if v.Schema.O != "" && !strings.EqualFold(v.Schema.O, n.currentSchema) {
-			n.currentSchemaOnly = false
-		}
 	case *ast.ColumnName:
 		n.qualifyColumnName(v)
 	}
@@ -169,4 +171,34 @@ func collectCreateViewSelectTables(node ast.ResultSetNode, scope *createViewSele
 		}
 		scope.tableByName[tableKey] = tableName.Schema.O
 	}
+}
+
+type tableSchemaExtractor struct {
+	schemas []string
+}
+
+func (e *tableSchemaExtractor) Enter(in ast.Node) (ast.Node, bool) {
+	if t, ok := in.(*ast.TableName); ok {
+		e.schemas = append(e.schemas, t.Schema.O)
+		return in, true
+	}
+	return in, false
+}
+
+func (e *tableSchemaExtractor) Leave(in ast.Node) (ast.Node, bool) {
+	return in, true
+}
+
+// extractTableSchemas returns schema qualifiers from all *ast.TableName nodes in
+// AST visit order. Unqualified tables contribute an empty schema name.
+func extractTableSchemas(node ast.Node) []string {
+	if node == nil {
+		return nil
+	}
+
+	extractor := &tableSchemaExtractor{
+		schemas: make([]string, 0),
+	}
+	node.Accept(extractor)
+	return extractor.schemas
 }
