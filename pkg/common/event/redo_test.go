@@ -97,7 +97,6 @@ func TestRedoUsesRoutedTableNames(t *testing.T) {
 	require.Equal(t, "target_table", decoded.TableInfo.GetTargetTableName())
 }
 
-
 // TestRedoDDLEventToRedoLogWithoutRouting verifies that a DDL event with a
 // non-routed TableInfo writes the source schema/table names into the redo log.
 func TestRedoDDLEventToRedoLogWithoutRouting(t *testing.T) {
