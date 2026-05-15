@@ -20,7 +20,7 @@ import (
 
 	"github.com/benbjohnson/clock"
 	"github.com/pingcap/log"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/security"
@@ -89,7 +89,7 @@ func (m *Manager) AddDefaultUpstream(
 	if err := m.initUpstreamFunc(m.ctx, up, &m.nodeCfg); err != nil {
 		up.err.Store(err)
 		up.Close()
-		return nil, cerror.Trace(err)
+		return nil, errors.Trace(err)
 	}
 	m.defaultUpstream = up
 	m.ups.Store(up.ID, up)
@@ -100,7 +100,7 @@ func (m *Manager) AddDefaultUpstream(
 // GetDefaultUpstream returns the default upstream
 func (m *Manager) GetDefaultUpstream() (*Upstream, error) {
 	if m.defaultUpstream == nil {
-		return nil, cerror.ErrUpstreamNotFound
+		return nil, errors.ErrUpstreamNotFound
 	}
 	return m.defaultUpstream, nil
 }
@@ -186,7 +186,7 @@ func (m *Manager) Close() {
 // Visit on each upstream, return error on the first
 func (m *Manager) Visit(visitor func(up *Upstream) error) error {
 	var err error
-	m.ups.Range(func(k, v interface{}) bool {
+	m.ups.Range(func(_, v interface{}) bool {
 		err = visitor(v.(*Upstream))
 		return err == nil
 	})

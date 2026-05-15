@@ -141,7 +141,6 @@ func (s *EventTestHelper) storeTableInfo(schemaName string, tableInfo *timodel.T
 	if info == nil {
 		return
 	}
-	info.InitPrivateFields()
 	key := toTableInfosKey(info.GetSchemaName(), info.GetTableName())
 	if tableInfo.Partition != nil {
 		if _, ok := s.partitionIDs[key]; !ok {
@@ -330,7 +329,7 @@ func (s *EventTestHelper) fillDDLEventMetadata(ddlEvent *DDLEvent, job *timodel.
 		ddlEvent.TableNameChange = &TableNameChange{
 			AddName: []SchemaTableName{{SchemaName: ddlEvent.SchemaName, TableName: ddlEvent.TableName}},
 		}
-		s.fillCreateTableLikeBlockedTableNames(ddlEvent)
+		s.fillCreateTableLikeBlockedTableNames(ddlEvent, job)
 	case timodel.ActionRecoverTable:
 		ddlEvent.TableNameChange = &TableNameChange{
 			AddName: []SchemaTableName{{SchemaName: ddlEvent.SchemaName, TableName: ddlEvent.TableName}},
@@ -346,8 +345,10 @@ func (s *EventTestHelper) fillDDLEventMetadata(ddlEvent *DDLEvent, job *timodel.
 		s.fillRenameTableEventMetadata(ddlEvent)
 	case timodel.ActionRenameTables:
 		s.fillRenameTablesEventMetadata(ddlEvent, job)
+	case timodel.ActionCreateView:
+		s.normalizeCreateViewQueryWithStoredSelect(ddlEvent)
 	case timodel.ActionCreateSchema, timodel.ActionModifySchemaCharsetAndCollate,
-		timodel.ActionCreateView, timodel.ActionDropView:
+		timodel.ActionDropView:
 	default:
 		if ddlEvent.SchemaName != "" && ddlEvent.TableName != "" {
 			ddlEvent.BlockedTableNames = []SchemaTableName{{SchemaName: ddlEvent.SchemaName, TableName: ddlEvent.TableName}}
@@ -355,7 +356,13 @@ func (s *EventTestHelper) fillDDLEventMetadata(ddlEvent *DDLEvent, job *timodel.
 	}
 }
 
-func (s *EventTestHelper) fillCreateTableLikeBlockedTableNames(ddlEvent *DDLEvent) {
+// fillCreateTableLikeBlockedTableNames populates BlockedTableNames for a
+// CREATE TABLE ... LIKE event. It first checks the query for an explicit
+// refer schema, then falls back to job.InvolvingSchemaInfo, and finally to
+// the event SchemaName. When the refer schema differs from the event schema,
+// it rewrites the query to include the qualified schema name so that
+// downstream routing can correctly resolve the cross-schema reference.
+func (s *EventTestHelper) fillCreateTableLikeBlockedTableNames(ddlEvent *DDLEvent, job *timodel.Job) {
 	stmt, err := parser.New().ParseOneStmt(ddlEvent.Query, "", "")
 	require.NoError(s.t, err)
 
@@ -366,12 +373,70 @@ func (s *EventTestHelper) fillCreateTableLikeBlockedTableNames(ddlEvent *DDLEven
 
 	refSchema := createStmt.ReferTable.Schema.O
 	if refSchema == "" {
+		refSchema = findCreateTableLikeReferSchema(job, ddlEvent.SchemaName, ddlEvent.TableName, createStmt.ReferTable.Name.O)
+	}
+	if refSchema == "" && createStmt.Table != nil && createStmt.Table.Schema.O == "" {
 		refSchema = ddlEvent.SchemaName
+	}
+	if refSchema == "" {
+		return
+	}
+	if createStmt.ReferTable.Schema.O == "" && !strings.EqualFold(refSchema, ddlEvent.SchemaName) {
+		createStmt.ReferTable.Schema = ast.NewCIStr(refSchema)
+		query, err := Restore(createStmt)
+		require.NoError(s.t, err)
+		ddlEvent.Query = query
 	}
 	ddlEvent.BlockedTableNames = []SchemaTableName{{
 		SchemaName: refSchema,
 		TableName:  createStmt.ReferTable.Name.O,
 	}}
+}
+
+func (s *EventTestHelper) normalizeCreateViewQueryWithStoredSelect(ddlEvent *DDLEvent) {
+	if ddlEvent.TableInfo == nil || ddlEvent.TableInfo.View == nil {
+		return
+	}
+
+	query, err := NormalizeCreateViewQueryWithStoredSelect(
+		ddlEvent.Query,
+		ddlEvent.TableInfo.View.SelectStmt,
+		ddlEvent.SchemaName,
+	)
+	require.NoError(s.t, err)
+	ddlEvent.Query = query
+}
+
+// findCreateTableLikeReferSchema resolves the source schema for CREATE TABLE
+// ... LIKE by inspecting job.InvolvingSchemaInfo.
+//
+// Example — "CREATE TABLE extra.t2 LIKE t1" with session in db1:
+//
+//	InvolvingSchemaInfo = [
+//	    {Database: "extra", Table: "t2"},               // target (exclusive)
+//	    {Database: "db1",   Table: "t1", SharedInvolving}, // refer source
+//	]
+//	→ returns "db1" (SharedInvolving match on table "t1")
+//
+// SharedInvolving entries are preferred because TiDB marks the LIKE source
+// table with this mode. Without the mode check, the DDL target table may be
+// mistaken for the refer table when both happen to share the same name.
+func findCreateTableLikeReferSchema(job *timodel.Job, targetSchema, targetTable, referTable string) string {
+	for _, info := range job.InvolvingSchemaInfo {
+		if info.Mode == timodel.SharedInvolving && strings.EqualFold(info.Table, referTable) {
+			return info.Database
+		}
+	}
+	for _, info := range job.InvolvingSchemaInfo {
+		if !strings.EqualFold(info.Table, referTable) {
+			continue
+		}
+		if strings.EqualFold(info.Database, targetSchema) && strings.EqualFold(info.Table, targetTable) {
+			continue
+		}
+		return info.Database
+	}
+	return ""
 }
 
 func (s *EventTestHelper) fillCreateTablesEventMetadata(ddlEvent *DDLEvent, job *timodel.Job) {

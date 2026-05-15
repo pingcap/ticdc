@@ -23,7 +23,6 @@ import (
 
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-	cerrors "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	pd "github.com/tikv/pd/client"
 	pdhttp "github.com/tikv/pd/client/http"
@@ -55,7 +54,7 @@ func ValidateActiveActiveTSOIndexes(
 	changefeedCfg *config.ChangefeedConfig,
 ) error {
 	if changefeedCfg == nil {
-		return cerrors.ErrActiveActiveTSOIndexIncompatible.GenWithStackByArgs("changefeed config is nil")
+		return errors.ErrActiveActiveTSOIndexIncompatible.GenWithStackByArgs("changefeed config is nil")
 	}
 	if !changefeedCfg.EnableActiveActive {
 		return nil
@@ -71,8 +70,8 @@ func ValidateActiveActiveTSOIndexes(
 
 	downUnique, downMax, err := getDownstreamTSOIndexes(ctx, changefeedCfg, sinkURI)
 	if err != nil {
-		return cerrors.WrapError(
-			cerrors.ErrActiveActiveTSOIndexIncompatible,
+		return errors.WrapError(
+			errors.ErrActiveActiveTSOIndexIncompatible,
 			err,
 			"failed to read downstream tso index config",
 		)
@@ -80,8 +79,8 @@ func ValidateActiveActiveTSOIndexes(
 
 	upUnique, upMax, err := getUpstreamTSOIndexes(ctx, upPD)
 	if err != nil {
-		return cerrors.WrapError(
-			cerrors.ErrActiveActiveTSOIndexIncompatible,
+		return errors.WrapError(
+			errors.ErrActiveActiveTSOIndexIncompatible,
 			err,
 			fmt.Sprintf("failed to read upstream tso index config, downstream unique=%d, downstream max=%d",
 				downUnique, downMax),
@@ -92,13 +91,13 @@ func ValidateActiveActiveTSOIndexes(
 	// downstream to avoid TSO collisions, while `tso-max-index` must match to guarantee
 	// the same logical index range.
 	if upUnique == downUnique {
-		return cerrors.ErrActiveActiveTSOIndexIncompatible.GenWithStackByArgs(
+		return errors.ErrActiveActiveTSOIndexIncompatible.GenWithStackByArgs(
 			fmt.Sprintf("active active tso index mismatch, upstream and downstream share the same tso-unique-index=%d, upstream max=%d, downstream max=%d",
 				upUnique, upMax, downMax),
 		)
 	}
 	if upMax != downMax {
-		return cerrors.ErrActiveActiveTSOIndexIncompatible.GenWithStackByArgs(
+		return errors.ErrActiveActiveTSOIndexIncompatible.GenWithStackByArgs(
 			fmt.Sprintf("active active tso index mismatch, upstream unique=%d, upstream max=%d, downstream unique=%d, downstream max=%d",
 				upUnique, upMax, downUnique, downMax),
 		)
@@ -121,18 +120,18 @@ func getDownstreamTSOIndexes(
 	sinkURI *url.URL,
 ) (unique int64, max int64, err error) {
 	if changefeedCfg == nil {
-		return 0, 0, cerrors.New("changefeed config is nil")
+		return 0, 0, errors.New("changefeed config is nil")
 	}
 
 	mysqlCfg, db, err := newMySQLConfigAndDBFn(ctx, changefeedCfg.ChangefeedID, sinkURI, changefeedCfg)
 	if err != nil {
-		return 0, 0, cerrors.Trace(err)
+		return 0, 0, errors.Trace(err)
 	}
 	defer func() { _ = db.Close() }()
 
 	readTimeout, err := time.ParseDuration(mysqlCfg.ReadTimeout)
 	if err != nil {
-		return 0, 0, cerrors.Trace(err)
+		return 0, 0, errors.Trace(err)
 	}
 
 	// Bound the downstream query by the sink read timeout to keep the validation
@@ -142,7 +141,7 @@ func getDownstreamTSOIndexes(
 
 	rows, err := db.QueryContext(queryCtx, showPDConfigQuery)
 	if err != nil {
-		return 0, 0, cerrors.Trace(err)
+		return 0, 0, errors.Trace(err)
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -157,13 +156,13 @@ func getDownstreamTSOIndexes(
 		// Columns: Type | Instance | Name | Value
 		var typ, instance, name, value string
 		if err := rows.Scan(&typ, &instance, &name, &value); err != nil {
-			return 0, 0, cerrors.Trace(err)
+			return 0, 0, errors.Trace(err)
 		}
 		switch name {
 		case pdTSOUniqueIndexKey:
 			parsed, err := strconv.ParseInt(value, 10, 64)
 			if err != nil {
-				return 0, 0, cerrors.Trace(err)
+				return 0, 0, errors.Trace(err)
 			}
 			if !uniqueSet {
 				unique = parsed
@@ -171,12 +170,12 @@ func getDownstreamTSOIndexes(
 				continue
 			}
 			if unique != parsed {
-				return 0, 0, cerrors.New("downstream TiDB reports inconsistent tso-unique-index across instances")
+				return 0, 0, errors.New("downstream TiDB reports inconsistent tso-unique-index across instances")
 			}
 		case pdTSOMaxIndexKey:
 			parsed, err := strconv.ParseInt(value, 10, 64)
 			if err != nil {
-				return 0, 0, cerrors.Trace(err)
+				return 0, 0, errors.Trace(err)
 			}
 			if !maxSet {
 				max = parsed
@@ -184,20 +183,20 @@ func getDownstreamTSOIndexes(
 				continue
 			}
 			if max != parsed {
-				return 0, 0, cerrors.New("downstream TiDB reports inconsistent tso-max-index across instances")
+				return 0, 0, errors.New("downstream TiDB reports inconsistent tso-max-index across instances")
 			}
 		default:
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return 0, 0, cerrors.Trace(err)
+		return 0, 0, errors.Trace(err)
 	}
 
 	if !uniqueSet {
-		return 0, 0, cerrors.Errorf("downstream TiDB does not report %s", pdTSOUniqueIndexKey)
+		return 0, 0, errors.Errorf("downstream TiDB does not report %s", pdTSOUniqueIndexKey)
 	}
 	if !maxSet {
-		return 0, 0, cerrors.Errorf("downstream TiDB does not report %s", pdTSOMaxIndexKey)
+		return 0, 0, errors.Errorf("downstream TiDB does not report %s", pdTSOMaxIndexKey)
 	}
 	return unique, max, nil
 }
@@ -215,27 +214,27 @@ func getUpstreamTSOIndexes(
 	upPD pd.Client,
 ) (unique int64, max int64, err error) {
 	if upPD == nil {
-		return 0, 0, cerrors.New("pd client is nil")
+		return 0, 0, errors.New("pd client is nil")
 	}
 
 	httpClient, err := newPDHTTPClientFn(upPD)
 	if err != nil {
-		return 0, 0, cerrors.Trace(err)
+		return 0, 0, errors.Trace(err)
 	}
 	defer httpClient.Close()
 
 	cfg, err := httpClient.GetConfig(ctx)
 	if err != nil {
-		return 0, 0, cerrors.Trace(err)
+		return 0, 0, errors.Trace(err)
 	}
 
 	unique, err = parsePDConfigInt64(cfg, pdTSOUniqueIndexKey)
 	if err != nil {
-		return 0, 0, cerrors.Trace(err)
+		return 0, 0, errors.Trace(err)
 	}
 	max, err = parsePDConfigInt64(cfg, pdTSOMaxIndexKey)
 	if err != nil {
-		return 0, 0, cerrors.Trace(err)
+		return 0, 0, errors.Trace(err)
 	}
 	return unique, max, nil
 }
@@ -243,7 +242,7 @@ func getUpstreamTSOIndexes(
 func parsePDConfigInt64(cfg map[string]any, key string) (int64, error) {
 	v, ok := cfg[key]
 	if !ok {
-		return 0, cerrors.Errorf("pd config key not found: %s", key)
+		return 0, errors.Errorf("pd config key not found: %s", key)
 	}
 
 	// PD stores `tso-unique-index` and `tso-max-index` as int64 values.
@@ -263,16 +262,16 @@ func parsePDConfigInt64(cfg map[string]any, key string) (int64, error) {
 		// on overflow.
 		const maxExactIntInFloat64 = float64(1 << 53)
 		if math.IsNaN(x) || math.IsInf(x, 0) {
-			return 0, cerrors.New("value is not a finite number")
+			return 0, errors.New("value is not a finite number")
 		}
 		if math.Trunc(x) != x {
-			return 0, cerrors.New("value is not an integer")
+			return 0, errors.New("value is not an integer")
 		}
 		if x > maxExactIntInFloat64 || x < -maxExactIntInFloat64 {
-			return 0, cerrors.Errorf("value for %s exceeds exact integer range for float64", key)
+			return 0, errors.Errorf("value for %s exceeds exact integer range for float64", key)
 		}
 		return int64(x), nil
 	default:
-		return 0, cerrors.Errorf("unexpected value type for %s: %T", key, v)
+		return 0, errors.Errorf("unexpected value type for %s: %T", key, v)
 	}
 }

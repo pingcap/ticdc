@@ -1,5 +1,30 @@
--- Test mixed DDL and DML operations for table route
+-- Test mixed DDL and DML operations for table route.
+DROP DATABASE IF EXISTS source_db;
+DROP DATABASE IF EXISTS source_extra_db;
+CREATE DATABASE source_db;
+CREATE DATABASE source_extra_db;
 USE source_db;
+
+-- ============================================
+-- DDL: CREATE TABLE with initial DML
+-- ============================================
+CREATE TABLE users (
+    id INT PRIMARY KEY,
+    name VARCHAR(100),
+    email VARCHAR(100)
+);
+
+CREATE TABLE orders (
+    id INT PRIMARY KEY,
+    user_id INT,
+    amount DECIMAL(10, 2)
+);
+
+INSERT INTO users VALUES (1, 'Alice', 'alice@example.com');
+INSERT INTO users VALUES (2, 'Bob', 'bob@example.com');
+
+INSERT INTO orders VALUES (1, 1, 100.00);
+INSERT INTO orders VALUES (2, 2, 200.00);
 
 -- ============================================
 -- DML: INSERT more data
@@ -55,6 +80,43 @@ ALTER TABLE users DROP COLUMN created_at;
 ALTER TABLE orders ADD INDEX idx_user_id (user_id);
 
 -- ============================================
+<<<<<<< HEAD
+=======
+-- DDL: CROSS DATABASE
+-- ============================================
+CREATE TABLE `source_extra_db`.`external_users` LIKE `source_db`.`users`;
+INSERT INTO `source_extra_db`.`external_users`
+    SELECT `id`, `name`, `email` FROM `source_db`.`users` WHERE `id` <= 2;
+UPDATE `source_extra_db`.`external_users` SET `email` = 'external_alice@example.com' WHERE `id` = 1;
+
+-- The referenced table `users` is unqualified. It must be resolved with the
+-- session default schema `source_db`, not the explicit target table schema
+-- `source_extra_db`.
+CREATE TABLE `source_extra_db`.`external_users_from_default` LIKE `users`;
+INSERT INTO `source_extra_db`.`external_users_from_default`
+    SELECT `id`, `name`, `email` FROM `source_db`.`users` WHERE `id` IN (1, 3);
+UPDATE `source_extra_db`.`external_users_from_default` SET `email` = 'default_charlie@example.com' WHERE `id` = 3;
+
+-- The view target is in `source_extra_db`, but the unqualified source table
+-- must be resolved from the session default schema `source_db`.
+CREATE VIEW `source_extra_db`.`users_view_from_default` AS
+    SELECT `id`, `name`, `email` FROM `users` WHERE `id` <= 2;
+
+-- TiDB stores the FROM table as `source_db`.`orders`, but keeps the table
+-- qualifier `orders`.`id` unless CDC normalizes it before table routing.
+CREATE VIEW `source_extra_db`.`orders_column_view_from_default` AS
+    SELECT `orders`.`id`, `orders`.`amount` FROM `orders` WHERE `orders`.`id` IN (1, 3);
+
+CREATE TABLE `source_db`.`cross_move_source` (
+    id INT PRIMARY KEY,
+    value VARCHAR(50)
+);
+INSERT INTO `source_db`.`cross_move_source` VALUES (1, 'move_source');
+RENAME TABLE `source_db`.`cross_move_source` TO `source_extra_db`.`cross_move_target`;
+INSERT INTO `source_extra_db`.`cross_move_target` VALUES (2, 'move_target');
+
+-- ============================================
+>>>>>>> master
 -- DDL: RENAME TABLE
 -- ============================================
 CREATE TABLE temp_table (
@@ -70,6 +132,69 @@ INSERT INTO renamed_table VALUES (2, 'test2');
 UPDATE renamed_table SET value = 'updated' WHERE id = 1;
 
 -- ============================================
+<<<<<<< HEAD
+=======
+-- DDL: RENAME TABLE with multiple table pairs
+-- ============================================
+CREATE TABLE multi_rename_a (
+    id INT PRIMARY KEY,
+    value VARCHAR(50)
+);
+CREATE TABLE multi_rename_b (
+    id INT PRIMARY KEY,
+    value VARCHAR(50)
+);
+INSERT INTO multi_rename_a VALUES (1, 'a');
+INSERT INTO multi_rename_b VALUES (1, 'b');
+
+RENAME TABLE multi_rename_a TO multi_rename_a_new, multi_rename_b TO multi_rename_b_new;
+
+INSERT INTO multi_rename_a_new VALUES (2, 'a2');
+UPDATE multi_rename_b_new SET value = 'b2' WHERE id = 1;
+
+-- ============================================
+-- DDL: CREATE VIEW and DROP VIEW
+-- ============================================
+CREATE VIEW `source_db`.`user_order_view` AS
+    SELECT `u`.`id`, `u`.`name`, `o`.`amount`
+    FROM `source_db`.`users` AS `u`
+    JOIN `source_db`.`orders` AS `o` ON `u`.`id` = `o`.`user_id`;
+
+CREATE VIEW `source_db`.`transient_view` AS
+    SELECT `id`, `name` FROM `source_db`.`users`;
+
+DROP VIEW `source_db`.`transient_view`;
+
+-- ============================================
+-- DDL: PARTITION TABLE
+-- ============================================
+CREATE TABLE partitioned_events (
+    id INT,
+    bucket INT NOT NULL,
+    value VARCHAR(50),
+    PRIMARY KEY (id, bucket)
+) PARTITION BY RANGE (bucket) (
+    PARTITION p0 VALUES LESS THAN (10),
+    PARTITION p1 VALUES LESS THAN (20)
+);
+
+INSERT INTO partitioned_events VALUES (1, 5, 'p0');
+INSERT INTO partitioned_events VALUES (2, 15, 'p1');
+ALTER TABLE partitioned_events ADD PARTITION (PARTITION p2 VALUES LESS THAN (30));
+INSERT INTO partitioned_events VALUES (3, 25, 'p2');
+ALTER TABLE partitioned_events TRUNCATE PARTITION p0;
+INSERT INTO partitioned_events VALUES (4, 6, 'p0_after_truncate');
+ALTER TABLE partitioned_events DROP PARTITION p1;
+INSERT INTO partitioned_events VALUES (5, 26, 'p2_more');
+
+-- Partitioned CREATE TABLE ... LIKE with an unqualified source table should
+-- resolve the LIKE source from `source_db`, not from `source_extra_db`.
+CREATE TABLE `source_extra_db`.`partitioned_events_like_from_default` LIKE `partitioned_events`;
+INSERT INTO `source_extra_db`.`partitioned_events_like_from_default` VALUES (6, 6, 'like_p0');
+INSERT INTO `source_extra_db`.`partitioned_events_like_from_default` VALUES (7, 27, 'like_p2');
+
+-- ============================================
+>>>>>>> master
 -- DDL: TRUNCATE TABLE
 -- ============================================
 CREATE TABLE truncate_test (

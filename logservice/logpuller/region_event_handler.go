@@ -169,7 +169,7 @@ func (h *regionEventHandler) GetSize(event regionEvent) int {
 	return event.getSize()
 }
 
-func (h *regionEventHandler) GetArea(path SubscriptionID, dest *subscribedSpan) int {
+func (h *regionEventHandler) GetArea(_ SubscriptionID, _ *subscribedSpan) int {
 	return 0
 }
 
@@ -198,7 +198,7 @@ func (h *regionEventHandler) GetTimestamp(event regionEvent) dynstream.Timestamp
 		return dynstream.Timestamp(event.resolvedTs)
 	}
 }
-func (h *regionEventHandler) IsPaused(event regionEvent) bool { return false }
+func (h *regionEventHandler) IsPaused(_ regionEvent) bool { return false }
 
 func (h *regionEventHandler) GetType(event regionEvent) dynstream.EventType {
 	if event.entries != nil || event.resolvedTs != 0 {

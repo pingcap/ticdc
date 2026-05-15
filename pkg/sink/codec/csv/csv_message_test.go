@@ -95,7 +95,7 @@ var csvTestColumnsGroup = [][]*csvTestColumnTuple{
 			},
 			model.ColumnInfo{
 				ID:        6,
-				FieldType: *setFlag(types.NewFieldType(mysql.TypeTiny), uint(mysql.UnsignedFlag)),
+				FieldType: *setFlag(types.NewFieldType(mysql.TypeTiny), mysql.UnsignedFlag),
 			},
 			uint64(1),
 			config.BinaryEncodingBase64,
@@ -929,11 +929,12 @@ func TestRowChangeEventConversion(t *testing.T) {
 		}
 		e.TableInfo = commonType.WrapTableInfo("test", tidbTableInfo)
 
-		if idx%3 == 0 { // delete operation
+		switch idx % 3 {
+		case 0: // delete operation
 			e.Event.PreRow = chunk.MutRowFromValues(cols...).ToRow()
-		} else if idx%3 == 1 { // insert operation
+		case 1: // insert operation
 			e.Event.Row = chunk.MutRowFromValues(cols...).ToRow()
-		} else { // update operation
+		default: // update operation
 			e.Event.PreRow = chunk.MutRowFromValues(cols...).ToRow()
 			e.Event.Row = chunk.MutRowFromValues(cols...).ToRow()
 		}

@@ -270,7 +270,7 @@ func (c *csvMessage) formatValue(value any, strBuilder *strings.Builder) {
 			c.formatWithEscapes(v, strBuilder)
 		}
 	default:
-		strBuilder.WriteString(fmt.Sprintf("%v", v))
+		fmt.Fprintf(strBuilder, "%v", v)
 	}
 }
 

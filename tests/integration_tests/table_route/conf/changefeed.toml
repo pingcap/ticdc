@@ -2,7 +2,7 @@
 # This tests schema and table routing for MySQL sinks
 
 [filter]
-rules = ['source_db.*']
+rules = ['source_db.*', 'source_extra_db.*']
 
 [sink]
 # Dispatch rules with schema and table routing
@@ -10,4 +10,9 @@ rules = ['source_db.*']
 [[sink.dispatchers]]
 matcher = ['source_db.*']
 target-schema = 'target_db'
+target-table = '{table}_routed'
+
+[[sink.dispatchers]]
+matcher = ['source_extra_db.*']
+target-schema = 'target_extra_db'
 target-table = '{table}_routed'

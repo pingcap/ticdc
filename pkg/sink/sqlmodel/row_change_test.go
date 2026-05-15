@@ -199,6 +199,11 @@ func mockRouteTableInfo(t *testing.T) *common.TableInfo {
 	return mockTableInfoWithSchema(t, "test", "CREATE TABLE t (id INT PRIMARY KEY, name VARCHAR(32))")
 }
 
+func mockRoutedTableInfo(t *testing.T, createTableSQL, targetSchema, targetTable string) (*common.TableInfo, *common.TableInfo) {
+	sourceTableInfo := mockTableInfo(t, createTableSQL)
+	return sourceTableInfo, sourceTableInfo.CloneWithRouting(targetSchema, targetTable)
+}
+
 type dpanicSuite struct {
 	suite.Suite
 }
@@ -249,6 +254,34 @@ func TestNewRowChange(t *testing.T) {
 	expected.whereHandle = nil
 	actual = NewRowChange(source, nil, []interface{}{1, 2}, []interface{}{1, 3}, sourceTI, nil, nil)
 	require.Equal(t, expected, actual)
+}
+
+func TestGenSQLUsesRoutedTargetTable(t *testing.T) {
+	sourceTableInfo, routedTableInfo := mockRoutedTableInfo(
+		t,
+		"CREATE TABLE tb1 (id INT PRIMARY KEY, name INT)",
+		"target_db",
+		"target_tb",
+	)
+
+	sourceTable := &sourceTableInfo.TableName
+	targetTable := &routedTableInfo.TableName
+
+	insertChange := NewRowChange(sourceTable, targetTable, nil, []interface{}{1, 2}, sourceTableInfo, routedTableInfo, nil)
+	insertSQL, _ := insertChange.GenSQL(DMLInsert)
+	require.Contains(t, insertSQL, "`target_db`.`target_tb`")
+	require.NotContains(t, insertSQL, "`db`.`tb1`")
+	require.Equal(t, "`target_db`.`target_tb`", insertChange.TargetTableID())
+
+	deleteChange := NewRowChange(sourceTable, targetTable, []interface{}{1, 2}, nil, sourceTableInfo, routedTableInfo, nil)
+	deleteSQL, _ := deleteChange.GenSQL(DMLDelete)
+	require.Contains(t, deleteSQL, "DELETE FROM `target_db`.`target_tb`")
+	require.NotContains(t, deleteSQL, "`db`.`tb1`")
+
+	updateChange := NewRowChange(sourceTable, targetTable, []interface{}{1, 2}, []interface{}{1, 3}, sourceTableInfo, routedTableInfo, nil)
+	updateSQL, _ := updateChange.GenSQL(DMLUpdate)
+	require.Contains(t, updateSQL, "UPDATE `target_db`.`target_tb`")
+	require.NotContains(t, updateSQL, "`db`.`tb1`")
 }
 
 func (s *dpanicSuite) TestRowChangeType() {

@@ -25,12 +25,15 @@ import (
 // EncryptionManager is the main interface for encryption/decryption operations
 type EncryptionManager interface {
 	// EncryptData encrypts data for a keyspace
-	// Returns encrypted data with header, or original data if encryption is not enabled
+	// Returns a value that has passed through the encryption layer and is wrapped
+	// with a 4-byte header. The payload is encrypted when a data key is available,
+	// or left plaintext with a version-0 header otherwise.
 	EncryptData(ctx context.Context, keyspaceID uint32, data []byte) ([]byte, error)
 
 	// DecryptData decrypts data for a keyspace
-	// Automatically detects if data is encrypted and handles accordingly
-	DecryptData(ctx context.Context, keyspaceID uint32, encryptedData []byte) ([]byte, error)
+	// The caller must ensure the key marks this value as passing through the
+	// encryption layer, so the value must carry the 4-byte encryption header.
+	DecryptData(ctx context.Context, keyspaceID uint32, layerData []byte) ([]byte, error)
 }
 
 type encryptionManager struct {
@@ -59,7 +62,7 @@ func (m *encryptionManager) EncryptData(ctx context.Context, keyspaceID uint32, 
 			log.Warn("failed to get current data key, degrade to plaintext",
 				zap.Uint32("keyspaceID", keyspaceID),
 				zap.Error(err))
-			return data, nil
+			return EncodeUnencryptedData(data), nil
 		}
 		log.Error("failed to get current data key",
 			zap.Uint32("keyspaceID", keyspaceID),
@@ -70,7 +73,7 @@ func (m *encryptionManager) EncryptData(ctx context.Context, keyspaceID uint32, 
 	if len(dataKey) == 0 {
 		log.Debug("encryption not enabled for keyspace",
 			zap.Uint32("keyspaceID", keyspaceID))
-		return data, nil
+		return EncodeUnencryptedData(data), nil
 	}
 
 	cipherImpl := NewAES256CTRCipher()
@@ -118,29 +121,39 @@ func (m *encryptionManager) EncryptData(ctx context.Context, keyspaceID uint32, 
 	return result, nil
 }
 
-// DecryptData decrypts data for a keyspace
-func (m *encryptionManager) DecryptData(ctx context.Context, keyspaceID uint32, encryptedData []byte) ([]byte, error) {
-	// Check if data is encrypted
-	if !IsEncrypted(encryptedData) {
-		// Data is not encrypted, return as-is (backward compatibility)
-		log.Debug("data is not encrypted",
-			zap.Uint32("keyspaceID", keyspaceID))
-		return encryptedData, nil
+func decodeEncryptionLayerData(layerData []byte) (byte, string, []byte, error) {
+	version, dataKeyID, payload, err := DecodeEncryptedData(layerData)
+	if err != nil {
+		return 0, "", nil, err
 	}
 
-	// Decode encryption header
-	version, dataKeyID, dataWithIV, err := DecodeEncryptedData(encryptedData)
+	if version == VersionUnencrypted {
+		if !dataKeyIDIsZero(layerData) {
+			return 0, "", nil, cerrors.ErrDecodeFailed.GenWithStackByArgs("invalid unencrypted data header")
+		}
+		return version, "", payload, nil
+	}
+
+	if dataKeyIDIsZero(layerData) {
+		return 0, "", nil, cerrors.ErrDecodeFailed.GenWithStackByArgs("invalid encrypted data header")
+	}
+
+	return version, dataKeyID, payload, nil
+}
+
+// DecryptData decrypts data for a keyspace
+func (m *encryptionManager) DecryptData(ctx context.Context, keyspaceID uint32, layerData []byte) ([]byte, error) {
+	version, dataKeyID, payload, err := decodeEncryptionLayerData(layerData)
 	if err != nil {
-		log.Warn("failed to decode encrypted data header",
+		log.Warn("failed to decode encryption layer data",
 			zap.Uint32("keyspaceID", keyspaceID),
-			zap.Int("encryptedSize", len(encryptedData)),
+			zap.Int("valueSize", len(layerData)),
 			zap.Error(err))
 		return nil, cerrors.ErrDecryptionFailed.Wrap(err)
 	}
 
 	if version == VersionUnencrypted {
-		// Should not happen if IsEncrypted returned true, but handle it anyway
-		return dataWithIV, nil
+		return payload, nil
 	}
 
 	dataKey, err := m.metaManager.GetDataKey(ctx, keyspaceID, dataKeyID)
@@ -165,18 +178,18 @@ func (m *encryptionManager) DecryptData(ctx context.Context, keyspaceID uint32, 
 
 	// Extract IV from the beginning of data
 	ivSize := cipherImpl.IVSize()
-	if len(dataWithIV) < ivSize {
+	if len(payload) < ivSize {
 		log.Warn("encrypted data too short for IV",
 			zap.Uint32("keyspaceID", keyspaceID),
 			zap.Uint8("version", version),
 			zap.Binary("dataKeyID", []byte(dataKeyID)),
-			zap.Int("dataWithIVSize", len(dataWithIV)),
+			zap.Int("dataWithIVSize", len(payload)),
 			zap.Int("expectedIVSize", ivSize))
 		return nil, cerrors.ErrDecryptionFailed.GenWithStackByArgs("data too short for IV")
 	}
 
-	iv := dataWithIV[:ivSize]
-	encryptedDataOnly := dataWithIV[ivSize:]
+	iv := payload[:ivSize]
+	encryptedDataOnly := payload[ivSize:]
 
 	// Decrypt data
 	plaintext, err := cipherImpl.Decrypt(encryptedDataOnly, dataKey, iv)
@@ -192,7 +205,7 @@ func (m *encryptionManager) DecryptData(ctx context.Context, keyspaceID uint32, 
 	log.Debug("data decrypted successfully",
 		zap.Uint32("keyspaceID", keyspaceID),
 		zap.String("dataKeyID", dataKeyID),
-		zap.Int("encryptedSize", len(encryptedData)),
+		zap.Int("encryptedSize", len(layerData)),
 		zap.Int("plaintextSize", len(plaintext)))
 
 	return plaintext, nil

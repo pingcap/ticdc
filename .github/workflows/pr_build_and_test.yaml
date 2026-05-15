@@ -36,6 +36,8 @@ jobs:
     steps:
       - name: Check out code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Go environment
         uses: actions/setup-go@v6
@@ -51,6 +53,9 @@ jobs:
 
       - name: Check
         run: make check
+
+      - name: Lint
+        run: make check-static LINT_NEW_FROM_REV="${{ github.event.pull_request.base.sha }}"
 
   classic_build_and_test:
     if: >-

@@ -53,6 +53,25 @@ type changefeedErrorMetricLabels struct {
 	message    string
 }
 
+func isUnchangedRuntimeState(info *config.ChangeFeedInfo, state config.FeedState, err *config.RunningError) bool {
+	if info == nil {
+		return true
+	}
+	if info.State != state {
+		return false
+	}
+	return sameRunningErrorSignature(info.Error, err)
+}
+
+func sameRunningErrorSignature(lhs *config.RunningError, rhs *config.RunningError) bool {
+	if lhs == nil || rhs == nil {
+		return lhs == rhs
+	}
+	return lhs.Addr == rhs.Addr &&
+		lhs.Code == rhs.Code &&
+		lhs.Message == rhs.Message
+}
+
 func (l changefeedErrorMetricLabels) labelValues() []string {
 	return []string{l.keyspace, l.changefeed, l.state, l.code, l.message}
 }

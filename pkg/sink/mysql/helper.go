@@ -28,6 +28,7 @@ import (
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common/event"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/retry"
 	"github.com/pingcap/tidb/br/pkg/version"
@@ -53,13 +54,13 @@ LIMIT 1;
 // Ref: https://github.com/pingcap/tidb/issues/55725
 const checkRunningAddIndexSQLForOldVersion = `
 ADMIN SHOW DDL JOBS 1
-WHERE DB_NAME = "%s" 
+WHERE DB_NAME = "%s"
     AND TABLE_NAME = "%s"
     AND JOB_TYPE LIKE "add index%%"
     AND (STATE = "running" OR STATE = "queueing");
 `
 
-const checkRunningSQL = `SELECT * FROM information_schema.ddl_jobs 
+const checkRunningSQL = `SELECT * FROM information_schema.ddl_jobs
 	WHERE CREATE_TIME >= "%s" AND QUERY = "%s";`
 
 // CheckIfBDRModeIsSupported checks if the downstream supports set tidb_cdc_write_source variable
@@ -69,8 +70,8 @@ func CheckIfBDRModeIsSupported(ctx context.Context, db *sql.DB) (bool, error) {
 	query := "SET SESSION tidb_cdc_write_source = 1"
 	_, err := db.ExecContext(ctx, query)
 	if err != nil {
-		if mysqlErr, ok := errors.Cause(err).(*dmysql.MySQLError); ok &&
-			mysqlErr.Number == mysql.ErrUnknownSystemVariable {
+		var mysqlErr *dmysql.MySQLError
+		if errors.As(errors.Cause(err), &mysqlErr) && mysqlErr.Number == mysql.ErrUnknownSystemVariable {
 			return false, nil
 		}
 		return false, err
@@ -188,7 +189,8 @@ func GetTestDB(dbConfig *dmysql.Config) (*sql.DB, error) {
 	testDB, err := CreateMysqlDBConn(dbConfig.FormatDSN())
 	if err != nil {
 		// If access is denied and password is encoded by base64, try to decoded password.
-		if mysqlErr, ok := errors.Cause(err).(*dmysql.MySQLError); ok && mysqlErr.Number == mysql.ErrAccessDenied {
+		var mysqlErr *dmysql.MySQLError
+		if errors.As(errors.Cause(err), &mysqlErr) && mysqlErr.Number == mysql.ErrAccessDenied {
 			if dePassword, decodeErr := base64.StdEncoding.DecodeString(password); decodeErr == nil && string(dePassword) != password {
 				dbConfig.Passwd = string(dePassword)
 				testDB, err = CreateMysqlDBConn(dbConfig.FormatDSN())
@@ -203,9 +205,8 @@ func checkTiDBVariable(db *sql.DB, variableName, defaultValue string) (string, e
 	var value string
 	querySQL := fmt.Sprintf("show session variables like '%s';", variableName)
 	err := db.QueryRowContext(context.Background(), querySQL).Scan(&name, &value)
-	if err != nil && err != sql.ErrNoRows {
-		errMsg := "fail to query session variable " + variableName
-		return "", errors.ErrMySQLQueryError.Wrap(err).GenWithStack(errMsg)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return "", errors.WrapError(errors.ErrMySQLQueryError, err, "fail to query session variable %s", variableName)
 	}
 	// session variable works, use given default value
 	if err == nil {
@@ -308,14 +309,13 @@ func checkCharsetSupport(db *sql.DB, charsetName string) (bool, error) {
 	querySQL := "select character_set_name from information_schema.character_sets " +
 		"where character_set_name = '" + charsetName + "';"
 	err = db.QueryRowContext(context.Background(), querySQL).Scan(&characterSetName)
-	if err != nil && err != sql.ErrNoRows {
-		return false, errors.WrapError(errors.ErrMySQLQueryError, err)
+	if err == nil {
+		return true, nil
 	}
-	if err != nil {
+	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
-
-	return true, nil
+	return false, errors.WrapError(errors.ErrMySQLQueryError, err)
 }
 
 // return dsn
@@ -330,7 +330,9 @@ func GenerateDSN(ctx context.Context, cfg *Config) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer testDB.Close()
+	defer func() {
+		_ = testDB.Close()
+	}()
 
 	// we use default sql mode for downstream because all dmls generated and ddls in ticdc
 	// are based on default sql mode.
@@ -404,8 +406,8 @@ func CreateMysqlDBConn(dsnStr string) (*sql.DB, error) {
 	return db, nil
 }
 
-func needSwitchDB(ddlEvent *event.DDLEvent) bool {
-	if len(ddlEvent.GetTargetSchemaName()) == 0 {
+func needSwitchDB(event *commonEvent.DDLEvent) bool {
+	if len(event.GetTargetSchemaName()) == 0 {
 		return false
 	}
 	if ddlEvent.GetDDLType() == timodel.ActionCreateSchema || ddlEvent.GetDDLType() == timodel.ActionDropSchema {
@@ -468,8 +470,9 @@ func isRetryableDMLError(err error) bool {
 	return true
 }
 
-func getSQLErrCode(err error) (uint16, bool) {
-	mysqlErr, ok := errors.Cause(err).(*dmysql.MySQLError)
+func getSQLErrCode(err error) (errors.ErrCode, bool) {
+	var mysqlErr *dmysql.MySQLError
+	ok := errors.As(errors.Cause(err), &mysqlErr)
 	if !ok {
 		return 0, false
 	}

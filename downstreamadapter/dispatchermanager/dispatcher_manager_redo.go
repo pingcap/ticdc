@@ -139,7 +139,7 @@ func (e *DispatcherManager) getRedoEventCollectorBatchCountAndBytes(redoSink *re
 	return batchCount, batchBytes
 }
 
-func (e *DispatcherManager) newRedoDispatchers(infos map[common.DispatcherID]dispatcherCreateInfo, removeDDLTs bool) error {
+func (e *DispatcherManager) newRedoDispatchers(infos map[common.DispatcherID]dispatcherCreateInfo, _ bool) error {
 	start := time.Now()
 	batchCount, batchBytes := e.getRedoEventCollectorBatchCountAndBytes(e.redoSink)
 
