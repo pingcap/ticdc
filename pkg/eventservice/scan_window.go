@@ -624,9 +624,6 @@ func (c *adaptiveScanWindowController) tryCriticalBrakeLocked(
 			pressureScore: c.pressureScore,
 		}, true
 	case usage.last > memoryUsageCriticalThreshold:
-		if c.shouldGraceCriticalBrakeLocked(usage) {
-			return scanWindowDecision{}, false
-		}
 		newInterval := scanWindowPressureInterval(current, max(current/2, defaultScanInterval))
 		c.lastCriticalTime = now
 		c.noteAdjustmentLocked(now, true)
@@ -642,13 +639,6 @@ func (c *adaptiveScanWindowController) tryCriticalBrakeLocked(
 	default:
 		return scanWindowDecision{}, false
 	}
-}
-
-func (c *adaptiveScanWindowController) shouldGraceCriticalBrakeLocked(usage memoryUsageStats) bool {
-	return usage.last < memoryUsageEmergencyThreshold &&
-		c.fastUsageEMA < 0.85 &&
-		c.slowUsageEMA < scanWindowHighPressureThreshold &&
-		usage.max < memoryUsageEmergencyThreshold
 }
 
 func (c *adaptiveScanWindowController) shouldAllowEmergencyMinIntervalLocked(
@@ -700,7 +690,7 @@ func (c *adaptiveScanWindowController) updatePressureScoreLocked(usage memoryUsa
 	switch {
 	case c.fastUsageEMA >= scanWindowHighPressureThreshold ||
 		c.slowUsageEMA >= scanWindowHighPressureThreshold ||
-		usage.max >= memoryUsageHighThreshold:
+		usage.last >= memoryUsageHighThreshold:
 		c.pressureScore = min(c.pressureScore+2, scanWindowPressureScoreCeiling)
 	case c.fastUsageEMA >= scanWindowModeratePressureThreshold ||
 		c.slowUsageEMA >= scanWindowModeratePressureThreshold ||
@@ -725,7 +715,7 @@ func (c *adaptiveScanWindowController) shouldReduceForHighPressureLocked(now tim
 
 	return c.fastUsageEMA >= scanWindowHighPressureThreshold ||
 		c.slowUsageEMA >= scanWindowHighPressureThreshold ||
-		usage.max >= memoryUsageHighThreshold
+		usage.last >= memoryUsageHighThreshold
 }
 
 func (c *adaptiveScanWindowController) shouldReduceForSustainedPressureLocked(now time.Time, usage memoryUsageStats) bool {

@@ -76,6 +76,28 @@ func TestAdjustScanIntervalHighPressureUsesBoundedReduction(t *testing.T) {
 	require.Equal(t, int64(30*time.Second), status.scanInterval.Load())
 }
 
+func TestAdjustScanIntervalDoesNotKeepReducingAfterTransientHighPressure(t *testing.T) {
+	t.Parallel()
+
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", t.Name()), 1*time.Minute)
+	changefeed := status.changefeedID.String()
+	t.Cleanup(func() {
+		deleteScanWindowMetrics(changefeed)
+	})
+
+	now := time.Now()
+	markScanWindowReadyForDecrease(status, now)
+	status.scanInterval.Store(int64(40 * time.Second))
+
+	status.updateMemoryUsage(now, 0.8, 0)
+	require.Equal(t, int64(30*time.Second), status.scanInterval.Load())
+
+	for i := 1; i <= int(scanWindowPressureAdjustCooldown/time.Second)+1; i++ {
+		status.updateMemoryUsage(now.Add(time.Duration(i)*time.Second), 0.1, 0)
+	}
+	require.Equal(t, int64(30*time.Second), status.scanInterval.Load())
+}
+
 func TestAdjustScanIntervalCriticalPressure(t *testing.T) {
 	t.Parallel()
 
@@ -83,6 +105,26 @@ func TestAdjustScanIntervalCriticalPressure(t *testing.T) {
 	status.scanInterval.Store(int64(40 * time.Second))
 	status.updateMemoryUsage(time.Now().Add(memoryUsageWindowDuration), 1, 0)
 	require.Equal(t, int64(scanWindowEmergencyBrakePlateauInterval), status.scanInterval.Load())
+}
+
+func TestAdjustScanIntervalCriticalPressureIgnoresLowPressureHistory(t *testing.T) {
+	t.Parallel()
+
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", t.Name()), 10*time.Minute)
+	changefeed := status.changefeedID.String()
+	t.Cleanup(func() {
+		deleteScanWindowMetrics(changefeed)
+	})
+
+	now := time.Now()
+	status.scanInterval.Store(int64(40 * time.Second))
+	for i := 0; i < 5; i++ {
+		status.updateMemoryUsage(now.Add(time.Duration(i)*time.Second), 0.05, 0)
+	}
+	require.Equal(t, int64(40*time.Second), status.scanInterval.Load())
+
+	status.updateMemoryUsage(now.Add(5*time.Second), 0.95, 0)
+	require.Equal(t, int64(20*time.Second), status.scanInterval.Load())
 }
 
 func TestAdjustScanIntervalCriticalPressureUsesDefaultFloor(t *testing.T) {
