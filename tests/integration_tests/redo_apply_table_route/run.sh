@@ -36,6 +36,27 @@ function query_count() {
 	get_sql_count
 }
 
+function wait_query_count() {
+	local sql="$1"
+	local host="$2"
+	local port="$3"
+	local expected="$4"
+	local retries="${5:-30}"
+
+	while [ "$retries" -gt 0 ]; do
+		local actual
+		actual=$(query_count "$sql" "$host" "$port")
+		if [ "$actual" = "$expected" ]; then
+			return 0
+		fi
+		retries=$((retries - 1))
+		sleep 1
+	done
+
+	echo "ERROR: timeout waiting for expected count ($expected) for query: $sql"
+	return 1
+}
+
 function require_equal() {
 	local actual="$1"
 	local expected="$2"
@@ -152,7 +173,6 @@ function run() {
 	run_cdc_server --workdir "$WORK_DIR" --binary "$CDC_BINARY" --cluster-id "$KEYSPACE_NAME"
 
 	write_redo_only_dml
-	sleep 20
 
 	local storage_path="file://$REDO_DIR"
 	local tmp_download_path="$WORK_DIR/cdc_data/redo/$changefeed_id"
@@ -181,10 +201,8 @@ function run() {
 
 	run_cdc_server --workdir "$WORK_DIR" --binary "$CDC_BINARY" --cluster-id "$KEYSPACE_NAME"
 	run_sql "INSERT INTO source_db.users VALUES (101, 'after_redo', 'after_redo@example.com');" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
-	check_table_exists target_db.finish_mark_routed "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 30
-	sleep 10
-	run_sql "SELECT name AS routed_name FROM target_db.users_routed WHERE id = 101;" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
-	check_contains "after_redo"
+
+	wait_query_count "SELECT COUNT(*) AS cnt FROM target_db.users_routed WHERE id = 101 AND name = 'after_redo';" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" "1" 30
 
 	cleanup_process "$CDC_BINARY"
 }
