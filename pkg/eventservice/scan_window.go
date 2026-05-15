@@ -347,6 +347,8 @@ func initializeScanWindowMetrics(changefeed string) {
 }
 
 func deleteScanWindowMetrics(changefeed string) {
+	// Available memory quota is a changefeed-lifecycle metric that is cleaned
+	// together with scan window metrics when the changefeed status is removed.
 	metrics.EventServiceAvailableMemoryQuotaGaugeVec.DeleteLabelValues(changefeed)
 	metrics.EventServiceScanWindowBaseTsGaugeVec.DeleteLabelValues(changefeed)
 	metrics.EventServiceScanWindowIntervalGaugeVec.DeleteLabelValues(changefeed)
@@ -412,11 +414,10 @@ func (c *changefeedStatus) observeScanWindowTargetBandMetrics(
 		metrics.EventServiceScanWindowTargetBandGaugeVec.WithLabelValues(changefeed, metricType).Set(0)
 	}
 
-	previousState := scanWindowBandState(state.Load())
+	previousState := scanWindowBandState(state.Swap(int32(currentState)))
 	if previousState != scanWindowBandUnknown && previousState != currentState {
 		metrics.EventServiceScanWindowTargetBandCrossCount.WithLabelValues(changefeed, metricType).Inc()
 	}
-	state.Store(int32(currentState))
 }
 
 func classifyScanWindowBandState(value float64) scanWindowBandState {

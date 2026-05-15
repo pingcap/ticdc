@@ -172,7 +172,7 @@ func TestAdjustScanIntervalEmergencyPressureCanReachMinFloorWhenSustained(t *tes
 	status.scanInterval.Store(int64(defaultScanInterval))
 	start := time.Now()
 
-	for i := 0; i <= 30; i++ {
+	for i := 0; i <= int(memoryUsageWindowDuration/time.Second); i++ {
 		status.updateMemoryUsage(start.Add(time.Duration(i)*time.Second), 1, 0)
 	}
 
