@@ -350,10 +350,6 @@ func (e *DDLEvent) GetUpdatedSchemas() []SchemaIDChange {
 }
 
 func (e *DDLEvent) GetDDLQuery() string {
-	if e == nil {
-		log.Error("DDLEvent is nil, should not happened in production env", zap.Any("event", e))
-		return ""
-	}
 	return e.Query
 }
 
