@@ -780,26 +780,6 @@ func (c *adaptiveScanWindowController) setLastDownAdjustTimeForTest(now time.Tim
 	c.lastDownAdjustTime = now
 }
 
-func (c *adaptiveScanWindowController) setPressureScoreForTest(score float64) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.pressureScore = score
-}
-
-func (c *adaptiveScanWindowController) resetForTest(now time.Time) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.usageWindow.reset()
-	c.lastAdjustTime = now
-	c.lastDownAdjustTime = now
-	c.lastCriticalTime = time.Time{}
-	c.lastInstabilityTime = time.Time{}
-	c.fastUsageEMA = 0
-	c.slowUsageEMA = 0
-	c.emaInitialized = false
-	c.pressureScore = 0
-}
-
 func normalizeUsageRatio(usageRatio float64) float64 {
 	if usageRatio != usageRatio || usageRatio < 0 {
 		return 0
