@@ -293,6 +293,7 @@ func TestRedoRowEventToRedoLogWithoutRouting(t *testing.T) {
 	require.Equal(t, "test", decoded.TableInfo.GetTargetSchemaName())
 	require.Equal(t, "t", decoded.TableInfo.GetTargetTableName())
 }
+
 func newRedoDDLTestColumn(
 	t *testing.T,
 	id int64,
