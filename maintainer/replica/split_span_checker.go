@@ -47,6 +47,7 @@ var (
 	maxMoveSpansCountForTrafficBalance = 4
 	maxMoveSpansCountForMerge          = 16
 	// maxMergeOperatorsPerGroup limits how many merge operators one split-table group can create per check.
+	// The value limits concurrent incremental scan tasks while still making merge progress each scheduler round.
 	maxMergeOperatorsPerGroup = 8
 	maxLagThreshold           = float64(30) // 30s
 	mergeThreshold            = 5
@@ -318,7 +319,7 @@ func (s *SplitSpanChecker) Check(batch int) replica.GroupCheckResult {
 	if !s.checkAllTaskAvailableLocked() {
 		log.Debug("some task is not available, skip check",
 			zap.String("changefeed", s.changefeedID.String()),
-			zap.Int64("group", int64(s.groupID)),
+			zap.Int64("group", s.groupID),
 		)
 		return results
 	}
@@ -390,7 +391,7 @@ func (s *SplitSpanChecker) Check(batch int) replica.GroupCheckResult {
 	if s.regionThreshold > 0 {
 		countByRegion := int(math.Ceil(float64(totalRegionCount) / float64(s.regionThreshold)))
 		if countByRegion > upperSpanCount {
-			upperSpanCount = int(countByRegion)
+			upperSpanCount = countByRegion
 		}
 	}
 
@@ -787,14 +788,14 @@ func (s *SplitSpanChecker) chooseMergedSpans(batchSize int) ([]SplitSpanCheckRes
 
 	appendMergeResult := func() bool {
 		if len(mergeSpans) <= 1 {
-			return len(results) >= mergeBatchSize
+			return false
 		}
 		if len(results) >= mergeBatchSize {
 			return true
 		}
 		log.Info("chooseMergedSpans merge spans",
 			zap.String("changefeed", s.changefeedID.String()),
-			zap.Int64("group", int64(s.groupID)),
+			zap.Int64("group", s.groupID),
 			zap.Any("mergeSpans", mergeSpans),
 			zap.Any("node", mergeSpans[0].GetNodeID()),
 		)
