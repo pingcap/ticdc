@@ -77,15 +77,15 @@ type DDLEventInRedoLog struct {
 	StartTs           uint64            `msg:"start-ts"`
 	CommitTs          uint64            `msg:"commit-ts"`
 	Query             string            `msg:"query"`
-	Columns           []*columnInfo     `msg:"columns"`
+	Columns           []*ColumnInfo     `msg:"columns"`
 	BlockedTables     *InfluencedTables `msg:"blocked-tables"`
 	BlockedTableNames []SchemaTableName `msg:"blocked-table-names"`
 	NeedDroppedTables *InfluencedTables `msg:"need-dropped-tables"`
 	NeedAddedTables   []Table           `msg:"need_added_tables"`
 }
 
-// columnInfo is for column meta in DDL event
-type columnInfo struct {
+// ColumnInfo is for column meta in DDL event
+type ColumnInfo struct {
 	Name               string `msg:"name"`
 	OriginDefaultValue any    `msg:"origin_default"`
 	Type               byte   `msg:"type"`
@@ -210,11 +210,11 @@ func (r *RedoRowEvent) ToRedoLog() *RedoLog {
 
 // ToRedoLog converts ddl event to redo log
 func (d *DDLEvent) ToRedoLog() *RedoLog {
-	var columns []*columnInfo
+	var columns []*ColumnInfo
 	if d.TableInfo != nil {
-		columns = make([]*columnInfo, 0, len(d.TableInfo.GetColumns()))
+		columns = make([]*ColumnInfo, 0, len(d.TableInfo.GetColumns()))
 		for _, col := range d.TableInfo.GetColumns() {
-			columns = append(columns, &columnInfo{
+			columns = append(columns, &ColumnInfo{
 				Name:               col.Name.String(),
 				OriginDefaultValue: col.GetOriginDefaultValue(),
 				Type:               col.GetType(),
@@ -222,31 +222,34 @@ func (d *DDLEvent) ToRedoLog() *RedoLog {
 			})
 		}
 	}
-	redoLog := &RedoLog{
-		RedoDDL: &RedoDDLEvent{
-			DDL: &DDLEventInRedoLog{
-				StartTs:           d.GetStartTs(),
-				CommitTs:          d.GetCommitTs(),
-				Query:             d.GetDDLQuery(),
-				Columns:           columns,
-				BlockedTables:     d.GetBlockedTables(),
-				BlockedTableNames: d.GetBlockedTableNames(),
-				NeedDroppedTables: d.GetNeedDroppedTables(),
-				NeedAddedTables:   d.GetNeedAddedTables(),
-			},
-			Type: d.Type,
-		},
-		Type: RedoLogTypeDDL,
+
+	body := &DDLEventInRedoLog{
+		StartTs:           d.GetStartTs(),
+		CommitTs:          d.GetCommitTs(),
+		Query:             d.GetDDLQuery(),
+		Columns:           columns,
+		BlockedTables:     d.GetBlockedTables(),
+		BlockedTableNames: d.GetBlockedTableNames(),
+		NeedDroppedTables: d.GetNeedDroppedTables(),
+		NeedAddedTables:   d.GetNeedAddedTables(),
 	}
+
+	redoDDL := &RedoDDLEvent{
+		DDL:  body,
+		Type: d.Type,
+	}
+
 	if d.TableInfo != nil {
-		redoLog.RedoDDL.TableName.TableID = d.TableInfo.TableName.TableID
-		redoLog.RedoDDL.TableName.IsPartition = d.TableInfo.TableName.IsPartition
+		redoDDL.TableName.TableID = d.TableInfo.TableName.TableID
+		redoDDL.TableName.IsPartition = d.TableInfo.TableName.IsPartition
 	}
+	redoDDL.TableName.Schema = d.GetTargetSchemaName()
+	redoDDL.TableName.Table = d.GetTargetTableName()
 
-	redoLog.RedoDDL.TableName.Schema = d.GetTargetSchemaName()
-	redoLog.RedoDDL.TableName.Table = d.GetTargetTableName()
-
-	return redoLog
+	return &RedoLog{
+		RedoDDL: redoDDL,
+		Type:    RedoLogTypeDDL,
+	}
 }
 
 // GetCommitTs returns commit timestamp of the log event.
