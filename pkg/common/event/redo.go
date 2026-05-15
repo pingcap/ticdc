@@ -133,79 +133,75 @@ func (r *RedoRowEvent) PostFlush() {
 }
 
 func (r *RedoRowEvent) ToRedoLog() *RedoLog {
-	redoLog := &RedoLog{
-		RedoRow: &RedoDMLEvent{
-			Row: &DMLEventInRedoLog{
-				StartTs:      r.StartTs,
-				CommitTs:     r.CommitTs,
-				Table:        nil,
-				Columns:      nil,
-				PreColumns:   nil,
-				IndexColumns: nil,
-			},
-			PreColumns: nil,
-			Columns:    nil,
+	redoRow := &RedoDMLEvent{
+		Row: &DMLEventInRedoLog{
+			StartTs:  r.StartTs,
+			CommitTs: r.CommitTs,
 		},
-		Type: RedoLogTypeRow,
 	}
-	if r.TableInfo != nil {
-		redoLog.RedoRow.Row.Table = &common.TableName{
-			Schema:      r.TableInfo.GetTargetSchemaName(),
-			Table:       r.TableInfo.GetTargetTableName(),
-			TableID:     r.PhysicalTableID,
-			IsPartition: r.TableInfo.TableName.IsPartition,
-		}
-		redoLog.RedoRow.Row.IndexColumns = getIndexColumns(r.TableInfo)
 
-		columnCount := len(r.TableInfo.GetColumns())
-		columns := make([]*RedoColumn, 0, columnCount)
+	if r.TableInfo == nil {
+		return &RedoLog{RedoRow: redoRow, Type: RedoLogTypeRow}
+	}
+
+	row := redoRow.Row
+	row.Table = &common.TableName{
+		Schema:      r.TableInfo.GetTargetSchemaName(),
+		Table:       r.TableInfo.GetTargetTableName(),
+		TableID:     r.PhysicalTableID,
+		IsPartition: r.TableInfo.TableName.IsPartition,
+	}
+	row.IndexColumns = getIndexColumns(r.TableInfo)
+
+	columnCount := len(r.TableInfo.GetColumns())
+	var columnsVal, preColumnsVal []RedoColumnValue
+	switch r.Event.RowType {
+	case common.RowTypeInsert:
+		columnsVal = make([]RedoColumnValue, 0, columnCount)
+	case common.RowTypeDelete:
+		preColumnsVal = make([]RedoColumnValue, 0, columnCount)
+	case common.RowTypeUpdate:
+		columnsVal = make([]RedoColumnValue, 0, columnCount)
+		preColumnsVal = make([]RedoColumnValue, 0, columnCount)
+	}
+
+	columns := make([]*RedoColumn, 0, columnCount)
+	for i, column := range r.TableInfo.GetColumns() {
+		if !common.IsColCDCVisible(column) {
+			continue
+		}
+		columns = append(columns, &RedoColumn{
+			Name:      column.Name.String(),
+			Type:      column.GetType(),
+			Charset:   column.GetCharset(),
+			Collation: column.GetCollate(),
+		})
+		isHandleKey := r.TableInfo.IsHandleKey(column.ID)
 		switch r.Event.RowType {
 		case common.RowTypeInsert:
-			redoLog.RedoRow.Columns = make([]RedoColumnValue, 0, columnCount)
+			columnsVal = append(columnsVal, parseColumnValue(&r.Event.Row, column, i, isHandleKey))
 		case common.RowTypeDelete:
-			redoLog.RedoRow.PreColumns = make([]RedoColumnValue, 0, columnCount)
+			preColumnsVal = append(preColumnsVal, parseColumnValue(&r.Event.PreRow, column, i, isHandleKey))
 		case common.RowTypeUpdate:
-			redoLog.RedoRow.Columns = make([]RedoColumnValue, 0, columnCount)
-			redoLog.RedoRow.PreColumns = make([]RedoColumnValue, 0, columnCount)
-		default:
-		}
-
-		for i, column := range r.TableInfo.GetColumns() {
-			if common.IsColCDCVisible(column) {
-				columns = append(columns, &RedoColumn{
-					Name:      column.Name.String(),
-					Type:      column.GetType(),
-					Charset:   column.GetCharset(),
-					Collation: column.GetCollate(),
-				})
-				isHandleKey := r.TableInfo.IsHandleKey(column.ID)
-				switch r.Event.RowType {
-				case common.RowTypeInsert:
-					v := parseColumnValue(&r.Event.Row, column, i, isHandleKey)
-					redoLog.RedoRow.Columns = append(redoLog.RedoRow.Columns, v)
-				case common.RowTypeDelete:
-					v := parseColumnValue(&r.Event.PreRow, column, i, isHandleKey)
-					redoLog.RedoRow.PreColumns = append(redoLog.RedoRow.PreColumns, v)
-				case common.RowTypeUpdate:
-					v := parseColumnValue(&r.Event.Row, column, i, isHandleKey)
-					redoLog.RedoRow.Columns = append(redoLog.RedoRow.Columns, v)
-					v = parseColumnValue(&r.Event.PreRow, column, i, isHandleKey)
-					redoLog.RedoRow.PreColumns = append(redoLog.RedoRow.PreColumns, v)
-				default:
-				}
-			}
-		}
-		switch r.Event.RowType {
-		case common.RowTypeInsert:
-			redoLog.RedoRow.Row.Columns = columns
-		case common.RowTypeDelete:
-			redoLog.RedoRow.Row.PreColumns = columns
-		case common.RowTypeUpdate:
-			redoLog.RedoRow.Row.Columns = columns
-			redoLog.RedoRow.Row.PreColumns = columns
+			columnsVal = append(columnsVal, parseColumnValue(&r.Event.Row, column, i, isHandleKey))
+			preColumnsVal = append(preColumnsVal, parseColumnValue(&r.Event.PreRow, column, i, isHandleKey))
 		}
 	}
-	return redoLog
+
+	switch r.Event.RowType {
+	case common.RowTypeInsert:
+		row.Columns = columns
+	case common.RowTypeDelete:
+		row.PreColumns = columns
+	case common.RowTypeUpdate:
+		row.Columns = columns
+		row.PreColumns = columns
+	}
+
+	redoRow.Columns = columnsVal
+	redoRow.PreColumns = preColumnsVal
+
+	return &RedoLog{RedoRow: redoRow, Type: RedoLogTypeRow}
 }
 
 // ToRedoLog converts ddl event to redo log
