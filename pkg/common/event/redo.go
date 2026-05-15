@@ -77,15 +77,15 @@ type DDLEventInRedoLog struct {
 	StartTs           uint64            `msg:"start-ts"`
 	CommitTs          uint64            `msg:"commit-ts"`
 	Query             string            `msg:"query"`
-	Columns           []*ColumnInfo     `msg:"columns"`
+	Columns           []*columnInfo     `msg:"columns"`
 	BlockedTables     *InfluencedTables `msg:"blocked-tables"`
 	BlockedTableNames []SchemaTableName `msg:"blocked-table-names"`
 	NeedDroppedTables *InfluencedTables `msg:"need-dropped-tables"`
 	NeedAddedTables   []Table           `msg:"need_added_tables"`
 }
 
-// ColumnInfo is for column meta in DDL event
-type ColumnInfo struct {
+// columnInfo is for column meta in DDL event
+type columnInfo struct {
 	Name               string `msg:"name"`
 	OriginDefaultValue any    `msg:"origin_default"`
 	Type               byte   `msg:"type"`
@@ -210,11 +210,11 @@ func (r *RedoRowEvent) ToRedoLog() *RedoLog {
 
 // ToRedoLog converts ddl event to redo log
 func (d *DDLEvent) ToRedoLog() *RedoLog {
-	var columns []*ColumnInfo
+	var columns []*columnInfo
 	if d.TableInfo != nil {
-		columns = make([]*ColumnInfo, 0, len(d.TableInfo.GetColumns()))
+		columns = make([]*columnInfo, 0, len(d.TableInfo.GetColumns()))
 		for _, col := range d.TableInfo.GetColumns() {
-			columns = append(columns, &ColumnInfo{
+			columns = append(columns, &columnInfo{
 				Name:               col.Name.String(),
 				OriginDefaultValue: col.GetOriginDefaultValue(),
 				Type:               col.GetType(),
@@ -227,12 +227,12 @@ func (d *DDLEvent) ToRedoLog() *RedoLog {
 			DDL: &DDLEventInRedoLog{
 				StartTs:           d.GetStartTs(),
 				CommitTs:          d.GetCommitTs(),
-				Query:             d.Query,
+				Query:             d.GetDDLQuery(),
 				Columns:           columns,
-				BlockedTables:     d.BlockedTables,
-				BlockedTableNames: d.BlockedTableNames,
-				NeedDroppedTables: d.NeedDroppedTables,
-				NeedAddedTables:   d.NeedAddedTables,
+				BlockedTables:     d.GetBlockedTables(),
+				BlockedTableNames: d.GetBlockedTableNames(),
+				NeedDroppedTables: d.GetNeedDroppedTables(),
+				NeedAddedTables:   d.GetNeedAddedTables(),
 			},
 			Type: d.Type,
 		},
