@@ -1,251 +1,213 @@
 #!/bin/bash
 
 # [DESCRIPTION]:
-#   This test verifies that redo log replay works correctly with table route.
-#   It tests the following scenario:
-#   1. Create a changefeed with redo log enabled AND table route (source_db -> target_db)
-#   2. Insert data into source_db.t1 in upstream
-#   3. Verify data flows to target_db.t1 in downstream (via table route)
-#   4. Restart CDC with MySQLSinkHangLongTime failpoint to block sink writes
-#   5. Insert more data (goes to redo logs but NOT to downstream due to failpoint)
-#   6. Wait for redo logs to catch up, then stop CDC
-#   7. Use `cdc redo apply` to replay redo logs
-#   8. Verify all data is replayed to target_db.t1 (table route preserved in redo logs)
-#   9. Restart CDC without failpoint and verify normal replication resumes
+#   This test verifies that redo log replay preserves table route target names.
+#   It first runs a table_route-style SQL workload through normal replication,
+#   then blocks MySQL DML writes, writes more source DML, and applies redo logs
+#   to confirm the replayed rows still land in routed downstream tables.
 
 set -euo pipefail
 
 CUR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-source $CUR/../_utils/test_prepare
-WORK_DIR=$OUT_DIR/$TEST_NAME
+source "$CUR/../_utils/test_prepare"
+
+WORK_DIR="$OUT_DIR/$TEST_NAME"
 CDC_BINARY=cdc.test
-SINK_TYPE=$1
+SINK_TYPE="$1"
 
 REDO_DIR="/tmp/tidb_cdc_test/redo_apply_table_route/redo"
 SQL_RES_FILE="$OUT_DIR/$TEST_NAME/sql_res.$TEST_NAME.log"
 
 function cleanup_redo_dir() {
-	rm -rf $REDO_DIR
-	mkdir -p $REDO_DIR
+	rm -rf "$REDO_DIR"
+	mkdir -p "$REDO_DIR"
 }
 
-# Helper function to get count from SQL result file
 function get_sql_count() {
-	grep -oE 'cnt: [0-9]+' "$SQL_RES_FILE" | grep -oE '[0-9]+' || echo "0"
+	grep -oE 'cnt:[[:space:]]*[0-9]+' "$SQL_RES_FILE" | grep -oE '[0-9]+' || echo "0"
+}
+
+function query_count() {
+	local sql="$1"
+	local host="$2"
+	local port="$3"
+
+	run_sql "$sql" "$host" "$port" >/dev/null
+	get_sql_count
+}
+
+function wait_query_count() {
+	local sql="$1"
+	local host="$2"
+	local port="$3"
+	local expected="$4"
+	local retries="${5:-30}"
+
+	while [ "$retries" -gt 0 ]; do
+		local actual
+		actual=$(query_count "$sql" "$host" "$port")
+		if [ "$actual" = "$expected" ]; then
+			return 0
+		fi
+		retries=$((retries - 1))
+		sleep 1
+	done
+
+	echo "ERROR: timeout waiting for expected count ($expected) for query: $sql"
+	return 1
+}
+
+function require_equal() {
+	local actual="$1"
+	local expected="$2"
+	local message="$3"
+
+	if [ "$actual" != "$expected" ]; then
+		echo "ERROR: $message, expected $expected, got $actual"
+		exit 1
+	fi
+}
+
+function verify_normal_table_route() {
+	check_table_exists target_db.finish_mark_routed "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 90
+
+	local source_users_count
+	local target_users_count
+	local source_extra_count
+	local target_extra_count
+	source_users_count=$(query_count "SELECT COUNT(*) AS cnt FROM source_db.users;" "$UP_TIDB_HOST" "$UP_TIDB_PORT")
+	target_users_count=$(query_count "SELECT COUNT(*) AS cnt FROM target_db.users_routed;" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT")
+	source_extra_count=$(query_count "SELECT COUNT(*) AS cnt FROM source_extra_db.external_users;" "$UP_TIDB_HOST" "$UP_TIDB_PORT")
+	target_extra_count=$(query_count "SELECT COUNT(*) AS cnt FROM target_extra_db.external_users_routed;" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT")
+
+	require_equal "$target_users_count" "$source_users_count" "normal table route users count mismatch"
+	require_equal "$target_extra_count" "$source_extra_count" "normal table route external_users count mismatch"
+
+	check_table_not_exists source_db.users "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
+	check_table_not_exists source_extra_db.external_users "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
+	check_table_not_exists target_db.temp_table_routed "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
+	check_table_not_exists target_db.to_be_dropped_routed "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
+
+	run_sql "SHOW CREATE VIEW target_db.user_order_view_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
+	check_contains "user_order_view_routed"
+	check_contains "users_routed"
+	check_contains "orders_routed"
+}
+
+function write_redo_only_dml() {
+	run_sql "INSERT INTO source_db.users VALUES (100, 'redo_user', 'redo_user@example.com');" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	run_sql "UPDATE source_db.users SET email = 'redo_alice@example.com' WHERE id = 1;" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	run_sql "INSERT INTO source_db.orders VALUES (100, 100, 1000.00);" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	run_sql "INSERT INTO source_extra_db.external_users VALUES (100, 'redo_external', 'redo_external@example.com');" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	run_sql "UPDATE source_extra_db.external_users SET email = 'redo_external_alice@example.com' WHERE id = 1;" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	run_sql "INSERT INTO source_db.finish_mark VALUES (2);" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+}
+
+function verify_redo_apply_route() {
+	local source_users_count
+	local target_users_count
+	local source_orders_count
+	local target_orders_count
+	local source_extra_count
+	local target_extra_count
+	local source_finish_count
+	local target_finish_count
+
+	source_users_count=$(query_count "SELECT COUNT(*) AS cnt FROM source_db.users;" "$UP_TIDB_HOST" "$UP_TIDB_PORT")
+	target_users_count=$(query_count "SELECT COUNT(*) AS cnt FROM target_db.users_routed;" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT")
+	source_orders_count=$(query_count "SELECT COUNT(*) AS cnt FROM source_db.orders;" "$UP_TIDB_HOST" "$UP_TIDB_PORT")
+	target_orders_count=$(query_count "SELECT COUNT(*) AS cnt FROM target_db.orders_routed;" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT")
+	source_extra_count=$(query_count "SELECT COUNT(*) AS cnt FROM source_extra_db.external_users;" "$UP_TIDB_HOST" "$UP_TIDB_PORT")
+	target_extra_count=$(query_count "SELECT COUNT(*) AS cnt FROM target_extra_db.external_users_routed;" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT")
+	source_finish_count=$(query_count "SELECT COUNT(*) AS cnt FROM source_db.finish_mark;" "$UP_TIDB_HOST" "$UP_TIDB_PORT")
+	target_finish_count=$(query_count "SELECT COUNT(*) AS cnt FROM target_db.finish_mark_routed;" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT")
+
+	require_equal "$target_users_count" "$source_users_count" "redo apply users count mismatch"
+	require_equal "$target_orders_count" "$source_orders_count" "redo apply orders count mismatch"
+	require_equal "$target_extra_count" "$source_extra_count" "redo apply external_users count mismatch"
+	require_equal "$target_finish_count" "$source_finish_count" "redo apply finish_mark count mismatch"
+
+	run_sql "SELECT email AS routed_email FROM target_db.users_routed WHERE id = 1;" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
+	check_contains "redo_alice@example.com"
+	run_sql "SELECT name AS routed_name FROM target_db.users_routed WHERE id = 100;" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
+	check_contains "redo_user"
+	run_sql "SELECT email AS routed_email FROM target_extra_db.external_users_routed WHERE id = 1;" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
+	check_contains "redo_external_alice@example.com"
+	run_sql "SELECT name AS routed_name FROM target_extra_db.external_users_routed WHERE id = 100;" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
+	check_contains "redo_external"
+
+	check_table_not_exists source_db.users "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
+	check_table_not_exists source_extra_db.external_users "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
 }
 
 function run() {
-	# Only run for mysql sink type since redo apply targets MySQL downstream
 	if [ "$SINK_TYPE" != "mysql" ]; then
-		echo "skip redo apply test for non-mysql sink"
+		echo "skip redo apply table route test for non-mysql sink"
 		return
 	fi
 
-	rm -rf $WORK_DIR && mkdir -p $WORK_DIR
+	rm -rf "$WORK_DIR" && mkdir -p "$WORK_DIR"
 	cleanup_redo_dir
 
-	start_tidb_cluster --workdir $WORK_DIR
+	start_tidb_cluster --workdir "$WORK_DIR"
 
-	cd $WORK_DIR
+	start_ts=$(run_cdc_cli_tso_query "$UP_PD_HOST_1" "$UP_PD_PORT_1")
+	run_cdc_server --workdir "$WORK_DIR" --binary "$CDC_BINARY" --cluster-id "$KEYSPACE_NAME"
 
-	# Create SOURCE database and table in upstream (where data originates)
-	run_sql "CREATE DATABASE IF NOT EXISTS source_db;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-	run_sql "CREATE TABLE source_db.t1 (id INT PRIMARY KEY, val VARCHAR(255));" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-
-	# Create TARGET database and table in downstream (where data should be routed to)
-	# The table route rule routes source_db.* -> target_db.*
-	run_sql "CREATE DATABASE IF NOT EXISTS target_db;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
-	run_sql "CREATE TABLE target_db.t1 (id INT PRIMARY KEY, val VARCHAR(255));" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
-
-	# Also create source_db in downstream to verify data does NOT go there
-	run_sql "CREATE DATABASE IF NOT EXISTS source_db;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
-	run_sql "CREATE TABLE source_db.t1 (id INT PRIMARY KEY, val VARCHAR(255));" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
-
-	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
-
-	# Start CDC server
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --cluster-id "$KEYSPACE_NAME"
-
-	SINK_URI="mysql://root@127.0.0.1:3306/"
-	changefeedid="redo-schema-routing-test"
-
-	# Create changefeed with redo log AND table route enabled
+	local sink_uri="mysql://root@${DOWN_TIDB_HOST}:${DOWN_TIDB_PORT}/"
+	local changefeed_id="redo-table-route-test"
 	cdc_cli_changefeed create \
-		--start-ts=$start_ts \
-		--sink-uri="$SINK_URI" \
-		--changefeed-id=$changefeedid \
+		--start-ts="$start_ts" \
+		--sink-uri="$sink_uri" \
+		--changefeed-id="$changefeed_id" \
 		--config="$CUR/conf/changefeed.toml"
 
-	# Insert data into SOURCE database in upstream
-	echo "Inserting data into source_db.t1..."
-	for i in $(seq 1 50); do
-		run_sql "INSERT INTO source_db.t1 VALUES ($i, 'value_$i');" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-	done
+	run_sql_file "$CUR/data/test.sql" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	verify_normal_table_route
 
-	# Wait for data to be replicated
-	sleep 10
+	local pre_redo_users_count
+	pre_redo_users_count=$(query_count "SELECT COUNT(*) AS cnt FROM target_db.users_routed;" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT")
 
-	# Verify data arrived in TARGET database (not source database) via table route
-	echo "Verifying table route during normal replication..."
-	run_sql "SELECT COUNT(*) as cnt FROM source_db.t1;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-	upstream_count=$(get_sql_count)
-	run_sql "SELECT COUNT(*) as cnt FROM target_db.t1;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
-	target_count=$(get_sql_count)
-	run_sql "SELECT COUNT(*) as cnt FROM source_db.t1;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
-	source_count=$(get_sql_count)
-
-	echo "Upstream source_db.t1 count: $upstream_count"
-	echo "Downstream target_db.t1 count: $target_count"
-	echo "Downstream source_db.t1 count: $source_count"
-
-	if [ "$target_count" != "$upstream_count" ]; then
-		echo "ERROR: Schema routing not working - target_count ($target_count) != upstream_count ($upstream_count)"
-		exit 1
-	fi
-	if [ "$source_count" -gt 0 ]; then
-		echo "ERROR: Schema routing not working - data incorrectly in source_db.t1"
-		exit 1
-	fi
-	echo "Schema routing verified: all $target_count rows correctly routed to target_db.t1"
-
-	# Record the count before injecting failpoint
-	pre_failpoint_count=$target_count
-
-	# Now inject the failpoint to prevent sink execution, but the global resolved can be moved forward.
-	# Then we can apply redo log to reach an eventual consistent state in downstream.
-	echo "Restarting CDC with MySQLSinkHangLongTime failpoint..."
-	cleanup_process $CDC_BINARY
+	cleanup_process "$CDC_BINARY"
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/pkg/sink/mysql/MySQLSinkHangLongTime=return(true)'
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --cluster-id "$KEYSPACE_NAME"
+	run_cdc_server --workdir "$WORK_DIR" --binary "$CDC_BINARY" --cluster-id "$KEYSPACE_NAME"
 
-	# Insert more data - this will go to redo logs but NOT to downstream (due to failpoint)
-	echo "Inserting additional data (will be captured in redo but blocked from sink)..."
-	for i in $(seq 51 100); do
-		run_sql "INSERT INTO source_db.t1 VALUES ($i, 'value_$i');" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-	done
+	write_redo_only_dml
 
-	# Wait for redo logs to be written (data is replicated to CDC but blocked at sink)
-	sleep 20
+	local storage_path="file://$REDO_DIR"
+	local tmp_download_path="$WORK_DIR/cdc_data/redo/$changefeed_id"
+	local current_tso
+	current_tso=$(run_cdc_cli_tso_query "$UP_PD_HOST_1" "$UP_PD_PORT_1")
+	ensure 50 check_redo_resolved_ts "$changefeed_id" "$current_tso" "$storage_path" "$tmp_download_path/meta"
 
-	# Get current TSO and wait for redo logs to catch up
-	storage_path="file://$REDO_DIR"
-	tmp_download_path=$WORK_DIR/cdc_data/redo/$changefeedid
-	current_tso=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
-	echo "Waiting for redo logs to reach TSO: $current_tso"
-	ensure 50 check_redo_resolved_ts $changefeedid $current_tso $storage_path $tmp_download_path/meta
-
-	# Stop CDC server
-	cleanup_process $CDC_BINARY
+	cleanup_process "$CDC_BINARY"
 	export GO_FAILPOINTS=''
 
-	# Verify downstream still has only pre-failpoint data (failpoint blocked additional inserts)
-	run_sql "SELECT COUNT(*) as cnt FROM target_db.t1;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
-	target_count_before_redo=$(get_sql_count)
-	echo "Downstream target_db.t1 count before redo apply: $target_count_before_redo"
-	echo "Expected (pre-failpoint count): $pre_failpoint_count"
+	local target_users_before_redo
+	target_users_before_redo=$(query_count "SELECT COUNT(*) AS cnt FROM target_db.users_routed;" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT")
+	require_equal "$target_users_before_redo" "$pre_redo_users_count" "failpoint did not block MySQL DML before redo apply"
 
-	if [ "$target_count_before_redo" != "$pre_failpoint_count" ]; then
-		echo "ERROR: Downstream has unexpected count (expected $pre_failpoint_count, got $target_count_before_redo)"
-		echo "The failpoint should have blocked additional inserts from reaching downstream"
-		exit 1
-	fi
-
-	# Check redo log files
-	echo "Checking redo log files..."
-	ls -la $REDO_DIR || echo "No redo files found"
-
-	# Apply redo logs to downstream using cdc redo apply
-	# The key test: redo logs should contain TargetSchema/TargetTable routing info
-	echo "Applying redo logs to downstream..."
-	$CDC_BINARY redo apply \
+	"$CDC_BINARY" redo apply \
 		--tmp-dir="$tmp_download_path/apply" \
 		--storage="$storage_path" \
-		--sink-uri="mysql://root@127.0.0.1:3306/?safe-mode=true" \
-		2>&1 | tee $WORK_DIR/redo_apply.log || {
-		echo "Redo apply failed, checking logs..."
-		cat $WORK_DIR/redo_apply.log
+		--sink-uri="mysql://root@${DOWN_TIDB_HOST}:${DOWN_TIDB_PORT}/?safe-mode=true" \
+		2>&1 | tee "$WORK_DIR/redo_apply.log" || {
+		echo "Redo apply failed"
+		cat "$WORK_DIR/redo_apply.log"
 		exit 1
 	}
 
-	echo "Redo apply completed"
+	verify_redo_apply_route
 
-	# Verify table route was preserved through redo replay
-	echo "Verifying table route after redo replay..."
+	run_cdc_server --workdir "$WORK_DIR" --binary "$CDC_BINARY" --cluster-id "$KEYSPACE_NAME"
+	run_sql "INSERT INTO source_db.users VALUES (101, 'after_redo', 'after_redo@example.com');" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
 
-	# Get expected count from upstream (should be 100 now: 50 original + 50 during failpoint)
-	run_sql "SELECT COUNT(*) as cnt FROM source_db.t1;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-	expected_count=$(get_sql_count)
+	wait_query_count "SELECT COUNT(*) AS cnt FROM target_db.users_routed WHERE id = 101 AND name = 'after_redo';" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" "1" 30
 
-	# Verify data was replayed to target_db.t1
-	run_sql "SELECT COUNT(*) as cnt FROM target_db.t1;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
-	target_count_after_replay=$(get_sql_count)
-
-	# Verify data did NOT go to source database in downstream
-	run_sql "SELECT COUNT(*) as cnt FROM source_db.t1;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
-	source_count_after_replay=$(get_sql_count)
-
-	echo "After redo replay - target_db.t1 count: $target_count_after_replay"
-	echo "After redo replay - source_db.t1 count (downstream): $source_count_after_replay"
-	echo "Expected count (from upstream): $expected_count"
-
-	if [ "$target_count_after_replay" != "$expected_count" ]; then
-		echo "ERROR: Redo replay count mismatch - target_count ($target_count_after_replay) != expected_count ($expected_count)"
-		echo "This indicates TargetSchema/TargetTable were not preserved in redo logs"
-		exit 1
-	fi
-
-	if [ "$source_count_after_replay" -gt 0 ]; then
-		echo "ERROR: Redo replay used wrong schema - data in source_db.t1 instead of target_db.t1"
-		echo "This indicates TargetSchema/TargetTable were not used during redo apply"
-		exit 1
-	fi
-
-	echo "SUCCESS: Schema routing preserved through redo log replay!"
-	echo "  - All $target_count_after_replay rows correctly replayed to target_db.t1"
-	echo "  - source_db.t1 correctly empty in downstream ($source_count_after_replay rows)"
-
-	# Verify changefeed resumes normally after redo apply (without failpoint)
-	echo "Verifying changefeed resumes normally after redo apply..."
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --cluster-id "$KEYSPACE_NAME"
-
-	# Insert more data to verify normal replication still works
-	echo "Inserting additional data to verify normal replication..."
-	for i in $(seq 101 150); do
-		run_sql "INSERT INTO source_db.t1 VALUES ($i, 'value_$i');" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-	done
-
-	# Wait for replication
-	sleep 10
-
-	# Verify all data arrived in target_db.t1
-	run_sql "SELECT COUNT(*) as cnt FROM source_db.t1;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
-	final_upstream_count=$(get_sql_count)
-	run_sql "SELECT COUNT(*) as cnt FROM target_db.t1;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
-	final_target_count=$(get_sql_count)
-	run_sql "SELECT COUNT(*) as cnt FROM source_db.t1;" ${DOWN_TIDB_HOST} ${DOWN_TIDB_PORT}
-	final_source_count=$(get_sql_count)
-
-	echo "Final upstream source_db.t1 count: $final_upstream_count"
-	echo "Final downstream target_db.t1 count: $final_target_count"
-	echo "Final downstream source_db.t1 count: $final_source_count"
-
-	if [ "$final_target_count" != "$final_upstream_count" ]; then
-		echo "ERROR: Final count mismatch after normal replication - target_count ($final_target_count) != upstream_count ($final_upstream_count)"
-		exit 1
-	fi
-
-	if [ "$final_source_count" -gt 0 ]; then
-		echo "ERROR: Data incorrectly routed to source_db.t1 after redo apply"
-		exit 1
-	fi
-
-	echo "SUCCESS: Changefeed resumes normally after redo apply!"
-	echo "  - All $final_target_count rows correctly in target_db.t1"
-
-	cleanup_process $CDC_BINARY
+	cleanup_process "$CDC_BINARY"
 }
 
-trap stop_tidb_cluster EXIT
+trap 'stop_test "$WORK_DIR"' EXIT
 run "$@"
-check_logs $WORK_DIR
+check_logs "$WORK_DIR"
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"
