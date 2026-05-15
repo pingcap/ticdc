@@ -643,6 +643,10 @@ type PulsarConfig struct {
 	// and 'type' always use 'client_credentials'
 	OAuth2 *OAuth2 `toml:"oauth2" json:"oauth2,omitempty"`
 
+	// MaxMessageBytes is the maximum size in bytes of a single message sent to Pulsar.
+	// Default: 10MB (same as the Kafka sink default).
+	MaxMessageBytes *int `toml:"max-message-bytes" json:"max-message-bytes,omitempty"`
+
 	// OutputRawChangeEvent controls whether to split the update pk/uk events.
 	OutputRawChangeEvent *bool `toml:"output-raw-change-event" json:"output-raw-change-event,omitempty"`
 
