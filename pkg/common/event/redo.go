@@ -388,7 +388,9 @@ func (r *RedoDDLEvent) ToDDLEvent() *DDLEvent {
 	tableName := r.TableName.GetTable()
 	if blockedTables == nil {
 		blockedTables = &InfluencedTables{InfluenceType: InfluenceTypeNormal}
-		blockedTableNames = []SchemaTableName{{SchemaName: schemaName, TableName: tableName}}
+		if len(blockedTableNames) == 0 {
+			blockedTableNames = []SchemaTableName{{SchemaName: schemaName, TableName: tableName}}
+		}
 	}
 	columns := make([]*model.ColumnInfo, 0, len(r.DDL.Columns))
 	for _, col := range r.DDL.Columns {
