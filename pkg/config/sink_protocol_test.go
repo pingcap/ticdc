@@ -116,6 +116,26 @@ func TestString(t *testing.T) {
 	}
 }
 
+func TestIsPulsarSupportedProtocols(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		protocol Protocol
+		expect   bool
+	}{
+		{ProtocolCanalJSON, true},
+		{ProtocolDebezium, true},
+		{ProtocolAvro, false},
+		{ProtocolOpen, false},
+		{ProtocolSimple, false},
+		{ProtocolCanal, false},
+	}
+
+	for _, tc := range testCases {
+		require.Equal(t, tc.expect, IsPulsarSupportedProtocols(tc.protocol))
+	}
+}
+
 func TestIsBatchEncoder(t *testing.T) {
 	t.Parallel()
 
