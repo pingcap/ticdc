@@ -53,6 +53,7 @@ type queuedDDL struct {
 type replayEngine struct {
 	partitions []*partitionState
 
+	applyMu     sync.Mutex
 	watermarkMu sync.RWMutex
 	consumerID  string
 	topic       string
@@ -71,6 +72,13 @@ type replayEngine struct {
 	offsets   *offsetTracker
 	inflight  *inflightTracker
 	syncpoint *syncpointManager
+}
+
+type decodedMessage struct {
+	messageType codeccommon.MessageType
+	resolvedTs  uint64
+	ddl         *commonEvent.DDLEvent
+	rows        []*commonEvent.DMLEvent
 }
 
 func newReplayEngine(ctx context.Context, o *option) (*replayEngine, error) {
@@ -149,7 +157,12 @@ func (e *replayEngine) HandleMessage(ctx context.Context, message *kafka.Message
 			partition, len(e.partitions))
 	}
 	source := e.offsets.NewSource(*message.TopicPartition.Topic, partition, message.TopicPartition.Offset)
-	err := e.handleMessage(ctx, message, source)
+	decoded, err := e.decodeMessage(message)
+	if err == nil {
+		e.applyMu.Lock()
+		err = e.applyDecodedMessage(ctx, message, source, decoded)
+		e.applyMu.Unlock()
+	}
 	source.Close()
 	if err != nil {
 		return nil, errors.Trace(err)
@@ -157,7 +170,11 @@ func (e *replayEngine) HandleMessage(ctx context.Context, message *kafka.Message
 	return e.offsets.DrainCommittable(), nil
 }
 
-func (e *replayEngine) handleMessage(ctx context.Context, message *kafka.Message, source *messageSource) error {
+func (e *replayEngine) DrainCommittableOffsets() []kafka.TopicPartition {
+	return e.offsets.DrainCommittable()
+}
+
+func (e *replayEngine) decodeMessage(message *kafka.Message) (*decodedMessage, error) {
 	partition := message.TopicPartition.Partition
 	offset := message.TopicPartition.Offset
 	progress := e.partitions[partition]
@@ -165,14 +182,73 @@ func (e *replayEngine) handleMessage(ctx context.Context, message *kafka.Message
 	progress.decoder.AddKeyValue(message.Key, message.Value)
 	messageType, hasNext := progress.decoder.HasNext()
 	if !hasNext {
-		return errors.Errorf("decoder has no event after receiving kafka message, partition=%d offset=%v", partition, offset)
+		return nil, errors.Errorf("decoder has no event after receiving kafka message, partition=%d offset=%v", partition, offset)
 	}
 
 	switch messageType {
 	case codeccommon.MessageTypeResolved:
-		source.AddWork()
 		newWatermark := progress.decoder.NextResolvedEvent()
-		e.updateWatermark(progress, newWatermark, offset)
+		return &decodedMessage{messageType: messageType, resolvedTs: newWatermark}, nil
+	case codeccommon.MessageTypeDDL:
+		ddl := progress.decoder.NextDDLEvent()
+		rows := make([]*commonEvent.DMLEvent, 0)
+		if dec, ok := progress.decoder.(*simple.Decoder); ok {
+			for _, row := range dec.GetCachedEvents() {
+				rows = append(rows, row)
+			}
+		}
+		return &decodedMessage{messageType: messageType, ddl: ddl, rows: rows}, nil
+	case codeccommon.MessageTypeRow:
+		counter := 0
+		row := progress.decoder.NextDMLEvent()
+		if row == nil {
+			if e.protocol != config.ProtocolSimple {
+				return nil, errors.Errorf("decoded nil DML event, partition=%d offset=%v", partition, offset)
+			}
+			return &decodedMessage{messageType: messageType}, nil
+		}
+		rows := []*commonEvent.DMLEvent{row}
+		counter++
+		for {
+			_, hasNext = progress.decoder.HasNext()
+			if !hasNext {
+				break
+			}
+			row = progress.decoder.NextDMLEvent()
+			if row == nil {
+				return nil, errors.Errorf("decoded nil DML event in batch, partition=%d offset=%v", partition, offset)
+			}
+			rows = append(rows, row)
+			counter++
+		}
+		if len(message.Key)+len(message.Value) > e.maxMessageBytes && counter > 1 {
+			return nil, errors.Errorf("kafka max-message-bytes exceeded, partition=%d offset=%v max=%d received=%d",
+				partition, offset, e.maxMessageBytes, len(message.Key)+len(message.Value))
+		}
+		if counter > e.maxBatchSize {
+			return nil, errors.Errorf("open protocol max-batch-size exceeded, partition=%d offset=%v max=%d actual=%d",
+				partition, offset, e.maxBatchSize, counter)
+		}
+		return &decodedMessage{messageType: messageType, rows: rows}, nil
+	default:
+		return nil, errors.Errorf("unknown kafka message type %v, partition=%d offset=%v", messageType, partition, offset)
+	}
+}
+
+func (e *replayEngine) applyDecodedMessage(
+	ctx context.Context, message *kafka.Message, source *messageSource, decoded *decodedMessage,
+) error {
+	partition := message.TopicPartition.Partition
+	offset := message.TopicPartition.Offset
+	progress := e.partitions[partition]
+	if decoded == nil {
+		return nil
+	}
+
+	switch decoded.messageType {
+	case codeccommon.MessageTypeResolved:
+		source.AddWork()
+		e.updateWatermark(progress, decoded.resolvedTs, offset)
 		if err := e.processReadyDDLs(ctx); err != nil {
 			return errors.Trace(err)
 		}
@@ -182,17 +258,14 @@ func (e *replayEngine) handleMessage(ctx context.Context, message *kafka.Message
 		e.dispatchBufferedDMLs()
 		source.Done()
 	case codeccommon.MessageTypeDDL:
-		ddl := progress.decoder.NextDDLEvent()
-		if dec, ok := progress.decoder.(*simple.Decoder); ok {
-			for _, row := range dec.GetCachedEvents() {
-				if err := e.appendDML(row, progress, source, offset); err != nil {
-					return errors.Trace(err)
-				}
+		for _, row := range decoded.rows {
+			if err := e.appendDML(row, progress, source, offset); err != nil {
+				return errors.Trace(err)
 			}
 		}
-		if ddl.Query != "" {
+		if decoded.ddl != nil && decoded.ddl.Query != "" {
 			source.AddWork()
-			accepted, err := e.enqueueDDL(ddl, source)
+			accepted, err := e.enqueueDDL(decoded.ddl, source)
 			if err != nil {
 				source.Done()
 				return errors.Trace(err)
@@ -206,42 +279,14 @@ func (e *replayEngine) handleMessage(ctx context.Context, message *kafka.Message
 			e.dispatchBufferedDMLs()
 		}
 	case codeccommon.MessageTypeRow:
-		counter := 0
-		row := progress.decoder.NextDMLEvent()
-		if row == nil {
-			if e.protocol != config.ProtocolSimple {
-				return errors.Errorf("decoded nil DML event, partition=%d offset=%v", partition, offset)
-			}
-			return nil
-		}
-		if err := e.appendDML(row, progress, source, offset); err != nil {
-			return errors.Trace(err)
-		}
-		counter++
-		for {
-			_, hasNext = progress.decoder.HasNext()
-			if !hasNext {
-				break
-			}
-			row = progress.decoder.NextDMLEvent()
-			if row == nil {
-				return errors.Errorf("decoded nil DML event in batch, partition=%d offset=%v", partition, offset)
-			}
+		for _, row := range decoded.rows {
 			if err := e.appendDML(row, progress, source, offset); err != nil {
 				return errors.Trace(err)
 			}
-			counter++
-		}
-		if len(message.Key)+len(message.Value) > e.maxMessageBytes && counter > 1 {
-			return errors.Errorf("kafka max-message-bytes exceeded, partition=%d offset=%v max=%d received=%d",
-				partition, offset, e.maxMessageBytes, len(message.Key)+len(message.Value))
-		}
-		if counter > e.maxBatchSize {
-			return errors.Errorf("open protocol max-batch-size exceeded, partition=%d offset=%v max=%d actual=%d",
-				partition, offset, e.maxBatchSize, counter)
 		}
 	default:
-		return errors.Errorf("unknown kafka message type %v, partition=%d offset=%v", messageType, partition, offset)
+		return errors.Errorf("unknown decoded kafka message type %v, partition=%d offset=%v",
+			decoded.messageType, partition, offset)
 	}
 	return nil
 }

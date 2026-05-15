@@ -15,6 +15,8 @@ package main
 
 import (
 	"context"
+	"math"
+	"sync"
 	"testing"
 	"time"
 
@@ -25,6 +27,7 @@ import (
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
+	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
@@ -151,6 +154,93 @@ func TestAppendDMLDoesNotSkipSameCommitTsAsAppliedWatermark(t *testing.T) {
 	require.Equal(t, 1, flushed)
 }
 
+func TestHandleMessageAllowsConcurrentPartitionDecode(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	s := sinkmock.NewMockSink(ctrl)
+	s.EXPECT().AddDMLEvent(gomock.Any()).DoAndReturn(func(event *commonEvent.DMLEvent) {
+		event.PostFlush()
+	}).AnyTimes()
+
+	cfg := config.GetDefaultReplicaConfig()
+	router, err := eventrouter.NewEventRouter(cfg.Sink, "topic", false, false)
+	require.NoError(t, err)
+
+	engine := &replayEngine{
+		partitions: []*partitionState{
+			{
+				partition: 0,
+				decoder:   &singleRowDecoder{event: newEmptyTestDMLEvent(1, 100)},
+				groups:    make(map[int64]*dmlGroup),
+			},
+			{
+				partition: 1,
+				decoder:   &singleRowDecoder{event: newEmptyTestDMLEvent(2, 101)},
+				groups:    make(map[int64]*dmlGroup),
+			},
+		},
+		eventRouter:     router,
+		protocol:        config.ProtocolCanalJSON,
+		maxMessageBytes: math.MaxInt,
+		maxBatchSize:    math.MaxInt,
+		mysqlSink:       s,
+		offsets:         newOffsetTracker(),
+		inflight:        newInflightTracker(),
+	}
+
+	topic := "topic"
+	var wg sync.WaitGroup
+	errCh := make(chan error, 2)
+	for partition := int32(0); partition < 2; partition++ {
+		wg.Add(1)
+		go func(partition int32) {
+			defer wg.Done()
+			_, err := engine.HandleMessage(context.Background(), &kafka.Message{
+				TopicPartition: kafka.TopicPartition{
+					Topic:     &topic,
+					Partition: partition,
+					Offset:    kafka.Offset(partition + 1),
+				},
+			})
+			errCh <- err
+		}(partition)
+	}
+	wg.Wait()
+	close(errCh)
+
+	for err := range errCh {
+		require.NoError(t, err)
+	}
+}
+
+type singleRowDecoder struct {
+	event *commonEvent.DMLEvent
+	ready bool
+}
+
+func (d *singleRowDecoder) AddKeyValue(_, _ []byte) {
+	d.ready = true
+}
+
+func (d *singleRowDecoder) HasNext() (codeccommon.MessageType, bool) {
+	return codeccommon.MessageTypeRow, d.ready
+}
+
+func (d *singleRowDecoder) NextResolvedEvent() uint64 {
+	return 0
+}
+
+func (d *singleRowDecoder) NextDMLEvent() *commonEvent.DMLEvent {
+	if !d.ready {
+		return nil
+	}
+	d.ready = false
+	return d.event
+}
+
+func (d *singleRowDecoder) NextDDLEvent() *commonEvent.DDLEvent {
+	return nil
+}
+
 func newTestDMLEvent(tableID int64, commitTs uint64) *commonEvent.DMLEvent {
 	return &commonEvent.DMLEvent{
 		PhysicalTableID: tableID,
@@ -161,6 +251,12 @@ func newTestDMLEvent(tableID int64, commitTs uint64) *commonEvent.DMLEvent {
 			TableName: commonType.TableName{Schema: "test", Table: "t"},
 		},
 	}
+}
+
+func newEmptyTestDMLEvent(tableID int64, commitTs uint64) *commonEvent.DMLEvent {
+	event := newTestDMLEvent(tableID, commitTs)
+	event.RowTypes = nil
+	return event
 }
 
 func TestProcessReadyDDLsExecutesIndependentCreateTableWithoutWatermark(t *testing.T) {
