@@ -147,10 +147,12 @@ func TestRedoDDLEventRoundTripPreservesColumnMetadata(t *testing.T) {
 
 func TestDDLEventToRedoLogHandlesNilTableInfo(t *testing.T) {
 	ddlEvent := &DDLEvent{
-		Type:       byte(timodel.ActionCreateSchema),
-		Query:      "create database test_redo",
-		StartTs:    33,
-		FinishedTs: 44,
+		Type:             byte(timodel.ActionCreateSchema),
+		SchemaName:       "source_db",
+		targetSchemaName: "target_db",
+		Query:            "create database target_db",
+		StartTs:          33,
+		FinishedTs:       44,
 	}
 
 	require.NotPanics(t, func() {
@@ -159,6 +161,16 @@ func TestDDLEventToRedoLogHandlesNilTableInfo(t *testing.T) {
 		require.Equal(t, ddlEvent.StartTs, redoLog.RedoDDL.DDL.StartTs)
 		require.Equal(t, ddlEvent.FinishedTs, redoLog.RedoDDL.DDL.CommitTs)
 		require.Nil(t, redoLog.RedoDDL.DDL.Columns)
+		require.Equal(t, "target_db", redoLog.RedoDDL.TableName.Schema)
+		require.Empty(t, redoLog.RedoDDL.TableName.Table)
+
+		roundTrip := redoLog.RedoDDL.ToDDLEvent()
+		require.Equal(t, "target_db", roundTrip.SchemaName)
+		require.Equal(t, "target_db", roundTrip.GetTargetSchemaName())
+		require.Equal(t, []SchemaTableName{{
+			SchemaName: "target_db",
+			TableName:  "",
+		}}, roundTrip.BlockedTableNames)
 	})
 }
 

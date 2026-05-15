@@ -241,11 +241,26 @@ func (d *DDLEvent) ToRedoLog() *RedoLog {
 		Type: RedoLogTypeDDL,
 	}
 	if d.TableInfo != nil {
+		redoLog.RedoDDL.TableName.TableID = d.TableInfo.TableName.TableID
+		redoLog.RedoDDL.TableName.IsPartition = d.TableInfo.TableName.IsPartition
+	}
+
+	schemaName := d.GetTargetSchemaName()
+	tableName := d.GetTargetTableName()
+	if d.TableInfo != nil {
+		if targetSchema := d.TableInfo.GetTargetSchemaName(); targetSchema != "" {
+			schemaName = targetSchema
+		}
+		if targetTable := d.TableInfo.GetTargetTableName(); targetTable != "" {
+			tableName = targetTable
+		}
+	}
+	if schemaName != "" || tableName != "" {
 		redoLog.RedoDDL.TableName = common.TableName{
-			Schema:      d.TableInfo.GetTargetSchemaName(),
-			Table:       d.TableInfo.GetTargetTableName(),
-			TableID:     d.TableInfo.TableName.TableID,
-			IsPartition: d.TableInfo.TableName.IsPartition,
+			Schema:      schemaName,
+			Table:       tableName,
+			TableID:     redoLog.RedoDDL.TableName.TableID,
+			IsPartition: redoLog.RedoDDL.TableName.IsPartition,
 		}
 	}
 
