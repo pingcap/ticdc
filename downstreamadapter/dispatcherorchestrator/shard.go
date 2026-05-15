@@ -26,7 +26,9 @@ type orchestratorShard struct {
 	queue  *pendingMessageQueue
 	handle func(msg *messaging.TargetMessage)
 
-	wg sync.WaitGroup
+	wg        sync.WaitGroup
+	runOnce   sync.Once
+	closeOnce sync.Once
 }
 
 func newOrchestratorShard(handle func(msg *messaging.TargetMessage)) *orchestratorShard {
@@ -38,17 +40,19 @@ func newOrchestratorShard(handle func(msg *messaging.TargetMessage)) *orchestrat
 
 // Run starts the shard worker loop.
 func (s *orchestratorShard) Run() {
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
-		for {
-			msg, ok := s.queue.Pop()
-			if !ok {
-				return
+	s.runOnce.Do(func() {
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+			for {
+				msg, ok := s.queue.Pop()
+				if !ok {
+					return
+				}
+				s.handle(msg)
 			}
-			s.handle(msg)
-		}
-	}()
+		}()
+	})
 }
 
 // TryEnqueue keeps the existing queue semantics inside the shard, including
@@ -57,8 +61,22 @@ func (s *orchestratorShard) TryEnqueue(key pendingMessageKey, msg *messaging.Tar
 	return s.queue.TryEnqueue(key, msg)
 }
 
+// CloseAsync signals the worker to stop after it drains the currently queued work.
+// The call is idempotent so orchestrator shutdown can broadcast to every shard first
+// and then wait for all workers in parallel.
+func (s *orchestratorShard) CloseAsync() {
+	s.closeOnce.Do(func() {
+		s.queue.Close()
+	})
+}
+
+// Wait blocks until the shard worker exits.
+func (s *orchestratorShard) Wait() {
+	s.wg.Wait()
+}
+
 // Close stops the shard worker after the currently running handler returns.
 func (s *orchestratorShard) Close() {
-	s.queue.Close()
-	s.wg.Wait()
+	s.CloseAsync()
+	s.Wait()
 }

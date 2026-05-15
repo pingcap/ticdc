@@ -53,7 +53,12 @@ type DispatcherOrchestrator struct {
 	msgGuardWaitGroup util.GuardedWaitGroup
 }
 
-const dispatcherOrchestratorShardCount = 8
+const (
+	// dispatcherOrchestratorShardCount is intentionally fixed to a small value.
+	// The goal is to break the global head-of-line blocking without introducing
+	// many long-lived goroutines or another layer of tuning knobs.
+	dispatcherOrchestratorShardCount = 8
+)
 
 func New() *DispatcherOrchestrator {
 	m := &DispatcherOrchestrator{
@@ -103,9 +108,14 @@ func (m *DispatcherOrchestrator) RecvMaintainerRequest(
 
 // shardForChangefeedID returns the shard responsible for the changefeed. The
 // routing key is the internal changefeed ID so retries always land on the same
-// shard.
+// shard. Changefeed IDs are UUID-derived GIDs, and GID.Hash mixes the low and
+// high halves before applying modulo, which is sufficient for this fixed shard count.
 func (m *DispatcherOrchestrator) shardForChangefeedID(changefeedID common.ChangeFeedID) *orchestratorShard {
-	return m.shards[changefeedID.ID().Hash(uint64(len(m.shards)))]
+	return m.shards[m.shardIndexForChangefeedID(changefeedID)]
+}
+
+func (m *DispatcherOrchestrator) shardIndexForChangefeedID(changefeedID common.ChangeFeedID) int {
+	return changefeedID.ID().Hash(uint64(len(m.shards)))
 }
 
 func getPendingMessageKey(msg *messaging.TargetMessage) (pendingMessageKey, bool) {
@@ -162,6 +172,9 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 			zap.String("changefeedID", cfId.Name()), zap.Any("data", req.Config), zap.Error(err))
 	}
 
+	// Keep the map lock scoped to dispatcherManagers lookups and updates only.
+	// NewDispatcherManager may perform expensive downstream initialization, so it
+	// must run outside the mutex to let unrelated shards progress concurrently.
 	m.mutex.Lock()
 	manager, exists := m.dispatcherManagers[cfId]
 	m.mutex.Unlock()
@@ -412,7 +425,10 @@ func (m *DispatcherOrchestrator) Close() {
 	m.msgGuardWaitGroup.Wait()
 
 	for _, shard := range m.shards {
-		shard.Close()
+		shard.CloseAsync()
+	}
+	for _, shard := range m.shards {
+		shard.Wait()
 	}
 
 	m.mutex.Lock()
