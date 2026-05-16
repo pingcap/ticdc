@@ -54,7 +54,7 @@ const (
 	// <schema>/<table>/meta/schema_{tableVersion}_{checksum}.json
 	tableSchemaPrefix = "%s/%s/meta/"
 	// When use-table-id-as-path, schema is omitted: <table_id>/meta/...
-	tableIdPrefix = "%s/meta/"
+	tableIDPrefix = "%s/meta/"
 )
 
 var schemaRE = regexp.MustCompile(`meta/schema_\d+_\d{10}\.json$`)
@@ -80,7 +80,7 @@ func mustParseSchemaName(path string) (uint64, uint32) {
 	}
 
 	checksum := strings.TrimSuffix(parts[len(parts)-1], ".json")
-	tableChecksum, err := strconv.ParseUint(checksum, 10, 64)
+	tableChecksum, err := strconv.ParseUint(checksum, 10, 32)
 	if err != nil {
 		reportErr(err)
 	}
@@ -110,7 +110,7 @@ func generateSchemaFilePath(
 			)
 		}
 		// use-table-id-as-path: omit schema, path is <table_id>/meta/
-		dir = fmt.Sprintf(tableIdPrefix, table)
+		dir = fmt.Sprintf(tableIDPrefix, table)
 	} else {
 		if table == "" {
 			// Generate db schema file path.
@@ -270,7 +270,7 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 	}
 	var subDir string
 	if f.config.UseTableIDAsPath {
-		subDir = fmt.Sprintf(tableIdPrefix, tablePathPart)
+		subDir = fmt.Sprintf(tableIDPrefix, tablePathPart)
 	} else {
 		subDir = fmt.Sprintf(tableSchemaPrefix, def.Schema, tablePathPart)
 	}
@@ -577,7 +577,8 @@ func RemoveEmptyDirs(
 					zap.String("keyspace", id.Keyspace()),
 					zap.String("changeFeedID", id.Name()),
 					zap.String("path", path))
-				os.Remove(path)
+				// Keep best-effort cleanup semantics: ignore remove failures.
+				_ = os.Remove(path) // #nosec G122
 				cnt++
 				return filepath.SkipDir
 			}

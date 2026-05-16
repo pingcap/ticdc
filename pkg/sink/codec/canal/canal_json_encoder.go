@@ -139,7 +139,7 @@ func newJSONMessageForDML(
 	columnLen := 0
 	for _, col := range e.TableInfo.GetColumns() {
 		if col != nil && !col.IsVirtualGenerated() && e.ColumnSelector.Select(col) {
-			columnLen += 1
+			columnLen++
 		}
 	}
 	if columnLen == 0 {
@@ -258,7 +258,7 @@ func newJSONMessageForDML(
 	{
 		const prefix string = ",\"mysqlType\":"
 		out.RawString(prefix)
-		if mysqlTypeMap == nil {
+		if len(mysqlTypeMap) == 0 {
 			out.RawString(`null`)
 		} else {
 			out.RawByte('{')

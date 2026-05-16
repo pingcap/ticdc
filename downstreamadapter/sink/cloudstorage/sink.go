@@ -99,6 +99,7 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.
 	return nil
 }
 
+//nolint:revive // Keep the constructor shape consistent with other sink implementations.
 func New(
 	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig, enableTableAcrossNodes bool,
 	cleanupJobs []func(), /* only for test */
