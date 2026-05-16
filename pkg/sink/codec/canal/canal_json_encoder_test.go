@@ -279,8 +279,6 @@ func TestCanalJSONCompressionE2E(t *testing.T) {
 }
 
 func TestEncodeRoutedDMLEventUsesTargetNames(t *testing.T) {
-	t.Parallel()
-
 	dmlEvent := newRoutedCanalDMLEvent()
 	row, ok := dmlEvent.GetNextRow()
 	require.True(t, ok)
@@ -315,8 +313,6 @@ func TestEncodeRoutedDMLEventUsesTargetNames(t *testing.T) {
 }
 
 func TestEncodeRoutedDDLEventUsesTargetNames(t *testing.T) {
-	t.Parallel()
-
 	ctx := context.Background()
 	codecConfig := common.NewConfig(config.ProtocolCanalJSON)
 	encIface, err := NewJSONRowEventEncoder(ctx, codecConfig)
