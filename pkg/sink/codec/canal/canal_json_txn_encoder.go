@@ -49,7 +49,6 @@ func NewJSONTxnEventEncoder(config *common.Config) common.TxnEventEncoder {
 
 // AppendTxnEvent appends a txn event to the encoder.
 func (j *JSONTxnEventEncoder) AppendTxnEvent(event *commonEvent.DMLEvent) error {
-	targetTable := event.TableInfo.GetTargetTableName()
 	for {
 		row, ok := event.GetNextRow()
 		if !ok {
@@ -72,7 +71,7 @@ func (j *JSONTxnEventEncoder) AppendTxnEvent(event *commonEvent.DMLEvent) error 
 				zap.Int("maxMessageBytes", j.config.MaxMessageBytes),
 				zap.Int("length", length),
 				zap.Any("table", event.TableInfo.TableName))
-			return errors.ErrMessageTooLarge.GenWithStackByArgs(targetTable, length, j.config.MaxMessageBytes)
+			return errors.ErrMessageTooLarge.GenWithStackByArgs(event.TableInfo.GetTargetTableName(), length, j.config.MaxMessageBytes)
 		}
 		j.valueBuf.Write(value)
 		j.valueBuf.Write(j.terminator)

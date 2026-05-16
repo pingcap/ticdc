@@ -230,11 +230,9 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 	changefeed := f.changefeedID.Name()
 
 	var def TableDefinition
-	targetSchema := tableInfo.GetTargetSchemaName()
-	targetTable := tableInfo.GetTargetTableName()
 	def.FromTableInfo(
-		targetSchema,
-		targetTable,
+		tableInfo.GetTargetSchemaName(),
+		tableInfo.GetTargetTableName(),
 		tableInfo,
 		table.TableInfoVersion,
 		f.config.OutputColumnID,

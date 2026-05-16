@@ -146,8 +146,6 @@ func newJSONMessageForDML(
 		return nil, errors.ErrCanalEncodeFailed.GenWithStack("not found valid columns for the event")
 	}
 
-	targetSchema := e.TableInfo.GetTargetSchemaName()
-	targetTable := e.TableInfo.GetTargetTableName()
 	mysqlTypeMap := make(map[string]string, columnLen)
 	// TODO: use util.JsonWriter
 	out := &jwriter.Writer{}
@@ -160,12 +158,12 @@ func newJSONMessageForDML(
 	{
 		const prefix string = ",\"database\":"
 		out.RawString(prefix)
-		out.String(targetSchema)
+		out.String(e.TableInfo.GetTargetSchemaName())
 	}
 	{
 		const prefix string = ",\"table\":"
 		out.RawString(prefix)
-		out.String(targetTable)
+		out.String(e.TableInfo.GetTargetTableName())
 	}
 	{
 		const prefix string = ",\"pkNames\":"
@@ -387,12 +385,10 @@ func NewJSONRowEventEncoder(ctx context.Context, config *common.Config) (common.
 }
 
 func (c *JSONRowEventEncoder) newJSONMessageForDDL(e *commonEvent.DDLEvent) canalJSONMessageInterface {
-	targetSchema := e.GetTargetSchemaName()
-	targetTable := e.GetTargetTableName()
 	msg := &JSONMessage{
 		ID:            0, // ignored by both Canal Adapter and Flink
-		Schema:        targetSchema,
-		Table:         targetTable,
+		Schema:        e.GetTargetSchemaName(),
+		Table:         e.GetTargetTableName(),
 		IsDDL:         true,
 		EventType:     convertDdlEventType(e.Type).String(),
 		ExecutionTime: convertToCanalTs(e.GetCommitTs()),
@@ -453,7 +449,6 @@ func (c *JSONRowEventEncoder) AppendRowChangedEvent(
 	_ string,
 	e *commonEvent.RowEvent,
 ) error {
-	targetTable := e.TableInfo.GetTargetTableName()
 	value, err := newJSONMessageForDML(e, c.config, false, "")
 	if err != nil {
 		return errors.Trace(err)
@@ -470,6 +465,7 @@ func (c *JSONRowEventEncoder) AppendRowChangedEvent(
 	m.Callback = e.Callback
 	m.IncRowsCount()
 
+	targetTable := e.TableInfo.GetTargetTableName()
 	originLength := m.Length()
 	if m.Length() > c.config.MaxMessageBytes {
 		// for single message that is longer than max-message-bytes, do not send it.
@@ -530,7 +526,6 @@ func (c *JSONRowEventEncoder) AppendRowChangedEvent(
 func (c *JSONRowEventEncoder) newClaimCheckLocationMessage(
 	event *commonEvent.RowEvent, fileName string,
 ) (*common.Message, error) {
-	targetTable := event.TableInfo.GetTargetTableName()
 	claimCheckLocation := c.claimCheck.FileNameWithPrefix(fileName)
 	value, err := newJSONMessageForDML(event, c.config, true, claimCheckLocation)
 	if err != nil {
@@ -554,7 +549,7 @@ func (c *JSONRowEventEncoder) newClaimCheckLocationMessage(
 			zap.Int("maxMessageBytes", c.config.MaxMessageBytes),
 			zap.Int("length", length),
 			zap.Any("table", event.TableInfo.TableName))
-		return nil, errors.ErrMessageTooLarge.GenWithStackByArgs(targetTable, length, c.config.MaxMessageBytes)
+		return nil, errors.ErrMessageTooLarge.GenWithStackByArgs(event.TableInfo.GetTargetTableName(), length, c.config.MaxMessageBytes)
 	}
 	return result, nil
 }

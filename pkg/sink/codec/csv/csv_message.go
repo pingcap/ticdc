@@ -334,14 +334,10 @@ func fromColValToCsvVal(csvConfig *common.Config, row *chunk.Row, idx int, colIn
 
 // rowChangedEvent2CSVMsg converts a RowChangedEvent to a csv record.
 func rowChangedEvent2CSVMsg(csvConfig *common.Config, e *event.RowEvent) (*csvMessage, error) {
-	var err error
-	targetSchema := e.TableInfo.GetTargetSchemaName()
-	targetTable := e.TableInfo.GetTargetTableName()
-
 	csvMsg := &csvMessage{
 		config:     csvConfig,
-		tableName:  targetTable,
-		schemaName: targetSchema,
+		tableName:  e.TableInfo.GetTargetTableName(),
+		schemaName: e.TableInfo.GetTargetSchemaName(),
 		commitTs:   e.CommitTs,
 		newRecord:  true,
 	}
@@ -351,6 +347,7 @@ func rowChangedEvent2CSVMsg(csvConfig *common.Config, e *event.RowEvent) (*csvMe
 		// csvMsg.HandleKey = e.HandleKey
 	}
 
+	var err error
 	if e.IsDelete() {
 		csvMsg.opType = operationDelete
 		csvMsg.columns, err = rowChangeColumns2CSVColumns(csvConfig, e.GetPreRows(), e.TableInfo)
