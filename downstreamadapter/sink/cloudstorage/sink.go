@@ -244,14 +244,26 @@ func (s *sink) writeDDLEvent(event *commonEvent.DDLEvent) error {
 		sourceTableInfo := event.MultipleTableInfos[1]
 
 		var def cloudstorage.TableDefinition
-		def.FromTableInfo(event.ExtraSchemaName, event.ExtraTableName, event.TableInfo, event.FinishedTs, s.cfg.OutputColumnID)
+		def.FromTableInfo(
+			event.GetTargetExtraSchemaName(),
+			event.GetTargetExtraTableName(),
+			event.TableInfo,
+			event.FinishedTs,
+			s.cfg.OutputColumnID,
+		)
 		def.Query = event.Query
 		def.Type = event.Type
 		if err := s.writeFile(event, def); err != nil {
 			return err
 		}
 		var sourceTableDef cloudstorage.TableDefinition
-		sourceTableDef.FromTableInfo(event.SchemaName, event.TableName, sourceTableInfo, event.FinishedTs, s.cfg.OutputColumnID)
+		sourceTableDef.FromTableInfo(
+			sourceTableInfo.GetTargetSchemaName(),
+			sourceTableInfo.GetTargetTableName(),
+			sourceTableInfo,
+			event.FinishedTs,
+			s.cfg.OutputColumnID,
+		)
 		sourceEvent := *event
 		sourceEvent.TableInfo = sourceTableInfo
 		if err := s.writeFile(&sourceEvent, sourceTableDef); err != nil {
@@ -269,8 +281,8 @@ func (s *sink) writeDDLEvent(event *commonEvent.DDLEvent) error {
 	log.Info("storage sink executed ddl event",
 		zap.String("keyspace", s.changefeedID.Keyspace()),
 		zap.String("changefeed", s.changefeedID.Name()),
-		zap.String("schema", event.GetSchemaName()),
-		zap.String("table", event.GetTableName()),
+		zap.String("schema", event.GetTargetSchemaName()),
+		zap.String("table", event.GetTargetTableName()),
 		zap.String("dispatcher", event.GetDispatcherID().String()),
 		zap.String("query", event.GetDDLQuery()),
 		zap.Uint64("finishedTs", event.GetCommitTs()),

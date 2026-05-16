@@ -499,6 +499,69 @@ func TestWriteDDLEventWithInvalidExchangePartitionEvent(t *testing.T) {
 	}
 }
 
+func TestWriteExchangePartitionDDLEventUsesTargetNames(t *testing.T) {
+	parentDir := t.TempDir()
+	uri := fmt.Sprintf("file:///%s?protocol=csv", parentDir)
+	sinkURI, err := url.Parse(uri)
+	require.NoError(t, err)
+
+	replicaConfig := config.GetDefaultReplicaConfig()
+	err = replicaConfig.ValidateAndAdjust(sinkURI)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	mockPDClock := pdutil.NewClock4Test()
+	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+
+	cloudStorageSink, err := newSinkForTest(ctx, replicaConfig, sinkURI, nil)
+	require.NoError(t, err)
+
+	tableInfo := common.WrapTableInfo("source_db", &timodel.TableInfo{
+		ID:   20,
+		Name: ast.NewCIStr("partitioned"),
+		Columns: []*timodel.ColumnInfo{
+			{
+				Name:      ast.NewCIStr("id"),
+				FieldType: *types.NewFieldType(mysql.TypeLong),
+			},
+		},
+	}).CloneWithRouting("target_db", "partitioned_routed")
+
+	baseEvent := &commonEvent.DDLEvent{
+		Query:           "alter table source_db.partitioned exchange partition p0 with table source_db.exchange_table",
+		Type:            byte(timodel.ActionExchangeTablePartition),
+		SchemaName:      "source_db",
+		TableName:       "partitioned",
+		ExtraSchemaName: "source_db",
+		ExtraTableName:  "exchange_table",
+		FinishedTs:      100,
+		TableInfo:       tableInfo,
+	}
+	routedEvent := commonEvent.NewRoutedDDLEvent(
+		baseEvent,
+		"alter table target_db.partitioned_routed exchange partition p0 with table target_db.exchange_table_routed",
+		"target_db",
+		"partitioned_routed",
+		"target_db",
+		"exchange_table_routed",
+		tableInfo,
+		[]*common.TableInfo{tableInfo, tableInfo},
+		nil,
+	)
+
+	err = cloudStorageSink.WriteBlockEvent(routedEvent)
+	require.NoError(t, err)
+
+	_, err = os.Stat(filepath.Join(parentDir, "target_db", "exchange_table_routed", "meta"))
+	require.NoError(t, err)
+	_, err = os.Stat(filepath.Join(parentDir, "target_db", "partitioned_routed", "meta"))
+	require.NoError(t, err)
+	_, err = os.Stat(filepath.Join(parentDir, "source_db"))
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
 func TestWriteCheckpointEvent(t *testing.T) {
 	parentDir := t.TempDir()
 	uri := fmt.Sprintf("file:///%s?protocol=csv", parentDir)

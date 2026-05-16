@@ -230,7 +230,15 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 	changefeed := f.changefeedID.Name()
 
 	var def TableDefinition
-	def.FromTableInfo(tableInfo.GetSchemaName(), tableInfo.GetTableName(), tableInfo, table.TableInfoVersion, f.config.OutputColumnID)
+	targetSchema := tableInfo.GetTargetSchemaName()
+	targetTable := tableInfo.GetTargetTableName()
+	def.FromTableInfo(
+		targetSchema,
+		targetTable,
+		tableInfo,
+		table.TableInfoVersion,
+		f.config.OutputColumnID,
+	)
 	if !def.IsTableSchema() {
 		// only check schema for table
 		log.Error("invalid table schema",

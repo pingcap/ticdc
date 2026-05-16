@@ -405,6 +405,48 @@ func TestCheckOrWriteSchema(t *testing.T) {
 	require.Equal(t, 2, len(files))
 }
 
+func TestCheckOrWriteSchemaUsesRoutedTargetNames(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	dir := t.TempDir()
+	f := testFilePathGenerator(ctx, t, dir)
+
+	tableInfo := commonType.WrapTableInfo("source_db", &timodel.TableInfo{
+		ID:   20,
+		Name: ast.NewCIStr("source_table"),
+		Columns: []*timodel.ColumnInfo{
+			{
+				Name:      ast.NewCIStr("id"),
+				FieldType: *types.NewFieldType(mysql.TypeLong),
+				State:     timodel.StatePublic,
+			},
+		},
+		Version: 100,
+	}).CloneWithRouting("target_db", "target_table")
+
+	table := VersionedTableName{
+		TableNameWithPhysicTableID: commonType.TableName{
+			Schema:  tableInfo.GetSchemaName(),
+			Table:   tableInfo.GetTableName(),
+			TableID: tableInfo.TableName.TableID,
+		},
+		TableInfoVersion: 100,
+	}
+
+	hasNewerSchemaVersion, err := f.CheckOrWriteSchema(ctx, table, tableInfo)
+	require.NoError(t, err)
+	require.False(t, hasNewerSchemaVersion)
+
+	files, err := os.ReadDir(filepath.Join(dir, "target_db", "target_table", "meta"))
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+
+	_, err = os.Stat(filepath.Join(dir, "source_db"))
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
 func TestRemoveExpiredFilesWithoutPartition(t *testing.T) {
 	t.Parallel()
 
