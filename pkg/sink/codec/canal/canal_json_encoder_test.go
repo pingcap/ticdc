@@ -26,7 +26,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
-	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
@@ -40,23 +40,23 @@ func newRoutedCanalTableInfo() *commonType.TableInfo {
 	nameFieldType := types.NewFieldType(mysql.TypeVarchar)
 	nameFieldType.SetFlen(32)
 
-	return commonType.WrapTableInfo("source_db", &timodel.TableInfo{
+	return commonType.WrapTableInfo("source_db", &model.TableInfo{
 		ID:       20,
 		Name:     ast.NewCIStr("source_table"),
 		UpdateTS: 100,
-		Columns: []*timodel.ColumnInfo{
+		Columns: []*model.ColumnInfo{
 			{
 				ID:        1,
 				Name:      ast.NewCIStr("id"),
 				FieldType: *idFieldType,
-				State:     timodel.StatePublic,
+				State:     model.StatePublic,
 				Offset:    0,
 			},
 			{
 				ID:        2,
 				Name:      ast.NewCIStr("name"),
 				FieldType: *nameFieldType,
-				State:     timodel.StatePublic,
+				State:     model.StatePublic,
 				Offset:    1,
 			},
 		},
@@ -86,7 +86,7 @@ func newRoutedCanalDDLEvent() *commonEvent.DDLEvent {
 	tableInfo := newRoutedCanalTableInfo()
 	sourceDDL := &commonEvent.DDLEvent{
 		Version:    commonEvent.DDLEventVersion1,
-		Type:       byte(timodel.ActionCreateTable),
+		Type:       byte(model.ActionCreateTable),
 		SchemaName: "source_db",
 		TableName:  "source_table",
 		Query:      "CREATE TABLE `source_db`.`source_table` (`id` INT PRIMARY KEY)",

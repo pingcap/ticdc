@@ -77,6 +77,7 @@ function run_mysql() {
 	verify_table_route_drop_database
 
 	cleanup_process "$CDC_BINARY"
+	check_logs "$WORK_DIR"
 }
 
 function run_storage_case() {
@@ -123,5 +124,4 @@ function run() {
 
 trap 'stop_test "$WORK_DIR"' EXIT
 run "$@"
-check_logs "$WORK_DIR"
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"

@@ -96,8 +96,6 @@ func TestCanalJSONAppendTxnEventEncoderWithCallback(t *testing.T) {
 	msgs[0].Callback()
 	require.Equal(t, 1, count, "expected one callback be called")
 	// Assert the build reset all the internal states.
-	require.Nil(t, encoder.(*JSONTxnEventEncoder).txnSchema)
-	require.Nil(t, encoder.(*JSONTxnEventEncoder).txnTable)
 	require.Nil(t, encoder.(*JSONTxnEventEncoder).callback)
 	require.Equal(t, 0, encoder.(*JSONTxnEventEncoder).batchSize)
 	require.Equal(t, 0, encoder.(*JSONTxnEventEncoder).valueBuf.Len())

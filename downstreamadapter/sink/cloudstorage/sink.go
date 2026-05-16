@@ -258,8 +258,8 @@ func (s *sink) writeDDLEvent(event *commonEvent.DDLEvent) error {
 		}
 		var sourceTableDef cloudstorage.TableDefinition
 		sourceTableDef.FromTableInfo(
-			sourceTableInfo.GetTargetSchemaName(),
-			sourceTableInfo.GetTargetTableName(),
+			event.GetTargetSchemaName(),
+			event.GetTargetTableName(),
 			sourceTableInfo,
 			event.FinishedTs,
 			s.cfg.OutputColumnID,

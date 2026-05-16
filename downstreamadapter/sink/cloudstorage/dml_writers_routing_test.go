@@ -17,10 +17,10 @@ import (
 	"context"
 	"testing"
 
-	commonType "github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/utils/chann"
-	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
@@ -32,21 +32,21 @@ func TestAddDMLEventUsesTargetNames(t *testing.T) {
 
 	idFieldType := types.NewFieldType(mysql.TypeLong)
 	idFieldType.SetFlag(mysql.PriKeyFlag | mysql.NotNullFlag)
-	routedTableInfo := commonType.WrapTableInfo("source_db", &timodel.TableInfo{
+	routedTableInfo := common.WrapTableInfo("source_db", &model.TableInfo{
 		ID:       20,
 		Name:     ast.NewCIStr("source_table"),
 		UpdateTS: 100,
-		Columns: []*timodel.ColumnInfo{
+		Columns: []*model.ColumnInfo{
 			{
 				ID:        1,
 				Name:      ast.NewCIStr("id"),
 				FieldType: *idFieldType,
-				State:     timodel.StatePublic,
+				State:     model.StatePublic,
 			},
 		},
 	}).CloneWithRouting("target_db", "target_table")
 	dmlEvent := commonEvent.NewDMLEvent(
-		commonType.NewDispatcherID(),
+		common.NewDispatcherID(),
 		routedTableInfo.TableName.TableID,
 		1,
 		2,

@@ -15,6 +15,7 @@ package cloudstorage
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"os"
@@ -499,6 +500,21 @@ func TestWriteDDLEventWithInvalidExchangePartitionEvent(t *testing.T) {
 	}
 }
 
+func readSchemaDefinitionForTest(t *testing.T, parentDir, schema, table string) pkgcloudstorage.TableDefinition {
+	t.Helper()
+
+	files, err := os.ReadDir(filepath.Join(parentDir, schema, table, "meta"))
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+
+	content, err := os.ReadFile(filepath.Join(parentDir, schema, table, "meta", files[0].Name()))
+	require.NoError(t, err)
+
+	var def pkgcloudstorage.TableDefinition
+	require.NoError(t, json.Unmarshal(content, &def))
+	return def
+}
+
 func TestWriteExchangePartitionDDLEventUsesTargetNames(t *testing.T) {
 	parentDir := t.TempDir()
 	uri := fmt.Sprintf("file:///%s?protocol=csv", parentDir)
@@ -518,16 +534,38 @@ func TestWriteExchangePartitionDDLEventUsesTargetNames(t *testing.T) {
 	cloudStorageSink, err := newSinkForTest(ctx, replicaConfig, sinkURI, nil)
 	require.NoError(t, err)
 
-	tableInfo := common.WrapTableInfo("source_db", &timodel.TableInfo{
+	idColumn := &timodel.ColumnInfo{
+		ID:        1,
+		Name:      ast.NewCIStr("id"),
+		FieldType: *types.NewFieldType(mysql.TypeLong),
+		State:     timodel.StatePublic,
+	}
+	partitionedTableInfo := common.WrapTableInfo("source_db", &timodel.TableInfo{
 		ID:   20,
 		Name: ast.NewCIStr("partitioned"),
 		Columns: []*timodel.ColumnInfo{
+			idColumn,
 			{
-				Name:      ast.NewCIStr("id"),
-				FieldType: *types.NewFieldType(mysql.TypeLong),
+				ID:        2,
+				Name:      ast.NewCIStr("partition_value"),
+				FieldType: *types.NewFieldType(mysql.TypeVarchar),
+				State:     timodel.StatePublic,
 			},
 		},
 	}).CloneWithRouting("target_db", "partitioned_routed")
+	exchangeTableInfo := common.WrapTableInfo("source_db", &timodel.TableInfo{
+		ID:   21,
+		Name: ast.NewCIStr("exchange_table"),
+		Columns: []*timodel.ColumnInfo{
+			idColumn,
+			{
+				ID:        2,
+				Name:      ast.NewCIStr("exchange_value"),
+				FieldType: *types.NewFieldType(mysql.TypeVarchar),
+				State:     timodel.StatePublic,
+			},
+		},
+	}).CloneWithRouting("target_db", "exchange_table_routed")
 
 	baseEvent := &commonEvent.DDLEvent{
 		Query:           "alter table source_db.partitioned exchange partition p0 with table source_db.exchange_table",
@@ -537,7 +575,7 @@ func TestWriteExchangePartitionDDLEventUsesTargetNames(t *testing.T) {
 		ExtraSchemaName: "source_db",
 		ExtraTableName:  "exchange_table",
 		FinishedTs:      100,
-		TableInfo:       tableInfo,
+		TableInfo:       partitionedTableInfo,
 	}
 	routedEvent := commonEvent.NewRoutedDDLEvent(
 		baseEvent,
@@ -546,18 +584,24 @@ func TestWriteExchangePartitionDDLEventUsesTargetNames(t *testing.T) {
 		"partitioned_routed",
 		"target_db",
 		"exchange_table_routed",
-		tableInfo,
-		[]*common.TableInfo{tableInfo, tableInfo},
+		partitionedTableInfo,
+		[]*common.TableInfo{partitionedTableInfo, exchangeTableInfo},
 		nil,
 	)
 
 	err = cloudStorageSink.WriteBlockEvent(routedEvent)
 	require.NoError(t, err)
 
-	_, err = os.Stat(filepath.Join(parentDir, "target_db", "exchange_table_routed", "meta"))
-	require.NoError(t, err)
-	_, err = os.Stat(filepath.Join(parentDir, "target_db", "partitioned_routed", "meta"))
-	require.NoError(t, err)
+	exchangeDef := readSchemaDefinitionForTest(t, parentDir, "target_db", "exchange_table_routed")
+	require.Equal(t, "target_db", exchangeDef.Schema)
+	require.Equal(t, "exchange_table_routed", exchangeDef.Table)
+	require.Equal(t, "partition_value", exchangeDef.Columns[1].Name)
+
+	partitionedDef := readSchemaDefinitionForTest(t, parentDir, "target_db", "partitioned_routed")
+	require.Equal(t, "target_db", partitionedDef.Schema)
+	require.Equal(t, "partitioned_routed", partitionedDef.Table)
+	require.Equal(t, "exchange_value", partitionedDef.Columns[1].Name)
+
 	_, err = os.Stat(filepath.Join(parentDir, "source_db"))
 	require.ErrorIs(t, err, os.ErrNotExist)
 }
