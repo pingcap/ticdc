@@ -27,11 +27,11 @@ import (
 	"github.com/linkedin/goavro/v2"
 	"github.com/pingcap/log"
 	commonType "github.com/pingcap/ticdc/pkg/common"
-	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/util"
-	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
@@ -79,7 +79,7 @@ func (a *BatchEncoder) getKeySchemaCodec(
 	return avroCodec, header, nil
 }
 
-func (a *BatchEncoder) encodeKey(ctx context.Context, topic string, e *commonEvent.RowEvent) ([]byte, error) {
+func (a *BatchEncoder) encodeKey(ctx context.Context, topic string, e *event.RowEvent) ([]byte, error) {
 	index, colInfos := e.PrimaryKeyColumn()
 	// result may be nil if the event has no handle key columns, this may happen in the force replicate mode.
 	// todo: disallow force replicate mode if using the avro.
@@ -125,7 +125,7 @@ func (a *BatchEncoder) encodeKey(ctx context.Context, topic string, e *commonEve
 	return data, nil
 }
 
-func (a *BatchEncoder) encodeValue(ctx context.Context, topic string, e *commonEvent.RowEvent) ([]byte, error) {
+func (a *BatchEncoder) encodeValue(ctx context.Context, topic string, e *event.RowEvent) ([]byte, error) {
 	if e.IsDelete() {
 		return nil, nil
 	}
@@ -176,7 +176,7 @@ func (a *BatchEncoder) encodeValue(ctx context.Context, topic string, e *commonE
 
 func (a *BatchEncoder) nativeValueWithExtension(
 	native map[string]any,
-	e *commonEvent.RowEvent,
+	e *event.RowEvent,
 ) map[string]any {
 	native[tidbOp] = getOperation(e)
 	native[tidbCommitTs] = int64(e.CommitTs)
@@ -240,7 +240,7 @@ func (a *BatchEncoder) schemaWithExtension(
 	return top
 }
 
-func (a *BatchEncoder) getDefaultValue(col *timodel.ColumnInfo) (any, error) {
+func (a *BatchEncoder) getDefaultValue(col *model.ColumnInfo) (any, error) {
 	defaultVal := col.GetDefaultValue()
 	if defaultVal == nil {
 		return nil, nil
@@ -465,7 +465,7 @@ func (a *BatchEncoder) columns2AvroData(
 	return ret, nil
 }
 
-func (a *BatchEncoder) columnToAvroSchema(col *timodel.ColumnInfo) (any, error) {
+func (a *BatchEncoder) columnToAvroSchema(col *model.ColumnInfo) (any, error) {
 	tt := getTiDBTypeFromColumn(col)
 	switch col.GetType() {
 	case mysql.TypeTiny, mysql.TypeShort, mysql.TypeInt24:
@@ -602,7 +602,7 @@ func (a *BatchEncoder) columnToAvroSchema(col *timodel.ColumnInfo) (any, error) 
 func (a *BatchEncoder) columnToAvroData(
 	row *chunk.Row,
 	idx int,
-	col *timodel.ColumnInfo,
+	col *model.ColumnInfo,
 ) (any, string, error) {
 	if row.IsNull(idx) {
 		return nil, "null", nil
