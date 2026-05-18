@@ -47,7 +47,7 @@ func TestGetColumns(t *testing.T) {
 			FieldType: *types.NewFieldType(mysql.TypeYear),
 		},
 	}
-	parseColumns(sql, columnInfos)
+	columnInfos = parseColumns(sql, columnInfos)
 	require.Equal(t, columnInfos[1].GetDefaultValue(), "CURRENT_TIMESTAMP")
 	require.Equal(t, columnInfos[2].GetDecimal(), 2)
 	require.Equal(t, columnInfos[2].GetDefaultValue(), "0")

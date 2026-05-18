@@ -1217,8 +1217,8 @@ func (c *dbzCodec) EncodeDDLEvent(
 							}
 						})
 						jWriter.WriteArrayField("columns", func() {
-							parseColumns(e.Query, e.TableInfo.GetColumns())
-							for pos, col := range e.TableInfo.GetColumns() {
+							columns := parseColumns(e.Query, e.TableInfo.GetColumns())
+							for pos, col := range columns {
 								if col.Hidden {
 									continue
 								}
