@@ -116,7 +116,7 @@ func (s *Sink) Run(ctx context.Context) error {
 }
 
 func (s *Sink) BatchCount() int {
-	return s.eventCh.Len()
+	return 4096
 }
 
 func (s *Sink) BatchBytes() int {
