@@ -9,6 +9,23 @@ TiCDC pulls change logs from TiDB clusters and pushes them to downstream systems
 * **Better maintainability**. E.g. simpler and human readable code, clear code module, and open to extensions.
 * **Cloud native architecture**. We want to design a new architecture from the ground to support the cloud.
 
+## Storage Sink Iceberg (Experimental)
+
+The storage sink supports an Iceberg output mode through `protocol=iceberg` on storage URIs (for example `s3://` and `file://`).
+
+Example:
+
+```bash
+bin/cdc cli changefeed create \
+  --sink-uri "s3://my-bucket/my-prefix?protocol=iceberg&namespace=ns&commit-interval=30s"
+```
+
+Notes:
+
+* Current implementation supports append mode only.
+* Partition-related DDL operations are rejected.
+* TiCDC writes Iceberg metadata and Parquet data files under the configured storage prefix.
+
 ## Quick Start
 
 ### Obtaining TiCDC Download Links
