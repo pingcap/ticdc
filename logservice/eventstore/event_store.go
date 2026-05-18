@@ -35,6 +35,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/encryption"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -118,6 +119,8 @@ type dispatcherStat struct {
 	resolvedTs atomic.Uint64
 	// the max ts of events which is not needed by this dispatcher
 	checkpointTs uint64
+	// keyspaceID for encryption (0 means default/classic)
+	keyspaceID uint32
 	// the difference between `subStat`, `pendingSubStat` and `removingSubStat`:
 	//   1) if there is no existing subscriptions which can be reused,
 	//      or there is a existing subscription with exact span match,
@@ -184,9 +187,10 @@ type subscriptionStat struct {
 type subscriptionStats map[logpuller.SubscriptionID]*subscriptionStat
 
 type eventWithCallback struct {
-	subID   logpuller.SubscriptionID
-	tableID int64
-	kvs     []common.RawKVEntry
+	subID      logpuller.SubscriptionID
+	tableID    int64
+	keyspaceID uint32
+	kvs        []common.RawKVEntry
 	// kv with commitTs <= currentResolvedTs will be filtered out
 	currentResolvedTs uint64
 	enqueueTimeNano   int64
@@ -242,6 +246,8 @@ type eventStore struct {
 	compressionThreshold int
 	// enableZstdCompression controls whether to enable zstd compression for large values.
 	enableZstdCompression bool
+	// encryptionManager for encrypting/decrypting data (optional).
+	encryptionManager encryption.EncryptionManager
 }
 
 const (
@@ -262,6 +268,8 @@ func New(
 		log.Panic("fail to remove path", zap.String("path", dbPath), zap.Error(err))
 	}
 
+	// Try to get encryption manager from appcontext (optional)
+	encMgr, _ := appcontext.TryGetService[encryption.EncryptionManager](appcontext.EncryptionManager)
 	dbs, pebbleCache, tableCache := createPebbleDBs(dbPath, dbCount)
 	store := &eventStore{
 		pdClock:   appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
@@ -287,6 +295,7 @@ func New(
 		},
 		compressionThreshold:  config.GetGlobalServerConfig().Debug.EventStore.CompressionThreshold,
 		enableZstdCompression: config.GetGlobalServerConfig().Debug.EventStore.EnableZstdCompression,
+		encryptionManager:     encMgr,
 	}
 	store.gcManager = newGCManager(store.dbs, deleteDataRange, compactDataRange)
 
@@ -447,7 +456,7 @@ func (e *eventStore) Close(_ context.Context) error {
 }
 
 func (e *eventStore) RegisterDispatcher(
-	changefeedID common.ChangeFeedID,
+	_ common.ChangeFeedID,
 	dispatcherID common.DispatcherID,
 	dispatcherSpan *heartbeatpb.TableSpan,
 	startTs uint64,
@@ -501,6 +510,7 @@ func (e *eventStore) RegisterDispatcher(
 		dispatcherID: dispatcherID,
 		tableSpan:    dispatcherSpan,
 		checkpointTs: startTs,
+		keyspaceID:   dispatcherSpan.KeyspaceID,
 	}
 	stat.resolvedTs.Store(startTs)
 
@@ -627,6 +637,7 @@ func (e *eventStore) RegisterDispatcher(
 		subStat.eventCh.Push(eventWithCallback{
 			subID:             subStat.subID,
 			tableID:           subStat.tableSpan.TableID,
+			keyspaceID:        subStat.tableSpan.KeyspaceID,
 			kvs:               kvs,
 			currentResolvedTs: subStat.resolvedTs.Load(),
 			enqueueTimeNano:   now.UnixNano(),
@@ -945,22 +956,21 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 
 	decoder := e.decoderPool.Get().(*zstd.Decoder)
 
-	needCheckSpan := true
-	if stat.tableSpan.Equal(subStat.tableSpan) {
-		needCheckSpan = false
-	}
+	needCheckSpan := !stat.tableSpan.Equal(subStat.tableSpan)
 
 	return &eventStoreIter{
-		tableSpan:     stat.tableSpan,
-		needCheckSpan: needCheckSpan,
-		innerIter:     iter,
-		prevStartTs:   0,
-		prevCommitTs:  0,
-		startTs:       dataRange.CommitTsStart,
-		endTs:         dataRange.CommitTsEnd,
-		rowCount:      0,
-		decoder:       decoder,
-		decoderPool:   e.decoderPool,
+		tableSpan:         stat.tableSpan,
+		needCheckSpan:     needCheckSpan,
+		innerIter:         iter,
+		prevStartTs:       0,
+		prevCommitTs:      0,
+		startTs:           dataRange.CommitTsStart,
+		endTs:             dataRange.CommitTsEnd,
+		rowCount:          0,
+		decoder:           decoder,
+		decoderPool:       e.decoderPool,
+		encryptionManager: e.encryptionManager,
+		keyspaceID:        stat.keyspaceID,
 	}, nil
 }
 
@@ -1364,37 +1374,62 @@ func (e *eventStore) writeEvents(
 				continue
 			}
 
-			compressionType := CompressionNone
 			valueBytesBefore := kv.GetSize()
 			valueBytesAfter := valueBytesBefore
 			keyLen := encodedKeyLen(kv)
-
-			if e.enableZstdCompression && valueBytesBefore > int64(e.compressionThreshold) {
-				if cap(rawBuf) < int(valueBytesBefore) {
-					rawBuf = make([]byte, 0, int(valueBytesBefore))
-				} else {
-					rawBuf = rawBuf[:0]
+			compressionType := CompressionNone
+			needCompress := e.enableZstdCompression && valueBytesBefore > int64(e.compressionThreshold)
+			if e.encryptionManager == nil && !needCompress {
+				// SetDeferred reserves the final Pebble batch space up front, so
+				// the uncompressed raw KV can be encoded directly into op.Value
+				// without allocating a separate value slice and copying it later.
+				op := batch.SetDeferred(keyLen, int(valueBytesBefore))
+				if err := encodeDeferredEventKey(op, keyLen, uint64(event.subID), event.tableID, kv, CompressionNone, false); err != nil {
+					return err
 				}
-				rawValue := kv.EncodeTo(rawBuf)
-				maxEncodedSize := encoder.MaxEncodedSize(len(rawValue))
-				if cap(dstBuf) < maxEncodedSize {
-					dstBuf = make([]byte, 0, maxEncodedSize)
-				} else {
-					dstBuf = dstBuf[:0]
+				op.Value = kv.EncodeTo(op.Value[:0])
+				if len(op.Value) != int(valueBytesBefore) {
+					return fmt.Errorf("encoded raw kv entry size mismatch, expected %d, got %d",
+						valueBytesBefore, len(op.Value))
 				}
-				value := encoder.EncodeAll(rawValue, dstBuf)
+				if err := op.Finish(); err != nil {
+					return err
+				}
+			} else if e.encryptionManager != nil {
+				var value []byte
+				value, compressionType, rawBuf, dstBuf = encodeAndMaybeCompressValue(kv, encoder, rawBuf, dstBuf, needCompress)
 				valueBytesAfter = int64(len(value))
-				compressionType = CompressionZSTD
-				metrics.EventStoreCompressedRowsCount.Inc()
+
+				// Encrypt if encryption is enabled (after compression)
+				encryptedValue, err := e.encryptionManager.EncryptData(context.Background(), event.keyspaceID, value)
+				if err != nil {
+					return err
+				}
+
+				op := batch.SetDeferred(keyLen, len(encryptedValue))
+				if err := encodeDeferredEventKey(op, keyLen, uint64(event.subID), event.tableID, kv, compressionType, true); err != nil {
+					return err
+				}
+				copiedValueLen := copy(op.Value, encryptedValue)
+				op.Value = op.Value[:copiedValueLen]
+				if copiedValueLen != len(encryptedValue) {
+					return fmt.Errorf("encrypted raw kv entry size mismatch, expected %d, got %d",
+						len(encryptedValue), copiedValueLen)
+				}
+				if err := op.Finish(); err != nil {
+					return err
+				}
+			} else {
+				var value []byte
+				value, compressionType, rawBuf, dstBuf = encodeAndMaybeCompressValue(kv, encoder, rawBuf, dstBuf, true)
+				valueBytesAfter = int64(len(value))
 				// SetDeferred is a write path optimization. Now that the compressed
 				// value length is known, reserve the exact key/value space in the
 				// Pebble batch, encode the key directly into op.Key, and copy the
 				// compressed value into op.Value without building a temporary key.
 				op := batch.SetDeferred(keyLen, len(value))
-				op.Key = EncodeKeyTo(op.Key[:0], uint64(event.subID), event.tableID, kv, compressionType)
-				if len(op.Key) != keyLen {
-					return fmt.Errorf("encoded event store key size mismatch, expected %d, got %d",
-						keyLen, len(op.Key))
+				if err := encodeDeferredEventKey(op, keyLen, uint64(event.subID), event.tableID, kv, compressionType, false); err != nil {
+					return err
 				}
 				copiedValueLen := copy(op.Value, value)
 				op.Value = op.Value[:copiedValueLen]
@@ -1405,28 +1440,7 @@ func (e *eventStore) writeEvents(
 				if err := op.Finish(); err != nil {
 					return err
 				}
-				rawBuf = rawValue[:0]
-				dstBuf = value[:0]
-			} else {
-				// SetDeferred reserves the final Pebble batch space up front, so
-				// the uncompressed raw KV can be encoded directly into op.Value
-				// without allocating a separate value slice and copying it later.
-				op := batch.SetDeferred(keyLen, int(valueBytesBefore))
-				op.Key = EncodeKeyTo(op.Key[:0], uint64(event.subID), event.tableID, kv, compressionType)
-				if len(op.Key) != keyLen {
-					return fmt.Errorf("encoded event store key size mismatch, expected %d, got %d",
-						keyLen, len(op.Key))
-				}
-				op.Value = kv.EncodeTo(op.Value[:0])
-				if len(op.Value) != int(valueBytesBefore) {
-					return fmt.Errorf("encoded raw kv entry size mismatch, expected %d, got %d",
-						valueBytesBefore, len(op.Value))
-				}
-				if err := op.Finish(); err != nil {
-					return err
-				}
 			}
-
 			totalValueBytesBefore += valueBytesBefore
 			totalValueBytesAfter += valueBytesAfter
 		}
@@ -1451,6 +1465,60 @@ func (e *eventStore) writeEvents(
 	return err
 }
 
+func encodeAndMaybeCompressValue(
+	kv *common.RawKVEntry,
+	encoder *zstd.Encoder,
+	rawBuf []byte,
+	dstBuf []byte,
+	needCompress bool,
+) (value []byte, compressionType CompressionType, nextRawBuf []byte, nextDstBuf []byte) {
+	rawValue := ensureValueBuffer(rawBuf, int(kv.GetSize()))
+	rawValue = kv.EncodeTo(rawValue)
+	value = rawValue
+	compressionType = CompressionNone
+	nextRawBuf = rawValue[:0]
+	nextDstBuf = dstBuf
+	if !needCompress {
+		return value, compressionType, nextRawBuf, nextDstBuf
+	}
+
+	maxEncodedSize := encoder.MaxEncodedSize(len(rawValue))
+	value = ensureValueBuffer(dstBuf, maxEncodedSize)
+	value = encoder.EncodeAll(rawValue, value)
+	compressionType = CompressionZSTD
+	nextDstBuf = value[:0]
+	metrics.EventStoreCompressedRowsCount.Inc()
+	return value, compressionType, nextRawBuf, nextDstBuf
+}
+
+func ensureValueBuffer(buf []byte, minCap int) []byte {
+	if cap(buf) < minCap {
+		return make([]byte, 0, minCap)
+	}
+	return buf[:0]
+}
+
+func encodeDeferredEventKey(
+	op *pebble.DeferredBatchOp,
+	keyLen int,
+	subID uint64,
+	tableID int64,
+	kv *common.RawKVEntry,
+	compressionType CompressionType,
+	usesEncryptionLayer bool,
+) error {
+	if usesEncryptionLayer {
+		op.Key = encodeKeyToWithEncryptionLayer(op.Key[:0], subID, tableID, kv, compressionType)
+	} else {
+		op.Key = EncodeKeyTo(op.Key[:0], subID, tableID, kv, compressionType)
+	}
+	if len(op.Key) != keyLen {
+		return fmt.Errorf("encoded event store key size mismatch, expected %d, got %d",
+			keyLen, len(op.Key))
+	}
+	return nil
+}
+
 type eventStoreIter struct {
 	tableSpan *heartbeatpb.TableSpan
 	// true when need check whether data from `innerIter` is in `tableSpan`
@@ -1468,6 +1536,9 @@ type eventStoreIter struct {
 	decoder     *zstd.Decoder
 	decoderPool *sync.Pool
 	decodeBuf   []byte
+	// encryptionManager for decrypting data (optional, can be nil).
+	encryptionManager encryption.EncryptionManager
+	keyspaceID        uint32
 }
 
 func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
@@ -1479,6 +1550,17 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
 		key := iter.innerIter.Key()
 		value := iter.innerIter.Value()
 
+		if KeyUsesEncryptionLayer(key) {
+			if iter.encryptionManager == nil {
+				log.Panic("encountered encryption-layer value but no encryption manager is configured",
+					zap.Uint32("keyspaceID", iter.keyspaceID))
+			}
+			decryptedValue, err := iter.encryptionManager.DecryptData(context.Background(), iter.keyspaceID, value)
+			if err != nil {
+				log.Panic("failed to decrypt value", zap.Error(err))
+			}
+			value = decryptedValue
+		}
 		_, compressionType := DecodeKeyAttributes(key)
 		var decodedValue []byte
 		if compressionType == CompressionZSTD {
@@ -1520,14 +1602,12 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
 		skippedBytesMetrics.Add(float64(len(value)))
 		iter.innerIter.Next()
 	}
-	isNewTxn := false
+	isNewTxn := iter.prevCommitTs == 0 || (rawKV.StartTs != iter.prevStartTs || rawKV.CRTs != iter.prevCommitTs)
 	// 2 PC transactions have different startTs and commitTs.
 	// async-commit transactions have different startTs and may have the same commitTs.
 	// at the moment, use commit-ts determine whether it is a new transaction, even though multiple
 	// different transactions may be grouped together, to satisfy the resolved-ts semantics.
-	if iter.prevCommitTs == 0 || (rawKV.StartTs != iter.prevStartTs || rawKV.CRTs != iter.prevCommitTs) {
-		isNewTxn = true
-	}
+
 	iter.prevCommitTs = rawKV.CRTs
 	iter.prevStartTs = rawKV.StartTs
 	iter.rowCount++

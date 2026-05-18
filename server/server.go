@@ -376,7 +376,7 @@ func (c *server) Run(ctx context.Context) error {
 	go func() {
 		<-gctx.Done()
 		time.Sleep(GracefulShutdownTimeout)
-		ch <- errors.ErrTimeout.FastGenByArgs("gracefull shutdown timeout")
+		ch <- errors.ErrTimeout.FastGenByArgs("graceful shutdown timeout")
 	}()
 	go func() {
 		ch <- g.Wait()

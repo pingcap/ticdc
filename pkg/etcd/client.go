@@ -30,7 +30,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/pd/pkg/errs"
-	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
 	v3rpc "go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
 	"go.etcd.io/etcd/client/pkg/v3/logutil"
 	clientV3 "go.etcd.io/etcd/client/v3"
@@ -566,8 +565,8 @@ func (checker *healthyChecker) update(eps []string) {
 			}
 			if time.Since(lastHealthy) > etcdServerDisconnectedTimeout {
 				// try to reset client endpoint to trigger reconnect
-				client.(*healthyClient).Client.SetEndpoints([]string{}...)
-				client.(*healthyClient).Client.SetEndpoints(ep)
+				client.(*healthyClient).SetEndpoints([]string{}...)
+				client.(*healthyClient).SetEndpoints(ep)
 			}
 			continue
 		}
@@ -614,5 +613,5 @@ func IsHealthy(ctx context.Context, client *clientv3.Client) bool {
 	_, err := client.Get(ctx, healthyPath)
 	// permission denied is OK since proposal goes through consensus to get it
 	// See: https://github.com/etcd-io/etcd/blob/85b640cee793e25f3837c47200089d14a8392dc7/etcdctl/ctlv3/command/ep_command.go#L124
-	return err == nil || err == rpctypes.ErrPermissionDenied
+	return err == nil || cerror.Is(err, v3rpc.ErrPermissionDenied)
 }

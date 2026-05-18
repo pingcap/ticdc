@@ -271,7 +271,7 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 			default:
 				log.Panic("unknown event type", zap.Any("event", event))
 			}
-			s.client.pushRegionEventToDS(SubscriptionID(event.RequestId), regionEvent)
+			s.client.pushRegionEventToDS(subscriptionID, regionEvent)
 		} else {
 			switch event.Event.(type) {
 			case *cdcpb.Event_Error:
@@ -363,17 +363,6 @@ func (s *regionRequestWorker) processRegionSendTask(
 		return nil
 	}
 
-	fetchMoreReq := func() (regionReq, error) {
-		for {
-			// Try to get from cache
-			if req, err := s.requestCache.pop(ctx); err != nil {
-				return regionReq{}, err
-			} else {
-				return req, nil
-			}
-		}
-	}
-
 	// Handle pre-fetched region first
 	region := *s.preFetchForConnecting
 	s.preFetchForConnecting = nil
@@ -440,7 +429,8 @@ func (s *regionRequestWorker) processRegionSendTask(
 				return err
 			}
 		}
-		regionReq, err = fetchMoreReq()
+		// Try to get from cache
+		regionReq, err = s.requestCache.pop(ctx)
 		if err != nil {
 			return err
 		}

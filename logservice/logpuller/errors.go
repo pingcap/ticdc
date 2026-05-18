@@ -16,12 +16,9 @@ package logpuller
 import (
 	"fmt"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/tikv/client-go/v2/tikv"
 )
-
-var errUnreachable = errors.New("kv client unreachable error")
 
 type eventError struct {
 	err *cdcpb.Error

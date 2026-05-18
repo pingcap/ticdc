@@ -95,7 +95,7 @@ var csvTestColumnsGroup = [][]*csvTestColumnTuple{
 			},
 			model.ColumnInfo{
 				ID:        6,
-				FieldType: *setFlag(types.NewFieldType(mysql.TypeTiny), uint(mysql.UnsignedFlag)),
+				FieldType: *setFlag(types.NewFieldType(mysql.TypeTiny), mysql.UnsignedFlag),
 			},
 			uint64(1),
 			config.BinaryEncodingBase64,
@@ -929,11 +929,12 @@ func TestRowChangeEventConversion(t *testing.T) {
 		}
 		e.TableInfo = commonType.WrapTableInfo("test", tidbTableInfo)
 
-		if idx%3 == 0 { // delete operation
+		switch idx % 3 {
+		case 0: // delete operation
 			e.Event.PreRow = chunk.MutRowFromValues(cols...).ToRow()
-		} else if idx%3 == 1 { // insert operation
+		case 1: // insert operation
 			e.Event.Row = chunk.MutRowFromValues(cols...).ToRow()
-		} else { // update operation
+		default: // update operation
 			e.Event.PreRow = chunk.MutRowFromValues(cols...).ToRow()
 			e.Event.Row = chunk.MutRowFromValues(cols...).ToRow()
 		}
@@ -954,6 +955,38 @@ func TestRowChangeEventConversion(t *testing.T) {
 		// require.Nil(t, err)
 		// require.NotNil(t, row2)
 	}
+}
+
+func TestRowChangedEvent2CSVMsgUsesTargetNames(t *testing.T) {
+	t.Parallel()
+
+	tableInfo := commonType.WrapTableInfo("source_db", &model.TableInfo{
+		ID:   20,
+		Name: ast.NewCIStr("source_table"),
+		Columns: []*model.ColumnInfo{
+			{
+				ID:        1,
+				Name:      ast.NewCIStr("id"),
+				FieldType: *types.NewFieldType(mysql.TypeLong),
+			},
+		},
+	}).CloneWithRouting("target_db", "target_table")
+
+	csvMsg, err := rowChangedEvent2CSVMsg(&common.Config{
+		Delimiter:  ",",
+		Quote:      "\"",
+		Terminator: "\n",
+		NullString: "\\N",
+	}, &commonEvent.RowEvent{
+		TableInfo: tableInfo,
+		Event: commonEvent.RowChange{
+			Row: chunk.MutRowFromValues(int64(1)).ToRow(),
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "target_db", csvMsg.schemaName)
+	require.Equal(t, "target_table", csvMsg.tableName)
+	require.Contains(t, string(csvMsg.encode()), `"target_table","target_db"`)
 }
 
 func TestCSVMessageDecode(t *testing.T) {

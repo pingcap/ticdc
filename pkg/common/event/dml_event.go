@@ -283,23 +283,10 @@ func (b *BatchDMLEvent) AssembleRows(tableInfo *common.TableInfo) {
 		log.Panic("DMLEvent: TableInfo is nil")
 	}
 
-	defer func() {
-		b.TableInfo.InitPrivateFields()
-	}()
-
 	// For local events (same node), rows are already set.
 	if b.Rows != nil {
 		if !tableInfo.TableName.IsRouted() {
 			return
-		}
-		if b.TableInfo != nil {
-			originVersion := b.TableInfo.GetUpdateTS()
-			routedVersion := tableInfo.GetUpdateTS()
-			if originVersion != routedVersion {
-				log.Panic("table version mismatch when set routed table info",
-					zap.Uint64("originTableVersion", originVersion),
-					zap.Uint64("routedTableVersion", routedVersion))
-			}
 		}
 		b.TableInfo = tableInfo
 		for _, dml := range b.DMLEvents {
@@ -315,11 +302,11 @@ func (b *BatchDMLEvent) AssembleRows(tableInfo *common.TableInfo) {
 
 	if b.TableInfo != nil {
 		originVersion := b.TableInfo.GetUpdateTS()
-		routedVersion := tableInfo.GetUpdateTS()
-		if originVersion != routedVersion {
+		version := tableInfo.GetUpdateTS()
+		if originVersion != version {
 			log.Panic("table version mismatch when decode remote raw rows",
 				zap.Uint64("originTableVersion", originVersion),
-				zap.Uint64("routedTableVersion", routedVersion))
+				zap.Uint64("tableVersion", version))
 		}
 	}
 
@@ -632,7 +619,7 @@ func (t *DMLEvent) AppendRow(raw *common.RawKVEntry,
 			copy(keyCopy, raw.Key)
 			t.RowKeys = append(t.RowKeys, keyCopy)
 		}
-		t.Length += 1
+		t.Length++
 		t.ApproximateSize += raw.GetSize()
 		if checksum != nil {
 			t.Checksum = append(t.Checksum, checksum)

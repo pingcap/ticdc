@@ -183,10 +183,10 @@ func getLen(ft types.FieldType) int {
 		}
 	case mysql.TypeTiny, mysql.TypeShort, mysql.TypeInt24, mysql.TypeLong:
 		if mysql.HasUnsignedFlag(ft.GetFlag()) {
-			defaultFlen -= 1
+			defaultFlen--
 		}
 		if ft.GetType() == mysql.TypeTiny && mysql.HasZerofillFlag(ft.GetFlag()) {
-			defaultFlen += 1
+			defaultFlen++
 		}
 		if flen != defaultFlen {
 			return flen
@@ -285,7 +285,7 @@ func getBitFromUint64(n int, v uint64) []byte {
 	binary.LittleEndian.PutUint64(buf[:], v)
 	numBytes := n / 8
 	if n%8 != 0 {
-		numBytes += 1
+		numBytes++
 	}
 	return buf[:numBytes]
 }

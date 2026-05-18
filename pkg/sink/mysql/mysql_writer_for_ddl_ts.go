@@ -395,7 +395,9 @@ func (w *Writer) GetTableRecoveryInfo(tableIDs []int64) ([]int64, []bool, []bool
 		}
 	}
 
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 
 	type ddlTsRow struct {
 		ddlTs       int64
@@ -663,7 +665,9 @@ func (w *Writer) isDDLExecuted(tableID int64, ddlTs uint64) (bool, error) {
 		return false, errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to check ddl ts table; Query is %s", query)))
 	}
 
-	defer rows.Close()
+	defer func() {
+		_ = rows.Close()
+	}()
 	if rows.Next() {
 		return true, nil
 	}

@@ -73,13 +73,15 @@ var (
 			Help:      "The status of changefeeds",
 		}, []string{getKeyspaceLabel(), "changefeed"})
 
+	// ChangefeedErrorInfoGauge records the current warning or failed reason and its occurrence time
+	// for each changefeed.
 	ChangefeedErrorInfoGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "owner",
 			Name:      "changefeed_error_info",
-			Help:      "The current warning or failed reason of changefeeds",
-		}, []string{getKeyspaceLabel(), "changefeed", "state", "code", "message"})
+			Help:      "The current warning or failed reason and occurrence time of changefeeds",
+		}, []string{getKeyspaceLabel(), "changefeed", "state", "error_time", "code", "message"})
 
 	ChangefeedCheckpointTsLagGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{

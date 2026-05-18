@@ -45,6 +45,7 @@ type mockDispatcher struct {
 	handleEvents func(events []dispatcher.DispatcherEvent, wakeCallback func()) (block bool)
 	events       []dispatcher.DispatcherEvent
 	checkPointTs uint64
+	tableSpan    *heartbeatpb.TableSpan
 
 	skipSyncpointAtStartTs bool
 }
@@ -89,6 +90,9 @@ func (m *mockDispatcher) GetEventCollectorBatchConfig() (batchCount int, batchBy
 }
 
 func (m *mockDispatcher) GetTableSpan() *heartbeatpb.TableSpan {
+	if m.tableSpan != nil {
+		return m.tableSpan
+	}
 	return &heartbeatpb.TableSpan{
 		TableID: 1,
 	}
@@ -1146,7 +1150,6 @@ func TestHandleBatchDataEvents(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			mockDisp := newMockDispatcher(common.NewDispatcherID(), 0)
@@ -1234,7 +1237,6 @@ func TestHandleSingleDataEvents(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			mockDisp := newMockDispatcher(common.NewDispatcherID(), 0)
@@ -1436,7 +1438,6 @@ func TestHandleBatchDMLEvent(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			mockDisp := newMockDispatcher(common.NewDispatcherID(), 0)
@@ -1746,59 +1747,50 @@ func TestLocalHeartbeatRemovedReregisterReadySendsReset(t *testing.T) {
 }
 
 func TestHandleDDLEventTableInfoUpdate(t *testing.T) {
-	t.Parallel()
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+	helper.Tk().MustExec("use test")
 
+	tableDDL := helper.DDL2Event("CREATE TABLE `products` (`id` INT PRIMARY KEY)")
+	viewDDL := helper.DDL2Event("CREATE VIEW `transient_view` AS SELECT 1 AS `id`")
+
+	localServerID := node.ID("local")
 	remoteServerID := node.ID("remote")
 
-	t.Run("stores ddl table info", func(t *testing.T) {
-		var capturedEvent *commonEvent.DDLEvent
-		mockDisp := newMockDispatcher(common.NewDispatcherID(), 0)
-		mockDisp.handleEvents = func(events []dispatcher.DispatcherEvent, wakeCallback func()) bool {
-			if len(events) > 0 {
-				capturedEvent = events[0].Event.(*commonEvent.DDLEvent)
-			}
-			return false
-		}
+	mockDisp := newMockDispatcher(common.NewDispatcherID(), 0)
+	mockDisp.tableSpan = &heartbeatpb.TableSpan{TableID: tableDDL.TableInfo.TableName.TableID}
+	mockDisp.handleEvents = func(events []dispatcher.DispatcherEvent, wakeCallback func()) bool {
+		return false
+	}
 
-		stat := newDispatcherStatForTest(mockDisp, nil)
-		markSessionReceiving(stat.session, remoteServerID)
-		stat.currentEpoch.Store(newDispatcherEpochState(10, 1, stat.target.GetStartTs()))
-		stat.lastEventCommitTs.Store(50)
+	stat := newDispatcherStat(mockDisp, newTestEventCollector(localServerID), nil)
+	markSessionReceiving(stat.session, remoteServerID)
+	stat.currentEpoch.Store(newDispatcherEpochState(10, 1, stat.target.GetStartTs()))
+	stat.lastEventCommitTs.Store(50)
 
-		tableInfo := &common.TableInfo{
-			TableName: common.TableName{
-				Schema:  "source_db",
-				Table:   "users",
-				TableID: 1,
-			},
-		}
+	tableDDL.Epoch = 10
+	tableDDL.Seq = 2
+	stat.handleDataEvents(dispatcher.DispatcherEvent{From: &remoteServerID, Event: tableDDL})
 
-		ddlEvent := &commonEvent.DDLEvent{
-			Version:    commonEvent.DDLEventVersion1,
-			Query:      "ALTER TABLE `source_db`.`users` ADD COLUMN `c1` INT",
-			FinishedTs: 100,
-			Epoch:      10,
-			Seq:        2,
-			TableInfo:  tableInfo,
-		}
+	storedTableInfo := stat.tableInfo.Load().(*common.TableInfo)
+	require.NotNil(t, storedTableInfo)
+	require.Same(t, tableDDL.TableInfo, storedTableInfo)
+	require.Equal(t, "test", storedTableInfo.TableName.Schema)
+	require.Equal(t, "products", storedTableInfo.TableName.Table)
+	require.Equal(t, tableDDL.TableInfo.TableName.TableID, storedTableInfo.TableName.TableID)
+	require.Equal(t, tableDDL.FinishedTs, stat.tableInfoVersion.Load())
+	require.Len(t, mockDisp.events, 1)
+	require.Same(t, tableDDL, mockDisp.events[0].Event)
 
-		events := []dispatcher.DispatcherEvent{
-			{From: &remoteServerID, Event: ddlEvent},
-		}
+	viewDDL.Epoch = 10
+	viewDDL.Seq = 3
+	stat.handleDataEvents(dispatcher.DispatcherEvent{From: &remoteServerID, Event: viewDDL})
 
-		stat.handleDataEvents(events...)
-
-		stored := stat.tableInfo.Load()
-		require.NotNil(t, stored)
-		storedTableInfo := stored.(*common.TableInfo)
-		require.Same(t, tableInfo, storedTableInfo)
-		require.Equal(t, "source_db", storedTableInfo.TableName.Schema)
-		require.Equal(t, "users", storedTableInfo.TableName.Table)
-		require.Equal(t, int64(1), storedTableInfo.TableName.TableID)
-		require.Equal(t, uint64(100), stat.tableInfoVersion.Load())
-		require.NotNil(t, capturedEvent)
-		require.Same(t, ddlEvent, capturedEvent)
-	})
+	storedTableInfo = stat.tableInfo.Load().(*common.TableInfo)
+	require.Same(t, tableDDL.TableInfo, storedTableInfo)
+	require.Equal(t, viewDDL.FinishedTs, stat.tableInfoVersion.Load())
+	require.Len(t, mockDisp.events, 2)
+	require.Same(t, viewDDL, mockDisp.events[1].Event)
 }
 
 func TestRemove(t *testing.T) {

@@ -65,7 +65,7 @@ func New(ctx context.Context, cfg *config.ChangefeedConfig, changefeedID common.
 	case config.S3Scheme, config.FileScheme, config.GCSScheme, config.GSScheme, config.AzblobScheme, config.AzureScheme, config.CloudStorageNoopScheme:
 		return cloudstorage.New(ctx, changefeedID, sinkURI, cfg.SinkConfig, cfg.EnableTableAcrossNodes, nil)
 	case config.BlackHoleScheme:
-		return blackhole.New()
+		return blackhole.New(changefeedID)
 	}
 	return nil, errors.ErrSinkURIInvalid.GenWithStackByArgs(sinkURI)
 }

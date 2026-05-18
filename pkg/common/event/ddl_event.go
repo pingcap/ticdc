@@ -354,10 +354,6 @@ func (e *DDLEvent) GetUpdatedSchemas() []SchemaIDChange {
 }
 
 func (e *DDLEvent) GetDDLQuery() string {
-	if e == nil {
-		log.Error("DDLEvent is nil, should not happened in production env", zap.Any("event", e))
-		return ""
-	}
 	return e.Query
 }
 
@@ -522,13 +518,6 @@ func (t *DDLEvent) decodeV1(data []byte) error {
 		return err
 	}
 
-	for _, info := range t.MultipleTableInfos {
-		info.InitPrivateFields()
-	}
-	if t.TableInfo != nil {
-		t.TableInfo.InitPrivateFields()
-	}
-
 	return nil
 }
 
@@ -588,10 +577,21 @@ func NewRoutedDDLEvent(
 		BDRMode:           d.BDRMode,
 		Err:               d.Err,
 		PostTxnFlushed:    clonePostTxnFlushed(d.PostTxnFlushed),
+		IndexIDs:          cloneIndexIDs(d.IndexIDs),
 		eventSize:         d.eventSize,
 		IsBootstrap:       d.IsBootstrap,
 		NotSync:           d.NotSync,
 	}
+}
+
+func cloneIndexIDs(indexIDs []int64) []int64 {
+	if indexIDs == nil {
+		return nil
+	}
+
+	cloned := make([]int64, len(indexIDs))
+	copy(cloned, indexIDs)
+	return cloned
 }
 
 func clonePostTxnFlushed(postTxnFlushed []func()) []func() {
