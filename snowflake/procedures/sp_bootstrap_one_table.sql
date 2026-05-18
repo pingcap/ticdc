@@ -31,7 +31,7 @@ BEGIN
     error_time TIMESTAMP_NTZ(6)
   );
 
-  CALL TICDC_META.SP_ENSURE_TARGET_TABLE(:p_integration_id, :p_object_id);
+  CALL TICDC_META.SP_ENSURE_TARGET_TABLE(:p_integration_id, :p_object_id, :p_generation, FALSE);
 
   SELECT
     MAX(target_base_table),
@@ -40,7 +40,8 @@ BEGIN
     INTO :v_target_base_table, :v_snapshot_external_table, :v_table_version
     FROM TICDC_META.OBJECT_REGISTRY
    WHERE integration_id = :p_integration_id
-     AND object_id = :p_object_id;
+     AND object_id = :p_object_id
+     AND generation = :p_generation;
 
   IF (v_snapshot_external_table IS NULL OR v_snapshot_external_table = '') THEN
     RETURN OBJECT_CONSTRUCT(
@@ -69,6 +70,7 @@ BEGIN
     FROM TICDC_META.COLUMN_REGISTRY
    WHERE integration_id = :p_integration_id
      AND object_id = :p_object_id
+     AND generation = :p_generation
      AND COALESCE(is_deleted, FALSE) = FALSE;
 
   SELECT COALESCE(
@@ -83,6 +85,7 @@ BEGIN
     FROM TICDC_META.COLUMN_REGISTRY
    WHERE integration_id = :p_integration_id
      AND object_id = :p_object_id
+     AND generation = :p_generation
      AND COALESCE(is_deleted, FALSE) = FALSE
      AND COALESCE(is_handle_key, is_primary_key, FALSE);
 
@@ -99,6 +102,7 @@ BEGIN
       FROM TICDC_META.COLUMN_REGISTRY
      WHERE integration_id = :p_integration_id
        AND object_id = :p_object_id
+       AND generation = :p_generation
        AND COALESCE(is_deleted, FALSE) = FALSE;
   END IF;
 
@@ -126,13 +130,15 @@ BEGIN
       :p_object_id AS object_id,
       :p_generation AS generation,
       :p_bootstrap_ts AS bootstrap_ts,
-      :v_table_version AS table_version
+      :v_table_version AS table_version,
+      :v_target_base_table AS target_base_table
   ) s
-  ON t.integration_id = s.integration_id AND t.object_id = s.object_id
+  ON t.integration_id = s.integration_id AND t.object_id = s.object_id AND t.generation = s.generation
   WHEN MATCHED THEN
     UPDATE SET
       generation = s.generation,
       bootstrap_ts = s.bootstrap_ts,
+      target_base_table = s.target_base_table,
       table_version = s.table_version,
       last_applied_commit_ts = s.bootstrap_ts,
       last_apply_time = CURRENT_TIMESTAMP(),
@@ -144,6 +150,7 @@ BEGIN
       object_id,
       generation,
       bootstrap_ts,
+      target_base_table,
       table_version,
       last_applied_commit_ts,
       last_apply_time,
@@ -155,6 +162,7 @@ BEGIN
       s.object_id,
       s.generation,
       s.bootstrap_ts,
+      s.target_base_table,
       s.table_version,
       s.bootstrap_ts,
       CURRENT_TIMESTAMP(),

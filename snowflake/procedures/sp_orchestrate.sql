@@ -6,6 +6,7 @@ AS
 $$
 DECLARE
   v_run_uuid STRING DEFAULT UUID_STRING();
+  v_active_generation STRING DEFAULT NULL;
   v_upper_ts NUMBER(20, 0) DEFAULT 0;
   v_watermark_before NUMBER(20, 0) DEFAULT 0;
   v_watermark_after NUMBER(20, 0) DEFAULT 0;
@@ -27,10 +28,16 @@ BEGIN
   CALL TICDC_META.SP_DISCOVER_CONTROL_FILES(:p_integration_id);
   CALL TICDC_META.SP_LOAD_DDL_MANIFESTS(:p_integration_id);
 
+  SELECT MAX(active_generation)
+    INTO :v_active_generation
+    FROM TICDC_META.INTEGRATION_REGISTRY
+   WHERE integration_id = :p_integration_id;
+
   SELECT COALESCE(MAX(last_applied_commit_ts), 0)
     INTO :v_watermark_before
     FROM TICDC_META.TABLE_SYNC_STATE
-   WHERE integration_id = :p_integration_id;
+   WHERE integration_id = :p_integration_id
+     AND (v_active_generation IS NULL OR generation = :v_active_generation);
 
   SELECT COALESCE(MAX(resolved_ts), 0)
     INTO :v_upper_ts
@@ -39,13 +46,14 @@ BEGIN
 
   CALL TICDC_META.SP_REGISTER_INCREMENTAL_OBJECTS(:p_integration_id, :v_upper_ts);
   CALL TICDC_META.SP_APPLY_DDL_UP_TO(:p_integration_id, :v_upper_ts);
-  CALL TICDC_META.SP_SYNC_ALL_TABLES(:p_integration_id, :v_upper_ts);
+  CALL TICDC_META.SP_SYNC_ALL_TABLES(:p_integration_id, :v_active_generation, :v_upper_ts);
   CALL TICDC_META.SP_PROCESS_REBUILD_QUEUE(:p_integration_id);
 
   SELECT COALESCE(MAX(last_applied_commit_ts), 0)
     INTO :v_watermark_after
     FROM TICDC_META.TABLE_SYNC_STATE
-   WHERE integration_id = :p_integration_id;
+   WHERE integration_id = :p_integration_id
+     AND (v_active_generation IS NULL OR generation = :v_active_generation);
 
   SELECT COUNT(*)
     INTO :v_ddl_pending_count

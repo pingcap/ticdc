@@ -40,32 +40,34 @@ BEGIN
      AND object_id = :p_object_id
      AND status IN ('PENDING', 'RUNNING');
 
-  SELECT MAX(generation)
+  SELECT MAX(active_generation)
     INTO :v_generation
-    FROM TICDC_META.TABLE_SYNC_STATE
-   WHERE integration_id = :p_integration_id
-     AND object_id = :p_object_id;
+    FROM TICDC_META.INTEGRATION_REGISTRY
+   WHERE integration_id = :p_integration_id;
 
   IF (v_generation IS NULL) THEN
     SELECT MAX(generation)
       INTO :v_generation
       FROM TICDC_META.OBJECT_REGISTRY
      WHERE integration_id = :p_integration_id
-       AND object_id = :p_object_id;
+       AND object_id = :p_object_id
+       AND COALESCE(is_active_generation, FALSE);
   END IF;
 
   SELECT COALESCE(MAX(bootstrap_ts), 0)
     INTO :v_bootstrap_ts
     FROM TICDC_META.TABLE_SYNC_STATE
    WHERE integration_id = :p_integration_id
-     AND object_id = :p_object_id;
+     AND object_id = :p_object_id
+     AND generation = :v_generation;
 
   IF (v_bootstrap_ts = 0) THEN
     SELECT COALESCE(MAX(bootstrap_ts), 0)
       INTO :v_bootstrap_ts
       FROM TICDC_META.OBJECT_REGISTRY
      WHERE integration_id = :p_integration_id
-       AND object_id = :p_object_id;
+       AND object_id = :p_object_id
+       AND generation = :v_generation;
   END IF;
 
   SELECT COALESCE(MAX(resolved_ts), :v_bootstrap_ts)
@@ -101,6 +103,7 @@ BEGIN
          updated_at = CURRENT_TIMESTAMP()
    WHERE integration_id = :p_integration_id
      AND object_id = :p_object_id
+     AND generation = :v_generation
      AND COALESCE(materialization_status, 'PAUSED_FOR_REBUILD') IN ('PAUSED_FOR_REBUILD', 'REBUILDING', 'ACTIVE');
 
   UPDATE TICDC_META.REBUILD_QUEUE
@@ -113,7 +116,7 @@ BEGIN
      AND status IN ('PENDING', 'RUNNING');
 
   CALL TICDC_META.SP_BOOTSTRAP_ONE_TABLE(:p_integration_id, :p_object_id, :v_generation, :v_bootstrap_ts);
-  CALL TICDC_META.SP_SYNC_ONE_TABLE(:p_integration_id, :p_object_id, :v_upper_ts);
+  CALL TICDC_META.SP_SYNC_ONE_TABLE(:p_integration_id, :p_object_id, :v_generation, :v_upper_ts);
 
   UPDATE TICDC_META.REBUILD_QUEUE
      SET status = 'DONE',
@@ -135,7 +138,8 @@ BEGIN
      SET materialization_status = 'ACTIVE',
          updated_at = CURRENT_TIMESTAMP()
    WHERE integration_id = :p_integration_id
-     AND object_id = :p_object_id;
+     AND object_id = :p_object_id
+     AND generation = :v_generation;
 
   RETURN OBJECT_CONSTRUCT(
     'status',

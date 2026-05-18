@@ -34,6 +34,11 @@ BEGIN
     replica_schema STRING,
     external_volume STRING,
     catalog_integration STRING,
+    active_generation STRING,
+    shadow_generation STRING,
+    active_bootstrap_ts NUMBER(20, 0),
+    shadow_bootstrap_ts NUMBER(20, 0),
+    cutover_state STRING,
     is_enabled BOOLEAN,
     created_at TIMESTAMP_NTZ(6),
     updated_at TIMESTAMP_NTZ(6)
@@ -61,6 +66,7 @@ BEGIN
     target_database STRING,
     target_schema STRING,
     target_table STRING,
+    serving_base_table STRING,
     target_base_table STRING,
     snapshot_external_table STRING,
     change_external_table STRING,
@@ -72,7 +78,9 @@ BEGIN
     table_version NUMBER(20, 0),
     bootstrap_ts NUMBER(20, 0),
     generation STRING,
+    cutover_state STRING,
     materialization_status STRING,
+    is_active_generation BOOLEAN,
     is_enabled BOOLEAN,
     created_at TIMESTAMP_NTZ(6),
     updated_at TIMESTAMP_NTZ(6)
@@ -132,6 +140,15 @@ BEGIN
     updated_at TIMESTAMP_NTZ(6),
     last_error STRING
   );
+
+  ALTER TABLE IF EXISTS TICDC_META.INTEGRATION_REGISTRY ADD COLUMN IF NOT EXISTS active_generation STRING;
+  ALTER TABLE IF EXISTS TICDC_META.INTEGRATION_REGISTRY ADD COLUMN IF NOT EXISTS shadow_generation STRING;
+  ALTER TABLE IF EXISTS TICDC_META.INTEGRATION_REGISTRY ADD COLUMN IF NOT EXISTS active_bootstrap_ts NUMBER(20, 0);
+  ALTER TABLE IF EXISTS TICDC_META.INTEGRATION_REGISTRY ADD COLUMN IF NOT EXISTS shadow_bootstrap_ts NUMBER(20, 0);
+  ALTER TABLE IF EXISTS TICDC_META.INTEGRATION_REGISTRY ADD COLUMN IF NOT EXISTS cutover_state STRING;
+  ALTER TABLE IF EXISTS TICDC_META.OBJECT_REGISTRY ADD COLUMN IF NOT EXISTS serving_base_table STRING;
+  ALTER TABLE IF EXISTS TICDC_META.OBJECT_REGISTRY ADD COLUMN IF NOT EXISTS cutover_state STRING;
+  ALTER TABLE IF EXISTS TICDC_META.OBJECT_REGISTRY ADD COLUMN IF NOT EXISTS is_active_generation BOOLEAN;
 
   SELECT MAX(control_prefix)
     INTO :v_control_prefix

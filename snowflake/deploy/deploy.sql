@@ -14,4 +14,6 @@
 !source ../procedures/sp_sync_all_tables.sql
 !source ../procedures/sp_rebuild_one_table.sql
 !source ../procedures/sp_process_rebuild_queue.sql
+!source ../procedures/sp_validate_generation.sql
+!source ../procedures/sp_cutover_generation.sql
 !source ../procedures/sp_orchestrate.sql

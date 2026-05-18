@@ -17,6 +17,7 @@ DECLARE
   v_rebuild_from_ts NUMBER(20, 0) DEFAULT NULL;
   v_ddl_sql STRING DEFAULT NULL;
   v_table_version_after NUMBER(20, 0) DEFAULT 0;
+  v_generation STRING DEFAULT NULL;
 BEGIN
   CREATE TABLE IF NOT EXISTS TICDC_META.PROCEDURE_ERROR_LOG (
     run_uuid STRING,
@@ -60,12 +61,26 @@ BEGIN
     object_id STRING,
     generation STRING,
     bootstrap_ts NUMBER(20, 0),
+    target_base_table STRING,
     table_version NUMBER(20, 0),
     last_applied_commit_ts NUMBER(20, 0),
     last_apply_time TIMESTAMP_NTZ(6),
     status STRING,
     updated_at TIMESTAMP_NTZ(6)
   );
+
+  SELECT COALESCE(MAX(active_generation), MAX(shadow_generation))
+    INTO :v_generation
+    FROM TICDC_META.INTEGRATION_REGISTRY
+   WHERE integration_id = :p_integration_id;
+
+  IF (v_generation IS NULL) THEN
+    SELECT MAX(generation)
+      INTO :v_generation
+      FROM TICDC_META.OBJECT_REGISTRY
+     WHERE integration_id = :p_integration_id
+       AND COALESCE(is_active_generation, FALSE);
+  END IF;
 
   SELECT
     COUNT(*),
@@ -190,35 +205,40 @@ BEGIN
 
   IF (LOWER(COALESCE(v_ddl_type, '')) = 'create table') THEN
     CALL TICDC_META.SP_ENSURE_RAW_CHANGE_TABLE(:p_integration_id, :v_object_id);
-    CALL TICDC_META.SP_ENSURE_TARGET_TABLE(:p_integration_id, :v_object_id);
+    CALL TICDC_META.SP_ENSURE_TARGET_TABLE(:p_integration_id, :v_object_id, :v_generation, TRUE);
 
     UPDATE TICDC_META.OBJECT_REGISTRY
        SET bootstrap_ts = COALESCE(bootstrap_ts, :v_commit_ts),
            table_version = COALESCE(table_version, :v_table_version_after),
            materialization_status = 'ACTIVE',
+           is_active_generation = TRUE,
            is_enabled = TRUE,
            updated_at = CURRENT_TIMESTAMP()
      WHERE integration_id = :p_integration_id
-       AND object_id = :v_object_id;
+       AND object_id = :v_object_id
+       AND generation = :v_generation;
 
     MERGE INTO TICDC_META.TABLE_SYNC_STATE t
     USING (
       SELECT
         :p_integration_id AS integration_id,
         :v_object_id AS object_id,
-        MAX(generation) AS generation,
+        :v_generation AS generation,
         COALESCE(MAX(bootstrap_ts), :v_commit_ts) AS bootstrap_ts,
+        MAX(target_base_table) AS target_base_table,
         COALESCE(MAX(table_version), :v_table_version_after) AS table_version,
         :v_commit_ts AS last_applied_commit_ts
       FROM TICDC_META.OBJECT_REGISTRY
       WHERE integration_id = :p_integration_id
         AND object_id = :v_object_id
+        AND generation = :v_generation
     ) s
-    ON t.integration_id = s.integration_id AND t.object_id = s.object_id
+    ON t.integration_id = s.integration_id AND t.object_id = s.object_id AND t.generation = s.generation
     WHEN MATCHED THEN
       UPDATE SET
-        generation = COALESCE(s.generation, t.generation),
+        generation = s.generation,
         bootstrap_ts = COALESCE(s.bootstrap_ts, t.bootstrap_ts),
+        target_base_table = COALESCE(s.target_base_table, t.target_base_table),
         table_version = GREATEST(COALESCE(t.table_version, 0), COALESCE(s.table_version, 0)),
         last_applied_commit_ts = GREATEST(COALESCE(t.last_applied_commit_ts, 0), s.last_applied_commit_ts),
         last_apply_time = CURRENT_TIMESTAMP(),
@@ -230,6 +250,7 @@ BEGIN
         object_id,
         generation,
         bootstrap_ts,
+        target_base_table,
         table_version,
         last_applied_commit_ts,
         last_apply_time,
@@ -241,6 +262,7 @@ BEGIN
         s.object_id,
         s.generation,
         s.bootstrap_ts,
+        s.target_base_table,
         s.table_version,
         s.last_applied_commit_ts,
         CURRENT_TIMESTAMP(),

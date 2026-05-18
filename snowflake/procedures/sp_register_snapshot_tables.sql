@@ -12,6 +12,7 @@ DECLARE
   v_registered NUMBER(20, 0) DEFAULT 0;
   v_external_volume STRING DEFAULT NULL;
   v_catalog_integration STRING DEFAULT NULL;
+  v_active_generation STRING DEFAULT NULL;
   v_snapshot_external_table STRING DEFAULT NULL;
   v_snapshot_metadata_file_path STRING DEFAULT NULL;
   v_sql STRING DEFAULT NULL;
@@ -31,8 +32,8 @@ BEGIN
     TYPE = JSON
     STRIP_OUTER_ARRAY = FALSE;
 
-  SELECT MAX(control_prefix)
-    INTO :v_control_prefix
+  SELECT MAX(control_prefix), MAX(active_generation)
+    INTO :v_control_prefix, :v_active_generation
     FROM TICDC_META.INTEGRATION_REGISTRY
    WHERE integration_id = :p_integration_id
      AND COALESCE(is_enabled, TRUE);
@@ -64,7 +65,19 @@ BEGIN
         COALESCE($1:target_database::STRING, 'TICDC_REPLICA') AS target_database,
         COALESCE($1:target_schema::STRING, $1:source_db::STRING, 'PUBLIC') AS target_schema,
         COALESCE($1:target_table::STRING, $1:source_table::STRING, $1:table_name::STRING) AS target_table,
-        $1:target_base_table::STRING AS target_base_table,
+        COALESCE(
+          $1:serving_base_table::STRING,
+          COALESCE($1:target_database::STRING, 'TICDC_REPLICA') || '.' ||
+            COALESCE($1:target_schema::STRING, $1:source_db::STRING, 'PUBLIC') || '.' ||
+            COALESCE($1:target_table::STRING, $1:source_table::STRING, $1:table_name::STRING) || '__BASE'
+        ) AS serving_base_table,
+        COALESCE(
+          $1:target_base_table::STRING,
+          COALESCE($1:target_database::STRING, 'TICDC_REPLICA') || '.' ||
+            COALESCE($1:target_schema::STRING, $1:source_db::STRING, 'PUBLIC') || '.' ||
+            COALESCE($1:target_table::STRING, $1:source_table::STRING, $1:table_name::STRING) || '__BASE__G_' ||
+            UPPER(REGEXP_REPLACE(COALESCE($1:generation::STRING, :p_generation), '[^A-Za-z0-9_]', '_'))
+        ) AS target_base_table,
         $1:snapshot_external_table::STRING AS snapshot_external_table,
         $1:change_external_table::STRING AS change_external_table,
         COALESCE($1:snapshot_metadata_file_path::STRING, $1:snapshot_metadata::STRING) AS snapshot_metadata_file_path,
@@ -75,8 +88,13 @@ BEGIN
         COALESCE($1:table_version::NUMBER(20, 0), $1:table_version_after::NUMBER(20, 0)) AS table_version,
         $1:bootstrap_ts::NUMBER(20, 0) AS bootstrap_ts,
         COALESCE($1:generation::STRING, :p_generation) AS generation,
+        IFF(COALESCE($1:generation::STRING, :p_generation) = :v_active_generation, 'ACTIVE', 'SHADOW_READY') AS cutover_state,
+        IFF(COALESCE($1:generation::STRING, :p_generation) = :v_active_generation, TRUE, FALSE) AS is_active_generation,
         ROW_NUMBER() OVER (
-          PARTITION BY :p_integration_id, COALESCE($1:object_id::STRING, $1:table_id::STRING, CONCAT($1:source_db::STRING, '.', $1:source_table::STRING))
+          PARTITION BY
+            :p_integration_id,
+            COALESCE($1:object_id::STRING, $1:table_id::STRING, CONCAT($1:source_db::STRING, '.', $1:source_table::STRING)),
+            COALESCE($1:generation::STRING, :p_generation)
           ORDER BY COALESCE($1:commit_ts::NUMBER(20, 0), $1:table_version::NUMBER(20, 0), 0) DESC
         ) AS rn
       FROM @TICDC_META.CTL_STAGE
@@ -87,7 +105,7 @@ BEGIN
     )
     WHERE rn = 1
   ) s
-  ON t.integration_id = s.integration_id AND t.object_id = s.object_id
+  ON t.integration_id = s.integration_id AND t.object_id = s.object_id AND t.generation = s.generation
   WHEN MATCHED THEN
     UPDATE SET
       source_db = COALESCE(s.source_db, t.source_db),
@@ -95,6 +113,7 @@ BEGIN
       target_database = COALESCE(s.target_database, t.target_database),
       target_schema = COALESCE(s.target_schema, t.target_schema),
       target_table = COALESCE(s.target_table, t.target_table),
+      serving_base_table = COALESCE(s.serving_base_table, t.serving_base_table),
       target_base_table = COALESCE(s.target_base_table, t.target_base_table),
       snapshot_external_table = COALESCE(s.snapshot_external_table, t.snapshot_external_table),
       change_external_table = COALESCE(s.change_external_table, t.change_external_table),
@@ -105,8 +124,10 @@ BEGIN
       table_id = COALESCE(s.table_id, t.table_id),
       table_version = COALESCE(s.table_version, t.table_version),
       bootstrap_ts = COALESCE(s.bootstrap_ts, t.bootstrap_ts),
-      generation = COALESCE(s.generation, t.generation),
+      generation = s.generation,
+      cutover_state = COALESCE(s.cutover_state, t.cutover_state, 'SHADOW_READY'),
       materialization_status = COALESCE(t.materialization_status, 'ACTIVE'),
+      is_active_generation = COALESCE(s.is_active_generation, t.is_active_generation, FALSE),
       is_enabled = TRUE,
       updated_at = CURRENT_TIMESTAMP()
   WHEN NOT MATCHED THEN
@@ -118,6 +139,7 @@ BEGIN
       target_database,
       target_schema,
       target_table,
+      serving_base_table,
       target_base_table,
       snapshot_external_table,
       change_external_table,
@@ -129,7 +151,9 @@ BEGIN
       table_version,
       bootstrap_ts,
       generation,
+      cutover_state,
       materialization_status,
+      is_active_generation,
       is_enabled,
       created_at,
       updated_at
@@ -142,6 +166,7 @@ BEGIN
       s.target_database,
       s.target_schema,
       s.target_table,
+      s.serving_base_table,
       s.target_base_table,
       s.snapshot_external_table,
       s.change_external_table,
@@ -153,7 +178,9 @@ BEGIN
       s.table_version,
       s.bootstrap_ts,
       s.generation,
+      s.cutover_state,
       'ACTIVE',
+      s.is_active_generation,
       TRUE,
       CURRENT_TIMESTAMP(),
       CURRENT_TIMESTAMP()
@@ -164,6 +191,7 @@ BEGIN
     SELECT
       :p_integration_id AS integration_id,
       COALESCE($1:object_id::STRING, $1:table_id::STRING, CONCAT($1:source_db::STRING, '.', $1:source_table::STRING)) AS object_id,
+      COALESCE($1:generation::STRING, :p_generation) AS generation,
       f.value:name::STRING AS column_name,
       COALESCE(f.value:target_name::STRING, f.value:name::STRING) AS target_column_name,
       COALESCE(f.value:snowflake_type::STRING, f.value:type::STRING, 'VARIANT') AS snowflake_type,
@@ -179,7 +207,7 @@ BEGIN
       AND REGEXP_LIKE(METADATA$FILENAME, '.*/control/schema/.*\\.json$', 'i')
       AND COALESCE($1:generation::STRING, :p_generation) = :p_generation
   ) s
-  ON t.integration_id = s.integration_id AND t.object_id = s.object_id AND t.column_name = s.column_name
+  ON t.integration_id = s.integration_id AND t.object_id = s.object_id AND t.generation = s.generation AND t.column_name = s.column_name
   WHEN MATCHED THEN
     UPDATE SET
       target_column_name = s.target_column_name,
@@ -194,6 +222,7 @@ BEGIN
     INSERT (
       integration_id,
       object_id,
+      generation,
       column_name,
       target_column_name,
       snowflake_type,
@@ -207,6 +236,7 @@ BEGIN
     VALUES (
       s.integration_id,
       s.object_id,
+      s.generation,
       s.column_name,
       s.target_column_name,
       s.snowflake_type,

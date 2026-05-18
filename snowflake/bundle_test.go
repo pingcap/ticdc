@@ -52,6 +52,8 @@ func TestProcedureBundleLayout(t *testing.T) {
 		{Name: "SP_SYNC_ALL_TABLES", File: "sp_sync_all_tables.sql"},
 		{Name: "SP_REBUILD_ONE_TABLE", File: "sp_rebuild_one_table.sql"},
 		{Name: "SP_PROCESS_REBUILD_QUEUE", File: "sp_process_rebuild_queue.sql"},
+		{Name: "SP_VALIDATE_GENERATION", File: "sp_validate_generation.sql"},
+		{Name: "SP_CUTOVER_GENERATION", File: "sp_cutover_generation.sql"},
 		{Name: "SP_ORCHESTRATE", File: "sp_orchestrate.sql"},
 	}
 
@@ -166,7 +168,8 @@ func TestOrchestratePropagatesIntegrationID(t *testing.T) {
 	require.Contains(t, orchestrateSQL, "CALL TICDC_META.SP_LOAD_DDL_MANIFESTS(:P_INTEGRATION_ID)")
 	require.Contains(t, orchestrateSQL, "CALL TICDC_META.SP_REGISTER_INCREMENTAL_OBJECTS(:P_INTEGRATION_ID, :V_UPPER_TS)")
 	require.Contains(t, orchestrateSQL, "CALL TICDC_META.SP_APPLY_DDL_UP_TO(:P_INTEGRATION_ID, :V_UPPER_TS)")
-	require.Contains(t, orchestrateSQL, "CALL TICDC_META.SP_SYNC_ALL_TABLES(:P_INTEGRATION_ID, :V_UPPER_TS)")
+	require.Contains(t, orchestrateSQL, "ACTIVE_GENERATION")
+	require.Contains(t, orchestrateSQL, "CALL TICDC_META.SP_SYNC_ALL_TABLES(:P_INTEGRATION_ID, :V_ACTIVE_GENERATION, :V_UPPER_TS)")
 	require.Contains(t, orchestrateSQL, "CALL TICDC_META.SP_PROCESS_REBUILD_QUEUE(:P_INTEGRATION_ID)")
 	require.Contains(t, orchestrateSQL, "WHERE INTEGRATION_ID = :P_INTEGRATION_ID")
 }
@@ -250,7 +253,7 @@ func TestCoreProceduresImplementBootstrapDDLAndDML(t *testing.T) {
 	require.Contains(t, applyOneSQL, "TICDC_META.DDL_APPLY_LOG")
 	require.Contains(t, applyOneSQL, "LOWER(COALESCE(V_DDL_TYPE, '')) = 'CREATE TABLE'")
 	require.Contains(t, applyOneSQL, "CALL TICDC_META.SP_ENSURE_RAW_CHANGE_TABLE(:P_INTEGRATION_ID, :V_OBJECT_ID)")
-	require.Contains(t, applyOneSQL, "CALL TICDC_META.SP_ENSURE_TARGET_TABLE(:P_INTEGRATION_ID, :V_OBJECT_ID)")
+	require.Contains(t, applyOneSQL, "CALL TICDC_META.SP_ENSURE_TARGET_TABLE(:P_INTEGRATION_ID, :V_OBJECT_ID, :V_GENERATION, TRUE)")
 	require.Contains(t, applyOneSQL, "MERGE INTO TICDC_META.TABLE_SYNC_STATE")
 	require.Contains(t, applyOneSQL, "MATERIALIZATION_STATUS = 'ACTIVE'")
 	require.Contains(t, applyOneSQL, "LAST_APPLIED_COMMIT_TS")
@@ -259,26 +262,99 @@ func TestCoreProceduresImplementBootstrapDDLAndDML(t *testing.T) {
 	require.Contains(t, applyOneSQL, "APPLY_STATUS = 'APPLIED'")
 
 	bootstrapSQL := readProcedure("sp_bootstrap_one_table.sql")
+	require.Contains(t, bootstrapSQL, "CALL TICDC_META.SP_ENSURE_TARGET_TABLE(:P_INTEGRATION_ID, :P_OBJECT_ID, :P_GENERATION, FALSE)")
 	require.Contains(t, bootstrapSQL, "INSERT INTO")
 	require.Contains(t, bootstrapSQL, "FROM ' || V_SNAPSHOT_EXTERNAL_TABLE")
 	require.Contains(t, bootstrapSQL, "MERGE INTO TICDC_META.TABLE_SYNC_STATE")
 	require.Contains(t, bootstrapSQL, "LAST_APPLIED_COMMIT_TS")
+	require.Contains(t, bootstrapSQL, "AND GENERATION = :P_GENERATION")
 
 	syncSQL := readProcedure("sp_sync_one_table.sql")
+	require.Contains(t, syncSQL, "CREATE OR REPLACE PROCEDURE TICDC_META.SP_SYNC_ONE_TABLE(")
+	require.Contains(t, syncSQL, "P_GENERATION STRING")
 	require.Contains(t, syncSQL, "DELETE FROM")
 	require.Contains(t, syncSQL, "_TIDB_OLD_ROW_IDENTITY")
 	require.Contains(t, syncSQL, "MERGE INTO")
 	require.Contains(t, syncSQL, "_TIDB_ROW_IDENTITY")
 	require.Contains(t, syncSQL, "TICDC_META.TABLE_SYNC_STATE")
+	require.Contains(t, syncSQL, "AND GENERATION = :P_GENERATION")
 
 	syncAllSQL := readProcedure("sp_sync_all_tables.sql")
+	require.Contains(t, syncAllSQL, "CREATE OR REPLACE PROCEDURE TICDC_META.SP_SYNC_ALL_TABLES(")
+	require.Contains(t, syncAllSQL, "P_GENERATION STRING")
+	require.Contains(t, syncAllSQL, "CALL TICDC_META.SP_SYNC_ONE_TABLE(:P_INTEGRATION_ID, :V_OBJECT_ID, :P_GENERATION, :P_UPPER_TS)")
 	require.Contains(t, syncAllSQL, "PENDING_DDL")
 
 	rebuildSQL := readProcedure("sp_rebuild_one_table.sql")
 	require.Contains(t, rebuildSQL, "PAUSED_FOR_REBUILD")
 	require.Contains(t, rebuildSQL, "CALL TICDC_META.SP_BOOTSTRAP_ONE_TABLE")
 	require.Contains(t, rebuildSQL, "CALL TICDC_META.SP_SYNC_ONE_TABLE")
+	require.Contains(t, rebuildSQL, "ACTIVE_GENERATION")
 	require.Contains(t, rebuildSQL, "REBUILD_QUEUE")
+}
+
+func TestMultiGenerationResyncUsesShadowTablesAndSwapCutover(t *testing.T) {
+	_, currentFile, _, ok := runtime.Caller(0)
+	require.True(t, ok)
+
+	baseDir := filepath.Dir(currentFile)
+	readProcedure := func(name string) string {
+		content, err := os.ReadFile(filepath.Join(baseDir, "procedures", name))
+		require.NoError(t, err)
+		return strings.ToUpper(string(content))
+	}
+
+	discoverSQL := readProcedure("sp_discover_control_files.sql")
+	require.Contains(t, discoverSQL, "ACTIVE_GENERATION STRING")
+	require.Contains(t, discoverSQL, "SHADOW_GENERATION STRING")
+	require.Contains(t, discoverSQL, "ACTIVE_BOOTSTRAP_TS NUMBER(20, 0)")
+	require.Contains(t, discoverSQL, "SHADOW_BOOTSTRAP_TS NUMBER(20, 0)")
+	require.Contains(t, discoverSQL, "SERVING_BASE_TABLE STRING")
+	require.Contains(t, discoverSQL, "CUTOVER_STATE STRING")
+	require.Contains(t, discoverSQL, "IS_ACTIVE_GENERATION BOOLEAN")
+
+	loadSQL := readProcedure("sp_load_ddl_manifests.sql")
+	require.Contains(t, loadSQL, "ACTIVE_GENERATION STRING")
+	require.Contains(t, loadSQL, "SHADOW_GENERATION STRING")
+	require.Contains(t, loadSQL, "SERVING_BASE_TABLE STRING")
+	require.Contains(t, loadSQL, "IS_ACTIVE_GENERATION BOOLEAN")
+
+	registerSnapshotSQL := readProcedure("sp_register_snapshot_tables.sql")
+	require.Contains(t, registerSnapshotSQL, "SERVING_BASE_TABLE")
+	require.Contains(t, registerSnapshotSQL, "TARGET_BASE_TABLE")
+	require.Contains(t, registerSnapshotSQL, "IS_ACTIVE_GENERATION")
+	require.Contains(t, registerSnapshotSQL, "ON T.INTEGRATION_ID = S.INTEGRATION_ID AND T.OBJECT_ID = S.OBJECT_ID AND T.GENERATION = S.GENERATION")
+
+	registerIncrementalSQL := readProcedure("sp_register_incremental_objects.sql")
+	require.Contains(t, registerIncrementalSQL, "SERVING_BASE_TABLE")
+	require.Contains(t, registerIncrementalSQL, "CUTOVER_STATE")
+	require.Contains(t, registerIncrementalSQL, "ON T.INTEGRATION_ID = S.INTEGRATION_ID AND T.OBJECT_ID = S.OBJECT_ID AND T.GENERATION = S.GENERATION")
+
+	ensureTargetSQL := readProcedure("sp_ensure_target_table.sql")
+	require.Contains(t, ensureTargetSQL, "CREATE OR REPLACE PROCEDURE TICDC_META.SP_ENSURE_TARGET_TABLE(")
+	require.Contains(t, ensureTargetSQL, "P_GENERATION STRING")
+	require.Contains(t, ensureTargetSQL, "P_BIND_SERVING_VIEW BOOLEAN")
+	require.Contains(t, ensureTargetSQL, "SERVING_BASE_TABLE")
+	require.Contains(t, ensureTargetSQL, "CREATE TABLE IF NOT EXISTS ' || V_SERVING_BASE_TABLE")
+	require.Contains(t, ensureTargetSQL, "CREATE TABLE IF NOT EXISTS ' || V_TARGET_BASE_TABLE")
+
+	validateSQL := readProcedure("sp_validate_generation.sql")
+	require.Contains(t, validateSQL, "CREATE OR REPLACE PROCEDURE TICDC_META.SP_VALIDATE_GENERATION(")
+	require.Contains(t, validateSQL, "P_GENERATION STRING")
+	require.Contains(t, validateSQL, "P_UPPER_TS NUMBER(20, 0)")
+	require.Contains(t, validateSQL, "LAST_APPLIED_COMMIT_TS")
+	require.Contains(t, validateSQL, "FULL_LOADED")
+	require.Contains(t, validateSQL, "INCREMENTAL_LOADED")
+
+	cutoverSQL := readProcedure("sp_cutover_generation.sql")
+	require.Contains(t, cutoverSQL, "CREATE OR REPLACE PROCEDURE TICDC_META.SP_CUTOVER_GENERATION(")
+	require.Contains(t, cutoverSQL, "P_GENERATION STRING")
+	require.Contains(t, cutoverSQL, "ALTER TABLE ")
+	require.Contains(t, cutoverSQL, " SWAP WITH ")
+	require.Contains(t, cutoverSQL, "DROP TABLE IF EXISTS ")
+	require.Contains(t, cutoverSQL, "ACTIVE_GENERATION")
+	require.Contains(t, cutoverSQL, "SHADOW_GENERATION")
+	require.Contains(t, cutoverSQL, "CUTOVER_STATE")
 }
 
 func TestExceptionLoggingUsesSnowflakeBindings(t *testing.T) {

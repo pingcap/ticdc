@@ -17,10 +17,21 @@ BEGIN
     replica_schema STRING,
     external_volume STRING,
     catalog_integration STRING,
+    active_generation STRING,
+    shadow_generation STRING,
+    active_bootstrap_ts NUMBER(20, 0),
+    shadow_bootstrap_ts NUMBER(20, 0),
+    cutover_state STRING,
     is_enabled BOOLEAN,
     created_at TIMESTAMP_NTZ(6),
     updated_at TIMESTAMP_NTZ(6)
   );
+
+  ALTER TABLE IF EXISTS TICDC_META.INTEGRATION_REGISTRY ADD COLUMN IF NOT EXISTS active_generation STRING;
+  ALTER TABLE IF EXISTS TICDC_META.INTEGRATION_REGISTRY ADD COLUMN IF NOT EXISTS shadow_generation STRING;
+  ALTER TABLE IF EXISTS TICDC_META.INTEGRATION_REGISTRY ADD COLUMN IF NOT EXISTS active_bootstrap_ts NUMBER(20, 0);
+  ALTER TABLE IF EXISTS TICDC_META.INTEGRATION_REGISTRY ADD COLUMN IF NOT EXISTS shadow_bootstrap_ts NUMBER(20, 0);
+  ALTER TABLE IF EXISTS TICDC_META.INTEGRATION_REGISTRY ADD COLUMN IF NOT EXISTS cutover_state STRING;
 
   CREATE TABLE IF NOT EXISTS TICDC_META.OBJECT_REGISTRY (
     integration_id STRING,
@@ -30,6 +41,7 @@ BEGIN
     target_database STRING,
     target_schema STRING,
     target_table STRING,
+    serving_base_table STRING,
     target_base_table STRING,
     snapshot_external_table STRING,
     change_external_table STRING,
@@ -41,15 +53,22 @@ BEGIN
     table_version NUMBER(20, 0),
     bootstrap_ts NUMBER(20, 0),
     generation STRING,
+    cutover_state STRING,
     materialization_status STRING,
+    is_active_generation BOOLEAN,
     is_enabled BOOLEAN,
     created_at TIMESTAMP_NTZ(6),
     updated_at TIMESTAMP_NTZ(6)
   );
 
+  ALTER TABLE IF EXISTS TICDC_META.OBJECT_REGISTRY ADD COLUMN IF NOT EXISTS serving_base_table STRING;
+  ALTER TABLE IF EXISTS TICDC_META.OBJECT_REGISTRY ADD COLUMN IF NOT EXISTS cutover_state STRING;
+  ALTER TABLE IF EXISTS TICDC_META.OBJECT_REGISTRY ADD COLUMN IF NOT EXISTS is_active_generation BOOLEAN;
+
   CREATE TABLE IF NOT EXISTS TICDC_META.COLUMN_REGISTRY (
     integration_id STRING,
     object_id STRING,
+    generation STRING,
     column_name STRING,
     target_column_name STRING,
     snowflake_type STRING,
@@ -61,9 +80,12 @@ BEGIN
     updated_at TIMESTAMP_NTZ(6)
   );
 
+  ALTER TABLE IF EXISTS TICDC_META.COLUMN_REGISTRY ADD COLUMN IF NOT EXISTS generation STRING;
+
   CREATE TABLE IF NOT EXISTS TICDC_META.INDEX_REGISTRY (
     integration_id STRING,
     object_id STRING,
+    generation STRING,
     index_name STRING,
     index_type STRING,
     columns VARIANT,
@@ -71,6 +93,8 @@ BEGIN
     is_primary BOOLEAN,
     updated_at TIMESTAMP_NTZ(6)
   );
+
+  ALTER TABLE IF EXISTS TICDC_META.INDEX_REGISTRY ADD COLUMN IF NOT EXISTS generation STRING;
 
   CREATE TABLE IF NOT EXISTS TICDC_META.CONTROL_FILE_REGISTRY (
     integration_id STRING,
@@ -133,12 +157,19 @@ BEGIN
     object_id STRING,
     generation STRING,
     bootstrap_ts NUMBER(20, 0),
+    target_base_table STRING,
+    serving_base_table STRING,
     table_version NUMBER(20, 0),
     last_applied_commit_ts NUMBER(20, 0),
     last_apply_time TIMESTAMP_NTZ(6),
+    is_active_generation BOOLEAN,
     status STRING,
     updated_at TIMESTAMP_NTZ(6)
   );
+
+  ALTER TABLE IF EXISTS TICDC_META.TABLE_SYNC_STATE ADD COLUMN IF NOT EXISTS target_base_table STRING;
+  ALTER TABLE IF EXISTS TICDC_META.TABLE_SYNC_STATE ADD COLUMN IF NOT EXISTS serving_base_table STRING;
+  ALTER TABLE IF EXISTS TICDC_META.TABLE_SYNC_STATE ADD COLUMN IF NOT EXISTS is_active_generation BOOLEAN;
 
   CREATE TABLE IF NOT EXISTS TICDC_META.REBUILD_QUEUE (
     integration_id STRING,

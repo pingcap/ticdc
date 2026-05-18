@@ -1,6 +1,7 @@
 CREATE OR REPLACE PROCEDURE TICDC_META.SP_SYNC_ONE_TABLE(
   p_integration_id STRING,
   p_object_id STRING,
+  p_generation STRING,
   p_upper_ts NUMBER(20, 0)
 )
 RETURNS VARIANT
@@ -11,7 +12,6 @@ $$
 DECLARE
   v_target_base_table STRING DEFAULT NULL;
   v_change_external_table STRING DEFAULT NULL;
-  v_generation STRING DEFAULT NULL;
   v_bootstrap_ts NUMBER(20, 0) DEFAULT 0;
   v_last_watermark NUMBER(20, 0) DEFAULT 0;
   v_table_version NUMBER(20, 0) DEFAULT 0;
@@ -33,18 +33,18 @@ BEGIN
   );
 
   CALL TICDC_META.SP_ENSURE_RAW_CHANGE_TABLE(:p_integration_id, :p_object_id);
-  CALL TICDC_META.SP_ENSURE_TARGET_TABLE(:p_integration_id, :p_object_id);
+  CALL TICDC_META.SP_ENSURE_TARGET_TABLE(:p_integration_id, :p_object_id, :p_generation, FALSE);
 
   SELECT
     MAX(target_base_table),
     MAX(change_external_table),
     COALESCE(MAX(table_version), 0),
-    COALESCE(MAX(bootstrap_ts), 0),
-    MAX(generation)
-    INTO :v_target_base_table, :v_change_external_table, :v_table_version, :v_bootstrap_ts, :v_generation
+    COALESCE(MAX(bootstrap_ts), 0)
+    INTO :v_target_base_table, :v_change_external_table, :v_table_version, :v_bootstrap_ts
     FROM TICDC_META.OBJECT_REGISTRY
    WHERE integration_id = :p_integration_id
-     AND object_id = :p_object_id;
+     AND object_id = :p_object_id
+     AND generation = :p_generation;
 
   IF (v_change_external_table IS NULL OR v_change_external_table = '') THEN
     RETURN OBJECT_CONSTRUCT(
@@ -56,6 +56,8 @@ BEGIN
       p_integration_id,
       'object_id',
       p_object_id,
+      'generation',
+      p_generation,
       'upper_ts',
       p_upper_ts,
       'reason',
@@ -67,7 +69,8 @@ BEGIN
     INTO :v_last_watermark
     FROM TICDC_META.TABLE_SYNC_STATE
    WHERE integration_id = :p_integration_id
-     AND object_id = :p_object_id;
+     AND object_id = :p_object_id
+     AND generation = :p_generation;
 
   IF (p_upper_ts <= v_last_watermark) THEN
     RETURN OBJECT_CONSTRUCT(
@@ -79,6 +82,8 @@ BEGIN
       p_integration_id,
       'object_id',
       p_object_id,
+      'generation',
+      p_generation,
       'upper_ts',
       p_upper_ts,
       'last_watermark',
@@ -108,6 +113,7 @@ BEGIN
     FROM TICDC_META.COLUMN_REGISTRY
    WHERE integration_id = :p_integration_id
      AND object_id = :p_object_id
+     AND generation = :p_generation
      AND COALESCE(is_deleted, FALSE) = FALSE;
 
   v_sql := 'DELETE FROM ' || v_target_base_table || ' t USING (' ||
@@ -142,16 +148,18 @@ BEGIN
     SELECT
       :p_integration_id AS integration_id,
       :p_object_id AS object_id,
-      :v_generation AS generation,
+      :p_generation AS generation,
       :v_bootstrap_ts AS bootstrap_ts,
+      :v_target_base_table AS target_base_table,
       :v_table_version AS table_version,
       :p_upper_ts AS last_applied_commit_ts
   ) s
-  ON t.integration_id = s.integration_id AND t.object_id = s.object_id
+  ON t.integration_id = s.integration_id AND t.object_id = s.object_id AND t.generation = s.generation
   WHEN MATCHED THEN
     UPDATE SET
-      generation = COALESCE(s.generation, t.generation),
+      generation = s.generation,
       bootstrap_ts = COALESCE(s.bootstrap_ts, t.bootstrap_ts),
+      target_base_table = COALESCE(s.target_base_table, t.target_base_table),
       table_version = s.table_version,
       last_applied_commit_ts = GREATEST(COALESCE(t.last_applied_commit_ts, 0), s.last_applied_commit_ts),
       last_apply_time = CURRENT_TIMESTAMP(),
@@ -163,6 +171,7 @@ BEGIN
       object_id,
       generation,
       bootstrap_ts,
+      target_base_table,
       table_version,
       last_applied_commit_ts,
       last_apply_time,
@@ -174,6 +183,7 @@ BEGIN
       s.object_id,
       s.generation,
       s.bootstrap_ts,
+      s.target_base_table,
       s.table_version,
       s.last_applied_commit_ts,
       CURRENT_TIMESTAMP(),
@@ -190,6 +200,8 @@ BEGIN
     p_integration_id,
     'object_id',
     p_object_id,
+    'generation',
+    p_generation,
     'upper_ts',
     p_upper_ts,
     'last_watermark',
@@ -208,7 +220,7 @@ EXCEPTION
       snowflake_query_id,
       error_time
     )
-    SELECT NULL, 'SP_SYNC_ONE_TABLE', :p_object_id || '@' || :p_integration_id, :p_upper_ts, :SQLSTATE, :SQLCODE, :SQLERRM, LAST_QUERY_ID(), CURRENT_TIMESTAMP();
+    SELECT NULL, 'SP_SYNC_ONE_TABLE', :p_object_id || '@' || :p_integration_id || '@' || :p_generation, :p_upper_ts, :SQLSTATE, :SQLCODE, :SQLERRM, LAST_QUERY_ID(), CURRENT_TIMESTAMP();
     RAISE;
 END;
 $$;
