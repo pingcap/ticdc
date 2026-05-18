@@ -451,7 +451,7 @@ func (s *sink) genCleanupJob(ctx context.Context, uri *url.URL) []func() {
 
 			checkpointTs := s.lastCheckpointTs.Load()
 			start := time.Now()
-			cnt, err := cloudstorage.RemoveEmptyDirs(ctx, s.changefeedID, uri.Path)
+			err := cloudstorage.RemoveEmptyDirs(ctx, s.changefeedID, uri.Path)
 			if err != nil {
 				log.Error("failed to remove empty dirs",
 					zap.String("keyspace", s.changefeedID.Keyspace()),
@@ -466,7 +466,6 @@ func (s *sink) genCleanupJob(ctx context.Context, uri *url.URL) []func() {
 				zap.String("keyspace", s.changefeedID.Keyspace()),
 				zap.String("changefeedID", s.changefeedID.Name()),
 				zap.Uint64("checkpointTs", checkpointTs),
-				zap.Uint64("count", cnt),
 				zap.Duration("cost", time.Since(start)))
 		})
 	}
@@ -483,7 +482,7 @@ func (s *sink) genCleanupJob(ctx context.Context, uri *url.URL) []func() {
 		defer isCleanupRunning.Store(false)
 		start := time.Now()
 		checkpointTs := s.lastCheckpointTs.Load()
-		cnt, err := cloudstorage.RemoveExpiredFiles(ctx, s.changefeedID, s.storage, s.cfg, checkpointTs)
+		err := cloudstorage.RemoveExpiredFiles(ctx, s.changefeedID, s.storage, s.cfg, checkpointTs)
 		if err != nil {
 			log.Error("failed to remove expired files",
 				zap.String("keyspace", s.changefeedID.Keyspace()),
@@ -498,7 +497,6 @@ func (s *sink) genCleanupJob(ctx context.Context, uri *url.URL) []func() {
 			zap.String("keyspace", s.changefeedID.Keyspace()),
 			zap.String("changefeedID", s.changefeedID.Name()),
 			zap.Uint64("checkpointTs", checkpointTs),
-			zap.Uint64("count", cnt),
 			zap.Duration("cost", time.Since(start)))
 	})
 	return ret

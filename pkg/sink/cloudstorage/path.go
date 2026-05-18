@@ -504,8 +504,7 @@ func FetchIndexFromFileName(fileName string, extension string) (uint64, error) {
 	if len(fileName) < minFileNamePrefixLen+len(extension) ||
 		!strings.HasPrefix(fileName, "CDC") ||
 		!strings.HasSuffix(fileName, extension) {
-		return 0, errors.ErrStorageSinkInvalidFileName.GenWithStack(
-			"filename in storage sink is invalid: %q", fileName)
+		return 0, errors.ErrStorageSinkInvalidFileName.GenWithStack("filename in storage sink is invalid: %q", fileName)
 	}
 
 	// CDC[_{dispatcherID}_]{num}.fileExtension
@@ -516,8 +515,7 @@ func FetchIndexFromFileName(fileName string, extension string) (uint64, error) {
 
 	matches := pathRE.FindStringSubmatch(fileName)
 	if len(matches) != 3 {
-		return 0, errors.ErrStorageSinkInvalidFileName.GenWithStack(
-			"cannot match dml path pattern for %q", fileName)
+		return 0, errors.ErrStorageSinkInvalidFileName.GenWithStack("cannot match dml path pattern for %q", fileName)
 	}
 	return strconv.ParseUint(matches[2], 10, 64)
 }
@@ -531,9 +529,9 @@ func RemoveExpiredFiles(
 	storage storage.ExternalStorage,
 	cfg *Config,
 	checkpointTs uint64,
-) (uint64, error) {
+) error {
 	if cfg.DateSeparator != config.DateSeparatorDay.String() {
-		return 0, nil
+		return nil
 	}
 	if dateSeparatorDayRegexp == nil {
 		dateSeparatorDayRegexp = regexp.MustCompile(config.DateSeparatorDay.GetPattern())
@@ -544,18 +542,13 @@ func RemoveExpiredFiles(
 	// Note: `expiredDate` is formatted using local TZ.
 	expiredDate := currTime.Format("2006-01-02")
 
-	cnt := uint64(0)
 	err := util.RemoveFilesIf(ctx, storage, func(path string) bool {
 		// the path is like: <schema>/<table>/<tableVersion>/<partitionID>/<date>/CDC_{dispatcher}_{num}.extension
 		// or <schema>/<table>/<tableVersion>/<partitionID>/<date>/CDC{num}.extension
 		match := dateSeparatorDayRegexp.FindString(path)
-		if match != "" && match < expiredDate {
-			cnt++
-			return true
-		}
-		return false
+		return match != "" && match < expiredDate
 	}, nil)
-	return cnt, err
+	return err
 }
 
 // RemoveEmptyDirs removes empty directories from external storage.
@@ -563,8 +556,7 @@ func RemoveEmptyDirs(
 	ctx context.Context,
 	id commonType.ChangeFeedID,
 	target string,
-) (uint64, error) {
-	cnt := uint64(0)
+) error {
 	err := filepath.Walk(target, func(path string, info fs.FileInfo, err error) error {
 		if os.IsNotExist(err) || path == target || info == nil {
 			// if path not exists, we should return nil to continue.
@@ -573,21 +565,19 @@ func RemoveEmptyDirs(
 		if err != nil {
 			return err
 		}
-		if info.IsDir() {
-			files, err := os.ReadDir(path)
-			if err == nil && len(files) == 0 {
-				log.Debug("Deleting empty directory",
-					zap.String("keyspace", id.Keyspace()),
-					zap.String("changeFeedID", id.Name()),
-					zap.String("path", path))
-				// Keep best-effort cleanup semantics: ignore remove failures.
-				_ = os.Remove(path) // #nosec G122
-				cnt++
-				return filepath.SkipDir
-			}
+
+		if !info.IsDir() {
+			return nil
+		}
+
+		files, err := os.ReadDir(path)
+		if err == nil && len(files) == 0 {
+			// Keep best-effort cleanup semantics: ignore remove failures.
+			_ = os.Remove(path) // #nosec G122
+			return filepath.SkipDir
 		}
 		return nil
 	})
 
-	return cnt, err
+	return err
 }
