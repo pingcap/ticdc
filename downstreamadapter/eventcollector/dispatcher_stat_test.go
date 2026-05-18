@@ -733,6 +733,51 @@ func TestHandleSignalEvent(t *testing.T) {
 	}
 }
 
+func TestRemoteReadyClearsRemoteCandidates(t *testing.T) {
+	localServerID := node.ID("local-server")
+	remoteServerID := node.ID("remote-server")
+	fallbackRemoteServerID := node.ID("fallback-remote-server")
+
+	newSignalEvent := func(from node.ID, eventType int) dispatcher.DispatcherEvent {
+		return dispatcher.DispatcherEvent{
+			From: &from,
+			Event: &mockEvent{
+				eventType: eventType,
+			},
+		}
+	}
+
+	mockDisp := newMockDispatcher(common.NewDispatcherID(), 0)
+	mockEventCollector := newTestEventCollector(localServerID)
+	stat := newDispatcherStat(mockDisp, mockEventCollector, nil)
+
+	// Remote probing has a fallback queue. Once a remote ready is accepted, the
+	// fallback candidates must be cleared so later re-register failures do not
+	// fall back to stale nodes.
+	setSessionState(stat.session, "", true, remoteServerID)
+	setSessionRemoteCandidates(stat.session, []string{fallbackRemoteServerID.String()})
+
+	stat.handleSignalEvent(newSignalEvent(remoteServerID, commonEvent.TypeReadyEvent))
+	requireDispatcherRequests(
+		t,
+		readDispatcherRequests(t, mockEventCollector, 1),
+		dispatcherRequestRecord{to: remoteServerID, action: eventpb.ActionType_ACTION_TYPE_RESET},
+	)
+
+	stat.session.registerTo(remoteServerID)
+	requireDispatcherRequests(
+		t,
+		readDispatcherRequests(t, mockEventCollector, 1),
+		dispatcherRequestRecord{to: remoteServerID, action: eventpb.ActionType_ACTION_TYPE_REGISTER},
+	)
+
+	// If remoteCandidates is not cleared by the earlier ready acceptance, this
+	// not reusable event would incorrectly trigger a register to the fallback
+	// candidate.
+	stat.handleSignalEvent(newSignalEvent(remoteServerID, commonEvent.TypeNotReusableEvent))
+	requireNoDispatcherRequest(t, mockEventCollector)
+}
+
 func TestHandleLocalReadyEventCleansUpRemoteRegistrations(t *testing.T) {
 	localServerID := node.ID("local-server")
 	remoteServerID := node.ID("remote-server")

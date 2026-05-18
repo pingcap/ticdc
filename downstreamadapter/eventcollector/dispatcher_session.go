@@ -174,6 +174,7 @@ func (d *dispatcherConnState) acceptReady(from node.ID, localServerID node.ID) r
 	// Keep localReadyPending unchanged: local ready may still arrive later and
 	// move the dispatcher back to local.
 	d.pendingRemoteEventServiceID = ""
+	d.remoteCandidates = nil
 	return readyDecision{
 		commitTarget: from,
 	}
