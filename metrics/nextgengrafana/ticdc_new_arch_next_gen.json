@@ -4665,6 +4665,18 @@
                     "value": 180
                   }
                 ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "error_time"
+                },
+                "properties": [
+                  {
+                    "id": "custom.width",
+                    "value": 180
+                  }
+                ]
               }
             ]
           },
@@ -4682,7 +4694,7 @@
           "pluginVersion": "7.5.17",
           "targets": [
             {
-              "expr": "max by (keyspace_name, changefeed, state, code, message) (ticdc_owner_changefeed_error_info{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"})",
+              "expr": "max by (keyspace_name, changefeed, state, code, error_time, message) (ticdc_owner_changefeed_error_info{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"})",
               "format": "time_series",
               "instant": true,
               "refId": "A"
@@ -4704,11 +4716,12 @@
                   "__name__": true
                 },
                 "indexByName": {
-                  "changefeed": 1,
-                  "code": 3,
-                  "message": 4,
                   "keyspace_name": 0,
-                  "state": 2
+                  "changefeed": 1,
+                  "state": 2,
+                  "error_time": 3,
+                  "code": 4,
+                  "message": 5
                 },
                 "renameByName": {}
               }
