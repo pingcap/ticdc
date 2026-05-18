@@ -176,6 +176,7 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 			req.StartTs,
 			from,
 			req.IsNewChangefeed,
+			req.SyncPointControl,
 		)
 		// Fast return the error to maintainer.
 		if err != nil {
@@ -203,6 +204,9 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 		m.mutex.Unlock()
 		metrics.DispatcherManagerGauge.WithLabelValues(cfId.Keyspace(), cfId.Name()).Inc()
 	} else {
+		if req.SyncPointControl != nil {
+			manager.SetSyncPointControl(req.SyncPointControl)
+		}
 		// Check and potentially add a table trigger event dispatcher.
 		// This is necessary during maintainer node migration, as the existing
 		// dispatcher manager on the new node may not have a table trigger
@@ -368,8 +372,9 @@ func createBootstrapResponse(
 	startTs, redoStartTs uint64,
 ) *heartbeatpb.MaintainerBootstrapResponse {
 	response := &heartbeatpb.MaintainerBootstrapResponse{
-		ChangefeedID: changefeedID,
-		Spans:        make([]*heartbeatpb.BootstrapTableSpan, 0, manager.GetDispatcherMap().Len()),
+		ChangefeedID:     changefeedID,
+		Spans:            make([]*heartbeatpb.BootstrapTableSpan, 0, manager.GetDispatcherMap().Len()),
+		SyncPointControl: manager.GetSyncPointControl().ToPB(),
 	}
 
 	// table trigger event dispatcher startTs

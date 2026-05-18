@@ -44,13 +44,15 @@ type Controller struct {
 	bootstrapped bool
 	startTs      uint64
 
-	schedulerController    *pkgscheduler.Controller
-	operatorController     *operator.Controller
-	redoOperatorController *operator.Controller
-	spanController         *span.Controller
-	redoSpanController     *span.Controller
-	barrier                *Barrier
-	redoBarrier            *Barrier
+	schedulerController        *pkgscheduler.Controller
+	operatorController         *operator.Controller
+	redoOperatorController     *operator.Controller
+	spanController             *span.Controller
+	redoSpanController         *span.Controller
+	barrier                    *Barrier
+	redoBarrier                *Barrier
+	syncPointDirectPassDecider func() bool
+	syncPointSkipDecider       func(uint64) bool
 
 	messageCenter messaging.MessageCenter
 	nodeManager   *watcher.NodeManager
@@ -241,6 +243,26 @@ func (c *Controller) HandleStatus(from node.ID, statusList []*heartbeatpb.TableS
 				spanController.MarkSpanAbsent(stm)
 			}
 		}
+	}
+}
+
+func (c *Controller) SetSyncPointDirectPassDecider(decider func() bool) {
+	c.syncPointDirectPassDecider = decider
+	if c.barrier != nil {
+		c.barrier.SetSyncPointDirectPassDecider(decider)
+	}
+	if c.redoBarrier != nil {
+		c.redoBarrier.SetSyncPointDirectPassDecider(decider)
+	}
+}
+
+func (c *Controller) SetSyncPointSkipDecider(decider func(uint64) bool) {
+	c.syncPointSkipDecider = decider
+	if c.barrier != nil {
+		c.barrier.SetSyncPointSkipDecider(decider)
+	}
+	if c.redoBarrier != nil {
+		c.redoBarrier.SetSyncPointSkipDecider(decider)
 	}
 }
 

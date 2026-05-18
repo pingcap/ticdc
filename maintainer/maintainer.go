@@ -49,6 +49,9 @@ import (
 const (
 	periodEventInterval = time.Millisecond * 100
 	periodRedoInterval  = time.Second * 1
+
+	defaultSyncPointDirectPassThreshold = 20 * time.Minute
+	defaultSyncPointDirectPassResume    = 15 * time.Minute
 )
 
 // Maintainer is response for handle changefeed replication tasks. Maintainer should:
@@ -163,6 +166,15 @@ type Maintainer struct {
 	redoScheduledTaskGauge prometheus.Gauge
 	redoSpanCountGauge     prometheus.Gauge
 	redoTableCountGauge    prometheus.Gauge
+
+	syncPointDirectPassActive     atomic.Bool
+	syncPointDirectPassThreshold  time.Duration
+	syncPointDirectPassResume     time.Duration
+	desiredSyncPointControl       common.SyncPointControl
+	authoritativeSyncPointControl common.SyncPointControl
+	nodeAppliedSyncPointControl   map[node.ID]common.SyncPointControl
+	syncPointControlEpoch         uint64
+	syncPointControlReady         bool
 }
 
 // NewMaintainer create the maintainer for the changefeed
@@ -230,8 +242,17 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		redoScheduledTaskGauge: metrics.ScheduleTaskGauge.WithLabelValues(keyspaceName, name, "redo"),
 		redoSpanCountGauge:     metrics.SpanCountGauge.WithLabelValues(keyspaceName, name, "redo"),
 		redoTableCountGauge:    metrics.TableCountGauge.WithLabelValues(keyspaceName, name, "redo"),
+
+		syncPointDirectPassThreshold:  defaultSyncPointDirectPassThreshold,
+		syncPointDirectPassResume:     defaultSyncPointDirectPassResume,
+		desiredSyncPointControl:       common.NewDisabledSyncPointControl(),
+		authoritativeSyncPointControl: common.NewDisabledSyncPointControl(),
+		nodeAppliedSyncPointControl:   make(map[node.ID]common.SyncPointControl),
+		syncPointControlReady:         false,
 	}
 	m.controller.SetSelfNodeID(selfNode.ID)
+	m.controller.SetSyncPointDirectPassDecider(m.shouldDirectPassSyncPoint)
+	m.controller.SetSyncPointSkipDecider(m.shouldSkipSyncPoint)
 	m.nodeChanged.changed = false
 	m.runningErrors.m = make(map[node.ID]*heartbeatpb.RunningError)
 
@@ -587,6 +608,7 @@ func (m *Maintainer) onNodeChanged() {
 		m.controller.RemoveNode(id)
 		m.checkpointTsByCapture.Delete(id)
 		m.redoTsByCapture.Delete(id)
+		delete(m.nodeAppliedSyncPointControl, id)
 	}
 
 	m.sendMessages(requests)
@@ -831,6 +853,49 @@ func (m *Maintainer) updateMetrics() {
 	m.resolvedTsLagGauge.Set(lag)
 }
 
+func (m *Maintainer) shouldDirectPassSyncPoint() bool {
+	if m == nil || m.syncPointDirectPassThreshold <= 0 {
+		return false
+	}
+
+	watermark := m.getWatermark()
+	if watermark.CheckpointTs == 0 || watermark.CheckpointTs == math.MaxUint64 {
+		return false
+	}
+
+	pdPhysicalTime := oracle.GetPhysical(m.pdClock.CurrentTime())
+	phyCheckpointTs := oracle.ExtractPhysical(watermark.CheckpointTs)
+	lag := time.Duration(0)
+	if pdPhysicalTime > phyCheckpointTs {
+		lag = time.Duration(pdPhysicalTime-phyCheckpointTs) * time.Millisecond
+	}
+
+	if m.syncPointDirectPassActive.Load() {
+		if lag <= m.syncPointDirectPassResume {
+			if m.syncPointDirectPassActive.CompareAndSwap(true, false) {
+				log.Info("syncpoint direct pass disabled",
+					zap.Stringer("changefeedID", m.changefeedID),
+					zap.Duration("lag", lag),
+					zap.Duration("resumeThreshold", m.syncPointDirectPassResume))
+			}
+			return false
+		}
+		return true
+	}
+
+	if lag > m.syncPointDirectPassThreshold {
+		if m.syncPointDirectPassActive.CompareAndSwap(false, true) {
+			log.Info("syncpoint direct pass enabled",
+				zap.Stringer("changefeedID", m.changefeedID),
+				zap.Duration("lag", lag),
+				zap.Duration("suppressThreshold", m.syncPointDirectPassThreshold),
+				zap.Duration("resumeThreshold", m.syncPointDirectPassResume))
+		}
+		return true
+	}
+	return false
+}
+
 // send message to other components
 func (m *Maintainer) sendMessages(msgs []*messaging.TargetMessage) {
 	for _, msg := range msgs {
@@ -879,6 +944,9 @@ func (m *Maintainer) onHeartbeatRequest(msg *messaging.TargetMessage) {
 		if !ok || req.RedoWatermark.Seq > old.Seq || (req.RedoWatermark.Seq == old.Seq && req.RedoWatermark.CheckpointTs > old.CheckpointTs) {
 			m.redoTsByCapture.Set(msg.From, *req.RedoWatermark)
 		}
+	}
+	if req.SyncPointControl != nil {
+		m.nodeAppliedSyncPointControl[msg.From] = common.NewSyncPointControlFromPB(req.SyncPointControl)
 	}
 	if req.Err != nil {
 		log.Error("dispatcher report an error",
@@ -996,6 +1064,7 @@ func (m *Maintainer) onBootstrapResponses(responses map[node.ID]*heartbeatpb.Mai
 	if responses == nil || m.removing.Load() {
 		return
 	}
+	m.recoverSyncPointControlFromBootstrapResponses(responses)
 	isMySQLSinkCompatible, err := isMysqlCompatible(m.info.SinkURI)
 	if err != nil {
 		m.handleError(err)
@@ -1148,6 +1217,9 @@ func (m *Maintainer) createBootstrapMessageFactory() bootstrap.NewBootstrapReque
 			IsNewChangefeed:               false,
 			KeyspaceId:                    m.info.KeyspaceID,
 		}
+		if m.syncPointControlReady {
+			msg.SyncPointControl = m.desiredSyncPointControl.ToPB()
+		}
 
 		// only send dispatcher targetNodeID to dispatcher manager on the same node
 		if targetNodeID == m.selfNode.ID {
@@ -1176,6 +1248,8 @@ func (m *Maintainer) createBootstrapMessageFactory() bootstrap.NewBootstrapReque
 }
 
 func (m *Maintainer) onPeriodTask() {
+	m.reconcileSyncPointControl()
+	m.broadcastSyncPointControl()
 	// send scheduling messages
 	m.handleResendMessage()
 	m.collectMetrics()

@@ -210,6 +210,40 @@ func TestCollectComponentStatusWhenChangedWatermarkSeqNoFallback(t *testing.T) {
 	require.Equal(t, uint64(200), req.Request.RedoWatermark.Seq)
 }
 
+func TestAggregateDispatcherHeartbeatsCarriesSyncPointControl(t *testing.T) {
+	manager := createTestManager(t)
+	manager.SetSyncPointControl(&heartbeatpb.SyncPointControl{
+		Epoch:       3,
+		SkipStartTs: 100,
+		SkipEndTs:   200,
+	})
+
+	msg := manager.aggregateDispatcherHeartbeats(false)
+	require.NotNil(t, msg.SyncPointControl)
+	require.Equal(t, uint64(3), msg.SyncPointControl.Epoch)
+	require.Equal(t, uint64(100), msg.SyncPointControl.SkipStartTs)
+	require.Equal(t, uint64(200), msg.SyncPointControl.SkipEndTs)
+}
+
+func TestSetSyncPointControlIgnoreSameEpochDifferentWindow(t *testing.T) {
+	manager := createTestManager(t)
+	manager.SetSyncPointControl(&heartbeatpb.SyncPointControl{
+		Epoch:       3,
+		SkipStartTs: 100,
+		SkipEndTs:   200,
+	})
+	manager.SetSyncPointControl(&heartbeatpb.SyncPointControl{
+		Epoch:       3,
+		SkipStartTs: 150,
+		SkipEndTs:   250,
+	})
+
+	control := manager.GetSyncPointControl()
+	require.Equal(t, uint64(3), control.Epoch)
+	require.Equal(t, uint64(100), control.SkipStartTs)
+	require.Equal(t, uint64(200), control.SkipEndTs)
+}
+
 func TestMergeDispatcherNormal(t *testing.T) {
 	manager := createTestManager(t)
 

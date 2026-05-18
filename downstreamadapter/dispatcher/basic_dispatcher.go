@@ -708,8 +708,14 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 				log.Panic("sync point event should only be singly handled",
 					zap.Stringer("dispatcherID", d.id))
 			}
-			block = true
 			syncPoint := event.(*commonEvent.SyncPointEvent)
+			if d.ShouldSkipSyncPoint(syncPoint.GetCommitTs()) {
+				log.Debug("dispatcher skip sync point event by control window",
+					zap.Stringer("dispatcher", d.id),
+					zap.Uint64("commitTs", syncPoint.GetCommitTs()))
+				continue
+			}
+			block = true
 			log.Info("dispatcher receive sync point event",
 				zap.Stringer("dispatcher", d.id),
 				zap.Uint64("commitTs", syncPoint.GetCommitTs()),

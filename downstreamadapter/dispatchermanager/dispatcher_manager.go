@@ -157,6 +157,8 @@ type DispatcherManager struct {
 
 	// Shared info for all dispatchers
 	sharedInfo *dispatcher.SharedInfo
+	// appliedSyncPointControl is the current syncpoint skip control installed on this dispatcher manager.
+	appliedSyncPointControl atomic.Pointer[common.SyncPointControl]
 
 	metricTableTriggerEventDispatcherCount prometheus.Gauge
 	metricEventDispatcherCount             prometheus.Gauge
@@ -183,6 +185,7 @@ func NewDispatcherManager(
 	startTs uint64,
 	maintainerID node.ID,
 	newChangefeed bool,
+	syncPointControl *heartbeatpb.SyncPointControl,
 ) (*DispatcherManager, error) {
 	failpoint.Inject("NewDispatcherManagerDelay", nil)
 
@@ -286,6 +289,7 @@ func NewDispatcherManager(
 		make(chan *heartbeatpb.TableSpanBlockStatus, 1024*1024),
 		make(chan error, 1),
 	)
+	manager.SetSyncPointControl(syncPointControl)
 
 	// Register Event Dispatcher Manager in HeartBeatCollector,
 	// which is responsible for communication with the maintainer.
@@ -749,10 +753,11 @@ func (e *DispatcherManager) collectComponentStatusWhenChanged(ctx context.Contex
 // Returns a HeartBeatRequest containing the aggregated information.
 func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus bool) *heartbeatpb.HeartBeatRequest {
 	message := heartbeatpb.HeartBeatRequest{
-		ChangefeedID:    e.changefeedID.ToPB(),
-		CompeleteStatus: needCompleteStatus,
-		Watermark:       heartbeatpb.NewMaxWatermark(),
-		RedoWatermark:   heartbeatpb.NewMaxWatermark(),
+		ChangefeedID:     e.changefeedID.ToPB(),
+		CompeleteStatus:  needCompleteStatus,
+		Watermark:        heartbeatpb.NewMaxWatermark(),
+		RedoWatermark:    heartbeatpb.NewMaxWatermark(),
+		SyncPointControl: e.GetSyncPointControl().ToPB(),
 	}
 
 	toCleanMap := make([]*cleanMap, 0)
@@ -822,6 +827,34 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 	e.metricResolvedTsLag.Set(float64(oracle.GetPhysical(pdTime)-phyResolvedTs) / 1e3)
 
 	return &message
+}
+
+func (e *DispatcherManager) SetSyncPointControl(control *heartbeatpb.SyncPointControl) {
+	newControl := common.NewSyncPointControlFromPB(control)
+	current := e.appliedSyncPointControl.Load()
+	if current != nil && current.Epoch > newControl.Epoch {
+		return
+	}
+	if current != nil && current.Epoch == newControl.Epoch && !current.Equal(newControl) {
+		log.Warn("ignore syncpoint control with same epoch but different window",
+			zap.Stringer("changefeedID", e.changefeedID),
+			zap.Uint64("epoch", newControl.Epoch),
+			zap.Uint64("currentSkipStartTs", current.SkipStartTs),
+			zap.Uint64("currentSkipEndTs", current.SkipEndTs),
+			zap.Uint64("newSkipStartTs", newControl.SkipStartTs),
+			zap.Uint64("newSkipEndTs", newControl.SkipEndTs))
+		return
+	}
+	e.sharedInfo.SetSyncPointControl(newControl)
+	e.appliedSyncPointControl.Store(&newControl)
+}
+
+func (e *DispatcherManager) GetSyncPointControl() common.SyncPointControl {
+	control := e.appliedSyncPointControl.Load()
+	if control == nil {
+		return common.NewDisabledSyncPointControl()
+	}
+	return control.Clone()
 }
 
 func (e *DispatcherManager) MergeDispatcher(dispatcherIDs []common.DispatcherID, mergedDispatcherID common.DispatcherID, mode int64) *MergeCheckTask {

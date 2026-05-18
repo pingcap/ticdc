@@ -42,6 +42,10 @@ type Barrier struct {
 	spanController     *span.Controller
 	operatorController *operator.Controller
 	splitTableEnabled  bool
+	// shouldDirectPassSyncPoint decides whether syncpoint barriers should bypass the write
+	// path and directly enter pass mode based on maintainer-global lag.
+	shouldDirectPassSyncPoint func() bool
+	shouldSkipSyncPoint       func(uint64) bool
 	// mode identifies which replication pipeline this barrier belongs to
 	// (common.DefaultMode or common.RedoMode). Barrier state, resend messages,
 	// and logs must stay in the same mode.
@@ -65,6 +69,14 @@ func NewBarrier(spanController *span.Controller,
 	}
 	barrier.handleBootstrapResponse(bootstrapRespMap)
 	return &barrier
+}
+
+func (b *Barrier) SetSyncPointDirectPassDecider(decider func() bool) {
+	b.shouldDirectPassSyncPoint = decider
+}
+
+func (b *Barrier) SetSyncPointSkipDecider(decider func(uint64) bool) {
+	b.shouldSkipSyncPoint = decider
 }
 
 // HandleStatus handle the block status from dispatcher manager
@@ -114,6 +126,43 @@ func (b *Barrier) HandleStatus(from node.ID,
 					continue
 				}
 			}
+		}
+
+		if status.State != nil &&
+			status.State.IsBlocked &&
+			status.State.IsSyncPoint &&
+			b.shouldSkipSyncPoint != nil &&
+			b.shouldSkipSyncPoint(status.State.BlockTs) {
+			if task := b.spanController.GetTaskByID(dispatcherID); task != nil {
+				task.UpdateStatus(&heartbeatpb.TableSpanStatus{
+					ID:              status.ID,
+					CheckpointTs:    status.State.BlockTs - 1,
+					ComponentStatus: heartbeatpb.ComponentState_Working,
+					Mode:            status.Mode,
+				})
+				task.UpdateBlockState(*status.State)
+			}
+			dispatcherStatus = append(dispatcherStatus, &heartbeatpb.DispatcherStatus{
+				InfluencedDispatchers: &heartbeatpb.InfluencedDispatchers{
+					InfluenceType: heartbeatpb.InfluenceType_Normal,
+					DispatcherIDs: []*heartbeatpb.DispatcherID{status.ID},
+				},
+				Ack: ackEvent(status.State.BlockTs, true),
+			})
+			if status.State.Stage != heartbeatpb.BlockStage_DONE {
+				dispatcherStatus = append(dispatcherStatus, &heartbeatpb.DispatcherStatus{
+					InfluencedDispatchers: &heartbeatpb.InfluencedDispatchers{
+						InfluenceType: heartbeatpb.InfluenceType_Normal,
+						DispatcherIDs: []*heartbeatpb.DispatcherID{status.ID},
+					},
+					Action: &heartbeatpb.DispatcherAction{
+						Action:      heartbeatpb.Action_Pass,
+						CommitTs:    status.State.BlockTs,
+						IsSyncPoint: true,
+					},
+				})
+			}
+			continue
 		}
 
 		// deal with block status, and check whether need to return action.
@@ -381,6 +430,10 @@ func (b *Barrier) handleBlockState(changefeedID common.ChangeFeedID,
 			)
 			// check whether the event can be finished.
 			b.checkEventFinish(event)
+			if event.writerDispatcherAdvanced {
+				action, targetID := event.passActionForDispatcher(dispatcherID)
+				return event, action, targetID, true
+			}
 			return event, nil, "", true
 		}
 
@@ -412,7 +465,8 @@ func (b *Barrier) handleBlockState(changefeedID common.ChangeFeedID,
 
 		// the block event, and check whether we need to send write action
 		event.markDispatcherEventDone(dispatcherID)
-		status, targetID := event.checkEventAction(dispatcherID)
+		directPassSyncPoint := blockState.IsSyncPoint && b.shouldDirectPassSyncPoint != nil && b.shouldDirectPassSyncPoint()
+		status, targetID := event.checkEventAction(dispatcherID, directPassSyncPoint)
 		if status != nil && event.needSchedule {
 			// scheduling is only required for ddl that changes tables, enqueue the event
 			b.pendingEvents.add(event)
@@ -461,6 +515,15 @@ func (b *Barrier) getOrInsertNewEvent(changefeedID common.ChangeFeedID, dispatch
 // check whether the event is get all the done message from dispatchers
 // if so, remove the event from blockedTs, not need to resend message anymore
 func (b *Barrier) checkEventFinish(be *BarrierEvent) {
+	if be.isSyncPoint && be.selected.Load() && b.spanController.GetMaintainerCommittedCheckpointTs() > be.commitTs {
+		log.Info("syncpoint barrier finished by committed checkpoint",
+			zap.String("changefeed", be.cfID.Name()),
+			zap.Uint64("commitTs", be.commitTs),
+			zap.Uint64("committedCheckpointTs", b.spanController.GetMaintainerCommittedCheckpointTs()),
+			zap.Int64("mode", b.mode))
+		b.blockedEvents.Delete(getEventKey(be.commitTs, be.isSyncPoint))
+		return
+	}
 	if !be.allDispatcherReported() {
 		return
 	}

@@ -43,7 +43,8 @@ type SharedInfo struct {
 	// the config of filter
 	filterConfig *eventpb.FilterConfig
 	// if syncPointInfo is not nil, means enable Sync Point feature,
-	syncPointConfig *syncpoint.SyncPointConfig
+	syncPointConfig  *syncpoint.SyncPointConfig
+	syncPointControl atomic.Pointer[common.SyncPointControl]
 
 	// The atomicity level of a transaction.
 	txnAtomicity config.AtomicityLevel
@@ -127,6 +128,8 @@ func NewSharedInfo(
 	} else {
 		sharedInfo.txnAtomicity = config.DefaultAtomicityLevel()
 	}
+	disabled := common.NewDisabledSyncPointControl()
+	sharedInfo.syncPointControl.Store(&disabled)
 	return sharedInfo
 }
 
@@ -233,6 +236,10 @@ func (d *BasicDispatcher) GetSyncPointInterval() time.Duration {
 	return time.Duration(0)
 }
 
+func (d *BasicDispatcher) ShouldSkipSyncPoint(commitTs uint64) bool {
+	return d.sharedInfo.ShouldSkipSyncPoint(commitTs)
+}
+
 func (d *BasicDispatcher) GetTableSpan() *heartbeatpb.TableSpan {
 	return d.tableSpan
 }
@@ -266,6 +273,23 @@ func (d *BasicDispatcher) SetCurrentPDTs(currentPDTs uint64) {
 // SharedInfo methods
 func (s *SharedInfo) IsOutputRawChangeEvent() bool {
 	return s.outputRawChangeEvent
+}
+
+func (s *SharedInfo) SetSyncPointControl(control common.SyncPointControl) {
+	clone := control.Clone()
+	s.syncPointControl.Store(&clone)
+}
+
+func (s *SharedInfo) GetSyncPointControl() common.SyncPointControl {
+	control := s.syncPointControl.Load()
+	if control == nil {
+		return common.NewDisabledSyncPointControl()
+	}
+	return control.Clone()
+}
+
+func (s *SharedInfo) ShouldSkipSyncPoint(commitTs uint64) bool {
+	return s.GetSyncPointControl().Contains(commitTs)
 }
 
 func (s *SharedInfo) GetStatusesChan() chan TableSpanStatusWithSeq {

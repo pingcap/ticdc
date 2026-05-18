@@ -17,6 +17,7 @@ message HeartBeatRequest {
     repeated TableSpanStatus statuses = 4;
     bool compeleteStatus = 5;  // Whether includes all table spans in the changefeed?
     RunningError err = 6;
+    SyncPointControl sync_point_control = 7;
 }
 
 message Watermark {
@@ -77,6 +78,17 @@ message HeartBeatResponse {
 message CheckpointTsMessage {
     ChangefeedID changefeedID = 1;
     uint64 checkpointTs = 2;
+}
+
+message SyncPointControl {
+    uint64 epoch = 1;
+    uint64 skip_start_ts = 2;
+    uint64 skip_end_ts = 3;
+}
+
+message SyncPointControlMessage {
+    ChangefeedID changefeedID = 1;
+    SyncPointControl control = 2;
 }
 
 // RedoMetaMessage used to send unflushed ts to update redo meta 
@@ -249,6 +261,7 @@ message MaintainerBootstrapRequest {
     bool is_new_changefeed = 5;                               // only true when the changefeed is new created or resumed with overwriteCheckpointTs
     DispatcherID table_trigger_redo_dispatcher_id = 6;  // only for redo
     uint32 keyspace_id = 7;
+    SyncPointControl sync_point_control = 8;
 }
 
 message MaintainerBootstrapResponse {
@@ -268,6 +281,7 @@ message MaintainerBootstrapResponse {
     // It will be used when redo enable.
     uint64 redo_checkpoint_ts = 5;
     repeated ScheduleDispatcherRequest operators = 6;
+    SyncPointControl sync_point_control = 7;
 }
 
 message MaintainerPostBootstrapRequest {

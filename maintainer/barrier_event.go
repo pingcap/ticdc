@@ -172,17 +172,17 @@ func (be *BarrierEvent) createRangeCheckerForTypeDB() {
 	log.Info("create range checker for block event", zap.Any("influcenceType", be.blockedDispatchers.InfluenceType), zap.Any("commitTs", be.commitTs), zap.Int64("mode", be.mode))
 }
 
-func (be *BarrierEvent) checkEventAction(dispatcherID common.DispatcherID) (*heartbeatpb.DispatcherStatus, node.ID) {
+func (be *BarrierEvent) checkEventAction(dispatcherID common.DispatcherID, directPassSyncPoint bool) (*heartbeatpb.DispatcherStatus, node.ID) {
 	if !be.allDispatcherReported() {
 		return nil, ""
 	}
-	return be.onAllDispatcherReportedBlockEvent(dispatcherID)
+	return be.onAllDispatcherReportedBlockEvent(dispatcherID, directPassSyncPoint)
 }
 
 // onAllDispatcherReportedBlockEvent is called when all dispatcher reported the block event
 // it will select a dispatcher as the writer, reset the range checker ,and move the event to the selected state
 // returns the dispatcher status to the dispatcher manager
-func (be *BarrierEvent) onAllDispatcherReportedBlockEvent(dispatcherID common.DispatcherID) (*heartbeatpb.DispatcherStatus, node.ID) {
+func (be *BarrierEvent) onAllDispatcherReportedBlockEvent(dispatcherID common.DispatcherID, directPassSyncPoint bool) (*heartbeatpb.DispatcherStatus, node.ID) {
 	var dispatcher common.DispatcherID
 	switch be.blockedDispatchers.InfluenceType {
 	case heartbeatpb.InfluenceType_DB, heartbeatpb.InfluenceType_All:
@@ -212,6 +212,29 @@ func (be *BarrierEvent) onAllDispatcherReportedBlockEvent(dispatcherID common.Di
 	be.rangeChecker.Reset()
 	be.reportedDispatchers = make(map[common.DispatcherID]struct{})
 
+	if be.isSyncPoint && directPassSyncPoint {
+		be.selected.Store(true)
+		be.writerDispatcher = dispatcher
+		be.writerDispatcherAdvanced = true
+		be.lastResendTime = time.Now().Add(-20 * time.Second)
+		log.Info("direct pass syncpoint due to lag after all dispatchers reported",
+			zap.String("changefeed", be.cfID.Name()),
+			zap.String("dispatcher", dispatcherID.String()),
+			zap.Uint64("commitTs", be.commitTs),
+			zap.Int64("mode", be.mode))
+		stm := be.spanController.GetTaskByID(dispatcherID)
+		if stm == nil {
+			return nil, ""
+		}
+		return &heartbeatpb.DispatcherStatus{
+			InfluencedDispatchers: &heartbeatpb.InfluencedDispatchers{
+				InfluenceType: heartbeatpb.InfluenceType_Normal,
+				DispatcherIDs: []*heartbeatpb.DispatcherID{dispatcherID.ToPB()},
+			},
+			Action: be.action(heartbeatpb.Action_Pass),
+		}, stm.GetNodeID()
+	}
+
 	be.selected.Store(true)
 	be.writerDispatcher = dispatcher
 	be.lastResendTime = time.Now()
@@ -228,6 +251,20 @@ func (be *BarrierEvent) onAllDispatcherReportedBlockEvent(dispatcherID common.Di
 			DispatcherIDs: []*heartbeatpb.DispatcherID{be.writerDispatcher.ToPB()},
 		},
 		Action: be.action(heartbeatpb.Action_Write),
+	}, stm.GetNodeID()
+}
+
+func (be *BarrierEvent) passActionForDispatcher(dispatcherID common.DispatcherID) (*heartbeatpb.DispatcherStatus, node.ID) {
+	stm := be.spanController.GetTaskByID(dispatcherID)
+	if stm == nil || stm.GetNodeID() == "" {
+		return nil, ""
+	}
+	return &heartbeatpb.DispatcherStatus{
+		InfluencedDispatchers: &heartbeatpb.InfluencedDispatchers{
+			InfluenceType: heartbeatpb.InfluenceType_Normal,
+			DispatcherIDs: []*heartbeatpb.DispatcherID{dispatcherID.ToPB()},
+		},
+		Action: be.action(heartbeatpb.Action_Pass),
 	}, stm.GetNodeID()
 }
 
