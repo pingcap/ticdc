@@ -179,7 +179,7 @@ function run_table_route_kafka_consumer() {
 	local schema_registry_uri=$4
 	local log_suffix=$5
 	local protocol_case=$6
-	local downstream_uri="mysql://root@127.0.0.1:3306/?safe-mode=true&batch-dml-enable=false&enable-ddl-ts=false"
+	local downstream_uri="mysql://root@${DOWN_TIDB_HOST}:${DOWN_TIDB_PORT}/?safe-mode=true&batch-dml-enable=false&enable-ddl-ts=false"
 
 	local args=(
 		--log-file "$work_dir/cdc_kafka_consumer${log_suffix}.log"

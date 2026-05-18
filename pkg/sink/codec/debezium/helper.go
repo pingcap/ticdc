@@ -108,6 +108,10 @@ func parseColumns(sql string, columns []*timodel.ColumnInfo) []*timodel.ColumnIn
 	stmt, err := p.ParseOneStmt(sql, mysql.DefaultCharset, mysql.DefaultCollationName)
 	if err != nil {
 		log.Error("format query parse one stmt failed", zap.Error(err))
+		return cloned
+	}
+	if stmt == nil {
+		return cloned
 	}
 
 	columnsMap := make(map[ast.CIStr]*timodel.ColumnInfo, len(cloned))

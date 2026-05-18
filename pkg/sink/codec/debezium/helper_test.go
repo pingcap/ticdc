@@ -91,6 +91,26 @@ func TestParseColumnsDoesNotMutateInput(t *testing.T) {
 	require.Equal(t, "CURRENT_TIMESTAMP", parsed[2].GetDefaultValue())
 }
 
+func TestParseColumnsReturnsClonedOnParseFailure(t *testing.T) {
+	columnInfos := []*timodel.ColumnInfo{
+		{
+			Name:      ast.NewCIStr("val1"),
+			FieldType: *types.NewFieldType(mysql.TypeDuration),
+		},
+	}
+	originalDecimal := columnInfos[0].GetDecimal()
+
+	var parsed []*timodel.ColumnInfo
+	require.NotPanics(t, func() {
+		parsed = parseColumns("CREATE TABLE test (", columnInfos)
+	})
+
+	require.Len(t, parsed, 1)
+	require.NotSame(t, columnInfos[0], parsed[0])
+	require.Equal(t, originalDecimal, parsed[0].GetDecimal())
+	require.Equal(t, originalDecimal, columnInfos[0].GetDecimal())
+}
+
 func TestGetSchemaTopicName(t *testing.T) {
 	namespace := "default"
 	schema := "1A.B"
