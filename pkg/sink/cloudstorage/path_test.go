@@ -17,6 +17,8 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -27,6 +29,10 @@ import (
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/br/pkg/storage"
+	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	parser_model "github.com/pingcap/tidb/pkg/parser/model"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
+	"github.com/pingcap/tidb/pkg/types"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
 )
@@ -448,6 +454,48 @@ func TestIsSchemaFile(t *testing.T) {
 // 	require.Equal(t, 2, len(files))
 // }
 
+func TestCheckOrWriteSchemaUsesRoutedTargetNames(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	dir := t.TempDir()
+	f := testFilePathGenerator(ctx, t, dir)
+
+	tableInfo := commonType.WrapTableInfo("source_db", &timodel.TableInfo{
+		ID:   20,
+		Name: parser_model.NewCIStr("source_table"),
+		Columns: []*timodel.ColumnInfo{
+			{
+				Name:      parser_model.NewCIStr("id"),
+				FieldType: *types.NewFieldType(mysql.TypeLong),
+				State:     timodel.StatePublic,
+			},
+		},
+		Version: 100,
+	}).CloneWithRouting("target_db", "target_table")
+
+	table := VersionedTableName{
+		TableNameWithPhysicTableID: commonType.TableName{
+			Schema:  tableInfo.GetSchemaName(),
+			Table:   tableInfo.GetTableName(),
+			TableID: tableInfo.TableName.TableID,
+		},
+		TableInfoVersion: 100,
+	}
+
+	hasNewerSchemaVersion, err := f.CheckOrWriteSchema(ctx, table, tableInfo)
+	require.NoError(t, err)
+	require.False(t, hasNewerSchemaVersion)
+
+	files, err := os.ReadDir(filepath.Join(dir, "target_db", "target_table", "meta"))
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+
+	_, err = os.Stat(filepath.Join(dir, "source_db"))
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
 func TestRemoveExpiredFilesWithoutPartition(t *testing.T) {
 	t.Parallel()
 
@@ -529,7 +577,6 @@ func TestRemoveExpiredFilesWithoutPartition(t *testing.T) {
 
 	currTime := time.Date(2021, 1, 3, 0, 0, 0, 0, time.Local)
 	checkpointTs := oracle.GoTimeToTS(currTime)
-	cnt, err := RemoveExpiredFiles(ctx, commonType.ChangeFeedID{}, storage, cfg, checkpointTs)
+	err = RemoveExpiredFiles(ctx, commonType.ChangeFeedID{}, storage, cfg, checkpointTs)
 	require.NoError(t, err)
-	require.Equal(t, uint64(16), cnt)
 }

@@ -185,7 +185,7 @@ storage_groups=(
 	# disables the no-operator terminal-status fallback; the case depends on that rescheduling path.
 	'cli_with_auth fail_over_ddl_N'
 	# G14
-	'csv_storage_partition_table csv_storage_multi_tables_ddl fail_over_ddl_O'
+	'csv_storage_partition_table csv_storage_multi_tables_ddl table_route fail_over_ddl_O'
 	# G15
 	'split_region autorandom gc_safepoint'
 )
