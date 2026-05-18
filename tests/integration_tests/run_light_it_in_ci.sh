@@ -87,7 +87,7 @@ kafka_groups=(
 	# G07
 	'kafka_messages kafka_big_messages kafka_compression fail_over_ddl_H changefeed_update_config'
 	# G08
-	'capture_session_done_during_task fail_over_ddl_I'
+	'capture_session_done_during_task fail_over_ddl_I table_route'
 	# G09
 	'cdc_server_tips ddl_sequence log_redaction fail_over_ddl_J'
 	# G10

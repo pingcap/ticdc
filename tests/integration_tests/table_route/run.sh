@@ -114,9 +114,42 @@ function run_storage() {
 	run_storage_case csv
 }
 
+function run_kafka_case() {
+	local protocol=$1
+	local work_dir="$WORK_DIR/$protocol"
+	local topic_name="ticdc-table-route-$protocol-$RANDOM"
+	local sink_uri="kafka://127.0.0.1:9092/$topic_name?protocol=$protocol&partition-num=1&kafka-version=${KAFKA_VERSION}&max-message-bytes=10485760"
+	if [ "$protocol" = "canal-json" ]; then
+		sink_uri="$sink_uri&enable-tidb-extension=true"
+	fi
+
+	rm -rf "$work_dir" && mkdir -p "$work_dir"
+
+	start_tidb_cluster --workdir "$work_dir"
+
+	run_cdc_server --workdir "$work_dir" --binary "$CDC_BINARY" --cluster-id "$KEYSPACE_NAME"
+
+	cdc_cli_changefeed create --sink-uri="$sink_uri" --config="$CUR/conf/changefeed.toml"
+	run_kafka_consumer "$work_dir" "$sink_uri" "$CUR/conf/changefeed.toml" "" "_$protocol"
+
+	run_sql_file "$CUR/data/test.sql" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+
+	verify_table_route_result "$work_dir"
+	verify_table_route_drop_database
+
+	stop_test "$work_dir"
+	check_logs "$work_dir"
+}
+
+function run_kafka() {
+	run_kafka_case canal-json
+	run_kafka_case open-protocol
+}
+
 function run() {
 	case "$SINK_TYPE" in
 	mysql) run_mysql ;;
+	kafka) run_kafka ;;
 	storage) run_storage ;;
 	*) return ;;
 	esac
