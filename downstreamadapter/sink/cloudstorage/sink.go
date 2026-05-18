@@ -348,7 +348,7 @@ func (s *sink) sendCheckpointTs(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			return errors.Trace(context.Cause(ctx))
+			return context.Cause(ctx)
 		case checkpoint = <-s.checkpointChan:
 		}
 
@@ -402,7 +402,7 @@ func (s *sink) initCron(
 	for _, job := range cleanupJobs {
 		err = s.cron.AddFunc(s.cfg.FileCleanupCronSpec, job)
 		if err != nil {
-			return errors.Trace(err)
+			return errors.WrapError(errors.ErrStorageSinkInvalidConfig, err, "add cloud storage cleanup job")
 		}
 	}
 	return nil
