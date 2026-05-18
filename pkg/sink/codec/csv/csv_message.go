@@ -67,8 +67,9 @@ func (o *operation) FromString(op string) error {
 	case "U":
 		*o = operationUpdate
 	default:
+		return errors.ErrCSVDecodeFailed.GenWithStack("invalid operation type %s", op)
 	}
-	return errors.ErrCSVDecodeFailed.GenWithStack("invalid operation type %s", op)
+	return nil
 }
 
 type csvMessage struct {
