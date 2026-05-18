@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	cerrors "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/httputil"
 	mysqlsink "github.com/pingcap/ticdc/pkg/sink/mysql"
 	"github.com/stretchr/testify/require"
 	pd "github.com/tikv/pd/client"
@@ -352,7 +353,7 @@ func TestValidateActiveActiveTSOIndexes_UpstreamPrefersTSOMicroservice(t *testin
 				{ServiceAddr: "http://tso-1:2379"},
 			}, nil
 		},
-		func(ctx context.Context, targetURL string) (map[string]any, error) {
+		func(ctx context.Context, httpClient *httputil.Client, targetURL string) (map[string]any, error) {
 			readTargets = append(readTargets, targetURL)
 			return map[string]any{
 				pdTSOUniqueIndexKey: float64(2),
@@ -442,12 +443,13 @@ func setTestDeps(
 	db *sql.DB,
 	getConfig func(ctx context.Context) (map[string]any, error),
 	getMicroserviceMembers func(ctx context.Context, service string) ([]pdhttp.MicroserviceMember, error),
-	readTSOConfig func(ctx context.Context, targetURL string) (map[string]any, error),
+	readTSOConfig func(ctx context.Context, httpClient *httputil.Client, targetURL string) (map[string]any, error),
 ) {
 	t.Helper()
 
 	oldMySQLFn := newMySQLConfigAndDBFn
 	oldNewHTTPClientFn := newPDHTTPClientFn
+	oldNewTSOConfigHTTPClientFn := newTSOConfigHTTPClientFn
 	oldReadTSOConfigFn := readTSOConfigFromURLFn
 	oldGetTSOMicroserviceMembersFn := getTSOMicroserviceMembersFn
 
@@ -481,11 +483,14 @@ func setTestDeps(
 		}, nil
 	}
 	if readTSOConfig == nil {
-		readTSOConfigFromURLFn = func(ctx context.Context, targetURL string) (map[string]any, error) {
+		readTSOConfigFromURLFn = func(ctx context.Context, httpClient *httputil.Client, targetURL string) (map[string]any, error) {
 			return nil, errors.New("unexpected TSO config read")
 		}
 	} else {
 		readTSOConfigFromURLFn = readTSOConfig
+	}
+	newTSOConfigHTTPClientFn = func(ctx context.Context) (*httputil.Client, error) {
+		return &httputil.Client{}, nil
 	}
 	if getMicroserviceMembers == nil {
 		getTSOMicroserviceMembersFn = func(ctx context.Context, httpClient pdhttp.Client) ([]pdhttp.MicroserviceMember, error) {
@@ -500,6 +505,7 @@ func setTestDeps(
 	t.Cleanup(func() {
 		newMySQLConfigAndDBFn = oldMySQLFn
 		newPDHTTPClientFn = oldNewHTTPClientFn
+		newTSOConfigHTTPClientFn = oldNewTSOConfigHTTPClientFn
 		readTSOConfigFromURLFn = oldReadTSOConfigFn
 		getTSOMicroserviceMembersFn = oldGetTSOMicroserviceMembersFn
 	})

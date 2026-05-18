@@ -81,11 +81,7 @@ var getTSOMicroserviceMembersFn = func(ctx context.Context, httpClient pdhttp.Cl
 	return members, nil
 }
 
-var readTSOConfigFromURLFn = func(ctx context.Context, targetURL string) (map[string]any, error) {
-	if len(targetURL) == 0 {
-		return nil, cerrors.New("tso target url is empty")
-	}
-
+var newTSOConfigHTTPClientFn = func(ctx context.Context) (*httputil.Client, error) {
 	var (
 		httpClient *httputil.Client
 		err        error
@@ -99,8 +95,13 @@ var readTSOConfigFromURLFn = func(ctx context.Context, targetURL string) (map[st
 		return nil, cerrors.Trace(err)
 	}
 	httpClient.SetTimeout(timeoutFromContextOrDefault(ctx, defaultHTTPTimeout))
-	defer httpClient.CloseIdleConnections()
+	return httpClient, nil
+}
 
+var readTSOConfigFromURLFn = func(ctx context.Context, httpClient *httputil.Client, targetURL string) (map[string]any, error) {
+	if len(targetURL) == 0 {
+		return nil, cerrors.New("tso target url is empty")
+	}
 	endpoint := strings.TrimRight(targetURL, "/") + tsoConfigAPIPath
 	body, err := httpClient.DoRequest(ctx, endpoint, http.MethodGet, nil, nil)
 	if err != nil {
@@ -227,7 +228,7 @@ func getDownstreamTSOIndexes(
 	if !found {
 		return 0, 0, cerrors.New("downstream TiDB does not report tso index config from TSO or PD instances")
 	}
-	return unique, max, err
+	return unique, max, nil
 }
 
 // getUpstreamTSOIndexes reads the upstream TSO index values.
@@ -347,12 +348,18 @@ func getUpstreamTSOIndexesFromTSOMicroservice(
 		return 0, 0, true, cerrors.New("upstream PD reports TSO microservice but no TSO members are registered")
 	}
 
+	tsoConfigHTTPClient, err := newTSOConfigHTTPClientFn(ctx)
+	if err != nil {
+		return 0, 0, true, cerrors.Trace(err)
+	}
+	defer tsoConfigHTTPClient.CloseIdleConnections()
+
 	var (
 		uniqueSet bool
 		maxSet    bool
 	)
 	for _, member := range members {
-		cfg, err := readTSOConfigFromURLFn(ctx, member.ServiceAddr)
+		cfg, err := readTSOConfigFromURLFn(ctx, tsoConfigHTTPClient, member.ServiceAddr)
 		if err != nil {
 			return 0, 0, true, cerrors.Errorf("failed to read upstream TSO config from %s: %v", member.ServiceAddr, err)
 		}
