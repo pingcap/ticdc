@@ -15,15 +15,22 @@ package check
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
+	stderrors "errors"
 	"fmt"
+	"io"
 	"math"
+	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	cerrors "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/httputil"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	pd "github.com/tikv/pd/client"
 	pdhttp "github.com/tikv/pd/client/http"
@@ -32,9 +39,15 @@ import (
 const (
 	pdTSOUniqueIndexKey = "tso-unique-index"
 	pdTSOMaxIndexKey    = "tso-max-index"
+	tsoServiceName      = "tso"
+	tsoConfigAPIPath    = "/tso/api/v1/config"
+	defaultHTTPTimeout  = 30 * time.Second
 )
 
-const showPDConfigQuery = "SHOW CONFIG WHERE type='pd' AND (name='tso-unique-index' OR name='tso-max-index')"
+const (
+	showTSOConfigQuery = "SHOW CONFIG WHERE type='tso' AND (name='tso-unique-index' OR name='tso-max-index')"
+	showPDConfigQuery  = "SHOW CONFIG WHERE type='pd' AND (name='tso-unique-index' OR name='tso-max-index')"
+)
 
 var newPDHTTPClientFn = func(upPD pd.Client) (pdhttp.Client, error) {
 	sc := config.GetGlobalServerConfig()
@@ -44,7 +57,64 @@ var newPDHTTPClientFn = func(upPD pd.Client) (pdhttp.Client, error) {
 	return pdutil.NewPDHTTPClient(upPD, sc.Security)
 }
 
-// ValidateActiveActiveTSOIndexes validates the upstream/downstream PD TSO index
+var errTSOMicroserviceUnsupported = stderrors.New("tso microservice is unsupported")
+
+var getTSOMicroserviceMembersFn = func(ctx context.Context, httpClient pdhttp.Client) ([]pdhttp.MicroserviceMember, error) {
+	members, err := httpClient.WithRespHandler(func(resp *http.Response, res any) error {
+		defer func() { _ = resp.Body.Close() }()
+
+		if resp.StatusCode == http.StatusNotFound {
+			return errTSOMicroserviceUnsupported
+		}
+		if resp.StatusCode != http.StatusOK {
+			body, err := io.ReadAll(resp.Body)
+			if err != nil {
+				return cerrors.Trace(err)
+			}
+			return cerrors.Errorf("request pd http api failed with status: '%s', body: '%s'", resp.Status, strings.TrimSpace(string(body)))
+		}
+		return cerrors.Trace(json.NewDecoder(resp.Body).Decode(res))
+	}).GetMicroserviceMembers(ctx, tsoServiceName)
+	if err != nil {
+		return nil, err
+	}
+	return members, nil
+}
+
+var readTSOConfigFromURLFn = func(ctx context.Context, targetURL string) (map[string]any, error) {
+	if len(targetURL) == 0 {
+		return nil, cerrors.New("tso target url is empty")
+	}
+
+	var (
+		httpClient *httputil.Client
+		err        error
+	)
+	if sc := config.GetGlobalServerConfig(); sc == nil {
+		httpClient, err = httputil.NewClient(nil)
+	} else {
+		httpClient, err = httputil.NewClient(sc.Security)
+	}
+	if err != nil {
+		return nil, cerrors.Trace(err)
+	}
+	httpClient.SetTimeout(timeoutFromContextOrDefault(ctx, defaultHTTPTimeout))
+	defer httpClient.CloseIdleConnections()
+
+	endpoint := strings.TrimRight(targetURL, "/") + tsoConfigAPIPath
+	body, err := httpClient.DoRequest(ctx, endpoint, http.MethodGet, nil, nil)
+	if err != nil {
+		return nil, cerrors.Trace(err)
+	}
+
+	var cfg map[string]any
+	if err := json.Unmarshal(body, &cfg); err != nil {
+		return nil, cerrors.Trace(err)
+	}
+	return cfg, nil
+}
+
+// ValidateActiveActiveTSOIndexes validates the upstream/downstream TSO index
 // compatibility when active-active mode is enabled and the downstream is TiDB.
 //
 // The validation is fail-closed: inability to retrieve or parse values is
@@ -106,12 +176,15 @@ func ValidateActiveActiveTSOIndexes(
 	return nil
 }
 
-// getDownstreamTSOIndexes reads the effective PD TSO index values from the
+// getDownstreamTSOIndexes reads the effective TSO index values from the
 // downstream TiDB cluster via SQL.
 //
-// These values are part of PD configuration, and TiDB exposes them through
-// `SHOW CONFIG`. The query returns one row per TiDB instance, so this function
-// requires all instances to report the same values.
+// In TSO microservice mode, TiDB exposes the effective TSO service config
+// through `SHOW CONFIG WHERE type='tso' ...`. In the legacy embedded-TSO mode,
+// there are no TSO service rows, so this function falls back to `type='pd'`.
+// `SHOW CONFIG` returns one row per matched component instance, so this
+// function requires all instances in the chosen source to report the same
+// values.
 //
 // The function is fail-closed: any retrieval, parsing, missing key, or
 // cross-instance inconsistency is treated as an error.
@@ -140,74 +213,29 @@ func getDownstreamTSOIndexes(
 	queryCtx, cancel := context.WithTimeout(ctx, readTimeout)
 	defer cancel()
 
-	rows, err := db.QueryContext(queryCtx, showPDConfigQuery)
+	unique, max, found, err := queryConsistentTSOIndexes(queryCtx, db, showTSOConfigQuery, "TSO instances")
 	if err != nil {
-		return 0, 0, cerrors.Trace(err)
+		return 0, 0, err
 	}
-	defer func() { _ = rows.Close() }()
-
-	var (
-		uniqueSet bool
-		maxSet    bool
-	)
-	// SHOW CONFIG returns one row per TiDB instance. Require all instances to
-	// report consistent values to avoid validating against a partially rolled-out
-	// or inconsistent configuration.
-	for rows.Next() {
-		// Columns: Type | Instance | Name | Value
-		var typ, instance, name, value string
-		if err := rows.Scan(&typ, &instance, &name, &value); err != nil {
-			return 0, 0, cerrors.Trace(err)
-		}
-		switch name {
-		case pdTSOUniqueIndexKey:
-			parsed, err := strconv.ParseInt(value, 10, 64)
-			if err != nil {
-				return 0, 0, cerrors.Trace(err)
-			}
-			if !uniqueSet {
-				unique = parsed
-				uniqueSet = true
-				continue
-			}
-			if unique != parsed {
-				return 0, 0, cerrors.New("downstream TiDB reports inconsistent tso-unique-index across instances")
-			}
-		case pdTSOMaxIndexKey:
-			parsed, err := strconv.ParseInt(value, 10, 64)
-			if err != nil {
-				return 0, 0, cerrors.Trace(err)
-			}
-			if !maxSet {
-				max = parsed
-				maxSet = true
-				continue
-			}
-			if max != parsed {
-				return 0, 0, cerrors.New("downstream TiDB reports inconsistent tso-max-index across instances")
-			}
-		default:
-		}
+	if found {
+		return unique, max, nil
 	}
-	if err := rows.Err(); err != nil {
-		return 0, 0, cerrors.Trace(err)
+	unique, max, found, err = queryConsistentTSOIndexes(queryCtx, db, showPDConfigQuery, "PD instances")
+	if err != nil {
+		return 0, 0, err
 	}
-
-	if !uniqueSet {
-		return 0, 0, cerrors.Errorf("downstream TiDB does not report %s", pdTSOUniqueIndexKey)
+	if !found {
+		return 0, 0, cerrors.New("downstream TiDB does not report tso index config from TSO or PD instances")
 	}
-	if !maxSet {
-		return 0, 0, cerrors.Errorf("downstream TiDB does not report %s", pdTSOMaxIndexKey)
-	}
-	return unique, max, nil
+	return unique, max, err
 }
 
-// getUpstreamTSOIndexes reads the PD TSO index values from the upstream PD via
-// PD HTTP API.
+// getUpstreamTSOIndexes reads the upstream TSO index values.
 //
-// The PD HTTP client uses the same service discovery (and TLS configuration) as
-// the given gRPC PD client. It also probes leader and followers internally, so a
-// single GetConfig call is sufficient here.
+// When PD reports a TSO microservice, this function reads `/tso/api/v1/config`
+// from every TSO instance and requires them to agree. If the upstream cluster
+// does not expose the TSO microservice membership API, it falls back to the
+// legacy PD config endpoint.
 //
 // The caller controls the request deadline through ctx.
 func getUpstreamTSOIndexes(
@@ -224,30 +252,176 @@ func getUpstreamTSOIndexes(
 	}
 	defer httpClient.Close()
 
+	unique, max, found, err := getUpstreamTSOIndexesFromTSOMicroservice(ctx, httpClient)
+	if err != nil {
+		return 0, 0, cerrors.Trace(err)
+	}
+	if found {
+		return unique, max, nil
+	}
+
+	return getUpstreamTSOIndexesFromPDConfig(ctx, httpClient)
+}
+
+func queryConsistentTSOIndexes(
+	ctx context.Context,
+	db *sql.DB,
+	query string,
+	instanceScope string,
+) (unique int64, max int64, found bool, err error) {
+	rows, err := db.QueryContext(ctx, query)
+	if err != nil {
+		return 0, 0, false, cerrors.Trace(err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var (
+		uniqueSet bool
+		maxSet    bool
+		sawRows   bool
+	)
+	for rows.Next() {
+		sawRows = true
+		// Columns: Type | Instance | Name | Value
+		var typ, instance, name, value string
+		if err := rows.Scan(&typ, &instance, &name, &value); err != nil {
+			return 0, 0, false, cerrors.Trace(err)
+		}
+		switch name {
+		case pdTSOUniqueIndexKey:
+			parsed, err := strconv.ParseInt(value, 10, 64)
+			if err != nil {
+				return 0, 0, true, cerrors.Trace(err)
+			}
+			if !uniqueSet {
+				unique = parsed
+				uniqueSet = true
+				continue
+			}
+			if unique != parsed {
+				return 0, 0, true, cerrors.Errorf("downstream TiDB reports inconsistent %s across %s", pdTSOUniqueIndexKey, instanceScope)
+			}
+		case pdTSOMaxIndexKey:
+			parsed, err := strconv.ParseInt(value, 10, 64)
+			if err != nil {
+				return 0, 0, true, cerrors.Trace(err)
+			}
+			if !maxSet {
+				max = parsed
+				maxSet = true
+				continue
+			}
+			if max != parsed {
+				return 0, 0, true, cerrors.Errorf("downstream TiDB reports inconsistent %s across %s", pdTSOMaxIndexKey, instanceScope)
+			}
+		default:
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return 0, 0, false, cerrors.Trace(err)
+	}
+	if !sawRows {
+		return 0, 0, false, nil
+	}
+	if !uniqueSet {
+		return 0, 0, true, cerrors.Errorf("downstream TiDB does not report %s for %s", pdTSOUniqueIndexKey, instanceScope)
+	}
+	if !maxSet {
+		return 0, 0, true, cerrors.Errorf("downstream TiDB does not report %s for %s", pdTSOMaxIndexKey, instanceScope)
+	}
+	return unique, max, true, nil
+}
+
+func getUpstreamTSOIndexesFromTSOMicroservice(
+	ctx context.Context,
+	httpClient pdhttp.Client,
+) (unique int64, max int64, found bool, err error) {
+	members, err := getTSOMicroserviceMembersFn(ctx, httpClient)
+	if err != nil {
+		if shouldFallbackToPDConfig(err) {
+			return 0, 0, false, nil
+		}
+		return 0, 0, false, cerrors.Trace(err)
+	}
+	if len(members) == 0 {
+		return 0, 0, true, cerrors.New("upstream PD reports TSO microservice but no TSO members are registered")
+	}
+
+	var (
+		uniqueSet bool
+		maxSet    bool
+	)
+	for _, member := range members {
+		cfg, err := readTSOConfigFromURLFn(ctx, member.ServiceAddr)
+		if err != nil {
+			return 0, 0, true, cerrors.Errorf("failed to read upstream TSO config from %s: %v", member.ServiceAddr, err)
+		}
+
+		memberUnique, memberMax, err := getTSOIndexesFromConfig(cfg)
+		if err != nil {
+			return 0, 0, true, cerrors.Errorf("invalid upstream TSO config from %s: %v", member.ServiceAddr, err)
+		}
+		if !uniqueSet {
+			unique = memberUnique
+			uniqueSet = true
+		} else if unique != memberUnique {
+			return 0, 0, true, cerrors.Errorf("upstream TSO reports inconsistent %s across instances", pdTSOUniqueIndexKey)
+		}
+		if !maxSet {
+			max = memberMax
+			maxSet = true
+		} else if max != memberMax {
+			return 0, 0, true, cerrors.Errorf("upstream TSO reports inconsistent %s across instances", pdTSOMaxIndexKey)
+		}
+	}
+	return unique, max, true, nil
+}
+
+func getUpstreamTSOIndexesFromPDConfig(
+	ctx context.Context,
+	httpClient pdhttp.Client,
+) (unique int64, max int64, err error) {
 	cfg, err := httpClient.GetConfig(ctx)
 	if err != nil {
 		return 0, 0, cerrors.Trace(err)
 	}
+	return getTSOIndexesFromConfig(cfg)
+}
 
-	unique, err = parsePDConfigInt64(cfg, pdTSOUniqueIndexKey)
+func getTSOIndexesFromConfig(cfg map[string]any) (unique int64, max int64, err error) {
+	unique, err = parseConfigInt64(cfg, pdTSOUniqueIndexKey)
 	if err != nil {
 		return 0, 0, cerrors.Trace(err)
 	}
-	max, err = parsePDConfigInt64(cfg, pdTSOMaxIndexKey)
+	max, err = parseConfigInt64(cfg, pdTSOMaxIndexKey)
 	if err != nil {
 		return 0, 0, cerrors.Trace(err)
 	}
 	return unique, max, nil
 }
 
-func parsePDConfigInt64(cfg map[string]any, key string) (int64, error) {
+func shouldFallbackToPDConfig(err error) bool {
+	return stderrors.Is(err, errTSOMicroserviceUnsupported)
+}
+
+func timeoutFromContextOrDefault(ctx context.Context, defaultTimeout time.Duration) time.Duration {
+	if deadline, ok := ctx.Deadline(); ok {
+		remaining := time.Until(deadline)
+		if remaining > 0 && remaining < defaultTimeout {
+			return remaining
+		}
+	}
+	return defaultTimeout
+}
+
+func parseConfigInt64(cfg map[string]any, key string) (int64, error) {
 	v, ok := cfg[key]
 	if !ok {
-		return 0, cerrors.Errorf("pd config key not found: %s", key)
+		return 0, cerrors.Errorf("config key not found: %s", key)
 	}
 
-	// PD stores `tso-unique-index` and `tso-max-index` as int64 values.
-	// The PD HTTP client unmarshals the JSON response into map[string]any,
+	// The config endpoints store `tso-unique-index` and `tso-max-index` as int64 values.
+	// The config readers unmarshal the JSON response into map[string]any,
 	// and encoding/json decodes JSON numbers as float64 in that case.
 	// Keep the conversion strict and fail-closed.
 	switch x := v.(type) {
