@@ -1705,6 +1705,46 @@ func TestRegisterAndRemoveRequestOrder(t *testing.T) {
 	}, requests)
 }
 
+func TestLocalHeartbeatRemovedReregisterReadySendsReset(t *testing.T) {
+	localServerID := node.ID("local-server")
+	dispatcherID := common.NewDispatcherID()
+	mockDisp := newMockDispatcher(dispatcherID, 0)
+	mockEventCollector := newTestEventCollector(localServerID)
+	stat := newDispatcherStat(mockDisp, mockEventCollector, nil)
+	mockEventCollector.dispatcherMap.Store(dispatcherID, stat)
+	markSessionReceiving(stat.session, localServerID)
+
+	response := commonEvent.NewDispatcherHeartbeatResponse()
+	response.Append(commonEvent.NewDispatcherState(dispatcherID, commonEvent.DSStateRemoved))
+	msg := messaging.NewSingleTargetMessage(localServerID, messaging.EventCollectorTopic, response)
+	msg.From = localServerID
+
+	mockEventCollector.handleDispatcherHeartbeatResponse(msg)
+	requireDispatcherRequests(
+		t,
+		readDispatcherRequests(t, mockEventCollector, 1),
+		dispatcherRequestRecord{to: localServerID, action: eventpb.ActionType_ACTION_TYPE_REGISTER},
+	)
+
+	stat.handleSignalEvent(dispatcher.DispatcherEvent{
+		From: &localServerID,
+		Event: &mockEvent{
+			eventType: commonEvent.TypeReadyEvent,
+		},
+	})
+
+	requireDispatcherRequests(
+		t,
+		readDispatcherRequests(t, mockEventCollector, 1),
+		dispatcherRequestRecord{to: localServerID, action: eventpb.ActionType_ACTION_TYPE_RESET},
+	)
+	requireNoDispatcherRequest(t, mockEventCollector)
+	currentEventServiceID, localReadyPending, pendingRemoteTarget := sessionState(stat.session)
+	require.Equal(t, localServerID, currentEventServiceID)
+	require.False(t, localReadyPending)
+	require.Equal(t, node.ID(""), pendingRemoteTarget)
+}
+
 func TestHandleDDLEventTableInfoUpdate(t *testing.T) {
 	t.Parallel()
 

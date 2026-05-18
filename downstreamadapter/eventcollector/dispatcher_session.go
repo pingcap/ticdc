@@ -127,17 +127,6 @@ func (d *dispatcherConnState) acceptReady(from node.ID, localServerID node.ID) r
 		return readyAcceptance{}
 	}
 
-	// Once local is serving, any later remote ready can only be stale and should
-	// be cleaned up. Another local ready does not change state.
-	if d.currentEventServiceID == localServerID {
-		if from != localServerID {
-			return readyAcceptance{
-				cleanupTargets: []node.ID{from},
-			}
-		}
-		return readyAcceptance{}
-	}
-
 	if from == localServerID {
 		if !d.localReadyPending {
 			return readyAcceptance{}
@@ -154,6 +143,15 @@ func (d *dispatcherConnState) acceptReady(from node.ID, localServerID node.ID) r
 		return readyAcceptance{
 			commitTarget:   localServerID,
 			cleanupTargets: cleanupTargets,
+		}
+	}
+
+	// Once local is serving, any later remote ready can only be stale and should
+	// be cleaned up. Another local ready does not change state unless a local
+	// re-register is pending, which is handled above.
+	if d.currentEventServiceID == localServerID {
+		return readyAcceptance{
+			cleanupTargets: []node.ID{from},
 		}
 	}
 
