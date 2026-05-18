@@ -175,7 +175,7 @@ storage_groups=(
 	# G13
 	'cli_with_auth fail_over_ddl_N maintainer_failover_when_operator'
 	# G14
-	'csv_storage_partition_table csv_storage_multi_tables_ddl fail_over_ddl_O update_changefeed_check_config'
+	'csv_storage_partition_table csv_storage_multi_tables_ddl table_route fail_over_ddl_O update_changefeed_check_config'
 	# G15
 	'split_region autorandom gc_safepoint'
 )

@@ -52,6 +52,18 @@ func TestCanalJSONTxnEventEncoderMaxMessageBytes(t *testing.T) {
 	require.NotNil(t, err)
 }
 
+func TestCanalJSONTxnEventEncoderUsesTargetNames(t *testing.T) {
+	t.Parallel()
+
+	encoder := NewJSONTxnEventEncoder(common.NewConfig(config.ProtocolCanalJSON))
+	require.NoError(t, encoder.AppendTxnEvent(newRoutedCanalDMLEvent()))
+
+	messages := encoder.Build()
+	require.Len(t, messages, 1)
+	require.Contains(t, string(messages[0].Value), `"database":"target_db"`)
+	require.Contains(t, string(messages[0].Value), `"table":"target_table"`)
+}
+
 func TestCanalJSONAppendTxnEventEncoderWithCallback(t *testing.T) {
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
@@ -84,8 +96,6 @@ func TestCanalJSONAppendTxnEventEncoderWithCallback(t *testing.T) {
 	msgs[0].Callback()
 	require.Equal(t, 1, count, "expected one callback be called")
 	// Assert the build reset all the internal states.
-	require.Nil(t, encoder.(*JSONTxnEventEncoder).txnSchema)
-	require.Nil(t, encoder.(*JSONTxnEventEncoder).txnTable)
 	require.Nil(t, encoder.(*JSONTxnEventEncoder).callback)
 	require.Equal(t, 0, encoder.(*JSONTxnEventEncoder).batchSize)
 	require.Equal(t, 0, encoder.(*JSONTxnEventEncoder).valueBuf.Len())
