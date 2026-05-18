@@ -128,10 +128,17 @@ func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 		if s.metric != nil {
 			s.metric.observeDDLWrite(time.Since(start))
 		}
+<<<<<<< HEAD
 		log.Info("redo sink send DDL event", zap.Any("startTs", event.GetStartTs()), zap.Any("commitTs", event.GetCommitTs()),
 			zap.Any("event", e.GetDDLQuery()), zap.String("schema", e.GetSchemaName()), zap.String("table", e.GetTableName()),
 			zap.Int64("tableID", e.GetTableID()))
 		return nil
+=======
+		log.Info("redo sink send DDL event",
+			zap.String("keyspace", s.changefeedID.Keyspace()), zap.String("changefeed", s.changefeedID.Name()),
+			zap.String("query", e.GetDDLQuery()), zap.Uint64("startTs", event.GetStartTs()), zap.Uint64("commitTs", event.GetCommitTs()),
+			zap.String("schema", e.GetSchemaName()), zap.String("table", e.GetTableName()), zap.Int64("tableID", e.GetTableID()))
+>>>>>>> 628deab03 (sink: add metrics for blackhole sink (#5042))
 	}
 	return nil
 }
