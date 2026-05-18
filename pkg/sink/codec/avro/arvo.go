@@ -92,7 +92,8 @@ func (a *BatchEncoder) encodeKey(ctx context.Context, topic string, e *commonEve
 		colInfos:       colInfos,
 		columnselector: e.ColumnSelector,
 	}
-	avroCodec, header, err := a.getKeySchemaCodec(ctx, topic, &e.TableInfo.TableName, e.TableInfo.GetUpdateTS(), keyColumns)
+	targetTableName := routedTableName(e.TableInfo)
+	avroCodec, header, err := a.getKeySchemaCodec(ctx, topic, &targetTableName, e.TableInfo.GetUpdateTS(), keyColumns)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
@@ -138,7 +139,8 @@ func (a *BatchEncoder) encodeValue(ctx context.Context, topic string, e *commonE
 		index:          index,
 		columnselector: e.ColumnSelector,
 	}
-	avroCodec, header, err := a.getValueSchemaCodec(ctx, topic, &e.TableInfo.TableName, e.TableInfo.GetUpdateTS(), input)
+	targetTableName := routedTableName(e.TableInfo)
+	avroCodec, header, err := a.getValueSchemaCodec(ctx, topic, &targetTableName, e.TableInfo.GetUpdateTS(), input)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
@@ -182,6 +184,13 @@ func (a *BatchEncoder) nativeValueWithExtension(
 		native[tidbChecksumVersion] = e.Checksum.Version
 	}
 	return native
+}
+
+func routedTableName(tableInfo *commonType.TableInfo) commonType.TableName {
+	tableName := tableInfo.TableName
+	tableName.Schema = tableInfo.GetTargetSchemaName()
+	tableName.Table = tableInfo.GetTargetTableName()
+	return tableName
 }
 
 func (a *BatchEncoder) schemaWithExtension(

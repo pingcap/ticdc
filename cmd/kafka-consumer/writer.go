@@ -535,8 +535,11 @@ func (w *writer) Write(ctx context.Context, messageType common.MessageType) bool
 }
 
 func (w *writer) onDDL(ddl *commonEvent.DDLEvent) {
+	if ddl.Query == "" {
+		return
+	}
 	switch w.protocol {
-	case config.ProtocolCanalJSON, config.ProtocolOpen, config.ProtocolAvro:
+	case config.ProtocolCanalJSON, config.ProtocolOpen, config.ProtocolAvro, config.ProtocolSimple, config.ProtocolDebezium:
 	default:
 		return
 	}

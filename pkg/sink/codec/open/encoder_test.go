@@ -24,10 +24,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
-	"github.com/pingcap/tidb/pkg/meta/model"
-	"github.com/pingcap/tidb/pkg/parser/ast"
-	"github.com/pingcap/tidb/pkg/parser/mysql"
-	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
 )
@@ -656,47 +652,8 @@ func TestCreateTableDDL(t *testing.T) {
 	require.Equal(t, ddlEvent.FinishedTs, obtained.FinishedTs)
 }
 
-func newRoutedOpenTableInfo() *commonTable.TableInfo {
-	idFieldType := types.NewFieldType(mysql.TypeLong)
-	idFieldType.SetFlag(mysql.PriKeyFlag | mysql.NotNullFlag)
-	nameFieldType := types.NewFieldType(mysql.TypeVarchar)
-	nameFieldType.SetFlen(32)
-
-	return commonTable.WrapTableInfo("source_db", &model.TableInfo{
-		ID:       20,
-		Name:     ast.NewCIStr("source_table"),
-		UpdateTS: 100,
-		Columns: []*model.ColumnInfo{
-			{
-				ID:        1,
-				Name:      ast.NewCIStr("id"),
-				FieldType: *idFieldType,
-				State:     model.StatePublic,
-				Offset:    0,
-			},
-			{
-				ID:        2,
-				Name:      ast.NewCIStr("name"),
-				FieldType: *nameFieldType,
-				State:     model.StatePublic,
-				Offset:    1,
-			},
-		},
-	}).CloneWithRouting("target_db", "target_table")
-}
-
 func TestEncodeRoutedDMLEventUsesTargetNames(t *testing.T) {
-	tableInfo := newRoutedOpenTableInfo()
-	rows := chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 1)
-	rows.AppendRow(chunk.MutRowFromValues(int64(1), "alice").ToRow())
-
-	rowEvent := &commonEvent.RowEvent{
-		TableInfo:      tableInfo,
-		CommitTs:       100,
-		Event:          commonEvent.RowChange{Row: rows.GetRow(0), RowType: commonTable.RowTypeInsert},
-		ColumnSelector: columnselector.NewDefaultColumnSelector(),
-		Callback:       func() {},
-	}
+	rowEvent := common.NewRoutedRowEvent4Test()
 
 	ctx := context.Background()
 	codecConfig := common.NewConfig(config.ProtocolOpen)
@@ -726,26 +683,7 @@ func TestEncodeRoutedDMLEventUsesTargetNames(t *testing.T) {
 }
 
 func TestEncodeRoutedDDLEventUsesTargetNames(t *testing.T) {
-	tableInfo := newRoutedOpenTableInfo()
-	sourceDDL := &commonEvent.DDLEvent{
-		Query:      "create table `source_db`.`source_table` (`id` int primary key, `name` varchar(32))",
-		Type:       byte(model.ActionCreateTable),
-		SchemaName: "source_db",
-		TableName:  "source_table",
-		TableInfo:  tableInfo,
-		FinishedTs: 100,
-	}
-	routedDDL := commonEvent.NewRoutedDDLEvent(
-		sourceDDL,
-		"create table `target_db`.`target_table` (`id` int primary key, `name` varchar(32))",
-		"target_db",
-		"target_table",
-		"",
-		"",
-		tableInfo,
-		nil,
-		nil,
-	)
+	routedDDL := common.NewRoutedDDLEvent4Test()
 
 	ctx := context.Background()
 	codecConfig := common.NewConfig(config.ProtocolOpen)
