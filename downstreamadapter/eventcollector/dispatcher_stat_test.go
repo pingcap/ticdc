@@ -1686,7 +1686,13 @@ func TestRegisterAndRemoveRequestOrder(t *testing.T) {
 	var requests []dispatcherRequestRecord
 	sendMessage := func(msg *messaging.TargetMessage) {
 		req, ok := msg.Message[0].(*messaging.DispatcherRequest)
-		require.True(t, ok)
+		if !ok {
+			t.Errorf("expected DispatcherRequest, got %T", msg.Message[0])
+			closeRegisterStarted.Do(func() {
+				close(registerStarted)
+			})
+			return
+		}
 		if req.ActionType == eventpb.ActionType_ACTION_TYPE_REGISTER {
 			closeRegisterStarted.Do(func() {
 				close(registerStarted)
