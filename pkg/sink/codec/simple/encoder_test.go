@@ -88,6 +88,140 @@ func TestEncodeCheckpoint(t *testing.T) {
 	}
 }
 
+func TestEncodeRoutedDMLEventUsesTargetNames(t *testing.T) {
+	t.Parallel()
+
+	for _, format := range []common.EncodingFormatType{
+		common.EncodingFormatJSON,
+		common.EncodingFormatAvro,
+	} {
+		format := format
+		t.Run(string(format), func(t *testing.T) {
+			helper := commonEvent.NewEventTestHelper(t)
+			defer helper.Close()
+
+			helper.Tk().MustExec("use test")
+			sourceDDL := helper.DDL2Event("create table test.t(id int primary key, name varchar(32))")
+			require.NotNil(t, sourceDDL)
+
+			dmlEvent := helper.DML2Event("test", "t", "insert into test.t values (1, 'alice')")
+			row, ok := dmlEvent.GetNextRow()
+			require.True(t, ok)
+
+			routedTableInfo := sourceDDL.TableInfo.CloneWithRouting("target_db", "target_table")
+			rowEvent := &commonEvent.RowEvent{
+				TableInfo:      routedTableInfo,
+				CommitTs:       dmlEvent.CommitTs,
+				Event:          row,
+				ColumnSelector: columnselector.NewDefaultColumnSelector(),
+			}
+
+			routedDDL := commonEvent.NewRoutedDDLEvent(
+				sourceDDL,
+				"CREATE TABLE `target_db`.`target_table` (`id` INT PRIMARY KEY, `name` VARCHAR(32))",
+				"target_db",
+				"target_table",
+				"",
+				"",
+				routedTableInfo,
+				nil,
+				nil,
+			)
+
+			ctx := context.Background()
+			codecConfig := common.NewConfig(config.ProtocolSimple)
+			codecConfig.EncodingFormat = format
+
+			encoder, err := NewEncoder(ctx, codecConfig)
+			require.NoError(t, err)
+
+			decoder, err := NewDecoder(ctx, codecConfig, nil)
+			require.NoError(t, err)
+			dec := decoder.(*Decoder)
+
+			ddlMessage, err := encoder.EncodeDDLEvent(routedDDL)
+			require.NoError(t, err)
+			dec.AddKeyValue(ddlMessage.Key, ddlMessage.Value)
+			messageType, hasNext := dec.HasNext()
+			require.True(t, hasNext)
+			require.Equal(t, common.MessageTypeDDL, messageType)
+			_ = dec.NextDDLEvent()
+
+			require.NoError(t, encoder.AppendRowChangedEvent(ctx, "", rowEvent))
+			messages := encoder.Build()
+			require.Len(t, messages, 1)
+
+			dec.AddKeyValue(messages[0].Key, messages[0].Value)
+			messageType, hasNext = dec.HasNext()
+			require.True(t, hasNext)
+			require.Equal(t, common.MessageTypeRow, messageType)
+
+			decoded := dec.NextDMLEvent()
+			require.NotNil(t, decoded)
+			require.Equal(t, "target_db", decoded.TableInfo.GetSchemaName())
+			require.Equal(t, "target_table", decoded.TableInfo.GetTableName())
+			decodedRow, ok := decoded.GetNextRow()
+			require.True(t, ok)
+			require.Equal(t, "alice", decodedRow.Row.GetString(1))
+		})
+	}
+}
+
+func TestEncodeRoutedDDLEventUsesTargetNames(t *testing.T) {
+	t.Parallel()
+
+	for _, format := range []common.EncodingFormatType{
+		common.EncodingFormatJSON,
+		common.EncodingFormatAvro,
+	} {
+		format := format
+		t.Run(string(format), func(t *testing.T) {
+			helper := commonEvent.NewEventTestHelper(t)
+			defer helper.Close()
+
+			helper.Tk().MustExec("use test")
+			sourceDDL := helper.DDL2Event("create table test.t(id int primary key)")
+			require.NotNil(t, sourceDDL)
+
+			routedDDL := commonEvent.NewRoutedDDLEvent(
+				sourceDDL,
+				"CREATE TABLE `target_db`.`target_table` (`id` INT PRIMARY KEY)",
+				"target_db",
+				"target_table",
+				"",
+				"",
+				sourceDDL.TableInfo.CloneWithRouting("target_db", "target_table"),
+				nil,
+				nil,
+			)
+
+			ctx := context.Background()
+			codecConfig := common.NewConfig(config.ProtocolSimple)
+			codecConfig.EncodingFormat = format
+
+			encoder, err := NewEncoder(ctx, codecConfig)
+			require.NoError(t, err)
+
+			message, err := encoder.EncodeDDLEvent(routedDDL)
+			require.NoError(t, err)
+
+			decoder, err := NewDecoder(ctx, codecConfig, nil)
+			require.NoError(t, err)
+			dec := decoder.(*Decoder)
+			dec.AddKeyValue(message.Key, message.Value)
+
+			messageType, hasNext := dec.HasNext()
+			require.True(t, hasNext)
+			require.Equal(t, common.MessageTypeDDL, messageType)
+
+			decoded := dec.NextDDLEvent()
+			require.Equal(t, "target_db", decoded.SchemaName)
+			require.Equal(t, "target_table", decoded.TableName)
+			require.Contains(t, decoded.Query, "`target_db`.`target_table`")
+		})
+	}
+}
+
 func TestEncodeDMLEnableChecksum(t *testing.T) {
 	replicaConfig := config.GetDefaultReplicaConfig()
 	replicaConfig.Integrity.IntegrityCheckLevel = util.AddressOf(config.CheckLevelCorrectness)

@@ -1,4 +1,4 @@
-// Copyright 2022 PingCAP, Inc.
+// Copyright 2024 PingCAP, Inc.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,6 +19,276 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/stretchr/testify/require"
 )
+
+func newInsertRowChanges(tableInfo *common.TableInfo, rows ...[]interface{}) []*RowChange {
+	changes := make([]*RowChange, 0, len(rows))
+	for _, row := range rows {
+		changes = append(changes, NewRowChange(&tableInfo.TableName, nil, nil, row, tableInfo, nil, nil))
+	}
+	return changes
+}
+
+func newDeleteRowChanges(tableInfo *common.TableInfo, rows ...[]interface{}) []*RowChange {
+	changes := make([]*RowChange, 0, len(rows))
+	for _, row := range rows {
+		changes = append(changes, NewRowChange(&tableInfo.TableName, nil, row, nil, tableInfo, nil, nil))
+	}
+	return changes
+}
+
+func newUpdateRowChanges(tableInfo *common.TableInfo, preRows [][]interface{}, postRows [][]interface{}) []*RowChange {
+	changes := make([]*RowChange, 0, len(preRows))
+	for i := range preRows {
+		changes = append(changes, NewRowChange(&tableInfo.TableName, nil, preRows[i], postRows[i], tableInfo, nil, nil))
+	}
+	return changes
+}
+
+func TestGenInsertSQLTableRoute(t *testing.T) {
+	sourceTableInfo := mockRouteTableInfo(t)
+
+	tests := []struct {
+		name            string
+		targetSchema    string
+		targetTable     string
+		expectedTableID string
+		expectedArgs    []interface{}
+		forbidden       string
+		checkAllModes   bool
+	}{
+		{
+			name:            "full route",
+			targetSchema:    "target_db",
+			targetTable:     "target_table",
+			expectedTableID: "`target_db`.`target_table`",
+			expectedArgs: []interface{}{
+				int64(1), "alice",
+				int64(2), "bob",
+				int64(3), "charlie",
+				int64(4), "david",
+				int64(5), "eve",
+			},
+			forbidden:     "`test`.`t`",
+			checkAllModes: true,
+		},
+		{
+			name:            "schema only route",
+			targetSchema:    "prod",
+			targetTable:     "users",
+			expectedTableID: "`prod`.`users`",
+			expectedArgs: []interface{}{
+				int64(1), "alice",
+				int64(2), "bob",
+				int64(3), "charlie",
+				int64(4), "david",
+				int64(5), "eve",
+			},
+			forbidden: "`test`.`t`",
+		},
+		{
+			name:            "table only route",
+			targetSchema:    "test",
+			targetTable:     "new_table",
+			expectedTableID: "`test`.`new_table`",
+			expectedArgs: []interface{}{
+				int64(1), "alice",
+				int64(2), "bob",
+				int64(3), "charlie",
+				int64(4), "david",
+				int64(5), "eve",
+			},
+			forbidden: "`test`.`t`",
+		},
+		{
+			name:            "no route",
+			targetSchema:    "test",
+			targetTable:     "t",
+			expectedTableID: "`test`.`t`",
+			expectedArgs: []interface{}{
+				int64(1), "alice",
+				int64(2), "bob",
+				int64(3), "charlie",
+				int64(4), "david",
+				int64(5), "eve",
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			tableInfo := sourceTableInfo
+			if tc.targetSchema != sourceTableInfo.TableName.Schema || tc.targetTable != sourceTableInfo.TableName.Table {
+				tableInfo = sourceTableInfo.CloneWithRouting(tc.targetSchema, tc.targetTable)
+			}
+
+			rows := newInsertRowChanges(tableInfo,
+				[]interface{}{int64(1), "alice"},
+				[]interface{}{int64(2), "bob"},
+				[]interface{}{int64(3), "charlie"},
+				[]interface{}{int64(4), "david"},
+				[]interface{}{int64(5), "eve"},
+			)
+
+			sql, args := GenInsertSQL(DMLInsert, rows...)
+			require.Contains(t, sql, tc.expectedTableID)
+			require.Equal(t, tc.expectedArgs, args)
+			if tc.forbidden != "" {
+				require.NotContains(t, sql, tc.forbidden)
+			}
+
+			if !tc.checkAllModes {
+				return
+			}
+
+			sql, args = GenInsertSQL(DMLReplace, rows...)
+			require.Contains(t, sql, "REPLACE INTO "+tc.expectedTableID)
+			require.Equal(t, tc.expectedArgs, args)
+			require.NotContains(t, sql, tc.forbidden)
+
+			sql, args = GenInsertSQL(DMLInsertOnDuplicateUpdate, rows...)
+			require.Contains(t, sql, "INSERT INTO "+tc.expectedTableID)
+			require.Contains(t, sql, "ON DUPLICATE KEY UPDATE")
+			require.Equal(t, tc.expectedArgs, args)
+			require.NotContains(t, sql, tc.forbidden)
+		})
+	}
+}
+
+func TestGenDeleteSQLTableRoute(t *testing.T) {
+	sourceTableInfo := mockRouteTableInfo(t)
+
+	tests := []struct {
+		name            string
+		targetSchema    string
+		targetTable     string
+		expectedTableID string
+		expectedArgs    []interface{}
+		forbidden       string
+	}{
+		{
+			name:            "full route",
+			targetSchema:    "target_db",
+			targetTable:     "target_table",
+			expectedTableID: "`target_db`.`target_table`",
+			expectedArgs:    []interface{}{int64(1), int64(2), int64(3), int64(4)},
+			forbidden:       "`test`.`t`",
+		},
+		{
+			name:            "schema only route",
+			targetSchema:    "target_db",
+			targetTable:     "orders",
+			expectedTableID: "`target_db`.`orders`",
+			expectedArgs:    []interface{}{int64(1), int64(2), int64(3), int64(4)},
+			forbidden:       "`test`.`t`",
+		},
+		{
+			name:            "no route",
+			targetSchema:    "test",
+			targetTable:     "t",
+			expectedTableID: "`test`.`t`",
+			expectedArgs:    []interface{}{int64(1), int64(2), int64(3), int64(4)},
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			tableInfo := sourceTableInfo
+			if tc.targetSchema != sourceTableInfo.TableName.Schema || tc.targetTable != sourceTableInfo.TableName.Table {
+				tableInfo = sourceTableInfo.CloneWithRouting(tc.targetSchema, tc.targetTable)
+			}
+
+			rows := newDeleteRowChanges(tableInfo,
+				[]interface{}{int64(1), "alice"},
+				[]interface{}{int64(2), "bob"},
+				[]interface{}{int64(3), "charlie"},
+				[]interface{}{int64(4), "david"},
+			)
+
+			sql, args := GenDeleteSQL(DefaultWhereClause, rows...)
+			require.Contains(t, sql, "DELETE FROM "+tc.expectedTableID)
+			require.Contains(t, sql, "IN")
+			require.Equal(t, tc.expectedArgs, args)
+			if tc.forbidden != "" {
+				require.NotContains(t, sql, tc.forbidden)
+			}
+		})
+	}
+}
+
+func TestGenUpdateSQLTableRoute(t *testing.T) {
+	sourceTableInfo := mockRouteTableInfo(t)
+
+	tests := []struct {
+		name            string
+		targetSchema    string
+		targetTable     string
+		expectedTableID string
+		forbidden       string
+		expectedNames   []string
+	}{
+		{
+			name:            "full route",
+			targetSchema:    "target_db",
+			targetTable:     "target_table",
+			expectedTableID: "`target_db`.`target_table`",
+			forbidden:       "`test`.`t`",
+			expectedNames:   []string{"alice_new", "bob_new", "charlie_new"},
+		},
+		{
+			name:            "table only route",
+			targetSchema:    "test",
+			targetTable:     "new_products",
+			expectedTableID: "`test`.`new_products`",
+			forbidden:       "`test`.`t`",
+			expectedNames:   []string{"alice_new", "bob_new", "charlie_new"},
+		},
+		{
+			name:            "no route",
+			targetSchema:    "test",
+			targetTable:     "t",
+			expectedTableID: "`test`.`t`",
+			expectedNames:   []string{"alice_new", "bob_new", "charlie_new"},
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			tableInfo := sourceTableInfo
+			if tc.targetSchema != sourceTableInfo.TableName.Schema || tc.targetTable != sourceTableInfo.TableName.Table {
+				tableInfo = sourceTableInfo.CloneWithRouting(tc.targetSchema, tc.targetTable)
+			}
+
+			rows := newUpdateRowChanges(tableInfo,
+				[][]interface{}{
+					{int64(1), "alice_old"},
+					{int64(2), "bob_old"},
+					{int64(3), "charlie_old"},
+				},
+				[][]interface{}{
+					{int64(1), "alice_new"},
+					{int64(2), "bob_new"},
+					{int64(3), "charlie_new"},
+				},
+			)
+
+			sql, args := GenUpdateSQL(DefaultWhereClause, rows...)
+			require.Contains(t, sql, "UPDATE "+tc.expectedTableID)
+			require.Contains(t, sql, "CASE")
+			require.Contains(t, sql, "WHEN")
+			require.Contains(t, sql, "IN")
+			require.Len(t, args, 15)
+			for _, expectedName := range tc.expectedNames {
+				require.Contains(t, args, expectedName)
+			}
+			if tc.forbidden != "" {
+				require.NotContains(t, sql, tc.forbidden)
+			}
+		})
+	}
+}
 
 type genSQLFunc func(whereClause string, changes ...*RowChange) (string, []any)
 

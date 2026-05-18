@@ -78,8 +78,8 @@ func (c *dbzCodec) writeDebeziumFieldValues(
 					valueStr = valueStr[:maxValueLen] + "...(truncated)"
 				}
 				log.Error("failed to write Debezium field value",
-					zap.String("schema", tableInfo.GetSchemaName()),
-					zap.String("table", tableInfo.GetTableName()),
+					zap.String("schema", tableInfo.GetTargetSchemaName()),
+					zap.String("table", tableInfo.GetTargetTableName()),
 					zap.String("column", colInfo.Name.O),
 					zap.String("value", valueStr),
 					zap.Uint64("commitTs", commitTs),
@@ -878,7 +878,7 @@ func (c *dbzCodec) EncodeKey(
 			jWriter.WriteObjectField("schema", func() {
 				jWriter.WriteStringField("type", "struct")
 				jWriter.WriteStringField("name",
-					fmt.Sprintf("%s.Key", getSchemaTopicName(c.clusterID, e.TableInfo.GetSchemaName(), e.TableInfo.GetTableName())))
+					fmt.Sprintf("%s.Key", getSchemaTopicName(c.clusterID, e.TableInfo.GetTargetSchemaName(), e.TableInfo.GetTargetTableName())))
 				jWriter.WriteBoolField("optional", false)
 				jWriter.WriteArrayField("fields", func() {
 					columns := e.TableInfo.GetColumns()
@@ -917,8 +917,8 @@ func (c *dbzCodec) EncodeValue(
 				jWriter.WriteInt64Field("ts_ms", commitTime.UnixMilli())
 				// snapshot field is a string of true,last,false,incremental
 				jWriter.WriteStringField("snapshot", "false")
-				jWriter.WriteStringField("db", e.TableInfo.GetSchemaName())
-				jWriter.WriteStringField("table", e.TableInfo.GetTableName())
+				jWriter.WriteStringField("db", e.TableInfo.GetTargetSchemaName())
+				jWriter.WriteStringField("table", e.TableInfo.GetTargetTableName())
 				jWriter.WriteInt64Field("server_id", 0)
 				jWriter.WriteNullField("gtid")
 				jWriter.WriteStringField("file", "")
@@ -976,7 +976,7 @@ func (c *dbzCodec) EncodeValue(
 				jWriter.WriteStringField("type", "struct")
 				jWriter.WriteBoolField("optional", false)
 				jWriter.WriteStringField("name",
-					fmt.Sprintf("%s.Envelope", getSchemaTopicName(c.clusterID, e.TableInfo.GetSchemaName(), e.TableInfo.GetTableName())))
+					fmt.Sprintf("%s.Envelope", getSchemaTopicName(c.clusterID, e.TableInfo.GetTargetSchemaName(), e.TableInfo.GetTargetTableName())))
 				jWriter.WriteIntField("version", 1)
 				jWriter.WriteArrayField("fields", func() {
 					// schema is the same for `before` and `after`. So we build a new buffer to
@@ -1006,7 +1006,7 @@ func (c *dbzCodec) EncodeValue(
 						jWriter.WriteStringField("type", "struct")
 						jWriter.WriteBoolField("optional", true)
 						jWriter.WriteStringField("name",
-							fmt.Sprintf("%s.Value", getSchemaTopicName(c.clusterID, e.TableInfo.GetSchemaName(), e.TableInfo.GetTableName())))
+							fmt.Sprintf("%s.Value", getSchemaTopicName(c.clusterID, e.TableInfo.GetTargetSchemaName(), e.TableInfo.GetTargetTableName())))
 						jWriter.WriteStringField("field", "before")
 						jWriter.WriteArrayField("fields", func() {
 							jWriter.WriteRaw(fieldsJSON)
@@ -1016,7 +1016,7 @@ func (c *dbzCodec) EncodeValue(
 						jWriter.WriteStringField("type", "struct")
 						jWriter.WriteBoolField("optional", true)
 						jWriter.WriteStringField("name",
-							fmt.Sprintf("%s.Value", getSchemaTopicName(c.clusterID, e.TableInfo.GetSchemaName(), e.TableInfo.GetTableName())))
+							fmt.Sprintf("%s.Value", getSchemaTopicName(c.clusterID, e.TableInfo.GetTargetSchemaName(), e.TableInfo.GetTargetTableName())))
 						jWriter.WriteStringField("field", "after")
 						jWriter.WriteArrayField("fields", func() {
 							jWriter.WriteRaw(fieldsJSON)
@@ -1185,14 +1185,14 @@ func (c *dbzCodec) EncodeDDLEvent(
 					switch e.GetDDLType() {
 					case timodel.ActionRenameTable:
 						jWriter.WriteStringField("id", fmt.Sprintf("\"%s\".\"%s\",\"%s\".\"%s\"",
-							e.ExtraSchemaName,
-							e.ExtraTableName,
+							e.GetTargetExtraSchemaName(),
+							e.GetTargetExtraTableName(),
 							dbName,
 							tableName))
 					case timodel.ActionExchangeTablePartition:
 						jWriter.WriteStringField("id", fmt.Sprintf("\"%s\".\"%s\"",
-							e.ExtraSchemaName,
-							e.ExtraTableName))
+							e.GetTargetExtraSchemaName(),
+							e.GetTargetExtraTableName()))
 					case timodel.ActionDropTable:
 						jWriter.WriteStringField("id", fmt.Sprintf("\"%s\".\"%s\"",
 							dbName,
