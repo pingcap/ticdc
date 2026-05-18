@@ -86,8 +86,12 @@ func (a *BatchEncoder) encodeKey(ctx context.Context, topic string, e *commonEve
 	if len(index) == 0 {
 		return nil, nil
 	}
+	row := e.GetRows()
+	if e.IsDelete() {
+		row = e.GetPreRows()
+	}
 	keyColumns := &avroEncodeInput{
-		row:            e.GetRows(),
+		row:            row,
 		index:          index,
 		colInfos:       colInfos,
 		columnselector: e.ColumnSelector,
@@ -171,9 +175,9 @@ func (a *BatchEncoder) encodeValue(ctx context.Context, topic string, e *commonE
 }
 
 func (a *BatchEncoder) nativeValueWithExtension(
-	native map[string]interface{},
+	native map[string]any,
 	e *commonEvent.RowEvent,
-) map[string]interface{} {
+) map[string]any {
 	native[tidbOp] = getOperation(e)
 	native[tidbCommitTs] = int64(e.CommitTs)
 	native[tidbPhysicalTime] = oracle.ExtractPhysical(e.CommitTs)
@@ -197,17 +201,17 @@ func (a *BatchEncoder) schemaWithExtension(
 	top *avroSchemaTop,
 ) *avroSchemaTop {
 	top.Fields = append(top.Fields,
-		map[string]interface{}{
+		map[string]any{
 			"name":    tidbOp,
 			"type":    "string",
 			"default": "",
 		},
-		map[string]interface{}{
+		map[string]any{
 			"name":    tidbCommitTs,
 			"type":    "long",
 			"default": 0,
 		},
-		map[string]interface{}{
+		map[string]any{
 			"name":    tidbPhysicalTime,
 			"type":    "long",
 			"default": 0,
@@ -216,17 +220,17 @@ func (a *BatchEncoder) schemaWithExtension(
 
 	if a.config.EnableRowChecksum {
 		top.Fields = append(top.Fields,
-			map[string]interface{}{
+			map[string]any{
 				"name":    tidbRowLevelChecksum,
 				"type":    "string",
 				"default": "",
 			},
-			map[string]interface{}{
+			map[string]any{
 				"name":    tidbCorrupted,
 				"type":    "boolean",
 				"default": false,
 			},
-			map[string]interface{}{
+			map[string]any{
 				"name":    tidbChecksumVersion,
 				"type":    "int",
 				"default": 0,
@@ -236,7 +240,7 @@ func (a *BatchEncoder) schemaWithExtension(
 	return top
 }
 
-func (a *BatchEncoder) getDefaultValue(col *timodel.ColumnInfo) (interface{}, error) {
+func (a *BatchEncoder) getDefaultValue(col *timodel.ColumnInfo) (any, error) {
 	defaultVal := col.GetDefaultValue()
 	if defaultVal == nil {
 		return nil, nil
@@ -353,7 +357,7 @@ func (a *BatchEncoder) columns2AvroSchema(
 		if err != nil {
 			return nil, err
 		}
-		field := make(map[string]interface{})
+		field := make(map[string]any)
 		field["name"] = common.SanitizeName(info.Name.O)
 
 		defaultValue, err := a.getDefaultValue(info)
@@ -365,7 +369,7 @@ func (a *BatchEncoder) columns2AvroSchema(
 		// https://github.com/linkedin/goavro/issues/202
 		if _, ok := avroType.(avroLogicalTypeSchema); ok {
 			if !mysql.HasNotNullFlag(info.GetFlag()) {
-				field["type"] = []interface{}{"null", avroType}
+				field["type"] = []any{"null", avroType}
 				field["default"] = nil
 			} else {
 				field["type"] = avroType
@@ -374,9 +378,9 @@ func (a *BatchEncoder) columns2AvroSchema(
 			if !mysql.HasNotNullFlag(info.GetFlag()) {
 				// https://stackoverflow.com/questions/22938124/avro-field-default-values
 				if defaultValue == nil {
-					field["type"] = []interface{}{"null", avroType}
+					field["type"] = []any{"null", avroType}
 				} else {
-					field["type"] = []interface{}{avroType, "null"}
+					field["type"] = []any{avroType, "null"}
 				}
 				field["default"] = defaultValue
 			} else {
@@ -438,8 +442,8 @@ func (a *BatchEncoder) key2AvroSchema(
 
 func (a *BatchEncoder) columns2AvroData(
 	input *avroEncodeInput,
-) (map[string]interface{}, error) {
-	ret := make(map[string]interface{}, len(input.colInfos))
+) (map[string]any, error) {
+	ret := make(map[string]any, len(input.colInfos))
 	for i, col := range input.colInfos {
 		if col == nil || !input.columnselector.Select(col) {
 			continue
@@ -461,7 +465,7 @@ func (a *BatchEncoder) columns2AvroData(
 	return ret, nil
 }
 
-func (a *BatchEncoder) columnToAvroSchema(col *timodel.ColumnInfo) (interface{}, error) {
+func (a *BatchEncoder) columnToAvroSchema(col *timodel.ColumnInfo) (any, error) {
 	tt := getTiDBTypeFromColumn(col)
 	switch col.GetType() {
 	case mysql.TypeTiny, mysql.TypeShort, mysql.TypeInt24:
@@ -599,7 +603,7 @@ func (a *BatchEncoder) columnToAvroData(
 	row *chunk.Row,
 	idx int,
 	col *timodel.ColumnInfo,
-) (interface{}, string, error) {
+) (any, string, error) {
 	if row.IsNull(idx) {
 		return nil, "null", nil
 	}
@@ -696,7 +700,7 @@ type avroEncodeResult struct {
 
 func (r *avroEncodeResult) toEnvelope() ([]byte, error) {
 	buf := new(bytes.Buffer)
-	data := []interface{}{r.header, r.data}
+	data := []any{r.header, r.data}
 	for _, v := range data {
 		err := binary.Write(buf, binary.BigEndian, v)
 		if err != nil {

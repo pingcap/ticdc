@@ -123,6 +123,41 @@ func TestAvroEncode(t *testing.T) {
 	}
 }
 
+func TestAvroEncodeDeleteEventUsesPreRowForKey(t *testing.T) {
+	codecConfig := common.NewConfig(config.ProtocolAvro)
+	codecConfig.EnableTiDBExtension = true
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	encoder, err := SetupEncoderAndSchemaRegistry4Testing(ctx, codecConfig)
+	defer TeardownEncoderAndSchemaRegistry4Testing()
+	require.NoError(t, err)
+	require.NotNil(t, encoder)
+
+	_, _, _, event := common.NewLargeEvent4Test(t)
+	topic := "avro-delete-test-topic"
+	require.NoError(t, encoder.AppendRowChangedEvent(ctx, topic, event))
+
+	messages := encoder.Build()
+	require.Len(t, messages, 1)
+	require.NotEmpty(t, messages[0].Key)
+	require.Nil(t, messages[0].Value)
+
+	cid, data, err := extractConfluentSchemaIDAndBinaryData(messages[0].Key)
+	require.NoError(t, err)
+
+	avroKeyCodec, err := encoder.schemaM.Lookup(ctx,
+		topicName2SchemaSubjects(topic, keySchemaSuffix),
+		schemaID{confluentSchemaID: cid})
+	require.NoError(t, err)
+
+	res, _, err := avroKeyCodec.NativeFromBinary(data)
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	require.Equal(t, int32(127), res.(map[string]interface{})["tu1"])
+}
+
 func TestAvroEnvelope(t *testing.T) {
 	t.Parallel()
 	cManager := &confluentSchemaManager{}

@@ -58,6 +58,39 @@ func TestGetColumns(t *testing.T) {
 	require.Equal(t, columnInfos[4].Comment, "")
 }
 
+func TestParseColumnsDoesNotMutateInput(t *testing.T) {
+	sql := "CREATE TABLE test (id INT PRIMARY KEY, val1 time(2) default 0, val2 timestamp(3) default now());"
+	columnInfos := []*timodel.ColumnInfo{
+		{
+			Name:      ast.NewCIStr("id"),
+			FieldType: *types.NewFieldType(mysql.TypeLong),
+		},
+		{
+			Name:      ast.NewCIStr("val1"),
+			FieldType: *types.NewFieldType(mysql.TypeDuration),
+		},
+		{
+			Name:      ast.NewCIStr("val2"),
+			FieldType: *types.NewFieldType(mysql.TypeTimestamp),
+		},
+	}
+	originalVal1Decimal := columnInfos[1].GetDecimal()
+	originalVal2Decimal := columnInfos[2].GetDecimal()
+
+	parsed := parseColumns(sql, columnInfos)
+
+	require.NotSame(t, columnInfos[1], parsed[1])
+	require.NotSame(t, columnInfos[2], parsed[2])
+	require.Equal(t, originalVal1Decimal, columnInfos[1].GetDecimal())
+	require.Equal(t, originalVal2Decimal, columnInfos[2].GetDecimal())
+	require.Nil(t, columnInfos[1].GetDefaultValue())
+	require.Nil(t, columnInfos[2].GetDefaultValue())
+	require.Equal(t, 2, parsed[1].GetDecimal())
+	require.Equal(t, "0", parsed[1].GetDefaultValue())
+	require.Equal(t, 3, parsed[2].GetDecimal())
+	require.Equal(t, "CURRENT_TIMESTAMP", parsed[2].GetDefaultValue())
+}
+
 func TestGetSchemaTopicName(t *testing.T) {
 	namespace := "default"
 	schema := "1A.B"
