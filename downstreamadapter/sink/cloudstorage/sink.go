@@ -294,9 +294,6 @@ func (s *sink) writeDDLEvent(event *commonEvent.DDLEvent) error {
 func (s *sink) writeFile(v *commonEvent.DDLEvent, def cloudstorage.TableDefinition) error {
 	// skip write database-level event for 'use-table-id-as-path' mode
 	if s.cfg.UseTableIDAsPath && def.Table == "" {
-		log.Debug("skip database schema for table id path",
-			zap.String("schema", def.Schema),
-			zap.String("query", def.Query))
 		return nil
 	}
 	encodedDef, err := def.MarshalWithQuery()
@@ -308,8 +305,6 @@ func (s *sink) writeFile(v *commonEvent.DDLEvent, def cloudstorage.TableDefiniti
 	if err != nil {
 		return err
 	}
-	log.Debug("write ddl event to external storage",
-		zap.String("path", path), zap.Any("ddl", v))
 	return s.statistics.RecordDDLExecution(func() (string, error) {
 		err = s.storage.WriteFile(s.ctx, path, encodedDef)
 		if err != nil {
