@@ -124,10 +124,6 @@ func (d *dispatcherStat) run() {
 	d.session.registerTo(d.eventCollector.getLocalServerID())
 }
 
-func (d *dispatcherStat) clear() {
-	d.session.clear()
-}
-
 // registerTo register the dispatcher to the specified event service.
 func (d *dispatcherStat) registerTo(serverID node.ID) {
 	d.session.registerTo(serverID)
@@ -138,8 +134,8 @@ func (d *dispatcherStat) commitReady(serverID node.ID) {
 	d.session.commitReady(serverID)
 }
 
-// reset is used to reset the dispatcher to the specified commitTs,
-// it will remove the dispatcher from the dynamic stream and add it back.
+// reset sends a RESET request to the specified EventService using the current
+// checkpoint ts, advancing the dispatcher epoch.
 func (d *dispatcherStat) reset(serverID node.ID) {
 	d.session.reset(serverID)
 }
@@ -161,11 +157,6 @@ func (d *dispatcherStat) advanceEpochForReset(resetTs uint64) uint64 {
 // remove is used to remove the dispatcher from the event service.
 func (d *dispatcherStat) remove() {
 	d.session.remove()
-}
-
-// removeFrom is used to remove the dispatcher from the specified event service.
-func (d *dispatcherStat) removeFrom(serverID node.ID) {
-	d.session.removeFrom(serverID)
 }
 
 func (d *dispatcherStat) wake() {
@@ -579,16 +570,4 @@ func (d *dispatcherStat) isCurrentEventService(serverID node.ID) bool {
 
 func (d *dispatcherStat) isReceivingDataEvent() bool {
 	return d.session.isReceivingDataEvent()
-}
-
-func (d *dispatcherStat) newDispatcherRegisterRequest(serverID string, onlyReuse bool) *messaging.DispatcherRequest {
-	return d.session.newDispatcherRegisterRequest(serverID, onlyReuse)
-}
-
-func (d *dispatcherStat) newDispatcherResetRequest(serverID string, resetTs uint64, epoch uint64) *messaging.DispatcherRequest {
-	return d.session.newDispatcherResetRequest(serverID, resetTs, epoch)
-}
-
-func (d *dispatcherStat) newDispatcherRemoveRequest(serverID string) *messaging.DispatcherRequest {
-	return d.session.newDispatcherRemoveRequest(serverID)
 }

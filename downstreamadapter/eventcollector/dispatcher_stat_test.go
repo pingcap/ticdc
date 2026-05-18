@@ -1530,7 +1530,7 @@ func TestNewDispatcherResetRequest(t *testing.T) {
 			mockDisp := newMockDispatcher(common.NewDispatcherID(), startTs)
 			mockDisp.skipSyncpointAtStartTs = tc.skipSyncpointAtStartTs
 			stat := newDispatcherStatForTest(mockDisp, nil)
-			resetReq := stat.newDispatcherResetRequest("local", tc.resetTs, 1)
+			resetReq := stat.session.newDispatcherResetRequest("local", tc.resetTs, 1)
 			require.Equal(t, tc.expectedSyncPointTs, resetReq.SyncPointTs)
 		})
 	}
