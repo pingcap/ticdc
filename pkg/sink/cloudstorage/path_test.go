@@ -439,8 +439,7 @@ func TestCheckOrWriteSchemaUsesRoutedTargetNames(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, hasNewerSchemaVersion)
 
-	targetSchemaDir := filepath.Join(dir, "target_db", "target_table", "meta")
-	files, err := os.ReadDir(targetSchemaDir)
+	files, err := os.ReadDir(filepath.Join(dir, "target_db", "target_table", "meta"))
 	require.NoError(t, err)
 	require.Len(t, files, 1)
 
@@ -529,7 +528,6 @@ func TestRemoveExpiredFilesWithoutPartition(t *testing.T) {
 
 	currTime := time.Date(2021, 1, 3, 0, 0, 0, 0, time.Local)
 	checkpointTs := oracle.GoTimeToTS(currTime)
-	cnt, err := RemoveExpiredFiles(ctx, commonType.ChangeFeedID{}, storage, cfg, checkpointTs)
+	err = RemoveExpiredFiles(ctx, commonType.ChangeFeedID{}, storage, cfg, checkpointTs)
 	require.NoError(t, err)
-	require.Equal(t, uint64(16), cnt)
 }

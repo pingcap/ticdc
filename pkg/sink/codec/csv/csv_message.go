@@ -67,9 +67,8 @@ func (o *operation) FromString(op string) error {
 	case "U":
 		*o = operationUpdate
 	default:
-		return fmt.Errorf("invalid operation type %s", op)
+		return errors.ErrCSVDecodeFailed.GenWithStack("invalid operation type %s", op)
 	}
-
 	return nil
 }
 
@@ -152,13 +151,12 @@ func (c *csvMessage) encodeColumns(columns []any, b *strings.Builder) {
 func (c *csvMessage) decode(datums []types.Datum) error {
 	var dataColIdx int
 	if len(datums) < minimumColsCnt {
-		return errors.WrapError(errors.ErrCSVDecodeFailed,
-			errors.New("the csv row should have at least four columns"+
-				"(operation-type, table-name, schema-name, commit-ts)"))
+		return errors.ErrCSVDecodeFailed.GenWithStack(
+			"the csv row should have at least four columns(operation-type, table-name, schema-name, commit-ts)")
 	}
 
 	if err := c.opType.FromString(datums[0].GetString()); err != nil {
-		return errors.WrapError(errors.ErrCSVDecodeFailed, err)
+		return err
 	}
 	dataColIdx++
 	c.tableName = datums[1].GetString()
@@ -168,8 +166,8 @@ func (c *csvMessage) decode(datums []types.Datum) error {
 	if c.config.IncludeCommitTs {
 		commitTs, err := strconv.ParseUint(datums[3].GetString(), 10, 64)
 		if err != nil {
-			return errors.WrapError(errors.ErrCSVDecodeFailed,
-				fmt.Errorf("the 4th column(%s) of csv row should be a valid commit-ts", datums[3].GetString()))
+			return errors.ErrCSVDecodeFailed.Wrap(err).GenWithStack(
+				"the 4th column(%s) of csv row should be a valid commit-ts", datums[3].GetString())
 		}
 		c.commitTs = commitTs
 		dataColIdx++
@@ -291,9 +289,8 @@ func fromColValToCsvVal(csvConfig *common.Config, row *chunk.Row, idx int, colIn
 			case config.BinaryEncodingHex:
 				return hex.EncodeToString(v), nil
 			default:
-				return nil, errors.WrapError(errors.ErrCSVEncodeFailed,
-					errors.Errorf("unsupported binary encoding method %s",
-						csvConfig.BinaryEncodingMethod))
+				return nil, errors.ErrCSVEncodeFailed.GenWithStack(
+					"unsupported binary encoding method %s", csvConfig.BinaryEncodingMethod)
 			}
 		}
 		return row.GetString(idx), nil
@@ -334,12 +331,11 @@ func fromColValToCsvVal(csvConfig *common.Config, row *chunk.Row, idx int, colIn
 
 // rowChangedEvent2CSVMsg converts a RowChangedEvent to a csv record.
 func rowChangedEvent2CSVMsg(csvConfig *common.Config, e *event.RowEvent) (*csvMessage, error) {
-	var err error
-
+	tableInfo := e.TableInfo
 	csvMsg := &csvMessage{
 		config:     csvConfig,
-		tableName:  e.TableInfo.GetTargetTableName(),
-		schemaName: e.TableInfo.GetTargetSchemaName(),
+		tableName:  tableInfo.GetTargetTableName(),
+		schemaName: tableInfo.GetTargetSchemaName(),
 		commitTs:   e.CommitTs,
 		newRecord:  true,
 	}
@@ -349,16 +345,17 @@ func rowChangedEvent2CSVMsg(csvConfig *common.Config, e *event.RowEvent) (*csvMe
 		// csvMsg.HandleKey = e.HandleKey
 	}
 
+	var err error
 	if e.IsDelete() {
 		csvMsg.opType = operationDelete
-		csvMsg.columns, err = rowChangeColumns2CSVColumns(csvConfig, e.GetPreRows(), e.TableInfo)
+		csvMsg.columns, err = rowChangeColumns2CSVColumns(csvConfig, e.GetPreRows(), tableInfo)
 		if err != nil {
 			return nil, err
 		}
 	} else if e.IsInsert() {
 		// This is a insert operation.
 		csvMsg.opType = operationInsert
-		csvMsg.columns, err = rowChangeColumns2CSVColumns(csvConfig, e.GetRows(), e.TableInfo)
+		csvMsg.columns, err = rowChangeColumns2CSVColumns(csvConfig, e.GetRows(), tableInfo)
 		if err != nil {
 			return nil, err
 		}
@@ -367,16 +364,16 @@ func rowChangedEvent2CSVMsg(csvConfig *common.Config, e *event.RowEvent) (*csvMe
 		csvMsg.opType = operationUpdate
 		if csvConfig.OutputOldValue {
 			if e.GetPreRows().Len() != e.GetRows().Len() {
-				return nil, errors.WrapError(errors.ErrCSVDecodeFailed,
-					fmt.Errorf("the column length of preColumns %d doesn't equal to that of columns %d",
-						e.GetPreRows().Len(), e.GetRows().Len()))
+				return nil, errors.ErrCSVDecodeFailed.GenWithStack(
+					"the column length of preColumns %d doesn't equal to that of columns %d",
+					e.GetPreRows().Len(), e.GetRows().Len())
 			}
-			csvMsg.preColumns, err = rowChangeColumns2CSVColumns(csvConfig, e.GetPreRows(), e.TableInfo)
+			csvMsg.preColumns, err = rowChangeColumns2CSVColumns(csvConfig, e.GetPreRows(), tableInfo)
 			if err != nil {
 				return nil, err
 			}
 		}
-		csvMsg.columns, err = rowChangeColumns2CSVColumns(csvConfig, e.GetRows(), e.TableInfo)
+		csvMsg.columns, err = rowChangeColumns2CSVColumns(csvConfig, e.GetRows(), tableInfo)
 		if err != nil {
 			return nil, err
 		}
@@ -397,7 +394,7 @@ func rowChangeColumns2CSVColumns(csvConfig *common.Config, row *chunk.Row, table
 		flag := col.GetFlag()
 		converted, err := fromColValToCsvVal(csvConfig, row, i, col, flag)
 		if err != nil {
-			return nil, errors.Trace(err)
+			return nil, err
 		}
 		csvColumns = append(csvColumns, converted)
 	}

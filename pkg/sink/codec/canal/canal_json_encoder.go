@@ -129,6 +129,9 @@ func newJSONMessageForDML(
 	messageTooLarge bool,
 	claimCheckFileName string,
 ) ([]byte, error) {
+	tableInfo := e.TableInfo
+	columns := tableInfo.GetColumns()
+	columnSelector := e.ColumnSelector
 	isDelete := e.IsDelete()
 
 	onlyHandleKey := messageTooLarge
@@ -137,9 +140,9 @@ func newJSONMessageForDML(
 	}
 
 	columnLen := 0
-	for _, col := range e.TableInfo.GetColumns() {
-		if col != nil && !col.IsVirtualGenerated() && e.ColumnSelector.Select(col) {
-			columnLen += 1
+	for _, col := range columns {
+		if col != nil && !col.IsVirtualGenerated() && columnSelector.Select(col) {
+			columnLen++
 		}
 	}
 	if columnLen == 0 {
@@ -158,12 +161,12 @@ func newJSONMessageForDML(
 	{
 		const prefix string = ",\"database\":"
 		out.RawString(prefix)
-		out.String(e.TableInfo.GetTargetSchemaName())
+		out.String(tableInfo.GetTargetSchemaName())
 	}
 	{
 		const prefix string = ",\"table\":"
 		out.RawString(prefix)
-		out.String(e.TableInfo.GetTargetTableName())
+		out.String(tableInfo.GetTargetTableName())
 	}
 	{
 		const prefix string = ",\"pkNames\":"
@@ -212,11 +215,11 @@ func newJSONMessageForDML(
 	javaTypeMap := make(map[int64]common.JavaSQLType, columnLen) // colId -> javaType
 
 	row := e.GetRows()
-	if e.IsDelete() {
+	if isDelete {
 		row = e.GetPreRows()
 	}
-	for idx, col := range e.TableInfo.GetColumns() {
-		if col == nil || col.IsVirtualGenerated() || !e.ColumnSelector.Select(col) {
+	for idx, col := range columns {
+		if col == nil || col.IsVirtualGenerated() || !columnSelector.Select(col) {
 			continue
 		}
 		value, javaType := formatColumnValue(row, idx, col)
@@ -227,10 +230,8 @@ func newJSONMessageForDML(
 		const prefix string = ",\"sqlType\":"
 		out.RawString(prefix)
 		emptyColumn := true
-		tableInfo := e.TableInfo
-		columnInfos := tableInfo.GetColumns()
-		for _, col := range columnInfos {
-			if col != nil && !col.IsVirtualGenerated() && e.ColumnSelector.Select(col) {
+		for _, col := range columns {
+			if col != nil && !col.IsVirtualGenerated() && columnSelector.Select(col) {
 				colID := col.ID
 				colName := col.Name.O
 				if onlyHandleKey && !tableInfo.IsHandleKey(colID) {
@@ -258,7 +259,7 @@ func newJSONMessageForDML(
 	{
 		const prefix string = ",\"mysqlType\":"
 		out.RawString(prefix)
-		if mysqlTypeMap == nil {
+		if len(mysqlTypeMap) == 0 {
 			out.RawString(`null`)
 		} else {
 			out.RawByte('{')
@@ -277,37 +278,37 @@ func newJSONMessageForDML(
 		}
 	}
 
-	if e.IsDelete() {
+	if isDelete {
 		out.RawString(",\"old\":null")
 		out.RawString(",\"data\":")
-		if err := fillColumns(valueMap, e.TableInfo, onlyHandleKey, out, e.ColumnSelector); err != nil {
+		if err := fillColumns(valueMap, tableInfo, onlyHandleKey, out, columnSelector); err != nil {
 			return nil, err
 		}
 	} else if e.IsInsert() {
 		out.RawString(",\"old\":null")
 		out.RawString(",\"data\":")
-		if err := fillColumns(valueMap, e.TableInfo, onlyHandleKey, out, e.ColumnSelector); err != nil {
+		if err := fillColumns(valueMap, tableInfo, onlyHandleKey, out, columnSelector); err != nil {
 			return nil, err
 		}
 	} else if e.IsUpdate() {
 		out.RawString(",\"old\":")
 
-		oldValueMap := make(map[int64]optionalString, 0) // colId -> value
+		oldValueMap := make(map[int64]optionalString, columnLen) // colId -> value
 		preRow := e.GetPreRows()
-		for idx, col := range e.TableInfo.GetColumns() {
-			if col == nil || col.IsVirtualGenerated() || !e.ColumnSelector.Select(col) {
+		for idx, col := range columns {
+			if col == nil || col.IsVirtualGenerated() || !columnSelector.Select(col) {
 				continue
 			}
 			value, _ := formatColumnValue(preRow, idx, col)
 			oldValueMap[col.ID] = value
 		}
 
-		if err := fillUpdateColumns(valueMap, oldValueMap, e.TableInfo, onlyHandleKey,
-			config.OnlyOutputUpdatedColumns, out, e.ColumnSelector); err != nil {
+		if err := fillUpdateColumns(valueMap, oldValueMap, tableInfo, onlyHandleKey,
+			config.OnlyOutputUpdatedColumns, out, columnSelector); err != nil {
 			return nil, err
 		}
 		out.RawString(",\"data\":")
-		if err := fillColumns(valueMap, e.TableInfo, onlyHandleKey, out, e.ColumnSelector); err != nil {
+		if err := fillColumns(valueMap, tableInfo, onlyHandleKey, out, columnSelector); err != nil {
 			return nil, err
 		}
 	} else {
@@ -375,7 +376,7 @@ type JSONRowEventEncoder struct {
 func NewJSONRowEventEncoder(ctx context.Context, config *common.Config) (common.EventEncoder, error) {
 	claimCheck, err := claimcheck.New(ctx, config.LargeMessageHandle, config.ChangefeedID)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, err
 	}
 	return &JSONRowEventEncoder{
 		messages:   make([]*common.Message, 0, 1),
@@ -437,7 +438,7 @@ func (c *JSONRowEventEncoder) EncodeCheckpointEvent(ts uint64) (*common.Message,
 		c.config.ChangefeedID, c.config.LargeMessageHandle.LargeMessageHandleCompression, value,
 	)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, errors.WrapError(errors.ErrCanalEncodeFailed, err)
 	}
 
 	return common.NewMsg(nil, value), nil
@@ -451,20 +452,21 @@ func (c *JSONRowEventEncoder) AppendRowChangedEvent(
 ) error {
 	value, err := newJSONMessageForDML(e, c.config, false, "")
 	if err != nil {
-		return errors.Trace(err)
+		return err
 	}
 
 	value, err = common.Compress(
 		c.config.ChangefeedID, c.config.LargeMessageHandle.LargeMessageHandleCompression, value,
 	)
 	if err != nil {
-		return errors.Trace(err)
+		return errors.WrapError(errors.ErrCanalEncodeFailed, err)
 	}
 
 	m := common.NewMsg(nil, value)
 	m.Callback = e.Callback
 	m.IncRowsCount()
 
+	targetTable := e.TableInfo.GetTargetTableName()
 	originLength := m.Length()
 	if m.Length() > c.config.MaxMessageBytes {
 		// for single message that is longer than max-message-bytes, do not send it.
@@ -473,19 +475,19 @@ func (c *JSONRowEventEncoder) AppendRowChangedEvent(
 				zap.Int("maxMessageBytes", c.config.MaxMessageBytes),
 				zap.Int("length", originLength),
 				zap.Any("table", e.TableInfo.TableName))
-			return errors.ErrMessageTooLarge.GenWithStackByArgs(e.TableInfo.GetTargetTableName(), originLength, c.config.MaxMessageBytes)
+			return errors.ErrMessageTooLarge.GenWithStackByArgs(targetTable, originLength, c.config.MaxMessageBytes)
 		}
 
 		if c.config.LargeMessageHandle.HandleKeyOnly() {
 			value, err = newJSONMessageForDML(e, c.config, true, "")
 			if err != nil {
-				return errors.Trace(err)
+				return err
 			}
 			value, err = common.Compress(
 				c.config.ChangefeedID, c.config.LargeMessageHandle.LargeMessageHandleCompression, value,
 			)
 			if err != nil {
-				return errors.Trace(err)
+				return errors.WrapError(errors.ErrCanalEncodeFailed, err)
 			}
 
 			m.Value = value
@@ -496,7 +498,7 @@ func (c *JSONRowEventEncoder) AppendRowChangedEvent(
 					zap.Int("originLength", originLength),
 					zap.Int("length", length),
 					zap.Any("table", e.TableInfo.TableName))
-				return errors.ErrMessageTooLarge.GenWithStackByArgs(e.TableInfo.GetTargetTableName(), length, c.config.MaxMessageBytes)
+				return errors.ErrMessageTooLarge.GenWithStackByArgs(targetTable, length, c.config.MaxMessageBytes)
 			}
 			log.Warn("Single message is too large for canal-json, only encode handle-key columns",
 				zap.Int("maxMessageBytes", c.config.MaxMessageBytes),
@@ -508,12 +510,12 @@ func (c *JSONRowEventEncoder) AppendRowChangedEvent(
 		if c.config.LargeMessageHandle.EnableClaimCheck() {
 			claimCheckFileName := claimcheck.NewFileName()
 			if err = c.claimCheck.WriteMessage(ctx, m.Key, m.Value, claimCheckFileName); err != nil {
-				return errors.Trace(err)
+				return err
 			}
 
 			m, err = c.newClaimCheckLocationMessage(e, claimCheckFileName)
 			if err != nil {
-				return errors.Trace(err)
+				return err
 			}
 		}
 	}
@@ -535,7 +537,7 @@ func (c *JSONRowEventEncoder) newClaimCheckLocationMessage(
 		c.config.ChangefeedID, c.config.LargeMessageHandle.LargeMessageHandleCompression, value,
 	)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, errors.WrapError(errors.ErrCanalEncodeFailed, err)
 	}
 
 	result := common.NewMsg(nil, value)
@@ -575,7 +577,7 @@ func (c *JSONRowEventEncoder) EncodeDDLEvent(e *commonEvent.DDLEvent) (*common.M
 		c.config.ChangefeedID, c.config.LargeMessageHandle.LargeMessageHandleCompression, value,
 	)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, errors.WrapError(errors.ErrCanalEncodeFailed, err)
 	}
 
 	return common.NewMsg(nil, value), nil

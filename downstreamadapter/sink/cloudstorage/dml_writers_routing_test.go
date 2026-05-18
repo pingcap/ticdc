@@ -17,24 +17,41 @@ import (
 	"context"
 	"testing"
 
+	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/utils/chann"
+	"github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser/ast"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
+	"github.com/pingcap/tidb/pkg/types"
 	"github.com/stretchr/testify/require"
 )
 
 func TestAddDMLEventUsesTargetNames(t *testing.T) {
 	t.Parallel()
 
-	helper := commonEvent.NewEventTestHelper(t)
-	defer helper.Close()
-
-	helper.Tk().MustExec("use test")
-	job := helper.DDL2Job("create table test.t(id int primary key)")
-	require.NotNil(t, job)
-
-	dmlEvent := helper.DML2Event("test", "t", "insert into test.t values (1)")
-	routedTableInfo := helper.GetTableInfo(job).CloneWithRouting("target_db", "target_table")
-	dmlEvent.TableInfo = routedTableInfo
+	idFieldType := types.NewFieldType(mysql.TypeLong)
+	idFieldType.SetFlag(mysql.PriKeyFlag | mysql.NotNullFlag)
+	routedTableInfo := common.WrapTableInfo("source_db", &model.TableInfo{
+		ID:       20,
+		Name:     ast.NewCIStr("source_table"),
+		UpdateTS: 100,
+		Columns: []*model.ColumnInfo{
+			{
+				ID:        1,
+				Name:      ast.NewCIStr("id"),
+				FieldType: *idFieldType,
+				State:     model.StatePublic,
+			},
+		},
+	}).CloneWithRouting("target_db", "target_table")
+	dmlEvent := commonEvent.NewDMLEvent(
+		common.NewDispatcherID(),
+		routedTableInfo.TableName.TableID,
+		1,
+		2,
+		routedTableInfo,
+	)
 	dmlEvent.TableInfoVersion = routedTableInfo.GetUpdateTS()
 
 	writers := &dmlWriters{

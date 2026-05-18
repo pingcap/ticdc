@@ -77,15 +77,33 @@ func generateTableDef() (TableDefinition, *common.TableInfo) {
 	return def, tableInfo
 }
 
-func TestFromDDLEventUsesCanonicalTargetNames(t *testing.T) {
+func TestFromDDLEventUsesTargetNames(t *testing.T) {
 	t.Parallel()
 
-	helper := commonEvent.NewEventTestHelper(t)
-	defer helper.Close()
-
-	helper.Tk().MustExec("use test")
-	sourceDDL := helper.DDL2Event("create table test.t(id int primary key)")
-	require.NotNil(t, sourceDDL)
+	idFieldType := types.NewFieldType(mysql.TypeLong)
+	idFieldType.SetFlag(mysql.PriKeyFlag | mysql.NotNullFlag)
+	routedTableInfo := common.WrapTableInfo("source_db", &timodel.TableInfo{
+		ID:       20,
+		Name:     ast.NewCIStr("source_table"),
+		UpdateTS: 100,
+		Columns: []*timodel.ColumnInfo{
+			{
+				ID:        1,
+				Name:      ast.NewCIStr("id"),
+				FieldType: *idFieldType,
+				State:     timodel.StatePublic,
+			},
+		},
+	}).CloneWithRouting("target_db", "target_table")
+	sourceDDL := &commonEvent.DDLEvent{
+		Version:    commonEvent.DDLEventVersion1,
+		Type:       byte(timodel.ActionCreateTable),
+		SchemaName: "source_db",
+		TableName:  "source_table",
+		Query:      "CREATE TABLE `source_db`.`source_table` (`id` INT PRIMARY KEY)",
+		TableInfo:  routedTableInfo,
+		FinishedTs: 100,
+	}
 
 	routedDDL := commonEvent.NewRoutedDDLEvent(
 		sourceDDL,
@@ -94,7 +112,7 @@ func TestFromDDLEventUsesCanonicalTargetNames(t *testing.T) {
 		"target_table",
 		"",
 		"",
-		sourceDDL.TableInfo.CloneWithRouting("target_db", "target_table"),
+		routedTableInfo,
 		nil,
 		nil,
 	)

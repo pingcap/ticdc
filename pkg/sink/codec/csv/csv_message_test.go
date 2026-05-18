@@ -957,6 +957,38 @@ func TestRowChangeEventConversion(t *testing.T) {
 	}
 }
 
+func TestRowChangedEvent2CSVMsgUsesTargetNames(t *testing.T) {
+	t.Parallel()
+
+	tableInfo := commonType.WrapTableInfo("source_db", &model.TableInfo{
+		ID:   20,
+		Name: ast.NewCIStr("source_table"),
+		Columns: []*model.ColumnInfo{
+			{
+				ID:        1,
+				Name:      ast.NewCIStr("id"),
+				FieldType: *types.NewFieldType(mysql.TypeLong),
+			},
+		},
+	}).CloneWithRouting("target_db", "target_table")
+
+	csvMsg, err := rowChangedEvent2CSVMsg(&common.Config{
+		Delimiter:  ",",
+		Quote:      "\"",
+		Terminator: "\n",
+		NullString: "\\N",
+	}, &commonEvent.RowEvent{
+		TableInfo: tableInfo,
+		Event: commonEvent.RowChange{
+			Row: chunk.MutRowFromValues(int64(1)).ToRow(),
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "target_db", csvMsg.schemaName)
+	require.Equal(t, "target_table", csvMsg.tableName)
+	require.Contains(t, string(csvMsg.encode()), `"target_table","target_db"`)
+}
+
 func TestCSVMessageDecode(t *testing.T) {
 	// datums := make([][]types.Datum, 0, 4)
 	testCases := []struct {

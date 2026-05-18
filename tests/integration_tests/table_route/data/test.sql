@@ -80,8 +80,6 @@ ALTER TABLE users DROP COLUMN created_at;
 ALTER TABLE orders ADD INDEX idx_user_id (user_id);
 
 -- ============================================
-<<<<<<< HEAD
-=======
 -- DDL: CROSS DATABASE
 -- ============================================
 CREATE TABLE `source_extra_db`.`external_users` LIKE `source_db`.`users`;
@@ -116,7 +114,6 @@ RENAME TABLE `source_db`.`cross_move_source` TO `source_extra_db`.`cross_move_ta
 INSERT INTO `source_extra_db`.`cross_move_target` VALUES (2, 'move_target');
 
 -- ============================================
->>>>>>> master
 -- DDL: RENAME TABLE
 -- ============================================
 CREATE TABLE temp_table (
@@ -132,8 +129,6 @@ INSERT INTO renamed_table VALUES (2, 'test2');
 UPDATE renamed_table SET value = 'updated' WHERE id = 1;
 
 -- ============================================
-<<<<<<< HEAD
-=======
 -- DDL: RENAME TABLE with multiple table pairs
 -- ============================================
 CREATE TABLE multi_rename_a (
@@ -194,7 +189,6 @@ INSERT INTO `source_extra_db`.`partitioned_events_like_from_default` VALUES (6, 
 INSERT INTO `source_extra_db`.`partitioned_events_like_from_default` VALUES (7, 27, 'like_p2');
 
 -- ============================================
->>>>>>> master
 -- DDL: TRUNCATE TABLE
 -- ============================================
 CREATE TABLE truncate_test (
