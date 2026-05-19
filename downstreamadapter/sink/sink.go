@@ -26,6 +26,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/util"
 )
 
 type Sink interface {
@@ -52,7 +53,8 @@ type Sink interface {
 func New(ctx context.Context, cfg *config.ChangefeedConfig, changefeedID common.ChangeFeedID) (Sink, error) {
 	sinkURI, err := url.Parse(cfg.SinkURI)
 	if err != nil {
-		return nil, errors.WrapError(errors.ErrSinkURIInvalid, err)
+		return nil, errors.ErrSinkURIInvalid.GenWithStackByArgs(
+			util.MaskSensitiveDataInURIForError(cfg.SinkURI))
 	}
 	scheme := config.GetScheme(sinkURI)
 	switch scheme {
@@ -67,13 +69,15 @@ func New(ctx context.Context, cfg *config.ChangefeedConfig, changefeedID common.
 	case config.BlackHoleScheme:
 		return blackhole.New(changefeedID)
 	}
-	return nil, errors.ErrSinkURIInvalid.GenWithStackByArgs(sinkURI)
+	return nil, errors.ErrSinkURIInvalid.GenWithStackByArgs(
+		util.MaskSensitiveDataInURIForError(sinkURI.String()))
 }
 
 func Verify(ctx context.Context, cfg *config.ChangefeedConfig, changefeedID common.ChangeFeedID) error {
 	sinkURI, err := url.Parse(cfg.SinkURI)
 	if err != nil {
-		return errors.WrapError(errors.ErrSinkURIInvalid, err)
+		return errors.ErrSinkURIInvalid.GenWithStackByArgs(
+			util.MaskSensitiveDataInURIForError(cfg.SinkURI))
 	}
 	scheme := config.GetScheme(sinkURI)
 	switch scheme {
@@ -88,5 +92,6 @@ func Verify(ctx context.Context, cfg *config.ChangefeedConfig, changefeedID comm
 	case config.BlackHoleScheme:
 		return nil
 	}
-	return errors.ErrSinkURIInvalid.GenWithStackByArgs(sinkURI)
+	return errors.ErrSinkURIInvalid.GenWithStackByArgs(
+		util.MaskSensitiveDataInURIForError(sinkURI.String()))
 }
