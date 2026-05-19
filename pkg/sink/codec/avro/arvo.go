@@ -127,7 +127,17 @@ func (a *BatchEncoder) encodeKey(ctx context.Context, topic string, e *event.Row
 
 func (a *BatchEncoder) encodeValue(ctx context.Context, topic string, e *event.RowEvent) ([]byte, error) {
 	if e.IsDelete() {
-		return nil, nil
+		if !a.config.EnableTiDBExtension || !a.config.AvroEnableWatermark {
+			return nil, nil
+		}
+		buf := new(bytes.Buffer)
+		data := []interface{}{deleteByte, e.CommitTs}
+		for _, v := range data {
+			if err := binary.Write(buf, binary.BigEndian, v); err != nil {
+				return nil, errors.WrapError(errors.ErrAvroToEnvelopeError, err)
+			}
+		}
+		return buf.Bytes(), nil
 	}
 	length := e.GetRows().Len()
 	if length == 0 {

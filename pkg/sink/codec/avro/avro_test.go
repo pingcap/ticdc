@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/linkedin/goavro/v2"
+	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/uuid"
@@ -156,6 +157,46 @@ func TestAvroEncodeDeleteEventUsesPreRowForKey(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, res)
 	require.Equal(t, int32(127), res.(map[string]interface{})["tu1"])
+}
+
+func TestAvroEncodeDeleteEventWithWatermarkCarriesCommitTs(t *testing.T) {
+	codecConfig := common.NewConfig(config.ProtocolAvro)
+	codecConfig.EnableTiDBExtension = true
+	codecConfig.AvroEnableWatermark = true
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	encoder, err := SetupEncoderAndSchemaRegistry4Testing(ctx, codecConfig)
+	defer TeardownEncoderAndSchemaRegistry4Testing()
+	require.NoError(t, err)
+	require.NotNil(t, encoder)
+
+	_, _, _, event := common.NewLargeEvent4Test(t)
+	topic := "avro-delete-with-watermark-test-topic"
+	require.NoError(t, encoder.AppendRowChangedEvent(ctx, topic, event))
+
+	messages := encoder.Build()
+	require.Len(t, messages, 1)
+	require.NotEmpty(t, messages[0].Key)
+	require.NotEmpty(t, messages[0].Value)
+	require.Equal(t, deleteByte, messages[0].Value[0])
+
+	decoder := NewDecoder(codecConfig, 0, encoder.schemaM, topic, nil)
+	decoder.AddKeyValue(messages[0].Key, messages[0].Value)
+
+	messageType, exists := decoder.HasNext()
+	require.True(t, exists)
+	require.Equal(t, common.MessageTypeRow, messageType)
+
+	decoded := decoder.NextDMLEvent()
+	require.NotNil(t, decoded)
+	require.Equal(t, event.CommitTs, decoded.GetCommitTs())
+	require.Len(t, decoded.RowTypes, 1)
+	require.Equal(t, commonType.RowTypeDelete, decoded.RowTypes[0])
+
+	_, exists = decoder.HasNext()
+	require.False(t, exists)
 }
 
 func TestAvroEnvelope(t *testing.T) {
