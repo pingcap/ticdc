@@ -103,7 +103,8 @@ func getClusterIDBySinkURI(
 ) (uint64, string, bool, error) {
 	uri, err := url.Parse(sinkURI)
 	if err != nil {
-		return 0, "", false, cerrors.WrapError(cerrors.ErrSinkURIInvalid, err, sinkURI)
+		return 0, "", false, cerrors.ErrSinkURIInvalid.GenWithStackByArgs(
+			util.MaskSensitiveDataInURIForError(sinkURI))
 	}
 
 	scheme := config.GetScheme(uri)
