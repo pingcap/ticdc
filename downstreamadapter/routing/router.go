@@ -52,6 +52,7 @@ type rule struct {
 	targetSchemaExpr string
 	targetTableExpr  string
 	matcher          []string
+	index            int
 }
 
 // Router is used to support the table route functionality,
@@ -67,7 +68,7 @@ func NewRouter(
 	changefeedID common.ChangeFeedID, caseSensitive bool, rules []*config.DispatchRule,
 ) (Router, error) {
 	routingRules := make([]rule, 0, len(rules))
-	for _, r := range rules {
+	for ruleIndex, r := range rules {
 		if r.TargetSchema == "" && r.TargetTable == "" {
 			continue
 		}
@@ -90,6 +91,7 @@ func NewRouter(
 			targetSchemaExpr: r.TargetSchema,
 			targetTableExpr:  r.TargetTable,
 			matcher:          r.Matcher,
+			index:            ruleIndex,
 		})
 	}
 
@@ -126,6 +128,11 @@ func (r Router) RouteName(schema, table string) (RouteResult, error) {
 		RuleIndex:    ruleIndex,
 		Matcher:      matcher,
 	}, nil
+}
+
+// HasTableRoute returns whether the router contains any table route rule.
+func (r Router) HasTableRoute() bool {
+	return len(r.rules) > 0
 }
 
 // ApplyToTableInfo returns the original TableInfo unless routing changes the target name.
@@ -243,7 +250,7 @@ func (r Router) route(originSchema, originTable string) (targetSchema, targetTab
 		return originSchema, originTable, false, -1, nil, nil
 	}
 
-	matched, idx, err := r.matchRule(originSchema, originTable)
+	matched, _, err := r.matchRule(originSchema, originTable)
 	if err != nil {
 		return "", "", false, -1, nil, err
 	}
@@ -253,11 +260,11 @@ func (r Router) route(originSchema, originTable string) (targetSchema, targetTab
 
 	targetSchema = substituteExpression(matched.targetSchemaExpr, originSchema, originTable, originSchema)
 	if originTable == "" {
-		return targetSchema, "", targetSchema != originSchema, idx, matched.matcher, nil
+		return targetSchema, "", targetSchema != originSchema, matched.index, matched.matcher, nil
 	}
 
 	targetTable = substituteExpression(matched.targetTableExpr, originSchema, originTable, originTable)
-	return targetSchema, targetTable, targetSchema != originSchema || targetTable != originTable, idx, matched.matcher, nil
+	return targetSchema, targetTable, targetSchema != originSchema || targetTable != originTable, matched.index, matched.matcher, nil
 }
 
 // matchRule finds the first rule that matches the given schema/table and returns
@@ -383,6 +390,7 @@ func ValidateNoStaticRouteConflict(
 	if err != nil {
 		return err
 	}
+	registry.SetChangefeedID(changefeedID)
 
 	for _, ti := range tableInfos {
 		if ti == nil {

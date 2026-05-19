@@ -17,9 +17,7 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/downstreamadapter/routing"
 	"github.com/pingcap/ticdc/heartbeatpb"
-	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/maintainer/operator"
 	"github.com/pingcap/ticdc/maintainer/range_checker"
 	"github.com/pingcap/ticdc/maintainer/replica"
@@ -33,13 +31,6 @@ import (
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
-
-// RouteTransition describes the route registry changes caused by a DDL.
-type RouteTransition struct {
-	CommitTs uint64
-	Removes  []int64
-	Adds     []routing.RouteBinding
-}
 
 // BarrierEvent is a barrier event that reported by dispatchers, note is a block multiple dispatchers
 // all of these dispatchers should report the same event
@@ -83,14 +74,6 @@ type BarrierEvent struct {
 	lastResendTime time.Time
 
 	lastWarningLogTime time.Time
-
-	// Table route conflict detection fields
-	routeRouter       routing.Router
-	targetRegistry    *routing.TargetTableRegistry
-	routeEnabled      bool
-	routeTransition   *RouteTransition
-	routePrecheckDone bool
-	keyspaceMeta      common.KeyspaceMeta
 }
 
 func NewBlockEvent(cfID common.ChangeFeedID,
@@ -100,10 +83,6 @@ func NewBlockEvent(cfID common.ChangeFeedID,
 	status *heartbeatpb.State,
 	dynamicSplitEnabled bool,
 	mode int64,
-	routeRouter routing.Router,
-	targetRegistry *routing.TargetTableRegistry,
-	routeEnabled bool,
-	keyspaceMeta common.KeyspaceMeta,
 ) *BarrierEvent {
 	event := &BarrierEvent{
 		cfID:               cfID,
@@ -128,14 +107,11 @@ func NewBlockEvent(cfID common.ChangeFeedID,
 		lastResendTime:      time.Time{},
 
 		lastWarningLogTime: time.Now(),
-
-		routeRouter:    routeRouter,
-		targetRegistry: targetRegistry,
-		routeEnabled:   routeEnabled,
-		keyspaceMeta:   keyspaceMeta,
 	}
 
-	if status.BlockTables != nil {
+	if status.BlockTables == nil {
+		event.rangeChecker = range_checker.NewBoolRangeChecker(true)
+	} else {
 		switch status.BlockTables.InfluenceType {
 		case heartbeatpb.InfluenceType_Normal:
 			if dynamicSplitEnabled {
@@ -155,155 +131,17 @@ func NewBlockEvent(cfID common.ChangeFeedID,
 	return event
 }
 
-// needsRoutePrecheck returns true when this DDL may change target ownership
-// and requires a route conflict check before the write action is issued.
-func (be *BarrierEvent) needsRoutePrecheck() bool {
-	if !be.routeEnabled || be.targetRegistry == nil {
-		return false
+func (be *BarrierEvent) routeDDLInfo() routeDDLInfo {
+	return routeDDLInfo{
+		key:           getEventKey(be.commitTs, be.isSyncPoint),
+		commitTs:      be.commitTs,
+		isSyncPoint:   be.isSyncPoint,
+		blockTables:   be.blockedDispatchers,
+		droppedTables: be.dropDispatchers,
+		addedTables:   be.newTables,
+		updatedSchema: be.schemaIDChange,
+		mode:          be.mode,
 	}
-	if be.isSyncPoint {
-		return false
-	}
-	if be.dropDispatchers != nil {
-		return true
-	}
-	if len(be.newTables) > 0 {
-		return true
-	}
-	if len(be.schemaIDChange) > 0 {
-		return true
-	}
-	// Rename or other DDL that blocks specific tables may affect routing.
-	if be.blockedDispatchers != nil && len(be.blockedDispatchers.TableIDs) > 0 {
-		return true
-	}
-	return false
-}
-
-// buildRouteTransition constructs the RouteTransition for this DDL by querying
-// the schema store at BlockTs for DDL-after table names.
-// Returns nil if no routing changes are needed.
-func (be *BarrierEvent) buildRouteTransition() (*RouteTransition, error) {
-	if !be.needsRoutePrecheck() {
-		return nil, nil
-	}
-
-	transition := &RouteTransition{CommitTs: be.commitTs}
-
-	// Handle drops via registry reverse index (no schema store query needed).
-	if be.dropDispatchers != nil {
-		switch be.dropDispatchers.InfluenceType {
-		case heartbeatpb.InfluenceType_Normal:
-			transition.Removes = append(transition.Removes, be.dropDispatchers.TableIDs...)
-		case heartbeatpb.InfluenceType_DB:
-			for _, b := range be.targetRegistry.GetBindingsBySchemaID(be.dropDispatchers.SchemaID) {
-				transition.Removes = append(transition.Removes, b.ReplicaTableID)
-			}
-		}
-	}
-
-	// Handle adds (create table, recover table, etc.)
-	schemaStore := appcontext.GetService[schemastore.SchemaStore](appcontext.SchemaStore)
-	for _, add := range be.newTables {
-		binding, err := be.buildRouteBindingForTable(schemaStore, add.TableID, add.SchemaID)
-		if err != nil {
-			return nil, err
-		}
-		if binding != nil {
-			transition.Adds = append(transition.Adds, *binding)
-		}
-	}
-
-	// Handle schema ID changes (cross-schema rename)
-	for _, change := range be.schemaIDChange {
-		binding, err := be.buildRouteBindingForTable(schemaStore, change.TableID, change.NewSchemaID)
-		if err != nil {
-			return nil, err
-		}
-		if binding != nil {
-			// Remove old binding by replica table ID, add new one.
-			transition.Removes = append(transition.Removes, change.TableID)
-			transition.Adds = append(transition.Adds, *binding)
-		}
-	}
-
-	// Handle rename (blocked tables may change name -> new route result)
-	if be.blockedDispatchers != nil && be.blockedDispatchers.InfluenceType == heartbeatpb.InfluenceType_Normal {
-		for _, tableID := range be.blockedDispatchers.TableIDs {
-			binding, err := be.buildRouteBindingForTable(schemaStore, tableID, 0)
-			if err != nil {
-				return nil, err
-			}
-			if binding != nil {
-				existing, exists := be.targetRegistry.GetBindingByReplicaID(tableID)
-				changed := !exists ||
-					existing.Target != binding.Target ||
-					existing.Source.Schema != binding.Source.Schema ||
-					existing.Source.Table != binding.Source.Table
-				if changed {
-					transition.Removes = append(transition.Removes, tableID)
-					transition.Adds = append(transition.Adds, *binding)
-				}
-			}
-		}
-	}
-
-	if len(transition.Removes) == 0 && len(transition.Adds) == 0 {
-		return nil, nil
-	}
-
-	log.Info("route transition built",
-		zap.String("changefeed", be.cfID.Name()),
-		zap.Uint64("commitTs", be.commitTs),
-		zap.Int("removes", len(transition.Removes)),
-		zap.Int("adds", len(transition.Adds)),
-		zap.Int64("mode", be.mode))
-	return transition, nil
-}
-
-// buildRouteBindingForTable queries the schema store for a table's info at
-// BlockTs and constructs a RouteBinding.
-func (be *BarrierEvent) buildRouteBindingForTable(
-	schemaStore schemastore.SchemaStore,
-	tableID int64,
-	schemaIDHint int64,
-) (*routing.RouteBinding, error) {
-	tableInfo, err := schemaStore.GetTableInfo(be.keyspaceMeta, tableID, be.commitTs)
-	if err != nil {
-		log.Warn("failed to get table info for route transition, skipping",
-			zap.String("changefeed", be.cfID.Name()),
-			zap.Int64("tableID", tableID),
-			zap.Uint64("commitTs", be.commitTs),
-			zap.Error(err))
-		return nil, nil
-	}
-	sourceSchema := tableInfo.GetSchemaName()
-	sourceTable := tableInfo.GetTableName()
-	result, routeErr := be.routeRouter.RouteName(sourceSchema, sourceTable)
-	if routeErr != nil {
-		return nil, routeErr
-	}
-	schemaID := schemaIDHint
-	if schemaID == 0 {
-		if b, ok := be.targetRegistry.GetBindingByReplicaID(tableID); ok {
-			schemaID = b.SourceSchemaID
-		}
-	}
-	return &routing.RouteBinding{
-		Source: routing.SourceKey{
-			LogicalTableID: tableInfo.TableName.TableID,
-			Schema:         sourceSchema,
-			Table:          sourceTable,
-		},
-		ReplicaTableID: tableID,
-		SourceSchemaID: schemaID,
-		Target: routing.TargetKey{
-			Schema: result.TargetSchema,
-			Table:  result.TargetTable,
-		},
-		RuleIndex: result.RuleIndex,
-		Matcher:   result.Matcher,
-	}, nil
 }
 
 func needSchedule(state *heartbeatpb.State) bool {
@@ -361,57 +199,39 @@ func (be *BarrierEvent) checkEventAction(dispatcherID common.DispatcherID) (*hea
 // returns the dispatcher status to the dispatcher manager
 func (be *BarrierEvent) onAllDispatcherReportedBlockEvent(dispatcherID common.DispatcherID) (*heartbeatpb.DispatcherStatus, node.ID) {
 	var dispatcher common.DispatcherID
-	switch be.blockedDispatchers.InfluenceType {
-	case heartbeatpb.InfluenceType_DB, heartbeatpb.InfluenceType_All:
-		// for all and db type, we always use the table trigger event dispatcher as the writer
-		log.Info("use table trigger event as the writer dispatcher",
-			zap.String("changefeed", be.cfID.Name()),
-			zap.String("dispatcher", be.spanController.GetDDLDispatcherID().String()),
-			zap.Uint64("commitTs", be.commitTs),
-			zap.Int64("mode", be.mode))
+	barrierType := "DDLDispatcherOnly"
+	if be.blockedDispatchers == nil {
 		dispatcher = be.spanController.GetDDLDispatcherID()
-	default:
-		selected := dispatcherID.ToPB()
-		if be.tableTriggerDispatcherRelated {
-			// select the last one as the writer
-			// or the table trigger event dispatcher if it's one of the blocked dispatcher
-			selected = be.spanController.GetDDLDispatcherID().ToPB()
+	} else {
+		barrierType = be.blockedDispatchers.InfluenceType.String()
+		switch be.blockedDispatchers.InfluenceType {
+		case heartbeatpb.InfluenceType_DB, heartbeatpb.InfluenceType_All:
+			// for all and db type, we always use the table trigger event dispatcher as the writer
 			log.Info("use table trigger event as the writer dispatcher",
 				zap.String("changefeed", be.cfID.Name()),
-				zap.String("dispatcher", selected.String()),
+				zap.String("dispatcher", be.spanController.GetDDLDispatcherID().String()),
 				zap.Uint64("commitTs", be.commitTs),
 				zap.Int64("mode", be.mode))
+			dispatcher = be.spanController.GetDDLDispatcherID()
+		default:
+			selected := dispatcherID.ToPB()
+			if be.tableTriggerDispatcherRelated {
+				// select the last one as the writer
+				// or the table trigger event dispatcher if it's one of the blocked dispatcher
+				selected = be.spanController.GetDDLDispatcherID().ToPB()
+				log.Info("use table trigger event as the writer dispatcher",
+					zap.String("changefeed", be.cfID.Name()),
+					zap.String("dispatcher", selected.String()),
+					zap.Uint64("commitTs", be.commitTs),
+					zap.Int64("mode", be.mode))
+			}
+			dispatcher = common.NewDispatcherIDFromPB(selected)
 		}
-		dispatcher = common.NewDispatcherIDFromPB(selected)
 	}
 
 	// reset ranger checkers and reportedDispatchers
 	be.rangeChecker.Reset()
 	be.reportedDispatchers = make(map[common.DispatcherID]struct{})
-
-	// Route conflict precheck: validate before issuing Action_Write.
-	if be.needsRoutePrecheck() && !be.routePrecheckDone {
-		transition, err := be.buildRouteTransition()
-		if err != nil {
-			log.Error("route transition build failed, blocking write action",
-				zap.String("changefeed", be.cfID.Name()),
-				zap.Uint64("commitTs", be.commitTs),
-				zap.Error(err))
-			return nil, ""
-		}
-		if transition != nil && (len(transition.Removes) > 0 || len(transition.Adds) > 0) {
-			if err := be.targetRegistry.ValidateReplace(transition.Removes, transition.Adds); err != nil {
-				log.Error("route conflict detected during DDL precheck, blocking write action",
-					zap.String("changefeed", be.cfID.Name()),
-					zap.Uint64("commitTs", be.commitTs),
-					zap.Int64("mode", be.mode),
-					zap.Error(err))
-				return nil, ""
-			}
-			be.routeTransition = transition
-		}
-		be.routePrecheckDone = true
-	}
 
 	be.selected.Store(true)
 	be.writerDispatcher = dispatcher
@@ -420,7 +240,7 @@ func (be *BarrierEvent) onAllDispatcherReportedBlockEvent(dispatcherID common.Di
 		zap.String("changefeed", be.cfID.Name()),
 		zap.String("dispatcher", be.writerDispatcher.String()),
 		zap.Uint64("commitTs", be.commitTs),
-		zap.String("barrierType", be.blockedDispatchers.InfluenceType.String()),
+		zap.String("barrierType", barrierType),
 		zap.Int64("mode", be.mode))
 	stm := be.spanController.GetTaskByID(be.writerDispatcher)
 	return &heartbeatpb.DispatcherStatus{

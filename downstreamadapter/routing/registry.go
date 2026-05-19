@@ -15,7 +15,6 @@ package routing
 
 import (
 	"fmt"
-	"maps"
 	"sort"
 
 	"github.com/pingcap/ticdc/pkg/common"
@@ -53,6 +52,8 @@ type RouteBinding struct {
 // partitioned tables or split spans). Different logical sources mapping to
 // the same target is a conflict.
 type TargetTableRegistry struct {
+	changefeedID common.ChangeFeedID
+
 	// ownerSources tracks which SourceKey currently owns each target.
 	// This is the constraint table for conflict detection.
 	ownerSources map[TargetKey]SourceKey
@@ -66,6 +67,11 @@ type TargetTableRegistry struct {
 	bySchemaID map[int64]map[int64]struct{} // schemaID -> replicaTableIDs
 	// targetRefs counts how many replicas map to each target.
 	targetRefs map[TargetKey]int
+}
+
+// SetChangefeedID annotates conflict errors emitted by this registry.
+func (r *TargetTableRegistry) SetChangefeedID(changefeedID common.ChangeFeedID) {
+	r.changefeedID = changefeedID
 }
 
 // NewTargetTableRegistry creates a registry from a set of initial bindings.
@@ -116,21 +122,33 @@ func (r *TargetTableRegistry) ValidateAdd(binding RouteBinding) error {
 	}
 	// Find the existing binding for the error message.
 	existingBinding := r.findBindingBySource(existingSource.LogicalTableID)
-	return newConflictError(existingBinding, binding)
+	return r.newConflictError(existingBinding, binding)
 }
 
 // ValidateReplace simulates removing replicaTableIDs then adding bindings.
 // It does not mutate the registry.
 func (r *TargetTableRegistry) ValidateReplace(removes []int64, adds []RouteBinding) error {
-	tmp := r.clone()
+	removeSet := make(map[int64]struct{}, len(removes))
+	removedTargetRefs := make(map[TargetKey]int, len(removes))
 	for _, id := range removes {
-		tmp.RemoveByReplicaID(id)
-	}
-	for _, b := range adds {
-		if err := tmp.ValidateAdd(b); err != nil {
-			return err
+		if _, ok := removeSet[id]; ok {
+			continue
 		}
-		tmp.unsafeInsert(b)
+		removeSet[id] = struct{}{}
+		if binding, ok := r.bindings[id]; ok {
+			removedTargetRefs[binding.Target]++
+		}
+	}
+
+	addedOwners := make(map[TargetKey]RouteBinding, len(adds))
+	for _, b := range adds {
+		existingBinding, ok := r.effectiveOwnerBinding(b.Target, removeSet, removedTargetRefs, addedOwners)
+		if ok && existingBinding.Source.LogicalTableID != b.Source.LogicalTableID {
+			return r.newConflictError(existingBinding, b)
+		}
+		if !ok {
+			addedOwners[b.Target] = b
+		}
 	}
 	return nil
 }
@@ -141,7 +159,7 @@ func (r *TargetTableRegistry) Upsert(binding RouteBinding) error {
 	existingSource, ok := r.ownerSources[binding.Target]
 	if ok && existingSource.LogicalTableID != binding.Source.LogicalTableID {
 		existingBinding := r.findBindingBySource(existingSource.LogicalTableID)
-		return newConflictError(existingBinding, binding)
+		return r.newConflictError(existingBinding, binding)
 	}
 	if oldBinding, exists := r.bindings[binding.ReplicaTableID]; exists {
 		r.removeFromSourceIndex(binding.ReplicaTableID)
@@ -245,6 +263,46 @@ func (r *TargetTableRegistry) findBindingBySource(logicalTableID int64) RouteBin
 	return b
 }
 
+func (r *TargetTableRegistry) effectiveOwnerBinding(
+	target TargetKey,
+	removeSet map[int64]struct{},
+	removedTargetRefs map[TargetKey]int,
+	addedOwners map[TargetKey]RouteBinding,
+) (RouteBinding, bool) {
+	if binding, ok := addedOwners[target]; ok {
+		return binding, true
+	}
+	if r.targetRefs[target]-removedTargetRefs[target] <= 0 {
+		return RouteBinding{}, false
+	}
+	owner, ok := r.ownerSources[target]
+	if !ok {
+		return RouteBinding{}, false
+	}
+	return r.findBindingBySourceAndTarget(owner.LogicalTableID, target, removeSet)
+}
+
+func (r *TargetTableRegistry) findBindingBySourceAndTarget(
+	logicalTableID int64,
+	target TargetKey,
+	removeSet map[int64]struct{},
+) (RouteBinding, bool) {
+	replicas, ok := r.bySourceID[logicalTableID]
+	if !ok {
+		return RouteBinding{}, false
+	}
+	for id := range replicas {
+		if _, removed := removeSet[id]; removed {
+			continue
+		}
+		b, exists := r.bindings[id]
+		if exists && b.Target == target {
+			return b, true
+		}
+	}
+	return RouteBinding{}, false
+}
+
 // NewRouteBinding constructs a RouteBinding from a table info and route result.
 func NewRouteBinding(
 	tableInfo *common.TableInfo,
@@ -303,68 +361,26 @@ func (r *TargetTableRegistry) GetBindingBySource(logicalTableID int64) (RouteBin
 	return RouteBinding{}, false
 }
 
-func (r *TargetTableRegistry) clone() *TargetTableRegistry {
-	refs := make(map[TargetKey]int, len(r.targetRefs))
-	maps.Copy(refs, r.targetRefs)
-	return &TargetTableRegistry{
-		ownerSources: r.cloneOwnerSources(),
-		bindings:     r.cloneBindings(),
-		bySourceID:   r.cloneSourceIndex(),
-		bySchemaID:   r.cloneSchemaIndex(),
-		targetRefs:   refs,
-	}
-}
-
-func (r *TargetTableRegistry) cloneOwnerSources() map[TargetKey]SourceKey {
-	m := make(map[TargetKey]SourceKey, len(r.ownerSources))
-	maps.Copy(m, r.ownerSources)
-	return m
-}
-
-func (r *TargetTableRegistry) cloneBindings() map[int64]RouteBinding {
-	m := make(map[int64]RouteBinding, len(r.bindings))
-	maps.Copy(m, r.bindings)
-	return m
-}
-
-func (r *TargetTableRegistry) cloneSourceIndex() map[int64]map[int64]struct{} {
-	m := make(map[int64]map[int64]struct{}, len(r.bySourceID))
-	for k, v := range r.bySourceID {
-		inner := make(map[int64]struct{}, len(v))
-		for id := range v {
-			inner[id] = struct{}{}
-		}
-		m[k] = inner
-	}
-	return m
-}
-
-func (r *TargetTableRegistry) cloneSchemaIndex() map[int64]map[int64]struct{} {
-	m := make(map[int64]map[int64]struct{}, len(r.bySchemaID))
-	for k, v := range r.bySchemaID {
-		inner := make(map[int64]struct{}, len(v))
-		for id := range v {
-			inner[id] = struct{}{}
-		}
-		m[k] = inner
-	}
-	return m
-}
-
 // TableRouteConflictError carries structured conflict details.
 type TableRouteConflictError struct {
-	Target   TargetKey
-	Existing RouteBinding
-	Incoming RouteBinding
+	Changefeed string
+	Target     TargetKey
+	Existing   RouteBinding
+	Incoming   RouteBinding
 }
 
 // Error implements the error interface with a human-readable conflict message.
 func (a *TableRouteConflictError) Error() string {
+	changefeed := ""
+	if a.Changefeed != "" {
+		changefeed = fmt.Sprintf(" in changefeed %s", a.Changefeed)
+	}
 	return fmt.Sprintf(
-		"table route conflict: "+
+		"table route conflict%s: "+
 			"target `%s`.`%s` is mapped by both "+
 			"source `%s`.`%s` tableID=%d rule=%d matcher=%s "+
 			"and source `%s`.`%s` tableID=%d rule=%d matcher=%s",
+		changefeed,
 		a.Target.Schema, a.Target.Table,
 		a.Existing.Source.Schema, a.Existing.Source.Table,
 		a.Existing.Source.LogicalTableID, a.Existing.RuleIndex,
@@ -375,12 +391,13 @@ func (a *TableRouteConflictError) Error() string {
 	)
 }
 
-func newConflictError(existing, incoming RouteBinding) error {
+func (r *TargetTableRegistry) newConflictError(existing, incoming RouteBinding) error {
 	return errors.ErrTableRouteConflict.GenWithStackByArgs(
 		&TableRouteConflictError{
-			Target:   existing.Target,
-			Existing: existing,
-			Incoming: incoming,
+			Changefeed: r.changefeedID.Name(),
+			Target:     existing.Target,
+			Existing:   existing,
+			Incoming:   incoming,
 		},
 	)
 }

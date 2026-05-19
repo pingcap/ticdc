@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/downstreamadapter/routing"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/operator"
 	"github.com/pingcap/ticdc/maintainer/replica"
@@ -78,10 +77,9 @@ type Controller struct {
 	// consistent host/target snapshot.
 	drainState *mscheduler.DrainState
 
-	// Table route conflict detection
-	routeRouter    routing.Router
-	targetRegistry *routing.TargetTableRegistry
-	routeEnabled   bool
+	// Table route conflict detection is owned by the maintainer controller.
+	routeDetector *routeConflictDetector
+	reportError   func(error)
 }
 
 func NewController(changefeedID common.ChangeFeedID,
@@ -161,6 +159,13 @@ func NewController(changefeedID common.ChangeFeedID,
 		balanceMoveBatchSize,
 	)
 	return controller
+}
+
+func (c *Controller) SetErrorReporter(reportError func(error)) {
+	c.reportError = reportError
+	if c.routeDetector != nil {
+		c.routeDetector.reportError = reportError
+	}
 }
 
 // HandleStatus handle the status report from the node

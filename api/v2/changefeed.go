@@ -1783,16 +1783,20 @@ func filterTableInfosForRouteConflict(
 		return tableInfos
 	}
 	if util.GetOrZero(replicaCfg.IgnoreIneligibleTable) {
-		ineligible := make(map[common.TableName]struct{}, len(ineligibleTables))
+		type tableNameKey struct {
+			schema string
+			table  string
+		}
+		ineligible := make(map[tableNameKey]struct{}, len(ineligibleTables))
 		for _, t := range ineligibleTables {
-			ineligible[t] = struct{}{}
+			ineligible[tableNameKey{schema: t.Schema, table: t.Table}] = struct{}{}
 		}
 		result := make([]*common.TableInfo, 0, len(tableInfos))
 		for _, ti := range tableInfos {
 			if ti == nil {
 				continue
 			}
-			tn := common.TableName{Schema: ti.GetSchemaName(), Table: ti.GetTableName()}
+			tn := tableNameKey{schema: ti.GetSchemaName(), table: ti.GetTableName()}
 			if _, ok := ineligible[tn]; ok {
 				continue
 			}
