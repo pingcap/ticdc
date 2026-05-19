@@ -131,7 +131,7 @@ func (a *BatchEncoder) encodeValue(ctx context.Context, topic string, e *event.R
 			return nil, nil
 		}
 		buf := new(bytes.Buffer)
-		data := []interface{}{deleteByte, e.CommitTs}
+		data := []any{deleteByte, e.CommitTs}
 		for _, v := range data {
 			if err := binary.Write(buf, binary.BigEndian, v); err != nil {
 				return nil, errors.WrapError(errors.ErrAvroToEnvelopeError, err)
@@ -144,7 +144,7 @@ func (a *BatchEncoder) encodeValue(ctx context.Context, topic string, e *event.R
 		return nil, nil
 	}
 	index := make([]int, length)
-	for i := 0; i < length; i++ {
+	for i := range length {
 		index[i] = i
 	}
 	input := &avroEncodeInput{

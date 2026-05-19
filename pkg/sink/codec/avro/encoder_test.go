@@ -110,8 +110,7 @@ func TestEncodeRoutedDMLEventUsesTargetNames(t *testing.T) {
 	codecConfig.AvroDecimalHandlingMode = "string"
 	codecConfig.AvroBigintUnsignedHandlingMode = "string"
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	encoder, err := SetupEncoderAndSchemaRegistry4Testing(ctx, codecConfig)
 	require.NoError(t, err)

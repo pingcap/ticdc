@@ -28,6 +28,7 @@ type sink struct {
 	eventCh chan *commonEvent.DMLEvent
 }
 
+//nolint:revive // Keep the constructor shape consistent with other sink implementations.
 func New() (*sink, error) {
 	return &sink{
 		eventCh: make(chan *commonEvent.DMLEvent, 4096),

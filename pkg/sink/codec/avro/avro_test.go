@@ -128,8 +128,7 @@ func TestAvroEncodeDeleteEventUsesPreRowForKey(t *testing.T) {
 	codecConfig := common.NewConfig(config.ProtocolAvro)
 	codecConfig.EnableTiDBExtension = true
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	encoder, err := SetupEncoderAndSchemaRegistry4Testing(ctx, codecConfig)
 	defer TeardownEncoderAndSchemaRegistry4Testing()
@@ -156,7 +155,7 @@ func TestAvroEncodeDeleteEventUsesPreRowForKey(t *testing.T) {
 	res, _, err := avroKeyCodec.NativeFromBinary(data)
 	require.NoError(t, err)
 	require.NotNil(t, res)
-	require.Equal(t, int32(127), res.(map[string]interface{})["tu1"])
+	require.Equal(t, int32(127), res.(map[string]any)["tu1"])
 }
 
 func TestAvroEncodeDeleteEventWithWatermarkCarriesCommitTs(t *testing.T) {
@@ -164,8 +163,7 @@ func TestAvroEncodeDeleteEventWithWatermarkCarriesCommitTs(t *testing.T) {
 	codecConfig.EnableTiDBExtension = true
 	codecConfig.AvroEnableWatermark = true
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	encoder, err := SetupEncoderAndSchemaRegistry4Testing(ctx, codecConfig)
 	defer TeardownEncoderAndSchemaRegistry4Testing()
