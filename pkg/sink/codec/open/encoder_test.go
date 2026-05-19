@@ -231,7 +231,7 @@ func TestFloatTypes(t *testing.T) {
 	helper.Tk().MustExec("use test")
 	job := helper.DDL2Job(`create table test.t(
     	id int primary key auto_increment,
-	    a float, b float(10, 3), c float(10), 
+	    a float, b float(10, 3), c float(10),
 	    d double, e double(20, 3))`)
 
 	dmlEvent := helper.DML2Event("test", "t", `insert into test.t(a,b,c,d,e) values (1.23, 4.56, 7.89, 10.11, 12.13)`)
@@ -575,17 +575,17 @@ func TestOtherTypes(t *testing.T) {
 
 	helper.Tk().MustExec("use test")
 	job := helper.DDL2Job(`create table test.t(
-    	id int primary key auto_increment, 
+    	id int primary key auto_increment,
     	a bool, b bool, c year,
-		d bit(10), e json, 
-		f decimal(10,2), 
+		d bit(10), e json,
+		f decimal(10,2),
 		g enum('a','b','c'), h set('a','b','c'))`)
 	tableInfo := helper.GetTableInfo(job)
 
 	dmlEvent := helper.DML2Event("test", "t", `insert into test.t(a, b, c, d, e, f, g, h) values (
-   		true, false, 2000, 
-	    0b0101010101, '{"key1": "value1"}', 
-	    153.123, 
+   		true, false, 2000,
+	    0b0101010101, '{"key1": "value1"}',
+	    153.123,
 	    'a', 'a,b')`)
 
 	require.NotNil(t, dmlEvent)
@@ -685,26 +685,38 @@ func TestCreateTableDDL(t *testing.T) {
 	require.Equal(t, ddlEvent.FinishedTs, obtained.FinishedTs)
 }
 
+func TestEncodeRoutedDMLEventUsesTargetNames(t *testing.T) {
+	rowEvent := common.NewRoutedRowEvent4Test()
+
+	ctx := context.Background()
+	codecConfig := common.NewConfig(config.ProtocolOpen)
+
+	encoder, err := NewBatchEncoder(ctx, codecConfig)
+	require.NoError(t, err)
+	require.NoError(t, encoder.AppendRowChangedEvent(ctx, "", rowEvent))
+
+	messages := encoder.Build()
+	require.Len(t, messages, 1)
+
+	decoder, err := NewDecoder(ctx, 0, codecConfig, nil)
+	require.NoError(t, err)
+	decoder.AddKeyValue(messages[0].Key, messages[0].Value)
+
+	messageType, hasNext := decoder.HasNext()
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeRow, messageType)
+
+	decoded := decoder.NextDMLEvent()
+	require.Equal(t, "target_db", decoded.TableInfo.GetSchemaName())
+	require.Equal(t, "target_table", decoded.TableInfo.GetTableName())
+
+	change, ok := decoded.GetNextRow()
+	require.True(t, ok)
+	common.CompareRow(t, rowEvent.Event, rowEvent.TableInfo, change, decoded.TableInfo)
+}
+
 func TestEncodeRoutedDDLEventUsesTargetNames(t *testing.T) {
-	helper := commonEvent.NewEventTestHelper(t)
-	defer helper.Close()
-
-	helper.Tk().MustExec("use test")
-
-	sourceDDL := helper.DDL2Event(`create table test.t(a tinyint primary key, b int)`)
-	require.NotNil(t, sourceDDL)
-
-	routedDDL := commonEvent.NewRoutedDDLEvent(
-		sourceDDL,
-		"CREATE TABLE `target_db`.`target_table` (`a` TINYINT PRIMARY KEY, `b` INT)",
-		"target_db",
-		"target_table",
-		"",
-		"",
-		sourceDDL.TableInfo.CloneWithRouting("target_db", "target_table"),
-		nil,
-		nil,
-	)
+	routedDDL := common.NewRoutedDDLEvent4Test()
 
 	ctx := context.Background()
 	codecConfig := common.NewConfig(config.ProtocolOpen)
@@ -717,7 +729,6 @@ func TestEncodeRoutedDDLEventUsesTargetNames(t *testing.T) {
 
 	decoder, err := NewDecoder(ctx, 0, codecConfig, nil)
 	require.NoError(t, err)
-
 	decoder.AddKeyValue(message.Key, message.Value)
 
 	messageType, hasNext := decoder.HasNext()
@@ -727,7 +738,7 @@ func TestEncodeRoutedDDLEventUsesTargetNames(t *testing.T) {
 	decoded := decoder.NextDDLEvent()
 	require.Equal(t, "target_db", decoded.SchemaName)
 	require.Equal(t, "target_table", decoded.TableName)
-	require.Contains(t, decoded.Query, "`target_db`.`target_table`")
+	require.Equal(t, routedDDL.Query, decoded.Query)
 }
 
 func TestEncoderOneMessage(t *testing.T) {

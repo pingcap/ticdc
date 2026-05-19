@@ -861,6 +861,8 @@ func (c *dbzCodec) EncodeKey(
 	defer util.ReturnJSONWriter(jWriter)
 
 	var err error
+	schemaName := e.TableInfo.GetTargetSchemaName()
+	tableName := e.TableInfo.GetTargetTableName()
 	jWriter.WriteObject(func() {
 		jWriter.WriteObjectField("payload", func() {
 			columns := e.TableInfo.GetColumns()
@@ -878,7 +880,7 @@ func (c *dbzCodec) EncodeKey(
 			jWriter.WriteObjectField("schema", func() {
 				jWriter.WriteStringField("type", "struct")
 				jWriter.WriteStringField("name",
-					fmt.Sprintf("%s.Key", getSchemaTopicName(c.clusterID, e.TableInfo.GetTargetSchemaName(), e.TableInfo.GetTargetTableName())))
+					fmt.Sprintf("%s.Key", getSchemaTopicName(c.clusterID, schemaName, tableName)))
 				jWriter.WriteBoolField("optional", false)
 				jWriter.WriteArrayField("fields", func() {
 					columns := e.TableInfo.GetColumns()
@@ -905,6 +907,8 @@ func (c *dbzCodec) EncodeValue(
 	commitTime := oracle.GetTimeFromTS(e.CommitTs)
 
 	var err error
+	schemaName := e.TableInfo.GetTargetSchemaName()
+	tableName := e.TableInfo.GetTargetTableName()
 
 	jWriter.WriteObject(func() {
 		jWriter.WriteObjectField("payload", func() {
@@ -917,8 +921,8 @@ func (c *dbzCodec) EncodeValue(
 				jWriter.WriteInt64Field("ts_ms", commitTime.UnixMilli())
 				// snapshot field is a string of true,last,false,incremental
 				jWriter.WriteStringField("snapshot", "false")
-				jWriter.WriteStringField("db", e.TableInfo.GetTargetSchemaName())
-				jWriter.WriteStringField("table", e.TableInfo.GetTargetTableName())
+				jWriter.WriteStringField("db", schemaName)
+				jWriter.WriteStringField("table", tableName)
 				jWriter.WriteInt64Field("server_id", 0)
 				jWriter.WriteNullField("gtid")
 				jWriter.WriteStringField("file", "")
@@ -976,7 +980,7 @@ func (c *dbzCodec) EncodeValue(
 				jWriter.WriteStringField("type", "struct")
 				jWriter.WriteBoolField("optional", false)
 				jWriter.WriteStringField("name",
-					fmt.Sprintf("%s.Envelope", getSchemaTopicName(c.clusterID, e.TableInfo.GetTargetSchemaName(), e.TableInfo.GetTargetTableName())))
+					fmt.Sprintf("%s.Envelope", getSchemaTopicName(c.clusterID, schemaName, tableName)))
 				jWriter.WriteIntField("version", 1)
 				jWriter.WriteArrayField("fields", func() {
 					// schema is the same for `before` and `after`. So we build a new buffer to
@@ -1006,7 +1010,7 @@ func (c *dbzCodec) EncodeValue(
 						jWriter.WriteStringField("type", "struct")
 						jWriter.WriteBoolField("optional", true)
 						jWriter.WriteStringField("name",
-							fmt.Sprintf("%s.Value", getSchemaTopicName(c.clusterID, e.TableInfo.GetTargetSchemaName(), e.TableInfo.GetTargetTableName())))
+							fmt.Sprintf("%s.Value", getSchemaTopicName(c.clusterID, schemaName, tableName)))
 						jWriter.WriteStringField("field", "before")
 						jWriter.WriteArrayField("fields", func() {
 							jWriter.WriteRaw(fieldsJSON)
@@ -1016,7 +1020,7 @@ func (c *dbzCodec) EncodeValue(
 						jWriter.WriteStringField("type", "struct")
 						jWriter.WriteBoolField("optional", true)
 						jWriter.WriteStringField("name",
-							fmt.Sprintf("%s.Value", getSchemaTopicName(c.clusterID, e.TableInfo.GetTargetSchemaName(), e.TableInfo.GetTargetTableName())))
+							fmt.Sprintf("%s.Value", getSchemaTopicName(c.clusterID, schemaName, tableName)))
 						jWriter.WriteStringField("field", "after")
 						jWriter.WriteArrayField("fields", func() {
 							jWriter.WriteRaw(fieldsJSON)
@@ -1213,8 +1217,8 @@ func (c *dbzCodec) EncodeDDLEvent(
 							}
 						})
 						jWriter.WriteArrayField("columns", func() {
-							parseColumns(e.Query, e.TableInfo.GetColumns())
-							for pos, col := range e.TableInfo.GetColumns() {
+							columns := parseColumns(e.Query, e.TableInfo.GetColumns())
+							for pos, col := range columns {
 								if col.Hidden {
 									continue
 								}

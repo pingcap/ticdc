@@ -26,13 +26,13 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter"
 	commonType "github.com/pingcap/ticdc/pkg/common"
-	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/codec/simple"
-	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"go.uber.org/atomic"
@@ -75,7 +75,7 @@ func (p *partitionProgress) updateWatermark(newWatermark uint64, offset kafka.Of
 
 type writer struct {
 	progresses         []*partitionProgress
-	ddlList            []*commonEvent.DDLEvent
+	ddlList            []*event.DDLEvent
 	ddlWithMaxCommitTs map[int64]uint64
 
 	// this should be used by the canal-json, avro and open protocol
@@ -96,7 +96,7 @@ func newWriter(ctx context.Context, o *option) *writer {
 		maxBatchSize:           o.maxBatchSize,
 		progresses:             make([]*partitionProgress, o.partitionNum),
 		partitionTableAccessor: common.NewPartitionTableAccessor(),
-		ddlList:                make([]*commonEvent.DDLEvent, 0),
+		ddlList:                make([]*event.DDLEvent, 0),
 		ddlWithMaxCommitTs:     make(map[int64]uint64),
 		enableTableAcrossNodes: o.enableTableAcrossNodes,
 	}
@@ -146,7 +146,7 @@ func (w *writer) run(ctx context.Context) error {
 	return w.mysqlSink.Run(ctx)
 }
 
-func (w *writer) flushDDLEvent(ctx context.Context, ddl *commonEvent.DDLEvent) error {
+func (w *writer) flushDDLEvent(ctx context.Context, ddl *event.DDLEvent) error {
 	var (
 		done = make(chan struct{}, 1)
 
@@ -156,7 +156,7 @@ func (w *writer) flushDDLEvent(ctx context.Context, ddl *commonEvent.DDLEvent) e
 
 	tableIDs := w.getBlockTableIDs(ddl)
 	commitTs := ddl.GetCommitTs()
-	resolvedEvents := make([]*commonEvent.DMLEvent, 0)
+	resolvedEvents := make([]*event.DMLEvent, 0)
 	// resolvedGroups records which EventsGroup has flushed events so we can
 	// advance its AppliedWatermark after the flush is fully finished.
 	resolvedGroups := make([]struct {
@@ -225,20 +225,20 @@ func (w *writer) flushDDLEvent(ctx context.Context, ddl *commonEvent.DDLEvent) e
 	}
 }
 
-func (w *writer) getBlockTableIDs(ddl *commonEvent.DDLEvent) map[int64]struct{} {
+func (w *writer) getBlockTableIDs(ddl *event.DDLEvent) map[int64]struct{} {
 	// The DDL event is delivered after all messages belongs to the tables which are blocked by the DDL event
 	// so we can make assumption that the all DMLs received before the DDL event.
 	// since one table's events may be produced to the different partitions, so we have to flush all partitions.
 	// if block the whole database, flush all tables, otherwise flush the blocked tables.
 	tableIDs := make(map[int64]struct{})
 	switch ddl.GetBlockedTables().InfluenceType {
-	case commonEvent.InfluenceTypeDB, commonEvent.InfluenceTypeAll:
+	case event.InfluenceTypeDB, event.InfluenceTypeAll:
 		for _, progress := range w.progresses {
 			for tableID := range progress.eventsGroup {
 				tableIDs[tableID] = struct{}{}
 			}
 		}
-	case commonEvent.InfluenceTypeNormal:
+	case event.InfluenceTypeNormal:
 		for _, item := range ddl.GetBlockedTables().TableIDs {
 			tableIDs[item] = struct{}{}
 		}
@@ -253,7 +253,7 @@ func (w *writer) getBlockTableIDs(ddl *commonEvent.DDLEvent) map[int64]struct{} 
 // DDLs may be received out of commit-ts order (e.g. due to MQ delivery or buffering), so Write() sorts
 // ddlList by commit-ts before executing. ddlWithMaxCommitTs is a guard against per-table commit-ts
 // regressions: executing an older DDL after a newer one may corrupt downstream schema/DML ordering.
-func (w *writer) appendDDL(ddl *commonEvent.DDLEvent) {
+func (w *writer) appendDDL(ddl *event.DDLEvent) {
 	// If commitTs goes backwards for a blocked table, ignore this DDL instead of applying it out of order.
 	tableIDs := w.getBlockTableIDs(ddl)
 	for tableID := range tableIDs {
@@ -292,7 +292,7 @@ func (w *writer) flushDMLEventsByWatermark(ctx context.Context) error {
 	)
 
 	watermark := w.globalWatermark()
-	resolvedEvents := make([]*commonEvent.DMLEvent, 0)
+	resolvedEvents := make([]*event.DMLEvent, 0)
 	// resolvedGroups records which EventsGroup has flushed events so we can
 	// advance its AppliedWatermark after the flush is fully finished.
 	resolvedGroups := make([]struct {
@@ -475,7 +475,7 @@ func (w *writer) Write(ctx context.Context, messageType common.MessageType) bool
 	}
 
 	watermark := w.globalWatermark()
-	ddlList := make([]*commonEvent.DDLEvent, 0)
+	ddlList := make([]*event.DDLEvent, 0)
 	for i, todoDDL := range w.ddlList {
 		// DDL ordering must follow commitTs (see appendDDL). Traditionally we wait until the global
 		// resolved-ts (watermark) has reached the DDL commitTs, which guarantees all partitions have
@@ -492,15 +492,15 @@ func (w *writer) Write(ctx context.Context, messageType common.MessageType) bool
 		// populating BlockedTableNames and/or adding referenced table IDs (or partition IDs) into
 		// BlockedTables.TableIDs. We only bypass watermark for CREATE TABLE when the DDL only blocks the
 		// special DDL span and has no referenced blocked table names.
-		action := timodel.ActionType(todoDDL.Type)
+		action := model.ActionType(todoDDL.Type)
 		bypassWatermark := false
 		switch action {
-		case timodel.ActionCreateSchema:
+		case model.ActionCreateSchema:
 			bypassWatermark = true
-		case timodel.ActionCreateTable:
+		case model.ActionCreateTable:
 			blockedTables := todoDDL.GetBlockedTables()
 			bypassWatermark = blockedTables != nil &&
-				blockedTables.InfluenceType == commonEvent.InfluenceTypeNormal &&
+				blockedTables.InfluenceType == event.InfluenceTypeNormal &&
 				len(blockedTables.TableIDs) == 1 &&
 				blockedTables.TableIDs[0] == commonType.DDLSpanTableID &&
 				len(todoDDL.GetBlockedTableNames()) == 0
@@ -534,16 +534,19 @@ func (w *writer) Write(ctx context.Context, messageType common.MessageType) bool
 	return true
 }
 
-func (w *writer) onDDL(ddl *commonEvent.DDLEvent) {
+func (w *writer) onDDL(ddl *event.DDLEvent) {
+	if ddl.Query == "" {
+		return
+	}
 	switch w.protocol {
-	case config.ProtocolCanalJSON, config.ProtocolOpen, config.ProtocolAvro:
+	case config.ProtocolCanalJSON, config.ProtocolOpen, config.ProtocolAvro, config.ProtocolSimple, config.ProtocolDebezium:
 	default:
 		return
 	}
 	// TODO: support more corner cases
 	// e.g. create partition table + drop table(rename table) + create normal table: the partitionTableAccessor should drop the table when the table become normal.
-	switch timodel.ActionType(ddl.Type) {
-	case timodel.ActionCreateTable:
+	switch model.ActionType(ddl.Type) {
+	case model.ActionCreateTable:
 		stmt, err := parser.New().ParseOneStmt(ddl.Query, "", "")
 		if err != nil {
 			log.Panic("parse ddl query failed", zap.String("query", ddl.Query), zap.Error(err))
@@ -551,14 +554,14 @@ func (w *writer) onDDL(ddl *commonEvent.DDLEvent) {
 		if v, ok := stmt.(*ast.CreateTableStmt); ok && v.Partition != nil {
 			w.partitionTableAccessor.Add(ddl.GetSchemaName(), ddl.GetTableName())
 		}
-	case timodel.ActionRenameTable:
+	case model.ActionRenameTable:
 		if w.partitionTableAccessor.IsPartitionTable(ddl.ExtraSchemaName, ddl.ExtraTableName) {
 			w.partitionTableAccessor.Add(ddl.GetSchemaName(), ddl.GetTableName())
 		}
 	}
 }
 
-func (w *writer) checkPartition(row *commonEvent.DMLEvent, partition int32, offset kafka.Offset) {
+func (w *writer) checkPartition(row *event.DMLEvent, partition int32, offset kafka.Offset) {
 	var (
 		partitioner  = w.eventRouter.GetPartitionGenerator(row.TableInfo.GetSchemaName(), row.TableInfo.GetTableName())
 		partitionNum = int32(len(w.progresses))
@@ -585,7 +588,7 @@ func (w *writer) checkPartition(row *commonEvent.DMLEvent, partition int32, offs
 	}
 }
 
-func (w *writer) appendRow2Group(dml *commonEvent.DMLEvent, progress *partitionProgress, offset kafka.Offset) {
+func (w *writer) appendRow2Group(dml *event.DMLEvent, progress *partitionProgress, offset kafka.Offset) {
 	w.checkPartition(dml, progress.partition, offset)
 	// if the kafka cluster is normal, this should not hit.
 	// else if the cluster is abnormal, the consumer may consume old message, then cause the watermark fallback.

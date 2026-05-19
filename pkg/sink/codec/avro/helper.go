@@ -46,10 +46,11 @@ const (
 )
 
 const (
-	// avro does not send ddl and checkpoint message, the following 2 field is used to distinguish
-	// TiCDC DDL event and checkpoint event, only used for testing purpose, not for production
+	// avro does not send ddl and checkpoint messages, the following bytes are used
+	// to distinguish TiCDC internal events, only used for testing purpose, not for production.
 	ddlByte        = uint8(1)
 	checkpointByte = uint8(2)
+	deleteByte     = uint8(3)
 )
 
 var type2TiDBType = map[byte]string{
