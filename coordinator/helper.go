@@ -15,6 +15,7 @@ package coordinator
 
 import (
 	"strings"
+	"time"
 
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging"
@@ -49,6 +50,7 @@ type changefeedErrorMetricLabels struct {
 	keyspace   string
 	changefeed string
 	state      string
+	errorTime  string
 	code       string
 	message    string
 }
@@ -73,7 +75,7 @@ func sameRunningErrorSignature(lhs *config.RunningError, rhs *config.RunningErro
 }
 
 func (l changefeedErrorMetricLabels) labelValues() []string {
-	return []string{l.keyspace, l.changefeed, l.state, l.code, l.message}
+	return []string{l.keyspace, l.changefeed, l.state, l.errorTime, l.code, l.message}
 }
 
 func normalizeChangefeedErrorMetricMessage(message string) string {
@@ -82,6 +84,15 @@ func normalizeChangefeedErrorMetricMessage(message string) string {
 		return message
 	}
 	return message[:changefeedErrorMetricMsgLimit-3] + "..."
+}
+
+func normalizeChangefeedErrorMetricTime(errorTime time.Time) string {
+	// Keep the label stable across nodes with different local time zones while remaining
+	// directly readable in Grafana's table view.
+	if errorTime.IsZero() {
+		return ""
+	}
+	return errorTime.UTC().Format(time.RFC3339)
 }
 
 func getChangefeedErrorMetricLabels(info *config.ChangeFeedInfo) (changefeedErrorMetricLabels, bool) {
@@ -104,6 +115,7 @@ func getChangefeedErrorMetricLabels(info *config.ChangeFeedInfo) (changefeedErro
 		keyspace:   info.ChangefeedID.Keyspace(),
 		changefeed: info.ChangefeedID.Name(),
 		state:      string(info.State),
+		errorTime:  normalizeChangefeedErrorMetricTime(runningErr.Time),
 		code:       runningErr.Code,
 		message:    normalizeChangefeedErrorMetricMessage(runningErr.Message),
 	}, true
