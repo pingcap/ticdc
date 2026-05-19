@@ -51,7 +51,9 @@ type Sink interface {
 func New(ctx context.Context, cfg *config.ChangefeedConfig, changefeedID common.ChangeFeedID) (Sink, error) {
 	sinkURI, err := url.Parse(cfg.SinkURI)
 	if err != nil {
-		return nil, errors.ErrSinkURIInvalid.GenWithStackByArgs(
+		return nil, errors.WrapError(
+			errors.ErrSinkURIInvalid,
+			util.MaskSensitiveDataInURLError(err),
 			util.MaskSensitiveDataInURIForError(cfg.SinkURI))
 	}
 	scheme := config.GetScheme(sinkURI)
@@ -74,7 +76,9 @@ func New(ctx context.Context, cfg *config.ChangefeedConfig, changefeedID common.
 func Verify(ctx context.Context, cfg *config.ChangefeedConfig, changefeedID common.ChangeFeedID) error {
 	sinkURI, err := url.Parse(cfg.SinkURI)
 	if err != nil {
-		return errors.ErrSinkURIInvalid.GenWithStackByArgs(
+		return errors.WrapError(
+			errors.ErrSinkURIInvalid,
+			util.MaskSensitiveDataInURLError(err),
 			util.MaskSensitiveDataInURIForError(cfg.SinkURI))
 	}
 	scheme := config.GetScheme(sinkURI)

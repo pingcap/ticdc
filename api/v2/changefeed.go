@@ -56,8 +56,9 @@ func maskSinkURIForError(sinkURI string) string {
 	return util.MaskSensitiveDataInURIForError(sinkURI)
 }
 
-func genSinkURIInvalidError(sinkURI string) error {
-	return errors.ErrSinkURIInvalid.GenWithStackByArgs(maskSinkURIForError(sinkURI))
+func genSinkURIInvalidError(sinkURI string, err error) error {
+	return errors.WrapError(
+		errors.ErrSinkURIInvalid, util.MaskSensitiveDataInURLError(err), maskSinkURIForError(sinkURI))
 }
 
 // CreateChangefeed handles create changefeed request,
@@ -143,7 +144,7 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 	}
 	sinkURIParsed, err := url.Parse(cfg.SinkURI)
 	if err != nil {
-		_ = c.Error(genSinkURIInvalidError(cfg.SinkURI))
+		_ = c.Error(genSinkURIInvalidError(cfg.SinkURI, err))
 		return
 	}
 
@@ -439,7 +440,7 @@ func (h *OpenAPIV2) VerifyTable(c *gin.Context) {
 	// verify replicaConfig
 	sinkURIParsed, err := url.Parse(cfg.SinkURI)
 	if err != nil {
-		_ = c.Error(genSinkURIInvalidError(cfg.SinkURI))
+		_ = c.Error(genSinkURIInvalidError(cfg.SinkURI, err))
 		return
 	}
 	err = replicaCfg.ValidateAndAdjust(sinkURIParsed)
@@ -830,7 +831,7 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 		)
 		sinkURIParsed, err = url.Parse(cfInfo.SinkURI)
 		if err != nil {
-			_ = c.Error(genSinkURIInvalidError(cfInfo.SinkURI))
+			_ = c.Error(genSinkURIInvalidError(cfInfo.SinkURI, err))
 			return
 		}
 		scheme := sinkURIParsed.Scheme
@@ -983,7 +984,7 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 		// verify replicaConfig
 		sinkURIParsed, err := url.Parse(oldCfInfo.SinkURI)
 		if err != nil {
-			_ = c.Error(genSinkURIInvalidError(oldCfInfo.SinkURI))
+			_ = c.Error(genSinkURIInvalidError(oldCfInfo.SinkURI, err))
 			return
 		}
 		err = oldCfInfo.Config.ValidateAndAdjust(sinkURIParsed)
