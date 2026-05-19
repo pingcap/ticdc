@@ -78,8 +78,8 @@ func (c *dbzCodec) writeDebeziumFieldValues(
 					valueStr = valueStr[:maxValueLen] + "...(truncated)"
 				}
 				log.Error("failed to write Debezium field value",
-					zap.String("schema", tableInfo.GetSchemaName()),
-					zap.String("table", tableInfo.GetTableName()),
+					zap.String("schema", tableInfo.GetTargetSchemaName()),
+					zap.String("table", tableInfo.GetTargetTableName()),
 					zap.String("column", colInfo.Name.O),
 					zap.String("value", valueStr),
 					zap.Uint64("commitTs", commitTs),
