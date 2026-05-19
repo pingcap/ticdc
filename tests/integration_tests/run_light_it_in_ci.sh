@@ -49,7 +49,7 @@ mysql_groups=(
 	# after TiDB release-8.5 has `mysql.tidb.cluster_id`.
 	'http_api http_api_compatibility http_api_tls_old_arch fail_over_ddl_G synced_status'
 	# G07
-	'fail_over_ddl_H changefeed_update_config synced_status_with_redo'
+	'fail_over_ddl_H changefeed_update_config synced_status_with_redo redo_apply_table_route'
 	# G08
 	'capture_session_done_during_task changefeed_dup_error_restart mysql_sink_retry fail_over_ddl_I table_route'
 	# G09
@@ -91,7 +91,7 @@ kafka_groups=(
 	# G07
 	'kafka_messages kafka_big_messages kafka_compression fail_over_ddl_H changefeed_update_config'
 	# G08
-	'capture_session_done_during_task fail_over_ddl_I'
+	'capture_session_done_during_task fail_over_ddl_I table_route'
 	# G09
 	'cdc_server_tips ddl_sequence log_redaction fail_over_ddl_J'
 	# G10

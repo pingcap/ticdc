@@ -20,91 +20,13 @@ import (
 	"testing"
 
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
-	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/compression"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
-	"github.com/pingcap/tidb/pkg/meta/model"
-	parser_model "github.com/pingcap/tidb/pkg/parser/model"
-	"github.com/pingcap/tidb/pkg/parser/mysql"
-	"github.com/pingcap/tidb/pkg/types"
-	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
 )
-
-func newRoutedCanalTableInfo() *commonType.TableInfo {
-	idFieldType := types.NewFieldType(mysql.TypeLong)
-	idFieldType.SetFlag(mysql.PriKeyFlag | mysql.NotNullFlag)
-	nameFieldType := types.NewFieldType(mysql.TypeVarchar)
-	nameFieldType.SetFlen(32)
-
-	return commonType.WrapTableInfo("source_db", &model.TableInfo{
-		ID:       20,
-		Name:     parser_model.NewCIStr("source_table"),
-		UpdateTS: 100,
-		Columns: []*model.ColumnInfo{
-			{
-				ID:        1,
-				Name:      parser_model.NewCIStr("id"),
-				FieldType: *idFieldType,
-				State:     model.StatePublic,
-				Offset:    0,
-			},
-			{
-				ID:        2,
-				Name:      parser_model.NewCIStr("name"),
-				FieldType: *nameFieldType,
-				State:     model.StatePublic,
-				Offset:    1,
-			},
-		},
-	}).CloneWithRouting("target_db", "target_table")
-}
-
-func newRoutedCanalDMLEvent() *commonEvent.DMLEvent {
-	tableInfo := newRoutedCanalTableInfo()
-	event := commonEvent.NewDMLEvent(
-		commonType.NewDispatcherID(),
-		tableInfo.TableName.TableID,
-		1,
-		2,
-		tableInfo,
-	)
-	rows := chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 1)
-	rows.AppendRow(chunk.MutRowFromValues(int64(1), "alice").ToRow())
-	event.SetRows(rows)
-	event.RowTypes = append(event.RowTypes, commonType.RowTypeInsert)
-	event.RowKeys = append(event.RowKeys, []byte("row-key"))
-	event.Length = 1
-	event.TableInfoVersion = tableInfo.GetUpdateTS()
-	return event
-}
-
-func newRoutedCanalDDLEvent() *commonEvent.DDLEvent {
-	tableInfo := newRoutedCanalTableInfo()
-	sourceDDL := &commonEvent.DDLEvent{
-		Version:    commonEvent.DDLEventVersion1,
-		Type:       byte(model.ActionCreateTable),
-		SchemaName: "source_db",
-		TableName:  "source_table",
-		Query:      "CREATE TABLE `source_db`.`source_table` (`id` INT PRIMARY KEY)",
-		TableInfo:  tableInfo,
-		FinishedTs: 100,
-	}
-	return commonEvent.NewRoutedDDLEvent(
-		sourceDDL,
-		"CREATE TABLE `target_db`.`target_table` (`id` INT PRIMARY KEY)",
-		"target_db",
-		"target_table",
-		"",
-		"",
-		tableInfo,
-		nil,
-		nil,
-	)
-}
 
 func dml2rowEvent(t *testing.T, dml *commonEvent.DMLEvent) *commonEvent.RowEvent {
 	row, ok := dml.GetNextRow()
@@ -279,7 +201,7 @@ func TestCanalJSONCompressionE2E(t *testing.T) {
 }
 
 func TestEncodeRoutedDMLEventUsesTargetNames(t *testing.T) {
-	dmlEvent := newRoutedCanalDMLEvent()
+	dmlEvent := common.NewRoutedDMLEvent4Test()
 	row, ok := dmlEvent.GetNextRow()
 	require.True(t, ok)
 
@@ -319,7 +241,7 @@ func TestEncodeRoutedDDLEventUsesTargetNames(t *testing.T) {
 	require.NoError(t, err)
 	encoder := encIface.(*JSONRowEventEncoder)
 
-	message, err := encoder.EncodeDDLEvent(newRoutedCanalDDLEvent())
+	message, err := encoder.EncodeDDLEvent(common.NewRoutedDDLEvent4Test())
 	require.NoError(t, err)
 
 	decoder, err := NewDecoder(ctx, codecConfig, nil)
