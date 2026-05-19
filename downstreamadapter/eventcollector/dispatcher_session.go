@@ -37,7 +37,7 @@ import (
 //  3. pendingRemoteEventServiceID: the remote reuse probe currently waiting for
 //     ready or not reusable.
 //
-// This lets the collector represent the common startup path correctly:
+// This lets the collector represent the common startup path correctly when remote read is enabled:
 //   - after add: current="", localReadyPending=true, pendingRemoteEventServiceID=""
 //   - after choosing a remote candidate: current="", localReadyPending=true,
 //     pendingRemoteEventServiceID="<remote>"
