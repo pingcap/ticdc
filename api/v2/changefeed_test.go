@@ -14,6 +14,7 @@
 package v2
 
 import (
+<<<<<<< HEAD
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common"
@@ -78,4 +79,39 @@ func TestVerifyRouteConflict(t *testing.T) {
 	require.Contains(t, err.Error(), "target `db1`.`orders`")
 	require.Contains(t, err.Error(), "source `db1`.`orders`")
 	require.Contains(t, err.Error(), "source `db2`.`orders`")
+=======
+	"net/url"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
+
+func TestMaskSinkURIForError(t *testing.T) {
+	sinkURI := "kafka://127.0.0.1:9092/topic?protocol=canal-json" +
+		"&sasl-user=ticdc&sasl-password=verysecure&secret-access-key=rawsecret"
+
+	maskedURI := maskSinkURIForError(sinkURI)
+	require.NotContains(t, maskedURI, "verysecure")
+	require.NotContains(t, maskedURI, "rawsecret")
+	require.Contains(t, maskedURI, "sasl-password=xxxxx")
+	require.Contains(t, maskedURI, "secret-access-key=xxxxx")
+	require.Contains(t, maskedURI, "sasl-user=ticdc")
+
+	invalidURI := "mysql://root:verysecure@127.0.0.1/%zz"
+	require.Equal(t, "<invalid uri>", maskSinkURIForError(invalidURI))
+
+	err := genSinkURIInvalidError(invalidURI, mustParseURLError(t, invalidURI))
+	require.NotContains(t, err.Error(), "verysecure")
+	require.Contains(t, err.Error(), "<invalid uri>")
+	require.Contains(t, err.Error(), `parse "<invalid uri>"`)
+	require.Contains(t, err.Error(), "invalid URL escape")
+}
+
+func mustParseURLError(t *testing.T, rawURL string) error {
+	t.Helper()
+
+	_, err := url.Parse(rawURL)
+	require.Error(t, err)
+	return err
+>>>>>>> d38ea0a5d (api,sink: mask sink uri secrets (#5093))
 }
