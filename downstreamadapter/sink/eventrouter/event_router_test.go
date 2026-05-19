@@ -317,3 +317,92 @@ func TestGetTopicForDDL(t *testing.T) {
 		require.Equal(t, test.expectedTopic, d.GetTopicForDDL(test.ddl))
 	}
 }
+
+func TestTableRoutingDoesNotAffectDDLTopicMatching(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		sinkConfig    *config.SinkConfig
+		ddl           *commonEvent.DDLEvent
+		expectedTopic string
+	}{
+		{
+			name: "single table ddl",
+			sinkConfig: &config.SinkConfig{
+				DispatchRules: []*config.DispatchRule{
+					{
+						Matcher:       []string{"source_db.*"},
+						PartitionRule: "table",
+						TopicRule:     "{schema}_topic",
+					},
+					{
+						Matcher:       []string{"target_db.*"},
+						PartitionRule: "table",
+						TopicRule:     "target_topic",
+					},
+				},
+			},
+			ddl: commonEvent.NewRoutedDDLEvent(
+				&commonEvent.DDLEvent{
+					SchemaName: "source_db",
+					TableName:  "orders",
+					Query:      "ALTER TABLE `source_db`.`orders` ADD COLUMN c INT",
+				},
+				"ALTER TABLE `target_db`.`orders_routed` ADD COLUMN c INT",
+				"target_db",
+				"orders_routed",
+				"",
+				"",
+				nil,
+				nil,
+				nil,
+			),
+			expectedTopic: "source_db_topic",
+		},
+		{
+			name: "rename ddl",
+			sinkConfig: &config.SinkConfig{
+				DispatchRules: []*config.DispatchRule{
+					{
+						Matcher:       []string{"source_db.orders_old"},
+						PartitionRule: "table",
+						TopicRule:     "{schema}_{table}_topic",
+					},
+					{
+						Matcher:       []string{"target_db.orders_old_routed"},
+						PartitionRule: "table",
+						TopicRule:     "target_topic",
+					},
+				},
+			},
+			ddl: commonEvent.NewRoutedDDLEvent(
+				&commonEvent.DDLEvent{
+					SchemaName:      "source_db",
+					TableName:       "orders_new",
+					ExtraSchemaName: "source_db",
+					ExtraTableName:  "orders_old",
+					Query:           "RENAME TABLE `source_db`.`orders_old` TO `source_db`.`orders_new`",
+				},
+				"RENAME TABLE `target_db`.`orders_old_routed` TO `target_db`.`orders_new_routed`",
+				"target_db",
+				"orders_new_routed",
+				"target_db",
+				"orders_old_routed",
+				nil,
+				nil,
+				nil,
+			),
+			expectedTopic: "source_db_orders_old_topic",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			d, err := NewEventRouter(tc.sinkConfig, "default_topic", false, false)
+			require.NoError(t, err)
+
+			require.Equal(t, tc.expectedTopic, d.GetTopicForDDL(tc.ddl))
+		})
+	}
+}
