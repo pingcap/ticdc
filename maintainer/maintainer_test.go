@@ -21,7 +21,6 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/downstreamadapter/routing"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/operator"
 	"github.com/pingcap/ticdc/maintainer/replica"
@@ -516,7 +515,7 @@ func newMaintainerForCheckpointCalculationTest(t testing.TB) (*Maintainer, node.
 		spanController:     spanController,
 		operatorController: operatorController,
 	}
-	controller.barrier = NewBarrier(spanController, operatorController, false, nil, common.DefaultMode, routing.Router{}, nil, false, common.KeyspaceMeta{})
+	controller.barrier = NewBarrier(spanController, operatorController, false, nil, common.DefaultMode, nil)
 
 	bootstrapper := bootstrap.NewBootstrapper[heartbeatpb.MaintainerBootstrapResponse](
 		"test",
@@ -568,8 +567,8 @@ func newMaintainerForRedoCheckpointCalculationTest(t testing.TB) (*Maintainer, n
 		redoOperatorController: redoOperatorController,
 		enableRedo:             true,
 	}
-	controller.barrier = NewBarrier(spanController, operatorController, false, nil, common.DefaultMode, routing.Router{}, nil, false, common.KeyspaceMeta{})
-	controller.redoBarrier = NewBarrier(redoSpanController, redoOperatorController, false, nil, common.RedoMode, routing.Router{}, nil, false, common.KeyspaceMeta{})
+	controller.barrier = NewBarrier(spanController, operatorController, false, nil, common.DefaultMode, nil)
+	controller.redoBarrier = NewBarrier(redoSpanController, redoOperatorController, false, nil, common.RedoMode, nil)
 
 	bootstrapper := bootstrap.NewBootstrapper[heartbeatpb.MaintainerBootstrapResponse](
 		"test",

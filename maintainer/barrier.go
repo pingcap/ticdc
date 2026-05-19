@@ -249,6 +249,11 @@ func (b *Barrier) Resend() []*messaging.TargetMessage {
 
 	eventList := make([]*BarrierEvent, 0)
 	b.blockedEvents.Range(func(key eventKey, barrierEvent *BarrierEvent) bool {
+		if barrierEvent.selected.Load() && barrierEvent.writerDispatcherAdvanced {
+			if err := b.applyRouteEvent(barrierEvent); err != nil {
+				return true
+			}
+		}
 		// todo: we can limit the number of messages to send in one round here
 		msgs = append(msgs, barrierEvent.resend(b.mode)...)
 
@@ -334,6 +339,9 @@ func (b *Barrier) handleEventDone(changefeedID common.ChangeFeedID, dispatcherID
 	// which means we have sent pass or write action to it
 	// the writer already synced ddl to downstream
 	if event.writerDispatcher == dispatcherID {
+		if err := b.applyRouteEvent(event); err != nil {
+			return event
+		}
 		if event.needSchedule {
 			// we need do schedule when writerDispatcherAdvanced
 			// Otherwise, if we do schedule when just selected = true, then ask dispatcher execute ddl
@@ -416,6 +424,12 @@ func (b *Barrier) handleBlockState(changefeedID common.ChangeFeedID,
 
 		// the block event, and check whether we need to send write action
 		event.markDispatcherEventDone(dispatcherID)
+		if event.allDispatcherReported() {
+			ready, err := b.precheckRouteEvent(event)
+			if err != nil || !ready {
+				return event, nil, "", false
+			}
+		}
 		status, targetID := event.checkEventAction(dispatcherID)
 		if status != nil && event.needSchedule {
 			// scheduling is only required for ddl that changes tables, enqueue the event
@@ -432,6 +446,15 @@ func (b *Barrier) handleBlockState(changefeedID common.ChangeFeedID,
 	key := getEventKey(blockState.BlockTs, blockState.IsSyncPoint)
 	event := b.getOrInsertNewEvent(changefeedID, dispatcherID, key, blockState)
 	event.writerDispatcher = dispatcherID
+	ready, err := b.precheckRouteEvent(event)
+	if err != nil || !ready {
+		b.blockedEvents.Delete(getEventKey(event.commitTs, event.isSyncPoint))
+		return event, nil, "", false
+	}
+	if err := b.applyRouteEvent(event); err != nil {
+		b.blockedEvents.Delete(getEventKey(event.commitTs, event.isSyncPoint))
+		return event, nil, "", false
+	}
 	if !event.needSchedule {
 		b.blockedEvents.Delete(getEventKey(event.commitTs, event.isSyncPoint))
 		return event, nil, "", true
@@ -513,6 +536,20 @@ func (b *Barrier) tryScheduleEvent(event *BarrierEvent) bool {
 	event.writerDispatcherAdvanced = true
 	event.lastResendTime = time.Now().Add(-20 * time.Second)
 	return true
+}
+
+func (b *Barrier) precheckRouteEvent(event *BarrierEvent) (bool, error) {
+	if b.routeDetector == nil {
+		return true, nil
+	}
+	return b.routeDetector.precheck(event.routeDDLInfo())
+}
+
+func (b *Barrier) applyRouteEvent(event *BarrierEvent) error {
+	if b.routeDetector == nil {
+		return nil
+	}
+	return b.routeDetector.apply(event.routeDDLInfo())
 }
 
 // ackEvent creates an ack event

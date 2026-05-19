@@ -932,6 +932,9 @@ func (d *BasicDispatcher) shouldBlock(event commonEvent.BlockEvent) bool {
 	switch event.GetType() {
 	case commonEvent.TypeDDLEvent:
 		ddlEvent := event.(*commonEvent.DDLEvent)
+		if d.sharedInfo.GetRouter().HasTableRoute() && routeAffectingDDL(ddlEvent) {
+			return true
+		}
 		if ddlEvent.BlockedTables == nil {
 			return false
 		}
@@ -952,6 +955,16 @@ func (d *BasicDispatcher) shouldBlock(event commonEvent.BlockEvent) bool {
 		return true
 	default:
 		log.Error("invalid event type", zap.Any("eventType", event.GetType()))
+	}
+	return false
+}
+
+func routeAffectingDDL(event *commonEvent.DDLEvent) bool {
+	if event.GetNeedDroppedTables() != nil ||
+		len(event.GetNeedAddedTables()) > 0 ||
+		len(event.GetUpdatedSchemas()) > 0 ||
+		event.TableNameChange != nil {
+		return true
 	}
 	return false
 }

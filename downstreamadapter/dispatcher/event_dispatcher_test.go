@@ -68,6 +68,45 @@ func newTestSharedInfo(
 	)
 }
 
+func TestShouldBlockRouteAffectingDDL(t *testing.T) {
+	router, err := routing.NewRouter(common.NewChangefeedID(common.DefaultKeyspaceName), false, []*config.DispatchRule{
+		{Matcher: []string{"*.*"}, TargetSchema: "target"},
+	})
+	require.NoError(t, err)
+
+	newDispatcher := func(router routing.Router) *BasicDispatcher {
+		sharedInfo := newTestSharedInfo(false, false, nil)
+		sharedInfo.router = router
+		return &BasicDispatcher{
+			isCompleteTable: true,
+			sharedInfo:      sharedInfo,
+		}
+	}
+
+	createTable := &commonEvent.DDLEvent{
+		NeedAddedTables: []commonEvent.Table{{SchemaID: 1, TableID: 2}},
+	}
+	require.False(t, newDispatcher(routing.Router{}).shouldBlock(createTable))
+	require.True(t, newDispatcher(router).shouldBlock(createTable))
+
+	renameTable := &commonEvent.DDLEvent{
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{1},
+		},
+		TableNameChange: &commonEvent.TableNameChange{},
+	}
+	require.True(t, newDispatcher(router).shouldBlock(renameTable))
+
+	regularSingleTableDDL := &commonEvent.DDLEvent{
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{1},
+		},
+	}
+	require.False(t, newDispatcher(router).shouldBlock(regularSingleTableDDL))
+}
+
 func getCompleteTableSpanWithTableID(keyspaceID uint32, tableID int64) (*heartbeatpb.TableSpan, error) {
 	tableSpan := &heartbeatpb.TableSpan{
 		KeyspaceID: keyspaceID,
