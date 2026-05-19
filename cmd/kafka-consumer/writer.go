@@ -18,6 +18,7 @@ import (
 	"database/sql"
 	"math"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
@@ -35,6 +36,7 @@ import (
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/ast"
+	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 )
@@ -77,6 +79,8 @@ type writer struct {
 	progresses         []*partitionProgress
 	ddlList            []*commonEvent.DDLEvent
 	ddlWithMaxCommitTs map[int64]uint64
+	mu                 sync.Mutex
+	pendingDMLFlushes  []*dmlFlushTracker
 
 	// this should be used by the canal-json, avro and open protocol
 	partitionTableAccessor *common.PartitionTableAccessor
@@ -87,6 +91,21 @@ type writer struct {
 	maxBatchSize           int
 	mysqlSink              sink.Sink
 	enableTableAcrossNodes bool
+
+	syncpointEnabled       bool
+	syncpointInterval      time.Duration
+	nextSyncpointTs        uint64
+	lastSyncedSyncpointTs  uint64
+	consumerSyncpointStore consumerSyncpointStore
+}
+
+type dmlFlushTracker struct {
+	tableID     int64
+	group       *util.EventsGroup
+	maxCommitTs uint64
+	total       int64
+	done        chan struct{}
+	flushed     atomic.Int64
 }
 
 func newWriter(ctx context.Context, o *option) *writer {
@@ -99,6 +118,8 @@ func newWriter(ctx context.Context, o *option) *writer {
 		ddlList:                make([]*commonEvent.DDLEvent, 0),
 		ddlWithMaxCommitTs:     make(map[int64]uint64),
 		enableTableAcrossNodes: o.enableTableAcrossNodes,
+		syncpointEnabled:       o.enableSyncpoint,
+		syncpointInterval:      o.syncpointInterval,
 	}
 	var (
 		db  *sql.DB
@@ -139,90 +160,53 @@ func newWriter(ctx context.Context, o *option) *writer {
 	if err != nil {
 		log.Panic("cannot create the mysql sink", zap.Error(err))
 	}
+	if o.enableSyncpoint {
+		store, err := newMySQLConsumerSyncpointStore(ctx, consumerSyncpointStoreConfig{
+			downstreamURI: o.downstreamURI,
+			consumerID:    o.groupID,
+			topic:         o.topic,
+			retention:     o.syncpointRetention,
+		})
+		if err != nil {
+			log.Panic("cannot create consumer syncpoint store", zap.Error(err))
+		}
+		lastSyncpointTs, err := store.Init(ctx)
+		if err != nil {
+			log.Panic("cannot initialize consumer syncpoint store", zap.Error(err))
+		}
+		w.consumerSyncpointStore = store
+		w.lastSyncedSyncpointTs = lastSyncpointTs
+		if lastSyncpointTs > 0 {
+			w.nextSyncpointTs = nextAlignedSyncpointTs(lastSyncpointTs, o.syncpointInterval)
+		}
+		log.Info("consumer syncpoint initialized",
+			zap.Uint64("lastSyncedSyncpointTs", w.lastSyncedSyncpointTs),
+			zap.Uint64("nextSyncpointTs", w.nextSyncpointTs),
+			zap.Duration("syncpointInterval", o.syncpointInterval))
+	}
 	return w
 }
 
 func (w *writer) run(ctx context.Context) error {
+	if w.consumerSyncpointStore != nil {
+		defer func() {
+			if err := w.consumerSyncpointStore.Close(); err != nil {
+				log.Warn("close consumer syncpoint store failed", zap.Error(err))
+			}
+		}()
+	}
 	return w.mysqlSink.Run(ctx)
 }
 
 func (w *writer) flushDDLEvent(ctx context.Context, ddl *commonEvent.DDLEvent) error {
-	var (
-		done = make(chan struct{}, 1)
-
-		total   int
-		flushed atomic.Int64
-	)
-
 	tableIDs := w.getBlockTableIDs(ddl)
 	commitTs := ddl.GetCommitTs()
-	resolvedEvents := make([]*commonEvent.DMLEvent, 0)
-	// resolvedGroups records which EventsGroup has flushed events so we can
-	// advance its AppliedWatermark after the flush is fully finished.
-	resolvedGroups := make([]struct {
-		group       *util.EventsGroup
-		maxCommitTs uint64
-	}, 0)
-	for tableID := range tableIDs {
-		for _, progress := range w.progresses {
-			g, ok := progress.eventsGroup[tableID]
-			if !ok {
-				continue
-			}
-			before := len(resolvedEvents)
-			resolvedEvents = g.ResolveInto(commitTs, resolvedEvents)
-			resolvedCount := len(resolvedEvents) - before
-			if resolvedCount == 0 {
-				continue
-			}
-
-			resolvedGroups = append(resolvedGroups, struct {
-				group       *util.EventsGroup
-				maxCommitTs uint64
-			}{
-				group:       g,
-				maxCommitTs: resolvedEvents[len(resolvedEvents)-1].GetCommitTs(),
-			})
-			total += resolvedCount
-		}
+	trackers := w.dispatchDMLEventsByTargetTs(commitTs, tableIDs)
+	trackers = append(trackers, w.pendingDMLFlushesUpTo(commitTs, tableIDs)...)
+	if err := w.waitDMLFlushes(ctx, trackers, "DDL", commitTs); err != nil {
+		return err
 	}
-
-	if total == 0 {
-		return w.mysqlSink.WriteBlockEvent(ddl)
-	}
-	for _, e := range resolvedEvents {
-		e.AddPostFlushFunc(func() {
-			if flushed.Inc() == int64(total) {
-				close(done)
-			}
-		})
-		w.mysqlSink.AddDMLEvent(e)
-	}
-
-	log.Info("flush DML events before DDL", zap.Uint64("DDLCommitTs", commitTs), zap.Int("total", total))
-	start := time.Now()
-	ticker := time.NewTicker(time.Minute)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return context.Cause(ctx)
-		case <-done:
-			log.Info("flush DML events before DDL done", zap.Uint64("DDLCommitTs", commitTs),
-				zap.Int("total", total), zap.Duration("duration", time.Since(start)),
-				zap.Any("tables", tableIDs))
-			for _, item := range resolvedGroups {
-				if item.maxCommitTs > item.group.AppliedWatermark {
-					item.group.AppliedWatermark = item.maxCommitTs
-				}
-			}
-			return w.mysqlSink.WriteBlockEvent(ddl)
-		case <-ticker.C:
-			log.Warn("DML events cannot be flushed in time",
-				zap.Uint64("DDLCommitTs", commitTs), zap.String("query", ddl.Query),
-				zap.Int("total", total), zap.Int64("flushed", flushed.Load()))
-		}
-	}
+	return w.mysqlSink.WriteBlockEvent(ddl)
 }
 
 func (w *writer) getBlockTableIDs(ddl *commonEvent.DDLEvent) map[int64]struct{} {
@@ -284,76 +268,218 @@ func (w *writer) globalWatermark() uint64 {
 }
 
 func (w *writer) flushDMLEventsByWatermark(ctx context.Context) error {
-	var (
-		done = make(chan struct{}, 1)
+	return w.flushDMLEventsByTargetTs(ctx, w.globalWatermark())
+}
 
-		total   int
-		flushed atomic.Int64
+func (w *writer) flushDMLEventsByTargetTs(ctx context.Context, targetTs uint64) error {
+	trackers := w.dispatchDMLEventsByTargetTs(targetTs, nil)
+	trackers = append(trackers, w.pendingDMLFlushesUpTo(targetTs, nil)...)
+	return w.waitDMLFlushes(ctx, trackers, "watermark", targetTs)
+}
+
+func (w *writer) dispatchDMLEventsByTargetTs(targetTs uint64, tableIDs map[int64]struct{}) []*dmlFlushTracker {
+	var (
+		total    int
+		trackers []*dmlFlushTracker
 	)
 
-	watermark := w.globalWatermark()
-	resolvedEvents := make([]*commonEvent.DMLEvent, 0)
-	// resolvedGroups records which EventsGroup has flushed events so we can
-	// advance its AppliedWatermark after the flush is fully finished.
-	resolvedGroups := make([]struct {
-		group       *util.EventsGroup
-		maxCommitTs uint64
-	}, 0)
 	for _, p := range w.progresses {
-		for _, group := range p.eventsGroup {
+		for tableID, group := range p.eventsGroup {
+			if tableIDs != nil {
+				if _, ok := tableIDs[tableID]; !ok {
+					continue
+				}
+			}
+			resolvedEvents := make([]*commonEvent.DMLEvent, 0)
 			before := len(resolvedEvents)
-			resolvedEvents = group.ResolveInto(watermark, resolvedEvents)
+			resolvedEvents = group.ResolveInto(targetTs, resolvedEvents)
 			resolvedCount := len(resolvedEvents) - before
 			if resolvedCount == 0 {
 				continue
 			}
 
-			resolvedGroups = append(resolvedGroups, struct {
-				group       *util.EventsGroup
-				maxCommitTs uint64
-			}{
+			tracker := &dmlFlushTracker{
+				tableID:     tableID,
 				group:       group,
 				maxCommitTs: resolvedEvents[len(resolvedEvents)-1].GetCommitTs(),
-			})
+				total:       int64(resolvedCount),
+				done:        make(chan struct{}),
+			}
+			w.trackDMLFlush(tracker)
+			trackers = append(trackers, tracker)
 			total += resolvedCount
+
+			for _, e := range resolvedEvents {
+				e.AddPostFlushFunc(func() {
+					if tracker.flushed.Inc() == tracker.total {
+						w.mu.Lock()
+						if tracker.maxCommitTs > tracker.group.AppliedWatermark {
+							tracker.group.AppliedWatermark = tracker.maxCommitTs
+						}
+						w.mu.Unlock()
+						close(tracker.done)
+					}
+				})
+				w.mysqlSink.AddDMLEvent(e)
+				log.Debug("dispatch DML event", zap.Int64("tableID", e.GetTableID()),
+					zap.Uint64("commitTs", e.GetCommitTs()), zap.Any("startTs", e.GetStartTs()))
+			}
 		}
 	}
-	if total == 0 {
+
+	if total > 0 {
+		log.Info("dispatch DML events by watermark", zap.Uint64("watermark", targetTs), zap.Int("total", total))
+	}
+	return trackers
+}
+
+func (w *writer) trackDMLFlush(tracker *dmlFlushTracker) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.pendingDMLFlushes = append(w.pendingDMLFlushes, tracker)
+}
+
+func (w *writer) pendingDMLFlushesUpTo(targetTs uint64, tableIDs map[int64]struct{}) []*dmlFlushTracker {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	trackers := make([]*dmlFlushTracker, 0)
+	for _, tracker := range w.pendingDMLFlushes {
+		if tracker.maxCommitTs > targetTs {
+			continue
+		}
+		if tableIDs != nil {
+			if _, ok := tableIDs[tracker.tableID]; !ok {
+				continue
+			}
+		}
+		trackers = append(trackers, tracker)
+	}
+	return trackers
+}
+
+func (w *writer) cleanupDoneDMLFlushes() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	remaining := w.pendingDMLFlushes[:0]
+	for _, tracker := range w.pendingDMLFlushes {
+		select {
+		case <-tracker.done:
+		default:
+			remaining = append(remaining, tracker)
+		}
+	}
+	clear(w.pendingDMLFlushes[len(remaining):])
+	w.pendingDMLFlushes = remaining
+}
+
+func (w *writer) waitDMLFlushes(
+	ctx context.Context,
+	trackers []*dmlFlushTracker,
+	reason string,
+	targetTs uint64,
+) error {
+	if len(trackers) == 0 {
 		return nil
 	}
-	for _, e := range resolvedEvents {
-		e.AddPostFlushFunc(func() {
-			if flushed.Inc() == int64(total) {
-				close(done)
-			}
-		})
-		w.mysqlSink.AddDMLEvent(e)
-		log.Debug("flush DML event", zap.Int64("tableID", e.GetTableID()),
-			zap.Uint64("commitTs", e.GetCommitTs()), zap.Any("startTs", e.GetStartTs()))
+	seen := make(map[*dmlFlushTracker]struct{}, len(trackers))
+	uniqueTrackers := trackers[:0]
+	var total int64
+	for _, tracker := range trackers {
+		if _, ok := seen[tracker]; ok {
+			continue
+		}
+		seen[tracker] = struct{}{}
+		uniqueTrackers = append(uniqueTrackers, tracker)
+		total += tracker.total
 	}
 
-	log.Info("flush DML events by watermark", zap.Uint64("watermark", watermark), zap.Int("total", total))
+	log.Info("wait DML events flushed", zap.String("reason", reason), zap.Uint64("targetTs", targetTs),
+		zap.Int("groups", len(uniqueTrackers)), zap.Int64("total", total))
 	start := time.Now()
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return context.Cause(ctx)
-		case <-done:
-			log.Info("flush DML events done", zap.Uint64("watermark", watermark),
-				zap.Int("total", total), zap.Duration("duration", time.Since(start)))
-			for _, item := range resolvedGroups {
-				if item.maxCommitTs > item.group.AppliedWatermark {
-					item.group.AppliedWatermark = item.maxCommitTs
+
+	for _, tracker := range uniqueTrackers {
+		for {
+			select {
+			case <-ctx.Done():
+				return context.Cause(ctx)
+			case <-tracker.done:
+				goto nextTracker
+			case <-ticker.C:
+				var flushed int64
+				for _, item := range uniqueTrackers {
+					flushed += item.flushed.Load()
 				}
+				log.Warn("DML events cannot be flushed in time", zap.String("reason", reason),
+					zap.Uint64("targetTs", targetTs), zap.Int64("total", total), zap.Int64("flushed", flushed))
 			}
-			return nil
-		case <-ticker.C:
-			log.Warn("DML events cannot be flushed in time", zap.Uint64("watermark", watermark),
-				zap.Int("total", total), zap.Int64("flushed", flushed.Load()))
+		}
+	nextTracker:
+	}
+
+	log.Info("DML events flushed", zap.String("reason", reason), zap.Uint64("targetTs", targetTs),
+		zap.Int64("total", total), zap.Duration("duration", time.Since(start)))
+	w.cleanupDoneDMLFlushes()
+	return nil
+}
+
+func (w *writer) flushDDLEventsUpTo(ctx context.Context, targetTs uint64) {
+	if len(w.ddlList) > 1 {
+		sort.SliceStable(w.ddlList, func(i, j int) bool {
+			return w.ddlList[i].GetCommitTs() < w.ddlList[j].GetCommitTs()
+		})
+	}
+	remaining := make([]*commonEvent.DDLEvent, 0, len(w.ddlList))
+	for _, ddl := range w.ddlList {
+		if ddl.GetCommitTs() > targetTs {
+			remaining = append(remaining, ddl)
+			continue
+		}
+		if err := w.flushDDLEvent(ctx, ddl); err != nil {
+			log.Panic("write DDL event failed", zap.Error(err),
+				zap.String("DDL", ddl.Query), zap.Uint64("commitTs", ddl.GetCommitTs()))
 		}
 	}
+	w.ddlList = remaining
+}
+
+func (w *writer) maybeFlushConsumerSyncpoint(ctx context.Context, watermark uint64) (bool, error) {
+	if !w.syncpointEnabled || w.consumerSyncpointStore == nil || w.syncpointInterval <= 0 || watermark == 0 {
+		return false, nil
+	}
+	if w.nextSyncpointTs == 0 {
+		w.nextSyncpointTs = calculateFloorAlignedSyncpointTs(watermark, w.syncpointInterval)
+		if w.nextSyncpointTs == 0 {
+			return false, nil
+		}
+	}
+	flushed := false
+	for w.nextSyncpointTs != 0 && w.nextSyncpointTs <= watermark {
+		targetTs := w.nextSyncpointTs
+		if targetTs <= w.lastSyncedSyncpointTs {
+			w.nextSyncpointTs = nextAlignedSyncpointTs(targetTs, w.syncpointInterval)
+			continue
+		}
+		w.flushDDLEventsUpTo(ctx, targetTs)
+		trackers := w.dispatchDMLEventsByTargetTs(targetTs, nil)
+		trackers = append(trackers, w.pendingDMLFlushesUpTo(targetTs, nil)...)
+		if err := w.waitDMLFlushes(ctx, trackers, "consumer syncpoint", targetTs); err != nil {
+			return false, err
+		}
+		if err := w.consumerSyncpointStore.Write(ctx, targetTs); err != nil {
+			return false, err
+		}
+		flushed = true
+		w.lastSyncedSyncpointTs = targetTs
+		w.nextSyncpointTs = nextAlignedSyncpointTs(targetTs, w.syncpointInterval)
+		log.Info("consumer syncpoint flushed",
+			zap.Uint64("syncpointTs", targetTs),
+			zap.Uint64("nextSyncpointTs", w.nextSyncpointTs))
+	}
+	return flushed, nil
 }
 
 // WriteMessage is to decode kafka message to event.
@@ -475,6 +601,14 @@ func (w *writer) Write(ctx context.Context, messageType common.MessageType) bool
 	}
 
 	watermark := w.globalWatermark()
+	consumerSyncpointFlushed := false
+	if messageType == common.MessageTypeResolved && w.syncpointEnabled {
+		var err error
+		consumerSyncpointFlushed, err = w.maybeFlushConsumerSyncpoint(ctx, watermark)
+		if err != nil {
+			log.Panic("flush consumer syncpoint failed", zap.Error(err), zap.Uint64("watermark", watermark))
+		}
+	}
 	ddlList := make([]*commonEvent.DDLEvent, 0)
 	for i, todoDDL := range w.ddlList {
 		// DDL ordering must follow commitTs (see appendDDL). Traditionally we wait until the global
@@ -516,10 +650,18 @@ func (w *writer) Write(ctx context.Context, messageType common.MessageType) bool
 	}
 
 	if messageType == common.MessageTypeResolved {
-		// since watermark is broadcast to all partitions, so that each partition can flush events individually.
-		err := w.flushDMLEventsByWatermark(ctx)
-		if err != nil {
-			log.Panic("flush dml events by the watermark failed", zap.Error(err))
+		// With consumer syncpoint enabled, normal resolved events should keep the
+		// consumer moving: dispatch DMLs to the sink and only wait at aligned
+		// syncpoint barriers. Without syncpoint, keep the historical behavior so
+		// offset commits only happen after DMLs are flushed.
+		if w.syncpointEnabled {
+			w.dispatchDMLEventsByTargetTs(watermark, nil)
+		} else {
+			// since watermark is broadcast to all partitions, so that each partition can flush events individually.
+			err := w.flushDMLEventsByWatermark(ctx)
+			if err != nil {
+				log.Panic("flush dml events by the watermark failed", zap.Error(err))
+			}
 		}
 	}
 
@@ -531,7 +673,38 @@ func (w *writer) Write(ctx context.Context, messageType common.MessageType) bool
 			zap.Int("length", len(w.ddlList)))
 		return false
 	}
+	if messageType == common.MessageTypeResolved && w.syncpointEnabled {
+		return consumerSyncpointFlushed
+	}
 	return true
+}
+
+func calculateAlignedSyncpointTs(ts uint64, interval time.Duration, skipSyncpointAtTs bool) uint64 {
+	if interval <= 0 {
+		return 0
+	}
+	k := oracle.GetTimeFromTS(ts).Sub(time.Unix(0, 0)) / interval
+	if oracle.GetTimeFromTS(ts).Sub(time.Unix(0, 0))%interval != 0 || oracle.ExtractLogical(ts) != 0 {
+		k++
+	} else if skipSyncpointAtTs {
+		k++
+	}
+	return oracle.GoTimeToTS(time.Unix(0, 0).Add(k * interval))
+}
+
+func nextAlignedSyncpointTs(ts uint64, interval time.Duration) uint64 {
+	return calculateAlignedSyncpointTs(ts, interval, true)
+}
+
+func calculateFloorAlignedSyncpointTs(ts uint64, interval time.Duration) uint64 {
+	if interval <= 0 {
+		return 0
+	}
+	k := oracle.GetTimeFromTS(ts).Sub(time.Unix(0, 0)) / interval
+	if k <= 0 {
+		return 0
+	}
+	return oracle.GoTimeToTS(time.Unix(0, 0).Add(k * interval))
 }
 
 func (w *writer) onDDL(ddl *commonEvent.DDLEvent) {
@@ -600,25 +773,29 @@ func (w *writer) appendRow2Group(dml *commonEvent.DMLEvent, progress *partitionP
 		group = util.NewEventsGroup(progress.partition, tableID)
 		progress.eventsGroup[tableID] = group
 	}
+	w.mu.Lock()
+	appliedWatermark := group.AppliedWatermark
+	highWatermark := group.HighWatermark
+	w.mu.Unlock()
 	// IMPORTANT: Kafka offsets are append-only, but CommitTs can go backwards after
 	// a TiCDC restart/retry (at-least-once replay). We must not drop such events
 	// solely based on a "seen" watermark (e.g. HighWatermark). The only safe
 	// ignore condition is "already flushed to downstream".
-	if commitTs <= group.AppliedWatermark {
+	if commitTs <= appliedWatermark {
 		log.Warn("DML event replayed after applied, ignore it",
 			zap.Int64("tableID", tableID), zap.Int32("partition", group.Partition),
 			zap.Uint64("commitTs", commitTs), zap.Any("offset", offset),
-			zap.Uint64("appliedWatermark", group.AppliedWatermark), zap.Uint64("highWatermark", group.HighWatermark),
+			zap.Uint64("appliedWatermark", appliedWatermark), zap.Uint64("highWatermark", highWatermark),
 			zap.Uint64("partitionWatermark", progress.watermark), zap.Any("watermarkOffset", progress.watermarkOffset),
 			zap.String("schema", schema), zap.String("table", table), zap.Any("protocol", w.protocol))
 		return
 	}
-	forceInsert := commitTs < group.HighWatermark || commitTs < progress.watermark || w.enableTableAcrossNodes
+	forceInsert := commitTs < highWatermark || commitTs < progress.watermark || w.enableTableAcrossNodes
 	if forceInsert {
 		log.Warn("DML event commit ts fallback, append with forceInsert",
 			zap.Int32("partition", group.Partition), zap.Any("offset", offset),
-			zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", group.HighWatermark),
-			zap.Uint64("appliedWatermark", group.AppliedWatermark),
+			zap.Uint64("commitTs", commitTs), zap.Uint64("highWatermark", highWatermark),
+			zap.Uint64("appliedWatermark", appliedWatermark),
 			zap.Uint64("partitionWatermark", progress.watermark), zap.Any("watermarkOffset", progress.watermarkOffset),
 			zap.String("schema", schema), zap.String("table", table), zap.Int64("tableID", tableID),
 			zap.Stringer("eventType", dml.RowTypes[0]), zap.Any("protocol", w.protocol),

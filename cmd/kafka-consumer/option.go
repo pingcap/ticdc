@@ -18,6 +18,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/cmd/util"
@@ -56,6 +57,10 @@ type option struct {
 	upstreamTiDBDSN string
 
 	enableTableAcrossNodes bool
+
+	enableSyncpoint    bool
+	syncpointInterval  time.Duration
+	syncpointRetention time.Duration
 }
 
 func newOption() *option {
@@ -161,6 +166,10 @@ func (o *option) Adjust(upstreamURIStr string, configFile string) {
 		o.codecConfig.AvroEnableWatermark = true
 	}
 	o.enableTableAcrossNodes = putil.GetOrZero(replicaConfig.Scheduler.EnableTableAcrossNodes)
+	if o.enableSyncpoint && o.syncpointInterval <= 0 {
+		log.Panic("syncpoint interval must be positive when syncpoint is enabled",
+			zap.Duration("syncpointInterval", o.syncpointInterval))
+	}
 
 	log.Info("consumer option adjusted",
 		zap.String("address", strings.Join(o.address, ",")),
@@ -173,5 +182,8 @@ func (o *option) Adjust(upstreamURIStr string, configFile string) {
 		zap.Int("maxBatchSize", o.maxBatchSize),
 		zap.String("configFile", configFile),
 		zap.String("upstreamURI", upstreamURI.String()),
-		zap.String("downstreamURI", o.downstreamURI))
+		zap.String("downstreamURI", o.downstreamURI),
+		zap.Bool("enableSyncpoint", o.enableSyncpoint),
+		zap.Duration("syncpointInterval", o.syncpointInterval),
+		zap.Duration("syncpointRetention", o.syncpointRetention))
 }
