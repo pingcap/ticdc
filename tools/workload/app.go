@@ -30,12 +30,14 @@ import (
 	pbank "workload/schema/bank"
 	pbank2 "workload/schema/bank2"
 	pbank3 "workload/schema/bank3"
+	pbank4 "workload/schema/bank4"
 	"workload/schema/bankupdate"
 	pcrawler "workload/schema/crawler"
 	pdc "workload/schema/dc"
 	"workload/schema/largerow"
 	"workload/schema/shop"
 	psysbench "workload/schema/sysbench"
+	ptableinfosharing "workload/schema/table_info_sharing"
 	puuu "workload/schema/uuu"
 	pwidetablewithjson "workload/schema/wide_table_with_json"
 )
@@ -81,8 +83,10 @@ const (
 	crawler           = "crawler"
 	bank2             = "bank2"
 	bank3             = "bank3"
+	bank4             = "bank4"
 	bankUpdate        = "bank_update"
 	dc                = "dc"
+	tableInfoSharing  = "table_info_sharing"
 	wideTableWithJSON = "wide_table_with_json"
 )
 
@@ -140,10 +144,14 @@ func (app *WorkloadApp) createWorkload() schema.Workload {
 		workload = pbank2.NewBank2Workload()
 	case bank3:
 		workload = pbank3.NewBankWorkload(app.Config.Partitioned)
+	case bank4:
+		workload = pbank4.NewBankWorkload(app.Config.Partitioned)
 	case bankUpdate:
 		workload = bankupdate.NewBankUpdateWorkload(app.Config.TotalRowCount, app.Config.UpdateLargeColumnSize)
 	case dc:
 		workload = pdc.NewDCWorkload()
+	case tableInfoSharing:
+		workload = ptableinfosharing.NewTableInfoSharingWorkload(app.Config.TableCount, app.Config.TableStartIndex)
 	case wideTableWithJSON:
 		workload = pwidetablewithjson.NewWideTableWithJSONWorkload(app.Config.RowSize, app.Config.TableCount, app.Config.TableStartIndex, app.Config.TotalRowCount)
 	default:
