@@ -14,6 +14,7 @@
 package maintainer
 
 import (
+	"github.com/pingcap/ticdc/downstreamadapter/routing"
 	"testing"
 	"time"
 

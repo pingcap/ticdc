@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/routing"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/maintainer/operator"
@@ -99,6 +100,14 @@ func (c *Controller) FinishBootstrap(
 	tables, err := c.loadTables(startTs)
 	if err != nil {
 		log.Error("load table from scheme store failed",
+			zap.String("changefeed", c.changefeedID.Name()),
+			zap.Error(err))
+		return nil, errors.Trace(err)
+	}
+
+	// Step 2.5: Initialize route router and target registry
+	if err := c.initializeRouteRegistry(tables, startTs); err != nil {
+		log.Error("initialize route registry failed",
 			zap.String("changefeed", c.changefeedID.Name()),
 			zap.Error(err))
 		return nil, errors.Trace(err)
@@ -364,9 +373,9 @@ func (c *Controller) initializeComponents(
 ) {
 	// Initialize barrier
 	if c.enableRedo {
-		c.redoBarrier = NewBarrier(c.redoSpanController, c.redoOperatorController, util.GetOrZero(c.replicaConfig.Scheduler.EnableTableAcrossNodes), allNodesResp, common.RedoMode)
+		c.redoBarrier = NewBarrier(c.redoSpanController, c.redoOperatorController, util.GetOrZero(c.replicaConfig.Scheduler.EnableTableAcrossNodes), allNodesResp, common.RedoMode, c.routeRouter, c.targetRegistry, c.routeEnabled)
 	}
-	c.barrier = NewBarrier(c.spanController, c.operatorController, util.GetOrZero(c.replicaConfig.Scheduler.EnableTableAcrossNodes), allNodesResp, common.DefaultMode)
+	c.barrier = NewBarrier(c.spanController, c.operatorController, util.GetOrZero(c.replicaConfig.Scheduler.EnableTableAcrossNodes), allNodesResp, common.DefaultMode, c.routeRouter, c.targetRegistry, c.routeEnabled)
 
 	// Start scheduler
 	c.taskHandlesMu.Lock()
@@ -453,6 +462,98 @@ func addToWorkingTaskMap(
 }
 
 // findHoles returns an array of Span that are not covered in the range
+// initializeRouteRegistry constructs the route router and TargetTableRegistry
+// from the current set of tables. If no dispatch rules contain routing targets,
+// the registry stays nil (routeEnabled = false).
+func (c *Controller) initializeRouteRegistry(tables []commonEvent.Table, startTs uint64) error {
+	if c.replicaConfig == nil || c.replicaConfig.Sink == nil {
+		return nil
+	}
+	rules := c.replicaConfig.Sink.DispatchRules
+	if len(rules) == 0 {
+		return nil
+	}
+
+	// Check if any rules actually configure table routing.
+	hasRouteRules := false
+	for _, r := range rules {
+		if r.TargetSchema != "" || r.TargetTable != "" {
+			hasRouteRules = true
+			break
+		}
+	}
+	if !hasRouteRules {
+		return nil
+	}
+
+	caseSensitive := util.GetOrZero(c.replicaConfig.CaseSensitive)
+	router, err := routing.NewRouter(c.changefeedID, caseSensitive, rules)
+	if err != nil {
+		return err
+	}
+	c.routeRouter = router
+
+	bindings, err := c.buildRouteBindingsFromTables(tables, startTs)
+	if err != nil {
+		return err
+	}
+
+	c.targetRegistry, err = routing.NewTargetTableRegistry(bindings)
+	if err != nil {
+		return err
+	}
+	c.routeEnabled = true
+
+	log.Info("route registry initialized",
+		zap.String("changefeed", c.changefeedID.Name()),
+		zap.Int("bindingCount", len(bindings)),
+		zap.Int("routeRuleCount", len(rules)))
+	return nil
+}
+
+// buildRouteBindingsFromTables constructs a RouteBinding for each table
+// using the route router and schema store.
+func (c *Controller) buildRouteBindingsFromTables(
+	tables []commonEvent.Table,
+	startTs uint64,
+) ([]routing.RouteBinding, error) {
+	schemaStore := appcontext.GetService[schemastore.SchemaStore](appcontext.SchemaStore)
+	bindings := make([]routing.RouteBinding, 0, len(tables))
+	for _, t := range tables {
+		tableInfo, err := schemaStore.GetTableInfo(c.keyspaceMeta, t.TableID, startTs)
+		if err != nil {
+			log.Warn("failed to get table info for route binding, skipping",
+				zap.String("changefeed", c.changefeedID.Name()),
+				zap.Int64("tableID", t.TableID),
+				zap.Error(err))
+			continue
+		}
+		sourceSchema := tableInfo.GetSchemaName()
+		sourceTable := tableInfo.GetTableName()
+		result, routeErr := c.routeRouter.RouteName(sourceSchema, sourceTable)
+		if routeErr != nil {
+			return nil, routeErr
+		}
+		binding := routing.RouteBinding{
+			Source: routing.SourceKey{
+				LogicalTableID: tableInfo.TableName.TableID,
+				Schema:         sourceSchema,
+				Table:          sourceTable,
+			},
+			ReplicaTableID: t.TableID,
+			SourceSchemaID: t.SchemaID,
+			Target: routing.TargetKey{
+				Schema: result.TargetSchema,
+				Table:  result.TargetTable,
+			},
+			RuleIndex: result.RuleIndex,
+			Matcher:   result.Matcher,
+		}
+		bindings = append(bindings, binding)
+	}
+	return bindings, nil
+}
+
 func findHoles(currentSpan utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication], totalSpan *heartbeatpb.TableSpan) []*heartbeatpb.TableSpan {
 	lastSpan := &heartbeatpb.TableSpan{
 		TableID:    totalSpan.TableID,

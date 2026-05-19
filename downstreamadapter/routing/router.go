@@ -35,11 +35,23 @@ const (
 	TablePlaceholder = "{table}"
 )
 
+// RouteResult carries the outcome of routing a source schema/table pair.
+type RouteResult struct {
+	SourceSchema string
+	SourceTable  string
+	TargetSchema string
+	TargetTable  string
+	Changed      bool
+	RuleIndex    int
+	Matcher      []string
+}
+
 // rule represents a single routing rule.
 type rule struct {
 	filter           tfilter.Filter
 	targetSchemaExpr string
 	targetTableExpr  string
+	matcher          []string
 }
 
 // Router is used to support the table route functionality,
@@ -77,6 +89,7 @@ func NewRouter(
 			filter:           f,
 			targetSchemaExpr: r.TargetSchema,
 			targetTableExpr:  r.TargetTable,
+			matcher:          r.Matcher,
 		})
 	}
 
@@ -84,6 +97,95 @@ func NewRouter(
 		changefeedID: changefeedID,
 		rules:        routingRules,
 	}, nil
+}
+
+// RouteName returns the routing result for the given source schema and table,
+// including which rule matched (RuleIndex = -1 when no rule matches).
+func (r Router) RouteName(schema, table string) (RouteResult, error) {
+	if len(r.rules) == 0 {
+		return RouteResult{
+			SourceSchema: schema,
+			SourceTable:  table,
+			TargetSchema: schema,
+			TargetTable:  table,
+			Changed:      false,
+			RuleIndex:    -1,
+		}, nil
+	}
+
+	targetSchema, targetTable, changed, ruleIndex, matcher, err := r.routeWithRuleInfo(schema, table)
+	if err != nil {
+		return RouteResult{}, err
+	}
+	return RouteResult{
+		SourceSchema: schema,
+		SourceTable:  table,
+		TargetSchema: targetSchema,
+		TargetTable:  targetTable,
+		Changed:      changed,
+		RuleIndex:    ruleIndex,
+		Matcher:      matcher,
+	}, nil
+}
+
+// routeWithRuleInfo is like route but also returns the matched rule index and matcher.
+func (r Router) routeWithRuleInfo(originSchema, originTable string) (targetSchema, targetTable string, changed bool, ruleIndex int, matcher []string, err error) {
+	if originSchema == "" {
+		return originSchema, originTable, false, -1, nil, nil
+	}
+
+	matched, idx, err := r.matchRuleWithIndex(originSchema, originTable)
+	if err != nil {
+		return "", "", false, -1, nil, err
+	}
+	if matched == nil {
+		return originSchema, originTable, false, -1, nil, nil
+	}
+
+	targetSchema = substituteExpression(matched.targetSchemaExpr, originSchema, originTable, originSchema)
+	if originTable == "" {
+		return targetSchema, "", targetSchema != originSchema, idx, matched.matcher, nil
+	}
+
+	targetTable = substituteExpression(matched.targetTableExpr, originSchema, originTable, originTable)
+	return targetSchema, targetTable, targetSchema != originSchema || targetTable != originTable, idx, matched.matcher, nil
+}
+
+// matchRuleWithIndex finds the first matching rule and returns it along with its index.
+func (r Router) matchRuleWithIndex(schema, table string) (*rule, int, error) {
+	if table == "" {
+		var (
+			matched      *rule
+			targetSchema string
+			matchedIdx   = -1
+		)
+		for i := range r.rules {
+			if !r.rules[i].filter.MatchSchema(schema) {
+				continue
+			}
+
+			currentTargetSchema := substituteExpression(r.rules[i].targetSchemaExpr, schema, "", schema)
+			if matched == nil {
+				matched = &r.rules[i]
+				targetSchema = currentTargetSchema
+				matchedIdx = i
+				continue
+			}
+			if currentTargetSchema != targetSchema {
+				return nil, -1, errors.ErrTableRoutingFailed.GenWithStack(
+					"ambiguous schema routing for schema %s: target schema %s conflicts with %s",
+					schema, currentTargetSchema, targetSchema)
+			}
+		}
+		return matched, matchedIdx, nil
+	}
+
+	for i := range r.rules {
+		if r.rules[i].filter.MatchTable(schema, table) {
+			return &r.rules[i], i, nil
+		}
+	}
+	return nil, -1, nil
 }
 
 // ApplyToTableInfo returns the original TableInfo unless routing changes the target name.
@@ -323,4 +425,56 @@ func substituteExpression(expr, sourceSchema, sourceTable, defaultValue string) 
 	result = strings.ReplaceAll(result, SchemaPlaceholder, sourceSchema)
 	result = strings.ReplaceAll(result, TablePlaceholder, sourceTable)
 	return result
+}
+
+// ValidateNoStaticRouteConflict checks whether the given tableInfos would produce
+// any route conflicts under the provided dispatch rules. It returns ErrTableRouteConflict
+// on the first conflict found, or nil when there is no conflict.
+func ValidateNoStaticRouteConflict(
+	changefeedID common.ChangeFeedID,
+	caseSensitive bool,
+	rules []*config.DispatchRule,
+	tableInfos []*common.TableInfo,
+) error {
+	router, err := NewRouter(changefeedID, caseSensitive, rules)
+	if err != nil {
+		return err
+	}
+
+	registry := &TargetTableRegistry{
+		ownerSources: make(map[TargetKey]SourceKey),
+		bindings:     make(map[int64]RouteBinding, len(tableInfos)),
+		bySourceID:   make(map[int64]map[int64]struct{}),
+		bySchemaID:   make(map[int64]map[int64]struct{}),
+	}
+
+	for _, ti := range tableInfos {
+		if ti == nil {
+			continue
+		}
+		result, routeErr := router.RouteName(ti.GetSchemaName(), ti.GetTableName())
+		if routeErr != nil {
+			return routeErr
+		}
+		binding := RouteBinding{
+			Source: SourceKey{
+				LogicalTableID: ti.TableName.TableID,
+				Schema:         ti.GetSchemaName(),
+				Table:          ti.GetTableName(),
+			},
+			ReplicaTableID: ti.TableName.TableID,
+			SourceSchemaID: 0, // static check uses TableID as ReplicaTableID
+			Target: TargetKey{
+				Schema: result.TargetSchema,
+				Table:  result.TargetTable,
+			},
+			RuleIndex: result.RuleIndex,
+			Matcher:   result.Matcher,
+		}
+		if err := registry.ValidateAdd(binding); err != nil {
+			return err
+		}
+		registry.unsafeInsert(binding)
+	}
+	return nil
 }

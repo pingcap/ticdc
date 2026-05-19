@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/routing"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/operator"
 	"github.com/pingcap/ticdc/maintainer/span"
@@ -46,6 +47,11 @@ type Barrier struct {
 	// (common.DefaultMode or common.RedoMode). Barrier state, resend messages,
 	// and logs must stay in the same mode.
 	mode int64
+
+	// Table route conflict detection
+	routeRouter    routing.Router
+	targetRegistry *routing.TargetTableRegistry
+	routeEnabled   bool
 }
 
 // NewBarrier create a new barrier for the changefeed
@@ -54,6 +60,9 @@ func NewBarrier(spanController *span.Controller,
 	splitTableEnabled bool,
 	bootstrapRespMap map[node.ID]*heartbeatpb.MaintainerBootstrapResponse,
 	mode int64,
+	routeRouter routing.Router,
+	targetRegistry *routing.TargetTableRegistry,
+	routeEnabled bool,
 ) *Barrier {
 	barrier := Barrier{
 		blockedEvents:      NewBlockEventMap(),
@@ -62,6 +71,9 @@ func NewBarrier(spanController *span.Controller,
 		operatorController: operatorController,
 		splitTableEnabled:  splitTableEnabled,
 		mode:               mode,
+		routeRouter:        routeRouter,
+		targetRegistry:     targetRegistry,
+		routeEnabled:       routeEnabled,
 	}
 	barrier.handleBootstrapResponse(bootstrapRespMap)
 	return &barrier
@@ -195,7 +207,7 @@ func (b *Barrier) handleBootstrapResponse(bootstrapRespMap map[node.ID]*heartbea
 			key := getEventKey(blockState.BlockTs, blockState.IsSyncPoint)
 			event, ok := b.blockedEvents.Get(key)
 			if !ok {
-				event = NewBlockEvent(common.NewChangefeedIDFromPB(resp.ChangefeedID), common.NewDispatcherIDFromPB(span.ID), b.spanController, b.operatorController, blockState, b.splitTableEnabled, b.mode)
+				event = NewBlockEvent(common.NewChangefeedIDFromPB(resp.ChangefeedID), common.NewDispatcherIDFromPB(span.ID), b.spanController, b.operatorController, blockState, b.splitTableEnabled, b.mode, b.routeRouter, b.targetRegistry, b.routeEnabled)
 				b.blockedEvents.Set(key, event)
 			}
 			switch blockState.Stage {
@@ -452,7 +464,7 @@ func (b *Barrier) getOrInsertNewEvent(changefeedID common.ChangeFeedID, dispatch
 ) *BarrierEvent {
 	event, ok := b.blockedEvents.Get(key)
 	if !ok {
-		event = NewBlockEvent(changefeedID, dispatcherID, b.spanController, b.operatorController, blockState, b.splitTableEnabled, b.mode)
+		event = NewBlockEvent(changefeedID, dispatcherID, b.spanController, b.operatorController, blockState, b.splitTableEnabled, b.mode, b.routeRouter, b.targetRegistry, b.routeEnabled)
 		b.blockedEvents.Set(key, event)
 	}
 	return event

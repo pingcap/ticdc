@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/routing"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/operator"
 	"github.com/pingcap/ticdc/maintainer/replica"
@@ -76,6 +77,11 @@ type Controller struct {
 	// maintainer and is shared by drain-aware schedulers so each tick reads a
 	// consistent host/target snapshot.
 	drainState *mscheduler.DrainState
+
+	// Table route conflict detection
+	routeRouter    routing.Router
+	targetRegistry *routing.TargetTableRegistry
+	routeEnabled   bool
 }
 
 func NewController(changefeedID common.ChangeFeedID,
