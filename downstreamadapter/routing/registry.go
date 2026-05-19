@@ -15,6 +15,7 @@ package routing
 
 import (
 	"fmt"
+	"maps"
 	"sort"
 
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -281,17 +282,13 @@ func (r *TargetTableRegistry) clone() *TargetTableRegistry {
 
 func (r *TargetTableRegistry) cloneOwnerSources() map[TargetKey]SourceKey {
 	m := make(map[TargetKey]SourceKey, len(r.ownerSources))
-	for k, v := range r.ownerSources {
-		m[k] = v
-	}
+	maps.Copy(m, r.ownerSources)
 	return m
 }
 
 func (r *TargetTableRegistry) cloneBindings() map[int64]RouteBinding {
 	m := make(map[int64]RouteBinding, len(r.bindings))
-	for k, v := range r.bindings {
-		m[k] = v
-	}
+	maps.Copy(m, r.bindings)
 	return m
 }
 
@@ -319,15 +316,15 @@ func (r *TargetTableRegistry) cloneSchemaIndex() map[int64]map[int64]struct{} {
 	return m
 }
 
-// TableRouteConflictArgs carries structured conflict details.
-type TableRouteConflictArgs struct {
+// TableRouteConflictError carries structured conflict details.
+type TableRouteConflictError struct {
 	Target   TargetKey
 	Existing RouteBinding
 	Incoming RouteBinding
 }
 
 // Error implements the error interface with a human-readable conflict message.
-func (a *TableRouteConflictArgs) Error() string {
+func (a *TableRouteConflictError) Error() string {
 	return fmt.Sprintf(
 		"table route conflict: "+
 			"target `%s`.`%s` is mapped by both "+
@@ -345,7 +342,7 @@ func (a *TableRouteConflictArgs) Error() string {
 
 func newConflictError(existing, incoming RouteBinding) error {
 	return errors.ErrTableRouteConflict.GenWithStackByArgs(
-		&TableRouteConflictArgs{
+		&TableRouteConflictError{
 			Target:   existing.Target,
 			Existing: existing,
 			Incoming: incoming,

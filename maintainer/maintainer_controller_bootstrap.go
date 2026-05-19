@@ -373,9 +373,9 @@ func (c *Controller) initializeComponents(
 ) {
 	// Initialize barrier
 	if c.enableRedo {
-		c.redoBarrier = NewBarrier(c.redoSpanController, c.redoOperatorController, util.GetOrZero(c.replicaConfig.Scheduler.EnableTableAcrossNodes), allNodesResp, common.RedoMode, c.routeRouter, c.targetRegistry, c.routeEnabled)
+		c.redoBarrier = NewBarrier(c.redoSpanController, c.redoOperatorController, util.GetOrZero(c.replicaConfig.Scheduler.EnableTableAcrossNodes), allNodesResp, common.RedoMode, c.routeRouter, c.targetRegistry, c.routeEnabled, c.keyspaceMeta)
 	}
-	c.barrier = NewBarrier(c.spanController, c.operatorController, util.GetOrZero(c.replicaConfig.Scheduler.EnableTableAcrossNodes), allNodesResp, common.DefaultMode, c.routeRouter, c.targetRegistry, c.routeEnabled)
+	c.barrier = NewBarrier(c.spanController, c.operatorController, util.GetOrZero(c.replicaConfig.Scheduler.EnableTableAcrossNodes), allNodesResp, common.DefaultMode, c.routeRouter, c.targetRegistry, c.routeEnabled, c.keyspaceMeta)
 
 	// Start scheduler
 	c.taskHandlesMu.Lock()

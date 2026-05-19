@@ -90,6 +90,7 @@ type BarrierEvent struct {
 	routeEnabled      bool
 	routeTransition   *RouteTransition
 	routePrecheckDone bool
+	keyspaceMeta      common.KeyspaceMeta
 }
 
 func NewBlockEvent(cfID common.ChangeFeedID,
@@ -102,6 +103,7 @@ func NewBlockEvent(cfID common.ChangeFeedID,
 	routeRouter routing.Router,
 	targetRegistry *routing.TargetTableRegistry,
 	routeEnabled bool,
+	keyspaceMeta common.KeyspaceMeta,
 ) *BarrierEvent {
 	event := &BarrierEvent{
 		cfID:               cfID,
@@ -130,6 +132,7 @@ func NewBlockEvent(cfID common.ChangeFeedID,
 		routeRouter:    routeRouter,
 		targetRegistry: targetRegistry,
 		routeEnabled:   routeEnabled,
+		keyspaceMeta:   keyspaceMeta,
 	}
 
 	if status.BlockTables != nil {
@@ -276,7 +279,7 @@ func (be *BarrierEvent) buildRouteBindingForTable(
 	tableID int64,
 	schemaIDHint int64,
 ) (*routing.RouteBinding, error) {
-	tableInfo, err := schemaStore.GetTableInfo(common.KeyspaceMeta{}, tableID, be.commitTs)
+	tableInfo, err := schemaStore.GetTableInfo(be.keyspaceMeta, tableID, be.commitTs)
 	if err != nil {
 		log.Warn("failed to get table info for route transition, skipping",
 			zap.String("changefeed", be.cfID.Name()),

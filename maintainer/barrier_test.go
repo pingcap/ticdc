@@ -14,11 +14,11 @@
 package maintainer
 
 import (
-	"github.com/pingcap/ticdc/downstreamadapter/routing"
 	"testing"
 	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/routing"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/operator"
 	"github.com/pingcap/ticdc/maintainer/range_checker"
@@ -53,7 +53,7 @@ func TestOneBlockEvent(t *testing.T) {
 	spanController.BindSpanToNode("", "node1", stm)
 	spanController.MarkSpanReplicating(stm)
 
-	barrier := NewBarrier(spanController, operatorController, false, nil, common.DefaultMode, routing.Router{}, nil, false)
+	barrier := NewBarrier(spanController, operatorController, false, nil, common.DefaultMode, routing.Router{}, nil, false, common.KeyspaceMeta{})
 	msgs := barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
 		ChangefeedID: cfID.ToPB(),
 		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
@@ -195,7 +195,7 @@ func TestNormalBlock(t *testing.T) {
 	spanController.MarkSpanReplicating(selectedRep)
 
 	newSpan := &heartbeatpb.Table{TableID: 10, SchemaID: 1}
-	barrier := NewBarrier(spanController, operatorController, false, nil, common.DefaultMode, routing.Router{}, nil, false)
+	barrier := NewBarrier(spanController, operatorController, false, nil, common.DefaultMode, routing.Router{}, nil, false, common.KeyspaceMeta{})
 
 	// first node block request
 	msgs := barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
@@ -358,7 +358,7 @@ func TestNormalBlockWithTableTrigger(t *testing.T) {
 	}
 
 	newSpan := &heartbeatpb.Table{TableID: 10, SchemaID: 1}
-	barrier := NewBarrier(spanController, operatorController, false, nil, common.DefaultMode, routing.Router{}, nil, false)
+	barrier := NewBarrier(spanController, operatorController, false, nil, common.DefaultMode, routing.Router{}, nil, false, common.KeyspaceMeta{})
 
 	// first node block request
 	msgs := barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
@@ -512,7 +512,7 @@ func TestSchemaBlock(t *testing.T) {
 	}
 
 	newTable := &heartbeatpb.Table{TableID: 10, SchemaID: 2}
-	barrier := NewBarrier(spanController, operatorController, true, nil, common.DefaultMode, routing.Router{}, nil, false)
+	barrier := NewBarrier(spanController, operatorController, true, nil, common.DefaultMode, routing.Router{}, nil, false, common.KeyspaceMeta{})
 
 	// first dispatcher  block request
 	msgs := barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
@@ -687,7 +687,7 @@ func TestSyncPointBlock(t *testing.T) {
 	spanController.BindSpanToNode("node1", "node2", selectedRep)
 	spanController.MarkSpanReplicating(selectedRep)
 
-	barrier := NewBarrier(spanController, operatorController, true, nil, common.DefaultMode, routing.Router{}, nil, false)
+	barrier := NewBarrier(spanController, operatorController, true, nil, common.DefaultMode, routing.Router{}, nil, false, common.KeyspaceMeta{})
 	// first dispatcher  block request
 	msgs := barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
 		ChangefeedID: cfID.ToPB(),
@@ -840,7 +840,7 @@ func TestNonBlocked(t *testing.T) {
 		}, "node1", false)
 	spanController := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
 	operatorController := operator.NewOperatorController(cfID, spanController, 1000, common.DefaultMode)
-	barrier := NewBarrier(spanController, operatorController, false, nil, common.DefaultMode, routing.Router{}, nil, false)
+	barrier := NewBarrier(spanController, operatorController, false, nil, common.DefaultMode, routing.Router{}, nil, false, common.KeyspaceMeta{})
 
 	var blockedDispatcherIDS []*heartbeatpb.DispatcherID
 	for id := 1; id < 4; id++ {
@@ -894,7 +894,7 @@ func TestUpdateCheckpointTs(t *testing.T) {
 		}, "node1", false)
 	spanController := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
 	operatorController := operator.NewOperatorController(cfID, spanController, 1000, common.DefaultMode)
-	barrier := NewBarrier(spanController, operatorController, false, nil, common.DefaultMode, routing.Router{}, nil, false)
+	barrier := NewBarrier(spanController, operatorController, false, nil, common.DefaultMode, routing.Router{}, nil, false, common.KeyspaceMeta{})
 	msgs := barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
 		ChangefeedID: cfID.ToPB(),
 		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
@@ -989,7 +989,7 @@ func TestHandleBlockBootstrapResponse(t *testing.T) {
 				},
 			},
 		},
-	}, common.DefaultMode)
+	}, common.DefaultMode, routing.Router{}, nil, false, common.KeyspaceMeta{})
 	event := barrier.blockedEvents.m[getEventKey(6, false)]
 	require.NotNil(t, event)
 	require.False(t, event.selected.Load())
@@ -1027,7 +1027,7 @@ func TestHandleBlockBootstrapResponse(t *testing.T) {
 				},
 			},
 		},
-	}, common.DefaultMode)
+	}, common.DefaultMode, routing.Router{}, nil, false, common.KeyspaceMeta{})
 	event = barrier.blockedEvents.m[getEventKey(6, false)]
 	require.NotNil(t, event)
 	require.True(t, event.selected.Load())
@@ -1064,7 +1064,7 @@ func TestHandleBlockBootstrapResponse(t *testing.T) {
 				},
 			},
 		},
-	}, common.DefaultMode)
+	}, common.DefaultMode, routing.Router{}, nil, false, common.KeyspaceMeta{})
 	event = barrier.blockedEvents.m[getEventKey(6, false)]
 	require.NotNil(t, event)
 	require.True(t, event.selected.Load())
@@ -1092,7 +1092,7 @@ func TestHandleBlockBootstrapResponse(t *testing.T) {
 				},
 			},
 		},
-	}, common.DefaultMode)
+	}, common.DefaultMode, routing.Router{}, nil, false, common.KeyspaceMeta{})
 	event = barrier.blockedEvents.m[getEventKey(6, false)]
 	require.Nil(t, event)
 }
@@ -1110,7 +1110,7 @@ func TestSyncPointBlockPerf(t *testing.T) {
 		}, "node1", false)
 	spanController := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
 	operatorController := operator.NewOperatorController(cfID, spanController, 1000, common.DefaultMode)
-	barrier := NewBarrier(spanController, operatorController, true, nil, common.DefaultMode, routing.Router{}, nil, false)
+	barrier := NewBarrier(spanController, operatorController, true, nil, common.DefaultMode, routing.Router{}, nil, false, common.KeyspaceMeta{})
 	for id := 1; id < 1000; id++ {
 		spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: int64(id)}, 1)
 	}
@@ -1235,7 +1235,7 @@ func TestBarrierEventWithDispatcherReallocation(t *testing.T) {
 	spanController.MarkSpanReplicating(dispatcherC)
 
 	// create barrier
-	barrier := NewBarrier(spanController, operatorController, true, nil, common.DefaultMode, routing.Router{}, nil, false)
+	barrier := NewBarrier(spanController, operatorController, true, nil, common.DefaultMode, routing.Router{}, nil, false, common.KeyspaceMeta{})
 
 	// report from dispatcherA
 	msgs := barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
@@ -1418,7 +1418,7 @@ func TestBarrierEventWithDispatcherScheduling(t *testing.T) {
 	spanController.MarkSpanReplicating(dispatcherA)
 
 	// Create barrier
-	barrier := NewBarrier(spanController, operatorController, true, nil, common.DefaultMode, routing.Router{}, nil, false)
+	barrier := NewBarrier(spanController, operatorController, true, nil, common.DefaultMode, routing.Router{}, nil, false, common.KeyspaceMeta{})
 
 	// Verify dispatcher A is in replicating state
 	require.True(t, spanController.IsReplicating(dispatcherA))
@@ -1544,7 +1544,7 @@ func TestDeferAllDBBlockEventFromDDLDispatcherWhilePendingSchedule(t *testing.T)
 	spanController.BindSpanToNode("", "node1", absents[0])
 	spanController.MarkSpanReplicating(absents[0])
 
-	barrier := NewBarrier(spanController, operatorController, false, nil, common.DefaultMode, routing.Router{}, nil, false)
+	barrier := NewBarrier(spanController, operatorController, false, nil, common.DefaultMode, routing.Router{}, nil, false, common.KeyspaceMeta{})
 
 	// Build a TRUNCATE TABLE-like block event, which requires scheduling and will be enqueued into pendingEvents
 	// when the write action is issued.
@@ -1651,7 +1651,7 @@ func TestBarrierReturnsTemporaryIgnoreForUnreplicatingWaitingStatus(t *testing.T
 	stm := spanController.GetTasksByTableID(1)[0]
 	spanController.BindSpanToNode("", "node1", stm)
 
-	barrier := NewBarrier(spanController, operatorController, false, nil, common.DefaultMode, routing.Router{}, nil, false)
+	barrier := NewBarrier(spanController, operatorController, false, nil, common.DefaultMode, routing.Router{}, nil, false, common.KeyspaceMeta{})
 	msgs := barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
 		ChangefeedID: cfID.ToPB(),
 		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{

@@ -52,6 +52,7 @@ type Barrier struct {
 	routeRouter    routing.Router
 	targetRegistry *routing.TargetTableRegistry
 	routeEnabled   bool
+	keyspaceMeta   common.KeyspaceMeta
 }
 
 // NewBarrier create a new barrier for the changefeed
@@ -63,6 +64,7 @@ func NewBarrier(spanController *span.Controller,
 	routeRouter routing.Router,
 	targetRegistry *routing.TargetTableRegistry,
 	routeEnabled bool,
+	keyspaceMeta common.KeyspaceMeta,
 ) *Barrier {
 	barrier := Barrier{
 		blockedEvents:      NewBlockEventMap(),
@@ -74,6 +76,7 @@ func NewBarrier(spanController *span.Controller,
 		routeRouter:        routeRouter,
 		targetRegistry:     targetRegistry,
 		routeEnabled:       routeEnabled,
+		keyspaceMeta:       keyspaceMeta,
 	}
 	barrier.handleBootstrapResponse(bootstrapRespMap)
 	return &barrier
@@ -207,7 +210,7 @@ func (b *Barrier) handleBootstrapResponse(bootstrapRespMap map[node.ID]*heartbea
 			key := getEventKey(blockState.BlockTs, blockState.IsSyncPoint)
 			event, ok := b.blockedEvents.Get(key)
 			if !ok {
-				event = NewBlockEvent(common.NewChangefeedIDFromPB(resp.ChangefeedID), common.NewDispatcherIDFromPB(span.ID), b.spanController, b.operatorController, blockState, b.splitTableEnabled, b.mode, b.routeRouter, b.targetRegistry, b.routeEnabled)
+				event = NewBlockEvent(common.NewChangefeedIDFromPB(resp.ChangefeedID), common.NewDispatcherIDFromPB(span.ID), b.spanController, b.operatorController, blockState, b.splitTableEnabled, b.mode, b.routeRouter, b.targetRegistry, b.routeEnabled, b.keyspaceMeta)
 				b.blockedEvents.Set(key, event)
 			}
 			switch blockState.Stage {
@@ -464,7 +467,7 @@ func (b *Barrier) getOrInsertNewEvent(changefeedID common.ChangeFeedID, dispatch
 ) *BarrierEvent {
 	event, ok := b.blockedEvents.Get(key)
 	if !ok {
-		event = NewBlockEvent(changefeedID, dispatcherID, b.spanController, b.operatorController, blockState, b.splitTableEnabled, b.mode, b.routeRouter, b.targetRegistry, b.routeEnabled)
+		event = NewBlockEvent(changefeedID, dispatcherID, b.spanController, b.operatorController, blockState, b.splitTableEnabled, b.mode, b.routeRouter, b.targetRegistry, b.routeEnabled, b.keyspaceMeta)
 		b.blockedEvents.Set(key, event)
 	}
 	return event
