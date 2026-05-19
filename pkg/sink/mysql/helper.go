@@ -27,7 +27,6 @@ import (
 	dmysql "github.com/go-sql-driver/mysql"
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/pkg/common/event"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/retry"
@@ -54,13 +53,13 @@ LIMIT 1;
 // Ref: https://github.com/pingcap/tidb/issues/55725
 const checkRunningAddIndexSQLForOldVersion = `
 ADMIN SHOW DDL JOBS 1
-WHERE DB_NAME = "%s"
+WHERE DB_NAME = "%s" 
     AND TABLE_NAME = "%s"
     AND JOB_TYPE LIKE "add index%%"
     AND (STATE = "running" OR STATE = "queueing");
 `
 
-const checkRunningSQL = `SELECT * FROM information_schema.ddl_jobs
+const checkRunningSQL = `SELECT * FROM information_schema.ddl_jobs 
 	WHERE CREATE_TIME >= "%s" AND QUERY = "%s";`
 
 // CheckIfBDRModeIsSupported checks if the downstream supports set tidb_cdc_write_source variable
@@ -309,13 +308,14 @@ func checkCharsetSupport(db *sql.DB, charsetName string) (bool, error) {
 	querySQL := "select character_set_name from information_schema.character_sets " +
 		"where character_set_name = '" + charsetName + "';"
 	err = db.QueryRowContext(context.Background(), querySQL).Scan(&characterSetName)
-	if err == nil {
-		return true, nil
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return false, errors.WrapError(errors.ErrMySQLQueryError, err)
 	}
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
-	return false, errors.WrapError(errors.ErrMySQLQueryError, err)
+
+	return true, nil
 }
 
 // return dsn
@@ -410,7 +410,7 @@ func needSwitchDB(event *commonEvent.DDLEvent) bool {
 	if len(event.GetTargetSchemaName()) == 0 {
 		return false
 	}
-	if ddlEvent.GetDDLType() == timodel.ActionCreateSchema || ddlEvent.GetDDLType() == timodel.ActionDropSchema {
+	if event.GetDDLType() == timodel.ActionCreateSchema || event.GetDDLType() == timodel.ActionDropSchema {
 		return false
 	}
 	return true
@@ -474,10 +474,10 @@ func getSQLErrCode(err error) (errors.ErrCode, bool) {
 	var mysqlErr *dmysql.MySQLError
 	ok := errors.As(errors.Cause(err), &mysqlErr)
 	if !ok {
-		return 0, false
+		return -1, false
 	}
 
-	return mysqlErr.Number, true
+	return errors.ErrCode(mysqlErr.Number), true
 }
 
 // queryMaxPreparedStmtCount gets the value of max_prepared_stmt_count
@@ -628,16 +628,16 @@ func formatUnixTimestamp(unixTimestamp float64) string {
 	return strconv.FormatFloat(unixTimestamp, 'f', 6, 64)
 }
 
-func ddlSessionTimestampFromOriginDefault(ddlEvent *event.DDLEvent, timezone string) (float64, bool) {
-	if ddlEvent == nil || ddlEvent.TableInfo == nil {
+func ddlSessionTimestampFromOriginDefault(event *commonEvent.DDLEvent, timezone string) (float64, bool) {
+	if event == nil || event.TableInfo == nil {
 		return 0, false
 	}
-	targetColumns, err := extractCurrentTimestampDefaultColumns(ddlEvent.GetDDLQuery())
+	targetColumns, err := extractCurrentTimestampDefaultColumns(event.GetDDLQuery())
 	if err != nil || len(targetColumns) == 0 {
 		return 0, false
 	}
 
-	for _, col := range ddlEvent.TableInfo.GetColumns() {
+	for _, col := range event.TableInfo.GetColumns() {
 		if _, ok := targetColumns[col.Name.L]; !ok {
 			continue
 		}

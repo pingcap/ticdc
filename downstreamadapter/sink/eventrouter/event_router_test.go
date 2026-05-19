@@ -19,7 +19,7 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter/partition"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter/topic"
 	"github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/ticdc/pkg/common/event"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/stretchr/testify/require"
 )
@@ -146,7 +146,7 @@ func TestGetActiveTopics(t *testing.T) {
 	sinkConfig := newSinkConfig4Test()
 	d, err := NewEventRouter(sinkConfig, "test", false, false)
 	require.NoError(t, err)
-	names := []*event.SchemaTableName{
+	names := []*commonEvent.SchemaTableName{
 		{SchemaName: "test_default1", TableName: "table"},
 		{SchemaName: "test_default2", TableName: "table"},
 		{SchemaName: "test_table", TableName: "table"},
@@ -193,7 +193,7 @@ func TestGetPartitionForRowChange(t *testing.T) {
 		TableName: common.TableName{Schema: "test_default1", Table: "table"},
 	}
 	partitionGenerator := d.GetPartitionGenerator(tableInfo.GetSchemaName(), tableInfo.GetTableName())
-	p, _, err := partitionGenerator.GeneratePartitionIndexAndKey(&event.RowChange{}, 16, tableInfo, 0)
+	p, _, err := partitionGenerator.GeneratePartitionIndexAndKey(&commonEvent.RowChange{}, 16, tableInfo, 0)
 	require.NoError(t, err)
 	require.Equal(t, int32(14), p)
 
@@ -202,7 +202,7 @@ func TestGetPartitionForRowChange(t *testing.T) {
 		TableName: common.TableName{Schema: "test_default2", Table: "table"},
 	}
 	partitionGenerator = d.GetPartitionGenerator(tableInfo.GetSchemaName(), tableInfo.GetTableName())
-	p, _, err = partitionGenerator.GeneratePartitionIndexAndKey(&event.RowChange{}, 16, tableInfo, 0)
+	p, _, err = partitionGenerator.GeneratePartitionIndexAndKey(&commonEvent.RowChange{}, 16, tableInfo, 0)
 	require.NoError(t, err)
 	require.Equal(t, int32(0), p)
 
@@ -211,7 +211,7 @@ func TestGetPartitionForRowChange(t *testing.T) {
 		TableName: common.TableName{Schema: "test_table", Table: "table"},
 	}
 	partitionGenerator = d.GetPartitionGenerator(tableInfo.GetSchemaName(), tableInfo.GetTableName())
-	p, _, err = partitionGenerator.GeneratePartitionIndexAndKey(&event.RowChange{}, 16, tableInfo, 1)
+	p, _, err = partitionGenerator.GeneratePartitionIndexAndKey(&commonEvent.RowChange{}, 16, tableInfo, 1)
 	require.NoError(t, err)
 	require.Equal(t, int32(15), p)
 
@@ -220,7 +220,7 @@ func TestGetPartitionForRowChange(t *testing.T) {
 		TableName: common.TableName{Schema: "test_index_value", Table: "table"},
 	}
 
-	helper := event.NewEventTestHelper(t)
+	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
 
 	helper.Tk().MustExec("create database test_index_value")
@@ -245,7 +245,7 @@ func TestGetPartitionForRowChange(t *testing.T) {
 		TableName: common.TableName{Schema: "a", Table: "table"},
 	}
 	partitionGenerator = d.GetPartitionGenerator(tableInfo.GetSchemaName(), tableInfo.GetTableName())
-	p, _, err = partitionGenerator.GeneratePartitionIndexAndKey(&event.RowChange{}, 2, tableInfo, 1)
+	p, _, err = partitionGenerator.GeneratePartitionIndexAndKey(&commonEvent.RowChange{}, 2, tableInfo, 1)
 	require.NoError(t, err)
 	require.Equal(t, int32(1), p)
 }
@@ -272,38 +272,38 @@ func TestGetTopicForDDL(t *testing.T) {
 	require.NoError(t, err)
 
 	tests := []struct {
-		ddl           *event.DDLEvent
+		ddl           *commonEvent.DDLEvent
 		expectedTopic string
 	}{
 		{
-			ddl: &event.DDLEvent{
+			ddl: &commonEvent.DDLEvent{
 				SchemaName: "test",
 			},
 			expectedTopic: "test",
 		},
 		{
-			ddl: &event.DDLEvent{
+			ddl: &commonEvent.DDLEvent{
 				SchemaName: "test",
 				TableName:  "tb1",
 			},
 			expectedTopic: "hello_test",
 		},
 		{
-			ddl: &event.DDLEvent{
+			ddl: &commonEvent.DDLEvent{
 				SchemaName: "test1",
 				TableName:  "view1",
 			},
 			expectedTopic: "test1_view1",
 		},
 		{
-			ddl: &event.DDLEvent{
+			ddl: &commonEvent.DDLEvent{
 				SchemaName: "test1",
 				TableName:  "tb1",
 			},
 			expectedTopic: "test1_tb1",
 		},
 		{
-			ddl: &event.DDLEvent{
+			ddl: &commonEvent.DDLEvent{
 				ExtraSchemaName: "test1",
 				ExtraTableName:  "tb1",
 				SchemaName:      "test1",
@@ -324,7 +324,7 @@ func TestTableRoutingDoesNotAffectDDLTopicMatching(t *testing.T) {
 	tests := []struct {
 		name          string
 		sinkConfig    *config.SinkConfig
-		ddl           *event.DDLEvent
+		ddl           *commonEvent.DDLEvent
 		expectedTopic string
 	}{
 		{
@@ -343,8 +343,8 @@ func TestTableRoutingDoesNotAffectDDLTopicMatching(t *testing.T) {
 					},
 				},
 			},
-			ddl: event.NewRoutedDDLEvent(
-				&event.DDLEvent{
+			ddl: commonEvent.NewRoutedDDLEvent(
+				&commonEvent.DDLEvent{
 					SchemaName: "source_db",
 					TableName:  "orders",
 					Query:      "ALTER TABLE `source_db`.`orders` ADD COLUMN c INT",
@@ -376,8 +376,8 @@ func TestTableRoutingDoesNotAffectDDLTopicMatching(t *testing.T) {
 					},
 				},
 			},
-			ddl: event.NewRoutedDDLEvent(
-				&event.DDLEvent{
+			ddl: commonEvent.NewRoutedDDLEvent(
+				&commonEvent.DDLEvent{
 					SchemaName:      "source_db",
 					TableName:       "orders_new",
 					ExtraSchemaName: "source_db",
@@ -398,7 +398,6 @@ func TestTableRoutingDoesNotAffectDDLTopicMatching(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			d, err := NewEventRouter(tc.sinkConfig, "default_topic", false, false)
 			require.NoError(t, err)

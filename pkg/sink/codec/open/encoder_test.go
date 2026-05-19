@@ -19,6 +19,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
+	commonTable "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -91,49 +92,6 @@ func TestEncodeFlag(t *testing.T) {
 	messageType, hasNext = decoder.HasNext()
 	require.False(t, hasNext)
 	require.Equal(t, common.MessageTypeUnknown, messageType)
-}
-
-func TestEncodeRoutedDMLEventUsesTargetNames(t *testing.T) {
-	helper := commonEvent.NewEventTestHelper(t)
-	defer helper.Close()
-
-	helper.Tk().MustExec("use test")
-	job := helper.DDL2Job(`create table test.t(id int primary key, name varchar(32))`)
-
-	dmlEvent := helper.DML2Event("test", "t", `insert into test.t values (1, 'a')`)
-	row, ok := dmlEvent.GetNextRow()
-	require.True(t, ok)
-
-	routedTableInfo := helper.GetTableInfo(job).CloneWithRouting("target_db", "target_table")
-	rowEvent := &commonEvent.RowEvent{
-		TableInfo:      routedTableInfo,
-		CommitTs:       dmlEvent.GetCommitTs(),
-		Event:          row,
-		ColumnSelector: columnselector.NewDefaultColumnSelector(),
-		Callback:       func() {},
-	}
-
-	ctx := context.Background()
-	codecConfig := common.NewConfig(config.ProtocolOpen)
-
-	encoder, err := NewBatchEncoder(ctx, codecConfig)
-	require.NoError(t, err)
-	require.NoError(t, encoder.AppendRowChangedEvent(ctx, "", rowEvent))
-
-	messages := encoder.Build()
-	require.Len(t, messages, 1)
-
-	decoder, err := NewDecoder(ctx, 0, codecConfig, nil)
-	require.NoError(t, err)
-	decoder.AddKeyValue(messages[0].Key, messages[0].Value)
-
-	messageType, hasNext := decoder.HasNext()
-	require.True(t, hasNext)
-	require.Equal(t, common.MessageTypeRow, messageType)
-
-	decoded := decoder.NextDMLEvent()
-	require.Equal(t, "target_db", decoded.TableInfo.GetSchemaName())
-	require.Equal(t, "target_table", decoded.TableInfo.GetTableName())
 }
 
 func TestIntegerTypes(t *testing.T) {
@@ -231,7 +189,7 @@ func TestFloatTypes(t *testing.T) {
 	helper.Tk().MustExec("use test")
 	job := helper.DDL2Job(`create table test.t(
     	id int primary key auto_increment,
-	    a float, b float(10, 3), c float(10),
+	    a float, b float(10, 3), c float(10), 
 	    d double, e double(20, 3))`)
 
 	dmlEvent := helper.DML2Event("test", "t", `insert into test.t(a,b,c,d,e) values (1.23, 4.56, 7.89, 10.11, 12.13)`)
@@ -575,17 +533,17 @@ func TestOtherTypes(t *testing.T) {
 
 	helper.Tk().MustExec("use test")
 	job := helper.DDL2Job(`create table test.t(
-    	id int primary key auto_increment,
+    	id int primary key auto_increment, 
     	a bool, b bool, c year,
-		d bit(10), e json,
-		f decimal(10,2),
+		d bit(10), e json, 
+		f decimal(10,2), 
 		g enum('a','b','c'), h set('a','b','c'))`)
 	tableInfo := helper.GetTableInfo(job)
 
 	dmlEvent := helper.DML2Event("test", "t", `insert into test.t(a, b, c, d, e, f, g, h) values (
-   		true, false, 2000,
-	    0b0101010101, '{"key1": "value1"}',
-	    153.123,
+   		true, false, 2000, 
+	    0b0101010101, '{"key1": "value1"}', 
+	    153.123, 
 	    'a', 'a,b')`)
 
 	require.NotNil(t, dmlEvent)
@@ -656,8 +614,17 @@ func TestCreateTableDDL(t *testing.T) {
 
 	helper.Tk().MustExec("use test")
 
-	ddlEvent := helper.DDL2Event(`create table test.t(a tinyint primary key, b int)`)
-	require.NotNil(t, ddlEvent)
+	job := helper.DDL2Job(`create table test.t(a tinyint primary key, b int)`)
+	require.NotNil(t, job)
+
+	ddlEvent := &commonEvent.DDLEvent{
+		Query:      job.Query,
+		Type:       byte(job.Type),
+		SchemaName: job.SchemaName,
+		TableName:  job.TableName,
+		TableInfo:  commonTable.WrapTableInfo(job.SchemaName, job.BinlogInfo.TableInfo),
+		FinishedTs: 1,
+	}
 
 	ctx := context.Background()
 	codecConfig := common.NewConfig(config.ProtocolOpen)

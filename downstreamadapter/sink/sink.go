@@ -58,7 +58,6 @@ func New(ctx context.Context, cfg *config.ChangefeedConfig, changefeedID common.
 			util.MaskSensitiveDataInURLError(err),
 			util.MaskSensitiveDataInURIForError(cfg.SinkURI))
 	}
-
 	scheme := config.GetScheme(sinkURI)
 	switch scheme {
 	case config.MySQLScheme, config.MySQLSSLScheme, config.TiDBScheme, config.TiDBSSLScheme:

@@ -24,7 +24,7 @@ import (
 
 	mysqlDriver "github.com/go-sql-driver/mysql"
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/pkg/common/event"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/meta/model"
@@ -189,15 +189,15 @@ func MustQueryTimezone(ctx context.Context, db *sql.DB) string {
 }
 
 func queryRowChecksum(
-	ctx context.Context, db *sql.DB, dmlEvent *event.DMLEvent,
+	ctx context.Context, db *sql.DB, event *commonEvent.DMLEvent,
 ) error {
 	var (
-		schema   = dmlEvent.TableInfo.GetSchemaName()
-		table    = dmlEvent.TableInfo.GetTableName()
-		commitTs = dmlEvent.GetCommitTs()
+		schema   = event.TableInfo.GetSchemaName()
+		table    = event.TableInfo.GetTableName()
+		commitTs = event.GetCommitTs()
 	)
 
-	pkNames := dmlEvent.TableInfo.GetPrimaryKeyColumnNames()
+	pkNames := event.TableInfo.GetPrimaryKeyColumnNames()
 	if len(pkNames) == 0 {
 		log.Warn("cannot query row checksum without primary key",
 			zap.String("schema", schema), zap.String("table", table))
@@ -213,12 +213,12 @@ func queryRowChecksum(
 	defer conn.Close()
 
 	for {
-		row, ok := dmlEvent.GetNextRow()
+		row, ok := event.GetNextRow()
 		if !ok {
-			dmlEvent.Rewind()
+			event.Rewind()
 			break
 		}
-		columns := dmlEvent.TableInfo.GetColumns()
+		columns := event.TableInfo.GetColumns()
 		if row.Checksum.Current != 0 {
 			conditions := make(map[string]any)
 			for _, name := range pkNames {

@@ -58,7 +58,10 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, cfg *config.C
 	return nil
 }
 
-func New(ctx context.Context, changefeedID common.ChangeFeedID, cfg *config.ConsistentConfig) (*Sink, error) {
+// New creates a new redo sink.
+func New(ctx context.Context, changefeedID common.ChangeFeedID,
+	cfg *config.ConsistentConfig,
+) (*Sink, error) {
 	var err error
 	config, err := writer.NewConfig(changefeedID, cfg)
 	if err != nil {
