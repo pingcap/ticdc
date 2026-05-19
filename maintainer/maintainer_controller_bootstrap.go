@@ -528,27 +528,11 @@ func (c *Controller) buildRouteBindingsFromTables(
 				zap.Error(err))
 			continue
 		}
-		sourceSchema := tableInfo.GetSchemaName()
-		sourceTable := tableInfo.GetTableName()
-		result, routeErr := c.routeRouter.RouteName(sourceSchema, sourceTable)
+		result, routeErr := c.routeRouter.RouteName(tableInfo.GetSchemaName(), tableInfo.GetTableName())
 		if routeErr != nil {
 			return nil, routeErr
 		}
-		binding := routing.RouteBinding{
-			Source: routing.SourceKey{
-				LogicalTableID: tableInfo.TableName.TableID,
-				Schema:         sourceSchema,
-				Table:          sourceTable,
-			},
-			ReplicaTableID: t.TableID,
-			SourceSchemaID: t.SchemaID,
-			Target: routing.TargetKey{
-				Schema: result.TargetSchema,
-				Table:  result.TargetTable,
-			},
-			RuleIndex: result.RuleIndex,
-			Matcher:   result.Matcher,
-		}
+		binding := routing.NewRouteBinding(tableInfo, t.TableID, t.SchemaID, result)
 		bindings = append(bindings, binding)
 	}
 	return bindings, nil

@@ -196,12 +196,8 @@ func (be *BarrierEvent) buildRouteTransition() (*RouteTransition, error) {
 		case heartbeatpb.InfluenceType_Normal:
 			transition.Removes = append(transition.Removes, be.dropDispatchers.TableIDs...)
 		case heartbeatpb.InfluenceType_DB:
-			// Schema-level drop: the registry's RemoveBySchemaID handles this.
-			// We collect all replica IDs for the schema from the registry.
-			for _, b := range be.targetRegistry.Snapshot() {
-				if b.SourceSchemaID == be.dropDispatchers.SchemaID {
-					transition.Removes = append(transition.Removes, b.ReplicaTableID)
-				}
+			for _, b := range be.targetRegistry.GetBindingsBySchemaID(be.dropDispatchers.SchemaID) {
+				transition.Removes = append(transition.Removes, b.ReplicaTableID)
 			}
 		}
 	}
@@ -239,18 +235,11 @@ func (be *BarrierEvent) buildRouteTransition() (*RouteTransition, error) {
 				return nil, err
 			}
 			if binding != nil {
-				// Check if the route actually changed.
-				existingBindings := be.targetRegistry.Snapshot()
-				changed := true
-				for _, existing := range existingBindings {
-					if existing.ReplicaTableID == tableID &&
-						existing.Target == binding.Target &&
-						existing.Source.Schema == binding.Source.Schema &&
-						existing.Source.Table == binding.Source.Table {
-						changed = false
-						break
-					}
-				}
+				existing, exists := be.targetRegistry.GetBindingByReplicaID(tableID)
+				changed := !exists ||
+					existing.Target != binding.Target ||
+					existing.Source.Schema != binding.Source.Schema ||
+					existing.Source.Table != binding.Source.Table
 				if changed {
 					transition.Removes = append(transition.Removes, tableID)
 					transition.Adds = append(transition.Adds, *binding)
@@ -296,12 +285,8 @@ func (be *BarrierEvent) buildRouteBindingForTable(
 	}
 	schemaID := schemaIDHint
 	if schemaID == 0 {
-		// Try to find from existing registry bindings.
-		for _, b := range be.targetRegistry.Snapshot() {
-			if b.ReplicaTableID == tableID {
-				schemaID = b.SourceSchemaID
-				break
-			}
+		if b, ok := be.targetRegistry.GetBindingByReplicaID(tableID); ok {
+			schemaID = b.SourceSchemaID
 		}
 	}
 	return &routing.RouteBinding{

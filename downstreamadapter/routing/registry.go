@@ -18,6 +18,7 @@ import (
 	"maps"
 	"sort"
 
+	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 )
 
@@ -63,6 +64,8 @@ type TargetTableRegistry struct {
 	bySourceID map[int64]map[int64]struct{} // logicalTableID -> replicaTableIDs
 	// bySchemaID tracks all replica table IDs for a source schema.
 	bySchemaID map[int64]map[int64]struct{} // schemaID -> replicaTableIDs
+	// targetRefs counts how many replicas map to each target.
+	targetRefs map[TargetKey]int
 }
 
 // NewTargetTableRegistry creates a registry from a set of initial bindings.
@@ -72,6 +75,7 @@ func NewTargetTableRegistry(bindings []RouteBinding) (*TargetTableRegistry, erro
 		bindings:     make(map[int64]RouteBinding, len(bindings)),
 		bySourceID:   make(map[int64]map[int64]struct{}),
 		bySchemaID:   make(map[int64]map[int64]struct{}),
+		targetRefs:   make(map[TargetKey]int),
 	}
 	for _, b := range bindings {
 		if err := r.Upsert(b); err != nil {
@@ -139,14 +143,10 @@ func (r *TargetTableRegistry) Upsert(binding RouteBinding) error {
 		existingBinding := r.findBindingBySource(existingSource.LogicalTableID)
 		return newConflictError(existingBinding, binding)
 	}
-	// Remove old binding for this replica if it exists.
 	if oldBinding, exists := r.bindings[binding.ReplicaTableID]; exists {
 		r.removeFromSourceIndex(binding.ReplicaTableID)
 		r.removeFromSchemaIndex(binding.ReplicaTableID, oldBinding.SourceSchemaID)
-		// If this was the last replica for this target, remove the owner.
-		if r.countReplicasForTarget(binding.ReplicaTableID, oldBinding.Target) <= 1 {
-			delete(r.ownerSources, oldBinding.Target)
-		}
+		r.unsafeRemove(oldBinding)
 	}
 	r.unsafeInsert(binding)
 	return nil
@@ -158,20 +158,9 @@ func (r *TargetTableRegistry) RemoveByReplicaID(replicaTableID int64) {
 	if !ok {
 		return
 	}
-	delete(r.bindings, replicaTableID)
 	r.removeFromSourceIndex(replicaTableID)
 	r.removeFromSchemaIndex(replicaTableID, binding.SourceSchemaID)
-	// Only remove the owner if no other replica (from the same or different source)
-	// maps to this target.
-	remaining := 0
-	for _, b := range r.bindings {
-		if b.Target == binding.Target {
-			remaining++
-		}
-	}
-	if remaining == 0 {
-		delete(r.ownerSources, binding.Target)
-	}
+	r.unsafeRemove(binding)
 }
 
 // RemoveBySchemaID removes all bindings belonging to the given schema ID.
@@ -183,18 +172,8 @@ func (r *TargetTableRegistry) RemoveBySchemaID(schemaID int64) {
 	for replicaID := range replicas {
 		binding, exists := r.bindings[replicaID]
 		if exists {
-			delete(r.bindings, replicaID)
 			r.removeFromSourceIndex(replicaID)
-			// Check if the target still has other replicas.
-			remaining := 0
-			for _, b := range r.bindings {
-				if b.Target == binding.Target {
-					remaining++
-				}
-			}
-			if remaining == 0 {
-				delete(r.ownerSources, binding.Target)
-			}
+			r.unsafeRemove(binding)
 		}
 	}
 	delete(r.bySchemaID, schemaID)
@@ -218,6 +197,7 @@ func (r *TargetTableRegistry) Replace(removes []int64, adds []RouteBinding) erro
 func (r *TargetTableRegistry) unsafeInsert(binding RouteBinding) {
 	r.bindings[binding.ReplicaTableID] = binding
 	r.ownerSources[binding.Target] = binding.Source
+	r.targetRefs[binding.Target]++
 	if _, ok := r.bySourceID[binding.Source.LogicalTableID]; !ok {
 		r.bySourceID[binding.Source.LogicalTableID] = make(map[int64]struct{})
 	}
@@ -226,6 +206,15 @@ func (r *TargetTableRegistry) unsafeInsert(binding RouteBinding) {
 		r.bySchemaID[binding.SourceSchemaID] = make(map[int64]struct{})
 	}
 	r.bySchemaID[binding.SourceSchemaID][binding.ReplicaTableID] = struct{}{}
+}
+
+func (r *TargetTableRegistry) unsafeRemove(binding RouteBinding) {
+	delete(r.bindings, binding.ReplicaTableID)
+	r.targetRefs[binding.Target]--
+	if r.targetRefs[binding.Target] == 0 {
+		delete(r.targetRefs, binding.Target)
+		delete(r.ownerSources, binding.Target)
+	}
 }
 
 func (r *TargetTableRegistry) removeFromSourceIndex(replicaTableID int64) {
@@ -251,32 +240,78 @@ func (r *TargetTableRegistry) removeFromSchemaIndex(replicaTableID, schemaID int
 	}
 }
 
-func (r *TargetTableRegistry) countReplicasForTarget(excludeReplica int64, target TargetKey) int {
-	count := 0
-	for id, b := range r.bindings {
-		if id != excludeReplica && b.Target == target {
-			count++
-		}
-	}
-	// Add 1 for the binding we haven't inserted yet (the one being upserted).
-	return count
+func (r *TargetTableRegistry) findBindingBySource(logicalTableID int64) RouteBinding {
+	b, _ := r.GetBindingBySource(logicalTableID)
+	return b
 }
 
-func (r *TargetTableRegistry) findBindingBySource(logicalTableID int64) RouteBinding {
-	for _, b := range r.bindings {
-		if b.Source.LogicalTableID == logicalTableID {
-			return b
+// NewRouteBinding constructs a RouteBinding from a table info and route result.
+func NewRouteBinding(
+	tableInfo *common.TableInfo,
+	replicaTableID, sourceSchemaID int64,
+	result RouteResult,
+) RouteBinding {
+	return RouteBinding{
+		Source: SourceKey{
+			LogicalTableID: tableInfo.TableName.TableID,
+			Schema:         tableInfo.GetSchemaName(),
+			Table:          tableInfo.GetTableName(),
+		},
+		ReplicaTableID: replicaTableID,
+		SourceSchemaID: sourceSchemaID,
+		Target: TargetKey{
+			Schema: result.TargetSchema,
+			Table:  result.TargetTable,
+		},
+		RuleIndex: result.RuleIndex,
+		Matcher:   result.Matcher,
+	}
+}
+
+// GetBindingByReplicaID returns the binding for a replica table ID, if it exists.
+func (r *TargetTableRegistry) GetBindingByReplicaID(replicaTableID int64) (RouteBinding, bool) {
+	b, ok := r.bindings[replicaTableID]
+	return b, ok
+}
+
+// GetBindingsBySchemaID returns all bindings belonging to the given schema ID.
+func (r *TargetTableRegistry) GetBindingsBySchemaID(schemaID int64) []RouteBinding {
+	replicas, ok := r.bySchemaID[schemaID]
+	if !ok {
+		return nil
+	}
+	result := make([]RouteBinding, 0, len(replicas))
+	for id := range replicas {
+		if b, exists := r.bindings[id]; exists {
+			result = append(result, b)
 		}
 	}
-	return RouteBinding{}
+	return result
+}
+
+// GetBindingBySource returns a binding for the logical source, if it exists.
+func (r *TargetTableRegistry) GetBindingBySource(logicalTableID int64) (RouteBinding, bool) {
+	replicas, ok := r.bySourceID[logicalTableID]
+	if !ok {
+		return RouteBinding{}, false
+	}
+	for id := range replicas {
+		if b, exists := r.bindings[id]; exists {
+			return b, true
+		}
+	}
+	return RouteBinding{}, false
 }
 
 func (r *TargetTableRegistry) clone() *TargetTableRegistry {
+	refs := make(map[TargetKey]int, len(r.targetRefs))
+	maps.Copy(refs, r.targetRefs)
 	return &TargetTableRegistry{
 		ownerSources: r.cloneOwnerSources(),
 		bindings:     r.cloneBindings(),
 		bySourceID:   r.cloneSourceIndex(),
 		bySchemaID:   r.cloneSchemaIndex(),
+		targetRefs:   refs,
 	}
 }
 
