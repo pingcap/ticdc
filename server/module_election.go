@@ -134,14 +134,15 @@ func (e *elector) campaignCoordinator(ctx context.Context) error {
 		log.Info("campaign coordinator successfully",
 			zap.String("nodeID", nodeID), zap.Int64("coordinatorVersion", coordinatorVersion))
 
+		maxTaskConcurrency, checkBalanceInterval := coordinatorSchedulerSettings()
 		co := coordinator.New(
 			e.svr.info,
 			e.svr.pdClient,
 			changefeed.NewEtcdBackend(e.svr.EtcdClient),
 			e.svr.EtcdClient.GetGCServiceID(),
 			coordinatorVersion,
-			10000,
-			time.Minute,
+			maxTaskConcurrency,
+			checkBalanceInterval,
 		)
 		e.svr.setCoordinator(co)
 		err = co.Run(ctx)
@@ -189,6 +190,11 @@ func (e *elector) campaignCoordinator(ctx context.Context) error {
 			zap.String("nodeID", nodeID), zap.Int64("coordinatorVersion", coordinatorVersion),
 			zap.Error(err))
 	}
+}
+
+func coordinatorSchedulerSettings() (int, time.Duration) {
+	schedulerCfg := config.GetGlobalServerConfig().Debug.Scheduler
+	return schedulerCfg.MaxTaskConcurrency, time.Duration(schedulerCfg.CheckBalanceInterval)
 }
 
 func (e *elector) campaignLogCoordinator(ctx context.Context) error {
