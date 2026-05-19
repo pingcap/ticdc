@@ -129,8 +129,8 @@ func (a *BatchEncoder) EncodeDDLEvent(e *commonEvent.DDLEvent) (*common.Message,
 		event := &ddlEvent{
 			Query:    e.Query,
 			Type:     e.GetDDLType(),
-			Schema:   e.GetSchemaName(),
-			Table:    e.GetTableName(),
+			Schema:   e.GetTargetSchemaName(),
+			Table:    e.GetTargetTableName(),
 			CommitTs: e.GetCommitTs(),
 		}
 		data, err := json.Marshal(event)

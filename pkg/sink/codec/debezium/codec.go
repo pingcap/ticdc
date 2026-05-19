@@ -1005,8 +1005,8 @@ func (c *dbzCodec) EncodeKey(
 	defer util.ReturnJSONWriter(jWriter)
 
 	var err error
-	schemaName := e.TableInfo.GetSchemaName()
-	tableName := e.TableInfo.GetTableName()
+	schemaName := e.TableInfo.GetTargetSchemaName()
+	tableName := e.TableInfo.GetTargetTableName()
 	jWriter.WriteObject(func() {
 		jWriter.WriteObjectField("payload", func() {
 			columns := e.TableInfo.GetColumns()
@@ -1050,8 +1050,8 @@ func (c *dbzCodec) EncodeValue(
 	commitTime := oracle.GetTimeFromTS(e.CommitTs)
 
 	var err error
-	schemaName := e.TableInfo.GetSchemaName()
-	tableName := e.TableInfo.GetTableName()
+	schemaName := e.TableInfo.GetTargetSchemaName()
+	tableName := e.TableInfo.GetTargetTableName()
 
 	jWriter.WriteObject(func() {
 		jWriter.WriteObjectField("payload", func() {
@@ -1341,14 +1341,14 @@ func (c *dbzCodec) EncodeDDLEvent(
 					switch e.GetDDLType() {
 					case timodel.ActionRenameTable:
 						jWriter.WriteStringField("id", fmt.Sprintf("\"%s\".\"%s\",\"%s\".\"%s\"",
-							e.ExtraSchemaName,
-							e.ExtraTableName,
+							e.GetTargetExtraSchemaName(),
+							e.GetTargetExtraTableName(),
 							dbName,
 							tableName))
 					case timodel.ActionExchangeTablePartition:
 						jWriter.WriteStringField("id", fmt.Sprintf("\"%s\".\"%s\"",
-							e.ExtraSchemaName,
-							e.ExtraTableName))
+							e.GetTargetExtraSchemaName(),
+							e.GetTargetExtraTableName()))
 					case timodel.ActionDropTable:
 						jWriter.WriteStringField("id", fmt.Sprintf("\"%s\".\"%s\"",
 							dbName,

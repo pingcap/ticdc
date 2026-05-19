@@ -652,6 +652,62 @@ func TestCreateTableDDL(t *testing.T) {
 	require.Equal(t, ddlEvent.FinishedTs, obtained.FinishedTs)
 }
 
+func TestEncodeRoutedDMLEventUsesTargetNames(t *testing.T) {
+	rowEvent := common.NewRoutedRowEvent4Test()
+
+	ctx := context.Background()
+	codecConfig := common.NewConfig(config.ProtocolOpen)
+
+	encoder, err := NewBatchEncoder(ctx, codecConfig)
+	require.NoError(t, err)
+	require.NoError(t, encoder.AppendRowChangedEvent(ctx, "", rowEvent))
+
+	messages := encoder.Build()
+	require.Len(t, messages, 1)
+
+	decoder, err := NewDecoder(ctx, 0, codecConfig, nil)
+	require.NoError(t, err)
+	decoder.AddKeyValue(messages[0].Key, messages[0].Value)
+
+	messageType, hasNext := decoder.HasNext()
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeRow, messageType)
+
+	decoded := decoder.NextDMLEvent()
+	require.Equal(t, "target_db", decoded.TableInfo.GetSchemaName())
+	require.Equal(t, "target_table", decoded.TableInfo.GetTableName())
+
+	change, ok := decoded.GetNextRow()
+	require.True(t, ok)
+	common.CompareRow(t, rowEvent.Event, rowEvent.TableInfo, change, decoded.TableInfo)
+}
+
+func TestEncodeRoutedDDLEventUsesTargetNames(t *testing.T) {
+	routedDDL := common.NewRoutedDDLEvent4Test()
+
+	ctx := context.Background()
+	codecConfig := common.NewConfig(config.ProtocolOpen)
+
+	encoder, err := NewBatchEncoder(ctx, codecConfig)
+	require.NoError(t, err)
+
+	message, err := encoder.EncodeDDLEvent(routedDDL)
+	require.NoError(t, err)
+
+	decoder, err := NewDecoder(ctx, 0, codecConfig, nil)
+	require.NoError(t, err)
+	decoder.AddKeyValue(message.Key, message.Value)
+
+	messageType, hasNext := decoder.HasNext()
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeDDL, messageType)
+
+	decoded := decoder.NextDDLEvent()
+	require.Equal(t, "target_db", decoded.SchemaName)
+	require.Equal(t, "target_table", decoded.TableName)
+	require.Equal(t, routedDDL.Query, decoded.Query)
+}
+
 func TestEncoderOneMessage(t *testing.T) {
 	ctx := context.Background()
 	codecConfig := common.NewConfig(config.ProtocolOpen)

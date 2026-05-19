@@ -104,6 +104,62 @@ func TestDDLEventE2E(t *testing.T) {
 	require.NotEmpty(t, decodedEvent.Query)
 }
 
+func TestEncodeRoutedDMLEventUsesTargetNames(t *testing.T) {
+	codecConfig := common.NewConfig(config.ProtocolAvro)
+	codecConfig.EnableTiDBExtension = true
+	codecConfig.AvroDecimalHandlingMode = "string"
+	codecConfig.AvroBigintUnsignedHandlingMode = "string"
+
+	ctx := t.Context()
+
+	encoder, err := SetupEncoderAndSchemaRegistry4Testing(ctx, codecConfig)
+	require.NoError(t, err)
+	defer TeardownEncoderAndSchemaRegistry4Testing()
+
+	topic := "avro-routed-test-topic"
+	require.NoError(t, encoder.AppendRowChangedEvent(ctx, topic, common.NewRoutedRowEvent4Test()))
+
+	messages := encoder.Build()
+	require.Len(t, messages, 1)
+
+	schemaM, err := NewConfluentSchemaManager(ctx, "http://127.0.0.1:8081", nil)
+	require.NoError(t, err)
+	decoder := NewDecoder(codecConfig, 0, schemaM, topic, nil)
+	decoder.AddKeyValue(messages[0].Key, messages[0].Value)
+
+	messageType, exists := decoder.HasNext()
+	require.True(t, exists)
+	require.Equal(t, common.MessageTypeRow, messageType)
+
+	decoded := decoder.NextDMLEvent()
+	require.Equal(t, "target_db", decoded.TableInfo.GetSchemaName())
+	require.Equal(t, "target_table", decoded.TableInfo.GetTableName())
+}
+
+func TestEncodeRoutedDDLEventUsesTargetNames(t *testing.T) {
+	codecConfig := common.NewConfig(config.ProtocolAvro)
+	codecConfig.EnableTiDBExtension = true
+	codecConfig.AvroEnableWatermark = true
+
+	encoder := newAvroEncoderForTest(codecConfig.ChangefeedID.Keyspace(), nil, codecConfig)
+	routedDDL := common.NewRoutedDDLEvent4Test()
+	message, err := encoder.EncodeDDLEvent(routedDDL)
+	require.NoError(t, err)
+
+	topic := "avro-routed-ddl-test-topic"
+	decoder := NewDecoder(codecConfig, 0, nil, topic, nil)
+	decoder.AddKeyValue(message.Key, message.Value)
+
+	messageType, exists := decoder.HasNext()
+	require.True(t, exists)
+	require.Equal(t, common.MessageTypeDDL, messageType)
+
+	decoded := decoder.NextDDLEvent()
+	require.Equal(t, "target_db", decoded.SchemaName)
+	require.Equal(t, "target_table", decoded.TableName)
+	require.Equal(t, routedDDL.Query, decoded.Query)
+}
+
 func TestResolvedE2E(t *testing.T) {
 	t.Parallel()
 

@@ -76,8 +76,12 @@ function verify_normal_table_route() {
 	local source_extra_count
 	local target_extra_count
 	source_users_count=$(query_count "SELECT COUNT(*) AS cnt FROM source_db.users;" "$UP_TIDB_HOST" "$UP_TIDB_PORT")
-	target_users_count=$(query_count "SELECT COUNT(*) AS cnt FROM target_db.users_routed;" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT")
 	source_extra_count=$(query_count "SELECT COUNT(*) AS cnt FROM source_extra_db.external_users;" "$UP_TIDB_HOST" "$UP_TIDB_PORT")
+
+	wait_query_count "SELECT COUNT(*) AS cnt FROM target_db.users_routed;" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" "$source_users_count" 90
+	wait_query_count "SELECT COUNT(*) AS cnt FROM target_extra_db.external_users_routed;" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" "$source_extra_count" 90
+
+	target_users_count=$(query_count "SELECT COUNT(*) AS cnt FROM target_db.users_routed;" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT")
 	target_extra_count=$(query_count "SELECT COUNT(*) AS cnt FROM target_extra_db.external_users_routed;" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT")
 
 	require_equal "$target_users_count" "$source_users_count" "normal table route users count mismatch"
