@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	"github.com/pingcap/ticdc/pkg/util"
 	pd "github.com/tikv/pd/client"
 	pdhttp "github.com/tikv/pd/client/http"
 )
@@ -62,7 +63,10 @@ func ValidateActiveActiveTSOIndexes(
 
 	sinkURI, err := url.Parse(changefeedCfg.SinkURI)
 	if err != nil {
-		return errors.WrapError(errors.ErrSinkURIInvalid, err, changefeedCfg.SinkURI)
+		return errors.WrapError(
+			errors.ErrSinkURIInvalid,
+			util.MaskSensitiveDataInURLError(err),
+			util.MaskSensitiveDataInURIForError(changefeedCfg.SinkURI))
 	}
 	if !config.IsMySQLCompatibleScheme(config.GetScheme(sinkURI)) {
 		return nil
