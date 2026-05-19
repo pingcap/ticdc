@@ -14,6 +14,7 @@
 package v2
 
 import (
+	"net/url"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -33,7 +34,17 @@ func TestMaskSinkURIForError(t *testing.T) {
 	invalidURI := "mysql://root:verysecure@127.0.0.1/%zz"
 	require.Equal(t, "<invalid uri>", maskSinkURIForError(invalidURI))
 
-	err := genSinkURIInvalidError(invalidURI)
+	err := genSinkURIInvalidError(invalidURI, mustParseURLError(t, invalidURI))
 	require.NotContains(t, err.Error(), "verysecure")
 	require.Contains(t, err.Error(), "<invalid uri>")
+	require.Contains(t, err.Error(), `parse "<invalid uri>"`)
+	require.Contains(t, err.Error(), "invalid URL escape")
+}
+
+func mustParseURLError(t *testing.T, rawURL string) error {
+	t.Helper()
+
+	_, err := url.Parse(rawURL)
+	require.Error(t, err)
+	return err
 }

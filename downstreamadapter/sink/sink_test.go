@@ -72,4 +72,6 @@ func requireInvalidSinkURIError(t *testing.T, err error) {
 	errMsg := err.Error()
 	require.NotContains(t, errMsg, "verysecure")
 	require.Contains(t, errMsg, "<invalid uri>")
+	require.Contains(t, errMsg, `parse "<invalid uri>"`)
+	require.Contains(t, errMsg, "invalid URL escape")
 }

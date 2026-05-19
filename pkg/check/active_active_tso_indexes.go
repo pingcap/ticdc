@@ -63,7 +63,9 @@ func ValidateActiveActiveTSOIndexes(
 
 	sinkURI, err := url.Parse(changefeedCfg.SinkURI)
 	if err != nil {
-		return errors.ErrSinkURIInvalid.GenWithStackByArgs(
+		return errors.WrapError(
+			errors.ErrSinkURIInvalid,
+			util.MaskSensitiveDataInURLError(err),
 			util.MaskSensitiveDataInURIForError(changefeedCfg.SinkURI))
 	}
 	if !config.IsMySQLCompatibleScheme(config.GetScheme(sinkURI)) {

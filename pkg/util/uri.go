@@ -118,3 +118,19 @@ func MaskSensitiveDataInURIForError(uri string) string {
 	}
 	return maskedURI
 }
+
+// MaskSensitiveDataInURLError masks the URL carried by net/url errors.
+func MaskSensitiveDataInURLError(err error) error {
+	if err == nil {
+		return nil
+	}
+	urlErr, ok := err.(*url.Error)
+	if !ok {
+		return err
+	}
+	return &url.Error{
+		Op:  urlErr.Op,
+		URL: MaskSensitiveDataInURIForError(urlErr.URL),
+		Err: urlErr.Err,
+	}
+}
