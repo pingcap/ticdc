@@ -22,23 +22,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func makeBinding(
-	logicalID int64,
-	sourceSchema, sourceTable, targetSchema, targetTable string,
-) RouteBinding {
-	return RouteBinding{
-		Source: SourceKey{
-			LogicalTableID: logicalID,
-			Schema:         sourceSchema,
-			Table:          sourceTable,
-		},
-		Target: TargetKey{
-			Schema: targetSchema,
-			Table:  targetTable,
-		},
-	}
-}
-
 func TestTargetTableRegistryAdd(t *testing.T) {
 	t.Parallel()
 
@@ -47,16 +30,16 @@ func TestTargetTableRegistryAdd(t *testing.T) {
 		r := NewTargetTableRegistry()
 		require.NotNil(t, r)
 
-		require.NoError(t, r.Add(makeBinding(1, "db1", "t1", "db1", "t1")))
-		require.NoError(t, r.Add(makeBinding(2, "db1", "t2", "archive", "t2")))
+		require.NoError(t, r.Add(NewRouteBinding(1, "db1", "t1", "db1", "t1")))
+		require.NoError(t, r.Add(NewRouteBinding(2, "db1", "t2", "archive", "t2")))
 	})
 
 	t.Run("conflicting bindings fail", func(t *testing.T) {
 		t.Parallel()
 		r := NewTargetTableRegistry()
 
-		require.NoError(t, r.Add(makeBinding(1, "db1", "t1", "archive", "orders")))
-		err := r.Add(makeBinding(2, "db2", "t1", "archive", "orders"))
+		require.NoError(t, r.Add(NewRouteBinding(1, "db1", "t1", "archive", "orders")))
+		err := r.Add(NewRouteBinding(2, "db2", "t1", "archive", "orders"))
 		require.Error(t, err)
 		require.True(t, errors.ErrTableRouteConflict.Equal(err))
 		require.Contains(t, err.Error(), "target `archive`.`orders`")
@@ -68,8 +51,8 @@ func TestTargetTableRegistryAdd(t *testing.T) {
 		t.Parallel()
 		r := NewTargetTableRegistry()
 
-		require.NoError(t, r.Add(makeBinding(1, "db1", "t1", "db1", "t1")))
-		require.NoError(t, r.Add(makeBinding(1, "db1", "t1", "db1", "t1")))
+		require.NoError(t, r.Add(NewRouteBinding(1, "db1", "t1", "db1", "t1")))
+		require.NoError(t, r.Add(NewRouteBinding(1, "db1", "t1", "db1", "t1")))
 	})
 }
 

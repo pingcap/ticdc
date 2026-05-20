@@ -17,50 +17,33 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 )
 
-// TargetKey identifies a downstream target table.
-type TargetKey struct {
-	Schema string
-	Table  string
-}
-
-// SourceKey identifies an upstream logical table.
-type SourceKey struct {
-	LogicalTableID int64
-	Schema         string
-	Table          string
-}
-
-// RouteBinding records one source-to-target route mapping.
-type RouteBinding struct {
-	Source SourceKey
-	Target TargetKey
-}
-
 // TargetTableRegistry tracks which upstream logical table owns each downstream
 // target. Different logical sources mapping to the same target is a conflict;
 // multiple replicas of the same logical source may share a target.
 type TargetTableRegistry struct {
-	owners map[TargetKey]RouteBinding
+	memo map[targetKey]routeBinding
 }
 
 // NewTargetTableRegistry creates an empty registry.
 func NewTargetTableRegistry() *TargetTableRegistry {
 	return &TargetTableRegistry{
-		owners: make(map[TargetKey]RouteBinding),
+		memo: make(map[targetKey]routeBinding),
 	}
 }
 
 // Add validates and records a source-to-target binding.
-func (r *TargetTableRegistry) Add(binding RouteBinding) error {
-	if existing, ok := r.owners[binding.Target]; ok {
-		if existing.Source.LogicalTableID != binding.Source.LogicalTableID {
-			return errors.ErrTableRouteConflict.FastGenByArgs(
-				binding.Target.Schema, binding.Target.Table,
-				existing.Source.Schema, existing.Source.Table,
-				binding.Source.Schema, binding.Source.Table)
-		}
+func (r *TargetTableRegistry) Add(binding routeBinding) error {
+	existing, ok := r.memo[binding.Target]
+	if !ok {
+		r.memo[binding.Target] = binding
+		return nil
 	}
 
-	r.owners[binding.Target] = binding
-	return nil
+	if existing.Source.LogicalTableID == binding.Source.LogicalTableID {
+		return nil
+	}
+	return errors.ErrTableRouteConflict.FastGenByArgs(
+		binding.Target.Schema, binding.Target.Table,
+		existing.Source.Schema, existing.Source.Table,
+		binding.Source.Schema, binding.Source.Table)
 }

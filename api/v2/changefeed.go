@@ -281,7 +281,7 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		allTables        []common.TableName
 	)
 	protocol, _ := config.ParseSinkProtocolFromString(util.GetOrZero(replicaCfg.Sink.Protocol))
-	_, ineligibleTables, eligibleTables, allTables, err = getVerifiedTables(ctx, changefeedID, replicaCfg, kvStorage, cfg.StartTs, scheme, topic, protocol)
+	ineligibleTables, eligibleTables, allTables, err = getVerifiedTables(ctx, changefeedID, replicaCfg, kvStorage, cfg.StartTs, scheme, topic, protocol)
 	if err != nil {
 		_ = c.Error(err)
 		return
@@ -490,7 +490,7 @@ func (h *OpenAPIV2) VerifyTable(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
-	_, ineligibleTables, eligibleTables, allTables, err := getVerifiedTables(ctx, common.ChangeFeedID{}, replicaCfg, kvStorage, cfg.StartTs, scheme, topic, protocol)
+	ineligibleTables, eligibleTables, allTables, err := getVerifiedTables(ctx, common.ChangeFeedID{}, replicaCfg, kvStorage, cfg.StartTs, scheme, topic, protocol)
 	if err != nil {
 		_ = c.Error(err)
 		return
@@ -872,7 +872,7 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 			_ = c.Error(err)
 			return
 		}
-		_, ineligibleTables, eligibleTables, allTables, err = getVerifiedTables(ctx, cfInfo.ChangefeedID, cfInfo.Config, kvStorage, newCheckpointTs, scheme, topic, protocol)
+		ineligibleTables, eligibleTables, allTables, err = getVerifiedTables(ctx, cfInfo.ChangefeedID, cfInfo.Config, kvStorage, newCheckpointTs, scheme, topic, protocol)
 		if err != nil {
 			_ = c.Error(err)
 			return
@@ -1032,7 +1032,7 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 		}
 
 		// use checkpointTs get snapshot from kv storage
-		_, ineligibleTables, eligibleTables, allTables, err = getVerifiedTables(ctx, oldCfInfo.ChangefeedID, oldCfInfo.Config, kvStorage, status.CheckpointTs, scheme, topic, protocol)
+		ineligibleTables, eligibleTables, allTables, err = getVerifiedTables(ctx, oldCfInfo.ChangefeedID, oldCfInfo.Config, kvStorage, status.CheckpointTs, scheme, topic, protocol)
 		if err != nil {
 			_ = c.Error(errors.ErrChangefeedUpdateRefused.GenWithStackByCause(err))
 			return
@@ -1043,7 +1043,6 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 				return
 			}
 		}
-
 	}
 
 	// verify sink
@@ -1708,34 +1707,34 @@ func getVerifiedTables(
 	replicaConfig *config.ReplicaConfig,
 	storage kv.Storage, startTs uint64,
 	scheme string, topic string, protocol config.Protocol,
-) ([]*common.TableInfo, []common.TableName, []common.TableName, []common.TableName, error) {
+) ([]common.TableName, []common.TableName, []common.TableName, error) {
 	f, err := filter.NewFilter(replicaConfig.Filter, "", util.GetOrZero(replicaConfig.CaseSensitive), util.GetOrZero(replicaConfig.ForceReplicate))
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, err
 	}
 	tableInfos, ineligibleTables, eligibleTables, allTables, err := schemastore.VerifyTables(f, storage, startTs)
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	err = f.Verify(tableInfos)
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	if err := verifyTable4MQ(replicaConfig, scheme, topic, protocol, tableInfos); err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	if err := verifyRouteConflict(changefeedID, eligibleTables, ineligibleTables, replicaConfig); err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	if ctx.Err() != nil {
-		return nil, nil, nil, nil, errors.Trace(ctx.Err())
+		return nil, nil, nil, errors.Trace(ctx.Err())
 	}
 
-	return tableInfos, ineligibleTables, eligibleTables, allTables, nil
+	return ineligibleTables, eligibleTables, allTables, nil
 }
 
 func verifyTable4MQ(
@@ -1761,10 +1760,7 @@ func verifyTable4MQ(
 	if err != nil {
 		return err
 	}
-	if err = selectors.VerifyTables(tableInfos, eventRouter); err != nil {
-		return err
-	}
-	return nil
+	return selectors.VerifyTables(tableInfos, eventRouter)
 }
 
 func verifyRouteConflict(

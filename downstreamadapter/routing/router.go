@@ -35,6 +35,43 @@ const (
 	TablePlaceholder = "{table}"
 )
 
+// targetKey identifies a downstream target table.
+type targetKey struct {
+	Schema string
+	Table  string
+}
+
+// sourceKey identifies an upstream logical table.
+type sourceKey struct {
+	LogicalTableID int64
+	Schema         string
+	Table          string
+}
+
+// routeBinding records one source-to-target route mapping.
+type routeBinding struct {
+	Source sourceKey
+	Target targetKey
+}
+
+func NewRouteBinding(tableID int64, schema, table, targetSchema, targetTable string) routeBinding {
+	return routeBinding{
+		Source: sourceKey{
+			LogicalTableID: tableID,
+			Schema:         schema,
+			Table:          table,
+		},
+		Target: targetKey{
+			Schema: targetSchema,
+			Table:  targetTable,
+		},
+	}
+}
+
+func (b routeBinding) routed() bool {
+	return b.Source.Schema != b.Target.Schema || b.Source.Table != b.Target.Table
+}
+
 // rule represents a single routing rule.
 type rule struct {
 	filter           tfilter.Filter
@@ -47,6 +84,10 @@ type rule struct {
 type Router struct {
 	changefeedID common.ChangeFeedID
 	rules        []rule
+}
+
+func (r Router) enabled() bool {
+	return len(r.rules) != 0
 }
 
 // NewRouter creates a new Router from dispatch rules.
@@ -94,14 +135,14 @@ func (r Router) ApplyToTableInfo(tableInfo *common.TableInfo) (*common.TableInfo
 		return tableInfo, nil
 	}
 
-	targetSchema, targetTable, changed, err := r.route(tableInfo.GetSchemaName(), tableInfo.GetTableName())
+	binding, err := r.route(tableInfo.GetSchemaName(), tableInfo.GetTableName())
 	if err != nil {
 		return nil, err
 	}
-	if !changed {
+	if !binding.routed() {
 		return tableInfo, nil
 	}
-	return tableInfo.CloneWithRouting(targetSchema, targetTable), nil
+	return tableInfo.CloneWithRouting(binding.Target.Schema, binding.Target.Table), nil
 }
 
 // ApplyToDDLEvent returns the original DDL event unless routing changes the DDL query;
@@ -145,12 +186,12 @@ func (r Router) ApplyToDDLEvent(ddl *commonEvent.DDLEvent) (*commonEvent.DDLEven
 		return ddl, nil
 	}
 
-	targetSchemaName, targetTableName, _, err := r.route(ddl.GetSchemaName(), ddl.GetTableName())
+	binding, err := r.route(ddl.GetSchemaName(), ddl.GetTableName())
 	if err != nil {
 		return nil, err
 	}
 
-	targetExtraSchemaName, targetExtraTableName, _, err := r.route(ddl.GetExtraSchemaName(), ddl.GetExtraTableName())
+	extraBinding, err := r.route(ddl.GetExtraSchemaName(), ddl.GetExtraTableName())
 	if err != nil {
 		return nil, err
 	}
@@ -184,10 +225,10 @@ func (r Router) ApplyToDDLEvent(ddl *commonEvent.DDLEvent) (*commonEvent.DDLEven
 	return commonEvent.NewRoutedDDLEvent(
 		ddl,
 		newQuery,
-		targetSchemaName,
-		targetTableName,
-		targetExtraSchemaName,
-		targetExtraTableName,
+		binding.Target.Schema,
+		binding.Target.Table,
+		extraBinding.Target.Schema,
+		extraBinding.Target.Table,
 		tableInfo,
 		multipleTableInfos,
 		blockedTableNames,
@@ -195,26 +236,29 @@ func (r Router) ApplyToDDLEvent(ddl *commonEvent.DDLEvent) (*commonEvent.DDLEven
 }
 
 // route returns the target schema/table names and whether routing changed them.
-func (r Router) route(originSchema, originTable string) (targetSchema, targetTable string, changed bool, err error) {
+func (r Router) route(originSchema, originTable string) (binding routeBinding, err error) {
+	// In CDC runtime, table names should always carry schema.
+	// Empty schema means this name pair is absent, so keep it unchanged.
+	// This also prevents wildcard rules like *.* from matching it.
 	if originSchema == "" {
-		return originSchema, originTable, false, nil
+		return NewRouteBinding(0, originSchema, originTable, originSchema, originTable), nil
 	}
 
-	matched, err := r.matchRule(originSchema, originTable)
+	rule, err := r.matchRule(originSchema, originTable)
 	if err != nil {
-		return "", "", false, err
+		return routeBinding{}, err
 	}
-	if matched == nil {
-		return originSchema, originTable, false, nil
+	if rule == nil {
+		return NewRouteBinding(0, originSchema, originTable, originSchema, originTable), nil
 	}
 
-	targetSchema = substituteExpression(matched.targetSchemaExpr, originSchema, originTable, originSchema)
+	targetSchema := substituteExpression(rule.targetSchemaExpr, originSchema, originTable, originSchema)
 	if originTable == "" {
-		return targetSchema, "", targetSchema != originSchema, nil
+		return NewRouteBinding(0, originSchema, originTable, targetSchema, originTable), nil
 	}
 
-	targetTable = substituteExpression(matched.targetTableExpr, originSchema, originTable, originTable)
-	return targetSchema, targetTable, targetSchema != originSchema || targetTable != originTable, nil
+	targetTable := substituteExpression(rule.targetTableExpr, originSchema, originTable, originTable)
+	return NewRouteBinding(0, originSchema, originTable, targetSchema, targetTable), nil
 }
 
 // matchRule finds the first rule that matches the given schema/table.
@@ -287,19 +331,19 @@ func (r Router) applyToBlockedTableNames(tableNames []commonEvent.SchemaTableNam
 
 	var result []commonEvent.SchemaTableName
 	for i, tableName := range tableNames {
-		targetSchema, targetTable, changed, err := r.route(tableName.SchemaName, tableName.TableName)
+		binding, err := r.route(tableName.SchemaName, tableName.TableName)
 		if err != nil {
 			return nil, err
 		}
-		if !changed {
+		if !binding.routed() {
 			continue
 		}
 		if result == nil {
 			result = append([]commonEvent.SchemaTableName(nil), tableNames...)
 		}
 		result[i] = commonEvent.SchemaTableName{
-			SchemaName: targetSchema,
-			TableName:  targetTable,
+			SchemaName: binding.Target.Schema,
+			TableName:  binding.Target.Table,
 		}
 	}
 	return result, nil
@@ -332,25 +376,16 @@ func ValidateNoStaticRouteConflict(
 	if err != nil {
 		return err
 	}
+	if !router.enabled() {
+		return nil
+	}
 
 	registry := NewTargetTableRegistry()
-
 	for _, tableNames := range tableNameGroups {
 		for _, tableName := range tableNames {
-			targetSchema, targetTable, _, err := router.route(tableName.Schema, tableName.Table)
+			binding, err := router.route(tableName.Schema, tableName.Table)
 			if err != nil {
 				return err
-			}
-			binding := RouteBinding{
-				Source: SourceKey{
-					LogicalTableID: tableName.TableID,
-					Schema:         tableName.Schema,
-					Table:          tableName.Table,
-				},
-				Target: TargetKey{
-					Schema: targetSchema,
-					Table:  targetTable,
-				},
 			}
 			if err := registry.Add(binding); err != nil {
 				return err
