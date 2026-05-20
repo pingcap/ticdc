@@ -23,10 +23,8 @@ import (
 )
 
 func makeBinding(
-	logicalID, replicaID, schemaID int64,
+	logicalID int64,
 	sourceSchema, sourceTable, targetSchema, targetTable string,
-	ruleIndex int,
-	matcher []string,
 ) RouteBinding {
 	return RouteBinding{
 		Source: SourceKey{
@@ -34,87 +32,45 @@ func makeBinding(
 			Schema:         sourceSchema,
 			Table:          sourceTable,
 		},
-		ReplicaTableID: replicaID,
-		SourceSchemaID: schemaID,
 		Target: TargetKey{
 			Schema: targetSchema,
 			Table:  targetTable,
 		},
-		RuleIndex: ruleIndex,
-		Matcher:   matcher,
 	}
 }
 
-func TestNewTargetTableRegistry(t *testing.T) {
+func TestTargetTableRegistryAdd(t *testing.T) {
 	t.Parallel()
-
-	t.Run("empty bindings", func(t *testing.T) {
-		t.Parallel()
-		r := NewTargetTableRegistry(common.ChangeFeedID{})
-		require.NotNil(t, r)
-		require.Empty(t, r.Snapshot())
-	})
 
 	t.Run("non-conflicting bindings", func(t *testing.T) {
 		t.Parallel()
-		bindings := []RouteBinding{
-			makeBinding(1, 1, 10, "db1", "t1", "db1", "t1", -1, nil),
-			makeBinding(2, 2, 10, "db1", "t2", "archive", "t2", 0, []string{"db1.*"}),
-		}
-		r := NewTargetTableRegistry(common.ChangeFeedID{})
-		for _, binding := range bindings {
-			require.NoError(t, r.Add(binding))
-		}
-		require.Len(t, r.Snapshot(), 2)
+		r := NewTargetTableRegistry()
+		require.NotNil(t, r)
+
+		require.NoError(t, r.Add(makeBinding(1, "db1", "t1", "db1", "t1")))
+		require.NoError(t, r.Add(makeBinding(2, "db1", "t2", "archive", "t2")))
 	})
 
 	t.Run("conflicting bindings fail", func(t *testing.T) {
 		t.Parallel()
-		bindings := []RouteBinding{
-			makeBinding(1, 1, 10, "db1", "t1", "archive", "orders", 0, []string{"db1.*"}),
-			makeBinding(2, 2, 20, "db2", "t1", "archive", "orders", 0, []string{"db2.*"}),
-		}
-		r := NewTargetTableRegistry(common.ChangeFeedID{})
-		require.NoError(t, r.Add(bindings[0]))
-		err := r.Add(bindings[1])
+		r := NewTargetTableRegistry()
+
+		require.NoError(t, r.Add(makeBinding(1, "db1", "t1", "archive", "orders")))
+		err := r.Add(makeBinding(2, "db2", "t1", "archive", "orders"))
 		require.Error(t, err)
 		require.True(t, errors.ErrTableRouteConflict.Equal(err))
+		require.Contains(t, err.Error(), "target `archive`.`orders`")
+		require.Contains(t, err.Error(), "source `db1`.`t1`")
+		require.Contains(t, err.Error(), "source `db2`.`t1`")
 	})
 
 	t.Run("same source multi-replica allowed", func(t *testing.T) {
 		t.Parallel()
-		bindings := []RouteBinding{
-			makeBinding(1, 100, 10, "db1", "t1", "db1", "t1", -1, nil),
-			makeBinding(1, 101, 10, "db1", "t1", "db1", "t1", -1, nil),
-		}
-		r := NewTargetTableRegistry(common.ChangeFeedID{})
-		for _, binding := range bindings {
-			require.NoError(t, r.Add(binding))
-		}
-		require.Len(t, r.Snapshot(), 2)
+		r := NewTargetTableRegistry()
+
+		require.NoError(t, r.Add(makeBinding(1, "db1", "t1", "db1", "t1")))
+		require.NoError(t, r.Add(makeBinding(1, "db1", "t1", "db1", "t1")))
 	})
-}
-
-func TestTargetTableRegistryValidateAdd(t *testing.T) {
-	t.Parallel()
-
-	r := NewTargetTableRegistry(common.ChangeFeedID{})
-	require.NoError(t, r.Add(makeBinding(1, 1, 10, "db1", "t1", "archive", "orders", 0, []string{"db1.*"})))
-
-	err := r.ValidateAdd(makeBinding(2, 2, 20, "db2", "t2", "archive", "customers", 0, []string{"db2.*"}))
-	require.NoError(t, err)
-
-	err = r.ValidateAdd(makeBinding(1, 3, 10, "db1", "t1", "archive", "orders", 0, []string{"db1.*"}))
-	require.NoError(t, err)
-
-	err = r.ValidateAdd(makeBinding(2, 2, 20, "db2", "t2", "archive", "orders", 0, []string{"db2.*"}))
-	require.Error(t, err)
-	require.True(t, errors.ErrTableRouteConflict.Equal(err))
-	require.Contains(t, err.Error(), "target `archive`.`orders`")
-	require.Contains(t, err.Error(), "source `db1`.`t1`")
-	require.Contains(t, err.Error(), "source `db2`.`t2`")
-	require.Contains(t, err.Error(), "matcher=[db1.*]")
-	require.Contains(t, err.Error(), "matcher=[db2.*]")
 }
 
 func TestValidateNoStaticRouteConflict(t *testing.T) {
@@ -126,16 +82,18 @@ func TestValidateNoStaticRouteConflict(t *testing.T) {
 		{Matcher: []string{"db2.*"}, TargetSchema: "archive", TargetTable: "{table}"},
 	}
 
-	err := ValidateNoStaticRouteConflict(changefeedID, false, rules, []common.TableName{
-		newRouteConflictTableName(1, "db1", "orders"),
-		newRouteConflictTableName(2, "db2", "orders"),
-	})
+	err := ValidateNoStaticRouteConflict(
+		changefeedID,
+		false,
+		rules,
+		[]common.TableName{newRouteConflictTableName(1, "db1", "orders")},
+		[]common.TableName{newRouteConflictTableName(2, "db2", "orders")},
+	)
 	require.Error(t, err)
 	require.True(t, errors.ErrTableRouteConflict.Equal(err))
-	require.Contains(t, err.Error(), "test-changefeed")
 	require.Contains(t, err.Error(), "target `archive`.`orders`")
-	require.Contains(t, err.Error(), "rule=0")
-	require.Contains(t, err.Error(), "rule=1")
+	require.Contains(t, err.Error(), "source `db1`.`orders`")
+	require.Contains(t, err.Error(), "source `db2`.`orders`")
 
 	err = ValidateNoStaticRouteConflict(changefeedID, false, rules, []common.TableName{
 		newRouteConflictTableName(1, "db1", "orders"),

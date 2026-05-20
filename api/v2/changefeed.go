@@ -1727,13 +1727,7 @@ func getVerifiedTables(
 		return nil, nil, nil, nil, err
 	}
 
-	// eligibleTables and ineligibleTables are both derived from tableInfos.
-	// allTables also includes table-filtered or unsupported tables, so it is not
-	// suitable for route conflict checks.
-	routeTables := make([]common.TableName, 0, len(eligibleTables)+len(ineligibleTables))
-	routeTables = append(routeTables, eligibleTables...)
-	routeTables = append(routeTables, ineligibleTables...)
-	if err := verifyRouteConflict(changefeedID, routeTables, replicaConfig); err != nil {
+	if err := verifyRouteConflict(changefeedID, eligibleTables, ineligibleTables, replicaConfig); err != nil {
 		return nil, nil, nil, nil, err
 	}
 
@@ -1775,17 +1769,20 @@ func verifyTable4MQ(
 
 func verifyRouteConflict(
 	changefeedID common.ChangeFeedID,
-	tableNames []common.TableName,
+	eligibleTables []common.TableName,
+	ineligibleTables []common.TableName,
 	replicaCfg *config.ReplicaConfig,
 ) error {
-	if len(tableNames) == 0 || replicaCfg == nil || replicaCfg.Sink == nil || len(replicaCfg.Sink.DispatchRules) == 0 {
+	if len(eligibleTables)+len(ineligibleTables) == 0 ||
+		replicaCfg == nil || replicaCfg.Sink == nil || len(replicaCfg.Sink.DispatchRules) == 0 {
 		return nil
 	}
 	return routing.ValidateNoStaticRouteConflict(
 		changefeedID,
 		util.GetOrZero(replicaCfg.CaseSensitive),
 		replicaCfg.Sink.DispatchRules,
-		tableNames,
+		eligibleTables,
+		ineligibleTables,
 	)
 }
 

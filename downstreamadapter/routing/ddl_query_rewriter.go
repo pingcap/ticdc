@@ -106,7 +106,7 @@ func (r Router) rewriteSingleDDLQuery(query string, defaultSchema string) (strin
 		targetTables = make([]commonEvent.SchemaTableName, 0, len(sourceTables))
 	)
 	for _, srcTable := range sourceTables {
-		targetSchema, targetTable, changed, _, _, err := r.route(srcTable.SchemaName, srcTable.TableName)
+		targetSchema, targetTable, changed, err := r.route(srcTable.SchemaName, srcTable.TableName)
 		if err != nil {
 			return "", err
 		}

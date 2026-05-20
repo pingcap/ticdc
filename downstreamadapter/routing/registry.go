@@ -14,9 +14,6 @@
 package routing
 
 import (
-	"sort"
-
-	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 )
 
@@ -35,93 +32,35 @@ type SourceKey struct {
 
 // RouteBinding records one source-to-target route mapping.
 type RouteBinding struct {
-	Source         SourceKey
-	ReplicaTableID int64
-	SourceSchemaID int64
-	Target         TargetKey
-
-	RuleIndex int
-	Matcher   []string
+	Source SourceKey
+	Target TargetKey
 }
 
 // TargetTableRegistry tracks which upstream logical table owns each downstream
 // target. Different logical sources mapping to the same target is a conflict;
 // multiple replicas of the same logical source may share a target.
 type TargetTableRegistry struct {
-	changefeedID common.ChangeFeedID
-
-	ownerSources map[TargetKey]SourceKey
-	bindings     map[int64]RouteBinding
-	bySourceID   map[int64]map[int64]struct{} // logicalTableID -> replicaTableIDs
+	owners map[TargetKey]RouteBinding
 }
 
 // NewTargetTableRegistry creates an empty registry.
-func NewTargetTableRegistry(changefeedID common.ChangeFeedID) *TargetTableRegistry {
+func NewTargetTableRegistry() *TargetTableRegistry {
 	return &TargetTableRegistry{
-		changefeedID: changefeedID,
-		ownerSources: make(map[TargetKey]SourceKey),
-		bindings:     make(map[int64]RouteBinding),
-		bySourceID:   make(map[int64]map[int64]struct{}),
+		owners: make(map[TargetKey]RouteBinding),
 	}
-}
-
-// Snapshot returns a deterministic copy of all current bindings.
-func (r *TargetTableRegistry) Snapshot() []RouteBinding {
-	result := make([]RouteBinding, 0, len(r.bindings))
-	for _, b := range r.bindings {
-		result = append(result, b)
-	}
-	sort.Slice(result, func(i, j int) bool {
-		if result[i].Target.Schema != result[j].Target.Schema {
-			return result[i].Target.Schema < result[j].Target.Schema
-		}
-		if result[i].Target.Table != result[j].Target.Table {
-			return result[i].Target.Table < result[j].Target.Table
-		}
-		return result[i].ReplicaTableID < result[j].ReplicaTableID
-	})
-	return result
-}
-
-// ValidateAdd checks whether binding can be added without conflict.
-func (r *TargetTableRegistry) ValidateAdd(binding RouteBinding) error {
-	existingSource, ok := r.ownerSources[binding.Target]
-	if !ok {
-		return nil
-	}
-	if existingSource.LogicalTableID == binding.Source.LogicalTableID {
-		return nil
-	}
-	existingBinding := r.findBindingBySource(existingSource.LogicalTableID)
-	return errors.ErrTableRouteConflict.FastGenByArgs("target `%s`.`%s` is mapped by both `%s`.`%s` and `%s`.`%s`",
-		existingBinding.Target.Schema, existingBinding.Target.Table,
-		existingSource.Schema, existingSource.Table,
-		binding.Target.Schema, binding.Target.Table)
 }
 
 // Add validates and records a source-to-target binding.
 func (r *TargetTableRegistry) Add(binding RouteBinding) error {
-	if err := r.ValidateAdd(binding); err != nil {
-		return err
-	}
-	r.bindings[binding.ReplicaTableID] = binding
-	r.ownerSources[binding.Target] = binding.Source
-	if _, ok := r.bySourceID[binding.Source.LogicalTableID]; !ok {
-		r.bySourceID[binding.Source.LogicalTableID] = make(map[int64]struct{})
-	}
-	r.bySourceID[binding.Source.LogicalTableID][binding.ReplicaTableID] = struct{}{}
-	return nil
-}
-
-func (r *TargetTableRegistry) findBindingBySource(logicalTableID int64) RouteBinding {
-	replicas, ok := r.bySourceID[logicalTableID]
-	if !ok {
-		return RouteBinding{}
-	}
-	for id := range replicas {
-		if b, exists := r.bindings[id]; exists {
-			return b
+	if existing, ok := r.owners[binding.Target]; ok {
+		if existing.Source.LogicalTableID != binding.Source.LogicalTableID {
+			return errors.ErrTableRouteConflict.FastGenByArgs(
+				binding.Target.Schema, binding.Target.Table,
+				existing.Source.Schema, existing.Source.Table,
+				binding.Source.Schema, binding.Source.Table)
 		}
 	}
-	return RouteBinding{}
+
+	r.owners[binding.Target] = binding
+	return nil
 }

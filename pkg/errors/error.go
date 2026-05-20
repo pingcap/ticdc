@@ -270,7 +270,7 @@ var (
 		errors.RFCCodeText("CDC:ErrTableRoutingFailed"),
 	)
 	ErrTableRouteConflict = errors.Normalize(
-		"table route conflict",
+		"table route conflict: target `%s`.`%s` is mapped by both source `%s`.`%s` and source `%s`.`%s`",
 		errors.RFCCodeText("CDC:ErrTableRouteConflict"),
 	)
 	ErrMessageTooLarge = errors.Normalize(
