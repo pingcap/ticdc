@@ -55,6 +55,7 @@ type stream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 	batcher               *batcher[T]
 	batchMetricCache      map[string]batchMetricObservers
 	batchMetricCacheOrder []string
+	batchMetricCacheNext  int
 
 	option Option
 
@@ -109,7 +110,9 @@ func (s *stream[A, P, T, D, H]) getBatchMetricObservers(label string) batchMetri
 		return observers
 	}
 	if len(s.batchMetricCache) >= maxBatchMetricCacheEntries {
-		s.evictOldestBatchMetricCache()
+		s.evictOldestBatchMetricCache(label)
+	} else {
+		s.batchMetricCacheOrder = append(s.batchMetricCacheOrder, label)
 	}
 	observers = batchMetricObservers{
 		duration: metrics.DynamicStreamBatchDuration.WithLabelValues(s.module, label),
@@ -117,19 +120,16 @@ func (s *stream[A, P, T, D, H]) getBatchMetricObservers(label string) batchMetri
 		bytes:    metrics.DynamicStreamBatchBytes.WithLabelValues(s.module, label),
 	}
 	s.batchMetricCache[label] = observers
-	s.batchMetricCacheOrder = append(s.batchMetricCacheOrder, label)
 	return observers
 }
 
-func (s *stream[A, P, T, D, H]) evictOldestBatchMetricCache() {
+func (s *stream[A, P, T, D, H]) evictOldestBatchMetricCache(label string) {
 	if len(s.batchMetricCacheOrder) == 0 {
 		return
 	}
-	label := s.batchMetricCacheOrder[0]
-	delete(s.batchMetricCache, label)
-	copy(s.batchMetricCacheOrder, s.batchMetricCacheOrder[1:])
-	s.batchMetricCacheOrder[len(s.batchMetricCacheOrder)-1] = ""
-	s.batchMetricCacheOrder = s.batchMetricCacheOrder[:len(s.batchMetricCacheOrder)-1]
+	delete(s.batchMetricCache, s.batchMetricCacheOrder[s.batchMetricCacheNext])
+	s.batchMetricCacheOrder[s.batchMetricCacheNext] = label
+	s.batchMetricCacheNext = (s.batchMetricCacheNext + 1) % len(s.batchMetricCacheOrder)
 }
 
 func (s *stream[A, P, T, D, H]) addPath(path *pathInfo[A, P, T, D, H]) {

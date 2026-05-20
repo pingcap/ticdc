@@ -190,13 +190,14 @@ func (d *dispatcherStat) verifyEventSequence(event dispatcher.DispatcherEvent, s
 		return false
 	}
 
+	debugEnabled := log.GetLevel() <= zap.DebugLevel
 	switch event.GetType() {
 	case commonEvent.TypeDMLEvent,
 		commonEvent.TypeDDLEvent,
 		commonEvent.TypeHandshakeEvent,
 		commonEvent.TypeSyncPointEvent,
 		commonEvent.TypeResolvedEvent:
-		if log.GetLevel() <= zap.DebugLevel {
+		if debugEnabled {
 			log.Debug("check event sequence",
 				zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 				zap.Stringer("dispatcher", d.getDispatcherID()),
@@ -231,7 +232,7 @@ func (d *dispatcherStat) verifyEventSequence(event dispatcher.DispatcherEvent, s
 		}
 	case commonEvent.TypeBatchDMLEvent:
 		for _, e := range event.Event.(*commonEvent.BatchDMLEvent).DMLEvents {
-			if log.GetLevel() <= zap.DebugLevel {
+			if debugEnabled {
 				log.Debug("check batch DML event sequence",
 					zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 					zap.Stringer("dispatcher", d.getDispatcherID()),
