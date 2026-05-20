@@ -17,6 +17,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 )
 
+type targetKey = tableKey
+
 // TargetTableRegistry tracks which upstream logical table owns each downstream
 // target. Different logical sources mapping to the same target is a conflict;
 // multiple replicas of the same logical source may share a target.
@@ -38,8 +40,7 @@ func (r *TargetTableRegistry) Add(binding routeBinding) error {
 		r.memo[binding.Target] = binding
 		return nil
 	}
-
-	if existing.Source.LogicalTableID == binding.Source.LogicalTableID {
+	if existing.Source.Schema == binding.Source.Schema && existing.Source.Table == binding.Source.Table {
 		return nil
 	}
 	return errors.ErrTableRouteConflict.FastGenByArgs(

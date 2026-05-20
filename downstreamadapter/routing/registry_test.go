@@ -30,16 +30,16 @@ func TestTargetTableRegistryAdd(t *testing.T) {
 		r := NewTargetTableRegistry()
 		require.NotNil(t, r)
 
-		require.NoError(t, r.Add(newRouteBinding(1, "db1", "t1", "db1", "t1")))
-		require.NoError(t, r.Add(newRouteBinding(2, "db1", "t2", "archive", "t2")))
+		require.NoError(t, r.Add(newRouteBinding("db1", "t1", "db1", "t1")))
+		require.NoError(t, r.Add(newRouteBinding("db1", "t2", "archive", "t2")))
 	})
 
 	t.Run("conflicting bindings fail", func(t *testing.T) {
 		t.Parallel()
 		r := NewTargetTableRegistry()
 
-		require.NoError(t, r.Add(newRouteBinding(1, "db1", "t1", "archive", "orders")))
-		err := r.Add(newRouteBinding(2, "db2", "t1", "archive", "orders"))
+		require.NoError(t, r.Add(newRouteBinding("db1", "t1", "archive", "orders")))
+		err := r.Add(newRouteBinding("db2", "t1", "archive", "orders"))
 		require.Error(t, err)
 		require.True(t, errors.ErrTableRouteConflict.Equal(err))
 		require.Contains(t, err.Error(), "target `archive`.`orders`")
@@ -51,8 +51,8 @@ func TestTargetTableRegistryAdd(t *testing.T) {
 		t.Parallel()
 		r := NewTargetTableRegistry()
 
-		require.NoError(t, r.Add(newRouteBinding(1, "db1", "t1", "db1", "t1")))
-		require.NoError(t, r.Add(newRouteBinding(1, "db1", "t1", "db1", "t1")))
+		require.NoError(t, r.Add(newRouteBinding("db1", "t1", "db1", "t1")))
+		require.NoError(t, r.Add(newRouteBinding("db1", "t1", "db1", "t1")))
 	})
 }
 
@@ -69,8 +69,8 @@ func TestValidateNoStaticRouteConflict(t *testing.T) {
 		changefeedID,
 		false,
 		rules,
-		[]common.TableName{newRouteConflictTableName(1, "db1", "orders")},
-		[]common.TableName{newRouteConflictTableName(2, "db2", "orders")},
+		[]common.TableName{{Schema: "db1", Table: "orders"}},
+		[]common.TableName{{Schema: "db2", Table: "orders"}},
 	)
 	require.Error(t, err)
 	require.True(t, errors.ErrTableRouteConflict.Equal(err))
@@ -79,16 +79,8 @@ func TestValidateNoStaticRouteConflict(t *testing.T) {
 	require.Contains(t, err.Error(), "source `db2`.`orders`")
 
 	err = ValidateNoStaticRouteConflict(changefeedID, false, rules, []common.TableName{
-		newRouteConflictTableName(1, "db1", "orders"),
-		newRouteConflictTableName(2, "db2", "customers"),
+		{Schema: "db1", Table: "orders"},
+		{Schema: "db2", Table: "customers"},
 	})
 	require.NoError(t, err)
-}
-
-func newRouteConflictTableName(tableID int64, schema, table string) common.TableName {
-	return common.TableName{
-		Schema:  schema,
-		Table:   table,
-		TableID: tableID,
-	}
 }
