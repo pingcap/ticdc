@@ -1727,7 +1727,13 @@ func getVerifiedTables(
 		return nil, nil, nil, nil, err
 	}
 
-	if err := verifyRouteConflict(changefeedID, tableInfos, replicaConfig); err != nil {
+	// eligibleTables and ineligibleTables are both derived from tableInfos.
+	// allTables also includes table-filtered or unsupported tables, so it is not
+	// suitable for route conflict checks.
+	routeTables := make([]common.TableName, 0, len(eligibleTables)+len(ineligibleTables))
+	routeTables = append(routeTables, eligibleTables...)
+	routeTables = append(routeTables, ineligibleTables...)
+	if err := verifyRouteConflict(changefeedID, routeTables, replicaConfig); err != nil {
 		return nil, nil, nil, nil, err
 	}
 
@@ -1769,17 +1775,17 @@ func verifyTable4MQ(
 
 func verifyRouteConflict(
 	changefeedID common.ChangeFeedID,
-	tableInfos []*common.TableInfo,
+	tableNames []common.TableName,
 	replicaCfg *config.ReplicaConfig,
 ) error {
-	if len(tableInfos) == 0 || replicaCfg == nil || replicaCfg.Sink == nil || len(replicaCfg.Sink.DispatchRules) == 0 {
+	if len(tableNames) == 0 || replicaCfg == nil || replicaCfg.Sink == nil || len(replicaCfg.Sink.DispatchRules) == 0 {
 		return nil
 	}
 	return routing.ValidateNoStaticRouteConflict(
 		changefeedID,
 		util.GetOrZero(replicaCfg.CaseSensitive),
 		replicaCfg.Sink.DispatchRules,
-		tableInfos,
+		tableNames,
 	)
 }
 

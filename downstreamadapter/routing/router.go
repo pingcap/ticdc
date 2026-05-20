@@ -35,17 +35,6 @@ const (
 	TablePlaceholder = "{table}"
 )
 
-// RouteResult carries the outcome of routing a source schema/table pair.
-type RouteResult struct {
-	SourceSchema string
-	SourceTable  string
-	TargetSchema string
-	TargetTable  string
-	Changed      bool
-	RuleIndex    int
-	Matcher      []string
-}
-
 // rule represents a single routing rule.
 type rule struct {
 	filter           tfilter.Filter
@@ -98,35 +87,6 @@ func NewRouter(
 	return Router{
 		changefeedID: changefeedID,
 		rules:        routingRules,
-	}, nil
-}
-
-// RouteName returns the routing result for the given source schema and table,
-// including which rule matched (RuleIndex = -1 when no rule matches).
-func (r Router) RouteName(schema, table string) (RouteResult, error) {
-	if len(r.rules) == 0 {
-		return RouteResult{
-			SourceSchema: schema,
-			SourceTable:  table,
-			TargetSchema: schema,
-			TargetTable:  table,
-			Changed:      false,
-			RuleIndex:    -1,
-		}, nil
-	}
-
-	targetSchema, targetTable, changed, ruleIndex, matcher, err := r.route(schema, table)
-	if err != nil {
-		return RouteResult{}, err
-	}
-	return RouteResult{
-		SourceSchema: schema,
-		SourceTable:  table,
-		TargetSchema: targetSchema,
-		TargetTable:  targetTable,
-		Changed:      changed,
-		RuleIndex:    ruleIndex,
-		Matcher:      matcher,
 	}, nil
 }
 
@@ -367,39 +327,44 @@ func substituteExpression(expr, sourceSchema, sourceTable, defaultValue string) 
 	return result
 }
 
-// ValidateNoStaticRouteConflict checks whether the given tableInfos would produce
+// ValidateNoStaticRouteConflict checks whether the given tableNames would produce
 // any route conflicts under the provided dispatch rules. It returns ErrTableRouteConflict
 // on the first conflict found, or nil when there is no conflict.
 func ValidateNoStaticRouteConflict(
 	changefeedID common.ChangeFeedID,
 	caseSensitive bool,
 	rules []*config.DispatchRule,
-	tableInfos []*common.TableInfo,
+	tableNames []common.TableName,
 ) error {
 	router, err := NewRouter(changefeedID, caseSensitive, rules)
 	if err != nil {
 		return err
 	}
 
-	registry, err := NewTargetTableRegistry(nil)
-	if err != nil {
-		return err
-	}
-	registry.SetChangefeedID(changefeedID)
+	registry := NewTargetTableRegistry(changefeedID)
 
-	for _, ti := range tableInfos {
-		if ti == nil {
-			continue
-		}
-		result, routeErr := router.RouteName(ti.GetSchemaName(), ti.GetTableName())
-		if routeErr != nil {
-			return routeErr
-		}
-		binding := NewRouteBinding(ti, ti.TableName.TableID, 0, result)
-		if err := registry.ValidateAdd(binding); err != nil {
+	for _, tableName := range tableNames {
+		targetSchema, targetTable, _, ruleIndex, matcher, err := router.route(tableName.Schema, tableName.Table)
+		if err != nil {
 			return err
 		}
-		registry.unsafeInsert(binding)
+		binding := RouteBinding{
+			Source: SourceKey{
+				LogicalTableID: tableName.TableID,
+				Schema:         tableName.Schema,
+				Table:          tableName.Table,
+			},
+			ReplicaTableID: tableName.TableID,
+			Target: TargetKey{
+				Schema: targetSchema,
+				Table:  targetTable,
+			},
+			RuleIndex: ruleIndex,
+			Matcher:   matcher,
+		}
+		if err := registry.Add(binding); err != nil {
+			return err
+		}
 	}
 	return nil
 }

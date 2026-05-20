@@ -56,25 +56,14 @@ type TargetTableRegistry struct {
 	bySourceID   map[int64]map[int64]struct{} // logicalTableID -> replicaTableIDs
 }
 
-// SetChangefeedID annotates conflict errors emitted by this registry.
-func (r *TargetTableRegistry) SetChangefeedID(changefeedID common.ChangeFeedID) {
-	r.changefeedID = changefeedID
-}
-
-// NewTargetTableRegistry creates a registry from initial bindings.
-func NewTargetTableRegistry(bindings []RouteBinding) (*TargetTableRegistry, error) {
-	r := &TargetTableRegistry{
+// NewTargetTableRegistry creates an empty registry.
+func NewTargetTableRegistry(changefeedID common.ChangeFeedID) *TargetTableRegistry {
+	return &TargetTableRegistry{
+		changefeedID: changefeedID,
 		ownerSources: make(map[TargetKey]SourceKey),
-		bindings:     make(map[int64]RouteBinding, len(bindings)),
+		bindings:     make(map[int64]RouteBinding),
 		bySourceID:   make(map[int64]map[int64]struct{}),
 	}
-	for _, b := range bindings {
-		if err := r.ValidateAdd(b); err != nil {
-			return nil, err
-		}
-		r.unsafeInsert(b)
-	}
-	return r, nil
 }
 
 // Snapshot returns a deterministic copy of all current bindings.
@@ -108,13 +97,18 @@ func (r *TargetTableRegistry) ValidateAdd(binding RouteBinding) error {
 	return r.newConflictError(existingBinding, binding)
 }
 
-func (r *TargetTableRegistry) unsafeInsert(binding RouteBinding) {
+// Add validates and records a source-to-target binding.
+func (r *TargetTableRegistry) Add(binding RouteBinding) error {
+	if err := r.ValidateAdd(binding); err != nil {
+		return err
+	}
 	r.bindings[binding.ReplicaTableID] = binding
 	r.ownerSources[binding.Target] = binding.Source
 	if _, ok := r.bySourceID[binding.Source.LogicalTableID]; !ok {
 		r.bySourceID[binding.Source.LogicalTableID] = make(map[int64]struct{})
 	}
 	r.bySourceID[binding.Source.LogicalTableID][binding.ReplicaTableID] = struct{}{}
+	return nil
 }
 
 func (r *TargetTableRegistry) findBindingBySource(logicalTableID int64) RouteBinding {
@@ -128,29 +122,6 @@ func (r *TargetTableRegistry) findBindingBySource(logicalTableID int64) RouteBin
 		}
 	}
 	return RouteBinding{}
-}
-
-// NewRouteBinding constructs a RouteBinding from a table info and route result.
-func NewRouteBinding(
-	tableInfo *common.TableInfo,
-	replicaTableID, sourceSchemaID int64,
-	result RouteResult,
-) RouteBinding {
-	return RouteBinding{
-		Source: SourceKey{
-			LogicalTableID: tableInfo.TableName.TableID,
-			Schema:         tableInfo.GetSchemaName(),
-			Table:          tableInfo.GetTableName(),
-		},
-		ReplicaTableID: replicaTableID,
-		SourceSchemaID: sourceSchemaID,
-		Target: TargetKey{
-			Schema: result.TargetSchema,
-			Table:  result.TargetTable,
-		},
-		RuleIndex: result.RuleIndex,
-		Matcher:   result.Matcher,
-	}
 }
 
 // TableRouteConflictError carries structured conflict details.

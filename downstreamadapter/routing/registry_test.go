@@ -50,8 +50,7 @@ func TestNewTargetTableRegistry(t *testing.T) {
 
 	t.Run("empty bindings", func(t *testing.T) {
 		t.Parallel()
-		r, err := NewTargetTableRegistry(nil)
-		require.NoError(t, err)
+		r := NewTargetTableRegistry(common.ChangeFeedID{})
 		require.NotNil(t, r)
 		require.Empty(t, r.Snapshot())
 	})
@@ -62,8 +61,10 @@ func TestNewTargetTableRegistry(t *testing.T) {
 			makeBinding(1, 1, 10, "db1", "t1", "db1", "t1", -1, nil),
 			makeBinding(2, 2, 10, "db1", "t2", "archive", "t2", 0, []string{"db1.*"}),
 		}
-		r, err := NewTargetTableRegistry(bindings)
-		require.NoError(t, err)
+		r := NewTargetTableRegistry(common.ChangeFeedID{})
+		for _, binding := range bindings {
+			require.NoError(t, r.Add(binding))
+		}
 		require.Len(t, r.Snapshot(), 2)
 	})
 
@@ -73,7 +74,9 @@ func TestNewTargetTableRegistry(t *testing.T) {
 			makeBinding(1, 1, 10, "db1", "t1", "archive", "orders", 0, []string{"db1.*"}),
 			makeBinding(2, 2, 20, "db2", "t1", "archive", "orders", 0, []string{"db2.*"}),
 		}
-		_, err := NewTargetTableRegistry(bindings)
+		r := NewTargetTableRegistry(common.ChangeFeedID{})
+		require.NoError(t, r.Add(bindings[0]))
+		err := r.Add(bindings[1])
 		require.Error(t, err)
 		require.True(t, errors.ErrTableRouteConflict.Equal(err))
 	})
@@ -84,8 +87,10 @@ func TestNewTargetTableRegistry(t *testing.T) {
 			makeBinding(1, 100, 10, "db1", "t1", "db1", "t1", -1, nil),
 			makeBinding(1, 101, 10, "db1", "t1", "db1", "t1", -1, nil),
 		}
-		r, err := NewTargetTableRegistry(bindings)
-		require.NoError(t, err)
+		r := NewTargetTableRegistry(common.ChangeFeedID{})
+		for _, binding := range bindings {
+			require.NoError(t, r.Add(binding))
+		}
 		require.Len(t, r.Snapshot(), 2)
 	})
 }
@@ -93,12 +98,10 @@ func TestNewTargetTableRegistry(t *testing.T) {
 func TestTargetTableRegistryValidateAdd(t *testing.T) {
 	t.Parallel()
 
-	r, err := NewTargetTableRegistry([]RouteBinding{
-		makeBinding(1, 1, 10, "db1", "t1", "archive", "orders", 0, []string{"db1.*"}),
-	})
-	require.NoError(t, err)
+	r := NewTargetTableRegistry(common.ChangeFeedID{})
+	require.NoError(t, r.Add(makeBinding(1, 1, 10, "db1", "t1", "archive", "orders", 0, []string{"db1.*"})))
 
-	err = r.ValidateAdd(makeBinding(2, 2, 20, "db2", "t2", "archive", "customers", 0, []string{"db2.*"}))
+	err := r.ValidateAdd(makeBinding(2, 2, 20, "db2", "t2", "archive", "customers", 0, []string{"db2.*"}))
 	require.NoError(t, err)
 
 	err = r.ValidateAdd(makeBinding(1, 3, 10, "db1", "t1", "archive", "orders", 0, []string{"db1.*"}))
@@ -123,9 +126,9 @@ func TestValidateNoStaticRouteConflict(t *testing.T) {
 		{Matcher: []string{"db2.*"}, TargetSchema: "archive", TargetTable: "{table}"},
 	}
 
-	err := ValidateNoStaticRouteConflict(changefeedID, false, rules, []*common.TableInfo{
-		newRouteConflictTableInfo(1, "db1", "orders"),
-		newRouteConflictTableInfo(2, "db2", "orders"),
+	err := ValidateNoStaticRouteConflict(changefeedID, false, rules, []common.TableName{
+		newRouteConflictTableName(1, "db1", "orders"),
+		newRouteConflictTableName(2, "db2", "orders"),
 	})
 	require.Error(t, err)
 	require.True(t, errors.ErrTableRouteConflict.Equal(err))
@@ -134,19 +137,17 @@ func TestValidateNoStaticRouteConflict(t *testing.T) {
 	require.Contains(t, err.Error(), "rule=0")
 	require.Contains(t, err.Error(), "rule=1")
 
-	err = ValidateNoStaticRouteConflict(changefeedID, false, rules, []*common.TableInfo{
-		newRouteConflictTableInfo(1, "db1", "orders"),
-		newRouteConflictTableInfo(2, "db2", "customers"),
+	err = ValidateNoStaticRouteConflict(changefeedID, false, rules, []common.TableName{
+		newRouteConflictTableName(1, "db1", "orders"),
+		newRouteConflictTableName(2, "db2", "customers"),
 	})
 	require.NoError(t, err)
 }
 
-func newRouteConflictTableInfo(tableID int64, schema, table string) *common.TableInfo {
-	return &common.TableInfo{
-		TableName: common.TableName{
-			Schema:  schema,
-			Table:   table,
-			TableID: tableID,
-		},
+func newRouteConflictTableName(tableID int64, schema, table string) common.TableName {
+	return common.TableName{
+		Schema:  schema,
+		Table:   table,
+		TableID: tableID,
 	}
 }
