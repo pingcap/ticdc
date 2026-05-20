@@ -14,35 +14,49 @@
 package routing
 
 import (
+	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"go.uber.org/zap"
 )
 
 type targetKey = tableKey
 
-// TargetTableRegistry tracks which upstream logical table owns each downstream
-// target. Different logical sources mapping to the same target is a conflict;
-// multiple replicas of the same logical source may share a target.
+// TargetTableRegistry tracks which upstream source table name owns each downstream
+// target table name. Different source names mapping to the same target is a conflict;
+// registering the same source-target mapping repeatedly is idempotent.
 type TargetTableRegistry struct {
-	memo map[targetKey]routeBinding
+	changefeedID common.ChangeFeedID
+	memo         map[targetKey]routeBinding
 }
 
 // NewTargetTableRegistry creates an empty registry.
-func NewTargetTableRegistry() *TargetTableRegistry {
+func NewTargetTableRegistry(changefeedID common.ChangeFeedID) *TargetTableRegistry {
 	return &TargetTableRegistry{
-		memo: make(map[targetKey]routeBinding),
+		changefeedID: changefeedID,
+		memo:         make(map[targetKey]routeBinding),
 	}
 }
 
-// Add validates and records a source-to-target binding.
+// Add validates and records a source-to-target table name mapping.
 func (r *TargetTableRegistry) Add(binding routeBinding) error {
 	existing, ok := r.memo[binding.Target]
 	if !ok {
 		r.memo[binding.Target] = binding
 		return nil
 	}
-	if existing.Source.Schema == binding.Source.Schema && existing.Source.Table == binding.Source.Table {
+	if existing.Source.Equal(binding.Source) {
 		return nil
 	}
+	log.Warn("table route conflict detected",
+		zap.String("keyspace", r.changefeedID.Keyspace()),
+		zap.String("changefeed", r.changefeedID.Name()),
+		zap.String("targetSchema", binding.Target.Schema),
+		zap.String("targetTable", binding.Target.Table),
+		zap.String("existingSourceSchema", existing.Source.Schema),
+		zap.String("existingSourceTable", existing.Source.Table),
+		zap.String("incomingSourceSchema", binding.Source.Schema),
+		zap.String("incomingSourceTable", binding.Source.Table))
 	return errors.ErrTableRouteConflict.FastGenByArgs(
 		binding.Target.Schema, binding.Target.Table,
 		existing.Source.Schema, existing.Source.Table,

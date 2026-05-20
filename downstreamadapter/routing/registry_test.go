@@ -25,9 +25,10 @@ import (
 func TestTargetTableRegistryAdd(t *testing.T) {
 	t.Parallel()
 
+	changefeedID := common.NewChangeFeedIDWithName("test-changefeed", common.DefaultKeyspaceName)
 	t.Run("non-conflicting bindings", func(t *testing.T) {
 		t.Parallel()
-		r := NewTargetTableRegistry()
+		r := NewTargetTableRegistry(changefeedID)
 		require.NotNil(t, r)
 
 		require.NoError(t, r.Add(newRouteBinding("db1", "t1", "db1", "t1")))
@@ -36,7 +37,7 @@ func TestTargetTableRegistryAdd(t *testing.T) {
 
 	t.Run("conflicting bindings fail", func(t *testing.T) {
 		t.Parallel()
-		r := NewTargetTableRegistry()
+		r := NewTargetTableRegistry(changefeedID)
 
 		require.NoError(t, r.Add(newRouteBinding("db1", "t1", "archive", "orders")))
 		err := r.Add(newRouteBinding("db2", "t1", "archive", "orders"))
@@ -47,9 +48,9 @@ func TestTargetTableRegistryAdd(t *testing.T) {
 		require.Contains(t, err.Error(), "source `db2`.`t1`")
 	})
 
-	t.Run("same source multi-replica allowed", func(t *testing.T) {
+	t.Run("same source mapping is idempotent", func(t *testing.T) {
 		t.Parallel()
-		r := NewTargetTableRegistry()
+		r := NewTargetTableRegistry(changefeedID)
 
 		require.NoError(t, r.Add(newRouteBinding("db1", "t1", "db1", "t1")))
 		require.NoError(t, r.Add(newRouteBinding("db1", "t1", "db1", "t1")))
@@ -83,4 +84,22 @@ func TestValidateNoStaticRouteConflict(t *testing.T) {
 		{Schema: "db2", Table: "customers"},
 	})
 	require.NoError(t, err)
+
+	err = ValidateNoStaticRouteConflict(
+		changefeedID,
+		false,
+		[]*config.DispatchRule{
+			{Matcher: []string{"db2.*"}, TargetSchema: "db1", TargetTable: "{table}"},
+		},
+		[]common.TableName{
+			{Schema: "db1", Table: "orders"},
+			{Schema: "db2", Table: "orders"},
+		},
+	)
+	require.Error(t, err)
+	require.True(t, errors.ErrTableRouteConflict.Equal(err))
+	require.Contains(t, err.Error(), "target `db1`.`orders`")
+	require.Contains(t, err.Error(), "source `db1`.`orders`")
+	require.Contains(t, err.Error(), "source `db2`.`orders`")
+
 }

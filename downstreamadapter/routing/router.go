@@ -40,6 +40,10 @@ type tableKey struct {
 	Table  string
 }
 
+func (k tableKey) Equal(other tableKey) bool {
+	return k.Schema == other.Schema && k.Table == other.Table
+}
+
 // routeBinding records one source-to-target route mapping.
 type routeBinding struct {
 	Source tableKey
@@ -60,7 +64,7 @@ func newRouteBinding(schema, table, targetSchema, targetTable string) routeBindi
 }
 
 func (b routeBinding) routed() bool {
-	return b.Source.Schema != b.Target.Schema || b.Source.Table != b.Target.Table
+	return !b.Source.Equal(b.Target)
 }
 
 // rule represents a single routing rule.
@@ -226,7 +230,7 @@ func (r Router) ApplyToDDLEvent(ddl *commonEvent.DDLEvent) (*commonEvent.DDLEven
 	), nil
 }
 
-// route returns the target schema/table names and whether routing changed them.
+// route returns the source-to-target table name binding.
 func (r Router) route(originSchema, originTable string) (binding routeBinding, err error) {
 	// In CDC runtime, table names should always carry schema.
 	// Empty schema means this name pair is absent, so keep it unchanged.
@@ -371,7 +375,7 @@ func ValidateNoStaticRouteConflict(
 		return nil
 	}
 
-	registry := NewTargetTableRegistry()
+	registry := NewTargetTableRegistry(changefeedID)
 	for _, tableNames := range tableNameGroups {
 		for _, tableName := range tableNames {
 			binding, err := router.route(tableName.Schema, tableName.Table)

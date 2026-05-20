@@ -1770,16 +1770,24 @@ func verifyRouteConflict(
 	ineligibleTables []common.TableName,
 	replicaCfg *config.ReplicaConfig,
 ) error {
-	if len(eligibleTables)+len(ineligibleTables) == 0 ||
-		replicaCfg == nil || replicaCfg.Sink == nil || len(replicaCfg.Sink.DispatchRules) == 0 {
+	if len(eligibleTables)+len(ineligibleTables) == 0 || replicaCfg == nil ||
+		replicaCfg.Sink == nil || len(replicaCfg.Sink.DispatchRules) == 0 {
 		return nil
+	}
+	if util.GetOrZero(replicaCfg.ForceReplicate) {
+		return routing.ValidateNoStaticRouteConflict(
+			changefeedID,
+			util.GetOrZero(replicaCfg.CaseSensitive),
+			replicaCfg.Sink.DispatchRules,
+			eligibleTables,
+			ineligibleTables,
+		)
 	}
 	return routing.ValidateNoStaticRouteConflict(
 		changefeedID,
 		util.GetOrZero(replicaCfg.CaseSensitive),
 		replicaCfg.Sink.DispatchRules,
 		eligibleTables,
-		ineligibleTables,
 	)
 }
 
