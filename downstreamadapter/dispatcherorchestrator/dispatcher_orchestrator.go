@@ -49,6 +49,9 @@ type DispatcherOrchestrator struct {
 
 	// closed indicates Close has been invoked and no more messages should be enqueued.
 	closed atomic.Bool
+	// fenced indicates this capture has lost local liveness and must stop local
+	// downstream writes without waiting for graceful dispatcher draining.
+	fenced atomic.Bool
 	// msgGuardWaitGroup waits for in-flight RecvMaintainerRequest handlers before shutdown.
 	msgGuardWaitGroup util.GuardedWaitGroup
 }
@@ -87,7 +90,7 @@ func (m *DispatcherOrchestrator) RecvMaintainerRequest(
 	_ context.Context,
 	msg *messaging.TargetMessage,
 ) error {
-	if !m.msgGuardWaitGroup.AddIf(func() bool { return !m.closed.Load() }) {
+	if !m.msgGuardWaitGroup.AddIf(func() bool { return !m.closed.Load() && !m.fenced.Load() }) {
 		log.Debug("dispatcher orchestrator already closed, drop message", zap.Any("message", msg.Message))
 		return nil
 	}
@@ -139,6 +142,12 @@ func getPendingMessageKey(msg *messaging.TargetMessage) (pendingMessageKey, bool
 // processMessage dispatches a queued control message to the existing handler
 // implementation. Shards only change concurrency, not per-message behavior.
 func (m *DispatcherOrchestrator) processMessage(msg *messaging.TargetMessage) {
+	if m.fenced.Load() {
+		log.Info("dispatcher orchestrator is fenced, drop pending message",
+			zap.String("type", msg.Type.String()))
+		return
+	}
+
 	switch req := msg.Message[0].(type) {
 	case *heartbeatpb.MaintainerBootstrapRequest:
 		if err := m.handleBootstrapRequest(msg.From, req); err != nil {
@@ -164,6 +173,9 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 	from node.ID,
 	req *heartbeatpb.MaintainerBootstrapRequest,
 ) error {
+	if m.fenced.Load() {
+		return nil
+	}
 	cfId := common.NewChangefeedIDFromPB(req.ChangefeedID)
 
 	cfConfig := &config.ChangefeedConfig{}
@@ -214,10 +226,18 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 			return m.sendResponse(from, messaging.MaintainerManagerTopic, response)
 		}
 		m.mutex.Lock()
+		if m.fenced.Load() || m.closed.Load() {
+			m.mutex.Unlock()
+			manager.LocalFence()
+			return nil
+		}
 		m.dispatcherManagers[cfId] = manager
 		m.mutex.Unlock()
 		metrics.DispatcherManagerGauge.WithLabelValues(cfId.Keyspace(), cfId.Name()).Inc()
 	} else {
+		if m.fenced.Load() {
+			return nil
+		}
 		// Check and potentially add a table trigger event dispatcher.
 		// This is necessary during maintainer node migration, as the existing
 		// dispatcher manager on the new node may not have a table trigger
@@ -375,6 +395,36 @@ func (m *DispatcherOrchestrator) handleCloseRequest(
 	log.Info("try close dispatcher manager",
 		zap.String("changefeed", cfId.String()), zap.Bool("success", response.Success))
 	return m.sendResponse(from, messaging.MaintainerTopic, response)
+}
+
+// LocalFence stops all local dispatcher managers from writing downstream without
+// waiting for dispatcher drain. Full resource cleanup is still handled by Close.
+func (m *DispatcherOrchestrator) LocalFence() {
+	if !m.fenced.CompareAndSwap(false, true) {
+		m.localFenceManagers()
+		return
+	}
+	log.Warn("dispatcher orchestrator local fence triggered")
+
+	m.mc.DeRegisterHandler(messaging.DispatcherManagerManagerTopic)
+	m.msgGuardWaitGroup.Wait()
+	for _, shard := range m.shards {
+		shard.CloseAsync()
+	}
+	m.localFenceManagers()
+}
+
+func (m *DispatcherOrchestrator) localFenceManagers() {
+	m.mutex.Lock()
+	managers := make([]*dispatchermanager.DispatcherManager, 0, len(m.dispatcherManagers))
+	for _, manager := range m.dispatcherManagers {
+		managers = append(managers, manager)
+	}
+	m.mutex.Unlock()
+
+	for _, manager := range managers {
+		manager.LocalFence()
+	}
 }
 
 func createBootstrapResponse(

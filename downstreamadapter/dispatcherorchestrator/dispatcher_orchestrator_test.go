@@ -425,3 +425,39 @@ func TestGetPendingMessageKey_SupportedTypes(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, pendingMessageKey{changefeedID: cfID, msgType: messaging.TypeMaintainerCloseRequest}, key)
 }
+
+func TestDispatcherOrchestratorLocalFenceDropsNewMessages(t *testing.T) {
+	mc, _, stop := messaging.NewMessageCenterForTest(t)
+	defer stop()
+
+	orchestrator := &DispatcherOrchestrator{
+		mc:                 mc,
+		dispatcherManagers: make(map[common.ChangeFeedID]*dispatchermanager.DispatcherManager),
+		shards:             make([]*orchestratorShard, dispatcherOrchestratorShardCount),
+	}
+	processed := make(chan struct{}, 1)
+	for i := range orchestrator.shards {
+		orchestrator.shards[i] = newOrchestratorShard(func(msg *messaging.TargetMessage) {
+			processed <- struct{}{}
+		})
+		orchestrator.shards[i].Run()
+	}
+	orchestrator.LocalFence()
+	for _, shard := range orchestrator.shards {
+		shard.Wait()
+	}
+
+	cfID := common.NewChangeFeedIDWithName("cf", "default")
+	msg := messaging.NewSingleTargetMessage(
+		node.ID("to"),
+		messaging.DispatcherManagerManagerTopic,
+		&heartbeatpb.MaintainerCloseRequest{ChangefeedID: cfID.ToPB()},
+	)
+	require.NoError(t, orchestrator.RecvMaintainerRequest(context.Background(), msg))
+
+	select {
+	case <-processed:
+		require.FailNow(t, "local fence should drop new maintainer messages")
+	case <-time.After(50 * time.Millisecond):
+	}
+}

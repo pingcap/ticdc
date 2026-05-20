@@ -140,6 +140,9 @@ func (e *DispatcherManager) getRedoEventCollectorBatchCountAndBytes(redoSink *re
 }
 
 func (e *DispatcherManager) newRedoDispatchers(infos map[common.DispatcherID]dispatcherCreateInfo, _ bool) error {
+	if e.writePathClosed.Load() {
+		return nil
+	}
 	start := time.Now()
 	batchCount, batchBytes := e.getRedoEventCollectorBatchCountAndBytes(e.redoSink)
 
@@ -180,6 +183,12 @@ func (e *DispatcherManager) newRedoDispatchers(infos map[common.DispatcherID]dis
 			e.heartBeatTask = newHeartBeatTask(e)
 		}
 
+		e.writePathMu.Lock()
+		if e.writePathClosed.Load() {
+			e.writePathMu.Unlock()
+			rd.Remove()
+			return nil
+		}
 		if rd.IsTableTriggerDispatcher() {
 			e.SetTableTriggerRedoDispatcher(rd)
 		} else {
@@ -189,6 +198,7 @@ func (e *DispatcherManager) newRedoDispatchers(infos map[common.DispatcherID]dis
 
 		redoSeq := e.redoDispatcherMap.Set(rd.GetId(), rd)
 		rd.SetSeq(redoSeq)
+		e.writePathMu.Unlock()
 
 		if rd.IsTableTriggerDispatcher() {
 			e.metricTableTriggerRedoDispatcherCount.Inc()
@@ -249,7 +259,14 @@ func (e *DispatcherManager) mergeRedoDispatcher(dispatcherIDs []common.Dispatche
 		zap.Stringer("dispatcherID", mergedDispatcherID),
 		zap.String("tableSpan", common.FormatTableSpan(mergedSpan)))
 
+	e.writePathMu.Lock()
+	if e.writePathClosed.Load() {
+		e.writePathMu.Unlock()
+		mergedDispatcher.Remove()
+		return nil
+	}
 	registerMergeDispatcher(e.changefeedID, dispatcherIDs, e.redoDispatcherMap, mergedDispatcherID, mergedDispatcher, e.redoSchemaIDToDispatchers, e.metricRedoEventDispatcherCount, e.redoQuota)
+	e.writePathMu.Unlock()
 	return newMergeCheckTask(e, mergedDispatcher, dispatcherIDs)
 }
 

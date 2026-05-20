@@ -401,6 +401,32 @@ func TestTryCloseRemovedRequestAfterClosedReturnsImmediatelyAndTriggersCleanup(t
 	require.True(t, manager.TryClose(true))
 }
 
+func TestLocalFenceCancelsWritePathWithoutWaitingForCleanup(t *testing.T) {
+	manager := createTestManager(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	manager.ctx = ctx
+	manager.cancel = cancel
+
+	manager.wg.Add(1)
+	done := make(chan struct{})
+	go func() {
+		manager.LocalFence()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		require.FailNow(t, "local fence should not wait for dispatcher manager cleanup")
+	}
+	require.ErrorIs(t, ctx.Err(), context.Canceled)
+
+	manager.wg.Done()
+	require.Eventually(t, func() bool {
+		return manager.TryClose(false)
+	}, time.Second, 10*time.Millisecond)
+}
+
 func TestMergeDispatcherExistingID(t *testing.T) {
 	manager := createTestManager(t)
 

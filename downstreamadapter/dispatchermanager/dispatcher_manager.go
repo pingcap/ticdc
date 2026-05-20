@@ -141,8 +141,10 @@ type DispatcherManager struct {
 	latestWatermark     Watermark
 	latestRedoWatermark Watermark
 
-	closing atomic.Bool
-	closed  atomic.Bool
+	closing         atomic.Bool
+	closed          atomic.Bool
+	writePathMu     sync.Mutex
+	writePathClosed atomic.Bool
 	// removeChangefeedRequested is sticky once any close request asks for removed=true.
 	// A later removed=false request must not downgrade the final cleanup semantics.
 	removeChangefeedRequested atomic.Bool
@@ -454,6 +456,9 @@ func (e *DispatcherManager) getTableRecoveryInfoFromMysqlSink(tableIds, startTsL
 // 1. newEventDispatchers is called by NewTableTriggerEventDispatcher(just means when creating table trigger event dispatcher)
 // 2. changefeed is total new created, or resumed with overwriteCheckpointTs
 func (e *DispatcherManager) newEventDispatchers(infos map[common.DispatcherID]dispatcherCreateInfo, removeDDLTs bool) error {
+	if e.writePathClosed.Load() {
+		return nil
+	}
 	start := time.Now()
 	currentPdTs := e.pdClock.CurrentTS()
 
@@ -517,6 +522,12 @@ func (e *DispatcherManager) newEventDispatchers(infos map[common.DispatcherID]di
 			e.heartBeatTask = newHeartBeatTask(e)
 		}
 
+		e.writePathMu.Lock()
+		if e.writePathClosed.Load() {
+			e.writePathMu.Unlock()
+			d.Remove()
+			return nil
+		}
 		if d.IsTableTriggerDispatcher() {
 			if util.GetOrZero(e.config.SinkConfig.SendAllBootstrapAtStart) {
 				d.BootstrapState = dispatcher.BootstrapNotStarted
@@ -532,6 +543,7 @@ func (e *DispatcherManager) newEventDispatchers(infos map[common.DispatcherID]di
 
 		seq := e.dispatcherMap.Set(id, d)
 		d.SetSeq(seq)
+		e.writePathMu.Unlock()
 
 		if d.IsTableTriggerDispatcher() {
 			e.metricTableTriggerEventDispatcherCount.Inc()
@@ -902,7 +914,14 @@ func (e *DispatcherManager) mergeEventDispatcher(dispatcherIDs []common.Dispatch
 		zap.Stringer("dispatcherID", mergedDispatcherID),
 		zap.String("tableSpan", common.FormatTableSpan(mergedSpan)))
 
+	e.writePathMu.Lock()
+	if e.writePathClosed.Load() {
+		e.writePathMu.Unlock()
+		mergedDispatcher.Remove()
+		return nil
+	}
 	registerMergeDispatcher(e.changefeedID, dispatcherIDs, e.dispatcherMap, mergedDispatcherID, mergedDispatcher, e.schemaIDToDispatchers, e.metricEventDispatcherCount, e.sinkQuota)
+	e.writePathMu.Unlock()
 	return newMergeCheckTask(e, mergedDispatcher, dispatcherIDs)
 }
 
@@ -916,45 +935,87 @@ func (e *DispatcherManager) TryClose(removeChangefeed bool) bool {
 		e.tryScheduleRemoveChangefeedCleanup()
 		return true
 	}
-	if e.closing.Load() {
+	if !e.closing.CompareAndSwap(false, true) {
 		return e.closed.Load()
 	}
 
-	e.closing.Store(true)
 	go e.close()
 	return false
+}
+
+// LocalFence stops the local write path immediately without waiting for
+// dispatcher progress to drain. The remaining cleanup continues asynchronously.
+func (e *DispatcherManager) LocalFence() {
+	if e.closed.Load() {
+		return
+	}
+	startClose := e.closing.CompareAndSwap(false, true)
+	e.stopWritePath(true)
+	if startClose {
+		go e.finishClose()
+	}
 }
 
 func (e *DispatcherManager) close() {
 	log.Info("closing event dispatcher manager",
 		zap.Stringer("changefeedID", e.changefeedID))
 
-	defer e.closing.Store(false)
+	e.stopWritePath(false)
+	e.finishClose()
+}
+
+func (e *DispatcherManager) stopWritePath(cancelFirst bool) {
+	e.writePathMu.Lock()
+	defer e.writePathMu.Unlock()
+	if e.writePathClosed.Load() {
+		return
+	}
+	e.writePathClosed.Store(true)
+
+	log.Info("stopping dispatcher manager write path",
+		zap.Stringer("changefeedID", e.changefeedID))
+
+	if cancelFirst && e.cancel != nil {
+		e.cancel()
+	}
+
 	if e.IsRedoEnabled() {
 		closeAllDispatchers(e.changefeedID, e.redoDispatcherMap, e.redoSink.SinkType())
 		log.Info("closed all redo dispatchers",
 			zap.Stringer("changefeedID", e.changefeedID))
-		err := appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RemoveRedoMessage(e.changefeedID)
-		if err != nil {
-			log.Error("remove redo message failed",
+		if heartbeatCollector, ok := appcontext.TryGetService[*HeartBeatCollector](appcontext.HeartbeatCollector); ok {
+			err := heartbeatCollector.RemoveRedoMessage(e.changefeedID)
+			if err != nil {
+				log.Error("remove redo message failed",
+					zap.Stringer("changefeedID", e.changefeedID),
+					zap.Error(err),
+				)
+			}
+		} else {
+			log.Warn("heartbeat collector is not available when stopping redo write path",
 				zap.Stringer("changefeedID", e.changefeedID),
-				zap.Error(err),
 			)
-			return
 		}
 	}
 
-	closeAllDispatchers(e.changefeedID, e.dispatcherMap, e.sink.SinkType())
+	if e.sink != nil {
+		closeAllDispatchers(e.changefeedID, e.dispatcherMap, e.sink.SinkType())
+	}
 	log.Info("closed all event dispatchers",
 		zap.Stringer("changefeedID", e.changefeedID))
 
-	err := appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RemoveDispatcherManager(e.changefeedID)
-	if err != nil {
-		log.Error("remove dispatcher manager from heartbeat collector failed",
+	if heartbeatCollector, ok := appcontext.TryGetService[*HeartBeatCollector](appcontext.HeartbeatCollector); ok {
+		err := heartbeatCollector.RemoveDispatcherManager(e.changefeedID)
+		if err != nil {
+			log.Error("remove dispatcher manager from heartbeat collector failed",
+				zap.Stringer("changefeedID", e.changefeedID),
+				zap.Error(err),
+			)
+		}
+	} else {
+		log.Warn("heartbeat collector is not available when stopping dispatcher manager write path",
 			zap.Stringer("changefeedID", e.changefeedID),
-			zap.Error(err),
 		)
-		return
 	}
 
 	// heartbeatTask only will be generated when create new dispatchers.
@@ -965,10 +1026,9 @@ func (e *DispatcherManager) close() {
 		e.heartBeatTask.Cancel()
 	}
 
-	// Cancel the context to signal all dependent components to stop.
-	// This is important to prevent `e.sink.Close() / e.sharedInfo.Close()` from blocking,
-	// especially when a long-running DDL is being executed by the sink.
-	e.cancel()
+	if !cancelFirst && e.cancel != nil {
+		e.cancel()
+	}
 
 	if e.sharedInfo != nil {
 		e.sharedInfo.Close()
@@ -979,10 +1039,18 @@ func (e *DispatcherManager) close() {
 	if e.IsRedoEnabled() {
 		e.redoSink.Close()
 	}
-	e.sink.Close()
+	if e.sink != nil {
+		e.sink.Close()
+	}
 	log.Info("sink closed", zap.Stringer("changefeedID", e.changefeedID))
+}
 
+func (e *DispatcherManager) finishClose() {
+	defer e.closing.Store(false)
 	e.wg.Wait()
+	if !e.closed.CompareAndSwap(false, true) {
+		return
+	}
 
 	e.removeTaskHandles.Range(func(key, value interface{}) bool {
 		handle := value.(*threadpool.TaskHandle)
@@ -992,7 +1060,6 @@ func (e *DispatcherManager) close() {
 
 	e.cleanMetrics()
 
-	e.closed.Store(true)
 	e.tryScheduleRemoveChangefeedCleanup()
 	log.Info("event dispatcher manager closed",
 		zap.Stringer("changefeedID", e.changefeedID))
