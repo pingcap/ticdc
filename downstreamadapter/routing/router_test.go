@@ -83,7 +83,7 @@ func TestNewRouter(t *testing.T) {
 		router, err := NewRouter(newTestChangefeedID(), true, nil)
 		require.NoError(t, err)
 		require.Empty(t, router.rules)
-		schema, table, changed, err := router.route("db1", "t1")
+		schema, table, changed, _, _, err := router.route("db1", "t1")
 		require.NoError(t, err)
 		require.Equal(t, "db1", schema)
 		require.Equal(t, "t1", table)
@@ -92,7 +92,7 @@ func TestNewRouter(t *testing.T) {
 		router, err = NewRouter(newTestChangefeedID(), true, []*config.DispatchRule{})
 		require.NoError(t, err)
 		require.Empty(t, router.rules)
-		schema, table, changed, err = router.route("db1", "t1")
+		schema, table, changed, _, _, err = router.route("db1", "t1")
 		require.NoError(t, err)
 		require.Equal(t, "db1", schema)
 		require.Equal(t, "t1", table)
@@ -148,19 +148,19 @@ func TestNewRouter(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, router.rules, 2)
 
-		schema, table, changed, err := router.route("db1", "orders")
+		schema, table, changed, _, _, err := router.route("db1", "orders")
 		require.NoError(t, err)
 		require.Equal(t, "db1", schema)
 		require.Equal(t, "orders", table)
 		require.False(t, changed)
 
-		schema, table, changed, err = router.route("db2", "orders")
+		schema, table, changed, _, _, err = router.route("db2", "orders")
 		require.NoError(t, err)
 		require.Equal(t, "archive", schema)
 		require.Equal(t, "orders", table)
 		require.True(t, changed)
 
-		schema, table, changed, err = router.route("db3", "users")
+		schema, table, changed, _, _, err = router.route("db3", "users")
 		require.NoError(t, err)
 		require.Equal(t, "db3", schema)
 		require.Equal(t, "users_bak", table)
@@ -172,7 +172,7 @@ func TestRouterRoute(t *testing.T) {
 	t.Parallel()
 
 	var zeroRouter Router
-	schema, table, changed, err := zeroRouter.route("source_db", "source_table")
+	schema, table, changed, _, _, err := zeroRouter.route("source_db", "source_table")
 	require.NoError(t, err)
 	require.Equal(t, "source_db", schema)
 	require.Equal(t, "source_table", table)
@@ -247,7 +247,7 @@ func TestRouterRoute(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			gotSchema, gotTable, gotChanged, err := router.route(tc.sourceSchema, tc.sourceTable)
+			gotSchema, gotTable, gotChanged, _, _, err := router.route(tc.sourceSchema, tc.sourceTable)
 			require.NoError(t, err)
 			require.Equal(t, tc.expectedSchema, gotSchema)
 			require.Equal(t, tc.expectedTable, gotTable)
@@ -261,7 +261,7 @@ func TestRouterRoute(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		schema, table, changed, err := router.route("db1", "")
+		schema, table, changed, _, _, err := router.route("db1", "")
 		require.NoError(t, err)
 		require.Equal(t, "db1_archive", schema)
 		require.Empty(t, table)
@@ -275,7 +275,7 @@ func TestRouterRoute(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		schema, table, changed, err := router.route("db1", "")
+		schema, table, changed, _, _, err := router.route("db1", "")
 		require.NoError(t, err)
 		require.Equal(t, "db1_archive", schema)
 		require.Empty(t, table)
@@ -289,7 +289,7 @@ func TestRouterRoute(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		_, _, _, err = router.route("db1", "")
+		_, _, _, _, _, err = router.route("db1", "")
 		require.Error(t, err)
 		require.True(t, errors.ErrTableRoutingFailed.Equal(err))
 		require.Contains(t, err.Error(), "ambiguous schema routing")
@@ -301,7 +301,7 @@ func TestRouterRoute(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		schema, table, changed, err := router.route("", "")
+		schema, table, changed, _, _, err := router.route("", "")
 		require.NoError(t, err)
 		require.Empty(t, schema)
 		require.Empty(t, table)
@@ -320,7 +320,7 @@ func TestRouterFirstMatchWins(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, router.rules, 3)
 
-	schema, table, changed, err := router.route("db1", "users")
+	schema, table, changed, _, _, err := router.route("db1", "users")
 	require.NoError(t, err)
 	require.Equal(t, "catch_all", schema)
 	require.Equal(t, "users", table)
@@ -338,13 +338,13 @@ func TestRouterCaseSensitivity(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		schema, table, changed, err := router.route("MyDB", "MyTable")
+		schema, table, changed, _, _, err := router.route("MyDB", "MyTable")
 		require.NoError(t, err)
 		require.Equal(t, "target_db", schema)
 		require.Equal(t, "target_table", table)
 		require.True(t, changed)
 
-		schema, table, changed, err = router.route("mydb", "mytable")
+		schema, table, changed, _, _, err = router.route("mydb", "mytable")
 		require.NoError(t, err)
 		require.Equal(t, "mydb", schema)
 		require.Equal(t, "mytable", table)
@@ -359,7 +359,7 @@ func TestRouterCaseSensitivity(t *testing.T) {
 		})
 		require.NoError(t, err)
 
-		schema, table, changed, err := router.route("mydb", "MyTable")
+		schema, table, changed, _, _, err := router.route("mydb", "MyTable")
 		require.NoError(t, err)
 		require.Equal(t, "backup_mydb", schema)
 		require.Equal(t, "MyTable", table)

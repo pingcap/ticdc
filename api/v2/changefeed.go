@@ -27,6 +27,7 @@ import (
 	"github.com/pingcap/kvproto/pkg/keyspacepb"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/api/middleware"
+	"github.com/pingcap/ticdc/downstreamadapter/routing"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter"
@@ -45,7 +46,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/version"
-	tidbkv "github.com/pingcap/tidb/pkg/kv"
+	"github.com/pingcap/tidb/pkg/kv"
 	"github.com/tikv/client-go/v2/oracle"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
@@ -252,7 +253,7 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		cancel()
 	}()
 
-	var kvStorage tidbkv.Storage
+	var kvStorage kv.Storage
 	keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
 	kvStorage, err = keyspaceManager.GetStorage(ctx, keyspaceName)
 	if err != nil {
@@ -280,7 +281,7 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		allTables        []common.TableName
 	)
 	protocol, _ := config.ParseSinkProtocolFromString(util.GetOrZero(replicaCfg.Sink.Protocol))
-	ineligibleTables, eligibleTables, allTables, err = getVerifiedTables(ctx, replicaCfg, kvStorage, cfg.StartTs, scheme, topic, protocol)
+	tableInfos, ineligibleTables, eligibleTables, allTables, err := getVerifiedTables(ctx, replicaCfg, kvStorage, cfg.StartTs, scheme, topic, protocol)
 	if err != nil {
 		_ = c.Error(err)
 		return
@@ -288,6 +289,15 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 	if !util.GetOrZero(replicaCfg.ForceReplicate) && !util.GetOrZero(cfg.ReplicaConfig.IgnoreIneligibleTable) {
 		if len(ineligibleTables) != 0 {
 			err = errors.ErrTableIneligible.GenWithStackByArgs(ineligibleTables)
+			_ = c.Error(err)
+			return
+		}
+	}
+
+	// Static table route conflict check
+	checkInfos := filterTableInfosForRouteConflict(tableInfos, ineligibleTables, replicaCfg)
+	if len(checkInfos) > 0 && len(replicaCfg.Sink.DispatchRules) > 0 {
+		if err = routing.ValidateNoStaticRouteConflict(changefeedID, util.GetOrZero(replicaCfg.CaseSensitive), replicaCfg.Sink.DispatchRules, checkInfos); err != nil {
 			_ = c.Error(err)
 			return
 		}
@@ -489,7 +499,7 @@ func (h *OpenAPIV2) VerifyTable(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
-	ineligibleTables, eligibleTables, allTables, err := getVerifiedTables(ctx, replicaCfg, kvStorage, cfg.StartTs, scheme, topic, protocol)
+	_, ineligibleTables, eligibleTables, allTables, err := getVerifiedTables(ctx, replicaCfg, kvStorage, cfg.StartTs, scheme, topic, protocol)
 	if err != nil {
 		_ = c.Error(err)
 		return
@@ -864,14 +874,14 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 		}
 		protocol, _ := config.ParseSinkProtocolFromString(util.GetOrZero(cfInfo.Config.Sink.Protocol))
 
-		var kvStorage tidbkv.Storage
+		var kvStorage kv.Storage
 		keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
 		kvStorage, err = keyspaceManager.GetStorage(ctx, changefeedDisplayName.Keyspace)
 		if err != nil {
 			_ = c.Error(err)
 			return
 		}
-		ineligibleTables, eligibleTables, allTables, err = getVerifiedTables(ctx, cfInfo.Config, kvStorage, newCheckpointTs, scheme, topic, protocol)
+		_, ineligibleTables, eligibleTables, allTables, err = getVerifiedTables(ctx, cfInfo.Config, kvStorage, newCheckpointTs, scheme, topic, protocol)
 		if err != nil {
 			_ = c.Error(err)
 			return
@@ -994,6 +1004,7 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 		targetTsUpdated, sinkURIUpdated, configUpdated))
 
 	var (
+		tableInfos       []*common.TableInfo
 		ineligibleTables []common.TableName
 		eligibleTables   []common.TableName
 		allTables        []common.TableName
@@ -1031,7 +1042,7 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 		}
 
 		// use checkpointTs get snapshot from kv storage
-		ineligibleTables, eligibleTables, allTables, err = getVerifiedTables(ctx, oldCfInfo.Config, kvStorage, status.CheckpointTs, scheme, topic, protocol)
+		tableInfos, ineligibleTables, eligibleTables, allTables, err = getVerifiedTables(ctx, oldCfInfo.Config, kvStorage, status.CheckpointTs, scheme, topic, protocol)
 		if err != nil {
 			_ = c.Error(errors.ErrChangefeedUpdateRefused.GenWithStackByCause(err))
 			return
@@ -1039,6 +1050,15 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 		if !util.GetOrZero(oldCfInfo.Config.ForceReplicate) && !util.GetOrZero(oldCfInfo.Config.IgnoreIneligibleTable) {
 			if len(ineligibleTables) != 0 {
 				_ = c.Error(errors.ErrTableIneligible.GenWithStackByArgs(ineligibleTables))
+				return
+			}
+		}
+
+		// Static table route conflict check
+		checkInfos := filterTableInfosForRouteConflict(tableInfos, ineligibleTables, oldCfInfo.Config)
+		if len(checkInfos) > 0 && len(oldCfInfo.Config.Sink.DispatchRules) > 0 {
+			if err = routing.ValidateNoStaticRouteConflict(oldCfInfo.ChangefeedID, util.GetOrZero(oldCfInfo.Config.CaseSensitive), oldCfInfo.Config.Sink.DispatchRules, checkInfos); err != nil {
+				_ = c.Error(err)
 				return
 			}
 		}
@@ -1703,17 +1723,17 @@ func (h *OpenAPIV2) synced(c *gin.Context) {
 func getVerifiedTables(
 	ctx context.Context,
 	replicaConfig *config.ReplicaConfig,
-	storage tidbkv.Storage, startTs uint64,
+	storage kv.Storage, startTs uint64,
 	scheme string, topic string, protocol config.Protocol,
-) ([]common.TableName, []common.TableName, []common.TableName, error) {
+) ([]*common.TableInfo, []common.TableName, []common.TableName, []common.TableName, error) {
 	f, err := filter.NewFilter(replicaConfig.Filter, "", util.GetOrZero(replicaConfig.CaseSensitive), util.GetOrZero(replicaConfig.ForceReplicate))
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	tableInfos, ineligibleTables, eligibleTables, allTables, err := schemastore.
 		VerifyTables(f, storage, startTs)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	log.Info("verifyTables completed",
 		zap.Int("tableCount", len(tableInfos)),
@@ -1721,35 +1741,70 @@ func getVerifiedTables(
 
 	err = f.Verify(tableInfos)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	if !config.IsMQScheme(scheme) {
-		return ineligibleTables, eligibleTables, allTables, nil
+		return tableInfos, ineligibleTables, eligibleTables, allTables, nil
 	}
 
 	eventRouter, err := eventrouter.NewEventRouter(replicaConfig.Sink, topic, config.IsPulsarScheme(scheme), protocol == config.ProtocolAvro)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	err = eventRouter.VerifyTables(tableInfos)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 
 	selectors, err := columnselector.New(replicaConfig.Sink)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	err = selectors.VerifyTables(tableInfos, eventRouter)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 
 	if ctx.Err() != nil {
-		return nil, nil, nil, errors.Trace(ctx.Err())
+		return nil, nil, nil, nil, errors.Trace(ctx.Err())
 	}
 
-	return ineligibleTables, eligibleTables, allTables, nil
+	return tableInfos, ineligibleTables, eligibleTables, allTables, nil
+}
+
+// filterTableInfosForRouteConflict filters tableInfos for static route conflict checks.
+// It excludes ineligible tables when IgnoreIneligibleTable is true and ForceReplicate is false.
+func filterTableInfosForRouteConflict(
+	tableInfos []*common.TableInfo,
+	ineligibleTables []common.TableName,
+	replicaCfg *config.ReplicaConfig,
+) []*common.TableInfo {
+	if util.GetOrZero(replicaCfg.ForceReplicate) || len(ineligibleTables) == 0 {
+		return tableInfos
+	}
+	if util.GetOrZero(replicaCfg.IgnoreIneligibleTable) {
+		type tableNameKey struct {
+			schema string
+			table  string
+		}
+		ineligible := make(map[tableNameKey]struct{}, len(ineligibleTables))
+		for _, t := range ineligibleTables {
+			ineligible[tableNameKey{schema: t.Schema, table: t.Table}] = struct{}{}
+		}
+		result := make([]*common.TableInfo, 0, len(tableInfos))
+		for _, ti := range tableInfos {
+			if ti == nil {
+				continue
+			}
+			tn := tableNameKey{schema: ti.GetSchemaName(), table: ti.GetTableName()}
+			if _, ok := ineligible[tn]; ok {
+				continue
+			}
+			result = append(result, ti)
+		}
+		return result
+	}
+	return tableInfos
 }
 
 func GetKeyspaceValueWithDefault(c *gin.Context) string {
