@@ -46,7 +46,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/txnutil/gc"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/version"
-	tidbkv "github.com/pingcap/tidb/pkg/kv"
+	"github.com/pingcap/tidb/pkg/kv"
 	"github.com/tikv/client-go/v2/oracle"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
@@ -253,7 +253,7 @@ func (h *OpenAPIV2) CreateChangefeed(c *gin.Context) {
 		cancel()
 	}()
 
-	var kvStorage tidbkv.Storage
+	var kvStorage kv.Storage
 	keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
 	kvStorage, err = keyspaceManager.GetStorage(ctx, keyspaceName)
 	if err != nil {
@@ -874,7 +874,7 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 		}
 		protocol, _ := config.ParseSinkProtocolFromString(util.GetOrZero(cfInfo.Config.Sink.Protocol))
 
-		var kvStorage tidbkv.Storage
+		var kvStorage kv.Storage
 		keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
 		kvStorage, err = keyspaceManager.GetStorage(ctx, changefeedDisplayName.Keyspace)
 		if err != nil {
@@ -1723,7 +1723,7 @@ func (h *OpenAPIV2) synced(c *gin.Context) {
 func getVerifiedTables(
 	ctx context.Context,
 	replicaConfig *config.ReplicaConfig,
-	storage tidbkv.Storage, startTs uint64,
+	storage kv.Storage, startTs uint64,
 	scheme string, topic string, protocol config.Protocol,
 ) ([]*common.TableInfo, []common.TableName, []common.TableName, []common.TableName, error) {
 	f, err := filter.NewFilter(replicaConfig.Filter, "", util.GetOrZero(replicaConfig.CaseSensitive), util.GetOrZero(replicaConfig.ForceReplicate))
