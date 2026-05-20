@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/utils/deque"
+	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 )
 
@@ -47,8 +48,9 @@ type stream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 	eventChan chan eventWrap[A, P, T, D, H]
 
 	// The queue to store the pending events of this stream.
-	eventQueue eventQueue[A, P, T, D, H]
-	batcher    *batcher[T]
+	eventQueue       eventQueue[A, P, T, D, H]
+	batcher          *batcher[T]
+	batchMetricCache map[string]batchMetricObservers
 
 	option Option
 
@@ -69,13 +71,14 @@ func newStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
 	batchConfigRegistry *areaBatchConfigRegistry[A],
 ) *stream[A, P, T, D, H] {
 	s := &stream[A, P, T, D, H]{
-		module:     component,
-		id:         id,
-		handler:    handler,
-		eventQueue: newEventQueue(handler, batchConfigRegistry),
-		batcher:    newDefaultBatcher[T](),
-		option:     option,
-		startTime:  time.Now(),
+		module:           component,
+		id:               id,
+		handler:          handler,
+		eventQueue:       newEventQueue(handler, batchConfigRegistry),
+		batcher:          newDefaultBatcher[T](),
+		batchMetricCache: make(map[string]batchMetricObservers),
+		option:           option,
+		startTime:        time.Now(),
 	}
 	s.ctx, s.cancel = context.WithCancel(context.Background())
 
@@ -88,6 +91,26 @@ func newStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
 		s.eventChan = make(chan eventWrap[A, P, T, D, H], 1024*16)
 	}
 	return s
+}
+
+type batchMetricObservers struct {
+	duration prometheus.Observer
+	count    prometheus.Observer
+	bytes    prometheus.Observer
+}
+
+func (s *stream[A, P, T, D, H]) getBatchMetricObservers(label string) batchMetricObservers {
+	observers, ok := s.batchMetricCache[label]
+	if ok {
+		return observers
+	}
+	observers = batchMetricObservers{
+		duration: metrics.DynamicStreamBatchDuration.WithLabelValues(s.module, label),
+		count:    metrics.DynamicStreamBatchCount.WithLabelValues(s.module, label),
+		bytes:    metrics.DynamicStreamBatchBytes.WithLabelValues(s.module, label),
+	}
+	s.batchMetricCache[label] = observers
+	return observers
 }
 
 func (s *stream[A, P, T, D, H]) addPath(path *pathInfo[A, P, T, D, H]) {
@@ -296,9 +319,10 @@ Loop:
 					continue Loop
 				}
 
-				metrics.DynamicStreamBatchDuration.WithLabelValues(s.module, path.metricLabel).Observe(float64(duration.Seconds()))
-				metrics.DynamicStreamBatchCount.WithLabelValues(s.module, path.metricLabel).Observe(float64(len(eventBuf)))
-				metrics.DynamicStreamBatchBytes.WithLabelValues(s.module, path.metricLabel).Observe(float64(nBytes))
+				batchMetrics := s.getBatchMetricObservers(path.metricLabel)
+				batchMetrics.duration.Observe(duration.Seconds())
+				batchMetrics.count.Observe(float64(len(eventBuf)))
+				batchMetrics.bytes.Observe(float64(nBytes))
 
 				path.lastHandleEventTs.Store(uint64(s.handler.GetTimestamp(eventBuf[0])))
 				path.blocking.Store(s.handler.Handle(path.dest, eventBuf...))
