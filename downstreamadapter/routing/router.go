@@ -87,6 +87,11 @@ func (r Router) enabled() bool {
 	return len(r.rules) != 0
 }
 
+// HasTableRoute returns whether the router contains any table route rule.
+func (r Router) HasTableRoute() bool {
+	return len(r.rules) > 0
+}
+
 // NewRouter creates a new Router from dispatch rules.
 // When multiple rules match the same table, the first matching rule wins.
 func NewRouter(
@@ -124,40 +129,6 @@ func NewRouter(
 		changefeedID: changefeedID,
 		rules:        routingRules,
 	}, nil
-}
-
-// RouteName returns the routing result for the given source schema and table,
-// including which rule matched (RuleIndex = -1 when no rule matches).
-func (r Router) RouteName(schema, table string) (RouteResult, error) {
-	if len(r.rules) == 0 {
-		return RouteResult{
-			SourceSchema: schema,
-			SourceTable:  table,
-			TargetSchema: schema,
-			TargetTable:  table,
-			Changed:      false,
-			RuleIndex:    -1,
-		}, nil
-	}
-
-	targetSchema, targetTable, changed, ruleIndex, matcher, err := r.route(schema, table)
-	if err != nil {
-		return RouteResult{}, err
-	}
-	return RouteResult{
-		SourceSchema: schema,
-		SourceTable:  table,
-		TargetSchema: targetSchema,
-		TargetTable:  targetTable,
-		Changed:      changed,
-		RuleIndex:    ruleIndex,
-		Matcher:      matcher,
-	}, nil
-}
-
-// HasTableRoute returns whether the router contains any table route rule.
-func (r Router) HasTableRoute() bool {
-	return len(r.rules) > 0
 }
 
 // ApplyToTableInfo returns the original TableInfo unless routing changes the target name.

@@ -1732,7 +1732,7 @@ func getVerifiedTables(
 	}
 
 	if ctx.Err() != nil {
-		return nil, nil, nil, ctx.Err()
+		return nil, nil, nil, errors.Trace(ctx.Err())
 	}
 
 	return ineligibleTables, eligibleTables, allTables, nil
