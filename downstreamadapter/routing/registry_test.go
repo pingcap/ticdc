@@ -16,10 +16,16 @@ package routing
 import (
 	"testing"
 
+<<<<<<< HEAD
+=======
+	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/config"
+>>>>>>> master
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
 
+<<<<<<< HEAD
 func makeBinding(logicalID, replicaID, schemaID int64, sourceSchema, sourceTable, targetSchema, targetTable string, ruleIndex int, matcher []string) RouteBinding {
 	return RouteBinding{
 		Source: SourceKey{
@@ -58,10 +64,24 @@ func TestNewTargetTableRegistry(t *testing.T) {
 		r, err := NewTargetTableRegistry(bindings)
 		require.NoError(t, err)
 		require.Len(t, r.Snapshot(), 2)
+=======
+func TestTargetTableRegistryAdd(t *testing.T) {
+	t.Parallel()
+
+	changefeedID := common.NewChangeFeedIDWithName("test-changefeed", common.DefaultKeyspaceName)
+	t.Run("non-conflicting bindings", func(t *testing.T) {
+		t.Parallel()
+		r := NewTargetTableRegistry(changefeedID)
+		require.NotNil(t, r)
+
+		require.NoError(t, r.Add(newRouteBinding("db1", "t1", "db1", "t1")))
+		require.NoError(t, r.Add(newRouteBinding("db1", "t2", "archive", "t2")))
+>>>>>>> master
 	})
 
 	t.Run("conflicting bindings fail", func(t *testing.T) {
 		t.Parallel()
+<<<<<<< HEAD
 		bindings := []RouteBinding{
 			makeBinding(1, 1, 10, "db1", "t1", "archive", "orders", 0, []string{"db1.*"}),
 			makeBinding(2, 2, 20, "db2", "t1", "archive", "orders", 0, []string{"db2.*"}),
@@ -275,4 +295,70 @@ func TestTargetTableRegistrySnapshot(t *testing.T) {
 	// "customers" < "orders" lexicographically
 	require.Equal(t, "customers", snapshot[0].Target.Table)
 	require.Equal(t, "orders", snapshot[1].Target.Table)
+=======
+		r := NewTargetTableRegistry(changefeedID)
+
+		require.NoError(t, r.Add(newRouteBinding("db1", "t1", "archive", "orders")))
+		err := r.Add(newRouteBinding("db2", "t1", "archive", "orders"))
+		require.Error(t, err)
+		require.True(t, errors.ErrTableRouteConflict.Equal(err))
+		require.Contains(t, err.Error(), "target `archive`.`orders`")
+		require.Contains(t, err.Error(), "source `db1`.`t1`")
+		require.Contains(t, err.Error(), "source `db2`.`t1`")
+	})
+
+	t.Run("same source mapping is idempotent", func(t *testing.T) {
+		t.Parallel()
+		r := NewTargetTableRegistry(changefeedID)
+
+		require.NoError(t, r.Add(newRouteBinding("db1", "t1", "db1", "t1")))
+		require.NoError(t, r.Add(newRouteBinding("db1", "t1", "db1", "t1")))
+	})
+}
+
+func TestValidateNoStaticRouteConflict(t *testing.T) {
+	t.Parallel()
+
+	changefeedID := common.NewChangeFeedIDWithName("test-changefeed", common.DefaultKeyspaceName)
+	rules := []*config.DispatchRule{
+		{Matcher: []string{"db1.*"}, TargetSchema: "archive", TargetTable: "{table}"},
+		{Matcher: []string{"db2.*"}, TargetSchema: "archive", TargetTable: "{table}"},
+	}
+
+	err := ValidateNoStaticRouteConflict(
+		changefeedID,
+		false,
+		rules,
+		[]common.TableName{{Schema: "db1", Table: "orders"}},
+		[]common.TableName{{Schema: "db2", Table: "orders"}},
+	)
+	require.Error(t, err)
+	require.True(t, errors.ErrTableRouteConflict.Equal(err))
+	require.Contains(t, err.Error(), "target `archive`.`orders`")
+	require.Contains(t, err.Error(), "source `db1`.`orders`")
+	require.Contains(t, err.Error(), "source `db2`.`orders`")
+
+	err = ValidateNoStaticRouteConflict(changefeedID, false, rules, []common.TableName{
+		{Schema: "db1", Table: "orders"},
+		{Schema: "db2", Table: "customers"},
+	})
+	require.NoError(t, err)
+
+	err = ValidateNoStaticRouteConflict(
+		changefeedID,
+		false,
+		[]*config.DispatchRule{
+			{Matcher: []string{"db2.*"}, TargetSchema: "db1", TargetTable: "{table}"},
+		},
+		[]common.TableName{
+			{Schema: "db1", Table: "orders"},
+			{Schema: "db2", Table: "orders"},
+		},
+	)
+	require.Error(t, err)
+	require.True(t, errors.ErrTableRouteConflict.Equal(err))
+	require.Contains(t, err.Error(), "target `db1`.`orders`")
+	require.Contains(t, err.Error(), "source `db1`.`orders`")
+	require.Contains(t, err.Error(), "source `db2`.`orders`")
+>>>>>>> master
 }

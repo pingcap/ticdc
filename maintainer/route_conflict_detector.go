@@ -38,7 +38,7 @@ type routeConflictDetector struct {
 	registry     *routing.TargetTableRegistry
 	schemaStore  schemastore.SchemaStore
 
-	pendingQueue pendingEventKeyHeap
+	pendingQueue  pendingEventKeyHeap
 	pendingEvents map[eventKey]*routePendingEvent
 
 	reportError func(error)

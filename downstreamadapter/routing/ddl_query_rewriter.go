@@ -106,16 +106,16 @@ func (r Router) rewriteSingleDDLQuery(query string, defaultSchema string) (strin
 		targetTables = make([]commonEvent.SchemaTableName, 0, len(sourceTables))
 	)
 	for _, srcTable := range sourceTables {
-		targetSchema, targetTable, changed, _, _, err := r.route(srcTable.SchemaName, srcTable.TableName)
+		binding, err := r.route(srcTable.SchemaName, srcTable.TableName)
 		if err != nil {
 			return "", err
 		}
-		if changed {
+		if binding.routed() {
 			routed = true
 		}
 		targetTables = append(targetTables, commonEvent.SchemaTableName{
-			SchemaName: targetSchema,
-			TableName:  targetTable,
+			SchemaName: binding.Target.Schema,
+			TableName:  binding.Target.Table,
 		})
 	}
 
