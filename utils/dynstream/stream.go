@@ -26,7 +26,10 @@ import (
 	"go.uber.org/zap"
 )
 
-const BlockLenInPendingQueue = 32
+const (
+	BlockLenInPendingQueue     = 32
+	maxBatchMetricCacheEntries = 1024
+)
 
 // A stream has two goroutines: receiver and handleLoop.
 // The receiver receives the events and buffers them.
@@ -48,9 +51,10 @@ type stream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 	eventChan chan eventWrap[A, P, T, D, H]
 
 	// The queue to store the pending events of this stream.
-	eventQueue       eventQueue[A, P, T, D, H]
-	batcher          *batcher[T]
-	batchMetricCache map[string]batchMetricObservers
+	eventQueue            eventQueue[A, P, T, D, H]
+	batcher               *batcher[T]
+	batchMetricCache      map[string]batchMetricObservers
+	batchMetricCacheOrder []string
 
 	option Option
 
@@ -104,13 +108,28 @@ func (s *stream[A, P, T, D, H]) getBatchMetricObservers(label string) batchMetri
 	if ok {
 		return observers
 	}
+	if len(s.batchMetricCache) >= maxBatchMetricCacheEntries {
+		s.evictOldestBatchMetricCache()
+	}
 	observers = batchMetricObservers{
 		duration: metrics.DynamicStreamBatchDuration.WithLabelValues(s.module, label),
 		count:    metrics.DynamicStreamBatchCount.WithLabelValues(s.module, label),
 		bytes:    metrics.DynamicStreamBatchBytes.WithLabelValues(s.module, label),
 	}
 	s.batchMetricCache[label] = observers
+	s.batchMetricCacheOrder = append(s.batchMetricCacheOrder, label)
 	return observers
+}
+
+func (s *stream[A, P, T, D, H]) evictOldestBatchMetricCache() {
+	if len(s.batchMetricCacheOrder) == 0 {
+		return
+	}
+	label := s.batchMetricCacheOrder[0]
+	delete(s.batchMetricCache, label)
+	copy(s.batchMetricCacheOrder, s.batchMetricCacheOrder[1:])
+	s.batchMetricCacheOrder[len(s.batchMetricCacheOrder)-1] = ""
+	s.batchMetricCacheOrder = s.batchMetricCacheOrder[:len(s.batchMetricCacheOrder)-1]
 }
 
 func (s *stream[A, P, T, D, H]) addPath(path *pathInfo[A, P, T, D, H]) {
