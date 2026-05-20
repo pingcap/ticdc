@@ -14,7 +14,6 @@
 package routing
 
 import (
-	"fmt"
 	"sort"
 
 	"github.com/pingcap/ticdc/pkg/common"
@@ -94,7 +93,10 @@ func (r *TargetTableRegistry) ValidateAdd(binding RouteBinding) error {
 		return nil
 	}
 	existingBinding := r.findBindingBySource(existingSource.LogicalTableID)
-	return r.newConflictError(existingBinding, binding)
+	return errors.ErrTableRouteConflict.FastGenByArgs("target `%s`.`%s` is mapped by both `%s`.`%s` and `%s`.`%s`",
+		existingBinding.Target.Schema, existingBinding.Target.Table,
+		existingSource.Schema, existingSource.Table,
+		binding.Target.Schema, binding.Target.Table)
 }
 
 // Add validates and records a source-to-target binding.
@@ -122,52 +124,4 @@ func (r *TargetTableRegistry) findBindingBySource(logicalTableID int64) RouteBin
 		}
 	}
 	return RouteBinding{}
-}
-
-// TableRouteConflictError carries structured conflict details.
-type TableRouteConflictError struct {
-	Changefeed string
-	Target     TargetKey
-	Existing   RouteBinding
-	Incoming   RouteBinding
-}
-
-// Error implements the error interface with a human-readable conflict message.
-func (a *TableRouteConflictError) Error() string {
-	changefeed := ""
-	if a.Changefeed != "" {
-		changefeed = fmt.Sprintf(" in changefeed %s", a.Changefeed)
-	}
-	return fmt.Sprintf(
-		"table route conflict%s: "+
-			"target `%s`.`%s` is mapped by both "+
-			"source `%s`.`%s` tableID=%d rule=%d matcher=%s "+
-			"and source `%s`.`%s` tableID=%d rule=%d matcher=%s",
-		changefeed,
-		a.Target.Schema, a.Target.Table,
-		a.Existing.Source.Schema, a.Existing.Source.Table,
-		a.Existing.Source.LogicalTableID, a.Existing.RuleIndex,
-		formatMatcher(a.Existing.Matcher),
-		a.Incoming.Source.Schema, a.Incoming.Source.Table,
-		a.Incoming.Source.LogicalTableID, a.Incoming.RuleIndex,
-		formatMatcher(a.Incoming.Matcher),
-	)
-}
-
-func (r *TargetTableRegistry) newConflictError(existing, incoming RouteBinding) error {
-	return errors.ErrTableRouteConflict.GenWithStackByArgs(
-		&TableRouteConflictError{
-			Changefeed: r.changefeedID.Name(),
-			Target:     existing.Target,
-			Existing:   existing,
-			Incoming:   incoming,
-		},
-	)
-}
-
-func formatMatcher(matcher []string) string {
-	if len(matcher) == 0 {
-		return "[]"
-	}
-	return fmt.Sprintf("%v", matcher)
 }
