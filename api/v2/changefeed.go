@@ -490,7 +490,8 @@ func (h *OpenAPIV2) VerifyTable(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
-	ineligibleTables, eligibleTables, allTables, err := getVerifiedTables(ctx, common.ChangeFeedID{}, replicaCfg, kvStorage, cfg.StartTs, scheme, topic, protocol)
+	changefeedID := common.NewChangeFeedIDWithName(cfg.ID, keyspaceName)
+	ineligibleTables, eligibleTables, allTables, err := getVerifiedTables(ctx, changefeedID, replicaCfg, kvStorage, cfg.StartTs, scheme, topic, protocol)
 	if err != nil {
 		_ = c.Error(err)
 		return
