@@ -119,6 +119,7 @@ var changefeedUnRetryableErrors = []*errors.Error{
 	ErrStorageSinkInvalidConfig,
 	ErrInvalidTableRoutingRule,
 	ErrTableRoutingFailed,
+	ErrTableRouteConflict,
 
 	// gc related errors
 	ErrGCTTLExceeded,
