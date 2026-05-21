@@ -111,7 +111,7 @@ func newPulsarSinkComponentWithFactory(ctx context.Context,
 		return pulsarComponent, protocol, errors.Trace(err)
 	}
 
-	pulsarComponent.eventRouter, err = eventrouter.NewEventRouter(sinkConfig, topic, true, false)
+	pulsarComponent.eventRouter, err = eventrouter.NewEventRouter(sinkConfig, topic, true, protocol == config.ProtocolAvro)
 	if err != nil {
 		return pulsarComponent, protocol, errors.Trace(err)
 	}

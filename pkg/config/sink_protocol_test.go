@@ -62,6 +62,14 @@ func TestParseSinkProtocolFromString(t *testing.T) {
 			protocol:             "open-protocol",
 			expectedProtocolEnum: ProtocolOpen,
 		},
+		{
+			protocol:             "debezium",
+			expectedProtocolEnum: ProtocolDebezium,
+		},
+		{
+			protocol:             "simple",
+			expectedProtocolEnum: ProtocolSimple,
+		},
 	}
 
 	for _, tc := range testCases {
@@ -108,6 +116,14 @@ func TestString(t *testing.T) {
 		{
 			protocolEnum:     ProtocolOpen,
 			expectedProtocol: "open-protocol",
+		},
+		{
+			protocolEnum:     ProtocolDebezium,
+			expectedProtocol: "debezium",
+		},
+		{
+			protocolEnum:     ProtocolSimple,
+			expectedProtocol: "simple",
 		},
 	}
 
