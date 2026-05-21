@@ -47,7 +47,7 @@ import (
 )
 
 const (
-	periodEventInterval = time.Millisecond * 100
+	periodEventInterval = time.Second * 120
 	periodRedoInterval  = time.Second * 1
 )
 
@@ -309,7 +309,7 @@ func (m *Maintainer) HandleEvent(event *Event) bool {
 					zap.Stringer("changefeedID", m.changefeedID),
 					zap.Int("eventType", event.eventType),
 					zap.Duration("duration", duration),
-					zap.Any("Message", event.message),
+					zap.Any("MessageType", event.message.Type),
 				)
 			} else {
 				log.Info("maintainer is too slow",
