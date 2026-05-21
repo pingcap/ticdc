@@ -54,16 +54,8 @@ func checkSinkURI(sinkURI *url.URL) error {
 // NewPulsarConfig new pulsar config
 // TODO(dongmen): make this method more concise.
 func NewPulsarConfig(sinkURI *url.URL, pulsarConfig *config.PulsarConfig) (*config.PulsarConfig, error) {
-	defaultMaxMessageBytes := config.DefaultMaxMessageBytes
-	c := &config.PulsarConfig{
-		ConnectionTimeout:       toSec(defaultConnectionTimeout),
-		OperationTimeout:        toSec(defaultOperationTimeout),
-		BatchingMaxMessages:     toUint(defaultBatchingMaxSize),
-		BatchingMaxPublishDelay: toMill(defaultBatchingMaxPublishDelay),
-		SendTimeout:             toSec(defaultSendTimeout),
-		MaxMessageBytes:         &defaultMaxMessageBytes,
-	}
-
+	// Parse max-message-bytes from the URI first so it can take precedence over TOML.
+	var uriMaxMessageBytes *int
 	if s := sinkURI.Query().Get("max-message-bytes"); s != "" {
 		v, err := strconv.Atoi(s)
 		if err != nil {
@@ -72,8 +64,24 @@ func NewPulsarConfig(sinkURI *url.URL, pulsarConfig *config.PulsarConfig) (*conf
 		if v <= 0 {
 			return nil, fmt.Errorf("max-message-bytes must be positive, got %d", v)
 		}
-		c.MaxMessageBytes = &v
+		uriMaxMessageBytes = &v
 	}
+
+	defaultMaxMessageBytes := config.DefaultMaxMessageBytes
+	effectiveMaxMessageBytes := &defaultMaxMessageBytes
+	if uriMaxMessageBytes != nil {
+		effectiveMaxMessageBytes = uriMaxMessageBytes
+	}
+
+	c := &config.PulsarConfig{
+		ConnectionTimeout:       toSec(defaultConnectionTimeout),
+		OperationTimeout:        toSec(defaultOperationTimeout),
+		BatchingMaxMessages:     toUint(defaultBatchingMaxSize),
+		BatchingMaxPublishDelay: toMill(defaultBatchingMaxPublishDelay),
+		SendTimeout:             toSec(defaultSendTimeout),
+		MaxMessageBytes:         effectiveMaxMessageBytes,
+	}
+
 	err := checkSinkURI(sinkURI)
 	if err != nil {
 		return nil, err
@@ -121,7 +129,10 @@ func NewPulsarConfig(sinkURI *url.URL, pulsarConfig *config.PulsarConfig) (*conf
 	if pulsarConfig.SendTimeout == nil {
 		pulsarConfig.SendTimeout = c.SendTimeout
 	}
-	if pulsarConfig.MaxMessageBytes == nil {
+	// URI parameter takes precedence over TOML; fall back to TOML, then default.
+	if uriMaxMessageBytes != nil {
+		pulsarConfig.MaxMessageBytes = uriMaxMessageBytes
+	} else if pulsarConfig.MaxMessageBytes == nil {
 		pulsarConfig.MaxMessageBytes = c.MaxMessageBytes
 	}
 
