@@ -28,7 +28,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestRouteConflictDetectorPrecheckReportsConflict(t *testing.T) {
+func TestRouteConflictDetectorApplyReportsConflict(t *testing.T) {
 	detector := newTestRouteConflictDetector(t, "target", routing.TablePlaceholder)
 
 	var reportedErr error
@@ -36,14 +36,18 @@ func TestRouteConflictDetectorPrecheckReportsConflict(t *testing.T) {
 		reportedErr = err
 	}
 
-	ready, err := detector.precheck(routeDDLInfo{
+	info := routeDDLInfo{
 		key:      getEventKey(10, false),
 		commitTs: 10,
 		addedTables: []*heartbeatpb.Table{
 			{SchemaID: 2, TableID: 2},
 		},
-	})
-	require.False(t, ready)
+	}
+	ready, err := detector.precheck(info)
+	require.True(t, ready)
+	require.NoError(t, err)
+
+	err = detector.apply(info)
 	require.Error(t, err)
 	require.Same(t, err, reportedErr)
 	require.Contains(t, err.Error(), "table route conflict")
@@ -67,9 +71,9 @@ func TestRouteConflictDetectorApplyUpdatesRegistry(t *testing.T) {
 	require.True(t, ready)
 	require.NoError(t, detector.apply(info))
 
-	binding, ok := detector.registry.GetBindingByReplicaID(2)
+	binding, ok := detector.tables[2]
 	require.True(t, ok)
-	require.Equal(t, routing.TargetKey{Schema: "db2_target", Table: "t"}, binding.Target)
+	require.Equal(t, routing.TableKey{Schema: "db2_target", Table: "t"}, binding.binding.Target)
 }
 
 func newTestRouteConflictDetector(t *testing.T, targetSchema, targetTable string) *routeConflictDetector {
@@ -92,15 +96,17 @@ func newTestRouteConflictDetector(t *testing.T, targetSchema, targetTable string
 		},
 	}
 	initialBinding := newTestRouteBinding(t, router, store.tables[1], 1, 1)
-	registry, err := routing.NewTargetTableRegistry([]routing.RouteBinding{initialBinding})
-	require.NoError(t, err)
-	registry.SetChangefeedID(cfID)
+	registry := routing.NewTargetTableRegistry(cfID)
+	require.NoError(t, registry.Add(initialBinding.binding))
 
 	return &routeConflictDetector{
-		changefeedID:  cfID,
-		router:        router,
-		registry:      registry,
-		schemaStore:   store,
+		changefeedID: cfID,
+		router:       router,
+		registry:     registry,
+		schemaStore:  store,
+		tables: map[int64]routeTableBinding{
+			1: initialBinding,
+		},
 		pendingEvents: make(map[eventKey]*routePendingEvent),
 	}
 }
@@ -111,12 +117,16 @@ func newTestRouteBinding(
 	tableInfo *common.TableInfo,
 	replicaTableID int64,
 	sourceSchemaID int64,
-) routing.RouteBinding {
+) routeTableBinding {
 	t.Helper()
 
-	result, err := router.RouteName(tableInfo.GetSchemaName(), tableInfo.GetTableName())
+	binding, err := router.Route(tableInfo.GetSchemaName(), tableInfo.GetTableName())
 	require.NoError(t, err)
-	return routing.NewRouteBinding(tableInfo, replicaTableID, sourceSchemaID, result)
+	return routeTableBinding{
+		tableID:        replicaTableID,
+		sourceSchemaID: sourceSchemaID,
+		binding:        binding,
+	}
 }
 
 func newTestRouteTableInfo(tableID int64, schema, table string) *common.TableInfo {

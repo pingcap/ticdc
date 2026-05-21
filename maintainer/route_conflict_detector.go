@@ -16,7 +16,7 @@ package maintainer
 import (
 	"container/heap"
 	"fmt"
-	"sort"
+	"slices"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/routing"
@@ -37,6 +37,7 @@ type routeConflictDetector struct {
 	router       routing.Router
 	registry     *routing.TargetTableRegistry
 	schemaStore  schemastore.SchemaStore
+	tables       map[int64]routeTableBinding
 
 	pendingQueue  pendingEventKeyHeap
 	pendingEvents map[eventKey]*routePendingEvent
@@ -62,9 +63,16 @@ type routeDDLInfo struct {
 }
 
 type routeTransition struct {
-	commitTs uint64
-	removes  []int64
-	adds     []routing.RouteBinding
+	commitTs       uint64
+	removeTableIDs []int64
+	removes        []routing.TableKey
+	adds           []routeTableBinding
+}
+
+type routeTableBinding struct {
+	tableID        int64
+	sourceSchemaID int64
+	binding        routing.RouteBinding
 }
 
 func newRouteConflictDetector(
@@ -96,18 +104,14 @@ func newRouteConflictDetector(
 	if err != nil {
 		return nil, err
 	}
-	registry, err := routing.NewTargetTableRegistry(nil)
-	if err != nil {
-		return nil, err
-	}
-	registry.SetChangefeedID(changefeedID)
 
 	return &routeConflictDetector{
 		changefeedID:  changefeedID,
 		keyspaceMeta:  keyspaceMeta,
 		router:        router,
-		registry:      registry,
+		registry:      routing.NewTargetTableRegistry(changefeedID),
 		schemaStore:   appcontext.GetService[schemastore.SchemaStore](appcontext.SchemaStore),
+		tables:        make(map[int64]routeTableBinding),
 		pendingEvents: make(map[eventKey]*routePendingEvent),
 		reportError:   reportError,
 	}, nil
@@ -117,29 +121,24 @@ func (d *routeConflictDetector) initializeFromTables(tables []commonEvent.Table,
 	if d == nil {
 		return nil
 	}
-	bindings := make([]routing.RouteBinding, 0, len(tables))
+	registry := routing.NewTargetTableRegistry(d.changefeedID, len(tables))
+	currentTables := make(map[int64]routeTableBinding, len(tables))
 	for _, t := range tables {
-		tableInfo, err := d.schemaStore.GetTableInfo(d.keyspaceMeta, t.TableID, startTs)
+		binding, err := d.buildBindingForTable(t.TableID, t.SchemaID, startTs)
 		if err != nil {
 			return err
 		}
-		result, err := d.router.RouteName(tableInfo.GetSchemaName(), tableInfo.GetTableName())
-		if err != nil {
+		if err := registry.Add(binding.binding); err != nil {
 			return err
 		}
-		bindings = append(bindings, routing.NewRouteBinding(tableInfo, t.TableID, t.SchemaID, result))
+		currentTables[t.TableID] = binding
 	}
-
-	registry, err := routing.NewTargetTableRegistry(bindings)
-	if err != nil {
-		return err
-	}
-	registry.SetChangefeedID(d.changefeedID)
 	d.registry = registry
+	d.tables = currentTables
 
 	log.Info("route registry initialized",
 		zap.String("changefeed", d.changefeedID.Name()),
-		zap.Int("bindingCount", len(bindings)))
+		zap.Int("bindingCount", len(currentTables)))
 	return nil
 }
 
@@ -163,9 +162,6 @@ func (d *routeConflictDetector) precheck(info routeDDLInfo) (bool, error) {
 	}
 	if pending.prechecked {
 		return true, nil
-	}
-	if err := d.registry.ValidateReplace(pending.transition.removes, pending.transition.adds); err != nil {
-		return false, d.fail(err)
 	}
 	pending.prechecked = true
 	log.Info("route transition prechecked",
@@ -192,14 +188,18 @@ func (d *routeConflictDetector) apply(info routeDDLInfo) error {
 			"route transition apply out of order, changefeed=%s, commitTs=%d",
 			d.changefeedID.Name(), info.commitTs))
 	}
-	if !pending.prechecked {
-		if err := d.registry.ValidateReplace(pending.transition.removes, pending.transition.adds); err != nil {
-			return d.fail(err)
-		}
-		pending.prechecked = true
+	adds := make([]routing.RouteBinding, 0, len(pending.transition.adds))
+	for _, add := range pending.transition.adds {
+		adds = append(adds, add.binding)
 	}
-	if err := d.registry.Replace(pending.transition.removes, pending.transition.adds); err != nil {
+	if err := d.registry.ApplyTransition(pending.transition.removes, adds); err != nil {
 		return d.fail(err)
+	}
+	for _, tableID := range pending.transition.removeTableIDs {
+		delete(d.tables, tableID)
+	}
+	for _, add := range pending.transition.adds {
+		d.tables[add.tableID] = add
 	}
 	d.popPendingHead(info.key)
 	log.Info("route transition applied",
@@ -259,15 +259,19 @@ func (d *routeConflictDetector) buildTransition(info routeDDLInfo) (*routeTransi
 		switch info.droppedTables.InfluenceType {
 		case heartbeatpb.InfluenceType_Normal:
 			for _, tableID := range info.droppedTables.TableIDs {
-				builder.addRemove(tableID)
+				if existing, ok := d.tables[tableID]; ok {
+					builder.addRemove(tableID, existing.binding.Source)
+				}
 			}
 		case heartbeatpb.InfluenceType_DB:
-			for _, b := range d.registry.GetBindingsBySchemaID(info.droppedTables.SchemaID) {
-				builder.addRemove(b.ReplicaTableID)
+			for _, existing := range d.tables {
+				if existing.sourceSchemaID == info.droppedTables.SchemaID {
+					builder.addRemove(existing.tableID, existing.binding.Source)
+				}
 			}
 		case heartbeatpb.InfluenceType_All:
-			for _, b := range d.registry.Snapshot() {
-				builder.addRemove(b.ReplicaTableID)
+			for _, existing := range d.tables {
+				builder.addRemove(existing.tableID, existing.binding.Source)
 			}
 		}
 	}
@@ -281,11 +285,15 @@ func (d *routeConflictDetector) buildTransition(info routeDDLInfo) (*routeTransi
 	}
 
 	for _, change := range info.updatedSchema {
+		existing, exists := d.tables[change.TableID]
+		if !exists {
+			return nil, fmt.Errorf("route registry binding not found for table %d", change.TableID)
+		}
 		binding, err := d.buildBindingForTable(change.TableID, change.NewSchemaID, info.commitTs)
 		if err != nil {
 			return nil, err
 		}
-		builder.addRemove(change.TableID)
+		builder.addRemove(change.TableID, existing.binding.Source)
 		builder.addBinding(binding)
 	}
 
@@ -294,18 +302,18 @@ func (d *routeConflictDetector) buildTransition(info routeDDLInfo) (*routeTransi
 			if builder.hasRemove(tableID) || builder.hasAdd(tableID) {
 				continue
 			}
-			existing, exists := d.registry.GetBindingByReplicaID(tableID)
+			existing, exists := d.tables[tableID]
 			if !exists {
 				return nil, fmt.Errorf("route registry binding not found for table %d", tableID)
 			}
-			binding, err := d.buildBindingForTable(tableID, existing.SourceSchemaID, info.commitTs)
+			binding, err := d.buildBindingForTable(tableID, existing.sourceSchemaID, info.commitTs)
 			if err != nil {
 				return nil, err
 			}
-			if existing.Target != binding.Target ||
-				existing.Source.Schema != binding.Source.Schema ||
-				existing.Source.Table != binding.Source.Table {
-				builder.addRemove(tableID)
+			if existing.binding.Target != binding.binding.Target ||
+				existing.binding.Source.Schema != binding.binding.Source.Schema ||
+				existing.binding.Source.Table != binding.binding.Source.Table {
+				builder.addRemove(tableID, existing.binding.Source)
 				builder.addBinding(binding)
 			}
 		}
@@ -314,23 +322,27 @@ func (d *routeConflictDetector) buildTransition(info routeDDLInfo) (*routeTransi
 	return builder.finish(), nil
 }
 
-func (d *routeConflictDetector) buildBindingForTable(tableID, schemaID int64, commitTs uint64) (routing.RouteBinding, error) {
+func (d *routeConflictDetector) buildBindingForTable(tableID, schemaID int64, commitTs uint64) (routeTableBinding, error) {
 	tableInfo, err := d.schemaStore.GetTableInfo(d.keyspaceMeta, tableID, commitTs)
 	if err != nil {
-		return routing.RouteBinding{}, err
+		return routeTableBinding{}, err
 	}
 	if schemaID == 0 {
-		if existing, ok := d.registry.GetBindingByReplicaID(tableID); ok {
-			schemaID = existing.SourceSchemaID
+		if existing, ok := d.tables[tableID]; ok {
+			schemaID = existing.sourceSchemaID
 		} else {
-			return routing.RouteBinding{}, fmt.Errorf("schema ID hint is missing for table %d", tableID)
+			return routeTableBinding{}, fmt.Errorf("schema ID hint is missing for table %d", tableID)
 		}
 	}
-	result, err := d.router.RouteName(tableInfo.GetSchemaName(), tableInfo.GetTableName())
+	binding, err := d.router.Route(tableInfo.GetSchemaName(), tableInfo.GetTableName())
 	if err != nil {
-		return routing.RouteBinding{}, err
+		return routeTableBinding{}, err
 	}
-	return routing.NewRouteBinding(tableInfo, tableID, schemaID, result), nil
+	return routeTableBinding{
+		tableID:        tableID,
+		sourceSchemaID: schemaID,
+		binding:        binding,
+	}, nil
 }
 
 func (d *routeConflictDetector) fail(err error) error {
@@ -347,23 +359,24 @@ func (d *routeConflictDetector) fail(err error) error {
 type routeTransitionBuilder struct {
 	transition routeTransition
 	removeSet  map[int64]struct{}
-	addsByID   map[int64]routing.RouteBinding
+	addsByID   map[int64]routeTableBinding
 }
 
 func newRouteTransitionBuilder(commitTs uint64) *routeTransitionBuilder {
 	return &routeTransitionBuilder{
 		transition: routeTransition{commitTs: commitTs},
 		removeSet:  make(map[int64]struct{}),
-		addsByID:   make(map[int64]routing.RouteBinding),
+		addsByID:   make(map[int64]routeTableBinding),
 	}
 }
 
-func (b *routeTransitionBuilder) addRemove(tableID int64) {
+func (b *routeTransitionBuilder) addRemove(tableID int64, source routing.TableKey) {
 	if _, ok := b.removeSet[tableID]; ok {
 		return
 	}
 	b.removeSet[tableID] = struct{}{}
-	b.transition.removes = append(b.transition.removes, tableID)
+	b.transition.removeTableIDs = append(b.transition.removeTableIDs, tableID)
+	b.transition.removes = append(b.transition.removes, source)
 }
 
 func (b *routeTransitionBuilder) hasRemove(tableID int64) bool {
@@ -371,8 +384,8 @@ func (b *routeTransitionBuilder) hasRemove(tableID int64) bool {
 	return ok
 }
 
-func (b *routeTransitionBuilder) addBinding(binding routing.RouteBinding) {
-	b.addsByID[binding.ReplicaTableID] = binding
+func (b *routeTransitionBuilder) addBinding(binding routeTableBinding) {
+	b.addsByID[binding.tableID] = binding
 }
 
 func (b *routeTransitionBuilder) hasAdd(tableID int64) bool {
@@ -386,7 +399,7 @@ func (b *routeTransitionBuilder) finish() *routeTransition {
 		for id := range b.addsByID {
 			ids = append(ids, id)
 		}
-		sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+		slices.Sort(ids)
 		for _, id := range ids {
 			b.transition.adds = append(b.transition.adds, b.addsByID[id])
 		}

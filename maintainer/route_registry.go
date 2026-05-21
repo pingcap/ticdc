@@ -47,7 +47,7 @@ func (c *Controller) rebuildTargetTableRegistry(tables []commonEvent.Table) erro
 				"schema table name is nil when rebuilding target table registry, tableID: %d",
 				table.TableID))
 		}
-		binding, err := router.Route(table.SchemaTableName.SchemaName, table.SchemaTableName.TableName)
+		binding, err := router.Route(table.SchemaName, table.TableName)
 		if err != nil {
 			return err
 		}
