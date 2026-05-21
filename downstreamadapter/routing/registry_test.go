@@ -57,6 +57,101 @@ func TestTargetTableRegistryAdd(t *testing.T) {
 	})
 }
 
+func TestTargetTableRegistryRemove(t *testing.T) {
+	t.Parallel()
+
+	changefeedID := common.NewChangeFeedIDWithName("test-changefeed", common.DefaultKeyspaceName)
+	r := NewTargetTableRegistry(changefeedID)
+
+	require.NoError(t, r.Add(newRouteBinding("db1", "t1", "archive", "orders")))
+	require.Len(t, r.owners, 1)
+
+	r.Remove(TableKey{Schema: "db1", Table: "t1"})
+	require.Empty(t, r.owners)
+
+	require.NoError(t, r.Add(newRouteBinding("db2", "t1", "archive", "orders")))
+	r.Remove(TableKey{Schema: "db1", Table: "t1"})
+	require.Len(t, r.owners, 1)
+}
+
+func TestTargetTableRegistryRejectsSourceRetarget(t *testing.T) {
+	t.Parallel()
+
+	changefeedID := common.NewChangeFeedIDWithName("test-changefeed", common.DefaultKeyspaceName)
+	r := NewTargetTableRegistry(changefeedID)
+
+	require.NoError(t, r.Add(newRouteBinding("db1", "t1", "archive", "orders")))
+	err := r.Add(newRouteBinding("db1", "t1", "archive", "orders_new"))
+	require.Error(t, err)
+	require.True(t, errors.ErrInternalCheckFailed.Equal(err))
+}
+
+func TestTargetTableRegistryApplyTransition(t *testing.T) {
+	t.Parallel()
+
+	changefeedID := common.NewChangeFeedIDWithName("test-changefeed", common.DefaultKeyspaceName)
+
+	t.Run("rename replace succeeds atomically", func(t *testing.T) {
+		t.Parallel()
+		r := NewTargetTableRegistry(changefeedID)
+		require.NoError(t, r.Add(newRouteBinding("db1", "t1", "archive", "orders")))
+		require.NoError(t, r.Add(newRouteBinding("db2", "t2", "archive", "customers")))
+
+		require.NoError(t, r.ApplyTransition(
+			[]TableKey{{Schema: "db1", Table: "t1"}},
+			[]RouteBinding{newRouteBinding("db1", "t1_new", "archive", "orders")},
+		))
+
+		require.Len(t, r.owners, 2)
+		err := r.Add(newRouteBinding("db3", "t3", "archive", "orders"))
+		require.Error(t, err)
+		require.True(t, errors.ErrTableRouteConflict.Equal(err))
+	})
+
+	t.Run("conflict leaves registry unchanged", func(t *testing.T) {
+		t.Parallel()
+		r := NewTargetTableRegistry(changefeedID)
+		require.NoError(t, r.Add(newRouteBinding("db1", "t1", "archive", "orders")))
+		require.NoError(t, r.Add(newRouteBinding("db2", "t2", "archive", "customers")))
+
+		err := r.ApplyTransition(
+			[]TableKey{{Schema: "db1", Table: "t1"}},
+			[]RouteBinding{newRouteBinding("db3", "t3", "archive", "customers")},
+		)
+		require.Error(t, err)
+		require.True(t, errors.ErrTableRouteConflict.Equal(err))
+
+		require.Len(t, r.owners, 2)
+		require.NoError(t, r.Add(newRouteBinding("db1", "t1", "archive", "orders")))
+	})
+
+	t.Run("internal duplicate target fails before mutation", func(t *testing.T) {
+		t.Parallel()
+		r := NewTargetTableRegistry(changefeedID)
+
+		err := r.ApplyTransition(nil, []RouteBinding{
+			newRouteBinding("db1", "t1", "archive", "orders"),
+			newRouteBinding("db2", "t2", "archive", "orders"),
+		})
+		require.Error(t, err)
+		require.True(t, errors.ErrTableRouteConflict.Equal(err))
+		require.Empty(t, r.owners)
+	})
+
+	t.Run("internal duplicate source fails before mutation", func(t *testing.T) {
+		t.Parallel()
+		r := NewTargetTableRegistry(changefeedID)
+
+		err := r.ApplyTransition(nil, []RouteBinding{
+			newRouteBinding("db1", "t1", "archive", "orders"),
+			newRouteBinding("db1", "t1", "archive", "orders_new"),
+		})
+		require.Error(t, err)
+		require.True(t, errors.ErrInternalCheckFailed.Equal(err))
+		require.Empty(t, r.owners)
+	})
+}
+
 func TestValidateNoStaticRouteConflict(t *testing.T) {
 	t.Parallel()
 

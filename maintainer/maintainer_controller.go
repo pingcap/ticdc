@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/routing"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/operator"
 	"github.com/pingcap/ticdc/maintainer/replica"
@@ -51,6 +52,7 @@ type Controller struct {
 	redoSpanController     *span.Controller
 	barrier                *Barrier
 	redoBarrier            *Barrier
+	targetTableRegistry    *routing.TargetTableRegistry
 
 	messageCenter messaging.MessageCenter
 	nodeManager   *watcher.NodeManager

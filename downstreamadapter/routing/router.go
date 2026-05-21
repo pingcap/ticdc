@@ -139,7 +139,7 @@ func (r Router) ApplyToTableInfo(tableInfo *common.TableInfo) (*common.TableInfo
 		return tableInfo, nil
 	}
 
-	binding, err := r.route(tableInfo.GetSchemaName(), tableInfo.GetTableName())
+	binding, err := r.Route(tableInfo.GetSchemaName(), tableInfo.GetTableName())
 	if err != nil {
 		return nil, err
 	}
@@ -190,12 +190,12 @@ func (r Router) ApplyToDDLEvent(ddl *commonEvent.DDLEvent) (*commonEvent.DDLEven
 		return ddl, nil
 	}
 
-	binding, err := r.route(ddl.GetSchemaName(), ddl.GetTableName())
+	binding, err := r.Route(ddl.GetSchemaName(), ddl.GetTableName())
 	if err != nil {
 		return nil, err
 	}
 
-	extraBinding, err := r.route(ddl.GetExtraSchemaName(), ddl.GetExtraTableName())
+	extraBinding, err := r.Route(ddl.GetExtraSchemaName(), ddl.GetExtraTableName())
 	if err != nil {
 		return nil, err
 	}
@@ -239,8 +239,8 @@ func (r Router) ApplyToDDLEvent(ddl *commonEvent.DDLEvent) (*commonEvent.DDLEven
 	), nil
 }
 
-// route returns the source-to-target table name binding.
-func (r Router) route(originSchema, originTable string) (binding routeBinding, err error) {
+// Route returns the source-to-target table name binding.
+func (r Router) Route(originSchema, originTable string) (binding RouteBinding, err error) {
 	// In CDC runtime, table names should always carry schema.
 	// Empty schema means this name pair is absent, so keep it unchanged.
 	// This also prevents wildcard rules like *.* from matching it.
@@ -335,7 +335,7 @@ func (r Router) applyToBlockedTableNames(tableNames []commonEvent.SchemaTableNam
 
 	var result []commonEvent.SchemaTableName
 	for i, tableName := range tableNames {
-		binding, err := r.route(tableName.SchemaName, tableName.TableName)
+		binding, err := r.Route(tableName.SchemaName, tableName.TableName)
 		if err != nil {
 			return nil, err
 		}
@@ -387,7 +387,7 @@ func ValidateNoStaticRouteConflict(
 	registry := NewTargetTableRegistry(changefeedID)
 	for _, tableNames := range tableNameGroups {
 		for _, tableName := range tableNames {
-			binding, err := router.route(tableName.Schema, tableName.Table)
+			binding, err := router.Route(tableName.Schema, tableName.Table)
 			if err != nil {
 				return err
 			}
