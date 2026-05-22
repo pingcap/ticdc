@@ -35,35 +35,36 @@ const (
 	TablePlaceholder = "{table}"
 )
 
-type tableKey struct {
+// TableKey identifies a table by schema and table name.
+type TableKey struct {
 	Schema string
 	Table  string
 }
 
-func (k tableKey) Equal(other tableKey) bool {
+func (k TableKey) Equal(other TableKey) bool {
 	return k.Schema == other.Schema && k.Table == other.Table
 }
 
-// routeBinding records one source-to-target route mapping.
-type routeBinding struct {
-	Source tableKey
-	Target tableKey
+// RouteBinding records one source-to-target route mapping.
+type RouteBinding struct {
+	Source TableKey
+	Target TableKey
 }
 
-func newRouteBinding(schema, table, targetSchema, targetTable string) routeBinding {
-	return routeBinding{
-		Source: tableKey{
+func newRouteBinding(schema, table, targetSchema, targetTable string) RouteBinding {
+	return RouteBinding{
+		Source: TableKey{
 			Schema: schema,
 			Table:  table,
 		},
-		Target: tableKey{
+		Target: TableKey{
 			Schema: targetSchema,
 			Table:  targetTable,
 		},
 	}
 }
 
-func (b routeBinding) routed() bool {
+func (b RouteBinding) routed() bool {
 	return !b.Source.Equal(b.Target)
 }
 
@@ -72,8 +73,6 @@ type rule struct {
 	filter           tfilter.Filter
 	targetSchemaExpr string
 	targetTableExpr  string
-	matcher          []string
-	index            int
 }
 
 // Router is used to support the table route functionality,
@@ -81,10 +80,6 @@ type rule struct {
 type Router struct {
 	changefeedID common.ChangeFeedID
 	rules        []rule
-}
-
-func (r Router) enabled() bool {
-	return len(r.rules) != 0
 }
 
 // HasTableRoute returns whether the router contains any table route rule.
@@ -98,7 +93,7 @@ func NewRouter(
 	changefeedID common.ChangeFeedID, caseSensitive bool, rules []*config.DispatchRule,
 ) (Router, error) {
 	routingRules := make([]rule, 0, len(rules))
-	for ruleIndex, r := range rules {
+	for _, r := range rules {
 		if r.TargetSchema == "" && r.TargetTable == "" {
 			continue
 		}
@@ -120,8 +115,6 @@ func NewRouter(
 			filter:           f,
 			targetSchemaExpr: r.TargetSchema,
 			targetTableExpr:  r.TargetTable,
-			matcher:          r.Matcher,
-			index:            ruleIndex,
 		})
 	}
 
@@ -250,7 +243,7 @@ func (r Router) Route(originSchema, originTable string) (binding RouteBinding, e
 
 	rule, err := r.matchRule(originSchema, originTable)
 	if err != nil {
-		return routeBinding{}, err
+		return RouteBinding{}, err
 	}
 	if rule == nil {
 		return newRouteBinding(originSchema, originTable, originSchema, originTable), nil
@@ -380,11 +373,15 @@ func ValidateNoStaticRouteConflict(
 	if err != nil {
 		return err
 	}
-	if !router.enabled() {
+	if !router.HasTableRoute() {
 		return nil
 	}
 
-	registry := NewTargetTableRegistry(changefeedID)
+	capacity := 0
+	for _, tableNames := range tableNameGroups {
+		capacity += len(tableNames)
+	}
+	registry := NewTargetTableRegistry(changefeedID, capacity)
 	for _, tableNames := range tableNameGroups {
 		for _, tableName := range tableNames {
 			binding, err := router.Route(tableName.Schema, tableName.Table)

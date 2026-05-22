@@ -15,7 +15,6 @@ package maintainer
 
 import (
 	"container/heap"
-	"fmt"
 	"slices"
 
 	"github.com/pingcap/log"
@@ -109,7 +108,7 @@ func newRouteConflictDetector(
 		changefeedID:  changefeedID,
 		keyspaceMeta:  keyspaceMeta,
 		router:        router,
-		registry:      routing.NewTargetTableRegistry(changefeedID),
+		registry:      routing.NewTargetTableRegistry(changefeedID, 0),
 		schemaStore:   appcontext.GetService[schemastore.SchemaStore](appcontext.SchemaStore),
 		tables:        make(map[int64]routeTableBinding),
 		pendingEvents: make(map[eventKey]*routePendingEvent),
@@ -287,7 +286,8 @@ func (d *routeConflictDetector) buildTransition(info routeDDLInfo) (*routeTransi
 	for _, change := range info.updatedSchema {
 		existing, exists := d.tables[change.TableID]
 		if !exists {
-			return nil, fmt.Errorf("route registry binding not found for table %d", change.TableID)
+			return nil, errors.ErrInternalCheckFailed.GenWithStack(
+				"route registry binding not found for table %d", change.TableID)
 		}
 		binding, err := d.buildBindingForTable(change.TableID, change.NewSchemaID, info.commitTs)
 		if err != nil {
@@ -304,7 +304,8 @@ func (d *routeConflictDetector) buildTransition(info routeDDLInfo) (*routeTransi
 			}
 			existing, exists := d.tables[tableID]
 			if !exists {
-				return nil, fmt.Errorf("route registry binding not found for table %d", tableID)
+				return nil, errors.ErrInternalCheckFailed.GenWithStack(
+					"route registry binding not found for table %d", tableID)
 			}
 			binding, err := d.buildBindingForTable(tableID, existing.sourceSchemaID, info.commitTs)
 			if err != nil {
@@ -331,7 +332,8 @@ func (d *routeConflictDetector) buildBindingForTable(tableID, schemaID int64, co
 		if existing, ok := d.tables[tableID]; ok {
 			schemaID = existing.sourceSchemaID
 		} else {
-			return routeTableBinding{}, fmt.Errorf("schema ID hint is missing for table %d", tableID)
+			return routeTableBinding{}, errors.ErrInternalCheckFailed.GenWithStack(
+				"schema ID hint is missing for table %d", tableID)
 		}
 	}
 	binding, err := d.router.Route(tableInfo.GetSchemaName(), tableInfo.GetTableName())

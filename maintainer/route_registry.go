@@ -14,8 +14,6 @@
 package maintainer
 
 import (
-	"fmt"
-
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/routing"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -43,9 +41,9 @@ func (c *Controller) rebuildTargetTableRegistry(tables []commonEvent.Table) erro
 	registry := routing.NewTargetTableRegistry(c.changefeedID, len(tables))
 	for _, table := range tables {
 		if table.SchemaTableName == nil {
-			return errors.ErrInternalCheckFailed.FastGenByArgs(fmt.Sprintf(
+			return errors.ErrInternalCheckFailed.GenWithStack(
 				"schema table name is nil when rebuilding target table registry, tableID: %d",
-				table.TableID))
+				table.TableID)
 		}
 		binding, err := router.Route(table.SchemaName, table.TableName)
 		if err != nil {

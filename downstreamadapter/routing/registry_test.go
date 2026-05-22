@@ -28,7 +28,7 @@ func TestTargetTableRegistryAdd(t *testing.T) {
 	changefeedID := common.NewChangeFeedIDWithName("test-changefeed", common.DefaultKeyspaceName)
 	t.Run("non-conflicting bindings", func(t *testing.T) {
 		t.Parallel()
-		r := NewTargetTableRegistry(changefeedID)
+		r := NewTargetTableRegistry(changefeedID, 0)
 		require.NotNil(t, r)
 
 		require.NoError(t, r.Add(newRouteBinding("db1", "t1", "db1", "t1")))
@@ -37,7 +37,7 @@ func TestTargetTableRegistryAdd(t *testing.T) {
 
 	t.Run("conflicting bindings fail", func(t *testing.T) {
 		t.Parallel()
-		r := NewTargetTableRegistry(changefeedID)
+		r := NewTargetTableRegistry(changefeedID, 0)
 
 		require.NoError(t, r.Add(newRouteBinding("db1", "t1", "archive", "orders")))
 		err := r.Add(newRouteBinding("db2", "t1", "archive", "orders"))
@@ -50,7 +50,7 @@ func TestTargetTableRegistryAdd(t *testing.T) {
 
 	t.Run("same source mapping is idempotent", func(t *testing.T) {
 		t.Parallel()
-		r := NewTargetTableRegistry(changefeedID)
+		r := NewTargetTableRegistry(changefeedID, 0)
 
 		require.NoError(t, r.Add(newRouteBinding("db1", "t1", "db1", "t1")))
 		require.NoError(t, r.Add(newRouteBinding("db1", "t1", "db1", "t1")))
@@ -61,7 +61,7 @@ func TestTargetTableRegistryRemove(t *testing.T) {
 	t.Parallel()
 
 	changefeedID := common.NewChangeFeedIDWithName("test-changefeed", common.DefaultKeyspaceName)
-	r := NewTargetTableRegistry(changefeedID)
+	r := NewTargetTableRegistry(changefeedID, 0)
 
 	require.NoError(t, r.Add(newRouteBinding("db1", "t1", "archive", "orders")))
 	require.Len(t, r.owners, 1)
@@ -78,7 +78,7 @@ func TestTargetTableRegistryRejectsSourceRetarget(t *testing.T) {
 	t.Parallel()
 
 	changefeedID := common.NewChangeFeedIDWithName("test-changefeed", common.DefaultKeyspaceName)
-	r := NewTargetTableRegistry(changefeedID)
+	r := NewTargetTableRegistry(changefeedID, 0)
 
 	require.NoError(t, r.Add(newRouteBinding("db1", "t1", "archive", "orders")))
 	err := r.Add(newRouteBinding("db1", "t1", "archive", "orders_new"))
@@ -93,7 +93,7 @@ func TestTargetTableRegistryApplyTransition(t *testing.T) {
 
 	t.Run("rename replace succeeds atomically", func(t *testing.T) {
 		t.Parallel()
-		r := NewTargetTableRegistry(changefeedID)
+		r := NewTargetTableRegistry(changefeedID, 0)
 		require.NoError(t, r.Add(newRouteBinding("db1", "t1", "archive", "orders")))
 		require.NoError(t, r.Add(newRouteBinding("db2", "t2", "archive", "customers")))
 
@@ -110,7 +110,7 @@ func TestTargetTableRegistryApplyTransition(t *testing.T) {
 
 	t.Run("conflict leaves registry unchanged", func(t *testing.T) {
 		t.Parallel()
-		r := NewTargetTableRegistry(changefeedID)
+		r := NewTargetTableRegistry(changefeedID, 0)
 		require.NoError(t, r.Add(newRouteBinding("db1", "t1", "archive", "orders")))
 		require.NoError(t, r.Add(newRouteBinding("db2", "t2", "archive", "customers")))
 
@@ -127,7 +127,7 @@ func TestTargetTableRegistryApplyTransition(t *testing.T) {
 
 	t.Run("internal duplicate target fails before mutation", func(t *testing.T) {
 		t.Parallel()
-		r := NewTargetTableRegistry(changefeedID)
+		r := NewTargetTableRegistry(changefeedID, 0)
 
 		err := r.ApplyTransition(nil, []RouteBinding{
 			newRouteBinding("db1", "t1", "archive", "orders"),
@@ -140,7 +140,7 @@ func TestTargetTableRegistryApplyTransition(t *testing.T) {
 
 	t.Run("internal duplicate source fails before mutation", func(t *testing.T) {
 		t.Parallel()
-		r := NewTargetTableRegistry(changefeedID)
+		r := NewTargetTableRegistry(changefeedID, 0)
 
 		err := r.ApplyTransition(nil, []RouteBinding{
 			newRouteBinding("db1", "t1", "archive", "orders"),

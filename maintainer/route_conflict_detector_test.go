@@ -96,7 +96,7 @@ func newTestRouteConflictDetector(t *testing.T, targetSchema, targetTable string
 		},
 	}
 	initialBinding := newTestRouteBinding(t, router, store.tables[1], 1, 1)
-	registry := routing.NewTargetTableRegistry(cfID)
+	registry := routing.NewTargetTableRegistry(cfID, 0)
 	require.NoError(t, registry.Add(initialBinding.binding))
 
 	return &routeConflictDetector{
