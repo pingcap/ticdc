@@ -37,6 +37,7 @@ linters:
     - revive
     # unconvert: finds unnecessary type conversions.
     - unconvert
+    - modernize
 
   settings:
     depguard:
@@ -44,7 +45,7 @@ linters:
         no-direct-errors:
           files:
             - $all
-            - '!pkg/errors/**'
+            - "!pkg/errors/**"
           deny:
             - pkg: errors$
               desc: use github.com/pingcap/ticdc/pkg/errors outside pkg/errors

@@ -56,7 +56,7 @@ func TestCanalJSONTxnEventEncoderUsesTargetNames(t *testing.T) {
 	t.Parallel()
 
 	encoder := NewJSONTxnEventEncoder(common.NewConfig(config.ProtocolCanalJSON))
-	require.NoError(t, encoder.AppendTxnEvent(newRoutedCanalDMLEvent()))
+	require.NoError(t, encoder.AppendTxnEvent(common.NewRoutedDMLEvent4Test()))
 
 	messages := encoder.Build()
 	require.Len(t, messages, 1)
