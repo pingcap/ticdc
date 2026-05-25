@@ -28,6 +28,12 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+<<<<<<< HEAD
+=======
+	"github.com/pingcap/ticdc/pkg/logger"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
+	tidbTypes "github.com/pingcap/tidb/pkg/types"
+>>>>>>> 70724ec69 ( *: reduce CPU overhead on hot paths (#5108))
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -597,11 +603,21 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 // and return await=true.
 // The status path will be woken up after the action finishes.
 func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.DispatcherStatus) (await bool) {
+<<<<<<< HEAD
 	log.Debug("dispatcher handle dispatcher status",
 		zap.Any("dispatcherStatus", dispatcherStatus),
 		zap.Stringer("dispatcher", d.id),
 		zap.Any("action", dispatcherStatus.GetAction()),
 		zap.Any("ack", dispatcherStatus.GetAck()))
+=======
+	if logger.IsDebugEnabled() {
+		log.Debug("dispatcher handle dispatcher status",
+			zap.String("dispatcherStatus", common.FormatDispatcherStatus(dispatcherStatus)),
+			zap.Stringer("dispatcher", d.id),
+			zap.Any("action", dispatcherStatus.GetAction()),
+			zap.Any("ack", dispatcherStatus.GetAck()))
+	}
+>>>>>>> 70724ec69 ( *: reduce CPU overhead on hot paths (#5108))
 
 	// Step1: deal with the ack info
 	ack := dispatcherStatus.GetAck()

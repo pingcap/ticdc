@@ -22,10 +22,14 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/utils/deque"
+	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 )
 
-const BlockLenInPendingQueue = 32
+const (
+	BlockLenInPendingQueue     = 32
+	maxBatchMetricCacheEntries = 1024
+)
 
 // A stream has two goroutines: receiver and handleLoop.
 // The receiver receives the events and buffers them.
@@ -47,7 +51,15 @@ type stream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]] struct {
 	eventChan chan eventWrap[A, P, T, D, H]
 
 	// The queue to store the pending events of this stream.
+<<<<<<< HEAD
 	eventQueue eventQueue[A, P, T, D, H]
+=======
+	eventQueue            eventQueue[A, P, T, D, H]
+	batcher               *batcher[T]
+	batchMetricCache      map[string]batchMetricObservers
+	batchMetricCacheOrder []string
+	batchMetricCacheNext  int
+>>>>>>> 70724ec69 ( *: reduce CPU overhead on hot paths (#5108))
 
 	option Option
 
@@ -67,12 +79,23 @@ func newStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
 	option Option,
 ) *stream[A, P, T, D, H] {
 	s := &stream[A, P, T, D, H]{
+<<<<<<< HEAD
 		module:     component,
 		id:         id,
 		handler:    handler,
 		eventQueue: newEventQueue(option, handler),
 		option:     option,
 		startTime:  time.Now(),
+=======
+		module:           component,
+		id:               id,
+		handler:          handler,
+		eventQueue:       newEventQueue(handler, batchConfigRegistry),
+		batcher:          newDefaultBatcher[T](),
+		batchMetricCache: make(map[string]batchMetricObservers),
+		option:           option,
+		startTime:        time.Now(),
+>>>>>>> 70724ec69 ( *: reduce CPU overhead on hot paths (#5108))
 	}
 	s.ctx, s.cancel = context.WithCancel(context.Background())
 
@@ -85,6 +108,40 @@ func newStream[A Area, P Path, T Event, D Dest, H Handler[A, P, T, D]](
 		s.eventChan = make(chan eventWrap[A, P, T, D, H], 1024*16)
 	}
 	return s
+}
+
+type batchMetricObservers struct {
+	duration prometheus.Observer
+	count    prometheus.Observer
+	bytes    prometheus.Observer
+}
+
+func (s *stream[A, P, T, D, H]) getBatchMetricObservers(label string) batchMetricObservers {
+	observers, ok := s.batchMetricCache[label]
+	if ok {
+		return observers
+	}
+	if len(s.batchMetricCache) >= maxBatchMetricCacheEntries {
+		s.evictOldestBatchMetricCache(label)
+	} else {
+		s.batchMetricCacheOrder = append(s.batchMetricCacheOrder, label)
+	}
+	observers = batchMetricObservers{
+		duration: metrics.DynamicStreamBatchDuration.WithLabelValues(s.module, label),
+		count:    metrics.DynamicStreamBatchCount.WithLabelValues(s.module, label),
+		bytes:    metrics.DynamicStreamBatchBytes.WithLabelValues(s.module, label),
+	}
+	s.batchMetricCache[label] = observers
+	return observers
+}
+
+func (s *stream[A, P, T, D, H]) evictOldestBatchMetricCache(label string) {
+	if len(s.batchMetricCacheOrder) == 0 {
+		return
+	}
+	delete(s.batchMetricCache, s.batchMetricCacheOrder[s.batchMetricCacheNext])
+	s.batchMetricCacheOrder[s.batchMetricCacheNext] = label
+	s.batchMetricCacheNext = (s.batchMetricCacheNext + 1) % len(s.batchMetricCacheOrder)
 }
 
 func (s *stream[A, P, T, D, H]) addPath(path *pathInfo[A, P, T, D, H]) {
@@ -294,6 +351,7 @@ Loop:
 					continue Loop
 				}
 
+<<<<<<< HEAD
 				path.lastHandleEventTs.Store(uint64(s.handler.GetTimestamp(eventBuf[0])))
 
 				path.blocking.Store(s.handler.Handle(path.dest, eventBuf...))
@@ -301,6 +359,12 @@ Loop:
 				metrics.DynamicStreamBatchDuration.WithLabelValues(s.module, path.metricLabel).Observe(float64(time.Since(start).Seconds()))
 				metrics.DynamicStreamBatchCount.WithLabelValues(s.module, path.metricLabel).Observe(float64(len(eventBuf)))
 				metrics.DynamicStreamBatchBytes.WithLabelValues(s.module, path.metricLabel).Observe(float64(nBytes))
+=======
+				batchMetrics := s.getBatchMetricObservers(path.metricLabel)
+				batchMetrics.duration.Observe(duration.Seconds())
+				batchMetrics.count.Observe(float64(len(eventBuf)))
+				batchMetrics.bytes.Observe(float64(nBytes))
+>>>>>>> 70724ec69 ( *: reduce CPU overhead on hot paths (#5108))
 
 				if path.blocking.Load() {
 					s.eventQueue.blockPath(path)
