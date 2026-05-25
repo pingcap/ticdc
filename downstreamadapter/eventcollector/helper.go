@@ -18,6 +18,7 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/logger"
 	"github.com/pingcap/ticdc/utils/dynstream"
 	"go.uber.org/zap"
 )
@@ -71,7 +72,7 @@ func (h *EventsHandler) Path(event dispatcher.DispatcherEvent) common.Dispatcher
 // Invariant: at any times, we can receive events from at most two event service, and one of them must be local event service.
 func (h *EventsHandler) Handle(stat *dispatcherStat, events ...dispatcher.DispatcherEvent) bool {
 	// add this log for debug some strange bug.
-	if log.GetLevel() <= zap.DebugLevel {
+	if logger.IsDebugEnabled() {
 		log.Debug("handle events", zap.Any("dispatcher", stat.target.GetId()), zap.Int("eventLen", len(events)))
 	}
 	if len(events) == 0 {
@@ -171,13 +172,13 @@ func (h *EventsHandler) GetTimestamp(event dispatcher.DispatcherEvent) dynstream
 func (h *EventsHandler) OnDrop(event dispatcher.DispatcherEvent) interface{} {
 	switch event.GetType() {
 	case commonEvent.TypeDMLEvent, commonEvent.TypeDDLEvent, commonEvent.TypeBatchDMLEvent, commonEvent.TypeSyncPointEvent:
-		if log.GetLevel() <= zap.DebugLevel {
+		if logger.IsDebugEnabled() {
 			log.Debug("Drop event", zap.String("dispatcher", event.GetDispatcherID().String()), zap.Uint64("seq", event.GetSeq()), zap.String("type", commonEvent.TypeToString(event.GetType())), zap.Uint64("epoch", event.GetEpoch()), zap.Uint64("startTs", event.GetStartTs()), zap.Uint64("commitTs", event.GetCommitTs()))
 		}
 		dropEvent := commonEvent.NewDropEvent(event.GetDispatcherID(), event.GetSeq(), event.GetEpoch(), event.GetCommitTs())
 		return dispatcher.NewDispatcherEvent(event.From, dropEvent)
 	default:
-		if log.GetLevel() <= zap.DebugLevel {
+		if logger.IsDebugEnabled() {
 			log.Debug("Drop event", zap.String("dispatcher", event.GetDispatcherID().String()), zap.Any("event", event), zap.String("type", commonEvent.TypeToString(event.GetType())))
 		}
 	}

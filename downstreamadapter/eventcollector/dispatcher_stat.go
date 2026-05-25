@@ -20,6 +20,7 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/logger"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -190,7 +191,7 @@ func (d *dispatcherStat) verifyEventSequence(event dispatcher.DispatcherEvent, s
 		return false
 	}
 
-	debugEnabled := log.GetLevel() <= zap.DebugLevel
+	debugEnabled := logger.IsDebugEnabled()
 	switch event.GetType() {
 	case commonEvent.TypeDMLEvent,
 		commonEvent.TypeDDLEvent,
@@ -357,7 +358,7 @@ func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEve
 	state := d.loadCurrentEpochState()
 	for _, event := range events {
 		if !d.isFromCurrentEpoch(event, state) {
-			if log.GetLevel() <= zap.DebugLevel {
+			if logger.IsDebugEnabled() {
 				log.Debug("receive DML/Resolved event from a stale epoch, ignore it",
 					zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 					zap.Stringer("dispatcher", d.getDispatcherID()),
@@ -539,7 +540,7 @@ func (d *dispatcherStat) handleDropEvent(event dispatcher.DispatcherEvent) {
 
 	state := d.loadCurrentEpochState()
 	if !d.isFromCurrentEpoch(event, state) {
-		if log.GetLevel() <= zap.DebugLevel {
+		if logger.IsDebugEnabled() {
 			log.Debug("receive a drop event from a stale epoch, ignore it",
 				zap.Stringer("changefeedID", d.target.GetChangefeedID()),
 				zap.Stringer("dispatcher", d.getDispatcherID()),
