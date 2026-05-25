@@ -455,7 +455,7 @@ func CreateRawEtcdClient(securityConf *security.Credential, grpcDialOption grpc.
 			select {
 			case <-client.Ctx().Done():
 				log.Info("etcd client is closed, exit health check goroutine")
-				checker.Range(func(key, value any) bool {
+				checker.Range(func(_, value any) bool {
 					client := value.(*healthyClient)
 					client.Close()
 					return true
@@ -523,7 +523,7 @@ func (checker *healthyChecker) patrol(ctx context.Context) []string {
 	// See https://github.com/etcd-io/etcd/blob/85b640cee793e25f3837c47200089d14a8392dc7/etcdctl/ctlv3/command/ep_command.go#L105-L145
 	var wg sync.WaitGroup
 	count := 0
-	checker.Range(func(_, value any) bool {
+	checker.Range(func(_, _ any) bool {
 		count++
 		return true
 	})
