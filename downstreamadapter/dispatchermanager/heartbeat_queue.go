@@ -65,6 +65,13 @@ type BlockStatusRequestWithTargetID struct {
 type BlockStatusRequestQueue struct {
 	queue chan *BlockStatusRequestWithTargetID
 
+	// queuedStatuses and inFlightStatuses form a two-stage dedupe window:
+	// 1. queuedStatuses suppresses equivalent WAITING/DONE statuses that are
+	//    still sitting in the local request queue.
+	// 2. inFlightStatuses keeps suppressing them while HeartBeatCollector is
+	//    currently sending that request to the maintainer.
+	// requestStatusKeys records which logical statuses belong to each queued
+	// request so Dequeue and OnSendComplete can move/release the right keys.
 	mu                sync.Mutex
 	requestStatusKeys map[*BlockStatusRequestWithTargetID][]blockStatusRequestDedupeKey
 	queuedStatuses    map[blockStatusRequestDedupeKey]struct{}
@@ -84,6 +91,9 @@ func (q *BlockStatusRequestQueue) Enqueue(request *BlockStatusRequestWithTargetI
 	if request == nil || request.Request == nil {
 		return
 	}
+	// Filter duplicate WAITING/DONE statuses before they consume queue slots.
+	// NONE statuses bypass this path because they carry schedule side effects and
+	// are not expected to resend continuously.
 	if !q.trackPendingStatuses(request) {
 		metrics.HeartbeatCollectorBlockStatusRequestQueueLenGauge.Set(float64(len(q.queue)))
 		return
@@ -97,12 +107,17 @@ func (q *BlockStatusRequestQueue) Dequeue(ctx context.Context) *BlockStatusReque
 	case <-ctx.Done():
 		return nil
 	case request := <-q.queue:
+		// Move keys from "queued" to "in flight" under the same queue-local
+		// dedupe state machine before the collector starts sending the request.
 		q.markInFlight(request)
 		metrics.HeartbeatCollectorBlockStatusRequestQueueLenGauge.Set(float64(len(q.queue)))
 		return request
 	}
 }
 
+// OnSendComplete closes the in-flight dedupe window for this request. The
+// request may have succeeded or failed; either way, future retries must be able
+// to enqueue another representative status if the dispatcher still needs it.
 func (q *BlockStatusRequestQueue) OnSendComplete(request *BlockStatusRequestWithTargetID) {
 	if request == nil {
 		return
@@ -129,6 +144,10 @@ type blockStatusRequestDedupeKey struct {
 	stage        heartbeatpb.BlockStage
 }
 
+// trackPendingStatuses removes duplicate WAITING/DONE statuses in place and
+// records the surviving logical keys for later Dequeue/OnSendComplete
+// transitions. Reusing the request slice avoids another allocation on the hot
+// batching path.
 func (q *BlockStatusRequestQueue) trackPendingStatuses(request *BlockStatusRequestWithTargetID) bool {
 	statuses := request.Request.BlockStatuses
 	filtered := statuses[:0]
@@ -170,6 +189,8 @@ func (q *BlockStatusRequestQueue) trackPendingStatuses(request *BlockStatusReque
 	return len(filtered) > 0
 }
 
+// markInFlight atomically transfers this request's keys from the queued set to
+// the in-flight set so another enqueue cannot slip between dequeue and send.
 func (q *BlockStatusRequestQueue) markInFlight(request *BlockStatusRequestWithTargetID) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -187,6 +208,9 @@ func isWaitingRequestStatus(status *heartbeatpb.TableSpanBlockStatus) bool {
 }
 
 func shouldDeduplicateRequestStatus(status *heartbeatpb.TableSpanBlockStatus) bool {
+	// WAITING and DONE are resend-driven progress signals with identical logical
+	// meaning per barrier key. NONE must remain lossless because it carries
+	// one-shot scheduling metadata rather than retry noise.
 	return isDoneRequestStatus(status) || isWaitingRequestStatus(status)
 }
 

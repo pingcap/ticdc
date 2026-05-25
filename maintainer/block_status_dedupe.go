@@ -35,11 +35,18 @@ type blockStatusDedupeKey struct {
 	stage        heartbeatpb.BlockStage
 }
 
+// blockStatusPendingSet tracks which logical statuses are already admitted into
+// the maintainer event queue and not yet fully handled. It gives the maintainer
+// the same "one representative while pending" guarantee that dispatcher manager
+// already applies on its own local queues.
 type blockStatusPendingSet struct {
 	mu      sync.Mutex
 	pending map[blockStatusDedupeKey]struct{}
 }
 
+// reserve returns false when an equivalent status is already queued or being
+// handled by the maintainer. Callers must later release every reserved key
+// exactly once after HandleEvent returns.
 func (s *blockStatusPendingSet) reserve(key blockStatusDedupeKey) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -54,6 +61,8 @@ func (s *blockStatusPendingSet) reserve(key blockStatusDedupeKey) bool {
 	return true
 }
 
+// release reopens the dedupe window for statuses that just finished maintainer
+// handling, so the next resend can enter if it is still needed.
 func (s *blockStatusPendingSet) release(keys []blockStatusDedupeKey) {
 	if len(keys) == 0 {
 		return
@@ -66,6 +75,9 @@ func (s *blockStatusPendingSet) release(keys []blockStatusDedupeKey) {
 	}
 }
 
+// buildBlockStatusDedupeKey keeps the dedupe identity aligned with dispatcher
+// and dispatcher-manager stages: sender, pipeline mode, dispatcher, barrier ts,
+// syncpoint bit, and stage all matter for correctness.
 func buildBlockStatusDedupeKey(from node.ID, status *heartbeatpb.TableSpanBlockStatus) (blockStatusDedupeKey, bool) {
 	if status == nil || status.ID == nil || status.State == nil {
 		return blockStatusDedupeKey{}, false
@@ -80,6 +92,9 @@ func buildBlockStatusDedupeKey(from node.ID, status *heartbeatpb.TableSpanBlockS
 	}, true
 }
 
+// cloneBlockStatusRequest rebuilds only the outer request so filtering can
+// replace the BlockStatuses slice without mutating the original message object.
+// The individual status protobufs are already treated as immutable payloads.
 func cloneBlockStatusRequest(
 	req *heartbeatpb.BlockStatusRequest,
 	blockStatuses []*heartbeatpb.TableSpanBlockStatus,
@@ -91,6 +106,10 @@ func cloneBlockStatusRequest(
 	}
 }
 
+// filterBlockStatusEvent is the maintainer-side queue gate for block statuses.
+// It keeps at most one logically equivalent status in the event queue at a
+// time, then arranges for the reservation to be released after HandleEvent
+// finishes processing that representative copy.
 func (m *Maintainer) filterBlockStatusEvent(event *Event) (*Event, bool) {
 	if event == nil || event.eventType != EventMessage || event.message == nil ||
 		event.message.Type != messaging.TypeBlockStatusRequest || len(event.message.Message) == 0 {
@@ -113,11 +132,15 @@ func (m *Maintainer) filterBlockStatusEvent(event *Event) (*Event, bool) {
 			filteredStatuses = append(filteredStatuses, status)
 			continue
 		}
+		// Collapse duplicates inside the same request first so only one copy
+		// competes for the queue-level reservation below.
 		if _, ok := seen[key]; ok {
 			suppressedCount++
 			continue
 		}
 		seen[key] = struct{}{}
+		// reserve extends dedupe across already-queued events and the event that
+		// is currently executing in the maintainer main loop.
 		if !m.blockStatusPending.reserve(key) {
 			suppressedCount++
 			continue

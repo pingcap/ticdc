@@ -32,6 +32,10 @@ import (
 	"go.uber.org/zap"
 )
 
+// fanoutPassResendQuietInterval throttles repeated DB/All pass resends after
+// the first fanout pass is sent. Fanout actions touch many captures at once, so
+// we first give recently received DONE statuses a short chance to converge
+// before broadcasting another identical pass wave.
 const fanoutPassResendQuietInterval = time.Second
 
 // BarrierEvent is a barrier event that reported by dispatchers, note is a block multiple dispatchers
@@ -72,10 +76,16 @@ type BarrierEvent struct {
 	//    so only we use table trigger to create rangeChecker can ensure the coverage is correct.
 	reportedDispatchers map[common.DispatcherID]struct{}
 	// rangeChecker is used to check if all the dispatchers reported the block events
-	rangeChecker           range_checker.RangeChecker
-	lastResendTime         time.Time
+	rangeChecker   range_checker.RangeChecker
+	lastResendTime time.Time
+	// lastStatusReceivedTime is refreshed after the event enters selected state.
+	// It lets resend distinguish "still receiving fresh DONE progress" from
+	// "stalled, must rebroadcast pass/write again".
 	lastStatusReceivedTime time.Time
-	passActionSent         bool
+	// passActionSent tracks whether resend has already emitted at least one pass
+	// action for the selected stage. The quiet interval only applies after that
+	// first fanout pass exists.
+	passActionSent bool
 
 	lastWarningLogTime time.Time
 }
@@ -213,7 +223,9 @@ func (be *BarrierEvent) onAllDispatcherReportedBlockEvent(dispatcherID common.Di
 		dispatcher = common.NewDispatcherIDFromPB(selected)
 	}
 
-	// reset ranger checkers and reportedDispatchers
+	// Once the event enters selected state, we start a new reporting phase that
+	// tracks completion after write/pass rather than the initial WAITING
+	// coverage. Reset both structures so DONE reports are measured from scratch.
 	be.rangeChecker.Reset()
 	be.reportedDispatchers = make(map[common.DispatcherID]struct{})
 
@@ -315,6 +327,8 @@ func (be *BarrierEvent) addDispatchersToRangeChecker() {
 
 func (be *BarrierEvent) markDispatcherEventDone(dispatcherID common.DispatcherID) {
 	if be.selected.Load() {
+		// After selection, every accepted status means the chosen write/pass path
+		// is still making progress, so quiet fanout resend for a short interval.
 		be.markStatusReceived()
 	}
 	replicaSpan := be.spanController.GetTaskByID(dispatcherID)
@@ -691,6 +705,9 @@ func (be *BarrierEvent) resend(mode int64) []*messaging.TargetMessage {
 	} else {
 		// the writer dispatcher is advanced, resend pass action
 		if be.passActionSent && be.isFanoutPassAction() &&
+			// DB/All pass actions can fan out to many captures. If new statuses
+			// are still arriving shortly after the previous fanout pass, wait for
+			// that progress to settle before broadcasting another identical wave.
 			now.Sub(be.lastStatusReceivedTime) < fanoutPassResendQuietInterval {
 			return nil
 		}
@@ -705,6 +722,9 @@ func (be *BarrierEvent) isFanoutPassAction() bool {
 	if be.blockedDispatchers == nil {
 		return false
 	}
+	// Normal barriers target an explicit dispatcher list and are cheap to retry.
+	// Only DB/All barriers benefit from the extra quiet window because they
+	// broadcast the same pass action to many captures at once.
 	return be.blockedDispatchers.InfluenceType == heartbeatpb.InfluenceType_All ||
 		be.blockedDispatchers.InfluenceType == heartbeatpb.InfluenceType_DB
 }
