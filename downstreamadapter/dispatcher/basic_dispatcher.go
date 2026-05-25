@@ -29,6 +29,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/logger"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	tidbTypes "github.com/pingcap/tidb/pkg/types"
 	"go.uber.org/atomic"
@@ -489,9 +490,9 @@ func (d *BasicDispatcher) isFirstEvent(event commonEvent.Event) bool {
 }
 
 func (d *BasicDispatcher) GetHeartBeatInfo(h *HeartBeatInfo) {
-	h.Watermark.CheckpointTs = d.GetCheckpointTs()
-	h.Watermark.ResolvedTs = d.GetResolvedTs()
-	h.Watermark.LastSyncedTs = d.GetLastSyncedTs()
+	h.CheckpointTs = d.GetCheckpointTs()
+	h.ResolvedTs = d.GetResolvedTs()
+	h.LastSyncedTs = d.GetLastSyncedTs()
 	h.Id = d.GetId()
 	h.ComponentStatus = d.GetComponentStatus()
 	h.IsRemoving = d.GetRemovingStatus()
@@ -590,7 +591,7 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 		if log.GetLevel() == zapcore.DebugLevel {
 			log.Debug("dispatcher receive all event",
 				zap.Stringer("dispatcher", d.id), zap.Int64("mode", d.mode),
-				zap.String("eventType", commonEvent.TypeToString(dispatcherEvent.Event.GetType())),
+				zap.String("eventType", commonEvent.TypeToString(dispatcherEvent.GetType())),
 				zap.Any("event", dispatcherEvent.Event))
 		}
 
@@ -761,7 +762,7 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 // and return await=true.
 // The status path will be waked up after the action finishes.
 func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.DispatcherStatus) (await bool) {
-	if log.GetLevel() <= zapcore.DebugLevel {
+	if logger.IsDebugEnabled() {
 		log.Debug("dispatcher handle dispatcher status",
 			zap.String("dispatcherStatus", common.FormatDispatcherStatus(dispatcherStatus)),
 			zap.Stringer("dispatcher", d.id),

@@ -863,7 +863,7 @@ func (e *DispatcherManager) MergeDispatcher(dispatcherIDs []common.DispatcherID,
 	return e.mergeEventDispatcher(dispatcherIDs, mergedDispatcherID)
 }
 
-// mergeEventDispatcher merges the mulitple event dispatchers belonging to the same table with consecutive ranges.
+// mergeEventDispatcher merges the multiple event dispatchers belonging to the same table with consecutive ranges.
 func (e *DispatcherManager) mergeEventDispatcher(dispatcherIDs []common.DispatcherID, mergedDispatcherID common.DispatcherID) *MergeCheckTask {
 	// Step 1: check the dispatcherIDs and mergedDispatcherID are valid:
 	//         1. whether the mergedDispatcherID is not exist in the dispatcherMap

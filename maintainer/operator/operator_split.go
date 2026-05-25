@@ -78,8 +78,8 @@ func NewSplitDispatcherOperator(
 ) *SplitDispatcherOperator {
 	var spansInfo strings.Builder
 	for _, span := range splitSpans {
-		spansInfo.WriteString(fmt.Sprintf("[%s,%s]",
-			hex.EncodeToString(span.StartKey), hex.EncodeToString(span.EndKey)))
+		fmt.Fprintf(&spansInfo, "[%s,%s]",
+			hex.EncodeToString(span.StartKey), hex.EncodeToString(span.EndKey))
 	}
 	op := &SplitDispatcherOperator{
 		replicaSet:       replicaSet,

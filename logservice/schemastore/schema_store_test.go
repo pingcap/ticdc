@@ -102,8 +102,8 @@ func TestIgnoreDDLByCommitTs(t *testing.T) {
 	require.Len(t, tables, 2)
 	tableNames := make(map[string]struct{})
 	for _, tbl := range tables {
-		log.Info("found table", zap.String("name", tbl.SchemaTableName.TableName))
-		tableNames[tbl.SchemaTableName.TableName] = struct{}{}
+		log.Info("found table", zap.String("name", tbl.TableName))
+		tableNames[tbl.TableName] = struct{}{}
 	}
 	require.Contains(t, tableNames, "t1")
 	require.Contains(t, tableNames, "t3")
