@@ -148,6 +148,11 @@ type blockStatusRequestDedupeKey struct {
 // records the surviving logical keys for later Dequeue/OnSendComplete
 // transitions. Reusing the request slice avoids another allocation on the hot
 // batching path.
+//
+// Callers must pass request-owned BlockStatuses storage. This function compacts
+// the slice in place by reusing its backing array, so sharing that array with
+// other requests or batches would let queue-local filtering mutate external
+// state unexpectedly.
 func (q *BlockStatusRequestQueue) trackPendingStatuses(request *BlockStatusRequestWithTargetID) bool {
 	statuses := request.Request.BlockStatuses
 	filtered := statuses[:0]

@@ -621,6 +621,8 @@ func (e *DispatcherManager) collectBlockStatusRequest(ctx context.Context) {
 			if end > len(blockStatusMessage) {
 				end = len(blockStatusMessage)
 			}
+			// Copy each chunk so queue-side in-place filtering owns the backing
+			// array and cannot mutate another batch's slice accidentally.
 			chunk := make([]*heartbeatpb.TableSpanBlockStatus, end-start)
 			copy(chunk, blockStatusMessage[start:end])
 			var message heartbeatpb.BlockStatusRequest
