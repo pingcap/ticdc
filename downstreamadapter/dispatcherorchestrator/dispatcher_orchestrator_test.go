@@ -14,9 +14,12 @@
 package dispatcherorchestrator
 
 import (
+	"context"
+	"fmt"
 	"testing"
 	"time"
 
+	"github.com/pingcap/ticdc/downstreamadapter/dispatchermanager"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/messaging"
@@ -24,7 +27,185 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+<<<<<<< HEAD
 func TestPendingMessageQueue_TryEnqueueDropsDuplicatesUntilDone(t *testing.T) {
+=======
+func TestOrchestratorShard_CloseWaitsForRunningHandler(t *testing.T) {
+	t.Parallel()
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	closed := make(chan struct{})
+	shard := newOrchestratorShard(func(msg *messaging.TargetMessage) {
+		close(started)
+		<-release
+	})
+	shard.Run()
+
+	cfID := common.NewChangeFeedIDWithName("cf", "default")
+	key := pendingMessageKey{
+		changefeedID: cfID,
+		msgType:      messaging.TypeMaintainerBootstrapRequest,
+	}
+	msg := &messaging.TargetMessage{Type: messaging.TypeMaintainerBootstrapRequest}
+	require.True(t, shard.TryEnqueue(key, msg))
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		require.FailNow(t, "handler did not start")
+	}
+
+	go func() {
+		shard.CloseAsync()
+		shard.Wait()
+		close(closed)
+	}()
+
+	select {
+	case <-closed:
+		require.FailNow(t, "shard closed before running handler returned")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(release)
+
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		require.FailNow(t, "shard close did not finish after handler returned")
+	}
+}
+
+func TestOrchestratorShard_RunIsIdempotent(t *testing.T) {
+	t.Parallel()
+
+	started := make(chan struct{}, 2)
+	release := make(chan struct{})
+	shard := newOrchestratorShard(func(msg *messaging.TargetMessage) {
+		started <- struct{}{}
+		<-release
+	})
+	shard.Run()
+	shard.Run()
+
+	cfID := common.NewChangeFeedIDWithName("cf", "default")
+	key := pendingMessageKey{
+		changefeedID: cfID,
+		msgType:      messaging.TypeMaintainerBootstrapRequest,
+	}
+	require.True(t, shard.TryEnqueue(key, &messaging.TargetMessage{Type: messaging.TypeMaintainerBootstrapRequest}))
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		require.FailNow(t, "handler did not start")
+	}
+
+	select {
+	case <-started:
+		require.FailNow(t, "Run started more than one worker")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(release)
+	shard.CloseAsync()
+	shard.Wait()
+}
+
+func TestDispatcherOrchestrator_RecvMaintainerRequestRoutesDifferentShardsInParallel(t *testing.T) {
+	t.Parallel()
+
+	orchestrator := newTestDispatcherOrchestrator()
+	cfID1, shardIndex1 := findChangefeedIDOnShard(orchestrator, -1)
+	cfID2, shardIndex2 := findChangefeedIDOnShard(orchestrator, shardIndex1)
+
+	enterShard1 := make(chan struct{})
+	enterShard2 := make(chan struct{})
+	releaseShard1 := make(chan struct{})
+	releaseShard2 := make(chan struct{})
+	orchestrator.shards[shardIndex1] = newOrchestratorShard(func(msg *messaging.TargetMessage) {
+		close(enterShard1)
+		<-releaseShard1
+	})
+	orchestrator.shards[shardIndex2] = newOrchestratorShard(func(msg *messaging.TargetMessage) {
+		close(enterShard2)
+		<-releaseShard2
+	})
+	for _, shard := range orchestrator.shards {
+		shard.Run()
+	}
+	t.Cleanup(func() {
+		close(releaseShard1)
+		close(releaseShard2)
+		for _, shard := range orchestrator.shards {
+			shard.CloseAsync()
+			shard.Wait()
+		}
+	})
+
+	msg0 := messaging.NewSingleTargetMessage(
+		node.ID("to"),
+		messaging.DispatcherManagerManagerTopic,
+		&heartbeatpb.MaintainerBootstrapRequest{ChangefeedID: cfID1.ToPB()},
+	)
+	msg1 := messaging.NewSingleTargetMessage(
+		node.ID("to"),
+		messaging.DispatcherManagerManagerTopic,
+		&heartbeatpb.MaintainerBootstrapRequest{ChangefeedID: cfID2.ToPB()},
+	)
+
+	require.NoError(t, orchestrator.RecvMaintainerRequest(context.Background(), msg0))
+	require.NoError(t, orchestrator.RecvMaintainerRequest(context.Background(), msg1))
+
+	select {
+	case <-enterShard1:
+	case <-time.After(time.Second):
+		require.FailNow(t, "first shard handler did not start")
+	}
+	select {
+	case <-enterShard2:
+	case <-time.After(time.Second):
+		require.FailNow(t, "second shard handler did not start")
+	}
+}
+
+func newTestDispatcherOrchestrator() *DispatcherOrchestrator {
+	// This test only exercises local routing through RecvMaintainerRequest, so it
+	// needs shard state and the dispatcher manager map but not a message center.
+	orchestrator := &DispatcherOrchestrator{
+		dispatcherManagers: make(map[common.ChangeFeedID]*dispatchermanager.DispatcherManager),
+		shards:             make([]*orchestratorShard, dispatcherOrchestratorShardCount),
+	}
+	for i := range orchestrator.shards {
+		orchestrator.shards[i] = newOrchestratorShard(func(msg *messaging.TargetMessage) {})
+	}
+	return orchestrator
+}
+
+func findChangefeedIDOnShard(orchestrator *DispatcherOrchestrator, excludedShard int) (common.ChangeFeedID, int) {
+	for i := 0; i < dispatcherOrchestratorShardCount*4; i++ {
+		cfID := newTestChangefeedID(i)
+		shardIndex := orchestrator.shardIndexForChangefeedID(cfID)
+		if shardIndex != excludedShard {
+			return cfID, shardIndex
+		}
+	}
+	panic("failed to find changefeed ID on a different shard")
+}
+
+func newTestChangefeedID(seed int) common.ChangeFeedID {
+	return common.ChangeFeedID{
+		Id: common.NewGIDWithValue(uint64(seed+1), uint64(seed+17)),
+		DisplayName: common.NewChangeFeedDisplayName(
+			fmt.Sprintf("cf-%d", seed),
+			"default",
+		),
+	}
+}
+
+func TestPendingMessageQueue_TryEnqueueDropsDuplicatesOnlyWhileQueued(t *testing.T) {
+>>>>>>> d9e2eee5c (downstreamadapter: shard dispatcher orchestrator queue (#5052))
 	t.Parallel()
 
 	q := newPendingMessageQueue()
