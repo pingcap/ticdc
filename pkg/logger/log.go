@@ -87,6 +87,11 @@ func SetLogLevel(level string) error {
 	return nil
 }
 
+// IsDebugEnabled reports whether DEBUG logs are enabled for the global logger.
+func IsDebugEnabled() bool {
+	return log.GetLevel() <= zapcore.DebugLevel
+}
+
 // loggerOp is the op for logger control
 type loggerOp struct {
 	isInitGRPCLogger   bool
