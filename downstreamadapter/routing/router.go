@@ -377,7 +377,7 @@ func ValidateNoStaticRouteConflict(
 		return nil
 	}
 
-	capacity := 0
+	var capacity int
 	for _, tableNames := range tableNameGroups {
 		capacity += len(tableNames)
 	}
