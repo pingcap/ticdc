@@ -24,18 +24,18 @@ import (
 // target table name. Different source names mapping to the same target is a conflict;
 // registering the same source-target mapping repeatedly is idempotent.
 type TargetTableRegistry struct {
-	changefeedID    common.ChangeFeedID
-	target2Bindings map[TableKey]RouteBinding
-	source2Target   map[TableKey]TableKey
+	changefeedID  common.ChangeFeedID
+	target2Source map[TableKey]TableKey
+	source2Target map[TableKey]TableKey
 }
 
 // NewTargetTableRegistry creates an empty registry and preallocates the internal
 // indexes for the expected source table count.
 func NewTargetTableRegistry(changefeedID common.ChangeFeedID, capacity int) *TargetTableRegistry {
 	return &TargetTableRegistry{
-		changefeedID:    changefeedID,
-		target2Bindings: make(map[TableKey]RouteBinding, capacity),
-		source2Target:   make(map[TableKey]TableKey, capacity),
+		changefeedID:  changefeedID,
+		target2Source: make(map[TableKey]TableKey, capacity),
+		source2Target: make(map[TableKey]TableKey, capacity),
 	}
 }
 
@@ -52,13 +52,13 @@ func (r *TargetTableRegistry) Add(binding RouteBinding) error {
 			binding.Target.Schema, binding.Target.Table)
 	}
 
-	existing, ok := r.target2Bindings[binding.Target]
+	existingSource, ok := r.target2Source[binding.Target]
 	if !ok {
-		r.target2Bindings[binding.Target] = binding
+		r.target2Source[binding.Target] = binding.Source
 		r.source2Target[binding.Source] = binding.Target
 		return nil
 	}
-	if existing.Source.Equal(binding.Source) {
+	if existingSource.Equal(binding.Source) {
 		return nil
 	}
 	log.Warn("table route conflict detected",
@@ -66,13 +66,13 @@ func (r *TargetTableRegistry) Add(binding RouteBinding) error {
 		zap.String("changefeed", r.changefeedID.Name()),
 		zap.String("targetSchema", binding.Target.Schema),
 		zap.String("targetTable", binding.Target.Table),
-		zap.String("existingSourceSchema", existing.Source.Schema),
-		zap.String("existingSourceTable", existing.Source.Table),
+		zap.String("existingSourceSchema", existingSource.Schema),
+		zap.String("existingSourceTable", existingSource.Table),
 		zap.String("incomingSourceSchema", binding.Source.Schema),
 		zap.String("incomingSourceTable", binding.Source.Table))
 	return errors.ErrTableRouteConflict.GenWithStackByArgs(
 		binding.Target.Schema, binding.Target.Table,
-		existing.Source.Schema, existing.Source.Table,
+		existingSource.Schema, existingSource.Table,
 		binding.Source.Schema, binding.Source.Table)
 }
 
@@ -83,7 +83,7 @@ func (r *TargetTableRegistry) Remove(source TableKey) {
 		return
 	}
 	delete(r.source2Target, source)
-	delete(r.target2Bindings, target)
+	delete(r.target2Source, target)
 }
 
 // ApplyTransition atomically applies source removals and source-to-target additions.
@@ -101,8 +101,8 @@ func (r *TargetTableRegistry) ApplyTransition(removes []TableKey, adds []RouteBi
 		removeSet[source] = struct{}{}
 	}
 
-	addedTargets := make(map[TableKey]RouteBinding, len(adds))
-	addedSources := make(map[TableKey]RouteBinding, len(adds))
+	addedTargets := make(map[TableKey]TableKey, len(adds))
+	addedSources := make(map[TableKey]TableKey, len(adds))
 	for _, add := range adds {
 		// A source already in the registry can only be re-added with a different
 		// target when the same transition also removes the old source binding.
@@ -122,51 +122,51 @@ func (r *TargetTableRegistry) ApplyTransition(removes []TableKey, adds []RouteBi
 		// that old owner is removed in the same transition. This is what makes
 		// rename/drop-and-create style replacements atomic while still rejecting
 		// two live source names that route to the same target.
-		if existing, ok := r.target2Bindings[add.Target]; ok && !existing.Source.Equal(add.Source) {
-			if _, removed := removeSet[existing.Source]; !removed {
+		if existingSource, ok := r.target2Source[add.Target]; ok && !existingSource.Equal(add.Source) {
+			if _, removed := removeSet[existingSource]; !removed {
 				log.Warn("table route conflict detected",
 					zap.String("keyspace", r.changefeedID.Keyspace()),
 					zap.String("changefeed", r.changefeedID.Name()),
 					zap.String("targetSchema", add.Target.Schema),
 					zap.String("targetTable", add.Target.Table),
-					zap.String("existingSourceSchema", existing.Source.Schema),
-					zap.String("existingSourceTable", existing.Source.Table),
+					zap.String("existingSourceSchema", existingSource.Schema),
+					zap.String("existingSourceTable", existingSource.Table),
 					zap.String("incomingSourceSchema", add.Source.Schema),
 					zap.String("incomingSourceTable", add.Source.Table))
 				return errors.ErrTableRouteConflict.GenWithStackByArgs(
 					add.Target.Schema, add.Target.Table,
-					existing.Source.Schema, existing.Source.Table,
+					existingSource.Schema, existingSource.Table,
 					add.Source.Schema, add.Source.Table)
 			}
 		}
 
 		// The adds list itself must be internally consistent before the registry
 		// is touched. One source cannot point to two targets in one transition.
-		if existing, ok := addedSources[add.Source]; ok && !existing.Target.Equal(add.Target) {
+		if existingTarget, ok := addedSources[add.Source]; ok && !existingTarget.Equal(add.Target) {
 			return errors.ErrInternalCheckFailed.GenWithStack(
 				"source `%s`.`%s` is added to multiple targets `%s`.`%s` and `%s`.`%s` in one transition",
 				add.Source.Schema, add.Source.Table,
-				existing.Target.Schema, existing.Target.Table,
+				existingTarget.Schema, existingTarget.Table,
 				add.Target.Schema, add.Target.Table)
 		}
 		// Likewise, two newly added live sources cannot claim the same target.
-		if existing, ok := addedTargets[add.Target]; ok && !existing.Source.Equal(add.Source) {
+		if existingSource, ok := addedTargets[add.Target]; ok && !existingSource.Equal(add.Source) {
 			log.Warn("table route conflict detected",
 				zap.String("keyspace", r.changefeedID.Keyspace()),
 				zap.String("changefeed", r.changefeedID.Name()),
 				zap.String("targetSchema", add.Target.Schema),
 				zap.String("targetTable", add.Target.Table),
-				zap.String("existingSourceSchema", existing.Source.Schema),
-				zap.String("existingSourceTable", existing.Source.Table),
+				zap.String("existingSourceSchema", existingSource.Schema),
+				zap.String("existingSourceTable", existingSource.Table),
 				zap.String("incomingSourceSchema", add.Source.Schema),
 				zap.String("incomingSourceTable", add.Source.Table))
 			return errors.ErrTableRouteConflict.GenWithStackByArgs(
 				add.Target.Schema, add.Target.Table,
-				existing.Source.Schema, existing.Source.Table,
+				existingSource.Schema, existingSource.Table,
 				add.Source.Schema, add.Source.Table)
 		}
-		addedSources[add.Source] = add
-		addedTargets[add.Target] = add
+		addedSources[add.Source] = add.Target
+		addedTargets[add.Target] = add.Source
 	}
 
 	// All validation above is side-effect free. Only after the complete transition
@@ -175,7 +175,7 @@ func (r *TargetTableRegistry) ApplyTransition(removes []TableKey, adds []RouteBi
 		r.Remove(source)
 	}
 	for _, add := range adds {
-		r.target2Bindings[add.Target] = add
+		r.target2Source[add.Target] = add.Source
 		r.source2Target[add.Source] = add.Target
 	}
 	return nil

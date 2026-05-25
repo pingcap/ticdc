@@ -127,13 +127,6 @@ func (c *Controller) FinishBootstrap(
 		}
 	}
 
-	if err := c.rebuildTargetTableRegistry(tables); err != nil {
-		log.Error("rebuild target table registry failed",
-			zap.String("changefeed", c.changefeedID.Name()),
-			zap.Error(err))
-		return nil, errors.Trace(err)
-	}
-
 	// Step 3: Build working task map from bootstrap responses and Process tables and build schema info
 	workingTaskMap, schemaInfos, err := c.buildTaskInfo(allNodesResp, tables, isMysqlCompatibleBackend, common.DefaultMode)
 	if err != nil {

@@ -64,14 +64,14 @@ func TestTargetTableRegistryRemove(t *testing.T) {
 	r := NewTargetTableRegistry(changefeedID, 0)
 
 	require.NoError(t, r.Add(newRouteBinding("db1", "t1", "archive", "orders")))
-	require.Len(t, r.target2Bindings, 1)
+	require.Len(t, r.target2Source, 1)
 
 	r.Remove(TableKey{Schema: "db1", Table: "t1"})
-	require.Empty(t, r.target2Bindings)
+	require.Empty(t, r.target2Source)
 
 	require.NoError(t, r.Add(newRouteBinding("db2", "t1", "archive", "orders")))
 	r.Remove(TableKey{Schema: "db1", Table: "t1"})
-	require.Len(t, r.target2Bindings, 1)
+	require.Len(t, r.target2Source, 1)
 }
 
 func TestTargetTableRegistryRejectsSourceRetarget(t *testing.T) {
@@ -102,7 +102,7 @@ func TestTargetTableRegistryApplyTransition(t *testing.T) {
 			[]RouteBinding{newRouteBinding("db1", "t1_new", "archive", "orders")},
 		))
 
-		require.Len(t, r.target2Bindings, 2)
+		require.Len(t, r.target2Source, 2)
 		err := r.Add(newRouteBinding("db3", "t3", "archive", "orders"))
 		require.Error(t, err)
 		require.True(t, errors.ErrTableRouteConflict.Equal(err))
@@ -121,7 +121,7 @@ func TestTargetTableRegistryApplyTransition(t *testing.T) {
 		require.Error(t, err)
 		require.True(t, errors.ErrTableRouteConflict.Equal(err))
 
-		require.Len(t, r.target2Bindings, 2)
+		require.Len(t, r.target2Source, 2)
 		require.NoError(t, r.Add(newRouteBinding("db1", "t1", "archive", "orders")))
 	})
 
@@ -135,7 +135,7 @@ func TestTargetTableRegistryApplyTransition(t *testing.T) {
 		})
 		require.Error(t, err)
 		require.True(t, errors.ErrTableRouteConflict.Equal(err))
-		require.Empty(t, r.target2Bindings)
+		require.Empty(t, r.target2Source)
 	})
 
 	t.Run("internal duplicate source fails before mutation", func(t *testing.T) {
@@ -148,7 +148,7 @@ func TestTargetTableRegistryApplyTransition(t *testing.T) {
 		})
 		require.Error(t, err)
 		require.True(t, errors.ErrInternalCheckFailed.Equal(err))
-		require.Empty(t, r.target2Bindings)
+		require.Empty(t, r.target2Source)
 	})
 }
 
