@@ -324,10 +324,8 @@ func (iter *mockEventIterator) Next() (*common.RawKVEntry, bool) {
 
 	row := iter.events[0]
 	iter.events = iter.events[1:]
-	isNewTxn := false
-	if iter.prevCommitTS == 0 || row.StartTs != iter.prevStartTS || row.CRTs != iter.prevCommitTS {
-		isNewTxn = true
-	}
+	isNewTxn := iter.prevCommitTS == 0 || row.StartTs != iter.prevStartTS || row.CRTs != iter.prevCommitTS
+
 	iter.prevStartTS = row.StartTs
 	iter.prevCommitTS = row.CRTs
 	iter.rowCount++

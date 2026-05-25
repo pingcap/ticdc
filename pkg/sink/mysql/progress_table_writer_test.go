@@ -21,14 +21,13 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
-	"github.com/pingcap/ticdc/pkg/common/event"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/stretchr/testify/require"
 )
 
-func newTestTableSchemaStore(tables []*event.SchemaTableName) *commonEvent.TableSchemaStore {
+func newTestTableSchemaStore(tables []*commonEvent.SchemaTableName) *commonEvent.TableSchemaStore {
 	schemaByName := make(map[string]*heartbeatpb.SchemaInfo)
 	nextSchemaID := int64(1)
 	nextTableID := int64(1)
@@ -65,7 +64,7 @@ func TestProgressTableWriterFlushSingleBatch(t *testing.T) {
 	setTestClusterID(t, "cluster-single")
 
 	writer := NewProgressTableWriter(context.Background(), db, common.NewChangeFeedIDWithName("cf", "ks"), 10, 1*time.Millisecond)
-	tables := []*event.SchemaTableName{
+	tables := []*commonEvent.SchemaTableName{
 		{SchemaName: "db1", TableName: "t1"},
 		{SchemaName: "db1", TableName: "t2"},
 	}
@@ -88,7 +87,7 @@ func TestProgressTableWriterFlushMultiBatch(t *testing.T) {
 	setTestClusterID(t, "cluster-multi")
 
 	writer := NewProgressTableWriter(context.Background(), db, common.NewChangeFeedIDWithName("cf", "ks"), 2, 1*time.Millisecond)
-	allTables := []*event.SchemaTableName{
+	allTables := []*commonEvent.SchemaTableName{
 		{SchemaName: "db1", TableName: "t1"},
 		{SchemaName: "db1", TableName: "t2"},
 		{SchemaName: "db1", TableName: "t3"},
@@ -121,7 +120,7 @@ func expectProgressTableInit(mock sqlmock.Sqlmock) {
 		WillReturnResult(sqlmock.NewResult(0, 0))
 }
 
-func expectProgressInsert(mock sqlmock.Sqlmock, changefeed, cluster string, checkpoint uint64, tables []*event.SchemaTableName) {
+func expectProgressInsert(mock sqlmock.Sqlmock, changefeed, cluster string, checkpoint uint64, tables []*commonEvent.SchemaTableName) {
 	args := make([]driver.Value, 0, len(tables)*5)
 	for _, tbl := range tables {
 		// the tables order is not guaranteed, so we only check the other field in the args.

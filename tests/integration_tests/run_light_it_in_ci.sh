@@ -46,9 +46,9 @@ mysql_groups=(
 	# G06
 	'http_api http_api_compatibility http_api_tls_old_arch fail_over_ddl_G synced_status same_upstream_downstream'
 	# G07
-	'fail_over_ddl_H changefeed_update_config synced_status_with_redo'
+	'fail_over_ddl_H changefeed_update_config synced_status_with_redo redo_apply_table_route'
 	# G08
-	'capture_session_done_during_task changefeed_dup_error_restart mysql_sink_retry fail_over_ddl_I'
+	'capture_session_done_during_task changefeed_dup_error_restart mysql_sink_retry fail_over_ddl_I table_route'
 	# G09
 	'sequence cdc_server_tips ddl_sequence server_config_compatibility log_redaction fail_over_ddl_J'
 	# G10
@@ -59,7 +59,7 @@ mysql_groups=(
 	# ds_memory_control
 	'row_format tiflash multi_rocks fail_over_ddl_M correctness_for_shared_column_schema partial_index'
 	# G13
-	'cli_tls_with_auth cli_with_auth fail_over_ddl_N maintainer_failover_when_operator cli_missing_keyspace_error'
+	'cli_with_auth fail_over_ddl_N maintainer_failover_when_operator cli_missing_keyspace_error'
 	# G14
 	'batch_add_table batch_update_to_no_batch fail_over_ddl_O update_changefeed_check_config pause_changefeed_with_long_time_ddl'
 	# G15
@@ -87,19 +87,19 @@ kafka_groups=(
 	# G07
 	'kafka_messages kafka_big_messages kafka_compression fail_over_ddl_H changefeed_update_config'
 	# G08
-	'capture_session_done_during_task fail_over_ddl_I'
+	'capture_session_done_during_task fail_over_ddl_I table_route'
 	# G09
 	'cdc_server_tips ddl_sequence log_redaction fail_over_ddl_J'
 	# G10
-	'changefeed_error batch_add_table fail_over_ddl_K split_table_check'
+	'changefeed_error batch_add_table fail_over_ddl_K'
 	# G11
 	'ddl_attributes multi_tables_ddl fail_over_ddl_L'
 	# G12
 	'row_format tiflash multi_rocks fail_over_ddl_M correctness_for_shared_column_schema partial_index'
 	# G13
-	'cli_tls_with_auth cli_with_auth fail_over_ddl_N maintainer_failover_when_operator'
+	'cli_with_auth fail_over_ddl_N maintainer_failover_when_operator'
 	# G14
-	'kafka_simple_basic avro_basic debezium_basic fail_over_ddl_O update_changefeed_check_config'
+	'kafka_simple_basic avro_basic fail_over_ddl_O update_changefeed_check_config'
 	# G15
 	'kafka_simple_basic_avro split_region autorandom gc_safepoint kafka_log_info'
 )
@@ -135,9 +135,9 @@ pulsar_groups=(
 	# G12
 	'row_format tiflash multi_rocks fail_over_ddl_M correctness_for_shared_column_schema partial_index'
 	# G13
-	'cli_tls_with_auth cli_with_auth fail_over_ddl_N maintainer_failover_when_operator'
+	'cli_with_auth fail_over_ddl_N maintainer_failover_when_operator'
 	# G14
-	'avro_basic debezium_basic fail_over_ddl_O update_changefeed_check_config'
+	'avro_basic fail_over_ddl_O update_changefeed_check_config'
 	# G15
 	'split_region autorandom gc_safepoint'
 )
@@ -173,9 +173,9 @@ storage_groups=(
 	# G12
 	'row_format tiflash multi_rocks fail_over_ddl_M correctness_for_shared_column_schema partial_index'
 	# G13
-	'cli_tls_with_auth cli_with_auth fail_over_ddl_N maintainer_failover_when_operator'
+	'cli_with_auth fail_over_ddl_N maintainer_failover_when_operator'
 	# G14
-	'csv_storage_partition_table csv_storage_multi_tables_ddl fail_over_ddl_O update_changefeed_check_config'
+	'csv_storage_partition_table csv_storage_multi_tables_ddl table_route fail_over_ddl_O update_changefeed_check_config'
 	# G15
 	'split_region autorandom gc_safepoint'
 )

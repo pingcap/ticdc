@@ -152,8 +152,9 @@ func run(_ *cobra.Command, _ []string) {
 		}
 	})))
 	http.Handle("/.well-known/openid-configuration", logMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(fmt.Sprintf(openIDConfiguration, serverConfig.port, serverConfig.port, serverConfig.port)))
-		w.WriteHeader(200)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, openIDConfiguration, serverConfig.port, serverConfig.port, serverConfig.port)
 	})))
 	log.Info("starting auth2 server", zap.Int("port", serverConfig.port))
 	log.Panic("run auth2 server failed", zap.Error(http.ListenAndServe(fmt.Sprintf(":%d", serverConfig.port), nil)))

@@ -18,10 +18,9 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
-	"github.com/pingcap/ticdc/downstreamadapter/syncpoint"
-	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/logger"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -70,8 +69,8 @@ type dispatcherStat struct {
 	gotSyncpointOnTS atomic.Bool
 	// tableInfo is the latest table info of the dispatcher's corresponding table.
 	tableInfo atomic.Value
-	// tableInfoVersion is the latest table info version of the dispatcher's corresponding table.
-	// It is updated by ddl event
+	// tableInfoVersion is the latest schema version delivered to this dispatcher.
+	// It may advance even when tableInfo is not replaced.
 	tableInfoVersion atomic.Uint64
 }
 
@@ -80,13 +79,35 @@ func newDispatcherStat(
 	eventCollector *EventCollector,
 	readyCallback func(),
 ) *dispatcherStat {
+	return newDispatcherStatInternal(
+		target,
+		eventCollector,
+		eventCollector.getLocalServerID(),
+		eventCollector.enqueueMessageForSend,
+		readyCallback,
+	)
+}
+
+func newDispatcherStatInternal(
+	target dispatcher.DispatcherService,
+	eventCollector *EventCollector,
+	localServerID node.ID,
+	sendMessage func(*messaging.TargetMessage),
+	readyCallback func(),
+) *dispatcherStat {
 	stat := &dispatcherStat{
 		target:         target,
 		eventCollector: eventCollector,
 	}
-	stat.session = newDispatcherSession(stat, readyCallback)
 	stat.currentEpoch.Store(newDispatcherEpochState(0, 0, target.GetStartTs()))
 	stat.lastEventCommitTs.Store(target.GetStartTs())
+	stat.session = newDispatcherSession(
+		target,
+		localServerID,
+		sendMessage,
+		stat.advanceEpochForReset,
+		readyCallback,
+	)
 	return stat
 }
 
@@ -128,10 +149,14 @@ func (d *dispatcherStat) doReset(serverID node.ID, resetTs uint64) {
 	d.session.doReset(serverID, resetTs)
 }
 
-// getResetTs is used to get the resetTs of the dispatcher.
-// resetTs must be larger than the startTs, otherwise it will cause panic in eventStore.
-func (d *dispatcherStat) getResetTs() uint64 {
-	return d.target.GetCheckpointTs()
+func (d *dispatcherStat) advanceEpochForReset(resetTs uint64) uint64 {
+	for {
+		currentState := d.loadCurrentEpochState()
+		nextState := newDispatcherEpochState(currentState.epoch+1, 0, resetTs)
+		if d.currentEpoch.CompareAndSwap(currentState, nextState) {
+			return nextState.epoch
+		}
+	}
 }
 
 // remove is used to remove the dispatcher from the event service.
@@ -166,19 +191,22 @@ func (d *dispatcherStat) verifyEventSequence(event dispatcher.DispatcherEvent, s
 		return false
 	}
 
+	debugEnabled := logger.IsDebugEnabled()
 	switch event.GetType() {
 	case commonEvent.TypeDMLEvent,
 		commonEvent.TypeDDLEvent,
 		commonEvent.TypeHandshakeEvent,
 		commonEvent.TypeSyncPointEvent,
 		commonEvent.TypeResolvedEvent:
-		log.Debug("check event sequence",
-			zap.Stringer("changefeedID", d.target.GetChangefeedID()),
-			zap.Stringer("dispatcher", d.getDispatcherID()),
-			zap.String("eventType", commonEvent.TypeToString(event.GetType())),
-			zap.Uint64("receivedSeq", event.GetSeq()),
-			zap.Uint64("lastEventSeq", state.lastEventSeq.Load()),
-			zap.Uint64("commitTs", event.GetCommitTs()))
+		if debugEnabled {
+			log.Debug("check event sequence",
+				zap.Stringer("changefeedID", d.target.GetChangefeedID()),
+				zap.Stringer("dispatcher", d.getDispatcherID()),
+				zap.String("eventType", commonEvent.TypeToString(event.GetType())),
+				zap.Uint64("receivedSeq", event.GetSeq()),
+				zap.Uint64("lastEventSeq", state.lastEventSeq.Load()),
+				zap.Uint64("commitTs", event.GetCommitTs()))
+		}
 
 		lastEventSeq := state.lastEventSeq.Load()
 		expectedSeq := uint64(0)
@@ -205,12 +233,14 @@ func (d *dispatcherStat) verifyEventSequence(event dispatcher.DispatcherEvent, s
 		}
 	case commonEvent.TypeBatchDMLEvent:
 		for _, e := range event.Event.(*commonEvent.BatchDMLEvent).DMLEvents {
-			log.Debug("check batch DML event sequence",
-				zap.Stringer("changefeedID", d.target.GetChangefeedID()),
-				zap.Stringer("dispatcher", d.getDispatcherID()),
-				zap.Uint64("receivedSeq", e.Seq),
-				zap.Uint64("lastEventSeq", state.lastEventSeq.Load()),
-				zap.Uint64("commitTs", e.CommitTs))
+			if debugEnabled {
+				log.Debug("check batch DML event sequence",
+					zap.Stringer("changefeedID", d.target.GetChangefeedID()),
+					zap.Stringer("dispatcher", d.getDispatcherID()),
+					zap.Uint64("receivedSeq", e.Seq),
+					zap.Uint64("lastEventSeq", state.lastEventSeq.Load()),
+					zap.Uint64("commitTs", e.CommitTs))
+			}
 
 			expectedSeq := state.lastEventSeq.Add(1)
 			if e.Seq != expectedSeq {
@@ -328,11 +358,13 @@ func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEve
 	state := d.loadCurrentEpochState()
 	for _, event := range events {
 		if !d.isFromCurrentEpoch(event, state) {
-			log.Debug("receive DML/Resolved event from a stale epoch, ignore it",
-				zap.Stringer("changefeedID", d.target.GetChangefeedID()),
-				zap.Stringer("dispatcher", d.getDispatcherID()),
-				zap.String("eventType", commonEvent.TypeToString(event.GetType())),
-				zap.Any("event", event.Event))
+			if logger.IsDebugEnabled() {
+				log.Debug("receive DML/Resolved event from a stale epoch, ignore it",
+					zap.Stringer("changefeedID", d.target.GetChangefeedID()),
+					zap.Stringer("dispatcher", d.getDispatcherID()),
+					zap.String("eventType", commonEvent.TypeToString(event.GetType())),
+					zap.Any("event", event.Event))
+			}
 			continue
 		}
 		if !d.verifyEventSequence(event, state) {
@@ -360,10 +392,6 @@ func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEve
 			batchDML := event.Event.(*commonEvent.BatchDMLEvent)
 			batchDML.AssembleRows(tableInfo)
 			for _, dml := range batchDML.DMLEvents {
-				// DMLs in the same batch share the same updateTs in their table info,
-				// but they may reference different table info objects,
-				// so each needs to be initialized separately.
-				dml.TableInfo.InitPrivateFields()
 				dml.TableInfoVersion = tableInfoVersion
 				dmlEvent := dispatcher.NewDispatcherEvent(event.From, dml)
 				if d.shouldForwardEventByCommitTs(dmlEvent) {
@@ -433,13 +461,51 @@ func (d *dispatcherStat) handleSingleDataEvents(events []dispatcher.DispatcherEv
 			return false
 		}
 		events[0].Event = ddl
-		d.tableInfoVersion.Store(ddl.FinishedTs)
-		if ddl.TableInfo != nil {
-			d.tableInfo.Store(ddl.TableInfo)
-		}
+		d.updateTableInfoByDDL(ddl)
 	}
 	d.updateCommitTsStateByEvents(state, events)
 	return d.target.HandleEvents(events, func() { d.wake() })
+}
+
+// updateTableInfoByDDL advances the table schema version and, when the DDL
+// event carries a TableInfo matching the dispatcher's table, refreshes the
+// cached TableInfo used for DML row assembly.
+//
+// Must be called from the per-dispatcher event loop (handleSingleDataEvents),
+// which guarantees serial access to dispatcherStat fields for a given table.
+func (d *dispatcherStat) updateTableInfoByDDL(ddl *commonEvent.DDLEvent) {
+	tableSpan := d.target.GetTableSpan()
+	if tableSpan == nil || tableSpan.TableID == common.DDLSpanTableID {
+		return
+	}
+
+	// EXCHANGE PARTITION can change the schema version of a physical table dispatcher
+	// while ddl.TableInfo carries another logical table. The storage sink uses
+	// tableInfoVersion to decide whether a DML belongs to an old schema, so advance
+	// it for every DDL delivered to this dispatcher.
+	// TODO: Revisit whether the storage sink should discard DML solely by comparing
+	// tableInfoVersion with existing schema files.
+	d.tableInfoVersion.Store(ddl.FinishedTs)
+
+	if ddl.TableInfo == nil {
+		return
+	}
+
+	// A table dispatcher can receive DDLs unrelated to its own table for barrier
+	// coordination, for example CREATE VIEW is tracked in every table's DDL history.
+	// The cached table info is used to assemble subsequent DML rows. For partition
+	// tables, the dispatcher span ID is a physical partition ID while TableInfo
+	// carries the logical table ID, so compare with the cached table info first.
+	expectedTableID := tableSpan.TableID
+	current := d.tableInfo.Load()
+	if current != nil {
+		expectedTableID = current.(*common.TableInfo).TableName.TableID
+	}
+	if ddl.TableInfo.TableName.TableID != expectedTableID {
+		return
+	}
+
+	d.tableInfo.Store(ddl.TableInfo)
 }
 
 func (d *dispatcherStat) handleDataEvents(events ...dispatcher.DispatcherEvent) bool {
@@ -474,10 +540,12 @@ func (d *dispatcherStat) handleDropEvent(event dispatcher.DispatcherEvent) {
 
 	state := d.loadCurrentEpochState()
 	if !d.isFromCurrentEpoch(event, state) {
-		log.Debug("receive a drop event from a stale epoch, ignore it",
-			zap.Stringer("changefeedID", d.target.GetChangefeedID()),
-			zap.Stringer("dispatcher", d.getDispatcherID()),
-			zap.Any("event", event.Event))
+		if logger.IsDebugEnabled() {
+			log.Debug("receive a drop event from a stale epoch, ignore it",
+				zap.Stringer("changefeedID", d.target.GetChangefeedID()),
+				zap.Stringer("dispatcher", d.getDispatcherID()),
+				zap.Any("event", event.Event))
+		}
 		return
 	}
 
@@ -558,76 +626,13 @@ func (d *dispatcherStat) isReceivingDataEvent() bool {
 }
 
 func (d *dispatcherStat) newDispatcherRegisterRequest(serverId string, onlyReuse bool) *messaging.DispatcherRequest {
-	startTs := d.target.GetStartTs()
-	syncPointInterval := d.target.GetSyncPointInterval()
-	return &messaging.DispatcherRequest{
-		DispatcherRequest: &eventpb.DispatcherRequest{
-			ChangefeedId: d.target.GetChangefeedID().ToPB(),
-			DispatcherId: d.target.GetId().ToPB(),
-			TableSpan:    d.target.GetTableSpan(),
-			StartTs:      startTs,
-			// ServerId is the id of the request sender.
-			ServerId:             serverId,
-			ActionType:           eventpb.ActionType_ACTION_TYPE_REGISTER,
-			FilterConfig:         d.target.GetFilterConfig(),
-			EnableSyncPoint:      d.target.EnableSyncPoint(),
-			SyncPointInterval:    uint64(syncPointInterval.Seconds()),
-			SyncPointTs:          syncpoint.CalculateStartSyncPointTs(startTs, syncPointInterval, d.target.GetSkipSyncpointAtStartTs()),
-			OnlyReuse:            onlyReuse,
-			BdrMode:              d.target.GetBDRMode(),
-			Mode:                 d.target.GetMode(),
-			Epoch:                0,
-			Timezone:             d.target.GetTimezone(),
-			Integrity:            d.target.GetIntegrityConfig(),
-			OutputRawChangeEvent: d.target.IsOutputRawChangeEvent(),
-			TxnAtomicity:         string(d.target.GetTxnAtomicity()),
-		},
-	}
+	return d.session.newDispatcherRegisterRequest(serverId, onlyReuse)
 }
 
 func (d *dispatcherStat) newDispatcherResetRequest(serverId string, resetTs uint64, epoch uint64) *messaging.DispatcherRequest {
-	syncPointInterval := d.target.GetSyncPointInterval()
-
-	// after reset during normal run time, we can filter reduduant syncpoint at event collector side
-	// so we just take care of the case that resetTs is same as startTs
-	skipSyncpointSameAsResetTs := false
-	if resetTs == d.target.GetStartTs() {
-		skipSyncpointSameAsResetTs = d.target.GetSkipSyncpointAtStartTs()
-	}
-	return &messaging.DispatcherRequest{
-		DispatcherRequest: &eventpb.DispatcherRequest{
-			ChangefeedId: d.target.GetChangefeedID().ToPB(),
-			DispatcherId: d.target.GetId().ToPB(),
-			TableSpan:    d.target.GetTableSpan(),
-			StartTs:      resetTs,
-			// ServerId is the id of the request sender.
-			ServerId:          serverId,
-			ActionType:        eventpb.ActionType_ACTION_TYPE_RESET,
-			FilterConfig:      d.target.GetFilterConfig(),
-			EnableSyncPoint:   d.target.EnableSyncPoint(),
-			SyncPointInterval: uint64(syncPointInterval.Seconds()),
-			SyncPointTs:       syncpoint.CalculateStartSyncPointTs(resetTs, syncPointInterval, skipSyncpointSameAsResetTs),
-			// OnlyReuse:         false,
-			BdrMode:              d.target.GetBDRMode(),
-			Mode:                 d.target.GetMode(),
-			Epoch:                epoch,
-			Timezone:             d.target.GetTimezone(),
-			Integrity:            d.target.GetIntegrityConfig(),
-			OutputRawChangeEvent: d.target.IsOutputRawChangeEvent(),
-		},
-	}
+	return d.session.newDispatcherResetRequest(serverId, resetTs, epoch)
 }
 
 func (d *dispatcherStat) newDispatcherRemoveRequest(serverId string) *messaging.DispatcherRequest {
-	return &messaging.DispatcherRequest{
-		DispatcherRequest: &eventpb.DispatcherRequest{
-			ChangefeedId: d.target.GetChangefeedID().ToPB(),
-			DispatcherId: d.target.GetId().ToPB(),
-			TableSpan:    d.target.GetTableSpan(),
-			// ServerId is the id of the request sender.
-			ServerId:   serverId,
-			ActionType: eventpb.ActionType_ACTION_TYPE_REMOVE,
-			Mode:       d.target.GetMode(),
-		},
-	}
+	return d.session.newDispatcherRemoveRequest(serverId)
 }

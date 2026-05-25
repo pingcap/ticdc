@@ -23,7 +23,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/compression"
 	"github.com/pingcap/ticdc/pkg/config"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/stretchr/testify/require"
 )
@@ -198,6 +198,64 @@ func TestCanalJSONCompressionE2E(t *testing.T) {
 
 	decodedWatermark := decoder.NextResolvedEvent()
 	require.Equal(t, decodedWatermark, waterMark)
+}
+
+func TestEncodeRoutedDMLEventUsesTargetNames(t *testing.T) {
+	dmlEvent := common.NewRoutedDMLEvent4Test()
+	row, ok := dmlEvent.GetNextRow()
+	require.True(t, ok)
+
+	ctx := context.Background()
+	codecConfig := common.NewConfig(config.ProtocolCanalJSON)
+
+	encIface, err := NewJSONRowEventEncoder(ctx, codecConfig)
+	require.NoError(t, err)
+	encoder := encIface.(*JSONRowEventEncoder)
+
+	require.NoError(t, encoder.AppendRowChangedEvent(ctx, "", &commonEvent.RowEvent{
+		TableInfo:      dmlEvent.TableInfo,
+		CommitTs:       dmlEvent.CommitTs,
+		Event:          row,
+		ColumnSelector: columnselector.NewDefaultColumnSelector(),
+	}))
+
+	message := encoder.Build()[0]
+
+	decoder, err := NewDecoder(ctx, codecConfig, nil)
+	require.NoError(t, err)
+	decoder.AddKeyValue(message.Key, message.Value)
+
+	messageType, hasNext := decoder.HasNext()
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeRow, messageType)
+
+	decoded := dml2rowEvent(t, decoder.NextDMLEvent())
+	require.Equal(t, "target_db", decoded.TableInfo.GetSchemaName())
+	require.Equal(t, "target_table", decoded.TableInfo.GetTableName())
+}
+
+func TestEncodeRoutedDDLEventUsesTargetNames(t *testing.T) {
+	ctx := context.Background()
+	codecConfig := common.NewConfig(config.ProtocolCanalJSON)
+	encIface, err := NewJSONRowEventEncoder(ctx, codecConfig)
+	require.NoError(t, err)
+	encoder := encIface.(*JSONRowEventEncoder)
+
+	message, err := encoder.EncodeDDLEvent(common.NewRoutedDDLEvent4Test())
+	require.NoError(t, err)
+
+	decoder, err := NewDecoder(ctx, codecConfig, nil)
+	require.NoError(t, err)
+	decoder.AddKeyValue(message.Key, message.Value)
+
+	messageType, hasNext := decoder.HasNext()
+	require.True(t, hasNext)
+	require.Equal(t, common.MessageTypeDDL, messageType)
+
+	decoded := decoder.NextDDLEvent()
+	require.Equal(t, "target_db", decoded.SchemaName)
+	require.Equal(t, "target_table", decoded.TableName)
+	require.Contains(t, decoded.Query, "`target_db`.`target_table`")
 }
 
 func TestCanalJSONClaimCheckE2E(t *testing.T) {
@@ -621,7 +679,7 @@ func TestMaxMessageBytes(t *testing.T) {
 		Event:          rc,
 		ColumnSelector: columnselector.NewDefaultColumnSelector(),
 	})
-	require.Error(t, err, cerror.ErrMessageTooLarge)
+	require.Error(t, err, errors.ErrMessageTooLarge)
 }
 
 func TestCanalJSONContentCompatibleE2E(t *testing.T) {

@@ -16,6 +16,7 @@ package eventstore
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"sync"
@@ -30,6 +31,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/encryption"
+	cerrors "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/pdutil"
@@ -46,6 +49,50 @@ type mockSubscriptionClient struct {
 	nextID        atomic.Uint64
 	mu            sync.Mutex
 	subscriptions map[logpuller.SubscriptionID]*mockSubscriptionStat
+}
+
+type spyEncryptionManager struct {
+	encryptKeyspaceID uint32
+	decryptKeyspaceID uint32
+	encryptCalls      int
+	decryptCalls      int
+}
+
+type unencryptedMetaManager struct{}
+
+func (m *unencryptedMetaManager) IsEncryptionEnabled(ctx context.Context, keyspaceID uint32) bool {
+	return false
+}
+
+func (m *unencryptedMetaManager) GetCurrentDataKey(ctx context.Context, keyspaceID uint32) ([]byte, string, byte, error) {
+	return nil, "", 0, nil
+}
+
+func (m *unencryptedMetaManager) GetDataKey(ctx context.Context, keyspaceID uint32, dataKeyID string) ([]byte, error) {
+	return nil, cerrors.ErrDataKeyNotFound.GenWithStackByArgs("data key not found")
+}
+
+func (m *unencryptedMetaManager) Start(ctx context.Context) error { return nil }
+
+func (m *unencryptedMetaManager) Stop() {}
+
+func (m *spyEncryptionManager) EncryptData(ctx context.Context, keyspaceID uint32, data []byte) ([]byte, error) {
+	m.encryptKeyspaceID = keyspaceID
+	m.encryptCalls++
+	encrypted := make([]byte, encryption.EncryptionHeaderSize+len(data))
+	encrypted[0] = 0x01
+	encrypted[3] = 0x01
+	copy(encrypted[encryption.EncryptionHeaderSize:], data)
+	return encrypted, nil
+}
+
+func (m *spyEncryptionManager) DecryptData(ctx context.Context, keyspaceID uint32, encryptedData []byte) ([]byte, error) {
+	m.decryptKeyspaceID = keyspaceID
+	m.decryptCalls++
+	if len(encryptedData) < encryption.EncryptionHeaderSize {
+		return nil, errors.New("encrypted data too short")
+	}
+	return encryptedData[encryption.EncryptionHeaderSize:], nil
 }
 
 func NewMockSubscriptionClient() logpuller.SubscriptionClient {
@@ -188,6 +235,187 @@ func TestEventStoreInteractionWithSubClient(t *testing.T) {
 		require.Equal(t, 2, len(mockSubClient.subscriptions))
 		mockSubClient.mu.Unlock()
 	}
+}
+
+func TestEventStoreUsesKeyspaceIDForEncryption(t *testing.T) {
+	subClient, store := newEventStoreForTest(fmt.Sprintf("/tmp/%s", t.Name()))
+	es := store.(*eventStore)
+	defer es.Close(context.Background())
+
+	spy := &spyEncryptionManager{}
+	es.encryptionManager = spy
+
+	dispatcherID := common.NewDispatcherID()
+	cfID := common.NewChangefeedID4Test("default", "test-cf")
+	span := &heartbeatpb.TableSpan{
+		TableID:    1,
+		StartKey:   []byte("a"),
+		EndKey:     []byte("z"),
+		KeyspaceID: 42,
+	}
+	ok := store.RegisterDispatcher(cfID, dispatcherID, span, 0, func(uint64, uint64) {}, false, false)
+	require.True(t, ok)
+
+	es.dispatcherMeta.RLock()
+	stat := es.dispatcherMeta.dispatcherStats[dispatcherID]
+	subStat := stat.subStat
+	if subStat == nil {
+		subStat = stat.pendingSubStat
+	}
+	es.dispatcherMeta.RUnlock()
+	require.NotNil(t, subStat)
+
+	smallKV := common.RawKVEntry{
+		OpType:  common.OpTypePut,
+		CRTs:    10,
+		StartTs: 5,
+		Key:     []byte("k-small"),
+		Value:   []byte("v"),
+	}
+	largeKV := common.RawKVEntry{
+		OpType:  common.OpTypePut,
+		CRTs:    11,
+		StartTs: 6,
+		Key:     []byte("k-large"),
+		Value:   bytes.Repeat([]byte("v"), es.compressionThreshold+1),
+	}
+	encoder, err := zstd.NewWriter(nil)
+	require.NoError(t, err)
+	defer encoder.Close()
+
+	events := []eventWithCallback{
+		{
+			subID:             subStat.subID,
+			tableID:           subStat.tableSpan.TableID,
+			keyspaceID:        subStat.tableSpan.KeyspaceID,
+			kvs:               []common.RawKVEntry{smallKV, largeKV},
+			currentResolvedTs: 0,
+			callback:          func() {},
+		},
+	}
+	var compressionBuf []byte
+	var rawValueBuf []byte
+	err = es.writeEvents(es.dbs[subStat.dbIndex], events, encoder, &compressionBuf, &rawValueBuf)
+	require.NoError(t, err)
+	require.Equal(t, uint32(42), spy.encryptKeyspaceID)
+	require.Equal(t, 2, spy.encryptCalls)
+
+	subStat.resolvedTs.Store(largeKV.CRTs)
+	dataRange := common.DataRange{
+		Span:          span,
+		CommitTsStart: 0,
+		CommitTsEnd:   largeKV.CRTs,
+	}
+	iter, err := es.GetIterator(dispatcherID, dataRange)
+	require.NoError(t, err)
+	require.NotNil(t, iter)
+
+	readValues := make(map[string][]byte)
+	for {
+		entry, ok := iter.Next()
+		if !ok {
+			break
+		}
+		readValues[string(entry.Key)] = entry.Value
+	}
+	require.Len(t, readValues, 2)
+	require.Equal(t, smallKV.Value, readValues[string(smallKV.Key)])
+	require.Equal(t, largeKV.Value, readValues[string(largeKV.Key)])
+	require.Equal(t, uint32(42), spy.decryptKeyspaceID)
+	require.Equal(t, 2, spy.decryptCalls)
+
+	_, err = iter.Close()
+	require.NoError(t, err)
+	subClient.(*mockSubscriptionClient).Unsubscribe(subStat.subID)
+}
+
+func TestEventStoreHandlesUnencryptedValuesFromEncryptionLayer(t *testing.T) {
+	restoreCompression := setZstdCompressionForTest(t, true)
+	defer restoreCompression()
+
+	subClient, store := newEventStoreForTest(t.TempDir())
+	es := store.(*eventStore)
+	defer es.Close(context.Background())
+
+	es.encryptionManager = encryption.NewEncryptionManager(&unencryptedMetaManager{})
+
+	dispatcherID := common.NewDispatcherID()
+	cfID := common.NewChangefeedID4Test("default", "test-cf")
+	span := &heartbeatpb.TableSpan{
+		TableID:    1,
+		StartKey:   []byte("a"),
+		EndKey:     []byte("z"),
+		KeyspaceID: 42,
+	}
+	ok := store.RegisterDispatcher(cfID, dispatcherID, span, 0, func(uint64, uint64) {}, false, false)
+	require.True(t, ok)
+
+	es.dispatcherMeta.RLock()
+	stat := es.dispatcherMeta.dispatcherStats[dispatcherID]
+	subStat := stat.subStat
+	if subStat == nil {
+		subStat = stat.pendingSubStat
+	}
+	es.dispatcherMeta.RUnlock()
+	require.NotNil(t, subStat)
+
+	smallKV := common.RawKVEntry{
+		OpType:  common.OpTypePut,
+		CRTs:    10,
+		StartTs: 5,
+		Key:     []byte("k-small"),
+		Value:   []byte("v"),
+	}
+	largeKV := common.RawKVEntry{
+		OpType:  common.OpTypePut,
+		CRTs:    11,
+		StartTs: 6,
+		Key:     []byte("k-large"),
+		Value:   bytes.Repeat([]byte("v"), es.compressionThreshold+1),
+	}
+	encoder, err := zstd.NewWriter(nil)
+	require.NoError(t, err)
+	defer encoder.Close()
+
+	events := []eventWithCallback{
+		{
+			subID:             subStat.subID,
+			tableID:           subStat.tableSpan.TableID,
+			keyspaceID:        subStat.tableSpan.KeyspaceID,
+			kvs:               []common.RawKVEntry{smallKV, largeKV},
+			currentResolvedTs: 0,
+			callback:          func() {},
+		},
+	}
+	var compressionBuf []byte
+	var rawValueBuf []byte
+	err = es.writeEvents(es.dbs[subStat.dbIndex], events, encoder, &compressionBuf, &rawValueBuf)
+	require.NoError(t, err)
+
+	subStat.resolvedTs.Store(largeKV.CRTs)
+	iter, err := es.GetIterator(dispatcherID, common.DataRange{
+		Span:          span,
+		CommitTsStart: 0,
+		CommitTsEnd:   largeKV.CRTs,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, iter)
+
+	readValues := make(map[string][]byte)
+	for {
+		entry, ok := iter.Next()
+		if !ok {
+			break
+		}
+		readValues[string(entry.Key)] = entry.Value
+	}
+	require.Len(t, readValues, 2)
+	require.Equal(t, smallKV.Value, readValues[string(smallKV.Key)])
+	require.Equal(t, largeKV.Value, readValues[string(largeKV.Key)])
+
+	_, err = iter.Close()
+	require.NoError(t, err)
+	subClient.(*mockSubscriptionClient).Unsubscribe(subStat.subID)
 }
 
 func markSubStatsInitializedForTest(store EventStore, tableID int64) {
@@ -501,7 +729,7 @@ func TestGetIteratorPanicWhenStartLessThanCheckpoint(t *testing.T) {
 	store.UpdateDispatcherCheckpointTs(dispatcherID, 120)
 
 	require.Panics(t, func() {
-		store.GetIterator(dispatcherID, common.DataRange{
+		_, _ = store.GetIterator(dispatcherID, common.DataRange{
 			Span:          span,
 			CommitTsStart: 110,
 			CommitTsEnd:   150,
@@ -998,6 +1226,54 @@ func TestWriteToEventStoreZstdCompressionDisabled(t *testing.T) {
 	require.Equal(t, 1, count)
 }
 
+func TestEncodeAndMaybeCompressValue(t *testing.T) {
+	entry := &common.RawKVEntry{
+		OpType:  common.OpTypePut,
+		StartTs: 100,
+		CRTs:    200,
+		Key:     []byte("encode-key"),
+		Value:   bytes.Repeat([]byte("value"), 32),
+	}
+
+	encoder, err := zstd.NewWriter(nil)
+	require.NoError(t, err)
+	defer encoder.Close()
+
+	expectedRawValue := entry.Encode()
+
+	t.Run("withoutCompression", func(t *testing.T) {
+		dstBuf := make([]byte, 0, 8)
+		value, compressionType, nextRawBuf, nextDstBuf := encodeAndMaybeCompressValue(
+			entry, encoder, nil, dstBuf, false,
+		)
+		require.Equal(t, CompressionNone, compressionType)
+		require.Equal(t, expectedRawValue, value)
+		require.Len(t, nextRawBuf, 0)
+		require.GreaterOrEqual(t, cap(nextRawBuf), len(expectedRawValue))
+		require.Empty(t, nextDstBuf)
+		require.Equal(t, cap(dstBuf), cap(nextDstBuf))
+	})
+
+	t.Run("withCompression", func(t *testing.T) {
+		value, compressionType, nextRawBuf, nextDstBuf := encodeAndMaybeCompressValue(
+			entry, encoder, nil, nil, true,
+		)
+		require.Equal(t, CompressionZSTD, compressionType)
+		require.Len(t, nextRawBuf, 0)
+		require.GreaterOrEqual(t, cap(nextRawBuf), len(expectedRawValue))
+		require.Empty(t, nextDstBuf)
+		require.GreaterOrEqual(t, cap(nextDstBuf), len(value))
+
+		decoder, err := zstd.NewReader(nil)
+		require.NoError(t, err)
+		defer decoder.Close()
+
+		decodedValue, err := decoder.DecodeAll(value, nil)
+		require.NoError(t, err)
+		require.Equal(t, expectedRawValue, decodedValue)
+	})
+}
+
 func TestEventStoreCompressionAndIterDecodeBufferReuse(t *testing.T) {
 	restoreCfg := setZstdCompressionForTest(t, true)
 	defer restoreCfg()
@@ -1084,6 +1360,65 @@ func TestEventStoreCompressionAndIterDecodeBufferReuse(t *testing.T) {
 	rowCount, err := iter.Close()
 	require.NoError(t, err)
 	require.Equal(t, int64(len(expectedValues)), rowCount)
+}
+
+func TestEventStoreIterReadsLegacyCompressedValuesWithEncryptionManager(t *testing.T) {
+	restoreCfg := setZstdCompressionForTest(t, true)
+	defer restoreCfg()
+
+	dir := t.TempDir()
+	_, storeInt := newEventStoreForTest(dir)
+	store := storeInt.(*eventStore)
+	defer store.Close(context.Background())
+
+	entry := common.RawKVEntry{
+		OpType:  common.OpTypePut,
+		StartTs: 100,
+		CRTs:    200,
+		Key:     []byte("legacy-compressed"),
+		Value:   bytes.Repeat([]byte("value"), store.compressionThreshold),
+	}
+	events := []eventWithCallback{{
+		subID:    1,
+		tableID:  1,
+		kvs:      []common.RawKVEntry{entry},
+		callback: func() {},
+	}}
+
+	encoder, err := zstd.NewWriter(nil)
+	require.NoError(t, err)
+	defer encoder.Close()
+
+	var compressionBuf []byte
+	var rawValueBuf []byte
+	err = store.writeEvents(store.dbs[0], events, encoder, &compressionBuf, &rawValueBuf)
+	require.NoError(t, err)
+
+	innerIter, err := store.dbs[0].NewIter(&pebble.IterOptions{})
+	require.NoError(t, err)
+	decoder := store.decoderPool.Get().(*zstd.Decoder)
+	iter := &eventStoreIter{
+		tableSpan: &heartbeatpb.TableSpan{
+			TableID:  1,
+			StartKey: []byte{},
+			EndKey:   []byte{0xFF},
+		},
+		innerIter:         innerIter,
+		decoder:           decoder,
+		decoderPool:       store.decoderPool,
+		encryptionManager: encryption.NewEncryptionManager(&unencryptedMetaManager{}),
+		keyspaceID:        42,
+	}
+	require.True(t, iter.innerIter.First())
+
+	readEntry, ok := iter.Next()
+	require.True(t, ok)
+	require.Equal(t, entry.Key, readEntry.Key)
+	require.Equal(t, entry.Value, readEntry.Value)
+
+	rowCount, err := iter.Close()
+	require.NoError(t, err)
+	require.Equal(t, int64(1), rowCount)
 }
 
 func TestEventStoreGetIteratorConcurrently(t *testing.T) {

@@ -19,7 +19,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -28,7 +27,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/security"
@@ -319,7 +318,7 @@ func (s *subscriptionClient) updateMetrics(ctx context.Context) error {
 			}
 
 			pendingRegionReqCount := 0
-			s.stores.Range(func(key, value any) bool {
+			s.stores.Range(func(_, value any) bool {
 				store := value.(*requestedStore)
 				store.requestWorkers.RLock()
 				for _, worker := range store.requestWorkers.s {
@@ -550,6 +549,8 @@ func (rs *requestedStore) getRequestWorker() *regionRequestWorker {
 // handleRegions receives regionInfo from regionTaskQueue and attach rpcCtx to them,
 // then send them to corresponding requestedStore.
 func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Group) error {
+	cfg := config.GetGlobalServerConfig()
+	pendingRegionRequestQueueSize := cfg.Debug.Puller.PendingRegionRequestQueueSize
 	getStore := func(storeAddr string) *requestedStore {
 		var rs *requestedStore
 		if v, ok := s.stores.Load(storeAddr); ok {
@@ -558,26 +559,28 @@ func (s *subscriptionClient) handleRegions(ctx context.Context, eg *errgroup.Gro
 		}
 
 		rs = &requestedStore{storeAddr: storeAddr}
+		rs.requestWorkers.s = make([]*regionRequestWorker, 0, s.config.RegionRequestWorkerPerStore)
 		s.stores.Store(storeAddr, rs)
 
-		config := config.GetGlobalServerConfig()
-		perWorkerQueueSize := config.Debug.Puller.PendingRegionRequestQueueSize / int(s.config.RegionRequestWorkerPerStore)
+		perWorkerQueueSize := pendingRegionRequestQueueSize / int(s.config.RegionRequestWorkerPerStore)
 		if perWorkerQueueSize <= 0 {
-			log.Warn("pending region request queue size is smaller than the number of workers, adjust per worker queue size to 1", zap.Int("pendingRegionRequestQueueSize", config.Debug.Puller.PendingRegionRequestQueueSize), zap.Uint("regionRequestWorkerPerStore", s.config.RegionRequestWorkerPerStore))
+			log.Warn("pending region request queue size is smaller than the number of workers, adjust per worker queue size to 1",
+				zap.Int("pendingRegionRequestQueueSize", pendingRegionRequestQueueSize),
+				zap.Uint("regionRequestWorkerPerStore", s.config.RegionRequestWorkerPerStore))
 			perWorkerQueueSize = 1
 		}
 
+		rs.requestWorkers.Lock()
 		for i := uint(0); i < s.config.RegionRequestWorkerPerStore; i++ {
 			requestWorker := newRegionRequestWorker(ctx, s, s.credential, eg, rs, perWorkerQueueSize)
-			rs.requestWorkers.Lock()
 			rs.requestWorkers.s = append(rs.requestWorkers.s, requestWorker)
-			rs.requestWorkers.Unlock()
 		}
+		rs.requestWorkers.Unlock()
 		return rs
 	}
 
 	defer func() {
-		s.stores.Range(func(key, value any) bool {
+		s.stores.Range(func(_, value any) bool {
 			rs := value.(*requestedStore)
 
 			rs.requestWorkers.RLock()
@@ -851,6 +854,7 @@ func (s *subscriptionClient) doHandleError(ctx context.Context, errInfo regionEr
 			zap.Error(err))
 	}
 
+	//nolint:errorlint // converting large type switch to errors.As is a significant refactor
 	switch eerr := err.(type) {
 	case *eventError:
 		innerErr := eerr.err
@@ -886,10 +890,10 @@ func (s *subscriptionClient) doHandleError(ctx context.Context, errInfo regionEr
 			return errors.New("duplicate request")
 		}
 		if compatibility := innerErr.GetCompatibility(); compatibility != nil {
-			return cerror.ErrVersionIncompatible.GenWithStackByArgs(compatibility)
+			return errors.ErrVersionIncompatible.GenWithStackByArgs(compatibility)
 		}
 		if mismatch := innerErr.GetClusterIdMismatch(); mismatch != nil {
-			return cerror.ErrClusterIDMismatch.GenWithStackByArgs(mismatch.Current, mismatch.Request)
+			return errors.ErrClusterIDMismatch.GenWithStackByArgs(mismatch.Current, mismatch.Request)
 		}
 
 		log.Warn("empty or unknown cdc error",
@@ -1042,7 +1046,7 @@ func (s *subscriptionClient) logSlowRegions(ctx context.Context) error {
 						zap.Any("slowRegion", attr.SlowestRegion))
 				}
 			} else if currTime.Sub(attr.SlowestRegion.Created) > 10*time.Minute {
-				slowInitializeRegion += 1
+				slowInitializeRegion++
 				log.Info("subscription client initializes a region too slow",
 					zap.Uint64("subscriptionID", uint64(subscriptionID)),
 					zap.Any("slowRegion", attr.SlowestRegion))
