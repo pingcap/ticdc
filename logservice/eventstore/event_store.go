@@ -724,7 +724,9 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 	if !ok {
 		return
 	}
-	dispatcherStat.checkpointTs.Store(checkpointTs)
+	if !util.CompareAndIncrease(&dispatcherStat.checkpointTs, checkpointTs) {
+		return
+	}
 
 	updateSubStatCheckpoint := func(subStat *subscriptionStat) {
 		if subStat == nil {
@@ -772,18 +774,14 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 			}
 			// If there is no dml event after old checkpoint ts, then there is no data to be deleted.
 			// So we can skip adding gc item.
-			lastReceiveDMLTime := subStat.lastReceiveDMLTime.Load()
-			if lastReceiveDMLTime > 0 {
-				oldCheckpointPhysicalTime := oracle.GetTimeFromTS(oldCheckpointTs)
-				if lastReceiveDMLTime >= oldCheckpointPhysicalTime.UnixMilli() {
-					e.gcManager.addGCItem(
-						subStat.dbIndex,
-						uint64(subStat.subID),
-						subStat.tableSpan.TableID,
-						oldCheckpointTs,
-						newCheckpointTs,
-					)
-				}
+			if subStat.maxEventCommitTs.Load() > oldCheckpointTs {
+				e.gcManager.addGCItem(
+					subStat.dbIndex,
+					uint64(subStat.subID),
+					subStat.tableSpan.TableID,
+					oldCheckpointTs,
+					newCheckpointTs,
+				)
 			}
 			e.subscriptionChangeCh.In() <- SubscriptionChange{
 				ChangeType:   SubscriptionChangeTypeUpdate,
