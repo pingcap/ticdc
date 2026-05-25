@@ -24,42 +24,41 @@ import (
 // target table name. Different source names mapping to the same target is a conflict;
 // registering the same source-target mapping repeatedly is idempotent.
 type TargetTableRegistry struct {
-	changefeedID   common.ChangeFeedID
-	owners         map[TableKey]RouteBinding
-	sourceToTarget map[TableKey]TableKey
+	changefeedID    common.ChangeFeedID
+	target2Bindings map[TableKey]RouteBinding
+	source2Target   map[TableKey]TableKey
 }
 
 // NewTargetTableRegistry creates an empty registry and preallocates the internal
 // indexes for the expected source table count.
 func NewTargetTableRegistry(changefeedID common.ChangeFeedID, capacity int) *TargetTableRegistry {
 	return &TargetTableRegistry{
-		changefeedID:   changefeedID,
-		owners:         make(map[TableKey]RouteBinding, capacity),
-		sourceToTarget: make(map[TableKey]TableKey, capacity),
+		changefeedID:    changefeedID,
+		target2Bindings: make(map[TableKey]RouteBinding, capacity),
+		source2Target:   make(map[TableKey]TableKey, capacity),
 	}
 }
 
 // Add validates and records a source-to-target table name mapping.
 func (r *TargetTableRegistry) Add(binding RouteBinding) error {
-	if ownedTarget, ok := r.sourceToTarget[binding.Source]; ok {
-		if ownedTarget.Equal(binding.Target) {
+	if target, ok := r.source2Target[binding.Source]; ok {
+		if target.Equal(binding.Target) {
 			return nil
 		}
 		return errors.ErrInternalCheckFailed.GenWithStack(
 			"source `%s`.`%s` is already registered to target `%s`.`%s`, incoming target `%s`.`%s`",
 			binding.Source.Schema, binding.Source.Table,
-			ownedTarget.Schema, ownedTarget.Table,
+			target.Schema, target.Table,
 			binding.Target.Schema, binding.Target.Table)
 	}
 
-	existing, ok := r.owners[binding.Target]
+	existing, ok := r.target2Bindings[binding.Target]
 	if !ok {
-		r.owners[binding.Target] = binding
-		r.sourceToTarget[binding.Source] = binding.Target
+		r.target2Bindings[binding.Target] = binding
+		r.source2Target[binding.Source] = binding.Target
 		return nil
 	}
 	if existing.Source.Equal(binding.Source) {
-		r.sourceToTarget[binding.Source] = binding.Target
 		return nil
 	}
 	log.Warn("table route conflict detected",
@@ -79,17 +78,23 @@ func (r *TargetTableRegistry) Add(binding RouteBinding) error {
 
 // Remove releases a source table name from the registry. It is idempotent.
 func (r *TargetTableRegistry) Remove(source TableKey) {
-	target, ok := r.sourceToTarget[source]
+	target, ok := r.source2Target[source]
 	if !ok {
 		return
 	}
-	delete(r.sourceToTarget, source)
-	delete(r.owners, target)
+	delete(r.source2Target, source)
+	delete(r.target2Bindings, target)
 }
 
 // ApplyTransition atomically applies source removals and source-to-target additions.
-// It validates the whole transition before mutating the registry, so a conflict leaves
-// the registry unchanged.
+//
+// The caller must describe one ordered table-info transition: every source name that
+// stops being replicated is listed in removes, and every source name that becomes
+// replicated is listed in adds. When a source name changes, the old source must be
+// removed before the new binding can claim its target.
+//
+// This method validates the whole transition before mutating the registry. If any
+// check fails, both indexes remain unchanged.
 func (r *TargetTableRegistry) ApplyTransition(removes []TableKey, adds []RouteBinding) error {
 	removeSet := make(map[TableKey]struct{}, len(removes))
 	for _, source := range removes {
@@ -99,17 +104,25 @@ func (r *TargetTableRegistry) ApplyTransition(removes []TableKey, adds []RouteBi
 	addedTargets := make(map[TableKey]RouteBinding, len(adds))
 	addedSources := make(map[TableKey]RouteBinding, len(adds))
 	for _, add := range adds {
-		if ownedTarget, ok := r.sourceToTarget[add.Source]; ok {
-			if _, removed := removeSet[add.Source]; !removed && !ownedTarget.Equal(add.Target) {
+		// A source already in the registry can only be re-added with a different
+		// target when the same transition also removes the old source binding.
+		// Otherwise the caller is trying to retarget an existing source without
+		// describing the corresponding table-info removal.
+		if target, ok := r.source2Target[add.Source]; ok {
+			if _, removed := removeSet[add.Source]; !removed && !target.Equal(add.Target) {
 				return errors.ErrInternalCheckFailed.GenWithStack(
 					"source `%s`.`%s` is already registered to target `%s`.`%s`, incoming target `%s`.`%s`",
 					add.Source.Schema, add.Source.Table,
-					ownedTarget.Schema, ownedTarget.Table,
+					target.Schema, target.Table,
 					add.Target.Schema, add.Target.Table)
 			}
 		}
 
-		if existing, ok := r.owners[add.Target]; ok && !existing.Source.Equal(add.Source) {
+		// A target that is already owned by another source can only be claimed if
+		// that old owner is removed in the same transition. This is what makes
+		// rename/drop-and-create style replacements atomic while still rejecting
+		// two live source names that route to the same target.
+		if existing, ok := r.target2Bindings[add.Target]; ok && !existing.Source.Equal(add.Source) {
 			if _, removed := removeSet[existing.Source]; !removed {
 				log.Warn("table route conflict detected",
 					zap.String("keyspace", r.changefeedID.Keyspace()),
@@ -127,6 +140,8 @@ func (r *TargetTableRegistry) ApplyTransition(removes []TableKey, adds []RouteBi
 			}
 		}
 
+		// The adds list itself must be internally consistent before the registry
+		// is touched. One source cannot point to two targets in one transition.
 		if existing, ok := addedSources[add.Source]; ok && !existing.Target.Equal(add.Target) {
 			return errors.ErrInternalCheckFailed.GenWithStack(
 				"source `%s`.`%s` is added to multiple targets `%s`.`%s` and `%s`.`%s` in one transition",
@@ -134,6 +149,7 @@ func (r *TargetTableRegistry) ApplyTransition(removes []TableKey, adds []RouteBi
 				existing.Target.Schema, existing.Target.Table,
 				add.Target.Schema, add.Target.Table)
 		}
+		// Likewise, two newly added live sources cannot claim the same target.
 		if existing, ok := addedTargets[add.Target]; ok && !existing.Source.Equal(add.Source) {
 			log.Warn("table route conflict detected",
 				zap.String("keyspace", r.changefeedID.Keyspace()),
@@ -153,12 +169,14 @@ func (r *TargetTableRegistry) ApplyTransition(removes []TableKey, adds []RouteBi
 		addedTargets[add.Target] = add
 	}
 
+	// All validation above is side-effect free. Only after the complete transition
+	// is known to be valid do we update both indexes.
 	for _, source := range removes {
 		r.Remove(source)
 	}
 	for _, add := range adds {
-		r.owners[add.Target] = add
-		r.sourceToTarget[add.Source] = add.Target
+		r.target2Bindings[add.Target] = add
+		r.source2Target[add.Source] = add.Target
 	}
 	return nil
 }
