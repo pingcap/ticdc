@@ -74,9 +74,3 @@ func (s *orchestratorShard) CloseAsync() {
 func (s *orchestratorShard) Wait() {
 	s.wg.Wait()
 }
-
-// Close stops the shard worker after the currently running handler returns.
-func (s *orchestratorShard) Close() {
-	s.CloseAsync()
-	s.Wait()
-}

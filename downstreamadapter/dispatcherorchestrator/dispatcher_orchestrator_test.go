@@ -54,7 +54,8 @@ func TestOrchestratorShard_CloseWaitsForRunningHandler(t *testing.T) {
 	}
 
 	go func() {
-		shard.Close()
+		shard.CloseAsync()
+		shard.Wait()
 		close(closed)
 	}()
 
@@ -105,7 +106,8 @@ func TestOrchestratorShard_RunIsIdempotent(t *testing.T) {
 	}
 
 	close(release)
-	shard.Close()
+	shard.CloseAsync()
+	shard.Wait()
 }
 
 func TestDispatcherOrchestrator_RecvMaintainerRequestRoutesDifferentShardsInParallel(t *testing.T) {
@@ -134,7 +136,8 @@ func TestDispatcherOrchestrator_RecvMaintainerRequestRoutesDifferentShardsInPara
 		close(releaseShard1)
 		close(releaseShard2)
 		for _, shard := range orchestrator.shards {
-			shard.Close()
+			shard.CloseAsync()
+			shard.Wait()
 		}
 	})
 
