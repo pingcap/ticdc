@@ -14,6 +14,7 @@
 package eventcollector
 
 import (
+	"slices"
 	"sync"
 
 	"github.com/pingcap/log"
@@ -101,10 +102,8 @@ func (t *cleanupTargets) appendCleanupTargetUnique(target node.ID, skip node.ID)
 	if target.IsEmpty() || target == skip {
 		return
 	}
-	for _, existing := range *t {
-		if existing == target {
-			return
-		}
+	if slices.Contains(*t, target) {
+		return
 	}
 	*t = append(*t, target)
 }
