@@ -564,7 +564,7 @@ func (checker *healthyChecker) update(eps []string) {
 			lastHealthy := client.lastHealth
 			if time.Since(lastHealthy) > etcdServerOfflineTimeout {
 				log.Info("some etcd server maybe offline", zap.String("endpoint", ep))
-				client.Close()
+				_ = client.Close()
 				checker.Delete(ep)
 			}
 			if time.Since(lastHealthy) > etcdServerDisconnectedTimeout {
@@ -580,7 +580,7 @@ func (checker *healthyChecker) update(eps []string) {
 		ep := key.(string)
 		if _, exist := updateEps[ep]; !exist {
 			if client, ok := value.(*healthyClient); ok {
-				client.Close()
+				_ = client.Close()
 			}
 			checker.Delete(key)
 		}
