@@ -678,6 +678,65 @@ func TestEventStoreUpdateCheckpointTs(t *testing.T) {
 	}
 }
 
+func TestEventStoreUpdateCheckpointTsConcurrentStaleUpdates(t *testing.T) {
+	restoreCfg := setDataSharingForTest(t, true)
+	defer restoreCfg()
+
+	_, store := newEventStoreForTest(t.TempDir())
+	es := store.(*eventStore)
+	defer func() {
+		require.NoError(t, es.Close(context.Background()))
+	}()
+
+	dispatcherID1 := common.NewDispatcherID()
+	dispatcherID2 := common.NewDispatcherID()
+	tableID := int64(1)
+	cfID := common.NewChangefeedID4Test("default", "test-cf")
+	span := &heartbeatpb.TableSpan{
+		TableID:  tableID,
+		StartKey: []byte("a"),
+		EndKey:   []byte("h"),
+	}
+
+	require.True(t, store.RegisterDispatcher(cfID, dispatcherID1, span, 100, func(uint64, uint64) {}, false, false))
+	require.True(t, store.RegisterDispatcher(cfID, dispatcherID2, span, 100, func(uint64, uint64) {}, false, false))
+
+	es.dispatcherMeta.RLock()
+	stat1 := es.dispatcherMeta.dispatcherStats[dispatcherID1]
+	stat2 := es.dispatcherMeta.dispatcherStats[dispatcherID2]
+	require.NotNil(t, stat1)
+	require.NotNil(t, stat2)
+	subStat := stat1.subStat
+	require.NotNil(t, subStat)
+	require.True(t, subStat == stat2.subStat)
+	es.dispatcherMeta.RUnlock()
+
+	store.UpdateDispatcherCheckpointTs(dispatcherID1, 900)
+	store.UpdateDispatcherCheckpointTs(dispatcherID2, 900)
+	require.Equal(t, uint64(100), subStat.checkpointTs.Load())
+
+	const staleUpdateCount = 64
+	startCh := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(staleUpdateCount)
+	for i := range staleUpdateCount {
+		staleCheckpointTs := uint64(150 + i)
+		go func(checkpointTs uint64) {
+			defer wg.Done()
+			<-startCh
+			store.UpdateDispatcherCheckpointTs(dispatcherID1, checkpointTs)
+		}(staleCheckpointTs)
+	}
+	close(startCh)
+	wg.Wait()
+
+	require.Equal(t, uint64(900), stat1.checkpointTs.Load())
+
+	subStat.resolvedTs.Store(900)
+	store.UpdateDispatcherCheckpointTs(dispatcherID2, 900)
+	require.Equal(t, uint64(900), subStat.checkpointTs.Load())
+}
+
 func TestEventStoreSwitchSubStat(t *testing.T) {
 	restoreCfg := setDataSharingForTest(t, true)
 	defer restoreCfg()
@@ -1248,8 +1307,8 @@ func TestEventStoreIter_NextWithFiltering(t *testing.T) {
 	var tableID int64 = 42
 	iteratorSpan := &heartbeatpb.TableSpan{
 		TableID:  tableID,
-		StartKey: []byte("keyB"),
-		EndKey:   []byte("keyD"),
+		StartKey: common.ToComparableKey([]byte("keyB")),
+		EndKey:   common.ToComparableKey([]byte("keyD")),
 	}
 
 	// This test now focuses on a single, more comprehensive scenario.
