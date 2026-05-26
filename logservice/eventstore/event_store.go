@@ -724,7 +724,7 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 	if !ok {
 		return
 	}
-	if !util.CompareAndMonotonicIncrease(&dispatcherStat.checkpointTs, checkpointTs) {
+	if !util.CompareAndIncrease(&dispatcherStat.checkpointTs, checkpointTs) {
 		return
 	}
 
