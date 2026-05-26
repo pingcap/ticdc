@@ -1742,13 +1742,10 @@ func (e *eventStore) uploadStatePeriodically(ctx context.Context) error {
 						zap.Uint64("oldResolvedTs", subState.ResolvedTs),
 						zap.Uint64("newCheckpointTs", change.CheckpointTs),
 						zap.Uint64("newResolvedTs", change.ResolvedTs))
+					continue
 				}
-				if change.CheckpointTs > subState.CheckpointTs {
-					subState.CheckpointTs = change.CheckpointTs
-				}
-				if change.ResolvedTs > subState.ResolvedTs {
-					subState.ResolvedTs = change.ResolvedTs
-				}
+				subState.CheckpointTs = change.CheckpointTs
+				subState.ResolvedTs = change.ResolvedTs
 			default:
 				log.Panic("invalid subscription change type", zap.Int("changeType", int(change.ChangeType)))
 			}
