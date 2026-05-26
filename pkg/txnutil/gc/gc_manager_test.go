@@ -98,7 +98,7 @@ func TestTryUpdateServiceGCSafepointDoesNotReturnSnapshotLost(t *testing.T) {
 	require.Equal(t, cerrors.ErrSnapshotLostByGC.RFCCode(), errCode)
 }
 
-func TestCheckStaleCheckpointTsAllowsCheckpointEqualGCSafepoint(t *testing.T) {
+func TestCheckStaleCheckpointTsRejectsCheckpointEqualGCSafepoint(t *testing.T) {
 	appcontext.SetService(appcontext.DefaultPDClock, pdutil.NewClock4Test())
 
 	pdClient := &MockPDClient{}
@@ -107,13 +107,13 @@ func TestCheckStaleCheckpointTsAllowsCheckpointEqualGCSafepoint(t *testing.T) {
 	m.isTiCDCBlockGC.Store(false)
 
 	cfID := common.NewChangeFeedIDWithName("test-changefeed", "test")
-	require.NoError(t, m.CheckStaleCheckpointTs(0, cfID, 100))
-
-	err := m.CheckStaleCheckpointTs(0, cfID, 99)
+	err := m.CheckStaleCheckpointTs(0, cfID, 100)
 	require.Error(t, err)
 	errCode, ok := cerrors.RFCCode(err)
 	require.True(t, ok)
 	require.Equal(t, cerrors.ErrSnapshotLostByGC.RFCCode(), errCode)
+
+	require.NoError(t, m.CheckStaleCheckpointTs(0, cfID, 101))
 }
 
 func TestTryDeleteServiceGCSafepointClearsCachedState(t *testing.T) {

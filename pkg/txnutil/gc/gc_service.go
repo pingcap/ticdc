@@ -74,7 +74,7 @@ func ensureChangefeedStartTsSafetyClassic(ctx context.Context, pdCli GCServiceCl
 		zap.Uint64("actualGCSafepoint", minServiceGCTs),
 		zap.Int64("ttl", ttl))
 
-	if startTs > 0 && startTs < minServiceGCTs {
+	if startTs > 0 && gcSafepointUpperBound < minServiceGCTs {
 		return errors.ErrStartTsBeforeGC.GenWithStackByArgs(startTs, minServiceGCTs)
 	}
 	return nil
@@ -92,7 +92,7 @@ func ensureChangefeedStartTsSafetyNextGen(ctx context.Context, pdCli GCServiceCl
 		if getErr != nil {
 			return getErr
 		}
-		if startTs > 0 && startTs < gcSafepoint {
+		if startTs > 0 && gcSafepointUpperBound < gcSafepoint {
 			return errors.ErrStartTsBeforeGC.GenWithStackByArgs(startTs, gcSafepoint)
 		}
 	}

@@ -72,7 +72,7 @@ func TestTryUpdateKeyspaceGCBarrierDoesNotReturnSnapshotLost(t *testing.T) {
 	require.Equal(t, cerrors.ErrSnapshotLostByGC.RFCCode(), errCode)
 }
 
-func TestCheckStaleCheckpointTsAllowsCheckpointEqualGCBarrier(t *testing.T) {
+func TestCheckStaleCheckpointTsRejectsCheckpointEqualGCBarrier(t *testing.T) {
 	appcontext.SetService(appcontext.DefaultPDClock, pdutil.NewClock4Test())
 
 	keyspaceID := uint32(1)
@@ -85,11 +85,11 @@ func TestCheckStaleCheckpointTsAllowsCheckpointEqualGCBarrier(t *testing.T) {
 	})
 
 	cfID := common.NewChangeFeedIDWithName("test-changefeed", keyspaceName)
-	require.NoError(t, m.CheckStaleCheckpointTs(keyspaceID, cfID, 100))
-
-	err := m.CheckStaleCheckpointTs(keyspaceID, cfID, 99)
+	err := m.CheckStaleCheckpointTs(keyspaceID, cfID, 100)
 	require.Error(t, err)
 	errCode, ok := cerrors.RFCCode(err)
 	require.True(t, ok)
 	require.Equal(t, cerrors.ErrSnapshotLostByGC.RFCCode(), errCode)
+
+	require.NoError(t, m.CheckStaleCheckpointTs(keyspaceID, cfID, 101))
 }
