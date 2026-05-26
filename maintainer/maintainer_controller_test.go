@@ -125,7 +125,7 @@ func TestBalanceGroupsNewNodeAdd_SplitsTableMoreThanNodeNum(t *testing.T) {
 	}, ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false, testBalanceMoveBatchSize)
 
 	nodeID := node.ID("node1")
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		// generate 100 groups
 		totalSpan := common.TableIDToComparableSpan(common.DefaultKeyspaceID, int64(i))
 		for j := 0; j < 4; j++ {
@@ -259,7 +259,7 @@ func TestBalanceGroupsNewNodeAdd_SplitsTableLessThanNodeNum(t *testing.T) {
 	regionCache := appcontext.GetService[*testutil.MockCache](appcontext.RegionCache)
 
 	nodeIDList := []node.ID{"node1", "node2"}
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		// generate 100 groups
 		totalSpan := common.TableIDToComparableSpan(common.DefaultKeyspaceID, int64(i))
 		for j := 0; j < 2; j++ {
