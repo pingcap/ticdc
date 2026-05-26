@@ -947,7 +947,7 @@ func TestEventStoreUpdateCheckpointTsConcurrentStaleUpdates(t *testing.T) {
 	startCh := make(chan struct{})
 	var wg sync.WaitGroup
 	wg.Add(staleUpdateCount)
-	for i := 0; i < staleUpdateCount; i++ {
+	for i := range staleUpdateCount {
 		staleCheckpointTs := uint64(150 + i)
 		go func(checkpointTs uint64) {
 			defer wg.Done()
