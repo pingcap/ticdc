@@ -125,6 +125,6 @@ func TestGetAllPhysicalTablesReturnsSnapshotLostByGCError(t *testing.T) {
 	_, err := pstorage.getAllPhysicalTables(99, nil)
 	require.Error(t, err)
 	require.True(t, cerror.ErrSnapshotLostByGC.Equal(err))
-	require.Contains(t, err.Error(), "checkpoint-ts 99 is earlier than or equal to GC safepoint at 100")
+	require.Contains(t, err.Error(), "checkpoint-ts 99 is earlier than GC safepoint at 100")
 	require.NotContains(t, err.Error(), "%!d")
 }
