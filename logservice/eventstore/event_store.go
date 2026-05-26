@@ -774,7 +774,8 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 			}
 			// If there is no dml event after old checkpoint ts, then there is no data to be deleted.
 			// So we can skip adding gc item.
-			if subStat.maxEventCommitTs.Load() > oldCheckpointTs {
+			maxEventCommitTs := subStat.maxEventCommitTs.Load()
+			if maxEventCommitTs != 0 && maxEventCommitTs >= oldCheckpointTs {
 				e.gcManager.addGCItem(
 					subStat.dbIndex,
 					uint64(subStat.subID),
@@ -792,7 +793,7 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 			}
 			if logger.IsDebugEnabled() {
 				log.Debug("update checkpoint ts",
-					zap.Any("dispatcherID", dispatcherID),
+					zap.Stringer("dispatcherID", dispatcherID),
 					zap.Uint64("subscriptionID", uint64(subStat.subID)),
 					zap.Uint64("newCheckpointTs", newCheckpointTs),
 					zap.Uint64("oldCheckpointTs", oldCheckpointTs))
