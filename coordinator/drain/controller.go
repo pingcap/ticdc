@@ -91,6 +91,10 @@ type Controller struct {
 	// targetSchedulerGate blocks maintainer placement onto nodes that have not
 	// yet reported the active dispatcher drain target in node heartbeat.
 	targetSchedulerGate *drainTargetSchedulerGate
+	// schedulingFrozen pauses all coordinator-side scheduling destinations when
+	// coordinator has observed an in-flight drain but cannot prove which active
+	// dispatcher drain target every maintainer should follow.
+	schedulingFrozen bool
 }
 
 // NewController creates a drain controller with in-memory state only.
@@ -236,7 +240,7 @@ func (c *Controller) StartDrainTargetSchedulerGate(target node.ID, epoch uint64)
 }
 
 // ClearDrainTargetSchedulerGate removes the active drain-target placement gate
-// once the matching drain session has finished.
+// once coordinator closes the matching drain session.
 func (c *Controller) ClearDrainTargetSchedulerGate(target node.ID, epoch uint64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -247,6 +251,13 @@ func (c *Controller) ClearDrainTargetSchedulerGate(target node.ID, epoch uint64)
 		return
 	}
 	c.targetSchedulerGate = nil
+}
+
+// SetSchedulingFrozen updates the coordinator-side scheduling freeze flag.
+func (c *Controller) SetSchedulingFrozen(frozen bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.schedulingFrozen = frozen
 }
 
 // resetObservedStateForNewEpoch clears per-epoch observations when the node
@@ -350,6 +361,9 @@ func (c *Controller) IsSchedulableDest(nodeID node.ID) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	if c.schedulingFrozen {
+		return false
+	}
 	if c.getStateLocked(nodeID, time.Now()) != StateAlive {
 		return false
 	}
@@ -391,13 +405,20 @@ func (c *Controller) GetDrainingOrStoppingNodes() []node.ID {
 	return res
 }
 
-// AdvanceLiveness advances liveness commands:
+// AdvanceLiveness advances liveness commands for the node set selected by
+// shouldManage:
 // - Request DRAINING until observed
 // - Once readyToStop and DRAINING observed, request STOPPING until observed
-func (c *Controller) AdvanceLiveness(readyToStop func(node.ID) bool) {
+func (c *Controller) AdvanceLiveness(
+	shouldManage func(node.ID) bool,
+	readyToStop func(node.ID) bool,
+) {
 	nodeIDs := c.listDrainRequestedNodeIDs()
 
 	for _, nodeID := range nodeIDs {
+		if shouldManage != nil && !shouldManage(nodeID) {
+			continue
+		}
 		drainRequested, drainingObserved, stoppingObserved := c.GetStatus(nodeID)
 		if !drainRequested {
 			continue

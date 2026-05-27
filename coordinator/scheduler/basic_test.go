@@ -68,6 +68,31 @@ func TestBasicSchedulerRequiresTargetAckBeforeUsingDestination(t *testing.T) {
 	require.ElementsMatch(t, []node.ID{acked}, op.AffectedNodes())
 }
 
+func TestBasicSchedulerSkipsWhenSchedulingFrozen(t *testing.T) {
+	setupCoordinatorSchedulerTestServices()
+	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+
+	nodeA := node.ID("node-a")
+	nodeB := node.ID("node-b")
+	nodeManager.GetAliveNodes()[nodeA] = &node.Info{ID: nodeA}
+	nodeManager.GetAliveNodes()[nodeB] = &node.Info{ID: nodeB}
+
+	drainController := drain.NewController(mc)
+	drainController.SetSchedulingFrozen(true)
+
+	db := changefeed.NewChangefeedDB(1)
+	cfID := addAbsentChangefeed(t, db, "cf-frozen")
+
+	selfNode := &node.Info{ID: node.ID("coordinator")}
+	oc := operator.NewOperatorController(selfNode, db, nil, 10)
+	s := NewBasicScheduler("test", 10, oc, db, drainController)
+	_ = s.Execute()
+
+	require.Nil(t, oc.GetOperator(cfID))
+	require.Equal(t, 0, oc.OperatorSize())
+}
+
 func addAbsentChangefeed(t *testing.T, db *changefeed.ChangefeedDB, name string) common.ChangeFeedID {
 	t.Helper()
 

@@ -94,9 +94,10 @@ type Controller struct {
 	// Only one drain session is allowed at a time.
 	drainSessionMu sync.Mutex
 	drainSession   *drainSession
-	// drainClearState keeps a clearing tombstone after the active drain session
-	// is closed. It lets coordinator resend the clear request until all nodes
-	// confirm they have dropped the stale drain target for that epoch.
+	// drainClearState keeps a clearing tombstone after target membership removal
+	// closes the active drain session. It lets coordinator resend the clear
+	// request until all nodes confirm they have dropped the stale drain target
+	// for that epoch.
 	drainClearState *drainClearState
 
 	dispatcherDrainEpoch uint64
@@ -324,9 +325,7 @@ func (c *Controller) onPeriodTask() {
 	// Drain liveness transitions and drain-target broadcasts are retry-based
 	// control loops. Drive them from the periodic task so they keep progressing
 	// even when no fresh heartbeat or node-change event arrives.
-	c.drainController.AdvanceLiveness(func(id node.ID) bool {
-		return len(c.changefeedDB.GetByNodeID(id)) == 0 && !c.operatorController.HasOperatorInvolvingNode(id)
-	})
+	c.advanceActiveDrainLiveness()
 	c.maybeBroadcastDispatcherDrainTarget(false)
 }
 
@@ -344,9 +343,11 @@ func (c *Controller) onMessage(ctx context.Context, msg *messaging.TargetMessage
 		req := msg.Message[0].(*heartbeatpb.NodeHeartbeat)
 		c.drainController.ObserveHeartbeat(msg.From, req)
 		c.observeDispatcherDrainTargetHeartbeat(msg.From, req)
+		c.syncDrainSchedulingPolicy()
 	case messaging.TypeSetNodeLivenessResponse:
 		req := msg.Message[0].(*heartbeatpb.SetNodeLivenessResponse)
 		c.drainController.ObserveSetNodeLivenessResponse(msg.From, req)
+		c.syncDrainSchedulingPolicy()
 	case messaging.TypeLogCoordinatorResolvedTsResponse:
 		c.onLogCoordinatorReportResolvedTs(msg)
 	default:
@@ -686,6 +687,7 @@ func (c *Controller) finishBootstrap(ctx context.Context, runningChangefeeds map
 	// start operator and scheduler
 	c.taskHandlerMutex.Lock()
 	defer c.taskHandlerMutex.Unlock()
+	c.syncDrainSchedulingPolicy()
 	c.taskHandlers = append(c.taskHandlers, c.scheduler.Start(c.taskScheduler)...)
 	operatorControllerHandle := c.taskScheduler.Submit(c.operatorController, time.Now())
 	c.taskHandlers = append(c.taskHandlers, operatorControllerHandle)
@@ -944,6 +946,7 @@ func (c *Controller) RemoveNode(id node.ID) {
 	}
 	c.observeDispatcherDrainTargetClearNodeRemoved(id)
 	c.drainController.RemoveNode(id)
+	c.syncDrainSchedulingPolicy()
 }
 
 func (c *Controller) submitPeriodTask() {

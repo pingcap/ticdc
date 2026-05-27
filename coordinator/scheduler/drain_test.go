@@ -263,3 +263,35 @@ func TestDrainSchedulerRequiresTargetAckBeforeUsingDestination(t *testing.T) {
 	require.NotNil(t, op)
 	require.ElementsMatch(t, []node.ID{origin, destAcked}, op.AffectedNodes())
 }
+
+func TestDrainSchedulerSkipsWhenSchedulingFrozen(t *testing.T) {
+	mc := messaging.NewMockMessageCenter()
+	appcontext.SetService(appcontext.MessageCenter, mc)
+
+	nodeManager := watcher.NewNodeManager(nil, nil)
+	appcontext.SetService(watcher.NodeManagerName, nodeManager)
+
+	origin := node.ID("origin")
+	dest := node.ID("dest")
+	nodeManager.GetAliveNodes()[origin] = &node.Info{ID: origin}
+	nodeManager.GetAliveNodes()[dest] = &node.Info{ID: dest}
+
+	drainController := drain.NewController(mc)
+	drainController.SetSchedulingFrozen(true)
+	drainController.ObserveHeartbeat(origin, &heartbeatpb.NodeHeartbeat{
+		Liveness:  heartbeatpb.NodeLiveness_DRAINING,
+		NodeEpoch: 1,
+	})
+
+	db := changefeed.NewChangefeedDB(1)
+	cfID := addReplicatingMaintainer(t, db, "cf-frozen-drain", origin)
+
+	selfNode := &node.Info{ID: node.ID("coordinator")}
+	oc := operator.NewOperatorController(selfNode, db, nil, 10)
+
+	s := NewDrainScheduler("test", 10, oc, db, drainController)
+	_ = s.Execute()
+
+	require.Nil(t, oc.GetOperator(cfID))
+	require.Equal(t, 0, oc.OperatorSize())
+}

@@ -110,6 +110,10 @@ func TestDrainNodeCompletesAfterCompletionObserved(t *testing.T) {
 	remaining, err = c.DrainNode(context.Background(), target)
 	require.NoError(t, err)
 	require.Equal(t, 0, remaining)
+	require.NotNil(t, c.drainSession)
+	require.Nil(t, c.drainClearState)
+	require.Equal(t, target, c.drainSession.target)
+	require.Equal(t, epoch, c.drainSession.epoch)
 }
 
 func TestDrainNodeDispatcherCountBlocksCompletion(t *testing.T) {
@@ -194,6 +198,33 @@ func TestDrainNodeRejectConcurrentDifferentDrainTarget(t *testing.T) {
 	remaining, err := c.DrainNode(context.Background(), target)
 	require.NoError(t, err)
 	require.Equal(t, 1, remaining)
+
+	_, err = c.DrainNode(context.Background(), other)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "drain already in progress")
+}
+
+func TestDrainNodeCompletionKeepsBlockingDifferentTargetUntilRemoval(t *testing.T) {
+	c, drainController, target := newDrainTestController(t)
+	setDrainProtocolVersion(c, target, 1)
+	cf := addRunningChangefeed(c, "cf1", node.ID("other"), 100)
+
+	other := node.ID("other-target")
+	c.nodeManager.GetAliveNodes()[other] = &node.Info{ID: other}
+	setDrainProtocolVersion(c, other, 1)
+
+	remaining, err := c.DrainNode(context.Background(), target)
+	require.NoError(t, err)
+	require.Equal(t, 1, remaining)
+
+	_, epoch, ok := c.getDispatcherDrainTarget()
+	require.True(t, ok)
+	setChangefeedDrainStatus(cf, target, epoch, 0, 0)
+	setTargetStoppingObserved(drainController, target)
+
+	remaining, err = c.DrainNode(context.Background(), target)
+	require.NoError(t, err)
+	require.Equal(t, 0, remaining)
 
 	_, err = c.DrainNode(context.Background(), other)
 	require.Error(t, err)
@@ -403,13 +434,18 @@ func TestLateCompatiblePeerJoinsTargetSyncAndClearAck(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 0, remaining)
 
+	require.NotNil(t, c.drainSession)
+	require.Nil(t, c.drainClearState)
+
+	delete(c.nodeManager.GetAliveNodes(), target)
+	c.RemoveNode(target)
 	require.Nil(t, c.drainSession)
 	require.NotNil(t, c.drainClearState)
 	clearEpoch := c.drainClearState.epoch
 	_, ok = c.drainClearState.pendingNodes[other]
 	require.True(t, ok)
 	_, ok = c.drainClearState.pendingNodes[target]
-	require.True(t, ok)
+	require.False(t, ok)
 
 	c.observeDispatcherDrainTargetHeartbeat(target, &heartbeatpb.NodeHeartbeat{
 		DispatcherDrainTargetEpoch: clearEpoch,
@@ -470,12 +506,13 @@ func TestLateLegacyPeerDoesNotEnterTargetSyncOrClearAck(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 0, remaining)
 
+	require.NotNil(t, c.drainSession)
+	require.Nil(t, c.drainClearState)
+
+	delete(c.nodeManager.GetAliveNodes(), target)
+	c.RemoveNode(target)
 	require.Nil(t, c.drainSession)
-	require.NotNil(t, c.drainClearState)
-	_, ok = c.drainClearState.pendingNodes[other]
-	require.False(t, ok)
-	_, ok = c.drainClearState.pendingNodes[target]
-	require.True(t, ok)
+	require.Nil(t, c.drainClearState)
 }
 
 func TestClearDispatcherDrainTargetSkipsRemovedPeerBeforeClear(t *testing.T) {
@@ -500,12 +537,13 @@ func TestClearDispatcherDrainTargetSkipsRemovedPeerBeforeClear(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 0, remaining)
 
+	require.NotNil(t, c.drainSession)
+	require.Nil(t, c.drainClearState)
+
+	delete(c.nodeManager.GetAliveNodes(), target)
+	c.RemoveNode(target)
 	require.Nil(t, c.drainSession)
-	require.NotNil(t, c.drainClearState)
-	_, ok := c.drainClearState.pendingNodes[other]
-	require.False(t, ok)
-	_, ok = c.drainClearState.pendingNodes[target]
-	require.True(t, ok)
+	require.Nil(t, c.drainClearState)
 }
 
 func TestClearDispatcherDrainTargetTracksNodeHeartbeatAck(t *testing.T) {

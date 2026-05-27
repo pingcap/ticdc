@@ -142,6 +142,7 @@ func (c *Controller) DrainNode(_ context.Context, target node.ID) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	c.syncDrainSchedulingPolicy()
 	c.maybeBroadcastDispatcherDrainTarget(true)
 
 	// Drain requests are idempotent. Reissuing the request on each poll keeps
@@ -158,7 +159,9 @@ func (c *Controller) DrainNode(_ context.Context, target node.ID) (int, error) {
 
 	// drain API must not return 0 until drain completion is proven.
 	if completionProven {
-		c.clearDispatcherDrainTarget(target, targetEpoch)
+		log.Info("drain completion proven, waiting for node removal to clear drain target",
+			zap.Stringer("targetNodeID", target),
+			zap.Uint64("targetEpoch", targetEpoch))
 		return 0, nil
 	}
 
@@ -239,6 +242,68 @@ func (c *Controller) observeDrainNode(target node.ID, epoch uint64) drainNodeObs
 	_, observation.drainingObserved, observation.stoppingObserved = c.drainController.GetStatus(target)
 	observation.nodeState = c.drainController.GetState(target)
 	return observation
+}
+
+// advanceActiveDrainLiveness retries liveness progression only for the current
+// active drain session target. Without an active session coordinator must not
+// continue an inherited drain based on stale heartbeats alone.
+func (c *Controller) advanceActiveDrainLiveness() {
+	c.syncDrainSchedulingPolicy()
+	if c.initialized == nil || !c.initialized.Load() {
+		return
+	}
+
+	target, epoch, ok := c.getDispatcherDrainTarget()
+	if !ok {
+		return
+	}
+
+	c.drainController.AdvanceLiveness(
+		func(id node.ID) bool {
+			return id == target
+		},
+		func(id node.ID) bool {
+			return id == target && c.isDrainReadyToStop(target, epoch)
+		},
+	)
+}
+
+// syncDrainSchedulingPolicy keeps coordinator schedulers conservative after
+// failover. When coordinator has no active drain session but still observes
+// draining or stopping nodes, scheduling must pause until a new session is
+// recreated or those observations disappear.
+func (c *Controller) syncDrainSchedulingPolicy() {
+	if c.drainController == nil {
+		return
+	}
+
+	_, _, hasSession := c.getDispatcherDrainTarget()
+	frozen := !hasSession && len(c.drainController.GetDrainingOrStoppingNodes()) > 0
+	c.drainController.SetSchedulingFrozen(frozen)
+}
+
+func (c *Controller) isDrainReadyToStop(target node.ID, epoch uint64) bool {
+	if !c.hasActiveDrainSession(target, epoch) {
+		return false
+	}
+
+	observation := c.observeDrainNode(target, epoch)
+	if !c.hasActiveDrainSession(target, epoch) {
+		return false
+	}
+
+	return observation.nodeState != drain.StateUnknown &&
+		observation.drainingObserved &&
+		observation.remaining == 0
+}
+
+func (c *Controller) hasActiveDrainSession(target node.ID, epoch uint64) bool {
+	c.drainSessionMu.Lock()
+	defer c.drainSessionMu.Unlock()
+
+	return c.drainSession != nil &&
+		c.drainSession.target == target &&
+		c.drainSession.epoch == epoch
 }
 
 // collectDrainPendingStatus advances the frozen pending baseline for the active
@@ -376,6 +441,8 @@ func (c *Controller) getDispatcherDrainTarget() (node.ID, uint64, bool) {
 
 // clearDispatcherDrainTarget closes the matching active drain session and
 // broadcasts an empty target at the same epoch to clear stale local targets.
+// It is triggered only after target membership removal proves the target node
+// can no longer receive new dispatcher assignments.
 func (c *Controller) clearDispatcherDrainTarget(target node.ID, epoch uint64) {
 	c.drainSessionMu.Lock()
 	if c.drainSession == nil || c.drainSession.target != target || c.drainSession.epoch != epoch {
@@ -408,6 +475,7 @@ func (c *Controller) clearDispatcherDrainTarget(target node.ID, epoch uint64) {
 	c.drainSessionMu.Unlock()
 
 	c.drainController.ClearDrainTargetSchedulerGate(target, epoch)
+	c.syncDrainSchedulingPolicy()
 	log.Info("dispatcher drain target cleared",
 		zap.Stringer("targetNodeID", target),
 		zap.Uint64("targetEpoch", epoch))

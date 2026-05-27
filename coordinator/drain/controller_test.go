@@ -42,7 +42,7 @@ func TestDrainControllerResendAndPromoteToStopping(t *testing.T) {
 	require.Equal(t, uint64(42), req.NodeEpoch)
 
 	// Before draining observed, it should retry after the resend interval.
-	c.AdvanceLiveness(nil)
+	c.AdvanceLiveness(nil, nil)
 	select {
 	case <-mc.GetMessageChannel():
 		require.FailNow(t, "unexpected command before resend interval")
@@ -53,7 +53,7 @@ func TestDrainControllerResendAndPromoteToStopping(t *testing.T) {
 	c.mu.Lock()
 	c.ensureNodeStateLocked(target).lastDrainCmdSentAt = time.Now().Add(-resendInterval - 10*time.Millisecond)
 	c.mu.Unlock()
-	c.AdvanceLiveness(nil)
+	c.AdvanceLiveness(nil, nil)
 	msg = <-mc.GetMessageChannel()
 	req = msg.Message[0].(*heartbeatpb.SetNodeLivenessRequest)
 	require.Equal(t, heartbeatpb.NodeLiveness_DRAINING, req.Target)
@@ -64,7 +64,7 @@ func TestDrainControllerResendAndPromoteToStopping(t *testing.T) {
 	})
 
 	// Once readyToStop, it should send STOPPING.
-	c.AdvanceLiveness(func(node.ID) bool { return true })
+	c.AdvanceLiveness(func(node.ID) bool { return true }, func(node.ID) bool { return true })
 	msg = <-mc.GetMessageChannel()
 	req = msg.Message[0].(*heartbeatpb.SetNodeLivenessRequest)
 	require.Equal(t, heartbeatpb.NodeLiveness_STOPPING, req.Target)
@@ -138,7 +138,7 @@ func TestDrainControllerSkipStoppingForNewEpochWithoutDraining(t *testing.T) {
 
 	// Simulate a node restart after AdvanceLiveness snapshots the old draining
 	// observation but before it tries to send STOPPING.
-	c.AdvanceLiveness(func(node.ID) bool {
+	c.AdvanceLiveness(func(node.ID) bool { return true }, func(node.ID) bool {
 		c.ObserveHeartbeat(target, &heartbeatpb.NodeHeartbeat{
 			Liveness:  heartbeatpb.NodeLiveness_ALIVE,
 			NodeEpoch: 43,
@@ -223,5 +223,24 @@ func TestDrainControllerSchedulerGateRequiresReackAfterNodeRestart(t *testing.T)
 		DispatcherDrainTargetNodeId: target.String(),
 		DispatcherDrainTargetEpoch:  epoch,
 	})
+	require.True(t, c.IsSchedulableDest(dest))
+}
+
+func TestDrainControllerSchedulingFreezeBlocksDestinations(t *testing.T) {
+	mc := messaging.NewMockMessageCenter()
+	c := NewController(mc)
+
+	dest := node.ID("dest")
+	c.ObserveHeartbeat(dest, &heartbeatpb.NodeHeartbeat{
+		Liveness:  heartbeatpb.NodeLiveness_ALIVE,
+		NodeEpoch: 1,
+	})
+
+	require.True(t, c.IsSchedulableDest(dest))
+
+	c.SetSchedulingFrozen(true)
+	require.False(t, c.IsSchedulableDest(dest))
+
+	c.SetSchedulingFrozen(false)
 	require.True(t, c.IsSchedulableDest(dest))
 }
