@@ -40,6 +40,13 @@ const (
 )
 
 type nodeState struct {
+	// drainProtocolObserved marks whether coordinator has received a bootstrap
+	// capability response for this node. Unknown capability must not silently
+	// degrade to the legacy fallback because that would hide bootstrap failures.
+	drainProtocolObserved bool
+	// drainProtocolVersion is the node-scoped drain capability reported during
+	// bootstrap. Zero means the node only supports the legacy hard-restart path.
+	drainProtocolVersion uint32
 	// drainRequested indicates this node has entered the drain workflow.
 	drainRequested bool
 	// drainingObserved indicates the node has reported DRAINING.
@@ -109,6 +116,21 @@ func (c *Controller) RequestDrain(nodeID node.ID) {
 	c.mu.Unlock()
 
 	c.trySendDrainCommand(nodeID)
+}
+
+// ObserveBootstrapResponse records the node-scoped drain capability reported
+// by a maintainer manager during bootstrap.
+func (c *Controller) ObserveBootstrapResponse(nodeID node.ID, resp *heartbeatpb.CoordinatorBootstrapResponse) {
+	if resp == nil {
+		return
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	st := c.ensureNodeStateLocked(nodeID)
+	st.drainProtocolObserved = true
+	st.drainProtocolVersion = resp.GetDrainProtocolVersion()
 }
 
 // ObserveHeartbeat updates drain progression from node heartbeat liveness.
@@ -190,6 +212,18 @@ func (c *Controller) GetStatus(nodeID node.ID) (drainRequested, drainingObserved
 		return false, false, false
 	}
 	return st.drainRequested, st.drainingObserved, st.stoppingObserved
+}
+
+// GetDrainProtocolVersion returns the bootstrap-observed drain capability for a node.
+func (c *Controller) GetDrainProtocolVersion(nodeID node.ID) (uint32, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	st, ok := c.nodes[nodeID]
+	if !ok || !st.drainProtocolObserved {
+		return 0, false
+	}
+	return st.drainProtocolVersion, true
 }
 
 // GetState returns coordinator-derived liveness state.

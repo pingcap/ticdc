@@ -224,6 +224,11 @@ message CoordinatorBootstrapRequest {
 
 message CoordinatorBootstrapResponse {
     repeated MaintainerStatus statuses = 1;
+    // drain_protocol_version is the node-scoped drain capability supported by
+    // the bootstrap responder. Zero means the node only supports the legacy
+    // hard-restart behavior. Non-zero versions opt into the coordinator-driven
+    // drain protocol used by rolling restart orchestration.
+    uint32 drain_protocol_version = 2;
 }
 
 message AddMaintainerRequest {

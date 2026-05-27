@@ -34,6 +34,11 @@ type drainSession struct {
 	target node.ID
 	epoch  uint64
 
+	// participants is the frozen set of alive nodes that took part in this
+	// strict drain session when it started. Later node joins must not change the
+	// completion contract of an already active session.
+	participants map[node.ID]struct{}
+
 	// trackedChangefeeds is the frozen set of running changefeeds that were
 	// relevant to this drain session when it started. Drain-aware scheduling must
 	// prevent new work from landing on the target, so repeated API polls can
@@ -76,8 +81,16 @@ func newDispatcherDrainEpochSeed() uint64 {
 }
 
 // DrainNode starts or continues draining one target node for the v1 drain API.
-// It ensures an active target epoch, broadcasts the drain target, requests liveness
-// transition, then evaluates a one-shot drain observation.
+// It first checks the drain capability learned from bootstrap for every alive
+// maintainer manager:
+//   - unknown capability keeps returning non-zero while coordinator waits for
+//     bootstrap to complete for that node
+//   - any legacy capability bypasses the new orchestration and falls back to
+//     the historical hard-restart behavior used during mixed-version rolling patch
+//
+// Supported targets then use the full orchestration: it ensures an active
+// target epoch, broadcasts the drain target, requests liveness transition, and
+// evaluates a one-shot drain observation.
 //
 // Drain completion requires the target to reach STOPPING after DRAINING and for
 // all maintainer-side drain work to converge to zero.
@@ -92,6 +105,32 @@ func (c *Controller) DrainNode(_ context.Context, target node.ID) (int, error) {
 		log.Info("drain waiting for coordinator bootstrap",
 			zap.Stringer("targetNodeID", target))
 		return 1, nil
+	}
+
+	activeTarget, _, hasSession := c.getDispatcherDrainTarget()
+	if !hasSession {
+		blockingNodeID, blockingVersion, capabilityObserved, hasBlocker := c.findStrictDrainProtocolBlocker()
+		if hasBlocker && !capabilityObserved {
+			log.Info("drain waiting for cluster drain capability observation",
+				zap.Stringer("targetNodeID", target),
+				zap.Stringer("blockingNodeID", blockingNodeID))
+			return 1, nil
+		}
+		if hasBlocker && blockingVersion == 0 {
+			message := "drain target does not support coordinator driven drain protocol, fall back to legacy hard restart"
+			if blockingNodeID != target {
+				message = "drain cluster contains legacy peer that cannot participate in coordinator driven drain, fall back to legacy hard restart"
+			}
+			log.Info(message,
+				zap.Stringer("targetNodeID", target),
+				zap.Stringer("blockingNodeID", blockingNodeID),
+				zap.Uint32("blockingDrainProtocolVersion", blockingVersion))
+			return 0, nil
+		}
+	} else if activeTarget == target {
+		// Once strict drain session is active, keep using its frozen participants
+		// even if node membership changes later. This prevents a new peer from
+		// retroactively turning an in-flight strict drain into a hard restart.
 	}
 	targetEpoch, err := c.ensureDispatcherDrainTarget(target)
 	if err != nil {
@@ -130,6 +169,27 @@ func (c *Controller) DrainNode(_ context.Context, target node.ID) (int, error) {
 		zap.Int("pendingStatusCount", observation.pendingStatusCount),
 		zap.Int("remaining", observation.remaining))
 	return ensureDrainRemainingNonZero(observation.remaining), nil
+}
+
+// findStrictDrainProtocolBlocker returns the first alive node that still
+// prevents strict drain orchestration from being safe cluster-wide. Unknown
+// capability has higher priority than legacy fallback so bootstrap races never
+// silently degrade to hard-restart behavior.
+func (c *Controller) findStrictDrainProtocolBlocker() (node.ID, uint32, bool, bool) {
+	var legacyBlocker node.ID
+	for id := range c.nodeManager.GetAliveNodes() {
+		version, observed := c.drainController.GetDrainProtocolVersion(id)
+		if !observed {
+			return id, 0, false, true
+		}
+		if version == 0 && legacyBlocker.IsEmpty() {
+			legacyBlocker = id
+		}
+	}
+	if legacyBlocker.IsEmpty() {
+		return "", 0, false, false
+	}
+	return legacyBlocker, 0, true, true
 }
 
 type drainNodeObservation struct {
@@ -229,6 +289,18 @@ func (c *Controller) snapshotDrainTrackedChangefeeds() []common.ChangeFeedID {
 	return snapshot
 }
 
+// snapshotDrainParticipants freezes the alive nodes that must satisfy the
+// strict drain contract for one session. Later joins may observe broadcasts,
+// but they must not expand the completion or clear-ack requirements of an
+// already running drain.
+func (c *Controller) snapshotDrainParticipants() map[node.ID]struct{} {
+	participants := make(map[node.ID]struct{}, len(c.nodeManager.GetAliveNodeIDs()))
+	for _, id := range c.nodeManager.GetAliveNodeIDs() {
+		participants[id] = struct{}{}
+	}
+	return participants
+}
+
 // isDrainStatusConvergenceRelevant returns whether a changefeed should
 // participate in drain status convergence checks.
 func isDrainStatusConvergenceRelevant(cf *changefeed.Changefeed) bool {
@@ -259,12 +331,14 @@ func (c *Controller) ensureDispatcherDrainTarget(target node.ID) (uint64, error)
 	}
 
 	trackedChangefeeds := c.snapshotDrainTrackedChangefeeds()
+	participants := c.snapshotDrainParticipants()
 	pendingStatus := make(map[common.ChangeFeedID]struct{}, len(trackedChangefeeds))
 	for _, id := range trackedChangefeeds {
 		pendingStatus[id] = struct{}{}
 	}
 	c.drainClearState = nil
 	c.drainSession = &drainSession{
+		participants:       participants,
 		target:             target,
 		epoch:              c.dispatcherDrainEpoch,
 		trackedChangefeeds: trackedChangefeeds,
@@ -296,8 +370,8 @@ func (c *Controller) clearDispatcherDrainTarget(target node.ID, epoch uint64) {
 		c.drainSessionMu.Unlock()
 		return
 	}
-	pendingNodes := make(map[node.ID]struct{}, len(c.nodeManager.GetAliveNodeIDs()))
-	for _, id := range c.nodeManager.GetAliveNodeIDs() {
+	pendingNodes := make(map[node.ID]struct{}, len(c.drainSession.participants))
+	for id := range c.drainSession.participants {
 		pendingNodes[id] = struct{}{}
 	}
 	c.drainSession = nil

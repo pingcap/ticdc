@@ -75,6 +75,7 @@ func TestDrainNodeReturnsNonZeroBeforeCoordinatorBootstrap(t *testing.T) {
 
 func TestDrainNodeReturnsNonZeroBeforeStoppingObserved(t *testing.T) {
 	c, _, target := newDrainTestController(t)
+	setDrainProtocolVersion(c, target, 1)
 
 	remaining, err := c.DrainNode(context.Background(), target)
 	require.NoError(t, err)
@@ -83,6 +84,7 @@ func TestDrainNodeReturnsNonZeroBeforeStoppingObserved(t *testing.T) {
 
 func TestDrainNodeCompletesAfterCompletionObserved(t *testing.T) {
 	c, drainController, target := newDrainTestController(t)
+	setDrainProtocolVersion(c, target, 1)
 	cf := addRunningChangefeed(c, "cf1", node.ID("other"), 100)
 
 	remaining, err := c.DrainNode(context.Background(), target)
@@ -101,6 +103,7 @@ func TestDrainNodeCompletesAfterCompletionObserved(t *testing.T) {
 
 func TestDrainNodeDispatcherCountBlocksCompletion(t *testing.T) {
 	c, drainController, target := newDrainTestController(t)
+	setDrainProtocolVersion(c, target, 1)
 	cf := addRunningChangefeed(c, "cf1", node.ID("other"), 100)
 
 	remaining, err := c.DrainNode(context.Background(), target)
@@ -124,6 +127,7 @@ func TestDrainNodeDispatcherCountBlocksCompletion(t *testing.T) {
 
 func TestDrainNodePendingStatusConvergenceBlocksCompletion(t *testing.T) {
 	c, drainController, target := newDrainTestController(t)
+	setDrainProtocolVersion(c, target, 1)
 	cf := addRunningChangefeed(c, "cf1", node.ID("other"), 100)
 
 	remaining, err := c.DrainNode(context.Background(), target)
@@ -147,6 +151,7 @@ func TestDrainNodePendingStatusConvergenceBlocksCompletion(t *testing.T) {
 
 func TestDrainNodeInflightDrainMovesBlockCompletion(t *testing.T) {
 	c, drainController, target := newDrainTestController(t)
+	setDrainProtocolVersion(c, target, 1)
 	cf := addRunningChangefeed(c, "cf1", node.ID("other"), 100)
 
 	remaining, err := c.DrainNode(context.Background(), target)
@@ -170,8 +175,10 @@ func TestDrainNodeInflightDrainMovesBlockCompletion(t *testing.T) {
 
 func TestDrainNodeRejectConcurrentDifferentDrainTarget(t *testing.T) {
 	c, _, target := newDrainTestController(t)
+	setDrainProtocolVersion(c, target, 1)
 	other := node.ID("other")
 	c.nodeManager.GetAliveNodes()[other] = &node.Info{ID: other}
+	setDrainProtocolVersion(c, other, 1)
 
 	remaining, err := c.DrainNode(context.Background(), target)
 	require.NoError(t, err)
@@ -184,6 +191,7 @@ func TestDrainNodeRejectConcurrentDifferentDrainTarget(t *testing.T) {
 
 func TestRemoveNodeClearsActiveDrainTarget(t *testing.T) {
 	c, _, target := newDrainTestController(t)
+	setDrainProtocolVersion(c, target, 1)
 	remaining, err := c.DrainNode(context.Background(), target)
 	require.NoError(t, err)
 	require.Equal(t, 1, remaining)
@@ -194,6 +202,116 @@ func TestRemoveNodeClearsActiveDrainTarget(t *testing.T) {
 	c.RemoveNode(target)
 	_, _, ok = c.getDispatcherDrainTarget()
 	require.False(t, ok)
+}
+
+func TestDrainNodeLegacyTargetFallsBackToHardRestart(t *testing.T) {
+	c, _, target := newDrainTestController(t)
+	setDrainProtocolVersion(c, target, 0)
+
+	remaining, err := c.DrainNode(context.Background(), target)
+	require.NoError(t, err)
+	require.Equal(t, 0, remaining)
+
+	drainTarget, epoch, ok := c.getDispatcherDrainTarget()
+	require.False(t, ok)
+	require.Equal(t, node.ID(""), drainTarget)
+	require.Equal(t, uint64(0), epoch)
+}
+
+func TestDrainNodeWaitsForTargetCapabilityObservation(t *testing.T) {
+	c, drainController, target := newDrainTestController(t)
+	setTargetStoppingObserved(drainController, target)
+
+	remaining, err := c.DrainNode(context.Background(), target)
+	require.NoError(t, err)
+	require.Equal(t, 1, remaining)
+
+	drainTarget, epoch, ok := c.getDispatcherDrainTarget()
+	require.False(t, ok)
+	require.Equal(t, node.ID(""), drainTarget)
+	require.Equal(t, uint64(0), epoch)
+}
+
+func TestDrainNodeWaitsForPeerCapabilityObservation(t *testing.T) {
+	c, _, target := newDrainTestController(t)
+	setDrainProtocolVersion(c, target, 1)
+	other := node.ID("other")
+	c.nodeManager.GetAliveNodes()[other] = &node.Info{ID: other}
+
+	remaining, err := c.DrainNode(context.Background(), target)
+	require.NoError(t, err)
+	require.Equal(t, 1, remaining)
+
+	drainTarget, epoch, ok := c.getDispatcherDrainTarget()
+	require.False(t, ok)
+	require.Equal(t, node.ID(""), drainTarget)
+	require.Equal(t, uint64(0), epoch)
+}
+
+func TestDrainNodeFallsBackWhenAlivePeerIsLegacy(t *testing.T) {
+	c, _, target := newDrainTestController(t)
+	setDrainProtocolVersion(c, target, 1)
+	other := node.ID("other")
+	c.nodeManager.GetAliveNodes()[other] = &node.Info{ID: other}
+	setDrainProtocolVersion(c, other, 0)
+	addRunningChangefeed(c, "cf1", other, 100)
+
+	remaining, err := c.DrainNode(context.Background(), target)
+	require.NoError(t, err)
+	require.Equal(t, 0, remaining)
+
+	drainTarget, epoch, ok := c.getDispatcherDrainTarget()
+	require.False(t, ok)
+	require.Equal(t, node.ID(""), drainTarget)
+	require.Equal(t, uint64(0), epoch)
+	require.Nil(t, c.drainSession)
+	require.Nil(t, c.drainClearState)
+}
+
+func TestDrainNodeIgnoresLateUnknownPeerAfterSessionStart(t *testing.T) {
+	c, _, target := newDrainTestController(t)
+	setDrainProtocolVersion(c, target, 1)
+
+	remaining, err := c.DrainNode(context.Background(), target)
+	require.NoError(t, err)
+	require.Equal(t, 1, remaining)
+
+	other := node.ID("other")
+	c.nodeManager.GetAliveNodes()[other] = &node.Info{ID: other}
+
+	remaining, err = c.DrainNode(context.Background(), target)
+	require.NoError(t, err)
+	require.Equal(t, 1, remaining)
+
+	drainTarget, _, ok := c.getDispatcherDrainTarget()
+	require.True(t, ok)
+	require.Equal(t, target, drainTarget)
+	require.NotNil(t, c.drainSession)
+}
+
+func TestClearDispatcherDrainTargetFreezesParticipantNodes(t *testing.T) {
+	c, drainController, target := newDrainTestController(t)
+	setDrainProtocolVersion(c, target, 1)
+
+	remaining, err := c.DrainNode(context.Background(), target)
+	require.NoError(t, err)
+	require.Equal(t, 1, remaining)
+
+	other := node.ID("other")
+	c.nodeManager.GetAliveNodes()[other] = &node.Info{ID: other}
+	setDrainProtocolVersion(c, other, 0)
+
+	setTargetStoppingObserved(drainController, target)
+	remaining, err = c.DrainNode(context.Background(), target)
+	require.NoError(t, err)
+	require.Equal(t, 0, remaining)
+
+	require.Nil(t, c.drainSession)
+	require.NotNil(t, c.drainClearState)
+	_, ok := c.drainClearState.pendingNodes[other]
+	require.False(t, ok)
+	_, ok = c.drainClearState.pendingNodes[target]
+	require.True(t, ok)
 }
 
 func TestClearDispatcherDrainTargetTracksNodeHeartbeatAck(t *testing.T) {
@@ -336,5 +454,11 @@ func setChangefeedDrainStatus(
 			TargetDispatcherCount:        dispatcherCount,
 			TargetInflightDrainMoveCount: inflightDrainMoveCount,
 		},
+	})
+}
+
+func setDrainProtocolVersion(c *Controller, target node.ID, version uint32) {
+	c.drainController.ObserveBootstrapResponse(target, &heartbeatpb.CoordinatorBootstrapResponse{
+		DrainProtocolVersion: version,
 	})
 }

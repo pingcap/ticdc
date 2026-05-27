@@ -429,6 +429,7 @@ func (c *Controller) onNodeChanged(ctx context.Context) {
 
 func (c *Controller) onMaintainerBootstrapResponse(ctx context.Context, req *messaging.TargetMessage) {
 	response := req.Message[0].(*heartbeatpb.CoordinatorBootstrapResponse)
+	c.drainController.ObserveBootstrapResponse(req.From, response)
 	log.Info("controller received maintainer bootstrap response",
 		zap.Stringer("node", req.From),
 		zap.Int("maintainerCount", len(response.Statuses)))

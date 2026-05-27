@@ -229,7 +229,9 @@ func (m *mockMaintainerManager) onCoordinatorBootstrapRequest(msg *messaging.Tar
 
 	response := m.bootstrapResponse
 	if response == nil {
-		response = &heartbeatpb.CoordinatorBootstrapResponse{}
+		response = &heartbeatpb.CoordinatorBootstrapResponse{
+			DrainProtocolVersion: 1,
+		}
 	}
 	err := m.mc.SendCommand(messaging.NewSingleTargetMessage(
 		m.coordinatorID,
