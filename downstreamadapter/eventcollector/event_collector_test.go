@@ -62,8 +62,19 @@ func (m *mockEventDispatcher) GetChangefeedID() common.ChangeFeedID {
 	return m.changefeedID
 }
 
+<<<<<<< HEAD
+=======
+func (m *mockEventDispatcher) GetEventCollectorBatchConfig() (batchCount int, batchBytes int) {
+	return m.eventCollectorBatchCount, m.eventCollectorBatchBytes
+}
+
+>>>>>>> 6abbf2fca (eventcollector: clarify dispatcher session state transitions (#5022))
 func (m *mockEventDispatcher) GetTableSpan() *heartbeatpb.TableSpan {
 	return m.tableSpan
+}
+
+func (m *mockEventDispatcher) GetRouter() routing.Router {
+	return routing.Router{}
 }
 
 func (m *mockEventDispatcher) GetTimezone() string {
@@ -332,8 +343,7 @@ func TestGroupHeartbeatUsesEpochAndClamp(t *testing.T) {
 	c.AddDispatcher(localDispatcher, 1024)
 	localStat := c.getDispatcherStatByID(localDispatcher.id)
 	require.NotNil(t, localStat)
-	localStat.session.connState.setEventServiceID(serverInfo.ID)
-	localStat.session.connState.readyEventReceived.Store(true)
+	markSessionReceiving(localStat.session, serverInfo.ID)
 	localStat.currentEpoch.Store(newDispatcherEpochState(3, 0, 150))
 
 	remoteID := node.ID("remote-server")
@@ -346,8 +356,7 @@ func TestGroupHeartbeatUsesEpochAndClamp(t *testing.T) {
 	c.AddDispatcher(remoteDispatcher, 1024)
 	remoteStat := c.getDispatcherStatByID(remoteDispatcher.id)
 	require.NotNil(t, remoteStat)
-	remoteStat.session.connState.setEventServiceID(remoteID)
-	remoteStat.session.connState.readyEventReceived.Store(true)
+	markSessionReceiving(remoteStat.session, remoteID)
 	remoteStat.currentEpoch.Store(newDispatcherEpochState(5, 1, 210))
 
 	grouped := c.groupHeartbeat()
@@ -392,8 +401,7 @@ func TestGroupHeartbeatResetThenHandshake(t *testing.T) {
 	c.AddDispatcher(mockDisp, 1024)
 	stat := c.getDispatcherStatByID(dispatcherID)
 	require.NotNil(t, stat)
-	stat.session.connState.setEventServiceID(serverInfo.ID)
-	stat.session.connState.readyEventReceived.Store(true)
+	markSessionReceiving(stat.session, serverInfo.ID)
 
 	// Simulate a reset to a smaller ts while old in-flight flushes have already
 	// advanced sink checkpoint to a larger value.
