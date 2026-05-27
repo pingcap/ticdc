@@ -70,9 +70,9 @@ type drainTargetSchedulerGate struct {
 	// acknowledge before it can receive newly placed maintainers.
 	target node.ID
 	epoch  uint64
-	// ackedNodes records nodes whose node heartbeat has already reported the
+	// ackedNodes records the node epoch whose heartbeat already reported the
 	// active drain target snapshot. The target node itself is never schedulable.
-	ackedNodes map[node.ID]struct{}
+	ackedNodes map[node.ID]uint64
 }
 
 // Controller manages node drain progression by sending SetNodeLiveness commands and tracking observations.
@@ -187,7 +187,7 @@ func (c *Controller) observeLivenessLocked(nodeID node.ID, nodeEpoch uint64, liv
 			return
 		}
 		if nodeEpoch > st.nodeEpoch {
-			resetObservedStateForNewEpoch(st)
+			resetObservedStateForNewEpoch(c.targetSchedulerGate, nodeID, st)
 		}
 		if nodeEpoch == st.nodeEpoch && liveness < st.liveness {
 			return
@@ -207,11 +207,15 @@ func (c *Controller) observeTargetSchedulerAckLocked(nodeID node.ID, hb *heartbe
 	if gate == nil || nodeID == gate.target {
 		return
 	}
+	st, ok := c.nodes[nodeID]
+	if !ok || !st.observedSet || hb.NodeEpoch != st.nodeEpoch {
+		return
+	}
 	if node.ID(hb.GetDispatcherDrainTargetNodeId()) != gate.target ||
 		hb.GetDispatcherDrainTargetEpoch() != gate.epoch {
 		return
 	}
-	gate.ackedNodes[nodeID] = struct{}{}
+	gate.ackedNodes[nodeID] = hb.NodeEpoch
 }
 
 // StartDrainTargetSchedulerGate blocks new maintainer placement onto nodes
@@ -227,7 +231,7 @@ func (c *Controller) StartDrainTargetSchedulerGate(target node.ID, epoch uint64)
 	c.targetSchedulerGate = &drainTargetSchedulerGate{
 		target:     target,
 		epoch:      epoch,
-		ackedNodes: make(map[node.ID]struct{}),
+		ackedNodes: make(map[node.ID]uint64),
 	}
 }
 
@@ -249,8 +253,15 @@ func (c *Controller) ClearDrainTargetSchedulerGate(target node.ID, epoch uint64)
 // restarts with a newer epoch, while preserving the drain request so the
 // coordinator can continue driving the drain workflow for the replacement
 // process.
-func resetObservedStateForNewEpoch(st *nodeState) {
+//
+// It also drops any scheduler-gate acknowledgement cached for the old process
+// lifetime. The replacement process must report the active drain target again
+// before coordinator can safely place new maintainers on it.
+func resetObservedStateForNewEpoch(gate *drainTargetSchedulerGate, nodeID node.ID, st *nodeState) {
 	drainRequested := st.drainRequested
+	if gate != nil {
+		delete(gate.ackedNodes, nodeID)
+	}
 	*st = nodeState{
 		drainRequested: drainRequested,
 	}
@@ -348,8 +359,12 @@ func (c *Controller) IsSchedulableDest(nodeID node.ID) bool {
 	if nodeID == c.targetSchedulerGate.target {
 		return false
 	}
-	_, ok := c.targetSchedulerGate.ackedNodes[nodeID]
-	return ok
+	st, ok := c.nodes[nodeID]
+	if !ok || !st.observedSet {
+		return false
+	}
+	ackedEpoch, ok := c.targetSchedulerGate.ackedNodes[nodeID]
+	return ok && ackedEpoch == st.nodeEpoch
 }
 
 // GetDrainingOrStoppingNodes returns non-stale nodes observed as draining or stopping.

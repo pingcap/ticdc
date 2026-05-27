@@ -182,3 +182,46 @@ func TestDrainControllerSchedulerGateRequiresTargetAck(t *testing.T) {
 	c.ClearDrainTargetSchedulerGate(target, epoch)
 	require.True(t, c.IsSchedulableDest(pending))
 }
+
+func TestDrainControllerSchedulerGateRequiresReackAfterNodeRestart(t *testing.T) {
+	mc := messaging.NewMockMessageCenter()
+	c := NewController(mc)
+
+	target := node.ID("target")
+	dest := node.ID("dest")
+	epoch := uint64(99)
+
+	c.StartDrainTargetSchedulerGate(target, epoch)
+	c.ObserveHeartbeat(dest, &heartbeatpb.NodeHeartbeat{
+		Liveness:                    heartbeatpb.NodeLiveness_ALIVE,
+		NodeEpoch:                   1,
+		DispatcherDrainTargetNodeId: target.String(),
+		DispatcherDrainTargetEpoch:  epoch,
+	})
+	require.True(t, c.IsSchedulableDest(dest))
+
+	// A replacement process with a newer node epoch must re-ack the active
+	// drain target before the destination becomes schedulable again.
+	c.ObserveHeartbeat(dest, &heartbeatpb.NodeHeartbeat{
+		Liveness:  heartbeatpb.NodeLiveness_ALIVE,
+		NodeEpoch: 2,
+	})
+	require.False(t, c.IsSchedulableDest(dest))
+
+	// A stale heartbeat from the old process must not resurrect the old ack.
+	c.ObserveHeartbeat(dest, &heartbeatpb.NodeHeartbeat{
+		Liveness:                    heartbeatpb.NodeLiveness_ALIVE,
+		NodeEpoch:                   1,
+		DispatcherDrainTargetNodeId: target.String(),
+		DispatcherDrainTargetEpoch:  epoch,
+	})
+	require.False(t, c.IsSchedulableDest(dest))
+
+	c.ObserveHeartbeat(dest, &heartbeatpb.NodeHeartbeat{
+		Liveness:                    heartbeatpb.NodeLiveness_ALIVE,
+		NodeEpoch:                   2,
+		DispatcherDrainTargetNodeId: target.String(),
+		DispatcherDrainTargetEpoch:  epoch,
+	})
+	require.True(t, c.IsSchedulableDest(dest))
+}
