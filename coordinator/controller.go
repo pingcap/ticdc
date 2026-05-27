@@ -434,6 +434,10 @@ func (c *Controller) onMaintainerBootstrapResponse(ctx context.Context, req *mes
 		zap.Stringer("node", req.From),
 		zap.Int("maintainerCount", len(response.Statuses)))
 	responses := c.bootstrapper.HandleBootstrapResponse(req.From, response)
+	if c.bootstrapper.HasNode(req.From) &&
+		c.maybeAddDispatcherDrainSyncNode(req.From, response.GetDrainProtocolVersion()) {
+		c.maybeBroadcastDispatcherDrainTarget(true)
+	}
 	c.handleBootstrapResponses(ctx, responses)
 }
 

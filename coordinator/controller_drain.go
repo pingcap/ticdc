@@ -39,6 +39,12 @@ type drainSession struct {
 	// completion contract of an already active session.
 	participants map[node.ID]struct{}
 
+	// targetSyncNodes is the set of nodes that coordinator explicitly keeps in
+	// sync with the active dispatcher drain target for this session. It starts
+	// from participants and may grow when compatible later-join nodes finish
+	// bootstrap while the session is still active.
+	targetSyncNodes map[node.ID]struct{}
+
 	// trackedChangefeeds is the frozen set of running changefeeds that were
 	// relevant to this drain session when it started. Drain-aware scheduling must
 	// prevent new work from landing on the target, so repeated API polls can
@@ -290,9 +296,9 @@ func (c *Controller) snapshotDrainTrackedChangefeeds() []common.ChangeFeedID {
 }
 
 // snapshotDrainParticipants freezes the alive nodes that must satisfy the
-// strict drain contract for one session. Later joins may observe broadcasts,
-// but they must not expand the completion or clear-ack requirements of an
-// already running drain.
+// strict drain completion contract for one session. Later joins must not
+// expand drain completion, but compatible peers may still be added to the
+// target-sync set so they can safely observe and clear the drain target.
 func (c *Controller) snapshotDrainParticipants() map[node.ID]struct{} {
 	participants := make(map[node.ID]struct{}, len(c.nodeManager.GetAliveNodeIDs()))
 	for _, id := range c.nodeManager.GetAliveNodeIDs() {
@@ -332,6 +338,10 @@ func (c *Controller) ensureDispatcherDrainTarget(target node.ID) (uint64, error)
 
 	trackedChangefeeds := c.snapshotDrainTrackedChangefeeds()
 	participants := c.snapshotDrainParticipants()
+	targetSyncNodes := make(map[node.ID]struct{}, len(participants))
+	for id := range participants {
+		targetSyncNodes[id] = struct{}{}
+	}
 	pendingStatus := make(map[common.ChangeFeedID]struct{}, len(trackedChangefeeds))
 	for _, id := range trackedChangefeeds {
 		pendingStatus[id] = struct{}{}
@@ -339,6 +349,7 @@ func (c *Controller) ensureDispatcherDrainTarget(target node.ID) (uint64, error)
 	c.drainClearState = nil
 	c.drainSession = &drainSession{
 		participants:       participants,
+		targetSyncNodes:    targetSyncNodes,
 		target:             target,
 		epoch:              c.dispatcherDrainEpoch,
 		trackedChangefeeds: trackedChangefeeds,
@@ -372,8 +383,8 @@ func (c *Controller) clearDispatcherDrainTarget(target node.ID, epoch uint64) {
 		return
 	}
 	aliveNodes := c.nodeManager.GetAliveNodes()
-	pendingNodes := make(map[node.ID]struct{}, len(c.drainSession.participants))
-	for id := range c.drainSession.participants {
+	pendingNodes := make(map[node.ID]struct{}, len(c.drainSession.targetSyncNodes))
+	for id := range c.drainSession.targetSyncNodes {
 		if _, ok := aliveNodes[id]; !ok {
 			continue
 		}
@@ -383,9 +394,10 @@ func (c *Controller) clearDispatcherDrainTarget(target node.ID, epoch uint64) {
 	if len(pendingNodes) == 0 {
 		c.drainClearState = nil
 	} else {
-		// Freeze only the nodes that both participated in this drain session and
-		// are still alive when the clear is issued. New nodes do not need to ack
-		// an old clear, and removed nodes can no longer acknowledge it.
+		// Freeze only the nodes that coordinator kept synchronized with the
+		// active target and that are still alive when the clear is issued.
+		// Compatible later-join nodes are included here once they were brought
+		// into the target-sync set during the active session.
 		c.drainClearState = &drainClearState{
 			target:       target,
 			epoch:        epoch,
@@ -410,18 +422,21 @@ func (c *Controller) maybeBroadcastDispatcherDrainTarget(force bool) {
 		target       node.ID
 		epoch        uint64
 		needSend     bool
+		recipients   []node.ID
 		sendingClear bool
 	)
 	switch {
 	case c.drainSession != nil:
 		target = c.drainSession.target
 		epoch = c.drainSession.epoch
+		recipients = c.aliveDrainTargetRecipientsLocked(c.drainSession.targetSyncNodes)
 		needSend = force ||
 			c.drainSession.dirty ||
 			time.Since(c.drainSession.lastSent) >= dispatcherDrainTargetResendIntvl
 	case c.drainClearState != nil:
 		epoch = c.drainClearState.epoch
 		sendingClear = true
+		recipients = c.aliveDrainTargetRecipientsLocked(c.drainClearState.pendingNodes)
 		needSend = force ||
 			c.drainClearState.dirty ||
 			time.Since(c.drainClearState.lastSent) >= dispatcherDrainTargetResendIntvl
@@ -435,7 +450,7 @@ func (c *Controller) maybeBroadcastDispatcherDrainTarget(force bool) {
 	}
 	c.drainSessionMu.Unlock()
 
-	c.broadcastDispatcherDrainTarget(target, epoch)
+	c.broadcastDispatcherDrainTarget(recipients, target, epoch)
 
 	c.drainSessionMu.Lock()
 	if sendingClear {
@@ -453,9 +468,27 @@ func (c *Controller) maybeBroadcastDispatcherDrainTarget(force bool) {
 	c.drainSessionMu.Unlock()
 }
 
-// broadcastDispatcherDrainTarget sends SetDispatcherDrainTargetRequest to all
-// currently alive nodes as a best-effort broadcast.
-func (c *Controller) broadcastDispatcherDrainTarget(target node.ID, epoch uint64) {
+// aliveDrainTargetRecipientsLocked returns the currently alive nodes that are
+// still relevant for one target-sync or clear-ack set.
+// Caller must hold c.drainSessionMu.
+func (c *Controller) aliveDrainTargetRecipientsLocked(nodes map[node.ID]struct{}) []node.ID {
+	if len(nodes) == 0 || c.nodeManager == nil {
+		return nil
+	}
+	aliveNodes := c.nodeManager.GetAliveNodes()
+	recipients := make([]node.ID, 0, len(nodes))
+	for id := range nodes {
+		if _, ok := aliveNodes[id]; !ok {
+			continue
+		}
+		recipients = append(recipients, id)
+	}
+	return recipients
+}
+
+// broadcastDispatcherDrainTarget sends SetDispatcherDrainTargetRequest to the
+// selected nodes as a best-effort broadcast.
+func (c *Controller) broadcastDispatcherDrainTarget(recipients []node.ID, target node.ID, epoch uint64) {
 	if epoch == 0 || c.messageCenter == nil || c.nodeManager == nil {
 		return
 	}
@@ -464,7 +497,7 @@ func (c *Controller) broadcastDispatcherDrainTarget(target node.ID, epoch uint64
 		TargetNodeId: target.String(),
 		TargetEpoch:  epoch,
 	}
-	for _, id := range c.nodeManager.GetAliveNodeIDs() {
+	for _, id := range recipients {
 		msg := messaging.NewSingleTargetMessage(id, messaging.MaintainerManagerTopic, req)
 		if err := c.messageCenter.SendCommand(msg); err != nil {
 			log.Warn("send set dispatcher drain target command failed",
@@ -474,6 +507,30 @@ func (c *Controller) broadcastDispatcherDrainTarget(target node.ID, epoch uint64
 				zap.Error(err))
 		}
 	}
+}
+
+// maybeAddDispatcherDrainSyncNode adds a later-join node into the active
+// target-sync set after bootstrap has confirmed it supports the drain
+// protocol. It returns true when the session changed and should be broadcast.
+func (c *Controller) maybeAddDispatcherDrainSyncNode(nodeID node.ID, version uint32) bool {
+	if version == 0 || c.nodeManager == nil || c.nodeManager.GetNodeInfo(nodeID) == nil {
+		return false
+	}
+
+	c.drainSessionMu.Lock()
+	defer c.drainSessionMu.Unlock()
+
+	session := c.drainSession
+	if session == nil {
+		return false
+	}
+	if _, ok := session.targetSyncNodes[nodeID]; ok {
+		return false
+	}
+
+	session.targetSyncNodes[nodeID] = struct{}{}
+	session.dirty = true
+	return true
 }
 
 func (c *Controller) observeDispatcherDrainTargetHeartbeat(from node.ID, hb *heartbeatpb.NodeHeartbeat) {

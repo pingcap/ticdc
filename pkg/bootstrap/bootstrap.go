@@ -152,6 +152,14 @@ func (b *Bootstrapper[T]) GetAllNodeIDs() []node.ID {
 	return result
 }
 
+// HasNode returns whether the bootstrapper is still tracking the given node.
+func (b *Bootstrapper[T]) HasNode(id node.ID) bool {
+	b.mutex.Lock()
+	defer b.mutex.Unlock()
+	_, ok := b.nodes[id]
+	return ok
+}
+
 func (b *Bootstrapper[T]) PrintBootstrapStatus() {
 	bootstrappedNodes := make([]node.ID, 0)
 	unbootstrappedNodes := make([]node.ID, 0)

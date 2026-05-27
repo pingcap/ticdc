@@ -21,6 +21,7 @@ import (
 	"github.com/pingcap/ticdc/coordinator/drain"
 	"github.com/pingcap/ticdc/coordinator/operator"
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/pkg/bootstrap"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -55,6 +56,16 @@ func newDrainTestController(t *testing.T) (*Controller, *drain.Controller, node.
 		drainController:    drainController,
 		messageCenter:      mc,
 		initialized:        atomic.NewBool(true),
+		bootstrapper: bootstrap.NewBootstrapper[heartbeatpb.CoordinatorBootstrapResponse](
+			"test-drain-bootstrapper",
+			func(id node.ID, _ string) *messaging.TargetMessage {
+				return messaging.NewSingleTargetMessage(
+					id,
+					messaging.MaintainerManagerTopic,
+					&heartbeatpb.CoordinatorBootstrapRequest{},
+				)
+			},
+		),
 	}
 	return c, drainController, target
 }
@@ -270,6 +281,7 @@ func TestDrainNodeFallsBackWhenAlivePeerIsLegacy(t *testing.T) {
 
 func TestDrainNodeIgnoresLateUnknownPeerAfterSessionStart(t *testing.T) {
 	c, _, target := newDrainTestController(t)
+	bootstrapTrackedNodes(c, target)
 	setDrainProtocolVersion(c, target, 1)
 
 	remaining, err := c.DrainNode(context.Background(), target)
@@ -289,8 +301,9 @@ func TestDrainNodeIgnoresLateUnknownPeerAfterSessionStart(t *testing.T) {
 	require.NotNil(t, c.drainSession)
 }
 
-func TestClearDispatcherDrainTargetFreezesParticipantNodes(t *testing.T) {
+func TestLateCompatiblePeerJoinsTargetSyncAndClearAck(t *testing.T) {
 	c, drainController, target := newDrainTestController(t)
+	bootstrapTrackedNodes(c, target)
 	setDrainProtocolVersion(c, target, 1)
 
 	remaining, err := c.DrainNode(context.Background(), target)
@@ -299,7 +312,45 @@ func TestClearDispatcherDrainTargetFreezesParticipantNodes(t *testing.T) {
 
 	other := node.ID("other")
 	c.nodeManager.GetAliveNodes()[other] = &node.Info{ID: other}
-	setDrainProtocolVersion(c, other, 0)
+
+	mc := c.messageCenter.(interface {
+		GetMessageChannel() chan *messaging.TargetMessage
+	})
+	drainMessageChannel(mc.GetMessageChannel())
+	c.onNodeChanged(context.Background())
+
+	require.NotNil(t, c.drainSession)
+	_, ok := c.drainSession.targetSyncNodes[other]
+	require.False(t, ok)
+
+	for len(mc.GetMessageChannel()) > 0 {
+		msg := <-mc.GetMessageChannel()
+		require.False(t, msg.Type == messaging.TypeSetDispatcherDrainTargetRequest && msg.To == other)
+	}
+
+	c.onMaintainerBootstrapResponse(context.Background(), &messaging.TargetMessage{
+		From:    other,
+		Topic:   messaging.CoordinatorTopic,
+		Type:    messaging.TypeCoordinatorBootstrapResponse,
+		Message: []messaging.IOTypeT{&heartbeatpb.CoordinatorBootstrapResponse{DrainProtocolVersion: 1}},
+	})
+
+	require.NotNil(t, c.drainSession)
+	_, ok = c.drainSession.targetSyncNodes[other]
+	require.True(t, ok)
+
+	foundActiveBroadcastToOther := false
+	for len(mc.GetMessageChannel()) > 0 {
+		msg := <-mc.GetMessageChannel()
+		if msg.Type != messaging.TypeSetDispatcherDrainTargetRequest || msg.To != other {
+			continue
+		}
+		req := msg.Message[0].(*heartbeatpb.SetDispatcherDrainTargetRequest)
+		if req.TargetNodeId == target.String() && req.TargetEpoch > 0 {
+			foundActiveBroadcastToOther = true
+		}
+	}
+	require.True(t, foundActiveBroadcastToOther)
 
 	setTargetStoppingObserved(drainController, target)
 	remaining, err = c.DrainNode(context.Background(), target)
@@ -308,7 +359,74 @@ func TestClearDispatcherDrainTargetFreezesParticipantNodes(t *testing.T) {
 
 	require.Nil(t, c.drainSession)
 	require.NotNil(t, c.drainClearState)
-	_, ok := c.drainClearState.pendingNodes[other]
+	clearEpoch := c.drainClearState.epoch
+	_, ok = c.drainClearState.pendingNodes[other]
+	require.True(t, ok)
+	_, ok = c.drainClearState.pendingNodes[target]
+	require.True(t, ok)
+
+	c.observeDispatcherDrainTargetHeartbeat(target, &heartbeatpb.NodeHeartbeat{
+		DispatcherDrainTargetEpoch: clearEpoch,
+	})
+	require.NotNil(t, c.drainClearState)
+
+	c.observeDispatcherDrainTargetHeartbeat(other, &heartbeatpb.NodeHeartbeat{
+		DispatcherDrainTargetEpoch: clearEpoch,
+	})
+	require.Nil(t, c.drainClearState)
+}
+
+func TestLateLegacyPeerDoesNotEnterTargetSyncOrClearAck(t *testing.T) {
+	c, drainController, target := newDrainTestController(t)
+	bootstrapTrackedNodes(c, target)
+	setDrainProtocolVersion(c, target, 1)
+
+	remaining, err := c.DrainNode(context.Background(), target)
+	require.NoError(t, err)
+	require.Equal(t, 1, remaining)
+
+	other := node.ID("other")
+	c.nodeManager.GetAliveNodes()[other] = &node.Info{ID: other}
+
+	mc := c.messageCenter.(interface {
+		GetMessageChannel() chan *messaging.TargetMessage
+	})
+	drainMessageChannel(mc.GetMessageChannel())
+	c.onNodeChanged(context.Background())
+
+	require.NotNil(t, c.drainSession)
+	_, ok := c.drainSession.targetSyncNodes[other]
+	require.False(t, ok)
+
+	for len(mc.GetMessageChannel()) > 0 {
+		msg := <-mc.GetMessageChannel()
+		require.False(t, msg.Type == messaging.TypeSetDispatcherDrainTargetRequest && msg.To == other)
+	}
+
+	c.onMaintainerBootstrapResponse(context.Background(), &messaging.TargetMessage{
+		From:    other,
+		Topic:   messaging.CoordinatorTopic,
+		Type:    messaging.TypeCoordinatorBootstrapResponse,
+		Message: []messaging.IOTypeT{&heartbeatpb.CoordinatorBootstrapResponse{DrainProtocolVersion: 0}},
+	})
+
+	require.NotNil(t, c.drainSession)
+	_, ok = c.drainSession.targetSyncNodes[other]
+	require.False(t, ok)
+
+	for len(mc.GetMessageChannel()) > 0 {
+		msg := <-mc.GetMessageChannel()
+		require.False(t, msg.Type == messaging.TypeSetDispatcherDrainTargetRequest && msg.To == other)
+	}
+
+	setTargetStoppingObserved(drainController, target)
+	remaining, err = c.DrainNode(context.Background(), target)
+	require.NoError(t, err)
+	require.Equal(t, 0, remaining)
+
+	require.Nil(t, c.drainSession)
+	require.NotNil(t, c.drainClearState)
+	_, ok = c.drainClearState.pendingNodes[other]
 	require.False(t, ok)
 	_, ok = c.drainClearState.pendingNodes[target]
 	require.True(t, ok)
@@ -316,10 +434,12 @@ func TestClearDispatcherDrainTargetFreezesParticipantNodes(t *testing.T) {
 
 func TestClearDispatcherDrainTargetSkipsRemovedPeerBeforeClear(t *testing.T) {
 	c, drainController, target := newDrainTestController(t)
+	bootstrapTrackedNodes(c, target)
 	setDrainProtocolVersion(c, target, 1)
 
 	other := node.ID("other")
 	c.nodeManager.GetAliveNodes()[other] = &node.Info{ID: other}
+	bootstrapTrackedNodes(c, other)
 	setDrainProtocolVersion(c, other, 1)
 
 	remaining, err := c.DrainNode(context.Background(), target)
@@ -344,8 +464,10 @@ func TestClearDispatcherDrainTargetSkipsRemovedPeerBeforeClear(t *testing.T) {
 
 func TestClearDispatcherDrainTargetTracksNodeHeartbeatAck(t *testing.T) {
 	c, _, target := newDrainTestController(t)
+	bootstrapTrackedNodes(c, target)
 	other := node.ID("other")
 	c.nodeManager.GetAliveNodes()[other] = &node.Info{ID: other}
+	bootstrapTrackedNodes(c, other)
 
 	epoch, err := c.ensureDispatcherDrainTarget(target)
 	require.NoError(t, err)
@@ -413,8 +535,10 @@ func TestHigherEpochHeartbeatAcknowledgesPendingClear(t *testing.T) {
 
 func TestRemoveNodeAcknowledgesPendingClear(t *testing.T) {
 	c, _, target := newDrainTestController(t)
+	bootstrapTrackedNodes(c, target)
 	other := node.ID("other")
 	c.nodeManager.GetAliveNodes()[other] = &node.Info{ID: other}
+	bootstrapTrackedNodes(c, other)
 
 	epoch, err := c.ensureDispatcherDrainTarget(target)
 	require.NoError(t, err)
@@ -489,4 +613,14 @@ func setDrainProtocolVersion(c *Controller, target node.ID, version uint32) {
 	c.drainController.ObserveBootstrapResponse(target, &heartbeatpb.CoordinatorBootstrapResponse{
 		DrainProtocolVersion: version,
 	})
+}
+
+func bootstrapTrackedNodes(c *Controller, ids ...node.ID) {
+	if c.bootstrapper == nil {
+		return
+	}
+	c.bootstrapper.HandleNodesChange(c.nodeManager.GetAliveNodes())
+	for _, id := range ids {
+		c.bootstrapper.HandleBootstrapResponse(id, &heartbeatpb.CoordinatorBootstrapResponse{})
+	}
 }
