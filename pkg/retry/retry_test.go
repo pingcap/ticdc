@@ -19,7 +19,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pingcap/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
 
@@ -64,11 +64,7 @@ func TestIsRetryable(t *testing.T) {
 	}
 
 	err := Do(context.Background(), f, WithMaxTries(3), WithIsRetryableErr(func(err error) bool {
-		switch errors.Cause(err) {
-		case context.Canceled:
-			return false
-		}
-		return true
+		return !errors.Is(errors.Cause(err), context.Canceled)
 	}))
 
 	require.Equal(t, errors.Cause(err), context.Canceled)

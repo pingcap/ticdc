@@ -4665,6 +4665,18 @@
                     "value": 180
                   }
                 ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "error_time"
+                },
+                "properties": [
+                  {
+                    "id": "custom.width",
+                    "value": 180
+                  }
+                ]
               }
             ]
           },
@@ -4682,7 +4694,7 @@
           "pluginVersion": "7.5.17",
           "targets": [
             {
-              "expr": "max by (namespace, changefeed, state, code, message) (ticdc_owner_changefeed_error_info{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\", changefeed=~\"$changefeed\"})",
+              "expr": "max by (namespace, changefeed, state, code, error_time, message) (ticdc_owner_changefeed_error_info{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\", changefeed=~\"$changefeed\"})",
               "format": "time_series",
               "instant": true,
               "refId": "A"
@@ -4704,13 +4716,188 @@
                   "__name__": true
                 },
                 "indexByName": {
-                  "changefeed": 1,
-                  "code": 3,
-                  "message": 4,
                   "namespace": 0,
-                  "state": 2
+                  "changefeed": 1,
+                  "state": 2,
+                  "error_time": 3,
+                  "code": 4,
+                  "message": 5
                 },
                 "renameByName": {}
+              }
+            }
+          ],
+          "type": "table"
+        },
+        {
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "Recent user initiated changefeed mutations retained in memory on the coordinator for oncall investigation. Use TiCDC logs for durable history beyond the latest 100 operations.",
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "align": null,
+                "filterable": false
+              },
+              "links": [],
+              "mappings": [],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": 80
+                  }
+                ]
+              }
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "namespace"
+                },
+                "properties": [
+                  {
+                    "id": "custom.width",
+                    "value": 120
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "changefeed"
+                },
+                "properties": [
+                  {
+                    "id": "custom.width",
+                    "value": 180
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "operation_time"
+                },
+                "properties": [
+                  {
+                    "id": "custom.width",
+                    "value": 180
+                  },
+                  {
+                    "id": "unit",
+                    "value": "dateTimeAsIso"
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "operation"
+                },
+                "properties": [
+                  {
+                    "id": "custom.width",
+                    "value": 100
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "result"
+                },
+                "properties": [
+                  {
+                    "id": "custom.width",
+                    "value": 90
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "username"
+                },
+                "properties": [
+                  {
+                    "id": "custom.width",
+                    "value": 120
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "details"
+                },
+                "properties": [
+                  {
+                    "id": "custom.width",
+                    "value": 320
+                  }
+                ]
+              }
+            ]
+          },
+          "gridPos": {
+            "h": 9,
+            "w": 24,
+            "x": 0,
+            "y": 34
+          },
+          "id": 62042,
+          "options": {
+            "showHeader": true,
+            "sortBy": [
+              {
+                "displayName": "operation_time",
+                "desc": true
+              }
+            ]
+          },
+          "pluginVersion": "7.5.17",
+          "targets": [
+            {
+              "expr": "max by (namespace, changefeed, operation, result, username, details, error, event_id) (ticdc_owner_changefeed_operation_time{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", namespace=~\"$namespace\", changefeed=~\"$changefeed\"})",
+              "format": "time_series",
+              "instant": true,
+              "refId": "A"
+            }
+          ],
+          "title": "Changefeed Operation History",
+          "transformations": [
+            {
+              "id": "labelsToFields",
+              "options": {}
+            },
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": {
+                  "Metric": true,
+                  "Time": true,
+                  "__name__": true,
+                  "event_id": true
+                },
+                "indexByName": {
+                  "namespace": 0,
+                  "changefeed": 1,
+                  "Value": 2,
+                  "operation": 3,
+                  "result": 4,
+                  "username": 5,
+                  "details": 6,
+                  "error": 7
+                },
+                "renameByName": {
+                  "Value": "operation_time"
+                }
               }
             }
           ],
@@ -8249,7 +8436,7 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "Dropped resolve lock tasks when resolveLockTaskCh is full.",
+          "description": "Resolve lock execution and task drop rate.",
           "fieldConfig": {
             "defaults": {},
             "overrides": []
@@ -8292,18 +8479,34 @@
           "targets": [
             {
               "exemplar": true,
+              "expr": "sum(rate(ticdc_subscription_client_resolve_lock_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\", status=\"success\"}[1m])) by (instance)",
+              "hide": false,
+              "interval": "",
+              "legendFormat": "{{instance}}-success",
+              "refId": "A"
+            },
+            {
+              "exemplar": true,
+              "expr": "sum(rate(ticdc_subscription_client_resolve_lock_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\", status=\"failure\"}[1m])) by (instance)",
+              "hide": false,
+              "interval": "",
+              "legendFormat": "{{instance}}-failure",
+              "refId": "B"
+            },
+            {
+              "exemplar": true,
               "expr": "sum(rate(ticdc_subscription_client_resolve_lock_task_drop_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (instance)",
               "hide": false,
               "interval": "",
-              "legendFormat": "{{instance}}",
-              "refId": "A"
+              "legendFormat": "{{instance}}-drop",
+              "refId": "C"
             }
           ],
           "thresholds": [],
           "timeFrom": null,
           "timeRegions": [],
           "timeShift": null,
-          "title": "Dropped Resolve Lock Tasks / s",
+          "title": "Resolve Lock / s",
           "tooltip": {
             "shared": true,
             "sort": 0,
@@ -8332,6 +8535,212 @@
           ],
           "yaxis": {
             "align": false
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "The number of locks found and resolved by resolve lock.",
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          },
+          "fill": 1,
+          "fillGradient": 0,
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 41
+          },
+          "hiddenSeries": false,
+          "id": 22361,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "max": true,
+            "min": false,
+            "show": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "nullPointMode": "null",
+          "options": {
+            "alertThreshold": true
+          },
+          "percentage": false,
+          "pluginVersion": "7.5.17",
+          "pointradius": 2,
+          "points": false,
+          "renderer": "flot",
+          "seriesOverrides": [],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "exemplar": true,
+              "expr": "sum(rate(ticdc_subscription_client_resolve_lock_processed_lock_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\", status=\"found\"}[1m])) by (instance)",
+              "hide": false,
+              "interval": "",
+              "legendFormat": "{{instance}}-found",
+              "refId": "A"
+            },
+            {
+              "exemplar": true,
+              "expr": "sum(rate(ticdc_subscription_client_resolve_lock_processed_lock_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\", status=\"resolved\"}[1m])) by (instance)",
+              "hide": false,
+              "interval": "",
+              "legendFormat": "{{instance}}-resolved",
+              "refId": "B"
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "Resolve Lock Processed Locks / s",
+          "tooltip": {
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "format": "ops",
+              "logBase": 1,
+              "min": "0",
+              "show": true
+            },
+            {
+              "format": "short",
+              "logBase": 1,
+              "show": false
+            }
+          ],
+          "yaxis": {
+            "align": false
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "dashLength": 10,
+          "dashes": false,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "Successful scan lock and resolve lock operation duration.",
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          },
+          "fill": 1,
+          "fillGradient": 0,
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 49
+          },
+          "hiddenSeries": false,
+          "id": 22362,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "max": true,
+            "min": false,
+            "show": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "nullPointMode": "null",
+          "options": {
+            "alertThreshold": true
+          },
+          "percentage": false,
+          "pluginVersion": "7.5.17",
+          "pointradius": 2,
+          "points": false,
+          "renderer": "flot",
+          "seriesOverrides": [],
+          "spaceLength": 10,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "exemplar": true,
+              "expr": "histogram_quantile(0.99, sum(rate(ticdc_subscription_client_resolve_lock_operation_duration_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (le, instance, type))",
+              "format": "heatmap",
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 2,
+              "legendFormat": "{{instance}}-{{type}}-p99",
+              "refId": "A"
+            },
+            {
+              "exemplar": true,
+              "expr": "sum(rate(ticdc_subscription_client_resolve_lock_operation_duration_sum{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (instance,type)\n/\nsum(rate(ticdc_subscription_client_resolve_lock_operation_duration_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$ticdc_instance\"}[1m])) by (instance,type)",
+              "hide": false,
+              "interval": "",
+              "legendFormat": "{{instance}}-{{type}}-avg",
+              "refId": "B"
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeRegions": [],
+          "timeShift": null,
+          "title": "Resolve Lock Operation Duration",
+          "tooltip": {
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "type": "graph",
+          "xaxis": {
+            "buckets": null,
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "format": "s",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": "0",
+              "show": true
+            },
+            {
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": false
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": null
           }
         }
       ],
@@ -24647,7 +25056,7 @@
           "linewidth": 1,
           "links": [],
           "maxPerRow": 3,
-          "nullPointMode": "null",
+          "nullPointMode": "null as zero",
           "options": {
             "alertThreshold": true
           },

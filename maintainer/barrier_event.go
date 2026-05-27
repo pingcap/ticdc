@@ -742,8 +742,3 @@ func getAllNodes(nodeManager *watcher.NodeManager) []node.ID {
 	}
 	return nodes
 }
-
-// for test
-func (be *BarrierEvent) setLastResendTime(time time.Time) {
-	be.lastResendTime = time
-}

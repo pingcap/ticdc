@@ -68,12 +68,12 @@ func RegisterOpenAPIV1Routes(router *gin.Engine, api OpenAPIV1) {
 	changefeedGroup.GET("/:changefeed_id", coordinatorMiddleware, setV1Header, api.v2.GetChangeFeed)
 
 	// These two APIs need to be adjusted to be compatible with the API v1.
-	changefeedGroup.POST("", coordinatorMiddleware, authenticateMiddleware, setV1Header, api.createChangefeed)
-	changefeedGroup.PUT("/:changefeed_id", coordinatorMiddleware, authenticateMiddleware, setV1Header, api.updateChangefeed)
+	changefeedGroup.POST("", coordinatorMiddleware, middleware.ChangefeedOperationMiddleware("create"), authenticateMiddleware, setV1Header, api.createChangefeed)
+	changefeedGroup.PUT("/:changefeed_id", coordinatorMiddleware, middleware.ChangefeedOperationMiddleware("update"), authenticateMiddleware, setV1Header, api.updateChangefeed)
 
-	changefeedGroup.POST("/:changefeed_id/pause", coordinatorMiddleware, authenticateMiddleware, setV1Header, api.v2.PauseChangefeed)
-	changefeedGroup.POST("/:changefeed_id/resume", coordinatorMiddleware, authenticateMiddleware, setV1Header, api.v2.ResumeChangefeed)
-	changefeedGroup.DELETE("/:changefeed_id", coordinatorMiddleware, authenticateMiddleware, setV1Header, api.v2.DeleteChangefeed)
+	changefeedGroup.POST("/:changefeed_id/pause", coordinatorMiddleware, middleware.ChangefeedOperationMiddleware("pause"), authenticateMiddleware, setV1Header, api.v2.PauseChangefeed)
+	changefeedGroup.POST("/:changefeed_id/resume", coordinatorMiddleware, middleware.ChangefeedOperationMiddleware("resume"), authenticateMiddleware, setV1Header, api.v2.ResumeChangefeed)
+	changefeedGroup.DELETE("/:changefeed_id", coordinatorMiddleware, middleware.ChangefeedOperationMiddleware("delete"), authenticateMiddleware, setV1Header, api.v2.DeleteChangefeed)
 
 	// These two APIs are not useful in new arch cdc, we implement them for compatibility with old arch cdc only.
 	changefeedGroup.POST("/:changefeed_id/tables/rebalance_table", coordinatorMiddleware, authenticateMiddleware, setV1Header, api.rebalanceTables)

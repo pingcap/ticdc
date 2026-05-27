@@ -113,7 +113,7 @@ func (w *Writer) SendSyncPointEvent(event *commonEvent.SyncPointEvent) error {
 		builder.WriteString("' and changefeed = '")
 		builder.WriteString(w.ChangefeedID.String())
 		builder.WriteString("' and created_at < (NOW() - INTERVAL ")
-		builder.WriteString(fmt.Sprintf("%.2f", w.cfg.SyncPointRetention.Seconds()))
+		fmt.Fprintf(&builder, "%.2f", w.cfg.SyncPointRetention.Seconds())
 		builder.WriteString(" SECOND)")
 		query := builder.String()
 

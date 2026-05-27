@@ -186,7 +186,7 @@ func NewController(
 	// detect the capture changes
 	c.nodeManager.RegisterNodeChangeHandler(
 		nodeChangeHandlerID,
-		func(allNodes map[node.ID]*node.Info) {
+		func(_ map[node.ID]*node.Info) {
 			c.nodeChanged.Lock()
 			defer c.nodeChanged.Unlock()
 			c.nodeChanged.changed = true
@@ -368,9 +368,14 @@ func (c *Controller) RequestResolvedTsFromLogCoordinator(ctx context.Context, ch
 	changefeedID := c.changefeedDB.GetChangefeedIDByName(changefeedDisplayName)
 	ids := c.nodeManager.GetAliveNodeIDs()
 	for _, id := range ids {
-		c.messageCenter.SendEvent(messaging.NewSingleTargetMessage(id, messaging.LogCoordinatorTopic, &heartbeatpb.LogCoordinatorResolvedTsRequest{
+		if err := c.messageCenter.SendEvent(messaging.NewSingleTargetMessage(id, messaging.LogCoordinatorTopic, &heartbeatpb.LogCoordinatorResolvedTsRequest{
 			ChangefeedID: changefeedID.ToPB(),
-		}))
+		})); err != nil {
+			log.Warn("failed to request resolved ts from log coordinator",
+				zap.Stringer("target", id),
+				zap.String("changefeed", changefeedID.DisplayName.String()),
+				zap.Error(err))
+		}
 	}
 
 	// wait for some time to get the resolved ts
@@ -700,7 +705,7 @@ func (c *Controller) CreateChangefeed(ctx context.Context, info *config.ChangeFe
 			return errors.Trace(ctx.Err())
 		case <-ticker.C:
 			log.Warn("changefeed is in scheduling, wait a moment", zap.String("changefeed", info.ChangefeedID.DisplayName.String()))
-			count += 1
+			count++
 		}
 	}
 
@@ -737,15 +742,12 @@ func (c *Controller) RemoveChangefeed(ctx context.Context, id common.ChangeFeedI
 	count := 0
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
-	for {
-		if op.IsFinished() {
-			break
-		}
+	for !op.IsFinished() {
 		select {
 		case <-ctx.Done():
 			return 0, errors.Trace(ctx.Err())
 		case <-ticker.C:
-			count += 1
+			count++
 			log.Info("wait for stop changefeed operator finished", zap.Int("count", count), zap.Any("id", id))
 		}
 	}
@@ -778,15 +780,12 @@ func (c *Controller) PauseChangefeed(ctx context.Context, id common.ChangeFeedID
 	count := 0
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
-	for {
-		if op.IsFinished() {
-			break
-		}
+	for !op.IsFinished() {
 		select {
 		case <-ctx.Done():
 			return errors.Trace(ctx.Err())
 		case <-ticker.C:
-			count += 1
+			count++
 			log.Info("wait for stop changefeed operator finished", zap.Int("count", count), zap.Any("id", id))
 		}
 	}

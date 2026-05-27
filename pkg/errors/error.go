@@ -265,6 +265,14 @@ var (
 		"invalid table routing rule",
 		errors.RFCCodeText("CDC:ErrInvalidTableRoutingRule"),
 	)
+	ErrTableRoutingFailed = errors.Normalize(
+		"table routing failed",
+		errors.RFCCodeText("CDC:ErrTableRoutingFailed"),
+	)
+	ErrTableRouteConflict = errors.Normalize(
+		"table route conflict: target `%s`.`%s` is mapped by both source `%s`.`%s` and source `%s`.`%s`",
+		errors.RFCCodeText("CDC:ErrTableRouteConflict"),
+	)
 	ErrMessageTooLarge = errors.Normalize(
 		"message is too large. table:%s, length:%d, maxMessageBytes:%d",
 		errors.RFCCodeText("CDC:ErrMessageTooLarge"),

@@ -120,6 +120,10 @@ type DDLEvent struct {
 	// UnmarshalJSON compatibility so both `not_sync` and legacy `NotSync`
 	// are interoperable in mixed-version deployment.
 	NotSync bool `json:"not_sync"`
+
+	// IndexIDs store the add index ids in SQL order for add index and multi schema change DDLs.
+	// MySQL sink uses them to recover anonymous index names.
+	IndexIDs []int64 `json:"index_ids"`
 }
 
 type ddlEventJSONAlias DDLEvent
@@ -350,10 +354,6 @@ func (e *DDLEvent) GetUpdatedSchemas() []SchemaIDChange {
 }
 
 func (e *DDLEvent) GetDDLQuery() string {
-	if e == nil {
-		log.Error("DDLEvent is nil, should not happened in production env", zap.Any("event", e))
-		return ""
-	}
 	return e.Query
 }
 
@@ -440,7 +440,6 @@ func (t DDLEvent) encodeV1() ([]byte, error) {
 	multipleTableInfosDataSize := make([]byte, 8)
 	binary.BigEndian.PutUint64(multipleTableInfosDataSize, uint64(len(t.MultipleTableInfos)))
 	data = append(data, multipleTableInfosDataSize...)
-
 	return data, nil
 }
 
@@ -519,13 +518,6 @@ func (t *DDLEvent) decodeV1(data []byte) error {
 		return err
 	}
 
-	for _, info := range t.MultipleTableInfos {
-		info.InitPrivateFields()
-	}
-	if t.TableInfo != nil {
-		t.TableInfo.InitPrivateFields()
-	}
-
 	return nil
 }
 
@@ -585,10 +577,21 @@ func NewRoutedDDLEvent(
 		BDRMode:           d.BDRMode,
 		Err:               d.Err,
 		PostTxnFlushed:    clonePostTxnFlushed(d.PostTxnFlushed),
+		IndexIDs:          cloneIndexIDs(d.IndexIDs),
 		eventSize:         d.eventSize,
 		IsBootstrap:       d.IsBootstrap,
 		NotSync:           d.NotSync,
 	}
+}
+
+func cloneIndexIDs(indexIDs []int64) []int64 {
+	if indexIDs == nil {
+		return nil
+	}
+
+	cloned := make([]int64, len(indexIDs))
+	copy(cloned, indexIDs)
+	return cloned
 }
 
 func clonePostTxnFlushed(postTxnFlushed []func()) []func() {

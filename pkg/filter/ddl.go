@@ -20,12 +20,18 @@ import (
 
 // TODO: clean this file
 
-// ALTER TABLE t2 ADD FULLTEXT INDEX (b) WITH PARSER standard;
-// TODO: remove this after ADD FULLTEXT INDEX has a dedicated action type in tidb repo
+// ActionAddFullTextIndex represents a CDC-local action for:
+// ALTER TABLE t2 ADD FULLTEXT INDEX (b) WITH PARSER standard.
+// TODO: remove this after ADD FULLTEXT INDEX has a dedicated action type in tidb repo.
+// When this DDL is officially supported by TiDB parser, table routing support
+// must be added at the same time.
 const ActionAddFullTextIndex = timodel.ActionType(230)
 
-// CREATE HYBRID INDEX i_idx ON t(b, c, d, e, g) PARAMETER
-// TODO: remove this after CREATE HYBRID INDEX has a dedicated action type in tidb repo
+// ActionCreateHybridIndex represents a CDC-local action for:
+// CREATE HYBRID INDEX i_idx ON t(b, c, d, e, g) PARAMETER ...
+// TODO: remove this after CREATE HYBRID INDEX has a dedicated action type in tidb repo.
+// When this DDL is officially supported by TiDB parser, table routing support
+// must be added at the same time.
 const ActionCreateHybridIndex = timodel.ActionType(231)
 
 // ddlWhiteListMap is a map of all DDL types that can be applied to cdc's schema storage.

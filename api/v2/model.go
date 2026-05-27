@@ -24,7 +24,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/liveness"
-	"github.com/pingcap/ticdc/pkg/security"
 	"github.com/pingcap/ticdc/pkg/util"
 )
 
@@ -83,12 +82,6 @@ type VerifyTableConfig struct {
 	ReplicaConfig *ReplicaConfig `json:"replica_config"`
 	StartTs       uint64         `json:"start_ts"`
 	SinkURI       string         `json:"sink_uri"`
-}
-
-func getDefaultVerifyTableConfig() *VerifyTableConfig {
-	return &VerifyTableConfig{
-		ReplicaConfig: GetDefaultReplicaConfig(),
-	}
 }
 
 // ResumeChangefeedConfig is used by resume changefeed api
@@ -1348,18 +1341,6 @@ type SyncedStatus struct {
 	LastSyncedTs     api.JSONTime `json:"last_synced_ts"`
 	NowTs            api.JSONTime `json:"now_ts"`
 	Info             string       `json:"info"`
-}
-
-// toCredential generates a security.Credential from a PDConfig
-func (cfg *PDConfig) toCredential() *security.Credential {
-	credential := &security.Credential{
-		CAPath:   cfg.CAPath,
-		CertPath: cfg.CertPath,
-		KeyPath:  cfg.KeyPath,
-	}
-	credential.CertAllowedCN = make([]string, len(cfg.CertAllowedCN))
-	copy(credential.CertAllowedCN, cfg.CertAllowedCN)
-	return credential
 }
 
 // Marshal returns the json marshal format of a ChangeFeedInfo

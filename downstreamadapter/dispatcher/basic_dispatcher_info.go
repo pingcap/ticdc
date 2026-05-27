@@ -17,6 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/pingcap/ticdc/downstreamadapter/routing"
 	"github.com/pingcap/ticdc/downstreamadapter/syncpoint"
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -54,6 +55,9 @@ type SharedInfo struct {
 	// will break the splittability of this table.
 	enableSplittableCheck bool
 
+	// router is used to route source schema/table names to target schema/table names.
+	// It is used to apply routing to TableInfo before storing it.
+	router routing.Router
 	// Normal event dispatchers inherit these shared batch defaults.
 	eventCollectorBatchCount int
 	eventCollectorBatchBytes int
@@ -91,6 +95,7 @@ func NewSharedInfo(
 	syncPointConfig *syncpoint.SyncPointConfig,
 	txnAtomicity *config.AtomicityLevel,
 	enableSplittableCheck bool,
+	router routing.Router,
 	eventCollectorBatchCount int,
 	eventCollectorBatchBytes int,
 	statusesChan chan TableSpanStatusWithSeq,
@@ -107,6 +112,7 @@ func NewSharedInfo(
 		filterConfig:             filterConfig,
 		syncPointConfig:          syncPointConfig,
 		enableSplittableCheck:    enableSplittableCheck,
+		router:                   router,
 		eventCollectorBatchCount: eventCollectorBatchCount,
 		eventCollectorBatchBytes: eventCollectorBatchBytes,
 		statusesChan:             statusesChan,
@@ -186,6 +192,10 @@ func (d *BasicDispatcher) GetTimezone() string {
 
 func (d *BasicDispatcher) IsOutputRawChangeEvent() bool {
 	return d.sharedInfo.outputRawChangeEvent
+}
+
+func (d *BasicDispatcher) GetRouter() routing.Router {
+	return d.sharedInfo.GetRouter()
 }
 
 func (d *BasicDispatcher) GetFilterConfig() *eventpb.FilterConfig {
@@ -276,6 +286,12 @@ func (s *SharedInfo) GetErrCh() chan error {
 
 func (s *SharedInfo) GetBlockEventExecutor() *blockEventExecutor {
 	return s.blockExecutor
+}
+
+// GetRouter returns the router for schema/table name routing.
+// The zero value router is a no-op router.
+func (s *SharedInfo) GetRouter() routing.Router {
+	return s.router
 }
 
 func (s *SharedInfo) Close() {

@@ -14,14 +14,12 @@
 package cli
 
 import (
-	"bufio"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
 	v2 "github.com/pingcap/ticdc/api/v2"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/spf13/cobra"
 	"github.com/tikv/client-go/v2/oracle"
 )
@@ -31,15 +29,6 @@ const (
 	// 1 day in milliseconds
 	tsGapWarning = 86400 * 1000
 )
-
-func readInput() (string, error) {
-	reader := bufio.NewReader(os.Stdin)
-	msg, err := reader.ReadString('\n')
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(msg), nil
-}
 
 func readYOrN(cmd *cobra.Command) bool {
 	var yOrN string
@@ -66,7 +55,7 @@ func confirmLargeDataGap(cmd *cobra.Command, currentPhysical int64, startTs uint
 		confirmed := readYOrN(cmd)
 		if !confirmed {
 			cmd.Printf("Abort changefeed %s.\n", command)
-			return cerror.ErrCliAborted.FastGenByArgs(fmt.Sprintf("cli changefeed %s", command))
+			return errors.ErrCliAborted.FastGen("cli changefeed %s", command)
 		}
 	}
 
@@ -84,7 +73,7 @@ func confirmOverwriteCheckpointTs(
 	confirmed := readYOrN(cmd)
 	if !confirmed {
 		cmd.Printf("Abort changefeed resume.\n")
-		return cerror.ErrCliAborted.FastGenByArgs("cli changefeed resume")
+		return errors.ErrCliAborted.FastGenByArgs("cli changefeed resume")
 	}
 
 	return nil
@@ -99,7 +88,7 @@ func confirmIgnoreIneligibleTables(cmd *cobra.Command) (bool, error) {
 	confirmed := readYOrN(cmd)
 	if !confirmed {
 		cmd.Printf("No changefeed is created because you don't want to ignore some tables.\n")
-		return false, cerror.ErrCliAborted.FastGenByArgs("cli changefeed create")
+		return false, errors.ErrCliAborted.FastGenByArgs("cli changefeed create")
 	}
 
 	return true, nil
