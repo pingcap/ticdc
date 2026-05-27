@@ -335,10 +335,11 @@ func (c *Controller) onMessage(ctx context.Context, msg *messaging.TargetMessage
 	case messaging.TypeCoordinatorBootstrapResponse:
 		c.onMaintainerBootstrapResponse(ctx, msg)
 	case messaging.TypeMaintainerHeartbeatRequest:
-		if c.bootstrapper.AllNodesReady() {
-			req := msg.Message[0].(*heartbeatpb.MaintainerHeartbeat)
-			c.handleMaintainerStatus(msg.From, req.Statuses)
+		if !c.shouldHandleMaintainerHeartbeat(msg.From) {
+			return
 		}
+		req := msg.Message[0].(*heartbeatpb.MaintainerHeartbeat)
+		c.handleMaintainerStatus(msg.From, req.Statuses)
 	case messaging.TypeNodeHeartbeatRequest:
 		req := msg.Message[0].(*heartbeatpb.NodeHeartbeat)
 		c.drainController.ObserveHeartbeat(msg.From, req)
@@ -353,6 +354,24 @@ func (c *Controller) onMessage(ctx context.Context, msg *messaging.TargetMessage
 			zap.String("type", msg.Type.String()),
 			zap.Any("message", msg.Message))
 	}
+}
+
+// shouldHandleMaintainerHeartbeat returns whether runtime maintainer status from
+// the given node is safe to apply to coordinator in-memory state.
+//
+// Initial coordinator bootstrap still requires a complete cluster snapshot
+// before any maintainer heartbeat is accepted. After that point, later node
+// joins must not block already bootstrapped peers from reporting progress, but
+// a node that has not finished coordinator bootstrap yet must still be ignored
+// so partial late-join state cannot overwrite runtime truth.
+func (c *Controller) shouldHandleMaintainerHeartbeat(from node.ID) bool {
+	if c.initialized == nil || !c.initialized.Load() {
+		return false
+	}
+	if c.bootstrapper == nil {
+		return true
+	}
+	return c.bootstrapper.NodeInitialized(from)
 }
 
 func (c *Controller) onLogCoordinatorReportResolvedTs(msg *messaging.TargetMessage) {

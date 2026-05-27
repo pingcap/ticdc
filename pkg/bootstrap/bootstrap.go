@@ -160,6 +160,16 @@ func (b *Bootstrapper[T]) HasNode(id node.ID) bool {
 	return ok
 }
 
+// NodeInitialized returns whether the given node is still tracked and has
+// already reported a bootstrap response.
+func (b *Bootstrapper[T]) NodeInitialized(id node.ID) bool {
+	b.mutex.Lock()
+	defer b.mutex.Unlock()
+
+	status, ok := b.nodes[id]
+	return ok && status.Initialized()
+}
+
 func (b *Bootstrapper[T]) PrintBootstrapStatus() {
 	bootstrappedNodes := make([]node.ID, 0)
 	unbootstrappedNodes := make([]node.ID, 0)

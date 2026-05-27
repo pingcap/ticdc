@@ -119,6 +119,87 @@ func TestOnPeriodTaskAdvanceLiveness(t *testing.T) {
 	})
 }
 
+func TestMaintainerHeartbeatAdmissionRequiresInitializedSender(t *testing.T) {
+	mc := messaging.NewMockMessageCenter()
+	appcontext.SetService(appcontext.MessageCenter, mc)
+
+	nodeManager := watcher.NewNodeManager(nil, nil)
+	appcontext.SetService(watcher.NodeManagerName, nodeManager)
+
+	owner := node.ID("owner")
+	late := node.ID("late")
+	nodeManager.GetAliveNodes()[owner] = &node.Info{ID: owner}
+	nodeManager.GetAliveNodes()[late] = &node.Info{ID: late}
+
+	db := changefeed.NewChangefeedDB(1)
+	cfID := common.NewChangeFeedIDWithName("cf", common.DefaultKeyspaceName)
+	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		Config:       config.GetDefaultReplicaConfig(),
+		SinkURI:      "blackhole://",
+		State:        config.StateNormal,
+	}, 100, false)
+	db.AddReplicatingMaintainer(cf, late)
+
+	controller := &Controller{
+		initialized:  atomic.NewBool(true),
+		changefeedDB: db,
+		operatorController: operator.NewOperatorController(
+			&node.Info{ID: node.ID("coordinator")},
+			db,
+			nil,
+			10,
+		),
+		bootstrapper: bootstrap.NewBootstrapper[heartbeatpb.CoordinatorBootstrapResponse](
+			"test",
+			func(id node.ID, _ string) *messaging.TargetMessage {
+				return messaging.NewSingleTargetMessage(
+					id,
+					messaging.MaintainerManagerTopic,
+					&heartbeatpb.CoordinatorBootstrapRequest{},
+				)
+			},
+		),
+	}
+
+	controller.bootstrapper.HandleNodesChange(nodeManager.GetAliveNodes())
+	controller.bootstrapper.HandleBootstrapResponse(owner, &heartbeatpb.CoordinatorBootstrapResponse{})
+	require.False(t, controller.bootstrapper.AllNodesReady())
+
+	ignored := &heartbeatpb.MaintainerHeartbeat{
+		Statuses: []*heartbeatpb.MaintainerStatus{{
+			ChangefeedID:  cfID.ToPB(),
+			CheckpointTs:  200,
+			State:         heartbeatpb.ComponentState_Working,
+			BootstrapDone: true,
+		}},
+	}
+	controller.onMessage(context.Background(), &messaging.TargetMessage{
+		From:    late,
+		Topic:   messaging.CoordinatorTopic,
+		Type:    messaging.TypeMaintainerHeartbeatRequest,
+		Message: []messaging.IOTypeT{ignored},
+	})
+	require.Equal(t, uint64(100), cf.GetStatus().CheckpointTs)
+
+	controller.bootstrapper.HandleBootstrapResponse(late, &heartbeatpb.CoordinatorBootstrapResponse{})
+	accepted := &heartbeatpb.MaintainerHeartbeat{
+		Statuses: []*heartbeatpb.MaintainerStatus{{
+			ChangefeedID:  cfID.ToPB(),
+			CheckpointTs:  200,
+			State:         heartbeatpb.ComponentState_Working,
+			BootstrapDone: true,
+		}},
+	}
+	controller.onMessage(context.Background(), &messaging.TargetMessage{
+		From:    late,
+		Topic:   messaging.CoordinatorTopic,
+		Type:    messaging.TypeMaintainerHeartbeatRequest,
+		Message: []messaging.IOTypeT{accepted},
+	})
+	require.Equal(t, uint64(200), cf.GetStatus().CheckpointTs)
+}
+
 func TestResumeChangefeed(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	backend := mock_changefeed.NewMockBackend(ctrl)

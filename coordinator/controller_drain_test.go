@@ -301,6 +301,52 @@ func TestDrainNodeIgnoresLateUnknownPeerAfterSessionStart(t *testing.T) {
 	require.NotNil(t, c.drainSession)
 }
 
+func TestDrainNodeContinuesProcessingBootstrappedPeerHeartbeatDuringLateJoin(t *testing.T) {
+	c, _, target := newDrainTestController(t)
+	owner := node.ID("owner")
+	c.nodeManager.GetAliveNodes()[owner] = &node.Info{ID: owner}
+	bootstrapTrackedNodes(c, target, owner)
+	setDrainProtocolVersion(c, target, 1)
+	setDrainProtocolVersion(c, owner, 1)
+
+	cf := addRunningChangefeed(c, "cf1", owner, 100)
+
+	remaining, err := c.DrainNode(context.Background(), target)
+	require.NoError(t, err)
+	require.Equal(t, 1, remaining)
+
+	_, epoch, ok := c.getDispatcherDrainTarget()
+	require.True(t, ok)
+	require.Equal(t, 1, c.collectDrainPendingStatus(target, epoch))
+
+	late := node.ID("late")
+	c.nodeManager.GetAliveNodes()[late] = &node.Info{ID: late}
+	c.onNodeChanged(context.Background())
+	require.False(t, c.bootstrapper.AllNodesReady())
+
+	hb := &heartbeatpb.MaintainerHeartbeat{
+		Statuses: []*heartbeatpb.MaintainerStatus{{
+			ChangefeedID: cf.ID.ToPB(),
+			CheckpointTs: 100,
+			State:        heartbeatpb.ComponentState_Working,
+			DrainProgress: &heartbeatpb.DrainProgress{
+				TargetNodeId:          target.String(),
+				TargetEpoch:           epoch,
+				TargetDispatcherCount: 0,
+			},
+		}},
+	}
+	c.onMessage(context.Background(), &messaging.TargetMessage{
+		From:    owner,
+		Topic:   messaging.CoordinatorTopic,
+		Type:    messaging.TypeMaintainerHeartbeatRequest,
+		Message: []messaging.IOTypeT{hb},
+	})
+
+	require.Zero(t, c.collectDrainPendingStatus(target, epoch))
+	require.NotNil(t, cf.GetStatus().GetDrainProgress())
+}
+
 func TestLateCompatiblePeerJoinsTargetSyncAndClearAck(t *testing.T) {
 	c, drainController, target := newDrainTestController(t)
 	bootstrapTrackedNodes(c, target)
