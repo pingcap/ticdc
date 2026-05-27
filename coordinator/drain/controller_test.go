@@ -153,3 +153,32 @@ func TestDrainControllerSkipStoppingForNewEpochWithoutDraining(t *testing.T) {
 	default:
 	}
 }
+
+func TestDrainControllerSchedulerGateRequiresTargetAck(t *testing.T) {
+	mc := messaging.NewMockMessageCenter()
+	c := NewController(mc)
+
+	target := node.ID("target")
+	acked := node.ID("acked")
+	pending := node.ID("pending")
+	epoch := uint64(99)
+
+	c.StartDrainTargetSchedulerGate(target, epoch)
+	c.ObserveHeartbeat(acked, &heartbeatpb.NodeHeartbeat{
+		Liveness:                    heartbeatpb.NodeLiveness_ALIVE,
+		NodeEpoch:                   1,
+		DispatcherDrainTargetNodeId: target.String(),
+		DispatcherDrainTargetEpoch:  epoch,
+	})
+	c.ObserveHeartbeat(pending, &heartbeatpb.NodeHeartbeat{
+		Liveness:  heartbeatpb.NodeLiveness_ALIVE,
+		NodeEpoch: 1,
+	})
+
+	require.False(t, c.IsSchedulableDest(target))
+	require.True(t, c.IsSchedulableDest(acked))
+	require.False(t, c.IsSchedulableDest(pending))
+
+	c.ClearDrainTargetSchedulerGate(target, epoch)
+	require.True(t, c.IsSchedulableDest(pending))
+}

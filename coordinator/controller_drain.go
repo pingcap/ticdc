@@ -345,6 +345,7 @@ func (c *Controller) ensureDispatcherDrainTarget(target node.ID) (uint64, error)
 		pendingStatus:      pendingStatus,
 		dirty:              true,
 	}
+	c.drainController.StartDrainTargetSchedulerGate(target, c.dispatcherDrainEpoch)
 	log.Info("dispatcher drain target activated",
 		zap.Stringer("targetNodeID", target),
 		zap.Uint64("targetEpoch", c.dispatcherDrainEpoch))
@@ -389,6 +390,7 @@ func (c *Controller) clearDispatcherDrainTarget(target node.ID, epoch uint64) {
 	}
 	c.drainSessionMu.Unlock()
 
+	c.drainController.ClearDrainTargetSchedulerGate(target, epoch)
 	log.Info("dispatcher drain target cleared",
 		zap.Stringer("targetNodeID", target),
 		zap.Uint64("targetEpoch", epoch))

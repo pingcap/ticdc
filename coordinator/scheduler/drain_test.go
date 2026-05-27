@@ -217,3 +217,49 @@ func TestDrainSchedulerRotatesAcrossDrainingNodes(t *testing.T) {
 
 	require.NotNil(t, oc.GetOperator(cfB))
 }
+
+func TestDrainSchedulerRequiresTargetAckBeforeUsingDestination(t *testing.T) {
+	mc := messaging.NewMockMessageCenter()
+	appcontext.SetService(appcontext.MessageCenter, mc)
+
+	nodeManager := watcher.NewNodeManager(nil, nil)
+	appcontext.SetService(watcher.NodeManagerName, nodeManager)
+
+	origin := node.ID("origin")
+	destPending := node.ID("dest-pending")
+	destAcked := node.ID("dest-acked")
+	nodeManager.GetAliveNodes()[origin] = &node.Info{ID: origin}
+	nodeManager.GetAliveNodes()[destPending] = &node.Info{ID: destPending}
+	nodeManager.GetAliveNodes()[destAcked] = &node.Info{ID: destAcked}
+
+	drainController := drain.NewController(mc)
+	epoch := uint64(7)
+	drainController.StartDrainTargetSchedulerGate(origin, epoch)
+	drainController.ObserveHeartbeat(origin, &heartbeatpb.NodeHeartbeat{
+		Liveness:  heartbeatpb.NodeLiveness_DRAINING,
+		NodeEpoch: 1,
+	})
+	drainController.ObserveHeartbeat(destPending, &heartbeatpb.NodeHeartbeat{
+		Liveness:  heartbeatpb.NodeLiveness_ALIVE,
+		NodeEpoch: 1,
+	})
+	drainController.ObserveHeartbeat(destAcked, &heartbeatpb.NodeHeartbeat{
+		Liveness:                    heartbeatpb.NodeLiveness_ALIVE,
+		NodeEpoch:                   1,
+		DispatcherDrainTargetNodeId: origin.String(),
+		DispatcherDrainTargetEpoch:  epoch,
+	})
+
+	db := changefeed.NewChangefeedDB(1)
+	cfID := addReplicatingMaintainer(t, db, "cf-drain", origin)
+
+	selfNode := &node.Info{ID: node.ID("coordinator")}
+	oc := operator.NewOperatorController(selfNode, db, nil, 10)
+
+	s := NewDrainScheduler("test", 10, oc, db, drainController)
+	_ = s.Execute()
+
+	op := oc.GetOperator(cfID)
+	require.NotNil(t, op)
+	require.ElementsMatch(t, []node.ID{origin, destAcked}, op.AffectedNodes())
+}

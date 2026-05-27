@@ -65,6 +65,16 @@ type nodeState struct {
 	liveness    heartbeatpb.NodeLiveness
 }
 
+type drainTargetSchedulerGate struct {
+	// target/epoch identify the active dispatcher drain target that a node must
+	// acknowledge before it can receive newly placed maintainers.
+	target node.ID
+	epoch  uint64
+	// ackedNodes records nodes whose node heartbeat has already reported the
+	// active drain target snapshot. The target node itself is never schedulable.
+	ackedNodes map[node.ID]struct{}
+}
+
 // Controller manages node drain progression by sending SetNodeLiveness commands and tracking observations.
 //
 // It is in-memory only. Observations come from either:
@@ -77,6 +87,10 @@ type Controller struct {
 	ttl time.Duration
 
 	nodes map[node.ID]*nodeState
+
+	// targetSchedulerGate blocks maintainer placement onto nodes that have not
+	// yet reported the active dispatcher drain target in node heartbeat.
+	targetSchedulerGate *drainTargetSchedulerGate
 }
 
 // NewController creates a drain controller with in-memory state only.
@@ -95,6 +109,9 @@ func (c *Controller) RemoveNode(nodeID node.ID) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	delete(c.nodes, nodeID)
+	if c.targetSchedulerGate != nil {
+		delete(c.targetSchedulerGate.ackedNodes, nodeID)
+	}
 }
 
 // ensureNodeStateLocked returns existing node state or creates one.
@@ -139,7 +156,10 @@ func (c *Controller) ObserveHeartbeat(nodeID node.ID, hb *heartbeatpb.NodeHeartb
 		return
 	}
 
-	c.observeLiveness(nodeID, hb.NodeEpoch, hb.Liveness)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.observeLivenessLocked(nodeID, hb.NodeEpoch, hb.Liveness)
+	c.observeTargetSchedulerAckLocked(nodeID, hb)
 }
 
 // ObserveSetNodeLivenessResponse updates drain progression from explicit liveness responses.
@@ -155,6 +175,10 @@ func (c *Controller) ObserveSetNodeLivenessResponse(nodeID node.ID, resp *heartb
 func (c *Controller) observeLiveness(nodeID node.ID, nodeEpoch uint64, liveness heartbeatpb.NodeLiveness) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.observeLivenessLocked(nodeID, nodeEpoch, liveness)
+}
+
+func (c *Controller) observeLivenessLocked(nodeID node.ID, nodeEpoch uint64, liveness heartbeatpb.NodeLiveness) {
 	st := c.ensureNodeStateLocked(nodeID)
 
 	if st.observedSet {
@@ -176,6 +200,49 @@ func (c *Controller) observeLiveness(nodeID node.ID, nodeEpoch uint64, liveness 
 	st.liveness = liveness
 
 	applyObservedLiveness(st, liveness)
+}
+
+func (c *Controller) observeTargetSchedulerAckLocked(nodeID node.ID, hb *heartbeatpb.NodeHeartbeat) {
+	gate := c.targetSchedulerGate
+	if gate == nil || nodeID == gate.target {
+		return
+	}
+	if node.ID(hb.GetDispatcherDrainTargetNodeId()) != gate.target ||
+		hb.GetDispatcherDrainTargetEpoch() != gate.epoch {
+		return
+	}
+	gate.ackedNodes[nodeID] = struct{}{}
+}
+
+// StartDrainTargetSchedulerGate blocks new maintainer placement onto nodes
+// until their node heartbeat has reported the active dispatcher drain target.
+func (c *Controller) StartDrainTargetSchedulerGate(target node.ID, epoch uint64) {
+	if target.IsEmpty() || epoch == 0 {
+		return
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.targetSchedulerGate = &drainTargetSchedulerGate{
+		target:     target,
+		epoch:      epoch,
+		ackedNodes: make(map[node.ID]struct{}),
+	}
+}
+
+// ClearDrainTargetSchedulerGate removes the active drain-target placement gate
+// once the matching drain session has finished.
+func (c *Controller) ClearDrainTargetSchedulerGate(target node.ID, epoch uint64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.targetSchedulerGate == nil ||
+		c.targetSchedulerGate.target != target ||
+		c.targetSchedulerGate.epoch != epoch {
+		return
+	}
+	c.targetSchedulerGate = nil
 }
 
 // resetObservedStateForNewEpoch clears per-epoch observations when the node
@@ -229,20 +296,21 @@ func (c *Controller) GetDrainProtocolVersion(nodeID node.ID) (uint32, bool) {
 // GetState returns coordinator-derived liveness state.
 func (c *Controller) GetState(nodeID node.ID) State {
 	c.mu.Lock()
+	state := c.getStateLocked(nodeID, time.Now())
+	c.mu.Unlock()
+	return state
+}
+
+func (c *Controller) getStateLocked(nodeID node.ID, now time.Time) State {
 	st, ok := c.nodes[nodeID]
 	if !ok || !st.observedSet {
-		c.mu.Unlock()
 		// Never observed: keep compatibility during rollout.
 		return StateAlive
 	}
-	lastSeen := st.lastSeen
-	liveness := st.liveness
-	c.mu.Unlock()
-
-	if time.Since(lastSeen) > c.ttl {
+	if now.Sub(st.lastSeen) > c.ttl {
 		return StateUnknown
 	}
-	switch liveness {
+	switch st.liveness {
 	case heartbeatpb.NodeLiveness_ALIVE:
 		return StateAlive
 	case heartbeatpb.NodeLiveness_DRAINING:
@@ -268,7 +336,20 @@ func (c *Controller) GetNodeEpoch(nodeID node.ID) (uint64, bool) {
 
 // IsSchedulableDest returns true only when the node is eligible as a scheduling destination.
 func (c *Controller) IsSchedulableDest(nodeID node.ID) bool {
-	return c.GetState(nodeID) == StateAlive
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.getStateLocked(nodeID, time.Now()) != StateAlive {
+		return false
+	}
+	if c.targetSchedulerGate == nil {
+		return true
+	}
+	if nodeID == c.targetSchedulerGate.target {
+		return false
+	}
+	_, ok := c.targetSchedulerGate.ackedNodes[nodeID]
+	return ok
 }
 
 // GetDrainingOrStoppingNodes returns non-stale nodes observed as draining or stopping.
