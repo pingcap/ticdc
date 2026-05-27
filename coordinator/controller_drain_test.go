@@ -314,6 +314,34 @@ func TestClearDispatcherDrainTargetFreezesParticipantNodes(t *testing.T) {
 	require.True(t, ok)
 }
 
+func TestClearDispatcherDrainTargetSkipsRemovedPeerBeforeClear(t *testing.T) {
+	c, drainController, target := newDrainTestController(t)
+	setDrainProtocolVersion(c, target, 1)
+
+	other := node.ID("other")
+	c.nodeManager.GetAliveNodes()[other] = &node.Info{ID: other}
+	setDrainProtocolVersion(c, other, 1)
+
+	remaining, err := c.DrainNode(context.Background(), target)
+	require.NoError(t, err)
+	require.Equal(t, 1, remaining)
+
+	delete(c.nodeManager.GetAliveNodes(), other)
+	c.RemoveNode(other)
+
+	setTargetStoppingObserved(drainController, target)
+	remaining, err = c.DrainNode(context.Background(), target)
+	require.NoError(t, err)
+	require.Equal(t, 0, remaining)
+
+	require.Nil(t, c.drainSession)
+	require.NotNil(t, c.drainClearState)
+	_, ok := c.drainClearState.pendingNodes[other]
+	require.False(t, ok)
+	_, ok = c.drainClearState.pendingNodes[target]
+	require.True(t, ok)
+}
+
 func TestClearDispatcherDrainTargetTracksNodeHeartbeatAck(t *testing.T) {
 	c, _, target := newDrainTestController(t)
 	other := node.ID("other")

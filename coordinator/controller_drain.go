@@ -371,16 +371,21 @@ func (c *Controller) clearDispatcherDrainTarget(target node.ID, epoch uint64) {
 		c.drainSessionMu.Unlock()
 		return
 	}
+	aliveNodes := c.nodeManager.GetAliveNodes()
 	pendingNodes := make(map[node.ID]struct{}, len(c.drainSession.participants))
 	for id := range c.drainSession.participants {
+		if _, ok := aliveNodes[id]; !ok {
+			continue
+		}
 		pendingNodes[id] = struct{}{}
 	}
 	c.drainSession = nil
 	if len(pendingNodes) == 0 {
 		c.drainClearState = nil
 	} else {
-		// Freeze the nodes that must observe this clear. New nodes do not need
-		// to ack an old clear because they bootstrap from the current coordinator state.
+		// Freeze only the nodes that both participated in this drain session and
+		// are still alive when the clear is issued. New nodes do not need to ack
+		// an old clear, and removed nodes can no longer acknowledge it.
 		c.drainClearState = &drainClearState{
 			target:       target,
 			epoch:        epoch,
