@@ -16,6 +16,7 @@ package maintainer
 import (
 	"container/heap"
 	"slices"
+	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/routing"
@@ -79,66 +80,56 @@ func newRouteConflictDetector(
 	keyspaceMeta common.KeyspaceMeta,
 	replicaConfig *config.ReplicaConfig,
 	reportError func(error),
+	tables []commonEvent.Table,
 ) (*routeConflictDetector, error) {
 	if replicaConfig == nil || replicaConfig.Sink == nil {
 		return nil, nil
 	}
-	rules := replicaConfig.Sink.DispatchRules
-	if len(rules) == 0 {
+	if !replicaConfig.Sink.TableRouteEnabled() {
 		return nil, nil
 	}
 
-	hasRouteRules := false
-	for _, r := range rules {
-		if r.TargetSchema != "" || r.TargetTable != "" {
-			hasRouteRules = true
-			break
-		}
-	}
-	if !hasRouteRules {
-		return nil, nil
-	}
-
-	router, err := routing.NewRouter(changefeedID, util.GetOrZero(replicaConfig.CaseSensitive), rules)
+	router, err := routing.NewRouter(changefeedID, util.GetOrZero(replicaConfig.CaseSensitive), replicaConfig.Sink.DispatchRules)
 	if err != nil {
 		return nil, err
 	}
+
+	start := time.Now()
+	currentTables := make(map[int64]routeTableBinding, len(tables))
+	registry := routing.NewTargetTableRegistry(changefeedID, len(tables))
+	for _, t := range tables {
+		binding, err := router.Route(t.SchemaName, t.TableName)
+		if err != nil {
+			return nil, err
+		}
+
+		if err := registry.Add(binding); err != nil {
+			return nil, err
+		}
+
+		// binding, err := d.buildBindingForTable(t.TableID, t.SchemaID, startTs)
+		// if err != nil {
+		// 	return err
+		// }
+		// currentTables[t.TableID] = binding
+	}
+
+	// todo: this log may can be removed after test huge number of tables.
+	log.Info("route conflict detector initialized",
+		zap.String("changefeed", changefeedID.Name()),
+		zap.Int("tableCount", len(tables)),
+		zap.Duration("duration", time.Since(start)))
 
 	return &routeConflictDetector{
 		changefeedID:  changefeedID,
 		keyspaceMeta:  keyspaceMeta,
 		router:        router,
-		registry:      routing.NewTargetTableRegistry(changefeedID, 0),
+		registry:      registry,
+		tables:        currentTables,
 		schemaStore:   appcontext.GetService[schemastore.SchemaStore](appcontext.SchemaStore),
-		tables:        make(map[int64]routeTableBinding),
 		pendingEvents: make(map[eventKey]*routePendingEvent),
 		reportError:   reportError,
 	}, nil
-}
-
-func (d *routeConflictDetector) initializeFromTables(tables []commonEvent.Table, startTs uint64) error {
-	if d == nil {
-		return nil
-	}
-	registry := routing.NewTargetTableRegistry(d.changefeedID, len(tables))
-	currentTables := make(map[int64]routeTableBinding, len(tables))
-	for _, t := range tables {
-		binding, err := d.buildBindingForTable(t.TableID, t.SchemaID, startTs)
-		if err != nil {
-			return err
-		}
-		if err := registry.Add(binding.binding); err != nil {
-			return err
-		}
-		currentTables[t.TableID] = binding
-	}
-	d.registry = registry
-	d.tables = currentTables
-
-	log.Info("route registry initialized",
-		zap.String("changefeed", d.changefeedID.Name()),
-		zap.Int("bindingCount", len(currentTables)))
-	return nil
 }
 
 func (d *routeConflictDetector) precheck(info routeDDLInfo) (bool, error) {

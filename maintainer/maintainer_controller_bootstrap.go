@@ -104,14 +104,6 @@ func (c *Controller) FinishBootstrap(
 		return nil, errors.Trace(err)
 	}
 
-	// Step 2.5: Initialize route router and target registry
-	if err := c.initializeRouteRegistry(tables, startTs); err != nil {
-		log.Error("initialize route registry failed",
-			zap.String("changefeed", c.changefeedID.Name()),
-			zap.Error(err))
-		return nil, errors.Trace(err)
-	}
-
 	var (
 		redoTables         []commonEvent.Table
 		redoWorkingTaskMap map[int64]utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication]
@@ -146,7 +138,14 @@ func (c *Controller) FinishBootstrap(
 	// Step 5: Initialize and start sub components
 	c.initializeComponents(allNodesResp)
 
-	// Step 6: Mark the controller as bootstrapped
+	// Step 6: Initialize route router and target registry
+	detector, err := newRouteConflictDetector(c.changefeedID, c.keyspaceMeta, c.replicaConfig, c.reportError, tables)
+	if err != nil {
+		return nil, err
+	}
+	c.routeDetector = detector
+
+	// Step 7: Mark the controller as bootstrapped
 	c.bootstrapped = true
 
 	return &heartbeatpb.MaintainerPostBootstrapRequest{
@@ -255,7 +254,7 @@ func (c *Controller) processTableSpans(
 	tableSpans, isTableWorking := workingTaskMap[table.TableID]
 	spanController := c.getSpanController(mode)
 	replicaSets := spanController.GetTasksByTableID(table.TableID)
-	isTableSpanExists := replicaSets != nil && len(replicaSets) > 0
+	isTableSpanExists := len(replicaSets) > 0
 	splitEnabled := spanController.ShouldEnableSplit(table.Splitable)
 	// During bootstrap we have two sources of "table already exists" information:
 	//   - workingTaskMap: dispatchers reported by dispatcher managers (bootstrap snapshots resp.Spans).
@@ -461,24 +460,6 @@ func addToWorkingTaskMap(
 }
 
 // findHoles returns an array of Span that are not covered in the range
-// initializeRouteRegistry constructs the maintainer-owned route conflict detector
-// from the current set of tables. If no dispatch rules contain routing targets,
-// routeDetector stays nil.
-func (c *Controller) initializeRouteRegistry(tables []commonEvent.Table, startTs uint64) error {
-	detector, err := newRouteConflictDetector(c.changefeedID, c.keyspaceMeta, c.replicaConfig, c.reportError)
-	if err != nil {
-		return err
-	}
-	if detector == nil {
-		return nil
-	}
-	if err := detector.initializeFromTables(tables, startTs); err != nil {
-		return err
-	}
-	c.routeDetector = detector
-	return nil
-}
-
 func findHoles(currentSpan utils.Map[*heartbeatpb.TableSpan, *replica.SpanReplication], totalSpan *heartbeatpb.TableSpan) []*heartbeatpb.TableSpan {
 	lastSpan := &heartbeatpb.TableSpan{
 		TableID:    totalSpan.TableID,
