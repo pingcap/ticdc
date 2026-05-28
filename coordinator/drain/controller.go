@@ -277,6 +277,31 @@ func (c *Controller) ClearDrainTargetSchedulerGate(target node.ID, epoch uint64)
 	c.targetSchedulerGate = nil
 }
 
+// SwitchDrainTargetSchedulerGateToClear atomically replaces the matching
+// active drain-target gate with a clear gate. A stale clear from an old session
+// must not overwrite a newer active drain gate.
+func (c *Controller) SwitchDrainTargetSchedulerGateToClear(target node.ID, epoch uint64, pendingNodes map[node.ID]struct{}) {
+	if target.IsEmpty() || epoch == 0 {
+		return
+	}
+
+	clonedPendingNodes := cloneNodeSet(pendingNodes)
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.targetSchedulerGate == nil ||
+		c.targetSchedulerGate.target != target ||
+		c.targetSchedulerGate.epoch != epoch {
+		return
+	}
+	c.targetSchedulerGate = nil
+	if len(clonedPendingNodes) == 0 {
+		return
+	}
+	c.startDrainTargetClearGateLocked(target, epoch, clonedPendingNodes)
+}
+
 // StartDrainTargetClearGate blocks scheduling onto nodes that may still retain
 // the cleared drain target snapshot locally.
 func (c *Controller) StartDrainTargetClearGate(target node.ID, epoch uint64, pendingNodes map[node.ID]struct{}) {
@@ -284,16 +309,43 @@ func (c *Controller) StartDrainTargetClearGate(target node.ID, epoch uint64, pen
 		return
 	}
 
-	clonedPendingNodes := make(map[node.ID]struct{}, len(pendingNodes))
-	utils.CopySetToSet(pendingNodes, clonedPendingNodes)
+	clonedPendingNodes := cloneNodeSet(pendingNodes)
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	if c.targetSchedulerGate != nil {
+		return
+	}
+	c.startDrainTargetClearGateLocked(target, epoch, clonedPendingNodes)
+}
+
+// startDrainTargetClearGateLocked installs or extends a clear gate without
+// allowing older epochs to override a newer clear handshake.
+func (c *Controller) startDrainTargetClearGateLocked(target node.ID, epoch uint64, pendingNodes map[node.ID]struct{}) {
+	if c.clearSchedulerGate != nil {
+		if c.clearSchedulerGate.epoch > epoch {
+			return
+		}
+		if c.clearSchedulerGate.epoch == epoch {
+			if c.clearSchedulerGate.target != target {
+				return
+			}
+			utils.CopySetToSet(pendingNodes, c.clearSchedulerGate.pendingNodes)
+			return
+		}
+	}
 	c.clearSchedulerGate = &drainTargetClearGate{
 		target:       target,
 		epoch:        epoch,
-		pendingNodes: clonedPendingNodes,
+		pendingNodes: pendingNodes,
 	}
+}
+
+func cloneNodeSet(nodes map[node.ID]struct{}) map[node.ID]struct{} {
+	cloned := make(map[node.ID]struct{}, len(nodes))
+	utils.CopySetToSet(nodes, cloned)
+	return cloned
 }
 
 // RemoveDrainTargetClearPendingNode unblocks one destination after it either

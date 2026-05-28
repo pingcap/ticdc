@@ -304,3 +304,31 @@ func TestDrainControllerNewActiveGateSupersedesOldClearGate(t *testing.T) {
 	})
 	require.True(t, c.IsSchedulableDest(dest))
 }
+
+func TestDrainControllerStaleClearDoesNotOverrideNewActiveGate(t *testing.T) {
+	mc := messaging.NewMockMessageCenter()
+	c := NewController(mc)
+
+	dest := node.ID("dest")
+	oldTarget := node.ID("old-target")
+	newTarget := node.ID("new-target")
+
+	c.ObserveHeartbeat(dest, &heartbeatpb.NodeHeartbeat{
+		Liveness:  heartbeatpb.NodeLiveness_ALIVE,
+		NodeEpoch: 1,
+	})
+	c.StartDrainTargetSchedulerGate(oldTarget, 10)
+	c.StartDrainTargetSchedulerGate(newTarget, 11)
+
+	c.SwitchDrainTargetSchedulerGateToClear(oldTarget, 10, map[node.ID]struct{}{
+		dest: {},
+	})
+
+	c.ObserveHeartbeat(dest, &heartbeatpb.NodeHeartbeat{
+		Liveness:                    heartbeatpb.NodeLiveness_ALIVE,
+		NodeEpoch:                   1,
+		DispatcherDrainTargetNodeId: newTarget.String(),
+		DispatcherDrainTargetEpoch:  11,
+	})
+	require.True(t, c.IsSchedulableDest(dest))
+}

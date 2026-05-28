@@ -77,6 +77,35 @@ type drainCompletedState struct {
 	target node.ID
 }
 
+type drainTargetSnapshot struct {
+	target node.ID
+	epoch  uint64
+}
+
+func drainTargetSnapshotFromBootstrap(resp *heartbeatpb.CoordinatorBootstrapResponse) drainTargetSnapshot {
+	if resp == nil {
+		return drainTargetSnapshot{}
+	}
+	return drainTargetSnapshot{
+		target: node.ID(resp.GetDispatcherDrainTargetNodeId()),
+		epoch:  resp.GetDispatcherDrainTargetEpoch(),
+	}
+}
+
+func drainTargetSnapshotFromHeartbeat(hb *heartbeatpb.NodeHeartbeat) drainTargetSnapshot {
+	if hb == nil {
+		return drainTargetSnapshot{}
+	}
+	return drainTargetSnapshot{
+		target: node.ID(hb.GetDispatcherDrainTargetNodeId()),
+		epoch:  hb.GetDispatcherDrainTargetEpoch(),
+	}
+}
+
+func (s drainTargetSnapshot) hasTarget() bool {
+	return !s.target.IsEmpty() && s.epoch != 0
+}
+
 // DrainNode starts or continues a best-effort drain for one target node.
 // It first checks the drain capability learned from bootstrap for every alive
 // maintainer manager:
@@ -530,21 +559,14 @@ func (c *Controller) clearDispatcherDrainTarget(target node.ID, epoch uint64) {
 			dirty:        true,
 		}
 	}
+	c.drainController.SwitchDrainTargetSchedulerGateToClear(target, epoch, pendingNodes)
 	c.drainSessionMu.Unlock()
 
-	c.drainController.ClearDrainTargetSchedulerGate(target, epoch)
-	if startClearGate {
-		// The active gate can be removed once the drain session is closed, but
-		// nodes that have not cleared the old target yet must stay blocked from
-		// new placement until they ack the empty-target snapshot.
-		c.drainController.StartDrainTargetClearGate(target, epoch, pendingNodes)
-	} else {
-		c.drainController.ClearDrainTargetClearGate(target, epoch)
-	}
 	c.syncDrainSchedulingPolicy()
 	log.Info("dispatcher drain target cleared",
 		zap.Stringer("targetNodeID", target),
-		zap.Uint64("targetEpoch", epoch))
+		zap.Uint64("targetEpoch", epoch),
+		zap.Bool("clearAckRequired", startClearGate))
 	c.maybeBroadcastDispatcherDrainTarget(true)
 }
 
@@ -669,14 +691,170 @@ func (c *Controller) maybeAddDispatcherDrainSyncNode(nodeID node.ID, version uin
 	return true
 }
 
-func (c *Controller) observeDispatcherDrainTargetHeartbeat(from node.ID, hb *heartbeatpb.NodeHeartbeat) {
-	if hb == nil {
-		return
+func (c *Controller) recoverStaleDispatcherDrainTargetFromBootstrap(
+	responses map[node.ID]*heartbeatpb.CoordinatorBootstrapResponse,
+) bool {
+	var stale drainTargetSnapshot
+	for _, resp := range responses {
+		if resp == nil ||
+			!heartbeatpb.SupportsCoordinatorDrivenDrain(resp.GetDrainProtocolVersion()) {
+			continue
+		}
+		snapshot := drainTargetSnapshotFromBootstrap(resp)
+		if snapshot.hasTarget() && snapshot.epoch > stale.epoch {
+			stale = snapshot
+		}
 	}
+	c.drainSessionMu.Lock()
+	defer c.drainSessionMu.Unlock()
+	if c.drainClearState != nil &&
+		(!stale.hasTarget() || c.drainClearState.epoch > stale.epoch) {
+		return c.createOrReplaceDrainClearStateLocked(
+			c.drainClearState.target,
+			c.drainClearState.epoch,
+			c.snapshotDrainClearParticipants(),
+		)
+	}
+	if !stale.hasTarget() {
+		return false
+	}
+	return c.createOrReplaceDrainClearStateLocked(
+		stale.target,
+		stale.epoch,
+		c.snapshotDrainClearParticipants(),
+	)
+}
 
+func (c *Controller) observeDispatcherDrainTargetHeartbeat(from node.ID, hb *heartbeatpb.NodeHeartbeat) bool {
+	return c.observeStaleDispatcherDrainTargetSnapshot(from, drainTargetSnapshotFromHeartbeat(hb))
+}
+
+func (c *Controller) observeStaleDispatcherDrainTargetSnapshot(from node.ID, snapshot drainTargetSnapshot) bool {
 	c.drainSessionMu.Lock()
 	defer c.drainSessionMu.Unlock()
 
+	if c.drainSession != nil {
+		return false
+	}
+
+	clearState := c.drainClearState
+	if clearState == nil {
+		if !c.isDrainClearParticipant(from) {
+			return false
+		}
+		if !snapshot.hasTarget() {
+			return false
+		}
+		return c.createOrReplaceDrainClearStateLocked(
+			snapshot.target,
+			snapshot.epoch,
+			c.snapshotDrainClearParticipants(),
+		)
+	}
+
+	if _, ok := clearState.pendingNodes[from]; !ok && !c.isDrainClearParticipant(from) {
+		return false
+	}
+	return c.reconcileDrainClearStateSnapshotLocked(from, snapshot)
+}
+
+func (c *Controller) reconcileDrainClearStateSnapshotLocked(from node.ID, snapshot drainTargetSnapshot) bool {
+	clearState := c.drainClearState
+	if clearState == nil || c.drainSession != nil {
+		return false
+	}
+
+	if snapshot.epoch < clearState.epoch {
+		return false
+	}
+
+	if snapshot.epoch == clearState.epoch {
+		if snapshot.target.IsEmpty() {
+			c.ackDrainClearStateLocked(from)
+			return false
+		}
+		return c.addDrainClearPendingNodeLocked(from)
+	}
+
+	if snapshot.target.IsEmpty() {
+		c.ackDrainClearStateLocked(from)
+		return false
+	}
+
+	// A higher non-empty target cannot acknowledge the old clear. Treat it as a
+	// newer stale target unless a future active drain session owns that epoch.
+	return c.createOrReplaceDrainClearStateLocked(
+		snapshot.target,
+		snapshot.epoch,
+		c.snapshotDrainClearParticipants(),
+	)
+}
+
+func (c *Controller) createOrReplaceDrainClearStateLocked(
+	target node.ID,
+	epoch uint64,
+	pendingNodes map[node.ID]struct{},
+) bool {
+	if target.IsEmpty() || epoch == 0 || len(pendingNodes) == 0 || c.drainSession != nil {
+		return false
+	}
+
+	if c.drainClearState != nil {
+		if c.drainClearState.epoch > epoch {
+			return false
+		}
+		if c.drainClearState.epoch == epoch {
+			before := len(c.drainClearState.pendingNodes)
+			utils.CopySetToSet(pendingNodes, c.drainClearState.pendingNodes)
+			if len(c.drainClearState.pendingNodes) == before {
+				return false
+			}
+			c.drainClearState.dirty = true
+			c.drainController.StartDrainTargetClearGate(
+				c.drainClearState.target,
+				c.drainClearState.epoch,
+				pendingNodes,
+			)
+			return true
+		}
+	}
+
+	clonedPendingNodes := make(map[node.ID]struct{}, len(pendingNodes))
+	utils.CopySetToSet(pendingNodes, clonedPendingNodes)
+	c.drainClearState = &drainClearState{
+		target:       target,
+		epoch:        epoch,
+		pendingNodes: clonedPendingNodes,
+		dirty:        true,
+	}
+	c.drainController.StartDrainTargetClearGate(target, epoch, clonedPendingNodes)
+	log.Info("stale dispatcher drain target clear started",
+		zap.Stringer("targetNodeID", target),
+		zap.Uint64("targetEpoch", epoch),
+		zap.Int("pendingNodeCount", len(clonedPendingNodes)))
+	return true
+}
+
+func (c *Controller) addDrainClearPendingNodeLocked(from node.ID) bool {
+	clearState := c.drainClearState
+	if clearState == nil || !c.isDrainClearParticipant(from) {
+		return false
+	}
+	if _, ok := clearState.pendingNodes[from]; ok {
+		return false
+	}
+
+	clearState.pendingNodes[from] = struct{}{}
+	clearState.dirty = true
+	c.drainController.StartDrainTargetClearGate(
+		clearState.target,
+		clearState.epoch,
+		map[node.ID]struct{}{from: {}},
+	)
+	return true
+}
+
+func (c *Controller) ackDrainClearStateLocked(from node.ID) {
 	clearState := c.drainClearState
 	if clearState == nil {
 		return
@@ -685,20 +863,6 @@ func (c *Controller) observeDispatcherDrainTargetHeartbeat(from node.ID, hb *hea
 		return
 	}
 
-	hbEpoch := hb.GetDispatcherDrainTargetEpoch()
-	hbTarget := node.ID(hb.GetDispatcherDrainTargetNodeId())
-	if hbEpoch < clearState.epoch {
-		// Older heartbeat cannot confirm this node has observed the clear.
-		return
-	}
-	if hbEpoch == clearState.epoch && !hbTarget.IsEmpty() {
-		// Same epoch still carrying a target means the old target is still cached locally.
-		return
-	}
-
-	// Ack is accepted when the node reports either:
-	// 1) the same epoch with an empty target, or
-	// 2) any newer epoch, which necessarily supersedes the old clear.
 	delete(clearState.pendingNodes, from)
 	c.drainController.RemoveDrainTargetClearPendingNode(from, clearState.target, clearState.epoch)
 	if len(clearState.pendingNodes) != 0 {
@@ -710,6 +874,33 @@ func (c *Controller) observeDispatcherDrainTargetHeartbeat(from node.ID, hb *hea
 		zap.Uint64("targetEpoch", clearState.epoch))
 	c.drainController.ClearDrainTargetClearGate(clearState.target, clearState.epoch)
 	c.drainClearState = nil
+}
+
+func (c *Controller) snapshotDrainClearParticipants() map[node.ID]struct{} {
+	participants := make(map[node.ID]struct{})
+	if c.nodeManager == nil {
+		return participants
+	}
+	for id := range c.nodeManager.GetAliveNodes() {
+		if c.isDrainClearParticipant(id) {
+			participants[id] = struct{}{}
+		}
+	}
+	return participants
+}
+
+func (c *Controller) isDrainClearParticipant(id node.ID) bool {
+	if c.nodeManager == nil || c.nodeManager.GetNodeInfo(id) == nil {
+		return false
+	}
+	if c.bootstrapper == nil || !c.bootstrapper.NodeInitialized(id) {
+		return false
+	}
+	if c.drainController == nil {
+		return false
+	}
+	version, observed := c.drainController.GetDrainProtocolVersion(id)
+	return observed && heartbeatpb.SupportsCoordinatorDrivenDrain(version)
 }
 
 func (c *Controller) observeDispatcherDrainTargetClearNodeRemoved(id node.ID) {

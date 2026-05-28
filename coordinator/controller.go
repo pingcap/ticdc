@@ -343,7 +343,9 @@ func (c *Controller) onMessage(ctx context.Context, msg *messaging.TargetMessage
 	case messaging.TypeNodeHeartbeatRequest:
 		req := msg.Message[0].(*heartbeatpb.NodeHeartbeat)
 		c.drainController.ObserveHeartbeat(msg.From, req)
-		c.observeDispatcherDrainTargetHeartbeat(msg.From, req)
+		if c.observeDispatcherDrainTargetHeartbeat(msg.From, req) {
+			c.maybeBroadcastDispatcherDrainTarget(true)
+		}
 		c.syncDrainSchedulingPolicy()
 	case messaging.TypeSetNodeLivenessResponse:
 		req := msg.Message[0].(*heartbeatpb.SetNodeLivenessResponse)
@@ -458,9 +460,12 @@ func (c *Controller) onMaintainerBootstrapResponse(ctx context.Context, req *mes
 		zap.Stringer("node", req.From),
 		zap.Int("maintainerCount", len(response.Statuses)))
 	responses := c.bootstrapper.HandleBootstrapResponse(req.From, response)
-	if c.bootstrapper.HasNode(req.From) &&
-		c.maybeAddDispatcherDrainSyncNode(req.From, response.GetDrainProtocolVersion()) {
-		c.maybeBroadcastDispatcherDrainTarget(true)
+	if c.bootstrapper.HasNode(req.From) {
+		if c.maybeAddDispatcherDrainSyncNode(req.From, response.GetDrainProtocolVersion()) {
+			c.maybeBroadcastDispatcherDrainTarget(true)
+		} else if c.observeStaleDispatcherDrainTargetSnapshot(req.From, drainTargetSnapshotFromBootstrap(response)) {
+			c.maybeBroadcastDispatcherDrainTarget(true)
+		}
 	}
 	c.handleBootstrapResponses(ctx, responses)
 }
@@ -493,7 +498,11 @@ func (c *Controller) handleBootstrapResponses(ctx context.Context, responses map
 			}
 		}
 	}
+	recoveredStaleDrainTarget := c.recoverStaleDispatcherDrainTargetFromBootstrap(responses)
 	c.finishBootstrap(ctx, runningCfs)
+	if recoveredStaleDrainTarget {
+		c.maybeBroadcastDispatcherDrainTarget(true)
+	}
 	c.bootstrapper.ClearBootstrapResponses()
 }
 

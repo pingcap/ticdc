@@ -229,6 +229,12 @@ message CoordinatorBootstrapResponse {
     // hard-restart behavior. Non-zero versions opt into the coordinator-driven
     // drain protocol used by rolling restart orchestration.
     uint32 drain_protocol_version = 2;
+    // dispatcher_drain_target_* reports the manager-level drain target snapshot
+    // applied before this bootstrap response is sent. Coordinator uses it to
+    // clear stale targets inherited across coordinator failover before
+    // scheduling resumes.
+    string dispatcher_drain_target_node_id = 3;
+    uint64 dispatcher_drain_target_epoch = 4;
 }
 
 message AddMaintainerRequest {

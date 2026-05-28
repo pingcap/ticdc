@@ -828,6 +828,82 @@ func TestClearDispatcherDrainTargetBlocksPendingDestinationsUntilAck(t *testing.
 	require.Len(t, c.drainClearState.pendingNodes, 1)
 }
 
+func TestStaleDispatcherDrainTargetRecoveredFromBootstrap(t *testing.T) {
+	c, drainController, target := newDrainTestController(t)
+	other := node.ID("other")
+	c.nodeManager.GetAliveNodes()[other] = &node.Info{ID: other}
+	bootstrapTrackedNodes(c, target, other)
+
+	responses := map[node.ID]*heartbeatpb.CoordinatorBootstrapResponse{
+		target: {
+			DrainProtocolVersion:        heartbeatpb.CurrentDrainProtocolVersion,
+			DispatcherDrainTargetNodeId: target.String(),
+			DispatcherDrainTargetEpoch:  10,
+		},
+		other: {
+			DrainProtocolVersion: heartbeatpb.CurrentDrainProtocolVersion,
+		},
+	}
+	for id, resp := range responses {
+		c.drainController.ObserveBootstrapResponse(id, resp)
+	}
+	drainController.ObserveHeartbeat(other, &heartbeatpb.NodeHeartbeat{
+		Liveness:  heartbeatpb.NodeLiveness_ALIVE,
+		NodeEpoch: 1,
+	})
+
+	require.True(t, c.recoverStaleDispatcherDrainTargetFromBootstrap(responses))
+	require.Nil(t, c.drainSession)
+	require.NotNil(t, c.drainClearState)
+	require.Equal(t, target, c.drainClearState.target)
+	require.Equal(t, uint64(10), c.drainClearState.epoch)
+	require.Contains(t, c.drainClearState.pendingNodes, target)
+	require.Contains(t, c.drainClearState.pendingNodes, other)
+	require.False(t, drainController.IsSchedulableDest(other))
+}
+
+func TestStaleDispatcherDrainTargetRecoveredFromHeartbeat(t *testing.T) {
+	c, _, target := newDrainTestController(t)
+	other := node.ID("other")
+	c.nodeManager.GetAliveNodes()[other] = &node.Info{ID: other}
+	bootstrapTrackedNodes(c, target, other)
+	setDrainProtocolVersion(c, target, heartbeatpb.CurrentDrainProtocolVersion)
+	setDrainProtocolVersion(c, other, heartbeatpb.CurrentDrainProtocolVersion)
+
+	changed := c.observeDispatcherDrainTargetHeartbeat(target, &heartbeatpb.NodeHeartbeat{
+		DispatcherDrainTargetNodeId: target.String(),
+		DispatcherDrainTargetEpoch:  10,
+	})
+
+	require.True(t, changed)
+	require.Nil(t, c.drainSession)
+	require.NotNil(t, c.drainClearState)
+	require.Equal(t, target, c.drainClearState.target)
+	require.Equal(t, uint64(10), c.drainClearState.epoch)
+	require.Contains(t, c.drainClearState.pendingNodes, target)
+	require.Contains(t, c.drainClearState.pendingNodes, other)
+}
+
+func TestStaleDispatcherDrainTargetIgnoredDuringActiveSession(t *testing.T) {
+	c, _, target := newDrainTestController(t)
+	bootstrapTrackedNodes(c, target)
+	setDrainProtocolVersion(c, target, heartbeatpb.CurrentDrainProtocolVersion)
+
+	epoch, err := c.ensureDispatcherDrainTarget(context.Background(), target)
+	require.NoError(t, err)
+
+	changed := c.observeDispatcherDrainTargetHeartbeat(target, &heartbeatpb.NodeHeartbeat{
+		DispatcherDrainTargetNodeId: "stale-target",
+		DispatcherDrainTargetEpoch:  epoch - 1,
+	})
+
+	require.False(t, changed)
+	require.NotNil(t, c.drainSession)
+	require.Nil(t, c.drainClearState)
+	require.Equal(t, target, c.drainSession.target)
+	require.Equal(t, epoch, c.drainSession.epoch)
+}
+
 func TestNewDrainSessionSupersedesOldClearPendingGate(t *testing.T) {
 	c, drainController, target := newDrainTestController(t)
 	bootstrapTrackedNodes(c, target)
@@ -890,8 +966,38 @@ func TestClearDispatcherDrainTargetResendsUntilAck(t *testing.T) {
 	require.Equal(t, epoch, req.TargetEpoch)
 }
 
-func TestHigherEpochHeartbeatAcknowledgesPendingClear(t *testing.T) {
+func TestHigherEpochNonEmptyHeartbeatStartsNewStaleClear(t *testing.T) {
 	c, _, target := newDrainTestController(t)
+	other := node.ID("other")
+	c.nodeManager.GetAliveNodes()[other] = &node.Info{ID: other}
+	bootstrapTrackedNodes(c, target, other)
+	setDrainProtocolVersion(c, target, heartbeatpb.CurrentDrainProtocolVersion)
+	setDrainProtocolVersion(c, other, heartbeatpb.CurrentDrainProtocolVersion)
+
+	epoch, err := c.ensureDispatcherDrainTarget(context.Background(), target)
+	require.NoError(t, err)
+
+	c.clearDispatcherDrainTarget(target, epoch)
+	require.NotNil(t, c.drainClearState)
+
+	changed := c.observeDispatcherDrainTargetHeartbeat(target, &heartbeatpb.NodeHeartbeat{
+		DispatcherDrainTargetNodeId: other.String(),
+		DispatcherDrainTargetEpoch:  epoch + 1,
+	})
+
+	require.True(t, changed)
+	require.NotNil(t, c.drainClearState)
+	require.Equal(t, other, c.drainClearState.target)
+	require.Equal(t, epoch+1, c.drainClearState.epoch)
+	require.Contains(t, c.drainClearState.pendingNodes, target)
+	require.Contains(t, c.drainClearState.pendingNodes, other)
+}
+
+func TestHigherEpochEmptyHeartbeatAcknowledgesPendingClear(t *testing.T) {
+	c, _, target := newDrainTestController(t)
+	bootstrapTrackedNodes(c, target)
+	setDrainProtocolVersion(c, target, heartbeatpb.CurrentDrainProtocolVersion)
+
 	epoch, err := c.ensureDispatcherDrainTarget(context.Background(), target)
 	require.NoError(t, err)
 
@@ -899,8 +1005,7 @@ func TestHigherEpochHeartbeatAcknowledgesPendingClear(t *testing.T) {
 	require.NotNil(t, c.drainClearState)
 
 	c.observeDispatcherDrainTargetHeartbeat(target, &heartbeatpb.NodeHeartbeat{
-		DispatcherDrainTargetNodeId: "next-target",
-		DispatcherDrainTargetEpoch:  epoch + 1,
+		DispatcherDrainTargetEpoch: epoch + 1,
 	})
 	require.Nil(t, c.drainClearState)
 }
