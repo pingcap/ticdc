@@ -263,20 +263,6 @@ func (c *Controller) StartDrainTargetSchedulerGate(target node.ID, epoch uint64)
 	c.clearSchedulerGate = nil
 }
 
-// ClearDrainTargetSchedulerGate removes the active drain-target placement gate
-// once coordinator closes the matching drain session.
-func (c *Controller) ClearDrainTargetSchedulerGate(target node.ID, epoch uint64) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if c.targetSchedulerGate == nil ||
-		c.targetSchedulerGate.target != target ||
-		c.targetSchedulerGate.epoch != epoch {
-		return
-	}
-	c.targetSchedulerGate = nil
-}
-
 // SwitchDrainTargetSchedulerGateToClear atomically replaces the matching
 // active drain-target gate with a clear gate. A stale clear from an old session
 // must not overwrite a newer active drain gate.

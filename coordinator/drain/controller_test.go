@@ -179,7 +179,7 @@ func TestDrainControllerSchedulerGateRequiresTargetAck(t *testing.T) {
 	require.True(t, c.IsSchedulableDest(acked))
 	require.False(t, c.IsSchedulableDest(pending))
 
-	c.ClearDrainTargetSchedulerGate(target, epoch)
+	c.SwitchDrainTargetSchedulerGateToClear(target, epoch, nil)
 	require.True(t, c.IsSchedulableDest(pending))
 }
 
