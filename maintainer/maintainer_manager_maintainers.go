@@ -31,8 +31,6 @@ import (
 	"go.uber.org/zap"
 )
 
-const currentDrainProtocolVersion uint32 = 1
-
 // managerMaintainerSet owns the changefeed-scoped part of a maintainer manager.
 // It tracks the local changefeedID -> maintainer registry, creates and removes
 // maintainers, routes maintainer-bound messages, and aggregates maintainer
@@ -161,7 +159,7 @@ func (p *managerMaintainerSet) closeAll() {
 // buildBootstrapResponse snapshots all local maintainer states for coordinator bootstrap.
 func (p *managerMaintainerSet) buildBootstrapResponse() *heartbeatpb.CoordinatorBootstrapResponse {
 	response := &heartbeatpb.CoordinatorBootstrapResponse{
-		DrainProtocolVersion: currentDrainProtocolVersion,
+		DrainProtocolVersion: heartbeatpb.CurrentDrainProtocolVersion,
 	}
 	p.registry.Range(func(_, value interface{}) bool {
 		maintainer := value.(*Maintainer)

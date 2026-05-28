@@ -230,7 +230,7 @@ func (m *mockMaintainerManager) onCoordinatorBootstrapRequest(msg *messaging.Tar
 	response := m.bootstrapResponse
 	if response == nil {
 		response = &heartbeatpb.CoordinatorBootstrapResponse{
-			DrainProtocolVersion: 1,
+			DrainProtocolVersion: heartbeatpb.CurrentDrainProtocolVersion,
 		}
 	}
 	err := m.mc.SendCommand(messaging.NewSingleTargetMessage(

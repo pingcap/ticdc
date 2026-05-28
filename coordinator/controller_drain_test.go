@@ -124,7 +124,7 @@ func TestDrainNodeReturnsNonZeroBeforeCoordinatorBootstrap(t *testing.T) {
 
 func TestDrainNodeReturnsNonZeroBeforeStoppingObserved(t *testing.T) {
 	c, _, target := newDrainTestController(t)
-	setDrainProtocolVersion(c, target, 1)
+	setDrainProtocolVersion(c, target, heartbeatpb.CurrentDrainProtocolVersion)
 
 	remaining, err := c.DrainNode(context.Background(), target)
 	require.NoError(t, err)
@@ -133,7 +133,7 @@ func TestDrainNodeReturnsNonZeroBeforeStoppingObserved(t *testing.T) {
 
 func TestDrainNodeCompletesAfterCompletionObserved(t *testing.T) {
 	c, drainController, target := newDrainTestController(t)
-	setDrainProtocolVersion(c, target, 1)
+	setDrainProtocolVersion(c, target, heartbeatpb.CurrentDrainProtocolVersion)
 	cf := addRunningChangefeed(c, "cf1", node.ID("other"), 100)
 
 	remaining, err := c.DrainNode(context.Background(), target)
@@ -156,7 +156,7 @@ func TestDrainNodeCompletesAfterCompletionObserved(t *testing.T) {
 
 func TestDrainNodeDispatcherCountBlocksCompletion(t *testing.T) {
 	c, drainController, target := newDrainTestController(t)
-	setDrainProtocolVersion(c, target, 1)
+	setDrainProtocolVersion(c, target, heartbeatpb.CurrentDrainProtocolVersion)
 	cf := addRunningChangefeed(c, "cf1", node.ID("other"), 100)
 
 	remaining, err := c.DrainNode(context.Background(), target)
@@ -180,7 +180,7 @@ func TestDrainNodeDispatcherCountBlocksCompletion(t *testing.T) {
 
 func TestDrainNodePendingStatusConvergenceBlocksCompletion(t *testing.T) {
 	c, drainController, target := newDrainTestController(t)
-	setDrainProtocolVersion(c, target, 1)
+	setDrainProtocolVersion(c, target, heartbeatpb.CurrentDrainProtocolVersion)
 	cf := addRunningChangefeed(c, "cf1", node.ID("other"), 100)
 
 	remaining, err := c.DrainNode(context.Background(), target)
@@ -204,7 +204,7 @@ func TestDrainNodePendingStatusConvergenceBlocksCompletion(t *testing.T) {
 
 func TestDrainNodeInflightDrainMovesBlockCompletion(t *testing.T) {
 	c, drainController, target := newDrainTestController(t)
-	setDrainProtocolVersion(c, target, 1)
+	setDrainProtocolVersion(c, target, heartbeatpb.CurrentDrainProtocolVersion)
 	cf := addRunningChangefeed(c, "cf1", node.ID("other"), 100)
 
 	remaining, err := c.DrainNode(context.Background(), target)
@@ -228,10 +228,10 @@ func TestDrainNodeInflightDrainMovesBlockCompletion(t *testing.T) {
 
 func TestDrainNodeRejectConcurrentDifferentDrainTarget(t *testing.T) {
 	c, _, target := newDrainTestController(t)
-	setDrainProtocolVersion(c, target, 1)
+	setDrainProtocolVersion(c, target, heartbeatpb.CurrentDrainProtocolVersion)
 	other := node.ID("other")
 	c.nodeManager.GetAliveNodes()[other] = &node.Info{ID: other}
-	setDrainProtocolVersion(c, other, 1)
+	setDrainProtocolVersion(c, other, heartbeatpb.CurrentDrainProtocolVersion)
 
 	remaining, err := c.DrainNode(context.Background(), target)
 	require.NoError(t, err)
@@ -246,7 +246,7 @@ func TestDrainNodeUsesPDTimestampAsDrainEpoch(t *testing.T) {
 	c, _, target := newDrainTestController(t)
 	pdClient := &drainTestPDClient{physical: 123, logical: 44}
 	c.pdClient = pdClient
-	setDrainProtocolVersion(c, target, 1)
+	setDrainProtocolVersion(c, target, heartbeatpb.CurrentDrainProtocolVersion)
 
 	remaining, err := c.DrainNode(context.Background(), target)
 	require.NoError(t, err)
@@ -267,7 +267,7 @@ func TestDrainNodeUsesPDTimestampAsDrainEpoch(t *testing.T) {
 func TestDrainNodeReturnsErrorWhenPDAllocEpochFails(t *testing.T) {
 	c, _, target := newDrainTestController(t)
 	c.pdClient.(*drainTestPDClient).err = context.Canceled
-	setDrainProtocolVersion(c, target, 1)
+	setDrainProtocolVersion(c, target, heartbeatpb.CurrentDrainProtocolVersion)
 
 	remaining, err := c.DrainNode(context.Background(), target)
 	require.Error(t, err)
@@ -285,7 +285,7 @@ func TestDrainNodeDoesNotCreateSessionWhenTargetLeavesDuringEpochAlloc(t *testin
 		called:   make(chan struct{}),
 		unblock:  make(chan struct{}),
 	}
-	setDrainProtocolVersion(c, target, 1)
+	setDrainProtocolVersion(c, target, heartbeatpb.CurrentDrainProtocolVersion)
 
 	type drainResult struct {
 		remaining int
@@ -312,12 +312,12 @@ func TestDrainNodeDoesNotCreateSessionWhenTargetLeavesDuringEpochAlloc(t *testin
 
 func TestDrainNodeCompletionKeepsBlockingDifferentTargetUntilRemoval(t *testing.T) {
 	c, drainController, target := newDrainTestController(t)
-	setDrainProtocolVersion(c, target, 1)
+	setDrainProtocolVersion(c, target, heartbeatpb.CurrentDrainProtocolVersion)
 	cf := addRunningChangefeed(c, "cf1", node.ID("other"), 100)
 
 	other := node.ID("other-target")
 	c.nodeManager.GetAliveNodes()[other] = &node.Info{ID: other}
-	setDrainProtocolVersion(c, other, 1)
+	setDrainProtocolVersion(c, other, heartbeatpb.CurrentDrainProtocolVersion)
 
 	remaining, err := c.DrainNode(context.Background(), target)
 	require.NoError(t, err)
@@ -339,7 +339,7 @@ func TestDrainNodeCompletionKeepsBlockingDifferentTargetUntilRemoval(t *testing.
 
 func TestDrainNodeReturnsZeroAfterCompletedTargetIsRemoved(t *testing.T) {
 	c, drainController, target := newDrainTestController(t)
-	setDrainProtocolVersion(c, target, 1)
+	setDrainProtocolVersion(c, target, heartbeatpb.CurrentDrainProtocolVersion)
 
 	remaining, err := c.DrainNode(context.Background(), target)
 	require.NoError(t, err)
@@ -360,7 +360,7 @@ func TestDrainNodeReturnsZeroAfterCompletedTargetIsRemoved(t *testing.T) {
 
 func TestDrainNodeReturnsZeroWhenCompletedTargetLeavesBeforeRemoveNode(t *testing.T) {
 	c, drainController, target := newDrainTestController(t)
-	setDrainProtocolVersion(c, target, 1)
+	setDrainProtocolVersion(c, target, heartbeatpb.CurrentDrainProtocolVersion)
 
 	remaining, err := c.DrainNode(context.Background(), target)
 	require.NoError(t, err)
@@ -384,7 +384,7 @@ func TestDrainNodeReturnsZeroWhenCompletedTargetLeavesBeforeRemoveNode(t *testin
 
 func TestDrainNodeKeepsNonZeroWhenIncompleteTargetLeavesBeforeRemoveNode(t *testing.T) {
 	c, _, target := newDrainTestController(t)
-	setDrainProtocolVersion(c, target, 1)
+	setDrainProtocolVersion(c, target, heartbeatpb.CurrentDrainProtocolVersion)
 
 	remaining, err := c.DrainNode(context.Background(), target)
 	require.NoError(t, err)
@@ -403,7 +403,7 @@ func TestDrainNodeKeepsNonZeroWhenIncompleteTargetLeavesBeforeRemoveNode(t *test
 
 func TestDrainNodeReturnsCaptureNotExistWhenIncompleteTargetIsRemoved(t *testing.T) {
 	c, _, target := newDrainTestController(t)
-	setDrainProtocolVersion(c, target, 1)
+	setDrainProtocolVersion(c, target, heartbeatpb.CurrentDrainProtocolVersion)
 
 	remaining, err := c.DrainNode(context.Background(), target)
 	require.NoError(t, err)
@@ -421,7 +421,7 @@ func TestDrainNodeReturnsCaptureNotExistWhenIncompleteTargetIsRemoved(t *testing
 func TestDrainCompletedTombstoneIsClearedWhenTargetRejoins(t *testing.T) {
 	c, drainController, target := newDrainTestController(t)
 	bootstrapTrackedNodes(c, target)
-	setDrainProtocolVersion(c, target, 1)
+	setDrainProtocolVersion(c, target, heartbeatpb.CurrentDrainProtocolVersion)
 
 	remaining, err := c.DrainNode(context.Background(), target)
 	require.NoError(t, err)
@@ -450,7 +450,7 @@ func TestDrainCompletedTombstoneIsClearedWhenTargetRejoins(t *testing.T) {
 
 func TestRemoveNodeClearsActiveDrainTarget(t *testing.T) {
 	c, _, target := newDrainTestController(t)
-	setDrainProtocolVersion(c, target, 1)
+	setDrainProtocolVersion(c, target, heartbeatpb.CurrentDrainProtocolVersion)
 	remaining, err := c.DrainNode(context.Background(), target)
 	require.NoError(t, err)
 	require.Equal(t, 1, remaining)
@@ -465,7 +465,7 @@ func TestRemoveNodeClearsActiveDrainTarget(t *testing.T) {
 
 func TestDrainNodeLegacyTargetFallsBackToHardRestart(t *testing.T) {
 	c, _, target := newDrainTestController(t)
-	setDrainProtocolVersion(c, target, 0)
+	setDrainProtocolVersion(c, target, heartbeatpb.LegacyDrainProtocolVersion)
 
 	remaining, err := c.DrainNode(context.Background(), target)
 	require.NoError(t, err)
@@ -493,7 +493,7 @@ func TestDrainNodeWaitsForTargetCapabilityObservation(t *testing.T) {
 
 func TestDrainNodeWaitsForPeerCapabilityObservation(t *testing.T) {
 	c, _, target := newDrainTestController(t)
-	setDrainProtocolVersion(c, target, 1)
+	setDrainProtocolVersion(c, target, heartbeatpb.CurrentDrainProtocolVersion)
 	other := node.ID("other")
 	c.nodeManager.GetAliveNodes()[other] = &node.Info{ID: other}
 
@@ -509,10 +509,10 @@ func TestDrainNodeWaitsForPeerCapabilityObservation(t *testing.T) {
 
 func TestDrainNodeFallsBackWhenAlivePeerIsLegacy(t *testing.T) {
 	c, _, target := newDrainTestController(t)
-	setDrainProtocolVersion(c, target, 1)
+	setDrainProtocolVersion(c, target, heartbeatpb.CurrentDrainProtocolVersion)
 	other := node.ID("other")
 	c.nodeManager.GetAliveNodes()[other] = &node.Info{ID: other}
-	setDrainProtocolVersion(c, other, 0)
+	setDrainProtocolVersion(c, other, heartbeatpb.LegacyDrainProtocolVersion)
 	addRunningChangefeed(c, "cf1", other, 100)
 
 	remaining, err := c.DrainNode(context.Background(), target)
@@ -530,7 +530,7 @@ func TestDrainNodeFallsBackWhenAlivePeerIsLegacy(t *testing.T) {
 func TestDrainNodeIgnoresLateUnknownPeerAfterSessionStart(t *testing.T) {
 	c, _, target := newDrainTestController(t)
 	bootstrapTrackedNodes(c, target)
-	setDrainProtocolVersion(c, target, 1)
+	setDrainProtocolVersion(c, target, heartbeatpb.CurrentDrainProtocolVersion)
 
 	remaining, err := c.DrainNode(context.Background(), target)
 	require.NoError(t, err)
@@ -554,8 +554,8 @@ func TestDrainNodeContinuesProcessingBootstrappedPeerHeartbeatDuringLateJoin(t *
 	owner := node.ID("owner")
 	c.nodeManager.GetAliveNodes()[owner] = &node.Info{ID: owner}
 	bootstrapTrackedNodes(c, target, owner)
-	setDrainProtocolVersion(c, target, 1)
-	setDrainProtocolVersion(c, owner, 1)
+	setDrainProtocolVersion(c, target, heartbeatpb.CurrentDrainProtocolVersion)
+	setDrainProtocolVersion(c, owner, heartbeatpb.CurrentDrainProtocolVersion)
 
 	cf := addRunningChangefeed(c, "cf1", owner, 100)
 
@@ -598,7 +598,7 @@ func TestDrainNodeContinuesProcessingBootstrappedPeerHeartbeatDuringLateJoin(t *
 func TestLateCompatiblePeerJoinsTargetSyncAndClearAck(t *testing.T) {
 	c, drainController, target := newDrainTestController(t)
 	bootstrapTrackedNodes(c, target)
-	setDrainProtocolVersion(c, target, 1)
+	setDrainProtocolVersion(c, target, heartbeatpb.CurrentDrainProtocolVersion)
 
 	remaining, err := c.DrainNode(context.Background(), target)
 	require.NoError(t, err)
@@ -626,7 +626,7 @@ func TestLateCompatiblePeerJoinsTargetSyncAndClearAck(t *testing.T) {
 		From:    other,
 		Topic:   messaging.CoordinatorTopic,
 		Type:    messaging.TypeCoordinatorBootstrapResponse,
-		Message: []messaging.IOTypeT{&heartbeatpb.CoordinatorBootstrapResponse{DrainProtocolVersion: 1}},
+		Message: []messaging.IOTypeT{&heartbeatpb.CoordinatorBootstrapResponse{DrainProtocolVersion: heartbeatpb.CurrentDrainProtocolVersion}},
 	})
 
 	require.NotNil(t, c.drainSession)
@@ -678,7 +678,7 @@ func TestLateCompatiblePeerJoinsTargetSyncAndClearAck(t *testing.T) {
 func TestLateLegacyPeerDoesNotEnterTargetSyncOrClearAck(t *testing.T) {
 	c, drainController, target := newDrainTestController(t)
 	bootstrapTrackedNodes(c, target)
-	setDrainProtocolVersion(c, target, 1)
+	setDrainProtocolVersion(c, target, heartbeatpb.CurrentDrainProtocolVersion)
 
 	remaining, err := c.DrainNode(context.Background(), target)
 	require.NoError(t, err)
@@ -706,7 +706,7 @@ func TestLateLegacyPeerDoesNotEnterTargetSyncOrClearAck(t *testing.T) {
 		From:    other,
 		Topic:   messaging.CoordinatorTopic,
 		Type:    messaging.TypeCoordinatorBootstrapResponse,
-		Message: []messaging.IOTypeT{&heartbeatpb.CoordinatorBootstrapResponse{DrainProtocolVersion: 0}},
+		Message: []messaging.IOTypeT{&heartbeatpb.CoordinatorBootstrapResponse{DrainProtocolVersion: heartbeatpb.LegacyDrainProtocolVersion}},
 	})
 
 	require.NotNil(t, c.drainSession)
@@ -735,12 +735,12 @@ func TestLateLegacyPeerDoesNotEnterTargetSyncOrClearAck(t *testing.T) {
 func TestClearDispatcherDrainTargetSkipsRemovedPeerBeforeClear(t *testing.T) {
 	c, drainController, target := newDrainTestController(t)
 	bootstrapTrackedNodes(c, target)
-	setDrainProtocolVersion(c, target, 1)
+	setDrainProtocolVersion(c, target, heartbeatpb.CurrentDrainProtocolVersion)
 
 	other := node.ID("other")
 	c.nodeManager.GetAliveNodes()[other] = &node.Info{ID: other}
 	bootstrapTrackedNodes(c, other)
-	setDrainProtocolVersion(c, other, 1)
+	setDrainProtocolVersion(c, other, heartbeatpb.CurrentDrainProtocolVersion)
 
 	remaining, err := c.DrainNode(context.Background(), target)
 	require.NoError(t, err)
@@ -841,9 +841,9 @@ func TestNewDrainSessionSupersedesOldClearPendingGate(t *testing.T) {
 		Liveness:  heartbeatpb.NodeLiveness_ALIVE,
 		NodeEpoch: 1,
 	})
-	setDrainProtocolVersion(c, target, 1)
-	setDrainProtocolVersion(c, other, 1)
-	setDrainProtocolVersion(c, nextTarget, 1)
+	setDrainProtocolVersion(c, target, heartbeatpb.CurrentDrainProtocolVersion)
+	setDrainProtocolVersion(c, other, heartbeatpb.CurrentDrainProtocolVersion)
+	setDrainProtocolVersion(c, nextTarget, heartbeatpb.CurrentDrainProtocolVersion)
 
 	epoch, err := c.ensureDispatcherDrainTarget(context.Background(), target)
 	require.NoError(t, err)

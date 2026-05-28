@@ -219,11 +219,9 @@ func TestDrainSchedulerRotatesAcrossDrainingNodes(t *testing.T) {
 }
 
 func TestDrainSchedulerRequiresTargetAckBeforeUsingDestination(t *testing.T) {
-	mc := messaging.NewMockMessageCenter()
-	appcontext.SetService(appcontext.MessageCenter, mc)
-
-	nodeManager := watcher.NewNodeManager(nil, nil)
-	appcontext.SetService(watcher.NodeManagerName, nodeManager)
+	setupCoordinatorSchedulerTestServices()
+	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 
 	origin := node.ID("origin")
 	destPending := node.ID("dest-pending")
@@ -265,11 +263,9 @@ func TestDrainSchedulerRequiresTargetAckBeforeUsingDestination(t *testing.T) {
 }
 
 func TestDrainSchedulerSkipsWhenSchedulingFrozen(t *testing.T) {
-	mc := messaging.NewMockMessageCenter()
-	appcontext.SetService(appcontext.MessageCenter, mc)
-
-	nodeManager := watcher.NewNodeManager(nil, nil)
-	appcontext.SetService(watcher.NodeManagerName, nodeManager)
+	setupCoordinatorSchedulerTestServices()
+	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
 
 	origin := node.ID("origin")
 	dest := node.ID("dest")

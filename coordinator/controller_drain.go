@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/utils"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
 )
@@ -221,7 +222,7 @@ func (c *Controller) findDrainProtocolBlocker() (node.ID, uint32, bool, bool) {
 		if !observed {
 			return id, 0, false, true
 		}
-		if version == 0 && legacyBlocker.IsEmpty() {
+		if !heartbeatpb.SupportsCoordinatorDrivenDrain(version) && legacyBlocker.IsEmpty() {
 			legacyBlocker = id
 		}
 	}
@@ -388,11 +389,7 @@ func (c *Controller) snapshotDrainTrackedChangefeeds() []common.ChangeFeedID {
 // estimate, but compatible peers may still be added to the target-sync set so
 // they can safely observe and clear the drain target.
 func (c *Controller) snapshotDrainParticipants() map[node.ID]struct{} {
-	participants := make(map[node.ID]struct{}, len(c.nodeManager.GetAliveNodeIDs()))
-	for _, id := range c.nodeManager.GetAliveNodeIDs() {
-		participants[id] = struct{}{}
-	}
-	return participants
+	return utils.SliceToSet(c.nodeManager.GetAliveNodeIDs())
 }
 
 // isDrainStatusConvergenceRelevant returns whether a changefeed should
@@ -444,10 +441,7 @@ func (c *Controller) ensureDispatcherDrainTarget(ctx context.Context, target nod
 
 	trackedChangefeeds := c.snapshotDrainTrackedChangefeeds()
 	targetSyncNodes := c.snapshotDrainParticipants()
-	pendingStatus := make(map[common.ChangeFeedID]struct{}, len(trackedChangefeeds))
-	for _, id := range trackedChangefeeds {
-		pendingStatus[id] = struct{}{}
-	}
+	pendingStatus := utils.SliceToSet(trackedChangefeeds)
 	c.drainClearState = nil
 	c.drainSession = &drainSession{
 		targetSyncNodes:    targetSyncNodes,
@@ -653,7 +647,9 @@ func (c *Controller) broadcastDispatcherDrainTarget(recipients []node.ID, target
 // target-sync set after bootstrap has confirmed it supports the drain
 // protocol. It returns true when the session changed and should be broadcast.
 func (c *Controller) maybeAddDispatcherDrainSyncNode(nodeID node.ID, version uint32) bool {
-	if version == 0 || c.nodeManager == nil || c.nodeManager.GetNodeInfo(nodeID) == nil {
+	if !heartbeatpb.SupportsCoordinatorDrivenDrain(version) ||
+		c.nodeManager == nil ||
+		c.nodeManager.GetNodeInfo(nodeID) == nil {
 		return false
 	}
 

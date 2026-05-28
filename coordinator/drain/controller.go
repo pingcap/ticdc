@@ -20,6 +20,7 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/utils"
 	"go.uber.org/zap"
 )
 
@@ -284,9 +285,7 @@ func (c *Controller) StartDrainTargetClearGate(target node.ID, epoch uint64, pen
 	}
 
 	clonedPendingNodes := make(map[node.ID]struct{}, len(pendingNodes))
-	for id := range pendingNodes {
-		clonedPendingNodes[id] = struct{}{}
-	}
+	utils.CopySetToSet(pendingNodes, clonedPendingNodes)
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -473,12 +472,9 @@ func (c *Controller) GetDrainingOrStoppingNodes() []node.ID {
 	}
 
 	res := make([]node.ID, 0, len(c.nodes))
-	for id, st := range c.nodes {
-		if !st.observedSet || now.Sub(st.lastSeen) > c.ttl {
-			continue
-		}
-		if st.liveness == heartbeatpb.NodeLiveness_DRAINING ||
-			st.liveness == heartbeatpb.NodeLiveness_STOPPING {
+	for id := range c.nodes {
+		switch c.getStateLocked(id, now) {
+		case StateDraining, StateStopping:
 			res = append(res, id)
 		}
 	}
