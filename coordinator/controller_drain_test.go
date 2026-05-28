@@ -253,6 +253,49 @@ func TestDrainNodeReturnsZeroAfterCompletedTargetIsRemoved(t *testing.T) {
 	require.Equal(t, 0, remaining)
 }
 
+func TestDrainNodeReturnsZeroWhenCompletedTargetLeavesBeforeRemoveNode(t *testing.T) {
+	c, drainController, target := newDrainTestController(t)
+	setDrainProtocolVersion(c, target, 1)
+
+	remaining, err := c.DrainNode(context.Background(), target)
+	require.NoError(t, err)
+	require.Equal(t, 1, remaining)
+
+	setTargetStoppingObserved(drainController, target)
+	remaining, err = c.DrainNode(context.Background(), target)
+	require.NoError(t, err)
+	require.Equal(t, 0, remaining)
+
+	messageCh := outboundMessages(c)
+	drainMessageChannel(messageCh)
+
+	delete(c.nodeManager.GetAliveNodes(), target)
+	remaining, err = c.DrainNode(context.Background(), target)
+	require.NoError(t, err)
+	require.Equal(t, 0, remaining)
+	require.NotNil(t, c.drainSession)
+	requireNoMessage(t, messageCh)
+}
+
+func TestDrainNodeKeepsNonZeroWhenIncompleteTargetLeavesBeforeRemoveNode(t *testing.T) {
+	c, _, target := newDrainTestController(t)
+	setDrainProtocolVersion(c, target, 1)
+
+	remaining, err := c.DrainNode(context.Background(), target)
+	require.NoError(t, err)
+	require.Equal(t, 1, remaining)
+
+	messageCh := outboundMessages(c)
+	drainMessageChannel(messageCh)
+
+	delete(c.nodeManager.GetAliveNodes(), target)
+	remaining, err = c.DrainNode(context.Background(), target)
+	require.NoError(t, err)
+	require.Equal(t, 1, remaining)
+	require.NotNil(t, c.drainSession)
+	requireNoMessage(t, messageCh)
+}
+
 func TestDrainNodeReturnsCaptureNotExistWhenIncompleteTargetIsRemoved(t *testing.T) {
 	c, _, target := newDrainTestController(t)
 	setDrainProtocolVersion(c, target, 1)
@@ -797,6 +840,22 @@ func drainMessageChannel(ch chan *messaging.TargetMessage) {
 		default:
 			return
 		}
+	}
+}
+
+func outboundMessages(c *Controller) chan *messaging.TargetMessage {
+	return c.messageCenter.(interface {
+		GetMessageChannel() chan *messaging.TargetMessage
+	}).GetMessageChannel()
+}
+
+func requireNoMessage(t *testing.T, ch chan *messaging.TargetMessage) {
+	t.Helper()
+
+	select {
+	case msg := <-ch:
+		require.Failf(t, "unexpected message", "type=%s to=%s", msg.Type.String(), msg.To.String())
+	default:
 	}
 }
 

@@ -107,9 +107,13 @@ func newDispatcherDrainEpochSeed() uint64 {
 // all maintainer-side drain work to converge to zero.
 // The returned remaining is guaranteed to be non-zero until completion is proven.
 func (c *Controller) DrainNode(_ context.Context, target node.ID) (int, error) {
+	activeTarget, activeEpoch, hasSession := c.getDispatcherDrainTarget()
 	if c.nodeManager.GetNodeInfo(target) == nil {
 		if c.isCompletedDrainTarget(target) {
 			return 0, nil
+		}
+		if hasSession && activeTarget == target {
+			return c.observeRemovedActiveDrainTarget(target, activeEpoch), nil
 		}
 		return 0, errors.ErrCaptureNotExist.GenWithStackByArgs(target)
 	}
@@ -121,7 +125,6 @@ func (c *Controller) DrainNode(_ context.Context, target node.ID) (int, error) {
 		return 1, nil
 	}
 
-	activeTarget, _, hasSession := c.getDispatcherDrainTarget()
 	if !hasSession {
 		blockingNodeID, blockingVersion, capabilityObserved, hasBlocker := c.findStrictDrainProtocolBlocker()
 		if hasBlocker && !capabilityObserved {
@@ -186,6 +189,40 @@ func (c *Controller) DrainNode(_ context.Context, target node.ID) (int, error) {
 		zap.Int("pendingStatusCount", observation.pendingStatusCount),
 		zap.Int("remaining", observation.remaining))
 	return ensureDrainRemainingNonZero(observation.remaining), nil
+}
+
+// observeRemovedActiveDrainTarget preserves polling semantics during the small
+// window where membership no longer contains the target but RemoveNode has not
+// closed the matching active session yet. It must not send new commands or
+// clear session state; RemoveNode remains the owner of those side effects.
+func (c *Controller) observeRemovedActiveDrainTarget(target node.ID, epoch uint64) int {
+	observation := c.observeDrainNode(target, epoch)
+	completionProven := isDrainCompletionProven(
+		observation.nodeState,
+		observation.drainingObserved,
+		observation.stoppingObserved,
+		observation.remaining,
+	)
+	if completionProven {
+		log.Info("drain completion proven for removed active target",
+			zap.Stringer("targetNodeID", target),
+			zap.Uint64("targetEpoch", epoch))
+		return 0
+	}
+
+	log.Info("removed active drain target has not completed",
+		zap.Stringer("targetNodeID", target),
+		zap.Uint64("targetEpoch", epoch),
+		zap.String("nodeState", drainStateString(observation.nodeState)),
+		zap.Bool("drainingObserved", observation.drainingObserved),
+		zap.Bool("stoppingObserved", observation.stoppingObserved),
+		zap.Int("maintainersOnTarget", observation.maintainersOnTarget),
+		zap.Int("inflightOpsInvolvingTarget", observation.inflightOpsInvolvingTarget),
+		zap.Int("dispatcherCountOnTarget", observation.dispatcherCountOnTarget),
+		zap.Int("targetInflightDrainMoveCount", observation.targetInflightDrainMoveCount),
+		zap.Int("pendingStatusCount", observation.pendingStatusCount),
+		zap.Int("remaining", observation.remaining))
+	return ensureDrainRemainingNonZero(observation.remaining)
 }
 
 // findStrictDrainProtocolBlocker returns the first alive node that still
