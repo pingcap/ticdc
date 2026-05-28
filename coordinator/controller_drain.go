@@ -35,15 +35,10 @@ type drainSession struct {
 	target node.ID
 	epoch  uint64
 
-	// participants is the frozen set of alive nodes that took part in this
-	// strict drain session when it started. Later node joins must not change the
-	// completion contract of an already active session.
-	participants map[node.ID]struct{}
-
 	// targetSyncNodes is the set of nodes that coordinator explicitly keeps in
 	// sync with the active dispatcher drain target for this session. It starts
-	// from participants and may grow when compatible later-join nodes finish
-	// bootstrap while the session is still active.
+	// from the frozen alive-node set and may grow when compatible later-join
+	// nodes finish bootstrap while the session is still active.
 	targetSyncNodes map[node.ID]struct{}
 
 	// trackedChangefeeds is the frozen set of running changefeeds that were
@@ -79,7 +74,6 @@ type drainClearState struct {
 
 type drainCompletedState struct {
 	target node.ID
-	epoch  uint64
 }
 
 // DrainNode starts or continues draining one target node for the v1 drain API.
@@ -138,11 +132,9 @@ func (c *Controller) DrainNode(ctx context.Context, target node.ID) (int, error)
 			// expected to continue with the legacy hard-restart removal flow.
 			return 0, nil
 		}
-	} else if activeTarget == target {
-		// Once strict drain session is active, keep using its frozen participants
-		// even if node membership changes later. This prevents a new peer from
-		// retroactively turning an in-flight strict drain into a hard restart.
 	}
+	// ensureDispatcherDrainTarget creates the first strict session or reuses the
+	// existing frozen session even if node membership changes later.
 	targetEpoch, err := c.ensureDispatcherDrainTarget(ctx, target)
 	if err != nil {
 		return 0, err
@@ -241,25 +233,18 @@ func (c *Controller) findStrictDrainProtocolBlocker() (node.ID, uint32, bool, bo
 }
 
 type drainNodeObservation struct {
-	// drainNodeObservation captures all one-shot completion signals used by DrainNode.
-	// maintainersOnTarget is the number of maintainers still hosted on the target node.
-	maintainersOnTarget int
-	// inflightOpsInvolvingTarget is the number of operators that still involve the target node.
+	maintainersOnTarget        int
 	inflightOpsInvolvingTarget int
-	// dispatcherCountOnTarget is the sum of maintainer-reported dispatchers still on target.
-	dispatcherCountOnTarget int
+	dispatcherCountOnTarget    int
 	// targetInflightDrainMoveCount is the sum of maintainer-reported dispatcher
 	// move operators still draining work away from the target node.
 	targetInflightDrainMoveCount int
 	// pendingStatusCount is the number of running changefeeds not converged to the active target epoch.
 	pendingStatusCount int
 	// remaining is the max of all workload dimensions used by drain completion gating.
-	remaining int
-	// nodeState is the drain controller state of the target node.
-	nodeState drain.State
-	// drainingObserved indicates DRAINING has been observed for this target.
+	remaining        int
+	nodeState        drain.State
 	drainingObserved bool
-	// stoppingObserved indicates STOPPING has been observed for this target.
 	stoppingObserved bool
 }
 
@@ -459,18 +444,13 @@ func (c *Controller) ensureDispatcherDrainTarget(ctx context.Context, target nod
 	}
 
 	trackedChangefeeds := c.snapshotDrainTrackedChangefeeds()
-	participants := c.snapshotDrainParticipants()
-	targetSyncNodes := make(map[node.ID]struct{}, len(participants))
-	for id := range participants {
-		targetSyncNodes[id] = struct{}{}
-	}
+	targetSyncNodes := c.snapshotDrainParticipants()
 	pendingStatus := make(map[common.ChangeFeedID]struct{}, len(trackedChangefeeds))
 	for _, id := range trackedChangefeeds {
 		pendingStatus[id] = struct{}{}
 	}
 	c.drainClearState = nil
 	c.drainSession = &drainSession{
-		participants:       participants,
 		targetSyncNodes:    targetSyncNodes,
 		target:             target,
 		epoch:              epoch,
@@ -504,13 +484,12 @@ func (c *Controller) isCompletedDrainTarget(target node.ID) bool {
 	return c.drainCompleted != nil && c.drainCompleted.target == target
 }
 
-func (c *Controller) recordCompletedDrainTarget(target node.ID, epoch uint64) {
+func (c *Controller) recordCompletedDrainTarget(target node.ID) {
 	c.drainSessionMu.Lock()
 	defer c.drainSessionMu.Unlock()
 
 	c.drainCompleted = &drainCompletedState{
 		target: target,
-		epoch:  epoch,
 	}
 }
 

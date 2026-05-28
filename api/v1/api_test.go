@@ -31,15 +31,7 @@ import (
 )
 
 func TestDrainCaptureRouteRequiresAuthentication(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-
-	originalConfig := config.GetGlobalServerConfig()
-	defer config.StoreGlobalServerConfig(originalConfig)
-
-	cfg := originalConfig.Clone()
-	cfg.Security.ClientUserRequired = true
-	cfg.Security.ClientAllowedUser = []string{"alice"}
-	config.StoreGlobalServerConfig(cfg)
+	configureDrainCaptureAuth(t, true)
 
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -55,33 +47,14 @@ func TestDrainCaptureRouteRequiresAuthentication(t *testing.T) {
 		etcdClient:    mockEtcdClient,
 	}
 
-	router := gin.New()
-	RegisterOpenAPIV1Routes(router, NewOpenAPIV1(apiServer))
-
-	req := httptest.NewRequest(
-		http.MethodPut,
-		"/api/v1/captures/drain",
-		bytes.NewBufferString(`{"capture_id":"target"}`),
-	)
-	req.Header.Set("Content-Type", "application/json")
-	resp := httptest.NewRecorder()
-
-	router.ServeHTTP(resp, req)
+	resp := serveDrainCaptureRequest(newDrainCaptureTestRouter(apiServer))
 
 	require.Equal(t, http.StatusUnauthorized, resp.Code)
 	require.False(t, coordinator.drainCalled)
 }
 
 func TestDrainCaptureRouteReachesHandlerWhenAuthenticationDisabled(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-
-	originalConfig := config.GetGlobalServerConfig()
-	defer config.StoreGlobalServerConfig(originalConfig)
-
-	cfg := originalConfig.Clone()
-	cfg.Security.ClientUserRequired = false
-	cfg.Security.ClientAllowedUser = nil
-	config.StoreGlobalServerConfig(cfg)
+	configureDrainCaptureAuth(t, false)
 
 	coordinator := &mockCoordinator{remaining: 7}
 	apiServer := &mockAPIServer{
@@ -90,9 +63,41 @@ func TestDrainCaptureRouteReachesHandlerWhenAuthenticationDisabled(t *testing.T)
 		coordinator:   coordinator,
 	}
 
+	resp := serveDrainCaptureRequest(newDrainCaptureTestRouter(apiServer))
+
+	require.Equal(t, http.StatusAccepted, resp.Code)
+	require.JSONEq(t, `{"current_table_count":7}`, resp.Body.String())
+	require.True(t, coordinator.drainCalled)
+	require.Equal(t, node.ID("target"), coordinator.target)
+}
+
+func configureDrainCaptureAuth(t *testing.T, required bool) {
+	t.Helper()
+
+	gin.SetMode(gin.TestMode)
+
+	originalConfig := config.GetGlobalServerConfig()
+	t.Cleanup(func() {
+		config.StoreGlobalServerConfig(originalConfig)
+	})
+
+	cfg := originalConfig.Clone()
+	cfg.Security.ClientUserRequired = required
+	if required {
+		cfg.Security.ClientAllowedUser = []string{"alice"}
+	} else {
+		cfg.Security.ClientAllowedUser = nil
+	}
+	config.StoreGlobalServerConfig(cfg)
+}
+
+func newDrainCaptureTestRouter(apiServer server.Server) *gin.Engine {
 	router := gin.New()
 	RegisterOpenAPIV1Routes(router, NewOpenAPIV1(apiServer))
+	return router
+}
 
+func serveDrainCaptureRequest(router http.Handler) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(
 		http.MethodPut,
 		"/api/v1/captures/drain",
@@ -102,11 +107,7 @@ func TestDrainCaptureRouteReachesHandlerWhenAuthenticationDisabled(t *testing.T)
 	resp := httptest.NewRecorder()
 
 	router.ServeHTTP(resp, req)
-
-	require.Equal(t, http.StatusAccepted, resp.Code)
-	require.JSONEq(t, `{"current_table_count":7}`, resp.Body.String())
-	require.True(t, coordinator.drainCalled)
-	require.Equal(t, node.ID("target"), coordinator.target)
+	return resp
 }
 
 type mockAPIServer struct {

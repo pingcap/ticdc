@@ -959,7 +959,7 @@ func (c *Controller) RemoveNode(id node.ID) {
 	if hasActiveDrain && target == id {
 		c.clearDispatcherDrainTarget(id, epoch)
 		if completionProven {
-			c.recordCompletedDrainTarget(id, epoch)
+			c.recordCompletedDrainTarget(id)
 		}
 	}
 	c.observeDispatcherDrainTargetClearNodeRemoved(id)
