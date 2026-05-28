@@ -76,7 +76,7 @@ type drainCompletedState struct {
 	target node.ID
 }
 
-// DrainNode starts or continues draining one target node for the v1 drain API.
+// DrainNode starts or continues a best-effort drain for one target node.
 // It first checks the drain capability learned from bootstrap for every alive
 // maintainer manager:
 //   - unknown capability keeps returning non-zero while coordinator waits for
@@ -84,13 +84,13 @@ type drainCompletedState struct {
 //   - any legacy capability bypasses the new orchestration and falls back to
 //     the historical hard-restart behavior used during mixed-version rolling patch
 //
-// Supported targets then use the full orchestration: it ensures an active
+// Supported targets then use coordinator-driven orchestration: it ensures an active
 // target epoch, broadcasts the drain target, requests liveness transition, and
 // evaluates a one-shot drain observation.
 //
-// Drain completion requires the target to reach STOPPING after DRAINING and for
-// all maintainer-side drain work to converge to zero.
-// The returned remaining is guaranteed to be non-zero until completion is proven.
+// A zero remaining value means all coordinator-observed drain signals have
+// converged. It is best-effort because the active session uses an in-memory
+// snapshot of relevant changefeeds rather than a cluster-wide persisted proof.
 func (c *Controller) DrainNode(ctx context.Context, target node.ID) (int, error) {
 	activeTarget, activeEpoch, hasSession := c.getDispatcherDrainTarget()
 	if c.nodeManager.GetNodeInfo(target) == nil {
@@ -111,7 +111,7 @@ func (c *Controller) DrainNode(ctx context.Context, target node.ID) (int, error)
 	}
 
 	if !hasSession {
-		blockingNodeID, blockingVersion, capabilityObserved, hasBlocker := c.findStrictDrainProtocolBlocker()
+		blockingNodeID, blockingVersion, capabilityObserved, hasBlocker := c.findDrainProtocolBlocker()
 		if hasBlocker && !capabilityObserved {
 			log.Info("drain waiting for cluster drain capability observation",
 				zap.Stringer("targetNodeID", target),
@@ -127,7 +127,7 @@ func (c *Controller) DrainNode(ctx context.Context, target node.ID) (int, error)
 				zap.Stringer("targetNodeID", target),
 				zap.Stringer("blockingNodeID", blockingNodeID),
 				zap.Uint32("blockingDrainProtocolVersion", blockingVersion))
-			// A zero remaining value here means strict drain is intentionally skipped
+			// A zero remaining value here means coordinator-driven drain is intentionally skipped
 			// because at least one alive node cannot run the protocol. The caller is
 			// expected to continue with the legacy hard-restart removal flow.
 			return 0, nil
@@ -147,22 +147,21 @@ func (c *Controller) DrainNode(ctx context.Context, target node.ID) (int, error)
 	c.drainController.RequestDrain(target)
 
 	observation := c.observeDrainNode(target, targetEpoch)
-	completionProven := isDrainCompletionProven(
+	completionObserved := isBestEffortDrainComplete(
 		observation.nodeState,
 		observation.drainingObserved,
 		observation.stoppingObserved,
 		observation.remaining,
 	)
 
-	// drain API must not return 0 until drain completion is proven.
-	if completionProven {
-		log.Info("drain completion proven, waiting for node removal to clear drain target",
+	if completionObserved {
+		log.Info("drain completion observed, waiting for node removal to clear drain target",
 			zap.Stringer("targetNodeID", target),
 			zap.Uint64("targetEpoch", targetEpoch))
 		return 0, nil
 	}
 
-	log.Info("drain completion not yet proven",
+	log.Info("drain completion not yet observed",
 		zap.Stringer("targetNodeID", target),
 		zap.Uint64("targetEpoch", targetEpoch),
 		zap.String("nodeState", drainStateString(observation.nodeState)),
@@ -183,20 +182,20 @@ func (c *Controller) DrainNode(ctx context.Context, target node.ID) (int, error)
 // clear session state; RemoveNode remains the owner of those side effects.
 func (c *Controller) observeRemovedActiveDrainTarget(target node.ID, epoch uint64) int {
 	observation := c.observeDrainNode(target, epoch)
-	completionProven := isDrainCompletionProven(
+	completionObserved := isBestEffortDrainComplete(
 		observation.nodeState,
 		observation.drainingObserved,
 		observation.stoppingObserved,
 		observation.remaining,
 	)
-	if completionProven {
-		log.Info("drain completion proven for removed active target",
+	if completionObserved {
+		log.Info("drain completion observed for removed active target",
 			zap.Stringer("targetNodeID", target),
 			zap.Uint64("targetEpoch", epoch))
 		return 0
 	}
 
-	log.Info("removed active drain target has not completed",
+	log.Info("removed active drain target completion not yet observed",
 		zap.Stringer("targetNodeID", target),
 		zap.Uint64("targetEpoch", epoch),
 		zap.String("nodeState", drainStateString(observation.nodeState)),
@@ -211,11 +210,11 @@ func (c *Controller) observeRemovedActiveDrainTarget(target node.ID, epoch uint6
 	return ensureDrainRemainingNonZero(observation.remaining)
 }
 
-// findStrictDrainProtocolBlocker returns the first alive node that still
-// prevents strict drain orchestration from being safe cluster-wide. Unknown
+// findDrainProtocolBlocker returns the first alive node that still
+// prevents coordinator-driven drain orchestration from being safe cluster-wide. Unknown
 // capability has higher priority than legacy fallback so bootstrap races never
 // silently degrade to hard-restart behavior.
-func (c *Controller) findStrictDrainProtocolBlocker() (node.ID, uint32, bool, bool) {
+func (c *Controller) findDrainProtocolBlocker() (node.ID, uint32, bool, bool) {
 	var legacyBlocker node.ID
 	for id := range c.nodeManager.GetAliveNodes() {
 		version, observed := c.drainController.GetDrainProtocolVersion(id)
@@ -384,10 +383,10 @@ func (c *Controller) snapshotDrainTrackedChangefeeds() []common.ChangeFeedID {
 	return snapshot
 }
 
-// snapshotDrainParticipants freezes the alive nodes that must satisfy the
-// strict drain completion contract for one session. Later joins must not
-// expand drain completion, but compatible peers may still be added to the
-// target-sync set so they can safely observe and clear the drain target.
+// snapshotDrainParticipants freezes the alive nodes that participate in one
+// best-effort drain session. Later joins must not expand the completion
+// estimate, but compatible peers may still be added to the target-sync set so
+// they can safely observe and clear the drain target.
 func (c *Controller) snapshotDrainParticipants() map[node.ID]struct{} {
 	participants := make(map[node.ID]struct{}, len(c.nodeManager.GetAliveNodeIDs()))
 	for _, id := range c.nodeManager.GetAliveNodeIDs() {
@@ -505,8 +504,8 @@ func (c *Controller) clearCompletedDrainTarget(target node.ID) {
 
 // clearDispatcherDrainTarget closes the matching active drain session and
 // broadcasts an empty target at the same epoch to clear stale local targets.
-// It is triggered only after target membership removal proves the target node
-// can no longer receive new dispatcher assignments.
+// It is triggered only after target membership removal confirms the target node
+// can no longer receive new coordinator-side assignments.
 func (c *Controller) clearDispatcherDrainTarget(target node.ID, epoch uint64) {
 	c.drainSessionMu.Lock()
 	if c.drainSession == nil || c.drainSession.target != target || c.drainSession.epoch != epoch {
@@ -693,7 +692,7 @@ func (c *Controller) observeDispatcherDrainTargetHeartbeat(from node.ID, hb *hea
 	hbEpoch := hb.GetDispatcherDrainTargetEpoch()
 	hbTarget := node.ID(hb.GetDispatcherDrainTargetNodeId())
 	if hbEpoch < clearState.epoch {
-		// Older heartbeat cannot prove this node has observed the clear.
+		// Older heartbeat cannot confirm this node has observed the clear.
 		return
 	}
 	if hbEpoch == clearState.epoch && !hbTarget.IsEmpty() {
@@ -798,9 +797,9 @@ func drainStateString(state drain.State) string {
 	}
 }
 
-// isDrainCompletionProven checks whether drain completion can be safely concluded.
-// Returning true is intentionally strict because v1 drain API must avoid premature zero remaining.
-func isDrainCompletionProven(
+// isBestEffortDrainComplete checks whether coordinator-observed drain signals
+// have converged for the active target epoch.
+func isBestEffortDrainComplete(
 	nodeState drain.State,
 	drainingObserved bool,
 	stoppingObserved bool,
@@ -829,7 +828,7 @@ func drainRemainingEstimate(
 	)
 }
 
-// ensureDrainRemainingNonZero keeps v1 compatibility before completion is proven.
+// ensureDrainRemainingNonZero keeps v1 compatibility before observed completion.
 func ensureDrainRemainingNonZero(remaining int) int {
 	return max(remaining, 1)
 }

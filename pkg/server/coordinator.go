@@ -49,7 +49,7 @@ type Coordinator interface {
 	// and coordinator will update the changefeed status after receiving the resolved ts from log coordinator.
 	RequestResolvedTsFromLogCoordinator(ctx context.Context, changefeedDisplayName common.ChangeFeedDisplayName)
 
-	// DrainNode requests draining on the target node and returns remaining work for drain completion.
+	// DrainNode requests best-effort draining on the target node and returns a remaining-work estimate.
 	DrainNode(ctx context.Context, target node.ID) (int, error)
 
 	Initialized() bool

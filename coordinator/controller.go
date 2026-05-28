@@ -941,10 +941,10 @@ func (c *Controller) getChangefeed(id common.ChangeFeedID) *changefeed.Changefee
 // RemoveNode is called when a node is removed
 func (c *Controller) RemoveNode(id node.ID) {
 	target, epoch, hasActiveDrain := c.getDispatcherDrainTarget()
-	completionProven := false
+	completionObserved := false
 	if hasActiveDrain && target == id {
 		observation := c.observeDrainNode(id, epoch)
-		completionProven = isDrainCompletionProven(
+		completionObserved = isBestEffortDrainComplete(
 			observation.nodeState,
 			observation.drainingObserved,
 			observation.stoppingObserved,
@@ -958,7 +958,7 @@ func (c *Controller) RemoveNode(id node.ID) {
 	// in-memory reference immediately to avoid leaking a stuck drain session.
 	if hasActiveDrain && target == id {
 		c.clearDispatcherDrainTarget(id, epoch)
-		if completionProven {
+		if completionObserved {
 			c.recordCompletedDrainTarget(id)
 		}
 	}
