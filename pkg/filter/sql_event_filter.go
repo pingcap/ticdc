@@ -95,6 +95,29 @@ func verifyIgnoreEvents(types []bf.EventType) error {
 	return nil
 }
 
+func verifyIgnoreDDLTypes(types []bf.EventType) error {
+	if err := verifyIgnoreEvents(types); err != nil {
+		return err
+	}
+	for _, et := range types {
+		switch et {
+		case bf.AllDDL, bf.NoneDDL:
+			continue
+		case bf.AllEvent, bf.NoneEvent, bf.AllDML, bf.NoneDML,
+			bf.InsertEvent, bf.UpdateEvent, bf.DeleteEvent:
+			return cerror.ErrInvalidIgnoreEventType.GenWithStackByArgs(string(et))
+		}
+		eventClass, err := bf.ClassifyEvent(et)
+		if err != nil {
+			return cerror.ErrInvalidIgnoreEventType.GenWithStackByArgs(string(et))
+		}
+		if eventClass != bf.EventType("ddl") && eventClass != bf.EventType("incompatible DDL") {
+			return cerror.ErrInvalidIgnoreEventType.GenWithStackByArgs(string(et))
+		}
+	}
+	return nil
+}
+
 // sqlEventFilter is a filter that filters DDL/DML event by its type or query.
 type sqlEventFilter struct {
 	rules []*sqlEventRule

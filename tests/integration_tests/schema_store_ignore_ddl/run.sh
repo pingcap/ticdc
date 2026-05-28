@@ -17,10 +17,10 @@ function run() {
 	rm -rf $WORK_DIR && mkdir -p $WORK_DIR
 	start_tidb_cluster --workdir $WORK_DIR
 
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --config $CUR/conf/server.toml
+	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
 
 	SINK_URI="mysql://normal:123456@127.0.0.1:3306/"
-	cdc_cli_changefeed create --sink-uri="$SINK_URI"
+	cdc_cli_changefeed create --sink-uri="$SINK_URI" --config $CUR/conf/changefeed.toml
 
 	run_sql "create database schema_store_ignore_ddl;" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "create table schema_store_ignore_ddl.t_old(id int primary key, v int);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}

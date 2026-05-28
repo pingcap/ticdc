@@ -287,9 +287,10 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 			efs = append(efs, ef.ToInternalEventFilterRule())
 		}
 		res.Filter = &config.FilterConfig{
-			Rules:            c.Filter.Rules,
-			IgnoreTxnStartTs: c.Filter.IgnoreTxnStartTs,
-			EventFilters:     efs,
+			Rules:                     c.Filter.Rules,
+			IgnoreTxnStartTs:          c.Filter.IgnoreTxnStartTs,
+			SchemaStoreIgnoreDDLTypes: c.Filter.SchemaStoreIgnoreDDLTypes,
+			EventFilters:              efs,
 		}
 	}
 	if c.Consistent != nil {
@@ -695,10 +696,12 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 		}
 
 		res.Filter = &FilterConfig{
-			Rules:            cloned.Filter.Rules,
-			IgnoreTxnStartTs: cloned.Filter.IgnoreTxnStartTs,
-			EventFilters:     efs,
+			Rules:                     cloned.Filter.Rules,
+			IgnoreTxnStartTs:          cloned.Filter.IgnoreTxnStartTs,
+			SchemaStoreIgnoreDDLTypes: make([]bf.EventType, len(cloned.Filter.SchemaStoreIgnoreDDLTypes)),
+			EventFilters:              efs,
 		}
+		copy(res.Filter.SchemaStoreIgnoreDDLTypes, cloned.Filter.SchemaStoreIgnoreDDLTypes)
 	}
 	if cloned.Sink != nil {
 		var dispatchRules []*DispatchRule
@@ -1065,9 +1068,10 @@ func GetDefaultReplicaConfig() *ReplicaConfig {
 // FilterConfig represents filter config for a changefeed
 // This is a duplicate of config.FilterConfig
 type FilterConfig struct {
-	Rules            []string          `json:"rules,omitempty"`
-	IgnoreTxnStartTs []uint64          `json:"ignore_txn_start_ts,omitempty"`
-	EventFilters     []EventFilterRule `json:"event_filters,omitempty"`
+	Rules                     []string          `json:"rules,omitempty"`
+	IgnoreTxnStartTs          []uint64          `json:"ignore_txn_start_ts,omitempty"`
+	SchemaStoreIgnoreDDLTypes []bf.EventType    `json:"schema_store_ignore_ddl_types,omitempty"`
+	EventFilters              []EventFilterRule `json:"event_filters,omitempty"`
 }
 
 // MounterConfig represents mounter config for a changefeed

@@ -22,7 +22,6 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/logservice/logpuller"
-	bf "github.com/pingcap/ticdc/pkg/binlog-filter"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -188,16 +187,24 @@ func (s *keyspaceSchemaStore) writeDDLEvent(ddlEvent DDLJobWithCommitTs) {
 	}
 }
 
-func filterIgnoredDDLEvents(events []commonEvent.DDLEvent) []commonEvent.DDLEvent {
-	serverConfig := config.GetGlobalServerConfig()
-	ignoreDDLTypes := serverConfig.Debug.SchemaStore.IgnoreDDLTypes
-	if len(ignoreDDLTypes) == 0 || len(events) == 0 {
+func filterIgnoredDDLEvents(events []commonEvent.DDLEvent, tableFilter filter.Filter) []commonEvent.DDLEvent {
+	if tableFilter == nil || len(events) == 0 {
 		return events
 	}
 
 	filteredEvents := events[:0]
 	for _, event := range events {
-		if shouldIgnoreDDLEventByType(event, ignoreDDLTypes) {
+		ignored, err := tableFilter.ShouldIgnoreDDLEventInSchemaStore(event.GetDDLType(), event.Query)
+		if err != nil {
+			log.Warn("schema store ddl filter failed",
+				zap.Any("type", event.GetDDLType()),
+				zap.Uint64("finishedTs", event.FinishedTs),
+				zap.String("query", event.Query),
+				zap.Error(err))
+			filteredEvents = append(filteredEvents, event)
+			continue
+		}
+		if ignored {
 			log.Info("ignore ddl event by type",
 				zap.Any("type", event.GetDDLType()),
 				zap.Uint64("finishedTs", event.FinishedTs),
@@ -207,70 +214,6 @@ func filterIgnoredDDLEvents(events []commonEvent.DDLEvent) []commonEvent.DDLEven
 		filteredEvents = append(filteredEvents, event)
 	}
 	return filteredEvents
-}
-
-func shouldIgnoreDDLEventByType(ddlEvent commonEvent.DDLEvent, ignoreDDLTypes []bf.EventType) bool {
-	if len(ignoreDDLTypes) == 0 {
-		return false
-	}
-
-	actionType := ddlEvent.GetDDLType()
-	ddlType := filter.DDLToEventType(actionType)
-	if ddlType == bf.NullEvent {
-		log.Warn("schema store ignore ddl type found unsupported ddl",
-			zap.String("type", actionType.String()),
-			zap.String("query", ddlEvent.Query))
-		return false
-	}
-
-	eventFilter, err := bf.NewBinlogEvent(false, []*bf.BinlogEventRule{
-		{
-			SchemaPattern: "schema-store",
-			TablePattern:  "ddl",
-			Events:        append([]bf.EventType(nil), ignoreDDLTypes...),
-			Action:        bf.Ignore,
-		},
-	})
-	if err != nil {
-		log.Warn("schema store ignore ddl type config is invalid",
-			zap.Any("ignoreDDLTypes", ignoreDDLTypes),
-			zap.Error(err))
-		return false
-	}
-
-	ignored, err := matchIgnoreDDLType(eventFilter, ddlType, ddlEvent.Query)
-	if err != nil {
-		log.Warn("schema store ignore ddl type failed",
-			zap.String("type", actionType.String()),
-			zap.String("query", ddlEvent.Query),
-			zap.Error(err))
-		return false
-	}
-	if ignored {
-		return true
-	}
-
-	if !filter.IsAlterTableDDL(actionType) {
-		return false
-	}
-
-	ignored, err = matchIgnoreDDLType(eventFilter, bf.AlterTable, ddlEvent.Query)
-	if err != nil {
-		log.Warn("schema store ignore alter table ddl type failed",
-			zap.String("type", actionType.String()),
-			zap.String("query", ddlEvent.Query),
-			zap.Error(err))
-		return false
-	}
-	return ignored
-}
-
-func matchIgnoreDDLType(eventFilter *bf.BinlogEvent, ddlType bf.EventType, query string) (bool, error) {
-	action, err := eventFilter.Filter("schema-store", "ddl", ddlType, query)
-	if err != nil {
-		return false, err
-	}
-	return action == bf.Ignore, nil
 }
 
 // TODO tenfyzhong 2025-09-13 13:40:26 use a chan to decoupling
@@ -517,7 +460,7 @@ func (s *schemaStore) FetchTableDDLEvents(
 	if err != nil {
 		return nil, err
 	}
-	return filterIgnoredDDLEvents(events), nil
+	return filterIgnoredDDLEvents(events, tableFilter), nil
 }
 
 // FetchTableTriggerDDLEvents returns the next ddl events which finishedTs are within the range (start, end]
@@ -538,7 +481,7 @@ func (s *schemaStore) FetchTableTriggerDDLEvents(keyspaceMeta common.KeyspaceMet
 		return nil, 0, err
 	}
 
-	filteredEvents := filterIgnoredDDLEvents(events)
+	filteredEvents := filterIgnoredDDLEvents(events, tableFilter)
 	if len(events) == limit {
 		return filteredEvents, events[limit-1].FinishedTs, nil
 	}

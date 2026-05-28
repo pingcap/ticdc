@@ -19,16 +19,18 @@ import (
 
 // FilterConfig represents filter config for a changefeed
 type FilterConfig struct {
-	Rules            []string           `toml:"rules" json:"rules"`
-	IgnoreTxnStartTs []uint64           `toml:"ignore-txn-start-ts" json:"ignore-txn-start-ts"`
-	EventFilters     []*EventFilterRule `toml:"event-filters" json:"event-filters"`
+	Rules                     []string           `toml:"rules" json:"rules"`
+	IgnoreTxnStartTs          []uint64           `toml:"ignore-txn-start-ts" json:"ignore-txn-start-ts"`
+	SchemaStoreIgnoreDDLTypes []bf.EventType     `toml:"schema-store-ignore-ddl-types" json:"schema-store-ignore-ddl-types"`
+	EventFilters              []*EventFilterRule `toml:"event-filters" json:"event-filters"`
 }
 
 func NewDefaultFilterConfig() *FilterConfig {
 	return &FilterConfig{
-		Rules:            []string{"*.*"},
-		IgnoreTxnStartTs: []uint64{},
-		EventFilters:     []*EventFilterRule{},
+		Rules:                     []string{"*.*"},
+		IgnoreTxnStartTs:          []uint64{},
+		SchemaStoreIgnoreDDLTypes: []bf.EventType{},
+		EventFilters:              []*EventFilterRule{},
 	}
 }
 

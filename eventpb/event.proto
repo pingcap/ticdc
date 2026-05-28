@@ -18,6 +18,7 @@ message InnerFilterConfig {
     repeated string rules = 1;
     repeated uint64 ignore_txn_start_ts = 2;
     repeated EventFilterRule EventFilters = 3;
+    repeated string schema_store_ignore_ddl_types = 4;
 }
 
 message FilterConfig {

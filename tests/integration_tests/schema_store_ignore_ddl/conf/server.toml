@@ -1,2 +1,0 @@
-[debug.schema-store]
-ignore-ddl-types = ["rename table"]
