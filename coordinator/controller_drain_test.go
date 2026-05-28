@@ -14,6 +14,7 @@ package coordinator
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -30,8 +31,43 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/stretchr/testify/require"
+	"github.com/tikv/client-go/v2/oracle"
+	pd "github.com/tikv/pd/client"
 	"go.uber.org/atomic"
 )
+
+type drainTestPDClient struct {
+	pd.Client
+
+	mu       sync.Mutex
+	physical int64
+	logical  int64
+	err      error
+	called   chan struct{}
+	unblock  chan struct{}
+}
+
+func newDrainTestPDClient() *drainTestPDClient {
+	return &drainTestPDClient{physical: 100}
+}
+
+func (c *drainTestPDClient) GetTS(context.Context) (int64, int64, error) {
+	if c.called != nil {
+		close(c.called)
+	}
+	if c.unblock != nil {
+		<-c.unblock
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.err != nil {
+		return 0, 0, c.err
+	}
+	c.logical++
+	return c.physical, c.logical, nil
+}
 
 func newDrainTestController(t *testing.T) (*Controller, *drain.Controller, node.ID) {
 	t.Helper()
@@ -56,6 +92,7 @@ func newDrainTestController(t *testing.T) (*Controller, *drain.Controller, node.
 		operatorController: oc,
 		drainController:    drainController,
 		messageCenter:      mc,
+		pdClient:           newDrainTestPDClient(),
 		initialized:        atomic.NewBool(true),
 		bootstrapper: bootstrap.NewBootstrapper[heartbeatpb.CoordinatorBootstrapResponse](
 			"test-drain-bootstrapper",
@@ -203,6 +240,74 @@ func TestDrainNodeRejectConcurrentDifferentDrainTarget(t *testing.T) {
 	_, err = c.DrainNode(context.Background(), other)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "drain already in progress")
+}
+
+func TestDrainNodeUsesPDTimestampAsDrainEpoch(t *testing.T) {
+	c, _, target := newDrainTestController(t)
+	pdClient := &drainTestPDClient{physical: 123, logical: 44}
+	c.pdClient = pdClient
+	setDrainProtocolVersion(c, target, 1)
+
+	remaining, err := c.DrainNode(context.Background(), target)
+	require.NoError(t, err)
+	require.Equal(t, 1, remaining)
+
+	_, epoch, ok := c.getDispatcherDrainTarget()
+	require.True(t, ok)
+	require.Equal(t, oracle.ComposeTS(int64(123), int64(45)), epoch)
+
+	remaining, err = c.DrainNode(context.Background(), target)
+	require.NoError(t, err)
+	require.Equal(t, 1, remaining)
+	_, reusedEpoch, ok := c.getDispatcherDrainTarget()
+	require.True(t, ok)
+	require.Equal(t, epoch, reusedEpoch)
+}
+
+func TestDrainNodeReturnsErrorWhenPDAllocEpochFails(t *testing.T) {
+	c, _, target := newDrainTestController(t)
+	c.pdClient.(*drainTestPDClient).err = context.Canceled
+	setDrainProtocolVersion(c, target, 1)
+
+	remaining, err := c.DrainNode(context.Background(), target)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "context canceled")
+	require.Zero(t, remaining)
+
+	_, _, ok := c.getDispatcherDrainTarget()
+	require.False(t, ok)
+}
+
+func TestDrainNodeDoesNotCreateSessionWhenTargetLeavesDuringEpochAlloc(t *testing.T) {
+	c, _, target := newDrainTestController(t)
+	c.pdClient = &drainTestPDClient{
+		physical: 123,
+		called:   make(chan struct{}),
+		unblock:  make(chan struct{}),
+	}
+	setDrainProtocolVersion(c, target, 1)
+
+	type drainResult struct {
+		remaining int
+		err       error
+	}
+	resultCh := make(chan drainResult, 1)
+	go func() {
+		remaining, err := c.DrainNode(context.Background(), target)
+		resultCh <- drainResult{remaining: remaining, err: err}
+	}()
+
+	<-c.pdClient.(*drainTestPDClient).called
+	delete(c.nodeManager.GetAliveNodes(), target)
+	close(c.pdClient.(*drainTestPDClient).unblock)
+
+	result := <-resultCh
+	require.Error(t, result.err)
+	require.Zero(t, result.remaining)
+	require.True(t, errors.ErrCaptureNotExist.Equal(result.err))
+
+	_, _, ok := c.getDispatcherDrainTarget()
+	require.False(t, ok)
 }
 
 func TestDrainNodeCompletionKeepsBlockingDifferentTargetUntilRemoval(t *testing.T) {
@@ -665,7 +770,7 @@ func TestClearDispatcherDrainTargetTracksNodeHeartbeatAck(t *testing.T) {
 	c.nodeManager.GetAliveNodes()[other] = &node.Info{ID: other}
 	bootstrapTrackedNodes(c, other)
 
-	epoch, err := c.ensureDispatcherDrainTarget(target)
+	epoch, err := c.ensureDispatcherDrainTarget(context.Background(), target)
 	require.NoError(t, err)
 
 	mc := c.messageCenter.(interface {
@@ -702,7 +807,7 @@ func TestClearDispatcherDrainTargetBlocksPendingDestinationsUntilAck(t *testing.
 		NodeEpoch: 1,
 	})
 
-	epoch, err := c.ensureDispatcherDrainTarget(target)
+	epoch, err := c.ensureDispatcherDrainTarget(context.Background(), target)
 	require.NoError(t, err)
 
 	c.clearDispatcherDrainTarget(target, epoch)
@@ -740,13 +845,13 @@ func TestNewDrainSessionSupersedesOldClearPendingGate(t *testing.T) {
 	setDrainProtocolVersion(c, other, 1)
 	setDrainProtocolVersion(c, nextTarget, 1)
 
-	epoch, err := c.ensureDispatcherDrainTarget(target)
+	epoch, err := c.ensureDispatcherDrainTarget(context.Background(), target)
 	require.NoError(t, err)
 
 	c.clearDispatcherDrainTarget(target, epoch)
 	require.False(t, drainController.IsSchedulableDest(other))
 
-	nextEpoch, err := c.ensureDispatcherDrainTarget(nextTarget)
+	nextEpoch, err := c.ensureDispatcherDrainTarget(context.Background(), nextTarget)
 	require.NoError(t, err)
 
 	// The old clear-pending gate must be replaced by the new active gate.
@@ -763,7 +868,7 @@ func TestNewDrainSessionSupersedesOldClearPendingGate(t *testing.T) {
 
 func TestClearDispatcherDrainTargetResendsUntilAck(t *testing.T) {
 	c, _, target := newDrainTestController(t)
-	epoch, err := c.ensureDispatcherDrainTarget(target)
+	epoch, err := c.ensureDispatcherDrainTarget(context.Background(), target)
 	require.NoError(t, err)
 
 	mc := c.messageCenter.(interface {
@@ -787,7 +892,7 @@ func TestClearDispatcherDrainTargetResendsUntilAck(t *testing.T) {
 
 func TestHigherEpochHeartbeatAcknowledgesPendingClear(t *testing.T) {
 	c, _, target := newDrainTestController(t)
-	epoch, err := c.ensureDispatcherDrainTarget(target)
+	epoch, err := c.ensureDispatcherDrainTarget(context.Background(), target)
 	require.NoError(t, err)
 
 	c.clearDispatcherDrainTarget(target, epoch)
@@ -807,7 +912,7 @@ func TestRemoveNodeAcknowledgesPendingClear(t *testing.T) {
 	c.nodeManager.GetAliveNodes()[other] = &node.Info{ID: other}
 	bootstrapTrackedNodes(c, other)
 
-	epoch, err := c.ensureDispatcherDrainTarget(target)
+	epoch, err := c.ensureDispatcherDrainTarget(context.Background(), target)
 	require.NoError(t, err)
 
 	c.clearDispatcherDrainTarget(target, epoch)

@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
 )
 
@@ -81,16 +82,6 @@ type drainCompletedState struct {
 	epoch  uint64
 }
 
-// newDispatcherDrainEpochSeed creates a non-zero epoch seed for this process lifetime.
-// It prevents immediate epoch reuse after coordinator restarts.
-func newDispatcherDrainEpochSeed() uint64 {
-	epoch := uint64(time.Now().UnixNano())
-	if epoch == 0 {
-		return 1
-	}
-	return epoch
-}
-
 // DrainNode starts or continues draining one target node for the v1 drain API.
 // It first checks the drain capability learned from bootstrap for every alive
 // maintainer manager:
@@ -106,7 +97,7 @@ func newDispatcherDrainEpochSeed() uint64 {
 // Drain completion requires the target to reach STOPPING after DRAINING and for
 // all maintainer-side drain work to converge to zero.
 // The returned remaining is guaranteed to be non-zero until completion is proven.
-func (c *Controller) DrainNode(_ context.Context, target node.ID) (int, error) {
+func (c *Controller) DrainNode(ctx context.Context, target node.ID) (int, error) {
 	activeTarget, activeEpoch, hasSession := c.getDispatcherDrainTarget()
 	if c.nodeManager.GetNodeInfo(target) == nil {
 		if c.isCompletedDrainTarget(target) {
@@ -142,6 +133,9 @@ func (c *Controller) DrainNode(_ context.Context, target node.ID) (int, error) {
 				zap.Stringer("targetNodeID", target),
 				zap.Stringer("blockingNodeID", blockingNodeID),
 				zap.Uint32("blockingDrainProtocolVersion", blockingVersion))
+			// A zero remaining value here means strict drain is intentionally skipped
+			// because at least one alive node cannot run the protocol. The caller is
+			// expected to continue with the legacy hard-restart removal flow.
 			return 0, nil
 		}
 	} else if activeTarget == target {
@@ -149,7 +143,7 @@ func (c *Controller) DrainNode(_ context.Context, target node.ID) (int, error) {
 		// even if node membership changes later. This prevents a new peer from
 		// retroactively turning an in-flight strict drain into a hard restart.
 	}
-	targetEpoch, err := c.ensureDispatcherDrainTarget(target)
+	targetEpoch, err := c.ensureDispatcherDrainTarget(ctx, target)
 	if err != nil {
 		return 0, err
 	}
@@ -427,12 +421,32 @@ func isDrainStatusConvergenceRelevant(cf *changefeed.Changefeed) bool {
 	return info != nil && shouldRunChangefeed(info.State)
 }
 
-// ensureDispatcherDrainTarget creates or reuses the single active drain
-// session. It rejects requests for a different target while one is active.
-func (c *Controller) ensureDispatcherDrainTarget(target node.ID) (uint64, error) {
+// ensureDispatcherDrainTarget creates or reuses the single active drain session.
+// A new session uses a PD-allocated TSO as the drain epoch so coordinator
+// failover and local clock rollback cannot make a node reject the target as
+// stale. It rejects requests for a different target while one is active.
+func (c *Controller) ensureDispatcherDrainTarget(ctx context.Context, target node.ID) (uint64, error) {
+	c.drainSessionMu.Lock()
+	if c.drainSession != nil {
+		defer c.drainSessionMu.Unlock()
+		if c.drainSession.target == target {
+			return c.drainSession.epoch, nil
+		}
+		return 0, errors.ErrSchedulerRequestFailed.GenWithStackByArgs(
+			"drain already in progress on capture " + c.drainSession.target.String())
+	}
+	c.drainSessionMu.Unlock()
+
+	// Allocate the epoch outside drainSessionMu so PD latency does not block
+	// active-session polling, broadcast retries, or node-change cleanup.
+	physical, logical, err := c.pdClient.GetTS(ctx)
+	if err != nil {
+		return 0, errors.Trace(err)
+	}
+	epoch := oracle.ComposeTS(physical, logical)
+
 	c.drainSessionMu.Lock()
 	defer c.drainSessionMu.Unlock()
-
 	if c.drainSession != nil {
 		if c.drainSession.target == target {
 			return c.drainSession.epoch, nil
@@ -440,10 +454,8 @@ func (c *Controller) ensureDispatcherDrainTarget(target node.ID) (uint64, error)
 		return 0, errors.ErrSchedulerRequestFailed.GenWithStackByArgs(
 			"drain already in progress on capture " + c.drainSession.target.String())
 	}
-
-	c.dispatcherDrainEpoch++
-	if c.dispatcherDrainEpoch == 0 {
-		c.dispatcherDrainEpoch = 1
+	if c.nodeManager.GetNodeInfo(target) == nil {
+		return 0, errors.ErrCaptureNotExist.GenWithStackByArgs(target)
 	}
 
 	trackedChangefeeds := c.snapshotDrainTrackedChangefeeds()
@@ -461,17 +473,17 @@ func (c *Controller) ensureDispatcherDrainTarget(target node.ID) (uint64, error)
 		participants:       participants,
 		targetSyncNodes:    targetSyncNodes,
 		target:             target,
-		epoch:              c.dispatcherDrainEpoch,
+		epoch:              epoch,
 		trackedChangefeeds: trackedChangefeeds,
 		pendingStatus:      pendingStatus,
 		dirty:              true,
 	}
-	c.drainController.StartDrainTargetSchedulerGate(target, c.dispatcherDrainEpoch)
+	c.drainController.StartDrainTargetSchedulerGate(target, epoch)
 	c.drainCompleted = nil
 	log.Info("dispatcher drain target activated",
 		zap.Stringer("targetNodeID", target),
-		zap.Uint64("targetEpoch", c.dispatcherDrainEpoch))
-	return c.dispatcherDrainEpoch, nil
+		zap.Uint64("targetEpoch", epoch))
+	return epoch, nil
 }
 
 // getDispatcherDrainTarget returns the current active drain target and epoch.

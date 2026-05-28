@@ -63,6 +63,7 @@ func TestOnPeriodTaskAdvanceLiveness(t *testing.T) {
 			nodeManager:     nodeManager,
 			initialized:     atomic.NewBool(true),
 			drainController: drain.NewController(mc),
+			pdClient:        newDrainTestPDClient(),
 			bootstrapper: bootstrap.NewBootstrapper[heartbeatpb.CoordinatorBootstrapResponse](
 				"test",
 				func(node.ID, string) *messaging.TargetMessage { return nil },
@@ -115,7 +116,7 @@ func TestOnPeriodTaskAdvanceLiveness(t *testing.T) {
 		}, 1, true)
 		changefeedDB.AddReplicatingMaintainer(cf, targetNodeID)
 
-		_, err := controller.ensureDispatcherDrainTarget(targetNodeID)
+		_, err := controller.ensureDispatcherDrainTarget(context.Background(), targetNodeID)
 		require.NoError(t, err)
 
 		controller.drainController.ObserveHeartbeat(targetNodeID, &heartbeatpb.NodeHeartbeat{
@@ -138,7 +139,7 @@ func TestOnPeriodTaskAdvanceLiveness(t *testing.T) {
 
 	t.Run("send stopping only for active drain session target", func(t *testing.T) {
 		controller, messageCh, _, targetNodeID := newController(t)
-		_, err := controller.ensureDispatcherDrainTarget(targetNodeID)
+		_, err := controller.ensureDispatcherDrainTarget(context.Background(), targetNodeID)
 		require.NoError(t, err)
 
 		controller.drainSessionMu.Lock()

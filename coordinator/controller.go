@@ -103,8 +103,6 @@ type Controller struct {
 	// membership removal closed the active session. It preserves v1 API polling
 	// semantics so late polls still observe success instead of capture-not-exist.
 	drainCompleted *drainCompletedState
-
-	dispatcherDrainEpoch uint64
 }
 
 type changefeedChange struct {
@@ -168,18 +166,17 @@ func NewController(
 				drainController,
 			),
 		}),
-		eventCh:              eventCh,
-		operatorController:   oc,
-		messageCenter:        messageCenter,
-		changefeedDB:         changefeedDB,
-		nodeManager:          appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
-		taskScheduler:        threadpool.NewThreadPoolDefault(),
-		backend:              backend,
-		changefeedChangeCh:   changefeedChangeCh,
-		pdClient:             pdClient,
-		pdClock:              appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
-		drainController:      drainController,
-		dispatcherDrainEpoch: newDispatcherDrainEpochSeed(),
+		eventCh:            eventCh,
+		operatorController: oc,
+		messageCenter:      messageCenter,
+		changefeedDB:       changefeedDB,
+		nodeManager:        appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
+		taskScheduler:      threadpool.NewThreadPoolDefault(),
+		backend:            backend,
+		changefeedChangeCh: changefeedChangeCh,
+		pdClient:           pdClient,
+		pdClock:            appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
+		drainController:    drainController,
 	}
 	c.nodeChanged.changed = false
 
