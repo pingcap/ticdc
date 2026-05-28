@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/pingcap/errors"
+	bf "github.com/pingcap/ticdc/pkg/binlog-filter"
 )
 
 // DebugConfig represents config for ticdc unexposed feature configurations
@@ -47,6 +48,12 @@ func (c *DebugConfig) ValidateAndAdjust() error {
 		return errors.Trace(err)
 	}
 	if err := c.Scheduler.ValidateAndAdjust(); err != nil {
+		return errors.Trace(err)
+	}
+	if c.SchemaStore == nil {
+		c.SchemaStore = NewDefaultSchemaStoreConfig()
+	}
+	if err := c.SchemaStore.ValidateAndAdjust(); err != nil {
 		return errors.Trace(err)
 	}
 
@@ -103,6 +110,9 @@ type SchemaStoreConfig struct {
 
 	// IgnoreDDLCommitTs is a list of commit ts of ddl jobs to be ignored by schema store.
 	IgnoreDDLCommitTs []uint64 `toml:"ignore-ddl-commit-ts" json:"ignore_ddl_commit_ts"`
+
+	// IgnoreDDLTypes is a list of ddl types to be ignored by schema store.
+	IgnoreDDLTypes []bf.EventType `toml:"ignore-ddl-types" json:"ignore_ddl_types"`
 }
 
 // NewDefaultSchemaStoreConfig return the default schema store configuration
@@ -110,7 +120,43 @@ func NewDefaultSchemaStoreConfig() *SchemaStoreConfig {
 	return &SchemaStoreConfig{
 		EnableGC:          false,
 		IgnoreDDLCommitTs: []uint64{},
+		IgnoreDDLTypes:    []bf.EventType{},
 	}
+}
+
+// ValidateAndAdjust validates and adjusts the schema store configuration.
+func (c *SchemaStoreConfig) ValidateAndAdjust() error {
+	if c.IgnoreDDLCommitTs == nil {
+		c.IgnoreDDLCommitTs = []uint64{}
+	}
+	if c.IgnoreDDLTypes == nil {
+		c.IgnoreDDLTypes = []bf.EventType{}
+	}
+	for _, eventType := range c.IgnoreDDLTypes {
+		switch eventType {
+		case bf.AllDDL, bf.NoneDDL:
+		case bf.AllEvent, bf.NoneEvent, bf.AllDML, bf.NoneDML,
+			bf.InsertEvent, bf.UpdateEvent, bf.DeleteEvent:
+			return errors.Errorf("schema store ignore-ddl-types does not support event type %s", eventType)
+		default:
+			eventClass, err := bf.ClassifyEvent(eventType)
+			if err != nil {
+				return errors.Trace(err)
+			}
+			if eventClass != bf.EventType("ddl") && eventClass != bf.EventType("incompatible DDL") {
+				return errors.Errorf("schema store ignore-ddl-types does not support event type %s", eventType)
+			}
+		}
+	}
+	_, err := bf.NewBinlogEvent(false, []*bf.BinlogEventRule{
+		{
+			SchemaPattern: "schema-store",
+			TablePattern:  "ddl",
+			Events:        append([]bf.EventType(nil), c.IgnoreDDLTypes...),
+			Action:        bf.Ignore,
+		},
+	})
+	return errors.Trace(err)
 }
 
 // EventServiceConfig represents config for event service

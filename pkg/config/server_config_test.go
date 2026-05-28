@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+	bf "github.com/pingcap/ticdc/pkg/binlog-filter"
 	"github.com/stretchr/testify/require"
 )
 
@@ -189,6 +190,19 @@ func TestSchedulerConfigValidateAndAdjust(t *testing.T) {
 
 	conf = GetDefaultServerConfig().Clone().Debug.Scheduler
 	conf.BalanceMoveBatchSize = 0
+	require.Error(t, conf.ValidateAndAdjust())
+}
+
+func TestSchemaStoreConfigValidateAndAdjust(t *testing.T) {
+	t.Parallel()
+	conf := GetDefaultServerConfig().Clone().Debug.SchemaStore
+	conf.IgnoreDDLTypes = []bf.EventType{bf.RenameTable, bf.AllDDL}
+	require.NoError(t, conf.ValidateAndAdjust())
+
+	conf.IgnoreDDLTypes = []bf.EventType{bf.InsertEvent}
+	require.Error(t, conf.ValidateAndAdjust())
+
+	conf.IgnoreDDLTypes = []bf.EventType{"invalid ddl type"}
 	require.Error(t, conf.ValidateAndAdjust())
 }
 

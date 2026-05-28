@@ -22,6 +22,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/logservice/logpuller"
+	bf "github.com/pingcap/ticdc/pkg/binlog-filter"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -182,10 +183,94 @@ func (s *keyspaceSchemaStore) writeDDLEvent(ddlEvent DDLJobWithCommitTs) {
 			return
 		}
 	}
-
 	if !filter.IsSysSchema(ddlEvent.Job.SchemaName) {
 		s.unsortedCache.addDDLEvent(ddlEvent)
 	}
+}
+
+func filterIgnoredDDLEvents(events []commonEvent.DDLEvent) []commonEvent.DDLEvent {
+	serverConfig := config.GetGlobalServerConfig()
+	ignoreDDLTypes := serverConfig.Debug.SchemaStore.IgnoreDDLTypes
+	if len(ignoreDDLTypes) == 0 || len(events) == 0 {
+		return events
+	}
+
+	filteredEvents := events[:0]
+	for _, event := range events {
+		if shouldIgnoreDDLEventByType(event, ignoreDDLTypes) {
+			log.Info("ignore ddl event by type",
+				zap.Any("type", event.GetDDLType()),
+				zap.Uint64("finishedTs", event.FinishedTs),
+				zap.String("query", event.Query))
+			continue
+		}
+		filteredEvents = append(filteredEvents, event)
+	}
+	return filteredEvents
+}
+
+func shouldIgnoreDDLEventByType(ddlEvent commonEvent.DDLEvent, ignoreDDLTypes []bf.EventType) bool {
+	if len(ignoreDDLTypes) == 0 {
+		return false
+	}
+
+	actionType := ddlEvent.GetDDLType()
+	ddlType := filter.DDLToEventType(actionType)
+	if ddlType == bf.NullEvent {
+		log.Warn("schema store ignore ddl type found unsupported ddl",
+			zap.String("type", actionType.String()),
+			zap.String("query", ddlEvent.Query))
+		return false
+	}
+
+	eventFilter, err := bf.NewBinlogEvent(false, []*bf.BinlogEventRule{
+		{
+			SchemaPattern: "schema-store",
+			TablePattern:  "ddl",
+			Events:        append([]bf.EventType(nil), ignoreDDLTypes...),
+			Action:        bf.Ignore,
+		},
+	})
+	if err != nil {
+		log.Warn("schema store ignore ddl type config is invalid",
+			zap.Any("ignoreDDLTypes", ignoreDDLTypes),
+			zap.Error(err))
+		return false
+	}
+
+	ignored, err := matchIgnoreDDLType(eventFilter, ddlType, ddlEvent.Query)
+	if err != nil {
+		log.Warn("schema store ignore ddl type failed",
+			zap.String("type", actionType.String()),
+			zap.String("query", ddlEvent.Query),
+			zap.Error(err))
+		return false
+	}
+	if ignored {
+		return true
+	}
+
+	if !filter.IsAlterTableDDL(actionType) {
+		return false
+	}
+
+	ignored, err = matchIgnoreDDLType(eventFilter, bf.AlterTable, ddlEvent.Query)
+	if err != nil {
+		log.Warn("schema store ignore alter table ddl type failed",
+			zap.String("type", actionType.String()),
+			zap.String("query", ddlEvent.Query),
+			zap.Error(err))
+		return false
+	}
+	return ignored
+}
+
+func matchIgnoreDDLType(eventFilter *bf.BinlogEvent, ddlType bf.EventType, query string) (bool, error) {
+	action, err := eventFilter.Filter("schema-store", "ddl", ddlType, query)
+	if err != nil {
+		return false, err
+	}
+	return action == bf.Ignore, nil
 }
 
 // TODO tenfyzhong 2025-09-13 13:40:26 use a chan to decoupling
@@ -432,7 +517,7 @@ func (s *schemaStore) FetchTableDDLEvents(
 	if err != nil {
 		return nil, err
 	}
-	return events, nil
+	return filterIgnoredDDLEvents(events), nil
 }
 
 // FetchTableTriggerDDLEvents returns the next ddl events which finishedTs are within the range (start, end]
@@ -453,8 +538,9 @@ func (s *schemaStore) FetchTableTriggerDDLEvents(keyspaceMeta common.KeyspaceMet
 		return nil, 0, err
 	}
 
+	filteredEvents := filterIgnoredDDLEvents(events)
 	if len(events) == limit {
-		return events, events[limit-1].FinishedTs, nil
+		return filteredEvents, events[limit-1].FinishedTs, nil
 	}
 	end := currentResolvedTs
 	// after we get currentResolvedTs, there may be new ddl events with FinishedTs > currentResolvedTs
@@ -469,7 +555,7 @@ func (s *schemaStore) FetchTableTriggerDDLEvents(keyspaceMeta common.KeyspaceMet
 		zap.Int("limit", limit),
 		zap.Uint64("end", end),
 		zap.Any("events", events))
-	return events, end, nil
+	return filteredEvents, end, nil
 }
 
 // RegisterKeyspace register a keyspace to fetch table ddl
