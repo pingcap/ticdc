@@ -244,3 +244,63 @@ func TestDrainControllerSchedulingFreezeBlocksDestinations(t *testing.T) {
 	c.SetSchedulingFrozen(false)
 	require.True(t, c.IsSchedulableDest(dest))
 }
+
+func TestDrainControllerClearGateBlocksPendingNodesUntilAck(t *testing.T) {
+	mc := messaging.NewMockMessageCenter()
+	c := NewController(mc)
+
+	ready := node.ID("ready")
+	pending := node.ID("pending")
+	target := node.ID("target")
+	epoch := uint64(77)
+
+	c.ObserveHeartbeat(ready, &heartbeatpb.NodeHeartbeat{
+		Liveness:  heartbeatpb.NodeLiveness_ALIVE,
+		NodeEpoch: 1,
+	})
+	c.ObserveHeartbeat(pending, &heartbeatpb.NodeHeartbeat{
+		Liveness:  heartbeatpb.NodeLiveness_ALIVE,
+		NodeEpoch: 1,
+	})
+
+	c.StartDrainTargetClearGate(target, epoch, map[node.ID]struct{}{
+		pending: {},
+	})
+
+	require.True(t, c.IsSchedulableDest(ready))
+	require.False(t, c.IsSchedulableDest(pending))
+
+	c.RemoveDrainTargetClearPendingNode(pending, target, epoch)
+	require.True(t, c.IsSchedulableDest(pending))
+}
+
+func TestDrainControllerNewActiveGateSupersedesOldClearGate(t *testing.T) {
+	mc := messaging.NewMockMessageCenter()
+	c := NewController(mc)
+
+	dest := node.ID("dest")
+	oldTarget := node.ID("old-target")
+	newTarget := node.ID("new-target")
+
+	c.ObserveHeartbeat(dest, &heartbeatpb.NodeHeartbeat{
+		Liveness:  heartbeatpb.NodeLiveness_ALIVE,
+		NodeEpoch: 1,
+	})
+	c.StartDrainTargetClearGate(oldTarget, 10, map[node.ID]struct{}{
+		dest: {},
+	})
+	require.False(t, c.IsSchedulableDest(dest))
+
+	c.StartDrainTargetSchedulerGate(newTarget, 11)
+	// The new active gate should replace the old clear-pending restriction, but
+	// the destination still needs to acknowledge the new target before reuse.
+	require.False(t, c.IsSchedulableDest(dest))
+
+	c.ObserveHeartbeat(dest, &heartbeatpb.NodeHeartbeat{
+		Liveness:                    heartbeatpb.NodeLiveness_ALIVE,
+		NodeEpoch:                   1,
+		DispatcherDrainTargetNodeId: newTarget.String(),
+		DispatcherDrainTargetEpoch:  11,
+	})
+	require.True(t, c.IsSchedulableDest(dest))
+}

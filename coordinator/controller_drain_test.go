@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/server/watcher"
@@ -229,6 +230,74 @@ func TestDrainNodeCompletionKeepsBlockingDifferentTargetUntilRemoval(t *testing.
 	_, err = c.DrainNode(context.Background(), other)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "drain already in progress")
+}
+
+func TestDrainNodeReturnsZeroAfterCompletedTargetIsRemoved(t *testing.T) {
+	c, drainController, target := newDrainTestController(t)
+	setDrainProtocolVersion(c, target, 1)
+
+	remaining, err := c.DrainNode(context.Background(), target)
+	require.NoError(t, err)
+	require.Equal(t, 1, remaining)
+
+	setTargetStoppingObserved(drainController, target)
+	remaining, err = c.DrainNode(context.Background(), target)
+	require.NoError(t, err)
+	require.Equal(t, 0, remaining)
+
+	delete(c.nodeManager.GetAliveNodes(), target)
+	c.RemoveNode(target)
+
+	remaining, err = c.DrainNode(context.Background(), target)
+	require.NoError(t, err)
+	require.Equal(t, 0, remaining)
+}
+
+func TestDrainNodeReturnsCaptureNotExistWhenIncompleteTargetIsRemoved(t *testing.T) {
+	c, _, target := newDrainTestController(t)
+	setDrainProtocolVersion(c, target, 1)
+
+	remaining, err := c.DrainNode(context.Background(), target)
+	require.NoError(t, err)
+	require.Equal(t, 1, remaining)
+
+	delete(c.nodeManager.GetAliveNodes(), target)
+	c.RemoveNode(target)
+
+	remaining, err = c.DrainNode(context.Background(), target)
+	require.Error(t, err)
+	require.Zero(t, remaining)
+	require.True(t, errors.ErrCaptureNotExist.Equal(err))
+}
+
+func TestDrainCompletedTombstoneIsClearedWhenTargetRejoins(t *testing.T) {
+	c, drainController, target := newDrainTestController(t)
+	bootstrapTrackedNodes(c, target)
+	setDrainProtocolVersion(c, target, 1)
+
+	remaining, err := c.DrainNode(context.Background(), target)
+	require.NoError(t, err)
+	require.Equal(t, 1, remaining)
+
+	setTargetStoppingObserved(drainController, target)
+	remaining, err = c.DrainNode(context.Background(), target)
+	require.NoError(t, err)
+	require.Equal(t, 0, remaining)
+
+	delete(c.nodeManager.GetAliveNodes(), target)
+	c.onNodeChanged(context.Background())
+	require.True(t, c.isCompletedDrainTarget(target))
+
+	c.nodeManager.GetAliveNodes()[target] = &node.Info{ID: target}
+	c.onNodeChanged(context.Background())
+	require.False(t, c.isCompletedDrainTarget(target))
+
+	delete(c.nodeManager.GetAliveNodes(), target)
+	c.onNodeChanged(context.Background())
+	remaining, err = c.DrainNode(context.Background(), target)
+	require.Error(t, err)
+	require.Zero(t, remaining)
+	require.True(t, errors.ErrCaptureNotExist.Equal(err))
 }
 
 func TestRemoveNodeClearsActiveDrainTarget(t *testing.T) {
@@ -576,6 +645,77 @@ func TestClearDispatcherDrainTargetTracksNodeHeartbeatAck(t *testing.T) {
 		DispatcherDrainTargetEpoch: epoch,
 	})
 	require.Nil(t, c.drainClearState)
+}
+
+func TestClearDispatcherDrainTargetBlocksPendingDestinationsUntilAck(t *testing.T) {
+	c, drainController, target := newDrainTestController(t)
+	bootstrapTrackedNodes(c, target)
+	other := node.ID("other")
+	c.nodeManager.GetAliveNodes()[other] = &node.Info{ID: other}
+	bootstrapTrackedNodes(c, other)
+
+	drainController.ObserveHeartbeat(other, &heartbeatpb.NodeHeartbeat{
+		Liveness:  heartbeatpb.NodeLiveness_ALIVE,
+		NodeEpoch: 1,
+	})
+
+	epoch, err := c.ensureDispatcherDrainTarget(target)
+	require.NoError(t, err)
+
+	c.clearDispatcherDrainTarget(target, epoch)
+	require.NotNil(t, c.drainClearState)
+	require.False(t, drainController.IsSchedulableDest(other))
+
+	ack := &heartbeatpb.NodeHeartbeat{
+		Liveness:                    heartbeatpb.NodeLiveness_ALIVE,
+		NodeEpoch:                   1,
+		DispatcherDrainTargetEpoch:  epoch,
+		DispatcherDrainTargetNodeId: "",
+	}
+	drainController.ObserveHeartbeat(other, ack)
+	c.observeDispatcherDrainTargetHeartbeat(other, ack)
+
+	require.True(t, drainController.IsSchedulableDest(other))
+	require.NotNil(t, c.drainClearState)
+	require.Len(t, c.drainClearState.pendingNodes, 1)
+}
+
+func TestNewDrainSessionSupersedesOldClearPendingGate(t *testing.T) {
+	c, drainController, target := newDrainTestController(t)
+	bootstrapTrackedNodes(c, target)
+	other := node.ID("other")
+	nextTarget := node.ID("next-target")
+	c.nodeManager.GetAliveNodes()[other] = &node.Info{ID: other}
+	c.nodeManager.GetAliveNodes()[nextTarget] = &node.Info{ID: nextTarget}
+	bootstrapTrackedNodes(c, other, nextTarget)
+
+	drainController.ObserveHeartbeat(other, &heartbeatpb.NodeHeartbeat{
+		Liveness:  heartbeatpb.NodeLiveness_ALIVE,
+		NodeEpoch: 1,
+	})
+	setDrainProtocolVersion(c, target, 1)
+	setDrainProtocolVersion(c, other, 1)
+	setDrainProtocolVersion(c, nextTarget, 1)
+
+	epoch, err := c.ensureDispatcherDrainTarget(target)
+	require.NoError(t, err)
+
+	c.clearDispatcherDrainTarget(target, epoch)
+	require.False(t, drainController.IsSchedulableDest(other))
+
+	nextEpoch, err := c.ensureDispatcherDrainTarget(nextTarget)
+	require.NoError(t, err)
+
+	// The old clear-pending gate must be replaced by the new active gate.
+	require.False(t, drainController.IsSchedulableDest(other))
+
+	drainController.ObserveHeartbeat(other, &heartbeatpb.NodeHeartbeat{
+		Liveness:                    heartbeatpb.NodeLiveness_ALIVE,
+		NodeEpoch:                   1,
+		DispatcherDrainTargetNodeId: nextTarget.String(),
+		DispatcherDrainTargetEpoch:  nextEpoch,
+	})
+	require.True(t, drainController.IsSchedulableDest(other))
 }
 
 func TestClearDispatcherDrainTargetResendsUntilAck(t *testing.T) {

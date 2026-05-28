@@ -99,6 +99,10 @@ type Controller struct {
 	// request until all nodes confirm they have dropped the stale drain target
 	// for that epoch.
 	drainClearState *drainClearState
+	// drainCompleted keeps the last successfully completed drain target after
+	// membership removal closed the active session. It preserves v1 API polling
+	// semantics so late polls still observe success instead of capture-not-exist.
+	drainCompleted *drainCompletedState
 
 	dispatcherDrainEpoch uint64
 }
@@ -435,6 +439,9 @@ func (c *Controller) onNodeChanged(ctx context.Context) {
 
 	for _, n := range removedNodes {
 		c.RemoveNode(n)
+	}
+	for _, n := range addedNodes {
+		c.clearCompletedDrainTarget(n)
 	}
 	for _, req := range requests {
 		err := c.messageCenter.SendCommand(req)
@@ -936,13 +943,27 @@ func (c *Controller) getChangefeed(id common.ChangeFeedID) *changefeed.Changefee
 
 // RemoveNode is called when a node is removed
 func (c *Controller) RemoveNode(id node.ID) {
+	target, epoch, hasActiveDrain := c.getDispatcherDrainTarget()
+	completionProven := false
+	if hasActiveDrain && target == id {
+		observation := c.observeDrainNode(id, epoch)
+		completionProven = isDrainCompletionProven(
+			observation.nodeState,
+			observation.drainingObserved,
+			observation.stoppingObserved,
+			observation.remaining,
+		)
+	}
+
 	c.operatorController.OnNodeRemoved(id)
 	// Membership removal is the only authoritative signal that this node will
 	// never acknowledge the current drain epoch again. Clear every drain-side
 	// in-memory reference immediately to avoid leaking a stuck drain session.
-	target, epoch, ok := c.getDispatcherDrainTarget()
-	if ok && target == id {
+	if hasActiveDrain && target == id {
 		c.clearDispatcherDrainTarget(id, epoch)
+		if completionProven {
+			c.recordCompletedDrainTarget(id, epoch)
+		}
 	}
 	c.observeDispatcherDrainTargetClearNodeRemoved(id)
 	c.drainController.RemoveNode(id)

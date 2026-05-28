@@ -75,6 +75,17 @@ type drainTargetSchedulerGate struct {
 	ackedNodes map[node.ID]uint64
 }
 
+type drainTargetClearGate struct {
+	// target/epoch identify the cleared drain target that some nodes may still
+	// cache locally. Those nodes must not receive new maintainers until they
+	// have acknowledged the clear or disappeared from membership.
+	target node.ID
+	epoch  uint64
+	// pendingNodes tracks the destinations that are still blocked by the clear
+	// handshake for this target epoch.
+	pendingNodes map[node.ID]struct{}
+}
+
 // Controller manages node drain progression by sending SetNodeLiveness commands and tracking observations.
 //
 // It is in-memory only. Observations come from either:
@@ -91,6 +102,10 @@ type Controller struct {
 	// targetSchedulerGate blocks maintainer placement onto nodes that have not
 	// yet reported the active dispatcher drain target in node heartbeat.
 	targetSchedulerGate *drainTargetSchedulerGate
+	// clearSchedulerGate blocks placement onto nodes that may still cache a
+	// stale drain target after coordinator has already cleared the active
+	// drain session.
+	clearSchedulerGate *drainTargetClearGate
 	// schedulingFrozen pauses all coordinator-side scheduling destinations when
 	// coordinator has observed an in-flight drain but cannot prove which active
 	// dispatcher drain target every maintainer should follow.
@@ -115,6 +130,12 @@ func (c *Controller) RemoveNode(nodeID node.ID) {
 	delete(c.nodes, nodeID)
 	if c.targetSchedulerGate != nil {
 		delete(c.targetSchedulerGate.ackedNodes, nodeID)
+	}
+	if c.clearSchedulerGate != nil {
+		delete(c.clearSchedulerGate.pendingNodes, nodeID)
+		if len(c.clearSchedulerGate.pendingNodes) == 0 {
+			c.clearSchedulerGate = nil
+		}
 	}
 }
 
@@ -237,6 +258,8 @@ func (c *Controller) StartDrainTargetSchedulerGate(target node.ID, epoch uint64)
 		epoch:      epoch,
 		ackedNodes: make(map[node.ID]uint64),
 	}
+	// A newer active drain target supersedes any older clear handshake.
+	c.clearSchedulerGate = nil
 }
 
 // ClearDrainTargetSchedulerGate removes the active drain-target placement gate
@@ -251,6 +274,58 @@ func (c *Controller) ClearDrainTargetSchedulerGate(target node.ID, epoch uint64)
 		return
 	}
 	c.targetSchedulerGate = nil
+}
+
+// StartDrainTargetClearGate blocks scheduling onto nodes that may still retain
+// the cleared drain target snapshot locally.
+func (c *Controller) StartDrainTargetClearGate(target node.ID, epoch uint64, pendingNodes map[node.ID]struct{}) {
+	if target.IsEmpty() || epoch == 0 || len(pendingNodes) == 0 {
+		return
+	}
+
+	clonedPendingNodes := make(map[node.ID]struct{}, len(pendingNodes))
+	for id := range pendingNodes {
+		clonedPendingNodes[id] = struct{}{}
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.clearSchedulerGate = &drainTargetClearGate{
+		target:       target,
+		epoch:        epoch,
+		pendingNodes: clonedPendingNodes,
+	}
+}
+
+// RemoveDrainTargetClearPendingNode unblocks one destination after it either
+// acknowledged the cleared drain target or left the cluster.
+func (c *Controller) RemoveDrainTargetClearPendingNode(nodeID node.ID, target node.ID, epoch uint64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.clearSchedulerGate == nil ||
+		c.clearSchedulerGate.target != target ||
+		c.clearSchedulerGate.epoch != epoch {
+		return
+	}
+	delete(c.clearSchedulerGate.pendingNodes, nodeID)
+	if len(c.clearSchedulerGate.pendingNodes) == 0 {
+		c.clearSchedulerGate = nil
+	}
+}
+
+// ClearDrainTargetClearGate removes the clear-pending placement gate for the
+// matching cleared drain target.
+func (c *Controller) ClearDrainTargetClearGate(target node.ID, epoch uint64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.clearSchedulerGate == nil ||
+		c.clearSchedulerGate.target != target ||
+		c.clearSchedulerGate.epoch != epoch {
+		return
+	}
+	c.clearSchedulerGate = nil
 }
 
 // SetSchedulingFrozen updates the coordinator-side scheduling freeze flag.
@@ -366,6 +441,11 @@ func (c *Controller) IsSchedulableDest(nodeID node.ID) bool {
 	}
 	if c.getStateLocked(nodeID, time.Now()) != StateAlive {
 		return false
+	}
+	if c.clearSchedulerGate != nil {
+		if _, ok := c.clearSchedulerGate.pendingNodes[nodeID]; ok {
+			return false
+		}
 	}
 	if c.targetSchedulerGate == nil {
 		return true
