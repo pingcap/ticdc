@@ -14,6 +14,7 @@ package coordinator
 
 import (
 	"context"
+	"math"
 	"sync"
 	"testing"
 	"time"
@@ -31,7 +32,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/stretchr/testify/require"
-	"github.com/tikv/client-go/v2/oracle"
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/atomic"
 )
@@ -242,19 +242,23 @@ func TestDrainNodeRejectConcurrentDifferentDrainTarget(t *testing.T) {
 	require.Contains(t, err.Error(), "drain already in progress")
 }
 
-func TestDrainNodeUsesPDTimestampAsDrainEpoch(t *testing.T) {
+func TestDrainNodeUsesUnixNanoCompatibleDrainEpoch(t *testing.T) {
 	c, _, target := newDrainTestController(t)
 	pdClient := &drainTestPDClient{physical: 123, logical: 44}
 	c.pdClient = pdClient
 	setDrainProtocolVersion(c, target, heartbeatpb.CurrentDrainProtocolVersion)
 
+	before := uint64(time.Now().UnixNano())
 	remaining, err := c.DrainNode(context.Background(), target)
 	require.NoError(t, err)
 	require.Equal(t, 1, remaining)
 
 	_, epoch, ok := c.getDispatcherDrainTarget()
 	require.True(t, ok)
-	require.Equal(t, oracle.ComposeTS(int64(123), int64(45)), epoch)
+	pdEpoch, err := unixNanoCompatibleDrainEpoch(123, 45)
+	require.NoError(t, err)
+	require.Greater(t, epoch, pdEpoch)
+	require.Greater(t, epoch, before)
 
 	remaining, err = c.DrainNode(context.Background(), target)
 	require.NoError(t, err)
@@ -262,6 +266,101 @@ func TestDrainNodeUsesPDTimestampAsDrainEpoch(t *testing.T) {
 	_, reusedEpoch, ok := c.getDispatcherDrainTarget()
 	require.True(t, ok)
 	require.Equal(t, epoch, reusedEpoch)
+}
+
+func TestDrainNodeEpochExceedsObservedOldUnixNanoEpoch(t *testing.T) {
+	c, _, target := newDrainTestController(t)
+	c.pdClient = &drainTestPDClient{physical: 123, logical: 44}
+	bootstrapTrackedNodes(c, target)
+	setDrainProtocolVersion(c, target, heartbeatpb.CurrentDrainProtocolVersion)
+
+	oldEpoch := uint64(math.MaxUint64 - 2)
+	changed := c.observeDispatcherDrainTargetHeartbeat(target, &heartbeatpb.NodeHeartbeat{
+		DispatcherDrainTargetNodeId: "old-target",
+		DispatcherDrainTargetEpoch:  oldEpoch,
+	})
+	require.True(t, changed)
+
+	remaining, err := c.DrainNode(context.Background(), target)
+	require.NoError(t, err)
+	require.Equal(t, 1, remaining)
+
+	_, epoch, ok := c.getDispatcherDrainTarget()
+	require.True(t, ok)
+	require.Equal(t, oldEpoch+1, epoch)
+}
+
+func TestDrainNodeEpochExceedsObservedEmptyClearEpoch(t *testing.T) {
+	c, _, target := newDrainTestController(t)
+	c.pdClient = &drainTestPDClient{physical: 123, logical: 44}
+	bootstrapTrackedNodes(c, target)
+	setDrainProtocolVersion(c, target, heartbeatpb.CurrentDrainProtocolVersion)
+
+	clearEpoch := uint64(math.MaxUint64 - 2)
+	changed := c.observeDispatcherDrainTargetHeartbeat(target, &heartbeatpb.NodeHeartbeat{
+		DispatcherDrainTargetEpoch: clearEpoch,
+	})
+	require.False(t, changed)
+
+	remaining, err := c.DrainNode(context.Background(), target)
+	require.NoError(t, err)
+	require.Equal(t, 1, remaining)
+
+	_, epoch, ok := c.getDispatcherDrainTarget()
+	require.True(t, ok)
+	require.Equal(t, clearEpoch+1, epoch)
+}
+
+func TestDrainNodeEpochExceedsBootstrapEmptyClearEpoch(t *testing.T) {
+	c, _, target := newDrainTestController(t)
+	c.pdClient = &drainTestPDClient{physical: 123, logical: 44}
+	setDrainProtocolVersion(c, target, heartbeatpb.CurrentDrainProtocolVersion)
+
+	clearEpoch := uint64(math.MaxUint64 - 2)
+	changed := c.recoverStaleDispatcherDrainTargetFromBootstrap(map[node.ID]*heartbeatpb.CoordinatorBootstrapResponse{
+		target: {
+			DrainProtocolVersion:        heartbeatpb.CurrentDrainProtocolVersion,
+			DispatcherDrainTargetEpoch:  clearEpoch,
+			DispatcherDrainTargetNodeId: "",
+		},
+	})
+	require.False(t, changed)
+
+	remaining, err := c.DrainNode(context.Background(), target)
+	require.NoError(t, err)
+	require.Equal(t, 1, remaining)
+
+	_, epoch, ok := c.getDispatcherDrainTarget()
+	require.True(t, ok)
+	require.Equal(t, clearEpoch+1, epoch)
+}
+
+func TestDrainNodeReturnsErrorWhenDrainEpochOverflows(t *testing.T) {
+	c, _, target := newDrainTestController(t)
+	c.maxObservedDrainEpoch = math.MaxUint64
+	setDrainProtocolVersion(c, target, heartbeatpb.CurrentDrainProtocolVersion)
+
+	remaining, err := c.DrainNode(context.Background(), target)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "drain epoch overflow")
+	require.Zero(t, remaining)
+
+	_, _, ok := c.getDispatcherDrainTarget()
+	require.False(t, ok)
+}
+
+func TestUnixNanoCompatibleDrainEpochRejectsInvalidTSO(t *testing.T) {
+	_, err := unixNanoCompatibleDrainEpoch(-1, 0)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid drain epoch")
+
+	_, err = unixNanoCompatibleDrainEpoch(0, -1)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid drain epoch")
+
+	_, err = unixNanoCompatibleDrainEpoch(int64(math.MaxInt64), int64(math.MaxInt64))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "drain epoch overflow")
 }
 
 func TestDrainNodeReturnsErrorWhenPDAllocEpochFails(t *testing.T) {
@@ -857,6 +956,7 @@ func TestStaleDispatcherDrainTargetRecoveredFromBootstrap(t *testing.T) {
 	require.NotNil(t, c.drainClearState)
 	require.Equal(t, target, c.drainClearState.target)
 	require.Equal(t, uint64(10), c.drainClearState.epoch)
+	require.Equal(t, uint64(10), c.maxObservedDrainEpoch)
 	require.Contains(t, c.drainClearState.pendingNodes, target)
 	require.Contains(t, c.drainClearState.pendingNodes, other)
 	require.False(t, drainController.IsSchedulableDest(other))

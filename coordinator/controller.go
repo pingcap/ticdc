@@ -94,6 +94,13 @@ type Controller struct {
 	// Only one drain session is allowed at a time.
 	drainSessionMu sync.Mutex
 	drainSession   *drainSession
+	// maxObservedDrainEpoch tracks the highest epoch reported by drain protocol
+	// participants, including empty clear targets. It keeps future drain
+	// fencing tokens compatible with old UnixNano-based epochs after rolling
+	// patch or owner failover.
+	maxObservedDrainEpoch uint64
+	// lastGeneratedDrainEpoch keeps epochs strictly increasing within one owner.
+	lastGeneratedDrainEpoch uint64
 	// drainClearState keeps a clearing tombstone after target membership removal
 	// closes the active drain session. It lets coordinator resend the clear
 	// request until all nodes confirm they have dropped the stale drain target

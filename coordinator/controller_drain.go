@@ -15,6 +15,7 @@ package coordinator
 
 import (
 	"context"
+	"math"
 	"time"
 
 	"github.com/pingcap/log"
@@ -26,7 +27,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/utils"
-	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
 )
 
@@ -104,6 +104,16 @@ func drainTargetSnapshotFromHeartbeat(hb *heartbeatpb.NodeHeartbeat) drainTarget
 
 func (s drainTargetSnapshot) hasTarget() bool {
 	return !s.target.IsEmpty() && s.epoch != 0
+}
+
+func (c *Controller) observeDrainEpochLocked(from node.ID, epoch uint64) {
+	if epoch == 0 || epoch <= c.maxObservedDrainEpoch {
+		return
+	}
+	c.maxObservedDrainEpoch = epoch
+	log.Info("observed dispatcher drain epoch",
+		zap.Stringer("fromNodeID", from),
+		zap.Uint64("targetEpoch", epoch))
 }
 
 // DrainNode starts or continues a best-effort drain for one target node.
@@ -431,10 +441,49 @@ func isDrainStatusConvergenceRelevant(cf *changefeed.Changefeed) bool {
 	return info != nil && shouldRunChangefeed(info.State)
 }
 
+func unixNanoCompatibleDrainEpoch(physical int64, logical int64) (uint64, error) {
+	if physical < 0 || logical < 0 {
+		return 0, errors.ErrSchedulerRequestFailed.GenWithStackByArgs("invalid drain epoch")
+	}
+
+	// PD physical is milliseconds. Multiplying it by time.Millisecond keeps the
+	// fencing token in the UnixNano scale used by old versions. The logical part
+	// is only a tie breaker; the result is not a wall clock timestamp.
+	physicalPart := uint64(physical)
+	logicalPart := uint64(logical)
+	if physicalPart > (math.MaxUint64-logicalPart)/uint64(time.Millisecond) {
+		return 0, errors.ErrSchedulerRequestFailed.GenWithStackByArgs("drain epoch overflow")
+	}
+	return physicalPart*uint64(time.Millisecond) + logicalPart, nil
+}
+
+func (c *Controller) nextDispatcherDrainEpochLocked(physical int64, logical int64) (uint64, error) {
+	epoch, err := unixNanoCompatibleDrainEpoch(physical, logical)
+	if err != nil {
+		return 0, err
+	}
+	if now := uint64(time.Now().UnixNano()); now > epoch {
+		epoch = now
+	}
+	if c.maxObservedDrainEpoch > epoch {
+		epoch = c.maxObservedDrainEpoch
+	}
+	if c.lastGeneratedDrainEpoch > epoch {
+		epoch = c.lastGeneratedDrainEpoch
+	}
+	if c.drainClearState != nil && c.drainClearState.epoch > epoch {
+		epoch = c.drainClearState.epoch
+	}
+	if epoch == math.MaxUint64 {
+		return 0, errors.ErrSchedulerRequestFailed.GenWithStackByArgs("drain epoch overflow")
+	}
+	return epoch + 1, nil
+}
+
 // ensureDispatcherDrainTarget creates or reuses the single active drain session.
-// A new session uses a PD-allocated TSO as the drain epoch so coordinator
-// failover and local clock rollback cannot make a node reject the target as
-// stale. It rejects requests for a different target while one is active.
+// A new session uses a monotonic fencing token compatible with the old
+// UnixNano-based epoch so mixed rolling patch cannot make a node reject the
+// target as stale. It rejects requests for a different target while one is active.
 func (c *Controller) ensureDispatcherDrainTarget(ctx context.Context, target node.ID) (uint64, error) {
 	c.drainSessionMu.Lock()
 	if c.drainSession != nil {
@@ -453,7 +502,6 @@ func (c *Controller) ensureDispatcherDrainTarget(ctx context.Context, target nod
 	if err != nil {
 		return 0, errors.Trace(err)
 	}
-	epoch := oracle.ComposeTS(physical, logical)
 
 	c.drainSessionMu.Lock()
 	defer c.drainSessionMu.Unlock()
@@ -466,6 +514,10 @@ func (c *Controller) ensureDispatcherDrainTarget(ctx context.Context, target nod
 	}
 	if c.nodeManager.GetNodeInfo(target) == nil {
 		return 0, errors.ErrCaptureNotExist.GenWithStackByArgs(target)
+	}
+	epoch, err := c.nextDispatcherDrainEpochLocked(physical, logical)
+	if err != nil {
+		return 0, err
 	}
 
 	trackedChangefeeds := c.snapshotDrainTrackedChangefeeds()
@@ -480,6 +532,7 @@ func (c *Controller) ensureDispatcherDrainTarget(ctx context.Context, target nod
 		pendingStatus:      pendingStatus,
 		dirty:              true,
 	}
+	c.lastGeneratedDrainEpoch = epoch
 	c.drainController.StartDrainTargetSchedulerGate(target, epoch)
 	c.drainCompleted = nil
 	log.Info("dispatcher drain target activated",
@@ -695,18 +748,25 @@ func (c *Controller) recoverStaleDispatcherDrainTargetFromBootstrap(
 	responses map[node.ID]*heartbeatpb.CoordinatorBootstrapResponse,
 ) bool {
 	var stale drainTargetSnapshot
-	for _, resp := range responses {
+	observed := make(map[node.ID]uint64)
+	for id, resp := range responses {
 		if resp == nil ||
 			!heartbeatpb.SupportsCoordinatorDrivenDrain(resp.GetDrainProtocolVersion()) {
 			continue
 		}
 		snapshot := drainTargetSnapshotFromBootstrap(resp)
+		if snapshot.epoch != 0 {
+			observed[id] = snapshot.epoch
+		}
 		if snapshot.hasTarget() && snapshot.epoch > stale.epoch {
 			stale = snapshot
 		}
 	}
 	c.drainSessionMu.Lock()
 	defer c.drainSessionMu.Unlock()
+	for id, epoch := range observed {
+		c.observeDrainEpochLocked(id, epoch)
+	}
 	if c.drainClearState != nil &&
 		(!stale.hasTarget() || c.drainClearState.epoch > stale.epoch) {
 		return c.createOrReplaceDrainClearStateLocked(
@@ -742,6 +802,7 @@ func (c *Controller) observeStaleDispatcherDrainTargetSnapshot(from node.ID, sna
 		if !c.isDrainClearParticipant(from) {
 			return false
 		}
+		c.observeDrainEpochLocked(from, snapshot.epoch)
 		if !snapshot.hasTarget() {
 			return false
 		}
@@ -755,6 +816,7 @@ func (c *Controller) observeStaleDispatcherDrainTargetSnapshot(from node.ID, sna
 	if _, ok := clearState.pendingNodes[from]; !ok && !c.isDrainClearParticipant(from) {
 		return false
 	}
+	c.observeDrainEpochLocked(from, snapshot.epoch)
 	return c.reconcileDrainClearStateSnapshotLocked(from, snapshot)
 }
 
