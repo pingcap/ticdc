@@ -14,6 +14,7 @@
 package dispatcher
 
 import (
+	"context"
 	"sync/atomic"
 	"time"
 
@@ -57,9 +58,9 @@ type SharedInfo struct {
 	// statusesChan is used to store the status of dispatchers when status changed
 	// and push to heartbeatRequestQueue
 	statusesChan chan TableSpanStatusWithSeq
-	// blockStatusesChan use to collector block status of ddl/sync point event to Maintainer
-	// shared by the event dispatcher manager
-	blockStatusesChan chan *heartbeatpb.TableSpanBlockStatus
+	// blockStatusBuffer keeps block statuses for the dispatcher manager.
+	// Identical WAITING and DONE statuses are coalesced while pending to reduce local memory amplification.
+	blockStatusBuffer *BlockStatusBuffer
 
 	// blockExecutor is used to execute block events such as DDL and sync point events asynchronously
 	// to avoid callback() called in handleEvents, causing deadlock in ds
@@ -86,10 +87,11 @@ func NewSharedInfo(
 	txnAtomicity *config.AtomicityLevel,
 	enableSplittableCheck bool,
 	statusesChan chan TableSpanStatusWithSeq,
-	blockStatusesChan chan *heartbeatpb.TableSpanBlockStatus,
+	blockStatusBufferSize int,
 	errCh chan error,
 ) *SharedInfo {
 	sharedInfo := &SharedInfo{
+<<<<<<< HEAD
 		changefeedID:          changefeedID,
 		timezone:              timezone,
 		bdrMode:               bdrMode,
@@ -103,6 +105,25 @@ func NewSharedInfo(
 		blockExecutor:         newBlockEventExecutor(),
 		errCh:                 errCh,
 		metricHandleDDLHis:    metrics.HandleDDLHistogram.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
+=======
+		changefeedID:             changefeedID,
+		timezone:                 timezone,
+		bdrMode:                  bdrMode,
+		enableActiveActive:       enableActiveActive,
+		outputRawChangeEvent:     outputRawChangeEvent,
+		integrityConfig:          integrityConfig,
+		filterConfig:             filterConfig,
+		syncPointConfig:          syncPointConfig,
+		enableSplittableCheck:    enableSplittableCheck,
+		router:                   router,
+		eventCollectorBatchCount: eventCollectorBatchCount,
+		eventCollectorBatchBytes: eventCollectorBatchBytes,
+		statusesChan:             statusesChan,
+		blockStatusBuffer:        NewBlockStatusBuffer(blockStatusBufferSize),
+		blockExecutor:            newBlockEventExecutor(),
+		errCh:                    errCh,
+		metricHandleDDLHis:       metrics.HandleDDLHistogram.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
+>>>>>>> 99f48594f (dispatcher,dispatchermanager: deduplicate pending block statuses (#5028))
 	}
 
 	if txnAtomicity != nil {
@@ -212,8 +233,20 @@ func (d *BasicDispatcher) GetTxnAtomicity() config.AtomicityLevel {
 	return d.sharedInfo.txnAtomicity
 }
 
-func (d *BasicDispatcher) GetBlockStatusesChan() chan *heartbeatpb.TableSpanBlockStatus {
-	return d.sharedInfo.blockStatusesChan
+// offerBlockStatus is the common path for WAITING/NONE protobufs that are
+// constructed once and then reused by resend tasks.
+func (d *BasicDispatcher) offerBlockStatus(status *heartbeatpb.TableSpanBlockStatus) {
+	d.sharedInfo.OfferBlockStatus(status)
+}
+
+// offerDoneBlockStatus keeps DONE on the dedicated minimal-key path so
+// duplicate completions are filtered before another protobuf allocation.
+func (d *BasicDispatcher) offerDoneBlockStatus(blockTs uint64, isSyncPoint bool) {
+	d.sharedInfo.OfferDoneBlockStatus(d.id, blockTs, isSyncPoint, d.GetMode())
+}
+
+func (d *BasicDispatcher) TakeBlockStatus(ctx context.Context) *heartbeatpb.TableSpanBlockStatus {
+	return d.sharedInfo.TakeBlockStatus(ctx)
 }
 
 func (d *BasicDispatcher) GetEventSizePerSecond() float32 {
@@ -243,8 +276,47 @@ func (s *SharedInfo) GetStatusesChan() chan TableSpanStatusWithSeq {
 	return s.statusesChan
 }
 
+<<<<<<< HEAD
 func (s *SharedInfo) GetBlockStatusesChan() chan *heartbeatpb.TableSpanBlockStatus {
 	return s.blockStatusesChan
+=======
+func (s *SharedInfo) EnableActiveActive() bool {
+	return s.enableActiveActive
+}
+
+// OfferBlockStatus appends a protobuf block status to the dispatcher-local
+// buffer. WAITING keeps a single pending protobuf object while NONE preserves
+// original ordering without deduplication.
+func (s *SharedInfo) OfferBlockStatus(status *heartbeatpb.TableSpanBlockStatus) {
+	s.blockStatusBuffer.OfferStatus(status)
+}
+
+// OfferDoneBlockStatus appends a DONE status through the dedicated minimal-key
+// path so duplicates are suppressed before another protobuf allocation.
+func (s *SharedInfo) OfferDoneBlockStatus(
+	dispatcherID common.DispatcherID,
+	blockTs uint64,
+	isSyncPoint bool,
+	mode int64,
+) {
+	s.blockStatusBuffer.OfferDone(dispatcherID, blockTs, isSyncPoint, mode)
+}
+
+// TakeBlockStatus blocks until a local status entry is available or the caller
+// cancels the wait.
+func (s *SharedInfo) TakeBlockStatus(ctx context.Context) *heartbeatpb.TableSpanBlockStatus {
+	return s.blockStatusBuffer.Take(ctx)
+}
+
+// TryTakeBlockStatus drains a ready entry without extending the current batch
+// window with another blocking wait.
+func (s *SharedInfo) TryTakeBlockStatus() (*heartbeatpb.TableSpanBlockStatus, bool) {
+	return s.blockStatusBuffer.TryTake()
+}
+
+func (s *SharedInfo) BlockStatusLen() int {
+	return s.blockStatusBuffer.Len()
+>>>>>>> 99f48594f (dispatcher,dispatchermanager: deduplicate pending block statuses (#5028))
 }
 
 func (s *SharedInfo) GetErrCh() chan error {

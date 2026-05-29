@@ -14,6 +14,7 @@
 package dispatcher
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"sync/atomic"
@@ -35,6 +36,57 @@ import (
 
 var defaultAtomicity = config.DefaultAtomicityLevel()
 
+<<<<<<< HEAD
+=======
+func takeBlockStatusWithTimeout(
+	t *testing.T,
+	dispatcher *EventDispatcher,
+	timeout time.Duration,
+) (*heartbeatpb.TableSpanBlockStatus, bool) {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	status := dispatcher.TakeBlockStatus(ctx)
+	if status == nil {
+		return nil, false
+	}
+	return status, true
+}
+
+func newTestSyncPointConfig() *syncpoint.SyncPointConfig {
+	return &syncpoint.SyncPointConfig{
+		SyncPointInterval:  5 * time.Second,
+		SyncPointRetention: 10 * time.Minute,
+	}
+}
+
+func newTestSharedInfo(
+	enableActiveActive bool,
+	enableSplittableCheck bool,
+	syncPointConfig *syncpoint.SyncPointConfig,
+) *SharedInfo {
+	return NewSharedInfo(
+		common.NewChangefeedID(common.DefaultKeyspaceName),
+		"system",
+		false,
+		enableActiveActive,
+		false,
+		nil,
+		nil,
+		syncPointConfig,
+		&defaultAtomicity,
+		enableSplittableCheck,
+		routing.Router{},
+		0,
+		0,
+		make(chan TableSpanStatusWithSeq, 128),
+		128,
+		make(chan error, 1),
+	)
+}
+
+>>>>>>> 99f48594f (dispatcher,dispatchermanager: deduplicate pending block statuses (#5028))
 func getCompleteTableSpanWithTableID(keyspaceID uint32, tableID int64) (*heartbeatpb.TableSpan, error) {
 	tableSpan := &heartbeatpb.TableSpan{
 		KeyspaceID: keyspaceID,
@@ -429,6 +481,60 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	t.Run("cloud storage wake callback after batch enqueue", verifyDMLWakeCallbackStorageAfterBatchEnqueue)
 }
 
+<<<<<<< HEAD
+=======
+func TestDispatcherIgnoresStaleIgnoredBlockStatus(t *testing.T) {
+	tableSpan := getUncompleteTableSpan()
+	tableSpan.KeyspaceID = getTestingKeyspaceID()
+	dispatcher := newDispatcherForTest(newDispatcherTestSink(t, common.MysqlSinkType).Sink(), tableSpan)
+
+	previousScheduler := GetDispatcherTaskScheduler()
+	taskScheduler := threadpool.NewThreadPool(1)
+	SetDispatcherTaskScheduler(taskScheduler)
+	defer func() {
+		SetDispatcherTaskScheduler(previousScheduler)
+		taskScheduler.Stop()
+	}()
+
+	ddlEvent := &commonEvent.DDLEvent{
+		FinishedTs: 30,
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{1},
+		},
+	}
+	dispatcher.blockEventStatus.setBlockEvent(ddlEvent, heartbeatpb.BlockStage_WRITING)
+	identifier := BlockEventIdentifier{CommitTs: ddlEvent.FinishedTs}
+	dispatcher.resendTaskMap.Set(identifier, newResendTask(
+		dispatcher,
+		&heartbeatpb.TableSpanBlockStatus{
+			ID: dispatcher.id.ToPB(),
+			State: &heartbeatpb.State{
+				IsBlocked:   true,
+				BlockTs:     ddlEvent.GetCommitTs(),
+				BlockTables: cloneInfluencedTablesPB(ddlEvent.GetBlockedTables()),
+				IsSyncPoint: false,
+				Stage:       heartbeatpb.BlockStage_WAITING,
+			},
+			Mode: dispatcher.GetMode(),
+		},
+		nil,
+	))
+	defer dispatcher.cancelResendTask(identifier)
+
+	await := dispatcher.HandleDispatcherStatus(&heartbeatpb.DispatcherStatus{
+		IgnoredBlockStatus: &heartbeatpb.IgnoredBlockStatus{
+			CommitTs: ddlEvent.FinishedTs,
+		},
+	})
+	require.False(t, await)
+
+	if msg, ok := takeBlockStatusWithTimeout(t, dispatcher, 200*time.Millisecond); ok {
+		require.FailNow(t, "unexpected fast retry for stale ignored block status", "msg=%v", msg)
+	}
+}
+
+>>>>>>> 99f48594f (dispatcher,dispatchermanager: deduplicate pending block statuses (#5028))
 func TestBlockingDDLFlushBeforeWaitingAndWriteDoesNotFlushAgain(t *testing.T) {
 	keyspaceID := getTestingKeyspaceID()
 	tableSpan := getUncompleteTableSpan()
@@ -476,22 +582,16 @@ func TestBlockingDDLFlushBeforeWaitingAndWriteDoesNotFlushAgain(t *testing.T) {
 	require.Nil(t, pendingEvent)
 	require.Equal(t, heartbeatpb.BlockStage_NONE, blockStage)
 
-	select {
-	case msg := <-dispatcher.GetBlockStatusesChan():
-		require.FailNow(t, "unexpected block status before local flush finishes", "received=%v", msg)
-	case <-time.After(200 * time.Millisecond):
-	}
+	msg, ok := takeBlockStatusWithTimeout(t, dispatcher, 200*time.Millisecond)
+	require.False(t, ok, "unexpected block status before local flush finishes: %v", msg)
 
 	close(flushRelease)
 
-	select {
-	case msg := <-dispatcher.GetBlockStatusesChan():
-		require.True(t, msg.State.IsBlocked)
-		require.Equal(t, uint64(10), msg.State.BlockTs)
-		require.Equal(t, heartbeatpb.BlockStage_WAITING, msg.State.Stage)
-	case <-time.After(time.Second):
-		require.FailNow(t, "expected blocking DDL to enter WAITING after local flush")
-	}
+	msg, ok = takeBlockStatusWithTimeout(t, dispatcher, time.Second)
+	require.True(t, ok, "expected blocking DDL to enter WAITING after local flush")
+	require.True(t, msg.State.IsBlocked)
+	require.Equal(t, uint64(10), msg.State.BlockTs)
+	require.Equal(t, heartbeatpb.BlockStage_WAITING, msg.State.Stage)
 
 	pendingEvent, blockStage = dispatcher.blockEventStatus.getEventAndStage()
 	require.Same(t, ddlEvent, pendingEvent)
@@ -507,14 +607,11 @@ func TestBlockingDDLFlushBeforeWaitingAndWriteDoesNotFlushAgain(t *testing.T) {
 	})
 	require.True(t, await)
 
-	select {
-	case msg := <-dispatcher.GetBlockStatusesChan():
-		require.True(t, msg.State.IsBlocked)
-		require.Equal(t, uint64(10), msg.State.BlockTs)
-		require.Equal(t, heartbeatpb.BlockStage_DONE, msg.State.Stage)
-	case <-time.After(time.Second):
-		require.FailNow(t, "expected DONE after write action")
-	}
+	msg, ok = takeBlockStatusWithTimeout(t, dispatcher, time.Second)
+	require.True(t, ok, "expected DONE after write action")
+	require.True(t, msg.State.IsBlocked)
+	require.Equal(t, uint64(10), msg.State.BlockTs)
+	require.Equal(t, heartbeatpb.BlockStage_DONE, msg.State.Stage)
 
 	require.Eventually(t, func() bool {
 		pendingEvent, blockStage = dispatcher.blockEventStatus.getEventAndStage()
@@ -1306,14 +1403,11 @@ func TestHoldBlockEventUntilNoResendTasks(t *testing.T) {
 	block := dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, createTableDDL)}, func() {})
 	require.True(t, block)
 
-	select {
-	case msg := <-dispatcher.GetBlockStatusesChan():
-		require.False(t, msg.State.IsBlocked)
-		require.False(t, msg.State.IsSyncPoint)
-		require.Equal(t, uint64(10), msg.State.BlockTs)
-	case <-time.After(time.Second):
-		require.FailNow(t, "expected add-table block status")
-	}
+	msg, ok := takeBlockStatusWithTimeout(t, dispatcher, time.Second)
+	require.True(t, ok, "expected add-table block status")
+	require.False(t, msg.State.IsBlocked)
+	require.False(t, msg.State.IsSyncPoint)
+	require.Equal(t, uint64(10), msg.State.BlockTs)
 	require.Equal(t, 1, dispatcher.resendTaskMap.Len())
 
 	// A DB/All block event must be deferred until resendTaskMap becomes empty,
@@ -1329,11 +1423,8 @@ func TestHoldBlockEventUntilNoResendTasks(t *testing.T) {
 	block = dispatcher.HandleEvents([]DispatcherEvent{NewDispatcherEvent(&nodeID, dropDBDDL)}, func() {})
 	require.True(t, block)
 
-	select {
-	case msg := <-dispatcher.GetBlockStatusesChan():
-		require.FailNow(t, "unexpected block status", "received=%v", msg)
-	case <-time.After(200 * time.Millisecond):
-	}
+	msg, ok = takeBlockStatusWithTimeout(t, dispatcher, 200*time.Millisecond)
+	require.False(t, ok, "unexpected block status: %v", msg)
 
 	// Simulate maintainer ACK for the create table scheduling message.
 	dispatcher.HandleDispatcherStatus(&heartbeatpb.DispatcherStatus{
@@ -1349,23 +1440,17 @@ func TestHoldBlockEventUntilNoResendTasks(t *testing.T) {
 		require.FailNow(t, "expected deferred DB-level flush to start")
 	}
 
-	select {
-	case msg := <-dispatcher.GetBlockStatusesChan():
-		require.FailNow(t, "unexpected block status before local flush finishes", "received=%v", msg)
-	case <-time.After(200 * time.Millisecond):
-	}
+	msg, ok = takeBlockStatusWithTimeout(t, dispatcher, 200*time.Millisecond)
+	require.False(t, ok, "unexpected block status before local flush finishes: %v", msg)
 
 	close(flushRelease)
 
-	select {
-	case msg := <-dispatcher.GetBlockStatusesChan():
-		require.True(t, msg.State.IsBlocked)
-		require.False(t, msg.State.IsSyncPoint)
-		require.Equal(t, uint64(20), msg.State.BlockTs)
-		require.Equal(t, heartbeatpb.InfluenceType_DB, msg.State.BlockTables.InfluenceType)
-		require.Equal(t, int64(1), msg.State.BlockTables.SchemaID)
-		require.Equal(t, heartbeatpb.BlockStage_WAITING, msg.State.Stage)
-	case <-time.After(time.Second):
-		require.FailNow(t, "expected deferred DB-level block status")
-	}
+	msg, ok = takeBlockStatusWithTimeout(t, dispatcher, time.Second)
+	require.True(t, ok, "expected deferred DB-level block status")
+	require.True(t, msg.State.IsBlocked)
+	require.False(t, msg.State.IsSyncPoint)
+	require.Equal(t, uint64(20), msg.State.BlockTs)
+	require.Equal(t, heartbeatpb.InfluenceType_DB, msg.State.BlockTables.InfluenceType)
+	require.Equal(t, int64(1), msg.State.BlockTables.SchemaID)
+	require.Equal(t, heartbeatpb.BlockStage_WAITING, msg.State.Stage)
 }

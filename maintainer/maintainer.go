@@ -71,6 +71,10 @@ type Maintainer struct {
 
 	pdClock pdutil.Clock
 	eventCh *chann.DrainableChann[*Event]
+	// blockStatusPending keeps the dedupe window local to the maintainer event
+	// queue so duplicate block-status resends do not pile up while an earlier
+	// equivalent event is still pending or being handled.
+	blockStatusPending blockStatusPendingSet
 
 	mc messaging.MessageCenter
 
@@ -308,7 +312,14 @@ func (m *Maintainer) HandleEvent(event *Event) bool {
 					zap.Stringer("changefeedID", m.changefeedID),
 					zap.Int("eventType", event.eventType),
 					zap.Duration("duration", duration),
+<<<<<<< HEAD
 					zap.Any("Message", event.message),
+=======
+					zap.String("from", event.message.From.String()),
+					zap.String("to", event.message.To.String()),
+					zap.String("type", event.message.Type.String()),
+					zap.String("topic", event.message.Topic),
+>>>>>>> 99f48594f (dispatcher,dispatchermanager: deduplicate pending block statuses (#5028))
 				)
 			} else {
 				log.Info("maintainer is too slow",
@@ -1196,7 +1207,13 @@ func (m *Maintainer) runHandleEvents(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case event := <-m.eventCh.Out():
-			m.HandleEvent(event)
+			if event == nil {
+				continue
+			}
+			func() {
+				defer m.blockStatusPending.release(event.blockStatusReleaseKeys)
+				m.HandleEvent(event)
+			}()
 		case <-ticker.C:
 			m.HandleEvent(&Event{
 				changefeedID: m.changefeedID,
@@ -1209,7 +1226,11 @@ func (m *Maintainer) runHandleEvents(ctx context.Context) {
 // pushEvent is used to push event to maintainer's event channel
 // event will be handled by maintainer's main loop
 func (m *Maintainer) pushEvent(event *Event) {
-	m.eventCh.In() <- event
+	filteredEvent, ok := m.filterBlockStatusEvent(event)
+	if !ok {
+		return
+	}
+	m.eventCh.In() <- filteredEvent
 }
 
 func (m *Maintainer) getWatermark() heartbeatpb.Watermark {
