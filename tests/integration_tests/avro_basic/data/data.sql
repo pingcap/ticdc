@@ -186,6 +186,17 @@ insert into t(c_tinyint, c_mediumint, c_int, c_bigint, a) values (4, 5, 6, 7, 8)
 alter table t modify c_mediumint varchar(10) null;
 insert into t(c_tinyint, c_mediumint, c_int, c_bigint, a) values (5, "234", 6, 7, 8);
 
+create table t2(
+    id int primary key,
+    v int,
+    note varchar(32)
+);
+
+insert into t2 values(1, 10, 'before-delete');
+insert into t2 values(2, 20, 'keep');
+update t2 set v = 11, note = 'updated-before-delete' where id = 1;
+delete from t2 where id = 1;
+
 create table finish_mark
 (
     id int PRIMARY KEY
