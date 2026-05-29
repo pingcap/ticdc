@@ -128,6 +128,11 @@ func (c *Controller) observeDrainEpochLocked(from node.ID, epoch uint64) {
 // target epoch, broadcasts the drain target, requests liveness transition, and
 // evaluates a one-shot drain observation.
 //
+// Requests for a different target while the previous drain is still active or
+// clearing return non-zero remaining instead of an error. This preserves the
+// polling contract used by rolling upgrade clients while keeping one drain
+// target active at a time.
+//
 // A zero remaining value means all coordinator-observed drain signals have
 // converged. It is best-effort because the active session uses an in-memory
 // snapshot of relevant changefeeds rather than a cluster-wide persisted proof.
@@ -141,6 +146,14 @@ func (c *Controller) DrainNode(ctx context.Context, target node.ID) (int, error)
 			return c.observeRemovedActiveDrainTarget(target, activeEpoch), nil
 		}
 		return 0, errors.ErrCaptureNotExist.GenWithStackByArgs(target)
+	}
+	if blockingTarget, blockingEpoch, phase, blocked := c.blockedByPreviousDrainTarget(target); blocked {
+		log.Info("drain waiting for previous drain target to clear",
+			zap.Stringer("targetNodeID", target),
+			zap.Stringer("blockingTargetNodeID", blockingTarget),
+			zap.Uint64("blockingTargetEpoch", blockingEpoch),
+			zap.String("phase", phase))
+		return 1, nil
 	}
 	// Drain completion relies on in-memory changefeed state built by coordinator bootstrap.
 	// Before bootstrap is complete, always return non-zero remaining to avoid premature zero.
@@ -248,6 +261,22 @@ func (c *Controller) observeRemovedActiveDrainTarget(target node.ID, epoch uint6
 		zap.Int("pendingStatusCount", observation.pendingStatusCount),
 		zap.Int("remaining", observation.remaining))
 	return ensureDrainRemainingNonZero(observation.remaining)
+}
+
+func (c *Controller) blockedByPreviousDrainTarget(target node.ID) (node.ID, uint64, string, bool) {
+	c.drainSessionMu.Lock()
+	defer c.drainSessionMu.Unlock()
+
+	if c.drainSession != nil {
+		if c.drainSession.target == target {
+			return "", 0, "", false
+		}
+		return c.drainSession.target, c.drainSession.epoch, "active_session", true
+	}
+	if c.drainClearState != nil {
+		return c.drainClearState.target, c.drainClearState.epoch, "clear_state", true
+	}
+	return "", 0, "", false
 }
 
 // findDrainProtocolBlocker returns the first alive node that still
