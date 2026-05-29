@@ -201,3 +201,33 @@ func TestReplicaConfigConversionRedoBatchField(t *testing.T) {
 	require.NotNil(t, apiCfgBack.Consistent.EventCollectorBatchCount)
 	require.Equal(t, 4096, *apiCfgBack.Consistent.EventCollectorBatchCount)
 }
+
+func TestReplicaConfigCodecConfigConversion(t *testing.T) {
+	t.Parallel()
+
+	apiCfg := &ReplicaConfig{
+		Sink: &SinkConfig{
+			KafkaConfig: &KafkaConfig{
+				CodecConfig: &CodecConfig{
+					EnableTiDBExtension:            util.AddressOf(true),
+					MaxBatchSize:                   util.AddressOf(16),
+					AvroEnableWatermark:            util.AddressOf(true),
+					AvroDecimalHandlingMode:        util.AddressOf("string"),
+					AvroBigintUnsignedHandlingMode: util.AddressOf("string"),
+					AvroIncludeBeforeValue:         util.AddressOf(true),
+					EncodingFormat:                 util.AddressOf("avro"),
+				},
+			},
+		},
+	}
+
+	internalCfg := apiCfg.ToInternalReplicaConfig()
+	require.NotNil(t, internalCfg.Sink.KafkaConfig)
+	require.NotNil(t, internalCfg.Sink.KafkaConfig.CodecConfig)
+	require.True(t, util.GetOrZero(internalCfg.Sink.KafkaConfig.CodecConfig.AvroIncludeBeforeValue))
+
+	apiCfgBack := ToAPIReplicaConfig(internalCfg)
+	require.NotNil(t, apiCfgBack.Sink.KafkaConfig)
+	require.NotNil(t, apiCfgBack.Sink.KafkaConfig.CodecConfig)
+	require.True(t, util.GetOrZero(apiCfgBack.Sink.KafkaConfig.CodecConfig.AvroIncludeBeforeValue))
+}
