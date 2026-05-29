@@ -932,22 +932,17 @@ func (d *BasicDispatcher) shouldBlock(event commonEvent.BlockEvent) bool {
 	switch event.GetType() {
 	case commonEvent.TypeDDLEvent:
 		ddlEvent := event.(*commonEvent.DDLEvent)
-		if d.routeAffectingDDL(ddlEvent) {
-			return true
-		}
-		if ddlEvent.BlockedTables == nil {
+		blockTables := ddlEvent.GetBlockedTables()
+		if blockTables == nil {
 			return false
 		}
-		switch ddlEvent.GetBlockedTables().InfluenceType {
+		switch blockTables.InfluenceType {
 		case commonEvent.InfluenceTypeNormal:
-			if len(ddlEvent.GetBlockedTables().TableIDs) > 1 {
-				return true
-			}
 			if !d.isCompleteTable {
 				// if the table is split, even the blockTable only itself, it should block
 				return true
 			}
-			return false
+			return len(blockTables.TableIDs) > 1
 		case commonEvent.InfluenceTypeDB, commonEvent.InfluenceTypeAll:
 			return true
 		}
@@ -957,14 +952,6 @@ func (d *BasicDispatcher) shouldBlock(event commonEvent.BlockEvent) bool {
 		log.Error("invalid event type", zap.Any("eventType", event.GetType()))
 	}
 	return false
-}
-
-func (d *BasicDispatcher) routeAffectingDDL(event *commonEvent.DDLEvent) bool {
-	return d.sharedInfo.GetRouter().HasTableRoute() &&
-		(event.GetNeedDroppedTables() != nil ||
-		len(event.GetNeedAddedTables()) > 0 ||
-		len(event.GetUpdatedSchemas()) > 0 ||
-		event.TableNameChange != nil)
 }
 
 // Hold DB/All block events on the table trigger dispatcher until there are no pending
