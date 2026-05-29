@@ -95,7 +95,7 @@ func verifyIgnoreEvents(types []bf.EventType) error {
 	return nil
 }
 
-func verifyIgnoreDDLTypes(types []bf.EventType) error {
+func verifyDebugSkipDDLTypes(types []bf.EventType) error {
 	if err := verifyIgnoreEvents(types); err != nil {
 		return err
 	}

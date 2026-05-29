@@ -111,14 +111,14 @@ func (d *DispatcherMap[T]) ForEach(fn func(id common.DispatcherID, dispatcher T)
 
 func toFilterConfigPB(filter *config.FilterConfig) *eventpb.InnerFilterConfig {
 	filterConfig := &eventpb.InnerFilterConfig{
-		Rules:                     filter.Rules,
-		IgnoreTxnStartTs:          filter.IgnoreTxnStartTs,
-		SchemaStoreIgnoreDdlTypes: make([]string, 0, len(filter.SchemaStoreIgnoreDDLTypes)),
-		EventFilters:              make([]*eventpb.EventFilterRule, 0),
+		Rules:             filter.Rules,
+		IgnoreTxnStartTs:  filter.IgnoreTxnStartTs,
+		DebugSkipDdlTypes: make([]string, 0, len(filter.DebugSkipDDLTypes)),
+		EventFilters:      make([]*eventpb.EventFilterRule, 0),
 	}
 
-	for _, eventType := range filter.SchemaStoreIgnoreDDLTypes {
-		filterConfig.SchemaStoreIgnoreDdlTypes = append(filterConfig.SchemaStoreIgnoreDdlTypes, string(eventType))
+	for _, eventType := range filter.DebugSkipDDLTypes {
+		filterConfig.DebugSkipDdlTypes = append(filterConfig.DebugSkipDdlTypes, string(eventType))
 	}
 	for _, eventFilterRule := range filter.EventFilters {
 		filterConfig.EventFilters = append(filterConfig.EventFilters, toEventFilterRulePB(eventFilterRule))

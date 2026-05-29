@@ -194,7 +194,7 @@ func filterIgnoredDDLEvents(events []commonEvent.DDLEvent, tableFilter filter.Fi
 
 	filteredEvents := events[:0]
 	for _, event := range events {
-		ignored, err := tableFilter.ShouldIgnoreDDLEventInSchemaStore(event.GetDDLType(), event.Query)
+		skipped, err := tableFilter.ShouldSkipDDLEventInSchemaStore(event.GetDDLType(), event.Query)
 		if err != nil {
 			log.Warn("schema store ddl filter failed",
 				zap.Any("type", event.GetDDLType()),
@@ -204,8 +204,8 @@ func filterIgnoredDDLEvents(events []commonEvent.DDLEvent, tableFilter filter.Fi
 			filteredEvents = append(filteredEvents, event)
 			continue
 		}
-		if ignored {
-			log.Info("ignore ddl event by type",
+		if skipped {
+			log.Info("skip ddl event by debug-skip-ddl-types",
 				zap.Any("type", event.GetDDLType()),
 				zap.Uint64("finishedTs", event.FinishedTs),
 				zap.String("query", event.Query))

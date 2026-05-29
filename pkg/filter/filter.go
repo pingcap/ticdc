@@ -62,9 +62,9 @@ type Filter interface {
 	//  1. `CREATE TABLE test.worker` will be ignored, but the table will be replicated by changefeed-test.
 	//  2. `CREATE TABLE other.worker` will be discarded, and the table will not be replicated by changefeed-test.
 	ShouldIgnoreDDL(schema, table, query string, ddlType timodel.ActionType, startTs uint64) (bool, error)
-	// ShouldIgnoreDDLEventInSchemaStore returns true if the DDL event should not be sent
+	// ShouldSkipDDLEventInSchemaStore returns true if the DDL event should not be sent
 	// from schema store to any dispatcher in this changefeed.
-	ShouldIgnoreDDLEventInSchemaStore(ddlType timodel.ActionType, query string) (bool, error)
+	ShouldSkipDDLEventInSchemaStore(ddlType timodel.ActionType, query string) (bool, error)
 	// ShouldIgnoreTable returns true if the table should be ignored.
 	ShouldIgnoreTable(schema, table string) bool
 	// ShouldIgnoreSchema returns true if the schema should be ignored.
@@ -84,8 +84,8 @@ type filter struct {
 	dmlExprFilter *dmlExprFilter
 	// sqlEventFilter is used to filter out dml/ddl event by its type or query.
 	sqlEventFilter *sqlEventFilter
-	// schemaStoreDDLFilter filters DDL events before schema store sends them to dispatchers.
-	schemaStoreDDLFilter *bf.BinlogEvent
+	// debugSkipDDLFilter filters DDL events before schema store sends them to dispatchers.
+	debugSkipDDLFilter *bf.BinlogEvent
 	// ignoreTxnStartTs is used to filter out dml/ddl event by its starsTs.
 	ignoreTxnStartTs []uint64
 	forceReplicate   bool
@@ -110,32 +110,32 @@ func NewFilter(cfg *config.FilterConfig, tz string, caseSensitive bool, forceRep
 	if err != nil {
 		return nil, err
 	}
-	schemaStoreDDLFilter, err := newSchemaStoreDDLFilter(cfg.SchemaStoreIgnoreDDLTypes)
+	debugSkipDDLFilter, err := newDebugSkipDDLFilter(cfg.DebugSkipDDLTypes)
 	if err != nil {
 		return nil, err
 	}
 	return &filter{
-		tableFilter:          f,
-		dmlExprFilter:        dmlExprFilter,
-		sqlEventFilter:       sqlEventFilter,
-		schemaStoreDDLFilter: schemaStoreDDLFilter,
-		ignoreTxnStartTs:     cfg.IgnoreTxnStartTs,
-		forceReplicate:       forceReplicate,
+		tableFilter:        f,
+		dmlExprFilter:      dmlExprFilter,
+		sqlEventFilter:     sqlEventFilter,
+		debugSkipDDLFilter: debugSkipDDLFilter,
+		ignoreTxnStartTs:   cfg.IgnoreTxnStartTs,
+		forceReplicate:     forceReplicate,
 	}, nil
 }
 
-func newSchemaStoreDDLFilter(ignoreDDLTypes []bf.EventType) (*bf.BinlogEvent, error) {
-	if len(ignoreDDLTypes) == 0 {
+func newDebugSkipDDLFilter(skipDDLTypes []bf.EventType) (*bf.BinlogEvent, error) {
+	if len(skipDDLTypes) == 0 {
 		return nil, nil
 	}
-	if err := verifyIgnoreDDLTypes(ignoreDDLTypes); err != nil {
+	if err := verifyDebugSkipDDLTypes(skipDDLTypes); err != nil {
 		return nil, err
 	}
 	return bf.NewBinlogEvent(false, []*bf.BinlogEventRule{
 		{
 			SchemaPattern: binlogFilterSchemaPlaceholder,
 			TablePattern:  binlogFilterTablePlaceholder,
-			Events:        append([]bf.EventType(nil), ignoreDDLTypes...),
+			Events:        append([]bf.EventType(nil), skipDDLTypes...),
 			Action:        bf.Ignore,
 		},
 	})
@@ -202,8 +202,8 @@ func (f *filter) ShouldIgnoreDDL(schema, table, query string, ddlType timodel.Ac
 	return f.sqlEventFilter.shouldSkipDDL(schema, table, query, ddlType)
 }
 
-func (f *filter) ShouldIgnoreDDLEventInSchemaStore(ddlType timodel.ActionType, query string) (bool, error) {
-	if f.schemaStoreDDLFilter == nil {
+func (f *filter) ShouldSkipDDLEventInSchemaStore(ddlType timodel.ActionType, query string) (bool, error) {
+	if f.debugSkipDDLFilter == nil {
 		return false, nil
 	}
 	eventType := ddlToEventType(ddlType)
@@ -213,7 +213,7 @@ func (f *filter) ShouldIgnoreDDLEventInSchemaStore(ddlType timodel.ActionType, q
 			zap.String("query", query))
 		return false, nil
 	}
-	action, err := f.schemaStoreDDLFilter.Filter(
+	action, err := f.debugSkipDDLFilter.Filter(
 		binlogFilterSchemaPlaceholder,
 		binlogFilterTablePlaceholder,
 		eventType,
@@ -228,7 +228,7 @@ func (f *filter) ShouldIgnoreDDLEventInSchemaStore(ddlType timodel.ActionType, q
 	if !isAlterTable(ddlType) {
 		return false, nil
 	}
-	action, err = f.schemaStoreDDLFilter.Filter(
+	action, err = f.debugSkipDDLFilter.Filter(
 		binlogFilterSchemaPlaceholder,
 		binlogFilterTablePlaceholder,
 		bf.AlterTable,
@@ -338,8 +338,8 @@ func (s *SharedFilterStorage) GetOrSetFilter(
 		Rules:            cfg.FilterConfig.Rules,
 		IgnoreTxnStartTs: cfg.FilterConfig.IgnoreTxnStartTs,
 	}
-	for _, eventType := range cfg.FilterConfig.SchemaStoreIgnoreDdlTypes {
-		filterCfg.SchemaStoreIgnoreDDLTypes = append(filterCfg.SchemaStoreIgnoreDDLTypes, bf.EventType(eventType))
+	for _, eventType := range cfg.FilterConfig.DebugSkipDdlTypes {
+		filterCfg.DebugSkipDDLTypes = append(filterCfg.DebugSkipDDLTypes, bf.EventType(eventType))
 	}
 	for _, rule := range cfg.FilterConfig.EventFilters {
 		f := &config.EventFilterRule{

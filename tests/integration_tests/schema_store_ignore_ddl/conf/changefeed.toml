@@ -1,2 +1,2 @@
 [filter]
-schema-store-ignore-ddl-types = ["rename table"]
+debug-skip-ddl-types = ["rename table"]

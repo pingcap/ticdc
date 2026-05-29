@@ -115,7 +115,7 @@ func TestIgnoreDDLByCommitTs(t *testing.T) {
 	require.NotContains(t, tableNames, "t2")
 }
 
-func TestIgnoreDDLByType(t *testing.T) {
+func TestDebugSkipDDLByType(t *testing.T) {
 	mockPDClock := pdutil.NewClock4Test()
 	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
 
@@ -136,8 +136,8 @@ func TestIgnoreDDLByType(t *testing.T) {
 	store.pendingResolvedTs.Store(pstorage.gcTs)
 
 	tableFilter, err := cdcfilter.NewFilter(&config.FilterConfig{
-		Rules:                     []string{"*.*"},
-		SchemaStoreIgnoreDDLTypes: []bf.EventType{bf.RenameTable},
+		Rules:             []string{"*.*"},
+		DebugSkipDDLTypes: []bf.EventType{bf.RenameTable},
 	}, "", false, false)
 	require.NoError(t, err)
 
@@ -194,7 +194,7 @@ func TestIgnoreDDLByType(t *testing.T) {
 	require.Equal(t, uint64(1020), end)
 }
 
-func TestIgnoreDDLEventByTypeCoversSupportedDDLTypes(t *testing.T) {
+func TestDebugSkipDDLEventByTypeCoversSupportedDDLTypes(t *testing.T) {
 	for _, actionType := range cdcfilter.SupportedDDLActionTypes() {
 		ddlEvent := commonEvent.DDLEvent{
 			Type:  byte(actionType),
@@ -204,30 +204,30 @@ func TestIgnoreDDLEventByTypeCoversSupportedDDLTypes(t *testing.T) {
 		require.NotEqual(t, bf.NullEvent, eventType, actionType.String())
 
 		require.True(t,
-			shouldIgnoreDDLEventInSchemaStore(t, ddlEvent, []bf.EventType{eventType}),
+			shouldSkipDDLEventInSchemaStore(t, ddlEvent, []bf.EventType{eventType}),
 			actionType.String())
 		require.True(t,
-			shouldIgnoreDDLEventInSchemaStore(t, ddlEvent, []bf.EventType{bf.AllDDL}),
+			shouldSkipDDLEventInSchemaStore(t, ddlEvent, []bf.EventType{bf.AllDDL}),
 			actionType.String())
 
 		if cdcfilter.IsAlterTableDDL(actionType) {
 			require.True(t,
-				shouldIgnoreDDLEventInSchemaStore(t, ddlEvent, []bf.EventType{bf.AlterTable}),
+				shouldSkipDDLEventInSchemaStore(t, ddlEvent, []bf.EventType{bf.AlterTable}),
 				actionType.String())
 		}
 	}
 }
 
-func shouldIgnoreDDLEventInSchemaStore(t *testing.T, ddlEvent commonEvent.DDLEvent, ignoreDDLTypes []bf.EventType) bool {
+func shouldSkipDDLEventInSchemaStore(t *testing.T, ddlEvent commonEvent.DDLEvent, skipDDLTypes []bf.EventType) bool {
 	t.Helper()
 	tableFilter, err := cdcfilter.NewFilter(&config.FilterConfig{
-		Rules:                     []string{"*.*"},
-		SchemaStoreIgnoreDDLTypes: ignoreDDLTypes,
+		Rules:             []string{"*.*"},
+		DebugSkipDDLTypes: skipDDLTypes,
 	}, "", false, false)
 	require.NoError(t, err)
-	ignored, err := tableFilter.ShouldIgnoreDDLEventInSchemaStore(ddlEvent.GetDDLType(), ddlEvent.Query)
+	skipped, err := tableFilter.ShouldSkipDDLEventInSchemaStore(ddlEvent.GetDDLType(), ddlEvent.Query)
 	require.NoError(t, err)
-	return ignored
+	return skipped
 }
 
 func TestGetAllPhysicalTablesReturnsSnapshotLostByGCError(t *testing.T) {

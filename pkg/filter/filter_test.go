@@ -358,35 +358,35 @@ func TestShouldIgnoreDDL(t *testing.T) {
 	require.False(t, ignore)
 }
 
-func TestShouldIgnoreDDLEventInSchemaStore(t *testing.T) {
+func TestShouldSkipDDLEventInSchemaStore(t *testing.T) {
 	t.Parallel()
 
 	f, err := NewFilter(&config.FilterConfig{
-		Rules:                     []string{"test.*"},
-		SchemaStoreIgnoreDDLTypes: []bf.EventType{bf.RenameTable},
+		Rules:             []string{"test.*"},
+		DebugSkipDDLTypes: []bf.EventType{bf.RenameTable},
 	}, "UTC", false, false)
 	require.NoError(t, err)
 
-	ignore, err := f.ShouldIgnoreDDLEventInSchemaStore(model.ActionRenameTable, "RENAME TABLE test.t1 TO test.t2")
+	ignore, err := f.ShouldSkipDDLEventInSchemaStore(model.ActionRenameTable, "RENAME TABLE test.t1 TO test.t2")
 	require.NoError(t, err)
 	require.True(t, ignore)
 
-	ignore, err = f.ShouldIgnoreDDLEventInSchemaStore(model.ActionCreateTable, "CREATE TABLE test.t3(id int)")
+	ignore, err = f.ShouldSkipDDLEventInSchemaStore(model.ActionCreateTable, "CREATE TABLE test.t3(id int)")
 	require.NoError(t, err)
 	require.False(t, ignore)
 
 	f, err = NewFilter(&config.FilterConfig{
-		Rules:                     []string{"test.*"},
-		SchemaStoreIgnoreDDLTypes: []bf.EventType{bf.AlterTable},
+		Rules:             []string{"test.*"},
+		DebugSkipDDLTypes: []bf.EventType{bf.AlterTable},
 	}, "UTC", false, false)
 	require.NoError(t, err)
-	ignore, err = f.ShouldIgnoreDDLEventInSchemaStore(model.ActionRenameTable, "RENAME TABLE test.t1 TO test.t2")
+	ignore, err = f.ShouldSkipDDLEventInSchemaStore(model.ActionRenameTable, "RENAME TABLE test.t1 TO test.t2")
 	require.NoError(t, err)
 	require.True(t, ignore)
 
 	_, err = NewFilter(&config.FilterConfig{
-		Rules:                     []string{"test.*"},
-		SchemaStoreIgnoreDDLTypes: []bf.EventType{bf.InsertEvent},
+		Rules:             []string{"test.*"},
+		DebugSkipDDLTypes: []bf.EventType{bf.InsertEvent},
 	}, "UTC", false, false)
 	require.Error(t, err)
 }
