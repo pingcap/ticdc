@@ -104,7 +104,7 @@ func (h *EventsHandler) Handle(stat *dispatcherStat, events ...dispatcher.Dispat
 		}
 		stat.handleHandshakeEvent(firstEvent)
 	default:
-		log.Panic("unknown event type", zap.Int("type", int(firstEvent.GetType())))
+		log.Panic("unknown event type", zap.Int("type", firstEvent.GetType()))
 	}
 	return false
 }

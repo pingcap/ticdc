@@ -66,11 +66,9 @@ func New() *DispatcherOrchestrator {
 func (m *DispatcherOrchestrator) Run() {
 	log.Info("dispatcher orchestrator is running")
 
-	m.wg.Add(1)
-	go func() {
-		defer m.wg.Done()
+	m.wg.Go(func() {
 		m.handleMessages()
-	}()
+	})
 }
 
 // RecvMaintainerRequest is the handler for the maintainer request message.
