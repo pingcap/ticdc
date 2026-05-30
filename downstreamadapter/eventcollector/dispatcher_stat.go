@@ -501,7 +501,11 @@ func (d *dispatcherStat) handleDataEvents(events ...dispatcher.DispatcherEvent) 
 	return false
 }
 
-// Data-plane event handlers.
+// "signalEvent" refers to the types of events that may modify the event service with which this dispatcher communicates.
+// "signalEvent" includes TypeReadyEvent/TypeNotReusableEvent
+func (d *dispatcherStat) handleSignalEvent(event dispatcher.DispatcherEvent) {
+	d.session.handleSignalEvent(event)
+}
 
 func (d *dispatcherStat) handleDropEvent(event dispatcher.DispatcherEvent) {
 	dropEvent, ok := event.Event.(*commonEvent.DropEvent)
@@ -595,10 +599,4 @@ func (d *dispatcherStat) getCurrentEventServiceTarget() (node.ID, bool) {
 		return "", false
 	}
 	return eventServiceID, true
-}
-
-// "signalEvent" refers to the types of events that may modify the event service with which this dispatcher communicates.
-// "signalEvent" includes TypeReadyEvent/TypeNotReusableEvent
-func (d *dispatcherStat) handleSignalEvent(event dispatcher.DispatcherEvent) {
-	d.session.handleSignalEvent(event)
 }
