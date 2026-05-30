@@ -39,13 +39,13 @@ if [ "$SINK_TYPE" == "mysql" ]; then
 	# 1000 rows per txn, 10 txns per type (insert, update, delete)
 	GO111MODULE=on go run main.go \
 		-dsn "root@tcp(${UP_TIDB_HOST}:${UP_TIDB_PORT})/large_txn" \
-		--rows=1000 \
-		--txns=10
+		--rows=10000 \
+		--txns=100
 
 	echo "[$(date)] Workload completed, verifying data consistency with CDC sync..."
 
 	# Use sync_diff_inspector to verify data consistency
-	check_sync_diff $WORK_DIR $CUR/diff_config.toml 200 3
+	check_sync_diff $WORK_DIR $CUR/diff_config.toml
 
 	cleanup_process $CDC_BINARY
 	echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"
