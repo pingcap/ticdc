@@ -14,8 +14,6 @@
 package maintainer
 
 import (
-	"context"
-	"fmt"
 	"testing"
 
 	"github.com/pingcap/ticdc/downstreamadapter/routing"
@@ -25,7 +23,7 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/ticdc/pkg/filter"
+	"github.com/pingcap/ticdc/pkg/eventservice"
 	"github.com/stretchr/testify/require"
 )
 
@@ -81,6 +79,25 @@ func TestRouteConflictDetectorApplyUpdatesRegistry(t *testing.T) {
 	require.Equal(t, routing.TableKey{Schema: "db2_target", Table: "t"}, binding.binding.Target)
 }
 
+func TestRouteConflictDetectorReadsNewTableBeforeDispatcherRegistration(t *testing.T) {
+	detector := newTestRouteConflictDetector(t, routing.SchemaPlaceholder+"_target", routing.TablePlaceholder)
+	store := testRouteSchemaStore(t, detector)
+	store.AppendDDLEvent(3, routeTableInfoDDL(3, "db3", "t"))
+	store.RequireRegisteredTablesForGetTableInfo()
+
+	info := routeDDLInfo{
+		key:      getEventKey(10, false),
+		commitTs: 10,
+		addedTables: []*heartbeatpb.Table{
+			{SchemaID: 3, TableID: 3},
+		},
+	}
+	ready, err := detector.precheck(info)
+	require.NoError(t, err)
+	require.True(t, ready)
+	require.Equal(t, 1, store.ForceGetTableInfoCount(3))
+}
+
 func TestRouteConflictDetectorDropReleasesBootstrapBinding(t *testing.T) {
 	detector := newTestRouteConflictDetector(t, "target", routing.TablePlaceholder)
 
@@ -117,12 +134,15 @@ func newTestRouteConflictDetector(t *testing.T, targetSchema, targetTable string
 	t.Helper()
 
 	cfID := common.NewChangeFeedIDWithName("test-changefeed", common.DefaultKeyspaceName)
-	store := &fakeRouteSchemaStore{
-		tables: map[int64]*common.TableInfo{
-			1: newTestRouteTableInfo(1, "db1", "t"),
-			2: newTestRouteTableInfo(2, "db2", "t"),
-		},
-	}
+	store := eventservice.NewMockSchemaStore()
+	store.AppendDDLEvent(
+		1,
+		routeTableInfoDDL(1, "db1", "t"),
+	)
+	store.AppendDDLEvent(
+		2,
+		routeTableInfoDDL(2, "db2", "t"),
+	)
 	appcontext.SetService[schemastore.SchemaStore](appcontext.SchemaStore, store)
 
 	detector, err := newRouteConflictDetector(
@@ -155,6 +175,26 @@ func newTestRouteConflictDetector(t *testing.T, targetSchema, targetTable string
 	return detector
 }
 
+type routeSchemaStoreMock interface {
+	AppendDDLEvent(id common.TableID, ddls ...commonEvent.DDLEvent)
+	RequireRegisteredTablesForGetTableInfo()
+	ForceGetTableInfoCount(tableID common.TableID) int
+}
+
+func testRouteSchemaStore(t *testing.T, detector *routeConflictDetector) routeSchemaStoreMock {
+	t.Helper()
+
+	store, ok := detector.schemaStore.(routeSchemaStoreMock)
+	require.True(t, ok)
+	return store
+}
+
+func routeTableInfoDDL(tableID int64, schema, table string) commonEvent.DDLEvent {
+	return commonEvent.DDLEvent{
+		TableInfo: newTestRouteTableInfo(tableID, schema, table),
+	}
+}
+
 func newTestRouteTableInfo(tableID int64, schema, table string) *common.TableInfo {
 	return &common.TableInfo{
 		TableName: common.TableName{
@@ -163,90 +203,4 @@ func newTestRouteTableInfo(tableID int64, schema, table string) *common.TableInf
 			TableID: tableID,
 		},
 	}
-}
-
-type fakeRouteSchemaStore struct {
-	tables map[int64]*common.TableInfo
-}
-
-func (s *fakeRouteSchemaStore) Name() string {
-	return "fake-route-schema-store"
-}
-
-func (s *fakeRouteSchemaStore) Run(ctx context.Context) error {
-	return nil
-}
-
-func (s *fakeRouteSchemaStore) Close(ctx context.Context) error {
-	return nil
-}
-
-func (s *fakeRouteSchemaStore) GetAllPhysicalTables(
-	keyspaceMeta common.KeyspaceMeta,
-	snapTs uint64,
-	filter filter.Filter,
-) ([]commonEvent.Table, error) {
-	return nil, nil
-}
-
-func (s *fakeRouteSchemaStore) RegisterTable(
-	keyspaceMeta common.KeyspaceMeta,
-	tableID int64,
-	startTs uint64,
-) error {
-	return nil
-}
-
-func (s *fakeRouteSchemaStore) UnregisterTable(
-	keyspaceMeta common.KeyspaceMeta,
-	tableID int64,
-) error {
-	return nil
-}
-
-func (s *fakeRouteSchemaStore) GetTableInfo(
-	keyspaceMeta common.KeyspaceMeta,
-	tableID int64,
-	ts uint64,
-) (*common.TableInfo, error) {
-	tableInfo, ok := s.tables[tableID]
-	if !ok {
-		return nil, fmt.Errorf("table %d not found", tableID)
-	}
-	return tableInfo, nil
-}
-
-func (s *fakeRouteSchemaStore) GetTableDDLEventState(
-	keyspaceMeta common.KeyspaceMeta,
-	tableID int64,
-) (schemastore.DDLEventState, error) {
-	return schemastore.DDLEventState{}, nil
-}
-
-func (s *fakeRouteSchemaStore) FetchTableDDLEvents(
-	keyspaceMeta common.KeyspaceMeta,
-	dispatcherID common.DispatcherID,
-	tableID int64,
-	tableFilter filter.Filter,
-	start uint64,
-	end uint64,
-) ([]commonEvent.DDLEvent, error) {
-	return nil, nil
-}
-
-func (s *fakeRouteSchemaStore) FetchTableTriggerDDLEvents(
-	keyspaceMeta common.KeyspaceMeta,
-	dispatcherID common.DispatcherID,
-	tableFilter filter.Filter,
-	start uint64,
-	limit int,
-) ([]commonEvent.DDLEvent, uint64, error) {
-	return nil, 0, nil
-}
-
-func (s *fakeRouteSchemaStore) RegisterKeyspace(
-	ctx context.Context,
-	keyspaceMeta common.KeyspaceMeta,
-) error {
-	return nil
 }

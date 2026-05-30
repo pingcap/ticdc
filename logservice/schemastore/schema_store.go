@@ -50,6 +50,10 @@ type SchemaStore interface {
 	// GetTableInfo return table info with the largest version <= ts
 	GetTableInfo(keyspaceMeta common.KeyspaceMeta, tableID int64, ts uint64) (*common.TableInfo, error)
 
+	// ForceGetTableInfo returns table info without requiring the table to be registered.
+	// Metadata-only DDL handling paths use this before a dispatcher exists for a new table.
+	ForceGetTableInfo(keyspaceMeta common.KeyspaceMeta, tableID int64, ts uint64) (*common.TableInfo, error)
+
 	// TODO: how to respect tableFilter
 	GetTableDDLEventState(keyspaceMeta common.KeyspaceMeta, tableID int64) (DDLEventState, error)
 
@@ -392,6 +396,25 @@ func (s *schemaStore) GetTableInfo(keyspaceMeta common.KeyspaceMeta, tableID int
 	}()
 	store.waitResolvedTs(tableID, ts, 2*time.Second)
 	return store.dataStorage.getTableInfo(tableID, ts)
+}
+
+func (s *schemaStore) ForceGetTableInfo(
+	keyspaceMeta common.KeyspaceMeta,
+	tableID int64,
+	ts uint64,
+) (*common.TableInfo, error) {
+	store, err := s.getKeyspaceSchemaStore(keyspaceMeta)
+	if err != nil {
+		return nil, err
+	}
+
+	metrics.SchemaStoreGetTableInfoCounter.Inc()
+	start := time.Now()
+	defer func() {
+		metrics.SchemaStoreGetTableInfoLagHist.Observe(time.Since(start).Seconds())
+	}()
+	store.waitResolvedTs(tableID, ts, 2*time.Second)
+	return store.dataStorage.forceGetTableInfo(tableID, ts)
 }
 
 func (s *schemaStore) GetTableDDLEventState(keyspaceMeta common.KeyspaceMeta, tableID int64) (DDLEventState, error) {

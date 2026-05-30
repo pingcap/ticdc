@@ -371,7 +371,9 @@ func (p *persistentStorage) forceGetTableInfo(tableID int64, ts uint64) (*common
 	p.mu.RUnlock()
 	// build a temp store to get table info
 	store := newEmptyVersionedTableInfoStore(tableID)
-	p.buildVersionedTableInfoStore(store)
+	if err := p.buildVersionedTableInfoStore(store); err != nil {
+		return nil, err
+	}
 	return store.getTableInfo(ts)
 }
 

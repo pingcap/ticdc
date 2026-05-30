@@ -15,6 +15,7 @@ package eventservice
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"sort"
 
@@ -38,7 +39,10 @@ type mockSchemaStore struct {
 	resolvedTs     uint64
 	maxDDLCommitTs uint64
 
-	registerTableError error
+	registerTableError      error
+	requireRegisteredTables bool
+	registeredTables        map[common.TableID]int
+	forceGetTableInfoCount  map[common.TableID]int
 }
 
 func NewMockSchemaStore() *mockSchemaStore {
@@ -47,6 +51,9 @@ func NewMockSchemaStore() *mockSchemaStore {
 		TableInfo:      make(map[common.TableID]*mockVersionTableInfo),
 		resolvedTs:     math.MaxUint64,
 		maxDDLCommitTs: math.MaxUint64,
+
+		registeredTables:       make(map[common.TableID]int),
+		forceGetTableInfoCount: make(map[common.TableID]int),
 	}
 }
 
@@ -90,7 +97,27 @@ func (m *mockSchemaStore) SetTables(tables []commonEvent.Table) {
 	m.Tables = tables
 }
 
+func (m *mockSchemaStore) RequireRegisteredTablesForGetTableInfo() {
+	m.requireRegisteredTables = true
+}
+
+func (m *mockSchemaStore) ForceGetTableInfoCount(tableID common.TableID) int {
+	return m.forceGetTableInfoCount[tableID]
+}
+
 func (m *mockSchemaStore) GetTableInfo(keyspaceMeta common.KeyspaceMeta, tableID common.TableID, ts common.Ts) (*common.TableInfo, error) {
+	if m.requireRegisteredTables && m.registeredTables[tableID] == 0 {
+		return nil, fmt.Errorf("table %d not found", tableID)
+	}
+	return m.getTableInfo(tableID, ts)
+}
+
+func (m *mockSchemaStore) ForceGetTableInfo(keyspaceMeta common.KeyspaceMeta, tableID common.TableID, ts common.Ts) (*common.TableInfo, error) {
+	m.forceGetTableInfoCount[tableID]++
+	return m.getTableInfo(tableID, ts)
+}
+
+func (m *mockSchemaStore) getTableInfo(tableID common.TableID, ts common.Ts) (*common.TableInfo, error) {
 	if info, ok := m.TableInfo[tableID]; ok {
 		if info.deleteVersion <= uint64(ts) {
 			return nil, &schemastore.TableDeletedError{}
@@ -123,10 +150,17 @@ func (m *mockSchemaStore) RegisterTable(
 	tableID int64,
 	startTS common.Ts,
 ) error {
-	return m.registerTableError
+	if m.registerTableError != nil {
+		return m.registerTableError
+	}
+	m.registeredTables[tableID]++
+	return nil
 }
 
-func (m *mockSchemaStore) UnregisterTable(_ common.KeyspaceMeta, _ int64) error {
+func (m *mockSchemaStore) UnregisterTable(_ common.KeyspaceMeta, tableID int64) error {
+	if m.registeredTables[tableID] > 0 {
+		m.registeredTables[tableID]--
+	}
 	return nil
 }
 

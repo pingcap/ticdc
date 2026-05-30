@@ -324,7 +324,9 @@ func (d *routeConflictDetector) buildTransition(info routeDDLInfo) (*routeTransi
 }
 
 func (d *routeConflictDetector) buildBindingForTable(tableID, schemaID int64, commitTs uint64) (routeTableBinding, error) {
-	tableInfo, err := d.schemaStore.GetTableInfo(d.keyspaceMeta, tableID, commitTs)
+	// New-table DDL reaches the detector before the table dispatcher is admitted,
+	// so the schema lookup must not depend on dispatcher table registration.
+	tableInfo, err := d.schemaStore.ForceGetTableInfo(d.keyspaceMeta, tableID, commitTs)
 	if err != nil {
 		return routeTableBinding{}, err
 	}
