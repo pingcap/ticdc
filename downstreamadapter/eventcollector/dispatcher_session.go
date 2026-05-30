@@ -361,14 +361,6 @@ func (s *dispatcherSession) commitLocalRegistration() {
 	s.doReset(s.localServerID, s.target.GetCheckpointTs())
 }
 
-// reset sends a RESET request to the specified EventService using the current
-// checkpoint ts. It also advances the dispatcher epoch so the EventService can
-// restart the dispatcher from that ts and resend handshake/data events for the
-// new epoch.
-func (s *dispatcherSession) reset(serverID node.ID) {
-	s.doReset(serverID, s.target.GetCheckpointTs())
-}
-
 // resetCurrentEventService sends RESET to the EventService currently serving
 // this dispatcher.
 func (s *dispatcherSession) resetCurrentEventService() {
@@ -485,18 +477,14 @@ func (s *dispatcherSession) handleReadyEvent(from node.ID) {
 	for _, target := range accepted.cleanupTargets {
 		s.removeFromLocked(target)
 	}
-	s.commitAcceptedReadyLocked(accepted.commitTarget)
-}
-
-func (s *dispatcherSession) commitAcceptedReadyLocked(serverID node.ID) {
-	if serverID.IsEmpty() {
+	if accepted.commitTarget.IsEmpty() {
 		return
 	}
-	if serverID == s.localServerID {
+	if accepted.commitTarget == s.localServerID {
 		s.handleAcceptedLocalReadyLocked()
 		return
 	}
-	s.handleAcceptedRemoteReadyLocked(serverID)
+	s.handleAcceptedRemoteReadyLocked(accepted.commitTarget)
 }
 
 func (s *dispatcherSession) handleAcceptedLocalReadyLocked() {
