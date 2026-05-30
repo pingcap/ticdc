@@ -328,11 +328,10 @@ func (s *dispatcherSession) retryCurrentRegistrationIfRemovedFrom(serverID node.
 	return true
 }
 
-// sendRegisterRequest sends a REGISTER request to the target event service.
-// For local registration, OnlyReuse=false means the target may initialize a new
-// source if needed. For remote probing, OnlyReuse=true means the target should
-// only accept the dispatcher if it can reuse an existing source.
 func (s *dispatcherSession) sendRegisterRequest(serverID node.ID) {
+	// For local registration, OnlyReuse=false means the target may initialize a new
+	// source if needed. For remote probing, OnlyReuse=true means the target should
+	// only accept the dispatcher if it can reuse an existing source.
 	onlyReuse := serverID != s.localServerID
 	msg := messaging.NewSingleTargetMessage(
 		serverID,
@@ -354,15 +353,11 @@ func (s *dispatcherSession) beginRegister(serverID node.ID) bool {
 }
 
 // commitLocalRegistration commits the accepted local registration by sending
-// RESET to the local EventService. In the current protocol, READY only means
-// the registration is accepted; RESET starts event delivery from the collector
-// checkpoint.
+// RESET to the local EventService.
 func (s *dispatcherSession) commitLocalRegistration() {
 	s.doReset(s.localServerID, s.target.GetCheckpointTs())
 }
 
-// resetCurrentEventService sends RESET to the EventService currently serving
-// this dispatcher.
 func (s *dispatcherSession) resetCurrentEventService() {
 	s.requestMu.Lock()
 	defer s.requestMu.Unlock()
@@ -437,11 +432,6 @@ func (s *dispatcherSession) removeFromLocked(serverID node.ID) {
 	s.sendMessage(msg)
 }
 
-// Signal-event orchestration.
-
-// handleSignalEvent is the control-plane event dispatch entrypoint. It only
-// routes to the ready / not reusable handlers; the actual acceptance rules live
-// in the corresponding connState transition helpers.
 func (s *dispatcherSession) handleSignalEvent(event dispatcher.DispatcherEvent) {
 	if s.connState.isRemoved() {
 		return
