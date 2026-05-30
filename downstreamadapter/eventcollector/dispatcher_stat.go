@@ -128,22 +128,8 @@ func (d *dispatcherStat) run() {
 	d.session.startLocalRegistration()
 }
 
-func (d *dispatcherStat) retryCurrentRegistration() {
-	d.session.retryCurrentRegistration()
-}
-
 func (d *dispatcherStat) commitLocalRegistration() {
 	d.session.commitReady(d.eventCollector.getLocalServerID())
-}
-
-// reset is used to reset the dispatcher to the specified commitTs,
-// it will remove the dispatcher from the dynamic stream and add it back.
-func (d *dispatcherStat) reset(serverID node.ID) {
-	d.session.reset(serverID)
-}
-
-func (d *dispatcherStat) doReset(serverID node.ID, resetTs uint64) {
-	d.session.doReset(serverID, resetTs)
 }
 
 // remove is used to remove the dispatcher from the event service.
@@ -160,7 +146,7 @@ func (d *dispatcherStat) currentEventServiceID() node.ID {
 }
 
 func (d *dispatcherStat) resetOnCurrentEventService() {
-	d.reset(d.currentEventServiceID())
+	d.session.reset(d.currentEventServiceID())
 }
 
 func (d *dispatcherStat) advanceEpochForReset(resetTs uint64) uint64 {

@@ -772,7 +772,7 @@ func TestRemoteReadyClearsRemoteCandidates(t *testing.T) {
 		dispatcherRequestRecord{to: remoteServerID, action: eventpb.ActionType_ACTION_TYPE_RESET},
 	)
 
-	stat.retryCurrentRegistration()
+	stat.session.retryCurrentRegistration()
 	requireDispatcherRequests(
 		t,
 		readDispatcherRequests(t, mockEventCollector, 1),
@@ -1610,7 +1610,7 @@ func TestCheckpointTsForEventServiceUsesCollectorObservedMaxTs(t *testing.T) {
 	require.Equal(t, uint64(100), stat.loadCurrentEpochState().maxEventTs.Load())
 	require.Equal(t, uint64(100), getHeartbeatCheckpoint())
 
-	stat.doReset(node.ID("event-service-1"), 150)
+	stat.session.doReset(node.ID("event-service-1"), 150)
 	require.Equal(t, uint64(150), stat.loadCurrentEpochState().maxEventTs.Load())
 	require.Equal(t, uint64(150), getHeartbeatCheckpoint())
 
@@ -1653,7 +1653,7 @@ func TestRegistrationEntrypoints(t *testing.T) {
 	stat := newDispatcherStat(mockDisp, mockEventCollector, nil)
 
 	t.Run("start local registration", func(t *testing.T) {
-		stat.start()
+		stat.run()
 
 		select {
 		case msg := <-mockEventCollector.dispatcherMessageChan.Out():
@@ -1687,7 +1687,7 @@ func TestRegistrationEntrypoints(t *testing.T) {
 	t.Run("retry current registration", func(t *testing.T) {
 		setSessionState(stat.session, remoteServerID, true, "")
 
-		stat.retryCurrentRegistration()
+		stat.session.retryCurrentRegistration()
 
 		select {
 		case msg := <-mockEventCollector.dispatcherMessageChan.Out():

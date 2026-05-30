@@ -399,7 +399,7 @@ func TestGroupHeartbeatResetThenHandshake(t *testing.T) {
 
 	// Simulate a reset to a smaller ts while old in-flight flushes have already
 	// advanced sink checkpoint to a larger value.
-	stat.doReset(serverInfo.ID, 150)
+	stat.session.doReset(serverInfo.ID, 150)
 
 	grouped := c.groupHeartbeat()
 	heartbeat := grouped[serverInfo.ID]

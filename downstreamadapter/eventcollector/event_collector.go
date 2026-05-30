@@ -277,7 +277,7 @@ func (c *EventCollector) PrepareAddDispatcher(
 	if err != nil {
 		log.Warn("add dispatcher to dynamic stream failed", zap.Error(err))
 	}
-	stat.start()
+	stat.run()
 }
 
 // CommitAddDispatcher notify local event service that the dispatcher is ready to receive events.
