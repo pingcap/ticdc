@@ -772,7 +772,7 @@ func TestRemoteReadyClearsRemoteCandidates(t *testing.T) {
 		dispatcherRequestRecord{to: remoteServerID, action: eventpb.ActionType_ACTION_TYPE_RESET},
 	)
 
-	stat.session.retryCurrentRegistration()
+	stat.session.retryCurrentRegistrationIfRemovedFrom(remoteServerID)
 	requireDispatcherRequests(
 		t,
 		readDispatcherRequests(t, mockEventCollector, 1),
@@ -1687,7 +1687,7 @@ func TestRegistrationEntrypoints(t *testing.T) {
 	t.Run("retry current registration", func(t *testing.T) {
 		setSessionState(stat.session, remoteServerID, true, "")
 
-		stat.session.retryCurrentRegistration()
+		stat.session.retryCurrentRegistrationIfRemovedFrom(remoteServerID)
 
 		select {
 		case msg := <-mockEventCollector.dispatcherMessageChan.Out():

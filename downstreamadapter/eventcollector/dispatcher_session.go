@@ -311,25 +311,6 @@ func (s *dispatcherSession) startLocalRegistration() {
 	s.sendRegisterRequest(s.localServerID)
 }
 
-func (s *dispatcherSession) retryCurrentRegistration() {
-	s.requestMu.Lock()
-	defer s.requestMu.Unlock()
-	s.retryCurrentRegistrationLocked()
-}
-
-func (s *dispatcherSession) retryCurrentRegistrationLocked() {
-	serverID := s.connState.getCurrentEventServiceID()
-	if serverID.IsEmpty() {
-		log.Panic("current event service should not be empty when retrying registration",
-			zap.Stringer("changefeedID", s.target.GetChangefeedID()),
-			zap.Stringer("dispatcher", s.target.GetId()))
-	}
-	if !s.beginRegister(serverID) {
-		return
-	}
-	s.sendRegisterRequest(serverID)
-}
-
 func (s *dispatcherSession) retryCurrentRegistrationIfRemovedFrom(serverID node.ID) bool {
 	s.requestMu.Lock()
 	defer s.requestMu.Unlock()
@@ -340,7 +321,10 @@ func (s *dispatcherSession) retryCurrentRegistrationIfRemovedFrom(serverID node.
 		zap.Stringer("changefeedID", s.target.GetChangefeedID()),
 		zap.Stringer("dispatcherID", s.target.GetId()),
 		zap.Stringer("eventServiceID", serverID))
-	s.retryCurrentRegistrationLocked()
+	if !s.beginRegister(serverID) {
+		return false
+	}
+	s.sendRegisterRequest(serverID)
 	return true
 }
 

@@ -581,8 +581,6 @@ func (d *dispatcherStat) handleHandshakeEvent(event dispatcher.DispatcherEvent) 
 	d.observeCurrentEpochMaxEventTs(state, handshakeEvent.GetCommitTs())
 }
 
-// Runtime projections used by event collector.
-
 func (d *dispatcherStat) getHeartbeatReport() (node.ID, uint64, uint64, bool) {
 	eventServiceID := d.session.getEventServiceID()
 	if eventServiceID.IsEmpty() {
@@ -591,12 +589,4 @@ func (d *dispatcherStat) getHeartbeatReport() (node.ID, uint64, uint64, bool) {
 	state := d.loadCurrentEpochState()
 	checkpointTs := min(d.target.GetCheckpointTs(), state.maxEventTs.Load())
 	return eventServiceID, checkpointTs, state.epoch, true
-}
-
-func (d *dispatcherStat) getCurrentEventServiceTarget() (node.ID, bool) {
-	eventServiceID := d.session.getEventServiceID()
-	if eventServiceID.IsEmpty() {
-		return "", false
-	}
-	return eventServiceID, true
 }

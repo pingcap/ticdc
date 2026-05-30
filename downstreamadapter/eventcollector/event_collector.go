@@ -674,8 +674,8 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 
 	c.dispatcherMap.Range(func(k, v interface{}) bool {
 		stat := v.(*dispatcherStat)
-		eventServiceID, ok := stat.getCurrentEventServiceTarget()
-		if !ok {
+		eventServiceID := stat.session.getEventServiceID()
+		if eventServiceID.IsEmpty() {
 			return true
 		}
 
