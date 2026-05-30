@@ -98,6 +98,29 @@ func TestRouteConflictDetectorReadsNewTableBeforeDispatcherRegistration(t *testi
 	require.Equal(t, 1, store.ForceGetTableInfoCount(3))
 }
 
+func TestRouteConflictDetectorIgnoresDDLSpanInBlockTables(t *testing.T) {
+	detector := newTestRouteConflictDetector(t, routing.SchemaPlaceholder+"_target", routing.TablePlaceholder)
+
+	info := routeDDLInfo{
+		key:      getEventKey(10, false),
+		commitTs: 10,
+		blockTables: &heartbeatpb.InfluencedTables{
+			InfluenceType: heartbeatpb.InfluenceType_Normal,
+			TableIDs:      []int64{common.DDLSpanTableID, 1},
+		},
+		addedTables: []*heartbeatpb.Table{
+			{SchemaID: 2, TableID: 2},
+		},
+	}
+	ready, err := detector.precheck(info)
+	require.NoError(t, err)
+	require.True(t, ready)
+	require.NoError(t, detector.apply(info))
+
+	_, ok := detector.tables[2]
+	require.True(t, ok)
+}
+
 func TestRouteConflictDetectorDropReleasesBootstrapBinding(t *testing.T) {
 	detector := newTestRouteConflictDetector(t, "target", routing.TablePlaceholder)
 

@@ -299,6 +299,9 @@ func (d *routeConflictDetector) buildTransition(info routeDDLInfo) (*routeTransi
 
 	if info.blockTables != nil && info.blockTables.InfluenceType == heartbeatpb.InfluenceType_Normal {
 		for _, tableID := range info.blockTables.TableIDs {
+			if tableID == common.DDLSpanTableID {
+				continue
+			}
 			if builder.hasRemove(tableID) || builder.hasAdd(tableID) {
 				continue
 			}
