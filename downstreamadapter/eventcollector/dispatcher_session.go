@@ -351,12 +351,12 @@ func (s *dispatcherSession) beginRegister(serverID node.ID) bool {
 	return s.connState.beginRegisterToRemote(serverID)
 }
 
-// commitReady commits an accepted READY by sending RESET to the chosen
-// event service. In the current protocol, READY only means the registration is
-// accepted; RESET is the command that starts or restarts event delivery from
-// the collector checkpoint.
-func (s *dispatcherSession) commitReady(serverID node.ID) {
-	s.doReset(serverID, s.target.GetCheckpointTs())
+// commitLocalRegistration commits the accepted local registration by sending
+// RESET to the local EventService. In the current protocol, READY only means
+// the registration is accepted; RESET starts event delivery from the collector
+// checkpoint.
+func (s *dispatcherSession) commitLocalRegistration() {
+	s.doReset(s.localServerID, s.target.GetCheckpointTs())
 }
 
 // reset sends a RESET request to the specified EventService using the current
