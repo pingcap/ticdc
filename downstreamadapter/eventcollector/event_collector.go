@@ -293,7 +293,7 @@ func (c *EventCollector) CommitAddDispatcher(target dispatcher.DispatcherService
 		return
 	}
 	stat := value.(*dispatcherStat)
-	stat.commitLocalRegistration()
+	stat.session.commitLocalRegistration()
 }
 
 func (c *EventCollector) RemoveDispatcher(target dispatcher.DispatcherService) {

@@ -128,10 +128,6 @@ func (d *dispatcherStat) run() {
 	d.session.startLocalRegistration()
 }
 
-func (d *dispatcherStat) commitLocalRegistration() {
-	d.session.commitReady(d.eventCollector.getLocalServerID())
-}
-
 // remove is used to remove the dispatcher from the event service.
 func (d *dispatcherStat) remove() {
 	d.session.remove()
@@ -139,14 +135,6 @@ func (d *dispatcherStat) remove() {
 
 func (d *dispatcherStat) startRemoteProbing(nodes []string) {
 	d.session.startRemoteProbing(nodes)
-}
-
-func (d *dispatcherStat) currentEventServiceID() node.ID {
-	return d.session.getEventServiceID()
-}
-
-func (d *dispatcherStat) resetOnCurrentEventService() {
-	d.session.reset(d.currentEventServiceID())
 }
 
 func (d *dispatcherStat) advanceEpochForReset(resetTs uint64) uint64 {
@@ -170,8 +158,6 @@ func (d *dispatcherStat) wake() {
 func (d *dispatcherStat) getDispatcherID() common.DispatcherID {
 	return d.target.GetId()
 }
-
-// Data-plane event validation and state update helpers.
 
 func (d *dispatcherStat) verifyEventSequence(event dispatcher.DispatcherEvent, state *dispatcherEpochState) bool {
 	// check the invariant that handshake event is the first event of every epoch
@@ -361,7 +347,7 @@ func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEve
 			continue
 		}
 		if !d.verifyEventSequence(event, state) {
-			d.resetOnCurrentEventService()
+			d.session.reset(d.session.getEventServiceID())
 			return false
 		}
 		if event.GetType() == commonEvent.TypeResolvedEvent {
@@ -429,11 +415,11 @@ func (d *dispatcherStat) handleSingleDataEvents(events []dispatcher.DispatcherEv
 			zap.Uint64("eventEpoch", events[0].GetEpoch()),
 			zap.Uint64("dispatcherEpoch", state.epoch),
 			zap.Stringer("staleEventService", *from),
-			zap.Stringer("currentEventService", d.currentEventServiceID()))
+			zap.Stringer("currentEventService", d.session.getEventServiceID()))
 		return false
 	}
 	if !d.verifyEventSequence(events[0], state) {
-		d.resetOnCurrentEventService()
+		d.session.reset(d.session.getEventServiceID())
 		return false
 	}
 	if !d.shouldForwardEventByCommitTs(events[0]) {
@@ -543,7 +529,7 @@ func (d *dispatcherStat) handleDropEvent(event dispatcher.DispatcherEvent) {
 		zap.Uint64("commitTs", dropEvent.GetCommitTs()),
 		zap.Uint64("sequence", dropEvent.GetSeq()),
 		zap.Uint64("lastEventCommitTs", d.lastEventCommitTs.Load()))
-	d.resetOnCurrentEventService()
+	d.session.reset(d.session.getEventServiceID())
 	metrics.EventCollectorDroppedEventCount.Inc()
 }
 
@@ -594,7 +580,7 @@ func (d *dispatcherStat) handleHandshakeEvent(event dispatcher.DispatcherEvent) 
 // Runtime projections used by event collector.
 
 func (d *dispatcherStat) getHeartbeatReport() (node.ID, uint64, uint64, bool) {
-	eventServiceID := d.currentEventServiceID()
+	eventServiceID := d.session.getEventServiceID()
 	if eventServiceID.IsEmpty() {
 		return "", 0, 0, false
 	}
@@ -604,7 +590,7 @@ func (d *dispatcherStat) getHeartbeatReport() (node.ID, uint64, uint64, bool) {
 }
 
 func (d *dispatcherStat) getCurrentEventServiceTarget() (node.ID, bool) {
-	eventServiceID := d.currentEventServiceID()
+	eventServiceID := d.session.getEventServiceID()
 	if eventServiceID.IsEmpty() {
 		return "", false
 	}
@@ -618,7 +604,7 @@ func (d *dispatcherStat) handleSignalEvent(event dispatcher.DispatcherEvent) {
 }
 
 func (d *dispatcherStat) retryCurrentRegistrationIfRemovedFrom(serverID node.ID) bool {
-	if d.currentEventServiceID() != serverID {
+	if d.session.getEventServiceID() != serverID {
 		return false
 	}
 	log.Info("dispatcher removed in current event service, retry registration",
