@@ -107,11 +107,11 @@ func newRouteConflictDetector(
 			return nil, err
 		}
 
-		// binding, err := d.buildBindingForTable(t.TableID, t.SchemaID, startTs)
-		// if err != nil {
-		// 	return err
-		// }
-		// currentTables[t.TableID] = binding
+		currentTables[t.TableID] = routeTableBinding{
+			tableID:        t.TableID,
+			sourceSchemaID: t.SchemaID,
+			binding:        binding,
+		}
 	}
 
 	// todo: this log may can be removed after test huge number of tables.
@@ -153,6 +153,10 @@ func (d *routeConflictDetector) precheck(info routeDDLInfo) (bool, error) {
 	if pending.prechecked {
 		return true, nil
 	}
+	adds := routeTransitionAdds(pending.transition)
+	if err := d.registry.ApplyTransition(pending.transition.removes, adds, false); err != nil {
+		return false, d.fail(err)
+	}
 	pending.prechecked = true
 	log.Info("route transition prechecked",
 		zap.String("changefeed", d.changefeedID.Name()),
@@ -178,11 +182,8 @@ func (d *routeConflictDetector) apply(info routeDDLInfo) error {
 			"route transition apply out of order, changefeed=%s, commitTs=%d",
 			d.changefeedID.Name(), info.commitTs))
 	}
-	adds := make([]routing.RouteBinding, 0, len(pending.transition.adds))
-	for _, add := range pending.transition.adds {
-		adds = append(adds, add.binding)
-	}
-	if err := d.registry.ApplyTransition(pending.transition.removes, adds); err != nil {
+	adds := routeTransitionAdds(pending.transition)
+	if err := d.registry.ApplyTransition(pending.transition.removes, adds, true); err != nil {
 		return d.fail(err)
 	}
 	for _, tableID := range pending.transition.removeTableIDs {
@@ -198,6 +199,14 @@ func (d *routeConflictDetector) apply(info routeDDLInfo) error {
 		zap.Int("removes", len(pending.transition.removes)),
 		zap.Int("adds", len(pending.transition.adds)))
 	return nil
+}
+
+func routeTransitionAdds(transition *routeTransition) []routing.RouteBinding {
+	adds := make([]routing.RouteBinding, 0, len(transition.adds))
+	for _, add := range transition.adds {
+		adds = append(adds, add.binding)
+	}
+	return adds
 }
 
 func (d *routeConflictDetector) needsCheck(info routeDDLInfo) bool {

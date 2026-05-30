@@ -100,6 +100,7 @@ func TestTargetTableRegistryApplyTransition(t *testing.T) {
 		require.NoError(t, r.ApplyTransition(
 			[]TableKey{{Schema: "db1", Table: "t1"}},
 			[]RouteBinding{newRouteBinding("db1", "t1_new", "archive", "orders")},
+			true,
 		))
 
 		require.Len(t, r.target2Source, 2)
@@ -117,6 +118,7 @@ func TestTargetTableRegistryApplyTransition(t *testing.T) {
 		err := r.ApplyTransition(
 			[]TableKey{{Schema: "db1", Table: "t1"}},
 			[]RouteBinding{newRouteBinding("db3", "t3", "archive", "customers")},
+			true,
 		)
 		require.Error(t, err)
 		require.True(t, errors.ErrTableRouteConflict.Equal(err))
@@ -132,7 +134,7 @@ func TestTargetTableRegistryApplyTransition(t *testing.T) {
 		err := r.ApplyTransition(nil, []RouteBinding{
 			newRouteBinding("db1", "t1", "archive", "orders"),
 			newRouteBinding("db2", "t2", "archive", "orders"),
-		})
+		}, true)
 		require.Error(t, err)
 		require.True(t, errors.ErrTableRouteConflict.Equal(err))
 		require.Empty(t, r.target2Source)
@@ -145,10 +147,30 @@ func TestTargetTableRegistryApplyTransition(t *testing.T) {
 		err := r.ApplyTransition(nil, []RouteBinding{
 			newRouteBinding("db1", "t1", "archive", "orders"),
 			newRouteBinding("db1", "t1", "archive", "orders_new"),
-		})
+		}, true)
 		require.Error(t, err)
 		require.True(t, errors.ErrInternalCheckFailed.Equal(err))
 		require.Empty(t, r.target2Source)
+	})
+
+	t.Run("check-only mode does not mutate", func(t *testing.T) {
+		t.Parallel()
+		r := NewTargetTableRegistry(changefeedID, 0)
+		require.NoError(t, r.Add(newRouteBinding("db1", "t1", "archive", "orders")))
+
+		err := r.ApplyTransition(nil, []RouteBinding{
+			newRouteBinding("db2", "t2", "archive", "customers"),
+		}, false)
+		require.NoError(t, err)
+		require.Len(t, r.target2Source, 1)
+
+		require.NoError(t, r.Add(newRouteBinding("db2", "t2", "archive", "customers")))
+		err = r.ApplyTransition(nil, []RouteBinding{
+			newRouteBinding("db3", "t3", "archive", "customers"),
+		}, false)
+		require.Error(t, err)
+		require.True(t, errors.ErrTableRouteConflict.Equal(err))
+		require.Len(t, r.target2Source, 2)
 	})
 }
 

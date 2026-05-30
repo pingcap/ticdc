@@ -94,8 +94,9 @@ func (r *TargetTableRegistry) Remove(source TableKey) {
 // removed before the new binding can claim its target.
 //
 // This method validates the whole transition before mutating the registry. If any
-// check fails, both indexes remain unchanged.
-func (r *TargetTableRegistry) ApplyTransition(removes []TableKey, adds []RouteBinding) error {
+// check fails, both indexes remain unchanged. If mutate is false, this method
+// only validates the transition and leaves both indexes unchanged.
+func (r *TargetTableRegistry) ApplyTransition(removes []TableKey, adds []RouteBinding, mutate bool) error {
 	removeSet := make(map[TableKey]struct{}, len(removes))
 	for _, source := range removes {
 		removeSet[source] = struct{}{}
@@ -167,6 +168,10 @@ func (r *TargetTableRegistry) ApplyTransition(removes []TableKey, adds []RouteBi
 		}
 		addedSources[add.Source] = add.Target
 		addedTargets[add.Target] = add.Source
+	}
+
+	if !mutate {
+		return nil
 	}
 
 	// All validation above is side-effect free. Only after the complete transition

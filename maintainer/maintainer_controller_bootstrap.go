@@ -135,15 +135,17 @@ func (c *Controller) FinishBootstrap(
 	// Step 4: Handle any remaining working tasks (likely dropped tables)
 	c.handleRemainingWorkingTasks(workingTaskMap, redoWorkingTaskMap)
 
-	// Step 5: Initialize and start sub components
-	c.initializeComponents(allNodesResp)
-
-	// Step 6: Initialize route router and target registry
+	// Step 5: Initialize route router and target registry before barrier starts
+	// handling bootstrap block states. The barrier captures the detector pointer
+	// at construction time.
 	detector, err := newRouteConflictDetector(c.changefeedID, c.keyspaceMeta, c.replicaConfig, c.reportError, tables)
 	if err != nil {
 		return nil, err
 	}
 	c.routeDetector = detector
+
+	// Step 6: Initialize and start sub components
+	c.initializeComponents(allNodesResp)
 
 	// Step 7: Mark the controller as bootstrapped
 	c.bootstrapped = true
