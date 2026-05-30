@@ -128,11 +128,6 @@ func (d *dispatcherStat) run() {
 	d.session.startLocalRegistration()
 }
 
-// remove is used to remove the dispatcher from the event service.
-func (d *dispatcherStat) remove() {
-	d.session.remove()
-}
-
 func (d *dispatcherStat) startRemoteProbing(nodes []string) {
 	d.session.startRemoteProbing(nodes)
 }
@@ -145,6 +140,11 @@ func (d *dispatcherStat) advanceEpochForReset(resetTs uint64) uint64 {
 			return nextState.epoch
 		}
 	}
+}
+
+// remove is used to remove the dispatcher from the event service.
+func (d *dispatcherStat) remove() {
+	d.session.remove()
 }
 
 func (d *dispatcherStat) wake() {
