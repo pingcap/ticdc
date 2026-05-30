@@ -314,6 +314,10 @@ func (s *dispatcherSession) startLocalRegistration() {
 func (s *dispatcherSession) retryCurrentRegistration() {
 	s.requestMu.Lock()
 	defer s.requestMu.Unlock()
+	s.retryCurrentRegistrationLocked()
+}
+
+func (s *dispatcherSession) retryCurrentRegistrationLocked() {
 	serverID := s.connState.getCurrentEventServiceID()
 	if serverID.IsEmpty() {
 		log.Panic("current event service should not be empty when retrying registration",
@@ -324,6 +328,20 @@ func (s *dispatcherSession) retryCurrentRegistration() {
 		return
 	}
 	s.sendRegisterRequest(serverID)
+}
+
+func (s *dispatcherSession) retryCurrentRegistrationIfRemovedFrom(serverID node.ID) bool {
+	s.requestMu.Lock()
+	defer s.requestMu.Unlock()
+	if s.connState.getCurrentEventServiceID() != serverID {
+		return false
+	}
+	log.Info("dispatcher removed in current event service, retry registration",
+		zap.Stringer("changefeedID", s.target.GetChangefeedID()),
+		zap.Stringer("dispatcherID", s.target.GetId()),
+		zap.Stringer("eventServiceID", serverID))
+	s.retryCurrentRegistrationLocked()
+	return true
 }
 
 // sendRegisterRequest sends a REGISTER request to the target event service.
@@ -365,6 +383,24 @@ func (s *dispatcherSession) commitLocalRegistration() {
 // new epoch.
 func (s *dispatcherSession) reset(serverID node.ID) {
 	s.doReset(serverID, s.target.GetCheckpointTs())
+}
+
+// resetCurrentEventService sends RESET to the EventService currently serving
+// this dispatcher.
+func (s *dispatcherSession) resetCurrentEventService() {
+	s.requestMu.Lock()
+	defer s.requestMu.Unlock()
+	if s.connState.isRemoved() {
+		return
+	}
+	serverID := s.connState.getCurrentEventServiceID()
+	if serverID.IsEmpty() {
+		log.Warn("skip reset because current event service is empty",
+			zap.Stringer("changefeedID", s.target.GetChangefeedID()),
+			zap.Stringer("dispatcher", s.target.GetId()))
+		return
+	}
+	s.doResetLocked(serverID, s.target.GetCheckpointTs())
 }
 
 // doReset sends RESET to the target event service and advances the

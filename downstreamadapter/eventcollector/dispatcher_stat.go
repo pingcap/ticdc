@@ -347,7 +347,7 @@ func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEve
 			continue
 		}
 		if !d.verifyEventSequence(event, state) {
-			d.session.reset(d.session.getEventServiceID())
+			d.session.resetCurrentEventService()
 			return false
 		}
 		if event.GetType() == commonEvent.TypeResolvedEvent {
@@ -419,7 +419,7 @@ func (d *dispatcherStat) handleSingleDataEvents(events []dispatcher.DispatcherEv
 		return false
 	}
 	if !d.verifyEventSequence(events[0], state) {
-		d.session.reset(d.session.getEventServiceID())
+		d.session.resetCurrentEventService()
 		return false
 	}
 	if !d.shouldForwardEventByCommitTs(events[0]) {
@@ -529,7 +529,7 @@ func (d *dispatcherStat) handleDropEvent(event dispatcher.DispatcherEvent) {
 		zap.Uint64("commitTs", dropEvent.GetCommitTs()),
 		zap.Uint64("sequence", dropEvent.GetSeq()),
 		zap.Uint64("lastEventCommitTs", d.lastEventCommitTs.Load()))
-	d.session.reset(d.session.getEventServiceID())
+	d.session.resetCurrentEventService()
 	metrics.EventCollectorDroppedEventCount.Inc()
 }
 
@@ -601,16 +601,4 @@ func (d *dispatcherStat) getCurrentEventServiceTarget() (node.ID, bool) {
 // "signalEvent" includes TypeReadyEvent/TypeNotReusableEvent
 func (d *dispatcherStat) handleSignalEvent(event dispatcher.DispatcherEvent) {
 	d.session.handleSignalEvent(event)
-}
-
-func (d *dispatcherStat) retryCurrentRegistrationIfRemovedFrom(serverID node.ID) bool {
-	if d.session.getEventServiceID() != serverID {
-		return false
-	}
-	log.Info("dispatcher removed in current event service, retry registration",
-		zap.Stringer("changefeedID", d.target.GetChangefeedID()),
-		zap.Stringer("dispatcherID", d.getDispatcherID()),
-		zap.Stringer("eventServiceID", serverID))
-	d.session.retryCurrentRegistration()
-	return true
 }

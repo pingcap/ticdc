@@ -512,7 +512,7 @@ func (c *EventCollector) handleDispatcherHeartbeatResponse(targetMessage *messag
 				continue
 			}
 			stat := v.(*dispatcherStat)
-			stat.retryCurrentRegistrationIfRemovedFrom(targetMessage.From)
+			stat.session.retryCurrentRegistrationIfRemovedFrom(targetMessage.From)
 		}
 	}
 }
