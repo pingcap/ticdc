@@ -54,9 +54,10 @@ func newDispatcherEpochState(epoch uint64, lastEventSeq uint64, maxEventTs uint6
 	return state
 }
 
-// dispatcherStat owns dispatcher data-plane state and runtime projections.
-// It tracks epoch / sequence / progress / table info, while delegating
-// control-plane orchestration to dispatcherSession.
+// dispatcherStat keeps per-dispatcher state used when handling events, including
+// epoch, event sequence, heartbeat progress, commitTs filters, and cached table
+// info. It uses dispatcherSession to manage the dispatcher's EventService
+// connection lifecycle.
 type dispatcherStat struct {
 	target         dispatcher.DispatcherService
 	eventCollector *EventCollector
@@ -75,8 +76,6 @@ type dispatcherStat struct {
 	// It may advance even when tableInfo is not replaced.
 	tableInfoVersion atomic.Uint64
 }
-
-// Construction and lifecycle entrypoints.
 
 func newDispatcherStat(
 	target dispatcher.DispatcherService,
@@ -115,8 +114,6 @@ func newDispatcherStatInternal(
 	return stat
 }
 
-// Epoch and runtime state helpers.
-
 func (d *dispatcherStat) loadCurrentEpochState() *dispatcherEpochState {
 	state := d.currentEpoch.Load()
 	if state == nil {
@@ -125,6 +122,37 @@ func (d *dispatcherStat) loadCurrentEpochState() *dispatcherEpochState {
 			zap.Stringer("dispatcher", d.getDispatcherID()))
 	}
 	return state
+}
+
+func (d *dispatcherStat) run() {
+	d.session.startLocalRegistration()
+}
+
+func (d *dispatcherStat) retryCurrentRegistration() {
+	d.session.retryCurrentRegistration()
+}
+
+func (d *dispatcherStat) commitLocalRegistration() {
+	d.session.commitReady(d.eventCollector.getLocalServerID())
+}
+
+// reset is used to reset the dispatcher to the specified commitTs,
+// it will remove the dispatcher from the dynamic stream and add it back.
+func (d *dispatcherStat) reset(serverID node.ID) {
+	d.session.reset(serverID)
+}
+
+func (d *dispatcherStat) doReset(serverID node.ID, resetTs uint64) {
+	d.session.doReset(serverID, resetTs)
+}
+
+// remove is used to remove the dispatcher from the event service.
+func (d *dispatcherStat) remove() {
+	d.session.remove()
+}
+
+func (d *dispatcherStat) startRemoteProbing(nodes []string) {
+	d.session.startRemoteProbing(nodes)
 }
 
 func (d *dispatcherStat) currentEventServiceID() node.ID {
@@ -595,39 +623,6 @@ func (d *dispatcherStat) getCurrentEventServiceTarget() (node.ID, bool) {
 		return "", false
 	}
 	return eventServiceID, true
-}
-
-// Control-plane façade methods.
-
-func (d *dispatcherStat) start() {
-	d.session.startLocalRegistration()
-}
-
-func (d *dispatcherStat) retryCurrentRegistration() {
-	d.session.retryCurrentRegistration()
-}
-
-func (d *dispatcherStat) commitLocalRegistration() {
-	d.session.commitReady(d.eventCollector.getLocalServerID())
-}
-
-// reset is used to reset the dispatcher to the specified commitTs,
-// it will remove the dispatcher from the dynamic stream and add it back.
-func (d *dispatcherStat) reset(serverID node.ID) {
-	d.session.reset(serverID)
-}
-
-func (d *dispatcherStat) doReset(serverID node.ID, resetTs uint64) {
-	d.session.doReset(serverID, resetTs)
-}
-
-// remove is used to remove the dispatcher from the event service.
-func (d *dispatcherStat) remove() {
-	d.session.remove()
-}
-
-func (d *dispatcherStat) startRemoteProbing(nodes []string) {
-	d.session.startRemoteProbing(nodes)
 }
 
 // "signalEvent" refers to the types of events that may modify the event service with which this dispatcher communicates.
