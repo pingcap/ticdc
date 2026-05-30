@@ -29,6 +29,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/logger"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	tidbTypes "github.com/pingcap/tidb/pkg/types"
 	"go.uber.org/atomic"
@@ -79,7 +80,6 @@ type Dispatcher interface {
 	GetHeartBeatInfo(h *HeartBeatInfo)
 	GetComponentStatus() heartbeatpb.ComponentState
 	GetBlockEventStatus() *heartbeatpb.State
-	GetBlockStatusesChan() chan *heartbeatpb.TableSpanBlockStatus
 	GetEventSizePerSecond() float32
 	IsTableTriggerDispatcher() bool
 	DealWithBlockEvent(event commonEvent.BlockEvent)
@@ -762,7 +762,7 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 // and return await=true.
 // The status path will be waked up after the action finishes.
 func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.DispatcherStatus) (await bool) {
-	if log.GetLevel() <= zapcore.DebugLevel {
+	if logger.IsDebugEnabled() {
 		log.Debug("dispatcher handle dispatcher status",
 			zap.String("dispatcherStatus", common.FormatDispatcherStatus(dispatcherStatus)),
 			zap.Stringer("dispatcher", d.id),
@@ -866,16 +866,7 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 		}
 
 		// Step4: whether the outdate message or not, we need to return message show we have finished the event.
-		d.sharedInfo.blockStatusesChan <- &heartbeatpb.TableSpanBlockStatus{
-			ID: d.id.ToPB(),
-			State: &heartbeatpb.State{
-				IsBlocked:   true,
-				BlockTs:     action.CommitTs,
-				IsSyncPoint: action.IsSyncPoint,
-				Stage:       heartbeatpb.BlockStage_DONE,
-			},
-			Mode: d.GetMode(),
-		}
+		d.offerDoneBlockStatus(action.CommitTs, action.IsSyncPoint)
 	}
 	return false
 }
@@ -911,17 +902,20 @@ func (d *BasicDispatcher) reportBlockedEventDone(
 	actionCommitTs uint64,
 	actionIsSyncPoint bool,
 ) {
-	d.sharedInfo.blockStatusesChan <- &heartbeatpb.TableSpanBlockStatus{
-		ID: d.id.ToPB(),
-		State: &heartbeatpb.State{
-			IsBlocked:   true,
-			BlockTs:     actionCommitTs,
-			IsSyncPoint: actionIsSyncPoint,
-			Stage:       heartbeatpb.BlockStage_DONE,
-		},
-		Mode: d.GetMode(),
-	}
+	d.offerDoneBlockStatus(actionCommitTs, actionIsSyncPoint)
 	GetDispatcherStatusDynamicStream().Wake(d.id)
+}
+
+// cloneInfluencedTablesPB breaks the alias between the source event and the
+// protobuf reused by resend tasks.
+func cloneInfluencedTablesPB(
+	influencedTables *commonEvent.InfluencedTables,
+) *heartbeatpb.InfluencedTables {
+	status := influencedTables.ToPB()
+	if status != nil && status.TableIDs != nil {
+		status.TableIDs = append([]int64(nil), status.TableIDs...)
+	}
+	return status
 }
 
 // shouldBlock check whether the event should be blocked(to wait maintainer response)
@@ -1032,14 +1026,14 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 			return
 		}
 
-		message := &heartbeatpb.TableSpanBlockStatus{
+		// This protobuf may be resent for a long time, so every slice-backed field
+		// must be detached from the mutable source event before we enqueue it.
+		status := &heartbeatpb.TableSpanBlockStatus{
 			ID: d.id.ToPB(),
 			State: &heartbeatpb.State{
-				IsBlocked:         false,
 				BlockTs:           event.GetCommitTs(),
-				NeedDroppedTables: event.GetNeedDroppedTables().ToPB(),
+				NeedDroppedTables: cloneInfluencedTablesPB(event.GetNeedDroppedTables()),
 				NeedAddedTables:   commonEvent.ToTablesPB(event.GetNeedAddedTables()),
-				IsSyncPoint:       false, // sync point event must should block
 				Stage:             heartbeatpb.BlockStage_NONE,
 			},
 			Mode: d.GetMode(),
@@ -1066,11 +1060,11 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 			// Thus, we add the event to tableProgress again, and call event postFunc when the ack is received from maintainer.
 			event.ClearPostFlushFunc()
 			d.tableProgress.Add(event)
-			d.resendTaskMap.Set(identifier, newResendTask(message, d, event.PostFlush))
+			d.resendTaskMap.Set(identifier, newResendTask(d, status, event.PostFlush))
 		} else {
-			d.resendTaskMap.Set(identifier, newResendTask(message, d, nil))
+			d.resendTaskMap.Set(identifier, newResendTask(d, status, nil))
 		}
-		d.sharedInfo.blockStatusesChan <- message
+		d.offerBlockStatus(status)
 	})
 
 	// dealing with events which update schema ids
@@ -1175,13 +1169,19 @@ func (d *BasicDispatcher) reportBlockedEventToMaintainer(event commonEvent.Block
 		d.pendingACKCount.Add(1)
 	}
 	d.blockEventStatus.setBlockEvent(event, heartbeatpb.BlockStage_WAITING)
-	message := &heartbeatpb.TableSpanBlockStatus{
+	identifier := BlockEventIdentifier{
+		CommitTs:    event.GetCommitTs(),
+		IsSyncPoint: event.GetType() == commonEvent.TypeSyncPointEvent,
+	}
+	// WAITING retries reuse this protobuf object, so clone mutable metadata once
+	// here and keep resend on the same immutable payload.
+	status := &heartbeatpb.TableSpanBlockStatus{
 		ID: d.id.ToPB(),
 		State: &heartbeatpb.State{
 			IsBlocked:         true,
 			BlockTs:           event.GetCommitTs(),
-			BlockTables:       event.GetBlockedTables().ToPB(),
-			NeedDroppedTables: event.GetNeedDroppedTables().ToPB(),
+			BlockTables:       cloneInfluencedTablesPB(event.GetBlockedTables()),
+			NeedDroppedTables: cloneInfluencedTablesPB(event.GetNeedDroppedTables()),
 			NeedAddedTables:   commonEvent.ToTablesPB(event.GetNeedAddedTables()),
 			UpdatedSchemas:    commonEvent.ToSchemaIDChangePB(event.GetUpdatedSchemas()),
 			IsSyncPoint:       event.GetType() == commonEvent.TypeSyncPointEvent,
@@ -1189,12 +1189,8 @@ func (d *BasicDispatcher) reportBlockedEventToMaintainer(event commonEvent.Block
 		},
 		Mode: d.GetMode(),
 	}
-	identifier := BlockEventIdentifier{
-		CommitTs:    event.GetCommitTs(),
-		IsSyncPoint: event.GetType() == commonEvent.TypeSyncPointEvent,
-	}
-	d.resendTaskMap.Set(identifier, newResendTask(message, d, nil))
-	d.sharedInfo.blockStatusesChan <- message
+	d.resendTaskMap.Set(identifier, newResendTask(d, status, nil))
+	d.offerBlockStatus(status)
 }
 
 func (d *BasicDispatcher) flushBlockedEventAndReportToMaintainer(event commonEvent.BlockEvent) {

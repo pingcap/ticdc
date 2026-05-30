@@ -42,9 +42,10 @@ type DispatcherOrchestrator struct {
 	mutex              sync.Mutex // protect dispatcherManagers
 	dispatcherManagers map[common.ChangeFeedID]*dispatchermanager.DispatcherManager
 
-	// Fields for asynchronous message processing
-	msgQueue *pendingMessageQueue
-	wg       sync.WaitGroup
+	// shards partition changefeed control messages by changefeed ID. Each shard keeps
+	// the existing FIFO queue semantics, while different shards can process messages
+	// concurrently.
+	shards []*orchestratorShard
 
 	// closed indicates Close has been invoked and no more messages should be enqueued.
 	closed atomic.Bool
@@ -52,23 +53,32 @@ type DispatcherOrchestrator struct {
 	msgGuardWaitGroup util.GuardedWaitGroup
 }
 
+const (
+	// dispatcherOrchestratorShardCount is intentionally fixed to a small value.
+	// The goal is to break the global head-of-line blocking without introducing
+	// many long-lived goroutines or another layer of tuning knobs.
+	dispatcherOrchestratorShardCount = 8
+)
+
 func New() *DispatcherOrchestrator {
 	m := &DispatcherOrchestrator{
 		mc:                 appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
 		dispatcherManagers: make(map[common.ChangeFeedID]*dispatchermanager.DispatcherManager),
-		msgQueue:           newPendingMessageQueue(),
+		shards:             make([]*orchestratorShard, dispatcherOrchestratorShardCount),
+	}
+	for i := range m.shards {
+		m.shards[i] = newOrchestratorShard(m.processMessage)
 	}
 	m.mc.RegisterHandler(messaging.DispatcherManagerManagerTopic, m.RecvMaintainerRequest)
 	return m
 }
 
-// Run starts the message handling goroutine
+// Run starts all shard workers for asynchronous message processing.
 func (m *DispatcherOrchestrator) Run() {
 	log.Info("dispatcher orchestrator is running")
-
-	m.wg.Go(func() {
-		m.handleMessages()
-	})
+	for _, shard := range m.shards {
+		shard.Run()
+	}
 }
 
 // RecvMaintainerRequest is the handler for the maintainer request message.
@@ -92,8 +102,20 @@ func (m *DispatcherOrchestrator) RecvMaintainerRequest(
 	}
 
 	// De-duplicate by (changefeedID, messageType) to avoid floods of retry messages.
-	_ = m.msgQueue.TryEnqueue(key, msg)
+	_ = m.shardForChangefeedID(key.changefeedID).TryEnqueue(key, msg)
 	return nil
+}
+
+// shardForChangefeedID returns the shard responsible for the changefeed. The
+// routing key is the internal changefeed ID so retries always land on the same
+// shard. Changefeed IDs are UUID-derived GIDs, and GID.Hash mixes the low and
+// high halves before applying modulo, which is sufficient for this fixed shard count.
+func (m *DispatcherOrchestrator) shardForChangefeedID(changefeedID common.ChangeFeedID) *orchestratorShard {
+	return m.shards[m.shardIndexForChangefeedID(changefeedID)]
+}
+
+func (m *DispatcherOrchestrator) shardIndexForChangefeedID(changefeedID common.ChangeFeedID) int {
+	return changefeedID.ID().Hash(uint64(len(m.shards)))
 }
 
 func getPendingMessageKey(msg *messaging.TargetMessage) (pendingMessageKey, bool) {
@@ -114,35 +136,27 @@ func getPendingMessageKey(msg *messaging.TargetMessage) (pendingMessageKey, bool
 	}, true
 }
 
-// handleMessages processes messages from the queue
-func (m *DispatcherOrchestrator) handleMessages() {
-	for {
-		msg, ok := m.msgQueue.Pop()
-		if !ok {
-			log.Info("dispatcher orchestrator is shutting down, exit handleMessages")
-			return
+// processMessage dispatches a queued control message to the existing handler
+// implementation. Shards only change concurrency, not per-message behavior.
+func (m *DispatcherOrchestrator) processMessage(msg *messaging.TargetMessage) {
+	switch req := msg.Message[0].(type) {
+	case *heartbeatpb.MaintainerBootstrapRequest:
+		if err := m.handleBootstrapRequest(msg.From, req); err != nil {
+			log.Error("failed to handle bootstrap request", zap.Error(err))
 		}
-
-		// Process the message
-		switch req := msg.Message[0].(type) {
-		case *heartbeatpb.MaintainerBootstrapRequest:
-			if err := m.handleBootstrapRequest(msg.From, req); err != nil {
-				log.Error("failed to handle bootstrap request", zap.Error(err))
-			}
-		case *heartbeatpb.MaintainerPostBootstrapRequest:
-			// Only the event dispatcher manager with table trigger event dispatcher will receive the post bootstrap request
-			if err := m.handlePostBootstrapRequest(msg.From, req); err != nil {
-				log.Error("failed to handle post bootstrap request", zap.Error(err))
-			}
-		case *heartbeatpb.MaintainerCloseRequest:
-			if err := m.handleCloseRequest(msg.From, req); err != nil {
-				log.Error("failed to handle close request", zap.Error(err))
-			}
-		default:
-			log.Warn("unknown message type, ignore it",
-				zap.String("type", msg.Type.String()),
-				zap.Any("message", msg.Message))
+	case *heartbeatpb.MaintainerPostBootstrapRequest:
+		// Only the event dispatcher manager with table trigger event dispatcher will receive the post bootstrap request.
+		if err := m.handlePostBootstrapRequest(msg.From, req); err != nil {
+			log.Error("failed to handle post bootstrap request", zap.Error(err))
 		}
+	case *heartbeatpb.MaintainerCloseRequest:
+		if err := m.handleCloseRequest(msg.From, req); err != nil {
+			log.Error("failed to handle close request", zap.Error(err))
+		}
+	default:
+		log.Warn("unknown message type, ignore it",
+			zap.String("type", msg.Type.String()),
+			zap.Any("message", msg.Message))
 	}
 }
 
@@ -158,6 +172,9 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 			zap.String("changefeedID", cfId.Name()), zap.Any("data", req.Config), zap.Error(err))
 	}
 
+	// Keep the map lock scoped to dispatcherManagers lookups and updates only.
+	// NewDispatcherManager may perform expensive downstream initialization, so it
+	// must run outside the mutex to let unrelated shards progress concurrently.
 	m.mutex.Lock()
 	manager, exists := m.dispatcherManagers[cfId]
 	m.mutex.Unlock()
@@ -404,13 +421,15 @@ func (m *DispatcherOrchestrator) Close() {
 	log.Info("dispatcher orchestrator is closing")
 	m.mc.DeRegisterHandler(messaging.DispatcherManagerManagerTopic)
 
-	// Wait until all in-flight RecvMaintainerRequest calls finish using msgQueue.
+	// Wait until all in-flight RecvMaintainerRequest calls finish before closing shards.
 	m.msgGuardWaitGroup.Wait()
 
-	// Close the message queue to unblock handleMessages.
-	m.msgQueue.Close()
-
-	m.wg.Wait()
+	for _, shard := range m.shards {
+		shard.CloseAsync()
+	}
+	for _, shard := range m.shards {
+		shard.Wait()
+	}
 
 	m.mutex.Lock()
 	defer m.mutex.Unlock()

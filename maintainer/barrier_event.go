@@ -32,6 +32,12 @@ import (
 	"go.uber.org/zap"
 )
 
+// fanoutPassResendQuietInterval throttles repeated DB/All pass resends after
+// the first fanout pass is sent. Fanout actions touch many captures at once, so
+// we first give recently received DONE statuses a short chance to converge
+// before broadcasting another identical pass wave.
+const fanoutPassResendQuietInterval = time.Second
+
 // BarrierEvent is a barrier event that reported by dispatchers, note is a block multiple dispatchers
 // all of these dispatchers should report the same event
 type BarrierEvent struct {
@@ -72,6 +78,14 @@ type BarrierEvent struct {
 	// rangeChecker is used to check if all the dispatchers reported the block events
 	rangeChecker   range_checker.RangeChecker
 	lastResendTime time.Time
+	// lastStatusReceivedTime is refreshed after the event enters selected state.
+	// It lets resend distinguish "still receiving fresh DONE progress" from
+	// "stalled, must rebroadcast pass/write again".
+	lastStatusReceivedTime time.Time
+	// passActionSent tracks whether resend has already emitted at least one pass
+	// action for the selected stage. The quiet interval only applies after that
+	// first fanout pass exists.
+	passActionSent bool
 
 	lastWarningLogTime time.Time
 }
@@ -106,7 +120,8 @@ func NewBlockEvent(cfID common.ChangeFeedID,
 		reportedDispatchers: make(map[common.DispatcherID]struct{}),
 		lastResendTime:      time.Time{},
 
-		lastWarningLogTime: time.Now(),
+		lastStatusReceivedTime: time.Now(),
+		lastWarningLogTime:     time.Now(),
 	}
 
 	if status.BlockTables == nil {
@@ -229,13 +244,16 @@ func (be *BarrierEvent) onAllDispatcherReportedBlockEvent(dispatcherID common.Di
 		}
 	}
 
-	// reset ranger checkers and reportedDispatchers
+	// Once the event enters selected state, we start a new reporting phase that
+	// tracks completion after write/pass rather than the initial WAITING
+	// coverage. Reset both structures so DONE reports are measured from scratch.
 	be.rangeChecker.Reset()
 	be.reportedDispatchers = make(map[common.DispatcherID]struct{})
 
 	be.selected.Store(true)
 	be.writerDispatcher = dispatcher
 	be.lastResendTime = time.Now()
+	be.passActionSent = false
 	log.Info("all dispatcher reported heartbeat, schedule it, and select one to write",
 		zap.String("changefeed", be.cfID.Name()),
 		zap.String("dispatcher", be.writerDispatcher.String()),
@@ -310,6 +328,10 @@ func (be *BarrierEvent) markTableDone(tableID int64) {
 	be.rangeChecker.AddSubRange(tableID, nil, nil)
 }
 
+func (be *BarrierEvent) markStatusReceived() {
+	be.lastStatusReceivedTime = time.Now()
+}
+
 func (be *BarrierEvent) addDispatchersToRangeChecker() {
 	for dispatcher := range be.reportedDispatchers {
 		replicaSpan := be.spanController.GetTaskByID(dispatcher)
@@ -325,6 +347,11 @@ func (be *BarrierEvent) addDispatchersToRangeChecker() {
 }
 
 func (be *BarrierEvent) markDispatcherEventDone(dispatcherID common.DispatcherID) {
+	if be.selected.Load() {
+		// After selection, every accepted status means the chosen write/pass path
+		// is still making progress, so quiet fanout resend for a short interval.
+		be.markStatusReceived()
+	}
 	replicaSpan := be.spanController.GetTaskByID(dispatcherID)
 	if replicaSpan == nil {
 		log.Warn("dispatcher not found, ignore",
@@ -539,7 +566,7 @@ func (be *BarrierEvent) checkBlockedDispatchers() {
 		replications := be.spanController.GetTasksBySchemaID(schemaID)
 		for _, replication := range replications {
 			if forwardBarrierEvent(replication, be) {
-				// one related table has forward checkpointTs, means the block event can be advanced
+				// One related dispatcher has moved past the barrier, so the block event can advance.
 				be.selected.Store(true)
 				be.writerDispatcherAdvanced = true
 				log.Info("one related dispatcher has forward checkpointTs, means the block event can be advanced",
@@ -557,7 +584,7 @@ func (be *BarrierEvent) checkBlockedDispatchers() {
 		replications := be.spanController.GetAllTasks()
 		for _, replication := range replications {
 			if forwardBarrierEvent(replication, be) {
-				// one related table has forward checkpointTs, means the block event can be advanced
+				// One related dispatcher has moved past the barrier, so the block event can advance.
 				be.selected.Store(true)
 				be.writerDispatcherAdvanced = true
 				log.Info("one related dispatcher has forward checkpointTs, means the block event can be advanced",
@@ -601,7 +628,8 @@ func forwardBarrierEvent(replication *replica.SpanReplication, event *BarrierEve
 }
 
 func (be *BarrierEvent) resend(mode int64) []*messaging.TargetMessage {
-	if time.Since(be.lastResendTime) < time.Second {
+	now := time.Now()
+	if now.Sub(be.lastResendTime) < time.Second {
 		return nil
 	}
 	var msgs []*messaging.TargetMessage
@@ -650,9 +678,9 @@ func (be *BarrierEvent) resend(mode int64) []*messaging.TargetMessage {
 		be.checkBlockedDispatchers()
 		return nil
 	}
-	be.lastResendTime = time.Now()
 	// we select a dispatcher as the writer, still waiting for that dispatcher advance its checkpoint ts
 	if !be.writerDispatcherAdvanced {
+		be.lastResendTime = now
 		// resend write action
 		stm := be.spanController.GetTaskByID(be.writerDispatcher)
 		if stm == nil || stm.GetNodeID() == "" {
@@ -697,9 +725,29 @@ func (be *BarrierEvent) resend(mode int64) []*messaging.TargetMessage {
 		msgs = []*messaging.TargetMessage{be.newWriterActionMessage(stm.GetNodeID(), mode)}
 	} else {
 		// the writer dispatcher is advanced, resend pass action
+		if be.passActionSent && be.isFanoutPassAction() &&
+			// DB/All pass actions can fan out to many captures. If new statuses
+			// are still arriving shortly after the previous fanout pass, wait for
+			// that progress to settle before broadcasting another identical wave.
+			now.Sub(be.lastStatusReceivedTime) < fanoutPassResendQuietInterval {
+			return nil
+		}
+		be.passActionSent = true
+		be.lastResendTime = now
 		return be.sendPassAction(mode)
 	}
 	return msgs
+}
+
+func (be *BarrierEvent) isFanoutPassAction() bool {
+	if be.blockedDispatchers == nil {
+		return false
+	}
+	// Normal barriers target an explicit dispatcher list and are cheap to retry.
+	// Only DB/All barriers benefit from the extra quiet window because they
+	// broadcast the same pass action to many captures at once.
+	return be.blockedDispatchers.InfluenceType == heartbeatpb.InfluenceType_All ||
+		be.blockedDispatchers.InfluenceType == heartbeatpb.InfluenceType_DB
 }
 
 func (be *BarrierEvent) newWriterActionMessage(capture node.ID, mode int64) *messaging.TargetMessage {
