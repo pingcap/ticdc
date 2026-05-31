@@ -617,10 +617,7 @@ func (e *DispatcherManager) collectBlockStatusRequest(ctx context.Context) {
 		// Split oversized batches so one protobuf message does not monopolize
 		// serialization, transport, and maintainer-side processing.
 		for start := 0; start < len(blockStatusMessage); start += maxBlockStatusesPerRequest {
-			end := start + maxBlockStatusesPerRequest
-			if end > len(blockStatusMessage) {
-				end = len(blockStatusMessage)
-			}
+			end := min(start+maxBlockStatusesPerRequest, len(blockStatusMessage))
 			// Copy each chunk so queue-side in-place filtering owns the backing
 			// array and cannot mutate another batch's slice accidentally.
 			chunk := make([]*heartbeatpb.TableSpanBlockStatus, end-start)

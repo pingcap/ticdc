@@ -112,7 +112,7 @@ func (m *mockSchemaStore) GetTableInfo(keyspaceMeta common.KeyspaceMeta, tableID
 	return m.getTableInfo(tableID, ts)
 }
 
-func (m *mockSchemaStore) ForceGetTableInfo(keyspaceMeta common.KeyspaceMeta, tableID common.TableID, ts common.Ts) (*common.TableInfo, error) {
+func (m *mockSchemaStore) ForceGetTableInfo(_ common.KeyspaceMeta, tableID common.TableID, ts common.Ts) (*common.TableInfo, error) {
 	m.forceGetTableInfoCount[tableID]++
 	return m.getTableInfo(tableID, ts)
 }

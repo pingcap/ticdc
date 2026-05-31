@@ -181,7 +181,7 @@ func newTestDispatcherOrchestrator() *DispatcherOrchestrator {
 }
 
 func findChangefeedIDOnShard(orchestrator *DispatcherOrchestrator, excludedShard int) (common.ChangeFeedID, int) {
-	for i := 0; i < dispatcherOrchestratorShardCount*4; i++ {
+	for i := range dispatcherOrchestratorShardCount * 4 {
 		cfID := newTestChangefeedID(i)
 		shardIndex := orchestrator.shardIndexForChangefeedID(cfID)
 		if shardIndex != excludedShard {

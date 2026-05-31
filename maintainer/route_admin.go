@@ -15,6 +15,7 @@ package maintainer
 
 import (
 	"container/heap"
+	"maps"
 	"slices"
 	"time"
 
@@ -389,9 +390,7 @@ func (a *routeAdmin) buildAdmissionChange(
 	transition *routeTransition,
 ) (routeAdmissionChange, map[routing.TableKey]int, error) {
 	nextRefs := make(map[routing.TableKey]int, len(a.sourceRefs)+len(transition.adds))
-	for source, count := range a.sourceRefs {
-		nextRefs[source] = count
-	}
+	maps.Copy(nextRefs, a.sourceRefs)
 
 	addsBySource := make(map[routing.TableKey]routing.RouteBinding, len(transition.adds))
 	for _, tableID := range transition.removeTableIDs {

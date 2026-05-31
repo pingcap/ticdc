@@ -214,10 +214,10 @@ func TestCollectComponentStatusWhenChangedWatermarkSeqNoFallback(t *testing.T) {
 func TestCollectBlockStatusRequestSplitsOversizedMessages(t *testing.T) {
 	manager := createTestManager(t)
 
-	for i := 0; i < maxBlockStatusesPerRequest+2; i++ {
+	for i := range maxBlockStatusesPerRequest + 2 {
 		manager.sharedInfo.OfferBlockStatus(newWaitingBlockStatus(common.DefaultMode, uint64(i+1)))
 	}
-	for i := 0; i < maxBlockStatusesPerRequest+1; i++ {
+	for i := range maxBlockStatusesPerRequest + 1 {
 		manager.sharedInfo.OfferBlockStatus(newWaitingBlockStatus(common.RedoMode, uint64(i+10000)))
 	}
 
