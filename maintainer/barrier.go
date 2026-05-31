@@ -427,6 +427,13 @@ func (b *Barrier) handleBlockState(changefeedID common.ChangeFeedID,
 			}
 		}
 
+		if dispatcherID == b.spanController.GetDDLDispatcherID() {
+			ready, err := b.precheckRouteEvent(event)
+			if err != nil || !ready {
+				return event, nil, "", false
+			}
+		}
+
 		// the block event, and check whether we need to send write action
 		event.markDispatcherEventDone(dispatcherID)
 		if event.allDispatcherReported() {

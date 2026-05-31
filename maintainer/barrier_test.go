@@ -27,6 +27,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/stretchr/testify/require"
@@ -473,6 +474,80 @@ func TestNormalBlockWithTableTrigger(t *testing.T) {
 	event.resend(common.DefaultMode)
 	barrier.checkEventFinish(event)
 	require.Len(t, barrier.blockedEvents.m, 0)
+}
+
+func TestBarrierPrechecksRouteEventWhenDDLDispatcherBlocks(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		precheckReady     bool
+		precheckErr       error
+		expectedStatusNum int
+	}{
+		{
+			name:              "ready",
+			precheckReady:     true,
+			expectedStatusNum: 1,
+		},
+		{
+			name:          "conflict",
+			precheckReady: false,
+			precheckErr:   errors.New("route conflict"),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			testutil.SetUpTestServices(t)
+			tableTriggerEventDispatcherID := common.NewDispatcherID()
+			cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+			ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
+				common.DDLSpanSchemaID,
+				common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
+					ID:              tableTriggerEventDispatcherID.ToPB(),
+					ComponentStatus: heartbeatpb.ComponentState_Working,
+					CheckpointTs:    1,
+				}, "node1", false)
+			spanController := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
+			operatorController := operator.NewOperatorController(cfID, spanController, 1000, common.DefaultMode)
+			spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 10)
+			stm := spanController.GetTasksByTableID(1)[0]
+			spanController.BindSpanToNode("", "node1", stm)
+			spanController.MarkSpanReplicating(stm)
+
+			routeAdmission := &testBarrierRouteAdmission{
+				precheckReady: tc.precheckReady,
+				precheckErr:   tc.precheckErr,
+			}
+			barrier := NewBarrier(spanController, operatorController, false, nil, common.DefaultMode, routeAdmission)
+			msgs := barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
+				ChangefeedID: cfID.ToPB(),
+				BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
+					{
+						ID: spanController.GetDDLDispatcherID().ToPB(),
+						State: &heartbeatpb.State{
+							IsBlocked: true,
+							BlockTs:   10,
+							BlockTables: &heartbeatpb.InfluencedTables{
+								InfluenceType: heartbeatpb.InfluenceType_Normal,
+								TableIDs:      []int64{common.DDLSpanTableID, 1},
+							},
+						},
+					},
+				},
+			})
+			require.Len(t, routeAdmission.precheckInfos, 1)
+			require.Empty(t, routeAdmission.applyInfos)
+			require.Equal(t, uint64(10), routeAdmission.precheckInfos[0].commitTs)
+			require.Equal(t, common.DefaultMode, routeAdmission.precheckInfos[0].mode)
+			require.Equal(t, []int64{common.DDLSpanTableID, 1}, routeAdmission.precheckInfos[0].blockTables.TableIDs)
+
+			require.NotNil(t, msgs)
+			require.NotEmpty(t, msgs)
+			resp := msgs[0].Message[0].(*heartbeatpb.HeartBeatResponse)
+			require.Len(t, resp.DispatcherStatuses, tc.expectedStatusNum)
+			for _, status := range resp.DispatcherStatuses {
+				require.Nil(t, status.Action)
+			}
+		})
+	}
 }
 
 func TestSchemaBlock(t *testing.T) {
@@ -1684,4 +1759,21 @@ func TestBarrierReturnsTemporaryIgnoreForUnreplicatingWaitingStatus(t *testing.T
 	require.Equal(t, stm.ID, common.NewDispatcherIDFromPB(status.InfluencedDispatchers.DispatcherIDs[0]))
 	require.Equal(t, 0, barrier.blockedEvents.Len())
 	require.Nil(t, stm.GetBlockState())
+}
+
+type testBarrierRouteAdmission struct {
+	precheckReady bool
+	precheckErr   error
+	precheckInfos []routeAdmissionInfo
+	applyInfos    []routeAdmissionInfo
+}
+
+func (a *testBarrierRouteAdmission) precheck(info routeAdmissionInfo) (bool, error) {
+	a.precheckInfos = append(a.precheckInfos, info)
+	return a.precheckReady, a.precheckErr
+}
+
+func (a *testBarrierRouteAdmission) apply(info routeAdmissionInfo) error {
+	a.applyInfos = append(a.applyInfos, info)
+	return nil
 }

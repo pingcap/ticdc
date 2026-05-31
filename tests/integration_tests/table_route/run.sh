@@ -57,6 +57,48 @@ function verify_table_route_drop_database() {
 	check_db_not_exists "$target_db" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 90
 }
 
+function get_table_route_dispatcher_count() {
+	local changefeed_id=$1
+	local addr="${CDC_HOST}:${CDC_PORT}"
+
+	curl -s -X GET "http://${addr}/api/v2/changefeeds/${changefeed_id}/get_dispatcher_count?mode=0&keyspace=${KEYSPACE_NAME}" | jq -r '.count'
+}
+
+function render_table_route_split_config() {
+	local changefeed_config=$1
+
+	cp "$CUR/conf/changefeed.toml" "$changefeed_config"
+	cat >>"$changefeed_config" <<EOF
+
+[scheduler]
+enable-table-across-nodes = true
+region-threshold = 1
+region-count-per-span = 10
+force-split = true
+EOF
+}
+
+function verify_table_route_split_effective() {
+	local changefeed_id=$1
+	local table_id
+	local before_count
+	local expected_count
+
+	query_dispatcher_count "${CDC_HOST}:${CDC_PORT}" "$changefeed_id" -1 60
+	before_count=$(get_table_route_dispatcher_count "$changefeed_id")
+	if [ -z "$before_count" ] || [ "$before_count" = "null" ]; then
+		echo "failed to query dispatcher count before table route split, got: $before_count"
+		exit 1
+	fi
+
+	run_sql "SPLIT TABLE source_db.users BETWEEN (1) AND (100000) REGIONS 20;" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	table_id=$(get_table_id "source_db" "users")
+	split_table_with_retry "$table_id" "$changefeed_id" 20
+
+	expected_count=$((before_count + 1))
+	query_dispatcher_count "${CDC_HOST}:${CDC_PORT}" "$changefeed_id" "$expected_count" 60 ge
+}
+
 function check_storage_files_use_target_names() {
 	local storage_dir=$1
 
@@ -78,13 +120,30 @@ function run_mysql() {
 	run_cdc_server --workdir "$WORK_DIR" --binary "$CDC_BINARY" --cluster-id "$KEYSPACE_NAME"
 
 	SINK_URI="mysql://normal:123456@${DOWN_TIDB_HOST}:${DOWN_TIDB_PORT}/"
-	cdc_cli_changefeed create --sink-uri="$SINK_URI" --config="$CUR/conf/changefeed.toml"
+	local normal_changefeed_id="table-route-mysql"
+	cdc_cli_changefeed create -c "$normal_changefeed_id" --sink-uri="$SINK_URI" --config="$CUR/conf/changefeed.toml"
 
 	run_sql_file "$CUR/data/test.sql" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
 
 	verify_table_route_result "$WORK_DIR"
 	drop_table_route_source_databases
 	verify_table_route_drop_database
+	cdc_cli_changefeed remove -c "$normal_changefeed_id"
+
+	local split_changefeed_id="table-route-split"
+	local split_changefeed_config="$WORK_DIR/table_route_split_changefeed.toml"
+	render_table_route_split_config "$split_changefeed_config"
+	cdc_cli_changefeed create -c "$split_changefeed_id" --sink-uri="$SINK_URI" --config="$split_changefeed_config"
+
+	run_sql_file "$CUR/data/test.sql" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	verify_table_route_result "$WORK_DIR"
+	verify_table_route_split_effective "$split_changefeed_id"
+	run_sql "INSERT INTO source_db.users VALUES (6, 'Split', 'split@example.com');" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+
+	check_sync_diff "$WORK_DIR" "$CUR/conf/diff_config.toml" 120
+	drop_table_route_source_databases
+	verify_table_route_drop_database
+	cdc_cli_changefeed remove -c "$split_changefeed_id"
 
 	cleanup_process "$CDC_BINARY"
 	check_logs "$WORK_DIR"
