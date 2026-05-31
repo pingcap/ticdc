@@ -14,6 +14,7 @@
 package maintainer
 
 import (
+	"slices"
 	"time"
 
 	"github.com/pingcap/log"
@@ -254,17 +255,38 @@ func (b *Barrier) Resend() []*messaging.TargetMessage {
 
 	eventList := make([]*BarrierEvent, 0)
 	b.blockedEvents.Range(func(key eventKey, barrierEvent *BarrierEvent) bool {
+		eventList = append(eventList, barrierEvent)
+		return true
+	})
+	// Bootstrap responses are dispatcher/span snapshots, not DDL logs. The DDL
+	// signal recovered here is each span's in-flight BlockState. After maintainer
+	// failover, some dispatchers may have advanced past an earlier blocking DDL
+	// while others still need pass actions, and the advanced dispatchers can
+	// already be blocked by a later DDL. Since blockedEvents is map-backed, sort
+	// recovered barrier events by event key before route precheck/apply so route
+	// admission state advances in DDL commit order.
+	slices.SortFunc(eventList, func(a, b *BarrierEvent) int {
+		return compareEventKey(
+			getEventKey(a.commitTs, a.isSyncPoint),
+			getEventKey(b.commitTs, b.isSyncPoint),
+		)
+	})
+
+	for _, barrierEvent := range eventList {
+		if barrierEvent.selected.Load() {
+			ready, err := b.precheckRouteEvent(barrierEvent)
+			if err != nil || !ready {
+				continue
+			}
+		}
 		if barrierEvent.selected.Load() && barrierEvent.writerDispatcherAdvanced {
 			if err := b.applyRouteEvent(barrierEvent); err != nil {
-				return true
+				continue
 			}
 		}
 		// todo: we can limit the number of messages to send in one round here
 		msgs = append(msgs, barrierEvent.resend(b.mode)...)
-
-		eventList = append(eventList, barrierEvent)
-		return true
-	})
+	}
 
 	for _, event := range eventList {
 		if event != nil {
@@ -344,6 +366,10 @@ func (b *Barrier) handleEventDone(changefeedID common.ChangeFeedID, dispatcherID
 	// which means we have sent pass or write action to it
 	// the writer already synced ddl to downstream
 	if event.writerDispatcher == dispatcherID {
+		ready, err := b.precheckRouteEvent(event)
+		if err != nil || !ready {
+			return event
+		}
 		if err := b.applyRouteEvent(event); err != nil {
 			return event
 		}

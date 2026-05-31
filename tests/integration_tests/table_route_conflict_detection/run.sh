@@ -199,6 +199,11 @@ function run_rename_table_out_of_filter_release_case() {
 	write_route_config "$config_file" "$source_a" "$source_b" "$target_schema"
 	start_ts=$(run_cdc_cli_tso_query "$UP_PD_HOST_1" "$UP_PD_PORT_1")
 	run_sql "CREATE DATABASE $source_a; CREATE TABLE $source_a.t (id INT PRIMARY KEY); CREATE DATABASE $ignored_schema;" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	# The old table is still in the replication range, so TiCDC writes the RENAME
+	# to downstream even though the new schema is outside the filter. Prepare the
+	# downstream schema explicitly and keep this case focused on route admission
+	# release instead of downstream schema existence.
+	run_sql "CREATE DATABASE $ignored_schema;" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
 	cdc_cli_changefeed create -c "$changefeed_id" --start-ts="$start_ts" --sink-uri="$SINK_URI" --config="$config_file"
 	check_table_exists "$target_schema.t_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 60
 

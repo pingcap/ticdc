@@ -217,7 +217,15 @@ func (a *routeAdmin) apply(info routeAdmissionInfo) error {
 	}
 	pending, ok := a.pendingEvents[info.key]
 	if !ok {
-		return nil
+		var err error
+		pending, ok, err = a.getOrBuildPendingEvent(info)
+		if err != nil {
+			return a.fail(err)
+		}
+		if !ok {
+			a.consumeRouteNeutralEvent(info.key)
+			return nil
+		}
 	}
 	if !a.isPendingHead(info.key) {
 		return a.fail(errors.ErrTableRouteConflict.GenWithStack(

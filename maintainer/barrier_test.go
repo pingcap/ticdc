@@ -550,6 +550,116 @@ func TestBarrierPrechecksRouteEventWhenDDLDispatcherBlocks(t *testing.T) {
 	}
 }
 
+func TestBarrierPrechecksRecoveredRouteEventBeforeResend(t *testing.T) {
+	testutil.SetUpTestServices(t)
+	tableTriggerEventDispatcherID := common.NewDispatcherID()
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
+		common.DDLSpanSchemaID,
+		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
+			ID:              tableTriggerEventDispatcherID.ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    1,
+		}, "node1", false)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
+	operatorController := operator.NewOperatorController(cfID, spanController, 1000, common.DefaultMode)
+	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 10)
+	stm := spanController.GetTasksByTableID(1)[0]
+	spanController.BindSpanToNode("", "node1", stm)
+	spanController.MarkSpanReplicating(stm)
+
+	routeAdmission := &testBarrierRouteAdmission{precheckReady: true}
+	barrier := NewBarrier(spanController, operatorController, false, map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{
+		"node1": {
+			ChangefeedID: cfID.ToPB(),
+			Spans: []*heartbeatpb.BootstrapTableSpan{
+				{
+					ID: tableTriggerEventDispatcherID.ToPB(),
+					BlockState: &heartbeatpb.State{
+						IsBlocked: true,
+						BlockTs:   10,
+						BlockTables: &heartbeatpb.InfluencedTables{
+							InfluenceType: heartbeatpb.InfluenceType_Normal,
+							TableIDs:      []int64{common.DDLSpanTableID, 1},
+						},
+						Stage: heartbeatpb.BlockStage_DONE,
+					},
+					Mode: common.DefaultMode,
+				},
+			},
+		},
+	}, common.DefaultMode, routeAdmission)
+
+	_ = barrier.Resend()
+	require.Len(t, routeAdmission.precheckInfos, 1)
+	require.Len(t, routeAdmission.applyInfos, 1)
+	require.Equal(t, uint64(10), routeAdmission.precheckInfos[0].commitTs)
+	require.Equal(t, routeAdmission.precheckInfos[0], routeAdmission.applyInfos[0])
+}
+
+func TestBarrierRouteConflictPrecheckPreventsWriteAction(t *testing.T) {
+	testutil.SetUpTestServices(t)
+	tableTriggerEventDispatcherID := common.NewDispatcherID()
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
+		common.DDLSpanSchemaID,
+		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
+			ID:              tableTriggerEventDispatcherID.ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    1,
+		}, "node1", false)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
+	operatorController := operator.NewOperatorController(cfID, spanController, 1000, common.DefaultMode)
+	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 10)
+	stm := spanController.GetTasksByTableID(1)[0]
+	spanController.BindSpanToNode("", "node1", stm)
+	spanController.MarkSpanReplicating(stm)
+
+	routeAdmission := &testBarrierRouteAdmission{
+		precheckErr: errors.New("route conflict"),
+	}
+	barrier := NewBarrier(spanController, operatorController, false, nil, common.DefaultMode, routeAdmission)
+	blockTables := &heartbeatpb.InfluencedTables{
+		InfluenceType: heartbeatpb.InfluenceType_Normal,
+		TableIDs:      []int64{common.DDLSpanTableID, 1},
+	}
+	msgs := barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
+		ChangefeedID: cfID.ToPB(),
+		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
+			{
+				ID: stm.ID.ToPB(),
+				State: &heartbeatpb.State{
+					IsBlocked:   true,
+					BlockTs:     10,
+					BlockTables: blockTables,
+				},
+			},
+			{
+				ID: tableTriggerEventDispatcherID.ToPB(),
+				State: &heartbeatpb.State{
+					IsBlocked:   true,
+					BlockTs:     10,
+					BlockTables: blockTables,
+				},
+			},
+		},
+	})
+
+	require.Len(t, routeAdmission.precheckInfos, 1)
+	require.Empty(t, routeAdmission.applyInfos)
+	event := barrier.blockedEvents.m[getEventKey(10, false)]
+	require.NotNil(t, event)
+	require.False(t, event.selected.Load())
+	require.NotNil(t, msgs)
+	require.NotEmpty(t, msgs)
+	for _, msg := range msgs {
+		resp := msg.Message[0].(*heartbeatpb.HeartBeatResponse)
+		for _, status := range resp.DispatcherStatuses {
+			require.Nil(t, status.Action)
+		}
+	}
+}
+
 func TestSchemaBlock(t *testing.T) {
 	testutil.SetUpTestServices(t)
 	nm := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)

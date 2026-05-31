@@ -79,6 +79,31 @@ func TestRouteAdminApplyUpdatesRegistry(t *testing.T) {
 	require.Equal(t, routing.TableKey{Schema: "db2_target", Table: "t"}, binding.binding.Target)
 }
 
+func TestRouteAdminApplyBuildsRecoveredTransition(t *testing.T) {
+	admin := newTestRouteAdmin(t, "target", routing.TablePlaceholder)
+	store := testRouteSchemaStore(t, admin)
+	store.AppendDDLEvent(1, routeTableInfoDDL(1, "db1", "u"))
+
+	info := routeAdmissionInfo{
+		key:      getEventKey(10, false),
+		commitTs: 10,
+		blockTables: &heartbeatpb.InfluencedTables{
+			InfluenceType: heartbeatpb.InfluenceType_Normal,
+			TableIDs:      []int64{1},
+		},
+	}
+
+	require.Empty(t, admin.pendingEvents)
+	require.NoError(t, admin.apply(info))
+
+	binding, ok := admin.tableSources[1]
+	require.True(t, ok)
+	require.Equal(t, routing.TableKey{Schema: "db1", Table: "u"}, binding.binding.Source)
+	require.Equal(t, routing.TableKey{Schema: "target", Table: "u"}, binding.binding.Target)
+	require.Empty(t, admin.pendingEvents)
+	require.Empty(t, admin.pendingQueue)
+}
+
 func TestRouteAdminReadsNewTableBeforeDispatcherRegistration(t *testing.T) {
 	admin := newTestRouteAdmin(t, routing.SchemaPlaceholder+"_target", routing.TablePlaceholder)
 	store := testRouteSchemaStore(t, admin)
