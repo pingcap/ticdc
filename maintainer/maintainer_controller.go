@@ -77,9 +77,9 @@ type Controller struct {
 	// consistent host/target snapshot.
 	drainState *mscheduler.DrainState
 
-	// Table route conflict detection is owned by the maintainer controller.
-	routeDetector *routeConflictDetector
-	reportError   func(error)
+	// Table route admission is owned by the maintainer controller.
+	routeAdmin  *routeAdmin
+	reportError func(error)
 }
 
 func NewController(changefeedID common.ChangeFeedID,
@@ -163,8 +163,8 @@ func NewController(changefeedID common.ChangeFeedID,
 
 func (c *Controller) SetErrorReporter(reportError func(error)) {
 	c.reportError = reportError
-	if c.routeDetector != nil {
-		c.routeDetector.reportError = reportError
+	if c.routeAdmin != nil {
+		c.routeAdmin.reportError = reportError
 	}
 }
 

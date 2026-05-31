@@ -27,11 +27,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestRouteConflictDetectorPrecheckReportsConflict(t *testing.T) {
-	detector := newTestRouteConflictDetector(t, "target", routing.TablePlaceholder)
+func TestRouteAdminPrecheckReportsConflict(t *testing.T) {
+	admin := newTestRouteAdmin(t, "target", routing.TablePlaceholder)
 
 	var reportedErr error
-	detector.reportError = func(err error) {
+	admin.reportError = func(err error) {
 		reportedErr = err
 	}
 
@@ -42,7 +42,7 @@ func TestRouteConflictDetectorPrecheckReportsConflict(t *testing.T) {
 			{SchemaID: 2, TableID: 2},
 		},
 	}
-	ready, err := detector.precheck(info)
+	ready, err := admin.precheck(info)
 	require.Error(t, err)
 	require.False(t, ready)
 	require.Same(t, err, reportedErr)
@@ -51,12 +51,12 @@ func TestRouteConflictDetectorPrecheckReportsConflict(t *testing.T) {
 	require.Contains(t, err.Error(), "source `db2`.`t`")
 	require.Contains(t, err.Error(), "target `target`.`t`")
 
-	_, ok := detector.tables[2]
+	_, ok := admin.tableSources[2]
 	require.False(t, ok)
 }
 
-func TestRouteConflictDetectorApplyUpdatesRegistry(t *testing.T) {
-	detector := newTestRouteConflictDetector(t, routing.SchemaPlaceholder+"_target", routing.TablePlaceholder)
+func TestRouteAdminApplyUpdatesRegistry(t *testing.T) {
+	admin := newTestRouteAdmin(t, routing.SchemaPlaceholder+"_target", routing.TablePlaceholder)
 
 	info := routeDDLInfo{
 		key:      getEventKey(10, false),
@@ -65,23 +65,23 @@ func TestRouteConflictDetectorApplyUpdatesRegistry(t *testing.T) {
 			{SchemaID: 2, TableID: 2},
 		},
 	}
-	ready, err := detector.precheck(info)
+	ready, err := admin.precheck(info)
 	require.NoError(t, err)
 	require.True(t, ready)
 
-	_, ok := detector.tables[2]
+	_, ok := admin.tableSources[2]
 	require.False(t, ok)
 
-	require.NoError(t, detector.apply(info))
+	require.NoError(t, admin.apply(info))
 
-	binding, ok := detector.tables[2]
+	binding, ok := admin.tableSources[2]
 	require.True(t, ok)
 	require.Equal(t, routing.TableKey{Schema: "db2_target", Table: "t"}, binding.binding.Target)
 }
 
-func TestRouteConflictDetectorReadsNewTableBeforeDispatcherRegistration(t *testing.T) {
-	detector := newTestRouteConflictDetector(t, routing.SchemaPlaceholder+"_target", routing.TablePlaceholder)
-	store := testRouteSchemaStore(t, detector)
+func TestRouteAdminReadsNewTableBeforeDispatcherRegistration(t *testing.T) {
+	admin := newTestRouteAdmin(t, routing.SchemaPlaceholder+"_target", routing.TablePlaceholder)
+	store := testRouteSchemaStore(t, admin)
 	store.AppendDDLEvent(3, routeTableInfoDDL(3, "db3", "t"))
 	store.RequireRegisteredTablesForGetTableInfo()
 
@@ -92,14 +92,14 @@ func TestRouteConflictDetectorReadsNewTableBeforeDispatcherRegistration(t *testi
 			{SchemaID: 3, TableID: 3},
 		},
 	}
-	ready, err := detector.precheck(info)
+	ready, err := admin.precheck(info)
 	require.NoError(t, err)
 	require.True(t, ready)
 	require.Equal(t, 1, store.ForceGetTableInfoCount(3))
 }
 
-func TestRouteConflictDetectorIgnoresDDLSpanInBlockTables(t *testing.T) {
-	detector := newTestRouteConflictDetector(t, routing.SchemaPlaceholder+"_target", routing.TablePlaceholder)
+func TestRouteAdminIgnoresDDLSpanInBlockTables(t *testing.T) {
+	admin := newTestRouteAdmin(t, routing.SchemaPlaceholder+"_target", routing.TablePlaceholder)
 
 	info := routeDDLInfo{
 		key:      getEventKey(10, false),
@@ -112,17 +112,17 @@ func TestRouteConflictDetectorIgnoresDDLSpanInBlockTables(t *testing.T) {
 			{SchemaID: 2, TableID: 2},
 		},
 	}
-	ready, err := detector.precheck(info)
+	ready, err := admin.precheck(info)
 	require.NoError(t, err)
 	require.True(t, ready)
-	require.NoError(t, detector.apply(info))
+	require.NoError(t, admin.apply(info))
 
-	_, ok := detector.tables[2]
+	_, ok := admin.tableSources[2]
 	require.True(t, ok)
 }
 
-func TestRouteConflictDetectorDropReleasesBootstrapBinding(t *testing.T) {
-	detector := newTestRouteConflictDetector(t, "target", routing.TablePlaceholder)
+func TestRouteAdminDropReleasesBootstrapBinding(t *testing.T) {
+	admin := newTestRouteAdmin(t, "target", routing.TablePlaceholder)
 
 	dropInfo := routeDDLInfo{
 		key:      getEventKey(10, false),
@@ -132,12 +132,12 @@ func TestRouteConflictDetectorDropReleasesBootstrapBinding(t *testing.T) {
 			TableIDs:      []int64{1},
 		},
 	}
-	ready, err := detector.precheck(dropInfo)
+	ready, err := admin.precheck(dropInfo)
 	require.NoError(t, err)
 	require.True(t, ready)
-	require.NoError(t, detector.apply(dropInfo))
+	require.NoError(t, admin.apply(dropInfo))
 
-	_, ok := detector.tables[1]
+	_, ok := admin.tableSources[1]
 	require.False(t, ok)
 
 	addInfo := routeDDLInfo{
@@ -147,13 +147,86 @@ func TestRouteConflictDetectorDropReleasesBootstrapBinding(t *testing.T) {
 			{SchemaID: 2, TableID: 2},
 		},
 	}
-	ready, err = detector.precheck(addInfo)
+	ready, err = admin.precheck(addInfo)
 	require.NoError(t, err)
 	require.True(t, ready)
-	require.NoError(t, detector.apply(addInfo))
+	require.NoError(t, admin.apply(addInfo))
 }
 
-func newTestRouteConflictDetector(t *testing.T, targetSchema, targetTable string) *routeConflictDetector {
+func TestRouteAdminTracksSourceAdmissionNotTableID(t *testing.T) {
+	admin := newTestRouteAdmin(t, "target", routing.TablePlaceholder)
+	store := testRouteSchemaStore(t, admin)
+	store.AppendDDLEvent(3, routeTableInfoDDL(3, "db1", "t"))
+	store.AppendDDLEvent(4, routeTableInfoDDL(4, "db1", "t"))
+
+	source := routing.TableKey{Schema: "db1", Table: "t"}
+
+	addSameSourceInfo := routeDDLInfo{
+		key:      getEventKey(10, false),
+		commitTs: 10,
+		addedTables: []*heartbeatpb.Table{
+			{SchemaID: 1, TableID: 3},
+		},
+	}
+	ready, err := admin.precheck(addSameSourceInfo)
+	require.NoError(t, err)
+	require.True(t, ready)
+	require.NoError(t, admin.apply(addSameSourceInfo))
+	require.Equal(t, 2, admin.sourceRefs[source])
+
+	dropOnePhysicalIDInfo := routeDDLInfo{
+		key:      getEventKey(20, false),
+		commitTs: 20,
+		droppedTables: &heartbeatpb.InfluencedTables{
+			InfluenceType: heartbeatpb.InfluenceType_Normal,
+			TableIDs:      []int64{1},
+		},
+	}
+	ready, err = admin.precheck(dropOnePhysicalIDInfo)
+	require.NoError(t, err)
+	require.True(t, ready)
+	require.NoError(t, admin.apply(dropOnePhysicalIDInfo))
+	require.Equal(t, 1, admin.sourceRefs[source])
+	_, ok := admin.tableSources[1]
+	require.False(t, ok)
+	_, ok = admin.tableSources[3]
+	require.True(t, ok)
+
+	truncateInfo := routeDDLInfo{
+		key:      getEventKey(30, false),
+		commitTs: 30,
+		droppedTables: &heartbeatpb.InfluencedTables{
+			InfluenceType: heartbeatpb.InfluenceType_Normal,
+			TableIDs:      []int64{3},
+		},
+		addedTables: []*heartbeatpb.Table{
+			{SchemaID: 1, TableID: 4},
+		},
+	}
+	ready, err = admin.precheck(truncateInfo)
+	require.NoError(t, err)
+	require.True(t, ready)
+	require.NoError(t, admin.apply(truncateInfo))
+	require.Equal(t, 1, admin.sourceRefs[source])
+	_, ok = admin.tableSources[3]
+	require.False(t, ok)
+	_, ok = admin.tableSources[4]
+	require.True(t, ok)
+
+	conflictInfo := routeDDLInfo{
+		key:      getEventKey(40, false),
+		commitTs: 40,
+		addedTables: []*heartbeatpb.Table{
+			{SchemaID: 2, TableID: 2},
+		},
+	}
+	ready, err = admin.precheck(conflictInfo)
+	require.Error(t, err)
+	require.False(t, ready)
+	require.Contains(t, err.Error(), "table route conflict")
+}
+
+func newTestRouteAdmin(t *testing.T, targetSchema, targetTable string) *routeAdmin {
 	t.Helper()
 
 	cfID := common.NewChangeFeedIDWithName("test-changefeed", common.DefaultKeyspaceName)
@@ -168,7 +241,7 @@ func newTestRouteConflictDetector(t *testing.T, targetSchema, targetTable string
 	)
 	appcontext.SetService[schemastore.SchemaStore](appcontext.SchemaStore, store)
 
-	detector, err := newRouteConflictDetector(
+	admin, err := newRouteAdmin(
 		cfID,
 		common.KeyspaceMeta{},
 		&config.ReplicaConfig{
@@ -195,7 +268,7 @@ func newTestRouteConflictDetector(t *testing.T, targetSchema, targetTable string
 		},
 	)
 	require.NoError(t, err)
-	return detector
+	return admin
 }
 
 type routeSchemaStoreMock interface {
@@ -204,10 +277,10 @@ type routeSchemaStoreMock interface {
 	ForceGetTableInfoCount(tableID common.TableID) int
 }
 
-func testRouteSchemaStore(t *testing.T, detector *routeConflictDetector) routeSchemaStoreMock {
+func testRouteSchemaStore(t *testing.T, admin *routeAdmin) routeSchemaStoreMock {
 	t.Helper()
 
-	store, ok := detector.schemaStore.(routeSchemaStoreMock)
+	store, ok := admin.schemaStore.(routeSchemaStoreMock)
 	require.True(t, ok)
 	return store
 }

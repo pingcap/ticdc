@@ -135,14 +135,13 @@ func (c *Controller) FinishBootstrap(
 	// Step 4: Handle any remaining working tasks (likely dropped tables)
 	c.handleRemainingWorkingTasks(workingTaskMap, redoWorkingTaskMap)
 
-	// Step 5: Initialize route router and target registry before barrier starts
-	// handling bootstrap block states. The barrier captures the detector pointer
-	// at construction time.
-	detector, err := newRouteConflictDetector(c.changefeedID, c.keyspaceMeta, c.replicaConfig, c.reportError, tables)
+	// Step 5: Initialize route admission before barrier starts handling bootstrap
+	// block states. The barrier captures the route admin pointer at construction time.
+	admin, err := newRouteAdmin(c.changefeedID, c.keyspaceMeta, c.replicaConfig, c.reportError, tables)
 	if err != nil {
 		return nil, err
 	}
-	c.routeDetector = detector
+	c.routeAdmin = admin
 
 	// Step 6: Initialize and start sub components
 	c.initializeComponents(allNodesResp)
@@ -375,7 +374,7 @@ func (c *Controller) initializeComponents(
 	if c.enableRedo {
 		c.redoBarrier = NewBarrier(c.redoSpanController, c.redoOperatorController, util.GetOrZero(c.replicaConfig.Scheduler.EnableTableAcrossNodes), allNodesResp, common.RedoMode, nil)
 	}
-	c.barrier = NewBarrier(c.spanController, c.operatorController, util.GetOrZero(c.replicaConfig.Scheduler.EnableTableAcrossNodes), allNodesResp, common.DefaultMode, c.routeDetector)
+	c.barrier = NewBarrier(c.spanController, c.operatorController, util.GetOrZero(c.replicaConfig.Scheduler.EnableTableAcrossNodes), allNodesResp, common.DefaultMode, c.routeAdmin)
 
 	// Start scheduler
 	c.taskHandlesMu.Lock()
