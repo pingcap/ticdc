@@ -35,7 +35,7 @@ func TestRouteAdminPrecheckReportsConflict(t *testing.T) {
 		reportedErr = err
 	}
 
-	info := routeDDLInfo{
+	info := routeAdmissionInfo{
 		key:      getEventKey(10, false),
 		commitTs: 10,
 		addedTables: []*heartbeatpb.Table{
@@ -58,7 +58,7 @@ func TestRouteAdminPrecheckReportsConflict(t *testing.T) {
 func TestRouteAdminApplyUpdatesRegistry(t *testing.T) {
 	admin := newTestRouteAdmin(t, routing.SchemaPlaceholder+"_target", routing.TablePlaceholder)
 
-	info := routeDDLInfo{
+	info := routeAdmissionInfo{
 		key:      getEventKey(10, false),
 		commitTs: 10,
 		addedTables: []*heartbeatpb.Table{
@@ -85,7 +85,7 @@ func TestRouteAdminReadsNewTableBeforeDispatcherRegistration(t *testing.T) {
 	store.AppendDDLEvent(3, routeTableInfoDDL(3, "db3", "t"))
 	store.RequireRegisteredTablesForGetTableInfo()
 
-	info := routeDDLInfo{
+	info := routeAdmissionInfo{
 		key:      getEventKey(10, false),
 		commitTs: 10,
 		addedTables: []*heartbeatpb.Table{
@@ -101,7 +101,7 @@ func TestRouteAdminReadsNewTableBeforeDispatcherRegistration(t *testing.T) {
 func TestRouteAdminIgnoresDDLSpanInBlockTables(t *testing.T) {
 	admin := newTestRouteAdmin(t, routing.SchemaPlaceholder+"_target", routing.TablePlaceholder)
 
-	info := routeDDLInfo{
+	info := routeAdmissionInfo{
 		key:      getEventKey(10, false),
 		commitTs: 10,
 		blockTables: &heartbeatpb.InfluencedTables{
@@ -124,7 +124,7 @@ func TestRouteAdminIgnoresDDLSpanInBlockTables(t *testing.T) {
 func TestRouteAdminDropReleasesBootstrapBinding(t *testing.T) {
 	admin := newTestRouteAdmin(t, "target", routing.TablePlaceholder)
 
-	dropInfo := routeDDLInfo{
+	dropInfo := routeAdmissionInfo{
 		key:      getEventKey(10, false),
 		commitTs: 10,
 		droppedTables: &heartbeatpb.InfluencedTables{
@@ -140,7 +140,7 @@ func TestRouteAdminDropReleasesBootstrapBinding(t *testing.T) {
 	_, ok := admin.tableSources[1]
 	require.False(t, ok)
 
-	addInfo := routeDDLInfo{
+	addInfo := routeAdmissionInfo{
 		key:      getEventKey(20, false),
 		commitTs: 20,
 		addedTables: []*heartbeatpb.Table{
@@ -161,7 +161,7 @@ func TestRouteAdminTracksSourceAdmissionNotTableID(t *testing.T) {
 
 	source := routing.TableKey{Schema: "db1", Table: "t"}
 
-	addSameSourceInfo := routeDDLInfo{
+	addSameSourceInfo := routeAdmissionInfo{
 		key:      getEventKey(10, false),
 		commitTs: 10,
 		addedTables: []*heartbeatpb.Table{
@@ -174,7 +174,7 @@ func TestRouteAdminTracksSourceAdmissionNotTableID(t *testing.T) {
 	require.NoError(t, admin.apply(addSameSourceInfo))
 	require.Equal(t, 2, admin.sourceRefs[source])
 
-	dropOnePhysicalIDInfo := routeDDLInfo{
+	dropOnePhysicalIDInfo := routeAdmissionInfo{
 		key:      getEventKey(20, false),
 		commitTs: 20,
 		droppedTables: &heartbeatpb.InfluencedTables{
@@ -192,7 +192,7 @@ func TestRouteAdminTracksSourceAdmissionNotTableID(t *testing.T) {
 	_, ok = admin.tableSources[3]
 	require.True(t, ok)
 
-	truncateInfo := routeDDLInfo{
+	truncateInfo := routeAdmissionInfo{
 		key:      getEventKey(30, false),
 		commitTs: 30,
 		droppedTables: &heartbeatpb.InfluencedTables{
@@ -213,7 +213,7 @@ func TestRouteAdminTracksSourceAdmissionNotTableID(t *testing.T) {
 	_, ok = admin.tableSources[4]
 	require.True(t, ok)
 
-	conflictInfo := routeDDLInfo{
+	conflictInfo := routeAdmissionInfo{
 		key:      getEventKey(40, false),
 		commitTs: 40,
 		addedTables: []*heartbeatpb.Table{

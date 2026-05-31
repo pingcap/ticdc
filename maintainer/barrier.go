@@ -47,7 +47,7 @@ type Barrier struct {
 	// and logs must stay in the same mode.
 	mode int64
 
-	routeAdmin *routeAdmin
+	routeAdmission tableRouteAdmission
 }
 
 // NewBarrier create a new barrier for the changefeed
@@ -56,7 +56,7 @@ func NewBarrier(spanController *span.Controller,
 	splitTableEnabled bool,
 	bootstrapRespMap map[node.ID]*heartbeatpb.MaintainerBootstrapResponse,
 	mode int64,
-	routeAdmin *routeAdmin,
+	routeAdmission tableRouteAdmission,
 ) *Barrier {
 	barrier := Barrier{
 		blockedEvents:      NewBlockEventMap(),
@@ -65,7 +65,7 @@ func NewBarrier(spanController *span.Controller,
 		operatorController: operatorController,
 		splitTableEnabled:  splitTableEnabled,
 		mode:               mode,
-		routeAdmin:         routeAdmin,
+		routeAdmission:     routeAdmission,
 	}
 	barrier.handleBootstrapResponse(bootstrapRespMap)
 	return &barrier
@@ -544,17 +544,17 @@ func (b *Barrier) tryScheduleEvent(event *BarrierEvent) bool {
 }
 
 func (b *Barrier) precheckRouteEvent(event *BarrierEvent) (bool, error) {
-	if b.routeAdmin == nil {
+	if b.routeAdmission == nil {
 		return true, nil
 	}
-	return b.routeAdmin.precheck(event.routeDDLInfo())
+	return b.routeAdmission.precheck(event.routeAdmissionInfo())
 }
 
 func (b *Barrier) applyRouteEvent(event *BarrierEvent) error {
-	if b.routeAdmin == nil {
+	if b.routeAdmission == nil {
 		return nil
 	}
-	return b.routeAdmin.apply(event.routeDDLInfo())
+	return b.routeAdmission.apply(event.routeAdmissionInfo())
 }
 
 // ackEvent creates an ack event

@@ -53,7 +53,12 @@ type routePendingEvent struct {
 	prechecked bool
 }
 
-type routeDDLInfo struct {
+type tableRouteAdmission interface {
+	precheck(info routeAdmissionInfo) (bool, error)
+	apply(info routeAdmissionInfo) error
+}
+
+type routeAdmissionInfo struct {
 	key           eventKey
 	commitTs      uint64
 	isSyncPoint   bool
@@ -156,7 +161,7 @@ func (a *routeAdmin) applyAdmissionChange(change routeAdmissionChange, mutate bo
 	return a.registry.ApplyTransition(change.releases, change.admits, mutate)
 }
 
-func (a *routeAdmin) precheck(info routeDDLInfo) (bool, error) {
+func (a *routeAdmin) precheck(info routeAdmissionInfo) (bool, error) {
 	if !a.needsCheck(info) {
 		return true, nil
 	}
@@ -193,7 +198,7 @@ func (a *routeAdmin) precheck(info routeDDLInfo) (bool, error) {
 	return true, nil
 }
 
-func (a *routeAdmin) apply(info routeDDLInfo) error {
+func (a *routeAdmin) apply(info routeAdmissionInfo) error {
 	if !a.needsCheck(info) {
 		return nil
 	}
@@ -222,7 +227,7 @@ func (a *routeAdmin) apply(info routeDDLInfo) error {
 	return nil
 }
 
-func (a *routeAdmin) needsCheck(info routeDDLInfo) bool {
+func (a *routeAdmin) needsCheck(info routeAdmissionInfo) bool {
 	if a == nil || a.registry == nil || info.isSyncPoint {
 		return false
 	}
@@ -232,7 +237,7 @@ func (a *routeAdmin) needsCheck(info routeDDLInfo) bool {
 	return info.blockTables != nil && len(info.blockTables.TableIDs) > 0
 }
 
-func (a *routeAdmin) getOrBuildPendingEvent(info routeDDLInfo) (*routePendingEvent, bool, error) {
+func (a *routeAdmin) getOrBuildPendingEvent(info routeAdmissionInfo) (*routePendingEvent, bool, error) {
 	if pending, ok := a.pendingEvents[info.key]; ok {
 		return pending, true, nil
 	}
@@ -264,7 +269,7 @@ func (a *routeAdmin) popPendingHead(key eventKey) {
 	delete(a.pendingEvents, key)
 }
 
-func (a *routeAdmin) buildTransition(info routeDDLInfo) (*routeTransition, error) {
+func (a *routeAdmin) buildTransition(info routeAdmissionInfo) (*routeTransition, error) {
 	builder := newRouteTransitionBuilder(info.commitTs)
 
 	if info.droppedTables != nil {

@@ -146,8 +146,8 @@ func NewBlockEvent(cfID common.ChangeFeedID,
 	return event
 }
 
-func (be *BarrierEvent) routeDDLInfo() routeDDLInfo {
-	return routeDDLInfo{
+func (be *BarrierEvent) routeAdmissionInfo() routeAdmissionInfo {
+	return routeAdmissionInfo{
 		key:           getEventKey(be.commitTs, be.isSyncPoint),
 		commitTs:      be.commitTs,
 		isSyncPoint:   be.isSyncPoint,
