@@ -28,6 +28,7 @@ import (
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/stretchr/testify/require"
@@ -598,36 +599,16 @@ func TestBarrierPrechecksRecoveredRouteEventBeforeResend(t *testing.T) {
 }
 
 func TestBarrierRouteConflictPrecheckPreventsWriteAction(t *testing.T) {
-	testutil.SetUpTestServices(t)
-	tableTriggerEventDispatcherID := common.NewDispatcherID()
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
-	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
-		common.DDLSpanSchemaID,
-		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
-			ID:              tableTriggerEventDispatcherID.ToPB(),
-			ComponentStatus: heartbeatpb.ComponentState_Working,
-			CheckpointTs:    1,
-		}, "node1", false)
-	spanController := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
-	operatorController := operator.NewOperatorController(cfID, spanController, 1000, common.DefaultMode)
-	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 10)
-	stm := spanController.GetTasksByTableID(1)[0]
-	spanController.BindSpanToNode("", "node1", stm)
-	spanController.MarkSpanReplicating(stm)
-
 	routeAdmission := &testBarrierRouteAdmission{
 		precheckErr: errors.New("route conflict"),
 	}
-	barrier := NewBarrier(spanController, operatorController, false, nil, common.DefaultMode, routeAdmission)
-	blockTables := &heartbeatpb.InfluencedTables{
-		InfluenceType: heartbeatpb.InfluenceType_Normal,
-		TableIDs:      []int64{common.DDLSpanTableID, 1},
-	}
+	barrier, cfID, tableTriggerEventDispatcherID, tableDispatcherID, blockTables :=
+		newBarrierRoutePrecheckTestFixture(t, routeAdmission)
 	msgs := barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
 		ChangefeedID: cfID.ToPB(),
 		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
 			{
-				ID: stm.ID.ToPB(),
+				ID: tableDispatcherID.ToPB(),
 				State: &heartbeatpb.State{
 					IsBlocked:   true,
 					BlockTs:     10,
@@ -650,8 +631,108 @@ func TestBarrierRouteConflictPrecheckPreventsWriteAction(t *testing.T) {
 	event := barrier.blockedEvents.m[getEventKey(10, false)]
 	require.NotNil(t, event)
 	require.False(t, event.selected.Load())
+	require.False(t, event.allDispatcherReported())
 	require.NotNil(t, msgs)
 	require.NotEmpty(t, msgs)
+	requireNoDispatcherActions(t, msgs)
+}
+
+func TestBarrierRoutePrecheckKeepsFullyReportedBlockedEventAndPreventsWriteAction(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		routeAdmission *testBarrierRouteAdmission
+	}{
+		{
+			name: "precheck not ready",
+			routeAdmission: &testBarrierRouteAdmission{
+				precheckResults: []testBarrierRoutePrecheckResult{
+					{ready: true},
+					{ready: false},
+				},
+			},
+		},
+		{
+			name: "precheck error",
+			routeAdmission: &testBarrierRouteAdmission{
+				precheckResults: []testBarrierRoutePrecheckResult{
+					{ready: true},
+					{err: errors.New("route conflict")},
+				},
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			barrier, cfID, tableTriggerEventDispatcherID, tableDispatcherID, blockTables :=
+				newBarrierRoutePrecheckTestFixture(t, tc.routeAdmission)
+			msgs := barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
+				ChangefeedID: cfID.ToPB(),
+				BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
+					{
+						ID: tableTriggerEventDispatcherID.ToPB(),
+						State: &heartbeatpb.State{
+							IsBlocked:   true,
+							BlockTs:     10,
+							BlockTables: blockTables,
+						},
+					},
+					{
+						ID: tableDispatcherID.ToPB(),
+						State: &heartbeatpb.State{
+							IsBlocked:   true,
+							BlockTs:     10,
+							BlockTables: blockTables,
+						},
+					},
+				},
+			})
+
+			require.Len(t, tc.routeAdmission.precheckInfos, 2)
+			require.Empty(t, tc.routeAdmission.applyInfos)
+			event := barrier.blockedEvents.m[getEventKey(10, false)]
+			require.NotNil(t, event)
+			// Keep the barrier event so ACKed WAITING coverage is not lost when
+			// route precheck prevents sending Action_Write.
+			require.True(t, event.allDispatcherReported())
+			require.False(t, event.selected.Load())
+			require.NotNil(t, msgs)
+			require.NotEmpty(t, msgs)
+			requireNoDispatcherActions(t, msgs)
+		})
+	}
+}
+
+func newBarrierRoutePrecheckTestFixture(
+	t *testing.T,
+	routeAdmission *testBarrierRouteAdmission,
+) (*Barrier, common.ChangeFeedID, common.DispatcherID, common.DispatcherID, *heartbeatpb.InfluencedTables) {
+	t.Helper()
+	testutil.SetUpTestServices(t)
+	tableTriggerEventDispatcherID := common.NewDispatcherID()
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
+		common.DDLSpanSchemaID,
+		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
+			ID:              tableTriggerEventDispatcherID.ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    1,
+		}, "node1", false)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
+	operatorController := operator.NewOperatorController(cfID, spanController, 1000, common.DefaultMode)
+	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 10)
+	stm := spanController.GetTasksByTableID(1)[0]
+	spanController.BindSpanToNode("", "node1", stm)
+	spanController.MarkSpanReplicating(stm)
+
+	barrier := NewBarrier(spanController, operatorController, false, nil, common.DefaultMode, routeAdmission)
+	blockTables := &heartbeatpb.InfluencedTables{
+		InfluenceType: heartbeatpb.InfluenceType_Normal,
+		TableIDs:      []int64{common.DDLSpanTableID, 1},
+	}
+	return barrier, cfID, tableTriggerEventDispatcherID, stm.ID, blockTables
+}
+
+func requireNoDispatcherActions(t *testing.T, msgs []*messaging.TargetMessage) {
+	t.Helper()
 	for _, msg := range msgs {
 		resp := msg.Message[0].(*heartbeatpb.HeartBeatResponse)
 		for _, status := range resp.DispatcherStatuses {
@@ -1872,14 +1953,25 @@ func TestBarrierReturnsTemporaryIgnoreForUnreplicatingWaitingStatus(t *testing.T
 }
 
 type testBarrierRouteAdmission struct {
-	precheckReady bool
-	precheckErr   error
-	precheckInfos []routeAdmissionInfo
-	applyInfos    []routeAdmissionInfo
+	precheckReady   bool
+	precheckErr     error
+	precheckResults []testBarrierRoutePrecheckResult
+	precheckInfos   []routeAdmissionInfo
+	applyInfos      []routeAdmissionInfo
+}
+
+type testBarrierRoutePrecheckResult struct {
+	ready bool
+	err   error
 }
 
 func (a *testBarrierRouteAdmission) precheck(info routeAdmissionInfo) (bool, error) {
 	a.precheckInfos = append(a.precheckInfos, info)
+	if len(a.precheckResults) > 0 {
+		result := a.precheckResults[0]
+		a.precheckResults = a.precheckResults[1:]
+		return result.ready, result.err
+	}
 	return a.precheckReady, a.precheckErr
 }
 
