@@ -121,6 +121,43 @@ func TestRouteAdminIgnoresDDLSpanInBlockTables(t *testing.T) {
 	require.True(t, ok)
 }
 
+func TestRouteAdminCachesRouteNeutralBlockEvents(t *testing.T) {
+	admin := newTestRouteAdmin(t, routing.SchemaPlaceholder+"_target", routing.TablePlaceholder)
+	store := testRouteSchemaStore(t, admin)
+
+	// Schema-only DDLs such as ADD COLUMN and RENAME COLUMN still report BlockTables,
+	// but they do not change table route admission. Keep repeated handling low-cost.
+	info := routeAdmissionInfo{
+		key:      getEventKey(10, false),
+		commitTs: 10,
+		blockTables: &heartbeatpb.InfluencedTables{
+			InfluenceType: heartbeatpb.InfluenceType_Normal,
+			TableIDs:      []int64{1},
+		},
+	}
+
+	ready, err := admin.precheck(info)
+	require.NoError(t, err)
+	require.True(t, ready)
+	require.Equal(t, 1, store.ForceGetTableInfoCount(1))
+	require.Len(t, admin.routeNeutralEventCache, 1)
+	require.Empty(t, admin.pendingEvents)
+	require.Empty(t, admin.pendingQueue)
+
+	ready, err = admin.precheck(info)
+	require.NoError(t, err)
+	require.True(t, ready)
+	require.Equal(t, 1, store.ForceGetTableInfoCount(1))
+	require.Len(t, admin.routeNeutralEventCache, 1)
+
+	require.NoError(t, admin.apply(info))
+	require.Equal(t, 1, store.ForceGetTableInfoCount(1))
+	require.Empty(t, admin.routeNeutralEventCache)
+	require.Empty(t, admin.pendingEvents)
+	require.Empty(t, admin.pendingQueue)
+	require.Equal(t, 1, admin.sourceRefs[routing.TableKey{Schema: "db1", Table: "t"}])
+}
+
 func TestRouteAdminDropReleasesBootstrapBinding(t *testing.T) {
 	admin := newTestRouteAdmin(t, "target", routing.TablePlaceholder)
 

@@ -43,6 +43,12 @@ type routeAdmin struct {
 
 	pendingQueue  pendingEventKeyHeap
 	pendingEvents map[eventKey]*routePendingEvent
+	// Block-only DDLs that are unrelated to table route, such as column/index changes,
+	// still reach route admin through BlockTables so same-schema RENAME TABLE can be
+	// detected from schema snapshots. Cache route-neutral events after the first
+	// check so later resend/apply paths are handled as low-cost no-ops with minimal
+	// impact on normal barrier processing.
+	routeNeutralEventCache map[eventKey]struct{}
 
 	reportError func(error)
 	failed      bool
@@ -113,15 +119,16 @@ func newRouteAdmin(
 	tableSources := make(map[int64]routeTableAdmission, len(tables))
 	sourceRefs := make(map[routing.TableKey]int, len(tables))
 	admin := &routeAdmin{
-		changefeedID:  changefeedID,
-		keyspaceMeta:  keyspaceMeta,
-		router:        router,
-		registry:      routing.NewTargetTableRegistry(changefeedID, len(tables)),
-		tableSources:  tableSources,
-		sourceRefs:    sourceRefs,
-		schemaStore:   appcontext.GetService[schemastore.SchemaStore](appcontext.SchemaStore),
-		pendingEvents: make(map[eventKey]*routePendingEvent),
-		reportError:   reportError,
+		changefeedID:           changefeedID,
+		keyspaceMeta:           keyspaceMeta,
+		router:                 router,
+		registry:               routing.NewTargetTableRegistry(changefeedID, len(tables)),
+		tableSources:           tableSources,
+		sourceRefs:             sourceRefs,
+		schemaStore:            appcontext.GetService[schemastore.SchemaStore](appcontext.SchemaStore),
+		pendingEvents:          make(map[eventKey]*routePendingEvent),
+		routeNeutralEventCache: make(map[eventKey]struct{}),
+		reportError:            reportError,
 	}
 
 	for _, t := range tables {
@@ -165,6 +172,9 @@ func (a *routeAdmin) precheck(info routeAdmissionInfo) (bool, error) {
 	if !a.needsCheck(info) {
 		return true, nil
 	}
+	if a.hasRouteNeutralEvent(info.key) {
+		return true, nil
+	}
 	pending, ok, err := a.getOrBuildPendingEvent(info)
 	if err != nil {
 		return false, a.fail(err)
@@ -200,6 +210,9 @@ func (a *routeAdmin) precheck(info routeAdmissionInfo) (bool, error) {
 
 func (a *routeAdmin) apply(info routeAdmissionInfo) error {
 	if !a.needsCheck(info) {
+		return nil
+	}
+	if a.consumeRouteNeutralEvent(info.key) {
 		return nil
 	}
 	pending, ok := a.pendingEvents[info.key]
@@ -246,12 +259,24 @@ func (a *routeAdmin) getOrBuildPendingEvent(info routeAdmissionInfo) (*routePend
 		return nil, false, err
 	}
 	if transition == nil {
+		a.routeNeutralEventCache[info.key] = struct{}{}
 		return nil, false, nil
 	}
 	pending := &routePendingEvent{transition: transition}
 	heap.Push(&a.pendingQueue, info.key)
 	a.pendingEvents[info.key] = pending
 	return pending, true, nil
+}
+
+func (a *routeAdmin) hasRouteNeutralEvent(key eventKey) bool {
+	_, ok := a.routeNeutralEventCache[key]
+	return ok
+}
+
+func (a *routeAdmin) consumeRouteNeutralEvent(key eventKey) bool {
+	_, ok := a.routeNeutralEventCache[key]
+	delete(a.routeNeutralEventCache, key)
+	return ok
 }
 
 func (a *routeAdmin) isPendingHead(key eventKey) bool {
