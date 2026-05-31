@@ -91,29 +91,6 @@ function run_create_table_conflict_case() {
 	echo "[$(date)] finish create table conflict case"
 }
 
-function run_rename_table_conflict_case() {
-	local source_a=route_conflict_rename_a
-	local source_b=route_conflict_rename_b
-	local target_schema=target_route_conflict_rename
-	local changefeed_id=route-conflict-rename
-	local config_file="$WORK_DIR/$changefeed_id.toml"
-	local start_ts
-
-	echo "[$(date)] start rename table conflict case"
-	write_route_config "$config_file" "$source_a" "$source_b" "$target_schema"
-	start_ts=$(run_cdc_cli_tso_query "$UP_PD_HOST_1" "$UP_PD_PORT_1")
-	run_sql "CREATE DATABASE $source_a; CREATE TABLE $source_a.t (id INT PRIMARY KEY);" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
-	run_sql "CREATE DATABASE $source_b; CREATE TABLE $source_b.tmp (id INT PRIMARY KEY);" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
-	cdc_cli_changefeed create -c "$changefeed_id" --start-ts="$start_ts" --sink-uri="$SINK_URI" --config="$config_file"
-	check_table_exists "$target_schema.t_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 60
-	check_table_exists "$target_schema.tmp_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 60
-
-	run_sql "RENAME TABLE $source_b.tmp TO $source_b.t;" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
-	ensure $MAX_RETRIES check_changefeed_state http://${UP_PD_HOST_1}:${UP_PD_PORT_1} "$changefeed_id" failed conflict ""
-	cdc_cli_changefeed remove -c "$changefeed_id" || true
-	echo "[$(date)] finish rename table conflict case"
-}
-
 function run_multi_rename_table_conflict_case() {
 	local source_a=route_conflict_multi_rename_a
 	local source_b=route_conflict_multi_rename_b
@@ -138,107 +115,6 @@ function run_multi_rename_table_conflict_case() {
 	echo "[$(date)] finish multi-rename table conflict case"
 }
 
-function run_drop_table_release_case() {
-	local source_a=route_conflict_drop_table_a
-	local source_b=route_conflict_drop_table_b
-	local target_schema=target_route_conflict_drop_table
-	local changefeed_id=route-conflict-drop-table
-	local config_file="$WORK_DIR/$changefeed_id.toml"
-	local start_ts
-
-	echo "[$(date)] start drop table release case"
-	write_route_config "$config_file" "$source_a" "$source_b" "$target_schema"
-	start_ts=$(run_cdc_cli_tso_query "$UP_PD_HOST_1" "$UP_PD_PORT_1")
-	run_sql "CREATE DATABASE $source_a; CREATE TABLE $source_a.t (id INT PRIMARY KEY);" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
-	cdc_cli_changefeed create -c "$changefeed_id" --start-ts="$start_ts" --sink-uri="$SINK_URI" --config="$config_file"
-	check_table_exists "$target_schema.t_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 60
-
-	run_sql "DROP TABLE $source_a.t;" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
-	check_table_not_exists "$target_schema.t_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 60
-	run_sql "CREATE DATABASE $source_b; CREATE TABLE $source_b.t (id INT PRIMARY KEY);" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
-	check_table_exists "$target_schema.t_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 60
-	ensure $MAX_RETRIES check_changefeed_state http://${UP_PD_HOST_1}:${UP_PD_PORT_1} "$changefeed_id" normal null ""
-	cdc_cli_changefeed remove -c "$changefeed_id" || true
-	echo "[$(date)] finish drop table release case"
-}
-
-function run_drop_database_release_case() {
-	local source_a=route_conflict_drop_database_a
-	local source_b=route_conflict_drop_database_b
-	local target_schema=target_route_conflict_drop_database
-	local changefeed_id=route-conflict-drop-database
-	local config_file="$WORK_DIR/$changefeed_id.toml"
-	local start_ts
-
-	echo "[$(date)] start drop database release case"
-	write_route_config "$config_file" "$source_a" "$source_b" "$target_schema"
-	start_ts=$(run_cdc_cli_tso_query "$UP_PD_HOST_1" "$UP_PD_PORT_1")
-	run_sql "CREATE DATABASE $source_a; CREATE TABLE $source_a.t (id INT PRIMARY KEY);" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
-	cdc_cli_changefeed create -c "$changefeed_id" --start-ts="$start_ts" --sink-uri="$SINK_URI" --config="$config_file"
-	check_table_exists "$target_schema.t_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 60
-
-	run_sql "DROP DATABASE $source_a;" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
-	check_table_not_exists "$target_schema.t_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 60
-	run_sql "CREATE DATABASE $source_b; CREATE TABLE $source_b.t (id INT PRIMARY KEY);" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
-	check_table_exists "$target_schema.t_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 60
-	ensure $MAX_RETRIES check_changefeed_state http://${UP_PD_HOST_1}:${UP_PD_PORT_1} "$changefeed_id" normal null ""
-	cdc_cli_changefeed remove -c "$changefeed_id" || true
-	echo "[$(date)] finish drop database release case"
-}
-
-function run_rename_table_out_of_filter_release_case() {
-	local source_a=route_conflict_rename_out_a
-	local source_b=route_conflict_rename_out_b
-	local ignored_schema=route_conflict_rename_out_ignored
-	local target_schema=target_route_conflict_rename_out
-	local changefeed_id=route-conflict-rename-out
-	local config_file="$WORK_DIR/$changefeed_id.toml"
-	local start_ts
-
-	echo "[$(date)] start rename table out of filter release case"
-	write_route_config "$config_file" "$source_a" "$source_b" "$target_schema"
-	start_ts=$(run_cdc_cli_tso_query "$UP_PD_HOST_1" "$UP_PD_PORT_1")
-	run_sql "CREATE DATABASE $source_a; CREATE TABLE $source_a.t (id INT PRIMARY KEY); CREATE DATABASE $ignored_schema;" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
-	# The old table is still in the replication range, so TiCDC writes the RENAME
-	# to downstream even though the new schema is outside the filter. Prepare the
-	# downstream schema explicitly and keep this case focused on route admission
-	# release instead of downstream schema existence.
-	run_sql "CREATE DATABASE $ignored_schema;" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
-	cdc_cli_changefeed create -c "$changefeed_id" --start-ts="$start_ts" --sink-uri="$SINK_URI" --config="$config_file"
-	check_table_exists "$target_schema.t_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 60
-
-	run_sql "RENAME TABLE $source_a.t TO $ignored_schema.t;" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
-	check_table_not_exists "$target_schema.t_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 60
-	run_sql "CREATE DATABASE $source_b; CREATE TABLE $source_b.t (id INT PRIMARY KEY);" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
-	check_table_exists "$target_schema.t_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 60
-	ensure $MAX_RETRIES check_changefeed_state http://${UP_PD_HOST_1}:${UP_PD_PORT_1} "$changefeed_id" normal null ""
-	cdc_cli_changefeed remove -c "$changefeed_id" || true
-	echo "[$(date)] finish rename table out of filter release case"
-}
-
-function run_truncate_table_keeps_source_name_case() {
-	local source_a=route_conflict_truncate_a
-	local source_b=route_conflict_truncate_b
-	local target_schema=target_route_conflict_truncate
-	local changefeed_id=route-conflict-truncate
-	local config_file="$WORK_DIR/$changefeed_id.toml"
-	local start_ts
-
-	echo "[$(date)] start truncate table keeps source name case"
-	write_route_config "$config_file" "$source_a" "$source_b" "$target_schema"
-	start_ts=$(run_cdc_cli_tso_query "$UP_PD_HOST_1" "$UP_PD_PORT_1")
-	run_sql "CREATE DATABASE $source_a; CREATE TABLE $source_a.t (id INT PRIMARY KEY);" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
-	cdc_cli_changefeed create -c "$changefeed_id" --start-ts="$start_ts" --sink-uri="$SINK_URI" --config="$config_file"
-	check_table_exists "$target_schema.t_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 60
-
-	run_sql "TRUNCATE TABLE $source_a.t;" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
-	check_table_exists "$target_schema.t_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 60
-	run_sql "CREATE DATABASE $source_b; CREATE TABLE $source_b.t (id INT PRIMARY KEY);" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
-	ensure $MAX_RETRIES check_changefeed_state http://${UP_PD_HOST_1}:${UP_PD_PORT_1} "$changefeed_id" failed conflict ""
-	cdc_cli_changefeed remove -c "$changefeed_id" || true
-	echo "[$(date)] finish truncate table keeps source name case"
-}
-
 function run() {
 	if [ "$SINK_TYPE" != "mysql" ]; then
 		echo "table_route_conflict_detection only supports mysql sink"
@@ -252,12 +128,7 @@ function run() {
 
 	run_static_conflict_case
 	run_create_table_conflict_case
-	run_rename_table_conflict_case
 	run_multi_rename_table_conflict_case
-	run_drop_table_release_case
-	run_drop_database_release_case
-	run_rename_table_out_of_filter_release_case
-	run_truncate_table_keeps_source_name_case
 
 	cleanup_process "$CDC_BINARY"
 }

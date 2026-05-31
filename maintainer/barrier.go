@@ -366,9 +366,9 @@ func (b *Barrier) handleEventDone(changefeedID common.ChangeFeedID, dispatcherID
 	// which means we have sent pass or write action to it
 	// the writer already synced ddl to downstream
 	if event.writerDispatcher == dispatcherID {
-		// Keep the selected event when route precheck/apply fails. Other
+		// Keep selected events when route precheck/apply fails. Other
 		// dispatchers may still need resend actions, and route admission is
-		// responsible for surfacing the conflict to changefeed error handling.
+		// responsible for reporting the conflict to changefeed error handling.
 		ready, err := b.precheckRouteEvent(event)
 		if err != nil || !ready {
 			return event

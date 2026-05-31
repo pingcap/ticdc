@@ -38,16 +38,15 @@ type routeAdmin struct {
 	router       routing.Router
 	registry     *routing.TargetTableRegistry
 	schemaStore  schemastore.SchemaStore
-	tableSources map[int64]routeTableAdmission
+	tableSources map[int64]admission
 	sourceRefs   map[routing.TableKey]int
 
 	pendingQueue  pendingEventKeyHeap
 	pendingEvents map[eventKey]*routePendingEvent
-	// Block-only DDLs that are unrelated to table route, such as column/index changes,
-	// still reach route admin through BlockTables so same-schema RENAME TABLE can be
-	// detected from schema snapshots. Cache route-neutral events after the first
-	// check so later resend/apply paths are handled as low-cost no-ops with minimal
-	// impact on normal barrier processing.
+	// Route admin receives every BlockTables event because same-schema RENAME
+	// TABLE is only discoverable by comparing schema snapshots. Events that do
+	// not change source or target names, such as column/index DDLs, are cached
+	// after the first comparison so resend/apply paths stay cheap.
 	routeNeutralEventCache map[eventKey]struct{}
 
 	reportError func(error)
@@ -78,10 +77,10 @@ type routeAdmissionInfo struct {
 type routeTransition struct {
 	commitTs       uint64
 	removeTableIDs []int64
-	adds           []routeTableAdmission
+	adds           []admission
 }
 
-type routeTableAdmission struct {
+type admission struct {
 	tableID        int64
 	sourceSchemaID int64
 	binding        routing.RouteBinding
@@ -116,7 +115,7 @@ func newRouteAdmin(
 	}
 
 	start := time.Now()
-	tableSources := make(map[int64]routeTableAdmission, len(tables))
+	tableSources := make(map[int64]admission, len(tables))
 	sourceRefs := make(map[routing.TableKey]int, len(tables))
 	admin := &routeAdmin{
 		changefeedID:           changefeedID,
@@ -143,7 +142,7 @@ func newRouteAdmin(
 			}
 		}
 
-		tableSources[t.TableID] = routeTableAdmission{
+		tableSources[t.TableID] = admission{
 			tableID:        t.TableID,
 			sourceSchemaID: t.SchemaID,
 			binding:        binding,
@@ -331,6 +330,12 @@ func (a *routeAdmin) buildTransition(info routeAdmissionInfo) (*routeTransition,
 		if err != nil {
 			return nil, err
 		}
+		if existing, ok := a.tableSources[add.TableID]; ok {
+			if existing.equal(binding) {
+				continue
+			}
+			builder.addRemove(add.TableID)
+		}
 		builder.addBinding(binding)
 	}
 
@@ -358,8 +363,7 @@ func (a *routeAdmin) buildTransition(info routeAdmissionInfo) (*routeTransition,
 			}
 			existing, exists := a.tableSources[tableID]
 			if !exists {
-				return nil, errors.ErrInternalCheckFailed.GenWithStack(
-					"route registry binding not found for table %d", tableID)
+				continue
 			}
 			binding, err := a.buildBindingForTable(tableID, existing.sourceSchemaID, info.commitTs)
 			if err != nil {
@@ -377,26 +381,26 @@ func (a *routeAdmin) buildTransition(info routeAdmissionInfo) (*routeTransition,
 	return builder.finish(), nil
 }
 
-func (a *routeAdmin) buildBindingForTable(tableID, schemaID int64, commitTs uint64) (routeTableAdmission, error) {
+func (a *routeAdmin) buildBindingForTable(tableID, schemaID int64, commitTs uint64) (admission, error) {
 	// New-table DDL reaches route admission before the table dispatcher is admitted,
 	// so the schema lookup must not depend on dispatcher table registration.
 	tableInfo, err := a.schemaStore.ForceGetTableInfo(a.keyspaceMeta, tableID, commitTs)
 	if err != nil {
-		return routeTableAdmission{}, err
+		return admission{}, err
 	}
 	if schemaID == 0 {
 		if existing, ok := a.tableSources[tableID]; ok {
 			schemaID = existing.sourceSchemaID
 		} else {
-			return routeTableAdmission{}, errors.ErrInternalCheckFailed.GenWithStack(
+			return admission{}, errors.ErrInternalCheckFailed.GenWithStack(
 				"schema ID hint is missing for table %d", tableID)
 		}
 	}
 	binding, err := a.route(tableInfo.GetSchemaName(), tableInfo.GetTableName())
 	if err != nil {
-		return routeTableAdmission{}, err
+		return admission{}, err
 	}
-	return routeTableAdmission{
+	return admission{
 		tableID:        tableID,
 		sourceSchemaID: schemaID,
 		binding:        binding,
@@ -485,6 +489,13 @@ func (a *routeAdmin) buildAdmissionChange(
 	return change, nextRefs, nil
 }
 
+func (a admission) equal(b admission) bool {
+	return a.tableID == b.tableID &&
+		a.sourceSchemaID == b.sourceSchemaID &&
+		a.binding.Source.Equal(b.binding.Source) &&
+		a.binding.Target.Equal(b.binding.Target)
+}
+
 func compareTableKey(a, b routing.TableKey) int {
 	if a.Schema < b.Schema {
 		return -1
@@ -522,14 +533,14 @@ func (a *routeAdmin) fail(err error) error {
 type routeTransitionBuilder struct {
 	transition routeTransition
 	removeSet  map[int64]struct{}
-	addsByID   map[int64]routeTableAdmission
+	addsByID   map[int64]admission
 }
 
 func newRouteTransitionBuilder(commitTs uint64) *routeTransitionBuilder {
 	return &routeTransitionBuilder{
 		transition: routeTransition{commitTs: commitTs},
 		removeSet:  make(map[int64]struct{}),
-		addsByID:   make(map[int64]routeTableAdmission),
+		addsByID:   make(map[int64]admission),
 	}
 }
 
@@ -546,7 +557,7 @@ func (b *routeTransitionBuilder) hasRemove(tableID int64) bool {
 	return ok
 }
 
-func (b *routeTransitionBuilder) addBinding(binding routeTableAdmission) {
+func (b *routeTransitionBuilder) addBinding(binding admission) {
 	b.addsByID[binding.tableID] = binding
 }
 

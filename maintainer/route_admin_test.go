@@ -257,6 +257,10 @@ func TestRouteAdminTracksSourceAdmissionNotTableID(t *testing.T) {
 	truncateInfo := routeAdmissionInfo{
 		key:      getEventKey(30, false),
 		commitTs: 30,
+		blockTables: &heartbeatpb.InfluencedTables{
+			InfluenceType: heartbeatpb.InfluenceType_Normal,
+			TableIDs:      []int64{3, 4},
+		},
 		droppedTables: &heartbeatpb.InfluencedTables{
 			InfluenceType: heartbeatpb.InfluenceType_Normal,
 			TableIDs:      []int64{3},
@@ -274,6 +278,14 @@ func TestRouteAdminTracksSourceAdmissionNotTableID(t *testing.T) {
 	require.False(t, ok)
 	_, ok = admin.tableSources[4]
 	require.True(t, ok)
+
+	// Replayed partition DDL can still mention the old physical partition ID in
+	// BlockTables after its admission state has been replaced.
+	ready, err = admin.precheck(truncateInfo)
+	require.NoError(t, err)
+	require.True(t, ready)
+	require.NoError(t, admin.apply(truncateInfo))
+	require.Equal(t, 1, admin.sourceRefs[source])
 
 	conflictInfo := routeAdmissionInfo{
 		key:      getEventKey(40, false),
