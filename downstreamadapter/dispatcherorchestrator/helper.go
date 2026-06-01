@@ -72,13 +72,20 @@ func (q *pendingMessageQueue) TryEnqueue(key pendingMessageKey, msg *messaging.T
 }
 
 func shouldReplacePendingMessage(key pendingMessageKey, oldMsg, newMsg *messaging.TargetMessage) bool {
+	oldEpoch, oldEpochOK := maintainerRequestEpoch(oldMsg)
+	newEpoch, newEpochOK := maintainerRequestEpoch(newMsg)
+	if oldEpochOK && newEpochOK {
+		if newEpoch > oldEpoch {
+			return true
+		}
+		if newEpoch < oldEpoch {
+			return false
+		}
+	}
 	if key.msgType != messaging.TypeMaintainerCloseRequest {
 		return false
 	}
-	if oldMsg == nil || newMsg == nil {
-		return false
-	}
-	if len(oldMsg.Message) == 0 || len(newMsg.Message) == 0 {
+	if oldMsg == nil || newMsg == nil || len(oldMsg.Message) == 0 || len(newMsg.Message) == 0 {
 		return false
 	}
 	oldReq, ok1 := oldMsg.Message[0].(*heartbeatpb.MaintainerCloseRequest)
@@ -88,6 +95,22 @@ func shouldReplacePendingMessage(key pendingMessageKey, oldMsg, newMsg *messagin
 	}
 	// Only upgrade semantics: allow removed=true to override removed=false.
 	return !oldReq.Removed && newReq.Removed
+}
+
+func maintainerRequestEpoch(msg *messaging.TargetMessage) (uint64, bool) {
+	if msg == nil || len(msg.Message) == 0 {
+		return 0, false
+	}
+	switch req := msg.Message[0].(type) {
+	case *heartbeatpb.MaintainerBootstrapRequest:
+		return req.MaintainerEpoch, true
+	case *heartbeatpb.MaintainerPostBootstrapRequest:
+		return req.MaintainerEpoch, true
+	case *heartbeatpb.MaintainerCloseRequest:
+		return req.MaintainerEpoch, true
+	default:
+		return 0, false
+	}
 }
 
 // Pop blocks until a message is available or the queue is closed.

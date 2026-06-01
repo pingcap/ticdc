@@ -389,6 +389,119 @@ func TestPendingMessageQueue_CloseRequestUpgradeAfterPopRequeuesNextRound(t *tes
 	}
 }
 
+func TestPendingMessageQueue_NewerEpochReplacesPendingBootstrap(t *testing.T) {
+	t.Parallel()
+
+	q := newPendingMessageQueue()
+	cfID := common.NewChangeFeedIDWithName("cf", "default")
+	key := pendingMessageKey{
+		changefeedID: cfID,
+		msgType:      messaging.TypeMaintainerBootstrapRequest,
+	}
+
+	msgOld := messaging.NewSingleTargetMessage(
+		node.ID("to"),
+		messaging.DispatcherManagerManagerTopic,
+		&heartbeatpb.MaintainerBootstrapRequest{ChangefeedID: cfID.ToPB(), MaintainerEpoch: 1},
+	)
+	msgNew := messaging.NewSingleTargetMessage(
+		node.ID("to"),
+		messaging.DispatcherManagerManagerTopic,
+		&heartbeatpb.MaintainerBootstrapRequest{ChangefeedID: cfID.ToPB(), MaintainerEpoch: 2},
+	)
+
+	require.True(t, q.TryEnqueue(key, msgOld))
+	require.True(t, q.TryEnqueue(key, msgNew))
+
+	poppedMsg, ok := q.Pop()
+	require.True(t, ok)
+	req := poppedMsg.Message[0].(*heartbeatpb.MaintainerBootstrapRequest)
+	require.Equal(t, uint64(2), req.MaintainerEpoch)
+}
+
+func TestPendingMessageQueue_OlderCloseEpochCannotOverrideNewerPendingRequest(t *testing.T) {
+	t.Parallel()
+
+	q := newPendingMessageQueue()
+	cfID := common.NewChangeFeedIDWithName("cf", "default")
+	key := pendingMessageKey{
+		changefeedID: cfID,
+		msgType:      messaging.TypeMaintainerCloseRequest,
+	}
+
+	msgNewerPause := messaging.NewSingleTargetMessage(
+		node.ID("to"),
+		messaging.DispatcherManagerManagerTopic,
+		&heartbeatpb.MaintainerCloseRequest{ChangefeedID: cfID.ToPB(), Removed: false, MaintainerEpoch: 2},
+	)
+	msgOlderRemove := messaging.NewSingleTargetMessage(
+		node.ID("to"),
+		messaging.DispatcherManagerManagerTopic,
+		&heartbeatpb.MaintainerCloseRequest{ChangefeedID: cfID.ToPB(), Removed: true, MaintainerEpoch: 1},
+	)
+
+	require.True(t, q.TryEnqueue(key, msgNewerPause))
+	require.False(t, q.TryEnqueue(key, msgOlderRemove))
+
+	poppedMsg, ok := q.Pop()
+	require.True(t, ok)
+	req := poppedMsg.Message[0].(*heartbeatpb.MaintainerCloseRequest)
+	require.False(t, req.Removed)
+	require.Equal(t, uint64(2), req.MaintainerEpoch)
+}
+
+func TestShouldAcceptMaintainerRequest(t *testing.T) {
+	t.Parallel()
+
+	require.False(t, shouldAcceptMaintainerRequest(0, 7))
+	require.True(t, shouldAcceptMaintainerRequest(0, 0))
+	require.True(t, shouldAcceptMaintainerRequest(7, 0))
+	require.True(t, shouldAcceptMaintainerRequest(7, 7))
+	require.True(t, shouldAcceptMaintainerRequest(8, 7))
+	require.False(t, shouldAcceptMaintainerRequest(6, 7))
+}
+
+func TestClosedMaintainerEpochRejectsDelayedBootstrap(t *testing.T) {
+	t.Parallel()
+
+	mc := messaging.NewMockMessageCenter()
+	orchestrator := &DispatcherOrchestrator{
+		mc:                     mc,
+		dispatcherManagers:     make(map[common.ChangeFeedID]*dispatchermanager.DispatcherManager),
+		closedMaintainerEpochs: make(map[common.ChangeFeedID]uint64),
+	}
+	cfID := common.NewChangeFeedIDWithName("cf", common.DefaultKeyspaceName)
+	maintainerID := node.ID("maintainer")
+
+	err := orchestrator.handleCloseRequest(maintainerID, &heartbeatpb.MaintainerCloseRequest{
+		ChangefeedID:    cfID.ToPB(),
+		Removed:         true,
+		MaintainerEpoch: 7,
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint64(7), orchestrator.closedMaintainerEpochs[cfID])
+
+	select {
+	case msg := <-mc.GetMessageChannel():
+		require.Equal(t, messaging.TypeMaintainerCloseResponse, msg.Type)
+	case <-time.After(time.Second):
+		t.Fatal("expected close response")
+	}
+
+	err = orchestrator.handleBootstrapRequest(maintainerID, &heartbeatpb.MaintainerBootstrapRequest{
+		ChangefeedID:    cfID.ToPB(),
+		MaintainerEpoch: 7,
+	})
+	require.NoError(t, err)
+	require.Empty(t, orchestrator.dispatcherManagers)
+
+	select {
+	case msg := <-mc.GetMessageChannel():
+		t.Fatalf("unexpected response for stale bootstrap: %s", msg.Type.String())
+	default:
+	}
+}
+
 func TestGetPendingMessageKey_SupportedTypes(t *testing.T) {
 	t.Parallel()
 

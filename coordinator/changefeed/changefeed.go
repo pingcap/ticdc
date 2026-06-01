@@ -106,6 +106,17 @@ func (c *Changefeed) SetInfo(info *config.ChangeFeedInfo) {
 	c.info.Store(info)
 }
 
+func (c *Changefeed) GetMaintainerEpoch() uint64 {
+	if c == nil || c.info == nil {
+		return 0
+	}
+	info := c.GetInfo()
+	if info == nil {
+		return 0
+	}
+	return info.Epoch
+}
+
 func (c *Changefeed) StartFinished() {
 	c.backoff.StartFinished()
 }
@@ -246,7 +257,7 @@ func (c *Changefeed) GetLastSavedCheckPointTs() uint64 {
 	return c.lastSavedCheckpointTs.Load()
 }
 
-func (c *Changefeed) NewAddMaintainerMessage(server node.ID) *messaging.TargetMessage {
+func (c *Changefeed) NewAddMaintainerMessage(server node.ID, maintainerEpoch uint64) *messaging.TargetMessage {
 	return messaging.NewSingleTargetMessage(server,
 		messaging.MaintainerManagerTopic,
 		&heartbeatpb.AddMaintainerRequest{
@@ -255,11 +266,12 @@ func (c *Changefeed) NewAddMaintainerMessage(server node.ID) *messaging.TargetMe
 			Config:          c.configBytes,
 			IsNewChangefeed: c.isNew,
 			KeyspaceId:      c.GetKeyspaceID(),
+			MaintainerEpoch: maintainerEpoch,
 		})
 }
 
 func (c *Changefeed) NewRemoveMaintainerMessage(server node.ID, casCade, removed bool) *messaging.TargetMessage {
-	return RemoveMaintainerMessage(c.GetKeyspaceID(), c.ID, server, casCade, removed)
+	return RemoveMaintainerMessageWithEpoch(c.GetKeyspaceID(), c.ID, server, casCade, removed, c.GetMaintainerEpoch())
 }
 
 func (c *Changefeed) NewCheckpointTsMessage(ts uint64) *messaging.TargetMessage {
@@ -272,14 +284,19 @@ func (c *Changefeed) NewCheckpointTsMessage(ts uint64) *messaging.TargetMessage 
 }
 
 func RemoveMaintainerMessage(keyspaceID uint32, id common.ChangeFeedID, server node.ID, casCade bool, removed bool) *messaging.TargetMessage {
+	return RemoveMaintainerMessageWithEpoch(keyspaceID, id, server, casCade, removed, 0)
+}
+
+func RemoveMaintainerMessageWithEpoch(keyspaceID uint32, id common.ChangeFeedID, server node.ID, casCade bool, removed bool, maintainerEpoch uint64) *messaging.TargetMessage {
 	casCade = casCade || removed
 	return messaging.NewSingleTargetMessage(server,
 		messaging.MaintainerManagerTopic,
 		&heartbeatpb.RemoveMaintainerRequest{
-			Id:         id.ToPB(),
-			Cascade:    casCade,
-			Removed:    removed,
-			KeyspaceId: keyspaceID,
+			Id:              id.ToPB(),
+			Cascade:         casCade,
+			Removed:         removed,
+			KeyspaceId:      keyspaceID,
+			MaintainerEpoch: maintainerEpoch,
 		})
 }
 

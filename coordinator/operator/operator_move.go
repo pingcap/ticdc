@@ -36,6 +36,7 @@ type MoveMaintainerOperator struct {
 	originNodeStopped bool
 	finished          bool
 	bind              bool
+	maintainerEpoch   uint64
 
 	canceled bool
 
@@ -68,10 +69,12 @@ func (m *MoveMaintainerOperator) Check(from node.ID, status *heartbeatpb.Maintai
 	}
 	if m.originNodeStopped && from == m.dest &&
 		status.State == heartbeatpb.ComponentState_Working &&
-		status.BootstrapDone {
+		status.BootstrapDone &&
+		maintainerEpochMatches(m.maintainerEpoch, status.MaintainerEpoch) {
 		log.Info("changefeed added to dest node",
 			zap.String("dest", m.dest.String()),
-			zap.String("changefeed", m.changefeed.ID.String()))
+			zap.String("changefeed", m.changefeed.ID.String()),
+			zap.Uint64("maintainerEpoch", status.MaintainerEpoch))
 		m.finished = true
 	}
 }
@@ -85,11 +88,14 @@ func (m *MoveMaintainerOperator) Schedule() *messaging.TargetMessage {
 	}
 
 	if m.originNodeStopped {
+		if m.maintainerEpoch == 0 {
+			m.maintainerEpoch = m.changefeed.GetMaintainerEpoch()
+		}
 		if !m.bind {
 			m.db.BindChangefeedToNode(m.origin, m.dest, m.changefeed)
 			m.bind = true
 		}
-		return m.changefeed.NewAddMaintainerMessage(m.dest)
+		return m.changefeed.NewAddMaintainerMessage(m.dest, m.maintainerEpoch)
 	}
 	return m.changefeed.NewRemoveMaintainerMessage(m.origin, false, false)
 }

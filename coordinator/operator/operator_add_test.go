@@ -18,6 +18,8 @@ import (
 
 	"github.com/pingcap/ticdc/coordinator/changefeed"
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/stretchr/testify/require"
 )
 
@@ -63,6 +65,40 @@ func TestAddMaintainerOperator_CheckRequiresBootstrapDone(t *testing.T) {
 	op.Check("n1", &heartbeatpb.MaintainerStatus{
 		State:         heartbeatpb.ComponentState_Working,
 		BootstrapDone: true,
+	})
+	require.True(t, op.finished.Load())
+}
+
+func TestAddMaintainerOperator_CheckRequiresMaintainerEpoch(t *testing.T) {
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		Config:       config.GetDefaultReplicaConfig(),
+		SinkURI:      "mysql://127.0.0.1:3306",
+		Epoch:        7,
+	}, 1, true)
+	op := NewAddMaintainerOperator(nil, cf, "n1")
+	req := op.Schedule().Message[0].(*heartbeatpb.AddMaintainerRequest)
+	require.Equal(t, uint64(7), req.MaintainerEpoch)
+
+	op.Check("n1", &heartbeatpb.MaintainerStatus{
+		State:           heartbeatpb.ComponentState_Working,
+		BootstrapDone:   true,
+		MaintainerEpoch: 0,
+	})
+	require.False(t, op.finished.Load())
+
+	op.Check("n1", &heartbeatpb.MaintainerStatus{
+		State:           heartbeatpb.ComponentState_Working,
+		BootstrapDone:   true,
+		MaintainerEpoch: 6,
+	})
+	require.False(t, op.finished.Load())
+
+	op.Check("n1", &heartbeatpb.MaintainerStatus{
+		State:           heartbeatpb.ComponentState_Working,
+		BootstrapDone:   true,
+		MaintainerEpoch: 7,
 	})
 	require.True(t, op.finished.Load())
 }

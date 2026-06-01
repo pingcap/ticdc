@@ -383,6 +383,9 @@ func TestMaintainer_GetMaintainerStatusUsesCommittedCheckpoint(t *testing.T) {
 
 	m := &Maintainer{
 		changefeedID: cfID,
+		info: &config.ChangeFeedInfo{
+			Epoch: 7,
+		},
 		controller: &Controller{
 			spanController: spanController,
 		},
@@ -398,6 +401,7 @@ func TestMaintainer_GetMaintainerStatusUsesCommittedCheckpoint(t *testing.T) {
 	status := m.GetMaintainerStatus()
 	require.Equal(t, uint64(20), status.CheckpointTs)
 	require.Equal(t, uint64(50), status.LastSyncedTs)
+	require.Equal(t, uint64(7), status.MaintainerEpoch)
 }
 
 func TestMaintainerCalculateNewCheckpointTs(t *testing.T) {

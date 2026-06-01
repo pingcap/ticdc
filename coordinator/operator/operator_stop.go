@@ -16,6 +16,7 @@ package operator
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/coordinator/changefeed"
@@ -30,10 +31,12 @@ import (
 
 // StopChangefeedOperator is an operator to remove a maintainer from a node
 type StopChangefeedOperator struct {
+	mu                  sync.RWMutex
 	keyspaceID          uint32
 	cfID                common.ChangeFeedID
 	nodeID              node.ID
 	changefeedIsRemoved bool
+	maintainerEpoch     uint64
 	finished            atomic.Bool
 	coordinatorNodeID   node.ID
 	backend             changefeed.Backend
@@ -46,31 +49,59 @@ func NewStopChangefeedOperator(
 	coordinatorNode node.ID,
 	backend changefeed.Backend,
 	removed bool,
+	maintainerEpoch uint64,
 ) *StopChangefeedOperator {
 	return &StopChangefeedOperator{
 		keyspaceID:          keyspaceID,
 		cfID:                cfID,
 		nodeID:              nodeID,
 		changefeedIsRemoved: removed,
+		maintainerEpoch:     maintainerEpoch,
 		coordinatorNodeID:   coordinatorNode,
 		backend:             backend,
 	}
 }
 
-func (m *StopChangefeedOperator) Check(_ node.ID, status *heartbeatpb.MaintainerStatus) {
-	if !m.finished.Load() && status.State != heartbeatpb.ComponentState_Working {
+func (m *StopChangefeedOperator) Check(from node.ID, status *heartbeatpb.MaintainerStatus) {
+	if status == nil {
+		return
+	}
+	if from != m.getNodeID() {
+		return
+	}
+	if !m.finished.Load() &&
+		status.State != heartbeatpb.ComponentState_Working &&
+		maintainerEpochCanBeStopped(m.maintainerEpoch, status.MaintainerEpoch) {
 		log.Info("maintainer report non-working status",
-			zap.Stringer("maintainer", m.cfID))
+			zap.Stringer("maintainer", m.cfID),
+			zap.Uint64("operatorMaintainerEpoch", m.maintainerEpoch),
+			zap.Uint64("statusMaintainerEpoch", status.MaintainerEpoch))
 		m.finished.Store(true)
 	}
 }
 
+func maintainerEpochCanBeStopped(operatorEpoch, statusEpoch uint64) bool {
+	// A stop for a newer epoch can legitimately retire an older local maintainer.
+	// It must not be completed by a newer maintainer's status.
+	return operatorEpoch == 0 || statusEpoch == 0 || statusEpoch <= operatorEpoch
+}
+
 func (m *StopChangefeedOperator) Schedule() *messaging.TargetMessage {
-	return changefeed.RemoveMaintainerMessage(m.keyspaceID, m.cfID, m.nodeID, true, m.changefeedIsRemoved)
+	return changefeed.RemoveMaintainerMessageWithEpoch(
+		m.keyspaceID,
+		m.cfID,
+		m.getNodeID(),
+		true,
+		m.changefeedIsRemoved,
+		m.maintainerEpoch,
+	)
 }
 
 // OnNodeRemove is called when node offline, and the maintainer must already move to absent status and will be scheduled again
 func (m *StopChangefeedOperator) OnNodeRemove(n node.ID) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	if n == m.nodeID {
 		log.Info("node is stopped during stop maintainer, schedule stop command to coordinator node",
 			zap.Stringer("changefeed", m.cfID),
@@ -80,7 +111,7 @@ func (m *StopChangefeedOperator) OnNodeRemove(n node.ID) {
 }
 
 func (m *StopChangefeedOperator) AffectedNodes() []node.ID {
-	return []node.ID{m.nodeID}
+	return []node.ID{m.getNodeID()}
 }
 
 func (m *StopChangefeedOperator) ID() common.ChangeFeedID {
@@ -124,7 +155,13 @@ func (m *StopChangefeedOperator) PostFinish() {
 
 func (m *StopChangefeedOperator) String() string {
 	return fmt.Sprintf("stop maintainer operator: %s, dest %s, remove %t",
-		m.cfID, m.nodeID, m.changefeedIsRemoved)
+		m.cfID, m.getNodeID(), m.changefeedIsRemoved)
+}
+
+func (m *StopChangefeedOperator) getNodeID() node.ID {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.nodeID
 }
 
 func (m *StopChangefeedOperator) Type() string {

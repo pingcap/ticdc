@@ -195,6 +195,9 @@ func (p *managerMaintainerSet) handleAddMaintainer(
 			zap.Uint64("checkpointTs", req.CheckpointTs))
 		return nil
 	}
+	if req.MaintainerEpoch != 0 {
+		info.Epoch = req.MaintainerEpoch
+	}
 	maintainer := NewMaintainer(changefeedID, p.conf, info, p.nodeInfo, p.taskScheduler, req.CheckpointTs, req.IsNewChangefeed, req.KeyspaceId)
 	registered, loaded := p.registry.LoadOrStore(changefeedID, maintainer)
 	if loaded {
@@ -232,10 +235,18 @@ func (p *managerMaintainerSet) handleRemoveMaintainer(msg *messaging.TargetMessa
 
 		// It's cascade remove, we should remove the dispatcher from all node.
 		// Here we create a maintainer to run the remove dispatcher logic.
-		maintainer = NewMaintainerForRemove(changefeedID, p.conf, p.nodeInfo, p.taskScheduler, req.KeyspaceId)
+		maintainer = NewMaintainerForRemove(changefeedID, p.conf, p.nodeInfo, p.taskScheduler, req.KeyspaceId, req.MaintainerEpoch)
 		p.registry.Store(changefeedID, maintainer)
 	}
-	maintainer.(*Maintainer).pushEvent(&Event{
+	cfMaintainer := maintainer.(*Maintainer)
+	if !shouldApplyMaintainerRemove(req.MaintainerEpoch, cfMaintainer.GetMaintainerEpoch()) {
+		log.Info("ignore stale remove maintainer request",
+			zap.Stringer("changefeedID", changefeedID),
+			zap.Uint64("requestMaintainerEpoch", req.MaintainerEpoch),
+			zap.Uint64("localMaintainerEpoch", cfMaintainer.GetMaintainerEpoch()))
+		return cfMaintainer.GetMaintainerStatus()
+	}
+	cfMaintainer.pushEvent(&Event{
 		changefeedID: changefeedID,
 		eventType:    EventMessage,
 		message:      msg,
@@ -243,6 +254,10 @@ func (p *managerMaintainerSet) handleRemoveMaintainer(msg *messaging.TargetMessa
 	log.Info("received remove maintainer request",
 		zap.Stringer("changefeedID", changefeedID))
 	return nil
+}
+
+func shouldApplyMaintainerRemove(requestEpoch, localEpoch uint64) bool {
+	return localEpoch == 0 || requestEpoch >= localEpoch
 }
 
 // buildHeartbeat collects status changes and periodic reports from local maintainers.
