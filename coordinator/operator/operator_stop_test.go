@@ -19,6 +19,7 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/coordinator/changefeed"
 	mock_changefeed "github.com/pingcap/ticdc/coordinator/changefeed/mock"
+	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -38,7 +39,7 @@ func TestStopChangefeedOperator_OnNodeRemove(t *testing.T) {
 
 	ctrl := gomock.NewController(t)
 	backend := mock_changefeed.NewMockBackend(ctrl)
-	op := NewStopChangefeedOperator(common.DefaultKeyspaceID, cfID, "n1", "n2", backend, true)
+	op := NewStopChangefeedOperator(common.DefaultKeyspaceID, cfID, "n1", "n2", backend, true, 0)
 	op.OnNodeRemove("n1")
 	require.Equal(t, "n2", op.nodeID.String())
 	require.False(t, op.finished.Load())
@@ -54,7 +55,7 @@ func TestStopChangefeedOperator_OnTaskRemoved(t *testing.T) {
 	},
 		1, true)
 	changefeedDB.AddReplicatingMaintainer(cf, "n1")
-	op := NewStopChangefeedOperator(common.DefaultKeyspaceID, cfID, "n1", "n2", nil, true)
+	op := NewStopChangefeedOperator(common.DefaultKeyspaceID, cfID, "n1", "n2", nil, true, 0)
 	op.OnTaskRemoved()
 	require.True(t, op.finished.Load())
 }
@@ -72,11 +73,19 @@ func TestStopChangefeedOperator_PostFinish(t *testing.T) {
 
 	ctrl := gomock.NewController(t)
 	backend := mock_changefeed.NewMockBackend(ctrl)
-	op := NewStopChangefeedOperator(common.DefaultKeyspaceID, cfID, "n1", "n2", backend, true)
+	op := NewStopChangefeedOperator(common.DefaultKeyspaceID, cfID, "n1", "n2", backend, true, 0)
 	backend.EXPECT().DeleteChangefeed(gomock.Any(), cfID).Return(errors.New("err"))
 	op.PostFinish()
 
-	op2 := NewStopChangefeedOperator(common.DefaultKeyspaceID, cfID, "n1", "n2", backend, false)
+	op2 := NewStopChangefeedOperator(common.DefaultKeyspaceID, cfID, "n1", "n2", backend, false, 0)
 	backend.EXPECT().SetChangefeedProgress(gomock.Any(), cfID, config.ProgressNone).Return(errors.New("err"))
 	op2.PostFinish()
+}
+
+func TestStopChangefeedOperator_ScheduleMaintainerEpoch(t *testing.T) {
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	op := NewStopChangefeedOperator(common.DefaultKeyspaceID, cfID, "n1", "n2", nil, true, 9)
+
+	req := op.Schedule().Message[0].(*heartbeatpb.RemoveMaintainerRequest)
+	require.Equal(t, uint64(9), req.MaintainerEpoch)
 }

@@ -58,6 +58,15 @@ func (e *DispatcherManager) SetMaintainerID(maintainerID node.ID) {
 	e.meta.maintainerID = maintainerID
 }
 
+func (e *DispatcherManager) SetMaintainerIdentity(maintainerID node.ID, maintainerEpoch uint64) {
+	e.meta.Lock()
+	defer e.meta.Unlock()
+	e.meta.maintainerID = maintainerID
+	if maintainerEpoch != 0 {
+		e.meta.maintainerEpoch = maintainerEpoch
+	}
+}
+
 func (e *DispatcherManager) GetMaintainerEpoch() uint64 {
 	e.meta.Lock()
 	defer e.meta.Unlock()

@@ -85,9 +85,9 @@ func (m *AddMaintainerOperator) Check(from node.ID, status *heartbeatpb.Maintain
 }
 
 func maintainerEpochMatches(expected, actual uint64) bool {
-	// Epoch zero means one side is from an older binary or a test fixture that
-	// does not participate in maintainer epoch fencing yet.
-	return expected == 0 || actual == 0 || expected == actual
+	// Expected epoch zero keeps compatibility with operators that were created
+	// before epoch fencing was introduced.
+	return expected == 0 || expected == actual
 }
 
 // Schedule builds the "add maintainer" command message, or returns nil when finished/canceled.

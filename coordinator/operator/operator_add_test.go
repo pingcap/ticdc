@@ -84,6 +84,13 @@ func TestAddMaintainerOperator_CheckRequiresMaintainerEpoch(t *testing.T) {
 	op.Check("n1", &heartbeatpb.MaintainerStatus{
 		State:           heartbeatpb.ComponentState_Working,
 		BootstrapDone:   true,
+		MaintainerEpoch: 0,
+	})
+	require.False(t, op.finished.Load())
+
+	op.Check("n1", &heartbeatpb.MaintainerStatus{
+		State:           heartbeatpb.ComponentState_Working,
+		BootstrapDone:   true,
 		MaintainerEpoch: 6,
 	})
 	require.False(t, op.finished.Load())

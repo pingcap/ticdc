@@ -31,6 +31,7 @@ func TestMoveMaintainerOperator_OnNodeRemove(t *testing.T) {
 		ChangefeedID: cfID,
 		Config:       config.GetDefaultReplicaConfig(),
 		SinkURI:      "mysql://127.0.0.1:3306",
+		Epoch:        7,
 	},
 		1, true)
 	changefeedDB.AddReplicatingMaintainer(cf, "n1")
@@ -44,6 +45,7 @@ func TestMoveMaintainerOperator_OnNodeRemove(t *testing.T) {
 	require.Len(t, changefeedDB.GetByNodeID("n1"), 1)
 	req := op.Schedule().Message[0].(*heartbeatpb.AddMaintainerRequest)
 	require.NotNil(t, req)
+	require.Equal(t, uint64(7), req.MaintainerEpoch)
 	require.Len(t, changefeedDB.GetByNodeID("n1"), 1)
 
 	op.OnNodeRemove("n1")

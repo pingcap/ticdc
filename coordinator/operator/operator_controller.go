@@ -127,6 +127,20 @@ func (oc *Controller) StopChangefeed(_ context.Context, cfID common.ChangeFeedID
 	oc.mu.Lock()
 	defer oc.mu.Unlock()
 
+	changefeed := oc.changefeedDB.GetByID(cfID)
+	if changefeed == nil {
+		log.Warn("stop changefeed failed, changefeed not found",
+			zap.String("role", oc.role),
+			zap.Bool("removed", removed),
+			zap.String("changefeed", cfID.Name()))
+		if old, ok := oc.operators[cfID]; ok {
+			return old.OP
+		}
+		return nil
+	}
+	keyspaceID := changefeed.GetKeyspaceID()
+	maintainerEpoch := changefeed.GetMaintainerEpoch()
+
 	scheduledNode := oc.changefeedDB.StopByChangefeedID(cfID, removed)
 	if scheduledNode == "" {
 		log.Info("changefeed is not scheduled, try stop maintainer using coordinator node",
@@ -136,17 +150,14 @@ func (oc *Controller) StopChangefeed(_ context.Context, cfID common.ChangeFeedID
 		scheduledNode = oc.selfNode.ID
 	}
 
-	changefeed := oc.changefeedDB.GetByID(cfID)
-	keyspaceID := changefeed.GetKeyspaceID()
-
-	return oc.pushStopChangefeedOperator(keyspaceID, cfID, scheduledNode, removed)
+	return oc.pushStopChangefeedOperator(keyspaceID, cfID, scheduledNode, removed, maintainerEpoch)
 }
 
 // pushStopChangefeedOperator pushes a stop changefeed operator to the controller.
 // it checks if the operator already exists, if exists, it will replace the old one.
 // if the old operator is the removing operator, it will skip this operator.
-func (oc *Controller) pushStopChangefeedOperator(keyspaceID uint32, cfID common.ChangeFeedID, nodeID node.ID, remove bool) operator.Operator[common.ChangeFeedID, *heartbeatpb.MaintainerStatus] {
-	op := NewStopChangefeedOperator(keyspaceID, cfID, nodeID, oc.selfNode.ID, oc.backend, remove)
+func (oc *Controller) pushStopChangefeedOperator(keyspaceID uint32, cfID common.ChangeFeedID, nodeID node.ID, remove bool, maintainerEpoch uint64) operator.Operator[common.ChangeFeedID, *heartbeatpb.MaintainerStatus] {
+	op := NewStopChangefeedOperator(keyspaceID, cfID, nodeID, oc.selfNode.ID, oc.backend, remove, maintainerEpoch)
 	if old, ok := oc.operators[cfID]; ok {
 		oldStop, ok := old.OP.(*StopChangefeedOperator)
 		if ok {

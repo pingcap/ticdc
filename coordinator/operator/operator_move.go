@@ -88,8 +88,10 @@ func (m *MoveMaintainerOperator) Schedule() *messaging.TargetMessage {
 	}
 
 	if m.originNodeStopped {
-		if !m.bind {
+		if m.maintainerEpoch == 0 {
 			m.maintainerEpoch = m.changefeed.GetMaintainerEpoch()
+		}
+		if !m.bind {
 			m.db.BindChangefeedToNode(m.origin, m.dest, m.changefeed)
 			m.bind = true
 		}

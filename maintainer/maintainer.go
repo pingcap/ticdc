@@ -287,11 +287,13 @@ func NewMaintainerForRemove(cfID common.ChangeFeedID,
 	selfNode *node.Info,
 	taskScheduler threadpool.ThreadPool,
 	keyspaceID uint32,
+	maintainerEpoch uint64,
 ) *Maintainer {
 	unused := &config.ChangeFeedInfo{
 		ChangefeedID: cfID,
 		SinkURI:      "",
 		Config:       config.GetDefaultReplicaConfig(),
+		Epoch:        maintainerEpoch,
 	}
 	m := NewMaintainer(cfID, conf, unused, selfNode, taskScheduler, 1, false, keyspaceID)
 	m.cascadeRemoving.Store(true)
@@ -413,6 +415,13 @@ func (m *Maintainer) GetMaintainerStatus() *heartbeatpb.MaintainerStatus {
 		}
 	}
 	return status
+}
+
+func (m *Maintainer) GetMaintainerEpoch() uint64 {
+	if m == nil || m.info == nil {
+		return 0
+	}
+	return m.info.Epoch
 }
 
 // clampIntToUint32 converts local int counters to heartbeat protobuf counters.
@@ -941,6 +950,14 @@ func (m *Maintainer) onMaintainerBootstrapResponse(msg *messaging.TargetMessage)
 		zap.Stringer("sourceNodeID", msg.From))
 
 	resp := msg.Message[0].(*heartbeatpb.MaintainerBootstrapResponse)
+	if !m.maintainerResponseEpochMatches(resp.MaintainerEpoch) {
+		log.Info("ignore stale maintainer bootstrap response",
+			zap.Stringer("changefeedID", m.changefeedID),
+			zap.Stringer("sourceNodeID", msg.From),
+			zap.Uint64("responseMaintainerEpoch", resp.MaintainerEpoch),
+			zap.Uint64("localMaintainerEpoch", m.GetMaintainerEpoch()))
+		return
+	}
 	if resp.Err != nil {
 		log.Warn("maintainer bootstrap failed",
 			zap.Stringer("changefeedID", m.changefeedID),
@@ -964,6 +981,14 @@ func (m *Maintainer) onMaintainerPostBootstrapResponse(msg *messaging.TargetMess
 		zap.Stringer("changefeedID", m.changefeedID),
 		zap.Any("server", msg.From))
 	resp := msg.Message[0].(*heartbeatpb.MaintainerPostBootstrapResponse)
+	if !m.maintainerResponseEpochMatches(resp.MaintainerEpoch) {
+		log.Info("ignore stale maintainer post bootstrap response",
+			zap.Stringer("changefeedID", m.changefeedID),
+			zap.Stringer("sourceNodeID", msg.From),
+			zap.Uint64("responseMaintainerEpoch", resp.MaintainerEpoch),
+			zap.Uint64("localMaintainerEpoch", m.GetMaintainerEpoch()))
+		return
+	}
 	if resp.Err != nil {
 		log.Warn("maintainer post bootstrap failed",
 			zap.Stringer("changefeedID", m.changefeedID),
@@ -1021,6 +1046,7 @@ func (m *Maintainer) onBootstrapResponses(responses map[node.ID]*heartbeatpb.Mai
 	if postBootstrapRequest == nil {
 		return
 	}
+	postBootstrapRequest.MaintainerEpoch = m.GetMaintainerEpoch()
 
 	m.initialized.Store(true)
 	log.Info("changefeed maintainer bootstrapped", zap.Stringer("changefeedID", m.changefeedID))
@@ -1044,10 +1070,22 @@ func (m *Maintainer) sendPostBootstrapRequest() {
 }
 
 func (m *Maintainer) onMaintainerCloseResponse(from node.ID, response *heartbeatpb.MaintainerCloseResponse) {
+	if !m.maintainerResponseEpochMatches(response.MaintainerEpoch) {
+		log.Info("ignore stale maintainer close response",
+			zap.Stringer("changefeedID", m.changefeedID),
+			zap.Stringer("sourceNodeID", from),
+			zap.Uint64("responseMaintainerEpoch", response.MaintainerEpoch),
+			zap.Uint64("localMaintainerEpoch", m.GetMaintainerEpoch()))
+		return
+	}
 	if response.Success {
 		m.closedNodes[from] = struct{}{}
 		m.onRemoveMaintainer(m.cascadeRemoving.Load(), m.changefeedRemoved.Load())
 	}
+}
+
+func (m *Maintainer) maintainerResponseEpochMatches(responseEpoch uint64) bool {
+	return responseEpoch == 0 || responseEpoch == m.GetMaintainerEpoch()
 }
 
 func (m *Maintainer) handleResendMessage() {
@@ -1095,8 +1133,9 @@ func (m *Maintainer) trySendMaintainerCloseRequestToAllNode() bool {
 				n,
 				messaging.DispatcherManagerManagerTopic,
 				&heartbeatpb.MaintainerCloseRequest{
-					ChangefeedID: m.changefeedID.ToPB(),
-					Removed:      m.changefeedRemoved.Load(),
+					ChangefeedID:    m.changefeedID.ToPB(),
+					Removed:         m.changefeedRemoved.Load(),
+					MaintainerEpoch: m.GetMaintainerEpoch(),
 				}))
 		}
 	}
@@ -1157,6 +1196,7 @@ func (m *Maintainer) createBootstrapMessageFactory() bootstrap.NewBootstrapReque
 			TableTriggerRedoDispatcherId:  nil,
 			IsNewChangefeed:               false,
 			KeyspaceId:                    m.info.KeyspaceID,
+			MaintainerEpoch:               m.GetMaintainerEpoch(),
 		}
 
 		// only send dispatcher targetNodeID to dispatcher manager on the same node

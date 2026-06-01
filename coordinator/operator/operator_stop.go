@@ -34,6 +34,7 @@ type StopChangefeedOperator struct {
 	cfID                common.ChangeFeedID
 	nodeID              node.ID
 	changefeedIsRemoved bool
+	maintainerEpoch     uint64
 	finished            atomic.Bool
 	coordinatorNodeID   node.ID
 	backend             changefeed.Backend
@@ -46,18 +47,23 @@ func NewStopChangefeedOperator(
 	coordinatorNode node.ID,
 	backend changefeed.Backend,
 	removed bool,
+	maintainerEpoch uint64,
 ) *StopChangefeedOperator {
 	return &StopChangefeedOperator{
 		keyspaceID:          keyspaceID,
 		cfID:                cfID,
 		nodeID:              nodeID,
 		changefeedIsRemoved: removed,
+		maintainerEpoch:     maintainerEpoch,
 		coordinatorNodeID:   coordinatorNode,
 		backend:             backend,
 	}
 }
 
 func (m *StopChangefeedOperator) Check(_ node.ID, status *heartbeatpb.MaintainerStatus) {
+	if status == nil {
+		return
+	}
 	if !m.finished.Load() && status.State != heartbeatpb.ComponentState_Working {
 		log.Info("maintainer report non-working status",
 			zap.Stringer("maintainer", m.cfID))
@@ -66,7 +72,14 @@ func (m *StopChangefeedOperator) Check(_ node.ID, status *heartbeatpb.Maintainer
 }
 
 func (m *StopChangefeedOperator) Schedule() *messaging.TargetMessage {
-	return changefeed.RemoveMaintainerMessage(m.keyspaceID, m.cfID, m.nodeID, true, m.changefeedIsRemoved)
+	return changefeed.RemoveMaintainerMessageWithEpoch(
+		m.keyspaceID,
+		m.cfID,
+		m.nodeID,
+		true,
+		m.changefeedIsRemoved,
+		m.maintainerEpoch,
+	)
 }
 
 // OnNodeRemove is called when node offline, and the maintainer must already move to absent status and will be scheduled again
