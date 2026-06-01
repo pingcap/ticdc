@@ -1085,7 +1085,8 @@ func (m *Maintainer) onMaintainerCloseResponse(from node.ID, response *heartbeat
 }
 
 func (m *Maintainer) maintainerResponseEpochMatches(responseEpoch uint64) bool {
-	return responseEpoch == 0 || responseEpoch == m.GetMaintainerEpoch()
+	localEpoch := m.GetMaintainerEpoch()
+	return localEpoch == 0 || responseEpoch == localEpoch
 }
 
 func (m *Maintainer) handleResendMessage() {

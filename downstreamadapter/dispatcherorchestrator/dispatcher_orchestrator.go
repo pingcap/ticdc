@@ -406,7 +406,7 @@ func (m *DispatcherOrchestrator) handleCloseRequest(
 }
 
 func shouldAcceptMaintainerRequest(requestEpoch, localEpoch uint64) bool {
-	return requestEpoch == 0 || localEpoch == 0 || requestEpoch >= localEpoch
+	return localEpoch == 0 || requestEpoch >= localEpoch
 }
 
 func createBootstrapResponse(

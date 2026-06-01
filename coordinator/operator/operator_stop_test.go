@@ -23,6 +23,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/stretchr/testify/require"
 )
 
@@ -88,4 +89,72 @@ func TestStopChangefeedOperator_ScheduleMaintainerEpoch(t *testing.T) {
 
 	req := op.Schedule().Message[0].(*heartbeatpb.RemoveMaintainerRequest)
 	require.Equal(t, uint64(9), req.MaintainerEpoch)
+}
+
+func TestStopChangefeedOperator_CheckRequiresTargetNodeAndEpoch(t *testing.T) {
+	t.Parallel()
+
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	tests := []struct {
+		name          string
+		from          node.ID
+		operatorEpoch uint64
+		status        *heartbeatpb.MaintainerStatus
+		finished      bool
+	}{
+		{
+			name:          "ignore status from other node",
+			from:          "n2",
+			operatorEpoch: 7,
+			status:        &heartbeatpb.MaintainerStatus{State: heartbeatpb.ComponentState_Stopped, MaintainerEpoch: 7},
+		},
+		{
+			name:          "ignore working status",
+			from:          "n1",
+			operatorEpoch: 7,
+			status:        &heartbeatpb.MaintainerStatus{State: heartbeatpb.ComponentState_Working, MaintainerEpoch: 7},
+		},
+		{
+			name:          "ignore newer maintainer status",
+			from:          "n1",
+			operatorEpoch: 7,
+			status:        &heartbeatpb.MaintainerStatus{State: heartbeatpb.ComponentState_Stopped, MaintainerEpoch: 8},
+		},
+		{
+			name:          "accept same epoch stopped status",
+			from:          "n1",
+			operatorEpoch: 7,
+			status:        &heartbeatpb.MaintainerStatus{State: heartbeatpb.ComponentState_Stopped, MaintainerEpoch: 7},
+			finished:      true,
+		},
+		{
+			name:          "accept older maintainer stopped status",
+			from:          "n1",
+			operatorEpoch: 7,
+			status:        &heartbeatpb.MaintainerStatus{State: heartbeatpb.ComponentState_Stopped, MaintainerEpoch: 6},
+			finished:      true,
+		},
+		{
+			name:          "accept unfenced maintainer stopped status",
+			from:          "n1",
+			operatorEpoch: 7,
+			status:        &heartbeatpb.MaintainerStatus{State: heartbeatpb.ComponentState_Stopped},
+			finished:      true,
+		},
+		{
+			name:          "unfenced operator keeps old compatibility",
+			from:          "n1",
+			operatorEpoch: 0,
+			status:        &heartbeatpb.MaintainerStatus{State: heartbeatpb.ComponentState_Stopped, MaintainerEpoch: 8},
+			finished:      true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			op := NewStopChangefeedOperator(common.DefaultKeyspaceID, cfID, "n1", "n2", nil, true, tt.operatorEpoch)
+			op.Check(tt.from, tt.status)
+			require.Equal(t, tt.finished, op.IsFinished())
+		})
+	}
 }

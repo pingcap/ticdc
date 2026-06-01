@@ -195,7 +195,7 @@ func (p *managerMaintainerSet) handleAddMaintainer(
 			zap.Uint64("checkpointTs", req.CheckpointTs))
 		return nil
 	}
-	if req.MaintainerEpoch != 0 && info != nil {
+	if req.MaintainerEpoch != 0 {
 		info.Epoch = req.MaintainerEpoch
 	}
 	maintainer := NewMaintainer(changefeedID, p.conf, info, p.nodeInfo, p.taskScheduler, req.CheckpointTs, req.IsNewChangefeed, req.KeyspaceId)
@@ -257,7 +257,7 @@ func (p *managerMaintainerSet) handleRemoveMaintainer(msg *messaging.TargetMessa
 }
 
 func shouldApplyMaintainerRemove(requestEpoch, localEpoch uint64) bool {
-	return requestEpoch == 0 || localEpoch == 0 || requestEpoch >= localEpoch
+	return localEpoch == 0 || requestEpoch >= localEpoch
 }
 
 // buildHeartbeat collects status changes and periodic reports from local maintainers.

@@ -453,7 +453,8 @@ func TestPendingMessageQueue_OlderCloseEpochCannotOverrideNewerPendingRequest(t 
 func TestShouldAcceptMaintainerRequest(t *testing.T) {
 	t.Parallel()
 
-	require.True(t, shouldAcceptMaintainerRequest(0, 7))
+	require.False(t, shouldAcceptMaintainerRequest(0, 7))
+	require.True(t, shouldAcceptMaintainerRequest(0, 0))
 	require.True(t, shouldAcceptMaintainerRequest(7, 0))
 	require.True(t, shouldAcceptMaintainerRequest(7, 7))
 	require.True(t, shouldAcceptMaintainerRequest(8, 7))

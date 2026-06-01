@@ -60,15 +60,28 @@ func NewStopChangefeedOperator(
 	}
 }
 
-func (m *StopChangefeedOperator) Check(_ node.ID, status *heartbeatpb.MaintainerStatus) {
+func (m *StopChangefeedOperator) Check(from node.ID, status *heartbeatpb.MaintainerStatus) {
 	if status == nil {
 		return
 	}
-	if !m.finished.Load() && status.State != heartbeatpb.ComponentState_Working {
+	if from != m.nodeID {
+		return
+	}
+	if !m.finished.Load() &&
+		status.State != heartbeatpb.ComponentState_Working &&
+		maintainerEpochCanBeStopped(m.maintainerEpoch, status.MaintainerEpoch) {
 		log.Info("maintainer report non-working status",
-			zap.Stringer("maintainer", m.cfID))
+			zap.Stringer("maintainer", m.cfID),
+			zap.Uint64("operatorMaintainerEpoch", m.maintainerEpoch),
+			zap.Uint64("statusMaintainerEpoch", status.MaintainerEpoch))
 		m.finished.Store(true)
 	}
+}
+
+func maintainerEpochCanBeStopped(operatorEpoch, statusEpoch uint64) bool {
+	// A stop for a newer epoch can legitimately retire an older local maintainer.
+	// It must not be completed by a newer maintainer's status.
+	return operatorEpoch == 0 || statusEpoch == 0 || statusEpoch <= operatorEpoch
 }
 
 func (m *StopChangefeedOperator) Schedule() *messaging.TargetMessage {

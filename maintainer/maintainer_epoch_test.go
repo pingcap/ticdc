@@ -27,8 +27,9 @@ func TestShouldApplyMaintainerRemove(t *testing.T) {
 		localEpoch   uint64
 		expected     bool
 	}{
-		{name: "old request without epoch keeps compatibility", requestEpoch: 0, localEpoch: 7, expected: true},
-		{name: "local maintainer without epoch keeps compatibility", requestEpoch: 7, localEpoch: 0, expected: true},
+		{name: "unfenced request cannot remove fenced maintainer", requestEpoch: 0, localEpoch: 7, expected: false},
+		{name: "unfenced request keeps compatibility with unfenced maintainer", requestEpoch: 0, localEpoch: 0, expected: true},
+		{name: "fenced request can remove unfenced maintainer", requestEpoch: 7, localEpoch: 0, expected: true},
 		{name: "same epoch applies", requestEpoch: 7, localEpoch: 7, expected: true},
 		{name: "newer request removes older maintainer", requestEpoch: 8, localEpoch: 7, expected: true},
 		{name: "older request cannot remove newer maintainer", requestEpoch: 6, localEpoch: 7, expected: false},
@@ -44,8 +45,12 @@ func TestShouldApplyMaintainerRemove(t *testing.T) {
 func TestMaintainerResponseEpochMatches(t *testing.T) {
 	maintainer := &Maintainer{info: &config.ChangeFeedInfo{Epoch: 7}}
 
-	require.True(t, maintainer.maintainerResponseEpochMatches(0))
+	require.False(t, maintainer.maintainerResponseEpochMatches(0))
 	require.True(t, maintainer.maintainerResponseEpochMatches(7))
 	require.False(t, maintainer.maintainerResponseEpochMatches(6))
 	require.False(t, maintainer.maintainerResponseEpochMatches(8))
+
+	unfencedMaintainer := &Maintainer{}
+	require.True(t, unfencedMaintainer.maintainerResponseEpochMatches(0))
+	require.True(t, unfencedMaintainer.maintainerResponseEpochMatches(7))
 }
