@@ -290,7 +290,9 @@ func (c *coordinator) handleStateChange(
 	switch event.state {
 	case config.StateWarning:
 		c.controller.operatorController.StopChangefeed(ctx, event.changefeedID, false)
-		c.controller.updateChangefeedEpoch(ctx, event.changefeedID)
+		if err := c.controller.updateChangefeedEpoch(ctx, event.changefeedID); err != nil {
+			return errors.Trace(err)
+		}
 		c.controller.moveChangefeedToSchedulingQueue(event.changefeedID, false, false)
 	case config.StateFailed, config.StateFinished:
 		failpoint.Inject("BlockBeforeStopChangefeed", func() {})

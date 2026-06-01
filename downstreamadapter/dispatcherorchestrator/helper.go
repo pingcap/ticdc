@@ -72,6 +72,9 @@ func (q *pendingMessageQueue) TryEnqueue(key pendingMessageKey, msg *messaging.T
 }
 
 func shouldReplacePendingMessage(key pendingMessageKey, oldMsg, newMsg *messaging.TargetMessage) bool {
+	if shouldReplaceByGeneration(oldMsg, newMsg) {
+		return true
+	}
 	if key.msgType != messaging.TypeMaintainerCloseRequest {
 		return false
 	}
@@ -88,6 +91,28 @@ func shouldReplacePendingMessage(key pendingMessageKey, oldMsg, newMsg *messagin
 	}
 	// Only upgrade semantics: allow removed=true to override removed=false.
 	return !oldReq.Removed && newReq.Removed
+}
+
+func shouldReplaceByGeneration(oldMsg, newMsg *messaging.TargetMessage) bool {
+	oldGeneration, oldOK := pendingMessageGeneration(oldMsg)
+	newGeneration, newOK := pendingMessageGeneration(newMsg)
+	return oldOK && newOK && newGeneration > oldGeneration
+}
+
+func pendingMessageGeneration(msg *messaging.TargetMessage) (uint64, bool) {
+	if msg == nil || len(msg.Message) == 0 {
+		return 0, false
+	}
+	switch req := msg.Message[0].(type) {
+	case *heartbeatpb.MaintainerBootstrapRequest:
+		return req.Generation, true
+	case *heartbeatpb.MaintainerPostBootstrapRequest:
+		return req.Generation, true
+	case *heartbeatpb.MaintainerCloseRequest:
+		return req.Generation, true
+	default:
+		return 0, false
+	}
 }
 
 // Pop blocks until a message is available or the queue is closed.

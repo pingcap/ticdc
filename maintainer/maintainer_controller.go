@@ -15,6 +15,7 @@ package maintainer
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pingcap/log"
@@ -59,6 +60,7 @@ type Controller struct {
 
 	replicaConfig *config.ReplicaConfig
 	changefeedID  common.ChangeFeedID
+	generation    atomic.Uint64
 
 	taskPool threadpool.ThreadPool
 
@@ -157,6 +159,20 @@ func NewController(changefeedID common.ChangeFeedID,
 	return controller
 }
 
+// SetMaintainerGeneration propagates the changefeed epoch used to fence
+// dispatcher-manager control requests from stale maintainers.
+func (c *Controller) SetMaintainerGeneration(generation uint64) {
+	c.generation.Store(generation)
+	c.operatorController.SetMaintainerGeneration(generation)
+	if c.redoOperatorController != nil {
+		c.redoOperatorController.SetMaintainerGeneration(generation)
+	}
+}
+
+func (c *Controller) maintainerGeneration() uint64 {
+	return c.generation.Load()
+}
+
 // HandleStatus handle the status report from the node
 func (c *Controller) HandleStatus(from node.ID, statusList []*heartbeatpb.TableSpanStatus) {
 	// HandleStatus reconciles runtime dispatcher reports with maintainer-side state.
@@ -193,7 +209,9 @@ func (c *Controller) HandleStatus(from node.ID, statusList []*heartbeatpb.TableS
 					zap.Any("status", status),
 					zap.String("dispatcherID", dispatcherID.String()))
 				// If the span is not found but status is Working, we need to remove it from dispatcher.
-				_ = c.messageCenter.SendCommand(replica.NewRemoveDispatcherMessage(from, c.changefeedID, status.ID, nil, status.Mode, heartbeatpb.OperatorType_O_Remove))
+				msg := replica.NewRemoveDispatcherMessage(from, c.changefeedID, status.ID, nil, status.Mode, heartbeatpb.OperatorType_O_Remove)
+				msg.Message[0].(*heartbeatpb.ScheduleDispatcherRequest).Generation = c.maintainerGeneration()
+				_ = c.messageCenter.SendCommand(msg)
 			}
 			continue
 		}

@@ -16,6 +16,7 @@ package operator
 import (
 	"container/heap"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pingcap/log"
@@ -52,6 +53,7 @@ type Controller struct {
 	spanController *span.Controller
 	nodeManager    *watcher.NodeManager
 	splitter       *split.Splitter
+	generation     atomic.Uint64
 
 	mu           sync.RWMutex // protect the following fields
 	operators    map[common.DispatcherID]*operator.OperatorWithTime[common.DispatcherID, *heartbeatpb.TableSpanStatus]
@@ -82,6 +84,11 @@ func NewOperatorController(
 	}
 }
 
+// SetMaintainerGeneration sets the epoch stamped on scheduler requests.
+func (oc *Controller) SetMaintainerGeneration(generation uint64) {
+	oc.generation.Store(generation)
+}
+
 // Execute poll the operator from the queue and execute it
 // It will be called in the thread pool.
 func (oc *Controller) Execute() time.Time {
@@ -98,6 +105,7 @@ func (oc *Controller) Execute() time.Time {
 		msg := op.Schedule()
 
 		if msg != nil {
+			oc.stampMaintainerGeneration(msg)
 			_ = oc.messageCenter.SendCommand(msg)
 			log.Debug("send command to dispatcher",
 				zap.String("role", oc.role),
@@ -109,6 +117,13 @@ func (oc *Controller) Execute() time.Time {
 		if executedCounter >= oc.batchSize {
 			return time.Now().Add(nextPollInterval)
 		}
+	}
+}
+
+func (oc *Controller) stampMaintainerGeneration(msg *messaging.TargetMessage) {
+	req, ok := msg.Message[0].(*heartbeatpb.ScheduleDispatcherRequest)
+	if ok {
+		req.Generation = oc.generation.Load()
 	}
 }
 

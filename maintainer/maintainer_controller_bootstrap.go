@@ -146,6 +146,7 @@ func (c *Controller) FinishBootstrap(
 		TableTriggerEventDispatcherId: c.spanController.GetDDLDispatcherID().ToPB(),
 		Schemas:                       c.prepareSchemaInfoResponse(schemaInfos),
 		RedoSchemas:                   c.prepareSchemaInfoResponse(redoSchemaInfos),
+		Generation:                    c.maintainerGeneration(),
 	}, nil
 }
 

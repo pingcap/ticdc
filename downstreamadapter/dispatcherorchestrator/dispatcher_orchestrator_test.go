@@ -304,6 +304,36 @@ func TestPendingMessageQueue_CloseRequestRemovedTrueOverridesPendingFalse(t *tes
 	require.True(t, req.Removed)
 }
 
+func TestPendingMessageQueue_NewerGenerationOverridesPendingRequest(t *testing.T) {
+	t.Parallel()
+
+	q := newPendingMessageQueue()
+	cfID := common.NewChangeFeedIDWithName("cf", "default")
+	key := pendingMessageKey{
+		changefeedID: cfID,
+		msgType:      messaging.TypeMaintainerBootstrapRequest,
+	}
+
+	oldMsg := messaging.NewSingleTargetMessage(
+		node.ID("to"),
+		messaging.DispatcherManagerManagerTopic,
+		&heartbeatpb.MaintainerBootstrapRequest{ChangefeedID: cfID.ToPB(), Generation: 1},
+	)
+	newMsg := messaging.NewSingleTargetMessage(
+		node.ID("to"),
+		messaging.DispatcherManagerManagerTopic,
+		&heartbeatpb.MaintainerBootstrapRequest{ChangefeedID: cfID.ToPB(), Generation: 2},
+	)
+
+	require.True(t, q.TryEnqueue(key, oldMsg))
+	require.True(t, q.TryEnqueue(key, newMsg))
+
+	poppedMsg, ok := q.Pop()
+	require.True(t, ok)
+	req := poppedMsg.Message[0].(*heartbeatpb.MaintainerBootstrapRequest)
+	require.Equal(t, uint64(2), req.Generation)
+}
+
 func TestPendingMessageQueue_CloseRequestUpgradeAfterPopKeepsReturnedMessageStable(t *testing.T) {
 	t.Parallel()
 

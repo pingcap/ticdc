@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/dynstream"
 	"go.uber.org/zap"
@@ -178,14 +179,20 @@ func newSchedulerDispatcherRequestDynamicStream() dynstream.DynamicStream[int, c
 }
 
 type SchedulerDispatcherRequest struct {
+	From node.ID
 	*heartbeatpb.ScheduleDispatcherRequest
 }
 
-func NewSchedulerDispatcherRequest(req *heartbeatpb.ScheduleDispatcherRequest) SchedulerDispatcherRequest {
-	return SchedulerDispatcherRequest{req}
+func NewSchedulerDispatcherRequest(from node.ID, req *heartbeatpb.ScheduleDispatcherRequest) SchedulerDispatcherRequest {
+	return SchedulerDispatcherRequest{From: from, ScheduleDispatcherRequest: req}
 }
 
 type SchedulerDispatcherRequestHandler struct{}
+
+type dispatcherOperatorKey struct {
+	dispatcherID common.DispatcherID
+	generation   uint64
+}
 
 func (h *SchedulerDispatcherRequestHandler) Path(scheduleDispatcherRequest SchedulerDispatcherRequest) common.GID {
 	return common.NewChangefeedGIDFromPB(scheduleDispatcherRequest.ChangefeedID)
@@ -208,6 +215,8 @@ func (h *SchedulerDispatcherRequestHandler) Handle(dispatcherManager *Dispatcher
 		// dynstream guarantees len(events)>0, but guard defensively to avoid panics if that contract changes.
 		return false
 	}
+	dispatcherManager.LockControl()
+	defer dispatcherManager.UnlockControl()
 
 	// `dynstream` guarantees per-path serialization: for a given changefeed (Path),
 	// SchedulerDispatcherRequestHandler.Handle will not be executed concurrently. This matters for reasoning:
@@ -251,7 +260,7 @@ func (h *SchedulerDispatcherRequestHandler) Handle(dispatcherManager *Dispatcher
 
 // preCheckForSchedulerHandler validates a scheduling request and decides whether it should be applied.
 //
-// It returns the stable key used in currentOperatorMap (dispatcherID), and a boolean indicating whether the
+// It returns the stable key used in currentOperatorMap (dispatcherID, generation), and a boolean indicating whether the
 // request should proceed. The precheck filters out:
 //   - invalid requests (nil request/config/dispatcherID),
 //   - redo requests when redo is disabled,
@@ -261,30 +270,41 @@ func (h *SchedulerDispatcherRequestHandler) Handle(dispatcherManager *Dispatcher
 // Note: Remove requests are allowed to proceed even if the dispatcher doesn't exist (we still want to emit a
 // terminal status to the maintainer), but we must be careful not to store such requests (see handleScheduleRemove),
 // otherwise the operator entry would never be cleaned up.
-func preCheckForSchedulerHandler(req SchedulerDispatcherRequest, dispatcherManager *DispatcherManager) (common.DispatcherID, bool) {
+func preCheckForSchedulerHandler(req SchedulerDispatcherRequest, dispatcherManager *DispatcherManager) (dispatcherOperatorKey, bool) {
 	if req.ScheduleDispatcherRequest == nil {
 		log.Warn("scheduleDispatcherRequest is nil, skip")
-		return common.DispatcherID{}, false
+		return dispatcherOperatorKey{}, false
 	}
 	if req.Config == nil {
 		log.Warn("scheduleDispatcherRequest config is nil, skip")
-		return common.DispatcherID{}, false
+		return dispatcherOperatorKey{}, false
 	}
-	operatorKey := common.NewDispatcherIDFromPB(req.Config.DispatcherID)
-	if operatorKey.IsZero() {
+	dispatcherID := common.NewDispatcherIDFromPB(req.Config.DispatcherID)
+	if dispatcherID.IsZero() {
 		log.Warn("scheduleDispatcherRequest has no valid operator key, skip")
-		return common.DispatcherID{}, false
+		return dispatcherOperatorKey{}, false
 	}
+	if !dispatcherManager.IsMaintainerRequestAllowed(req.From, req.Generation) {
+		log.Warn("drop stale schedule dispatcher request",
+			zap.String("changefeedID", req.ChangefeedID.String()),
+			zap.String("dispatcherID", dispatcherID.String()),
+			zap.String("from", req.From.String()),
+			zap.Uint64("requestGeneration", req.Generation),
+			zap.Uint64("currentGeneration", dispatcherManager.GetMaintainerEpoch()),
+			zap.String("currentMaintainer", dispatcherManager.GetMaintainerID().String()))
+		return dispatcherOperatorKey{}, false
+	}
+	operatorKey := dispatcherOperatorKey{dispatcherID: dispatcherID, generation: req.Generation}
 
 	isRedo := common.IsRedoMode(req.Config.Mode)
 	if isRedo && !dispatcherManager.IsRedoReady() {
-		return common.DispatcherID{}, false
+		return dispatcherOperatorKey{}, false
 	}
 	if _, operatorExists := dispatcherManager.currentOperatorMap.Load(operatorKey); operatorExists {
 		// Create requests must be serialized per dispatcherID; otherwise we can end up creating multiple
 		// dispatchers for the same span/dispatcherID.
 		if req.ScheduleAction == heartbeatpb.ScheduleAction_Create {
-			return common.DispatcherID{}, false
+			return dispatcherOperatorKey{}, false
 		}
 		// Remove requests are allowed to proceed: removeDispatcher is idempotent and the incoming request
 		// may carry a newer OperatorType for maintainer bootstrap/failover reconstruction.
@@ -293,9 +313,9 @@ func preCheckForSchedulerHandler(req SchedulerDispatcherRequest, dispatcherManag
 	// Check whether the dispatcher exists locally. This is used to treat Create as idempotent.
 	var dispatcherExists bool
 	if isRedo {
-		_, dispatcherExists = dispatcherManager.redoDispatcherMap.Get(operatorKey)
+		_, dispatcherExists = dispatcherManager.redoDispatcherMap.Get(dispatcherID)
 	} else {
-		_, dispatcherExists = dispatcherManager.dispatcherMap.Get(operatorKey)
+		_, dispatcherExists = dispatcherManager.dispatcherMap.Get(dispatcherID)
 	}
 
 	// Action-aware precheck:
@@ -304,7 +324,7 @@ func preCheckForSchedulerHandler(req SchedulerDispatcherRequest, dispatcherManag
 	switch req.ScheduleAction {
 	case heartbeatpb.ScheduleAction_Create:
 		if dispatcherExists {
-			return common.DispatcherID{}, false
+			return dispatcherOperatorKey{}, false
 		}
 	case heartbeatpb.ScheduleAction_Remove:
 	}
@@ -315,7 +335,7 @@ func preCheckForSchedulerHandler(req SchedulerDispatcherRequest, dispatcherManag
 func handleScheduleCreate(
 	dispatcherManager *DispatcherManager,
 	req SchedulerDispatcherRequest,
-	operatorKey common.DispatcherID,
+	operatorKey dispatcherOperatorKey,
 	infos map[common.DispatcherID]dispatcherCreateInfo,
 	redoInfos map[common.DispatcherID]dispatcherCreateInfo,
 ) {
@@ -326,6 +346,7 @@ func handleScheduleCreate(
 		TableSpan:        config.Span,
 		StartTs:          config.StartTs,
 		SchemaID:         config.SchemaID,
+		OperatorKey:      operatorKey,
 		SkipDMLAsStartTs: config.SkipDMLAsStartTs,
 	}
 	if common.IsRedoMode(config.Mode) {
@@ -350,7 +371,7 @@ func handleScheduleCreate(
 func handleScheduleRemove(
 	dispatcherManager *DispatcherManager,
 	req SchedulerDispatcherRequest,
-	operatorKey common.DispatcherID,
+	operatorKey dispatcherOperatorKey,
 ) {
 	config := req.Config
 	dispatcherID := common.NewDispatcherIDFromPB(config.DispatcherID)
@@ -412,7 +433,7 @@ func createDispatcherByInfo(
 		}
 		for _, info := range redoInfos {
 			// Create requests are stored in currentOperatorMap before creation and should be deleted once the dispatcher is created.
-			if v, ok := dispatcherManager.currentOperatorMap.Load(info.Id); ok {
+			if v, ok := dispatcherManager.currentOperatorMap.Load(info.OperatorKey); ok {
 				req := v.(SchedulerDispatcherRequest)
 				if req.ScheduleAction == heartbeatpb.ScheduleAction_Create {
 					log.Debug("delete current working add operator for redo dispatcher",
@@ -420,7 +441,7 @@ func createDispatcherByInfo(
 						zap.String("dispatcherID", info.Id.String()),
 						zap.Any("operator", req),
 					)
-					dispatcherManager.currentOperatorMap.Delete(info.Id)
+					dispatcherManager.currentOperatorMap.Delete(info.OperatorKey)
 				}
 			}
 		}
@@ -432,7 +453,7 @@ func createDispatcherByInfo(
 		}
 		for _, info := range infos {
 			// Create requests are stored in currentOperatorMap before creation and should be deleted once the dispatcher is created.
-			if v, ok := dispatcherManager.currentOperatorMap.Load(info.Id); ok {
+			if v, ok := dispatcherManager.currentOperatorMap.Load(info.OperatorKey); ok {
 				req := v.(SchedulerDispatcherRequest)
 				if req.ScheduleAction == heartbeatpb.ScheduleAction_Create {
 					log.Debug("delete current working add operator",
@@ -440,7 +461,7 @@ func createDispatcherByInfo(
 						zap.String("dispatcherID", info.Id.String()),
 						zap.Any("operator", req),
 					)
-					dispatcherManager.currentOperatorMap.Delete(info.Id)
+					dispatcherManager.currentOperatorMap.Delete(info.OperatorKey)
 				}
 			}
 		}

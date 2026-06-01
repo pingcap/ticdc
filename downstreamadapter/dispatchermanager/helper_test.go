@@ -160,7 +160,7 @@ func TestPreCheckForSchedulerHandler_RemoveAllowedWhenDispatcherMissing(t *testi
 		dispatcherMap: newDispatcherMap[*dispatcher.EventDispatcher](),
 	}
 
-	removeReq := NewSchedulerDispatcherRequest(&heartbeatpb.ScheduleDispatcherRequest{
+	removeReq := NewSchedulerDispatcherRequest("node1", &heartbeatpb.ScheduleDispatcherRequest{
 		ChangefeedID: &heartbeatpb.ChangefeedID{Keyspace: "test-namespace", Name: "test-changefeed"},
 		Config: &heartbeatpb.DispatcherConfig{
 			DispatcherID: dispatcherID.ToPB(),
@@ -172,7 +172,7 @@ func TestPreCheckForSchedulerHandler_RemoveAllowedWhenDispatcherMissing(t *testi
 
 	operatorKey, ok := preCheckForSchedulerHandler(removeReq, dm)
 	require.True(t, ok)
-	require.Equal(t, dispatcherID, operatorKey)
+	require.Equal(t, dispatcherID, operatorKey.dispatcherID)
 }
 
 func TestPreCheckForSchedulerHandler_CreateSkippedWhenDispatcherExists(t *testing.T) {
@@ -190,7 +190,7 @@ func TestPreCheckForSchedulerHandler_CreateSkippedWhenDispatcherExists(t *testin
 	}
 	dm.dispatcherMap.Set(dispatcherID, &dispatcher.EventDispatcher{})
 
-	createReq := NewSchedulerDispatcherRequest(&heartbeatpb.ScheduleDispatcherRequest{
+	createReq := NewSchedulerDispatcherRequest("node1", &heartbeatpb.ScheduleDispatcherRequest{
 		ChangefeedID: &heartbeatpb.ChangefeedID{Keyspace: "test-namespace", Name: "test-changefeed"},
 		Config: &heartbeatpb.DispatcherConfig{
 			DispatcherID: dispatcherID.ToPB(),
@@ -202,6 +202,72 @@ func TestPreCheckForSchedulerHandler_CreateSkippedWhenDispatcherExists(t *testin
 
 	_, ok := preCheckForSchedulerHandler(createReq, dm)
 	require.False(t, ok)
+}
+
+func TestPreCheckForSchedulerHandler_FencesStaleMaintainerGeneration(t *testing.T) {
+	t.Parallel()
+
+	dispatcherID := common.NewDispatcherID()
+	dm := &DispatcherManager{
+		changefeedID:  common.NewChangeFeedIDWithName("test-changefeed", "test-namespace"),
+		dispatcherMap: newDispatcherMap[*dispatcher.EventDispatcher](),
+	}
+	dm.meta.maintainerID = "new-maintainer"
+	dm.meta.maintainerEpoch = 2
+
+	staleReq := NewSchedulerDispatcherRequest("old-maintainer", &heartbeatpb.ScheduleDispatcherRequest{
+		ChangefeedID: &heartbeatpb.ChangefeedID{Keyspace: "test-namespace", Name: "test-changefeed"},
+		Config: &heartbeatpb.DispatcherConfig{
+			DispatcherID: dispatcherID.ToPB(),
+			Mode:         0,
+		},
+		ScheduleAction: heartbeatpb.ScheduleAction_Create,
+		OperatorType:   heartbeatpb.OperatorType_O_Add,
+		Generation:     1,
+	})
+	_, ok := preCheckForSchedulerHandler(staleReq, dm)
+	require.False(t, ok)
+
+	currentReq := NewSchedulerDispatcherRequest("new-maintainer", &heartbeatpb.ScheduleDispatcherRequest{
+		ChangefeedID: &heartbeatpb.ChangefeedID{Keyspace: "test-namespace", Name: "test-changefeed"},
+		Config: &heartbeatpb.DispatcherConfig{
+			DispatcherID: dispatcherID.ToPB(),
+			Mode:         0,
+		},
+		ScheduleAction: heartbeatpb.ScheduleAction_Create,
+		OperatorType:   heartbeatpb.OperatorType_O_Add,
+		Generation:     2,
+	})
+	operatorKey, ok := preCheckForSchedulerHandler(currentReq, dm)
+	require.True(t, ok)
+	require.Equal(t, dispatcherID, operatorKey.dispatcherID)
+	require.Equal(t, uint64(2), operatorKey.generation)
+}
+
+func TestPreCheckForSchedulerHandler_AllowsCurrentMaintainerWithoutGeneration(t *testing.T) {
+	t.Parallel()
+
+	dispatcherID := common.NewDispatcherID()
+	dm := &DispatcherManager{
+		changefeedID:  common.NewChangeFeedIDWithName("test-changefeed", "test-namespace"),
+		dispatcherMap: newDispatcherMap[*dispatcher.EventDispatcher](),
+	}
+	dm.meta.maintainerID = "current-maintainer"
+	dm.meta.maintainerEpoch = 2
+
+	req := NewSchedulerDispatcherRequest("current-maintainer", &heartbeatpb.ScheduleDispatcherRequest{
+		ChangefeedID: &heartbeatpb.ChangefeedID{Keyspace: "test-namespace", Name: "test-changefeed"},
+		Config: &heartbeatpb.DispatcherConfig{
+			DispatcherID: dispatcherID.ToPB(),
+			Mode:         0,
+		},
+		ScheduleAction: heartbeatpb.ScheduleAction_Create,
+		OperatorType:   heartbeatpb.OperatorType_O_Add,
+	})
+	operatorKey, ok := preCheckForSchedulerHandler(req, dm)
+	require.True(t, ok)
+	require.Equal(t, dispatcherID, operatorKey.dispatcherID)
+	require.Zero(t, operatorKey.generation)
 }
 
 func TestDispatcherManagerIsRedoReadyRequiresPublication(t *testing.T) {

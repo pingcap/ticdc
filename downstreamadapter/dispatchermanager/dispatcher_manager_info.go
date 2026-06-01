@@ -25,10 +25,11 @@ import (
 // event_dispatcher_mananger_info.go is used to store the basic info and function of the event dispatcher manager
 
 type dispatcherCreateInfo struct {
-	Id        common.DispatcherID
-	TableSpan *heartbeatpb.TableSpan
-	StartTs   uint64
-	SchemaID  int64
+	Id          common.DispatcherID
+	TableSpan   *heartbeatpb.TableSpan
+	StartTs     uint64
+	SchemaID    int64
+	OperatorKey dispatcherOperatorKey
 	// SkipDMLAsStartTs indicates whether to skip DML events at (StartTs+1).
 	// It is used when a dispatcher is recreated during an in-flight DDL barrier:
 	// we need to replay the DDL by starting from (blockTs-1), while avoiding
@@ -56,6 +57,51 @@ func (e *DispatcherManager) SetMaintainerID(maintainerID node.ID) {
 	e.meta.Lock()
 	defer e.meta.Unlock()
 	e.meta.maintainerID = maintainerID
+}
+
+// LockControl serializes maintainer ownership changes with scheduler requests.
+func (e *DispatcherManager) LockControl() {
+	e.controlMu.Lock()
+}
+
+// UnlockControl releases the maintainer control critical section.
+func (e *DispatcherManager) UnlockControl() {
+	e.controlMu.Unlock()
+}
+
+// TryUpdateMaintainer records the active maintainer owner and generation.
+// Generation 0 is accepted only for rolling-upgrade compatibility and never
+// downgrades a known non-zero generation from a different maintainer.
+func (e *DispatcherManager) TryUpdateMaintainer(from node.ID, generation uint64) bool {
+	e.meta.Lock()
+	defer e.meta.Unlock()
+	if generation == 0 {
+		if e.meta.maintainerEpoch != 0 && e.meta.maintainerID != "" && e.meta.maintainerID != from {
+			return false
+		}
+		e.meta.maintainerID = from
+		return true
+	}
+	if e.meta.maintainerEpoch > generation {
+		return false
+	}
+	if e.meta.maintainerEpoch == generation && e.meta.maintainerID != "" && e.meta.maintainerID != from {
+		return false
+	}
+	e.meta.maintainerEpoch = generation
+	e.meta.maintainerID = from
+	return true
+}
+
+// IsMaintainerRequestAllowed reports whether a request belongs to the current
+// maintainer owner/generation view known by this dispatcher manager.
+func (e *DispatcherManager) IsMaintainerRequestAllowed(from node.ID, generation uint64) bool {
+	e.meta.Lock()
+	defer e.meta.Unlock()
+	if generation == 0 {
+		return e.meta.maintainerEpoch == 0 || e.meta.maintainerID == "" || e.meta.maintainerID == from
+	}
+	return e.meta.maintainerEpoch == generation && e.meta.maintainerID == from
 }
 
 func (e *DispatcherManager) GetMaintainerEpoch() uint64 {
@@ -95,6 +141,16 @@ func (e *DispatcherManager) GetAllDispatchers(schemaID int64) []common.Dispatche
 
 func (e *DispatcherManager) GetCurrentOperatorMap() *sync.Map {
 	return &e.currentOperatorMap
+}
+
+func (e *DispatcherManager) deleteCurrentOperatorsByDispatcherID(id common.DispatcherID) {
+	e.currentOperatorMap.Range(func(key, _ any) bool {
+		operatorKey, ok := key.(dispatcherOperatorKey)
+		if ok && operatorKey.dispatcherID == id {
+			e.currentOperatorMap.Delete(key)
+		}
+		return true
+	})
 }
 
 // IsRedoEnabled reports whether redo is configured for the changefeed.

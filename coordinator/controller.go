@@ -802,10 +802,6 @@ func (c *Controller) ResumeChangefeed(
 		return nil
 	}
 
-	if err := c.backend.ResumeChangefeed(ctx, id, newCheckpointTs); err != nil {
-		return err
-	}
-
 	clone, err := cf.GetInfo().Clone()
 	if err != nil {
 		return err
@@ -813,10 +809,17 @@ func (c *Controller) ResumeChangefeed(
 
 	clone.State = config.StateNormal
 	clone.Epoch = pdutil.GenerateChangefeedEpoch(ctx, c.pdClient)
+	checkpointTs := cf.GetStatus().CheckpointTs
+	if newCheckpointTs > 0 {
+		checkpointTs = newCheckpointTs
+	}
+	if err := c.backend.UpdateChangefeed(ctx, clone, checkpointTs, config.ProgressNone); err != nil {
+		return err
+	}
 	cf.SetInfo(clone)
 
 	status := cf.GetStatusForResume()
-	status.CheckpointTs = newCheckpointTs
+	status.CheckpointTs = checkpointTs
 	_, _, runningErr := cf.ForceUpdateStatus(status)
 	if runningErr != nil {
 		return errors.New(runningErr.Message)
@@ -917,18 +920,22 @@ func (c *Controller) newBootstrapMessage(id node.ID, addr string) *messaging.Tar
 		&heartbeatpb.CoordinatorBootstrapRequest{Version: c.version})
 }
 
-func (c *Controller) updateChangefeedEpoch(ctx context.Context, id common.ChangeFeedID) {
+func (c *Controller) updateChangefeedEpoch(ctx context.Context, id common.ChangeFeedID) error {
 	cf := c.changefeedDB.GetByID(id)
 	if cf == nil {
 		log.Warn("changefeed not found, skip updating epoch", zap.String("changefeed", id.String()))
-		return
+		return nil
 	}
 	clonedInfo, err := cf.GetInfo().Clone()
 	if err != nil {
 		log.Panic("clone changefeed info failed", zap.String("changefeed", id.String()), zap.Error(err))
 	}
 	clonedInfo.Epoch = pdutil.GenerateChangefeedEpoch(ctx, c.pdClient)
+	if err := c.backend.UpdateChangefeed(ctx, clonedInfo, cf.GetStatus().CheckpointTs, config.ProgressNone); err != nil {
+		return errors.Trace(err)
+	}
 	cf.SetInfo(clonedInfo)
+	return nil
 }
 
 // moveChangefeedToSchedulingQueue moves a changefeed to scheduling queue
