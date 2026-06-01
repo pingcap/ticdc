@@ -382,9 +382,10 @@ func (a *routeAdmin) buildTransition(info routeAdmissionInfo) (*routeTransition,
 }
 
 func (a *routeAdmin) buildBindingForTable(tableID, schemaID int64, commitTs uint64) (admission, error) {
-	// New-table DDL reaches route admission before the table dispatcher is admitted,
-	// so the schema lookup must not depend on dispatcher table registration.
-	tableInfo, err := a.schemaStore.ForceGetTableInfo(a.keyspaceMeta, tableID, commitTs)
+	// Some DDL route transitions reach route admission before the target table
+	// dispatcher is admitted, so route precheck asks only for the source name
+	// and must not depend on dispatcher table registration.
+	tableName, err := a.schemaStore.GetTableNameByID(a.keyspaceMeta, tableID, commitTs)
 	if err != nil {
 		return admission{}, err
 	}
@@ -396,7 +397,7 @@ func (a *routeAdmin) buildBindingForTable(tableID, schemaID int64, commitTs uint
 				"schema ID hint is missing for table %d", tableID)
 		}
 	}
-	binding, err := a.route(tableInfo.GetSchemaName(), tableInfo.GetTableName())
+	binding, err := a.route(tableName.Schema, tableName.Table)
 	if err != nil {
 		return admission{}, err
 	}

@@ -47,12 +47,18 @@ type SchemaStore interface {
 
 	UnregisterTable(keyspaceMeta common.KeyspaceMeta, tableID int64) error
 
-	// GetTableInfo return table info with the largest version <= ts
+	// GetTableInfo returns full table schema with the largest version <= ts.
+	// It is for already admitted table dispatchers: the table must have been
+	// registered through RegisterTable so schema store keeps its versioned table
+	// info cache.
 	GetTableInfo(keyspaceMeta common.KeyspaceMeta, tableID int64, ts uint64) (*common.TableInfo, error)
 
-	// ForceGetTableInfo returns table info without requiring the table to be registered.
-	// Metadata-only DDL handling paths use this before a dispatcher exists for a new table.
-	ForceGetTableInfo(keyspaceMeta common.KeyspaceMeta, tableID int64, ts uint64) (*common.TableInfo, error)
+	// GetTableNameByID returns the source schema/table name with the largest
+	// version <= ts. Unlike GetTableInfo, it does not require the table
+	// dispatcher to be admitted or registered. DDL admission/precheck uses this
+	// after schema store has applied the DDL but before a newly created table
+	// dispatcher has registered its full table info cache.
+	GetTableNameByID(keyspaceMeta common.KeyspaceMeta, tableID int64, ts uint64) (common.TableName, error)
 
 	// TODO: how to respect tableFilter
 	GetTableDDLEventState(keyspaceMeta common.KeyspaceMeta, tableID int64) (DDLEventState, error)
@@ -398,14 +404,14 @@ func (s *schemaStore) GetTableInfo(keyspaceMeta common.KeyspaceMeta, tableID int
 	return store.dataStorage.getTableInfo(tableID, ts)
 }
 
-func (s *schemaStore) ForceGetTableInfo(
+func (s *schemaStore) GetTableNameByID(
 	keyspaceMeta common.KeyspaceMeta,
 	tableID int64,
 	ts uint64,
-) (*common.TableInfo, error) {
+) (common.TableName, error) {
 	store, err := s.getKeyspaceSchemaStore(keyspaceMeta)
 	if err != nil {
-		return nil, err
+		return common.TableName{}, err
 	}
 
 	metrics.SchemaStoreGetTableInfoCounter.Inc()
@@ -414,7 +420,14 @@ func (s *schemaStore) ForceGetTableInfo(
 		metrics.SchemaStoreGetTableInfoLagHist.Observe(time.Since(start).Seconds())
 	}()
 	store.waitResolvedTs(tableID, ts, 2*time.Second)
-	return store.dataStorage.forceGetTableInfo(tableID, ts)
+	tableInfo, err := store.dataStorage.forceGetTableInfo(tableID, ts)
+	if err != nil {
+		return common.TableName{}, err
+	}
+	if tableInfo == nil {
+		return common.TableName{}, errors.ErrTableIsNotFounded.GenWithStackByArgs("tableID", tableID)
+	}
+	return tableInfo.TableName, nil
 }
 
 func (s *schemaStore) GetTableDDLEventState(keyspaceMeta common.KeyspaceMeta, tableID int64) (DDLEventState, error) {

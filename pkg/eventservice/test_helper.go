@@ -42,7 +42,7 @@ type mockSchemaStore struct {
 	registerTableError      error
 	requireRegisteredTables bool
 	registeredTables        map[common.TableID]int
-	forceGetTableInfoCount  map[common.TableID]int
+	getTableNameByIDCount   map[common.TableID]int
 }
 
 func NewMockSchemaStore() *mockSchemaStore {
@@ -52,8 +52,8 @@ func NewMockSchemaStore() *mockSchemaStore {
 		resolvedTs:     math.MaxUint64,
 		maxDDLCommitTs: math.MaxUint64,
 
-		registeredTables:       make(map[common.TableID]int),
-		forceGetTableInfoCount: make(map[common.TableID]int),
+		registeredTables:      make(map[common.TableID]int),
+		getTableNameByIDCount: make(map[common.TableID]int),
 	}
 }
 
@@ -101,8 +101,8 @@ func (m *mockSchemaStore) RequireRegisteredTablesForGetTableInfo() {
 	m.requireRegisteredTables = true
 }
 
-func (m *mockSchemaStore) ForceGetTableInfoCount(tableID common.TableID) int {
-	return m.forceGetTableInfoCount[tableID]
+func (m *mockSchemaStore) GetTableNameByIDCount(tableID common.TableID) int {
+	return m.getTableNameByIDCount[tableID]
 }
 
 func (m *mockSchemaStore) GetTableInfo(keyspaceMeta common.KeyspaceMeta, tableID common.TableID, ts common.Ts) (*common.TableInfo, error) {
@@ -112,9 +112,17 @@ func (m *mockSchemaStore) GetTableInfo(keyspaceMeta common.KeyspaceMeta, tableID
 	return m.getTableInfo(tableID, ts)
 }
 
-func (m *mockSchemaStore) ForceGetTableInfo(_ common.KeyspaceMeta, tableID common.TableID, ts common.Ts) (*common.TableInfo, error) {
-	m.forceGetTableInfoCount[tableID]++
-	return m.getTableInfo(tableID, ts)
+func (m *mockSchemaStore) GetTableNameByID(
+	_ common.KeyspaceMeta,
+	tableID common.TableID,
+	ts common.Ts,
+) (common.TableName, error) {
+	m.getTableNameByIDCount[tableID]++
+	tableInfo, err := m.getTableInfo(tableID, ts)
+	if err != nil || tableInfo == nil {
+		return common.TableName{}, err
+	}
+	return tableInfo.TableName, nil
 }
 
 func (m *mockSchemaStore) getTableInfo(tableID common.TableID, ts common.Ts) (*common.TableInfo, error) {

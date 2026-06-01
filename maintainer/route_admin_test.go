@@ -91,7 +91,7 @@ func TestRouteAdminAdmitsAddedTables(t *testing.T) {
 	ready, err = admin.precheck(info)
 	require.NoError(t, err)
 	require.True(t, ready)
-	require.Equal(t, 1, store.ForceGetTableInfoCount(3))
+	require.Equal(t, 1, store.GetTableNameByIDCount(3))
 	require.NoError(t, admin.apply(info))
 
 	store.AppendDDLEvent(4, routeTableInfoDDL(4, "db4", "t"))
@@ -113,7 +113,7 @@ func TestRouteAdminAdmitsAddedTables(t *testing.T) {
 
 	_, ok = admin.tableSources[4]
 	require.True(t, ok)
-	require.Equal(t, 0, store.ForceGetTableInfoCount(common.DDLSpanTableID))
+	require.Equal(t, 0, store.GetTableNameByIDCount(common.DDLSpanTableID))
 }
 
 func TestRouteAdminApplyBuildsRecoveredTransition(t *testing.T) {
@@ -159,7 +159,7 @@ func TestRouteAdminCachesRouteNeutralBlockEvents(t *testing.T) {
 	ready, err := admin.precheck(info)
 	require.NoError(t, err)
 	require.True(t, ready)
-	require.Equal(t, 1, store.ForceGetTableInfoCount(1))
+	require.Equal(t, 1, store.GetTableNameByIDCount(1))
 	require.Len(t, admin.routeNeutralEventCache, 1)
 	require.Empty(t, admin.pendingEvents)
 	require.Empty(t, admin.pendingQueue)
@@ -167,11 +167,11 @@ func TestRouteAdminCachesRouteNeutralBlockEvents(t *testing.T) {
 	ready, err = admin.precheck(info)
 	require.NoError(t, err)
 	require.True(t, ready)
-	require.Equal(t, 1, store.ForceGetTableInfoCount(1))
+	require.Equal(t, 1, store.GetTableNameByIDCount(1))
 	require.Len(t, admin.routeNeutralEventCache, 1)
 
 	require.NoError(t, admin.apply(info))
-	require.Equal(t, 1, store.ForceGetTableInfoCount(1))
+	require.Equal(t, 1, store.GetTableNameByIDCount(1))
 	require.Empty(t, admin.routeNeutralEventCache)
 	require.Empty(t, admin.pendingEvents)
 	require.Empty(t, admin.pendingQueue)
@@ -343,7 +343,7 @@ func newTestRouteAdmin(t *testing.T, targetSchema, targetTable string) *routeAdm
 type routeSchemaStoreMock interface {
 	AppendDDLEvent(id common.TableID, ddls ...commonEvent.DDLEvent)
 	RequireRegisteredTablesForGetTableInfo()
-	ForceGetTableInfoCount(tableID common.TableID) int
+	GetTableNameByIDCount(tableID common.TableID) int
 }
 
 func testRouteSchemaStore(t *testing.T, admin *routeAdmin) routeSchemaStoreMock {
