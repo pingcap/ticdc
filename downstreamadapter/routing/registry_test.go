@@ -22,156 +22,85 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestTargetTableRegistryAdd(t *testing.T) {
-	t.Parallel()
-
-	changefeedID := common.NewChangeFeedIDWithName("test-changefeed", common.DefaultKeyspaceName)
-	t.Run("non-conflicting bindings", func(t *testing.T) {
-		t.Parallel()
-		r := NewTargetTableRegistry(changefeedID, 0)
-		require.NotNil(t, r)
-
-		require.NoError(t, r.Add(newRouteBinding("db1", "t1", "db1", "t1")))
-		require.NoError(t, r.Add(newRouteBinding("db1", "t2", "archive", "t2")))
-	})
-
-	t.Run("conflicting bindings fail", func(t *testing.T) {
-		t.Parallel()
-		r := NewTargetTableRegistry(changefeedID, 0)
-
-		require.NoError(t, r.Add(newRouteBinding("db1", "t1", "archive", "orders")))
-		err := r.Add(newRouteBinding("db2", "t1", "archive", "orders"))
-		require.Error(t, err)
-		require.True(t, errors.ErrTableRouteConflict.Equal(err))
-		require.Contains(t, err.Error(), "target `archive`.`orders`")
-		require.Contains(t, err.Error(), "source `db1`.`t1`")
-		require.Contains(t, err.Error(), "source `db2`.`t1`")
-	})
-
-	t.Run("same source mapping is idempotent", func(t *testing.T) {
-		t.Parallel()
-		r := NewTargetTableRegistry(changefeedID, 0)
-
-		require.NoError(t, r.Add(newRouteBinding("db1", "t1", "db1", "t1")))
-		require.NoError(t, r.Add(newRouteBinding("db1", "t1", "db1", "t1")))
-	})
-}
-
-func TestTargetTableRegistryRemove(t *testing.T) {
+func TestTargetTableRegistry(t *testing.T) {
 	t.Parallel()
 
 	changefeedID := common.NewChangeFeedIDWithName("test-changefeed", common.DefaultKeyspaceName)
 	r := NewTargetTableRegistry(changefeedID, 0)
+	require.NotNil(t, r)
 
-	require.NoError(t, r.Add(newRouteBinding("db1", "t1", "archive", "orders")))
-	require.Len(t, r.target2Source, 1)
+	require.NoError(t, r.Add(newRouteBinding("db1", "t1", "db1", "t1")))
+	require.NoError(t, r.Add(newRouteBinding("db1", "t2", "archive", "t2")))
+	require.NoError(t, r.Add(newRouteBinding("db1", "t3", "archive", "orders")))
 
-	r.Remove(TableKey{Schema: "db1", Table: "t1"})
-	require.Empty(t, r.target2Source)
+	err := r.Add(newRouteBinding("db2", "t1", "archive", "orders"))
+	require.Error(t, err)
+	require.True(t, errors.ErrTableRouteConflict.Equal(err))
+	require.Contains(t, err.Error(), "target `archive`.`orders`")
+	require.Contains(t, err.Error(), "source `db1`.`t3`")
+	require.Contains(t, err.Error(), "source `db2`.`t1`")
 
-	require.NoError(t, r.Add(newRouteBinding("db2", "t1", "archive", "orders")))
-	r.Remove(TableKey{Schema: "db1", Table: "t1"})
-	require.Len(t, r.target2Source, 1)
-}
+	require.NoError(t, r.Add(newRouteBinding("db1", "t1", "db1", "t1")))
 
-func TestTargetTableRegistryRejectsSourceRetarget(t *testing.T) {
-	t.Parallel()
-
-	changefeedID := common.NewChangeFeedIDWithName("test-changefeed", common.DefaultKeyspaceName)
-	r := NewTargetTableRegistry(changefeedID, 0)
-
-	require.NoError(t, r.Add(newRouteBinding("db1", "t1", "archive", "orders")))
-	err := r.Add(newRouteBinding("db1", "t1", "archive", "orders_new"))
+	err = r.Add(newRouteBinding("db1", "t1", "archive", "orders_new"))
 	require.Error(t, err)
 	require.True(t, errors.ErrInternalCheckFailed.Equal(err))
-}
 
-func TestTargetTableRegistryApplyTransition(t *testing.T) {
-	t.Parallel()
+	r.Remove(TableKey{Schema: "db1", Table: "t3"})
+	require.Len(t, r.target2Source, 2)
+	require.NoError(t, r.Add(newRouteBinding("db2", "t1", "archive", "orders")))
+	r.Remove(TableKey{Schema: "db1", Table: "t3"})
+	require.Len(t, r.target2Source, 3)
 
-	changefeedID := common.NewChangeFeedIDWithName("test-changefeed", common.DefaultKeyspaceName)
+	require.NoError(t, r.ApplyTransition(
+		[]TableKey{{Schema: "db2", Table: "t1"}},
+		[]RouteBinding{newRouteBinding("db2", "t1_new", "archive", "orders")},
+		true,
+	))
+	require.Len(t, r.target2Source, 3)
+	err = r.Add(newRouteBinding("db3", "t3", "archive", "orders"))
+	require.Error(t, err)
+	require.True(t, errors.ErrTableRouteConflict.Equal(err))
 
-	t.Run("rename replace succeeds atomically", func(t *testing.T) {
-		t.Parallel()
-		r := NewTargetTableRegistry(changefeedID, 0)
-		require.NoError(t, r.Add(newRouteBinding("db1", "t1", "archive", "orders")))
-		require.NoError(t, r.Add(newRouteBinding("db2", "t2", "archive", "customers")))
+	err = r.ApplyTransition(
+		[]TableKey{{Schema: "db2", Table: "t1_new"}},
+		[]RouteBinding{newRouteBinding("db3", "t3", "archive", "t2")},
+		true,
+	)
+	require.Error(t, err)
+	require.True(t, errors.ErrTableRouteConflict.Equal(err))
+	require.Len(t, r.target2Source, 3)
+	require.NoError(t, r.Add(newRouteBinding("db2", "t1_new", "archive", "orders")))
 
-		require.NoError(t, r.ApplyTransition(
-			[]TableKey{{Schema: "db1", Table: "t1"}},
-			[]RouteBinding{newRouteBinding("db1", "t1_new", "archive", "orders")},
-			true,
-		))
+	err = r.ApplyTransition(nil, []RouteBinding{
+		newRouteBinding("db4", "t4", "archive", "invoices"),
+	}, false)
+	require.NoError(t, err)
+	require.Len(t, r.target2Source, 3)
 
-		require.Len(t, r.target2Source, 2)
-		err := r.Add(newRouteBinding("db3", "t3", "archive", "orders"))
-		require.Error(t, err)
-		require.True(t, errors.ErrTableRouteConflict.Equal(err))
-	})
+	require.NoError(t, r.Add(newRouteBinding("db4", "t4", "archive", "invoices")))
+	err = r.ApplyTransition(nil, []RouteBinding{
+		newRouteBinding("db5", "t5", "archive", "invoices"),
+	}, false)
+	require.Error(t, err)
+	require.True(t, errors.ErrTableRouteConflict.Equal(err))
+	require.Len(t, r.target2Source, 4)
 
-	t.Run("conflict leaves registry unchanged", func(t *testing.T) {
-		t.Parallel()
-		r := NewTargetTableRegistry(changefeedID, 0)
-		require.NoError(t, r.Add(newRouteBinding("db1", "t1", "archive", "orders")))
-		require.NoError(t, r.Add(newRouteBinding("db2", "t2", "archive", "customers")))
+	err = r.ApplyTransition(nil, []RouteBinding{
+		newRouteBinding("db6", "t6", "archive", "payments"),
+		newRouteBinding("db7", "t7", "archive", "payments"),
+	}, true)
+	require.Error(t, err)
+	require.True(t, errors.ErrTableRouteConflict.Equal(err))
+	require.Len(t, r.target2Source, 4)
 
-		err := r.ApplyTransition(
-			[]TableKey{{Schema: "db1", Table: "t1"}},
-			[]RouteBinding{newRouteBinding("db3", "t3", "archive", "customers")},
-			true,
-		)
-		require.Error(t, err)
-		require.True(t, errors.ErrTableRouteConflict.Equal(err))
-
-		require.Len(t, r.target2Source, 2)
-		require.NoError(t, r.Add(newRouteBinding("db1", "t1", "archive", "orders")))
-	})
-
-	t.Run("internal duplicate target fails before mutation", func(t *testing.T) {
-		t.Parallel()
-		r := NewTargetTableRegistry(changefeedID, 0)
-
-		err := r.ApplyTransition(nil, []RouteBinding{
-			newRouteBinding("db1", "t1", "archive", "orders"),
-			newRouteBinding("db2", "t2", "archive", "orders"),
-		}, true)
-		require.Error(t, err)
-		require.True(t, errors.ErrTableRouteConflict.Equal(err))
-		require.Empty(t, r.target2Source)
-	})
-
-	t.Run("internal duplicate source fails before mutation", func(t *testing.T) {
-		t.Parallel()
-		r := NewTargetTableRegistry(changefeedID, 0)
-
-		err := r.ApplyTransition(nil, []RouteBinding{
-			newRouteBinding("db1", "t1", "archive", "orders"),
-			newRouteBinding("db1", "t1", "archive", "orders_new"),
-		}, true)
-		require.Error(t, err)
-		require.True(t, errors.ErrInternalCheckFailed.Equal(err))
-		require.Empty(t, r.target2Source)
-	})
-
-	t.Run("check-only mode does not mutate", func(t *testing.T) {
-		t.Parallel()
-		r := NewTargetTableRegistry(changefeedID, 0)
-		require.NoError(t, r.Add(newRouteBinding("db1", "t1", "archive", "orders")))
-
-		err := r.ApplyTransition(nil, []RouteBinding{
-			newRouteBinding("db2", "t2", "archive", "customers"),
-		}, false)
-		require.NoError(t, err)
-		require.Len(t, r.target2Source, 1)
-
-		require.NoError(t, r.Add(newRouteBinding("db2", "t2", "archive", "customers")))
-		err = r.ApplyTransition(nil, []RouteBinding{
-			newRouteBinding("db3", "t3", "archive", "customers"),
-		}, false)
-		require.Error(t, err)
-		require.True(t, errors.ErrTableRouteConflict.Equal(err))
-		require.Len(t, r.target2Source, 2)
-	})
+	err = r.ApplyTransition(nil, []RouteBinding{
+		newRouteBinding("db6", "t6", "archive", "payments"),
+		newRouteBinding("db6", "t6", "archive", "payments_new"),
+	}, true)
+	require.Error(t, err)
+	require.True(t, errors.ErrInternalCheckFailed.Equal(err))
+	require.Len(t, r.target2Source, 4)
 }
 
 func TestValidateNoStaticRouteConflict(t *testing.T) {

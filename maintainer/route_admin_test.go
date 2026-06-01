@@ -55,8 +55,9 @@ func TestRouteAdminPrecheckReportsConflict(t *testing.T) {
 	require.False(t, ok)
 }
 
-func TestRouteAdminApplyUpdatesRegistry(t *testing.T) {
+func TestRouteAdminAdmitsAddedTables(t *testing.T) {
 	admin := newTestRouteAdmin(t, routing.SchemaPlaceholder+"_target", routing.TablePlaceholder)
+	store := testRouteSchemaStore(t, admin)
 
 	info := routeAdmissionInfo{
 		key:      getEventKey(10, false),
@@ -77,6 +78,42 @@ func TestRouteAdminApplyUpdatesRegistry(t *testing.T) {
 	binding, ok := admin.tableSources[2]
 	require.True(t, ok)
 	require.Equal(t, routing.TableKey{Schema: "db2_target", Table: "t"}, binding.binding.Target)
+
+	store.AppendDDLEvent(3, routeTableInfoDDL(3, "db3", "t"))
+	store.RequireRegisteredTablesForGetTableInfo()
+	info = routeAdmissionInfo{
+		key:      getEventKey(20, false),
+		commitTs: 20,
+		addedTables: []*heartbeatpb.Table{
+			{SchemaID: 3, TableID: 3},
+		},
+	}
+	ready, err = admin.precheck(info)
+	require.NoError(t, err)
+	require.True(t, ready)
+	require.Equal(t, 1, store.ForceGetTableInfoCount(3))
+	require.NoError(t, admin.apply(info))
+
+	store.AppendDDLEvent(4, routeTableInfoDDL(4, "db4", "t"))
+	info = routeAdmissionInfo{
+		key:      getEventKey(30, false),
+		commitTs: 30,
+		blockTables: &heartbeatpb.InfluencedTables{
+			InfluenceType: heartbeatpb.InfluenceType_Normal,
+			TableIDs:      []int64{common.DDLSpanTableID, 1},
+		},
+		addedTables: []*heartbeatpb.Table{
+			{SchemaID: 4, TableID: 4},
+		},
+	}
+	ready, err = admin.precheck(info)
+	require.NoError(t, err)
+	require.True(t, ready)
+	require.NoError(t, admin.apply(info))
+
+	_, ok = admin.tableSources[4]
+	require.True(t, ok)
+	require.Equal(t, 0, store.ForceGetTableInfoCount(common.DDLSpanTableID))
 }
 
 func TestRouteAdminApplyBuildsRecoveredTransition(t *testing.T) {
@@ -102,48 +139,6 @@ func TestRouteAdminApplyBuildsRecoveredTransition(t *testing.T) {
 	require.Equal(t, routing.TableKey{Schema: "target", Table: "u"}, binding.binding.Target)
 	require.Empty(t, admin.pendingEvents)
 	require.Empty(t, admin.pendingQueue)
-}
-
-func TestRouteAdminReadsNewTableBeforeDispatcherRegistration(t *testing.T) {
-	admin := newTestRouteAdmin(t, routing.SchemaPlaceholder+"_target", routing.TablePlaceholder)
-	store := testRouteSchemaStore(t, admin)
-	store.AppendDDLEvent(3, routeTableInfoDDL(3, "db3", "t"))
-	store.RequireRegisteredTablesForGetTableInfo()
-
-	info := routeAdmissionInfo{
-		key:      getEventKey(10, false),
-		commitTs: 10,
-		addedTables: []*heartbeatpb.Table{
-			{SchemaID: 3, TableID: 3},
-		},
-	}
-	ready, err := admin.precheck(info)
-	require.NoError(t, err)
-	require.True(t, ready)
-	require.Equal(t, 1, store.ForceGetTableInfoCount(3))
-}
-
-func TestRouteAdminIgnoresDDLSpanInBlockTables(t *testing.T) {
-	admin := newTestRouteAdmin(t, routing.SchemaPlaceholder+"_target", routing.TablePlaceholder)
-
-	info := routeAdmissionInfo{
-		key:      getEventKey(10, false),
-		commitTs: 10,
-		blockTables: &heartbeatpb.InfluencedTables{
-			InfluenceType: heartbeatpb.InfluenceType_Normal,
-			TableIDs:      []int64{common.DDLSpanTableID, 1},
-		},
-		addedTables: []*heartbeatpb.Table{
-			{SchemaID: 2, TableID: 2},
-		},
-	}
-	ready, err := admin.precheck(info)
-	require.NoError(t, err)
-	require.True(t, ready)
-	require.NoError(t, admin.apply(info))
-
-	_, ok := admin.tableSources[2]
-	require.True(t, ok)
 }
 
 func TestRouteAdminCachesRouteNeutralBlockEvents(t *testing.T) {
