@@ -156,9 +156,11 @@ func TestChangefeed_NewAddMaintainerMessage(t *testing.T) {
 	cf := NewChangefeed(cfID, info, 100, true)
 
 	server := node.ID("server-1")
-	msg := cf.NewAddMaintainerMessage(server)
+	msg := cf.NewAddMaintainerMessage(server, 42)
 	require.Equal(t, server, msg.To)
 	require.Equal(t, messaging.MaintainerManagerTopic, msg.Topic)
+	req := msg.Message[0].(*heartbeatpb.AddMaintainerRequest)
+	require.Equal(t, uint64(42), req.MaintainerEpoch)
 }
 
 func TestChangefeed_NewRemoveMaintainerMessage(t *testing.T) {

@@ -40,9 +40,10 @@ const (
 // Note: OperatorController can call Schedule/Check/OnNodeRemove concurrently under a
 // shared read lock, so the operator's internal state must be concurrency-safe.
 type AddMaintainerOperator struct {
-	cf       *changefeed.Changefeed
-	dest     node.ID
-	finished atomic.Bool
+	cf              *changefeed.Changefeed
+	dest            node.ID
+	maintainerEpoch uint64
+	finished        atomic.Bool
 	// canceled records why the operator stops scheduling.
 	// It must be atomic because Schedule can run concurrently with OnNodeRemove/OnTaskRemoved.
 	canceled atomic.Int32
@@ -56,9 +57,10 @@ func NewAddMaintainerOperator(
 	dest node.ID,
 ) *AddMaintainerOperator {
 	return &AddMaintainerOperator{
-		cf:   cf,
-		dest: dest,
-		db:   db,
+		cf:              cf,
+		dest:            dest,
+		maintainerEpoch: cf.GetMaintainerEpoch(),
+		db:              db,
 	}
 }
 
@@ -73,11 +75,19 @@ func (m *AddMaintainerOperator) Check(from node.ID, status *heartbeatpb.Maintain
 	// This avoids false positives when a removal-only maintainer reports Working.
 	if !m.finished.Load() && from == m.dest &&
 		status.State == heartbeatpb.ComponentState_Working &&
-		status.BootstrapDone {
+		status.BootstrapDone &&
+		maintainerEpochMatches(m.maintainerEpoch, status.MaintainerEpoch) {
 		log.Info("maintainer report working status",
-			zap.String("changefeed", m.cf.ID.String()))
+			zap.String("changefeed", m.cf.ID.String()),
+			zap.Uint64("maintainerEpoch", status.MaintainerEpoch))
 		m.finished.Store(true)
 	}
+}
+
+func maintainerEpochMatches(expected, actual uint64) bool {
+	// Epoch zero means one side is from an older binary or a test fixture that
+	// does not participate in maintainer epoch fencing yet.
+	return expected == 0 || actual == 0 || expected == actual
 }
 
 // Schedule builds the "add maintainer" command message, or returns nil when finished/canceled.
@@ -85,7 +95,7 @@ func (m *AddMaintainerOperator) Schedule() *messaging.TargetMessage {
 	if m.finished.Load() || m.canceled.Load() != None {
 		return nil
 	}
-	return m.cf.NewAddMaintainerMessage(m.dest)
+	return m.cf.NewAddMaintainerMessage(m.dest, m.maintainerEpoch)
 }
 
 // OnNodeRemove cancels the operator when the destination node goes offline.
@@ -138,8 +148,8 @@ func (m *AddMaintainerOperator) PostFinish() {
 
 // String returns a human-readable description of the operator, for logging.
 func (m *AddMaintainerOperator) String() string {
-	return fmt.Sprintf("add maintainer operator: %s, dest:%s",
-		m.cf.ID, m.dest)
+	return fmt.Sprintf("add maintainer operator: %s, dest:%s, epoch:%d",
+		m.cf.ID, m.dest, m.maintainerEpoch)
 }
 
 // Type returns the operator type used by metrics/logging.

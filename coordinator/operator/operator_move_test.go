@@ -84,6 +84,7 @@ func TestMoveMaintainerOperator_CheckRequiresDestBootstrapDone(t *testing.T) {
 		ChangefeedID: cfID,
 		Config:       config.GetDefaultReplicaConfig(),
 		SinkURI:      "mysql://127.0.0.1:3306",
+		Epoch:        7,
 	},
 		1, true)
 	changefeedDB.AddReplicatingMaintainer(cf, "n1")
@@ -93,16 +94,27 @@ func TestMoveMaintainerOperator_CheckRequiresDestBootstrapDone(t *testing.T) {
 	op.Check("n1", &heartbeatpb.MaintainerStatus{State: heartbeatpb.ComponentState_Stopped})
 	require.True(t, op.originNodeStopped)
 	require.False(t, op.finished)
+	req := op.Schedule().Message[0].(*heartbeatpb.AddMaintainerRequest)
+	require.Equal(t, uint64(7), req.MaintainerEpoch)
 
 	op.Check("n2", &heartbeatpb.MaintainerStatus{
-		State:         heartbeatpb.ComponentState_Working,
-		BootstrapDone: false,
+		State:           heartbeatpb.ComponentState_Working,
+		BootstrapDone:   true,
+		MaintainerEpoch: 6,
 	})
 	require.False(t, op.finished)
 
 	op.Check("n2", &heartbeatpb.MaintainerStatus{
-		State:         heartbeatpb.ComponentState_Working,
-		BootstrapDone: true,
+		State:           heartbeatpb.ComponentState_Working,
+		BootstrapDone:   false,
+		MaintainerEpoch: 7,
+	})
+	require.False(t, op.finished)
+
+	op.Check("n2", &heartbeatpb.MaintainerStatus{
+		State:           heartbeatpb.ComponentState_Working,
+		BootstrapDone:   true,
+		MaintainerEpoch: 7,
 	})
 	require.True(t, op.finished)
 	require.Nil(t, op.Schedule())

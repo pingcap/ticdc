@@ -195,6 +195,9 @@ func (p *managerMaintainerSet) handleAddMaintainer(
 			zap.Uint64("checkpointTs", req.CheckpointTs))
 		return nil
 	}
+	if req.MaintainerEpoch != 0 {
+		info.Epoch = req.MaintainerEpoch
+	}
 	maintainer := NewMaintainer(changefeedID, p.conf, info, p.nodeInfo, p.taskScheduler, req.CheckpointTs, req.IsNewChangefeed, req.KeyspaceId)
 	registered, loaded := p.registry.LoadOrStore(changefeedID, maintainer)
 	if loaded {

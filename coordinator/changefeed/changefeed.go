@@ -106,6 +106,17 @@ func (c *Changefeed) SetInfo(info *config.ChangeFeedInfo) {
 	c.info.Store(info)
 }
 
+func (c *Changefeed) GetMaintainerEpoch() uint64 {
+	if c == nil || c.info == nil {
+		return 0
+	}
+	info := c.GetInfo()
+	if info == nil {
+		return 0
+	}
+	return info.Epoch
+}
+
 func (c *Changefeed) StartFinished() {
 	c.backoff.StartFinished()
 }
@@ -246,7 +257,7 @@ func (c *Changefeed) GetLastSavedCheckPointTs() uint64 {
 	return c.lastSavedCheckpointTs.Load()
 }
 
-func (c *Changefeed) NewAddMaintainerMessage(server node.ID) *messaging.TargetMessage {
+func (c *Changefeed) NewAddMaintainerMessage(server node.ID, maintainerEpoch uint64) *messaging.TargetMessage {
 	return messaging.NewSingleTargetMessage(server,
 		messaging.MaintainerManagerTopic,
 		&heartbeatpb.AddMaintainerRequest{
@@ -255,6 +266,7 @@ func (c *Changefeed) NewAddMaintainerMessage(server node.ID) *messaging.TargetMe
 			Config:          c.configBytes,
 			IsNewChangefeed: c.isNew,
 			KeyspaceId:      c.GetKeyspaceID(),
+			MaintainerEpoch: maintainerEpoch,
 		})
 }
 

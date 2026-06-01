@@ -621,7 +621,18 @@ func (c *Controller) finishBootstrap(ctx context.Context, runningChangefeeds map
 				zap.String("changefeed", cfID.String()),
 				zap.String("node", rm.nodeID.String()),
 				zap.String("status", common.FormatMaintainerStatus(rm.status)))
-			cf := changefeed.NewChangefeed(cfID, cfMeta.Info, rm.status.CheckpointTs, false)
+			info := cfMeta.Info
+			if epoch := rm.status.GetMaintainerEpoch(); epoch != 0 && info.Epoch != epoch {
+				clonedInfo, err := info.Clone()
+				if err != nil {
+					log.Panic("clone changefeed info failed",
+						zap.Stringer("changefeed", cfID),
+						zap.Error(err))
+				}
+				clonedInfo.Epoch = epoch
+				info = clonedInfo
+			}
+			cf := changefeed.NewChangefeed(cfID, info, rm.status.CheckpointTs, false)
 			c.changefeedDB.AddReplicatingMaintainer(cf, rm.nodeID)
 			delete(runningChangefeeds, cfID)
 		}

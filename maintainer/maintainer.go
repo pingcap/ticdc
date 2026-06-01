@@ -388,6 +388,9 @@ func (m *Maintainer) GetMaintainerStatus() *heartbeatpb.MaintainerStatus {
 		BootstrapDone: m.initialized.Load(),
 		LastSyncedTs:  m.getWatermark().LastSyncedTs,
 	}
+	if m.info != nil {
+		status.MaintainerEpoch = m.info.Epoch
+	}
 	drainTarget, drainEpoch := m.controller.getDispatcherDrainTarget()
 	if !drainTarget.IsEmpty() && drainEpoch > 0 {
 		// Report drain progress against the controller snapshot that all local
