@@ -116,25 +116,12 @@ func NewBlockEvent(cfID common.ChangeFeedID,
 		mode:               mode,
 		// if the split table is enable for this changefeed, if not we can use tableID to check coverage
 		dynamicSplitEnabled: dynamicSplitEnabled,
-
+		rangeChecker:        newRangeCheck(status, dynamicSplitEnabled, spanController.GetkeyspaceID()),
 		reportedDispatchers: make(map[common.DispatcherID]struct{}),
 		lastResendTime:      time.Time{},
 
 		lastStatusReceivedTime: time.Now(),
 		lastWarningLogTime:     time.Now(),
-	}
-
-	if status.BlockTables == nil {
-		event.rangeChecker = range_checker.NewBoolRangeChecker(true)
-	} else {
-		switch status.BlockTables.InfluenceType {
-		case heartbeatpb.InfluenceType_Normal:
-			if dynamicSplitEnabled {
-				event.rangeChecker = range_checker.NewTableSpanRangeChecker(spanController.GetkeyspaceID(), status.BlockTables.TableIDs)
-			} else {
-				event.rangeChecker = range_checker.NewTableCountChecker(status.BlockTables.TableIDs)
-			}
-		}
 	}
 
 	log.Info("new block event is created",
@@ -144,6 +131,22 @@ func NewBlockEvent(cfID common.ChangeFeedID,
 		zap.Any("detail", status),
 		zap.Int64("mode", event.mode))
 	return event
+}
+
+func newRangeCheck(status *heartbeatpb.State, dynamicSplitEnabled bool, keyspaceID uint32) range_checker.RangeChecker {
+	if status.BlockTables == nil {
+		return range_checker.NewBoolRangeChecker(true)
+	}
+
+	if status.BlockTables.InfluenceType != heartbeatpb.InfluenceType_Normal {
+		return nil
+	}
+
+	if dynamicSplitEnabled {
+		return range_checker.NewTableSpanRangeChecker(keyspaceID, status.BlockTables.TableIDs)
+	}
+
+	return range_checker.NewTableCountChecker(status.BlockTables.TableIDs)
 }
 
 func (be *BarrierEvent) routeAdmissionInfo() routeAdmissionInfo {
@@ -213,12 +216,8 @@ func (be *BarrierEvent) checkEventAction(dispatcherID common.DispatcherID) (*hea
 // it will select a dispatcher as the writer, reset the range checker ,and move the event to the selected state
 // returns the dispatcher status to the dispatcher manager
 func (be *BarrierEvent) onAllDispatcherReportedBlockEvent(dispatcherID common.DispatcherID) (*heartbeatpb.DispatcherStatus, node.ID) {
-	var dispatcher common.DispatcherID
-	barrierType := "DDLDispatcherOnly"
-	if be.blockedDispatchers == nil {
-		dispatcher = be.spanController.GetDDLDispatcherID()
-	} else {
-		barrierType = be.blockedDispatchers.InfluenceType.String()
+	dispatcher := be.spanController.GetDDLDispatcherID()
+	if be.blockedDispatchers != nil {
 		switch be.blockedDispatchers.InfluenceType {
 		case heartbeatpb.InfluenceType_DB, heartbeatpb.InfluenceType_All:
 			// for all and db type, we always use the table trigger event dispatcher as the writer
@@ -227,7 +226,6 @@ func (be *BarrierEvent) onAllDispatcherReportedBlockEvent(dispatcherID common.Di
 				zap.String("dispatcher", be.spanController.GetDDLDispatcherID().String()),
 				zap.Uint64("commitTs", be.commitTs),
 				zap.Int64("mode", be.mode))
-			dispatcher = be.spanController.GetDDLDispatcherID()
 		default:
 			selected := dispatcherID.ToPB()
 			if be.tableTriggerDispatcherRelated {
@@ -258,7 +256,7 @@ func (be *BarrierEvent) onAllDispatcherReportedBlockEvent(dispatcherID common.Di
 		zap.String("changefeed", be.cfID.Name()),
 		zap.String("dispatcher", be.writerDispatcher.String()),
 		zap.Uint64("commitTs", be.commitTs),
-		zap.String("barrierType", barrierType),
+		zap.String("barrierType", be.blockedDispatchers.InfluenceType.String()),
 		zap.Int64("mode", be.mode))
 	stm := be.spanController.GetTaskByID(be.writerDispatcher)
 	return &heartbeatpb.DispatcherStatus{
