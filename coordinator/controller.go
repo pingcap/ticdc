@@ -510,11 +510,32 @@ func (c *Controller) handleNonExistentChangefeed(
 			zap.Stringer("sourceNode", from),
 			zap.String("status", common.FormatMaintainerStatus(status)))
 
-		keyspaceID := c.getChangefeed(cfID).GetKeyspaceID()
-
 		// Remove working changefeed from maintainer if it's not in changefeedDB
-		_ = c.messageCenter.SendCommand(changefeed.RemoveMaintainerMessage(keyspaceID, cfID, from, true, true))
+		_ = c.messageCenter.SendCommand(removeStaleMaintainerMessage(cfID, from, status))
 	}
+}
+
+func removeStaleMaintainerMessage(
+	cfID common.ChangeFeedID,
+	server node.ID,
+	status *heartbeatpb.MaintainerStatus,
+) *messaging.TargetMessage {
+	var maintainerEpoch uint64
+	if status != nil {
+		maintainerEpoch = status.MaintainerEpoch
+	}
+	// The metastore entry is already gone, so the numeric keyspace ID is no
+	// longer available. The target node has just reported this maintainer, and
+	// the remove path only needs keyspace ID when creating a fallback
+	// removal-only maintainer after the local maintainer is absent.
+	return changefeed.RemoveMaintainerMessageWithEpoch(
+		common.DefaultKeyspaceID,
+		cfID,
+		server,
+		true,
+		true,
+		maintainerEpoch,
+	)
 }
 
 func (c *Controller) validateMaintainerNode(
@@ -652,8 +673,7 @@ func (c *Controller) finishBootstrap(ctx context.Context, runningChangefeeds map
 			zap.String("changefeed", id.Name()),
 			zap.String("node", rm.nodeID.String()),
 		)
-		keyspaceID := c.getChangefeed(id).GetKeyspaceID()
-		_ = c.messageCenter.SendCommand(changefeed.RemoveMaintainerMessage(keyspaceID, id, rm.nodeID, true, true))
+		_ = c.messageCenter.SendCommand(removeStaleMaintainerMessage(id, rm.nodeID, rm.status))
 	}
 
 	// start operator and scheduler

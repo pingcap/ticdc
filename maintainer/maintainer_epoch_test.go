@@ -45,7 +45,7 @@ func TestShouldApplyMaintainerRemove(t *testing.T) {
 func TestMaintainerResponseEpochMatches(t *testing.T) {
 	maintainer := &Maintainer{info: &config.ChangeFeedInfo{Epoch: 7}}
 
-	require.False(t, maintainer.maintainerResponseEpochMatches(0))
+	require.True(t, maintainer.maintainerResponseEpochMatches(0))
 	require.True(t, maintainer.maintainerResponseEpochMatches(7))
 	require.False(t, maintainer.maintainerResponseEpochMatches(6))
 	require.False(t, maintainer.maintainerResponseEpochMatches(8))

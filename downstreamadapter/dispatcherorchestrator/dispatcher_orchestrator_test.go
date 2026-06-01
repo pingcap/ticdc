@@ -461,6 +461,47 @@ func TestShouldAcceptMaintainerRequest(t *testing.T) {
 	require.False(t, shouldAcceptMaintainerRequest(6, 7))
 }
 
+func TestClosedMaintainerEpochRejectsDelayedBootstrap(t *testing.T) {
+	t.Parallel()
+
+	mc := messaging.NewMockMessageCenter()
+	orchestrator := &DispatcherOrchestrator{
+		mc:                     mc,
+		dispatcherManagers:     make(map[common.ChangeFeedID]*dispatchermanager.DispatcherManager),
+		closedMaintainerEpochs: make(map[common.ChangeFeedID]uint64),
+	}
+	cfID := common.NewChangeFeedIDWithName("cf", common.DefaultKeyspaceName)
+	maintainerID := node.ID("maintainer")
+
+	err := orchestrator.handleCloseRequest(maintainerID, &heartbeatpb.MaintainerCloseRequest{
+		ChangefeedID:    cfID.ToPB(),
+		Removed:         true,
+		MaintainerEpoch: 7,
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint64(7), orchestrator.closedMaintainerEpochs[cfID])
+
+	select {
+	case msg := <-mc.GetMessageChannel():
+		require.Equal(t, messaging.TypeMaintainerCloseResponse, msg.Type)
+	case <-time.After(time.Second):
+		t.Fatal("expected close response")
+	}
+
+	err = orchestrator.handleBootstrapRequest(maintainerID, &heartbeatpb.MaintainerBootstrapRequest{
+		ChangefeedID:    cfID.ToPB(),
+		MaintainerEpoch: 7,
+	})
+	require.NoError(t, err)
+	require.Empty(t, orchestrator.dispatcherManagers)
+
+	select {
+	case msg := <-mc.GetMessageChannel():
+		t.Fatalf("unexpected response for stale bootstrap: %s", msg.Type.String())
+	default:
+	}
+}
+
 func TestGetPendingMessageKey_SupportedTypes(t *testing.T) {
 	t.Parallel()
 

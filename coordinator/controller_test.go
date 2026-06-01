@@ -119,6 +119,51 @@ func TestOnPeriodTaskAdvanceLiveness(t *testing.T) {
 	})
 }
 
+func TestHandleNonExistentChangefeedRemovesStaleMaintainerWithEpoch(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	t.Cleanup(ctrl.Finish)
+
+	backend := mock_changefeed.NewMockBackend(ctrl)
+	changefeedDB := changefeed.NewChangefeedDB(1216)
+	self := node.NewInfo("localhost:8300", "")
+	source := node.NewInfo("localhost:8301", "")
+	nodeManager := watcher.NewNodeManager(nil, nil)
+	nodeManager.GetAliveNodes()[self.ID] = self
+	nodeManager.GetAliveNodes()[source.ID] = source
+
+	mc := messaging.NewMockMessageCenter()
+	appcontext.SetService(appcontext.MessageCenter, mc)
+	appcontext.SetService(watcher.NodeManagerName, nodeManager)
+
+	controller := &Controller{
+		changefeedDB: changefeedDB,
+		operatorController: operator.NewOperatorController(
+			self, changefeedDB, backend, 10,
+		),
+		messageCenter: mc,
+	}
+
+	cfID := common.NewChangeFeedIDWithName("stale", common.DefaultKeyspaceName)
+	controller.handleNonExistentChangefeed(cfID, source.ID, &heartbeatpb.MaintainerStatus{
+		ChangefeedID:    cfID.ToPB(),
+		State:           heartbeatpb.ComponentState_Working,
+		BootstrapDone:   true,
+		MaintainerEpoch: 7,
+	})
+
+	select {
+	case msg := <-mc.GetMessageChannel():
+		require.Equal(t, source.ID, msg.To)
+		req := msg.Message[0].(*heartbeatpb.RemoveMaintainerRequest)
+		require.Equal(t, cfID, common.NewChangefeedIDFromPB(req.Id))
+		require.True(t, req.Cascade)
+		require.True(t, req.Removed)
+		require.Equal(t, uint64(7), req.MaintainerEpoch)
+	case <-time.After(time.Second):
+		t.Fatal("expected remove maintainer command")
+	}
+}
+
 func TestResumeChangefeed(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	backend := mock_changefeed.NewMockBackend(ctrl)

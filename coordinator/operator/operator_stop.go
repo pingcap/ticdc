@@ -16,6 +16,7 @@ package operator
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/coordinator/changefeed"
@@ -30,6 +31,7 @@ import (
 
 // StopChangefeedOperator is an operator to remove a maintainer from a node
 type StopChangefeedOperator struct {
+	mu                  sync.RWMutex
 	keyspaceID          uint32
 	cfID                common.ChangeFeedID
 	nodeID              node.ID
@@ -64,7 +66,7 @@ func (m *StopChangefeedOperator) Check(from node.ID, status *heartbeatpb.Maintai
 	if status == nil {
 		return
 	}
-	if from != m.nodeID {
+	if from != m.getNodeID() {
 		return
 	}
 	if !m.finished.Load() &&
@@ -88,7 +90,7 @@ func (m *StopChangefeedOperator) Schedule() *messaging.TargetMessage {
 	return changefeed.RemoveMaintainerMessageWithEpoch(
 		m.keyspaceID,
 		m.cfID,
-		m.nodeID,
+		m.getNodeID(),
 		true,
 		m.changefeedIsRemoved,
 		m.maintainerEpoch,
@@ -97,6 +99,9 @@ func (m *StopChangefeedOperator) Schedule() *messaging.TargetMessage {
 
 // OnNodeRemove is called when node offline, and the maintainer must already move to absent status and will be scheduled again
 func (m *StopChangefeedOperator) OnNodeRemove(n node.ID) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	if n == m.nodeID {
 		log.Info("node is stopped during stop maintainer, schedule stop command to coordinator node",
 			zap.Stringer("changefeed", m.cfID),
@@ -106,7 +111,7 @@ func (m *StopChangefeedOperator) OnNodeRemove(n node.ID) {
 }
 
 func (m *StopChangefeedOperator) AffectedNodes() []node.ID {
-	return []node.ID{m.nodeID}
+	return []node.ID{m.getNodeID()}
 }
 
 func (m *StopChangefeedOperator) ID() common.ChangeFeedID {
@@ -150,7 +155,13 @@ func (m *StopChangefeedOperator) PostFinish() {
 
 func (m *StopChangefeedOperator) String() string {
 	return fmt.Sprintf("stop maintainer operator: %s, dest %s, remove %t",
-		m.cfID, m.nodeID, m.changefeedIsRemoved)
+		m.cfID, m.getNodeID(), m.changefeedIsRemoved)
+}
+
+func (m *StopChangefeedOperator) getNodeID() node.ID {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.nodeID
 }
 
 func (m *StopChangefeedOperator) Type() string {
