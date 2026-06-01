@@ -390,12 +390,12 @@ func (a *routeAdmin) buildBindingForTable(tableID, schemaID int64, commitTs uint
 		return admission{}, err
 	}
 	if schemaID == 0 {
-		if existing, ok := a.tableSources[tableID]; ok {
-			schemaID = existing.sourceSchemaID
-		} else {
+		existing, ok := a.tableSources[tableID]
+		if !ok {
 			return admission{}, errors.ErrInternalCheckFailed.GenWithStack(
 				"schema ID hint is missing for table %d", tableID)
 		}
+		schemaID = existing.sourceSchemaID
 	}
 	binding, err := a.route(tableName.Schema, tableName.Table)
 	if err != nil {
