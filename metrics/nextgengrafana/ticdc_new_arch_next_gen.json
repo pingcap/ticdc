@@ -4591,8 +4591,6 @@
             "align": false,
             "alignLevel": null
           }
-<<<<<<< HEAD
-=======
         },
         {
           "datasource": "${DS_TEST-CLUSTER}",
@@ -4730,7 +4728,6 @@
             }
           ],
           "type": "table"
->>>>>>> 7b68b7051 (metrics: show error time in changefeed error details panel (#5086))
         }
       ],
       "title": "Changefeed",

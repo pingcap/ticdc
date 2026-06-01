@@ -14,13 +14,10 @@
 package coordinator
 
 import (
-<<<<<<< HEAD
-=======
 	"strings"
 	"time"
 
 	"github.com/pingcap/ticdc/pkg/config"
->>>>>>> 7b68b7051 (metrics: show error time in changefeed error details panel (#5086))
 	"github.com/pingcap/ticdc/pkg/messaging"
 )
 
@@ -42,12 +39,12 @@ const (
 	EventPeriod
 )
 
+const changefeedErrorMetricMsgLimit = 256
+
 type Event struct {
 	eventType int
 	message   *messaging.TargetMessage
 }
-<<<<<<< HEAD
-=======
 
 type changefeedErrorMetricLabels struct {
 	keyspace   string
@@ -56,25 +53,6 @@ type changefeedErrorMetricLabels struct {
 	errorTime  string
 	code       string
 	message    string
-}
-
-func isUnchangedRuntimeState(info *config.ChangeFeedInfo, state config.FeedState, err *config.RunningError) bool {
-	if info == nil {
-		return true
-	}
-	if info.State != state {
-		return false
-	}
-	return sameRunningErrorSignature(info.Error, err)
-}
-
-func sameRunningErrorSignature(lhs *config.RunningError, rhs *config.RunningError) bool {
-	if lhs == nil || rhs == nil {
-		return lhs == rhs
-	}
-	return lhs.Addr == rhs.Addr &&
-		lhs.Code == rhs.Code &&
-		lhs.Message == rhs.Message
 }
 
 func (l changefeedErrorMetricLabels) labelValues() []string {
@@ -123,4 +101,3 @@ func getChangefeedErrorMetricLabels(info *config.ChangeFeedInfo) (changefeedErro
 		message:    normalizeChangefeedErrorMetricMessage(runningErr.Message),
 	}, true
 }
->>>>>>> 7b68b7051 (metrics: show error time in changefeed error details panel (#5086))

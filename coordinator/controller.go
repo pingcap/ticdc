@@ -186,6 +186,7 @@ func NewController(
 func (c *Controller) collectMetrics(ctx context.Context) error {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
+	errorMetricLabels := make(map[common.ChangeFeedID]changefeedErrorMetricLabels)
 	for {
 		select {
 		case <-ctx.Done():
@@ -196,6 +197,8 @@ func (c *Controller) collectMetrics(ctx context.Context) error {
 			metrics.ChangefeedStateGauge.WithLabelValues("Scheduling").Set(float64(c.operatorController.OperatorSize()))
 			metrics.ChangefeedStateGauge.WithLabelValues("Absent").Set(float64(c.changefeedDB.GetAbsentSize()))
 			metrics.ChangefeedStateGauge.WithLabelValues("Stopped").Set(float64(c.changefeedDB.GetStoppedSize()))
+
+			currentChangefeeds := make(map[common.ChangeFeedID]struct{})
 
 			c.changefeedDB.Foreach(func(cf *changefeed.Changefeed) {
 				info := cf.GetInfo()
@@ -213,7 +216,32 @@ func (c *Controller) collectMetrics(ctx context.Context) error {
 				lag := float64(pdPhysicalTime-phyCkpTs) / 1e3
 				metrics.ChangefeedCheckpointTsGauge.WithLabelValues(keyspace, name).Set(float64(phyCkpTs))
 				metrics.ChangefeedCheckpointTsLagGauge.WithLabelValues(keyspace, name).Set(lag)
+
+				// Keep only one error-info series per changefeed so stale labels disappear
+				// when the warning or failure changes.
+				currentChangefeeds[cf.ID] = struct{}{}
+				oldLabels, exists := errorMetricLabels[cf.ID]
+				newLabels, hasError := getChangefeedErrorMetricLabels(cf.GetInfo())
+				if exists && hasError && oldLabels == newLabels {
+					return
+				}
+				if exists {
+					metrics.ChangefeedErrorInfoGauge.DeleteLabelValues(oldLabels.labelValues()...)
+				}
+				if hasError {
+					metrics.ChangefeedErrorInfoGauge.WithLabelValues(newLabels.labelValues()...).Set(1)
+					errorMetricLabels[cf.ID] = newLabels
+				} else {
+					delete(errorMetricLabels, cf.ID)
+				}
 			})
+			for changefeedID, labels := range errorMetricLabels {
+				if _, ok := currentChangefeeds[changefeedID]; ok {
+					continue
+				}
+				metrics.ChangefeedErrorInfoGauge.DeleteLabelValues(labels.labelValues()...)
+				delete(errorMetricLabels, changefeedID)
+			}
 		}
 	}
 }
