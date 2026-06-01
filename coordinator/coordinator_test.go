@@ -363,6 +363,48 @@ func (m *mockEtcdClient) GetOwnerID(ctx context.Context) (config.CaptureID, erro
 	return config.CaptureID(m.ownerID), nil
 }
 
+func mockBumpChangefeedEpoch(
+	backend *mock_changefeed.MockBackend,
+	cfs map[common.ChangeFeedID]*changefeed.ChangefeedMetaWrapper,
+) {
+	var mu sync.Mutex
+	backend.EXPECT().
+		BumpChangefeedEpoch(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		DoAndReturn(func(
+			_ context.Context,
+			id common.ChangeFeedID,
+			candidateEpoch uint64,
+			options changefeed.EpochBumpOptions,
+		) (*config.ChangeFeedInfo, error) {
+			mu.Lock()
+			defer mu.Unlock()
+
+			cf, ok := cfs[id]
+			if !ok {
+				return nil, fmt.Errorf("changefeed %s not found", id.String())
+			}
+			info, err := cf.Info.Clone()
+			if err != nil {
+				return nil, err
+			}
+			info.Epoch, err = pdutil.AdvanceChangefeedEpoch(candidateEpoch, info.Epoch)
+			if err != nil {
+				return nil, err
+			}
+			if options.State != nil {
+				info.State = *options.State
+			}
+			cf.Info = info
+			if cf.Status == nil {
+				cf.Status = &config.ChangeFeedStatus{}
+			}
+			cf.Status.CheckpointTs = options.CheckpointTs
+			cf.Status.Progress = options.Progress
+			return info, nil
+		}).
+		AnyTimes()
+}
+
 func TestCoordinatorScheduling(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/debug/pprof/", pprof.Index)
@@ -413,6 +455,7 @@ func TestCoordinatorScheduling(t *testing.T) {
 	cfs := make(map[common.ChangeFeedID]*changefeed.ChangefeedMetaWrapper)
 	backend.EXPECT().GetAllChangefeeds(gomock.Any()).Return(cfs, nil).AnyTimes()
 	backend.EXPECT().UpdateChangefeed(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	mockBumpChangefeedEpoch(backend, cfs)
 	for i := 0; i < cfSize; i++ {
 		cfID := common.NewChangeFeedIDWithDisplayName(common.ChangeFeedDisplayName{
 			Name:     fmt.Sprintf("%d", i),
@@ -485,6 +528,7 @@ func TestScaleNode(t *testing.T) {
 	}
 	backend.EXPECT().GetAllChangefeeds(gomock.Any()).Return(cfs, nil).AnyTimes()
 	backend.EXPECT().UpdateChangefeed(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+	mockBumpChangefeedEpoch(backend, cfs)
 
 	cr := New(info, &mockPdClient{}, backend, serviceID, 100, 10000, time.Millisecond*1)
 

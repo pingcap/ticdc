@@ -139,17 +139,22 @@ func TestResumeChangefeed(t *testing.T) {
 	// no changefeed
 	require.NotNil(t, controller.ResumeChangefeed(context.Background(), common.NewChangeFeedIDWithName("test2", common.DefaultKeyspaceName), 12, true))
 
-	backend.EXPECT().UpdateChangefeed(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(errors.New("failed")).Times(1)
+	backend.EXPECT().BumpChangefeedEpoch(gomock.Any(), cfID, gomock.Any(), gomock.Any()).Return(nil, errors.New("failed")).Times(1)
 	require.NotNil(t, controller.ResumeChangefeed(context.Background(), cfID, 12, true))
 	require.Equal(t, config.StateFailed, changefeedDB.GetByID(cfID).GetInfo().State)
 
-	backend.EXPECT().UpdateChangefeed(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
-		DoAndReturn(func(_ context.Context, info *config.ChangeFeedInfo, checkpointTs uint64, progress config.Progress) error {
-			require.Equal(t, config.StateNormal, info.State)
-			require.NotZero(t, info.Epoch)
-			require.Equal(t, uint64(12), checkpointTs)
-			require.Equal(t, config.ProgressNone, progress)
-			return nil
+	backend.EXPECT().BumpChangefeedEpoch(gomock.Any(), cfID, gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, _ common.ChangeFeedID, candidateEpoch uint64, options changefeed.EpochBumpOptions) (*config.ChangeFeedInfo, error) {
+			require.NotZero(t, candidateEpoch)
+			require.NotNil(t, options.State)
+			require.Equal(t, config.StateNormal, *options.State)
+			require.Equal(t, uint64(12), options.CheckpointTs)
+			require.Equal(t, config.ProgressNone, options.Progress)
+			info, err := cf.GetInfo().Clone()
+			require.NoError(t, err)
+			info.State = *options.State
+			info.Epoch = candidateEpoch
+			return info, nil
 		}).Times(1)
 	require.Nil(t, controller.ResumeChangefeed(context.Background(), cfID, 12, false))
 	require.Equal(t, config.StateNormal, changefeedDB.GetByID(cfID).GetInfo().State)
@@ -200,7 +205,19 @@ func TestResumeChangefeedOverwriteUpdatesLastSavedCheckpointTs(t *testing.T) {
 	changefeedDB.AddStoppedChangefeed(cf)
 
 	newCheckpointTs := uint64(120)
-	backend.EXPECT().UpdateChangefeed(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).Times(1)
+	backend.EXPECT().BumpChangefeedEpoch(gomock.Any(), cfID, gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, _ common.ChangeFeedID, candidateEpoch uint64, options changefeed.EpochBumpOptions) (*config.ChangeFeedInfo, error) {
+			require.NotZero(t, candidateEpoch)
+			require.NotNil(t, options.State)
+			require.Equal(t, config.StateNormal, *options.State)
+			require.Equal(t, newCheckpointTs, options.CheckpointTs)
+			require.Equal(t, config.ProgressNone, options.Progress)
+			info, err := cf.GetInfo().Clone()
+			require.NoError(t, err)
+			info.State = *options.State
+			info.Epoch = candidateEpoch
+			return info, nil
+		}).Times(1)
 	require.Nil(t, controller.ResumeChangefeed(context.Background(), cfID, newCheckpointTs, true))
 	require.Equal(t, newCheckpointTs, changefeedDB.GetByID(cfID).GetLastSavedCheckPointTs())
 }
@@ -234,7 +251,19 @@ func TestResumeChangefeedIgnoresStaleMaintainerErrorAndSchedules(t *testing.T) {
 	_, _, err := cf.ForceUpdateStatus(stale)
 	require.NotNil(t, err)
 
-	backend.EXPECT().UpdateChangefeed(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).Times(1)
+	backend.EXPECT().BumpChangefeedEpoch(gomock.Any(), cfID, gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, _ common.ChangeFeedID, candidateEpoch uint64, options changefeed.EpochBumpOptions) (*config.ChangeFeedInfo, error) {
+			require.NotZero(t, candidateEpoch)
+			require.NotNil(t, options.State)
+			require.Equal(t, config.StateNormal, *options.State)
+			require.Equal(t, uint64(100), options.CheckpointTs)
+			require.Equal(t, config.ProgressNone, options.Progress)
+			info, err := cf.GetInfo().Clone()
+			require.NoError(t, err)
+			info.State = *options.State
+			info.Epoch = candidateEpoch
+			return info, nil
+		}).Times(1)
 	require.NoError(t, controller.ResumeChangefeed(context.Background(), cfID, 100, false))
 
 	// The changefeed should be enqueued for scheduling and should not be blocked by the stale error.

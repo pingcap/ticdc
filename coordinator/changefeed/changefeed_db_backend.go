@@ -20,6 +20,13 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 )
 
+// EpochBumpOptions carries metadata persisted together with a changefeed epoch bump.
+type EpochBumpOptions struct {
+	CheckpointTs uint64
+	Progress     config.Progress
+	State        *config.FeedState
+}
+
 // Backend is the metastore for the changefeed
 type Backend interface {
 	// GetAllChangefeeds returns all changefeeds from the backend db, include stopped and failed changefeeds
@@ -28,6 +35,8 @@ type Backend interface {
 	CreateChangefeed(ctx context.Context, info *config.ChangeFeedInfo) error
 	// UpdateChangefeed updates changefeed info  to db
 	UpdateChangefeed(ctx context.Context, info *config.ChangeFeedInfo, checkpointTs uint64, progress config.Progress) error
+	// BumpChangefeedEpoch persists a strictly newer epoch using the latest stored ChangeFeedInfo.
+	BumpChangefeedEpoch(ctx context.Context, id common.ChangeFeedID, candidateEpoch uint64, options EpochBumpOptions) (*config.ChangeFeedInfo, error)
 	// PauseChangefeed persists the pause status to db for a changefeed
 	PauseChangefeed(ctx context.Context, id common.ChangeFeedID) error
 	// DeleteChangefeed removes all related info of a changefeed from db

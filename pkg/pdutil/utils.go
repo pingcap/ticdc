@@ -75,8 +75,13 @@ func NextChangefeedEpoch(ctx context.Context, pdClient pd.Client, current uint64
 	if err != nil {
 		return 0, err
 	}
-	if epoch > current {
-		return epoch, nil
+	return AdvanceChangefeedEpoch(epoch, current)
+}
+
+// AdvanceChangefeedEpoch returns max(candidate, current+1).
+func AdvanceChangefeedEpoch(candidate, current uint64) (uint64, error) {
+	if candidate > current {
+		return candidate, nil
 	}
 	if current == ^uint64(0) {
 		return 0, fmt.Errorf("changefeed epoch overflow")

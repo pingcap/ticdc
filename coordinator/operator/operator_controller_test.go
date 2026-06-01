@@ -213,10 +213,20 @@ func TestController_AddOperatorBumpsAndPersistsOwnershipEpoch(t *testing.T) {
 			tc.addToDB(changefeedDB, cf, self.ID)
 
 			backend.EXPECT().
-				UpdateChangefeed(gomock.Any(), gomock.Any(), uint64(123), config.ProgressNone).
-				DoAndReturn(func(ctx context.Context, info *config.ChangeFeedInfo, checkpointTs uint64, progress config.Progress) error {
-					require.Equal(t, expectedEpoch, info.Epoch)
-					return nil
+				BumpChangefeedEpoch(gomock.Any(), cfID, gomock.Any(), changefeed.EpochBumpOptions{
+					CheckpointTs: 123,
+					Progress:     config.ProgressNone,
+				}).
+				DoAndReturn(func(ctx context.Context, id common.ChangeFeedID, candidateEpoch uint64, options changefeed.EpochBumpOptions) (*config.ChangeFeedInfo, error) {
+					require.NotZero(t, candidateEpoch)
+					require.Equal(t, cfID, id)
+					require.Equal(t, uint64(123), options.CheckpointTs)
+					require.Equal(t, config.ProgressNone, options.Progress)
+					info, err := cf.GetInfo().Clone()
+					require.NoError(t, err)
+					require.Equal(t, oldEpoch, info.Epoch)
+					info.Epoch = expectedEpoch
+					return info, nil
 				}).
 				Times(1)
 

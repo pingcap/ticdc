@@ -151,24 +151,23 @@ func (oc *Controller) bumpChangefeedEpochIfNeeded(
 	if info == nil {
 		return nil
 	}
-	clonedInfo, err := info.Clone()
+	epoch, err := pdutil.GenerateChangefeedEpoch(context.Background(), oc.pdClient)
 	if err != nil {
 		return err
 	}
-	epoch, err := pdutil.NextChangefeedEpoch(context.Background(), oc.pdClient, clonedInfo.Epoch)
-	if err != nil {
-		return err
-	}
-	clonedInfo.Epoch = epoch
-	if err := oc.backend.UpdateChangefeed(
+	info, err = oc.backend.BumpChangefeedEpoch(
 		context.Background(),
-		clonedInfo,
-		cf.GetStatus().CheckpointTs,
-		config.ProgressNone,
-	); err != nil {
+		cf.ID,
+		epoch,
+		changefeed.EpochBumpOptions{
+			CheckpointTs: cf.GetStatus().CheckpointTs,
+			Progress:     config.ProgressNone,
+		},
+	)
+	if err != nil {
 		return err
 	}
-	cf.SetInfo(clonedInfo)
+	cf.SetInfo(info)
 	return nil
 }
 

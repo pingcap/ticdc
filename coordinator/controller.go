@@ -807,25 +807,24 @@ func (c *Controller) ResumeChangefeed(
 		return nil
 	}
 
-	clone, err := cf.GetInfo().Clone()
-	if err != nil {
-		return err
-	}
-
-	clone.State = config.StateNormal
-	epoch, err := pdutil.NextChangefeedEpoch(ctx, c.pdClient, clone.Epoch)
-	if err != nil {
-		return errors.Trace(err)
-	}
-	clone.Epoch = epoch
 	checkpointTs := cf.GetStatus().CheckpointTs
 	if newCheckpointTs > 0 {
 		checkpointTs = newCheckpointTs
 	}
-	if err := c.backend.UpdateChangefeed(ctx, clone, checkpointTs, config.ProgressNone); err != nil {
-		return err
+	epoch, err := pdutil.GenerateChangefeedEpoch(ctx, c.pdClient)
+	if err != nil {
+		return errors.Trace(err)
 	}
-	cf.SetInfo(clone)
+	normalState := config.StateNormal
+	info, err := c.backend.BumpChangefeedEpoch(ctx, id, epoch, changefeed.EpochBumpOptions{
+		CheckpointTs: checkpointTs,
+		Progress:     config.ProgressNone,
+		State:        &normalState,
+	})
+	if err != nil {
+		return errors.Trace(err)
+	}
+	cf.SetInfo(info)
 
 	status := cf.GetStatusForResume()
 	status.CheckpointTs = checkpointTs
@@ -935,19 +934,18 @@ func (c *Controller) updateChangefeedEpoch(ctx context.Context, id common.Change
 		log.Warn("changefeed not found, skip updating epoch", zap.String("changefeed", id.String()))
 		return nil
 	}
-	clonedInfo, err := cf.GetInfo().Clone()
-	if err != nil {
-		log.Panic("clone changefeed info failed", zap.String("changefeed", id.String()), zap.Error(err))
-	}
-	epoch, err := pdutil.NextChangefeedEpoch(ctx, c.pdClient, clonedInfo.Epoch)
+	epoch, err := pdutil.GenerateChangefeedEpoch(ctx, c.pdClient)
 	if err != nil {
 		return errors.Trace(err)
 	}
-	clonedInfo.Epoch = epoch
-	if err := c.backend.UpdateChangefeed(ctx, clonedInfo, cf.GetStatus().CheckpointTs, config.ProgressNone); err != nil {
+	info, err := c.backend.BumpChangefeedEpoch(ctx, id, epoch, changefeed.EpochBumpOptions{
+		CheckpointTs: cf.GetStatus().CheckpointTs,
+		Progress:     config.ProgressNone,
+	})
+	if err != nil {
 		return errors.Trace(err)
 	}
-	cf.SetInfo(clonedInfo)
+	cf.SetInfo(info)
 	return nil
 }
 

@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -190,6 +191,85 @@ func (b *EtcdBackend) UpdateChangefeed(ctx context.Context, info *config.ChangeF
 		return errors.Trace(err)
 	}
 	return nil
+}
+
+func (b *EtcdBackend) BumpChangefeedEpoch(
+	ctx context.Context,
+	id common.ChangeFeedID,
+	candidateEpoch uint64,
+	options EpochBumpOptions,
+) (*config.ChangeFeedInfo, error) {
+	// The epoch bump must be serialized at the persisted metadata boundary.
+	// Otherwise independent in-memory bumps can generate the same epoch or
+	// overwrite a newer epoch written by another coordinator.
+	const (
+		bumpEpochMaxRetries = 10
+		bumpEpochRetryDelay = 25 * time.Millisecond
+	)
+	infoKey := etcd.GetEtcdKeyChangeFeedInfo(b.etcdClient.GetClusterID(), id.DisplayName)
+	jobKey := etcd.GetEtcdKeyJob(b.etcdClient.GetClusterID(), id.DisplayName)
+
+	for attempt := 0; attempt < bumpEpochMaxRetries; attempt++ {
+		resp, err := b.etcdClient.GetEtcdClient().Get(ctx, infoKey)
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
+		if len(resp.Kvs) == 0 {
+			return nil, errors.Trace(cerror.ErrChangeFeedNotExists.GenWithStackByArgs(id.Name()))
+		}
+
+		info := &config.ChangeFeedInfo{}
+		if err := info.Unmarshal(resp.Kvs[0].Value); err != nil {
+			return nil, errors.Trace(err)
+		}
+		if info.ChangefeedID.Name() == "" {
+			info.ChangefeedID = id
+		}
+		epoch, err := pdutil.AdvanceChangefeedEpoch(candidateEpoch, info.Epoch)
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
+		info.Epoch = epoch
+		if options.State != nil {
+			info.State = *options.State
+		}
+		infoValue, err := info.Marshal()
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
+
+		status := &config.ChangeFeedStatus{
+			CheckpointTs: options.CheckpointTs,
+			Progress:     options.Progress,
+		}
+		statusValue, err := status.Marshal()
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
+
+		putResp, err := b.etcdClient.GetEtcdClient().Txn(ctx,
+			[]clientv3.Cmp{clientv3.Compare(clientv3.ModRevision(infoKey), "=", resp.Kvs[0].ModRevision)},
+			[]clientv3.Op{
+				clientv3.OpPut(infoKey, infoValue),
+				clientv3.OpPut(jobKey, statusValue),
+			},
+			[]clientv3.Op{})
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
+		if putResp.Succeeded {
+			return info, nil
+		}
+
+		select {
+		case <-ctx.Done():
+			return nil, errors.Trace(ctx.Err())
+		case <-time.After(bumpEpochRetryDelay):
+		}
+	}
+
+	err := cerror.ErrMetaOpFailed.GenWithStackByArgs(fmt.Sprintf("bump changefeed epoch %s failed", id.Name()))
+	return nil, errors.Trace(err)
 }
 
 func (b *EtcdBackend) PauseChangefeed(ctx context.Context, id common.ChangeFeedID) error {

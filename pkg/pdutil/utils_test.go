@@ -89,6 +89,18 @@ func TestNextChangefeedEpochStrictlyIncreases(t *testing.T) {
 	require.Equal(t, candidate+11, epoch)
 }
 
+func TestAdvanceChangefeedEpoch(t *testing.T) {
+	t.Parallel()
+
+	epoch, err := AdvanceChangefeedEpoch(10, 8)
+	require.NoError(t, err)
+	require.Equal(t, uint64(10), epoch)
+
+	epoch, err = AdvanceChangefeedEpoch(10, 12)
+	require.NoError(t, err)
+	require.Equal(t, uint64(13), epoch)
+}
+
 func TestNextChangefeedEpochOverflow(t *testing.T) {
 	t.Parallel()
 
