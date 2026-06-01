@@ -165,6 +165,10 @@ func TestBumpChangefeedEpoch(t *testing.T) {
 	value, err := info.Marshal()
 	require.NoError(t, err)
 	infoKey := etcd.GetEtcdKeyChangeFeedInfo("test-cluster-id", changefeedID.DisplayName)
+	persistedStatus := &config.ChangeFeedStatus{
+		CheckpointTs: 200,
+		Progress:     config.ProgressStopping,
+	}
 
 	etcdClient.EXPECT().
 		Get(gomock.Any(), infoKey).
@@ -175,16 +179,28 @@ func TestBumpChangefeedEpoch(t *testing.T) {
 			}},
 		}, nil).
 		Times(1)
+	cdcClient.EXPECT().
+		GetChangeFeedStatus(gomock.Any(), changefeedID).
+		Return(persistedStatus, int64(5), nil).
+		Times(1)
 	etcdClient.EXPECT().
-		Txn(gomock.Any(), gomock.Len(1), gomock.Len(2), gomock.Len(0)).
+		Txn(gomock.Any(), gomock.Len(2), NewFuncMatcher(func(i interface{}) bool {
+			ops := i.([]clientv3.Op)
+			require.Len(t, ops, 2)
+			require.True(t, ops[0].IsPut())
+			require.True(t, ops[1].IsPut())
+			status := &config.ChangeFeedStatus{}
+			require.NoError(t, status.Unmarshal(ops[1].ValueBytes()))
+			require.Equal(t, persistedStatus.CheckpointTs, status.CheckpointTs)
+			require.Equal(t, persistedStatus.Progress, status.Progress)
+			return true
+		}), gomock.Len(0)).
 		Return(&clientv3.TxnResponse{Succeeded: true}, nil).
 		Times(1)
 
 	normalState := config.StateNormal
 	got, err := backend.BumpChangefeedEpoch(context.Background(), changefeedID, 7, EpochBumpOptions{
-		CheckpointTs: 100,
-		Progress:     config.ProgressNone,
-		State:        &normalState,
+		State: &normalState,
 	})
 	require.NoError(t, err)
 	require.Equal(t, uint64(9), got.Epoch)
@@ -209,6 +225,7 @@ func TestBumpChangefeedEpochRetriesOnCASConflict(t *testing.T) {
 	secondValue, err := secondInfo.Marshal()
 	require.NoError(t, err)
 	infoKey := etcd.GetEtcdKeyChangeFeedInfo("test-cluster-id", changefeedID.DisplayName)
+	status := &config.ChangeFeedStatus{CheckpointTs: 100, Progress: config.ProgressNone}
 
 	etcdClient.EXPECT().
 		Get(gomock.Any(), infoKey).
@@ -219,8 +236,12 @@ func TestBumpChangefeedEpochRetriesOnCASConflict(t *testing.T) {
 			}},
 		}, nil).
 		Times(1)
+	cdcClient.EXPECT().
+		GetChangeFeedStatus(gomock.Any(), changefeedID).
+		Return(status, int64(3), nil).
+		Times(1)
 	etcdClient.EXPECT().
-		Txn(gomock.Any(), gomock.Len(1), gomock.Len(2), gomock.Len(0)).
+		Txn(gomock.Any(), gomock.Len(2), gomock.Len(2), gomock.Len(0)).
 		Return(&clientv3.TxnResponse{Succeeded: false}, nil).
 		Times(1)
 	etcdClient.EXPECT().
@@ -232,15 +253,16 @@ func TestBumpChangefeedEpochRetriesOnCASConflict(t *testing.T) {
 			}},
 		}, nil).
 		Times(1)
+	cdcClient.EXPECT().
+		GetChangeFeedStatus(gomock.Any(), changefeedID).
+		Return(status, int64(4), nil).
+		Times(1)
 	etcdClient.EXPECT().
-		Txn(gomock.Any(), gomock.Len(1), gomock.Len(2), gomock.Len(0)).
+		Txn(gomock.Any(), gomock.Len(2), gomock.Len(2), gomock.Len(0)).
 		Return(&clientv3.TxnResponse{Succeeded: true}, nil).
 		Times(1)
 
-	got, err := backend.BumpChangefeedEpoch(context.Background(), changefeedID, 7, EpochBumpOptions{
-		CheckpointTs: 100,
-		Progress:     config.ProgressNone,
-	})
+	got, err := backend.BumpChangefeedEpoch(context.Background(), changefeedID, 7, EpochBumpOptions{})
 	require.NoError(t, err)
 	require.Equal(t, uint64(10), got.Epoch)
 }

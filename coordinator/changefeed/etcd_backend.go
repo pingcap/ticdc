@@ -210,16 +210,20 @@ func (b *EtcdBackend) BumpChangefeedEpoch(
 	jobKey := etcd.GetEtcdKeyJob(b.etcdClient.GetClusterID(), id.DisplayName)
 
 	for attempt := 0; attempt < bumpEpochMaxRetries; attempt++ {
-		resp, err := b.etcdClient.GetEtcdClient().Get(ctx, infoKey)
+		infoResp, err := b.etcdClient.GetEtcdClient().Get(ctx, infoKey)
 		if err != nil {
 			return nil, errors.Trace(err)
 		}
-		if len(resp.Kvs) == 0 {
+		if len(infoResp.Kvs) == 0 {
 			return nil, errors.Trace(cerror.ErrChangeFeedNotExists.GenWithStackByArgs(id.Name()))
+		}
+		status, statusModRevision, err := b.etcdClient.GetChangeFeedStatus(ctx, id)
+		if err != nil {
+			return nil, errors.Trace(err)
 		}
 
 		info := &config.ChangeFeedInfo{}
-		if err := info.Unmarshal(resp.Kvs[0].Value); err != nil {
+		if err := info.Unmarshal(infoResp.Kvs[0].Value); err != nil {
 			return nil, errors.Trace(err)
 		}
 		if info.ChangefeedID.Name() == "" {
@@ -233,14 +237,17 @@ func (b *EtcdBackend) BumpChangefeedEpoch(
 		if options.State != nil {
 			info.State = *options.State
 		}
+		if options.UpdateError {
+			info.Error = options.Error
+		}
 		infoValue, err := info.Marshal()
 		if err != nil {
 			return nil, errors.Trace(err)
 		}
 
-		status := &config.ChangeFeedStatus{
-			CheckpointTs: options.CheckpointTs,
-			Progress:     options.Progress,
+		if options.UpdateStatus {
+			status.CheckpointTs = options.CheckpointTs
+			status.Progress = options.Progress
 		}
 		statusValue, err := status.Marshal()
 		if err != nil {
@@ -248,7 +255,10 @@ func (b *EtcdBackend) BumpChangefeedEpoch(
 		}
 
 		putResp, err := b.etcdClient.GetEtcdClient().Txn(ctx,
-			[]clientv3.Cmp{clientv3.Compare(clientv3.ModRevision(infoKey), "=", resp.Kvs[0].ModRevision)},
+			[]clientv3.Cmp{
+				clientv3.Compare(clientv3.ModRevision(infoKey), "=", infoResp.Kvs[0].ModRevision),
+				clientv3.Compare(clientv3.ModRevision(jobKey), "=", statusModRevision),
+			},
 			[]clientv3.Op{
 				clientv3.OpPut(infoKey, infoValue),
 				clientv3.OpPut(jobKey, statusValue),

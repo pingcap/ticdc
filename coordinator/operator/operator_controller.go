@@ -24,7 +24,6 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
-	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -159,10 +158,7 @@ func (oc *Controller) bumpChangefeedEpochIfNeeded(
 		context.Background(),
 		cf.ID,
 		epoch,
-		changefeed.EpochBumpOptions{
-			CheckpointTs: cf.GetStatus().CheckpointTs,
-			Progress:     config.ProgressNone,
-		},
+		changefeed.EpochBumpOptions{},
 	)
 	if err != nil {
 		return err

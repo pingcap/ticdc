@@ -819,6 +819,7 @@ func (c *Controller) ResumeChangefeed(
 	info, err := c.backend.BumpChangefeedEpoch(ctx, id, epoch, changefeed.EpochBumpOptions{
 		CheckpointTs: checkpointTs,
 		Progress:     config.ProgressNone,
+		UpdateStatus: true,
 		State:        &normalState,
 	})
 	if err != nil {
@@ -928,7 +929,11 @@ func (c *Controller) newBootstrapMessage(id node.ID, addr string) *messaging.Tar
 		&heartbeatpb.CoordinatorBootstrapRequest{Version: c.version})
 }
 
-func (c *Controller) updateChangefeedEpoch(ctx context.Context, id common.ChangeFeedID) error {
+func (c *Controller) updateChangefeedEpoch(
+	ctx context.Context,
+	id common.ChangeFeedID,
+	options changefeed.EpochBumpOptions,
+) error {
 	cf := c.changefeedDB.GetByID(id)
 	if cf == nil {
 		log.Warn("changefeed not found, skip updating epoch", zap.String("changefeed", id.String()))
@@ -938,10 +943,7 @@ func (c *Controller) updateChangefeedEpoch(ctx context.Context, id common.Change
 	if err != nil {
 		return errors.Trace(err)
 	}
-	info, err := c.backend.BumpChangefeedEpoch(ctx, id, epoch, changefeed.EpochBumpOptions{
-		CheckpointTs: cf.GetStatus().CheckpointTs,
-		Progress:     config.ProgressNone,
-	})
+	info, err := c.backend.BumpChangefeedEpoch(ctx, id, epoch, options)
 	if err != nil {
 		return errors.Trace(err)
 	}

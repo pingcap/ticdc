@@ -24,7 +24,13 @@ import (
 type EpochBumpOptions struct {
 	CheckpointTs uint64
 	Progress     config.Progress
+	// UpdateStatus controls whether CheckpointTs and Progress overwrite the
+	// persisted status read by the bump transaction.
+	UpdateStatus bool
 	State        *config.FeedState
+	Error        *config.RunningError
+	// UpdateError controls whether Error overwrites the persisted runtime error.
+	UpdateError bool
 }
 
 // Backend is the metastore for the changefeed
@@ -35,7 +41,8 @@ type Backend interface {
 	CreateChangefeed(ctx context.Context, info *config.ChangeFeedInfo) error
 	// UpdateChangefeed updates changefeed info  to db
 	UpdateChangefeed(ctx context.Context, info *config.ChangeFeedInfo, checkpointTs uint64, progress config.Progress) error
-	// BumpChangefeedEpoch persists a strictly newer epoch using the latest stored ChangeFeedInfo.
+	// BumpChangefeedEpoch persists a strictly newer epoch using the latest
+	// stored ChangeFeedInfo and preserves stored status unless UpdateStatus is set.
 	BumpChangefeedEpoch(ctx context.Context, id common.ChangeFeedID, candidateEpoch uint64, options EpochBumpOptions) (*config.ChangeFeedInfo, error)
 	// PauseChangefeed persists the pause status to db for a changefeed
 	PauseChangefeed(ctx context.Context, id common.ChangeFeedID) error
