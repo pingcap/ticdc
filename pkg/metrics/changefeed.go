@@ -73,18 +73,6 @@ var (
 			Help:      "The status of changefeeds",
 		}, []string{getKeyspaceLabel(), "changefeed"})
 
-<<<<<<< HEAD
-=======
-	// ChangefeedErrorInfoGauge records the current warning or failed reason and its occurrence time
-	// for each changefeed.
-	ChangefeedErrorInfoGauge = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Namespace: "ticdc",
-			Subsystem: "owner",
-			Name:      "changefeed_error_info",
-			Help:      "The current warning or failed reason and occurrence time of changefeeds",
-		}, []string{getKeyspaceLabel(), "changefeed", "state", "error_time", "code", "message"})
-
 	// ChangefeedOperationTimeGauge records a bounded set of recent user initiated
 	// changefeed operation timestamps for the Grafana investigation panel.
 	ChangefeedOperationTimeGauge = prometheus.NewGaugeVec(
@@ -95,7 +83,6 @@ var (
 			Help:      "Recent user initiated changefeed operation timestamps in Unix milliseconds",
 		}, []string{getKeyspaceLabel(), "changefeed", "operation", "result", "username", "details", "error", "event_id"})
 
->>>>>>> 3a652c164 (api,metrics: add changefeed operation history (#5095))
 	ChangefeedCheckpointTsLagGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
@@ -122,11 +109,7 @@ func initChangefeedMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(CoordinatorCounter)
 	registry.MustRegister(MaintainerGauge)
 	registry.MustRegister(ChangefeedStatusGauge)
-<<<<<<< HEAD
-=======
-	registry.MustRegister(ChangefeedErrorInfoGauge)
 	registry.MustRegister(ChangefeedOperationTimeGauge)
->>>>>>> 3a652c164 (api,metrics: add changefeed operation history (#5095))
 	registry.MustRegister(ChangefeedCheckpointTsLagGauge)
 	registry.MustRegister(ChangefeedCheckpointTsGauge)
 }
