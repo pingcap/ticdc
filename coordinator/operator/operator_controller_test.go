@@ -15,6 +15,7 @@ package operator
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -26,9 +27,22 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
+	scheduleroperator "github.com/pingcap/ticdc/pkg/scheduler/operator"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/stretchr/testify/require"
+	"github.com/tikv/client-go/v2/oracle"
+	pd "github.com/tikv/pd/client"
 )
+
+type operatorEpochPDClient struct {
+	pd.Client
+	physical int64
+	logical  int64
+}
+
+func (m *operatorEpochPDClient) GetTS(ctx context.Context) (int64, int64, error) {
+	return m.physical, m.logical, nil
+}
 
 func newOperatorControllerForTest(
 	t *testing.T,
@@ -147,6 +161,74 @@ func TestController_CountMoveMaintainerOperatorsFromNodes(t *testing.T) {
 
 	require.Equal(t, 1, oc.CountMoveMaintainerOperatorsFromNodes([]node.ID{self.ID}))
 	require.Equal(t, 0, oc.CountMoveMaintainerOperatorsFromNodes([]node.ID{"n3"}))
+}
+
+func TestController_AddOperatorBumpsAndPersistsOwnershipEpoch(t *testing.T) {
+	testCases := []struct {
+		name    string
+		addToDB func(*changefeed.ChangefeedDB, *changefeed.Changefeed, node.ID)
+		newOp   func(*changefeed.ChangefeedDB, *changefeed.Changefeed, node.ID, node.ID) scheduleroperator.Operator[common.ChangeFeedID, *heartbeatpb.MaintainerStatus]
+	}{
+		{
+			name: "add-maintainer",
+			addToDB: func(db *changefeed.ChangefeedDB, cf *changefeed.Changefeed, self node.ID) {
+				db.AddAbsentChangefeed(cf)
+			},
+			newOp: func(db *changefeed.ChangefeedDB, cf *changefeed.Changefeed, self, dest node.ID) scheduleroperator.Operator[common.ChangeFeedID, *heartbeatpb.MaintainerStatus] {
+				return NewAddMaintainerOperator(db, cf, dest)
+			},
+		},
+		{
+			name: "move-maintainer",
+			addToDB: func(db *changefeed.ChangefeedDB, cf *changefeed.Changefeed, self node.ID) {
+				db.AddReplicatingMaintainer(cf, self)
+			},
+			newOp: func(db *changefeed.ChangefeedDB, cf *changefeed.Changefeed, self, dest node.ID) scheduleroperator.Operator[common.ChangeFeedID, *heartbeatpb.MaintainerStatus] {
+				return NewMoveMaintainerOperator(db, cf, self, dest)
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			changefeedDB := changefeed.NewChangefeedDB(1216)
+			ctrl := gomock.NewController(t)
+			backend := mock_changefeed.NewMockBackend(ctrl)
+			oc, self, nodeManager := newOperatorControllerForTest(t, changefeedDB, backend)
+			target := node.NewInfo("localhost:8301", "")
+			nodeManager.GetAliveNodes()[target.ID] = target
+
+			candidateEpoch := uint64(oracle.ComposeTS(100, 1))
+			oldEpoch := candidateEpoch + 10
+			expectedEpoch := oldEpoch + 1
+			oc.SetPDClient(&operatorEpochPDClient{physical: 100, logical: 1})
+
+			cfID := common.NewChangeFeedIDWithName(tc.name, common.DefaultKeyspaceName)
+			cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
+				ChangefeedID: cfID,
+				Config:       config.GetDefaultReplicaConfig(),
+				SinkURI:      "mysql://127.0.0.1:3306",
+				Epoch:        oldEpoch,
+			}, 123, true)
+			tc.addToDB(changefeedDB, cf, self.ID)
+
+			backend.EXPECT().
+				UpdateChangefeed(gomock.Any(), gomock.Any(), uint64(123), config.ProgressNone).
+				DoAndReturn(func(ctx context.Context, info *config.ChangeFeedInfo, checkpointTs uint64, progress config.Progress) error {
+					require.Equal(t, expectedEpoch, info.Epoch)
+					return nil
+				}).
+				Times(1)
+
+			require.True(t, oc.AddOperator(tc.newOp(changefeedDB, cf, self.ID, target.ID)))
+			require.Equal(t, expectedEpoch, cf.GetInfo().Epoch)
+
+			req := cf.NewAddMaintainerMessage(target.ID).Message[0].(*heartbeatpb.AddMaintainerRequest)
+			info := &config.ChangeFeedInfo{}
+			require.NoError(t, json.Unmarshal(req.Config, info))
+			require.Equal(t, expectedEpoch, info.Epoch)
+		})
+	}
 }
 
 func TestController_StopChangefeedDuringAddOperator(t *testing.T) {

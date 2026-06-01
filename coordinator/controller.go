@@ -123,6 +123,7 @@ func NewController(
 	messageCenter := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 
 	oc := operator.NewOperatorController(selfNode, changefeedDB, backend, batchSize)
+	oc.SetPDClient(pdClient)
 	drainController := drain.NewController(messageCenter)
 	c := &Controller{
 		version:     version,
@@ -700,8 +701,12 @@ func (c *Controller) CreateChangefeed(ctx context.Context, info *config.ChangeFe
 	}
 
 	// generate a unique changefeed epoch
-	info.Epoch = pdutil.GenerateChangefeedEpoch(ctx, c.pdClient)
-	err := c.backend.CreateChangefeed(ctx, info)
+	epoch, err := pdutil.GenerateChangefeedEpoch(ctx, c.pdClient)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	info.Epoch = epoch
+	err = c.backend.CreateChangefeed(ctx, info)
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -808,7 +813,11 @@ func (c *Controller) ResumeChangefeed(
 	}
 
 	clone.State = config.StateNormal
-	clone.Epoch = pdutil.GenerateChangefeedEpoch(ctx, c.pdClient)
+	epoch, err := pdutil.NextChangefeedEpoch(ctx, c.pdClient, clone.Epoch)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	clone.Epoch = epoch
 	checkpointTs := cf.GetStatus().CheckpointTs
 	if newCheckpointTs > 0 {
 		checkpointTs = newCheckpointTs
@@ -930,7 +939,11 @@ func (c *Controller) updateChangefeedEpoch(ctx context.Context, id common.Change
 	if err != nil {
 		log.Panic("clone changefeed info failed", zap.String("changefeed", id.String()), zap.Error(err))
 	}
-	clonedInfo.Epoch = pdutil.GenerateChangefeedEpoch(ctx, c.pdClient)
+	epoch, err := pdutil.NextChangefeedEpoch(ctx, c.pdClient, clonedInfo.Epoch)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	clonedInfo.Epoch = epoch
 	if err := c.backend.UpdateChangefeed(ctx, clonedInfo, cf.GetStatus().CheckpointTs, config.ProgressNone); err != nil {
 		return errors.Trace(err)
 	}

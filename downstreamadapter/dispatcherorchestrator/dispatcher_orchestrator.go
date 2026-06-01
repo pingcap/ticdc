@@ -172,9 +172,6 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 			zap.String("changefeedID", cfId.Name()), zap.Any("data", req.Config), zap.Error(err))
 	}
 	generation := req.Generation
-	if generation == 0 || cfConfig.Epoch > generation {
-		generation = cfConfig.Epoch
-	}
 
 	// Keep the map lock scoped to dispatcherManagers lookups and updates only.
 	// NewDispatcherManager may perform expensive downstream initialization, so it
@@ -194,6 +191,7 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 			req.TableTriggerRedoDispatcherId,
 			req.StartTs,
 			from,
+			generation,
 			req.IsNewChangefeed,
 		)
 		// Fast return the error to maintainer.

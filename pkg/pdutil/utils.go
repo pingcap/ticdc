@@ -15,6 +15,7 @@ package pdutil
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"time"
 
@@ -54,15 +55,31 @@ func GetSourceID(ctx context.Context, pdClient pd.Client) (uint64, error) {
 }
 
 // GenerateChangefeedEpoch generates a unique changefeed epoch.
-func GenerateChangefeedEpoch(ctx context.Context, pdClient pd.Client) uint64 {
+func GenerateChangefeedEpoch(ctx context.Context, pdClient pd.Client) (uint64, error) {
 	if pdClient == nil {
-		return uint64(time.Now().UnixNano())
+		// Unit tests may build a controller without a PD client. Production
+		// controllers always pass a PD client and must surface TSO failures.
+		return uint64(time.Now().UnixNano()), nil
 	}
 
 	phyTs, logical, err := pdClient.GetTS(ctx)
 	if err != nil {
-		log.Warn("generate epoch using local timestamp due to error", zap.Error(err))
-		return uint64(time.Now().UnixNano())
+		return 0, cerror.WrapError(cerror.ErrPDEtcdAPIError, err)
 	}
-	return oracle.ComposeTS(phyTs, logical)
+	return oracle.ComposeTS(phyTs, logical), nil
+}
+
+// NextChangefeedEpoch generates an epoch that is strictly greater than current.
+func NextChangefeedEpoch(ctx context.Context, pdClient pd.Client, current uint64) (uint64, error) {
+	epoch, err := GenerateChangefeedEpoch(ctx, pdClient)
+	if err != nil {
+		return 0, err
+	}
+	if epoch > current {
+		return epoch, nil
+	}
+	if current == ^uint64(0) {
+		return 0, fmt.Errorf("changefeed epoch overflow")
+	}
+	return current + 1, nil
 }

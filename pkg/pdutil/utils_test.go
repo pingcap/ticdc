@@ -15,6 +15,7 @@ package pdutil
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -22,7 +23,20 @@ import (
 	"github.com/pingcap/tidb/pkg/session"
 	"github.com/pingcap/tidb/pkg/store/mockstore"
 	"github.com/stretchr/testify/require"
+	"github.com/tikv/client-go/v2/oracle"
+	pd "github.com/tikv/pd/client"
 )
+
+type epochPDClient struct {
+	pd.Client
+	physical int64
+	logical  int64
+	err      error
+}
+
+func (m *epochPDClient) GetTS(ctx context.Context) (int64, int64, error) {
+	return m.physical, m.logical, m.err
+}
 
 func TestGetSourceID(t *testing.T) {
 	store, err := mockstore.NewMockStore()
@@ -44,4 +58,44 @@ func TestGetSourceID(t *testing.T) {
 		require.NoError(t, err)
 		return sourceID == 2
 	}, 5*time.Second, 100*time.Millisecond)
+}
+
+func TestGenerateChangefeedEpochReturnsPDError(t *testing.T) {
+	t.Parallel()
+
+	_, err := GenerateChangefeedEpoch(context.Background(), &epochPDClient{
+		err: errors.New("pd tso unavailable"),
+	})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "pd tso unavailable")
+}
+
+func TestNextChangefeedEpochStrictlyIncreases(t *testing.T) {
+	t.Parallel()
+
+	candidate := uint64(oracle.ComposeTS(100, 1))
+	epoch, err := NextChangefeedEpoch(context.Background(), &epochPDClient{
+		physical: 100,
+		logical:  1,
+	}, candidate-1)
+	require.NoError(t, err)
+	require.Equal(t, candidate, epoch)
+
+	epoch, err = NextChangefeedEpoch(context.Background(), &epochPDClient{
+		physical: 100,
+		logical:  1,
+	}, candidate+10)
+	require.NoError(t, err)
+	require.Equal(t, candidate+11, epoch)
+}
+
+func TestNextChangefeedEpochOverflow(t *testing.T) {
+	t.Parallel()
+
+	_, err := NextChangefeedEpoch(context.Background(), &epochPDClient{
+		physical: 100,
+		logical:  1,
+	}, ^uint64(0))
+	require.Error(t, err)
+	require.ErrorContains(t, err, "changefeed epoch overflow")
 }

@@ -194,6 +194,7 @@ func NewDispatcherManager(
 	tableTriggerRedoDispatcherID *heartbeatpb.DispatcherID,
 	startTs uint64,
 	maintainerID node.ID,
+	maintainerGeneration uint64,
 	newChangefeed bool,
 ) (*DispatcherManager, error) {
 	failpoint.Inject("NewDispatcherManagerDelay", nil)
@@ -240,8 +241,10 @@ func NewDispatcherManager(
 		metricRedoCreateDispatcherDuration:    metrics.CreateDispatcherDuration.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "redoDispatcher"),
 	}
 
-	// Set the epoch and maintainerID of the event dispatcher manager
-	manager.meta.maintainerEpoch = cfConfig.Epoch
+	// Trust only the explicit request generation for receiver fencing. The
+	// config epoch may be newer than an old rolling-upgrade request and must not
+	// turn generation 0 compatibility traffic into strict-mode traffic.
+	manager.meta.maintainerEpoch = maintainerGeneration
 	manager.meta.maintainerID = maintainerID
 
 	// Set Sync Point Config

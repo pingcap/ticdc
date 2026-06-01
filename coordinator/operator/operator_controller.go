@@ -24,11 +24,14 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/scheduler/operator"
 	"github.com/pingcap/ticdc/server/watcher"
+	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
 )
 
@@ -45,6 +48,7 @@ type Controller struct {
 	messageCenter messaging.MessageCenter
 	selfNode      *node.Info
 	backend       changefeed.Backend
+	pdClient      pd.Client
 	nodeManger    *watcher.NodeManager
 }
 
@@ -66,6 +70,11 @@ func NewOperatorController(
 		nodeManger:    appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
 	}
 	return oc
+}
+
+// SetPDClient sets the PD client used to generate persisted maintainer ownership generations.
+func (oc *Controller) SetPDClient(pdClient pd.Client) {
+	oc.pdClient = pdClient
 }
 
 // Execute periodically execute the operator
@@ -116,8 +125,62 @@ func (oc *Controller) AddOperator(op operator.Operator[common.ChangeFeedID, *hea
 			zap.String("operator", op.String()))
 		return false
 	}
+	if err := oc.bumpChangefeedEpochIfNeeded(op, cf); err != nil {
+		log.Warn("add operator failed, cannot bump changefeed epoch",
+			zap.String("role", oc.role),
+			zap.String("operator", op.String()),
+			zap.Stringer("changefeed", op.ID()),
+			zap.Error(err))
+		return false
+	}
 	oc.pushOperator(op)
 	return true
+}
+
+func (oc *Controller) bumpChangefeedEpochIfNeeded(
+	op operator.Operator[common.ChangeFeedID, *heartbeatpb.MaintainerStatus],
+	cf *changefeed.Changefeed,
+) error {
+	if !requiresNewMaintainerOwnership(op) {
+		return nil
+	}
+	if oc.pdClient == nil || oc.backend == nil {
+		return nil
+	}
+	info := cf.GetInfo()
+	if info == nil {
+		return nil
+	}
+	clonedInfo, err := info.Clone()
+	if err != nil {
+		return err
+	}
+	epoch, err := pdutil.NextChangefeedEpoch(context.Background(), oc.pdClient, clonedInfo.Epoch)
+	if err != nil {
+		return err
+	}
+	clonedInfo.Epoch = epoch
+	if err := oc.backend.UpdateChangefeed(
+		context.Background(),
+		clonedInfo,
+		cf.GetStatus().CheckpointTs,
+		config.ProgressNone,
+	); err != nil {
+		return err
+	}
+	cf.SetInfo(clonedInfo)
+	return nil
+}
+
+func requiresNewMaintainerOwnership(
+	op operator.Operator[common.ChangeFeedID, *heartbeatpb.MaintainerStatus],
+) bool {
+	switch op.(type) {
+	case *AddMaintainerOperator, *MoveMaintainerOperator:
+		return true
+	default:
+		return false
+	}
 }
 
 // StopChangefeed stop changefeed when the changefeed is stopped/removed.

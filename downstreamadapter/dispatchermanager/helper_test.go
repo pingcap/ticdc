@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/sink/redo"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/stretchr/testify/require"
 )
 
@@ -244,7 +245,7 @@ func TestPreCheckForSchedulerHandler_FencesStaleMaintainerGeneration(t *testing.
 	require.Equal(t, uint64(2), operatorKey.generation)
 }
 
-func TestPreCheckForSchedulerHandler_AllowsCurrentMaintainerWithoutGeneration(t *testing.T) {
+func TestPreCheckForSchedulerHandler_RejectsGenerationZeroAfterStrictGeneration(t *testing.T) {
 	t.Parallel()
 
 	dispatcherID := common.NewDispatcherID()
@@ -265,9 +266,56 @@ func TestPreCheckForSchedulerHandler_AllowsCurrentMaintainerWithoutGeneration(t 
 		OperatorType:   heartbeatpb.OperatorType_O_Add,
 	})
 	operatorKey, ok := preCheckForSchedulerHandler(req, dm)
+	require.False(t, ok)
+	require.Equal(t, common.DispatcherID{}, operatorKey.dispatcherID)
+}
+
+func TestPreCheckForSchedulerHandler_AllowsGenerationZeroBeforeStrictGeneration(t *testing.T) {
+	t.Parallel()
+
+	dispatcherID := common.NewDispatcherID()
+	dm := &DispatcherManager{
+		changefeedID:  common.NewChangeFeedIDWithName("test-changefeed", "test-namespace"),
+		dispatcherMap: newDispatcherMap[*dispatcher.EventDispatcher](),
+	}
+	dm.meta.maintainerID = "current-maintainer"
+
+	req := NewSchedulerDispatcherRequest("current-maintainer", &heartbeatpb.ScheduleDispatcherRequest{
+		ChangefeedID: &heartbeatpb.ChangefeedID{Keyspace: "test-namespace", Name: "test-changefeed"},
+		Config: &heartbeatpb.DispatcherConfig{
+			DispatcherID: dispatcherID.ToPB(),
+			Mode:         0,
+		},
+		ScheduleAction: heartbeatpb.ScheduleAction_Create,
+		OperatorType:   heartbeatpb.OperatorType_O_Add,
+	})
+	operatorKey, ok := preCheckForSchedulerHandler(req, dm)
 	require.True(t, ok)
 	require.Equal(t, dispatcherID, operatorKey.dispatcherID)
 	require.Zero(t, operatorKey.generation)
+}
+
+func TestDispatcherManagerTryUpdateMaintainerRejectsGenerationZeroAfterStrictGeneration(t *testing.T) {
+	t.Parallel()
+
+	dm := &DispatcherManager{}
+	dm.meta.maintainerID = "current-maintainer"
+	dm.meta.maintainerEpoch = 2
+
+	require.False(t, dm.TryUpdateMaintainer("current-maintainer", 0))
+	require.Equal(t, node.ID("current-maintainer"), dm.GetMaintainerID())
+	require.Equal(t, uint64(2), dm.GetMaintainerEpoch())
+}
+
+func TestDispatcherManagerTryUpdateMaintainerAllowsGenerationZeroCompatOwnerChange(t *testing.T) {
+	t.Parallel()
+
+	dm := &DispatcherManager{}
+	dm.meta.maintainerID = "old-maintainer"
+
+	require.True(t, dm.TryUpdateMaintainer("new-maintainer", 0))
+	require.Equal(t, node.ID("new-maintainer"), dm.GetMaintainerID())
+	require.Zero(t, dm.GetMaintainerEpoch())
 }
 
 func TestDispatcherManagerIsRedoReadyRequiresPublication(t *testing.T) {

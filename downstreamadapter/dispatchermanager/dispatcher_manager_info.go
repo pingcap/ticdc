@@ -70,13 +70,14 @@ func (e *DispatcherManager) UnlockControl() {
 }
 
 // TryUpdateMaintainer records the active maintainer owner and generation.
-// Generation 0 is accepted only for rolling-upgrade compatibility and never
-// downgrades a known non-zero generation from a different maintainer.
+// Generation 0 is accepted only while the manager is still in compatibility
+// mode. Once a non-zero generation is known, generation 0 must never downgrade
+// the receiver back to compatibility mode.
 func (e *DispatcherManager) TryUpdateMaintainer(from node.ID, generation uint64) bool {
 	e.meta.Lock()
 	defer e.meta.Unlock()
 	if generation == 0 {
-		if e.meta.maintainerEpoch != 0 && e.meta.maintainerID != "" && e.meta.maintainerID != from {
+		if e.meta.maintainerEpoch != 0 {
 			return false
 		}
 		e.meta.maintainerID = from
@@ -99,7 +100,7 @@ func (e *DispatcherManager) IsMaintainerRequestAllowed(from node.ID, generation 
 	e.meta.Lock()
 	defer e.meta.Unlock()
 	if generation == 0 {
-		return e.meta.maintainerEpoch == 0 || e.meta.maintainerID == "" || e.meta.maintainerID == from
+		return e.meta.maintainerEpoch == 0 && (e.meta.maintainerID == "" || e.meta.maintainerID == from)
 	}
 	return e.meta.maintainerEpoch == generation && e.meta.maintainerID == from
 }
