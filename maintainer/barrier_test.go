@@ -602,8 +602,7 @@ func TestBarrierRouteConflictPrecheckPreventsWriteAction(t *testing.T) {
 	routeAdmission := &testBarrierRouteAdmission{
 		precheckErr: errors.New("route conflict"),
 	}
-	barrier, cfID, tableTriggerEventDispatcherID, tableDispatcherID, blockTables :=
-		newBarrierRoutePrecheckTestFixture(t, routeAdmission)
+	barrier, cfID, tableTriggerEventDispatcherID, tableDispatcherID, blockTables := newBarrierRoutePrecheckTestFixture(t, routeAdmission)
 	msgs := barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
 		ChangefeedID: cfID.ToPB(),
 		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
@@ -662,8 +661,7 @@ func TestBarrierRoutePrecheckKeepsFullyReportedBlockedEventAndPreventsWriteActio
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			barrier, cfID, tableTriggerEventDispatcherID, tableDispatcherID, blockTables :=
-				newBarrierRoutePrecheckTestFixture(t, tc.routeAdmission)
+			barrier, cfID, tableTriggerEventDispatcherID, tableDispatcherID, blockTables := newBarrierRoutePrecheckTestFixture(t, tc.routeAdmission)
 			msgs := barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
 				ChangefeedID: cfID.ToPB(),
 				BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
