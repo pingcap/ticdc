@@ -258,32 +258,7 @@ func (b *Barrier) Resend() []*messaging.TargetMessage {
 		eventList = append(eventList, barrierEvent)
 		return true
 	})
-	// Bootstrap responses are dispatcher/span snapshots, not DDL logs. The DDL
-	// signal recovered here is each span's in-flight BlockState. After maintainer
-	// failover, some dispatchers may have advanced past an earlier blocking DDL
-	// while others still need pass actions, and the advanced dispatchers can
-	// already be blocked by a later DDL. Since blockedEvents is map-backed, sort
-	// recovered barrier events by event key before route precheck/apply so route
-	// admission state advances in DDL commit order.
-	slices.SortFunc(eventList, func(a, b *BarrierEvent) int {
-		return compareEventKey(
-			getEventKey(a.commitTs, a.isSyncPoint),
-			getEventKey(b.commitTs, b.isSyncPoint),
-		)
-	})
-
-	for _, barrierEvent := range eventList {
-		if barrierEvent.selected.Load() {
-			ready, err := b.precheckRouteEvent(barrierEvent)
-			if err != nil || !ready {
-				continue
-			}
-		}
-		if barrierEvent.selected.Load() && barrierEvent.writerDispatcherAdvanced {
-			if err := b.applyRouteEvent(barrierEvent); err != nil {
-				continue
-			}
-		}
+	for _, barrierEvent := range b.eventsReadyForResend(eventList) {
 		// todo: we can limit the number of messages to send in one round here
 		msgs = append(msgs, barrierEvent.resend(b.mode)...)
 	}
@@ -295,6 +270,43 @@ func (b *Barrier) Resend() []*messaging.TargetMessage {
 		}
 	}
 	return msgs
+}
+
+// eventsReadyForResend applies route admission gates when enabled and returns
+// the BarrierEvents whose resend messages can be emitted in this round.
+func (b *Barrier) eventsReadyForResend(eventList []*BarrierEvent) []*BarrierEvent {
+	if b.routeAdmission == nil {
+		return eventList
+	}
+	// Route admission is order-sensitive: a later DDL must be checked against
+	// the admission snapshot produced by all earlier DDLs. blockedEvents is
+	// map-backed, so recovered events must be sorted before precheck/apply to
+	// avoid false route conflicts or missed conflicts after maintainer failover.
+	slices.SortFunc(eventList, func(a, b *BarrierEvent) int {
+		return compareEventKey(
+			getEventKey(a.commitTs, a.isSyncPoint),
+			getEventKey(b.commitTs, b.isSyncPoint),
+		)
+	})
+
+	readyEvents := make([]*BarrierEvent, 0, len(eventList))
+	for _, event := range eventList {
+		if !event.selected.Load() {
+			readyEvents = append(readyEvents, event)
+			continue
+		}
+		ready, err := b.precheckRouteEvent(event)
+		if err != nil || !ready {
+			continue
+		}
+		if event.writerDispatcherAdvanced {
+			if err := b.applyRouteEvent(event); err != nil {
+				continue
+			}
+		}
+		readyEvents = append(readyEvents, event)
+	}
+	return readyEvents
 }
 
 // ShouldBlockCheckpointTs returns ture if there is a block event need block the checkpoint ts forwarding
