@@ -41,8 +41,6 @@ type Changefeed struct {
 	nodeIDMu sync.Mutex
 	nodeID   node.ID
 
-	configBytesMu sync.RWMutex
-	configBytes   []byte
 	// it's saved to the backend db
 	lastSavedCheckpointTs    *atomic.Uint64
 	logCoordinatorResolvedTs *atomic.Uint64
@@ -63,16 +61,9 @@ func NewChangefeed(cfID common.ChangeFeedID,
 		log.Panic("unable to parse sink-uri",
 			zap.String("url", info.SinkURI), zap.Error(err))
 	}
-	bytes, err := json.Marshal(info)
-	if err != nil {
-		log.Panic("unable to marshal changefeed config",
-			zap.Error(err))
-	}
-
 	res := &Changefeed{
 		ID:                       cfID,
 		info:                     atomic.NewPointer(info),
-		configBytes:              bytes,
 		lastSavedCheckpointTs:    atomic.NewUint64(checkpointTs),
 		logCoordinatorResolvedTs: atomic.NewUint64(checkpointTs),
 		sinkType:                 getSinkType(uri.Scheme),
@@ -104,22 +95,6 @@ func (c *Changefeed) GetInfo() *config.ChangeFeedInfo {
 }
 
 func (c *Changefeed) SetInfo(info *config.ChangeFeedInfo) {
-	if info == nil {
-		c.configBytesMu.Lock()
-		c.configBytes = nil
-		c.configBytesMu.Unlock()
-		c.info.Store(nil)
-		return
-	}
-	// AddMaintainerRequest carries configBytes, so keep them in sync with
-	// the latest persisted ChangeFeedInfo before rescheduling a maintainer.
-	bytes, err := json.Marshal(info)
-	if err != nil {
-		log.Panic("unable to marshal changefeed config", zap.Error(err))
-	}
-	c.configBytesMu.Lock()
-	c.configBytes = bytes
-	c.configBytesMu.Unlock()
 	c.info.Store(info)
 }
 
@@ -264,9 +239,14 @@ func (c *Changefeed) GetLastSavedCheckPointTs() uint64 {
 }
 
 func (c *Changefeed) NewAddMaintainerMessage(server node.ID) *messaging.TargetMessage {
-	c.configBytesMu.RLock()
-	configBytes := c.configBytes
-	c.configBytesMu.RUnlock()
+	info := c.GetInfo()
+	if info == nil {
+		log.Panic("changefeed info is nil", zap.String("changefeedID", c.ID.String()))
+	}
+	configBytes, err := json.Marshal(info)
+	if err != nil {
+		log.Panic("unable to marshal changefeed config", zap.Error(err))
+	}
 	return messaging.NewSingleTargetMessage(server,
 		messaging.MaintainerManagerTopic,
 		&heartbeatpb.AddMaintainerRequest{
