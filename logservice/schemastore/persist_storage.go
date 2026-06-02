@@ -249,31 +249,21 @@ func (p *persistentStorage) initializeFromDisk() {
 	storageSnap := p.db.NewSnapshot()
 	defer storageSnap.Close()
 
-	var err error
-	if p.databaseMap, err = loadDatabasesInKVSnap(storageSnap, p.gcTs); err != nil {
-		log.Fatal("load database info from disk failed")
-	}
-
-	if p.tableMap, p.partitionMap, err = loadTablesInKVSnap(storageSnap, p.gcTs, p.databaseMap); err != nil {
-		log.Fatal("load tables in kv snapshot failed")
-	}
-
-	if p.tablesDDLHistory, p.tableTriggerDDLHistory, err = loadAndApplyDDLHistory(
+	p.databaseMap = loadDatabasesInKVSnap(storageSnap, p.gcTs)
+	p.tableMap, p.partitionMap = loadTablesInKVSnap(storageSnap, p.gcTs, p.databaseMap)
+	p.tablesDDLHistory, p.tableTriggerDDLHistory = loadAndApplyDDLHistory(
 		storageSnap,
 		p.gcTs,
 		p.upperBound.FinishedDDLTs,
 		p.databaseMap,
 		p.tableMap,
-		p.partitionMap); err != nil {
-		log.Fatal("fail to initialize from disk")
-	}
+		p.partitionMap)
 }
 
-func (p *persistentStorage) run() error {
+func (p *persistentStorage) run() {
 	p.wg.Add(2)
 	go p.gc(p.ctx)
 	go p.persistUpperBoundPeriodically(p.ctx)
-	return nil
 }
 
 func (p *persistentStorage) close() error {
@@ -305,7 +295,7 @@ func (p *persistentStorage) getAllPhysicalTables(snapTs uint64, tableFilter filt
 		log.Debug("getAllPhysicalTables finish",
 			zap.Any("duration(s)", time.Since(start).Seconds()))
 	}()
-	return loadAllPhysicalTablesAtTs(storageSnap, gcTs, snapTs, tableFilter)
+	return loadAllPhysicalTablesAtTs(storageSnap, gcTs, snapTs, tableFilter), nil
 }
 
 // only return when table info is initialized
@@ -324,7 +314,8 @@ func (p *persistentStorage) registerTable(tableID int64, startTs uint64) error {
 	p.mu.Unlock()
 
 	if !ok {
-		return p.buildVersionedTableInfoStore(store)
+		p.buildVersionedTableInfoStore(store)
+		return nil
 	}
 
 	store.waitTableInfoInitialized()
@@ -518,7 +509,7 @@ func (p *persistentStorage) fetchTableTriggerDDLEvents(tableFilter filter.Filter
 	}
 }
 
-func (p *persistentStorage) buildVersionedTableInfoStore(store *versionedTableInfoStore) error {
+func (p *persistentStorage) buildVersionedTableInfoStore(store *versionedTableInfoStore) {
 	tableID := store.getTableID()
 	// get snapshot from disk before get current gc ts to make sure data is not deleted by gc process
 	storageSnap := p.db.NewSnapshot()
@@ -530,28 +521,24 @@ func (p *persistentStorage) buildVersionedTableInfoStore(store *versionedTableIn
 	allDDLFinishedTs = append(allDDLFinishedTs, p.tablesDDLHistory[tableID]...)
 	p.mu.RUnlock()
 
-	if err := addTableInfoFromKVSnap(store, kvSnapVersion, storageSnap); err != nil {
-		return err
-	}
+	addTableInfoFromKVSnap(store, kvSnapVersion, storageSnap)
 
 	for _, version := range allDDLFinishedTs {
 		ddlEvent := readPersistedDDLEvent(storageSnap, version)
 		store.applyDDLFromPersistStorage(&ddlEvent)
 	}
 	store.setTableInfoInitialized()
-	return nil
 }
 
 func addTableInfoFromKVSnap(
 	store *versionedTableInfoStore,
 	kvSnapVersion uint64,
 	snap *pebble.Snapshot,
-) error {
+) {
 	tableInfo := readTableInfoInKVSnap(snap, store.getTableID(), kvSnapVersion)
 	if tableInfo != nil {
 		store.addInitialTableInfo(tableInfo, kvSnapVersion)
 	}
-	return nil
 }
 
 func (p *persistentStorage) gc(ctx context.Context) {
