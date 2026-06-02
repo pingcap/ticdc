@@ -56,6 +56,7 @@ type BarrierEvent struct {
 	blockedDispatchers *heartbeatpb.InfluencedTables
 	dropDispatchers    *heartbeatpb.InfluencedTables
 	newTables          []*heartbeatpb.Table
+	routeTables        []*heartbeatpb.RouteTableAdmission
 	schemaIDChange     []*heartbeatpb.SchemaIDChange
 	isSyncPoint        bool
 	needSchedule       bool
@@ -110,6 +111,7 @@ func NewBlockEvent(cfID common.ChangeFeedID,
 		blockedDispatchers: status.BlockTables,
 		dropDispatchers:    status.NeedDroppedTables,
 		newTables:          status.NeedAddedTables,
+		routeTables:        status.RouteTableAdmissions,
 		schemaIDChange:     status.UpdatedSchemas,
 		isSyncPoint:        status.IsSyncPoint,
 		needSchedule:       needSchedule(status),
@@ -157,6 +159,7 @@ func (be *BarrierEvent) buildRouteAdmission() routeAdmission {
 		blockTables:   be.blockedDispatchers,
 		droppedTables: be.dropDispatchers,
 		addedTables:   be.newTables,
+		routeTables:   be.routeTables,
 		updatedSchema: be.schemaIDChange,
 		mode:          be.mode,
 	}

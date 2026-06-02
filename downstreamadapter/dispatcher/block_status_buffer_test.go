@@ -168,6 +168,8 @@ func TestWaitingBlockStatusClonesMutableMetadata(t *testing.T) {
 	dispatcherID := common.NewDispatcherID()
 	event := &commonEvent.DDLEvent{
 		FinishedTs: 100,
+		SchemaName: "db",
+		TableName:  "t",
 		BlockedTables: &commonEvent.InfluencedTables{
 			InfluenceType: commonEvent.InfluenceTypeNormal,
 			TableIDs:      []int64{1, 2},
@@ -177,39 +179,58 @@ func TestWaitingBlockStatusClonesMutableMetadata(t *testing.T) {
 			TableIDs:      []int64{3, 4},
 		},
 		NeedAddedTables: []commonEvent.Table{
-			{SchemaID: 10, TableID: 11, Splitable: true},
+			{
+				SchemaID:  10,
+				TableID:   11,
+				Splitable: true,
+			},
+		},
+		TableNameChange: &commonEvent.TableNameChange{
+			AddName: []commonEvent.SchemaTableName{{SchemaName: "db", TableName: "t"}},
 		},
 		UpdatedSchemas: []commonEvent.SchemaIDChange{
 			{TableID: 12, OldSchemaID: 13, NewSchemaID: 14},
 		},
 	}
+	event = commonEvent.NewRoutedDDLEvent(event, event.Query, "target_db", "target_t", "", "", nil, nil, nil)
 
 	status := &heartbeatpb.TableSpanBlockStatus{
 		ID: dispatcherID.ToPB(),
 		State: &heartbeatpb.State{
-			IsBlocked:         true,
-			BlockTs:           event.GetCommitTs(),
-			BlockTables:       cloneInfluencedTablesPB(event.GetBlockedTables()),
-			NeedDroppedTables: cloneInfluencedTablesPB(event.GetNeedDroppedTables()),
-			NeedAddedTables:   commonEvent.ToTablesPB(event.GetNeedAddedTables()),
-			UpdatedSchemas:    commonEvent.ToSchemaIDChangePB(event.GetUpdatedSchemas()),
-			Stage:             heartbeatpb.BlockStage_WAITING,
+			IsBlocked:            true,
+			BlockTs:              event.GetCommitTs(),
+			BlockTables:          cloneInfluencedTablesPB(event.GetBlockedTables()),
+			NeedDroppedTables:    cloneInfluencedTablesPB(event.GetNeedDroppedTables()),
+			NeedAddedTables:      commonEvent.ToTablesPB(event.GetNeedAddedTables()),
+			RouteTableAdmissions: routeTableAdmissionsForBlockState(event),
+			UpdatedSchemas:       commonEvent.ToSchemaIDChangePB(event.GetUpdatedSchemas()),
+			Stage:                heartbeatpb.BlockStage_WAITING,
 		},
 		Mode: common.DefaultMode,
 	}
 	require.Equal(t, []int64{1, 2}, status.State.BlockTables.TableIDs)
 	require.Equal(t, []int64{3, 4}, status.State.NeedDroppedTables.TableIDs)
 	require.Equal(t, int64(11), status.State.NeedAddedTables[0].TableID)
+	require.Equal(t, "db", status.State.RouteTableAdmissions[0].SourceSchemaName)
+	require.Equal(t, "t", status.State.RouteTableAdmissions[0].SourceTableName)
+	require.Equal(t, "target_db", status.State.RouteTableAdmissions[0].TargetSchemaName)
+	require.Equal(t, "target_t", status.State.RouteTableAdmissions[0].TargetTableName)
 	require.Equal(t, int64(14), status.State.UpdatedSchemas[0].NewSchemaID)
 
 	event.BlockedTables.TableIDs[0] = 101
 	event.NeedDroppedTables.TableIDs[0] = 102
 	event.NeedAddedTables[0].TableID = 103
+	event.TableNameChange.AddName[0].SchemaName = "changed"
+	event.TableNameChange.AddName[0].TableName = "changed"
 	event.UpdatedSchemas[0].NewSchemaID = 104
 
 	require.Equal(t, []int64{1, 2}, status.State.BlockTables.TableIDs)
 	require.Equal(t, []int64{3, 4}, status.State.NeedDroppedTables.TableIDs)
 	require.Equal(t, int64(11), status.State.NeedAddedTables[0].TableID)
+	require.Equal(t, "db", status.State.RouteTableAdmissions[0].SourceSchemaName)
+	require.Equal(t, "t", status.State.RouteTableAdmissions[0].SourceTableName)
+	require.Equal(t, "target_db", status.State.RouteTableAdmissions[0].TargetSchemaName)
+	require.Equal(t, "target_t", status.State.RouteTableAdmissions[0].TargetTableName)
 	require.Equal(t, int64(14), status.State.UpdatedSchemas[0].NewSchemaID)
 }
 

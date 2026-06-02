@@ -102,6 +102,7 @@ type routeAdmission struct {
 	blockTables   *heartbeatpb.InfluencedTables
 	droppedTables *heartbeatpb.InfluencedTables
 	addedTables   []*heartbeatpb.Table
+	routeTables   []*heartbeatpb.RouteTableAdmission
 	updatedSchema []*heartbeatpb.SchemaIDChange
 	mode          int64
 }
@@ -288,7 +289,8 @@ func (a *routeAdmin) needsCheck(info routeAdmission) bool {
 	if a == nil || a.registry == nil || info.isSyncPoint {
 		return false
 	}
-	if info.droppedTables != nil || len(info.addedTables) > 0 || len(info.updatedSchema) > 0 {
+	if info.droppedTables != nil || len(info.addedTables) > 0 ||
+		len(info.routeTables) > 0 || len(info.updatedSchema) > 0 {
 		return true
 	}
 	return info.blockTables != nil && len(info.blockTables.TableIDs) > 0
@@ -363,20 +365,20 @@ func (a *routeAdmin) buildTransition(info routeAdmission) (*routeTransition, err
 	}
 
 	for _, add := range info.addedTables {
+		if a.hasRouteAdmission(info.routeTables, add.TableID) {
+			continue
+		}
 		binding, err := a.buildBindingForTable(add.TableID, add.SchemaID, info.commitTs)
 		if err != nil {
 			return nil, err
 		}
-		if existing, ok := a.tableSources[add.TableID]; ok {
-			if existing.equal(binding) {
-				continue
-			}
-			builder.addRemove(add.TableID)
-		}
-		builder.addBinding(binding)
+		a.addBindingToTransition(builder, binding)
 	}
 
 	for _, change := range info.updatedSchema {
+		if a.hasRouteAdmission(info.routeTables, change.TableID) {
+			continue
+		}
 		_, exists := a.tableSources[change.TableID]
 		if !exists {
 			return nil, errors.ErrInternalCheckFailed.GenWithStack(
@@ -390,6 +392,20 @@ func (a *routeAdmin) buildTransition(info routeAdmission) (*routeTransition, err
 		builder.addBinding(binding)
 	}
 
+	for _, table := range info.routeTables {
+		if builder.hasRemove(table.TableID) {
+			continue
+		}
+		binding, ok, err := a.buildBindingForRouteAdmission(table)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			continue
+		}
+		a.addBindingToTransition(builder, binding)
+	}
+
 	if info.blockTables != nil && info.blockTables.InfluenceType == heartbeatpb.InfluenceType_Normal {
 		for _, tableID := range info.blockTables.TableIDs {
 			if tableID == common.DDLSpanTableID {
@@ -400,6 +416,9 @@ func (a *routeAdmin) buildTransition(info routeAdmission) (*routeTransition, err
 			}
 			existing, exists := a.tableSources[tableID]
 			if !exists {
+				continue
+			}
+			if a.hasRouteAdmission(info.routeTables, tableID) {
 				continue
 			}
 			binding, err := a.buildBindingForTable(tableID, existing.sourceSchemaID, info.commitTs)
@@ -416,14 +435,46 @@ func (a *routeAdmin) buildTransition(info routeAdmission) (*routeTransition, err
 	return builder.finish(), nil
 }
 
+func (a *routeAdmin) addBindingToTransition(builder *routeTransitionBuilder, binding admission) {
+	if existing, ok := a.tableSources[binding.tableID]; ok {
+		if existing.equal(binding) {
+			return
+		}
+		builder.addRemove(binding.tableID)
+	}
+	builder.addBinding(binding)
+}
+
 func (a *routeAdmin) buildBindingForTable(tableID, schemaID int64, commitTs uint64) (admission, error) {
-	// Some DDL route transitions reach route admission before the target table
-	// dispatcher is admitted, so route precheck asks only for the source name
-	// and must not depend on dispatcher table registration.
 	tableName, err := a.getTableNameByID(a.keyspaceMeta, tableID, commitTs)
 	if err != nil {
 		return admission{}, err
 	}
+	binding, err := a.router.Route(tableName.Schema, tableName.Table)
+	if err != nil {
+		return admission{}, err
+	}
+	return a.newAdmission(tableID, schemaID, binding)
+}
+
+func (a *routeAdmin) buildBindingForRouteAdmission(
+	table *heartbeatpb.RouteTableAdmission,
+) (admission, bool, error) {
+	if table.SourceSchemaName == "" || table.SourceTableName == "" ||
+		table.TargetSchemaName == "" || table.TargetTableName == "" {
+		return admission{}, false, nil
+	}
+	binding, err := a.newAdmission(table.TableID, table.SchemaID, routing.RouteBinding{
+		Source: routing.TableKey{Schema: table.SourceSchemaName, Table: table.SourceTableName},
+		Target: routing.TableKey{Schema: table.TargetSchemaName, Table: table.TargetTableName},
+	})
+	if err != nil {
+		return admission{}, false, err
+	}
+	return binding, true, nil
+}
+
+func (a *routeAdmin) newAdmission(tableID, schemaID int64, binding routing.RouteBinding) (admission, error) {
 	if schemaID == 0 {
 		existing, ok := a.tableSources[tableID]
 		if !ok {
@@ -432,15 +483,20 @@ func (a *routeAdmin) buildBindingForTable(tableID, schemaID int64, commitTs uint
 		}
 		schemaID = existing.sourceSchemaID
 	}
-	binding, err := a.router.Route(tableName.Schema, tableName.Table)
-	if err != nil {
-		return admission{}, err
-	}
 	return admission{
 		tableID:        tableID,
 		sourceSchemaID: schemaID,
 		binding:        binding,
 	}, nil
+}
+
+func (a *routeAdmin) hasRouteAdmission(tables []*heartbeatpb.RouteTableAdmission, tableID int64) bool {
+	for _, table := range tables {
+		if table.TableID == tableID {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *routeAdmin) applyTransition(transition *routeTransition, mutate bool) (routeAdmissionChange, error) {

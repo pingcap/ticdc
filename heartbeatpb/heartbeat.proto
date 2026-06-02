@@ -342,6 +342,15 @@ message Table {
     bool Splitable = 3;
 }
 
+message RouteTableAdmission {
+    int64 TableID = 1;
+    int64 SchemaID = 2;
+    string SourceSchemaName = 3;
+    string SourceTableName = 4;
+    string TargetSchemaName = 5;
+    string TargetTableName = 6;
+}
+
 message SchemaIDChange {
     int64 TableID = 1;
     int64 OldSchemaID = 2;
@@ -357,6 +366,7 @@ message State {
     repeated SchemaIDChange UpdatedSchemas = 6;
     bool IsSyncPoint = 7;
     BlockStage stage = 8;  // means whether the block is waiting / writing / done
+    repeated RouteTableAdmission RouteTableAdmissions = 9;
 }
 
 message TableSpanBlockStatus {

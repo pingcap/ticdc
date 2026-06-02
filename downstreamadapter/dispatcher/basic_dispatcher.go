@@ -918,6 +918,176 @@ func cloneInfluencedTablesPB(
 	return status
 }
 
+func routeTableAdmissionsForBlockState(event commonEvent.BlockEvent) []*heartbeatpb.RouteTableAdmission {
+	ddlEvent, ok := event.(*commonEvent.DDLEvent)
+	if !ok {
+		return nil
+	}
+	seen := make(map[int64]struct{})
+	admissions := make([]*heartbeatpb.RouteTableAdmission, 0, len(ddlEvent.GetNeedAddedTables()))
+	admissions = appendAddedRouteAdmissions(admissions, seen, ddlEvent)
+	admissions = appendBlockedRouteAdmissions(admissions, seen, ddlEvent)
+	if len(admissions) == 0 {
+		return nil
+	}
+	return admissions
+}
+
+func appendAddedRouteAdmissions(
+	admissions []*heartbeatpb.RouteTableAdmission,
+	seen map[int64]struct{},
+	ddlEvent *commonEvent.DDLEvent,
+) []*heartbeatpb.RouteTableAdmission {
+	addedTables := ddlEvent.GetNeedAddedTables()
+	if len(addedTables) == 0 {
+		return admissions
+	}
+	addNames := tableNameChangeAddNames(ddlEvent)
+	if len(addNames) == 1 {
+		binding, ok := routeBindingForSingleDDL(ddlEvent, addNames[0])
+		if !ok {
+			return admissions
+		}
+		for _, table := range addedTables {
+			admissions = appendRouteAdmission(admissions, seen, table.TableID, table.SchemaID, binding)
+		}
+		return admissions
+	}
+	if len(addNames) != len(addedTables) {
+		return admissions
+	}
+	for i, table := range addedTables {
+		binding := routeBindingFromSource(addNames[i])
+		if i < len(ddlEvent.MultipleTableInfos) {
+			if infoBinding, ok := routeBindingFromTableInfo(ddlEvent.MultipleTableInfos[i]); ok {
+				binding = infoBinding
+			}
+		}
+		admissions = appendRouteAdmission(admissions, seen, table.TableID, table.SchemaID, binding)
+	}
+	return admissions
+}
+
+func appendBlockedRouteAdmissions(
+	admissions []*heartbeatpb.RouteTableAdmission,
+	seen map[int64]struct{},
+	ddlEvent *commonEvent.DDLEvent,
+) []*heartbeatpb.RouteTableAdmission {
+	blockTables := ddlEvent.GetBlockedTables()
+	if blockTables == nil || blockTables.InfluenceType != commonEvent.InfluenceTypeNormal {
+		return admissions
+	}
+	binding, ok := primaryRouteBinding(ddlEvent)
+	addNames := tableNameChangeAddNames(ddlEvent)
+	if len(addNames) == 1 {
+		binding, ok = routeBindingForSingleDDL(ddlEvent, addNames[0])
+	}
+	if !ok {
+		return appendTableInfoRouteAdmissions(admissions, seen, ddlEvent)
+	}
+	for _, tableID := range blockTables.TableIDs {
+		if tableID == common.DDLSpanTableID {
+			continue
+		}
+		admissions = appendRouteAdmission(admissions, seen, tableID, ddlEvent.SchemaID, binding)
+	}
+	return admissions
+}
+
+func appendTableInfoRouteAdmissions(
+	admissions []*heartbeatpb.RouteTableAdmission,
+	seen map[int64]struct{},
+	ddlEvent *commonEvent.DDLEvent,
+) []*heartbeatpb.RouteTableAdmission {
+	for _, tableInfo := range ddlEvent.MultipleTableInfos {
+		binding, ok := routeBindingFromTableInfo(tableInfo)
+		if !ok {
+			continue
+		}
+		admissions = appendRouteAdmission(admissions, seen, tableInfo.TableName.TableID, ddlEvent.SchemaID, binding)
+	}
+	return admissions
+}
+
+func appendRouteAdmission(
+	admissions []*heartbeatpb.RouteTableAdmission,
+	seen map[int64]struct{},
+	tableID, schemaID int64,
+	binding routing.RouteBinding,
+) []*heartbeatpb.RouteTableAdmission {
+	if tableID == common.DDLSpanTableID {
+		return admissions
+	}
+	if _, ok := seen[tableID]; ok {
+		return admissions
+	}
+	seen[tableID] = struct{}{}
+	return append(admissions, &heartbeatpb.RouteTableAdmission{
+		TableID:          tableID,
+		SchemaID:         schemaID,
+		SourceSchemaName: binding.Source.Schema,
+		SourceTableName:  binding.Source.Table,
+		TargetSchemaName: binding.Target.Schema,
+		TargetTableName:  binding.Target.Table,
+	})
+}
+
+func routeBindingForSingleDDL(
+	ddlEvent *commonEvent.DDLEvent,
+	source commonEvent.SchemaTableName,
+) (routing.RouteBinding, bool) {
+	for _, tableInfo := range ddlEvent.MultipleTableInfos {
+		binding, ok := routeBindingFromTableInfo(tableInfo)
+		if !ok {
+			continue
+		}
+		if binding.Source.Schema == source.SchemaName && binding.Source.Table == source.TableName {
+			return binding, true
+		}
+	}
+	if ddlEvent.GetSchemaName() == source.SchemaName && ddlEvent.GetTableName() == source.TableName {
+		return routing.RouteBinding{
+			Source: routing.TableKey{Schema: source.SchemaName, Table: source.TableName},
+			Target: routing.TableKey{Schema: ddlEvent.GetTargetSchemaName(), Table: ddlEvent.GetTargetTableName()},
+		}, true
+	}
+	return routeBindingFromSource(source), true
+}
+
+func primaryRouteBinding(ddlEvent *commonEvent.DDLEvent) (routing.RouteBinding, bool) {
+	if ddlEvent.GetSchemaName() == "" || ddlEvent.GetTableName() == "" {
+		return routing.RouteBinding{}, false
+	}
+	return routing.RouteBinding{
+		Source: routing.TableKey{Schema: ddlEvent.GetSchemaName(), Table: ddlEvent.GetTableName()},
+		Target: routing.TableKey{Schema: ddlEvent.GetTargetSchemaName(), Table: ddlEvent.GetTargetTableName()},
+	}, true
+}
+
+func routeBindingFromTableInfo(tableInfo *common.TableInfo) (routing.RouteBinding, bool) {
+	if tableInfo == nil || tableInfo.GetSchemaName() == "" || tableInfo.GetTableName() == "" {
+		return routing.RouteBinding{}, false
+	}
+	return routing.RouteBinding{
+		Source: routing.TableKey{Schema: tableInfo.GetSchemaName(), Table: tableInfo.GetTableName()},
+		Target: routing.TableKey{Schema: tableInfo.GetTargetSchemaName(), Table: tableInfo.GetTargetTableName()},
+	}, true
+}
+
+func routeBindingFromSource(source commonEvent.SchemaTableName) routing.RouteBinding {
+	return routing.RouteBinding{
+		Source: routing.TableKey{Schema: source.SchemaName, Table: source.TableName},
+		Target: routing.TableKey{Schema: source.SchemaName, Table: source.TableName},
+	}
+}
+
+func tableNameChangeAddNames(ddlEvent *commonEvent.DDLEvent) []commonEvent.SchemaTableName {
+	if ddlEvent.TableNameChange == nil {
+		return nil
+	}
+	return ddlEvent.TableNameChange.AddName
+}
+
 // shouldBlock check whether the event should be blocked(to wait maintainer response)
 // For the ddl event with more than one blockedTable, it should block.
 // For the ddl event with only one blockedTable, it should block only if the table is not complete span.
@@ -1031,10 +1201,11 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 		status := &heartbeatpb.TableSpanBlockStatus{
 			ID: d.id.ToPB(),
 			State: &heartbeatpb.State{
-				BlockTs:           event.GetCommitTs(),
-				NeedDroppedTables: cloneInfluencedTablesPB(event.GetNeedDroppedTables()),
-				NeedAddedTables:   commonEvent.ToTablesPB(event.GetNeedAddedTables()),
-				Stage:             heartbeatpb.BlockStage_NONE,
+				BlockTs:              event.GetCommitTs(),
+				NeedDroppedTables:    cloneInfluencedTablesPB(event.GetNeedDroppedTables()),
+				NeedAddedTables:      commonEvent.ToTablesPB(event.GetNeedAddedTables()),
+				RouteTableAdmissions: routeTableAdmissionsForBlockState(event),
+				Stage:                heartbeatpb.BlockStage_NONE,
 			},
 			Mode: d.GetMode(),
 		}
@@ -1178,14 +1349,15 @@ func (d *BasicDispatcher) reportBlockedEventToMaintainer(event commonEvent.Block
 	status := &heartbeatpb.TableSpanBlockStatus{
 		ID: d.id.ToPB(),
 		State: &heartbeatpb.State{
-			IsBlocked:         true,
-			BlockTs:           event.GetCommitTs(),
-			BlockTables:       cloneInfluencedTablesPB(event.GetBlockedTables()),
-			NeedDroppedTables: cloneInfluencedTablesPB(event.GetNeedDroppedTables()),
-			NeedAddedTables:   commonEvent.ToTablesPB(event.GetNeedAddedTables()),
-			UpdatedSchemas:    commonEvent.ToSchemaIDChangePB(event.GetUpdatedSchemas()),
-			IsSyncPoint:       event.GetType() == commonEvent.TypeSyncPointEvent,
-			Stage:             heartbeatpb.BlockStage_WAITING,
+			IsBlocked:            true,
+			BlockTs:              event.GetCommitTs(),
+			BlockTables:          cloneInfluencedTablesPB(event.GetBlockedTables()),
+			NeedDroppedTables:    cloneInfluencedTablesPB(event.GetNeedDroppedTables()),
+			NeedAddedTables:      commonEvent.ToTablesPB(event.GetNeedAddedTables()),
+			RouteTableAdmissions: routeTableAdmissionsForBlockState(event),
+			UpdatedSchemas:       commonEvent.ToSchemaIDChangePB(event.GetUpdatedSchemas()),
+			IsSyncPoint:          event.GetType() == commonEvent.TypeSyncPointEvent,
+			Stage:                heartbeatpb.BlockStage_WAITING,
 		},
 		Mode: d.GetMode(),
 	}
@@ -1226,14 +1398,15 @@ func (d *BasicDispatcher) GetBlockEventStatus() *heartbeatpb.State {
 	//    so don't need to do extra add and drop actions.
 
 	return &heartbeatpb.State{
-		IsBlocked:         true,
-		BlockTs:           pendingEvent.GetCommitTs(),
-		BlockTables:       pendingEvent.GetBlockedTables().ToPB(),
-		NeedDroppedTables: pendingEvent.GetNeedDroppedTables().ToPB(),
-		NeedAddedTables:   commonEvent.ToTablesPB(pendingEvent.GetNeedAddedTables()),
-		UpdatedSchemas:    commonEvent.ToSchemaIDChangePB(pendingEvent.GetUpdatedSchemas()), // only exists for rename table and rename tables
-		IsSyncPoint:       pendingEvent.GetType() == commonEvent.TypeSyncPointEvent,         // sync point event must should block
-		Stage:             blockStage,
+		IsBlocked:            true,
+		BlockTs:              pendingEvent.GetCommitTs(),
+		BlockTables:          pendingEvent.GetBlockedTables().ToPB(),
+		NeedDroppedTables:    pendingEvent.GetNeedDroppedTables().ToPB(),
+		NeedAddedTables:      commonEvent.ToTablesPB(pendingEvent.GetNeedAddedTables()),
+		RouteTableAdmissions: routeTableAdmissionsForBlockState(pendingEvent),
+		UpdatedSchemas:       commonEvent.ToSchemaIDChangePB(pendingEvent.GetUpdatedSchemas()), // only exists for rename table and rename tables
+		IsSyncPoint:          pendingEvent.GetType() == commonEvent.TypeSyncPointEvent,         // sync point event must should block
+		Stage:                blockStage,
 	}
 }
 

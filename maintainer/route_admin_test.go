@@ -62,10 +62,21 @@ func TestRouteAdminAdmitsAddedTables(t *testing.T) {
 		addedTables: []*heartbeatpb.Table{
 			{SchemaID: 2, TableID: 2},
 		},
+		routeTables: []*heartbeatpb.RouteTableAdmission{
+			{
+				SchemaID:         2,
+				TableID:          2,
+				SourceSchemaName: "db2",
+				SourceTableName:  "t",
+				TargetSchemaName: "db2_target",
+				TargetTableName:  "t",
+			},
+		},
 	}
 	ready, err := admin.precheck(info)
 	require.NoError(t, err)
 	require.True(t, ready)
+	require.Equal(t, 0, tableNames.count(2))
 
 	_, ok := admin.tableSources[2]
 	require.False(t, ok)
