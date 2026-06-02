@@ -142,8 +142,7 @@ func NewController(
 ) *Controller {
 	changefeedDB := changefeed.NewChangefeedDB(version)
 
-	oc := operator.NewOperatorController(selfNode, changefeedDB, backend, batchSize)
-	oc.SetPDClient(pdClient)
+	oc := operator.NewOperatorController(selfNode, changefeedDB, backend, pdClient, batchSize)
 	messageCenter := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 	drainController := drain.NewController(messageCenter)
 	c := &Controller{

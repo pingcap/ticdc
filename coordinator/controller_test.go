@@ -58,7 +58,7 @@ func TestOnPeriodTaskAdvanceLiveness(t *testing.T) {
 		return &Controller{
 			changefeedDB: changefeedDB,
 			operatorController: operator.NewOperatorController(
-				self, changefeedDB, backend, 10,
+				self, changefeedDB, backend, nil, 10,
 			),
 			nodeManager:     nodeManager,
 			initialized:     atomic.NewBool(true),
@@ -203,6 +203,7 @@ func TestMaintainerHeartbeatAdmissionRequiresInitializedSender(t *testing.T) {
 		operatorController: operator.NewOperatorController(
 			&node.Info{ID: node.ID("coordinator")},
 			db,
+			nil,
 			nil,
 			10,
 		),
@@ -434,7 +435,7 @@ func TestPauseChangefeed(t *testing.T) {
 		backend:      backend,
 		changefeedDB: changefeedDB,
 		operatorController: operator.NewOperatorController(node.NewInfo("node1", ""),
-			changefeedDB, backend, 10),
+			changefeedDB, backend, nil, 10),
 	}
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
@@ -549,7 +550,7 @@ func TestRemoveChangefeed(t *testing.T) {
 		backend:      backend,
 		changefeedDB: changefeedDB,
 		operatorController: operator.NewOperatorController(node.NewInfo("node1", ""),
-			changefeedDB, backend, 10),
+			changefeedDB, backend, nil, 10),
 	}
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
@@ -594,7 +595,7 @@ func TestListChangefeed(t *testing.T) {
 		backend:      backend,
 		changefeedDB: changefeedDB,
 		operatorController: operator.NewOperatorController(node.NewInfo("node1", ""),
-			changefeedDB, backend, 10),
+			changefeedDB, backend, nil, 10),
 	}
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
@@ -641,7 +642,7 @@ func TestCreateChangefeed(t *testing.T) {
 		backend:      backend,
 		changefeedDB: changefeedDB,
 		operatorController: operator.NewOperatorController(node.NewInfo("node1", ""),
-			changefeedDB, backend, 10),
+			changefeedDB, backend, nil, 10),
 		initialized: atomic.NewBool(false),
 	}
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)

@@ -55,6 +55,7 @@ func NewOperatorController(
 	selfNode *node.Info,
 	db *changefeed.ChangefeedDB,
 	backend changefeed.Backend,
+	pdClient pd.Client,
 	batchSize int,
 ) *Controller {
 	oc := &Controller{
@@ -66,14 +67,10 @@ func NewOperatorController(
 		changefeedDB:  db,
 		selfNode:      selfNode,
 		backend:       backend,
+		pdClient:      pdClient,
 		nodeManger:    appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
 	}
 	return oc
-}
-
-// SetPDClient sets the PD client used to generate persisted maintainer ownership generations.
-func (oc *Controller) SetPDClient(pdClient pd.Client) {
-	oc.pdClient = pdClient
 }
 
 // Execute periodically execute the operator

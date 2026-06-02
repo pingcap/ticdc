@@ -875,6 +875,7 @@ func TestHandleStateChangeSkipsDuplicateRuntimeStatePersistence(t *testing.T) {
 			self,
 			changefeedDB,
 			backend,
+			nil,
 			10,
 		),
 	}
@@ -934,6 +935,7 @@ func TestHandleStateChangeBumpsEpochForWarningState(t *testing.T) {
 			self,
 			changefeedDB,
 			backend,
+			nil,
 			10,
 		),
 	}

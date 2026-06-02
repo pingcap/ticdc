@@ -48,6 +48,7 @@ func newOperatorControllerForTest(
 	t *testing.T,
 	changefeedDB *changefeed.ChangefeedDB,
 	backend changefeed.Backend,
+	pdClient pd.Client,
 ) (*Controller, *node.Info, *watcher.NodeManager) {
 	t.Helper()
 
@@ -58,14 +59,14 @@ func newOperatorControllerForTest(
 	appcontext.SetService(appcontext.MessageCenter, messaging.NewMockMessageCenter())
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)
 
-	return NewOperatorController(self, changefeedDB, backend, 10), self, nodeManager
+	return NewOperatorController(self, changefeedDB, backend, pdClient, 10), self, nodeManager
 }
 
 func TestController_StopChangefeed(t *testing.T) {
 	changefeedDB := changefeed.NewChangefeedDB(1216)
 	ctrl := gomock.NewController(t)
 	backend := mock_changefeed.NewMockBackend(ctrl)
-	oc, self, _ := newOperatorControllerForTest(t, changefeedDB, backend)
+	oc, self, _ := newOperatorControllerForTest(t, changefeedDB, backend, nil)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
 		ChangefeedID: cfID,
@@ -89,7 +90,7 @@ func TestController_AddOperator(t *testing.T) {
 	changefeedDB := changefeed.NewChangefeedDB(1216)
 	ctrl := gomock.NewController(t)
 	backend := mock_changefeed.NewMockBackend(ctrl)
-	oc, self, nodeManager := newOperatorControllerForTest(t, changefeedDB, backend)
+	oc, self, nodeManager := newOperatorControllerForTest(t, changefeedDB, backend, nil)
 	target := node.NewInfo("localhost:8301", "")
 	nodeManager.GetAliveNodes()[target.ID] = target
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
@@ -123,7 +124,7 @@ func TestController_HasOperatorInvolvingNode(t *testing.T) {
 	changefeedDB := changefeed.NewChangefeedDB(1216)
 	ctrl := gomock.NewController(t)
 	backend := mock_changefeed.NewMockBackend(ctrl)
-	oc, self, nodeManager := newOperatorControllerForTest(t, changefeedDB, backend)
+	oc, self, nodeManager := newOperatorControllerForTest(t, changefeedDB, backend, nil)
 	target := node.NewInfo("localhost:8301", "")
 	nodeManager.GetAliveNodes()[target.ID] = target
 
@@ -147,7 +148,7 @@ func TestController_CountMoveMaintainerOperatorsFromNodes(t *testing.T) {
 	changefeedDB := changefeed.NewChangefeedDB(1216)
 	ctrl := gomock.NewController(t)
 	backend := mock_changefeed.NewMockBackend(ctrl)
-	oc, self, nodeManager := newOperatorControllerForTest(t, changefeedDB, backend)
+	oc, self, nodeManager := newOperatorControllerForTest(t, changefeedDB, backend, nil)
 	dest := node.NewInfo("localhost:8301", "")
 	nodeManager.GetAliveNodes()[dest.ID] = dest
 
@@ -196,15 +197,13 @@ func TestController_AddOperatorBumpsAndPersistsOwnershipEpoch(t *testing.T) {
 			changefeedDB := changefeed.NewChangefeedDB(1216)
 			ctrl := gomock.NewController(t)
 			backend := mock_changefeed.NewMockBackend(ctrl)
-			oc, self, nodeManager := newOperatorControllerForTest(t, changefeedDB, backend)
+			oc, self, nodeManager := newOperatorControllerForTest(t, changefeedDB, backend, &operatorEpochPDClient{physical: 100, logical: 1})
 			target := node.NewInfo("localhost:8301", "")
 			nodeManager.GetAliveNodes()[target.ID] = target
 
 			candidateEpoch := oracle.ComposeTS(100, 1)
 			oldEpoch := candidateEpoch + 10
 			expectedEpoch := oldEpoch + 1
-			oc.SetPDClient(&operatorEpochPDClient{physical: 100, logical: 1})
-
 			cfID := common.NewChangeFeedIDWithName(tc.name, common.DefaultKeyspaceName)
 			cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
 				ChangefeedID: cfID,
@@ -244,7 +243,7 @@ func TestController_StopChangefeedDuringAddOperator(t *testing.T) {
 	changefeedDB := changefeed.NewChangefeedDB(1216)
 	ctrl := gomock.NewController(t)
 	backend := mock_changefeed.NewMockBackend(ctrl)
-	oc, _, nodeManager := newOperatorControllerForTest(t, changefeedDB, backend)
+	oc, _, nodeManager := newOperatorControllerForTest(t, changefeedDB, backend, nil)
 	target := node.NewInfo("localhost:8301", "")
 	nodeManager.GetAliveNodes()[target.ID] = target
 

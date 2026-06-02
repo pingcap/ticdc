@@ -81,7 +81,7 @@ func newDrainTestController(t *testing.T) (*Controller, *drain.Controller, node.
 	drainController := drain.NewController(mc)
 	db := changefeed.NewChangefeedDB(1)
 	selfNode := &node.Info{ID: node.ID("coordinator")}
-	oc := operator.NewOperatorController(selfNode, db, nil, 10)
+	oc := operator.NewOperatorController(selfNode, db, nil, nil, 10)
 
 	target := node.ID("target")
 	nodeManager.GetAliveNodes()[target] = &node.Info{ID: target}
