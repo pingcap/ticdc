@@ -16,7 +16,6 @@ package maintainer
 import (
 	"cmp"
 	"container/heap"
-	"maps"
 	"slices"
 	"time"
 
@@ -500,7 +499,7 @@ func (a *routeAdmin) hasRouteAdmission(tables []*heartbeatpb.RouteTableAdmission
 }
 
 func (a *routeAdmin) applyTransition(transition *routeTransition, mutate bool) (routeAdmissionChange, error) {
-	change, nextRefs, err := a.buildAdmissionChange(transition)
+	change, refDeltas, err := a.buildAdmissionChange(transition)
 	if err != nil {
 		return routeAdmissionChange{}, err
 	}
@@ -516,26 +515,29 @@ func (a *routeAdmin) applyTransition(transition *routeTransition, mutate bool) (
 	for _, add := range transition.adds {
 		a.tableSources[add.tableID] = add
 	}
-	a.sourceRefs = nextRefs
+	for source, delta := range refDeltas {
+		next := a.sourceRefs[source] + delta
+		if next == 0 {
+			delete(a.sourceRefs, source)
+			continue
+		}
+		a.sourceRefs[source] = next
+	}
 	return change, nil
 }
 
 func (a *routeAdmin) buildAdmissionChange(
 	transition *routeTransition,
 ) (routeAdmissionChange, map[routing.TableKey]int, error) {
-	nextRefs := make(map[routing.TableKey]int, len(a.sourceRefs)+len(transition.adds))
-	maps.Copy(nextRefs, a.sourceRefs)
-
 	addsBySource := make(map[routing.TableKey]routing.RouteBinding, len(transition.adds))
+	refDeltas := make(map[routing.TableKey]int, len(transition.removeTableIDs)+len(transition.adds))
 	for _, tableID := range transition.removeTableIDs {
 		existing, ok := a.tableSources[tableID]
 		if !ok {
 			continue
 		}
 		source := existing.binding.Source
-		if nextRefs[source] > 0 {
-			nextRefs[source]--
-		}
+		refDeltas[source]--
 	}
 	for _, add := range transition.adds {
 		source := add.binding.Source
@@ -547,20 +549,26 @@ func (a *routeAdmin) buildAdmissionChange(
 				add.binding.Target.Schema, add.binding.Target.Table)
 		}
 		addsBySource[source] = add.binding
-		nextRefs[source]++
+		refDeltas[source]++
 	}
 
 	change := routeAdmissionChange{
 		releases: make([]routing.TableKey, 0),
 		admits:   make([]routing.RouteBinding, 0),
 	}
-	for source, count := range a.sourceRefs {
-		if count > 0 && nextRefs[source] == 0 {
-			change.releases = append(change.releases, source)
+	for source, delta := range refDeltas {
+		oldCount := a.sourceRefs[source]
+		nextCount := oldCount + delta
+		if nextCount < 0 {
+			return routeAdmissionChange{}, nil, errors.ErrInternalCheckFailed.GenWithStack(
+				"route admission source reference count becomes negative for `%s`.`%s`",
+				source.Schema, source.Table)
 		}
-	}
-	for source, count := range nextRefs {
-		if a.sourceRefs[source] != 0 || count == 0 {
+		if oldCount > 0 && nextCount == 0 {
+			change.releases = append(change.releases, source)
+			continue
+		}
+		if oldCount != 0 || nextCount <= 0 {
 			continue
 		}
 		binding, ok := addsBySource[source]
@@ -573,12 +581,7 @@ func (a *routeAdmin) buildAdmissionChange(
 	slices.SortFunc(change.releases, compareTableKey)
 	slices.SortFunc(change.admits, compareRouteBinding)
 
-	for source, count := range nextRefs {
-		if count == 0 {
-			delete(nextRefs, source)
-		}
-	}
-	return change, nextRefs, nil
+	return change, refDeltas, nil
 }
 
 func (a admission) equal(b admission) bool {
