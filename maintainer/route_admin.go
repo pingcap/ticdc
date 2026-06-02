@@ -14,6 +14,7 @@
 package maintainer
 
 import (
+	"cmp"
 	"container/heap"
 	"maps"
 	"slices"
@@ -30,11 +31,21 @@ import (
 	"go.uber.org/zap"
 )
 
+// routeAdmin owns table-route admission state in the maintainer.
+//
+// It turns ordered DDL barrier events into source-table admission/release
+// transitions, validates those transitions against TargetTableRegistry before a
+// conflicting dispatcher can be admitted, and applies the transition after the
+// DDL is known to have advanced. Related DDL events are serialized by eventKey;
+// route-neutral DDLs are remembered so repeated barrier handling stays cheap.
 type routeAdmin struct {
-	changefeedID     common.ChangeFeedID
-	keyspaceMeta     common.KeyspaceMeta
-	router           routing.Router
-	registry         *routing.TargetTableRegistry
+	changefeedID common.ChangeFeedID
+	keyspaceMeta common.KeyspaceMeta
+	router       routing.Router
+	registry     *routing.TargetTableRegistry
+	// getTableNameByID is intentionally narrower than SchemaStore. Route
+	// admission only needs the source name at the DDL commit ts, and CREATE /
+	// RECOVER can be checked before the new table dispatcher is registered.
 	getTableNameByID getTableNameByIDFunc
 	// tableSources is the admission snapshot for currently admitted source tables,
 	// keyed by logical table ID. DDL transitions use it to map table IDs from
@@ -45,6 +56,9 @@ type routeAdmin struct {
 	// on the first reference and release it only after the last reference leaves.
 	sourceRefs map[routing.TableKey]int
 
+	// pendingQueue and pendingEvents keep route-affecting DDL transitions in
+	// commit order. A later route transition can be prechecked only after every
+	// earlier route transition has been applied to the admission snapshot.
 	pendingQueue  pendingEventKeyHeap
 	pendingEvents map[eventKey]*routePendingEvent
 	// Route admin receives every BlockTables event because same-schema RENAME
@@ -53,22 +67,34 @@ type routeAdmin struct {
 	// after the first comparison so resend/apply paths stay cheap.
 	routeNeutralEventCache map[eventKey]struct{}
 
+	// reportError reports unrecoverable route admission errors to the
+	// changefeed-level error path. failed suppresses duplicate reports from
+	// dispatcher/barrier resends of the same broken state.
 	reportError func(error)
 	failed      bool
 }
 
 type getTableNameByIDFunc func(common.KeyspaceMeta, int64, uint64) (common.TableName, error)
 
+// routePendingEvent is the cached route transition for one DDL event waiting in
+// pendingQueue. prechecked means the transition has already passed the registry
+// dry-run, so repeated barrier reports do not redo the same validation.
 type routePendingEvent struct {
 	transition *routeTransition
 	prechecked bool
 }
 
+// tableRouteAdmission is the minimal protocol Barrier needs from table route
+// admission. Keeping this interface small avoids coupling Barrier to routeAdmin
+// internals.
 type tableRouteAdmission interface {
 	precheck(info routeAdmission) (bool, error)
 	apply(info routeAdmission) error
 }
 
+// routeAdmission is the route-relevant snapshot derived from one BarrierEvent.
+// routeAdmin consumes this instead of BarrierEvent so route logic depends only
+// on DDL admission inputs, not on Barrier's dispatcher bookkeeping.
 type routeAdmission struct {
 	key           eventKey
 	commitTs      uint64
@@ -80,18 +106,27 @@ type routeAdmission struct {
 	mode          int64
 }
 
+// routeTransition is the normalized mutation produced from one routeAdmission.
+// removeTableIDs releases currently admitted table IDs; adds admits the source
+// names visible at commitTs. The same transition is used for both precheck and
+// apply so the validated state change is not rebuilt differently later.
 type routeTransition struct {
 	commitTs       uint64
 	removeTableIDs []int64
 	adds           []admission
 }
 
+// admission is the maintainer's current view of one admitted source table ID.
+// sourceSchemaID is kept separately because DROP DATABASE releases by schema ID,
+// while the registry conflict check is based on the source/target names.
 type admission struct {
 	tableID        int64
 	sourceSchemaID int64
 	binding        routing.RouteBinding
 }
 
+// routeAdmissionChange is the registry-level projection of routeTransition:
+// source names to release and source-to-target bindings to admit.
 type routeAdmissionChange struct {
 	releases []routing.TableKey
 	admits   []routing.RouteBinding
@@ -141,13 +176,13 @@ func newRouteAdmin(
 	}
 
 	for _, t := range tables {
-		binding, err := admin.route(t.SchemaName, t.TableName)
+		binding, err := admin.router.Route(t.SchemaName, t.TableName)
 		if err != nil {
 			return nil, err
 		}
 
 		if sourceRefs[binding.Source] == 0 {
-			if err := admin.applyAdmissionChange(routeAdmissionChange{admits: []routing.RouteBinding{binding}}, true); err != nil {
+			if err := admin.registry.ApplyTransition(nil, []routing.RouteBinding{binding}, true); err != nil {
 				return nil, err
 			}
 		}
@@ -167,14 +202,6 @@ func newRouteAdmin(
 		zap.Duration("duration", time.Since(start)))
 
 	return admin, nil
-}
-
-func (a *routeAdmin) route(schema, table string) (routing.RouteBinding, error) {
-	return a.router.Route(schema, table)
-}
-
-func (a *routeAdmin) applyAdmissionChange(change routeAdmissionChange, mutate bool) error {
-	return a.registry.ApplyTransition(change.releases, change.admits, mutate)
 }
 
 func (a *routeAdmin) precheck(info routeAdmission) (bool, error) {
@@ -379,9 +406,7 @@ func (a *routeAdmin) buildTransition(info routeAdmission) (*routeTransition, err
 			if err != nil {
 				return nil, err
 			}
-			if existing.binding.Target != binding.binding.Target ||
-				existing.binding.Source.Schema != binding.binding.Source.Schema ||
-				existing.binding.Source.Table != binding.binding.Source.Table {
+			if !existing.equal(binding) {
 				builder.addRemove(tableID)
 				builder.addBinding(binding)
 			}
@@ -407,7 +432,7 @@ func (a *routeAdmin) buildBindingForTable(tableID, schemaID int64, commitTs uint
 		}
 		schemaID = existing.sourceSchemaID
 	}
-	binding, err := a.route(tableName.Schema, tableName.Table)
+	binding, err := a.router.Route(tableName.Schema, tableName.Table)
 	if err != nil {
 		return admission{}, err
 	}
@@ -423,7 +448,7 @@ func (a *routeAdmin) applyTransition(transition *routeTransition, mutate bool) (
 	if err != nil {
 		return routeAdmissionChange{}, err
 	}
-	if err := a.applyAdmissionChange(change, mutate); err != nil {
+	if err := a.registry.ApplyTransition(change.releases, change.admits, mutate); err != nil {
 		return routeAdmissionChange{}, err
 	}
 	if !mutate {
@@ -508,19 +533,10 @@ func (a admission) equal(b admission) bool {
 }
 
 func compareTableKey(a, b routing.TableKey) int {
-	if a.Schema < b.Schema {
-		return -1
+	if n := cmp.Compare(a.Schema, b.Schema); n != 0 {
+		return n
 	}
-	if a.Schema > b.Schema {
-		return 1
-	}
-	if a.Table < b.Table {
-		return -1
-	}
-	if a.Table > b.Table {
-		return 1
-	}
-	return 0
+	return cmp.Compare(a.Table, b.Table)
 }
 
 func compareRouteBinding(a, b routing.RouteBinding) int {

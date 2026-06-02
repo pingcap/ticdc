@@ -588,14 +588,14 @@ func (b *Barrier) precheckRouteEvent(event *BarrierEvent) (bool, error) {
 	if b.routeAdmission == nil {
 		return true, nil
 	}
-	return b.routeAdmission.precheck(event.routeAdmissionInfo())
+	return b.routeAdmission.precheck(event.buildRouteAdmission())
 }
 
 func (b *Barrier) applyRouteEvent(event *BarrierEvent) error {
 	if b.routeAdmission == nil {
 		return nil
 	}
-	return b.routeAdmission.apply(event.routeAdmissionInfo())
+	return b.routeAdmission.apply(event.buildRouteAdmission())
 }
 
 // ackEvent creates an ack event

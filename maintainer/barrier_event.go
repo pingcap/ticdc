@@ -149,7 +149,7 @@ func newRangeCheck(status *heartbeatpb.State, dynamicSplitEnabled bool, keyspace
 	return range_checker.NewTableCountChecker(status.BlockTables.TableIDs)
 }
 
-func (be *BarrierEvent) routeAdmissionInfo() routeAdmission {
+func (be *BarrierEvent) buildRouteAdmission() routeAdmission {
 	return routeAdmission{
 		key:           getEventKey(be.commitTs, be.isSyncPoint),
 		commitTs:      be.commitTs,

@@ -112,30 +112,6 @@ func TestRouteAdminAdmitsAddedTables(t *testing.T) {
 	require.Equal(t, 0, tableNames.count(common.DDLSpanTableID))
 }
 
-func TestRouteAdminApplyBuildsRecoveredTransition(t *testing.T) {
-	admin, tableNames := newTestRouteAdmin(t, routeForRename())
-	tableNames.set(1, "db1", "u")
-
-	info := routeAdmission{
-		key:      getEventKey(10, false),
-		commitTs: 10,
-		blockTables: &heartbeatpb.InfluencedTables{
-			InfluenceType: heartbeatpb.InfluenceType_Normal,
-			TableIDs:      []int64{1},
-		},
-	}
-
-	require.Empty(t, admin.pendingEvents)
-	require.NoError(t, admin.apply(info))
-
-	binding, ok := admin.tableSources[1]
-	require.True(t, ok)
-	require.Equal(t, routing.TableKey{Schema: "db1", Table: "u"}, binding.binding.Source)
-	require.Equal(t, routing.TableKey{Schema: "target", Table: "u"}, binding.binding.Target)
-	require.Empty(t, admin.pendingEvents)
-	require.Empty(t, admin.pendingQueue)
-}
-
 func TestRouteAdminCachesRouteNeutralBlockEvents(t *testing.T) {
 	admin, tableNames := newTestRouteAdmin(t, routeBySource())
 
@@ -170,38 +146,23 @@ func TestRouteAdminCachesRouteNeutralBlockEvents(t *testing.T) {
 	require.Empty(t, admin.pendingEvents)
 	require.Empty(t, admin.pendingQueue)
 	require.Equal(t, 1, admin.sourceRefs[routing.TableKey{Schema: "db1", Table: "t"}])
-}
 
-func TestRouteAdminDropReleasesBootstrapBinding(t *testing.T) {
-	admin, _ := newTestRouteAdmin(t, routeAllTo("target", "t"))
-
-	dropInfo := routeAdmission{
-		key:      getEventKey(10, false),
-		commitTs: 10,
-		droppedTables: &heartbeatpb.InfluencedTables{
+	tableNames.set(1, "db1", "u")
+	recoveredInfo := routeAdmission{
+		key:      getEventKey(20, false),
+		commitTs: 20,
+		blockTables: &heartbeatpb.InfluencedTables{
 			InfluenceType: heartbeatpb.InfluenceType_Normal,
 			TableIDs:      []int64{1},
 		},
 	}
-	ready, err := admin.precheck(dropInfo)
-	require.NoError(t, err)
-	require.True(t, ready)
-	require.NoError(t, admin.apply(dropInfo))
-
-	_, ok := admin.tableSources[1]
-	require.False(t, ok)
-
-	addInfo := routeAdmission{
-		key:      getEventKey(20, false),
-		commitTs: 20,
-		addedTables: []*heartbeatpb.Table{
-			{SchemaID: 2, TableID: 2},
-		},
-	}
-	ready, err = admin.precheck(addInfo)
-	require.NoError(t, err)
-	require.True(t, ready)
-	require.NoError(t, admin.apply(addInfo))
+	require.NoError(t, admin.apply(recoveredInfo))
+	binding, ok := admin.tableSources[1]
+	require.True(t, ok)
+	require.Equal(t, routing.TableKey{Schema: "db1", Table: "u"}, binding.binding.Source)
+	require.Equal(t, routing.TableKey{Schema: "db1_target", Table: "u"}, binding.binding.Target)
+	require.Empty(t, admin.pendingEvents)
+	require.Empty(t, admin.pendingQueue)
 }
 
 func TestRouteAdminTracksSourceAdmissionNotTableID(t *testing.T) {
@@ -275,17 +236,36 @@ func TestRouteAdminTracksSourceAdmissionNotTableID(t *testing.T) {
 	require.NoError(t, admin.apply(truncateInfo))
 	require.Equal(t, 1, admin.sourceRefs[source])
 
-	conflictInfo := routeAdmission{
+	dropLastSourceInfo := routeAdmission{
 		key:      getEventKey(40, false),
 		commitTs: 40,
+		droppedTables: &heartbeatpb.InfluencedTables{
+			InfluenceType: heartbeatpb.InfluenceType_Normal,
+			TableIDs:      []int64{4},
+		},
+	}
+	ready, err = admin.precheck(dropLastSourceInfo)
+	require.NoError(t, err)
+	require.True(t, ready)
+	require.NoError(t, admin.apply(dropLastSourceInfo))
+	_, ok = admin.sourceRefs[source]
+	require.False(t, ok)
+	_, ok = admin.tableSources[4]
+	require.False(t, ok)
+
+	addOtherSourceInfo := routeAdmission{
+		key:      getEventKey(50, false),
+		commitTs: 50,
 		addedTables: []*heartbeatpb.Table{
 			{SchemaID: 2, TableID: 2},
 		},
 	}
-	ready, err = admin.precheck(conflictInfo)
-	require.Error(t, err)
-	require.False(t, ready)
-	require.Contains(t, err.Error(), "table route conflict")
+	ready, err = admin.precheck(addOtherSourceInfo)
+	require.NoError(t, err)
+	require.True(t, ready)
+	require.NoError(t, admin.apply(addOtherSourceInfo))
+	_, ok = admin.tableSources[2]
+	require.True(t, ok)
 }
 
 func newTestRouteAdmin(t *testing.T, rules []*config.DispatchRule) (*routeAdmin, *routeTableNames) {
