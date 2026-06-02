@@ -101,7 +101,7 @@ func (e *DispatcherManager) NewTableTriggerRedoDispatcher(id *heartbeatpb.Dispat
 	infos := map[common.DispatcherID]dispatcherCreateInfo{}
 	dispatcherID := common.NewDispatcherIDFromPB(id)
 	infos[dispatcherID] = dispatcherCreateInfo{
-		Id:        dispatcherID,
+		ID:        dispatcherID,
 		TableSpan: common.KeyspaceDDLSpan(e.keyspaceID),
 		StartTs:   startTs,
 		SchemaID:  0,

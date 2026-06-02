@@ -342,7 +342,7 @@ func handleScheduleCreate(
 	config := req.Config
 	dispatcherID := common.NewDispatcherIDFromPB(config.DispatcherID)
 	info := dispatcherCreateInfo{
-		Id:               dispatcherID,
+		ID:               dispatcherID,
 		TableSpan:        config.Span,
 		StartTs:          config.StartTs,
 		SchemaID:         config.SchemaID,
@@ -438,7 +438,7 @@ func createDispatcherByInfo(
 				if req.ScheduleAction == heartbeatpb.ScheduleAction_Create {
 					log.Debug("delete current working add operator for redo dispatcher",
 						zap.String("changefeedID", dispatcherManager.changefeedID.String()),
-						zap.String("dispatcherID", info.Id.String()),
+						zap.String("dispatcherID", info.ID.String()),
 						zap.Any("operator", req),
 					)
 					dispatcherManager.currentOperatorMap.Delete(info.OperatorKey)
@@ -458,7 +458,7 @@ func createDispatcherByInfo(
 				if req.ScheduleAction == heartbeatpb.ScheduleAction_Create {
 					log.Debug("delete current working add operator",
 						zap.String("changefeedID", dispatcherManager.changefeedID.String()),
-						zap.String("dispatcherID", info.Id.String()),
+						zap.String("dispatcherID", info.ID.String()),
 						zap.Any("operator", req),
 					)
 					dispatcherManager.currentOperatorMap.Delete(info.OperatorKey)

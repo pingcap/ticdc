@@ -15,10 +15,10 @@ package pdutil
 
 import (
 	"context"
-	"errors"
 	"testing"
 	"time"
 
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tidb/pkg/kv"
 	"github.com/pingcap/tidb/pkg/session"
 	"github.com/pingcap/tidb/pkg/store/mockstore"
@@ -73,7 +73,7 @@ func TestGenerateChangefeedEpochReturnsPDError(t *testing.T) {
 func TestNextChangefeedEpochStrictlyIncreases(t *testing.T) {
 	t.Parallel()
 
-	candidate := uint64(oracle.ComposeTS(100, 1))
+	candidate := oracle.ComposeTS(100, 1)
 	epoch, err := NextChangefeedEpoch(context.Background(), &epochPDClient{
 		physical: 100,
 		logical:  1,

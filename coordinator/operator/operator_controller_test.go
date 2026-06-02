@@ -198,7 +198,7 @@ func TestController_AddOperatorBumpsAndPersistsOwnershipEpoch(t *testing.T) {
 			target := node.NewInfo("localhost:8301", "")
 			nodeManager.GetAliveNodes()[target.ID] = target
 
-			candidateEpoch := uint64(oracle.ComposeTS(100, 1))
+			candidateEpoch := oracle.ComposeTS(100, 1)
 			oldEpoch := candidateEpoch + 10
 			expectedEpoch := oldEpoch + 1
 			oc.SetPDClient(&operatorEpochPDClient{physical: 100, logical: 1})

@@ -209,7 +209,7 @@ func (b *EtcdBackend) BumpChangefeedEpoch(
 	infoKey := etcd.GetEtcdKeyChangeFeedInfo(b.etcdClient.GetClusterID(), id.DisplayName)
 	jobKey := etcd.GetEtcdKeyJob(b.etcdClient.GetClusterID(), id.DisplayName)
 
-	for attempt := 0; attempt < bumpEpochMaxRetries; attempt++ {
+	for range bumpEpochMaxRetries {
 		infoResp, err := b.etcdClient.GetEtcdClient().Get(ctx, infoKey)
 		if err != nil {
 			return nil, errors.Trace(err)

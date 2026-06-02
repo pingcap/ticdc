@@ -184,7 +184,7 @@ func TestBumpChangefeedEpoch(t *testing.T) {
 		Return(persistedStatus, int64(5), nil).
 		Times(1)
 	etcdClient.EXPECT().
-		Txn(gomock.Any(), gomock.Len(2), NewFuncMatcher(func(i interface{}) bool {
+		Txn(gomock.Any(), gomock.Len(2), NewFuncMatcher(func(i any) bool {
 			ops := i.([]clientv3.Op)
 			require.Len(t, ops, 2)
 			require.True(t, ops[0].IsPut())
@@ -413,16 +413,16 @@ func TestUpdateChangefeedCheckpointTs(t *testing.T) {
 }
 
 type FuncMarcher struct {
-	m func(interface{}) bool
+	m func(any) bool
 }
 
-func NewFuncMatcher(m func(interface{}) bool) gomock.Matcher {
+func NewFuncMatcher(m func(any) bool) gomock.Matcher {
 	return &FuncMarcher{
 		m: m,
 	}
 }
 
-func (f *FuncMarcher) Matches(x interface{}) bool {
+func (f *FuncMarcher) Matches(x any) bool {
 	return f.m(x)
 }
 

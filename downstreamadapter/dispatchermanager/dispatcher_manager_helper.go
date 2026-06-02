@@ -82,7 +82,7 @@ func prepareCreateDispatcher[T dispatcher.Dispatcher](infos map[common.Dispatche
 	schemaIds := make([]int64, 0, len(infos))
 	skipDMLAsStartTsList := make([]bool, 0, len(infos))
 	for _, info := range infos {
-		id := info.Id
+		id := info.ID
 		if _, ok := dispatcherMap.Get(id); ok {
 			continue
 		}
