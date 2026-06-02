@@ -22,8 +22,11 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/dispatchermanager"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
+	appcontext "github.com/pingcap/ticdc/pkg/common/context"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -454,4 +457,80 @@ func TestGetPendingMessageKey_SupportedTypes(t *testing.T) {
 	key, ok = getPendingMessageKey(closeReq)
 	require.True(t, ok)
 	require.Equal(t, pendingMessageKey{changefeedID: cfID, msgType: messaging.TypeMaintainerCloseRequest}, key)
+}
+
+func TestBootstrapResponseRestoresOnlyCurrentGenerationOperators(t *testing.T) {
+	appcontext.SetService(appcontext.DefaultPDClock, pdutil.NewClock4Test())
+	appcontext.SetService(appcontext.MessageCenter, messaging.NewMockMessageCenter())
+	heartbeatCollector := dispatchermanager.NewHeartBeatCollector(node.ID("receiver"))
+	heartbeatCollector.Run(context.Background())
+	appcontext.SetService(appcontext.HeartbeatCollector, heartbeatCollector)
+	t.Cleanup(heartbeatCollector.Close)
+
+	cfID := common.NewChangeFeedIDWithName("cf", "default")
+	manager, err := dispatchermanager.NewDispatcherManager(
+		0,
+		cfID,
+		newBootstrapResponseTestChangefeedConfig(cfID),
+		nil,
+		nil,
+		100,
+		node.ID("current-maintainer"),
+		2,
+		false,
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		manager.TryClose(false)
+	})
+
+	currentDispatcherID := common.NewDispatcherID()
+	oldDispatcherID := common.NewDispatcherID()
+	manager.GetCurrentOperatorMap().Store(
+		"current-generation",
+		dispatchermanager.NewSchedulerDispatcherRequest(
+			node.ID("current-maintainer"),
+			newBootstrapResponseTestScheduleRequest(cfID, currentDispatcherID, 2),
+		),
+	)
+	manager.GetCurrentOperatorMap().Store(
+		"old-generation",
+		dispatchermanager.NewSchedulerDispatcherRequest(
+			node.ID("old-maintainer"),
+			newBootstrapResponseTestScheduleRequest(cfID, oldDispatcherID, 1),
+		),
+	)
+
+	response := createBootstrapResponse(cfID.ToPB(), manager, 0, 0)
+	require.Len(t, response.Operators, 1)
+	require.Equal(t, uint64(2), response.Operators[0].Generation)
+	require.Equal(t, currentDispatcherID, common.NewDispatcherIDFromPB(response.Operators[0].Config.DispatcherID))
+}
+
+func newBootstrapResponseTestChangefeedConfig(cfID common.ChangeFeedID) *config.ChangefeedConfig {
+	replicaConfig := config.GetDefaultReplicaConfig()
+	return &config.ChangefeedConfig{
+		ChangefeedID: cfID,
+		SinkURI:      "blackhole://",
+		SinkConfig:   replicaConfig.Sink,
+		Filter:       replicaConfig.Filter,
+	}
+}
+
+func newBootstrapResponseTestScheduleRequest(
+	cfID common.ChangeFeedID,
+	dispatcherID common.DispatcherID,
+	generation uint64,
+) *heartbeatpb.ScheduleDispatcherRequest {
+	return &heartbeatpb.ScheduleDispatcherRequest{
+		ChangefeedID: cfID.ToPB(),
+		Config: &heartbeatpb.DispatcherConfig{
+			Span:         &heartbeatpb.TableSpan{TableID: 1},
+			StartTs:      100,
+			DispatcherID: dispatcherID.ToPB(),
+			Mode:         common.DefaultMode,
+		},
+		ScheduleAction: heartbeatpb.ScheduleAction_Create,
+		Generation:     generation,
+	}
 }
