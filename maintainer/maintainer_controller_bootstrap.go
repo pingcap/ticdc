@@ -137,7 +137,9 @@ func (c *Controller) FinishBootstrap(
 
 	// Step 5: Initialize route admission before barrier starts handling bootstrap
 	// block states. The barrier captures the route admin pointer at construction time.
-	admin, err := newRouteAdmin(c.changefeedID, c.keyspaceMeta, c.replicaConfig, c.reportError, tables)
+	schemaStore := appcontext.GetService[schemastore.SchemaStore](appcontext.SchemaStore)
+	admin, err := newRouteAdmin(
+		c.changefeedID, c.keyspaceMeta, c.replicaConfig, c.reportError, tables, schemaStore.GetTableNameByID)
 	if err != nil {
 		return nil, err
 	}

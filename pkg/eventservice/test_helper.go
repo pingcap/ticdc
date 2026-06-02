@@ -15,7 +15,6 @@ package eventservice
 
 import (
 	"context"
-	"fmt"
 	"math"
 	"sort"
 
@@ -39,10 +38,7 @@ type mockSchemaStore struct {
 	resolvedTs     uint64
 	maxDDLCommitTs uint64
 
-	registerTableError      error
-	requireRegisteredTables bool
-	registeredTables        map[common.TableID]int
-	getTableNameByIDCount   map[common.TableID]int
+	registerTableError error
 }
 
 func NewMockSchemaStore() *mockSchemaStore {
@@ -51,9 +47,6 @@ func NewMockSchemaStore() *mockSchemaStore {
 		TableInfo:      make(map[common.TableID]*mockVersionTableInfo),
 		resolvedTs:     math.MaxUint64,
 		maxDDLCommitTs: math.MaxUint64,
-
-		registeredTables:      make(map[common.TableID]int),
-		getTableNameByIDCount: make(map[common.TableID]int),
 	}
 }
 
@@ -97,35 +90,7 @@ func (m *mockSchemaStore) SetTables(tables []commonEvent.Table) {
 	m.Tables = tables
 }
 
-func (m *mockSchemaStore) RequireRegisteredTablesForGetTableInfo() {
-	m.requireRegisteredTables = true
-}
-
-func (m *mockSchemaStore) GetTableNameByIDCount(tableID common.TableID) int {
-	return m.getTableNameByIDCount[tableID]
-}
-
 func (m *mockSchemaStore) GetTableInfo(keyspaceMeta common.KeyspaceMeta, tableID common.TableID, ts common.Ts) (*common.TableInfo, error) {
-	if m.requireRegisteredTables && m.registeredTables[tableID] == 0 {
-		return nil, fmt.Errorf("table %d not found", tableID)
-	}
-	return m.getTableInfo(tableID, ts)
-}
-
-func (m *mockSchemaStore) GetTableNameByID(
-	_ common.KeyspaceMeta,
-	tableID common.TableID,
-	ts common.Ts,
-) (common.TableName, error) {
-	m.getTableNameByIDCount[tableID]++
-	tableInfo, err := m.getTableInfo(tableID, ts)
-	if err != nil || tableInfo == nil {
-		return common.TableName{}, err
-	}
-	return tableInfo.TableName, nil
-}
-
-func (m *mockSchemaStore) getTableInfo(tableID common.TableID, ts common.Ts) (*common.TableInfo, error) {
 	if info, ok := m.TableInfo[tableID]; ok {
 		if info.deleteVersion <= uint64(ts) {
 			return nil, &schemastore.TableDeletedError{}
@@ -140,6 +105,18 @@ func (m *mockSchemaStore) getTableInfo(tableID common.TableID, ts common.Ts) (*c
 		return infos[idx-1], nil
 	}
 	return nil, nil
+}
+
+func (m *mockSchemaStore) GetTableNameByID(
+	keyspaceMeta common.KeyspaceMeta,
+	tableID common.TableID,
+	ts common.Ts,
+) (common.TableName, error) {
+	tableInfo, err := m.GetTableInfo(keyspaceMeta, tableID, ts)
+	if err != nil || tableInfo == nil {
+		return common.TableName{}, err
+	}
+	return tableInfo.TableName, nil
 }
 
 func (m *mockSchemaStore) GetAllPhysicalTables(keyspaceMeta common.KeyspaceMeta, snapTs uint64, filter filter.Filter) ([]commonEvent.Table, error) {
@@ -158,17 +135,10 @@ func (m *mockSchemaStore) RegisterTable(
 	tableID int64,
 	startTS common.Ts,
 ) error {
-	if m.registerTableError != nil {
-		return m.registerTableError
-	}
-	m.registeredTables[tableID]++
-	return nil
+	return m.registerTableError
 }
 
-func (m *mockSchemaStore) UnregisterTable(_ common.KeyspaceMeta, tableID int64) error {
-	if m.registeredTables[tableID] > 0 {
-		m.registeredTables[tableID]--
-	}
+func (m *mockSchemaStore) UnregisterTable(_ common.KeyspaceMeta, _ int64) error {
 	return nil
 }
 

@@ -244,10 +244,6 @@ func (d *DDLEvent) GetTargetExtraTableName() string {
 	return d.ExtraTableName
 }
 
-func (d *DDLEvent) IsRouted() bool {
-	return d.targetSchemaName != "" || d.targetTableName != "" || d.targetExtraTableName != "" || d.targetExtraSchemaName != ""
-}
-
 // GetTableID returns the logic table ID of the event.
 // it returns 0 when there is no tableinfo
 func (d *DDLEvent) GetTableID() int64 {

@@ -18,24 +18,22 @@ import (
 
 	"github.com/pingcap/ticdc/downstreamadapter/routing"
 	"github.com/pingcap/ticdc/heartbeatpb"
-	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/pkg/common"
-	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/ticdc/pkg/eventservice"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
 
 func TestRouteAdminPrecheckReportsConflict(t *testing.T) {
-	admin := newTestRouteAdmin(t, "target", routing.TablePlaceholder)
+	admin, _ := newTestRouteAdmin(t, routeAllTo("target", "t"))
 
 	var reportedErr error
 	admin.reportError = func(err error) {
 		reportedErr = err
 	}
 
-	info := routeAdmissionInfo{
+	info := routeAdmission{
 		key:      getEventKey(10, false),
 		commitTs: 10,
 		addedTables: []*heartbeatpb.Table{
@@ -56,10 +54,9 @@ func TestRouteAdminPrecheckReportsConflict(t *testing.T) {
 }
 
 func TestRouteAdminAdmitsAddedTables(t *testing.T) {
-	admin := newTestRouteAdmin(t, routing.SchemaPlaceholder+"_target", routing.TablePlaceholder)
-	store := testRouteSchemaStore(t, admin)
+	admin, tableNames := newTestRouteAdmin(t, routeBySource())
 
-	info := routeAdmissionInfo{
+	info := routeAdmission{
 		key:      getEventKey(10, false),
 		commitTs: 10,
 		addedTables: []*heartbeatpb.Table{
@@ -79,9 +76,8 @@ func TestRouteAdminAdmitsAddedTables(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, routing.TableKey{Schema: "db2_target", Table: "t"}, binding.binding.Target)
 
-	store.AppendDDLEvent(3, routeTableInfoDDL(3, "db3", "t"))
-	store.RequireRegisteredTablesForGetTableInfo()
-	info = routeAdmissionInfo{
+	tableNames.set(3, "db3", "t")
+	info = routeAdmission{
 		key:      getEventKey(20, false),
 		commitTs: 20,
 		addedTables: []*heartbeatpb.Table{
@@ -91,11 +87,11 @@ func TestRouteAdminAdmitsAddedTables(t *testing.T) {
 	ready, err = admin.precheck(info)
 	require.NoError(t, err)
 	require.True(t, ready)
-	require.Equal(t, 1, store.GetTableNameByIDCount(3))
+	require.Equal(t, 1, tableNames.count(3))
 	require.NoError(t, admin.apply(info))
 
-	store.AppendDDLEvent(4, routeTableInfoDDL(4, "db4", "t"))
-	info = routeAdmissionInfo{
+	tableNames.set(4, "db4", "t")
+	info = routeAdmission{
 		key:      getEventKey(30, false),
 		commitTs: 30,
 		blockTables: &heartbeatpb.InfluencedTables{
@@ -113,15 +109,14 @@ func TestRouteAdminAdmitsAddedTables(t *testing.T) {
 
 	_, ok = admin.tableSources[4]
 	require.True(t, ok)
-	require.Equal(t, 0, store.GetTableNameByIDCount(common.DDLSpanTableID))
+	require.Equal(t, 0, tableNames.count(common.DDLSpanTableID))
 }
 
 func TestRouteAdminApplyBuildsRecoveredTransition(t *testing.T) {
-	admin := newTestRouteAdmin(t, "target", routing.TablePlaceholder)
-	store := testRouteSchemaStore(t, admin)
-	store.AppendDDLEvent(1, routeTableInfoDDL(1, "db1", "u"))
+	admin, tableNames := newTestRouteAdmin(t, routeForRename())
+	tableNames.set(1, "db1", "u")
 
-	info := routeAdmissionInfo{
+	info := routeAdmission{
 		key:      getEventKey(10, false),
 		commitTs: 10,
 		blockTables: &heartbeatpb.InfluencedTables{
@@ -142,12 +137,11 @@ func TestRouteAdminApplyBuildsRecoveredTransition(t *testing.T) {
 }
 
 func TestRouteAdminCachesRouteNeutralBlockEvents(t *testing.T) {
-	admin := newTestRouteAdmin(t, routing.SchemaPlaceholder+"_target", routing.TablePlaceholder)
-	store := testRouteSchemaStore(t, admin)
+	admin, tableNames := newTestRouteAdmin(t, routeBySource())
 
 	// Schema-only DDLs such as ADD COLUMN and RENAME COLUMN still report BlockTables,
 	// but they do not change table route admission. Keep repeated handling low-cost.
-	info := routeAdmissionInfo{
+	info := routeAdmission{
 		key:      getEventKey(10, false),
 		commitTs: 10,
 		blockTables: &heartbeatpb.InfluencedTables{
@@ -159,7 +153,7 @@ func TestRouteAdminCachesRouteNeutralBlockEvents(t *testing.T) {
 	ready, err := admin.precheck(info)
 	require.NoError(t, err)
 	require.True(t, ready)
-	require.Equal(t, 1, store.GetTableNameByIDCount(1))
+	require.Equal(t, 1, tableNames.count(1))
 	require.Len(t, admin.routeNeutralEventCache, 1)
 	require.Empty(t, admin.pendingEvents)
 	require.Empty(t, admin.pendingQueue)
@@ -167,11 +161,11 @@ func TestRouteAdminCachesRouteNeutralBlockEvents(t *testing.T) {
 	ready, err = admin.precheck(info)
 	require.NoError(t, err)
 	require.True(t, ready)
-	require.Equal(t, 1, store.GetTableNameByIDCount(1))
+	require.Equal(t, 1, tableNames.count(1))
 	require.Len(t, admin.routeNeutralEventCache, 1)
 
 	require.NoError(t, admin.apply(info))
-	require.Equal(t, 1, store.GetTableNameByIDCount(1))
+	require.Equal(t, 1, tableNames.count(1))
 	require.Empty(t, admin.routeNeutralEventCache)
 	require.Empty(t, admin.pendingEvents)
 	require.Empty(t, admin.pendingQueue)
@@ -179,9 +173,9 @@ func TestRouteAdminCachesRouteNeutralBlockEvents(t *testing.T) {
 }
 
 func TestRouteAdminDropReleasesBootstrapBinding(t *testing.T) {
-	admin := newTestRouteAdmin(t, "target", routing.TablePlaceholder)
+	admin, _ := newTestRouteAdmin(t, routeAllTo("target", "t"))
 
-	dropInfo := routeAdmissionInfo{
+	dropInfo := routeAdmission{
 		key:      getEventKey(10, false),
 		commitTs: 10,
 		droppedTables: &heartbeatpb.InfluencedTables{
@@ -197,7 +191,7 @@ func TestRouteAdminDropReleasesBootstrapBinding(t *testing.T) {
 	_, ok := admin.tableSources[1]
 	require.False(t, ok)
 
-	addInfo := routeAdmissionInfo{
+	addInfo := routeAdmission{
 		key:      getEventKey(20, false),
 		commitTs: 20,
 		addedTables: []*heartbeatpb.Table{
@@ -211,14 +205,13 @@ func TestRouteAdminDropReleasesBootstrapBinding(t *testing.T) {
 }
 
 func TestRouteAdminTracksSourceAdmissionNotTableID(t *testing.T) {
-	admin := newTestRouteAdmin(t, "target", routing.TablePlaceholder)
-	store := testRouteSchemaStore(t, admin)
-	store.AppendDDLEvent(3, routeTableInfoDDL(3, "db1", "t"))
-	store.AppendDDLEvent(4, routeTableInfoDDL(4, "db1", "t"))
+	admin, tableNames := newTestRouteAdmin(t, routeAllTo("target", "t"))
+	tableNames.set(3, "db1", "t")
+	tableNames.set(4, "db1", "t")
 
 	source := routing.TableKey{Schema: "db1", Table: "t"}
 
-	addSameSourceInfo := routeAdmissionInfo{
+	addSameSourceInfo := routeAdmission{
 		key:      getEventKey(10, false),
 		commitTs: 10,
 		addedTables: []*heartbeatpb.Table{
@@ -231,7 +224,7 @@ func TestRouteAdminTracksSourceAdmissionNotTableID(t *testing.T) {
 	require.NoError(t, admin.apply(addSameSourceInfo))
 	require.Equal(t, 2, admin.sourceRefs[source])
 
-	dropOnePhysicalIDInfo := routeAdmissionInfo{
+	dropOnePhysicalIDInfo := routeAdmission{
 		key:      getEventKey(20, false),
 		commitTs: 20,
 		droppedTables: &heartbeatpb.InfluencedTables{
@@ -249,7 +242,7 @@ func TestRouteAdminTracksSourceAdmissionNotTableID(t *testing.T) {
 	_, ok = admin.tableSources[3]
 	require.True(t, ok)
 
-	truncateInfo := routeAdmissionInfo{
+	truncateInfo := routeAdmission{
 		key:      getEventKey(30, false),
 		commitTs: 30,
 		blockTables: &heartbeatpb.InfluencedTables{
@@ -282,7 +275,7 @@ func TestRouteAdminTracksSourceAdmissionNotTableID(t *testing.T) {
 	require.NoError(t, admin.apply(truncateInfo))
 	require.Equal(t, 1, admin.sourceRefs[source])
 
-	conflictInfo := routeAdmissionInfo{
+	conflictInfo := routeAdmission{
 		key:      getEventKey(40, false),
 		commitTs: 40,
 		addedTables: []*heartbeatpb.Table{
@@ -295,33 +288,30 @@ func TestRouteAdminTracksSourceAdmissionNotTableID(t *testing.T) {
 	require.Contains(t, err.Error(), "table route conflict")
 }
 
-func newTestRouteAdmin(t *testing.T, targetSchema, targetTable string) *routeAdmin {
+func newTestRouteAdmin(t *testing.T, rules []*config.DispatchRule) (*routeAdmin, *routeTableNames) {
 	t.Helper()
 
 	cfID := common.NewChangeFeedIDWithName("test-changefeed", common.DefaultKeyspaceName)
-	store := eventservice.NewMockSchemaStore()
-	store.AppendDDLEvent(
-		1,
-		routeTableInfoDDL(1, "db1", "t"),
-	)
-	store.AppendDDLEvent(
-		2,
-		routeTableInfoDDL(2, "db2", "t"),
-	)
-	appcontext.SetService[schemastore.SchemaStore](appcontext.SchemaStore, store)
+	return newTestRouteAdminWithChangefeed(t, cfID, rules)
+}
+
+func newTestRouteAdminWithChangefeed(
+	t *testing.T,
+	cfID common.ChangeFeedID,
+	rules []*config.DispatchRule,
+) (*routeAdmin, *routeTableNames) {
+	t.Helper()
+
+	tableNames := newRouteTableNames()
+	tableNames.set(1, "db1", "t")
+	tableNames.set(2, "db2", "t")
 
 	admin, err := newRouteAdmin(
 		cfID,
 		common.KeyspaceMeta{},
 		&config.ReplicaConfig{
 			Sink: &config.SinkConfig{
-				DispatchRules: []*config.DispatchRule{
-					{
-						Matcher:      []string{"*.*"},
-						TargetSchema: targetSchema,
-						TargetTable:  targetTable,
-					},
-				},
+				DispatchRules: rules,
 			},
 		},
 		nil,
@@ -335,37 +325,78 @@ func newTestRouteAdmin(t *testing.T, targetSchema, targetTable string) *routeAdm
 				},
 			},
 		},
+		tableNames.get,
 	)
 	require.NoError(t, err)
-	return admin
+	return admin, tableNames
 }
 
-type routeSchemaStoreMock interface {
-	AppendDDLEvent(id common.TableID, ddls ...commonEvent.DDLEvent)
-	RequireRegisteredTablesForGetTableInfo()
-	GetTableNameByIDCount(tableID common.TableID) int
+type routeTableNames struct {
+	names       map[int64]common.TableName
+	lookupCount map[int64]int
 }
 
-func testRouteSchemaStore(t *testing.T, admin *routeAdmin) routeSchemaStoreMock {
-	t.Helper()
-
-	store, ok := admin.schemaStore.(routeSchemaStoreMock)
-	require.True(t, ok)
-	return store
-}
-
-func routeTableInfoDDL(tableID int64, schema, table string) commonEvent.DDLEvent {
-	return commonEvent.DDLEvent{
-		TableInfo: newTestRouteTableInfo(tableID, schema, table),
+func newRouteTableNames() *routeTableNames {
+	return &routeTableNames{
+		names:       make(map[int64]common.TableName),
+		lookupCount: make(map[int64]int),
 	}
 }
 
-func newTestRouteTableInfo(tableID int64, schema, table string) *common.TableInfo {
-	return &common.TableInfo{
-		TableName: common.TableName{
-			Schema:  schema,
-			Table:   table,
-			TableID: tableID,
-		},
+func (s *routeTableNames) set(tableID int64, schema, table string) {
+	s.names[tableID] = common.TableName{
+		Schema:  schema,
+		Table:   table,
+		TableID: tableID,
+	}
+}
+
+func (s *routeTableNames) get(
+	_ common.KeyspaceMeta,
+	tableID int64,
+	_ uint64,
+) (common.TableName, error) {
+	s.lookupCount[tableID]++
+	tableName, ok := s.names[tableID]
+	if !ok {
+		return common.TableName{}, errors.New("table name not found")
+	}
+	return tableName, nil
+}
+
+func (s *routeTableNames) count(tableID int64) int {
+	return s.lookupCount[tableID]
+}
+
+func routeAllTo(targetSchema, targetTable string) []*config.DispatchRule {
+	return []*config.DispatchRule{{
+		Matcher:      []string{"*.*"},
+		TargetSchema: targetSchema,
+		TargetTable:  targetTable,
+	}}
+}
+
+func routeBySource() []*config.DispatchRule {
+	return []*config.DispatchRule{
+		routeExact("db1", "t", "db1_target", "t"),
+		routeExact("db1", "u", "db1_target", "u"),
+		routeExact("db2", "t", "db2_target", "t"),
+		routeExact("db3", "t", "db3_target", "t"),
+		routeExact("db4", "t", "db4_target", "t"),
+	}
+}
+
+func routeForRename() []*config.DispatchRule {
+	return []*config.DispatchRule{
+		routeExact("db1", "t", "target", "t"),
+		routeExact("db1", "u", "target", "u"),
+	}
+}
+
+func routeExact(sourceSchema, sourceTable, targetSchema, targetTable string) *config.DispatchRule {
+	return &config.DispatchRule{
+		Matcher:      []string{sourceSchema + "." + sourceTable},
+		TargetSchema: targetSchema,
+		TargetTable:  targetTable,
 	}
 }

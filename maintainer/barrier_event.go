@@ -135,7 +135,7 @@ func NewBlockEvent(cfID common.ChangeFeedID,
 
 func newRangeCheck(status *heartbeatpb.State, dynamicSplitEnabled bool, keyspaceID uint32) range_checker.RangeChecker {
 	if status.BlockTables == nil {
-		return range_checker.NewBoolRangeChecker(true)
+		return nil
 	}
 
 	if status.BlockTables.InfluenceType != heartbeatpb.InfluenceType_Normal {
@@ -149,8 +149,8 @@ func newRangeCheck(status *heartbeatpb.State, dynamicSplitEnabled bool, keyspace
 	return range_checker.NewTableCountChecker(status.BlockTables.TableIDs)
 }
 
-func (be *BarrierEvent) routeAdmissionInfo() routeAdmissionInfo {
-	return routeAdmissionInfo{
+func (be *BarrierEvent) routeAdmissionInfo() routeAdmission {
+	return routeAdmission{
 		key:           getEventKey(be.commitTs, be.isSyncPoint),
 		commitTs:      be.commitTs,
 		isSyncPoint:   be.isSyncPoint,

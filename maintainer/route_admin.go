@@ -22,9 +22,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/routing"
 	"github.com/pingcap/ticdc/heartbeatpb"
-	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/pkg/common"
-	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
@@ -33,13 +31,19 @@ import (
 )
 
 type routeAdmin struct {
-	changefeedID common.ChangeFeedID
-	keyspaceMeta common.KeyspaceMeta
-	router       routing.Router
-	registry     *routing.TargetTableRegistry
-	schemaStore  schemastore.SchemaStore
+	changefeedID     common.ChangeFeedID
+	keyspaceMeta     common.KeyspaceMeta
+	router           routing.Router
+	registry         *routing.TargetTableRegistry
+	getTableNameByID getTableNameByIDFunc
+	// tableSources is the admission snapshot for currently admitted source tables,
+	// keyed by logical table ID. DDL transitions use it to map table IDs from
+	// barrier metadata back to source names and current routed targets.
 	tableSources map[int64]admission
-	sourceRefs   map[routing.TableKey]int
+	// sourceRefs counts how many admitted physical/logical table IDs currently
+	// share the same source name. The route registry should admit a source only
+	// on the first reference and release it only after the last reference leaves.
+	sourceRefs map[routing.TableKey]int
 
 	pendingQueue  pendingEventKeyHeap
 	pendingEvents map[eventKey]*routePendingEvent
@@ -53,17 +57,19 @@ type routeAdmin struct {
 	failed      bool
 }
 
+type getTableNameByIDFunc func(common.KeyspaceMeta, int64, uint64) (common.TableName, error)
+
 type routePendingEvent struct {
 	transition *routeTransition
 	prechecked bool
 }
 
 type tableRouteAdmission interface {
-	precheck(info routeAdmissionInfo) (bool, error)
-	apply(info routeAdmissionInfo) error
+	precheck(info routeAdmission) (bool, error)
+	apply(info routeAdmission) error
 }
 
-type routeAdmissionInfo struct {
+type routeAdmission struct {
 	key           eventKey
 	commitTs      uint64
 	isSyncPoint   bool
@@ -97,12 +103,16 @@ func newRouteAdmin(
 	replicaConfig *config.ReplicaConfig,
 	reportError func(error),
 	tables []commonEvent.Table,
+	getTableNameByID getTableNameByIDFunc,
 ) (*routeAdmin, error) {
 	if replicaConfig == nil || replicaConfig.Sink == nil {
 		return nil, nil
 	}
 	if !replicaConfig.Sink.TableRouteEnabled() {
 		return nil, nil
+	}
+	if getTableNameByID == nil {
+		return nil, errors.ErrInternalCheckFailed.GenWithStack("route table name getter is nil")
 	}
 
 	router, err := routing.NewRouter(
@@ -124,7 +134,7 @@ func newRouteAdmin(
 		registry:               routing.NewTargetTableRegistry(changefeedID, len(tables)),
 		tableSources:           tableSources,
 		sourceRefs:             sourceRefs,
-		schemaStore:            appcontext.GetService[schemastore.SchemaStore](appcontext.SchemaStore),
+		getTableNameByID:       getTableNameByID,
 		pendingEvents:          make(map[eventKey]*routePendingEvent),
 		routeNeutralEventCache: make(map[eventKey]struct{}),
 		reportError:            reportError,
@@ -167,7 +177,7 @@ func (a *routeAdmin) applyAdmissionChange(change routeAdmissionChange, mutate bo
 	return a.registry.ApplyTransition(change.releases, change.admits, mutate)
 }
 
-func (a *routeAdmin) precheck(info routeAdmissionInfo) (bool, error) {
+func (a *routeAdmin) precheck(info routeAdmission) (bool, error) {
 	if !a.needsCheck(info) {
 		return true, nil
 	}
@@ -207,7 +217,7 @@ func (a *routeAdmin) precheck(info routeAdmissionInfo) (bool, error) {
 	return true, nil
 }
 
-func (a *routeAdmin) apply(info routeAdmissionInfo) error {
+func (a *routeAdmin) apply(info routeAdmission) error {
 	if !a.needsCheck(info) {
 		return nil
 	}
@@ -247,7 +257,7 @@ func (a *routeAdmin) apply(info routeAdmissionInfo) error {
 	return nil
 }
 
-func (a *routeAdmin) needsCheck(info routeAdmissionInfo) bool {
+func (a *routeAdmin) needsCheck(info routeAdmission) bool {
 	if a == nil || a.registry == nil || info.isSyncPoint {
 		return false
 	}
@@ -257,7 +267,7 @@ func (a *routeAdmin) needsCheck(info routeAdmissionInfo) bool {
 	return info.blockTables != nil && len(info.blockTables.TableIDs) > 0
 }
 
-func (a *routeAdmin) getOrBuildPendingEvent(info routeAdmissionInfo) (*routePendingEvent, bool, error) {
+func (a *routeAdmin) getOrBuildPendingEvent(info routeAdmission) (*routePendingEvent, bool, error) {
 	if pending, ok := a.pendingEvents[info.key]; ok {
 		return pending, true, nil
 	}
@@ -301,7 +311,7 @@ func (a *routeAdmin) popPendingHead(key eventKey) {
 	delete(a.pendingEvents, key)
 }
 
-func (a *routeAdmin) buildTransition(info routeAdmissionInfo) (*routeTransition, error) {
+func (a *routeAdmin) buildTransition(info routeAdmission) (*routeTransition, error) {
 	builder := newRouteTransitionBuilder(info.commitTs)
 
 	if info.droppedTables != nil {
@@ -385,7 +395,7 @@ func (a *routeAdmin) buildBindingForTable(tableID, schemaID int64, commitTs uint
 	// Some DDL route transitions reach route admission before the target table
 	// dispatcher is admitted, so route precheck asks only for the source name
 	// and must not depend on dispatcher table registration.
-	tableName, err := a.schemaStore.GetTableNameByID(a.keyspaceMeta, tableID, commitTs)
+	tableName, err := a.getTableNameByID(a.keyspaceMeta, tableID, commitTs)
 	if err != nil {
 		return admission{}, err
 	}

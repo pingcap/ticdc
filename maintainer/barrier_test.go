@@ -27,7 +27,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/server/watcher"
@@ -478,8 +478,8 @@ func TestNormalBlockWithTableTrigger(t *testing.T) {
 }
 
 func TestBarrierPrechecksRouteEventWhenDDLDispatcherBlocks(t *testing.T) {
-	routeAdmission := &testBarrierRouteAdmission{precheckReady: true}
-	barrier, cfID, tableTriggerEventDispatcherID, _, blockTables := newBarrierRoutePrecheckTestFixture(t, routeAdmission)
+	barrier, routeAdmin, _, cfID, tableTriggerEventDispatcherID, _, blockTables := newBarrierRoutePrecheckTestFixture(
+		t, routeAllTo("target", "t"))
 	msgs := barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
 		ChangefeedID: cfID.ToPB(),
 		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
@@ -493,21 +493,20 @@ func TestBarrierPrechecksRouteEventWhenDDLDispatcherBlocks(t *testing.T) {
 			},
 		},
 	})
-	require.Len(t, routeAdmission.precheckInfos, 1)
-	require.Empty(t, routeAdmission.applyInfos)
-	require.Equal(t, uint64(10), routeAdmission.precheckInfos[0].commitTs)
-	require.Equal(t, common.DefaultMode, routeAdmission.precheckInfos[0].mode)
-	require.Equal(t, []int64{common.DDLSpanTableID, 1}, routeAdmission.precheckInfos[0].blockTables.TableIDs)
+	require.Len(t, routeAdmin.routeNeutralEventCache, 1)
+	require.Empty(t, routeAdmin.pendingEvents)
 	require.NotNil(t, msgs)
 	require.NotEmpty(t, msgs)
 	resp := msgs[0].Message[0].(*heartbeatpb.HeartBeatResponse)
 	require.Len(t, resp.DispatcherStatuses, 1)
 	require.Nil(t, resp.DispatcherStatuses[0].Action)
 
-	routeAdmission = &testBarrierRouteAdmission{
-		precheckErr: errors.New("route conflict"),
+	var reportedErr error
+	barrier, routeAdmin, _, cfID, tableTriggerEventDispatcherID, _, blockTables = newBarrierRoutePrecheckTestFixture(
+		t, routeAllTo("target", "t"))
+	routeAdmin.reportError = func(err error) {
+		reportedErr = err
 	}
-	barrier, cfID, tableTriggerEventDispatcherID, _, blockTables = newBarrierRoutePrecheckTestFixture(t, routeAdmission)
 	msgs = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
 		ChangefeedID: cfID.ToPB(),
 		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
@@ -517,12 +516,15 @@ func TestBarrierPrechecksRouteEventWhenDDLDispatcherBlocks(t *testing.T) {
 					IsBlocked:   true,
 					BlockTs:     10,
 					BlockTables: blockTables,
+					NeedAddedTables: []*heartbeatpb.Table{
+						{SchemaID: 2, TableID: 2},
+					},
 				},
 			},
 		},
 	})
-	require.Len(t, routeAdmission.precheckInfos, 1)
-	require.Empty(t, routeAdmission.applyInfos)
+	require.NotNil(t, reportedErr)
+	require.Contains(t, reportedErr.Error(), "table route conflict")
 	require.NotNil(t, msgs)
 	require.NotEmpty(t, msgs)
 	resp = msgs[0].Message[0].(*heartbeatpb.HeartBeatResponse)
@@ -547,7 +549,8 @@ func TestBarrierPrechecksRecoveredRouteEventBeforeResend(t *testing.T) {
 	spanController.BindSpanToNode("", "node1", stm)
 	spanController.MarkSpanReplicating(stm)
 
-	routeAdmission := &testBarrierRouteAdmission{precheckReady: true}
+	routeAdmin, tableNames := newTestRouteAdminWithChangefeed(t, cfID, routeForRename())
+	tableNames.set(1, "db1", "u")
 	barrier := NewBarrier(spanController, operatorController, false, map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{
 		"node1": {
 			ChangefeedID: cfID.ToPB(),
@@ -567,20 +570,26 @@ func TestBarrierPrechecksRecoveredRouteEventBeforeResend(t *testing.T) {
 				},
 			},
 		},
-	}, common.DefaultMode, routeAdmission)
+	}, common.DefaultMode, routeAdmin)
 
 	_ = barrier.Resend()
-	require.Len(t, routeAdmission.precheckInfos, 1)
-	require.Len(t, routeAdmission.applyInfos, 1)
-	require.Equal(t, uint64(10), routeAdmission.precheckInfos[0].commitTs)
-	require.Equal(t, routeAdmission.precheckInfos[0], routeAdmission.applyInfos[0])
+	binding, ok := routeAdmin.tableSources[1]
+	require.True(t, ok)
+	require.Equal(t, "db1", binding.binding.Source.Schema)
+	require.Equal(t, "u", binding.binding.Source.Table)
+	require.Equal(t, "target", binding.binding.Target.Schema)
+	require.Equal(t, "u", binding.binding.Target.Table)
+	require.Empty(t, routeAdmin.pendingEvents)
+	require.Empty(t, routeAdmin.pendingQueue)
 }
 
 func TestBarrierRouteConflictPrecheckPreventsWriteAction(t *testing.T) {
-	routeAdmission := &testBarrierRouteAdmission{
-		precheckErr: errors.New("route conflict"),
+	barrier, routeAdmin, _, cfID, tableTriggerEventDispatcherID, tableDispatcherID, blockTables := newBarrierRoutePrecheckTestFixture(
+		t, routeAllTo("target", "t"))
+	var reportedErr error
+	routeAdmin.reportError = func(err error) {
+		reportedErr = err
 	}
-	barrier, cfID, tableTriggerEventDispatcherID, tableDispatcherID, blockTables := newBarrierRoutePrecheckTestFixture(t, routeAdmission)
 	msgs := barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
 		ChangefeedID: cfID.ToPB(),
 		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
@@ -590,6 +599,9 @@ func TestBarrierRouteConflictPrecheckPreventsWriteAction(t *testing.T) {
 					IsBlocked:   true,
 					BlockTs:     10,
 					BlockTables: blockTables,
+					NeedAddedTables: []*heartbeatpb.Table{
+						{SchemaID: 2, TableID: 2},
+					},
 				},
 			},
 			{
@@ -598,13 +610,16 @@ func TestBarrierRouteConflictPrecheckPreventsWriteAction(t *testing.T) {
 					IsBlocked:   true,
 					BlockTs:     10,
 					BlockTables: blockTables,
+					NeedAddedTables: []*heartbeatpb.Table{
+						{SchemaID: 2, TableID: 2},
+					},
 				},
 			},
 		},
 	})
 
-	require.Len(t, routeAdmission.precheckInfos, 1)
-	require.Empty(t, routeAdmission.applyInfos)
+	require.NotNil(t, reportedErr)
+	require.Contains(t, reportedErr.Error(), "table route conflict")
 	event := barrier.blockedEvents.m[getEventKey(10, false)]
 	require.NotNil(t, event)
 	require.False(t, event.selected.Load())
@@ -618,44 +633,45 @@ func TestBarrierRoutePrecheckKeepsFullyReportedBlockedEventAndPreventsWriteActio
 	handleBlockedDispatchers := func(
 		barrier *Barrier,
 		cfID common.ChangeFeedID,
-		tableTriggerEventDispatcherID common.DispatcherID,
 		tableDispatcherID common.DispatcherID,
 		blockTables *heartbeatpb.InfluencedTables,
+		addedTables []*heartbeatpb.Table,
 	) []*messaging.TargetMessage {
 		return barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
 			ChangefeedID: cfID.ToPB(),
 			BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
 				{
-					ID: tableTriggerEventDispatcherID.ToPB(),
-					State: &heartbeatpb.State{
-						IsBlocked:   true,
-						BlockTs:     10,
-						BlockTables: blockTables,
-					},
-				},
-				{
 					ID: tableDispatcherID.ToPB(),
 					State: &heartbeatpb.State{
-						IsBlocked:   true,
-						BlockTs:     10,
-						BlockTables: blockTables,
+						IsBlocked:       true,
+						BlockTs:         10,
+						BlockTables:     blockTables,
+						NeedAddedTables: addedTables,
 					},
 				},
 			},
 		})
 	}
 
-	routeAdmission := &testBarrierRouteAdmission{
-		precheckResults: []testBarrierRoutePrecheckResult{
-			{ready: true},
-			{ready: false},
+	barrier, routeAdmin, tableNames, cfID, _, tableDispatcherID, _ := newBarrierRoutePrecheckTestFixture(
+		t, routeBySource())
+	ready, err := routeAdmin.precheck(routeAdmission{
+		key:      getEventKey(5, false),
+		commitTs: 5,
+		addedTables: []*heartbeatpb.Table{
+			{SchemaID: 2, TableID: 2},
 		},
+	})
+	require.NoError(t, err)
+	require.True(t, ready)
+	tableNames.set(1, "db1", "u")
+	blockTables := &heartbeatpb.InfluencedTables{
+		InfluenceType: heartbeatpb.InfluenceType_Normal,
+		TableIDs:      []int64{1},
 	}
-	barrier, cfID, tableTriggerEventDispatcherID, tableDispatcherID, blockTables := newBarrierRoutePrecheckTestFixture(t, routeAdmission)
 	msgs := handleBlockedDispatchers(
-		barrier, cfID, tableTriggerEventDispatcherID, tableDispatcherID, blockTables)
-	require.Len(t, routeAdmission.precheckInfos, 2)
-	require.Empty(t, routeAdmission.applyInfos)
+		barrier, cfID, tableDispatcherID, blockTables, nil)
+	require.Len(t, routeAdmin.pendingEvents, 2)
 	event := barrier.blockedEvents.m[getEventKey(10, false)]
 	require.NotNil(t, event)
 	// Keep the barrier event so ACKed WAITING coverage is not lost when
@@ -666,17 +682,22 @@ func TestBarrierRoutePrecheckKeepsFullyReportedBlockedEventAndPreventsWriteActio
 	require.NotEmpty(t, msgs)
 	requireNoDispatcherActions(t, msgs)
 
-	routeAdmission = &testBarrierRouteAdmission{
-		precheckResults: []testBarrierRoutePrecheckResult{
-			{ready: true},
-			{err: errors.New("route conflict")},
-		},
+	barrier, routeAdmin, _, cfID, _, tableDispatcherID, _ = newBarrierRoutePrecheckTestFixture(
+		t, routeAllTo("target", "t"))
+	var reportedErr error
+	routeAdmin.reportError = func(err error) {
+		reportedErr = err
 	}
-	barrier, cfID, tableTriggerEventDispatcherID, tableDispatcherID, blockTables = newBarrierRoutePrecheckTestFixture(t, routeAdmission)
+	blockTables = &heartbeatpb.InfluencedTables{
+		InfluenceType: heartbeatpb.InfluenceType_Normal,
+		TableIDs:      []int64{1},
+	}
 	msgs = handleBlockedDispatchers(
-		barrier, cfID, tableTriggerEventDispatcherID, tableDispatcherID, blockTables)
-	require.Len(t, routeAdmission.precheckInfos, 2)
-	require.Empty(t, routeAdmission.applyInfos)
+		barrier, cfID, tableDispatcherID, blockTables, []*heartbeatpb.Table{
+			{SchemaID: 2, TableID: 2},
+		})
+	require.NotNil(t, reportedErr)
+	require.Contains(t, reportedErr.Error(), "table route conflict")
 	event = barrier.blockedEvents.m[getEventKey(10, false)]
 	require.NotNil(t, event)
 	require.True(t, event.allDispatcherReported())
@@ -688,8 +709,8 @@ func TestBarrierRoutePrecheckKeepsFullyReportedBlockedEventAndPreventsWriteActio
 
 func newBarrierRoutePrecheckTestFixture(
 	t *testing.T,
-	routeAdmission *testBarrierRouteAdmission,
-) (*Barrier, common.ChangeFeedID, common.DispatcherID, common.DispatcherID, *heartbeatpb.InfluencedTables) {
+	rules []*config.DispatchRule,
+) (*Barrier, *routeAdmin, *routeTableNames, common.ChangeFeedID, common.DispatcherID, common.DispatcherID, *heartbeatpb.InfluencedTables) {
 	t.Helper()
 	testutil.SetUpTestServices(t)
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
@@ -708,12 +729,13 @@ func newBarrierRoutePrecheckTestFixture(
 	spanController.BindSpanToNode("", "node1", stm)
 	spanController.MarkSpanReplicating(stm)
 
-	barrier := NewBarrier(spanController, operatorController, false, nil, common.DefaultMode, routeAdmission)
+	routeAdmin, tableNames := newTestRouteAdminWithChangefeed(t, cfID, rules)
+	barrier := NewBarrier(spanController, operatorController, false, nil, common.DefaultMode, routeAdmin)
 	blockTables := &heartbeatpb.InfluencedTables{
 		InfluenceType: heartbeatpb.InfluenceType_Normal,
 		TableIDs:      []int64{common.DDLSpanTableID, 1},
 	}
-	return barrier, cfID, tableTriggerEventDispatcherID, stm.ID, blockTables
+	return barrier, routeAdmin, tableNames, cfID, tableTriggerEventDispatcherID, stm.ID, blockTables
 }
 
 func requireNoDispatcherActions(t *testing.T, msgs []*messaging.TargetMessage) {
@@ -1935,32 +1957,4 @@ func TestBarrierReturnsTemporaryIgnoreForUnreplicatingWaitingStatus(t *testing.T
 	require.Equal(t, stm.ID, common.NewDispatcherIDFromPB(status.InfluencedDispatchers.DispatcherIDs[0]))
 	require.Equal(t, 0, barrier.blockedEvents.Len())
 	require.Nil(t, stm.GetBlockState())
-}
-
-type testBarrierRouteAdmission struct {
-	precheckReady   bool
-	precheckErr     error
-	precheckResults []testBarrierRoutePrecheckResult
-	precheckInfos   []routeAdmissionInfo
-	applyInfos      []routeAdmissionInfo
-}
-
-type testBarrierRoutePrecheckResult struct {
-	ready bool
-	err   error
-}
-
-func (a *testBarrierRouteAdmission) precheck(info routeAdmissionInfo) (bool, error) {
-	a.precheckInfos = append(a.precheckInfos, info)
-	if len(a.precheckResults) > 0 {
-		result := a.precheckResults[0]
-		a.precheckResults = a.precheckResults[1:]
-		return result.ready, result.err
-	}
-	return a.precheckReady, a.precheckErr
-}
-
-func (a *testBarrierRouteAdmission) apply(info routeAdmissionInfo) error {
-	a.applyInfos = append(a.applyInfos, info)
-	return nil
 }
