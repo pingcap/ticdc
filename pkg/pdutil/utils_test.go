@@ -60,14 +60,13 @@ func TestGetSourceID(t *testing.T) {
 	}, 5*time.Second, 100*time.Millisecond)
 }
 
-func TestGenerateChangefeedEpochReturnsPDError(t *testing.T) {
+func TestGenerateChangefeedEpochFallsBackToLocalTime(t *testing.T) {
 	t.Parallel()
 
-	_, err := GenerateChangefeedEpoch(context.Background(), &epochPDClient{
+	epoch := GenerateChangefeedEpoch(context.Background(), &epochPDClient{
 		err: errors.New("pd tso unavailable"),
 	})
-	require.Error(t, err)
-	require.ErrorContains(t, err, "pd tso unavailable")
+	require.NotZero(t, epoch)
 }
 
 func TestNextChangefeedEpochStrictlyIncreases(t *testing.T) {

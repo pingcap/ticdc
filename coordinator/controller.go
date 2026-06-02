@@ -761,12 +761,9 @@ func (c *Controller) CreateChangefeed(ctx context.Context, info *config.ChangeFe
 	}
 
 	// generate a unique changefeed epoch
-	epoch, err := pdutil.GenerateChangefeedEpoch(ctx, c.pdClient)
-	if err != nil {
-		return errors.Trace(err)
-	}
+	epoch := pdutil.GenerateChangefeedEpoch(ctx, c.pdClient)
 	info.Epoch = epoch
-	err = c.backend.CreateChangefeed(ctx, info)
+	err := c.backend.CreateChangefeed(ctx, info)
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -871,10 +868,7 @@ func (c *Controller) ResumeChangefeed(
 	if newCheckpointTs > 0 {
 		checkpointTs = newCheckpointTs
 	}
-	epoch, err := pdutil.GenerateChangefeedEpoch(ctx, c.pdClient)
-	if err != nil {
-		return errors.Trace(err)
-	}
+	epoch := pdutil.GenerateChangefeedEpoch(ctx, c.pdClient)
 	normalState := config.StateNormal
 	info, err := c.backend.BumpChangefeedEpoch(ctx, id, epoch, changefeed.EpochBumpOptions{
 		CheckpointTs: checkpointTs,
@@ -1022,10 +1016,7 @@ func (c *Controller) updateChangefeedEpoch(
 		log.Warn("changefeed not found, skip updating epoch", zap.String("changefeed", id.String()))
 		return nil
 	}
-	epoch, err := pdutil.GenerateChangefeedEpoch(ctx, c.pdClient)
-	if err != nil {
-		return errors.Trace(err)
-	}
+	epoch := pdutil.GenerateChangefeedEpoch(ctx, c.pdClient)
 	info, err := c.backend.BumpChangefeedEpoch(ctx, id, epoch, options)
 	if err != nil {
 		return errors.Trace(err)

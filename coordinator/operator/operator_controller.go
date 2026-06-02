@@ -150,11 +150,8 @@ func (oc *Controller) bumpChangefeedEpochIfNeeded(
 	if info == nil {
 		return nil
 	}
-	epoch, err := pdutil.GenerateChangefeedEpoch(context.Background(), oc.pdClient)
-	if err != nil {
-		return err
-	}
-	info, err = oc.backend.BumpChangefeedEpoch(
+	epoch := pdutil.GenerateChangefeedEpoch(context.Background(), oc.pdClient)
+	info, err := oc.backend.BumpChangefeedEpoch(
 		context.Background(),
 		cf.ID,
 		epoch,

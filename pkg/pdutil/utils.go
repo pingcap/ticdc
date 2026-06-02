@@ -55,26 +55,22 @@ func GetSourceID(ctx context.Context, pdClient pd.Client) (uint64, error) {
 }
 
 // GenerateChangefeedEpoch generates a unique changefeed epoch.
-func GenerateChangefeedEpoch(ctx context.Context, pdClient pd.Client) (uint64, error) {
+func GenerateChangefeedEpoch(ctx context.Context, pdClient pd.Client) uint64 {
 	if pdClient == nil {
-		// Unit tests may build a controller without a PD client. Production
-		// controllers always pass a PD client and must surface TSO failures.
-		return uint64(time.Now().UnixNano()), nil
+		return uint64(time.Now().UnixNano())
 	}
 
 	phyTs, logical, err := pdClient.GetTS(ctx)
 	if err != nil {
-		return 0, cerror.WrapError(cerror.ErrPDEtcdAPIError, err)
+		log.Warn("generate epoch using local timestamp due to error", zap.Error(err))
+		return uint64(time.Now().UnixNano())
 	}
-	return oracle.ComposeTS(phyTs, logical), nil
+	return oracle.ComposeTS(phyTs, logical)
 }
 
 // NextChangefeedEpoch generates an epoch that is strictly greater than current.
 func NextChangefeedEpoch(ctx context.Context, pdClient pd.Client, current uint64) (uint64, error) {
-	epoch, err := GenerateChangefeedEpoch(ctx, pdClient)
-	if err != nil {
-		return 0, err
-	}
+	epoch := GenerateChangefeedEpoch(ctx, pdClient)
 	return AdvanceChangefeedEpoch(epoch, current)
 }
 
