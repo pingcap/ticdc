@@ -389,7 +389,7 @@ func ValidateNoStaticRouteConflict(
 			if err != nil {
 				return err
 			}
-			if err := registry.Add(binding); err != nil {
+			if err := registry.ApplyTransition(nil, []RouteBinding{binding}, true); err != nil {
 				return err
 			}
 		}

@@ -39,45 +39,8 @@ func NewTargetTableRegistry(changefeedID common.ChangeFeedID, capacity int) *Tar
 	}
 }
 
-// Add validates and records a source-to-target table name mapping.
-func (r *TargetTableRegistry) Add(binding RouteBinding) error {
-	if target, ok := r.source2Target[binding.Source]; ok {
-		if target.Equal(binding.Target) {
-			return nil
-		}
-		return errors.ErrInternalCheckFailed.GenWithStack(
-			"source `%s`.`%s` is already registered to target `%s`.`%s`, incoming target `%s`.`%s`",
-			binding.Source.Schema, binding.Source.Table,
-			target.Schema, target.Table,
-			binding.Target.Schema, binding.Target.Table)
-	}
-
-	existingSource, ok := r.target2Source[binding.Target]
-	if !ok {
-		r.target2Source[binding.Target] = binding.Source
-		r.source2Target[binding.Source] = binding.Target
-		return nil
-	}
-	if existingSource.Equal(binding.Source) {
-		return nil
-	}
-	log.Warn("table route conflict detected",
-		zap.String("keyspace", r.changefeedID.Keyspace()),
-		zap.String("changefeed", r.changefeedID.Name()),
-		zap.String("targetSchema", binding.Target.Schema),
-		zap.String("targetTable", binding.Target.Table),
-		zap.String("existingSourceSchema", existingSource.Schema),
-		zap.String("existingSourceTable", existingSource.Table),
-		zap.String("incomingSourceSchema", binding.Source.Schema),
-		zap.String("incomingSourceTable", binding.Source.Table))
-	return errors.ErrTableRouteConflict.GenWithStackByArgs(
-		binding.Target.Schema, binding.Target.Table,
-		existingSource.Schema, existingSource.Table,
-		binding.Source.Schema, binding.Source.Table)
-}
-
-// Remove releases a source table name from the registry. It is idempotent.
-func (r *TargetTableRegistry) Remove(source TableKey) {
+// remove releases a source table name from the registry. It is idempotent.
+func (r *TargetTableRegistry) remove(source TableKey) {
 	target, ok := r.source2Target[source]
 	if !ok {
 		return
@@ -177,7 +140,7 @@ func (r *TargetTableRegistry) ApplyTransition(removes []TableKey, adds []RouteBi
 	// All validation above is side-effect free. Only after the complete transition
 	// is known to be valid do we update both indexes.
 	for _, source := range removes {
-		r.Remove(source)
+		r.remove(source)
 	}
 	for _, add := range adds {
 		r.target2Source[add.Target] = add.Source

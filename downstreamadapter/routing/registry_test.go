@@ -29,27 +29,29 @@ func TestTargetTableRegistry(t *testing.T) {
 	r := NewTargetTableRegistry(changefeedID, 0)
 	require.NotNil(t, r)
 
-	require.NoError(t, r.Add(NewRouteBinding("db1", "t1", "db1", "t1")))
-	require.NoError(t, r.Add(NewRouteBinding("db1", "t2", "archive", "t2")))
-	require.NoError(t, r.Add(NewRouteBinding("db1", "t3", "archive", "orders")))
+	require.NoError(t, r.ApplyTransition(nil, []RouteBinding{
+		NewRouteBinding("db1", "t1", "db1", "t1"),
+		NewRouteBinding("db1", "t2", "archive", "t2"),
+		NewRouteBinding("db1", "t3", "archive", "orders"),
+	}, true))
 
-	err := r.Add(NewRouteBinding("db2", "t1", "archive", "orders"))
+	err := r.ApplyTransition(nil, []RouteBinding{NewRouteBinding("db2", "t1", "archive", "orders")}, true)
 	require.Error(t, err)
 	require.True(t, errors.ErrTableRouteConflict.Equal(err))
 	require.Contains(t, err.Error(), "target `archive`.`orders`")
 	require.Contains(t, err.Error(), "source `db1`.`t3`")
 	require.Contains(t, err.Error(), "source `db2`.`t1`")
 
-	require.NoError(t, r.Add(NewRouteBinding("db1", "t1", "db1", "t1")))
+	require.NoError(t, r.ApplyTransition(nil, []RouteBinding{NewRouteBinding("db1", "t1", "db1", "t1")}, true))
 
-	err = r.Add(NewRouteBinding("db1", "t1", "archive", "orders_new"))
+	err = r.ApplyTransition(nil, []RouteBinding{NewRouteBinding("db1", "t1", "archive", "orders_new")}, true)
 	require.Error(t, err)
 	require.True(t, errors.ErrInternalCheckFailed.Equal(err))
 
-	r.Remove(TableKey{Schema: "db1", Table: "t3"})
+	require.NoError(t, r.ApplyTransition([]TableKey{{Schema: "db1", Table: "t3"}}, nil, true))
 	require.Len(t, r.target2Source, 2)
-	require.NoError(t, r.Add(NewRouteBinding("db2", "t1", "archive", "orders")))
-	r.Remove(TableKey{Schema: "db1", Table: "t3"})
+	require.NoError(t, r.ApplyTransition(nil, []RouteBinding{NewRouteBinding("db2", "t1", "archive", "orders")}, true))
+	require.NoError(t, r.ApplyTransition([]TableKey{{Schema: "db1", Table: "t3"}}, nil, true))
 	require.Len(t, r.target2Source, 3)
 
 	require.NoError(t, r.ApplyTransition(
@@ -58,7 +60,7 @@ func TestTargetTableRegistry(t *testing.T) {
 		true,
 	))
 	require.Len(t, r.target2Source, 3)
-	err = r.Add(NewRouteBinding("db3", "t3", "archive", "orders"))
+	err = r.ApplyTransition(nil, []RouteBinding{NewRouteBinding("db3", "t3", "archive", "orders")}, true)
 	require.Error(t, err)
 	require.True(t, errors.ErrTableRouteConflict.Equal(err))
 
@@ -70,7 +72,7 @@ func TestTargetTableRegistry(t *testing.T) {
 	require.Error(t, err)
 	require.True(t, errors.ErrTableRouteConflict.Equal(err))
 	require.Len(t, r.target2Source, 3)
-	require.NoError(t, r.Add(NewRouteBinding("db2", "t1_new", "archive", "orders")))
+	require.NoError(t, r.ApplyTransition(nil, []RouteBinding{NewRouteBinding("db2", "t1_new", "archive", "orders")}, true))
 
 	err = r.ApplyTransition(nil, []RouteBinding{
 		NewRouteBinding("db4", "t4", "archive", "invoices"),
@@ -78,7 +80,7 @@ func TestTargetTableRegistry(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, r.target2Source, 3)
 
-	require.NoError(t, r.Add(NewRouteBinding("db4", "t4", "archive", "invoices")))
+	require.NoError(t, r.ApplyTransition(nil, []RouteBinding{NewRouteBinding("db4", "t4", "archive", "invoices")}, true))
 	err = r.ApplyTransition(nil, []RouteBinding{
 		NewRouteBinding("db5", "t5", "archive", "invoices"),
 	}, false)
