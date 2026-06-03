@@ -918,7 +918,10 @@ func cloneInfluencedTablesPB(
 	return status
 }
 
-func routeTableAdmissionsForBlockState(event commonEvent.BlockEvent) []*heartbeatpb.RouteTableAdmission {
+func (d *BasicDispatcher) routeTableAdmissionsForBlockState(event commonEvent.BlockEvent) []*heartbeatpb.RouteTableAdmission {
+	if d.sharedInfo == nil || !d.sharedInfo.GetRouter().HasTableRoute() {
+		return nil
+	}
 	ddlEvent, ok := event.(*commonEvent.DDLEvent)
 	if !ok {
 		return nil
@@ -1204,7 +1207,7 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 				BlockTs:              event.GetCommitTs(),
 				NeedDroppedTables:    cloneInfluencedTablesPB(event.GetNeedDroppedTables()),
 				NeedAddedTables:      commonEvent.ToTablesPB(event.GetNeedAddedTables()),
-				RouteTableAdmissions: routeTableAdmissionsForBlockState(event),
+				RouteTableAdmissions: d.routeTableAdmissionsForBlockState(event),
 				Stage:                heartbeatpb.BlockStage_NONE,
 			},
 			Mode: d.GetMode(),
@@ -1354,7 +1357,7 @@ func (d *BasicDispatcher) reportBlockedEventToMaintainer(event commonEvent.Block
 			BlockTables:          cloneInfluencedTablesPB(event.GetBlockedTables()),
 			NeedDroppedTables:    cloneInfluencedTablesPB(event.GetNeedDroppedTables()),
 			NeedAddedTables:      commonEvent.ToTablesPB(event.GetNeedAddedTables()),
-			RouteTableAdmissions: routeTableAdmissionsForBlockState(event),
+			RouteTableAdmissions: d.routeTableAdmissionsForBlockState(event),
 			UpdatedSchemas:       commonEvent.ToSchemaIDChangePB(event.GetUpdatedSchemas()),
 			IsSyncPoint:          event.GetType() == commonEvent.TypeSyncPointEvent,
 			Stage:                heartbeatpb.BlockStage_WAITING,
@@ -1403,7 +1406,7 @@ func (d *BasicDispatcher) GetBlockEventStatus() *heartbeatpb.State {
 		BlockTables:          pendingEvent.GetBlockedTables().ToPB(),
 		NeedDroppedTables:    pendingEvent.GetNeedDroppedTables().ToPB(),
 		NeedAddedTables:      commonEvent.ToTablesPB(pendingEvent.GetNeedAddedTables()),
-		RouteTableAdmissions: routeTableAdmissionsForBlockState(pendingEvent),
+		RouteTableAdmissions: d.routeTableAdmissionsForBlockState(pendingEvent),
 		UpdatedSchemas:       commonEvent.ToSchemaIDChangePB(pendingEvent.GetUpdatedSchemas()), // only exists for rename table and rename tables
 		IsSyncPoint:          pendingEvent.GetType() == commonEvent.TypeSyncPointEvent,         // sync point event must should block
 		Stage:                blockStage,

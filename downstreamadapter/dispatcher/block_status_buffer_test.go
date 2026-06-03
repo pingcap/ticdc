@@ -18,9 +18,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pingcap/ticdc/downstreamadapter/routing"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/stretchr/testify/require"
 )
 
@@ -166,6 +168,7 @@ func TestBlockStatusBufferKeepsDistinctDoneKeys(t *testing.T) {
 
 func TestWaitingBlockStatusClonesMutableMetadata(t *testing.T) {
 	dispatcherID := common.NewDispatcherID()
+	dispatcher := newRouteAdmissionTestDispatcher(t)
 	event := &commonEvent.DDLEvent{
 		FinishedTs: 100,
 		SchemaName: "db",
@@ -202,7 +205,7 @@ func TestWaitingBlockStatusClonesMutableMetadata(t *testing.T) {
 			BlockTables:          cloneInfluencedTablesPB(event.GetBlockedTables()),
 			NeedDroppedTables:    cloneInfluencedTablesPB(event.GetNeedDroppedTables()),
 			NeedAddedTables:      commonEvent.ToTablesPB(event.GetNeedAddedTables()),
-			RouteTableAdmissions: routeTableAdmissionsForBlockState(event),
+			RouteTableAdmissions: dispatcher.routeTableAdmissionsForBlockState(event),
 			UpdatedSchemas:       commonEvent.ToSchemaIDChangePB(event.GetUpdatedSchemas()),
 			Stage:                heartbeatpb.BlockStage_WAITING,
 		},
@@ -232,6 +235,23 @@ func TestWaitingBlockStatusClonesMutableMetadata(t *testing.T) {
 	require.Equal(t, "target_db", status.State.RouteTableAdmissions[0].TargetSchemaName)
 	require.Equal(t, "target_t", status.State.RouteTableAdmissions[0].TargetTableName)
 	require.Equal(t, int64(14), status.State.UpdatedSchemas[0].NewSchemaID)
+}
+
+func newRouteAdmissionTestDispatcher(t *testing.T) *BasicDispatcher {
+	t.Helper()
+
+	router, err := routing.NewRouter(
+		common.NewChangefeedID(common.DefaultKeyspaceName),
+		false,
+		[]*config.DispatchRule{
+			{Matcher: []string{"*.*"}, TargetSchema: "target_db", TargetTable: "{table}_routed"},
+		},
+	)
+	require.NoError(t, err)
+
+	return &BasicDispatcher{
+		sharedInfo: &SharedInfo{router: router},
+	}
 }
 
 func TestNoneBlockStatusClonesMutableMetadata(t *testing.T) {

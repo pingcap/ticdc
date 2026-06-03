@@ -1288,6 +1288,7 @@ func TestHoldBlockEventUntilNoResendTasks(t *testing.T) {
 	require.False(t, msg.State.IsBlocked)
 	require.False(t, msg.State.IsSyncPoint)
 	require.Equal(t, uint64(10), msg.State.BlockTs)
+	require.Empty(t, msg.State.RouteTableAdmissions)
 	require.Equal(t, 1, dispatcher.resendTaskMap.Len())
 
 	// A DB/All block event must be deferred until resendTaskMap becomes empty,
