@@ -95,15 +95,23 @@ type tableRouteAdmission interface {
 // routeAdmin consumes this instead of BarrierEvent so route logic depends only
 // on DDL admission inputs, not on Barrier's dispatcher bookkeeping.
 type routeAdmission struct {
-	key           eventKey
-	commitTs      uint64
-	isSyncPoint   bool
-	blockTables   *heartbeatpb.InfluencedTables
+	// key orders route-affecting DDLs in the same order Barrier uses.
+	key eventKey
+	// commitTs is the schema snapshot timestamp used when maintainer must rebuild a table name.
+	commitTs uint64
+	// isSyncPoint is part of key and distinguishes sync-point barriers from DDL barriers at the same ts.
+	isSyncPoint bool
+	// blockTables is the DDL's affected table scope. routeAdmin uses it only to
+	// refresh already-admitted route owners when their source/target names may change.
+	blockTables *heartbeatpb.InfluencedTables
+	// droppedTables releases existing route owners.
 	droppedTables *heartbeatpb.InfluencedTables
-	addedTables   []*heartbeatpb.Table
-	routeTables   []*heartbeatpb.RouteTableAdmission
+	// addedTables admits new route owners when dispatcher did not provide routeTables.
+	addedTables []*heartbeatpb.Table
+	// routeTables carries dispatcher-provided per-table source/target names, avoiding schemaStore lookup.
+	routeTables []*heartbeatpb.RouteTableAdmission
+	// updatedSchema carries per-table schema ID changes, such as cross-schema RENAME TABLE.
 	updatedSchema []*heartbeatpb.SchemaIDChange
-	mode          int64
 }
 
 // routeTransition is the normalized mutation produced from one routeAdmission.
@@ -221,8 +229,7 @@ func (a *routeAdmin) precheck(info routeAdmission) (bool, error) {
 	if !a.isPendingHead(info.key) {
 		log.Info("route transition waits for earlier DDL",
 			zap.String("changefeed", a.changefeedID.Name()),
-			zap.Uint64("commitTs", info.commitTs),
-			zap.Int64("mode", info.mode))
+			zap.Uint64("commitTs", info.commitTs))
 		return false, nil
 	}
 	if pending.prechecked {
@@ -463,10 +470,12 @@ func (a *routeAdmin) buildBindingForRouteAdmission(
 		table.TargetSchemaName == "" || table.TargetTableName == "" {
 		return admission{}, false, nil
 	}
-	binding, err := a.newAdmission(table.TableID, table.SchemaID, routing.RouteBinding{
-		Source: routing.TableKey{Schema: table.SourceSchemaName, Table: table.SourceTableName},
-		Target: routing.TableKey{Schema: table.TargetSchemaName, Table: table.TargetTableName},
-	})
+	binding, err := a.newAdmission(table.TableID, table.SchemaID, routing.NewRouteBinding(
+		table.SourceSchemaName,
+		table.SourceTableName,
+		table.TargetSchemaName,
+		table.TargetTableName,
+	))
 	if err != nil {
 		return admission{}, false, err
 	}

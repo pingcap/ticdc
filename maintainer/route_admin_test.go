@@ -123,6 +123,72 @@ func TestRouteAdminAdmitsAddedTables(t *testing.T) {
 	require.Equal(t, 0, tableNames.count(common.DDLSpanTableID))
 }
 
+func TestRouteAdminReleasesCrossSchemaRenameOnDropDatabase(t *testing.T) {
+	admin, tableNames := newTestRouteAdmin(t, routeAllTo("target", "t"))
+
+	renameInfo := routeAdmission{
+		key:      getEventKey(10, false),
+		commitTs: 10,
+		blockTables: &heartbeatpb.InfluencedTables{
+			InfluenceType: heartbeatpb.InfluenceType_Normal,
+			TableIDs:      []int64{1},
+		},
+		routeTables: []*heartbeatpb.RouteTableAdmission{
+			{
+				SchemaID:         2,
+				TableID:          1,
+				SourceSchemaName: "db2",
+				SourceTableName:  "t",
+				TargetSchemaName: "target",
+				TargetTableName:  "t",
+			},
+		},
+		updatedSchema: []*heartbeatpb.SchemaIDChange{
+			{TableID: 1, OldSchemaID: 1, NewSchemaID: 2},
+		},
+	}
+	ready, err := admin.precheck(renameInfo)
+	require.NoError(t, err)
+	require.True(t, ready)
+	require.NoError(t, admin.apply(renameInfo))
+	binding, ok := admin.tableSources[1]
+	require.True(t, ok)
+	require.Equal(t, int64(2), binding.sourceSchemaID)
+	require.Equal(t, 1, admin.sourceRefs[routing.TableKey{Schema: "db2", Table: "t"}])
+
+	dropDBInfo := routeAdmission{
+		key:      getEventKey(20, false),
+		commitTs: 20,
+		droppedTables: &heartbeatpb.InfluencedTables{
+			InfluenceType: heartbeatpb.InfluenceType_DB,
+			SchemaID:      2,
+		},
+	}
+	ready, err = admin.precheck(dropDBInfo)
+	require.NoError(t, err)
+	require.True(t, ready)
+	require.NoError(t, admin.apply(dropDBInfo))
+	_, ok = admin.tableSources[1]
+	require.False(t, ok)
+	_, ok = admin.sourceRefs[routing.TableKey{Schema: "db2", Table: "t"}]
+	require.False(t, ok)
+
+	tableNames.set(3, "db1", "t")
+	addInfo := routeAdmission{
+		key:      getEventKey(30, false),
+		commitTs: 30,
+		addedTables: []*heartbeatpb.Table{
+			{SchemaID: 1, TableID: 3},
+		},
+	}
+	ready, err = admin.precheck(addInfo)
+	require.NoError(t, err)
+	require.True(t, ready)
+	require.NoError(t, admin.apply(addInfo))
+	_, ok = admin.tableSources[3]
+	require.True(t, ok)
+}
+
 func TestRouteAdminCachesRouteNeutralBlockEvents(t *testing.T) {
 	admin, tableNames := newTestRouteAdmin(t, routeBySource())
 

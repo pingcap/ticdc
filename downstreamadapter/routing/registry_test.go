@@ -29,74 +29,74 @@ func TestTargetTableRegistry(t *testing.T) {
 	r := NewTargetTableRegistry(changefeedID, 0)
 	require.NotNil(t, r)
 
-	require.NoError(t, r.Add(newRouteBinding("db1", "t1", "db1", "t1")))
-	require.NoError(t, r.Add(newRouteBinding("db1", "t2", "archive", "t2")))
-	require.NoError(t, r.Add(newRouteBinding("db1", "t3", "archive", "orders")))
+	require.NoError(t, r.Add(NewRouteBinding("db1", "t1", "db1", "t1")))
+	require.NoError(t, r.Add(NewRouteBinding("db1", "t2", "archive", "t2")))
+	require.NoError(t, r.Add(NewRouteBinding("db1", "t3", "archive", "orders")))
 
-	err := r.Add(newRouteBinding("db2", "t1", "archive", "orders"))
+	err := r.Add(NewRouteBinding("db2", "t1", "archive", "orders"))
 	require.Error(t, err)
 	require.True(t, errors.ErrTableRouteConflict.Equal(err))
 	require.Contains(t, err.Error(), "target `archive`.`orders`")
 	require.Contains(t, err.Error(), "source `db1`.`t3`")
 	require.Contains(t, err.Error(), "source `db2`.`t1`")
 
-	require.NoError(t, r.Add(newRouteBinding("db1", "t1", "db1", "t1")))
+	require.NoError(t, r.Add(NewRouteBinding("db1", "t1", "db1", "t1")))
 
-	err = r.Add(newRouteBinding("db1", "t1", "archive", "orders_new"))
+	err = r.Add(NewRouteBinding("db1", "t1", "archive", "orders_new"))
 	require.Error(t, err)
 	require.True(t, errors.ErrInternalCheckFailed.Equal(err))
 
 	r.Remove(TableKey{Schema: "db1", Table: "t3"})
 	require.Len(t, r.target2Source, 2)
-	require.NoError(t, r.Add(newRouteBinding("db2", "t1", "archive", "orders")))
+	require.NoError(t, r.Add(NewRouteBinding("db2", "t1", "archive", "orders")))
 	r.Remove(TableKey{Schema: "db1", Table: "t3"})
 	require.Len(t, r.target2Source, 3)
 
 	require.NoError(t, r.ApplyTransition(
 		[]TableKey{{Schema: "db2", Table: "t1"}},
-		[]RouteBinding{newRouteBinding("db2", "t1_new", "archive", "orders")},
+		[]RouteBinding{NewRouteBinding("db2", "t1_new", "archive", "orders")},
 		true,
 	))
 	require.Len(t, r.target2Source, 3)
-	err = r.Add(newRouteBinding("db3", "t3", "archive", "orders"))
+	err = r.Add(NewRouteBinding("db3", "t3", "archive", "orders"))
 	require.Error(t, err)
 	require.True(t, errors.ErrTableRouteConflict.Equal(err))
 
 	err = r.ApplyTransition(
 		[]TableKey{{Schema: "db2", Table: "t1_new"}},
-		[]RouteBinding{newRouteBinding("db3", "t3", "archive", "t2")},
+		[]RouteBinding{NewRouteBinding("db3", "t3", "archive", "t2")},
 		true,
 	)
 	require.Error(t, err)
 	require.True(t, errors.ErrTableRouteConflict.Equal(err))
 	require.Len(t, r.target2Source, 3)
-	require.NoError(t, r.Add(newRouteBinding("db2", "t1_new", "archive", "orders")))
+	require.NoError(t, r.Add(NewRouteBinding("db2", "t1_new", "archive", "orders")))
 
 	err = r.ApplyTransition(nil, []RouteBinding{
-		newRouteBinding("db4", "t4", "archive", "invoices"),
+		NewRouteBinding("db4", "t4", "archive", "invoices"),
 	}, false)
 	require.NoError(t, err)
 	require.Len(t, r.target2Source, 3)
 
-	require.NoError(t, r.Add(newRouteBinding("db4", "t4", "archive", "invoices")))
+	require.NoError(t, r.Add(NewRouteBinding("db4", "t4", "archive", "invoices")))
 	err = r.ApplyTransition(nil, []RouteBinding{
-		newRouteBinding("db5", "t5", "archive", "invoices"),
+		NewRouteBinding("db5", "t5", "archive", "invoices"),
 	}, false)
 	require.Error(t, err)
 	require.True(t, errors.ErrTableRouteConflict.Equal(err))
 	require.Len(t, r.target2Source, 4)
 
 	err = r.ApplyTransition(nil, []RouteBinding{
-		newRouteBinding("db6", "t6", "archive", "payments"),
-		newRouteBinding("db7", "t7", "archive", "payments"),
+		NewRouteBinding("db6", "t6", "archive", "payments"),
+		NewRouteBinding("db7", "t7", "archive", "payments"),
 	}, true)
 	require.Error(t, err)
 	require.True(t, errors.ErrTableRouteConflict.Equal(err))
 	require.Len(t, r.target2Source, 4)
 
 	err = r.ApplyTransition(nil, []RouteBinding{
-		newRouteBinding("db6", "t6", "archive", "payments"),
-		newRouteBinding("db6", "t6", "archive", "payments_new"),
+		NewRouteBinding("db6", "t6", "archive", "payments"),
+		NewRouteBinding("db6", "t6", "archive", "payments_new"),
 	}, true)
 	require.Error(t, err)
 	require.True(t, errors.ErrInternalCheckFailed.Equal(err))

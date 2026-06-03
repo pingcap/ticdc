@@ -926,90 +926,73 @@ func (d *BasicDispatcher) routeTableAdmissionsForBlockState(event commonEvent.Bl
 	if !ok {
 		return nil
 	}
+	// MultipleTableInfos carries per-table source/target names after routing.
+	// Without it, maintainer rebuilds the binding from schemaStore instead of
+	// guessing one DDL-level binding for possibly many tables.
+	if len(ddlEvent.MultipleTableInfos) == 0 {
+		return nil
+	}
+	candidateTableIDs := routeAdmissionCandidateTableIDs(ddlEvent)
+	if len(candidateTableIDs) == 0 {
+		return nil
+	}
 	seen := make(map[int64]struct{})
-	admissions := make([]*heartbeatpb.RouteTableAdmission, 0, len(ddlEvent.GetNeedAddedTables()))
-	admissions = appendAddedRouteAdmissions(admissions, seen, ddlEvent)
-	admissions = appendBlockedRouteAdmissions(admissions, seen, ddlEvent)
+	schemaIDs := routeAdmissionSchemaIDs(ddlEvent)
+	admissions := make([]*heartbeatpb.RouteTableAdmission, 0, len(ddlEvent.MultipleTableInfos))
+	for _, tableInfo := range ddlEvent.MultipleTableInfos {
+		tableID := tableInfo.TableName.TableID
+		if _, ok := candidateTableIDs[tableID]; !ok {
+			continue
+		}
+		binding, ok := routeBindingFromTableInfo(tableInfo)
+		if !ok {
+			continue
+		}
+		admissions = appendRouteAdmission(admissions, seen, tableID, routeAdmissionSchemaID(schemaIDs, tableID), binding)
+	}
 	if len(admissions) == 0 {
 		return nil
 	}
 	return admissions
 }
 
-func appendAddedRouteAdmissions(
-	admissions []*heartbeatpb.RouteTableAdmission,
-	seen map[int64]struct{},
-	ddlEvent *commonEvent.DDLEvent,
-) []*heartbeatpb.RouteTableAdmission {
-	addedTables := ddlEvent.GetNeedAddedTables()
-	if len(addedTables) == 0 {
-		return admissions
+func routeAdmissionCandidateTableIDs(ddlEvent *commonEvent.DDLEvent) map[int64]struct{} {
+	tableIDs := make(map[int64]struct{})
+	for _, table := range ddlEvent.GetNeedAddedTables() {
+		tableIDs[table.TableID] = struct{}{}
 	}
-	addNames := tableNameChangeAddNames(ddlEvent)
-	if len(addNames) == 1 {
-		binding, ok := routeBindingForSingleDDL(ddlEvent, addNames[0])
-		if !ok {
-			return admissions
-		}
-		for _, table := range addedTables {
-			admissions = appendRouteAdmission(admissions, seen, table.TableID, table.SchemaID, binding)
-		}
-		return admissions
-	}
-	if len(addNames) != len(addedTables) {
-		return admissions
-	}
-	for i, table := range addedTables {
-		binding := routeBindingFromSource(addNames[i])
-		if i < len(ddlEvent.MultipleTableInfos) {
-			if infoBinding, ok := routeBindingFromTableInfo(ddlEvent.MultipleTableInfos[i]); ok {
-				binding = infoBinding
-			}
-		}
-		admissions = appendRouteAdmission(admissions, seen, table.TableID, table.SchemaID, binding)
-	}
-	return admissions
-}
-
-func appendBlockedRouteAdmissions(
-	admissions []*heartbeatpb.RouteTableAdmission,
-	seen map[int64]struct{},
-	ddlEvent *commonEvent.DDLEvent,
-) []*heartbeatpb.RouteTableAdmission {
 	blockTables := ddlEvent.GetBlockedTables()
 	if blockTables == nil || blockTables.InfluenceType != commonEvent.InfluenceTypeNormal {
-		return admissions
-	}
-	binding, ok := primaryRouteBinding(ddlEvent)
-	addNames := tableNameChangeAddNames(ddlEvent)
-	if len(addNames) == 1 {
-		binding, ok = routeBindingForSingleDDL(ddlEvent, addNames[0])
-	}
-	if !ok {
-		return appendTableInfoRouteAdmissions(admissions, seen, ddlEvent)
+		return tableIDs
 	}
 	for _, tableID := range blockTables.TableIDs {
-		if tableID == common.DDLSpanTableID {
-			continue
-		}
-		admissions = appendRouteAdmission(admissions, seen, tableID, ddlEvent.SchemaID, binding)
+		tableIDs[tableID] = struct{}{}
 	}
-	return admissions
+	return tableIDs
 }
 
-func appendTableInfoRouteAdmissions(
-	admissions []*heartbeatpb.RouteTableAdmission,
-	seen map[int64]struct{},
-	ddlEvent *commonEvent.DDLEvent,
-) []*heartbeatpb.RouteTableAdmission {
-	for _, tableInfo := range ddlEvent.MultipleTableInfos {
-		binding, ok := routeBindingFromTableInfo(tableInfo)
-		if !ok {
-			continue
-		}
-		admissions = appendRouteAdmission(admissions, seen, tableInfo.TableName.TableID, ddlEvent.SchemaID, binding)
+func routeAdmissionSchemaIDs(ddlEvent *commonEvent.DDLEvent) map[int64]int64 {
+	schemaIDs := make(map[int64]int64)
+	for _, table := range ddlEvent.GetNeedAddedTables() {
+		schemaIDs[table.TableID] = table.SchemaID
 	}
-	return admissions
+	updatedSchemas := ddlEvent.GetUpdatedSchemas()
+	for _, update := range updatedSchemas {
+		schemaIDs[update.TableID] = update.NewSchemaID
+	}
+	if len(schemaIDs) == 0 {
+		return nil
+	}
+	return schemaIDs
+}
+
+func routeAdmissionSchemaID(schemaIDs map[int64]int64, tableID int64) int64 {
+	schemaID, ok := schemaIDs[tableID]
+	if ok {
+		return schemaID
+	}
+	// Zero tells routeAdmin to preserve the table's existing source schema ID.
+	return 0
 }
 
 func appendRouteAdmission(
@@ -1035,60 +1018,16 @@ func appendRouteAdmission(
 	})
 }
 
-func routeBindingForSingleDDL(
-	ddlEvent *commonEvent.DDLEvent,
-	source commonEvent.SchemaTableName,
-) (routing.RouteBinding, bool) {
-	for _, tableInfo := range ddlEvent.MultipleTableInfos {
-		binding, ok := routeBindingFromTableInfo(tableInfo)
-		if !ok {
-			continue
-		}
-		if binding.Source.Schema == source.SchemaName && binding.Source.Table == source.TableName {
-			return binding, true
-		}
-	}
-	if ddlEvent.GetSchemaName() == source.SchemaName && ddlEvent.GetTableName() == source.TableName {
-		return routing.RouteBinding{
-			Source: routing.TableKey{Schema: source.SchemaName, Table: source.TableName},
-			Target: routing.TableKey{Schema: ddlEvent.GetTargetSchemaName(), Table: ddlEvent.GetTargetTableName()},
-		}, true
-	}
-	return routeBindingFromSource(source), true
-}
-
-func primaryRouteBinding(ddlEvent *commonEvent.DDLEvent) (routing.RouteBinding, bool) {
-	if ddlEvent.GetSchemaName() == "" || ddlEvent.GetTableName() == "" {
-		return routing.RouteBinding{}, false
-	}
-	return routing.RouteBinding{
-		Source: routing.TableKey{Schema: ddlEvent.GetSchemaName(), Table: ddlEvent.GetTableName()},
-		Target: routing.TableKey{Schema: ddlEvent.GetTargetSchemaName(), Table: ddlEvent.GetTargetTableName()},
-	}, true
-}
-
 func routeBindingFromTableInfo(tableInfo *common.TableInfo) (routing.RouteBinding, bool) {
 	if tableInfo == nil || tableInfo.GetSchemaName() == "" || tableInfo.GetTableName() == "" {
 		return routing.RouteBinding{}, false
 	}
-	return routing.RouteBinding{
-		Source: routing.TableKey{Schema: tableInfo.GetSchemaName(), Table: tableInfo.GetTableName()},
-		Target: routing.TableKey{Schema: tableInfo.GetTargetSchemaName(), Table: tableInfo.GetTargetTableName()},
-	}, true
-}
-
-func routeBindingFromSource(source commonEvent.SchemaTableName) routing.RouteBinding {
-	return routing.RouteBinding{
-		Source: routing.TableKey{Schema: source.SchemaName, Table: source.TableName},
-		Target: routing.TableKey{Schema: source.SchemaName, Table: source.TableName},
-	}
-}
-
-func tableNameChangeAddNames(ddlEvent *commonEvent.DDLEvent) []commonEvent.SchemaTableName {
-	if ddlEvent.TableNameChange == nil {
-		return nil
-	}
-	return ddlEvent.TableNameChange.AddName
+	return routing.NewRouteBinding(
+		tableInfo.GetSchemaName(),
+		tableInfo.GetTableName(),
+		tableInfo.GetTargetSchemaName(),
+		tableInfo.GetTargetTableName(),
+	), true
 }
 
 // shouldBlock check whether the event should be blocked(to wait maintainer response)

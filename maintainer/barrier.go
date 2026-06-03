@@ -48,6 +48,8 @@ type Barrier struct {
 	// and logs must stay in the same mode.
 	mode int64
 
+	// routeAdmission gates DDL writes when table route is enabled. A nil value
+	// keeps Barrier on the normal non-route path.
 	routeAdmission tableRouteAdmission
 }
 

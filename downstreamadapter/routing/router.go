@@ -51,7 +51,8 @@ type RouteBinding struct {
 	Target TableKey
 }
 
-func newRouteBinding(schema, table, targetSchema, targetTable string) RouteBinding {
+// NewRouteBinding creates a source-to-target route mapping.
+func NewRouteBinding(schema, table, targetSchema, targetTable string) RouteBinding {
 	return RouteBinding{
 		Source: TableKey{
 			Schema: schema,
@@ -238,7 +239,7 @@ func (r Router) Route(originSchema, originTable string) (binding RouteBinding, e
 	// Empty schema means this name pair is absent, so keep it unchanged.
 	// This also prevents wildcard rules like *.* from matching it.
 	if originSchema == "" {
-		return newRouteBinding(originSchema, originTable, originSchema, originTable), nil
+		return NewRouteBinding(originSchema, originTable, originSchema, originTable), nil
 	}
 
 	rule, err := r.matchRule(originSchema, originTable)
@@ -246,16 +247,16 @@ func (r Router) Route(originSchema, originTable string) (binding RouteBinding, e
 		return RouteBinding{}, err
 	}
 	if rule == nil {
-		return newRouteBinding(originSchema, originTable, originSchema, originTable), nil
+		return NewRouteBinding(originSchema, originTable, originSchema, originTable), nil
 	}
 
 	targetSchema := substituteExpression(rule.targetSchemaExpr, originSchema, originTable, originSchema)
 	if originTable == "" {
-		return newRouteBinding(originSchema, originTable, targetSchema, originTable), nil
+		return NewRouteBinding(originSchema, originTable, targetSchema, originTable), nil
 	}
 
 	targetTable := substituteExpression(rule.targetTableExpr, originSchema, originTable, originTable)
-	return newRouteBinding(originSchema, originTable, targetSchema, targetTable), nil
+	return NewRouteBinding(originSchema, originTable, targetSchema, targetTable), nil
 }
 
 // matchRule finds the first rule that matches the given schema/table.

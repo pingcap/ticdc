@@ -195,7 +195,17 @@ func TestWaitingBlockStatusClonesMutableMetadata(t *testing.T) {
 			{TableID: 12, OldSchemaID: 13, NewSchemaID: 14},
 		},
 	}
-	event = commonEvent.NewRoutedDDLEvent(event, event.Query, "target_db", "target_t", "", "", nil, nil, nil)
+	event = commonEvent.NewRoutedDDLEvent(event, event.Query, "target_db", "target_t", "", "", nil, []*common.TableInfo{
+		{
+			TableName: common.TableName{
+				Schema:       "db",
+				Table:        "t",
+				TableID:      11,
+				TargetSchema: "target_db",
+				TargetTable:  "target_t",
+			},
+		},
+	}, nil)
 
 	status := &heartbeatpb.TableSpanBlockStatus{
 		ID: dispatcherID.ToPB(),
@@ -216,9 +226,66 @@ func TestWaitingBlockStatusClonesMutableMetadata(t *testing.T) {
 	require.Equal(t, int64(11), status.State.NeedAddedTables[0].TableID)
 	require.Equal(t, "db", status.State.RouteTableAdmissions[0].SourceSchemaName)
 	require.Equal(t, "t", status.State.RouteTableAdmissions[0].SourceTableName)
+	require.Equal(t, int64(10), status.State.RouteTableAdmissions[0].SchemaID)
 	require.Equal(t, "target_db", status.State.RouteTableAdmissions[0].TargetSchemaName)
 	require.Equal(t, "target_t", status.State.RouteTableAdmissions[0].TargetTableName)
 	require.Equal(t, int64(14), status.State.UpdatedSchemas[0].NewSchemaID)
+
+	renameEvent := &commonEvent.DDLEvent{
+		FinishedTs: 201,
+		SchemaID:   10,
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{common.DDLSpanTableID, 21, 22},
+		},
+		MultipleTableInfos: []*common.TableInfo{
+			{
+				TableName: common.TableName{
+					Schema:       "db1",
+					Table:        "x",
+					TableID:      21,
+					TargetSchema: "target_db",
+					TargetTable:  "x_routed",
+				},
+			},
+			{
+				TableName: common.TableName{
+					Schema:       "db2",
+					Table:        "y",
+					TableID:      22,
+					TargetSchema: "target_db",
+					TargetTable:  "y_routed",
+				},
+			},
+		},
+		TableNameChange: &commonEvent.TableNameChange{
+			AddName: []commonEvent.SchemaTableName{
+				{SchemaName: "db1", TableName: "x"},
+				{SchemaName: "db2", TableName: "y"},
+			},
+		},
+		UpdatedSchemas: []commonEvent.SchemaIDChange{
+			{TableID: 22, OldSchemaID: 10, NewSchemaID: 20},
+		},
+	}
+	routeAdmissions := dispatcher.routeTableAdmissionsForBlockState(renameEvent)
+	require.Equal(t, []*heartbeatpb.RouteTableAdmission{
+		{
+			TableID:          21,
+			SourceSchemaName: "db1",
+			SourceTableName:  "x",
+			TargetSchemaName: "target_db",
+			TargetTableName:  "x_routed",
+		},
+		{
+			TableID:          22,
+			SchemaID:         20,
+			SourceSchemaName: "db2",
+			SourceTableName:  "y",
+			TargetSchemaName: "target_db",
+			TargetTableName:  "y_routed",
+		},
+	}, routeAdmissions)
 
 	event.BlockedTables.TableIDs[0] = 101
 	event.NeedDroppedTables.TableIDs[0] = 102
@@ -232,6 +299,7 @@ func TestWaitingBlockStatusClonesMutableMetadata(t *testing.T) {
 	require.Equal(t, int64(11), status.State.NeedAddedTables[0].TableID)
 	require.Equal(t, "db", status.State.RouteTableAdmissions[0].SourceSchemaName)
 	require.Equal(t, "t", status.State.RouteTableAdmissions[0].SourceTableName)
+	require.Equal(t, int64(10), status.State.RouteTableAdmissions[0].SchemaID)
 	require.Equal(t, "target_db", status.State.RouteTableAdmissions[0].TargetSchemaName)
 	require.Equal(t, "target_t", status.State.RouteTableAdmissions[0].TargetTableName)
 	require.Equal(t, int64(14), status.State.UpdatedSchemas[0].NewSchemaID)

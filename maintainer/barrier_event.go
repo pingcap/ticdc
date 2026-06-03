@@ -161,7 +161,6 @@ func (be *BarrierEvent) buildRouteAdmission() routeAdmission {
 		addedTables:   be.newTables,
 		routeTables:   be.routeTables,
 		updatedSchema: be.schemaIDChange,
-		mode:          be.mode,
 	}
 }
 
@@ -219,30 +218,29 @@ func (be *BarrierEvent) checkEventAction(dispatcherID common.DispatcherID) (*hea
 // it will select a dispatcher as the writer, reset the range checker ,and move the event to the selected state
 // returns the dispatcher status to the dispatcher manager
 func (be *BarrierEvent) onAllDispatcherReportedBlockEvent(dispatcherID common.DispatcherID) (*heartbeatpb.DispatcherStatus, node.ID) {
-	dispatcher := be.spanController.GetDDLDispatcherID()
-	if be.blockedDispatchers != nil {
-		switch be.blockedDispatchers.InfluenceType {
-		case heartbeatpb.InfluenceType_DB, heartbeatpb.InfluenceType_All:
-			// for all and db type, we always use the table trigger event dispatcher as the writer
+	var dispatcher common.DispatcherID
+	switch be.blockedDispatchers.InfluenceType {
+	case heartbeatpb.InfluenceType_DB, heartbeatpb.InfluenceType_All:
+		// for all and db type, we always use the table trigger event dispatcher as the writer
+		log.Info("use table trigger event as the writer dispatcher",
+			zap.String("changefeed", be.cfID.Name()),
+			zap.String("dispatcher", be.spanController.GetDDLDispatcherID().String()),
+			zap.Uint64("commitTs", be.commitTs),
+			zap.Int64("mode", be.mode))
+		dispatcher = be.spanController.GetDDLDispatcherID()
+	default:
+		selected := dispatcherID.ToPB()
+		if be.tableTriggerDispatcherRelated {
+			// select the last one as the writer
+			// or the table trigger event dispatcher if it's one of the blocked dispatcher
+			selected = be.spanController.GetDDLDispatcherID().ToPB()
 			log.Info("use table trigger event as the writer dispatcher",
 				zap.String("changefeed", be.cfID.Name()),
-				zap.String("dispatcher", be.spanController.GetDDLDispatcherID().String()),
+				zap.String("dispatcher", selected.String()),
 				zap.Uint64("commitTs", be.commitTs),
 				zap.Int64("mode", be.mode))
-		default:
-			selected := dispatcherID.ToPB()
-			if be.tableTriggerDispatcherRelated {
-				// select the last one as the writer
-				// or the table trigger event dispatcher if it's one of the blocked dispatcher
-				selected = be.spanController.GetDDLDispatcherID().ToPB()
-				log.Info("use table trigger event as the writer dispatcher",
-					zap.String("changefeed", be.cfID.Name()),
-					zap.String("dispatcher", selected.String()),
-					zap.Uint64("commitTs", be.commitTs),
-					zap.Int64("mode", be.mode))
-			}
-			dispatcher = common.NewDispatcherIDFromPB(selected)
 		}
+		dispatcher = common.NewDispatcherIDFromPB(selected)
 	}
 
 	// Once the event enters selected state, we start a new reporting phase that
