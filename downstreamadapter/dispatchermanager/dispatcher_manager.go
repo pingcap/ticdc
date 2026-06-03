@@ -84,9 +84,9 @@ type DispatcherManager struct {
 		maintainerEpoch uint64
 		maintainerID    node.ID
 	}
-	// maintainerFenceMu serializes maintainer owner/epoch changes with request
+	// MaintainerFenceMu serializes maintainer owner/epoch changes with request
 	// fence checks and scheduler side effects.
-	maintainerFenceMu sync.Mutex
+	MaintainerFenceMu sync.Mutex
 
 	pdClock pdutil.Clock
 

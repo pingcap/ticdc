@@ -206,12 +206,8 @@ func (h *SchedulerDispatcherRequestHandler) Path(scheduleDispatcherRequest Sched
 // Some requests are intentionally dropped (see preCheckForSchedulerHandler / handleScheduleRemove) to avoid
 // leaking operator entries in cases where we have no cleanup callback (e.g. remove a non-existent dispatcher).
 func (h *SchedulerDispatcherRequestHandler) Handle(dispatcherManager *DispatcherManager, reqs ...SchedulerDispatcherRequest) bool {
-	if len(reqs) == 0 {
-		// dynstream guarantees len(events)>0, but guard defensively to avoid panics if that contract changes.
-		return false
-	}
-	dispatcherManager.LockMaintainerFence()
-	defer dispatcherManager.UnlockMaintainerFence()
+	dispatcherManager.MaintainerFenceMu.Lock()
+	defer dispatcherManager.MaintainerFenceMu.Unlock()
 
 	// `dynstream` guarantees per-path serialization: for a given changefeed (Path),
 	// SchedulerDispatcherRequestHandler.Handle will not be executed concurrently. This matters for reasoning:
@@ -293,8 +289,8 @@ func preCheckForSchedulerHandler(req SchedulerDispatcherRequest, dispatcherManag
 		return common.DispatcherID{}, false
 	}
 	if existing, operatorExists := dispatcherManager.currentOperatorMap.Load(dispatcherID); operatorExists {
-		existingReq, ok := existing.(SchedulerDispatcherRequest)
-		if ok && !dispatcherManager.IsMaintainerRequestAllowed(existingReq.From, existingReq.MaintainerEpoch) {
+		existingReq := existing.(SchedulerDispatcherRequest)
+		if !dispatcherManager.IsMaintainerRequestAllowed(existingReq.From, existingReq.MaintainerEpoch) {
 			dispatcherManager.currentOperatorMap.Delete(dispatcherID)
 		} else {
 			// Create requests must be serialized per dispatcherID; otherwise we can end up creating multiple

@@ -52,22 +52,6 @@ func (e *DispatcherManager) GetMaintainerID() node.ID {
 	return e.meta.maintainerID
 }
 
-func (e *DispatcherManager) SetMaintainerID(maintainerID node.ID) {
-	e.meta.Lock()
-	defer e.meta.Unlock()
-	e.meta.maintainerID = maintainerID
-}
-
-// LockMaintainerFence enters the receiver-local maintainer fence critical section.
-func (e *DispatcherManager) LockMaintainerFence() {
-	e.maintainerFenceMu.Lock()
-}
-
-// UnlockMaintainerFence releases the receiver-local maintainer fence critical section.
-func (e *DispatcherManager) UnlockMaintainerFence() {
-	e.maintainerFenceMu.Unlock()
-}
-
 // TryUpdateMaintainer records the active maintainer owner and epoch.
 // Maintainer epoch 0 is accepted only while the manager is still in compatibility
 // mode. Once a non-zero epoch is known, epoch 0 must never downgrade the receiver

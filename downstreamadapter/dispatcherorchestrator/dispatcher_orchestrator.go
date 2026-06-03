@@ -221,7 +221,7 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 		metrics.DispatcherManagerGauge.WithLabelValues(cfId.Keyspace(), cfId.Name()).Inc()
 	}
 
-	manager.LockMaintainerFence()
+	manager.MaintainerFenceMu.Lock()
 	if !manager.TryUpdateMaintainer(from, maintainerEpoch) {
 		log.Warn("drop stale maintainer bootstrap request",
 			zap.String("changefeed", cfId.Name()),
@@ -229,7 +229,7 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 			zap.Uint64("requestMaintainerEpoch", maintainerEpoch),
 			zap.Uint64("currentMaintainerEpoch", manager.GetMaintainerEpoch()),
 			zap.String("currentMaintainer", manager.GetMaintainerID().String()))
-		manager.UnlockMaintainerFence()
+		manager.MaintainerFenceMu.Unlock()
 		return nil
 	}
 	if exists {
@@ -248,7 +248,7 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 				if err != nil {
 					log.Error("failed to create new table trigger event dispatcher",
 						zap.Stringer("changefeedID", cfId), zap.Error(err))
-					manager.UnlockMaintainerFence()
+					manager.MaintainerFenceMu.Unlock()
 					return m.handleDispatcherError(from, req.ChangefeedID, err)
 				}
 			}
@@ -264,7 +264,7 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 				if err != nil {
 					log.Error("failed to create new table trigger redo dispatcher",
 						zap.Stringer("changefeedID", cfId), zap.Error(err))
-					manager.UnlockMaintainerFence()
+					manager.MaintainerFenceMu.Unlock()
 					return m.handleDispatcherError(from, req.ChangefeedID, err)
 				}
 			}
@@ -284,7 +284,7 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 		}
 	}
 	response := createBootstrapResponse(req.ChangefeedID, manager, startTs, redoStartTs)
-	manager.UnlockMaintainerFence()
+	manager.MaintainerFenceMu.Unlock()
 	return m.sendResponse(from, messaging.MaintainerManagerTopic, response)
 }
 
@@ -307,7 +307,7 @@ func (m *DispatcherOrchestrator) handlePostBootstrapRequest(
 			zap.Any("changefeedID", cfId.Name()))
 		return nil
 	}
-	manager.LockMaintainerFence()
+	manager.MaintainerFenceMu.Lock()
 	if !manager.IsMaintainerRequestAllowed(from, req.MaintainerEpoch) {
 		log.Warn("drop stale maintainer post bootstrap request",
 			zap.String("changefeed", cfId.Name()),
@@ -315,7 +315,7 @@ func (m *DispatcherOrchestrator) handlePostBootstrapRequest(
 			zap.Uint64("requestMaintainerEpoch", req.MaintainerEpoch),
 			zap.Uint64("currentMaintainerEpoch", manager.GetMaintainerEpoch()),
 			zap.String("currentMaintainer", manager.GetMaintainerID().String()))
-		manager.UnlockMaintainerFence()
+		manager.MaintainerFenceMu.Unlock()
 		return nil
 	}
 	if manager.GetTableTriggerEventDispatcher().GetId() !=
@@ -340,7 +340,7 @@ func (m *DispatcherOrchestrator) handlePostBootstrapRequest(
 			},
 		}
 
-		manager.UnlockMaintainerFence()
+		manager.MaintainerFenceMu.Unlock()
 		return m.sendResponse(from, messaging.MaintainerManagerTopic, response)
 	}
 
@@ -349,7 +349,7 @@ func (m *DispatcherOrchestrator) handlePostBootstrapRequest(
 	if err != nil {
 		log.Error("failed to initialize table trigger event dispatcher",
 			zap.Any("changefeedID", cfId.Name()), zap.Error(err))
-		manager.UnlockMaintainerFence()
+		manager.MaintainerFenceMu.Unlock()
 		return m.handleDispatcherError(from, req.ChangefeedID, err)
 	}
 	if manager.IsRedoReady() {
@@ -357,7 +357,7 @@ func (m *DispatcherOrchestrator) handlePostBootstrapRequest(
 		if err != nil {
 			log.Error("failed to initialize table trigger redo dispatcher",
 				zap.Any("changefeedID", cfId.Name()), zap.Error(err))
-			manager.UnlockMaintainerFence()
+			manager.MaintainerFenceMu.Unlock()
 			return m.handleDispatcherError(from, req.ChangefeedID, err)
 		}
 	}
@@ -366,7 +366,7 @@ func (m *DispatcherOrchestrator) handlePostBootstrapRequest(
 		ChangefeedID:                  req.ChangefeedID,
 		TableTriggerEventDispatcherId: req.TableTriggerEventDispatcherId,
 	}
-	manager.UnlockMaintainerFence()
+	manager.MaintainerFenceMu.Unlock()
 	return m.sendResponse(from, messaging.MaintainerManagerTopic, response)
 }
 
@@ -382,7 +382,7 @@ func (m *DispatcherOrchestrator) handleCloseRequest(
 
 	m.mutex.Lock()
 	if manager, ok := m.dispatcherManagers[cfId]; ok {
-		manager.LockMaintainerFence()
+		manager.MaintainerFenceMu.Lock()
 		if manager.IsMaintainerRequestAllowed(from, req.MaintainerEpoch) {
 			if closed := manager.TryClose(req.Removed); closed {
 				delete(m.dispatcherManagers, cfId)
@@ -399,7 +399,7 @@ func (m *DispatcherOrchestrator) handleCloseRequest(
 				zap.Uint64("currentMaintainerEpoch", manager.GetMaintainerEpoch()),
 				zap.String("currentMaintainer", manager.GetMaintainerID().String()))
 		}
-		manager.UnlockMaintainerFence()
+		manager.MaintainerFenceMu.Unlock()
 	}
 	m.mutex.Unlock()
 
