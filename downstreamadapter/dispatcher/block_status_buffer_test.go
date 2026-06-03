@@ -195,17 +195,15 @@ func TestWaitingBlockStatusClonesMutableMetadata(t *testing.T) {
 			{TableID: 12, OldSchemaID: 13, NewSchemaID: 14},
 		},
 	}
-	event = commonEvent.NewRoutedDDLEvent(event, event.Query, "target_db", "target_t", "", "", nil, []*common.TableInfo{
-		{
-			TableName: common.TableName{
-				Schema:       "db",
-				Table:        "t",
-				TableID:      11,
-				TargetSchema: "target_db",
-				TargetTable:  "target_t",
-			},
+	event = commonEvent.NewRoutedDDLEvent(event, event.Query, "target_db", "target_t", "", "", &common.TableInfo{
+		TableName: common.TableName{
+			Schema:       "db",
+			Table:        "t",
+			TableID:      11,
+			TargetSchema: "target_db",
+			TargetTable:  "target_t",
 		},
-	}, nil)
+	}, nil, nil)
 
 	status := &heartbeatpb.TableSpanBlockStatus{
 		ID: dispatcherID.ToPB(),

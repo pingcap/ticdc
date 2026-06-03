@@ -926,19 +926,13 @@ func (d *BasicDispatcher) routeTableAdmissionsForBlockState(event commonEvent.Bl
 	if !ok {
 		return nil
 	}
-	// MultipleTableInfos carries per-table source/target names after routing.
-	// Without it, maintainer rebuilds the binding from schemaStore instead of
-	// guessing one DDL-level binding for possibly many tables.
-	if len(ddlEvent.MultipleTableInfos) == 0 {
-		return nil
-	}
 	candidateTableIDs := routeAdmissionCandidateTableIDs(ddlEvent)
 	if len(candidateTableIDs) == 0 {
 		return nil
 	}
 	seen := make(map[int64]struct{})
 	schemaIDs := routeAdmissionSchemaIDs(ddlEvent)
-	admissions := make([]*heartbeatpb.RouteTableAdmission, 0, len(ddlEvent.MultipleTableInfos))
+	admissions := make([]*heartbeatpb.RouteTableAdmission, 0, len(ddlEvent.MultipleTableInfos)+1)
 	for _, tableInfo := range ddlEvent.MultipleTableInfos {
 		tableID := tableInfo.TableName.TableID
 		if _, ok := candidateTableIDs[tableID]; !ok {
@@ -950,6 +944,38 @@ func (d *BasicDispatcher) routeTableAdmissionsForBlockState(event commonEvent.Bl
 		}
 		admissions = appendRouteAdmission(admissions, seen, tableID, routeAdmissionSchemaID(schemaIDs, tableID), binding)
 	}
+
+	// Single-table DDLs may only carry TableInfo or the DDL primary table name,
+	// but added tables still need complete route admission metadata.
+	if tableInfo := ddlEvent.TableInfo; tableInfo != nil {
+		tableID := tableInfo.TableName.TableID
+		if _, ok := candidateTableIDs[tableID]; ok {
+			binding, ok := routeBindingFromTableInfo(tableInfo)
+			if ok {
+				admissions = appendRouteAdmission(admissions, seen, tableID, routeAdmissionSchemaID(schemaIDs, tableID), binding)
+			}
+		}
+	}
+
+	addedTables := ddlEvent.GetNeedAddedTables()
+	if len(addedTables) == 1 {
+		tableID := addedTables[0].TableID
+		if _, ok := seen[tableID]; !ok && ddlEvent.GetSchemaName() != "" && ddlEvent.GetTableName() != "" {
+			admissions = appendRouteAdmission(
+				admissions,
+				seen,
+				tableID,
+				addedTables[0].SchemaID,
+				routing.NewRouteBinding(
+					ddlEvent.GetSchemaName(),
+					ddlEvent.GetTableName(),
+					ddlEvent.GetTargetSchemaName(),
+					ddlEvent.GetTargetTableName(),
+				),
+			)
+		}
+	}
+
 	if len(admissions) == 0 {
 		return nil
 	}

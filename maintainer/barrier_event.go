@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/routing"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/operator"
 	"github.com/pingcap/ticdc/maintainer/range_checker"
@@ -156,12 +157,73 @@ func (be *BarrierEvent) buildRouteAdmission() routeAdmission {
 		key:           getEventKey(be.commitTs, be.isSyncPoint),
 		commitTs:      be.commitTs,
 		isSyncPoint:   be.isSyncPoint,
-		blockTables:   be.blockedDispatchers,
-		droppedTables: be.dropDispatchers,
-		addedTables:   be.newTables,
-		routeTables:   be.routeTables,
-		updatedSchema: be.schemaIDChange,
+		blockTables:   routeInfluencedTablesFromPB(be.blockedDispatchers),
+		droppedTables: routeInfluencedTablesFromPB(be.dropDispatchers),
+		routeTables:   routeTableAdmissionsFromPB(be.routeTables),
+		updatedSchema: routeSchemaIDChangesFromPB(be.schemaIDChange),
 	}
+}
+
+func routeInfluencedTablesFromPB(tables *heartbeatpb.InfluencedTables) *commonEvent.InfluencedTables {
+	if tables == nil {
+		return nil
+	}
+	influenceType := commonEvent.InfluenceTypeNormal
+	switch tables.InfluenceType {
+	case heartbeatpb.InfluenceType_All:
+		influenceType = commonEvent.InfluenceTypeAll
+	case heartbeatpb.InfluenceType_DB:
+		influenceType = commonEvent.InfluenceTypeDB
+	case heartbeatpb.InfluenceType_Normal:
+		influenceType = commonEvent.InfluenceTypeNormal
+	}
+	return &commonEvent.InfluencedTables{
+		InfluenceType: influenceType,
+		TableIDs:      append([]int64(nil), tables.TableIDs...),
+		SchemaID:      tables.SchemaID,
+	}
+}
+
+func routeTableAdmissionsFromPB(tables []*heartbeatpb.RouteTableAdmission) []routeTableAdmissionInfo {
+	if len(tables) == 0 {
+		return nil
+	}
+	result := make([]routeTableAdmissionInfo, 0, len(tables))
+	for _, table := range tables {
+		if table == nil || table.SourceSchemaName == "" || table.SourceTableName == "" ||
+			table.TargetSchemaName == "" || table.TargetTableName == "" {
+			continue
+		}
+		result = append(result, routeTableAdmissionInfo{
+			tableID:  table.TableID,
+			schemaID: table.SchemaID,
+			binding: routing.NewRouteBinding(
+				table.SourceSchemaName,
+				table.SourceTableName,
+				table.TargetSchemaName,
+				table.TargetTableName,
+			),
+		})
+	}
+	return result
+}
+
+func routeSchemaIDChangesFromPB(changes []*heartbeatpb.SchemaIDChange) []commonEvent.SchemaIDChange {
+	if len(changes) == 0 {
+		return nil
+	}
+	result := make([]commonEvent.SchemaIDChange, 0, len(changes))
+	for _, change := range changes {
+		if change == nil {
+			continue
+		}
+		result = append(result, commonEvent.SchemaIDChange{
+			TableID:     change.TableID,
+			OldSchemaID: change.OldSchemaID,
+			NewSchemaID: change.NewSchemaID,
+		})
+	}
+	return result
 }
 
 func needSchedule(state *heartbeatpb.State) bool {

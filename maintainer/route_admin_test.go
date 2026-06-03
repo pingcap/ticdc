@@ -17,7 +17,6 @@ import (
 	"testing"
 
 	"github.com/pingcap/ticdc/downstreamadapter/routing"
-	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -36,8 +35,12 @@ func TestRouteAdminPrecheckReportsConflict(t *testing.T) {
 	info := routeAdmission{
 		key:      getEventKey(10, false),
 		commitTs: 10,
-		addedTables: []*heartbeatpb.Table{
-			{SchemaID: 2, TableID: 2},
+		routeTables: []routeTableAdmissionInfo{
+			{
+				schemaID: 2,
+				tableID:  2,
+				binding:  routing.NewRouteBinding("db2", "t", "target", "t"),
+			},
 		},
 	}
 	ready, err := admin.precheck(info)
@@ -54,29 +57,22 @@ func TestRouteAdminPrecheckReportsConflict(t *testing.T) {
 }
 
 func TestRouteAdminAdmitsAddedTables(t *testing.T) {
-	admin, tableNames := newTestRouteAdmin(t, routeBySource())
+	admin, _ := newTestRouteAdmin(t, routeBySource())
 
 	info := routeAdmission{
 		key:      getEventKey(10, false),
 		commitTs: 10,
-		addedTables: []*heartbeatpb.Table{
-			{SchemaID: 2, TableID: 2},
-		},
-		routeTables: []*heartbeatpb.RouteTableAdmission{
+		routeTables: []routeTableAdmissionInfo{
 			{
-				SchemaID:         2,
-				TableID:          2,
-				SourceSchemaName: "db2",
-				SourceTableName:  "t",
-				TargetSchemaName: "db2_target",
-				TargetTableName:  "t",
+				schemaID: 2,
+				tableID:  2,
+				binding:  routing.NewRouteBinding("db2", "t", "db2_target", "t"),
 			},
 		},
 	}
 	ready, err := admin.precheck(info)
 	require.NoError(t, err)
 	require.True(t, ready)
-	require.Equal(t, 0, tableNames.count(2))
 
 	_, ok := admin.tableSources[2]
 	require.False(t, ok)
@@ -87,30 +83,35 @@ func TestRouteAdminAdmitsAddedTables(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, routing.TableKey{Schema: "db2_target", Table: "t"}, binding.binding.Target)
 
-	tableNames.set(3, "db3", "t")
 	info = routeAdmission{
 		key:      getEventKey(20, false),
 		commitTs: 20,
-		addedTables: []*heartbeatpb.Table{
-			{SchemaID: 3, TableID: 3},
+		routeTables: []routeTableAdmissionInfo{
+			{
+				schemaID: 3,
+				tableID:  3,
+				binding:  routing.NewRouteBinding("db3", "t", "db3_target", "t"),
+			},
 		},
 	}
 	ready, err = admin.precheck(info)
 	require.NoError(t, err)
 	require.True(t, ready)
-	require.Equal(t, 1, tableNames.count(3))
 	require.NoError(t, admin.apply(info))
 
-	tableNames.set(4, "db4", "t")
 	info = routeAdmission{
 		key:      getEventKey(30, false),
 		commitTs: 30,
-		blockTables: &heartbeatpb.InfluencedTables{
-			InfluenceType: heartbeatpb.InfluenceType_Normal,
+		blockTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
 			TableIDs:      []int64{common.DDLSpanTableID, 1},
 		},
-		addedTables: []*heartbeatpb.Table{
-			{SchemaID: 4, TableID: 4},
+		routeTables: []routeTableAdmissionInfo{
+			{
+				schemaID: 4,
+				tableID:  4,
+				binding:  routing.NewRouteBinding("db4", "t", "db4_target", "t"),
+			},
 		},
 	}
 	ready, err = admin.precheck(info)
@@ -120,30 +121,26 @@ func TestRouteAdminAdmitsAddedTables(t *testing.T) {
 
 	_, ok = admin.tableSources[4]
 	require.True(t, ok)
-	require.Equal(t, 0, tableNames.count(common.DDLSpanTableID))
 }
 
 func TestRouteAdminReleasesCrossSchemaRenameOnDropDatabase(t *testing.T) {
-	admin, tableNames := newTestRouteAdmin(t, routeAllTo("target", "t"))
+	admin, _ := newTestRouteAdmin(t, routeAllTo("target", "t"))
 
 	renameInfo := routeAdmission{
 		key:      getEventKey(10, false),
 		commitTs: 10,
-		blockTables: &heartbeatpb.InfluencedTables{
-			InfluenceType: heartbeatpb.InfluenceType_Normal,
+		blockTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
 			TableIDs:      []int64{1},
 		},
-		routeTables: []*heartbeatpb.RouteTableAdmission{
+		routeTables: []routeTableAdmissionInfo{
 			{
-				SchemaID:         2,
-				TableID:          1,
-				SourceSchemaName: "db2",
-				SourceTableName:  "t",
-				TargetSchemaName: "target",
-				TargetTableName:  "t",
+				schemaID: 2,
+				tableID:  1,
+				binding:  routing.NewRouteBinding("db2", "t", "target", "t"),
 			},
 		},
-		updatedSchema: []*heartbeatpb.SchemaIDChange{
+		updatedSchema: []commonEvent.SchemaIDChange{
 			{TableID: 1, OldSchemaID: 1, NewSchemaID: 2},
 		},
 	}
@@ -159,8 +156,8 @@ func TestRouteAdminReleasesCrossSchemaRenameOnDropDatabase(t *testing.T) {
 	dropDBInfo := routeAdmission{
 		key:      getEventKey(20, false),
 		commitTs: 20,
-		droppedTables: &heartbeatpb.InfluencedTables{
-			InfluenceType: heartbeatpb.InfluenceType_DB,
+		droppedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeDB,
 			SchemaID:      2,
 		},
 	}
@@ -173,12 +170,15 @@ func TestRouteAdminReleasesCrossSchemaRenameOnDropDatabase(t *testing.T) {
 	_, ok = admin.sourceRefs[routing.TableKey{Schema: "db2", Table: "t"}]
 	require.False(t, ok)
 
-	tableNames.set(3, "db1", "t")
 	addInfo := routeAdmission{
 		key:      getEventKey(30, false),
 		commitTs: 30,
-		addedTables: []*heartbeatpb.Table{
-			{SchemaID: 1, TableID: 3},
+		routeTables: []routeTableAdmissionInfo{
+			{
+				schemaID: 1,
+				tableID:  3,
+				binding:  routing.NewRouteBinding("db1", "t", "target", "t"),
+			},
 		},
 	}
 	ready, err = admin.precheck(addInfo)
@@ -197,8 +197,8 @@ func TestRouteAdminCachesRouteNeutralBlockEvents(t *testing.T) {
 	info := routeAdmission{
 		key:      getEventKey(10, false),
 		commitTs: 10,
-		blockTables: &heartbeatpb.InfluencedTables{
-			InfluenceType: heartbeatpb.InfluenceType_Normal,
+		blockTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
 			TableIDs:      []int64{1},
 		},
 	}
@@ -207,29 +207,22 @@ func TestRouteAdminCachesRouteNeutralBlockEvents(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ready)
 	require.Equal(t, 1, tableNames.count(1))
-	require.Len(t, admin.routeNeutralEventCache, 1)
-	require.Empty(t, admin.pendingEvents)
-	require.Empty(t, admin.pendingQueue)
 
 	ready, err = admin.precheck(info)
 	require.NoError(t, err)
 	require.True(t, ready)
 	require.Equal(t, 1, tableNames.count(1))
-	require.Len(t, admin.routeNeutralEventCache, 1)
 
 	require.NoError(t, admin.apply(info))
 	require.Equal(t, 1, tableNames.count(1))
-	require.Empty(t, admin.routeNeutralEventCache)
-	require.Empty(t, admin.pendingEvents)
-	require.Empty(t, admin.pendingQueue)
 	require.Equal(t, 1, admin.sourceRefs[routing.TableKey{Schema: "db1", Table: "t"}])
 
 	tableNames.set(1, "db1", "u")
 	recoveredInfo := routeAdmission{
 		key:      getEventKey(20, false),
 		commitTs: 20,
-		blockTables: &heartbeatpb.InfluencedTables{
-			InfluenceType: heartbeatpb.InfluenceType_Normal,
+		blockTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
 			TableIDs:      []int64{1},
 		},
 	}
@@ -238,22 +231,22 @@ func TestRouteAdminCachesRouteNeutralBlockEvents(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, routing.TableKey{Schema: "db1", Table: "u"}, binding.binding.Source)
 	require.Equal(t, routing.TableKey{Schema: "db1_target", Table: "u"}, binding.binding.Target)
-	require.Empty(t, admin.pendingEvents)
-	require.Empty(t, admin.pendingQueue)
 }
 
 func TestRouteAdminTracksSourceAdmissionNotTableID(t *testing.T) {
-	admin, tableNames := newTestRouteAdmin(t, routeAllTo("target", "t"))
-	tableNames.set(3, "db1", "t")
-	tableNames.set(4, "db1", "t")
+	admin, _ := newTestRouteAdmin(t, routeAllTo("target", "t"))
 
 	source := routing.TableKey{Schema: "db1", Table: "t"}
 
 	addSameSourceInfo := routeAdmission{
 		key:      getEventKey(10, false),
 		commitTs: 10,
-		addedTables: []*heartbeatpb.Table{
-			{SchemaID: 1, TableID: 3},
+		routeTables: []routeTableAdmissionInfo{
+			{
+				schemaID: 1,
+				tableID:  3,
+				binding:  routing.NewRouteBinding("db1", "t", "target", "t"),
+			},
 		},
 	}
 	ready, err := admin.precheck(addSameSourceInfo)
@@ -265,8 +258,8 @@ func TestRouteAdminTracksSourceAdmissionNotTableID(t *testing.T) {
 	dropOnePhysicalIDInfo := routeAdmission{
 		key:      getEventKey(20, false),
 		commitTs: 20,
-		droppedTables: &heartbeatpb.InfluencedTables{
-			InfluenceType: heartbeatpb.InfluenceType_Normal,
+		droppedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
 			TableIDs:      []int64{1},
 		},
 	}
@@ -283,16 +276,20 @@ func TestRouteAdminTracksSourceAdmissionNotTableID(t *testing.T) {
 	truncateInfo := routeAdmission{
 		key:      getEventKey(30, false),
 		commitTs: 30,
-		blockTables: &heartbeatpb.InfluencedTables{
-			InfluenceType: heartbeatpb.InfluenceType_Normal,
+		blockTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
 			TableIDs:      []int64{3, 4},
 		},
-		droppedTables: &heartbeatpb.InfluencedTables{
-			InfluenceType: heartbeatpb.InfluenceType_Normal,
+		droppedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
 			TableIDs:      []int64{3},
 		},
-		addedTables: []*heartbeatpb.Table{
-			{SchemaID: 1, TableID: 4},
+		routeTables: []routeTableAdmissionInfo{
+			{
+				schemaID: 1,
+				tableID:  4,
+				binding:  routing.NewRouteBinding("db1", "t", "target", "t"),
+			},
 		},
 	}
 	ready, err = admin.precheck(truncateInfo)
@@ -316,8 +313,8 @@ func TestRouteAdminTracksSourceAdmissionNotTableID(t *testing.T) {
 	dropLastSourceInfo := routeAdmission{
 		key:      getEventKey(40, false),
 		commitTs: 40,
-		droppedTables: &heartbeatpb.InfluencedTables{
-			InfluenceType: heartbeatpb.InfluenceType_Normal,
+		droppedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
 			TableIDs:      []int64{4},
 		},
 	}
@@ -333,8 +330,12 @@ func TestRouteAdminTracksSourceAdmissionNotTableID(t *testing.T) {
 	addOtherSourceInfo := routeAdmission{
 		key:      getEventKey(50, false),
 		commitTs: 50,
-		addedTables: []*heartbeatpb.Table{
-			{SchemaID: 2, TableID: 2},
+		routeTables: []routeTableAdmissionInfo{
+			{
+				schemaID: 2,
+				tableID:  2,
+				binding:  routing.NewRouteBinding("db2", "t", "target", "t"),
+			},
 		},
 	}
 	ready, err = admin.precheck(addOtherSourceInfo)

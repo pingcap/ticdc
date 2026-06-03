@@ -21,7 +21,6 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/routing"
-	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -43,8 +42,9 @@ type routeAdmin struct {
 	router       routing.Router
 	registry     *routing.TargetTableRegistry
 	// getTableNameByID is intentionally narrower than SchemaStore. Route
-	// admission only needs the source name at the DDL commit ts, and CREATE /
-	// RECOVER can be checked before the new table dispatcher is registered.
+	// admission only needs the source name at the DDL commit ts when an
+	// existing table's binding must be refreshed without dispatcher-provided
+	// routeTables.
 	getTableNameByID getTableNameByIDFunc
 	// tableSources is the admission snapshot for currently admitted source tables,
 	// keyed by logical table ID. DDL transitions use it to map table IDs from
@@ -103,15 +103,23 @@ type routeAdmission struct {
 	isSyncPoint bool
 	// blockTables is the DDL's affected table scope. routeAdmin uses it only to
 	// refresh already-admitted route owners when their source/target names may change.
-	blockTables *heartbeatpb.InfluencedTables
+	blockTables *commonEvent.InfluencedTables
 	// droppedTables releases existing route owners.
-	droppedTables *heartbeatpb.InfluencedTables
-	// addedTables admits new route owners when dispatcher did not provide routeTables.
-	addedTables []*heartbeatpb.Table
-	// routeTables carries dispatcher-provided per-table source/target names, avoiding schemaStore lookup.
-	routeTables []*heartbeatpb.RouteTableAdmission
+	droppedTables *commonEvent.InfluencedTables
+	// routeTables carries complete dispatcher-provided per-table source/target
+	// names. Incomplete protocol entries are filtered out at the BarrierEvent
+	// boundary.
+	routeTables []routeTableAdmissionInfo
 	// updatedSchema carries per-table schema ID changes, such as cross-schema RENAME TABLE.
-	updatedSchema []*heartbeatpb.SchemaIDChange
+	updatedSchema []commonEvent.SchemaIDChange
+}
+
+// routeTableAdmissionInfo is the complete, route-specific table binding form
+// accepted by routeAdmin. The protobuf adapter must not pass partial entries.
+type routeTableAdmissionInfo struct {
+	tableID  int64
+	schemaID int64
+	binding  routing.RouteBinding
 }
 
 // routeTransition is the normalized mutation produced from one routeAdmission.
@@ -295,8 +303,7 @@ func (a *routeAdmin) needsCheck(info routeAdmission) bool {
 	if a == nil || a.registry == nil || info.isSyncPoint {
 		return false
 	}
-	if info.droppedTables != nil || len(info.addedTables) > 0 ||
-		len(info.routeTables) > 0 || len(info.updatedSchema) > 0 {
+	if info.droppedTables != nil || len(info.routeTables) > 0 || len(info.updatedSchema) > 0 {
 		return true
 	}
 	return info.blockTables != nil && len(info.blockTables.TableIDs) > 0
@@ -351,34 +358,23 @@ func (a *routeAdmin) buildTransition(info routeAdmission) (*routeTransition, err
 
 	if info.droppedTables != nil {
 		switch info.droppedTables.InfluenceType {
-		case heartbeatpb.InfluenceType_Normal:
+		case commonEvent.InfluenceTypeNormal:
 			for _, tableID := range info.droppedTables.TableIDs {
 				if _, ok := a.tableSources[tableID]; ok {
 					builder.addRemove(tableID)
 				}
 			}
-		case heartbeatpb.InfluenceType_DB:
+		case commonEvent.InfluenceTypeDB:
 			for _, existing := range a.tableSources {
 				if existing.sourceSchemaID == info.droppedTables.SchemaID {
 					builder.addRemove(existing.tableID)
 				}
 			}
-		case heartbeatpb.InfluenceType_All:
+		case commonEvent.InfluenceTypeAll:
 			for _, existing := range a.tableSources {
 				builder.addRemove(existing.tableID)
 			}
 		}
-	}
-
-	for _, add := range info.addedTables {
-		if a.hasRouteAdmission(info.routeTables, add.TableID) {
-			continue
-		}
-		binding, err := a.buildBindingForTable(add.TableID, add.SchemaID, info.commitTs)
-		if err != nil {
-			return nil, err
-		}
-		a.addBindingToTransition(builder, binding)
 	}
 
 	for _, change := range info.updatedSchema {
@@ -399,20 +395,17 @@ func (a *routeAdmin) buildTransition(info routeAdmission) (*routeTransition, err
 	}
 
 	for _, table := range info.routeTables {
-		if builder.hasRemove(table.TableID) {
+		if builder.hasRemove(table.tableID) {
 			continue
 		}
-		binding, ok, err := a.buildBindingForRouteAdmission(table)
+		binding, err := a.buildBindingForRouteAdmission(table)
 		if err != nil {
 			return nil, err
-		}
-		if !ok {
-			continue
 		}
 		a.addBindingToTransition(builder, binding)
 	}
 
-	if info.blockTables != nil && info.blockTables.InfluenceType == heartbeatpb.InfluenceType_Normal {
+	if info.blockTables != nil && info.blockTables.InfluenceType == commonEvent.InfluenceTypeNormal {
 		for _, tableID := range info.blockTables.TableIDs {
 			if tableID == common.DDLSpanTableID {
 				continue
@@ -463,23 +456,8 @@ func (a *routeAdmin) buildBindingForTable(tableID, schemaID int64, commitTs uint
 	return a.newAdmission(tableID, schemaID, binding)
 }
 
-func (a *routeAdmin) buildBindingForRouteAdmission(
-	table *heartbeatpb.RouteTableAdmission,
-) (admission, bool, error) {
-	if table.SourceSchemaName == "" || table.SourceTableName == "" ||
-		table.TargetSchemaName == "" || table.TargetTableName == "" {
-		return admission{}, false, nil
-	}
-	binding, err := a.newAdmission(table.TableID, table.SchemaID, routing.NewRouteBinding(
-		table.SourceSchemaName,
-		table.SourceTableName,
-		table.TargetSchemaName,
-		table.TargetTableName,
-	))
-	if err != nil {
-		return admission{}, false, err
-	}
-	return binding, true, nil
+func (a *routeAdmin) buildBindingForRouteAdmission(table routeTableAdmissionInfo) (admission, error) {
+	return a.newAdmission(table.tableID, table.schemaID, table.binding)
 }
 
 func (a *routeAdmin) newAdmission(tableID, schemaID int64, binding routing.RouteBinding) (admission, error) {
@@ -498,9 +476,9 @@ func (a *routeAdmin) newAdmission(tableID, schemaID int64, binding routing.Route
 	}, nil
 }
 
-func (a *routeAdmin) hasRouteAdmission(tables []*heartbeatpb.RouteTableAdmission, tableID int64) bool {
+func (a *routeAdmin) hasRouteAdmission(tables []routeTableAdmissionInfo, tableID int64) bool {
 	for _, table := range tables {
-		if table.TableID == tableID {
+		if table.tableID == tableID {
 			return true
 		}
 	}
