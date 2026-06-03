@@ -854,6 +854,57 @@ func TestHandleLocalReadyEventCleansUpRemoteRegistrations(t *testing.T) {
 	})
 }
 
+func TestInitialLocalReadyCallbackIsOneShot(t *testing.T) {
+	localServerID := node.ID("local-server")
+	dispatcherID := common.NewDispatcherID()
+
+	newReadyEvent := func(from node.ID) dispatcher.DispatcherEvent {
+		return dispatcher.DispatcherEvent{
+			From: &from,
+			Event: &mockEvent{
+				eventType: commonEvent.TypeReadyEvent,
+			},
+		}
+	}
+
+	mockDisp := newMockDispatcher(dispatcherID, 0)
+	mockEventCollector := newTestEventCollector(localServerID)
+	stat := newDispatcherStat(mockDisp, mockEventCollector, nil)
+	callbackCount := 0
+	setSessionState(stat.session, "", true, "")
+	setSessionReadyCallback(stat.session, func() {
+		callbackCount++
+	})
+
+	stat.handleSignalEvent(newReadyEvent(localServerID))
+	require.Equal(t, 1, callbackCount)
+	require.Nil(t, stat.session.readyCallback)
+	requireNoDispatcherRequest(t, mockEventCollector)
+
+	stat.session.commitLocalRegistration()
+	requireDispatcherRequests(
+		t,
+		readDispatcherRequests(t, mockEventCollector, 1),
+		dispatcherRequestRecord{to: localServerID, action: eventpb.ActionType_ACTION_TYPE_RESET},
+	)
+
+	require.True(t, stat.session.retryCurrentRegistrationIfRemovedFrom(localServerID))
+	requireDispatcherRequests(
+		t,
+		readDispatcherRequests(t, mockEventCollector, 1),
+		dispatcherRequestRecord{to: localServerID, action: eventpb.ActionType_ACTION_TYPE_REGISTER},
+	)
+
+	stat.handleSignalEvent(newReadyEvent(localServerID))
+	require.Equal(t, 1, callbackCount)
+	requireDispatcherRequests(
+		t,
+		readDispatcherRequests(t, mockEventCollector, 1),
+		dispatcherRequestRecord{to: localServerID, action: eventpb.ActionType_ACTION_TYPE_RESET},
+	)
+	requireNoDispatcherRequest(t, mockEventCollector)
+}
+
 func TestIsFromCurrentEpoch(t *testing.T) {
 	t.Parallel()
 
