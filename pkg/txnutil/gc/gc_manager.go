@@ -187,32 +187,24 @@ func (m *gcManager) checkStaleCheckPointTsGlobal(changefeedID common.ChangeFeedI
 }
 
 func (m *gcManager) TryUpdateKeyspaceGCBarrier(ctx context.Context, keyspaceID uint32, keyspaceName string, checkpointTs common.Ts) error {
-	gcCli := m.pdClient.GetGCStatesClient(keyspaceID)
-	ttl := time.Duration(m.gcTTL) * time.Second
-	_, setBarrierErr := SetGCBarrier(ctx, gcCli, m.gcServiceID, checkpointTs, ttl)
-	if setBarrierErr != nil && !errors.IsGCBarrierTSBehindTxnSafePointError(setBarrierErr) {
+	minGCBarrier, err := setKeyspaceGCSafepoint(ctx, m.pdClient, keyspaceID, m.gcServiceID, m.gcTTL, checkpointTs)
+	if err != nil {
 		log.Warn("update keyspace gc barrier failed",
 			zap.Uint32("keyspaceID", keyspaceID), zap.Uint64("checkpointTs", checkpointTs),
-			zap.String("serviceID", m.gcServiceID), zap.Error(setBarrierErr))
-		return errors.WrapError(errors.ErrUpdateGCBarrierFailed, setBarrierErr)
-	}
-
-	minGCBarrier, err := UnifyGetServiceGCSafepoint(ctx, m.pdClient, keyspaceID, m.gcServiceID)
-	if err != nil {
-		return err
+			zap.String("serviceID", m.gcServiceID), zap.Error(err))
+		return errors.WrapError(errors.ErrUpdateGCBarrierFailed, err)
 	}
 
 	failpoint.Inject("InjectActualGCSafePoint", func(val failpoint.Value) {
 		minGCBarrier = uint64(val.(int))
 	})
 
-	if setBarrierErr != nil {
+	if checkpointTs < minGCBarrier {
 		log.Warn("update keyspace gc barrier failed, checkpointTs smaller than the minimum gc barrier",
 			zap.Uint32("keyspaceID", keyspaceID),
 			zap.Uint64("checkpointTs", checkpointTs),
 			zap.Uint64("minGCBarrier", minGCBarrier),
-			zap.String("serviceID", m.gcServiceID),
-			zap.Error(setBarrierErr))
+			zap.String("serviceID", m.gcServiceID))
 	}
 	// if the min checkpoint ts is equal to the current gc barrier ts, it means
 	// that the service gc barrier ts set by TiCDC is the min service gc barrier ts

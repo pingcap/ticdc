@@ -28,9 +28,14 @@ import (
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/stretchr/testify/require"
 	pdgc "github.com/tikv/pd/client/clients/gc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func TestTryUpdateKeyspaceGCBarrierDoesNotReturnSnapshotLost(t *testing.T) {
+	if kerneltype.UseLegacySafePointInNextGen {
+		t.Skip("GC Barrier path is disabled with legacy_safepoint tag")
+	}
 	appcontext.SetService(appcontext.DefaultPDClock, pdutil.NewClock4Test())
 
 	keyspaceID := uint32(1)
@@ -70,4 +75,144 @@ func TestTryUpdateKeyspaceGCBarrierDoesNotReturnSnapshotLost(t *testing.T) {
 	errCode, ok := cerrors.RFCCode(err)
 	require.True(t, ok)
 	require.Equal(t, cerrors.ErrSnapshotLostByGC.RFCCode(), errCode)
+}
+
+func TestTryUpdateKeyspaceGCBarrierUsesServiceSafePointV2WhenEnabled(t *testing.T) {
+	if !kerneltype.UseLegacySafePointInNextGen {
+		t.Skip("legacy safepoint path requires legacy_safepoint tag")
+	}
+	appcontext.SetService(appcontext.DefaultPDClock, pdutil.NewClock4Test())
+
+	keyspaceID := uint32(1)
+	keyspaceName := "test"
+	checkpointTs := common.Ts(100)
+
+	setServiceSafePointV2Calls := 0
+	var manager *gcManager
+	pdClient := &MockPDClient{
+		GetGCStatesClientFunc: func(id uint32) pdgc.GCStatesClient {
+			require.FailNow(t, "GetGCStatesClient should not be called when service safe point v2 is enabled")
+			return nil
+		},
+		SetServiceSafePointV2Func: func(
+			ctx context.Context, id uint32, serviceID string, ttl int64, safePoint uint64,
+		) (uint64, error) {
+			setServiceSafePointV2Calls++
+			require.Equal(t, keyspaceID, id)
+			require.Equal(t, "test-service", serviceID)
+			require.Equal(t, manager.gcTTL, ttl)
+			require.Equal(t, uint64(checkpointTs), safePoint)
+			return safePoint, nil
+		},
+	}
+
+	manager = NewManager("test-service", pdClient).(*gcManager)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	require.NoError(t, manager.TryUpdateKeyspaceGCBarrier(ctx, keyspaceID, keyspaceName, checkpointTs))
+	require.Equal(t, 1, setServiceSafePointV2Calls)
+
+	barrierInfo, ok := manager.keyspaceGCBarrierInfoMap.Load(keyspaceID)
+	require.True(t, ok)
+	require.Equal(t, &keyspaceGCBarrierInfo{
+		lastSafePointTs: uint64(checkpointTs),
+		isTiCDCBlockGC:  true,
+	}, barrierInfo)
+}
+
+func TestTryUpdateKeyspaceGCBarrierDoesNotUseServiceSafePointV2WhenDisabled(t *testing.T) {
+	if kerneltype.UseLegacySafePointInNextGen {
+		t.Skip("GC Barrier path is disabled with legacy_safepoint tag")
+	}
+	appcontext.SetService(appcontext.DefaultPDClock, pdutil.NewClock4Test())
+
+	keyspaceID := uint32(1)
+	keyspaceName := "test"
+	checkpointTs := common.Ts(100)
+
+	pdClient := &MockPDClient{
+		GetGCStatesClientFunc: func(id uint32) pdgc.GCStatesClient {
+			require.Equal(t, keyspaceID, id)
+			return unsupportedGCStatesClient{}
+		},
+		SetServiceSafePointV2Func: func(
+			ctx context.Context, id uint32, serviceID string, ttl int64, safePoint uint64,
+		) (uint64, error) {
+			require.FailNow(t, "SetServiceSafePointV2 should not be called when service safe point v2 is disabled")
+			return 0, nil
+		},
+	}
+
+	manager := NewManager("test-service", pdClient).(*gcManager)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	err := manager.TryUpdateKeyspaceGCBarrier(ctx, keyspaceID, keyspaceName, checkpointTs)
+	require.Error(t, err)
+	errCode, ok := cerrors.RFCCode(err)
+	require.True(t, ok)
+	require.Equal(t, cerrors.ErrUpdateGCBarrierFailed.RFCCode(), errCode)
+}
+
+func TestUnifyGetAndDeleteGcSafepointUseServiceSafePointV2WhenEnabled(t *testing.T) {
+	if !kerneltype.UseLegacySafePointInNextGen {
+		t.Skip("legacy safepoint path requires legacy_safepoint tag")
+	}
+
+	keyspaceID := uint32(1)
+	serviceID := "test-service"
+	minSafePoint := uint64(120)
+
+	getServiceSafePointV2Calls := 0
+	deleteServiceSafePointV2Calls := 0
+	pdClient := &MockPDClient{
+		GetGCStatesClientFunc: func(id uint32) pdgc.GCStatesClient {
+			require.FailNow(t, "GetGCStatesClient should not be called when service safe point v2 is enabled")
+			return nil
+		},
+		GetMinServiceSafePointV2Func: func(ctx context.Context, id uint32) (uint64, error) {
+			getServiceSafePointV2Calls++
+			require.Equal(t, keyspaceID, id)
+			return minSafePoint, nil
+		},
+		DeleteServiceSafePointV2Func: func(ctx context.Context, id uint32, sid string) (uint64, error) {
+			deleteServiceSafePointV2Calls++
+			require.Equal(t, keyspaceID, id)
+			require.Equal(t, serviceID, sid)
+			return minSafePoint, nil
+		},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	gotMinSafePoint, err := UnifyGetServiceGCSafepoint(ctx, pdClient, keyspaceID, serviceID)
+	require.NoError(t, err)
+	require.Equal(t, minSafePoint, gotMinSafePoint)
+	require.Equal(t, 1, getServiceSafePointV2Calls)
+
+	require.NoError(t, UnifyDeleteGcSafepoint(ctx, pdClient, keyspaceID, serviceID))
+	require.Equal(t, 1, deleteServiceSafePointV2Calls)
+}
+
+type unsupportedGCStatesClient struct{}
+
+func (unsupportedGCStatesClient) SetGCBarrier(
+	ctx context.Context,
+	barrierID string,
+	barrierTS uint64,
+	ttl time.Duration,
+) (*pdgc.GCBarrierInfo, error) {
+	return nil, status.Error(codes.Unimplemented, "unknown method SetGCBarrier")
+}
+
+func (unsupportedGCStatesClient) DeleteGCBarrier(ctx context.Context, barrierID string) (*pdgc.GCBarrierInfo, error) {
+	return nil, status.Error(codes.Unimplemented, "unknown method DeleteGCBarrier")
+}
+
+func (unsupportedGCStatesClient) GetGCState(ctx context.Context) (pdgc.GCState, error) {
+	return pdgc.GCState{}, status.Error(codes.Unimplemented, "unknown method GetGCState")
 }

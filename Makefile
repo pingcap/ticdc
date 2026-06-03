@@ -74,11 +74,21 @@ ifeq ("${NEXT_GEN}", "1")
 	else
 		BUILD_FLAG := $(BUILD_FLAG),nextgen
 	endif
+	ifeq ("${LEGACY_SAFEPOINT}", "1")
+		ifeq ($(BUILD_FLAG),)
+			BUILD_FLAG := -tags legacy_safepoint
+		else
+			BUILD_FLAG := $(BUILD_FLAG),legacy_safepoint
+		endif
+	endif
 endif
 
 TEST_FLAG=intest
 ifeq ("${NEXT_GEN}", "1")
 	TEST_FLAG := $(TEST_FLAG),nextgen
+	ifeq ("${LEGACY_SAFEPOINT}", "1")
+		TEST_FLAG := $(TEST_FLAG),legacy_safepoint
+	endif
 endif
 
 GOTEST := CGO_ENABLED=1 $(GO) test -p 3 --race --tags=$(TEST_FLAG)
@@ -268,7 +278,7 @@ unit_test_in_verify_ci_next_gen: check_failpoint_ctl tools/bin/gotestsum tools/b
 	$(FAILPOINT_ENABLE)
 	@echo "Running unit tests..."
 	@export log_level=error;\
-	CGO_ENABLED=1 tools/bin/gotestsum --junitfile cdc-junit-report.xml -- -v -timeout 300s -p $(P) --race --tags=intest,nextgen \
+	CGO_ENABLED=1 tools/bin/gotestsum --junitfile cdc-junit-report.xml -- -v -timeout 300s -p $(P) --race --tags=$(NEXTGEN_TEST_FLAG) \
 	-parallel=16 \
 	-covermode=atomic -coverprofile="$(TEST_DIR)/cov.unit.out" $(PACKAGES) \
 	|| { $(FAILPOINT_DISABLE); exit 1; }
@@ -293,7 +303,7 @@ unit_test_pkg_next_gen: check_failpoint_ctl tools/bin/gotestsum tools/bin/gocov 
 	$(FAILPOINT_ENABLE)
 	@echo "Running unit tests..."
 	@export log_level=error;\
-	CGO_ENABLED=1 tools/bin/gotestsum --junitfile cdc-junit-report.xml -- -v -timeout 300s -p $(P) --race --tags=intest,nextgen \
+	CGO_ENABLED=1 tools/bin/gotestsum --junitfile cdc-junit-report.xml -- -v -timeout 300s -p $(P) --race --tags=$(NEXTGEN_TEST_FLAG) \
 	-parallel=16 \
 	-covermode=atomic -coverprofile="$(TEST_DIR)/cov.unit.out" \
 	$(PKG) \
