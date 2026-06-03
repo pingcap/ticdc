@@ -194,6 +194,10 @@ func (d *BasicDispatcher) IsOutputRawChangeEvent() bool {
 	return d.sharedInfo.outputRawChangeEvent
 }
 
+func (d *BasicDispatcher) EnableIgnoreUpdateOnlyColumns() bool {
+	return d.sink.SinkType() == common.KafkaSinkType
+}
+
 func (d *BasicDispatcher) GetRouter() routing.Router {
 	return d.sharedInfo.GetRouter()
 }

@@ -141,6 +141,10 @@ func (m *mockEventDispatcher) IsOutputRawChangeEvent() bool {
 	return false
 }
 
+func (m *mockEventDispatcher) EnableIgnoreUpdateOnlyColumns() bool {
+	return false
+}
+
 func (m *mockEventDispatcher) GetRouter() routing.Router {
 	return routing.Router{}
 }

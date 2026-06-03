@@ -417,6 +417,186 @@ func TestShouldIgnoreDML(t *testing.T) {
 	require.True(t, ignore, "Should be ignored by SQL event filter")
 }
 
+func TestShouldIgnoreDMLByUpdateOnlyColumns(t *testing.T) {
+	t.Parallel()
+
+	cols := []*model.ColumnInfo{
+		newColumnInfo(1, "id", mysql.TypeLong, mysql.PriKeyFlag|mysql.NotNullFlag),
+		newColumnInfo(2, "email", mysql.TypeVarchar, mysql.NotNullFlag),
+		newColumnInfo(3, "name", mysql.TypeVarchar, 0),
+		newColumnInfo(4, "version", mysql.TypeLong, 0),
+		newColumnInfo(5, "updated_at", mysql.TypeLong, 0),
+	}
+	indices := []*model.IndexInfo{
+		newIndexInfo("email_idx", []*model.IndexColumn{{Name: ast.NewCIStr("email"), Offset: 1}}, false, true),
+	}
+	tableInfo := mustNewCommonTableInfo("test", "t", cols, indices)
+	enabled := DMLFilterContext{EnableIgnoreUpdateOnlyColumns: true}
+
+	newRow := func(values ...interface{}) chunk.Row {
+		return datumsToChunkRow(types.MakeDatums(values...), tableInfo)
+	}
+	baseRow := newRow(int64(1), "a@example.com", "Alice", int64(1), int64(10))
+
+	cases := []struct {
+		name          string
+		caseSensitive bool
+		columns       []string
+		dmlType       common.RowType
+		preRow        chunk.Row
+		row           chunk.Row
+		context       DMLFilterContext
+		shouldIgnore  bool
+	}{
+		{
+			name:         "disabled by context",
+			columns:      []string{"version"},
+			dmlType:      common.RowTypeUpdate,
+			preRow:       baseRow,
+			row:          newRow(int64(1), "a@example.com", "Alice", int64(2), int64(10)),
+			shouldIgnore: false,
+		},
+		{
+			name:         "empty column list disables rule",
+			columns:      []string{},
+			dmlType:      common.RowTypeUpdate,
+			preRow:       baseRow,
+			row:          newRow(int64(1), "a@example.com", "Alice", int64(2), int64(10)),
+			context:      enabled,
+			shouldIgnore: false,
+		},
+		{
+			name:         "only ignored columns changed",
+			columns:      []string{"version", "updated_at"},
+			dmlType:      common.RowTypeUpdate,
+			preRow:       baseRow,
+			row:          newRow(int64(1), "a@example.com", "Alice", int64(2), int64(11)),
+			context:      enabled,
+			shouldIgnore: true,
+		},
+		{
+			name:         "ignored and non ignored columns changed",
+			columns:      []string{"version", "updated_at"},
+			dmlType:      common.RowTypeUpdate,
+			preRow:       baseRow,
+			row:          newRow(int64(1), "a@example.com", "Bob", int64(2), int64(11)),
+			context:      enabled,
+			shouldIgnore: false,
+		},
+		{
+			name:         "primary key update is kept",
+			columns:      []string{"id", "version"},
+			dmlType:      common.RowTypeUpdate,
+			preRow:       baseRow,
+			row:          newRow(int64(2), "a@example.com", "Alice", int64(1), int64(10)),
+			context:      enabled,
+			shouldIgnore: false,
+		},
+		{
+			name:         "unique key update is kept",
+			columns:      []string{"email", "version"},
+			dmlType:      common.RowTypeUpdate,
+			preRow:       baseRow,
+			row:          newRow(int64(1), "b@example.com", "Alice", int64(1), int64(10)),
+			context:      enabled,
+			shouldIgnore: false,
+		},
+		{
+			name:         "missing column is ignored with remaining valid column",
+			columns:      []string{"missing", "version"},
+			dmlType:      common.RowTypeUpdate,
+			preRow:       baseRow,
+			row:          newRow(int64(1), "a@example.com", "Alice", int64(2), int64(10)),
+			context:      enabled,
+			shouldIgnore: true,
+		},
+		{
+			name:          "case insensitive column resolution",
+			caseSensitive: false,
+			columns:       []string{"VERSION"},
+			dmlType:       common.RowTypeUpdate,
+			preRow:        baseRow,
+			row:           newRow(int64(1), "a@example.com", "Alice", int64(2), int64(10)),
+			context:       enabled,
+			shouldIgnore:  true,
+		},
+		{
+			name:          "case sensitive column resolution",
+			caseSensitive: true,
+			columns:       []string{"VERSION"},
+			dmlType:       common.RowTypeUpdate,
+			preRow:        baseRow,
+			row:           newRow(int64(1), "a@example.com", "Alice", int64(2), int64(10)),
+			context:       enabled,
+			shouldIgnore:  false,
+		},
+		{
+			name:         "insert is not affected",
+			columns:      []string{"version"},
+			dmlType:      common.RowTypeInsert,
+			preRow:       chunk.Row{},
+			row:          baseRow,
+			context:      enabled,
+			shouldIgnore: false,
+		},
+		{
+			name:         "delete is not affected",
+			columns:      []string{"version"},
+			dmlType:      common.RowTypeDelete,
+			preRow:       baseRow,
+			row:          chunk.Row{},
+			context:      enabled,
+			shouldIgnore: false,
+		},
+		{
+			name:         "null to null is unchanged",
+			columns:      []string{"updated_at"},
+			dmlType:      common.RowTypeUpdate,
+			preRow:       newRow(int64(1), "a@example.com", "Alice", int64(1), nil),
+			row:          newRow(int64(1), "a@example.com", "Alice", int64(1), nil),
+			context:      enabled,
+			shouldIgnore: true,
+		},
+		{
+			name:         "null to non null is changed",
+			columns:      []string{"updated_at"},
+			dmlType:      common.RowTypeUpdate,
+			preRow:       newRow(int64(1), "a@example.com", "Alice", int64(1), nil),
+			row:          newRow(int64(1), "a@example.com", "Alice", int64(1), int64(10)),
+			context:      enabled,
+			shouldIgnore: true,
+		},
+		{
+			name:         "non null to null is changed",
+			columns:      []string{"updated_at"},
+			dmlType:      common.RowTypeUpdate,
+			preRow:       newRow(int64(1), "a@example.com", "Alice", int64(1), int64(10)),
+			row:          newRow(int64(1), "a@example.com", "Alice", int64(1), nil),
+			context:      enabled,
+			shouldIgnore: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f, err := NewFilter(&config.FilterConfig{
+				Rules: []string{"test.*"},
+				EventFilters: []*config.EventFilterRule{
+					{
+						Matcher:                 []string{"test.t"},
+						IgnoreUpdateOnlyColumns: tc.columns,
+					},
+				},
+			}, "UTC", tc.caseSensitive, false)
+			require.NoError(t, err)
+
+			ignore, err := f.ShouldIgnoreDML(tc.dmlType, tc.preRow, tc.row, tableInfo, 0, tc.context)
+			require.NoError(t, err)
+			require.Equal(t, tc.shouldIgnore, ignore)
+		})
+	}
+}
+
 func TestShouldIgnoreDMLCaseSensitivity(t *testing.T) {
 	t.Parallel()
 

@@ -1082,10 +1082,11 @@ type EventFilterRule struct {
 	// regular expression
 	IgnoreSQL []string `toml:"ignore_sql" json:"ignore_sql"`
 	// sql expression
-	IgnoreInsertValueExpr    string `json:"ignore_insert_value_expr"`
-	IgnoreUpdateNewValueExpr string `json:"ignore_update_new_value_expr"`
-	IgnoreUpdateOldValueExpr string `json:"ignore_update_old_value_expr"`
-	IgnoreDeleteValueExpr    string `json:"ignore_delete_value_expr"`
+	IgnoreInsertValueExpr    string   `json:"ignore_insert_value_expr"`
+	IgnoreUpdateNewValueExpr string   `json:"ignore_update_new_value_expr"`
+	IgnoreUpdateOldValueExpr string   `json:"ignore_update_old_value_expr"`
+	IgnoreDeleteValueExpr    string   `json:"ignore_delete_value_expr"`
+	IgnoreUpdateOnlyColumns  []string `json:"ignore_update_only_columns,omitempty"`
 }
 
 // ToInternalEventFilterRule converts EventFilterRule to *config.EventFilterRule
@@ -1097,6 +1098,7 @@ func (e EventFilterRule) ToInternalEventFilterRule() *config.EventFilterRule {
 		IgnoreUpdateNewValueExpr: &e.IgnoreUpdateNewValueExpr,
 		IgnoreUpdateOldValueExpr: &e.IgnoreUpdateOldValueExpr,
 		IgnoreDeleteValueExpr:    &e.IgnoreDeleteValueExpr,
+		IgnoreUpdateOnlyColumns:  e.IgnoreUpdateOnlyColumns,
 	}
 	if len(e.IgnoreEvent) != 0 {
 		res.IgnoreEvent = make([]bf.EventType, len(e.IgnoreEvent))
@@ -1114,6 +1116,10 @@ func ToAPIEventFilterRule(er *config.EventFilterRule) EventFilterRule {
 		IgnoreUpdateNewValueExpr: util.GetOrZero(er.IgnoreUpdateNewValueExpr),
 		IgnoreUpdateOldValueExpr: util.GetOrZero(er.IgnoreUpdateOldValueExpr),
 		IgnoreDeleteValueExpr:    util.GetOrZero(er.IgnoreDeleteValueExpr),
+	}
+	if len(er.IgnoreUpdateOnlyColumns) != 0 {
+		res.IgnoreUpdateOnlyColumns = make([]string, len(er.IgnoreUpdateOnlyColumns))
+		copy(res.IgnoreUpdateOnlyColumns, er.IgnoreUpdateOnlyColumns)
 	}
 	if len(er.Matcher) != 0 {
 		res.Matcher = make([]string, len(er.Matcher))

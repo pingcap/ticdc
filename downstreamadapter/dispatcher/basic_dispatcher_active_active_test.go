@@ -96,6 +96,12 @@ func TestHandleEventsIgnoreSpecialTableOnNonMySQLSink(t *testing.T) {
 	}
 }
 
+func TestEnableIgnoreUpdateOnlyColumns(t *testing.T) {
+	require.True(t, newTestBasicDispatcher(t, common.KafkaSinkType, false).EnableIgnoreUpdateOnlyColumns())
+	require.False(t, newTestBasicDispatcher(t, common.MysqlSinkType, false).EnableIgnoreUpdateOnlyColumns())
+	require.False(t, newTestBasicDispatcher(t, common.PulsarSinkType, false).EnableIgnoreUpdateOnlyColumns())
+}
+
 func TestDDLEventsAlwaysValidateActiveActive(t *testing.T) {
 	dispatcher := newTestBasicDispatcher(t, common.MysqlSinkType, false)
 	dispatcher.tableModeCompatibilityChecked = true
