@@ -167,6 +167,7 @@ func TestChangefeed_NewRemoveMaintainerMessage(t *testing.T) {
 		SinkURI: "kafka://127.0.0.1:9092",
 		State:   config.StateNormal,
 		Config:  config.GetDefaultReplicaConfig(),
+		Epoch:   9,
 	}
 	cf := NewChangefeed(cfID, info, 100, true)
 
@@ -174,6 +175,8 @@ func TestChangefeed_NewRemoveMaintainerMessage(t *testing.T) {
 	msg := cf.NewRemoveMaintainerMessage(server, true, true)
 	require.Equal(t, server, msg.To)
 	require.Equal(t, messaging.MaintainerManagerTopic, msg.Topic)
+	req := msg.Message[0].(*heartbeatpb.RemoveMaintainerRequest)
+	require.Equal(t, info.Epoch, req.MaintainerEpoch)
 }
 
 func TestChangefeed_NewCheckpointTsMessage(t *testing.T) {
@@ -194,9 +197,11 @@ func TestChangefeed_NewCheckpointTsMessage(t *testing.T) {
 func TestRemoveMaintainerMessage(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	server := node.ID("server-1")
-	msg := RemoveMaintainerMessage(common.DefaultKeyspaceID, cfID, server, true, true)
+	msg := RemoveMaintainerMessage(common.DefaultKeyspaceID, cfID, server, true, true, 10)
 	require.Equal(t, server, msg.To)
 	require.Equal(t, messaging.MaintainerManagerTopic, msg.Topic)
+	req := msg.Message[0].(*heartbeatpb.RemoveMaintainerRequest)
+	require.Equal(t, uint64(10), req.MaintainerEpoch)
 }
 
 func TestChangefeedGetStatusForResume(t *testing.T) {

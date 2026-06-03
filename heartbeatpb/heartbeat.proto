@@ -140,6 +140,7 @@ message MergeDispatcherRequest {
     repeated DispatcherID dispatcherIDs = 2;  // dispatcherIDs from the dispatchers that need to be merged
     DispatcherID mergedDispatcherID = 3;      // the dispatcherID of the new dispatcher to be merged to.
     int64 mode = 4;
+    uint64 maintainer_epoch = 5;
 }
 
 message MaintainerHeartbeat {
@@ -251,6 +252,7 @@ message RemoveMaintainerRequest {
     bool cascade = 2;
     bool removed = 3;
     uint32 keyspace_id = 4;
+    uint64 maintainer_epoch = 5;
 }
 
 message MaintainerBootstrapRequest {
@@ -281,6 +283,7 @@ message MaintainerBootstrapResponse {
     // It will be used when redo enable.
     uint64 redo_checkpoint_ts = 5;
     repeated ScheduleDispatcherRequest operators = 6;
+    uint64 maintainer_epoch = 7;
 }
 
 message MaintainerPostBootstrapRequest {
@@ -295,6 +298,7 @@ message MaintainerPostBootstrapResponse {
     ChangefeedID changefeedID = 1;
     DispatcherID table_trigger_event_dispatcher_id = 2;
     RunningError err = 3;
+    uint64 maintainer_epoch = 4;
 }
 
 message SchemaInfo {
@@ -335,6 +339,7 @@ message MaintainerCloseRequest {
 message MaintainerCloseResponse {
     ChangefeedID changefeedID = 1;
     bool success = 2;
+    uint64 maintainer_epoch = 3;
 }
 
 enum InfluenceType {

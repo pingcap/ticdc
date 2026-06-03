@@ -138,9 +138,10 @@ func (m *mockDispatcherManager) onBootstrapRequest(msg *messaging.TargetMessage)
 	req := msg.Message[0].(*heartbeatpb.MaintainerBootstrapRequest)
 	m.maintainerID = msg.From
 	response := &heartbeatpb.MaintainerBootstrapResponse{
-		ChangefeedID: req.ChangefeedID,
-		Spans:        m.bootstrapTables,
-		CheckpointTs: req.StartTs,
+		ChangefeedID:    req.ChangefeedID,
+		Spans:           m.bootstrapTables,
+		CheckpointTs:    req.StartTs,
+		MaintainerEpoch: req.MaintainerEpoch,
 	}
 	m.changefeedID = req.ChangefeedID
 	m.checkpointTs = req.StartTs
@@ -171,6 +172,7 @@ func (m *mockDispatcherManager) onPostBootstrapRequest(msg *messaging.TargetMess
 		ChangefeedID:                  req.ChangefeedID,
 		TableTriggerEventDispatcherId: req.TableTriggerEventDispatcherId,
 		Err:                           nil,
+		MaintainerEpoch:               req.MaintainerEpoch,
 	}
 	err := m.mc.SendCommand(messaging.NewSingleTargetMessage(
 		m.maintainerID,
@@ -240,8 +242,9 @@ func (m *mockDispatcherManager) onDispatchRequest(
 func (m *mockDispatcherManager) onMaintainerCloseRequest(msg *messaging.TargetMessage) {
 	_ = m.mc.SendCommand(messaging.NewSingleTargetMessage(msg.From,
 		messaging.MaintainerTopic, &heartbeatpb.MaintainerCloseResponse{
-			ChangefeedID: msg.Message[0].(*heartbeatpb.MaintainerCloseRequest).ChangefeedID,
-			Success:      true,
+			ChangefeedID:    msg.Message[0].(*heartbeatpb.MaintainerCloseRequest).ChangefeedID,
+			Success:         true,
+			MaintainerEpoch: msg.Message[0].(*heartbeatpb.MaintainerCloseRequest).MaintainerEpoch,
 		}))
 }
 
@@ -258,6 +261,49 @@ func (m *mockDispatcherManager) sendHeartbeat() {
 		m.checkpointTs++
 		m.sendMessages(response)
 	}
+}
+
+func TestMaintainerPostBootstrapResponseRequiresCurrentEpoch(t *testing.T) {
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	m := &Maintainer{
+		changefeedID: cfID,
+		info:         &config.ChangeFeedInfo{Epoch: 2},
+		postBootstrapMsg: &heartbeatpb.MaintainerPostBootstrapRequest{
+			ChangefeedID:    cfID.ToPB(),
+			MaintainerEpoch: 2,
+		},
+	}
+
+	m.onMaintainerPostBootstrapResponse(messaging.NewSingleTargetMessage(
+		node.ID("current"),
+		messaging.MaintainerManagerTopic,
+		&heartbeatpb.MaintainerPostBootstrapResponse{
+			ChangefeedID:    cfID.ToPB(),
+			MaintainerEpoch: 1,
+		},
+	))
+	require.NotNil(t, m.postBootstrapMsg)
+
+	m.onMaintainerPostBootstrapResponse(messaging.NewSingleTargetMessage(
+		node.ID("current"),
+		messaging.MaintainerManagerTopic,
+		&heartbeatpb.MaintainerPostBootstrapResponse{
+			ChangefeedID:    cfID.ToPB(),
+			MaintainerEpoch: 2,
+		},
+	))
+	require.Nil(t, m.postBootstrapMsg)
+}
+
+func TestMaintainerEpochRequestRequiresCompatOrCurrentEpoch(t *testing.T) {
+	compatMaintainer := &Maintainer{info: &config.ChangeFeedInfo{}}
+	require.True(t, compatMaintainer.isMaintainerEpochRequestAllowed(0))
+	require.True(t, compatMaintainer.isMaintainerEpochRequestAllowed(2))
+
+	strictMaintainer := &Maintainer{info: &config.ChangeFeedInfo{Epoch: 2}}
+	require.False(t, strictMaintainer.isMaintainerEpochRequestAllowed(0))
+	require.False(t, strictMaintainer.isMaintainerEpochRequestAllowed(1))
+	require.True(t, strictMaintainer.isMaintainerEpochRequestAllowed(2))
 }
 
 func TestMaintainerSchedule(t *testing.T) {

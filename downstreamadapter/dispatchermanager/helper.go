@@ -777,11 +777,12 @@ func newMergeDispatcherRequestDynamicStream() dynstream.DynamicStream[int, commo
 }
 
 type MergeDispatcherRequest struct {
+	From node.ID
 	*heartbeatpb.MergeDispatcherRequest
 }
 
-func NewMergeDispatcherRequest(req *heartbeatpb.MergeDispatcherRequest) MergeDispatcherRequest {
-	return MergeDispatcherRequest{req}
+func NewMergeDispatcherRequest(from node.ID, req *heartbeatpb.MergeDispatcherRequest) MergeDispatcherRequest {
+	return MergeDispatcherRequest{From: from, MergeDispatcherRequest: req}
 }
 
 type MergeDispatcherRequestHandler struct{}
@@ -796,6 +797,17 @@ func (h *MergeDispatcherRequestHandler) Handle(dispatcherManager *DispatcherMana
 	}
 
 	mergeDispatcherRequest := reqs[0]
+	dispatcherManager.MaintainerFenceMu.Lock()
+	defer dispatcherManager.MaintainerFenceMu.Unlock()
+	if !dispatcherManager.IsMaintainerRequestAllowed(mergeDispatcherRequest.From, mergeDispatcherRequest.MaintainerEpoch) {
+		log.Warn("drop stale merge dispatcher request",
+			zap.String("changefeedID", mergeDispatcherRequest.ChangefeedID.String()),
+			zap.String("from", mergeDispatcherRequest.From.String()),
+			zap.Uint64("requestMaintainerEpoch", mergeDispatcherRequest.MaintainerEpoch),
+			zap.Uint64("currentMaintainerEpoch", dispatcherManager.GetMaintainerEpoch()),
+			zap.String("currentMaintainer", dispatcherManager.GetMaintainerID().String()))
+		return false
+	}
 	dispatcherIDs := make([]common.DispatcherID, 0, len(mergeDispatcherRequest.DispatcherIDs))
 	for _, id := range mergeDispatcherRequest.DispatcherIDs {
 		dispatcherIDs = append(dispatcherIDs, common.NewDispatcherIDFromPB(id))

@@ -15,6 +15,7 @@ package dispatcherorchestrator
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
@@ -174,8 +175,9 @@ func newTestDispatcherOrchestrator() *DispatcherOrchestrator {
 	// This test only exercises local routing through RecvMaintainerRequest, so it
 	// needs shard state and the dispatcher manager map but not a message center.
 	orchestrator := &DispatcherOrchestrator{
-		dispatcherManagers: make(map[common.ChangeFeedID]*dispatchermanager.DispatcherManager),
-		shards:             make([]*orchestratorShard, dispatcherOrchestratorShardCount),
+		dispatcherManagers:     make(map[common.ChangeFeedID]*dispatchermanager.DispatcherManager),
+		closedMaintainerEpochs: make(map[common.ChangeFeedID]uint64),
+		shards:                 make([]*orchestratorShard, dispatcherOrchestratorShardCount),
 	}
 	for i := range orchestrator.shards {
 		orchestrator.shards[i] = newOrchestratorShard(func(msg *messaging.TargetMessage) {})
@@ -505,6 +507,71 @@ func TestBootstrapResponseRestoresOnlyCurrentMaintainerEpochOperators(t *testing
 	require.Len(t, response.Operators, 1)
 	require.Equal(t, uint64(2), response.Operators[0].MaintainerEpoch)
 	require.Equal(t, currentDispatcherID, common.NewDispatcherIDFromPB(response.Operators[0].Config.DispatcherID))
+}
+
+func TestHandleCloseRequestRejectsStaleMaintainerEpoch(t *testing.T) {
+	mc := messaging.NewMockMessageCenter()
+	appcontext.SetService(appcontext.DefaultPDClock, pdutil.NewClock4Test())
+	appcontext.SetService(appcontext.MessageCenter, mc)
+	heartbeatCollector := dispatchermanager.NewHeartBeatCollector(node.ID("receiver"))
+	heartbeatCollector.Run(context.Background())
+	appcontext.SetService(appcontext.HeartbeatCollector, heartbeatCollector)
+	t.Cleanup(heartbeatCollector.Close)
+
+	cfID := common.NewChangeFeedIDWithName("cf", "default")
+	manager, err := dispatchermanager.NewDispatcherManager(
+		0,
+		cfID,
+		newBootstrapResponseTestChangefeedConfig(cfID),
+		nil,
+		nil,
+		100,
+		node.ID("current-maintainer"),
+		2,
+		false,
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		manager.TryClose(false)
+	})
+
+	orchestrator := &DispatcherOrchestrator{
+		mc:                     mc,
+		dispatcherManagers:     map[common.ChangeFeedID]*dispatchermanager.DispatcherManager{cfID: manager},
+		closedMaintainerEpochs: make(map[common.ChangeFeedID]uint64),
+	}
+	err = orchestrator.handleCloseRequest(node.ID("old-maintainer"), &heartbeatpb.MaintainerCloseRequest{
+		ChangefeedID:    cfID.ToPB(),
+		MaintainerEpoch: 1,
+	})
+	require.NoError(t, err)
+
+	responseMsg := <-mc.GetMessageChannel()
+	response := responseMsg.Message[0].(*heartbeatpb.MaintainerCloseResponse)
+	require.False(t, response.Success)
+	require.Equal(t, uint64(1), response.MaintainerEpoch)
+	require.Contains(t, orchestrator.dispatcherManagers, cfID)
+}
+
+func TestHandleBootstrapRequestRejectsClosedOlderMaintainerEpoch(t *testing.T) {
+	cfID := common.NewChangeFeedIDWithName("cf", "default")
+	configBytes, err := json.Marshal(newBootstrapResponseTestChangefeedConfig(cfID))
+	require.NoError(t, err)
+
+	orchestrator := &DispatcherOrchestrator{
+		mc:                 messaging.NewMockMessageCenter(),
+		dispatcherManagers: make(map[common.ChangeFeedID]*dispatchermanager.DispatcherManager),
+		closedMaintainerEpochs: map[common.ChangeFeedID]uint64{
+			cfID: 2,
+		},
+	}
+	err = orchestrator.handleBootstrapRequest(node.ID("old-maintainer"), &heartbeatpb.MaintainerBootstrapRequest{
+		ChangefeedID:    cfID.ToPB(),
+		Config:          configBytes,
+		MaintainerEpoch: 1,
+	})
+	require.NoError(t, err)
+	require.Empty(t, orchestrator.dispatcherManagers)
 }
 
 func newBootstrapResponseTestChangefeedConfig(cfID common.ChangeFeedID) *config.ChangefeedConfig {

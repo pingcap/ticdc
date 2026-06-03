@@ -275,6 +275,22 @@ func TestDispatcherManagerTryUpdateMaintainerEpoch(t *testing.T) {
 	require.Zero(t, compatDM.GetMaintainerEpoch())
 }
 
+func TestMergeDispatcherRequestHandler_MaintainerEpochFence(t *testing.T) {
+	t.Parallel()
+
+	dm := &DispatcherManager{}
+	dm.meta.maintainerID = "current-maintainer"
+	dm.meta.maintainerEpoch = 2
+
+	handler := &MergeDispatcherRequestHandler{}
+	require.NotPanics(t, func() {
+		handler.Handle(dm, NewMergeDispatcherRequest("old-maintainer", &heartbeatpb.MergeDispatcherRequest{
+			ChangefeedID:    (&heartbeatpb.ChangefeedID{Keyspace: "test-namespace", Name: "test-changefeed"}),
+			MaintainerEpoch: 1,
+		}))
+	})
+}
+
 func TestDispatcherManagerIsRedoReadyRequiresPublication(t *testing.T) {
 	t.Parallel()
 

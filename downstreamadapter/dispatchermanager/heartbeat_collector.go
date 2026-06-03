@@ -290,7 +290,7 @@ func (c *HeartBeatCollector) RecvMessages(_ context.Context, msg *messaging.Targ
 		mergeDispatcherRequest := msg.Message[0].(*heartbeatpb.MergeDispatcherRequest)
 		c.mergeDispatcherRequestDynamicStream.Push(
 			common.NewChangefeedGIDFromPB(mergeDispatcherRequest.ChangefeedID),
-			NewMergeDispatcherRequest(mergeDispatcherRequest))
+			NewMergeDispatcherRequest(msg.From, mergeDispatcherRequest))
 	default:
 		log.Warn("unknown message type, ignore it",
 			zap.String("type", msg.Type.String()),

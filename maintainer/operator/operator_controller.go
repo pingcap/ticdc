@@ -119,8 +119,10 @@ func (oc *Controller) Execute() time.Time {
 }
 
 func (oc *Controller) stampMaintainerEpoch(msg *messaging.TargetMessage) {
-	req, ok := msg.Message[0].(*heartbeatpb.ScheduleDispatcherRequest)
-	if ok {
+	switch req := msg.Message[0].(type) {
+	case *heartbeatpb.ScheduleDispatcherRequest:
+		req.MaintainerEpoch = oc.maintainerEpoch.Load()
+	case *heartbeatpb.MergeDispatcherRequest:
 		req.MaintainerEpoch = oc.maintainerEpoch.Load()
 	}
 }

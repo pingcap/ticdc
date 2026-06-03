@@ -288,11 +288,13 @@ func NewMaintainerForRemove(cfID common.ChangeFeedID,
 	selfNode *node.Info,
 	taskScheduler threadpool.ThreadPool,
 	keyspaceID uint32,
+	maintainerEpoch uint64,
 ) *Maintainer {
 	unused := &config.ChangeFeedInfo{
 		ChangefeedID: cfID,
 		SinkURI:      "",
 		Config:       config.GetDefaultReplicaConfig(),
+		Epoch:        maintainerEpoch,
 	}
 	m := NewMaintainer(cfID, conf, unused, selfNode, taskScheduler, 1, false, keyspaceID)
 	m.cascadeRemoving.Store(true)
@@ -523,6 +525,14 @@ func (m *Maintainer) onMessage(msg *messaging.TargetMessage) {
 		m.onMaintainerCloseResponse(msg.From, resp)
 	case messaging.TypeRemoveMaintainerRequest:
 		req := msg.Message[0].(*heartbeatpb.RemoveMaintainerRequest)
+		if !m.isMaintainerEpochRequestAllowed(req.MaintainerEpoch) {
+			log.Warn("drop stale remove maintainer request",
+				zap.Stringer("changefeedID", m.changefeedID),
+				zap.Stringer("from", msg.From),
+				zap.Uint64("requestMaintainerEpoch", req.MaintainerEpoch),
+				zap.Uint64("currentMaintainerEpoch", m.currentMaintainerEpoch()))
+			return
+		}
 		m.onRemoveMaintainer(req.Cascade, req.Removed)
 	case messaging.TypeCheckpointTsMessage:
 		req := msg.Message[0].(*heartbeatpb.CheckpointTsMessage)
@@ -946,6 +956,10 @@ func (m *Maintainer) onMaintainerBootstrapResponse(msg *messaging.TargetMessage)
 		zap.Stringer("sourceNodeID", msg.From))
 
 	resp := msg.Message[0].(*heartbeatpb.MaintainerBootstrapResponse)
+	if !m.isMaintainerEpochResponseAllowed(resp.MaintainerEpoch) {
+		m.logDroppedMaintainerResponse("bootstrap", msg.From, resp.MaintainerEpoch)
+		return
+	}
 	if resp.Err != nil {
 		log.Warn("maintainer bootstrap failed",
 			zap.Stringer("changefeedID", m.changefeedID),
@@ -969,6 +983,10 @@ func (m *Maintainer) onMaintainerPostBootstrapResponse(msg *messaging.TargetMess
 		zap.Stringer("changefeedID", m.changefeedID),
 		zap.Any("server", msg.From))
 	resp := msg.Message[0].(*heartbeatpb.MaintainerPostBootstrapResponse)
+	if !m.isMaintainerEpochResponseAllowed(resp.MaintainerEpoch) {
+		m.logDroppedMaintainerResponse("post-bootstrap", msg.From, resp.MaintainerEpoch)
+		return
+	}
 	if resp.Err != nil {
 		log.Warn("maintainer post bootstrap failed",
 			zap.Stringer("changefeedID", m.changefeedID),
@@ -978,6 +996,29 @@ func (m *Maintainer) onMaintainerPostBootstrapResponse(msg *messaging.TargetMess
 	}
 	// disable resend post bootstrap message
 	m.postBootstrapMsg = nil
+}
+
+func (m *Maintainer) isMaintainerEpochResponseAllowed(responseEpoch uint64) bool {
+	currentEpoch := m.currentMaintainerEpoch()
+	// Epoch 0 keeps mixed-version nodes compatible. Once both sides are upgraded,
+	// non-zero response epochs must match the current maintainer ownership.
+	return currentEpoch == 0 || responseEpoch == 0 || responseEpoch == currentEpoch
+}
+
+func (m *Maintainer) isMaintainerEpochRequestAllowed(requestEpoch uint64) bool {
+	currentEpoch := m.currentMaintainerEpoch()
+	// Requests mutate this maintainer, so epoch 0 is only compatible before the
+	// maintainer has entered strict non-zero epoch mode.
+	return currentEpoch == 0 || requestEpoch == currentEpoch
+}
+
+func (m *Maintainer) logDroppedMaintainerResponse(responseType string, from node.ID, responseEpoch uint64) {
+	log.Warn("drop stale maintainer response",
+		zap.Stringer("changefeedID", m.changefeedID),
+		zap.String("responseType", responseType),
+		zap.Stringer("from", from),
+		zap.Uint64("responseMaintainerEpoch", responseEpoch),
+		zap.Uint64("currentMaintainerEpoch", m.currentMaintainerEpoch()))
 }
 
 // isMysqlCompatible returns true if the sinkURIStr is mysql compatible.
@@ -1049,6 +1090,10 @@ func (m *Maintainer) sendPostBootstrapRequest() {
 }
 
 func (m *Maintainer) onMaintainerCloseResponse(from node.ID, response *heartbeatpb.MaintainerCloseResponse) {
+	if !m.isMaintainerEpochResponseAllowed(response.MaintainerEpoch) {
+		m.logDroppedMaintainerResponse("close", from, response.MaintainerEpoch)
+		return
+	}
 	if response.Success {
 		m.closedNodes[from] = struct{}{}
 		m.onRemoveMaintainer(m.cascadeRemoving.Load(), m.changefeedRemoved.Load())

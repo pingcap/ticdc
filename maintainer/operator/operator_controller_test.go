@@ -215,6 +215,21 @@ func TestController_AddMergeOperatorFailureCleansOccupyOperators(t *testing.T) {
 	require.Equal(t, 1, oc.OperatorSize())
 }
 
+func TestController_StampMaintainerEpochOnMergeRequest(t *testing.T) {
+	oc := &Controller{}
+	oc.SetMaintainerEpoch(7)
+
+	msg := messaging.NewSingleTargetMessage(
+		node.ID("target"),
+		messaging.HeartbeatCollectorTopic,
+		&heartbeatpb.MergeDispatcherRequest{},
+	)
+	oc.stampMaintainerEpoch(msg)
+
+	req := msg.Message[0].(*heartbeatpb.MergeDispatcherRequest)
+	require.Equal(t, uint64(7), req.MaintainerEpoch)
+}
+
 func TestController_RemoveReplicaSet_ReplacesRemoveOperatorOnTaskRemoved(t *testing.T) {
 	// Scenario: the barrier can enqueue the same remove task multiple times during failover/bootstrap.
 	// Steps:

@@ -234,7 +234,14 @@ func (p *managerMaintainerSet) handleRemoveMaintainer(msg *messaging.TargetMessa
 
 		// It's cascade remove, we should remove the dispatcher from all node.
 		// Here we create a maintainer to run the remove dispatcher logic.
-		maintainer = NewMaintainerForRemove(changefeedID, p.conf, p.nodeInfo, p.taskScheduler, req.KeyspaceId)
+		maintainer = NewMaintainerForRemove(
+			changefeedID,
+			p.conf,
+			p.nodeInfo,
+			p.taskScheduler,
+			req.KeyspaceId,
+			req.MaintainerEpoch,
+		)
 		p.registry.Store(changefeedID, maintainer)
 	}
 	maintainer.(*Maintainer).pushEvent(&Event{
