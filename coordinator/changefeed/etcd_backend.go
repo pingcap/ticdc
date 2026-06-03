@@ -229,6 +229,9 @@ func (b *EtcdBackend) BumpChangefeedEpoch(
 		if info.ChangefeedID.Name() == "" {
 			info.ChangefeedID = id
 		}
+		// Keep compatibility defaults when the bumped info replaces the
+		// coordinator's in-memory copy after an upgrade.
+		info.VerifyAndComplete()
 		epoch, err := pdutil.AdvanceChangefeedEpoch(candidateEpoch, info.Epoch)
 		if err != nil {
 			return nil, errors.Trace(err)

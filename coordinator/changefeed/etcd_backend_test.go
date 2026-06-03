@@ -159,6 +159,7 @@ func TestBumpChangefeedEpoch(t *testing.T) {
 	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	info := &config.ChangeFeedInfo{
 		ChangefeedID: changefeedID,
+		Config:       config.GetDefaultReplicaConfig(),
 		State:        config.StateStopped,
 		Epoch:        8,
 	}
@@ -207,6 +208,64 @@ func TestBumpChangefeedEpoch(t *testing.T) {
 	require.Equal(t, config.StateNormal, got.State)
 }
 
+func TestBumpChangefeedEpochCompletesPersistedInfo(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	cdcClient := etcd.NewMockCDCEtcdClient(ctrl)
+	etcdClient := etcd.NewMockClient(ctrl)
+	cdcClient.EXPECT().GetEtcdClient().Return(etcdClient).AnyTimes()
+	cdcClient.EXPECT().GetClusterID().Return("test-cluster-id").AnyTimes()
+	backend := NewEtcdBackend(cdcClient)
+
+	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	regionThreshold := 20
+	info := &config.ChangeFeedInfo{
+		ChangefeedID: changefeedID,
+		Config: &config.ReplicaConfig{
+			Scheduler: &config.ChangefeedSchedulerConfig{
+				RegionThreshold: &regionThreshold,
+			},
+		},
+		Epoch: 8,
+	}
+	value, err := info.Marshal()
+	require.NoError(t, err)
+	infoKey := etcd.GetEtcdKeyChangeFeedInfo("test-cluster-id", changefeedID.DisplayName)
+	status := &config.ChangeFeedStatus{CheckpointTs: 200, Progress: config.ProgressNone}
+
+	etcdClient.EXPECT().
+		Get(gomock.Any(), infoKey).
+		Return(&clientv3.GetResponse{
+			Kvs: []*mvccpb.KeyValue{{
+				Value:       []byte(value),
+				ModRevision: 3,
+			}},
+		}, nil).
+		Times(1)
+	cdcClient.EXPECT().
+		GetChangeFeedStatus(gomock.Any(), changefeedID).
+		Return(status, int64(5), nil).
+		Times(1)
+	etcdClient.EXPECT().
+		Txn(gomock.Any(), gomock.Len(2), NewFuncMatcher(func(i any) bool {
+			ops := i.([]clientv3.Op)
+			require.Len(t, ops, 2)
+			persistedInfo := &config.ChangeFeedInfo{}
+			require.NoError(t, persistedInfo.Unmarshal(ops[0].ValueBytes()))
+			require.NotNil(t, persistedInfo.Config.Scheduler.RegionCountPerSpan)
+			require.NotZero(t, *persistedInfo.Config.Scheduler.RegionCountPerSpan)
+			return true
+		}), gomock.Len(0)).
+		Return(&clientv3.TxnResponse{Succeeded: true}, nil).
+		Times(1)
+
+	got, err := backend.BumpChangefeedEpoch(context.Background(), changefeedID, 7, EpochBumpOptions{})
+	require.NoError(t, err)
+	require.NotNil(t, got.Config.Scheduler.RegionCountPerSpan)
+	require.NotZero(t, *got.Config.Scheduler.RegionCountPerSpan)
+}
+
 func TestBumpChangefeedEpochRetriesOnCASConflict(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -218,10 +277,18 @@ func TestBumpChangefeedEpochRetriesOnCASConflict(t *testing.T) {
 	backend := NewEtcdBackend(cdcClient)
 
 	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
-	firstInfo := &config.ChangeFeedInfo{ChangefeedID: changefeedID, Epoch: 8}
+	firstInfo := &config.ChangeFeedInfo{
+		ChangefeedID: changefeedID,
+		Config:       config.GetDefaultReplicaConfig(),
+		Epoch:        8,
+	}
 	firstValue, err := firstInfo.Marshal()
 	require.NoError(t, err)
-	secondInfo := &config.ChangeFeedInfo{ChangefeedID: changefeedID, Epoch: 9}
+	secondInfo := &config.ChangeFeedInfo{
+		ChangefeedID: changefeedID,
+		Config:       config.GetDefaultReplicaConfig(),
+		Epoch:        9,
+	}
 	secondValue, err := secondInfo.Marshal()
 	require.NoError(t, err)
 	infoKey := etcd.GetEtcdKeyChangeFeedInfo("test-cluster-id", changefeedID.DisplayName)
