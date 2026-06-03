@@ -329,8 +329,9 @@ func (s *dispatcherSession) retryCurrentRegistrationIfRemovedFrom(serverID node.
 }
 
 func (s *dispatcherSession) sendRegisterRequest(serverID node.ID) {
-	// For local registration, OnlyReuse=false means the target may initialize a new
-	// source if needed. For remote probing, OnlyReuse=true means the target should
+	// For local registration, OnlyReuse is set to false which means the target may initialize a new
+	// source if needed.
+	// For remote probing, OnlyReuse is set to true which means the target should
 	// only accept the dispatcher if it can reuse an existing source.
 	onlyReuse := serverID != s.localServerID
 	msg := messaging.NewSingleTargetMessage(
