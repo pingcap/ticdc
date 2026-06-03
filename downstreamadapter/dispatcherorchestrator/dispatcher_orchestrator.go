@@ -219,18 +219,20 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 		m.dispatcherManagers[cfId] = manager
 		m.mutex.Unlock()
 		metrics.DispatcherManagerGauge.WithLabelValues(cfId.Keyspace(), cfId.Name()).Inc()
-	} else {
-		manager.LockMaintainerFence()
-		defer manager.UnlockMaintainerFence()
-		if !manager.TryUpdateMaintainer(from, maintainerEpoch) {
-			log.Warn("drop stale maintainer bootstrap request",
-				zap.String("changefeed", cfId.Name()),
-				zap.String("from", from.String()),
-				zap.Uint64("requestMaintainerEpoch", maintainerEpoch),
-				zap.Uint64("currentMaintainerEpoch", manager.GetMaintainerEpoch()),
-				zap.String("currentMaintainer", manager.GetMaintainerID().String()))
-			return nil
-		}
+	}
+
+	manager.LockMaintainerFence()
+	if !manager.TryUpdateMaintainer(from, maintainerEpoch) {
+		log.Warn("drop stale maintainer bootstrap request",
+			zap.String("changefeed", cfId.Name()),
+			zap.String("from", from.String()),
+			zap.Uint64("requestMaintainerEpoch", maintainerEpoch),
+			zap.Uint64("currentMaintainerEpoch", manager.GetMaintainerEpoch()),
+			zap.String("currentMaintainer", manager.GetMaintainerID().String()))
+		manager.UnlockMaintainerFence()
+		return nil
+	}
+	if exists {
 		// Check and potentially add a table trigger event dispatcher.
 		// This is necessary during maintainer node migration, as the existing
 		// dispatcher manager on the new node may not have a table trigger
@@ -246,6 +248,7 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 				if err != nil {
 					log.Error("failed to create new table trigger event dispatcher",
 						zap.Stringer("changefeedID", cfId), zap.Error(err))
+					manager.UnlockMaintainerFence()
 					return m.handleDispatcherError(from, req.ChangefeedID, err)
 				}
 			}
@@ -261,22 +264,10 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 				if err != nil {
 					log.Error("failed to create new table trigger redo dispatcher",
 						zap.Stringer("changefeedID", cfId), zap.Error(err))
+					manager.UnlockMaintainerFence()
 					return m.handleDispatcherError(from, req.ChangefeedID, err)
 				}
 			}
-		}
-	}
-	if !exists {
-		manager.LockMaintainerFence()
-		defer manager.UnlockMaintainerFence()
-		if !manager.TryUpdateMaintainer(from, maintainerEpoch) {
-			log.Warn("drop stale maintainer bootstrap request",
-				zap.String("changefeed", cfId.Name()),
-				zap.String("from", from.String()),
-				zap.Uint64("requestMaintainerEpoch", maintainerEpoch),
-				zap.Uint64("currentMaintainerEpoch", manager.GetMaintainerEpoch()),
-				zap.String("currentMaintainer", manager.GetMaintainerID().String()))
-			return nil
 		}
 	}
 
@@ -293,6 +284,7 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 		}
 	}
 	response := createBootstrapResponse(req.ChangefeedID, manager, startTs, redoStartTs)
+	manager.UnlockMaintainerFence()
 	return m.sendResponse(from, messaging.MaintainerManagerTopic, response)
 }
 
@@ -316,7 +308,6 @@ func (m *DispatcherOrchestrator) handlePostBootstrapRequest(
 		return nil
 	}
 	manager.LockMaintainerFence()
-	defer manager.UnlockMaintainerFence()
 	if !manager.IsMaintainerRequestAllowed(from, req.MaintainerEpoch) {
 		log.Warn("drop stale maintainer post bootstrap request",
 			zap.String("changefeed", cfId.Name()),
@@ -324,6 +315,7 @@ func (m *DispatcherOrchestrator) handlePostBootstrapRequest(
 			zap.Uint64("requestMaintainerEpoch", req.MaintainerEpoch),
 			zap.Uint64("currentMaintainerEpoch", manager.GetMaintainerEpoch()),
 			zap.String("currentMaintainer", manager.GetMaintainerID().String()))
+		manager.UnlockMaintainerFence()
 		return nil
 	}
 	if manager.GetTableTriggerEventDispatcher().GetId() !=
@@ -348,6 +340,7 @@ func (m *DispatcherOrchestrator) handlePostBootstrapRequest(
 			},
 		}
 
+		manager.UnlockMaintainerFence()
 		return m.sendResponse(from, messaging.MaintainerManagerTopic, response)
 	}
 
@@ -356,6 +349,7 @@ func (m *DispatcherOrchestrator) handlePostBootstrapRequest(
 	if err != nil {
 		log.Error("failed to initialize table trigger event dispatcher",
 			zap.Any("changefeedID", cfId.Name()), zap.Error(err))
+		manager.UnlockMaintainerFence()
 		return m.handleDispatcherError(from, req.ChangefeedID, err)
 	}
 	if manager.IsRedoReady() {
@@ -363,6 +357,7 @@ func (m *DispatcherOrchestrator) handlePostBootstrapRequest(
 		if err != nil {
 			log.Error("failed to initialize table trigger redo dispatcher",
 				zap.Any("changefeedID", cfId.Name()), zap.Error(err))
+			manager.UnlockMaintainerFence()
 			return m.handleDispatcherError(from, req.ChangefeedID, err)
 		}
 	}
@@ -371,6 +366,7 @@ func (m *DispatcherOrchestrator) handlePostBootstrapRequest(
 		ChangefeedID:                  req.ChangefeedID,
 		TableTriggerEventDispatcherId: req.TableTriggerEventDispatcherId,
 	}
+	manager.UnlockMaintainerFence()
 	return m.sendResponse(from, messaging.MaintainerManagerTopic, response)
 }
 
