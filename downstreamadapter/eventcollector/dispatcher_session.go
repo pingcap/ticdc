@@ -483,7 +483,9 @@ func (s *dispatcherSession) handleAcceptedLocalReadyLocked() {
 		// This path is used during the initial add flow before the dispatcher is
 		// committed. Local is still authoritative, so any speculative remote
 		// registration must already be canceled above.
-		s.readyCallback()
+		readyCallback := s.readyCallback
+		s.readyCallback = nil
+		readyCallback()
 		return
 	}
 	log.Info("received ready signal from local event service, prepare to reset the dispatcher",
