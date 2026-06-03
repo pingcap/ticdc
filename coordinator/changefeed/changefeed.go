@@ -241,11 +241,11 @@ func (c *Changefeed) GetLastSavedCheckPointTs() uint64 {
 func (c *Changefeed) NewAddMaintainerMessage(server node.ID) *messaging.TargetMessage {
 	info := c.GetInfo()
 	if info == nil {
-		log.Panic("changefeed info is nil", zap.String("changefeedID", c.ID.String()))
+		panic("changefeed info is nil")
 	}
 	configBytes, err := json.Marshal(info)
 	if err != nil {
-		log.Panic("unable to marshal changefeed config", zap.Error(err))
+		panic(err)
 	}
 	return messaging.NewSingleTargetMessage(server,
 		messaging.MaintainerManagerTopic,
