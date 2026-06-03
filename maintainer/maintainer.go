@@ -842,30 +842,12 @@ func (m *Maintainer) updateMetrics() {
 // send message to other components
 func (m *Maintainer) sendMessages(msgs []*messaging.TargetMessage) {
 	for _, msg := range msgs {
-		m.stampMaintainerEpoch(msg)
 		err := m.mc.SendCommand(msg)
 		if err != nil {
 			log.Debug("failed to send maintainer request",
 				zap.Stringer("changefeedID", m.changefeedID),
 				zap.Any("msg", msg), zap.Error(err))
 		}
-	}
-}
-
-func (m *Maintainer) stampMaintainerEpoch(msg *messaging.TargetMessage) {
-	if msg == nil || len(msg.Message) == 0 {
-		return
-	}
-	maintainerEpoch := m.currentMaintainerEpoch()
-	switch req := msg.Message[0].(type) {
-	case *heartbeatpb.MaintainerBootstrapRequest:
-		req.MaintainerEpoch = maintainerEpoch
-	case *heartbeatpb.MaintainerPostBootstrapRequest:
-		req.MaintainerEpoch = maintainerEpoch
-	case *heartbeatpb.MaintainerCloseRequest:
-		req.MaintainerEpoch = maintainerEpoch
-	case *heartbeatpb.ScheduleDispatcherRequest:
-		req.MaintainerEpoch = maintainerEpoch
 	}
 }
 
