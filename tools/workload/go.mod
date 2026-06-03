@@ -1,6 +1,6 @@
 module workload
 
-go 1.25.8
+go 1.25.10
 
 require (
 	github.com/go-sql-driver/mysql v1.9.3
