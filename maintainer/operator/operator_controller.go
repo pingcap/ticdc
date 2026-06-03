@@ -23,7 +23,6 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/replica"
 	"github.com/pingcap/ticdc/maintainer/span"
-	"github.com/pingcap/ticdc/maintainer/split"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/messaging"
@@ -46,14 +45,13 @@ var _ operator.Controller[common.DispatcherID, *heartbeatpb.TableSpanStatus] = &
 // Controller is the operator controller, it manages all operators.
 // And the Controller is responsible for the execution of the operator.
 type Controller struct {
-	role           string
-	changefeedID   common.ChangeFeedID
-	batchSize      int
-	messageCenter  messaging.MessageCenter
-	spanController *span.Controller
-	nodeManager    *watcher.NodeManager
-	splitter       *split.Splitter
-	generation     atomic.Uint64
+	role            string
+	changefeedID    common.ChangeFeedID
+	batchSize       int
+	messageCenter   messaging.MessageCenter
+	spanController  *span.Controller
+	nodeManager     *watcher.NodeManager
+	maintainerEpoch atomic.Uint64
 
 	mu           sync.RWMutex // protect the following fields
 	operators    map[common.DispatcherID]*operator.OperatorWithTime[common.DispatcherID, *heartbeatpb.TableSpanStatus]
@@ -84,9 +82,9 @@ func NewOperatorController(
 	}
 }
 
-// SetMaintainerGeneration sets the epoch stamped on scheduler requests.
-func (oc *Controller) SetMaintainerGeneration(generation uint64) {
-	oc.generation.Store(generation)
+// SetMaintainerEpoch sets the epoch stamped on scheduler requests.
+func (oc *Controller) SetMaintainerEpoch(maintainerEpoch uint64) {
+	oc.maintainerEpoch.Store(maintainerEpoch)
 }
 
 // Execute poll the operator from the queue and execute it
@@ -105,7 +103,7 @@ func (oc *Controller) Execute() time.Time {
 		msg := op.Schedule()
 
 		if msg != nil {
-			oc.stampMaintainerGeneration(msg)
+			oc.stampMaintainerEpoch(msg)
 			_ = oc.messageCenter.SendCommand(msg)
 			log.Debug("send command to dispatcher",
 				zap.String("role", oc.role),
@@ -120,10 +118,10 @@ func (oc *Controller) Execute() time.Time {
 	}
 }
 
-func (oc *Controller) stampMaintainerGeneration(msg *messaging.TargetMessage) {
+func (oc *Controller) stampMaintainerEpoch(msg *messaging.TargetMessage) {
 	req, ok := msg.Message[0].(*heartbeatpb.ScheduleDispatcherRequest)
 	if ok {
-		req.Generation = oc.generation.Load()
+		req.MaintainerEpoch = oc.maintainerEpoch.Load()
 	}
 }
 

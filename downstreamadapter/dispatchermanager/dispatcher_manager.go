@@ -84,9 +84,15 @@ type DispatcherManager struct {
 		maintainerEpoch uint64
 		maintainerID    node.ID
 	}
-	// controlMu serializes maintainer generation changes with scheduler requests
-	// so delayed requests cannot pass the fence while a newer bootstrap is taking over.
-	controlMu sync.Mutex
+	// maintainerFenceMu serializes the receiver-local maintainer fence.
+	//
+	// It protects the critical section that updates the accepted maintainer
+	// owner/epoch during bootstrap, checks scheduler/post-bootstrap/close
+	// requests against that owner/epoch, and registers scheduler side effects.
+	// Without this lock, an old scheduler request could pass the fence before a
+	// newer bootstrap takes over, then create/remove dispatchers after the
+	// receiver has already accepted the newer maintainer.
+	maintainerFenceMu sync.Mutex
 
 	pdClock pdutil.Clock
 
@@ -100,15 +106,19 @@ type DispatcherManager struct {
 	dispatcherMap *DispatcherMap[*dispatcher.EventDispatcher]
 	// redoDispatcherMap restore all the redo dispatchers in the DispatcherManager, including table trigger redo dispatcher
 	redoDispatcherMap *DispatcherMap[*dispatcher.RedoDispatcher]
-	// currentOperatorMap stores in-flight scheduling requests per dispatcherID and maintainer generation.
+	// currentOperatorMap stores in-flight scheduling requests by dispatcherID and maintainer epoch.
 	//
 	// It is used for:
-	//   - suppressing duplicate maintainer requests for the same dispatcher,
-	//   - reporting unfinished requests during bootstrap so a new maintainer can restore operators,
+	//   - suppressing duplicate maintainer requests for the same dispatcher within one epoch,
+	//   - reporting unfinished current-epoch requests during bootstrap so the maintainer can restore operators,
 	//   - cleaning up remove requests when a dispatcher is fully removed.
 	//
+	// The key includes maintainerEpoch because an unfinished intent from an old
+	// maintainer must not block reconciliation by a newer maintainer for the
+	// same dispatcherID.
+	//
 	// Entries must be deleted on completion (create -> after creation; remove -> on cleanup), otherwise
-	// future maintainer requests for the same dispatcherID and generation will be ignored.
+	// future maintainer requests for the same dispatcherID and maintainer epoch will be ignored.
 	currentOperatorMap sync.Map // map[dispatcherOperatorKey]SchedulerDispatcherRequest (in dispatcher manager, not heartbeatpb)
 	// schemaIDToDispatchers is shared in the DispatcherManager,
 	// it store all the infos about schemaID->Dispatchers
@@ -194,7 +204,7 @@ func NewDispatcherManager(
 	tableTriggerRedoDispatcherID *heartbeatpb.DispatcherID,
 	startTs uint64,
 	maintainerID node.ID,
-	maintainerGeneration uint64,
+	maintainerEpoch uint64,
 	newChangefeed bool,
 ) (*DispatcherManager, error) {
 	failpoint.Inject("NewDispatcherManagerDelay", nil)
@@ -241,10 +251,10 @@ func NewDispatcherManager(
 		metricRedoCreateDispatcherDuration:    metrics.CreateDispatcherDuration.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "redoDispatcher"),
 	}
 
-	// Trust only the explicit request generation for receiver fencing. The
+	// Trust only the explicit request maintainer epoch for receiver fencing. The
 	// config epoch may be newer than an old rolling-upgrade request and must not
-	// turn generation 0 compatibility traffic into strict-mode traffic.
-	manager.meta.maintainerEpoch = maintainerGeneration
+	// turn epoch 0 compatibility traffic into strict-mode traffic.
+	manager.meta.maintainerEpoch = maintainerEpoch
 	manager.meta.maintainerID = maintainerID
 
 	// Set Sync Point Config

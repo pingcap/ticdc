@@ -171,7 +171,7 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 		log.Panic("failed to unmarshal changefeed config",
 			zap.String("changefeedID", cfId.Name()), zap.Any("data", req.Config), zap.Error(err))
 	}
-	generation := req.Generation
+	maintainerEpoch := req.MaintainerEpoch
 
 	// Keep the map lock scoped to dispatcherManagers lookups and updates only.
 	// NewDispatcherManager may perform expensive downstream initialization, so it
@@ -191,7 +191,7 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 			req.TableTriggerRedoDispatcherId,
 			req.StartTs,
 			from,
-			generation,
+			maintainerEpoch,
 			req.IsNewChangefeed,
 		)
 		// Fast return the error to maintainer.
@@ -220,14 +220,14 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 		m.mutex.Unlock()
 		metrics.DispatcherManagerGauge.WithLabelValues(cfId.Keyspace(), cfId.Name()).Inc()
 	} else {
-		manager.LockControl()
-		defer manager.UnlockControl()
-		if !manager.TryUpdateMaintainer(from, generation) {
+		manager.LockMaintainerFence()
+		defer manager.UnlockMaintainerFence()
+		if !manager.TryUpdateMaintainer(from, maintainerEpoch) {
 			log.Warn("drop stale maintainer bootstrap request",
 				zap.String("changefeed", cfId.Name()),
 				zap.String("from", from.String()),
-				zap.Uint64("requestGeneration", generation),
-				zap.Uint64("currentGeneration", manager.GetMaintainerEpoch()),
+				zap.Uint64("requestMaintainerEpoch", maintainerEpoch),
+				zap.Uint64("currentMaintainerEpoch", manager.GetMaintainerEpoch()),
 				zap.String("currentMaintainer", manager.GetMaintainerID().String()))
 			return nil
 		}
@@ -267,14 +267,14 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 		}
 	}
 	if !exists {
-		manager.LockControl()
-		defer manager.UnlockControl()
-		if !manager.TryUpdateMaintainer(from, generation) {
+		manager.LockMaintainerFence()
+		defer manager.UnlockMaintainerFence()
+		if !manager.TryUpdateMaintainer(from, maintainerEpoch) {
 			log.Warn("drop stale maintainer bootstrap request",
 				zap.String("changefeed", cfId.Name()),
 				zap.String("from", from.String()),
-				zap.Uint64("requestGeneration", generation),
-				zap.Uint64("currentGeneration", manager.GetMaintainerEpoch()),
+				zap.Uint64("requestMaintainerEpoch", maintainerEpoch),
+				zap.Uint64("currentMaintainerEpoch", manager.GetMaintainerEpoch()),
 				zap.String("currentMaintainer", manager.GetMaintainerID().String()))
 			return nil
 		}
@@ -315,14 +315,14 @@ func (m *DispatcherOrchestrator) handlePostBootstrapRequest(
 			zap.Any("changefeedID", cfId.Name()))
 		return nil
 	}
-	manager.LockControl()
-	defer manager.UnlockControl()
-	if !manager.IsMaintainerRequestAllowed(from, req.Generation) {
+	manager.LockMaintainerFence()
+	defer manager.UnlockMaintainerFence()
+	if !manager.IsMaintainerRequestAllowed(from, req.MaintainerEpoch) {
 		log.Warn("drop stale maintainer post bootstrap request",
 			zap.String("changefeed", cfId.Name()),
 			zap.String("from", from.String()),
-			zap.Uint64("requestGeneration", req.Generation),
-			zap.Uint64("currentGeneration", manager.GetMaintainerEpoch()),
+			zap.Uint64("requestMaintainerEpoch", req.MaintainerEpoch),
+			zap.Uint64("currentMaintainerEpoch", manager.GetMaintainerEpoch()),
 			zap.String("currentMaintainer", manager.GetMaintainerID().String()))
 		return nil
 	}
@@ -386,8 +386,8 @@ func (m *DispatcherOrchestrator) handleCloseRequest(
 
 	m.mutex.Lock()
 	if manager, ok := m.dispatcherManagers[cfId]; ok {
-		manager.LockControl()
-		if manager.IsMaintainerRequestAllowed(from, req.Generation) {
+		manager.LockMaintainerFence()
+		if manager.IsMaintainerRequestAllowed(from, req.MaintainerEpoch) {
 			if closed := manager.TryClose(req.Removed); closed {
 				delete(m.dispatcherManagers, cfId)
 				metrics.DispatcherManagerGauge.WithLabelValues(cfId.Keyspace(), cfId.Name()).Dec()
@@ -399,11 +399,11 @@ func (m *DispatcherOrchestrator) handleCloseRequest(
 			log.Warn("drop stale maintainer close request",
 				zap.String("changefeed", cfId.Name()),
 				zap.String("from", from.String()),
-				zap.Uint64("requestGeneration", req.Generation),
-				zap.Uint64("currentGeneration", manager.GetMaintainerEpoch()),
+				zap.Uint64("requestMaintainerEpoch", req.MaintainerEpoch),
+				zap.Uint64("currentMaintainerEpoch", manager.GetMaintainerEpoch()),
 				zap.String("currentMaintainer", manager.GetMaintainerID().String()))
 		}
-		manager.UnlockControl()
+		manager.UnlockMaintainerFence()
 	}
 	m.mutex.Unlock()
 
@@ -541,7 +541,7 @@ func retrieveOperatorsForBootstrapResponse(
 ) {
 	manager.GetCurrentOperatorMap().Range(func(_, value any) bool {
 		req := value.(dispatchermanager.SchedulerDispatcherRequest)
-		if !manager.IsMaintainerRequestAllowed(req.From, req.Generation) {
+		if !manager.IsMaintainerRequestAllowed(req.From, req.MaintainerEpoch) {
 			return true
 		}
 		dispatcherID := common.NewDispatcherIDFromPB(req.Config.DispatcherID)
@@ -571,11 +571,11 @@ func retrieveOperatorsForBootstrapResponse(
 			}
 		}
 		response.Operators = append(response.Operators, &heartbeatpb.ScheduleDispatcherRequest{
-			ChangefeedID:   req.ChangefeedID,
-			Config:         req.Config,
-			ScheduleAction: req.ScheduleAction,
-			OperatorType:   req.OperatorType,
-			Generation:     req.Generation,
+			ChangefeedID:    req.ChangefeedID,
+			Config:          req.Config,
+			ScheduleAction:  req.ScheduleAction,
+			OperatorType:    req.OperatorType,
+			MaintainerEpoch: req.MaintainerEpoch,
 		})
 		return true
 	})

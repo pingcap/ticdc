@@ -307,7 +307,7 @@ func TestPendingMessageQueue_CloseRequestRemovedTrueOverridesPendingFalse(t *tes
 	require.True(t, req.Removed)
 }
 
-func TestPendingMessageQueue_NewerGenerationOverridesPendingRequest(t *testing.T) {
+func TestPendingMessageQueue_NewerMaintainerEpochOverridesPendingRequest(t *testing.T) {
 	t.Parallel()
 
 	q := newPendingMessageQueue()
@@ -320,12 +320,12 @@ func TestPendingMessageQueue_NewerGenerationOverridesPendingRequest(t *testing.T
 	oldMsg := messaging.NewSingleTargetMessage(
 		node.ID("to"),
 		messaging.DispatcherManagerManagerTopic,
-		&heartbeatpb.MaintainerBootstrapRequest{ChangefeedID: cfID.ToPB(), Generation: 1},
+		&heartbeatpb.MaintainerBootstrapRequest{ChangefeedID: cfID.ToPB(), MaintainerEpoch: 1},
 	)
 	newMsg := messaging.NewSingleTargetMessage(
 		node.ID("to"),
 		messaging.DispatcherManagerManagerTopic,
-		&heartbeatpb.MaintainerBootstrapRequest{ChangefeedID: cfID.ToPB(), Generation: 2},
+		&heartbeatpb.MaintainerBootstrapRequest{ChangefeedID: cfID.ToPB(), MaintainerEpoch: 2},
 	)
 
 	require.True(t, q.TryEnqueue(key, oldMsg))
@@ -334,7 +334,7 @@ func TestPendingMessageQueue_NewerGenerationOverridesPendingRequest(t *testing.T
 	poppedMsg, ok := q.Pop()
 	require.True(t, ok)
 	req := poppedMsg.Message[0].(*heartbeatpb.MaintainerBootstrapRequest)
-	require.Equal(t, uint64(2), req.Generation)
+	require.Equal(t, uint64(2), req.MaintainerEpoch)
 }
 
 func TestPendingMessageQueue_CloseRequestUpgradeAfterPopKeepsReturnedMessageStable(t *testing.T) {
@@ -459,7 +459,7 @@ func TestGetPendingMessageKey_SupportedTypes(t *testing.T) {
 	require.Equal(t, pendingMessageKey{changefeedID: cfID, msgType: messaging.TypeMaintainerCloseRequest}, key)
 }
 
-func TestBootstrapResponseRestoresOnlyCurrentGenerationOperators(t *testing.T) {
+func TestBootstrapResponseRestoresOnlyCurrentMaintainerEpochOperators(t *testing.T) {
 	appcontext.SetService(appcontext.DefaultPDClock, pdutil.NewClock4Test())
 	appcontext.SetService(appcontext.MessageCenter, messaging.NewMockMessageCenter())
 	heartbeatCollector := dispatchermanager.NewHeartBeatCollector(node.ID("receiver"))
@@ -487,14 +487,14 @@ func TestBootstrapResponseRestoresOnlyCurrentGenerationOperators(t *testing.T) {
 	currentDispatcherID := common.NewDispatcherID()
 	oldDispatcherID := common.NewDispatcherID()
 	manager.GetCurrentOperatorMap().Store(
-		"current-generation",
+		"current-maintainer-epoch",
 		dispatchermanager.NewSchedulerDispatcherRequest(
 			node.ID("current-maintainer"),
 			newBootstrapResponseTestScheduleRequest(cfID, currentDispatcherID, 2),
 		),
 	)
 	manager.GetCurrentOperatorMap().Store(
-		"old-generation",
+		"old-maintainer-epoch",
 		dispatchermanager.NewSchedulerDispatcherRequest(
 			node.ID("old-maintainer"),
 			newBootstrapResponseTestScheduleRequest(cfID, oldDispatcherID, 1),
@@ -503,7 +503,7 @@ func TestBootstrapResponseRestoresOnlyCurrentGenerationOperators(t *testing.T) {
 
 	response := createBootstrapResponse(cfID.ToPB(), manager, 0, 0)
 	require.Len(t, response.Operators, 1)
-	require.Equal(t, uint64(2), response.Operators[0].Generation)
+	require.Equal(t, uint64(2), response.Operators[0].MaintainerEpoch)
 	require.Equal(t, currentDispatcherID, common.NewDispatcherIDFromPB(response.Operators[0].Config.DispatcherID))
 }
 
@@ -520,7 +520,7 @@ func newBootstrapResponseTestChangefeedConfig(cfID common.ChangeFeedID) *config.
 func newBootstrapResponseTestScheduleRequest(
 	cfID common.ChangeFeedID,
 	dispatcherID common.DispatcherID,
-	generation uint64,
+	maintainerEpoch uint64,
 ) *heartbeatpb.ScheduleDispatcherRequest {
 	return &heartbeatpb.ScheduleDispatcherRequest{
 		ChangefeedID: cfID.ToPB(),
@@ -530,7 +530,7 @@ func newBootstrapResponseTestScheduleRequest(
 			DispatcherID: dispatcherID.ToPB(),
 			Mode:         common.DefaultMode,
 		},
-		ScheduleAction: heartbeatpb.ScheduleAction_Create,
-		Generation:     generation,
+		ScheduleAction:  heartbeatpb.ScheduleAction_Create,
+		MaintainerEpoch: maintainerEpoch,
 	}
 }

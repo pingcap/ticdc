@@ -205,7 +205,7 @@ func TestPreCheckForSchedulerHandler_CreateSkippedWhenDispatcherExists(t *testin
 	require.False(t, ok)
 }
 
-func TestPreCheckForSchedulerHandler_FencesStaleMaintainerGeneration(t *testing.T) {
+func TestPreCheckForSchedulerHandler_FencesStaleMaintainerEpoch(t *testing.T) {
 	t.Parallel()
 
 	dispatcherID := common.NewDispatcherID()
@@ -222,9 +222,9 @@ func TestPreCheckForSchedulerHandler_FencesStaleMaintainerGeneration(t *testing.
 			DispatcherID: dispatcherID.ToPB(),
 			Mode:         0,
 		},
-		ScheduleAction: heartbeatpb.ScheduleAction_Create,
-		OperatorType:   heartbeatpb.OperatorType_O_Add,
-		Generation:     1,
+		ScheduleAction:  heartbeatpb.ScheduleAction_Create,
+		OperatorType:    heartbeatpb.OperatorType_O_Add,
+		MaintainerEpoch: 1,
 	})
 	_, ok := preCheckForSchedulerHandler(staleReq, dm)
 	require.False(t, ok)
@@ -235,17 +235,17 @@ func TestPreCheckForSchedulerHandler_FencesStaleMaintainerGeneration(t *testing.
 			DispatcherID: dispatcherID.ToPB(),
 			Mode:         0,
 		},
-		ScheduleAction: heartbeatpb.ScheduleAction_Create,
-		OperatorType:   heartbeatpb.OperatorType_O_Add,
-		Generation:     2,
+		ScheduleAction:  heartbeatpb.ScheduleAction_Create,
+		OperatorType:    heartbeatpb.OperatorType_O_Add,
+		MaintainerEpoch: 2,
 	})
 	operatorKey, ok := preCheckForSchedulerHandler(currentReq, dm)
 	require.True(t, ok)
 	require.Equal(t, dispatcherID, operatorKey.dispatcherID)
-	require.Equal(t, uint64(2), operatorKey.generation)
+	require.Equal(t, uint64(2), operatorKey.maintainerEpoch)
 }
 
-func TestPreCheckForSchedulerHandler_RejectsGenerationZeroAfterStrictGeneration(t *testing.T) {
+func TestPreCheckForSchedulerHandler_RejectsEpochZeroAfterStrictMaintainerEpoch(t *testing.T) {
 	t.Parallel()
 
 	dispatcherID := common.NewDispatcherID()
@@ -270,7 +270,7 @@ func TestPreCheckForSchedulerHandler_RejectsGenerationZeroAfterStrictGeneration(
 	require.Equal(t, common.DispatcherID{}, operatorKey.dispatcherID)
 }
 
-func TestPreCheckForSchedulerHandler_AllowsGenerationZeroBeforeStrictGeneration(t *testing.T) {
+func TestPreCheckForSchedulerHandler_AllowsEpochZeroBeforeStrictMaintainerEpoch(t *testing.T) {
 	t.Parallel()
 
 	dispatcherID := common.NewDispatcherID()
@@ -292,10 +292,10 @@ func TestPreCheckForSchedulerHandler_AllowsGenerationZeroBeforeStrictGeneration(
 	operatorKey, ok := preCheckForSchedulerHandler(req, dm)
 	require.True(t, ok)
 	require.Equal(t, dispatcherID, operatorKey.dispatcherID)
-	require.Zero(t, operatorKey.generation)
+	require.Zero(t, operatorKey.maintainerEpoch)
 }
 
-func TestDispatcherManagerTryUpdateMaintainerRejectsGenerationZeroAfterStrictGeneration(t *testing.T) {
+func TestDispatcherManagerTryUpdateMaintainerRejectsEpochZeroAfterStrictMaintainerEpoch(t *testing.T) {
 	t.Parallel()
 
 	dm := &DispatcherManager{}
@@ -307,7 +307,7 @@ func TestDispatcherManagerTryUpdateMaintainerRejectsGenerationZeroAfterStrictGen
 	require.Equal(t, uint64(2), dm.GetMaintainerEpoch())
 }
 
-func TestDispatcherManagerTryUpdateMaintainerAllowsGenerationZeroCompatOwnerChange(t *testing.T) {
+func TestDispatcherManagerTryUpdateMaintainerAllowsEpochZeroCompatOwnerChange(t *testing.T) {
 	t.Parallel()
 
 	dm := &DispatcherManager{}

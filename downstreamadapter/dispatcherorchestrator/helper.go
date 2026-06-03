@@ -72,7 +72,7 @@ func (q *pendingMessageQueue) TryEnqueue(key pendingMessageKey, msg *messaging.T
 }
 
 func shouldReplacePendingMessage(key pendingMessageKey, oldMsg, newMsg *messaging.TargetMessage) bool {
-	if shouldReplaceByGeneration(oldMsg, newMsg) {
+	if shouldReplaceByMaintainerEpoch(oldMsg, newMsg) {
 		return true
 	}
 	if key.msgType != messaging.TypeMaintainerCloseRequest {
@@ -93,23 +93,23 @@ func shouldReplacePendingMessage(key pendingMessageKey, oldMsg, newMsg *messagin
 	return !oldReq.Removed && newReq.Removed
 }
 
-func shouldReplaceByGeneration(oldMsg, newMsg *messaging.TargetMessage) bool {
-	oldGeneration, oldOK := pendingMessageGeneration(oldMsg)
-	newGeneration, newOK := pendingMessageGeneration(newMsg)
-	return oldOK && newOK && newGeneration > oldGeneration
+func shouldReplaceByMaintainerEpoch(oldMsg, newMsg *messaging.TargetMessage) bool {
+	oldMaintainerEpoch, oldOK := pendingMessageMaintainerEpoch(oldMsg)
+	newMaintainerEpoch, newOK := pendingMessageMaintainerEpoch(newMsg)
+	return oldOK && newOK && newMaintainerEpoch > oldMaintainerEpoch
 }
 
-func pendingMessageGeneration(msg *messaging.TargetMessage) (uint64, bool) {
+func pendingMessageMaintainerEpoch(msg *messaging.TargetMessage) (uint64, bool) {
 	if msg == nil || len(msg.Message) == 0 {
 		return 0, false
 	}
 	switch req := msg.Message[0].(type) {
 	case *heartbeatpb.MaintainerBootstrapRequest:
-		return req.Generation, true
+		return req.MaintainerEpoch, true
 	case *heartbeatpb.MaintainerPostBootstrapRequest:
-		return req.Generation, true
+		return req.MaintainerEpoch, true
 	case *heartbeatpb.MaintainerCloseRequest:
-		return req.Generation, true
+		return req.MaintainerEpoch, true
 	default:
 		return 0, false
 	}

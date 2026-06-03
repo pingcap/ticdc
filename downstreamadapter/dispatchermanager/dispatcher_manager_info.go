@@ -59,50 +59,50 @@ func (e *DispatcherManager) SetMaintainerID(maintainerID node.ID) {
 	e.meta.maintainerID = maintainerID
 }
 
-// LockControl serializes maintainer ownership changes with scheduler requests.
-func (e *DispatcherManager) LockControl() {
-	e.controlMu.Lock()
+// LockMaintainerFence enters the receiver-local maintainer fence critical section.
+func (e *DispatcherManager) LockMaintainerFence() {
+	e.maintainerFenceMu.Lock()
 }
 
-// UnlockControl releases the maintainer control critical section.
-func (e *DispatcherManager) UnlockControl() {
-	e.controlMu.Unlock()
+// UnlockMaintainerFence releases the receiver-local maintainer fence critical section.
+func (e *DispatcherManager) UnlockMaintainerFence() {
+	e.maintainerFenceMu.Unlock()
 }
 
-// TryUpdateMaintainer records the active maintainer owner and generation.
-// Generation 0 is accepted only while the manager is still in compatibility
-// mode. Once a non-zero generation is known, generation 0 must never downgrade
-// the receiver back to compatibility mode.
-func (e *DispatcherManager) TryUpdateMaintainer(from node.ID, generation uint64) bool {
+// TryUpdateMaintainer records the active maintainer owner and epoch.
+// Maintainer epoch 0 is accepted only while the manager is still in compatibility
+// mode. Once a non-zero epoch is known, epoch 0 must never downgrade the receiver
+// back to compatibility mode.
+func (e *DispatcherManager) TryUpdateMaintainer(from node.ID, maintainerEpoch uint64) bool {
 	e.meta.Lock()
 	defer e.meta.Unlock()
-	if generation == 0 {
+	if maintainerEpoch == 0 {
 		if e.meta.maintainerEpoch != 0 {
 			return false
 		}
 		e.meta.maintainerID = from
 		return true
 	}
-	if e.meta.maintainerEpoch > generation {
+	if e.meta.maintainerEpoch > maintainerEpoch {
 		return false
 	}
-	if e.meta.maintainerEpoch == generation && e.meta.maintainerID != "" && e.meta.maintainerID != from {
+	if e.meta.maintainerEpoch == maintainerEpoch && e.meta.maintainerID != "" && e.meta.maintainerID != from {
 		return false
 	}
-	e.meta.maintainerEpoch = generation
+	e.meta.maintainerEpoch = maintainerEpoch
 	e.meta.maintainerID = from
 	return true
 }
 
 // IsMaintainerRequestAllowed reports whether a request belongs to the current
-// maintainer owner/generation view known by this dispatcher manager.
-func (e *DispatcherManager) IsMaintainerRequestAllowed(from node.ID, generation uint64) bool {
+// maintainer owner/epoch view known by this dispatcher manager.
+func (e *DispatcherManager) IsMaintainerRequestAllowed(from node.ID, maintainerEpoch uint64) bool {
 	e.meta.Lock()
 	defer e.meta.Unlock()
-	if generation == 0 {
+	if maintainerEpoch == 0 {
 		return e.meta.maintainerEpoch == 0 && (e.meta.maintainerID == "" || e.meta.maintainerID == from)
 	}
-	return e.meta.maintainerEpoch == generation && e.meta.maintainerID == from
+	return e.meta.maintainerEpoch == maintainerEpoch && e.meta.maintainerID == from
 }
 
 func (e *DispatcherManager) GetMaintainerEpoch() uint64 {

@@ -236,7 +236,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		redoTableCountGauge:    metrics.TableCountGauge.WithLabelValues(keyspaceName, name, "redo"),
 	}
 	m.controller.SetSelfNodeID(selfNode.ID)
-	m.controller.SetMaintainerGeneration(info.Epoch)
+	m.controller.SetMaintainerEpoch(info.Epoch)
 	m.nodeChanged.changed = false
 	m.runningErrors.m = make(map[node.ID]*heartbeatpb.RunningError)
 
@@ -842,7 +842,7 @@ func (m *Maintainer) updateMetrics() {
 // send message to other components
 func (m *Maintainer) sendMessages(msgs []*messaging.TargetMessage) {
 	for _, msg := range msgs {
-		m.stampMaintainerGeneration(msg)
+		m.stampMaintainerEpoch(msg)
 		err := m.mc.SendCommand(msg)
 		if err != nil {
 			log.Debug("failed to send maintainer request",
@@ -852,24 +852,24 @@ func (m *Maintainer) sendMessages(msgs []*messaging.TargetMessage) {
 	}
 }
 
-func (m *Maintainer) stampMaintainerGeneration(msg *messaging.TargetMessage) {
+func (m *Maintainer) stampMaintainerEpoch(msg *messaging.TargetMessage) {
 	if msg == nil || len(msg.Message) == 0 {
 		return
 	}
-	generation := m.maintainerGeneration()
+	maintainerEpoch := m.currentMaintainerEpoch()
 	switch req := msg.Message[0].(type) {
 	case *heartbeatpb.MaintainerBootstrapRequest:
-		req.Generation = generation
+		req.MaintainerEpoch = maintainerEpoch
 	case *heartbeatpb.MaintainerPostBootstrapRequest:
-		req.Generation = generation
+		req.MaintainerEpoch = maintainerEpoch
 	case *heartbeatpb.MaintainerCloseRequest:
-		req.Generation = generation
+		req.MaintainerEpoch = maintainerEpoch
 	case *heartbeatpb.ScheduleDispatcherRequest:
-		req.Generation = generation
+		req.MaintainerEpoch = maintainerEpoch
 	}
 }
 
-func (m *Maintainer) maintainerGeneration() uint64 {
+func (m *Maintainer) currentMaintainerEpoch() uint64 {
 	if m.info == nil {
 		return 0
 	}
@@ -1118,9 +1118,9 @@ func (m *Maintainer) trySendMaintainerCloseRequestToAllNode() bool {
 				n,
 				messaging.DispatcherManagerManagerTopic,
 				&heartbeatpb.MaintainerCloseRequest{
-					ChangefeedID: m.changefeedID.ToPB(),
-					Removed:      m.changefeedRemoved.Load(),
-					Generation:   m.maintainerGeneration(),
+					ChangefeedID:    m.changefeedID.ToPB(),
+					Removed:         m.changefeedRemoved.Load(),
+					MaintainerEpoch: m.currentMaintainerEpoch(),
 				}))
 		}
 	}
@@ -1181,7 +1181,7 @@ func (m *Maintainer) createBootstrapMessageFactory() bootstrap.NewBootstrapReque
 			TableTriggerRedoDispatcherId:  nil,
 			IsNewChangefeed:               false,
 			KeyspaceId:                    m.info.KeyspaceID,
-			Generation:                    m.maintainerGeneration(),
+			MaintainerEpoch:               m.currentMaintainerEpoch(),
 		}
 
 		// only send dispatcher targetNodeID to dispatcher manager on the same node

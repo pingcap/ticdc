@@ -189,9 +189,12 @@ func NewSchedulerDispatcherRequest(from node.ID, req *heartbeatpb.ScheduleDispat
 
 type SchedulerDispatcherRequestHandler struct{}
 
+// dispatcherOperatorKey scopes in-flight scheduler intents to one maintainer
+// epoch. A newer maintainer must be able to reconcile the same dispatcherID
+// without being blocked by an unfinished intent from an old maintainer.
 type dispatcherOperatorKey struct {
-	dispatcherID common.DispatcherID
-	generation   uint64
+	dispatcherID    common.DispatcherID
+	maintainerEpoch uint64
 }
 
 func (h *SchedulerDispatcherRequestHandler) Path(scheduleDispatcherRequest SchedulerDispatcherRequest) common.GID {
@@ -215,8 +218,8 @@ func (h *SchedulerDispatcherRequestHandler) Handle(dispatcherManager *Dispatcher
 		// dynstream guarantees len(events)>0, but guard defensively to avoid panics if that contract changes.
 		return false
 	}
-	dispatcherManager.LockControl()
-	defer dispatcherManager.UnlockControl()
+	dispatcherManager.LockMaintainerFence()
+	defer dispatcherManager.UnlockMaintainerFence()
 
 	// `dynstream` guarantees per-path serialization: for a given changefeed (Path),
 	// SchedulerDispatcherRequestHandler.Handle will not be executed concurrently. This matters for reasoning:
@@ -260,8 +263,8 @@ func (h *SchedulerDispatcherRequestHandler) Handle(dispatcherManager *Dispatcher
 
 // preCheckForSchedulerHandler validates a scheduling request and decides whether it should be applied.
 //
-// It returns the stable key used in currentOperatorMap (dispatcherID, generation), and a boolean indicating whether the
-// request should proceed. The precheck filters out:
+// It returns the stable key used in currentOperatorMap (dispatcherID, maintainerEpoch),
+// and a boolean indicating whether the request should proceed. The precheck filters out:
 //   - invalid requests (nil request/config/dispatcherID),
 //   - redo requests when redo is disabled,
 //   - duplicate Create requests for the same dispatcherID while another operator is in-flight,
@@ -284,17 +287,17 @@ func preCheckForSchedulerHandler(req SchedulerDispatcherRequest, dispatcherManag
 		log.Warn("scheduleDispatcherRequest has no valid operator key, skip")
 		return dispatcherOperatorKey{}, false
 	}
-	if !dispatcherManager.IsMaintainerRequestAllowed(req.From, req.Generation) {
+	if !dispatcherManager.IsMaintainerRequestAllowed(req.From, req.MaintainerEpoch) {
 		log.Warn("drop stale schedule dispatcher request",
 			zap.String("changefeedID", req.ChangefeedID.String()),
 			zap.String("dispatcherID", dispatcherID.String()),
 			zap.String("from", req.From.String()),
-			zap.Uint64("requestGeneration", req.Generation),
-			zap.Uint64("currentGeneration", dispatcherManager.GetMaintainerEpoch()),
+			zap.Uint64("requestMaintainerEpoch", req.MaintainerEpoch),
+			zap.Uint64("currentMaintainerEpoch", dispatcherManager.GetMaintainerEpoch()),
 			zap.String("currentMaintainer", dispatcherManager.GetMaintainerID().String()))
 		return dispatcherOperatorKey{}, false
 	}
-	operatorKey := dispatcherOperatorKey{dispatcherID: dispatcherID, generation: req.Generation}
+	operatorKey := dispatcherOperatorKey{dispatcherID: dispatcherID, maintainerEpoch: req.MaintainerEpoch}
 
 	isRedo := common.IsRedoMode(req.Config.Mode)
 	if isRedo && !dispatcherManager.IsRedoReady() {
