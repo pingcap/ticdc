@@ -84,14 +84,8 @@ type DispatcherManager struct {
 		maintainerEpoch uint64
 		maintainerID    node.ID
 	}
-	// maintainerFenceMu serializes the receiver-local maintainer fence.
-	//
-	// It protects the critical section that updates the accepted maintainer
-	// owner/epoch during bootstrap, checks scheduler/post-bootstrap/close
-	// requests against that owner/epoch, and registers scheduler side effects.
-	// Without this lock, an old scheduler request could pass the fence before a
-	// newer bootstrap takes over, then create/remove dispatchers after the
-	// receiver has already accepted the newer maintainer.
+	// maintainerFenceMu serializes maintainer owner/epoch changes with request
+	// fence checks and scheduler side effects.
 	maintainerFenceMu sync.Mutex
 
 	pdClock pdutil.Clock
@@ -108,17 +102,10 @@ type DispatcherManager struct {
 	redoDispatcherMap *DispatcherMap[*dispatcher.RedoDispatcher]
 	// currentOperatorMap stores one in-flight scheduling request per dispatcherID.
 	//
-	// It is used for:
-	//   - suppressing duplicate maintainer requests for the same dispatcher in the current maintainer epoch,
-	//   - reporting unfinished current-epoch requests during bootstrap so the maintainer can restore operators,
-	//   - cleaning up remove requests when a dispatcher is fully removed.
-	//
-	// The value carries the sender and maintainer epoch. Bootstrap recovery only returns entries that
-	// match the current maintainer fence, and scheduler precheck drops stale-epoch entries before applying
-	// a current-epoch request for the same dispatcherID.
-	//
-	// Entries must be deleted on completion (create -> after creation; remove -> on cleanup), otherwise
-	// future maintainer requests for the same dispatcherID will be ignored.
+	// The value carries sender and maintainer epoch so bootstrap recovery can
+	// return only current-epoch operators, and precheck can replace stale entries.
+	// Entries must be deleted on completion, otherwise future requests for the
+	// same dispatcherID will be ignored.
 	currentOperatorMap sync.Map // map[common.DispatcherID]SchedulerDispatcherRequest (in dispatcher manager, not heartbeatpb)
 	// schemaIDToDispatchers is shared in the DispatcherManager,
 	// it store all the infos about schemaID->Dispatchers
@@ -1065,7 +1052,7 @@ func (e *DispatcherManager) runRemoveChangefeedCleanup() error {
 func (e *DispatcherManager) cleanEventDispatcher(id common.DispatcherID, schemaID int64) {
 	e.dispatcherMap.Delete(id)
 	e.schemaIDToDispatchers.Delete(schemaID, id)
-	e.deleteCurrentOperatorsByDispatcherID(id)
+	e.currentOperatorMap.Delete(id)
 	log.Debug("delete current working remove operator",
 		zap.String("changefeedID", e.changefeedID.String()),
 		zap.String("dispatcherID", id.String()),

@@ -68,12 +68,6 @@ func GenerateChangefeedEpoch(ctx context.Context, pdClient pd.Client) uint64 {
 	return oracle.ComposeTS(phyTs, logical)
 }
 
-// NextChangefeedEpoch generates an epoch that is strictly greater than current.
-func NextChangefeedEpoch(ctx context.Context, pdClient pd.Client, current uint64) (uint64, error) {
-	epoch := GenerateChangefeedEpoch(ctx, pdClient)
-	return AdvanceChangefeedEpoch(epoch, current)
-}
-
 // AdvanceChangefeedEpoch returns max(candidate, current+1).
 func AdvanceChangefeedEpoch(candidate, current uint64) (uint64, error) {
 	if candidate > current {

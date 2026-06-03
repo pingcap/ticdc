@@ -23,19 +23,16 @@ import (
 	"github.com/pingcap/tidb/pkg/session"
 	"github.com/pingcap/tidb/pkg/store/mockstore"
 	"github.com/stretchr/testify/require"
-	"github.com/tikv/client-go/v2/oracle"
 	pd "github.com/tikv/pd/client"
 )
 
 type epochPDClient struct {
 	pd.Client
-	physical int64
-	logical  int64
-	err      error
+	err error
 }
 
 func (m *epochPDClient) GetTS(ctx context.Context) (int64, int64, error) {
-	return m.physical, m.logical, m.err
+	return 0, 0, m.err
 }
 
 func TestGetSourceID(t *testing.T) {
@@ -69,25 +66,6 @@ func TestGenerateChangefeedEpochFallsBackToLocalTime(t *testing.T) {
 	require.NotZero(t, epoch)
 }
 
-func TestNextChangefeedEpochStrictlyIncreases(t *testing.T) {
-	t.Parallel()
-
-	candidate := oracle.ComposeTS(100, 1)
-	epoch, err := NextChangefeedEpoch(context.Background(), &epochPDClient{
-		physical: 100,
-		logical:  1,
-	}, candidate-1)
-	require.NoError(t, err)
-	require.Equal(t, candidate, epoch)
-
-	epoch, err = NextChangefeedEpoch(context.Background(), &epochPDClient{
-		physical: 100,
-		logical:  1,
-	}, candidate+10)
-	require.NoError(t, err)
-	require.Equal(t, candidate+11, epoch)
-}
-
 func TestAdvanceChangefeedEpoch(t *testing.T) {
 	t.Parallel()
 
@@ -98,15 +76,8 @@ func TestAdvanceChangefeedEpoch(t *testing.T) {
 	epoch, err = AdvanceChangefeedEpoch(10, 12)
 	require.NoError(t, err)
 	require.Equal(t, uint64(13), epoch)
-}
 
-func TestNextChangefeedEpochOverflow(t *testing.T) {
-	t.Parallel()
-
-	_, err := NextChangefeedEpoch(context.Background(), &epochPDClient{
-		physical: 100,
-		logical:  1,
-	}, ^uint64(0))
+	_, err = AdvanceChangefeedEpoch(10, ^uint64(0))
 	require.Error(t, err)
 	require.ErrorContains(t, err, "changefeed epoch overflow")
 }

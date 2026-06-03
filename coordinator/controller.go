@@ -760,8 +760,7 @@ func (c *Controller) CreateChangefeed(ctx context.Context, info *config.ChangeFe
 	}
 
 	// generate a unique changefeed epoch
-	epoch := pdutil.GenerateChangefeedEpoch(ctx, c.pdClient)
-	info.Epoch = epoch
+	info.Epoch = pdutil.GenerateChangefeedEpoch(ctx, c.pdClient)
 	err := c.backend.CreateChangefeed(ctx, info)
 	if err != nil {
 		return errors.Trace(err)
