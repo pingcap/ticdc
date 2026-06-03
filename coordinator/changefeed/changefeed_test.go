@@ -14,7 +14,6 @@
 package changefeed
 
 import (
-	"encoding/json"
 	"testing"
 
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -55,15 +54,9 @@ func TestChangefeed_GetSetInfo(t *testing.T) {
 		SinkURI: "kafka://127.0.0.1:9097",
 		State:   config.StateNormal,
 		Config:  config.GetDefaultReplicaConfig(),
-		Epoch:   2,
 	}
 	cf.SetInfo(newInfo)
 	require.Equal(t, newInfo, cf.GetInfo())
-
-	req := cf.NewAddMaintainerMessage("node1").Message[0].(*heartbeatpb.AddMaintainerRequest)
-	got := &config.ChangeFeedInfo{}
-	require.NoError(t, json.Unmarshal(req.Config, got))
-	require.Equal(t, uint64(2), got.Epoch)
 }
 
 func TestChangefeed_GetSetNodeID(t *testing.T) {

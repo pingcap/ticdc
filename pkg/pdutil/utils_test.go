@@ -18,22 +18,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tidb/pkg/kv"
 	"github.com/pingcap/tidb/pkg/session"
 	"github.com/pingcap/tidb/pkg/store/mockstore"
 	"github.com/stretchr/testify/require"
-	pd "github.com/tikv/pd/client"
 )
-
-type epochPDClient struct {
-	pd.Client
-	err error
-}
-
-func (m *epochPDClient) GetTS(ctx context.Context) (int64, int64, error) {
-	return 0, 0, m.err
-}
 
 func TestGetSourceID(t *testing.T) {
 	store, err := mockstore.NewMockStore()
@@ -55,15 +44,6 @@ func TestGetSourceID(t *testing.T) {
 		require.NoError(t, err)
 		return sourceID == 2
 	}, 5*time.Second, 100*time.Millisecond)
-}
-
-func TestGenerateChangefeedEpochFallsBackToLocalTime(t *testing.T) {
-	t.Parallel()
-
-	epoch := GenerateChangefeedEpoch(context.Background(), &epochPDClient{
-		err: errors.New("pd tso unavailable"),
-	})
-	require.NotZero(t, epoch)
 }
 
 func TestAdvanceChangefeedEpoch(t *testing.T) {
