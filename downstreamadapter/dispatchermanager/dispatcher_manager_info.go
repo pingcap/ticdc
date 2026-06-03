@@ -29,7 +29,7 @@ type dispatcherCreateInfo struct {
 	TableSpan   *heartbeatpb.TableSpan
 	StartTs     uint64
 	SchemaID    int64
-	OperatorKey dispatcherOperatorKey
+	OperatorKey common.DispatcherID
 	// SkipDMLAsStartTs indicates whether to skip DML events at (StartTs+1).
 	// It is used when a dispatcher is recreated during an in-flight DDL barrier:
 	// we need to replay the DDL by starting from (blockTs-1), while avoiding
@@ -145,13 +145,7 @@ func (e *DispatcherManager) GetCurrentOperatorMap() *sync.Map {
 }
 
 func (e *DispatcherManager) deleteCurrentOperatorsByDispatcherID(id common.DispatcherID) {
-	e.currentOperatorMap.Range(func(key, _ any) bool {
-		operatorKey, ok := key.(dispatcherOperatorKey)
-		if ok && operatorKey.dispatcherID == id {
-			e.currentOperatorMap.Delete(key)
-		}
-		return true
-	})
+	e.currentOperatorMap.Delete(id)
 }
 
 // IsRedoEnabled reports whether redo is configured for the changefeed.

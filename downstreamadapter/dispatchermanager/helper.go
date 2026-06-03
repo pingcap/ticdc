@@ -189,14 +189,6 @@ func NewSchedulerDispatcherRequest(from node.ID, req *heartbeatpb.ScheduleDispat
 
 type SchedulerDispatcherRequestHandler struct{}
 
-// dispatcherOperatorKey scopes in-flight scheduler intents to one maintainer
-// epoch. A newer maintainer must be able to reconcile the same dispatcherID
-// without being blocked by an unfinished intent from an old maintainer.
-type dispatcherOperatorKey struct {
-	dispatcherID    common.DispatcherID
-	maintainerEpoch uint64
-}
-
 func (h *SchedulerDispatcherRequestHandler) Path(scheduleDispatcherRequest SchedulerDispatcherRequest) common.GID {
 	return common.NewChangefeedGIDFromPB(scheduleDispatcherRequest.ChangefeedID)
 }
@@ -263,29 +255,29 @@ func (h *SchedulerDispatcherRequestHandler) Handle(dispatcherManager *Dispatcher
 
 // preCheckForSchedulerHandler validates a scheduling request and decides whether it should be applied.
 //
-// It returns the stable key used in currentOperatorMap (dispatcherID, maintainerEpoch),
-// and a boolean indicating whether the request should proceed. The precheck filters out:
+// It returns the stable key used in currentOperatorMap (dispatcherID), and a
+// boolean indicating whether the request should proceed. The precheck filters out:
 //   - invalid requests (nil request/config/dispatcherID),
 //   - redo requests when redo is disabled,
-//   - duplicate Create requests for the same dispatcherID while another operator is in-flight,
+//   - duplicate Create requests while a current-epoch operator is in-flight for the same dispatcherID,
 //   - Create requests for an already-existing dispatcher (idempotent no-op).
 //
 // Note: Remove requests are allowed to proceed even if the dispatcher doesn't exist (we still want to emit a
 // terminal status to the maintainer), but we must be careful not to store such requests (see handleScheduleRemove),
 // otherwise the operator entry would never be cleaned up.
-func preCheckForSchedulerHandler(req SchedulerDispatcherRequest, dispatcherManager *DispatcherManager) (dispatcherOperatorKey, bool) {
+func preCheckForSchedulerHandler(req SchedulerDispatcherRequest, dispatcherManager *DispatcherManager) (common.DispatcherID, bool) {
 	if req.ScheduleDispatcherRequest == nil {
 		log.Warn("scheduleDispatcherRequest is nil, skip")
-		return dispatcherOperatorKey{}, false
+		return common.DispatcherID{}, false
 	}
 	if req.Config == nil {
 		log.Warn("scheduleDispatcherRequest config is nil, skip")
-		return dispatcherOperatorKey{}, false
+		return common.DispatcherID{}, false
 	}
 	dispatcherID := common.NewDispatcherIDFromPB(req.Config.DispatcherID)
 	if dispatcherID.IsZero() {
 		log.Warn("scheduleDispatcherRequest has no valid operator key, skip")
-		return dispatcherOperatorKey{}, false
+		return common.DispatcherID{}, false
 	}
 	if !dispatcherManager.IsMaintainerRequestAllowed(req.From, req.MaintainerEpoch) {
 		log.Warn("drop stale schedule dispatcher request",
@@ -295,22 +287,30 @@ func preCheckForSchedulerHandler(req SchedulerDispatcherRequest, dispatcherManag
 			zap.Uint64("requestMaintainerEpoch", req.MaintainerEpoch),
 			zap.Uint64("currentMaintainerEpoch", dispatcherManager.GetMaintainerEpoch()),
 			zap.String("currentMaintainer", dispatcherManager.GetMaintainerID().String()))
-		return dispatcherOperatorKey{}, false
+		return common.DispatcherID{}, false
 	}
-	operatorKey := dispatcherOperatorKey{dispatcherID: dispatcherID, maintainerEpoch: req.MaintainerEpoch}
+	operatorKey := dispatcherID
 
 	isRedo := common.IsRedoMode(req.Config.Mode)
 	if isRedo && !dispatcherManager.IsRedoReady() {
-		return dispatcherOperatorKey{}, false
+		return common.DispatcherID{}, false
 	}
-	if _, operatorExists := dispatcherManager.currentOperatorMap.Load(operatorKey); operatorExists {
-		// Create requests must be serialized per dispatcherID; otherwise we can end up creating multiple
-		// dispatchers for the same span/dispatcherID.
-		if req.ScheduleAction == heartbeatpb.ScheduleAction_Create {
-			return dispatcherOperatorKey{}, false
+	if existing, operatorExists := dispatcherManager.currentOperatorMap.Load(operatorKey); operatorExists {
+		existingReq, ok := existing.(SchedulerDispatcherRequest)
+		if ok && !dispatcherManager.IsMaintainerRequestAllowed(existingReq.From, existingReq.MaintainerEpoch) {
+			// The pending map keeps one in-flight intent per dispatcherID. A stale
+			// maintainer epoch must not block the current maintainer from reconciling
+			// the same dispatcherID.
+			dispatcherManager.currentOperatorMap.Delete(operatorKey)
+		} else {
+			// Create requests must be serialized per dispatcherID; otherwise we can end up creating multiple
+			// dispatchers for the same span/dispatcherID.
+			if req.ScheduleAction == heartbeatpb.ScheduleAction_Create {
+				return common.DispatcherID{}, false
+			}
+			// Remove requests are allowed to proceed: removeDispatcher is idempotent and the incoming request
+			// may carry a newer OperatorType for maintainer bootstrap/failover reconstruction.
 		}
-		// Remove requests are allowed to proceed: removeDispatcher is idempotent and the incoming request
-		// may carry a newer OperatorType for maintainer bootstrap/failover reconstruction.
 	}
 
 	// Check whether the dispatcher exists locally. This is used to treat Create as idempotent.
@@ -327,7 +327,7 @@ func preCheckForSchedulerHandler(req SchedulerDispatcherRequest, dispatcherManag
 	switch req.ScheduleAction {
 	case heartbeatpb.ScheduleAction_Create:
 		if dispatcherExists {
-			return dispatcherOperatorKey{}, false
+			return common.DispatcherID{}, false
 		}
 	case heartbeatpb.ScheduleAction_Remove:
 	}
@@ -338,7 +338,7 @@ func preCheckForSchedulerHandler(req SchedulerDispatcherRequest, dispatcherManag
 func handleScheduleCreate(
 	dispatcherManager *DispatcherManager,
 	req SchedulerDispatcherRequest,
-	operatorKey dispatcherOperatorKey,
+	operatorKey common.DispatcherID,
 	infos map[common.DispatcherID]dispatcherCreateInfo,
 	redoInfos map[common.DispatcherID]dispatcherCreateInfo,
 ) {
@@ -374,7 +374,7 @@ func handleScheduleCreate(
 func handleScheduleRemove(
 	dispatcherManager *DispatcherManager,
 	req SchedulerDispatcherRequest,
-	operatorKey dispatcherOperatorKey,
+	operatorKey common.DispatcherID,
 ) {
 	config := req.Config
 	dispatcherID := common.NewDispatcherIDFromPB(config.DispatcherID)

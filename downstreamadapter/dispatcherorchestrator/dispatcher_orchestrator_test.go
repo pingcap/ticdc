@@ -487,14 +487,14 @@ func TestBootstrapResponseRestoresOnlyCurrentMaintainerEpochOperators(t *testing
 	currentDispatcherID := common.NewDispatcherID()
 	oldDispatcherID := common.NewDispatcherID()
 	manager.GetCurrentOperatorMap().Store(
-		"current-maintainer-epoch",
+		currentDispatcherID,
 		dispatchermanager.NewSchedulerDispatcherRequest(
 			node.ID("current-maintainer"),
 			newBootstrapResponseTestScheduleRequest(cfID, currentDispatcherID, 2),
 		),
 	)
 	manager.GetCurrentOperatorMap().Store(
-		"old-maintainer-epoch",
+		oldDispatcherID,
 		dispatchermanager.NewSchedulerDispatcherRequest(
 			node.ID("old-maintainer"),
 			newBootstrapResponseTestScheduleRequest(cfID, oldDispatcherID, 1),

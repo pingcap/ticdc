@@ -106,20 +106,20 @@ type DispatcherManager struct {
 	dispatcherMap *DispatcherMap[*dispatcher.EventDispatcher]
 	// redoDispatcherMap restore all the redo dispatchers in the DispatcherManager, including table trigger redo dispatcher
 	redoDispatcherMap *DispatcherMap[*dispatcher.RedoDispatcher]
-	// currentOperatorMap stores in-flight scheduling requests by dispatcherID and maintainer epoch.
+	// currentOperatorMap stores one in-flight scheduling request per dispatcherID.
 	//
 	// It is used for:
-	//   - suppressing duplicate maintainer requests for the same dispatcher within one epoch,
+	//   - suppressing duplicate maintainer requests for the same dispatcher in the current maintainer epoch,
 	//   - reporting unfinished current-epoch requests during bootstrap so the maintainer can restore operators,
 	//   - cleaning up remove requests when a dispatcher is fully removed.
 	//
-	// The key includes maintainerEpoch because an unfinished intent from an old
-	// maintainer must not block reconciliation by a newer maintainer for the
-	// same dispatcherID.
+	// The value carries the sender and maintainer epoch. Bootstrap recovery only returns entries that
+	// match the current maintainer fence, and scheduler precheck drops stale-epoch entries before applying
+	// a current-epoch request for the same dispatcherID.
 	//
 	// Entries must be deleted on completion (create -> after creation; remove -> on cleanup), otherwise
-	// future maintainer requests for the same dispatcherID and maintainer epoch will be ignored.
-	currentOperatorMap sync.Map // map[dispatcherOperatorKey]SchedulerDispatcherRequest (in dispatcher manager, not heartbeatpb)
+	// future maintainer requests for the same dispatcherID will be ignored.
+	currentOperatorMap sync.Map // map[common.DispatcherID]SchedulerDispatcherRequest (in dispatcher manager, not heartbeatpb)
 	// schemaIDToDispatchers is shared in the DispatcherManager,
 	// it store all the infos about schemaID->Dispatchers
 	// Dispatchers may change the schemaID when meets some special events, such as rename ddl

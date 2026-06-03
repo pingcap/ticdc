@@ -173,7 +173,7 @@ func TestPreCheckForSchedulerHandler_RemoveAllowedWhenDispatcherMissing(t *testi
 
 	operatorKey, ok := preCheckForSchedulerHandler(removeReq, dm)
 	require.True(t, ok)
-	require.Equal(t, dispatcherID, operatorKey.dispatcherID)
+	require.Equal(t, dispatcherID, operatorKey)
 }
 
 func TestPreCheckForSchedulerHandler_CreateSkippedWhenDispatcherExists(t *testing.T) {
@@ -241,8 +241,48 @@ func TestPreCheckForSchedulerHandler_FencesStaleMaintainerEpoch(t *testing.T) {
 	})
 	operatorKey, ok := preCheckForSchedulerHandler(currentReq, dm)
 	require.True(t, ok)
-	require.Equal(t, dispatcherID, operatorKey.dispatcherID)
-	require.Equal(t, uint64(2), operatorKey.maintainerEpoch)
+	require.Equal(t, dispatcherID, operatorKey)
+}
+
+func TestPreCheckForSchedulerHandler_DropsStalePendingOperatorBeforeCurrentMaintainerEpoch(t *testing.T) {
+	t.Parallel()
+
+	dispatcherID := common.NewDispatcherID()
+	dm := &DispatcherManager{
+		changefeedID:  common.NewChangeFeedIDWithName("test-changefeed", "test-namespace"),
+		dispatcherMap: newDispatcherMap[*dispatcher.EventDispatcher](),
+	}
+	dm.meta.maintainerID = "current-maintainer"
+	dm.meta.maintainerEpoch = 2
+	dm.currentOperatorMap.Store(dispatcherID, NewSchedulerDispatcherRequest(
+		"old-maintainer",
+		&heartbeatpb.ScheduleDispatcherRequest{
+			ChangefeedID: &heartbeatpb.ChangefeedID{Keyspace: "test-namespace", Name: "test-changefeed"},
+			Config: &heartbeatpb.DispatcherConfig{
+				DispatcherID: dispatcherID.ToPB(),
+				Mode:         0,
+			},
+			ScheduleAction:  heartbeatpb.ScheduleAction_Create,
+			OperatorType:    heartbeatpb.OperatorType_O_Add,
+			MaintainerEpoch: 1,
+		},
+	))
+
+	currentReq := NewSchedulerDispatcherRequest("current-maintainer", &heartbeatpb.ScheduleDispatcherRequest{
+		ChangefeedID: &heartbeatpb.ChangefeedID{Keyspace: "test-namespace", Name: "test-changefeed"},
+		Config: &heartbeatpb.DispatcherConfig{
+			DispatcherID: dispatcherID.ToPB(),
+			Mode:         0,
+		},
+		ScheduleAction:  heartbeatpb.ScheduleAction_Create,
+		OperatorType:    heartbeatpb.OperatorType_O_Add,
+		MaintainerEpoch: 2,
+	})
+	operatorKey, ok := preCheckForSchedulerHandler(currentReq, dm)
+	require.True(t, ok)
+	require.Equal(t, dispatcherID, operatorKey)
+	_, exists := dm.currentOperatorMap.Load(dispatcherID)
+	require.False(t, exists)
 }
 
 func TestPreCheckForSchedulerHandler_RejectsEpochZeroAfterStrictMaintainerEpoch(t *testing.T) {
@@ -267,7 +307,7 @@ func TestPreCheckForSchedulerHandler_RejectsEpochZeroAfterStrictMaintainerEpoch(
 	})
 	operatorKey, ok := preCheckForSchedulerHandler(req, dm)
 	require.False(t, ok)
-	require.Equal(t, common.DispatcherID{}, operatorKey.dispatcherID)
+	require.Equal(t, common.DispatcherID{}, operatorKey)
 }
 
 func TestPreCheckForSchedulerHandler_AllowsEpochZeroBeforeStrictMaintainerEpoch(t *testing.T) {
@@ -291,8 +331,7 @@ func TestPreCheckForSchedulerHandler_AllowsEpochZeroBeforeStrictMaintainerEpoch(
 	})
 	operatorKey, ok := preCheckForSchedulerHandler(req, dm)
 	require.True(t, ok)
-	require.Equal(t, dispatcherID, operatorKey.dispatcherID)
-	require.Zero(t, operatorKey.maintainerEpoch)
+	require.Equal(t, dispatcherID, operatorKey)
 }
 
 func TestDispatcherManagerTryUpdateMaintainerRejectsEpochZeroAfterStrictMaintainerEpoch(t *testing.T) {
