@@ -525,7 +525,7 @@ func (m *Maintainer) onMessage(msg *messaging.TargetMessage) {
 		m.onMaintainerCloseResponse(msg.From, resp)
 	case messaging.TypeRemoveMaintainerRequest:
 		req := msg.Message[0].(*heartbeatpb.RemoveMaintainerRequest)
-		if !m.isMaintainerEpochRequestAllowed(req.MaintainerEpoch) {
+		if !m.isMaintainerEpochRequestAllowed(req.MaintainerEpoch, req.Cascade, req.Removed) {
 			log.Warn("drop stale remove maintainer request",
 				zap.Stringer("changefeedID", m.changefeedID),
 				zap.Stringer("from", msg.From),
@@ -1005,8 +1005,14 @@ func (m *Maintainer) isMaintainerEpochResponseAllowed(responseEpoch uint64) bool
 	return currentEpoch == 0 || responseEpoch == 0 || responseEpoch == currentEpoch
 }
 
-func (m *Maintainer) isMaintainerEpochRequestAllowed(requestEpoch uint64) bool {
+func (m *Maintainer) isMaintainerEpochRequestAllowed(requestEpoch uint64, cascade, removed bool) bool {
 	currentEpoch := m.currentMaintainerEpoch()
+	if requestEpoch == 0 && cascade && removed {
+		// Orphan cleanup is sent after coordinator has lost the changefeed info,
+		// so it cannot echo the current epoch. Treat it as a tombstone for this
+		// ChangeFeedID instead of a normal ownership request.
+		return true
+	}
 	// Requests mutate this maintainer, so epoch 0 is only compatible before the
 	// maintainer has entered strict non-zero epoch mode.
 	return currentEpoch == 0 || requestEpoch == currentEpoch
