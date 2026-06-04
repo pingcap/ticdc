@@ -564,33 +564,43 @@ func retrieveOperatorsForBootstrapResponse(
 ) {
 	manager.GetCurrentOperatorMap().Range(func(_, value any) bool {
 		req := value.(dispatchermanager.SchedulerDispatcherRequest)
-		if !manager.IsMaintainerRequestAllowed(req.From, req.MaintainerEpoch) {
-			return true
-		}
+		requestAllowed := manager.IsMaintainerRequestAllowed(req.From, req.MaintainerEpoch)
 		dispatcherID := common.NewDispatcherIDFromPB(req.Config.DispatcherID)
+		dispatcherExistsKnown := false
+		dispatcherExists := false
 		if common.IsRedoMode(req.Config.Mode) {
 			if manager.IsRedoReady() {
-				_, ok := manager.GetRedoDispatcherMap().Get(dispatcherID)
-				// Log error if dispatcher not found and action is not create
-				// It's possible that the dispatcher is not found when the action is create
-				// because the dispatcher may be created after the operator is stored
-				if !ok && req.ScheduleAction != heartbeatpb.ScheduleAction_Create {
-					log.Error("Redo dispatcher not found, this should not happen",
-						zap.String("changefeed", changefeedID.String()),
-						zap.String("dispatcherID", req.Config.DispatcherID.String()),
-					)
-				}
+				dispatcherExistsKnown = true
+				_, dispatcherExists = manager.GetRedoDispatcherMap().Get(dispatcherID)
 			}
 		} else {
-			_, ok := manager.GetDispatcherMap().Get(dispatcherID)
-			// Log error if dispatcher not found and action is not create
-			// It's possible that the dispatcher is not found when the action is create
-			// because the dispatcher may be created after the operator is stored
-			if !ok && req.ScheduleAction != heartbeatpb.ScheduleAction_Create {
+			dispatcherExistsKnown = true
+			_, dispatcherExists = manager.GetDispatcherMap().Get(dispatcherID)
+		}
+		if !requestAllowed {
+			if req.ScheduleAction != heartbeatpb.ScheduleAction_Remove || !dispatcherExists {
+				return true
+			}
+			log.Info("include stale remove operator in bootstrap response",
+				zap.String("changefeed", changefeedID.String()),
+				zap.String("dispatcherID", req.Config.DispatcherID.String()),
+				zap.String("from", req.From.String()),
+				zap.Uint64("requestMaintainerEpoch", req.MaintainerEpoch),
+				zap.Uint64("currentMaintainerEpoch", manager.GetMaintainerEpoch()),
+				zap.String("currentMaintainer", manager.GetMaintainerID().String()))
+		}
+		// Log error if dispatcher not found and action is not create.
+		// It's possible that the dispatcher is not found when the action is create
+		// because the dispatcher may be created after the operator is stored.
+		if dispatcherExistsKnown && !dispatcherExists && req.ScheduleAction != heartbeatpb.ScheduleAction_Create {
+			if common.IsRedoMode(req.Config.Mode) {
+				log.Error("Redo dispatcher not found, this should not happen",
+					zap.String("changefeed", changefeedID.String()),
+					zap.String("dispatcherID", req.Config.DispatcherID.String()))
+			} else {
 				log.Error("Dispatcher not found, this should not happen",
 					zap.String("changefeed", changefeedID.String()),
-					zap.String("dispatcherID", req.Config.DispatcherID.String()),
-				)
+					zap.String("dispatcherID", req.Config.DispatcherID.String()))
 			}
 		}
 		response.Operators = append(response.Operators, &heartbeatpb.ScheduleDispatcherRequest{

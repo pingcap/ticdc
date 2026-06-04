@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/pingcap/ticdc/downstreamadapter/dispatchermanager"
+	"github.com/pingcap/ticdc/downstreamadapter/eventcollector"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
@@ -461,20 +462,24 @@ func TestGetPendingMessageKey_SupportedTypes(t *testing.T) {
 	require.Equal(t, pendingMessageKey{changefeedID: cfID, msgType: messaging.TypeMaintainerCloseRequest}, key)
 }
 
-func TestBootstrapResponseRestoresOnlyCurrentMaintainerEpochOperators(t *testing.T) {
+func TestBootstrapResponseRestoresCurrentOperatorsAndStaleRemoves(t *testing.T) {
 	appcontext.SetService(appcontext.DefaultPDClock, pdutil.NewClock4Test())
 	appcontext.SetService(appcontext.MessageCenter, messaging.NewMockMessageCenter())
 	heartbeatCollector := dispatchermanager.NewHeartBeatCollector(node.ID("receiver"))
 	heartbeatCollector.Run(context.Background())
 	appcontext.SetService(appcontext.HeartbeatCollector, heartbeatCollector)
 	t.Cleanup(heartbeatCollector.Close)
+	appcontext.SetService(appcontext.EventCollector, eventcollector.New(node.ID("receiver")))
 
 	cfID := common.NewChangeFeedIDWithName("cf", "default")
+	currentDispatcherID := common.NewDispatcherID()
+	oldCreateDispatcherID := common.NewDispatcherID()
+	staleRemoveDispatcherID := common.NewDispatcherID()
 	manager, err := dispatchermanager.NewDispatcherManager(
 		0,
 		cfID,
 		newBootstrapResponseTestChangefeedConfig(cfID),
-		nil,
+		staleRemoveDispatcherID.ToPB(),
 		nil,
 		100,
 		node.ID("current-maintainer"),
@@ -486,8 +491,6 @@ func TestBootstrapResponseRestoresOnlyCurrentMaintainerEpochOperators(t *testing
 		manager.TryClose(false)
 	})
 
-	currentDispatcherID := common.NewDispatcherID()
-	oldDispatcherID := common.NewDispatcherID()
 	manager.GetCurrentOperatorMap().Store(
 		currentDispatcherID,
 		dispatchermanager.NewSchedulerDispatcherRequest(
@@ -496,17 +499,39 @@ func TestBootstrapResponseRestoresOnlyCurrentMaintainerEpochOperators(t *testing
 		),
 	)
 	manager.GetCurrentOperatorMap().Store(
-		oldDispatcherID,
+		oldCreateDispatcherID,
 		dispatchermanager.NewSchedulerDispatcherRequest(
 			node.ID("old-maintainer"),
-			newBootstrapResponseTestScheduleRequest(cfID, oldDispatcherID, 1),
+			newBootstrapResponseTestScheduleRequest(cfID, oldCreateDispatcherID, 1),
+		),
+	)
+	staleRemoveReq := newBootstrapResponseTestScheduleRequest(cfID, staleRemoveDispatcherID, 1)
+	staleRemoveReq.ScheduleAction = heartbeatpb.ScheduleAction_Remove
+	staleRemoveReq.OperatorType = heartbeatpb.OperatorType_O_Move
+	manager.GetCurrentOperatorMap().Store(
+		staleRemoveDispatcherID,
+		dispatchermanager.NewSchedulerDispatcherRequest(
+			node.ID("old-maintainer"),
+			staleRemoveReq,
 		),
 	)
 
 	response := createBootstrapResponse(cfID.ToPB(), manager, 0, 0)
-	require.Len(t, response.Operators, 1)
-	require.Equal(t, uint64(2), response.Operators[0].MaintainerEpoch)
-	require.Equal(t, currentDispatcherID, common.NewDispatcherIDFromPB(response.Operators[0].Config.DispatcherID))
+	require.Len(t, response.Operators, 2)
+	operators := make(map[common.DispatcherID]*heartbeatpb.ScheduleDispatcherRequest)
+	for _, op := range response.Operators {
+		operators[common.NewDispatcherIDFromPB(op.Config.DispatcherID)] = op
+	}
+	currentOp, ok := operators[currentDispatcherID]
+	require.True(t, ok)
+	require.Equal(t, uint64(2), currentOp.MaintainerEpoch)
+	require.Equal(t, heartbeatpb.ScheduleAction_Create, currentOp.ScheduleAction)
+	require.NotContains(t, operators, oldCreateDispatcherID)
+	staleRemoveOp, ok := operators[staleRemoveDispatcherID]
+	require.True(t, ok)
+	require.Equal(t, uint64(1), staleRemoveOp.MaintainerEpoch)
+	require.Equal(t, heartbeatpb.ScheduleAction_Remove, staleRemoveOp.ScheduleAction)
+	require.Equal(t, heartbeatpb.OperatorType_O_Move, staleRemoveOp.OperatorType)
 }
 
 func TestHandleCloseRequestRejectsStaleMaintainerEpoch(t *testing.T) {
@@ -598,6 +623,7 @@ func newBootstrapResponseTestScheduleRequest(
 			Mode:         common.DefaultMode,
 		},
 		ScheduleAction:  heartbeatpb.ScheduleAction_Create,
+		OperatorType:    heartbeatpb.OperatorType_O_Add,
 		MaintainerEpoch: maintainerEpoch,
 	}
 }
