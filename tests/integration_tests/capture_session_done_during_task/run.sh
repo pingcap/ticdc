@@ -57,7 +57,7 @@ function run() {
 	# ensure server exit
 	ensure 30 "! ps -p $cdc_pid"
 	check_logs_contains $WORK_DIR "local fence triggered"
-	check_logs_contains $WORK_DIR "etcd session done"
+	check_logs_contains $WORK_DIR "etcd lease expired"
 	check_logs_contains $WORK_DIR "server closed"
 	echo "cdc server already exit"
 
