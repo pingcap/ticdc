@@ -10,9 +10,29 @@ SINK_TYPE=$1
 
 DB_NAME="capture_local_fence_on_session_done"
 TABLE_NAME="t"
-CAPTURE1_ADDR="127.0.0.1:8300"
-CAPTURE2_ADDR="127.0.0.1:8301"
+CAPTURE1_LISTEN_ADDR="127.0.0.1:8300"
+CAPTURE2_LISTEN_ADDR="127.0.0.1:8301"
 HANG_FAILPOINT="github.com/pingcap/ticdc/pkg/sink/mysql/MySQLSinkHangLongTime"
+
+function get_capture_addr_by_port() {
+	local api_addr=$1
+	local port=$2
+	local suffix=":$port"
+
+	for ((i = 0; i < 30; i++)); do
+		local addr
+		addr=$(curl -s "http://${api_addr}/api/v2/captures" |
+			jq -r --arg suffix "$suffix" '.items[] | select(.address | endswith($suffix)) | .address' | head -n1)
+		if [ -n "$addr" ] && [ "$addr" != "null" ]; then
+			echo "$addr"
+			return 0
+		fi
+		sleep 2
+	done
+
+	echo "capture with port $port not found" >&2
+	return 1
+}
 
 function get_capture_id_by_addr() {
 	local api_addr=$1
@@ -96,10 +116,11 @@ function run() {
 	start_tidb_cluster --workdir $WORK_DIR
 
 	pd_addr="http://$UP_PD_HOST_1:$UP_PD_PORT_1"
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --pd $pd_addr --logsuffix 1 --addr "$CAPTURE1_ADDR"
+	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --pd $pd_addr --logsuffix 1 --addr "$CAPTURE1_LISTEN_ADDR"
 	export GO_FAILPOINTS="${HANG_FAILPOINT}=return(true)"
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --pd $pd_addr --logsuffix 2 --addr "$CAPTURE2_ADDR"
+	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --pd $pd_addr --logsuffix 2 --addr "$CAPTURE2_LISTEN_ADDR"
 	export GO_FAILPOINTS=''
+	capture2_addr=$(get_capture_addr_by_port "$CAPTURE1_LISTEN_ADDR" "${CAPTURE2_LISTEN_ADDR#*:}")
 
 	SINK_URI="mysql://normal:123456@127.0.0.1:3306/?max-txn-row=1&worker-count=1"
 
@@ -112,15 +133,15 @@ function run() {
 	changefeed_id=$(cdc_cli_changefeed create --pd=$pd_addr --start-ts=$start_ts --sink-uri="$SINK_URI" | grep '^ID:' | head -n1 | awk '{print $2}')
 	table_id=$(get_table_id "$DB_NAME" "$TABLE_NAME")
 
-	move_table_with_retry "$CAPTURE2_ADDR" $table_id "$changefeed_id" 10
-	wait_for_table_on_addr "$CAPTURE1_ADDR" "$changefeed_id" "$table_id" "$CAPTURE2_ADDR"
+	move_table_with_retry "$capture2_addr" $table_id "$changefeed_id" 10
+	wait_for_table_on_addr "$CAPTURE1_LISTEN_ADDR" "$changefeed_id" "$table_id" "$capture2_addr"
 
-	capture2_id=$(get_capture_id_by_addr "$CAPTURE1_ADDR" "$CAPTURE2_ADDR")
+	capture2_id=$(get_capture_id_by_addr "$CAPTURE1_LISTEN_ADDR" "$capture2_addr")
 	if [ -z "$capture2_id" ] || [ "$capture2_id" == "null" ]; then
-		echo "failed to get capture id for $CAPTURE2_ADDR" >&2
+		echo "failed to get capture id for $capture2_addr" >&2
 		exit 1
 	fi
-	cdc2_pid=$(get_cdc_pid "127.0.0.1" "8301")
+	cdc2_pid=$(get_cdc_pid "${CAPTURE2_LISTEN_ADDR%:*}" "${CAPTURE2_LISTEN_ADDR#*:}")
 
 	run_sql "INSERT INTO ${DB_NAME}.${TABLE_NAME} VALUES (1, 10), (2, 20), (3, 30), (4, 40);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	ensure 30 "grep -Eq 'inject MySQLSinkHangLongTime' '$WORK_DIR/cdc2.log'"
