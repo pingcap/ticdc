@@ -547,7 +547,7 @@ func (s *failOnIndexStorage) WriteFile(ctx context.Context, name string, data []
 	if strings.HasSuffix(name, ".index") {
 		return errors.New("index write failed")
 	}
-	return s.ExternalStorage.WriteFile(ctx, name, data)
+	return s.Storage.WriteFile(ctx, name, data)
 }
 
 func TestWriterIndexWriteError(t *testing.T) {
@@ -556,7 +556,7 @@ func TestWriterIndexWriteError(t *testing.T) {
 	uri := fmt.Sprintf("file:///%s?flush-interval=2s", parentDir)
 	baseStorage, err := util.GetExternalStorageWithDefaultTimeout(ctx, uri)
 	require.NoError(t, err)
-	storage := &failOnIndexStorage{ExternalStorage: baseStorage}
+	storage := &failOnIndexStorage{Storage: baseStorage}
 
 	sinkURI, err := url.Parse(uri)
 	require.NoError(t, err)
