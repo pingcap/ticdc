@@ -178,9 +178,8 @@ func wrapTLSListener(inner net.Listener, credentials *security.Credential) (net.
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
-	// Prefer HTTP/1.1 for ordinary HTTP clients because the HTTP listener behind
-	// cmux serves HTTP/1.x. Keep h2 advertised because grpc-go v1.67+ requires
-	// ALPN to select h2 for TLS gRPC connections.
+	// Prefer HTTP/1.1 for non-gRPC traffic. gRPC clients will still negotiate
+	// "h2" because they only advertise "h2" in ALPN.
 	config.NextProtos = []string{"http/1.1", "h2"}
 	return tls.NewListener(inner, config), nil
 }
