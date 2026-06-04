@@ -24,6 +24,7 @@ import (
 
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
+	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	cerrors "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/stretchr/testify/require"
@@ -213,6 +214,29 @@ func (unsupportedGCStatesClient) DeleteGCBarrier(ctx context.Context, barrierID 
 	return nil, status.Error(codes.Unimplemented, "unknown method DeleteGCBarrier")
 }
 
-func (unsupportedGCStatesClient) GetGCState(ctx context.Context) (pdgc.GCState, error) {
+func (unsupportedGCStatesClient) GetGCState(ctx context.Context, opts ...pdgc.GCStatesAPIOption) (pdgc.GCState, error) {
 	return pdgc.GCState{}, status.Error(codes.Unimplemented, "unknown method GetGCState")
+}
+
+func (unsupportedGCStatesClient) SetGlobalGCBarrier(
+	ctx context.Context,
+	barrierID string,
+	barrierTS uint64,
+	ttl time.Duration,
+) (*pdgc.GlobalGCBarrierInfo, error) {
+	return nil, status.Error(codes.Unimplemented, "unknown method SetGlobalGCBarrier")
+}
+
+func (unsupportedGCStatesClient) DeleteGlobalGCBarrier(
+	ctx context.Context,
+	barrierID string,
+) (*pdgc.GlobalGCBarrierInfo, error) {
+	return nil, status.Error(codes.Unimplemented, "unknown method DeleteGlobalGCBarrier")
+}
+
+func (unsupportedGCStatesClient) GetAllKeyspacesGCStates(
+	ctx context.Context,
+	opts ...pdgc.GCStatesAPIOption,
+) (pdgc.ClusterGCStates, error) {
+	return pdgc.ClusterGCStates{}, status.Error(codes.Unimplemented, "unknown method GetAllKeyspacesGCStates")
 }
