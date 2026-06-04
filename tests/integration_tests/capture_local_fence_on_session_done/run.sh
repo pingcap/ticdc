@@ -10,8 +10,11 @@ SINK_TYPE=$1
 
 DB_NAME="capture_local_fence_on_session_done"
 TABLE_NAME="t"
-CAPTURE1_LISTEN_ADDR="127.0.0.1:8300"
-CAPTURE2_LISTEN_ADDR="127.0.0.1:8301"
+CAPTURE1_PORT=${CDC_PORT:-8300}
+CAPTURE2_PORT=${CAPTURE2_PORT:-8301}
+CAPTURE1_LISTEN_ADDR="127.0.0.1:${CAPTURE1_PORT}"
+CAPTURE2_LISTEN_ADDR="127.0.0.1:${CAPTURE2_PORT}"
+export CDC_PORT=$CAPTURE1_PORT
 HANG_FAILPOINT="github.com/pingcap/ticdc/pkg/sink/mysql/MySQLSinkHangLongTime"
 
 function get_capture_addr_by_port() {
