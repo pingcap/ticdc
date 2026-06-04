@@ -562,23 +562,27 @@ func retrieveOperatorsForBootstrapResponse(
 	manager *dispatchermanager.DispatcherManager,
 	response *heartbeatpb.MaintainerBootstrapResponse,
 ) {
+	reportedDispatchers := make(map[reportedDispatcherKey]struct{}, len(response.Spans))
+	for _, span := range response.Spans {
+		reportedDispatchers[reportedDispatcherKey{
+			id:   common.NewDispatcherIDFromPB(span.ID),
+			mode: span.Mode,
+		}] = struct{}{}
+	}
+
 	manager.GetCurrentOperatorMap().Range(func(_, value any) bool {
 		req := value.(dispatchermanager.SchedulerDispatcherRequest)
 		requestAllowed := manager.IsMaintainerRequestAllowed(req.From, req.MaintainerEpoch)
 		dispatcherID := common.NewDispatcherIDFromPB(req.Config.DispatcherID)
-		dispatcherExistsKnown := false
-		dispatcherExists := false
-		if common.IsRedoMode(req.Config.Mode) {
-			if manager.IsRedoReady() {
-				dispatcherExistsKnown = true
-				_, dispatcherExists = manager.GetRedoDispatcherMap().Get(dispatcherID)
-			}
-		} else {
-			dispatcherExistsKnown = true
-			_, dispatcherExists = manager.GetDispatcherMap().Get(dispatcherID)
-		}
+		dispatcherExistsKnown := !common.IsRedoMode(req.Config.Mode) || manager.IsRedoReady()
+		_, dispatcherReported := reportedDispatchers[reportedDispatcherKey{
+			id:   dispatcherID,
+			mode: req.Config.Mode,
+		}]
 		if !requestAllowed {
-			if req.ScheduleAction != heartbeatpb.ScheduleAction_Remove || !dispatcherExists {
+			// Restore stale remove only when the same bootstrap snapshot reports the dispatcher.
+			// This keeps the working span and cleanup intent consistent even if live maps change during cleanup.
+			if req.ScheduleAction != heartbeatpb.ScheduleAction_Remove || !dispatcherReported {
 				return true
 			}
 			log.Info("include stale remove operator in bootstrap response",
@@ -592,7 +596,7 @@ func retrieveOperatorsForBootstrapResponse(
 		// Log error if dispatcher not found and action is not create.
 		// It's possible that the dispatcher is not found when the action is create
 		// because the dispatcher may be created after the operator is stored.
-		if dispatcherExistsKnown && !dispatcherExists && req.ScheduleAction != heartbeatpb.ScheduleAction_Create {
+		if dispatcherExistsKnown && !dispatcherReported && req.ScheduleAction != heartbeatpb.ScheduleAction_Create {
 			if common.IsRedoMode(req.Config.Mode) {
 				log.Error("Redo dispatcher not found, this should not happen",
 					zap.String("changefeed", changefeedID.String()),
@@ -612,4 +616,9 @@ func retrieveOperatorsForBootstrapResponse(
 		})
 		return true
 	})
+}
+
+type reportedDispatcherKey struct {
+	id   common.DispatcherID
+	mode int64
 }

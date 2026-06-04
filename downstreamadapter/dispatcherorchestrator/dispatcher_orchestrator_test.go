@@ -534,6 +534,68 @@ func TestBootstrapResponseRestoresCurrentOperatorsAndStaleRemoves(t *testing.T) 
 	require.Equal(t, heartbeatpb.OperatorType_O_Move, staleRemoveOp.OperatorType)
 }
 
+func TestBootstrapResponseUsesSpanSnapshotForStaleRemove(t *testing.T) {
+	appcontext.SetService(appcontext.DefaultPDClock, pdutil.NewClock4Test())
+	appcontext.SetService(appcontext.MessageCenter, messaging.NewMockMessageCenter())
+	heartbeatCollector := dispatchermanager.NewHeartBeatCollector(node.ID("receiver"))
+	heartbeatCollector.Run(context.Background())
+	appcontext.SetService(appcontext.HeartbeatCollector, heartbeatCollector)
+	t.Cleanup(heartbeatCollector.Close)
+
+	cfID := common.NewChangeFeedIDWithName("cf", "default")
+	manager, err := dispatchermanager.NewDispatcherManager(
+		0,
+		cfID,
+		newBootstrapResponseTestChangefeedConfig(cfID),
+		nil,
+		nil,
+		100,
+		node.ID("current-maintainer"),
+		2,
+		false,
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		manager.TryClose(false)
+	})
+
+	reportedRemoveDispatcherID := common.NewDispatcherID()
+	reportedRemoveReq := newBootstrapResponseTestScheduleRequest(cfID, reportedRemoveDispatcherID, 1)
+	reportedRemoveReq.ScheduleAction = heartbeatpb.ScheduleAction_Remove
+	reportedRemoveReq.OperatorType = heartbeatpb.OperatorType_O_Move
+	manager.GetCurrentOperatorMap().Store(
+		reportedRemoveDispatcherID,
+		dispatchermanager.NewSchedulerDispatcherRequest(node.ID("old-maintainer"), reportedRemoveReq),
+	)
+
+	missingRemoveDispatcherID := common.NewDispatcherID()
+	missingRemoveReq := newBootstrapResponseTestScheduleRequest(cfID, missingRemoveDispatcherID, 1)
+	missingRemoveReq.ScheduleAction = heartbeatpb.ScheduleAction_Remove
+	missingRemoveReq.OperatorType = heartbeatpb.OperatorType_O_Split
+	manager.GetCurrentOperatorMap().Store(
+		missingRemoveDispatcherID,
+		dispatchermanager.NewSchedulerDispatcherRequest(node.ID("old-maintainer"), missingRemoveReq),
+	)
+
+	response := &heartbeatpb.MaintainerBootstrapResponse{
+		ChangefeedID: cfID.ToPB(),
+		Spans: []*heartbeatpb.BootstrapTableSpan{
+			{
+				ID:              reportedRemoveDispatcherID.ToPB(),
+				Span:            &heartbeatpb.TableSpan{TableID: 1},
+				ComponentStatus: heartbeatpb.ComponentState_Working,
+				Mode:            common.DefaultMode,
+			},
+		},
+	}
+	retrieveOperatorsForBootstrapResponse(cfID.ToPB(), manager, response)
+
+	require.Len(t, response.Operators, 1)
+	require.Equal(t, reportedRemoveDispatcherID, common.NewDispatcherIDFromPB(response.Operators[0].Config.DispatcherID))
+	require.Equal(t, heartbeatpb.ScheduleAction_Remove, response.Operators[0].ScheduleAction)
+	require.Equal(t, heartbeatpb.OperatorType_O_Move, response.Operators[0].OperatorType)
+}
+
 func TestHandleCloseRequestRejectsStaleMaintainerEpoch(t *testing.T) {
 	mc := messaging.NewMockMessageCenter()
 	appcontext.SetService(appcontext.DefaultPDClock, pdutil.NewClock4Test())
