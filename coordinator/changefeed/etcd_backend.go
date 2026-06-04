@@ -207,7 +207,6 @@ func (b *EtcdBackend) BumpChangefeedEpoch(
 		bumpEpochRetryDelay = 25 * time.Millisecond
 	)
 	infoKey := etcd.GetEtcdKeyChangeFeedInfo(b.etcdClient.GetClusterID(), id.DisplayName)
-	jobKey := etcd.GetEtcdKeyJob(b.etcdClient.GetClusterID(), id.DisplayName)
 
 	for range bumpEpochMaxRetries {
 		infoResp, err := b.etcdClient.GetEtcdClient().Get(ctx, infoKey)
@@ -216,10 +215,6 @@ func (b *EtcdBackend) BumpChangefeedEpoch(
 		}
 		if len(infoResp.Kvs) == 0 {
 			return nil, errors.Trace(cerror.ErrChangeFeedNotExists.GenWithStackByArgs(id.Name()))
-		}
-		status, statusModRevision, err := b.etcdClient.GetChangeFeedStatus(ctx, id)
-		if err != nil {
-			return nil, errors.Trace(err)
 		}
 
 		info := &config.ChangeFeedInfo{}
@@ -248,10 +243,37 @@ func (b *EtcdBackend) BumpChangefeedEpoch(
 			return nil, errors.Trace(err)
 		}
 
-		if options.UpdateStatus {
-			status.CheckpointTs = options.CheckpointTs
-			status.Progress = options.Progress
+		if !options.UpdateStatus {
+			putResp, err := b.etcdClient.GetEtcdClient().Txn(ctx,
+				[]clientv3.Cmp{
+					clientv3.Compare(clientv3.ModRevision(infoKey), "=", infoResp.Kvs[0].ModRevision),
+				},
+				[]clientv3.Op{
+					clientv3.OpPut(infoKey, infoValue),
+				},
+				[]clientv3.Op{})
+			if err != nil {
+				return nil, errors.Trace(err)
+			}
+			if putResp.Succeeded {
+				return info, nil
+			}
+
+			select {
+			case <-ctx.Done():
+				return nil, errors.Trace(ctx.Err())
+			case <-time.After(bumpEpochRetryDelay):
+			}
+			continue
 		}
+
+		jobKey := etcd.GetEtcdKeyJob(b.etcdClient.GetClusterID(), id.DisplayName)
+		status, statusModRevision, err := b.etcdClient.GetChangeFeedStatus(ctx, id)
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
+		status.CheckpointTs = options.CheckpointTs
+		status.Progress = options.Progress
 		statusValue, err := status.Marshal()
 		if err != nil {
 			return nil, errors.Trace(err)

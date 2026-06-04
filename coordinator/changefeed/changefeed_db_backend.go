@@ -41,8 +41,8 @@ type Backend interface {
 	CreateChangefeed(ctx context.Context, info *config.ChangeFeedInfo) error
 	// UpdateChangefeed updates changefeed info  to db
 	UpdateChangefeed(ctx context.Context, info *config.ChangeFeedInfo, checkpointTs uint64, progress config.Progress) error
-	// BumpChangefeedEpoch persists a strictly newer epoch using the latest
-	// stored ChangeFeedInfo and preserves stored status unless UpdateStatus is set.
+	// BumpChangefeedEpoch persists a strictly newer epoch using the latest stored
+	// ChangeFeedInfo. It only reads and updates stored status when UpdateStatus is set.
 	BumpChangefeedEpoch(ctx context.Context, id common.ChangeFeedID, candidateEpoch uint64, options EpochBumpOptions) (*config.ChangeFeedInfo, error)
 	// PauseChangefeed persists the pause status to db for a changefeed
 	PauseChangefeed(ctx context.Context, id common.ChangeFeedID) error
