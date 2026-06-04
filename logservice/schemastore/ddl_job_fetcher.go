@@ -25,7 +25,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/utils/heap"
-	"github.com/pingcap/tidb/pkg/ddl"
 	"github.com/pingcap/tidb/pkg/kv"
 	"github.com/pingcap/tidb/pkg/meta"
 	"github.com/pingcap/tidb/pkg/meta/model"
@@ -243,16 +242,6 @@ func findColumnByName(cols []*model.ColumnInfo, name string) (*model.ColumnInfo,
 		errors.Errorf("can't find column %s", name))
 }
 
-<<<<<<< HEAD
-const (
-	// JobTableID is the id of `tidb_ddl_job`.
-	JobTableID = ddl.JobTableID
-	// JobHistoryID is the id of `tidb_ddl_history`
-	JobHistoryID = ddl.HistoryTableID
-)
-
-=======
->>>>>>> 895bb89bc (logservice,event: stop capturing tidb_ddl_history (#4766))
 func getAllDDLSpan(keyspaceID uint32) ([]heartbeatpb.TableSpan, error) {
 	// TiDB v8.3+ emits create-table jobs through tidb_ddl_job again, so the
 	// schema store only needs to subscribe to the job table.

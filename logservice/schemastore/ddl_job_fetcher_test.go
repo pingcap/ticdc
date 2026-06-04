@@ -123,5 +123,5 @@ func TestGetAllDDLSpan(t *testing.T) {
 	spans, err := getAllDDLSpan(keyspaceID)
 	require.NoError(t, err)
 	require.Len(t, spans, 1)
-	require.Equal(t, common.JobTableID, spans[0].TableID)
+	require.Equal(t, int64(common.JobTableID), spans[0].TableID)
 }
