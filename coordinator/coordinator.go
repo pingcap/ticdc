@@ -272,6 +272,7 @@ func (c *coordinator) handleStateChange(
 
 	if event.state == config.StateWarning {
 		warningState := config.StateWarning
+		currentMaintainerEpoch := currentInfo.Epoch
 		if err := c.controller.updateChangefeedEpoch(ctx, event.changefeedID, changefeed.EpochBumpOptions{
 			State:       &warningState,
 			Error:       event.err,
@@ -279,7 +280,7 @@ func (c *coordinator) handleStateChange(
 		}); err != nil {
 			return errors.Trace(err)
 		}
-		c.controller.operatorController.StopChangefeed(ctx, event.changefeedID, false)
+		c.controller.operatorController.StopChangefeedWithMaintainerEpoch(ctx, event.changefeedID, false, currentMaintainerEpoch)
 		c.controller.moveChangefeedToSchedulingQueue(event.changefeedID, false, false)
 		return nil
 	}

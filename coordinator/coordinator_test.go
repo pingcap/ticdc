@@ -985,6 +985,10 @@ func TestHandleStateChangeBumpsEpochForWarningState(t *testing.T) {
 	require.Equal(t, config.StateWarning, cf.GetInfo().State)
 	require.Equal(t, newError, cf.GetInfo().Error)
 	require.Greater(t, cf.GetInfo().Epoch, oldEpoch)
+	op := controller.operatorController.GetOperator(cfID)
+	require.NotNil(t, op)
+	req := op.Schedule().Message[0].(*heartbeatpb.RemoveMaintainerRequest)
+	require.Equal(t, oldEpoch, req.MaintainerEpoch)
 }
 
 func TestHandleStateChangeSkipsNilChangefeedInfo(t *testing.T) {

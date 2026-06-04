@@ -172,15 +172,37 @@ func requiresNewMaintainerOwnership(
 // if remove is true, it will remove the changefeed from the chagnefeed DB
 // if remove is false, it only marks as the changefeed stooped in changefeed DB, so we will not schedule the changefeed again
 func (oc *Controller) StopChangefeed(_ context.Context, cfID common.ChangeFeedID, removed bool) operator.Operator[common.ChangeFeedID, *heartbeatpb.MaintainerStatus] {
+	return oc.stopChangefeed(cfID, removed, 0, false)
+}
+
+// StopChangefeedWithMaintainerEpoch stops the current maintainer with the epoch
+// it already owns, even if the in-memory changefeed has advanced to a newer
+// ownership epoch.
+func (oc *Controller) StopChangefeedWithMaintainerEpoch(
+	_ context.Context,
+	cfID common.ChangeFeedID,
+	removed bool,
+	maintainerEpoch uint64,
+) operator.Operator[common.ChangeFeedID, *heartbeatpb.MaintainerStatus] {
+	return oc.stopChangefeed(cfID, removed, maintainerEpoch, true)
+}
+
+func (oc *Controller) stopChangefeed(
+	cfID common.ChangeFeedID,
+	removed bool,
+	maintainerEpoch uint64,
+	hasMaintainerEpoch bool,
+) operator.Operator[common.ChangeFeedID, *heartbeatpb.MaintainerStatus] {
 	oc.mu.Lock()
 	defer oc.mu.Unlock()
 
 	changefeed := oc.changefeedDB.GetByID(cfID)
 	keyspaceID := common.DefaultKeyspaceID
-	var maintainerEpoch uint64
 	if changefeed != nil {
 		keyspaceID = changefeed.GetKeyspaceID()
-		maintainerEpoch = changefeed.GetInfo().Epoch
+		if !hasMaintainerEpoch {
+			maintainerEpoch = changefeed.GetInfo().Epoch
+		}
 	}
 
 	scheduledNode := oc.changefeedDB.StopByChangefeedID(cfID, removed)

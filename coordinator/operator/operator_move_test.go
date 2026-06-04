@@ -69,7 +69,14 @@ func TestMoveMaintainerOperator_OnNodeRemove(t *testing.T) {
 }
 
 func TestMoveMaintainerOperator_OnTaskRemoved(t *testing.T) {
-	op := NewMoveMaintainerOperator(nil, &changefeed.Changefeed{}, "n1", "n2")
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		Config:       config.GetDefaultReplicaConfig(),
+		SinkURI:      "mysql://127.0.0.1:3306",
+	},
+		1, true)
+	op := NewMoveMaintainerOperator(nil, cf, "n1", "n2")
 	op.OnTaskRemoved()
 	require.True(t, op.canceled)
 	require.Nil(t, op.Schedule())

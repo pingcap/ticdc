@@ -33,9 +33,10 @@ type MoveMaintainerOperator struct {
 	origin     node.ID
 	dest       node.ID
 
-	originNodeStopped bool
-	finished          bool
-	bind              bool
+	originMaintainerEpoch uint64
+	originNodeStopped     bool
+	finished              bool
+	bind                  bool
 
 	canceled bool
 
@@ -50,6 +51,9 @@ func NewMoveMaintainerOperator(db *changefeed.ChangefeedDB, changefeed *changefe
 		origin:     origin,
 		dest:       dest,
 		db:         db,
+		// The move first removes the origin maintainer and then adds the
+		// destination. The remove must use the epoch the origin already owns.
+		originMaintainerEpoch: changefeed.GetInfo().Epoch,
 	}
 }
 
@@ -91,7 +95,14 @@ func (m *MoveMaintainerOperator) Schedule() *messaging.TargetMessage {
 		}
 		return m.changefeed.NewAddMaintainerMessage(m.dest)
 	}
-	return m.changefeed.NewRemoveMaintainerMessage(m.origin, false, false)
+	return changefeed.RemoveMaintainerMessage(
+		m.changefeed.GetKeyspaceID(),
+		m.changefeed.ID,
+		m.origin,
+		false,
+		false,
+		m.originMaintainerEpoch,
+	)
 }
 
 func (m *MoveMaintainerOperator) OnNodeRemove(n node.ID) {

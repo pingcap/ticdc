@@ -86,6 +86,26 @@ func TestController_StopChangefeed(t *testing.T) {
 	require.Len(t, oc.operators, 1)
 }
 
+func TestController_StopChangefeedWithMaintainerEpoch(t *testing.T) {
+	changefeedDB := changefeed.NewChangefeedDB(1216)
+	ctrl := gomock.NewController(t)
+	backend := mock_changefeed.NewMockBackend(ctrl)
+	oc, self, _ := newOperatorControllerForTest(t, changefeedDB, backend, nil)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		Config:       config.GetDefaultReplicaConfig(),
+		SinkURI:      "mysql://127.0.0.1:3306",
+		Epoch:        20,
+	},
+		1, true)
+	changefeedDB.AddReplicatingMaintainer(cf, self.ID)
+
+	op := oc.StopChangefeedWithMaintainerEpoch(context.Background(), cfID, false, 10)
+	req := op.Schedule().Message[0].(*heartbeatpb.RemoveMaintainerRequest)
+	require.Equal(t, uint64(10), req.MaintainerEpoch)
+}
+
 func TestController_AddOperator(t *testing.T) {
 	changefeedDB := changefeed.NewChangefeedDB(1216)
 	ctrl := gomock.NewController(t)
@@ -227,8 +247,19 @@ func TestController_AddOperatorBumpsAndPersistsOwnershipEpoch(t *testing.T) {
 				}).
 				Times(1)
 
-			require.True(t, oc.AddOperator(tc.newOp(changefeedDB, cf, self.ID, target.ID)))
+			op := tc.newOp(changefeedDB, cf, self.ID, target.ID)
+			require.True(t, oc.AddOperator(op))
 			require.Equal(t, expectedEpoch, cf.GetInfo().Epoch)
+			if move, ok := op.(*MoveMaintainerOperator); ok {
+				removeReq := move.Schedule().Message[0].(*heartbeatpb.RemoveMaintainerRequest)
+				require.Equal(t, oldEpoch, removeReq.MaintainerEpoch)
+
+				move.Check(self.ID, &heartbeatpb.MaintainerStatus{State: heartbeatpb.ComponentState_Stopped})
+				addReq := move.Schedule().Message[0].(*heartbeatpb.AddMaintainerRequest)
+				info := &config.ChangeFeedInfo{}
+				require.NoError(t, json.Unmarshal(addReq.Config, info))
+				require.Equal(t, expectedEpoch, info.Epoch)
+			}
 
 			req := cf.NewAddMaintainerMessage(target.ID).Message[0].(*heartbeatpb.AddMaintainerRequest)
 			info := &config.ChangeFeedInfo{}
