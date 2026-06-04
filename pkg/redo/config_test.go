@@ -20,7 +20,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/pingcap/tidb/pkg/objstore"
-
 	"github.com/stretchr/testify/require"
 )
 
