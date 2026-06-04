@@ -12,7 +12,6 @@
 // limitations under the License.
 
 //go:build legacy_safepoint
-// +build legacy_safepoint
 
 package kerneltype
 

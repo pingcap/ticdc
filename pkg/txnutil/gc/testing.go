@@ -15,7 +15,7 @@ package gc
 
 import (
 	"context"
-	stderrors "errors"
+	"errors"
 	"time"
 
 	"github.com/pingcap/kvproto/pkg/metapb"
@@ -96,7 +96,7 @@ func (m *MockPDClient) GetMinServiceSafePointV2(ctx context.Context, keyspaceID 
 	if legacyCli, ok := m.Client.(legacySafePointClient); ok {
 		return legacyCli.GetMinServiceSafePointV2(ctx, keyspaceID)
 	}
-	return 0, stderrors.New("GetMinServiceSafePointV2Func is not set")
+	return 0, errors.New("GetMinServiceSafePointV2Func is not set")
 }
 
 // SetServiceSafePointV2 implements legacySafePointClient.SetServiceSafePointV2.
@@ -109,7 +109,7 @@ func (m *MockPDClient) SetServiceSafePointV2(
 	if legacyCli, ok := m.Client.(legacySafePointClient); ok {
 		return legacyCli.SetServiceSafePointV2(ctx, keyspaceID, serviceID, ttl, safePoint)
 	}
-	return 0, stderrors.New("SetServiceSafePointV2Func is not set")
+	return 0, errors.New("SetServiceSafePointV2Func is not set")
 }
 
 // DeleteServiceSafePointV2 implements legacySafePointClient.DeleteServiceSafePointV2.
@@ -120,5 +120,5 @@ func (m *MockPDClient) DeleteServiceSafePointV2(ctx context.Context, keyspaceID 
 	if legacyCli, ok := m.Client.(legacySafePointClient); ok {
 		return legacyCli.DeleteServiceSafePointV2(ctx, keyspaceID, serviceID)
 	}
-	return 0, stderrors.New("DeleteServiceSafePointV2Func is not set")
+	return 0, errors.New("DeleteServiceSafePointV2Func is not set")
 }
