@@ -97,8 +97,26 @@ func (c *blockingGCStatesClient) DeleteGCBarrier(ctx context.Context, barrierID 
 	}
 }
 
-func (c *blockingGCStatesClient) GetGCState(ctx context.Context) (pdgc.GCState, error) {
+func (c *blockingGCStatesClient) GetGCState(ctx context.Context, opts ...pdgc.GCStatesAPIOption) (pdgc.GCState, error) {
 	return pdgc.GCState{}, nil
+}
+
+func (c *blockingGCStatesClient) SetGlobalGCBarrier(
+	ctx context.Context, barrierID string, barrierTS uint64, ttl time.Duration,
+) (*pdgc.GlobalGCBarrierInfo, error) {
+	return pdgc.NewGlobalGCBarrierInfo(barrierID, barrierTS, ttl, time.Now()), nil
+}
+
+func (c *blockingGCStatesClient) DeleteGlobalGCBarrier(
+	ctx context.Context, barrierID string,
+) (*pdgc.GlobalGCBarrierInfo, error) {
+	return nil, nil
+}
+
+func (c *blockingGCStatesClient) GetAllKeyspacesGCStates(
+	ctx context.Context, opts ...pdgc.GCStatesAPIOption,
+) (pdgc.ClusterGCStates, error) {
+	return pdgc.NewClusterGCStatesWithoutGlobalGCBarriers(map[uint32]pdgc.GCState{}), nil
 }
 
 func TestTryClearEnsureGCSafepointDoesNotBlockChangefeedChanges(t *testing.T) {

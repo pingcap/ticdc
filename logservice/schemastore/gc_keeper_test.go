@@ -217,7 +217,7 @@ func (m *mockSchemaStoreGCStatesClient) DeleteGCBarrier(
 	return pdgc.NewGCBarrierInfo(barrierID, barrierTS, 0, time.Now()), nil
 }
 
-func (m *mockSchemaStoreGCStatesClient) GetGCState(ctx context.Context) (pdgc.GCState, error) {
+func (m *mockSchemaStoreGCStatesClient) GetGCState(ctx context.Context, opts ...pdgc.GCStatesAPIOption) (pdgc.GCState, error) {
 	if err := ctx.Err(); err != nil {
 		return pdgc.GCState{}, err
 	}
@@ -225,8 +225,35 @@ func (m *mockSchemaStoreGCStatesClient) GetGCState(ctx context.Context) (pdgc.GC
 	for id, ts := range m.state.gcBarriers {
 		gcBarriers = append(gcBarriers, pdgc.NewGCBarrierInfo(id, ts, 0, time.Now()))
 	}
-	return pdgc.GCState{
-		TxnSafePoint: m.state.txnSafePoint,
-		GCBarriers:   gcBarriers,
-	}, nil
+	return pdgc.NewGCStateWithGCBarriers(0, m.state.txnSafePoint, 0, gcBarriers), nil
+}
+
+func (m *mockSchemaStoreGCStatesClient) SetGlobalGCBarrier(
+	ctx context.Context, barrierID string, barrierTS uint64, ttl time.Duration,
+) (*pdgc.GlobalGCBarrierInfo, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return pdgc.NewGlobalGCBarrierInfo(barrierID, barrierTS, ttl, time.Now()), nil
+}
+
+func (m *mockSchemaStoreGCStatesClient) DeleteGlobalGCBarrier(
+	ctx context.Context, barrierID string,
+) (*pdgc.GlobalGCBarrierInfo, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return nil, nil
+}
+
+func (m *mockSchemaStoreGCStatesClient) GetAllKeyspacesGCStates(
+	ctx context.Context, opts ...pdgc.GCStatesAPIOption,
+) (pdgc.ClusterGCStates, error) {
+	gcState, err := m.GetGCState(ctx, opts...)
+	if err != nil {
+		return pdgc.ClusterGCStates{}, err
+	}
+	return pdgc.NewClusterGCStatesWithoutGlobalGCBarriers(map[uint32]pdgc.GCState{
+		0: gcState,
+	}), nil
 }
