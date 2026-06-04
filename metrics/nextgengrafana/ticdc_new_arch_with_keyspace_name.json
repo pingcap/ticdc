@@ -2471,6 +2471,180 @@
             }
           ],
           "type": "table"
+        },
+        {
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "Recent user initiated changefeed mutations retained in memory on the coordinator for oncall investigation. Use TiCDC logs for durable history beyond the latest 100 operations.",
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "align": null,
+                "filterable": false
+              },
+              "links": [],
+              "mappings": [],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": 80
+                  }
+                ]
+              }
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "keyspace_name"
+                },
+                "properties": [
+                  {
+                    "id": "custom.width",
+                    "value": 120
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "changefeed"
+                },
+                "properties": [
+                  {
+                    "id": "custom.width",
+                    "value": 180
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "operation_time"
+                },
+                "properties": [
+                  {
+                    "id": "custom.width",
+                    "value": 180
+                  },
+                  {
+                    "id": "unit",
+                    "value": "dateTimeAsIso"
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "operation"
+                },
+                "properties": [
+                  {
+                    "id": "custom.width",
+                    "value": 100
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "result"
+                },
+                "properties": [
+                  {
+                    "id": "custom.width",
+                    "value": 90
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "username"
+                },
+                "properties": [
+                  {
+                    "id": "custom.width",
+                    "value": 120
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "details"
+                },
+                "properties": [
+                  {
+                    "id": "custom.width",
+                    "value": 320
+                  }
+                ]
+              }
+            ]
+          },
+          "gridPos": {
+            "h": 9,
+            "w": 24,
+            "x": 0,
+            "y": 34
+          },
+          "id": 62042,
+          "options": {
+            "showHeader": true,
+            "sortBy": [
+              {
+                "displayName": "operation_time",
+                "desc": true
+              }
+            ]
+          },
+          "pluginVersion": "7.5.17",
+          "targets": [
+            {
+              "expr": "max by (keyspace_name, changefeed, operation, result, username, details, error, event_id) (ticdc_owner_changefeed_operation_time{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"})",
+              "format": "time_series",
+              "instant": true,
+              "refId": "A"
+            }
+          ],
+          "title": "Changefeed Operation History",
+          "transformations": [
+            {
+              "id": "labelsToFields",
+              "options": {}
+            },
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": {
+                  "Metric": true,
+                  "Time": true,
+                  "__name__": true,
+                  "event_id": true
+                },
+                "indexByName": {
+                  "keyspace_name": 0,
+                  "changefeed": 1,
+                  "Value": 2,
+                  "operation": 3,
+                  "result": 4,
+                  "username": 5,
+                  "details": 6,
+                  "error": 7
+                },
+                "renameByName": {
+                  "Value": "operation_time"
+                }
+              }
+            }
+          ],
+          "type": "table"
         }
       ],
       "title": "Changefeed",
