@@ -205,12 +205,6 @@ func (d *dispatcherConnState) getCurrentEventServiceID() node.ID {
 	return d.currentEventServiceID
 }
 
-func (d *dispatcherConnState) isCurrentEventService(serverID node.ID) bool {
-	d.RLock()
-	defer d.RUnlock()
-	return d.currentEventServiceID == serverID
-}
-
 func (d *dispatcherConnState) isReceivingDataEvent() bool {
 	d.RLock()
 	defer d.RUnlock()
@@ -308,21 +302,37 @@ func newDispatcherSession(
 
 // Register/reset/remove request entry points.
 
-// registerTo records the in-flight register state, then sends the register
-// request to the target event service.
-func (s *dispatcherSession) registerTo(serverID node.ID) {
+func (s *dispatcherSession) startLocalRegistration() {
 	s.requestMu.Lock()
 	defer s.requestMu.Unlock()
-	if !s.beginRegister(serverID) {
+	if !s.beginRegister(s.localServerID) {
 		return
 	}
+	s.sendRegisterRequest(s.localServerID)
+}
+
+func (s *dispatcherSession) retryCurrentRegistrationIfRemovedFrom(serverID node.ID) bool {
+	s.requestMu.Lock()
+	defer s.requestMu.Unlock()
+	if s.connState.getCurrentEventServiceID() != serverID {
+		return false
+	}
+	log.Info("dispatcher removed in current event service, retry registration",
+		zap.Stringer("changefeedID", s.target.GetChangefeedID()),
+		zap.Stringer("dispatcherID", s.target.GetId()),
+		zap.Stringer("eventServiceID", serverID))
+	if !s.beginRegister(serverID) {
+		return false
+	}
 	s.sendRegisterRequest(serverID)
+	return true
 }
 
 func (s *dispatcherSession) sendRegisterRequest(serverID node.ID) {
-	// `onlyReuse` is used to control the register behavior at logservice side
-	// it should be set to `false` when register to a local event service,
-	// and set to `true` when register to a remote event service.
+	// For local registration, OnlyReuse is set to false which means the target may initialize a new
+	// source if needed.
+	// For remote probing, OnlyReuse is set to true which means the target should
+	// only accept the dispatcher if it can reuse an existing source.
 	onlyReuse := serverID != s.localServerID
 	msg := messaging.NewSingleTargetMessage(
 		serverID,
@@ -343,19 +353,30 @@ func (s *dispatcherSession) beginRegister(serverID node.ID) bool {
 	return s.connState.beginRegisterToRemote(serverID)
 }
 
-// commitReady is used to notify the event service to start sending events.
-func (s *dispatcherSession) commitReady(serverID node.ID) {
-	s.doReset(serverID, s.target.GetCheckpointTs())
+// commitLocalRegistration commits the accepted local registration by sending
+// RESET to the local EventService.
+func (s *dispatcherSession) commitLocalRegistration() {
+	s.doReset(s.localServerID, s.target.GetCheckpointTs())
 }
 
-// reset sends a RESET request to the specified EventService using the current
-// checkpoint ts. It also advances the dispatcher epoch so the EventService can
-// restart the dispatcher from that ts and resend handshake/data events for the
-// new epoch.
-func (s *dispatcherSession) reset(serverID node.ID) {
-	s.doReset(serverID, s.target.GetCheckpointTs())
+func (s *dispatcherSession) resetCurrentEventService() {
+	s.requestMu.Lock()
+	defer s.requestMu.Unlock()
+	if s.connState.isRemoved() {
+		return
+	}
+	serverID := s.connState.getCurrentEventServiceID()
+	if serverID.IsEmpty() {
+		log.Warn("skip reset because current event service is empty",
+			zap.Stringer("changefeedID", s.target.GetChangefeedID()),
+			zap.Stringer("dispatcher", s.target.GetId()))
+		return
+	}
+	s.doResetLocked(serverID, s.target.GetCheckpointTs())
 }
 
+// doReset sends RESET to the target event service and advances the
+// collector epoch for the new stream.
 func (s *dispatcherSession) doReset(serverID node.ID, resetTs uint64) {
 	s.requestMu.Lock()
 	defer s.requestMu.Unlock()
@@ -396,6 +417,9 @@ func (s *dispatcherSession) remove() {
 	}
 }
 
+// removeFromLocked sends REMOVE to the target event service. The request may
+// represent either terminal removal of the dispatcher session or best-effort
+// cleanup of a stale registration on another event service.
 func (s *dispatcherSession) removeFromLocked(serverID node.ID) {
 	log.Info("send remove dispatcher request to event service",
 		zap.Stringer("changefeedID", s.target.GetChangefeedID()),
@@ -459,7 +483,9 @@ func (s *dispatcherSession) handleAcceptedLocalReadyLocked() {
 		// This path is used during the initial add flow before the dispatcher is
 		// committed. Local is still authoritative, so any speculative remote
 		// registration must already be canceled above.
-		s.readyCallback()
+		readyCallback := s.readyCallback
+		s.readyCallback = nil
+		readyCallback()
 		return
 	}
 	log.Info("received ready signal from local event service, prepare to reset the dispatcher",
@@ -560,8 +586,8 @@ func (s *dispatcherSession) newDispatcherRemoveRequest(serverID string) *messagi
 	}
 }
 
-// Entry point used by the log coordinator callback to start remote reuse probing.
-func (s *dispatcherSession) setRemoteCandidates(nodes []string) {
+// startRemoteProbing begins probing reusable remote event services one by one.
+func (s *dispatcherSession) startRemoteProbing(nodes []string) {
 	s.requestMu.Lock()
 	defer s.requestMu.Unlock()
 	candidate, ok := s.connState.beginRemoteProbing(nodes)
@@ -579,10 +605,6 @@ func (s *dispatcherSession) setRemoteCandidates(nodes []string) {
 // Read-only session queries.
 func (s *dispatcherSession) getEventServiceID() node.ID {
 	return s.connState.getCurrentEventServiceID()
-}
-
-func (s *dispatcherSession) isCurrentEventService(serverID node.ID) bool {
-	return s.connState.isCurrentEventService(serverID)
 }
 
 func (s *dispatcherSession) isReceivingDataEvent() bool {

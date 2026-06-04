@@ -54,7 +54,10 @@ func newDispatcherEpochState(epoch uint64, lastEventSeq uint64, maxEventTs uint6
 	return state
 }
 
-// dispatcherStat is a helper struct to manage the state of a dispatcher.
+// dispatcherStat keeps per-dispatcher state used when handling events, including
+// epoch, event sequence, heartbeat progress, commitTs filters, and cached table
+// info. It uses dispatcherSession to manage the dispatcher's EventService
+// connection lifecycle.
 type dispatcherStat struct {
 	target         dispatcher.DispatcherService
 	eventCollector *EventCollector
@@ -122,27 +125,11 @@ func (d *dispatcherStat) loadCurrentEpochState() *dispatcherEpochState {
 }
 
 func (d *dispatcherStat) run() {
-	d.session.registerTo(d.eventCollector.getLocalServerID())
+	d.session.startLocalRegistration()
 }
 
-// registerTo register the dispatcher to the specified event service.
-func (d *dispatcherStat) registerTo(serverID node.ID) {
-	d.session.registerTo(serverID)
-}
-
-// commitReady is used to notify the event service to start sending events.
-func (d *dispatcherStat) commitReady(serverID node.ID) {
-	d.session.commitReady(serverID)
-}
-
-// reset sends a RESET request to the specified EventService using the current
-// checkpoint ts, advancing the dispatcher epoch.
-func (d *dispatcherStat) reset(serverID node.ID) {
-	d.session.reset(serverID)
-}
-
-func (d *dispatcherStat) doReset(serverID node.ID, resetTs uint64) {
-	d.session.doReset(serverID, resetTs)
+func (d *dispatcherStat) startRemoteProbing(nodes []string) {
+	d.session.startRemoteProbing(nodes)
 }
 
 func (d *dispatcherStat) advanceEpochForReset(resetTs uint64) uint64 {
@@ -360,7 +347,7 @@ func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEve
 			continue
 		}
 		if !d.verifyEventSequence(event, state) {
-			d.reset(d.session.getEventServiceID())
+			d.session.resetCurrentEventService()
 			return false
 		}
 		if event.GetType() == commonEvent.TypeResolvedEvent {
@@ -432,7 +419,7 @@ func (d *dispatcherStat) handleSingleDataEvents(events []dispatcher.DispatcherEv
 		return false
 	}
 	if !d.verifyEventSequence(events[0], state) {
-		d.reset(d.session.getEventServiceID())
+		d.session.resetCurrentEventService()
 		return false
 	}
 	if !d.shouldForwardEventByCommitTs(events[0]) {
@@ -546,7 +533,7 @@ func (d *dispatcherStat) handleDropEvent(event dispatcher.DispatcherEvent) {
 		zap.Uint64("commitTs", dropEvent.GetCommitTs()),
 		zap.Uint64("sequence", dropEvent.GetSeq()),
 		zap.Uint64("lastEventCommitTs", d.lastEventCommitTs.Load()))
-	d.reset(d.session.getEventServiceID())
+	d.session.resetCurrentEventService()
 	metrics.EventCollectorDroppedEventCount.Inc()
 }
 
@@ -594,24 +581,12 @@ func (d *dispatcherStat) handleHandshakeEvent(event dispatcher.DispatcherEvent) 
 	d.observeCurrentEpochMaxEventTs(state, handshakeEvent.GetCommitTs())
 }
 
-func (d *dispatcherStat) getHeartbeatProgressForEventService() (uint64, uint64) {
+func (d *dispatcherStat) getHeartbeatReport() (node.ID, uint64, uint64, bool) {
+	eventServiceID := d.session.getEventServiceID()
+	if eventServiceID.IsEmpty() {
+		return "", 0, 0, false
+	}
 	state := d.loadCurrentEpochState()
 	checkpointTs := min(d.target.GetCheckpointTs(), state.maxEventTs.Load())
-	return checkpointTs, state.epoch
-}
-
-func (d *dispatcherStat) setRemoteCandidates(nodes []string) {
-	d.session.setRemoteCandidates(nodes)
-}
-
-func (d *dispatcherStat) getEventServiceID() node.ID {
-	return d.session.getEventServiceID()
-}
-
-func (d *dispatcherStat) isCurrentEventService(serverID node.ID) bool {
-	return d.session.isCurrentEventService(serverID)
-}
-
-func (d *dispatcherStat) isReceivingDataEvent() bool {
-	return d.session.isReceivingDataEvent()
+	return eventServiceID, checkpointTs, state.epoch, true
 }
