@@ -33,7 +33,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/hash"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/util"
-	"github.com/pingcap/tidb/br/pkg/storage"
+
+	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
 )
@@ -182,7 +183,7 @@ type FilePathGenerator struct {
 	extension    string
 	config       *Config
 	pdClock      pdutil.Clock
-	storage      storage.ExternalStorage
+	storage      storeapi.Storage
 	// fileIndex caches the last emitted data file index for one
 	// VersionedTableName and date bucket.
 	fileIndex map[VersionedTableName]*indexWithDate
@@ -200,7 +201,7 @@ type FilePathGenerator struct {
 func NewFilePathGenerator(
 	changefeedID commonType.ChangeFeedID,
 	config *Config,
-	storage storage.ExternalStorage,
+	storage storeapi.Storage,
 	extension string,
 ) *FilePathGenerator {
 	pdClock := appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock)
@@ -278,7 +279,7 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 	}
 	checksumSuffix := fmt.Sprintf("%010d.json", checksum)
 	hasNewerSchemaVersion := false
-	err = f.storage.WalkDir(ctx, &storage.WalkOption{
+	err = f.storage.WalkDir(ctx, &storeapi.WalkOption{
 		SubDir:    subDir, /* use subDir to prevent walk the whole storage */
 		ObjPrefix: "schema_",
 	}, func(path string, _ int64) error {
@@ -526,7 +527,7 @@ var dateSeparatorDayRegexp *regexp.Regexp
 func RemoveExpiredFiles(
 	ctx context.Context,
 	_ commonType.ChangeFeedID,
-	storage storage.ExternalStorage,
+	storage storeapi.Storage,
 	cfg *Config,
 	checkpointTs uint64,
 ) error {

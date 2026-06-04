@@ -26,7 +26,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	pmetrics "github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
-	"github.com/pingcap/tidb/br/pkg/storage"
+
+	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -35,7 +36,7 @@ import (
 type writer struct {
 	shardID       int
 	changeFeedID  common.ChangeFeedID
-	storage       storage.ExternalStorage
+	storage       storeapi.Storage
 	config        *cloudstorage.Config
 	spool         *spool.Spool
 	bufferManager *bufferManager
@@ -76,7 +77,7 @@ type payload struct {
 func newWriter(
 	id int,
 	changefeedID common.ChangeFeedID,
-	storage storage.ExternalStorage,
+	storage storeapi.Storage,
 	config *cloudstorage.Config,
 	extension string,
 	statistics *pmetrics.Statistics,
@@ -240,7 +241,7 @@ func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath 
 			return payload.rowsCount, payload.nBytes, nil
 		}
 
-		writer, inErr := d.storage.Create(ctx, dataFilePath, &storage.WriterOption{
+		writer, inErr := d.storage.Create(ctx, dataFilePath, &storeapi.WriterOption{
 			Concurrency: d.config.FlushConcurrency,
 		})
 		if inErr != nil {

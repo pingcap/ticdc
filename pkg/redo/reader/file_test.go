@@ -22,8 +22,9 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/redo"
-	mockstorage "github.com/pingcap/tidb/br/pkg/mock/storage"
-	"github.com/pingcap/tidb/br/pkg/storage"
+
+	"github.com/pingcap/tidb/pkg/objstore/mockobjstore"
+	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/mock/gomock"
 )
@@ -83,9 +84,9 @@ func TestFileReaderRead(t *testing.T) {
 
 func TestDownLoadAndSortFilesClosesExternalStorage(t *testing.T) {
 	controller := gomock.NewController(t)
-	mockStorage := mockstorage.NewMockExternalStorage(controller)
+	mockStorage := mockobjstore.NewMockStorage(controller)
 	mockStorage.EXPECT().WalkDir(gomock.Any(), gomock.Any(), gomock.Any()).
-		DoAndReturn(func(ctx context.Context, opt *storage.WalkOption, fn func(string, int64) error) error {
+		DoAndReturn(func(ctx context.Context, opt *storeapi.WalkOption, fn func(string, int64) error) error {
 			return nil
 		})
 	mockStorage.EXPECT().Close().Times(1)
@@ -94,7 +95,7 @@ func TestDownLoadAndSortFilesClosesExternalStorage(t *testing.T) {
 	defer func() {
 		redo.InitExternalStorage = oldInitExternalStorage
 	}()
-	redo.InitExternalStorage = func(context.Context, url.URL) (storage.ExternalStorage, error) {
+	redo.InitExternalStorage = func(context.Context, url.URL) (storeapi.Storage, error) {
 		return mockStorage, nil
 	}
 

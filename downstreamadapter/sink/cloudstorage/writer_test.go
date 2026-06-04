@@ -37,8 +37,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/util"
-	"github.com/pingcap/tidb/br/pkg/storage"
 	"github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/parser/types"
@@ -540,7 +540,7 @@ func TestWriterRunExitAfterContextCancel(t *testing.T) {
 }
 
 type failOnIndexStorage struct {
-	storage.ExternalStorage
+	storeapi.Storage
 }
 
 func (s *failOnIndexStorage) WriteFile(ctx context.Context, name string, data []byte) error {
