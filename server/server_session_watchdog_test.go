@@ -21,7 +21,7 @@ import (
 
 	"github.com/golang/mock/gomock"
 	appctx "github.com/pingcap/ticdc/pkg/common/context"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/liveness"
 	"github.com/stretchr/testify/require"
@@ -46,7 +46,7 @@ func TestSessionWatchdogFencesOnSessionDone(t *testing.T) {
 
 	err := c.watchEtcdSession(context.Background(), sessionDone, 1, time.Hour)
 
-	require.True(t, cerror.ErrCaptureSuicide.Equal(err), err)
+	require.True(t, errors.ErrCaptureSuicide.Equal(err), err)
 	require.Equal(t, int32(1), fencer.count.Load())
 	require.Equal(t, liveness.CaptureStopping, c.liveness.Load())
 }
@@ -70,7 +70,7 @@ func TestSessionWatchdogFencesOnExpiredLease(t *testing.T) {
 	defer cancel()
 	err := c.watchEtcdSession(ctx, sessionDone, 100, time.Millisecond)
 
-	require.True(t, cerror.ErrCaptureSuicide.Equal(err), err)
+	require.True(t, errors.ErrCaptureSuicide.Equal(err), err)
 	require.Equal(t, int32(1), fencer.count.Load())
 	require.Equal(t, liveness.CaptureStopping, c.liveness.Load())
 }
