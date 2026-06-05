@@ -85,10 +85,10 @@ endif
 
 TEST_FLAG=intest
 ifeq ("${NEXT_GEN}", "1")
-	TEST_FLAG := $(TEST_FLAG),nextgen
-	ifeq ("${LEGACY_SAFEPOINT}", "1")
-		TEST_FLAG := $(TEST_FLAG),legacy_safepoint
-	endif
+	TEST_FLAG := $(TEST_FLAG),nextgen,legacy_safepoint
+# 	ifeq ("${LEGACY_SAFEPOINT}", "1")
+# 		TEST_FLAG := $(TEST_FLAG),legacy_safepoint
+# 	endif
 endif
 
 NEXT_GEN_TEST_FLAG=intest,nextgen
