@@ -75,12 +75,9 @@ func ensureChangefeedStartTsSafetyClassic(ctx context.Context, pdCli GCServiceCl
 }
 
 func ensureChangefeedStartTsSafetyNextGen(ctx context.Context, pdCli pd.Client, gcServiceID string, keyspaceID uint32, ttl int64, startTs uint64) error {
-	minServiceGCTs, err := setKeyspaceGCSafepoint(ctx, pdCli, keyspaceID, gcServiceID, ttl, startTs)
+	_, err := setKeyspaceGCSafepoint(ctx, pdCli, keyspaceID, gcServiceID, ttl, startTs)
 	if err != nil {
-		return errors.ErrStartTsBeforeGC.GenWithStackByArgs(startTs, 0)
-	}
-	if startTs > 0 && startTs < minServiceGCTs+1 {
-		return errors.ErrStartTsBeforeGC.GenWithStackByArgs(startTs, minServiceGCTs)
+		return errors.ErrStartTsBeforeGC.GenWithStackByArgs(startTs)
 	}
 	return nil
 }
@@ -212,7 +209,7 @@ func setKeyspaceGCSafepoint(
 		if legacyCli, ok := pdCli.(pdgc.LegacyClientV2); ok {
 			return setServiceGCSafepointV2(ctx, legacyCli, keyspaceID, serviceID, ttl, safePoint)
 		}
-		return 0, errors.ErrUpdateServiceSafepointFailed.GenWithStackByArgs()
+		return 0, errors.ErrUpdateServiceSafepointFailed.GenWithStackByArgs("not support LegacyClientV2")
 	}
 
 	gcCli := pdCli.GetGCStatesClient(keyspaceID)
@@ -244,7 +241,7 @@ func getKeyspaceGCSafepoint(
 		if legacyCli, ok := pdCli.(pdgc.LegacyClientV2); ok {
 			return getMinServiceGCSafepointV2(ctx, legacyCli, keyspaceID)
 		}
-		return 0, errors.ErrUpdateServiceSafepointFailed.GenWithStackByArgs()
+		return 0, errors.ErrUpdateServiceSafepointFailed.GenWithStackByArgs("not support LegacyClientV2")
 	}
 
 	gcCli := pdCli.GetGCStatesClient(keyspaceID)
@@ -265,7 +262,7 @@ func deleteKeyspaceGCSafepoint(
 		if legacyCli, ok := pdCli.(pdgc.LegacyClientV2); ok {
 			return deleteServiceGCSafepointV2(ctx, legacyCli, keyspaceID, serviceID)
 		}
-		return errors.ErrUpdateServiceSafepointFailed.GenWithStackByArgs()
+		return errors.ErrUpdateServiceSafepointFailed.GenWithStackByArgs("not support LegacyClientV2")
 	}
 
 	gcCli := pdCli.GetGCStatesClient(keyspaceID)
