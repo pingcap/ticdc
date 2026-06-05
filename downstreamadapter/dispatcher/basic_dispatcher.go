@@ -918,6 +918,9 @@ func cloneInfluencedTablesPB(
 	return status
 }
 
+// routeTableAdmissionsForBlockState attaches concrete table route bindings to a
+// block state so maintainer routeAdmin can update its route registry without
+// looking up routed table names from historical schema snapshots.
 func (d *BasicDispatcher) routeTableAdmissionsForBlockState(event commonEvent.BlockEvent) []*heartbeatpb.RouteTableAdmission {
 	if d.sharedInfo == nil || !d.sharedInfo.GetRouter().HasTableRoute() {
 		return nil
@@ -958,6 +961,9 @@ func (d *BasicDispatcher) routeTableAdmissionsForBlockState(event commonEvent.Bl
 	}
 
 	addedTables := ddlEvent.GetNeedAddedTables()
+	// Fallback for single-table create-like DDLs. Some events do not expose a
+	// complete routed TableInfo, but their primary source/target table names
+	// still identify the only added table unambiguously.
 	if len(addedTables) == 1 {
 		tableID := addedTables[0].TableID
 		if _, ok := seen[tableID]; !ok && ddlEvent.GetSchemaName() != "" && ddlEvent.GetTableName() != "" {
@@ -1027,6 +1033,8 @@ func appendRouteAdmission(
 	tableID, schemaID int64,
 	binding routing.RouteBinding,
 ) []*heartbeatpb.RouteTableAdmission {
+	// DDLSpanTableID is a coordination span for the table-trigger dispatcher,
+	// not a real table tracked by routeAdmin's route registry.
 	if tableID == common.DDLSpanTableID {
 		return admissions
 	}
