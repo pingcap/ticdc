@@ -199,8 +199,12 @@ func (p *managerMaintainerSet) handleAddMaintainer(
 	} else {
 		info.Epoch = requestEpoch
 	}
-	maintainer := NewMaintainer(changefeedID, p.conf, info, p.nodeInfo, p.taskScheduler, req.CheckpointTs, req.IsNewChangefeed, req.KeyspaceId)
-	registeredMaintainer := p.registerMaintainerForAdd(changefeedID, maintainer, requestEpoch)
+	// Create the maintainer only after epoch admission so normal duplicate
+	// add retries do not start short-lived goroutines or metrics.
+	newMaintainer := func() *Maintainer {
+		return NewMaintainer(changefeedID, p.conf, info, p.nodeInfo, p.taskScheduler, req.CheckpointTs, req.IsNewChangefeed, req.KeyspaceId)
+	}
+	registeredMaintainer := p.registerMaintainerForAdd(changefeedID, requestEpoch, newMaintainer)
 	if registeredMaintainer == nil {
 		return nil
 	}
@@ -214,25 +218,30 @@ func (p *managerMaintainerSet) handleAddMaintainer(
 
 func (p *managerMaintainerSet) registerMaintainerForAdd(
 	changefeedID common.ChangeFeedID,
-	maintainer *Maintainer,
 	requestEpoch uint64,
+	newMaintainer func() *Maintainer,
 ) *Maintainer {
 	for {
-		registered, loaded := p.registry.LoadOrStore(changefeedID, maintainer)
+		registered, loaded := p.registry.Load(changefeedID)
 		if !loaded {
-			return maintainer
+			maintainer := newMaintainer()
+			registered, loaded = p.registry.LoadOrStore(changefeedID, maintainer)
+			if !loaded {
+				return maintainer
+			}
+			maintainer.Close()
 		}
-
 		existing := registered.(*Maintainer)
 		existingEpoch := existing.currentMaintainerEpoch()
 		if !shouldReplaceMaintainerForAdd(existingEpoch, requestEpoch) {
-			maintainer.Close()
 			return nil
 		}
+		maintainer := newMaintainer()
 		if p.registry.CompareAndSwap(changefeedID, existing, maintainer) {
 			existing.Close()
 			return maintainer
 		}
+		maintainer.Close()
 	}
 }
 

@@ -17,6 +17,7 @@ import (
 	"context"
 	"encoding/json"
 	"net"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -115,12 +116,18 @@ func TestManagerMaintainerSet_AddMaintainerReplacesOlderEpoch(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, uint64(1), oldMaintainer.currentMaintainerEpoch())
 
-	// The explicit request epoch is zero to cover rolling-upgrade fallback from config.
-	maintainers.handleAddMaintainer(newAddMaintainerRequestForEpoch(t, cfID, 2, 0), noDrainTarget)
+	maintainers.handleAddMaintainer(newAddMaintainerRequestForEpoch(t, cfID, 2, 2), noDrainTarget)
 	currentMaintainer, ok := maintainers.getMaintainer(cfID)
 	require.True(t, ok)
 	require.False(t, oldMaintainer == currentMaintainer)
 	require.Equal(t, uint64(2), currentMaintainer.currentMaintainerEpoch())
+
+	// The explicit request epoch is zero to cover rolling-upgrade fallback from config.
+	maintainers.handleAddMaintainer(newAddMaintainerRequestForEpoch(t, cfID, 3, 0), noDrainTarget)
+	fallbackMaintainer, ok := maintainers.getMaintainer(cfID)
+	require.True(t, ok)
+	require.False(t, currentMaintainer == fallbackMaintainer)
+	require.Equal(t, uint64(3), fallbackMaintainer.currentMaintainerEpoch())
 }
 
 func TestManagerMaintainerSet_AddMaintainerRejectsOlderEpoch(t *testing.T) {
@@ -142,6 +149,31 @@ func TestManagerMaintainerSet_AddMaintainerRejectsOlderEpoch(t *testing.T) {
 	maintainerAfterCompatAdd, ok := maintainers.getMaintainer(cfID)
 	require.True(t, ok)
 	require.True(t, currentMaintainer == maintainerAfterCompatAdd)
+}
+
+func TestManagerMaintainerSet_AddMaintainerDoesNotCreateRejectedDuplicate(t *testing.T) {
+	maintainers := newManagerMaintainerSetForAddTest(t)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	noDrainTarget := func() (node.ID, uint64) { return "", 0 }
+
+	maintainers.handleAddMaintainer(newAddMaintainerRequestForEpoch(t, cfID, 2, 2), noDrainTarget)
+	currentMaintainer, ok := maintainers.getMaintainer(cfID)
+	require.True(t, ok)
+	require.Equal(t, uint64(2), currentMaintainer.currentMaintainerEpoch())
+
+	rejectedEpochs := []uint64{2, 1, 0}
+	for _, requestEpoch := range rejectedEpochs {
+		t.Run("requestEpoch"+strconv.FormatUint(requestEpoch, 10), func(t *testing.T) {
+			registeredMaintainer := maintainers.registerMaintainerForAdd(cfID, requestEpoch, func() *Maintainer {
+				t.Fatalf("registerMaintainerForAdd created maintainer for rejected request epoch %d", requestEpoch)
+				return nil
+			})
+			require.Nil(t, registeredMaintainer)
+			maintainerAfterRejectedAdd, ok := maintainers.getMaintainer(cfID)
+			require.True(t, ok)
+			require.True(t, currentMaintainer == maintainerAfterRejectedAdd)
+		})
+	}
 }
 
 // This is a integration test for maintainer manager, it may consume a lot of time.
