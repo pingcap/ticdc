@@ -75,9 +75,12 @@ func ensureChangefeedStartTsSafetyClassic(ctx context.Context, pdCli GCServiceCl
 }
 
 func ensureChangefeedStartTsSafetyNextGen(ctx context.Context, pdCli pd.Client, gcServiceID string, keyspaceID uint32, ttl int64, startTs uint64) error {
-	_, err := setKeyspaceGCSafepoint(ctx, pdCli, keyspaceID, gcServiceID, ttl, startTs)
+	minServiceGCTs, err := setKeyspaceGCSafepoint(ctx, pdCli, keyspaceID, gcServiceID, ttl, startTs)
 	if err != nil {
-		return errors.ErrStartTsBeforeGC.GenWithStackByArgs(startTs)
+		return errors.ErrStartTsBeforeGC.GenWithStackByArgs(startTs, minServiceGCTs)
+	}
+	if startTs > 0 && startTs < minServiceGCTs+1 {
+		return errors.ErrStartTsBeforeGC.GenWithStackByArgs(startTs, minServiceGCTs)
 	}
 	return nil
 }

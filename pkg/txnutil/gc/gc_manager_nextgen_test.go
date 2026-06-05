@@ -130,6 +130,63 @@ func TestTryUpdateKeyspaceGCBarrierUsesServiceSafePointV2WhenEnabled(t *testing.
 	}, barrierInfo)
 }
 
+func TestEnsureChangefeedStartTsSafetyUsesServiceSafePointV2WhenEnabled(t *testing.T) {
+	if !kerneltype.UseLegacySafePointInNextGen {
+		t.Skip("legacy safepoint path requires legacy_safepoint tag")
+	}
+
+	const (
+		keyspaceID = uint32(1)
+		startTs    = uint64(100)
+	)
+	changefeedID := common.NewChangeFeedIDWithName("test-changefeed", "default")
+
+	testCases := []struct {
+		name         string
+		minSafePoint uint64
+		expectedErr  string
+	}{
+		{
+			name:         "reject start ts behind minimum safe point",
+			minSafePoint: 200,
+			expectedErr: "[CDC:ErrStartTsBeforeGC]fail to create or maintain changefeed " +
+				"because start-ts 100 is earlier than or equal to GC safepoint at 200",
+		},
+		{
+			name:         "accept start ts equal to minimum safe point",
+			minSafePoint: startTs,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			pdClient := &MockPDClient{
+				GetGCStatesClientFunc: func(id uint32) pdgc.GCStatesClient {
+					require.FailNow(t, "GetGCStatesClient should not be called when service safe point v2 is enabled")
+					return nil
+				},
+				SetServiceSafePointV2Func: func(
+					ctx context.Context, id uint32, serviceID string, ttl int64, safePoint uint64,
+				) (uint64, error) {
+					require.Equal(t, keyspaceID, id)
+					require.Equal(t, "test-service-default_test-changefeed", serviceID)
+					require.Equal(t, int64(60), ttl)
+					require.Equal(t, startTs, safePoint)
+					return tc.minSafePoint, nil
+				},
+			}
+
+			err := EnsureChangefeedStartTsSafety(
+				context.Background(), pdClient, "test-service-", keyspaceID, changefeedID, 60, startTs)
+			if tc.expectedErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.EqualError(t, err, tc.expectedErr)
+		})
+	}
+}
+
 func TestTryUpdateKeyspaceGCBarrierDoesNotUseServiceSafePointV2WhenDisabled(t *testing.T) {
 	if kerneltype.UseLegacySafePointInNextGen {
 		t.Skip("GC Barrier path is disabled with legacy_safepoint tag")
