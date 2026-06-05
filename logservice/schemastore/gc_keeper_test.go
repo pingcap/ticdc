@@ -19,7 +19,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golang/mock/gomock"
 	"github.com/pingcap/errors"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -54,6 +53,11 @@ func TestSchemaStoreGCKeeperLifecycle(t *testing.T) {
 		require.Equal(t, uint64(math.MaxUint64), state.serviceSafePoint[serviceID])
 		return
 	}
+	if kerneltype.UseLegacySafePointInNextGen {
+		_, ok := state.legacyServiceSafePoint[serviceID]
+		require.False(t, ok)
+		return
+	}
 	_, ok := state.gcBarriers[serviceID]
 	require.False(t, ok)
 }
@@ -80,6 +84,11 @@ func TestCloseSchemaStoreGCKeeperUsesFreshContext(t *testing.T) {
 	require.NoError(t, closeSchemaStoreGCKeeper(common.DefaultKeyspace.ID, keeper))
 	if kerneltype.IsClassic() {
 		require.Equal(t, uint64(math.MaxUint64), state.serviceSafePoint[serviceID])
+		return
+	}
+	if kerneltype.UseLegacySafePointInNextGen {
+		_, ok := state.legacyServiceSafePoint[serviceID]
+		require.False(t, ok)
 		return
 	}
 	_, ok := state.gcBarriers[serviceID]
@@ -137,30 +146,32 @@ func assertSchemaStoreBarrierTS(t *testing.T, state *schemaStoreGCMockState, ser
 		require.Equal(t, expected, state.serviceSafePoint[serviceID])
 		return
 	}
+	if kerneltype.UseLegacySafePointInNextGen {
+		require.Equal(t, expected, state.legacyServiceSafePoint[serviceID])
+		return
+	}
 	require.Equal(t, expected, state.gcBarriers[serviceID])
 }
 
 type schemaStoreGCMockState struct {
-	serviceSafePoint map[string]uint64
-	gcBarriers       map[string]uint64
-	txnSafePoint     uint64
+	serviceSafePoint       map[string]uint64
+	legacyServiceSafePoint map[string]uint64
+	gcBarriers             map[string]uint64
+	txnSafePoint           uint64
 }
 
-func newMockGCServiceClientForSchemaStoreGC(t *testing.T) (*gc.MockGCServiceClient, *schemaStoreGCMockState) {
+func newMockGCServiceClientForSchemaStoreGC(t *testing.T) (*gc.MockPDClient, *schemaStoreGCMockState) {
 	t.Helper()
 
-	ctrl := gomock.NewController(t)
 	state := &schemaStoreGCMockState{
-		serviceSafePoint: make(map[string]uint64),
-		gcBarriers:       make(map[string]uint64),
-		txnSafePoint:     100,
+		serviceSafePoint:       make(map[string]uint64),
+		legacyServiceSafePoint: make(map[string]uint64),
+		gcBarriers:             make(map[string]uint64),
+		txnSafePoint:           100,
 	}
-	pdCli := gc.NewMockGCServiceClient(ctrl)
 	gcStatesCli := &mockSchemaStoreGCStatesClient{state: state}
-
-	pdCli.EXPECT().
-		UpdateServiceGCSafePoint(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
-		DoAndReturn(func(ctx context.Context, serviceID string, ttl int64, safePoint uint64) (uint64, error) {
+	pdCli := &gc.MockPDClient{
+		UpdateServiceGCSafePointFunc: func(ctx context.Context, serviceID string, ttl int64, safePoint uint64) (uint64, error) {
 			if err := ctx.Err(); err != nil {
 				return 0, err
 			}
@@ -175,13 +186,33 @@ func newMockGCServiceClientForSchemaStoreGC(t *testing.T) (*gc.MockGCServiceClie
 			}
 			state.serviceSafePoint[serviceID] = safePoint
 			return minSafePoint, nil
-		}).
-		AnyTimes()
-
-	pdCli.EXPECT().
-		GetGCStatesClient(gomock.Any()).
-		Return(gcStatesCli).
-		AnyTimes()
+		},
+		GetGCStatesClientFunc: func(keyspaceID uint32) pdgc.GCStatesClient {
+			return gcStatesCli
+		},
+		GetMinServiceSafePointV2Func: func(ctx context.Context, keyspaceID uint32) (uint64, error) {
+			if err := ctx.Err(); err != nil {
+				return 0, err
+			}
+			return state.txnSafePoint, nil
+		},
+		SetServiceSafePointV2Func: func(
+			ctx context.Context, keyspaceID uint32, serviceID string, ttl int64, safePoint uint64,
+		) (uint64, error) {
+			if err := ctx.Err(); err != nil {
+				return 0, err
+			}
+			state.legacyServiceSafePoint[serviceID] = safePoint
+			return state.txnSafePoint, nil
+		},
+		DeleteServiceSafePointV2Func: func(ctx context.Context, keyspaceID uint32, serviceID string) (uint64, error) {
+			if err := ctx.Err(); err != nil {
+				return 0, err
+			}
+			delete(state.legacyServiceSafePoint, serviceID)
+			return state.txnSafePoint, nil
+		},
+	}
 
 	return pdCli, state
 }
