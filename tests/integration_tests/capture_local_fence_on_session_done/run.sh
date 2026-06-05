@@ -24,7 +24,7 @@ function get_capture_addr_by_port() {
 
 	for ((i = 0; i < 30; i++)); do
 		local addr
-		addr=$(curl -s "http://${api_addr}/api/v2/captures" |
+		addr=$(curl -sS --connect-timeout 2 --max-time 5 "http://${api_addr}/api/v2/captures" |
 			jq -r --arg suffix "$suffix" '.items[] | select(.address | endswith($suffix)) | .address' | head -n1)
 		if [ -n "$addr" ] && [ "$addr" != "null" ]; then
 			echo "$addr"
@@ -40,7 +40,7 @@ function get_capture_addr_by_port() {
 function get_capture_id_by_addr() {
 	local api_addr=$1
 	local target_addr=$2
-	curl -s "http://${api_addr}/api/v2/captures" |
+	curl -sS --connect-timeout 2 --max-time 5 "http://${api_addr}/api/v2/captures" |
 		jq -r --arg addr "$target_addr" '.items[] | select(.address==$addr) | .id' | head -n1
 }
 
@@ -48,7 +48,7 @@ function get_table_node_id() {
 	local api_addr=$1
 	local changefeed_id=$2
 	local table_id=$3
-	curl -s "http://${api_addr}/api/v2/changefeeds/${changefeed_id}/tables?keyspace=$KEYSPACE_NAME" |
+	curl -sS --connect-timeout 2 --max-time 5 "http://${api_addr}/api/v2/changefeeds/${changefeed_id}/tables?keyspace=$KEYSPACE_NAME" |
 		jq -r --argjson tid "$table_id" '.items[] | select(.table_ids | index($tid)) | .node_id' | head -n1
 }
 
@@ -165,6 +165,6 @@ function run() {
 }
 
 trap 'stop_test $WORK_DIR' EXIT
-run $*
+run "$@"
 check_logs $WORK_DIR
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"

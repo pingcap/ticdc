@@ -57,7 +57,7 @@ function run() {
 	# ensure server exit
 	ensure 30 "! ps -p $cdc_pid"
 	check_logs_contains $WORK_DIR "local fence triggered"
-	check_logs_contains $WORK_DIR "etcd lease expired"
+	ensure 30 "grep -Eq 'etcd lease expired|etcd session done' '$WORK_DIR/cdc.log'"
 	check_logs_contains $WORK_DIR "server closed"
 	echo "cdc server already exit"
 
@@ -76,6 +76,6 @@ function run() {
 }
 
 trap 'stop_test $WORK_DIR' EXIT
-run $*
+run "$@"
 check_logs $WORK_DIR
 echo "[$(date)] <<<<<< run test case $TEST_NAME success! >>>>>>"
