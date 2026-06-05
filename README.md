@@ -132,3 +132,5 @@ make cdc
 cd bin
 tar -czf newarch_cdc.tar.gz cdc
 ```
+
+<!-- VERSION_PLACEHOLDER: vrelease-nextgen-202603 -->
