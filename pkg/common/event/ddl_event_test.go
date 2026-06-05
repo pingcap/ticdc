@@ -41,6 +41,9 @@ func TestDDLEvent(t *testing.T) {
 		Query:        ddlJob.Query,
 		TableInfo:    common.WrapTableInfo(ddlJob.SchemaName, ddlJob.BinlogInfo.TableInfo),
 		FinishedTs:   ddlJob.BinlogInfo.FinishedTS,
+		// NotSync must survive Marshal/Unmarshal because it controls whether dispatchers
+		// should forward this DDL to downstream sinks.
+		NotSync: true,
 		BlockedTableNames: []SchemaTableName{
 			{SchemaName: ddlJob.SchemaName, TableName: ddlJob.TableName},
 		},
@@ -78,6 +81,7 @@ func TestDDLEvent(t *testing.T) {
 	require.Equal(t, ddlEvent.FinishedTs, reverseEvent.FinishedTs)
 	require.Equal(t, ddlEvent.Err, reverseEvent.Err)
 	require.Equal(t, ddlEvent.BlockedTableNames, reverseEvent.BlockedTableNames)
+	require.Equal(t, ddlEvent.NotSync, reverseEvent.NotSync)
 
 	// Test unsupported version in Marshal
 	mockDDLVersion1 := 99
