@@ -113,6 +113,13 @@ func (e *DispatcherManager) NewTableTriggerRedoDispatcher(id *heartbeatpb.Dispat
 	// redo meta should keep the same node with table trigger event dispatcher
 	// table trigger event dispatcher and table trigger redo dispatcher must exist on the same node
 	redoDispatcher := e.GetTableTriggerRedoDispatcher()
+	if redoDispatcher == nil {
+		if e.writePathClosed.Load() {
+			return newWritePathClosedError()
+		}
+		return errors.ErrChangefeedInitTableTriggerDispatcherFailed.
+			FastGenByArgs("table trigger redo dispatcher was not created")
+	}
 	redoDispatcher.SetRedoMeta(e.ctx, e.config.Consistent)
 	e.wg.Add(1)
 	go func() {
@@ -141,7 +148,7 @@ func (e *DispatcherManager) getRedoEventCollectorBatchCountAndBytes(redoSink *re
 
 func (e *DispatcherManager) newRedoDispatchers(infos map[common.DispatcherID]dispatcherCreateInfo, _ bool) error {
 	if e.writePathClosed.Load() {
-		return nil
+		return newWritePathClosedError()
 	}
 	start := time.Now()
 	batchCount, batchBytes := e.getRedoEventCollectorBatchCountAndBytes(e.redoSink)
@@ -187,7 +194,7 @@ func (e *DispatcherManager) newRedoDispatchers(infos map[common.DispatcherID]dis
 		if e.writePathClosed.Load() {
 			e.writePathMu.Unlock()
 			rd.Remove()
-			return nil
+			return newWritePathClosedError()
 		}
 		if rd.IsTableTriggerDispatcher() {
 			e.SetTableTriggerRedoDispatcher(rd)
@@ -307,17 +314,23 @@ func (e *DispatcherManager) closeRedoMeta(removeChangefeed bool) error {
 }
 
 func (e *DispatcherManager) InitalizeTableTriggerRedoDispatcher(schemaInfo []*heartbeatpb.SchemaInfo) error {
-	if e.GetTableTriggerRedoDispatcher() == nil {
+	e.writePathMu.Lock()
+	defer e.writePathMu.Unlock()
+	if e.writePathClosed.Load() {
+		return newWritePathClosedError()
+	}
+	tableTriggerRedoDispatcher := e.GetTableTriggerRedoDispatcher()
+	if tableTriggerRedoDispatcher == nil {
 		return nil
 	}
-	needAddDispatcher, err := e.GetTableTriggerRedoDispatcher().InitializeTableSchemaStore(schemaInfo)
+	needAddDispatcher, err := tableTriggerRedoDispatcher.InitializeTableSchemaStore(schemaInfo)
 	if err != nil {
 		return errors.Trace(err)
 	}
 	if !needAddDispatcher {
 		return nil
 	}
-	appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).AddDispatcher(e.GetTableTriggerRedoDispatcher(), e.redoQuota)
+	appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).AddDispatcher(tableTriggerRedoDispatcher, e.redoQuota)
 	return nil
 }
 

@@ -251,6 +251,11 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 					false,
 				)
 				if err != nil {
+					if dispatchermanager.IsWritePathClosedError(err) {
+						log.Info("dispatcher manager write path closed while creating table trigger event dispatcher",
+							zap.Stringer("changefeedID", cfId), zap.Error(err))
+						return nil
+					}
 					log.Error("failed to create new table trigger event dispatcher",
 						zap.Stringer("changefeedID", cfId), zap.Error(err))
 					return m.handleDispatcherError(from, req.ChangefeedID, err)
@@ -266,6 +271,11 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 					false,
 				)
 				if err != nil {
+					if dispatchermanager.IsWritePathClosedError(err) {
+						log.Info("dispatcher manager write path closed while creating table trigger redo dispatcher",
+							zap.Stringer("changefeedID", cfId), zap.Error(err))
+						return nil
+					}
 					log.Error("failed to create new table trigger redo dispatcher",
 						zap.Stringer("changefeedID", cfId), zap.Error(err))
 					return m.handleDispatcherError(from, req.ChangefeedID, err)
@@ -285,6 +295,11 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 	if manager.GetMaintainerEpoch() != cfConfig.Epoch {
 		log.Error("maintainer epoch changed, this should not happen, please report this issue",
 			zap.String("changefeed", cfId.Name()), zap.Uint64("epoch", cfConfig.Epoch))
+	}
+
+	if m.fenced.Load() {
+		manager.LocalFence()
+		return nil
 	}
 
 	var (
@@ -311,6 +326,9 @@ func (m *DispatcherOrchestrator) handlePostBootstrapRequest(
 	from node.ID,
 	req *heartbeatpb.MaintainerPostBootstrapRequest,
 ) error {
+	if m.fenced.Load() {
+		return nil
+	}
 	cfId := common.NewChangefeedIDFromPB(req.ChangefeedID)
 
 	m.mutex.Lock()
@@ -350,6 +368,11 @@ func (m *DispatcherOrchestrator) handlePostBootstrapRequest(
 	// init table schema store
 	err := manager.InitalizeTableTriggerEventDispatcher(req.Schemas)
 	if err != nil {
+		if dispatchermanager.IsWritePathClosedError(err) {
+			log.Info("dispatcher manager write path closed while initializing table trigger event dispatcher",
+				zap.Any("changefeedID", cfId.Name()), zap.Error(err))
+			return nil
+		}
 		log.Error("failed to initialize table trigger event dispatcher",
 			zap.Any("changefeedID", cfId.Name()), zap.Error(err))
 		return m.handleDispatcherError(from, req.ChangefeedID, err)
@@ -357,10 +380,20 @@ func (m *DispatcherOrchestrator) handlePostBootstrapRequest(
 	if manager.IsRedoReady() {
 		err := manager.InitalizeTableTriggerRedoDispatcher(req.RedoSchemas)
 		if err != nil {
+			if dispatchermanager.IsWritePathClosedError(err) {
+				log.Info("dispatcher manager write path closed while initializing table trigger redo dispatcher",
+					zap.Any("changefeedID", cfId.Name()), zap.Error(err))
+				return nil
+			}
 			log.Error("failed to initialize table trigger redo dispatcher",
 				zap.Any("changefeedID", cfId.Name()), zap.Error(err))
 			return m.handleDispatcherError(from, req.ChangefeedID, err)
 		}
+	}
+
+	if m.fenced.Load() {
+		manager.LocalFence()
+		return nil
 	}
 
 	response := &heartbeatpb.MaintainerPostBootstrapResponse{
@@ -407,6 +440,7 @@ func (m *DispatcherOrchestrator) LocalFence() {
 	log.Warn("dispatcher orchestrator local fence triggered")
 
 	m.mc.DeRegisterHandler(messaging.DispatcherManagerManagerTopic)
+	m.localFenceManagers()
 	m.msgGuardWaitGroup.Wait()
 	for _, shard := range m.shards {
 		shard.CloseAsync()

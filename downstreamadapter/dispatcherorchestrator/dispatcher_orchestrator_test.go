@@ -461,3 +461,29 @@ func TestDispatcherOrchestratorLocalFenceDropsNewMessages(t *testing.T) {
 	case <-time.After(50 * time.Millisecond):
 	}
 }
+
+func TestDispatcherOrchestratorLocalFenceFencesManagersImmediately(t *testing.T) {
+	mc, _, stop := messaging.NewMessageCenterForTest(t)
+	defer stop()
+
+	cfID := common.NewChangeFeedIDWithName("cf", "default")
+	manager := &dispatchermanager.DispatcherManager{}
+	orchestrator := &DispatcherOrchestrator{
+		mc: mc,
+		dispatcherManagers: map[common.ChangeFeedID]*dispatchermanager.DispatcherManager{
+			cfID: manager,
+		},
+		shards: make([]*orchestratorShard, dispatcherOrchestratorShardCount),
+	}
+	for i := range orchestrator.shards {
+		orchestrator.shards[i] = newOrchestratorShard(func(msg *messaging.TargetMessage) {})
+		orchestrator.shards[i].Run()
+	}
+	orchestrator.LocalFence()
+	for _, shard := range orchestrator.shards {
+		shard.Wait()
+	}
+
+	err := manager.InitalizeTableTriggerEventDispatcher(nil)
+	require.True(t, dispatchermanager.IsWritePathClosedError(err))
+}

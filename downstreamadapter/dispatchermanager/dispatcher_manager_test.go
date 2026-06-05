@@ -440,6 +440,95 @@ func TestLocalFenceWithRedoEnabledBeforeRedoSinkInitialized(t *testing.T) {
 	}, time.Second, 10*time.Millisecond)
 }
 
+func TestNewTableTriggerDispatchersReturnFenceErrorWhenWritePathClosed(t *testing.T) {
+	manager := createTestManager(t)
+	manager.writePathClosed.Store(true)
+
+	dispatcherID := common.NewDispatcherID()
+	require.NotPanics(t, func() {
+		err := manager.NewTableTriggerEventDispatcher(dispatcherID.ToPB(), 1, false)
+		require.True(t, IsWritePathClosedError(err))
+	})
+	require.Nil(t, manager.GetTableTriggerEventDispatcher())
+
+	redoDispatcherID := common.NewDispatcherID()
+	require.NotPanics(t, func() {
+		err := manager.NewTableTriggerRedoDispatcher(redoDispatcherID.ToPB(), 1, false)
+		require.True(t, IsWritePathClosedError(err))
+	})
+	require.Nil(t, manager.GetTableTriggerRedoDispatcher())
+}
+
+func TestInitializeTableTriggerEventDispatcherReturnsFenceErrorWhenWritePathClosed(t *testing.T) {
+	manager := createTestManager(t)
+	dispatcherID := common.NewDispatcherID()
+	var redoTs atomic.Uint64
+	redoTs.Store(math.MaxUint64)
+	tableTriggerDispatcher := dispatcher.NewEventDispatcher(
+		dispatcherID,
+		common.KeyspaceDDLSpan(common.DefaultKeyspaceID),
+		1,
+		0,
+		manager.schemaIDToDispatchers,
+		false,
+		false,
+		0,
+		manager.sink,
+		manager.sharedInfo,
+		false,
+		&redoTs,
+	)
+	manager.SetTableTriggerEventDispatcher(tableTriggerDispatcher)
+	manager.dispatcherMap.Set(dispatcherID, tableTriggerDispatcher)
+	manager.writePathClosed.Store(true)
+
+	err := manager.InitalizeTableTriggerEventDispatcher(nil)
+	require.True(t, IsWritePathClosedError(err))
+
+	err = manager.InitalizeTableTriggerRedoDispatcher(nil)
+	require.True(t, IsWritePathClosedError(err))
+
+	eventCollector := appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector)
+	require.False(t, eventCollector.HasDispatcher(dispatcherID))
+}
+
+func TestCreateDispatcherByInfoKeepsCreateOperatorWhenFenced(t *testing.T) {
+	manager := createTestManager(t)
+	manager.writePathClosed.Store(true)
+	dispatcherID := common.NewDispatcherID()
+	createReq := NewSchedulerDispatcherRequest(&heartbeatpb.ScheduleDispatcherRequest{
+		ChangefeedID: manager.changefeedID.ToPB(),
+		Config: &heartbeatpb.DispatcherConfig{
+			DispatcherID: dispatcherID.ToPB(),
+			Span: &heartbeatpb.TableSpan{
+				TableID: 1,
+			},
+			StartTs: 1,
+			Mode:    common.DefaultMode,
+		},
+		ScheduleAction: heartbeatpb.ScheduleAction_Create,
+		OperatorType:   heartbeatpb.OperatorType_O_Add,
+	})
+	manager.currentOperatorMap.Store(dispatcherID, createReq)
+
+	createDispatcherByInfo(manager, map[common.DispatcherID]dispatcherCreateInfo{
+		dispatcherID: {
+			Id: dispatcherID,
+			TableSpan: &heartbeatpb.TableSpan{
+				TableID: 1,
+			},
+			StartTs:  1,
+			SchemaID: 1,
+		},
+	}, nil)
+
+	_, dispatcherExists := manager.dispatcherMap.Get(dispatcherID)
+	require.False(t, dispatcherExists)
+	operator, operatorExists := manager.currentOperatorMap.Load(dispatcherID)
+	require.True(t, operatorExists)
+	require.Equal(t, createReq, operator)
+}
+
 func TestMergeDispatcherExistingID(t *testing.T) {
 	manager := createTestManager(t)
 

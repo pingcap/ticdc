@@ -16,6 +16,7 @@ package dispatchermanager
 import (
 	"context"
 	"math"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -52,8 +53,28 @@ const (
 	// manager batching drains it. Longer retries are absorbed by the request
 	// queue dedupe, so keeping this queue modest avoids preallocating a large
 	// value-retention window in front of the manager.
-	blockStatusBufferSize = 16 * 1024
+	blockStatusBufferSize                   = 16 * 1024
+	dispatcherManagerWritePathClosedMessage = "dispatcher manager write path is closed"
 )
+
+// IsWritePathClosedError reports whether err means the local write path has
+// already been fenced. Callers should stop the in-flight local request instead
+// of treating it as a successful dispatcher creation.
+func IsWritePathClosedError(err error) bool {
+	if err == nil {
+		return false
+	}
+	code, ok := errors.RFCCode(err)
+	if !ok || code != errors.ErrChangefeedInitTableTriggerDispatcherFailed.RFCCode() {
+		return false
+	}
+	return strings.Contains(err.Error(), dispatcherManagerWritePathClosedMessage)
+}
+
+func newWritePathClosedError() error {
+	return errors.ErrChangefeedInitTableTriggerDispatcherFailed.
+		FastGenByArgs(dispatcherManagerWritePathClosedMessage)
+}
 
 /*
 DispatcherManager manages dispatchers for a changefeed instance with responsibilities including:
@@ -388,19 +409,33 @@ func (e *DispatcherManager) NewTableTriggerEventDispatcher(id *heartbeatpb.Dispa
 	if err != nil {
 		return errors.Trace(err)
 	}
+	tableTriggerDispatcher := e.GetTableTriggerEventDispatcher()
+	if tableTriggerDispatcher == nil {
+		if e.writePathClosed.Load() {
+			return newWritePathClosedError()
+		}
+		return errors.ErrChangefeedInitTableTriggerDispatcherFailed.
+			FastGenByArgs("table trigger event dispatcher was not created")
+	}
 	log.Info("table trigger event dispatcher created",
 		zap.Stringer("changefeedID", e.changefeedID),
-		zap.Stringer("dispatcherID", e.GetTableTriggerEventDispatcher().GetId()),
-		zap.Uint64("startTs", e.GetTableTriggerEventDispatcher().GetStartTs()),
+		zap.Stringer("dispatcherID", tableTriggerDispatcher.GetId()),
+		zap.Uint64("startTs", tableTriggerDispatcher.GetStartTs()),
 	)
 	return nil
 }
 
 func (e *DispatcherManager) InitalizeTableTriggerEventDispatcher(schemaInfo []*heartbeatpb.SchemaInfo) error {
-	if e.GetTableTriggerEventDispatcher() == nil {
+	e.writePathMu.Lock()
+	defer e.writePathMu.Unlock()
+	if e.writePathClosed.Load() {
+		return newWritePathClosedError()
+	}
+	tableTriggerDispatcher := e.GetTableTriggerEventDispatcher()
+	if tableTriggerDispatcher == nil {
 		return nil
 	}
-	needAddDispatcher, err := e.GetTableTriggerEventDispatcher().InitializeTableSchemaStore(schemaInfo)
+	needAddDispatcher, err := tableTriggerDispatcher.InitializeTableSchemaStore(schemaInfo)
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -408,13 +443,13 @@ func (e *DispatcherManager) InitalizeTableTriggerEventDispatcher(schemaInfo []*h
 		return nil
 	}
 	// before bootstrap finished, cannot send any event.
-	success := e.GetTableTriggerEventDispatcher().EmitBootstrap()
+	success := tableTriggerDispatcher.EmitBootstrap()
 	if !success {
 		return errors.ErrDispatcherFailed.GenWithStackByArgs()
 	}
 
 	// table trigger event dispatcher can register to event collector to receive events after finish the initial table schema store from the maintainer.
-	appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).AddDispatcher(e.GetTableTriggerEventDispatcher(), e.sinkQuota)
+	appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).AddDispatcher(tableTriggerDispatcher, e.sinkQuota)
 
 	// The table trigger event dispatcher needs changefeed-level checkpoint updates only
 	// when downstream components must maintain table names (for non-MySQL sinks), or
@@ -457,7 +492,7 @@ func (e *DispatcherManager) getTableRecoveryInfoFromMysqlSink(tableIds, startTsL
 // 2. changefeed is total new created, or resumed with overwriteCheckpointTs
 func (e *DispatcherManager) newEventDispatchers(infos map[common.DispatcherID]dispatcherCreateInfo, removeDDLTs bool) error {
 	if e.writePathClosed.Load() {
-		return nil
+		return newWritePathClosedError()
 	}
 	start := time.Now()
 	currentPdTs := e.pdClock.CurrentTS()
@@ -526,7 +561,7 @@ func (e *DispatcherManager) newEventDispatchers(infos map[common.DispatcherID]di
 		if e.writePathClosed.Load() {
 			e.writePathMu.Unlock()
 			d.Remove()
-			return nil
+			return newWritePathClosedError()
 		}
 		if d.IsTableTriggerDispatcher() {
 			if util.GetOrZero(e.config.SinkConfig.SendAllBootstrapAtStart) {
