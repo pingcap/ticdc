@@ -60,6 +60,7 @@ type Config struct {
 	AvroDecimalHandlingMode        string
 	AvroBigintUnsignedHandlingMode string
 	AvroGlueSchemaRegistry         *config.GlueSchemaRegistryConfig
+	AvroIncludeBeforeValue         bool
 	// EnableWatermarkEvent set to true, avro encode DDL and checkpoint event
 	// and send to the downstream kafka, they cannot be consumed by the confluent official consumer
 	// and would cause error, so this is only used for ticdc internal testing purpose, should not be
@@ -124,6 +125,7 @@ func NewConfig(protocol config.Protocol) *Config {
 		AvroConfluentSchemaRegistry:    "",
 		AvroDecimalHandlingMode:        "precise",
 		AvroBigintUnsignedHandlingMode: "long",
+		AvroIncludeBeforeValue:         false,
 		AvroEnableWatermark:            false,
 
 		OnlyOutputUpdatedColumns:   false,
@@ -167,6 +169,7 @@ type urlConfig struct {
 	MaxMessageBytes                *int    `form:"max-message-bytes"`
 	AvroDecimalHandlingMode        *string `form:"avro-decimal-handling-mode"`
 	AvroBigintUnsignedHandlingMode *string `form:"avro-bigint-unsigned-handling-mode"`
+	AvroIncludeBeforeValue         *bool   `form:"avro-include-before-value"`
 
 	// AvroEnableWatermark is the option for enabling watermark in avro protocol
 	// only used for internal testing, do not set this in the production environment since the
@@ -223,6 +226,9 @@ func (c *Config) Apply(sinkURI *url.URL, sinkConfig *config.SinkConfig) error {
 	if urlParameter.AvroBigintUnsignedHandlingMode != nil &&
 		*urlParameter.AvroBigintUnsignedHandlingMode != "" {
 		c.AvroBigintUnsignedHandlingMode = *urlParameter.AvroBigintUnsignedHandlingMode
+	}
+	if urlParameter.AvroIncludeBeforeValue != nil && c.Protocol == config.ProtocolAvro {
+		c.AvroIncludeBeforeValue = *urlParameter.AvroIncludeBeforeValue
 	}
 	if urlParameter.AvroEnableWatermark != nil {
 		if c.EnableTiDBExtension && c.Protocol == config.ProtocolAvro {
@@ -325,6 +331,7 @@ func mergeConfig(
 				dest.AvroEnableWatermark = codecConfig.AvroEnableWatermark
 				dest.AvroDecimalHandlingMode = codecConfig.AvroDecimalHandlingMode
 				dest.AvroBigintUnsignedHandlingMode = codecConfig.AvroBigintUnsignedHandlingMode
+				dest.AvroIncludeBeforeValue = codecConfig.AvroIncludeBeforeValue
 				dest.EncodingFormatType = codecConfig.EncodingFormat
 			}
 		}

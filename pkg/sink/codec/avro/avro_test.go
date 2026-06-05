@@ -18,12 +18,67 @@ import (
 	"testing"
 
 	"github.com/linkedin/goavro/v2"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
 	commonType "github.com/pingcap/ticdc/pkg/common"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/uuid"
+	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser/ast"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
+	parserTypes "github.com/pingcap/tidb/pkg/parser/types"
+	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
 )
+
+func newAvroRowEventForTest(
+	tableInfo *commonType.TableInfo,
+	commitTs uint64,
+	preRow chunk.Row,
+	row chunk.Row,
+) *commonEvent.RowEvent {
+	return &commonEvent.RowEvent{
+		PhysicalTableID: tableInfo.TableName.TableID,
+		StartTs:         commitTs,
+		CommitTs:        commitTs,
+		TableInfo:       tableInfo,
+		Event: commonEvent.RowChange{
+			PreRow: preRow,
+			Row:    row,
+		},
+		ColumnSelector: columnselector.NewDefaultColumnSelector(),
+	}
+}
+
+func newAvroTableInfoForTest() *commonType.TableInfo {
+	idFieldType := parserTypes.NewFieldType(mysql.TypeLong)
+	idFieldType.SetFlag(mysql.PriKeyFlag | mysql.NotNullFlag)
+	ageFieldType := parserTypes.NewFieldType(mysql.TypeLong)
+
+	return commonType.WrapTableInfo("test", &timodel.TableInfo{
+		ID:       20,
+		Name:     ast.NewCIStr("person"),
+		UpdateTS: 100,
+		Columns: []*timodel.ColumnInfo{
+			{
+				ID:        1,
+				Name:      ast.NewCIStr("id"),
+				FieldType: *idFieldType,
+				State:     timodel.StatePublic,
+				Offset:    0,
+			},
+			{
+				ID:        2,
+				Name:      ast.NewCIStr("age"),
+				FieldType: *ageFieldType,
+				State:     timodel.StatePublic,
+				Offset:    1,
+			},
+		},
+	})
+}
 
 func TestAvroEncode4EnableChecksum(t *testing.T) {
 	codecConfig := common.NewConfig(config.ProtocolAvro)
@@ -66,6 +121,50 @@ func TestAvroEncode4EnableChecksum(t *testing.T) {
 
 	_, found = m[tidbChecksumVersion]
 	require.True(t, found)
+}
+
+func TestAvroEncodeDeleteChecksum(t *testing.T) {
+	codecConfig := common.NewConfig(config.ProtocolAvro)
+	codecConfig.EnableTiDBExtension = true
+	codecConfig.EnableRowChecksum = true
+	codecConfig.AvroIncludeBeforeValue = true
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	encoder, err := SetupEncoderAndSchemaRegistry4Testing(ctx, codecConfig)
+	defer TeardownEncoderAndSchemaRegistry4Testing()
+	require.NoError(t, err)
+	require.NotNil(t, encoder)
+
+	tableInfo := newAvroTableInfoForTest()
+	event := newAvroRowEventForTest(
+		tableInfo,
+		1024,
+		chunk.MutRowFromValues(int64(1), int64(18)).ToRow(),
+		chunk.Row{},
+	)
+	event.Checksum = &integrity.Checksum{
+		Current:  11,
+		Previous: 22,
+	}
+
+	topic := "default"
+	bin, err := encoder.encodeValue(ctx, topic, event)
+	require.NoError(t, err)
+
+	cid, data, err := extractConfluentSchemaIDAndBinaryData(bin)
+	require.NoError(t, err)
+
+	avroValueCodec, err := encoder.schemaM.Lookup(ctx, topic, schemaID{confluentSchemaID: cid})
+	require.NoError(t, err)
+
+	res, _, err := avroValueCodec.NativeFromBinary(data)
+	require.NoError(t, err)
+	m, ok := res.(map[string]interface{})
+	require.True(t, ok)
+	require.Equal(t, deleteOperation, m[tidbOp])
+	require.Equal(t, "22", m[tidbRowLevelChecksum])
 }
 
 func TestAvroEncode(t *testing.T) {
@@ -121,6 +220,95 @@ func TestAvroEncode(t *testing.T) {
 		if k == "float" {
 			require.Equal(t, float32(3.14), v)
 		}
+	}
+}
+
+func TestAvroEncodeIncludeBeforeValue(t *testing.T) {
+	codecConfig := common.NewConfig(config.ProtocolAvro)
+	codecConfig.EnableTiDBExtension = true
+	codecConfig.AvroIncludeBeforeValue = true
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	encoder, err := SetupEncoderAndSchemaRegistry4Testing(ctx, codecConfig)
+	defer TeardownEncoderAndSchemaRegistry4Testing()
+	require.NoError(t, err)
+	require.NotNil(t, encoder)
+
+	tableInfo := newAvroTableInfoForTest()
+	beforeRow := chunk.MutRowFromValues(int64(1), int64(18)).ToRow()
+	afterRow := chunk.MutRowFromValues(int64(1), int64(20)).ToRow()
+
+	testCases := []struct {
+		name      string
+		event     *commonEvent.RowEvent
+		op        string
+		hasBefore bool
+	}{
+		{
+			name:  "insert",
+			event: newAvroRowEventForTest(tableInfo, 1024, chunk.Row{}, beforeRow),
+			op:    insertOperation,
+		},
+		{
+			name:      "update",
+			event:     newAvroRowEventForTest(tableInfo, 1025, beforeRow, afterRow),
+			op:        updateOperation,
+			hasBefore: true,
+		},
+		{
+			name:      "delete",
+			event:     newAvroRowEventForTest(tableInfo, 1026, afterRow, chunk.Row{}),
+			op:        deleteOperation,
+			hasBefore: true,
+		},
+	}
+
+	topic := "default"
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			bin, err := encoder.encodeValue(ctx, topic, tc.event)
+			require.NoError(t, err)
+			require.NotNil(t, bin)
+
+			cid, data, err := extractConfluentSchemaIDAndBinaryData(bin)
+			require.NoError(t, err)
+
+			avroValueCodec, err := encoder.schemaM.Lookup(ctx, topic, schemaID{confluentSchemaID: cid})
+			require.NoError(t, err)
+
+			res, _, err := avroValueCodec.NativeFromBinary(data)
+			require.NoError(t, err)
+			require.NotNil(t, res)
+
+			m, ok := res.(map[string]interface{})
+			require.True(t, ok)
+			require.Equal(t, int64(tc.event.CommitTs), m[tidbCommitTs])
+			require.Equal(t, tc.op, m[tidbOp])
+			if tc.hasBefore {
+				require.NotNil(t, m[ticdcBefore])
+			} else {
+				require.Nil(t, m[ticdcBefore])
+			}
+
+			key, err := encoder.encodeKey(ctx, topic, tc.event)
+			require.NoError(t, err)
+			decoder := NewDecoder(codecConfig, 0, encoder.schemaM, topic, nil)
+			decoder.AddKeyValue(key, bin)
+
+			messageType, exist := decoder.HasNext()
+			require.True(t, exist)
+			require.Equal(t, common.MessageTypeRow, messageType)
+
+			decoded := decoder.NextDMLEvent()
+			require.NotNil(t, decoded)
+			require.Equal(t, tc.event.CommitTs, decoded.CommitTs)
+
+			decodedRow, ok := decoded.GetNextRow()
+			require.True(t, ok)
+			common.CompareRow(t, tc.event.Event, tc.event.TableInfo, decodedRow, decoded.TableInfo)
+		})
 	}
 }
 
