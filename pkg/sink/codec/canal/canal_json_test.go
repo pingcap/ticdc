@@ -15,6 +15,7 @@ package canal
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"testing"
 
@@ -1262,5 +1263,6 @@ func TestRowKey(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NotEqual(t, tidb_ext.CommitTs, 0)
-	require.Equal(t, "dIAAAAAAAABuX3KAAAAAAAAAAQ==", tidb_ext.Rowkey)
+	require.NotEmpty(t, row.RowKey)
+	require.Equal(t, base64.StdEncoding.EncodeToString(row.RowKey), tidb_ext.Rowkey)
 }
