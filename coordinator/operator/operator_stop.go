@@ -60,8 +60,11 @@ func NewStopChangefeedOperator(
 	}
 }
 
-func (m *StopChangefeedOperator) Check(_ node.ID, status *heartbeatpb.MaintainerStatus) {
-	if !m.finished.Load() && status.State != heartbeatpb.ComponentState_Working {
+func (m *StopChangefeedOperator) Check(from node.ID, status *heartbeatpb.MaintainerStatus) {
+	if !m.finished.Load() &&
+		from == m.nodeID &&
+		isMaintainerStatusEpochAllowed(status.MaintainerEpoch, m.maintainerEpoch) &&
+		status.State != heartbeatpb.ComponentState_Working {
 		log.Info("maintainer report non-working status",
 			zap.Stringer("maintainer", m.cfID))
 		m.finished.Store(true)

@@ -106,6 +106,41 @@ func TestController_StopChangefeedWithMaintainerEpoch(t *testing.T) {
 	require.Equal(t, uint64(10), req.MaintainerEpoch)
 }
 
+func TestController_StopRemoteMaintainerWithMaintainerEpoch(t *testing.T) {
+	changefeedDB := changefeed.NewChangefeedDB(1216)
+	ctrl := gomock.NewController(t)
+	backend := mock_changefeed.NewMockBackend(ctrl)
+	oc, _, nodeManager := newOperatorControllerForTest(t, changefeedDB, backend, nil)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		Config:       config.GetDefaultReplicaConfig(),
+		SinkURI:      "mysql://127.0.0.1:3306",
+		Epoch:        20,
+	}, 1, true)
+	changefeedDB.AddAbsentChangefeed(cf)
+
+	oldNode := node.ID("old-node")
+	nodeManager.GetAliveNodes()[oldNode] = &node.Info{ID: oldNode}
+	op := oc.StopRemoteMaintainerWithMaintainerEpoch(context.Background(), cfID, oldNode, false, 10)
+	reqMsg := op.Schedule()
+	require.Equal(t, oldNode, reqMsg.To)
+	req := reqMsg.Message[0].(*heartbeatpb.RemoveMaintainerRequest)
+	require.Equal(t, uint64(10), req.MaintainerEpoch)
+
+	op.Check(oldNode, &heartbeatpb.MaintainerStatus{
+		State:           heartbeatpb.ComponentState_Stopped,
+		MaintainerEpoch: 20,
+	})
+	require.False(t, op.IsFinished())
+
+	op.Check(oldNode, &heartbeatpb.MaintainerStatus{
+		State:           heartbeatpb.ComponentState_Stopped,
+		MaintainerEpoch: 10,
+	})
+	require.True(t, op.IsFinished())
+}
+
 func TestController_AddOperator(t *testing.T) {
 	changefeedDB := changefeed.NewChangefeedDB(1216)
 	ctrl := gomock.NewController(t)

@@ -168,6 +168,10 @@ func requiresNewMaintainerOwnership(
 	}
 }
 
+func isMaintainerStatusEpochAllowed(statusEpoch, expectedEpoch uint64) bool {
+	return statusEpoch == 0 || expectedEpoch == 0 || statusEpoch == expectedEpoch
+}
+
 // StopChangefeed stop changefeed when the changefeed is stopped/removed.
 // if remove is true, it will remove the changefeed from the chagnefeed DB
 // if remove is false, it only marks as the changefeed stooped in changefeed DB, so we will not schedule the changefeed again
@@ -185,6 +189,28 @@ func (oc *Controller) StopChangefeedWithMaintainerEpoch(
 	maintainerEpoch uint64,
 ) operator.Operator[common.ChangeFeedID, *heartbeatpb.MaintainerStatus] {
 	return oc.stopChangefeed(cfID, removed, maintainerEpoch, true)
+}
+
+// StopRemoteMaintainerWithMaintainerEpoch stops a reported maintainer without
+// changing the local changefeed placement. It is used during coordinator
+// bootstrap when the reported maintainer is from an old ownership epoch and
+// must occupy the operator slot until the old owner stops.
+func (oc *Controller) StopRemoteMaintainerWithMaintainerEpoch(
+	_ context.Context,
+	cfID common.ChangeFeedID,
+	nodeID node.ID,
+	removed bool,
+	maintainerEpoch uint64,
+) operator.Operator[common.ChangeFeedID, *heartbeatpb.MaintainerStatus] {
+	oc.mu.Lock()
+	defer oc.mu.Unlock()
+
+	keyspaceID := common.DefaultKeyspaceID
+	changefeed := oc.changefeedDB.GetByID(cfID)
+	if changefeed != nil {
+		keyspaceID = changefeed.GetKeyspaceID()
+	}
+	return oc.pushStopChangefeedOperator(keyspaceID, cfID, nodeID, removed, maintainerEpoch)
 }
 
 func (oc *Controller) stopChangefeed(

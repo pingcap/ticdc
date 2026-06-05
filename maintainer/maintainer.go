@@ -384,12 +384,13 @@ func (m *Maintainer) GetMaintainerStatus() *heartbeatpb.MaintainerStatus {
 	}
 
 	status := &heartbeatpb.MaintainerStatus{
-		ChangefeedID:  m.changefeedID.ToPB(),
-		State:         heartbeatpb.ComponentState(m.scheduleState.Load()),
-		CheckpointTs:  m.controller.spanController.GetMaintainerCommittedCheckpointTs(),
-		Err:           runningErrors,
-		BootstrapDone: m.initialized.Load(),
-		LastSyncedTs:  m.getWatermark().LastSyncedTs,
+		ChangefeedID:    m.changefeedID.ToPB(),
+		State:           heartbeatpb.ComponentState(m.scheduleState.Load()),
+		CheckpointTs:    m.controller.spanController.GetMaintainerCommittedCheckpointTs(),
+		Err:             runningErrors,
+		BootstrapDone:   m.initialized.Load(),
+		LastSyncedTs:    m.getWatermark().LastSyncedTs,
+		MaintainerEpoch: m.currentMaintainerEpoch(),
 	}
 	drainTarget, drainEpoch := m.controller.getDispatcherDrainTarget()
 	if !drainTarget.IsEmpty() && drainEpoch > 0 {

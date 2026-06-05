@@ -548,6 +548,14 @@ func (c *Controller) handleSingleMaintainerStatus(
 	if !c.validateMaintainerNode(cf, from, cfID) {
 		return nil
 	}
+	if !validateMaintainerStatusEpoch(cf, status) {
+		log.Warn("drop stale maintainer status",
+			zap.Stringer("changefeed", cfID),
+			zap.Stringer("node", from),
+			zap.Uint64("statusMaintainerEpoch", status.MaintainerEpoch),
+			zap.Uint64("currentMaintainerEpoch", cf.GetInfo().Epoch))
+		return nil
+	}
 
 	change := c.updateChangefeedStatus(cf, cfID, status)
 	return change
@@ -599,6 +607,17 @@ func (c *Controller) validateMaintainerNode(
 		return false
 	}
 	return true
+}
+
+func validateMaintainerStatusEpoch(
+	cf *changefeed.Changefeed,
+	status *heartbeatpb.MaintainerStatus,
+) bool {
+	return maintainerEpochMatches(status.MaintainerEpoch, cf.GetInfo().Epoch)
+}
+
+func maintainerEpochMatches(statusEpoch, currentEpoch uint64) bool {
+	return statusEpoch == 0 || currentEpoch == 0 || statusEpoch == currentEpoch
 }
 
 func (c *Controller) updateChangefeedStatus(
@@ -668,12 +687,22 @@ func (c *Controller) finishBootstrap(ctx context.Context, runningChangefeeds map
 	log.Info("load all changefeeds", zap.Int("size", len(allChangefeeds)))
 	// Compare all changefeeds and running changefeeds, and add them to changefeedDB
 	for cfID, cfMeta := range allChangefeeds {
+		// Configuration items for compatibility with older versions
+		cfMeta.Info.VerifyAndComplete()
 		rm, ok := runningChangefeeds[cfID]
-		if !ok {
-			// Configuration items for compatibility with older versions
-			cfMeta.Info.VerifyAndComplete()
+		runningEpochMatches := ok && maintainerEpochMatches(rm.status.MaintainerEpoch, cfMeta.Info.Epoch)
+		if !ok || !runningEpochMatches {
 			// The changefeed is not running on other nodes, add it to changefeedDB.
 			// We will create this changefeed later.
+			if ok {
+				log.Warn("ignore running maintainer with stale epoch when bootstrapping",
+					zap.String("changefeed", cfID.String()),
+					zap.String("node", rm.nodeID.String()),
+					zap.Uint64("statusMaintainerEpoch", rm.status.MaintainerEpoch),
+					zap.Uint64("currentMaintainerEpoch", cfMeta.Info.Epoch),
+					zap.String("status", common.FormatMaintainerStatus(rm.status)))
+				delete(runningChangefeeds, cfID)
+			}
 			cf := changefeed.NewChangefeed(cfID, cfMeta.Info, cfMeta.Status.CheckpointTs, false)
 			if shouldRunChangefeed(cf.GetInfo().State) {
 				c.changefeedDB.AddAbsentChangefeed(cf)
@@ -694,8 +723,19 @@ func (c *Controller) finishBootstrap(ctx context.Context, runningChangefeeds map
 		switch cfMeta.Status.Progress {
 		case config.ProgressStopping, config.ProgressRemoving:
 			remove := cfMeta.Status.Progress == config.ProgressRemoving
-			c.operatorController.StopChangefeed(ctx, cfID, remove)
+			if ok && !runningEpochMatches {
+				c.operatorController.StopRemoteMaintainerWithMaintainerEpoch(
+					ctx, cfID, rm.nodeID, remove, rm.status.MaintainerEpoch)
+				c.changefeedDB.StopByChangefeedID(cfID, remove)
+			} else {
+				c.operatorController.StopChangefeed(ctx, cfID, remove)
+			}
 			log.Info("stop changefeed when bootstrapping", zap.String("changefeed", cfID.String()), zap.Any("meta", cfMeta))
+		default:
+			if ok && !runningEpochMatches {
+				c.operatorController.StopRemoteMaintainerWithMaintainerEpoch(
+					ctx, cfID, rm.nodeID, false, rm.status.MaintainerEpoch)
+			}
 		}
 	}
 
@@ -1034,8 +1074,7 @@ func (c *Controller) updateChangefeedEpoch(
 	return nil
 }
 
-// moveChangefeedToSchedulingQueue moves a changefeed to scheduling queue
-// It will set a new epoch for the changefeed before moving it to scheduling queue
+// moveChangefeedToSchedulingQueue moves a changefeed to scheduling queue.
 func (c *Controller) moveChangefeedToSchedulingQueue(
 	id common.ChangeFeedID,
 	resetBackoff bool,

@@ -372,28 +372,6 @@ func TestDeleteChangefeed(t *testing.T) {
 	require.Nil(t, err)
 }
 
-func TestResumeChangefeed(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	cdcClient := etcd.NewMockCDCEtcdClient(ctrl)
-	etcdClient := etcd.NewMockClient(ctrl)
-	cdcClient.EXPECT().GetEtcdClient().Return(etcdClient).AnyTimes()
-	cdcClient.EXPECT().GetClusterID().Return("test-cluster-id").AnyTimes()
-	backend := NewEtcdBackend(cdcClient)
-
-	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
-	info := &config.ChangeFeedInfo{State: config.StateStopped}
-	status := &config.ChangeFeedStatus{CheckpointTs: 100}
-
-	cdcClient.EXPECT().GetChangeFeedInfo(gomock.Any(), changefeedID.DisplayName).Return(info, nil).Times(1)
-	cdcClient.EXPECT().GetChangeFeedStatus(gomock.Any(), changefeedID).Return(status, int64(0), nil).Times(1)
-	etcdClient.EXPECT().Txn(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(&clientv3.TxnResponse{Succeeded: true}, nil).Times(1)
-
-	err := backend.ResumeChangefeed(context.Background(), changefeedID, 200)
-	require.Nil(t, err)
-}
-
 func TestSetChangefeedProgress(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()

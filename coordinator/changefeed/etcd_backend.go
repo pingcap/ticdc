@@ -363,48 +363,6 @@ func (b *EtcdBackend) DeleteChangefeed(ctx context.Context,
 	return nil
 }
 
-func (b *EtcdBackend) ResumeChangefeed(ctx context.Context,
-	id common.ChangeFeedID, newCheckpointTs uint64,
-) error {
-	info, err := b.etcdClient.GetChangeFeedInfo(ctx, id.DisplayName)
-	if err != nil {
-		return errors.Trace(err)
-	}
-	info.State = config.StateNormal
-	newStr, err := info.Marshal()
-	if err != nil {
-		return errors.Trace(err)
-	}
-	infoKey := etcd.GetEtcdKeyChangeFeedInfo(b.etcdClient.GetClusterID(), id.DisplayName)
-	opsThen := []clientv3.Op{
-		clientv3.OpPut(infoKey, newStr),
-	}
-	if newCheckpointTs > 0 {
-		status, _, err := b.etcdClient.GetChangeFeedStatus(ctx, id)
-		if err != nil {
-			return errors.Trace(err)
-		}
-		status.CheckpointTs = newCheckpointTs
-		status.Progress = config.ProgressNone
-		jobValue, err := status.Marshal()
-		if err != nil {
-			return errors.Trace(err)
-		}
-		jobKey := etcd.GetEtcdKeyJob(b.etcdClient.GetClusterID(), id.DisplayName)
-		opsThen = append(opsThen, clientv3.OpPut(jobKey, jobValue))
-	}
-
-	putResp, err := b.etcdClient.GetEtcdClient().Txn(ctx, nil, opsThen, []clientv3.Op{})
-	if err != nil {
-		return errors.Trace(err)
-	}
-	if !putResp.Succeeded {
-		err = cerror.ErrMetaOpFailed.GenWithStackByArgs(fmt.Sprintf("resume changefeed %s", info.ChangefeedID.Name()))
-		return errors.Trace(err)
-	}
-	return nil
-}
-
 func (b *EtcdBackend) SetChangefeedProgress(ctx context.Context, id common.ChangeFeedID, progress config.Progress) error {
 	// SetChangefeedProgress uses etcd ModRevision compare-and-swap (CAS) to avoid
 	// overwriting a newer checkpointTs written by the checkpoint updater.

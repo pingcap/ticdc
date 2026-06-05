@@ -18,6 +18,8 @@ import (
 
 	"github.com/pingcap/ticdc/coordinator/changefeed"
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/stretchr/testify/require"
 )
 
@@ -52,7 +54,14 @@ func TestAddMaintainerOperator_OnTaskRemoved(t *testing.T) {
 // TestAddMaintainerOperator_CheckRequiresBootstrapDone verifies that the operator only
 // completes after it observes a Working status with BootstrapDone from the destination node.
 func TestAddMaintainerOperator_CheckRequiresBootstrapDone(t *testing.T) {
-	op := NewAddMaintainerOperator(nil, &changefeed.Changefeed{}, "n1")
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		Config:       config.GetDefaultReplicaConfig(),
+		SinkURI:      "mysql://127.0.0.1:3306",
+		Epoch:        1,
+	}, 1, true)
+	op := NewAddMaintainerOperator(nil, cf, "n1")
 
 	op.Check("n1", &heartbeatpb.MaintainerStatus{
 		State:         heartbeatpb.ComponentState_Working,
@@ -61,8 +70,9 @@ func TestAddMaintainerOperator_CheckRequiresBootstrapDone(t *testing.T) {
 	require.False(t, op.finished.Load())
 
 	op.Check("n1", &heartbeatpb.MaintainerStatus{
-		State:         heartbeatpb.ComponentState_Working,
-		BootstrapDone: true,
+		State:           heartbeatpb.ComponentState_Working,
+		BootstrapDone:   true,
+		MaintainerEpoch: 1,
 	})
 	require.True(t, op.finished.Load())
 }
