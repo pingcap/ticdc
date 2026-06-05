@@ -979,7 +979,7 @@ func (e *DispatcherManager) stopWritePath(cancelFirst bool) {
 		e.cancel()
 	}
 
-	if e.IsRedoEnabled() {
+	if e.IsRedoEnabled() && e.redoSink != nil {
 		closeAllDispatchers(e.changefeedID, e.redoDispatcherMap, e.redoSink.SinkType())
 		log.Info("closed all redo dispatchers",
 			zap.Stringer("changefeedID", e.changefeedID))
@@ -1036,7 +1036,7 @@ func (e *DispatcherManager) stopWritePath(cancelFirst bool) {
 
 	log.Info("shared info closed", zap.Stringer("changefeedID", e.changefeedID))
 
-	if e.IsRedoEnabled() {
+	if e.IsRedoEnabled() && e.redoSink != nil {
 		e.redoSink.Close()
 	}
 	if e.sink != nil {

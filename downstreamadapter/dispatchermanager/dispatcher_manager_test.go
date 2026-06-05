@@ -427,6 +427,19 @@ func TestLocalFenceCancelsWritePathWithoutWaitingForCleanup(t *testing.T) {
 	}, time.Second, 10*time.Millisecond)
 }
 
+func TestLocalFenceWithRedoEnabledBeforeRedoSinkInitialized(t *testing.T) {
+	manager := createTestManager(t)
+	manager.redoEnabled = true
+	manager.redoSink = nil
+
+	require.NotPanics(t, func() {
+		manager.LocalFence()
+	})
+	require.Eventually(t, func() bool {
+		return manager.TryClose(false)
+	}, time.Second, 10*time.Millisecond)
+}
+
 func TestMergeDispatcherExistingID(t *testing.T) {
 	manager := createTestManager(t)
 
