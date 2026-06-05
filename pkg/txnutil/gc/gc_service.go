@@ -213,23 +213,7 @@ func setKeyspaceGCSafepoint(
 	}
 
 	gcCli := pdCli.GetGCStatesClient(keyspaceID)
-	_, setBarrierErr := SetGCBarrier(ctx, gcCli, serviceID, safePoint, time.Duration(ttl)*time.Second)
-	if setBarrierErr != nil && !errors.IsGCBarrierTSBehindTxnSafePointError(setBarrierErr) {
-		log.Warn("update keyspace gc barrier failed",
-			zap.Uint32("keyspaceID", keyspaceID), zap.Uint64("checkpointTs", safePoint),
-			zap.String("serviceID", serviceID), zap.Error(setBarrierErr))
-		return 0, errors.WrapError(errors.ErrUpdateGCBarrierFailed, setBarrierErr)
-	}
-	minGCBarrier, err := UnifyGetServiceGCSafepoint(ctx, pdCli, keyspaceID, serviceID)
-	if setBarrierErr != nil {
-		log.Warn("update keyspace gc barrier failed, checkpointTs smaller than the minimum gc barrier",
-			zap.Uint32("keyspaceID", keyspaceID),
-			zap.Uint64("checkpointTs", safePoint),
-			zap.Uint64("minGCBarrier", minGCBarrier),
-			zap.String("serviceID", serviceID),
-			zap.Error(setBarrierErr))
-	}
-	return minGCBarrier, err
+	return SetGCBarrier(ctx, gcCli, serviceID, safePoint, time.Duration(ttl)*time.Second)
 }
 
 func getKeyspaceGCSafepoint(
