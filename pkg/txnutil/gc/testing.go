@@ -88,36 +88,36 @@ func (m *MockPDClient) GetGCStatesClient(keyspaceID uint32) pdgc.GCStatesClient 
 	return nil
 }
 
-// GetMinServiceSafePointV2 implements legacySafePointClient.GetMinServiceSafePointV2.
+// GetMinServiceSafePointV2 implements pdgc.LegacyClientV2.GetMinServiceSafePointV2.
 func (m *MockPDClient) GetMinServiceSafePointV2(ctx context.Context, keyspaceID uint32) (uint64, error) {
 	if m.GetMinServiceSafePointV2Func != nil {
 		return m.GetMinServiceSafePointV2Func(ctx, keyspaceID)
 	}
-	if legacyCli, ok := m.Client.(legacySafePointClient); ok {
+	if legacyCli, ok := m.Client.(pdgc.LegacyClientV2); ok {
 		return legacyCli.GetMinServiceSafePointV2(ctx, keyspaceID)
 	}
 	return 0, errors.New("GetMinServiceSafePointV2Func is not set")
 }
 
-// SetServiceSafePointV2 implements legacySafePointClient.SetServiceSafePointV2.
+// SetServiceSafePointV2 implements pdgc.LegacyClientV2.SetServiceSafePointV2.
 func (m *MockPDClient) SetServiceSafePointV2(
 	ctx context.Context, keyspaceID uint32, serviceID string, ttl int64, safePoint uint64,
 ) (uint64, error) {
 	if m.SetServiceSafePointV2Func != nil {
 		return m.SetServiceSafePointV2Func(ctx, keyspaceID, serviceID, ttl, safePoint)
 	}
-	if legacyCli, ok := m.Client.(legacySafePointClient); ok {
+	if legacyCli, ok := m.Client.(pdgc.LegacyClientV2); ok {
 		return legacyCli.SetServiceSafePointV2(ctx, keyspaceID, serviceID, ttl, safePoint)
 	}
 	return 0, errors.New("SetServiceSafePointV2Func is not set")
 }
 
-// DeleteServiceSafePointV2 implements legacySafePointClient.DeleteServiceSafePointV2.
+// DeleteServiceSafePointV2 implements pdgc.LegacyClientV2.DeleteServiceSafePointV2.
 func (m *MockPDClient) DeleteServiceSafePointV2(ctx context.Context, keyspaceID uint32, serviceID string) (uint64, error) {
 	if m.DeleteServiceSafePointV2Func != nil {
 		return m.DeleteServiceSafePointV2Func(ctx, keyspaceID, serviceID)
 	}
-	if legacyCli, ok := m.Client.(legacySafePointClient); ok {
+	if legacyCli, ok := m.Client.(pdgc.LegacyClientV2); ok {
 		return legacyCli.DeleteServiceSafePointV2(ctx, keyspaceID, serviceID)
 	}
 	return 0, errors.New("DeleteServiceSafePointV2Func is not set")

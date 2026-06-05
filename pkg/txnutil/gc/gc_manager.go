@@ -199,13 +199,6 @@ func (m *gcManager) TryUpdateKeyspaceGCBarrier(ctx context.Context, keyspaceID u
 		minGCBarrier = uint64(val.(int))
 	})
 
-	if checkpointTs < minGCBarrier {
-		log.Warn("update keyspace gc barrier failed, checkpointTs smaller than the minimum gc barrier",
-			zap.Uint32("keyspaceID", keyspaceID),
-			zap.Uint64("checkpointTs", checkpointTs),
-			zap.Uint64("minGCBarrier", minGCBarrier),
-			zap.String("serviceID", m.gcServiceID))
-	}
 	// if the min checkpoint ts is equal to the current gc barrier ts, it means
 	// that the service gc barrier ts set by TiCDC is the min service gc barrier ts
 	newBarrierInfo := &keyspaceGCBarrierInfo{
