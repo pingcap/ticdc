@@ -16,7 +16,9 @@ package operator
 import (
 	"context"
 	"encoding/json"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/coordinator/changefeed"
@@ -302,6 +304,104 @@ func TestController_AddOperatorBumpsAndPersistsOwnershipEpoch(t *testing.T) {
 			require.Equal(t, expectedEpoch, info.Epoch)
 		})
 	}
+}
+
+func TestController_AddOperatorEpochBumpDoesNotBlockStatusAndStop(t *testing.T) {
+	changefeedDB := changefeed.NewChangefeedDB(1216)
+	ctrl := gomock.NewController(t)
+	backend := mock_changefeed.NewMockBackend(ctrl)
+	oc, _, nodeManager := newOperatorControllerForTest(t, changefeedDB, backend, &operatorEpochPDClient{physical: 100, logical: 1})
+	target := node.NewInfo("localhost:8301", "")
+	nodeManager.GetAliveNodes()[target.ID] = target
+
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		Config:       config.GetDefaultReplicaConfig(),
+		SinkURI:      "mysql://127.0.0.1:3306",
+		Epoch:        10,
+	}, 1, true)
+	changefeedDB.AddAbsentChangefeed(cf)
+
+	bumpStarted := make(chan struct{})
+	bumpHasDeadline := make(chan bool, 1)
+	unblockBump := make(chan struct{})
+	var unblockOnce sync.Once
+	unblock := func() {
+		unblockOnce.Do(func() {
+			close(unblockBump)
+		})
+	}
+	t.Cleanup(unblock)
+
+	backend.EXPECT().
+		BumpChangefeedEpoch(gomock.Any(), cfID, gomock.Any(), changefeed.EpochBumpOptions{}).
+		DoAndReturn(func(ctx context.Context, id common.ChangeFeedID, candidateEpoch uint64, options changefeed.EpochBumpOptions) (*config.ChangeFeedInfo, error) {
+			_, ok := ctx.Deadline()
+			bumpHasDeadline <- ok
+			close(bumpStarted)
+			select {
+			case <-unblockBump:
+				info, err := cf.GetInfo().Clone()
+				if err != nil {
+					return nil, err
+				}
+				info.Epoch = candidateEpoch
+				return info, nil
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}).
+		Times(1)
+
+	addDone := make(chan bool, 1)
+	go func() {
+		addDone <- oc.AddOperator(NewAddMaintainerOperator(changefeedDB, cf, target.ID))
+	}()
+
+	select {
+	case <-bumpStarted:
+	case <-time.After(time.Second):
+		t.Fatal("AddOperator did not reach epoch bump")
+	}
+	require.True(t, <-bumpHasDeadline)
+
+	statusDone := make(chan struct{}, 1)
+	go func() {
+		oc.UpdateOperatorStatus(cfID, target.ID, &heartbeatpb.MaintainerStatus{
+			State: heartbeatpb.ComponentState_Working,
+		})
+		statusDone <- struct{}{}
+	}()
+	select {
+	case <-statusDone:
+	case <-time.After(time.Second):
+		t.Fatal("UpdateOperatorStatus blocked behind AddOperator epoch bump")
+	}
+
+	stopDone := make(chan scheduleroperator.Operator[common.ChangeFeedID, *heartbeatpb.MaintainerStatus], 1)
+	go func() {
+		stopDone <- oc.StopChangefeed(context.Background(), cfID, true)
+	}()
+	var stopOp scheduleroperator.Operator[common.ChangeFeedID, *heartbeatpb.MaintainerStatus]
+	select {
+	case stopOp = <-stopDone:
+	case <-time.After(time.Second):
+		t.Fatal("StopChangefeed blocked behind AddOperator epoch bump")
+	}
+	require.NotNil(t, stopOp)
+	require.Equal(t, "stop", stopOp.Type())
+	require.Equal(t, 1, oc.OperatorSize())
+
+	unblock()
+	select {
+	case added := <-addDone:
+		require.False(t, added)
+	case <-time.After(time.Second):
+		t.Fatal("AddOperator did not finish after epoch bump was unblocked")
+	}
+	require.Equal(t, 1, oc.OperatorSize())
+	require.Equal(t, "stop", oc.GetOperator(cfID).Type())
 }
 
 func TestController_StopChangefeedDuringAddOperator(t *testing.T) {

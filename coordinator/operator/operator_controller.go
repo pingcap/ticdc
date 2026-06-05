@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
+	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -33,6 +34,8 @@ import (
 	pd "github.com/tikv/pd/client"
 	"go.uber.org/zap"
 )
+
+const operatorEpochBumpTimeout = 10 * time.Second
 
 // Controller is the operator controller, it manages all operators.
 // And the Controller is responsible for the execution of the operator.
@@ -106,22 +109,24 @@ func (oc *Controller) Execute() time.Time {
 // AddOperator adds an operator to the controller, if the operator already exists, return false.
 func (oc *Controller) AddOperator(op operator.Operator[common.ChangeFeedID, *heartbeatpb.MaintainerStatus]) bool {
 	oc.mu.Lock()
-	defer oc.mu.Unlock()
+	cf, ok := oc.precheckAddOperatorLocked(op)
+	if !ok {
+		oc.mu.Unlock()
+		return false
+	}
+	shouldBumpEpoch := oc.shouldBumpChangefeedEpoch(op)
+	if !shouldBumpEpoch {
+		oc.pushOperator(op)
+		oc.mu.Unlock()
+		return true
+	}
+	// Epoch bump may call PD and etcd, so keep it outside oc.mu. Recheck the
+	// operator slot before pushing because stop or another operator may win
+	// while the bump is in flight.
+	oc.mu.Unlock()
 
-	if pre, ok := oc.operators[op.ID()]; ok {
-		log.Info("add operator failed, operator already exists",
-			zap.String("role", oc.role),
-			zap.Stringer("operator", op), zap.Stringer("previousOperator", pre.OP))
-		return false
-	}
-	cf := oc.changefeedDB.GetByID(op.ID())
-	if cf == nil {
-		log.Warn("add operator failed, changefeed not found",
-			zap.String("role", oc.role),
-			zap.String("operator", op.String()))
-		return false
-	}
-	if err := oc.bumpChangefeedEpochIfNeeded(op, cf); err != nil {
+	info, err := oc.bumpChangefeedEpoch(cf)
+	if err != nil {
 		log.Warn("add operator failed, cannot bump changefeed epoch",
 			zap.String("role", oc.role),
 			zap.String("operator", op.String()),
@@ -129,32 +134,79 @@ func (oc *Controller) AddOperator(op operator.Operator[common.ChangeFeedID, *hea
 			zap.Error(err))
 		return false
 	}
+
+	oc.mu.Lock()
+	defer oc.mu.Unlock()
+	if !oc.recheckAddOperatorLocked(op, cf) {
+		return false
+	}
+	cf.SetInfo(info)
 	oc.pushOperator(op)
 	return true
 }
 
-func (oc *Controller) bumpChangefeedEpochIfNeeded(
+func (oc *Controller) precheckAddOperatorLocked(
+	op operator.Operator[common.ChangeFeedID, *heartbeatpb.MaintainerStatus],
+) (*changefeed.Changefeed, bool) {
+	if pre, ok := oc.operators[op.ID()]; ok {
+		log.Info("add operator failed, operator already exists",
+			zap.String("role", oc.role),
+			zap.Stringer("operator", op), zap.Stringer("previousOperator", pre.OP))
+		return nil, false
+	}
+	cf := oc.changefeedDB.GetByID(op.ID())
+	if cf == nil {
+		log.Warn("add operator failed, changefeed not found",
+			zap.String("role", oc.role),
+			zap.String("operator", op.String()))
+		return nil, false
+	}
+	return cf, true
+}
+
+func (oc *Controller) recheckAddOperatorLocked(
 	op operator.Operator[common.ChangeFeedID, *heartbeatpb.MaintainerStatus],
 	cf *changefeed.Changefeed,
-) error {
-	if !requiresNewMaintainerOwnership(op) {
-		return nil
+) bool {
+	if pre, ok := oc.operators[op.ID()]; ok {
+		log.Info("add operator failed, operator already exists after epoch bump",
+			zap.String("role", oc.role),
+			zap.Stringer("operator", op), zap.Stringer("previousOperator", pre.OP))
+		return false
 	}
-	if oc.pdClient == nil || oc.backend == nil {
-		return nil
+	current := oc.changefeedDB.GetByID(op.ID())
+	if current == nil {
+		log.Warn("add operator failed, changefeed not found after epoch bump",
+			zap.String("role", oc.role),
+			zap.String("operator", op.String()))
+		return false
 	}
-	epoch := pdutil.GenerateChangefeedEpoch(context.Background(), oc.pdClient)
-	info, err := oc.backend.BumpChangefeedEpoch(
-		context.Background(),
+	if current != cf {
+		log.Warn("add operator failed, changefeed changed after epoch bump",
+			zap.String("role", oc.role),
+			zap.String("operator", op.String()))
+		return false
+	}
+	return true
+}
+
+func (oc *Controller) shouldBumpChangefeedEpoch(
+	op operator.Operator[common.ChangeFeedID, *heartbeatpb.MaintainerStatus],
+) bool {
+	return requiresNewMaintainerOwnership(op) && oc.pdClient != nil && oc.backend != nil
+}
+
+func (oc *Controller) bumpChangefeedEpoch(cf *changefeed.Changefeed) (*config.ChangeFeedInfo, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), operatorEpochBumpTimeout)
+	defer cancel()
+
+	epoch := pdutil.GenerateChangefeedEpoch(ctx, oc.pdClient)
+	return oc.backend.BumpChangefeedEpoch(
+		ctx,
 		cf.ID,
 		epoch,
 		changefeed.EpochBumpOptions{},
 	)
-	if err != nil {
-		return err
-	}
-	cf.SetInfo(info)
-	return nil
 }
 
 func requiresNewMaintainerOwnership(
