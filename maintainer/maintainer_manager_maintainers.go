@@ -179,10 +179,6 @@ func (p *managerMaintainerSet) handleAddMaintainer(
 	getDrainTarget func() (node.ID, uint64),
 ) *heartbeatpb.MaintainerStatus {
 	changefeedID := common.NewChangefeedIDFromPB(req.Id)
-	if _, ok := p.registry.Load(changefeedID); ok {
-		return nil
-	}
-
 	info := &config.ChangeFeedInfo{}
 	if err := json.Unmarshal(req.Config, info); err != nil {
 		log.Error("ignore add maintainer request with invalid config",
@@ -197,22 +193,57 @@ func (p *managerMaintainerSet) handleAddMaintainer(
 			zap.Uint64("checkpointTs", req.CheckpointTs))
 		return nil
 	}
+	requestEpoch := req.MaintainerEpoch
+	if requestEpoch == 0 {
+		requestEpoch = info.Epoch
+	} else {
+		info.Epoch = requestEpoch
+	}
 	maintainer := NewMaintainer(changefeedID, p.conf, info, p.nodeInfo, p.taskScheduler, req.CheckpointTs, req.IsNewChangefeed, req.KeyspaceId)
-	registered, loaded := p.registry.LoadOrStore(changefeedID, maintainer)
-	if loaded {
-		// Duplicate add requests can race on the same changefeed. Drop the loser and
-		// stop the redundant maintainer immediately so background goroutines do not leak.
-		maintainer.Close()
+	registeredMaintainer := p.registerMaintainerForAdd(changefeedID, maintainer, requestEpoch)
+	if registeredMaintainer == nil {
 		return nil
 	}
-
-	registeredMaintainer := registered.(*Maintainer)
 	// Register the maintainer before seeding the drain snapshot so concurrent
 	// manager-level drain fanout can always observe it in the registry.
 	target, epoch := getDrainTarget()
 	registeredMaintainer.SetDispatcherDrainTarget(target, epoch)
 	registeredMaintainer.pushEvent(&Event{changefeedID: changefeedID, eventType: EventInit})
 	return nil
+}
+
+func (p *managerMaintainerSet) registerMaintainerForAdd(
+	changefeedID common.ChangeFeedID,
+	maintainer *Maintainer,
+	requestEpoch uint64,
+) *Maintainer {
+	for {
+		registered, loaded := p.registry.LoadOrStore(changefeedID, maintainer)
+		if !loaded {
+			return maintainer
+		}
+
+		existing := registered.(*Maintainer)
+		existingEpoch := existing.currentMaintainerEpoch()
+		if !shouldReplaceMaintainerForAdd(existingEpoch, requestEpoch) {
+			maintainer.Close()
+			return nil
+		}
+		if p.registry.CompareAndSwap(changefeedID, existing, maintainer) {
+			existing.Close()
+			return maintainer
+		}
+	}
+}
+
+func shouldReplaceMaintainerForAdd(existingEpoch, requestEpoch uint64) bool {
+	if requestEpoch == 0 {
+		return false
+	}
+	if existingEpoch == 0 {
+		return true
+	}
+	return requestEpoch > existingEpoch
 }
 
 // handleRemoveMaintainer handles both normal remove and cascade-remove flows.

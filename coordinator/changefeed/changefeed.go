@@ -255,6 +255,7 @@ func (c *Changefeed) NewAddMaintainerMessage(server node.ID) *messaging.TargetMe
 			Config:          configBytes,
 			IsNewChangefeed: c.isNew,
 			KeyspaceId:      c.GetKeyspaceID(),
+			MaintainerEpoch: info.Epoch,
 		})
 }
 

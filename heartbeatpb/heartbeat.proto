@@ -246,6 +246,7 @@ message AddMaintainerRequest {
     uint64 checkpoint_ts = 3;
     bool is_new_changefeed = 4;  // only true when the changefeed is new created or resumed with overwriteCheckpointTs
     uint32 keyspace_id = 5;
+    uint64 maintainer_epoch = 6;
 }
 
 message RemoveMaintainerRequest {

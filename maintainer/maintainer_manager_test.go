@@ -71,6 +71,79 @@ func runCancelable(t *testing.T, ctx context.Context, run func(context.Context) 
 	})
 }
 
+func newAddMaintainerRequestForEpoch(
+	t *testing.T,
+	cfID common.ChangeFeedID,
+	configEpoch uint64,
+	requestEpoch uint64,
+) *heartbeatpb.AddMaintainerRequest {
+	t.Helper()
+
+	info := &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		Config:       config.GetDefaultReplicaConfig(),
+		Epoch:        configEpoch,
+	}
+	data, err := json.Marshal(info)
+	require.NoError(t, err)
+	return &heartbeatpb.AddMaintainerRequest{
+		Id:              cfID.ToPB(),
+		Config:          data,
+		CheckpointTs:    10,
+		KeyspaceId:      common.DefaultKeyspaceID,
+		MaintainerEpoch: requestEpoch,
+	}
+}
+
+func newManagerMaintainerSetForAddTest(t *testing.T) *managerMaintainerSet {
+	t.Helper()
+
+	testutil.SetUpTestServices(t)
+	selfNode := node.NewInfo("", "")
+	maintainers := newManagerMaintainerSet(config.NewDefaultSchedulerConfig(), selfNode)
+	t.Cleanup(maintainers.closeAll)
+	return maintainers
+}
+
+func TestManagerMaintainerSet_AddMaintainerReplacesOlderEpoch(t *testing.T) {
+	maintainers := newManagerMaintainerSetForAddTest(t)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	noDrainTarget := func() (node.ID, uint64) { return "", 0 }
+
+	maintainers.handleAddMaintainer(newAddMaintainerRequestForEpoch(t, cfID, 1, 1), noDrainTarget)
+	oldMaintainer, ok := maintainers.getMaintainer(cfID)
+	require.True(t, ok)
+	require.Equal(t, uint64(1), oldMaintainer.currentMaintainerEpoch())
+
+	// The explicit request epoch is zero to cover rolling-upgrade fallback from config.
+	maintainers.handleAddMaintainer(newAddMaintainerRequestForEpoch(t, cfID, 2, 0), noDrainTarget)
+	currentMaintainer, ok := maintainers.getMaintainer(cfID)
+	require.True(t, ok)
+	require.False(t, oldMaintainer == currentMaintainer)
+	require.Equal(t, uint64(2), currentMaintainer.currentMaintainerEpoch())
+}
+
+func TestManagerMaintainerSet_AddMaintainerRejectsOlderEpoch(t *testing.T) {
+	maintainers := newManagerMaintainerSetForAddTest(t)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	noDrainTarget := func() (node.ID, uint64) { return "", 0 }
+
+	maintainers.handleAddMaintainer(newAddMaintainerRequestForEpoch(t, cfID, 2, 2), noDrainTarget)
+	currentMaintainer, ok := maintainers.getMaintainer(cfID)
+	require.True(t, ok)
+	require.Equal(t, uint64(2), currentMaintainer.currentMaintainerEpoch())
+
+	maintainers.handleAddMaintainer(newAddMaintainerRequestForEpoch(t, cfID, 1, 1), noDrainTarget)
+	maintainerAfterOldAdd, ok := maintainers.getMaintainer(cfID)
+	require.True(t, ok)
+	require.True(t, currentMaintainer == maintainerAfterOldAdd)
+
+	maintainers.handleAddMaintainer(newAddMaintainerRequestForEpoch(t, cfID, 0, 0), noDrainTarget)
+	maintainerAfterCompatAdd, ok := maintainers.getMaintainer(cfID)
+	require.True(t, ok)
+	require.True(t, currentMaintainer == maintainerAfterCompatAdd)
+}
+
 // This is a integration test for maintainer manager, it may consume a lot of time.
 // scale out/in close, add/remove tables
 func TestMaintainerSchedulesNodeChanges(t *testing.T) {

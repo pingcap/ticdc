@@ -152,6 +152,7 @@ func TestChangefeed_NewAddMaintainerMessage(t *testing.T) {
 		SinkURI: "kafka://127.0.0.1:9092",
 		State:   config.StateNormal,
 		Config:  config.GetDefaultReplicaConfig(),
+		Epoch:   7,
 	}
 	cf := NewChangefeed(cfID, info, 100, true)
 
@@ -159,6 +160,8 @@ func TestChangefeed_NewAddMaintainerMessage(t *testing.T) {
 	msg := cf.NewAddMaintainerMessage(server)
 	require.Equal(t, server, msg.To)
 	require.Equal(t, messaging.MaintainerManagerTopic, msg.Topic)
+	req := msg.Message[0].(*heartbeatpb.AddMaintainerRequest)
+	require.Equal(t, info.Epoch, req.MaintainerEpoch)
 }
 
 func TestChangefeed_NewCheckpointTsMessage(t *testing.T) {
