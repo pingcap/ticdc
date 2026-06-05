@@ -69,9 +69,9 @@ require (
 	github.com/spf13/pflag v1.0.10
 	github.com/stretchr/testify v1.11.1
 	github.com/thanhpk/randstr v1.0.6
-	github.com/tikv/client-go/v2 v2.0.8-0.20260603073448-ee79f08242bf
-	github.com/tikv/pd v1.1.0-beta.0.20240407022249-7179657d129b
-	github.com/tikv/pd/client v0.0.0-20260601035915-3ef6a3b10c84
+	github.com/tikv/client-go/v2 v2.0.8-0.20260604120313-9cad65dbeae3
+	github.com/tikv/pd v1.1.0-beta.0.20260604125942-9f1c47b1e851
+	github.com/tikv/pd/client v0.0.0-20260604125942-9f1c47b1e851
 	github.com/tinylib/msgp v1.5.0
 	github.com/uber-go/atomic v1.4.0
 	github.com/xdg/scram v1.0.5
@@ -401,6 +401,4 @@ replace (
 	// copy from TiDB
 	github.com/go-ldap/ldap/v3 v3.4.4 => github.com/yangkeao/ldap/v3 v3.4.5-0.20230421065457-369a3bab1117
 	github.com/pingcap/tiflow => github.com/wk989898/tiflow v0.0.0-20260604065511-33c2eebdb79f
-	github.com/tikv/pd => github.com/pingyu/pd v0.0.0-20260603101135-70b5e96fae34
-	github.com/tikv/pd/client => github.com/pingyu/pd/client v0.0.0-20260603101135-70b5e96fae34
 )
