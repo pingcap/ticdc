@@ -16,7 +16,6 @@ package dispatchermanager
 import (
 	"context"
 	"math"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -53,8 +52,7 @@ const (
 	// manager batching drains it. Longer retries are absorbed by the request
 	// queue dedupe, so keeping this queue modest avoids preallocating a large
 	// value-retention window in front of the manager.
-	blockStatusBufferSize                   = 16 * 1024
-	dispatcherManagerWritePathClosedMessage = "dispatcher manager write path is closed"
+	blockStatusBufferSize = 16 * 1024
 )
 
 // IsWritePathClosedError reports whether err means the local write path has
@@ -65,15 +63,11 @@ func IsWritePathClosedError(err error) bool {
 		return false
 	}
 	code, ok := errors.RFCCode(err)
-	if !ok || code != errors.ErrChangefeedInitTableTriggerDispatcherFailed.RFCCode() {
-		return false
-	}
-	return strings.Contains(err.Error(), dispatcherManagerWritePathClosedMessage)
+	return ok && code == errors.ErrDispatcherManagerWritePathClosed.RFCCode()
 }
 
 func newWritePathClosedError() error {
-	return errors.ErrChangefeedInitTableTriggerDispatcherFailed.
-		FastGenByArgs(dispatcherManagerWritePathClosedMessage)
+	return errors.ErrDispatcherManagerWritePathClosed.FastGenByArgs()
 }
 
 /*
