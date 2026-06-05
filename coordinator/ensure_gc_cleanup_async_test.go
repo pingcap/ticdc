@@ -77,6 +77,28 @@ func (c *blockingPdClient) GetGCStatesClient(keyspaceID uint32) pdgc.GCStatesCli
 	return &blockingGCStatesClient{parent: c}
 }
 
+func (c *blockingPdClient) GetMinServiceSafePointV2(ctx context.Context, keyspaceID uint32) (uint64, error) {
+	return 0, nil
+}
+
+func (c *blockingPdClient) SetServiceSafePointV2(
+	ctx context.Context, keyspaceID uint32, serviceID string, ttl int64, safePoint uint64,
+) (uint64, error) {
+	return safePoint, nil
+}
+
+func (c *blockingPdClient) DeleteServiceSafePointV2(
+	ctx context.Context, keyspaceID uint32, serviceID string,
+) (uint64, error) {
+	c.markStarted()
+	select {
+	case <-c.releaseUndo:
+		return 0, nil
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	}
+}
+
 type blockingGCStatesClient struct {
 	parent *blockingPdClient
 }

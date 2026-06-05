@@ -40,6 +40,20 @@ func (c *errorPdClient) GetGCStatesClient(keyspaceID uint32) pdgc.GCStatesClient
 	return &errorGCStatesClient{err: c.err}
 }
 
+func (c *errorPdClient) GetMinServiceSafePointV2(ctx context.Context, keyspaceID uint32) (uint64, error) {
+	return 0, c.err
+}
+
+func (c *errorPdClient) SetServiceSafePointV2(
+	ctx context.Context, keyspaceID uint32, serviceID string, ttl int64, safePoint uint64,
+) (uint64, error) {
+	return 0, c.err
+}
+
+func (c *errorPdClient) DeleteServiceSafePointV2(ctx context.Context, keyspaceID uint32, serviceID string) (uint64, error) {
+	return 0, c.err
+}
+
 type errorGCStatesClient struct {
 	err error
 }
@@ -84,6 +98,21 @@ func (c *countingPdClient) UpdateServiceGCSafePoint(ctx context.Context, service
 
 func (c *countingPdClient) GetGCStatesClient(keyspaceID uint32) pdgc.GCStatesClient {
 	return &countingGCStatesClient{parent: c}
+}
+
+func (c *countingPdClient) GetMinServiceSafePointV2(ctx context.Context, keyspaceID uint32) (uint64, error) {
+	return 0, nil
+}
+
+func (c *countingPdClient) SetServiceSafePointV2(
+	ctx context.Context, keyspaceID uint32, serviceID string, ttl int64, safePoint uint64,
+) (uint64, error) {
+	return safePoint, nil
+}
+
+func (c *countingPdClient) DeleteServiceSafePointV2(ctx context.Context, keyspaceID uint32, serviceID string) (uint64, error) {
+	c.callCount.Add(1)
+	return 0, nil
 }
 
 type countingGCStatesClient struct {

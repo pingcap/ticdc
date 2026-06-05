@@ -89,11 +89,17 @@ func TestTryUpdateKeyspaceGCBarrierUsesServiceSafePointV2WhenEnabled(t *testing.
 	checkpointTs := common.Ts(100)
 
 	setServiceSafePointV2Calls := 0
+	getMinServiceSafePointV2Calls := 0
 	var manager *gcManager
 	pdClient := &MockPDClient{
 		GetGCStatesClientFunc: func(id uint32) pdgc.GCStatesClient {
 			require.FailNow(t, "GetGCStatesClient should not be called when service safe point v2 is enabled")
 			return nil
+		},
+		GetMinServiceSafePointV2Func: func(ctx context.Context, id uint32) (uint64, error) {
+			getMinServiceSafePointV2Calls++
+			require.Equal(t, keyspaceID, id)
+			return uint64(checkpointTs), nil
 		},
 		SetServiceSafePointV2Func: func(
 			ctx context.Context, id uint32, serviceID string, ttl int64, safePoint uint64,
@@ -114,6 +120,7 @@ func TestTryUpdateKeyspaceGCBarrierUsesServiceSafePointV2WhenEnabled(t *testing.
 
 	require.NoError(t, manager.TryUpdateKeyspaceGCBarrier(ctx, keyspaceID, keyspaceName, checkpointTs))
 	require.Equal(t, 1, setServiceSafePointV2Calls)
+	require.Equal(t, 1, getMinServiceSafePointV2Calls)
 
 	barrierInfo, ok := manager.keyspaceGCBarrierInfoMap.Load(keyspaceID)
 	require.True(t, ok)
