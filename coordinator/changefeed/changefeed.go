@@ -258,10 +258,6 @@ func (c *Changefeed) NewAddMaintainerMessage(server node.ID) *messaging.TargetMe
 		})
 }
 
-func (c *Changefeed) NewRemoveMaintainerMessage(server node.ID, casCade, removed bool) *messaging.TargetMessage {
-	return RemoveMaintainerMessage(c.GetKeyspaceID(), c.ID, server, casCade, removed, c.GetInfo().Epoch)
-}
-
 func (c *Changefeed) NewCheckpointTsMessage(ts uint64) *messaging.TargetMessage {
 	return messaging.NewSingleTargetMessage(c.GetNodeID(),
 		messaging.MaintainerManagerTopic,

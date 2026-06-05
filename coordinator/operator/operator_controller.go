@@ -196,7 +196,6 @@ func (oc *Controller) StopChangefeedWithMaintainerEpoch(
 // bootstrap when the reported maintainer is from an old ownership epoch and
 // must occupy the operator slot until the old owner stops.
 func (oc *Controller) StopRemoteMaintainerWithMaintainerEpoch(
-	_ context.Context,
 	cfID common.ChangeFeedID,
 	nodeID node.ID,
 	removed bool,

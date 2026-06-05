@@ -161,24 +161,6 @@ func TestChangefeed_NewAddMaintainerMessage(t *testing.T) {
 	require.Equal(t, messaging.MaintainerManagerTopic, msg.Topic)
 }
 
-func TestChangefeed_NewRemoveMaintainerMessage(t *testing.T) {
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
-	info := &config.ChangeFeedInfo{
-		SinkURI: "kafka://127.0.0.1:9092",
-		State:   config.StateNormal,
-		Config:  config.GetDefaultReplicaConfig(),
-		Epoch:   9,
-	}
-	cf := NewChangefeed(cfID, info, 100, true)
-
-	server := node.ID("server-1")
-	msg := cf.NewRemoveMaintainerMessage(server, true, true)
-	require.Equal(t, server, msg.To)
-	require.Equal(t, messaging.MaintainerManagerTopic, msg.Topic)
-	req := msg.Message[0].(*heartbeatpb.RemoveMaintainerRequest)
-	require.Equal(t, info.Epoch, req.MaintainerEpoch)
-}
-
 func TestChangefeed_NewCheckpointTsMessage(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	info := &config.ChangeFeedInfo{

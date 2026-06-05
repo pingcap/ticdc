@@ -548,7 +548,7 @@ func (c *Controller) handleSingleMaintainerStatus(
 	if !c.validateMaintainerNode(cf, from, cfID) {
 		return nil
 	}
-	if !validateMaintainerStatusEpoch(cf, status) {
+	if !maintainerEpochMatches(status.MaintainerEpoch, cf.GetInfo().Epoch) {
 		log.Warn("drop stale maintainer status",
 			zap.Stringer("changefeed", cfID),
 			zap.Stringer("node", from),
@@ -607,13 +607,6 @@ func (c *Controller) validateMaintainerNode(
 		return false
 	}
 	return true
-}
-
-func validateMaintainerStatusEpoch(
-	cf *changefeed.Changefeed,
-	status *heartbeatpb.MaintainerStatus,
-) bool {
-	return maintainerEpochMatches(status.MaintainerEpoch, cf.GetInfo().Epoch)
 }
 
 func maintainerEpochMatches(statusEpoch, currentEpoch uint64) bool {
@@ -725,7 +718,7 @@ func (c *Controller) finishBootstrap(ctx context.Context, runningChangefeeds map
 			remove := cfMeta.Status.Progress == config.ProgressRemoving
 			if ok && !runningEpochMatches {
 				c.operatorController.StopRemoteMaintainerWithMaintainerEpoch(
-					ctx, cfID, rm.nodeID, remove, rm.status.MaintainerEpoch)
+					cfID, rm.nodeID, remove, rm.status.MaintainerEpoch)
 				c.changefeedDB.StopByChangefeedID(cfID, remove)
 			} else {
 				c.operatorController.StopChangefeed(ctx, cfID, remove)
@@ -734,7 +727,7 @@ func (c *Controller) finishBootstrap(ctx context.Context, runningChangefeeds map
 		default:
 			if ok && !runningEpochMatches {
 				c.operatorController.StopRemoteMaintainerWithMaintainerEpoch(
-					ctx, cfID, rm.nodeID, false, rm.status.MaintainerEpoch)
+					cfID, rm.nodeID, false, rm.status.MaintainerEpoch)
 			}
 		}
 	}

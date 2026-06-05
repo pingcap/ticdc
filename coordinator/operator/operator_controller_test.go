@@ -122,7 +122,7 @@ func TestController_StopRemoteMaintainerWithMaintainerEpoch(t *testing.T) {
 
 	oldNode := node.ID("old-node")
 	nodeManager.GetAliveNodes()[oldNode] = &node.Info{ID: oldNode}
-	op := oc.StopRemoteMaintainerWithMaintainerEpoch(context.Background(), cfID, oldNode, false, 10)
+	op := oc.StopRemoteMaintainerWithMaintainerEpoch(cfID, oldNode, false, 10)
 	reqMsg := op.Schedule()
 	require.Equal(t, oldNode, reqMsg.To)
 	req := reqMsg.Message[0].(*heartbeatpb.RemoveMaintainerRequest)
