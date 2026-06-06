@@ -542,7 +542,7 @@ func (h *OpenAPIV2) GetChangeFeed(c *gin.Context) {
 
 	taskStatus := make([]config.CaptureTaskStatus, 0)
 	detail := CfInfoToAPIModel(cfInfo, status, taskStatus)
-	c.JSON(http.StatusOK, detail)
+	respondWithFormat(c, http.StatusOK, detail)
 }
 
 func shouldShowRunningError(state config.FeedState) bool {
