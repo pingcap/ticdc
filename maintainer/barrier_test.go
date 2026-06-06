@@ -1632,7 +1632,7 @@ func TestDeferAllDBBlockEventFromDDLDispatcherWhilePendingSchedule(t *testing.T)
 }
 
 func TestBarrierReturnsTemporaryIgnoreForUnreplicatingWaitingStatus(t *testing.T) {
-	testutil.SetUpTestServices(t)
+	testutil.SetUpTestServices()
 
 	tableTriggerDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
