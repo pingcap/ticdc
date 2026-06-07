@@ -231,7 +231,7 @@ func (c *eventBroker) sendDML(remoteID node.ID, batchEvent *event.BatchDMLEvent,
 	doSendDML(batchEvent)
 }
 
-func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *event.DDLEvent, d *dispatcherStat) bool {
+func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *event.DDLEvent, d *dispatcherStat) {
 	c.emitSyncPointEventIfNeeded(e.FinishedTs, d, remoteID)
 	e.DispatcherID = d.id
 	e.Seq = d.seq.Add(1)
@@ -240,7 +240,7 @@ func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *event.DD
 	select {
 	case <-ctx.Done():
 		log.Error("send ddl event failed", zap.Error(ctx.Err()))
-		return false
+		return
 	case c.getMessageCh(d.messageWorkerIndex, common.IsRedoMode(d.info.GetMode())) <- ddlEvent:
 		updateMetricEventServiceSendDDLCount(d.info.GetMode())
 	}
@@ -252,7 +252,6 @@ func (c *eventBroker) sendDDL(ctx context.Context, remoteID node.ID, e *event.DD
 		zap.Int64("EventTableID", e.GetTableID()),
 		zap.String("query", e.Query), zap.Uint64("commitTs", e.FinishedTs),
 		zap.Uint64("seq", e.Seq), zap.Int64("mode", d.info.GetMode()))
-	return true
 }
 
 func (c *eventBroker) sendSignalResolvedTs(d *dispatcherStat) {
@@ -333,13 +332,11 @@ func (c *eventBroker) tickTableTriggerDispatchers(ctx context.Context) error {
 					log.Error("table trigger ddl events fetch failed", zap.Uint32("keyspaceID", stat.info.GetTableSpan().KeyspaceID), zap.Stringer("dispatcherID", stat.id), zap.Error(err))
 					return true
 				}
+				stat.receivedResolvedTs.Store(endTs)
 				for _, e := range ddlEvents {
 					ep := &e
-					if !c.sendDDL(ctx, remoteID, ep, stat) {
-						return false
-					}
+					c.sendDDL(ctx, remoteID, ep, stat)
 				}
-				stat.receivedResolvedTs.Store(endTs)
 				if endTs > startTs {
 					// After all the events are sent, we send the watermark to the dispatcher.
 					c.sendResolvedTs(stat, endTs)
@@ -680,9 +677,7 @@ func (c *eventBroker) doScan(ctx context.Context, task scanTask) {
 			if !ok {
 				log.Panic("expect a DDLEvent, but got", zap.Any("event", e))
 			}
-			if !c.sendDDL(ctx, remoteID, ddl, task) {
-				return
-			}
+			c.sendDDL(ctx, remoteID, ddl, task)
 		case event.TypeResolvedEvent:
 			re, ok := e.(event.ResolvedEvent)
 			if !ok {
