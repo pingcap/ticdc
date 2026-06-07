@@ -34,7 +34,6 @@ type mockSchemaStore struct {
 	DDLEvents map[common.TableID][]commonEvent.DDLEvent
 	TableInfo map[common.TableID]*mockVersionTableInfo
 	Tables    []commonEvent.Table
-	MViewIDs  []int64
 
 	resolvedTs     uint64
 	maxDDLCommitTs uint64
@@ -112,10 +111,6 @@ func (m *mockSchemaStore) GetAllPhysicalTables(keyspaceMeta common.KeyspaceMeta,
 	return m.Tables, nil
 }
 
-func (m *mockSchemaStore) GetMaterializedViewIDs(keyspaceMeta common.KeyspaceMeta, snapTs uint64, filter filter.Filter) ([]int64, error) {
-	return append([]int64(nil), m.MViewIDs...), nil
-}
-
 func (m *mockSchemaStore) GetTableDDLEventState(keyspaceMeta common.KeyspaceMeta, tableID int64) (schemastore.DDLEventState, error) {
 	return schemastore.DDLEventState{
 		ResolvedTs:       m.resolvedTs,
@@ -153,8 +148,8 @@ func (m *mockSchemaStore) FetchTableDDLEvents(keyspaceMeta common.KeyspaceMeta, 
 	return events[l:r], nil
 }
 
-func (m *mockSchemaStore) FetchTableTriggerDDLEvents(keyspaceMeta common.KeyspaceMeta, dispatcherID common.DispatcherID, tableFilter filter.Filter, start uint64, trackedMaterializedViewIDs map[int64]struct{}, limit int) ([]commonEvent.DDLEvent, uint64, map[int64]struct{}, error) {
-	return nil, 0, trackedMaterializedViewIDs, nil
+func (m *mockSchemaStore) FetchTableTriggerDDLEvents(keyspaceMeta common.KeyspaceMeta, dispatcherID common.DispatcherID, tableFilter filter.Filter, start uint64, limit int) ([]commonEvent.DDLEvent, uint64, error) {
+	return nil, 0, nil
 }
 
 func (m *mockSchemaStore) RegisterKeyspace(ctx context.Context, keyspaceMeta common.KeyspaceMeta) error {

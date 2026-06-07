@@ -2614,7 +2614,7 @@ func TestApplyDDLJobs(t *testing.T) {
 					}
 				}
 				for _, testCase := range tt.fetchTableTriggerDDLEvents {
-					events, _, err := pStorage.fetchTableTriggerDDLEvents(testCase.tableFilter, testCase.startTs, nil, testCase.limit)
+					events, err := pStorage.fetchTableTriggerDDLEvents(testCase.tableFilter, testCase.startTs, testCase.limit)
 					require.Nil(t, err)
 					if !checkDDLEvents(testCase.result, events) {
 						log.Warn("fetchTableTriggerDDLEvents result wrong",
@@ -2745,7 +2745,7 @@ func TestActionCreateMaterializedViewDDL(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, []int64{mviewID}, mviewIDs)
 
-		triggerEvents, _, err := pStorage.fetchTableTriggerDDLEvents(nil, 999, nil, 10)
+		triggerEvents, err := pStorage.fetchTableTriggerDDLEvents(nil, 999, 10)
 		require.NoError(t, err)
 		require.Len(t, triggerEvents, 2)
 		require.Equal(t, byte(model.ActionCreateSchema), triggerEvents[0].Type)
@@ -2798,7 +2798,7 @@ func TestActionCreateMaterializedViewDDL(t *testing.T) {
 		require.NoError(t, err)
 		require.Empty(t, mviewIDs)
 
-		triggerEvents, _, err := pStorage.fetchTableTriggerDDLEvents(nil, 999, nil, 10)
+		triggerEvents, err := pStorage.fetchTableTriggerDDLEvents(nil, 999, 10)
 		require.NoError(t, err)
 		require.Len(t, triggerEvents, 3)
 		require.Equal(t, byte(model.ActionCreateSchema), triggerEvents[0].Type)
@@ -2996,15 +2996,12 @@ func TestActionMViewRefreshOutOfPlaceCutoverDDL(t *testing.T) {
 		require.Equal(t, shadowTableID, newTableEvents[0].TableInfo.TableName.TableID)
 		require.Equal(t, mviewName, newTableEvents[0].TableInfo.TableName.Table)
 
-		trackedMaterializedViewIDs := map[int64]struct{}{oldMViewID: {}}
-		triggerEvents, updatedTrackedMaterializedViewIDs, err := pStorage.fetchTableTriggerDDLEvents(nil, 1010, trackedMaterializedViewIDs, 10)
+		triggerEvents, err := pStorage.fetchTableTriggerDDLEvents(nil, 1010, 10)
 		require.NoError(t, err)
 		require.Len(t, triggerEvents, 1)
 		require.Equal(t, byte(model.ActionMViewRefreshOutOfPlaceCutover), triggerEvents[0].Type)
 		require.Equal(t, uint64(1030), triggerEvents[0].FinishedTs)
 		require.True(t, triggerEvents[0].NotSync)
-		require.Equal(t, map[int64]struct{}{oldMViewID: {}}, trackedMaterializedViewIDs)
-		require.Equal(t, map[int64]struct{}{shadowTableID: {}}, updatedTrackedMaterializedViewIDs)
 	}
 
 	pStorage := newPersistentStorageForTest(dbPath, nil)
@@ -3111,14 +3108,14 @@ func TestActionMViewRefreshOutOfPlaceCutoverDDLWithTableFilter(t *testing.T) {
 		},
 	}, events[1].NeedAddedTables)
 
-	triggerEvents, _, err := pStorage.fetchTableTriggerDDLEvents(tableFilter, 1000, map[int64]struct{}{oldMViewID: {}}, 10)
+	triggerEvents, err := pStorage.fetchTableTriggerDDLEvents(tableFilter, 1000, 10)
 	require.NoError(t, err)
 	require.Len(t, triggerEvents, 2)
 	require.Equal(t, byte(model.ActionCreateTable), triggerEvents[0].Type)
 	require.Equal(t, byte(model.ActionMViewRefreshOutOfPlaceCutover), triggerEvents[1].Type)
 }
 
-func TestActionMViewRefreshOutOfPlaceCutoverDDLForUntrackedMVIsIgnored(t *testing.T) {
+func TestActionMViewRefreshOutOfPlaceCutoverDDLFilteredByTableFilter(t *testing.T) {
 	dbPath := fmt.Sprintf("/tmp/testdb-%s", t.Name())
 	t.Cleanup(func() {
 		_ = os.RemoveAll(dbPath)
@@ -3183,13 +3180,12 @@ func TestActionMViewRefreshOutOfPlaceCutoverDDLForUntrackedMVIsIgnored(t *testin
 		require.NoError(t, pStorage.handleDDLJob(job))
 	}
 
-	triggerEvents, _, err := pStorage.fetchTableTriggerDDLEvents(buildTableFilterByNameForTest(schemaName, mviewName), 1000, map[int64]struct{}{}, 10)
+	triggerEvents, err := pStorage.fetchTableTriggerDDLEvents(buildTableFilterByNameForTest(schemaName, "other_mv"), 1000, 10)
 	require.NoError(t, err)
-	require.Len(t, triggerEvents, 1)
-	require.Equal(t, byte(model.ActionCreateTable), triggerEvents[0].Type)
+	require.Empty(t, triggerEvents)
 }
 
-func TestActionMViewRefreshOutOfPlaceCutoverDDLRollsTrackedMaterializedViewIDs(t *testing.T) {
+func TestActionMViewRefreshOutOfPlaceCutoverDDLReturnsConsecutiveCutovers(t *testing.T) {
 	dbPath := fmt.Sprintf("/tmp/testdb-%s", t.Name())
 	t.Cleanup(func() {
 		_ = os.RemoveAll(dbPath)
@@ -3257,15 +3253,12 @@ func TestActionMViewRefreshOutOfPlaceCutoverDDLRollsTrackedMaterializedViewIDs(t
 		require.NoError(t, pStorage.handleDDLJob(job))
 	}
 
-	trackedMaterializedViewIDs := map[int64]struct{}{oldMViewID: {}}
-	triggerEvents, updatedTrackedMaterializedViewIDs, err := pStorage.fetchTableTriggerDDLEvents(nil, 1000, trackedMaterializedViewIDs, 10)
+	triggerEvents, err := pStorage.fetchTableTriggerDDLEvents(nil, 1000, 10)
 	require.NoError(t, err)
 	require.Len(t, triggerEvents, 3)
 	require.Equal(t, byte(model.ActionCreateTable), triggerEvents[0].Type)
 	require.Equal(t, uint64(1030), triggerEvents[1].FinishedTs)
 	require.Equal(t, uint64(1050), triggerEvents[2].FinishedTs)
-	require.Equal(t, map[int64]struct{}{oldMViewID: {}}, trackedMaterializedViewIDs)
-	require.Equal(t, map[int64]struct{}{shadowTableID2: {}}, updatedTrackedMaterializedViewIDs)
 }
 
 func TestActionCreateMaterializedViewShadowDDL(t *testing.T) {
@@ -3360,7 +3353,7 @@ func TestActionCreateMaterializedViewShadowDDL(t *testing.T) {
 			TableIDs:      []int64{shadowTableID},
 		}, tableEvents[0].NeedDroppedTables)
 
-		triggerEvents, _, err := pStorage.fetchTableTriggerDDLEvents(nil, 1000, nil, 10)
+		triggerEvents, err := pStorage.fetchTableTriggerDDLEvents(nil, 1000, 10)
 		require.NoError(t, err)
 		require.Len(t, triggerEvents, 1)
 		require.Equal(t, byte(model.ActionDropTable), triggerEvents[0].Type)

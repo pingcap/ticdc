@@ -51,11 +51,6 @@ type dispatcherStat struct {
 	messageWorkerIndex int
 	info               DispatcherInfo
 	filter             filter.Filter
-	// trackedMaterializedViewIDs is only used by table trigger dispatchers.
-	// It stores the logical table IDs of materialized views that belong to the
-	// current changefeed run: seeded from bootstrap snapshot and rolled forward
-	// on each accepted out-of-place refresh cutover.
-	trackedMaterializedViewIDs map[int64]struct{}
 	// the start ts of the dispatcher
 	startTs uint64
 	// startTableInfo is the table info at the `startTs` of the dispatcher
