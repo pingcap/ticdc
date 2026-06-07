@@ -27,6 +27,7 @@ import (
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	parser_model "github.com/pingcap/tidb/pkg/parser/model"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"go.uber.org/zap"
 )
 
@@ -153,7 +154,7 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		updateSchemaMetadataFunc:   updateSchemaMetadataForNewTableDDL,
 		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
 		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
-		buildDDLEventFunc:          buildDDLEventIgnore,
+		buildDDLEventFunc:          buildDDLEventForCreateMaterializedView,
 	},
 	model.ActionCreateMaterializedViewShadow: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForCreateTable,
@@ -2180,6 +2181,59 @@ func buildDDLEventForNewTableDDL(rawEvent *PersistedDDLEvent, tableFilter filter
 		}
 	}
 	return ddlEvent, true, err
+}
+
+func buildDDLEventForCreateMaterializedView(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error) {
+	ddlEvent, ok, err := buildDDLEventForNewTableDDL(rawEvent, tableFilter, tableID)
+	if err != nil || !ok {
+		return ddlEvent, ok, err
+	}
+	ddlEvent.Type = byte(model.ActionCreateTable)
+	ddlEvent.Query = buildCreateTableQueryForMaterializedView(rawEvent)
+	return ddlEvent, true, nil
+}
+
+func buildCreateTableQueryForMaterializedView(rawEvent *PersistedDDLEvent) string {
+	tableName := common.QuoteSchema(rawEvent.SchemaName, rawEvent.TableName)
+	if rawEvent.TableInfo == nil {
+		return fmt.Sprintf("CREATE TABLE %s ()", tableName)
+	}
+
+	definitions := make([]string, 0, len(rawEvent.TableInfo.Columns)+1)
+	for _, col := range rawEvent.TableInfo.Columns {
+		if col.Hidden {
+			continue
+		}
+		definition := fmt.Sprintf("%s %s", common.QuoteName(col.Name.O), col.FieldType.CompactStr())
+		if mysql.HasNotNullFlag(col.GetFlag()) || mysql.HasPriKeyFlag(col.GetFlag()) {
+			definition += " NOT NULL"
+		}
+		definitions = append(definitions, definition)
+	}
+	if pkColumns := getPrimaryKeyColumnNames(rawEvent.TableInfo); len(pkColumns) > 0 {
+		definitions = append(definitions, fmt.Sprintf("PRIMARY KEY (%s)", strings.Join(pkColumns, ", ")))
+	}
+	return fmt.Sprintf("CREATE TABLE %s (%s)", tableName, strings.Join(definitions, ", "))
+}
+
+func getPrimaryKeyColumnNames(tableInfo *model.TableInfo) []string {
+	for _, index := range tableInfo.Indices {
+		if !index.Primary {
+			continue
+		}
+		columnNames := make([]string, 0, len(index.Columns))
+		for _, indexColumn := range index.Columns {
+			columnNames = append(columnNames, common.QuoteName(indexColumn.Name.O))
+		}
+		return columnNames
+	}
+
+	for _, col := range tableInfo.Columns {
+		if mysql.HasPriKeyFlag(col.GetFlag()) {
+			return []string{common.QuoteName(col.Name.O)}
+		}
+	}
+	return nil
 }
 
 func buildDDLEventForDropTable(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error) {

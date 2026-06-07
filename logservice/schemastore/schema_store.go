@@ -61,7 +61,7 @@ type SchemaStore interface {
 	// TODO: add a parameter limit
 	FetchTableDDLEvents(keyspaceMeta common.KeyspaceMeta, dispatcherID common.DispatcherID, tableID int64, tableFilter filter.Filter, start, end uint64) ([]commonEvent.DDLEvent, error)
 
-	FetchTableTriggerDDLEvents(keyspaceMeta common.KeyspaceMeta, dispatcherID common.DispatcherID, tableFilter filter.Filter, start uint64, trackedMaterializedViewIDs map[int64]struct{}, limit int) ([]commonEvent.DDLEvent, uint64, error)
+	FetchTableTriggerDDLEvents(keyspaceMeta common.KeyspaceMeta, dispatcherID common.DispatcherID, tableFilter filter.Filter, start uint64, trackedMaterializedViewIDs map[int64]struct{}, limit int) ([]commonEvent.DDLEvent, uint64, map[int64]struct{}, error)
 
 	// RegisterKeyspace register a keyspace to fetch table ddl
 	RegisterKeyspace(ctx context.Context, keyspaceMeta common.KeyspaceMeta) error
@@ -458,25 +458,25 @@ func (s *schemaStore) FetchTableDDLEvents(
 }
 
 // FetchTableTriggerDDLEvents returns the next ddl events which finishedTs are within the range (start, end]
-func (s *schemaStore) FetchTableTriggerDDLEvents(keyspaceMeta common.KeyspaceMeta, dispatcherID common.DispatcherID, tableFilter filter.Filter, start uint64, trackedMaterializedViewIDs map[int64]struct{}, limit int) ([]commonEvent.DDLEvent, uint64, error) {
+func (s *schemaStore) FetchTableTriggerDDLEvents(keyspaceMeta common.KeyspaceMeta, dispatcherID common.DispatcherID, tableFilter filter.Filter, start uint64, trackedMaterializedViewIDs map[int64]struct{}, limit int) ([]commonEvent.DDLEvent, uint64, map[int64]struct{}, error) {
 	store, err := s.getKeyspaceSchemaStore(keyspaceMeta)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, nil, err
 	}
 
 	// must get resolved ts first
 	currentResolvedTs := store.resolvedTs.Load()
 	if currentResolvedTs <= start {
-		return nil, currentResolvedTs, nil
+		return nil, currentResolvedTs, trackedMaterializedViewIDs, nil
 	}
 
-	events, err := store.dataStorage.fetchTableTriggerDDLEvents(tableFilter, start, trackedMaterializedViewIDs, limit)
+	events, updatedTrackedMaterializedViewIDs, err := store.dataStorage.fetchTableTriggerDDLEvents(tableFilter, start, trackedMaterializedViewIDs, limit)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, nil, err
 	}
 
 	if len(events) == limit {
-		return events, events[limit-1].FinishedTs, nil
+		return events, events[limit-1].FinishedTs, updatedTrackedMaterializedViewIDs, nil
 	}
 	end := currentResolvedTs
 	// after we get currentResolvedTs, there may be new ddl events with FinishedTs > currentResolvedTs
@@ -491,7 +491,7 @@ func (s *schemaStore) FetchTableTriggerDDLEvents(keyspaceMeta common.KeyspaceMet
 		zap.Int("limit", limit),
 		zap.Uint64("end", end),
 		zap.Any("events", events))
-	return events, end, nil
+	return events, end, updatedTrackedMaterializedViewIDs, nil
 }
 
 // RegisterKeyspace register a keyspace to fetch table ddl

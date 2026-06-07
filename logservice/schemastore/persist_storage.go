@@ -475,12 +475,25 @@ func (p *persistentStorage) fetchTableDDLEvents(dispatcherID common.DispatcherID
 	return events, nil
 }
 
-func (p *persistentStorage) fetchTableTriggerDDLEvents(tableFilter filter.Filter, start uint64, trackedMaterializedViewIDs map[int64]struct{}, limit int) ([]commonEvent.DDLEvent, error) {
+func cloneTrackedMaterializedViewIDs(trackedMaterializedViewIDs map[int64]struct{}) map[int64]struct{} {
+	if trackedMaterializedViewIDs == nil {
+		return nil
+	}
+	cloned := make(map[int64]struct{}, len(trackedMaterializedViewIDs))
+	for tableID := range trackedMaterializedViewIDs {
+		cloned[tableID] = struct{}{}
+	}
+	return cloned
+}
+
+func (p *persistentStorage) fetchTableTriggerDDLEvents(tableFilter filter.Filter, start uint64, trackedMaterializedViewIDs map[int64]struct{}, limit int) ([]commonEvent.DDLEvent, map[int64]struct{}, error) {
+	updatedTrackedMaterializedViewIDs := cloneTrackedMaterializedViewIDs(trackedMaterializedViewIDs)
+
 	// fast check
 	p.mu.RLock()
 	if len(p.tableTriggerDDLHistory) == 0 || start >= p.tableTriggerDDLHistory[len(p.tableTriggerDDLHistory)-1] {
 		p.mu.RUnlock()
-		return nil, nil
+		return nil, updatedTrackedMaterializedViewIDs, nil
 	}
 	p.mu.RUnlock()
 
@@ -495,7 +508,7 @@ func (p *persistentStorage) fetchTableTriggerDDLEvents(tableFilter filter.Filter
 		// no more events to read
 		if index == len(p.tableTriggerDDLHistory) {
 			p.mu.RUnlock()
-			return events, nil
+			return events, updatedTrackedMaterializedViewIDs, nil
 		}
 		for i := index; i < len(p.tableTriggerDDLHistory); i++ {
 			allTargetTs = append(allTargetTs, p.tableTriggerDDLHistory[i])
@@ -506,7 +519,7 @@ func (p *persistentStorage) fetchTableTriggerDDLEvents(tableFilter filter.Filter
 		p.mu.RUnlock()
 
 		if len(allTargetTs) == 0 {
-			return events, nil
+			return events, updatedTrackedMaterializedViewIDs, nil
 		}
 
 		// ensure the order: get target ts -> get storage snap -> check gc ts
@@ -514,12 +527,13 @@ func (p *persistentStorage) fetchTableTriggerDDLEvents(tableFilter filter.Filter
 		p.mu.RLock()
 		if allTargetTs[0] < p.gcTs {
 			p.mu.RUnlock()
-			return nil, fmt.Errorf("startTs %d is smaller than gcTs %d", allTargetTs[0], p.gcTs)
+			storageSnap.Close()
+			return nil, nil, fmt.Errorf("startTs %d is smaller than gcTs %d", allTargetTs[0], p.gcTs)
 		}
 		p.mu.RUnlock()
 		for _, ts := range allTargetTs {
 			rawEvent := readPersistedDDLEvent(storageSnap, ts)
-			if p.shouldSkipTableTriggerDDLEvent(&rawEvent, trackedMaterializedViewIDs) {
+			if p.shouldSkipTableTriggerDDLEvent(&rawEvent, updatedTrackedMaterializedViewIDs) {
 				log.Info("skip table trigger ddl event",
 					zap.Uint64("ts", ts),
 					zap.String("type", model.ActionType(rawEvent.Type).String()),
@@ -531,7 +545,8 @@ func (p *persistentStorage) fetchTableTriggerDDLEvents(tableFilter filter.Filter
 			// the tableID of buildDDLEvent is not used in this function, set it to 0
 			ddlEvent, ok, err := buildDDLEvent(&rawEvent, tableFilter, 0)
 			if err != nil {
-				return nil, errors.Trace(err)
+				storageSnap.Close()
+				return nil, nil, errors.Trace(err)
 			}
 			if ok {
 				events = append(events, ddlEvent)
@@ -539,7 +554,7 @@ func (p *persistentStorage) fetchTableTriggerDDLEvents(tableFilter filter.Filter
 		}
 		storageSnap.Close()
 		if len(events) >= limit {
-			return events, nil
+			return events, updatedTrackedMaterializedViewIDs, nil
 		}
 		nextStartTs = allTargetTs[len(allTargetTs)-1]
 	}
@@ -547,10 +562,6 @@ func (p *persistentStorage) fetchTableTriggerDDLEvents(tableFilter filter.Filter
 
 func (p *persistentStorage) shouldSkipTableTriggerDDLEvent(rawEvent *PersistedDDLEvent, trackedMaterializedViewIDs map[int64]struct{}) bool {
 	switch model.ActionType(rawEvent.Type) {
-	case model.ActionCreateMaterializedView:
-		// Existing materialized views are loaded from snapshot during bootstrap.
-		// Ignore runtime create-MV DDLs so they do not create new dispatchers mid-run.
-		return true
 	case model.ActionMViewRefreshOutOfPlaceCutover:
 		// This DDL is only relevant to at most two dispatcher kinds:
 		//   1. the table dispatcher for the materialized view being refreshed; and
@@ -568,10 +579,6 @@ func (p *persistentStorage) shouldSkipTableTriggerDDLEvent(rawEvent *PersistedDD
 
 // handleTrackedMaterializedViewCutover reports whether a refresh cutover belongs to a
 // materialized view that is already tracked by the current table trigger dispatcher.
-//
-// We intentionally keep runtime-created materialized views invisible until the next bootstrap:
-//   - `CREATE MATERIALIZED VIEW` is ignored at runtime, so no dispatcher is created for it.
-//   - Such MVs never enter `trackedMaterializedViewIDs`, so later out-of-place cutovers stay invisible too.
 //
 // For tracked MVs, out-of-place refresh changes the logical table ID from old MV -> shadow table,
 // so we roll the tracked set forward here to keep future cutovers of the same MV lineage visible.

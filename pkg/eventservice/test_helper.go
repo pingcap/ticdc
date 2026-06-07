@@ -153,8 +153,8 @@ func (m *mockSchemaStore) FetchTableDDLEvents(keyspaceMeta common.KeyspaceMeta, 
 	return events[l:r], nil
 }
 
-func (m *mockSchemaStore) FetchTableTriggerDDLEvents(keyspaceMeta common.KeyspaceMeta, dispatcherID common.DispatcherID, tableFilter filter.Filter, start uint64, trackedMaterializedViewIDs map[int64]struct{}, limit int) ([]commonEvent.DDLEvent, uint64, error) {
-	return nil, 0, nil
+func (m *mockSchemaStore) FetchTableTriggerDDLEvents(keyspaceMeta common.KeyspaceMeta, dispatcherID common.DispatcherID, tableFilter filter.Filter, start uint64, trackedMaterializedViewIDs map[int64]struct{}, limit int) ([]commonEvent.DDLEvent, uint64, map[int64]struct{}, error) {
+	return nil, 0, trackedMaterializedViewIDs, nil
 }
 
 func (m *mockSchemaStore) RegisterKeyspace(ctx context.Context, keyspaceMeta common.KeyspaceMeta) error {
