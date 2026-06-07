@@ -53,9 +53,9 @@ require (
 	github.com/pingcap/kvproto v0.0.0-20251212013835-ed676560b3b4
 	github.com/pingcap/log v1.1.1-0.20250917021125-19901e015dc9
 	github.com/pingcap/sysutil v1.0.1-0.20240311050922-ae81ee01f3a5
-	github.com/pingcap/tidb v1.1.0-beta.0.20251212033720-f5289a74240a
+	github.com/pingcap/tidb v1.1.0-beta.0.20260407144938-f4213910f645
 	github.com/pingcap/tidb-dashboard v0.0.0-20250928152019-e111aaee93f4
-	github.com/pingcap/tidb/pkg/parser v0.0.0-20251212033720-f5289a74240a
+	github.com/pingcap/tidb/pkg/parser v0.0.0-20260407144938-f4213910f645
 	github.com/pingcap/tiflow v0.0.0-20260323082129-d6d53adbe1a0
 	github.com/prometheus/client_golang v1.23.0
 	github.com/r3labs/diff v1.1.0
@@ -67,7 +67,7 @@ require (
 	github.com/spf13/pflag v1.0.7
 	github.com/stretchr/testify v1.11.1
 	github.com/thanhpk/randstr v1.0.6
-	github.com/tikv/client-go/v2 v2.0.8-0.20260112052152-1d3c5ec76bf8
+	github.com/tikv/client-go/v2 v2.0.8-0.20260113054240-c88e82cf2927
 	github.com/tikv/pd v1.1.0-beta.0.20251113050911-303c6c3b403e
 	github.com/tikv/pd/client v0.0.0-20251219084741-029eb6e7d5d0
 	github.com/tinylib/msgp v1.5.0
@@ -271,7 +271,7 @@ require (
 	github.com/pingcap/badger v1.5.1-0.20241015064302-38533b6cbf8d // indirect
 	github.com/pingcap/fn v1.0.0 // indirect
 	github.com/pingcap/goleveldb v0.0.0-20191226122134-f82aafb29989 // indirect
-	github.com/pingcap/tipb v0.0.0-20251125085256-097db0b2c02a // indirect
+	github.com/pingcap/tipb v0.0.0-20260324015222-fe7badb76b66 // indirect
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
@@ -373,8 +373,12 @@ replace github.com/go-ldap/ldap/v3 v3.4.4 => github.com/yangkeao/ldap/v3 v3.4.5-
 
 replace github.com/tikv/pd/client => github.com/tikv/pd/client v0.0.0-20251219084741-029eb6e7d5d0
 
-replace github.com/pingcap/tipb => github.com/pingcap/tipb v0.0.0-20251125085256-097db0b2c02a
+replace github.com/pingcap/tipb => github.com/pingcap/tipb v0.0.0-20260324015222-fe7badb76b66
 
 replace github.com/pingcap/kvproto => github.com/pingcap/kvproto v0.0.0-20251212013835-ed676560b3b4
+
+replace github.com/pingcap/tidb => github.com/windtalker/tidb v1.1.0-beta.0.20260407144938-f4213910f645
+
+replace github.com/pingcap/tidb/pkg/parser => github.com/windtalker/tidb/pkg/parser v0.0.0-20260407144938-f4213910f645
 
 replace github.com/IBM/sarama v1.41.2 => github.com/pingcap/sarama v1.41.2-pingcap-20251202-x

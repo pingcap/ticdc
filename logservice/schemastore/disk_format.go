@@ -805,6 +805,9 @@ func loadAllPhysicalTablesAtTs(
 		if !ok {
 			log.Panic("table info not found", zap.Int64("tableID", tableID))
 		}
+		if fullTableInfo.MaterializedViewShadow != nil {
+			continue
+		}
 		if tableFilter != nil {
 			if tableFilter.ShouldIgnoreTable(schemaName, tableInfo.Name) {
 				continue
