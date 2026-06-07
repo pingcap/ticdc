@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/downstreamadapter/routing"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/operator"
 	"github.com/pingcap/ticdc/maintainer/range_checker"
@@ -26,8 +25,10 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/routing"
 	"github.com/pingcap/ticdc/server/watcher"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
@@ -152,78 +153,76 @@ func newRangeCheck(status *heartbeatpb.State, dynamicSplitEnabled bool, keyspace
 	return range_checker.NewTableCountChecker(status.BlockTables.TableIDs)
 }
 
-func (be *BarrierEvent) buildRouteAdmission() routeAdmission {
-	return routeAdmission{
-		key:           getEventKey(be.commitTs, be.isSyncPoint),
-		commitTs:      be.commitTs,
-		isSyncPoint:   be.isSyncPoint,
-		blockTables:   routeInfluencedTablesFromPB(be.blockedDispatchers),
-		droppedTables: routeInfluencedTablesFromPB(be.dropDispatchers),
-		routeTables:   routeTableAdmissionsFromPB(be.routeTables),
-		updatedSchema: routeSchemaIDChangesFromPB(be.schemaIDChange),
+func (be *BarrierEvent) buildRouteAdmission() routing.AdmissionEvent {
+	routeTables, err := routeTableAdmissionsFromPB(be.routeTables)
+	return routing.AdmissionEvent{
+		CommitTs:    be.commitTs,
+		IsSyncPoint: be.isSyncPoint,
+		ParseErr:    err,
+		Tables:      routeTables,
 	}
 }
 
-func routeInfluencedTablesFromPB(tables *heartbeatpb.InfluencedTables) *commonEvent.InfluencedTables {
-	if tables == nil {
-		return nil
-	}
-	influenceType := commonEvent.InfluenceTypeNormal
-	switch tables.InfluenceType {
-	case heartbeatpb.InfluenceType_All:
-		influenceType = commonEvent.InfluenceTypeAll
-	case heartbeatpb.InfluenceType_DB:
-		influenceType = commonEvent.InfluenceTypeDB
-	case heartbeatpb.InfluenceType_Normal:
-		influenceType = commonEvent.InfluenceTypeNormal
-	}
-	return &commonEvent.InfluencedTables{
-		InfluenceType: influenceType,
-		TableIDs:      append([]int64(nil), tables.TableIDs...),
-		SchemaID:      tables.SchemaID,
-	}
-}
-
-func routeTableAdmissionsFromPB(tables []*heartbeatpb.RouteTableAdmission) []routeTableAdmissionInfo {
+func routeTableAdmissionsFromPB(tables []*heartbeatpb.RouteTableAdmission) ([]routing.Admission, error) {
 	if len(tables) == 0 {
-		return nil
+		return nil, nil
 	}
-	result := make([]routeTableAdmissionInfo, 0, len(tables))
+	result := make([]routing.Admission, 0, len(tables))
 	for _, table := range tables {
-		if table == nil || table.SourceSchemaName == "" || table.SourceTableName == "" ||
-			table.TargetSchemaName == "" || table.TargetTableName == "" {
-			continue
+		if table == nil {
+			return nil, errors.ErrInternalCheckFailed.GenWithStack("route table admission is nil")
 		}
-		result = append(result, routeTableAdmissionInfo{
-			tableID:  table.TableID,
-			schemaID: table.SchemaID,
-			binding: routing.NewRouteBinding(
-				table.SourceSchemaName,
-				table.SourceTableName,
-				table.TargetSchemaName,
-				table.TargetTableName,
-			),
-		})
-	}
-	return result
-}
-
-func routeSchemaIDChangesFromPB(changes []*heartbeatpb.SchemaIDChange) []commonEvent.SchemaIDChange {
-	if len(changes) == 0 {
-		return nil
-	}
-	result := make([]commonEvent.SchemaIDChange, 0, len(changes))
-	for _, change := range changes {
-		if change == nil {
-			continue
+		switch table.Action {
+		case heartbeatpb.RouteTableAdmissionAction_ADMIT:
+			if table.SourceSchemaName == "" || table.SourceTableName == "" ||
+				table.TargetSchemaName == "" || table.TargetTableName == "" {
+				return nil, errors.ErrInternalCheckFailed.GenWithStack(
+					"incomplete route admit admission: source=`%s`.`%s`, target=`%s`.`%s`",
+					table.SourceSchemaName, table.SourceTableName,
+					table.TargetSchemaName, table.TargetTableName)
+			}
+			result = append(result, routing.Admission{
+				Action: routing.Admit,
+				Source: routing.TableKey{
+					Schema: table.SourceSchemaName,
+					Table:  table.SourceTableName,
+				},
+				Binding: routing.NewRouteBinding(
+					table.SourceSchemaName,
+					table.SourceTableName,
+					table.TargetSchemaName,
+					table.TargetTableName,
+				),
+			})
+		case heartbeatpb.RouteTableAdmissionAction_RELEASE:
+			if table.SourceSchemaName == "" || table.SourceTableName == "" {
+				return nil, errors.ErrInternalCheckFailed.GenWithStack(
+					"incomplete route release admission: source=`%s`.`%s`",
+					table.SourceSchemaName, table.SourceTableName)
+			}
+			result = append(result, routing.Admission{
+				Action: routing.Release,
+				Source: routing.TableKey{
+					Schema: table.SourceSchemaName,
+					Table:  table.SourceTableName,
+				},
+			})
+		case heartbeatpb.RouteTableAdmissionAction_RELEASE_SCHEMA:
+			if table.SourceSchemaName == "" {
+				return nil, errors.ErrInternalCheckFailed.GenWithStack(
+					"incomplete route schema release admission: sourceSchema=%s",
+					table.SourceSchemaName)
+			}
+			result = append(result, routing.Admission{
+				Action: routing.ReleaseSchema,
+				Source: routing.TableKey{Schema: table.SourceSchemaName},
+			})
+		default:
+			return nil, errors.ErrInternalCheckFailed.GenWithStack(
+				"unknown route table admission action %d", table.Action)
 		}
-		result = append(result, commonEvent.SchemaIDChange{
-			TableID:     change.TableID,
-			OldSchemaID: change.OldSchemaID,
-			NewSchemaID: change.NewSchemaID,
-		})
 	}
-	return result
+	return result, nil
 }
 
 func needSchedule(state *heartbeatpb.State) bool {

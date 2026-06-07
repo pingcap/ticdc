@@ -29,6 +29,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/routing"
 	pkgscheduler "github.com/pingcap/ticdc/pkg/scheduler"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/server/watcher"
@@ -78,7 +79,7 @@ type Controller struct {
 	drainState *mscheduler.DrainState
 
 	// Table route admission is owned by the maintainer controller.
-	routeAdmin  *routeAdmin
+	routeAdmin  *routing.Admin
 	reportError func(error)
 }
 
@@ -164,7 +165,7 @@ func NewController(changefeedID common.ChangeFeedID,
 func (c *Controller) SetErrorReporter(reportError func(error)) {
 	c.reportError = reportError
 	if c.routeAdmin != nil {
-		c.routeAdmin.reportError = reportError
+		c.routeAdmin.SetErrorReporter(reportError)
 	}
 }
 

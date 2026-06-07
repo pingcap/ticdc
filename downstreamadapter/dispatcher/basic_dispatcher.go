@@ -21,7 +21,6 @@ import (
 
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/downstreamadapter/routing"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -30,6 +29,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/logger"
+	"github.com/pingcap/ticdc/pkg/routing"
+	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	tidbTypes "github.com/pingcap/tidb/pkg/types"
 	"go.uber.org/atomic"
@@ -918,138 +919,171 @@ func cloneInfluencedTablesPB(
 	return status
 }
 
-// routeTableAdmissionsForBlockState attaches concrete table route bindings to a
-// block state so maintainer routeAdmin can update its route registry without
-// looking up routed table names from historical schema snapshots.
+// routeTableAdmissionsForBlockState attaches name-level table route transitions
+// to a block state so maintainer routeAdmin can update its route registry.
 func (d *BasicDispatcher) routeTableAdmissionsForBlockState(event commonEvent.BlockEvent) []*heartbeatpb.RouteTableAdmission {
-	if d.sharedInfo == nil || !d.sharedInfo.GetRouter().HasTableRoute() {
+	if !d.sharedInfo.GetRouter().HasTableRoute() {
 		return nil
 	}
 	ddlEvent, ok := event.(*commonEvent.DDLEvent)
 	if !ok {
 		return nil
 	}
-	candidateTableIDs := routeAdmissionCandidateTableIDs(ddlEvent)
-	if len(candidateTableIDs) == 0 {
+
+	seen := make(map[routeAdmissionKey]struct{})
+	admissions := make([]*heartbeatpb.RouteTableAdmission, 0, len(ddlEvent.MultipleTableInfos)+2)
+	switch ddlEvent.GetDDLType() {
+	case model.ActionCreateTable, model.ActionRecoverTable:
+		admissions = appendRouteAdmissionAdmit(admissions, seen, routeBindingFromDDLEvent(ddlEvent))
+	case model.ActionCreateTables:
+		admissions = appendRouteAdmissionAdmitsFromTableInfos(admissions, seen, ddlEvent.MultipleTableInfos)
+	case model.ActionDropTable:
+		admissions = appendRouteAdmissionReleases(admissions, seen, routeAdmissionDropNames(ddlEvent)...)
+	case model.ActionDropSchema:
+		admissions = appendRouteAdmissionReleaseSchema(admissions, seen, routeAdmissionDropSchemaName(ddlEvent))
+	case model.ActionRenameTable:
+		admissions = appendRouteAdmissionReleases(admissions, seen, routeAdmissionDropNames(ddlEvent)...)
+		admissions = appendRouteAdmissionAdmit(admissions, seen, routeBindingFromDDLEvent(ddlEvent))
+	case model.ActionRenameTables:
+		admissions = appendRouteAdmissionReleases(admissions, seen, routeAdmissionDropNames(ddlEvent)...)
+		admissions = appendRouteAdmissionAdmitsFromTableInfos(admissions, seen, ddlEvent.MultipleTableInfos)
+	default:
 		return nil
 	}
-	seen := make(map[int64]struct{})
-	schemaIDs := routeAdmissionSchemaIDs(ddlEvent)
-	admissions := make([]*heartbeatpb.RouteTableAdmission, 0, len(ddlEvent.MultipleTableInfos)+1)
-	for _, tableInfo := range ddlEvent.MultipleTableInfos {
-		tableID := tableInfo.TableName.TableID
-		if _, ok := candidateTableIDs[tableID]; !ok {
-			continue
-		}
-		binding, ok := routeBindingFromTableInfo(tableInfo)
-		if !ok {
-			continue
-		}
-		admissions = appendRouteAdmission(admissions, seen, tableID, routeAdmissionSchemaID(schemaIDs, tableID), binding)
-	}
-
-	// Single-table DDLs may only carry TableInfo or the DDL primary table name,
-	// but added tables still need complete route admission metadata.
-	if tableInfo := ddlEvent.TableInfo; tableInfo != nil {
-		tableID := tableInfo.TableName.TableID
-		if _, ok := candidateTableIDs[tableID]; ok {
-			binding, ok := routeBindingFromTableInfo(tableInfo)
-			if ok {
-				admissions = appendRouteAdmission(admissions, seen, tableID, routeAdmissionSchemaID(schemaIDs, tableID), binding)
-			}
-		}
-	}
-
-	addedTables := ddlEvent.GetNeedAddedTables()
-	// Fallback for single-table create-like DDLs. Some events do not expose a
-	// complete routed TableInfo, but their primary source/target table names
-	// still identify the only added table unambiguously.
-	if len(addedTables) == 1 {
-		tableID := addedTables[0].TableID
-		if _, ok := seen[tableID]; !ok && ddlEvent.GetSchemaName() != "" && ddlEvent.GetTableName() != "" {
-			admissions = appendRouteAdmission(
-				admissions,
-				seen,
-				tableID,
-				addedTables[0].SchemaID,
-				routing.NewRouteBinding(
-					ddlEvent.GetSchemaName(),
-					ddlEvent.GetTableName(),
-					ddlEvent.GetTargetSchemaName(),
-					ddlEvent.GetTargetTableName(),
-				),
-			)
-		}
-	}
-
 	if len(admissions) == 0 {
 		return nil
 	}
 	return admissions
 }
 
-func routeAdmissionCandidateTableIDs(ddlEvent *commonEvent.DDLEvent) map[int64]struct{} {
-	tableIDs := make(map[int64]struct{})
-	for _, table := range ddlEvent.GetNeedAddedTables() {
-		tableIDs[table.TableID] = struct{}{}
-	}
-	blockTables := ddlEvent.GetBlockedTables()
-	if blockTables == nil || blockTables.InfluenceType != commonEvent.InfluenceTypeNormal {
-		return tableIDs
-	}
-	for _, tableID := range blockTables.TableIDs {
-		tableIDs[tableID] = struct{}{}
-	}
-	return tableIDs
+type routeAdmissionKey struct {
+	action       heartbeatpb.RouteTableAdmissionAction
+	sourceSchema string
+	sourceTable  string
+	targetSchema string
+	targetTable  string
 }
 
-func routeAdmissionSchemaIDs(ddlEvent *commonEvent.DDLEvent) map[int64]int64 {
-	schemaIDs := make(map[int64]int64)
-	for _, table := range ddlEvent.GetNeedAddedTables() {
-		schemaIDs[table.TableID] = table.SchemaID
-	}
-	updatedSchemas := ddlEvent.GetUpdatedSchemas()
-	for _, update := range updatedSchemas {
-		schemaIDs[update.TableID] = update.NewSchemaID
-	}
-	if len(schemaIDs) == 0 {
-		return nil
-	}
-	return schemaIDs
-}
-
-func routeAdmissionSchemaID(schemaIDs map[int64]int64, tableID int64) int64 {
-	schemaID, ok := schemaIDs[tableID]
-	if ok {
-		return schemaID
-	}
-	// Zero tells routeAdmin to preserve the table's existing source schema ID.
-	return 0
-}
-
-func appendRouteAdmission(
+func appendRouteAdmissionAdmitsFromTableInfos(
 	admissions []*heartbeatpb.RouteTableAdmission,
-	seen map[int64]struct{},
-	tableID, schemaID int64,
+	seen map[routeAdmissionKey]struct{},
+	tableInfos []*common.TableInfo,
+) []*heartbeatpb.RouteTableAdmission {
+	for _, tableInfo := range tableInfos {
+		binding, ok := routeBindingFromTableInfo(tableInfo)
+		if !ok {
+			continue
+		}
+		admissions = appendRouteAdmissionAdmit(admissions, seen, binding)
+	}
+	return admissions
+}
+
+func appendRouteAdmissionAdmit(
+	admissions []*heartbeatpb.RouteTableAdmission,
+	seen map[routeAdmissionKey]struct{},
 	binding routing.RouteBinding,
 ) []*heartbeatpb.RouteTableAdmission {
-	// DDLSpanTableID is a coordination span for the table-trigger dispatcher,
-	// not a real table tracked by routeAdmin's route registry.
-	if tableID == common.DDLSpanTableID {
+	if binding.Source.Schema == "" || binding.Source.Table == "" ||
+		binding.Target.Schema == "" || binding.Target.Table == "" {
 		return admissions
 	}
-	if _, ok := seen[tableID]; ok {
+	key := routeAdmissionKey{
+		action:       heartbeatpb.RouteTableAdmissionAction_ADMIT,
+		sourceSchema: binding.Source.Schema,
+		sourceTable:  binding.Source.Table,
+		targetSchema: binding.Target.Schema,
+		targetTable:  binding.Target.Table,
+	}
+	if _, ok := seen[key]; ok {
 		return admissions
 	}
-	seen[tableID] = struct{}{}
+	seen[key] = struct{}{}
 	return append(admissions, &heartbeatpb.RouteTableAdmission{
-		TableID:          tableID,
-		SchemaID:         schemaID,
 		SourceSchemaName: binding.Source.Schema,
 		SourceTableName:  binding.Source.Table,
 		TargetSchemaName: binding.Target.Schema,
 		TargetTableName:  binding.Target.Table,
+		Action:           heartbeatpb.RouteTableAdmissionAction_ADMIT,
 	})
+}
+
+func appendRouteAdmissionReleases(
+	admissions []*heartbeatpb.RouteTableAdmission,
+	seen map[routeAdmissionKey]struct{},
+	names ...commonEvent.SchemaTableName,
+) []*heartbeatpb.RouteTableAdmission {
+	for _, name := range names {
+		if name.SchemaName == "" || name.TableName == "" {
+			continue
+		}
+		key := routeAdmissionKey{
+			action:       heartbeatpb.RouteTableAdmissionAction_RELEASE,
+			sourceSchema: name.SchemaName,
+			sourceTable:  name.TableName,
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		admissions = append(admissions, &heartbeatpb.RouteTableAdmission{
+			SourceSchemaName: name.SchemaName,
+			SourceTableName:  name.TableName,
+			Action:           heartbeatpb.RouteTableAdmissionAction_RELEASE,
+		})
+	}
+	return admissions
+}
+
+func appendRouteAdmissionReleaseSchema(
+	admissions []*heartbeatpb.RouteTableAdmission,
+	seen map[routeAdmissionKey]struct{},
+	schema string,
+) []*heartbeatpb.RouteTableAdmission {
+	if schema == "" {
+		return admissions
+	}
+	key := routeAdmissionKey{
+		action:       heartbeatpb.RouteTableAdmissionAction_RELEASE_SCHEMA,
+		sourceSchema: schema,
+	}
+	if _, ok := seen[key]; ok {
+		return admissions
+	}
+	seen[key] = struct{}{}
+	return append(admissions, &heartbeatpb.RouteTableAdmission{
+		SourceSchemaName: schema,
+		Action:           heartbeatpb.RouteTableAdmissionAction_RELEASE_SCHEMA,
+	})
+}
+
+func routeAdmissionDropNames(ddlEvent *commonEvent.DDLEvent) []commonEvent.SchemaTableName {
+	if ddlEvent.TableNameChange != nil && len(ddlEvent.TableNameChange.DropName) > 0 {
+		return ddlEvent.TableNameChange.DropName
+	}
+	if ddlEvent.GetSchemaName() == "" || ddlEvent.GetTableName() == "" {
+		return nil
+	}
+	return []commonEvent.SchemaTableName{{
+		SchemaName: ddlEvent.GetSchemaName(),
+		TableName:  ddlEvent.GetTableName(),
+	}}
+}
+
+func routeAdmissionDropSchemaName(ddlEvent *commonEvent.DDLEvent) string {
+	if ddlEvent.TableNameChange != nil && ddlEvent.TableNameChange.DropDatabaseName != "" {
+		return ddlEvent.TableNameChange.DropDatabaseName
+	}
+	return ddlEvent.GetSchemaName()
+}
+
+func routeBindingFromDDLEvent(ddlEvent *commonEvent.DDLEvent) routing.RouteBinding {
+	return routing.NewRouteBinding(
+		ddlEvent.GetSchemaName(),
+		ddlEvent.GetTableName(),
+		ddlEvent.GetTargetSchemaName(),
+		ddlEvent.GetTargetTableName(),
+	)
 }
 
 func routeBindingFromTableInfo(tableInfo *common.TableInfo) (routing.RouteBinding, bool) {

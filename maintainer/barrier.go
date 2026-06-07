@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/routing"
 	"go.uber.org/zap"
 )
 
@@ -51,6 +52,11 @@ type Barrier struct {
 	// routeAdmission gates DDL writes when table route is enabled. A nil value
 	// keeps Barrier on the normal non-route path.
 	routeAdmission tableRouteAdmission
+}
+
+type tableRouteAdmission interface {
+	Precheck(info routing.AdmissionEvent) (bool, error)
+	Apply(info routing.AdmissionEvent) error
 }
 
 // NewBarrier create a new barrier for the changefeed
@@ -602,14 +608,14 @@ func (b *Barrier) precheckRouteEvent(event *BarrierEvent) (bool, error) {
 	if b.routeAdmission == nil {
 		return true, nil
 	}
-	return b.routeAdmission.precheck(event.buildRouteAdmission())
+	return b.routeAdmission.Precheck(event.buildRouteAdmission())
 }
 
 func (b *Barrier) applyRouteEvent(event *BarrierEvent) error {
 	if b.routeAdmission == nil {
 		return nil
 	}
-	return b.routeAdmission.apply(event.buildRouteAdmission())
+	return b.routeAdmission.Apply(event.buildRouteAdmission())
 }
 
 // ackEvent creates an ack event

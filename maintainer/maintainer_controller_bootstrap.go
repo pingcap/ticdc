@@ -31,6 +31,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/routing"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils"
 	"go.uber.org/zap"
@@ -137,9 +138,7 @@ func (c *Controller) FinishBootstrap(
 
 	// Step 5: Initialize route admission before barrier starts handling bootstrap
 	// block states. The barrier captures the route admin pointer at construction time.
-	schemaStore := appcontext.GetService[schemastore.SchemaStore](appcontext.SchemaStore)
-	admin, err := newRouteAdmin(
-		c.changefeedID, c.keyspaceMeta, c.replicaConfig, c.reportError, tables, schemaStore.GetTableNameByID)
+	admin, err := routing.NewAdmin(c.changefeedID, c.replicaConfig, c.reportError, tables)
 	if err != nil {
 		return nil, err
 	}

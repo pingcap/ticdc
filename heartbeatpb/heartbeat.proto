@@ -353,13 +353,22 @@ message Table {
     bool Splitable = 3;
 }
 
+enum RouteTableAdmissionAction {
+    ADMIT = 0;
+    RELEASE = 1;
+    RELEASE_SCHEMA = 2;
+}
+
 message RouteTableAdmission {
+    // Kept for compatibility with old route admission payloads.
+    // Route admission lifecycle uses source/target names plus Action.
     int64 TableID = 1;
     int64 SchemaID = 2;
     string SourceSchemaName = 3;
     string SourceTableName = 4;
     string TargetSchemaName = 5;
     string TargetTableName = 6;
+    RouteTableAdmissionAction Action = 7;
 }
 
 message SchemaIDChange {

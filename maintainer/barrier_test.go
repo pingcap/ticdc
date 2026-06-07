@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/downstreamadapter/routing"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/operator"
 	"github.com/pingcap/ticdc/maintainer/range_checker"
@@ -31,6 +30,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/routing"
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -479,7 +479,7 @@ func TestNormalBlockWithTableTrigger(t *testing.T) {
 }
 
 func TestBarrierPrechecksRouteEventWhenDDLDispatcherBlocks(t *testing.T) {
-	barrier, _, _, cfID, tableTriggerEventDispatcherID, _, blockTables := newBarrierRoutePrecheckTestFixture(
+	barrier, _, cfID, tableTriggerEventDispatcherID, _, blockTables := newBarrierRoutePrecheckTestFixture(
 		t, routeAllTo("target", "t"))
 	msgs := barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
 		ChangefeedID: cfID.ToPB(),
@@ -501,11 +501,11 @@ func TestBarrierPrechecksRouteEventWhenDDLDispatcherBlocks(t *testing.T) {
 	require.Nil(t, resp.DispatcherStatuses[0].Action)
 
 	var reportedErr error
-	barrier, routeAdmin, _, cfID, tableTriggerEventDispatcherID, _, blockTables := newBarrierRoutePrecheckTestFixture(
+	barrier, routeAdmin, cfID, tableTriggerEventDispatcherID, _, blockTables := newBarrierRoutePrecheckTestFixture(
 		t, routeAllTo("target", "t"))
-	routeAdmin.reportError = func(err error) {
+	routeAdmin.SetErrorReporter(func(err error) {
 		reportedErr = err
-	}
+	})
 	msgs = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
 		ChangefeedID: cfID.ToPB(),
 		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
@@ -558,8 +558,7 @@ func TestBarrierPrechecksRecoveredRouteEventBeforeResend(t *testing.T) {
 	spanController.BindSpanToNode("", "node1", stm)
 	spanController.MarkSpanReplicating(stm)
 
-	routeAdmin, tableNames := newTestRouteAdminWithChangefeed(t, cfID, routeForRename())
-	tableNames.set(1, "db1", "u")
+	routeAdmin := newRouteAdminForBarrierTest(t, cfID, routeForRename())
 	barrier := NewBarrier(spanController, operatorController, false, map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{
 		"node1": {
 			ChangefeedID: cfID.ToPB(),
@@ -573,6 +572,20 @@ func TestBarrierPrechecksRecoveredRouteEventBeforeResend(t *testing.T) {
 							InfluenceType: heartbeatpb.InfluenceType_Normal,
 							TableIDs:      []int64{common.DDLSpanTableID, 1},
 						},
+						RouteTableAdmissions: []*heartbeatpb.RouteTableAdmission{
+							{
+								SourceSchemaName: "db1",
+								SourceTableName:  "t",
+								Action:           heartbeatpb.RouteTableAdmissionAction_RELEASE,
+							},
+							{
+								SourceSchemaName: "db1",
+								SourceTableName:  "u",
+								TargetSchemaName: "target",
+								TargetTableName:  "u",
+								Action:           heartbeatpb.RouteTableAdmissionAction_ADMIT,
+							},
+						},
 						Stage: heartbeatpb.BlockStage_DONE,
 					},
 					Mode: common.DefaultMode,
@@ -582,21 +595,27 @@ func TestBarrierPrechecksRecoveredRouteEventBeforeResend(t *testing.T) {
 	}, common.DefaultMode, routeAdmin)
 
 	_ = barrier.Resend()
-	binding, ok := routeAdmin.tableSources[1]
-	require.True(t, ok)
-	require.Equal(t, "db1", binding.binding.Source.Schema)
-	require.Equal(t, "u", binding.binding.Source.Table)
-	require.Equal(t, "target", binding.binding.Target.Schema)
-	require.Equal(t, "u", binding.binding.Target.Table)
+	ready, err := routeAdmin.Precheck(routing.AdmissionEvent{
+		CommitTs: 20,
+		Tables: []routing.Admission{
+			{
+				Action:  routing.Admit,
+				Binding: routing.NewRouteBinding("db2", "u", "target", "u"),
+			},
+		},
+	})
+	require.Error(t, err)
+	require.False(t, ready)
+	require.Contains(t, err.Error(), "table route conflict")
 }
 
 func TestBarrierRouteConflictPrecheckPreventsWriteAction(t *testing.T) {
-	barrier, routeAdmin, _, cfID, tableTriggerEventDispatcherID, tableDispatcherID, blockTables := newBarrierRoutePrecheckTestFixture(
+	barrier, routeAdmin, cfID, tableTriggerEventDispatcherID, tableDispatcherID, blockTables := newBarrierRoutePrecheckTestFixture(
 		t, routeAllTo("target", "t"))
 	var reportedErr error
-	routeAdmin.reportError = func(err error) {
+	routeAdmin.SetErrorReporter(func(err error) {
 		reportedErr = err
-	}
+	})
 	msgs := barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
 		ChangefeedID: cfID.ToPB(),
 		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
@@ -682,28 +701,38 @@ func TestBarrierRoutePrecheckKeepsFullyReportedBlockedEventAndPreventsWriteActio
 		})
 	}
 
-	barrier, routeAdmin, tableNames, cfID, _, tableDispatcherID, _ := newBarrierRoutePrecheckTestFixture(
+	barrier, routeAdmin, cfID, _, tableDispatcherID, _ := newBarrierRoutePrecheckTestFixture(
 		t, routeBySource())
-	ready, err := routeAdmin.precheck(routeAdmission{
-		key:      getEventKey(5, false),
-		commitTs: 5,
-		routeTables: []routeTableAdmissionInfo{
+	ready, err := routeAdmin.Precheck(routing.AdmissionEvent{
+		CommitTs: 5,
+		Tables: []routing.Admission{
 			{
-				schemaID: 2,
-				tableID:  2,
-				binding:  routing.NewRouteBinding("db2", "t", "db2_target", "t"),
+				Action:  routing.Admit,
+				Binding: routing.NewRouteBinding("db2", "t", "db2_target", "t"),
 			},
 		},
 	})
 	require.NoError(t, err)
 	require.True(t, ready)
-	tableNames.set(1, "db1", "u")
 	blockTables := &heartbeatpb.InfluencedTables{
 		InfluenceType: heartbeatpb.InfluenceType_Normal,
 		TableIDs:      []int64{1},
 	}
 	msgs := handleBlockedDispatchers(
-		barrier, cfID, tableDispatcherID, blockTables, nil, nil)
+		barrier, cfID, tableDispatcherID, blockTables, nil, []*heartbeatpb.RouteTableAdmission{
+			{
+				SourceSchemaName: "db1",
+				SourceTableName:  "t",
+				Action:           heartbeatpb.RouteTableAdmissionAction_RELEASE,
+			},
+			{
+				SourceSchemaName: "db1",
+				SourceTableName:  "u",
+				TargetSchemaName: "db1_target",
+				TargetTableName:  "u",
+				Action:           heartbeatpb.RouteTableAdmissionAction_ADMIT,
+			},
+		})
 	event := barrier.blockedEvents.m[getEventKey(10, false)]
 	require.NotNil(t, event)
 	// Keep the barrier event so ACKed WAITING coverage is not lost when
@@ -714,12 +743,12 @@ func TestBarrierRoutePrecheckKeepsFullyReportedBlockedEventAndPreventsWriteActio
 	require.NotEmpty(t, msgs)
 	requireNoDispatcherActions(t, msgs)
 
-	barrier, routeAdmin, _, cfID, _, tableDispatcherID, _ = newBarrierRoutePrecheckTestFixture(
+	barrier, routeAdmin, cfID, _, tableDispatcherID, _ = newBarrierRoutePrecheckTestFixture(
 		t, routeAllTo("target", "t"))
 	var reportedErr error
-	routeAdmin.reportError = func(err error) {
+	routeAdmin.SetErrorReporter(func(err error) {
 		reportedErr = err
-	}
+	})
 	blockTables = &heartbeatpb.InfluencedTables{
 		InfluenceType: heartbeatpb.InfluenceType_Normal,
 		TableIDs:      []int64{1},
@@ -751,7 +780,7 @@ func TestBarrierRoutePrecheckKeepsFullyReportedBlockedEventAndPreventsWriteActio
 func newBarrierRoutePrecheckTestFixture(
 	t *testing.T,
 	rules []*config.DispatchRule,
-) (*Barrier, *routeAdmin, *routeTableNames, common.ChangeFeedID, common.DispatcherID, common.DispatcherID, *heartbeatpb.InfluencedTables) {
+) (*Barrier, *routing.Admin, common.ChangeFeedID, common.DispatcherID, common.DispatcherID, *heartbeatpb.InfluencedTables) {
 	t.Helper()
 	testutil.SetUpTestServices(t)
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
@@ -770,13 +799,74 @@ func newBarrierRoutePrecheckTestFixture(
 	spanController.BindSpanToNode("", "node1", stm)
 	spanController.MarkSpanReplicating(stm)
 
-	routeAdmin, tableNames := newTestRouteAdminWithChangefeed(t, cfID, rules)
+	routeAdmin := newRouteAdminForBarrierTest(t, cfID, rules)
 	barrier := NewBarrier(spanController, operatorController, false, nil, common.DefaultMode, routeAdmin)
 	blockTables := &heartbeatpb.InfluencedTables{
 		InfluenceType: heartbeatpb.InfluenceType_Normal,
 		TableIDs:      []int64{common.DDLSpanTableID, 1},
 	}
-	return barrier, routeAdmin, tableNames, cfID, tableTriggerEventDispatcherID, stm.ID, blockTables
+	return barrier, routeAdmin, cfID, tableTriggerEventDispatcherID, stm.ID, blockTables
+}
+
+func newRouteAdminForBarrierTest(
+	t *testing.T,
+	cfID common.ChangeFeedID,
+	rules []*config.DispatchRule,
+) *routing.Admin {
+	t.Helper()
+
+	admin, err := routing.NewAdmin(
+		cfID,
+		&config.ReplicaConfig{
+			Sink: &config.SinkConfig{
+				DispatchRules: rules,
+			},
+		},
+		nil,
+		[]commonEvent.Table{
+			{
+				SchemaID: 1,
+				TableID:  1,
+				SchemaTableName: &commonEvent.SchemaTableName{
+					SchemaName: "db1",
+					TableName:  "t",
+				},
+			},
+		},
+	)
+	require.NoError(t, err)
+	return admin
+}
+
+func routeAllTo(targetSchema, targetTable string) []*config.DispatchRule {
+	return []*config.DispatchRule{{
+		Matcher:      []string{"*.*"},
+		TargetSchema: targetSchema,
+		TargetTable:  targetTable,
+	}}
+}
+
+func routeBySource() []*config.DispatchRule {
+	return []*config.DispatchRule{
+		routeExact("db1", "t", "db1_target", "t"),
+		routeExact("db1", "u", "db1_target", "u"),
+		routeExact("db2", "t", "db2_target", "t"),
+	}
+}
+
+func routeForRename() []*config.DispatchRule {
+	return []*config.DispatchRule{
+		routeExact("db1", "t", "target", "t"),
+		routeExact("db1", "u", "target", "u"),
+	}
+}
+
+func routeExact(sourceSchema, sourceTable, targetSchema, targetTable string) *config.DispatchRule {
+	return &config.DispatchRule{
+		Matcher:      []string{sourceSchema + "." + sourceTable},
+		TargetSchema: targetSchema,
+		TargetTable:  targetTable,
+	}
 }
 
 func requireNoDispatcherActions(t *testing.T, msgs []*messaging.TargetMessage) {
