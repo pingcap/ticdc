@@ -307,25 +307,6 @@ func (p *persistentStorage) getAllPhysicalTables(snapTs uint64, tableFilter filt
 	return loadAllPhysicalTablesAtTs(storageSnap, gcTs, snapTs, tableFilter)
 }
 
-func (p *persistentStorage) getMaterializedViewIDs(snapTs uint64, tableFilter filter.Filter) ([]int64, error) {
-	storageSnap := p.db.NewSnapshot()
-	defer storageSnap.Close()
-
-	p.mu.Lock()
-	failpoint.Inject("getAllPhysicalTablesGCFastFail", func() {
-		snapTs = 0
-	})
-	if snapTs < p.gcTs {
-		p.mu.Unlock()
-		return nil, errors.ErrSnapshotLostByGC.GenWithStackByArgs("snapTs %d is smaller than gcTs %d", snapTs, p.gcTs)
-	}
-
-	gcTs := p.gcTs
-	p.mu.Unlock()
-
-	return loadMaterializedViewIDsAtTs(storageSnap, gcTs, snapTs, tableFilter)
-}
-
 // only return when table info is initialized
 func (p *persistentStorage) registerTable(tableID int64, startTs uint64) error {
 	p.mu.Lock()

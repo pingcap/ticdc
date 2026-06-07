@@ -2741,10 +2741,6 @@ func TestActionCreateMaterializedViewDDL(t *testing.T) {
 			},
 		}, events[0].TableNameChange)
 
-		mviewIDs, err := pStorage.getMaterializedViewIDs(1015, nil)
-		require.NoError(t, err)
-		require.Equal(t, []int64{mviewID}, mviewIDs)
-
 		triggerEvents, err := pStorage.fetchTableTriggerDDLEvents(nil, 999, 10)
 		require.NoError(t, err)
 		require.Len(t, triggerEvents, 2)
@@ -2793,10 +2789,6 @@ func TestActionCreateMaterializedViewDDL(t *testing.T) {
 				},
 			},
 		}, events[1].TableNameChange)
-
-		mviewIDs, err := pStorage.getMaterializedViewIDs(1025, nil)
-		require.NoError(t, err)
-		require.Empty(t, mviewIDs)
 
 		triggerEvents, err := pStorage.fetchTableTriggerDDLEvents(nil, 999, 10)
 		require.NoError(t, err)

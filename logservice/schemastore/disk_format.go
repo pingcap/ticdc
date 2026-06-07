@@ -18,7 +18,6 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"math"
-	"sort"
 	"strings"
 	"time"
 
@@ -868,41 +867,4 @@ func loadAllPhysicalTablesAtTs(
 	log.Info("loadAllPhysicalTablesAtTs",
 		zap.Int("tableLen", len(tables)))
 	return tables, nil
-}
-
-func loadMaterializedViewIDsAtTs(
-	storageSnap *pebble.Snapshot,
-	gcTs uint64,
-	snapVersion uint64,
-	tableFilter filter.Filter,
-) ([]int64, error) {
-	state, err := loadTablesAtTs(storageSnap, gcTs, snapVersion)
-	if err != nil {
-		return nil, err
-	}
-
-	ids := make([]int64, 0)
-	for tableID, tableInfo := range state.tableMap {
-		fullTableInfo, ok := state.tableInfoMap[tableID]
-		if !ok {
-			log.Panic("table info not found", zap.Int64("tableID", tableID))
-		}
-		if fullTableInfo.MaterializedView == nil || fullTableInfo.MaterializedViewShadow != nil {
-			continue
-		}
-		schemaName := state.databaseMap[tableInfo.SchemaID].Name
-		if tableFilter != nil {
-			if tableFilter.ShouldIgnoreTable(schemaName, tableInfo.Name) {
-				continue
-			}
-			if !tableFilter.IsEligibleTable(common.WrapTableInfo(schemaName, fullTableInfo)) {
-				continue
-			}
-		}
-		ids = append(ids, tableID)
-	}
-	sort.Slice(ids, func(i, j int) bool {
-		return ids[i] < ids[j]
-	})
-	return ids, nil
 }
