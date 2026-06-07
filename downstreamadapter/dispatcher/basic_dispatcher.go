@@ -30,7 +30,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/logger"
 	"github.com/pingcap/ticdc/pkg/routing"
-	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	tidbTypes "github.com/pingcap/tidb/pkg/types"
 	"go.uber.org/atomic"
@@ -921,39 +920,56 @@ func cloneInfluencedTablesPB(
 
 // routeTableAdmissionsForBlockState attaches name-level table route transitions
 // to a block state so maintainer routeAdmin can update its route registry.
-func (d *BasicDispatcher) routeTableAdmissionsForBlockState(event commonEvent.BlockEvent) []*heartbeatpb.RouteTableAdmission {
-	if !d.sharedInfo.GetRouter().HasTableRoute() {
-		return nil
+func (d *BasicDispatcher) routeTableAdmissionsForBlockState(event commonEvent.BlockEvent) ([]*heartbeatpb.RouteTableAdmission, error) {
+	router := d.sharedInfo.GetRouter()
+	if !router.HasTableRoute() {
+		return nil, nil
 	}
 	ddlEvent, ok := event.(*commonEvent.DDLEvent)
 	if !ok {
-		return nil
+		return nil, nil
+	}
+	nameChange := ddlEvent.TableNameChange
+	if nameChange == nil {
+		return nil, nil
 	}
 
 	seen := make(map[routeAdmissionKey]struct{})
-	admissions := make([]*heartbeatpb.RouteTableAdmission, 0, len(ddlEvent.MultipleTableInfos)+2)
-	switch ddlEvent.GetDDLType() {
-	case model.ActionCreateTable, model.ActionRecoverTable:
-		admissions = appendRouteAdmissionAdmit(admissions, seen, routeBindingFromDDLEvent(ddlEvent))
-	case model.ActionCreateTables:
-		admissions = appendRouteAdmissionAdmitsFromTableInfos(admissions, seen, ddlEvent.MultipleTableInfos)
-	case model.ActionDropTable:
-		admissions = appendRouteAdmissionReleases(admissions, seen, routeAdmissionDropNames(ddlEvent)...)
-	case model.ActionDropSchema:
-		admissions = appendRouteAdmissionReleaseSchema(admissions, seen, routeAdmissionDropSchemaName(ddlEvent))
-	case model.ActionRenameTable:
-		admissions = appendRouteAdmissionReleases(admissions, seen, routeAdmissionDropNames(ddlEvent)...)
-		admissions = appendRouteAdmissionAdmit(admissions, seen, routeBindingFromDDLEvent(ddlEvent))
-	case model.ActionRenameTables:
-		admissions = appendRouteAdmissionReleases(admissions, seen, routeAdmissionDropNames(ddlEvent)...)
-		admissions = appendRouteAdmissionAdmitsFromTableInfos(admissions, seen, ddlEvent.MultipleTableInfos)
-	default:
-		return nil
+	capacity := len(nameChange.AddName) + len(nameChange.DropName) + 1
+	admissions := make([]*heartbeatpb.RouteTableAdmission, 0, capacity)
+	if nameChange.DropDatabaseName != "" {
+		var err error
+		admissions, err = appendRouteAdmissionReleaseSchema(admissions, seen, nameChange.DropDatabaseName)
+		if err != nil {
+			return nil, err
+		}
+	}
+	for _, name := range nameChange.DropName {
+		var err error
+		admissions, err = appendRouteAdmissionReleases(admissions, seen, name)
+		if err != nil {
+			return nil, err
+		}
+	}
+	for _, name := range nameChange.AddName {
+		if name.SchemaName == "" || name.TableName == "" {
+			return nil, errors.ErrInternalCheckFailed.GenWithStack(
+				"incomplete route admit admission: source=`%s`.`%s`",
+				name.SchemaName, name.TableName)
+		}
+		binding, err := router.Route(name.SchemaName, name.TableName)
+		if err != nil {
+			return nil, err
+		}
+		admissions, err = appendRouteAdmissionAdmit(admissions, seen, binding)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if len(admissions) == 0 {
-		return nil
+		return nil, nil
 	}
-	return admissions
+	return admissions, nil
 }
 
 type routeAdmissionKey struct {
@@ -964,29 +980,17 @@ type routeAdmissionKey struct {
 	targetTable  string
 }
 
-func appendRouteAdmissionAdmitsFromTableInfos(
-	admissions []*heartbeatpb.RouteTableAdmission,
-	seen map[routeAdmissionKey]struct{},
-	tableInfos []*common.TableInfo,
-) []*heartbeatpb.RouteTableAdmission {
-	for _, tableInfo := range tableInfos {
-		binding, ok := routeBindingFromTableInfo(tableInfo)
-		if !ok {
-			continue
-		}
-		admissions = appendRouteAdmissionAdmit(admissions, seen, binding)
-	}
-	return admissions
-}
-
 func appendRouteAdmissionAdmit(
 	admissions []*heartbeatpb.RouteTableAdmission,
 	seen map[routeAdmissionKey]struct{},
 	binding routing.RouteBinding,
-) []*heartbeatpb.RouteTableAdmission {
+) ([]*heartbeatpb.RouteTableAdmission, error) {
 	if binding.Source.Schema == "" || binding.Source.Table == "" ||
 		binding.Target.Schema == "" || binding.Target.Table == "" {
-		return admissions
+		return nil, errors.ErrInternalCheckFailed.GenWithStack(
+			"incomplete route admit admission: source=`%s`.`%s`, target=`%s`.`%s`",
+			binding.Source.Schema, binding.Source.Table,
+			binding.Target.Schema, binding.Target.Table)
 	}
 	key := routeAdmissionKey{
 		action:       heartbeatpb.RouteTableAdmissionAction_ADMIT,
@@ -996,7 +1000,7 @@ func appendRouteAdmissionAdmit(
 		targetTable:  binding.Target.Table,
 	}
 	if _, ok := seen[key]; ok {
-		return admissions
+		return admissions, nil
 	}
 	seen[key] = struct{}{}
 	return append(admissions, &heartbeatpb.RouteTableAdmission{
@@ -1005,17 +1009,19 @@ func appendRouteAdmissionAdmit(
 		TargetSchemaName: binding.Target.Schema,
 		TargetTableName:  binding.Target.Table,
 		Action:           heartbeatpb.RouteTableAdmissionAction_ADMIT,
-	})
+	}), nil
 }
 
 func appendRouteAdmissionReleases(
 	admissions []*heartbeatpb.RouteTableAdmission,
 	seen map[routeAdmissionKey]struct{},
 	names ...commonEvent.SchemaTableName,
-) []*heartbeatpb.RouteTableAdmission {
+) ([]*heartbeatpb.RouteTableAdmission, error) {
 	for _, name := range names {
 		if name.SchemaName == "" || name.TableName == "" {
-			continue
+			return nil, errors.ErrInternalCheckFailed.GenWithStack(
+				"incomplete route release admission: source=`%s`.`%s`",
+				name.SchemaName, name.TableName)
 		}
 		key := routeAdmissionKey{
 			action:       heartbeatpb.RouteTableAdmissionAction_RELEASE,
@@ -1032,70 +1038,30 @@ func appendRouteAdmissionReleases(
 			Action:           heartbeatpb.RouteTableAdmissionAction_RELEASE,
 		})
 	}
-	return admissions
+	return admissions, nil
 }
 
 func appendRouteAdmissionReleaseSchema(
 	admissions []*heartbeatpb.RouteTableAdmission,
 	seen map[routeAdmissionKey]struct{},
 	schema string,
-) []*heartbeatpb.RouteTableAdmission {
+) ([]*heartbeatpb.RouteTableAdmission, error) {
 	if schema == "" {
-		return admissions
+		return nil, errors.ErrInternalCheckFailed.GenWithStack(
+			"incomplete route schema release admission: sourceSchema=%s", schema)
 	}
 	key := routeAdmissionKey{
 		action:       heartbeatpb.RouteTableAdmissionAction_RELEASE_SCHEMA,
 		sourceSchema: schema,
 	}
 	if _, ok := seen[key]; ok {
-		return admissions
+		return admissions, nil
 	}
 	seen[key] = struct{}{}
 	return append(admissions, &heartbeatpb.RouteTableAdmission{
 		SourceSchemaName: schema,
 		Action:           heartbeatpb.RouteTableAdmissionAction_RELEASE_SCHEMA,
-	})
-}
-
-func routeAdmissionDropNames(ddlEvent *commonEvent.DDLEvent) []commonEvent.SchemaTableName {
-	if ddlEvent.TableNameChange != nil && len(ddlEvent.TableNameChange.DropName) > 0 {
-		return ddlEvent.TableNameChange.DropName
-	}
-	if ddlEvent.GetSchemaName() == "" || ddlEvent.GetTableName() == "" {
-		return nil
-	}
-	return []commonEvent.SchemaTableName{{
-		SchemaName: ddlEvent.GetSchemaName(),
-		TableName:  ddlEvent.GetTableName(),
-	}}
-}
-
-func routeAdmissionDropSchemaName(ddlEvent *commonEvent.DDLEvent) string {
-	if ddlEvent.TableNameChange != nil && ddlEvent.TableNameChange.DropDatabaseName != "" {
-		return ddlEvent.TableNameChange.DropDatabaseName
-	}
-	return ddlEvent.GetSchemaName()
-}
-
-func routeBindingFromDDLEvent(ddlEvent *commonEvent.DDLEvent) routing.RouteBinding {
-	return routing.NewRouteBinding(
-		ddlEvent.GetSchemaName(),
-		ddlEvent.GetTableName(),
-		ddlEvent.GetTargetSchemaName(),
-		ddlEvent.GetTargetTableName(),
-	)
-}
-
-func routeBindingFromTableInfo(tableInfo *common.TableInfo) (routing.RouteBinding, bool) {
-	if tableInfo == nil || tableInfo.GetSchemaName() == "" || tableInfo.GetTableName() == "" {
-		return routing.RouteBinding{}, false
-	}
-	return routing.NewRouteBinding(
-		tableInfo.GetSchemaName(),
-		tableInfo.GetTableName(),
-		tableInfo.GetTargetSchemaName(),
-		tableInfo.GetTargetTableName(),
-	), true
+	}), nil
 }
 
 // shouldBlock check whether the event should be blocked(to wait maintainer response)
@@ -1170,10 +1136,20 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 	// the dynamic stream goroutine.
 	d.sharedInfo.GetBlockEventExecutor().Submit(d, func() {
 		noNeedAddAndDrop := event.GetNeedAddedTables() == nil && event.GetNeedDroppedTables() == nil
-		needsScheduleACKTracking := !shouldBlock && d.IsTableTriggerDispatcher() && !noNeedAddAndDrop
-		if needsScheduleACKTracking {
-			// If this is a table trigger dispatcher, and the DDL leads to add/drop tables,
-			// we track it as a pending schedule-related event until the maintainer ACKs it.
+		var routeAdmissions []*heartbeatpb.RouteTableAdmission
+		if !shouldBlock {
+			var err error
+			routeAdmissions, err = d.routeTableAdmissionsForBlockState(event)
+			if err != nil {
+				d.HandleError(err)
+				return
+			}
+		}
+		needsMaintainerACK := !shouldBlock && d.IsTableTriggerDispatcher() &&
+			(!noNeedAddAndDrop || len(routeAdmissions) > 0)
+		if needsMaintainerACK {
+			// If this is a table trigger dispatcher, and the DDL leads to add/drop tables
+			// or route admissions, track it until the maintainer ACKs it.
 			d.pendingACKCount.Add(1)
 		}
 		if shouldBlock {
@@ -1183,7 +1159,7 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 		// For storage sink this waits all previous enqueued DML events flushed.
 		// For non-storage sinks it is usually a no-op.
 		if err := d.sink.FlushDMLBeforeBlock(event); err != nil {
-			if needsScheduleACKTracking {
+			if needsMaintainerACK {
 				d.pendingACKCount.Add(-1)
 			}
 			d.HandleError(err)
@@ -1196,13 +1172,13 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 		}
 		err := d.AddBlockEventToSink(event)
 		if err != nil {
-			if needsScheduleACKTracking {
+			if needsMaintainerACK {
 				d.pendingACKCount.Add(-1)
 			}
 			d.HandleError(err)
 			return
 		}
-		if noNeedAddAndDrop {
+		if noNeedAddAndDrop && len(routeAdmissions) == 0 {
 			return
 		}
 
@@ -1214,7 +1190,7 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 				BlockTs:              event.GetCommitTs(),
 				NeedDroppedTables:    cloneInfluencedTablesPB(event.GetNeedDroppedTables()),
 				NeedAddedTables:      commonEvent.ToTablesPB(event.GetNeedAddedTables()),
-				RouteTableAdmissions: d.routeTableAdmissionsForBlockState(event),
+				RouteTableAdmissions: routeAdmissions,
 				Stage:                heartbeatpb.BlockStage_NONE,
 			},
 			Mode: d.GetMode(),
@@ -1344,6 +1320,11 @@ func (d *BasicDispatcher) popHoldingBlockEvent() commonEvent.BlockEvent {
 }
 
 func (d *BasicDispatcher) reportBlockedEventToMaintainer(event commonEvent.BlockEvent) {
+	routeAdmissions, err := d.routeTableAdmissionsForBlockState(event)
+	if err != nil {
+		d.HandleError(err)
+		return
+	}
 	if d.IsTableTriggerDispatcher() {
 		// If this is a table trigger event dispatcher, we need to increment pendingACKCount
 		// for any block event reported to the maintainer to track un-ACKed events.
@@ -1364,7 +1345,7 @@ func (d *BasicDispatcher) reportBlockedEventToMaintainer(event commonEvent.Block
 			BlockTables:          cloneInfluencedTablesPB(event.GetBlockedTables()),
 			NeedDroppedTables:    cloneInfluencedTablesPB(event.GetNeedDroppedTables()),
 			NeedAddedTables:      commonEvent.ToTablesPB(event.GetNeedAddedTables()),
-			RouteTableAdmissions: d.routeTableAdmissionsForBlockState(event),
+			RouteTableAdmissions: routeAdmissions,
 			UpdatedSchemas:       commonEvent.ToSchemaIDChangePB(event.GetUpdatedSchemas()),
 			IsSyncPoint:          event.GetType() == commonEvent.TypeSyncPointEvent,
 			Stage:                heartbeatpb.BlockStage_WAITING,
@@ -1407,13 +1388,18 @@ func (d *BasicDispatcher) GetBlockEventStatus() *heartbeatpb.State {
 	// 2. maintainer can get current available tables based on table trigger event dispatcher's startTs,
 	//    so don't need to do extra add and drop actions.
 
+	routeAdmissions, err := d.routeTableAdmissionsForBlockState(pendingEvent)
+	if err != nil {
+		d.HandleError(err)
+		return nil
+	}
 	return &heartbeatpb.State{
 		IsBlocked:            true,
 		BlockTs:              pendingEvent.GetCommitTs(),
 		BlockTables:          pendingEvent.GetBlockedTables().ToPB(),
 		NeedDroppedTables:    pendingEvent.GetNeedDroppedTables().ToPB(),
 		NeedAddedTables:      commonEvent.ToTablesPB(pendingEvent.GetNeedAddedTables()),
-		RouteTableAdmissions: d.routeTableAdmissionsForBlockState(pendingEvent),
+		RouteTableAdmissions: routeAdmissions,
 		UpdatedSchemas:       commonEvent.ToSchemaIDChangePB(pendingEvent.GetUpdatedSchemas()), // only exists for rename table and rename tables
 		IsSyncPoint:          pendingEvent.GetType() == commonEvent.TypeSyncPointEvent,         // sync point event must should block
 		Stage:                blockStage,
