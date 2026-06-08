@@ -17,15 +17,22 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/pingcap/ticdc/pkg/clock"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/util"
+	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser/model"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
+	"github.com/pingcap/tidb/pkg/parser/types"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
 )
@@ -326,93 +333,77 @@ func TestIsSchemaFile(t *testing.T) {
 	}
 }
 
-// TODO: br WalkDir interface has bug, waiting the cherry-pick of https://github.com/pingcap/tidb/pull/62433
-// func TestCheckOrWriteSchema(t *testing.T) {
-// 	t.Parallel()
+func TestCheckOrWriteSchema(t *testing.T) {
+	t.Parallel()
 
-// 	ctx, cancel := context.WithCancel(context.Background())
-// 	defer cancel()
-// 	dir := t.TempDir()
-// 	f := testFilePathGenerator(ctx, t, dir)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	dir := t.TempDir()
+	f := testFilePathGenerator(ctx, t, dir)
 
-// 	var columns []*timodel.ColumnInfo
-// 	ft := types.NewFieldType(mysql.TypeLong)
-// 	ft.SetFlag(mysql.PriKeyFlag | mysql.NotNullFlag)
-// 	col := &timodel.ColumnInfo{
-// 		Name:         parser_model.NewCIStr("Id"),
-// 		FieldType:    *ft,
-// 		DefaultValue: 10,
-// 	}
-// 	columns = append(columns, col)
-// 	tidbInfo := &timodel.TableInfo{
-// 		ID:      20,
-// 		Name:    parser_model.NewCIStr("table1"),
-// 		Columns: columns,
-// 		Version: 100,
-// 	}
-// 	tableInfo := commonType.WrapTableInfo("test", tidbInfo)
+	var columns []*timodel.ColumnInfo
+	ft := types.NewFieldType(mysql.TypeLong)
+	ft.SetFlag(mysql.PriKeyFlag | mysql.NotNullFlag)
+	col := &timodel.ColumnInfo{
+		Name:         model.NewCIStr("Id"),
+		FieldType:    *ft,
+		DefaultValue: 10,
+	}
+	columns = append(columns, col)
+	tidbInfo := &timodel.TableInfo{
+		ID:      20,
+		Name:    model.NewCIStr("table1"),
+		Columns: columns,
+		Version: 100,
+	}
+	tableInfo := commonType.WrapTableInfo("test", tidbInfo)
 
-// 	table := VersionedTableName{
-// 		TableNameWithPhysicTableID: tableInfo.TableName,
-// 		TableInfoVersion:           100,
-// 	}
+	table := VersionedTableName{
+		TableNameWithPhysicTableID: tableInfo.TableName,
+		TableInfoVersion:           100,
+	}
 
-// 	hasNewerSchemaVersion, err := f.CheckOrWriteSchema(ctx, table, tableInfo)
-// 	require.NoError(t, err)
-// 	require.False(t, hasNewerSchemaVersion)
-// 	require.Equal(t, table.TableInfoVersion, f.versionMap[table])
+	hasNewerSchemaVersion, err := f.CheckOrWriteSchema(ctx, table, tableInfo)
+	require.NoError(t, err)
+	require.False(t, hasNewerSchemaVersion)
+	require.Equal(t, table.TableInfoVersion, f.versionMap[table])
 
-// 	// test old dml file can be ignored
-// 	table.TableInfoVersion = 99
-// 	hasNewerSchemaVersion, err = f.CheckOrWriteSchema(ctx, table, tableInfo)
-// 	require.NoError(t, err)
-// 	require.True(t, hasNewerSchemaVersion)
-// 	require.Equal(t, 1, len(f.versionMap))
+	// test old dml file can be ignored
+	table.TableInfoVersion = 99
+	hasNewerSchemaVersion, err = f.CheckOrWriteSchema(ctx, table, tableInfo)
+	require.NoError(t, err)
+	require.True(t, hasNewerSchemaVersion)
+	require.Equal(t, 1, len(f.versionMap))
 
-<<<<<<< HEAD
-// 	// test only table version changed, schema file should be reused
-// 	table.TableInfoVersion = 101
-// 	hasNewerSchemaVersion, err = f.CheckOrWriteSchema(ctx, table, tableInfo)
-// 	require.NoError(t, err)
-// 	require.False(t, hasNewerSchemaVersion)
-// 	require.Equal(t, uint64(tidbInfo.Version), f.versionMap[table])
-
-// 	dir = filepath.Join(dir, "test/table1/meta")
-// 	files, err := os.ReadDir(dir)
-// 	require.NoError(t, err)
-// 	require.Equal(t, 1, len(files))
-=======
-	// test only table version changed, schema file should follow current version
+	// test only table version changed, schema file should be reused
 	table.TableInfoVersion = 101
+	hasNewerSchemaVersion, err = f.CheckOrWriteSchema(ctx, table, tableInfo)
+	require.NoError(t, err)
+	require.False(t, hasNewerSchemaVersion)
+	require.Equal(t, uint64(tidbInfo.Version), f.versionMap[table])
+
+	dir = filepath.Join(dir, "test/table1/meta")
+	files, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	require.Equal(t, 1, len(files))
+
+	// test schema file is invalid
+	err = os.WriteFile(filepath.Join(dir,
+		fmt.Sprintf("%s.tmp.%s", files[0].Name(), uuid.NewString())),
+		[]byte("invalid"), 0o644)
+	require.NoError(t, err)
+	err = os.Remove(filepath.Join(dir, files[0].Name()))
+	require.NoError(t, err)
+	delete(f.versionMap, table)
 	hasNewerSchemaVersion, err = f.CheckOrWriteSchema(ctx, table, tableInfo)
 	require.NoError(t, err)
 	require.False(t, hasNewerSchemaVersion)
 	require.Equal(t, table.TableInfoVersion, f.versionMap[table])
 
-	dir = filepath.Join(dir, "test/table1/meta")
-	files, err := os.ReadDir(dir)
+	files, err = os.ReadDir(dir)
 	require.NoError(t, err)
 	require.Equal(t, 2, len(files))
->>>>>>> 29db6eb28 (dispatcher,event,cloudstorage: add DML two-stage ack (#4263))
-
-// 	// test schema file is invalid
-// 	err = os.WriteFile(filepath.Join(dir,
-// 		fmt.Sprintf("%s.tmp.%s", files[0].Name(), uuid.NewString())),
-// 		[]byte("invalid"), 0o644)
-// 	require.NoError(t, err)
-// 	err = os.Remove(filepath.Join(dir, files[0].Name()))
-// 	require.NoError(t, err)
-// 	delete(f.versionMap, table)
-// 	hasNewerSchemaVersion, err = f.CheckOrWriteSchema(ctx, table, tableInfo)
-// 	require.NoError(t, err)
-// 	require.False(t, hasNewerSchemaVersion)
-// 	require.Equal(t, table.TableInfoVersion, f.versionMap[table])
-
-// 	files, err = os.ReadDir(dir)
-// 	require.NoError(t, err)
-// 	require.Equal(t, 2, len(files))
-// }
-
+}
 func TestRemoveExpiredFilesWithoutPartition(t *testing.T) {
 	t.Parallel()
 

@@ -28,12 +28,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
-<<<<<<< HEAD
-=======
-	"github.com/pingcap/tidb/pkg/parser/mysql"
-	tidbTypes "github.com/pingcap/tidb/pkg/types"
 	"go.uber.org/atomic"
->>>>>>> 29db6eb28 (dispatcher,event,cloudstorage: add DML two-stage ack (#4263))
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
@@ -259,8 +254,6 @@ func NewBasicDispatcher(
 	return dispatcher
 }
 
-<<<<<<< HEAD
-=======
 // AddDMLEventsToSink filters events for special tables, registers batch wake
 // callbacks, and returns true when at least one event remains to be written to
 // the downstream sink.
@@ -310,7 +303,6 @@ func (d *BasicDispatcher) AddDMLEventsToSink(events []*commonEvent.DMLEvent, wak
 	return true
 }
 
->>>>>>> 29db6eb28 (dispatcher,event,cloudstorage: add DML two-stage ack (#4263))
 // InitializeTableSchemaStore initializes the tableSchemaStore for the table trigger event dispatcher.
 // It returns true if the tableSchemaStore is initialized successfully, otherwise returns fals
 func (d *BasicDispatcher) InitializeTableSchemaStore(schemaInfo []*heartbeatpb.SchemaInfo) (ok bool, err error) {
@@ -637,15 +629,11 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 	// the checkpointTs may be incorrect set as the new resolvedTs,
 	// due to the tableProgress is empty before dml events add into sink.
 	if len(dmlEvents) > 0 {
-<<<<<<< HEAD
-		d.AddDMLEventsToSink(dmlEvents)
-=======
 		hasDMLToFlush := d.AddDMLEventsToSink(dmlEvents, wakeCallback)
 		if !hasDMLToFlush {
 			// All DML events were filtered out, so they no longer block dispatcher progress.
 			block = false
 		}
->>>>>>> 29db6eb28 (dispatcher,event,cloudstorage: add DML two-stage ack (#4263))
 	}
 	if latestResolvedTs > 0 {
 		d.resolvedTs.Store(latestResolvedTs)

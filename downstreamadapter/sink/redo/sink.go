@@ -133,25 +133,9 @@ func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 }
 
 func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
-<<<<<<< HEAD
-	toRowCallback := func(postTxnFlushed []func(), totalCount uint64) func() {
-		var calledCount atomic.Uint64
-		// The callback of the last row will trigger the callback of the txn.
-		return func() {
-			if calledCount.Inc() == totalCount {
-				for _, callback := range postTxnFlushed {
-					callback()
-				}
-			}
-		}
-	}
-	rowsCount := event.Len()
-	rowCallback := toRowCallback(event.PostTxnFlushed, uint64(rowsCount))
-	events := make([]writer.RedoEvent, 0, rowsCount)
-=======
 	rowsCount := uint64(event.Len())
 	rowCallback := helper.NewTxnPostFlushRowCallback(event, rowsCount)
->>>>>>> 29db6eb28 (dispatcher,event,cloudstorage: add DML two-stage ack (#4263))
+	events := make([]writer.RedoEvent, 0, rowsCount)
 
 	for {
 		row, ok := event.GetNextRow()
