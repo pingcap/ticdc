@@ -382,9 +382,8 @@ func (b *Barrier) handleBlockState(changefeedID common.ChangeFeedID,
 		// the block event, and check whether we need to send write action
 		event.markDispatcherEventDone(dispatcherID)
 		status, targetID := event.checkEventAction(dispatcherID)
-		if event.selected.Load() && event.needSchedule {
-			// scheduling is only required for ddl that changes tables. enqueue once the
-			// barrier is selected, regardless of whether the action is sent immediately.
+		if status != nil && event.needSchedule {
+			// scheduling is only required for ddl that changes tables, enqueue the event
 			b.pendingEvents.add(event)
 		}
 		return event, status, targetID, true
@@ -431,17 +430,13 @@ func (b *Barrier) getOrInsertNewEvent(changefeedID common.ChangeFeedID, dispatch
 // check whether the event is get all the done message from dispatchers
 // if so, remove the event from blockedTs, not need to resend message anymore
 func (b *Barrier) checkEventFinish(be *BarrierEvent) {
-	if !be.selected.Load() {
-		return
-	}
 	if !be.allDispatcherReported() {
 		return
 	}
 	if be.selected.Load() {
 		log.Info("all dispatchers reported event done, remove event",
 			zap.String("changefeed", be.cfID.Name()),
-			zap.Uint64("committs", be.commitTs),
-			zap.Int64("mode", b.mode))
+			zap.Uint64("committs", be.commitTs))
 		// already selected a dispatcher to write, now all dispatchers reported the block event
 		b.blockedEvents.Delete(getEventKey(be.commitTs, be.isSyncPoint))
 	}
