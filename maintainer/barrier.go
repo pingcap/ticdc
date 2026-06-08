@@ -53,26 +53,12 @@ func NewBarrier(spanController *span.Controller,
 	bootstrapRespMap map[node.ID]*heartbeatpb.MaintainerBootstrapResponse,
 	mode int64,
 ) *Barrier {
-	return NewBarrierWithFlush(spanController, operatorController, splitTableEnabled, true, bootstrapRespMap, mode)
-}
-
-// NewBarrierWithFlush creates a barrier with an explicit flush phase switch.
-// flushEnabled must be decided before restoring bootstrap events so restored
-// events use the right phase machine from the beginning.
-func NewBarrierWithFlush(spanController *span.Controller,
-	operatorController *operator.Controller,
-	splitTableEnabled bool,
-	flushEnabled bool,
-	bootstrapRespMap map[node.ID]*heartbeatpb.MaintainerBootstrapResponse,
-	mode int64,
-) *Barrier {
 	barrier := Barrier{
 		blockedEvents:      NewBlockEventMap(),
 		pendingEvents:      newPendingScheduleEventMap(),
 		spanController:     spanController,
 		operatorController: operatorController,
 		splitTableEnabled:  splitTableEnabled,
-		flushEnabled:       flushEnabled,
 		mode:               mode,
 	}
 	barrier.handleBootstrapResponse(bootstrapRespMap)
