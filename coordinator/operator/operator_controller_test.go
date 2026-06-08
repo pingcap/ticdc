@@ -306,6 +306,59 @@ func TestController_AddOperatorBumpsAndPersistsOwnershipEpoch(t *testing.T) {
 	}
 }
 
+func TestController_StopChangefeedDuringMoveUsesOriginEpoch(t *testing.T) {
+	changefeedDB := changefeed.NewChangefeedDB(1216)
+	ctrl := gomock.NewController(t)
+	backend := mock_changefeed.NewMockBackend(ctrl)
+	oc, self, nodeManager := newOperatorControllerForTest(t, changefeedDB, backend, &operatorEpochPDClient{physical: 100, logical: 1})
+	target := node.NewInfo("localhost:8301", "")
+	nodeManager.GetAliveNodes()[target.ID] = target
+
+	oldEpoch := uint64(10)
+	newEpoch := uint64(20)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		Config:       config.GetDefaultReplicaConfig(),
+		SinkURI:      "mysql://127.0.0.1:3306",
+		Epoch:        oldEpoch,
+	}, 1, true)
+	changefeedDB.AddReplicatingMaintainer(cf, self.ID)
+
+	backend.EXPECT().
+		BumpChangefeedEpoch(gomock.Any(), cfID, gomock.Any(), changefeed.EpochBumpOptions{}).
+		DoAndReturn(func(ctx context.Context, id common.ChangeFeedID, candidateEpoch uint64, options changefeed.EpochBumpOptions) (*config.ChangeFeedInfo, error) {
+			info, err := cf.GetInfo().Clone()
+			require.NoError(t, err)
+			info.Epoch = newEpoch
+			return info, nil
+		}).
+		Times(1)
+
+	moveOp := NewMoveMaintainerOperator(changefeedDB, cf, self.ID, target.ID)
+	require.True(t, oc.AddOperator(moveOp))
+	require.Equal(t, newEpoch, cf.GetInfo().Epoch)
+
+	stopOp := oc.StopChangefeed(context.Background(), cfID, false)
+	require.Equal(t, "stop", stopOp.Type())
+	reqMsg := stopOp.Schedule()
+	require.Equal(t, self.ID, reqMsg.To)
+	req := reqMsg.Message[0].(*heartbeatpb.RemoveMaintainerRequest)
+	require.Equal(t, oldEpoch, req.MaintainerEpoch)
+
+	stopOp.Check(self.ID, &heartbeatpb.MaintainerStatus{
+		State:           heartbeatpb.ComponentState_Stopped,
+		MaintainerEpoch: newEpoch,
+	})
+	require.False(t, stopOp.IsFinished())
+
+	stopOp.Check(self.ID, &heartbeatpb.MaintainerStatus{
+		State:           heartbeatpb.ComponentState_Stopped,
+		MaintainerEpoch: oldEpoch,
+	})
+	require.True(t, stopOp.IsFinished())
+}
+
 func TestController_AddOperatorEpochBumpDoesNotBlockStatusAndStop(t *testing.T) {
 	changefeedDB := changefeed.NewChangefeedDB(1216)
 	ctrl := gomock.NewController(t)

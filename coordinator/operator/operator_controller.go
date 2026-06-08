@@ -282,7 +282,18 @@ func (oc *Controller) stopChangefeed(
 		}
 	}
 
+	var originNode node.ID
+	var originEpoch uint64
+	var useOriginEpoch bool
+	if !hasMaintainerEpoch {
+		originNode, originEpoch, useOriginEpoch = oc.moveOriginStopTargetLocked(cfID)
+	}
+
 	scheduledNode := oc.changefeedDB.StopByChangefeedID(cfID, removed)
+	if useOriginEpoch {
+		scheduledNode = originNode
+		maintainerEpoch = originEpoch
+	}
 	if scheduledNode == "" {
 		log.Info("changefeed is not scheduled, try stop maintainer using coordinator node",
 			zap.String("role", oc.role),
@@ -292,6 +303,20 @@ func (oc *Controller) stopChangefeed(
 	}
 
 	return oc.pushStopChangefeedOperator(keyspaceID, cfID, scheduledNode, removed, maintainerEpoch)
+}
+
+// moveOriginStopTargetLocked returns the origin maintainer stop target for an
+// in-flight move. The caller must hold oc.mu.
+func (oc *Controller) moveOriginStopTargetLocked(cfID common.ChangeFeedID) (node.ID, uint64, bool) {
+	old, ok := oc.operators[cfID]
+	if !ok {
+		return "", 0, false
+	}
+	moveOp, ok := old.OP.(*MoveMaintainerOperator)
+	if !ok {
+		return "", 0, false
+	}
+	return moveOp.originStopTarget()
 }
 
 // pushStopChangefeedOperator pushes a stop changefeed operator to the controller.
