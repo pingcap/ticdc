@@ -258,32 +258,9 @@ func NewBasicDispatcher(
 // callbacks, and returns true when at least one event remains to be written to
 // the downstream sink.
 func (d *BasicDispatcher) AddDMLEventsToSink(events []*commonEvent.DMLEvent, wakeCallback func()) bool {
-	// Normal DML dispatch: most tables just pass through this function unchanged.
-	// Active-active or soft-delete tables are processed by FilterDMLEvent before
-	// being handed over to the sink (delete rows dropped; soft-delete transitions may
-	// be rewritten into deletes when enable-active-active is disabled).
-	filteredEvents := make([]*commonEvent.DMLEvent, 0, len(events))
-	for _, event := range events {
-		// FilterDMLEvent returns the original event for normal tables and only
-		// allocates a new event when the table needs active-active or soft-delete
-		// processing. Skip is true when every row in the event is dropped, or when
-		// the event contains unexpected schema issues that have been reported via
-		// HandleError.
-		filtered, skip := commonEvent.FilterDMLEvent(event, d.sharedInfo.enableActiveActive, d.HandleError)
-		if skip || filtered == nil {
-			continue
-		}
-		filteredEvents = append(filteredEvents, filtered)
-	}
-	if len(filteredEvents) == 0 {
-		log.Debug("all events filtered")
-		// Nothing left to flush. Caller will treat this batch as non-blocking.
-		return false
-	}
-
 	var remaining atomic.Int64
-	remaining.Store(int64(len(filteredEvents)))
-	for _, event := range filteredEvents {
+	remaining.Store(int64(len(events)))
+	for _, event := range events {
 		event.AddPostEnqueueFunc(func() {
 			if remaining.Dec() == 0 {
 				wakeCallback()
@@ -293,10 +270,10 @@ func (d *BasicDispatcher) AddDMLEventsToSink(events []*commonEvent.DMLEvent, wak
 
 	// for one batch events, we need to add all them in table progress first, then add them to sink
 	// to avoid checkpoint jumping while events are being enqueued/flushed.
-	for _, event := range filteredEvents {
+	for _, event := range events {
 		d.tableProgress.Add(event)
 	}
-	for _, event := range filteredEvents {
+	for _, event := range events {
 		d.sink.AddDMLEvent(event)
 		failpoint.Inject("BlockAddDMLEvents", nil)
 	}
