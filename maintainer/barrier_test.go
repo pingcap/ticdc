@@ -520,8 +520,6 @@ func TestBarrierPrechecksRouteEventWhenDDLDispatcherBlocks(t *testing.T) {
 					},
 					RouteTableAdmissions: []*heartbeatpb.RouteTableAdmission{
 						{
-							SchemaID:         2,
-							TableID:          2,
 							SourceSchemaName: "db2",
 							SourceTableName:  "t",
 							TargetSchemaName: "target",
@@ -630,8 +628,6 @@ func TestBarrierRouteConflictPrecheckPreventsWriteAction(t *testing.T) {
 					},
 					RouteTableAdmissions: []*heartbeatpb.RouteTableAdmission{
 						{
-							SchemaID:         2,
-							TableID:          2,
 							SourceSchemaName: "db2",
 							SourceTableName:  "t",
 							TargetSchemaName: "target",
@@ -651,8 +647,6 @@ func TestBarrierRouteConflictPrecheckPreventsWriteAction(t *testing.T) {
 					},
 					RouteTableAdmissions: []*heartbeatpb.RouteTableAdmission{
 						{
-							SchemaID:         2,
-							TableID:          2,
 							SourceSchemaName: "db2",
 							SourceTableName:  "t",
 							TargetSchemaName: "target",
@@ -758,8 +752,6 @@ func TestBarrierRoutePrecheckKeepsFullyReportedBlockedEventAndPreventsWriteActio
 			{SchemaID: 2, TableID: 2},
 		}, []*heartbeatpb.RouteTableAdmission{
 			{
-				SchemaID:         2,
-				TableID:          2,
 				SourceSchemaName: "db2",
 				SourceTableName:  "t",
 				TargetSchemaName: "target",
