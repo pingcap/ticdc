@@ -399,16 +399,38 @@ func (m *DispatcherOrchestrator) handleCloseRequest(
 	}
 
 	m.mutex.Lock()
-	if manager, ok := m.dispatcherManagers[cfId]; ok {
+	manager, ok := m.dispatcherManagers[cfId]
+	if !ok && req.MaintainerEpoch > m.closedMaintainerEpochs[cfId] {
+		m.closedMaintainerEpochs[cfId] = req.MaintainerEpoch
+	}
+	m.mutex.Unlock()
+
+	if ok {
+		// Do not hold the orchestrator-wide map lock while waiting for the
+		// per-changefeed fence; a slow manager must not block unrelated changefeeds.
+		decGauge := false
 		manager.MaintainerFenceMu.Lock()
 		if manager.IsMaintainerRequestAllowed(from, req.MaintainerEpoch) {
 			if closed := manager.TryClose(req.Removed); closed {
-				delete(m.dispatcherManagers, cfId)
-				if req.MaintainerEpoch > m.closedMaintainerEpochs[cfId] {
-					m.closedMaintainerEpochs[cfId] = req.MaintainerEpoch
+				m.mutex.Lock()
+				currentManager, stillExists := m.dispatcherManagers[cfId]
+				switch {
+				case stillExists && currentManager == manager:
+					delete(m.dispatcherManagers, cfId)
+					if req.MaintainerEpoch > m.closedMaintainerEpochs[cfId] {
+						m.closedMaintainerEpochs[cfId] = req.MaintainerEpoch
+					}
+					decGauge = true
+					response.Success = true
+				case !stillExists:
+					if req.MaintainerEpoch > m.closedMaintainerEpochs[cfId] {
+						m.closedMaintainerEpochs[cfId] = req.MaintainerEpoch
+					}
+					response.Success = true
+				default:
+					response.Success = false
 				}
-				metrics.DispatcherManagerGauge.WithLabelValues(cfId.Keyspace(), cfId.Name()).Dec()
-				response.Success = true
+				m.mutex.Unlock()
 			} else {
 				response.Success = false
 			}
@@ -422,10 +444,10 @@ func (m *DispatcherOrchestrator) handleCloseRequest(
 				zap.String("currentMaintainer", manager.GetMaintainerID().String()))
 		}
 		manager.MaintainerFenceMu.Unlock()
-	} else if req.MaintainerEpoch > m.closedMaintainerEpochs[cfId] {
-		m.closedMaintainerEpochs[cfId] = req.MaintainerEpoch
+		if decGauge {
+			metrics.DispatcherManagerGauge.WithLabelValues(cfId.Keyspace(), cfId.Name()).Dec()
+		}
 	}
-	m.mutex.Unlock()
 
 	log.Info("try close dispatcher manager",
 		zap.String("changefeed", cfId.String()), zap.Bool("success", response.Success))
