@@ -15,7 +15,6 @@ package pdutil
 
 import (
 	"context"
-	"fmt"
 	"strconv"
 	"time"
 
@@ -74,7 +73,7 @@ func AdvanceChangefeedEpoch(candidate, current uint64) (uint64, error) {
 		return candidate, nil
 	}
 	if current == ^uint64(0) {
-		return 0, fmt.Errorf("changefeed epoch overflow")
+		return 0, cerror.ErrSchedulerRequestFailed.GenWithStackByArgs("changefeed epoch overflow")
 	}
 	return current + 1, nil
 }
