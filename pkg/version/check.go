@@ -42,15 +42,23 @@ var (
 	minPDVersion = semver.New("7.5.0-alpha")
 	// maxPDVersion is the version of the maximum compatible PD.
 	// Compatible versions are in [minPDVersion, maxPDVersion)
+<<<<<<< HEAD
 	// PD release-nextgen-202603 now reports v26.3.0-1-g9fdd971 after tikv/pd#10845.
 	maxPDVersion = semver.New("26.4.0")
+=======
+	maxPDVersion = semver.New("9999.0.0")
+>>>>>>> 0c2d3f37a (version: remove hard-coded max version guard for new architecture (#4682))
 
 	// MinTiKVVersion is the version of the minimal compatible TiKV.
 	// The min version should be 7.5 for new arch.
 	MinTiKVVersion = semver.New("7.5.0-alpha")
 	// maxTiKVVersion is the version of the maximum compatible TiKV.
 	// Compatible versions are in [MinTiKVVersion, maxTiKVVersion)
+<<<<<<< HEAD
 	maxTiKVVersion = semver.New("26.4.0")
+=======
+	maxTiKVVersion = semver.New("9999.0.0")
+>>>>>>> 0c2d3f37a (version: remove hard-coded max version guard for new architecture (#4682))
 
 	// New Arch Starts From 9.0.0,
 	// we use the minimal release version as default.
@@ -58,9 +66,9 @@ var (
 
 	// MinTiCDCVersion is the version of the minimal allowed TiCDC version.
 	MinTiCDCVersion = semver.New("7.5.0-alpha")
-	// MaxTiCDCVersion is the version of the maximum allowed TiCDC version.
-	// for version `x.y.z`, max allowed `x+2.0.0`
-	MaxTiCDCVersion = semver.New("15.0.0-alpha")
+	// MaxTiCDCVersion is the sentinel upper bound for TiCDC compatibility checks.
+	// 9999 keeps future TiCDC versions accepted while preserving an explicit upper bound.
+	MaxTiCDCVersion = semver.New("9999.0.0-alpha")
 )
 
 var versionHash = regexp.MustCompile("-[0-9]+-g[0-9a-f]{7,}(-dev)?")
