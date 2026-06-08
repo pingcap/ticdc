@@ -137,8 +137,6 @@ func TestResendAction(t *testing.T) {
 
 	// flush phase disabled: resend write action directly
 	event.lastResendTime = time.Time{}
-	event.flushEnabled = false
-	event.flushDispatcherAdvanced = true
 	event.writerDispatcherAdvanced = false
 	event.writerDispatcher = dispatcherIDs[0]
 	msgs = event.resend(common.DefaultMode)
@@ -157,7 +155,6 @@ func TestResendAction(t *testing.T) {
 		},
 	}, false)
 	event.selected.Store(true)
-	event.flushDispatcherAdvanced = true
 	event.writerDispatcherAdvanced = true
 	msgs = event.resend(common.DefaultMode)
 	require.Len(t, msgs, 1)
@@ -176,7 +173,6 @@ func TestResendAction(t *testing.T) {
 		},
 	}, false)
 	event.selected.Store(true)
-	event.flushDispatcherAdvanced = true
 	event.writerDispatcherAdvanced = true
 	msgs = event.resend(common.DefaultMode)
 	require.Len(t, msgs, 1)
@@ -196,7 +192,6 @@ func TestResendAction(t *testing.T) {
 		},
 	}, false)
 	event.selected.Store(true)
-	event.flushDispatcherAdvanced = true
 	event.writerDispatcherAdvanced = true
 	msgs = event.resend(common.DefaultMode)
 	require.Len(t, msgs, 1)

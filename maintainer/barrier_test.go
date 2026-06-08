@@ -91,7 +91,6 @@ func TestOneBlockEvent(t *testing.T) {
 	require.Equal(t, uint64(10), event.commitTs)
 	require.True(t, event.writerDispatcher == spanController.GetDDLDispatcherID())
 	require.True(t, event.selected.Load())
-	require.False(t, event.flushDispatcherAdvanced)
 	require.False(t, event.writerDispatcherAdvanced)
 	require.Len(t, resp.DispatcherStatuses, 1)
 	require.Equal(t, resp.DispatcherStatuses[0].Ack.CommitTs, uint64(10))
@@ -134,7 +133,6 @@ func TestOneBlockEvent(t *testing.T) {
 	resp = msgs[0].Message[0].(*heartbeatpb.HeartBeatResponse)
 	require.Equal(t, resp.DispatcherStatuses[0].Ack.CommitTs, uint64(10))
 	require.Len(t, barrier.blockedEvents.m, 1)
-	require.True(t, event.flushDispatcherAdvanced)
 	// writerDispatcherAdvanced can already be true here when Action_Flush is skipped
 	// (for example if there is no live influenced dispatcher to flush).
 	// resend write action after flush phase done
@@ -374,7 +372,6 @@ func TestNormalBlock(t *testing.T) {
 		},
 	})
 	require.Len(t, barrier.blockedEvents.m, 1)
-	require.True(t, event.flushDispatcherAdvanced)
 	require.False(t, event.writerDispatcherAdvanced)
 
 	// Phase2: resend write action and writer reports done.
@@ -588,7 +585,6 @@ func TestNormalBlockWithTableTrigger(t *testing.T) {
 		},
 	})
 	require.Len(t, barrier.blockedEvents.m, 1)
-	require.True(t, event.flushDispatcherAdvanced)
 	require.False(t, event.writerDispatcherAdvanced)
 
 	// Phase2: writer action and done.
@@ -817,7 +813,6 @@ func TestSchemaBlock(t *testing.T) {
 			},
 		},
 	})
-	require.True(t, event.flushDispatcherAdvanced)
 	require.False(t, event.writerDispatcherAdvanced)
 
 	// Phase2: writer action and done.
@@ -1030,7 +1025,6 @@ func TestSyncPointBlock(t *testing.T) {
 			},
 		},
 	})
-	require.True(t, event.flushDispatcherAdvanced)
 	require.False(t, event.writerDispatcherAdvanced)
 
 	// Phase2: write action and writer done.
@@ -1416,7 +1410,6 @@ func TestHandleBlockBootstrapResponse(t *testing.T) {
 	event = barrier.blockedEvents.m[getEventKey(6, false)]
 	require.NotNil(t, event)
 	require.True(t, event.selected.Load())
-	require.True(t, event.flushDispatcherAdvanced)
 	require.False(t, event.writerDispatcherAdvanced)
 	bootstrapMsgs := barrier.Resend()
 	require.Len(t, bootstrapMsgs, 1)

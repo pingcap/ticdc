@@ -6,10 +6,11 @@ package heartbeatpb
 import (
 	encoding_binary "encoding/binary"
 	fmt "fmt"
-	proto "github.com/gogo/protobuf/proto"
 	io "io"
 	math "math"
 	math_bits "math/bits"
+
+	proto "github.com/gogo/protobuf/proto"
 )
 
 // Reference imports to suppress errors if they are not otherwise used.
@@ -26,6 +27,8 @@ const _ = proto.GoGoProtoPackageIsVersion3 // please upgrade the proto package
 type Action int32
 
 const (
+	// Write means the selected writer dispatcher executes the barrier event
+	// (DDL/syncpoint) to downstream.
 	Action_Write Action = 0
 	Action_Pass  Action = 1
 	Action_Flush Action = 2

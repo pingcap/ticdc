@@ -35,7 +35,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/chann"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
-	parser_model "github.com/pingcap/tidb/pkg/parser/model"
+	"github.com/pingcap/tidb/pkg/parser/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/parser/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
@@ -77,10 +77,10 @@ func TestWriterRun(t *testing.T) {
 
 	tidbTableInfo := &timodel.TableInfo{
 		ID:   100,
-		Name: parser_model.NewCIStr("table1"),
+		Name: model.NewCIStr("table1"),
 		Columns: []*timodel.ColumnInfo{
-			{ID: 1, Name: parser_model.NewCIStr("c1"), FieldType: *types.NewFieldType(mysql.TypeLong)},
-			{ID: 2, Name: parser_model.NewCIStr("c2"), FieldType: *types.NewFieldType(mysql.TypeVarchar)},
+			{ID: 1, Name: model.NewCIStr("c1"), FieldType: *types.NewFieldType(mysql.TypeLong)},
+			{ID: 2, Name: model.NewCIStr("c2"), FieldType: *types.NewFieldType(mysql.TypeVarchar)},
 		},
 	}
 	tableInfo := commonType.WrapTableInfo("test", tidbTableInfo)
@@ -141,9 +141,9 @@ func verifyWriterDrainMarker(t *testing.T) {
 
 	tidbTableInfo := &timodel.TableInfo{
 		ID:   100,
-		Name: ast.NewCIStr("table1"),
+		Name: model.NewCIStr("table1"),
 		Columns: []*timodel.ColumnInfo{
-			{ID: 1, Name: ast.NewCIStr("c1"), FieldType: *types.NewFieldType(mysql.TypeLong)},
+			{ID: 1, Name: model.NewCIStr("c1"), FieldType: *types.NewFieldType(mysql.TypeLong)},
 		},
 	}
 	tableInfo := commonType.WrapTableInfo("test", tidbTableInfo)

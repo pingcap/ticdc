@@ -183,8 +183,6 @@ func (b *Barrier) handleBootstrapResponse(bootstrapRespMap map[node.ID]*heartbea
 			event, ok := b.blockedEvents.Get(key)
 			if !ok {
 				event = NewBlockEvent(common.NewChangefeedIDFromPB(resp.ChangefeedID), common.NewDispatcherIDFromPB(span.ID), b.spanController, b.operatorController, blockState, b.splitTableEnabled)
-				event.flushEnabled = b.flushEnabled
-				event.flushDispatcherAdvanced = !b.flushEnabled
 				b.blockedEvents.Set(key, event)
 			}
 			switch blockState.Stage {
@@ -315,58 +313,29 @@ func (b *Barrier) handleEventDone(changefeedID common.ChangeFeedID, dispatcherID
 		return nil
 	}
 
-	// We should only see DONE after the event has been selected.
-	if !event.selected.Load() {
-		return event
-	}
-
-	// Phase 1 (Flush, storage split-table only): all influenced dispatchers must flush pre-barrier DML first.
-	// This prevents pre-DDL data from overtaking the barrier write when a table is
-	// split into multiple dispatchers across nodes.
-	// DONE from all influenced dispatchers advances flushDispatcherAdvanced = true.
-	if !event.flushDispatcherAdvanced {
-		event.markDispatcherEventDone(dispatcherID)
-		if !event.allDispatcherReported() {
-			return event
-		}
-
-		event.flushDispatcherAdvanced = true
-		event.rangeChecker.Reset()
-		event.reportedDispatchers = make(map[common.DispatcherID]struct{})
-		event.lastResendTime = time.Now().Add(-20 * time.Second)
-		return event
-	}
-
-	// Phase 2 (Write): only writerDispatcher executes Action_Write.
-	// DONE from writerDispatcher advances writerDispatcherAdvanced = true.
-	if !event.writerDispatcherAdvanced {
-		if event.writerDispatcher != dispatcherID {
-			// Ignore stale DONE from non-writer dispatchers while waiting writer Action_Write.
-			return event
-		}
-
+	// there is a block event and the dispatcher write or pass action already
+	// which means we have sent pass or write action to it
+	// the writer already synced ddl to downstream
+	if event.writerDispatcher == dispatcherID {
 		if event.needSchedule {
-			// We should schedule only after writer finished Action_Write.
-			// Otherwise truncate/create like ddl may expose new table dml before old table cleanup.
+			// we need do schedule when writerDispatcherAdvanced
+			// Otherwise, if we do schedule when just selected = true, then ask dispatcher execute ddl
+			// when meeting truncate table,
+			// there is possible that dml for the new table will arrive before truncate ddl executed.
+			// that will lead to data loss
 			scheduled := b.tryScheduleEvent(event)
 			if !scheduled {
-				// Not scheduled yet, keep waiting and resend later.
+				// not scheduled yet, just return, wait for next resend
 				return event
 			}
 		} else {
+			// the pass action will be sent periodically in resend logic if not acked
 			event.writerDispatcherAdvanced = true
 			event.lastResendTime = time.Now().Add(-20 * time.Second)
 		}
-
-		// Start Phase 3 from a clean coverage window.
-		event.rangeChecker.Reset()
-		event.reportedDispatchers = make(map[common.DispatcherID]struct{})
-		event.lastResendTime = time.Now().Add(-20 * time.Second)
-		return event
 	}
 
-	// Phase 3 (Pass): all influenced dispatchers report DONE for Action_Pass,
-	// then checkEventFinish removes the barrier from blockedEvents.
+	// checkpoint ts is advanced, clear the map, so do not need to resend message anymore
 	event.markDispatcherEventDone(dispatcherID)
 	b.checkEventFinish(event)
 	return event
@@ -469,8 +438,6 @@ func (b *Barrier) getOrInsertNewEvent(changefeedID common.ChangeFeedID, dispatch
 	event, ok := b.blockedEvents.Get(key)
 	if !ok {
 		event = NewBlockEvent(changefeedID, dispatcherID, b.spanController, b.operatorController, blockState, b.splitTableEnabled)
-		event.flushEnabled = b.flushEnabled
-		event.flushDispatcherAdvanced = !b.flushEnabled
 		b.blockedEvents.Set(key, event)
 	}
 	return event
@@ -482,17 +449,17 @@ func (b *Barrier) checkEventFinish(be *BarrierEvent) {
 	if !be.selected.Load() {
 		return
 	}
-	if !be.flushDispatcherAdvanced || !be.writerDispatcherAdvanced {
-		return
-	}
 	if !be.allDispatcherReported() {
 		return
 	}
-
-	log.Info("all dispatchers reported event done, remove event",
-		zap.String("changefeed", be.cfID.Name()),
-		zap.Uint64("committs", be.commitTs))
-	b.blockedEvents.Delete(getEventKey(be.commitTs, be.isSyncPoint))
+	if be.selected.Load() {
+		log.Info("all dispatchers reported event done, remove event",
+			zap.String("changefeed", be.cfID.Name()),
+			zap.Uint64("committs", be.commitTs),
+			zap.Int64("mode", b.mode))
+		// already selected a dispatcher to write, now all dispatchers reported the block event
+		b.blockedEvents.Delete(getEventKey(be.commitTs, be.isSyncPoint))
+	}
 }
 
 func (b *Barrier) tryScheduleEvent(event *BarrierEvent) bool {
