@@ -3142,8 +3142,8 @@ func TestRenameTable(t *testing.T) {
 	job.Version = model.JobVersion2
 	job.FillArgs(&model.RenameTableArgs{
 		OldSchemaID:   200,
-		OldSchemaName: ast.NewCIStr("SalesDB"),
-		NewTableName:  ast.NewCIStr("t1"),
+		OldSchemaName: parser_model.NewCIStr("SalesDB"),
+		NewTableName:  parser_model.NewCIStr("t1"),
 	})
 	job.Query = "RENAME TABLE t1 TO ArchiveDB.t1"
 	ddl = buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
@@ -3181,8 +3181,8 @@ func TestRenameTable(t *testing.T) {
 	job.Version = model.JobVersion2
 	job.FillArgs(&model.RenameTableArgs{
 		OldSchemaID:   200,
-		OldSchemaName: ast.NewCIStr("SalesDB"),
-		NewTableName:  ast.NewCIStr("t1"),
+		OldSchemaName: parser_model.NewCIStr("SalesDB"),
+		NewTableName:  parser_model.NewCIStr("t1"),
 	})
 	job.Query = "RENAME TABLE t1 TO ArchiveDB.t1"
 	ddl = buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
