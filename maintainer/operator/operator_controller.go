@@ -87,6 +87,11 @@ func (oc *Controller) SetMaintainerEpoch(maintainerEpoch uint64) {
 	oc.maintainerEpoch.Store(maintainerEpoch)
 }
 
+// MaintainerEpoch returns the epoch stamped on maintainer-to-dispatcher-manager requests.
+func (oc *Controller) MaintainerEpoch() uint64 {
+	return oc.maintainerEpoch.Load()
+}
+
 // Execute poll the operator from the queue and execute it
 // It will be called in the thread pool.
 func (oc *Controller) Execute() time.Time {

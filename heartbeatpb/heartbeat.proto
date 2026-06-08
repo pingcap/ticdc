@@ -72,6 +72,8 @@ message HeartBeatResponse {
     ChangefeedID changefeedID = 1;
     repeated DispatcherStatus dispatcherStatuses = 2;
     int64 mode = 3;
+    // maintainer_epoch fences barrier decisions from stale maintainers.
+    uint64 maintainer_epoch = 4;
 }
 
 message CheckpointTsMessage {

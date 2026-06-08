@@ -500,11 +500,12 @@ func newHeartBeatResponseDynamicStream(dds dynstream.DynamicStream[common.GID, c
 }
 
 type HeartBeatResponse struct {
+	From node.ID
 	*heartbeatpb.HeartBeatResponse
 }
 
-func NewHeartBeatResponse(resp *heartbeatpb.HeartBeatResponse) HeartBeatResponse {
-	return HeartBeatResponse{resp}
+func NewHeartBeatResponse(from node.ID, resp *heartbeatpb.HeartBeatResponse) HeartBeatResponse {
+	return HeartBeatResponse{From: from, HeartBeatResponse: resp}
 }
 
 type HeartBeatResponseHandler struct {
@@ -525,6 +526,11 @@ func (h *HeartBeatResponseHandler) Handle(dispatcherManager *DispatcherManager, 
 		panic("invalid response count")
 	}
 	heartbeatResponse := resps[0]
+	dispatcherManager.MaintainerFenceMu.Lock()
+	defer dispatcherManager.MaintainerFenceMu.Unlock()
+	if !isHeartBeatResponseAllowed(dispatcherManager, heartbeatResponse) {
+		return false
+	}
 	dispatcherStatuses := heartbeatResponse.GetDispatcherStatuses()
 	for _, dispatcherStatus := range dispatcherStatuses {
 		influencedDispatchersType := dispatcherStatus.InfluencedDispatchers.InfluenceType
@@ -559,6 +565,19 @@ func (h *HeartBeatResponseHandler) Handle(dispatcherManager *DispatcherManager, 
 			}
 		}
 	}
+	return false
+}
+
+func isHeartBeatResponseAllowed(dispatcherManager *DispatcherManager, heartbeatResponse HeartBeatResponse) bool {
+	if dispatcherManager.IsMaintainerRequestAllowed(heartbeatResponse.From, heartbeatResponse.MaintainerEpoch) {
+		return true
+	}
+	log.Warn("drop stale heartbeat response",
+		zap.String("changefeedID", heartbeatResponse.ChangefeedID.String()),
+		zap.String("from", heartbeatResponse.From.String()),
+		zap.Uint64("responseMaintainerEpoch", heartbeatResponse.MaintainerEpoch),
+		zap.Uint64("currentMaintainerEpoch", dispatcherManager.GetMaintainerEpoch()),
+		zap.String("currentMaintainer", dispatcherManager.GetMaintainerID().String()))
 	return false
 }
 

@@ -177,7 +177,7 @@ func newTestDispatcherOrchestrator() *DispatcherOrchestrator {
 	// needs shard state and the dispatcher manager map but not a message center.
 	orchestrator := &DispatcherOrchestrator{
 		dispatcherManagers:     make(map[common.ChangeFeedID]*dispatchermanager.DispatcherManager),
-		closedMaintainerEpochs: make(map[common.ChangeFeedID]uint64),
+		closedMaintainerEpochs: make(map[common.ChangeFeedID]closedMaintainerEpoch),
 		shards:                 make([]*orchestratorShard, dispatcherOrchestratorShardCount),
 	}
 	for i := range orchestrator.shards {
@@ -625,7 +625,7 @@ func TestHandleCloseRequestRejectsStaleMaintainerEpoch(t *testing.T) {
 	orchestrator := &DispatcherOrchestrator{
 		mc:                     mc,
 		dispatcherManagers:     map[common.ChangeFeedID]*dispatchermanager.DispatcherManager{cfID: manager},
-		closedMaintainerEpochs: make(map[common.ChangeFeedID]uint64),
+		closedMaintainerEpochs: make(map[common.ChangeFeedID]closedMaintainerEpoch),
 	}
 	err = orchestrator.handleCloseRequest(node.ID("old-maintainer"), &heartbeatpb.MaintainerCloseRequest{
 		ChangefeedID:    cfID.ToPB(),
@@ -648,14 +648,43 @@ func TestHandleBootstrapRequestRejectsClosedOlderMaintainerEpoch(t *testing.T) {
 	orchestrator := &DispatcherOrchestrator{
 		mc:                 messaging.NewMockMessageCenter(),
 		dispatcherManagers: make(map[common.ChangeFeedID]*dispatchermanager.DispatcherManager),
-		closedMaintainerEpochs: map[common.ChangeFeedID]uint64{
-			cfID: 2,
+		closedMaintainerEpochs: map[common.ChangeFeedID]closedMaintainerEpoch{
+			cfID: {epoch: 2},
 		},
 	}
 	err = orchestrator.handleBootstrapRequest(node.ID("old-maintainer"), &heartbeatpb.MaintainerBootstrapRequest{
 		ChangefeedID:    cfID.ToPB(),
 		Config:          configBytes,
 		MaintainerEpoch: 1,
+	})
+	require.NoError(t, err)
+	require.Empty(t, orchestrator.dispatcherManagers)
+}
+
+func TestHandleCloseRequestRecordsEpochZeroTombstone(t *testing.T) {
+	cfID := common.NewChangeFeedIDWithName("cf", "default")
+	configBytes, err := json.Marshal(newBootstrapResponseTestChangefeedConfig(cfID))
+	require.NoError(t, err)
+
+	orchestrator := &DispatcherOrchestrator{
+		mc:                     messaging.NewMockMessageCenter(),
+		dispatcherManagers:     make(map[common.ChangeFeedID]*dispatchermanager.DispatcherManager),
+		closedMaintainerEpochs: make(map[common.ChangeFeedID]closedMaintainerEpoch),
+	}
+
+	err = orchestrator.handleCloseRequest(node.ID("compat-maintainer"), &heartbeatpb.MaintainerCloseRequest{
+		ChangefeedID:    cfID.ToPB(),
+		MaintainerEpoch: 0,
+	})
+	require.NoError(t, err)
+	closedEpoch, ok := orchestrator.closedMaintainerEpochs[cfID]
+	require.True(t, ok)
+	require.Zero(t, closedEpoch.epoch)
+
+	err = orchestrator.handleBootstrapRequest(node.ID("compat-maintainer"), &heartbeatpb.MaintainerBootstrapRequest{
+		ChangefeedID:    cfID.ToPB(),
+		Config:          configBytes,
+		MaintainerEpoch: 0,
 	})
 	require.NoError(t, err)
 	require.Empty(t, orchestrator.dispatcherManagers)

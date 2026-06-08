@@ -275,6 +275,92 @@ func TestDispatcherManagerTryUpdateMaintainerEpoch(t *testing.T) {
 	require.Zero(t, compatDM.GetMaintainerEpoch())
 }
 
+func TestHeartBeatResponseAllowedByMaintainerEpoch(t *testing.T) {
+	t.Parallel()
+
+	changefeedID := common.NewChangeFeedIDWithName("test-changefeed", "test-namespace")
+	strictDM := &DispatcherManager{
+		changefeedID: changefeedID,
+	}
+	strictDM.meta.maintainerID = "current-maintainer"
+	strictDM.meta.maintainerEpoch = 2
+
+	require.False(t, isHeartBeatResponseAllowed(strictDM, NewHeartBeatResponse(
+		node.ID("old-maintainer"),
+		&heartbeatpb.HeartBeatResponse{
+			ChangefeedID:    changefeedID.ToPB(),
+			MaintainerEpoch: 1,
+			DispatcherStatuses: []*heartbeatpb.DispatcherStatus{
+				{
+					InfluencedDispatchers: &heartbeatpb.InfluencedDispatchers{
+						InfluenceType: heartbeatpb.InfluenceType_All,
+					},
+					Action: &heartbeatpb.DispatcherAction{Action: heartbeatpb.Action_Pass},
+				},
+			},
+		},
+	)))
+	require.False(t, isHeartBeatResponseAllowed(strictDM, NewHeartBeatResponse(
+		node.ID("current-maintainer"),
+		&heartbeatpb.HeartBeatResponse{
+			ChangefeedID:    changefeedID.ToPB(),
+			MaintainerEpoch: 0,
+		},
+	)))
+	require.True(t, isHeartBeatResponseAllowed(strictDM, NewHeartBeatResponse(
+		node.ID("current-maintainer"),
+		&heartbeatpb.HeartBeatResponse{
+			ChangefeedID:    changefeedID.ToPB(),
+			MaintainerEpoch: 2,
+		},
+	)))
+
+	compatDM := &DispatcherManager{
+		changefeedID: changefeedID,
+	}
+	compatDM.meta.maintainerID = "compat-maintainer"
+	require.True(t, isHeartBeatResponseAllowed(compatDM, NewHeartBeatResponse(
+		node.ID("compat-maintainer"),
+		&heartbeatpb.HeartBeatResponse{
+			ChangefeedID:    changefeedID.ToPB(),
+			MaintainerEpoch: 0,
+		},
+	)))
+}
+
+func TestHeartBeatResponseHandlerDropsStaleMaintainerEpoch(t *testing.T) {
+	t.Parallel()
+
+	changefeedID := common.NewChangeFeedIDWithName("test-changefeed", "test-namespace")
+	dispatcherID := common.NewDispatcherID()
+	dispatcherManager := &DispatcherManager{
+		changefeedID: changefeedID,
+	}
+	dispatcherManager.meta.maintainerID = "current-maintainer"
+	dispatcherManager.meta.maintainerEpoch = 2
+
+	handler := &HeartBeatResponseHandler{}
+	staleResponse := NewHeartBeatResponse(
+		node.ID("old-maintainer"),
+		&heartbeatpb.HeartBeatResponse{
+			ChangefeedID:    changefeedID.ToPB(),
+			MaintainerEpoch: 1,
+			DispatcherStatuses: []*heartbeatpb.DispatcherStatus{
+				{
+					InfluencedDispatchers: &heartbeatpb.InfluencedDispatchers{
+						InfluenceType: heartbeatpb.InfluenceType_Normal,
+						DispatcherIDs: []*heartbeatpb.DispatcherID{dispatcherID.ToPB()},
+					},
+					Action: &heartbeatpb.DispatcherAction{Action: heartbeatpb.Action_Pass},
+				},
+			},
+		})
+
+	require.NotPanics(t, func() {
+		require.False(t, handler.Handle(dispatcherManager, staleResponse))
+	})
+}
+
 func TestDispatcherManagerIsRedoReadyRequiresPublication(t *testing.T) {
 	t.Parallel()
 
