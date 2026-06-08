@@ -7,6 +7,12 @@ source "$CUR/../_utils/test_prepare"
 WORK_DIR="$OUT_DIR/$TEST_NAME"
 CDC_BINARY=cdc.test
 SINK_TYPE="$1"
+ROUTE_NAME_SOURCE_DB=route_name_src
+ROUTE_NAME_EXTRA_DB=route_name_extra
+ROUTE_NAME_TARGET_DB=route_name_target
+ROUTE_NAME_EXTRA_TARGET_DB=route_name_extra_target
+ROUTE_FAILPOINT_BLOCK_BEFORE_WRITE=github.com/pingcap/ticdc/downstreamadapter/dispatcher/BlockOrWaitBeforeWrite
+ROUTE_CDC_ADDRS=("127.0.0.1:8300" "127.0.0.1:8301")
 
 function verify_table_route_result() {
 	local work_dir=$1
@@ -112,6 +118,215 @@ function check_storage_files_use_target_names() {
 	fi
 }
 
+function render_name_change_route_config() {
+	local changefeed_config=$1
+
+	cat >"$changefeed_config" <<EOF
+[filter]
+rules = ['$ROUTE_NAME_SOURCE_DB.*', '$ROUTE_NAME_EXTRA_DB.*']
+
+[sink]
+[[sink.dispatchers]]
+matcher = ['$ROUTE_NAME_SOURCE_DB.*']
+target-schema = '$ROUTE_NAME_TARGET_DB'
+target-table = '{table}_routed'
+
+[[sink.dispatchers]]
+matcher = ['$ROUTE_NAME_EXTRA_DB.*']
+target-schema = '$ROUTE_NAME_EXTRA_TARGET_DB'
+target-table = '{table}_routed'
+EOF
+}
+
+function cleanup_name_change_route_databases() {
+	run_sql "DROP DATABASE IF EXISTS $ROUTE_NAME_SOURCE_DB;" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	run_sql "DROP DATABASE IF EXISTS $ROUTE_NAME_EXTRA_DB;" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	run_sql "DROP DATABASE IF EXISTS $ROUTE_NAME_TARGET_DB;" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
+	run_sql "DROP DATABASE IF EXISTS $ROUTE_NAME_EXTRA_TARGET_DB;" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT"
+}
+
+function ensure_downstream_contains() {
+	local sql=$1
+	local expected=$2
+	local retry=${3:-60}
+
+	ensure "$retry" "run_sql \"$sql\" \"$DOWN_TIDB_HOST\" \"$DOWN_TIDB_PORT\" && check_contains \"$expected\""
+}
+
+function verify_name_change_route_result() {
+	check_table_exists "$ROUTE_NAME_TARGET_DB.finish_name_change_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 120
+	check_table_exists "$ROUTE_NAME_TARGET_DB.batch_05_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 120
+	check_table_exists "$ROUTE_NAME_TARGET_DB.alt_renamed_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 120
+	check_table_not_exists "$ROUTE_NAME_TARGET_DB.alt_rename_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 120
+	check_table_exists "$ROUTE_NAME_TARGET_DB.multi_a_new_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 120
+	check_table_exists "$ROUTE_NAME_TARGET_DB.multi_b_new_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 120
+	check_table_not_exists "$ROUTE_NAME_TARGET_DB.multi_a_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 120
+	check_table_not_exists "$ROUTE_NAME_TARGET_DB.multi_b_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 120
+	check_table_exists "$ROUTE_NAME_EXTRA_TARGET_DB.cross_moved_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 120
+	check_table_not_exists "$ROUTE_NAME_TARGET_DB.cross_move_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 120
+	check_table_exists "$ROUTE_NAME_TARGET_DB.swap_a_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 120
+	check_table_exists "$ROUTE_NAME_TARGET_DB.swap_b_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 120
+	check_table_not_exists "$ROUTE_NAME_TARGET_DB.drop_1_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 120
+	check_table_not_exists "$ROUTE_NAME_TARGET_DB.drop_2_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 120
+	check_table_exists "$ROUTE_NAME_TARGET_DB.recreate_old_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 120
+	check_table_exists "$ROUTE_NAME_EXTRA_TARGET_DB.extra_seed_new_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 120
+	check_table_not_exists "$ROUTE_NAME_EXTRA_TARGET_DB.extra_seed_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 120
+
+	ensure_downstream_contains "SELECT note FROM $ROUTE_NAME_TARGET_DB.alt_renamed_routed WHERE id = 2;" "after alter rename"
+	ensure_downstream_contains "SELECT note FROM $ROUTE_NAME_TARGET_DB.multi_a_new_routed WHERE id = 2;" "multi_a_after"
+	ensure_downstream_contains "SELECT note FROM $ROUTE_NAME_TARGET_DB.recreate_old_routed WHERE id = 2;" "recreated"
+	ensure_downstream_contains "SELECT note FROM $ROUTE_NAME_TARGET_DB.swap_a_routed WHERE id = 2;" "swap_b_original"
+	ensure_downstream_contains "SELECT note FROM $ROUTE_NAME_TARGET_DB.swap_b_routed WHERE id = 1;" "swap_a_original"
+	ensure_downstream_contains "SELECT note FROM $ROUTE_NAME_EXTRA_TARGET_DB.cross_moved_routed WHERE id = 2;" "cross_move_after"
+}
+
+function run_pause_resume_name_change_case() {
+	local changefeed_id=table-route-pause-resume-name-change
+	local changefeed_config="$WORK_DIR/$changefeed_id.toml"
+	local start_ts
+
+	echo "[$(date)] <<<<<< run table route pause/resume name-change case >>>>>>"
+	cleanup_name_change_route_databases
+	render_name_change_route_config "$changefeed_config"
+
+	start_ts=$(run_cdc_cli_tso_query "$UP_PD_HOST_1" "$UP_PD_PORT_1")
+	cdc_cli_changefeed create -c "$changefeed_id" --start-ts="$start_ts" --sink-uri="$SINK_URI" --config="$changefeed_config"
+	ensure 20 check_changefeed_state "http://${UP_PD_HOST_1}:${UP_PD_PORT_1}" "$changefeed_id" "normal" "null" ""
+
+	cdc_cli_changefeed pause -c "$changefeed_id"
+	ensure 20 check_changefeed_state "http://${UP_PD_HOST_1}:${UP_PD_PORT_1}" "$changefeed_id" "stopped" "null" ""
+
+	run_sql_file "$CUR/data/name_change_prepare.sql" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+
+	cdc_cli_changefeed resume -c "$changefeed_id"
+	ensure 20 check_changefeed_state "http://${UP_PD_HOST_1}:${UP_PD_PORT_1}" "$changefeed_id" "normal" "null" ""
+	check_table_exists "$ROUTE_NAME_TARGET_DB.batch_05_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 120
+
+	run_sql_file "$CUR/data/name_change_ddls.sql" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	verify_name_change_route_result
+
+	cdc_cli_changefeed remove -c "$changefeed_id"
+	cleanup_name_change_route_databases
+}
+
+function get_table_route_maintainer_addr() {
+	local api_addr=$1
+	local changefeed_id=$2
+
+	curl -s "http://${api_addr}/api/v2/changefeeds/${changefeed_id}?keyspace=$KEYSPACE_NAME" | jq -r '.maintainer_addr'
+}
+
+function wait_for_table_route_maintainer_move() {
+	local api_addr=$1
+	local changefeed_id=$2
+	local old_addr=$3
+
+	for ((i = 0; i < 30; i++)); do
+		local new_addr
+		new_addr=$(get_table_route_maintainer_addr "$api_addr" "$changefeed_id")
+		if [ -n "$new_addr" ] && [ "$new_addr" != "null" ] && [ "$new_addr" != "$old_addr" ]; then
+			echo "$new_addr"
+			return 0
+		fi
+		sleep 2
+	done
+	echo "maintainer did not move from $old_addr" >&2
+	return 1
+}
+
+function pick_table_route_addr_excluding() {
+	local excluded_addr=$1
+	local addr
+
+	for addr in "${ROUTE_CDC_ADDRS[@]}"; do
+		if [ "$addr" != "$excluded_addr" ]; then
+			echo "$addr"
+			return 0
+		fi
+	done
+	return 1
+}
+
+function enable_route_write_failpoint_on_all_addrs() {
+	local addr
+
+	for addr in "${ROUTE_CDC_ADDRS[@]}"; do
+		enable_failpoint --addr "$addr" --name "$ROUTE_FAILPOINT_BLOCK_BEFORE_WRITE" --expr "pause"
+	done
+}
+
+function disable_route_write_failpoint_on_all_addrs_best_effort() {
+	local addr
+
+	set +e
+	for addr in "${ROUTE_CDC_ADDRS[@]}"; do
+		disable_failpoint --addr "$addr" --name "$ROUTE_FAILPOINT_BLOCK_BEFORE_WRITE"
+	done
+	set -e
+}
+
+function run_route_admission_failover_case() {
+	local changefeed_id=table-route-admission-failover
+	local changefeed_config="$WORK_DIR/$changefeed_id.toml"
+	local maintainer_addr
+	local maintainer_host
+	local maintainer_port
+	local maintainer_pid
+	local live_api_addr
+	local new_maintainer_addr
+	local start_ts
+
+	echo "[$(date)] <<<<<< run table route admission maintainer failover case >>>>>>"
+	cleanup_name_change_route_databases
+	render_name_change_route_config "$changefeed_config"
+	cleanup_process "$CDC_BINARY"
+
+	export GO_FAILPOINTS='github.com/pingcap/ticdc/maintainer/scheduler/StopBalanceScheduler=return(true)'
+	run_cdc_server --workdir "$WORK_DIR" --binary "$CDC_BINARY" --cluster-id "$KEYSPACE_NAME" --logsuffix "route-failover-0" --addr "127.0.0.1:8300"
+	run_cdc_server --workdir "$WORK_DIR" --binary "$CDC_BINARY" --cluster-id "$KEYSPACE_NAME" --logsuffix "route-failover-1" --addr "127.0.0.1:8301"
+	export GO_FAILPOINTS=''
+
+	start_ts=$(run_cdc_cli_tso_query "$UP_PD_HOST_1" "$UP_PD_PORT_1")
+	cdc_cli_changefeed create -c "$changefeed_id" --start-ts="$start_ts" --sink-uri="$SINK_URI" --config="$changefeed_config"
+	ensure 20 check_changefeed_state "http://${UP_PD_HOST_1}:${UP_PD_PORT_1}" "$changefeed_id" "normal" "null" ""
+
+	run_sql_file "$CUR/data/name_change_prepare.sql" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	check_table_exists "$ROUTE_NAME_TARGET_DB.failover_old_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 120
+
+	maintainer_addr=$(get_table_route_maintainer_addr "127.0.0.1:8300" "$changefeed_id")
+	if [ -z "$maintainer_addr" ] || [ "$maintainer_addr" = "null" ]; then
+		echo "failed to get maintainer address for $changefeed_id" >&2
+		exit 1
+	fi
+	live_api_addr=$(pick_table_route_addr_excluding "$maintainer_addr")
+
+	enable_route_write_failpoint_on_all_addrs
+	run_sql "RENAME TABLE $ROUTE_NAME_SOURCE_DB.failover_old TO $ROUTE_NAME_SOURCE_DB.failover_new;" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+
+	# Keep this aligned with existing DDL failover tests: wait until the DDL has reached the blocked write point.
+	sleep 20
+
+	maintainer_host=${maintainer_addr%:*}
+	maintainer_port=${maintainer_addr#*:}
+	maintainer_pid=$(get_cdc_pid "$maintainer_host" "$maintainer_port")
+	kill_cdc_pid "$maintainer_pid"
+	new_maintainer_addr=$(wait_for_table_route_maintainer_move "$live_api_addr" "$changefeed_id" "$maintainer_addr")
+	echo "maintainer moved from $maintainer_addr to $new_maintainer_addr"
+
+	disable_route_write_failpoint_on_all_addrs_best_effort
+	run_cdc_server --workdir "$WORK_DIR" --binary "$CDC_BINARY" --cluster-id "$KEYSPACE_NAME" --logsuffix "route-failover-restart" --addr "$maintainer_addr"
+
+	check_table_exists "$ROUTE_NAME_TARGET_DB.failover_new_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 180
+	check_table_not_exists "$ROUTE_NAME_TARGET_DB.failover_old_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 180
+	run_sql "INSERT INTO $ROUTE_NAME_SOURCE_DB.failover_new VALUES (2, 'after failover');" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	ensure_downstream_contains "SELECT note FROM $ROUTE_NAME_TARGET_DB.failover_new_routed WHERE id = 2;" "after failover" 90
+	ensure 20 check_changefeed_state "http://${UP_PD_HOST_1}:${UP_PD_PORT_1}" "$changefeed_id" "normal" "null" ""
+
+	cdc_cli_changefeed remove -c "$changefeed_id"
+	cleanup_process "$CDC_BINARY"
+	cleanup_name_change_route_databases
+}
+
 function run_mysql() {
 	rm -rf "$WORK_DIR" && mkdir -p "$WORK_DIR"
 
@@ -144,6 +359,9 @@ function run_mysql() {
 	drop_table_route_source_databases
 	verify_table_route_drop_database
 	cdc_cli_changefeed remove -c "$split_changefeed_id"
+
+	run_pause_resume_name_change_case
+	run_route_admission_failover_case
 
 	cleanup_process "$CDC_BINARY"
 	check_logs "$WORK_DIR"

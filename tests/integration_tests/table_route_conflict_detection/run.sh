@@ -101,9 +101,9 @@ function run_multi_rename_table_conflict_case() {
 
 	echo "[$(date)] start multi-rename table conflict case"
 	write_route_config "$config_file" "$source_a" "$source_b" "$target_schema"
-	start_ts=$(run_cdc_cli_tso_query "$UP_PD_HOST_1" "$UP_PD_PORT_1")
 	run_sql "CREATE DATABASE $source_a; CREATE TABLE $source_a.t (id INT PRIMARY KEY);" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
 	run_sql "CREATE DATABASE $source_b; CREATE TABLE $source_b.tmp (id INT PRIMARY KEY); CREATE TABLE $source_b.other_tmp (id INT PRIMARY KEY);" "$UP_TIDB_HOST" "$UP_TIDB_PORT"
+	start_ts=$(run_cdc_cli_tso_query "$UP_PD_HOST_1" "$UP_PD_PORT_1")
 	cdc_cli_changefeed create -c "$changefeed_id" --start-ts="$start_ts" --sink-uri="$SINK_URI" --config="$config_file"
 	check_table_exists "$target_schema.t_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 60
 	check_table_exists "$target_schema.tmp_routed" "$DOWN_TIDB_HOST" "$DOWN_TIDB_PORT" 60
