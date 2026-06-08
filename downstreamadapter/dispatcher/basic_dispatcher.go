@@ -276,24 +276,8 @@ func (d *BasicDispatcher) InitializeTableSchemaStore(schemaInfo []*heartbeatpb.S
 	return true, nil
 }
 
-<<<<<<< HEAD
-func (d *BasicDispatcher) AddDMLEventsToSink(events []*commonEvent.DMLEvent) {
-	// for one batch events, we need to add all them in table progress first, then add them to sink
-	// because we need to ensure the wakeCallback only will be called when
-	// all these events are flushed to downstream successfully
-	for _, event := range events {
-		d.tableProgress.Add(event)
-	}
-	for _, event := range events {
-		d.sink.AddDMLEvent(event)
-		failpoint.Inject("BlockAddDMLEvents", nil)
-	}
-}
-
-=======
 // AddBlockEventToSink writes a block event to downstream.
 // Must make sure the previous events have been flushed to downstream before calling this function
->>>>>>> 579ef2ed6 (maintainer,dispatcher: remove flush from the action and flush all enqueued dml events before report to maintainer (#4389))
 func (d *BasicDispatcher) AddBlockEventToSink(event commonEvent.BlockEvent) error {
 	// For ddl event, we need to check whether it should be sent to downstream.
 	// It may be marked as not sync by filter when building the event.
@@ -311,11 +295,6 @@ func (d *BasicDispatcher) AddBlockEventToSink(event commonEvent.BlockEvent) erro
 	return d.sink.WriteBlockEvent(event)
 }
 
-<<<<<<< HEAD
-func (d *BasicDispatcher) PassBlockEventToSink(event commonEvent.BlockEvent) {
-	d.tableProgress.Pass(event)
-	event.PostFlush()
-=======
 // PassBlockEventToSink advances local progress for a block event without writing it downstream.
 // Must make sure the previous events have been flushed to downstream before calling this function
 func (d *BasicDispatcher) PassBlockEventToSink(event commonEvent.BlockEvent) {
@@ -422,7 +401,6 @@ func (d *BasicDispatcher) ensureTableModeCompatibility(tableInfo *common.TableIn
 				tableInfo.GetSchemaName(), tableInfo.GetTableName(), tableInfo.TableName.TableID, d.id.String()))
 	}
 	return nil
->>>>>>> 579ef2ed6 (maintainer,dispatcher: remove flush from the action and flush all enqueued dml events before report to maintainer (#4389))
 }
 
 func (d *BasicDispatcher) isFirstEvent(event commonEvent.Event) bool {
@@ -699,16 +677,10 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 // 1. If the action is a write, we need to add the ddl event to the sink for writing to downstream.
 // 2. If the action is a pass, we just need to pass the event
 //
-<<<<<<< HEAD
-// For Action_Write, writing the block event may involve IO (e.g. executing DDL). To avoid blocking the
-// dispatcher status dynamic stream handler, we execute the write asynchronously and return await=true.
-// The status path will be waked up after the write finishes.
-=======
 // For block actions (write/pass), execution may involve downstream IO.
 // To avoid blocking the dispatcher status dynamic stream handler, we execute the action asynchronously
 // and return await=true.
 // The status path will be waked up after the action finishes.
->>>>>>> 579ef2ed6 (maintainer,dispatcher: remove flush from the action and flush all enqueued dml events before report to maintainer (#4389))
 func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.DispatcherStatus) (await bool) {
 	log.Debug("dispatcher handle dispatcher status",
 		zap.Any("dispatcherStatus", dispatcherStatus),
@@ -755,19 +727,14 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 				// 3. clear blockEventStatus(should be the old pending event, but clear the new one)
 				d.blockEventStatus.clear()
 			})
-			if action.Action == heartbeatpb.Action_Write {
+			switch action.Action {
+			case heartbeatpb.Action_Write:
 				actionCommitTs := action.CommitTs
 				actionIsSyncPoint := action.IsSyncPoint
 				d.sharedInfo.GetBlockEventExecutor().Submit(d, func() {
 					d.ExecuteBlockEventDDL(pendingEvent, actionCommitTs, actionIsSyncPoint)
 				})
 				return true
-<<<<<<< HEAD
-			} else {
-				failpoint.Inject("BlockOrWaitBeforePass", nil)
-				d.PassBlockEventToSink(pendingEvent)
-				failpoint.Inject("BlockAfterPass", nil)
-=======
 			case heartbeatpb.Action_Pass:
 				pendingEvent.PushFrontFlushFunc(func() {
 					// clear blockEventStatus should be before wake ds.
@@ -789,7 +756,6 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 					zap.Bool("isSyncPoint", action.IsSyncPoint))
 				d.blockEventStatus.updateBlockStage(heartbeatpb.BlockStage_WAITING)
 				return false
->>>>>>> 579ef2ed6 (maintainer,dispatcher: remove flush from the action and flush all enqueued dml events before report to maintainer (#4389))
 			}
 		} else {
 			ts, ok := d.blockEventStatus.getEventCommitTs()
@@ -831,8 +797,6 @@ func (d *BasicDispatcher) ExecuteBlockEventDDL(pendingEvent commonEvent.BlockEve
 	}
 	failpoint.Inject("BlockOrWaitReportAfterWrite", nil)
 
-<<<<<<< HEAD
-=======
 // PassBlockEvent executes maintainer Action_Pass on a block event whose prior DMLs
 // were already drained before it entered WAITING.
 func (d *BasicDispatcher) PassBlockEvent(pendingEvent commonEvent.BlockEvent, actionCommitTs uint64, actionIsSyncPoint bool) {
@@ -848,7 +812,6 @@ func (d *BasicDispatcher) reportBlockedEventDone(
 	actionCommitTs uint64,
 	actionIsSyncPoint bool,
 ) {
->>>>>>> 579ef2ed6 (maintainer,dispatcher: remove flush from the action and flush all enqueued dml events before report to maintainer (#4389))
 	d.sharedInfo.blockStatusesChan <- &heartbeatpb.TableSpanBlockStatus{
 		ID: d.id.ToPB(),
 		State: &heartbeatpb.State{
@@ -955,11 +918,6 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 			d.HandleError(err)
 			return
 		}
-<<<<<<< HEAD
-
-		d.reportBlockedEventToMaintainer(event)
-	}
-=======
 		if shouldBlock {
 			failpoint.Inject("BlockAfterFlush", nil)
 			d.reportBlockedEventToMaintainer(event)
@@ -1017,7 +975,6 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 		}
 		d.sharedInfo.blockStatusesChan <- message
 	})
->>>>>>> 579ef2ed6 (maintainer,dispatcher: remove flush from the action and flush all enqueued dml events before report to maintainer (#4389))
 
 	// dealing with events which update schema ids
 	// Only rename table and rename tables may update schema ids(rename db1.table1 to db2.table2)

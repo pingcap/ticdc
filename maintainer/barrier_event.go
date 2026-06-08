@@ -210,12 +210,7 @@ func (be *BarrierEvent) onAllDispatcherReportedBlockEvent(dispatcherID common.Di
 		zap.String("changefeed", be.cfID.Name()),
 		zap.String("dispatcher", be.writerDispatcher.String()),
 		zap.Uint64("commitTs", be.commitTs),
-<<<<<<< HEAD
 		zap.String("barrierType", be.blockedDispatchers.InfluenceType.String()))
-=======
-		zap.String("barrierType", be.blockedDispatchers.InfluenceType.String()),
-		zap.Int64("mode", be.mode))
->>>>>>> 579ef2ed6 (maintainer,dispatcher: remove flush from the action and flush all enqueued dml events before report to maintainer (#4389))
 	stm := be.spanController.GetTaskByID(be.writerDispatcher)
 	return &heartbeatpb.DispatcherStatus{
 		InfluencedDispatchers: &heartbeatpb.InfluencedDispatchers{

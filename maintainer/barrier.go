@@ -42,14 +42,7 @@ type Barrier struct {
 	spanController     *span.Controller
 	operatorController *operator.Controller
 	splitTableEnabled  bool
-<<<<<<< HEAD
 	mode               int64
-=======
-	// mode identifies which replication pipeline this barrier belongs to
-	// (common.DefaultMode or common.RedoMode). Barrier state, resend messages,
-	// and logs must stay in the same mode.
-	mode int64
->>>>>>> 579ef2ed6 (maintainer,dispatcher: remove flush from the action and flush all enqueued dml events before report to maintainer (#4389))
 }
 
 // NewBarrier create a new barrier for the changefeed
@@ -174,11 +167,7 @@ func (b *Barrier) handleBootstrapResponse(bootstrapRespMap map[node.ID]*heartbea
 			key := getEventKey(blockState.BlockTs, blockState.IsSyncPoint)
 			event, ok := b.blockedEvents.Get(key)
 			if !ok {
-<<<<<<< HEAD
 				event = NewBlockEvent(common.NewChangefeedIDFromPB(resp.ChangefeedID), common.NewDispatcherIDFromPB(span.ID), b.spanController, b.operatorController, blockState, b.splitTableEnabled)
-=======
-				event = NewBlockEvent(common.NewChangefeedIDFromPB(resp.ChangefeedID), common.NewDispatcherIDFromPB(span.ID), b.spanController, b.operatorController, blockState, b.splitTableEnabled, b.mode)
->>>>>>> 579ef2ed6 (maintainer,dispatcher: remove flush from the action and flush all enqueued dml events before report to maintainer (#4389))
 				b.blockedEvents.Set(key, event)
 			}
 			switch blockState.Stage {
@@ -432,11 +421,7 @@ func (b *Barrier) getOrInsertNewEvent(changefeedID common.ChangeFeedID, dispatch
 ) *BarrierEvent {
 	event, ok := b.blockedEvents.Get(key)
 	if !ok {
-<<<<<<< HEAD
 		event = NewBlockEvent(changefeedID, dispatcherID, b.spanController, b.operatorController, blockState, b.splitTableEnabled)
-=======
-		event = NewBlockEvent(changefeedID, dispatcherID, b.spanController, b.operatorController, blockState, b.splitTableEnabled, b.mode)
->>>>>>> 579ef2ed6 (maintainer,dispatcher: remove flush from the action and flush all enqueued dml events before report to maintainer (#4389))
 		b.blockedEvents.Set(key, event)
 	}
 	return event
@@ -451,12 +436,8 @@ func (b *Barrier) checkEventFinish(be *BarrierEvent) {
 	if be.selected.Load() {
 		log.Info("all dispatchers reported event done, remove event",
 			zap.String("changefeed", be.cfID.Name()),
-<<<<<<< HEAD
-			zap.Uint64("committs", be.commitTs))
-=======
 			zap.Uint64("committs", be.commitTs),
 			zap.Int64("mode", b.mode))
->>>>>>> 579ef2ed6 (maintainer,dispatcher: remove flush from the action and flush all enqueued dml events before report to maintainer (#4389))
 		// already selected a dispatcher to write, now all dispatchers reported the block event
 		b.blockedEvents.Delete(getEventKey(be.commitTs, be.isSyncPoint))
 	}

@@ -6,10 +6,11 @@ package heartbeatpb
 import (
 	encoding_binary "encoding/binary"
 	fmt "fmt"
-	proto "github.com/gogo/protobuf/proto"
 	io "io"
 	math "math"
 	math_bits "math/bits"
+
+	proto "github.com/gogo/protobuf/proto"
 )
 
 // Reference imports to suppress errors if they are not otherwise used.
@@ -29,13 +30,7 @@ const (
 	// Write means the selected writer dispatcher executes the barrier event
 	// (DDL/syncpoint) to downstream.
 	Action_Write Action = 0
-<<<<<<< HEAD
 	Action_Pass  Action = 1
-=======
-	// Pass means influenced dispatchers mark this barrier as passed after the
-	// writer has finished Write for the same (commitTs, isSyncPoint).
-	Action_Pass Action = 1
->>>>>>> 579ef2ed6 (maintainer,dispatcher: remove flush from the action and flush all enqueued dml events before report to maintainer (#4389))
 )
 
 var Action_name = map[int32]string{

@@ -1131,10 +1131,6 @@ func TestDispatcher_SkipDMLAsStartTs_Disabled(t *testing.T) {
 func TestHoldBlockEventUntilNoResendTasks(t *testing.T) {
 	keyspaceID := getTestingKeyspaceID()
 	ddlTableSpan := common.KeyspaceDDLSpan(keyspaceID)
-<<<<<<< HEAD
-	mockSink := sink.NewMockSink(common.MysqlSinkType)
-	dispatcher := newDispatcherForTest(mockSink, ddlTableSpan)
-=======
 	mockSink := newDispatcherTestSink(t, common.MysqlSinkType)
 	flushStarted := make(chan struct{}, 1)
 	flushRelease := make(chan struct{})
@@ -1150,7 +1146,6 @@ func TestHoldBlockEventUntilNoResendTasks(t *testing.T) {
 		return nil
 	})
 	dispatcher := newDispatcherForTest(mockSink.Sink(), ddlTableSpan)
->>>>>>> 579ef2ed6 (maintainer,dispatcher: remove flush from the action and flush all enqueued dml events before report to maintainer (#4389))
 
 	nodeID := node.NewID()
 
