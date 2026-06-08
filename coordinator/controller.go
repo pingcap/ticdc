@@ -584,7 +584,7 @@ func (c *Controller) handleNonExistentChangefeed(
 			from,
 			true,
 			true,
-			0,
+			status.MaintainerEpoch,
 		))
 	}
 }
@@ -744,7 +744,7 @@ func (c *Controller) finishBootstrap(ctx context.Context, runningChangefeeds map
 			rm.nodeID,
 			true,
 			true,
-			0,
+			rm.status.MaintainerEpoch,
 		))
 	}
 

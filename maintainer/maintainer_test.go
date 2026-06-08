@@ -297,16 +297,13 @@ func TestMaintainerPostBootstrapResponseRequiresCurrentEpoch(t *testing.T) {
 
 func TestMaintainerEpochRequestRequiresCompatOrCurrentEpoch(t *testing.T) {
 	compatMaintainer := &Maintainer{info: &config.ChangeFeedInfo{}}
-	require.True(t, compatMaintainer.isMaintainerEpochRequestAllowed(0, false, false))
-	require.True(t, compatMaintainer.isMaintainerEpochRequestAllowed(2, false, false))
+	require.True(t, compatMaintainer.isMaintainerEpochRequestAllowed(0))
+	require.True(t, compatMaintainer.isMaintainerEpochRequestAllowed(2))
 
 	strictMaintainer := &Maintainer{info: &config.ChangeFeedInfo{Epoch: 2}}
-	require.False(t, strictMaintainer.isMaintainerEpochRequestAllowed(0, false, false))
-	require.False(t, strictMaintainer.isMaintainerEpochRequestAllowed(0, true, false))
-	require.False(t, strictMaintainer.isMaintainerEpochRequestAllowed(0, false, true))
-	require.False(t, strictMaintainer.isMaintainerEpochRequestAllowed(1, true, true))
-	require.True(t, strictMaintainer.isMaintainerEpochRequestAllowed(0, true, true))
-	require.True(t, strictMaintainer.isMaintainerEpochRequestAllowed(2, false, false))
+	require.False(t, strictMaintainer.isMaintainerEpochRequestAllowed(0))
+	require.False(t, strictMaintainer.isMaintainerEpochRequestAllowed(1))
+	require.True(t, strictMaintainer.isMaintainerEpochRequestAllowed(2))
 }
 
 func TestMaintainerSchedule(t *testing.T) {

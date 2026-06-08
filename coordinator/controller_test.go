@@ -318,6 +318,35 @@ func TestMaintainerHeartbeatAdmissionDropsStaleMaintainerEpoch(t *testing.T) {
 	require.Equal(t, uint64(200), cf.GetStatus().CheckpointTs)
 }
 
+func TestHandleNonExistentChangefeedRemovesWithReportedEpoch(t *testing.T) {
+	mc := messaging.NewMockMessageCenter()
+	db := changefeed.NewChangefeedDB(1)
+	controller := &Controller{
+		changefeedDB: db,
+		operatorController: operator.NewOperatorController(
+			&node.Info{ID: node.ID("coordinator")},
+			db,
+			nil,
+			nil,
+			10,
+		),
+		messageCenter: mc,
+	}
+	cfID := common.NewChangeFeedIDWithName("cf", common.DefaultKeyspaceName)
+
+	controller.handleNonExistentChangefeed(cfID, node.ID("owner"), &heartbeatpb.MaintainerStatus{
+		ChangefeedID:    cfID.ToPB(),
+		State:           heartbeatpb.ComponentState_Working,
+		MaintainerEpoch: 7,
+	})
+
+	msg := <-mc.GetMessageChannel()
+	req := msg.Message[0].(*heartbeatpb.RemoveMaintainerRequest)
+	require.Equal(t, uint64(7), req.MaintainerEpoch)
+	require.True(t, req.Cascade)
+	require.True(t, req.Removed)
+}
+
 func TestFinishBootstrapStopsStaleEpochMaintainerWithReportedEpoch(t *testing.T) {
 	testCases := []struct {
 		name          string

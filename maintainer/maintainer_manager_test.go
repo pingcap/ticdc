@@ -121,13 +121,22 @@ func TestManagerMaintainerSet_AddMaintainerReplacesOlderEpoch(t *testing.T) {
 	require.True(t, ok)
 	require.False(t, oldMaintainer == currentMaintainer)
 	require.Equal(t, uint64(2), currentMaintainer.currentMaintainerEpoch())
+}
 
-	// The explicit request epoch is zero to cover rolling-upgrade fallback from config.
+func TestManagerMaintainerSet_AddMaintainerKeepsCompatibilityEpoch(t *testing.T) {
+	maintainers := newManagerMaintainerSetForAddTest(t)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	noDrainTarget := func() (node.ID, uint64) { return "", 0 }
+
 	maintainers.handleAddMaintainer(newAddMaintainerRequestForEpoch(t, cfID, 3, 0), noDrainTarget)
-	fallbackMaintainer, ok := maintainers.getMaintainer(cfID)
+	compatMaintainer, ok := maintainers.getMaintainer(cfID)
 	require.True(t, ok)
-	require.False(t, currentMaintainer == fallbackMaintainer)
-	require.Equal(t, uint64(3), fallbackMaintainer.currentMaintainerEpoch())
+	require.Zero(t, compatMaintainer.currentMaintainerEpoch())
+
+	maintainers.handleAddMaintainer(newAddMaintainerRequestForEpoch(t, cfID, 4, 0), noDrainTarget)
+	compatMaintainerAfterRetry, ok := maintainers.getMaintainer(cfID)
+	require.True(t, ok)
+	require.True(t, compatMaintainer == compatMaintainerAfterRetry)
 }
 
 func TestManagerMaintainerSet_AddMaintainerRejectsOlderEpoch(t *testing.T) {
@@ -145,7 +154,7 @@ func TestManagerMaintainerSet_AddMaintainerRejectsOlderEpoch(t *testing.T) {
 	require.True(t, ok)
 	require.True(t, currentMaintainer == maintainerAfterOldAdd)
 
-	maintainers.handleAddMaintainer(newAddMaintainerRequestForEpoch(t, cfID, 0, 0), noDrainTarget)
+	maintainers.handleAddMaintainer(newAddMaintainerRequestForEpoch(t, cfID, 3, 0), noDrainTarget)
 	maintainerAfterCompatAdd, ok := maintainers.getMaintainer(cfID)
 	require.True(t, ok)
 	require.True(t, currentMaintainer == maintainerAfterCompatAdd)

@@ -194,11 +194,10 @@ func (p *managerMaintainerSet) handleAddMaintainer(
 		return nil
 	}
 	requestEpoch := req.MaintainerEpoch
-	if requestEpoch == 0 {
-		requestEpoch = info.Epoch
-	} else {
-		info.Epoch = requestEpoch
-	}
+	// The wire epoch is the sender capability signal. If an old coordinator sends
+	// epoch 0, keep the maintainer in compatibility mode even when the serialized
+	// config still carries a non-zero ChangeFeedInfo epoch.
+	info.Epoch = requestEpoch
 	// Create the maintainer only after epoch admission so normal duplicate
 	// add retries do not start short-lived goroutines or metrics.
 	newMaintainer := func() *Maintainer {
