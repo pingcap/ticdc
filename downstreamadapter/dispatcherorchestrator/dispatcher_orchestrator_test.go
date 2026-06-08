@@ -661,7 +661,26 @@ func TestHandleBootstrapRequestRejectsClosedOlderMaintainerEpoch(t *testing.T) {
 	require.Empty(t, orchestrator.dispatcherManagers)
 }
 
-func TestHandleCloseRequestRecordsEpochZeroTombstone(t *testing.T) {
+func TestHandleCloseRequestDoesNotRecordEpochZeroTombstoneForCompatClose(t *testing.T) {
+	cfID := common.NewChangeFeedIDWithName("cf", "default")
+
+	orchestrator := &DispatcherOrchestrator{
+		mc:                     messaging.NewMockMessageCenter(),
+		dispatcherManagers:     make(map[common.ChangeFeedID]*dispatchermanager.DispatcherManager),
+		closedMaintainerEpochs: make(map[common.ChangeFeedID]closedMaintainerEpoch),
+	}
+
+	err := orchestrator.handleCloseRequest(node.ID("compat-maintainer"), &heartbeatpb.MaintainerCloseRequest{
+		ChangefeedID:    cfID.ToPB(),
+		Removed:         false,
+		MaintainerEpoch: 0,
+	})
+	require.NoError(t, err)
+	_, ok := orchestrator.closedMaintainerEpochs[cfID]
+	require.False(t, ok)
+}
+
+func TestHandleCloseRequestRecordsEpochZeroTombstoneForRemovedChangefeed(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("cf", "default")
 	configBytes, err := json.Marshal(newBootstrapResponseTestChangefeedConfig(cfID))
 	require.NoError(t, err)
@@ -674,6 +693,7 @@ func TestHandleCloseRequestRecordsEpochZeroTombstone(t *testing.T) {
 
 	err = orchestrator.handleCloseRequest(node.ID("compat-maintainer"), &heartbeatpb.MaintainerCloseRequest{
 		ChangefeedID:    cfID.ToPB(),
+		Removed:         true,
 		MaintainerEpoch: 0,
 	})
 	require.NoError(t, err)

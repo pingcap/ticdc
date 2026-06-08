@@ -406,7 +406,7 @@ func (m *DispatcherOrchestrator) handleCloseRequest(
 	m.mutex.Lock()
 	manager, ok := m.dispatcherManagers[cfId]
 	if !ok {
-		m.recordClosedMaintainerEpochLocked(cfId, req.MaintainerEpoch)
+		m.recordClosedMaintainerEpochLocked(cfId, req.MaintainerEpoch, req.Removed)
 	}
 	m.mutex.Unlock()
 
@@ -422,11 +422,11 @@ func (m *DispatcherOrchestrator) handleCloseRequest(
 				switch {
 				case stillExists && currentManager == manager:
 					delete(m.dispatcherManagers, cfId)
-					m.recordClosedMaintainerEpochLocked(cfId, req.MaintainerEpoch)
+					m.recordClosedMaintainerEpochLocked(cfId, req.MaintainerEpoch, req.Removed)
 					decGauge = true
 					response.Success = true
 				case !stillExists:
-					m.recordClosedMaintainerEpochLocked(cfId, req.MaintainerEpoch)
+					m.recordClosedMaintainerEpochLocked(cfId, req.MaintainerEpoch, req.Removed)
 					response.Success = true
 				default:
 					response.Success = false
@@ -455,7 +455,12 @@ func (m *DispatcherOrchestrator) handleCloseRequest(
 	return m.sendResponse(from, messaging.MaintainerTopic, response)
 }
 
-func (m *DispatcherOrchestrator) recordClosedMaintainerEpochLocked(cfID common.ChangeFeedID, maintainerEpoch uint64) {
+func (m *DispatcherOrchestrator) recordClosedMaintainerEpochLocked(cfID common.ChangeFeedID, maintainerEpoch uint64, removed bool) {
+	if maintainerEpoch == 0 && !removed {
+		// Epoch 0 has no ordering information. Keep permanent tombstones only
+		// for removal so mixed-version resume can still bootstrap in compat mode.
+		return
+	}
 	closedEpoch, ok := m.closedMaintainerEpochs[cfID]
 	if ok && closedEpoch.epoch >= maintainerEpoch {
 		return
