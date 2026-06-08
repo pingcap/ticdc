@@ -596,7 +596,7 @@ func TestBootstrapResponseUsesSpanSnapshotForStaleRemove(t *testing.T) {
 	require.Equal(t, heartbeatpb.OperatorType_O_Move, response.Operators[0].OperatorType)
 }
 
-func TestHandleCloseRequestRejectsStaleMaintainerEpoch(t *testing.T) {
+func TestHandleCloseRequestAcksStaleMaintainerEpoch(t *testing.T) {
 	mc := messaging.NewMockMessageCenter()
 	appcontext.SetService(appcontext.DefaultPDClock, pdutil.NewClock4Test())
 	appcontext.SetService(appcontext.MessageCenter, mc)
@@ -635,9 +635,10 @@ func TestHandleCloseRequestRejectsStaleMaintainerEpoch(t *testing.T) {
 
 	responseMsg := <-mc.GetMessageChannel()
 	response := responseMsg.Message[0].(*heartbeatpb.MaintainerCloseResponse)
-	require.False(t, response.Success)
+	require.True(t, response.Success)
 	require.Equal(t, uint64(1), response.MaintainerEpoch)
 	require.Contains(t, orchestrator.dispatcherManagers, cfID)
+	require.NotContains(t, orchestrator.closedMaintainerEpochs, cfID)
 }
 
 func TestHandleBootstrapRequestRejectsClosedOlderMaintainerEpoch(t *testing.T) {

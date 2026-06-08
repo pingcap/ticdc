@@ -436,7 +436,9 @@ func (m *DispatcherOrchestrator) handleCloseRequest(
 				response.Success = false
 			}
 		} else {
-			response.Success = false
+			// The active manager belongs to a newer maintainer. Do not close it, but
+			// acknowledge the stale sender so removal-only maintainers can stop retrying.
+			response.Success = true
 			log.Warn("drop stale maintainer close request",
 				zap.String("changefeed", cfId.Name()),
 				zap.String("from", from.String()),
