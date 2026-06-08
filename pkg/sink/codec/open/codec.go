@@ -45,8 +45,8 @@ func encodeRowChangedEvent(
 
 	keyWriter.WriteObject(func() {
 		keyWriter.WriteUint64Field("ts", e.CommitTs)
-		keyWriter.WriteStringField("scm", e.TableInfo.GetSchemaName())
-		keyWriter.WriteStringField("tbl", e.TableInfo.GetTableName())
+		keyWriter.WriteStringField("scm", e.TableInfo.GetTargetSchemaName())
+		keyWriter.WriteStringField("tbl", e.TableInfo.GetTargetTableName())
 		keyWriter.WriteIntField("t", int(common.MessageTypeRow))
 
 		if largeMessageOnlyHandleKeyColumns {
@@ -126,8 +126,8 @@ func encodeDDLEvent(e *commonEvent.DDLEvent, config *common.Config) ([]byte, []b
 
 	keyWriter.WriteObject(func() {
 		keyWriter.WriteUint64Field("ts", e.FinishedTs)
-		keyWriter.WriteStringField("scm", e.SchemaName)
-		keyWriter.WriteStringField("tbl", e.TableName)
+		keyWriter.WriteStringField("scm", e.GetTargetSchemaName())
+		keyWriter.WriteStringField("tbl", e.GetTargetTableName())
 		keyWriter.WriteIntField("t", int(common.MessageTypeDDL))
 	})
 
@@ -215,7 +215,7 @@ func writeColumnFieldValue(
 		value := row.GetTime(idx)
 		writer.WriteStringField("v", value.String())
 	case mysql.TypeDuration:
-		value := row.GetDuration(idx, 0)
+		value := row.GetDuration(idx, col.GetDecimal())
 		writer.WriteStringField("v", value.String())
 	case mysql.TypeJSON:
 		value := row.GetJSON(idx)
@@ -368,8 +368,8 @@ func writeColumnFieldValueIfUpdated(
 			writeFunc(func() { writer.WriteStringField("v", preRowValue.String()) })
 		}
 	case mysql.TypeDuration:
-		rowValue := row.GetDuration(idx, 0)
-		preRowValue := preRow.GetDuration(idx, 0)
+		rowValue := row.GetDuration(idx, col.GetDecimal())
+		preRowValue := preRow.GetDuration(idx, col.GetDecimal())
 		if rowValue != preRowValue {
 			writeFunc(func() { writer.WriteStringField("v", preRowValue.String()) })
 		}

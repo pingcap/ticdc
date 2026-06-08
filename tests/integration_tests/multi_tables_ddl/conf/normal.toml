@@ -1,5 +1,21 @@
 [filter]
-rules = ["multi_tables_ddl_test.t1", "multi_tables_ddl_test.t2", "multi_tables_ddl_test.t3", "multi_tables_ddl_test.t4" ,"multi_tables_ddl_test.t1_7","multi_tables_ddl_test.t2_7", "multi_tables_ddl_test.finish_mark"]
+rules = [
+    "multi_tables_ddl_test.t1",
+    "multi_tables_ddl_test.t2",
+    "multi_tables_ddl_test.t3",
+    "multi_tables_ddl_test.t4",
+    "multi_tables_ddl_test.t1_7",
+    "multi_tables_ddl_test.t2_7",
+    "multi_tables_ddl_test.rename_mix_normal_1",
+    "multi_tables_ddl_test.rename_mix_part_1",
+    "multi_tables_ddl_test.rename_mix_normal_1_done",
+    "multi_tables_ddl_test.rename_mix_part_1_done",
+    "multi_tables_ddl_test.rename_mix_normal_2",
+    "multi_tables_ddl_test.rename_mix_part_2",
+    "multi_tables_ddl_test.rename_mix_normal_2_done",
+    "multi_tables_ddl_test.rename_mix_part_2_done",
+    "multi_tables_ddl_test.finish_mark",
+]
 
 [sink.csv]
 include-commit-ts = true

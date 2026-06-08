@@ -145,7 +145,7 @@ func newDispatcherStat(
 		scanWorkerIndex:    (common.GID)(id).Hash(scanWorkerCount),
 		messageWorkerIndex: (common.GID)(id).Hash(messageWorkerCount),
 		info:               info,
-		filter:             info.GetFilter(),
+		filter:             changefeedStatus.filter,
 		startTs:            info.GetStartTs(),
 		epoch:              info.GetEpoch(),
 		startTableInfo:     startTableInfo,
@@ -327,14 +327,6 @@ func (w *wrapEvent) reset() {
 	wrapEventPool.Put(w)
 }
 
-func (w *wrapEvent) getDispatcherID() common.DispatcherID {
-	e, ok := w.e.(pevent.Event)
-	if !ok {
-		log.Panic("cast event failed", zap.Any("event", w.e))
-	}
-	return e.GetDispatcherID()
-}
-
 func newWrapHandshakeEvent(serverID node.ID, e pevent.HandshakeEvent) *wrapEvent {
 	w := getWrapEvent()
 	w.serverID = serverID
@@ -423,16 +415,30 @@ func (c *resolvedTsCache) reset() {
 
 type changefeedStatus struct {
 	changefeedID common.ChangeFeedID
+	filter       filter.Filter
 
 	dispatchers sync.Map // common.DispatcherID -> *atomic.Pointer[dispatcherStat]
 
 	availableMemoryQuota sync.Map // nodeID -> atomic.Uint64 (memory quota in bytes)
+	minSentTs            atomic.Uint64
+	scanInterval         atomic.Int64
+	reportBandState      atomic.Int32
+	fastBandState        atomic.Int32
+	slowBandState        atomic.Int32
+
+	scanWindowController *adaptiveScanWindowController
+	syncPointInterval    time.Duration
 }
 
-func newChangefeedStatus(changefeedID common.ChangeFeedID) *changefeedStatus {
-	return &changefeedStatus{
-		changefeedID: changefeedID,
+func newChangefeedStatus(changefeedID common.ChangeFeedID, syncPointInterval time.Duration) *changefeedStatus {
+	status := &changefeedStatus{
+		changefeedID:         changefeedID,
+		scanWindowController: newAdaptiveScanWindowController(time.Now()),
+		syncPointInterval:    syncPointInterval,
 	}
+	status.scanInterval.Store(int64(defaultScanInterval))
+
+	return status
 }
 
 func (c *changefeedStatus) addDispatcher(id common.DispatcherID, dispatcher *atomic.Pointer[dispatcherStat]) {
@@ -450,4 +456,8 @@ func (c *changefeedStatus) isEmpty() bool {
 		return false // stop iteration
 	})
 	return empty
+}
+
+func (c *changefeedStatus) isSyncpointEnabled() bool {
+	return c.syncPointInterval > 0
 }

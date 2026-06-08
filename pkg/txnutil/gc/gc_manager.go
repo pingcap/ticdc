@@ -36,6 +36,8 @@ import (
 type Manager interface {
 	// TryUpdateServiceGCSafepoint tries to update TiCDC service GC safepoint.
 	TryUpdateServiceGCSafepoint(ctx context.Context, checkpointTs common.Ts) error
+	// TryDeleteServiceGCSafepoint removes the TiCDC service GC safepoint when no changefeed needs it.
+	TryDeleteServiceGCSafepoint(ctx context.Context) error
 	CheckStaleCheckpointTs(keyspaceID uint32, changefeedID common.ChangeFeedID, checkpointTs common.Ts) error
 	// TryUpdateKeyspaceGCBarrier tries to update gc barrier of a keyspace
 	TryUpdateKeyspaceGCBarrier(ctx context.Context, keyspaceID uint32, keyspaceName string, checkpointTs common.Ts) error
@@ -107,6 +109,23 @@ func (m *gcManager) TryUpdateServiceGCSafepoint(
 	m.lastSafePointTs.Store(minServiceGCSafepoint)
 	minServiceGCSafePointGauge.Set(float64(oracle.ExtractPhysical(minServiceGCSafepoint)))
 	cdcGCSafePointGauge.Set(float64(oracle.ExtractPhysical(checkpointTs)))
+	return nil
+}
+
+func (m *gcManager) TryDeleteServiceGCSafepoint(ctx context.Context) error {
+	if err := UnifyDeleteGcSafepoint(ctx, m.pdClient, 0, m.gcServiceID); err != nil {
+		log.Warn("delete service gc safepoint failed",
+			zap.String("serviceID", m.gcServiceID),
+			zap.Error(err))
+		return errors.WrapError(errors.ErrUpdateServiceSafepointFailed, err)
+	}
+
+	// Clear the cached GC state right away so a later changefeed does not inherit
+	// stale "TiCDC is still blocking GC" state after the service safepoint is gone.
+	m.isTiCDCBlockGC.Store(false)
+	m.lastSafePointTs.Store(0)
+	minServiceGCSafePointGauge.Set(0)
+	cdcGCSafePointGauge.Set(0)
 	return nil
 }
 

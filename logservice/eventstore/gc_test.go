@@ -17,9 +17,11 @@ import (
 	"bytes"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/cockroachdb/pebble"
 	"github.com/stretchr/testify/require"
+	"github.com/tikv/client-go/v2/oracle"
 )
 
 type mockDB struct {
@@ -56,11 +58,21 @@ func (m *mockDB) getCompactCalls() [][]byte {
 
 func TestGCManager(t *testing.T) {
 	mdb := &mockDB{}
-	deleteFn := func(db *pebble.DB, uniqueKeyID uint64, tableID int64, startTs uint64, endTs uint64) error {
-		return mdb.DeleteRange(EncodeKeyPrefix(uniqueKeyID, tableID, startTs), EncodeKeyPrefix(uniqueKeyID, tableID, endTs), nil)
+	deleteFn := func(
+		db *pebble.DB, uniqueKeyID uint64, tableID int64, startTxnCommitTs uint64, endTxnCommitTs uint64,
+	) error {
+		return mdb.DeleteRange(
+			encodeTxnCommitTsBoundaryKey(uniqueKeyID, tableID, startTxnCommitTs),
+			encodeTxnCommitTsBoundaryKey(uniqueKeyID, tableID, endTxnCommitTs),
+			nil)
 	}
-	compactFn := func(db *pebble.DB, uniqueKeyID uint64, tableID int64, startTs uint64, endTs uint64) error {
-		return mdb.Compact(EncodeKeyPrefix(uniqueKeyID, tableID, startTs), EncodeKeyPrefix(uniqueKeyID, tableID, endTs), false)
+	compactFn := func(
+		db *pebble.DB, uniqueKeyID uint64, tableID int64, startTxnCommitTs uint64, endTxnCommitTs uint64,
+	) error {
+		return mdb.Compact(
+			encodeTxnCommitTsBoundaryKey(uniqueKeyID, tableID, startTxnCommitTs),
+			encodeTxnCommitTsBoundaryKey(uniqueKeyID, tableID, endTxnCommitTs),
+			false)
 	}
 	gcm := newGCManager([]*pebble.DB{nil}, deleteFn, compactFn)
 
@@ -69,7 +81,7 @@ func TestGCManager(t *testing.T) {
 	gcm.addGCItem(0, 1, 20, 300, 400) // Add a second table
 
 	{
-		ranges := gcm.fetchAllGCItems()
+		ranges := gcm.fetchGCItems(time.Now(), 0, 0)
 		require.Len(t, ranges, 2)
 		gcm.doGCJob(ranges)
 		gcm.updateCompactRanges(ranges)
@@ -80,22 +92,27 @@ func TestGCManager(t *testing.T) {
 	{
 		deleteCalls := mdb.getDeleteCalls()
 		require.Len(t, deleteCalls, 4)
-		// Check first table call
-		require.Equal(t, EncodeKeyPrefix(1, 10, 100), deleteCalls[0])
-		require.Equal(t, EncodeKeyPrefix(1, 10, 200), deleteCalls[1])
-		// Check second table call
-		require.Equal(t, EncodeKeyPrefix(1, 20, 300), deleteCalls[2])
-		require.Equal(t, EncodeKeyPrefix(1, 20, 400), deleteCalls[3])
+		// The order of delete ranges is not guaranteed because it iterates over a map.
+		if bytes.Equal(deleteCalls[0], encodeTxnCommitTsBoundaryKey(1, 10, 100)) {
+			require.Equal(t, encodeTxnCommitTsBoundaryKey(1, 10, 200), deleteCalls[1])
+			require.Equal(t, encodeTxnCommitTsBoundaryKey(1, 20, 300), deleteCalls[2])
+			require.Equal(t, encodeTxnCommitTsBoundaryKey(1, 20, 400), deleteCalls[3])
+		} else {
+			require.Equal(t, encodeTxnCommitTsBoundaryKey(1, 20, 300), deleteCalls[0])
+			require.Equal(t, encodeTxnCommitTsBoundaryKey(1, 20, 400), deleteCalls[1])
+			require.Equal(t, encodeTxnCommitTsBoundaryKey(1, 10, 100), deleteCalls[2])
+			require.Equal(t, encodeTxnCommitTsBoundaryKey(1, 10, 200), deleteCalls[3])
+		}
 
 		// Check internal state for compaction
 		gcm.mu.Lock()
 		state1, ok := gcm.compactRanges[compactKey1]
 		require.True(t, ok)
-		require.Equal(t, uint64(200), state1.endTs)
+		require.Equal(t, uint64(200), state1.endTxnCommitTs)
 		require.False(t, state1.compacted)
 		state2, ok := gcm.compactRanges[compactKey2]
 		require.True(t, ok)
-		require.Equal(t, uint64(400), state2.endTs)
+		require.Equal(t, uint64(400), state2.endTxnCommitTs)
 		require.False(t, state2.compacted)
 		gcm.mu.Unlock()
 	}
@@ -105,15 +122,15 @@ func TestGCManager(t *testing.T) {
 		compactCalls := mdb.getCompactCalls()
 		require.Len(t, compactCalls, 4)
 		// The order of compaction is not guaranteed because it iterates over a map.
-		if bytes.Equal(compactCalls[0], EncodeKeyPrefix(1, 10, 0)) {
-			require.Equal(t, EncodeKeyPrefix(1, 10, 200), compactCalls[1])
-			require.Equal(t, EncodeKeyPrefix(1, 20, 0), compactCalls[2])
-			require.Equal(t, EncodeKeyPrefix(1, 20, 400), compactCalls[3])
+		if bytes.Equal(compactCalls[0], encodeTxnCommitTsBoundaryKey(1, 10, 0)) {
+			require.Equal(t, encodeTxnCommitTsBoundaryKey(1, 10, 200), compactCalls[1])
+			require.Equal(t, encodeTxnCommitTsBoundaryKey(1, 20, 0), compactCalls[2])
+			require.Equal(t, encodeTxnCommitTsBoundaryKey(1, 20, 400), compactCalls[3])
 		} else {
-			require.Equal(t, EncodeKeyPrefix(1, 20, 0), compactCalls[0])
-			require.Equal(t, EncodeKeyPrefix(1, 20, 400), compactCalls[1])
-			require.Equal(t, EncodeKeyPrefix(1, 10, 0), compactCalls[2])
-			require.Equal(t, EncodeKeyPrefix(1, 10, 200), compactCalls[3])
+			require.Equal(t, encodeTxnCommitTsBoundaryKey(1, 20, 0), compactCalls[0])
+			require.Equal(t, encodeTxnCommitTsBoundaryKey(1, 20, 400), compactCalls[1])
+			require.Equal(t, encodeTxnCommitTsBoundaryKey(1, 10, 0), compactCalls[2])
+			require.Equal(t, encodeTxnCommitTsBoundaryKey(1, 10, 200), compactCalls[3])
 		}
 		// Verify internal state is now compacted
 		gcm.mu.Lock()
@@ -133,7 +150,7 @@ func TestGCManager(t *testing.T) {
 	gcm.addGCItem(0, 1, 10, 200, 300) // Add new item for the first table
 
 	{
-		ranges := gcm.fetchAllGCItems()
+		ranges := gcm.fetchGCItems(time.Now(), 0, 0)
 		require.Len(t, ranges, 1)
 		gcm.doGCJob(ranges)
 		gcm.updateCompactRanges(ranges)
@@ -144,76 +161,103 @@ func TestGCManager(t *testing.T) {
 	}
 }
 
-func TestMergeDeleteRanges(t *testing.T) {
-	input := []gcRangeItem{
-		{dbIndex: 0, uniqueKeyID: 1, tableID: 10, startTs: 200, endTs: 300},
-		{dbIndex: 0, uniqueKeyID: 1, tableID: 10, startTs: 100, endTs: 200},
-		{dbIndex: 0, uniqueKeyID: 1, tableID: 10, startTs: 300, endTs: 400},
-		{dbIndex: 0, uniqueKeyID: 1, tableID: 10, startTs: 350, endTs: 450}, // overlap
-		{dbIndex: 0, uniqueKeyID: 1, tableID: 20, startTs: 100, endTs: 200}, // different table
-		{dbIndex: 1, uniqueKeyID: 1, tableID: 10, startTs: 100, endTs: 200}, // different db
-		{dbIndex: 0, uniqueKeyID: 1, tableID: 10, startTs: 500, endTs: 600}, // gap, should not merge
-		{dbIndex: 0, uniqueKeyID: 1, tableID: 10, startTs: 600, endTs: 700}, // contiguous with previous
-	}
+func TestGCManagerDelaysSmallDeleteRanges(t *testing.T) {
+	gcm := newGCManager(nil, nil, nil)
+	now := time.Unix(100, 0)
 
-	merged, mergedCount := mergeDeleteRanges(input)
-	require.Greater(t, mergedCount, 0)
+	startTxnCommitTs := oracle.ComposeTS(1_000, 0)
+	midTxnCommitTs := oracle.ComposeTS(2_000, 0)
+	endTxnCommitTs := oracle.ComposeTS(3_000, 0)
 
-	// Expect:
-	// - (100, 450] for (0,1,10) due to contiguous and overlap
-	// - (500, 700] for (0,1,10) due to contiguous (500,600] + (600,700]
-	// - plus the two unrelated keys
-	require.Len(t, merged, 4)
+	gcm.addGCItem(0, 1, 10, startTxnCommitTs, midTxnCommitTs)
+	gcm.addGCItem(0, 1, 10, midTxnCommitTs, endTxnCommitTs)
 
-	var got0100_450 bool
-	var got0500_700 bool
-	var gotTable20 bool
-	var gotDB1 bool
-	for _, r := range merged {
-		switch {
-		case r.dbIndex == 0 && r.uniqueKeyID == 1 && r.tableID == 10 && r.startTs == 100 && r.endTs == 450:
-			got0100_450 = true
-		case r.dbIndex == 0 && r.uniqueKeyID == 1 && r.tableID == 10 && r.startTs == 500 && r.endTs == 700:
-			got0500_700 = true
-		case r.dbIndex == 0 && r.uniqueKeyID == 1 && r.tableID == 20 && r.startTs == 100 && r.endTs == 200:
-			gotTable20 = true
-		case r.dbIndex == 1 && r.uniqueKeyID == 1 && r.tableID == 10 && r.startTs == 100 && r.endTs == 200:
-			gotDB1 = true
-		}
-	}
+	compactKey := compactItemKey{dbIndex: 0, uniqueKeyID: 1, tableID: 10}
+	gcm.mu.Lock()
+	pending, ok := gcm.deleteRanges[compactKey]
+	require.True(t, ok)
+	pending.firstEnqueueTime = now
+	gcm.mu.Unlock()
 
-	require.True(t, got0100_450)
-	require.True(t, got0500_700)
-	require.True(t, gotTable20)
-	require.True(t, gotDB1)
+	ranges := gcm.fetchGCItems(now.Add(time.Minute), 5*time.Minute, 30*time.Minute)
+	require.Empty(t, ranges)
+
+	gcm.mu.Lock()
+	pending, ok = gcm.deleteRanges[compactKey]
+	require.True(t, ok)
+	require.Equal(t, startTxnCommitTs, pending.item.startTxnCommitTs)
+	require.Equal(t, endTxnCommitTs, pending.item.endTxnCommitTs)
+	gcm.mu.Unlock()
+
+	ranges = gcm.fetchGCItems(now.Add(31*time.Minute), 5*time.Minute, 30*time.Minute)
+	require.Len(t, ranges, 1)
+	require.Equal(t, gcRangeItem{
+		dbIndex:          0,
+		uniqueKeyID:      1,
+		tableID:          10,
+		startTxnCommitTs: startTxnCommitTs,
+		endTxnCommitTs:   endTxnCommitTs,
+	}, ranges[0])
+	require.Equal(t, 0, gcm.pendingDeleteRangeCount())
 }
 
-func TestMergeDeleteRangesNoOverlapNoChange(t *testing.T) {
-	// Same key but no overlap/contiguous; mergeDeleteRanges should not merge or change any interval.
-	input := []gcRangeItem{
-		{dbIndex: 0, uniqueKeyID: 1, tableID: 10, startTs: 100, endTs: 200},
-		{dbIndex: 0, uniqueKeyID: 1, tableID: 10, startTs: 300, endTs: 400},
-		{dbIndex: 0, uniqueKeyID: 1, tableID: 20, startTs: 100, endTs: 200},
-	}
-	original := append([]gcRangeItem(nil), input...)
+func TestGCManagerFlushesLargeDeleteRangeImmediately(t *testing.T) {
+	gcm := newGCManager(nil, nil, nil)
+	now := time.Unix(100, 0)
 
-	out, mergedCount := mergeDeleteRanges(input)
-	require.Equal(t, 0, mergedCount)
-	require.ElementsMatch(t, original, out)
+	startTxnCommitTs := oracle.ComposeTS(1_000, 0)
+	endTxnCommitTs := oracle.ComposeTS(1_000+6*60*1000, 0)
+
+	gcm.addGCItem(0, 1, 10, startTxnCommitTs, endTxnCommitTs)
+
+	compactKey := compactItemKey{dbIndex: 0, uniqueKeyID: 1, tableID: 10}
+	gcm.mu.Lock()
+	pending, ok := gcm.deleteRanges[compactKey]
+	require.True(t, ok)
+	pending.firstEnqueueTime = now
+	gcm.mu.Unlock()
+
+	ranges := gcm.fetchGCItems(now.Add(time.Minute), 5*time.Minute, 30*time.Minute)
+	require.Len(t, ranges, 1)
+	require.Equal(t, gcRangeItem{
+		dbIndex:          0,
+		uniqueKeyID:      1,
+		tableID:          10,
+		startTxnCommitTs: startTxnCommitTs,
+		endTxnCommitTs:   endTxnCommitTs,
+	}, ranges[0])
+	require.Equal(t, 0, gcm.pendingDeleteRangeCount())
 }
 
-func TestMergeDeleteRangesFastPathNoDuplicateKey(t *testing.T) {
-	// No duplicate (dbIndex, uniqueKeyID, tableID) keys; mergeDeleteRanges should early-return and keep order.
-	input := []gcRangeItem{
-		{dbIndex: 0, uniqueKeyID: 1, tableID: 10, startTs: 100, endTs: 200},
-		{dbIndex: 0, uniqueKeyID: 1, tableID: 20, startTs: 300, endTs: 400},
-		{dbIndex: 0, uniqueKeyID: 2, tableID: 10, startTs: 100, endTs: 200},
-		{dbIndex: 1, uniqueKeyID: 1, tableID: 10, startTs: 100, endTs: 200},
-	}
-	original := append([]gcRangeItem(nil), input...)
+func TestGCManagerWidensDisjointDeleteRanges(t *testing.T) {
+	gcm := newGCManager(nil, nil, nil)
+	now := time.Unix(100, 0)
 
-	out, mergedCount := mergeDeleteRanges(input)
-	require.Equal(t, 0, mergedCount)
-	require.Equal(t, original, out)
-	require.Equal(t, original, input)
+	firstStart := oracle.ComposeTS(1_000, 0)
+	firstEnd := oracle.ComposeTS(2_000, 0)
+	secondStart := oracle.ComposeTS(3_000, 0)
+	secondEnd := oracle.ComposeTS(4_000, 0)
+
+	gcm.addGCItem(0, 1, 10, firstStart, firstEnd)
+	gcm.addGCItem(0, 1, 10, secondStart, secondEnd)
+
+	compactKey := compactItemKey{dbIndex: 0, uniqueKeyID: 1, tableID: 10}
+	gcm.mu.Lock()
+	pending, ok := gcm.deleteRanges[compactKey]
+	require.True(t, ok)
+	pending.firstEnqueueTime = now
+	require.Equal(t, firstStart, pending.item.startTxnCommitTs)
+	require.Equal(t, secondEnd, pending.item.endTxnCommitTs)
+	gcm.mu.Unlock()
+
+	ranges := gcm.fetchGCItems(now.Add(31*time.Minute), 5*time.Minute, 30*time.Minute)
+	require.Len(t, ranges, 1)
+	require.Equal(t, gcRangeItem{
+		dbIndex:          0,
+		uniqueKeyID:      1,
+		tableID:          10,
+		startTxnCommitTs: firstStart,
+		endTxnCommitTs:   secondEnd,
+	}, ranges[0])
+	require.Equal(t, 0, gcm.pendingDeleteRangeCount())
 }

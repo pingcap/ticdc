@@ -125,6 +125,16 @@ func (c *ChangefeedSchedulerConfig) ValidateAndAdjust(sinkURI *url.URL) error {
 	if util.GetOrZero(c.RegionCountPerSpan) <= 0 {
 		return errors.New("region-count-per-span must be larger than 0")
 	}
+
+	// Keep the initial split granularity bounded by the table split threshold.
+	regionThreshold := util.GetOrZero(c.RegionThreshold)
+	regionCountPerSpan := util.GetOrZero(c.RegionCountPerSpan)
+	if regionThreshold > 0 && regionCountPerSpan > regionThreshold {
+		log.Warn("`region-count-per-span` is larger than `region-threshold`, adjusting",
+			zap.Int("configuredRegionCountPerSpan", regionCountPerSpan),
+			zap.Int("regionThreshold", regionThreshold))
+		c.RegionCountPerSpan = util.AddressOf(regionThreshold)
+	}
 	if c.RegionCountRefreshInterval == nil || *c.RegionCountRefreshInterval <= 0 {
 		return errors.New("region-count-refresh-interval must be larger than 0")
 	}
@@ -168,6 +178,11 @@ type SchedulerConfig struct {
 	// When there are only 2 captures, and a large number of tables, this can be helpful to prevent
 	// oom caused by all tables dispatched to only one capture.
 	AddTableBatchSize int `toml:"add-table-batch-size" json:"add-table-batch-size"`
+	// BalanceMoveBatchSize is the maximum number of operators that the default
+	// group balance scheduler can create in one tick, covering both split and
+	// move work. Keep this separate from add table batching so rebalance churn
+	// can be bounded independently.
+	BalanceMoveBatchSize int `toml:"balance-move-batch-size" json:"balance-move-batch-size"`
 
 	// ChangefeedSettings is setting by changefeed.
 	ChangefeedSettings *ChangefeedSchedulerConfig `toml:"-" json:"-"`
@@ -183,6 +198,7 @@ func NewDefaultSchedulerConfig() *SchedulerConfig {
 		MaxTaskConcurrency:   10,
 		CheckBalanceInterval: TomlDuration(15 * time.Second),
 		AddTableBatchSize:    10000,
+		BalanceMoveBatchSize: 1024,
 	}
 }
 
@@ -207,6 +223,10 @@ func (c *SchedulerConfig) ValidateAndAdjust() error {
 	if c.AddTableBatchSize <= 0 {
 		return cerror.ErrInvalidServerOption.GenWithStackByArgs(
 			"add-table-batch-size must be large than 0")
+	}
+	if c.BalanceMoveBatchSize <= 0 {
+		return cerror.ErrInvalidServerOption.GenWithStackByArgs(
+			"balance-move-batch-size must be larger than 0")
 	}
 	return nil
 }

@@ -129,9 +129,13 @@ func (d *decoder) NextDMLEvent() *commonEvent.DMLEvent {
 
 	// for the delete event, only have key part, it holds primary key or the unique key columns.
 	// for the insert / update, extract the value part, it holds all columns.
-	isDelete := len(d.value) == 0
+	isDelete := len(d.value) == 0 || d.isDeleteValue()
+	deleteCommitTs := uint64(0)
 	if isDelete {
 		// delete event only have key part, treat it as the value part also.
+		if d.isDeleteValue() {
+			deleteCommitTs = d.decodeDeleteCommitTs()
+		}
 		valueMap = keyMap
 		valueSchema = keySchema
 	} else {
@@ -144,6 +148,10 @@ func (d *decoder) NextDMLEvent() *commonEvent.DMLEvent {
 	event, err := assembleEvent(keyMap, valueMap, valueSchema, isDelete)
 	if err != nil {
 		log.Panic("assemble event failed", zap.Error(err))
+	}
+	if deleteCommitTs != 0 {
+		event.StartTs = deleteCommitTs
+		event.CommitTs = deleteCommitTs
 	}
 
 	// Delete event only has Primary Key Columns, but the checksum is calculated based on the whole row columns,
@@ -181,6 +189,23 @@ func (d *decoder) NextDMLEvent() *commonEvent.DMLEvent {
 	}
 
 	return event
+}
+
+func (d *decoder) isDeleteValue() bool {
+	return d.config.EnableTiDBExtension &&
+		d.config.AvroEnableWatermark &&
+		len(d.value) > 0 &&
+		d.value[0] == deleteByte
+}
+
+func (d *decoder) decodeDeleteCommitTs() uint64 {
+	if len(d.value) != 9 {
+		log.Panic("avro invalid delete value, expected delete marker plus commit-ts",
+			zap.String("data", util.RedactAny(d.value)))
+	}
+	commitTs := binary.BigEndian.Uint64(d.value[1:])
+	d.value = nil
+	return commitTs
 }
 
 // assembleEvent return a row changed event

@@ -1,0 +1,468 @@
+// Copyright 2026 PingCAP, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package eventservice
+
+import (
+	"testing"
+	"time"
+
+	"github.com/pingcap/ticdc/pkg/common"
+	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/prometheus/client_golang/prometheus/testutil"
+	"github.com/stretchr/testify/require"
+	"github.com/tikv/client-go/v2/oracle"
+	"go.uber.org/atomic"
+)
+
+func markScanWindowReadyForIncrease(status *changefeedStatus, now time.Time) {
+	status.scanWindowController.setLastAdjustTimeForTest(now.Add(-scanIntervalAdjustCooldown - time.Second))
+	status.scanWindowController.setLastDownAdjustTimeForTest(now.Add(-scanWindowReleaseRecoveryCooldown - time.Second))
+}
+
+func markScanWindowReadyForDecrease(status *changefeedStatus, now time.Time) {
+	status.scanWindowController.setLastDownAdjustTimeForTest(now.Add(-scanWindowPressureAdjustCooldown - time.Second))
+}
+
+func TestAdjustScanIntervalLowPressureSlowsRecoveryForLargeWindow(t *testing.T) {
+	t.Parallel()
+
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 10*time.Minute)
+
+	now := time.Now()
+	markScanWindowReadyForIncrease(status, now)
+	status.scanInterval.Store(int64(80 * time.Second))
+
+	for i := 0; i <= int(memoryUsageWindowDuration/time.Second); i++ {
+		status.updateMemoryUsage(now.Add(time.Duration(i)*time.Second), 0.15, 0)
+	}
+	require.Equal(t, int64(88*time.Second), status.scanInterval.Load())
+}
+
+func TestAdjustScanIntervalVeryLowPressureSlowsRecoveryForVeryLargeWindow(t *testing.T) {
+	t.Parallel()
+
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 10*time.Minute)
+
+	now := time.Now()
+	markScanWindowReadyForIncrease(status, now)
+	status.scanInterval.Store(int64(150 * time.Second))
+
+	for i := 0; i <= int(memoryUsageWindowDuration/time.Second); i++ {
+		status.updateMemoryUsage(now.Add(time.Duration(i)*time.Second), 0, 0)
+	}
+	require.Equal(t, int64(165*time.Second), status.scanInterval.Load())
+}
+
+func TestAdjustScanIntervalHighPressureUsesBoundedReduction(t *testing.T) {
+	t.Parallel()
+
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 1*time.Minute)
+	now := time.Now()
+	markScanWindowReadyForDecrease(status, now)
+
+	status.scanInterval.Store(int64(40 * time.Second))
+	status.updateMemoryUsage(now.Add(memoryUsageWindowDuration), 0.8, 0)
+	require.Equal(t, int64(30*time.Second), status.scanInterval.Load())
+}
+
+func TestAdjustScanIntervalDoesNotKeepReducingAfterTransientHighPressure(t *testing.T) {
+	t.Parallel()
+
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", t.Name()), 1*time.Minute)
+	changefeed := status.changefeedID.String()
+	t.Cleanup(func() {
+		deleteScanWindowMetrics(changefeed)
+	})
+
+	now := time.Now()
+	markScanWindowReadyForDecrease(status, now)
+	status.scanInterval.Store(int64(40 * time.Second))
+
+	status.updateMemoryUsage(now, 0.8, 0)
+	require.Equal(t, int64(30*time.Second), status.scanInterval.Load())
+
+	for i := 1; i <= int(scanWindowPressureAdjustCooldown/time.Second)+1; i++ {
+		status.updateMemoryUsage(now.Add(time.Duration(i)*time.Second), 0.1, 0)
+	}
+	require.Equal(t, int64(30*time.Second), status.scanInterval.Load())
+}
+
+func TestAdjustScanIntervalCriticalPressure(t *testing.T) {
+	t.Parallel()
+
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 1*time.Minute)
+	status.scanInterval.Store(int64(40 * time.Second))
+	status.updateMemoryUsage(time.Now().Add(memoryUsageWindowDuration), 1, 0)
+	require.Equal(t, int64(scanWindowEmergencyBrakePlateauInterval), status.scanInterval.Load())
+}
+
+func TestAdjustScanIntervalCriticalPressureIgnoresLowPressureHistory(t *testing.T) {
+	t.Parallel()
+
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", t.Name()), 10*time.Minute)
+	changefeed := status.changefeedID.String()
+	t.Cleanup(func() {
+		deleteScanWindowMetrics(changefeed)
+	})
+
+	now := time.Now()
+	status.scanInterval.Store(int64(40 * time.Second))
+	for i := 0; i < 5; i++ {
+		status.updateMemoryUsage(now.Add(time.Duration(i)*time.Second), 0.05, 0)
+	}
+	require.Equal(t, int64(40*time.Second), status.scanInterval.Load())
+
+	status.updateMemoryUsage(now.Add(5*time.Second), 0.95, 0)
+	require.Equal(t, int64(20*time.Second), status.scanInterval.Load())
+}
+
+func TestAdjustScanIntervalCriticalPressureUsesDefaultFloor(t *testing.T) {
+	t.Parallel()
+
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 10*time.Minute)
+	status.scanInterval.Store(int64(8 * time.Second))
+	status.updateMemoryUsage(time.Now().Add(memoryUsageWindowDuration), 0.95, 0)
+	require.Equal(t, int64(defaultScanInterval), status.scanInterval.Load())
+}
+
+func TestAdjustScanIntervalHighPressureDoesNotIncreaseBelowDefaultFloor(t *testing.T) {
+	t.Parallel()
+
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 1*time.Minute)
+	now := time.Now()
+	markScanWindowReadyForDecrease(status, now)
+
+	status.scanInterval.Store(int64(2 * time.Second))
+	status.updateMemoryUsage(now.Add(memoryUsageWindowDuration), 0.8, 0)
+	require.Equal(t, int64(2*time.Second), status.scanInterval.Load())
+}
+
+func TestAdjustScanIntervalCriticalPressureDoesNotIncreaseBelowDefaultFloor(t *testing.T) {
+	t.Parallel()
+
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 10*time.Minute)
+	status.scanInterval.Store(int64(2 * time.Second))
+	status.updateMemoryUsage(time.Now().Add(memoryUsageWindowDuration), 0.95, 0)
+	require.Equal(t, int64(2*time.Second), status.scanInterval.Load())
+}
+
+func TestAdjustScanIntervalEmergencyPressureUsesModerateBrakeForSmallWindow(t *testing.T) {
+	t.Parallel()
+
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 10*time.Minute)
+	status.scanInterval.Store(int64(20 * time.Second))
+	status.updateMemoryUsage(time.Now().Add(memoryUsageWindowDuration), 1, 0)
+	require.Equal(t, int64(10*time.Second), status.scanInterval.Load())
+}
+
+func TestScanWindowEmergencyBrakeIntervalIsContinuousAtThirtySeconds(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, 15*time.Second, scanWindowEmergencyBrakeInterval(30*time.Second, false))
+	require.Equal(t, 15*time.Second, scanWindowEmergencyBrakeInterval(31*time.Second, false))
+	require.Equal(t, 15*time.Second, scanWindowEmergencyBrakeInterval(60*time.Second, false))
+}
+
+func TestScanWindowEmergencyBrakeIntervalUsesStrongBrakeForLargeWindow(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, 20*time.Second, scanWindowEmergencyBrakeInterval(80*time.Second, false))
+}
+
+func TestAdjustScanIntervalEmergencyPressureUsesDefaultFloorForVerySmallWindow(t *testing.T) {
+	t.Parallel()
+
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 10*time.Minute)
+	status.scanInterval.Store(int64(8 * time.Second))
+	status.updateMemoryUsage(time.Now().Add(memoryUsageWindowDuration), 1, 0)
+	require.Equal(t, int64(defaultScanInterval), status.scanInterval.Load())
+}
+
+func TestAdjustScanIntervalEmergencyPressureDoesNotImmediatelyDropBelowDefaultFloor(t *testing.T) {
+	t.Parallel()
+
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 10*time.Minute)
+	status.scanInterval.Store(int64(defaultScanInterval))
+	status.updateMemoryUsage(time.Now().Add(memoryUsageWindowDuration), 1, 0)
+	require.Equal(t, int64(defaultScanInterval), status.scanInterval.Load())
+}
+
+func TestAdjustScanIntervalEmergencyPressureDoesNotIncreaseBelowDefaultFloor(t *testing.T) {
+	t.Parallel()
+
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 10*time.Minute)
+	status.scanInterval.Store(int64(2 * time.Second))
+	status.updateMemoryUsage(time.Now().Add(memoryUsageWindowDuration), 1, 0)
+	require.Equal(t, int64(2*time.Second), status.scanInterval.Load())
+}
+
+func TestAdjustScanIntervalEmergencyPressureCanReachMinFloorWhenSustained(t *testing.T) {
+	t.Parallel()
+
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 10*time.Minute)
+	status.scanInterval.Store(int64(defaultScanInterval))
+	start := time.Now()
+
+	for i := 0; i <= int(memoryUsageWindowDuration/time.Second); i++ {
+		status.updateMemoryUsage(start.Add(time.Duration(i)*time.Second), 1, 0)
+	}
+
+	require.Equal(t, int64(minScanInterval), status.scanInterval.Load())
+}
+
+func TestAdjustScanIntervalRecoversFromFloorBeforeNormalIncreaseCooldown(t *testing.T) {
+	t.Parallel()
+
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 10*time.Minute)
+	now := time.Now()
+	status.scanInterval.Store(int64(defaultScanInterval))
+	status.scanWindowController.setLastAdjustTimeForTest(now.Add(-scanWindowFloorRecoveryCooldown - time.Second))
+	status.scanWindowController.setLastDownAdjustTimeForTest(now.Add(-scanWindowFloorRecoveryCooldown - time.Second))
+
+	for i, usage := range []float64{0.30, 0.25, 0.20, 0.18, 0.15} {
+		status.updateMemoryUsage(now.Add(time.Duration(i)*time.Second), usage, 0)
+	}
+	require.Greater(t, status.scanInterval.Load(), int64(defaultScanInterval))
+}
+
+func TestUpdateMemoryUsageDoesNotResetScanIntervalOnMemoryRelease(t *testing.T) {
+	t.Parallel()
+
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 1*time.Minute)
+	now := time.Now()
+	status.scanInterval.Store(int64(40 * time.Second))
+
+	status.updateMemoryUsage(now, 0.5, 1)
+	require.Equal(t, int64(40*time.Second), status.scanInterval.Load())
+}
+
+func TestUpdateMemoryUsageRecordsScanWindowObservationMetrics(t *testing.T) {
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", t.Name()), 1*time.Minute)
+	changefeed := status.changefeedID.String()
+	t.Cleanup(func() {
+		deleteScanWindowMetrics(changefeed)
+	})
+
+	now := time.Now()
+	status.scanInterval.Store(int64(40 * time.Second))
+
+	status.updateMemoryUsage(now, 0.6, 1)
+
+	require.InDelta(t, 0.6, testutil.ToFloat64(metrics.EventServiceScanWindowUsageRatioGaugeVec.WithLabelValues(changefeed, "report")), 1e-9)
+	require.InDelta(t, 0.6, testutil.ToFloat64(metrics.EventServiceScanWindowUsageRatioGaugeVec.WithLabelValues(changefeed, "avg")), 1e-9)
+	require.InDelta(t, 0.6, testutil.ToFloat64(metrics.EventServiceScanWindowUsageRatioGaugeVec.WithLabelValues(changefeed, "max")), 1e-9)
+	require.InDelta(t, 0.6, testutil.ToFloat64(metrics.EventServiceScanWindowUsageEMAGaugeVec.WithLabelValues(changefeed, "fast")), 1e-9)
+	require.InDelta(t, 0.6, testutil.ToFloat64(metrics.EventServiceScanWindowUsageEMAGaugeVec.WithLabelValues(changefeed, "slow")), 1e-9)
+	require.InDelta(t, 0, testutil.ToFloat64(metrics.EventServiceScanWindowTargetBandGaugeVec.WithLabelValues(changefeed, "report")), 1e-9)
+	require.InDelta(t, 0, testutil.ToFloat64(metrics.EventServiceScanWindowTargetBandGaugeVec.WithLabelValues(changefeed, "fast")), 1e-9)
+	require.InDelta(t, 0, testutil.ToFloat64(metrics.EventServiceScanWindowTargetBandGaugeVec.WithLabelValues(changefeed, "slow")), 1e-9)
+	require.InDelta(t, 0, testutil.ToFloat64(metrics.EventServiceScanWindowPressureScoreGaugeVec.WithLabelValues(changefeed)), 1e-9)
+	require.InDelta(t, 1, testutil.ToFloat64(metrics.EventServiceScanWindowMemoryReleaseCount.WithLabelValues(changefeed)), 1e-9)
+}
+
+func TestUpdateMemoryUsageRecordsScanWindowAdjustCount(t *testing.T) {
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", t.Name()), 1*time.Minute)
+	changefeed := status.changefeedID.String()
+	t.Cleanup(func() {
+		deleteScanWindowMetrics(changefeed)
+	})
+
+	now := time.Now()
+	markScanWindowReadyForDecrease(status, now)
+	status.scanInterval.Store(int64(40 * time.Second))
+
+	status.updateMemoryUsage(now.Add(memoryUsageWindowDuration), 0.8, 0)
+
+	require.Equal(t, int64(30*time.Second), status.scanInterval.Load())
+	require.InDelta(t, 1, testutil.ToFloat64(metrics.EventServiceScanWindowAdjustCount.WithLabelValues(changefeed, string(scanWindowDecisionHighPressure))), 1e-9)
+}
+
+func TestUpdateMemoryUsageRecordsScanWindowTargetBandMetrics(t *testing.T) {
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", t.Name()), 10*time.Minute)
+	changefeed := status.changefeedID.String()
+	t.Cleanup(func() {
+		deleteScanWindowMetrics(changefeed)
+	})
+
+	start := time.Now()
+	status.updateMemoryUsage(start, 0.20, 0)
+	status.updateMemoryUsage(start.Add(time.Second), 0.40, 0)
+	status.updateMemoryUsage(start.Add(2*time.Second), 0.60, 0)
+
+	require.InDelta(t, 0, testutil.ToFloat64(metrics.EventServiceScanWindowTargetBandGaugeVec.WithLabelValues(changefeed, "report")), 1e-9)
+	require.InDelta(t, 1, testutil.ToFloat64(metrics.EventServiceScanWindowTargetBandGaugeVec.WithLabelValues(changefeed, "fast")), 1e-9)
+	require.InDelta(t, 1, testutil.ToFloat64(metrics.EventServiceScanWindowTargetBandGaugeVec.WithLabelValues(changefeed, "slow")), 1e-9)
+	require.InDelta(t, 2, testutil.ToFloat64(metrics.EventServiceScanWindowTargetBandCrossCount.WithLabelValues(changefeed, "report")), 1e-9)
+	require.InDelta(t, 1, testutil.ToFloat64(metrics.EventServiceScanWindowTargetBandCrossCount.WithLabelValues(changefeed, "fast")), 1e-9)
+	require.InDelta(t, 1, testutil.ToFloat64(metrics.EventServiceScanWindowTargetBandCrossCount.WithLabelValues(changefeed, "slow")), 1e-9)
+}
+
+func TestAdjustScanIntervalIncreaseWithJitteredSamples(t *testing.T) {
+	t.Parallel()
+
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 1*time.Minute)
+
+	start := time.Now()
+	markScanWindowReadyForIncrease(status, start)
+
+	status.scanInterval.Store(int64(40 * time.Second))
+
+	// Use a >1s interval to simulate heartbeat jitter, so the window span will be
+	// slightly less than memoryUsageWindowDuration.
+	step := 1100 * time.Millisecond
+	for i := 0; i < 28; i++ {
+		status.updateMemoryUsage(start.Add(time.Duration(i)*step), 0.15, 0)
+	}
+	require.Equal(t, int64(50*time.Second), status.scanInterval.Load())
+}
+
+func TestAdjustScanIntervalReducesOnSustainedPressure(t *testing.T) {
+	t.Parallel()
+
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 1*time.Minute)
+	now := time.Now()
+	markScanWindowReadyForDecrease(status, now)
+
+	status.scanInterval.Store(int64(40 * time.Second))
+
+	status.updateMemoryUsage(now, 0.60, 0)
+	status.updateMemoryUsage(now.Add(1*time.Second), 0.60, 0)
+	status.updateMemoryUsage(now.Add(2*time.Second), 0.60, 0)
+	require.Equal(t, int64(36*time.Second), status.scanInterval.Load())
+}
+
+func TestAdjustScanIntervalSustainedPressureDoesNotIncreaseBelowDefaultFloor(t *testing.T) {
+	t.Parallel()
+
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 1*time.Minute)
+	now := time.Now()
+	markScanWindowReadyForDecrease(status, now)
+
+	status.scanInterval.Store(int64(2 * time.Second))
+
+	status.updateMemoryUsage(now, 0.60, 0)
+	status.updateMemoryUsage(now.Add(1*time.Second), 0.60, 0)
+	status.updateMemoryUsage(now.Add(2*time.Second), 0.60, 0)
+	require.Equal(t, int64(2*time.Second), status.scanInterval.Load())
+}
+
+func TestAdjustScanIntervalDoesNotIncreaseBeforeCooldown(t *testing.T) {
+	t.Parallel()
+
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 1*time.Minute)
+	now := time.Now()
+	status.scanInterval.Store(int64(40 * time.Second))
+
+	for i := 0; i < 10; i++ {
+		status.updateMemoryUsage(now.Add(time.Duration(i)*time.Second), 0.05, 0)
+	}
+	require.Equal(t, int64(40*time.Second), status.scanInterval.Load())
+}
+
+func TestRefreshMinSentResolvedTsMinAndSkipRules(t *testing.T) {
+	t.Parallel()
+
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 1*time.Minute)
+
+	stale := &dispatcherStat{}
+	stale.seq.Store(1)
+	stale.sentResolvedTs.Store(10)
+	stale.lastReceivedHeartbeatTime.Store(time.Now().Add(-scanWindowStaleDispatcherHeartbeatThreshold - time.Second).Unix())
+
+	removed := &dispatcherStat{}
+	removed.seq.Store(1)
+	removed.sentResolvedTs.Store(150)
+	removed.isRemoved.Store(true)
+
+	uninitialized := &dispatcherStat{}
+	uninitialized.seq.Store(0)
+	uninitialized.sentResolvedTs.Store(10)
+
+	first := &dispatcherStat{}
+	first.seq.Store(1)
+	first.sentResolvedTs.Store(200)
+
+	second := &dispatcherStat{}
+	second.seq.Store(1)
+	second.sentResolvedTs.Store(50)
+
+	stalePtr := &atomic.Pointer[dispatcherStat]{}
+	stalePtr.Store(stale)
+	status.addDispatcher(common.NewDispatcherID(), stalePtr)
+
+	removedPtr := &atomic.Pointer[dispatcherStat]{}
+	removedPtr.Store(removed)
+	status.addDispatcher(common.NewDispatcherID(), removedPtr)
+
+	uninitializedPtr := &atomic.Pointer[dispatcherStat]{}
+	uninitializedPtr.Store(uninitialized)
+	status.addDispatcher(common.NewDispatcherID(), uninitializedPtr)
+
+	firstPtr := &atomic.Pointer[dispatcherStat]{}
+	firstPtr.Store(first)
+	status.addDispatcher(common.NewDispatcherID(), firstPtr)
+
+	secondPtr := &atomic.Pointer[dispatcherStat]{}
+	secondPtr.Store(second)
+	status.addDispatcher(common.NewDispatcherID(), secondPtr)
+
+	status.refreshMinSentResolvedTs()
+	require.Equal(t, uint64(50), status.minSentTs.Load())
+
+	second.isRemoved.Store(true)
+	status.refreshMinSentResolvedTs()
+	require.Equal(t, uint64(200), status.minSentTs.Load())
+
+	stale.isRemoved.Store(true)
+	first.seq.Store(0)
+	status.refreshMinSentResolvedTs()
+	require.Equal(t, uint64(0), status.minSentTs.Load())
+}
+
+func TestRefreshMinSentResolvedTsStaleFallback(t *testing.T) {
+	t.Parallel()
+
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 1*time.Minute)
+
+	stale := &dispatcherStat{}
+	stale.seq.Store(1)
+	stale.sentResolvedTs.Store(123)
+	stale.lastReceivedHeartbeatTime.Store(time.Now().Add(-scanWindowStaleDispatcherHeartbeatThreshold - time.Second).Unix())
+
+	stalePtr := &atomic.Pointer[dispatcherStat]{}
+	stalePtr.Store(stale)
+	status.addDispatcher(common.NewDispatcherID(), stalePtr)
+
+	status.refreshMinSentResolvedTs()
+	require.Equal(t, uint64(123), status.minSentTs.Load())
+}
+
+func TestGetScanMaxTsFallbackInterval(t *testing.T) {
+	t.Parallel()
+
+	status := newChangefeedStatus(common.NewChangefeedID4Test("default", "test"), 1*time.Minute)
+
+	baseTime := time.Unix(1234, 0)
+	baseTs := oracle.GoTimeToTS(baseTime)
+	status.minSentTs.Store(baseTs)
+
+	status.scanInterval.Store(0)
+	require.Equal(t, oracle.GoTimeToTS(baseTime.Add(defaultScanInterval)), status.getScanMaxTs())
+
+	status.scanInterval.Store(int64(10 * time.Second))
+	require.Equal(t, oracle.GoTimeToTS(baseTime.Add(10*time.Second)), status.getScanMaxTs())
+
+	status.minSentTs.Store(0)
+	require.Equal(t, uint64(0), status.getScanMaxTs())
+}

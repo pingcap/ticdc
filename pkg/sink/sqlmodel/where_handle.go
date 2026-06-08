@@ -133,7 +133,7 @@ func allColsNotNull(idx *model.IndexInfo, cols []*model.ColumnInfo) bool {
 // For the last case, last used index is swapped to front.
 func (h *WhereHandle) getWhereIdxByData(data []interface{}) *model.IndexInfo {
 	if h == nil {
-		log.L().DPanic("WhereHandle is nil")
+		log.Panic("WhereHandle is nil")
 		return nil
 	}
 	if h.UniqueNotNullIdx != nil {

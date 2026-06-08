@@ -32,6 +32,12 @@ import (
 	"go.uber.org/zap"
 )
 
+// fanoutPassResendQuietInterval throttles repeated DB/All pass resends after
+// the first fanout pass is sent. Fanout actions touch many captures at once, so
+// we first give recently received DONE statuses a short chance to converge
+// before broadcasting another identical pass wave.
+const fanoutPassResendQuietInterval = time.Second
+
 // BarrierEvent is a barrier event that reported by dispatchers, note is a block multiple dispatchers
 // all of these dispatchers should report the same event
 type BarrierEvent struct {
@@ -53,6 +59,10 @@ type BarrierEvent struct {
 	schemaIDChange     []*heartbeatpb.SchemaIDChange
 	isSyncPoint        bool
 	needSchedule       bool
+	// mode is inherited from the owning Barrier and keeps this event's
+	// scheduling, resend messages, and logs within the same replication pipeline
+	// (common.DefaultMode or common.RedoMode).
+	mode int64
 	// if the split table is enable for this changefeed, if not we can use tableID to check coverage
 	dynamicSplitEnabled bool
 
@@ -68,6 +78,14 @@ type BarrierEvent struct {
 	// rangeChecker is used to check if all the dispatchers reported the block events
 	rangeChecker   range_checker.RangeChecker
 	lastResendTime time.Time
+	// lastStatusReceivedTime is refreshed after the event enters selected state.
+	// It lets resend distinguish "still receiving fresh DONE progress" from
+	// "stalled, must rebroadcast pass/write again".
+	lastStatusReceivedTime time.Time
+	// passActionSent tracks whether resend has already emitted at least one pass
+	// action for the selected stage. The quiet interval only applies after that
+	// first fanout pass exists.
+	passActionSent bool
 
 	lastWarningLogTime time.Time
 }
@@ -78,6 +96,7 @@ func NewBlockEvent(cfID common.ChangeFeedID,
 	operatorController *operator.Controller,
 	status *heartbeatpb.State,
 	dynamicSplitEnabled bool,
+	mode int64,
 ) *BarrierEvent {
 	event := &BarrierEvent{
 		cfID:               cfID,
@@ -94,13 +113,15 @@ func NewBlockEvent(cfID common.ChangeFeedID,
 		schemaIDChange:     status.UpdatedSchemas,
 		isSyncPoint:        status.IsSyncPoint,
 		needSchedule:       needSchedule(status),
+		mode:               mode,
 		// if the split table is enable for this changefeed, if not we can use tableID to check coverage
 		dynamicSplitEnabled: dynamicSplitEnabled,
 
 		reportedDispatchers: make(map[common.DispatcherID]struct{}),
 		lastResendTime:      time.Time{},
 
-		lastWarningLogTime: time.Now(),
+		lastStatusReceivedTime: time.Now(),
+		lastWarningLogTime:     time.Now(),
 	}
 
 	if status.BlockTables != nil {
@@ -118,7 +139,8 @@ func NewBlockEvent(cfID common.ChangeFeedID,
 		zap.String("changefeedID", cfID.Name()),
 		zap.Uint64("blockTs", event.commitTs),
 		zap.Bool("syncPoint", event.isSyncPoint),
-		zap.Any("detail", status))
+		zap.Any("detail", status),
+		zap.Int64("mode", event.mode))
 	return event
 }
 
@@ -146,7 +168,7 @@ func (be *BarrierEvent) createRangeCheckerForTypeAll() {
 	} else {
 		be.rangeChecker = range_checker.NewTableCountChecker(tbls)
 	}
-	log.Info("create range checker for block event", zap.Any("influcenceType", be.blockedDispatchers.InfluenceType), zap.Any("commitTs", be.commitTs))
+	log.Info("create range checker for block event", zap.Any("influcenceType", be.blockedDispatchers.InfluenceType), zap.Any("commitTs", be.commitTs), zap.Int64("mode", be.mode))
 }
 
 func (be *BarrierEvent) createRangeCheckerForTypeDB() {
@@ -162,7 +184,7 @@ func (be *BarrierEvent) createRangeCheckerForTypeDB() {
 	} else {
 		be.rangeChecker = range_checker.NewTableCountChecker(tbls)
 	}
-	log.Info("create range checker for block event", zap.Any("influcenceType", be.blockedDispatchers.InfluenceType), zap.Any("commitTs", be.commitTs))
+	log.Info("create range checker for block event", zap.Any("influcenceType", be.blockedDispatchers.InfluenceType), zap.Any("commitTs", be.commitTs), zap.Int64("mode", be.mode))
 }
 
 func (be *BarrierEvent) checkEventAction(dispatcherID common.DispatcherID) (*heartbeatpb.DispatcherStatus, node.ID) {
@@ -183,7 +205,8 @@ func (be *BarrierEvent) onAllDispatcherReportedBlockEvent(dispatcherID common.Di
 		log.Info("use table trigger event as the writer dispatcher",
 			zap.String("changefeed", be.cfID.Name()),
 			zap.String("dispatcher", be.spanController.GetDDLDispatcherID().String()),
-			zap.Uint64("commitTs", be.commitTs))
+			zap.Uint64("commitTs", be.commitTs),
+			zap.Int64("mode", be.mode))
 		dispatcher = be.spanController.GetDDLDispatcherID()
 	default:
 		selected := dispatcherID.ToPB()
@@ -194,23 +217,28 @@ func (be *BarrierEvent) onAllDispatcherReportedBlockEvent(dispatcherID common.Di
 			log.Info("use table trigger event as the writer dispatcher",
 				zap.String("changefeed", be.cfID.Name()),
 				zap.String("dispatcher", selected.String()),
-				zap.Uint64("commitTs", be.commitTs))
+				zap.Uint64("commitTs", be.commitTs),
+				zap.Int64("mode", be.mode))
 		}
 		dispatcher = common.NewDispatcherIDFromPB(selected)
 	}
 
-	// reset ranger checkers and reportedDispatchers
+	// Once the event enters selected state, we start a new reporting phase that
+	// tracks completion after write/pass rather than the initial WAITING
+	// coverage. Reset both structures so DONE reports are measured from scratch.
 	be.rangeChecker.Reset()
 	be.reportedDispatchers = make(map[common.DispatcherID]struct{})
 
 	be.selected.Store(true)
 	be.writerDispatcher = dispatcher
 	be.lastResendTime = time.Now()
+	be.passActionSent = false
 	log.Info("all dispatcher reported heartbeat, schedule it, and select one to write",
 		zap.String("changefeed", be.cfID.Name()),
 		zap.String("dispatcher", be.writerDispatcher.String()),
 		zap.Uint64("commitTs", be.commitTs),
-		zap.String("barrierType", be.blockedDispatchers.InfluenceType.String()))
+		zap.String("barrierType", be.blockedDispatchers.InfluenceType.String()),
+		zap.Int64("mode", be.mode))
 	stm := be.spanController.GetTaskByID(be.writerDispatcher)
 	return &heartbeatpb.DispatcherStatus{
 		InfluencedDispatchers: &heartbeatpb.InfluencedDispatchers{
@@ -222,7 +250,7 @@ func (be *BarrierEvent) onAllDispatcherReportedBlockEvent(dispatcherID common.Di
 }
 
 func (be *BarrierEvent) scheduleBlockEvent() {
-	log.Info("schedule block event", zap.Uint64("commitTs", be.commitTs))
+	log.Info("schedule block event", zap.Uint64("commitTs", be.commitTs), zap.Int64("mode", be.mode))
 	// dispatcher notify us to drop some tables, by dispatcher ID or schema ID
 	if be.dropDispatchers != nil {
 		switch be.dropDispatchers.InfluenceType {
@@ -231,18 +259,21 @@ func (be *BarrierEvent) scheduleBlockEvent() {
 			log.Info("remove table",
 				zap.String("changefeed", be.cfID.Name()),
 				zap.Uint64("commitTs", be.commitTs),
-				zap.Int64("schema", be.dropDispatchers.SchemaID))
+				zap.Int64("schema", be.dropDispatchers.SchemaID),
+				zap.Int64("mode", be.mode))
 		case heartbeatpb.InfluenceType_Normal:
 			be.operatorController.RemoveTasksByTableIDs(be.dropDispatchers.TableIDs...)
 			log.Info("remove table",
 				zap.String("changefeed", be.cfID.Name()),
 				zap.Uint64("commitTs", be.commitTs),
-				zap.Int64s("table", be.dropDispatchers.TableIDs))
+				zap.Int64s("table", be.dropDispatchers.TableIDs),
+				zap.Int64("mode", be.mode))
 		case heartbeatpb.InfluenceType_All:
 			log.Panic("invalid influence type meet drop dispatchers",
 				zap.Any("blockedDispatchers", be.blockedDispatchers),
 				zap.Any("changefeed", be.cfID.Name()),
 				zap.Any("commitTs", be.commitTs),
+				zap.Int64("mode", be.mode),
 			)
 		}
 	}
@@ -251,7 +282,8 @@ func (be *BarrierEvent) scheduleBlockEvent() {
 			zap.Uint64("commitTs", be.commitTs),
 			zap.String("changefeed", be.cfID.Name()),
 			zap.Int64("schema", add.SchemaID),
-			zap.Int64("table", add.TableID))
+			zap.Int64("table", add.TableID),
+			zap.Int64("mode", be.mode))
 		be.spanController.AddNewTable(commonEvent.Table{
 			SchemaID:  add.SchemaID,
 			TableID:   add.TableID,
@@ -265,7 +297,8 @@ func (be *BarrierEvent) scheduleBlockEvent() {
 			zap.Uint64("commitTs", be.commitTs),
 			zap.Int64("newSchema", change.OldSchemaID),
 			zap.Int64("oldSchema", change.NewSchemaID),
-			zap.Int64("table", change.TableID))
+			zap.Int64("table", change.TableID),
+			zap.Int64("mode", be.mode))
 		be.spanController.UpdateSchemaID(change.TableID, change.NewSchemaID)
 	}
 }
@@ -274,13 +307,18 @@ func (be *BarrierEvent) markTableDone(tableID int64) {
 	be.rangeChecker.AddSubRange(tableID, nil, nil)
 }
 
+func (be *BarrierEvent) markStatusReceived() {
+	be.lastStatusReceivedTime = time.Now()
+}
+
 func (be *BarrierEvent) addDispatchersToRangeChecker() {
 	for dispatcher := range be.reportedDispatchers {
 		replicaSpan := be.spanController.GetTaskByID(dispatcher)
 		if replicaSpan == nil {
 			log.Info("dispatcher not found, ignore",
 				zap.String("changefeed", be.cfID.Name()),
-				zap.String("dispatcher", dispatcher.String()))
+				zap.String("dispatcher", dispatcher.String()),
+				zap.Int64("mode", be.mode))
 			continue
 		}
 		be.rangeChecker.AddSubRange(replicaSpan.Span.TableID, replicaSpan.Span.StartKey, replicaSpan.Span.EndKey)
@@ -288,11 +326,17 @@ func (be *BarrierEvent) addDispatchersToRangeChecker() {
 }
 
 func (be *BarrierEvent) markDispatcherEventDone(dispatcherID common.DispatcherID) {
+	if be.selected.Load() {
+		// After selection, every accepted status means the chosen write/pass path
+		// is still making progress, so quiet fanout resend for a short interval.
+		be.markStatusReceived()
+	}
 	replicaSpan := be.spanController.GetTaskByID(dispatcherID)
 	if replicaSpan == nil {
 		log.Warn("dispatcher not found, ignore",
 			zap.String("changefeed", be.cfID.Name()),
-			zap.String("dispatcher", dispatcherID.String()))
+			zap.String("dispatcher", dispatcherID.String()),
+			zap.Int64("mode", be.mode))
 		return
 	}
 
@@ -303,7 +347,7 @@ func (be *BarrierEvent) markDispatcherEventDone(dispatcherID common.DispatcherID
 			// create rangeChecker
 			switch be.blockedDispatchers.InfluenceType {
 			case heartbeatpb.InfluenceType_Normal:
-				log.Panic("influence type should not be normal when range checker is nil")
+				log.Panic("influence type should not be normal when range checker is nil", zap.Int64("mode", be.mode))
 			case heartbeatpb.InfluenceType_DB:
 				// create range checker first
 				be.createRangeCheckerForTypeDB()
@@ -350,6 +394,7 @@ func (be *BarrierEvent) allDispatcherReported() bool {
 				zap.String("changefeed", be.cfID.Name()),
 				zap.String("dispatcher", dispatcherID.String()),
 				zap.Uint64("commitTs", be.commitTs),
+				zap.Int64("mode", be.mode),
 			)
 			needDoubleCheck = true
 			delete(be.reportedDispatchers, dispatcherID)
@@ -361,6 +406,7 @@ func (be *BarrierEvent) allDispatcherReported() bool {
 				zap.String("changefeed", be.cfID.Name()),
 				zap.String("dispatcher", dispatcherID.String()),
 				zap.Uint64("commitTs", be.commitTs),
+				zap.Int64("mode", be.mode),
 			)
 			needDoubleCheck = true
 			delete(be.reportedDispatchers, dispatcherID)
@@ -488,6 +534,7 @@ func (be *BarrierEvent) checkBlockedDispatchers() {
 						zap.Int64("tableId", tableId),
 						zap.Uint64("checkpointTs", replication.GetStatus().CheckpointTs),
 						zap.String("dispatcher", replication.ID.String()),
+						zap.Int64("mode", be.mode),
 					)
 					return
 				}
@@ -498,7 +545,7 @@ func (be *BarrierEvent) checkBlockedDispatchers() {
 		replications := be.spanController.GetTasksBySchemaID(schemaID)
 		for _, replication := range replications {
 			if forwardBarrierEvent(replication, be) {
-				// one related table has forward checkpointTs, means the block event can be advanced
+				// One related dispatcher has moved past the barrier, so the block event can advance.
 				be.selected.Store(true)
 				be.writerDispatcherAdvanced = true
 				log.Info("one related dispatcher has forward checkpointTs, means the block event can be advanced",
@@ -507,6 +554,7 @@ func (be *BarrierEvent) checkBlockedDispatchers() {
 					zap.Int64("schemaID", schemaID),
 					zap.Uint64("checkpointTs", replication.GetStatus().CheckpointTs),
 					zap.String("dispatcher", replication.ID.String()),
+					zap.Int64("mode", be.mode),
 				)
 				return
 			}
@@ -515,7 +563,7 @@ func (be *BarrierEvent) checkBlockedDispatchers() {
 		replications := be.spanController.GetAllTasks()
 		for _, replication := range replications {
 			if forwardBarrierEvent(replication, be) {
-				// one related table has forward checkpointTs, means the block event can be advanced
+				// One related dispatcher has moved past the barrier, so the block event can advance.
 				be.selected.Store(true)
 				be.writerDispatcherAdvanced = true
 				log.Info("one related dispatcher has forward checkpointTs, means the block event can be advanced",
@@ -523,6 +571,7 @@ func (be *BarrierEvent) checkBlockedDispatchers() {
 					zap.Uint64("commitTs", be.commitTs),
 					zap.Uint64("checkpointTs", replication.GetStatus().CheckpointTs),
 					zap.String("dispatcher", replication.ID.String()),
+					zap.Int64("mode", be.mode),
 				)
 				return
 			}
@@ -558,7 +607,8 @@ func forwardBarrierEvent(replication *replica.SpanReplication, event *BarrierEve
 }
 
 func (be *BarrierEvent) resend(mode int64) []*messaging.TargetMessage {
-	if time.Since(be.lastResendTime) < time.Second {
+	now := time.Now()
+	if now.Sub(be.lastResendTime) < time.Second {
 		return nil
 	}
 	var msgs []*messaging.TargetMessage
@@ -574,6 +624,7 @@ func (be *BarrierEvent) resend(mode int64) []*messaging.TargetMessage {
 					zap.String("coverage", be.rangeChecker.Detail()),
 					zap.Any("blocker", be.blockedDispatchers),
 					zap.Any("resend", msgs),
+					zap.Int64("mode", be.mode),
 				)
 			} else {
 				log.Warn("barrier event is not resolved",
@@ -584,6 +635,7 @@ func (be *BarrierEvent) resend(mode int64) []*messaging.TargetMessage {
 					zap.Bool("writerDispatcherAdvanced", be.writerDispatcherAdvanced),
 					zap.Any("blocker", be.blockedDispatchers),
 					zap.Any("resend", msgs),
+					zap.Int64("mode", be.mode),
 				)
 			}
 			be.lastWarningLogTime = time.Now()
@@ -599,14 +651,15 @@ func (be *BarrierEvent) resend(mode int64) []*messaging.TargetMessage {
 				zap.Bool("isSyncPoint", be.isSyncPoint),
 				zap.Bool("selected", be.selected.Load()),
 				zap.Bool("writerDispatcherAdvanced", be.writerDispatcherAdvanced),
-				zap.Any("blocker", be.blockedDispatchers))
+				zap.Any("blocker", be.blockedDispatchers),
+				zap.Int64("mode", be.mode))
 		}
 		be.checkBlockedDispatchers()
 		return nil
 	}
-	be.lastResendTime = time.Now()
 	// we select a dispatcher as the writer, still waiting for that dispatcher advance its checkpoint ts
 	if !be.writerDispatcherAdvanced {
+		be.lastResendTime = now
 		// resend write action
 		stm := be.spanController.GetTaskByID(be.writerDispatcher)
 		if stm == nil || stm.GetNodeID() == "" {
@@ -614,7 +667,8 @@ func (be *BarrierEvent) resend(mode int64) []*messaging.TargetMessage {
 				zap.String("changefeed", be.cfID.Name()),
 				zap.String("dispatcher", be.writerDispatcher.String()),
 				zap.Uint64("commitTs", be.commitTs),
-				zap.Bool("isSyncPoint", be.isSyncPoint))
+				zap.Bool("isSyncPoint", be.isSyncPoint),
+				zap.Int64("mode", be.mode))
 
 			// choose a new one as the writer
 			// it only can happen then the split and merge happens to a table, and the writeDispatcher is not the table trigger event dispatcher
@@ -625,7 +679,8 @@ func (be *BarrierEvent) resend(mode int64) []*messaging.TargetMessage {
 					zap.Any("event", be),
 					zap.String("dispatcher", be.writerDispatcher.String()),
 					zap.Uint64("commitTs", be.commitTs),
-					zap.Bool("isSyncPoint", be.isSyncPoint))
+					zap.Bool("isSyncPoint", be.isSyncPoint),
+					zap.Int64("mode", be.mode))
 			}
 
 			tableID := be.blockedDispatchers.TableIDs[0]
@@ -638,7 +693,8 @@ func (be *BarrierEvent) resend(mode int64) []*messaging.TargetMessage {
 					zap.Any("event", be),
 					zap.String("dispatcher", be.writerDispatcher.String()),
 					zap.Uint64("commitTs", be.commitTs),
-					zap.Bool("isSyncPoint", be.isSyncPoint))
+					zap.Bool("isSyncPoint", be.isSyncPoint),
+					zap.Int64("mode", be.mode))
 			}
 
 			be.writerDispatcher = replications[0].ID
@@ -648,9 +704,29 @@ func (be *BarrierEvent) resend(mode int64) []*messaging.TargetMessage {
 		msgs = []*messaging.TargetMessage{be.newWriterActionMessage(stm.GetNodeID(), mode)}
 	} else {
 		// the writer dispatcher is advanced, resend pass action
+		if be.passActionSent && be.isFanoutPassAction() &&
+			// DB/All pass actions can fan out to many captures. If new statuses
+			// are still arriving shortly after the previous fanout pass, wait for
+			// that progress to settle before broadcasting another identical wave.
+			now.Sub(be.lastStatusReceivedTime) < fanoutPassResendQuietInterval {
+			return nil
+		}
+		be.passActionSent = true
+		be.lastResendTime = now
 		return be.sendPassAction(mode)
 	}
 	return msgs
+}
+
+func (be *BarrierEvent) isFanoutPassAction() bool {
+	if be.blockedDispatchers == nil {
+		return false
+	}
+	// Normal barriers target an explicit dispatcher list and are cheap to retry.
+	// Only DB/All barriers benefit from the extra quiet window because they
+	// broadcast the same pass action to many captures at once.
+	return be.blockedDispatchers.InfluenceType == heartbeatpb.InfluenceType_All ||
+		be.blockedDispatchers.InfluenceType == heartbeatpb.InfluenceType_DB
 }
 
 func (be *BarrierEvent) newWriterActionMessage(capture node.ID, mode int64) *messaging.TargetMessage {
@@ -713,9 +789,4 @@ func getAllNodes(nodeManager *watcher.NodeManager) []node.ID {
 		nodes = append(nodes, id)
 	}
 	return nodes
-}
-
-// for test
-func (be *BarrierEvent) setLastResendTime(time time.Time) {
-	be.lastResendTime = time
 }

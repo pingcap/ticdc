@@ -20,6 +20,7 @@ import (
 	"github.com/pingcap/log"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
+	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -101,10 +102,29 @@ func TestIgnoreDDLByCommitTs(t *testing.T) {
 	require.Len(t, tables, 2)
 	tableNames := make(map[string]struct{})
 	for _, tbl := range tables {
-		log.Info("found table", zap.String("name", tbl.SchemaTableName.TableName))
-		tableNames[tbl.SchemaTableName.TableName] = struct{}{}
+		log.Info("found table", zap.String("name", tbl.TableName))
+		tableNames[tbl.TableName] = struct{}{}
 	}
 	require.Contains(t, tableNames, "t1")
 	require.Contains(t, tableNames, "t3")
 	require.NotContains(t, tableNames, "t2")
+}
+
+func TestGetAllPhysicalTablesReturnsSnapshotLostByGCError(t *testing.T) {
+	dir := t.TempDir()
+	pstorage := newPersistentStorageForTest(dir, nil)
+	defer func() {
+		err := pstorage.close()
+		require.NoError(t, err)
+	}()
+
+	pstorage.mu.Lock()
+	pstorage.gcTs = 100
+	pstorage.mu.Unlock()
+
+	_, err := pstorage.getAllPhysicalTables(99, nil)
+	require.Error(t, err)
+	require.True(t, cerror.ErrSnapshotLostByGC.Equal(err))
+	require.Contains(t, err.Error(), "checkpoint-ts 99 is earlier than or equal to GC safepoint at 100")
+	require.NotContains(t, err.Error(), "%!d")
 }

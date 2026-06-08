@@ -20,6 +20,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/coordinator/changefeed"
+	"github.com/pingcap/ticdc/coordinator/drain"
 	"github.com/pingcap/ticdc/coordinator/operator"
 	coscheduler "github.com/pingcap/ticdc/coordinator/scheduler"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -86,6 +87,29 @@ type Controller struct {
 
 	changefeedChangeCh chan []*changefeedChange
 	apiLock            sync.RWMutex
+
+	drainController *drain.Controller
+
+	// drainSession is the in-memory drain state machine for v1 drain API.
+	// Only one drain session is allowed at a time.
+	drainSessionMu sync.Mutex
+	drainSession   *drainSession
+	// maxObservedDrainEpoch tracks the highest epoch reported by drain protocol
+	// participants, including empty clear targets. It keeps future drain
+	// fencing tokens compatible with old UnixNano-based epochs after rolling
+	// patch or owner failover.
+	maxObservedDrainEpoch uint64
+	// lastGeneratedDrainEpoch keeps epochs strictly increasing within one owner.
+	lastGeneratedDrainEpoch uint64
+	// drainClearState keeps a clearing tombstone after target membership removal
+	// closes the active drain session. It lets coordinator resend the clear
+	// request until all nodes confirm they have dropped the stale drain target
+	// for that epoch.
+	drainClearState *drainClearState
+	// drainCompleted keeps the last successfully completed drain target after
+	// membership removal closed the active session. It preserves v1 API polling
+	// semantics so late polls still observe success instead of capture-not-exist.
+	drainCompleted *drainCompletedState
 }
 
 type changefeedChange struct {
@@ -119,6 +143,8 @@ func NewController(
 	changefeedDB := changefeed.NewChangefeedDB(version)
 
 	oc := operator.NewOperatorController(selfNode, changefeedDB, backend, batchSize)
+	messageCenter := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
+	drainController := drain.NewController(messageCenter)
 	c := &Controller{
 		version:     version,
 		selfNode:    selfNode,
@@ -129,6 +155,14 @@ func NewController(
 				batchSize,
 				oc,
 				changefeedDB,
+				drainController,
+			),
+			scheduler.DrainScheduler: coscheduler.NewDrainScheduler(
+				selfNode.ID.String(),
+				batchSize,
+				oc,
+				changefeedDB,
+				drainController,
 			),
 			scheduler.BalanceScheduler: coscheduler.NewBalanceScheduler(
 				selfNode.ID.String(),
@@ -136,11 +170,12 @@ func NewController(
 				oc,
 				changefeedDB,
 				balanceInterval,
+				drainController,
 			),
 		}),
 		eventCh:            eventCh,
 		operatorController: oc,
-		messageCenter:      appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
+		messageCenter:      messageCenter,
 		changefeedDB:       changefeedDB,
 		nodeManager:        appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
 		taskScheduler:      threadpool.NewThreadPoolDefault(),
@@ -148,6 +183,7 @@ func NewController(
 		changefeedChangeCh: changefeedChangeCh,
 		pdClient:           pdClient,
 		pdClock:            appcontext.GetService[pdutil.Clock](appcontext.DefaultPDClock),
+		drainController:    drainController,
 	}
 	c.nodeChanged.changed = false
 
@@ -159,7 +195,7 @@ func NewController(
 	// detect the capture changes
 	c.nodeManager.RegisterNodeChangeHandler(
 		nodeChangeHandlerID,
-		func(allNodes map[node.ID]*node.Info) {
+		func(_ map[node.ID]*node.Info) {
 			c.nodeChanged.Lock()
 			defer c.nodeChanged.Unlock()
 			c.nodeChanged.changed = true
@@ -190,6 +226,7 @@ func (c *Controller) collectMetrics(ctx context.Context) error {
 	// changefeedDownstreamTypeCache is used to cleanup the previous downstream type
 	// label value when a changefeed's sink-uri is updated.
 	changefeedDownstreamTypeCache := make(map[common.ChangeFeedDisplayName]string)
+	errorMetricLabels := make(map[common.ChangeFeedID]changefeedErrorMetricLabels)
 	for {
 		select {
 		case <-ctx.Done():
@@ -202,6 +239,8 @@ func (c *Controller) collectMetrics(ctx context.Context) error {
 			metrics.ChangefeedStateGauge.WithLabelValues("Stopped").Set(float64(c.changefeedDB.GetStoppedSize()))
 
 			changefeedDownstreamTypes := make(map[common.ChangeFeedDisplayName]struct{})
+			currentChangefeeds := make(map[common.ChangeFeedID]struct{})
+
 			c.changefeedDB.Foreach(func(cf *changefeed.Changefeed) {
 				info := cf.GetInfo()
 				if info == nil {
@@ -232,6 +271,27 @@ func (c *Controller) collectMetrics(ctx context.Context) error {
 				lag := float64(pdPhysicalTime-phyCkpTs) / 1e3
 				metrics.ChangefeedCheckpointTsGauge.WithLabelValues(keyspace, name).Set(float64(phyCkpTs))
 				metrics.ChangefeedCheckpointTsLagGauge.WithLabelValues(keyspace, name).Set(lag)
+
+				// sync changefeed error metrics
+				currentChangefeeds[cf.ID] = struct{}{}
+				oldLabels, exists := errorMetricLabels[cf.ID]
+				newLabels, hasError := getChangefeedErrorMetricLabels(cf.GetInfo())
+				// If the error state has not changed, do nothing.
+				if exists && hasError && oldLabels == newLabels {
+					return
+				}
+				// If there was an old metric, delete it, as the state has changed.
+				if exists {
+					metrics.ChangefeedErrorInfoGauge.DeleteLabelValues(oldLabels.labelValues()...)
+				}
+				if hasError {
+					// An error exists (either new or changed). Set the new metric and update cache.
+					metrics.ChangefeedErrorInfoGauge.WithLabelValues(newLabels.labelValues()...).Set(1)
+					errorMetricLabels[cf.ID] = newLabels
+				} else {
+					// The error has disappeared, remove from cache.
+					delete(errorMetricLabels, cf.ID)
+				}
 			})
 
 			// Cleanup removed changefeeds, so dashboards won't show stale label values.
@@ -245,6 +305,13 @@ func (c *Controller) collectMetrics(ctx context.Context) error {
 					downstreamType,
 				)
 				delete(changefeedDownstreamTypeCache, displayName)
+			}
+			for changefeedID, labels := range errorMetricLabels {
+				if _, ok := currentChangefeeds[changefeedID]; ok {
+					continue
+				}
+				metrics.ChangefeedErrorInfoGauge.DeleteLabelValues(labels.labelValues()...)
+				delete(errorMetricLabels, changefeedID)
 			}
 		}
 	}
@@ -294,6 +361,12 @@ func (c *Controller) onPeriodTask() {
 	for _, req := range requests {
 		_ = c.messageCenter.SendCommand(req)
 	}
+
+	// Drain liveness transitions and drain-target broadcasts are retry-based
+	// control loops. Drive them from the periodic task so they keep progressing
+	// even when no fresh heartbeat or node-change event arrives.
+	c.advanceActiveDrainLiveness()
+	c.maybeBroadcastDispatcherDrainTarget(false)
 }
 
 func (c *Controller) onMessage(ctx context.Context, msg *messaging.TargetMessage) {
@@ -301,10 +374,22 @@ func (c *Controller) onMessage(ctx context.Context, msg *messaging.TargetMessage
 	case messaging.TypeCoordinatorBootstrapResponse:
 		c.onMaintainerBootstrapResponse(ctx, msg)
 	case messaging.TypeMaintainerHeartbeatRequest:
-		if c.bootstrapper.AllNodesReady() {
-			req := msg.Message[0].(*heartbeatpb.MaintainerHeartbeat)
-			c.handleMaintainerStatus(msg.From, req.Statuses)
+		if !c.shouldHandleMaintainerHeartbeat(msg.From) {
+			return
 		}
+		req := msg.Message[0].(*heartbeatpb.MaintainerHeartbeat)
+		c.handleMaintainerStatus(msg.From, req.Statuses)
+	case messaging.TypeNodeHeartbeatRequest:
+		req := msg.Message[0].(*heartbeatpb.NodeHeartbeat)
+		c.drainController.ObserveHeartbeat(msg.From, req)
+		if c.observeDispatcherDrainTargetHeartbeat(msg.From, req) {
+			c.maybeBroadcastDispatcherDrainTarget(true)
+		}
+		c.syncDrainSchedulingPolicy()
+	case messaging.TypeSetNodeLivenessResponse:
+		req := msg.Message[0].(*heartbeatpb.SetNodeLivenessResponse)
+		c.drainController.ObserveSetNodeLivenessResponse(msg.From, req)
+		c.syncDrainSchedulingPolicy()
 	case messaging.TypeLogCoordinatorResolvedTsResponse:
 		c.onLogCoordinatorReportResolvedTs(msg)
 	default:
@@ -312,6 +397,24 @@ func (c *Controller) onMessage(ctx context.Context, msg *messaging.TargetMessage
 			zap.String("type", msg.Type.String()),
 			zap.Any("message", msg.Message))
 	}
+}
+
+// shouldHandleMaintainerHeartbeat returns whether runtime maintainer status from
+// the given node is safe to apply to coordinator in-memory state.
+//
+// Initial coordinator bootstrap still requires a complete cluster snapshot
+// before any maintainer heartbeat is accepted. After that point, later node
+// joins must not block already bootstrapped peers from reporting progress, but
+// a node that has not finished coordinator bootstrap yet must still be ignored
+// so partial late-join state cannot overwrite runtime truth.
+func (c *Controller) shouldHandleMaintainerHeartbeat(from node.ID) bool {
+	if c.initialized == nil || !c.initialized.Load() {
+		return false
+	}
+	if c.bootstrapper == nil {
+		return true
+	}
+	return c.bootstrapper.NodeInitialized(from)
 }
 
 func (c *Controller) onLogCoordinatorReportResolvedTs(msg *messaging.TargetMessage) {
@@ -327,9 +430,14 @@ func (c *Controller) RequestResolvedTsFromLogCoordinator(ctx context.Context, ch
 	changefeedID := c.changefeedDB.GetChangefeedIDByName(changefeedDisplayName)
 	ids := c.nodeManager.GetAliveNodeIDs()
 	for _, id := range ids {
-		c.messageCenter.SendEvent(messaging.NewSingleTargetMessage(id, messaging.LogCoordinatorTopic, &heartbeatpb.LogCoordinatorResolvedTsRequest{
+		if err := c.messageCenter.SendEvent(messaging.NewSingleTargetMessage(id, messaging.LogCoordinatorTopic, &heartbeatpb.LogCoordinatorResolvedTsRequest{
 			ChangefeedID: changefeedID.ToPB(),
-		}))
+		})); err != nil {
+			log.Warn("failed to request resolved ts from log coordinator",
+				zap.Stringer("target", id),
+				zap.String("changefeed", changefeedID.DisplayName.String()),
+				zap.Error(err))
+		}
 	}
 
 	// wait for some time to get the resolved ts
@@ -370,6 +478,9 @@ func (c *Controller) onNodeChanged(ctx context.Context) {
 	for _, n := range removedNodes {
 		c.RemoveNode(n)
 	}
+	for _, n := range addedNodes {
+		c.clearCompletedDrainTarget(n)
+	}
 	for _, req := range requests {
 		err := c.messageCenter.SendCommand(req)
 		if err != nil {
@@ -377,15 +488,24 @@ func (c *Controller) onNodeChanged(ctx context.Context) {
 				zap.Any("targetNode", req.To), zap.Error(err))
 		}
 	}
+	c.maybeBroadcastDispatcherDrainTarget(true)
 	c.handleBootstrapResponses(ctx, responses)
 }
 
 func (c *Controller) onMaintainerBootstrapResponse(ctx context.Context, req *messaging.TargetMessage) {
 	response := req.Message[0].(*heartbeatpb.CoordinatorBootstrapResponse)
+	c.drainController.ObserveBootstrapResponse(req.From, response)
 	log.Info("controller received maintainer bootstrap response",
 		zap.Stringer("node", req.From),
 		zap.Int("maintainerCount", len(response.Statuses)))
 	responses := c.bootstrapper.HandleBootstrapResponse(req.From, response)
+	if c.bootstrapper.HasNode(req.From) {
+		if c.maybeAddDispatcherDrainSyncNode(req.From, response.GetDrainProtocolVersion()) {
+			c.maybeBroadcastDispatcherDrainTarget(true)
+		} else if c.observeStaleDispatcherDrainTargetSnapshot(req.From, drainTargetSnapshotFromBootstrap(response)) {
+			c.maybeBroadcastDispatcherDrainTarget(true)
+		}
+	}
 	c.handleBootstrapResponses(ctx, responses)
 }
 
@@ -417,7 +537,12 @@ func (c *Controller) handleBootstrapResponses(ctx context.Context, responses map
 			}
 		}
 	}
+	recoveredStaleDrainTarget := c.recoverStaleDispatcherDrainTargetFromBootstrap(responses)
 	c.finishBootstrap(ctx, runningCfs)
+	if recoveredStaleDrainTarget {
+		c.maybeBroadcastDispatcherDrainTarget(true)
+	}
+	c.bootstrapper.ClearBootstrapResponses()
 }
 
 // handleMaintainerStatus handle the status report from the maintainers
@@ -614,6 +739,7 @@ func (c *Controller) finishBootstrap(ctx context.Context, runningChangefeeds map
 	// start operator and scheduler
 	c.taskHandlerMutex.Lock()
 	defer c.taskHandlerMutex.Unlock()
+	c.syncDrainSchedulingPolicy()
 	c.taskHandlers = append(c.taskHandlers, c.scheduler.Start(c.taskScheduler)...)
 	operatorControllerHandle := c.taskScheduler.Submit(c.operatorController, time.Now())
 	c.taskHandlers = append(c.taskHandlers, operatorControllerHandle)
@@ -645,15 +771,22 @@ func (c *Controller) CreateChangefeed(ctx context.Context, info *config.ChangeFe
 	// remove changefeed is async action, so when we create the same changefeed just when we remove the changefeed
 	// the remove changefeed may not finished, so we need to wait a moment
 	count := 0
+	ticker := time.NewTicker(createChangefeedRetryInterval)
+	defer ticker.Stop()
 	for count < createChangefeedMaxRetry {
 		ok := c.operatorController.HasOperator(info.ChangefeedID.DisplayName)
 		if !ok {
 			break
 		}
-		log.Warn("changefeed is in scheduling, wait a moment", zap.String("changefeed", info.ChangefeedID.DisplayName.String()))
-		time.Sleep(createChangefeedRetryInterval)
-		count += 1
+		select {
+		case <-ctx.Done():
+			return errors.Trace(ctx.Err())
+		case <-ticker.C:
+			log.Warn("changefeed is in scheduling, wait a moment", zap.String("changefeed", info.ChangefeedID.DisplayName.String()))
+			count++
+		}
 	}
+
 	if count >= createChangefeedMaxRetry {
 		return errors.New("changefeed is still in scheduling, please try again later")
 	}
@@ -685,14 +818,16 @@ func (c *Controller) RemoveChangefeed(ctx context.Context, id common.ChangeFeedI
 	c.apiLock.Unlock()
 
 	count := 0
-	for {
-		if op.IsFinished() {
-			break
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+	for !op.IsFinished() {
+		select {
+		case <-ctx.Done():
+			return 0, errors.Trace(ctx.Err())
+		case <-ticker.C:
+			count++
+			log.Info("wait for stop changefeed operator finished", zap.Int("count", count), zap.Any("id", id))
 		}
-
-		time.Sleep(1 * time.Second)
-		count += 1
-		log.Info("wait for stop changefeed operator finished", zap.Int("count", count), zap.Any("id", id))
 	}
 	return cf.GetStatus().CheckpointTs, nil
 }
@@ -721,14 +856,16 @@ func (c *Controller) PauseChangefeed(ctx context.Context, id common.ChangeFeedID
 	c.apiLock.Unlock()
 
 	count := 0
-	for {
-		if op.IsFinished() {
-			break
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+	for !op.IsFinished() {
+		select {
+		case <-ctx.Done():
+			return errors.Trace(ctx.Err())
+		case <-ticker.C:
+			count++
+			log.Info("wait for stop changefeed operator finished", zap.Int("count", count), zap.Any("id", id))
 		}
-
-		time.Sleep(1 * time.Second)
-		count += 1
-		log.Info("wait for stop changefeed operator finished", zap.Int("count", count), zap.Any("id", id))
 	}
 	return nil
 }
@@ -851,7 +988,31 @@ func (c *Controller) getChangefeed(id common.ChangeFeedID) *changefeed.Changefee
 
 // RemoveNode is called when a node is removed
 func (c *Controller) RemoveNode(id node.ID) {
+	target, epoch, hasActiveDrain := c.getDispatcherDrainTarget()
+	completionObserved := false
+	if hasActiveDrain && target == id {
+		observation := c.observeDrainNode(id, epoch)
+		completionObserved = isBestEffortDrainComplete(
+			observation.nodeState,
+			observation.drainingObserved,
+			observation.stoppingObserved,
+			observation.remaining,
+		)
+	}
+
 	c.operatorController.OnNodeRemoved(id)
+	// Membership removal is the only authoritative signal that this node will
+	// never acknowledge the current drain epoch again. Clear every drain-side
+	// in-memory reference immediately to avoid leaking a stuck drain session.
+	if hasActiveDrain && target == id {
+		c.clearDispatcherDrainTarget(id, epoch)
+		if completionObserved {
+			c.recordCompletedDrainTarget(id)
+		}
+	}
+	c.observeDispatcherDrainTargetClearNodeRemoved(id)
+	c.drainController.RemoveNode(id)
+	c.syncDrainSchedulingPolicy()
 }
 
 func (c *Controller) submitPeriodTask() {

@@ -46,8 +46,8 @@ var (
 // in conflict detection.
 type Node struct {
 	// Immutable fields.
-	id                  int64
-	sortedDedupKeysHash []uint64
+	id             int64
+	sortedKeysHash []uint64
 
 	// Called when all dependencies are resolved.
 	TrySendToTxnCache func(id cacheID) bool
@@ -251,27 +251,6 @@ func (n *Node) getOrCreateDependers() *btree.BTreeG[*Node] {
 		}, btreeFreeList)
 	}
 	return n.dependers
-}
-
-// dependerCount returns the number of dependers the node has.
-// NOTE: dependerCount is used for unit tests only.
-func (n *Node) dependerCount() int {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
-	if n.dependers == nil {
-		return 0
-	}
-	return n.dependers.Len()
-}
-
-// assignedWorkerID returns the cache ID that the node has been assigned to.
-// NOTE: assignedWorkerID is used for unit tests only.
-func (n *Node) assignedWorkerID() cacheID {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-
-	return n.assignedTo
 }
 
 func genNextNodeID() int64 {

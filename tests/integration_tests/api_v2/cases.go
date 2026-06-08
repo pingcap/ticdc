@@ -416,7 +416,7 @@ func testSetLogLevel(ctx context.Context, client *CDCRESTClient) error {
 }
 
 func assertEmptyResponseBody(resp *Result) {
-	if "{}" != string(resp.body) {
+	if string(resp.body) != "{}" {
 		log.Panic("failed call api", zap.String("body", string(resp.body)))
 	}
 }

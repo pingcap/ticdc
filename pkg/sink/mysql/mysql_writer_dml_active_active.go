@@ -30,9 +30,10 @@ import (
 // ===== Normal SQL layer =====
 
 // generateActiveActiveNormalSQLs emits one UPSERT per row without any cross-event batching.
-func (w *Writer) generateActiveActiveNormalSQLs(events []*commonEvent.DMLEvent) ([]string, [][]interface{}) {
+func (w *Writer) generateActiveActiveNormalSQLs(events []*commonEvent.DMLEvent) ([]string, [][]interface{}, []common.RowType) {
 	queries := make([]string, 0)
 	argsList := make([][]interface{}, 0)
+	rowTypes := make([]common.RowType, 0)
 	for _, event := range events {
 		if event.Len() == 0 {
 			continue
@@ -50,53 +51,59 @@ func (w *Writer) generateActiveActiveNormalSQLs(events []*commonEvent.DMLEvent) 
 			if originTsChecker.shouldDropRow(&row, event.CommitTs) {
 				continue
 			}
-			sql, args := buildActiveActiveUpsertSQL(
+			sql, args, rowType := buildActiveActiveUpsertSQL(
 				event.TableInfo,
 				[]*commonEvent.RowChange{&row},
 				[]uint64{event.CommitTs},
 			)
 			queries = append(queries, sql)
 			argsList = append(argsList, args)
+			rowTypes = append(rowTypes, rowType)
 		}
 	}
-	return queries, argsList
+	return queries, argsList, rowTypes
 }
 
 // ===== Per-event batch layer =====
 
 // generateActiveActiveBatchSQLForPerEvent falls back to per-event batching when merging fails.
-func (w *Writer) generateActiveActiveBatchSQLForPerEvent(events []*commonEvent.DMLEvent) ([]string, [][]interface{}) {
+func (w *Writer) generateActiveActiveBatchSQLForPerEvent(events []*commonEvent.DMLEvent) ([]string, [][]interface{}, []common.RowType) {
 	var (
-		queries []string
-		args    [][]interface{}
+		queriesList  []string
+		argsList     [][]interface{}
+		rowTypesList []common.RowType
 	)
 	for _, event := range events {
 		if event.Len() == 0 {
 			continue
 		}
-		sqls, vals := w.generateActiveActiveSQLForSingleEvent(event)
-		queries = append(queries, sqls...)
-		args = append(args, vals...)
+		sqls, vals, rowTypes := w.generateActiveActiveSQLForSingleEvent(event)
+		queriesList = append(queriesList, sqls...)
+		argsList = append(argsList, vals...)
+		rowTypesList = append(rowTypesList, rowTypes...)
 	}
-	return queries, args
+	return queriesList, argsList, rowTypesList
 }
 
 // generateActiveActiveSQLForSingleEvent merges rows from a single event into one active-active UPSERT.
-func (w *Writer) generateActiveActiveSQLForSingleEvent(event *commonEvent.DMLEvent) ([]string, [][]interface{}) {
+func (w *Writer) generateActiveActiveSQLForSingleEvent(event *commonEvent.DMLEvent) ([]string, [][]interface{}, []common.RowType) {
 	rows, commitTs := w.collectActiveActiveRows(event)
 	if len(rows) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
-	sql, args := buildActiveActiveUpsertSQL(event.TableInfo, rows, commitTs)
-	return []string{sql}, [][]interface{}{args}
+	sql, args, rowType := buildActiveActiveUpsertSQL(event.TableInfo, rows, commitTs)
+	if sql == "" {
+		return nil, nil, nil
+	}
+	return []string{sql}, [][]interface{}{args}, []common.RowType{rowType}
 }
 
 // ===== Cross-event batch layer =====
 
 // generateActiveActiveBatchSQL reuses the unsafe batching logic to build a single LWW UPSERT.
-func (w *Writer) generateActiveActiveBatchSQL(events []*commonEvent.DMLEvent) ([]string, [][]interface{}) {
+func (w *Writer) generateActiveActiveBatchSQL(events []*commonEvent.DMLEvent) ([]string, [][]interface{}, []common.RowType) {
 	if len(events) == 0 {
-		return []string{}, [][]interface{}{}
+		return []string{}, [][]interface{}{}, []common.RowType{}
 	}
 
 	if len(events) == 1 {
@@ -152,7 +159,7 @@ func (w *Writer) batchSingleTxnActiveRows(
 	commitTs []uint64,
 	tableInfo *common.TableInfo,
 	tableID int64,
-) ([]string, [][]interface{}) {
+) ([]string, [][]interface{}, []common.RowType) {
 	if len(rows) != len(commitTs) {
 		log.Panic("mismatched rows and commitTs for active active batch",
 			zap.Int("rows", len(rows)), zap.Int("commitTs", len(commitTs)))
@@ -171,10 +178,10 @@ func (w *Writer) batchSingleTxnActiveRows(
 		filteredCommitTs = append(filteredCommitTs, commitTs[i])
 	}
 	if len(filteredRows) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
-	sql, args := buildActiveActiveUpsertSQL(tableInfo, filteredRows, filteredCommitTs)
-	return []string{sql}, [][]interface{}{args}
+	sql, args, rowType := buildActiveActiveUpsertSQL(tableInfo, filteredRows, filteredCommitTs)
+	return []string{sql}, [][]interface{}{args}, []common.RowType{rowType}
 }
 
 // originTsChecker filters out rows whose upstream payload already contains a non-NULL _tidb_origin_ts.

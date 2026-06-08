@@ -81,7 +81,6 @@ func (h *OpenAPIV2) DeleteServiceGcSafePoint(c *gin.Context) {
 		return
 	}
 	pdClient := h.server.GetPdClient()
-	defer pdClient.Close()
 
 	keyspaceMeta := middleware.GetKeyspaceFromContext(c)
 

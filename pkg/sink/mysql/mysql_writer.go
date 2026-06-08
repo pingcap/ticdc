@@ -21,11 +21,10 @@ import (
 	"time"
 
 	lru "github.com/hashicorp/golang-lru"
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"go.uber.org/zap"
 )
@@ -168,6 +167,7 @@ func (w *Writer) FlushDDLEvent(event *commonEvent.DDLEvent) error {
 
 func (w *Writer) FlushSyncPointEvent(event *commonEvent.SyncPointEvent) error {
 	if w.cfg.DryRun {
+		log.Info("dry-run mode, skip send syncpoint event", zap.Stringer("changefeedID", w.ChangefeedID), zap.Uint64("commitTs", event.GetCommitTs()))
 		return nil
 	}
 
@@ -259,7 +259,7 @@ func (w *Writer) checkIsDuplicateEntryError(err error) bool {
 	if err == nil {
 		return false
 	}
-	if errors.Cause(err) == cerror.ErrMySQLDuplicateEntry ||
+	if errors.Is(errors.Cause(err), errors.ErrMySQLDuplicateEntry) ||
 		strings.Contains(err.Error(), "Duplicate entry") {
 		if !w.isInErrorCausedSafeMode {
 			w.isInErrorCausedSafeMode = true

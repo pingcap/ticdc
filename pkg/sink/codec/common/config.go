@@ -182,7 +182,7 @@ type urlConfig struct {
 	// can be `json` and `avro`, default to `json`.
 	EncodingFormatType *string `form:"encoding-format"`
 
-	// If both `EnableTiDBExtension` and `OutputRowKey` is set to true, row key will be outputed in the tidb-extension field.
+	// If both `EnableTiDBExtension` and `OutputRowKey` is set to true, row key will be outputted in the tidb-extension field.
 	// This is only used for the **canal-json** protocol.
 	OutputRowKey *bool `form:"output-row-key"`
 }
@@ -353,7 +353,7 @@ func (c *Config) WithChangefeedID(id common.ChangeFeedID) *Config {
 // Validate the Config
 func (c *Config) Validate() error {
 	if c.EnableTiDBExtension &&
-		!(c.Protocol == config.ProtocolCanalJSON || c.Protocol == config.ProtocolAvro || c.Protocol == config.ProtocolDebezium) {
+		(c.Protocol != config.ProtocolCanalJSON && c.Protocol != config.ProtocolAvro && c.Protocol != config.ProtocolDebezium) {
 		log.Warn("ignore invalid config, enable-tidb-extension"+
 			"only supports canal-json/avro/debezium protocol",
 			zap.Bool("enableTidbExtension", c.EnableTiDBExtension),
@@ -398,8 +398,8 @@ func (c *Config) Validate() error {
 		}
 
 		if c.EnableRowChecksum {
-			if !(c.EnableTiDBExtension && c.AvroDecimalHandlingMode == DecimalHandlingModeString &&
-				c.AvroBigintUnsignedHandlingMode == BigintUnsignedHandlingModeString) {
+			if !c.EnableTiDBExtension || c.AvroDecimalHandlingMode != DecimalHandlingModeString ||
+				c.AvroBigintUnsignedHandlingMode != BigintUnsignedHandlingModeString {
 				return errors.ErrCodecInvalidConfig.GenWithStack(
 					`Avro protocol with row level checksum,
 					should set "%s" to "%s", and set "%s" to "%s" and "%s" to "%s"`,
