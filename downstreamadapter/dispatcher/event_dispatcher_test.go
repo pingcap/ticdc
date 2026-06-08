@@ -324,7 +324,7 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	// receive the action info
 	dispatcherStatus = &heartbeatpb.DispatcherStatus{
 		Action: &heartbeatpb.DispatcherAction{
-			Action:      heartbeatpb.Action(2),
+			Action:      heartbeatpb.Action(100),
 			CommitTs:    ddlEvent3.FinishedTs,
 			IsSyncPoint: false,
 		},

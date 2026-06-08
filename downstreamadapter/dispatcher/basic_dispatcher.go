@@ -319,13 +319,6 @@ func (d *BasicDispatcher) AddBlockEventToSink(event commonEvent.BlockEvent) erro
 			return nil
 		}
 	}
-	// Keep block-event write order with prior DML. For storage sink this may wait
-	// until prior DML are enqueued/flushed to the sink pipeline; for non-storage
-	// sinks it is usually a no-op.
-	if err := d.sink.FlushDMLBeforeBlock(event); err != nil {
-		return err
-	}
-
 	d.tableProgress.Add(event)
 	return d.sink.WriteBlockEvent(event)
 }
@@ -429,11 +422,11 @@ func (d *BasicDispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeC
 // handleEvents processes one batch for one dispatcher.
 // the next batch of events can only be handled after the current batch is enqueued or flushed.
 // A batch may mix DML and resolved-ts events; Block events are expected to be handled one by one.
-//   - Block events, such as DDL / Syncpoint, is sent to the sink synchronously,
+//   - Block events, such as DDL / Syncpoint, are sent to the sink synchronously,
 //     the dispatcher is blocked until the block event is flushed.
-//   - DML events is sent to the sink asynchronously.
-//   - Storage sink, the dispatcher wake up after all DML events is guaranteed enqueued.
-//   - Non-storage sink, the dispatche wake up after all DML events is guaranteed flushed.
+//   - DML events are sent to the sink asynchronously.
+//   - For storage sinks, the dispatcher wakes up after all DML events are enqueued.
+//   - For non-storage sinks, the dispatcher wakes up after all DML events are flushed.
 //
 // Return true if should block the dispatcher.
 func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeCallback func()) bool {
@@ -610,7 +603,7 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 // For block actions (write/pass), execution may involve downstream IO.
 // To avoid blocking the dispatcher status dynamic stream handler, we execute the action asynchronously
 // and return await=true.
-// The status path will be waked up after the action finishes.
+// The status path will be woken up after the action finishes.
 func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.DispatcherStatus) (await bool) {
 	log.Debug("dispatcher handle dispatcher status",
 		zap.Any("dispatcherStatus", dispatcherStatus),

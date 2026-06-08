@@ -346,8 +346,10 @@ func (d *DispatcherStatusWithID) GetDispatcherID() common.DispatcherID {
 // If so, we can cancel the resend task.
 // If we get a dispatcher action, we need to check whether the action is for the current pending ddl event.
 // If so, we can deal the ddl event based on the action.
-// 1. If the action is a write, flush prior DML and write the block event to sink(async).
-// 2. If the action is a pass, flush prior DML and pass the event in tableProgress(async).
+// 1. If the action is a write, write the block event to sink(async).
+// 2. If the action is a pass, pass the event in tableProgress(async).
+// Prior DML has already been flushed before the dispatcher reports the block
+// event as waiting.
 type DispatcherStatusHandler struct{}
 
 func (h *DispatcherStatusHandler) Path(event DispatcherStatusWithID) common.DispatcherID {
@@ -381,8 +383,7 @@ func (h *DispatcherStatusHandler) GetTimestamp(event DispatcherStatusWithID) dyn
 }
 
 func (h *DispatcherStatusHandler) GetType(event DispatcherStatusWithID) dynstream.EventType {
-	// DispatcherStatus may trigger downstream IO when handling action write/pass
-	// because we flush prior DML before completing the block action.
+	// DispatcherStatus may trigger downstream IO when handling action write/pass.
 	// Make it non-batchable to ensure we can safely return await=true for a single event.
 	return dynstream.EventType{DataGroup: 0, Property: dynstream.NonBatchable}
 }
