@@ -79,8 +79,11 @@ func ensureChangefeedStartTsSafetyNextGen(ctx context.Context, pdCli pd.Client, 
 	if err != nil {
 		return errors.ErrStartTsBeforeGC.GenWithStackByArgs(startTs, minServiceGCTs)
 	}
-	if startTs > 0 && startTs < minServiceGCTs+1 {
-		return errors.ErrStartTsBeforeGC.GenWithStackByArgs(startTs, minServiceGCTs)
+	// When UseLegacySafePointInNextGen is true, the logic should follow the classic architecture
+	if kerneltype.UseLegacySafePointInNextGen {
+		if startTs > 0 && startTs < minServiceGCTs+1 {
+			return errors.ErrStartTsBeforeGC.GenWithStackByArgs(startTs, minServiceGCTs)
+		}
 	}
 	return nil
 }
