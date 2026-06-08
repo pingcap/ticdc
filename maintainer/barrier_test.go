@@ -538,7 +538,7 @@ func TestBarrierPrechecksRouteEventWhenDDLDispatcherBlocks(t *testing.T) {
 	require.Empty(t, resp.DispatcherStatuses)
 }
 
-func TestBarrierPrechecksRecoveredRouteEventBeforeResend(t *testing.T) {
+func TestBarrierAppliesRecoveredRouteEventBeforeActionResend(t *testing.T) {
 	testutil.SetUpTestServices(t)
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)

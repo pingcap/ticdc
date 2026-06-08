@@ -260,7 +260,7 @@ func (b *Barrier) Resend() []*messaging.TargetMessage {
 		eventList = append(eventList, barrierEvent)
 		return true
 	})
-	for _, barrierEvent := range b.eventsReadyForResend(eventList) {
+	for _, barrierEvent := range b.eventsReadyForActionResend(eventList) {
 		// todo: we can limit the number of messages to send in one round here
 		msgs = append(msgs, barrierEvent.resend(b.mode)...)
 	}
@@ -274,9 +274,17 @@ func (b *Barrier) Resend() []*messaging.TargetMessage {
 	return msgs
 }
 
-// eventsReadyForResend applies route admission gates when enabled and returns
-// the BarrierEvents whose resend messages can be emitted in this round.
-func (b *Barrier) eventsReadyForResend(eventList []*BarrierEvent) []*BarrierEvent {
+// eventsReadyForActionResend returns the BarrierEvents whose resend path may
+// emit WRITE/PASS actions in this round.
+//
+// A recovered BarrierEvent can be selected from dispatcher BlockState while
+// routeAdmin is new in this maintainer process. Before resending WRITE/PASS
+// actions for those selected events, replay route admission in commit-ts order
+// so the in-memory route registry matches DDLs that already reached WRITING/DONE.
+//
+// Unselected events are allowed through: BarrierEvent.resend does not send
+// actions for them, and only checks whether blocked dispatchers have reached the DDL.
+func (b *Barrier) eventsReadyForActionResend(eventList []*BarrierEvent) []*BarrierEvent {
 	if b.routeAdmin == nil {
 		return eventList
 	}
