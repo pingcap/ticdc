@@ -115,7 +115,7 @@ func TestMoveMaintainerOperator_CheckRequiresDestBootstrapDone(t *testing.T) {
 	require.Nil(t, op.Schedule())
 }
 
-func TestMoveMaintainerOperator_CheckRejectsCompatDestEpochBeforeAddSchedule(t *testing.T) {
+func TestMoveMaintainerOperator_CheckRejectsCompatDestEpochBeforeAddMessageSent(t *testing.T) {
 	changefeedDB := changefeed.NewChangefeedDB(1216)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
@@ -140,7 +140,12 @@ func TestMoveMaintainerOperator_CheckRejectsCompatDestEpochBeforeAddSchedule(t *
 	op.Check("n2", status)
 	require.False(t, op.IsFinished())
 
-	require.NotNil(t, op.Schedule())
+	msg := op.Schedule()
+	require.NotNil(t, msg)
+	op.Check("n2", status)
+	require.False(t, op.IsFinished())
+
+	op.onMessageSent(msg)
 	op.Check("n2", status)
 	require.True(t, op.IsFinished())
 }

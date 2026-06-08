@@ -46,9 +46,9 @@ type AddMaintainerOperator struct {
 	// canceled records why the operator stops scheduling.
 	// It must be atomic because Schedule can run concurrently with OnNodeRemove/OnTaskRemoved.
 	canceled atomic.Int32
-	// addScheduled becomes true after the fenced add request has been built at least once.
-	addScheduled atomic.Bool
-	db           *changefeed.ChangefeedDB
+	// addMessageSent becomes true only after the fenced add request is accepted by MessageCenter.
+	addMessageSent atomic.Bool
+	db             *changefeed.ChangefeedDB
 }
 
 // NewAddMaintainerOperator creates an AddMaintainerOperator to schedule the given changefeed to dest.
@@ -88,14 +88,16 @@ func (m *AddMaintainerOperator) Schedule() *messaging.TargetMessage {
 	if m.finished.Load() || m.canceled.Load() != None {
 		return nil
 	}
-	msg := m.cf.NewAddMaintainerMessage(m.dest)
-	m.addScheduled.Store(true)
-	return msg
+	return m.cf.NewAddMaintainerMessage(m.dest)
+}
+
+func (m *AddMaintainerOperator) onMessageSent(_ *messaging.TargetMessage) {
+	m.addMessageSent.Store(true)
 }
 
 func (m *AddMaintainerOperator) isStatusEpochAllowed(statusEpoch uint64) bool {
 	expectedEpoch := m.cf.GetInfo().Epoch
-	if statusEpoch == 0 && expectedEpoch != 0 && !m.addScheduled.Load() {
+	if statusEpoch == 0 && expectedEpoch != 0 && !m.addMessageSent.Load() {
 		return false
 	}
 	return isMaintainerStatusEpochAllowed(statusEpoch, expectedEpoch)

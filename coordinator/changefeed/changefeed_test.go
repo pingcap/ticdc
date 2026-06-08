@@ -14,6 +14,7 @@
 package changefeed
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -162,6 +163,10 @@ func TestChangefeed_NewAddMaintainerMessage(t *testing.T) {
 	require.Equal(t, messaging.MaintainerManagerTopic, msg.Topic)
 	req := msg.Message[0].(*heartbeatpb.AddMaintainerRequest)
 	require.Equal(t, info.Epoch, req.MaintainerEpoch)
+	configInfo := &config.ChangeFeedInfo{}
+	require.NoError(t, json.Unmarshal(req.Config, configInfo))
+	require.Equal(t, info.Epoch, configInfo.Epoch)
+	require.Equal(t, info.SinkURI, configInfo.SinkURI)
 }
 
 func TestChangefeed_NewCheckpointTsMessage(t *testing.T) {

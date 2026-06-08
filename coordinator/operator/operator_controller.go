@@ -98,10 +98,18 @@ func (oc *Controller) Execute() time.Time {
 		oc.mu.RUnlock()
 
 		if msg != nil {
-			_ = oc.messageCenter.SendCommand(msg)
-			log.Info("send command to maintainer",
-				zap.String("role", oc.role),
-				zap.String("operator", r.String()))
+			err := oc.messageCenter.SendCommand(msg)
+			if err != nil {
+				log.Warn("send command to maintainer failed",
+					zap.String("role", oc.role),
+					zap.String("operator", r.String()),
+					zap.Error(err))
+			} else {
+				notifyMessageSent(r, msg)
+				log.Info("send command to maintainer",
+					zap.String("role", oc.role),
+					zap.String("operator", r.String()))
+			}
 		}
 		executedItem++
 		if executedItem >= oc.batchSize {
@@ -230,6 +238,21 @@ func requiresNewMaintainerOwnership(
 	default:
 		return false
 	}
+}
+
+type messageSentObserver interface {
+	onMessageSent(*messaging.TargetMessage)
+}
+
+func notifyMessageSent(
+	op operator.Operator[common.ChangeFeedID, *heartbeatpb.MaintainerStatus],
+	msg *messaging.TargetMessage,
+) {
+	observer, ok := op.(messageSentObserver)
+	if !ok {
+		return
+	}
+	observer.onMessageSent(msg)
 }
 
 func isMaintainerStatusEpochAllowed(statusEpoch, expectedEpoch uint64) bool {

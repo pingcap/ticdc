@@ -177,7 +177,7 @@ func newTestDispatcherOrchestrator() *DispatcherOrchestrator {
 	// needs shard state and the dispatcher manager map but not a message center.
 	orchestrator := &DispatcherOrchestrator{
 		dispatcherManagers:     make(map[common.ChangeFeedID]*dispatchermanager.DispatcherManager),
-		closedMaintainerEpochs: make(map[common.ChangeFeedID]closedMaintainerEpoch),
+		closedMaintainerEpochs: make(map[common.ChangeFeedID]uint64),
 		shards:                 make([]*orchestratorShard, dispatcherOrchestratorShardCount),
 	}
 	for i := range orchestrator.shards {
@@ -625,7 +625,7 @@ func TestHandleCloseRequestAcksStaleMaintainerEpoch(t *testing.T) {
 	orchestrator := &DispatcherOrchestrator{
 		mc:                     mc,
 		dispatcherManagers:     map[common.ChangeFeedID]*dispatchermanager.DispatcherManager{cfID: manager},
-		closedMaintainerEpochs: make(map[common.ChangeFeedID]closedMaintainerEpoch),
+		closedMaintainerEpochs: make(map[common.ChangeFeedID]uint64),
 	}
 	err = orchestrator.handleCloseRequest(node.ID("old-maintainer"), &heartbeatpb.MaintainerCloseRequest{
 		ChangefeedID:    cfID.ToPB(),
@@ -649,8 +649,8 @@ func TestHandleBootstrapRequestRejectsClosedOlderMaintainerEpoch(t *testing.T) {
 	orchestrator := &DispatcherOrchestrator{
 		mc:                 messaging.NewMockMessageCenter(),
 		dispatcherManagers: make(map[common.ChangeFeedID]*dispatchermanager.DispatcherManager),
-		closedMaintainerEpochs: map[common.ChangeFeedID]closedMaintainerEpoch{
-			cfID: {epoch: 2},
+		closedMaintainerEpochs: map[common.ChangeFeedID]uint64{
+			cfID: 2,
 		},
 	}
 	err = orchestrator.handleBootstrapRequest(node.ID("old-maintainer"), &heartbeatpb.MaintainerBootstrapRequest{
@@ -668,7 +668,7 @@ func TestHandleCloseRequestDoesNotRecordEpochZeroTombstoneForCompatClose(t *test
 	orchestrator := &DispatcherOrchestrator{
 		mc:                     messaging.NewMockMessageCenter(),
 		dispatcherManagers:     make(map[common.ChangeFeedID]*dispatchermanager.DispatcherManager),
-		closedMaintainerEpochs: make(map[common.ChangeFeedID]closedMaintainerEpoch),
+		closedMaintainerEpochs: make(map[common.ChangeFeedID]uint64),
 	}
 
 	err := orchestrator.handleCloseRequest(node.ID("compat-maintainer"), &heartbeatpb.MaintainerCloseRequest{
@@ -689,7 +689,7 @@ func TestHandleCloseRequestRecordsEpochZeroTombstoneForRemovedChangefeed(t *test
 	orchestrator := &DispatcherOrchestrator{
 		mc:                     messaging.NewMockMessageCenter(),
 		dispatcherManagers:     make(map[common.ChangeFeedID]*dispatchermanager.DispatcherManager),
-		closedMaintainerEpochs: make(map[common.ChangeFeedID]closedMaintainerEpoch),
+		closedMaintainerEpochs: make(map[common.ChangeFeedID]uint64),
 	}
 
 	err = orchestrator.handleCloseRequest(node.ID("compat-maintainer"), &heartbeatpb.MaintainerCloseRequest{
@@ -700,7 +700,7 @@ func TestHandleCloseRequestRecordsEpochZeroTombstoneForRemovedChangefeed(t *test
 	require.NoError(t, err)
 	closedEpoch, ok := orchestrator.closedMaintainerEpochs[cfID]
 	require.True(t, ok)
-	require.Zero(t, closedEpoch.epoch)
+	require.Zero(t, closedEpoch)
 
 	err = orchestrator.handleBootstrapRequest(node.ID("compat-maintainer"), &heartbeatpb.MaintainerBootstrapRequest{
 		ChangefeedID:    cfID.ToPB(),

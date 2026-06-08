@@ -27,6 +27,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	scheduleroperator "github.com/pingcap/ticdc/pkg/scheduler/operator"
@@ -44,6 +45,15 @@ type operatorEpochPDClient struct {
 
 func (m *operatorEpochPDClient) GetTS(ctx context.Context) (int64, int64, error) {
 	return m.physical, m.logical, nil
+}
+
+type sendCommandErrorMessageCenter struct {
+	messaging.MessageCenter
+	err error
+}
+
+func (m *sendCommandErrorMessageCenter) SendCommand(_ *messaging.TargetMessage) error {
+	return m.err
 }
 
 func newOperatorControllerForTest(
@@ -175,6 +185,43 @@ func TestController_AddOperator(t *testing.T) {
 
 	require.True(t, oc.HasOperator(cfID.DisplayName))
 	require.False(t, oc.HasOperator(cf2ID.DisplayName))
+}
+
+func TestControllerExecuteMarksAddMessageSentOnlyAfterSuccessfulSend(t *testing.T) {
+	changefeedDB := changefeed.NewChangefeedDB(1216)
+	ctrl := gomock.NewController(t)
+	backend := mock_changefeed.NewMockBackend(ctrl)
+	oc, _, nodeManager := newOperatorControllerForTest(t, changefeedDB, backend, nil)
+	target := node.NewInfo("localhost:8301", "")
+	nodeManager.GetAliveNodes()[target.ID] = target
+
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		Config:       config.GetDefaultReplicaConfig(),
+		SinkURI:      "mysql://127.0.0.1:3306",
+		Epoch:        2,
+	}, 1, true)
+	changefeedDB.AddAbsentChangefeed(cf)
+
+	addOp := NewAddMaintainerOperator(changefeedDB, cf, target.ID)
+	require.True(t, oc.AddOperator(addOp))
+
+	status := &heartbeatpb.MaintainerStatus{
+		State:           heartbeatpb.ComponentState_Working,
+		BootstrapDone:   true,
+		MaintainerEpoch: 0,
+	}
+	oc.messageCenter = &sendCommandErrorMessageCenter{err: errors.NewAppErrorS(errors.ErrorTypeMessageCongested)}
+	oc.Execute()
+	addOp.Check(target.ID, status)
+	require.False(t, addOp.IsFinished())
+
+	oc.operators[cfID].NotifyAt = time.Now().Add(-time.Second)
+	oc.messageCenter = messaging.NewMockMessageCenter()
+	oc.Execute()
+	addOp.Check(target.ID, status)
+	require.True(t, addOp.IsFinished())
 }
 
 func TestController_HasOperatorInvolvingNode(t *testing.T) {

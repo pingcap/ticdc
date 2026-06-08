@@ -44,7 +44,7 @@ type DispatcherOrchestrator struct {
 	// closedMaintainerEpochs remembers the highest epoch that closed a manager.
 	// Map presence is meaningful because epoch 0 is a valid compatibility epoch.
 	// The tombstone prevents a delayed old bootstrap from recreating the manager after close.
-	closedMaintainerEpochs map[common.ChangeFeedID]closedMaintainerEpoch
+	closedMaintainerEpochs map[common.ChangeFeedID]uint64
 
 	// shards partition changefeed control messages by changefeed ID. Each shard keeps
 	// the existing FIFO queue semantics, while different shards can process messages
@@ -55,10 +55,6 @@ type DispatcherOrchestrator struct {
 	closed atomic.Bool
 	// msgGuardWaitGroup waits for in-flight RecvMaintainerRequest handlers before shutdown.
 	msgGuardWaitGroup util.GuardedWaitGroup
-}
-
-type closedMaintainerEpoch struct {
-	epoch uint64
 }
 
 const (
@@ -72,7 +68,7 @@ func New() *DispatcherOrchestrator {
 	m := &DispatcherOrchestrator{
 		mc:                     appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
 		dispatcherManagers:     make(map[common.ChangeFeedID]*dispatchermanager.DispatcherManager),
-		closedMaintainerEpochs: make(map[common.ChangeFeedID]closedMaintainerEpoch),
+		closedMaintainerEpochs: make(map[common.ChangeFeedID]uint64),
 		shards:                 make([]*orchestratorShard, dispatcherOrchestratorShardCount),
 	}
 	for i := range m.shards {
@@ -192,12 +188,12 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 
 	var err error
 	if !exists {
-		if closed && (maintainerEpoch == 0 || maintainerEpoch <= closedEpoch.epoch) {
+		if closed && (maintainerEpoch == 0 || maintainerEpoch <= closedEpoch) {
 			log.Warn("drop stale maintainer bootstrap request after close",
 				zap.String("changefeed", cfId.Name()),
 				zap.String("from", from.String()),
 				zap.Uint64("requestMaintainerEpoch", maintainerEpoch),
-				zap.Uint64("closedMaintainerEpoch", closedEpoch.epoch))
+				zap.Uint64("closedMaintainerEpoch", closedEpoch))
 			return nil
 		}
 		start := time.Now()
@@ -464,10 +460,10 @@ func (m *DispatcherOrchestrator) recordClosedMaintainerEpochLocked(cfID common.C
 		return
 	}
 	closedEpoch, ok := m.closedMaintainerEpochs[cfID]
-	if ok && closedEpoch.epoch >= maintainerEpoch {
+	if ok && closedEpoch >= maintainerEpoch {
 		return
 	}
-	m.closedMaintainerEpochs[cfID] = closedMaintainerEpoch{epoch: maintainerEpoch}
+	m.closedMaintainerEpochs[cfID] = maintainerEpoch
 }
 
 func createBootstrapResponse(

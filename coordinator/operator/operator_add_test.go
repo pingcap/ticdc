@@ -77,7 +77,7 @@ func TestAddMaintainerOperator_CheckRequiresBootstrapDone(t *testing.T) {
 	require.True(t, op.finished.Load())
 }
 
-func TestAddMaintainerOperator_CheckRejectsCompatEpochBeforeSchedule(t *testing.T) {
+func TestAddMaintainerOperator_CheckRejectsCompatEpochBeforeAddMessageSent(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
 		ChangefeedID: cfID,
@@ -95,7 +95,12 @@ func TestAddMaintainerOperator_CheckRejectsCompatEpochBeforeSchedule(t *testing.
 	op.Check("n1", status)
 	require.False(t, op.finished.Load())
 
-	require.NotNil(t, op.Schedule())
+	msg := op.Schedule()
+	require.NotNil(t, msg)
+	op.Check("n1", status)
+	require.False(t, op.finished.Load())
+
+	op.onMessageSent(msg)
 	op.Check("n1", status)
 	require.True(t, op.finished.Load())
 }

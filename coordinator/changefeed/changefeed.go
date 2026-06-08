@@ -14,7 +14,6 @@
 package changefeed
 
 import (
-	"encoding/json"
 	"net/url"
 	"sync"
 
@@ -243,7 +242,7 @@ func (c *Changefeed) NewAddMaintainerMessage(server node.ID) *messaging.TargetMe
 	if info == nil {
 		log.Panic("changefeed info is nil", zap.String("changefeedID", c.ID.String()))
 	}
-	configBytes, err := json.Marshal(info)
+	configData, err := info.MarshalWithTruncation(false)
 	if err != nil {
 		log.Panic("unable to marshal changefeed config", zap.Error(err))
 	}
@@ -252,7 +251,7 @@ func (c *Changefeed) NewAddMaintainerMessage(server node.ID) *messaging.TargetMe
 		&heartbeatpb.AddMaintainerRequest{
 			Id:              c.ID.ToPB(),
 			CheckpointTs:    c.GetStatus().CheckpointTs,
-			Config:          configBytes,
+			Config:          []byte(configData),
 			IsNewChangefeed: c.isNew,
 			KeyspaceId:      c.GetKeyspaceID(),
 			MaintainerEpoch: info.Epoch,
