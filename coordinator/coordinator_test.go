@@ -30,10 +30,12 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/coordinator/changefeed"
 	mock_changefeed "github.com/pingcap/ticdc/coordinator/changefeed/mock"
+	"github.com/pingcap/ticdc/coordinator/operator"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/eventservice"
 	"github.com/pingcap/ticdc/pkg/messaging"
@@ -178,6 +180,9 @@ func (m *mockMaintainerManager) handleMessage(msg *messaging.TargetMessage) {
 				m.sendMessages(response)
 			}
 		}
+	case messaging.TypeSetDispatcherDrainTargetRequest:
+		// mock maintainer manager does not emulate dispatcher scheduling.
+		// this command is accepted and ignored for coordinator tests.
 	}
 }
 
@@ -198,7 +203,8 @@ func (m *mockMaintainerManager) recvMessages(ctx context.Context, msg *messaging
 	// receive message from coordinator
 	case messaging.TypeAddMaintainerRequest, messaging.TypeRemoveMaintainerRequest:
 		fallthrough
-	case messaging.TypeCoordinatorBootstrapRequest:
+	case messaging.TypeCoordinatorBootstrapRequest,
+		messaging.TypeSetDispatcherDrainTargetRequest:
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -223,7 +229,9 @@ func (m *mockMaintainerManager) onCoordinatorBootstrapRequest(msg *messaging.Tar
 
 	response := m.bootstrapResponse
 	if response == nil {
-		response = &heartbeatpb.CoordinatorBootstrapResponse{}
+		response = &heartbeatpb.CoordinatorBootstrapResponse{
+			DrainProtocolVersion: heartbeatpb.CurrentDrainProtocolVersion,
+		}
 	}
 	err := m.mc.SendCommand(messaging.NewSingleTargetMessage(
 		m.coordinatorID,
@@ -288,6 +296,72 @@ func (m *mockMaintainerManager) sendHeartbeat() {
 			m.sendMessages(response)
 		}
 	}
+}
+
+type maintainNode struct {
+	cancel  context.CancelFunc
+	mc      messaging.MessageCenter
+	manager *mockMaintainerManager
+	wg      sync.WaitGroup
+}
+
+func (d *maintainNode) stop() {
+	d.cancel()
+	d.wg.Wait()
+	d.mc.Close()
+}
+
+func newMaintainerNodeForTest(t *testing.T) (*node.Info, net.Listener) {
+	t.Helper()
+
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	return node.NewInfo(lis.Addr().String(), ""), lis
+}
+
+func startMaintainerNode(ctx context.Context,
+	node *node.Info, mc messaging.MessageCenter,
+	nodeManager *watcher.NodeManager,
+	lis net.Listener,
+) *maintainNode {
+	nodeManager.RegisterNodeChangeHandler(node.ID, mc.OnNodeChanges)
+	ctx, cancel := context.WithCancel(ctx)
+	maintainerM := NewMaintainerManager(mc)
+	res := &maintainNode{
+		cancel:  cancel,
+		mc:      mc,
+		manager: maintainerM,
+	}
+	res.wg.Add(1)
+	go func() {
+		defer res.wg.Done()
+		var opts []grpc.ServerOption
+		grpcServer := grpc.NewServer(opts...)
+		mcs := messaging.NewMessageCenterServer(mc)
+		proto.RegisterMessageServiceServer(grpcServer, mcs)
+		go func() {
+			_ = grpcServer.Serve(lis)
+		}()
+		_ = maintainerM.Run(ctx)
+		grpcServer.Stop()
+	}()
+	return res
+}
+
+type mockEtcdClient struct {
+	ownerID string
+	etcd.CDCEtcdClient
+}
+
+func newMockEtcdClient(ownerID string) *mockEtcdClient {
+	return &mockEtcdClient{
+		ownerID: ownerID,
+	}
+}
+
+func (m *mockEtcdClient) GetOwnerID(ctx context.Context) (config.CaptureID, error) {
+	return config.CaptureID(m.ownerID), nil
 }
 
 func TestCoordinatorScheduling(t *testing.T) {
@@ -373,22 +447,22 @@ func TestCoordinatorScheduling(t *testing.T) {
 }
 
 func TestScaleNode(t *testing.T) {
-	ctx := context.Background()
-	info := node.NewInfo("127.0.0.1:28300", "")
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	info, lis1 := newMaintainerNodeForTest(t)
 	etcdClient := newMockEtcdClient(string(info.ID))
 	nodeManager := watcher.NewNodeManager(nil, etcdClient)
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)
+	appcontext.SetService(appcontext.DefaultPDClock, pdutil.NewClock4Test())
+	appcontext.SetService(appcontext.SchemaStore, eventservice.NewMockSchemaStore())
 	nodeManager.GetAliveNodes()[info.ID] = info
 	cfg := config.NewDefaultMessageCenterConfig(info.AdvertiseAddr)
 	mc1 := messaging.NewMessageCenter(ctx, info.ID, cfg, nil)
 	mc1.Run(ctx)
-	defer func() {
-		mc1.Close()
-		log.Info("close message center 1")
-	}()
 
 	appcontext.SetService(appcontext.MessageCenter, mc1)
-	startMaintainerNode(ctx, info, mc1, nodeManager)
+	node1 := startMaintainerNode(ctx, info, mc1, nodeManager, lis1)
+	t.Cleanup(node1.stop)
 
 	serviceID := "default"
 
@@ -426,23 +500,16 @@ func TestScaleNode(t *testing.T) {
 	}, waitTime, time.Millisecond*5)
 
 	// add two nodes
-	info2 := node.NewInfo("127.0.0.1:28400", "")
+	info2, lis2 := newMaintainerNodeForTest(t)
 	mc2 := messaging.NewMessageCenter(ctx, info2.ID, config.NewDefaultMessageCenterConfig(info2.AdvertiseAddr), nil)
 	mc2.Run(ctx)
-	defer func() {
-		mc2.Close()
-		log.Info("close message center 2")
-	}()
-	startMaintainerNode(ctx, info2, mc2, nodeManager)
-	info3 := node.NewInfo("127.0.0.1:28500", "")
+	node2 := startMaintainerNode(ctx, info2, mc2, nodeManager, lis2)
+	t.Cleanup(node2.stop)
+	info3, lis3 := newMaintainerNodeForTest(t)
 	mc3 := messaging.NewMessageCenter(ctx, info3.ID, config.NewDefaultMessageCenterConfig(info3.AdvertiseAddr), nil)
 	mc3.Run(ctx)
-	defer func() {
-		mc3.Close()
-		log.Info("close message center 3")
-	}()
-
-	startMaintainerNode(ctx, info3, mc3, nodeManager)
+	node3 := startMaintainerNode(ctx, info3, mc3, nodeManager, lis3)
+	t.Cleanup(node3.stop)
 
 	log.Info("Start maintainer node",
 		zap.Stringer("id", info3.ID),
@@ -488,7 +555,7 @@ func TestScaleNode(t *testing.T) {
 func TestBootstrapWithUnStoppedChangefeed(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	info := node.NewInfo("127.0.0.1:28301", "")
+	info, lis := newMaintainerNodeForTest(t)
 	etcdClient := newMockEtcdClient(string(info.ID))
 	nodeManager := watcher.NewNodeManager(nil, etcdClient)
 	appcontext.SetService(watcher.NodeManagerName, nodeManager)
@@ -498,10 +565,10 @@ func TestBootstrapWithUnStoppedChangefeed(t *testing.T) {
 
 	mc1 := messaging.NewMessageCenter(ctx, info.ID, config.NewDefaultMessageCenterConfig(info.AdvertiseAddr), nil)
 	mc1.Run(ctx)
-	defer mc1.Close()
 
 	appcontext.SetService(appcontext.MessageCenter, mc1)
-	mNode := startMaintainerNode(ctx, info, mc1, nodeManager)
+	mNode := startMaintainerNode(ctx, info, mc1, nodeManager, lis)
+	defer mNode.stop()
 
 	removingCf1 := &changefeed.ChangefeedMetaWrapper{
 		Info: &config.ChangeFeedInfo{
@@ -622,7 +689,7 @@ func TestConcurrentStopAndSendEvents(t *testing.T) {
 	ctxRun, cancelRun := context.WithCancel(ctx)
 	go func() {
 		err := cr.Run(ctxRun)
-		if err != nil && err != context.Canceled {
+		if err != nil && !errors.Is(err, context.Canceled) {
 			t.Errorf("Coordinator Run returned unexpected error: %v", err)
 		}
 	}()
@@ -655,7 +722,7 @@ func TestConcurrentStopAndSendEvents(t *testing.T) {
 
 				// Use recvMessages to send event to channel
 				err := co.recvMessages(ctx, msg)
-				if err != nil && err != context.Canceled {
+				if err != nil && !errors.Is(err, context.Canceled) {
 					t.Logf("Failed to send event in goroutine %d: %v", id, err)
 				}
 
@@ -706,57 +773,171 @@ func TestConcurrentStopAndSendEvents(t *testing.T) {
 	require.True(t, co.closed.Load())
 }
 
-type maintainNode struct {
-	cancel  context.CancelFunc
-	mc      messaging.MessageCenter
-	manager *mockMaintainerManager
-}
-
-func (d *maintainNode) stop() {
-	d.mc.Close()
-	d.cancel()
-}
-
-func startMaintainerNode(ctx context.Context,
-	node *node.Info, mc messaging.MessageCenter,
-	nodeManager *watcher.NodeManager,
-) *maintainNode {
-	nodeManager.RegisterNodeChangeHandler(node.ID, mc.OnNodeChanges)
-	ctx, cancel := context.WithCancel(ctx)
-	maintainerM := NewMaintainerManager(mc)
-	go func() {
-		var opts []grpc.ServerOption
-		grpcServer := grpc.NewServer(opts...)
-		mcs := messaging.NewMessageCenterServer(mc)
-		proto.RegisterMessageServiceServer(grpcServer, mcs)
-		lis, err := net.Listen("tcp", node.AdvertiseAddr)
-		if err != nil {
-			panic(err)
-		}
-		go func() {
-			_ = grpcServer.Serve(lis)
-		}()
-		_ = maintainerM.Run(ctx)
-		grpcServer.Stop()
-	}()
-	return &maintainNode{
-		cancel:  cancel,
-		mc:      mc,
-		manager: maintainerM,
+func TestIsUnchangedRuntimeStateIgnoresRunningErrorTime(t *testing.T) {
+	errTime := time.Unix(1, 0)
+	info := &config.ChangeFeedInfo{
+		State: config.StateWarning,
+		Error: &config.RunningError{
+			Time:    errTime,
+			Addr:    "127.0.0.1:8300",
+			Code:    "CDC:ErrSinkURIInvalid",
+			Message: "sink uri invalid",
+		},
 	}
+
+	require.True(t, isUnchangedRuntimeState(nil, config.StateWarning, info.Error))
+	require.True(t, isUnchangedRuntimeState(info, config.StateWarning, &config.RunningError{
+		Time:    errTime.Add(time.Hour),
+		Addr:    "127.0.0.1:8300",
+		Code:    "CDC:ErrSinkURIInvalid",
+		Message: "sink uri invalid",
+	}))
+	require.False(t, isUnchangedRuntimeState(info, config.StateWarning, &config.RunningError{
+		Time:    errTime.Add(time.Hour),
+		Addr:    "127.0.0.1:8300",
+		Code:    "CDC:ErrSinkURIInvalid",
+		Message: "another sink error",
+	}))
+	require.False(t, isUnchangedRuntimeState(info, config.StateFailed, info.Error))
+	require.False(t, isUnchangedRuntimeState(info, config.StateWarning, nil))
 }
 
-type mockEtcdClient struct {
-	ownerID string
-	etcd.CDCEtcdClient
-}
+func TestHandleStateChangeSkipsDuplicateRuntimeStatePersistence(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	t.Cleanup(ctrl.Finish)
 
-func newMockEtcdClient(ownerID string) *mockEtcdClient {
-	return &mockEtcdClient{
-		ownerID: ownerID,
+	backend := mock_changefeed.NewMockBackend(ctrl)
+	changefeedDB := changefeed.NewChangefeedDB(1216)
+	self := node.NewInfo("localhost:8300", "")
+	nodeManager := watcher.NewNodeManager(nil, nil)
+	nodeManager.GetAliveNodes()[self.ID] = self
+	appcontext.SetService(appcontext.MessageCenter, messaging.NewMockMessageCenter())
+	appcontext.SetService(watcher.NodeManagerName, nodeManager)
+
+	controller := &Controller{
+		backend:      backend,
+		changefeedDB: changefeedDB,
+		operatorController: operator.NewOperatorController(
+			self,
+			changefeedDB,
+			backend,
+			10,
+		),
 	}
+	co := &coordinator{
+		backend:    backend,
+		controller: controller,
+	}
+
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	storedError := &config.RunningError{
+		Time:    time.Unix(1, 0),
+		Addr:    "127.0.0.1:8300",
+		Code:    "CDC:ErrSinkURIInvalid",
+		Message: "sink uri invalid",
+	}
+	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		Config:       config.GetDefaultReplicaConfig(),
+		State:        config.StateWarning,
+		Error:        storedError,
+		SinkURI:      "mysql://127.0.0.1:3306",
+		Epoch:        233,
+	}, 1, false)
+	changefeedDB.AddReplicatingMaintainer(cf, self.ID)
+
+	newError := &config.RunningError{
+		Time:    storedError.Time.Add(time.Hour),
+		Addr:    storedError.Addr,
+		Code:    storedError.Code,
+		Message: storedError.Message,
+	}
+	event := newChangefeedChange(cf, config.StateWarning, ChangeState, newError)
+	require.NoError(t, co.handleStateChange(context.Background(), event))
+
+	require.True(t, cf.GetInfo().Error.Time.Equal(storedError.Time))
+	require.Equal(t, uint64(233), cf.GetInfo().Epoch)
+	require.Equal(t, 0, controller.operatorController.OperatorSize())
+	require.Equal(t, 1, changefeedDB.GetReplicatingSize())
 }
 
-func (m *mockEtcdClient) GetOwnerID(ctx context.Context) (config.CaptureID, error) {
-	return config.CaptureID(m.ownerID), nil
+func TestHandleStateChangeSkipsNilChangefeedInfo(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	t.Cleanup(ctrl.Finish)
+
+	backend := mock_changefeed.NewMockBackend(ctrl)
+	changefeedDB := changefeed.NewChangefeedDB(1216)
+	controller := &Controller{
+		backend:      backend,
+		changefeedDB: changefeedDB,
+	}
+	co := &coordinator{
+		backend:    backend,
+		controller: controller,
+	}
+
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		Config:       config.GetDefaultReplicaConfig(),
+		State:        config.StateNormal,
+		SinkURI:      "mysql://127.0.0.1:3306",
+	}, 1, false)
+	changefeedDB.AddAbsentChangefeed(cf)
+	cf.SetInfo(nil)
+
+	event := newChangefeedChange(cf, config.StateWarning, ChangeState, &config.RunningError{
+		Time:    time.Unix(1, 0),
+		Addr:    "127.0.0.1:8300",
+		Code:    "CDC:ErrSinkURIInvalid",
+		Message: "sink uri invalid",
+	})
+	require.NoError(t, co.handleStateChange(context.Background(), event))
+}
+
+func TestHandleStateChangePersistsRuntimeStateWhenStateChanges(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	t.Cleanup(ctrl.Finish)
+
+	backend := mock_changefeed.NewMockBackend(ctrl)
+	changefeedDB := changefeed.NewChangefeedDB(1216)
+	controller := &Controller{
+		backend:      backend,
+		changefeedDB: changefeedDB,
+	}
+	co := &coordinator{
+		backend:    backend,
+		controller: controller,
+	}
+
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	storedError := &config.RunningError{
+		Time:    time.Unix(1, 0),
+		Addr:    "127.0.0.1:8300",
+		Code:    "CDC:ErrSinkURIInvalid",
+		Message: "sink uri invalid",
+	}
+	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		Config:       config.GetDefaultReplicaConfig(),
+		State:        config.StateWarning,
+		Error:        storedError,
+		SinkURI:      "mysql://127.0.0.1:3306",
+	}, 1, false)
+	changefeedDB.AddAbsentChangefeed(cf)
+
+	backend.EXPECT().
+		UpdateChangefeed(gomock.Any(), gomock.Any(), uint64(1), config.ProgressNone).
+		DoAndReturn(func(_ context.Context, info *config.ChangeFeedInfo, _ uint64, _ config.Progress) error {
+			require.Equal(t, config.StateNormal, info.State)
+			require.Nil(t, info.Error)
+			return nil
+		}).
+		Times(1)
+
+	event := newChangefeedChange(cf, config.StateNormal, ChangeState, nil)
+	require.NoError(t, co.handleStateChange(context.Background(), event))
+
+	require.Equal(t, config.StateNormal, cf.GetInfo().State)
+	require.Nil(t, cf.GetInfo().Error)
 }

@@ -110,7 +110,7 @@ func (b *decoder) HasNext() (common.MessageType, bool) {
 	err := b.parser.ReadRow()
 	if err != nil {
 		b.closed = true
-		if errors.Cause(err) == io.EOF {
+		if errors.Is(errors.Cause(err), io.EOF) {
 			return common.MessageTypeUnknown, false
 		}
 		log.Panic("read csv row failed", zap.Error(err))
@@ -189,9 +189,9 @@ func fromCsvValToColValue(csvConfig *common.Config, csvVal any, ft types.FieldTy
 	case mysql.TypeYear:
 		val, err = strconv.ParseInt(str, 10, 64)
 	case mysql.TypeDate, mysql.TypeDatetime, mysql.TypeTimestamp:
-		val, err = types.ParseTime(types.DefaultStmtNoWarningContext, str, ft.GetType(), ft.GetDecimal())
+		val, err = types.ParseTime(types.DefaultStmtNoWarningContext, str, ft.GetType(), types.MaxFsp)
 	case mysql.TypeDuration:
-		val, _, err = types.ParseDuration(types.DefaultStmtNoWarningContext, str, ft.GetDecimal())
+		val, _, err = types.ParseDuration(types.DefaultStmtNoWarningContext, str, types.MaxFsp)
 	case mysql.TypeBit:
 		var v uint64
 		v, err = strconv.ParseUint(str, 10, 64)
@@ -239,7 +239,7 @@ func csvMsg2RowChangedEvent(csvConfig *common.Config, csvMsg *csvMessage, tableI
 		e.RowTypes = append(e.RowTypes, commonType.RowTypeInsert)
 	}
 	e.Rows = chk
-	e.Length += 1
+	e.Length++
 	return e, nil
 }
 

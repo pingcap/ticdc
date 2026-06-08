@@ -126,6 +126,10 @@ func hashTableInfo(tableInfo *model.TableInfo) Digest {
 		for _, col := range idx.Columns {
 			binary.BigEndian.PutUint64(buf, uint64(col.Offset))
 			sha256Hasher.Write(buf)
+			// Prefix length changes handle decode behavior for clustered primary key.
+			// Include the length to prevent sharing schema across incompatible tables.
+			binary.BigEndian.PutUint64(buf, uint64(col.Length))
+			sha256Hasher.Write(buf)
 		}
 		// unique
 		binary.BigEndian.PutUint64(buf, uint64(boolToInt(idx.Unique)))
@@ -255,6 +259,11 @@ func (s *columnSchema) sameColumnsAndIndices(columns []*model.ColumnInfo, indice
 			if col.Offset != indices[i].Columns[j].Offset {
 				return false
 			}
+			// Prefix length affects whether a primary key column is partially indexed.
+			// This directly impacts handle decoding and must be part of schema equality.
+			if col.Length != indices[i].Columns[j].Length {
+				return false
+			}
 		}
 		if idx.Unique != indices[i].Unique {
 			return false
@@ -284,7 +293,7 @@ func (s *SharedColumnSchemaStorage) incColumnSchemaCount(columnSchema *columnSch
 		log.Error("inc column schema count failed, column schema not found", zap.Any("columnSchema", columnSchema))
 	}
 	for idx, colSchemaWithCount := range colSchemas {
-		if colSchemaWithCount.columnSchema.equal(columnSchema) {
+		if colSchemaWithCount.equal(columnSchema) {
 			s.m[columnSchema.Digest][idx].count++
 			return
 		}
@@ -317,7 +326,7 @@ func (s *SharedColumnSchemaStorage) GetOrSetColumnSchema(tableInfo *model.TableI
 	} else {
 		for idx, colSchemaWithCount := range colSchemas {
 			// compare tableInfo to check whether the column schema is the same
-			if colSchemaWithCount.columnSchema.SameWithTableInfo(tableInfo) {
+			if colSchemaWithCount.SameWithTableInfo(tableInfo) {
 				s.m[digest][idx].count++
 				return colSchemaWithCount.columnSchema
 			}
@@ -343,7 +352,7 @@ func (s *SharedColumnSchemaStorage) getOrSetColumnSchemaByColumnSchema(columnSch
 	} else {
 		for idx, colSchemaWithCount := range colSchemas {
 			// compare tableInfo to check whether the column schema is the same
-			if colSchemaWithCount.columnSchema.equal(columnSchema) {
+			if colSchemaWithCount.equal(columnSchema) {
 				s.m[digest][idx].count++
 				return colSchemaWithCount.columnSchema
 			}
@@ -391,7 +400,7 @@ func (s *SharedColumnSchemaStorage) tryReleaseColumnSchema(columnSchema *columnS
 // columnSchema is shared across multiple tableInfos with the same schema, in order to reduce memory usage.
 // we make columnSchema as a private struct, in order to avoid other method to directly create a columnSchema object.
 // we only want user to get columnSchema by the function we provide, which will increase the reference count of columnSchema.(GetOrSetColumnSchema)
-// If user want to copy columnSchema(shaddow copy), they should use Clone method.
+// If user want to copy columnSchema(shadow copy), they should use Clone method.
 type columnSchema struct {
 	// digest of the table info
 	Digest Digest `json:"digest"`
@@ -460,7 +469,7 @@ func (s *columnSchema) Marshal() ([]byte, error) {
 	return json.Marshal(s)
 }
 
-// If you want to copy columnSchema(shaddow copy), you should use Clone method.
+// If you want to copy columnSchema(shadow copy), you should use Clone method.
 // This function will increase the reference count of the columnSchema object.
 func (s *columnSchema) Clone() *columnSchema {
 	GetSharedColumnSchemaStorage().incColumnSchemaCount(s)
@@ -481,7 +490,7 @@ func unmarshalJsonToColumnSchema(data []byte) (*columnSchema, error) {
 
 // newColumnSchema4Decoder should only be used by the codec decoder for the test purpose,
 // do not call this method in the TiCDC code.
-func newColumnSchema4Decoder(tableInfo *model.TableInfo) *columnSchema {
+func NewColumnSchema4Decoder(tableInfo *model.TableInfo) *columnSchema {
 	return newColumnSchema(tableInfo, Digest{})
 }
 

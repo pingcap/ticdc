@@ -77,6 +77,53 @@ func generateTableDef() (TableDefinition, *common.TableInfo) {
 	return def, tableInfo
 }
 
+func TestFromDDLEventUsesTargetNames(t *testing.T) {
+	t.Parallel()
+
+	idFieldType := types.NewFieldType(mysql.TypeLong)
+	idFieldType.SetFlag(mysql.PriKeyFlag | mysql.NotNullFlag)
+	routedTableInfo := common.WrapTableInfo("source_db", &timodel.TableInfo{
+		ID:       20,
+		Name:     ast.NewCIStr("source_table"),
+		UpdateTS: 100,
+		Columns: []*timodel.ColumnInfo{
+			{
+				ID:        1,
+				Name:      ast.NewCIStr("id"),
+				FieldType: *idFieldType,
+				State:     timodel.StatePublic,
+			},
+		},
+	}).CloneWithRouting("target_db", "target_table")
+	sourceDDL := &commonEvent.DDLEvent{
+		Version:    commonEvent.DDLEventVersion1,
+		Type:       byte(timodel.ActionCreateTable),
+		SchemaName: "source_db",
+		TableName:  "source_table",
+		Query:      "CREATE TABLE `source_db`.`source_table` (`id` INT PRIMARY KEY)",
+		TableInfo:  routedTableInfo,
+		FinishedTs: 100,
+	}
+
+	routedDDL := commonEvent.NewRoutedDDLEvent(
+		sourceDDL,
+		"CREATE TABLE `target_db`.`target_table` (`id` INT PRIMARY KEY)",
+		"target_db",
+		"target_table",
+		"",
+		"",
+		routedTableInfo,
+		nil,
+		nil,
+	)
+
+	var def TableDefinition
+	def.FromDDLEvent(routedDDL, false)
+	require.Equal(t, "target_db", def.Schema)
+	require.Equal(t, "target_table", def.Table)
+	require.Contains(t, def.Query, "`target_db`.`target_table`")
+}
+
 func TestTableCol(t *testing.T) {
 	t.Parallel()
 
@@ -488,14 +535,54 @@ func TestTableDefinitionGenFilePath(t *testing.T) {
 		Version:      defaultTableDefinitionVersion,
 		TableVersion: 100,
 	}
-	schemaPath, err := schemaDef.GenerateSchemaFilePath()
+	schemaPath, err := schemaDef.GenerateSchemaFilePath(false, 0)
+	require.NoError(t, err)
+	require.Equal(t, "schema1/meta/schema_100_3233644819.json", schemaPath)
+
+	schemaPath, err = schemaDef.GenerateSchemaFilePath(true, 0)
 	require.NoError(t, err)
 	require.Equal(t, "schema1/meta/schema_100_3233644819.json", schemaPath)
 
 	def, _ := generateTableDef()
-	tablePath, err := def.GenerateSchemaFilePath()
+	tablePath, err := def.GenerateSchemaFilePath(false, 0)
 	require.NoError(t, err)
 	require.Equal(t, "schema1/table1/meta/schema_100_3752767265.json", tablePath)
+
+	tablePath, err = def.GenerateSchemaFilePath(true, 12345)
+	require.NoError(t, err)
+	require.Equal(t, "12345/meta/schema_100_3752767265.json", tablePath)
+}
+
+func TestGenerateSchemaFilePathValidation(t *testing.T) {
+	t.Parallel()
+
+	def, _ := generateTableDef()
+
+	// empty schema
+	emptySchemaDef := &TableDefinition{Schema: "", Table: "t1", TableVersion: 100, TotalColumns: 1, Columns: []TableCol{{}}}
+	_, err := emptySchemaDef.GenerateSchemaFilePath(false, 0)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "schema cannot be empty")
+
+	// zero table version
+	zeroVersionDef := &TableDefinition{Schema: "s1", Table: "t1", TableVersion: 0, TotalColumns: 1, Columns: []TableCol{{}}}
+	_, err = zeroVersionDef.GenerateSchemaFilePath(false, 0)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "table version cannot be zero")
+
+	// use-table-id-as-path with invalid tableID
+	_, err = def.GenerateSchemaFilePath(true, 0)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid table id for table-id path")
+	_, err = def.GenerateSchemaFilePath(true, -1)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid table id for table-id path")
+
+	// invalid table definition
+	invalidDef := &TableDefinition{Schema: "s1", Table: "t1", TableVersion: 100, TotalColumns: 1, Columns: nil}
+	_, err = invalidDef.GenerateSchemaFilePath(false, 0)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid table definition")
 }
 
 func TestTableDefinitionSum32(t *testing.T) {

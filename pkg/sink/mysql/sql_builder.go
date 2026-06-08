@@ -35,6 +35,7 @@ type tsPair struct {
 type preparedDMLs struct {
 	sqls            []string
 	values          [][]interface{}
+	rowTypes        []common.RowType
 	rowCount        int
 	approximateSize int64
 	tsPairs         []tsPair
@@ -44,12 +45,12 @@ func (d *preparedDMLs) LogWithoutValues() string {
 	// Calculate total count
 	totalCount := len(d.sqls)
 	var logBuilder strings.Builder
-	logBuilder.WriteString(fmt.Sprintf("Total SQL Count: %d, Row Count: %d,", totalCount, d.rowCount))
+	fmt.Fprintf(&logBuilder, "Total SQL Count: %d, Row Count: %d,", totalCount, d.rowCount)
 
 	// Build SQL statements and arguments section
 	for i, sql := range d.sqls {
 		// Add formatted SQL and args to log content
-		logBuilder.WriteString(fmt.Sprintf("[%03d] Query: %s,", i+1, sql))
+		fmt.Fprintf(&logBuilder, "[%03d] Query: %s,", i+1, sql)
 	}
 	logBuilder.WriteString("End")
 
@@ -71,7 +72,7 @@ func (d *preparedDMLs) LogDebug(events []*commonEvent.DMLEvent, writerID int) {
 
 	// Build complete log content in a single string
 	var logBuilder strings.Builder
-	logBuilder.WriteString(fmt.Sprintf("Total SQL Count: %d, Row Count: %d, Writer ID: %d :", totalCount, d.rowCount, writerID))
+	fmt.Fprintf(&logBuilder, "Total SQL Count: %d, Row Count: %d, Writer ID: %d :", totalCount, d.rowCount, writerID)
 
 	// Build SQL statements and arguments section
 	for i, sql := range d.sqls {
@@ -80,8 +81,8 @@ func (d *preparedDMLs) LogDebug(events []*commonEvent.DMLEvent, writerID int) {
 			args = d.values[i]
 		}
 
-		logBuilder.WriteString(fmt.Sprintf("[%03d] Query: %s,", i+1, sql))
-		logBuilder.WriteString(fmt.Sprintf("      Args: %s,", util.RedactArgs(args)))
+		fmt.Fprintf(&logBuilder, "[%03d] Query: %s,", i+1, sql)
+		fmt.Fprintf(&logBuilder, "      Args: %s,", util.RedactArgs(args))
 	}
 
 	// Build timestamp information
@@ -92,8 +93,8 @@ func (d *preparedDMLs) LogDebug(events []*commonEvent.DMLEvent, writerID int) {
 		startTsList[i] = event.GetStartTs()
 	}
 
-	logBuilder.WriteString(fmt.Sprintf("CommitTs: %v,", commitTsList))
-	logBuilder.WriteString(fmt.Sprintf("StartTs:  %v,", startTsList))
+	fmt.Fprintf(&logBuilder, "CommitTs: %v,", commitTsList)
+	fmt.Fprintf(&logBuilder, "StartTs:  %v,", startTsList)
 	logBuilder.WriteString("End")
 
 	// Output the complete log content in a single call
@@ -116,6 +117,20 @@ func (d *preparedDMLs) fmtSqls() string {
 	return builder.String()
 }
 
+func (d *preparedDMLs) RowsAffected() int64 {
+	var count int64
+	for _, rowType := range d.rowTypes {
+		switch rowType {
+		case common.RowTypeInsert, common.RowTypeDelete:
+			count++
+		case common.RowTypeUpdate:
+			count += 2
+		default:
+		}
+	}
+	return count
+}
+
 var dmlsPool = sync.Pool{
 	New: func() interface{} {
 		return &preparedDMLs{
@@ -129,6 +144,7 @@ var dmlsPool = sync.Pool{
 func (d *preparedDMLs) reset() {
 	d.sqls = d.sqls[:0]
 	d.values = d.values[:0]
+	d.rowTypes = d.rowTypes[:0]
 	d.tsPairs = d.tsPairs[:0]
 	d.rowCount = 0
 	d.approximateSize = 0
@@ -164,7 +180,7 @@ func buildInsert(
 // sql: `DELETE FROM `test`.`t` WHERE x = ? AND y >= ? LIMIT 1`
 func buildDelete(tableInfo *common.TableInfo, row commonEvent.RowChange) (string, []interface{}) {
 	var builder strings.Builder
-	quoteTable := tableInfo.TableName.QuoteString()
+	quoteTable := tableInfo.TableName.QuoteTargetString()
 	builder.WriteString("DELETE FROM ")
 	builder.WriteString(quoteTable)
 	builder.WriteString(" WHERE ")
@@ -243,9 +259,9 @@ func buildActiveActiveUpsertSQL(
 	tableInfo *common.TableInfo,
 	rows []*commonEvent.RowChange,
 	commitTs []uint64,
-) (string, []interface{}) {
+) (string, []interface{}, common.RowType) {
 	if tableInfo == nil || len(rows) == 0 {
-		return "", nil
+		return "", nil, common.RowTypeInsert
 	}
 	if len(commitTs) != len(rows) {
 		log.Panic("mismatched commitTs and rows length",
@@ -265,7 +281,7 @@ func buildActiveActiveUpsertSQL(
 		insertColumns = append(insertColumns, col.Name.O)
 	}
 	if len(insertColumns) == 0 {
-		return "", nil
+		return "", nil, common.RowTypeInsert
 	}
 
 	valueOffsets := make([]int, len(insertColumns))
@@ -292,7 +308,7 @@ func buildActiveActiveUpsertSQL(
 
 	var builder strings.Builder
 	builder.WriteString("INSERT INTO ")
-	builder.WriteString(tableInfo.TableName.QuoteString())
+	builder.WriteString(tableInfo.TableName.QuoteTargetString())
 	builder.WriteString(" (")
 	for i, colName := range insertColumns {
 		if i > 0 {
@@ -339,10 +355,10 @@ func buildActiveActiveUpsertSQL(
 		if i > 0 {
 			builder.WriteString(",")
 		}
-		builder.WriteString(fmt.Sprintf("%s = IF((%s), VALUES(%s), %s)", quoted, cond, quoted, quoted))
+		fmt.Fprintf(&builder, "%s = IF((%s), VALUES(%s), %s)", quoted, cond, quoted, quoted)
 	}
 
-	return builder.String(), args
+	return builder.String(), args, common.RowTypeInsert
 }
 
 func getArgs(row *chunk.Row, tableInfo *common.TableInfo) []interface{} {

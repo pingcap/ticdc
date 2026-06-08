@@ -18,8 +18,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/integrity"
-	"github.com/pingcap/tidb/pkg/parser/mysql"
-	tidbTypes "github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"go.uber.org/zap"
 )
@@ -114,52 +112,6 @@ func isSoftDeleteTransition(preRow, row chunk.Row, offset int) bool {
 		return false
 	}
 	return preRow.IsNull(offset) && !row.IsNull(offset)
-}
-
-// getSoftDeleteTimeColumnIndex returns the column offset for `_tidb_softdelete_time` after validating
-// its semantics. It reports schema issues via `handleError` and returns ok=false in that case.
-//
-// The soft-delete transition detection relies on the invariant that `_tidb_softdelete_time` is
-// defined as `TIMESTAMP(6) NULL`, and NULL is the only representation of "not deleted".
-func getSoftDeleteTimeColumnIndex(event *DMLEvent, handleError func(error)) (idx int, ok bool) {
-	tableInfo := event.TableInfo
-	colInfo, ok := tableInfo.GetColumnInfoByName(SoftDeleteTimeColumn)
-	if !ok {
-		handleError(errors.Errorf(
-			"dispatcher %s table %s.%s missing required column %s",
-			event.DispatcherID.String(),
-			tableInfo.GetSchemaName(),
-			tableInfo.GetTableName(),
-			SoftDeleteTimeColumn,
-		))
-		return 0, false
-	}
-	offset, ok := tableInfo.GetColumnOffsetByName(SoftDeleteTimeColumn)
-	if !ok {
-		handleError(errors.Errorf(
-			"dispatcher %s table %s.%s missing required column offset %s",
-			event.DispatcherID.String(),
-			tableInfo.GetSchemaName(),
-			tableInfo.GetTableName(),
-			SoftDeleteTimeColumn,
-		))
-		return 0, false
-	}
-	notNull := mysql.HasNotNullFlag(colInfo.GetFlag())
-	if colInfo.GetType() != mysql.TypeTimestamp || colInfo.FieldType.GetDecimal() != tidbTypes.MaxFsp || notNull {
-		handleError(errors.Errorf(
-			"dispatcher %s table %s.%s invalid column %s, expect TIMESTAMP(6) NULL, got type %d fsp %d notNull %t",
-			event.DispatcherID.String(),
-			tableInfo.GetSchemaName(),
-			tableInfo.GetTableName(),
-			SoftDeleteTimeColumn,
-			colInfo.GetType(),
-			colInfo.FieldType.GetDecimal(),
-			notNull,
-		))
-		return 0, false
-	}
-	return offset, true
 }
 
 // getSoftDeleteTimeColumnOffset returns the column offset for `_tidb_softdelete_time` without validating
@@ -443,7 +395,10 @@ func newFilteredDMLEvent(
 	newEvent.Seq = source.Seq
 	newEvent.Epoch = source.Epoch
 	newEvent.ReplicatingTs = source.ReplicatingTs
+	newEvent.PostTxnEnqueued = source.PostTxnEnqueued
 	newEvent.PostTxnFlushed = source.PostTxnFlushed
+	newEvent.postEnqueueCalled.Store(source.postEnqueueCalled.Load())
+	source.PostTxnEnqueued = nil
 	source.PostTxnFlushed = nil
 
 	newEvent.SetRows(rows)

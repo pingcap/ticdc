@@ -121,14 +121,22 @@ func TestCompressionAndKeyOrder(t *testing.T) {
 		Key:     []byte("test-key"),
 	}
 	keyWithZstd := EncodeKey(1, 1, ev, CompressionZSTD)
-	dmlOrder, compressionType := DecodeKeyMetas(keyWithZstd)
+	dmlOrder, compressionType := DecodeKeyAttributes(keyWithZstd)
 	require.Equal(t, DMLOrderInsert, dmlOrder)
 	require.Equal(t, CompressionZSTD, compressionType)
+	require.False(t, KeyUsesEncryptionLayer(keyWithZstd))
 
 	keyWithNone := EncodeKey(1, 1, ev, CompressionNone)
-	dmlOrder, compressionType = DecodeKeyMetas(keyWithNone)
+	dmlOrder, compressionType = DecodeKeyAttributes(keyWithNone)
 	require.Equal(t, DMLOrderInsert, dmlOrder)
 	require.Equal(t, CompressionNone, compressionType)
+	require.False(t, KeyUsesEncryptionLayer(keyWithNone))
+
+	keyWithEncryptionLayer := encodeKeyToWithEncryptionLayer(make([]byte, 0, encodedKeyLen(ev)), 1, 1, ev, CompressionZSTD)
+	dmlOrder, compressionType = DecodeKeyAttributes(keyWithEncryptionLayer)
+	require.Equal(t, DMLOrderInsert, dmlOrder)
+	require.Equal(t, CompressionZSTD, compressionType)
+	require.True(t, KeyUsesEncryptionLayer(keyWithEncryptionLayer))
 
 	// 2. Test key sorting order.
 	// For the same transaction (same StartTs, same CRTs), the order should be Delete < Update < Insert.
@@ -142,4 +150,31 @@ func TestCompressionAndKeyOrder(t *testing.T) {
 
 	require.Less(t, bytes.Compare(keyDelete, keyUpdate), 0, "Delete should come before Update")
 	require.Less(t, bytes.Compare(keyUpdate, keyInsert), 0, "Update should come before Insert")
+}
+
+func TestEventStoreKeyBounds(t *testing.T) {
+	t.Parallel()
+
+	event := &common.RawKVEntry{
+		OpType:  common.OpTypePut,
+		StartTs: 20,
+		CRTs:    10,
+		Key:     []byte("key"),
+	}
+	key := EncodeKey(1, 1, event, CompressionNone)
+	commitTsBoundaryKey := encodeTxnCommitTsBoundaryKey(1, 1, event.CRTs)
+	require.Len(t, commitTsBoundaryKey, encodedKeyTxnCommitTsOffset+encodedKeyTxnCommitTsLen)
+	require.True(t, bytes.HasPrefix(key, commitTsBoundaryKey))
+
+	lowerBound := encodeScanLowerBound(1, 1, event.CRTs, event.StartTs)
+	require.Len(t, lowerBound, encodedKeyTxnStartTsOffset+encodedKeyTxnStartTsLen)
+	require.True(t, bytes.HasPrefix(key, lowerBound))
+
+	previousEvent := &common.RawKVEntry{
+		OpType:  common.OpTypePut,
+		StartTs: event.StartTs - 1,
+		CRTs:    event.CRTs,
+		Key:     []byte("key"),
+	}
+	require.Less(t, bytes.Compare(EncodeKey(1, 1, previousEvent, CompressionNone), lowerBound), 0)
 }

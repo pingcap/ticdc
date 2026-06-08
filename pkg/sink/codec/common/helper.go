@@ -23,9 +23,9 @@ import (
 	"unsafe"
 
 	mysqlDriver "github.com/go-sql-driver/mysql"
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
@@ -268,7 +268,8 @@ func queryRowChecksumAux(
 	query := fmt.Sprintf("set @@tidb_snapshot=%d", commitTs)
 	_, err := conn.ExecContext(ctx, query)
 	if err != nil {
-		mysqlErr, ok := errors.Cause(err).(*mysqlDriver.MySQLError)
+		var mysqlErr *mysqlDriver.MySQLError
+		ok := errors.As(err, &mysqlErr)
 		if ok {
 			// Error 8055 (HY000): snapshot is older than GC safe point
 			if mysqlErr.Number == 8055 {
@@ -324,7 +325,8 @@ func MustSnapshotQuery(
 	query := fmt.Sprintf("set @@tidb_snapshot=%d", commitTs)
 	_, err = conn.ExecContext(ctx, query)
 	if err != nil {
-		mysqlErr, ok := errors.Cause(err).(*mysqlDriver.MySQLError)
+		var mysqlErr *mysqlDriver.MySQLError
+		ok := errors.As(errors.Cause(err), &mysqlErr)
 		if ok {
 			// Error 8055 (HY000): snapshot is older than GC safe point
 			if mysqlErr.Number == 8055 {
@@ -365,6 +367,8 @@ func MustSnapshotQuery(
 			zap.String("schema", schema), zap.String("table", table),
 			zap.Uint64("commitTs", commitTs), zap.Error(err))
 	}
+	// go-mysql-driver 1.8 converts integer/float values into int64/double even in text protocol.
+	// This doesn't increase allocation compared to []byte and conversion cost is negilible.
 	for rows.Next() {
 		err = rows.Scan(holder.ValuePointers...)
 		if err != nil {

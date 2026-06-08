@@ -26,6 +26,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/logger"
 	"github.com/pingcap/ticdc/pkg/version"
 	"go.uber.org/zap"
@@ -101,9 +102,9 @@ func main() {
 	deferFunc := func() int {
 		stop()
 		if consumer != nil {
-			consumer.sink.Close(false)
+			consumer.sink.Close()
 		}
-		if err != nil && err != context.Canceled {
+		if err != nil && !errors.Is(err, context.Canceled) {
 			return 1
 		}
 		return 0

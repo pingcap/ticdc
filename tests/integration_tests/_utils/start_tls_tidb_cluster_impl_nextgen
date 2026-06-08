@@ -68,6 +68,9 @@ else
 	echo "Bucket tls-cse-test already exists, skipping creation"
 fi
 
+echo "Checking TiKV version information..."
+tikv-server -V
+
 # Tries to limit the max number of open files under the system limit
 cat - >"$OUT_DIR/tikv-config-tls.toml" <<EOF
 [storage]
@@ -92,6 +95,9 @@ wal-chunk-target-file-size = "128MB"
 ca-path = "$TLS_DIR/ca.pem"
 cert-path = "$TLS_DIR/server.pem"
 key-path = "$TLS_DIR/server-key.pem"
+
+[cdc]
+enable = true
 EOF
 
 cat >"$OUT_DIR/tikv-worker-tls.toml" <<EOF
@@ -176,7 +182,6 @@ cluster-ssl-key = "$TLS_DIR/server-key.pem"
 EOF
 
 echo "Starting TLS TiKV..."
-tikv-server --version
 # Uncomment to turn on grpc versbose log.
 # GRPC_VERBOSITY=debug \
 # GRPC_TRACE=server_channel,call_error,handshaker,tsi \

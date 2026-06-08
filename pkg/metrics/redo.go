@@ -23,6 +23,22 @@ const (
 )
 
 var (
+	// RedoResolvedTsGauge records the resolved ts persisted by redo meta.
+	RedoResolvedTsGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: namespace,
+		Subsystem: subsystem,
+		Name:      "resolved_ts",
+		Help:      "Resolved ts persisted by redo meta",
+	}, []string{getKeyspaceLabel(), "changefeed"})
+
+	// RedoCheckpointTsGauge records the checkpoint ts persisted by redo meta.
+	RedoCheckpointTsGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: namespace,
+		Subsystem: subsystem,
+		Name:      "checkpoint_ts",
+		Help:      "Checkpoint ts persisted by redo meta",
+	}, []string{getKeyspaceLabel(), "changefeed"})
+
 	// RedoWriteBytesGauge records the total number of bytes written to redo log.
 	RedoWriteBytesGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: namespace,
@@ -50,6 +66,23 @@ var (
 		Buckets:   prometheus.ExponentialBuckets(0.001, 2.0, 16),
 	}, []string{getKeyspaceLabel(), "changefeed", "type"})
 
+	// RedoTotalRowsCountGauge records the total number of rows written to redo log.
+	RedoTotalRowsCountGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: namespace,
+		Subsystem: subsystem,
+		Name:      "total_rows_count",
+		Help:      "The total count of rows that are processed by redo writer",
+	}, []string{getKeyspaceLabel(), "changefeed", "type"})
+
+	// RedoWriteLogDurationHistogram records the latency distributions of writeLog.
+	RedoWriteLogDurationHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: namespace,
+		Subsystem: subsystem,
+		Name:      "write_log_duration_seconds",
+		Help:      "The latency distributions of writeLog called by redo sink",
+		Buckets:   prometheus.ExponentialBuckets(0.001, 2.0, 16),
+	}, []string{getKeyspaceLabel(), "changefeed", "type"})
+
 	// RedoFlushLogDurationHistogram records the latency distributions of flushLog.
 	RedoFlushLogDurationHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: namespace,
@@ -58,11 +91,25 @@ var (
 		Help:      "The latency distributions of flushLog called by redo sink",
 		Buckets:   prometheus.ExponentialBuckets(0.001, 2.0, 16),
 	}, []string{getKeyspaceLabel(), "changefeed", "type"})
+
+	// RedoWorkerBusyRatio records the busy ratio of redo sink worker.
+	RedoWorkerBusyRatio = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Subsystem: subsystem,
+			Name:      "worker_busy_ratio",
+			Help:      "Busy ratio for redo sink worker.",
+		}, []string{getKeyspaceLabel(), "changefeed", "type"})
 )
 
 func initRedoMetrics(registry *prometheus.Registry) {
+	registry.MustRegister(RedoResolvedTsGauge)
+	registry.MustRegister(RedoCheckpointTsGauge)
 	registry.MustRegister(RedoFsyncDurationHistogram)
+	registry.MustRegister(RedoTotalRowsCountGauge)
 	registry.MustRegister(RedoWriteBytesGauge)
 	registry.MustRegister(RedoFlushAllDurationHistogram)
+	registry.MustRegister(RedoWriteLogDurationHistogram)
 	registry.MustRegister(RedoFlushLogDurationHistogram)
+	registry.MustRegister(RedoWorkerBusyRatio)
 }

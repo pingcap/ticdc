@@ -214,13 +214,29 @@ func initExternalStorageForTest(ctx context.Context, uri url.URL) (storage.Exter
 	return s, nil
 }
 
+// StorageValidationOptions controls whether ValidateStorage performs
+// an I/O based accessibility check.
+type StorageValidationOptions struct {
+	EnableIOCheck bool
+}
+
 // ValidateStorage validates the storage used by redo.
 func ValidateStorage(uri *url.URL) error {
+	return ValidateStorageWithOptions(uri, StorageValidationOptions{EnableIOCheck: true})
+}
+
+// ValidateStorageWithOptions validates the storage used by redo with options.
+//
+// When EnableIOCheck is false, only basic scheme validation is performed.
+func ValidateStorageWithOptions(uri *url.URL, opts StorageValidationOptions) error {
 	scheme := uri.Scheme
 	if !IsValidConsistentStorage(scheme) {
 		return errors.ErrConsistentStorage.GenWithStackByArgs(scheme)
 	}
 	if IsBlackholeStorage(scheme) {
+		return nil
+	}
+	if !opts.EnableIOCheck {
 		return nil
 	}
 

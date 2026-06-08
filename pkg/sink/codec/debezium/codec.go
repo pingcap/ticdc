@@ -15,6 +15,7 @@ package debezium
 
 import (
 	"bytes"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"strconv"
@@ -47,6 +48,7 @@ func (c *dbzCodec) writeDebeziumFieldValues(
 	row *chunk.Row,
 	tableInfo *commonType.TableInfo,
 	columnSelector commonEvent.Selector,
+	commitTs uint64,
 ) error {
 	var err error
 	writer.WriteObjectField(fieldName, func() {
@@ -56,7 +58,32 @@ func (c *dbzCodec) writeDebeziumFieldValues(
 			}
 			err = c.writeDebeziumFieldValue(writer, row, i, colInfo)
 			if err != nil {
-				log.Error("write Debezium field value meet error", zap.Error(err))
+				// Get value for logging with truncation
+				ft := &colInfo.FieldType
+				datum := row.GetDatum(i, ft)
+				var valueStr string
+				// Use hex encoding for binary types for better readability
+				switch ft.GetType() {
+				case mysql.TypeTinyBlob, mysql.TypeMediumBlob, mysql.TypeLongBlob, mysql.TypeBlob, mysql.TypeVarString, mysql.TypeString:
+					if mysql.HasBinaryFlag(ft.GetFlag()) {
+						valueStr = hex.EncodeToString(datum.GetBytes())
+					} else {
+						valueStr = datum.String()
+					}
+				default:
+					valueStr = datum.String()
+				}
+				const maxValueLen = 1024
+				if len(valueStr) > maxValueLen {
+					valueStr = valueStr[:maxValueLen] + "...(truncated)"
+				}
+				log.Error("failed to write Debezium field value",
+					zap.String("schema", tableInfo.GetTargetSchemaName()),
+					zap.String("table", tableInfo.GetTargetTableName()),
+					zap.String("column", colInfo.Name.O),
+					zap.String("value", valueStr),
+					zap.Uint64("commitTs", commitTs),
+					zap.Error(err))
 				break
 			}
 		}
@@ -834,6 +861,8 @@ func (c *dbzCodec) EncodeKey(
 	defer util.ReturnJSONWriter(jWriter)
 
 	var err error
+	schemaName := e.TableInfo.GetTargetSchemaName()
+	tableName := e.TableInfo.GetTargetTableName()
 	jWriter.WriteObject(func() {
 		jWriter.WriteObjectField("payload", func() {
 			columns := e.TableInfo.GetColumns()
@@ -851,7 +880,7 @@ func (c *dbzCodec) EncodeKey(
 			jWriter.WriteObjectField("schema", func() {
 				jWriter.WriteStringField("type", "struct")
 				jWriter.WriteStringField("name",
-					fmt.Sprintf("%s.Key", getSchemaTopicName(c.clusterID, e.TableInfo.GetSchemaName(), e.TableInfo.GetTableName())))
+					fmt.Sprintf("%s.Key", getSchemaTopicName(c.clusterID, schemaName, tableName)))
 				jWriter.WriteBoolField("optional", false)
 				jWriter.WriteArrayField("fields", func() {
 					columns := e.TableInfo.GetColumns()
@@ -878,6 +907,8 @@ func (c *dbzCodec) EncodeValue(
 	commitTime := oracle.GetTimeFromTS(e.CommitTs)
 
 	var err error
+	schemaName := e.TableInfo.GetTargetSchemaName()
+	tableName := e.TableInfo.GetTargetTableName()
 
 	jWriter.WriteObject(func() {
 		jWriter.WriteObjectField("payload", func() {
@@ -890,8 +921,8 @@ func (c *dbzCodec) EncodeValue(
 				jWriter.WriteInt64Field("ts_ms", commitTime.UnixMilli())
 				// snapshot field is a string of true,last,false,incremental
 				jWriter.WriteStringField("snapshot", "false")
-				jWriter.WriteStringField("db", e.TableInfo.GetSchemaName())
-				jWriter.WriteStringField("table", e.TableInfo.GetTableName())
+				jWriter.WriteStringField("db", schemaName)
+				jWriter.WriteStringField("table", tableName)
 				jWriter.WriteInt64Field("server_id", 0)
 				jWriter.WriteNullField("gtid")
 				jWriter.WriteStringField("file", "")
@@ -928,18 +959,18 @@ func (c *dbzCodec) EncodeValue(
 				// after: An optional field that specifies the state of the row after the event occurred.
 				// Optional field that specifies the state of the row after the event occurred.
 				// In a delete event value, the after field is null, signifying that the row no longer exists.
-				err = c.writeDebeziumFieldValues(jWriter, "after", e.GetRows(), e.TableInfo, e.ColumnSelector)
+				err = c.writeDebeziumFieldValues(jWriter, "after", e.GetRows(), e.TableInfo, e.ColumnSelector, e.CommitTs)
 			} else if e.IsDelete() {
 				jWriter.WriteStringField("op", "d")
 				jWriter.WriteNullField("after")
-				err = c.writeDebeziumFieldValues(jWriter, "before", e.GetPreRows(), e.TableInfo, e.ColumnSelector)
+				err = c.writeDebeziumFieldValues(jWriter, "before", e.GetPreRows(), e.TableInfo, e.ColumnSelector, e.CommitTs)
 			} else if e.IsUpdate() {
 				jWriter.WriteStringField("op", "u")
 				if c.config.DebeziumOutputOldValue {
-					err = c.writeDebeziumFieldValues(jWriter, "before", e.GetPreRows(), e.TableInfo, e.ColumnSelector)
+					err = c.writeDebeziumFieldValues(jWriter, "before", e.GetPreRows(), e.TableInfo, e.ColumnSelector, e.CommitTs)
 				}
 				if err == nil {
-					err = c.writeDebeziumFieldValues(jWriter, "after", e.GetRows(), e.TableInfo, e.ColumnSelector)
+					err = c.writeDebeziumFieldValues(jWriter, "after", e.GetRows(), e.TableInfo, e.ColumnSelector, e.CommitTs)
 				}
 			}
 		})
@@ -949,7 +980,7 @@ func (c *dbzCodec) EncodeValue(
 				jWriter.WriteStringField("type", "struct")
 				jWriter.WriteBoolField("optional", false)
 				jWriter.WriteStringField("name",
-					fmt.Sprintf("%s.Envelope", getSchemaTopicName(c.clusterID, e.TableInfo.GetSchemaName(), e.TableInfo.GetTableName())))
+					fmt.Sprintf("%s.Envelope", getSchemaTopicName(c.clusterID, schemaName, tableName)))
 				jWriter.WriteIntField("version", 1)
 				jWriter.WriteArrayField("fields", func() {
 					// schema is the same for `before` and `after`. So we build a new buffer to
@@ -979,7 +1010,7 @@ func (c *dbzCodec) EncodeValue(
 						jWriter.WriteStringField("type", "struct")
 						jWriter.WriteBoolField("optional", true)
 						jWriter.WriteStringField("name",
-							fmt.Sprintf("%s.Value", getSchemaTopicName(c.clusterID, e.TableInfo.GetSchemaName(), e.TableInfo.GetTableName())))
+							fmt.Sprintf("%s.Value", getSchemaTopicName(c.clusterID, schemaName, tableName)))
 						jWriter.WriteStringField("field", "before")
 						jWriter.WriteArrayField("fields", func() {
 							jWriter.WriteRaw(fieldsJSON)
@@ -989,7 +1020,7 @@ func (c *dbzCodec) EncodeValue(
 						jWriter.WriteStringField("type", "struct")
 						jWriter.WriteBoolField("optional", true)
 						jWriter.WriteStringField("name",
-							fmt.Sprintf("%s.Value", getSchemaTopicName(c.clusterID, e.TableInfo.GetSchemaName(), e.TableInfo.GetTableName())))
+							fmt.Sprintf("%s.Value", getSchemaTopicName(c.clusterID, schemaName, tableName)))
 						jWriter.WriteStringField("field", "after")
 						jWriter.WriteArrayField("fields", func() {
 							jWriter.WriteRaw(fieldsJSON)
@@ -1158,14 +1189,14 @@ func (c *dbzCodec) EncodeDDLEvent(
 					switch e.GetDDLType() {
 					case timodel.ActionRenameTable:
 						jWriter.WriteStringField("id", fmt.Sprintf("\"%s\".\"%s\",\"%s\".\"%s\"",
-							e.ExtraSchemaName,
-							e.ExtraTableName,
+							e.GetTargetExtraSchemaName(),
+							e.GetTargetExtraTableName(),
 							dbName,
 							tableName))
 					case timodel.ActionExchangeTablePartition:
 						jWriter.WriteStringField("id", fmt.Sprintf("\"%s\".\"%s\"",
-							e.ExtraSchemaName,
-							e.ExtraTableName))
+							e.GetTargetExtraSchemaName(),
+							e.GetTargetExtraTableName()))
 					case timodel.ActionDropTable:
 						jWriter.WriteStringField("id", fmt.Sprintf("\"%s\".\"%s\"",
 							dbName,
@@ -1186,8 +1217,8 @@ func (c *dbzCodec) EncodeDDLEvent(
 							}
 						})
 						jWriter.WriteArrayField("columns", func() {
-							parseColumns(e.Query, e.TableInfo.GetColumns())
-							for pos, col := range e.TableInfo.GetColumns() {
+							columns := parseColumns(e.Query, e.TableInfo.GetColumns())
+							for pos, col := range columns {
 								if col.Hidden {
 									continue
 								}

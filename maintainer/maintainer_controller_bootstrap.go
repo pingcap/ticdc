@@ -88,7 +88,12 @@ func (c *Controller) FinishBootstrap(
 		zap.Int("nodeCount", len(allNodesResp)))
 
 	// Step 1: Determine start timestamp and update DDL dispatcher
-	startTs, redoStartTs := c.determineStartTs(allNodesResp)
+	startTs, redoStartTs, err := c.determineStartTs(allNodesResp)
+	if err != nil {
+		log.Error("can not determine the startTs from the bootstrap response",
+			zap.String("changefeed", c.changefeedID.Name()), zap.Error(err))
+		return nil, errors.Trace(err)
+	}
 
 	// Step 2: Load tables from schema store
 	tables, err := c.loadTables(startTs)
@@ -144,7 +149,7 @@ func (c *Controller) FinishBootstrap(
 	}, nil
 }
 
-func (c *Controller) determineStartTs(allNodesResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse) (uint64, uint64) {
+func (c *Controller) determineStartTs(allNodesResp map[node.ID]*heartbeatpb.MaintainerBootstrapResponse) (uint64, uint64, error) {
 	var (
 		startTs     uint64
 		redoStartTs uint64
@@ -170,14 +175,18 @@ func (c *Controller) determineStartTs(allNodesResp map[node.ID]*heartbeatpb.Main
 		}
 	}
 	if startTs == 0 {
-		log.Panic("cant not found the startTs from the bootstrap response",
-			zap.String("changefeed", c.changefeedID.Name()))
+		return 0, 0, errors.WrapError(
+			errors.ErrChangefeedInitTableTriggerDispatcherFailed,
+			errors.New("all bootstrap responses reported empty checkpointTs"),
+		)
 	}
 	if c.enableRedo && redoStartTs == 0 {
-		log.Panic("cant not found the redoStartTs from the bootstrap response",
-			zap.String("changefeed", c.changefeedID.Name()))
+		return 0, 0, errors.WrapError(
+			errors.ErrChangefeedInitTableTriggerDispatcherFailed,
+			errors.New("all bootstrap responses reported empty redoCheckpointTs"),
+		)
 	}
-	return startTs, redoStartTs
+	return startTs, redoStartTs, nil
 }
 
 func (c *Controller) buildWorkingTaskMap(
@@ -703,6 +712,20 @@ func (c *Controller) restoreCurrentWorkingCreateAction(
 	replicaSet *replica.SpanReplication,
 	tableSplitMap map[int64]bool,
 ) error {
+	splitable, tableExists := tableSplitMap[span.TableID]
+	if !tableExists {
+		// The bootstrap schema-store snapshot is already taken at startTs. If the table is absent there,
+		// this create request is stale (for example, add/move/split was in-flight before a DROP TABLE) and
+		// restoring it would recreate a ghost task/operator for a table that should stay removed.
+		log.Warn("bootstrap create operator references table missing from schema snapshot, skip restoring it",
+			zap.String("nodeID", nodeID.String()),
+			zap.String("changefeed", resp.ChangefeedID.String()),
+			zap.String("dispatcherID", dispatcherID.String()),
+			zap.String("operatorType", req.OperatorType.String()),
+			zap.Int64("tableID", span.TableID))
+		return nil
+	}
+
 	// Create is only meaningful if the dispatcher does not already exist. If the node snapshot already contains
 	// the dispatcher (or maintainer already bound the span), treat it as done.
 	if spanInfo != nil {
@@ -728,7 +751,7 @@ func (c *Controller) restoreCurrentWorkingCreateAction(
 			span,
 			req.Config.StartTs,
 			req.Config.Mode,
-			spanController.ShouldEnableSplit(tableSplitMap[span.TableID]),
+			spanController.ShouldEnableSplit(splitable),
 		)
 		spanController.AddAbsentReplicaSet(replicaSet)
 	}

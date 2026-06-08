@@ -29,6 +29,7 @@ import (
 	"workload/schema"
 	pbank "workload/schema/bank"
 	pbank2 "workload/schema/bank2"
+	pbank3 "workload/schema/bank3"
 	"workload/schema/bankupdate"
 	pcrawler "workload/schema/crawler"
 	pdc "workload/schema/dc"
@@ -36,6 +37,7 @@ import (
 	"workload/schema/shop"
 	psysbench "workload/schema/sysbench"
 	puuu "workload/schema/uuu"
+	pwidetablewithjson "workload/schema/wide_table_with_json"
 )
 
 // WorkloadExecutor executes the workload and collects statistics
@@ -56,6 +58,10 @@ type WorkloadStats struct {
 	QueryCount      atomic.Uint64
 	ErrorCount      atomic.Uint64
 	CreatedTableNum atomic.Int32
+	DDLExecuted     atomic.Uint64
+	DDLSucceeded    atomic.Uint64
+	DDLSkipped      atomic.Uint64
+	DDLFailed       atomic.Uint64
 }
 
 // WorkloadApp is the main structure of the application
@@ -67,15 +73,17 @@ type WorkloadApp struct {
 }
 
 const (
-	bank       = "bank"
-	sysbench   = "sysbench"
-	largeRow   = "large_row"
-	shopItem   = "shop_item"
-	uuu        = "uuu"
-	crawler    = "crawler"
-	bank2      = "bank2"
-	bankUpdate = "bank_update"
-	dc         = "dc"
+	bank              = "bank"
+	sysbench          = "sysbench"
+	largeRow          = "large_row"
+	shopItem          = "shop_item"
+	uuu               = "uuu"
+	crawler           = "crawler"
+	bank2             = "bank2"
+	bank3             = "bank3"
+	bankUpdate        = "bank_update"
+	dc                = "dc"
+	wideTableWithJSON = "wide_table_with_json"
 )
 
 // stmtCacheKey is used as the key for statement cache
@@ -130,10 +138,14 @@ func (app *WorkloadApp) createWorkload() schema.Workload {
 		workload = pcrawler.NewCrawlerWorkload()
 	case bank2:
 		workload = pbank2.NewBank2Workload()
+	case bank3:
+		workload = pbank3.NewBankWorkload(app.Config.Partitioned)
 	case bankUpdate:
 		workload = bankupdate.NewBankUpdateWorkload(app.Config.TotalRowCount, app.Config.UpdateLargeColumnSize)
 	case dc:
 		workload = pdc.NewDCWorkload()
+	case wideTableWithJSON:
+		workload = pwidetablewithjson.NewWideTableWithJSONWorkload(app.Config.RowSize, app.Config.TableCount, app.Config.TableStartIndex, app.Config.TotalRowCount)
 	default:
 		plog.Panic("unsupported workload type", zap.String("workload", app.Config.WorkloadType))
 	}
@@ -161,35 +173,58 @@ func (app *WorkloadApp) executeWorkload(wg *sync.WaitGroup) error {
 		zap.Int("dbCount", len(app.DBManager.GetDBs())),
 		zap.Int("tableCount", app.Config.TableCount))
 
-	if !app.Config.SkipCreateTable && app.Config.Action == "prepare" {
-		app.handlePrepareAction(insertConcurrency, wg)
-		return nil
+	if app.Config.Action == "ddl" || app.Config.OnlyDDL {
+		return app.handleDDLExecution(wg)
 	}
 
-	if app.Config.OnlyDDL {
-		return nil
+	if app.Config.Action == "prepare" {
+		return app.handlePrepareAction(insertConcurrency, wg)
+	}
+
+	if err := app.startDDLRunnerIfEnabled(wg); err != nil {
+		return err
 	}
 
 	app.handleWorkloadExecution(insertConcurrency, updateConcurrency, deleteConcurrency, wg)
 	return nil
 }
 
+func (app *WorkloadApp) startDDLRunnerIfEnabled(wg *sync.WaitGroup) error {
+	if app.Config.OnlyDML {
+		return nil
+	}
+	if strings.TrimSpace(app.Config.DDLConfigPath) == "" {
+		return nil
+	}
+	return app.handleDDLExecution(wg)
+}
+
 // handlePrepareAction handles the prepare action
-func (app *WorkloadApp) handlePrepareAction(insertConcurrency int, mainWg *sync.WaitGroup) {
-	plog.Info("start to create tables", zap.Int("tableCount", app.Config.TableCount))
-	wg := &sync.WaitGroup{}
-	for _, db := range app.DBManager.GetDBs() {
-		wg.Add(1)
-		go func(db *DBWrapper) {
-			defer wg.Done()
-			app.initTables(db.DB)
-		}(db)
+func (app *WorkloadApp) handlePrepareAction(insertConcurrency int, mainWg *sync.WaitGroup) error {
+	if !app.Config.SkipCreateTable {
+		plog.Info("start to create tables", zap.Int("tableCount", app.Config.TableCount))
+		wg := &sync.WaitGroup{}
+		for _, db := range app.DBManager.GetDBs() {
+			wg.Add(1)
+			go func(db *DBWrapper) {
+				defer wg.Done()
+				app.initTables(db.DB)
+			}(db)
+		}
+		wg.Wait()
+		plog.Info("all dbs create tables finished")
+	} else {
+		plog.Info("skip creating tables", zap.Int("tableCount", app.Config.TableCount))
 	}
-	wg.Wait()
-	plog.Info("All dbs create tables finished")
+
+	if err := app.startDDLRunnerIfEnabled(mainWg); err != nil {
+		return err
+	}
+
 	if app.Config.TotalRowCount != 0 {
-		app.executeInsertWorkers(insertConcurrency, wg)
+		app.executeInsertWorkers(insertConcurrency, mainWg)
 	}
+	return nil
 }
 
 // handleWorkloadExecution handles the workload execution
@@ -201,7 +236,11 @@ func (app *WorkloadApp) handleWorkloadExecution(insertConcurrency, updateConcurr
 		zap.Int("insertConcurrency", insertConcurrency),
 		zap.Int("updateConcurrency", updateConcurrency),
 		zap.Int("deleteConcurrency", deleteConcurrency),
+		zap.String("ddlConfig", strings.TrimSpace(app.Config.DDLConfigPath)),
+		zap.Int("ddlWorker", app.Config.DDLWorker),
+		zap.String("ddlTimeout", app.Config.DDLTimeout.String()),
 		zap.Int("batchSize", app.Config.BatchSize),
+		zap.Bool("batchInTxn", app.Config.BatchInTxn),
 		zap.String("action", app.Config.Action),
 	)
 
@@ -257,7 +296,9 @@ func (app *WorkloadApp) executeInsertWorkers(insertConcurrency int, wg *sync.Wai
 			plog.Info("start insert worker to write data to db", zap.Int("worker", workerID), zap.String("db", db.Name))
 
 			for {
-				err = app.doInsert(conn)
+				flushedRows, err := app.runTransaction(conn, func() (uint64, error) {
+					return app.doInsertOnce(conn)
+				})
 				if err != nil {
 					// Check if it's a connection-level error that requires reconnection
 					if app.isConnectionError(err) {
@@ -282,6 +323,10 @@ func (app *WorkloadApp) executeInsertWorkers(insertConcurrency int, wg *sync.Wai
 					time.Sleep(time.Second * 2)
 					continue
 				}
+
+				if flushedRows != 0 {
+					app.Stats.FlushedRowCount.Add(flushedRows)
+				}
 			}
 		}(i)
 	}
@@ -302,36 +347,47 @@ func (app *WorkloadApp) isConnectionError(err error) bool {
 		strings.Contains(errStr, "invalid connection")
 }
 
-// doInsert performs insert operations
-func (app *WorkloadApp) doInsert(conn *sql.Conn) error {
-	for {
-		j := rand.Intn(app.Config.TableCount) + app.Config.TableStartIndex
-		var err error
+func (app *WorkloadApp) doInsertOnce(conn *sql.Conn) (uint64, error) {
+	tableIndex := rand.Intn(app.Config.TableCount) + app.Config.TableStartIndex
+	var (
+		res sql.Result
+		err error
+	)
 
-		switch app.Config.WorkloadType {
-		case uuu:
-			insertSql, values := app.Workload.(*puuu.UUUWorkload).BuildInsertSqlWithValues(j, app.Config.BatchSize)
-			_, err = app.executeWithValues(conn, insertSql, j, values)
-		case bank2:
-			insertSql, values := app.Workload.(*pbank2.Bank2Workload).BuildInsertSqlWithValues(j, app.Config.BatchSize)
-			_, err = app.executeWithValues(conn, insertSql, j, values)
-		default:
-			insertSql := app.Workload.BuildInsertSql(j, app.Config.BatchSize)
-			_, err = app.execute(conn, insertSql, j)
-		}
-		if err != nil {
-			if strings.Contains(err.Error(), "connection is already closed") {
-				plog.Info("connection is already closed", zap.Error(err))
-				app.Stats.ErrorCount.Add(1)
-				return err
-			}
-
-			plog.Info("do insert error", zap.Error(err))
-			app.Stats.ErrorCount.Add(1)
-			continue
-		}
-		app.Stats.FlushedRowCount.Add(uint64(app.Config.BatchSize))
+	switch app.Config.WorkloadType {
+	case uuu:
+		insertSQL, values := app.Workload.(*puuu.UUUWorkload).BuildInsertSqlWithValues(tableIndex, app.Config.BatchSize)
+		res, err = app.executeWithValues(conn, insertSQL, tableIndex, values)
+	case bank2:
+		insertSQL, values := app.Workload.(*pbank2.Bank2Workload).BuildInsertSqlWithValues(tableIndex, app.Config.BatchSize)
+		res, err = app.executeWithValues(conn, insertSQL, tableIndex, values)
+	case wideTableWithJSON:
+		insertSQL, values := app.Workload.(*pwidetablewithjson.WideTableWithJSONWorkload).BuildInsertSqlWithValues(tableIndex, app.Config.BatchSize)
+		res, err = app.executeWithValues(conn, insertSQL, tableIndex, values)
+	default:
+		insertSQL := app.Workload.BuildInsertSql(tableIndex, app.Config.BatchSize)
+		res, err = app.execute(conn, insertSQL, tableIndex)
 	}
+
+	if err != nil {
+		return 0, err
+	}
+
+	if res == nil {
+		return 0, nil
+	}
+
+	cnt, err := res.RowsAffected()
+	if err != nil {
+		plog.Info("get rows affected error",
+			zap.Error(err),
+			zap.Int("table", tableIndex),
+			zap.Int("batchSize", app.Config.BatchSize))
+		app.Stats.ErrorCount.Add(1)
+		return 0, nil
+	}
+
+	return uint64(cnt), nil
 }
 
 // execute executes a SQL statement

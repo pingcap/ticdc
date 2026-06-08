@@ -46,6 +46,10 @@ type balanceSplitsScheduler struct {
 
 	splitter *split.Splitter
 	mode     int64
+
+	drainState *DrainState
+
+	drainBalanceBlockedUntil time.Time
 }
 
 func NewBalanceSplitsScheduler(
@@ -55,6 +59,7 @@ func NewBalanceSplitsScheduler(
 	oc *operator.Controller,
 	sc *span.Controller,
 	mode int64,
+	drainState *DrainState,
 ) *balanceSplitsScheduler {
 	return &balanceSplitsScheduler{
 		changefeedID:       changefeedID,
@@ -64,6 +69,7 @@ func NewBalanceSplitsScheduler(
 		spanController:     sc,
 		nodeManager:        appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName),
 		mode:               mode,
+		drainState:         drainState,
 	}
 }
 
@@ -75,6 +81,13 @@ func (s *balanceSplitsScheduler) Name() string {
 }
 
 func (s *balanceSplitsScheduler) Execute() time.Time {
+	now := time.Now()
+	state := s.drainState.snapshot()
+	if shouldPauseBalanceForDrain(state, now, &s.drainBalanceBlockedUntil) {
+		// Pause split-table balancing while dispatcher drain is active
+		// and keep a cooldown window after drain completion to avoid churn.
+		return time.Now().Add(time.Second * 15)
+	}
 	if s.operatorController.OperatorSize() > 0 || s.spanController.GetAbsentSize() > 0 {
 		// not in stable schedule state, skip balance split
 		return time.Now().Add(time.Second * 15)
@@ -115,7 +128,8 @@ func (s *balanceSplitsScheduler) Execute() time.Time {
 
 		checkResults := s.spanController.CheckByGroup(group, availableSize)
 		for _, checkResult := range checkResults.([]replica.SplitSpanCheckResult) {
-			if checkResult.OpType == replica.OpSplit {
+			switch checkResult.OpType {
+			case replica.OpSplit:
 				splitSpans := s.splitter.Split(context.Background(), checkResult.SplitSpan.Span, checkResult.SpanNum, checkResult.SpanType)
 				if len(splitSpans) > 1 {
 					op := operator.NewSplitDispatcherOperator(s.spanController, checkResult.SplitSpan, splitSpans, checkResult.SplitTargetNodes, func(span *replica.SpanReplication, node node.ID) bool {
@@ -126,7 +140,7 @@ func (s *balanceSplitsScheduler) Execute() time.Time {
 						availableSize--
 					}
 				}
-			} else if checkResult.OpType == replica.OpMove {
+			case replica.OpMove:
 				for _, span := range checkResult.MoveSpans {
 					op := operator.NewMoveDispatcherOperator(s.spanController, span, span.GetNodeID(), checkResult.TargetNode)
 					ret := s.operatorController.AddOperator(op)
@@ -134,7 +148,7 @@ func (s *balanceSplitsScheduler) Execute() time.Time {
 						availableSize--
 					}
 				}
-			} else if checkResult.OpType == replica.OpMerge {
+			case replica.OpMerge:
 				if s.operatorController.AddMergeOperator(checkResult.MergeSpans) != nil {
 					availableSize = availableSize - 1 - len(checkResult.MergeSpans)
 				}

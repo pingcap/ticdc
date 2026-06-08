@@ -277,7 +277,7 @@ func preCheckForSchedulerHandler(req SchedulerDispatcherRequest, dispatcherManag
 	}
 
 	isRedo := common.IsRedoMode(req.Config.Mode)
-	if isRedo && (!dispatcherManager.RedoEnable || dispatcherManager.redoDispatcherMap == nil) {
+	if isRedo && !dispatcherManager.IsRedoReady() {
 		return common.DispatcherID{}, false
 	}
 	if _, operatorExists := dispatcherManager.currentOperatorMap.Load(operatorKey); operatorExists {
@@ -447,12 +447,12 @@ func createDispatcherByInfo(
 	}
 }
 
-func (h *SchedulerDispatcherRequestHandler) GetSize(event SchedulerDispatcherRequest) int { return 0 }
-func (h *SchedulerDispatcherRequestHandler) IsPaused(event SchedulerDispatcherRequest) bool {
+func (h *SchedulerDispatcherRequestHandler) GetSize(_ SchedulerDispatcherRequest) int { return 0 }
+func (h *SchedulerDispatcherRequestHandler) IsPaused(_ SchedulerDispatcherRequest) bool {
 	return false
 }
 
-func (h *SchedulerDispatcherRequestHandler) GetArea(path common.GID, dest *DispatcherManager) int {
+func (h *SchedulerDispatcherRequestHandler) GetArea(_ common.GID, _ *DispatcherManager) int {
 	return 0
 }
 
@@ -460,7 +460,7 @@ func (h *SchedulerDispatcherRequestHandler) GetMetricLabel(dest *DispatcherManag
 	return dest.changefeedID.String()
 }
 
-func (h *SchedulerDispatcherRequestHandler) GetTimestamp(event SchedulerDispatcherRequest) dynstream.Timestamp {
+func (h *SchedulerDispatcherRequestHandler) GetTimestamp(_ SchedulerDispatcherRequest) dynstream.Timestamp {
 	return 0
 }
 
@@ -553,7 +553,7 @@ func (h *HeartBeatResponseHandler) Handle(dispatcherManager *DispatcherManager, 
 
 func (h *HeartBeatResponseHandler) GetSize(event HeartBeatResponse) int   { return 0 }
 func (h *HeartBeatResponseHandler) IsPaused(event HeartBeatResponse) bool { return false }
-func (h *HeartBeatResponseHandler) GetArea(path common.GID, dest *DispatcherManager) int {
+func (h *HeartBeatResponseHandler) GetArea(_ common.GID, _ *DispatcherManager) int {
 	return 0
 }
 
@@ -609,7 +609,7 @@ func (h *CheckpointTsMessageHandler) Handle(dispatcherManager *DispatcherManager
 
 func (h *CheckpointTsMessageHandler) GetSize(event CheckpointTsMessage) int   { return 0 }
 func (h *CheckpointTsMessageHandler) IsPaused(event CheckpointTsMessage) bool { return false }
-func (h *CheckpointTsMessageHandler) GetArea(path common.GID, dest *DispatcherManager) int {
+func (h *CheckpointTsMessageHandler) GetArea(_ common.GID, _ *DispatcherManager) int {
 	return 0
 }
 
@@ -663,7 +663,7 @@ func (h *RedoResolvedTsForwardMessageHandler) Handle(dispatcherManager *Dispatch
 	msg := messages[0]
 	ok := dispatcherManager.SetRedoResolvedTs(msg.ResolvedTs)
 	if ok {
-		dispatcherManager.dispatcherMap.ForEach(func(id common.DispatcherID, dispatcher *dispatcher.EventDispatcher) {
+		dispatcherManager.dispatcherMap.ForEach(func(_ common.DispatcherID, dispatcher *dispatcher.EventDispatcher) {
 			dispatcher.HandleCacheEvents()
 		})
 	}
@@ -678,7 +678,7 @@ func (h *RedoResolvedTsForwardMessageHandler) IsPaused(event RedoResolvedTsForwa
 	return false
 }
 
-func (h *RedoResolvedTsForwardMessageHandler) GetArea(path common.GID, dest *DispatcherManager) int {
+func (h *RedoResolvedTsForwardMessageHandler) GetArea(_ common.GID, _ *DispatcherManager) int {
 	return 0
 }
 
@@ -738,7 +738,7 @@ func (h *RedoMetaMessageHandler) Handle(dispatcherManager *DispatcherManager, me
 
 func (h *RedoMetaMessageHandler) GetSize(event RedoMetaMessage) int   { return 0 }
 func (h *RedoMetaMessageHandler) IsPaused(event RedoMetaMessage) bool { return false }
-func (h *RedoMetaMessageHandler) GetArea(path common.GID, dest *DispatcherManager) int {
+func (h *RedoMetaMessageHandler) GetArea(_ common.GID, _ *DispatcherManager) int {
 	return 0
 }
 
@@ -795,7 +795,7 @@ func (h *MergeDispatcherRequestHandler) Handle(dispatcherManager *DispatcherMana
 
 func (h *MergeDispatcherRequestHandler) GetSize(event MergeDispatcherRequest) int   { return 0 }
 func (h *MergeDispatcherRequestHandler) IsPaused(event MergeDispatcherRequest) bool { return false }
-func (h *MergeDispatcherRequestHandler) GetArea(path common.GID, dest *DispatcherManager) int {
+func (h *MergeDispatcherRequestHandler) GetArea(_ common.GID, _ *DispatcherManager) int {
 	return 0
 }
 

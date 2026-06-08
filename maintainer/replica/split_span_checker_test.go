@@ -115,7 +115,7 @@ func TestSplitTableSpanIntoMultiple_Properties(t *testing.T) {
 }
 
 func TestSplitSpanChecker_AddReplica(t *testing.T) {
-	testutil.SetUpTestServices()
+	testutil.SetUpTestServices(t)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
@@ -151,7 +151,7 @@ func TestSplitSpanChecker_AddReplica(t *testing.T) {
 }
 
 func TestSplitSpanChecker_RemoveReplica(t *testing.T) {
-	testutil.SetUpTestServices()
+	testutil.SetUpTestServices(t)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
@@ -196,7 +196,7 @@ func TestSplitSpanChecker_RemoveReplica(t *testing.T) {
 }
 
 func TestSplitSpanChecker_UpdateStatus_Traffic(t *testing.T) {
-	testutil.SetUpTestServices()
+	testutil.SetUpTestServices(t)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
@@ -273,7 +273,7 @@ func TestSplitSpanChecker_UpdateStatus_Traffic(t *testing.T) {
 }
 
 func TestSplitSpanChecker_UpdateStatus_Region(t *testing.T) {
-	testutil.SetUpTestServices()
+	testutil.SetUpTestServices(t)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
@@ -327,7 +327,7 @@ func TestSplitSpanChecker_UpdateStatus_Region(t *testing.T) {
 }
 
 func TestSplitSpanChecker_UpdateStatus_NonWorking(t *testing.T) {
-	testutil.SetUpTestServices()
+	testutil.SetUpTestServices(t)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
@@ -369,7 +369,7 @@ func TestSplitSpanChecker_UpdateStatus_NonWorking(t *testing.T) {
 }
 
 func TestSplitSpanChecker_ChooseSplitSpans_Traffic(t *testing.T) {
-	testutil.SetUpTestServices()
+	testutil.SetUpTestServices(t)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
@@ -425,7 +425,7 @@ func TestSplitSpanChecker_ChooseSplitSpans_Traffic(t *testing.T) {
 }
 
 func TestSplitSpanChecker_ChooseSplitSpans_Region(t *testing.T) {
-	testutil.SetUpTestServices()
+	testutil.SetUpTestServices(t)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
@@ -477,7 +477,7 @@ func TestSplitSpanChecker_ChooseSplitSpans_Region(t *testing.T) {
 }
 
 func TestSplitSpanChecker_CheckMergeWhole_SingleNode(t *testing.T) {
-	testutil.SetUpTestServices()
+	testutil.SetUpTestServices(t)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
@@ -523,7 +523,7 @@ func TestSplitSpanChecker_CheckMergeWhole_SingleNode(t *testing.T) {
 }
 
 func TestSplitSpanChecker_CheckMergeWhole_MultiNode(t *testing.T) {
-	testutil.SetUpTestServices()
+	testutil.SetUpTestServices(t)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
@@ -570,7 +570,7 @@ func TestSplitSpanChecker_CheckMergeWhole_MultiNode(t *testing.T) {
 }
 
 func TestSplitSpanChecker_CheckMergeWhole_ThresholdNotMet(t *testing.T) {
-	testutil.SetUpTestServices()
+	testutil.SetUpTestServices(t)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
@@ -614,7 +614,7 @@ func TestSplitSpanChecker_CheckMergeWhole_ThresholdNotMet(t *testing.T) {
 }
 
 func TestSplitSpanChecker_CheckBalanceTraffic_Balance(t *testing.T) {
-	testutil.SetUpTestServices()
+	testutil.SetUpTestServices(t)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
@@ -664,7 +664,7 @@ func TestSplitSpanChecker_CheckBalanceTraffic_Balance(t *testing.T) {
 	// Set region counts
 	for _, spanStatus := range []*splitSpanStatus{spanStatus1, spanStatus2, spanStatus3, spanStatus4} {
 		spanStatus.regionCount = 3
-		spanStatus.GetStatus().CheckpointTs = oracle.ComposeTS(int64(time.Now().Add(-10*time.Second).UnixMilli()), 0)
+		spanStatus.GetStatus().CheckpointTs = oracle.ComposeTS(time.Now().Add(-10*time.Second).UnixMilli(), 0)
 	}
 	checker.balanceCondition.statusUpdated = true
 
@@ -680,7 +680,7 @@ func TestSplitSpanChecker_CheckBalanceTraffic_Balance(t *testing.T) {
 }
 
 func TestSplitSpanChecker_CheckBalanceTraffic_NoBalanceNeeded(t *testing.T) {
-	testutil.SetUpTestServices()
+	testutil.SetUpTestServices(t)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
@@ -727,7 +727,7 @@ func TestSplitSpanChecker_CheckBalanceTraffic_NoBalanceNeeded(t *testing.T) {
 }
 
 func TestSplitSpanChecker_CheckBalanceTraffic_SplitIfNoMove(t *testing.T) {
-	testutil.SetUpTestServices()
+	testutil.SetUpTestServices(t)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
@@ -766,9 +766,9 @@ func TestSplitSpanChecker_CheckBalanceTraffic_SplitIfNoMove(t *testing.T) {
 
 	// Set region counts
 	spanStatus1.regionCount = 5
-	spanStatus1.GetStatus().CheckpointTs = oracle.ComposeTS(int64(time.Now().Add(-10*time.Second).UnixMilli()), 0)
+	spanStatus1.GetStatus().CheckpointTs = oracle.ComposeTS(time.Now().Add(-10*time.Second).UnixMilli(), 0)
 	spanStatus2.regionCount = 5
-	spanStatus2.GetStatus().CheckpointTs = oracle.ComposeTS(int64(time.Now().Add(-10*time.Second).UnixMilli()), 0)
+	spanStatus2.GetStatus().CheckpointTs = oracle.ComposeTS(time.Now().Add(-10*time.Second).UnixMilli(), 0)
 
 	checker.balanceCondition.statusUpdated = true
 
@@ -782,7 +782,7 @@ func TestSplitSpanChecker_CheckBalanceTraffic_SplitIfNoMove(t *testing.T) {
 }
 
 func TestSplitSpanChecker_CheckBalanceTraffic_SingleNode(t *testing.T) {
-	testutil.SetUpTestServices()
+	testutil.SetUpTestServices(t)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
@@ -827,7 +827,7 @@ func TestSplitSpanChecker_CheckBalanceTraffic_SingleNode(t *testing.T) {
 }
 
 func TestSplitSpanChecker_CheckBalanceTraffic_TrafficFluctuation(t *testing.T) {
-	testutil.SetUpTestServices()
+	testutil.SetUpTestServices(t)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
@@ -900,7 +900,7 @@ func TestSplitSpanChecker_CheckBalanceTraffic_TrafficFluctuation(t *testing.T) {
 }
 
 func TestSplitSpanChecker_ChooseMergedSpans_LargeLag(t *testing.T) {
-	testutil.SetUpTestServices()
+	testutil.SetUpTestServices(t)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
@@ -938,7 +938,7 @@ func TestSplitSpanChecker_ChooseMergedSpans_LargeLag(t *testing.T) {
 }
 
 func TestSplitSpanChecker_ChooseMergedSpans_Continuous(t *testing.T) {
-	testutil.SetUpTestServices()
+	testutil.SetUpTestServices(t)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
@@ -977,7 +977,7 @@ func TestSplitSpanChecker_ChooseMergedSpans_Continuous(t *testing.T) {
 			ID:                 replica.ID.ToPB(),
 			ComponentStatus:    heartbeatpb.ComponentState_Working,
 			EventSizePerSecond: 200,
-			CheckpointTs:       oracle.ComposeTS(int64(currentTime.Add(-10*time.Second).UnixMilli()), 0),
+			CheckpointTs:       oracle.ComposeTS(currentTime.Add(-10*time.Second).UnixMilli(), 0),
 		}
 		replica.UpdateStatus(status)
 	}
@@ -994,8 +994,146 @@ func TestSplitSpanChecker_ChooseMergedSpans_Continuous(t *testing.T) {
 	require.Contains(t, mergeResult.MergeSpans, replicas[2])
 }
 
+func TestSplitSpanChecker_ChooseMergedSpans_LimitsMergeResultsPerGroup(t *testing.T) {
+	testutil.SetUpTestServices(t)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+
+	schedulerCfg := &config.ChangefeedSchedulerConfig{
+		WriteKeyThreshold:     util.AddressOf(1000),
+		RegionThreshold:       util.AddressOf(20),
+		BalanceScoreThreshold: util.AddressOf(1),
+		MinTrafficPercentage:  util.AddressOf(0.8),
+		MaxTrafficPercentage:  util.AddressOf(1.2),
+	}
+
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+	nodeManager.GetAliveNodes()["node1"] = node.NewInfo("node1", "127.0.0.1:8300")
+	nodeManager.GetAliveNodes()["node2"] = node.NewInfo("node2", "127.0.0.1:8301")
+
+	replicas := createTestSplitSpanReplications(cfID, 100000, 18)
+	groupID := replicas[0].GetGroupID()
+	checker := newTestSplitChecker(t, cfID, groupID, schedulerCfg)
+
+	for _, replica := range replicas {
+		checker.AddReplica(replica)
+	}
+
+	currentTime := time.Now()
+	for idx, replica := range replicas {
+		if idx%4 < 2 {
+			replica.SetNodeID("node1")
+		} else {
+			replica.SetNodeID("node2")
+		}
+
+		spanStatus := checker.allTasks[replica.ID]
+		spanStatus.trafficScore = 0
+		spanStatus.regionCount = 3
+		spanStatus.lastThreeTraffic = []float64{200, 200, 200}
+		replica.UpdateStatus(&heartbeatpb.TableSpanStatus{
+			ID:                 replica.ID.ToPB(),
+			ComponentStatus:    heartbeatpb.ComponentState_Working,
+			EventSizePerSecond: 200,
+			CheckpointTs:       oracle.ComposeTS(currentTime.Add(-10*time.Second).UnixMilli(), 0),
+		})
+	}
+
+	results := checker.Check(20)
+	require.Len(t, results, 8)
+	for _, result := range results.([]SplitSpanCheckResult) {
+		require.Equal(t, OpMerge, result.OpType)
+		require.Len(t, result.MergeSpans, 2)
+	}
+}
+
+func TestSplitSpanChecker_ChooseMergedSpans_RespectsBatchSizeBelowMergeLimit(t *testing.T) {
+	testutil.SetUpTestServices(t)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+
+	schedulerCfg := &config.ChangefeedSchedulerConfig{
+		WriteKeyThreshold:     util.AddressOf(1000),
+		RegionThreshold:       util.AddressOf(20),
+		BalanceScoreThreshold: util.AddressOf(1),
+		MinTrafficPercentage:  util.AddressOf(0.8),
+		MaxTrafficPercentage:  util.AddressOf(1.2),
+	}
+
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+	nodeManager.GetAliveNodes()["node1"] = node.NewInfo("node1", "127.0.0.1:8300")
+	nodeManager.GetAliveNodes()["node2"] = node.NewInfo("node2", "127.0.0.1:8301")
+
+	replicas := createTestSplitSpanReplications(cfID, 100000, 8)
+	groupID := replicas[0].GetGroupID()
+	checker := newTestSplitChecker(t, cfID, groupID, schedulerCfg)
+
+	for _, replica := range replicas {
+		checker.AddReplica(replica)
+	}
+
+	currentTime := time.Now()
+	for idx, replica := range replicas {
+		if idx%4 < 2 {
+			replica.SetNodeID("node1")
+		} else {
+			replica.SetNodeID("node2")
+		}
+
+		spanStatus := checker.allTasks[replica.ID]
+		spanStatus.trafficScore = 0
+		spanStatus.regionCount = 3
+		spanStatus.lastThreeTraffic = []float64{200, 200, 200}
+		replica.UpdateStatus(&heartbeatpb.TableSpanStatus{
+			ID:                 replica.ID.ToPB(),
+			ComponentStatus:    heartbeatpb.ComponentState_Working,
+			EventSizePerSecond: 200,
+			CheckpointTs:       oracle.ComposeTS(currentTime.Add(-10*time.Second).UnixMilli(), 0),
+		})
+	}
+
+	results := checker.Check(3)
+	require.Len(t, results, 3)
+	for _, result := range results.([]SplitSpanCheckResult) {
+		require.Equal(t, OpMerge, result.OpType)
+		require.Len(t, result.MergeSpans, 2)
+	}
+}
+
+func TestSplitSpanChecker_ChooseMergedSpans_ZeroBatchReturnsNoResults(t *testing.T) {
+	testutil.SetUpTestServices(t)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+
+	schedulerCfg := &config.ChangefeedSchedulerConfig{
+		WriteKeyThreshold:     util.AddressOf(1000),
+		RegionThreshold:       util.AddressOf(20),
+		BalanceScoreThreshold: util.AddressOf(1),
+		MinTrafficPercentage:  util.AddressOf(0.8),
+		MaxTrafficPercentage:  util.AddressOf(1.2),
+	}
+
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+	nodeManager.GetAliveNodes()["node1"] = node.NewInfo("node1", "127.0.0.1:8300")
+
+	replicas := createTestSplitSpanReplications(cfID, 100000, 2)
+	groupID := replicas[0].GetGroupID()
+	checker := newTestSplitChecker(t, cfID, groupID, schedulerCfg)
+
+	for _, replica := range replicas {
+		checker.AddReplica(replica)
+		replica.SetNodeID("node1")
+
+		spanStatus := checker.allTasks[replica.ID]
+		spanStatus.trafficScore = 0
+		spanStatus.regionCount = 3
+		spanStatus.lastThreeTraffic = []float64{200, 200, 200}
+	}
+
+	results, sortedSpans := checker.chooseMergedSpans(0)
+	require.Empty(t, results)
+	require.Len(t, sortedSpans, len(replicas))
+}
+
 func TestSplitSpanChecker_ChooseMoveSpans_SimpleMove(t *testing.T) {
-	testutil.SetUpTestServices()
+	testutil.SetUpTestServices(t)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
@@ -1047,7 +1185,7 @@ func TestSplitSpanChecker_ChooseMoveSpans_SimpleMove(t *testing.T) {
 			ID:                 replica.ID.ToPB(),
 			ComponentStatus:    heartbeatpb.ComponentState_Working,
 			EventSizePerSecond: 200,
-			CheckpointTs:       oracle.ComposeTS(int64(currentTime.Add(-10*time.Second).UnixMilli()), 0),
+			CheckpointTs:       oracle.ComposeTS(currentTime.Add(-10*time.Second).UnixMilli(), 0),
 		}
 		replica.UpdateStatus(status)
 	}
@@ -1064,7 +1202,7 @@ func TestSplitSpanChecker_ChooseMoveSpans_SimpleMove(t *testing.T) {
 }
 
 func TestSplitSpanChecker_ChooseMoveSpans_ExchangeMove(t *testing.T) {
-	testutil.SetUpTestServices()
+	testutil.SetUpTestServices(t)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
@@ -1109,7 +1247,7 @@ func TestSplitSpanChecker_ChooseMoveSpans_ExchangeMove(t *testing.T) {
 			ID:                 replica.ID.ToPB(),
 			ComponentStatus:    heartbeatpb.ComponentState_Working,
 			EventSizePerSecond: 100,
-			CheckpointTs:       oracle.ComposeTS(int64(currentTime.Add(-10*time.Second).UnixMilli()), 0),
+			CheckpointTs:       oracle.ComposeTS(currentTime.Add(-10*time.Second).UnixMilli(), 0),
 		}
 		replica.UpdateStatus(status)
 	}
@@ -1126,7 +1264,7 @@ func TestSplitSpanChecker_ChooseMoveSpans_ExchangeMove(t *testing.T) {
 }
 
 func TestSplitSpanChecker_Check_FullFlow(t *testing.T) {
-	testutil.SetUpTestServices()
+	testutil.SetUpTestServices(t)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
@@ -1187,7 +1325,7 @@ func TestSplitSpanChecker_Check_FullFlow(t *testing.T) {
 			ID:                 replica.ID.ToPB(),
 			ComponentStatus:    heartbeatpb.ComponentState_Working,
 			EventSizePerSecond: 200,
-			CheckpointTs:       oracle.ComposeTS(int64(currentTime.Add(-10*time.Second).UnixMilli()), 0),
+			CheckpointTs:       oracle.ComposeTS(currentTime.Add(-10*time.Second).UnixMilli(), 0),
 		}
 		replica.UpdateStatus(status)
 	}
@@ -1202,7 +1340,7 @@ func TestSplitSpanChecker_Check_FullFlow(t *testing.T) {
 }
 
 func TestSplitSpanChecker_Check_FullFlow_WriteThresholdZero(t *testing.T) {
-	testutil.SetUpTestServices()
+	testutil.SetUpTestServices(t)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
@@ -1263,7 +1401,7 @@ func TestSplitSpanChecker_Check_FullFlow_WriteThresholdZero(t *testing.T) {
 			ID:                 replica.ID.ToPB(),
 			ComponentStatus:    heartbeatpb.ComponentState_Working,
 			EventSizePerSecond: 200,
-			CheckpointTs:       oracle.ComposeTS(int64(currentTime.Add(-10*time.Second).UnixMilli()), 0),
+			CheckpointTs:       oracle.ComposeTS(currentTime.Add(-10*time.Second).UnixMilli(), 0),
 		}
 		replica.UpdateStatus(status)
 	}
@@ -1278,7 +1416,7 @@ func TestSplitSpanChecker_Check_FullFlow_WriteThresholdZero(t *testing.T) {
 }
 
 func TestSplitSpanChecker_Check_FullFlow_RegionThresholdZero(t *testing.T) {
-	testutil.SetUpTestServices()
+	testutil.SetUpTestServices(t)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
 	schedulerCfg := &config.ChangefeedSchedulerConfig{
@@ -1339,7 +1477,7 @@ func TestSplitSpanChecker_Check_FullFlow_RegionThresholdZero(t *testing.T) {
 			ID:                 replica.ID.ToPB(),
 			ComponentStatus:    heartbeatpb.ComponentState_Working,
 			EventSizePerSecond: 0,
-			CheckpointTs:       oracle.ComposeTS(int64(currentTime.Add(-10*time.Second).UnixMilli()), 0),
+			CheckpointTs:       oracle.ComposeTS(currentTime.Add(-10*time.Second).UnixMilli(), 0),
 		}
 		replica.UpdateStatus(status)
 	}
@@ -1354,7 +1492,7 @@ func TestSplitSpanChecker_Check_FullFlow_RegionThresholdZero(t *testing.T) {
 }
 
 func TestSplitSpanChecker_Check_PerformanceWithManySpans(t *testing.T) {
-	testutil.SetUpTestServices()
+	testutil.SetUpTestServices(t)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 
 	spanCount := 10000

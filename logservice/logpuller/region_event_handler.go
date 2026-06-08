@@ -31,6 +31,15 @@ import (
 var (
 	metricsResolvedTsCount = metrics.PullerEventCounter.WithLabelValues("resolved_ts")
 	metricsEventCount      = metrics.PullerEventCounter.WithLabelValues("event")
+
+	metricRegionEventHandleDurationEntries  = metrics.SubscriptionClientRegionEventHandleDuration.WithLabelValues("entries")
+	metricRegionEventHandleDurationResolved = metrics.SubscriptionClientRegionEventHandleDuration.WithLabelValues("resolved")
+	metricRegionEventHandleDurationMixed    = metrics.SubscriptionClientRegionEventHandleDuration.WithLabelValues("mixed")
+	metricRegionEventHandleDurationError    = metrics.SubscriptionClientRegionEventHandleDuration.WithLabelValues("error")
+
+	metricConsumeKVEventsCallbackDurationClearCache        = metrics.SubscriptionClientConsumeKVEventsCallbackDuration.WithLabelValues("clearCache")
+	metricConsumeKVEventsCallbackDurationAdvanceResolvedTs = metrics.SubscriptionClientConsumeKVEventsCallbackDuration.WithLabelValues("advanceResolvedTs")
+	metricConsumeKVEventsCallbackDurationWakeSubscription  = metrics.SubscriptionClientConsumeKVEventsCallbackDuration.WithLabelValues("wakeSubscription")
 )
 
 const (
@@ -91,18 +100,18 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 	hasResolved := false
 	hasError := false
 	defer func() {
-		eventType := "error"
+		observer := metricRegionEventHandleDurationError
 		switch {
 		case hasEntries && hasResolved:
-			eventType = "mixed"
+			observer = metricRegionEventHandleDurationMixed
 		case hasEntries:
-			eventType = "entries"
+			observer = metricRegionEventHandleDurationEntries
 		case hasResolved:
-			eventType = "resolved"
+			observer = metricRegionEventHandleDurationResolved
 		case hasError:
-			eventType = "error"
+			observer = metricRegionEventHandleDurationError
 		}
-		metrics.SubscriptionClientRegionEventHandleDuration.WithLabelValues(eventType).Observe(time.Since(startTime).Seconds())
+		observer.Observe(time.Since(startTime).Seconds())
 	}()
 
 	if len(span.kvEventsCache) != 0 {
@@ -143,15 +152,15 @@ func (h *regionEventHandler) Handle(span *subscribedSpan, events ...regionEvent)
 		await := span.consumeKVEvents(span.kvEventsCache, func() {
 			start := time.Now()
 			span.clearKVEventsCache()
-			metrics.SubscriptionClientConsumeKVEventsCallbackDuration.WithLabelValues("clearCache").Observe(time.Since(start).Seconds())
+			metricConsumeKVEventsCallbackDurationClearCache.Observe(time.Since(start).Seconds())
 
 			start = time.Now()
 			tryAdvanceResolvedTs()
-			metrics.SubscriptionClientConsumeKVEventsCallbackDuration.WithLabelValues("advanceResolvedTs").Observe(time.Since(start).Seconds())
+			metricConsumeKVEventsCallbackDurationAdvanceResolvedTs.Observe(time.Since(start).Seconds())
 
 			start = time.Now()
 			h.subClient.wakeSubscription(span.subID)
-			metrics.SubscriptionClientConsumeKVEventsCallbackDuration.WithLabelValues("wakeSubscription").Observe(time.Since(start).Seconds())
+			metricConsumeKVEventsCallbackDurationWakeSubscription.Observe(time.Since(start).Seconds())
 		})
 		// if not await, the wake callback will not be called, we need clear the cache manually.
 		if !await {
@@ -169,7 +178,7 @@ func (h *regionEventHandler) GetSize(event regionEvent) int {
 	return event.getSize()
 }
 
-func (h *regionEventHandler) GetArea(path SubscriptionID, dest *subscribedSpan) int {
+func (h *regionEventHandler) GetArea(_ SubscriptionID, _ *subscribedSpan) int {
 	return 0
 }
 
@@ -198,7 +207,7 @@ func (h *regionEventHandler) GetTimestamp(event regionEvent) dynstream.Timestamp
 		return dynstream.Timestamp(event.resolvedTs)
 	}
 }
-func (h *regionEventHandler) IsPaused(event regionEvent) bool { return false }
+func (h *regionEventHandler) IsPaused(_ regionEvent) bool { return false }
 
 func (h *regionEventHandler) GetType(event regionEvent) dynstream.EventType {
 	if event.entries != nil || event.resolvedTs != 0 {

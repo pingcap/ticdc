@@ -304,6 +304,10 @@ values(%d,
 	return buf.String()
 }
 
+func (c *BankWorkload) BuildDDLSql(opts schema.DDLOption) string {
+	return ""
+}
+
 func (c *BankWorkload) BuildUpdateSql(opts schema.UpdateOption) string {
 	panic("unimplemented")
 }

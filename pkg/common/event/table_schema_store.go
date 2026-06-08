@@ -92,7 +92,6 @@ func newTableSchemaStoreRequirements(
 			needTableNames: true,
 		}
 	case commonType.CloudStorageSinkType, commonType.BlackHoleSinkType:
-		// These sinks currently do not consume TableSchemaStore metadata.
 		return tableSchemaStoreRequirements{
 			needTableIDs:   false,
 			updateTableIDs: false,

@@ -87,6 +87,8 @@ func TestMigration(t *testing.T) {
 	}
 	status2 := config.ChangeFeedStatus{CheckpointTs: 2}
 	cfg := config.GetDefaultReplicaConfig()
+	// This internal field is not persisted in changefeed metadata.
+	cfg.EnableRedoIOCheck = nil
 	cfg.CheckGCSafePoint = util.AddressOf(false)
 	cfg.Sink = &config.SinkConfig{
 		DispatchRules: []*config.DispatchRule{

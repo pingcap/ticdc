@@ -223,6 +223,8 @@ dbLoop:
 
 	verifier.closeAndWait()
 
+	log.Info("verifyTables completed", zap.Int("tableCount", len(verifier.tableInfos)), zap.Uint64("startTs", startTs))
+
 	if verifier.firstErr != nil {
 		return nil, nil, nil, nil, verifier.firstErr
 	}
