@@ -156,7 +156,7 @@ func (be *BarrierEvent) buildRouteAdmission() routing.AdmissionEvent {
 	return routing.AdmissionEvent{
 		CommitTs:    be.commitTs,
 		IsSyncPoint: be.isSyncPoint,
-		Tables:      be.routeAdmissions,
+		Admissions:  be.routeAdmissions,
 	}
 }
 

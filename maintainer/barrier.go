@@ -49,14 +49,8 @@ type Barrier struct {
 	// and logs must stay in the same mode.
 	mode int64
 
-	// routeAdmission gates DDL writes when table route is enabled. A nil value
-	// keeps Barrier on the normal non-route path.
-	routeAdmission tableRouteAdmission
-}
-
-type tableRouteAdmission interface {
-	Precheck(info routing.AdmissionEvent) (bool, error)
-	Apply(info routing.AdmissionEvent) error
+	// routeAdmin gates DDL writes when table route is enabled. A nil value keeps Barrier on the normal non-route path.
+	routeAdmin *routing.Admin
 }
 
 // NewBarrier create a new barrier for the changefeed
@@ -65,7 +59,7 @@ func NewBarrier(spanController *span.Controller,
 	splitTableEnabled bool,
 	bootstrapRespMap map[node.ID]*heartbeatpb.MaintainerBootstrapResponse,
 	mode int64,
-	routeAdmission tableRouteAdmission,
+	admin *routing.Admin,
 ) *Barrier {
 	barrier := Barrier{
 		blockedEvents:      NewBlockEventMap(),
@@ -74,7 +68,7 @@ func NewBarrier(spanController *span.Controller,
 		operatorController: operatorController,
 		splitTableEnabled:  splitTableEnabled,
 		mode:               mode,
-		routeAdmission:     routeAdmission,
+		routeAdmin:         admin,
 	}
 	barrier.handleBootstrapResponse(bootstrapRespMap)
 	return &barrier
@@ -283,7 +277,7 @@ func (b *Barrier) Resend() []*messaging.TargetMessage {
 // eventsReadyForResend applies route admission gates when enabled and returns
 // the BarrierEvents whose resend messages can be emitted in this round.
 func (b *Barrier) eventsReadyForResend(eventList []*BarrierEvent) []*BarrierEvent {
-	if b.routeAdmission == nil {
+	if b.routeAdmin == nil {
 		return eventList
 	}
 	// Route admission is order-sensitive: a later DDL must be checked against
@@ -605,17 +599,17 @@ func (b *Barrier) tryScheduleEvent(event *BarrierEvent) bool {
 }
 
 func (b *Barrier) precheckRouteEvent(event *BarrierEvent) (bool, error) {
-	if b.routeAdmission == nil {
+	if b.routeAdmin == nil {
 		return true, nil
 	}
-	return b.routeAdmission.Precheck(event.buildRouteAdmission())
+	return b.routeAdmin.Precheck(event.buildRouteAdmission())
 }
 
 func (b *Barrier) applyRouteEvent(event *BarrierEvent) error {
-	if b.routeAdmission == nil {
+	if b.routeAdmin == nil {
 		return nil
 	}
-	return b.routeAdmission.Apply(event.buildRouteAdmission())
+	return b.routeAdmin.Apply(event.buildRouteAdmission())
 }
 
 // ackEvent creates an ack event

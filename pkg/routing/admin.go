@@ -77,10 +77,10 @@ type AdmissionEvent struct {
 	CommitTs uint64
 	// IsSyncPoint distinguishes sync-point barriers from DDL barriers at the same ts.
 	IsSyncPoint bool
-	// Tables carries dispatcher-provided source route transitions. DDL type
+	// Admissions carries dispatcher-provided source route transitions. DDL type
 	// interpretation stays in dispatcher; Admin only consumes route-level
 	// admit/release operations.
-	Tables []Admission
+	Admissions []Admission
 }
 
 // pendingEvent is the cached route transition for one DDL event waiting in
@@ -229,10 +229,7 @@ func (a *Admin) Precheck(info AdmissionEvent) (bool, error) {
 	if !a.needsCheck(info) {
 		return true, nil
 	}
-	pending, ok, err := a.getOrBuildPendingEvent(info)
-	if err != nil {
-		return false, a.fail(err)
-	}
+	pending, ok := a.getOrBuildPendingEvent(info)
 	if !ok {
 		return true, nil
 	}
@@ -269,11 +266,7 @@ func (a *Admin) Apply(info AdmissionEvent) error {
 	key := eventKey(info)
 	pending, ok := a.pendingEvents[key]
 	if !ok {
-		var err error
-		pending, ok, err = a.getOrBuildPendingEvent(info)
-		if err != nil {
-			return a.fail(err)
-		}
+		pending, ok = a.getOrBuildPendingEvent(info)
 		if !ok {
 			return nil
 		}
@@ -303,25 +296,22 @@ func (a *Admin) needsCheck(info AdmissionEvent) bool {
 	if a == nil || a.registry == nil || info.IsSyncPoint {
 		return false
 	}
-	return len(info.Tables) > 0
+	return len(info.Admissions) > 0
 }
 
-func (a *Admin) getOrBuildPendingEvent(info AdmissionEvent) (*pendingEvent, bool, error) {
+func (a *Admin) getOrBuildPendingEvent(info AdmissionEvent) (*pendingEvent, bool) {
 	key := eventKey(info)
 	if pending, ok := a.pendingEvents[key]; ok {
-		return pending, true, nil
+		return pending, true
 	}
-	transition, err := a.buildTransition(info)
-	if err != nil {
-		return nil, false, err
-	}
+	transition := a.buildTransition(info)
 	if transition == nil {
-		return nil, false, nil
+		return nil, false
 	}
 	pending := &pendingEvent{transition: transition}
 	heap.Push(&a.pendingQueue, key)
 	a.pendingEvents[key] = pending
-	return pending, true, nil
+	return pending, true
 }
 
 func (a *Admin) isPendingHead(key pendingKey) bool {
@@ -339,21 +329,14 @@ func (a *Admin) popPendingHead(key pendingKey) {
 	delete(a.pendingEvents, key)
 }
 
-func (a *Admin) buildTransition(info AdmissionEvent) (*routeTransition, error) {
+func (a *Admin) buildTransition(info AdmissionEvent) *routeTransition {
 	transition := &routeTransition{commitTs: info.CommitTs}
 	releaseSet := make(map[TableKey]struct{})
 	schemaSet := make(map[string]struct{})
 	admitSet := make(map[routeBindingKey]struct{})
-	for _, table := range info.Tables {
+	for _, table := range info.Admissions {
 		switch table.Action {
 		case Admit:
-			if table.Binding.Source.Schema == "" || table.Binding.Source.Table == "" ||
-				table.Binding.Target.Schema == "" || table.Binding.Target.Table == "" {
-				return nil, errors.ErrInternalCheckFailed.GenWithStack(
-					"incomplete route admit: source=`%s`.`%s`, target=`%s`.`%s`",
-					table.Binding.Source.Schema, table.Binding.Source.Table,
-					table.Binding.Target.Schema, table.Binding.Target.Table)
-			}
 			key := routeBindingKey{source: table.Binding.Source, target: table.Binding.Target}
 			if _, ok := admitSet[key]; ok {
 				continue
@@ -361,30 +344,18 @@ func (a *Admin) buildTransition(info AdmissionEvent) (*routeTransition, error) {
 			admitSet[key] = struct{}{}
 			transition.admits = append(transition.admits, table.Binding)
 		case Release:
-			if table.Source.Schema == "" || table.Source.Table == "" {
-				return nil, errors.ErrInternalCheckFailed.GenWithStack(
-					"incomplete route release: source=`%s`.`%s`",
-					table.Source.Schema, table.Source.Table)
-			}
 			if _, ok := releaseSet[table.Source]; ok {
 				continue
 			}
 			releaseSet[table.Source] = struct{}{}
 			transition.releases = append(transition.releases, table.Source)
 		case ReleaseSchema:
-			if table.Source.Schema == "" {
-				return nil, errors.ErrInternalCheckFailed.GenWithStack(
-					"incomplete route schema release: sourceSchema=%s",
-					table.Source.Schema)
-			}
 			if _, ok := schemaSet[table.Source.Schema]; ok {
 				continue
 			}
 			schemaSet[table.Source.Schema] = struct{}{}
 			transition.releaseSchemas = append(transition.releaseSchemas, table.Source.Schema)
 		default:
-			return nil, errors.ErrInternalCheckFailed.GenWithStack(
-				"unknown route admission action %d", table.Action)
 		}
 	}
 	slices.SortFunc(transition.releases, compareTableKey)
@@ -393,9 +364,9 @@ func (a *Admin) buildTransition(info AdmissionEvent) (*routeTransition, error) {
 	if len(transition.releases) == 0 &&
 		len(transition.releaseSchemas) == 0 &&
 		len(transition.admits) == 0 {
-		return nil, nil
+		return nil
 	}
-	return transition, nil
+	return transition
 }
 
 func (a *Admin) applyTransition(transition *routeTransition, mutate bool) (routeAdmissionChange, error) {

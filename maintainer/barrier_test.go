@@ -595,7 +595,7 @@ func TestBarrierPrechecksRecoveredRouteEventBeforeResend(t *testing.T) {
 	_ = barrier.Resend()
 	ready, err := routeAdmin.Precheck(routing.AdmissionEvent{
 		CommitTs: 20,
-		Tables: []routing.Admission{
+		Admissions: []routing.Admission{
 			{
 				Action:  routing.Admit,
 				Binding: routing.NewRouteBinding("db2", "u", "target", "u"),
@@ -699,7 +699,7 @@ func TestBarrierRoutePrecheckKeepsFullyReportedBlockedEventAndPreventsWriteActio
 		t, routeBySource())
 	ready, err := routeAdmin.Precheck(routing.AdmissionEvent{
 		CommitTs: 5,
-		Tables: []routing.Admission{
+		Admissions: []routing.Admission{
 			{
 				Action:  routing.Admit,
 				Binding: routing.NewRouteBinding("db2", "t", "db2_target", "t"),

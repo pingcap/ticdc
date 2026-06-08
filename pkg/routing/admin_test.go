@@ -142,7 +142,7 @@ func newAdminForTest(t *testing.T, rules []*config.DispatchRule) *Admin {
 }
 
 func routeEvent(commitTs uint64, tables ...Admission) AdmissionEvent {
-	return AdmissionEvent{CommitTs: commitTs, Tables: tables}
+	return AdmissionEvent{CommitTs: commitTs, Admissions: tables}
 }
 
 func admit(schema, table, targetSchema, targetTable string) Admission {
