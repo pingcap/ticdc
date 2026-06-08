@@ -149,6 +149,8 @@ func TestResumeChangefeed(t *testing.T) {
 }
 
 func TestResumeChangefeedNormalState(t *testing.T) {
+	// Scenario: a running changefeed receives a resume request. The controller
+	// should reject it before touching backend state, so the epoch remains unchanged.
 	ctrl := gomock.NewController(t)
 	backend := mock_changefeed.NewMockBackend(ctrl)
 	changefeedDB := changefeed.NewChangefeedDB(1216)
@@ -167,9 +169,8 @@ func TestResumeChangefeedNormalState(t *testing.T) {
 	changefeedDB.AddReplicatingMaintainer(cf, "node1")
 
 	err := controller.ResumeChangefeed(context.Background(), cfID, 12, true)
-	require.NoError(t, err)
+	require.True(t, errors.ErrChangefeedUpdateRefused.Equal(err))
 
-	// The resume operation is skipped, so the epoch is not updated and should remain its original value.
 	changefeed := controller.changefeedDB.GetByID(cfID)
 	require.Equal(t, changefeed.GetInfo().Epoch, uint64(233))
 }
