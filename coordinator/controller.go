@@ -488,21 +488,17 @@ func (c *Controller) handleBootstrapResponses(ctx context.Context, responses map
 	}
 	log.Info("all new nodes bootstrap response received",
 		zap.Int("newNodeCount", len(responses)))
-	// runningCfs are changefeeds that already running on other nodes
-	runningCfs := make(map[common.ChangeFeedID]remoteMaintainer)
+	// runningCfs are changefeeds that already running on other nodes.
+	// A changefeed can appear more than once during epoch handover: the new
+	// maintainer may already report while an older epoch is still closing.
+	runningCfs := make(map[common.ChangeFeedID][]remoteMaintainer)
 	for nodeID, resp := range responses {
 		for _, status := range resp.Statuses {
 			changeFeedID := common.NewChangefeedIDFromPB(status.ChangefeedID)
-			if old, ok := runningCfs[changeFeedID]; ok {
-				log.Panic("maintainer runs on multiple node",
-					zap.Stringer("changefeedID", changeFeedID),
-					zap.Stringer("oldNode", old.nodeID),
-					zap.Stringer("newNode", nodeID))
-			}
-			runningCfs[changeFeedID] = remoteMaintainer{
+			runningCfs[changeFeedID] = append(runningCfs[changeFeedID], remoteMaintainer{
 				nodeID: nodeID,
 				status: status,
-			}
+			})
 		}
 	}
 	recoveredStaleDrainTarget := c.recoverStaleDispatcherDrainTargetFromBootstrap(responses)
@@ -646,7 +642,7 @@ func (c *Controller) updateChangefeedStatus(
 // It will load all changefeeds from metastore, and compare with running changefeeds
 // Then initialize the changefeeds that are not running on other nodes
 // And construct all changefeeds state in memory.
-func (c *Controller) finishBootstrap(ctx context.Context, runningChangefeeds map[common.ChangeFeedID]remoteMaintainer) {
+func (c *Controller) finishBootstrap(ctx context.Context, runningChangefeeds map[common.ChangeFeedID][]remoteMaintainer) {
 	// load all changefeeds from metastore, and check if the changefeed is already in workingMap
 	allChangefeeds, err := c.backend.GetAllChangefeeds(ctx)
 	if err != nil {
@@ -682,20 +678,11 @@ func (c *Controller) finishBootstrap(ctx context.Context, runningChangefeeds map
 	for cfID, cfMeta := range allChangefeeds {
 		// Configuration items for compatibility with older versions
 		cfMeta.Info.VerifyAndComplete()
-		rm, ok := runningChangefeeds[cfID]
-		runningEpochMatches := ok && maintainerEpochMatches(rm.status.MaintainerEpoch, cfMeta.Info.Epoch)
-		if !ok || !runningEpochMatches {
+		remotes := runningChangefeeds[cfID]
+		rm, ok, staleMaintainers := selectBootstrapMaintainer(cfID, cfMeta.Info.Epoch, remotes)
+		if !ok {
 			// The changefeed is not running on other nodes, add it to changefeedDB.
 			// We will create this changefeed later.
-			if ok {
-				log.Warn("ignore running maintainer with stale epoch when bootstrapping",
-					zap.String("changefeed", cfID.String()),
-					zap.String("node", rm.nodeID.String()),
-					zap.Uint64("statusMaintainerEpoch", rm.status.MaintainerEpoch),
-					zap.Uint64("currentMaintainerEpoch", cfMeta.Info.Epoch),
-					zap.String("status", common.FormatMaintainerStatus(rm.status)))
-				delete(runningChangefeeds, cfID)
-			}
 			cf := changefeed.NewChangefeed(cfID, cfMeta.Info, cfMeta.Status.CheckpointTs, false)
 			if shouldRunChangefeed(cf.GetInfo().State) {
 				c.changefeedDB.AddAbsentChangefeed(cf)
@@ -709,43 +696,41 @@ func (c *Controller) finishBootstrap(ctx context.Context, runningChangefeeds map
 				zap.String("status", common.FormatMaintainerStatus(rm.status)))
 			cf := changefeed.NewChangefeed(cfID, cfMeta.Info, rm.status.CheckpointTs, false)
 			c.changefeedDB.AddReplicatingMaintainer(cf, rm.nodeID)
-			delete(runningChangefeeds, cfID)
 		}
+		delete(runningChangefeeds, cfID)
 
 		// check if the changefeed is stopping or removing, we need to stop all dispatchers completely
 		switch cfMeta.Status.Progress {
 		case config.ProgressStopping, config.ProgressRemoving:
 			remove := cfMeta.Status.Progress == config.ProgressRemoving
-			if ok && !runningEpochMatches {
-				c.operatorController.StopRemoteMaintainerWithMaintainerEpoch(
-					cfID, rm.nodeID, remove, rm.status.MaintainerEpoch)
+			if !ok && len(staleMaintainers) > 0 {
 				c.changefeedDB.StopByChangefeedID(cfID, remove)
 			} else {
 				c.operatorController.StopChangefeed(ctx, cfID, remove)
 			}
+			c.stopStaleBootstrapMaintainers(cfID, staleMaintainers, remove)
 			log.Info("stop changefeed when bootstrapping", zap.String("changefeed", cfID.String()), zap.Any("meta", cfMeta))
 		default:
-			if ok && !runningEpochMatches {
-				c.operatorController.StopRemoteMaintainerWithMaintainerEpoch(
-					cfID, rm.nodeID, false, rm.status.MaintainerEpoch)
-			}
+			c.stopStaleBootstrapMaintainers(cfID, staleMaintainers, false)
 		}
 	}
 
 	// Remove the changefeeds that are not in allChangefeeds, there are stale changefeeds.
-	for id, rm := range runningChangefeeds {
-		log.Warn("maintainer not found in local, remove it",
-			zap.String("changefeed", id.Name()),
-			zap.String("node", rm.nodeID.String()),
-		)
-		_ = c.messageCenter.SendCommand(changefeed.RemoveMaintainerMessage(
-			common.DefaultKeyspaceID,
-			id,
-			rm.nodeID,
-			true,
-			true,
-			rm.status.MaintainerEpoch,
-		))
+	for id, remotes := range runningChangefeeds {
+		for _, rm := range remotes {
+			log.Warn("maintainer not found in local, remove it",
+				zap.String("changefeed", id.Name()),
+				zap.String("node", rm.nodeID.String()),
+			)
+			_ = c.messageCenter.SendCommand(changefeed.RemoveMaintainerMessage(
+				common.DefaultKeyspaceID,
+				id,
+				rm.nodeID,
+				true,
+				true,
+				rm.status.MaintainerEpoch,
+			))
+		}
 	}
 
 	// start operator and scheduler
@@ -757,6 +742,81 @@ func (c *Controller) finishBootstrap(ctx context.Context, runningChangefeeds map
 	c.taskHandlers = append(c.taskHandlers, operatorControllerHandle)
 	c.initialized.Store(true)
 	log.Info("coordinator bootstrapped", zap.Any("nodeID", c.selfNode.ID))
+}
+
+func selectBootstrapMaintainer(
+	cfID common.ChangeFeedID,
+	currentEpoch uint64,
+	remotes []remoteMaintainer,
+) (remoteMaintainer, bool, []remoteMaintainer) {
+	if len(remotes) == 0 {
+		return remoteMaintainer{}, false, nil
+	}
+
+	exactMatches := make([]remoteMaintainer, 0, len(remotes))
+	compatMatches := make([]remoteMaintainer, 0, len(remotes))
+	staleMaintainers := make([]remoteMaintainer, 0, len(remotes))
+	for _, rm := range remotes {
+		statusEpoch := rm.status.MaintainerEpoch
+		switch {
+		case statusEpoch == currentEpoch:
+			exactMatches = append(exactMatches, rm)
+		case maintainerEpochMatches(statusEpoch, currentEpoch):
+			compatMatches = append(compatMatches, rm)
+		default:
+			staleMaintainers = append(staleMaintainers, rm)
+		}
+	}
+
+	matches := exactMatches
+	if len(matches) == 0 {
+		matches = compatMatches
+	} else {
+		staleMaintainers = append(staleMaintainers, compatMatches...)
+	}
+	if len(matches) > 1 {
+		log.Panic("maintainer runs on multiple node",
+			zap.Stringer("changefeedID", cfID),
+			zap.Stringer("oldNode", matches[0].nodeID),
+			zap.Stringer("newNode", matches[1].nodeID),
+			zap.Uint64("currentMaintainerEpoch", currentEpoch),
+			zap.Uint64("statusMaintainerEpoch", matches[0].status.MaintainerEpoch))
+	}
+	if len(matches) == 0 {
+		return remoteMaintainer{}, false, staleMaintainers
+	}
+	return matches[0], true, staleMaintainers
+}
+
+func (c *Controller) stopStaleBootstrapMaintainers(
+	cfID common.ChangeFeedID,
+	staleMaintainers []remoteMaintainer,
+	removed bool,
+) {
+	for _, stale := range staleMaintainers {
+		log.Warn("ignore running maintainer with stale epoch when bootstrapping",
+			zap.String("changefeed", cfID.String()),
+			zap.String("node", stale.nodeID.String()),
+			zap.Uint64("statusMaintainerEpoch", stale.status.MaintainerEpoch),
+			zap.String("status", common.FormatMaintainerStatus(stale.status)))
+		if c.operatorController.GetOperator(cfID) != nil {
+			keyspaceID := common.DefaultKeyspaceID
+			if cf := c.changefeedDB.GetByID(cfID); cf != nil {
+				keyspaceID = cf.GetKeyspaceID()
+			}
+			_ = c.messageCenter.SendCommand(changefeed.RemoveMaintainerMessage(
+				keyspaceID,
+				cfID,
+				stale.nodeID,
+				true,
+				removed,
+				stale.status.MaintainerEpoch,
+			))
+			continue
+		}
+		c.operatorController.StopRemoteMaintainerWithMaintainerEpoch(
+			cfID, stale.nodeID, removed, stale.status.MaintainerEpoch)
+	}
 }
 
 func (c *Controller) Stop() {
