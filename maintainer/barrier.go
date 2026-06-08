@@ -42,7 +42,6 @@ type Barrier struct {
 	spanController     *span.Controller
 	operatorController *operator.Controller
 	splitTableEnabled  bool
-	flushEnabled       bool
 	mode               int64
 }
 

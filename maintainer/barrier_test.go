@@ -1375,47 +1375,6 @@ func TestHandleBlockBootstrapResponse(t *testing.T) {
 	}, common.DefaultMode)
 	event = barrier.blockedEvents.m[getEventKey(6, false)]
 	require.Nil(t, event)
-	// flush disabled: restored bootstrap event should skip flush phase and resend write directly.
-	barrier = NewBarrierWithFlush(spanController, operatorController, false, false, map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{
-		"nod1": {
-			ChangefeedID: cfID.ToPB(),
-			Spans: []*heartbeatpb.BootstrapTableSpan{
-				{
-					ID: dispatcherIDs[0],
-					BlockState: &heartbeatpb.State{
-						IsBlocked: true,
-						BlockTs:   6,
-						BlockTables: &heartbeatpb.InfluencedTables{
-							InfluenceType: heartbeatpb.InfluenceType_Normal,
-							TableIDs:      []int64{1, 2},
-						},
-						Stage: heartbeatpb.BlockStage_WRITING,
-					},
-				},
-				{
-					ID: dispatcherIDs[1],
-					BlockState: &heartbeatpb.State{
-						IsBlocked: true,
-						BlockTs:   6,
-						BlockTables: &heartbeatpb.InfluencedTables{
-							InfluenceType: heartbeatpb.InfluenceType_Normal,
-							TableIDs:      []int64{1, 2},
-						},
-						Stage: heartbeatpb.BlockStage_WAITING,
-					},
-				},
-			},
-		},
-	}, common.DefaultMode)
-	event = barrier.blockedEvents.m[getEventKey(6, false)]
-	require.NotNil(t, event)
-	require.True(t, event.selected.Load())
-	require.False(t, event.writerDispatcherAdvanced)
-	bootstrapMsgs := barrier.Resend()
-	require.Len(t, bootstrapMsgs, 1)
-	bootstrapResp := bootstrapMsgs[0].Message[0].(*heartbeatpb.HeartBeatResponse)
-	require.Len(t, bootstrapResp.DispatcherStatuses, 1)
-	require.Equal(t, heartbeatpb.Action_Write, bootstrapResp.DispatcherStatuses[0].Action.Action)
 }
 
 func TestSyncPointBlockPerf(t *testing.T) {
@@ -1918,31 +1877,6 @@ func TestDeferAllDBBlockEventFromDDLDispatcherWhilePendingSchedule(t *testing.T)
 	event := barrier.blockedEvents.m[key]
 	require.NotNil(t, event)
 	require.Nil(t, event.rangeChecker)
-
-	// Truncate barrier finishes flush phase first.
-	_ = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
-		ChangefeedID: cfID.ToPB(),
-		BlockStatuses: []*heartbeatpb.TableSpanBlockStatus{
-			{
-				ID: spanController.GetDDLDispatcherID().ToPB(),
-				State: &heartbeatpb.State{
-					IsBlocked:   true,
-					BlockTs:     10,
-					IsSyncPoint: false,
-					Stage:       heartbeatpb.BlockStage_DONE,
-				},
-			},
-			{
-				ID: oldTableDispatcherID.ToPB(),
-				State: &heartbeatpb.State{
-					IsBlocked:   true,
-					BlockTs:     10,
-					IsSyncPoint: false,
-					Stage:       heartbeatpb.BlockStage_DONE,
-				},
-			},
-		},
-	})
 
 	// Then writer reports write done, maintainer schedules it and removes old table task.
 	_ = barrier.HandleStatus("node1", &heartbeatpb.BlockStatusRequest{
