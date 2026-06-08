@@ -57,8 +57,8 @@ var (
 
 	// MinTiCDCVersion is the version of the minimal allowed TiCDC version.
 	MinTiCDCVersion = semver.New("7.5.0-alpha")
-	// MaxTiCDCVersion is the version of the maximum allowed TiCDC version.
-	// for version `x.y.z`, max allowed `x+2.0.0`
+	// MaxTiCDCVersion is the sentinel upper bound for TiCDC compatibility checks.
+	// 9999 keeps future TiCDC versions accepted while preserving an explicit upper bound.
 	MaxTiCDCVersion = semver.New("9999.0.0-alpha")
 )
 
