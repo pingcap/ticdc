@@ -27,6 +27,7 @@ import (
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	parser_model "github.com/pingcap/tidb/pkg/parser/model"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"go.uber.org/zap"
 )
 
@@ -145,6 +146,15 @@ var allDDLHandlers = map[model.ActionType]*persistStorageDDLHandler{
 		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
 		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
 		buildDDLEventFunc:          buildDDLEventForNewTableDDL,
+	},
+	model.ActionCreateMaterializedView: {
+		buildPersistedDDLEventFunc: buildPersistedDDLEventForCreateMaterializedView,
+		updateDDLHistoryFunc:       updateDDLHistoryForAddDropTable,
+		updateFullTableInfoFunc:    updateFullTableInfoForSingleTableDDL,
+		updateSchemaMetadataFunc:   updateSchemaMetadataForNewTableDDL,
+		iterateEventTablesFunc:     iterateEventTablesForSingleTableDDL,
+		extractTableInfoFunc:       extractTableInfoFuncForSingleTableDDL,
+		buildDDLEventFunc:          buildDDLEventForCreateMaterializedView,
 	},
 	model.ActionCreateMaterializedViewShadow: {
 		buildPersistedDDLEventFunc: buildPersistedDDLEventForCreateTable,
@@ -577,8 +587,9 @@ func buildPersistedDDLEventCommon(args buildPersistedDDLEventFuncArgs) Persisted
 		query = job.Query
 	}
 
-	// Note: if a ddl involve multiple tables, job.TableID is different with job.BinlogInfo.TableInfo.ID
-	// and usually job.BinlogInfo.TableInfo.ID will be the newly created IDs.
+	// Note: if a ddl involve multiple tables, job.TableID is different with job.BinlogInfo.TableInfo.ID.
+	// For some upstream DDLs like ActionCreateMaterializedView, BinlogInfo.TableInfo may even point to
+	// a related base table, so callers must override TableInfo when needed.
 	event := PersistedDDLEvent{
 		ID:             job.ID,
 		Type:           byte(job.Type),
@@ -674,6 +685,35 @@ func setReferTableForCreateTableLike(event *PersistedDDLEvent, args buildPersist
 			event.ReferTablePartitionIDs = append(event.ReferTablePartitionIDs, id)
 		}
 	}
+}
+
+func buildPersistedDDLEventForCreateMaterializedView(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
+	event := buildPersistedDDLEventCommon(args)
+	event.SchemaName = getSchemaName(args.databaseMap, event.SchemaID)
+	event.TableInfo = getCreateMaterializedViewTableInfo(args.job)
+	event.TableName = event.TableInfo.Name.O
+	return event
+}
+
+func getCreateMaterializedViewTableInfo(job *model.Job) *model.TableInfo {
+	args, err := model.GetCreateMaterializedViewArgs(job)
+	if err == nil && args != nil && args.TableInfo != nil {
+		return args.TableInfo
+	}
+	if job.BinlogInfo != nil && job.BinlogInfo.TableInfo != nil {
+		log.Warn("fallback to binlog table info for create materialized view",
+			zap.Error(err),
+			zap.Int64("jobID", job.ID),
+			zap.Int64("tableID", job.TableID),
+			zap.String("tableName", job.TableName))
+		return job.BinlogInfo.TableInfo
+	}
+	log.Panic("table info not found for create materialized view",
+		zap.Error(err),
+		zap.Int64("jobID", job.ID),
+		zap.Int64("tableID", job.TableID),
+		zap.String("tableName", job.TableName))
+	return nil
 }
 
 func buildPersistedDDLEventForDropTable(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
@@ -2141,6 +2181,59 @@ func buildDDLEventForNewTableDDL(rawEvent *PersistedDDLEvent, tableFilter filter
 		}
 	}
 	return ddlEvent, true, err
+}
+
+func buildDDLEventForCreateMaterializedView(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error) {
+	ddlEvent, ok, err := buildDDLEventForNewTableDDL(rawEvent, tableFilter, tableID)
+	if err != nil || !ok {
+		return ddlEvent, ok, err
+	}
+	ddlEvent.Type = byte(model.ActionCreateTable)
+	ddlEvent.Query = buildCreateTableQueryForMaterializedView(rawEvent)
+	return ddlEvent, true, nil
+}
+
+func buildCreateTableQueryForMaterializedView(rawEvent *PersistedDDLEvent) string {
+	tableName := common.QuoteSchema(rawEvent.SchemaName, rawEvent.TableName)
+	if rawEvent.TableInfo == nil {
+		return fmt.Sprintf("CREATE TABLE %s ()", tableName)
+	}
+
+	definitions := make([]string, 0, len(rawEvent.TableInfo.Columns)+1)
+	for _, col := range rawEvent.TableInfo.Columns {
+		if col.Hidden {
+			continue
+		}
+		definition := fmt.Sprintf("%s %s", common.QuoteName(col.Name.O), col.FieldType.CompactStr())
+		if mysql.HasNotNullFlag(col.GetFlag()) || mysql.HasPriKeyFlag(col.GetFlag()) {
+			definition += " NOT NULL"
+		}
+		definitions = append(definitions, definition)
+	}
+	if pkColumns := getPrimaryKeyColumnNames(rawEvent.TableInfo); len(pkColumns) > 0 {
+		definitions = append(definitions, fmt.Sprintf("PRIMARY KEY (%s)", strings.Join(pkColumns, ", ")))
+	}
+	return fmt.Sprintf("CREATE TABLE %s (%s)", tableName, strings.Join(definitions, ", "))
+}
+
+func getPrimaryKeyColumnNames(tableInfo *model.TableInfo) []string {
+	for _, index := range tableInfo.Indices {
+		if !index.Primary {
+			continue
+		}
+		columnNames := make([]string, 0, len(index.Columns))
+		for _, indexColumn := range index.Columns {
+			columnNames = append(columnNames, common.QuoteName(indexColumn.Name.O))
+		}
+		return columnNames
+	}
+
+	for _, col := range tableInfo.Columns {
+		if mysql.HasPriKeyFlag(col.GetFlag()) {
+			return []string{common.QuoteName(col.Name.O)}
+		}
+	}
+	return nil
 }
 
 func buildDDLEventForDropTable(rawEvent *PersistedDDLEvent, tableFilter filter.Filter, tableID int64) (commonEvent.DDLEvent, bool, error) {

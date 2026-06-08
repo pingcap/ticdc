@@ -1051,7 +1051,9 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 		ID:   span.KeyspaceID,
 		Name: changefeedID.Keyspace(),
 	}
-	c.schemaStore.UnregisterTable(keyspaceMeta, span.TableID)
+	if !isTableTriggerDispatcher && !span.Equal(common.KeyspaceDDLSpan(span.KeyspaceID)) {
+		c.schemaStore.UnregisterTable(keyspaceMeta, span.TableID)
+	}
 
 	log.Info("remove dispatcher",
 		zap.Uint64("clusterID", c.tidbClusterID), zap.Stringer("changefeedID", changefeedID),
@@ -1092,12 +1094,12 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 	changefeedID := dispatcherInfo.GetChangefeedID()
 	span := dispatcherInfo.GetTableSpan()
 	var tableInfo *common.TableInfo
+	keyspaceMeta := common.KeyspaceMeta{
+		ID:   span.KeyspaceID,
+		Name: changefeedID.Keyspace(),
+	}
 	if !span.Equal(common.KeyspaceDDLSpan(span.KeyspaceID)) {
 		var err error
-		keyspaceMeta := common.KeyspaceMeta{
-			ID:   span.KeyspaceID,
-			Name: changefeedID.Keyspace(),
-		}
 		tableInfo, err = c.schemaStore.GetTableInfo(keyspaceMeta, span.GetTableID(), dispatcherInfo.GetStartTs())
 		if err != nil {
 			log.Error("get table info from schemaStore failed",

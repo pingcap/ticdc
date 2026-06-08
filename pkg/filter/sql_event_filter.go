@@ -47,6 +47,9 @@ type sqlEventRule struct {
 	// which means not match `test.t1`.
 	tf tfilter.Filter
 	bf *bf.BinlogEvent
+	// ignoreEvents keeps the original event types from config so TiCDC-local
+	// event types can be matched without changing pkg/binlog-filter.
+	ignoreEvents map[bf.EventType]struct{}
 }
 
 func newSQLEventFilterRule(cfg *config.EventFilterRule, caseSensitive bool) (*sqlEventRule, error) {
@@ -59,7 +62,8 @@ func newSQLEventFilterRule(cfg *config.EventFilterRule, caseSensitive bool) (*sq
 		tf = tfilter.CaseInsensitive(tf)
 	}
 	res := &sqlEventRule{
-		tf: tf,
+		tf:           tf,
+		ignoreEvents: makeIgnoreEventSet(cfg.IgnoreEvent),
 	}
 
 	if err := verifyIgnoreEvents(cfg.IgnoreEvent); err != nil {
@@ -69,7 +73,7 @@ func newSQLEventFilterRule(cfg *config.EventFilterRule, caseSensitive bool) (*sq
 	bfRule := &bf.BinlogEventRule{
 		SchemaPattern: binlogFilterSchemaPlaceholder,
 		TablePattern:  binlogFilterTablePlaceholder,
-		Events:        cfg.IgnoreEvent,
+		Events:        normalizeIgnoreEventsForBinlogFilter(cfg.IgnoreEvent),
 		SQLPattern:    cfg.IgnoreSQL,
 		Action:        bf.Ignore,
 	}
@@ -80,6 +84,31 @@ func newSQLEventFilterRule(cfg *config.EventFilterRule, caseSensitive bool) (*sq
 	}
 
 	return res, nil
+}
+
+func makeIgnoreEventSet(events []bf.EventType) map[bf.EventType]struct{} {
+	if len(events) == 0 {
+		return nil
+	}
+	ignoreEvents := make(map[bf.EventType]struct{}, len(events))
+	for _, event := range events {
+		ignoreEvents[event] = struct{}{}
+	}
+	return ignoreEvents
+}
+
+func normalizeIgnoreEventsForBinlogFilter(events []bf.EventType) []bf.EventType {
+	if len(events) == 0 {
+		return nil
+	}
+	normalized := make([]bf.EventType, 0, len(events))
+	for _, event := range events {
+		if event == EventTypeMViewRefreshOutOfPlaceCutover {
+			continue
+		}
+		normalized = append(normalized, event)
+	}
+	return normalized
 }
 
 func verifyIgnoreEvents(types []bf.EventType) error {
@@ -108,6 +137,22 @@ func newSQLEventFilter(cfg *config.FilterConfig, caseSensitive bool) (*sqlEventF
 		}
 	}
 	return res, nil
+}
+
+func (r *sqlEventRule) matchDDLEvent(eventType bf.EventType) bool {
+	if len(r.ignoreEvents) == 0 {
+		return false
+	}
+	if _, ok := r.ignoreEvents[eventType]; ok {
+		return true
+	}
+	if _, ok := r.ignoreEvents[bf.AllDDL]; ok {
+		return true
+	}
+	if _, ok := r.ignoreEvents[bf.AllEvent]; ok {
+		return true
+	}
+	return false
 }
 
 func (f *sqlEventFilter) addRule(cfg *config.EventFilterRule, caseSensitive bool) error {
@@ -150,6 +195,23 @@ func (f *sqlEventFilter) shouldSkipDDL(schema, table, query string, ddlType mode
 
 	rules := f.getRules(schema, table)
 	for _, rule := range rules {
+		if evenType == EventTypeMViewRefreshOutOfPlaceCutover {
+			if rule.matchDDLEvent(evenType) {
+				return true, nil
+			}
+			action, err := rule.bf.Filter(
+				binlogFilterSchemaPlaceholder,
+				binlogFilterTablePlaceholder,
+				bf.NullEvent, query)
+			if err != nil {
+				return false, errors.Trace(err)
+			}
+			if action == bf.Ignore {
+				return true, nil
+			}
+			continue
+		}
+
 		action, err := rule.bf.Filter(
 			binlogFilterSchemaPlaceholder,
 			binlogFilterTablePlaceholder,
