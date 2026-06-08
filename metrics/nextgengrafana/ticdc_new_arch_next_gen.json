@@ -3540,7 +3540,7 @@
           "pluginVersion": "7.5.17",
           "targets": [
             {
-              "expr": "max by (instance, kernel_type, git_hash, release_version, utc_build_time) (ticdc_server_build_info{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", job=~\".*ticdc.*\", instance=~\"$ticdc_instance\"})",
+              "expr": "max by (instance, ticdc_arch, kernel_type, git_hash, release_version, utc_build_time) (ticdc_server_build_info{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", job=~\".*ticdc.*\", instance=~\"$ticdc_instance\"}) or (max by (instance, ticdc_arch, kernel_type, git_hash, release_version, utc_build_time) (label_replace(label_replace(label_replace(label_replace(label_replace(ticdc_server_etcd_health_check_duration_count{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", job=~\".*ticdc.*\", instance=~\"$ticdc_instance\"}, \"ticdc_arch\", \"oldarch\", \"instance\", \".*\"), \"kernel_type\", \"unknown\", \"instance\", \".*\"), \"git_hash\", \"unknown\", \"instance\", \".*\"), \"release_version\", \"unknown\", \"instance\", \".*\"), \"utc_build_time\", \"unknown\", \"instance\", \".*\"))) unless on (instance) ticdc_server_build_info{k8s_cluster=\"$k8s_cluster\", sharedpool_id=\"$tidb_cluster\", job=~\".*ticdc.*\", instance=~\"$ticdc_instance\"})",
               "format": "time_series",
               "instant": true,
               "refId": "A"
@@ -3562,11 +3562,12 @@
                   "__name__": true
                 },
                 "indexByName": {
-                  "git_hash": 2,
+                  "git_hash": 3,
                   "instance": 0,
-                  "kernel_type": 1,
-                  "release_version": 3,
-                  "utc_build_time": 4
+                  "kernel_type": 2,
+                  "release_version": 4,
+                  "ticdc_arch": 1,
+                  "utc_build_time": 5
                 },
                 "renameByName": {}
               }
