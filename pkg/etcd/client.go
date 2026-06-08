@@ -570,13 +570,8 @@ func (checker *healthyChecker) update(eps []string) {
 			}
 			if time.Since(lastHealthy) > etcdServerDisconnectedTimeout {
 				// try to reset client endpoint to trigger reconnect
-<<<<<<< HEAD
-				client.(*healthyClient).Client.SetEndpoints([]string{}...)
-				client.(*healthyClient).Client.SetEndpoints(ep)
-=======
 				client.SetEndpoints([]string{}...)
 				client.SetEndpoints(ep)
->>>>>>> d4824e9a3 (etcd: update etcd cluster member correctly (#5138))
 			}
 			continue
 		}
