@@ -1115,6 +1115,16 @@ func (m *Maintainer) onMaintainerCloseResponse(from node.ID, response *heartbeat
 		m.logDroppedMaintainerResponse("close", from, response.MaintainerEpoch)
 		return
 	}
+	if !m.removing.Load() {
+		// Close responses only complete an active remove flow. A delayed compat
+		// response from a superseded maintainer can share this changefeed ID.
+		log.Warn("drop unexpected maintainer close response",
+			zap.Stringer("changefeedID", m.changefeedID),
+			zap.Stringer("from", from),
+			zap.Uint64("responseMaintainerEpoch", response.MaintainerEpoch),
+			zap.Uint64("currentMaintainerEpoch", m.currentMaintainerEpoch()))
+		return
+	}
 	if response.Success {
 		m.closedNodes[from] = struct{}{}
 		m.onRemoveMaintainer(m.cascadeRemoving.Load(), m.changefeedRemoved.Load())

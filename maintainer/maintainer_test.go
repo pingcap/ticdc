@@ -306,6 +306,24 @@ func TestMaintainerEpochRequestRequiresCompatOrCurrentEpoch(t *testing.T) {
 	require.True(t, strictMaintainer.isMaintainerEpochRequestAllowed(2))
 }
 
+func TestMaintainerCloseResponseIgnoredBeforeRemoving(t *testing.T) {
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	m := &Maintainer{
+		changefeedID: cfID,
+		info:         &config.ChangeFeedInfo{Epoch: 2},
+		closedNodes:  make(map[node.ID]struct{}),
+	}
+
+	m.onMaintainerCloseResponse(node.ID("old"), &heartbeatpb.MaintainerCloseResponse{
+		ChangefeedID:    cfID.ToPB(),
+		Success:         true,
+		MaintainerEpoch: 0,
+	})
+
+	require.Empty(t, m.closedNodes)
+	require.False(t, m.removing.Load())
+}
+
 func TestMaintainerSchedule(t *testing.T) {
 	// This test exercises a single-node maintainer lifecycle:
 	// 1) Bootstrap a changefeed via the dispatcher manager mock.

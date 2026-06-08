@@ -42,9 +42,12 @@ const operatorEpochBumpTimeout = 10 * time.Second
 type Controller struct {
 	mu sync.RWMutex
 
-	role          string
-	changefeedDB  *changefeed.ChangefeedDB
-	operators     map[common.ChangeFeedID]*operator.OperatorWithTime[common.ChangeFeedID, *heartbeatpb.MaintainerStatus]
+	role         string
+	changefeedDB *changefeed.ChangefeedDB
+	operators    map[common.ChangeFeedID]*operator.OperatorWithTime[common.ChangeFeedID, *heartbeatpb.MaintainerStatus]
+	// epochBumping reserves an owner-changing operator slot while its epoch bump
+	// runs outside mu, so another add or move cannot persist a newer epoch first.
+	epochBumping  map[common.ChangeFeedID]struct{}
 	runningQueue  operator.OperatorQueue[common.ChangeFeedID, *heartbeatpb.MaintainerStatus]
 	batchSize     int
 	messageCenter messaging.MessageCenter
@@ -64,6 +67,7 @@ func NewOperatorController(
 	oc := &Controller{
 		role:          "coordinator",
 		operators:     make(map[common.ChangeFeedID]*operator.OperatorWithTime[common.ChangeFeedID, *heartbeatpb.MaintainerStatus]),
+		epochBumping:  make(map[common.ChangeFeedID]struct{}),
 		runningQueue:  make(operator.OperatorQueue[common.ChangeFeedID, *heartbeatpb.MaintainerStatus], 0),
 		messageCenter: appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
 		batchSize:     batchSize,
@@ -120,12 +124,16 @@ func (oc *Controller) AddOperator(op operator.Operator[common.ChangeFeedID, *hea
 		oc.mu.Unlock()
 		return true
 	}
+	oc.epochBumping[op.ID()] = struct{}{}
 	// Epoch bump may call PD and etcd, so keep it outside oc.mu. Recheck the
 	// operator slot before pushing because stop or another operator may win
 	// while the bump is in flight.
 	oc.mu.Unlock()
 
 	info, err := oc.bumpChangefeedEpoch(cf)
+	oc.mu.Lock()
+	defer oc.mu.Unlock()
+	delete(oc.epochBumping, op.ID())
 	if err != nil {
 		log.Warn("add operator failed, cannot bump changefeed epoch",
 			zap.String("role", oc.role),
@@ -135,8 +143,6 @@ func (oc *Controller) AddOperator(op operator.Operator[common.ChangeFeedID, *hea
 		return false
 	}
 
-	oc.mu.Lock()
-	defer oc.mu.Unlock()
 	if !oc.recheckAddOperatorLocked(op, cf) {
 		return false
 	}
@@ -152,6 +158,12 @@ func (oc *Controller) precheckAddOperatorLocked(
 		log.Info("add operator failed, operator already exists",
 			zap.String("role", oc.role),
 			zap.Stringer("operator", op), zap.Stringer("previousOperator", pre.OP))
+		return nil, false
+	}
+	if _, ok := oc.epochBumping[op.ID()]; ok {
+		log.Info("add operator failed, epoch bump already in progress",
+			zap.String("role", oc.role),
+			zap.Stringer("operator", op))
 		return nil, false
 	}
 	cf := oc.changefeedDB.GetByID(op.ID())

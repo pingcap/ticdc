@@ -306,6 +306,54 @@ func TestController_AddOperatorBumpsAndPersistsOwnershipEpoch(t *testing.T) {
 	}
 }
 
+func TestController_AddOperatorRejectsConcurrentEpochBump(t *testing.T) {
+	changefeedDB := changefeed.NewChangefeedDB(1216)
+	ctrl := gomock.NewController(t)
+	backend := mock_changefeed.NewMockBackend(ctrl)
+	oc, _, nodeManager := newOperatorControllerForTest(t, changefeedDB, backend, &operatorEpochPDClient{physical: 100, logical: 1})
+	target1 := node.NewInfo("localhost:8301", "")
+	target2 := node.NewInfo("localhost:8302", "")
+	nodeManager.GetAliveNodes()[target1.ID] = target1
+	nodeManager.GetAliveNodes()[target2.ID] = target2
+
+	cfID := common.NewChangeFeedIDWithName("concurrent-epoch-bump", common.DefaultKeyspaceName)
+	oldEpoch := uint64(10)
+	newEpoch := uint64(20)
+	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		Config:       config.GetDefaultReplicaConfig(),
+		SinkURI:      "mysql://127.0.0.1:3306",
+		Epoch:        oldEpoch,
+	}, 123, true)
+	changefeedDB.AddAbsentChangefeed(cf)
+
+	bumpStarted := make(chan struct{})
+	releaseBump := make(chan struct{})
+	backend.EXPECT().
+		BumpChangefeedEpoch(gomock.Any(), cfID, gomock.Any(), changefeed.EpochBumpOptions{}).
+		DoAndReturn(func(ctx context.Context, id common.ChangeFeedID, candidateEpoch uint64, options changefeed.EpochBumpOptions) (*config.ChangeFeedInfo, error) {
+			close(bumpStarted)
+			<-releaseBump
+			info, err := cf.GetInfo().Clone()
+			require.NoError(t, err)
+			info.Epoch = newEpoch
+			return info, nil
+		}).
+		Times(1)
+
+	firstResult := make(chan bool, 1)
+	go func() {
+		firstResult <- oc.AddOperator(NewAddMaintainerOperator(changefeedDB, cf, target1.ID))
+	}()
+	<-bumpStarted
+
+	require.False(t, oc.AddOperator(NewAddMaintainerOperator(changefeedDB, cf, target2.ID)))
+	close(releaseBump)
+	require.True(t, <-firstResult)
+	require.Equal(t, newEpoch, cf.GetInfo().Epoch)
+	require.NotNil(t, oc.GetOperator(cfID))
+}
+
 func TestController_StopChangefeedDuringMoveUsesOriginEpoch(t *testing.T) {
 	testCases := []struct {
 		name                    string
