@@ -79,6 +79,33 @@ func TestCustomerWorkloadCompositeDeleteUsesTupleKey(t *testing.T) {
 	}
 }
 
+func TestCustomerWorkloadModelATableMix(t *testing.T) {
+	t.Parallel()
+
+	workload := NewCustomerWorkload(Options{
+		Model:      "A",
+		TableCount: 27,
+	}).(*CustomerWorkload)
+
+	countByPrefix := make(map[string]int)
+	for i := 0; i < 27; i++ {
+		countByPrefix[workload.specForTable(i).prefix]++
+	}
+
+	expected := map[string]int{
+		"catalog_large":     9,
+		"catalog_blended":   9,
+		"catalog_json":      7,
+		"catalog_compact_a": 1,
+		"catalog_compact_b": 1,
+	}
+	for prefix, want := range expected {
+		if got := countByPrefix[prefix]; got != want {
+			t.Fatalf("unexpected model A table mix for %s: got %d, want %d", prefix, got, want)
+		}
+	}
+}
+
 func TestCustomerWorkloadInitialSeqSeedsInsertContinuation(t *testing.T) {
 	t.Parallel()
 

@@ -22,6 +22,17 @@ The generated table names are anonymized and suffixed by table index, for exampl
 
 Column names are also generic: `entity_id`, `bucket_id`, `sequence_no`, `payload_text`, `payload_json`, `payload_blob`, and `aux_blob`.
 
+For a full Model A run with `-table-count 27`, the table mix approximates the
+row-share inferred from 286K rows/s and 6.66GB/s:
+
+| Shape | Tables | Payload target | Approx row share |
+| --- | ---: | ---: | ---: |
+| `catalog_large_*` | 9 | 37KiB | 33.3% |
+| `catalog_blended_*` | 9 | 20KiB | 33.3% |
+| `catalog_json_*` | 7 | 17KiB | 25.9% |
+| `catalog_compact_a_*` | 1 | 2.3KiB | 3.7% |
+| `catalog_compact_b_*` | 1 | 1.1KiB | 3.7% |
+
 ## Example
 
 Prepare and run a small model-A calibration against a TiDB cluster:

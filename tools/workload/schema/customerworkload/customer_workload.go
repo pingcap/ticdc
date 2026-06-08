@@ -175,9 +175,12 @@ func buildTableSlots(model string, rowSizeOverride int) []tableSpec {
 	switch model {
 	case modelA:
 		var slots []tableSpec
-		slots = append(slots, repeat(tableSpec{"catalog_large", singleColumnPrimaryKey, withOverride(37 * 1024)}, 5)...)
-		slots = append(slots, repeat(tableSpec{"catalog_blended", singleColumnPrimaryKey, withOverride(20 * 1024)}, 5)...)
-		slots = append(slots, repeat(tableSpec{"catalog_json", singleColumnPrimaryKey, withOverride(17 * 1024)}, 4)...)
+		// The 27-slot shape approximates the observed Model A row mix derived
+		// from 286K rows/s and 6.66GB/s: large ~=32%, blended ~=32%,
+		// json/blob ~=26%, compact ~=9%.
+		slots = append(slots, repeat(tableSpec{"catalog_large", singleColumnPrimaryKey, withOverride(37 * 1024)}, 9)...)
+		slots = append(slots, repeat(tableSpec{"catalog_blended", singleColumnPrimaryKey, withOverride(20 * 1024)}, 9)...)
+		slots = append(slots, repeat(tableSpec{"catalog_json", singleColumnPrimaryKey, withOverride(17 * 1024)}, 7)...)
 		slots = append(slots, tableSpec{"catalog_compact_a", singleColumnPrimaryKey, withOverride(2300)})
 		slots = append(slots, tableSpec{"catalog_compact_b", singleColumnPrimaryKey, withOverride(1100)})
 		return slots
