@@ -42,7 +42,7 @@ func TestDrainControllerResendAndPromoteToStopping(t *testing.T) {
 	require.Equal(t, uint64(42), req.NodeEpoch)
 
 	// Before draining observed, it should retry after the resend interval.
-	c.AdvanceLiveness(nil)
+	c.AdvanceLiveness(nil, nil)
 	select {
 	case <-mc.GetMessageChannel():
 		require.FailNow(t, "unexpected command before resend interval")
@@ -53,7 +53,7 @@ func TestDrainControllerResendAndPromoteToStopping(t *testing.T) {
 	c.mu.Lock()
 	c.ensureNodeStateLocked(target).lastDrainCmdSentAt = time.Now().Add(-resendInterval - 10*time.Millisecond)
 	c.mu.Unlock()
-	c.AdvanceLiveness(nil)
+	c.AdvanceLiveness(nil, nil)
 	msg = <-mc.GetMessageChannel()
 	req = msg.Message[0].(*heartbeatpb.SetNodeLivenessRequest)
 	require.Equal(t, heartbeatpb.NodeLiveness_DRAINING, req.Target)
@@ -64,7 +64,7 @@ func TestDrainControllerResendAndPromoteToStopping(t *testing.T) {
 	})
 
 	// Once readyToStop, it should send STOPPING.
-	c.AdvanceLiveness(func(node.ID) bool { return true })
+	c.AdvanceLiveness(func(node.ID) bool { return true }, func(node.ID) bool { return true })
 	msg = <-mc.GetMessageChannel()
 	req = msg.Message[0].(*heartbeatpb.SetNodeLivenessRequest)
 	require.Equal(t, heartbeatpb.NodeLiveness_STOPPING, req.Target)
@@ -138,7 +138,7 @@ func TestDrainControllerSkipStoppingForNewEpochWithoutDraining(t *testing.T) {
 
 	// Simulate a node restart after AdvanceLiveness snapshots the old draining
 	// observation but before it tries to send STOPPING.
-	c.AdvanceLiveness(func(node.ID) bool {
+	c.AdvanceLiveness(func(node.ID) bool { return true }, func(node.ID) bool {
 		c.ObserveHeartbeat(target, &heartbeatpb.NodeHeartbeat{
 			Liveness:  heartbeatpb.NodeLiveness_ALIVE,
 			NodeEpoch: 43,
@@ -152,4 +152,183 @@ func TestDrainControllerSkipStoppingForNewEpochWithoutDraining(t *testing.T) {
 		t.Fatalf("unexpected liveness command sent for new epoch: target=%s epoch=%d", req.Target.String(), req.NodeEpoch)
 	default:
 	}
+}
+
+func TestDrainControllerSchedulerGateRequiresTargetAck(t *testing.T) {
+	mc := messaging.NewMockMessageCenter()
+	c := NewController(mc)
+
+	target := node.ID("target")
+	acked := node.ID("acked")
+	pending := node.ID("pending")
+	epoch := uint64(99)
+
+	c.StartDrainTargetSchedulerGate(target, epoch)
+	c.ObserveHeartbeat(acked, &heartbeatpb.NodeHeartbeat{
+		Liveness:                    heartbeatpb.NodeLiveness_ALIVE,
+		NodeEpoch:                   1,
+		DispatcherDrainTargetNodeId: target.String(),
+		DispatcherDrainTargetEpoch:  epoch,
+	})
+	c.ObserveHeartbeat(pending, &heartbeatpb.NodeHeartbeat{
+		Liveness:  heartbeatpb.NodeLiveness_ALIVE,
+		NodeEpoch: 1,
+	})
+
+	require.False(t, c.IsSchedulableDest(target))
+	require.True(t, c.IsSchedulableDest(acked))
+	require.False(t, c.IsSchedulableDest(pending))
+
+	c.SwitchDrainTargetSchedulerGateToClear(target, epoch, nil)
+	require.True(t, c.IsSchedulableDest(pending))
+}
+
+func TestDrainControllerSchedulerGateRequiresReackAfterNodeRestart(t *testing.T) {
+	mc := messaging.NewMockMessageCenter()
+	c := NewController(mc)
+
+	target := node.ID("target")
+	dest := node.ID("dest")
+	epoch := uint64(99)
+
+	c.StartDrainTargetSchedulerGate(target, epoch)
+	c.ObserveHeartbeat(dest, &heartbeatpb.NodeHeartbeat{
+		Liveness:                    heartbeatpb.NodeLiveness_ALIVE,
+		NodeEpoch:                   1,
+		DispatcherDrainTargetNodeId: target.String(),
+		DispatcherDrainTargetEpoch:  epoch,
+	})
+	require.True(t, c.IsSchedulableDest(dest))
+
+	// A replacement process with a newer node epoch must re-ack the active
+	// drain target before the destination becomes schedulable again.
+	c.ObserveHeartbeat(dest, &heartbeatpb.NodeHeartbeat{
+		Liveness:  heartbeatpb.NodeLiveness_ALIVE,
+		NodeEpoch: 2,
+	})
+	require.False(t, c.IsSchedulableDest(dest))
+
+	// A stale heartbeat from the old process must not resurrect the old ack.
+	c.ObserveHeartbeat(dest, &heartbeatpb.NodeHeartbeat{
+		Liveness:                    heartbeatpb.NodeLiveness_ALIVE,
+		NodeEpoch:                   1,
+		DispatcherDrainTargetNodeId: target.String(),
+		DispatcherDrainTargetEpoch:  epoch,
+	})
+	require.False(t, c.IsSchedulableDest(dest))
+
+	c.ObserveHeartbeat(dest, &heartbeatpb.NodeHeartbeat{
+		Liveness:                    heartbeatpb.NodeLiveness_ALIVE,
+		NodeEpoch:                   2,
+		DispatcherDrainTargetNodeId: target.String(),
+		DispatcherDrainTargetEpoch:  epoch,
+	})
+	require.True(t, c.IsSchedulableDest(dest))
+}
+
+func TestDrainControllerSchedulingFreezeBlocksDestinations(t *testing.T) {
+	mc := messaging.NewMockMessageCenter()
+	c := NewController(mc)
+
+	dest := node.ID("dest")
+	c.ObserveHeartbeat(dest, &heartbeatpb.NodeHeartbeat{
+		Liveness:  heartbeatpb.NodeLiveness_ALIVE,
+		NodeEpoch: 1,
+	})
+
+	require.True(t, c.IsSchedulableDest(dest))
+
+	c.SetSchedulingFrozen(true)
+	require.False(t, c.IsSchedulableDest(dest))
+
+	c.SetSchedulingFrozen(false)
+	require.True(t, c.IsSchedulableDest(dest))
+}
+
+func TestDrainControllerClearGateBlocksPendingNodesUntilAck(t *testing.T) {
+	mc := messaging.NewMockMessageCenter()
+	c := NewController(mc)
+
+	ready := node.ID("ready")
+	pending := node.ID("pending")
+	target := node.ID("target")
+	epoch := uint64(77)
+
+	c.ObserveHeartbeat(ready, &heartbeatpb.NodeHeartbeat{
+		Liveness:  heartbeatpb.NodeLiveness_ALIVE,
+		NodeEpoch: 1,
+	})
+	c.ObserveHeartbeat(pending, &heartbeatpb.NodeHeartbeat{
+		Liveness:  heartbeatpb.NodeLiveness_ALIVE,
+		NodeEpoch: 1,
+	})
+
+	c.StartDrainTargetClearGate(target, epoch, map[node.ID]struct{}{
+		pending: {},
+	})
+
+	require.True(t, c.IsSchedulableDest(ready))
+	require.False(t, c.IsSchedulableDest(pending))
+
+	c.RemoveDrainTargetClearPendingNode(pending, target, epoch)
+	require.True(t, c.IsSchedulableDest(pending))
+}
+
+func TestDrainControllerNewActiveGateSupersedesOldClearGate(t *testing.T) {
+	mc := messaging.NewMockMessageCenter()
+	c := NewController(mc)
+
+	dest := node.ID("dest")
+	oldTarget := node.ID("old-target")
+	newTarget := node.ID("new-target")
+
+	c.ObserveHeartbeat(dest, &heartbeatpb.NodeHeartbeat{
+		Liveness:  heartbeatpb.NodeLiveness_ALIVE,
+		NodeEpoch: 1,
+	})
+	c.StartDrainTargetClearGate(oldTarget, 10, map[node.ID]struct{}{
+		dest: {},
+	})
+	require.False(t, c.IsSchedulableDest(dest))
+
+	c.StartDrainTargetSchedulerGate(newTarget, 11)
+	// The new active gate should replace the old clear-pending restriction, but
+	// the destination still needs to acknowledge the new target before reuse.
+	require.False(t, c.IsSchedulableDest(dest))
+
+	c.ObserveHeartbeat(dest, &heartbeatpb.NodeHeartbeat{
+		Liveness:                    heartbeatpb.NodeLiveness_ALIVE,
+		NodeEpoch:                   1,
+		DispatcherDrainTargetNodeId: newTarget.String(),
+		DispatcherDrainTargetEpoch:  11,
+	})
+	require.True(t, c.IsSchedulableDest(dest))
+}
+
+func TestDrainControllerStaleClearDoesNotOverrideNewActiveGate(t *testing.T) {
+	mc := messaging.NewMockMessageCenter()
+	c := NewController(mc)
+
+	dest := node.ID("dest")
+	oldTarget := node.ID("old-target")
+	newTarget := node.ID("new-target")
+
+	c.ObserveHeartbeat(dest, &heartbeatpb.NodeHeartbeat{
+		Liveness:  heartbeatpb.NodeLiveness_ALIVE,
+		NodeEpoch: 1,
+	})
+	c.StartDrainTargetSchedulerGate(oldTarget, 10)
+	c.StartDrainTargetSchedulerGate(newTarget, 11)
+
+	c.SwitchDrainTargetSchedulerGateToClear(oldTarget, 10, map[node.ID]struct{}{
+		dest: {},
+	})
+
+	c.ObserveHeartbeat(dest, &heartbeatpb.NodeHeartbeat{
+		Liveness:                    heartbeatpb.NodeLiveness_ALIVE,
+		NodeEpoch:                   1,
+		DispatcherDrainTargetNodeId: newTarget.String(),
+		DispatcherDrainTargetEpoch:  11,
+	})
+	require.True(t, c.IsSchedulableDest(dest))
 }

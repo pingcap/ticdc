@@ -17,6 +17,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -30,6 +31,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/liveness"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/server"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/stretchr/testify/require"
 	pd "github.com/tikv/pd/client"
 )
@@ -159,4 +161,97 @@ func (c *resumeNormalCoordinator) UpdateChangefeed(ctx context.Context, change *
 func (c *resumeNormalCoordinator) RequestResolvedTsFromLogCoordinator(ctx context.Context, changefeedDisplayName common.ChangeFeedDisplayName) {
 }
 
+func (c *resumeNormalCoordinator) DrainNode(ctx context.Context, target node.ID) (int, error) {
+	return 0, nil
+}
+
 func (c *resumeNormalCoordinator) Initialized() bool { return true }
+
+// TestMaskSinkURIForError verifies that error messages mask sensitive sink URI
+// fields. It checks both a valid URI with secret query parameters and an invalid
+// URI parse error that previously exposed raw credentials.
+func TestMaskSinkURIForError(t *testing.T) {
+	sinkURI := "kafka://127.0.0.1:9092/topic?protocol=canal-json" +
+		"&sasl-user=ticdc&sasl-password=verysecure&secret-access-key=rawsecret"
+
+	maskedURI := maskSinkURIForError(sinkURI)
+	require.NotContains(t, maskedURI, "verysecure")
+	require.NotContains(t, maskedURI, "rawsecret")
+	require.Contains(t, maskedURI, "sasl-password=xxxxx")
+	require.Contains(t, maskedURI, "secret-access-key=xxxxx")
+	require.Contains(t, maskedURI, "sasl-user=ticdc")
+
+	invalidURI := "mysql://root:verysecure@127.0.0.1/%zz"
+	require.Equal(t, "<invalid uri>", maskSinkURIForError(invalidURI))
+
+	err := genSinkURIInvalidError(invalidURI, mustParseURLError(t, invalidURI))
+	require.NotContains(t, err.Error(), "verysecure")
+	require.Contains(t, err.Error(), "<invalid uri>")
+	require.Contains(t, err.Error(), `parse "<invalid uri>"`)
+	require.Contains(t, err.Error(), "invalid URL escape")
+}
+
+func mustParseURLError(t *testing.T, rawURL string) error {
+	t.Helper()
+
+	_, err := url.Parse(rawURL)
+	require.Error(t, err)
+	return err
+}
+
+// TestVerifyRouteConflict covers route conflict detection for eligible and
+// ineligible source tables. It exercises the safe cases first, then verifies
+// that conflicts report both the shared target table and conflicting sources.
+func TestVerifyRouteConflict(t *testing.T) {
+	t.Parallel()
+
+	changefeedID := common.NewChangeFeedIDWithName("test-changefeed", common.DefaultKeyspaceName)
+	replicaCfg := config.GetDefaultReplicaConfig()
+	replicaCfg.Sink.DispatchRules = []*config.DispatchRule{
+		{Matcher: []string{"db1.*"}, TargetSchema: "archive", TargetTable: "{table}"},
+		{Matcher: []string{"db2.*"}, TargetSchema: "archive", TargetTable: "{table}"},
+	}
+
+	eligibleTables := []common.TableName{{Schema: "db1", Table: "orders"}}
+	ineligibleTables := []common.TableName{{Schema: "db2", Table: "orders"}}
+
+	replicaCfg.ForceReplicate = util.AddressOf(false)
+	replicaCfg.IgnoreIneligibleTable = util.AddressOf(true)
+	require.NoError(t, verifyRouteConflict(changefeedID, eligibleTables, ineligibleTables, replicaCfg))
+
+	replicaCfg.IgnoreIneligibleTable = util.AddressOf(false)
+	require.NoError(t, verifyRouteConflict(changefeedID, eligibleTables, ineligibleTables, replicaCfg))
+
+	err := verifyRouteConflict(
+		changefeedID,
+		[]common.TableName{{Schema: "db1", Table: "orders"}, {Schema: "db2", Table: "orders"}},
+		ineligibleTables,
+		replicaCfg,
+	)
+	require.Error(t, err)
+	require.True(t, cerror.ErrTableRouteConflict.Equal(err))
+
+	replicaCfg.ForceReplicate = util.AddressOf(true)
+	err = verifyRouteConflict(changefeedID, eligibleTables, ineligibleTables, replicaCfg)
+	require.Error(t, err)
+	require.True(t, cerror.ErrTableRouteConflict.Equal(err))
+	require.Contains(t, err.Error(), "target `archive`.`orders`")
+	require.Contains(t, err.Error(), "source `db1`.`orders`")
+	require.Contains(t, err.Error(), "source `db2`.`orders`")
+
+	replicaCfg.ForceReplicate = util.AddressOf(false)
+	replicaCfg.Sink.DispatchRules = []*config.DispatchRule{
+		{Matcher: []string{"db2.*"}, TargetSchema: "db1", TargetTable: "{table}"},
+	}
+	err = verifyRouteConflict(
+		changefeedID,
+		[]common.TableName{{Schema: "db1", Table: "orders"}, {Schema: "db2", Table: "orders"}},
+		nil,
+		replicaCfg,
+	)
+	require.Error(t, err)
+	require.True(t, cerror.ErrTableRouteConflict.Equal(err))
+	require.Contains(t, err.Error(), "target `db1`.`orders`")
+	require.Contains(t, err.Error(), "source `db1`.`orders`")
+	require.Contains(t, err.Error(), "source `db2`.`orders`")
+}
