@@ -227,7 +227,7 @@ func (d *BasicDispatcher) IsTableTriggerDispatcher() bool {
 // SetStartTs only be called after the dispatcher is created
 func (d *BasicDispatcher) SetStartTs(startTs uint64) {
 	atomic.StoreUint64(&d.startTs, startTs)
-	atomic.StoreUint64(&d.resolvedTs, startTs)
+	d.resolvedTs.Store(startTs)
 }
 
 func (d *BasicDispatcher) SetCurrentPDTs(currentPDTs uint64) {

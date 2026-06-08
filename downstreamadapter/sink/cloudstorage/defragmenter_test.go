@@ -45,7 +45,8 @@ func TestDeframenter(t *testing.T) {
 
 	inputCh := make(chan eventFragment)
 	outputCh := chann.NewAutoDrainChann[eventFragment]()
-	defrag := newDefragmenter(inputCh, []*chann.DrainableChann[eventFragment]{outputCh})
+	changefeedID := common.NewChangefeedID4Test("test", "table1")
+	defrag := newDefragmenter(changefeedID, inputCh, []*chann.DrainableChann[eventFragment]{outputCh})
 	eg.Go(func() error {
 		return defrag.Run(egCtx)
 	})
@@ -56,7 +57,6 @@ func TestDeframenter(t *testing.T) {
 	require.Nil(t, err)
 
 	replicaConfig := config.GetDefaultReplicaConfig()
-	changefeedID := common.NewChangefeedID4Test("test", "table1")
 	encoderConfig, err := helper.GetEncoderConfig(changefeedID, sinkURI, config.ProtocolCsv,
 		replicaConfig.Sink, config.DefaultMaxMessageBytes)
 	require.NoError(t, err)

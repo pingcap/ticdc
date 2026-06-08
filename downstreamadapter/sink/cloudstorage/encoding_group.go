@@ -85,11 +85,13 @@ func (eg *encodingGroup) runEncoder(ctx context.Context) error {
 			if !ok || eg.closed.Load() {
 				return nil
 			}
-			err = encoder.AppendTxnEvent(frag.event)
-			if err != nil {
-				return err
+			if !frag.isDrain() {
+				err = encoder.AppendTxnEvent(frag.event)
+				if err != nil {
+					return err
+				}
+				frag.encodedMsgs = encoder.Build()
 			}
-			frag.encodedMsgs = encoder.Build()
 
 			select {
 			case <-ctx.Done():

@@ -19,6 +19,7 @@ import (
 	"net/url"
 	"path"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -34,7 +35,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/chann"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
-	parser_model "github.com/pingcap/tidb/pkg/parser/model"
+	"github.com/pingcap/tidb/pkg/parser/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/parser/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
@@ -76,10 +77,10 @@ func TestWriterRun(t *testing.T) {
 
 	tidbTableInfo := &timodel.TableInfo{
 		ID:   100,
-		Name: parser_model.NewCIStr("table1"),
+		Name: model.NewCIStr("table1"),
 		Columns: []*timodel.ColumnInfo{
-			{ID: 1, Name: parser_model.NewCIStr("c1"), FieldType: *types.NewFieldType(mysql.TypeLong)},
-			{ID: 2, Name: parser_model.NewCIStr("c2"), FieldType: *types.NewFieldType(mysql.TypeVarchar)},
+			{ID: 1, Name: model.NewCIStr("c1"), FieldType: *types.NewFieldType(mysql.TypeLong)},
+			{ID: 2, Name: model.NewCIStr("c2"), FieldType: *types.NewFieldType(mysql.TypeVarchar)},
 		},
 	}
 	tableInfo := commonType.WrapTableInfo("test", tidbTableInfo)
@@ -128,5 +129,76 @@ func TestWriterRun(t *testing.T) {
 	fragCh.CloseAndDrain()
 	cancel()
 	d.close()
+	wg.Wait()
+	t.Run("drain marker", verifyWriterDrainMarker)
+}
+
+func verifyWriterDrainMarker(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	parentDir := t.TempDir()
+	d := testWriter(ctx, t, parentDir)
+
+	tidbTableInfo := &timodel.TableInfo{
+		ID:   100,
+		Name: model.NewCIStr("table1"),
+		Columns: []*timodel.ColumnInfo{
+			{ID: 1, Name: model.NewCIStr("c1"), FieldType: *types.NewFieldType(mysql.TypeLong)},
+		},
+	}
+	tableInfo := commonType.WrapTableInfo("test", tidbTableInfo)
+	dispatcherID := commonType.NewDispatcherID()
+
+	var callbackCnt int64
+	msg := common.NewMsg(nil, []byte(`{"id":1}`))
+	msg.SetRowsCount(1)
+	msg.Callback = func() {
+		atomic.AddInt64(&callbackCnt, 1)
+	}
+
+	d.inputCh.In() <- eventFragment{
+		kind:         eventFragmentKindDML,
+		seqNumber:    1,
+		dispatcherID: dispatcherID,
+		versionedTable: cloudstorage.VersionedTableName{
+			TableNameWithPhysicTableID: commonType.TableName{
+				Schema:  "test",
+				Table:   "table1",
+				TableID: 100,
+			},
+			TableInfoVersion: 99,
+			DispatcherID:     dispatcherID,
+		},
+		event: &commonEvent.DMLEvent{
+			PhysicalTableID: 100,
+			TableInfo:       tableInfo,
+		},
+		encodedMsgs: []*common.Message{msg},
+	}
+
+	doneCh := make(chan error, 1)
+	d.inputCh.In() <- newDrainEventFragment(2, dispatcherID, 100, doneCh)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		_ = d.Run(ctx)
+	}()
+
+	select {
+	case err := <-doneCh:
+		require.NoError(t, err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("wait drain marker timeout")
+	}
+
+	require.Eventually(t, func() bool {
+		return atomic.LoadInt64(&callbackCnt) == 1
+	}, 5*time.Second, 100*time.Millisecond)
+
+	d.inputCh.CloseAndDrain()
+	d.close()
+	cancel()
 	wg.Wait()
 }

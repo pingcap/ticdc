@@ -42,6 +42,10 @@ func (s *recordingSink) IsNormal() bool            { return true }
 func (s *recordingSink) AddDMLEvent(_ *commonEvent.DMLEvent) {
 }
 
+func (s *recordingSink) FlushDMLBeforeBlock(_ commonEvent.BlockEvent) error {
+	return nil
+}
+
 func (s *recordingSink) WriteBlockEvent(event commonEvent.BlockEvent) error {
 	if ddl, ok := event.(*commonEvent.DDLEvent); ok {
 		s.ddls = append(s.ddls, ddl.Query)
