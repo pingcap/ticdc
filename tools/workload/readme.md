@@ -79,7 +79,7 @@ Insert test data using sysbench-compatible schema:
 ```
 
 Notes:
-- This example runs **DML only**. DDL is disabled by default (or set `-ddl-thread=0` explicitly).
+- This example runs **DML only**. DDL is disabled by default unless `-ddl-config` is provided.
 
 ### 2. Large Row Update Workload
 
@@ -120,14 +120,12 @@ Run DML only (no DDL) while using `write` mode:
     -only-dml
 ```
 
-(Equivalent: `-ddl-thread 0`.)
-
 ### 4. DML + DDL Together
 
-Run DDL concurrently with DML (extra workers controlled by `-ddl-thread`):
+Run DDL concurrently with DML by providing a DDL config:
 
 ```bash
-./workload -action write \
+./bin/workload -action write \
     -database-host 127.0.0.1 \
     -database-port 4000 \
     -database-db-name db1 \
@@ -135,8 +133,9 @@ Run DDL concurrently with DML (extra workers controlled by `-ddl-thread`):
     -workload-type sysbench \
     -thread 32 \
     -batch-size 64 \
-    -ddl-thread 1 \
-    -ddl-interval 5s
+    -ddl-config ./ddl.toml \
+    -ddl-worker 1 \
+    -ddl-timeout 2m
 ```
 
 ### 5. DDL Only
@@ -144,14 +143,15 @@ Run DDL concurrently with DML (extra workers controlled by `-ddl-thread`):
 Run only DDL (useful for testing DDL concurrency/replication without DML):
 
 ```bash
-./workload -only-ddl \
+./bin/workload -only-ddl \
     -database-host 127.0.0.1 \
     -database-port 4000 \
     -database-db-name db1 \
     -table-count 1000 \
     -workload-type sysbench \
-    -ddl-thread 1 \
-    -ddl-interval 5s
+    -ddl-config ./ddl.toml \
+    -ddl-worker 1 \
+    -ddl-timeout 2m
 ```
 
 (Equivalent: `-action ddl`.)
@@ -161,7 +161,7 @@ Run only DDL (useful for testing DDL concurrency/replication without DML):
 Run insert and update concurrently, and execute DDL in parallel:
 
 ```bash
-./workload -action write \
+./bin/workload -action write \
     -database-host 127.0.0.1 \
     -database-port 4000 \
     -database-db-name db1 \
@@ -171,13 +171,35 @@ Run insert and update concurrently, and execute DDL in parallel:
     -batch-size 64 \
     -percentage-for-update 0.5 \
     -percentage-for-delete 0 \
-    -ddl-thread 1 \
-    -ddl-interval 5s
+    -ddl-config ./ddl.toml \
+    -ddl-worker 1 \
+    -ddl-timeout 2m
+```
+
+### 7. Wide Table With JSON Workload
+
+Generate writes for `wide_table_with_json_primary` and `wide_table_with_json_secondary` (two tables per shard). Use `-row-size` to control payload width and `-table-count` to control shard count.
+
+```bash
+./workload -action write \
+    -database-host 127.0.0.1 \
+    -database-port 4000 \
+    -database-db-name json_payload \
+    -total-row-count 1000000 \
+    -table-count 16 \
+    -workload-type wide_table_with_json \
+    -row-size $((16 * 1024)) \
+    -thread 32 \
+    -batch-size 32 \
+    -percentage-for-update 0.5 \
+    -percentage-for-delete 0.05
 ```
 
 ## Notes
 
 - Ensure the database is properly configured and has the necessary permissions.
 - Adjust the thread and batch-size parameters based on your needs.
+- Use `-batch-in-txn` to wrap each batch in a single explicit transaction (BEGIN/COMMIT).
+- `wide_table_with_json` always generates JSON-like payload data.
 - For workloads that support partitioned tables (e.g. bank3), set `-partitioned=false` to create non-partitioned tables.
 - `-bank3-partitioned` is deprecated; use `-partitioned`.

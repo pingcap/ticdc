@@ -23,7 +23,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/hash"
-	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/charset"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
@@ -51,7 +51,7 @@ type TableCol struct {
 }
 
 // FromTiColumnInfo converts from TiDB ColumnInfo to TableCol.
-func (t *TableCol) FromTiColumnInfo(col *timodel.ColumnInfo, outputColumnID bool) {
+func (t *TableCol) FromTiColumnInfo(col *model.ColumnInfo, outputColumnID bool) {
 	defaultFlen, defaultDecimal := mysql.GetDefaultFieldLengthAndDecimal(col.GetType())
 	isDecimalNotDefault := col.GetDecimal() != defaultDecimal &&
 		col.GetDecimal() != 0 &&
@@ -106,14 +106,14 @@ func (t *TableCol) FromTiColumnInfo(col *timodel.ColumnInfo, outputColumnID bool
 }
 
 // ToTiColumnInfo converts from TableCol to TiDB ColumnInfo.
-func (t *TableCol) ToTiColumnInfo(colID int64) (*timodel.ColumnInfo, error) {
-	col := new(timodel.ColumnInfo)
+func (t *TableCol) ToTiColumnInfo(colID int64) (*model.ColumnInfo, error) {
+	col := new(model.ColumnInfo)
 
 	if t.ID != "" {
 		var err error
 		col.ID, err = strconv.ParseInt(t.ID, 10, 64)
 		if err != nil {
-			return nil, errors.Trace(err)
+			return nil, errors.WrapError(errors.ErrInternalCheckFailed, err)
 		}
 	}
 
@@ -140,7 +140,7 @@ func (t *TableCol) ToTiColumnInfo(colID int64) (*timodel.ColumnInfo, error) {
 		if len(precision) > 0 {
 			flen, err := strconv.Atoi(precision)
 			if err != nil {
-				return errors.Trace(err)
+				return errors.WrapError(errors.ErrInternalCheckFailed, err)
 			}
 			col.SetFlen(flen)
 		}
@@ -150,7 +150,7 @@ func (t *TableCol) ToTiColumnInfo(colID int64) (*timodel.ColumnInfo, error) {
 		if len(scale) > 0 {
 			decimal, err := strconv.Atoi(scale)
 			if err != nil {
-				return errors.Trace(err)
+				return errors.WrapError(errors.ErrInternalCheckFailed, err)
 			}
 			col.SetDecimal(decimal)
 		}
@@ -160,23 +160,23 @@ func (t *TableCol) ToTiColumnInfo(colID int64) (*timodel.ColumnInfo, error) {
 	case mysql.TypeTimestamp, mysql.TypeDatetime, mysql.TypeDuration:
 		err := setDecimal(t.Scale)
 		if err != nil {
-			return nil, errors.Trace(err)
+			return nil, err
 		}
 	case mysql.TypeDouble, mysql.TypeFloat, mysql.TypeNewDecimal:
 		err := setFlen(t.Precision)
 		if err != nil {
-			return nil, errors.Trace(err)
+			return nil, err
 		}
 		err = setDecimal(t.Scale)
 		if err != nil {
-			return nil, errors.Trace(err)
+			return nil, err
 		}
 	case mysql.TypeTiny, mysql.TypeShort, mysql.TypeInt24, mysql.TypeLong, mysql.TypeLonglong,
 		mysql.TypeBit, mysql.TypeVarchar, mysql.TypeString, mysql.TypeVarString, mysql.TypeBlob,
 		mysql.TypeTinyBlob, mysql.TypeMediumBlob, mysql.TypeLongBlob, mysql.TypeYear:
 		err := setFlen(t.Precision)
 		if err != nil {
-			return nil, errors.Trace(err)
+			return nil, err
 		}
 	case mysql.TypeEnum, mysql.TypeSet:
 		col.SetElems(t.Elems)
@@ -188,9 +188,12 @@ func (t *TableCol) ToTiColumnInfo(colID int64) (*timodel.ColumnInfo, error) {
 // TableDefinition is the detailed table definition used for cloud storage sink.
 // TODO: find a better name for this struct.
 type TableDefinition struct {
-	Table        string     `json:"Table"`
-	Schema       string     `json:"Schema"`
-	Version      uint64     `json:"Version"`
+	Table   string `json:"Table"`
+	Schema  string `json:"Schema"`
+	Version uint64 `json:"Version"`
+	// TableVersion is the schema version encoded into schema file name:
+	// schema_{TableVersion}_{checksum}.json.
+	// It is passed from tableInfoVersion in path generation.
 	TableVersion uint64     `json:"TableVersion"`
 	Query        string     `json:"Query"`
 	Type         byte       `json:"Type"`
@@ -210,7 +213,7 @@ type tableDefWithoutQuery struct {
 
 // FromDDLEvent converts from DDLEvent to TableDefinition.
 func (t *TableDefinition) FromDDLEvent(event *commonEvent.DDLEvent, outputColumnID bool) {
-	t.FromTableInfo(event.SchemaName, event.TableName, event.TableInfo, event.FinishedTs, outputColumnID)
+	t.FromTableInfo(event.GetTargetSchemaName(), event.GetTargetTableName(), event.TableInfo, event.FinishedTs, outputColumnID)
 	t.Query = event.Query
 	t.Type = event.Type
 }
@@ -254,7 +257,7 @@ func (t *TableDefinition) FromTableInfo(
 
 // ToTableInfo converts from TableDefinition to DDLEvent.
 func (t *TableDefinition) ToTableInfo() (*common.TableInfo, error) {
-	tidbTableInfo := &timodel.TableInfo{
+	tidbTableInfo := &model.TableInfo{
 		Name: ast.NewCIStr(t.Table),
 	}
 	nextMockID := int64(100) // 100 is an arbitrary number
@@ -268,7 +271,7 @@ func (t *TableDefinition) ToTableInfo() (*common.TableInfo, error) {
 			tidbTableInfo.PKIsHandle = true
 		}
 		tidbTableInfo.Columns = append(tidbTableInfo.Columns, tiCol)
-		nextMockID += 1
+		nextMockID++
 	}
 	info := common.NewTableInfo4Decoder(t.Schema, tidbTableInfo)
 	return info, nil
@@ -329,14 +332,42 @@ func (t *TableDefinition) Sum32(hasher *hash.PositionInertia) (uint32, error) {
 	return hasher.Sum32(), nil
 }
 
-// GenerateSchemaFilePath generates the schema file path for TableDefinition.
-func (t *TableDefinition) GenerateSchemaFilePath() (string, error) {
+// GenerateSchemaFilePath generates the schema file path for TableDefinition
+// with optional table id path.
+func (t *TableDefinition) GenerateSchemaFilePath(useTableIDAsPath bool, tableID int64) (string, error) {
 	checksum, err := t.Sum32(nil)
 	if err != nil {
 		return "", err
 	}
-	if !t.IsTableSchema() && t.Table != "" {
-		log.Panic("invalid table definition", zap.Any("tableDef", t))
+	if t.Schema == "" {
+		return "", errors.ErrInternalCheckFailed.GenWithStackByArgs("schema cannot be empty")
 	}
-	return generateSchemaFilePath(t.Schema, t.Table, t.TableVersion, checksum), nil
+	if t.TableVersion == 0 {
+		return "", errors.ErrInternalCheckFailed.GenWithStackByArgs("table version cannot be zero")
+	}
+	if len(t.Columns) != t.TotalColumns {
+		return "", errors.ErrInternalCheckFailed.GenWithStackByArgs("invalid table definition")
+	}
+	isTableSchema := t.TotalColumns != 0
+	if !isTableSchema && t.Table != "" {
+		return "", errors.ErrInternalCheckFailed.GenWithStackByArgs("invalid table definition")
+	}
+	if useTableIDAsPath && isTableSchema && tableID <= 0 {
+		return "", errors.ErrInternalCheckFailed.GenWithStackByArgs("invalid table id for table-id path")
+	}
+
+	table := t.Table
+	if isTableSchema {
+		tablePath, err := generateTablePath(t.Table, tableID, useTableIDAsPath)
+		if err != nil {
+			return "", err
+		}
+		table = tablePath
+	}
+	omitSchema := useTableIDAsPath && isTableSchema
+	path, err := generateSchemaFilePath(t.Schema, table, t.TableVersion, checksum, omitSchema)
+	if err != nil {
+		return "", err
+	}
+	return path, nil
 }

@@ -23,9 +23,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
-	cerrors "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/migrate"
 	"github.com/pingcap/ticdc/pkg/orchestrator/util"
@@ -52,7 +51,7 @@ type simpleReactor struct {
 
 func (s *simpleReactor) Tick(_ context.Context, state ReactorState) (nextState ReactorState, err error) {
 	if s.tickCount >= totalTicksPerReactor {
-		return s.state, cerrors.ErrReactorFinished
+		return s.state, errors.ErrReactorFinished.FastGenByArgs()
 	}
 	s.tickCount++
 
@@ -272,8 +271,8 @@ func TestEtcdSum(t *testing.T) {
 	}
 
 	err = errg.Wait()
-	if err != nil && (errors.Cause(err) == context.DeadlineExceeded ||
-		errors.Cause(err) == context.Canceled ||
+	if err != nil && (errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, context.Canceled) ||
 		strings.Contains(err.Error(), "etcdserver: request timeout")) {
 		return
 	}
@@ -323,7 +322,7 @@ func (r *linearizabilityReactor) Tick(ctx context.Context, state ReactorState) (
 		r.tickCount++
 	}
 	if r.state.val == 1999 {
-		return r.state, cerrors.ErrReactorFinished
+		return r.state, errors.ErrReactorFinished.FastGenByArgs()
 	}
 	r.state.isUpdated = false
 	return r.state, nil
@@ -423,7 +422,7 @@ func (r *finishedReactor) Tick(ctx context.Context, state ReactorState) (nextSta
 	r.state.AppendPatch(util.NewEtcdKey(r.prefix+"/key2"), func(old []byte) (newValue []byte, changed bool, err error) {
 		return nil, true, nil
 	})
-	return r.state, cerrors.ErrReactorFinished
+	return r.state, errors.ErrReactorFinished.FastGenByArgs()
 }
 
 func TestFinished(t *testing.T) {
@@ -493,7 +492,7 @@ func (r *coverReactor) Tick(ctx context.Context, state ReactorState) (nextState 
 	r.state.AppendPatch(util.NewEtcdKey(r.prefix+"/key2"), func(old []byte) (newValue []byte, changed bool, err error) {
 		return append(old, []byte("fin")...), true, nil
 	})
-	return r.state, cerrors.ErrReactorFinished
+	return r.state, errors.ErrReactorFinished.FastGenByArgs()
 }
 
 func TestCover(t *testing.T) {
@@ -572,7 +571,7 @@ func (r *emptyTxnReactor) Tick(ctx context.Context, state ReactorState) (nextSta
 	r.state.AppendPatch(util.NewEtcdKey(r.prefix+"/key2"), func(old []byte) (newValue []byte, changed bool, err error) {
 		return []byte("123"), true, nil
 	})
-	return r.state, cerrors.ErrReactorFinished
+	return r.state, errors.ErrReactorFinished.FastGenByArgs()
 }
 
 func TestEmptyTxn(t *testing.T) {
@@ -641,7 +640,7 @@ func (r *emptyOrNilReactor) Tick(ctx context.Context, state ReactorState) (nextS
 	r.state.AppendPatch(util.NewEtcdKey(r.prefix+"/key2"), func(old []byte) (newValue []byte, changed bool, err error) {
 		return nil, true, nil
 	})
-	return r.state, cerrors.ErrReactorFinished
+	return r.state, errors.ErrReactorFinished.FastGenByArgs()
 }
 
 func TestEmptyOrNil(t *testing.T) {
@@ -689,7 +688,7 @@ func (r *modifyOneReactor) Tick(ctx context.Context, state ReactorState) (nextSt
 	if !r.finished {
 		r.finished = true
 	} else {
-		return r.state, cerrors.ErrReactorFinished.GenWithStackByArgs()
+		return r.state, errors.ErrReactorFinished.GenWithStackByArgs()
 	}
 	if r.waitOnCh != nil {
 		select {
@@ -777,8 +776,8 @@ func TestModifyAfterDelete(t *testing.T) {
 }
 
 func TestRetryableError(t *testing.T) {
-	require.True(t, isRetryableError(cerrors.ErrEtcdTryAgain))
-	require.True(t, isRetryableError(cerrors.ErrReachMaxTry.Wrap(rpctypes.ErrTimeoutDueToLeaderFail)))
+	require.True(t, isRetryableError(errors.ErrEtcdTryAgain))
+	require.True(t, isRetryableError(errors.ErrReachMaxTry.Wrap(rpctypes.ErrTimeoutDueToLeaderFail)))
 	require.True(t, isRetryableError(errors.Trace(context.DeadlineExceeded)))
 	require.False(t, isRetryableError(context.Canceled))
 }

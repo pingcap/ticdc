@@ -1,11 +1,11 @@
 # Phony targets are targets that are not associated with files.
 # Add new phony targets here to make them available in the `make` command.
-.PHONY: clean fmt check tidy \
+.PHONY: clean fmt check check-static local-static-check tidy \
 	generate-protobuf generate_mock \
 	cdc kafka_consumer storage_consumer pulsar_consumer filter_helper \
 	prepare_test_binaries \
 	unit_test_in_verify_ci integration_test_build integration_test_build_fast integration_test_mysql integration_test_kafka integration_test_storage integration_test_pulsar \
-	generate-next-gen-grafana
+	generate-next-gen-grafana check-next-gen-grafana
 
 
 FAIL_ON_STDOUT := awk "{ print } END { if (NR > 0) { exit 1  }  }"
@@ -309,8 +309,24 @@ check-copyright:
 	@echo "check-copyright"
 	@./scripts/check-copyright.sh
 
+# LINT_NEW_FROM_REV: when set (e.g. to a base commit SHA), only checks lines
+# that changed since that revision. Used in CI to avoid flagging pre-existing
+# issues. If unset, checks all files.
+# Directory exclusions (e.g. tests/) are configured in .golangci.yml.
 check-static: tools/bin/golangci-lint
-	tools/bin/golangci-lint run --timeout 10m0s --exclude-dirs "^tests/"
+ifneq ($(LINT_NEW_FROM_REV),)
+	tools/bin/golangci-lint run --timeout 10m0s --new-from-rev=$(LINT_NEW_FROM_REV)
+else
+	tools/bin/golangci-lint run --timeout 10m0s
+endif
+
+# Lint only code changed on the current branch (vs upstream/master by default).
+# Override base with LINT_BASE=<ref>.
+#   make local-static-check
+#   make local-static-check LINT_BASE=HEAD~3
+local-static-check: tools/bin/golangci-lint
+	$(eval BASE := $(if $(LINT_BASE),$(LINT_BASE),upstream/master))
+	tools/bin/golangci-lint run --timeout 10m0s --new-from-rev=$(BASE)
 
 check-ticdc-dashboard:
 	@echo "check-ticdc-dashboard"
@@ -328,7 +344,8 @@ check-makefiles: format-makefiles
 format-makefiles: $(MAKE_FILES)
 	$(SED_IN_PLACE) -e 's/^\(\t*\)  /\1\t/g' -e 's/^\(\t*\) /\1/' -- $?
 
-check: check-copyright fmt tidy generate_mock go-generate check-diff-line-width check-ticdc-dashboard check-makefiles generate-next-gen-grafana
+# TODO: add check-static back once CI workflows pass LINT_NEW_FROM_REV
+check: check-copyright fmt tidy generate_mock go-generate check-diff-line-width check-ticdc-dashboard check-makefiles
 	@git --no-pager diff --exit-code || (echo "Please add changed files!" && false)
 
 clean:
@@ -342,3 +359,6 @@ workload: tools/bin/workload
 
 generate-next-gen-grafana:
 	./scripts/generate-next-gen-metrics.sh
+
+check-next-gen-grafana: generate-next-gen-grafana
+	@git --no-pager diff --exit-code -- metrics/nextgengrafana || (echo "Please run 'make generate-next-gen-grafana' and add changed files!" && false)

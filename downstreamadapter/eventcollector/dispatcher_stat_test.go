@@ -15,10 +15,12 @@ package eventcollector
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
+	"github.com/pingcap/ticdc/downstreamadapter/routing"
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -43,6 +45,7 @@ type mockDispatcher struct {
 	handleEvents func(events []dispatcher.DispatcherEvent, wakeCallback func()) (block bool)
 	events       []dispatcher.DispatcherEvent
 	checkPointTs uint64
+	tableSpan    *heartbeatpb.TableSpan
 
 	skipSyncpointAtStartTs bool
 }
@@ -54,6 +57,16 @@ func newMockDispatcher(id common.DispatcherID, startTs uint64) *mockDispatcher {
 		changefeedID: mockChangefeedID,
 		checkPointTs: startTs,
 	}
+}
+
+func newDispatcherStatForTest(target dispatcher.DispatcherService, readyCallback func()) *dispatcherStat {
+	return newDispatcherStatInternal(
+		target,
+		nil,
+		"",
+		func(*messaging.TargetMessage) {},
+		readyCallback,
+	)
 }
 
 func (m *mockDispatcher) GetStartTs() uint64 {
@@ -72,10 +85,21 @@ func (m *mockDispatcher) GetChangefeedID() common.ChangeFeedID {
 	return m.changefeedID
 }
 
+func (m *mockDispatcher) GetEventCollectorBatchConfig() (batchCount int, batchBytes int) {
+	return 0, 0
+}
+
 func (m *mockDispatcher) GetTableSpan() *heartbeatpb.TableSpan {
+	if m.tableSpan != nil {
+		return m.tableSpan
+	}
 	return &heartbeatpb.TableSpan{
 		TableID: 1,
 	}
+}
+
+func (m *mockDispatcher) GetRouter() routing.Router {
+	return routing.Router{}
 }
 
 func (m *mockDispatcher) GetBDRMode() bool {
@@ -329,11 +353,10 @@ func TestVerifyEventSequence(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			stat := &dispatcherStat{
-				target: newMockDispatcher(common.NewDispatcherID(), 0),
-			}
-			stat.lastEventSeq.Store(tt.lastEventSeq)
-			result := stat.verifyEventSequence(tt.event)
+			stat := newDispatcherStatForTest(newMockDispatcher(common.NewDispatcherID(), 0), nil)
+			state := stat.loadCurrentEpochState()
+			state.lastEventSeq.Store(tt.lastEventSeq)
+			result := stat.verifyEventSequence(tt.event, state)
 			require.Equal(t, tt.expectedResult, result)
 		})
 	}
@@ -480,14 +503,16 @@ func TestFilterAndUpdateEventByCommitTs(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			stat := &dispatcherStat{
-				target: newMockDispatcher(common.NewDispatcherID(), 0),
-			}
+			stat := newDispatcherStatForTest(newMockDispatcher(common.NewDispatcherID(), 0), nil)
 			stat.lastEventCommitTs.Store(tt.lastEventCommitTs)
 			stat.gotDDLOnTs.Store(tt.gotDDLOnTs)
 			stat.gotSyncpointOnTS.Store(tt.gotSyncpointOnTS)
 
-			result := stat.filterAndUpdateEventByCommitTs(tt.event)
+			state := stat.loadCurrentEpochState()
+			result := stat.shouldForwardEventByCommitTs(tt.event)
+			if result {
+				stat.updateCommitTsStateByEvents(state, []dispatcher.DispatcherEvent{tt.event})
+			}
 			require.Equal(t, tt.expectedResult, result)
 			require.Equal(t, tt.expectedDDLOnTs, stat.gotDDLOnTs.Load())
 			require.Equal(t, tt.expectedSyncOnTs, stat.gotSyncpointOnTS.Load())
@@ -496,18 +521,51 @@ func TestFilterAndUpdateEventByCommitTs(t *testing.T) {
 	}
 }
 
+func TestUpdateCommitTsStateByEvents(t *testing.T) {
+	t.Parallel()
+
+	stat := newDispatcherStatForTest(newMockDispatcher(common.NewDispatcherID(), 0), nil)
+	stat.lastEventCommitTs.Store(100)
+	stat.gotDDLOnTs.Store(true)
+	stat.gotSyncpointOnTS.Store(true)
+	state := stat.loadCurrentEpochState()
+	state.maxEventTs.Store(100)
+
+	stat.updateCommitTsStateByEvents(state, []dispatcher.DispatcherEvent{
+		{
+			Event: &mockEvent{
+				eventType: commonEvent.TypeResolvedEvent,
+				commitTs:  105,
+			},
+		},
+		{
+			Event: &mockEvent{
+				eventType: commonEvent.TypeDMLEvent,
+				commitTs:  110,
+			},
+		},
+	})
+
+	require.Equal(t, uint64(110), stat.lastEventCommitTs.Load())
+	require.False(t, stat.gotDDLOnTs.Load())
+	require.False(t, stat.gotSyncpointOnTS.Load())
+	require.Equal(t, uint64(110), state.maxEventTs.Load())
+}
+
 func TestHandleSignalEvent(t *testing.T) {
 	localServerID := node.ID("local-server")
 	remoteServerID := node.ID("remote-server")
 	anotherRemoteServerID := node.ID("another-remote-server")
 
 	tests := []struct {
-		name                   string
-		event                  dispatcher.DispatcherEvent
-		initialState           func(*dispatcherStat)
-		expectedEventServiceID node.ID
-		expectedReadyReceived  bool
-		expectedPanic          bool
+		name                        string
+		event                       dispatcher.DispatcherEvent
+		initialState                func(*dispatcherStat)
+		expectedEventServiceID      node.ID
+		expectedReceivingData       bool
+		expectedAwaitingLocalReady  bool
+		expectedPendingRemoteTarget node.ID
+		expectedPanic               bool
 	}{
 		{
 			name: "ignore signal event when already connected to local server",
@@ -518,10 +576,12 @@ func TestHandleSignalEvent(t *testing.T) {
 				},
 			},
 			initialState: func(stat *dispatcherStat) {
-				stat.connState.setEventServiceID(localServerID)
+				setSessionState(stat.session, localServerID, false, "")
 			},
-			expectedEventServiceID: localServerID,
-			expectedReadyReceived:  false,
+			expectedEventServiceID:      localServerID,
+			expectedReceivingData:       true,
+			expectedAwaitingLocalReady:  false,
+			expectedPendingRemoteTarget: "",
 		},
 		{
 			name: "ignore signal event from unknown server",
@@ -532,10 +592,12 @@ func TestHandleSignalEvent(t *testing.T) {
 				},
 			},
 			initialState: func(stat *dispatcherStat) {
-				stat.connState.setEventServiceID(remoteServerID)
+				setSessionState(stat.session, "", true, remoteServerID)
 			},
-			expectedEventServiceID: remoteServerID,
-			expectedReadyReceived:  false,
+			expectedEventServiceID:      "",
+			expectedReceivingData:       false,
+			expectedAwaitingLocalReady:  true,
+			expectedPendingRemoteTarget: remoteServerID,
 		},
 		{
 			name: "handle ready event from local server with callback",
@@ -546,10 +608,13 @@ func TestHandleSignalEvent(t *testing.T) {
 				},
 			},
 			initialState: func(stat *dispatcherStat) {
-				stat.readyCallback = func() {}
+				markSessionRegistering(stat.session, localServerID)
+				setSessionReadyCallback(stat.session, func() {})
 			},
-			expectedEventServiceID: localServerID,
-			expectedReadyReceived:  true,
+			expectedEventServiceID:      localServerID,
+			expectedReceivingData:       true,
+			expectedAwaitingLocalReady:  false,
+			expectedPendingRemoteTarget: "",
 		},
 		{
 			name: "handle ready event from local server without callback",
@@ -560,10 +625,12 @@ func TestHandleSignalEvent(t *testing.T) {
 				},
 			},
 			initialState: func(stat *dispatcherStat) {
-				stat.connState.setEventServiceID(remoteServerID)
+				setSessionState(stat.session, "", true, remoteServerID)
 			},
-			expectedEventServiceID: localServerID,
-			expectedReadyReceived:  true,
+			expectedEventServiceID:      localServerID,
+			expectedReceivingData:       true,
+			expectedAwaitingLocalReady:  false,
+			expectedPendingRemoteTarget: "",
 		},
 		{
 			name: "handle ready event from remote server",
@@ -574,10 +641,12 @@ func TestHandleSignalEvent(t *testing.T) {
 				},
 			},
 			initialState: func(stat *dispatcherStat) {
-				stat.connState.setEventServiceID(remoteServerID)
+				setSessionState(stat.session, "", true, remoteServerID)
 			},
-			expectedEventServiceID: remoteServerID,
-			expectedReadyReceived:  true,
+			expectedEventServiceID:      remoteServerID,
+			expectedReceivingData:       true,
+			expectedAwaitingLocalReady:  true,
+			expectedPendingRemoteTarget: "",
 		},
 		{
 			name: "ignore duplicate ready event from remote server",
@@ -588,11 +657,12 @@ func TestHandleSignalEvent(t *testing.T) {
 				},
 			},
 			initialState: func(stat *dispatcherStat) {
-				stat.connState.setEventServiceID(remoteServerID)
-				stat.connState.readyEventReceived.Store(true)
+				setSessionState(stat.session, remoteServerID, true, "")
 			},
-			expectedEventServiceID: remoteServerID,
-			expectedReadyReceived:  true,
+			expectedEventServiceID:      remoteServerID,
+			expectedReceivingData:       true,
+			expectedAwaitingLocalReady:  true,
+			expectedPendingRemoteTarget: "",
 		},
 		{
 			name: "handle not reusable event from remote server",
@@ -603,11 +673,13 @@ func TestHandleSignalEvent(t *testing.T) {
 				},
 			},
 			initialState: func(stat *dispatcherStat) {
-				stat.connState.setEventServiceID(remoteServerID)
-				stat.connState.remoteCandidates = []string{anotherRemoteServerID.String()}
+				setSessionState(stat.session, "", true, remoteServerID)
+				setSessionRemoteCandidates(stat.session, []string{anotherRemoteServerID.String()})
 			},
-			expectedEventServiceID: anotherRemoteServerID,
-			expectedReadyReceived:  false,
+			expectedEventServiceID:      "",
+			expectedReceivingData:       false,
+			expectedAwaitingLocalReady:  true,
+			expectedPendingRemoteTarget: anotherRemoteServerID,
 		},
 		{
 			name: "panic on not reusable event from local server",
@@ -618,7 +690,7 @@ func TestHandleSignalEvent(t *testing.T) {
 				},
 			},
 			initialState: func(stat *dispatcherStat) {
-				stat.connState.setEventServiceID(remoteServerID)
+				markSessionRegistering(stat.session, remoteServerID)
 			},
 			expectedPanic: true,
 		},
@@ -631,7 +703,7 @@ func TestHandleSignalEvent(t *testing.T) {
 				},
 			},
 			initialState: func(stat *dispatcherStat) {
-				stat.connState.setEventServiceID(remoteServerID)
+				markSessionRegistering(stat.session, remoteServerID)
 			},
 			expectedPanic: true,
 		},
@@ -639,10 +711,7 @@ func TestHandleSignalEvent(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			stat := &dispatcherStat{
-				target:         newMockDispatcher(common.NewDispatcherID(), 0),
-				eventCollector: newTestEventCollector(localServerID),
-			}
+			stat := newDispatcherStat(newMockDispatcher(common.NewDispatcherID(), 0), newTestEventCollector(localServerID), nil)
 			if tt.initialState != nil {
 				tt.initialState(stat)
 			}
@@ -655,10 +724,177 @@ func TestHandleSignalEvent(t *testing.T) {
 			}
 
 			stat.handleSignalEvent(tt.event)
-			require.Equal(t, tt.expectedEventServiceID, stat.connState.getEventServiceID())
-			require.Equal(t, tt.expectedReadyReceived, stat.connState.readyEventReceived.Load())
+			currentEventServiceID, localReadyPending, pendingRemoteTarget := sessionState(stat.session)
+			require.Equal(t, tt.expectedEventServiceID, currentEventServiceID)
+			require.Equal(t, tt.expectedReceivingData, stat.session.isReceivingDataEvent())
+			require.Equal(t, tt.expectedAwaitingLocalReady, localReadyPending)
+			require.Equal(t, tt.expectedPendingRemoteTarget, pendingRemoteTarget)
 		})
 	}
+}
+
+func TestRemoteReadyClearsRemoteCandidates(t *testing.T) {
+	localServerID := node.ID("local-server")
+	remoteServerID := node.ID("remote-server")
+	fallbackRemoteServerID := node.ID("fallback-remote-server")
+
+	newSignalEvent := func(from node.ID, eventType int) dispatcher.DispatcherEvent {
+		return dispatcher.DispatcherEvent{
+			From: &from,
+			Event: &mockEvent{
+				eventType: eventType,
+			},
+		}
+	}
+
+	mockDisp := newMockDispatcher(common.NewDispatcherID(), 0)
+	mockEventCollector := newTestEventCollector(localServerID)
+	stat := newDispatcherStat(mockDisp, mockEventCollector, nil)
+
+	// Remote probing has a fallback queue. Once a remote ready is accepted, the
+	// fallback candidates must be cleared so later re-register failures do not
+	// fall back to stale nodes.
+	setSessionState(stat.session, "", true, remoteServerID)
+	setSessionRemoteCandidates(stat.session, []string{fallbackRemoteServerID.String()})
+
+	stat.handleSignalEvent(newSignalEvent(remoteServerID, commonEvent.TypeReadyEvent))
+	requireDispatcherRequests(
+		t,
+		readDispatcherRequests(t, mockEventCollector, 1),
+		dispatcherRequestRecord{to: remoteServerID, action: eventpb.ActionType_ACTION_TYPE_RESET},
+	)
+
+	stat.session.retryCurrentRegistrationIfRemovedFrom(remoteServerID)
+	requireDispatcherRequests(
+		t,
+		readDispatcherRequests(t, mockEventCollector, 1),
+		dispatcherRequestRecord{to: remoteServerID, action: eventpb.ActionType_ACTION_TYPE_REGISTER},
+	)
+
+	// If remoteCandidates is not cleared by the earlier ready acceptance, this
+	// not reusable event would incorrectly trigger a register to the fallback
+	// candidate.
+	stat.handleSignalEvent(newSignalEvent(remoteServerID, commonEvent.TypeNotReusableEvent))
+	requireNoDispatcherRequest(t, mockEventCollector)
+}
+
+func TestHandleLocalReadyEventCleansUpRemoteRegistrations(t *testing.T) {
+	localServerID := node.ID("local-server")
+	remoteServerID := node.ID("remote-server")
+	anotherRemoteServerID := node.ID("another-remote-server")
+	dispatcherID := common.NewDispatcherID()
+
+	newReadyEvent := func(from node.ID) dispatcher.DispatcherEvent {
+		return dispatcher.DispatcherEvent{
+			From: &from,
+			Event: &mockEvent{
+				eventType: commonEvent.TypeReadyEvent,
+			},
+		}
+	}
+
+	t.Run("local ready removes pending remote register and resets local", func(t *testing.T) {
+		mockDisp := newMockDispatcher(dispatcherID, 0)
+		mockEventCollector := newTestEventCollector(localServerID)
+		stat := newDispatcherStat(mockDisp, mockEventCollector, nil)
+		setSessionState(stat.session, "", true, remoteServerID)
+
+		stat.handleSignalEvent(newReadyEvent(localServerID))
+
+		requireDispatcherRequests(
+			t,
+			readDispatcherRequests(t, mockEventCollector, 2),
+			dispatcherRequestRecord{to: remoteServerID, action: eventpb.ActionType_ACTION_TYPE_REMOVE},
+			dispatcherRequestRecord{to: localServerID, action: eventpb.ActionType_ACTION_TYPE_RESET},
+		)
+		requireNoDispatcherRequest(t, mockEventCollector)
+	})
+
+	t.Run("local ready removes current remote and pending remote without duplicates", func(t *testing.T) {
+		mockDisp := newMockDispatcher(dispatcherID, 0)
+		mockEventCollector := newTestEventCollector(localServerID)
+		stat := newDispatcherStat(mockDisp, mockEventCollector, nil)
+		setSessionState(stat.session, remoteServerID, true, anotherRemoteServerID)
+
+		stat.handleSignalEvent(newReadyEvent(localServerID))
+
+		requireDispatcherRequests(
+			t,
+			readDispatcherRequests(t, mockEventCollector, 3),
+			dispatcherRequestRecord{to: remoteServerID, action: eventpb.ActionType_ACTION_TYPE_REMOVE},
+			dispatcherRequestRecord{to: anotherRemoteServerID, action: eventpb.ActionType_ACTION_TYPE_REMOVE},
+			dispatcherRequestRecord{to: localServerID, action: eventpb.ActionType_ACTION_TYPE_RESET},
+		)
+		requireNoDispatcherRequest(t, mockEventCollector)
+	})
+
+	t.Run("local ready with callback still removes speculative remote register", func(t *testing.T) {
+		mockDisp := newMockDispatcher(dispatcherID, 0)
+		mockEventCollector := newTestEventCollector(localServerID)
+		stat := newDispatcherStat(mockDisp, mockEventCollector, nil)
+		setSessionState(stat.session, "", true, remoteServerID)
+		setSessionReadyCallback(stat.session, func() {})
+
+		stat.handleSignalEvent(newReadyEvent(localServerID))
+
+		requireDispatcherRequests(
+			t,
+			readDispatcherRequests(t, mockEventCollector, 1),
+			dispatcherRequestRecord{to: remoteServerID, action: eventpb.ActionType_ACTION_TYPE_REMOVE},
+		)
+		requireNoDispatcherRequest(t, mockEventCollector)
+	})
+}
+
+func TestInitialLocalReadyCallbackIsOneShot(t *testing.T) {
+	localServerID := node.ID("local-server")
+	dispatcherID := common.NewDispatcherID()
+
+	newReadyEvent := func(from node.ID) dispatcher.DispatcherEvent {
+		return dispatcher.DispatcherEvent{
+			From: &from,
+			Event: &mockEvent{
+				eventType: commonEvent.TypeReadyEvent,
+			},
+		}
+	}
+
+	mockDisp := newMockDispatcher(dispatcherID, 0)
+	mockEventCollector := newTestEventCollector(localServerID)
+	stat := newDispatcherStat(mockDisp, mockEventCollector, nil)
+	callbackCount := 0
+	setSessionState(stat.session, "", true, "")
+	setSessionReadyCallback(stat.session, func() {
+		callbackCount++
+	})
+
+	stat.handleSignalEvent(newReadyEvent(localServerID))
+	require.Equal(t, 1, callbackCount)
+	require.Nil(t, stat.session.readyCallback)
+	requireNoDispatcherRequest(t, mockEventCollector)
+
+	stat.session.commitLocalRegistration()
+	requireDispatcherRequests(
+		t,
+		readDispatcherRequests(t, mockEventCollector, 1),
+		dispatcherRequestRecord{to: localServerID, action: eventpb.ActionType_ACTION_TYPE_RESET},
+	)
+
+	require.True(t, stat.session.retryCurrentRegistrationIfRemovedFrom(localServerID))
+	requireDispatcherRequests(
+		t,
+		readDispatcherRequests(t, mockEventCollector, 1),
+		dispatcherRequestRecord{to: localServerID, action: eventpb.ActionType_ACTION_TYPE_REGISTER},
+	)
+
+	stat.handleSignalEvent(newReadyEvent(localServerID))
+	require.Equal(t, 1, callbackCount)
+	requireDispatcherRequests(
+		t,
+		readDispatcherRequests(t, mockEventCollector, 1),
+		dispatcherRequestRecord{to: localServerID, action: eventpb.ActionType_ACTION_TYPE_RESET},
+	)
+	requireNoDispatcherRequest(t, mockEventCollector)
 }
 
 func TestIsFromCurrentEpoch(t *testing.T) {
@@ -737,12 +973,10 @@ func TestIsFromCurrentEpoch(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			stat := &dispatcherStat{
-				target: newMockDispatcher(common.NewDispatcherID(), 0),
-			}
-			stat.epoch.Store(tt.epoch)
-			stat.lastEventSeq.Store(tt.lastEventSeq)
-			result := stat.isFromCurrentEpoch(tt.event)
+			stat := newDispatcherStatForTest(newMockDispatcher(common.NewDispatcherID(), 0), nil)
+			state := newDispatcherEpochState(tt.epoch, tt.lastEventSeq, stat.target.GetStartTs())
+			stat.currentEpoch.Store(state)
+			result := stat.isFromCurrentEpoch(tt.event, state)
 			require.Equal(t, tt.expectedResult, result)
 		})
 	}
@@ -777,9 +1011,8 @@ func TestHandleDataEvents(t *testing.T) {
 				},
 			},
 			initialState: func(stat *dispatcherStat) {
-				stat.connState.setEventServiceID(remoteServerID)
-				stat.lastEventSeq.Store(1)
-				stat.epoch.Store(2)
+				markSessionReceiving(stat.session, remoteServerID)
+				stat.currentEpoch.Store(newDispatcherEpochState(2, 1, stat.target.GetStartTs()))
 			},
 			handleEvents:   normalHandleEvents,
 			expectedResult: false,
@@ -798,9 +1031,8 @@ func TestHandleDataEvents(t *testing.T) {
 				},
 			},
 			initialState: func(stat *dispatcherStat) {
-				stat.connState.setEventServiceID(remoteServerID)
-				stat.epoch.Store(2)
-				stat.lastEventSeq.Store(1)
+				markSessionReceiving(stat.session, remoteServerID)
+				stat.currentEpoch.Store(newDispatcherEpochState(2, 1, stat.target.GetStartTs()))
 				stat.lastEventCommitTs.Store(50)
 			},
 			handleEvents:   normalHandleEvents,
@@ -820,9 +1052,8 @@ func TestHandleDataEvents(t *testing.T) {
 				},
 			},
 			initialState: func(stat *dispatcherStat) {
-				stat.connState.setEventServiceID(remoteServerID)
-				stat.lastEventSeq.Store(1)
-				stat.epoch.Store(10)
+				markSessionReceiving(stat.session, remoteServerID)
+				stat.currentEpoch.Store(newDispatcherEpochState(10, 1, stat.target.GetStartTs()))
 				stat.lastEventCommitTs.Store(50)
 			},
 			handleEvents:   normalHandleEvents,
@@ -843,9 +1074,8 @@ func TestHandleDataEvents(t *testing.T) {
 				},
 			},
 			initialState: func(stat *dispatcherStat) {
-				stat.connState.setEventServiceID(remoteServerID)
-				stat.epoch.Store(10)
-				stat.lastEventSeq.Store(1)
+				markSessionReceiving(stat.session, remoteServerID)
+				stat.currentEpoch.Store(newDispatcherEpochState(10, 1, stat.target.GetStartTs()))
 				stat.lastEventCommitTs.Store(50)
 			},
 			handleEvents:   normalHandleEvents,
@@ -875,9 +1105,8 @@ func TestHandleDataEvents(t *testing.T) {
 				},
 			},
 			initialState: func(stat *dispatcherStat) {
-				stat.connState.setEventServiceID(remoteServerID)
-				stat.epoch.Store(10)
-				stat.lastEventSeq.Store(1)
+				markSessionReceiving(stat.session, remoteServerID)
+				stat.currentEpoch.Store(newDispatcherEpochState(10, 1, stat.target.GetStartTs()))
 				stat.lastEventCommitTs.Store(50)
 				stat.tableInfo.Store(&common.TableInfo{})
 			},
@@ -898,9 +1127,8 @@ func TestHandleDataEvents(t *testing.T) {
 				},
 			},
 			initialState: func(stat *dispatcherStat) {
-				stat.connState.setEventServiceID(remoteServerID)
-				stat.epoch.Store(10)
-				stat.lastEventSeq.Store(1)
+				markSessionReceiving(stat.session, remoteServerID)
+				stat.currentEpoch.Store(newDispatcherEpochState(10, 1, stat.target.GetStartTs()))
 				stat.lastEventCommitTs.Store(50)
 			},
 			handleEvents:   normalHandleEvents,
@@ -920,9 +1148,8 @@ func TestHandleDataEvents(t *testing.T) {
 				},
 			},
 			initialState: func(stat *dispatcherStat) {
-				stat.connState.setEventServiceID(remoteServerID)
-				stat.epoch.Store(20)
-				stat.lastEventSeq.Store(1)
+				markSessionReceiving(stat.session, remoteServerID)
+				stat.currentEpoch.Store(newDispatcherEpochState(20, 1, stat.target.GetStartTs()))
 				stat.lastEventCommitTs.Store(50)
 			},
 			handleEvents:   normalHandleEvents,
@@ -932,10 +1159,7 @@ func TestHandleDataEvents(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			stat := &dispatcherStat{
-				target:         newMockDispatcher(common.NewDispatcherID(), 0),
-				eventCollector: newTestEventCollector(localServerID),
-			}
+			stat := newDispatcherStat(newMockDispatcher(common.NewDispatcherID(), 0), newTestEventCollector(localServerID), nil)
 			stat.target.(*mockDispatcher).handleEvents = tt.handleEvents
 
 			if tt.initialState != nil {
@@ -1022,18 +1246,17 @@ func TestHandleBatchDataEvents(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			mockDisp := newMockDispatcher(common.NewDispatcherID(), 0)
 			mockDisp.handleEvents = normalHandleEvents
 			mockEventCollector := newTestEventCollector(tt.currentService)
 			stat := newDispatcherStat(mockDisp, mockEventCollector, nil)
-			stat.lastEventSeq.Store(tt.lastSeq)
+			stat.loadCurrentEpochState().lastEventSeq.Store(tt.lastSeq)
 			stat.lastEventCommitTs.Store(tt.lastCommitTs)
-			stat.epoch.Store(tt.epoch)
-			stat.connState.setEventServiceID(tt.currentService)
-			stat.connState.readyEventReceived.Store(true)
+			state := stat.loadCurrentEpochState()
+			stat.currentEpoch.Store(newDispatcherEpochState(tt.epoch, state.lastEventSeq.Load(), state.maxEventTs.Load()))
+			markSessionReceiving(stat.session, tt.currentService)
 
 			got := stat.handleBatchDataEvents(tt.events)
 			require.Equal(t, tt.want, got)
@@ -1110,18 +1333,17 @@ func TestHandleSingleDataEvents(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			mockDisp := newMockDispatcher(common.NewDispatcherID(), 0)
 			mockDisp.handleEvents = normalHandleEvents
 			mockEventCollector := newTestEventCollector(tt.currentService)
 			stat := newDispatcherStat(mockDisp, mockEventCollector, nil)
-			stat.lastEventSeq.Store(tt.lastSeq)
+			stat.loadCurrentEpochState().lastEventSeq.Store(tt.lastSeq)
 			stat.lastEventCommitTs.Store(tt.lastCommitTs)
-			stat.epoch.Store(tt.epoch)
-			stat.connState.setEventServiceID(tt.currentService)
-			stat.connState.readyEventReceived.Store(true)
+			state := stat.loadCurrentEpochState()
+			stat.currentEpoch.Store(newDispatcherEpochState(tt.epoch, state.lastEventSeq.Load(), state.maxEventTs.Load()))
+			markSessionReceiving(stat.session, tt.currentService)
 
 			// Special handling for multiple events test case - it should panic
 			if tt.name == "multiple events" {
@@ -1134,6 +1356,94 @@ func TestHandleSingleDataEvents(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestHandleSingleDataEventsUpdatesDDLStateAndDedupsSameTsDDL(t *testing.T) {
+	t.Parallel()
+
+	mockDisp := newMockDispatcher(common.NewDispatcherID(), 0)
+	mockDisp.handleEvents = func(events []dispatcher.DispatcherEvent, wakeCallback func()) (block bool) {
+		return len(events) > 0
+	}
+
+	currentService := node.ID("service1")
+	stat := newDispatcherStatForTest(mockDisp, nil)
+	stat.lastEventCommitTs.Store(99)
+	stat.currentEpoch.Store(newDispatcherEpochState(10, 1, stat.target.GetStartTs()))
+	markSessionReceiving(stat.session, currentService)
+
+	firstDDL := dispatcher.DispatcherEvent{
+		From: createNodeID("service1"),
+		Event: &commonEvent.DDLEvent{
+			Seq:        2,
+			Epoch:      10,
+			FinishedTs: 100,
+		},
+	}
+	secondDDL := dispatcher.DispatcherEvent{
+		From: createNodeID("service1"),
+		Event: &commonEvent.DDLEvent{
+			Seq:        3,
+			Epoch:      10,
+			FinishedTs: 100,
+		},
+	}
+
+	require.True(t, stat.handleSingleDataEvents([]dispatcher.DispatcherEvent{firstDDL}))
+	require.Equal(t, uint64(100), stat.lastEventCommitTs.Load())
+	require.True(t, stat.gotDDLOnTs.Load())
+	require.False(t, stat.gotSyncpointOnTS.Load())
+	require.Len(t, mockDisp.events, 1)
+
+	require.False(t, stat.handleSingleDataEvents([]dispatcher.DispatcherEvent{secondDDL}))
+	require.Equal(t, uint64(100), stat.lastEventCommitTs.Load())
+	require.True(t, stat.gotDDLOnTs.Load())
+	require.False(t, stat.gotSyncpointOnTS.Load())
+	require.Len(t, mockDisp.events, 1)
+}
+
+func TestHandleSingleDataEventsUpdatesSyncPointStateAndDedupsSameTsSyncPoint(t *testing.T) {
+	t.Parallel()
+
+	mockDisp := newMockDispatcher(common.NewDispatcherID(), 0)
+	mockDisp.handleEvents = func(events []dispatcher.DispatcherEvent, wakeCallback func()) (block bool) {
+		return len(events) > 0
+	}
+
+	currentService := node.ID("service1")
+	stat := newDispatcherStatForTest(mockDisp, nil)
+	stat.lastEventCommitTs.Store(199)
+	stat.currentEpoch.Store(newDispatcherEpochState(10, 1, stat.target.GetStartTs()))
+	markSessionReceiving(stat.session, currentService)
+
+	firstSyncPoint := dispatcher.DispatcherEvent{
+		From: createNodeID("service1"),
+		Event: &commonEvent.SyncPointEvent{
+			Seq:      2,
+			Epoch:    10,
+			CommitTs: 200,
+		},
+	}
+	secondSyncPoint := dispatcher.DispatcherEvent{
+		From: createNodeID("service1"),
+		Event: &commonEvent.SyncPointEvent{
+			Seq:      3,
+			Epoch:    10,
+			CommitTs: 200,
+		},
+	}
+
+	require.True(t, stat.handleSingleDataEvents([]dispatcher.DispatcherEvent{firstSyncPoint}))
+	require.Equal(t, uint64(200), stat.lastEventCommitTs.Load())
+	require.False(t, stat.gotDDLOnTs.Load())
+	require.True(t, stat.gotSyncpointOnTS.Load())
+	require.Len(t, mockDisp.events, 1)
+
+	require.False(t, stat.handleSingleDataEvents([]dispatcher.DispatcherEvent{secondSyncPoint}))
+	require.Equal(t, uint64(200), stat.lastEventCommitTs.Load())
+	require.False(t, stat.gotDDLOnTs.Load())
+	require.True(t, stat.gotSyncpointOnTS.Load())
+	require.Len(t, mockDisp.events, 1)
 }
 
 func TestHandleBatchDMLEvent(t *testing.T) {
@@ -1224,15 +1534,13 @@ func TestHandleBatchDMLEvent(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			mockDisp := newMockDispatcher(common.NewDispatcherID(), 0)
 			mockDisp.handleEvents = normalHandleEvents
-			stat := newDispatcherStat(mockDisp, nil, nil)
+			stat := newDispatcherStatForTest(mockDisp, nil)
 			stat.lastEventCommitTs.Store(tt.lastCommitTs)
-			stat.epoch.Store(tt.epoch)
-			stat.lastEventSeq.Store(tt.lastSeq)
+			stat.currentEpoch.Store(newDispatcherEpochState(tt.epoch, tt.lastSeq, stat.target.GetStartTs()))
 			if tt.tableInfo != nil {
 				stat.tableInfo.Store(tt.tableInfo)
 			}
@@ -1246,6 +1554,35 @@ func TestHandleBatchDMLEvent(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestHandleBatchDataEventsDoesNotAdvanceCommitTsWhenNoValidEvents(t *testing.T) {
+	t.Parallel()
+
+	mockDisp := newMockDispatcher(common.NewDispatcherID(), 0)
+	mockDisp.handleEvents = func(events []dispatcher.DispatcherEvent, wakeCallback func()) (block bool) {
+		return false
+	}
+
+	stat := newDispatcherStatForTest(mockDisp, nil)
+	stat.lastEventCommitTs.Store(50)
+	stat.currentEpoch.Store(newDispatcherEpochState(10, 1, stat.target.GetStartTs()))
+
+	events := []dispatcher.DispatcherEvent{
+		{
+			Event: &mockEvent{
+				eventType: commonEvent.TypeDMLEvent,
+				seq:       2,
+				epoch:     10,
+				commitTs:  40,
+			},
+			From: createNodeID("service1"),
+		},
+	}
+
+	require.False(t, stat.handleBatchDataEvents(events))
+	require.Equal(t, uint64(50), stat.lastEventCommitTs.Load())
+	require.Empty(t, mockDisp.events)
 }
 
 func TestNewDispatcherResetRequest(t *testing.T) {
@@ -1289,14 +1626,63 @@ func TestNewDispatcherResetRequest(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			mockDisp := newMockDispatcher(common.NewDispatcherID(), startTs)
 			mockDisp.skipSyncpointAtStartTs = tc.skipSyncpointAtStartTs
-			stat := newDispatcherStat(mockDisp, nil, nil)
-			resetReq := stat.newDispatcherResetRequest("local", tc.resetTs, 1)
+			stat := newDispatcherStatForTest(mockDisp, nil)
+			resetReq := stat.session.newDispatcherResetRequest("local", tc.resetTs, 1)
 			require.Equal(t, tc.expectedSyncPointTs, resetReq.SyncPointTs)
 		})
 	}
 }
 
-func TestRegisterTo(t *testing.T) {
+func TestCheckpointTsForEventServiceUsesCollectorObservedMaxTs(t *testing.T) {
+	t.Parallel()
+
+	dispatcherID := common.NewDispatcherID()
+	mockDisp := newMockDispatcher(dispatcherID, 100)
+	mockDisp.checkPointTs = 220
+	stat := newDispatcherStat(mockDisp, newTestEventCollector(node.ID("local")), nil)
+	markSessionReceiving(stat.session, node.ID("local"))
+	getHeartbeatCheckpoint := func() uint64 {
+		_, checkpointTs, _, ok := stat.getHeartbeatReport()
+		require.True(t, ok)
+		return checkpointTs
+	}
+
+	require.Equal(t, uint64(100), stat.loadCurrentEpochState().maxEventTs.Load())
+	require.Equal(t, uint64(100), getHeartbeatCheckpoint())
+
+	stat.session.doReset(node.ID("event-service-1"), 150)
+	require.Equal(t, uint64(150), stat.loadCurrentEpochState().maxEventTs.Load())
+	require.Equal(t, uint64(150), getHeartbeatCheckpoint())
+
+	handshake := commonEvent.NewHandshakeEvent(dispatcherID, 180, 1, &common.TableInfo{})
+	stat.handleHandshakeEvent(dispatcher.DispatcherEvent{
+		Event: &handshake,
+	})
+	require.Equal(t, uint64(180), stat.loadCurrentEpochState().maxEventTs.Load())
+	require.Equal(t, uint64(180), getHeartbeatCheckpoint())
+
+	mockDisp.checkPointTs = 170
+	require.Equal(t, uint64(170), getHeartbeatCheckpoint())
+
+	mockDisp.checkPointTs = 220
+	resolved := commonEvent.NewResolvedEvent(200, dispatcherID, 1)
+	resolved.Seq = 1
+	stat.handleDataEvents(dispatcher.DispatcherEvent{Event: resolved})
+	require.Equal(t, uint64(200), stat.loadCurrentEpochState().maxEventTs.Load())
+	require.Equal(t, uint64(200), getHeartbeatCheckpoint())
+
+	dml := &mockEvent{
+		eventType: commonEvent.TypeDMLEvent,
+		seq:       2,
+		epoch:     1,
+		commitTs:  210,
+	}
+	stat.handleDataEvents(dispatcher.DispatcherEvent{Event: dml})
+	require.Equal(t, uint64(210), stat.loadCurrentEpochState().maxEventTs.Load())
+	require.Equal(t, uint64(210), getHeartbeatCheckpoint())
+}
+
+func TestRegistrationEntrypoints(t *testing.T) {
 	localServerID := node.ID("local-server")
 	remoteServerID := node.ID("remote-server")
 	dispatcherID := common.NewDispatcherID()
@@ -1306,9 +1692,8 @@ func TestRegisterTo(t *testing.T) {
 	mockEventCollector := newTestEventCollector(localServerID)
 	stat := newDispatcherStat(mockDisp, mockEventCollector, nil)
 
-	// Test case 1: Register to local server
-	t.Run("register to local server", func(t *testing.T) {
-		stat.registerTo(localServerID)
+	t.Run("start local registration", func(t *testing.T) {
+		stat.run()
 
 		select {
 		case msg := <-mockEventCollector.dispatcherMessageChan.Out():
@@ -1323,9 +1708,8 @@ func TestRegisterTo(t *testing.T) {
 		}
 	})
 
-	// Test case 2: Register to remote server
-	t.Run("register to remote server", func(t *testing.T) {
-		stat.registerTo(remoteServerID)
+	t.Run("start remote probing", func(t *testing.T) {
+		stat.startRemoteProbing([]string{remoteServerID.String()})
 
 		select {
 		case msg := <-mockEventCollector.dispatcherMessageChan.Out():
@@ -1339,4 +1723,359 @@ func TestRegisterTo(t *testing.T) {
 			require.Fail(t, "timed out waiting for message")
 		}
 	})
+
+	t.Run("retry current registration", func(t *testing.T) {
+		setSessionState(stat.session, remoteServerID, true, "")
+
+		stat.session.retryCurrentRegistrationIfRemovedFrom(remoteServerID)
+
+		select {
+		case msg := <-mockEventCollector.dispatcherMessageChan.Out():
+			require.Equal(t, remoteServerID, msg.Message.To)
+			req, ok := msg.Message.Message[0].(*messaging.DispatcherRequest)
+			require.True(t, ok)
+			require.Equal(t, eventpb.ActionType_ACTION_TYPE_REGISTER, req.ActionType)
+			require.True(t, req.OnlyReuse, "OnlyReuse should be true for remote registration retry")
+			require.Equal(t, dispatcherID.ToPB(), req.DispatcherId)
+		case <-time.After(1 * time.Second):
+			require.Fail(t, "timed out waiting for message")
+		}
+	})
+}
+
+func TestRegisterAndRemoveRequestOrder(t *testing.T) {
+	localServerID := node.ID("local-server")
+	remoteServerID := node.ID("remote-server")
+	dispatcherID := common.NewDispatcherID()
+
+	registerStarted := make(chan struct{})
+	allowRegister := make(chan struct{})
+	var closeRegisterStarted sync.Once
+	var mu sync.Mutex
+	var requests []dispatcherRequestRecord
+	sendMessage := func(msg *messaging.TargetMessage) {
+		req, ok := msg.Message[0].(*messaging.DispatcherRequest)
+		if !ok {
+			t.Errorf("expected DispatcherRequest, got %T", msg.Message[0])
+			closeRegisterStarted.Do(func() {
+				close(registerStarted)
+			})
+			return
+		}
+		if req.ActionType == eventpb.ActionType_ACTION_TYPE_REGISTER {
+			closeRegisterStarted.Do(func() {
+				close(registerStarted)
+			})
+			<-allowRegister
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		requests = append(requests, dispatcherRequestRecord{
+			to:     msg.To,
+			action: req.ActionType,
+		})
+	}
+	stat := newDispatcherStatInternal(
+		newMockDispatcher(dispatcherID, 0),
+		nil,
+		localServerID,
+		sendMessage,
+		nil,
+	)
+
+	registerDone := make(chan struct{})
+	go func() {
+		stat.startRemoteProbing([]string{remoteServerID.String()})
+		close(registerDone)
+	}()
+
+	select {
+	case <-registerStarted:
+	case <-time.After(1 * time.Second):
+		require.FailNow(t, "timed out waiting for register request")
+	}
+
+	removeDone := make(chan struct{})
+	go func() {
+		stat.remove()
+		close(removeDone)
+	}()
+
+	select {
+	case <-removeDone:
+		require.FailNow(t, "remove should wait for in-flight register request")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(allowRegister)
+	select {
+	case <-registerDone:
+	case <-time.After(1 * time.Second):
+		require.FailNow(t, "timed out waiting for register to finish")
+	}
+	select {
+	case <-removeDone:
+	case <-time.After(1 * time.Second):
+		require.FailNow(t, "timed out waiting for remove to finish")
+	}
+
+	require.Equal(t, []dispatcherRequestRecord{
+		{to: remoteServerID, action: eventpb.ActionType_ACTION_TYPE_REGISTER},
+		{to: localServerID, action: eventpb.ActionType_ACTION_TYPE_REMOVE},
+		{to: remoteServerID, action: eventpb.ActionType_ACTION_TYPE_REMOVE},
+	}, requests)
+}
+
+func TestLocalHeartbeatRemovedReregisterReadySendsReset(t *testing.T) {
+	localServerID := node.ID("local-server")
+	dispatcherID := common.NewDispatcherID()
+	mockDisp := newMockDispatcher(dispatcherID, 0)
+	mockEventCollector := newTestEventCollector(localServerID)
+	stat := newDispatcherStat(mockDisp, mockEventCollector, nil)
+	mockEventCollector.dispatcherMap.Store(dispatcherID, stat)
+	markSessionReceiving(stat.session, localServerID)
+
+	response := commonEvent.NewDispatcherHeartbeatResponse()
+	response.Append(commonEvent.NewDispatcherState(dispatcherID, commonEvent.DSStateRemoved))
+	msg := messaging.NewSingleTargetMessage(localServerID, messaging.EventCollectorTopic, response)
+	msg.From = localServerID
+
+	mockEventCollector.handleDispatcherHeartbeatResponse(msg)
+	requireDispatcherRequests(
+		t,
+		readDispatcherRequests(t, mockEventCollector, 1),
+		dispatcherRequestRecord{to: localServerID, action: eventpb.ActionType_ACTION_TYPE_REGISTER},
+	)
+
+	stat.handleSignalEvent(dispatcher.DispatcherEvent{
+		From: &localServerID,
+		Event: &mockEvent{
+			eventType: commonEvent.TypeReadyEvent,
+		},
+	})
+
+	requireDispatcherRequests(
+		t,
+		readDispatcherRequests(t, mockEventCollector, 1),
+		dispatcherRequestRecord{to: localServerID, action: eventpb.ActionType_ACTION_TYPE_RESET},
+	)
+	requireNoDispatcherRequest(t, mockEventCollector)
+	currentEventServiceID, localReadyPending, pendingRemoteTarget := sessionState(stat.session)
+	require.Equal(t, localServerID, currentEventServiceID)
+	require.False(t, localReadyPending)
+	require.Equal(t, node.ID(""), pendingRemoteTarget)
+}
+
+func TestHandleDDLEventTableInfoUpdate(t *testing.T) {
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+	helper.Tk().MustExec("use test")
+
+	tableDDL := helper.DDL2Event("CREATE TABLE `products` (`id` INT PRIMARY KEY)")
+	viewDDL := helper.DDL2Event("CREATE VIEW `transient_view` AS SELECT 1 AS `id`")
+
+	localServerID := node.ID("local")
+	remoteServerID := node.ID("remote")
+
+	mockDisp := newMockDispatcher(common.NewDispatcherID(), 0)
+	mockDisp.tableSpan = &heartbeatpb.TableSpan{TableID: tableDDL.TableInfo.TableName.TableID}
+	mockDisp.handleEvents = func(events []dispatcher.DispatcherEvent, wakeCallback func()) bool {
+		return false
+	}
+
+	stat := newDispatcherStat(mockDisp, newTestEventCollector(localServerID), nil)
+	markSessionReceiving(stat.session, remoteServerID)
+	stat.currentEpoch.Store(newDispatcherEpochState(10, 1, stat.target.GetStartTs()))
+	stat.lastEventCommitTs.Store(50)
+
+	tableDDL.Epoch = 10
+	tableDDL.Seq = 2
+	stat.handleDataEvents(dispatcher.DispatcherEvent{From: &remoteServerID, Event: tableDDL})
+
+	storedTableInfo := stat.tableInfo.Load().(*common.TableInfo)
+	require.NotNil(t, storedTableInfo)
+	require.Same(t, tableDDL.TableInfo, storedTableInfo)
+	require.Equal(t, "test", storedTableInfo.TableName.Schema)
+	require.Equal(t, "products", storedTableInfo.TableName.Table)
+	require.Equal(t, tableDDL.TableInfo.TableName.TableID, storedTableInfo.TableName.TableID)
+	require.Equal(t, tableDDL.FinishedTs, stat.tableInfoVersion.Load())
+	require.Len(t, mockDisp.events, 1)
+	require.Same(t, tableDDL, mockDisp.events[0].Event)
+
+	viewDDL.Epoch = 10
+	viewDDL.Seq = 3
+	stat.handleDataEvents(dispatcher.DispatcherEvent{From: &remoteServerID, Event: viewDDL})
+
+	storedTableInfo = stat.tableInfo.Load().(*common.TableInfo)
+	require.Same(t, tableDDL.TableInfo, storedTableInfo)
+	require.Equal(t, viewDDL.FinishedTs, stat.tableInfoVersion.Load())
+	require.Len(t, mockDisp.events, 2)
+	require.Same(t, viewDDL, mockDisp.events[1].Event)
+}
+
+func TestRemove(t *testing.T) {
+	localServerID := node.ID("local-server")
+	remoteServerID := node.ID("remote-server")
+	anotherRemoteServerID := node.ID("another-remote-server")
+	dispatcherID := common.NewDispatcherID()
+
+	t.Run("remove local and current remote", func(t *testing.T) {
+		mockDisp := newMockDispatcher(dispatcherID, 0)
+		mockEventCollector := newTestEventCollector(localServerID)
+		stat := newDispatcherStat(mockDisp, mockEventCollector, nil)
+		setSessionState(stat.session, remoteServerID, true, "")
+
+		stat.remove()
+
+		requireRemoveTargets(
+			t,
+			readRemoveTargets(t, mockEventCollector, 2),
+			localServerID,
+			remoteServerID,
+		)
+	})
+
+	t.Run("remove local and pending remote even if remote not ready", func(t *testing.T) {
+		mockDisp := newMockDispatcher(dispatcherID, 0)
+		mockEventCollector := newTestEventCollector(localServerID)
+		stat := newDispatcherStat(mockDisp, mockEventCollector, nil)
+		setSessionState(stat.session, "", true, remoteServerID)
+
+		stat.remove()
+
+		requireRemoveTargets(
+			t,
+			readRemoveTargets(t, mockEventCollector, 2),
+			localServerID,
+			remoteServerID,
+		)
+	})
+
+	t.Run("remove local current remote and another pending remote without duplicates", func(t *testing.T) {
+		mockDisp := newMockDispatcher(dispatcherID, 0)
+		mockEventCollector := newTestEventCollector(localServerID)
+		stat := newDispatcherStat(mockDisp, mockEventCollector, nil)
+		setSessionState(stat.session, remoteServerID, true, anotherRemoteServerID)
+
+		stat.remove()
+
+		requireRemoveTargets(
+			t,
+			readRemoveTargets(t, mockEventCollector, 3),
+			localServerID,
+			remoteServerID,
+			anotherRemoteServerID,
+		)
+	})
+
+	t.Run("late signal is ignored after remove", func(t *testing.T) {
+		mockDisp := newMockDispatcher(dispatcherID, 0)
+		mockEventCollector := newTestEventCollector(localServerID)
+		stat := newDispatcherStat(mockDisp, mockEventCollector, nil)
+		setSessionState(stat.session, "", true, remoteServerID)
+
+		stat.remove()
+		stat.handleSignalEvent(dispatcher.DispatcherEvent{
+			From: &localServerID,
+			Event: &mockEvent{
+				eventType: commonEvent.TypeReadyEvent,
+			},
+		})
+
+		currentEventServiceID, localReadyPending, pendingRemoteTarget := sessionState(stat.session)
+		require.Equal(t, node.ID(""), currentEventServiceID)
+		require.False(t, stat.session.isReceivingDataEvent())
+		require.False(t, localReadyPending)
+		require.Equal(t, node.ID(""), pendingRemoteTarget)
+	})
+}
+
+func requireRemoveTargets(t *testing.T, got []node.ID, expected ...node.ID) {
+	t.Helper()
+	require.Len(t, got, len(expected))
+	gotSet := make(map[node.ID]struct{}, len(got))
+	for _, id := range got {
+		gotSet[id] = struct{}{}
+	}
+	for _, id := range expected {
+		_, ok := gotSet[id]
+		require.True(t, ok, "missing remove target %s", id)
+	}
+}
+
+type dispatcherRequestRecord struct {
+	to     node.ID
+	action eventpb.ActionType
+}
+
+func requireDispatcherRequests(t *testing.T, got []dispatcherRequestRecord, expected ...dispatcherRequestRecord) {
+	t.Helper()
+	require.Len(t, got, len(expected))
+	gotSet := make(map[dispatcherRequestRecord]struct{}, len(got))
+	for _, record := range got {
+		gotSet[record] = struct{}{}
+	}
+	for _, record := range expected {
+		_, ok := gotSet[record]
+		require.True(
+			t,
+			ok,
+			"missing request action=%s target=%s",
+			record.action.String(),
+			record.to,
+		)
+	}
+}
+
+func readDispatcherRequests(t *testing.T, collector *EventCollector, count int) []dispatcherRequestRecord {
+	t.Helper()
+	requests := make([]dispatcherRequestRecord, 0, count)
+	for range count {
+		select {
+		case msg := <-collector.dispatcherMessageChan.Out():
+			req, ok := msg.Message.Message[0].(*messaging.DispatcherRequest)
+			require.True(t, ok)
+			requests = append(requests, dispatcherRequestRecord{
+				to:     msg.Message.To,
+				action: req.ActionType,
+			})
+		case <-time.After(1 * time.Second):
+			require.FailNow(t, "timed out waiting for dispatcher request")
+		}
+	}
+	return requests
+}
+
+func requireNoDispatcherRequest(t *testing.T, collector *EventCollector) {
+	t.Helper()
+	select {
+	case msg := <-collector.dispatcherMessageChan.Out():
+		req, ok := msg.Message.Message[0].(*messaging.DispatcherRequest)
+		require.True(t, ok)
+		require.FailNowf(
+			t,
+			"unexpected dispatcher request",
+			"action=%s target=%s",
+			req.ActionType.String(),
+			msg.Message.To,
+		)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+func readRemoveTargets(t *testing.T, collector *EventCollector, count int) []node.ID {
+	t.Helper()
+	targets := make([]node.ID, 0, count)
+	for range count {
+		select {
+		case msg := <-collector.dispatcherMessageChan.Out():
+			req, ok := msg.Message.Message[0].(*messaging.DispatcherRequest)
+			require.True(t, ok)
+			require.Equal(t, eventpb.ActionType_ACTION_TYPE_REMOVE, req.ActionType)
+			targets = append(targets, msg.Message.To)
+		case <-time.After(1 * time.Second):
+			require.FailNow(t, "timed out waiting for remove message")
+		}
+	}
+	return targets
 }

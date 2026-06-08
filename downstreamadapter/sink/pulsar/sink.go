@@ -32,6 +32,18 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+type newPulsarDMLProducerFunc func(
+	changefeedID commonType.ChangeFeedID,
+	comp component,
+	failpointCh chan error,
+) (dmlProducer, error)
+
+type newPulsarDDLProducerFunc func(
+	changefeedID commonType.ChangeFeedID,
+	comp component,
+	sinkConfig *config.SinkConfig,
+) (ddlProducer, error)
+
 type sink struct {
 	changefeedID commonType.ChangeFeedID
 
@@ -71,20 +83,78 @@ func New(
 	if err != nil {
 		return nil, err
 	}
+	return newWithComponent(
+		ctx,
+		changefeedID,
+		sinkConfig,
+		comp,
+		protocol,
+		newPulsarDMLProducer,
+		newPulsarDDLProducer,
+	)
+}
+
+func newPulsarDMLProducer(
+	changefeedID commonType.ChangeFeedID,
+	comp component,
+	failpointCh chan error,
+) (dmlProducer, error) {
+	producer, err := newDMLProducers(changefeedID, comp, failpointCh)
+	if err != nil {
+		return nil, err
+	}
+	return producer, nil
+}
+
+func newPulsarDDLProducer(
+	changefeedID commonType.ChangeFeedID,
+	comp component,
+	sinkConfig *config.SinkConfig,
+) (ddlProducer, error) {
+	producer, err := newDDLProducers(changefeedID, comp, sinkConfig)
+	if err != nil {
+		return nil, err
+	}
+	return producer, nil
+}
+
+func newWithComponent(
+	ctx context.Context,
+	changefeedID commonType.ChangeFeedID,
+	sinkConfig *config.SinkConfig,
+	comp component,
+	protocol config.Protocol,
+	newDMLProducer newPulsarDMLProducerFunc,
+	newDDLProducer newPulsarDDLProducerFunc,
+) (_ *sink, err error) {
+	var (
+		dmlProducer dmlProducer
+		ddlProducer ddlProducer
+		statistics  *metrics.Statistics
+	)
 	defer func() {
 		if err != nil {
+			if ddlProducer != nil {
+				ddlProducer.close()
+			}
+			if dmlProducer != nil {
+				dmlProducer.close()
+			}
+			if statistics != nil {
+				statistics.Close()
+			}
 			comp.close()
 		}
 	}()
 
 	failpointCh := make(chan error, 1)
-	statistics := metrics.NewStatistics(changefeedID, "pulsar")
-	dmlProducer, err := newDMLProducers(changefeedID, comp, failpointCh)
+	statistics = metrics.NewStatistics(changefeedID, "pulsar")
+	dmlProducer, err = newDMLProducer(changefeedID, comp, failpointCh)
 	if err != nil {
 		return nil, err
 	}
 
-	ddlProducer, err := newDDLProducers(changefeedID, comp, sinkConfig)
+	ddlProducer, err = newDDLProducer(changefeedID, comp, sinkConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -423,7 +493,7 @@ func (s *sink) batchEncodeRun(ctx context.Context) error {
 
 // batch collects a batch of messages from w.msgChan into buffer.
 // Note: It will block until at least one message is received.
-func (s *sink) batch(ctx context.Context, buffer []*commonEvent.MQRowEvent, ticker *time.Ticker) ([]*commonEvent.MQRowEvent, error) {
+func (s *sink) batch(ctx context.Context, buffer []*commonEvent.MQRowEvent, _ *time.Ticker) ([]*commonEvent.MQRowEvent, error) {
 	// We need to receive at least one message or be interrupted,
 	// otherwise it will lead to idling.
 	select {
@@ -523,9 +593,17 @@ func (s *sink) getAllTableNames(ts uint64) []*commonEvent.SchemaTableName {
 	return s.tableSchemaStore.GetAllTableNames(ts, true)
 }
 
-func (s *sink) Close(_ bool) {
+func (s *sink) Close() {
 	s.ddlProducer.close()
 	s.dmlProducer.close()
 	s.comp.close()
 	s.statistics.Close()
+}
+
+func (s *sink) BatchCount() int {
+	return 4096
+}
+
+func (s *sink) BatchBytes() int {
+	return 0
 }

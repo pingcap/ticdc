@@ -29,11 +29,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/compression"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/codec"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
@@ -85,7 +84,7 @@ type reader struct {
 
 func newReaders(ctx context.Context, cfg *readerConfig) ([]fileReader, error) {
 	if cfg == nil {
-		return nil, cerror.WrapError(cerror.ErrRedoConfigInvalid, errors.New("readerConfig can not be nil"))
+		return nil, errors.ErrRedoConfigInvalid.GenWithStack("reader Config can not be nil")
 	}
 	if !cfg.useExternalStorage {
 		log.Panic("external storage is not enabled, please check your configuration")
@@ -122,7 +121,7 @@ func downLoadAndSortFiles(ctx context.Context, cfg *readerConfig) ([]io.ReadClos
 	// create temp dir in local storage
 	err := os.MkdirAll(dir, redo.DefaultDirMode)
 	if err != nil {
-		return nil, cerror.WrapError(cerror.ErrRedoFileOp, err)
+		return nil, errors.WrapError(errors.ErrRedoFileOp, err)
 	}
 
 	// get all files
@@ -130,6 +129,7 @@ func downLoadAndSortFiles(ctx context.Context, cfg *readerConfig) ([]io.ReadClos
 	if err != nil {
 		return nil, err
 	}
+	defer extStorage.Close()
 	files, err := selectDownLoadFile(ctx, extStorage, cfg.fileType, cfg.startTs)
 	if err != nil {
 		return nil, err
@@ -168,7 +168,7 @@ func downLoadAndSortFiles(ctx context.Context, cfg *readerConfig) ([]io.ReadClos
 			if os.IsNotExist(err) {
 				continue
 			}
-			return nil, cerror.WrapError(cerror.ErrRedoFileOp, err)
+			return nil, errors.WrapError(errors.ErrRedoFileOp, err)
 		}
 		ret = append(ret, f)
 	}
@@ -201,7 +201,7 @@ func selectDownLoadFile(
 			return nil
 		})
 	if err != nil {
-		return nil, cerror.WrapError(cerror.ErrExternalStorageAPI, err)
+		return nil, errors.WrapError(errors.ErrExternalStorageAPI, err)
 	}
 
 	return files, nil
@@ -218,13 +218,15 @@ func readAllFromBuffer(buf []byte) (logHeap, error) {
 	r := &reader{
 		br: bytes.NewReader(buf),
 	}
-	defer r.Close()
+	defer func() {
+		_ = r.Close()
+	}()
 
 	h := logHeap{}
 	for {
 		rl, err := r.Read()
 		if err != nil {
-			if err != io.EOF {
+			if !errors.Is(err, io.EOF) {
 				return nil, err
 			}
 			break
@@ -243,11 +245,7 @@ func sortAndWriteFile(
 	fileName string, cfg *readerConfig,
 ) error {
 	sortedName := getSortedFileName(fileName)
-	writerCfg := &writer.LogWriterConfig{
-		Dir:               cfg.dir,
-		MaxLogSizeInBytes: math.MaxInt32,
-	}
-	w, err := file.NewFileWriter(egCtx, writerCfg, cfg.fileType, writer.WithLogFileName(func() string {
+	w, err := file.NewLocalFileWriter(cfg.dir, math.MaxInt32, cfg.fileType, writer.WithLogFileName(func() string {
 		return sortedName
 	}))
 	if err != nil {
@@ -256,7 +254,7 @@ func sortAndWriteFile(
 
 	fileContent, err := extStorage.ReadFile(egCtx, fileName)
 	if err != nil {
-		return cerror.WrapError(cerror.ErrExternalStorageAPI, err)
+		return errors.WrapError(errors.ErrExternalStorageAPI, err)
 	}
 	if len(fileContent) == 0 {
 		log.Warn("download file is empty", zap.String("file", fileName))
@@ -293,7 +291,7 @@ func sortAndWriteFile(
 		}
 		data, err := codec.MarshalRedoLog(item, nil)
 		if err != nil {
-			return cerror.WrapError(cerror.ErrMarshalFailed, err)
+			return errors.WrapError(errors.ErrMarshalFailed, err)
 		}
 		_, err = w.Write(data)
 		if err != nil {
@@ -330,23 +328,23 @@ func (r *reader) Read() (*pevent.RedoLog, error) {
 
 	lenField, err := readInt64(r.br)
 	if err != nil {
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return nil, err
 		}
-		return nil, cerror.WrapError(cerror.ErrRedoFileOp, err)
+		return nil, errors.WrapError(errors.ErrRedoFileOp, err)
 	}
 
 	recBytes, padBytes := decodeFrameSize(lenField)
 	data := make([]byte, recBytes+padBytes)
 	_, err = io.ReadFull(r.br, data)
 	if err != nil {
-		if err == io.EOF || err == io.ErrUnexpectedEOF {
+		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 			log.Warn("read redo log have unexpected io error",
 				zap.String("fileName", r.fileName),
 				zap.Error(err))
 			return nil, io.EOF
 		}
-		return nil, cerror.WrapError(cerror.ErrRedoFileOp, err)
+		return nil, errors.WrapError(errors.ErrRedoFileOp, err)
 	}
 
 	redoLog, _, err := codec.UnmarshalRedoLog(data[:recBytes])
@@ -355,7 +353,7 @@ func (r *reader) Read() (*pevent.RedoLog, error) {
 			// just return io.EOF, since if torn write it is the last redoLog entry
 			return nil, io.EOF
 		}
-		return nil, cerror.WrapError(cerror.ErrUnmarshalFailed, err)
+		return nil, errors.WrapError(errors.ErrUnmarshalFailed, err)
 	}
 
 	// point last valid offset to the end of redoLog
@@ -423,5 +421,5 @@ func (r *reader) Close() error {
 		return nil
 	}
 
-	return cerror.WrapError(cerror.ErrRedoFileOp, r.closer.Close())
+	return errors.WrapError(errors.ErrRedoFileOp, r.closer.Close())
 }

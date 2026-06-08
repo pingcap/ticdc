@@ -18,7 +18,6 @@ import (
 	"database/sql"
 	"fmt"
 	"math/rand"
-	"strings"
 	"sync"
 	"time"
 
@@ -79,7 +78,9 @@ func (app *WorkloadApp) executeDeleteWorkers(deleteConcurrency int, wg *sync.Wai
 			plog.Info("start delete worker", zap.Int("worker", workerID))
 
 			for {
-				err = app.doDelete(conn, deleteTaskCh)
+				flushedRows, err := app.runTransaction(conn, func() (uint64, error) {
+					return app.doDeleteOnce(conn, deleteTaskCh)
+				})
 				if err != nil {
 					// Check if it's a connection-level error that requires reconnection
 					if app.isConnectionError(err) {
@@ -98,8 +99,14 @@ func (app *WorkloadApp) executeDeleteWorkers(deleteConcurrency int, wg *sync.Wai
 						}
 					}
 
+					app.Stats.ErrorCount.Add(1)
 					plog.Info("delete worker failed, retrying", zap.Int("worker", workerID), zap.Error(err))
 					time.Sleep(time.Second * 2)
+					continue
+				}
+
+				if flushedRows != 0 {
+					app.Stats.FlushedRowCount.Add(flushedRows)
 				}
 			}
 		}(i)
@@ -121,42 +128,33 @@ func (app *WorkloadApp) genDeleteTask(output chan deleteTask) {
 	}
 }
 
-// doDelete performs delete operations on the database
-func (app *WorkloadApp) doDelete(conn *sql.Conn, input chan deleteTask) error {
-	for task := range input {
-		if err := app.processDeleteTask(conn, task); err != nil {
-			// Return only if connection is closed, other errors are handled within processDeleteTask
-			if strings.Contains(err.Error(), "connection is already closed") {
-				return err
-			}
-		}
-	}
-	return nil
+func (app *WorkloadApp) doDeleteOnce(conn *sql.Conn, input chan deleteTask) (uint64, error) {
+	task := <-input
+	return app.processDeleteTask(conn, &task)
 }
 
 // processDeleteTask handles a single delete task
-func (app *WorkloadApp) processDeleteTask(conn *sql.Conn, task deleteTask) error {
+func (app *WorkloadApp) processDeleteTask(conn *sql.Conn, task *deleteTask) (uint64, error) {
 	// Execute delete and get result
 	res, err := app.executeDelete(conn, task)
 	if err != nil {
-		return app.handleDeleteError(err, task)
+		app.handleDeleteError(err, task)
+		return 0, err
 	}
 
 	// Process delete result
-	if err := app.processDeleteResult(res, task); err != nil {
-		return err
-	}
+	affectedRows := app.processDeleteResult(res, task)
 
 	// Execute callback if exists
 	if task.callback != nil {
 		task.callback()
 	}
 
-	return nil
+	return affectedRows, nil
 }
 
 // executeDelete performs the actual delete operation
-func (app *WorkloadApp) executeDelete(conn *sql.Conn, task deleteTask) (sql.Result, error) {
+func (app *WorkloadApp) executeDelete(conn *sql.Conn, task *deleteTask) (sql.Result, error) {
 	deleteSQL := app.Workload.BuildDeleteSql(task.DeleteOption)
 	if deleteSQL == "" {
 		return nil, nil
@@ -166,19 +164,17 @@ func (app *WorkloadApp) executeDelete(conn *sql.Conn, task deleteTask) (sql.Resu
 }
 
 // handleDeleteError processes delete operation errors
-func (app *WorkloadApp) handleDeleteError(err error, task deleteTask) error {
-	app.Stats.ErrorCount.Add(1)
+func (app *WorkloadApp) handleDeleteError(err error, task *deleteTask) {
 	// Truncate long SQL for logging
 	plog.Info("delete error",
 		zap.Error(err),
 		zap.String("sql", getSQLPreview(task.generatedSQL)))
-	return err
 }
 
 // processDeleteResult handles the result of delete operation
-func (app *WorkloadApp) processDeleteResult(res sql.Result, task deleteTask) error {
+func (app *WorkloadApp) processDeleteResult(res sql.Result, task *deleteTask) uint64 {
 	if res == nil {
-		return nil
+		return 0
 	}
 
 	cnt, err := res.RowsAffected()
@@ -189,9 +185,7 @@ func (app *WorkloadApp) processDeleteResult(res sql.Result, task deleteTask) err
 			zap.Int("rowCount", task.Batch),
 			zap.String("sql", getSQLPreview(task.generatedSQL)))
 		app.Stats.ErrorCount.Add(1)
+		return 0
 	}
-
-	app.Stats.FlushedRowCount.Add(uint64(cnt))
-
-	return nil
+	return uint64(cnt)
 }

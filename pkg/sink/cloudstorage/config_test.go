@@ -21,6 +21,7 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
 
@@ -33,16 +34,18 @@ func TestConfigApply(t *testing.T) {
 	expected.DateSeparator = config.DateSeparatorDay.String()
 	expected.EnablePartitionSeparator = true
 	expected.FlushConcurrency = 1
-	uri := "s3://bucket/prefix?worker-count=32&flush-interval=10s&file-size=16777216&protocol=csv"
+	expected.SpoolDiskQuota = 10 * 1024 * 1024 * 1024
+	expected.UseTableIDAsPath = true
+	uri := "s3://bucket/prefix?worker-count=32&flush-interval=10s&file-size=16777216&protocol=csv&use-table-id-as-path=true"
 	sinkURI, err := url.Parse(uri)
-	require.Nil(t, err)
+	require.NoError(t, err)
 
 	replicaConfig := config.GetDefaultReplicaConfig()
 	err = replicaConfig.ValidateAndAdjust(sinkURI)
 	require.NoError(t, err)
 	cfg := NewConfig()
 	err = cfg.Apply(context.TODO(), sinkURI, replicaConfig.Sink, false)
-	require.Nil(t, err)
+	require.NoError(t, err)
 	require.Equal(t, expected, cfg)
 }
 
@@ -75,6 +78,11 @@ func TestVerifySinkURIParams(t *testing.T) {
 		{
 			name:        "sink uri with valid scheme, worker-count, flush-interval and file-size",
 			uri:         "s3://bucket/prefix?worker-count=64&flush-interval=1m30s&file-size=33554432",
+			expectedErr: "",
+		},
+		{
+			name:        "sink uri with use-table-id-as-path",
+			uri:         "s3://bucket/prefix?use-table-id-as-path=true",
 			expectedErr: "",
 		},
 		{
@@ -116,11 +124,11 @@ func TestVerifySinkURIParams(t *testing.T) {
 
 	for _, tc := range testCases {
 		sinkURI, err := url.Parse(tc.uri)
-		require.Nil(t, err)
+		require.NoError(t, err)
 		cfg := NewConfig()
 		err = cfg.Apply(context.TODO(), sinkURI, config.GetDefaultReplicaConfig().Sink, true)
 		if tc.expectedErr == "" {
-			require.Nil(t, err)
+			require.NoError(t, err)
 			require.LessOrEqual(t, cfg.WorkerCount, maxWorkerCount)
 			require.LessOrEqual(t, cfg.FlushInterval, maxFlushInterval)
 			require.LessOrEqual(t, cfg.FileSize, maxFileSize)
@@ -164,4 +172,80 @@ func TestMergeConfig(t *testing.T) {
 	require.Equal(t, 64, c.WorkerCount)
 	require.Equal(t, 33554432, c.FileSize)
 	require.Equal(t, "2m2s", c.FlushInterval.String())
+}
+
+func TestSpoolDiskQuotaConfig(t *testing.T) {
+	uri := "s3://bucket/prefix?spool-disk-quota=2147483648"
+	sinkURI, err := url.Parse(uri)
+	require.NoError(t, err)
+
+	replicaConfig := config.GetDefaultReplicaConfig()
+	replicaConfig.Sink.CloudStorageConfig = &config.CloudStorageConfig{
+		SpoolDiskQuota: aws.Int64(3221225472),
+	}
+
+	cfg := NewConfig()
+	err = cfg.Apply(context.Background(), sinkURI, replicaConfig.Sink, true)
+	require.NoError(t, err)
+	require.Equal(t, int64(2147483648), cfg.SpoolDiskQuota)
+
+	uri = "s3://bucket/prefix"
+	sinkURI, err = url.Parse(uri)
+	require.NoError(t, err)
+	cfg = NewConfig()
+	err = cfg.Apply(context.Background(), sinkURI, replicaConfig.Sink, true)
+	require.NoError(t, err)
+	require.Equal(t, int64(3221225472), cfg.SpoolDiskQuota)
+}
+
+func TestSpoolBaseDirConfig(t *testing.T) {
+	uriSpoolBaseDir := t.TempDir()
+	configSpoolBaseDir := t.TempDir()
+
+	uri := "s3://bucket/prefix?spool-base-dir=" + url.QueryEscape(uriSpoolBaseDir)
+	sinkURI, err := url.Parse(uri)
+	require.NoError(t, err)
+
+	replicaConfig := config.GetDefaultReplicaConfig()
+	replicaConfig.Sink.CloudStorageConfig = &config.CloudStorageConfig{
+		SpoolBaseDir: aws.String(configSpoolBaseDir),
+	}
+
+	cfg := NewConfig()
+	err = cfg.Apply(context.Background(), sinkURI, replicaConfig.Sink, true)
+	require.NoError(t, err)
+	require.Equal(t, uriSpoolBaseDir, cfg.SpoolBaseDir)
+
+	uri = "s3://bucket/prefix"
+	sinkURI, err = url.Parse(uri)
+	require.NoError(t, err)
+
+	cfg = NewConfig()
+	err = cfg.Apply(context.Background(), sinkURI, replicaConfig.Sink, true)
+	require.NoError(t, err)
+	require.Equal(t, configSpoolBaseDir, cfg.SpoolBaseDir)
+}
+
+func TestInvalidSpoolBaseDirConfig(t *testing.T) {
+	uri := "s3://bucket/prefix?spool-base-dir=relative/path"
+	sinkURI, err := url.Parse(uri)
+	require.NoError(t, err)
+
+	cfg := NewConfig()
+	err = cfg.Apply(context.Background(), sinkURI, config.GetDefaultReplicaConfig().Sink, true)
+	require.Error(t, err)
+	require.True(t, errors.ErrStorageSinkInvalidConfig.Equal(err))
+
+	sinkURI, err = url.Parse("s3://bucket/prefix")
+	require.NoError(t, err)
+
+	replicaConfig := config.GetDefaultReplicaConfig()
+	replicaConfig.Sink.CloudStorageConfig = &config.CloudStorageConfig{
+		SpoolBaseDir: aws.String("relative/path"),
+	}
+
+	cfg = NewConfig()
+	err = cfg.Apply(context.Background(), sinkURI, replicaConfig.Sink, true)
+	require.Error(t, err)
+	require.True(t, errors.ErrStorageSinkInvalidConfig.Equal(err))
 }
