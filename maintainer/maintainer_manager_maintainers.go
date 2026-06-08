@@ -51,6 +51,10 @@ type managerMaintainerSet struct {
 	// taskScheduler is shared by all local maintainers to run background tasks.
 	taskScheduler threadpool.ThreadPool
 
+	// registryMu serializes registry mutations that create, replace, or fully
+	// close maintainers because maintainer metrics share changefeed labels across
+	// epochs.
+	registryMu sync.Mutex
 	// registry is the in-memory changefeedID -> maintainer mapping.
 	registry sync.Map
 }
@@ -235,6 +239,9 @@ func (p *managerMaintainerSet) registerMaintainerForAdd(
 	requestEpoch uint64,
 	newMaintainer func() *Maintainer,
 ) *Maintainer {
+	p.registryMu.Lock()
+	defer p.registryMu.Unlock()
+
 	for {
 		registered, loaded := p.registry.Load(changefeedID)
 		if !loaded {
@@ -288,15 +295,20 @@ func (p *managerMaintainerSet) handleRemoveMaintainer(msg *messaging.TargetMessa
 
 		// It's cascade remove, we should remove the dispatcher from all node.
 		// Here we create a maintainer to run the remove dispatcher logic.
-		maintainer = NewMaintainerForRemove(
-			changefeedID,
-			p.conf,
-			p.nodeInfo,
-			p.taskScheduler,
-			req.KeyspaceId,
-			req.MaintainerEpoch,
-		)
-		p.registry.Store(changefeedID, maintainer)
+		p.registryMu.Lock()
+		maintainer, ok = p.registry.Load(changefeedID)
+		if !ok {
+			maintainer = NewMaintainerForRemove(
+				changefeedID,
+				p.conf,
+				p.nodeInfo,
+				p.taskScheduler,
+				req.KeyspaceId,
+				req.MaintainerEpoch,
+			)
+			p.registry.Store(changefeedID, maintainer)
+		}
+		p.registryMu.Unlock()
 	}
 	maintainer.(*Maintainer).pushEvent(&Event{
 		changefeedID: changefeedID,
@@ -337,6 +349,9 @@ func (p *managerMaintainerSet) cleanupRemovedMaintainers() {
 }
 
 func (p *managerMaintainerSet) cleanupRemovedMaintainer(key, value interface{}) {
+	p.registryMu.Lock()
+	defer p.registryMu.Unlock()
+
 	cf := value.(*Maintainer)
 	if !cf.removed.Load() {
 		return
