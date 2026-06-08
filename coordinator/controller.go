@@ -223,6 +223,10 @@ func NewController(
 func (c *Controller) collectMetrics(ctx context.Context) error {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
+
+	// changefeedDownstreamTypeCache is used to cleanup the previous downstream type
+	// label value when a changefeed's sink-uri is updated.
+	changefeedDownstreamTypeCache := make(map[common.ChangeFeedDisplayName]string)
 	errorMetricLabels := make(map[common.ChangeFeedID]changefeedErrorMetricLabels)
 	for {
 		select {
@@ -235,12 +239,27 @@ func (c *Controller) collectMetrics(ctx context.Context) error {
 			metrics.ChangefeedStateGauge.WithLabelValues("Absent").Set(float64(c.changefeedDB.GetAbsentSize()))
 			metrics.ChangefeedStateGauge.WithLabelValues("Stopped").Set(float64(c.changefeedDB.GetStoppedSize()))
 
+			changefeedDownstreamTypes := make(map[common.ChangeFeedDisplayName]struct{})
 			currentChangefeeds := make(map[common.ChangeFeedID]struct{})
 
 			c.changefeedDB.Foreach(func(cf *changefeed.Changefeed) {
 				info := cf.GetInfo()
-				keyspace := info.ChangefeedID.Keyspace()
-				name := info.ChangefeedID.Name()
+				if info == nil {
+					return
+				}
+
+				displayName := info.ChangefeedID.DisplayName
+				changefeedDownstreamTypes[displayName] = struct{}{}
+				keyspace := displayName.Keyspace
+				name := displayName.Name
+
+				downstreamType := metrics.DownstreamTypeFromSinkURI(info.SinkURI)
+				if oldType, ok := changefeedDownstreamTypeCache[displayName]; ok && oldType != downstreamType {
+					metrics.ChangefeedDownstreamInfoGauge.DeleteLabelValues(keyspace, name, oldType)
+				}
+				changefeedDownstreamTypeCache[displayName] = downstreamType
+				metrics.ChangefeedDownstreamInfoGauge.WithLabelValues(keyspace, name, downstreamType).Set(1)
+
 				metrics.ChangefeedStatusGauge.WithLabelValues(keyspace, name).Set(float64(info.State.ToInt()))
 
 				// don't update checkpoint ts and checkpoint ts lag for stopped changefeed
@@ -275,6 +294,19 @@ func (c *Controller) collectMetrics(ctx context.Context) error {
 					delete(errorMetricLabels, cf.ID)
 				}
 			})
+
+			// Cleanup removed changefeeds, so dashboards won't show stale label values.
+			for displayName, downstreamType := range changefeedDownstreamTypeCache {
+				if _, ok := changefeedDownstreamTypes[displayName]; ok {
+					continue
+				}
+				metrics.ChangefeedDownstreamInfoGauge.DeleteLabelValues(
+					displayName.Keyspace,
+					displayName.Name,
+					downstreamType,
+				)
+				delete(changefeedDownstreamTypeCache, displayName)
+			}
 			for changefeedID, labels := range errorMetricLabels {
 				if _, ok := currentChangefeeds[changefeedID]; ok {
 					continue
