@@ -254,10 +254,8 @@ func NewBasicDispatcher(
 	return dispatcher
 }
 
-// AddDMLEventsToSink filters events for special tables, registers batch wake
-// callbacks, and returns true when at least one event remains to be written to
-// the downstream sink.
-func (d *BasicDispatcher) AddDMLEventsToSink(events []*commonEvent.DMLEvent, wakeCallback func()) bool {
+// AddDMLEventsToSink send events to the sink.
+func (d *BasicDispatcher) AddDMLEventsToSink(events []*commonEvent.DMLEvent, wakeCallback func()) {
 	var remaining atomic.Int64
 	remaining.Store(int64(len(events)))
 	for _, event := range events {
@@ -277,7 +275,6 @@ func (d *BasicDispatcher) AddDMLEventsToSink(events []*commonEvent.DMLEvent, wak
 		d.sink.AddDMLEvent(event)
 		failpoint.Inject("BlockAddDMLEvents", nil)
 	}
-	return true
 }
 
 // InitializeTableSchemaStore initializes the tableSchemaStore for the table trigger event dispatcher.
@@ -310,9 +307,7 @@ func (d *BasicDispatcher) AddBlockEventToSink(event commonEvent.BlockEvent) erro
 	if event.GetType() == commonEvent.TypeDDLEvent {
 		ddl := event.(*commonEvent.DDLEvent)
 		// If NotSync is true, it means the DDL should not be sent to downstream.
-		// So we just call PassBlockEventToSink to finish local bookkeeping:
-		// mark it passed in tableProgress and trigger flush callbacks to unblock
-		// dispatcher progress, without sending this DDL to sink.
+		// So we just call PassBlockEventToSink to update the table progress and call the postFlush func.
 		if ddl.NotSync {
 			log.Info("ignore DDL by NotSync", zap.Stringer("dispatcher", d.id), zap.Any("ddl", ddl))
 			d.PassBlockEventToSink(event)
@@ -422,11 +417,11 @@ func (d *BasicDispatcher) HandleEvents(dispatcherEvents []DispatcherEvent, wakeC
 // handleEvents processes one batch for one dispatcher.
 // the next batch of events can only be handled after the current batch is enqueued or flushed.
 // A batch may mix DML and resolved-ts events; Block events are expected to be handled one by one.
-//   - Block events, such as DDL / Syncpoint, are sent to the sink synchronously,
+//   - Block events, such as DDL / Syncpoint, is sent to the sink synchronously,
 //     the dispatcher is blocked until the block event is flushed.
-//   - DML events are sent to the sink asynchronously.
-//   - For storage sinks, the dispatcher wakes up after all DML events are enqueued.
-//   - For non-storage sinks, the dispatcher wakes up after all DML events are flushed.
+//   - DML events is sent to the sink asynchronously.
+//   - Storage sink, the dispatcher wake up after all DML events is guaranteed enqueued.
+//   - Non-storage sink, the dispatche wake up after all DML events is guaranteed flushed.
 //
 // Return true if should block the dispatcher.
 func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeCallback func()) bool {
@@ -581,11 +576,7 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 	// the checkpointTs may be incorrect set as the new resolvedTs,
 	// due to the tableProgress is empty before dml events add into sink.
 	if len(dmlEvents) > 0 {
-		hasDMLToFlush := d.AddDMLEventsToSink(dmlEvents, wakeCallback)
-		if !hasDMLToFlush {
-			// All DML events were filtered out, so they no longer block dispatcher progress.
-			block = false
-		}
+		d.AddDMLEventsToSink(dmlEvents, wakeCallback)
 	}
 	if latestResolvedTs > 0 {
 		d.resolvedTs.Store(latestResolvedTs)
@@ -654,8 +645,6 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 			})
 			switch action.Action {
 			case heartbeatpb.Action_Write:
-				actionCommitTs := action.CommitTs
-				actionIsSyncPoint := action.IsSyncPoint
 				d.sharedInfo.GetBlockEventExecutor().Submit(d, func() {
 					d.ExecuteBlockEventDDL(pendingEvent, actionCommitTs, actionIsSyncPoint)
 				})
