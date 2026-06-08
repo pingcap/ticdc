@@ -76,3 +76,26 @@ func TestAddMaintainerOperator_CheckRequiresBootstrapDone(t *testing.T) {
 	})
 	require.True(t, op.finished.Load())
 }
+
+func TestAddMaintainerOperator_CheckRejectsCompatEpochBeforeSchedule(t *testing.T) {
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		Config:       config.GetDefaultReplicaConfig(),
+		SinkURI:      "mysql://127.0.0.1:3306",
+		Epoch:        2,
+	}, 1, true)
+	op := NewAddMaintainerOperator(nil, cf, "n1")
+	status := &heartbeatpb.MaintainerStatus{
+		State:           heartbeatpb.ComponentState_Working,
+		BootstrapDone:   true,
+		MaintainerEpoch: 0,
+	}
+
+	op.Check("n1", status)
+	require.False(t, op.finished.Load())
+
+	require.NotNil(t, op.Schedule())
+	op.Check("n1", status)
+	require.True(t, op.finished.Load())
+}

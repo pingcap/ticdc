@@ -115,6 +115,36 @@ func TestMoveMaintainerOperator_CheckRequiresDestBootstrapDone(t *testing.T) {
 	require.Nil(t, op.Schedule())
 }
 
+func TestMoveMaintainerOperator_CheckRejectsCompatDestEpochBeforeAddSchedule(t *testing.T) {
+	changefeedDB := changefeed.NewChangefeedDB(1216)
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		Config:       config.GetDefaultReplicaConfig(),
+		SinkURI:      "mysql://127.0.0.1:3306",
+		Epoch:        2,
+	}, 1, true)
+	changefeedDB.AddReplicatingMaintainer(cf, "n1")
+
+	op := NewMoveMaintainerOperator(changefeedDB, cf, "n1", "n2")
+	op.Check("n1", &heartbeatpb.MaintainerStatus{
+		State:           heartbeatpb.ComponentState_Stopped,
+		MaintainerEpoch: 2,
+	})
+	status := &heartbeatpb.MaintainerStatus{
+		State:           heartbeatpb.ComponentState_Working,
+		BootstrapDone:   true,
+		MaintainerEpoch: 0,
+	}
+
+	op.Check("n2", status)
+	require.False(t, op.IsFinished())
+
+	require.NotNil(t, op.Schedule())
+	op.Check("n2", status)
+	require.True(t, op.IsFinished())
+}
+
 func TestMoveMaintainerOperator_OnNodeRemoveAfterFinishMarksAbsent(t *testing.T) {
 	changefeedDB := changefeed.NewChangefeedDB(1216)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)

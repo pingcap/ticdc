@@ -37,6 +37,8 @@ type MoveMaintainerOperator struct {
 	originNodeStopped     bool
 	finished              bool
 	bind                  bool
+	// destAddScheduled becomes true after the fenced destination add request has been built.
+	destAddScheduled bool
 
 	canceled bool
 
@@ -73,7 +75,7 @@ func (m *MoveMaintainerOperator) Check(from node.ID, status *heartbeatpb.Maintai
 		m.originNodeStopped = true
 	}
 	if m.originNodeStopped && from == m.dest &&
-		isMaintainerStatusEpochAllowed(status.MaintainerEpoch, m.changefeed.GetInfo().Epoch) &&
+		m.isDestStatusEpochAllowed(status.MaintainerEpoch) &&
 		status.State == heartbeatpb.ComponentState_Working &&
 		status.BootstrapDone {
 		log.Info("changefeed added to dest node",
@@ -96,7 +98,9 @@ func (m *MoveMaintainerOperator) Schedule() *messaging.TargetMessage {
 			m.db.BindChangefeedToNode(m.origin, m.dest, m.changefeed)
 			m.bind = true
 		}
-		return m.changefeed.NewAddMaintainerMessage(m.dest)
+		msg := m.changefeed.NewAddMaintainerMessage(m.dest)
+		m.destAddScheduled = true
+		return msg
 	}
 	return changefeed.RemoveMaintainerMessage(
 		m.changefeed.GetKeyspaceID(),
@@ -106,6 +110,14 @@ func (m *MoveMaintainerOperator) Schedule() *messaging.TargetMessage {
 		false,
 		m.originMaintainerEpoch,
 	)
+}
+
+func (m *MoveMaintainerOperator) isDestStatusEpochAllowed(statusEpoch uint64) bool {
+	expectedEpoch := m.changefeed.GetInfo().Epoch
+	if statusEpoch == 0 && expectedEpoch != 0 && !m.destAddScheduled {
+		return false
+	}
+	return isMaintainerStatusEpochAllowed(statusEpoch, expectedEpoch)
 }
 
 func (m *MoveMaintainerOperator) OnNodeRemove(n node.ID) {
