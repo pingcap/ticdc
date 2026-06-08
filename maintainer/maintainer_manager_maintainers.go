@@ -228,7 +228,7 @@ func (p *managerMaintainerSet) registerMaintainerForAdd(
 			if !loaded {
 				return maintainer
 			}
-			maintainer.Close()
+			maintainer.closeSuperseded()
 		}
 		existing := registered.(*Maintainer)
 		existingEpoch := existing.currentMaintainerEpoch()
@@ -237,10 +237,10 @@ func (p *managerMaintainerSet) registerMaintainerForAdd(
 		}
 		maintainer := newMaintainer()
 		if p.registry.CompareAndSwap(changefeedID, existing, maintainer) {
-			existing.Close()
+			existing.closeSuperseded()
 			return maintainer
 		}
-		maintainer.Close()
+		maintainer.closeSuperseded()
 	}
 }
 

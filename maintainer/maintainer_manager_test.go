@@ -38,10 +38,12 @@ import (
 	"github.com/pingcap/ticdc/pkg/liveness"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/messaging/proto"
+	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/orchestrator"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/server/watcher"
+	promtestutil "github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 )
@@ -106,21 +108,58 @@ func newManagerMaintainerSetForAddTest(t *testing.T) *managerMaintainerSet {
 	return maintainers
 }
 
+func cleanupMaintainerMetricsForTest(t *testing.T, cfID common.ChangeFeedID) {
+	t.Helper()
+
+	cleanup := func() {
+		keyspace := cfID.Keyspace()
+		name := cfID.Name()
+		metrics.MaintainerGauge.DeleteLabelValues(keyspace, name)
+		metrics.MaintainerCheckpointTsGauge.DeleteLabelValues(keyspace, name)
+		metrics.MaintainerCheckpointTsLagGauge.DeleteLabelValues(keyspace, name)
+		metrics.MaintainerHandleEventDuration.DeleteLabelValues(keyspace, name)
+		metrics.MaintainerEventChLenGauge.DeleteLabelValues(keyspace, name)
+		metrics.MaintainerResolvedTsGauge.DeleteLabelValues(keyspace, name)
+		metrics.MaintainerResolvedTsLagGauge.DeleteLabelValues(keyspace, name)
+
+		metrics.TableStateGauge.DeleteLabelValues(keyspace, name, "Absent", "default")
+		metrics.TableStateGauge.DeleteLabelValues(keyspace, name, "Absent", "redo")
+		metrics.TableStateGauge.DeleteLabelValues(keyspace, name, "Working", "default")
+		metrics.TableStateGauge.DeleteLabelValues(keyspace, name, "Working", "redo")
+
+		metrics.ScheduleTaskGauge.DeleteLabelValues(keyspace, name, "default")
+		metrics.ScheduleTaskGauge.DeleteLabelValues(keyspace, name, "redo")
+		metrics.SpanCountGauge.DeleteLabelValues(keyspace, name, "default")
+		metrics.SpanCountGauge.DeleteLabelValues(keyspace, name, "redo")
+		metrics.TableCountGauge.DeleteLabelValues(keyspace, name, "default")
+		metrics.TableCountGauge.DeleteLabelValues(keyspace, name, "redo")
+	}
+	cleanup()
+	t.Cleanup(cleanup)
+}
+
 func TestManagerMaintainerSet_AddMaintainerReplacesOlderEpoch(t *testing.T) {
 	maintainers := newManagerMaintainerSetForAddTest(t)
-	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	cfID := common.NewChangeFeedIDWithName("replace-maintainer-metrics", common.DefaultKeyspaceName)
+	cleanupMaintainerMetricsForTest(t, cfID)
 	noDrainTarget := func() (node.ID, uint64) { return "", 0 }
+	keyspace, changefeed := cfID.Keyspace(), cfID.Name()
 
 	maintainers.handleAddMaintainer(newAddMaintainerRequestForEpoch(t, cfID, 1, 1), noDrainTarget)
 	oldMaintainer, ok := maintainers.getMaintainer(cfID)
 	require.True(t, ok)
 	require.Equal(t, uint64(1), oldMaintainer.currentMaintainerEpoch())
+	require.Equal(t, float64(1), promtestutil.ToFloat64(metrics.MaintainerGauge.WithLabelValues(keyspace, changefeed)))
 
 	maintainers.handleAddMaintainer(newAddMaintainerRequestForEpoch(t, cfID, 2, 2), noDrainTarget)
 	currentMaintainer, ok := maintainers.getMaintainer(cfID)
 	require.True(t, ok)
 	require.False(t, oldMaintainer == currentMaintainer)
 	require.Equal(t, uint64(2), currentMaintainer.currentMaintainerEpoch())
+	require.Equal(t, float64(1), promtestutil.ToFloat64(metrics.MaintainerGauge.WithLabelValues(keyspace, changefeed)))
+
+	currentMaintainer.checkpointTsGauge.Set(123)
+	require.Equal(t, float64(123), promtestutil.ToFloat64(metrics.MaintainerCheckpointTsGauge.WithLabelValues(keyspace, changefeed)))
 }
 
 func TestManagerMaintainerSet_AddMaintainerKeepsCompatibilityEpoch(t *testing.T) {

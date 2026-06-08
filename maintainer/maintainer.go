@@ -371,6 +371,15 @@ func (m *Maintainer) Close() {
 	m.cleanupMetrics()
 }
 
+// closeSuperseded stops a maintainer that lost ownership of its registry slot.
+// It must keep per-changefeed metrics registered because the winning maintainer
+// uses the same label set and has already cached those metric children.
+func (m *Maintainer) closeSuperseded() {
+	m.cancel()
+	m.controller.Stop()
+	m.markRemoved()
+}
+
 func (m *Maintainer) GetMaintainerStatus() *heartbeatpb.MaintainerStatus {
 	m.runningErrors.Lock()
 	defer m.runningErrors.Unlock()
@@ -492,6 +501,13 @@ func (m *Maintainer) cleanupMetrics() {
 	metrics.TableCountGauge.DeleteLabelValues(keyspace, name, "redo")
 }
 
+func (m *Maintainer) markRemoved() {
+	if !m.removed.CompareAndSwap(false, true) {
+		return
+	}
+	metrics.MaintainerGauge.WithLabelValues(m.changefeedID.Keyspace(), m.changefeedID.Name()).Dec()
+}
+
 func (m *Maintainer) onInit() bool {
 	err := m.initialize()
 	if err != nil {
@@ -563,9 +579,8 @@ func (m *Maintainer) onRemoveMaintainer(cascade, changefeedRemoved bool) {
 	m.changefeedRemoved.Store(changefeedRemoved)
 	closed := m.tryCloseChangefeed()
 	if closed {
-		m.removed.Store(true)
+		m.markRemoved()
 		m.scheduleState.Store(int32(heartbeatpb.ComponentState_Stopped))
-		metrics.MaintainerGauge.WithLabelValues(m.changefeedID.Keyspace(), m.changefeedID.Name()).Dec()
 		log.Info("changefeed maintainer closed", zap.Stringer("changefeedID", m.changefeedID),
 			zap.Uint64("checkpointTs", m.getWatermark().CheckpointTs), zap.Bool("removed", m.removed.Load()))
 	}
