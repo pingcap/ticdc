@@ -895,7 +895,7 @@ func (e *DispatcherManager) close(removeChangefeed bool) {
 		zap.Stringer("changefeedID", e.changefeedID))
 
 	defer e.closing.Store(false)
-	if e.IsRedoEnabled() {
+	if e.IsRedoEnabled() && e.redoSink != nil {
 		closeAllDispatchers(e.changefeedID, e.redoDispatcherMap, e.redoSink.SinkType())
 		log.Info("closed all redo dispatchers",
 			zap.Stringer("changefeedID", e.changefeedID))
@@ -941,7 +941,7 @@ func (e *DispatcherManager) close(removeChangefeed bool) {
 
 	log.Info("shared info closed", zap.Stringer("changefeedID", e.changefeedID))
 
-	if e.IsRedoEnabled() {
+	if e.IsRedoEnabled() && e.redoSink != nil {
 		e.redoSink.Close(removeChangefeed)
 		// FIXME: cleanup redo log when remove the changefeed
 		e.closeRedoMeta(removeChangefeed)
