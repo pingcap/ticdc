@@ -166,15 +166,15 @@ func (m *MoveMaintainerOperator) OriginNode() node.ID {
 	return m.origin
 }
 
-// originStopTarget returns the origin maintainer while the move is still in
-// its first remove phase. The origin keeps fencing close requests by the epoch
-// it already owns, even if the changefeed info has advanced to the destination
-// epoch.
+// originStopTarget returns the origin maintainer until the destination owner
+// has been bound. The origin keeps fencing close requests by the epoch it
+// already owns, even after it has reported stopped, because no new owner exists
+// before the move sends the destination add request.
 func (m *MoveMaintainerOperator) originStopTarget() (node.ID, uint64, bool) {
 	m.lck.Lock()
 	defer m.lck.Unlock()
 
-	if m.canceled || m.originNodeStopped {
+	if m.canceled || m.bind {
 		return "", 0, false
 	}
 	return m.origin, m.originMaintainerEpoch, true
