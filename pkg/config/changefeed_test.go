@@ -21,6 +21,28 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestFeedStateIsResumable verifies the shared state predicate used by CLI/API
+// resume paths. Only stopped or terminal-but-resumable states should be accepted.
+func TestFeedStateIsResumable(t *testing.T) {
+	tests := []struct {
+		state     FeedState
+		resumable bool
+	}{
+		{state: StateStopped, resumable: true},
+		{state: StateFailed, resumable: true},
+		{state: StateFinished, resumable: true},
+		{state: StateNormal, resumable: false},
+		{state: StateWarning, resumable: false},
+		{state: StatePending, resumable: false},
+		{state: StateRemoved, resumable: false},
+		{state: StateUnInitialized, resumable: false},
+	}
+
+	for _, tt := range tests {
+		require.Equal(t, tt.resumable, tt.state.IsResumable())
+	}
+}
+
 // TestChangeFeedInfoToChangefeedConfigBatchFields ensures the maintainer-facing
 // changefeed config keeps the optional event collector batch overrides.
 func TestChangeFeedInfoToChangefeedConfigBatchFields(t *testing.T) {
