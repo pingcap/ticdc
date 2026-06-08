@@ -202,9 +202,9 @@ func TestWriterFlushMarkerOnlyFlushesTargetDispatcher(t *testing.T) {
 
 	tidbTableInfo := &timodel.TableInfo{
 		ID:   100,
-		Name: ast.NewCIStr("table1"),
+		Name: model.NewCIStr("table1"),
 		Columns: []*timodel.ColumnInfo{
-			{ID: 1, Name: ast.NewCIStr("c1"), FieldType: *types.NewFieldType(mysql.TypeLong)},
+			{ID: 1, Name: model.NewCIStr("c1"), FieldType: *types.NewFieldType(mysql.TypeLong)},
 		},
 	}
 	tableInfo := commonType.WrapTableInfo("test", tidbTableInfo)
@@ -251,9 +251,9 @@ func TestWriterFlushMarkerOnlyFlushesTargetDispatcher(t *testing.T) {
 			PhysicalTableID: 101,
 			TableInfo: commonType.WrapTableInfo("test", &timodel.TableInfo{
 				ID:   101,
-				Name: ast.NewCIStr("table2"),
+				Name: model.NewCIStr("table2"),
 				Columns: []*timodel.ColumnInfo{
-					{ID: 1, Name: ast.NewCIStr("c1"), FieldType: *types.NewFieldType(mysql.TypeLong)},
+					{ID: 1, Name: model.NewCIStr("c1"), FieldType: *types.NewFieldType(mysql.TypeLong)},
 				},
 			}),
 		},
@@ -298,9 +298,9 @@ func TestWriterPostEnqueueAfterConsume(t *testing.T) {
 
 	tidbTableInfo := &timodel.TableInfo{
 		ID:   100,
-		Name: ast.NewCIStr("table1"),
+		Name: model.NewCIStr("table1"),
 		Columns: []*timodel.ColumnInfo{
-			{ID: 1, Name: ast.NewCIStr("c1"), FieldType: *types.NewFieldType(mysql.TypeLong)},
+			{ID: 1, Name: model.NewCIStr("c1"), FieldType: *types.NewFieldType(mysql.TypeLong)},
 		},
 	}
 	tableInfo := commonType.WrapTableInfo("test", tidbTableInfo)

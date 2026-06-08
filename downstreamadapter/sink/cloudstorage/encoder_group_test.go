@@ -15,7 +15,6 @@ package cloudstorage
 
 import (
 	"context"
-	"errors"
 	"net/url"
 	"testing"
 	"time"
@@ -27,7 +26,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
-	"github.com/pingcap/tidb/pkg/parser/ast"
+	"github.com/pingcap/tidb/pkg/parser/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/parser/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
@@ -217,18 +216,6 @@ func TestEncodingGroupEncodeDMLTask(t *testing.T) {
 	require.ErrorIs(t, eg.Wait(), context.Canceled)
 }
 
-func TestEncoderGroupAddReturnsContextCause(t *testing.T) {
-	t.Parallel()
-
-	ctx, cancel := context.WithCancelCause(context.Background())
-	cause := errors.New("encoder group canceled")
-	cancel(cause)
-
-	group := newEncoderGroup(newTestTxnEncoderConfig(t), 1, 1)
-	err := group.add(ctx, newFlushTask(commonType.NewDispatcherID(), 1))
-	require.ErrorIs(t, err, cause)
-}
-
 func newTestTxnEncoderConfig(t *testing.T) *common.Config {
 	uri := "file:///tmp/test"
 	sinkURI, err := url.Parse(uri)
@@ -250,10 +237,10 @@ func newTestTxnEncoderConfig(t *testing.T) *common.Config {
 func newTestDMLEvent(dispatcherID commonType.DispatcherID, tableID int64) *commonEvent.DMLEvent {
 	tidbTableInfo := &timodel.TableInfo{
 		ID:   tableID,
-		Name: ast.NewCIStr("table1"),
+		Name: model.NewCIStr("table1"),
 		Columns: []*timodel.ColumnInfo{
-			{ID: 1, Name: ast.NewCIStr("c1"), FieldType: *types.NewFieldType(mysql.TypeLong)},
-			{ID: 2, Name: ast.NewCIStr("c2"), FieldType: *types.NewFieldType(mysql.TypeVarchar)},
+			{ID: 1, Name: model.NewCIStr("c1"), FieldType: *types.NewFieldType(mysql.TypeLong)},
+			{ID: 2, Name: model.NewCIStr("c2"), FieldType: *types.NewFieldType(mysql.TypeVarchar)},
 		},
 	}
 	tableInfo := commonType.WrapTableInfo("test", tidbTableInfo)

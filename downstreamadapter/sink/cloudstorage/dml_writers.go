@@ -144,13 +144,7 @@ func (d *dmlWriters) addDMLEvent(event *commonEvent.DMLEvent) {
 		TableInfoVersion: event.TableInfoVersion,
 		DispatcherID:     event.GetDispatcherID(),
 	}
-<<<<<<< HEAD
-	seq := d.lastSeqNum.Inc()
-	// emit a TxnCallbackableEvent encoupled with a sequence number starting from one.
-	d.msgCh.Push(newEventFragment(seq, tbl, event.GetDispatcherID(), event))
-=======
 	d.msgCh.Push(newDMLTask(table, event))
->>>>>>> a0b4566e2 (storage: introduce new encoder group and remove the fragment and defragmenter (#4364))
 }
 
 func (d *dmlWriters) flushDMLBeforeBlock(ctx context.Context, event commonEvent.BlockEvent) error {
