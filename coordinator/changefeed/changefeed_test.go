@@ -155,6 +155,7 @@ func TestChangefeed_NewAddMaintainerMessage(t *testing.T) {
 		Config:  config.GetDefaultReplicaConfig(),
 		Epoch:   7,
 	}
+	info.KeyspaceID = 123
 	cf := NewChangefeed(cfID, info, 100, true)
 
 	server := node.ID("server-1")
@@ -162,6 +163,7 @@ func TestChangefeed_NewAddMaintainerMessage(t *testing.T) {
 	require.Equal(t, server, msg.To)
 	require.Equal(t, messaging.MaintainerManagerTopic, msg.Topic)
 	req := msg.Message[0].(*heartbeatpb.AddMaintainerRequest)
+	require.Equal(t, info.KeyspaceID, req.KeyspaceId)
 	require.Equal(t, info.Epoch, req.MaintainerEpoch)
 	configInfo := &config.ChangeFeedInfo{}
 	require.NoError(t, json.Unmarshal(req.Config, configInfo))
