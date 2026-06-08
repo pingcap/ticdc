@@ -20,6 +20,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatchermanager"
@@ -170,12 +171,6 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 	req *heartbeatpb.MaintainerBootstrapRequest,
 ) error {
 	cfId := common.NewChangefeedIDFromPB(req.ChangefeedID)
-
-	cfConfig := &config.ChangefeedConfig{}
-	if err := json.Unmarshal(req.Config, cfConfig); err != nil {
-		log.Panic("failed to unmarshal changefeed config",
-			zap.String("changefeedID", cfId.Name()), zap.Any("data", req.Config), zap.Error(err))
-	}
 	maintainerEpoch := req.MaintainerEpoch
 
 	// Keep the map lock scoped to dispatcherManagers lookups and updates only.
@@ -195,6 +190,11 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 				zap.Uint64("requestMaintainerEpoch", maintainerEpoch),
 				zap.Uint64("closedMaintainerEpoch", closedEpoch))
 			return nil
+		}
+		cfConfig := &config.ChangefeedConfig{}
+		if err := json.Unmarshal(req.Config, cfConfig); err != nil {
+			log.Panic("failed to unmarshal changefeed config",
+				zap.String("changefeedID", cfId.Name()), zap.Any("data", req.Config), zap.Error(err))
 		}
 		start := time.Now()
 		manager, err = dispatchermanager.NewDispatcherManager(
@@ -641,13 +641,8 @@ func retrieveOperatorsForBootstrapResponse(
 					zap.String("dispatcherID", req.Config.DispatcherID.String()))
 			}
 		}
-		response.Operators = append(response.Operators, &heartbeatpb.ScheduleDispatcherRequest{
-			ChangefeedID:    req.ChangefeedID,
-			Config:          req.Config,
-			ScheduleAction:  req.ScheduleAction,
-			OperatorType:    req.OperatorType,
-			MaintainerEpoch: req.MaintainerEpoch,
-		})
+		response.Operators = append(response.Operators,
+			proto.Clone(req.ScheduleDispatcherRequest).(*heartbeatpb.ScheduleDispatcherRequest))
 		return true
 	})
 }

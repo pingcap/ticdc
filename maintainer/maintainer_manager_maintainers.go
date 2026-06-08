@@ -179,6 +179,16 @@ func (p *managerMaintainerSet) handleAddMaintainer(
 	getDrainTarget func() (node.ID, uint64),
 ) *heartbeatpb.MaintainerStatus {
 	changefeedID := common.NewChangefeedIDFromPB(req.Id)
+	if req.CheckpointTs == 0 {
+		log.Error("ignore add maintainer request with invalid checkpointTs",
+			zap.Stringer("changefeedID", changefeedID),
+			zap.Uint64("checkpointTs", req.CheckpointTs))
+		return nil
+	}
+	requestEpoch := req.MaintainerEpoch
+	if !p.mayRegisterMaintainerForAdd(changefeedID, requestEpoch) {
+		return nil
+	}
 	info := &config.ChangeFeedInfo{}
 	if err := json.Unmarshal(req.Config, info); err != nil {
 		log.Error("ignore add maintainer request with invalid config",
@@ -187,13 +197,6 @@ func (p *managerMaintainerSet) handleAddMaintainer(
 			zap.Error(err))
 		return nil
 	}
-	if req.CheckpointTs == 0 {
-		log.Error("ignore add maintainer request with invalid checkpointTs",
-			zap.Stringer("changefeedID", changefeedID),
-			zap.Uint64("checkpointTs", req.CheckpointTs))
-		return nil
-	}
-	requestEpoch := req.MaintainerEpoch
 	// The wire epoch is the sender capability signal. If an old coordinator sends
 	// epoch 0, keep the maintainer in compatibility mode even when the serialized
 	// config still carries a non-zero ChangeFeedInfo epoch.
@@ -213,6 +216,18 @@ func (p *managerMaintainerSet) handleAddMaintainer(
 	registeredMaintainer.SetDispatcherDrainTarget(target, epoch)
 	registeredMaintainer.pushEvent(&Event{changefeedID: changefeedID, eventType: EventInit})
 	return nil
+}
+
+func (p *managerMaintainerSet) mayRegisterMaintainerForAdd(
+	changefeedID common.ChangeFeedID,
+	requestEpoch uint64,
+) bool {
+	registered, loaded := p.registry.Load(changefeedID)
+	if !loaded {
+		return true
+	}
+	existing := registered.(*Maintainer)
+	return shouldReplaceMaintainerForAdd(existing.currentMaintainerEpoch(), requestEpoch)
 }
 
 func (p *managerMaintainerSet) registerMaintainerForAdd(

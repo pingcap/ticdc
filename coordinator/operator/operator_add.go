@@ -97,10 +97,11 @@ func (m *AddMaintainerOperator) onMessageSent(_ *messaging.TargetMessage) {
 
 func (m *AddMaintainerOperator) isStatusEpochAllowed(statusEpoch uint64) bool {
 	expectedEpoch := m.cf.GetInfo().Epoch
-	if statusEpoch == 0 && expectedEpoch != 0 && !m.addMessageSent.Load() {
-		return false
-	}
-	return isMaintainerStatusEpochAllowed(statusEpoch, expectedEpoch)
+	return isMaintainerStatusEpochAllowedAfterAddSent(
+		statusEpoch,
+		expectedEpoch,
+		m.addMessageSent.Load(),
+	)
 }
 
 // OnNodeRemove cancels the operator when the destination node goes offline.

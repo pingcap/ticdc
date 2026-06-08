@@ -212,6 +212,7 @@ func TestManagerMaintainerSet_AddMaintainerDoesNotCreateRejectedDuplicate(t *tes
 	rejectedEpochs := []uint64{2, 1, 0}
 	for _, requestEpoch := range rejectedEpochs {
 		t.Run("requestEpoch"+strconv.FormatUint(requestEpoch, 10), func(t *testing.T) {
+			require.False(t, maintainers.mayRegisterMaintainerForAdd(cfID, requestEpoch))
 			registeredMaintainer := maintainers.registerMaintainerForAdd(cfID, requestEpoch, func() *Maintainer {
 				t.Fatalf("registerMaintainerForAdd created maintainer for rejected request epoch %d", requestEpoch)
 				return nil

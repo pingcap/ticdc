@@ -643,8 +643,6 @@ func TestHandleCloseRequestAcksStaleMaintainerEpoch(t *testing.T) {
 
 func TestHandleBootstrapRequestRejectsClosedOlderMaintainerEpoch(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("cf", "default")
-	configBytes, err := json.Marshal(newBootstrapResponseTestChangefeedConfig(cfID))
-	require.NoError(t, err)
 
 	orchestrator := &DispatcherOrchestrator{
 		mc:                 messaging.NewMockMessageCenter(),
@@ -653,9 +651,9 @@ func TestHandleBootstrapRequestRejectsClosedOlderMaintainerEpoch(t *testing.T) {
 			cfID: 2,
 		},
 	}
-	err = orchestrator.handleBootstrapRequest(node.ID("old-maintainer"), &heartbeatpb.MaintainerBootstrapRequest{
+	err := orchestrator.handleBootstrapRequest(node.ID("old-maintainer"), &heartbeatpb.MaintainerBootstrapRequest{
 		ChangefeedID:    cfID.ToPB(),
-		Config:          configBytes,
+		Config:          []byte("invalid config"),
 		MaintainerEpoch: 1,
 	})
 	require.NoError(t, err)

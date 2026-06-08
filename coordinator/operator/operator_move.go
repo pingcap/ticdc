@@ -122,10 +122,11 @@ func (m *MoveMaintainerOperator) onMessageSent(msg *messaging.TargetMessage) {
 
 func (m *MoveMaintainerOperator) isDestStatusEpochAllowed(statusEpoch uint64) bool {
 	expectedEpoch := m.changefeed.GetInfo().Epoch
-	if statusEpoch == 0 && expectedEpoch != 0 && !m.destAddMessageSent {
-		return false
-	}
-	return isMaintainerStatusEpochAllowed(statusEpoch, expectedEpoch)
+	return isMaintainerStatusEpochAllowedAfterAddSent(
+		statusEpoch,
+		expectedEpoch,
+		m.destAddMessageSent,
+	)
 }
 
 func (m *MoveMaintainerOperator) OnNodeRemove(n node.ID) {

@@ -259,6 +259,17 @@ func isMaintainerStatusEpochAllowed(statusEpoch, expectedEpoch uint64) bool {
 	return statusEpoch == 0 || expectedEpoch == 0 || statusEpoch == expectedEpoch
 }
 
+func isMaintainerStatusEpochAllowedAfterAddSent(
+	statusEpoch uint64,
+	expectedEpoch uint64,
+	addMessageSent bool,
+) bool {
+	if statusEpoch == 0 && expectedEpoch != 0 && !addMessageSent {
+		return false
+	}
+	return isMaintainerStatusEpochAllowed(statusEpoch, expectedEpoch)
+}
+
 // StopChangefeed stop changefeed when the changefeed is stopped/removed.
 // if remove is true, it will remove the changefeed from the chagnefeed DB
 // if remove is false, it only marks as the changefeed stooped in changefeed DB, so we will not schedule the changefeed again
