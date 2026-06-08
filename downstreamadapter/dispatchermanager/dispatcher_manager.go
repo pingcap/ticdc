@@ -421,27 +421,41 @@ func (e *DispatcherManager) NewTableTriggerEventDispatcher(id *heartbeatpb.Dispa
 
 func (e *DispatcherManager) InitalizeTableTriggerEventDispatcher(schemaInfo []*heartbeatpb.SchemaInfo) error {
 	e.writePathMu.Lock()
-	defer e.writePathMu.Unlock()
 	if e.writePathClosed.Load() {
+		e.writePathMu.Unlock()
 		return newWritePathClosedError()
 	}
 	tableTriggerDispatcher := e.GetTableTriggerEventDispatcher()
 	if tableTriggerDispatcher == nil {
+		e.writePathMu.Unlock()
 		return nil
 	}
 	needAddDispatcher, err := tableTriggerDispatcher.InitializeTableSchemaStore(schemaInfo)
 	if err != nil {
+		e.writePathMu.Unlock()
 		return errors.Trace(err)
 	}
+	e.writePathMu.Unlock()
 	if !needAddDispatcher {
 		return nil
 	}
+	if e.writePathClosed.Load() {
+		return newWritePathClosedError()
+	}
 	// before bootstrap finished, cannot send any event.
-	success := tableTriggerDispatcher.EmitBootstrap()
+	success := tableTriggerDispatcher.EmitBootstrap(e.writePathClosed.Load)
+	if e.writePathClosed.Load() {
+		return newWritePathClosedError()
+	}
 	if !success {
 		return errors.ErrDispatcherFailed.GenWithStackByArgs()
 	}
 
+	e.writePathMu.Lock()
+	defer e.writePathMu.Unlock()
+	if e.writePathClosed.Load() {
+		return newWritePathClosedError()
+	}
 	// table trigger event dispatcher can register to event collector to receive events after finish the initial table schema store from the maintainer.
 	appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).AddDispatcher(tableTriggerDispatcher, e.sinkQuota)
 
@@ -995,11 +1009,12 @@ func (e *DispatcherManager) close() {
 
 func (e *DispatcherManager) stopWritePath(cancelFirst bool) {
 	e.writePathMu.Lock()
-	defer e.writePathMu.Unlock()
 	if e.writePathClosed.Load() {
+		e.writePathMu.Unlock()
 		return
 	}
 	e.writePathClosed.Store(true)
+	e.writePathMu.Unlock()
 
 	log.Info("stopping dispatcher manager write path",
 		zap.Stringer("changefeedID", e.changefeedID))
@@ -1072,6 +1087,19 @@ func (e *DispatcherManager) stopWritePath(cancelFirst bool) {
 		e.sink.Close()
 	}
 	log.Info("sink closed", zap.Stringer("changefeedID", e.changefeedID))
+}
+
+func (e *DispatcherManager) addCheckpointTs(checkpointTs uint64) {
+	if e.writePathClosed.Load() {
+		return
+	}
+	if e.GetTableTriggerEventDispatcher() == nil || e.sink == nil {
+		return
+	}
+	if e.writePathClosed.Load() {
+		return
+	}
+	e.sink.AddCheckpointTs(checkpointTs)
 }
 
 func (e *DispatcherManager) finishClose() {

@@ -154,9 +154,10 @@ func (d *EventDispatcher) Remove() {
 	d.removeDispatcher()
 }
 
-// EmitBootstrap emits the table bootstrap event in a blocking way after changefeed started
-// It will return after the bootstrap event is sent.
-func (d *EventDispatcher) EmitBootstrap() bool {
+// EmitBootstrap emits the table bootstrap event in a blocking way after changefeed started.
+// It will return after the bootstrap event is sent, or when shouldStop asks it
+// to stop because the local write path has been fenced.
+func (d *EventDispatcher) EmitBootstrap(shouldStop func() bool) bool {
 	bootstrap := loadBootstrapState(&d.BootstrapState)
 	switch bootstrap {
 	case BootstrapFinished:
@@ -206,9 +207,15 @@ func (d *EventDispatcher) EmitBootstrap() bool {
 		if table.IsView() {
 			continue
 		}
+		if shouldStop != nil && shouldStop() {
+			return false
+		}
 		ddlEvent := codec.NewBootstrapDDLEvent(table)
 		err := d.sink.WriteBlockEvent(ddlEvent)
 		if err != nil {
+			if shouldStop != nil && shouldStop() {
+				return false
+			}
 			log.Error("send bootstrap message failed",
 				zap.Stringer("changefeed", d.sharedInfo.changefeedID),
 				zap.Int("tables", len(currentTables)),
@@ -217,6 +224,9 @@ func (d *EventDispatcher) EmitBootstrap() bool {
 				zap.Error(err))
 			d.HandleError(errors.ErrExecDDLFailed.GenWithStackByArgs())
 			return true
+		}
+		if shouldStop != nil && shouldStop() {
+			return false
 		}
 	}
 	storeBootstrapState(&d.BootstrapState, BootstrapFinished)

@@ -335,6 +335,9 @@ func (e *DispatcherManager) InitalizeTableTriggerRedoDispatcher(schemaInfo []*he
 }
 
 func (e *DispatcherManager) UpdateRedoMeta(checkpointTs, resolvedTs uint64) {
+	if e.writePathClosed.Load() {
+		return
+	}
 	// only update meta on the one node
 	d := e.GetTableTriggerRedoDispatcher()
 	if d == nil {

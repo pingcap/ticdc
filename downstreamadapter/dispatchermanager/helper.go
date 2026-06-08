@@ -619,7 +619,7 @@ func (h *CheckpointTsMessageHandler) Handle(dispatcherManager *DispatcherManager
 	}
 	if dispatcherManager.GetTableTriggerEventDispatcher() != nil {
 		checkpointTsMessage := messages[0]
-		dispatcherManager.sink.AddCheckpointTs(checkpointTsMessage.CheckpointTs)
+		dispatcherManager.addCheckpointTs(checkpointTsMessage.CheckpointTs)
 	}
 	return false
 }
