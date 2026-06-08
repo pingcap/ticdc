@@ -125,16 +125,6 @@ func (d *dmlWriters) AddDMLEvent(event *commonEvent.DMLEvent) {
 		DispatcherID:     event.GetDispatcherID(),
 	}
 	seq := d.lastSeqNum.Inc()
-	log.Info("storage sink add dml event",
-		zap.String("keyspace", d.changefeedID.Keyspace()),
-		zap.String("changefeed", d.changefeedID.ID().String()),
-		zap.String("schema", tbl.TableNameWithPhysicTableID.Schema),
-		zap.String("table", tbl.TableNameWithPhysicTableID.Table),
-		zap.Int64("tableID", tbl.TableNameWithPhysicTableID.TableID),
-		zap.Uint64("tableVersion", tbl.TableInfoVersion),
-		zap.String("dispatcher", event.GetDispatcherID().String()),
-		zap.Uint64("commitTs", event.CommitTs),
-		zap.Uint64("seq", seq))
 	// emit a TxnCallbackableEvent encoupled with a sequence number starting from one.
 	d.msgCh.Push(newEventFragment(seq, tbl, event.GetDispatcherID(), event))
 }
