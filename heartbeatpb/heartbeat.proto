@@ -33,12 +33,6 @@ enum Action {
     // Pass means influenced dispatchers mark this barrier as passed after the
     // writer has finished Write for the same (commitTs, isSyncPoint).
     Pass = 1;
-    // Flush means influenced dispatchers flush all DML before this barrier and
-    // keep the pending barrier event for the later Write/Pass steps.
-    // It is required for storage sink when split-table is enabled: one table may have multiple
-    // dispatchers on different nodes, and every dispatcher must flush pre-barrier
-    // DML first to prevent it from being reordered after the writer executes DDL.
-    Flush = 2;
 }
 
 message DispatcherAction {
@@ -79,7 +73,7 @@ message CheckpointTsMessage {
     uint64 checkpointTs = 2;
 }
 
-// RedoMetaMessage used to send unflushed ts to update redo meta 
+// RedoMetaMessage used to send unflushed ts to update redo meta
 // from maintainer to dispatcher manager
 message RedoMetaMessage {
     ChangefeedID changefeedID = 1;
@@ -87,14 +81,14 @@ message RedoMetaMessage {
     uint64 checkpointTs = 3;
 }
 
-// RedoResolvedTsProgressMessage used to send redo meta flushed resolvedTs 
+// RedoResolvedTsProgressMessage used to send redo meta flushed resolvedTs
 // from dispatcher manager to maintainer
 message RedoResolvedTsProgressMessage {
     ChangefeedID changefeedID = 1;
     uint64 resolvedTs = 2;
 }
 
-// RedoResolvedTsForwardMessage used to send redoGlobalTs (redo meta flushed resolvedTs) 
+// RedoResolvedTsForwardMessage used to send redoGlobalTs (redo meta flushed resolvedTs)
 // from maintainer to dispatcher manager
 message RedoResolvedTsForwardMessage {
     ChangefeedID changefeedID = 1;
@@ -366,7 +360,7 @@ enum ChecksumState {
 
 message ChecksumMeta {
     ChecksumState state = 1;
-    // checksumStateSeq is a monotonic version for checksumState, 
+    // checksumStateSeq is a monotonic version for checksumState,
     // used to discard out-of-order meta info.
     uint64 checksumStateSeq = 2;
 }

@@ -6,11 +6,10 @@ package heartbeatpb
 import (
 	encoding_binary "encoding/binary"
 	fmt "fmt"
+	proto "github.com/gogo/protobuf/proto"
 	io "io"
 	math "math"
 	math_bits "math/bits"
-
-	proto "github.com/gogo/protobuf/proto"
 )
 
 // Reference imports to suppress errors if they are not otherwise used.
@@ -30,20 +29,19 @@ const (
 	// Write means the selected writer dispatcher executes the barrier event
 	// (DDL/syncpoint) to downstream.
 	Action_Write Action = 0
-	Action_Pass  Action = 1
-	Action_Flush Action = 2
+	// Pass means influenced dispatchers mark this barrier as passed after the
+	// writer has finished Write for the same (commitTs, isSyncPoint).
+	Action_Pass Action = 1
 )
 
 var Action_name = map[int32]string{
 	0: "Write",
 	1: "Pass",
-	2: "Flush",
 }
 
 var Action_value = map[string]int32{
 	"Write": 0,
 	"Pass":  1,
-	"Flush": 2,
 }
 
 func (x Action) String() string {
