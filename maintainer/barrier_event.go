@@ -25,7 +25,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/routing"
@@ -58,7 +57,7 @@ type BarrierEvent struct {
 	blockedDispatchers *heartbeatpb.InfluencedTables
 	dropDispatchers    *heartbeatpb.InfluencedTables
 	newTables          []*heartbeatpb.Table
-	routeTables        []*heartbeatpb.RouteTableAdmission
+	routeAdmissions    []routing.Admission
 	schemaIDChange     []*heartbeatpb.SchemaIDChange
 	isSyncPoint        bool
 	needSchedule       bool
@@ -113,7 +112,7 @@ func NewBlockEvent(cfID common.ChangeFeedID,
 		blockedDispatchers: status.BlockTables,
 		dropDispatchers:    status.NeedDroppedTables,
 		newTables:          status.NeedAddedTables,
-		routeTables:        status.RouteTableAdmissions,
+		routeAdmissions:    routeTableAdmissionsFromPB(status.RouteTableAdmissions),
 		schemaIDChange:     status.UpdatedSchemas,
 		isSyncPoint:        status.IsSyncPoint,
 		needSchedule:       needSchedule(status),
@@ -154,75 +153,54 @@ func newRangeCheck(status *heartbeatpb.State, dynamicSplitEnabled bool, keyspace
 }
 
 func (be *BarrierEvent) buildRouteAdmission() routing.AdmissionEvent {
-	routeTables, err := routeTableAdmissionsFromPB(be.routeTables)
 	return routing.AdmissionEvent{
 		CommitTs:    be.commitTs,
 		IsSyncPoint: be.isSyncPoint,
-		ParseErr:    err,
-		Tables:      routeTables,
+		Tables:      be.routeAdmissions,
 	}
 }
 
-func routeTableAdmissionsFromPB(tables []*heartbeatpb.RouteTableAdmission) ([]routing.Admission, error) {
-	if len(tables) == 0 {
-		return nil, nil
+func routeTableAdmissionsFromPB(admissions []*heartbeatpb.RouteTableAdmission) []routing.Admission {
+	if len(admissions) == 0 {
+		return nil
 	}
-	result := make([]routing.Admission, 0, len(tables))
-	for _, table := range tables {
-		if table == nil {
-			return nil, errors.ErrInternalCheckFailed.GenWithStack("route table admission is nil")
+	result := make([]routing.Admission, 0, len(admissions))
+	for _, item := range admissions {
+		if item == nil {
+			continue
 		}
-		switch table.Action {
+		switch item.Action {
 		case heartbeatpb.RouteTableAdmissionAction_ADMIT:
-			if table.SourceSchemaName == "" || table.SourceTableName == "" ||
-				table.TargetSchemaName == "" || table.TargetTableName == "" {
-				return nil, errors.ErrInternalCheckFailed.GenWithStack(
-					"incomplete route admit admission: source=`%s`.`%s`, target=`%s`.`%s`",
-					table.SourceSchemaName, table.SourceTableName,
-					table.TargetSchemaName, table.TargetTableName)
-			}
 			result = append(result, routing.Admission{
 				Action: routing.Admit,
 				Source: routing.TableKey{
-					Schema: table.SourceSchemaName,
-					Table:  table.SourceTableName,
+					Schema: item.SourceSchemaName,
+					Table:  item.SourceTableName,
 				},
 				Binding: routing.NewRouteBinding(
-					table.SourceSchemaName,
-					table.SourceTableName,
-					table.TargetSchemaName,
-					table.TargetTableName,
+					item.SourceSchemaName,
+					item.SourceTableName,
+					item.TargetSchemaName,
+					item.TargetTableName,
 				),
 			})
 		case heartbeatpb.RouteTableAdmissionAction_RELEASE:
-			if table.SourceSchemaName == "" || table.SourceTableName == "" {
-				return nil, errors.ErrInternalCheckFailed.GenWithStack(
-					"incomplete route release admission: source=`%s`.`%s`",
-					table.SourceSchemaName, table.SourceTableName)
-			}
 			result = append(result, routing.Admission{
 				Action: routing.Release,
 				Source: routing.TableKey{
-					Schema: table.SourceSchemaName,
-					Table:  table.SourceTableName,
+					Schema: item.SourceSchemaName,
+					Table:  item.SourceTableName,
 				},
 			})
 		case heartbeatpb.RouteTableAdmissionAction_RELEASE_SCHEMA:
-			if table.SourceSchemaName == "" {
-				return nil, errors.ErrInternalCheckFailed.GenWithStack(
-					"incomplete route schema release admission: sourceSchema=%s",
-					table.SourceSchemaName)
-			}
 			result = append(result, routing.Admission{
 				Action: routing.ReleaseSchema,
-				Source: routing.TableKey{Schema: table.SourceSchemaName},
+				Source: routing.TableKey{Schema: item.SourceSchemaName},
 			})
 		default:
-			return nil, errors.ErrInternalCheckFailed.GenWithStack(
-				"unknown route table admission action %d", table.Action)
 		}
 	}
-	return result, nil
+	return result
 }
 
 func needSchedule(state *heartbeatpb.State) bool {

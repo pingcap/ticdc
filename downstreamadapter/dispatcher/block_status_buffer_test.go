@@ -355,6 +355,34 @@ func TestRouteTableAdmissionsForNameLevelDDLs(t *testing.T) {
 		},
 	}, admissions)
 
+	createTablesEvent := &commonEvent.DDLEvent{
+		Type: byte(model.ActionCreateTables),
+		TableNameChange: &commonEvent.TableNameChange{
+			AddName: []commonEvent.SchemaTableName{
+				{SchemaName: "db", TableName: "t1"},
+				{SchemaName: "db", TableName: "t2"},
+			},
+		},
+	}
+	admissions, err = dispatcher.routeTableAdmissionsForBlockState(createTablesEvent)
+	require.NoError(t, err)
+	require.Equal(t, []*heartbeatpb.RouteTableAdmission{
+		{
+			SourceSchemaName: "db",
+			SourceTableName:  "t1",
+			TargetSchemaName: "target_db",
+			TargetTableName:  "t1_routed",
+			Action:           heartbeatpb.RouteTableAdmissionAction_ADMIT,
+		},
+		{
+			SourceSchemaName: "db",
+			SourceTableName:  "t2",
+			TargetSchemaName: "target_db",
+			TargetTableName:  "t2_routed",
+			Action:           heartbeatpb.RouteTableAdmissionAction_ADMIT,
+		},
+	}, admissions)
+
 	dropEvent := &commonEvent.DDLEvent{
 		Type:       byte(model.ActionDropTable),
 		SchemaName: "db",
@@ -405,6 +433,48 @@ func TestRouteTableAdmissionsForNameLevelDDLs(t *testing.T) {
 			SourceTableName:  "p2",
 			TargetSchemaName: "target_db",
 			TargetTableName:  "p2_routed",
+			Action:           heartbeatpb.RouteTableAdmissionAction_ADMIT,
+		},
+	}, admissions)
+
+	renameTablesEvent := &commonEvent.DDLEvent{
+		Type: byte(model.ActionRenameTables),
+		TableNameChange: &commonEvent.TableNameChange{
+			DropName: []commonEvent.SchemaTableName{
+				{SchemaName: "db", TableName: "t1"},
+				{SchemaName: "db", TableName: "t2"},
+			},
+			AddName: []commonEvent.SchemaTableName{
+				{SchemaName: "db2", TableName: "t1_new"},
+				{SchemaName: "db2", TableName: "t2_new"},
+			},
+		},
+	}
+	admissions, err = dispatcher.routeTableAdmissionsForBlockState(renameTablesEvent)
+	require.NoError(t, err)
+	require.Equal(t, []*heartbeatpb.RouteTableAdmission{
+		{
+			SourceSchemaName: "db",
+			SourceTableName:  "t1",
+			Action:           heartbeatpb.RouteTableAdmissionAction_RELEASE,
+		},
+		{
+			SourceSchemaName: "db",
+			SourceTableName:  "t2",
+			Action:           heartbeatpb.RouteTableAdmissionAction_RELEASE,
+		},
+		{
+			SourceSchemaName: "db2",
+			SourceTableName:  "t1_new",
+			TargetSchemaName: "target_db",
+			TargetTableName:  "t1_new_routed",
+			Action:           heartbeatpb.RouteTableAdmissionAction_ADMIT,
+		},
+		{
+			SourceSchemaName: "db2",
+			SourceTableName:  "t2_new",
+			TargetSchemaName: "target_db",
+			TargetTableName:  "t2_new_routed",
 			Action:           heartbeatpb.RouteTableAdmissionAction_ADMIT,
 		},
 	}, admissions)

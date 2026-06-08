@@ -77,8 +77,6 @@ type AdmissionEvent struct {
 	CommitTs uint64
 	// IsSyncPoint distinguishes sync-point barriers from DDL barriers at the same ts.
 	IsSyncPoint bool
-	// ParseErr records invalid dispatcher-provided route transition metadata.
-	ParseErr error
 	// Tables carries dispatcher-provided source route transitions. DDL type
 	// interpretation stays in dispatcher; Admin only consumes route-level
 	// admit/release operations.
@@ -228,9 +226,6 @@ func (a *Admin) SetErrorReporter(reportError func(error)) {
 
 // Precheck validates a route transition without mutating the route registry.
 func (a *Admin) Precheck(info AdmissionEvent) (bool, error) {
-	if info.ParseErr != nil {
-		return false, a.fail(info.ParseErr)
-	}
 	if !a.needsCheck(info) {
 		return true, nil
 	}
@@ -268,9 +263,6 @@ func (a *Admin) Precheck(info AdmissionEvent) (bool, error) {
 
 // Apply applies a route transition after the DDL has advanced.
 func (a *Admin) Apply(info AdmissionEvent) error {
-	if info.ParseErr != nil {
-		return a.fail(info.ParseErr)
-	}
 	if !a.needsCheck(info) {
 		return nil
 	}
