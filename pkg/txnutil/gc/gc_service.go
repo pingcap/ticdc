@@ -67,7 +67,7 @@ func ensureChangefeedStartTsSafetyClassic(ctx context.Context, pdCli GCServiceCl
 
 	// startTs should be greater than or equal to minServiceGCTs + 1, otherwise gcManager
 	// would return a ErrSnapshotLostByGC even though the changefeed would appear to be successfully
-	// created/resumed. See issue #6350 for more detail.
+	// created/resumed. See issue https://github.com/pingcap/tiflow/issues/6350 for more detail.
 	if startTs > 0 && startTs < minServiceGCTs+1 {
 		return errors.ErrStartTsBeforeGC.GenWithStackByArgs(startTs, minServiceGCTs)
 	}
