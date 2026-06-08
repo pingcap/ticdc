@@ -331,17 +331,26 @@ func (p *managerMaintainerSet) buildHeartbeat() *heartbeatpb.MaintainerHeartbeat
 // cleanupRemovedMaintainers closes maintainers after their remove flow has finished.
 func (p *managerMaintainerSet) cleanupRemovedMaintainers() {
 	p.registry.Range(func(key, value interface{}) bool {
-		cf := value.(*Maintainer)
-		if cf.removed.Load() {
-			cf.Close()
-			log.Info("maintainer removed, remove it from dynamic stream",
-				zap.Stringer("changefeedID", cf.changefeedID),
-				zap.Uint64("checkpointTs", cf.getWatermark().CheckpointTs),
-			)
-			p.registry.Delete(key)
-		}
+		p.cleanupRemovedMaintainer(key, value)
 		return true
 	})
+}
+
+func (p *managerMaintainerSet) cleanupRemovedMaintainer(key, value interface{}) {
+	cf := value.(*Maintainer)
+	if !cf.removed.Load() {
+		return
+	}
+	// Range can observe a removed maintainer just before a newer epoch replaces it.
+	// Only the value still stored in the registry owns the shared metric labels.
+	if !p.registry.CompareAndDelete(key, cf) {
+		return
+	}
+	cf.Close()
+	log.Info("maintainer removed, remove it from dynamic stream",
+		zap.Stringer("changefeedID", cf.changefeedID),
+		zap.Uint64("checkpointTs", cf.getWatermark().CheckpointTs),
+	)
 }
 
 // applyDispatcherDrainTarget fans out the latest node-scoped drain target to
