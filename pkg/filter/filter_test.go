@@ -388,31 +388,31 @@ func TestShouldIgnoreDML(t *testing.T) {
 	emptyRow := chunk.Row{}
 
 	// Case 1: DML on `test.t4`, should be ignored by table filter (highest precedence).
-	ignore, err := f.ShouldIgnoreDML(common.RowTypeInsert, emptyRow, dummyRowData, ti4, 0)
+	ignore, err := f.ShouldIgnoreDML(common.RowTypeInsert, emptyRow, dummyRowData, ti4, 0, DMLFilterContext{})
 	require.NoError(t, err)
 	require.True(t, ignore, "Should be ignored by table filter")
 
 	// Case 2: INSERT on `test.t2`, should be ignored by SQL event filter (second precedence).
-	ignore, err = f.ShouldIgnoreDML(common.RowTypeInsert, emptyRow, dummyRowData, ti2, 0)
+	ignore, err = f.ShouldIgnoreDML(common.RowTypeInsert, emptyRow, dummyRowData, ti2, 0, DMLFilterContext{})
 	require.NoError(t, err)
 	require.True(t, ignore, "Should be ignored by SQL event filter")
 
 	// Case 3: UPDATE on `test.t2`, should pass SQL event filter.
 	updatePreRow := datumsToChunkRow(types.MakeDatums(int64(1)), ti2)
 	updateRow := datumsToChunkRow(types.MakeDatums(int64(2)), ti2)
-	ignore, err = f.ShouldIgnoreDML(common.RowTypeUpdate, updatePreRow, updateRow, ti2, 0)
+	ignore, err = f.ShouldIgnoreDML(common.RowTypeUpdate, updatePreRow, updateRow, ti2, 0, DMLFilterContext{})
 	require.NoError(t, err)
 	require.False(t, ignore, "Should pass SQL event filter as no expression is configured")
 
 	// Case 4: DML on `test.t1`, should pass all filters.
 	insertRow := datumsToChunkRow(types.MakeDatums(int64(1)), ti1)
-	ignore, err = f.ShouldIgnoreDML(common.RowTypeInsert, emptyRow, insertRow, ti1, 0)
+	ignore, err = f.ShouldIgnoreDML(common.RowTypeInsert, emptyRow, insertRow, ti1, 0, DMLFilterContext{})
 	require.NoError(t, err)
 	require.False(t, ignore, "Should pass all filters")
 
 	// Case 5: DELETE on `test.t3`, should be ignored by SQL event filter.
 	deleteRow := datumsToChunkRow(types.MakeDatums(int64(1)), ti3)
-	ignore, err = f.ShouldIgnoreDML(common.RowTypeDelete, deleteRow, emptyRow, ti3, 0)
+	ignore, err = f.ShouldIgnoreDML(common.RowTypeDelete, deleteRow, emptyRow, ti3, 0, DMLFilterContext{})
 	require.NoError(t, err)
 	require.True(t, ignore, "Should be ignored by SQL event filter")
 }
@@ -632,7 +632,7 @@ func TestShouldIgnoreDMLCaseSensitivity(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f, err := NewFilter(cfg, "UTC", tc.caseSensitive, false)
 			require.NoError(t, err)
-			ignore, err := f.ShouldIgnoreDML(common.RowTypeInsert, emptyRow, rowData, tc.tableInfo, 0)
+			ignore, err := f.ShouldIgnoreDML(common.RowTypeInsert, emptyRow, rowData, tc.tableInfo, 0, DMLFilterContext{})
 			require.NoError(t, err)
 			require.Equal(t, tc.shouldIgnore, ignore, tc.msg)
 		})

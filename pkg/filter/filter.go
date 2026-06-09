@@ -46,7 +46,7 @@ const (
 // Filter are safe for concurrent use.
 type Filter interface {
 	// ShouldIgnoreDML returns true if the DML event should not be handled.
-	ShouldIgnoreDML(dmlType common.RowType, preRow, row chunk.Row, tableInfo *common.TableInfo, startTs uint64, ctx ...DMLFilterContext) (bool, error)
+	ShouldIgnoreDML(dmlType common.RowType, preRow, row chunk.Row, tableInfo *common.TableInfo, startTs uint64, ctx DMLFilterContext) (bool, error)
 	// ShouldDiscardDDL returns true if the DDL event should not be handled.
 	ShouldDiscardDDL(schema, table string, ddlType timodel.ActionType, tableInfo *common.TableInfo) bool
 	// ShouldIgnoreDDL returns true if the DDL event should not be sent to downstream.
@@ -132,7 +132,7 @@ func NewFilter(cfg *config.FilterConfig, tz string, caseSensitive bool, forceRep
 // 3. By type.
 // 4. By update-only-column config.
 // 5. By row value expression.
-func (f *filter) ShouldIgnoreDML(dmlType common.RowType, preRow, row chunk.Row, tableInfo *common.TableInfo, startTs uint64, contexts ...DMLFilterContext) (bool, error) {
+func (f *filter) ShouldIgnoreDML(dmlType common.RowType, preRow, row chunk.Row, tableInfo *common.TableInfo, startTs uint64, filterContext DMLFilterContext) (bool, error) {
 	if f.shouldIgnoreStartTs(startTs) {
 		return true, nil
 	}
@@ -147,10 +147,6 @@ func (f *filter) ShouldIgnoreDML(dmlType common.RowType, preRow, row chunk.Row, 
 	}
 	if ignoreByEventType {
 		return true, nil
-	}
-	filterContext := DMLFilterContext{}
-	if len(contexts) > 0 {
-		filterContext = contexts[0]
 	}
 	if filterContext.EnableIgnoreUpdateOnlyColumns {
 		ignoreByUpdateOnlyColumns, err := f.updateOnlyColumnsFilter.shouldSkipDML(dmlType, preRow, row, tableInfo)
@@ -309,7 +305,7 @@ func (s *SharedFilterStorage) GetOrSetFilter(
 			IgnoreUpdateNewValueExpr: util.AddressOf(rule.IgnoreUpdateNewValueExpr),
 			IgnoreUpdateOldValueExpr: util.AddressOf(rule.IgnoreUpdateOldValueExpr),
 			IgnoreDeleteValueExpr:    util.AddressOf(rule.IgnoreDeleteValueExpr),
-			IgnoreUpdateOnlyColumns:  append([]string(nil), rule.IgnoreUpdateOnlyColumns...),
+			IgnoreUpdateOnlyColumns:  rule.IgnoreUpdateOnlyColumns,
 		}
 		for _, e := range rule.IgnoreEvent {
 			f.IgnoreEvent = append(f.IgnoreEvent, bf.EventType(e))

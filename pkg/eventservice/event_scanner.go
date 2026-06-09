@@ -664,7 +664,7 @@ func (t *TxnEvent) AppendRow(
 		chk *chunk.Chunk,
 	) (int, *integrity.Checksum, error),
 	filter filter.Filter,
-	filterContexts ...filter.DMLFilterContext,
+	filterContext filter.DMLFilterContext,
 ) error {
 	if t.shouldSplitTxn && (t.CurrentDMLEvent.Len() >= t.DMLEventMaxRows || t.CurrentDMLEvent.GetSize() >= t.DMLEventMaxBytes) {
 		newDMLEvent := event.NewDMLEvent(
@@ -679,7 +679,7 @@ func (t *TxnEvent) AppendRow(
 			return err
 		}
 	}
-	return t.CurrentDMLEvent.AppendRow(rawEvent, decode, filter, filterContexts...)
+	return t.CurrentDMLEvent.AppendRow(rawEvent, decode, filter, filterContext)
 }
 
 // dmlProcessor handles DML event processing and batching
@@ -707,10 +707,10 @@ type dmlProcessor struct {
 func newDMLProcessor(
 	mounter event.Mounter, schemaGetter schemaGetter,
 	dmlFilter filter.Filter, outputRawChangeEvent bool, mode int64,
-	enableIgnoreUpdateOnlyColumns ...bool,
+	enableIgnoreUpdateOnlyColumns bool,
 ) *dmlProcessor {
 	filterContext := filter.DMLFilterContext{}
-	if len(enableIgnoreUpdateOnlyColumns) > 0 && enableIgnoreUpdateOnlyColumns[0] {
+	if enableIgnoreUpdateOnlyColumns {
 		filterContext.EnableIgnoreUpdateOnlyColumns = true
 	}
 	return &dmlProcessor{
