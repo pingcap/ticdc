@@ -954,13 +954,8 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
-	updatedCfInfo, err := oldCfInfo.Clone()
-	if err != nil {
-		_ = c.Error(err)
-		return
-	}
 
-	switch updatedCfInfo.State {
+	switch oldCfInfo.State {
 	case config.StateStopped, config.StateFailed:
 	default:
 		_ = c.Error(
@@ -979,22 +974,22 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 
 	var configUpdated, sinkURIUpdated, targetTsUpdated bool
 	if updateCfConfig.TargetTs != 0 {
-		if updateCfConfig.TargetTs <= updatedCfInfo.StartTs {
+		if updateCfConfig.TargetTs <= oldCfInfo.StartTs {
 			_ = c.Error(errors.ErrChangefeedUpdateRefused.GenWithStack(
 				"can not update target_ts:%d less than start_ts:%d",
-				updateCfConfig.TargetTs, updatedCfInfo.StartTs))
+				updateCfConfig.TargetTs, oldCfInfo.StartTs))
 			return
 		}
-		updatedCfInfo.TargetTs = updateCfConfig.TargetTs
+		oldCfInfo.TargetTs = updateCfConfig.TargetTs
 		targetTsUpdated = true
 	}
 	if updateCfConfig.ReplicaConfig != nil {
 		configUpdated = true
-		updatedCfInfo.Config = updateCfConfig.ReplicaConfig.ToInternalReplicaConfig()
+		oldCfInfo.Config = updateCfConfig.ReplicaConfig.ToInternalReplicaConfig()
 	}
 	if updateCfConfig.SinkURI != "" {
 		sinkURIUpdated = true
-		updatedCfInfo.SinkURI = updateCfConfig.SinkURI
+		oldCfInfo.SinkURI = updateCfConfig.SinkURI
 	}
 	if updateCfConfig.StartTs != 0 {
 		_ = c.Error(errors.ErrAPIInvalidParam.GenWithStack("start_ts can not be updated"))
@@ -1011,12 +1006,12 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 	)
 	if configUpdated || sinkURIUpdated {
 		// verify replicaConfig
-		sinkURIParsed, err := url.Parse(updatedCfInfo.SinkURI)
+		sinkURIParsed, err := url.Parse(oldCfInfo.SinkURI)
 		if err != nil {
-			_ = c.Error(genSinkURIInvalidError(updatedCfInfo.SinkURI, err))
+			_ = c.Error(genSinkURIInvalidError(oldCfInfo.SinkURI, err))
 			return
 		}
-		err = updatedCfInfo.Config.ValidateAndAdjust(sinkURIParsed)
+		err = oldCfInfo.Config.ValidateAndAdjust(sinkURIParsed)
 		if err != nil {
 			_ = c.Error(errors.WrapError(errors.ErrInvalidReplicaConfig, err))
 			return
@@ -1027,11 +1022,11 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 		if config.IsMQScheme(scheme) {
 			topic, err = helper.GetTopic(sinkURIParsed)
 			if err != nil {
-				_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, maskSinkURIForError(updatedCfInfo.SinkURI)))
+				_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, maskSinkURIForError(oldCfInfo.SinkURI)))
 				return
 			}
 		}
-		protocol, _ := config.ParseSinkProtocolFromString(util.GetOrZero(updatedCfInfo.Config.Sink.Protocol))
+		protocol, _ := config.ParseSinkProtocolFromString(util.GetOrZero(oldCfInfo.Config.Sink.Protocol))
 
 		keyspaceManager := appcontext.GetService[keyspace.Manager](appcontext.KeyspaceManager)
 
@@ -1042,12 +1037,12 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 		}
 
 		// use checkpointTs get snapshot from kv storage
-		ineligibleTables, eligibleTables, allTables, err = getVerifiedTables(ctx, updatedCfInfo.ChangefeedID, updatedCfInfo.Config, kvStorage, status.CheckpointTs, scheme, topic, protocol)
+		ineligibleTables, eligibleTables, allTables, err = getVerifiedTables(ctx, oldCfInfo.ChangefeedID, oldCfInfo.Config, kvStorage, status.CheckpointTs, scheme, topic, protocol)
 		if err != nil {
 			_ = c.Error(errors.ErrChangefeedUpdateRefused.GenWithStackByCause(err))
 			return
 		}
-		if !util.GetOrZero(updatedCfInfo.Config.ForceReplicate) && !util.GetOrZero(updatedCfInfo.Config.IgnoreIneligibleTable) {
+		if !util.GetOrZero(oldCfInfo.Config.ForceReplicate) && !util.GetOrZero(oldCfInfo.Config.IgnoreIneligibleTable) {
 			if len(ineligibleTables) != 0 {
 				_ = c.Error(errors.ErrTableIneligible.GenWithStackByArgs(ineligibleTables))
 				return
@@ -1057,7 +1052,7 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 
 	// verify sink
 	// Reject a changefeed if the downstream is the same TiDB logical cluster as the upstream.
-	isSame, err := check.IsSameUpstreamDownstream(ctx, h.server.GetPdClient(), updatedCfInfo.ToChangefeedConfig())
+	isSame, err := check.IsSameUpstreamDownstream(ctx, h.server.GetPdClient(), oldCfInfo.ToChangefeedConfig())
 	if err != nil {
 		_ = c.Error(err)
 		return
@@ -1069,27 +1064,27 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 		return
 	}
 
-	err = check.ValidateActiveActiveTSOIndexes(ctx, h.server.GetPdClient(), updatedCfInfo.ToChangefeedConfig())
+	err = check.ValidateActiveActiveTSOIndexes(ctx, h.server.GetPdClient(), oldCfInfo.ToChangefeedConfig())
 	if err != nil {
 		_ = c.Error(err)
 		return
 	}
 
-	err = sink.Verify(ctx, updatedCfInfo.ToChangefeedConfig(), updatedCfInfo.ChangefeedID)
+	err = sink.Verify(ctx, oldCfInfo.ToChangefeedConfig(), oldCfInfo.ChangefeedID)
 	if err != nil {
-		_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, maskSinkURIForError(updatedCfInfo.SinkURI)))
+		_ = c.Error(errors.WrapError(errors.ErrSinkURIInvalid, err, maskSinkURIForError(oldCfInfo.SinkURI)))
 		return
 	}
 
-	if err = co.UpdateChangefeed(ctx, updatedCfInfo); err != nil {
+	if err = co.UpdateChangefeed(ctx, oldCfInfo); err != nil {
 		_ = c.Error(err)
 		return
 	}
 
 	log.Info("Update changefeed successfully",
-		zap.String("id", updatedCfInfo.ChangefeedID.Name()),
-		zap.String("state", string(updatedCfInfo.State)),
-		zap.String("changefeedInfo", updatedCfInfo.String()),
+		zap.String("id", oldCfInfo.ChangefeedID.Name()),
+		zap.String("state", string(oldCfInfo.State)),
+		zap.String("changefeedInfo", oldCfInfo.String()),
 		zap.Bool("configUpdated", configUpdated),
 		zap.Bool("sinkURIUpdated", sinkURIUpdated),
 		zap.Int("eligibleTablesLength", len(eligibleTables)),
@@ -1097,7 +1092,7 @@ func (h *OpenAPIV2) UpdateChangefeed(c *gin.Context) {
 		zap.Int("allTables", len(allTables)),
 	)
 
-	c.JSON(getStatus(c), CfInfoToAPIModel(updatedCfInfo, status, nil))
+	c.JSON(getStatus(c), CfInfoToAPIModel(oldCfInfo, status, nil))
 }
 
 func validateResumeChangefeedState(state config.FeedState) error {
