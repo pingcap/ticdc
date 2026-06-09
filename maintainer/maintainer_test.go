@@ -581,6 +581,52 @@ func TestMaintainerCalculateNewCheckpointTs(t *testing.T) {
 		require.False(t, canUpdate)
 		require.Nil(t, newWatermark)
 	})
+
+	t.Run("removing keeps blocked add operator checkpoint constraint", func(t *testing.T) {
+		// Scenario: the old maintainer enters removing mode while an Add operator is still in flight.
+		// Steps: report a higher capture watermark, quiesce all ordinary operators, and verify the
+		// checkpoint calculation remains capped at the in-flight add span's start checkpoint.
+		m, selfNodeID := newMaintainerForCheckpointCalculationTest(t)
+		nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+		nodeManager.GetAliveNodes()[selfNodeID] = &node.Info{ID: selfNodeID}
+
+		dispatcherID := common.NewDispatcherID()
+		replicaSet := replica.NewWorkingSpanReplication(
+			m.changefeedID,
+			dispatcherID,
+			1,
+			testutil.GetTableSpanByID(101),
+			&heartbeatpb.TableSpanStatus{
+				ID:              dispatcherID.ToPB(),
+				ComponentStatus: heartbeatpb.ComponentState_Working,
+				CheckpointTs:    10,
+				Mode:            common.DefaultMode,
+			},
+			"",
+			false,
+		)
+		m.controller.spanController.AddAbsentReplicaSet(replicaSet)
+		require.True(t, m.controller.operatorController.AddOperator(operator.NewAddDispatcherOperator(
+			m.controller.spanController,
+			replicaSet,
+			selfNodeID,
+			heartbeatpb.OperatorType_O_Add,
+		)))
+
+		m.removing.Store(true)
+		m.controller.EnterRemovingMode(m.ddlSpan.ID)
+		m.checkpointTsByCapture.Set(selfNodeID, heartbeatpb.Watermark{
+			CheckpointTs: 100,
+			ResolvedTs:   100,
+		})
+
+		newWatermark, canUpdate := m.calculateNewCheckpointTs()
+
+		require.True(t, canUpdate)
+		require.NotNil(t, newWatermark)
+		require.Equal(t, uint64(10), newWatermark.CheckpointTs)
+		require.Equal(t, uint64(10), newWatermark.ResolvedTs)
+	})
 }
 
 func TestMaintainerCalCheckpointTsSkipsInvalidGlobalCheckpoint(t *testing.T) {
@@ -680,6 +726,7 @@ func newMaintainerForCheckpointCalculationTest(t testing.TB) (*Maintainer, node.
 		changefeedID:          cfID,
 		selfNode:              selfNode,
 		controller:            controller,
+		ddlSpan:               ddlSpan,
 		pdClock:               pdutil.NewClock4Test(),
 		bootstrapper:          bootstrapper,
 		checkpointTsByCapture: newWatermarkCaptureMap(),

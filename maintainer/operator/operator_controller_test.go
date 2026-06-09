@@ -273,8 +273,10 @@ func TestController_RemoveReplicaSet_ReplacesRemoveOperatorOnTaskRemoved(t *test
 }
 
 func TestController_QuiesceExceptFreezesNonAllowedOperators(t *testing.T) {
-	// The controller is quiesced with one allowed dispatcher; only that dispatcher should keep
-	// accepting status, scheduling, and checkpoint participation while all other work is frozen.
+	// Scenario: removing mode allows only the DDL close operator to keep running.
+	// Steps: quiesce the controller with one allowed dispatcher, then verify the
+	// allowed operator still accepts status and schedules, while the frozen operator
+	// does not run but still blocks checkpoint advancement.
 	messageCenter := messaging.NewMockMessageCenter()
 	appcontext.SetService(appcontext.MessageCenter, messageCenter)
 
@@ -283,6 +285,12 @@ func TestController_QuiesceExceptFreezesNonAllowedOperators(t *testing.T) {
 
 	allowedID := common.NewDispatcherID()
 	allowedReplica := setupReplicaSetWithID(t, changefeedID, allowedID, nodeA)
+	allowedReplica.UpdateStatus(&heartbeatpb.TableSpanStatus{
+		ID:              allowedID.ToPB(),
+		ComponentStatus: heartbeatpb.ComponentState_Working,
+		CheckpointTs:    20,
+		Mode:            common.DefaultMode,
+	})
 	spanController.AddReplicatingSpan(allowedReplica)
 
 	blockedID := common.NewDispatcherID()
@@ -323,6 +331,38 @@ func TestController_QuiesceExceptFreezesNonAllowedOperators(t *testing.T) {
 	require.Equal(t, int32(0), blockedOp.scheduleCount.Load())
 	require.Len(t, messageCenter.GetMessageChannel(), 1)
 	require.Equal(t, 2, oc.OperatorSize())
+}
+
+func TestController_QuiesceExceptDropsBlockedOnlyQueueFromExecution(t *testing.T) {
+	// Scenario: after removing starts, the running queue can contain only frozen ordinary operators.
+	// Steps: poll a quiesced controller with one non-allowed operator and verify it leaves the heap,
+	// remains in the operator map for checkpoint safety, and the next poll terminates the Execute loop.
+	messageCenter := messaging.NewMockMessageCenter()
+	appcontext.SetService(appcontext.MessageCenter, messageCenter)
+
+	spanController, changefeedID, replicaSet, nodeA, _ := setupTestEnvironment(t)
+	spanController.AddReplicatingSpan(replicaSet)
+
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+	setAliveNodes(nodeManager, map[node.ID]*node.Info{nodeA: {ID: nodeA}})
+
+	oc := NewOperatorController(changefeedID, spanController, 10, common.DefaultMode)
+	blockedOp := &countingOperator{id: replicaSet.ID, targetNode: nodeA, blockTsForward: true}
+	require.True(t, oc.AddOperator(blockedOp))
+
+	oc.QuiesceExcept(common.NewDispatcherID())
+
+	op, next := oc.pollQueueingOperator()
+	require.Nil(t, op)
+	require.True(t, next)
+	require.Equal(t, 0, oc.runningQueue.Len())
+	require.Equal(t, 1, oc.OperatorSize())
+	require.Equal(t, uint64(1000), oc.GetMinCheckpointTs(^uint64(0)))
+
+	op, next = oc.pollQueueingOperator()
+	require.Nil(t, op)
+	require.False(t, next)
+	require.Equal(t, int32(0), blockedOp.scheduleCount.Load())
 }
 
 func setupReplicaSetWithID(

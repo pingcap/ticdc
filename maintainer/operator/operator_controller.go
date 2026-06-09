@@ -299,9 +299,6 @@ func (oc *Controller) GetMinCheckpointTs(minCheckpointTs uint64) uint64 {
 	ops := oc.GetAllOperators()
 
 	for _, op := range ops {
-		if !oc.isOperatorAllowed(op.ID()) {
-			continue
-		}
 		if op.BlockTsForward() {
 			spanReplication := oc.spanController.GetTaskByID(op.ID())
 			if spanReplication == nil {
@@ -333,10 +330,9 @@ func (oc *Controller) pollQueueingOperator() (
 	opID := op.ID()
 	oc.mu.Unlock()
 	if !oc.isOperatorAllowed(opID) {
-		oc.mu.Lock()
-		item.NotifyAt = time.Now().Add(time.Millisecond * 500)
-		heap.Push(&oc.runningQueue, item)
-		oc.mu.Unlock()
+		// Quiescing is terminal for the old maintainer. Frozen ordinary operators must
+		// stop executing, but they stay in operators so GetMinCheckpointTs still applies
+		// their checkpoint safety constraints until the maintainer is closed.
 		return nil, true
 	}
 	if item.IsRemoved.Load() {
