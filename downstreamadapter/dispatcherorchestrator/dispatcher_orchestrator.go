@@ -252,7 +252,7 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 		// Reconcile table trigger dispatchers for maintainer migration and
 		// same-node higher-epoch takeover. The latter keeps the existing
 		// DispatcherManager but the new Maintainer owns fresh trigger IDs.
-		err = manager.EnsureTableTriggerEventDispatcher(
+		ready, err := manager.EnsureTableTriggerEventDispatcher(
 			req.TableTriggerEventDispatcherId,
 			req.StartTs,
 			false,
@@ -263,7 +263,11 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 			manager.MaintainerFenceMu.Unlock()
 			return m.handleDispatcherError(from, req.ChangefeedID, maintainerEpoch, err)
 		}
-		err = manager.EnsureTableTriggerRedoDispatcher(
+		if !ready {
+			manager.MaintainerFenceMu.Unlock()
+			return nil
+		}
+		ready, err = manager.EnsureTableTriggerRedoDispatcher(
 			req.TableTriggerRedoDispatcherId,
 			req.StartTs,
 			false,
@@ -273,6 +277,10 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 				zap.Stringer("changefeedID", cfId), zap.Error(err))
 			manager.MaintainerFenceMu.Unlock()
 			return m.handleDispatcherError(from, req.ChangefeedID, maintainerEpoch, err)
+		}
+		if !ready {
+			manager.MaintainerFenceMu.Unlock()
+			return nil
 		}
 	}
 

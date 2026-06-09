@@ -266,17 +266,7 @@ func removeDispatcher[T dispatcher.Dispatcher](e *DispatcherManager,
 			}
 		}
 
-		// Submit async remove task to thread pool
-		task := &RemoveDispatcherTask{
-			manager:        e,
-			dispatcherItem: dispatcherItem,
-			retryCount:     0,
-		}
-		scheduler := GetRemoveDispatcherTaskScheduler()
-		taskHandle := scheduler.Submit(task, time.Now())
-
-		// Save taskHandle for later cancellation
-		e.removeTaskHandles.Store(id, taskHandle)
+		e.submitRemoveDispatcherTask(dispatcherItem)
 
 		dispatcherItem.SetTryRemoving()
 
@@ -294,6 +284,17 @@ func removeDispatcher[T dispatcher.Dispatcher](e *DispatcherManager,
 			Seq: dispatcherMap.GetSeq(),
 		}
 	}
+}
+
+func (e *DispatcherManager) submitRemoveDispatcherTask(dispatcherItem dispatcher.Dispatcher) {
+	task := &RemoveDispatcherTask{
+		manager:        e,
+		dispatcherItem: dispatcherItem,
+		retryCount:     0,
+	}
+	scheduler := GetRemoveDispatcherTaskScheduler()
+	taskHandle := scheduler.Submit(task, time.Now())
+	e.removeTaskHandles.Store(dispatcherItem.GetId(), taskHandle)
 }
 
 // closeAllDispatchers is called when the event dispatcher manager is closing

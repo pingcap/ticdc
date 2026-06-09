@@ -131,44 +131,54 @@ func (e *DispatcherManager) NewTableTriggerRedoDispatcher(id *heartbeatpb.Dispat
 }
 
 // EnsureTableTriggerRedoDispatcher keeps redo DDL dispatchers in sync with the
-// maintainer owner chosen by the bootstrap request.
+// maintainer owner chosen by the bootstrap request. It returns ready=false when
+// the old trigger is still draining and the caller must retry later.
 func (e *DispatcherManager) EnsureTableTriggerRedoDispatcher(
 	id *heartbeatpb.DispatcherID,
 	startTs uint64,
 	newChangefeed bool,
-) error {
+) (bool, error) {
 	if id == nil {
-		return nil
+		return true, nil
 	}
 	expectedID := common.NewDispatcherIDFromPB(id)
 	existing := e.GetTableTriggerRedoDispatcher()
 	if existing == nil {
-		return e.NewTableTriggerRedoDispatcher(id, startTs, newChangefeed)
+		return true, e.NewTableTriggerRedoDispatcher(id, startTs, newChangefeed)
 	}
 	if existing.GetId() == expectedID {
-		return nil
+		return true, nil
 	}
 
 	replacementStartTs := existing.GetStartTs()
-	e.removeTableTriggerRedoDispatcher(existing)
-	return e.NewTableTriggerRedoDispatcher(id, replacementStartTs, newChangefeed)
+	if !e.removeTableTriggerRedoDispatcherForReplacement(existing) {
+		return false, nil
+	}
+	return true, e.NewTableTriggerRedoDispatcher(id, replacementStartTs, newChangefeed)
 }
 
-func (e *DispatcherManager) removeTableTriggerRedoDispatcher(d *dispatcher.RedoDispatcher) {
+func (e *DispatcherManager) removeTableTriggerRedoDispatcherForReplacement(d *dispatcher.RedoDispatcher) bool {
+	if d.GetTryRemoving() {
+		return false
+	}
 	appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).RemoveDispatcher(d)
 	if redoMeta := d.GetRedoMeta(); redoMeta != nil {
 		redoMeta.CleanupMetrics()
 	}
-	d.TryClose()
+	d.SetTryRemoving()
+	if _, ok := d.TryClose(); !ok {
+		e.submitRemoveDispatcherTask(d)
+		log.Info("waiting for table trigger redo dispatcher to close before replacement",
+			zap.Stringer("changefeedID", e.changefeedID),
+			zap.Stringer("dispatcherID", d.GetId()))
+		return false
+	}
 	d.Remove()
-	e.redoDispatcherMap.Delete(d.GetId())
-	e.redoSchemaIDToDispatchers.Delete(d.GetSchemaID(), d.GetId())
-	e.currentOperatorMap.Delete(d.GetId())
-	e.SetTableTriggerRedoDispatcher(nil)
-	e.metricTableTriggerRedoDispatcherCount.Dec()
+	e.cleanRedoDispatcher(d.GetId(), d.GetSchemaID())
 	log.Info("replaced table trigger redo dispatcher",
 		zap.Stringer("changefeedID", e.changefeedID),
 		zap.Stringer("dispatcherID", d.GetId()))
+	return true
 }
 
 func (e *DispatcherManager) getRedoEventCollectorBatchCountAndBytes(redoSink *redo.Sink) (int, int) {

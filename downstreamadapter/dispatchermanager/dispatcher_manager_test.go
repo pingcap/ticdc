@@ -146,6 +146,53 @@ func createTestManager(t *testing.T) *DispatcherManager {
 	return manager
 }
 
+func TestEnsureTableTriggerEventDispatcherWaitsForSafeClose(t *testing.T) {
+	manager := createTestManager(t)
+	manager.config.SinkConfig = config.GetDefaultReplicaConfig().Sink
+	manager.metricTableTriggerEventDispatcherCount = metrics.TableTriggerEventDispatcherGauge.WithLabelValues(
+		manager.changefeedID.Keyspace(),
+		manager.changefeedID.Name(),
+		"eventDispatcher",
+	)
+	manager.metricCreateDispatcherDuration = metrics.CreateDispatcherDuration.WithLabelValues(
+		manager.changefeedID.Keyspace(),
+		manager.changefeedID.Name(),
+		"eventDispatcher",
+	)
+	heartbeatCollector := NewHeartBeatCollector(node.ID("receiver"))
+	heartbeatCollector.Run(context.Background())
+	appcontext.SetService(appcontext.HeartbeatCollector, heartbeatCollector)
+	t.Cleanup(heartbeatCollector.Close)
+
+	oldTriggerID := common.NewDispatcherID()
+	newTriggerID := common.NewDispatcherID()
+	require.NoError(t, manager.NewTableTriggerEventDispatcher(oldTriggerID.ToPB(), 100, false))
+	t.Cleanup(func() {
+		manager.closed.Store(true)
+	})
+
+	oldTrigger := manager.GetTableTriggerEventDispatcher()
+	dml := event.NewDMLEvent(oldTriggerID, 0, 101, 102, nil)
+	dml.Length = 1
+	nodeID := node.NewID()
+	require.True(t, oldTrigger.HandleEvents(
+		[]dispatcher.DispatcherEvent{
+			dispatcher.NewDispatcherEvent(&nodeID, dml),
+		},
+		func() {},
+	))
+
+	ready, err := manager.EnsureTableTriggerEventDispatcher(newTriggerID.ToPB(), 200, false)
+	require.NoError(t, err)
+	require.False(t, ready)
+	require.Equal(t, oldTriggerID, manager.GetTableTriggerEventDispatcher().GetId())
+	require.True(t, manager.GetTableTriggerEventDispatcher().GetTryRemoving())
+	_, oldExists := manager.GetDispatcherMap().Get(oldTriggerID)
+	require.True(t, oldExists)
+	_, newExists := manager.GetDispatcherMap().Get(newTriggerID)
+	require.False(t, newExists)
+}
+
 func TestCollectComponentStatusWhenChangedWatermarkSeqNoFallback(t *testing.T) {
 	manager := createTestManager(t)
 

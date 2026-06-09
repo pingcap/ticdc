@@ -403,30 +403,36 @@ func (e *DispatcherManager) NewTableTriggerEventDispatcher(id *heartbeatpb.Dispa
 // EnsureTableTriggerEventDispatcher makes the existing manager match the
 // bootstrap request's table trigger dispatcher ID. A same-node higher-epoch
 // maintainer replacement creates a new DDL span, so keeping the old trigger ID
-// would make post-bootstrap reject the new maintainer.
+// would make post-bootstrap reject the new maintainer. It returns ready=false
+// when the old trigger is still draining and the caller must retry later.
 func (e *DispatcherManager) EnsureTableTriggerEventDispatcher(
 	id *heartbeatpb.DispatcherID,
 	startTs uint64,
 	newChangefeed bool,
-) error {
+) (bool, error) {
 	if id == nil {
-		return nil
+		return true, nil
 	}
 	expectedID := common.NewDispatcherIDFromPB(id)
 	existing := e.GetTableTriggerEventDispatcher()
 	if existing == nil {
-		return e.NewTableTriggerEventDispatcher(id, startTs, newChangefeed)
+		return true, e.NewTableTriggerEventDispatcher(id, startTs, newChangefeed)
 	}
 	if existing.GetId() == expectedID {
-		return nil
+		return true, nil
 	}
 
 	replacementStartTs := existing.GetStartTs()
-	e.removeTableTriggerEventDispatcher(existing)
-	return e.NewTableTriggerEventDispatcher(id, replacementStartTs, newChangefeed)
+	if !e.removeTableTriggerEventDispatcherForReplacement(existing) {
+		return false, nil
+	}
+	return true, e.NewTableTriggerEventDispatcher(id, replacementStartTs, newChangefeed)
 }
 
-func (e *DispatcherManager) removeTableTriggerEventDispatcher(d *dispatcher.EventDispatcher) {
+func (e *DispatcherManager) removeTableTriggerEventDispatcherForReplacement(d *dispatcher.EventDispatcher) bool {
+	if d.GetTryRemoving() {
+		return false
+	}
 	appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).RemoveDispatcher(d)
 	needCheckpointUpdates := commonEvent.NeedTableNameStoreAndCheckpointTs(
 		e.sink.SinkType() == common.MysqlSinkType,
@@ -439,16 +445,20 @@ func (e *DispatcherManager) removeTableTriggerEventDispatcher(d *dispatcher.Even
 				zap.Error(err))
 		}
 	}
-	d.TryClose()
+	d.SetTryRemoving()
+	if _, ok := d.TryClose(); !ok {
+		e.submitRemoveDispatcherTask(d)
+		log.Info("waiting for table trigger event dispatcher to close before replacement",
+			zap.Stringer("changefeedID", e.changefeedID),
+			zap.Stringer("dispatcherID", d.GetId()))
+		return false
+	}
 	d.Remove()
-	e.dispatcherMap.Delete(d.GetId())
-	e.schemaIDToDispatchers.Delete(d.GetSchemaID(), d.GetId())
-	e.currentOperatorMap.Delete(d.GetId())
-	e.SetTableTriggerEventDispatcher(nil)
-	e.metricTableTriggerEventDispatcherCount.Dec()
+	e.cleanEventDispatcher(d.GetId(), d.GetSchemaID())
 	log.Info("replaced table trigger event dispatcher",
 		zap.Stringer("changefeedID", e.changefeedID),
 		zap.Stringer("dispatcherID", d.GetId()))
+	return true
 }
 
 func (e *DispatcherManager) InitalizeTableTriggerEventDispatcher(schemaInfo []*heartbeatpb.SchemaInfo) error {
