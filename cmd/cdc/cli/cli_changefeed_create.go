@@ -164,7 +164,7 @@ func (o *createChangefeedOptions) completeReplicaCfg() error {
 	// storage I/O checks here and keep validation in cdc server.
 	cfg.EnableRedoIOCheck = putil.AddressOf(false)
 
-	if o.syncPoint {
+	if o.syncPoint || o.syncInterval != 0 {
 		cfg.EnableSyncPoint = putil.AddressOf(true)
 	}
 	if o.syncInterval != 0 {
