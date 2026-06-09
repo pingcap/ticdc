@@ -246,7 +246,8 @@ func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath 
 		if inErr != nil {
 			return 0, 0, inErr
 		}
-		defer func() {
+
+		closeWriter := func() error {
 			closeErr := writer.Close(ctx)
 			if closeErr != nil {
 				log.Warn("failed to close writer",
@@ -256,8 +257,13 @@ func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath 
 					zap.Int("shardID", d.shardID),
 					zap.Error(closeErr))
 			}
-		}()
+			return closeErr
+		}
 		if _, retErr = writer.Write(ctx, payload.data); retErr != nil {
+			_ = closeWriter()
+			return 0, 0, retErr
+		}
+		if retErr = closeWriter(); retErr != nil {
 			return 0, 0, retErr
 		}
 		return payload.rowsCount, payload.nBytes, nil

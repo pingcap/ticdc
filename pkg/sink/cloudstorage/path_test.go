@@ -299,6 +299,39 @@ func TestGenerateDataFilePathResyncIndexFile(t *testing.T) {
 	require.Equal(t, fmt.Sprintf("test/table1/5/CDC_%s_000003.json", dispatcherID.String()), dataFilePath)
 }
 
+func TestGenerateDataFilePathReconcilesStaleIndexFile(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+
+	dir := t.TempDir()
+	f := testFilePathGenerator(ctx, t, dir)
+
+	dispatcherID := commonType.NewDispatcherID()
+	table := VersionedTableName{
+		TableNameWithPhysicTableID: commonType.TableName{
+			Schema: "test",
+			Table:  "table1",
+		},
+		TableInfoVersion: 5,
+		DispatcherID:     dispatcherID,
+	}
+	f.versionMap[table] = table.TableInfoVersion
+
+	date := ""
+	firstDataFile := fmt.Sprintf("test/table1/5/CDC_%s_000001.json", dispatcherID.String())
+	secondDataFile := fmt.Sprintf("test/table1/5/CDC_%s_000002.json", dispatcherID.String())
+	indexFilePath, err := f.GenerateIndexFilePath(table, date)
+	require.NoError(t, err)
+	require.NoError(t, f.storage.WriteFile(ctx, firstDataFile, []byte("test1")))
+	require.NoError(t, f.storage.WriteFile(ctx, secondDataFile, []byte("test2")))
+	require.NoError(t, f.storage.WriteFile(ctx, indexFilePath, fmt.Appendf(nil, "CDC_%s_000001.json\n", dispatcherID.String())))
+
+	dataFilePath, err := f.GenerateDataFilePath(ctx, table, date)
+	require.NoError(t, err)
+	require.Equal(t, fmt.Sprintf("test/table1/5/CDC_%s_000003.json", dispatcherID.String()), dataFilePath)
+}
+
 func TestIsSchemaFile(t *testing.T) {
 	t.Parallel()
 

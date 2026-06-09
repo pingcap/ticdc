@@ -409,27 +409,29 @@ func (f *FilePathGenerator) GenerateDataFilePath(
 		f.fileIndex[tbl].prevDate = f.fileIndex[tbl].currDate
 		f.fileIndex[tbl].index = 0
 	}
-	f.fileIndex[tbl].index++
-	name := generateDataFileName(f.config.EnableTableAcrossNodes, tbl.DispatcherID.String(), f.fileIndex[tbl].index, f.extension, f.config.FileIndexWidth)
-	dataFile := path.Join(dir, name)
-	exist, err := f.storage.FileExists(ctx, dataFile)
-	if err != nil {
-		return "", err
+	for {
+		f.fileIndex[tbl].index++
+		name := generateDataFileName(f.config.EnableTableAcrossNodes, tbl.DispatcherID.String(), f.fileIndex[tbl].index, f.extension, f.config.FileIndexWidth)
+		dataFile := path.Join(dir, name)
+		exist, err := f.storage.FileExists(ctx, dataFile)
+		if err != nil {
+			return "", err
+		}
+		if !exist {
+			return dataFile, nil
+		}
+		if newIndexFile {
+			log.Warn("the data file exists and the index file is stale",
+				zap.String("keyspace", f.changefeedID.Keyspace()),
+				zap.String("changefeedID", f.changefeedID.Name()),
+				zap.Any("versionedTableName", tbl),
+				zap.String("dataFile", dataFile))
+			newIndexFile = false
+		}
+		// Avoid listing the whole object directory. In the normal partial-success
+		// case only the next candidate exists, so one more existence probe moves
+		// us past the orphan data file.
 	}
-	if !exist {
-		return dataFile, nil
-	}
-	if newIndexFile {
-		log.Warn("the data file exists and the index file is stale",
-			zap.String("keyspace", f.changefeedID.Keyspace()),
-			zap.String("changefeedID", f.changefeedID.Name()),
-			zap.Any("versionedTableName", tbl),
-			zap.String("dataFile", dataFile))
-	}
-	// if the file already exists, which means the fileIndex is stale,
-	// we need to delete the file index in memory and re-generate the file path with the updated file index until we find a non-existing file path.
-	delete(f.fileIndex, tbl)
-	return f.GenerateDataFilePath(ctx, tbl, date)
 }
 
 func (f *FilePathGenerator) generateDataDirPath(tbl VersionedTableName, date string) (string, error) {
