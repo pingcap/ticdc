@@ -223,57 +223,6 @@ func (m *mockMaintainerManager) sendHeartbeat() {
 	}
 }
 
-type maintainNode struct {
-	cancel  context.CancelFunc
-	mc      messaging.MessageCenter
-	manager *mockMaintainerManager
-	wg      sync.WaitGroup
-}
-
-func (d *maintainNode) stop() {
-	d.cancel()
-	d.wg.Wait()
-	d.mc.Close()
-}
-
-func newMaintainerNodeForTest(t *testing.T) (*node.Info, net.Listener) {
-	t.Helper()
-
-	lis, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-
-	return node.NewInfo(lis.Addr().String(), ""), lis
-}
-
-func startMaintainerNode(ctx context.Context,
-	node *node.Info, mc messaging.MessageCenter,
-	nodeManager *watcher.NodeManager,
-	lis net.Listener,
-) *maintainNode {
-	nodeManager.RegisterNodeChangeHandler(node.ID, mc.OnNodeChanges)
-	ctx, cancel := context.WithCancel(ctx)
-	maintainerM := NewMaintainerManager(mc)
-	res := &maintainNode{
-		cancel:  cancel,
-		mc:      mc,
-		manager: maintainerM,
-	}
-	res.wg.Add(1)
-	go func() {
-		defer res.wg.Done()
-		var opts []grpc.ServerOption
-		grpcServer := grpc.NewServer(opts...)
-		mcs := messaging.NewMessageCenterServer(mc)
-		proto.RegisterMessageServiceServer(grpcServer, mcs)
-		go func() {
-			_ = grpcServer.Serve(lis)
-		}()
-		_ = maintainerM.Run(ctx)
-		grpcServer.Stop()
-	}()
-	return res
-}
-
 type mockEtcdClient struct {
 	ownerID string
 	etcd.CDCEtcdClient
@@ -713,11 +662,6 @@ type maintainNode struct {
 	manager *mockMaintainerManager
 }
 
-func (d *maintainNode) stop() {
-	d.mc.Close()
-	d.cancel()
-}
-
 func startMaintainerNode(ctx context.Context,
 	node *node.Info, mc messaging.MessageCenter,
 	nodeManager *watcher.NodeManager,
@@ -745,6 +689,7 @@ func startMaintainerNode(ctx context.Context,
 		mc:      mc,
 		manager: maintainerM,
 	}
+}
 
 func TestIsUnchangedRuntimeStateIgnoresRunningErrorTime(t *testing.T) {
 	errTime := time.Unix(1, 0)
