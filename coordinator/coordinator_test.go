@@ -707,7 +707,6 @@ func TestConcurrentStopAndSendEvents(t *testing.T) {
 	require.True(t, co.closed.Load())
 }
 
-<<<<<<< HEAD
 type maintainNode struct {
 	cancel  context.CancelFunc
 	mc      messaging.MessageCenter
@@ -746,7 +745,7 @@ func startMaintainerNode(ctx context.Context,
 		mc:      mc,
 		manager: maintainerM,
 	}
-=======
+
 func TestIsUnchangedRuntimeStateIgnoresRunningErrorTime(t *testing.T) {
 	errTime := time.Unix(1, 0)
 	info := &config.ChangeFeedInfo{
@@ -774,7 +773,6 @@ func TestIsUnchangedRuntimeStateIgnoresRunningErrorTime(t *testing.T) {
 	}))
 	require.False(t, isUnchangedRuntimeState(info, config.StateFailed, info.Error))
 	require.False(t, isUnchangedRuntimeState(info, config.StateWarning, nil))
->>>>>>> 5c806201f (coordinator: reduce etcd pressure when many changefeeds enter warning  (#4997))
 }
 
 func TestHandleStateChangeSkipsDuplicateRuntimeStatePersistence(t *testing.T) {
