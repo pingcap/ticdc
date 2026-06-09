@@ -90,7 +90,7 @@ func (b *bootstrapWorker) run(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-sendTicker.C:
-			b.activeTables.Range(func(key, value interface{}) bool {
+			b.activeTables.Range(func(_, value interface{}) bool {
 				table := value.(*tableStatistic)
 				err = b.sendBootstrapMsg(ctx, table)
 				return err == nil

@@ -139,8 +139,24 @@ func (b *BlockEventStatus) actionMatchs(action *heartbeatpb.DispatcherAction) bo
 		return false
 	}
 
+	return b.blockCommitTs == action.CommitTs
+}
+
+// ignoredStatusMatches checks whether the ignored status is for the current pending ddl/sync point event.
+func (b *BlockEventStatus) ignoredStatusMatches(ignored *heartbeatpb.IgnoredBlockStatus) bool {
+	b.mutex.Lock()
+	defer b.mutex.Unlock()
+
+	if b.blockPendingEvent == nil {
+		return false
+	}
+
+	if b.blockStage != heartbeatpb.BlockStage_WAITING {
+		return false
+	}
+
 	pendingIsSyncPoint := b.blockPendingEvent.GetType() == commonEvent.TypeSyncPointEvent
-	return b.blockCommitTs == action.CommitTs && pendingIsSyncPoint == action.IsSyncPoint
+	return b.blockCommitTs == ignored.CommitTs && pendingIsSyncPoint == ignored.IsSyncPoint
 }
 
 func (b *BlockEventStatus) getEventCommitTs() (uint64, bool) {
@@ -245,11 +261,18 @@ type HeartBeatInfo struct {
 	IsRemoving      bool
 }
 
-// ResendTask is responsible for periodically resending the TableSpanBlockStatus message to the maintainer.
+// blockStatusOfferer is the minimal dispatcher surface needed by resend tasks.
+// Keeping it narrow avoids reintroducing a broader unified block-status API.
+type blockStatusOfferer interface {
+	GetId() common.DispatcherID
+	offerBlockStatus(status *heartbeatpb.TableSpanBlockStatus)
+}
+
+// ResendTask is responsible for periodically resending the block status to the maintainer.
 // The task will be cancelled when the dispatcher receives the ACK message from the maintainer.
 type ResendTask struct {
+	dispatcher   blockStatusOfferer
 	message      *heartbeatpb.TableSpanBlockStatus
-	dispatcher   Dispatcher
 	callback     func() // function need to be called when the task is cancelled
 	taskHandle   *threadpool.TaskHandle
 	executeCount uint64
@@ -257,31 +280,35 @@ type ResendTask struct {
 
 const resendTimeInterval = 5 * time.Second
 
-func newResendTask(message *heartbeatpb.TableSpanBlockStatus, dispatcher Dispatcher, callback func()) *ResendTask {
+// newResendTask registers a periodic resend immediately so the first retry is
+// scheduled with the same immutable protobuf object the initial send used.
+func newResendTask(dispatcher blockStatusOfferer, message *heartbeatpb.TableSpanBlockStatus, callback func()) *ResendTask {
 	taskScheduler := GetDispatcherTaskScheduler()
 	t := &ResendTask{
-		message:    message,
 		dispatcher: dispatcher,
+		message:    message,
 		callback:   callback,
 	}
 	t.taskHandle = taskScheduler.Submit(t, time.Now().Add(resendTimeInterval))
 	return t
 }
 
+// Execute resends the original protobuf object without rebuilding payload so
+// WAITING/NONE retries stay allocation-light and byte-for-byte consistent.
 func (t *ResendTask) Execute() time.Time {
-	log.Debug("resend task", zap.Any("message", t.message), zap.Any("dispatcherID", t.dispatcher.GetId()))
-	t.dispatcher.GetBlockStatusesChan() <- t.message
+	log.Debug("resend task", zap.Any("dispatcherID", t.dispatcher.GetId()))
+	t.dispatcher.offerBlockStatus(t.message)
 
 	executeCount := atomic.AddUint64(&t.executeCount, 1)
 	if executeCount%10 == 0 {
 		log.Info("resend task periodic resend",
 			zap.Any("dispatcherID", t.dispatcher.GetId()),
-			zap.Any("message", t.message),
 			zap.Uint64("executeCount", executeCount))
 	}
 	return time.Now().Add(resendTimeInterval)
 }
 
+// Cancel stops future retries and runs the optional completion callback once.
 func (t *ResendTask) Cancel() {
 	if t.callback != nil {
 		t.callback()

@@ -73,7 +73,7 @@ func newDDLProducers(
 		producerCacheSize = int(*sinkConfig.PulsarConfig.PulsarProducerCacheSize)
 	}
 
-	producers, err := lru.NewWithEvict(producerCacheSize, func(key interface{}, value interface{}) {
+	producers, err := lru.NewWithEvict(producerCacheSize, func(_ interface{}, value interface{}) {
 		// remove producer
 		pulsarProducer, ok := value.(pulsarClient.Producer)
 		if ok && pulsarProducer != nil {
@@ -161,6 +161,9 @@ func (p *ddlProducers) getProducerByTopic(topicName string) (producer pulsarClie
 
 // Close all producers
 func (p *ddlProducers) close() {
+	if p == nil {
+		return
+	}
 	keys := p.producers.Keys()
 
 	p.producersMutex.Lock()

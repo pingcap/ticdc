@@ -145,7 +145,7 @@ func newDispatcherStat(
 		scanWorkerIndex:    (common.GID)(id).Hash(scanWorkerCount),
 		messageWorkerIndex: (common.GID)(id).Hash(messageWorkerCount),
 		info:               info,
-		filter:             info.GetFilter(),
+		filter:             changefeedStatus.filter,
 		startTs:            info.GetStartTs(),
 		epoch:              info.GetEpoch(),
 		startTableInfo:     startTableInfo,
@@ -327,14 +327,6 @@ func (w *wrapEvent) reset() {
 	wrapEventPool.Put(w)
 }
 
-func (w *wrapEvent) getDispatcherID() common.DispatcherID {
-	e, ok := w.e.(pevent.Event)
-	if !ok {
-		log.Panic("cast event failed", zap.Any("event", w.e))
-	}
-	return e.GetDispatcherID()
-}
-
 func newWrapHandshakeEvent(serverID node.ID, e pevent.HandshakeEvent) *wrapEvent {
 	w := getWrapEvent()
 	w.serverID = serverID
@@ -423,38 +415,28 @@ func (c *resolvedTsCache) reset() {
 
 type changefeedStatus struct {
 	changefeedID common.ChangeFeedID
+	filter       filter.Filter
 
 	dispatchers sync.Map // common.DispatcherID -> *atomic.Pointer[dispatcherStat]
 
 	availableMemoryQuota sync.Map // nodeID -> atomic.Uint64 (memory quota in bytes)
 	minSentTs            atomic.Uint64
 	scanInterval         atomic.Int64
+	reportBandState      atomic.Int32
+	fastBandState        atomic.Int32
+	slowBandState        atomic.Int32
 
-	lastAdjustTime      atomic.Time
-	lastTrendAdjustTime atomic.Time
-	usageWindow         *memoryUsageWindow
-	syncPointInterval   time.Duration
-	// syncPointPreparingTs is the globally selected syncpoint ts in prepare stage.
-	// 0 means there is no pending syncpoint preparation.
-	syncPointPreparingTs atomic.Uint64
-	// syncPointInFlightTs tracks the commit-stage syncpoint ts that is waiting for all
-	// active dispatchers to advance nextSyncPoint beyond it.
-	// 0 means there is no in-flight syncpoint in commit stage.
-	syncPointInFlightTs atomic.Uint64
-	// syncPointStateMu serializes transitions between prepare/commit stages so
-	// syncPointPreparingTs and syncPointInFlightTs stay consistent.
-	syncPointStateMu sync.Mutex
+	scanWindowController *adaptiveScanWindowController
+	syncPointInterval    time.Duration
 }
 
 func newChangefeedStatus(changefeedID common.ChangeFeedID, syncPointInterval time.Duration) *changefeedStatus {
 	status := &changefeedStatus{
-		changefeedID:      changefeedID,
-		usageWindow:       newMemoryUsageWindow(memoryUsageWindowDuration),
-		syncPointInterval: syncPointInterval,
+		changefeedID:         changefeedID,
+		scanWindowController: newAdaptiveScanWindowController(time.Now()),
+		syncPointInterval:    syncPointInterval,
 	}
 	status.scanInterval.Store(int64(defaultScanInterval))
-	status.lastAdjustTime.Store(time.Now())
-	status.lastTrendAdjustTime.Store(time.Now())
 
 	return status
 }
@@ -478,112 +460,4 @@ func (c *changefeedStatus) isEmpty() bool {
 
 func (c *changefeedStatus) isSyncpointEnabled() bool {
 	return c.syncPointInterval > 0
-}
-
-func (c *changefeedStatus) getSyncPointPreparingTs() uint64 {
-	return c.syncPointPreparingTs.Load()
-}
-
-// tryEnterSyncPointPrepare tries to enter syncpoint prepare stage for candidateTs.
-// If a prepare ts already exists, the same ts is accepted, and a smaller ts can
-// replace it before commit stage starts.
-func (c *changefeedStatus) tryEnterSyncPointPrepare(candidateTs uint64) bool {
-	if candidateTs == 0 {
-		return false
-	}
-	c.syncPointStateMu.Lock()
-	defer c.syncPointStateMu.Unlock()
-
-	preparingTs := c.syncPointPreparingTs.Load()
-	switch {
-	case preparingTs == 0:
-		c.syncPointPreparingTs.Store(candidateTs)
-		return true
-	case preparingTs == candidateTs:
-		return true
-	case c.syncPointInFlightTs.Load() != 0:
-		return false
-	case candidateTs < preparingTs:
-		c.syncPointPreparingTs.Store(candidateTs)
-		return true
-	default:
-		return false
-	}
-}
-
-// isSyncPointInCommitStage returns whether commitTs is in commit stage and can be emitted now.
-func (c *changefeedStatus) isSyncPointInCommitStage(commitTs uint64) bool {
-	return commitTs > 0 &&
-		c.syncPointPreparingTs.Load() == commitTs &&
-		c.syncPointInFlightTs.Load() == commitTs
-}
-
-// tryPromoteSyncPointToCommitIfReady promotes prepare stage to commit stage when all active
-// dispatchers have sentResolvedTs >= preparingTs.
-func (c *changefeedStatus) tryPromoteSyncPointToCommitIfReady() {
-	c.syncPointStateMu.Lock()
-	defer c.syncPointStateMu.Unlock()
-
-	preparingTs := c.syncPointPreparingTs.Load()
-	if preparingTs == 0 || c.syncPointInFlightTs.Load() != 0 {
-		return
-	}
-
-	hasEligible := false
-	ready := true
-	c.dispatchers.Range(func(_ any, value any) bool {
-		dispatcher := value.(*atomic.Pointer[dispatcherStat]).Load()
-		if dispatcher == nil || dispatcher.isRemoved.Load() || dispatcher.seq.Load() == 0 {
-			return true
-		}
-		hasEligible = true
-		if dispatcher.sentResolvedTs.Load() < preparingTs {
-			ready = false
-			return false
-		}
-		return true
-	})
-	if !hasEligible || !ready {
-		return
-	}
-
-	c.syncPointInFlightTs.Store(preparingTs)
-}
-
-// tryFinishSyncPointCommitIfAllEmitted finishes current commit stage when all active dispatchers
-// have advanced nextSyncPoint beyond inFlightTs and checkpointTs beyond inFlightTs.
-// nextSyncPoint progression only proves event-broker emission, while checkpoint progression
-// confirms downstream has moved past the in-flight syncpoint barrier.
-func (c *changefeedStatus) tryFinishSyncPointCommitIfAllEmitted() {
-	c.syncPointStateMu.Lock()
-	defer c.syncPointStateMu.Unlock()
-
-	inFlightTs := c.syncPointInFlightTs.Load()
-	if inFlightTs == 0 {
-		return
-	}
-
-	canAdvance := true
-	c.dispatchers.Range(func(_ any, value any) bool {
-		dispatcher := value.(*atomic.Pointer[dispatcherStat]).Load()
-		if dispatcher == nil || dispatcher.isRemoved.Load() || dispatcher.seq.Load() == 0 {
-			return true
-		}
-		if dispatcher.nextSyncPoint.Load() <= inFlightTs {
-			canAdvance = false
-			return false
-		}
-		if dispatcher.checkpointTs.Load() <= inFlightTs {
-			canAdvance = false
-			return false
-		}
-		return true
-	})
-
-	if canAdvance {
-		c.syncPointInFlightTs.Store(0)
-		if c.syncPointPreparingTs.Load() == inFlightTs {
-			c.syncPointPreparingTs.Store(0)
-		}
-	}
 }

@@ -184,10 +184,7 @@ func (ra *RedoApplier) consumeLogs(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	for {
-		if row == nil && ddl == nil {
-			break
-		}
+	for row != nil || ddl != nil {
 		if shouldApplyDDL(row, ddl) {
 			if err := ra.applyDDL(ctx, ddl, checkpointTs); err != nil {
 				return err
@@ -478,7 +475,7 @@ func (ra *RedoApplier) Apply(egCtx context.Context) (err error) {
 	ra.updateSplitter = newUpdateEventSplitter(ra.rd, ra.cfg.Dir)
 
 	eg.Go(func() error {
-		defer ra.mysqlSink.Close(false)
+		defer ra.mysqlSink.Close()
 		return ra.consumeLogs(egCtx)
 	})
 

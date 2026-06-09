@@ -22,7 +22,7 @@ import (
 
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/maintainer/replica"
-	maintainertestutil "github.com/pingcap/ticdc/maintainer/testutil"
+	"github.com/pingcap/ticdc/maintainer/testutil"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/messaging"
@@ -30,6 +30,44 @@ import (
 	"github.com/pingcap/ticdc/server/watcher"
 	"github.com/stretchr/testify/require"
 )
+
+func TestController_CountInflightDrainMovesFromNode(t *testing.T) {
+	messageCenter, _, _ := messaging.NewMessageCenterForTest(t)
+	appcontext.SetService(appcontext.MessageCenter, messageCenter)
+
+	spanController, changefeedID, replicaSet, nodeA, nodeB := setupTestEnvironment(t)
+	spanController.AddReplicatingSpan(replicaSet)
+
+	otherDispatcherID := common.NewDispatcherID()
+	otherReplicaSet := replica.NewWorkingSpanReplication(
+		changefeedID,
+		otherDispatcherID,
+		2,
+		testutil.GetTableSpanByID(101),
+		&heartbeatpb.TableSpanStatus{
+			ID:              otherDispatcherID.ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    1000,
+		},
+		nodeB,
+		false,
+	)
+	spanController.AddReplicatingSpan(otherReplicaSet)
+
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+	setAliveNodes(nodeManager, map[node.ID]*node.Info{
+		nodeA: {ID: nodeA},
+		nodeB: {ID: nodeB},
+	})
+
+	oc := NewOperatorController(changefeedID, spanController, 1, common.DefaultMode)
+	require.True(t, oc.AddOperator(NewMoveDispatcherOperator(spanController, replicaSet, nodeA, nodeB)))
+	require.True(t, oc.AddOperator(NewMoveDispatcherOperator(spanController, otherReplicaSet, nodeB, nodeA)))
+
+	require.Equal(t, 1, oc.CountInflightDrainMovesFromNode(nodeA))
+	require.Equal(t, 1, oc.CountInflightDrainMovesFromNode(nodeB))
+	require.Equal(t, 0, oc.CountInflightDrainMovesFromNode(node.ID("node-c")))
+}
 
 type blockingFinishOperator struct {
 	id common.DispatcherID
@@ -235,6 +273,8 @@ func TestController_RemoveReplicaSet_ReplacesRemoveOperatorOnTaskRemoved(t *test
 }
 
 func TestController_QuiesceExceptFreezesNonAllowedOperators(t *testing.T) {
+	// The controller is quiesced with one allowed dispatcher; only that dispatcher should keep
+	// accepting status, scheduling, and checkpoint participation while all other work is frozen.
 	messageCenter := messaging.NewMockMessageCenter()
 	appcontext.SetService(appcontext.MessageCenter, messageCenter)
 
@@ -294,7 +334,7 @@ func setupReplicaSetWithID(
 	t.Helper()
 
 	tableID := int64(dispatcherID.Low + 100)
-	span := maintainertestutil.GetTableSpanByID(tableID)
+	span := testutil.GetTableSpanByID(tableID)
 	return replica.NewWorkingSpanReplication(changefeedID, dispatcherID, 1, span, &heartbeatpb.TableSpanStatus{
 		ID:              dispatcherID.ToPB(),
 		ComponentStatus: heartbeatpb.ComponentState_Working,

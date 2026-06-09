@@ -115,13 +115,13 @@ func newRegionRequestWorker(
 				if cerror.Is(err, cerror.ErrGetAllStoresFailed) {
 					regionErr = &getStoreErr{}
 				} else {
-					regionErr = &sendRequestToStoreErr{}
+					regionErr = &storeStreamErr{}
 				}
 			} else {
 				if canceled := worker.run(ctx, credential); canceled {
 					return nil
 				}
-				regionErr = &sendRequestToStoreErr{}
+				regionErr = &storeStreamErr{}
 			}
 			for subID, m := range worker.clearRegionStates() {
 				for _, state := range m {
@@ -206,6 +206,13 @@ func (s *regionRequestWorker) run(ctx context.Context, credential *security.Cred
 	return isCanceled()
 }
 
+func normalizeStreamError(err error) error {
+	if StatusIsEOF(grpcstatus.Convert(err)) {
+		return &storeStreamErr{}
+	}
+	return errors.Trace(err)
+}
+
 // receiveAndDispatchChangeEventsToProcessor receives events from the grpc stream and dispatches them to ds.
 func (s *regionRequestWorker) receiveAndDispatchChangeEvents(conn *ConnAndClient) error {
 	for {
@@ -216,10 +223,7 @@ func (s *regionRequestWorker) receiveAndDispatchChangeEvents(conn *ConnAndClient
 				zap.String("addr", s.store.storeAddr),
 				zap.String("code", grpcstatus.Code(err).String()),
 				zap.Error(err))
-			if StatusIsEOF(grpcstatus.Convert(err)) {
-				return nil
-			}
-			return errors.Trace(err)
+			return normalizeStreamError(err)
 		}
 		if len(changeEvent.Events) > 0 {
 			s.dispatchRegionChangeEvents(changeEvent.Events)
@@ -267,7 +271,7 @@ func (s *regionRequestWorker) dispatchRegionChangeEvents(events []*cdcpb.Event) 
 			default:
 				log.Panic("unknown event type", zap.Any("event", event))
 			}
-			s.client.pushRegionEventToDS(SubscriptionID(event.RequestId), regionEvent)
+			s.client.pushRegionEventToDS(subscriptionID, regionEvent)
 		} else {
 			switch event.Event.(type) {
 			case *cdcpb.Event_Error:
@@ -353,21 +357,10 @@ func (s *regionRequestWorker) processRegionSendTask(
 				zap.Uint64("regionID", req.RegionId),
 				zap.String("addr", s.store.storeAddr),
 				zap.Error(err))
-			return errors.Trace(err)
+			return normalizeStreamError(err)
 		}
 		// TODO: add a metric?
 		return nil
-	}
-
-	fetchMoreReq := func() (regionReq, error) {
-		for {
-			// Try to get from cache
-			if req, err := s.requestCache.pop(ctx); err != nil {
-				return regionReq{}, err
-			} else {
-				return req, nil
-			}
-		}
 	}
 
 	// Handle pre-fetched region first
@@ -410,7 +403,7 @@ func (s *regionRequestWorker) processRegionSendTask(
 			// It can be skipped directly because there must be no pending states from
 			// the stopped subscribedTable, or the special singleRegionInfo for stopping
 			// the table will be handled later.
-			s.client.onRegionFail(newRegionErrorInfo(region, &sendRequestToStoreErr{}))
+			s.client.onRegionFail(newRegionErrorInfo(region, &storeStreamErr{}))
 			s.requestCache.markDone()
 		} else {
 			state := newRegionFeedState(region, uint64(subID), s)
@@ -436,7 +429,8 @@ func (s *regionRequestWorker) processRegionSendTask(
 				return err
 			}
 		}
-		regionReq, err = fetchMoreReq()
+		// Try to get from cache
+		regionReq, err = s.requestCache.pop(ctx)
 		if err != nil {
 			return err
 		}
