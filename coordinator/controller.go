@@ -211,7 +211,7 @@ func NewController(
 	for _, req := range requests {
 		err := c.messageCenter.SendCommand(req)
 		if err != nil {
-			log.Warn("send request failed when boostrapping initial node, will be resent later",
+			log.Warn("send request failed when bootstrapping initial node, will be resent later",
 				zap.Any("targetNode", req.To), zap.Error(err))
 		}
 	}
@@ -485,7 +485,7 @@ func (c *Controller) onNodeChanged(ctx context.Context) {
 	for _, req := range requests {
 		err := c.messageCenter.SendCommand(req)
 		if err != nil {
-			log.Warn("send request failed when boostrapping newly added node, will be resent later",
+			log.Warn("send request failed when bootstrapping newly added node, will be resent later",
 				zap.Any("targetNode", req.To), zap.Error(err))
 		}
 	}

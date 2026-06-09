@@ -195,7 +195,7 @@ func (m *MoveMaintainerOperator) OnTaskRemoved() {
 	m.lck.Lock()
 	defer m.lck.Unlock()
 
-	log.Info("changefeed is changefeedIsRemoved, mark move changefeed operator finished",
+	log.Info("changefeed removed, mark move changefeed operator finished",
 		zap.String("changefeed", m.changefeed.ID.String()))
 	m.canceled = true
 }

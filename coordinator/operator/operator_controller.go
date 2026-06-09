@@ -239,7 +239,7 @@ func requiresNewMaintainerOwnership(
 	}
 }
 
-// StopChangefeed stop changefeed when the changefeed is stopped/removed.
+// StopChangefeed stops a changefeed when the changefeed is stopped or removed.
 // if remove is true, it will remove the changefeed from the changefeed DB
 // if remove is false, it only marks the changefeed stopped in changefeed DB, so we will not schedule the changefeed again
 func (oc *Controller) StopChangefeed(_ context.Context, cfID common.ChangeFeedID, removed bool) operator.Operator[common.ChangeFeedID, *heartbeatpb.MaintainerStatus] {
@@ -348,7 +348,7 @@ func (oc *Controller) pushStopChangefeedOperator(
 	if old, ok := oc.operators[cfID]; ok {
 		oldStop, ok := old.OP.(*StopChangefeedOperator)
 		if ok {
-			if oldStop.changefeedIsRemoved {
+			if oldStop.changefeedRemoved {
 				log.Info("changefeed is in removing progress, skip the stop operator",
 					zap.String("role", oc.role),
 					zap.String("changefeed", cfID.Name()))
