@@ -188,14 +188,9 @@ func (d *writer) flushMessages(ctx context.Context) error {
 				indexFilePath, err := d.filePathGenerator.GenerateIndexFilePath(table, date)
 				if err != nil {
 					log.Error("failed to generate index file path",
-<<<<<<< HEAD
-						zap.String("keyspace", d.changeFeedID.Keyspace()),
-						zap.Stringer("changefeed", d.changeFeedID.ID()),
-=======
 						zap.String("keyspace", keyspace),
 						zap.String("changefeed", changefeed),
 						zap.Int("shardID", d.shardID),
->>>>>>> 8a067c41d (storage: add local spool for cloud storage sink (#4219))
 						zap.Error(err))
 					return err
 				}

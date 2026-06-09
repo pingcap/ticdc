@@ -37,14 +37,9 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/util"
-<<<<<<< HEAD
+	"github.com/pingcap/tidb/br/pkg/storage"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/model"
-=======
-	"github.com/pingcap/tidb/br/pkg/storage"
-	"github.com/pingcap/tidb/pkg/meta/model"
-	"github.com/pingcap/tidb/pkg/parser/ast"
->>>>>>> 8a067c41d (storage: add local spool for cloud storage sink (#4219))
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/parser/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
@@ -112,19 +107,12 @@ func TestWriterRun(t *testing.T) {
 	d := testWriter(ctx, t, parentDir)
 	table1Dir := path.Join(parentDir, "test/table1/99")
 
-	tidbTableInfo := &model.TableInfo{
+	tidbTableInfo := &timodel.TableInfo{
 		ID:   100,
-<<<<<<< HEAD
 		Name: model.NewCIStr("table1"),
 		Columns: []*timodel.ColumnInfo{
 			{ID: 1, Name: model.NewCIStr("c1"), FieldType: *types.NewFieldType(mysql.TypeLong)},
 			{ID: 2, Name: model.NewCIStr("c2"), FieldType: *types.NewFieldType(mysql.TypeVarchar)},
-=======
-		Name: ast.NewCIStr("table1"),
-		Columns: []*model.ColumnInfo{
-			{ID: 1, Name: ast.NewCIStr("c1"), FieldType: *types.NewFieldType(mysql.TypeLong)},
-			{ID: 2, Name: ast.NewCIStr("c2"), FieldType: *types.NewFieldType(mysql.TypeVarchar)},
->>>>>>> 8a067c41d (storage: add local spool for cloud storage sink (#4219))
 		},
 	}
 	tableInfo := commonType.WrapTableInfo("test", tidbTableInfo)
@@ -184,17 +172,11 @@ func TestWriterFlushMarker(t *testing.T) {
 	parentDir := t.TempDir()
 	d := testWriter(ctx, t, parentDir)
 
-	tidbTableInfo := &model.TableInfo{
+	tidbTableInfo := &timodel.TableInfo{
 		ID:   100,
-<<<<<<< HEAD
 		Name: model.NewCIStr("table1"),
 		Columns: []*timodel.ColumnInfo{
 			{ID: 1, Name: model.NewCIStr("c1"), FieldType: *types.NewFieldType(mysql.TypeLong)},
-=======
-		Name: ast.NewCIStr("table1"),
-		Columns: []*model.ColumnInfo{
-			{ID: 1, Name: ast.NewCIStr("c1"), FieldType: *types.NewFieldType(mysql.TypeLong)},
->>>>>>> 8a067c41d (storage: add local spool for cloud storage sink (#4219))
 		},
 	}
 	tableInfo := commonType.WrapTableInfo("test", tidbTableInfo)
@@ -255,17 +237,11 @@ func TestWriterFlushMarkerOnlyFlushesTargetDispatcher(t *testing.T) {
 	d := testWriter(ctx, t, parentDir)
 	d.config.FlushInterval = time.Hour
 
-	tidbTableInfo := &model.TableInfo{
+	tidbTableInfo := &timodel.TableInfo{
 		ID:   100,
-<<<<<<< HEAD
 		Name: model.NewCIStr("table1"),
 		Columns: []*timodel.ColumnInfo{
 			{ID: 1, Name: model.NewCIStr("c1"), FieldType: *types.NewFieldType(mysql.TypeLong)},
-=======
-		Name: ast.NewCIStr("table1"),
-		Columns: []*model.ColumnInfo{
-			{ID: 1, Name: ast.NewCIStr("c1"), FieldType: *types.NewFieldType(mysql.TypeLong)},
->>>>>>> 8a067c41d (storage: add local spool for cloud storage sink (#4219))
 		},
 	}
 	tableInfo := commonType.WrapTableInfo("test", tidbTableInfo)
@@ -310,17 +286,11 @@ func TestWriterFlushMarkerOnlyFlushesTargetDispatcher(t *testing.T) {
 		},
 		&commonEvent.DMLEvent{
 			PhysicalTableID: 101,
-			TableInfo: commonType.WrapTableInfo("test", &model.TableInfo{
+			TableInfo: commonType.WrapTableInfo("test", &timodel.TableInfo{
 				ID:   101,
-<<<<<<< HEAD
 				Name: model.NewCIStr("table2"),
 				Columns: []*timodel.ColumnInfo{
 					{ID: 1, Name: model.NewCIStr("c1"), FieldType: *types.NewFieldType(mysql.TypeLong)},
-=======
-				Name: ast.NewCIStr("table2"),
-				Columns: []*model.ColumnInfo{
-					{ID: 1, Name: ast.NewCIStr("c1"), FieldType: *types.NewFieldType(mysql.TypeLong)},
->>>>>>> 8a067c41d (storage: add local spool for cloud storage sink (#4219))
 				},
 			}),
 		},
@@ -363,17 +333,11 @@ func TestWriterPostEnqueueAfterConsume(t *testing.T) {
 	parentDir := t.TempDir()
 	d := testWriter(ctx, t, parentDir)
 
-	tidbTableInfo := &model.TableInfo{
+	tidbTableInfo := &timodel.TableInfo{
 		ID:   100,
-<<<<<<< HEAD
 		Name: model.NewCIStr("table1"),
 		Columns: []*timodel.ColumnInfo{
 			{ID: 1, Name: model.NewCIStr("c1"), FieldType: *types.NewFieldType(mysql.TypeLong)},
-=======
-		Name: ast.NewCIStr("table1"),
-		Columns: []*model.ColumnInfo{
-			{ID: 1, Name: ast.NewCIStr("c1"), FieldType: *types.NewFieldType(mysql.TypeLong)},
->>>>>>> 8a067c41d (storage: add local spool for cloud storage sink (#4219))
 		},
 	}
 	tableInfo := commonType.WrapTableInfo("test", tidbTableInfo)
@@ -466,11 +430,11 @@ func TestWriterStoresPendingMessagesInSpoolBeforeFlush(t *testing.T) {
 	spoolBuffer := newTestSpool(t, changefeedID, cfg)
 	d := newWriter(1, changefeedID, storage, cfg, ".json", statistics, spoolBuffer)
 
-	tidbTableInfo := &model.TableInfo{
+	tidbTableInfo := &timodel.TableInfo{
 		ID:   100,
-		Name: ast.NewCIStr("table1"),
-		Columns: []*model.ColumnInfo{
-			{ID: 1, Name: ast.NewCIStr("c1"), FieldType: *types.NewFieldType(mysql.TypeLong)},
+		Name: model.NewCIStr("table1"),
+		Columns: []*timodel.ColumnInfo{
+			{ID: 1, Name: model.NewCIStr("c1"), FieldType: *types.NewFieldType(mysql.TypeLong)},
 		},
 	}
 	tableInfo := commonType.WrapTableInfo("test", tidbTableInfo)
@@ -613,11 +577,11 @@ func TestWriterIndexWriteError(t *testing.T) {
 	spoolBuffer := newTestSpool(t, changefeedID, cfg)
 	d := newWriter(1, changefeedID, storage, cfg, ".json", statistics, spoolBuffer)
 
-	tableInfo := commonType.WrapTableInfo("test", &model.TableInfo{
+	tableInfo := commonType.WrapTableInfo("test", &timodel.TableInfo{
 		ID:   100,
-		Name: ast.NewCIStr("table1"),
-		Columns: []*model.ColumnInfo{
-			{ID: 1, Name: ast.NewCIStr("c1"), FieldType: *types.NewFieldType(mysql.TypeLong)},
+		Name: model.NewCIStr("table1"),
+		Columns: []*timodel.ColumnInfo{
+			{ID: 1, Name: model.NewCIStr("c1"), FieldType: *types.NewFieldType(mysql.TypeLong)},
 		},
 	})
 	dispatcherID := commonType.NewDispatcherID()
