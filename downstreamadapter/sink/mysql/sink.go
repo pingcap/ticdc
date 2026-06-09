@@ -95,6 +95,18 @@ func New(
 	if err != nil {
 		return nil, err
 	}
+
+	// Expose whether the MySQL-compatible downstream is confirmed to be TiDB, so
+	// dashboards can display "tidb" when we can prove it. Otherwise, the
+	// scheme-based label remains "mysql/tidb".
+	keyspace := changefeedID.Keyspace()
+	name := changefeedID.Name()
+	if cfg.IsTiDB {
+		metrics.ChangefeedDownstreamIsTiDBGauge.WithLabelValues(keyspace, name).Set(1)
+	} else {
+		metrics.ChangefeedDownstreamIsTiDBGauge.DeleteLabelValues(keyspace, name)
+	}
+
 	return NewMySQLSink(ctx, changefeedID, cfg, db, config.BDRMode, config.EnableActiveActive, config.ActiveActiveProgressInterval), nil
 }
 
@@ -406,6 +418,8 @@ func (s *Sink) Close() {
 		s.activeActiveSyncStatsCollector.Close()
 	}
 	s.statistics.Close()
+
+	metrics.ChangefeedDownstreamIsTiDBGauge.DeleteLabelValues(s.changefeedID.Keyspace(), s.changefeedID.Name())
 }
 
 // CleanupRemovedChangefeed removes ddl_ts state for a deleted changefeed.
