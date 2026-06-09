@@ -21,6 +21,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -53,7 +54,7 @@ func newSinkForTest(
 }
 
 func TestBasicFunctionality(t *testing.T) {
-	uri := fmt.Sprintf("file:///%s?protocol=csv&flush-interval=100ms", t.TempDir())
+	uri := fmt.Sprintf("file:///%s?protocol=csv&flush-interval=3600s&file-size=1024", t.TempDir())
 	sinkURI, err := url.Parse(uri)
 	require.NoError(t, err)
 
@@ -77,7 +78,7 @@ func TestBasicFunctionality(t *testing.T) {
 	defer helper.Close()
 
 	helper.Tk().MustExec("use test")
-	createTableSQL := "create table t (id int primary key, name varchar(32));"
+	createTableSQL := "create table t (id int primary key, name varchar(2048));"
 	job := helper.DDL2Job(createTableSQL)
 	require.NotNil(t, job)
 	helper.ApplyJob(job)
@@ -116,7 +117,12 @@ func TestBasicFunctionality(t *testing.T) {
 		},
 	}
 
-	dmlEvent := helper.DML2Event("test", "t", "insert into t values (1, 'test')", "insert into t values (2, 'test2');")
+	dmlEvent := helper.DML2Event(
+		"test",
+		"t",
+		fmt.Sprintf("insert into t values (1, '%s')", strings.Repeat("x", 1024)),
+		fmt.Sprintf("insert into t values (2, '%s')", strings.Repeat("y", 1024)),
+	)
 	dmlEvent.TableInfoVersion = job.BinlogInfo.FinishedTS
 	dmlEvent.PostTxnFlushed = []func(){
 		func() {
@@ -225,9 +231,7 @@ func TestWriteDDLEvent(t *testing.T) {
 
 	cloudStorageSink, err := newSinkForTest(ctx, replicaConfig, sinkURI, nil)
 	require.NoError(t, err)
-
-	runDone := runSinkInBackground(t, ctx, cloudStorageSink)
-	defer cancelAndWaitSink(t, cancel, runDone)
+	defer cloudStorageSink.Close()
 
 	tableInfo := common.WrapTableInfo("test", &timodel.TableInfo{
 		ID:   20,
@@ -362,9 +366,7 @@ func TestWriteDDLEventWithTableIDAsPath(t *testing.T) {
 
 	cloudStorageSink, err := newSinkForTest(ctx, replicaConfig, sinkURI, nil)
 	require.NoError(t, err)
-
-	runDone := runSinkInBackground(t, ctx, cloudStorageSink)
-	defer cancelAndWaitSink(t, cancel, runDone)
+	defer cloudStorageSink.Close()
 
 	tableInfo := common.WrapTableInfo("test", &timodel.TableInfo{
 		ID:   20,
@@ -673,7 +675,7 @@ func TestCleanupExpiredFiles(t *testing.T) {
 	replicaConfig := config.GetDefaultReplicaConfig()
 	replicaConfig.Sink.CloudStorageConfig = &config.CloudStorageConfig{
 		FileExpirationDays:  util.AddressOf(1),
-		FileCleanupCronSpec: util.AddressOf("* * * * * *"),
+		FileCleanupCronSpec: util.AddressOf("@every 1ms"),
 	}
 	err = replicaConfig.ValidateAndAdjust(sinkURI)
 	require.NoError(t, err)
@@ -693,12 +695,20 @@ func TestCleanupExpiredFiles(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	setPDClockForTest(t, pdutil.NewClock4Test())
-
-	cloudStorageSink, err := newSinkForTest(ctx, replicaConfig, sinkURI, cleanupJobs)
-	require.NoError(t, err)
-	runDone := runSinkInBackground(t, ctx, cloudStorageSink)
-	defer cancelAndWaitSink(t, cancel, runDone)
+	cloudStorageSink := &sink{
+		changefeedID: common.NewChangefeedID4Test("test", "test"),
+		cfg: &pkgcloudstorage.Config{
+			DateSeparator:       config.DateSeparatorDay.String(),
+			FileExpirationDays:  1,
+			FileCleanupCronSpec: util.GetOrZero(replicaConfig.Sink.CloudStorageConfig.FileCleanupCronSpec),
+		},
+	}
+	require.NoError(t, cloudStorageSink.initCron(ctx, sinkURI, cleanupJobs))
+	cleanupDoneCh := make(chan struct{}, 1)
+	go func() {
+		cloudStorageSink.bgCleanup(ctx)
+		cleanupDoneCh <- struct{}{}
+	}()
 
 	select {
 	case <-cleanupDone:
@@ -706,6 +716,12 @@ func TestCleanupExpiredFiles(t *testing.T) {
 		t.Fatal("cleanup job did not run")
 	}
 	require.LessOrEqual(t, int64(1), count.Load())
+	cancel()
+	select {
+	case <-cleanupDoneCh:
+	case <-time.After(testEventuallyTimeout):
+		t.Fatal("background cleanup did not exit after context cancel")
+	}
 }
 
 func TestRemoveEmptyDirsCleanupJobCanRunMultipleTimes(t *testing.T) {

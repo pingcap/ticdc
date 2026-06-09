@@ -30,6 +30,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	putil "github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/chann"
+	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/stretchr/testify/require"
 )
 
@@ -145,11 +146,49 @@ func TestCloudStoragePostEnqueueBeforeFlush(t *testing.T) {
 	require.ErrorIs(t, <-runDone, context.Canceled)
 }
 
-func TestCloudStorageWriteEventsWithoutDateSeparator(t *testing.T) {
+func TestCloudStorageWriteEvents(t *testing.T) {
 	t.Run("add dml does not call post enqueue before run", verifyAddDMLEventDoesNotCallPostEnqueueBeforePipelineRun)
+
+	helper, job, dmls, batch := newCloudStorageWriteEventsFixture(t)
+	t.Run("without date separator", func(t *testing.T) {
+		verifyCloudStorageWriteEventsWithoutDateSeparator(t, helper, job, dmls, batch)
+	})
+	t.Run("with date separator", func(t *testing.T) {
+		verifyCloudStorageWriteEventsWithDateSeparator(t, helper, job, dmls, batch)
+	})
+}
+
+func newCloudStorageWriteEventsFixture(
+	t *testing.T,
+) (*commonEvent.EventTestHelper, *timodel.Job, []string, int) {
+	t.Helper()
+
+	helper := commonEvent.NewEventTestHelper(t)
+	t.Cleanup(helper.Close)
+
+	helper.Tk().MustExec("use test")
+	job := helper.DDL2Job("create table table1(c1 int, c2 varchar(255))")
+	require.NotNil(t, job)
+	helper.ApplyJob(job)
+
+	batch := 100
+	dmls := make([]string, 0, batch)
+	for j := 0; j < batch; j++ {
+		dmls = append(dmls, fmt.Sprintf("insert into table1 values (%d, 'hello world')", j))
+	}
+	return helper, job, dmls, batch
+}
+
+func verifyCloudStorageWriteEventsWithoutDateSeparator(
+	t *testing.T,
+	helper *commonEvent.EventTestHelper,
+	job *timodel.Job,
+	dmls []string,
+	batch int,
+) {
 	parentDir := t.TempDir()
 
-	uri := fmt.Sprintf("file:///%s?protocol=csv&flush-interval=100ms", parentDir)
+	uri := fmt.Sprintf("file:///%s?protocol=csv&flush-interval=3600s&file-size=1024", parentDir)
 	sinkURI, err := url.Parse(uri)
 	require.NoError(t, err)
 
@@ -171,20 +210,7 @@ func TestCloudStorageWriteEventsWithoutDateSeparator(t *testing.T) {
 	runDone := runSinkInBackground(t, ctx, cloudStorageSink)
 	defer cancelAndWaitSink(t, cancel, runDone)
 
-	var cnt uint64 = 0
-	batch := 100
-
-	helper := commonEvent.NewEventTestHelper(t)
-	defer helper.Close()
-
-	helper.Tk().MustExec("use test")
-	job := helper.DDL2Job("create table table1(c1 int, c2 varchar(255))")
-	require.NotNil(t, job)
-	helper.ApplyJob(job)
-	dmls := make([]string, 0, batch)
-	for j := 0; j < batch; j++ {
-		dmls = append(dmls, fmt.Sprintf("insert into table1 values (%d, 'hello world')", j))
-	}
+	var cnt uint64
 	dispatcherID := common.NewDispatcherID()
 	event := helper.DML2Event(job.SchemaName, job.TableName, dmls...)
 	event.TableInfoVersion = job.BinlogInfo.FinishedTS
@@ -214,7 +240,7 @@ func TestCloudStorageWriteEventsWithoutDateSeparator(t *testing.T) {
 	content, err = os.ReadFile(path.Join(tableDir, fmt.Sprintf("meta/CDC_%s.index", dispatcherID.String())))
 	require.NoError(t, err)
 	require.Equal(t, fmt.Sprintf("CDC_%s_000001.csv\n", dispatcherID.String()), string(content))
-	require.Equal(t, uint64(100), atomic.LoadUint64(&cnt))
+	require.Equal(t, uint64(batch), atomic.LoadUint64(&cnt))
 
 	// generating another dml file.
 	event = helper.DML2Event(job.SchemaName, job.TableName, dmls...)
@@ -241,7 +267,7 @@ func TestCloudStorageWriteEventsWithoutDateSeparator(t *testing.T) {
 	content, err = os.ReadFile(path.Join(tableDir, fmt.Sprintf("meta/CDC_%s.index", dispatcherID.String())))
 	require.Nil(t, err)
 	require.Equal(t, fmt.Sprintf("CDC_%s_000002.csv\n", dispatcherID.String()), string(content))
-	require.Equal(t, uint64(200), atomic.LoadUint64(&cnt))
+	require.Equal(t, 2*uint64(batch), atomic.LoadUint64(&cnt))
 
 }
 
@@ -267,10 +293,16 @@ func TestSubmitTaskToEncoderExitOnContextCancel(t *testing.T) {
 	}
 }
 
-func TestCloudStorageWriteEventsWithDateSeparator(t *testing.T) {
+func verifyCloudStorageWriteEventsWithDateSeparator(
+	t *testing.T,
+	helper *commonEvent.EventTestHelper,
+	job *timodel.Job,
+	dmls []string,
+	batch int,
+) {
 	parentDir := t.TempDir()
 
-	uri := fmt.Sprintf("file:///%s?protocol=csv&flush-interval=100ms", parentDir)
+	uri := fmt.Sprintf("file:///%s?protocol=csv&flush-interval=3600s&file-size=1024", parentDir)
 	sinkURI, err := url.Parse(uri)
 	require.NoError(t, err)
 
@@ -292,20 +324,7 @@ func TestCloudStorageWriteEventsWithDateSeparator(t *testing.T) {
 
 	runDone := runSinkInBackground(t, ctx, cloudStorageSink)
 
-	var cnt uint64 = 0
-	batch := 100
-
-	helper := commonEvent.NewEventTestHelper(t)
-	defer helper.Close()
-
-	helper.Tk().MustExec("use test")
-	job := helper.DDL2Job("create table table1(c1 int, c2 varchar(255))")
-	require.NotNil(t, job)
-	helper.ApplyJob(job)
-	dmls := make([]string, 0, batch)
-	for j := 0; j < batch; j++ {
-		dmls = append(dmls, fmt.Sprintf("insert into table1 values (%d, 'hello world')", j))
-	}
+	var cnt uint64
 
 	dispatcherID := common.NewDispatcherID()
 	event := helper.DML2Event(job.SchemaName, job.TableName, dmls...)
@@ -405,7 +424,7 @@ func TestCloudStorageWriteEventsWithDateSeparator(t *testing.T) {
 	content, err = os.ReadFile(path.Join(tableDir, fmt.Sprintf("meta/CDC_%s.index", dispatcherID.String())))
 	require.Nil(t, err)
 	require.Equal(t, fmt.Sprintf("CDC_%s_000001.csv\n", dispatcherID.String()), string(content))
-	require.Equal(t, uint64(300), atomic.LoadUint64(&cnt))
+	require.Equal(t, 3*uint64(batch), atomic.LoadUint64(&cnt))
 	cancelAndWaitSink(t, cancel, runDone)
 
 	// test table is scheduled from one node to another
