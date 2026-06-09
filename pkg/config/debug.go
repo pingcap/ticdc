@@ -17,8 +17,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/pingcap/errors"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 )
 
 // DebugConfig represents config for ticdc unexposed feature configurations
@@ -172,7 +171,7 @@ func (c *DebugReplicaConfig) ValidateAndAdjust() error {
 
 	minInterval := time.Duration(c.MinSyncPointInterval)
 	if minInterval < minConfigurableSyncPointInterval || minInterval > minSyncPointIntervalDefault {
-		return cerror.ErrInvalidServerOption.GenWithStackByArgs(
+		return errors.ErrInvalidServerOption.GenWithStackByArgs(
 			fmt.Sprintf("debug.replica-config.min-sync-point-interval must be in range [%s, %s]",
 				minConfigurableSyncPointInterval, minSyncPointIntervalDefault))
 	}
