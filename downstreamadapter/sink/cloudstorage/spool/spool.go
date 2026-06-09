@@ -49,7 +49,7 @@ const (
 
 	// Keep only a small hot working set in memory. Most queued data can move to
 	// local files so the writer is less likely to keep growing memory usage.
-	defaultMemoryRatio = 0.2
+	defaultMemoryRatio = 0.1
 
 	// Pause PostEnqueue callbacks only after local usage is already fairly high,
 	// so the upstream side is not slowed down too early.
@@ -127,9 +127,6 @@ func WithSegmentBytes(segmentBytes int64) option {
 
 func WithMemoryRatio(memoryRatio float64) option {
 	return func(options *options) {
-		if memoryRatio == 0 {
-			return
-		}
 		if memoryRatio < 0 || memoryRatio >= 1 {
 			log.Warn(
 				"spool option is invalid, use default",
