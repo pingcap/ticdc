@@ -284,6 +284,15 @@ func (c *replicaConfig) fillFromV1(v1 *outdated.ReplicaConfigV1) {
 
 // ValidateAndAdjust verifies and adjusts the replica configuration.
 func (c *ReplicaConfig) ValidateAndAdjust(sinkURI *url.URL) error { // check sink uri
+	return c.validateAndAdjust(sinkURI, getMinSyncPointInterval())
+}
+
+// ValidateAndAdjustForCLI verifies and adjusts the replica configuration before sending it to the server.
+func (c *ReplicaConfig) ValidateAndAdjustForCLI(sinkURI *url.URL) error {
+	return c.validateAndAdjust(sinkURI, minConfigurableSyncPointInterval)
+}
+
+func (c *ReplicaConfig) validateAndAdjust(sinkURI *url.URL, minSyncPointInterval time.Duration) error {
 	enableRedoIOCheck := true
 	if c.EnableRedoIOCheck != nil {
 		enableRedoIOCheck = *c.EnableRedoIOCheck
@@ -309,7 +318,6 @@ func (c *ReplicaConfig) ValidateAndAdjust(sinkURI *url.URL) error { // check sin
 			return cerror.ErrInvalidReplicaConfig.
 				FastGenByArgs("The SyncPoint must be disabled when the downstream is not tidb or mysql")
 		}
-		minSyncPointInterval := getMinSyncPointInterval()
 		if c.SyncPointInterval != nil &&
 			*c.SyncPointInterval < minSyncPointInterval {
 			return cerror.ErrInvalidReplicaConfig.

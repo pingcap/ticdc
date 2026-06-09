@@ -63,47 +63,6 @@ func (c *DebugConfig) ValidateAndAdjust() error {
 	return nil
 }
 
-// DebugReplicaConfig represents debug configs for replica configurations.
-type DebugReplicaConfig struct {
-	// MinSyncPointInterval is the minimum sync point interval allowed by changefeed replica config.
-	MinSyncPointInterval TomlDuration `toml:"min-sync-point-interval" json:"min_sync_point_interval"`
-}
-
-// NewDefaultDebugReplicaConfig returns the default debug replica configuration.
-func NewDefaultDebugReplicaConfig() *DebugReplicaConfig {
-	return &DebugReplicaConfig{
-		MinSyncPointInterval: TomlDuration(minSyncPointIntervalDefault),
-	}
-}
-
-// ValidateAndAdjust validates and adjusts debug replica configs.
-func (c *DebugReplicaConfig) ValidateAndAdjust() error {
-	if c.MinSyncPointInterval == 0 {
-		c.MinSyncPointInterval = TomlDuration(minSyncPointIntervalDefault)
-	}
-
-	minInterval := time.Duration(c.MinSyncPointInterval)
-	if minInterval < minConfigurableSyncPointInterval || minInterval > minSyncPointIntervalDefault {
-		return cerror.ErrInvalidServerOption.GenWithStackByArgs(
-			fmt.Sprintf("debug.replica-config.min-sync-point-interval must be in range [%s, %s]",
-				minConfigurableSyncPointInterval, minSyncPointIntervalDefault))
-	}
-	return nil
-}
-
-func getMinSyncPointInterval() time.Duration {
-	serverConfig := GetGlobalServerConfig()
-	if serverConfig == nil || serverConfig.Debug == nil || serverConfig.Debug.ReplicaConfig == nil {
-		return minSyncPointIntervalDefault
-	}
-
-	minInterval := time.Duration(serverConfig.Debug.ReplicaConfig.MinSyncPointInterval)
-	if minInterval == 0 {
-		return minSyncPointIntervalDefault
-	}
-	return minInterval
-}
-
 // PullerConfig represents config for puller
 type PullerConfig struct {
 	// EnableResolvedTsStuckDetection is used to enable resolved ts stuck detection.
@@ -190,4 +149,45 @@ func NewDefaultEventServiceConfig() *EventServiceConfig {
 		DMLEventMaxBytes:         1024 * 1024 * 1, // 1MB
 		EnableRemoteEventService: true,
 	}
+}
+
+// DebugReplicaConfig represents debug configs for replica configurations.
+type DebugReplicaConfig struct {
+	// MinSyncPointInterval is the minimum sync point interval allowed by changefeed replica config.
+	MinSyncPointInterval TomlDuration `toml:"min-sync-point-interval" json:"min_sync_point_interval"`
+}
+
+// NewDefaultDebugReplicaConfig returns the default debug replica configuration.
+func NewDefaultDebugReplicaConfig() *DebugReplicaConfig {
+	return &DebugReplicaConfig{
+		MinSyncPointInterval: TomlDuration(minSyncPointIntervalDefault),
+	}
+}
+
+// ValidateAndAdjust validates and adjusts debug replica configs.
+func (c *DebugReplicaConfig) ValidateAndAdjust() error {
+	if c.MinSyncPointInterval == 0 {
+		c.MinSyncPointInterval = TomlDuration(minSyncPointIntervalDefault)
+	}
+
+	minInterval := time.Duration(c.MinSyncPointInterval)
+	if minInterval < minConfigurableSyncPointInterval || minInterval > minSyncPointIntervalDefault {
+		return cerror.ErrInvalidServerOption.GenWithStackByArgs(
+			fmt.Sprintf("debug.replica-config.min-sync-point-interval must be in range [%s, %s]",
+				minConfigurableSyncPointInterval, minSyncPointIntervalDefault))
+	}
+	return nil
+}
+
+func getMinSyncPointInterval() time.Duration {
+	serverConfig := GetGlobalServerConfig()
+	if serverConfig == nil || serverConfig.Debug == nil || serverConfig.Debug.ReplicaConfig == nil {
+		return minSyncPointIntervalDefault
+	}
+
+	minInterval := time.Duration(serverConfig.Debug.ReplicaConfig.MinSyncPointInterval)
+	if minInterval == 0 {
+		return minSyncPointIntervalDefault
+	}
+	return minInterval
 }

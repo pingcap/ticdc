@@ -163,16 +163,16 @@ func (o *createChangefeedOptions) completeReplicaCfg() error {
 	// CLI create runs pre-validation on the local machine, so skip redo
 	// storage I/O checks here and keep validation in cdc server.
 	cfg.EnableRedoIOCheck = putil.AddressOf(false)
-	err = cfg.ValidateAndAdjust(uri)
-	if err != nil {
-		return err
-	}
 
 	if o.syncPoint {
 		cfg.EnableSyncPoint = putil.AddressOf(true)
 	}
 	if o.syncInterval != 0 {
 		cfg.SyncPointInterval = putil.AddressOf(o.syncInterval)
+	}
+	err = cfg.ValidateAndAdjustForCLI(uri)
+	if err != nil {
+		return err
 	}
 
 	if o.commonChangefeedOptions.schemaRegistry != "" {

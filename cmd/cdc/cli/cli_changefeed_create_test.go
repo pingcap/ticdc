@@ -240,13 +240,17 @@ func TestChangefeedCreateSyncIntervalFlag(t *testing.T) {
 	opt = newCreateChangefeedOptions(commonOptions)
 	opt.syncPoint = true
 	opt.syncInterval = 4 * time.Second
-	require.NoError(t, opt.completeReplicaCfg())
-	require.True(t, *opt.cfg.EnableSyncPoint)
-	require.Equal(t, 4*time.Second, *opt.cfg.SyncPointInterval)
+	require.ErrorContains(t, opt.completeReplicaCfg(), "must be larger than 5s")
+
+	configPath = filepath.Join(dir, "valid-short-cf.toml")
+	err = os.WriteFile(configPath, []byte("enable-sync-point=true\nsync-point-interval='10s'"), 0o644)
+	require.NoError(t, err)
+	commonOptions.configFile = configPath
+	require.NoError(t, newCreateChangefeedOptions(commonOptions).completeReplicaCfg())
 
 	invalidConfigPath := filepath.Join(dir, "invalid-cf.toml")
-	err = os.WriteFile(invalidConfigPath, []byte("enable-sync-point=true\nsync-point-interval='10s'"), 0o644)
+	err = os.WriteFile(invalidConfigPath, []byte("enable-sync-point=true\nsync-point-interval='4s'"), 0o644)
 	require.NoError(t, err)
 	commonOptions.configFile = invalidConfigPath
-	require.ErrorContains(t, newCreateChangefeedOptions(commonOptions).completeReplicaCfg(), "must be larger than 30s")
+	require.ErrorContains(t, newCreateChangefeedOptions(commonOptions).completeReplicaCfg(), "must be larger than 5s")
 }
