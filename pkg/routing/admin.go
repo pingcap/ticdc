@@ -312,8 +312,7 @@ func (a *Admin) applyTransition(transition *routeTransition, mutate bool) ([]Tab
 
 func (a *Admin) buildAdmissionChange(transition *routeTransition) ([]TableKey, []RouteBinding) {
 	releases := make([]TableKey, 0, len(transition.releases))
-	admits := make([]RouteBinding, len(transition.admits))
-	copy(admits, transition.admits)
+	admits := transition.admits
 	releaseSet := make(map[TableKey]struct{}, len(transition.releases))
 	for _, source := range transition.releases {
 		if _, ok := releaseSet[source]; ok {
