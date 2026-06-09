@@ -26,7 +26,6 @@ import (
 	"time"
 
 	"github.com/pingcap/ticdc/pkg/common"
-	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/pdutil"
@@ -54,7 +53,7 @@ func newSinkForTest(
 }
 
 func TestBasicFunctionality(t *testing.T) {
-	uri := fmt.Sprintf("file:///%s?protocol=csv", t.TempDir())
+	uri := fmt.Sprintf("file:///%s?protocol=csv&flush-interval=100ms", t.TempDir())
 	sinkURI, err := url.Parse(uri)
 	require.NoError(t, err)
 
@@ -65,12 +64,12 @@ func TestBasicFunctionality(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	mockPDClock := pdutil.NewClock4Test()
-	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+	setPDClockForTest(t, pdutil.NewClock4Test())
 	cloudStorageSink, err := newSinkForTest(ctx, replicaConfig, sinkURI, nil)
 	require.NoError(t, err)
 
-	go cloudStorageSink.Run(ctx)
+	runDone := runSinkInBackground(t, ctx, cloudStorageSink)
+	defer cancelAndWaitSink(t, cancel, runDone)
 
 	var count atomic.Int64
 
@@ -129,8 +128,9 @@ func TestBasicFunctionality(t *testing.T) {
 	require.NoError(t, err)
 
 	cloudStorageSink.AddDMLEvent(dmlEvent)
-
-	time.Sleep(5 * time.Second)
+	require.Eventually(t, func() bool {
+		return count.Load() == 2
+	}, testEventuallyTimeout, testEventuallyTick)
 
 	ddlEvent2.PostFlush()
 
@@ -149,8 +149,7 @@ func TestIgnoreCallsAfterRunError(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	mockPDClock := pdutil.NewClock4Test()
-	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+	setPDClockForTest(t, pdutil.NewClock4Test())
 
 	cloudStorageSink, err := newSinkForTest(ctx, replicaConfig, sinkURI, nil)
 	require.NoError(t, err)
@@ -211,13 +210,13 @@ func TestWriteDDLEvent(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	mockPDClock := pdutil.NewClock4Test()
-	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+	setPDClockForTest(t, pdutil.NewClock4Test())
 
 	cloudStorageSink, err := newSinkForTest(ctx, replicaConfig, sinkURI, nil)
 	require.NoError(t, err)
 
-	go cloudStorageSink.Run(ctx)
+	runDone := runSinkInBackground(t, ctx, cloudStorageSink)
+	defer cancelAndWaitSink(t, cancel, runDone)
 
 	tableInfo := common.WrapTableInfo("test", &timodel.TableInfo{
 		ID:   20,
@@ -285,13 +284,13 @@ func verifyWriteDDLEventFlushDMLBeforeBlock(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	mockPDClock := pdutil.NewClock4Test()
-	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+	setPDClockForTest(t, pdutil.NewClock4Test())
 
 	cloudStorageSink, err := newSinkForTest(ctx, replicaConfig, sinkURI, nil)
 	require.NoError(t, err)
 
-	go cloudStorageSink.Run(ctx)
+	runDone := runSinkInBackground(t, ctx, cloudStorageSink)
+	defer cancelAndWaitSink(t, cancel, runDone)
 
 	helper := commonEvent.NewEventTestHelper(t)
 	defer helper.Close()
@@ -348,13 +347,13 @@ func TestWriteDDLEventWithTableIDAsPath(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	mockPDClock := pdutil.NewClock4Test()
-	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+	setPDClockForTest(t, pdutil.NewClock4Test())
 
 	cloudStorageSink, err := newSinkForTest(ctx, replicaConfig, sinkURI, nil)
 	require.NoError(t, err)
 
-	go cloudStorageSink.Run(ctx)
+	runDone := runSinkInBackground(t, ctx, cloudStorageSink)
+	defer cancelAndWaitSink(t, cancel, runDone)
 
 	tableInfo := common.WrapTableInfo("test", &timodel.TableInfo{
 		ID:   20,
@@ -401,13 +400,13 @@ func TestSkipDatabaseSchemaWithTableIDAsPath(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	mockPDClock := pdutil.NewClock4Test()
-	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+	setPDClockForTest(t, pdutil.NewClock4Test())
 
 	cloudStorageSink, err := newSinkForTest(ctx, replicaConfig, sinkURI, nil)
 	require.NoError(t, err)
 
-	go cloudStorageSink.Run(ctx)
+	runDone := runSinkInBackground(t, ctx, cloudStorageSink)
+	defer cancelAndWaitSink(t, cancel, runDone)
 
 	ddlEvent := &commonEvent.DDLEvent{
 		Query:      "create database test_db",
@@ -466,8 +465,7 @@ func TestWriteDDLEventWithInvalidExchangePartitionEvent(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 
-			mockPDClock := pdutil.NewClock4Test()
-			appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+			setPDClockForTest(t, pdutil.NewClock4Test())
 
 			cloudStorageSink, err := newSinkForTest(ctx, replicaConfig, sinkURI, nil)
 			require.NoError(t, err)
@@ -518,8 +516,7 @@ func TestWriteExchangePartitionDDLEventUsesTargetNames(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	mockPDClock := pdutil.NewClock4Test()
-	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+	setPDClockForTest(t, pdutil.NewClock4Test())
 
 	cloudStorageSink, err := newSinkForTest(ctx, replicaConfig, sinkURI, nil)
 	require.NoError(t, err)
@@ -609,20 +606,18 @@ func TestWriteCheckpointEvent(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	mockPDClock := pdutil.NewClock4Test()
-	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+	setPDClockForTest(t, pdutil.NewClock4Test())
 
 	cloudStorageSink, err := newSinkForTest(ctx, replicaConfig, sinkURI, nil)
 	require.NoError(t, err)
 
-	go cloudStorageSink.Run(ctx)
-	time.Sleep(3 * time.Second)
+	runDone := runSinkInBackground(t, ctx, cloudStorageSink)
+	defer cancelAndWaitSink(t, cancel, runDone)
 
+	cloudStorageSink.lastSendCheckpointTsTime = time.Now().Add(-2 * time.Second)
 	cloudStorageSink.AddCheckpointTs(100)
 
-	time.Sleep(2 * time.Second)
-	metadata, err := os.ReadFile(path.Join(parentDir, "metadata"))
-	require.NoError(t, err)
+	metadata := readFileEventually(t, path.Join(parentDir, "metadata"))
 	require.JSONEq(t, `{"checkpoint-ts":100}`, string(metadata))
 }
 
@@ -639,8 +634,7 @@ func TestCloseBeforeRunDoesNotPanicAndCleansSpool(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	mockPDClock := pdutil.NewClock4Test()
-	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+	setPDClockForTest(t, pdutil.NewClock4Test())
 
 	changefeedID := common.NewChangefeedID4Test("test", "close-before-run")
 	cloudStorageSink, err := New(ctx, changefeedID, sinkURI, replicaConfig.Sink, true, nil)
@@ -674,23 +668,32 @@ func TestCleanupExpiredFiles(t *testing.T) {
 	require.NoError(t, err)
 
 	var count atomic.Int64
+	cleanupDone := make(chan struct{}, 1)
 	cleanupJobs := []func(){
 		func() {
 			count.Add(1)
+			select {
+			case cleanupDone <- struct{}{}:
+			default:
+			}
 		},
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	mockPDClock := pdutil.NewClock4Test()
-	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+	setPDClockForTest(t, pdutil.NewClock4Test())
 
 	cloudStorageSink, err := newSinkForTest(ctx, replicaConfig, sinkURI, cleanupJobs)
-	go cloudStorageSink.Run(ctx)
 	require.NoError(t, err)
+	runDone := runSinkInBackground(t, ctx, cloudStorageSink)
+	defer cancelAndWaitSink(t, cancel, runDone)
 
-	time.Sleep(5 * time.Second)
+	select {
+	case <-cleanupDone:
+	case <-time.After(testEventuallyTimeout):
+		t.Fatal("cleanup job did not run")
+	}
 	require.LessOrEqual(t, int64(1), count.Load())
 }
 
