@@ -15,6 +15,7 @@ package cloudstorage
 
 import (
 	"context"
+	"sync/atomic"
 
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
@@ -38,6 +39,8 @@ type task struct {
 
 	// DML-only fields.
 	event          *commonEvent.DMLEvent           // Original DML event to encode and flush.
+	callbacks      *txnCallbacks                   // Lightweight txn callbacks detached from event.
+	tableInfo      *commonType.TableInfo           // Table info used after event is released.
 	versionedTable cloudstorage.VersionedTableName // Versioned output identity for the DML event.
 	encodedMsgs    []*common.Message               // Encoded result built from event.
 
@@ -52,6 +55,8 @@ func newDMLTask(
 	return &task{
 		kind:           taskKindDML,
 		event:          event,
+		callbacks:      newTxnCallbacks(event),
+		tableInfo:      event.TableInfo,
 		versionedTable: version,
 		dispatcherID:   event.GetDispatcherID(),
 	}
@@ -70,6 +75,70 @@ func newFlushTask(
 
 func (t *task) isFlushTask() bool {
 	return t != nil && t.kind == taskKindFlush
+}
+
+func (t *task) replacePostFlushCallbacks() {
+	if t == nil || t.callbacks == nil || len(t.encodedMsgs) == 0 {
+		return
+	}
+	replaced := false
+	for _, msg := range t.encodedMsgs {
+		if msg.Callback == nil {
+			continue
+		}
+		msg.Callback = t.callbacks.postFlush
+		replaced = true
+	}
+	if !replaced {
+		t.encodedMsgs[len(t.encodedMsgs)-1].Callback = t.callbacks.postFlush
+	}
+}
+
+func (t *task) releaseEvent() {
+	if t == nil {
+		return
+	}
+	t.event = nil
+}
+
+type txnCallbacks struct {
+	flushed  []func()
+	enqueued []func()
+
+	flushedCalled  atomic.Bool
+	enqueuedCalled atomic.Bool
+}
+
+func newTxnCallbacks(event *commonEvent.DMLEvent) *txnCallbacks {
+	if event == nil {
+		return &txnCallbacks{}
+	}
+	return &txnCallbacks{
+		flushed:  append([]func(){}, event.PostTxnFlushed...),
+		enqueued: append([]func(){}, event.PostTxnEnqueued...),
+	}
+}
+
+func (c *txnCallbacks) postFlush() {
+	if c == nil || !c.flushedCalled.CompareAndSwap(false, true) {
+		return
+	}
+	for _, f := range c.flushed {
+		if f != nil {
+			f()
+		}
+	}
+}
+
+func (c *txnCallbacks) postEnqueue() {
+	if c == nil || !c.enqueuedCalled.CompareAndSwap(false, true) {
+		return
+	}
+	for _, f := range c.enqueued {
+		if f != nil {
+			f()
+		}
+	}
 }
 
 func (t *task) wait(ctx context.Context) error {
