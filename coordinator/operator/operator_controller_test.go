@@ -345,11 +345,21 @@ func TestController_AddOperatorRejectsConcurrentEpochBump(t *testing.T) {
 	go func() {
 		firstResult <- oc.AddOperator(NewAddMaintainerOperator(changefeedDB, cf, target1.ID))
 	}()
-	<-bumpStarted
+	select {
+	case <-bumpStarted:
+	case <-time.After(time.Second):
+		close(releaseBump)
+		require.FailNow(t, "timed out waiting for epoch bump to start")
+	}
 
 	require.False(t, oc.AddOperator(NewAddMaintainerOperator(changefeedDB, cf, target2.ID)))
 	close(releaseBump)
-	require.True(t, <-firstResult)
+	select {
+	case ok := <-firstResult:
+		require.True(t, ok)
+	case <-time.After(time.Second):
+		require.FailNow(t, "timed out waiting for epoch bump to finish")
+	}
 	require.Equal(t, newEpoch, cf.GetInfo().Epoch)
 	require.NotNil(t, oc.GetOperator(cfID))
 }

@@ -421,7 +421,7 @@ func TestFinishBootstrapStopsStaleEpochMaintainerWithReportedEpoch(t *testing.T)
 					10,
 				),
 				nodeManager:   nodeManager,
-				taskScheduler: threadpool.NewThreadPoolDefault(),
+				taskScheduler: threadpool.NewThreadPool(1),
 				scheduler: pkgscheduler.NewController(map[string]pkgscheduler.Scheduler{
 					pkgscheduler.BasicScheduler: noopScheduler{},
 				}),
@@ -509,7 +509,7 @@ func TestHandleBootstrapResponsesKeepsCurrentEpochAndStopsStaleDuplicate(t *test
 			10,
 		),
 		nodeManager:   nodeManager,
-		taskScheduler: threadpool.NewThreadPoolDefault(),
+		taskScheduler: threadpool.NewThreadPool(1),
 		scheduler: pkgscheduler.NewController(map[string]pkgscheduler.Scheduler{
 			pkgscheduler.BasicScheduler: noopScheduler{},
 		}),

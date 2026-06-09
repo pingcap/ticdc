@@ -25,7 +25,6 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/routing"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/mock"
-	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql"
 	redosink "github.com/pingcap/ticdc/downstreamadapter/sink/redo"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -37,7 +36,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	redotestutil "github.com/pingcap/ticdc/pkg/redo/testutil"
-	mysqlcfg "github.com/pingcap/ticdc/pkg/sink/mysql"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/stretchr/testify/require"
@@ -533,20 +531,9 @@ func TestMergeDispatcherInvalidIDs(t *testing.T) {
 
 func TestTryCloseRemovedRequestAfterClosedReturnsImmediatelyAndTriggersCleanup(t *testing.T) {
 	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
-	mysqlConfig := mysqlcfg.New()
-	mysqlConfig.EnableDDLTs = false
-	mysqlSink := mysql.NewMySQLSink(
-		context.Background(),
-		changefeedID,
-		mysqlConfig,
-		nil,
-		false,
-		false,
-		time.Minute,
-	)
 	manager := &DispatcherManager{
 		changefeedID: changefeedID,
-		sink:         mysqlSink,
+		sink:         newDispatcherManagerTestSink(t, common.BlackHoleSinkType),
 	}
 	manager.closed.Store(true)
 
