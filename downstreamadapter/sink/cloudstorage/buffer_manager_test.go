@@ -198,6 +198,32 @@ func TestBufferManagerIntervalFlushesOnlyBatchesReachingMaxAge(t *testing.T) {
 	require.Contains(t, controller.buffer.tables, secondTask.versionedTable)
 }
 
+func TestTableBatchesNextIntervalFlushDeadline(t *testing.T) {
+	t.Parallel()
+
+	var empty tableBatches
+	_, ok := empty.nextIntervalFlushDeadline(5 * time.Second)
+	require.False(t, ok)
+
+	base := time.Unix(100, 0)
+	firstTask := newBufferedTask("table1", commonType.NewDispatcherID(), `{"id":1}`)
+	secondTask := newBufferedTask("table2", commonType.NewDispatcherID(), `{"id":2}`)
+
+	batches := newTableBatches()
+	batches.tables[firstTask.versionedTable] = &tableBatch{
+		size:         1,
+		firstEntryAt: base.Add(2 * time.Second),
+	}
+	batches.tables[secondTask.versionedTable] = &tableBatch{
+		size:         1,
+		firstEntryAt: base,
+	}
+
+	deadline, ok := batches.nextIntervalFlushDeadline(5 * time.Second)
+	require.True(t, ok)
+	require.Equal(t, base.Add(5*time.Second), deadline)
+}
+
 func newBufferedTask(table string, dispatcherID commonType.DispatcherID, payload string) *task {
 	tableInfo := &commonType.TableInfo{
 		TableName: commonType.TableName{

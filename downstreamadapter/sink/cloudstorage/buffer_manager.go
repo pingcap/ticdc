@@ -28,7 +28,6 @@ import (
 
 const (
 	defaultBufferManagerChannelSize = 64
-	maxIntervalFlushCheckPeriod     = time.Second
 
 	flushReasonSize     = "size"
 	flushReasonInterval = "interval"
@@ -70,21 +69,31 @@ func newBufferManager(
 }
 
 func (c *bufferManager) run(ctx context.Context) error {
-	ticker := time.NewTicker(intervalFlushCheckPeriod(c.config.FlushInterval))
-	defer ticker.Stop()
+	var intervalFlushTimer *time.Timer
+	var intervalFlushC <-chan time.Time
+	defer stopIntervalFlushTimer(intervalFlushTimer)
 
 	for {
+		var injectedErr error
 		failpoint.Inject("passTickerOnce", func() {
-			<-ticker.C
+			if intervalFlushC != nil {
+				now := <-intervalFlushC
+				injectedErr = c.emitExpiredBatch(ctx, now)
+				intervalFlushTimer, intervalFlushC = c.resetIntervalFlushTimer(intervalFlushTimer)
+			}
 		})
+		if injectedErr != nil {
+			return injectedErr
+		}
 
 		select {
 		case <-ctx.Done():
 			return errors.Trace(context.Cause(ctx))
-		case <-ticker.C:
-			if err := c.emitExpiredBatch(ctx, c.now()); err != nil {
+		case now := <-intervalFlushC:
+			if err := c.emitExpiredBatch(ctx, now); err != nil {
 				return err
 			}
+			intervalFlushTimer, intervalFlushC = c.resetIntervalFlushTimer(intervalFlushTimer)
 		case task := <-c.inputCh:
 			if task.isFlushTask() {
 				dispatcherBatch := c.buffer.detachByDispatcher(task.dispatcherID)
@@ -96,11 +105,13 @@ func (c *bufferManager) run(ctx context.Context) error {
 				if err := c.enqueueFlushTask(ctx, flushTask{marker: task.marker}); err != nil {
 					return err
 				}
+				intervalFlushTimer, intervalFlushC = c.resetIntervalFlushTimer(intervalFlushTimer)
 				continue
 			}
 			if err := c.handleDMLTask(ctx, task); err != nil {
 				return err
 			}
+			intervalFlushTimer, intervalFlushC = c.resetIntervalFlushTimer(intervalFlushTimer)
 		}
 	}
 }
@@ -273,18 +284,50 @@ func (t *tableBatches) detachExpired(now time.Time, maxAge time.Duration) tableB
 	return detached
 }
 
-func intervalFlushCheckPeriod(flushInterval time.Duration) time.Duration {
-	if flushInterval <= 0 {
-		return maxIntervalFlushCheckPeriod
+func (t *tableBatches) nextIntervalFlushDeadline(maxAge time.Duration) (time.Time, bool) {
+	var deadline time.Time
+	for _, tableTask := range t.tables {
+		next := tableTask.firstEntryAt
+		if maxAge > 0 {
+			next = next.Add(maxAge)
+		}
+		if deadline.IsZero() || next.Before(deadline) {
+			deadline = next
+		}
 	}
-	checkPeriod := flushInterval / 10
-	if checkPeriod <= 0 {
-		return flushInterval
+	return deadline, !deadline.IsZero()
+}
+
+func (c *bufferManager) resetIntervalFlushTimer(timer *time.Timer) (*time.Timer, <-chan time.Time) {
+	deadline, ok := c.buffer.nextIntervalFlushDeadline(c.config.FlushInterval)
+	if !ok {
+		stopIntervalFlushTimer(timer)
+		return timer, nil
 	}
-	if checkPeriod > maxIntervalFlushCheckPeriod {
-		return maxIntervalFlushCheckPeriod
+
+	delay := deadline.Sub(c.now())
+	if delay < 0 {
+		delay = 0
 	}
-	return checkPeriod
+	if timer == nil {
+		timer = time.NewTimer(delay)
+	} else {
+		stopIntervalFlushTimer(timer)
+		timer.Reset(delay)
+	}
+	return timer, timer.C
+}
+
+func stopIntervalFlushTimer(timer *time.Timer) {
+	if timer == nil {
+		return
+	}
+	if !timer.Stop() {
+		select {
+		case <-timer.C:
+		default:
+		}
+	}
 }
 
 func (c *bufferManager) emitFlushTask(ctx context.Context, batch tableBatches, reason string) error {
