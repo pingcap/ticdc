@@ -27,9 +27,7 @@ import (
 	"time"
 
 	"github.com/pingcap/ticdc/downstreamadapter/sink/cloudstorage/spool"
-	"github.com/pingcap/ticdc/pkg/clock"
 	commonType "github.com/pingcap/ticdc/pkg/common"
-	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/metrics"
@@ -47,7 +45,7 @@ import (
 )
 
 func testWriter(ctx context.Context, t *testing.T, dir string) *writer {
-	uri := fmt.Sprintf("file:///%s?flush-interval=2s", dir)
+	uri := fmt.Sprintf("file:///%s?flush-interval=100ms", dir)
 	storage, err := util.GetExternalStorageWithDefaultTimeout(ctx, uri)
 	require.NoError(t, err)
 	sinkURI, err := url.Parse(uri)
@@ -61,10 +59,7 @@ func testWriter(ctx context.Context, t *testing.T, dir string) *writer {
 
 	changefeedID := commonType.NewChangefeedID4Test("test", t.Name())
 	statistics := metrics.NewStatistics(changefeedID, t.Name())
-	pdlock := pdutil.NewMonotonicClock(clock.New())
-	appcontext.SetService(appcontext.DefaultPDClock, pdlock)
-	mockPDClock := pdutil.NewClock4Test()
-	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+	setPDClockForTest(t, pdutil.NewClock4Test())
 	spoolBuffer := newTestSpool(t, changefeedID, cfg)
 	d := newWriter(1, changefeedID, storage,
 		cfg, ".json", statistics, spoolBuffer)
@@ -100,8 +95,6 @@ func hasSpoolLogFile(spoolDir string) bool {
 }
 
 func TestWriterRun(t *testing.T) {
-	t.Parallel()
-
 	ctx, cancel := context.WithCancel(context.Background())
 	parentDir := t.TempDir()
 	d := testWriter(ctx, t, parentDir)
@@ -165,8 +158,6 @@ func TestWriterRun(t *testing.T) {
 }
 
 func TestWriterFlushMarker(t *testing.T) {
-	t.Parallel()
-
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	parentDir := t.TempDir()
@@ -229,8 +220,6 @@ func TestWriterFlushMarker(t *testing.T) {
 }
 
 func TestWriterFlushMarkerOnlyFlushesTargetDispatcher(t *testing.T) {
-	t.Parallel()
-
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	parentDir := t.TempDir()
@@ -326,8 +315,6 @@ func TestWriterFlushMarkerOnlyFlushesTargetDispatcher(t *testing.T) {
 }
 
 func TestWriterPostEnqueueAfterConsume(t *testing.T) {
-	t.Parallel()
-
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	parentDir := t.TempDir()
@@ -422,10 +409,7 @@ func TestWriterStoresPendingMessagesInSpoolBeforeFlush(t *testing.T) {
 
 	changefeedID := commonType.NewChangefeedID4Test("test", "spool-pending")
 	statistics := metrics.NewStatistics(changefeedID, t.Name())
-	pdlock := pdutil.NewMonotonicClock(clock.New())
-	appcontext.SetService(appcontext.DefaultPDClock, pdlock)
-	mockPDClock := pdutil.NewClock4Test()
-	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+	setPDClockForTest(t, pdutil.NewClock4Test())
 
 	spoolBuffer := newTestSpool(t, changefeedID, cfg)
 	d := newWriter(1, changefeedID, storage, cfg, ".json", statistics, spoolBuffer)
@@ -517,8 +501,6 @@ func TestDiscardPayloadDoesNotLoadSpilledPayload(t *testing.T) {
 }
 
 func TestWriterRunExitAfterContextCancel(t *testing.T) {
-	t.Parallel()
-
 	ctx, cancel := context.WithCancelCause(context.Background())
 	parentDir := t.TempDir()
 	d := testWriter(ctx, t, parentDir)
@@ -593,10 +575,7 @@ func TestWriterIndexWriteError(t *testing.T) {
 
 	changefeedID := commonType.NewChangefeedID4Test("test", "writer-error-metric")
 	statistics := metrics.NewStatistics(changefeedID, t.Name())
-	pdlock := pdutil.NewMonotonicClock(clock.New())
-	appcontext.SetService(appcontext.DefaultPDClock, pdlock)
-	mockPDClock := pdutil.NewClock4Test()
-	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+	setPDClockForTest(t, pdutil.NewClock4Test())
 	spoolBuffer := newTestSpool(t, changefeedID, cfg)
 	d := newWriter(1, changefeedID, storage, cfg, ".json", statistics, spoolBuffer)
 
@@ -659,10 +638,7 @@ func TestWriterDataFileCloseError(t *testing.T) {
 
 	changefeedID := commonType.NewChangefeedID4Test("test", "writer-close-error")
 	statistics := metrics.NewStatistics(changefeedID, t.Name())
-	pdlock := pdutil.NewMonotonicClock(clock.New())
-	appcontext.SetService(appcontext.DefaultPDClock, pdlock)
-	mockPDClock := pdutil.NewClock4Test()
-	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+	setPDClockForTest(t, pdutil.NewClock4Test())
 	spoolBuffer := newTestSpool(t, changefeedID, cfg)
 	d := newWriter(1, changefeedID, storage, cfg, ".json", statistics, spoolBuffer)
 
