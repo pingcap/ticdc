@@ -248,29 +248,20 @@ func (t *tableBatches) detachByDispatcher(dispatcherID common.DispatcherID) tabl
 }
 
 func (c *bufferManager) emitFlushTask(ctx context.Context, batch tableBatches, reason string) error {
-	batches := make([]tablePayload, 0, len(batch.tables))
-	for table, tableTask := range batch.tables {
-		payload, err := c.buildPayload(tableTask)
-		if err != nil {
-			return err
-		}
-		batches = append(batches, tablePayload{
-			table:   table,
-			payload: payload,
-		})
+	if batch.isEmpty() {
+		return nil
 	}
-
-	if err := c.enqueueFlushTask(ctx, flushTask{batches: batches}); err != nil {
+	if err := c.enqueueFlushTask(ctx, flushTask{batch: batch}); err != nil {
 		return err
 	}
 	metrics.CloudStorageFlushReasonCounter.WithLabelValues(c.changeFeedID.Keyspace(), c.changeFeedID.Name(), reason).Inc()
 	return nil
 }
 
-func (c *bufferManager) buildPayload(batch *tableBatch) (*payload, error) {
+func buildPayload(spoolBuffer *spool.Spool, batch *tableBatch) (*payload, error) {
 	builder := newPayloadBuilder(batch)
 	for _, entry := range batch.entries {
-		if err := builder.appendEntry(c.spool, entry); err != nil {
+		if err := builder.appendEntry(spoolBuffer, entry); err != nil {
 			return nil, err
 		}
 	}
