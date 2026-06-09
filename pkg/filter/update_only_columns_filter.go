@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/pingcap/tidb/pkg/util/collate"
@@ -34,7 +35,7 @@ type updateOnlyColumnsFilter struct {
 }
 
 type updateOnlyColumnsRule struct {
-	mu sync.Mutex
+	mu sync.RWMutex
 
 	tableMatcher  tfilter.Filter
 	configured    []string
@@ -47,6 +48,7 @@ type updateOnlyColumnsRule struct {
 type resolvedUpdateOnlyColumns struct {
 	updateTS     uint64
 	ignoredColID map[int64]struct{}
+	keyColID     map[int64]struct{}
 }
 
 func newUpdateOnlyColumnsFilter(cfg *config.FilterConfig, caseSensitive bool) (*updateOnlyColumnsFilter, error) {
@@ -118,7 +120,6 @@ func (r *updateOnlyColumnsRule) shouldSkipUpdate(
 		return false, nil
 	}
 
-	keyColIDs := makeColumnIDSet(tableInfo.GetIndexColumns())
 	for _, col := range tableInfo.GetColumns() {
 		offset, ok := tableInfo.GetRowColumnsOffset()[col.ID]
 		if !ok {
@@ -136,7 +137,7 @@ func (r *updateOnlyColumnsRule) shouldSkipUpdate(
 			continue
 		}
 
-		if _, ok := keyColIDs[col.ID]; ok {
+		if _, ok := resolved.keyColID[col.ID]; ok {
 			return false, nil
 		}
 		if _, ok := resolved.ignoredColID[col.ID]; !ok {
@@ -150,6 +151,13 @@ func (r *updateOnlyColumnsRule) resolveColumns(tableInfo *common.TableInfo) reso
 	tableID := tableInfo.TableName.TableID
 	updateTS := tableInfo.GetUpdateTS()
 
+	r.mu.RLock()
+	if resolved, ok := r.tables[tableID]; ok && resolved.updateTS == updateTS {
+		r.mu.RUnlock()
+		return resolved
+	}
+	r.mu.RUnlock()
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -160,6 +168,7 @@ func (r *updateOnlyColumnsRule) resolveColumns(tableInfo *common.TableInfo) reso
 	resolved := resolvedUpdateOnlyColumns{
 		updateTS:     updateTS,
 		ignoredColID: make(map[int64]struct{}, len(r.configured)),
+		keyColID:     makeColumnIDSet(tableInfo.GetIndexColumns()),
 	}
 	rowColumnsOffset := tableInfo.GetRowColumnsOffset()
 	for _, columnName := range r.configured {
@@ -213,6 +222,10 @@ func columnValueEqual(preRow, row chunk.Row, offset int, ft *types.FieldType) (b
 		return preRow.IsNull(offset) == row.IsNull(offset), nil
 	}
 
+	if equal, ok := columnValueEqualFastPath(preRow, row, offset, ft); ok {
+		return equal, nil
+	}
+
 	preValue := preRow.GetDatum(offset, ft)
 	rowValue := row.GetDatum(offset, ft)
 	cmp, err := preValue.Compare(types.DefaultStmtNoWarningContext, &rowValue, collate.GetBinaryCollator())
@@ -220,4 +233,25 @@ func columnValueEqual(preRow, row chunk.Row, offset int, ft *types.FieldType) (b
 		return false, errors.Trace(err)
 	}
 	return cmp == 0, nil
+}
+
+func columnValueEqualFastPath(preRow, row chunk.Row, offset int, ft *types.FieldType) (bool, bool) {
+	switch ft.GetType() {
+	case mysql.TypeTiny, mysql.TypeShort, mysql.TypeInt24, mysql.TypeLong, mysql.TypeLonglong:
+		if mysql.HasUnsignedFlag(ft.GetFlag()) {
+			return preRow.GetUint64(offset) == row.GetUint64(offset), true
+		}
+		return preRow.GetInt64(offset) == row.GetInt64(offset), true
+	case mysql.TypeYear:
+		return preRow.GetInt64(offset) == row.GetInt64(offset), true
+	case mysql.TypeFloat:
+		return preRow.GetFloat32(offset) == row.GetFloat32(offset), true
+	case mysql.TypeDouble:
+		return preRow.GetFloat64(offset) == row.GetFloat64(offset), true
+	case mysql.TypeVarchar, mysql.TypeVarString, mysql.TypeString,
+		mysql.TypeBlob, mysql.TypeTinyBlob, mysql.TypeMediumBlob, mysql.TypeLongBlob:
+		return preRow.GetString(offset) == row.GetString(offset), true
+	default:
+		return false, false
+	}
 }

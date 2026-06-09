@@ -597,6 +597,111 @@ func TestShouldIgnoreDMLByUpdateOnlyColumns(t *testing.T) {
 	}
 }
 
+func TestColumnValueEqual(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name  string
+		tp    byte
+		flag  uint
+		pre   any
+		row   any
+		equal bool
+	}{
+		{
+			name:  "signed int equal",
+			tp:    mysql.TypeLonglong,
+			pre:   int64(-1),
+			row:   int64(-1),
+			equal: true,
+		},
+		{
+			name:  "signed int changed",
+			tp:    mysql.TypeLonglong,
+			pre:   int64(-1),
+			row:   int64(1),
+			equal: false,
+		},
+		{
+			name:  "unsigned int equal",
+			tp:    mysql.TypeLonglong,
+			flag:  mysql.UnsignedFlag,
+			pre:   uint64(1),
+			row:   uint64(1),
+			equal: true,
+		},
+		{
+			name:  "float equal",
+			tp:    mysql.TypeFloat,
+			pre:   float32(1.5),
+			row:   float32(1.5),
+			equal: true,
+		},
+		{
+			name:  "double changed",
+			tp:    mysql.TypeDouble,
+			pre:   float64(1.5),
+			row:   float64(2.5),
+			equal: false,
+		},
+		{
+			name:  "string equal",
+			tp:    mysql.TypeVarchar,
+			pre:   "alice",
+			row:   "alice",
+			equal: true,
+		},
+		{
+			name:  "string changed",
+			tp:    mysql.TypeVarchar,
+			pre:   "alice",
+			row:   "bob",
+			equal: false,
+		},
+		{
+			name:  "null equal",
+			tp:    mysql.TypeVarchar,
+			pre:   nil,
+			row:   nil,
+			equal: true,
+		},
+		{
+			name:  "null changed",
+			tp:    mysql.TypeVarchar,
+			pre:   nil,
+			row:   "alice",
+			equal: false,
+		},
+		{
+			name:  "decimal fallback equal",
+			tp:    mysql.TypeNewDecimal,
+			pre:   types.NewDecFromStringForTest("1.23"),
+			row:   types.NewDecFromStringForTest("1.23"),
+			equal: true,
+		},
+		{
+			name:  "decimal fallback changed",
+			tp:    mysql.TypeNewDecimal,
+			pre:   types.NewDecFromStringForTest("1.23"),
+			row:   types.NewDecFromStringForTest("2.34"),
+			equal: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tableInfo := mustNewCommonTableInfo("test", "t",
+				[]*model.ColumnInfo{newColumnInfo(1, "c", tc.tp, tc.flag)}, nil)
+			preRow := datumsToChunkRow(types.MakeDatums(tc.pre), tableInfo)
+			row := datumsToChunkRow(types.MakeDatums(tc.row), tableInfo)
+
+			equal, err := columnValueEqual(preRow, row, 0, &tableInfo.GetColumns()[0].FieldType)
+			require.NoError(t, err)
+			require.Equal(t, tc.equal, equal)
+		})
+	}
+}
+
 func TestShouldIgnoreDMLCaseSensitivity(t *testing.T) {
 	t.Parallel()
 
