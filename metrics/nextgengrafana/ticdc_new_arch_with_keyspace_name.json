@@ -124,8 +124,8 @@
   "editable": true,
   "gnetId": null,
   "graphTooltip": 1,
-  "id": 35,
-  "iteration": 1774515109805,
+  "id": 39,
+  "iteration": 1781002213772,
   "links": [],
   "panels": [
     {
@@ -1002,130 +1002,6 @@
             "align": false,
             "alignLevel": null
           }
-        },
-        {
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "Current warning or failed reason of each changefeed. The metric message is normalized to a single line and truncated to 256 characters.",
-          "fieldConfig": {
-            "defaults": {
-              "custom": {
-                "align": null,
-                "filterable": false
-              },
-              "links": [],
-              "mappings": [],
-              "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                  {
-                    "color": "green",
-                    "value": null
-                  },
-                  {
-                    "color": "red",
-                    "value": 80
-                  }
-                ]
-              }
-            },
-            "overrides": [
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "keyspace_name"
-                },
-                "properties": [
-                  {
-                    "id": "custom.width",
-                    "value": 120
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "changefeed"
-                },
-                "properties": [
-                  {
-                    "id": "custom.width",
-                    "value": 180
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "state"
-                },
-                "properties": [
-                  {
-                    "id": "custom.width",
-                    "value": 100
-                  }
-                ]
-              },
-              {
-                "matcher": {
-                  "id": "byName",
-                  "options": "code"
-                },
-                "properties": [
-                  {
-                    "id": "custom.width",
-                    "value": 180
-                  }
-                ]
-              }
-            ]
-          },
-          "gridPos": {
-            "h": 8,
-            "w": 24,
-            "x": 0,
-            "y": 32
-          },
-          "id": 62010,
-          "options": {
-            "showHeader": true,
-            "sortBy": []
-          },
-          "pluginVersion": "7.5.17",
-          "targets": [
-            {
-              "expr": "max by (keyspace_name, changefeed, state, code, message) (ticdc_owner_changefeed_error_info{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"})",
-              "format": "time_series",
-              "instant": true,
-              "refId": "A"
-            }
-          ],
-          "title": "Changefeed Error Details",
-          "transformations": [
-            {
-              "id": "labelsToFields",
-              "options": {}
-            },
-            {
-              "id": "organize",
-              "options": {
-                "excludeByName": {
-                  "Metric": true,
-                  "Time": true,
-                  "Value": true,
-                  "__name__": true
-                },
-                "indexByName": {
-                  "changefeed": 1,
-                  "code": 3,
-                  "message": 4,
-                  "keyspace_name": 0,
-                  "state": 2
-                },
-                "renameByName": {}
-              }
-            }
-          ],
-          "type": "table"
         }
       ],
       "title": "Summary",
@@ -2583,12 +2459,12 @@
                   "__name__": true
                 },
                 "indexByName": {
-                  "keyspace_name": 0,
                   "changefeed": 1,
-                  "state": 2,
-                  "error_time": 3,
                   "code": 4,
-                  "message": 5
+                  "error_time": 3,
+                  "message": 5,
+                  "keyspace_name": 0,
+                  "state": 2
                 },
                 "renameByName": {}
               }
@@ -2723,8 +2599,8 @@
             "showHeader": true,
             "sortBy": [
               {
-                "displayName": "operation_time",
-                "desc": true
+                "desc": true,
+                "displayName": "operation_time"
               }
             ]
           },
@@ -2753,14 +2629,14 @@
                   "event_id": true
                 },
                 "indexByName": {
-                  "keyspace_name": 0,
-                  "changefeed": 1,
                   "Value": 2,
+                  "changefeed": 1,
+                  "details": 6,
+                  "error": 7,
+                  "keyspace_name": 0,
                   "operation": 3,
                   "result": 4,
-                  "username": 5,
-                  "details": 6,
-                  "error": 7
+                  "username": 5
                 },
                 "renameByName": {
                   "Value": "operation_time"
@@ -3984,212 +3860,6 @@
       },
       "id": 20007,
       "panels": [
-        {
-          "aliasColors": {},
-          "bars": false,
-          "dashLength": 10,
-          "dashes": false,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The lag between changefeed checkpoint ts and the lac1 ts of upstream TiDB.",
-          "fieldConfig": {
-            "defaults": {
-              "links": []
-            },
-            "overrides": []
-          },
-          "fill": 1,
-          "fillGradient": 0,
-          "gridPos": {
-            "h": 6,
-            "w": 12,
-            "x": 0,
-            "y": 12
-          },
-          "hiddenSeries": false,
-          "id": 60029,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "max": true,
-            "min": false,
-            "rightSide": false,
-            "show": true,
-            "total": false,
-            "values": true
-          },
-          "lines": true,
-          "linewidth": 1,
-          "links": [],
-          "nullPointMode": "null",
-          "options": {
-            "alertThreshold": true
-          },
-          "paceLength": 10,
-          "percentage": false,
-          "pluginVersion": "7.5.17",
-          "pointradius": 2,
-          "points": false,
-          "renderer": "flot",
-          "seriesOverrides": [],
-          "spaceLength": 10,
-          "stack": false,
-          "steppedLine": false,
-          "targets": [
-            {
-              "exemplar": true,
-              "expr": "max(ticdc_event_service_scan_window_interval{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",  changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}) by (keyspace_name, changefeed,instance)",
-              "format": "time_series",
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": "{{instance}}{{keyspace_name}}-{{changefeed}}",
-              "refId": "A"
-            }
-          ],
-          "thresholds": [],
-          "timeFrom": null,
-          "timeRegions": [],
-          "timeShift": null,
-          "title": "Scan window interval",
-          "tooltip": {
-            "shared": true,
-            "sort": 0,
-            "value_type": "individual"
-          },
-          "type": "graph",
-          "xaxis": {
-            "buckets": null,
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
-          },
-          "yaxes": [
-            {
-              "format": "s",
-              "logBase": 1,
-              "min": "0",
-              "show": true
-            },
-            {
-              "format": "short",
-              "logBase": 1,
-              "show": false
-            }
-          ],
-          "yaxis": {
-            "align": false
-          }
-        },
-        {
-          "aliasColors": {},
-          "bars": true,
-          "cacheTimeout": null,
-          "dashLength": 10,
-          "dashes": false,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "",
-          "fieldConfig": {
-            "defaults": {},
-            "overrides": []
-          },
-          "fill": 0,
-          "fillGradient": 0,
-          "gridPos": {
-            "h": 6,
-            "w": 12,
-            "x": 12,
-            "y": 12
-          },
-          "hiddenSeries": false,
-          "id": 60030,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "max": false,
-            "min": false,
-            "rightSide": false,
-            "show": true,
-            "sideWidth": null,
-            "total": false,
-            "values": true
-          },
-          "lines": true,
-          "linewidth": 2,
-          "links": [],
-          "nullPointMode": "null",
-          "options": {
-            "alertThreshold": true
-          },
-          "percentage": false,
-          "pluginVersion": "7.5.17",
-          "pointradius": 2,
-          "points": false,
-          "renderer": "flot",
-          "seriesOverrides": [
-            {
-              "alias": "/approximate current time.*/",
-              "bars": false
-            }
-          ],
-          "spaceLength": 10,
-          "stack": false,
-          "steppedLine": false,
-          "targets": [
-            {
-              "exemplar": true,
-              "expr": "max(ticdc_event_service_scan_window_base_ts{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\"}) by (keyspace_name,changefeed,instance)",
-              "format": "time_series",
-              "hide": false,
-              "interval": "",
-              "intervalFactor": 1,
-              "legendFormat": "{{instance}}{{keyspace_name}}-{{changefeed}}",
-              "refId": "B"
-            }
-          ],
-          "thresholds": [],
-          "timeFrom": null,
-          "timeRegions": [],
-          "timeShift": null,
-          "title": "Scan window base ts",
-          "tooltip": {
-            "shared": true,
-            "sort": 0,
-            "value_type": "individual"
-          },
-          "type": "graph",
-          "xaxis": {
-            "buckets": null,
-            "max": null,
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
-          },
-          "yaxes": [
-            {
-              "format": "none",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            },
-            {
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": false
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": null
-          }
-        },
         {
           "aliasColors": {},
           "bars": false,
@@ -7863,253 +7533,6 @@
           "dashLength": 10,
           "dashes": false,
           "datasource": "${DS_TEST-CLUSTER}",
-          "fieldConfig": {
-            "defaults": {},
-            "overrides": []
-          },
-          "fill": 1,
-          "fillGradient": 0,
-          "gridPos": {
-            "h": 8,
-            "w": 12,
-            "x": 12,
-            "y": 19
-          },
-          "hiddenSeries": false,
-          "id": 62004,
-          "legend": {
-            "avg": false,
-            "current": false,
-            "max": false,
-            "min": false,
-            "show": true,
-            "total": false,
-            "values": false
-          },
-          "lines": true,
-          "linewidth": 1,
-          "nullPointMode": "null",
-          "options": {
-            "alertThreshold": true
-          },
-          "percentage": false,
-          "pluginVersion": "7.5.17",
-          "pointradius": 2,
-          "points": false,
-          "renderer": "flot",
-          "seriesOverrides": [],
-          "spaceLength": 10,
-          "stack": false,
-          "steppedLine": false,
-          "targets": [
-            {
-              "exemplar": true,
-              "expr": "sum(ticdc_sink_cloud_storage_file_count{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\"}) by (keyspace_name,changefeed, instance)",
-              "interval": "",
-              "legendFormat": "{{keyspace_name}}-{{changefeed}}-{{instance}}",
-              "queryType": "randomWalk",
-              "refId": "A"
-            }
-          ],
-          "thresholds": [],
-          "timeFrom": null,
-          "timeRegions": [],
-          "timeShift": null,
-          "title": "File Count",
-          "tooltip": {
-            "shared": true,
-            "sort": 0,
-            "value_type": "individual"
-          },
-          "type": "graph",
-          "xaxis": {
-            "buckets": null,
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
-          },
-          "yaxes": [
-            {
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": "0",
-              "show": true
-            },
-            {
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": null
-          }
-        },
-        {
-          "cards": {
-            "cardPadding": 0,
-            "cardRound": 0
-          },
-          "color": {
-            "cardColor": "#b4ff00",
-            "colorScale": "sqrt",
-            "colorScheme": "interpolateSpectral",
-            "exponent": 0.5,
-            "max": null,
-            "min": 0,
-            "mode": "spectrum"
-          },
-          "dataFormat": "tsbuckets",
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The latency distributions of write storage by a cloud storage sink",
-          "fieldConfig": {
-            "defaults": {},
-            "overrides": []
-          },
-          "gridPos": {
-            "h": 8,
-            "w": 12,
-            "x": 0,
-            "y": 27
-          },
-          "heatmap": {},
-          "hideZeroBuckets": true,
-          "highlightCards": true,
-          "id": 62005,
-          "legend": {
-            "show": true
-          },
-          "pluginVersion": "7.5.11",
-          "reverseYBuckets": false,
-          "targets": [
-            {
-              "exemplar": true,
-              "expr": "max(rate(ticdc_sink_cloud_storage_write_duration_seconds_bucket{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (le)",
-              "format": "heatmap",
-              "hide": false,
-              "interval": "",
-              "intervalFactor": 2,
-              "legendFormat": "{{le}}",
-              "queryType": "randomWalk",
-              "refId": "A"
-            }
-          ],
-          "timeFrom": null,
-          "timeShift": null,
-          "title": "Write duration",
-          "tooltip": {
-            "show": true,
-            "showHistogram": true
-          },
-          "tooltipDecimals": 1,
-          "type": "heatmap",
-          "xAxis": {
-            "show": true
-          },
-          "xBucketNumber": null,
-          "xBucketSize": null,
-          "yAxis": {
-            "decimals": 1,
-            "format": "s",
-            "logBase": 1,
-            "max": null,
-            "min": null,
-            "show": true,
-            "splitFactor": null
-          },
-          "yBucketBound": "upper",
-          "yBucketNumber": null,
-          "yBucketSize": null
-        },
-        {
-          "cards": {
-            "cardPadding": 0,
-            "cardRound": 0
-          },
-          "color": {
-            "cardColor": "#b4ff00",
-            "colorScale": "sqrt",
-            "colorScheme": "interpolateSpectral",
-            "exponent": 0.5,
-            "max": null,
-            "min": 0,
-            "mode": "spectrum"
-          },
-          "dataFormat": "tsbuckets",
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The latency distributions of flush storage by a cloud storage sink",
-          "fieldConfig": {
-            "defaults": {},
-            "overrides": []
-          },
-          "gridPos": {
-            "h": 8,
-            "w": 12,
-            "x": 12,
-            "y": 27
-          },
-          "heatmap": {},
-          "hideZeroBuckets": true,
-          "highlightCards": true,
-          "id": 60015,
-          "legend": {
-            "show": true
-          },
-          "pluginVersion": "7.5.11",
-          "reverseYBuckets": false,
-          "targets": [
-            {
-              "exemplar": true,
-              "expr": "max(rate(ticdc_sink_cloud_storage_flush_duration_seconds_bucket{k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",keyspace_name=~\"$keyspace_name\",changefeed=~\"$changefeed\",instance=~\"$ticdc_instance\"}[1m])) by (le)",
-              "format": "heatmap",
-              "hide": false,
-              "interval": "",
-              "intervalFactor": 2,
-              "legendFormat": "{{le}}",
-              "queryType": "randomWalk",
-              "refId": "A"
-            }
-          ],
-          "timeFrom": null,
-          "timeShift": null,
-          "title": "Flush duration",
-          "tooltip": {
-            "show": true,
-            "showHistogram": true
-          },
-          "tooltipDecimals": 1,
-          "type": "heatmap",
-          "xAxis": {
-            "show": true
-          },
-          "xBucketNumber": null,
-          "xBucketSize": null,
-          "yAxis": {
-            "decimals": 1,
-            "format": "s",
-            "logBase": 1,
-            "max": null,
-            "min": null,
-            "show": true,
-            "splitFactor": null
-          },
-          "yBucketBound": "upper",
-          "yBucketNumber": null,
-          "yBucketSize": null
-        },
-        {
-          "aliasColors": {},
-          "bars": false,
-          "dashLength": 10,
-          "dashes": false,
-          "datasource": "${DS_TEST-CLUSTER}",
           "description": "Busy ratio (X ms in 1s) for cloud storage sink dml worker",
           "fieldConfig": {
             "defaults": {},
@@ -10764,154 +10187,6 @@
         "x": 0,
         "y": 21
       },
-      "id": 62006,
-      "panels": [
-        {
-          "aliasColors": {},
-          "bars": false,
-          "dashLength": 10,
-          "dashes": false,
-          "datasource": "${DS_TEST-CLUSTER}",
-          "description": "Rows skipped due to last-write-wins conflict resolution during TiDB active-active replication.",
-          "fieldConfig": {
-            "defaults": {
-              "links": []
-            },
-            "overrides": []
-          },
-          "fill": 1,
-          "fillGradient": 0,
-          "gridPos": {
-            "h": 6,
-            "w": 12,
-            "x": 0,
-            "y": 20
-          },
-          "hiddenSeries": false,
-          "id": 22477,
-          "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "max": true,
-            "min": false,
-            "rightSide": false,
-            "show": true,
-            "sort": "current",
-            "sortDesc": true,
-            "total": false,
-            "values": true
-          },
-          "lines": true,
-          "linewidth": 1,
-          "links": [],
-          "nullPointMode": "null",
-          "options": {
-            "alertThreshold": true
-          },
-          "percentage": false,
-          "pluginVersion": "7.5.17",
-          "pointradius": 2,
-          "points": false,
-          "renderer": "flot",
-          "seriesOverrides": [
-            {
-              "alias": "/.*-sum/",
-              "lines": true,
-              "linewidth": 3,
-              "points": false,
-              "yaxis": 2
-            },
-            {
-              "alias": "/.*-rate/",
-              "lines": true,
-              "linewidth": 3,
-              "points": false,
-              "yaxis": 1
-            }
-          ],
-          "spaceLength": 10,
-          "stack": false,
-          "steppedLine": false,
-          "targets": [
-            {
-              "exemplar": true,
-              "expr": "sum(rate(ticdc_sink_active_active_conflict_skip_rows_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}[1m])) by (keyspace_name, changefeed)",
-              "format": "time_series",
-              "hide": false,
-              "interval": "",
-              "intervalFactor": 2,
-              "legendFormat": "{{keyspace_name}}-{{changefeed}}-rate",
-              "refId": "B",
-              "step": 10
-            },
-            {
-              "exemplar": true,
-              "expr": "sum(ticdc_sink_active_active_conflict_skip_rows_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", keyspace_name=~\"$keyspace_name\", changefeed=~\"$changefeed\", instance=~\"$ticdc_instance\"}) by (keyspace_name, changefeed)",
-              "format": "time_series",
-              "hide": true,
-              "interval": "",
-              "intervalFactor": 2,
-              "legendFormat": "{{keyspace_name}}-{{changefeed}}-sum",
-              "refId": "C",
-              "step": 10
-            }
-          ],
-          "thresholds": [],
-          "timeRegions": [],
-          "title": "Conflict Skip Rows / s",
-          "tooltip": {
-            "msResolution": false,
-            "shared": true,
-            "sort": 0,
-            "value_type": "individual"
-          },
-          "type": "graph",
-          "xaxis": {
-            "buckets": null,
-            "mode": "time",
-            "name": null,
-            "show": true,
-            "values": []
-          },
-          "yaxes": [
-            {
-              "decimals": null,
-              "format": "none",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": "0",
-              "show": true
-            },
-            {
-              "decimals": 0,
-              "format": "none",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": "0",
-              "show": true
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": null
-          }
-        }
-      ],
-      "title": "Active Active",
-      "type": "row"
-    },
-    {
-      "collapsed": true,
-      "datasource": null,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 22
-      },
       "id": 10021,
       "panels": [
         {
@@ -10931,7 +10206,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 45
+            "y": 46
           },
           "hiddenSeries": false,
           "id": 22470,
@@ -11015,7 +10290,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 24
+        "y": 243
       },
       "id": 607,
       "panels": [
@@ -11036,7 +10311,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 25
+            "y": 24
           },
           "hiddenSeries": false,
           "id": 613,
@@ -11141,7 +10416,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 25
+            "y": 24
           },
           "hiddenSeries": false,
           "id": 614,
@@ -11234,7 +10509,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 33
+            "y": 32
           },
           "hiddenSeries": false,
           "id": 6141,
@@ -11327,7 +10602,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 33
+            "y": 32
           },
           "hiddenSeries": false,
           "id": 615,
@@ -11426,7 +10701,7 @@
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 41
+            "y": 40
           },
           "heatmap": {},
           "hideZeroBuckets": true,
