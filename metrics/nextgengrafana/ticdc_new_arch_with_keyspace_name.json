@@ -922,7 +922,7 @@
             "y": 26
           },
           "hiddenSeries": false,
-          "id": 22271,
+          "id": 62002,
           "legend": {
             "alignAsTable": false,
             "avg": false,
@@ -5780,7 +5780,7 @@
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 32
+            "y": 33
           },
           "hiddenSeries": false,
           "id": 636,
@@ -7427,7 +7427,7 @@
         "x": 0,
         "y": 18
       },
-      "id": 60007,
+      "id": 62007,
       "panels": [
         {
           "aliasColors": {},
@@ -7544,7 +7544,7 @@
             "y": 19
           },
           "hiddenSeries": false,
-          "id": 60011,
+          "id": 62004,
           "legend": {
             "avg": false,
             "current": false,
@@ -7650,7 +7650,7 @@
           "heatmap": {},
           "hideZeroBuckets": true,
           "highlightCards": true,
-          "id": 60013,
+          "id": 62005,
           "legend": {
             "show": true
           },
@@ -9815,7 +9815,7 @@
       "type": "row"
     }
   ],
-  "refresh": "5s",
+  "refresh": "10s",
   "schemaVersion": 27,
   "style": "dark",
   "tags": [],
