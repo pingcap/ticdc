@@ -152,13 +152,6 @@ func newRangeCheck(status *heartbeatpb.State, dynamicSplitEnabled bool, keyspace
 	return range_checker.NewTableCountChecker(status.BlockTables.TableIDs)
 }
 
-func (be *BarrierEvent) buildRouteAdmission() routing.AdmissionEvent {
-	return routing.AdmissionEvent{
-		CommitTs:   be.commitTs,
-		Admissions: be.routeAdmissions,
-	}
-}
-
 func routeTableAdmissionsFromPB(admissions []*heartbeatpb.RouteTableAdmission) []routing.Admission {
 	if len(admissions) == 0 {
 		return nil

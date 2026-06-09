@@ -593,15 +593,10 @@ func TestBarrierAppliesRecoveredRouteEventBeforeActionResend(t *testing.T) {
 	}, common.DefaultMode, routeAdmin)
 
 	_ = barrier.Resend()
-	ready, err := routeAdmin.Precheck(routing.AdmissionEvent{
-		CommitTs: 20,
-		Admissions: []routing.Admission{
-			{
-				Action:  routing.Admit,
-				Binding: routing.NewRouteBinding("db2", "u", "target", "u"),
-			},
-		},
-	})
+	ready, err := routeAdmin.Precheck(20, []routing.Admission{{
+		Action:  routing.Admit,
+		Binding: routing.NewRouteBinding("db2", "u", "target", "u"),
+	}})
 	require.Error(t, err)
 	require.False(t, ready)
 	require.Contains(t, err.Error(), "table route conflict")
@@ -697,15 +692,10 @@ func TestBarrierRoutePrecheckKeepsFullyReportedBlockedEventAndPreventsWriteActio
 
 	barrier, routeAdmin, cfID, _, tableDispatcherID, _ := newBarrierRoutePrecheckTestFixture(
 		t, routeBySource())
-	ready, err := routeAdmin.Precheck(routing.AdmissionEvent{
-		CommitTs: 5,
-		Admissions: []routing.Admission{
-			{
-				Action:  routing.Admit,
-				Binding: routing.NewRouteBinding("db2", "t", "db2_target", "t"),
-			},
-		},
-	})
+	ready, err := routeAdmin.Precheck(5, []routing.Admission{{
+		Action:  routing.Admit,
+		Binding: routing.NewRouteBinding("db2", "t", "db2_target", "t"),
+	}})
 	require.NoError(t, err)
 	require.True(t, ready)
 	blockTables := &heartbeatpb.InfluencedTables{

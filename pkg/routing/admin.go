@@ -15,7 +15,6 @@ package routing
 
 import (
 	"cmp"
-	"container/heap"
 	"slices"
 	"time"
 
@@ -43,11 +42,11 @@ type Admin struct {
 	// do not change this lifecycle unless the logical source route changes.
 	activeRoutes map[TableKey]RouteBinding
 
-	// pendingQueue and pendingEvents keep route-affecting DDL transitions in
+	// pendingQueue and pendingTransitions keep route-affecting DDL transitions in
 	// commit order. A later route transition can be prechecked only after every
 	// earlier route transition has been applied to the admission snapshot.
-	pendingQueue  pendingCommitTsHeap
-	pendingEvents map[uint64]*pendingEvent
+	pendingQueue       []uint64
+	pendingTransitions map[uint64]*routeTransition
 
 	// reportError reports unrecoverable route admission errors to the
 	// changefeed-level error path. failed suppresses duplicate reports from
@@ -71,63 +70,14 @@ type Admission struct {
 	Binding RouteBinding
 }
 
-// AdmissionEvent is the route-relevant snapshot derived from one DDL barrier.
-type AdmissionEvent struct {
-	// CommitTs orders route-affecting DDLs in the same order Barrier uses.
-	CommitTs uint64
-	// Admissions carries dispatcher-provided source route transitions. DDL type
-	// interpretation stays in dispatcher; Admin only consumes route-level
-	// admit/release operations.
-	Admissions []Admission
-}
-
-// pendingEvent is the cached route transition for one DDL event waiting in
-// pendingQueue. prechecked means the transition has already passed the registry
-// dry-run, so repeated barrier reports do not redo the same validation.
-type pendingEvent struct {
-	transition *routeTransition
-	prechecked bool
-}
-
-// routeTransition is the normalized mutation produced from one AdmissionEvent.
+// routeTransition is the normalized mutation produced from one DDL barrier.
 // The same transition is used for both precheck and apply so the validated
 // state change is not rebuilt differently later.
 type routeTransition struct {
-	commitTs       uint64
 	releases       []TableKey
 	releaseSchemas []string
 	admits         []RouteBinding
-}
-
-// routeAdmissionChange is the registry-level projection of routeTransition:
-// source names to release and source-to-target bindings to admit.
-type routeAdmissionChange struct {
-	releases []TableKey
-	admits   []RouteBinding
-}
-
-type pendingCommitTsHeap []uint64
-
-func (h pendingCommitTsHeap) Len() int { return len(h) }
-
-func (h pendingCommitTsHeap) Less(i, j int) bool {
-	return h[i] < h[j]
-}
-
-func (h pendingCommitTsHeap) Swap(i, j int) {
-	h[i], h[j] = h[j], h[i]
-}
-
-func (h *pendingCommitTsHeap) Push(x any) {
-	*h = append(*h, x.(uint64))
-}
-
-func (h *pendingCommitTsHeap) Pop() any {
-	old := *h
-	n := len(old)
-	x := old[n-1]
-	*h = old[:n-1]
-	return x
+	prechecked     bool
 }
 
 // NewAdmin creates a table route admin when table route is enabled.
@@ -156,12 +106,12 @@ func NewAdmin(
 	start := time.Now()
 	activeRoutes := make(map[TableKey]RouteBinding, len(tables))
 	admin := &Admin{
-		changefeedID:  changefeedID,
-		router:        router,
-		registry:      NewTargetTableRegistry(changefeedID, len(tables)),
-		activeRoutes:  activeRoutes,
-		pendingEvents: make(map[uint64]*pendingEvent),
-		reportError:   reportError,
+		changefeedID:       changefeedID,
+		router:             router,
+		registry:           NewTargetTableRegistry(changefeedID, len(tables)),
+		activeRoutes:       activeRoutes,
+		pendingTransitions: make(map[uint64]*routeTransition),
+		reportError:        reportError,
 	}
 
 	for _, t := range tables {
@@ -201,90 +151,91 @@ func (a *Admin) SetErrorReporter(reportError func(error)) {
 }
 
 // Precheck validates a route transition without mutating the route registry.
-func (a *Admin) Precheck(info AdmissionEvent) (bool, error) {
-	if !a.needsCheck(info) {
+func (a *Admin) Precheck(commitTs uint64, admissions []Admission) (bool, error) {
+	if !a.needsCheck(admissions) {
 		return true, nil
 	}
-	pending, ok := a.getOrBuildPendingEvent(info)
+	transition, ok := a.getOrBuildPendingEvent(commitTs, admissions)
 	if !ok {
 		return true, nil
 	}
-	if !a.isPendingHead(info.CommitTs) {
+	if !a.isPendingHead(commitTs) {
 		log.Info("route transition waits for earlier DDL",
 			zap.String("changefeed", a.changefeedID.Name()),
-			zap.Uint64("commitTs", info.CommitTs))
+			zap.Uint64("commitTs", commitTs))
 		return false, nil
 	}
-	if pending.prechecked {
+	if transition.prechecked {
 		return true, nil
 	}
-	transition := pending.transition
-	change, err := a.applyTransition(transition, false)
+	releases, admits, err := a.applyTransition(transition, false)
 	if err != nil {
 		return false, a.fail(err)
 	}
-	pending.prechecked = true
+	transition.prechecked = true
 	log.Info("route transition prechecked",
 		zap.String("changefeed", a.changefeedID.Name()),
-		zap.Uint64("commitTs", info.CommitTs),
-		zap.Int("releases", len(change.releases)),
+		zap.Uint64("commitTs", commitTs),
+		zap.Int("releases", len(releases)),
 		zap.Int("releaseSchemas", len(transition.releaseSchemas)),
-		zap.Int("admits", len(change.admits)))
+		zap.Int("admits", len(admits)))
 	return true, nil
 }
 
 // Apply applies a route transition after the DDL has advanced.
-func (a *Admin) Apply(info AdmissionEvent) error {
-	if !a.needsCheck(info) {
+func (a *Admin) Apply(commitTs uint64, admissions []Admission) error {
+	if a == nil || a.registry == nil {
 		return nil
 	}
-	pending, ok := a.pendingEvents[info.CommitTs]
+	transition, ok := a.pendingTransitions[commitTs]
 	if !ok {
-		pending, ok = a.getOrBuildPendingEvent(info)
+		if len(admissions) == 0 {
+			return nil
+		}
+		transition, ok = a.getOrBuildPendingEvent(commitTs, admissions)
 		if !ok {
 			return nil
 		}
 	}
-	if !a.isPendingHead(info.CommitTs) {
+	if !a.isPendingHead(commitTs) {
 		err := errors.ErrTableRouteConflict.GenWithStack(
 			"route transition apply out of order, changefeed=%s, commitTs=%d",
-			a.changefeedID.Name(), info.CommitTs)
+			a.changefeedID.Name(), commitTs)
 		return a.fail(err)
 	}
-	transition := pending.transition
-	change, err := a.applyTransition(transition, true)
+	releases, admits, err := a.applyTransition(transition, true)
 	if err != nil {
 		return a.fail(err)
 	}
-	a.popPendingHead(info.CommitTs)
+	a.popPendingHead(commitTs)
 	log.Info("route transition applied",
 		zap.String("changefeed", a.changefeedID.Name()),
-		zap.Uint64("commitTs", info.CommitTs),
-		zap.Int("releases", len(change.releases)),
+		zap.Uint64("commitTs", commitTs),
+		zap.Int("releases", len(releases)),
 		zap.Int("releaseSchemas", len(transition.releaseSchemas)),
-		zap.Int("admits", len(change.admits)))
+		zap.Int("admits", len(admits)))
 	return nil
 }
 
-func (a *Admin) needsCheck(info AdmissionEvent) bool {
+func (a *Admin) needsCheck(admissions []Admission) bool {
 	if a == nil || a.registry == nil {
 		return false
 	}
-	return len(info.Admissions) > 0
+	return len(admissions) > 0
 }
 
-func (a *Admin) getOrBuildPendingEvent(info AdmissionEvent) (*pendingEvent, bool) {
-	if pending, ok := a.pendingEvents[info.CommitTs]; ok {
-		return pending, true
+func (a *Admin) getOrBuildPendingEvent(commitTs uint64, admissions []Admission) (*routeTransition, bool) {
+	if transition, ok := a.pendingTransitions[commitTs]; ok {
+		return transition, true
 	}
-	transition := a.buildTransition(info)
+	transition := a.buildTransition(admissions)
 	if transition == nil {
 		return nil, false
 	}
-	pending := &pendingEvent{transition: transition}
-	heap.Push(&a.pendingQueue, info.CommitTs)
-	a.pendingEvents[info.CommitTs] = pending
-	return pending, true
+	a.pendingQueue = append(a.pendingQueue, commitTs)
+	slices.Sort(a.pendingQueue)
+	a.pendingTransitions[commitTs] = transition
+	return transition, true
 }
 
 func (a *Admin) isPendingHead(commitTs uint64) bool {
@@ -298,16 +249,16 @@ func (a *Admin) popPendingHead(commitTs uint64) {
 			zap.Uint64("expected", commitTs),
 			zap.Any("actual", a.pendingQueue))
 	}
-	heap.Pop(&a.pendingQueue)
-	delete(a.pendingEvents, commitTs)
+	a.pendingQueue = a.pendingQueue[1:]
+	delete(a.pendingTransitions, commitTs)
 }
 
-func (a *Admin) buildTransition(info AdmissionEvent) *routeTransition {
-	transition := &routeTransition{commitTs: info.CommitTs}
+func (a *Admin) buildTransition(admissions []Admission) *routeTransition {
+	transition := &routeTransition{}
 	releaseSet := make(map[TableKey]struct{})
 	schemaSet := make(map[string]struct{})
 	admitSet := make(map[routeBindingKey]struct{})
-	for _, table := range info.Admissions {
+	for _, table := range admissions {
 		switch table.Action {
 		case Admit:
 			key := routeBindingKey{source: table.Binding.Source, target: table.Binding.Target}
@@ -342,35 +293,34 @@ func (a *Admin) buildTransition(info AdmissionEvent) *routeTransition {
 	return transition
 }
 
-func (a *Admin) applyTransition(transition *routeTransition, mutate bool) (routeAdmissionChange, error) {
-	change := a.buildAdmissionChange(transition)
-	if err := a.registry.ApplyTransition(change.releases, change.admits, mutate); err != nil {
-		return routeAdmissionChange{}, err
+func (a *Admin) applyTransition(transition *routeTransition, mutate bool) ([]TableKey, []RouteBinding, error) {
+	releases, admits := a.buildAdmissionChange(transition)
+	if err := a.registry.ApplyTransition(releases, admits, mutate); err != nil {
+		return nil, nil, err
 	}
 	if !mutate {
-		return change, nil
+		return releases, admits, nil
 	}
-	for _, source := range change.releases {
+	for _, source := range releases {
 		delete(a.activeRoutes, source)
 	}
-	for _, admit := range change.admits {
+	for _, admit := range admits {
 		a.activeRoutes[admit.Source] = admit
 	}
-	return change, nil
+	return releases, admits, nil
 }
 
-func (a *Admin) buildAdmissionChange(transition *routeTransition) routeAdmissionChange {
-	change := routeAdmissionChange{
-		releases: make([]TableKey, 0, len(transition.releases)),
-		admits:   append([]RouteBinding(nil), transition.admits...),
-	}
+func (a *Admin) buildAdmissionChange(transition *routeTransition) ([]TableKey, []RouteBinding) {
+	releases := make([]TableKey, 0, len(transition.releases))
+	admits := make([]RouteBinding, len(transition.admits))
+	copy(admits, transition.admits)
 	releaseSet := make(map[TableKey]struct{}, len(transition.releases))
 	for _, source := range transition.releases {
 		if _, ok := releaseSet[source]; ok {
 			continue
 		}
 		releaseSet[source] = struct{}{}
-		change.releases = append(change.releases, source)
+		releases = append(releases, source)
 	}
 	for _, schema := range transition.releaseSchemas {
 		for source := range a.activeRoutes {
@@ -381,12 +331,12 @@ func (a *Admin) buildAdmissionChange(transition *routeTransition) routeAdmission
 				continue
 			}
 			releaseSet[source] = struct{}{}
-			change.releases = append(change.releases, source)
+			releases = append(releases, source)
 		}
 	}
-	slices.SortFunc(change.releases, compareTableKey)
-	slices.SortFunc(change.admits, compareRouteBinding)
-	return change
+	slices.SortFunc(releases, compareTableKey)
+	slices.SortFunc(admits, compareRouteBinding)
+	return releases, admits
 }
 
 func compareTableKey(a, b TableKey) int {

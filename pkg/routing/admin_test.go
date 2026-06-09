@@ -30,8 +30,7 @@ func TestAdminReportsRouteConflict(t *testing.T) {
 		reportedErr = err
 	})
 
-	info := routeEvent(10, admit("db2", "t", "target", "t"))
-	ready, err := admin.Precheck(info)
+	ready, err := admin.Precheck(10, []Admission{admit("db2", "t", "target", "t")})
 	require.Error(t, err)
 	require.False(t, ready)
 	require.Same(t, err, reportedErr)
@@ -52,41 +51,38 @@ func TestAdminMaintainsNameLevelLifecycle(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, TableKey{Schema: "target", Table: "t"}, binding.Target)
 
-	neutral := routeEvent(10)
-	ready, err := admin.Precheck(neutral)
+	ready, err := admin.Precheck(10, nil)
 	require.NoError(t, err)
 	require.True(t, ready)
-	require.NoError(t, admin.Apply(neutral))
+	require.NoError(t, admin.Apply(10, nil))
 	_, ok = admin.activeRoutes[source]
 	require.True(t, ok)
 
-	rename := routeEvent(20,
+	rename := []Admission{
 		release("db1", "t"),
 		admit("db2", "t", "target", "t"),
-	)
-	ready, err = admin.Precheck(rename)
+	}
+	ready, err = admin.Precheck(20, rename)
 	require.NoError(t, err)
 	require.True(t, ready)
-	require.NoError(t, admin.Apply(rename))
+	require.NoError(t, admin.Apply(20, rename))
 	_, ok = admin.activeRoutes[source]
 	require.False(t, ok)
 	binding, ok = admin.activeRoutes[TableKey{Schema: "db2", Table: "t"}]
 	require.True(t, ok)
 	require.Equal(t, TableKey{Schema: "target", Table: "t"}, binding.Target)
 
-	dropSchema := routeEvent(30, releaseSchema("db2"))
-	ready, err = admin.Precheck(dropSchema)
+	ready, err = admin.Precheck(30, []Admission{releaseSchema("db2")})
 	require.NoError(t, err)
 	require.True(t, ready)
-	require.NoError(t, admin.Apply(dropSchema))
+	require.NoError(t, admin.Apply(30, []Admission{releaseSchema("db2")}))
 	_, ok = admin.activeRoutes[TableKey{Schema: "db2", Table: "t"}]
 	require.False(t, ok)
 
-	recreate := routeEvent(40, admit("db1", "t", "target", "t"))
-	ready, err = admin.Precheck(recreate)
+	ready, err = admin.Precheck(40, []Admission{admit("db1", "t", "target", "t")})
 	require.NoError(t, err)
 	require.True(t, ready)
-	require.NoError(t, admin.Apply(recreate))
+	require.NoError(t, admin.Apply(40, []Admission{admit("db1", "t", "target", "t")}))
 	_, ok = admin.activeRoutes[source]
 	require.True(t, ok)
 }
@@ -94,21 +90,21 @@ func TestAdminMaintainsNameLevelLifecycle(t *testing.T) {
 func TestAdminSerializesPendingTransitions(t *testing.T) {
 	admin := newAdminForTest(t, routeBySource())
 
-	first := routeEvent(10, admit("db2", "t", "db2_target", "t"))
-	ready, err := admin.Precheck(first)
+	first := admit("db2", "t", "db2_target", "t")
+	ready, err := admin.Precheck(10, []Admission{first})
 	require.NoError(t, err)
 	require.True(t, ready)
 
-	second := routeEvent(20, admit("db3", "t", "db3_target", "t"))
-	ready, err = admin.Precheck(second)
+	second := admit("db3", "t", "db3_target", "t")
+	ready, err = admin.Precheck(20, []Admission{second})
 	require.NoError(t, err)
 	require.False(t, ready)
 
-	require.NoError(t, admin.Apply(first))
-	ready, err = admin.Precheck(second)
+	require.NoError(t, admin.Apply(10, []Admission{first}))
+	ready, err = admin.Precheck(20, []Admission{second})
 	require.NoError(t, err)
 	require.True(t, ready)
-	require.NoError(t, admin.Apply(second))
+	require.NoError(t, admin.Apply(20, []Admission{second}))
 
 	binding, ok := admin.activeRoutes[TableKey{Schema: "db3", Table: "t"}]
 	require.True(t, ok)
@@ -139,10 +135,6 @@ func newAdminForTest(t *testing.T, rules []*config.DispatchRule) *Admin {
 	)
 	require.NoError(t, err)
 	return admin
-}
-
-func routeEvent(commitTs uint64, tables ...Admission) AdmissionEvent {
-	return AdmissionEvent{CommitTs: commitTs, Admissions: tables}
 }
 
 func admit(schema, table, targetSchema, targetTable string) Admission {

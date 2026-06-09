@@ -610,14 +610,14 @@ func (b *Barrier) precheckRouteEvent(event *BarrierEvent) (bool, error) {
 	if b.routeAdmin == nil || event.isSyncPoint {
 		return true, nil
 	}
-	return b.routeAdmin.Precheck(event.buildRouteAdmission())
+	return b.routeAdmin.Precheck(event.commitTs, event.routeAdmissions)
 }
 
 func (b *Barrier) applyRouteEvent(event *BarrierEvent) error {
 	if b.routeAdmin == nil || event.isSyncPoint {
 		return nil
 	}
-	return b.routeAdmin.Apply(event.buildRouteAdmission())
+	return b.routeAdmin.Apply(event.commitTs, event.routeAdmissions)
 }
 
 // ackEvent creates an ack event
