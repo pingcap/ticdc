@@ -15,6 +15,7 @@ package coordinator
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -329,6 +330,9 @@ func TestUpdateChangefeed(t *testing.T) {
 }
 
 func TestGetChangefeed(t *testing.T) {
+	// Scenario: API-facing GetChangefeed must not expose coordinator-owned mutable info.
+	// Steps: fetch a changefeed, mutate the returned copy, and verify the in-memory
+	// changefeed state is unchanged while status fields are still reported.
 	ctrl := gomock.NewController(t)
 	backend := mock_changefeed.NewMockBackend(ctrl)
 	changefeedDB := changefeed.NewChangefeedDB(1216)
@@ -353,8 +357,65 @@ func TestGetChangefeed(t *testing.T) {
 	require.Equal(t, ret.State, config.StateStopped)
 	require.Equal(t, uint64(1), status.CheckpointTs)
 
+	ret.SinkURI = "kafka://127.0.0.1:9092"
+	ret.Config = nil
+	storedInfo := changefeedDB.GetByID(cfID).GetInfo()
+	require.Equal(t, "mysql://127.0.0.1:3306", storedInfo.SinkURI)
+	require.NotNil(t, storedInfo.Config)
+
 	_, _, err = controller.GetChangefeed(context.Background(), common.NewChangeFeedDisplayName("test1", "default"))
 	require.True(t, errors.ErrChangeFeedNotExists.Equal(err))
+}
+
+func TestGetChangefeedReturnedInfoMutationDoesNotRaceWithStoredInfo(t *testing.T) {
+	// Scenario: API handlers may mutate the info returned from GetChangefeed while coordinator
+	// goroutines read the stored info. Steps: mutate the returned copy and read the stored
+	// info concurrently, then verify the stored fields remain unchanged.
+	ctrl := gomock.NewController(t)
+	backend := mock_changefeed.NewMockBackend(ctrl)
+	changefeedDB := changefeed.NewChangefeedDB(1216)
+	nodeManager := watcher.NewNodeManager(nil, nil)
+	controller := &Controller{
+		backend:      backend,
+		changefeedDB: changefeedDB,
+		nodeManager:  nodeManager,
+	}
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		Config:       config.GetDefaultReplicaConfig(),
+		State:        config.StateStopped,
+		SinkURI:      "mysql://127.0.0.1:3306",
+	}, 1, true)
+	changefeedDB.AddStoppedChangefeed(cf)
+
+	ret, _, err := controller.GetChangefeed(context.Background(), cfID.DisplayName)
+	require.NoError(t, err)
+
+	var (
+		wg            sync.WaitGroup
+		storedChanged bool
+	)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 1000; i++ {
+			ret.SinkURI = "kafka://127.0.0.1:9092"
+			ret.TargetTs = uint64(i + 1)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		storedInfo := changefeedDB.GetByID(cfID).GetInfo()
+		for i := 0; i < 1000; i++ {
+			if storedInfo.SinkURI != "mysql://127.0.0.1:3306" || storedInfo.TargetTs != 0 {
+				storedChanged = true
+				return
+			}
+		}
+	}()
+	wg.Wait()
+	require.False(t, storedChanged)
 }
 
 func TestRemoveChangefeed(t *testing.T) {

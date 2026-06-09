@@ -853,6 +853,10 @@ func (c *Controller) ListChangefeeds(_ context.Context, keyspace string) ([]*con
 	return infos, statuses, nil
 }
 
+// GetChangefeed returns a copy of the changefeed info and the current status.
+// API callers mutate the returned info when validating update requests, so the
+// copy prevents those writes from racing with coordinator goroutines that read
+// the in-memory changefeed state.
 func (c *Controller) GetChangefeed(
 	_ context.Context,
 	changefeedDisplayName common.ChangeFeedDisplayName,
@@ -869,6 +873,11 @@ func (c *Controller) GetChangefeed(
 		return nil, nil, errors.ErrChangeFeedNotExists.GenWithStackByArgs(changefeedDisplayName.Name)
 	}
 
+	info, err := cf.GetInfo().Clone()
+	if err != nil {
+		return nil, nil, errors.Trace(err)
+	}
+
 	maintainerID := cf.GetNodeID()
 	nodeInfo := c.nodeManager.GetNodeInfo(maintainerID)
 	maintainerAddr := ""
@@ -877,7 +886,7 @@ func (c *Controller) GetChangefeed(
 	}
 	status := &config.ChangeFeedStatus{CheckpointTs: cf.GetStatus().CheckpointTs, LastSyncedTs: cf.GetStatus().LastSyncedTs, LogCoordinatorResolvedTs: cf.GetLogCoordinatorResolvedTs()}
 	status.SetMaintainerAddr(maintainerAddr)
-	return cf.GetInfo(), status, nil
+	return info, status, nil
 }
 
 // getChangefeed returns the changefeed by id, return nil if not found

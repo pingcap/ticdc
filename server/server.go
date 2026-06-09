@@ -214,7 +214,7 @@ func (c *server) initialize(ctx context.Context) error {
 
 	c.nodeModules = []common.SubModule{
 		nodeManager,
-		NewElector(c),
+		NewElector(c, conf.Debug.Scheduler),
 	}
 
 	c.subModules = []common.SubModule{

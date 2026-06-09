@@ -21,21 +21,25 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCoordinatorSchedulerSettingsUsesGlobalConfig(t *testing.T) {
-	// Scenario: the coordinator should honor the validated server scheduler config.
-	// Steps: install a temporary global config, read the coordinator settings, and
-	// verify both the concurrency limit and balance interval match the config.
+func TestCoordinatorSchedulerSettingsUsesCapturedConfig(t *testing.T) {
+	// Scenario: the coordinator should honor the scheduler config captured during server startup.
+	// Steps: install a different global config, read settings from an explicit scheduler config,
+	// and verify both the concurrency limit and balance interval come from the captured config.
 	original := config.GetGlobalServerConfig()
 	t.Cleanup(func() {
 		config.StoreGlobalServerConfig(original)
 	})
 
+	globalCfg := config.GetDefaultServerConfig()
+	globalCfg.Debug.Scheduler.MaxTaskConcurrency = 9
+	globalCfg.Debug.Scheduler.CheckBalanceInterval = config.TomlDuration(44 * time.Second)
+	config.StoreGlobalServerConfig(globalCfg)
+
 	cfg := config.GetDefaultServerConfig()
 	cfg.Debug.Scheduler.MaxTaskConcurrency = 3
 	cfg.Debug.Scheduler.CheckBalanceInterval = config.TomlDuration(22 * time.Second)
-	config.StoreGlobalServerConfig(cfg)
 
-	maxTaskConcurrency, checkBalanceInterval := coordinatorSchedulerSettings()
+	maxTaskConcurrency, checkBalanceInterval := coordinatorSchedulerSettings(cfg.Debug.Scheduler)
 	require.Equal(t, 3, maxTaskConcurrency)
 	require.Equal(t, 22*time.Second, checkBalanceInterval)
 }
