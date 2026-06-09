@@ -46,8 +46,8 @@ type Admin struct {
 	// pendingQueue and pendingEvents keep route-affecting DDL transitions in
 	// commit order. A later route transition can be prechecked only after every
 	// earlier route transition has been applied to the admission snapshot.
-	pendingQueue  pendingKeyHeap
-	pendingEvents map[pendingKey]*pendingEvent
+	pendingQueue  pendingCommitTsHeap
+	pendingEvents map[uint64]*pendingEvent
 
 	// reportError reports unrecoverable route admission errors to the
 	// changefeed-level error path. failed suppresses duplicate reports from
@@ -75,8 +75,6 @@ type Admission struct {
 type AdmissionEvent struct {
 	// CommitTs orders route-affecting DDLs in the same order Barrier uses.
 	CommitTs uint64
-	// IsSyncPoint distinguishes sync-point barriers from DDL barriers at the same ts.
-	IsSyncPoint bool
 	// Admissions carries dispatcher-provided source route transitions. DDL type
 	// interpretation stays in dispatcher; Admin only consumes route-level
 	// admit/release operations.
@@ -108,50 +106,28 @@ type routeAdmissionChange struct {
 	admits   []RouteBinding
 }
 
-type pendingKey struct {
-	commitTs    uint64
-	isSyncPoint bool
+type pendingCommitTsHeap []uint64
+
+func (h pendingCommitTsHeap) Len() int { return len(h) }
+
+func (h pendingCommitTsHeap) Less(i, j int) bool {
+	return h[i] < h[j]
 }
 
-type pendingKeyHeap []pendingKey
-
-func (h pendingKeyHeap) Len() int { return len(h) }
-
-func (h pendingKeyHeap) Less(i, j int) bool {
-	return comparePendingKey(h[i], h[j]) < 0
-}
-
-func (h pendingKeyHeap) Swap(i, j int) {
+func (h pendingCommitTsHeap) Swap(i, j int) {
 	h[i], h[j] = h[j], h[i]
 }
 
-func (h *pendingKeyHeap) Push(x any) {
-	*h = append(*h, x.(pendingKey))
+func (h *pendingCommitTsHeap) Push(x any) {
+	*h = append(*h, x.(uint64))
 }
 
-func (h *pendingKeyHeap) Pop() any {
+func (h *pendingCommitTsHeap) Pop() any {
 	old := *h
 	n := len(old)
 	x := old[n-1]
 	*h = old[:n-1]
 	return x
-}
-
-func comparePendingKey(a, b pendingKey) int {
-	if n := cmp.Compare(a.commitTs, b.commitTs); n != 0 {
-		return n
-	}
-	if a.isSyncPoint == b.isSyncPoint {
-		return 0
-	}
-	if !a.isSyncPoint {
-		return -1
-	}
-	return 1
-}
-
-func eventKey(info AdmissionEvent) pendingKey {
-	return pendingKey{commitTs: info.CommitTs, isSyncPoint: info.IsSyncPoint}
 }
 
 // NewAdmin creates a table route admin when table route is enabled.
@@ -184,7 +160,7 @@ func NewAdmin(
 		router:        router,
 		registry:      NewTargetTableRegistry(changefeedID, len(tables)),
 		activeRoutes:  activeRoutes,
-		pendingEvents: make(map[pendingKey]*pendingEvent),
+		pendingEvents: make(map[uint64]*pendingEvent),
 		reportError:   reportError,
 	}
 
@@ -233,8 +209,7 @@ func (a *Admin) Precheck(info AdmissionEvent) (bool, error) {
 	if !ok {
 		return true, nil
 	}
-	key := eventKey(info)
-	if !a.isPendingHead(key) {
+	if !a.isPendingHead(info.CommitTs) {
 		log.Info("route transition waits for earlier DDL",
 			zap.String("changefeed", a.changefeedID.Name()),
 			zap.Uint64("commitTs", info.CommitTs))
@@ -263,15 +238,14 @@ func (a *Admin) Apply(info AdmissionEvent) error {
 	if !a.needsCheck(info) {
 		return nil
 	}
-	key := eventKey(info)
-	pending, ok := a.pendingEvents[key]
+	pending, ok := a.pendingEvents[info.CommitTs]
 	if !ok {
 		pending, ok = a.getOrBuildPendingEvent(info)
 		if !ok {
 			return nil
 		}
 	}
-	if !a.isPendingHead(key) {
+	if !a.isPendingHead(info.CommitTs) {
 		err := errors.ErrTableRouteConflict.GenWithStack(
 			"route transition apply out of order, changefeed=%s, commitTs=%d",
 			a.changefeedID.Name(), info.CommitTs)
@@ -282,7 +256,7 @@ func (a *Admin) Apply(info AdmissionEvent) error {
 	if err != nil {
 		return a.fail(err)
 	}
-	a.popPendingHead(key)
+	a.popPendingHead(info.CommitTs)
 	log.Info("route transition applied",
 		zap.String("changefeed", a.changefeedID.Name()),
 		zap.Uint64("commitTs", info.CommitTs),
@@ -293,15 +267,14 @@ func (a *Admin) Apply(info AdmissionEvent) error {
 }
 
 func (a *Admin) needsCheck(info AdmissionEvent) bool {
-	if a == nil || a.registry == nil || info.IsSyncPoint {
+	if a == nil || a.registry == nil {
 		return false
 	}
 	return len(info.Admissions) > 0
 }
 
 func (a *Admin) getOrBuildPendingEvent(info AdmissionEvent) (*pendingEvent, bool) {
-	key := eventKey(info)
-	if pending, ok := a.pendingEvents[key]; ok {
+	if pending, ok := a.pendingEvents[info.CommitTs]; ok {
 		return pending, true
 	}
 	transition := a.buildTransition(info)
@@ -309,24 +282,24 @@ func (a *Admin) getOrBuildPendingEvent(info AdmissionEvent) (*pendingEvent, bool
 		return nil, false
 	}
 	pending := &pendingEvent{transition: transition}
-	heap.Push(&a.pendingQueue, key)
-	a.pendingEvents[key] = pending
+	heap.Push(&a.pendingQueue, info.CommitTs)
+	a.pendingEvents[info.CommitTs] = pending
 	return pending, true
 }
 
-func (a *Admin) isPendingHead(key pendingKey) bool {
-	return len(a.pendingQueue) > 0 && a.pendingQueue[0] == key
+func (a *Admin) isPendingHead(commitTs uint64) bool {
+	return len(a.pendingQueue) > 0 && a.pendingQueue[0] == commitTs
 }
 
-func (a *Admin) popPendingHead(key pendingKey) {
-	if len(a.pendingQueue) == 0 || a.pendingQueue[0] != key {
+func (a *Admin) popPendingHead(commitTs uint64) {
+	if len(a.pendingQueue) == 0 || a.pendingQueue[0] != commitTs {
 		log.Panic("route pending queue head mismatch",
 			zap.String("changefeed", a.changefeedID.Name()),
-			zap.Any("expected", key),
+			zap.Uint64("expected", commitTs),
 			zap.Any("actual", a.pendingQueue))
 	}
 	heap.Pop(&a.pendingQueue)
-	delete(a.pendingEvents, key)
+	delete(a.pendingEvents, commitTs)
 }
 
 func (a *Admin) buildTransition(info AdmissionEvent) *routeTransition {

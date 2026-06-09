@@ -154,9 +154,8 @@ func newRangeCheck(status *heartbeatpb.State, dynamicSplitEnabled bool, keyspace
 
 func (be *BarrierEvent) buildRouteAdmission() routing.AdmissionEvent {
 	return routing.AdmissionEvent{
-		CommitTs:    be.commitTs,
-		IsSyncPoint: be.isSyncPoint,
-		Admissions:  be.routeAdmissions,
+		CommitTs:   be.commitTs,
+		Admissions: be.routeAdmissions,
 	}
 }
 
