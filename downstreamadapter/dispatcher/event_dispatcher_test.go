@@ -29,6 +29,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/stretchr/testify/require"
 )
 
@@ -520,6 +521,57 @@ func TestBlockingDDLFlushBeforeWaitingAndWriteDoesNotFlushAgain(t *testing.T) {
 		return pendingEvent == nil && blockStage == heartbeatpb.BlockStage_NONE
 	}, time.Second, 10*time.Millisecond)
 	require.Equal(t, int32(1), flushCalls.Load())
+}
+
+func TestDispatcherIgnoresStaleIgnoredBlockStatus(t *testing.T) {
+	tableSpan := getUncompleteTableSpan()
+	tableSpan.KeyspaceID = getTestingKeyspaceID()
+	dispatcher := newDispatcherForTest(newDispatcherTestSink(t, common.MysqlSinkType).Sink(), tableSpan)
+
+	previousScheduler := GetDispatcherTaskScheduler()
+	taskScheduler := threadpool.NewThreadPool(1)
+	SetDispatcherTaskScheduler(taskScheduler)
+	defer func() {
+		SetDispatcherTaskScheduler(previousScheduler)
+		taskScheduler.Stop()
+	}()
+
+	ddlEvent := &commonEvent.DDLEvent{
+		FinishedTs: 30,
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{1},
+		},
+	}
+	dispatcher.blockEventStatus.setBlockEvent(ddlEvent, heartbeatpb.BlockStage_WRITING)
+	identifier := BlockEventIdentifier{CommitTs: ddlEvent.FinishedTs}
+	dispatcher.resendTaskMap.Set(identifier, newResendTask(&heartbeatpb.TableSpanBlockStatus{
+		ID: dispatcher.GetId().ToPB(),
+		State: &heartbeatpb.State{
+			IsBlocked: true,
+			BlockTs:   ddlEvent.FinishedTs,
+			BlockTables: &heartbeatpb.InfluencedTables{
+				InfluenceType: heartbeatpb.InfluenceType_Normal,
+				TableIDs:      []int64{1},
+			},
+			Stage: heartbeatpb.BlockStage_WAITING,
+		},
+		Mode: dispatcher.GetMode(),
+	}, dispatcher, nil))
+	defer dispatcher.cancelResendTask(identifier)
+
+	await := dispatcher.HandleDispatcherStatus(&heartbeatpb.DispatcherStatus{
+		IgnoredBlockStatus: &heartbeatpb.IgnoredBlockStatus{
+			CommitTs: ddlEvent.FinishedTs,
+		},
+	})
+	require.False(t, await)
+
+	select {
+	case msg := <-dispatcher.GetBlockStatusesChan():
+		require.FailNow(t, "unexpected fast retry for stale ignored block status", "msg=%v", msg)
+	case <-time.After(200 * time.Millisecond):
+	}
 }
 
 // test uncompelete table span can correctly handle the ddl events
