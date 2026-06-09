@@ -32,8 +32,10 @@ import (
 )
 
 const (
-	// minSyncPointInterval is the minimum of SyncPointInterval can be set.
-	minSyncPointInterval = time.Second * 30
+	// minSyncPointIntervalDefault is the default minimum of SyncPointInterval can be set.
+	minSyncPointIntervalDefault = time.Second * 30
+	// minConfigurableSyncPointInterval is the minimum debug override for minSyncPointInterval.
+	minConfigurableSyncPointInterval = time.Second * 5
 	// minSyncPointRetention is the minimum of SyncPointRetention can be set.
 	minSyncPointRetention                = time.Hour * 1
 	minChangeFeedErrorStuckDuration      = time.Minute * 30
@@ -307,6 +309,7 @@ func (c *ReplicaConfig) ValidateAndAdjust(sinkURI *url.URL) error { // check sin
 			return cerror.ErrInvalidReplicaConfig.
 				FastGenByArgs("The SyncPoint must be disabled when the downstream is not tidb or mysql")
 		}
+		minSyncPointInterval := getMinSyncPointInterval()
 		if c.SyncPointInterval != nil &&
 			*c.SyncPointInterval < minSyncPointInterval {
 			return cerror.ErrInvalidReplicaConfig.

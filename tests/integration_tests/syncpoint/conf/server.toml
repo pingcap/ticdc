@@ -1,0 +1,2 @@
+[debug.replica-config]
+min-sync-point-interval = "5s"

@@ -14,9 +14,11 @@
 package config
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/pingcap/errors"
+	cerror "github.com/pingcap/ticdc/pkg/errors"
 )
 
 // DebugConfig represents config for ticdc unexposed feature configurations
@@ -36,6 +38,8 @@ type DebugConfig struct {
 	SchemaStore *SchemaStoreConfig `toml:"schema-store" json:"schema_store"`
 
 	EventService *EventServiceConfig `toml:"event-service" json:"event_service"`
+
+	ReplicaConfig *DebugReplicaConfig `toml:"replica-config" json:"replica_config"`
 }
 
 // ValidateAndAdjust validates and adjusts the debug configuration
@@ -49,8 +53,55 @@ func (c *DebugConfig) ValidateAndAdjust() error {
 	if err := c.Scheduler.ValidateAndAdjust(); err != nil {
 		return errors.Trace(err)
 	}
+	if c.ReplicaConfig == nil {
+		c.ReplicaConfig = NewDefaultDebugReplicaConfig()
+	}
+	if err := c.ReplicaConfig.ValidateAndAdjust(); err != nil {
+		return errors.Trace(err)
+	}
 
 	return nil
+}
+
+// DebugReplicaConfig represents debug configs for replica configurations.
+type DebugReplicaConfig struct {
+	// MinSyncPointInterval is the minimum sync point interval allowed by changefeed replica config.
+	MinSyncPointInterval TomlDuration `toml:"min-sync-point-interval" json:"min_sync_point_interval"`
+}
+
+// NewDefaultDebugReplicaConfig returns the default debug replica configuration.
+func NewDefaultDebugReplicaConfig() *DebugReplicaConfig {
+	return &DebugReplicaConfig{
+		MinSyncPointInterval: TomlDuration(minSyncPointIntervalDefault),
+	}
+}
+
+// ValidateAndAdjust validates and adjusts debug replica configs.
+func (c *DebugReplicaConfig) ValidateAndAdjust() error {
+	if c.MinSyncPointInterval == 0 {
+		c.MinSyncPointInterval = TomlDuration(minSyncPointIntervalDefault)
+	}
+
+	minInterval := time.Duration(c.MinSyncPointInterval)
+	if minInterval < minConfigurableSyncPointInterval || minInterval > minSyncPointIntervalDefault {
+		return cerror.ErrInvalidServerOption.GenWithStackByArgs(
+			fmt.Sprintf("debug.replica-config.min-sync-point-interval must be in range [%s, %s]",
+				minConfigurableSyncPointInterval, minSyncPointIntervalDefault))
+	}
+	return nil
+}
+
+func getMinSyncPointInterval() time.Duration {
+	serverConfig := GetGlobalServerConfig()
+	if serverConfig == nil || serverConfig.Debug == nil || serverConfig.Debug.ReplicaConfig == nil {
+		return minSyncPointIntervalDefault
+	}
+
+	minInterval := time.Duration(serverConfig.Debug.ReplicaConfig.MinSyncPointInterval)
+	if minInterval == 0 {
+		return minSyncPointIntervalDefault
+	}
+	return minInterval
 }
 
 // PullerConfig represents config for puller

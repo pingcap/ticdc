@@ -143,6 +143,41 @@ func TestDBConfigValidateAndAdjust(t *testing.T) {
 	require.Error(t, conf.ValidateAndAdjust())
 }
 
+func TestDebugReplicaConfigValidateAndAdjust(t *testing.T) {
+	t.Parallel()
+
+	conf := GetDefaultServerConfig().Clone().Debug.ReplicaConfig
+	require.NoError(t, conf.ValidateAndAdjust())
+	require.Equal(t, TomlDuration(30*time.Second), conf.MinSyncPointInterval)
+
+	conf.MinSyncPointInterval = TomlDuration(5 * time.Second)
+	require.NoError(t, conf.ValidateAndAdjust())
+
+	conf.MinSyncPointInterval = TomlDuration(4 * time.Second)
+	require.ErrorContains(t, conf.ValidateAndAdjust(), "min-sync-point-interval")
+
+	conf.MinSyncPointInterval = TomlDuration(31 * time.Second)
+	require.ErrorContains(t, conf.ValidateAndAdjust(), "min-sync-point-interval")
+}
+
+func TestServerConfigDecodeDebugReplicaConfig(t *testing.T) {
+	t.Parallel()
+
+	configPath := filepath.Join(t.TempDir(), "server.toml")
+	configContent := strings.TrimSpace(`
+[debug.replica-config]
+min-sync-point-interval = "5s"
+`)
+	require.NoError(t, os.WriteFile(configPath, []byte(configContent), 0o644))
+
+	cfg := GetDefaultServerConfig()
+	metaData, err := toml.DecodeFile(configPath, cfg)
+	require.NoError(t, err)
+	require.Empty(t, metaData.Undecoded())
+	require.NoError(t, cfg.ValidateAndAdjust())
+	require.Equal(t, TomlDuration(5*time.Second), cfg.Debug.ReplicaConfig.MinSyncPointInterval)
+}
+
 func TestKVClientConfigValidateAndAdjust(t *testing.T) {
 	t.Parallel()
 	conf := GetDefaultServerConfig().Clone().KVClient

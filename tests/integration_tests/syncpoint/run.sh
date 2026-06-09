@@ -159,12 +159,12 @@ function run() {
 
 	export GO_FAILPOINTS='github.com/pingcap/ticdc/utils/dynstream/InjectDeadlock=10%return(true)'
 	start_ts=$(run_cdc_cli_tso_query ${UP_PD_HOST_1} ${UP_PD_PORT_1})
-	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
+	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY --config $CUR/conf/server.toml
 
 	# this test contains `set global tidb_external_ts = ?` , which requires super privilege, so we
 	# can't use the normal user
 	SINK_URI="mysql://root@127.0.0.1:3306/?max-txn-row=1"
-	cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --config="$CUR/conf/changefeed.toml"
+	cdc_cli_changefeed create --start-ts=$start_ts --sink-uri="$SINK_URI" --sync-point --sync-interval 10s
 
 	goSql
 

@@ -218,3 +218,35 @@ compression = "snappy"
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "consistent.compression")
 }
+
+func TestChangefeedCreateSyncIntervalFlag(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "cf.toml")
+	err := os.WriteFile(configPath, []byte("sync-point-interval='30s'"), 0o644)
+	require.NoError(t, err)
+
+	commonOptions := newChangefeedCommonOptions()
+	commonOptions.sinkURI = "mysql://localhost:3306/test"
+	commonOptions.configFile = configPath
+	require.NoError(t, newCreateChangefeedOptions(commonOptions).completeReplicaCfg())
+
+	opt := newCreateChangefeedOptions(commonOptions)
+	opt.syncPoint = true
+	opt.syncInterval = 10 * time.Second
+	require.NoError(t, opt.completeReplicaCfg())
+	require.True(t, *opt.cfg.EnableSyncPoint)
+	require.Equal(t, 10*time.Second, *opt.cfg.SyncPointInterval)
+
+	opt = newCreateChangefeedOptions(commonOptions)
+	opt.syncPoint = true
+	opt.syncInterval = 4 * time.Second
+	require.NoError(t, opt.completeReplicaCfg())
+	require.True(t, *opt.cfg.EnableSyncPoint)
+	require.Equal(t, 4*time.Second, *opt.cfg.SyncPointInterval)
+
+	invalidConfigPath := filepath.Join(dir, "invalid-cf.toml")
+	err = os.WriteFile(invalidConfigPath, []byte("enable-sync-point=true\nsync-point-interval='10s'"), 0o644)
+	require.NoError(t, err)
+	commonOptions.configFile = invalidConfigPath
+	require.ErrorContains(t, newCreateChangefeedOptions(commonOptions).completeReplicaCfg(), "must be larger than 30s")
+}

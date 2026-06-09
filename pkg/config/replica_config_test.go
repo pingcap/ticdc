@@ -247,3 +247,25 @@ func TestReplicaConfig_EnableRedoIOCheck_CanDisableForCLI(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, config.ValidateAndAdjust(sinkURI))
 }
+
+func TestReplicaConfigSyncPointIntervalUsesDebugMinimum(t *testing.T) {
+	sinkURI, err := url.Parse("mysql://localhost:3306/test")
+	require.NoError(t, err)
+
+	originalConfig := GetGlobalServerConfig()
+	defer StoreGlobalServerConfig(originalConfig)
+
+	cfg := GetDefaultReplicaConfig()
+	cfg.EnableSyncPoint = util.AddressOf(true)
+	cfg.SyncPointInterval = util.AddressOf(10 * time.Second)
+	require.ErrorContains(t, cfg.ValidateAndAdjust(sinkURI), "must be larger than 30s")
+
+	serverConfig := GetDefaultServerConfig()
+	serverConfig.Debug.ReplicaConfig.MinSyncPointInterval = TomlDuration(5 * time.Second)
+	StoreGlobalServerConfig(serverConfig)
+
+	cfg = GetDefaultReplicaConfig()
+	cfg.EnableSyncPoint = util.AddressOf(true)
+	cfg.SyncPointInterval = util.AddressOf(10 * time.Second)
+	require.NoError(t, cfg.ValidateAndAdjust(sinkURI))
+}

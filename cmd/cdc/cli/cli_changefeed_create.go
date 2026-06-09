@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/fatih/color"
 	"github.com/pingcap/errors"
@@ -105,6 +106,8 @@ type createChangefeedOptions struct {
 	keyspace                string
 	disableGCSafePointCheck bool
 	startTs                 uint64
+	syncPoint               bool
+	syncInterval            time.Duration
 	timezone                string
 	verbose                 bool
 
@@ -126,6 +129,8 @@ func (o *createChangefeedOptions) addFlags(cmd *cobra.Command) {
 	cmd.PersistentFlags().StringVarP(&o.changefeedID, "changefeed-id", "c", "", "Replication task (changefeed) ID")
 	cmd.PersistentFlags().BoolVarP(&o.disableGCSafePointCheck, "disable-gc-check", "", false, "Disable GC safe point check")
 	cmd.PersistentFlags().Uint64Var(&o.startTs, "start-ts", 0, "Start ts of changefeed")
+	cmd.PersistentFlags().BoolVar(&o.syncPoint, "sync-point", false, "Enable sync point")
+	cmd.PersistentFlags().DurationVar(&o.syncInterval, "sync-interval", 0, "Sync point interval")
 	cmd.PersistentFlags().StringVar(&o.timezone, "tz", "SYSTEM", "timezone used when checking sink uri (changefeed timezone is determined by cdc server)")
 	cmd.PersistentFlags().BoolVarP(&o.verbose, "verbose", "v", false, "Print verbose information when creating a changefeed. Caution: This will list all tables to be replicated by the changefeed. If the number of tables is extremely large, it may flood your screen.")
 	// we don't support specify these flags below when cdc version >= 6.2.0
@@ -161,6 +166,13 @@ func (o *createChangefeedOptions) completeReplicaCfg() error {
 	err = cfg.ValidateAndAdjust(uri)
 	if err != nil {
 		return err
+	}
+
+	if o.syncPoint {
+		cfg.EnableSyncPoint = putil.AddressOf(true)
+	}
+	if o.syncInterval != 0 {
+		cfg.SyncPointInterval = putil.AddressOf(o.syncInterval)
 	}
 
 	if o.commonChangefeedOptions.schemaRegistry != "" {
