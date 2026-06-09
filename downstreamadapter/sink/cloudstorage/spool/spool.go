@@ -49,15 +49,15 @@ const (
 
 	// Keep only a small hot working set in memory. Most queued data can move to
 	// local files so the writer is less likely to keep growing memory usage.
-	defaultMemoryRatio = 0
+	defaultMemoryRatio = 0.2
 
 	// Pause PostEnqueue callbacks only after local usage is already fairly high,
 	// so the upstream side is not slowed down too early.
-	defaultHighWatermarkRatio = 0.1
+	defaultHighWatermarkRatio = 0.8
 
 	// Resume pending PostEnqueue callbacks only after usage has dropped enough
 	// to avoid bouncing immediately back into the paused state.
-	defaultLowWatermarkRatio = 0.05
+	defaultLowWatermarkRatio = 0.6
 )
 
 type options struct {
