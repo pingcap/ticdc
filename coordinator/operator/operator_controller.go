@@ -105,7 +105,6 @@ func (oc *Controller) Execute() time.Time {
 					zap.String("operator", r.String()),
 					zap.Error(err))
 			} else {
-				notifyMessageSent(r, msg)
 				log.Info("send command to maintainer",
 					zap.String("role", oc.role),
 					zap.String("operator", r.String()))
@@ -240,34 +239,13 @@ func requiresNewMaintainerOwnership(
 	}
 }
 
-type messageSentObserver interface {
-	onMessageSent(*messaging.TargetMessage)
-}
-
-func notifyMessageSent(
-	op operator.Operator[common.ChangeFeedID, *heartbeatpb.MaintainerStatus],
-	msg *messaging.TargetMessage,
-) {
-	observer, ok := op.(messageSentObserver)
-	if !ok {
-		return
-	}
-	observer.onMessageSent(msg)
-}
-
+// isMaintainerStatusEpochAllowed keeps rolling-upgrade compatibility while
+// enforcing exact owner epochs after upgraded maintainers report them. Epoch 0
+// means either side predates the maintainer epoch field, so it stays accepted
+// during mixed-version rollout; this gate is not intended to fence every
+// mixed-version race, only stale non-zero epochs after the rollout completes.
 func isMaintainerStatusEpochAllowed(statusEpoch, expectedEpoch uint64) bool {
 	return statusEpoch == 0 || expectedEpoch == 0 || statusEpoch == expectedEpoch
-}
-
-func isMaintainerStatusEpochAllowedAfterAddSent(
-	statusEpoch uint64,
-	expectedEpoch uint64,
-	addMessageSent bool,
-) bool {
-	if statusEpoch == 0 && expectedEpoch != 0 && !addMessageSent {
-		return false
-	}
-	return isMaintainerStatusEpochAllowed(statusEpoch, expectedEpoch)
 }
 
 // StopChangefeed stop changefeed when the changefeed is stopped/removed.

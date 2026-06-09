@@ -37,9 +37,6 @@ type MoveMaintainerOperator struct {
 	originNodeStopped     bool
 	finished              bool
 	bind                  bool
-	// destAddMessageSent becomes true after the fenced destination add request
-	// is accepted by MessageCenter.
-	destAddMessageSent bool
 
 	canceled bool
 
@@ -76,7 +73,7 @@ func (m *MoveMaintainerOperator) Check(from node.ID, status *heartbeatpb.Maintai
 		m.originNodeStopped = true
 	}
 	if m.originNodeStopped && from == m.dest &&
-		m.isDestStatusEpochAllowed(status.MaintainerEpoch) &&
+		isMaintainerStatusEpochAllowed(status.MaintainerEpoch, m.changefeed.GetInfo().Epoch) &&
 		status.State == heartbeatpb.ComponentState_Working &&
 		status.BootstrapDone {
 		log.Info("changefeed added to dest node",
@@ -108,24 +105,6 @@ func (m *MoveMaintainerOperator) Schedule() *messaging.TargetMessage {
 		false,
 		false,
 		m.originMaintainerEpoch,
-	)
-}
-
-func (m *MoveMaintainerOperator) onMessageSent(msg *messaging.TargetMessage) {
-	m.lck.Lock()
-	defer m.lck.Unlock()
-
-	if _, ok := msg.Message[0].(*heartbeatpb.AddMaintainerRequest); ok {
-		m.destAddMessageSent = true
-	}
-}
-
-func (m *MoveMaintainerOperator) isDestStatusEpochAllowed(statusEpoch uint64) bool {
-	expectedEpoch := m.changefeed.GetInfo().Epoch
-	return isMaintainerStatusEpochAllowedAfterAddSent(
-		statusEpoch,
-		expectedEpoch,
-		m.destAddMessageSent,
 	)
 }
 

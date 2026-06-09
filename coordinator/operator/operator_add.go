@@ -46,9 +46,7 @@ type AddMaintainerOperator struct {
 	// canceled records why the operator stops scheduling.
 	// It must be atomic because Schedule can run concurrently with OnNodeRemove/OnTaskRemoved.
 	canceled atomic.Int32
-	// addMessageSent becomes true only after the fenced add request is accepted by MessageCenter.
-	addMessageSent atomic.Bool
-	db             *changefeed.ChangefeedDB
+	db       *changefeed.ChangefeedDB
 }
 
 // NewAddMaintainerOperator creates an AddMaintainerOperator to schedule the given changefeed to dest.
@@ -74,7 +72,7 @@ func (m *AddMaintainerOperator) Check(from node.ID, status *heartbeatpb.Maintain
 	// Require bootstrap to be done before considering the maintainer successfully started.
 	// This avoids false positives when a removal-only maintainer reports Working.
 	if !m.finished.Load() && from == m.dest &&
-		m.isStatusEpochAllowed(status.MaintainerEpoch) &&
+		isMaintainerStatusEpochAllowed(status.MaintainerEpoch, m.cf.GetInfo().Epoch) &&
 		status.State == heartbeatpb.ComponentState_Working &&
 		status.BootstrapDone {
 		log.Info("maintainer report working status",
@@ -89,19 +87,6 @@ func (m *AddMaintainerOperator) Schedule() *messaging.TargetMessage {
 		return nil
 	}
 	return m.cf.NewAddMaintainerMessage(m.dest)
-}
-
-func (m *AddMaintainerOperator) onMessageSent(_ *messaging.TargetMessage) {
-	m.addMessageSent.Store(true)
-}
-
-func (m *AddMaintainerOperator) isStatusEpochAllowed(statusEpoch uint64) bool {
-	expectedEpoch := m.cf.GetInfo().Epoch
-	return isMaintainerStatusEpochAllowedAfterAddSent(
-		statusEpoch,
-		expectedEpoch,
-		m.addMessageSent.Load(),
-	)
 }
 
 // OnNodeRemove cancels the operator when the destination node goes offline.
