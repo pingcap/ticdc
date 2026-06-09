@@ -49,7 +49,7 @@ const (
 
 	// Keep only a small hot working set in memory. Most queued data can move to
 	// local files so the writer is less likely to keep growing memory usage.
-	defaultMemoryRatio = 0.1
+	defaultMemoryRatio = 0
 
 	// Pause PostEnqueue callbacks only after local usage is already fairly high,
 	// so the upstream side is not slowed down too early.
