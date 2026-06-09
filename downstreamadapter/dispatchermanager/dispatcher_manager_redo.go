@@ -114,18 +114,61 @@ func (e *DispatcherManager) NewTableTriggerRedoDispatcher(id *heartbeatpb.Dispat
 	// table trigger event dispatcher and table trigger redo dispatcher must exist on the same node
 	redoDispatcher := e.GetTableTriggerRedoDispatcher()
 	redoDispatcher.SetRedoMeta(e.ctx, e.config.Consistent)
-	e.wg.Add(1)
-	go func() {
-		defer e.wg.Done()
-		err := e.collectRedoMeta(e.ctx)
-		e.handleError(e.ctx, err)
-	}()
+	if e.redoMetaCollectorStarted.CompareAndSwap(false, true) {
+		e.wg.Add(1)
+		go func() {
+			defer e.wg.Done()
+			err := e.collectRedoMeta(e.ctx)
+			e.handleError(e.ctx, err)
+		}()
+	}
 	log.Info("table trigger redo dispatcher created",
 		zap.Stringer("changefeedID", e.changefeedID),
 		zap.Stringer("dispatcherID", redoDispatcher.GetId()),
 		zap.Uint64("startTs", redoDispatcher.GetStartTs()),
 	)
 	return nil
+}
+
+// EnsureTableTriggerRedoDispatcher keeps redo DDL dispatchers in sync with the
+// maintainer owner chosen by the bootstrap request.
+func (e *DispatcherManager) EnsureTableTriggerRedoDispatcher(
+	id *heartbeatpb.DispatcherID,
+	startTs uint64,
+	newChangefeed bool,
+) error {
+	if id == nil {
+		return nil
+	}
+	expectedID := common.NewDispatcherIDFromPB(id)
+	existing := e.GetTableTriggerRedoDispatcher()
+	if existing == nil {
+		return e.NewTableTriggerRedoDispatcher(id, startTs, newChangefeed)
+	}
+	if existing.GetId() == expectedID {
+		return nil
+	}
+
+	replacementStartTs := existing.GetStartTs()
+	e.removeTableTriggerRedoDispatcher(existing)
+	return e.NewTableTriggerRedoDispatcher(id, replacementStartTs, newChangefeed)
+}
+
+func (e *DispatcherManager) removeTableTriggerRedoDispatcher(d *dispatcher.RedoDispatcher) {
+	appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).RemoveDispatcher(d)
+	if redoMeta := d.GetRedoMeta(); redoMeta != nil {
+		redoMeta.CleanupMetrics()
+	}
+	d.TryClose()
+	d.Remove()
+	e.redoDispatcherMap.Delete(d.GetId())
+	e.redoSchemaIDToDispatchers.Delete(d.GetSchemaID(), d.GetId())
+	e.currentOperatorMap.Delete(d.GetId())
+	e.SetTableTriggerRedoDispatcher(nil)
+	e.metricTableTriggerRedoDispatcherCount.Dec()
+	log.Info("replaced table trigger redo dispatcher",
+		zap.Stringer("changefeedID", e.changefeedID),
+		zap.Stringer("dispatcherID", d.GetId()))
 }
 
 func (e *DispatcherManager) getRedoEventCollectorBatchCountAndBytes(redoSink *redo.Sink) (int, int) {

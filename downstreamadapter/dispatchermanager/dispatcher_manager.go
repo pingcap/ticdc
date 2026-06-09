@@ -134,7 +134,10 @@ type DispatcherManager struct {
 	redoEnabled bool
 	// redoReady set to true after the redo components are fully initialized and safe for concurrent access.
 	redoReady atomic.Bool
-	redoSink  *redo.Sink
+	// redoMetaCollectorStarted prevents table trigger redo replacement from
+	// starting duplicate collector loops for the same dispatcher manager.
+	redoMetaCollectorStarted atomic.Bool
+	redoSink                 *redo.Sink
 	// redoGlobalTs stores the resolved-ts of the redo metadata and blocks events in the common dispatcher where the commit-ts is greater than the resolved-ts.
 	redoGlobalTs atomic.Uint64
 
@@ -395,6 +398,57 @@ func (e *DispatcherManager) NewTableTriggerEventDispatcher(id *heartbeatpb.Dispa
 		zap.Uint64("startTs", e.GetTableTriggerEventDispatcher().GetStartTs()),
 	)
 	return nil
+}
+
+// EnsureTableTriggerEventDispatcher makes the existing manager match the
+// bootstrap request's table trigger dispatcher ID. A same-node higher-epoch
+// maintainer replacement creates a new DDL span, so keeping the old trigger ID
+// would make post-bootstrap reject the new maintainer.
+func (e *DispatcherManager) EnsureTableTriggerEventDispatcher(
+	id *heartbeatpb.DispatcherID,
+	startTs uint64,
+	newChangefeed bool,
+) error {
+	if id == nil {
+		return nil
+	}
+	expectedID := common.NewDispatcherIDFromPB(id)
+	existing := e.GetTableTriggerEventDispatcher()
+	if existing == nil {
+		return e.NewTableTriggerEventDispatcher(id, startTs, newChangefeed)
+	}
+	if existing.GetId() == expectedID {
+		return nil
+	}
+
+	replacementStartTs := existing.GetStartTs()
+	e.removeTableTriggerEventDispatcher(existing)
+	return e.NewTableTriggerEventDispatcher(id, replacementStartTs, newChangefeed)
+}
+
+func (e *DispatcherManager) removeTableTriggerEventDispatcher(d *dispatcher.EventDispatcher) {
+	appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).RemoveDispatcher(d)
+	needCheckpointUpdates := commonEvent.NeedTableNameStoreAndCheckpointTs(
+		e.sink.SinkType() == common.MysqlSinkType,
+		e.sharedInfo.EnableActiveActive(),
+	)
+	if needCheckpointUpdates {
+		if err := appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RemoveCheckpointTsMessage(e.changefeedID); err != nil {
+			log.Error("remove checkpointTs message failed",
+				zap.Stringer("changefeedID", e.changefeedID),
+				zap.Error(err))
+		}
+	}
+	d.TryClose()
+	d.Remove()
+	e.dispatcherMap.Delete(d.GetId())
+	e.schemaIDToDispatchers.Delete(d.GetSchemaID(), d.GetId())
+	e.currentOperatorMap.Delete(d.GetId())
+	e.SetTableTriggerEventDispatcher(nil)
+	e.metricTableTriggerEventDispatcherCount.Dec()
+	log.Info("replaced table trigger event dispatcher",
+		zap.Stringer("changefeedID", e.changefeedID),
+		zap.Stringer("dispatcherID", d.GetId()))
 }
 
 func (e *DispatcherManager) InitalizeTableTriggerEventDispatcher(schemaInfo []*heartbeatpb.SchemaInfo) error {

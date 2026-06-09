@@ -249,41 +249,30 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 		return nil
 	}
 	if exists {
-		// Check and potentially add a table trigger event dispatcher.
-		// This is necessary during maintainer node migration, as the existing
-		// dispatcher manager on the new node may not have a table trigger
-		// event dispatcher configured yet.
-		if req.TableTriggerEventDispatcherId != nil {
-			tableTriggerDispatcher := manager.GetTableTriggerEventDispatcher()
-			if tableTriggerDispatcher == nil {
-				err = manager.NewTableTriggerEventDispatcher(
-					req.TableTriggerEventDispatcherId,
-					req.StartTs,
-					false,
-				)
-				if err != nil {
-					log.Error("failed to create new table trigger event dispatcher",
-						zap.Stringer("changefeedID", cfId), zap.Error(err))
-					manager.MaintainerFenceMu.Unlock()
-					return m.handleDispatcherError(from, req.ChangefeedID, maintainerEpoch, err)
-				}
-			}
+		// Reconcile table trigger dispatchers for maintainer migration and
+		// same-node higher-epoch takeover. The latter keeps the existing
+		// DispatcherManager but the new Maintainer owns fresh trigger IDs.
+		err = manager.EnsureTableTriggerEventDispatcher(
+			req.TableTriggerEventDispatcherId,
+			req.StartTs,
+			false,
+		)
+		if err != nil {
+			log.Error("failed to reconcile table trigger event dispatcher",
+				zap.Stringer("changefeedID", cfId), zap.Error(err))
+			manager.MaintainerFenceMu.Unlock()
+			return m.handleDispatcherError(from, req.ChangefeedID, maintainerEpoch, err)
 		}
-		if req.TableTriggerRedoDispatcherId != nil {
-			tableTriggerRedoDispatcher := manager.GetTableTriggerRedoDispatcher()
-			if tableTriggerRedoDispatcher == nil {
-				err = manager.NewTableTriggerRedoDispatcher(
-					req.TableTriggerRedoDispatcherId,
-					req.StartTs,
-					false,
-				)
-				if err != nil {
-					log.Error("failed to create new table trigger redo dispatcher",
-						zap.Stringer("changefeedID", cfId), zap.Error(err))
-					manager.MaintainerFenceMu.Unlock()
-					return m.handleDispatcherError(from, req.ChangefeedID, maintainerEpoch, err)
-				}
-			}
+		err = manager.EnsureTableTriggerRedoDispatcher(
+			req.TableTriggerRedoDispatcherId,
+			req.StartTs,
+			false,
+		)
+		if err != nil {
+			log.Error("failed to reconcile table trigger redo dispatcher",
+				zap.Stringer("changefeedID", cfId), zap.Error(err))
+			manager.MaintainerFenceMu.Unlock()
+			return m.handleDispatcherError(from, req.ChangefeedID, maintainerEpoch, err)
 		}
 	}
 
