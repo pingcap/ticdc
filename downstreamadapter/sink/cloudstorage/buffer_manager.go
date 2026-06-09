@@ -143,11 +143,7 @@ func (c *bufferManager) handleDMLTask(ctx context.Context, task *task) error {
 			c.addEntry(task, entry)
 		}
 
-		version := task.versionedTable
-		if c.buffer.tables[version].size < uint64(c.config.FileSize) {
-			return nil
-		}
-		return c.emitTableBatch(ctx, version, flushReasonSize)
+		return c.emitTableBatchIfSizeReached(ctx, task.versionedTable)
 	}
 }
 
@@ -170,6 +166,16 @@ func (c *bufferManager) emitExpiredBatch(ctx context.Context, now time.Time) err
 		return nil
 	}
 	return c.emitFlushTask(ctx, batch, flushReasonInterval)
+}
+
+func (c *bufferManager) emitTableBatchIfSizeReached(
+	ctx context.Context,
+	table cloudstorage.VersionedTableName,
+) error {
+	if c.buffer.tableSize(table) < uint64(c.config.FileSize) {
+		return nil
+	}
+	return c.emitTableBatch(ctx, table, flushReasonSize)
 }
 
 func (c *bufferManager) emitTableBatch(
@@ -216,6 +222,14 @@ func newTableBatches() tableBatches {
 
 func (t *tableBatches) isEmpty() bool {
 	return len(t.tables) == 0
+}
+
+func (t *tableBatches) tableSize(table cloudstorage.VersionedTableName) uint64 {
+	tableTask := t.tables[table]
+	if tableTask == nil {
+		return 0
+	}
+	return tableTask.size
 }
 
 func (t *tableBatches) addEntry(event *task, entry *spool.Entry, now time.Time) {

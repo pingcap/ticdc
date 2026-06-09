@@ -148,6 +148,44 @@ func TestBufferManagerOversizedBatchFlushesImmediatelyFromMemory(t *testing.T) {
 	require.ErrorIs(t, <-done, context.Canceled)
 }
 
+func TestBufferManagerSizeFlushesWithoutWaitingForMaxAge(t *testing.T) {
+	t.Parallel()
+
+	changefeedID := commonType.NewChangefeedID4Test("test", "buffer-size")
+	flushSink := newTestFlushTaskSink(16)
+	spoolBuffer, err := spool.New(
+		changefeedID,
+		spool.WithRootDir(t.TempDir()),
+		spool.WithDiskQuotaBytes(1<<20),
+		spool.WithMemoryRatio(0.5),
+	)
+	require.NoError(t, err)
+	defer spoolBuffer.Close()
+
+	controller := newBufferManager(changefeedID, &cloudstorage.Config{
+		FlushInterval:    time.Hour,
+		FileSize:         1,
+		SpoolDiskQuota:   1 << 20,
+		FileIndexWidth:   6,
+		UseTableIDAsPath: false,
+	}, spoolBuffer, flushSink.enqueueFlushTask)
+
+	task := newBufferedTask("table1", commonType.NewDispatcherID(), `{"id":1}`)
+	require.NoError(t, controller.handleDMLTask(context.Background(), task))
+
+	select {
+	case flushed := <-flushSink.ch:
+		require.Nil(t, flushed.marker)
+		require.Len(t, flushed.batches, 1)
+		require.Equal(t, task.versionedTable, flushed.batches[0].table)
+		require.NotEmpty(t, flushed.batches[0].payload.data)
+		require.Len(t, flushed.batches[0].payload.entries, 1)
+	case <-time.After(3 * time.Second):
+		t.Fatal("buffer controller did not flush size-reached batch immediately")
+	}
+	require.Empty(t, controller.buffer.tables)
+}
+
 func TestBufferManagerIntervalFlushesOnlyBatchesReachingMaxAge(t *testing.T) {
 	t.Parallel()
 
@@ -188,9 +226,9 @@ func TestBufferManagerIntervalFlushesOnlyBatchesReachingMaxAge(t *testing.T) {
 	select {
 	case flushed := <-flushSink.ch:
 		require.Nil(t, flushed.marker)
-		require.Len(t, flushed.batch.tables, 1)
-		require.Contains(t, flushed.batch.tables, firstTask.versionedTable)
-		require.NotContains(t, flushed.batch.tables, secondTask.versionedTable)
+		require.Len(t, flushed.batches, 1)
+		require.Equal(t, firstTask.versionedTable, flushed.batches[0].table)
+		require.NotEmpty(t, flushed.batches[0].payload.data)
 	case <-time.After(3 * time.Second):
 		t.Fatal("buffer controller did not flush expired batch")
 	}
@@ -259,7 +297,7 @@ func newBufferedTask(table string, dispatcherID commonType.DispatcherID, payload
 func newBufferedEntry(t *testing.T, spoolBuffer *spool.Spool, task *task) *spool.Entry {
 	t.Helper()
 
-	_, entry, err := spoolBuffer.TryEnqueue(task.encodedMsgs, task.callbacks.postEnqueue)
+	_, entry, err := spoolBuffer.TryEnqueue(task.encodedMsgs, task.event.PostEnqueue)
 	require.NoError(t, err)
 	require.NotNil(t, entry)
 	return entry
