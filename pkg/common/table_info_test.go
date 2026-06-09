@@ -18,7 +18,7 @@ import (
 	"testing"
 
 	"github.com/pingcap/tidb/pkg/meta/model"
-	"github.com/pingcap/tidb/pkg/parser/ast"
+	parser_model "github.com/pingcap/tidb/pkg/parser/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/stretchr/testify/require"
@@ -66,7 +66,7 @@ func TestUnmarshalJSONToTableInfoRoundTrip(t *testing.T) {
 
 	idCol := &model.ColumnInfo{
 		ID:      1,
-		Name:    ast.NewCIStr("id"),
+		Name:    parser_model.NewCIStr("id"),
 		Offset:  0,
 		State:   model.StatePublic,
 		Version: model.CurrLatestColumnInfoVersion,
@@ -76,7 +76,7 @@ func TestUnmarshalJSONToTableInfoRoundTrip(t *testing.T) {
 
 	nameCol := &model.ColumnInfo{
 		ID:      2,
-		Name:    ast.NewCIStr("name"),
+		Name:    parser_model.NewCIStr("name"),
 		Offset:  1,
 		State:   model.StatePublic,
 		Version: model.CurrLatestColumnInfoVersion,
@@ -85,7 +85,7 @@ func TestUnmarshalJSONToTableInfoRoundTrip(t *testing.T) {
 
 	source := WrapTableInfo("test", &model.TableInfo{
 		ID:         1001,
-		Name:       ast.NewCIStr("t_roundtrip"),
+		Name:       parser_model.NewCIStr("t_roundtrip"),
 		PKIsHandle: true,
 		Columns:    []*model.ColumnInfo{idCol, nameCol},
 	})
