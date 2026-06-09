@@ -73,12 +73,16 @@ func (m *mockEventDispatcher) GetChangefeedID() common.ChangeFeedID {
 	return m.changefeedID
 }
 
-func (d *mockEventDispatcher) GetEventCollectorBatchConfig() (batchCount int, batchBytes int) {
-	return d.eventCollectorBatchCount, d.eventCollectorBatchBytes
+func (m *mockEventDispatcher) GetEventCollectorBatchConfig() (batchCount int, batchBytes int) {
+	return m.eventCollectorBatchCount, m.eventCollectorBatchBytes
 }
 
 func (m *mockEventDispatcher) GetTableSpan() *heartbeatpb.TableSpan {
 	return m.tableSpan
+}
+
+func (m *mockEventDispatcher) GetRouter() routing.Router {
+	return routing.Router{}
 }
 
 func (m *mockEventDispatcher) GetTimezone() string {
@@ -145,10 +149,6 @@ func (m *mockEventDispatcher) EnableIgnoreUpdateOnlyColumns() bool {
 	return false
 }
 
-func (m *mockEventDispatcher) GetRouter() routing.Router {
-	return routing.Router{}
-}
-
 func newMessage(id node.ID, msg messaging.IOTypeT) *messaging.TargetMessage {
 	targetMessage := messaging.NewSingleTargetMessage(id, messaging.EventCollectorTopic, msg)
 	targetMessage.From = id
@@ -201,10 +201,7 @@ func TestProcessMessage(t *testing.T) {
 
 	seq.Store(1)
 	done := make(chan struct{})
-	d := &mockEventDispatcher{
-		id:        did,
-		tableSpan: &heartbeatpb.TableSpan{TableID: 1},
-	}
+	d := &mockEventDispatcher{id: did, tableSpan: &heartbeatpb.TableSpan{TableID: 1}}
 	d.handle = func(e commonEvent.Event) {
 		require.Equal(t, e.GetSeq(), seq.Add(1))
 		require.Equal(t, events[e.GetSeq()], e)
@@ -242,21 +239,9 @@ func TestRemoveLastDispatcher(t *testing.T) {
 	cfID1 := common.NewChangefeedID(common.DefaultKeyspaceName)
 	cfID2 := common.NewChangefeedID(common.DefaultKeyspaceName)
 
-	d1 := &mockEventDispatcher{
-		id:           common.NewDispatcherID(),
-		tableSpan:    &heartbeatpb.TableSpan{TableID: 1},
-		changefeedID: cfID1,
-	}
-	d2 := &mockEventDispatcher{
-		id:           common.NewDispatcherID(),
-		tableSpan:    &heartbeatpb.TableSpan{TableID: 2},
-		changefeedID: cfID1,
-	}
-	d3 := &mockEventDispatcher{
-		id:           common.NewDispatcherID(),
-		tableSpan:    &heartbeatpb.TableSpan{TableID: 3},
-		changefeedID: cfID2,
-	}
+	d1 := &mockEventDispatcher{id: common.NewDispatcherID(), tableSpan: &heartbeatpb.TableSpan{TableID: 1}, changefeedID: cfID1}
+	d2 := &mockEventDispatcher{id: common.NewDispatcherID(), tableSpan: &heartbeatpb.TableSpan{TableID: 2}, changefeedID: cfID1}
+	d3 := &mockEventDispatcher{id: common.NewDispatcherID(), tableSpan: &heartbeatpb.TableSpan{TableID: 3}, changefeedID: cfID2}
 
 	// Add dispatchers
 	c.AddDispatcher(d1, 1024)
@@ -301,8 +286,7 @@ func TestGroupHeartbeatUsesEpochAndClamp(t *testing.T) {
 	c.AddDispatcher(localDispatcher, 1024)
 	localStat := c.getDispatcherStatByID(localDispatcher.id)
 	require.NotNil(t, localStat)
-	localStat.session.connState.setEventServiceID(serverInfo.ID)
-	localStat.session.connState.readyEventReceived.Store(true)
+	markSessionReceiving(localStat.session, serverInfo.ID)
 	localStat.currentEpoch.Store(newDispatcherEpochState(3, 0, 150))
 
 	remoteID := node.ID("remote-server")
@@ -315,8 +299,7 @@ func TestGroupHeartbeatUsesEpochAndClamp(t *testing.T) {
 	c.AddDispatcher(remoteDispatcher, 1024)
 	remoteStat := c.getDispatcherStatByID(remoteDispatcher.id)
 	require.NotNil(t, remoteStat)
-	remoteStat.session.connState.setEventServiceID(remoteID)
-	remoteStat.session.connState.readyEventReceived.Store(true)
+	markSessionReceiving(remoteStat.session, remoteID)
 	remoteStat.currentEpoch.Store(newDispatcherEpochState(5, 1, 210))
 
 	grouped := c.groupHeartbeat()
@@ -361,12 +344,11 @@ func TestGroupHeartbeatResetThenHandshake(t *testing.T) {
 	c.AddDispatcher(mockDisp, 1024)
 	stat := c.getDispatcherStatByID(dispatcherID)
 	require.NotNil(t, stat)
-	stat.session.connState.setEventServiceID(serverInfo.ID)
-	stat.session.connState.readyEventReceived.Store(true)
+	markSessionReceiving(stat.session, serverInfo.ID)
 
 	// Simulate a reset to a smaller ts while old in-flight flushes have already
 	// advanced sink checkpoint to a larger value.
-	stat.doReset(serverInfo.ID, 150)
+	stat.session.doReset(serverInfo.ID, 150)
 
 	grouped := c.groupHeartbeat()
 	heartbeat := grouped[serverInfo.ID]

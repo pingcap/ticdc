@@ -366,6 +366,41 @@ func TestCloseRemovesOwnedChangefeedDir(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestRotateRemovesReleasedActiveSegment(t *testing.T) {
+	t.Parallel()
+
+	changefeedID := commonType.NewChangefeedID4Test("test", "spool")
+	manager, err := New(
+		changefeedID,
+		WithDiskQuotaBytes(1024),
+		WithRootDir(t.TempDir()),
+		WithSegmentBytes(40),
+		WithMemoryRatio(0.01),
+	)
+	require.NoError(t, err)
+	defer manager.Close()
+
+	firstEntry, err := manager.Enqueue([]*common.Message{newTestMessage("first-entry", 1)}, nil)
+	require.NoError(t, err)
+	require.True(t, firstEntry.IsSpilled())
+
+	firstSegmentPath := filepath.Join(manager.workDir, "segment-000001.log")
+	_, err = os.Stat(firstSegmentPath)
+	require.NoError(t, err)
+
+	manager.Release(firstEntry)
+
+	secondEntry, err := manager.Enqueue([]*common.Message{newTestMessage("second-entry", 1)}, nil)
+	require.NoError(t, err)
+	require.True(t, secondEntry.IsSpilled())
+	defer manager.Release(secondEntry)
+
+	_, err = os.Stat(firstSegmentPath)
+	require.ErrorIs(t, err, os.ErrNotExist)
+	_, err = os.Stat(filepath.Join(manager.workDir, "segment-000002.log"))
+	require.NoError(t, err)
+}
+
 func TestEnqueueSpillsWhenSerializedBatchExceedsMemoryQuota(t *testing.T) {
 	t.Parallel()
 

@@ -158,7 +158,9 @@ func (p *managerMaintainerSet) closeAll() {
 
 // buildBootstrapResponse snapshots all local maintainer states for coordinator bootstrap.
 func (p *managerMaintainerSet) buildBootstrapResponse() *heartbeatpb.CoordinatorBootstrapResponse {
-	response := &heartbeatpb.CoordinatorBootstrapResponse{}
+	response := &heartbeatpb.CoordinatorBootstrapResponse{
+		DrainProtocolVersion: heartbeatpb.CurrentDrainProtocolVersion,
+	}
 	p.registry.Range(func(_, value interface{}) bool {
 		maintainer := value.(*Maintainer)
 		status := maintainer.GetMaintainerStatus()
