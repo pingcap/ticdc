@@ -217,21 +217,24 @@ func (c *Controller) collectMetrics(ctx context.Context) error {
 				metrics.ChangefeedCheckpointTsGauge.WithLabelValues(keyspace, name).Set(float64(phyCkpTs))
 				metrics.ChangefeedCheckpointTsLagGauge.WithLabelValues(keyspace, name).Set(lag)
 
-				// Keep only one error-info series per changefeed so stale labels disappear
-				// when the warning or failure changes.
+				// sync changefeed error metrics
 				currentChangefeeds[cf.ID] = struct{}{}
 				oldLabels, exists := errorMetricLabels[cf.ID]
 				newLabels, hasError := getChangefeedErrorMetricLabels(cf.GetInfo())
+				// If the error state has not changed, do nothing.
 				if exists && hasError && oldLabels == newLabels {
 					return
 				}
+				// If there was an old metric, delete it, as the state has changed.
 				if exists {
 					metrics.ChangefeedErrorInfoGauge.DeleteLabelValues(oldLabels.labelValues()...)
 				}
 				if hasError {
+					// An error exists (either new or changed). Set the new metric and update cache.
 					metrics.ChangefeedErrorInfoGauge.WithLabelValues(newLabels.labelValues()...).Set(1)
 					errorMetricLabels[cf.ID] = newLabels
 				} else {
+					// The error has disappeared, remove from cache.
 					delete(errorMetricLabels, cf.ID)
 				}
 			})
