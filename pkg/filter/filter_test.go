@@ -433,7 +433,7 @@ func TestShouldIgnoreDMLByUpdateOnlyColumns(t *testing.T) {
 	tableInfo := mustNewCommonTableInfo("test", "t", cols, indices)
 	enabled := DMLFilterContext{EnableIgnoreUpdateOnlyColumns: true}
 
-	newRow := func(values ...interface{}) chunk.Row {
+	newRow := func(values ...any) chunk.Row {
 		return datumsToChunkRow(types.MakeDatums(values...), tableInfo)
 	}
 	baseRow := newRow(int64(1), "a@example.com", "Alice", int64(1), int64(10))

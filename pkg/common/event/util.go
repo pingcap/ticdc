@@ -666,7 +666,8 @@ func (s *EventTestHelper) DML2UpdateEvent(schema, table string, dml ...string) (
 		CRTs:        rawKvs[1].CRTs,
 	}
 
-	dmlEvent.AppendRow(raw, s.mounter.DecodeToChunk, nil, filter.DMLFilterContext{})
+	err := dmlEvent.AppendRow(raw, s.mounter.DecodeToChunk, nil, filter.DMLFilterContext{})
+	require.NoError(s.t, err)
 
 	return dmlEvent, raw
 }
