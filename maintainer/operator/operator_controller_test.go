@@ -61,8 +61,8 @@ func TestController_CountInflightDrainMovesFromNode(t *testing.T) {
 	})
 
 	oc := NewOperatorController(changefeedID, spanController, 1, common.DefaultMode)
-	require.True(t, oc.AddOperator(NewMoveDispatcherOperator(spanController, replicaSet, nodeA, nodeB)))
-	require.True(t, oc.AddOperator(NewMoveDispatcherOperator(spanController, otherReplicaSet, nodeB, nodeA)))
+	require.True(t, oc.AddOperator(NewMoveDispatcherOperator(spanController, replicaSet, nodeA, nodeB, 7)))
+	require.True(t, oc.AddOperator(NewMoveDispatcherOperator(spanController, otherReplicaSet, nodeB, nodeA, 7)))
 
 	require.Equal(t, 1, oc.CountInflightDrainMovesFromNode(nodeA))
 	require.Equal(t, 1, oc.CountInflightDrainMovesFromNode(nodeB))
@@ -168,7 +168,7 @@ func TestController_PostFinishCalledOnceOnReplace(t *testing.T) {
 	}()
 	<-op.isFinishedCalled
 
-	oc.removeReplicaSet(newRemoveDispatcherOperator(spanController, replicaSet, heartbeatpb.OperatorType_O_Remove))
+	oc.removeReplicaSet(newRemoveDispatcherOperator(spanController, replicaSet, heartbeatpb.OperatorType_O_Remove, 7))
 	wg.Wait()
 
 	require.Equal(t, int32(1), op.postFinishCount.Load())
@@ -215,16 +215,11 @@ func TestController_AddMergeOperatorFailureCleansOccupyOperators(t *testing.T) {
 	require.Equal(t, 1, oc.OperatorSize())
 }
 
-func TestController_StampMaintainerEpochOnMergeRequest(t *testing.T) {
-	oc := &Controller{}
-	oc.SetMaintainerEpoch(7)
+func TestMergeDispatcherOperatorScheduleMaintainerEpoch(t *testing.T) {
+	spanController, toMergedReplicaSets, occupyOperators, _ := setupMergeTestEnvironment(t)
 
-	msg := messaging.NewSingleTargetMessage(
-		node.ID("target"),
-		messaging.HeartbeatCollectorTopic,
-		&heartbeatpb.MergeDispatcherRequest{},
-	)
-	oc.stampMaintainerEpoch(msg)
+	op := NewMergeDispatcherOperator(spanController, toMergedReplicaSets, occupyOperators, 7)
+	msg := op.Schedule()
 
 	req := msg.Message[0].(*heartbeatpb.MergeDispatcherRequest)
 	require.Equal(t, uint64(7), req.MaintainerEpoch)
@@ -249,10 +244,11 @@ func TestController_RemoveReplicaSet_ReplacesRemoveOperatorOnTaskRemoved(t *test
 		spanController,
 		replicaSet,
 		heartbeatpb.OperatorType_O_Move,
+		7,
 		func() { postFinishCount.Add(1) },
 	)))
 
-	oc.removeReplicaSet(newRemoveDispatcherOperator(spanController, replicaSet, heartbeatpb.OperatorType_O_Remove))
+	oc.removeReplicaSet(newRemoveDispatcherOperator(spanController, replicaSet, heartbeatpb.OperatorType_O_Remove, 7))
 
 	require.Equal(t, int32(0), postFinishCount.Load())
 	require.NotNil(t, oc.GetOperator(replicaSet.ID))

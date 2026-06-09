@@ -148,7 +148,14 @@ func (s *balanceScheduler) doSplit(results pkgReplica.GroupCheckResult) int {
 		spansNum := max(result.SpanNum, len(s.nodeManager.GetAliveNodes())*2)
 		splitSpans := s.splitter.Split(context.Background(), result.Span.Span, spansNum, result.SpanType)
 		if len(splitSpans) > 1 {
-			op := operator.NewSplitDispatcherOperator(s.spanController, result.Span, splitSpans, []node.ID{}, nil)
+			op := operator.NewSplitDispatcherOperator(
+				s.spanController,
+				result.Span,
+				splitSpans,
+				[]node.ID{},
+				s.operatorController.MaintainerEpoch(),
+				nil,
+			)
 			ret := s.operatorController.AddOperator(op)
 			if ret {
 				splitCount++
@@ -160,6 +167,12 @@ func (s *balanceScheduler) doSplit(results pkgReplica.GroupCheckResult) int {
 }
 
 func (s *balanceScheduler) doMove(replication *replica.SpanReplication, id node.ID) bool {
-	op := operator.NewMoveDispatcherOperator(s.spanController, replication, replication.GetNodeID(), id)
+	op := operator.NewMoveDispatcherOperator(
+		s.spanController,
+		replication,
+		replication.GetNodeID(),
+		id,
+		s.operatorController.MaintainerEpoch(),
+	)
 	return s.operatorController.AddOperator(op)
 }

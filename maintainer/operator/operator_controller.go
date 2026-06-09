@@ -82,12 +82,12 @@ func NewOperatorController(
 	}
 }
 
-// SetMaintainerEpoch sets the epoch stamped on scheduler requests.
+// SetMaintainerEpoch sets the epoch used by scheduler requests.
 func (oc *Controller) SetMaintainerEpoch(maintainerEpoch uint64) {
 	oc.maintainerEpoch.Store(maintainerEpoch)
 }
 
-// MaintainerEpoch returns the epoch stamped on maintainer-to-dispatcher-manager requests.
+// MaintainerEpoch returns the epoch used by maintainer-to-dispatcher-manager requests.
 func (oc *Controller) MaintainerEpoch() uint64 {
 	return oc.maintainerEpoch.Load()
 }
@@ -108,7 +108,6 @@ func (oc *Controller) Execute() time.Time {
 		msg := op.Schedule()
 
 		if msg != nil {
-			oc.stampMaintainerEpoch(msg)
 			_ = oc.messageCenter.SendCommand(msg)
 			log.Debug("send command to dispatcher",
 				zap.String("role", oc.role),
@@ -123,21 +122,17 @@ func (oc *Controller) Execute() time.Time {
 	}
 }
 
-func (oc *Controller) stampMaintainerEpoch(msg *messaging.TargetMessage) {
-	switch req := msg.Message[0].(type) {
-	case *heartbeatpb.ScheduleDispatcherRequest:
-		req.MaintainerEpoch = oc.maintainerEpoch.Load()
-	case *heartbeatpb.MergeDispatcherRequest:
-		req.MaintainerEpoch = oc.maintainerEpoch.Load()
-	}
-}
-
 // RemoveTasksBySchemaID remove all tasks by schema id.
 // it is only by the barrier when the schema is dropped by ddl
 func (oc *Controller) RemoveTasksBySchemaID(schemaID int64) {
 	tasks := oc.spanController.GetRemoveTasksBySchemaID(schemaID)
 	for _, task := range tasks {
-		oc.removeReplicaSet(newRemoveDispatcherOperator(oc.spanController, task, heartbeatpb.OperatorType_O_Remove))
+		oc.removeReplicaSet(newRemoveDispatcherOperator(
+			oc.spanController,
+			task,
+			heartbeatpb.OperatorType_O_Remove,
+			oc.MaintainerEpoch(),
+		))
 	}
 	oc.spanController.RemoveBySchemaID(schemaID)
 }
@@ -155,7 +150,12 @@ func (oc *Controller) RemoveTasksBySchemaID(schemaID int64) {
 func (oc *Controller) RemoveTasksByTableIDs(tables ...int64) {
 	tasks := oc.spanController.GetRemoveTasksByTableIDs(tables...)
 	for _, task := range tasks {
-		oc.removeReplicaSet(newRemoveDispatcherOperator(oc.spanController, task, heartbeatpb.OperatorType_O_Remove))
+		oc.removeReplicaSet(newRemoveDispatcherOperator(
+			oc.spanController,
+			task,
+			heartbeatpb.OperatorType_O_Remove,
+			oc.MaintainerEpoch(),
+		))
 	}
 	oc.spanController.RemoveByTableIDs(tables...)
 }
@@ -422,7 +422,7 @@ func (oc *Controller) checkAffectedNodes(op operator.Operator[common.DispatcherI
 }
 
 func (oc *Controller) NewMoveOperator(replicaSet *replica.SpanReplication, origin, dest node.ID) operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus] {
-	return NewMoveDispatcherOperator(oc.spanController, replicaSet, origin, dest)
+	return NewMoveDispatcherOperator(oc.spanController, replicaSet, origin, dest, oc.MaintainerEpoch())
 }
 
 func checkMergeOperator(affectedReplicaSets []*replica.SpanReplication) bool {
@@ -483,7 +483,7 @@ func (oc *Controller) AddMergeOperator(
 		}
 	}
 
-	mergeOperator := NewMergeDispatcherOperator(oc.spanController, affectedReplicaSets, operators)
+	mergeOperator := NewMergeDispatcherOperator(oc.spanController, affectedReplicaSets, operators, oc.MaintainerEpoch())
 	ret := oc.AddOperator(mergeOperator)
 	if !ret {
 		log.Error("failed to add merge dispatcher operator",

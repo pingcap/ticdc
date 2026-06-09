@@ -59,32 +59,41 @@ type removeDispatcherOperator struct {
 	// ScheduleDispatcherRequest (for example merge-related messages).
 	operatorType heartbeatpb.OperatorType
 
-	sendThrottler sendThrottler
+	maintainerEpoch uint64
+	sendThrottler   sendThrottler
 }
 
 func NewRemoveDispatcherOperator(
 	spanController *span.Controller,
 	replicaSet *replica.SpanReplication,
 	operatorType heartbeatpb.OperatorType,
+	maintainerEpoch uint64,
 	postFinish func(),
 ) *removeDispatcherOperator {
 	return &removeDispatcherOperator{
-		replicaSet:     replicaSet,
-		nodeID:         replicaSet.GetNodeID(),
-		spanController: spanController,
-		postFinish:     postFinish,
-		operatorType:   operatorType,
-		sendThrottler:  newSendThrottler(),
+		replicaSet:      replicaSet,
+		nodeID:          replicaSet.GetNodeID(),
+		spanController:  spanController,
+		postFinish:      postFinish,
+		operatorType:    operatorType,
+		maintainerEpoch: maintainerEpoch,
+		sendThrottler:   newSendThrottler(),
 	}
 }
 
-func newRemoveDispatcherOperator(spanController *span.Controller, replicaSet *replica.SpanReplication, operatorType heartbeatpb.OperatorType) *removeDispatcherOperator {
+func newRemoveDispatcherOperator(
+	spanController *span.Controller,
+	replicaSet *replica.SpanReplication,
+	operatorType heartbeatpb.OperatorType,
+	maintainerEpoch uint64,
+) *removeDispatcherOperator {
 	return &removeDispatcherOperator{
-		replicaSet:     replicaSet,
-		nodeID:         replicaSet.GetNodeID(),
-		spanController: spanController,
-		operatorType:   operatorType,
-		sendThrottler:  newSendThrottler(),
+		replicaSet:      replicaSet,
+		nodeID:          replicaSet.GetNodeID(),
+		spanController:  spanController,
+		operatorType:    operatorType,
+		maintainerEpoch: maintainerEpoch,
+		sendThrottler:   newSendThrottler(),
 	}
 }
 
@@ -110,7 +119,7 @@ func (m *removeDispatcherOperator) Schedule() *messaging.TargetMessage {
 		return nil
 	}
 
-	return m.replicaSet.NewRemoveDispatcherMessage(m.nodeID, m.operatorType)
+	return m.replicaSet.NewRemoveDispatcherMessage(m.nodeID, m.operatorType, m.maintainerEpoch)
 }
 
 // OnNodeRemove is called when node offline, and the replicaset has been removed from spanController, so it's ok.

@@ -209,8 +209,15 @@ func (c *Controller) HandleStatus(from node.ID, statusList []*heartbeatpb.TableS
 					zap.Any("status", status),
 					zap.String("dispatcherID", dispatcherID.String()))
 				// If the span is not found but status is Working, we need to remove it from dispatcher.
-				msg := replica.NewRemoveDispatcherMessage(from, c.changefeedID, status.ID, nil, status.Mode, heartbeatpb.OperatorType_O_Remove)
-				msg.Message[0].(*heartbeatpb.ScheduleDispatcherRequest).MaintainerEpoch = c.currentMaintainerEpoch()
+				msg := replica.NewRemoveDispatcherMessage(
+					from,
+					c.changefeedID,
+					status.ID,
+					nil,
+					status.Mode,
+					heartbeatpb.OperatorType_O_Remove,
+					c.currentMaintainerEpoch(),
+				)
 				_ = c.messageCenter.SendCommand(msg)
 			}
 			continue
