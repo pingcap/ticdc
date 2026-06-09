@@ -239,15 +239,6 @@ func requiresNewMaintainerOwnership(
 	}
 }
 
-// isMaintainerStatusEpochAllowed keeps rolling-upgrade compatibility while
-// enforcing exact owner epochs after upgraded maintainers report them. Epoch 0
-// means either side predates the maintainer epoch field, so it stays accepted
-// during mixed-version rollout; this gate is not intended to fence every
-// mixed-version race, only stale non-zero epochs after the rollout completes.
-func isMaintainerStatusEpochAllowed(statusEpoch, expectedEpoch uint64) bool {
-	return statusEpoch == 0 || expectedEpoch == 0 || statusEpoch == expectedEpoch
-}
-
 // StopChangefeed stop changefeed when the changefeed is stopped/removed.
 // if remove is true, it will remove the changefeed from the chagnefeed DB
 // if remove is false, it only marks as the changefeed stooped in changefeed DB, so we will not schedule the changefeed again

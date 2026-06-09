@@ -1015,10 +1015,7 @@ func (m *Maintainer) onMaintainerPostBootstrapResponse(msg *messaging.TargetMess
 }
 
 func (m *Maintainer) isMaintainerEpochResponseAllowed(responseEpoch uint64) bool {
-	currentEpoch := m.currentMaintainerEpoch()
-	// Epoch 0 keeps mixed-version nodes compatible. Once both sides are upgraded,
-	// non-zero response epochs must match the current maintainer ownership.
-	return currentEpoch == 0 || responseEpoch == 0 || responseEpoch == currentEpoch
+	return common.MaintainerEpochMatches(responseEpoch, m.currentMaintainerEpoch())
 }
 
 func (m *Maintainer) isMaintainerEpochRequestAllowed(requestEpoch uint64) bool {

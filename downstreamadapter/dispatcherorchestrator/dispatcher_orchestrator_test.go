@@ -310,6 +310,45 @@ func TestPendingMessageQueue_CloseRequestRemovedTrueOverridesPendingFalse(t *tes
 	require.True(t, req.Removed)
 }
 
+func TestPendingMessageQueue_StaleRemovedCloseCannotOverrideNewerEpochClose(t *testing.T) {
+	t.Parallel()
+
+	q := newPendingMessageQueue()
+	cfID := common.NewChangeFeedIDWithName("cf", "default")
+	key := pendingMessageKey{
+		changefeedID: cfID,
+		msgType:      messaging.TypeMaintainerCloseRequest,
+	}
+
+	newerClose := messaging.NewSingleTargetMessage(
+		node.ID("to"),
+		messaging.DispatcherManagerManagerTopic,
+		&heartbeatpb.MaintainerCloseRequest{
+			ChangefeedID:    cfID.ToPB(),
+			MaintainerEpoch: 2,
+			Removed:         false,
+		},
+	)
+	staleRemovedClose := messaging.NewSingleTargetMessage(
+		node.ID("to"),
+		messaging.DispatcherManagerManagerTopic,
+		&heartbeatpb.MaintainerCloseRequest{
+			ChangefeedID:    cfID.ToPB(),
+			MaintainerEpoch: 1,
+			Removed:         true,
+		},
+	)
+
+	require.True(t, q.TryEnqueue(key, newerClose))
+	require.False(t, q.TryEnqueue(key, staleRemovedClose))
+
+	poppedMsg, ok := q.Pop()
+	require.True(t, ok)
+	req := poppedMsg.Message[0].(*heartbeatpb.MaintainerCloseRequest)
+	require.Equal(t, uint64(2), req.MaintainerEpoch)
+	require.False(t, req.Removed)
+}
+
 func TestPendingMessageQueue_NewerMaintainerEpochOverridesPendingRequest(t *testing.T) {
 	t.Parallel()
 

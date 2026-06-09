@@ -205,9 +205,10 @@ func TestChangefeedGetStatusForResume(t *testing.T) {
 			Name:     "test-changefeed",
 			Keyspace: "test-keyspace",
 		},
-		CheckpointTs: 789,
-		FeedState:    "normal",
-		State:        heartbeatpb.ComponentState_Working,
+		CheckpointTs:    789,
+		FeedState:       "normal",
+		State:           heartbeatpb.ComponentState_Working,
+		MaintainerEpoch: 42,
 		Err: []*heartbeatpb.RunningError{
 			{
 				Time:    "2024-01-01 00:00:00",
@@ -234,6 +235,7 @@ func TestChangefeedGetStatusForResume(t *testing.T) {
 	require.Equal(t, originalStatus.CheckpointTs, clonedStatus.CheckpointTs)
 	require.Equal(t, originalStatus.FeedState, clonedStatus.FeedState)
 	require.Equal(t, originalStatus.State, clonedStatus.State)
+	require.Equal(t, originalStatus.MaintainerEpoch, clonedStatus.MaintainerEpoch)
 
 	require.Equal(t, 0, len(clonedStatus.Err))
 }

@@ -72,7 +72,7 @@ func (m *AddMaintainerOperator) Check(from node.ID, status *heartbeatpb.Maintain
 	// Require bootstrap to be done before considering the maintainer successfully started.
 	// This avoids false positives when a removal-only maintainer reports Working.
 	if !m.finished.Load() && from == m.dest &&
-		isMaintainerStatusEpochAllowed(status.MaintainerEpoch, m.cf.GetInfo().Epoch) &&
+		common.MaintainerEpochMatches(status.MaintainerEpoch, m.cf.GetInfo().Epoch) &&
 		status.State == heartbeatpb.ComponentState_Working &&
 		status.BootstrapDone {
 		log.Info("maintainer report working status",

@@ -167,12 +167,6 @@ func (s *balanceScheduler) doSplit(results pkgReplica.GroupCheckResult) int {
 }
 
 func (s *balanceScheduler) doMove(replication *replica.SpanReplication, id node.ID) bool {
-	op := operator.NewMoveDispatcherOperator(
-		s.spanController,
-		replication,
-		replication.GetNodeID(),
-		id,
-		s.operatorController.MaintainerEpoch(),
-	)
+	op := s.operatorController.NewMoveOperator(replication, replication.GetNodeID(), id)
 	return s.operatorController.AddOperator(op)
 }

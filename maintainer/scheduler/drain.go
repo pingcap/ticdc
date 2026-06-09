@@ -152,13 +152,7 @@ func (s *drainScheduler) Execute() time.Time {
 		}
 
 		if s.operatorController.AddOperator(
-			operator.NewMoveDispatcherOperator(
-				s.spanController,
-				replication,
-				target,
-				dest,
-				s.operatorController.MaintainerEpoch(),
-			),
+			s.operatorController.NewMoveOperator(replication, target, dest),
 		) {
 			nodeTaskSize[target]--
 			nodeTaskSize[dest]++

@@ -34,9 +34,8 @@ type pendingMessageKey struct {
 // Once Pop returns a message, the key leaves the pending set immediately, so the next
 // retry can queue one more request for the next processing round.
 //
-// For MaintainerCloseRequest, we treat removed=true as stronger semantics than removed=false.
-// While a request is still queued, a later removed=true request replaces removed=false in
-// that queued slot so the next execution still observes the stronger semantics.
+// For MaintainerCloseRequest, removed=true has stronger semantics than removed=false.
+// It can upgrade a queued request only when it does not move the maintainer epoch backward.
 type pendingMessageQueue struct {
 	mu      sync.Mutex
 	pending map[pendingMessageKey]*messaging.TargetMessage
@@ -89,8 +88,9 @@ func shouldReplacePendingMessage(key pendingMessageKey, oldMsg, newMsg *messagin
 	if !ok1 || !ok2 {
 		return false
 	}
-	// Only upgrade semantics: allow removed=true to override removed=false.
-	return !oldReq.Removed && newReq.Removed
+	// Only upgrade semantics: allow removed=true to override removed=false without
+	// letting a stale removed request overwrite a newer epoch close.
+	return !oldReq.Removed && newReq.Removed && newReq.MaintainerEpoch >= oldReq.MaintainerEpoch
 }
 
 func shouldReplaceByMaintainerEpoch(oldMsg, newMsg *messaging.TargetMessage) bool {

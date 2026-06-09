@@ -87,14 +87,7 @@ func newRemoveDispatcherOperator(
 	operatorType heartbeatpb.OperatorType,
 	maintainerEpoch uint64,
 ) *removeDispatcherOperator {
-	return &removeDispatcherOperator{
-		replicaSet:      replicaSet,
-		nodeID:          replicaSet.GetNodeID(),
-		spanController:  spanController,
-		operatorType:    operatorType,
-		maintainerEpoch: maintainerEpoch,
-		sendThrottler:   newSendThrottler(),
-	}
+	return NewRemoveDispatcherOperator(spanController, replicaSet, operatorType, maintainerEpoch, nil)
 }
 
 func (m *removeDispatcherOperator) Check(from node.ID, status *heartbeatpb.TableSpanStatus) {

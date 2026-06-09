@@ -552,6 +552,9 @@ func (c *Controller) handleMaintainerStatus(from node.ID, statusList []*heartbea
 			changes = append(changes, change)
 		}
 	}
+	if len(changes) == 0 {
+		return
+	}
 
 	// Try to send updated changefeeds without blocking
 	select {
@@ -577,7 +580,7 @@ func (c *Controller) handleSingleMaintainerStatus(
 	if !c.validateMaintainerNode(cf, from, cfID) {
 		return nil
 	}
-	if !maintainerEpochMatches(status.MaintainerEpoch, cf.GetInfo().Epoch) {
+	if !common.MaintainerEpochMatches(status.MaintainerEpoch, cf.GetInfo().Epoch) {
 		log.Warn("drop stale maintainer status",
 			zap.Stringer("changefeed", cfID),
 			zap.Stringer("node", from),
@@ -636,10 +639,6 @@ func (c *Controller) validateMaintainerNode(
 		return false
 	}
 	return true
-}
-
-func maintainerEpochMatches(statusEpoch, currentEpoch uint64) bool {
-	return statusEpoch == 0 || currentEpoch == 0 || statusEpoch == currentEpoch
 }
 
 func (c *Controller) updateChangefeedStatus(
@@ -794,7 +793,7 @@ func selectBootstrapMaintainer(
 		switch {
 		case statusEpoch == currentEpoch:
 			exactMatches = append(exactMatches, rm)
-		case maintainerEpochMatches(statusEpoch, currentEpoch):
+		case common.MaintainerEpochMatches(statusEpoch, currentEpoch):
 			compatMatches = append(compatMatches, rm)
 		default:
 			staleMaintainers = append(staleMaintainers, rm)

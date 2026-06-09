@@ -228,10 +228,11 @@ func (c *Changefeed) GetStatusForResume() *heartbeatpb.MaintainerStatus {
 	}
 
 	clone := &heartbeatpb.MaintainerStatus{
-		CheckpointTs: status.CheckpointTs,
-		FeedState:    status.FeedState,
-		State:        status.State,
-		// we don't clone the errors from status, because the old error is meaningless for the resume action, but only blocks.
+		CheckpointTs:    status.CheckpointTs,
+		FeedState:       status.FeedState,
+		State:           status.State,
+		MaintainerEpoch: status.MaintainerEpoch,
+		// Old errors are meaningless for resume and can only block the resumed task.
 		Err: []*heartbeatpb.RunningError{},
 	}
 

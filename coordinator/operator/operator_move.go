@@ -66,14 +66,14 @@ func (m *MoveMaintainerOperator) Check(from node.ID, status *heartbeatpb.Maintai
 	}
 
 	if from == m.origin &&
-		isMaintainerStatusEpochAllowed(status.MaintainerEpoch, m.originMaintainerEpoch) &&
+		common.MaintainerEpochMatches(status.MaintainerEpoch, m.originMaintainerEpoch) &&
 		status.State != heartbeatpb.ComponentState_Working {
 		log.Info("changefeed changefeedIsRemoved from origin node",
 			zap.String("changefeed", m.changefeed.ID.String()))
 		m.originNodeStopped = true
 	}
 	if m.originNodeStopped && from == m.dest &&
-		isMaintainerStatusEpochAllowed(status.MaintainerEpoch, m.changefeed.GetInfo().Epoch) &&
+		common.MaintainerEpochMatches(status.MaintainerEpoch, m.changefeed.GetInfo().Epoch) &&
 		status.State == heartbeatpb.ComponentState_Working &&
 		status.BootstrapDone {
 		log.Info("changefeed added to dest node",

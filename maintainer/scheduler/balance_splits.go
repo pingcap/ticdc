@@ -155,13 +155,7 @@ func (s *balanceSplitsScheduler) Execute() time.Time {
 				}
 			case replica.OpMove:
 				for _, span := range checkResult.MoveSpans {
-					op := operator.NewMoveDispatcherOperator(
-						s.spanController,
-						span,
-						span.GetNodeID(),
-						checkResult.TargetNode,
-						s.operatorController.MaintainerEpoch(),
-					)
+					op := s.operatorController.NewMoveOperator(span, span.GetNodeID(), checkResult.TargetNode)
 					ret := s.operatorController.AddOperator(op)
 					if ret {
 						availableSize--
