@@ -53,11 +53,11 @@ const (
 
 	// Pause PostEnqueue callbacks only after local usage is already fairly high,
 	// so the upstream side is not slowed down too early.
-	defaultHighWatermarkRatio = 0.8
+	defaultHighWatermarkRatio = 0.1
 
 	// Resume pending PostEnqueue callbacks only after usage has dropped enough
 	// to avoid bouncing immediately back into the paused state.
-	defaultLowWatermarkRatio = 0.6
+	defaultLowWatermarkRatio = 0.05
 )
 
 type options struct {
