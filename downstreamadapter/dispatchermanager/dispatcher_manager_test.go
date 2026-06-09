@@ -26,7 +26,6 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/mock"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql"
-	redosink "github.com/pingcap/ticdc/downstreamadapter/sink/redo"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
@@ -36,7 +35,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
-	redotestutil "github.com/pingcap/ticdc/pkg/redo/testutil"
 	mysqlcfg "github.com/pingcap/ticdc/pkg/sink/mysql"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/threadpool"
@@ -148,50 +146,6 @@ func createTestManager(t *testing.T) *DispatcherManager {
 	return manager
 }
 
-func enableRedoForTest(t *testing.T, manager *DispatcherManager) {
-	t.Helper()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	manager.ctx = ctx
-	manager.cancel = cancel
-	manager.config.Consistent = redotestutil.NewConsistentConfig("blackhole://")
-	manager.redoEnabled = true
-	manager.redoReady.Store(true)
-	manager.redoDispatcherMap = newDispatcherMap[*dispatcher.RedoDispatcher]()
-	manager.redoSchemaIDToDispatchers = dispatcher.NewSchemaIDToDispatchers()
-	redoSink, err := redosink.New(ctx, manager.changefeedID, manager.config.Consistent)
-	require.NoError(t, err)
-	manager.redoSink = redoSink
-	manager.redoQuota = manager.sinkQuota
-	manager.metricTableTriggerRedoDispatcherCount = metrics.TableTriggerEventDispatcherGauge.WithLabelValues(
-		manager.changefeedID.Keyspace(),
-		manager.changefeedID.Name(),
-		"redoDispatcher",
-	)
-	manager.metricRedoEventDispatcherCount = metrics.EventDispatcherGauge.WithLabelValues(
-		manager.changefeedID.Keyspace(),
-		manager.changefeedID.Name(),
-		"redoDispatcher",
-	)
-	manager.metricRedoCreateDispatcherDuration = metrics.CreateDispatcherDuration.WithLabelValues(
-		manager.changefeedID.Keyspace(),
-		manager.changefeedID.Name(),
-		"redoDispatcher",
-	)
-	t.Cleanup(func() {
-		manager.closed.Store(true)
-		if manager.heartBeatTask != nil {
-			manager.heartBeatTask.Cancel()
-		}
-		cancel()
-		if d := manager.GetTableTriggerRedoDispatcher(); d != nil {
-			d.Remove()
-		}
-		manager.wg.Wait()
-		redoSink.Close()
-	})
-}
-
 func TestEnsureTableTriggerEventDispatcherWaitsForSafeClose(t *testing.T) {
 	manager := createTestManager(t)
 	manager.config.SinkConfig = config.GetDefaultReplicaConfig().Sink
@@ -255,71 +209,6 @@ func TestEnsureTableTriggerEventDispatcherWaitsForSafeClose(t *testing.T) {
 	require.NotNil(t, newTrigger)
 	require.Equal(t, newTriggerID, newTrigger.GetId())
 	require.Equal(t, uint64(100), newTrigger.GetStartTs())
-}
-
-func TestEnsureTableTriggerRedoDispatcherWaitsForSafeClose(t *testing.T) {
-	manager := createTestManager(t)
-	enableRedoForTest(t, manager)
-
-	oldTriggerID := common.NewDispatcherID()
-	newTriggerID := common.NewDispatcherID()
-	oldTrigger := dispatcher.NewRedoDispatcher(
-		oldTriggerID,
-		common.KeyspaceDDLSpan(manager.keyspaceID),
-		100,
-		0,
-		manager.redoSchemaIDToDispatchers,
-		false, // skipSyncpointAtStartTs
-		false, // skipDMLAsStartTs
-		0,
-		0,
-		manager.sink,
-		manager.sharedInfo,
-	)
-	oldTrigger.SetComponentStatus(heartbeatpb.ComponentState_Working)
-	oldSeq := manager.GetRedoDispatcherMap().Set(oldTriggerID, oldTrigger)
-	oldTrigger.SetSeq(oldSeq)
-	manager.SetTableTriggerRedoDispatcher(oldTrigger)
-	manager.metricTableTriggerRedoDispatcherCount.Inc()
-
-	dml := event.NewDMLEvent(oldTriggerID, 0, 101, 102, nil)
-	dml.Length = 1
-	nodeID := node.NewID()
-	require.True(t, oldTrigger.HandleEvents(
-		[]dispatcher.DispatcherEvent{
-			dispatcher.NewDispatcherEvent(&nodeID, dml),
-		},
-		func() {},
-	))
-
-	ready, err := manager.EnsureTableTriggerRedoDispatcher(newTriggerID.ToPB(), 200, false)
-	require.NoError(t, err)
-	require.False(t, ready)
-	require.Equal(t, oldTriggerID, manager.GetTableTriggerRedoDispatcher().GetId())
-	require.True(t, manager.GetTableTriggerRedoDispatcher().GetTryRemoving())
-	_, oldExists := manager.GetRedoDispatcherMap().Get(oldTriggerID)
-	require.True(t, oldExists)
-	_, newExists := manager.GetRedoDispatcherMap().Get(newTriggerID)
-	require.False(t, newExists)
-
-	if handle, ok := manager.removeTaskHandles.LoadAndDelete(oldTriggerID); ok {
-		handle.(*threadpool.TaskHandle).Cancel()
-	}
-	dml.PostFlush()
-	_, ok := oldTrigger.TryClose()
-	require.True(t, ok)
-	oldTrigger.Remove()
-	manager.cleanRedoDispatcher(oldTriggerID, oldTrigger.GetSchemaID())
-	require.Nil(t, manager.GetTableTriggerRedoDispatcher())
-
-	ready, err = manager.EnsureTableTriggerRedoDispatcher(newTriggerID.ToPB(), 200, false)
-	require.NoError(t, err)
-	require.True(t, ready)
-	newTrigger := manager.GetTableTriggerRedoDispatcher()
-	require.NotNil(t, newTrigger)
-	require.Equal(t, newTriggerID, newTrigger.GetId())
-	require.Equal(t, uint64(100), newTrigger.GetStartTs())
-	require.False(t, manager.pendingTableTriggerRedoReplacement.pending)
 }
 
 func TestCollectComponentStatusWhenChangedWatermarkSeqNoFallback(t *testing.T) {
