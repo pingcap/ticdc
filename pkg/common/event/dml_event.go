@@ -387,8 +387,10 @@ type DMLEvent struct {
 	// TableInfo is the table info of the transaction.
 	// If the DMLEvent is send from a remote eventService, the TableInfo is nil.
 	TableInfo *common.TableInfo `json:"table_info"`
-	// TableInfoVersion record the table info version from last ddl event.
-	// include 'truncate table', 'rename table', 'rename tables', 'truncate partition' and 'exchange partition'.
+	// TableInfoVersion tracks the schema version associated with this DML.
+	// It is advanced by schema-changing DDLs (for example truncate/rename/
+	// exchange partition) and is consumed by storage sink to route DML files
+	// into <schema>/<table>/<tableVersion>/... directories.
 	TableInfoVersion uint64 `json:"-"`
 
 	// The following fields are set and used by dispatcher.

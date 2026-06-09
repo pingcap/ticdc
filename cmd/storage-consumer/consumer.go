@@ -326,9 +326,6 @@ func (c *consumer) appendDMLEvents(
 			c.dmlCount.Add(1)
 
 			row := decoder.NextDMLEvent()
-
-			log.Debug("next dml event", zap.Any("commitTs", row.CommitTs), zap.Any("tableName", tableInfo.TableName.String()), zap.Any("tableID", tableID))
-
 			row.PhysicalTableID = tableID
 			c.appendRow2Group(row, fileIdx.EnableTableAcrossNodes)
 			filteredCnt++
