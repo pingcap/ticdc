@@ -42,15 +42,10 @@ type Barrier struct {
 	spanController     *span.Controller
 	operatorController *operator.Controller
 	splitTableEnabled  bool
-<<<<<<< HEAD
-	mode               int64
-=======
-	flushEnabled       bool
 	// mode identifies which replication pipeline this barrier belongs to
 	// (common.DefaultMode or common.RedoMode). Barrier state, resend messages,
 	// and logs must stay in the same mode.
 	mode int64
->>>>>>> c1f39ed2e (maintainer: add mode information in barrier logs (#4412))
 }
 
 // NewBarrier create a new barrier for the changefeed
@@ -177,13 +172,7 @@ func (b *Barrier) handleBootstrapResponse(bootstrapRespMap map[node.ID]*heartbea
 			key := getEventKey(blockState.BlockTs, blockState.IsSyncPoint)
 			event, ok := b.blockedEvents.Get(key)
 			if !ok {
-<<<<<<< HEAD
-				event = NewBlockEvent(common.NewChangefeedIDFromPB(resp.ChangefeedID), common.NewDispatcherIDFromPB(span.ID), b.spanController, b.operatorController, blockState, b.splitTableEnabled)
-=======
 				event = NewBlockEvent(common.NewChangefeedIDFromPB(resp.ChangefeedID), common.NewDispatcherIDFromPB(span.ID), b.spanController, b.operatorController, blockState, b.splitTableEnabled, b.mode)
-				event.flushEnabled = b.flushEnabled
-				event.flushDispatcherAdvanced = !b.flushEnabled
->>>>>>> c1f39ed2e (maintainer: add mode information in barrier logs (#4412))
 				b.blockedEvents.Set(key, event)
 			}
 			switch blockState.Stage {
@@ -440,13 +429,7 @@ func (b *Barrier) getOrInsertNewEvent(changefeedID common.ChangeFeedID, dispatch
 ) *BarrierEvent {
 	event, ok := b.blockedEvents.Get(key)
 	if !ok {
-<<<<<<< HEAD
-		event = NewBlockEvent(changefeedID, dispatcherID, b.spanController, b.operatorController, blockState, b.splitTableEnabled)
-=======
 		event = NewBlockEvent(changefeedID, dispatcherID, b.spanController, b.operatorController, blockState, b.splitTableEnabled, b.mode)
-		event.flushEnabled = b.flushEnabled
-		event.flushDispatcherAdvanced = !b.flushEnabled
->>>>>>> c1f39ed2e (maintainer: add mode information in barrier logs (#4412))
 		b.blockedEvents.Set(key, event)
 	}
 	return event
@@ -458,22 +441,14 @@ func (b *Barrier) checkEventFinish(be *BarrierEvent) {
 	if !be.allDispatcherReported() {
 		return
 	}
-<<<<<<< HEAD
 	if be.selected.Load() {
 		log.Info("all dispatchers reported event done, remove event",
 			zap.String("changefeed", be.cfID.Name()),
-			zap.Uint64("committs", be.commitTs))
+			zap.Uint64("commitTs", be.commitTs),
+			zap.Int64("mode", b.mode))
 		// already selected a dispatcher to write, now all dispatchers reported the block event
 		b.blockedEvents.Delete(getEventKey(be.commitTs, be.isSyncPoint))
 	}
-=======
-
-	log.Info("all dispatchers reported event done, remove event",
-		zap.String("changefeed", be.cfID.Name()),
-		zap.Uint64("committs", be.commitTs),
-		zap.Int64("mode", b.mode))
-	b.blockedEvents.Delete(getEventKey(be.commitTs, be.isSyncPoint))
->>>>>>> c1f39ed2e (maintainer: add mode information in barrier logs (#4412))
 }
 
 func (b *Barrier) tryScheduleEvent(event *BarrierEvent) bool {

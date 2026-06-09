@@ -219,8 +219,8 @@ func (be *BarrierEvent) onAllDispatcherReportedBlockEvent(dispatcherID common.Di
 		zap.String("changefeed", be.cfID.Name()),
 		zap.String("dispatcher", be.writerDispatcher.String()),
 		zap.Uint64("commitTs", be.commitTs),
-<<<<<<< HEAD
-		zap.String("barrierType", be.blockedDispatchers.InfluenceType.String()))
+		zap.String("barrierType", be.blockedDispatchers.InfluenceType.String()),
+		zap.Int64("mode", be.mode))
 	stm := be.spanController.GetTaskByID(be.writerDispatcher)
 	return &heartbeatpb.DispatcherStatus{
 		InfluencedDispatchers: &heartbeatpb.InfluencedDispatchers{
@@ -229,11 +229,6 @@ func (be *BarrierEvent) onAllDispatcherReportedBlockEvent(dispatcherID common.Di
 		},
 		Action: be.action(heartbeatpb.Action_Write),
 	}, stm.GetNodeID()
-=======
-		zap.String("barrierType", be.blockedDispatchers.InfluenceType.String()),
-		zap.Int64("mode", be.mode))
-	return nil, ""
->>>>>>> c1f39ed2e (maintainer: add mode information in barrier logs (#4412))
 }
 
 func (be *BarrierEvent) scheduleBlockEvent() {
@@ -635,32 +630,6 @@ func (be *BarrierEvent) resend(mode int64) []*messaging.TargetMessage {
 		return nil
 	}
 	be.lastResendTime = time.Now()
-<<<<<<< HEAD
-=======
-	// Phase 1 (Flush, storage split-table only): all influenced dispatchers flush pre-barrier DML first.
-	// This fence is required for storage sink when split-table is enabled: one table may span
-	// multiple dispatchers on different nodes, and pre-DDL DML must not overtake
-	// the writer's Action_Write.
-	if !be.flushDispatcherAdvanced {
-		msgs = be.sendFlushAction(mode)
-		if len(msgs) > 0 {
-			return msgs
-		}
-		// No influenced dispatcher needs Action_Flush (for example DB/ALL barriers with empty
-		// runtime influenced set like "DROP DATABASE IF EXISTS <db>" before any table exists).
-		// Advance flush phase immediately; otherwise the barrier can be stuck forever in phase 1.
-		be.flushDispatcherAdvanced = true
-		be.rangeChecker.Reset()
-		be.reportedDispatchers = make(map[common.DispatcherID]struct{})
-		be.lastResendTime = time.Now().Add(-20 * time.Second)
-		log.Info("barrier flush phase auto advanced due to empty influenced dispatchers",
-			zap.String("changefeed", be.cfID.Name()),
-			zap.Uint64("commitTs", be.commitTs),
-			zap.Bool("isSyncPoint", be.isSyncPoint),
-			zap.String("barrierType", be.blockedDispatchers.InfluenceType.String()),
-			zap.Int64("mode", be.mode))
-	}
->>>>>>> c1f39ed2e (maintainer: add mode information in barrier logs (#4412))
 	// we select a dispatcher as the writer, still waiting for that dispatcher advance its checkpoint ts
 	if !be.writerDispatcherAdvanced {
 		// resend write action
