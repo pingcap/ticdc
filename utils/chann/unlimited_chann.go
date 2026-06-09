@@ -14,6 +14,7 @@
 package chann
 
 import (
+	"context"
 	"math"
 	"sync"
 
@@ -83,23 +84,57 @@ func (c *UnlimitedChannel[T, G]) Push(values ...T) {
 // Return the element and a boolean indicating whether the channel is available.
 // Return false if the channel is closed.
 func (c *UnlimitedChannel[T, G]) Get() (T, bool) {
+	v, ok, err := c.getWithContext(context.Background())
+	if err != nil {
+		// Get uses context.Background(), so getWithContext cannot observe
+		// cancellation here. The error path is only for GetWithContext.
+		panic("unreachable")
+	}
+	return v, ok
+}
+
+// GetWithContext retrieves an element from the channel with context cancellation.
+// It returns (zero, false, nil) when channel is closed and empty.
+// It returns (zero, false, err) when context is canceled while waiting.
+func (c *UnlimitedChannel[T, G]) GetWithContext(ctx context.Context) (T, bool, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return c.getWithContext(ctx)
+}
+
+func (c *UnlimitedChannel[T, G]) getWithContext(ctx context.Context) (T, bool, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	for !c.closed && c.queue.Length() == 0 {
+	canceled := false
+	if ctx != nil {
+		stop := context.AfterFunc(ctx, func() {
+			c.mu.Lock()
+			canceled = true
+			c.cond.Broadcast()
+			c.mu.Unlock()
+		})
+		defer stop()
+	}
+
+	for !c.closed && c.queue.Length() == 0 && !canceled {
 		c.cond.Wait()
 	}
+
 	var zero T
-	if c.closed && c.queue.Length() == 0 {
-		return zero, false
+	if c.queue.Length() > 0 {
+		v, ok := c.queue.PopFront()
+		if !ok {
+			panic("unreachable")
+		}
+		return v, true, nil
 	}
 
-	v, ok := c.queue.PopFront()
-	if !ok {
-		panic("unreachable")
+	if canceled {
+		return zero, false, context.Cause(ctx)
 	}
-
-	return v, true
+	return zero, false, nil
 }
 
 type getMultType int

@@ -75,7 +75,7 @@ message CheckpointTsMessage {
     uint64 checkpointTs = 2;
 }
 
-// RedoMetaMessage used to send unflushed ts to update redo meta 
+// RedoMetaMessage used to send unflushed ts to update redo meta
 // from maintainer to dispatcher manager
 message RedoMetaMessage {
     ChangefeedID changefeedID = 1;
@@ -83,14 +83,14 @@ message RedoMetaMessage {
     uint64 checkpointTs = 3;
 }
 
-// RedoResolvedTsProgressMessage used to send redo meta flushed resolvedTs 
+// RedoResolvedTsProgressMessage used to send redo meta flushed resolvedTs
 // from dispatcher manager to maintainer
 message RedoResolvedTsProgressMessage {
     ChangefeedID changefeedID = 1;
     uint64 resolvedTs = 2;
 }
 
-// RedoResolvedTsForwardMessage used to send redoGlobalTs (redo meta flushed resolvedTs) 
+// RedoResolvedTsForwardMessage used to send redoGlobalTs (redo meta flushed resolvedTs)
 // from maintainer to dispatcher manager
 message RedoResolvedTsForwardMessage {
     ChangefeedID changefeedID = 1;
@@ -362,7 +362,7 @@ enum ChecksumState {
 
 message ChecksumMeta {
     ChecksumState state = 1;
-    // checksumStateSeq is a monotonic version for checksumState, 
+    // checksumStateSeq is a monotonic version for checksumState,
     // used to discard out-of-order meta info.
     uint64 checksumStateSeq = 2;
 }

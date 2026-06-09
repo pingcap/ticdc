@@ -96,3 +96,17 @@ func (e *DispatcherManager) GetAllDispatchers(schemaID int64) []common.Dispatche
 func (e *DispatcherManager) GetCurrentOperatorMap() *sync.Map {
 	return &e.currentOperatorMap
 }
+
+// IsRedoEnabled reports whether redo is configured for the changefeed.
+func (e *DispatcherManager) IsRedoEnabled() bool {
+	return e.redoEnabled
+}
+
+// IsRedoReady reports whether redo is configured and its runtime components are fully initialized.
+func (e *DispatcherManager) IsRedoReady() bool {
+	return e.IsRedoEnabled() &&
+		e.redoReady.Load() &&
+		e.redoSink != nil &&
+		e.redoDispatcherMap != nil &&
+		e.redoSchemaIDToDispatchers != nil
+}

@@ -3070,6 +3070,7 @@ func TestGCPersistStorage(t *testing.T) {
 }
 
 func TestRenameTable(t *testing.T) {
+	// Case: query specifies both old and new schema; use query for old schema/table.
 	// use t;
 	job := buildRenameTableJobForTest(100, 101, "t1", 101, &model.InvolvingSchemaInfo{
 		Database: "t",
@@ -3090,6 +3091,7 @@ func TestRenameTable(t *testing.T) {
 	})
 	assert.Equal(t, "RENAME TABLE `t`.`t3` TO `test`.`t1`", ddl.Query)
 
+	// Case: same-schema rename, query omits schema; fallback to InvolvingSchemaInfo.
 	// use test;
 	job = buildRenameTableJobForTest(100, 101, "t2", 100, &model.InvolvingSchemaInfo{
 		Database: "test",
@@ -3110,6 +3112,7 @@ func TestRenameTable(t *testing.T) {
 	})
 	assert.Equal(t, "RENAME TABLE `test`.`t1` TO `test`.`t2`", ddl.Query)
 
+	// Case: ALTER TABLE ... RENAME TO, same-schema rename; fallback to InvolvingSchemaInfo.
 	// use test;
 	job = buildRenameTableJobForTest(100, 101, "t2", 100, &model.InvolvingSchemaInfo{
 		Database: "test",
@@ -3129,6 +3132,70 @@ func TestRenameTable(t *testing.T) {
 		},
 	})
 	assert.Equal(t, "RENAME TABLE `test`.`t1` TO `test`.`t2`", ddl.Query)
+
+	// Case: args provide old schema name, should override InvolvingSchemaInfo (ExtraSchemaID == SchemaID).
+	// use SalesDB;
+	job = buildRenameTableJobForTest(100, 101, "t1", 100, &model.InvolvingSchemaInfo{
+		Database: "salesdb",
+		Table:    "t1",
+	})
+	job.Version = model.JobVersion2
+	job.FillArgs(&model.RenameTableArgs{
+		OldSchemaID:   200,
+		OldSchemaName: parser_model.NewCIStr("SalesDB"),
+		NewTableName:  parser_model.NewCIStr("t1"),
+	})
+	job.Query = "RENAME TABLE t1 TO ArchiveDB.t1"
+	ddl = buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
+		job: job,
+		databaseMap: map[int64]*BasicDatabaseInfo{
+			100: {Name: "ArchiveDB", Tables: map[int64]bool{101: true}},
+			200: {Name: "SalesDB", Tables: map[int64]bool{101: true}},
+		},
+		tableMap: map[int64]*BasicTableInfo{
+			101: {SchemaID: 100, Name: "t1"},
+		},
+	})
+	assert.Equal(t, "RENAME TABLE `SalesDB`.`t1` TO `ArchiveDB`.`t1`", ddl.Query)
+
+	// Case: query omits old schema; ExtraSchemaID overwrites normalized InvolvingSchemaInfo to recover case.
+	job = buildRenameTableJobForTest(100, 101, "t1", 100, &model.InvolvingSchemaInfo{
+		Database: "salesdb",
+		Table:    "t1",
+	})
+	job.Query = "RENAME TABLE t1 TO ArchiveDB.t1"
+	ddl = buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
+		job: job,
+		databaseMap: map[int64]*BasicDatabaseInfo{
+			100: {Name: "ArchiveDB", Tables: map[int64]bool{101: true}},
+			200: {Name: "SalesDB", Tables: map[int64]bool{101: true}},
+		},
+		tableMap: map[int64]*BasicTableInfo{
+			101: {SchemaID: 200, Name: "t1"},
+		},
+	})
+	assert.Equal(t, "RENAME TABLE `SalesDB`.`t1` TO `ArchiveDB`.`t1`", ddl.Query)
+
+	// Case: args provide old schema name, no InvolvingSchemaInfo.
+	job = buildRenameTableJobForTest(100, 101, "t1", 100, nil)
+	job.Version = model.JobVersion2
+	job.FillArgs(&model.RenameTableArgs{
+		OldSchemaID:   200,
+		OldSchemaName: parser_model.NewCIStr("SalesDB"),
+		NewTableName:  parser_model.NewCIStr("t1"),
+	})
+	job.Query = "RENAME TABLE t1 TO ArchiveDB.t1"
+	ddl = buildPersistedDDLEventForRenameTable(buildPersistedDDLEventFuncArgs{
+		job: job,
+		databaseMap: map[int64]*BasicDatabaseInfo{
+			100: {Name: "ArchiveDB", Tables: map[int64]bool{101: true}},
+			200: {Name: "SalesDB", Tables: map[int64]bool{101: true}},
+		},
+		tableMap: map[int64]*BasicTableInfo{
+			101: {SchemaID: 200, Name: "t1"},
+		},
+	})
+	assert.Equal(t, "RENAME TABLE `SalesDB`.`t1` TO `ArchiveDB`.`t1`", ddl.Query)
 }
 
 func TestBuildPersistedDDLEventForRenameTablesFallbackOldTableName(t *testing.T) {
@@ -3370,7 +3437,7 @@ func TestBuildPersistedDDLEventEscapesIdentifiers(t *testing.T) {
 
 	t.Run("exchange partition", func(t *testing.T) {
 		job := buildExchangePartitionJobForTest(100, 200, 300, "pt`x", []int64{301}, 1000)
-		job.Query = "ALTER TABLE `ignored`.`ignored` EXCHANGE PARTITION `p0` WITH TABLE `ignored2`.`ignored2` WITHOUT VALIDATION"
+		job.Query = "ALTER TABLE `ignored`.`ignored` EXCHANGE PARTITION `p``0` WITH TABLE `ignored2`.`ignored2` WITHOUT VALIDATION"
 
 		ddl := buildPersistedDDLEventForExchangePartition(buildPersistedDDLEventFuncArgs{
 			job: job,
@@ -3390,7 +3457,7 @@ func TestBuildPersistedDDLEventEscapesIdentifiers(t *testing.T) {
 		})
 
 		assert.Equal(t,
-			"ALTER TABLE `part``db`.`pt``x` EXCHANGE PARTITION `p0` WITH TABLE `normal``db`.`normal``t` WITHOUT VALIDATION",
+			"ALTER TABLE `part``db`.`pt``x` EXCHANGE PARTITION `p``0` WITH TABLE `normal``db`.`normal``t` WITHOUT VALIDATION",
 			ddl.Query)
 	})
 }
