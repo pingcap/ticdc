@@ -255,6 +255,25 @@ func TestManagerMaintainerSet_AddMaintainerDoesNotCreateRejectedDuplicate(t *tes
 	}
 }
 
+func TestManagerMaintainerSet_RemoveMissingMaintainerReportsRequestEpoch(t *testing.T) {
+	maintainers := newManagerMaintainerSetForAddTest(t)
+	cfID := common.NewChangeFeedIDWithName("remove-missing", common.DefaultKeyspaceName)
+	req := &heartbeatpb.RemoveMaintainerRequest{
+		Id:              cfID.ToPB(),
+		MaintainerEpoch: 7,
+	}
+	msg := messaging.NewSingleTargetMessage(
+		node.ID("self"),
+		messaging.MaintainerManagerTopic,
+		req,
+	)
+
+	status := maintainers.handleRemoveMaintainer(msg)
+	require.NotNil(t, status)
+	require.Equal(t, heartbeatpb.ComponentState_Stopped, status.State)
+	require.Equal(t, uint64(7), status.MaintainerEpoch)
+}
+
 // This is a integration test for maintainer manager, it may consume a lot of time.
 // scale out/in close, add/remove tables
 func TestMaintainerSchedulesNodeChanges(t *testing.T) {

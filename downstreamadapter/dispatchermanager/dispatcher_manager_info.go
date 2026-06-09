@@ -22,7 +22,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/node"
 )
 
-// event_dispatcher_mananger_info.go is used to store the basic info and function of the event dispatcher manager
+// dispatcher_manager_info.go stores the basic info and functions of the dispatcher manager.
 
 type dispatcherCreateInfo struct {
 	ID        common.DispatcherID

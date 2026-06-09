@@ -42,22 +42,22 @@ type DispatcherMap[T dispatcher.Dispatcher] struct {
 	// When some new dispatcher(table) is being added, the maintainer will block the forward of changefeed's checkpointTs
 	// until the maintainer receive the message that the new dispatcher's component status change to working.
 	//
-	// Besides, there is no strict order of the heartbeat message and the table status messages, which is means
-	// it can happen that when dispatcher A is created, event dispatcher manager may first send a table status message
-	// to show the new dispatcher is working, and then send a heartbeat message of the current watermark,
-	// which is calculated without the new disaptcher.
-	// When the checkpointTs of the watermark is large than the startTs of the new dispatcher,
-	// the watermark of next heartbeat, which calculated with the new dispatcher can be less than the previous watermark.
-	// Then it can cause the fallback of changefeed's checkpointTs.
-	// To avoid fallback, we add a seq number in each heartbeat message(both collect from collectComponentStatusWhenChanged and aggregateDispatcherHeartbeats)
-	// When a table is added the seq number will be increase,
-	// and when the maintainer receive the outdate seq, it will know the heartbeat message is outdate and ignore it.
+	// Besides, heartbeat messages and table status messages have no strict order.
+	// After dispatcher A is created, the event dispatcher manager may first send
+	// a table status message showing the new dispatcher is working, and then send
+	// a heartbeat with the current watermark calculated without the new dispatcher.
+	// If that watermark checkpointTs is larger than the new dispatcher's startTs,
+	// the next heartbeat calculated with the new dispatcher can be lower and cause
+	// the changefeed checkpointTs to fall back.
+	// To avoid fallback, each heartbeat carries a seq number collected from
+	// collectComponentStatusWhenChanged and aggregateDispatcherHeartbeats. When a
+	// table is added, the seq number increases, so the maintainer can ignore
+	// outdated heartbeat messages.
 	// In this way, even the above case happens, the changefeed's checkpointTs will not fallback.
 	//
-	// Here we don't need to make seq changes always atmoic with the m changed.
-	// Our target is just :
-	// The seq get from ForEach should be smaller than the seq get from Set
-	// when ForEach is not access the new dispatcher just Set.
+	// Here we don't need to make seq changes always atomic with the map changes.
+	// Our target is only that the seq from ForEach is smaller than the seq from
+	// Set when ForEach does not access the newly added dispatcher.
 	// So we add seq after the dispatcher is add in the m for Set, and get the seq before do range for ForRange.
 	seq atomic.Uint64
 }

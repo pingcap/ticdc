@@ -288,8 +288,9 @@ func (p *managerMaintainerSet) handleRemoveMaintainer(msg *messaging.TargetMessa
 				zap.Stringer("changefeedID", changefeedID),
 				zap.Any("request", req))
 			return &heartbeatpb.MaintainerStatus{
-				ChangefeedID: req.GetId(),
-				State:        heartbeatpb.ComponentState_Stopped,
+				ChangefeedID:    req.GetId(),
+				State:           heartbeatpb.ComponentState_Stopped,
+				MaintainerEpoch: req.MaintainerEpoch,
 			}
 		}
 

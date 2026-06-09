@@ -68,7 +68,7 @@ func (m *MoveMaintainerOperator) Check(from node.ID, status *heartbeatpb.Maintai
 	if from == m.origin &&
 		common.MaintainerEpochMatches(status.MaintainerEpoch, m.originMaintainerEpoch) &&
 		status.State != heartbeatpb.ComponentState_Working {
-		log.Info("changefeed changefeedIsRemoved from origin node",
+		log.Info("changefeed removed from origin node",
 			zap.String("changefeed", m.changefeed.ID.String()))
 		m.originNodeStopped = true
 	}
@@ -128,7 +128,7 @@ func (m *MoveMaintainerOperator) OnNodeRemove(n node.ID) {
 			return
 		}
 
-		log.Info("changefeed changefeed is removed from dest node",
+		log.Info("destination node removed during maintainer move",
 			zap.String("dest", m.dest.String()),
 			zap.String("origin", m.origin.String()),
 			zap.String("changefeed", m.changefeed.ID.String()))
