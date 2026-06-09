@@ -191,6 +191,24 @@ func TestEnsureTableTriggerEventDispatcherWaitsForSafeClose(t *testing.T) {
 	require.True(t, oldExists)
 	_, newExists := manager.GetDispatcherMap().Get(newTriggerID)
 	require.False(t, newExists)
+
+	if handle, ok := manager.removeTaskHandles.LoadAndDelete(oldTriggerID); ok {
+		handle.(*threadpool.TaskHandle).Cancel()
+	}
+	dml.PostFlush()
+	_, ok := oldTrigger.TryClose()
+	require.True(t, ok)
+	oldTrigger.Remove()
+	manager.cleanEventDispatcher(oldTriggerID, oldTrigger.GetSchemaID())
+	require.Nil(t, manager.GetTableTriggerEventDispatcher())
+
+	ready, err = manager.EnsureTableTriggerEventDispatcher(newTriggerID.ToPB(), 200, false)
+	require.NoError(t, err)
+	require.True(t, ready)
+	newTrigger := manager.GetTableTriggerEventDispatcher()
+	require.NotNil(t, newTrigger)
+	require.Equal(t, newTriggerID, newTrigger.GetId())
+	require.Equal(t, uint64(100), newTrigger.GetStartTs())
 }
 
 func TestCollectComponentStatusWhenChangedWatermarkSeqNoFallback(t *testing.T) {

@@ -144,17 +144,28 @@ func (e *DispatcherManager) EnsureTableTriggerRedoDispatcher(
 	expectedID := common.NewDispatcherIDFromPB(id)
 	existing := e.GetTableTriggerRedoDispatcher()
 	if existing == nil {
-		return true, e.NewTableTriggerRedoDispatcher(id, startTs, newChangefeed)
+		replacementStartTs := e.getTableTriggerRedoReplacementStartTs(startTs)
+		if err := e.NewTableTriggerRedoDispatcher(id, replacementStartTs, newChangefeed); err != nil {
+			return true, err
+		}
+		e.clearPendingTableTriggerRedoReplacement()
+		return true, nil
 	}
 	if existing.GetId() == expectedID {
+		e.clearPendingTableTriggerRedoReplacement()
 		return true, nil
 	}
 
 	replacementStartTs := existing.GetStartTs()
+	e.setPendingTableTriggerRedoReplacement(replacementStartTs)
 	if !e.removeTableTriggerRedoDispatcherForReplacement(existing) {
 		return false, nil
 	}
-	return true, e.NewTableTriggerRedoDispatcher(id, replacementStartTs, newChangefeed)
+	if err := e.NewTableTriggerRedoDispatcher(id, replacementStartTs, newChangefeed); err != nil {
+		return true, err
+	}
+	e.clearPendingTableTriggerRedoReplacement()
+	return true, nil
 }
 
 func (e *DispatcherManager) removeTableTriggerRedoDispatcherForReplacement(d *dispatcher.RedoDispatcher) bool {
@@ -420,6 +431,30 @@ func (e *DispatcherManager) SetTableTriggerRedoDispatcher(rd *dispatcher.RedoDis
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.tableTriggerRedoDispatcher = rd
+}
+
+func (e *DispatcherManager) setPendingTableTriggerRedoReplacement(startTs uint64) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.pendingTableTriggerRedoReplacement = tableTriggerReplacement{
+		pending: true,
+		startTs: startTs,
+	}
+}
+
+func (e *DispatcherManager) getTableTriggerRedoReplacementStartTs(fallback uint64) uint64 {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.pendingTableTriggerRedoReplacement.pending {
+		return e.pendingTableTriggerRedoReplacement.startTs
+	}
+	return fallback
+}
+
+func (e *DispatcherManager) clearPendingTableTriggerRedoReplacement() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.pendingTableTriggerRedoReplacement = tableTriggerReplacement{}
 }
 
 func (e *DispatcherManager) GetAllRedoDispatchers(schemaID int64) []common.DispatcherID {

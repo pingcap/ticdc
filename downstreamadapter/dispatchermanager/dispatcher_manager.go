@@ -55,6 +55,11 @@ const (
 	blockStatusBufferSize = 16 * 1024
 )
 
+type tableTriggerReplacement struct {
+	pending bool
+	startTs uint64
+}
+
 /*
 DispatcherManager manages dispatchers for a changefeed instance with responsibilities including:
 
@@ -94,8 +99,14 @@ type DispatcherManager struct {
 
 	// tableTriggerEventDispatcher is a special dispatcher, that is responsible for handling ddl and checkpoint events.
 	tableTriggerEventDispatcher *dispatcher.EventDispatcher
+	// pendingTableTriggerEventReplacement preserves the old trigger startTs
+	// while replacement waits for async drain.
+	pendingTableTriggerEventReplacement tableTriggerReplacement
 	// tableTriggerRedoDispatcher is a special redo dispatcher, that is responsible for handling ddl and checkpoint events.
 	tableTriggerRedoDispatcher *dispatcher.RedoDispatcher
+	// pendingTableTriggerRedoReplacement preserves the old redo trigger startTs
+	// while replacement waits for async drain.
+	pendingTableTriggerRedoReplacement tableTriggerReplacement
 	// dispatcherMap restore all the dispatchers in the DispatcherManager, including table trigger event dispatcher
 	dispatcherMap *DispatcherMap[*dispatcher.EventDispatcher]
 	// redoDispatcherMap restore all the redo dispatchers in the DispatcherManager, including table trigger redo dispatcher
@@ -416,17 +427,28 @@ func (e *DispatcherManager) EnsureTableTriggerEventDispatcher(
 	expectedID := common.NewDispatcherIDFromPB(id)
 	existing := e.GetTableTriggerEventDispatcher()
 	if existing == nil {
-		return true, e.NewTableTriggerEventDispatcher(id, startTs, newChangefeed)
+		replacementStartTs := e.getTableTriggerEventReplacementStartTs(startTs)
+		if err := e.NewTableTriggerEventDispatcher(id, replacementStartTs, newChangefeed); err != nil {
+			return true, err
+		}
+		e.clearPendingTableTriggerEventReplacement()
+		return true, nil
 	}
 	if existing.GetId() == expectedID {
+		e.clearPendingTableTriggerEventReplacement()
 		return true, nil
 	}
 
 	replacementStartTs := existing.GetStartTs()
+	e.setPendingTableTriggerEventReplacement(replacementStartTs)
 	if !e.removeTableTriggerEventDispatcherForReplacement(existing) {
 		return false, nil
 	}
-	return true, e.NewTableTriggerEventDispatcher(id, replacementStartTs, newChangefeed)
+	if err := e.NewTableTriggerEventDispatcher(id, replacementStartTs, newChangefeed); err != nil {
+		return true, err
+	}
+	e.clearPendingTableTriggerEventReplacement()
+	return true, nil
 }
 
 func (e *DispatcherManager) removeTableTriggerEventDispatcherForReplacement(d *dispatcher.EventDispatcher) bool {
