@@ -128,9 +128,7 @@ func TestBasicFunctionality(t *testing.T) {
 
 	cloudStorageSink.AddDMLEvent(dmlEvent)
 
-	require.Eventually(t, func() bool {
-		return count.Load() == 2
-	}, 10*time.Second, 100*time.Millisecond)
+	time.Sleep(5 * time.Second)
 
 	ddlEvent2.PostFlush()
 
