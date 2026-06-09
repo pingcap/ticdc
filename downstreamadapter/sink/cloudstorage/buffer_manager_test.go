@@ -148,6 +148,56 @@ func TestBufferManagerOversizedBatchFlushesImmediatelyFromMemory(t *testing.T) {
 	require.ErrorIs(t, <-done, context.Canceled)
 }
 
+func TestBufferManagerIntervalFlushesOnlyBatchesReachingMaxAge(t *testing.T) {
+	t.Parallel()
+
+	changefeedID := commonType.NewChangefeedID4Test("test", "buffer-interval")
+	flushSink := newTestFlushTaskSink(16)
+	spoolBuffer, err := spool.New(
+		changefeedID,
+		spool.WithRootDir(t.TempDir()),
+		spool.WithDiskQuotaBytes(1<<20),
+		spool.WithMemoryRatio(0.5),
+	)
+	require.NoError(t, err)
+	defer spoolBuffer.Close()
+
+	controller := newBufferManager(changefeedID, &cloudstorage.Config{
+		FlushInterval:    10 * time.Second,
+		FileSize:         1 << 20,
+		SpoolDiskQuota:   1 << 20,
+		FileIndexWidth:   6,
+		UseTableIDAsPath: false,
+	}, spoolBuffer, flushSink.enqueueFlushTask)
+
+	now := time.Unix(100, 0)
+	firstTask := newBufferedTask("table1", commonType.NewDispatcherID(), `{"id":1}`)
+	secondTask := newBufferedTask("table2", commonType.NewDispatcherID(), `{"id":2}`)
+
+	firstEntry := newBufferedEntry(t, spoolBuffer, firstTask)
+	secondEntry := newBufferedEntry(t, spoolBuffer, secondTask)
+	controller.buffer.addEntry(firstTask, firstEntry, now)
+	controller.buffer.addEntry(secondTask, secondEntry, now.Add(time.Second))
+
+	require.NoError(t, controller.emitExpiredBatch(context.Background(), now.Add(9*time.Second)))
+	require.Len(t, controller.buffer.tables, 2)
+	require.Empty(t, flushSink.ch)
+
+	require.NoError(t, controller.emitExpiredBatch(context.Background(), now.Add(10*time.Second)))
+
+	select {
+	case flushed := <-flushSink.ch:
+		require.Nil(t, flushed.marker)
+		require.Len(t, flushed.batch.tables, 1)
+		require.Contains(t, flushed.batch.tables, firstTask.versionedTable)
+		require.NotContains(t, flushed.batch.tables, secondTask.versionedTable)
+	case <-time.After(3 * time.Second):
+		t.Fatal("buffer controller did not flush expired batch")
+	}
+	require.Len(t, controller.buffer.tables, 1)
+	require.Contains(t, controller.buffer.tables, secondTask.versionedTable)
+}
+
 func newBufferedTask(table string, dispatcherID commonType.DispatcherID, payload string) *task {
 	tableInfo := &commonType.TableInfo{
 		TableName: commonType.TableName{
@@ -178,4 +228,13 @@ func newBufferedTask(table string, dispatcherID commonType.DispatcherID, payload
 	msg.SetRowsCount(1)
 	t.encodedMsgs = []*common.Message{msg}
 	return t
+}
+
+func newBufferedEntry(t *testing.T, spoolBuffer *spool.Spool, task *task) *spool.Entry {
+	t.Helper()
+
+	_, entry, err := spoolBuffer.TryEnqueue(task.encodedMsgs, task.callbacks.postEnqueue)
+	require.NoError(t, err)
+	require.NotNil(t, entry)
+	return entry
 }
