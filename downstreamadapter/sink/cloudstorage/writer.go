@@ -229,9 +229,9 @@ func (d *writer) discardPayload(payload *payload) {
 func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath string, payload *payload) error {
 	keyspace := d.changeFeedID.Keyspace()
 	changefeed := d.changeFeedID.Name()
-
 	start := time.Now()
-	if err := d.statistics.RecordBatchExecution(func() (_ int, _ int64, retErr error) {
+
+	err := d.statistics.RecordBatchExecution(func() (int, int64, error) {
 		if d.config.FlushConcurrency <= 1 {
 			err := d.storage.WriteFile(ctx, dataFilePath, payload.data)
 			if err != nil {
@@ -240,32 +240,38 @@ func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath 
 			return payload.rowsCount, payload.nBytes, nil
 		}
 
-		writer, inErr := d.storage.Create(ctx, dataFilePath, &storeapi.WriterOption{
+		writer, err := d.storage.Create(ctx, dataFilePath, &storeapi.WriterOption{
 			Concurrency: d.config.FlushConcurrency,
 		})
-		if inErr != nil {
-			return 0, 0, inErr
+		if err != nil {
+			return 0, 0, err
 		}
-		defer func() {
+
+		_, err = writer.Write(ctx, payload.data)
+		if err != nil {
 			closeErr := writer.Close(ctx)
 			if closeErr != nil {
-				log.Warn("failed to close writer",
-					zap.String("keyspace", keyspace),
-					zap.String("changefeed", changefeed),
-					zap.Any("table", payload.tableInfo.TableName),
-					zap.Int("shardID", d.shardID),
-					zap.Error(closeErr))
+				log.Warn("failed to close writer after write failure",
+					zap.String("keyspace", keyspace), zap.String("changefeed", changefeed),
+					zap.String("path", dataFilePath), zap.Error(closeErr))
 			}
-		}()
-		if _, retErr = writer.Write(ctx, payload.data); retErr != nil {
-			return 0, 0, retErr
+			return 0, 0, err
+		}
+
+		if err = writer.Close(ctx); err != nil {
+			log.Error("failed to close concurrency writer",
+				zap.String("keyspace", keyspace), zap.String("changefeed", changefeed),
+				zap.String("path", dataFilePath), zap.Error(err))
+			return 0, 0, err
 		}
 		return payload.rowsCount, payload.nBytes, nil
-	}); err != nil {
+	})
+	if err != nil {
 		return err
 	}
 
-	if err := d.storage.WriteFile(ctx, indexFilePath, []byte(path.Base(dataFilePath)+"\n")); err != nil {
+	err = d.storage.WriteFile(ctx, indexFilePath, []byte(path.Base(dataFilePath)+"\n"))
+	if err != nil {
 		log.Error("failed to write index file to external storage",
 			zap.String("keyspace", keyspace),
 			zap.String("changefeed", changefeed),
