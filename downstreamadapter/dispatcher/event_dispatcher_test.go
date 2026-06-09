@@ -406,7 +406,7 @@ func TestDispatcherHandleEvents(t *testing.T) {
 func TestDispatcherIgnoresStaleIgnoredBlockStatus(t *testing.T) {
 	tableSpan := getUncompleteTableSpan()
 	tableSpan.KeyspaceID = getTestingKeyspaceID()
-	dispatcher := newDispatcherForTest(sink.NewMockSink(common.MysqlSinkType), tableSpan)
+	dispatcher := newDispatcherForTest(newDispatcherTestSink(t, common.MysqlSinkType).Sink(), tableSpan)
 
 	previousScheduler := GetDispatcherTaskScheduler()
 	taskScheduler := threadpool.NewThreadPool(1)
