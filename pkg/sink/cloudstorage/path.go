@@ -389,7 +389,7 @@ func (f *FilePathGenerator) GenerateDataFilePath(
 	if err != nil {
 		return "", err
 	}
-	newIndexFile := false
+	loadedIndexFile := false
 	if idx, ok := f.fileIndex[tbl]; !ok {
 		fileIdx, err := f.getFileIdxFromIndexFile(ctx, tbl, date)
 		if err != nil {
@@ -400,7 +400,7 @@ func (f *FilePathGenerator) GenerateDataFilePath(
 			currDate: date,
 			index:    fileIdx,
 		}
-		newIndexFile = true
+		loadedIndexFile = true
 	} else {
 		idx.currDate = date
 	}
@@ -409,9 +409,11 @@ func (f *FilePathGenerator) GenerateDataFilePath(
 		f.fileIndex[tbl].prevDate = f.fileIndex[tbl].currDate
 		f.fileIndex[tbl].index = 0
 	}
+	triedIndexResync := loadedIndexFile
 	// A local file index can lag behind existing data files after sink restart or
-	// dispatcher ownership transfer. Probe consecutive file names from the index
-	// until the first missing one.
+	// dispatcher ownership transfer. If the local cache collides with an existing
+	// data file, reload the index file once before falling back to consecutive
+	// probes for the index-stale recovery path.
 	for {
 		f.fileIndex[tbl].index++
 		name := generateDataFileName(f.config.EnableTableAcrossNodes, tbl.DispatcherID.String(), f.fileIndex[tbl].index, f.extension, f.config.FileIndexWidth)
@@ -423,13 +425,24 @@ func (f *FilePathGenerator) GenerateDataFilePath(
 		if !exist {
 			return dataFile, nil
 		}
-		if newIndexFile {
+		if !triedIndexResync {
+			fileIdx, err := f.getFileIdxFromIndexFile(ctx, tbl, date)
+			if err != nil {
+				return "", err
+			}
+			triedIndexResync = true
+			if fileIdx >= f.fileIndex[tbl].index {
+				f.fileIndex[tbl].index = fileIdx
+				continue
+			}
+		}
+		if loadedIndexFile {
 			log.Warn("the data file exists and the index file is stale",
 				zap.String("keyspace", f.changefeedID.Keyspace()),
 				zap.String("changefeedID", f.changefeedID.Name()),
 				zap.Any("versionedTableName", tbl),
 				zap.String("dataFile", dataFile))
-			newIndexFile = false
+			loadedIndexFile = false
 		}
 	}
 }

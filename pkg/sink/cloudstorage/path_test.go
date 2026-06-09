@@ -29,6 +29,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/tidb/br/pkg/storage"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
@@ -36,6 +37,16 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
 )
+
+type countFileExistsStorage struct {
+	storage.ExternalStorage
+	fileExistsCount int
+}
+
+func (s *countFileExistsStorage) FileExists(ctx context.Context, name string) (bool, error) {
+	s.fileExistsCount++
+	return s.ExternalStorage.FileExists(ctx, name)
+}
 
 func testFilePathGenerator(ctx context.Context, t *testing.T, dir string) *FilePathGenerator {
 	uri := fmt.Sprintf("file:///%s?flush-interval=2s", dir)
@@ -250,8 +261,7 @@ func TestGenerateDataFilePathWithIndexFile(t *testing.T) {
 func TestGenerateDataFilePathResyncIndexFile(t *testing.T) {
 	t.Parallel()
 
-	ctx, cancel := context.WithCancel(context.TODO())
-	defer cancel()
+	ctx := t.Context()
 
 	dir := t.TempDir()
 	f1 := testFilePathGenerator(ctx, t, dir)
@@ -280,23 +290,29 @@ func TestGenerateDataFilePathResyncIndexFile(t *testing.T) {
 	require.Equal(t, fmt.Sprintf("test/table1/5/CDC_%s_000001.json", dispatcherID.String()), dataFilePath)
 	err = f1.storage.WriteFile(ctx, dataFilePath, []byte("test1"))
 	require.NoError(t, err)
-	err = f1.storage.WriteFile(ctx, indexFilePath, []byte(fmt.Sprintf("CDC_%s_000001.json\n", dispatcherID.String())))
+	err = f1.storage.WriteFile(ctx, indexFilePath, fmt.Appendf(nil, "CDC_%s_000001.json\n", dispatcherID.String()))
 	require.NoError(t, err)
 
-	// 2) f2 continues from index file and generates CDC_..._000002, then updates index file.
-	dataFilePath, err = f2.GenerateDataFilePath(ctx, table, date)
-	require.NoError(t, err)
-	err = f2.storage.WriteFile(ctx, dataFilePath, []byte("test2"))
-	require.NoError(t, err)
-	require.Equal(t, fmt.Sprintf("test/table1/5/CDC_%s_000002.json", dispatcherID.String()), dataFilePath)
-	err = f2.storage.WriteFile(ctx, indexFilePath, []byte(fmt.Sprintf("CDC_%s_000002.json\n", dispatcherID.String())))
-	require.NoError(t, err)
+	// 2) f2 continues from index file and generates CDC_..._000002 to CDC_..._000005,
+	// then updates index file.
+	for i := 2; i <= 5; i++ {
+		dataFilePath, err = f2.GenerateDataFilePath(ctx, table, date)
+		require.NoError(t, err)
+		require.Equal(t, fmt.Sprintf("test/table1/5/CDC_%s_%06d.json", dispatcherID.String(), i), dataFilePath)
+		err = f2.storage.WriteFile(ctx, dataFilePath, []byte("test"))
+		require.NoError(t, err)
+		err = f2.storage.WriteFile(ctx, indexFilePath, fmt.Appendf(nil, "CDC_%s_%06d.json\n", dispatcherID.String(), i))
+		require.NoError(t, err)
+	}
 
 	// 3) f1 generates again after being scheduled back. It must reconcile with index file and
-	//    generate CDC_..._000003 instead of overwriting CDC_..._000002.
+	//    generate CDC_..._000006 instead of probing every existing data file one by one.
+	countStorage := &countFileExistsStorage{ExternalStorage: f1.storage}
+	f1.storage = countStorage
 	dataFilePath, err = f1.GenerateDataFilePath(ctx, table, date)
 	require.NoError(t, err)
-	require.Equal(t, fmt.Sprintf("test/table1/5/CDC_%s_000003.json", dispatcherID.String()), dataFilePath)
+	require.Equal(t, fmt.Sprintf("test/table1/5/CDC_%s_000006.json", dispatcherID.String()), dataFilePath)
+	require.LessOrEqual(t, countStorage.fileExistsCount, 3)
 }
 
 func TestGenerateDataFilePathReconcilesStaleIndexFile(t *testing.T) {
