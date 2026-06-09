@@ -409,6 +409,9 @@ func (f *FilePathGenerator) GenerateDataFilePath(
 		f.fileIndex[tbl].prevDate = f.fileIndex[tbl].currDate
 		f.fileIndex[tbl].index = 0
 	}
+	// A local file index can lag behind existing data files after sink restart or
+	// dispatcher ownership transfer. Probe consecutive file names from the index
+	// until the first missing one.
 	for {
 		f.fileIndex[tbl].index++
 		name := generateDataFileName(f.config.EnableTableAcrossNodes, tbl.DispatcherID.String(), f.fileIndex[tbl].index, f.extension, f.config.FileIndexWidth)
@@ -428,9 +431,6 @@ func (f *FilePathGenerator) GenerateDataFilePath(
 				zap.String("dataFile", dataFile))
 			newIndexFile = false
 		}
-		// Avoid listing the whole object directory. In the normal partial-success
-		// case only the next candidate exists, so one more existence probe moves
-		// us past the orphan data file.
 	}
 }
 

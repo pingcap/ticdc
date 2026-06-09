@@ -753,10 +753,15 @@ func (s *Spool) rotateLocked() error {
 }
 
 func (s *Spool) removeSegmentLocked(seg *segment) {
-	if err := seg.file.Close(); err != nil {
-		log.Warn("close spool segment file failed",
-			zap.String("keyspace", s.keyspace), zap.String("changefeed", s.changefeed),
-			zap.Error(err))
+	if seg == nil {
+		return
+	}
+	if seg.file != nil {
+		if err := seg.file.Close(); err != nil {
+			log.Warn("close spool segment file failed",
+				zap.String("keyspace", s.keyspace), zap.String("changefeed", s.changefeed),
+				zap.Error(err))
+		}
 	}
 	if err := os.Remove(seg.path); err != nil {
 		log.Warn(
