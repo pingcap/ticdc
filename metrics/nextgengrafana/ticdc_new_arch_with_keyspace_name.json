@@ -7654,11 +7654,7 @@
             "y": 19
           },
           "hiddenSeries": false,
-<<<<<<< HEAD
-          "id": 60011,
-=======
           "id": 62011,
->>>>>>> e8de3a63c (metrics: add changefeed error info info (#4499))
           "legend": {
             "avg": false,
             "current": false,
@@ -7764,11 +7760,7 @@
           "heatmap": {},
           "hideZeroBuckets": true,
           "highlightCards": true,
-<<<<<<< HEAD
-          "id": 60013,
-=======
           "id": 62012,
->>>>>>> e8de3a63c (metrics: add changefeed error info info (#4499))
           "legend": {
             "show": true
           },
