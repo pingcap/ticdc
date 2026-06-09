@@ -71,7 +71,9 @@ func newBufferManager(
 func (c *bufferManager) run(ctx context.Context) error {
 	var intervalFlushTimer *time.Timer
 	var intervalFlushC <-chan time.Time
-	defer stopIntervalFlushTimer(intervalFlushTimer)
+	defer func() {
+		stopIntervalFlushTimer(intervalFlushTimer)
+	}()
 
 	for {
 		var injectedErr error
@@ -108,42 +110,50 @@ func (c *bufferManager) run(ctx context.Context) error {
 				intervalFlushTimer, intervalFlushC = c.resetIntervalFlushTimer(intervalFlushTimer)
 				continue
 			}
-			if err := c.handleDMLTask(ctx, task); err != nil {
+			timerDirty, err := c.handleDMLTask(ctx, task)
+			if err != nil {
 				return err
 			}
-			intervalFlushTimer, intervalFlushC = c.resetIntervalFlushTimer(intervalFlushTimer)
+			if timerDirty {
+				intervalFlushTimer, intervalFlushC = c.resetIntervalFlushTimer(intervalFlushTimer)
+			}
 		}
 	}
 }
 
-func (c *bufferManager) handleDMLTask(ctx context.Context, task *task) error {
+func (c *bufferManager) handleDMLTask(ctx context.Context, task *task) (bool, error) {
 	if len(task.encodedMsgs) == 0 {
 		task.event.PostEnqueue()
-		return nil
+		return false, nil
 	}
 
+	timerDirty := false
 	for {
 		action, entry, err := c.spool.TryEnqueue(task.encodedMsgs, task.event.PostEnqueue)
 		if err != nil {
-			return err
+			return false, err
 		}
 		switch action {
 		case spool.EnqueueActionAcceptedOversized:
 			c.addEntry(task, entry)
-			return c.emitTableBatch(ctx, task.versionedTable, flushReasonOversize)
+			return true, c.emitTableBatch(ctx, task.versionedTable, flushReasonOversize)
 		case spool.EnqueueActionWaitDiskQuota:
 			if err := c.emitBatch(ctx, flushReasonQuota); err != nil {
-				return err
+				return false, err
 			}
+			timerDirty = true
 			if err := c.spool.WaitForDiskQuota(ctx, task.encodedMsgs); err != nil {
-				return err
+				return false, err
 			}
 			continue
 		default:
-			c.addEntry(task, entry)
+			if c.addEntry(task, entry) {
+				timerDirty = true
+			}
 		}
 
-		return c.emitTableBatchIfSizeReached(ctx, task.versionedTable)
+		flushed, err := c.emitTableBatchIfSizeReached(ctx, task.versionedTable)
+		return timerDirty || flushed, err
 	}
 }
 
@@ -171,11 +181,11 @@ func (c *bufferManager) emitExpiredBatch(ctx context.Context, now time.Time) err
 func (c *bufferManager) emitTableBatchIfSizeReached(
 	ctx context.Context,
 	table cloudstorage.VersionedTableName,
-) error {
+) (bool, error) {
 	if c.buffer.tableSize(table) < uint64(c.config.FileSize) {
-		return nil
+		return false, nil
 	}
-	return c.emitTableBatch(ctx, table, flushReasonSize)
+	return true, c.emitTableBatch(ctx, table, flushReasonSize)
 }
 
 func (c *bufferManager) emitTableBatch(
@@ -232,24 +242,27 @@ func (t *tableBatches) tableSize(table cloudstorage.VersionedTableName) uint64 {
 	return tableTask.size
 }
 
-func (t *tableBatches) addEntry(event *task, entry *spool.Entry, now time.Time) {
+func (t *tableBatches) addEntry(event *task, entry *spool.Entry, now time.Time) bool {
 	table := event.versionedTable
+	created := false
 	if _, ok := t.tables[table]; !ok {
 		t.tables[table] = &tableBatch{
 			size:         0,
 			firstEntryAt: now,
 			tableInfo:    event.event.TableInfo,
 		}
+		created = true
 	}
 
 	tableTask := t.tables[table]
 	tableTask.size += entry.FileBytes()
 	tableTask.entries = append(tableTask.entries, entry)
 	t.nBytes += entry.FileBytes()
+	return created
 }
 
-func (c *bufferManager) addEntry(event *task, entry *spool.Entry) {
-	c.buffer.addEntry(event, entry, c.now())
+func (c *bufferManager) addEntry(event *task, entry *spool.Entry) bool {
+	return c.buffer.addEntry(event, entry, c.now())
 }
 
 func (t *tableBatches) detachByTable(version cloudstorage.VersionedTableName) (tableBatches, error) {

@@ -171,7 +171,9 @@ func TestBufferManagerSizeFlushesWithoutWaitingForMaxAge(t *testing.T) {
 	}, spoolBuffer, flushSink.enqueueFlushTask)
 
 	task := newBufferedTask("table1", commonType.NewDispatcherID(), `{"id":1}`)
-	require.NoError(t, controller.handleDMLTask(context.Background(), task))
+	timerDirty, err := controller.handleDMLTask(context.Background(), task)
+	require.NoError(t, err)
+	require.True(t, timerDirty)
 
 	select {
 	case flushed := <-flushSink.ch:
@@ -184,6 +186,46 @@ func TestBufferManagerSizeFlushesWithoutWaitingForMaxAge(t *testing.T) {
 		t.Fatal("buffer controller did not flush size-reached batch immediately")
 	}
 	require.Empty(t, controller.buffer.tables)
+}
+
+func TestBufferManagerDMLTaskMarksTimerDirtyOnlyWhenBatchDeadlineCanChange(t *testing.T) {
+	t.Parallel()
+
+	changefeedID := commonType.NewChangefeedID4Test("test", "buffer-timer-dirty")
+	flushSink := newTestFlushTaskSink(16)
+	spoolBuffer, err := spool.New(
+		changefeedID,
+		spool.WithRootDir(t.TempDir()),
+		spool.WithDiskQuotaBytes(1<<20),
+		spool.WithMemoryRatio(0.5),
+	)
+	require.NoError(t, err)
+	defer spoolBuffer.Close()
+
+	controller := newBufferManager(changefeedID, &cloudstorage.Config{
+		FlushInterval:    time.Hour,
+		FileSize:         1 << 20,
+		SpoolDiskQuota:   1 << 20,
+		FileIndexWidth:   6,
+		UseTableIDAsPath: false,
+	}, spoolBuffer, flushSink.enqueueFlushTask)
+
+	dispatcherID := commonType.NewDispatcherID()
+	firstTask := newBufferedTask("table1", dispatcherID, `{"id":1}`)
+	timerDirty, err := controller.handleDMLTask(context.Background(), firstTask)
+	require.NoError(t, err)
+	require.True(t, timerDirty)
+
+	secondTask := newBufferedTask("table1", dispatcherID, `{"id":2}`)
+	timerDirty, err = controller.handleDMLTask(context.Background(), secondTask)
+	require.NoError(t, err)
+	require.False(t, timerDirty)
+
+	thirdTask := newBufferedTask("table2", commonType.NewDispatcherID(), `{"id":3}`)
+	timerDirty, err = controller.handleDMLTask(context.Background(), thirdTask)
+	require.NoError(t, err)
+	require.True(t, timerDirty)
+	require.Empty(t, flushSink.ch)
 }
 
 func TestBufferManagerIntervalFlushesOnlyBatchesReachingMaxAge(t *testing.T) {
