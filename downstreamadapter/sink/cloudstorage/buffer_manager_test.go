@@ -148,6 +148,162 @@ func TestBufferManagerOversizedBatchFlushesImmediatelyFromMemory(t *testing.T) {
 	require.ErrorIs(t, <-done, context.Canceled)
 }
 
+func TestBufferManagerSizeFlushesWithoutWaitingForMaxAge(t *testing.T) {
+	t.Parallel()
+
+	changefeedID := commonType.NewChangefeedID4Test("test", "buffer-size")
+	flushSink := newTestFlushTaskSink(16)
+	spoolBuffer, err := spool.New(
+		changefeedID,
+		spool.WithRootDir(t.TempDir()),
+		spool.WithDiskQuotaBytes(1<<20),
+		spool.WithMemoryRatio(0.5),
+	)
+	require.NoError(t, err)
+	defer spoolBuffer.Close()
+
+	controller := newBufferManager(changefeedID, &cloudstorage.Config{
+		FlushInterval:    time.Hour,
+		FileSize:         1,
+		SpoolDiskQuota:   1 << 20,
+		FileIndexWidth:   6,
+		UseTableIDAsPath: false,
+	}, spoolBuffer, flushSink.enqueueFlushTask)
+
+	task := newBufferedTask("table1", commonType.NewDispatcherID(), `{"id":1}`)
+	timerDirty, err := controller.handleDMLTask(context.Background(), task)
+	require.NoError(t, err)
+	require.True(t, timerDirty)
+
+	select {
+	case flushed := <-flushSink.ch:
+		require.Nil(t, flushed.marker)
+		require.Len(t, flushed.batches, 1)
+		require.Equal(t, task.versionedTable, flushed.batches[0].table)
+		require.NotEmpty(t, flushed.batches[0].payload.data)
+		require.Len(t, flushed.batches[0].payload.entries, 1)
+	case <-time.After(3 * time.Second):
+		t.Fatal("buffer controller did not flush size-reached batch immediately")
+	}
+	require.Empty(t, controller.buffer.tables)
+}
+
+func TestBufferManagerDMLTaskMarksTimerDirtyOnlyWhenBatchDeadlineCanChange(t *testing.T) {
+	t.Parallel()
+
+	changefeedID := commonType.NewChangefeedID4Test("test", "buffer-timer-dirty")
+	flushSink := newTestFlushTaskSink(16)
+	spoolBuffer, err := spool.New(
+		changefeedID,
+		spool.WithRootDir(t.TempDir()),
+		spool.WithDiskQuotaBytes(1<<20),
+		spool.WithMemoryRatio(0.5),
+	)
+	require.NoError(t, err)
+	defer spoolBuffer.Close()
+
+	controller := newBufferManager(changefeedID, &cloudstorage.Config{
+		FlushInterval:    time.Hour,
+		FileSize:         1 << 20,
+		SpoolDiskQuota:   1 << 20,
+		FileIndexWidth:   6,
+		UseTableIDAsPath: false,
+	}, spoolBuffer, flushSink.enqueueFlushTask)
+
+	dispatcherID := commonType.NewDispatcherID()
+	firstTask := newBufferedTask("table1", dispatcherID, `{"id":1}`)
+	timerDirty, err := controller.handleDMLTask(context.Background(), firstTask)
+	require.NoError(t, err)
+	require.True(t, timerDirty)
+
+	secondTask := newBufferedTask("table1", dispatcherID, `{"id":2}`)
+	timerDirty, err = controller.handleDMLTask(context.Background(), secondTask)
+	require.NoError(t, err)
+	require.False(t, timerDirty)
+
+	thirdTask := newBufferedTask("table2", commonType.NewDispatcherID(), `{"id":3}`)
+	timerDirty, err = controller.handleDMLTask(context.Background(), thirdTask)
+	require.NoError(t, err)
+	require.True(t, timerDirty)
+	require.Empty(t, flushSink.ch)
+}
+
+func TestBufferManagerIntervalFlushesOnlyBatchesReachingMaxAge(t *testing.T) {
+	t.Parallel()
+
+	changefeedID := commonType.NewChangefeedID4Test("test", "buffer-interval")
+	flushSink := newTestFlushTaskSink(16)
+	spoolBuffer, err := spool.New(
+		changefeedID,
+		spool.WithRootDir(t.TempDir()),
+		spool.WithDiskQuotaBytes(1<<20),
+		spool.WithMemoryRatio(0.5),
+	)
+	require.NoError(t, err)
+	defer spoolBuffer.Close()
+
+	controller := newBufferManager(changefeedID, &cloudstorage.Config{
+		FlushInterval:    10 * time.Second,
+		FileSize:         1 << 20,
+		SpoolDiskQuota:   1 << 20,
+		FileIndexWidth:   6,
+		UseTableIDAsPath: false,
+	}, spoolBuffer, flushSink.enqueueFlushTask)
+
+	now := time.Unix(100, 0)
+	firstTask := newBufferedTask("table1", commonType.NewDispatcherID(), `{"id":1}`)
+	secondTask := newBufferedTask("table2", commonType.NewDispatcherID(), `{"id":2}`)
+
+	firstEntry := newBufferedEntry(t, spoolBuffer, firstTask)
+	secondEntry := newBufferedEntry(t, spoolBuffer, secondTask)
+	controller.buffer.addEntry(firstTask, firstEntry, now)
+	controller.buffer.addEntry(secondTask, secondEntry, now.Add(time.Second))
+
+	require.NoError(t, controller.emitExpiredBatch(context.Background(), now.Add(9*time.Second)))
+	require.Len(t, controller.buffer.tables, 2)
+	require.Empty(t, flushSink.ch)
+
+	require.NoError(t, controller.emitExpiredBatch(context.Background(), now.Add(10*time.Second)))
+
+	select {
+	case flushed := <-flushSink.ch:
+		require.Nil(t, flushed.marker)
+		require.Len(t, flushed.batches, 1)
+		require.Equal(t, firstTask.versionedTable, flushed.batches[0].table)
+		require.NotEmpty(t, flushed.batches[0].payload.data)
+	case <-time.After(3 * time.Second):
+		t.Fatal("buffer controller did not flush expired batch")
+	}
+	require.Len(t, controller.buffer.tables, 1)
+	require.Contains(t, controller.buffer.tables, secondTask.versionedTable)
+}
+
+func TestTableBatchesNextIntervalFlushDeadline(t *testing.T) {
+	t.Parallel()
+
+	var empty tableBatches
+	_, ok := empty.nextIntervalFlushDeadline(5 * time.Second)
+	require.False(t, ok)
+
+	base := time.Unix(100, 0)
+	firstTask := newBufferedTask("table1", commonType.NewDispatcherID(), `{"id":1}`)
+	secondTask := newBufferedTask("table2", commonType.NewDispatcherID(), `{"id":2}`)
+
+	batches := newTableBatches()
+	batches.tables[firstTask.versionedTable] = &tableBatch{
+		size:         1,
+		firstEntryAt: base.Add(2 * time.Second),
+	}
+	batches.tables[secondTask.versionedTable] = &tableBatch{
+		size:         1,
+		firstEntryAt: base,
+	}
+
+	deadline, ok := batches.nextIntervalFlushDeadline(5 * time.Second)
+	require.True(t, ok)
+	require.Equal(t, base.Add(5*time.Second), deadline)
+}
+
 func newBufferedTask(table string, dispatcherID commonType.DispatcherID, payload string) *task {
 	tableInfo := &commonType.TableInfo{
 		TableName: commonType.TableName{
@@ -178,4 +334,13 @@ func newBufferedTask(table string, dispatcherID commonType.DispatcherID, payload
 	msg.SetRowsCount(1)
 	t.encodedMsgs = []*common.Message{msg}
 	return t
+}
+
+func newBufferedEntry(t *testing.T, spoolBuffer *spool.Spool, task *task) *spool.Entry {
+	t.Helper()
+
+	_, entry, err := spoolBuffer.TryEnqueue(task.encodedMsgs, task.event.PostEnqueue)
+	require.NoError(t, err)
+	require.NotNil(t, entry)
+	return entry
 }
