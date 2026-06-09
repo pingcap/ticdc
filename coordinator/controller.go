@@ -217,16 +217,6 @@ func (c *Controller) collectMetrics(ctx context.Context) error {
 				metrics.ChangefeedCheckpointTsGauge.WithLabelValues(keyspace, name).Set(float64(phyCkpTs))
 				metrics.ChangefeedCheckpointTsLagGauge.WithLabelValues(keyspace, name).Set(lag)
 
-<<<<<<< HEAD
-				// Keep only one error-info series per changefeed so stale labels disappear
-				// when the warning or failure changes.
-				currentChangefeeds[cf.ID] = struct{}{}
-				oldLabels, exists := errorMetricLabels[cf.ID]
-				newLabels, hasError := getChangefeedErrorMetricLabels(cf.GetInfo())
-				if exists && hasError && oldLabels == newLabels {
-					return
-				}
-=======
 				// sync changefeed error metrics
 				currentChangefeeds[cf.ID] = struct{}{}
 				oldLabels, exists := errorMetricLabels[cf.ID]
@@ -236,22 +226,15 @@ func (c *Controller) collectMetrics(ctx context.Context) error {
 					return
 				}
 				// If there was an old metric, delete it, as the state has changed.
->>>>>>> e8de3a63c (metrics: add changefeed error info info (#4499))
 				if exists {
 					metrics.ChangefeedErrorInfoGauge.DeleteLabelValues(oldLabels.labelValues()...)
 				}
 				if hasError {
-<<<<<<< HEAD
-					metrics.ChangefeedErrorInfoGauge.WithLabelValues(newLabels.labelValues()...).Set(1)
-					errorMetricLabels[cf.ID] = newLabels
-				} else {
-=======
 					// An error exists (either new or changed). Set the new metric and update cache.
 					metrics.ChangefeedErrorInfoGauge.WithLabelValues(newLabels.labelValues()...).Set(1)
 					errorMetricLabels[cf.ID] = newLabels
 				} else {
 					// The error has disappeared, remove from cache.
->>>>>>> e8de3a63c (metrics: add changefeed error info info (#4499))
 					delete(errorMetricLabels, cf.ID)
 				}
 			})
