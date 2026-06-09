@@ -112,6 +112,18 @@ func TestCheckClusterVersion(t *testing.T) {
 		require.Nil(t, err)
 	}
 
+	// Accept PD release-nextgen-202603 versions after tikv/pd#10845.
+	{
+		mock.getPDVersion = func() string {
+			return "v26.3.0-1-g9fdd971"
+		}
+		mock.getAllStores = func() []*metapb.Store {
+			return []*metapb.Store{{Version: MinTiKVVersion.String()}}
+		}
+		err := CheckClusterVersion(context.Background(), &mock, pdAddrs, nil, true)
+		require.Nil(t, err)
+	}
+
 	// Check invalid PD/TiKV version.
 	{
 		mock.getPDVersion = func() string {

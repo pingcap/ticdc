@@ -42,7 +42,8 @@ var (
 	minPDVersion = semver.New("7.5.0-alpha")
 	// maxPDVersion is the version of the maximum compatible PD.
 	// Compatible versions are in [minPDVersion, maxPDVersion)
-	maxPDVersion = semver.New("15.0.0")
+	// PD release-nextgen-202603 now reports v26.3.0-1-g9fdd971 after tikv/pd#10845.
+	maxPDVersion = semver.New("26.4.0")
 
 	// MinTiKVVersion is the version of the minimal compatible TiKV.
 	// The min version should be 7.5 for new arch.

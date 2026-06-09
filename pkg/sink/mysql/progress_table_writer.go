@@ -14,9 +14,11 @@
 package mysql
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -99,6 +101,16 @@ func (w *ProgressTableWriter) Flush(checkpoint uint64) error {
 	if len(tableNames) == 0 {
 		return nil
 	}
+	// TableSchemaStore stores table names in maps, so the returned order is not
+	// stable across runs. The progress table is keyed by table identity and the
+	// writes are idempotent, but deterministic order keeps batch boundaries and
+	// SQL arguments reproducible for tests and debugging.
+	slices.SortFunc(tableNames, func(a, b *event.SchemaTableName) int {
+		if c := cmp.Compare(a.SchemaName, b.SchemaName); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.TableName, b.TableName)
+	})
 
 	if err := w.initProgressTable(w.ctx); err != nil {
 		return err
