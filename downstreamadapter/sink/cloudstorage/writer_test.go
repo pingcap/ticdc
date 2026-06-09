@@ -543,11 +543,34 @@ type failOnIndexStorage struct {
 	storage.ExternalStorage
 }
 
+type failOnCloseStorage struct {
+	storage.ExternalStorage
+}
+
+type failOnCloseWriter struct {
+	storage.ExternalFileWriter
+}
+
 func (s *failOnIndexStorage) WriteFile(ctx context.Context, name string, data []byte) error {
 	if strings.HasSuffix(name, ".index") {
 		return errors.New("index write failed")
 	}
 	return s.ExternalStorage.WriteFile(ctx, name, data)
+}
+
+func (s *failOnCloseStorage) Create(
+	ctx context.Context, name string, option *storage.WriterOption,
+) (storage.ExternalFileWriter, error) {
+	writer, err := s.ExternalStorage.Create(ctx, name, option)
+	if err != nil {
+		return nil, err
+	}
+	return &failOnCloseWriter{ExternalFileWriter: writer}, nil
+}
+
+func (w *failOnCloseWriter) Close(ctx context.Context) error {
+	_ = w.ExternalFileWriter.Close(ctx)
+	return errors.New("writer close failed")
 }
 
 func TestWriterIndexWriteError(t *testing.T) {
@@ -613,4 +636,80 @@ func TestWriterIndexWriteError(t *testing.T) {
 
 	err = <-done
 	require.ErrorContains(t, err, "index write failed")
+}
+
+func TestWriterDataFileCloseError(t *testing.T) {
+	ctx := context.Background()
+	parentDir := t.TempDir()
+	uri := fmt.Sprintf("file:///%s?flush-interval=2s", parentDir)
+	baseStorage, err := util.GetExternalStorageWithDefaultTimeout(ctx, uri)
+	require.NoError(t, err)
+	storage := &failOnCloseStorage{ExternalStorage: baseStorage}
+
+	sinkURI, err := url.Parse(uri)
+	require.NoError(t, err)
+	cfg := cloudstorage.NewConfig()
+	replicaConfig := config.GetDefaultReplicaConfig()
+	replicaConfig.Sink.DateSeparator = util.AddressOf(config.DateSeparatorNone.String())
+	err = cfg.Apply(context.TODO(), sinkURI, replicaConfig.Sink, true)
+	require.NoError(t, err)
+	cfg.FileIndexWidth = 6
+	cfg.FlushConcurrency = 2
+	cfg.FlushInterval = time.Hour
+
+	changefeedID := commonType.NewChangefeedID4Test("test", "writer-close-error")
+	statistics := metrics.NewStatistics(changefeedID, t.Name())
+	pdlock := pdutil.NewMonotonicClock(clock.New())
+	appcontext.SetService(appcontext.DefaultPDClock, pdlock)
+	mockPDClock := pdutil.NewClock4Test()
+	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
+	spoolBuffer := newTestSpool(t, changefeedID, cfg)
+	d := newWriter(1, changefeedID, storage, cfg, ".json", statistics, spoolBuffer)
+
+	tableInfo := commonType.WrapTableInfo("test", &timodel.TableInfo{
+		ID:   100,
+		Name: model.NewCIStr("table1"),
+		Columns: []*timodel.ColumnInfo{
+			{ID: 1, Name: model.NewCIStr("c1"), FieldType: *types.NewFieldType(mysql.TypeLong)},
+		},
+	})
+	dispatcherID := commonType.NewDispatcherID()
+	task := newDMLTask(
+		cloudstorage.VersionedTableName{
+			TableNameWithPhysicTableID: commonType.TableName{
+				Schema:  "test",
+				Table:   "table1",
+				TableID: 100,
+			},
+			TableInfoVersion: 99,
+			DispatcherID:     dispatcherID,
+		},
+		&commonEvent.DMLEvent{
+			PhysicalTableID: 100,
+			TableInfo:       tableInfo,
+		},
+	)
+
+	var callbackCount atomic.Int64
+	msg := common.NewMsg(nil, []byte(`{"id":1}`))
+	msg.SetRowsCount(1)
+	msg.Callback = func() {
+		callbackCount.Add(1)
+	}
+	task.encodedMsgs = []*common.Message{msg}
+	require.NoError(t, d.enqueueTask(ctx, task))
+	require.NoError(t, d.enqueueTask(ctx, newFlushTask(dispatcherID, 100)))
+
+	done := make(chan error, 1)
+	go func() {
+		done <- d.run(ctx)
+	}()
+
+	err = <-done
+	require.ErrorContains(t, err, "writer close failed")
+	require.Equal(t, int64(0), callbackCount.Load())
+
+	indexFilePath := path.Join(parentDir, "test/table1/99/meta", fmt.Sprintf("CDC_%s.index", dispatcherID.String()))
+	_, err = os.Stat(indexFilePath)
+	require.ErrorIs(t, err, os.ErrNotExist)
 }

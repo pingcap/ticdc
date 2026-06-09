@@ -480,6 +480,8 @@ func (c *ReplicaConfig) toInternalReplicaConfigWithOriginConfig(
 				WorkerCount:          c.Sink.CloudStorageConfig.WorkerCount,
 				FlushInterval:        c.Sink.CloudStorageConfig.FlushInterval,
 				FileSize:             c.Sink.CloudStorageConfig.FileSize,
+				SpoolDiskQuota:       c.Sink.CloudStorageConfig.SpoolDiskQuota,
+				SpoolBaseDir:         c.Sink.CloudStorageConfig.SpoolBaseDir,
 				OutputColumnID:       c.Sink.CloudStorageConfig.OutputColumnID,
 				FileExpirationDays:   c.Sink.CloudStorageConfig.FileExpirationDays,
 				FileCleanupCronSpec:  c.Sink.CloudStorageConfig.FileCleanupCronSpec,
@@ -830,6 +832,8 @@ func ToAPIReplicaConfig(c *config.ReplicaConfig) *ReplicaConfig {
 				WorkerCount:          cloned.Sink.CloudStorageConfig.WorkerCount,
 				FlushInterval:        cloned.Sink.CloudStorageConfig.FlushInterval,
 				FileSize:             cloned.Sink.CloudStorageConfig.FileSize,
+				SpoolDiskQuota:       cloned.Sink.CloudStorageConfig.SpoolDiskQuota,
+				SpoolBaseDir:         cloned.Sink.CloudStorageConfig.SpoolBaseDir,
 				OutputColumnID:       cloned.Sink.CloudStorageConfig.OutputColumnID,
 				FileExpirationDays:   cloned.Sink.CloudStorageConfig.FileExpirationDays,
 				FileCleanupCronSpec:  cloned.Sink.CloudStorageConfig.FileCleanupCronSpec,
@@ -1465,6 +1469,8 @@ type CloudStorageConfig struct {
 	WorkerCount          *int    `json:"worker_count,omitempty"`
 	FlushInterval        *string `json:"flush_interval,omitempty"`
 	FileSize             *int    `json:"file_size,omitempty"`
+	SpoolDiskQuota       *int64  `json:"spool_disk_quota,omitempty"`
+	SpoolBaseDir         *string `json:"spool_base_dir,omitempty"`
 	OutputColumnID       *bool   `json:"output_column_id,omitempty"`
 	FileExpirationDays   *int    `json:"file_expiration_days,omitempty"`
 	FileCleanupCronSpec  *string `json:"file_cleanup_cron_spec,omitempty"`
