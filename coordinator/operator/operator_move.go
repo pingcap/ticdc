@@ -26,6 +26,7 @@ import (
 	"go.uber.org/zap"
 )
 
+// moveMaintainerState describes the origin-first handoff flow for a maintainer move.
 type moveMaintainerState int
 
 const (
@@ -45,10 +46,14 @@ type MoveMaintainerOperator struct {
 
 	originMaintainerEpoch uint64
 	state                 moveMaintainerState
+	// originRemoved records node-liveness removal for the origin node. The move
+	// may still be waiting on target removal when this flag is set.
+	originRemoved bool
 
 	lck sync.Mutex
 }
 
+// NewMoveMaintainerOperator creates an operator that moves a maintainer from origin to dest.
 func NewMoveMaintainerOperator(db *changefeed.ChangefeedDB, changefeed *changefeed.Changefeed,
 	origin, dest node.ID,
 ) *MoveMaintainerOperator {
@@ -63,6 +68,7 @@ func NewMoveMaintainerOperator(db *changefeed.ChangefeedDB, changefeed *changefe
 	}
 }
 
+// Check observes maintainer status and advances the move handoff state.
 func (m *MoveMaintainerOperator) Check(from node.ID, status *heartbeatpb.MaintainerStatus) {
 	m.lck.Lock()
 	defer m.lck.Unlock()
@@ -94,6 +100,7 @@ func (m *MoveMaintainerOperator) Check(from node.ID, status *heartbeatpb.Maintai
 	}
 }
 
+// Schedule returns the next remove or add command needed by the current move state.
 func (m *MoveMaintainerOperator) Schedule() *messaging.TargetMessage {
 	m.lck.Lock()
 	defer m.lck.Unlock()
@@ -122,6 +129,7 @@ func (m *MoveMaintainerOperator) Schedule() *messaging.TargetMessage {
 	}
 }
 
+// OnNodeRemove updates the move when either the origin or target node goes offline.
 func (m *MoveMaintainerOperator) OnNodeRemove(n node.ID) {
 	m.lck.Lock()
 	defer m.lck.Unlock()
@@ -130,6 +138,9 @@ func (m *MoveMaintainerOperator) OnNodeRemove(n node.ID) {
 		return
 	}
 
+	if n == m.origin {
+		m.originRemoved = true
+	}
 	if n == m.target {
 		m.onTargetNodeRemovedLocked()
 		return
@@ -146,6 +157,7 @@ func (m *MoveMaintainerOperator) OnNodeRemove(n node.ID) {
 	}
 }
 
+// onTargetNodeRemovedLocked handles target loss without creating two live owners.
 func (m *MoveMaintainerOperator) onTargetNodeRemovedLocked() {
 	switch m.state {
 	case moveMaintainerStateRemoveOrigin:
@@ -169,6 +181,10 @@ func (m *MoveMaintainerOperator) onTargetNodeRemovedLocked() {
 			zap.String("dest", m.target.String()),
 			zap.String("origin", m.origin.String()),
 			zap.String("changefeed", m.changefeed.ID.String()))
+		if m.originRemoved {
+			m.finishAsAbsentLocked()
+			return
+		}
 		m.target = m.origin
 	case moveMaintainerStateAddTarget, moveMaintainerStateDoneSuccess:
 		// Once the add request may have reached target, rebinding to origin can
@@ -178,11 +194,13 @@ func (m *MoveMaintainerOperator) onTargetNodeRemovedLocked() {
 	}
 }
 
+// enterAddTargetLocked binds the changefeed to the target before sending add requests.
 func (m *MoveMaintainerOperator) enterAddTargetLocked() {
 	m.db.BindChangefeedToNode(m.origin, m.target, m.changefeed)
 	m.state = moveMaintainerStateAddTarget
 }
 
+// finishAsAbsentLocked finishes the move without PostFinish side effects.
 func (m *MoveMaintainerOperator) finishAsAbsentLocked() {
 	log.Info("move maintainer operator aborted, mark changefeed absent",
 		zap.String("changefeed", m.changefeed.ID.String()),
@@ -197,14 +215,11 @@ func (m *MoveMaintainerOperator) isFinishedLocked() bool {
 }
 
 func (m *MoveMaintainerOperator) isOriginStopTargetLocked() bool {
-	switch m.state {
-	case moveMaintainerStateRemoveOrigin, moveMaintainerStateOriginStopped:
-		return true
-	default:
-		return false
-	}
+	return m.state == moveMaintainerStateRemoveOrigin ||
+		m.state == moveMaintainerStateOriginStopped
 }
 
+// AffectedNodes returns the origin and current target nodes touched by this move.
 func (m *MoveMaintainerOperator) AffectedNodes() []node.ID {
 	m.lck.Lock()
 	defer m.lck.Unlock()
@@ -234,10 +249,12 @@ func (m *MoveMaintainerOperator) originStopTarget() (node.ID, uint64, bool) {
 	return m.origin, m.originMaintainerEpoch, true
 }
 
+// ID returns the changefeed ID this operator works on.
 func (m *MoveMaintainerOperator) ID() common.ChangeFeedID {
 	return m.changefeed.ID
 }
 
+// IsFinished reports whether the move has reached a terminal state.
 func (m *MoveMaintainerOperator) IsFinished() bool {
 	m.lck.Lock()
 	defer m.lck.Unlock()
@@ -245,6 +262,7 @@ func (m *MoveMaintainerOperator) IsFinished() bool {
 	return m.isFinishedLocked()
 }
 
+// OnTaskRemoved stops the move when the changefeed task is removed.
 func (m *MoveMaintainerOperator) OnTaskRemoved() {
 	m.lck.Lock()
 	defer m.lck.Unlock()
@@ -254,6 +272,7 @@ func (m *MoveMaintainerOperator) OnTaskRemoved() {
 	m.state = moveMaintainerStateDoneNoPostFinish
 }
 
+// Start marks the changefeed as scheduling before the first move command is sent.
 func (m *MoveMaintainerOperator) Start() {
 	m.lck.Lock()
 	defer m.lck.Unlock()
@@ -264,6 +283,7 @@ func (m *MoveMaintainerOperator) Start() {
 	m.db.MarkMaintainerScheduling(m.changefeed)
 }
 
+// PostFinish marks a successfully moved maintainer as replicating.
 func (m *MoveMaintainerOperator) PostFinish() {
 	m.lck.Lock()
 	defer m.lck.Unlock()
@@ -277,6 +297,7 @@ func (m *MoveMaintainerOperator) PostFinish() {
 	m.db.MarkMaintainerReplicating(m.changefeed)
 }
 
+// String returns a human-readable description of the operator.
 func (m *MoveMaintainerOperator) String() string {
 	m.lck.Lock()
 	defer m.lck.Unlock()
@@ -285,10 +306,12 @@ func (m *MoveMaintainerOperator) String() string {
 		m.changefeed.ID, m.origin, m.target)
 }
 
+// Type returns the operator type used by metrics and logs.
 func (m *MoveMaintainerOperator) Type() string {
 	return "move"
 }
 
+// BlockTsForward indicates whether this operator blocks changefeed checkpoint forwarding.
 func (m *MoveMaintainerOperator) BlockTsForward() bool {
 	log.Panic("unreachable code")
 	return false

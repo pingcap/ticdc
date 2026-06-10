@@ -286,6 +286,8 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 	return m.sendResponse(from, messaging.MaintainerManagerTopic, response)
 }
 
+// ensureBootstrapTableTriggerEventDispatcher verifies that a reused manager has
+// the bootstrap owner's table trigger, or creates it when no trigger exists yet.
 func ensureBootstrapTableTriggerEventDispatcher(
 	cfId common.ChangeFeedID,
 	manager *dispatchermanager.DispatcherManager,
@@ -316,6 +318,8 @@ func ensureBootstrapTableTriggerEventDispatcher(
 		GenWithStackByArgs("table trigger event dispatcher id mismatch during bootstrap")
 }
 
+// ensureBootstrapTableTriggerRedoDispatcher verifies that a reused manager has
+// the bootstrap owner's redo table trigger, or creates it when no trigger exists yet.
 func ensureBootstrapTableTriggerRedoDispatcher(
 	cfId common.ChangeFeedID,
 	manager *dispatchermanager.DispatcherManager,

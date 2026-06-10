@@ -222,6 +222,8 @@ func (p *managerMaintainerSet) handleAddMaintainer(
 	return nil
 }
 
+// mayRegisterMaintainerForAdd performs a cheap admission check before decoding
+// config and constructing a maintainer.
 func (p *managerMaintainerSet) mayRegisterMaintainerForAdd(
 	changefeedID common.ChangeFeedID,
 	requestEpoch uint64,
@@ -238,6 +240,8 @@ func (p *managerMaintainerSet) mayRegisterMaintainerForAdd(
 	return allowed
 }
 
+// registerMaintainerForAdd installs a newly created maintainer after rechecking
+// epoch and stopped-state admission under the registry mutation lock.
 func (p *managerMaintainerSet) registerMaintainerForAdd(
 	changefeedID common.ChangeFeedID,
 	requestEpoch uint64,
@@ -266,6 +270,8 @@ func (p *managerMaintainerSet) registerMaintainerForAdd(
 	return maintainer
 }
 
+// canRegisterAfterExistingMaintainer reports whether an add request can replace
+// the existing local maintainer without overlapping two live owners.
 func canRegisterAfterExistingMaintainer(existing *Maintainer, requestEpoch uint64) bool {
 	if !isMaintainerFullyStopped(existing) {
 		return false
@@ -273,6 +279,7 @@ func canRegisterAfterExistingMaintainer(existing *Maintainer, requestEpoch uint6
 	return isNewerMaintainerEpoch(existing.currentMaintainerEpoch(), requestEpoch)
 }
 
+// isNewerMaintainerEpoch applies strict epoch ordering for replacement adds.
 func isNewerMaintainerEpoch(existingEpoch, requestEpoch uint64) bool {
 	if requestEpoch == 0 {
 		return false
@@ -283,11 +290,15 @@ func isNewerMaintainerEpoch(existingEpoch, requestEpoch uint64) bool {
 	return requestEpoch > existingEpoch
 }
 
+// isMaintainerFullyStopped reports whether the old maintainer has finished its
+// remove flow and released scheduler ownership.
 func isMaintainerFullyStopped(maintainer *Maintainer) bool {
 	return maintainer.removed.Load() &&
 		heartbeatpb.ComponentState(maintainer.scheduleState.Load()) == heartbeatpb.ComponentState_Stopped
 }
 
+// logRejectedAddMaintainer emits detail only for newer requests blocked by a
+// still-running local maintainer.
 func logRejectedAddMaintainer(changefeedID common.ChangeFeedID, existing *Maintainer, requestEpoch uint64) {
 	existingEpoch := existing.currentMaintainerEpoch()
 	if requestEpoch <= existingEpoch || isMaintainerFullyStopped(existing) {

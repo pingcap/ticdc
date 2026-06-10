@@ -110,6 +110,21 @@ func TestMoveMaintainerOperator_OnNodeRemove(t *testing.T) {
 		require.Len(t, changefeedDB.GetByNodeID("n1"), 0)
 		require.Nil(t, op.Schedule())
 	})
+
+	t.Run("origin removed before fallback target marks absent", func(t *testing.T) {
+		changefeedDB, cf := newMoveMaintainerTestChangefeed(t, "origin-before-fallback-target")
+		op := NewMoveMaintainerOperator(changefeedDB, cf, "n1", "n2")
+
+		op.OnNodeRemove("n1")
+		require.Equal(t, moveMaintainerStateOriginStopped, op.state)
+
+		op.OnNodeRemove("n2")
+		require.True(t, op.IsFinished())
+		require.Equal(t, 1, changefeedDB.GetAbsentSize())
+		require.Len(t, changefeedDB.GetByNodeID("n1"), 0)
+		require.Len(t, changefeedDB.GetByNodeID("n2"), 0)
+		require.Nil(t, op.Schedule())
+	})
 }
 
 func newMoveMaintainerTestChangefeed(t *testing.T, name string) (*changefeed.ChangefeedDB, *changefeed.Changefeed) {
