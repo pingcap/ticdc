@@ -876,8 +876,6 @@ github.com/VividCortex/ewma v1.2.0 h1:f58SaIzcDXrSy3kWaHNvuJgJ3Nmz59Zji6XoJR/q1o
 github.com/VividCortex/ewma v1.2.0/go.mod h1:nz4BbCtbLyFDeC9SUHbtcT5644juEuWfUAUnGx7j5l4=
 github.com/YangKeao/go-mysql-driver v0.0.0-20240627104025-dd5589458cfa h1:mx7rQczQb38AWgiFJsuwvygvOnktsz/mknqUJNByB1Q=
 github.com/YangKeao/go-mysql-driver v0.0.0-20240627104025-dd5589458cfa/go.mod h1:qn/VrHolklFxsKZNciiayiHO5qi+2v1TN5jEKDkPC2g=
-github.com/YangKeao/tiflow v0.0.0-20260609102859-5a02f41a7019 h1:2TwlBCxVd9cIBNhu4XHBPYlfHFdk7dJf8jkbX7DBHiQ=
-github.com/YangKeao/tiflow v0.0.0-20260609102859-5a02f41a7019/go.mod h1:I9fckdOp87lNPORaXRdCivZ8qY0/gOMWSr24+On+Yp8=
 github.com/acarl005/stripansi v0.0.0-20180116102854-5a71ef0e047d h1:licZJFw2RwpHMqeKTCYkitsPqHNxTmd4SNR5r94FGM8=
 github.com/acarl005/stripansi v0.0.0-20180116102854-5a71ef0e047d/go.mod h1:asat636LX7Bqt5lYEZ27JNDcqxfjdBQuJ/MM4CN/Lzo=
 github.com/agiledragon/gomonkey/v2 v2.11.0 h1:5oxSgA+tC1xuGsrIorR+sYiziYltmJyEZ9qA25b6l5U=
@@ -1721,6 +1719,8 @@ github.com/pingcap/tidb-dashboard v0.0.0-20250928152019-e111aaee93f4 h1:cl2GYJ9e
 github.com/pingcap/tidb-dashboard v0.0.0-20250928152019-e111aaee93f4/go.mod h1:iwv1jXwX18IKvkHvQI9JgQ+WnLPFc5DpIGRfM+mlYKk=
 github.com/pingcap/tidb/pkg/parser v0.0.0-20260610013012-09c773ad3104 h1:BE9qfkR919EvdiVu81U0+MfHuJlKjt3wy6cQh8zbjcE=
 github.com/pingcap/tidb/pkg/parser v0.0.0-20260610013012-09c773ad3104/go.mod h1:49aXiDQhHi2UF15fq7zqtJZlKm+y+oIu9BVgWh9++Lk=
+github.com/pingcap/tiflow v0.0.0-20260610135340-aae1173472c6 h1:9bAeoCqBTiBSH0E4JCWBVo3jsiFJODY2wHXb6OouRAo=
+github.com/pingcap/tiflow v0.0.0-20260610135340-aae1173472c6/go.mod h1:I9fckdOp87lNPORaXRdCivZ8qY0/gOMWSr24+On+Yp8=
 github.com/pingcap/tipb v0.0.0-20260605083900-f9f651ef5fbc h1:wxolKysltFSu8gxWJBdUdWuTBoSuY3MjNIIZI5S9JLY=
 github.com/pingcap/tipb v0.0.0-20260605083900-f9f651ef5fbc/go.mod h1:A7mrd7WHBl1o63LE2bIBGEJMTNWXqhgmYiOvMLxozfs=
 github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c h1:+mdjkGKdHQG3305AYmdv1U2eRNDiU2ErMBj1gwrq8eQ=
