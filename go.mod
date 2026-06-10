@@ -58,7 +58,7 @@ require (
 	github.com/pingcap/tidb v1.1.0-beta.0.20260604031706-f9faeaf4828f
 	github.com/pingcap/tidb-dashboard v0.0.0-20260316045729-aa6178a60657
 	github.com/pingcap/tidb/pkg/parser v0.0.0-20260604031706-f9faeaf4828f
-	github.com/pingcap/tiflow v0.0.0-20260202075306-0ea757eae77a
+	github.com/pingcap/tiflow v0.0.0-20260610095716-97d622547231
 	github.com/prometheus/client_golang v1.23.0
 	github.com/r3labs/diff v1.1.0
 	github.com/rcrowley/go-metrics v0.0.0-20250401214520-65e299d6c5c9
@@ -400,5 +400,4 @@ replace (
 	github.com/apache/arrow-go/v18 => github.com/joechenrh/arrow-go/v18 v18.0.0-20250911101656-62c34c9a3b82
 	// copy from TiDB
 	github.com/go-ldap/ldap/v3 v3.4.4 => github.com/yangkeao/ldap/v3 v3.4.5-0.20230421065457-369a3bab1117
-	github.com/pingcap/tiflow => github.com/wk989898/tiflow v0.0.0-20260604065511-33c2eebdb79f
 )
