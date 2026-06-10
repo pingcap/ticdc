@@ -88,14 +88,10 @@ func (s *Sink) AddCheckpointTs(ts uint64) {
 	log.Debug("BlackHoleSink: Checkpoint Ts Event", zap.Uint64("ts", ts))
 }
 
-<<<<<<< HEAD
-func (s *sink) Close(_ bool) {}
-=======
 func (s *Sink) Close() {
 	s.eventCh.Close()
 	s.statistics.Close()
 }
->>>>>>> 628deab03 (sink: add metrics for blackhole sink (#5042))
 
 func (s *Sink) Run(ctx context.Context) error {
 	for {
@@ -118,8 +114,6 @@ func (s *Sink) Run(ctx context.Context) error {
 		}
 	}
 }
-<<<<<<< HEAD
-=======
 
 func (s *Sink) BatchCount() int {
 	return 4096
@@ -128,4 +122,3 @@ func (s *Sink) BatchCount() int {
 func (s *Sink) BatchBytes() int {
 	return 0
 }
->>>>>>> 628deab03 (sink: add metrics for blackhole sink (#5042))
