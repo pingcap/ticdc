@@ -137,50 +137,6 @@ func (ti *TableInfo) initPreSQLs() {
 	ti.preSQLs.isInitialized.Store(true)
 }
 
-<<<<<<< HEAD
-=======
-// CloneWithRouting creates a shallow copy of TableInfo with routing applied.
-// The new TableInfo shares the same columnSchema, View, Sequence pointers
-// but has its own TableName (with TargetSchema/TargetTable set) and preSQLs.
-// This is safe because:
-// - columnSchema, View, Sequence are read-only after creation
-// - preSQLs will be initialized lazily using the new TableName
-// - TableName is a value type that gets copied
-func (ti *TableInfo) CloneWithRouting(targetSchema, targetTable string) *TableInfo {
-	if ti == nil {
-		return nil
-	}
-	// Create a new TableInfo with copied basic fields
-	cloned := &TableInfo{
-		TableName:         ti.TableName, // Value copy of TableName struct
-		Charset:           ti.Charset,
-		Collate:           ti.Collate,
-		Comment:           ti.Comment,
-		columnSchema:      ti.columnSchema, // Share the pointer (read-only)
-		HasPKOrNotNullUK:  ti.HasPKOrNotNullUK,
-		View:              ti.View,     // Share the pointer (read-only)
-		Sequence:          ti.Sequence, // Share the pointer (read-only)
-		UpdateTS:          ti.UpdateTS,
-		ActiveActiveTable: ti.ActiveActiveTable,
-		SoftDeleteTable:   ti.SoftDeleteTable,
-	}
-	cloned.TableName.TargetSchema = targetSchema
-	cloned.TableName.TargetTable = targetTable
-
-	// Increment refcount for the shared columnSchema and set finalizer to decrement
-	// when the clone is garbage collected. This prevents use-after-free if the
-	// original TableInfo is GC'd before the clone.
-	if ti.columnSchema != nil {
-		GetSharedColumnSchemaStorage().incColumnSchemaCount(ti.columnSchema)
-		runtime.SetFinalizer(cloned, func(ti *TableInfo) {
-			GetSharedColumnSchemaStorage().tryReleaseColumnSchema(ti.columnSchema)
-		})
-	}
-
-	return cloned
-}
-
->>>>>>> 5521ba376 (tableInfo: init the private sql lazily (#5029))
 func (ti *TableInfo) Marshal() ([]byte, error) {
 	// otherField | columnSchemaData | columnSchemaDataSize
 	data, err := json.Marshal(ti)

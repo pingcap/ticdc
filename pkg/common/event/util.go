@@ -33,6 +33,7 @@ import (
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/format"
 	parser_model "github.com/pingcap/tidb/pkg/parser/model"
+
 	// NOTE: Do not remove the `test_driver` import.
 	// For details, refer to: https://github.com/pingcap/parser/issues/43
 	_ "github.com/pingcap/tidb/pkg/parser/test_driver"
@@ -104,10 +105,6 @@ func (s *EventTestHelper) ApplyJob(job *timodel.Job) {
 		}
 	}
 
-<<<<<<< HEAD
-	info := common.WrapTableInfo(job.SchemaName, tableInfo)
-	info.InitPrivateFields()
-=======
 	s.storeTableInfo(job.SchemaName, tableInfo)
 }
 
@@ -116,7 +113,6 @@ func (s *EventTestHelper) storeTableInfo(schemaName string, tableInfo *timodel.T
 	if info == nil {
 		return
 	}
->>>>>>> 5521ba376 (tableInfo: init the private sql lazily (#5029))
 	key := toTableInfosKey(info.GetSchemaName(), info.GetTableName())
 	if tableInfo.Partition != nil {
 		if _, ok := s.partitionIDs[key]; !ok {

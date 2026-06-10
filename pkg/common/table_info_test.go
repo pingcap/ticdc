@@ -136,11 +136,7 @@ func newPreSQLTestModelTableInfo(table string) *model.TableInfo {
 
 	return &model.TableInfo{
 		ID:         1001,
-<<<<<<< HEAD
-		Name:       parser_model.NewCIStr("t_roundtrip"),
-=======
-		Name:       ast.NewCIStr(table),
->>>>>>> 5521ba376 (tableInfo: init the private sql lazily (#5029))
+		Name:       parser_model.NewCIStr(table),
 		PKIsHandle: true,
 		Columns:    []*model.ColumnInfo{idCol, nameCol},
 	}
