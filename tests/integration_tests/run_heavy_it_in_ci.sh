@@ -144,7 +144,7 @@ storage_groups=(
 	# G02
 	'canal_json_storage_basic canal_json_storage_partition_table'
 	# G03
-	'csv_storage_basic storage_csv_update'
+	'csv_storage_basic storage_csv_update iceberg_storage_basic'
 	# G04
 	'ddl_for_split_tables_with_random_move_table'
 	# G05

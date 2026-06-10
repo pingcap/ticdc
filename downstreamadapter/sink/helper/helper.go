@@ -109,6 +109,8 @@ func GetFileExtension(protocol config.Protocol) string {
 		return ".canal"
 	case config.ProtocolCsv:
 		return ".csv"
+	case config.ProtocolIceberg:
+		return ".parquet"
 	default:
 		return ".unknown"
 	}

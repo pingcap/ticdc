@@ -62,6 +62,10 @@ func TestParseSinkProtocolFromString(t *testing.T) {
 			protocol:             "open-protocol",
 			expectedProtocolEnum: ProtocolOpen,
 		},
+		{
+			protocol:             "iceberg",
+			expectedProtocolEnum: ProtocolIceberg,
+		},
 	}
 
 	for _, tc := range testCases {
@@ -109,6 +113,10 @@ func TestString(t *testing.T) {
 			protocolEnum:     ProtocolOpen,
 			expectedProtocol: "open-protocol",
 		},
+		{
+			protocolEnum:     ProtocolIceberg,
+			expectedProtocol: "iceberg",
+		},
 	}
 
 	for _, tc := range testCases {
@@ -150,6 +158,10 @@ func TestIsBatchEncoder(t *testing.T) {
 		{
 			protocolEnum: ProtocolOpen,
 			expect:       true,
+		},
+		{
+			protocolEnum: ProtocolIceberg,
+			expect:       false,
 		},
 	}
 

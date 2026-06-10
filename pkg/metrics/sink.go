@@ -264,4 +264,7 @@ func initSinkMetrics(registry *prometheus.Registry) {
 
 	// pulsar sink metrics
 	initPulsarMetrics(registry)
+
+	// iceberg sink metrics
+	initIcebergMetrics(registry)
 }
