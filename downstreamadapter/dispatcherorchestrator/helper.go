@@ -93,12 +93,16 @@ func shouldReplacePendingMessage(key pendingMessageKey, oldMsg, newMsg *messagin
 	return !oldReq.Removed && newReq.Removed && newReq.MaintainerEpoch >= oldReq.MaintainerEpoch
 }
 
+// shouldReplaceByMaintainerEpoch lets a newer maintainer generation replace an
+// older queued control message for the same changefeed and message type.
 func shouldReplaceByMaintainerEpoch(oldMsg, newMsg *messaging.TargetMessage) bool {
 	oldMaintainerEpoch, oldOK := pendingMessageMaintainerEpoch(oldMsg)
 	newMaintainerEpoch, newOK := pendingMessageMaintainerEpoch(newMsg)
 	return oldOK && newOK && newMaintainerEpoch > oldMaintainerEpoch
 }
 
+// pendingMessageMaintainerEpoch extracts the maintainer epoch from messages
+// whose ordering must be fenced by maintainer generation.
 func pendingMessageMaintainerEpoch(msg *messaging.TargetMessage) (uint64, bool) {
 	if msg == nil || len(msg.Message) == 0 {
 		return 0, false

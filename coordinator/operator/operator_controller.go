@@ -158,6 +158,8 @@ func (oc *Controller) AddOperator(op operator.Operator[common.ChangeFeedID, *hea
 	return true
 }
 
+// precheckAddOperatorLocked reserves the changefeed for an add-like operator
+// before any expensive epoch bump is started. The caller must hold oc.mu.
 func (oc *Controller) precheckAddOperatorLocked(
 	op operator.Operator[common.ChangeFeedID, *heartbeatpb.MaintainerStatus],
 ) (*changefeed.Changefeed, bool) {
@@ -183,6 +185,8 @@ func (oc *Controller) precheckAddOperatorLocked(
 	return cf, true
 }
 
+// recheckAddOperatorLocked verifies the original changefeed still owns the slot
+// after the epoch bump completed outside oc.mu.
 func (oc *Controller) recheckAddOperatorLocked(
 	op operator.Operator[common.ChangeFeedID, *heartbeatpb.MaintainerStatus],
 	cf *changefeed.Changefeed,
@@ -209,12 +213,15 @@ func (oc *Controller) recheckAddOperatorLocked(
 	return true
 }
 
+// shouldBumpChangefeedEpoch gates epoch bumps to operators that create a new
+// maintainer owner and to runtime paths that have a real metastore and PD client.
 func (oc *Controller) shouldBumpChangefeedEpoch(
 	op operator.Operator[common.ChangeFeedID, *heartbeatpb.MaintainerStatus],
 ) bool {
 	return requiresNewMaintainerOwnership(op) && oc.pdClient != nil && oc.backend != nil
 }
 
+// bumpChangefeedEpoch persists the next owner epoch before the operator is queued.
 func (oc *Controller) bumpChangefeedEpoch(cf *changefeed.Changefeed) (*config.ChangeFeedInfo, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), operatorEpochBumpTimeout)
 	defer cancel()
@@ -228,6 +235,8 @@ func (oc *Controller) bumpChangefeedEpoch(cf *changefeed.Changefeed) (*config.Ch
 	)
 }
 
+// requiresNewMaintainerOwnership identifies operators that will create a new
+// maintainer generation and therefore must advance the persisted owner epoch.
 func requiresNewMaintainerOwnership(
 	op operator.Operator[common.ChangeFeedID, *heartbeatpb.MaintainerStatus],
 ) bool {
@@ -279,6 +288,8 @@ func (oc *Controller) StopRemoteMaintainerWithMaintainerEpoch(
 	return oc.pushStopChangefeedOperator(keyspaceID, cfID, nodeID, removed, maintainerEpoch)
 }
 
+// stopChangefeed creates a stop operator using the owner epoch that must be
+// fenced. During a move, the origin epoch is kept until the target is bound.
 func (oc *Controller) stopChangefeed(
 	cfID common.ChangeFeedID,
 	removed bool,

@@ -193,6 +193,9 @@ func (b *EtcdBackend) UpdateChangefeed(ctx context.Context, info *config.ChangeF
 	return nil
 }
 
+// BumpChangefeedEpoch atomically persists a strictly newer ownership epoch.
+// It can optionally update status in the same transaction so state changes and
+// the new owner fence are observed together after coordinator failover.
 func (b *EtcdBackend) BumpChangefeedEpoch(
 	ctx context.Context,
 	id common.ChangeFeedID,

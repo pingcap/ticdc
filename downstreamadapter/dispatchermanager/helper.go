@@ -183,6 +183,8 @@ type SchedulerDispatcherRequest struct {
 	*heartbeatpb.ScheduleDispatcherRequest
 }
 
+// NewSchedulerDispatcherRequest carries the sender node with the schedule
+// request so dispatcher-manager admission can fence stale maintainers.
 func NewSchedulerDispatcherRequest(from node.ID, req *heartbeatpb.ScheduleDispatcherRequest) SchedulerDispatcherRequest {
 	return SchedulerDispatcherRequest{From: from, ScheduleDispatcherRequest: req}
 }
@@ -504,6 +506,8 @@ type HeartBeatResponse struct {
 	*heartbeatpb.HeartBeatResponse
 }
 
+// NewHeartBeatResponse carries the sender node with the heartbeat so stale
+// maintainer responses cannot update dispatcher state.
 func NewHeartBeatResponse(from node.ID, resp *heartbeatpb.HeartBeatResponse) HeartBeatResponse {
 	return HeartBeatResponse{From: from, HeartBeatResponse: resp}
 }
@@ -568,6 +572,8 @@ func (h *HeartBeatResponseHandler) Handle(dispatcherManager *DispatcherManager, 
 	return false
 }
 
+// isHeartBeatResponseAllowed drops dispatcher heartbeats from stale maintainers
+// before they can update table state or complete scheduler operators.
 func isHeartBeatResponseAllowed(dispatcherManager *DispatcherManager, heartbeatResponse HeartBeatResponse) bool {
 	if dispatcherManager.IsMaintainerRequestAllowed(heartbeatResponse.From, heartbeatResponse.MaintainerEpoch) {
 		return true
@@ -800,6 +806,8 @@ type MergeDispatcherRequest struct {
 	*heartbeatpb.MergeDispatcherRequest
 }
 
+// NewMergeDispatcherRequest carries the sender node together with the request
+// so the handler can apply the dispatcher-manager maintainer fence.
 func NewMergeDispatcherRequest(from node.ID, req *heartbeatpb.MergeDispatcherRequest) MergeDispatcherRequest {
 	return MergeDispatcherRequest{From: from, MergeDispatcherRequest: req}
 }

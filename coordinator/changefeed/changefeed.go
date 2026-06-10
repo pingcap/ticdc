@@ -287,6 +287,8 @@ func (c *Changefeed) NewCheckpointTsMessage(ts uint64) *messaging.TargetMessage 
 		})
 }
 
+// RemoveMaintainerMessage builds the fenced remove request sent to a maintainer owner.
+// The maintainer epoch identifies the owner generation that is allowed to stop.
 func RemoveMaintainerMessage(
 	keyspaceID uint32,
 	id common.ChangeFeedID,

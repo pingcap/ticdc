@@ -490,6 +490,8 @@ func (m *DispatcherOrchestrator) handleCloseRequest(
 	return m.sendResponse(from, messaging.MaintainerTopic, response)
 }
 
+// recordClosedMaintainerEpochLocked remembers closed maintainer generations so
+// later bootstrap requests from older owners cannot recreate a closed manager.
 func (m *DispatcherOrchestrator) recordClosedMaintainerEpochLocked(cfID common.ChangeFeedID, maintainerEpoch uint64, removed bool) {
 	if maintainerEpoch == 0 && !removed {
 		// Epoch 0 has no ordering information. Keep permanent tombstones only

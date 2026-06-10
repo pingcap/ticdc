@@ -385,6 +385,8 @@ func (p *managerMaintainerSet) cleanupRemovedMaintainers() {
 	})
 }
 
+// cleanupRemovedMaintainer removes only the registry entry that still owns the
+// shared changefeed metric labels observed by Range.
 func (p *managerMaintainerSet) cleanupRemovedMaintainer(key, value interface{}) {
 	p.registryMu.Lock()
 	defer p.registryMu.Unlock()

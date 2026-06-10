@@ -776,6 +776,8 @@ func (c *Controller) finishBootstrap(ctx context.Context, runningChangefeeds map
 	log.Info("coordinator bootstrapped", zap.Any("nodeID", c.selfNode.ID))
 }
 
+// selectBootstrapMaintainer chooses the single remote maintainer that still owns
+// the persisted epoch and returns the remaining reports as stale owners to stop.
 func selectBootstrapMaintainer(
 	cfID common.ChangeFeedID,
 	currentEpoch uint64,
@@ -820,6 +822,9 @@ func selectBootstrapMaintainer(
 	return matches[0], true, staleMaintainers
 }
 
+// stopStaleBootstrapMaintainers fences bootstrap reports from older owner epochs.
+// If another operator already owns the changefeed slot, stale owners are removed
+// with direct best-effort commands so the active operator is not replaced.
 func (c *Controller) stopStaleBootstrapMaintainers(
 	cfID common.ChangeFeedID,
 	staleMaintainers []remoteMaintainer,
@@ -1141,6 +1146,8 @@ func (c *Controller) newBootstrapMessage(id node.ID, addr string) *messaging.Tar
 		&heartbeatpb.CoordinatorBootstrapRequest{Version: c.version})
 }
 
+// updateChangefeedEpoch bumps the persisted owner epoch before a state change
+// can create a new maintainer generation from the current coordinator.
 func (c *Controller) updateChangefeedEpoch(
 	ctx context.Context,
 	id common.ChangeFeedID,

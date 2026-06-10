@@ -1004,10 +1004,14 @@ func (m *Maintainer) onMaintainerPostBootstrapResponse(msg *messaging.TargetMess
 	m.postBootstrapMsg = nil
 }
 
+// isMaintainerEpochResponseAllowed accepts current-generation responses while
+// preserving epoch-0 compatibility during rolling upgrades.
 func (m *Maintainer) isMaintainerEpochResponseAllowed(responseEpoch uint64) bool {
 	return common.MaintainerEpochMatches(responseEpoch, m.currentMaintainerEpoch())
 }
 
+// isMaintainerEpochRequestAllowed fences dispatcher-manager requests that can
+// close or mutate local dispatcher state on behalf of a maintainer generation.
 func (m *Maintainer) isMaintainerEpochRequestAllowed(requestEpoch uint64) bool {
 	currentEpoch := m.currentMaintainerEpoch()
 	if requestEpoch == 0 {
@@ -1020,6 +1024,7 @@ func (m *Maintainer) isMaintainerEpochRequestAllowed(requestEpoch uint64) bool {
 	return currentEpoch == 0 || requestEpoch == currentEpoch
 }
 
+// logDroppedMaintainerResponse records responses rejected by maintainer epoch fencing.
 func (m *Maintainer) logDroppedMaintainerResponse(responseType string, from node.ID, responseEpoch uint64) {
 	log.Warn("drop stale maintainer response",
 		zap.Stringer("changefeedID", m.changefeedID),
