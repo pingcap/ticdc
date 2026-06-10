@@ -937,56 +937,35 @@ func (d *BasicDispatcher) routeTableAdmissionsForBlockState(event commonEvent.Bl
 	capacity := len(nameChange.AddName) + len(nameChange.DropName) + 1
 	admissions := make([]*heartbeatpb.RouteTableAdmission, 0, capacity)
 	if nameChange.DropDatabaseName != "" {
-		admissions = appendRouteAdmissionReleaseSchema(admissions, nameChange.DropDatabaseName)
+		admissions = append(admissions, &heartbeatpb.RouteTableAdmission{
+			SourceSchemaName: nameChange.DropDatabaseName,
+			Action:           heartbeatpb.RouteTableAdmissionAction_RELEASE_SCHEMA,
+		})
 	}
 	for _, name := range nameChange.DropName {
-		admissions = appendRouteAdmissionReleases(admissions, name)
-	}
-	for _, name := range nameChange.AddName {
-		binding := router.MustRoute(name.SchemaName, name.TableName)
-		admissions = appendRouteAdmissionAdmit(admissions, binding)
-	}
-	if len(admissions) == 0 {
-		return nil
-	}
-	return admissions
-}
-
-func appendRouteAdmissionAdmit(
-	admissions []*heartbeatpb.RouteTableAdmission,
-	binding routing.RouteBinding,
-) []*heartbeatpb.RouteTableAdmission {
-	return append(admissions, &heartbeatpb.RouteTableAdmission{
-		SourceSchemaName: binding.Source.Schema,
-		SourceTableName:  binding.Source.Table,
-		TargetSchemaName: binding.Target.Schema,
-		TargetTableName:  binding.Target.Table,
-		Action:           heartbeatpb.RouteTableAdmissionAction_ADMIT,
-	})
-}
-
-func appendRouteAdmissionReleases(
-	admissions []*heartbeatpb.RouteTableAdmission,
-	names ...commonEvent.SchemaTableName,
-) []*heartbeatpb.RouteTableAdmission {
-	for _, name := range names {
 		admissions = append(admissions, &heartbeatpb.RouteTableAdmission{
 			SourceSchemaName: name.SchemaName,
 			SourceTableName:  name.TableName,
 			Action:           heartbeatpb.RouteTableAdmissionAction_RELEASE,
 		})
 	}
+	for _, name := range nameChange.AddName {
+		binding := router.RouteTable(name.SchemaName, name.TableName)
+		if binding.Source.Schema == "" || binding.Source.Table == "" {
+			return nil
+		}
+		admissions = append(admissions, &heartbeatpb.RouteTableAdmission{
+			SourceSchemaName: binding.Source.Schema,
+			SourceTableName:  binding.Source.Table,
+			TargetSchemaName: binding.Target.Schema,
+			TargetTableName:  binding.Target.Table,
+			Action:           heartbeatpb.RouteTableAdmissionAction_ADMIT,
+		})
+	}
+	if len(admissions) == 0 {
+		return nil
+	}
 	return admissions
-}
-
-func appendRouteAdmissionReleaseSchema(
-	admissions []*heartbeatpb.RouteTableAdmission,
-	schema string,
-) []*heartbeatpb.RouteTableAdmission {
-	return append(admissions, &heartbeatpb.RouteTableAdmission{
-		SourceSchemaName: schema,
-		Action:           heartbeatpb.RouteTableAdmissionAction_RELEASE_SCHEMA,
-	})
 }
 
 // shouldBlock check whether the event should be blocked(to wait maintainer response)

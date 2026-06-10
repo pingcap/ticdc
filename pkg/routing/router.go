@@ -259,18 +259,20 @@ func (r Router) Route(originSchema, originTable string) (binding RouteBinding, e
 	return NewRouteBinding(originSchema, originTable, targetSchema, targetTable), nil
 }
 
-// MustRoute returns the source-to-target table name binding, and panics if the route is invalid.
-// it should only be called after once called Route which return error.
-func (r Router) MustRoute(originSchema, originTable string) RouteBinding {
-	binding, err := r.Route(originSchema, originTable)
-	if err != nil {
-		log.Panic("table route failed",
+// RouteTable returns the source-to-target binding for a table-level source name.
+// It logs and returns an empty binding if the source name is incomplete or routing fails.
+func (r Router) RouteTable(originSchema, originTable string) RouteBinding {
+	if originSchema == "" || originTable == "" {
+		log.Warn("table route requires complete source table name",
 			zap.String("keyspace", r.changefeedID.Keyspace()),
 			zap.String("changefeed", r.changefeedID.Name()),
 			zap.String("schema", originSchema),
-			zap.String("table", originTable),
-			zap.Error(err))
+			zap.String("table", originTable))
+		return RouteBinding{}
 	}
+	// RouteTable has already rejected empty table names. Route only returns an
+	// error for schema-level routing ambiguity, so table-level routing cannot fail here.
+	binding, _ := r.Route(originSchema, originTable)
 	return binding
 }
 

@@ -120,14 +120,7 @@ func NewAdmin(
 			return nil, err
 		}
 
-		if existing, ok := activeRoutes[binding.Source]; ok {
-			if !existing.Target.Equal(binding.Target) {
-				return nil, errors.ErrInternalCheckFailed.GenWithStack(
-					"source `%s`.`%s` maps to multiple targets `%s`.`%s` and `%s`.`%s` during route admin initialization",
-					binding.Source.Schema, binding.Source.Table,
-					existing.Target.Schema, existing.Target.Table,
-					binding.Target.Schema, binding.Target.Table)
-			}
+		if _, ok := activeRoutes[binding.Source]; ok {
 			continue
 		}
 		if err := admin.registry.ApplyTransition(nil, []RouteBinding{binding}, true); err != nil {
