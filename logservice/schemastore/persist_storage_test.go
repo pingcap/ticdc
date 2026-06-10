@@ -3761,7 +3761,7 @@ func TestBuildPersistedDDLEventForCreateTableLikeSetsReferTableID(t *testing.T) 
 }
 
 func TestBuildPersistedDDLEventForCreateTableLikeUsesInvolvingReferSchema(t *testing.T) {
-	job := buildCreateTableJobForTest(100, 200, "t", 1010)
+	job := buildCreateTableJobForTest(100, 200, "t1", 1010)
 	job.Query = "CREATE TABLE `dst_db`.`t` LIKE `t`"
 	job.InvolvingSchemaInfo = []model.InvolvingSchemaInfo{
 		{Database: "dst_db", Table: "t"},
