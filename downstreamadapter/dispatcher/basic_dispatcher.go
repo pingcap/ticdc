@@ -934,18 +934,17 @@ func (d *BasicDispatcher) routeTableAdmissionsForBlockState(event commonEvent.Bl
 		return nil
 	}
 
-	seen := make(map[routeAdmissionKey]struct{})
 	capacity := len(nameChange.AddName) + len(nameChange.DropName) + 1
 	admissions := make([]*heartbeatpb.RouteTableAdmission, 0, capacity)
 	if nameChange.DropDatabaseName != "" {
-		admissions = appendRouteAdmissionReleaseSchema(admissions, seen, nameChange.DropDatabaseName)
+		admissions = appendRouteAdmissionReleaseSchema(admissions, nameChange.DropDatabaseName)
 	}
 	for _, name := range nameChange.DropName {
-		admissions = appendRouteAdmissionReleases(admissions, seen, name)
+		admissions = appendRouteAdmissionReleases(admissions, name)
 	}
 	for _, name := range nameChange.AddName {
 		binding := router.MustRoute(name.SchemaName, name.TableName)
-		admissions = appendRouteAdmissionAdmit(admissions, seen, binding)
+		admissions = appendRouteAdmissionAdmit(admissions, binding)
 	}
 	if len(admissions) == 0 {
 		return nil
@@ -953,30 +952,10 @@ func (d *BasicDispatcher) routeTableAdmissionsForBlockState(event commonEvent.Bl
 	return admissions
 }
 
-type routeAdmissionKey struct {
-	action       heartbeatpb.RouteTableAdmissionAction
-	sourceSchema string
-	sourceTable  string
-	targetSchema string
-	targetTable  string
-}
-
 func appendRouteAdmissionAdmit(
 	admissions []*heartbeatpb.RouteTableAdmission,
-	seen map[routeAdmissionKey]struct{},
 	binding routing.RouteBinding,
 ) []*heartbeatpb.RouteTableAdmission {
-	key := routeAdmissionKey{
-		action:       heartbeatpb.RouteTableAdmissionAction_ADMIT,
-		sourceSchema: binding.Source.Schema,
-		sourceTable:  binding.Source.Table,
-		targetSchema: binding.Target.Schema,
-		targetTable:  binding.Target.Table,
-	}
-	if _, ok := seen[key]; ok {
-		return admissions
-	}
-	seen[key] = struct{}{}
 	return append(admissions, &heartbeatpb.RouteTableAdmission{
 		SourceSchemaName: binding.Source.Schema,
 		SourceTableName:  binding.Source.Table,
@@ -988,19 +967,9 @@ func appendRouteAdmissionAdmit(
 
 func appendRouteAdmissionReleases(
 	admissions []*heartbeatpb.RouteTableAdmission,
-	seen map[routeAdmissionKey]struct{},
 	names ...commonEvent.SchemaTableName,
 ) []*heartbeatpb.RouteTableAdmission {
 	for _, name := range names {
-		key := routeAdmissionKey{
-			action:       heartbeatpb.RouteTableAdmissionAction_RELEASE,
-			sourceSchema: name.SchemaName,
-			sourceTable:  name.TableName,
-		}
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
 		admissions = append(admissions, &heartbeatpb.RouteTableAdmission{
 			SourceSchemaName: name.SchemaName,
 			SourceTableName:  name.TableName,
@@ -1012,17 +981,8 @@ func appendRouteAdmissionReleases(
 
 func appendRouteAdmissionReleaseSchema(
 	admissions []*heartbeatpb.RouteTableAdmission,
-	seen map[routeAdmissionKey]struct{},
 	schema string,
 ) []*heartbeatpb.RouteTableAdmission {
-	key := routeAdmissionKey{
-		action:       heartbeatpb.RouteTableAdmissionAction_RELEASE_SCHEMA,
-		sourceSchema: schema,
-	}
-	if _, ok := seen[key]; ok {
-		return admissions
-	}
-	seen[key] = struct{}{}
 	return append(admissions, &heartbeatpb.RouteTableAdmission{
 		SourceSchemaName: schema,
 		Action:           heartbeatpb.RouteTableAdmissionAction_RELEASE_SCHEMA,
