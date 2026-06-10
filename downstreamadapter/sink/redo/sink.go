@@ -35,17 +35,10 @@ import (
 // Sink manages redo log writer, buffers un-persistent redo logs, calculates
 // redo log resolved ts. It implements Sink interface.
 type Sink struct {
-<<<<<<< HEAD
-	ctx       context.Context
-	cfg       *writer.LogWriterConfig
-	ddlWriter writer.RedoLogWriter
-	dmlWriter writer.RedoLogWriter
-=======
 	ctx          context.Context
 	changefeedID common.ChangeFeedID
 	ddlWriter    writer.RedoDDLWriter
 	dmlWriter    writer.RedoDMLWriter
->>>>>>> 7b6e554bb (redo: split the redo writer interface to ddl writer and dml writer (#4580))
 
 	logBuffer *chann.UnlimitedChannel[*commonEvent.RedoRowEvent, any]
 
@@ -68,21 +61,6 @@ func New(ctx context.Context, changefeedID common.ChangeFeedID,
 	cfg *config.ConsistentConfig,
 ) *Sink {
 	s := &Sink{
-<<<<<<< HEAD
-		ctx: ctx,
-		cfg: &writer.LogWriterConfig{
-			ConsistentConfig:  *cfg,
-			CaptureID:         config.GetGlobalServerConfig().AdvertiseAddr,
-			ChangeFeedID:      changefeedID,
-			MaxLogSizeInBytes: util.GetOrZero(cfg.MaxLogSize) * redo.Megabyte,
-		},
-		logBuffer: chann.NewUnlimitedChannelDefault[writer.RedoEvent](),
-		isNormal:  atomic.NewBool(true),
-		isClosed:  atomic.NewBool(false),
-	}
-	start := time.Now()
-	ddlWriter, err := factory.NewRedoLogWriter(s.ctx, s.cfg, redo.RedoDDLLogFileType)
-=======
 		ctx:          ctx,
 		changefeedID: changefeedID,
 		logBuffer:    chann.NewUnlimitedChannelDefault[*commonEvent.RedoRowEvent](),
@@ -108,7 +86,6 @@ func New(ctx context.Context, changefeedID common.ChangeFeedID,
 	}()
 
 	ddlWriter, err = factory.NewRedoDDLWriter(ctx, config)
->>>>>>> 7b6e554bb (redo: split the redo writer interface to ddl writer and dml writer (#4580))
 	if err != nil {
 		log.Error("redo: failed to create redo log writer",
 			zap.String("keyspace", s.cfg.ChangeFeedID.Keyspace()),
@@ -117,11 +94,7 @@ func New(ctx context.Context, changefeedID common.ChangeFeedID,
 			zap.Error(err))
 		return nil
 	}
-<<<<<<< HEAD
-	dmlWriter, err := factory.NewRedoLogWriter(s.ctx, s.cfg, redo.RedoRowLogFileType)
-=======
 	dmlWriter, err = factory.NewRedoDMLWriter(ctx, config)
->>>>>>> 7b6e554bb (redo: split the redo writer interface to ddl writer and dml writer (#4580))
 	if err != nil {
 		log.Error("redo: failed to create redo log writer",
 			zap.String("keyspace", s.cfg.ChangeFeedID.Keyspace()),
@@ -179,13 +152,8 @@ func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 		}
 	}
 	rowsCount := event.Len()
-<<<<<<< HEAD
-	rowCallback := toRowCallback(event.PostTxnFlushed, uint64(rowsCount))
-	events := make([]writer.RedoEvent, 0, rowsCount)
-=======
 	events := make([]*commonEvent.RedoRowEvent, 0, rowsCount)
 	rowCallback := helper.NewTxnPostFlushRowCallback(event, uint64(rowsCount))
->>>>>>> 7b6e554bb (redo: split the redo writer interface to ddl writer and dml writer (#4580))
 
 	for {
 		row, ok := event.GetNextRow()

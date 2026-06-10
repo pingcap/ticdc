@@ -15,24 +15,20 @@ package writer
 
 import (
 	"context"
-	"fmt"
-	"net/url"
 
-	"github.com/pingcap/ticdc/pkg/common"
-	pevent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/config"
+	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/uuid"
 )
 
 var (
-	_ RedoEvent = (*pevent.RedoRowEvent)(nil)
-	_ RedoEvent = (*pevent.DDLEvent)(nil)
+	_ RedoEvent = (*commonEvent.RedoRowEvent)(nil)
+	_ RedoEvent = (*commonEvent.DDLEvent)(nil)
 )
 
 // RedoEvent is the interface for redo event.
 type RedoEvent interface {
 	PostFlush()
-	ToRedoLog() *pevent.RedoLog
+	ToRedoLog() *commonEvent.RedoLog
 }
 
 // RedoDMLWriter writes row redo events, all operations are thread-safe.
@@ -42,33 +38,11 @@ type RedoDMLWriter interface {
 	Close() error
 }
 
-<<<<<<< HEAD
-	SetTableSchemaStore(*pevent.TableSchemaStore)
-}
-
-// LogWriterConfig is the config for redo log writer.
-type LogWriterConfig struct {
-	config.ConsistentConfig
-	CaptureID    config.CaptureID
-	ChangeFeedID common.ChangeFeedID
-
-	URI                *url.URL
-	UseExternalStorage bool
-	Dir                string
-	MaxLogSizeInBytes  int64
-}
-
-func (cfg LogWriterConfig) String() string {
-	return fmt.Sprintf("%s:%s:%s:%s:%d:%s:%t",
-		cfg.ChangeFeedID.Keyspace(), cfg.ChangeFeedID.Name(), cfg.CaptureID,
-		cfg.Dir, cfg.MaxLogSize, cfg.URI.String(), cfg.UseExternalStorage)
-=======
 // RedoDDLWriter writes DDL redo events, all operations are thread-safe.
 type RedoDDLWriter interface {
 	WriteDDLEvent(ctx context.Context, event *commonEvent.DDLEvent) error
 	Close() error
 	SetTableSchemaStore(*commonEvent.TableSchemaStore)
->>>>>>> 7b6e554bb (redo: split the redo writer interface to ddl writer and dml writer (#4580))
 }
 
 // Option define the writerOptions

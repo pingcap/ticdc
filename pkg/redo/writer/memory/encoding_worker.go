@@ -47,15 +47,6 @@ func toPolymorphicDMLEvent(
 	event *commonEvent.RedoRowEvent,
 ) (*polymorphicRedoEvent, error) {
 	rl := event.ToRedoLog()
-<<<<<<< HEAD
-	if rl == nil {
-		return nil, errors.ErrUnexpected.FastGenByArgs("redo event to log conversion failed")
-	}
-	if rl.Type == commonEvent.RedoLogTypeDDL {
-		rl.RedoDDL.SetTableSchemaStore(tableSchemaStore)
-	}
-=======
->>>>>>> 7b6e554bb (redo: split the redo writer interface to ddl writer and dml writer (#4580))
 
 	rawData, err := codec.MarshalRedoLog(rl, nil)
 	if err != nil {

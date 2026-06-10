@@ -21,6 +21,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -101,13 +102,8 @@ func TestLogWriterWriteDDL(t *testing.T) {
 		mockWriter := &mockFileWriter{}
 		mockWriter.On("IsRunning").Return(tt.isRunning)
 		mockWriter.On("SyncWrite", mock.Anything).Return(tt.writerErr)
-<<<<<<< HEAD
-		w := logWriter{
-			cfg:           &writer.LogWriterConfig{},
-=======
 		w := ddlWriter{logWriter: &logWriter{
 			cfg:           newTestWriterConfig(t, common.ChangeFeedID{}, nil),
->>>>>>> 7b6e554bb (redo: split the redo writer interface to ddl writer and dml writer (#4580))
 			backendWriter: mockWriter,
 		}}
 
@@ -117,15 +113,7 @@ func TestLogWriterWriteDDL(t *testing.T) {
 			tt.args.ctx = ctx
 		}
 
-<<<<<<< HEAD
-		var e writer.RedoEvent
-		if tt.args.ddl != nil {
-			e = tt.args.ddl
-		}
-		err := w.WriteEvents(tt.args.ctx, e)
-=======
 		err := w.WriteDDLEvent(tt.ctx, tt.ddl)
->>>>>>> 7b6e554bb (redo: split the redo writer interface to ddl writer and dml writer (#4580))
 		if tt.wantErr != nil {
 			log.Info("log error",
 				zap.String("wantErr", tt.wantErr.Error()),

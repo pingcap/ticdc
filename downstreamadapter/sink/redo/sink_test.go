@@ -374,13 +374,8 @@ func TestRedoSinkSendMessagesInBatch(t *testing.T) {
 	}()
 
 	totalEvents := redo.DefaultFlushBatchSize*2 + 17
-<<<<<<< HEAD
-	events := make([]writer.RedoEvent, 0, totalEvents)
-	for i := 0; i < totalEvents; i++ {
-=======
 	events := make([]*commonEvent.RedoRowEvent, 0, totalEvents)
 	for range totalEvents {
->>>>>>> 7b6e554bb (redo: split the redo writer interface to ddl writer and dml writer (#4580))
 		events = append(events, &commonEvent.RedoRowEvent{})
 	}
 	s.logBuffer.Push(events...)
