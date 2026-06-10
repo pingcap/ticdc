@@ -22,7 +22,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tidb/pkg/meta/model"
-	"github.com/pingcap/tidb/pkg/parser/ast"
+	parser_model "github.com/pingcap/tidb/pkg/parser/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -479,11 +479,11 @@ INSERT INTO test VALUES (1);
 		{
 			name: "Queries with whitespace and newlines",
 			input: `
-    
+
     CREATE TABLE test (id INT);
-    
+
     INSERT INTO test VALUES (1);
-    
+
 `,
 			expected: []string{
 				"CREATE TABLE `test` (`id` INT);",
@@ -658,12 +658,12 @@ func TestNewRoutedDDLEventPreservesSourceFields(t *testing.T) {
 func TestGetEventsForRenameTablesPreservesSourceAndTargetNames(t *testing.T) {
 	sourceTable1 := common.WrapTableInfo("new_db1", &model.TableInfo{
 		ID:       100,
-		Name:     ast.NewCIStr("new_table1"),
+		Name:     parser_model.NewCIStr("new_table1"),
 		UpdateTS: 10,
 	})
 	sourceTable2 := common.WrapTableInfo("new_db2", &model.TableInfo{
 		ID:       101,
-		Name:     ast.NewCIStr("new_table2"),
+		Name:     parser_model.NewCIStr("new_table2"),
 		UpdateTS: 11,
 	})
 
