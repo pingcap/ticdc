@@ -29,13 +29,9 @@ import (
 	misc "github.com/pingcap/ticdc/pkg/redo/common"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/uuid"
-<<<<<<< HEAD
-	"github.com/prometheus/client_golang/prometheus/testutil"
-=======
 	mockstorage "github.com/pingcap/tidb/br/pkg/mock/storage"
 	"github.com/pingcap/tidb/br/pkg/storage"
-	promtestutil "github.com/prometheus/client_golang/prometheus/testutil"
->>>>>>> b8a1cd664 (*: fix missing resource cleanup on initialization failure paths (#4517))
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/mock/gomock"

@@ -147,39 +147,6 @@ func NewFileWriter(
 	return w, nil
 }
 
-<<<<<<< HEAD
-=======
-// NewFileWriter returns a file rotated writer for the normal redo writer path.
-func NewFileWriter(
-	ctx context.Context, cfg *writer.Config, logType string, opts ...writer.Option,
-) (w *Writer, err error) {
-	var extStorage storage.ExternalStorage
-	if cfg.UseExternalStorage() {
-		extStorage, err = redo.InitExternalStorage(ctx, *cfg.URI())
-		if err != nil {
-			return nil, err
-		}
-	}
-	return newWriter(cfg, logType, extStorage, opts...)
-}
-
-// NewLocalFileWriter is used by reader-side local sorting. It keeps the
-// temporary sorted-file path local and avoids the external-storage write path.
-func NewLocalFileWriter(
-	dir string,
-	maxLogSizeInBytes int64,
-	logType string,
-	opts ...writer.Option,
-) (*Writer, error) {
-	return newWriter(&localFileConfig{
-		dir:               dir,
-		maxLogSizeInBytes: maxLogSizeInBytes,
-		flushIntervalInMs: redo.DefaultFlushIntervalInMs,
-		flushWorkerNum:    redo.DefaultFlushWorkerNum,
-	}, logType, nil, opts...)
-}
-
->>>>>>> b8a1cd664 (*: fix missing resource cleanup on initialization failure paths (#4517))
 func (w *Writer) SetTableSchemaStore(tableSchemaStore *commonEvent.TableSchemaStore) {
 	w.tableSchemaStore = tableSchemaStore
 }
