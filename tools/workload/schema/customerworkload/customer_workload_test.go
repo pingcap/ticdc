@@ -136,6 +136,60 @@ func TestCustomerWorkloadInitialSeqSeedsInsertContinuation(t *testing.T) {
 	}
 }
 
+func TestCustomerWorkloadRandomizedInsertUsesPreparedKeyspace(t *testing.T) {
+	t.Parallel()
+
+	workload := NewCustomerWorkload(Options{
+		Model:           "C",
+		TableCount:      1,
+		KeyspaceSize:    1000,
+		InitialSeq:      1000,
+		RandomizeInsert: true,
+	}).(*CustomerWorkload)
+
+	_, values := workload.BuildInsertSqlWithValues(0, 16)
+	seen := make(map[uint64]struct{}, 16)
+	for i := 0; i < len(values); i += 13 {
+		entityID, ok := values[i].(uint64)
+		if !ok {
+			t.Fatalf("unexpected entity id type %T", values[i])
+		}
+		if entityID == 0 || entityID > 1000 {
+			t.Fatalf("expected randomized insert entity id inside keyspace, got %d", entityID)
+		}
+		if _, ok := seen[entityID]; ok {
+			t.Fatalf("expected unique entity id inside one batch, got duplicate %d", entityID)
+		}
+		seen[entityID] = struct{}{}
+	}
+
+	if workload.tableSeq[0].Load() != 1000 {
+		t.Fatalf("randomized insert should not append table sequence, got %d", workload.tableSeq[0].Load())
+	}
+}
+
+func TestCustomerWorkloadRandomizedInsertDefaultsToComputedKeyspace(t *testing.T) {
+	t.Parallel()
+
+	workload := NewCustomerWorkload(Options{
+		Model:           "B",
+		TableCount:      2,
+		TotalRowCount:   200,
+		RandomizeInsert: true,
+	}).(*CustomerWorkload)
+
+	_, values := workload.BuildInsertSqlWithValues(0, 4)
+	for i := 0; i < len(values); i += 13 {
+		entityID, ok := values[i].(uint64)
+		if !ok {
+			t.Fatalf("unexpected entity id type %T", values[i])
+		}
+		if entityID == 0 || entityID > 100 {
+			t.Fatalf("expected entity id inside computed per-table keyspace, got %d", entityID)
+		}
+	}
+}
+
 func assertContains(t *testing.T, s string, expected string) {
 	t.Helper()
 	if !strings.Contains(s, expected) {

@@ -46,7 +46,7 @@ func TestCreateCustomerWorkload(t *testing.T) {
 	}
 }
 
-func TestCreateCustomerWorkloadDerivesInitialSeqFromKeyspaceForWrite(t *testing.T) {
+func TestCreateCustomerWorkloadRandomizesInsertInsideKeyspaceForWrite(t *testing.T) {
 	t.Parallel()
 
 	cfg := NewWorkloadConfig()
@@ -59,12 +59,14 @@ func TestCreateCustomerWorkloadDerivesInitialSeqFromKeyspaceForWrite(t *testing.
 	app := NewWorkloadApp(cfg)
 	workload := app.createWorkload().(schema.InsertValuesWorkload)
 
-	_, values := workload.BuildInsertSqlWithValues(0, 1)
-	entityID, ok := values[0].(uint64)
-	if !ok {
-		t.Fatalf("unexpected entity id type %T", values[0])
-	}
-	if entityID != 101 {
-		t.Fatalf("expected write inserts to continue after keyspace, got %d", entityID)
+	_, values := workload.BuildInsertSqlWithValues(0, 8)
+	for i := 0; i < len(values); i += 13 {
+		entityID, ok := values[i].(uint64)
+		if !ok {
+			t.Fatalf("unexpected entity id type %T", values[i])
+		}
+		if entityID == 0 || entityID > 100 {
+			t.Fatalf("expected write insert inside keyspace, got %d", entityID)
+		}
 	}
 }

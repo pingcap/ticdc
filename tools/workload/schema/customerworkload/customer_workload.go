@@ -57,6 +57,7 @@ type Options struct {
 	RowSize         int
 	KeyspaceSize    uint64
 	InitialSeq      uint64
+	RandomizeInsert bool
 }
 
 type tableSpec struct {
@@ -80,6 +81,7 @@ type CustomerWorkload struct {
 	tableSlots      []tableSpec
 	tableSeq        []atomic.Uint64
 	keyspaceSize    uint64
+	randomizeInsert bool
 
 	payloadPools map[string][]rowPayload
 
@@ -114,14 +116,19 @@ func NewCustomerWorkload(opts Options) schema.Workload {
 		tableSlots:      tableSlots,
 		tableSeq:        make([]atomic.Uint64, tableCount),
 		keyspaceSize:    keyspaceSize,
+		randomizeInsert: opts.RandomizeInsert,
 		payloadPools:    make(map[string][]rowPayload),
 	}
 	w.seed.Store(time.Now().UnixNano())
 	w.randPool.New = func() any {
 		return rand.New(rand.NewSource(w.seed.Add(1)))
 	}
+	initialSeq := opts.InitialSeq
+	if opts.RandomizeInsert && initialSeq == 0 {
+		initialSeq = keyspaceSize
+	}
 	for i := range w.tableSeq {
-		w.tableSeq[i].Store(opts.InitialSeq)
+		w.tableSeq[i].Store(initialSeq)
 	}
 
 	r := rand.New(rand.NewSource(w.seed.Add(1)))
@@ -135,7 +142,8 @@ func NewCustomerWorkload(opts Options) schema.Workload {
 		zap.Int("tableCount", tableCount),
 		zap.Int("tableStartIndex", opts.TableStartIndex),
 		zap.Uint64("keyspaceSize", keyspaceSize),
-		zap.Uint64("initialSeq", opts.InitialSeq))
+		zap.Uint64("initialSeq", initialSeq),
+		zap.Bool("randomizeInsert", opts.RandomizeInsert))
 
 	return w
 }
@@ -296,6 +304,51 @@ func (w *CustomerWorkload) randSeq(tableIndex int, r *rand.Rand) uint64 {
 	return (r.Uint64() % upper) + 1
 }
 
+func (w *CustomerWorkload) insertSeq(tableIndex int, r *rand.Rand, used map[uint64]struct{}) uint64 {
+	if !w.randomizeInsert {
+		slot := w.seqSlot(tableIndex)
+		return w.tableSeq[slot].Add(1)
+	}
+
+	upper := w.insertKeyspaceUpper(tableIndex)
+	if upper <= 1 {
+		return 1
+	}
+
+	// Keep keys unique inside one INSERT statement. TiDB accepts ON DUPLICATE
+	// KEY UPDATE, but repeated keys in one statement would distort row counts.
+	if uint64(len(used)) < upper {
+		for {
+			seq := randomSeqBelow(r, upper)
+			if _, ok := used[seq]; ok {
+				continue
+			}
+			used[seq] = struct{}{}
+			return seq
+		}
+	}
+	return randomSeqBelow(r, upper)
+}
+
+func (w *CustomerWorkload) insertKeyspaceUpper(tableIndex int) uint64 {
+	slot := w.seqSlot(tableIndex)
+	upper := w.tableSeq[slot].Load()
+	if w.keyspaceSize > 0 {
+		upper = minUint64(w.keyspaceSize, maxUint64(1, upper))
+	}
+	return maxUint64(1, upper)
+}
+
+func randomSeqBelow(r *rand.Rand, upper uint64) uint64 {
+	if upper <= 1 {
+		return 1
+	}
+	if upper <= uint64(math.MaxInt64) {
+		return uint64(r.Int63n(int64(upper))) + 1
+	}
+	return (r.Uint64() % upper) + 1
+}
+
 func keyParts(tableIndex int, seq uint64) (uint64, uint64, string) {
 	entityID := uint64(tableIndex)*1_000_000_000 + seq
 	bucketID := seq % 1024
@@ -349,7 +402,6 @@ func (w *CustomerWorkload) BuildInsertSqlWithValues(tableIndex int, batchSize in
 
 	spec := w.specForTable(tableIndex)
 	tableName := w.tableName(tableIndex)
-	slot := w.seqSlot(tableIndex)
 	now := time.Now()
 	r := w.getRand()
 	defer w.putRand(r)
@@ -357,9 +409,10 @@ func (w *CustomerWorkload) BuildInsertSqlWithValues(tableIndex int, batchSize in
 	const colCount = 13
 	values := make([]interface{}, 0, batchSize*colCount)
 	placeholders := make([]string, 0, batchSize)
+	usedSeqs := make(map[uint64]struct{}, batchSize)
 
 	for i := 0; i < batchSize; i++ {
-		seq := w.tableSeq[slot].Add(1)
+		seq := w.insertSeq(tableIndex, r, usedSeqs)
 		entityID, bucketID, sequenceNo := keyParts(tableIndex, seq)
 		payload := w.choosePayload(spec, r)
 		placeholders = append(placeholders, "(?,?,?,?,?,?,?,?,?,?,?,?,?)")

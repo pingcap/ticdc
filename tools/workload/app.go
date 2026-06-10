@@ -165,6 +165,7 @@ func (app *WorkloadApp) createWorkload() schema.Workload {
 			RowSize:         app.Config.CustomerRowSize,
 			KeyspaceSize:    app.Config.CustomerKeyspace,
 			InitialSeq:      initialSeq,
+			RandomizeInsert: app.Config.Action != "prepare",
 		})
 	default:
 		plog.Panic("unsupported workload type", zap.String("workload", app.Config.WorkloadType))

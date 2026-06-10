@@ -72,7 +72,8 @@ Prepare and run a small model-A calibration against a TiDB cluster:
 
 - `-customer-row-size` overrides the model default payload size for every table shape.
 - `-customer-keyspace` controls the update/delete keyspace per table. For `write -skip-create-table` runs after a separate prepare phase, set this to the prepared rows per table.
-- `-customer-initial-seq` controls where new inserts continue. If omitted in non-prepare actions, it derives from `-customer-keyspace`.
+- In non-prepare actions, customer-workload insert/upsert keys are randomized inside the prepared keyspace instead of appended after the current maximum key. This avoids artificial right-edge primary-key hotspots that are not representative of the target production traffic.
+- `-customer-initial-seq` seeds prepare continuation and the upper bound used by randomized non-prepare insert/upsert. If omitted in non-prepare actions, it derives from `-customer-keyspace`.
 - Avoid using `-total-row-count` to express write-phase keyspace; the generic metrics reporter may stop non-update actions after that many affected rows.
 - `-target-rows-per-sec` throttles rows across all DML workers. Use TiCDC sink metrics and Kafka/object-store ingress as the source of truth for CDC throughput.
 - The workload uses prepared statements for insert, update, and delete paths to avoid mixing large SQL string parsing cost into CDC capacity tests.
