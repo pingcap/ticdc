@@ -92,7 +92,7 @@ type DDLEvent struct {
 	eventSize int64 `json:"-"`
 
 	// for simple protocol
-	IsBootstrap bool `msg:"-"`
+	IsBootstrap bool `json:"-"`
 	// NotSync is used to indicate whether the event should be synced to downstream.
 	// If it is true, sink should not sync this event to downstream.
 	// It is used for some special DDL events that do not need to be synced,
@@ -104,11 +104,51 @@ type DDLEvent struct {
 	// to ensure the new truncated table can be handled correctly.
 	// If the DDL involves multiple tables, this field is not effective.
 	// The multiple table DDL event will be handled by filtering querys and table infos.
-	// NOTE: The `msg` tag is a legacy tag kept for backward compatibility.
-	// DDLEventVersion1 still marshals the struct with encoding/json, so changing this
-	// field to `json:"not_sync"` would change the wire key from `NotSync` to
-	// `not_sync` and break mixed-version DDLEvent interoperability.
-	NotSync bool `msg:"not_sync"`
+	// NOTE: DDLEventVersion1 still marshals the struct with encoding/json.
+	// We use json:"not_sync" as the canonical key and keep custom MarshalJSON/
+	// UnmarshalJSON compatibility so both `not_sync` and legacy `NotSync`
+	// are interoperable in mixed-version deployment.
+	NotSync bool `json:"not_sync"`
+}
+
+type ddlEventJSONAlias DDLEvent
+
+type ddlEventJSONCompat struct {
+	ddlEventJSONAlias
+	NotSyncLegacy bool `json:"NotSync"`
+}
+
+type ddlEventJSONDecodeCompat struct {
+	*ddlEventJSONAlias
+	NotSyncLegacy *bool `json:"NotSync"`
+	NotSyncNew    *bool `json:"not_sync"`
+}
+
+// MarshalJSON encodes both new and legacy NotSync keys for mixed-version compatibility.
+func (d DDLEvent) MarshalJSON() ([]byte, error) {
+	return json.Marshal(ddlEventJSONCompat{
+		ddlEventJSONAlias: ddlEventJSONAlias(d),
+		NotSyncLegacy:     d.NotSync,
+	})
+}
+
+// UnmarshalJSON accepts both `not_sync` and legacy `NotSync` keys.
+// If both keys are present, `not_sync` takes precedence.
+func (d *DDLEvent) UnmarshalJSON(data []byte) error {
+	compat := ddlEventJSONDecodeCompat{
+		ddlEventJSONAlias: (*ddlEventJSONAlias)(d),
+	}
+	if err := json.Unmarshal(data, &compat); err != nil {
+		return err
+	}
+	if compat.NotSyncNew != nil {
+		d.NotSync = *compat.NotSyncNew
+		return nil
+	}
+	if compat.NotSyncLegacy != nil {
+		d.NotSync = *compat.NotSyncLegacy
+	}
+	return nil
 }
 
 func (d *DDLEvent) String() string {
@@ -351,35 +391,72 @@ func (t *DDLEvent) decodeV1(data []byte) error {
 	t.eventSize = int64(len(data))
 
 	end := len(data)
-	multipleTableInfosDataSize := binary.BigEndian.Uint64(data[end-8 : end])
-	for i := 0; i < int(multipleTableInfosDataSize); i++ {
-		tableInfoDataSize := binary.BigEndian.Uint64(data[end-8 : end])
+	if end < 8 {
+		return fmt.Errorf("invalid DDLEvent data: length %d is too short", len(data))
+	}
+
+	multipleTableInfoCount := binary.BigEndian.Uint64(data[end-8 : end])
+	if multipleTableInfoCount > uint64((end-8)/8) {
+		return fmt.Errorf("invalid DDLEvent data: too many multiple table infos, count=%d", multipleTableInfoCount)
+	}
+	end -= 8
+
+	t.MultipleTableInfos = t.MultipleTableInfos[:0]
+	if multipleTableInfoCount > 0 {
+		multipleTableInfos := make([]*common.TableInfo, int(multipleTableInfoCount))
+		for i := int(multipleTableInfoCount) - 1; i >= 0; i-- {
+			if end < 8 {
+				return fmt.Errorf("invalid DDLEvent data: missing table info size for multiple table infos")
+			}
+			tableInfoDataSize := binary.BigEndian.Uint64(data[end-8 : end])
+			if tableInfoDataSize > uint64(end-8) {
+				return fmt.Errorf("invalid DDLEvent data: invalid multiple table info size=%d", tableInfoDataSize)
+			}
+			tableInfoData := data[end-8-int(tableInfoDataSize) : end-8]
+			info, err := common.UnmarshalJSONToTableInfo(tableInfoData)
+			if err != nil {
+				return err
+			}
+			multipleTableInfos[i] = info
+			end -= 8 + int(tableInfoDataSize)
+		}
+		t.MultipleTableInfos = append(t.MultipleTableInfos, multipleTableInfos...)
+	}
+
+	if end < 8 {
+		return fmt.Errorf("invalid DDLEvent data: missing tableInfoDataSize")
+	}
+	tableInfoDataSize := binary.BigEndian.Uint64(data[end-8 : end])
+	if tableInfoDataSize > uint64(end-8) {
+		return fmt.Errorf("invalid DDLEvent data: invalid table info size=%d", tableInfoDataSize)
+	}
+	var err error
+	t.TableInfo = nil
+	if tableInfoDataSize > 0 {
 		tableInfoData := data[end-8-int(tableInfoDataSize) : end-8]
 		info, err := common.UnmarshalJSONToTableInfo(tableInfoData)
 		if err != nil {
 			return err
 		}
-		t.MultipleTableInfos = append(t.MultipleTableInfos, info)
-		end -= 8 + int(tableInfoDataSize)
-	}
-	end -= 8 + int(multipleTableInfosDataSize)
-	tableInfoDataSize := binary.BigEndian.Uint64(data[end-8 : end])
-	var err error
-	if tableInfoDataSize > 0 {
-		tableInfoData := data[end-8-int(tableInfoDataSize) : end-8]
-		t.TableInfo, err = common.UnmarshalJSONToTableInfo(tableInfoData)
-		if err != nil {
-			return err
-		}
+		t.TableInfo = info
 	}
 	end -= 8 + int(tableInfoDataSize)
+
+	if end < 8 {
+		return fmt.Errorf("invalid DDLEvent data: missing dispatcherIDDataSize")
+	}
 	dispatcherIDDatSize := binary.BigEndian.Uint64(data[end-8 : end])
+	if dispatcherIDDatSize > uint64(end-8) {
+		return fmt.Errorf("invalid DDLEvent data: invalid dispatcher ID size=%d", dispatcherIDDatSize)
+	}
 	dispatcherIDData := data[end-8-int(dispatcherIDDatSize) : end-8]
 	err = t.DispatcherID.Unmarshal(dispatcherIDData)
 	if err != nil {
 		return err
 	}
-	err = json.Unmarshal(data[:end-8-int(dispatcherIDDatSize)], t)
+
+	restDataEnd := end - 8 - int(dispatcherIDDatSize)
+	err = json.Unmarshal(data[:restDataEnd], t)
 	if err != nil {
 		return err
 	}

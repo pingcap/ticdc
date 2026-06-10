@@ -30,7 +30,7 @@ var (
 )
 
 type logWriter struct {
-	cfg           *writer.LogWriterConfig
+	cfg           *writer.Config
 	backendWriter fileWriter
 }
 
@@ -86,9 +86,9 @@ func (l *dmlWriter) AddDMLEvents(ctx context.Context, events ...*commonEvent.Red
 	for _, event := range events {
 		if event == nil {
 			log.Warn("writing nil event to redo log, ignore this",
-				zap.String("keyspace", l.cfg.ChangeFeedID.Keyspace()),
-				zap.String("changefeed", l.cfg.ChangeFeedID.Name()),
-				zap.String("capture", l.cfg.CaptureID))
+				zap.String("keyspace", l.cfg.ChangeFeedID().Keyspace()),
+				zap.String("changefeed", l.cfg.ChangeFeedID().Name()),
+				zap.String("capture", l.cfg.CaptureID()))
 			continue
 		}
 		select {

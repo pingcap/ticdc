@@ -24,7 +24,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/codec"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
-	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -74,8 +73,8 @@ type encodingWorkerGroup struct {
 	closed     chan error
 }
 
-func newEncodingWorkerGroup(cfg *writer.LogWriterConfig) *encodingWorkerGroup {
-	workerNum := util.GetOrZero(cfg.EncodingWorkerNum)
+func newEncodingWorkerGroup(cfg *writer.Config) *encodingWorkerGroup {
+	workerNum := cfg.EncodingWorkerNum()
 	if workerNum <= 0 {
 		workerNum = redo.DefaultEncodingWorkerNum
 	}
@@ -84,7 +83,7 @@ func newEncodingWorkerGroup(cfg *writer.LogWriterConfig) *encodingWorkerGroup {
 		inputChs[i] = make(chan *commonEvent.RedoRowEvent, redo.DefaultEncodingInputChanSize)
 	}
 	return &encodingWorkerGroup{
-		changefeed: cfg.ChangeFeedID,
+		changefeed: cfg.ChangeFeedID(),
 		inputChs:   inputChs,
 		outputCh:   make(chan *polymorphicRedoEvent, redo.DefaultEncodingOutputChanSize),
 		workerNum:  workerNum,
@@ -122,14 +121,21 @@ func (e *encodingWorkerGroup) Run(ctx context.Context) (err error) {
 
 func (e *encodingWorkerGroup) AddEvent(ctx context.Context, event *commonEvent.RedoRowEvent) error {
 	idx := int((e.nextWorker.Inc() - 1) % uint64(e.workerNum))
-	return e.input(ctx, idx, event)
+	select {
+	case <-ctx.Done():
+		return errors.Trace(context.Cause(ctx))
+	case err := <-e.closed:
+		return errors.ErrRedoWriterStopped.FastGenByArgs(err)
+	case e.inputChs[idx] <- event:
+	}
+	return nil
 }
 
-func (e *encodingWorkerGroup) runWorker(egCtx context.Context, idx int) error {
+func (e *encodingWorkerGroup) runWorker(ctx context.Context, idx int) error {
 	for {
 		select {
-		case <-egCtx.Done():
-			return errors.Trace(egCtx.Err())
+		case <-ctx.Done():
+			return errors.Trace(context.Cause(ctx))
 		case event := <-e.inputChs[idx]:
 			if event == nil {
 				log.Warn("received nil event in redo encoding worker",
@@ -139,37 +145,15 @@ func (e *encodingWorkerGroup) runWorker(egCtx context.Context, idx int) error {
 			}
 			redoLogEvent, err := toPolymorphicDMLEvent(event)
 			if err != nil {
-				return errors.Trace(err)
+				return err
 			}
-			if err := e.output(egCtx, redoLogEvent); err != nil {
-				return errors.Trace(err)
+			select {
+			case <-ctx.Done():
+				return errors.Trace(context.Cause(ctx))
+			case err := <-e.closed:
+				return errors.ErrRedoWriterStopped.FastGenByArgs(err)
+			case e.outputCh <- redoLogEvent:
 			}
 		}
-	}
-}
-
-func (e *encodingWorkerGroup) input(
-	ctx context.Context, idx int, event writer.RedoEvent,
-) error {
-	select {
-	case <-ctx.Done():
-		return errors.Trace(ctx.Err())
-	case err := <-e.closed:
-		return errors.ErrRedoWriterStopped.FastGenByArgs(err)
-	case e.inputChs[idx] <- event:
-		return nil
-	}
-}
-
-func (e *encodingWorkerGroup) output(
-	ctx context.Context, event *polymorphicRedoEvent,
-) error {
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case err := <-e.closed:
-		return errors.ErrRedoWriterStopped.FastGenByArgs(err)
-	case e.outputCh <- event:
-		return nil
 	}
 }

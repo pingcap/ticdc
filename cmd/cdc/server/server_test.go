@@ -14,9 +14,11 @@
 package server
 
 import (
+	"context"
 	"strings"
 	"testing"
 
+	cerror "github.com/pingcap/ticdc/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
 
@@ -117,4 +119,59 @@ func TestNewOptionsDefaultSecurity(t *testing.T) {
 	require.Empty(t, o.serverConfig.Security.CAPath)
 	require.Empty(t, o.serverConfig.Security.CertPath)
 	require.Empty(t, o.serverConfig.Security.KeyPath)
+}
+
+func TestIsNormalServerShutdown(t *testing.T) {
+	testCases := []struct {
+		name      string
+		err       error
+		cancelCtx bool
+		expected  bool
+	}{
+		{
+			name:     "nil error",
+			err:      nil,
+			expected: true,
+		},
+		{
+			name:      "context canceled by shutdown",
+			err:       context.Canceled,
+			cancelCtx: true,
+			expected:  true,
+		},
+		{
+			name:      "wrapped context canceled by shutdown",
+			err:       cerror.Trace(context.Canceled),
+			cancelCtx: true,
+			expected:  true,
+		},
+		{
+			name:     "context canceled without shutdown",
+			err:      context.Canceled,
+			expected: false,
+		},
+		{
+			name:     "wrapped context canceled without shutdown",
+			err:      cerror.Trace(context.Canceled),
+			expected: false,
+		},
+		{
+			name:     "other error",
+			err:      cerror.New("boom"),
+			expected: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			if tc.cancelCtx {
+				cancel()
+			} else {
+				defer cancel()
+			}
+
+			require.Equal(t, tc.expected, isNormalServerShutdown(tc.err, ctx))
+		})
+	}
 }
