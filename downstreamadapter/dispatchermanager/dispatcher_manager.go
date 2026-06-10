@@ -32,11 +32,6 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
-<<<<<<< HEAD
-	"github.com/pingcap/ticdc/pkg/common/event"
-=======
-	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
->>>>>>> 7500c692c (eventcollector: move dispatcher heartbeat to collector and add epoch (#4566))
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"

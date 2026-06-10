@@ -235,7 +235,6 @@ func TestRemoveLastDispatcher(t *testing.T) {
 	require.True(t, ok, "changefeedStat for cfID2 should not be affected")
 }
 
-<<<<<<< HEAD
 func TestNewCongestionControlMessagesSendZeroAvailable(t *testing.T) {
 	localServerID := node.NewID()
 	remoteID := node.ID("remote-event-service")
@@ -312,7 +311,8 @@ func TestNewCongestionControlMessagesSendZeroAvailable(t *testing.T) {
 	dispatcherAvailable, ok := message.GetAvailables()[0].DispatcherAvailable[dispatcherID]
 	require.True(t, ok)
 	require.Greater(t, dispatcherAvailable, uint64(0))
-=======
+}
+
 func TestGroupHeartbeatUsesEpochAndClamp(t *testing.T) {
 	ctx := context.Background()
 	serverInfo := node.NewInfo("127.0.0.1:18300", "")
@@ -431,5 +431,4 @@ func TestGroupHeartbeatResetThenHandshake(t *testing.T) {
 	require.Equal(t, uint8(commonEvent.DispatcherProgressVersion1), heartbeat.DispatcherProgresses[0].Version)
 	require.Equal(t, uint64(210), heartbeat.DispatcherProgresses[0].CheckpointTs)
 	require.Equal(t, uint64(1), heartbeat.DispatcherProgresses[0].Epoch)
->>>>>>> 7500c692c (eventcollector: move dispatcher heartbeat to collector and add epoch (#4566))
 }

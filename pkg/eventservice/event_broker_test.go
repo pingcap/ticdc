@@ -654,7 +654,7 @@ func TestSendHandshakeUsesStartTs(t *testing.T) {
 		UpdateTS:  100,
 	}
 
-	changefeedStatus := broker.getOrSetChangefeedStatus(info.GetChangefeedID(), info.GetSyncPointInterval())
+	changefeedStatus := broker.getOrSetChangefeedStatus(info.GetChangefeedID())
 	disp := newDispatcherStat(info, 1, 1, initialTableInfo, changefeedStatus)
 	disp.checkpointTs.Store(200)
 

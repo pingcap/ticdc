@@ -1161,15 +1161,9 @@ func (c *eventBroker) getOrSetChangefeedStatus(changefeedID common.ChangeFeedID)
 
 func (c *eventBroker) handleDispatcherHeartbeat(heartbeat *DispatcherHeartBeatWithServerID) {
 	responseMap := make(map[string]*event.DispatcherHeartbeatResponse)
-<<<<<<< HEAD
-	for _, dp := range heartbeat.heartbeat.DispatcherProgresses {
-		dispatcherPtr := c.getDispatcher(dp.DispatcherID)
-=======
-	changedChangefeeds := make(map[*changefeedStatus]struct{})
 	now := time.Now().Unix()
 	handleProgress := func(dispatcherID common.DispatcherID, checkpointTs uint64, heartbeatEpoch uint64, checkEpoch bool) {
 		dispatcherPtr := c.getDispatcher(dispatcherID)
->>>>>>> 7500c692c (eventcollector: move dispatcher heartbeat to collector and add epoch (#4566))
 		// Can't find the dispatcher, it means the dispatcher is removed.
 		if dispatcherPtr == nil {
 			response, ok := responseMap[heartbeat.serverID]
@@ -1195,7 +1189,7 @@ func (c *eventBroker) handleDispatcherHeartbeat(heartbeat *DispatcherHeartBeatWi
 			dispatcher.checkpointTs.Store(checkpointTs)
 		}
 		// Update the last received heartbeat time to the current time.
-		dispatcher.lastReceivedHeartbeatTime.Store(time.Now().Unix())
+		dispatcher.lastReceivedHeartbeatTime.Store(now)
 	}
 	if heartbeat.heartbeat.Version >= event.DispatcherHeartbeatVersion2 {
 		for _, dp := range heartbeat.heartbeat.DispatcherProgresses {
