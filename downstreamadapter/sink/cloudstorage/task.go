@@ -126,6 +126,7 @@ func (c *txnCallbacks) postFlush() {
 			f()
 		}
 	}
+	c.postEnqueue()
 }
 
 func (c *txnCallbacks) postEnqueue() {
