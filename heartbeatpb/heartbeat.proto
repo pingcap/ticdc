@@ -170,8 +170,6 @@ message MaintainerStatus {
     DrainProgress drain_progress = 8;
 }
 
-<<<<<<< HEAD
-=======
 // NodeLiveness is node-reported liveness.
 // Coordinator uses it for destination filtering and safe rolling-restart handoff
 // without persisting a separate intent in etcd.
@@ -216,7 +214,6 @@ message SetDispatcherDrainTargetRequest {
     uint64 target_epoch = 2;
 }
 
->>>>>>> 0213a79b4 (maintainer,heartbeatpb: add drain target plumbing (#4759))
 message CoordinatorBootstrapRequest {
     int64 version = 1;
 }
