@@ -46,11 +46,7 @@ func (s *Sink) SinkType() common.SinkType {
 	return common.BlackHoleSinkType
 }
 
-<<<<<<< HEAD
-func (s *sink) SetTableSchemaStore(tableSchemaStore *commonEvent.TableSchemaStore) {
-=======
 func (s *Sink) SetTableSchemaStore(_ *commonEvent.TableSchemaStore) {
->>>>>>> 628deab03 (sink: add metrics for blackhole sink (#5042))
 }
 
 func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
