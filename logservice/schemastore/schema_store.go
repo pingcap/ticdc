@@ -53,13 +53,6 @@ type SchemaStore interface {
 	// info cache.
 	GetTableInfo(keyspaceMeta common.KeyspaceMeta, tableID int64, ts uint64) (*common.TableInfo, error)
 
-	// GetTableNameByID returns the source schema/table name with the largest
-	// version <= ts. Unlike GetTableInfo, it does not require the table
-	// dispatcher to be admitted or registered. DDL admission/precheck uses this
-	// after schema store has applied the DDL but before a newly created table
-	// dispatcher has registered its full table info cache.
-	GetTableNameByID(keyspaceMeta common.KeyspaceMeta, tableID int64, ts uint64) (common.TableName, error)
-
 	// TODO: how to respect tableFilter
 	GetTableDDLEventState(keyspaceMeta common.KeyspaceMeta, tableID int64) (DDLEventState, error)
 
@@ -402,32 +395,6 @@ func (s *schemaStore) GetTableInfo(keyspaceMeta common.KeyspaceMeta, tableID int
 	}()
 	store.waitResolvedTs(tableID, ts, 2*time.Second)
 	return store.dataStorage.getTableInfo(tableID, ts)
-}
-
-func (s *schemaStore) GetTableNameByID(
-	keyspaceMeta common.KeyspaceMeta,
-	tableID int64,
-	ts uint64,
-) (common.TableName, error) {
-	store, err := s.getKeyspaceSchemaStore(keyspaceMeta)
-	if err != nil {
-		return common.TableName{}, err
-	}
-
-	metrics.SchemaStoreGetTableInfoCounter.Inc()
-	start := time.Now()
-	defer func() {
-		metrics.SchemaStoreGetTableInfoLagHist.Observe(time.Since(start).Seconds())
-	}()
-	store.waitResolvedTs(tableID, ts, 2*time.Second)
-	tableInfo, err := store.dataStorage.forceGetTableInfo(tableID, ts)
-	if err != nil {
-		return common.TableName{}, err
-	}
-	if tableInfo == nil {
-		return common.TableName{}, errors.ErrTableIsNotFounded.GenWithStackByArgs("tableID", tableID)
-	}
-	return tableInfo.TableName, nil
 }
 
 func (s *schemaStore) GetTableDDLEventState(keyspaceMeta common.KeyspaceMeta, tableID int64) (DDLEventState, error) {

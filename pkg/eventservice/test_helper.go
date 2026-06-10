@@ -107,18 +107,6 @@ func (m *mockSchemaStore) GetTableInfo(keyspaceMeta common.KeyspaceMeta, tableID
 	return nil, nil
 }
 
-func (m *mockSchemaStore) GetTableNameByID(
-	keyspaceMeta common.KeyspaceMeta,
-	tableID common.TableID,
-	ts common.Ts,
-) (common.TableName, error) {
-	tableInfo, err := m.GetTableInfo(keyspaceMeta, tableID, ts)
-	if err != nil || tableInfo == nil {
-		return common.TableName{}, err
-	}
-	return tableInfo.TableName, nil
-}
-
 func (m *mockSchemaStore) GetAllPhysicalTables(keyspaceMeta common.KeyspaceMeta, snapTs uint64, filter filter.Filter) ([]commonEvent.Table, error) {
 	return m.Tables, nil
 }

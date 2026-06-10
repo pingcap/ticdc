@@ -259,6 +259,21 @@ func (r Router) Route(originSchema, originTable string) (binding RouteBinding, e
 	return NewRouteBinding(originSchema, originTable, targetSchema, targetTable), nil
 }
 
+// MustRoute returns the source-to-target table name binding, and panics if the route is invalid.
+// it should only be called after once called Route which return error.
+func (r Router) MustRoute(originSchema, originTable string) RouteBinding {
+	binding, err := r.Route(originSchema, originTable)
+	if err != nil {
+		log.Panic("table route failed",
+			zap.String("keyspace", r.changefeedID.Keyspace()),
+			zap.String("changefeed", r.changefeedID.Name()),
+			zap.String("schema", originSchema),
+			zap.String("table", originTable),
+			zap.Error(err))
+	}
+	return binding
+}
+
 // matchRule finds the first rule that matches the given schema/table.
 func (r Router) matchRule(schema, table string) (*rule, error) {
 	if table == "" {

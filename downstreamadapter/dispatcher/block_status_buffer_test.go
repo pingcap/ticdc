@@ -206,8 +206,7 @@ func TestWaitingBlockStatusClonesMutableMetadata(t *testing.T) {
 			TargetTable:  "t_routed",
 		},
 	}, nil, nil)
-	routeAdmissions, err := dispatcher.routeTableAdmissionsForBlockState(event)
-	require.NoError(t, err)
+	routeAdmissions := dispatcher.routeTableAdmissionsForBlockState(event)
 
 	status := &heartbeatpb.TableSpanBlockStatus{
 		ID: dispatcherID.ToPB(),
@@ -275,8 +274,7 @@ func TestWaitingBlockStatusClonesMutableMetadata(t *testing.T) {
 			{TableID: 22, OldSchemaID: 10, NewSchemaID: 20},
 		},
 	}
-	routeAdmissions, err = dispatcher.routeTableAdmissionsForBlockState(renameEvent)
-	require.NoError(t, err)
+	routeAdmissions = dispatcher.routeTableAdmissionsForBlockState(renameEvent)
 	require.Equal(t, []*heartbeatpb.RouteTableAdmission{
 		{
 			SourceSchemaName: "db1",
@@ -343,8 +341,7 @@ func TestRouteTableAdmissionsForNameLevelDDLs(t *testing.T) {
 		nil,
 		nil,
 	)
-	admissions, err := dispatcher.routeTableAdmissionsForBlockState(createEvent)
-	require.NoError(t, err)
+	admissions := dispatcher.routeTableAdmissionsForBlockState(createEvent)
 	require.Equal(t, []*heartbeatpb.RouteTableAdmission{
 		{
 			SourceSchemaName: "db",
@@ -364,8 +361,7 @@ func TestRouteTableAdmissionsForNameLevelDDLs(t *testing.T) {
 			},
 		},
 	}
-	admissions, err = dispatcher.routeTableAdmissionsForBlockState(createTablesEvent)
-	require.NoError(t, err)
+	admissions = dispatcher.routeTableAdmissionsForBlockState(createTablesEvent)
 	require.Equal(t, []*heartbeatpb.RouteTableAdmission{
 		{
 			SourceSchemaName: "db",
@@ -391,8 +387,7 @@ func TestRouteTableAdmissionsForNameLevelDDLs(t *testing.T) {
 			DropName: []commonEvent.SchemaTableName{{SchemaName: "db", TableName: "p"}},
 		},
 	}
-	admissions, err = dispatcher.routeTableAdmissionsForBlockState(dropEvent)
-	require.NoError(t, err)
+	admissions = dispatcher.routeTableAdmissionsForBlockState(dropEvent)
 	require.Equal(t, []*heartbeatpb.RouteTableAdmission{
 		{
 			SourceSchemaName: "db",
@@ -420,8 +415,7 @@ func TestRouteTableAdmissionsForNameLevelDDLs(t *testing.T) {
 		nil,
 		nil,
 	)
-	admissions, err = dispatcher.routeTableAdmissionsForBlockState(renameEvent)
-	require.NoError(t, err)
+	admissions = dispatcher.routeTableAdmissionsForBlockState(renameEvent)
 	require.Equal(t, []*heartbeatpb.RouteTableAdmission{
 		{
 			SourceSchemaName: "db",
@@ -450,8 +444,7 @@ func TestRouteTableAdmissionsForNameLevelDDLs(t *testing.T) {
 			},
 		},
 	}
-	admissions, err = dispatcher.routeTableAdmissionsForBlockState(renameTablesEvent)
-	require.NoError(t, err)
+	admissions = dispatcher.routeTableAdmissionsForBlockState(renameTablesEvent)
 	require.Equal(t, []*heartbeatpb.RouteTableAdmission{
 		{
 			SourceSchemaName: "db",
@@ -486,8 +479,7 @@ func TestRouteTableAdmissionsForNameLevelDDLs(t *testing.T) {
 			DropDatabaseName: "db",
 		},
 	}
-	admissions, err = dispatcher.routeTableAdmissionsForBlockState(dropSchemaEvent)
-	require.NoError(t, err)
+	admissions = dispatcher.routeTableAdmissionsForBlockState(dropSchemaEvent)
 	require.Equal(t, []*heartbeatpb.RouteTableAdmission{
 		{
 			SourceSchemaName: "db",
@@ -507,33 +499,15 @@ func TestRouteTableAdmissionsForNameLevelDDLs(t *testing.T) {
 			TableIDs:      []int64{100},
 		},
 	}
-	admissions, err = dispatcher.routeTableAdmissionsForBlockState(partitionEvent)
-	require.NoError(t, err)
+	admissions = dispatcher.routeTableAdmissionsForBlockState(partitionEvent)
 	require.Nil(t, admissions)
 
-	admissions, err = dispatcher.routeTableAdmissionsForBlockState(&commonEvent.DDLEvent{
+	admissions = dispatcher.routeTableAdmissionsForBlockState(&commonEvent.DDLEvent{
 		Type:       byte(model.ActionDropTable),
 		SchemaName: "db",
 		TableName:  "p",
 	})
-	require.NoError(t, err)
 	require.Nil(t, admissions)
-
-	_, err = dispatcher.routeTableAdmissionsForBlockState(&commonEvent.DDLEvent{
-		TableNameChange: &commonEvent.TableNameChange{
-			DropName: []commonEvent.SchemaTableName{{SchemaName: "db"}},
-		},
-	})
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "incomplete route release admission")
-
-	_, err = dispatcher.routeTableAdmissionsForBlockState(&commonEvent.DDLEvent{
-		TableNameChange: &commonEvent.TableNameChange{
-			AddName: []commonEvent.SchemaTableName{{SchemaName: "db"}},
-		},
-	})
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "incomplete route admit admission")
 }
 
 func newRouteAdmissionTestDispatcher(t *testing.T) *BasicDispatcher {
