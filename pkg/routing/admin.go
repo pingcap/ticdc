@@ -22,7 +22,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/util"
 	"go.uber.org/zap"
 )
@@ -190,12 +189,6 @@ func (a *Admin) Apply(commitTs uint64, admissions []Admission) error {
 			return nil
 		}
 	}
-	if !a.isPendingHead(commitTs) {
-		err := errors.ErrTableRouteConflict.GenWithStack(
-			"route transition apply out of order, changefeed=%s, commitTs=%d",
-			a.changefeedID.Name(), commitTs)
-		return a.fail(err)
-	}
 	releases, admits, err := a.applyTransition(transition, true)
 	if err != nil {
 		return a.fail(err)
@@ -248,36 +241,17 @@ func (a *Admin) popPendingHead(commitTs uint64) {
 
 func (a *Admin) buildTransition(admissions []Admission) *routeTransition {
 	transition := &routeTransition{}
-	releaseSet := make(map[TableKey]struct{})
-	schemaSet := make(map[string]struct{})
-	admitSet := make(map[routeBindingKey]struct{})
 	for _, table := range admissions {
 		switch table.Action {
 		case Admit:
-			key := routeBindingKey{source: table.Binding.Source, target: table.Binding.Target}
-			if _, ok := admitSet[key]; ok {
-				continue
-			}
-			admitSet[key] = struct{}{}
 			transition.admits = append(transition.admits, table.Binding)
 		case Release:
-			if _, ok := releaseSet[table.Source]; ok {
-				continue
-			}
-			releaseSet[table.Source] = struct{}{}
 			transition.releases = append(transition.releases, table.Source)
 		case ReleaseSchema:
-			if _, ok := schemaSet[table.Source.Schema]; ok {
-				continue
-			}
-			schemaSet[table.Source.Schema] = struct{}{}
 			transition.releaseSchemas = append(transition.releaseSchemas, table.Source.Schema)
 		default:
 		}
 	}
-	slices.SortFunc(transition.releases, compareTableKey)
-	slices.Sort(transition.releaseSchemas)
-	slices.SortFunc(transition.admits, compareRouteBinding)
 	if len(transition.releases) == 0 &&
 		len(transition.releaseSchemas) == 0 &&
 		len(transition.admits) == 0 {
@@ -354,9 +328,4 @@ func (a *Admin) fail(err error) error {
 		a.reportError(err)
 	}
 	return err
-}
-
-type routeBindingKey struct {
-	source TableKey
-	target TableKey
 }
