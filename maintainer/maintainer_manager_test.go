@@ -138,9 +138,9 @@ func cleanupMaintainerMetricsForTest(t *testing.T, cfID common.ChangeFeedID) {
 	t.Cleanup(cleanup)
 }
 
-func TestManagerMaintainerSet_AddMaintainerReplacesOlderEpoch(t *testing.T) {
+func TestManagerMaintainerSet_AddMaintainerRejectsLiveNewerEpoch(t *testing.T) {
 	maintainers := newManagerMaintainerSetForAddTest(t)
-	cfID := common.NewChangeFeedIDWithName("replace-maintainer-metrics", common.DefaultKeyspaceName)
+	cfID := common.NewChangeFeedIDWithName("reject-live-newer-epoch", common.DefaultKeyspaceName)
 	cleanupMaintainerMetricsForTest(t, cfID)
 	noDrainTarget := func() (node.ID, uint64) { return "", 0 }
 	keyspace, changefeed := cfID.Keyspace(), cfID.Name()
@@ -154,17 +154,17 @@ func TestManagerMaintainerSet_AddMaintainerReplacesOlderEpoch(t *testing.T) {
 	maintainers.handleAddMaintainer(newAddMaintainerRequestForEpoch(t, cfID, 2, 2), noDrainTarget)
 	currentMaintainer, ok := maintainers.getMaintainer(cfID)
 	require.True(t, ok)
-	require.False(t, oldMaintainer == currentMaintainer)
-	require.Equal(t, uint64(2), currentMaintainer.currentMaintainerEpoch())
+	require.True(t, oldMaintainer == currentMaintainer)
+	require.Equal(t, uint64(1), currentMaintainer.currentMaintainerEpoch())
 	require.Equal(t, float64(1), promtestutil.ToFloat64(metrics.MaintainerGauge.WithLabelValues(keyspace, changefeed)))
 
 	currentMaintainer.checkpointTsGauge.Set(123)
 	require.Equal(t, float64(123), promtestutil.ToFloat64(metrics.MaintainerCheckpointTsGauge.WithLabelValues(keyspace, changefeed)))
 }
 
-func TestManagerMaintainerSet_CleanupRemovedMaintainerKeepsReplacement(t *testing.T) {
+func TestManagerMaintainerSet_AddMaintainerAfterStoppedKeepsReplacement(t *testing.T) {
 	maintainers := newManagerMaintainerSetForAddTest(t)
-	cfID := common.NewChangeFeedIDWithName("cleanup-maintainer-replacement", common.DefaultKeyspaceName)
+	cfID := common.NewChangeFeedIDWithName("stopped-maintainer-replacement", common.DefaultKeyspaceName)
 	cleanupMaintainerMetricsForTest(t, cfID)
 	noDrainTarget := func() (node.ID, uint64) { return "", 0 }
 	keyspace, changefeed := cfID.Keyspace(), cfID.Name()
@@ -173,11 +173,15 @@ func TestManagerMaintainerSet_CleanupRemovedMaintainerKeepsReplacement(t *testin
 	oldMaintainer, ok := maintainers.getMaintainer(cfID)
 	require.True(t, ok)
 
+	oldMaintainer.markRemoved()
+	oldMaintainer.scheduleState.Store(int32(heartbeatpb.ComponentState_Stopped))
+
 	maintainers.handleAddMaintainer(newAddMaintainerRequestForEpoch(t, cfID, 2, 2), noDrainTarget)
 	currentMaintainer, ok := maintainers.getMaintainer(cfID)
 	require.True(t, ok)
 	require.False(t, oldMaintainer == currentMaintainer)
-	require.True(t, oldMaintainer.removed.Load())
+	require.Equal(t, uint64(2), currentMaintainer.currentMaintainerEpoch())
+	require.Equal(t, float64(1), promtestutil.ToFloat64(metrics.MaintainerGauge.WithLabelValues(keyspace, changefeed)))
 
 	currentMaintainer.checkpointTsGauge.Set(456)
 	maintainers.cleanupRemovedMaintainer(cfID, oldMaintainer)
@@ -187,6 +191,7 @@ func TestManagerMaintainerSet_CleanupRemovedMaintainerKeepsReplacement(t *testin
 	require.Equal(t, float64(456), promtestutil.ToFloat64(metrics.MaintainerCheckpointTsGauge.WithLabelValues(keyspace, changefeed)))
 
 	currentMaintainer.markRemoved()
+	currentMaintainer.scheduleState.Store(int32(heartbeatpb.ComponentState_Stopped))
 	maintainers.cleanupRemovedMaintainer(cfID, currentMaintainer)
 	_, ok = maintainers.getMaintainer(cfID)
 	require.False(t, ok)
@@ -239,7 +244,7 @@ func TestManagerMaintainerSet_AddMaintainerDoesNotCreateRejectedDuplicate(t *tes
 	require.True(t, ok)
 	require.Equal(t, uint64(2), currentMaintainer.currentMaintainerEpoch())
 
-	rejectedEpochs := []uint64{2, 1, 0}
+	rejectedEpochs := []uint64{3, 2, 1, 0}
 	for _, requestEpoch := range rejectedEpochs {
 		t.Run("requestEpoch"+strconv.FormatUint(requestEpoch, 10), func(t *testing.T) {
 			require.False(t, maintainers.mayRegisterMaintainerForAdd(cfID, requestEpoch))

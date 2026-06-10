@@ -231,7 +231,11 @@ func (p *managerMaintainerSet) mayRegisterMaintainerForAdd(
 		return true
 	}
 	existing := registered.(*Maintainer)
-	return shouldReplaceMaintainerForAdd(existing.currentMaintainerEpoch(), requestEpoch)
+	allowed := canRegisterAfterExistingMaintainer(existing, requestEpoch)
+	if !allowed {
+		logRejectedAddMaintainer(changefeedID, existing, requestEpoch)
+	}
+	return allowed
 }
 
 func (p *managerMaintainerSet) registerMaintainerForAdd(
@@ -242,31 +246,34 @@ func (p *managerMaintainerSet) registerMaintainerForAdd(
 	p.registryMu.Lock()
 	defer p.registryMu.Unlock()
 
-	for {
-		registered, loaded := p.registry.Load(changefeedID)
-		if !loaded {
-			maintainer := newMaintainer()
-			registered, loaded = p.registry.LoadOrStore(changefeedID, maintainer)
-			if !loaded {
-				return maintainer
-			}
-			maintainer.closeSuperseded()
-		}
-		existing := registered.(*Maintainer)
-		existingEpoch := existing.currentMaintainerEpoch()
-		if !shouldReplaceMaintainerForAdd(existingEpoch, requestEpoch) {
-			return nil
-		}
+	registered, loaded := p.registry.Load(changefeedID)
+	if !loaded {
 		maintainer := newMaintainer()
-		if p.registry.CompareAndSwap(changefeedID, existing, maintainer) {
-			existing.closeSuperseded()
-			return maintainer
-		}
-		maintainer.closeSuperseded()
+		p.registry.Store(changefeedID, maintainer)
+		return maintainer
 	}
+	existing := registered.(*Maintainer)
+	if !canRegisterAfterExistingMaintainer(existing, requestEpoch) {
+		logRejectedAddMaintainer(changefeedID, existing, requestEpoch)
+		return nil
+	}
+	// The old maintainer has fully stopped, so it is safe to release the
+	// shared metric labels before the new maintainer creates its own metric
+	// children for the same changefeed.
+	existing.Close()
+	maintainer := newMaintainer()
+	p.registry.Store(changefeedID, maintainer)
+	return maintainer
 }
 
-func shouldReplaceMaintainerForAdd(existingEpoch, requestEpoch uint64) bool {
+func canRegisterAfterExistingMaintainer(existing *Maintainer, requestEpoch uint64) bool {
+	if !isMaintainerFullyStopped(existing) {
+		return false
+	}
+	return isNewerMaintainerEpoch(existing.currentMaintainerEpoch(), requestEpoch)
+}
+
+func isNewerMaintainerEpoch(existingEpoch, requestEpoch uint64) bool {
 	if requestEpoch == 0 {
 		return false
 	}
@@ -274,6 +281,24 @@ func shouldReplaceMaintainerForAdd(existingEpoch, requestEpoch uint64) bool {
 		return true
 	}
 	return requestEpoch > existingEpoch
+}
+
+func isMaintainerFullyStopped(maintainer *Maintainer) bool {
+	return maintainer.removed.Load() &&
+		heartbeatpb.ComponentState(maintainer.scheduleState.Load()) == heartbeatpb.ComponentState_Stopped
+}
+
+func logRejectedAddMaintainer(changefeedID common.ChangeFeedID, existing *Maintainer, requestEpoch uint64) {
+	existingEpoch := existing.currentMaintainerEpoch()
+	if requestEpoch <= existingEpoch || isMaintainerFullyStopped(existing) {
+		return
+	}
+	log.Warn("reject add maintainer request because existing maintainer is still running",
+		zap.Stringer("changefeedID", changefeedID),
+		zap.Uint64("requestMaintainerEpoch", requestEpoch),
+		zap.Uint64("existingMaintainerEpoch", existingEpoch),
+		zap.Bool("existingRemoved", existing.removed.Load()),
+		zap.String("existingState", heartbeatpb.ComponentState(existing.scheduleState.Load()).String()))
 }
 
 // handleRemoveMaintainer handles both normal remove and cascade-remove flows.

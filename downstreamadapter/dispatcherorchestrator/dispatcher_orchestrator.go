@@ -456,20 +456,11 @@ func (m *DispatcherOrchestrator) handleCloseRequest(
 		if manager.IsMaintainerRequestAllowed(from, req.MaintainerEpoch) {
 			if closed := manager.TryClose(req.Removed); closed {
 				m.mutex.Lock()
-				currentManager, stillExists := m.dispatcherManagers[cfId]
-				switch {
-				case stillExists && currentManager == manager:
-					delete(m.dispatcherManagers, cfId)
-					m.recordClosedMaintainerEpochLocked(cfId, req.MaintainerEpoch, req.Removed)
-					decGauge = true
-					response.Success = true
-				case !stillExists:
-					m.recordClosedMaintainerEpochLocked(cfId, req.MaintainerEpoch, req.Removed)
-					response.Success = true
-				default:
-					response.Success = false
-				}
+				delete(m.dispatcherManagers, cfId)
+				m.recordClosedMaintainerEpochLocked(cfId, req.MaintainerEpoch, req.Removed)
 				m.mutex.Unlock()
+				decGauge = true
+				response.Success = true
 			} else {
 				response.Success = false
 			}

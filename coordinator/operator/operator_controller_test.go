@@ -417,8 +417,7 @@ func TestController_StopChangefeedDuringMoveUsesOriginEpoch(t *testing.T) {
 					State:           heartbeatpb.ComponentState_Stopped,
 					MaintainerEpoch: oldEpoch,
 				})
-				require.True(t, moveOp.originNodeStopped)
-				require.False(t, moveOp.bind)
+				require.Equal(t, moveMaintainerStateOriginStopped, moveOp.state)
 			}
 
 			stopOp := oc.StopChangefeed(context.Background(), cfID, false)

@@ -370,15 +370,6 @@ func (m *Maintainer) Close() {
 	m.cleanupMetrics()
 }
 
-// closeSuperseded stops a maintainer that lost ownership of its registry slot.
-// It must keep per-changefeed metrics registered because the winning maintainer
-// uses the same label set and has already cached those metric children.
-func (m *Maintainer) closeSuperseded() {
-	m.cancel()
-	m.controller.Stop()
-	m.markRemoved()
-}
-
 func (m *Maintainer) GetMaintainerStatus() *heartbeatpb.MaintainerStatus {
 	m.runningErrors.Lock()
 	defer m.runningErrors.Unlock()
