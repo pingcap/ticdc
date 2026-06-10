@@ -21,7 +21,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/util"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	parser_model "github.com/pingcap/tidb/pkg/parser/model"
-	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	tiTypes "github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
@@ -391,7 +390,7 @@ func (r *RedoDDLEvent) ToDDLEvent() *DDLEvent {
 	columns := make([]*timodel.ColumnInfo, 0, len(r.DDL.Columns))
 	for _, col := range r.DDL.Columns {
 		colInfo := &timodel.ColumnInfo{
-			Name:    ast.NewCIStr(col.Name),
+			Name:    parser_model.NewCIStr(col.Name),
 			State:   timodel.StatePublic,
 			Version: col.Version,
 		}
@@ -406,7 +405,7 @@ func (r *RedoDDLEvent) ToDDLEvent() *DDLEvent {
 	}
 	tableInfo := commonType.WrapTableInfo(r.TableName.Schema, &timodel.TableInfo{
 		ID:      r.TableName.TableID,
-		Name:    ast.NewCIStr(r.TableName.Table),
+		Name:    parser_model.NewCIStr(r.TableName.Table),
 		Columns: columns,
 	})
 	tableInfo.TableName.IsPartition = r.TableName.IsPartition
