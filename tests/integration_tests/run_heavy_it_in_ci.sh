@@ -54,11 +54,7 @@ mysql_groups=(
 	# G11
 	'multi_changefeeds ddl_wait ddl_reentrant force_replicate_table multi_source'
 	# G12
-<<<<<<< HEAD
-	'ddl_with_random_move_table'
-=======
-	'ddl_with_random_move_table http_api_tls cli_tls_with_auth'
->>>>>>> 21bf02628 (schemastore: fix create table like with unqualified source table (#5023))
+	'ddl_with_random_move_table cli_tls_with_auth'
 	# G13
 	# 'tidb_mysql_test fail_over region_merge fail_over_ddl_mix_random_delay'
 	'fail_over region_merge fail_over_ddl_mix_random_delay'

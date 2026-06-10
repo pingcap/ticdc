@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/ast"
+	"github.com/pingcap/tidb/pkg/parser/format"
 	parser_model "github.com/pingcap/tidb/pkg/parser/model"
 	"go.uber.org/zap"
 )
@@ -647,8 +648,8 @@ func setReferTableForCreateTableLike(event *PersistedDDLEvent, args buildPersist
 		return
 	}
 	if referSchemaInfo.qualifyQuery {
-		createStmt.ReferTable.Schema = ast.NewCIStr(referSchemaInfo.schemaName)
-		query, err := commonEvent.Restore(createStmt)
+		createStmt.ReferTable.Schema = parser_model.NewCIStr(referSchemaInfo.schemaName)
+		query, err := restoreCreateTableLikeDDL(createStmt)
 		if err != nil {
 			log.Warn("restore create table like ddl failed",
 				zap.String("schema", referSchemaInfo.schemaName),
@@ -673,6 +674,20 @@ func setReferTableForCreateTableLike(event *PersistedDDLEvent, args buildPersist
 			event.ReferTablePartitionIDs = append(event.ReferTablePartitionIDs, id)
 		}
 	}
+}
+
+func restoreCreateTableLikeDDL(stmt *ast.CreateTableStmt) (string, error) {
+	var sb strings.Builder
+	restoreFlags := format.RestoreTiDBSpecialComment
+	restoreFlags |= format.RestoreNameBackQuotes
+	restoreFlags |= format.RestoreKeyWordUppercase
+	restoreFlags |= format.RestoreStringSingleQuotes
+	restoreFlags |= format.SkipPlacementRuleForRestore
+	restoreFlags |= format.RestoreWithTTLEnableOff
+	if err := stmt.Restore(format.NewRestoreCtx(restoreFlags, &sb)); err != nil {
+		return "", cerror.Trace(err)
+	}
+	return sb.String(), nil
 }
 
 func resolveCreateTableLikeReferSchema(
