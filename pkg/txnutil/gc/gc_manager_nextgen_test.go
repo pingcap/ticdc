@@ -137,7 +137,7 @@ func TestEnsureChangefeedStartTsSafetyUsesServiceSafePointV2WhenEnabled(t *testi
 
 	const (
 		keyspaceID = uint32(1)
-		startTs    = uint64(100)
+		startTs    = uint64(99)
 	)
 	changefeedID := common.NewChangeFeedIDWithName("test-changefeed", "default")
 
@@ -153,7 +153,7 @@ func TestEnsureChangefeedStartTsSafetyUsesServiceSafePointV2WhenEnabled(t *testi
 				"because start-ts 100 is earlier than or equal to GC safepoint at 200",
 		},
 		{
-			name:         "accept start ts equal to minimum safe point",
+			name:         "accept start ts bigger than the minimum safe point",
 			minSafePoint: startTs,
 		},
 	}
