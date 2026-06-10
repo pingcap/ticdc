@@ -133,8 +133,6 @@ func TestPulsarSinkBasicFunctionality(t *testing.T) {
 
 	require.Equal(t, count.Load(), int64(3))
 }
-<<<<<<< HEAD
-=======
 
 func TestPulsarSinkBatchConfig(t *testing.T) {
 	sink := &sink{}
@@ -196,4 +194,3 @@ func TestPulsarSinkNewWithComponentReturnsDDLProducerError(t *testing.T) {
 	require.Error(t, err)
 	require.EqualError(t, err, expectedErr.Error())
 }
->>>>>>> 35f308fb1 (sink: fix a panic when closing pulsar sink (#4938))
