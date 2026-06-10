@@ -941,8 +941,6 @@ github.com/tidwall/rtred v0.1.2 h1:exmoQtOLvDoO8ud++6LwVsAMTu0KPzLTUrMln8u1yu8=
 github.com/tidwall/rtred v0.1.2/go.mod h1:hd69WNXQ5RP9vHd7dqekAz+RIdtfBogmglkZSRxCHFQ=
 github.com/tidwall/tinyqueue v0.1.1 h1:SpNEvEggbpyN5DIReaJ2/1ndroY8iyEGxPYxoSaymYE=
 github.com/tidwall/tinyqueue v0.1.1/go.mod h1:O/QNHwrnjqr6IHItYrzoHAKYhBkLI67Q096fQP5zMYw=
-github.com/tikv/client-go/v2 v2.0.8-0.20260609070524-8df1c02428d9 h1:5lleEEMr9u0DiBRKlhZfaTeZygiOmbV5+aHbZH8Cgcw=
-github.com/tikv/client-go/v2 v2.0.8-0.20260609070524-8df1c02428d9/go.mod h1:ifrCFaHJeZDcz6kded2eVwn+t3Auvqve8hI9vLIoVBg=
 github.com/tikv/pd v1.1.0-beta.0.20260604125942-9f1c47b1e851 h1:2beLPo1vMSw9gpdcC5Fam/P5HaXRPmX4TEN2fv+7nKE=
 github.com/tikv/pd v1.1.0-beta.0.20260604125942-9f1c47b1e851/go.mod h1:Pb3H0cSkdiEdj761wzNziNHFOLVYuQmNgxQKp35UoxQ=
 github.com/tikv/pd/client v0.0.0-20260604125942-9f1c47b1e851 h1:WhOxs9dUc4hZv9TkRTQ3e+jEIWpn5B2S+yzXZE7qn38=
@@ -985,6 +983,8 @@ github.com/vmihailenco/tagparser/v2 v2.0.0 h1:y09buUbR+b5aycVFQs/g70pqKVZNBmxwAh
 github.com/vmihailenco/tagparser/v2 v2.0.0/go.mod h1:Wri+At7QHww0WTrCBeu4J6bNtoV6mEfg5OIWRZA9qds=
 github.com/wangjohn/quickselect v0.0.0-20161129230411-ed8402a42d5f h1:9DDCDwOyEy/gId+IEMrFHLuQ5R/WV0KNxWLler8X2OY=
 github.com/wangjohn/quickselect v0.0.0-20161129230411-ed8402a42d5f/go.mod h1:8sdOQnirw1PrcnTJYkmW1iOHtUmblMmGdUOHyWYycLI=
+github.com/wk989898/client-go/v2 v2.0.8-0.20260610063407-96a7a115a8a9 h1:la8ImwEdfIpjWlCeu16jDqEKXy//Y4N2CBY/YdaADPo=
+github.com/wk989898/client-go/v2 v2.0.8-0.20260610063407-96a7a115a8a9/go.mod h1:tH3oIes4bPlpNn2W5Lghg0dAbMVNflPvD+nDqdLMwd0=
 github.com/wk989898/tiflow v0.0.0-20260604065511-33c2eebdb79f h1:zcKZ7xfSlrHEnQiJrLvLzocQ5oWaq04o1mZ+6xWvQ6w=
 github.com/wk989898/tiflow v0.0.0-20260604065511-33c2eebdb79f/go.mod h1:eSgC/TFKS21LoXZ1fE9nc2GncDjdHMljFB9aAcSWIaA=
 github.com/xdg-go/pbkdf2 v1.0.0 h1:Su7DPu48wXMwC3bs7MCNG+z4FhcyEuz5dlvchbq0B0c=
