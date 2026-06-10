@@ -401,5 +401,5 @@ replace (
 	// copy from TiDB
 	github.com/go-ldap/ldap/v3 v3.4.4 => github.com/yangkeao/ldap/v3 v3.4.5-0.20230421065457-369a3bab1117
 	github.com/pingcap/tiflow => github.com/wk989898/tiflow v0.0.0-20260604065511-33c2eebdb79f
-	github.com/tikv/client-go/v2 => github.com/wk989898/client-go/v2 v2.0.8-0.20260610063407-96a7a115a8a9
+// github.com/tikv/client-go/v2 => github.com/wk989898/client-go/v2 v2.0.8-0.20260610063407-96a7a115a8a9
 )
