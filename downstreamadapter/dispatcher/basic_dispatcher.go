@@ -21,6 +21,7 @@ import (
 
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/routing"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -28,6 +29,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/logger"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	tidbTypes "github.com/pingcap/tidb/pkg/types"
 	"go.uber.org/atomic"
@@ -42,7 +44,9 @@ type DispatcherService interface {
 	GetStartTs() uint64
 	GetBDRMode() bool
 	GetChangefeedID() common.ChangeFeedID
+	GetEventCollectorBatchConfig() (batchCount int, batchBytes int)
 	GetTableSpan() *heartbeatpb.TableSpan
+	GetRouter() routing.Router
 	GetTimezone() string
 	GetIntegrityConfig() *eventpb.IntegrityConfig
 	GetFilterConfig() *eventpb.FilterConfig
@@ -76,7 +80,6 @@ type Dispatcher interface {
 	GetHeartBeatInfo(h *HeartBeatInfo)
 	GetComponentStatus() heartbeatpb.ComponentState
 	GetBlockEventStatus() *heartbeatpb.State
-	GetBlockStatusesChan() chan *heartbeatpb.TableSpanBlockStatus
 	GetEventSizePerSecond() float32
 	IsTableTriggerDispatcher() bool
 	DealWithBlockEvent(event commonEvent.BlockEvent)
@@ -164,6 +167,11 @@ type BasicDispatcher struct {
 	// Shared info containing all common configuration and resources
 	sharedInfo *SharedInfo
 
+	// normal event dispatchers set them by the shared defaults.
+	// redo dispatchers set them by the redo specific defaults.
+	eventCollectorBatchCount int
+	eventCollectorBatchBytes int
+
 	// sink is the sink for this dispatcher
 	sink sink.Sink
 
@@ -231,31 +239,35 @@ func NewBasicDispatcher(
 	schemaIDToDispatchers *SchemaIDToDispatchers,
 	skipSyncpointAtStartTs bool,
 	skipDMLAsStartTs bool,
+	eventCollectorBatchCount int,
+	eventCollectorBatchBytes int,
 	currentPDTs uint64,
 	mode int64,
 	sink sink.Sink,
 	sharedInfo *SharedInfo,
 ) *BasicDispatcher {
 	dispatcher := &BasicDispatcher{
-		id:                     id,
-		tableSpan:              tableSpan,
-		isCompleteTable:        common.IsCompleteSpan(tableSpan),
-		startTs:                startTs,
-		skipSyncpointAtStartTs: skipSyncpointAtStartTs,
-		skipDMLAsStartTs:       skipDMLAsStartTs,
-		sharedInfo:             sharedInfo,
-		sink:                   sink,
-		componentStatus:        newComponentStateWithMutex(heartbeatpb.ComponentState_Initializing),
-		isRemoving:             atomic.Bool{},
-		duringHandleEvents:     atomic.Bool{},
-		blockEventStatus:       BlockEventStatus{blockPendingEvent: nil},
-		tableProgress:          NewTableProgress(),
-		schemaID:               schemaID,
-		schemaIDToDispatchers:  schemaIDToDispatchers,
-		resendTaskMap:          newResendTaskMap(),
-		creationPDTs:           currentPDTs,
-		mode:                   mode,
-		BootstrapState:         BootstrapFinished,
+		id:                       id,
+		tableSpan:                tableSpan,
+		isCompleteTable:          common.IsCompleteSpan(tableSpan),
+		startTs:                  startTs,
+		skipSyncpointAtStartTs:   skipSyncpointAtStartTs,
+		skipDMLAsStartTs:         skipDMLAsStartTs,
+		sharedInfo:               sharedInfo,
+		eventCollectorBatchCount: eventCollectorBatchCount,
+		eventCollectorBatchBytes: eventCollectorBatchBytes,
+		sink:                     sink,
+		componentStatus:          newComponentStateWithMutex(heartbeatpb.ComponentState_Initializing),
+		isRemoving:               atomic.Bool{},
+		duringHandleEvents:       atomic.Bool{},
+		blockEventStatus:         BlockEventStatus{blockPendingEvent: nil},
+		tableProgress:            NewTableProgress(),
+		schemaID:                 schemaID,
+		schemaIDToDispatchers:    schemaIDToDispatchers,
+		resendTaskMap:            newResendTaskMap(),
+		creationPDTs:             currentPDTs,
+		mode:                     mode,
+		BootstrapState:           BootstrapFinished,
 	}
 	dispatcher.resolvedTs.Store(startTs)
 
@@ -478,9 +490,9 @@ func (d *BasicDispatcher) isFirstEvent(event commonEvent.Event) bool {
 }
 
 func (d *BasicDispatcher) GetHeartBeatInfo(h *HeartBeatInfo) {
-	h.Watermark.CheckpointTs = d.GetCheckpointTs()
-	h.Watermark.ResolvedTs = d.GetResolvedTs()
-	h.Watermark.LastSyncedTs = d.GetLastSyncedTs()
+	h.CheckpointTs = d.GetCheckpointTs()
+	h.ResolvedTs = d.GetResolvedTs()
+	h.LastSyncedTs = d.GetLastSyncedTs()
 	h.Id = d.GetId()
 	h.ComponentStatus = d.GetComponentStatus()
 	h.IsRemoving = d.GetRemovingStatus()
@@ -579,7 +591,7 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 		if log.GetLevel() == zapcore.DebugLevel {
 			log.Debug("dispatcher receive all event",
 				zap.Stringer("dispatcher", d.id), zap.Int64("mode", d.mode),
-				zap.String("eventType", commonEvent.TypeToString(dispatcherEvent.Event.GetType())),
+				zap.String("eventType", commonEvent.TypeToString(dispatcherEvent.GetType())),
 				zap.Any("event", dispatcherEvent.Event))
 		}
 
@@ -738,8 +750,9 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 }
 
 // HandleDispatcherStatus handles the dispatcher status from the maintainer to process block events.
-// Each dispatcher status may contain an ACK info or a dispatcher action or both.
+// Each dispatcher status may contain an ACK info, an ignored-block hint, or a dispatcher action.
 // If we get an ack info, we need to check whether the ack is for the ddl event in resend task map. If so, we can cancel the resend task.
+// If we get an ignored-block hint for the current waiting event, we schedule one fast retry while keeping the slow fallback resend task.
 // If we get a dispatcher action, we need to check whether the action is for the current pending ddl event. If so, we can deal the ddl event based on the action.
 // 1. If the action is a write, we need to add the ddl event to the sink for writing to downstream.
 // 2. If the action is a pass, we just need to pass the event
@@ -749,11 +762,13 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 // and return await=true.
 // The status path will be waked up after the action finishes.
 func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.DispatcherStatus) (await bool) {
-	// log.Debug("dispatcher handle dispatcher status",
-	// 	zap.String("dispatcherStatus", common.FormatDispatcherStatus(dispatcherStatus)),
-	// 	zap.Stringer("dispatcher", d.id),
-	// 	zap.Any("action", dispatcherStatus.GetAction()),
-	// 	zap.Any("ack", dispatcherStatus.GetAck()))
+	if logger.IsDebugEnabled() {
+		log.Debug("dispatcher handle dispatcher status",
+			zap.String("dispatcherStatus", common.FormatDispatcherStatus(dispatcherStatus)),
+			zap.Stringer("dispatcher", d.id),
+			zap.Any("action", dispatcherStatus.GetAction()),
+			zap.Any("ack", dispatcherStatus.GetAck()))
+	}
 
 	// Step1: deal with the ack info
 	ack := dispatcherStatus.GetAck()
@@ -765,7 +780,22 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 		d.cancelResendTask(identifier)
 	}
 
-	// Step2: deal with the dispatcher action
+	// Step2: deal with the ignored block status
+	ignoredBlockStatus := dispatcherStatus.GetIgnoredBlockStatus()
+	if ignoredBlockStatus != nil && d.blockEventStatus.ignoredStatusMatches(ignoredBlockStatus) {
+		identifier := BlockEventIdentifier{
+			CommitTs:    ignoredBlockStatus.CommitTs,
+			IsSyncPoint: ignoredBlockStatus.IsSyncPoint,
+		}
+		if task := d.resendTaskMap.Get(identifier); task != nil {
+			_ = task.Execute()
+		} else {
+			log.Info("resendTask not found; fast resend path cannot be executed.", zap.Uint64("CommitTs", ignoredBlockStatus.CommitTs), zap.Bool("IsSyncPoint", ignoredBlockStatus.IsSyncPoint))
+		}
+		return false
+	}
+
+	// Step3: deal with the dispatcher action
 	action := dispatcherStatus.GetAction()
 	if action != nil {
 		pendingEvent := d.blockEventStatus.getEvent()
@@ -835,17 +865,8 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 			}
 		}
 
-		// Step3: whether the outdate message or not, we need to return message show we have finished the event.
-		d.sharedInfo.blockStatusesChan <- &heartbeatpb.TableSpanBlockStatus{
-			ID: d.id.ToPB(),
-			State: &heartbeatpb.State{
-				IsBlocked:   true,
-				BlockTs:     action.CommitTs,
-				IsSyncPoint: action.IsSyncPoint,
-				Stage:       heartbeatpb.BlockStage_DONE,
-			},
-			Mode: d.GetMode(),
-		}
+		// Step4: whether the outdate message or not, we need to return message show we have finished the event.
+		d.offerDoneBlockStatus(action.CommitTs, action.IsSyncPoint)
 	}
 	return false
 }
@@ -881,17 +902,20 @@ func (d *BasicDispatcher) reportBlockedEventDone(
 	actionCommitTs uint64,
 	actionIsSyncPoint bool,
 ) {
-	d.sharedInfo.blockStatusesChan <- &heartbeatpb.TableSpanBlockStatus{
-		ID: d.id.ToPB(),
-		State: &heartbeatpb.State{
-			IsBlocked:   true,
-			BlockTs:     actionCommitTs,
-			IsSyncPoint: actionIsSyncPoint,
-			Stage:       heartbeatpb.BlockStage_DONE,
-		},
-		Mode: d.GetMode(),
-	}
+	d.offerDoneBlockStatus(actionCommitTs, actionIsSyncPoint)
 	GetDispatcherStatusDynamicStream().Wake(d.id)
+}
+
+// cloneInfluencedTablesPB breaks the alias between the source event and the
+// protobuf reused by resend tasks.
+func cloneInfluencedTablesPB(
+	influencedTables *commonEvent.InfluencedTables,
+) *heartbeatpb.InfluencedTables {
+	status := influencedTables.ToPB()
+	if status != nil && status.TableIDs != nil {
+		status.TableIDs = append([]int64(nil), status.TableIDs...)
+	}
+	return status
 }
 
 // shouldBlock check whether the event should be blocked(to wait maintainer response)
@@ -1004,14 +1028,14 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 			return
 		}
 
-		message := &heartbeatpb.TableSpanBlockStatus{
+		// This protobuf may be resent for a long time, so every slice-backed field
+		// must be detached from the mutable source event before we enqueue it.
+		status := &heartbeatpb.TableSpanBlockStatus{
 			ID: d.id.ToPB(),
 			State: &heartbeatpb.State{
-				IsBlocked:         false,
 				BlockTs:           event.GetCommitTs(),
-				NeedDroppedTables: event.GetNeedDroppedTables().ToPB(),
+				NeedDroppedTables: cloneInfluencedTablesPB(event.GetNeedDroppedTables()),
 				NeedAddedTables:   commonEvent.ToTablesPB(event.GetNeedAddedTables()),
-				IsSyncPoint:       false, // sync point event must should block
 				Stage:             heartbeatpb.BlockStage_NONE,
 			},
 			Mode: d.GetMode(),
@@ -1038,11 +1062,11 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 			// Thus, we add the event to tableProgress again, and call event postFunc when the ack is received from maintainer.
 			event.ClearPostFlushFunc()
 			d.tableProgress.Add(event)
-			d.resendTaskMap.Set(identifier, newResendTask(message, d, event.PostFlush))
+			d.resendTaskMap.Set(identifier, newResendTask(d, status, event.PostFlush))
 		} else {
-			d.resendTaskMap.Set(identifier, newResendTask(message, d, nil))
+			d.resendTaskMap.Set(identifier, newResendTask(d, status, nil))
 		}
-		d.sharedInfo.blockStatusesChan <- message
+		d.offerBlockStatus(status)
 	})
 
 	// dealing with events which update schema ids
@@ -1147,13 +1171,19 @@ func (d *BasicDispatcher) reportBlockedEventToMaintainer(event commonEvent.Block
 		d.pendingACKCount.Add(1)
 	}
 	d.blockEventStatus.setBlockEvent(event, heartbeatpb.BlockStage_WAITING)
-	message := &heartbeatpb.TableSpanBlockStatus{
+	identifier := BlockEventIdentifier{
+		CommitTs:    event.GetCommitTs(),
+		IsSyncPoint: event.GetType() == commonEvent.TypeSyncPointEvent,
+	}
+	// WAITING retries reuse this protobuf object, so clone mutable metadata once
+	// here and keep resend on the same immutable payload.
+	status := &heartbeatpb.TableSpanBlockStatus{
 		ID: d.id.ToPB(),
 		State: &heartbeatpb.State{
 			IsBlocked:         true,
 			BlockTs:           event.GetCommitTs(),
-			BlockTables:       event.GetBlockedTables().ToPB(),
-			NeedDroppedTables: event.GetNeedDroppedTables().ToPB(),
+			BlockTables:       cloneInfluencedTablesPB(event.GetBlockedTables()),
+			NeedDroppedTables: cloneInfluencedTablesPB(event.GetNeedDroppedTables()),
 			NeedAddedTables:   commonEvent.ToTablesPB(event.GetNeedAddedTables()),
 			UpdatedSchemas:    commonEvent.ToSchemaIDChangePB(event.GetUpdatedSchemas()),
 			IsSyncPoint:       event.GetType() == commonEvent.TypeSyncPointEvent,
@@ -1161,12 +1191,8 @@ func (d *BasicDispatcher) reportBlockedEventToMaintainer(event commonEvent.Block
 		},
 		Mode: d.GetMode(),
 	}
-	identifier := BlockEventIdentifier{
-		CommitTs:    event.GetCommitTs(),
-		IsSyncPoint: event.GetType() == commonEvent.TypeSyncPointEvent,
-	}
-	d.resendTaskMap.Set(identifier, newResendTask(message, d, nil))
-	d.sharedInfo.blockStatusesChan <- message
+	d.resendTaskMap.Set(identifier, newResendTask(d, status, nil))
+	d.offerBlockStatus(status)
 }
 
 func (d *BasicDispatcher) flushBlockedEventAndReportToMaintainer(event commonEvent.BlockEvent) {

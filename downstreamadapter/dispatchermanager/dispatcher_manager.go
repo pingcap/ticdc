@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/downstreamadapter/eventcollector"
+	"github.com/pingcap/ticdc/downstreamadapter/routing"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/redo"
@@ -43,6 +44,15 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/tikv/client-go/v2/oracle"
 	"go.uber.org/zap"
+)
+
+const (
+	maxBlockStatusesPerRequest = 2048
+	// The local buffer only needs to cover the short gap before dispatcher
+	// manager batching drains it. Longer retries are absorbed by the request
+	// queue dedupe, so keeping this queue modest avoids preallocating a large
+	// value-retention window in front of the manager.
+	blockStatusBufferSize = 16 * 1024
 )
 
 /*
@@ -133,8 +143,19 @@ type DispatcherManager struct {
 
 	closing atomic.Bool
 	closed  atomic.Bool
-	cancel  context.CancelFunc
-	wg      sync.WaitGroup
+	// removeChangefeedRequested is sticky once any close request asks for removed=true.
+	// A later removed=false request must not downgrade the final cleanup semantics.
+	removeChangefeedRequested atomic.Bool
+	// removeChangefeedCleaned records whether the best-effort remove-only cleanup has finished.
+	// It is intentionally not part of the TryClose success condition so the close contract
+	// stays compatible with the historical behavior.
+	removeChangefeedCleaned atomic.Bool
+	// removeChangefeedCleanupRunning prevents duplicate background cleanup runs
+	// while late remove requests or retries keep asking for remove semantics after
+	// the base close path ends.
+	removeChangefeedCleanupRunning atomic.Bool
+	cancel                         context.CancelFunc
+	wg                             sync.WaitGroup
 
 	// removeTaskHandles stores the task handles for async dispatcher removal
 	// map[common.DispatcherID]*threadpool.TaskHandle
@@ -196,8 +217,8 @@ func NewDispatcherManager(
 		pdClock:               pdClock,
 		cancel:                cancel,
 		config:                cfConfig,
-		latestWatermark:       NewWatermark(0),
-		latestRedoWatermark:   NewWatermark(0),
+		latestWatermark:       NewWatermark(startTs),
+		latestRedoWatermark:   NewWatermark(startTs),
 		schemaIDToDispatchers: dispatcher.NewSchemaIDToDispatchers(),
 		sinkQuota:             cfConfig.MemoryQuota,
 		redoEnabled:           isRedoConfigEnabled(cfConfig),
@@ -245,6 +266,16 @@ func NewDispatcherManager(
 		outputRawChangeEvent = manager.config.SinkConfig.KafkaConfig.GetOutputRawChangeEvent()
 	}
 
+	router, err := routing.NewRouter(
+		manager.changefeedID,
+		util.GetOrZero(manager.config.SinkConfig.CaseSensitive),
+		manager.config.SinkConfig.DispatchRules,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	batchCounts, batchBytes := manager.getEventCollectorBatchCountAndBytes(manager.sink)
 	// Create shared info for all dispatchers
 	manager.sharedInfo = dispatcher.NewSharedInfo(
 		manager.changefeedID,
@@ -257,8 +288,11 @@ func NewDispatcherManager(
 		syncPointConfig,
 		manager.config.SinkConfig.TxnAtomicity,
 		manager.config.EnableSplittableCheck,
+		router,
+		batchCounts,
+		batchBytes,
 		make(chan dispatcher.TableSpanStatusWithSeq, 8192),
-		make(chan *heartbeatpb.TableSpanBlockStatus, 1024*1024),
+		blockStatusBufferSize,
 		make(chan error, 1),
 	)
 
@@ -320,6 +354,20 @@ func NewDispatcherManager(
 		zap.String("filterConfig", filterCfg.String()),
 	)
 	return manager, nil
+}
+
+func (e *DispatcherManager) getEventCollectorBatchCountAndBytes(s sink.Sink) (int, int) {
+	var (
+		batchCount = s.BatchCount()
+		batchBytes = s.BatchBytes()
+	)
+	if e.config.EventCollectorBatchCount != nil {
+		batchCount = *e.config.EventCollectorBatchCount
+	}
+	if e.config.EventCollectorBatchBytes != nil {
+		batchBytes = *e.config.EventCollectorBatchBytes
+	}
+	return batchCount, batchBytes
 }
 
 func (e *DispatcherManager) NewTableTriggerEventDispatcher(id *heartbeatpb.DispatcherID, startTs uint64, newChangefeed bool) error {
@@ -565,49 +613,72 @@ func (e *DispatcherManager) collectErrors(ctx context.Context) {
 
 // collectBlockStatusRequest collect the block status from the block status channel and report to the maintainer.
 func (e *DispatcherManager) collectBlockStatusRequest(ctx context.Context) {
-	delay := time.NewTimer(0)
-	defer delay.Stop()
 	enqueueBlockStatus := func(blockStatusMessage []*heartbeatpb.TableSpanBlockStatus, mode int64) {
-		var message heartbeatpb.BlockStatusRequest
-		message.ChangefeedID = e.changefeedID.ToPB()
-		message.BlockStatuses = blockStatusMessage
-		message.Mode = mode
-		e.blockStatusRequestQueue.Enqueue(&BlockStatusRequestWithTargetID{TargetID: e.GetMaintainerID(), Request: &message})
+		// Split oversized batches so one protobuf message does not monopolize
+		// serialization, transport, and maintainer-side processing.
+		for start := 0; start < len(blockStatusMessage); start += maxBlockStatusesPerRequest {
+			end := start + maxBlockStatusesPerRequest
+			if end > len(blockStatusMessage) {
+				end = len(blockStatusMessage)
+			}
+			// Copy each chunk so queue-side in-place filtering owns the backing
+			// array and cannot mutate another batch's slice accidentally.
+			chunk := make([]*heartbeatpb.TableSpanBlockStatus, end-start)
+			copy(chunk, blockStatusMessage[start:end])
+			var message heartbeatpb.BlockStatusRequest
+			message.ChangefeedID = e.changefeedID.ToPB()
+			message.BlockStatuses = chunk
+			message.Mode = mode
+			e.blockStatusRequestQueue.Enqueue(&BlockStatusRequestWithTargetID{TargetID: e.GetMaintainerID(), Request: &message})
+		}
 	}
 	for {
 		blockStatusMessage := make([]*heartbeatpb.TableSpanBlockStatus, 0)
 		redoBlockStatusMessage := make([]*heartbeatpb.TableSpanBlockStatus, 0)
-		select {
-		case <-ctx.Done():
+		blockStatus := e.sharedInfo.TakeBlockStatus(ctx)
+		if blockStatus == nil {
 			return
-		case blockStatus := <-e.sharedInfo.GetBlockStatusesChan():
+		}
+		if common.IsDefaultMode(blockStatus.Mode) {
+			blockStatusMessage = append(blockStatusMessage, blockStatus)
+		} else {
+			redoBlockStatusMessage = append(redoBlockStatusMessage, blockStatus)
+		}
+
+		// Batch from the first observed status for up to 10ms. We drain ready
+		// entries first, then keep waiting until the same deadline so late arrivals
+		// still join the current request instead of being delayed to the next batch.
+		deadline := time.Now().Add(10 * time.Millisecond)
+	loop:
+		for {
+			var ok bool
+			blockStatus, ok = e.sharedInfo.TryTakeBlockStatus()
+			if !ok {
+				// Once the local queue is drained, keep waiting until the batch
+				// deadline so late arrivals can still join the current request.
+				waitCtx, cancel := context.WithDeadline(ctx, deadline)
+				blockStatus = e.sharedInfo.TakeBlockStatus(waitCtx)
+				cancel()
+				if blockStatus == nil {
+					if ctx.Err() != nil {
+						return
+					}
+					break loop
+				}
+			}
 			if common.IsDefaultMode(blockStatus.Mode) {
 				blockStatusMessage = append(blockStatusMessage, blockStatus)
 			} else {
 				redoBlockStatusMessage = append(redoBlockStatusMessage, blockStatus)
 			}
-			delay.Reset(10 * time.Millisecond)
-		loop:
-			for {
-				select {
-				case blockStatus := <-e.sharedInfo.GetBlockStatusesChan():
-					if common.IsDefaultMode(blockStatus.Mode) {
-						blockStatusMessage = append(blockStatusMessage, blockStatus)
-					} else {
-						redoBlockStatusMessage = append(redoBlockStatusMessage, blockStatus)
-					}
-				case <-delay.C:
-					break loop
-				}
-			}
+		}
 
-			e.metricBlockStatusesChanLen.Set(float64(len(e.sharedInfo.GetBlockStatusesChan())))
-			if len(blockStatusMessage) != 0 {
-				enqueueBlockStatus(blockStatusMessage, common.DefaultMode)
-			}
-			if len(redoBlockStatusMessage) != 0 {
-				enqueueBlockStatus(redoBlockStatusMessage, common.RedoMode)
-			}
+		e.metricBlockStatusesChanLen.Set(float64(e.sharedInfo.BlockStatusLen()))
+		if len(blockStatusMessage) != 0 {
+			enqueueBlockStatus(blockStatusMessage, common.DefaultMode)
+		}
+		if len(redoBlockStatusMessage) != 0 {
+			enqueueBlockStatus(redoBlockStatusMessage, common.RedoMode)
 		}
 	}
 }
@@ -792,7 +863,7 @@ func (e *DispatcherManager) MergeDispatcher(dispatcherIDs []common.DispatcherID,
 	return e.mergeEventDispatcher(dispatcherIDs, mergedDispatcherID)
 }
 
-// mergeEventDispatcher merges the mulitple event dispatchers belonging to the same table with consecutive ranges.
+// mergeEventDispatcher merges the multiple event dispatchers belonging to the same table with consecutive ranges.
 func (e *DispatcherManager) mergeEventDispatcher(dispatcherIDs []common.DispatcherID, mergedDispatcherID common.DispatcherID) *MergeCheckTask {
 	// Step 1: check the dispatcherIDs and mergedDispatcherID are valid:
 	//         1. whether the mergedDispatcherID is not exist in the dispatcherMap
@@ -838,7 +909,11 @@ func (e *DispatcherManager) mergeEventDispatcher(dispatcherIDs []common.Dispatch
 // ==== remove and clean related functions ====
 
 func (e *DispatcherManager) TryClose(removeChangefeed bool) bool {
+	if removeChangefeed {
+		e.removeChangefeedRequested.Store(true)
+	}
 	if e.closed.Load() {
+		e.tryScheduleRemoveChangefeedCleanup()
 		return true
 	}
 	if e.closing.Load() {
@@ -846,11 +921,11 @@ func (e *DispatcherManager) TryClose(removeChangefeed bool) bool {
 	}
 
 	e.closing.Store(true)
-	go e.close(removeChangefeed)
+	go e.close()
 	return false
 }
 
-func (e *DispatcherManager) close(removeChangefeed bool) {
+func (e *DispatcherManager) close() {
 	log.Info("closing event dispatcher manager",
 		zap.Stringer("changefeedID", e.changefeedID))
 
@@ -902,11 +977,9 @@ func (e *DispatcherManager) close(removeChangefeed bool) {
 	log.Info("shared info closed", zap.Stringer("changefeedID", e.changefeedID))
 
 	if e.IsRedoEnabled() {
-		e.redoSink.Close(removeChangefeed)
-		// FIXME: cleanup redo log when remove the changefeed
-		e.closeRedoMeta(removeChangefeed)
+		e.redoSink.Close()
 	}
-	e.sink.Close(removeChangefeed)
+	e.sink.Close()
 	log.Info("sink closed", zap.Stringer("changefeedID", e.changefeedID))
 
 	e.wg.Wait()
@@ -920,8 +993,56 @@ func (e *DispatcherManager) close(removeChangefeed bool) {
 	e.cleanMetrics()
 
 	e.closed.Store(true)
+	e.tryScheduleRemoveChangefeedCleanup()
 	log.Info("event dispatcher manager closed",
 		zap.Stringer("changefeedID", e.changefeedID))
+}
+
+func (e *DispatcherManager) tryScheduleRemoveChangefeedCleanup() {
+	if !e.removeChangefeedRequested.Load() {
+		return
+	}
+	if e.removeChangefeedCleaned.Load() {
+		return
+	}
+	if !e.removeChangefeedCleanupRunning.CompareAndSwap(false, true) {
+		return
+	}
+
+	go func() {
+		defer e.removeChangefeedCleanupRunning.Store(false)
+
+		if err := e.runRemoveChangefeedCleanup(); err != nil {
+			log.Warn("failed to cleanup removed changefeed",
+				zap.Stringer("changefeedID", e.changefeedID),
+				zap.Error(err))
+			return
+		}
+		e.removeChangefeedCleaned.Store(true)
+	}()
+}
+
+func (e *DispatcherManager) runRemoveChangefeedCleanup() error {
+	if !e.removeChangefeedRequested.Load() || e.removeChangefeedCleaned.Load() {
+		return nil
+	}
+
+	if e.IsRedoEnabled() {
+		// Redo meta cleanup is the remove-only step for redo mode. It is safe to retry
+		// because removeChangefeedCleaned is only set after all remove-only cleanup succeeds.
+		if err := e.closeRedoMeta(true); err != nil {
+			return errors.Trace(err)
+		}
+	}
+
+	if mysqlSink, ok := e.sink.(*mysql.Sink); ok {
+		// MySQL sink may still need ddl_ts cleanup after the base close path has already
+		// released the long-lived DB connection, so keep the retryable remove step here.
+		if err := mysqlSink.CleanupRemovedChangefeed(); err != nil {
+			return errors.Trace(err)
+		}
+	}
+	return nil
 }
 
 // cleanEventDispatcher is called when the event dispatcher is removed successfully.

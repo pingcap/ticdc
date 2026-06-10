@@ -410,7 +410,7 @@ func TestGetTableRecoveryInfo_StartTsGreaterThanDDLTs(t *testing.T) {
 	require.False(t, skipDMLList[2], "Table 3: skipDML should be reset to false when startTs > ddlTs")
 
 	// Clean up
-	sink.Close(false)
+	sink.Close()
 
 	// Check all mock expectations were met (after closing)
 	require.NoError(t, mock.ExpectationsWereMet())
@@ -448,7 +448,7 @@ func TestGetTableRecoveryInfo_RemoveDDLTs(t *testing.T) {
 	}
 
 	// Clean up
-	sink.Close(false)
+	sink.Close()
 
 	// Check all mock expectations were met (after closing)
 	require.NoError(t, mock.ExpectationsWereMet())

@@ -89,15 +89,15 @@ func (mr *MockSinkMockRecorder) BatchCount() *gomock.Call {
 }
 
 // Close mocks base method.
-func (m *MockSink) Close(removeChangefeed bool) {
+func (m *MockSink) Close() {
 	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "Close", removeChangefeed)
+	m.ctrl.Call(m, "Close")
 }
 
 // Close indicates an expected call of Close.
-func (mr *MockSinkMockRecorder) Close(removeChangefeed interface{}) *gomock.Call {
+func (mr *MockSinkMockRecorder) Close() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Close", reflect.TypeOf((*MockSink)(nil).Close), removeChangefeed)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Close", reflect.TypeOf((*MockSink)(nil).Close))
 }
 
 // FlushDMLBeforeBlock mocks base method.

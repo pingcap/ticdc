@@ -173,10 +173,8 @@ func (c *UnlimitedChannel[T, G]) getMultiple(gmt getMultType, buffer []T, batchB
 
 	switch gmt {
 	case getMultNoGroup:
-		for {
-			if len(buffer) >= cap || bytes >= maxBytes {
-				break
-			}
+		for len(buffer) < cap && bytes < maxBytes {
+
 			v, ok := c.queue.PopFront()
 			if !ok {
 				break

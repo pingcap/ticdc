@@ -73,13 +73,25 @@ var (
 			Help:      "The status of changefeeds",
 		}, []string{getKeyspaceLabel(), "changefeed"})
 
+	// ChangefeedErrorInfoGauge records the current warning or failed reason and its occurrence time
+	// for each changefeed.
 	ChangefeedErrorInfoGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: "ticdc",
 			Subsystem: "owner",
 			Name:      "changefeed_error_info",
-			Help:      "The current warning or failed reason of changefeeds",
-		}, []string{getKeyspaceLabel(), "changefeed", "state", "code", "message"})
+			Help:      "The current warning or failed reason and occurrence time of changefeeds",
+		}, []string{getKeyspaceLabel(), "changefeed", "state", "error_time", "code", "message"})
+
+	// ChangefeedOperationTimeGauge records a bounded set of recent user initiated
+	// changefeed operation timestamps for the Grafana investigation panel.
+	ChangefeedOperationTimeGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "owner",
+			Name:      "changefeed_operation_time",
+			Help:      "Recent user initiated changefeed operation timestamps in Unix milliseconds",
+		}, []string{getKeyspaceLabel(), "changefeed", "operation", "result", "username", "details", "error", "event_id"})
 
 	ChangefeedCheckpointTsLagGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -97,6 +109,34 @@ var (
 			Name:      "checkpoint_ts",
 			Help:      "checkpoint ts of changefeeds",
 		}, []string{getKeyspaceLabel(), "changefeed"})
+
+	// ChangefeedDownstreamInfoGauge is a metric with a constant '1' value,
+	// labeled by the downstream type of each changefeed.
+	//
+	// It is used by dashboards to show a changefeed -> downstream type mapping
+	// without leaking sensitive information in sink-uri.
+	ChangefeedDownstreamInfoGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "owner",
+			Name:      "changefeed_downstream_info",
+			Help:      "Downstream type information of changefeeds exposed as labels.",
+		}, []string{getKeyspaceLabel(), "changefeed", "downstream_type"})
+
+	// ChangefeedDownstreamIsTiDBGauge indicates whether the downstream of a
+	// MySQL-compatible sink is confirmed to be TiDB (1 means yes).
+	//
+	// This metric is only set when the sink can positively identify TiDB (for
+	// example by executing `SELECT tidb_version()`), and is intentionally absent
+	// for MySQL or unknown downstreams. Dashboards can use it to override the
+	// generic "mysql/tidb" label value with "tidb" for running changefeeds.
+	ChangefeedDownstreamIsTiDBGauge = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "ticdc",
+			Subsystem: "sink",
+			Name:      "changefeed_downstream_is_tidb",
+			Help:      "Whether the downstream of a changefeed is confirmed to be TiDB (1 means yes).",
+		}, []string{getKeyspaceLabel(), "changefeed"})
 )
 
 func initChangefeedMetrics(registry *prometheus.Registry) {
@@ -108,6 +148,9 @@ func initChangefeedMetrics(registry *prometheus.Registry) {
 	registry.MustRegister(MaintainerGauge)
 	registry.MustRegister(ChangefeedStatusGauge)
 	registry.MustRegister(ChangefeedErrorInfoGauge)
+	registry.MustRegister(ChangefeedOperationTimeGauge)
 	registry.MustRegister(ChangefeedCheckpointTsLagGauge)
 	registry.MustRegister(ChangefeedCheckpointTsGauge)
+	registry.MustRegister(ChangefeedDownstreamInfoGauge)
+	registry.MustRegister(ChangefeedDownstreamIsTiDBGauge)
 }

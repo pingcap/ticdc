@@ -58,7 +58,7 @@ func TestGetAllChangefeeds(t *testing.T) {
 	require.Nil(t, err)
 	require.Len(t, resp, 0)
 
-	// status unmarshal failed, changefeed will not be ignored, and the checkpiont ts will be the start ts
+	// status unmarshal failed, changefeed will not be ignored, and the checkpoint ts will be the start ts
 	// the old version of changefeed without gid
 	cdcClient.EXPECT().GetChangefeedInfoAndStatus(gomock.Any()).Return(
 		int64(0),

@@ -54,7 +54,7 @@ const (
 	// <schema>/<table>/meta/schema_{tableVersion}_{checksum}.json
 	tableSchemaPrefix = "%s/%s/meta/"
 	// When use-table-id-as-path, schema is omitted: <table_id>/meta/...
-	tableIdPrefix = "%s/meta/"
+	tableIDPrefix = "%s/meta/"
 )
 
 var schemaRE = regexp.MustCompile(`meta/schema_\d+_\d{10}\.json$`)
@@ -66,28 +66,30 @@ func IsSchemaFile(path string) bool {
 
 // mustParseSchemaName parses the version from the schema file name.
 func mustParseSchemaName(path string) (uint64, uint32) {
-	reportErr := func(err error) {
-		log.Panic("failed to parse schema file name",
+	reportErr := func(reason string, fields ...zap.Field) {
+		fields = append([]zap.Field{
 			zap.String("schemaPath", path),
-			zap.Any("error", err))
+			zap.String("reason", reason),
+		}, fields...)
+		log.Panic("failed to parse schema file name", fields...)
 	}
 
 	// For <schema>/<table>/meta/schema_{tableVersion}_{checksum}.json, the parts
 	// should be ["<schema>/<table>/meta/schema", "{tableVersion}", "{checksum}.json"].
 	parts := strings.Split(path, "_")
 	if len(parts) < 3 {
-		reportErr(errors.New("invalid path format"))
+		reportErr("invalid path format")
 	}
 
 	checksum := strings.TrimSuffix(parts[len(parts)-1], ".json")
-	tableChecksum, err := strconv.ParseUint(checksum, 10, 64)
+	tableChecksum, err := strconv.ParseUint(checksum, 10, 32)
 	if err != nil {
-		reportErr(err)
+		reportErr("invalid checksum", zap.Error(err))
 	}
 	version := parts[len(parts)-2]
 	tableVersion, err := strconv.ParseUint(version, 10, 64)
 	if err != nil {
-		reportErr(err)
+		reportErr("invalid table version", zap.Error(err))
 	}
 	return tableVersion, uint32(tableChecksum)
 }
@@ -96,9 +98,9 @@ func generateSchemaFilePath(
 	schema, table string, tableVersion uint64, checksum uint32, omitSchema bool,
 ) (string, error) {
 	if schema == "" || tableVersion == 0 {
-		return "", errors.ErrInternalCheckFailed.GenWithStackByArgs(
-			fmt.Sprintf("invalid schema or tableVersion, schema=%q table=%q tableVersion=%d",
-				schema, table, tableVersion),
+		return "", errors.ErrInternalCheckFailed.GenWithStack(
+			"invalid schema or tableVersion, schema=%q table=%q tableVersion=%d",
+			schema, table, tableVersion,
 		)
 	}
 
@@ -110,7 +112,7 @@ func generateSchemaFilePath(
 			)
 		}
 		// use-table-id-as-path: omit schema, path is <table_id>/meta/
-		dir = fmt.Sprintf(tableIdPrefix, table)
+		dir = fmt.Sprintf(tableIDPrefix, table)
 	} else {
 		if table == "" {
 			// Generate db schema file path.
@@ -230,7 +232,13 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 	changefeed := f.changefeedID.Name()
 
 	var def TableDefinition
-	def.FromTableInfo(tableInfo.GetSchemaName(), tableInfo.GetTableName(), tableInfo, table.TableInfoVersion, f.config.OutputColumnID)
+	def.FromTableInfo(
+		tableInfo.GetTargetSchemaName(),
+		tableInfo.GetTargetTableName(),
+		tableInfo,
+		table.TableInfoVersion,
+		f.config.OutputColumnID,
+	)
 	if !def.IsTableSchema() {
 		// only check schema for table
 		log.Error("invalid table schema",
@@ -264,7 +272,7 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 	}
 	var subDir string
 	if f.config.UseTableIDAsPath {
-		subDir = fmt.Sprintf(tableIdPrefix, tablePathPart)
+		subDir = fmt.Sprintf(tableIDPrefix, tablePathPart)
 	} else {
 		subDir = fmt.Sprintf(tableSchemaPrefix, def.Schema, tablePathPart)
 	}
@@ -284,9 +292,9 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 				zap.String("keyspace", keyspace),
 				zap.String("changefeedID", changefeed),
 				zap.String("path", path), zap.Any("checksum", checksum))
-			errMsg := fmt.Sprintf("invalid schema filename in storage sink, "+
-				"expected checksum: %d, actual checksum: %d", checksum, parsedChecksum)
-			return errors.ErrInternalCheckFailed.GenWithStackByArgs(errMsg)
+			return errors.ErrInternalCheckFailed.GenWithStack(
+				"invalid schema filename in storage sink, expected checksum: %d, actual checksum: %d",
+				checksum, parsedChecksum)
 		}
 		if version > table.TableInfoVersion {
 			hasNewerSchemaVersion = true
@@ -381,7 +389,7 @@ func (f *FilePathGenerator) GenerateDataFilePath(
 	if err != nil {
 		return "", err
 	}
-	newIndexFile := false
+	loadedIndexFile := false
 	if idx, ok := f.fileIndex[tbl]; !ok {
 		fileIdx, err := f.getFileIdxFromIndexFile(ctx, tbl, date)
 		if err != nil {
@@ -392,7 +400,7 @@ func (f *FilePathGenerator) GenerateDataFilePath(
 			currDate: date,
 			index:    fileIdx,
 		}
-		newIndexFile = true
+		loadedIndexFile = true
 	} else {
 		idx.currDate = date
 	}
@@ -401,27 +409,42 @@ func (f *FilePathGenerator) GenerateDataFilePath(
 		f.fileIndex[tbl].prevDate = f.fileIndex[tbl].currDate
 		f.fileIndex[tbl].index = 0
 	}
-	f.fileIndex[tbl].index++
-	name := generateDataFileName(f.config.EnableTableAcrossNodes, tbl.DispatcherID.String(), f.fileIndex[tbl].index, f.extension, f.config.FileIndexWidth)
-	dataFile := path.Join(dir, name)
-	exist, err := f.storage.FileExists(ctx, dataFile)
-	if err != nil {
-		return "", err
+	triedIndexResync := loadedIndexFile
+	// A local file index can lag behind existing data files after sink restart or
+	// dispatcher ownership transfer. If the local cache collides with an existing
+	// data file, reload the index file once before falling back to consecutive
+	// probes for the index-stale recovery path.
+	for {
+		f.fileIndex[tbl].index++
+		name := generateDataFileName(f.config.EnableTableAcrossNodes, tbl.DispatcherID.String(), f.fileIndex[tbl].index, f.extension, f.config.FileIndexWidth)
+		dataFile := path.Join(dir, name)
+		exist, err := f.storage.FileExists(ctx, dataFile)
+		if err != nil {
+			return "", err
+		}
+		if !exist {
+			return dataFile, nil
+		}
+		if !triedIndexResync {
+			fileIdx, err := f.getFileIdxFromIndexFile(ctx, tbl, date)
+			if err != nil {
+				return "", err
+			}
+			triedIndexResync = true
+			if fileIdx >= f.fileIndex[tbl].index {
+				f.fileIndex[tbl].index = fileIdx
+				continue
+			}
+		}
+		if loadedIndexFile {
+			log.Warn("the data file exists and the index file is stale",
+				zap.String("keyspace", f.changefeedID.Keyspace()),
+				zap.String("changefeedID", f.changefeedID.Name()),
+				zap.Any("versionedTableName", tbl),
+				zap.String("dataFile", dataFile))
+			loadedIndexFile = false
+		}
 	}
-	if !exist {
-		return dataFile, nil
-	}
-	if newIndexFile {
-		log.Warn("the data file exists and the index file is stale",
-			zap.String("keyspace", f.changefeedID.Keyspace()),
-			zap.String("changefeedID", f.changefeedID.Name()),
-			zap.Any("versionedTableName", tbl),
-			zap.String("dataFile", dataFile))
-	}
-	// if the file already exists, which means the fileIndex is stale,
-	// we need to delete the file index in memory and re-generate the file path with the updated file index until we find a non-existing file path.
-	delete(f.fileIndex, tbl)
-	return f.GenerateDataFilePath(ctx, tbl, date)
 }
 
 func (f *FilePathGenerator) generateDataDirPath(tbl VersionedTableName, date string) (string, error) {
@@ -496,8 +519,7 @@ func FetchIndexFromFileName(fileName string, extension string) (uint64, error) {
 	if len(fileName) < minFileNamePrefixLen+len(extension) ||
 		!strings.HasPrefix(fileName, "CDC") ||
 		!strings.HasSuffix(fileName, extension) {
-		return 0, errors.WrapError(errors.ErrStorageSinkInvalidFileName,
-			fmt.Errorf("'%s' is a invalid file name", fileName))
+		return 0, errors.ErrStorageSinkInvalidFileName.GenWithStack("filename in storage sink is invalid: %q", fileName)
 	}
 
 	// CDC[_{dispatcherID}_]{num}.fileExtension
@@ -508,7 +530,7 @@ func FetchIndexFromFileName(fileName string, extension string) (uint64, error) {
 
 	matches := pathRE.FindStringSubmatch(fileName)
 	if len(matches) != 3 {
-		return 0, fmt.Errorf("cannot match dml path pattern for %s", fileName)
+		return 0, errors.ErrStorageSinkInvalidFileName.GenWithStack("cannot match dml path pattern for %q", fileName)
 	}
 	return strconv.ParseUint(matches[2], 10, 64)
 }
@@ -522,9 +544,9 @@ func RemoveExpiredFiles(
 	storage storage.ExternalStorage,
 	cfg *Config,
 	checkpointTs uint64,
-) (uint64, error) {
+) error {
 	if cfg.DateSeparator != config.DateSeparatorDay.String() {
-		return 0, nil
+		return nil
 	}
 	if dateSeparatorDayRegexp == nil {
 		dateSeparatorDayRegexp = regexp.MustCompile(config.DateSeparatorDay.GetPattern())
@@ -535,18 +557,13 @@ func RemoveExpiredFiles(
 	// Note: `expiredDate` is formatted using local TZ.
 	expiredDate := currTime.Format("2006-01-02")
 
-	cnt := uint64(0)
 	err := util.RemoveFilesIf(ctx, storage, func(path string) bool {
 		// the path is like: <schema>/<table>/<tableVersion>/<partitionID>/<date>/CDC_{dispatcher}_{num}.extension
 		// or <schema>/<table>/<tableVersion>/<partitionID>/<date>/CDC{num}.extension
 		match := dateSeparatorDayRegexp.FindString(path)
-		if match != "" && match < expiredDate {
-			cnt++
-			return true
-		}
-		return false
+		return match != "" && match < expiredDate
 	}, nil)
-	return cnt, err
+	return err
 }
 
 // RemoveEmptyDirs removes empty directories from external storage.
@@ -554,8 +571,7 @@ func RemoveEmptyDirs(
 	ctx context.Context,
 	id commonType.ChangeFeedID,
 	target string,
-) (uint64, error) {
-	cnt := uint64(0)
+) error {
 	err := filepath.Walk(target, func(path string, info fs.FileInfo, err error) error {
 		if os.IsNotExist(err) || path == target || info == nil {
 			// if path not exists, we should return nil to continue.
@@ -564,20 +580,19 @@ func RemoveEmptyDirs(
 		if err != nil {
 			return err
 		}
-		if info.IsDir() {
-			files, err := os.ReadDir(path)
-			if err == nil && len(files) == 0 {
-				log.Debug("Deleting empty directory",
-					zap.String("keyspace", id.Keyspace()),
-					zap.String("changeFeedID", id.Name()),
-					zap.String("path", path))
-				os.Remove(path)
-				cnt++
-				return filepath.SkipDir
-			}
+
+		if !info.IsDir() {
+			return nil
+		}
+
+		files, err := os.ReadDir(path)
+		if err == nil && len(files) == 0 {
+			// Keep best-effort cleanup semantics: ignore remove failures.
+			_ = os.Remove(path) // #nosec G122
+			return filepath.SkipDir
 		}
 		return nil
 	})
 
-	return cnt, err
+	return err
 }
