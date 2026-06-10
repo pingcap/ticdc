@@ -17,16 +17,12 @@ import (
 	"context"
 	"testing"
 
-<<<<<<< HEAD
-	"github.com/pingcap/kvproto/pkg/cdcpb"
-	"github.com/pingcap/ticdc/utils/dynstream"
-	"github.com/prometheus/client_golang/prometheus"
-=======
 	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/cdcpb"
 	"github.com/pingcap/kvproto/pkg/metapb"
 	"github.com/pingcap/ticdc/logservice/logpuller/regionlock"
->>>>>>> 87a1a8bca (logpuller: fix stale sent request after fast region error (#4557))
+	"github.com/pingcap/ticdc/utils/dynstream"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/tikv"
 	"google.golang.org/grpc"
@@ -102,7 +98,6 @@ func TestClearPendingRegionsReleaseSlotForPreFetchedRegion(t *testing.T) {
 	require.Equal(t, 0, worker.requestCache.getPendingCount())
 }
 
-<<<<<<< HEAD
 type pushedResolvedEvent struct {
 	subscriptionID SubscriptionID
 	resolvedTs     uint64
@@ -268,7 +263,8 @@ func BenchmarkDispatchResolvedTsEventSmallBatchLegacy(b *testing.B) {
 
 func BenchmarkDispatchResolvedTsEventSmallBatchCurrent(b *testing.B) {
 	benchmarkDispatchResolvedTsEvent(b, 16, false)
-=======
+}
+
 func TestClearPendingRegionsDoesNotReturnStoppedSentRegion(t *testing.T) {
 	worker := &regionRequestWorker{
 		requestCache: newRequestCache(10),
@@ -335,5 +331,4 @@ func TestProcessRegionSendTaskSendFailureCleansSentRequest(t *testing.T) {
 	require.Empty(t, worker.requestCache.sentRequests.regionReqs)
 	state := worker.getRegionState(req.regionInfo.subscribedSpan.subID, req.regionInfo.verID.GetID())
 	require.True(t, state == nil || state.isStale(), "region state should be removed or marked stale after send failure")
->>>>>>> 87a1a8bca (logpuller: fix stale sent request after fast region error (#4557))
 }
