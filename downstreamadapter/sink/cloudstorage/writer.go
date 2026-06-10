@@ -55,13 +55,8 @@ type writer struct {
 // flushTask is internal and never crosses component boundary.
 // marker task and data batch are mutually exclusive in normal flow.
 type flushTask struct {
-	batches []tablePayload
-	marker  *flushMarker
-}
-
-type tablePayload struct {
-	table   cloudstorage.VersionedTableName
-	payload *payload
+	batch  tableBatches
+	marker *flushMarker
 }
 
 type payload struct {
@@ -142,19 +137,17 @@ func (d *writer) flushMessages(ctx context.Context) error {
 				task.marker.finish()
 				continue
 			}
-			if len(task.batches) == 0 {
+			if task.batch.isEmpty() {
 				continue
 			}
 
 			start := time.Now()
-			for _, batch := range task.batches {
-				table := batch.table
-				payload := batch.payload
-				if payload == nil || len(payload.entries) == 0 {
+			for table, tableTask := range task.batch.tables {
+				if tableTask == nil || len(tableTask.entries) == 0 {
 					continue
 				}
 
-				hasNewerSchemaVersion, err := d.filePathGenerator.CheckOrWriteSchema(ctx, table, payload.tableInfo)
+				hasNewerSchemaVersion, err := d.filePathGenerator.CheckOrWriteSchema(ctx, table, tableTask.tableInfo)
 				if err != nil {
 					log.Error("failed to write schema file to external storage",
 						zap.String("keyspace", keyspace),
@@ -164,7 +157,8 @@ func (d *writer) flushMessages(ctx context.Context) error {
 					return err
 				}
 				if hasNewerSchemaVersion {
-					d.discardPayload(payload)
+					d.discardEntries(tableTask.entries)
+					tableTask.entries = nil
 					log.Warn("ignore messages belonging to an old schema version",
 						zap.String("keyspace", keyspace),
 						zap.String("changefeed", changefeed),
@@ -195,6 +189,10 @@ func (d *writer) flushMessages(ctx context.Context) error {
 					return err
 				}
 
+				payload, err := buildPayload(d.spool, tableTask)
+				if err != nil {
+					return err
+				}
 				if err := d.writeDataFile(ctx, dataFilePath, indexFilePath, payload); err != nil {
 					log.Error("failed to write data file to external storage",
 						zap.String("keyspace", keyspace),
@@ -204,6 +202,7 @@ func (d *writer) flushMessages(ctx context.Context) error {
 						zap.Error(err))
 					return err
 				}
+				tableTask.entries = nil
 
 				log.Debug("write file to storage success",
 					zap.String("keyspace", keyspace),
@@ -220,8 +219,8 @@ func (d *writer) flushMessages(ctx context.Context) error {
 	}
 }
 
-func (d *writer) discardPayload(payload *payload) {
-	for _, entry := range payload.entries {
+func (d *writer) discardEntries(entries []*spool.Entry) {
+	for _, entry := range entries {
 		d.spool.Discard(entry)
 	}
 }
@@ -292,6 +291,8 @@ func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath 
 	for _, entry := range payload.entries {
 		d.spool.Release(entry)
 	}
+	// Help GC release the potentially large encoded payload buffer before returning.
+	payload.data = nil
 	return nil
 }
 

@@ -386,6 +386,70 @@ func TestWriterPostEnqueueAfterConsume(t *testing.T) {
 	require.ErrorIs(t, <-done, context.Canceled)
 }
 
+func TestWriterPostFlushRunsPausedPostEnqueueBeforeLowWatermark(t *testing.T) {
+	t.Parallel()
+
+	changefeedID := commonType.NewChangefeedID4Test("test", t.Name())
+	spoolBuffer, err := spool.New(
+		changefeedID,
+		spool.WithDiskQuotaBytes(1000),
+		spool.WithRootDir(t.TempDir()),
+		spool.WithSegmentBytes(1<<20),
+		spool.WithMemoryRatio(0.99),
+		spool.WithHighWatermarkRatio(0.6),
+		spool.WithLowWatermarkRatio(0.3),
+	)
+	require.NoError(t, err)
+	defer spoolBuffer.Close()
+
+	var firstEnqueued atomic.Int64
+	firstMsg := common.NewMsg(nil, []byte(strings.Repeat("a", 500)))
+	firstEntry, err := spoolBuffer.Enqueue([]*common.Message{firstMsg}, func() {
+		firstEnqueued.Add(1)
+	})
+	require.NoError(t, err)
+	defer spoolBuffer.Release(firstEntry)
+	require.Equal(t, int64(1), firstEnqueued.Load())
+
+	var secondFlushed atomic.Int64
+	var secondEnqueued atomic.Int64
+	secondCallbacks := &txnCallbacks{
+		flushed: []func(){
+			func() {
+				secondFlushed.Add(1)
+			},
+		},
+		enqueued: []func(){
+			func() {
+				secondEnqueued.Add(1)
+			},
+		},
+	}
+	secondMsg := common.NewMsg(nil, []byte(strings.Repeat("b", 120)))
+	secondMsg.Callback = secondCallbacks.postFlush
+	secondEntry, err := spoolBuffer.Enqueue([]*common.Message{secondMsg}, secondCallbacks.postEnqueue)
+	require.NoError(t, err)
+	defer spoolBuffer.Release(secondEntry)
+	require.Equal(t, int64(0), secondEnqueued.Load())
+
+	payload, err := buildPayload(spoolBuffer, &tableBatch{entries: []*spool.Entry{secondEntry}})
+	require.NoError(t, err)
+	require.Len(t, payload.postFlushCallbacks, 1)
+
+	for _, postFlushCallback := range payload.postFlushCallbacks {
+		postFlushCallback()
+	}
+	for _, entry := range payload.entries {
+		spoolBuffer.Release(entry)
+	}
+
+	require.Equal(t, int64(1), secondFlushed.Load())
+	require.Equal(t, int64(1), secondEnqueued.Load())
+
+	spoolBuffer.Release(firstEntry)
+	require.Equal(t, int64(1), secondEnqueued.Load())
+}
+
 func TestWriterStoresPendingMessagesInSpoolBeforeFlush(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -479,7 +543,7 @@ func TestWriterStoresPendingMessagesInSpoolBeforeFlush(t *testing.T) {
 	require.ErrorIs(t, <-done, context.Canceled)
 }
 
-func TestDiscardPayloadDoesNotLoadSpilledPayload(t *testing.T) {
+func TestDiscardEntriesDoesNotLoadSpilledPayload(t *testing.T) {
 	ctx := context.Background()
 	dataDir := t.TempDir()
 
@@ -510,9 +574,7 @@ func TestDiscardPayloadDoesNotLoadSpilledPayload(t *testing.T) {
 
 	d.spool.Close()
 
-	d.discardPayload(&payload{
-		entries: []*spool.Entry{entry},
-	})
+	d.discardEntries([]*spool.Entry{entry})
 	require.Equal(t, int64(1), callbackCount.Load())
 }
 
