@@ -34,21 +34,9 @@ import (
 type Manager interface {
 	// TryUpdateServiceGCSafepoint tries to update TiCDC service GC safepoint.
 	TryUpdateServiceGCSafepoint(ctx context.Context, checkpointTs common.Ts) error
-<<<<<<< HEAD
-	CheckStaleCheckpointTs(changefeedID common.ChangeFeedID, checkpointTs common.Ts) error
-=======
 	// TryDeleteServiceGCSafepoint removes the TiCDC service GC safepoint when no changefeed needs it.
 	TryDeleteServiceGCSafepoint(ctx context.Context) error
-	CheckStaleCheckpointTs(keyspaceID uint32, changefeedID common.ChangeFeedID, checkpointTs common.Ts) error
-	// TryUpdateKeyspaceGCBarrier tries to update gc barrier of a keyspace
-	TryUpdateKeyspaceGCBarrier(ctx context.Context, keyspaceID uint32, keyspaceName string, checkpointTs common.Ts) error
-}
-
-// keyspaceGCBarrierInfo is the gc info for a keyspace
-type keyspaceGCBarrierInfo struct {
-	lastSafePointTs uint64
-	isTiCDCBlockGC  bool
->>>>>>> 430effd4f (coordinator,gc: delete stale cluster service safepoint (#4613))
+	CheckStaleCheckpointTs(changefeedID common.ChangeFeedID, checkpointTs common.Ts) error
 }
 
 type gcManager struct {

@@ -36,19 +36,11 @@ func (noopGCManager) TryUpdateServiceGCSafepoint(ctx context.Context, checkpoint
 	return nil
 }
 
-<<<<<<< HEAD
-func (noopGCManager) CheckStaleCheckpointTs(changefeedID common.ChangeFeedID, checkpointTs common.Ts) error {
-=======
 func (noopGCManager) TryDeleteServiceGCSafepoint(ctx context.Context) error {
 	return nil
 }
 
-func (noopGCManager) CheckStaleCheckpointTs(keyspaceID uint32, changefeedID common.ChangeFeedID, checkpointTs common.Ts) error {
-	return nil
-}
-
-func (noopGCManager) TryUpdateKeyspaceGCBarrier(ctx context.Context, keyspaceID uint32, keyspaceName string, checkpointTs common.Ts) error {
->>>>>>> 430effd4f (coordinator,gc: delete stale cluster service safepoint (#4613))
+func (noopGCManager) CheckStaleCheckpointTs(changefeedID common.ChangeFeedID, checkpointTs common.Ts) error {
 	return nil
 }
 
