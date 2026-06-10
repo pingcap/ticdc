@@ -15,11 +15,9 @@ package file
 
 import (
 	"context"
-	"path/filepath"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
@@ -29,32 +27,15 @@ import (
 var _ writer.RedoLogWriter = &logWriter{}
 
 type logWriter struct {
-	cfg           *writer.LogWriterConfig
+	cfg           *writer.Config
 	backendWriter fileWriter
 	fileType      string
 }
 
 // NewLogWriter create a new logWriter.
 func NewLogWriter(
-	ctx context.Context, cfg *writer.LogWriterConfig, fileType string, opts ...writer.Option,
+	ctx context.Context, cfg *writer.Config, fileType string, opts ...writer.Option,
 ) (l *logWriter, err error) {
-	if cfg == nil {
-		err := errors.New("LogWriterConfig can not be nil")
-		return nil, errors.WrapError(errors.ErrRedoConfigInvalid, err)
-	}
-
-	if cfg.UseExternalStorage {
-		// When an external storage is used, we use redoDir as a temporary dir to store redo logs
-		// before we flush them to S3.
-		changeFeedID := cfg.ChangeFeedID
-		dataDir := config.GetGlobalServerConfig().DataDir
-		cfg.Dir = filepath.Join(dataDir, config.DefaultRedoDir,
-			changeFeedID.Keyspace(), changeFeedID.Name())
-	} else {
-		// When local storage or NFS is used, we use redoDir as the final storage path.
-		cfg.Dir = cfg.URI.Path
-	}
-
 	l = &logWriter{cfg: cfg, fileType: fileType}
 	if l.backendWriter, err = NewFileWriter(ctx, cfg, fileType, opts...); err != nil {
 		return nil, err
@@ -90,9 +71,9 @@ func (l *logWriter) writeEvents(ctx context.Context, events ...writer.RedoEvent)
 	for _, event := range events {
 		if event == nil {
 			log.Warn("writing nil event to redo log, ignore this",
-				zap.String("keyspace", l.cfg.ChangeFeedID.Keyspace()),
-				zap.String("changefeed", l.cfg.ChangeFeedID.Name()),
-				zap.String("capture", l.cfg.CaptureID))
+				zap.String("keyspace", l.cfg.ChangeFeedID().Keyspace()),
+				zap.String("changefeed", l.cfg.ChangeFeedID().Name()),
+				zap.String("capture", l.cfg.CaptureID()))
 			continue
 		}
 		if err := l.backendWriter.SyncWrite(event); err != nil {
@@ -106,9 +87,9 @@ func (l *logWriter) asyncWriteEvents(ctx context.Context, events ...writer.RedoE
 	for _, event := range events {
 		if event == nil {
 			log.Warn("writing nil event to redo log, ignore this",
-				zap.String("keyspace", l.cfg.ChangeFeedID.Keyspace()),
-				zap.String("changefeed", l.cfg.ChangeFeedID.Name()),
-				zap.String("capture", l.cfg.CaptureID))
+				zap.String("keyspace", l.cfg.ChangeFeedID().Keyspace()),
+				zap.String("changefeed", l.cfg.ChangeFeedID().Name()),
+				zap.String("capture", l.cfg.CaptureID()))
 			continue
 		}
 		select {
