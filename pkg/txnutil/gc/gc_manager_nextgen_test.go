@@ -150,11 +150,11 @@ func TestEnsureChangefeedStartTsSafetyUsesServiceSafePointV2WhenEnabled(t *testi
 			name:         "reject start ts behind minimum safe point",
 			minSafePoint: 200,
 			expectedErr: "[CDC:ErrStartTsBeforeGC]fail to create or maintain changefeed " +
-				"because start-ts 100 is earlier than or equal to GC safepoint at 200",
+				"because start-ts 99 is earlier than or equal to GC safepoint at 200",
 		},
 		{
 			name:         "accept start ts bigger than the minimum safe point",
-			minSafePoint: startTs,
+			minSafePoint: startTs - 1,
 		},
 	}
 

@@ -58,6 +58,10 @@ const (
 	defaultMaxRetry = 50
 )
 
+type pdClientProvider interface {
+	GetPDClient() pd.Client
+}
+
 // Upstream holds resources of a TiDB cluster, it can be shared by many changefeeds
 // and processors. All public fields and method of an upstream should be thread-safe.
 // Please be careful that never change any exported field of an Upstream.
@@ -110,7 +114,7 @@ func CreateTiStore(ctx context.Context, urls string, credential *security.Creden
 
 	tiPath := fmt.Sprintf("tikv://%s?disableGC=true", urlv.HostString())
 	if kerneltype.IsNextGen() && keyspaceName != "" {
-		tiPath += "&keyspaceName=" + keyspaceName
+		tiPath = "&keyspaceName=" + keyspaceName
 	}
 	securityCfg := tikvconfig.Security{
 		ClusterSSLCA:    credential.CAPath,
@@ -124,7 +128,10 @@ func CreateTiStore(ctx context.Context, urls string, credential *security.Creden
 		// we should use OpenWithOptions to open a storage to avoid modifying tidb's GlobalConfig
 		// so that we can create different storage in TiCDC by different urls and credential
 		tiStore, err = d.OpenWithOptions(tiPath, driver.WithSecurity(securityCfg))
-		return err
+		if err != nil {
+			return err
+		}
+		return disablePDRouterClient(tiStore)
 	}, retry.WithMaxTries(defaultMaxRetry),
 		retry.WithBackoffBaseDelay(200),
 		retry.WithBackoffMaxDelay(4000),
@@ -135,6 +142,18 @@ func CreateTiStore(ctx context.Context, urls string, credential *security.Creden
 		return nil, errors.WrapError(errors.ErrNewStore, err)
 	}
 	return tiStore, nil
+}
+
+func disablePDRouterClient(storage tidbkv.Storage) error {
+	provider, ok := storage.(pdClientProvider)
+	if !ok {
+		return nil
+	}
+	pdClient := provider.GetPDClient()
+	if pdClient == nil {
+		return nil
+	}
+	return errors.Trace(pdClient.UpdateOption(pdopt.EnableRouterClient, false))
 }
 
 func isCreateTiStoreRetryable(ctx context.Context, err error) bool {
