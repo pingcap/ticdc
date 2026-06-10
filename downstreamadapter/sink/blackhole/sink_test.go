@@ -89,8 +89,6 @@ func TestBlacHoleSinkBasicFunctionality(t *testing.T) {
 
 	require.Equal(t, count.Load(), int32(3))
 }
-<<<<<<< HEAD
-=======
 
 func TestBlackHoleSinkBatchConfig(t *testing.T) {
 	sink, err := New(common.NewChangefeedID(common.DefaultKeyspaceName))
@@ -98,4 +96,3 @@ func TestBlackHoleSinkBatchConfig(t *testing.T) {
 	require.Equal(t, 4096, sink.BatchCount())
 	require.Zero(t, sink.BatchBytes())
 }
->>>>>>> 628deab03 (sink: add metrics for blackhole sink (#5042))
