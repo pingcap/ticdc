@@ -52,6 +52,9 @@ func newDMLTask(
 	version cloudstorage.VersionedTableName,
 	event *commonEvent.DMLEvent,
 ) *task {
+	// The dispatcher path registers progress callbacks before calling
+	// Sink.AddDMLEvent, so snapshot callbacks here and release the large event
+	// object after encoding.
 	return &task{
 		kind:           taskKindDML,
 		event:          event,
@@ -78,29 +81,24 @@ func (t *task) isFlushTask() bool {
 }
 
 func (t *task) replacePostFlushCallbacks() {
-	if t == nil || t.callbacks == nil || len(t.encodedMsgs) == 0 {
+	if len(t.encodedMsgs) == 0 {
 		return
 	}
-	replaced := false
+
+	// Txn encoders put event.PostFlush into message.Callback. That method value
+	// keeps the original DMLEvent reachable through the encoded messages, so
+	// replace it with the lightweight callback copy before releasing task.event.
 	for _, msg := range t.encodedMsgs {
-		if msg.Callback == nil {
-			continue
-		}
-		msg.Callback = t.callbacks.postFlush
-		replaced = true
+		msg.Callback = nil
 	}
-	if !replaced {
-		t.encodedMsgs[len(t.encodedMsgs)-1].Callback = t.callbacks.postFlush
-	}
+	// One callback on the last message is enough because all messages in a task
+	// are enqueued and flushed as one spool entry.
+	t.encodedMsgs[len(t.encodedMsgs)-1].Callback = t.callbacks.postFlush
 }
 
-func (t *task) releaseEvent() {
-	if t == nil {
-		return
-	}
-	t.event = nil
-}
-
+// txnCallbacks is a lightweight copy of a DMLEvent's enqueue and flush
+// callbacks. It lets cloud storage release the full DMLEvent after encoding
+// while preserving the event callback semantics: each stage runs at most once.
 type txnCallbacks struct {
 	flushed  []func()
 	enqueued []func()

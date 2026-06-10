@@ -158,6 +158,7 @@ func (d *writer) flushMessages(ctx context.Context) error {
 				}
 				if hasNewerSchemaVersion {
 					d.discardEntries(tableTask.entries)
+					tableTask.entries = nil
 					log.Warn("ignore messages belonging to an old schema version",
 						zap.String("keyspace", keyspace),
 						zap.String("changefeed", changefeed),
@@ -201,6 +202,7 @@ func (d *writer) flushMessages(ctx context.Context) error {
 						zap.Error(err))
 					return err
 				}
+				tableTask.entries = nil
 
 				log.Debug("write file to storage success",
 					zap.String("keyspace", keyspace),
@@ -289,9 +291,8 @@ func (d *writer) writeDataFile(ctx context.Context, dataFilePath, indexFilePath 
 	for _, entry := range payload.entries {
 		d.spool.Release(entry)
 	}
+	// Help GC release the potentially large encoded payload buffer before returning.
 	payload.data = nil
-	payload.entries = nil
-	payload.postFlushCallbacks = nil
 	return nil
 }
 
