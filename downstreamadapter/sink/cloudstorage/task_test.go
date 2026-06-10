@@ -56,11 +56,17 @@ func TestReplacePostFlushCallbacksDetachesOriginalMessageCallbacks(t *testing.T)
 
 	var originalCallbackCount atomic.Int32
 	var flushCallbackCount atomic.Int32
+	var enqueueCallbackCount atomic.Int32
 	task := &task{
 		callbacks: &txnCallbacks{
 			flushed: []func(){
 				func() {
 					flushCallbackCount.Add(1)
+				},
+			},
+			enqueued: []func(){
+				func() {
+					enqueueCallbackCount.Add(1)
 				},
 			},
 		},
@@ -81,4 +87,5 @@ func TestReplacePostFlushCallbacksDetachesOriginalMessageCallbacks(t *testing.T)
 	task.encodedMsgs[2].Callback()
 	require.Equal(t, int32(0), originalCallbackCount.Load())
 	require.Equal(t, int32(1), flushCallbackCount.Load())
+	require.Equal(t, int32(1), enqueueCallbackCount.Load())
 }
