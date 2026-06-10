@@ -38,6 +38,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/objstore/objectio"
 	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
@@ -544,11 +545,11 @@ type failOnIndexStorage struct {
 }
 
 type failOnCloseStorage struct {
-	storage.ExternalStorage
+	storeapi.Storage
 }
 
 type failOnCloseWriter struct {
-	storage.ExternalFileWriter
+	objectio.Writer
 }
 
 func (s *failOnIndexStorage) WriteFile(ctx context.Context, name string, data []byte) error {
@@ -559,17 +560,17 @@ func (s *failOnIndexStorage) WriteFile(ctx context.Context, name string, data []
 }
 
 func (s *failOnCloseStorage) Create(
-	ctx context.Context, name string, option *storage.WriterOption,
-) (storage.ExternalFileWriter, error) {
-	writer, err := s.ExternalStorage.Create(ctx, name, option)
+	ctx context.Context, name string, option *storeapi.WriterOption,
+) (objectio.Writer, error) {
+	writer, err := s.Storage.Create(ctx, name, option)
 	if err != nil {
 		return nil, err
 	}
-	return &failOnCloseWriter{ExternalFileWriter: writer}, nil
+	return &failOnCloseWriter{Writer: writer}, nil
 }
 
 func (w *failOnCloseWriter) Close(ctx context.Context) error {
-	_ = w.ExternalFileWriter.Close(ctx)
+	_ = w.Writer.Close(ctx)
 	return errors.New("writer close failed")
 }
 
@@ -644,7 +645,7 @@ func TestWriterDataFileCloseError(t *testing.T) {
 	uri := fmt.Sprintf("file:///%s?flush-interval=2s", parentDir)
 	baseStorage, err := util.GetExternalStorageWithDefaultTimeout(ctx, uri)
 	require.NoError(t, err)
-	storage := &failOnCloseStorage{ExternalStorage: baseStorage}
+	storage := &failOnCloseStorage{Storage: baseStorage}
 
 	sinkURI, err := url.Parse(uri)
 	require.NoError(t, err)
