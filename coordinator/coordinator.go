@@ -302,11 +302,9 @@ func (c *coordinator) handleStateChange(
 	}
 	cf.SetInfo(cfInfo)
 
-	switch event.state {
-	case config.StateFailed, config.StateFinished:
+	if event.state == config.StateFailed || event.state == config.StateFinished {
 		failpoint.Inject("BlockBeforeStopChangefeed", func() {})
 		c.controller.operatorController.StopChangefeed(ctx, event.changefeedID, false)
-	default:
 	}
 	return nil
 }
