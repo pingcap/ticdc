@@ -114,82 +114,18 @@ func (e *DispatcherManager) NewTableTriggerRedoDispatcher(id *heartbeatpb.Dispat
 	// table trigger event dispatcher and table trigger redo dispatcher must exist on the same node
 	redoDispatcher := e.GetTableTriggerRedoDispatcher()
 	redoDispatcher.SetRedoMeta(e.ctx, e.config.Consistent)
-	if e.redoMetaCollectorStarted.CompareAndSwap(false, true) {
-		e.wg.Add(1)
-		go func() {
-			defer e.wg.Done()
-			err := e.collectRedoMeta(e.ctx)
-			e.handleError(e.ctx, err)
-		}()
-	}
+	e.wg.Add(1)
+	go func() {
+		defer e.wg.Done()
+		err := e.collectRedoMeta(e.ctx)
+		e.handleError(e.ctx, err)
+	}()
 	log.Info("table trigger redo dispatcher created",
 		zap.Stringer("changefeedID", e.changefeedID),
 		zap.Stringer("dispatcherID", redoDispatcher.GetId()),
 		zap.Uint64("startTs", redoDispatcher.GetStartTs()),
 	)
 	return nil
-}
-
-// EnsureTableTriggerRedoDispatcher keeps redo DDL dispatchers in sync with the
-// maintainer owner chosen by the bootstrap request. It returns ready=false when
-// the old trigger is still draining and the caller must retry later.
-func (e *DispatcherManager) EnsureTableTriggerRedoDispatcher(
-	id *heartbeatpb.DispatcherID,
-	startTs uint64,
-	newChangefeed bool,
-) (bool, error) {
-	if id == nil {
-		return true, nil
-	}
-	expectedID := common.NewDispatcherIDFromPB(id)
-	existing := e.GetTableTriggerRedoDispatcher()
-	if existing == nil {
-		replacementStartTs := e.getTableTriggerRedoReplacementStartTs(startTs)
-		if err := e.NewTableTriggerRedoDispatcher(id, replacementStartTs, newChangefeed); err != nil {
-			return true, err
-		}
-		e.clearPendingTableTriggerRedoReplacement()
-		return true, nil
-	}
-	if existing.GetId() == expectedID {
-		e.clearPendingTableTriggerRedoReplacement()
-		return true, nil
-	}
-
-	replacementStartTs := existing.GetStartTs()
-	e.setPendingTableTriggerRedoReplacement(replacementStartTs)
-	if !e.removeTableTriggerRedoDispatcherForReplacement(existing) {
-		return false, nil
-	}
-	if err := e.NewTableTriggerRedoDispatcher(id, replacementStartTs, newChangefeed); err != nil {
-		return true, err
-	}
-	e.clearPendingTableTriggerRedoReplacement()
-	return true, nil
-}
-
-func (e *DispatcherManager) removeTableTriggerRedoDispatcherForReplacement(d *dispatcher.RedoDispatcher) bool {
-	if d.GetTryRemoving() {
-		return false
-	}
-	appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).RemoveDispatcher(d)
-	if redoMeta := d.GetRedoMeta(); redoMeta != nil {
-		redoMeta.CleanupMetrics()
-	}
-	d.SetTryRemoving()
-	if _, ok := d.TryClose(); !ok {
-		e.submitRemoveDispatcherTask(d)
-		log.Info("waiting for table trigger redo dispatcher to close before replacement",
-			zap.Stringer("changefeedID", e.changefeedID),
-			zap.Stringer("dispatcherID", d.GetId()))
-		return false
-	}
-	d.Remove()
-	e.cleanRedoDispatcher(d.GetId(), d.GetSchemaID())
-	log.Info("replaced table trigger redo dispatcher",
-		zap.Stringer("changefeedID", e.changefeedID),
-		zap.Stringer("dispatcherID", d.GetId()))
-	return true
 }
 
 func (e *DispatcherManager) getRedoEventCollectorBatchCountAndBytes(redoSink *redo.Sink) (int, int) {
@@ -431,30 +367,6 @@ func (e *DispatcherManager) SetTableTriggerRedoDispatcher(rd *dispatcher.RedoDis
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.tableTriggerRedoDispatcher = rd
-}
-
-func (e *DispatcherManager) setPendingTableTriggerRedoReplacement(startTs uint64) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.pendingTableTriggerRedoReplacement = tableTriggerReplacement{
-		pending: true,
-		startTs: startTs,
-	}
-}
-
-func (e *DispatcherManager) getTableTriggerRedoReplacementStartTs(fallback uint64) uint64 {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if e.pendingTableTriggerRedoReplacement.pending {
-		return e.pendingTableTriggerRedoReplacement.startTs
-	}
-	return fallback
-}
-
-func (e *DispatcherManager) clearPendingTableTriggerRedoReplacement() {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.pendingTableTriggerRedoReplacement = tableTriggerReplacement{}
 }
 
 func (e *DispatcherManager) GetAllRedoDispatchers(schemaID int64) []common.DispatcherID {

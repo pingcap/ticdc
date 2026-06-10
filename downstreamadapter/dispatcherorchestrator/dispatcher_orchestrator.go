@@ -249,38 +249,23 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 		return nil
 	}
 	if exists {
-		// Reconcile table trigger dispatchers for maintainer migration and
-		// same-node higher-epoch takeover. The latter keeps the existing
-		// DispatcherManager but the new Maintainer owns fresh trigger IDs.
-		ready, err := manager.EnsureTableTriggerEventDispatcher(
-			req.TableTriggerEventDispatcherId,
-			req.StartTs,
-			false,
-		)
-		if err != nil {
-			log.Error("failed to reconcile table trigger event dispatcher",
-				zap.Stringer("changefeedID", cfId), zap.Error(err))
+		// A higher-epoch maintainer may reuse an existing DispatcherManager with
+		// the same table trigger ID. A fresh trigger ID is allowed only after the
+		// old maintainer handover leaves no old trigger on this node. If a
+		// different trigger ID is still present, the scheduler has violated the
+		// handover ordering; replacing it in place can duplicate DDL ownership,
+		// so fail the bootstrap instead.
+		if err := ensureBootstrapTableTriggerEventDispatcher(
+			cfId, manager, req.TableTriggerEventDispatcherId, req.StartTs,
+		); err != nil {
 			manager.MaintainerFenceMu.Unlock()
 			return m.handleDispatcherError(from, req.ChangefeedID, maintainerEpoch, err)
 		}
-		if !ready {
-			manager.MaintainerFenceMu.Unlock()
-			return nil
-		}
-		ready, err = manager.EnsureTableTriggerRedoDispatcher(
-			req.TableTriggerRedoDispatcherId,
-			req.StartTs,
-			false,
-		)
-		if err != nil {
-			log.Error("failed to reconcile table trigger redo dispatcher",
-				zap.Stringer("changefeedID", cfId), zap.Error(err))
+		if err := ensureBootstrapTableTriggerRedoDispatcher(
+			cfId, manager, req.TableTriggerRedoDispatcherId, req.StartTs,
+		); err != nil {
 			manager.MaintainerFenceMu.Unlock()
 			return m.handleDispatcherError(from, req.ChangefeedID, maintainerEpoch, err)
-		}
-		if !ready {
-			manager.MaintainerFenceMu.Unlock()
-			return nil
 		}
 	}
 
@@ -299,6 +284,66 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 	response := createBootstrapResponse(req.ChangefeedID, manager, startTs, redoStartTs)
 	manager.MaintainerFenceMu.Unlock()
 	return m.sendResponse(from, messaging.MaintainerManagerTopic, response)
+}
+
+func ensureBootstrapTableTriggerEventDispatcher(
+	cfId common.ChangeFeedID,
+	manager *dispatchermanager.DispatcherManager,
+	id *heartbeatpb.DispatcherID,
+	startTs uint64,
+) error {
+	if id == nil {
+		return nil
+	}
+	expectedID := common.NewDispatcherIDFromPB(id)
+	tableTriggerDispatcher := manager.GetTableTriggerEventDispatcher()
+	if tableTriggerDispatcher == nil {
+		if err := manager.NewTableTriggerEventDispatcher(id, startTs, false); err != nil {
+			log.Error("failed to create table trigger event dispatcher",
+				zap.Stringer("changefeedID", cfId), zap.Error(err))
+			return err
+		}
+		return nil
+	}
+	if tableTriggerDispatcher.GetId() == expectedID {
+		return nil
+	}
+	log.Error("table trigger event dispatcher id mismatch during bootstrap",
+		zap.Stringer("changefeedID", cfId),
+		zap.Stringer("expectedDispatcherID", expectedID),
+		zap.Stringer("actualDispatcherID", tableTriggerDispatcher.GetId()))
+	return errors.ErrChangefeedInitTableTriggerDispatcherFailed.
+		GenWithStackByArgs("table trigger event dispatcher id mismatch during bootstrap")
+}
+
+func ensureBootstrapTableTriggerRedoDispatcher(
+	cfId common.ChangeFeedID,
+	manager *dispatchermanager.DispatcherManager,
+	id *heartbeatpb.DispatcherID,
+	startTs uint64,
+) error {
+	if id == nil {
+		return nil
+	}
+	expectedID := common.NewDispatcherIDFromPB(id)
+	tableTriggerRedoDispatcher := manager.GetTableTriggerRedoDispatcher()
+	if tableTriggerRedoDispatcher == nil {
+		if err := manager.NewTableTriggerRedoDispatcher(id, startTs, false); err != nil {
+			log.Error("failed to create table trigger redo dispatcher",
+				zap.Stringer("changefeedID", cfId), zap.Error(err))
+			return err
+		}
+		return nil
+	}
+	if tableTriggerRedoDispatcher.GetId() == expectedID {
+		return nil
+	}
+	log.Error("table trigger redo dispatcher id mismatch during bootstrap",
+		zap.Stringer("changefeedID", cfId),
+		zap.Stringer("expectedDispatcherID", expectedID),
+		zap.Stringer("actualDispatcherID", tableTriggerRedoDispatcher.GetId()))
+	return errors.ErrChangefeedInitTableTriggerDispatcherFailed.
+		GenWithStackByArgs("table trigger redo dispatcher id mismatch during bootstrap")
 }
 
 // handlePostBootstrapRequest handles the maintainer post-bootstrap request message.

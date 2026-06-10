@@ -106,30 +106,6 @@ func (e *DispatcherManager) SetTableTriggerEventDispatcher(d *dispatcher.EventDi
 	e.tableTriggerEventDispatcher = d
 }
 
-func (e *DispatcherManager) setPendingTableTriggerEventReplacement(startTs uint64) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.pendingTableTriggerEventReplacement = tableTriggerReplacement{
-		pending: true,
-		startTs: startTs,
-	}
-}
-
-func (e *DispatcherManager) getTableTriggerEventReplacementStartTs(fallback uint64) uint64 {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if e.pendingTableTriggerEventReplacement.pending {
-		return e.pendingTableTriggerEventReplacement.startTs
-	}
-	return fallback
-}
-
-func (e *DispatcherManager) clearPendingTableTriggerEventReplacement() {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.pendingTableTriggerEventReplacement = tableTriggerReplacement{}
-}
-
 func (e *DispatcherManager) SetHeartbeatRequestQueue(heartbeatRequestQueue *HeartbeatRequestQueue) {
 	e.heartbeatRequestQueue = heartbeatRequestQueue
 }
