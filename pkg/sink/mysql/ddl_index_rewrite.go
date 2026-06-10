@@ -117,8 +117,7 @@ func isIndexConstraint(constraint *ast.Constraint) bool {
 		ast.ConstraintUniqKey,
 		ast.ConstraintUniqIndex,
 		ast.ConstraintFulltext,
-		ast.ConstraintVector,
-		ast.ConstraintColumnar:
+		ast.ConstraintVector:
 		return true
 	default:
 		return false

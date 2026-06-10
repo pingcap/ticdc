@@ -31,6 +31,7 @@ import (
 	"github.com/pingcap/tidb/pkg/meta"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser"
+	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/format"
 	parser_model "github.com/pingcap/tidb/pkg/parser/model"
 	// NOTE: Do not remove the `test_driver` import.
