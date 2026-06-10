@@ -82,6 +82,7 @@ func createGRPCConn(ctx context.Context, credential *security.Credential, target
 			Timeout:             3 * time.Second,
 			PermitWithoutStream: true,
 		}),
+		grpc.WithSharedWriteBuffer(true),
 	}
 
 	grpcMetrics := metrics.GetGlobalGrpcMetrics()
