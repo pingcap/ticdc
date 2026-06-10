@@ -52,6 +52,9 @@ func newDMLTask(
 	version cloudstorage.VersionedTableName,
 	event *commonEvent.DMLEvent,
 ) *task {
+	// The dispatcher path registers progress callbacks before calling
+	// Sink.AddDMLEvent, so snapshot callbacks here and release the large event
+	// object after encoding.
 	return &task{
 		kind:           taskKindDML,
 		event:          event,
@@ -92,13 +95,6 @@ func (t *task) replacePostFlushCallbacks() {
 	if !replaced {
 		t.encodedMsgs[len(t.encodedMsgs)-1].Callback = t.callbacks.postFlush
 	}
-}
-
-func (t *task) releaseEvent() {
-	if t == nil {
-		return
-	}
-	t.event = nil
 }
 
 type txnCallbacks struct {
