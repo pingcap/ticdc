@@ -90,6 +90,7 @@ func NewController(changefeedID common.ChangeFeedID,
 	keyspaceMeta common.KeyspaceMeta,
 	enableRedo bool,
 	balanceMoveBatchSize int,
+	maintainerEpoch uint64,
 ) *Controller {
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 
@@ -156,6 +157,7 @@ func NewController(changefeedID common.ChangeFeedID,
 		controller.drainState,
 		balanceMoveBatchSize,
 	)
+	controller.SetMaintainerEpoch(maintainerEpoch)
 	return controller
 }
 

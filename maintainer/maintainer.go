@@ -205,7 +205,7 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		eventCh:           chann.NewAutoDrainChann[*Event](),
 		startCheckpointTs: checkpointTs,
 		controller: NewController(cfID, checkpointTs, taskScheduler,
-			info.Config, ddlSpan, redoDDLSpan, conf.AddTableBatchSize, time.Duration(conf.CheckBalanceInterval), refresher, keyspaceMeta, enableRedo, conf.BalanceMoveBatchSize),
+			info.Config, ddlSpan, redoDDLSpan, conf.AddTableBatchSize, time.Duration(conf.CheckBalanceInterval), refresher, keyspaceMeta, enableRedo, conf.BalanceMoveBatchSize, info.Epoch),
 		mc:                    mc,
 		removed:               atomic.NewBool(false),
 		nodeManager:           nodeManager,
@@ -236,7 +236,6 @@ func NewMaintainer(cfID common.ChangeFeedID,
 		redoTableCountGauge:    metrics.TableCountGauge.WithLabelValues(keyspaceName, name, "redo"),
 	}
 	m.controller.SetSelfNodeID(selfNode.ID)
-	m.controller.SetMaintainerEpoch(info.Epoch)
 	m.nodeChanged.changed = false
 	m.runningErrors.m = make(map[node.ID]*heartbeatpb.RunningError)
 
