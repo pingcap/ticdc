@@ -113,13 +113,6 @@ func (p *TableProgress) Add(event commonEvent.FlushableEvent) {
 	})
 }
 
-// Remove deletes an event from the TableProgress.
-// Note: Consider implementing batch removal in the future if needed.
-func (p *TableProgress) Remove(event commonEvent.FlushableEvent) {
-	ts := Ts{startTs: event.GetStartTs(), commitTs: event.GetCommitTs()}
-	p.remove(ts, event.GetSize())
-}
-
 func (p *TableProgress) remove(ts Ts, size int64) {
 	p.rwMutex.Lock()
 	defer p.rwMutex.Unlock()

@@ -93,8 +93,11 @@ func TestSyncPointEventCommitTs(t *testing.T) {
 	assert.Equal(t, uint64(39), checkpointTs, "checkpointTs should be largest commitTs - 1")
 	assert.False(t, isEmpty)
 
-	// Test Remove method
-	tp.Remove(syncPointEvent)
+	// Test remove method
+	tp.remove(
+		Ts{startTs: syncPointEvent.GetStartTs(), commitTs: syncPointEvent.GetCommitTs()},
+		syncPointEvent.GetSize(),
+	)
 	assert.True(t, tp.Empty(), "TableProgress should be empty after removing the event")
 
 	// Verify checkpointTs after removal
@@ -115,7 +118,10 @@ func TestSyncPointEventCommitTs(t *testing.T) {
 	assert.Equal(t, uint64(59), checkpointTs, "checkpointTs should be largest commitTs - 1")
 	assert.False(t, isEmpty)
 
-	tp.Remove(syncPointEvent)
+	tp.remove(
+		Ts{startTs: syncPointEvent.GetStartTs(), commitTs: syncPointEvent.GetCommitTs()},
+		syncPointEvent.GetSize(),
+	)
 
 	checkpointTs, isEmpty = tp.GetCheckpointTs()
 	assert.Equal(t, uint64(59), checkpointTs, "checkpointTs should be largest commitTs - 1")
