@@ -243,8 +243,11 @@ func (c *Controller) collectMetrics(ctx context.Context) error {
 			currentChangefeeds := make(map[common.ChangeFeedID]struct{})
 
 			c.changefeedDB.Foreach(func(cf *changefeed.Changefeed) {
-				info := cf.GetInfo()
-				if info == nil {
+				if cf.GetInfo() == nil {
+					return
+				}
+				info, err := cf.GetInfo().Clone()
+				if err != nil {
 					return
 				}
 
