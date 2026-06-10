@@ -165,10 +165,6 @@ func routeTableAdmissionsFromPB(admissions []*heartbeatpb.RouteTableAdmission) [
 		case heartbeatpb.RouteTableAdmissionAction_ADMIT:
 			result = append(result, routing.Admission{
 				Action: routing.Admit,
-				Source: routing.TableKey{
-					Schema: item.SourceSchemaName,
-					Table:  item.SourceTableName,
-				},
 				Binding: routing.NewRouteBinding(
 					item.SourceSchemaName,
 					item.SourceTableName,

@@ -147,10 +147,7 @@ func (a *Admin) Precheck(commitTs uint64, admissions []Admission) (bool, error) 
 	if !a.needsCheck(admissions) {
 		return true, nil
 	}
-	transition, ok := a.getOrBuildPendingEvent(commitTs, admissions)
-	if !ok {
-		return true, nil
-	}
+	transition := a.getOrBuildPendingEvent(commitTs, admissions)
 	if !a.isPendingHead(commitTs) {
 		log.Info("route transition waits for earlier DDL",
 			zap.String("changefeed", a.changefeedID.Name()),
@@ -184,10 +181,7 @@ func (a *Admin) Apply(commitTs uint64, admissions []Admission) error {
 		if len(admissions) == 0 {
 			return nil
 		}
-		transition, ok = a.getOrBuildPendingEvent(commitTs, admissions)
-		if !ok {
-			return nil
-		}
+		transition = a.getOrBuildPendingEvent(commitTs, admissions)
 	}
 	releases, admits, err := a.applyTransition(transition, true)
 	if err != nil {
@@ -210,18 +204,15 @@ func (a *Admin) needsCheck(admissions []Admission) bool {
 	return len(admissions) > 0
 }
 
-func (a *Admin) getOrBuildPendingEvent(commitTs uint64, admissions []Admission) (*routeTransition, bool) {
+func (a *Admin) getOrBuildPendingEvent(commitTs uint64, admissions []Admission) *routeTransition {
 	if transition, ok := a.pendingTransitions[commitTs]; ok {
-		return transition, true
+		return transition
 	}
 	transition := a.buildTransition(admissions)
-	if transition == nil {
-		return nil, false
-	}
 	a.pendingQueue = append(a.pendingQueue, commitTs)
 	slices.Sort(a.pendingQueue)
 	a.pendingTransitions[commitTs] = transition
-	return transition, true
+	return transition
 }
 
 func (a *Admin) isPendingHead(commitTs uint64) bool {
@@ -251,11 +242,6 @@ func (a *Admin) buildTransition(admissions []Admission) *routeTransition {
 			transition.releaseSchemas = append(transition.releaseSchemas, table.Source.Schema)
 		default:
 		}
-	}
-	if len(transition.releases) == 0 &&
-		len(transition.releaseSchemas) == 0 &&
-		len(transition.admits) == 0 {
-		return nil
 	}
 	return transition
 }

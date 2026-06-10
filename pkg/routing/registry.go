@@ -57,9 +57,8 @@ func (r *TargetTableRegistry) remove(source TableKey) {
 // removed before the new binding can claim its target.
 //
 // This method validates the transition before mutating the registry. Route
-// conflicts still fail the whole transition. Malformed same-source additions are
-// logged and ignored. If mutate is false, this method only validates the
-// transition and leaves both indexes unchanged.
+// conflicts fail the whole transition. If mutate is false, this method only
+// validates the transition and leaves both indexes unchanged.
 func (r *TargetTableRegistry) ApplyTransition(removes []TableKey, adds []RouteBinding, mutate bool) error {
 	removeSet := make(map[TableKey]struct{}, len(removes))
 	for _, source := range removes {
@@ -67,43 +66,7 @@ func (r *TargetTableRegistry) ApplyTransition(removes []TableKey, adds []RouteBi
 	}
 
 	addedTargets := make(map[TableKey]TableKey, len(adds))
-	addedSources := make(map[TableKey]TableKey, len(adds))
-	acceptedAdds := make([]RouteBinding, 0, len(adds))
 	for _, add := range adds {
-		// A source already in the registry can only be re-added with a different
-		// target when the same transition also removes the old source binding.
-		// Otherwise the caller is trying to retarget an existing source without
-		// describing the corresponding table-info removal.
-		if target, ok := r.source2Target[add.Source]; ok {
-			if _, removed := removeSet[add.Source]; !removed && !target.Equal(add.Target) {
-				log.Warn("source is already registered to a different target, ignore incoming route admission",
-					zap.String("keyspace", r.changefeedID.Keyspace()),
-					zap.String("changefeed", r.changefeedID.Name()),
-					zap.String("sourceSchema", add.Source.Schema),
-					zap.String("sourceTable", add.Source.Table),
-					zap.String("registeredTargetSchema", target.Schema),
-					zap.String("registeredTargetTable", target.Table),
-					zap.String("incomingTargetSchema", add.Target.Schema),
-					zap.String("incomingTargetTable", add.Target.Table))
-				continue
-			}
-		}
-
-		// The adds list itself must be internally consistent before the registry
-		// is touched. One source cannot point to two targets in one transition.
-		if existingTarget, ok := addedSources[add.Source]; ok && !existingTarget.Equal(add.Target) {
-			log.Warn("source is added to multiple targets in one route transition, ignore later admission",
-				zap.String("keyspace", r.changefeedID.Keyspace()),
-				zap.String("changefeed", r.changefeedID.Name()),
-				zap.String("sourceSchema", add.Source.Schema),
-				zap.String("sourceTable", add.Source.Table),
-				zap.String("existingTargetSchema", existingTarget.Schema),
-				zap.String("existingTargetTable", existingTarget.Table),
-				zap.String("incomingTargetSchema", add.Target.Schema),
-				zap.String("incomingTargetTable", add.Target.Table))
-			continue
-		}
-
 		// A target that is already owned by another source can only be claimed if
 		// that old owner is removed in the same transition. This is what makes
 		// rename/drop-and-create style replacements atomic while still rejecting
@@ -141,9 +104,7 @@ func (r *TargetTableRegistry) ApplyTransition(removes []TableKey, adds []RouteBi
 				existingSource.Schema, existingSource.Table,
 				add.Source.Schema, add.Source.Table)
 		}
-		addedSources[add.Source] = add.Target
 		addedTargets[add.Target] = add.Source
-		acceptedAdds = append(acceptedAdds, add)
 	}
 
 	if !mutate {
@@ -155,7 +116,7 @@ func (r *TargetTableRegistry) ApplyTransition(removes []TableKey, adds []RouteBi
 	for _, source := range removes {
 		r.remove(source)
 	}
-	for _, add := range acceptedAdds {
+	for _, add := range adds {
 		r.target2Source[add.Target] = add.Source
 		r.source2Target[add.Source] = add.Target
 	}
