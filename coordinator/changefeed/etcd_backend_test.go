@@ -193,6 +193,11 @@ func TestDeleteChangefeed(t *testing.T) {
 }
 
 func TestResumeChangefeed(t *testing.T) {
+	// Scenario: resuming a stopped changefeed persists the normal state and
+	// returns the metadata that was actually loaded from etcd.
+	// Steps:
+	// 1) Load legacy changefeed info without an embedded ChangefeedID.
+	// 2) Resume the changefeed and assert the returned info is normalized.
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -210,8 +215,10 @@ func TestResumeChangefeed(t *testing.T) {
 	cdcClient.EXPECT().GetChangeFeedStatus(gomock.Any(), changefeedID).Return(status, int64(0), nil).Times(1)
 	etcdClient.EXPECT().Txn(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).Return(&clientv3.TxnResponse{Succeeded: true}, nil).Times(1)
 
-	err := backend.ResumeChangefeed(context.Background(), changefeedID, 200)
+	resumedInfo, err := backend.ResumeChangefeed(context.Background(), changefeedID, 200)
 	require.Nil(t, err)
+	require.Equal(t, config.StateNormal, resumedInfo.State)
+	require.Equal(t, changefeedID, resumedInfo.ChangefeedID)
 }
 
 func TestSetChangefeedProgress(t *testing.T) {

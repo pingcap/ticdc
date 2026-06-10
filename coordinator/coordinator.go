@@ -410,6 +410,10 @@ func (c *coordinator) GetChangefeed(ctx context.Context, changefeedDisplayName c
 	return c.controller.GetChangefeed(ctx, changefeedDisplayName)
 }
 
+func (c *coordinator) GetPersistedChangefeedInfo(ctx context.Context, id common.ChangeFeedID) (*config.ChangeFeedInfo, error) {
+	return c.controller.GetPersistedChangefeedInfo(ctx, id)
+}
+
 func (c *coordinator) Initialized() bool {
 	return c.controller.initialized.Load()
 }

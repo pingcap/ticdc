@@ -24,6 +24,8 @@ import (
 type Backend interface {
 	// GetAllChangefeeds returns all changefeeds from the backend db, include stopped and failed changefeeds
 	GetAllChangefeeds(ctx context.Context) (map[common.ChangeFeedID]*ChangefeedMetaWrapper, error)
+	// GetChangefeedInfo returns the latest persisted changefeed info from the backend db.
+	GetChangefeedInfo(ctx context.Context, id common.ChangeFeedID) (*config.ChangeFeedInfo, error)
 	// CreateChangefeed saves changefeed info and status to db
 	CreateChangefeed(ctx context.Context, info *config.ChangeFeedInfo) error
 	// UpdateChangefeed updates changefeed info  to db
@@ -34,8 +36,8 @@ type Backend interface {
 	DeleteChangefeed(ctx context.Context, id common.ChangeFeedID) error
 	// SetChangefeedProgress persists the operation progress status to db for a changefeed
 	SetChangefeedProgress(ctx context.Context, id common.ChangeFeedID, progress config.Progress) error
-	// ResumeChangefeed persists the resumed status to db for a changefeed
-	ResumeChangefeed(ctx context.Context, id common.ChangeFeedID, newCheckpointTs uint64) error
+	// ResumeChangefeed persists the resumed status to db for a changefeed and returns the resumed info.
+	ResumeChangefeed(ctx context.Context, id common.ChangeFeedID, newCheckpointTs uint64) (*config.ChangeFeedInfo, error)
 	// UpdateChangefeedCheckpointTs persists the checkpointTs for changefeeds
 	UpdateChangefeedCheckpointTs(ctx context.Context, checkpointTs map[common.ChangeFeedID]uint64) error
 }

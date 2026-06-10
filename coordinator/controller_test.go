@@ -121,6 +121,9 @@ func TestOnPeriodTaskAdvanceLiveness(t *testing.T) {
 }
 
 func TestResumeChangefeed(t *testing.T) {
+	// Scenario: resume should propagate backend failures and update in-memory state after success.
+	// Steps: try a missing changefeed, simulate a backend resume failure, then return a persisted
+	// changefeed info from the backend and verify the stopped changefeed becomes normal.
 	ctrl := gomock.NewController(t)
 	backend := mock_changefeed.NewMockBackend(ctrl)
 	changefeedDB := changefeed.NewChangefeedDB(1216)
@@ -140,11 +143,11 @@ func TestResumeChangefeed(t *testing.T) {
 	// no changefeed
 	require.NotNil(t, controller.ResumeChangefeed(context.Background(), common.NewChangeFeedIDWithName("test2", common.DefaultKeyspaceName), 12, true))
 
-	backend.EXPECT().ResumeChangefeed(gomock.Any(), gomock.Any(), gomock.Any()).Return(errors.New("failed")).Times(1)
+	backend.EXPECT().ResumeChangefeed(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, errors.New("failed")).Times(1)
 	require.NotNil(t, controller.ResumeChangefeed(context.Background(), cfID, 12, true))
 	require.Equal(t, config.StateFailed, changefeedDB.GetByID(cfID).GetInfo().State)
 
-	backend.EXPECT().ResumeChangefeed(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).Times(1)
+	backend.EXPECT().ResumeChangefeed(gomock.Any(), gomock.Any(), gomock.Any()).Return(cf.GetInfo(), nil).Times(1)
 	require.Nil(t, controller.ResumeChangefeed(context.Background(), cfID, 12, false))
 	require.Equal(t, config.StateNormal, changefeedDB.GetByID(cfID).GetInfo().State)
 }
@@ -176,6 +179,9 @@ func TestResumeChangefeedNormalState(t *testing.T) {
 }
 
 func TestResumeChangefeedOverwriteUpdatesLastSavedCheckpointTs(t *testing.T) {
+	// Scenario: overwrite resume should reset the persisted checkpoint baseline.
+	// Steps: resume a stopped changefeed with overwriteCheckpointTs and verify the in-memory
+	// last saved checkpoint is updated to the requested checkpoint.
 	ctrl := gomock.NewController(t)
 	backend := mock_changefeed.NewMockBackend(ctrl)
 	changefeedDB := changefeed.NewChangefeedDB(1216)
@@ -194,12 +200,15 @@ func TestResumeChangefeedOverwriteUpdatesLastSavedCheckpointTs(t *testing.T) {
 	changefeedDB.AddStoppedChangefeed(cf)
 
 	newCheckpointTs := uint64(120)
-	backend.EXPECT().ResumeChangefeed(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).Times(1)
+	backend.EXPECT().ResumeChangefeed(gomock.Any(), gomock.Any(), gomock.Any()).Return(cf.GetInfo(), nil).Times(1)
 	require.Nil(t, controller.ResumeChangefeed(context.Background(), cfID, newCheckpointTs, true))
 	require.Equal(t, newCheckpointTs, changefeedDB.GetByID(cfID).GetLastSavedCheckPointTs())
 }
 
 func TestResumeChangefeedIgnoresStaleMaintainerErrorAndSchedules(t *testing.T) {
+	// Scenario: a stale maintainer error kept in memory must not block manual resume.
+	// Steps: install an errored in-memory status, resume from the backend, and verify
+	// the changefeed is scheduled with a clean status.
 	ctrl := gomock.NewController(t)
 	backend := mock_changefeed.NewMockBackend(ctrl)
 	changefeedDB := changefeed.NewChangefeedDB(1216)
@@ -228,7 +237,7 @@ func TestResumeChangefeedIgnoresStaleMaintainerErrorAndSchedules(t *testing.T) {
 	_, _, err := cf.ForceUpdateStatus(stale)
 	require.NotNil(t, err)
 
-	backend.EXPECT().ResumeChangefeed(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil).Times(1)
+	backend.EXPECT().ResumeChangefeed(gomock.Any(), gomock.Any(), gomock.Any()).Return(cf.GetInfo(), nil).Times(1)
 	require.NoError(t, controller.ResumeChangefeed(context.Background(), cfID, 100, false))
 
 	// The changefeed should be enqueued for scheduling and should not be blocked by the stale error.
@@ -240,6 +249,38 @@ func TestResumeChangefeedIgnoresStaleMaintainerErrorAndSchedules(t *testing.T) {
 	require.False(t, status.BootstrapDone)
 	require.Len(t, status.Err, 0)
 	require.True(t, cf.ShouldRun())
+}
+
+func TestResumeChangefeedUsesBackendReturnedInfo(t *testing.T) {
+	// Scenario: stopped changefeed metadata can be edited directly in the backend while
+	// the coordinator still has an older in-memory copy. Steps: resume the changefeed
+	// with backend-returned info whose sink URI differs from memory, then verify the
+	// in-memory changefeed uses the backend value instead of overwriting it.
+	ctrl := gomock.NewController(t)
+	backend := mock_changefeed.NewMockBackend(ctrl)
+	changefeedDB := changefeed.NewChangefeedDB(1216)
+	controller := &Controller{
+		backend:      backend,
+		changefeedDB: changefeedDB,
+	}
+	cfID := common.NewChangeFeedIDWithName("test-backend-info", common.DefaultKeyspaceName)
+	cf := changefeed.NewChangefeed(cfID, &config.ChangeFeedInfo{
+		ChangefeedID: cfID,
+		Config:       config.GetDefaultReplicaConfig(),
+		State:        config.StateStopped,
+		SinkURI:      "mysql://downstream:3306",
+	}, 100, true)
+	changefeedDB.AddStoppedChangefeed(cf)
+
+	backendInfo, err := cf.GetInfo().Clone()
+	require.NoError(t, err)
+	backendInfo.SinkURI = "mysql://upstream:4000"
+	backendInfo.State = config.StateNormal
+	backend.EXPECT().ResumeChangefeed(gomock.Any(), cfID, uint64(100)).Return(backendInfo, nil).Times(1)
+
+	require.NoError(t, controller.ResumeChangefeed(context.Background(), cfID, 100, false))
+	require.Equal(t, "mysql://upstream:4000", changefeedDB.GetByID(cfID).GetInfo().SinkURI)
+	require.Equal(t, config.StateNormal, changefeedDB.GetByID(cfID).GetInfo().State)
 }
 
 func TestPauseChangefeed(t *testing.T) {

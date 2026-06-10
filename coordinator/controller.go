@@ -793,11 +793,17 @@ func (c *Controller) ResumeChangefeed(
 		return nil
 	}
 
-	if err := c.backend.ResumeChangefeed(ctx, id, newCheckpointTs); err != nil {
+	resumedInfo, err := c.backend.ResumeChangefeed(ctx, id, newCheckpointTs)
+	if err != nil {
 		return err
 	}
+	if resumedInfo == nil {
+		return errors.New("resumed changefeed info is nil")
+	}
 
-	clone, err := cf.GetInfo().Clone()
+	// Use the backend-returned info so direct metadata edits made while the
+	// changefeed was stopped are not overwritten by the stale in-memory copy.
+	clone, err := resumedInfo.Clone()
 	if err != nil {
 		return err
 	}
@@ -887,6 +893,18 @@ func (c *Controller) GetChangefeed(
 	status := &config.ChangeFeedStatus{CheckpointTs: cf.GetStatus().CheckpointTs, LastSyncedTs: cf.GetStatus().LastSyncedTs, LogCoordinatorResolvedTs: cf.GetLogCoordinatorResolvedTs()}
 	status.SetMaintainerAddr(maintainerAddr)
 	return info, status, nil
+}
+
+// GetPersistedChangefeedInfo returns the latest changefeed info persisted in the backend.
+//
+// Use this for resume-time validation because stopped changefeed metadata can
+// be changed outside the coordinator process, for example during metadata
+// migration or by legacy tooling. GetChangefeed intentionally returns the
+// coordinator's in-memory copy.
+func (c *Controller) GetPersistedChangefeedInfo(ctx context.Context, id common.ChangeFeedID) (*config.ChangeFeedInfo, error) {
+	c.apiLock.RLock()
+	defer c.apiLock.RUnlock()
+	return c.backend.GetChangefeedInfo(ctx, id)
 }
 
 // getChangefeed returns the changefeed by id, return nil if not found

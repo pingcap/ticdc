@@ -745,6 +745,13 @@ func (h *OpenAPIV2) ResumeChangefeed(c *gin.Context) {
 		_ = c.Error(err)
 		return
 	}
+	// Resume validation must use persisted metadata because stopped changefeeds
+	// can be edited outside the coordinator process during legacy migration.
+	cfInfo, err = co.GetPersistedChangefeedInfo(ctx, cfInfo.ChangefeedID)
+	if err != nil {
+		_ = c.Error(err)
+		return
+	}
 
 	// If there is no overrideCheckpointTs, then check whether the currentCheckpointTs is smaller than gc safepoint or not.
 	newCheckpointTs := status.CheckpointTs
