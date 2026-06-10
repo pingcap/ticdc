@@ -18,9 +18,10 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
+	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/util"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
-	parser_model "github.com/pingcap/tidb/pkg/parser/model"
+	"github.com/pingcap/tidb/pkg/parser/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	tiTypes "github.com/pingcap/tidb/pkg/types"
 	"github.com/pingcap/tidb/pkg/util/chunk"
@@ -267,7 +268,7 @@ func (r *RedoDMLEvent) ToDMLEvent() *DMLEvent {
 	}
 	tidbTableInfo := &timodel.TableInfo{
 		ID:   r.Row.Table.TableID,
-		Name: parser_model.NewCIStr(r.Row.Table.Table),
+		Name: model.NewCIStr(r.Row.Table.Table),
 	}
 	rawCols := r.Row.Columns
 	rawColsValue := r.Columns
@@ -278,7 +279,7 @@ func (r *RedoDMLEvent) ToDMLEvent() *DMLEvent {
 	for idx, col := range rawCols {
 		colInfo := &timodel.ColumnInfo{
 			ID:    int64(idx),
-			Name:  parser_model.NewCIStr(col.Name),
+			Name:  model.NewCIStr(col.Name),
 			State: timodel.StatePublic,
 		}
 		colInfo.SetType(col.Type)
@@ -310,7 +311,7 @@ func (r *RedoDMLEvent) ToDMLEvent() *DMLEvent {
 	}
 	for i, index := range r.Row.IndexColumns {
 		indexInfo := &timodel.IndexInfo{
-			Name:  parser_model.NewCIStr(fmt.Sprintf("index_%d", i)),
+			Name:  model.NewCIStr(fmt.Sprintf("index_%d", i)),
 			State: timodel.StatePublic,
 		}
 		firstCol := tidbTableInfo.Columns[index[0]]
@@ -325,7 +326,7 @@ func (r *RedoDMLEvent) ToDMLEvent() *DMLEvent {
 				isPrimary = false
 			}
 			indexInfo.Columns = append(indexInfo.Columns, &timodel.IndexColumn{
-				Name:   parser_model.NewCIStr(rawCols[id].Name),
+				Name:   model.NewCIStr(rawCols[id].Name),
 				Offset: id,
 			})
 		}
@@ -372,31 +373,6 @@ func (r *RedoDDLEvent) ToDDLEvent() *DDLEvent {
 		blockedTables = &InfluencedTables{InfluenceType: InfluenceTypeNormal}
 		blockedTableNames = []SchemaTableName{{SchemaName: schemaName, TableName: tableName}}
 	}
-<<<<<<< HEAD
-=======
-	columns := make([]*timodel.ColumnInfo, 0, len(r.DDL.Columns))
-	for _, col := range r.DDL.Columns {
-		colInfo := &timodel.ColumnInfo{
-			Name:    ast.NewCIStr(col.Name),
-			State:   timodel.StatePublic,
-			Version: col.Version,
-		}
-		colInfo.SetType(col.Type)
-		if err := colInfo.SetOriginDefaultValue(col.OriginDefaultValue); err != nil {
-			log.Panic("set origin default value failed",
-				zap.String("column", col.Name),
-				zap.Any("originDefaultValue", col.OriginDefaultValue),
-				zap.Error(err))
-		}
-		columns = append(columns, colInfo)
-	}
-	tableInfo := common.WrapTableInfo(schemaName, &timodel.TableInfo{
-		ID:      r.TableName.TableID,
-		Name:    ast.NewCIStr(tableName),
-		Columns: columns,
-	})
-	tableInfo.TableName.IsPartition = r.TableName.IsPartition
->>>>>>> b2b596352 (event: add target related fields to the event model to support table route (#4658))
 	return &DDLEvent{
 		TableInfo: &commonType.TableInfo{
 			TableName: r.TableName,

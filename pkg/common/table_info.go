@@ -150,17 +150,15 @@ func (ti *TableInfo) CloneWithRouting(targetSchema, targetTable string) *TableIn
 	}
 	// Create a new TableInfo with copied basic fields
 	cloned := &TableInfo{
-		TableName:         ti.TableName, // Value copy of TableName struct
-		Charset:           ti.Charset,
-		Collate:           ti.Collate,
-		Comment:           ti.Comment,
-		columnSchema:      ti.columnSchema, // Share the pointer (read-only)
-		HasPKOrNotNullUK:  ti.HasPKOrNotNullUK,
-		View:              ti.View,     // Share the pointer (read-only)
-		Sequence:          ti.Sequence, // Share the pointer (read-only)
-		UpdateTS:          ti.UpdateTS,
-		ActiveActiveTable: ti.ActiveActiveTable,
-		SoftDeleteTable:   ti.SoftDeleteTable,
+		TableName:        ti.TableName, // Value copy of TableName struct
+		Charset:          ti.Charset,
+		Collate:          ti.Collate,
+		Comment:          ti.Comment,
+		columnSchema:     ti.columnSchema, // Share the pointer (read-only)
+		HasPKOrNotNullUK: ti.HasPKOrNotNullUK,
+		View:             ti.View,     // Share the pointer (read-only)
+		Sequence:         ti.Sequence, // Share the pointer (read-only)
+		UpdateTS:         ti.UpdateTS,
 		// preSQLs is zero-initialized (uninitialized mutex/atomic, empty strings)
 	}
 	// Apply routing to the cloned TableName while keeping Schema/Table as source names.
@@ -358,13 +356,8 @@ func (ti *TableInfo) GetTableName() string {
 	return ti.TableName.GetTable()
 }
 
-<<<<<<< HEAD
 func (ti *TableInfo) GetTableNameCIStr() parser_model.CIStr {
-	return parser_model.NewCIStr(ti.TableName.Table)
-=======
-func (ti *TableInfo) GetTableNameCIStr() ast.CIStr {
-	return ast.NewCIStr(ti.GetTableName())
->>>>>>> b2b596352 (event: add target related fields to the event model to support table route (#4658))
+	return parser_model.NewCIStr(ti.GetTableName())
 }
 
 // GetSchemaNamePtr returns the pointer to the schema name of the table
