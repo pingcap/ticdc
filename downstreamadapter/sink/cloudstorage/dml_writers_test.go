@@ -173,8 +173,8 @@ func newCloudStorageWriteEventsFixture(
 
 	batch := 100
 	dmls := make([]string, 0, batch)
-	for j := 0; j < batch; j++ {
-		dmls = append(dmls, fmt.Sprintf("insert into table1 values (%d, 'hello world')", j))
+	for idx := range batch {
+		dmls = append(dmls, fmt.Sprintf("insert into table1 values (%d, 'hello world')", idx))
 	}
 	return helper, job, dmls, batch
 }
@@ -210,18 +210,18 @@ func verifyCloudStorageWriteEventsWithoutDateSeparator(
 	runDone := runSinkInBackground(t, ctx, cloudStorageSink)
 	defer cancelAndWaitSink(t, cancel, runDone)
 
-	var cnt uint64
+	var cnt atomic.Uint64
 	dispatcherID := common.NewDispatcherID()
 	event := helper.DML2Event(job.SchemaName, job.TableName, dmls...)
 	event.TableInfoVersion = job.BinlogInfo.FinishedTS
 	event.AddPostFlushFunc(func() {
-		atomic.AddUint64(&cnt, uint64(len(dmls)))
+		cnt.Add(uint64(len(dmls)))
 	})
 	event.DispatcherID = dispatcherID
 
 	cloudStorageSink.AddDMLEvent(event)
 	require.Eventually(t, func() bool {
-		return atomic.LoadUint64(&cnt) == uint64(batch)
+		return cnt.Load() == uint64(batch)
 	}, testEventuallyTimeout, testEventuallyTick, "wait for first event consumed")
 	metaDir := path.Join(parentDir, "test/table1/meta")
 	files, err := os.ReadDir(metaDir)
@@ -240,19 +240,19 @@ func verifyCloudStorageWriteEventsWithoutDateSeparator(
 	content, err = os.ReadFile(path.Join(tableDir, fmt.Sprintf("meta/CDC_%s.index", dispatcherID.String())))
 	require.NoError(t, err)
 	require.Equal(t, fmt.Sprintf("CDC_%s_000001.csv\n", dispatcherID.String()), string(content))
-	require.Equal(t, uint64(batch), atomic.LoadUint64(&cnt))
+	require.Equal(t, uint64(batch), cnt.Load())
 
 	// generating another dml file.
 	event = helper.DML2Event(job.SchemaName, job.TableName, dmls...)
 	event.TableInfoVersion = job.BinlogInfo.FinishedTS
 	event.AddPostFlushFunc(func() {
-		atomic.AddUint64(&cnt, uint64(len(dmls)))
+		cnt.Add(uint64(len(dmls)))
 	})
 	event.DispatcherID = dispatcherID
 
 	cloudStorageSink.AddDMLEvent(event)
 	require.Eventually(t, func() bool {
-		return atomic.LoadUint64(&cnt) == 2*uint64(batch)
+		return cnt.Load() == 2*uint64(batch)
 	}, testEventuallyTimeout, testEventuallyTick, "wait for second event consumed")
 
 	fileNames = getTableFiles(t, tableDir)
@@ -267,7 +267,7 @@ func verifyCloudStorageWriteEventsWithoutDateSeparator(
 	content, err = os.ReadFile(path.Join(tableDir, fmt.Sprintf("meta/CDC_%s.index", dispatcherID.String())))
 	require.Nil(t, err)
 	require.Equal(t, fmt.Sprintf("CDC_%s_000002.csv\n", dispatcherID.String()), string(content))
-	require.Equal(t, 2*uint64(batch), atomic.LoadUint64(&cnt))
+	require.Equal(t, 2*uint64(batch), cnt.Load())
 }
 
 func TestSubmitTaskToEncoderExitOnContextCancel(t *testing.T) {
