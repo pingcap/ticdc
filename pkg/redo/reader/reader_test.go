@@ -28,8 +28,10 @@ import (
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/codec"
 	misc "github.com/pingcap/ticdc/pkg/redo/common"
+	"github.com/pingcap/ticdc/pkg/redo/testutil"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
 	"github.com/pingcap/ticdc/pkg/redo/writer/file"
+	"github.com/pingcap/ticdc/pkg/util"
 	mockstorage "github.com/pingcap/tidb/br/pkg/mock/storage"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	"github.com/pingcap/tidb/pkg/meta/model"
@@ -44,10 +46,13 @@ func genLogFile(
 	dir string, logType string,
 	minCommitTs, maxCommitTs uint64,
 ) {
-	cfg := &writer.LogWriterConfig{
-		MaxLogSizeInBytes: 100000,
-		Dir:               dir,
-	}
+	consistentCfg := testutil.NewConsistentConfig("file://" + dir)
+	consistentCfg.MaxLogSize = util.AddressOf(int64(1))
+	cfg, err := writer.NewConfig(
+		common.NewChangeFeedIDWithName("reader-test", common.DefaultKeyspaceName),
+		consistentCfg,
+	)
+	require.NoError(t, err)
 	fileName := fmt.Sprintf(redo.RedoLogFileFormatV2, "capture", "default",
 		"changefeed", logType, maxCommitTs, uuid.NewString(), redo.LogEXT)
 	w, err := file.NewFileWriter(ctx, cfg, logType, writer.WithLogFileName(func() string {
@@ -88,7 +93,7 @@ func TestReadLogs(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx := context.Background()
 
 	meta := &misc.LogMeta{
 		CheckpointTs: 11,
@@ -105,7 +110,8 @@ func TestReadLogs(t *testing.T) {
 
 	uri, err := url.Parse(fmt.Sprintf("file://%s", dir))
 	require.NoError(t, err)
-	r := &LogReader{
+
+	rowReader := &LogReader{
 		cfg: &LogReaderConfig{
 			Dir:                t.TempDir(),
 			URI:                *uri,
@@ -113,26 +119,29 @@ func TestReadLogs(t *testing.T) {
 		},
 		meta:  meta,
 		rowCh: make(chan *pevent.RedoDMLEvent, defaultReaderChanSize),
+	}
+	require.NoError(t, rowReader.runRowReader(ctx))
+	var actualRows []uint64
+	for row := range rowReader.rowCh {
+		actualRows = append(actualRows, row.Row.CommitTs)
+	}
+	require.Equal(t, expectedRows, actualRows)
+
+	ddlReader := &LogReader{
+		cfg: &LogReaderConfig{
+			Dir:                t.TempDir(),
+			URI:                *uri,
+			UseExternalStorage: true,
+		},
+		meta:  meta,
 		ddlCh: make(chan *pevent.RedoDDLEvent, defaultReaderChanSize),
 	}
-	eg, egCtx := errgroup.WithContext(ctx)
-	eg.Go(func() error {
-		return r.Run(egCtx)
-	})
-
-	for _, ts := range expectedRows {
-		row, err := r.ReadNextRow(egCtx)
-		require.NoError(t, err)
-		require.Equal(t, ts, row.Row.CommitTs)
+	require.NoError(t, ddlReader.runDDLReader(ctx))
+	var actualDDLs []uint64
+	for ddl := range ddlReader.ddlCh {
+		actualDDLs = append(actualDDLs, ddl.DDL.CommitTs)
 	}
-	for _, ts := range expectedDDLs {
-		ddl, err := r.ReadNextDDL(egCtx)
-		require.NoError(t, err)
-		require.Equal(t, ts, ddl.DDL.CommitTs)
-	}
-
-	cancel()
-	require.ErrorIs(t, eg.Wait(), nil)
+	require.Equal(t, expectedDDLs, actualDDLs)
 }
 
 func TestLogReaderClose(t *testing.T) {
@@ -169,7 +178,9 @@ func TestLogReaderClose(t *testing.T) {
 		return r.Run(egCtx)
 	})
 
-	time.Sleep(2 * time.Second)
+	require.Eventually(t, func() bool {
+		return len(r.rowCh) > 0 && len(r.ddlCh) > 0
+	}, time.Second, 10*time.Millisecond)
 	cancel()
 	require.ErrorIs(t, eg.Wait(), context.Canceled)
 }
