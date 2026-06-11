@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/ast"
+	"github.com/pingcap/tidb/pkg/parser/format"
 	parser_model "github.com/pingcap/tidb/pkg/parser/model"
 	"go.uber.org/zap"
 )
@@ -591,6 +592,7 @@ func buildPersistedDDLEventForCreateView(args buildPersistedDDLEventFuncArgs) Pe
 	event := buildPersistedDDLEventCommon(args)
 	event.SchemaName = getSchemaName(args.databaseMap, event.SchemaID)
 	event.TableName = args.job.TableName
+	normalizeCreateViewQueryWithStoredSelect(&event)
 	return event
 }
 
@@ -604,8 +606,6 @@ func buildPersistedDDLEventForDropView(args buildPersistedDDLEventFuncArgs) Pers
 	return event
 }
 
-<<<<<<< HEAD
-=======
 // TiDB persists the normalized SELECT body of a view in
 // event.TableInfo.View.SelectStmt when executing CREATE VIEW, so this field can
 // carry fully resolved source-table references even if job.Query keeps the
@@ -615,32 +615,69 @@ func buildPersistedDDLEventForDropView(args buildPersistedDDLEventFuncArgs) Pers
 // Value assignment in CREATE VIEW:
 // https://github.com/pingcap/tidb/blob/8f2630e53d5d/pkg/ddl/create_table.go#L1668-L1678
 func normalizeCreateViewQueryWithStoredSelect(event *PersistedDDLEvent) {
-	if event.TableInfo == nil || event.TableInfo.View == nil {
+	if event.Query == "" || event.TableInfo == nil || event.TableInfo.View == nil || event.TableInfo.View.SelectStmt == "" {
 		return
 	}
 
-	query, err := commonEvent.NormalizeCreateViewQueryWithStoredSelect(
-		event.Query,
-		event.TableInfo.View.SelectStmt,
-		event.SchemaName,
-	)
+	stmt, err := parser.New().ParseOneStmt(event.Query, "", "")
 	if err != nil {
-		log.Warn("normalize create view query with stored select failed",
+		log.Warn("parse create view query failed when normalizing select statement",
+			zap.String("query", event.Query),
+			zap.Error(err))
+		return
+	}
+	createViewStmt, ok := stmt.(*ast.CreateViewStmt)
+	if !ok {
+		return
+	}
+
+	selectStmt, err := parser.New().ParseOneStmt(event.TableInfo.View.SelectStmt, "", "")
+	if err != nil {
+		log.Warn("parse stored create view select statement failed",
+			zap.String("selectStmt", event.TableInfo.View.SelectStmt),
+			zap.String("query", event.Query),
+			zap.Error(err))
+		return
+	}
+	// Keep the original CREATE VIEW text when the stored SELECT only qualifies tables in the view's own schema.
+	if createViewSelectUsesCurrentSchemaOnly(selectStmt, event.SchemaName) {
+		return
+	}
+
+	createViewStmt.Select = selectStmt
+	normalizedQuery, err := restoreDDLStmt(createViewStmt)
+	if err != nil {
+		log.Warn("restore normalized create view query failed",
 			zap.String("query", event.Query),
 			zap.String("selectStmt", event.TableInfo.View.SelectStmt),
 			zap.Error(err))
 		return
 	}
-	event.Query = query
+	event.Query = normalizedQuery
 }
 
->>>>>>> 136d2d392 (logservice: qualify CREATE VIEW column references (#5044))
+func createViewSelectUsesCurrentSchemaOnly(selectStmt ast.StmtNode, currentSchema string) bool {
+	for _, schema := range extractTableSchemas(selectStmt) {
+		if schema != "" && !strings.EqualFold(schema, currentSchema) {
+			return false
+		}
+	}
+	return true
+}
+
 func buildPersistedDDLEventForCreateTable(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
 	event := buildPersistedDDLEventCommon(args)
 	event.SchemaName = getSchemaName(args.databaseMap, event.SchemaID)
 	event.TableName = event.TableInfo.Name.O
 	setReferTableForCreateTableLike(&event, args)
 	return event
+}
+
+type createTableLikeReferSchemaInfo struct {
+	schemaName string
+	schemaID   int64
+	// true when the source schema was inferred and should be written back to query.
+	qualifyQuery bool
 }
 
 func setReferTableForCreateTableLike(event *PersistedDDLEvent, args buildPersistedDDLEventFuncArgs) {
@@ -659,22 +696,33 @@ func setReferTableForCreateTableLike(event *PersistedDDLEvent, args buildPersist
 		return
 	}
 	refTable := createStmt.ReferTable.Name.O
-	refSchema := createStmt.ReferTable.Schema.O
-	if refSchema == "" {
-		refSchema = event.SchemaName
-	}
-	refSchemaID, ok := findSchemaIDByName(args.databaseMap, refSchema)
+	// refSchema is the schema name of the table referenced by
+	// CREATE TABLE ... LIKE. It can be absent in the original query.
+	refSchemaInQuery := createStmt.ReferTable.Schema.O
+	referSchemaInfo, ok := resolveCreateTableLikeReferSchema(args, refSchemaInQuery, refTable)
 	if !ok {
 		log.Warn("refer schema not found for create table like",
-			zap.String("schema", refSchema),
+			zap.String("schema", referSchemaInfo.schemaName),
 			zap.String("table", refTable),
 			zap.String("query", event.Query))
 		return
 	}
-	refTableID, ok := findTableIDByName(args.tableMap, refSchemaID, refTable)
+	if referSchemaInfo.qualifyQuery {
+		createStmt.ReferTable.Schema = parser_model.NewCIStr(referSchemaInfo.schemaName)
+		query, err := restoreCreateTableLikeDDL(createStmt)
+		if err != nil {
+			log.Warn("restore create table like ddl failed",
+				zap.String("schema", referSchemaInfo.schemaName),
+				zap.String("query", event.Query),
+				zap.Error(err))
+			return
+		}
+		event.Query = query
+	}
+	refTableID, ok := findTableIDByName(args.tableMap, referSchemaInfo.schemaID, refTable)
 	if !ok {
 		log.Warn("refer table not found for create table like",
-			zap.String("schema", refSchema),
+			zap.String("schema", referSchemaInfo.schemaName),
 			zap.String("table", refTable),
 			zap.String("query", event.Query))
 		return
@@ -686,6 +734,64 @@ func setReferTableForCreateTableLike(event *PersistedDDLEvent, args buildPersist
 			event.ReferTablePartitionIDs = append(event.ReferTablePartitionIDs, id)
 		}
 	}
+}
+
+func restoreCreateTableLikeDDL(stmt *ast.CreateTableStmt) (string, error) {
+	var sb strings.Builder
+	restoreFlags := format.RestoreTiDBSpecialComment
+	restoreFlags |= format.RestoreNameBackQuotes
+	restoreFlags |= format.RestoreKeyWordUppercase
+	restoreFlags |= format.RestoreStringSingleQuotes
+	restoreFlags |= format.SkipPlacementRuleForRestore
+	restoreFlags |= format.RestoreWithTTLEnableOff
+	if err := stmt.Restore(format.NewRestoreCtx(restoreFlags, &sb)); err != nil {
+		return "", cerror.Trace(err)
+	}
+	return sb.String(), nil
+}
+
+func resolveCreateTableLikeReferSchema(
+	args buildPersistedDDLEventFuncArgs,
+	refSchemaInQuery string,
+	refTable string,
+) (createTableLikeReferSchemaInfo, bool) {
+	if refSchemaInQuery != "" {
+		schemaID, ok := findSchemaIDByName(args.databaseMap, refSchemaInQuery)
+		return createTableLikeReferSchemaInfo{
+			schemaName: refSchemaInQuery,
+			schemaID:   schemaID,
+		}, ok
+	}
+
+	for _, info := range args.job.InvolvingSchemaInfo {
+		// TiDB records the LIKE source table as a shared involving table.
+		// For CREATE TABLE db2.t LIKE db1.t, the target db2.t is also in
+		// InvolvingSchemaInfo, but it is exclusive. Without this mode check,
+		// the target table may be mistaken as the referenced table.
+		// https://github.com/pingcap/tidb/blob/8f2630e53d5d/pkg/ddl/executor.go#L1009-L1023
+		if info.Mode != model.SharedInvolving ||
+			info.Database == "" ||
+			!strings.EqualFold(info.Table, refTable) {
+			continue
+		}
+		schemaID, ok := findSchemaIDByName(args.databaseMap, info.Database)
+		if !ok {
+			continue
+		}
+		refSchema := getSchemaName(args.databaseMap, schemaID)
+		return createTableLikeReferSchemaInfo{
+			schemaName:   refSchema,
+			schemaID:     schemaID,
+			qualifyQuery: !strings.EqualFold(refSchema, getSchemaName(args.databaseMap, args.job.SchemaID)),
+		}, true
+	}
+
+	// If TiDB does not provide the referenced schema, fall back to the schema
+	// that the CREATE TABLE event belongs to, matching MySQL/TiDB resolution.
+	return createTableLikeReferSchemaInfo{
+		schemaName: getSchemaName(args.databaseMap, args.job.SchemaID),
+		schemaID:   args.job.SchemaID,
+	}, true
 }
 
 func buildPersistedDDLEventForDropTable(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {

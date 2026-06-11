@@ -20,11 +20,8 @@ import (
 	"github.com/pingcap/log"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser"
-<<<<<<< HEAD
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/format"
-=======
->>>>>>> 136d2d392 (logservice: qualify CREATE VIEW column references (#5044))
 	"go.uber.org/zap"
 )
 
@@ -83,6 +80,20 @@ func transformDDLJobQuery(job *model.Job) (string, error) {
 	return result, nil
 }
 
+func restoreDDLStmt(stmt ast.StmtNode) (string, error) {
+	var sb strings.Builder
+	restoreFlags := format.RestoreTiDBSpecialComment
+	restoreFlags |= format.RestoreNameBackQuotes
+	restoreFlags |= format.RestoreKeyWordUppercase
+	restoreFlags |= format.RestoreStringSingleQuotes
+	restoreFlags |= format.SkipPlacementRuleForRestore
+	restoreFlags |= format.RestoreWithTTLEnableOff
+	if err := stmt.Restore(format.NewRestoreCtx(restoreFlags, &sb)); err != nil {
+		return "", errors.Trace(err)
+	}
+	return sb.String(), nil
+}
+
 // isSplitable returns whether the table is eligible for split in all sinks
 // Only the table with pk and no uk can be splitted in all sinks.
 func isSplitable(tableInfo *model.TableInfo) bool {
@@ -101,8 +112,6 @@ func isSplitable(tableInfo *model.TableInfo) bool {
 	}
 	return true
 }
-<<<<<<< HEAD
-=======
 
 func getIndexIDs(job *model.Job) []int64 {
 	if job == nil {
@@ -144,4 +153,33 @@ func extractAddIndexIDs(job *model.Job) []int64 {
 	}
 	return res
 }
->>>>>>> 136d2d392 (logservice: qualify CREATE VIEW column references (#5044))
+
+type tableSchemaExtractor struct {
+	schemas []string
+}
+
+func (e *tableSchemaExtractor) Enter(in ast.Node) (ast.Node, bool) {
+	if t, ok := in.(*ast.TableName); ok {
+		e.schemas = append(e.schemas, t.Schema.O)
+		return in, true
+	}
+	return in, false
+}
+
+func (e *tableSchemaExtractor) Leave(in ast.Node) (ast.Node, bool) {
+	return in, true
+}
+
+// extractTableSchemas returns schema qualifiers from all *ast.TableName nodes in
+// AST visit order. Unqualified tables contribute an empty schema name.
+func extractTableSchemas(node ast.Node) []string {
+	if node == nil {
+		return nil
+	}
+
+	extractor := &tableSchemaExtractor{
+		schemas: make([]string, 0),
+	}
+	node.Accept(extractor)
+	return extractor.schemas
+}
