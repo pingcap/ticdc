@@ -44,6 +44,32 @@ func NewLockerResolver() LockResolver {
 
 const scanLockLimit = 1024
 
+func resolveScanLockInfos(lockInfos []*kvrpcpb.LockInfo, resolve func([]*txnkv.Lock) (int64, error)) ([]*txnkv.Lock, int64, error) {
+	locks := make([]*txnkv.Lock, 0, len(lockInfos))
+	for _, lockInfo := range lockInfos {
+		sharedLockInfos := lockInfo.GetSharedLockInfos()
+		if len(sharedLockInfos) > 0 {
+			for _, sharedLockInfo := range sharedLockInfos {
+				locks = append(locks, txnkv.NewLock(sharedLockInfo))
+			}
+			continue
+		}
+		locks = append(locks, txnkv.NewLock(lockInfo))
+	}
+	if len(locks) == 0 {
+		return locks, 0, nil
+	}
+	ttl, err := resolve(locks)
+	return locks, ttl, err
+}
+
+func nextScanLockKey(locEndKey []byte, locks []*txnkv.Lock, ttl int64) []byte {
+	if ttl > 0 || len(locks) < scanLockLimit {
+		return locEndKey
+	}
+	return locks[len(locks)-1].Key
+}
+
 func (r *resolver) Resolve(ctx context.Context, keyspaceID uint32, regionID uint64, maxVersion uint64) (err error) {
 	var totalLocks []*txnkv.Lock
 
@@ -132,21 +158,15 @@ func (r *resolver) Resolve(ctx context.Context, keyspaceID uint32, regionID uint
 			return errors.Errorf("unexpected scanlock error: %s", locksResp)
 		}
 		locksInfo := locksResp.GetLocks()
-		locks := make([]*txnkv.Lock, len(locksInfo))
-		for i := range locksInfo {
-			locks[i] = txnkv.NewLock(locksInfo[i])
-		}
+		locks, ttl, err1 := resolveScanLockInfos(locksInfo, func(locks []*txnkv.Lock) (int64, error) {
+			return kvStorage.GetLockResolver().ResolveLocks(bo, 0, locks)
+		})
 		totalLocks = append(totalLocks, locks...)
 
-		_, err1 := kvStorage.GetLockResolver().ResolveLocks(bo, 0, locks)
 		if err1 != nil {
 			return errors.Trace(err1)
 		}
-		if len(locks) < scanLockLimit {
-			key = loc.EndKey
-		} else {
-			key = locks[len(locks)-1].Key
-		}
+		key = nextScanLockKey(loc.EndKey, locks, ttl)
 
 		if len(key) == 0 || (len(loc.EndKey) != 0 && bytes.Compare(key, loc.EndKey) >= 0) {
 			break
