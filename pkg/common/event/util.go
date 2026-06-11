@@ -31,6 +31,7 @@ import (
 	"github.com/pingcap/tidb/pkg/meta"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser"
+	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/format"
 	parser_model "github.com/pingcap/tidb/pkg/parser/model"
 	// NOTE: Do not remove the `test_driver` import.
@@ -513,4 +514,25 @@ func IsSplitable(tableInfo *common.TableInfo) bool {
 		}
 	}
 	return true
+}
+
+func Restore(stmt ast.StmtNode) (string, error) {
+	var sb strings.Builder
+	// translate TiDB feature to special comment
+	restoreFlags := format.RestoreTiDBSpecialComment
+	// escape the keyword
+	restoreFlags |= format.RestoreNameBackQuotes
+	// upper case keyword
+	restoreFlags |= format.RestoreKeyWordUppercase
+	// wrap string with single quote
+	restoreFlags |= format.RestoreStringSingleQuotes
+	// remove placement rule
+	restoreFlags |= format.SkipPlacementRuleForRestore
+	// force disable ttl
+	restoreFlags |= format.RestoreWithTTLEnableOff
+	err := stmt.Restore(format.NewRestoreCtx(restoreFlags, &sb))
+	if err != nil {
+		return "", errors.Trace(err)
+	}
+	return sb.String(), nil
 }
