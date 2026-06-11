@@ -34,6 +34,7 @@ import (
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/format"
 	parser_model "github.com/pingcap/tidb/pkg/parser/model"
+
 	// NOTE: Do not remove the `test_driver` import.
 	// For details, refer to: https://github.com/pingcap/parser/issues/43
 	_ "github.com/pingcap/tidb/pkg/parser/test_driver"
@@ -122,7 +123,6 @@ func (s *EventTestHelper) storeTableInfo(schemaName string, tableInfo *timodel.T
 			s.partitionIDs[key][partition.Name.O] = partition.ID
 		}
 	}
-	log.Info("apply job", zap.String("jobKey", key), zap.Any("job", job))
 	s.tableInfos[key] = info
 }
 
