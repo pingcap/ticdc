@@ -280,8 +280,6 @@ func TestTryCloseRemovedRequestAfterClosedReturnsImmediatelyAndTriggersCleanup(t
 		mysqlConfig,
 		nil,
 		false,
-		false,
-		time.Minute,
 	)
 	manager := &DispatcherManager{
 		changefeedID: changefeedID,

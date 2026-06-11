@@ -53,7 +53,9 @@ type Sink struct {
 	conflictDetector *causality.ConflictDetector
 
 	// isNormal indicate whether the sink is in the normal state.
-	isNormal   *atomic.Bool
+	isNormal *atomic.Bool
+	// cfg is retained so remove cleanup can reopen a short-lived DB connection after Close.
+	cfg        *mysql.Config
 	maxTxnRows int
 	bdrMode    bool
 }
@@ -108,6 +110,7 @@ func NewMySQLSink(
 			},
 			changefeedID),
 		isNormal:   atomic.NewBool(true),
+		cfg:        cfg,
 		maxTxnRows: cfg.MaxTxnRow,
 		bdrMode:    bdrMode,
 	}
@@ -338,8 +341,6 @@ func (s *Sink) Close() {
 	}
 	s.statistics.Close()
 }
-<<<<<<< HEAD
-=======
 
 // CleanupRemovedChangefeed removes ddl_ts state for a deleted changefeed.
 // It uses a short-lived DB connection so the cleanup can still run after the
@@ -366,7 +367,7 @@ func (s *Sink) CleanupRemovedChangefeed() error {
 		}
 	}()
 
-	cleanupWriter := mysql.NewWriter(context.Background(), -1, db, s.cfg, s.changefeedID, nil, nil)
+	cleanupWriter := mysql.NewWriter(context.Background(), -1, db, s.cfg, s.changefeedID, nil)
 	defer cleanupWriter.Close()
 	return cleanupWriter.RemoveDDLTsItem()
 }
@@ -378,4 +379,3 @@ func (s *Sink) BatchCount() int {
 func (s *Sink) BatchBytes() int {
 	return int(s.cfg.MaxAllowedPacket)
 }
->>>>>>> 3c6a88206 (downstreamadapter: preserve remove upgrade during close (#4815))

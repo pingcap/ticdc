@@ -911,15 +911,8 @@ func (e *DispatcherManager) close() {
 
 	log.Info("shared info closed", zap.Stringer("changefeedID", e.changefeedID))
 
-<<<<<<< HEAD
 	if e.IsRedoEnabled() && e.redoSink != nil {
-		e.redoSink.Close(removeChangefeed)
-		// FIXME: cleanup redo log when remove the changefeed
-		e.closeRedoMeta(removeChangefeed)
-=======
-	if e.IsRedoEnabled() {
 		e.redoSink.Close()
->>>>>>> 3c6a88206 (downstreamadapter: preserve remove upgrade during close (#4815))
 	}
 	e.sink.Close()
 	log.Info("sink closed", zap.Stringer("changefeedID", e.changefeedID))

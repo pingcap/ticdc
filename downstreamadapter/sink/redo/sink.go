@@ -41,7 +41,8 @@ type Sink struct {
 	ddlWriter    writer.RedoDDLWriter
 	dmlWriter    writer.RedoDMLWriter
 
-	logBuffer *chann.UnlimitedChannel[*commonEvent.RedoRowEvent, any]
+	logBuffer         *chann.UnlimitedChannel[*commonEvent.RedoRowEvent, any]
+	maxLogSizeInBytes int
 
 	// isNormal indicate whether the sink is in the normal state.
 	isNormal *atomic.Bool
@@ -67,11 +68,12 @@ func New(ctx context.Context, changefeedID common.ChangeFeedID,
 		return nil, err
 	}
 	s := &Sink{
-		ctx:          ctx,
-		changefeedID: changefeedID,
-		logBuffer:    chann.NewUnlimitedChannelDefault[*commonEvent.RedoRowEvent](),
-		isNormal:     atomic.NewBool(true),
-		isClosed:     atomic.NewBool(false),
+		ctx:               ctx,
+		changefeedID:      changefeedID,
+		logBuffer:         chann.NewUnlimitedChannelDefault[*commonEvent.RedoRowEvent](),
+		maxLogSizeInBytes: int(config.MaxLogSizeInBytes()),
+		isNormal:          atomic.NewBool(true),
+		isClosed:          atomic.NewBool(false),
 	}
 
 	var (
@@ -248,3 +250,11 @@ func (s *Sink) sendMessages(ctx context.Context) error {
 }
 
 func (s *Sink) AddCheckpointTs(_ uint64) {}
+
+func (s *Sink) BatchCount() int {
+	return 4096
+}
+
+func (s *Sink) BatchBytes() int {
+	return s.maxLogSizeInBytes
+}
