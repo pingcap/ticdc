@@ -110,7 +110,7 @@ func (c *mockGCStatesClient) DeleteGCBarrier(ctx context.Context, barrierID stri
 	return info, nil
 }
 
-func (c *mockGCStatesClient) GetGCState(ctx context.Context) (pdgc.GCState, error) {
+func (c *mockGCStatesClient) GetGCState(ctx context.Context, opts ...pdgc.GCStatesAPIOption) (pdgc.GCState, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -118,12 +118,31 @@ func (c *mockGCStatesClient) GetGCState(ctx context.Context) (pdgc.GCState, erro
 	for _, info := range c.barriers {
 		barriers = append(barriers, info)
 	}
-	return pdgc.GCState{
-		KeyspaceID:   c.keyspaceID,
-		TxnSafePoint: 0,
-		GCSafePoint:  0,
-		GCBarriers:   barriers,
-	}, nil
+	return pdgc.NewGCStateWithGCBarriers(c.keyspaceID, 0, 0, barriers), nil
+}
+
+func (c *mockGCStatesClient) SetGlobalGCBarrier(
+	ctx context.Context, barrierID string, barrierTS uint64, ttl time.Duration,
+) (*pdgc.GlobalGCBarrierInfo, error) {
+	return pdgc.NewGlobalGCBarrierInfo(barrierID, barrierTS, ttl, time.Now()), nil
+}
+
+func (c *mockGCStatesClient) DeleteGlobalGCBarrier(
+	ctx context.Context, barrierID string,
+) (*pdgc.GlobalGCBarrierInfo, error) {
+	return nil, nil
+}
+
+func (c *mockGCStatesClient) GetAllKeyspacesGCStates(
+	ctx context.Context, opts ...pdgc.GCStatesAPIOption,
+) (pdgc.ClusterGCStates, error) {
+	gcState, err := c.GetGCState(ctx, opts...)
+	if err != nil {
+		return pdgc.ClusterGCStates{}, err
+	}
+	return pdgc.NewClusterGCStatesWithoutGlobalGCBarriers(map[uint32]pdgc.GCState{
+		c.keyspaceID: gcState,
+	}), nil
 }
 
 type mockMaintainerManager struct {

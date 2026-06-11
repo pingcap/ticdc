@@ -187,16 +187,13 @@ func (m *gcManager) checkStaleCheckPointTsGlobal(changefeedID common.ChangeFeedI
 }
 
 func (m *gcManager) TryUpdateKeyspaceGCBarrier(ctx context.Context, keyspaceID uint32, keyspaceName string, checkpointTs common.Ts) error {
-	gcCli := m.pdClient.GetGCStatesClient(keyspaceID)
-	ttl := time.Duration(m.gcTTL) * time.Second
-	_, setBarrierErr := SetGCBarrier(ctx, gcCli, m.gcServiceID, checkpointTs, ttl)
+	_, setBarrierErr := setKeyspaceGCSafepoint(ctx, m.pdClient, keyspaceID, m.gcServiceID, m.gcTTL, checkpointTs)
 	if setBarrierErr != nil && !errors.IsGCBarrierTSBehindTxnSafePointError(setBarrierErr) {
 		log.Warn("update keyspace gc barrier failed",
 			zap.Uint32("keyspaceID", keyspaceID), zap.Uint64("checkpointTs", checkpointTs),
 			zap.String("serviceID", m.gcServiceID), zap.Error(setBarrierErr))
 		return errors.WrapError(errors.ErrUpdateGCBarrierFailed, setBarrierErr)
 	}
-
 	minGCBarrier, err := UnifyGetServiceGCSafepoint(ctx, m.pdClient, keyspaceID, m.gcServiceID)
 	if err != nil {
 		return err
