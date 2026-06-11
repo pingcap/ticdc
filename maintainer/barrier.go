@@ -302,16 +302,22 @@ func (b *Barrier) eventsReadyForActionResend(eventList []*BarrierEvent) []*Barri
 	readyEvents := make([]*BarrierEvent, 0, len(eventList))
 	for _, event := range eventList {
 		if !event.selected.Load() {
-			readyEvents = append(readyEvents, event)
-			continue
+			// checkBlockedDispatchers may promote a recovered WAITING event
+			// when one related dispatcher has already checkpointed past this
+			// DDL. Do it before route precheck/apply so an earlier route DDL
+			// is committed before later selected route DDLs in this sorted pass.
+			event.checkBlockedDispatchers()
 		}
-		ready, err := b.precheckRouteEvent(event)
-		if err != nil || !ready {
-			continue
-		}
-		if event.writerDispatcherAdvanced {
-			if err := b.applyRouteEvent(event); err != nil {
+
+		if event.selected.Load() {
+			ready, err := b.precheckRouteEvent(event)
+			if err != nil || !ready {
 				continue
+			}
+			if event.writerDispatcherAdvanced {
+				if err := b.applyRouteEvent(event); err != nil {
+					continue
+				}
 			}
 		}
 		readyEvents = append(readyEvents, event)

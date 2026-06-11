@@ -602,6 +602,97 @@ func TestBarrierAppliesRecoveredRouteEventBeforeActionResend(t *testing.T) {
 	require.Contains(t, err.Error(), "table route conflict")
 }
 
+func TestBarrierCommitsForwardedRouteEventBeforeLaterRouteEvent(t *testing.T) {
+	testutil.SetUpTestServices(t)
+	tableTriggerEventDispatcherID := common.NewDispatcherID()
+	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,
+		common.DDLSpanSchemaID,
+		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
+			ID:              tableTriggerEventDispatcherID.ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    1,
+		}, "node1", false)
+	spanController := span.NewController(cfID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
+	operatorController := operator.NewOperatorController(cfID, spanController, 1000, common.DefaultMode)
+	spanController.AddNewTable(commonEvent.Table{SchemaID: 1, TableID: 1}, 10)
+	tableSpan := spanController.GetTasksByTableID(1)[0]
+	spanController.BindSpanToNode("", "node1", tableSpan)
+	spanController.MarkSpanReplicating(tableSpan)
+	tableSpan.UpdateStatus(&heartbeatpb.TableSpanStatus{
+		ID:              tableSpan.ID.ToPB(),
+		ComponentStatus: heartbeatpb.ComponentState_Working,
+		CheckpointTs:    11,
+		Mode:            common.DefaultMode,
+	})
+
+	routeAdmin := newRouteAdminForBarrierTest(t, cfID, routeAllTo("target", "t"))
+	var reportedErr error
+	routeAdmin.SetErrorReporter(func(err error) {
+		reportedErr = err
+	})
+	barrier := NewBarrier(spanController, operatorController, false, map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{
+		"node1": {
+			ChangefeedID: cfID.ToPB(),
+			Spans: []*heartbeatpb.BootstrapTableSpan{
+				{
+					ID: tableTriggerEventDispatcherID.ToPB(),
+					BlockState: &heartbeatpb.State{
+						IsBlocked: true,
+						BlockTs:   10,
+						BlockTables: &heartbeatpb.InfluencedTables{
+							InfluenceType: heartbeatpb.InfluenceType_Normal,
+							TableIDs:      []int64{common.DDLSpanTableID, 1},
+						},
+						RouteTableAdmissions: []*heartbeatpb.RouteTableAdmission{
+							{
+								SourceSchemaName: "db1",
+								SourceTableName:  "t",
+								Action:           heartbeatpb.RouteTableAdmissionAction_RELEASE,
+							},
+						},
+						Stage: heartbeatpb.BlockStage_WAITING,
+					},
+					Mode: common.DefaultMode,
+				},
+				{
+					ID: tableTriggerEventDispatcherID.ToPB(),
+					BlockState: &heartbeatpb.State{
+						IsBlocked: true,
+						BlockTs:   20,
+						BlockTables: &heartbeatpb.InfluencedTables{
+							InfluenceType: heartbeatpb.InfluenceType_Normal,
+							TableIDs:      []int64{common.DDLSpanTableID, 1},
+						},
+						RouteTableAdmissions: []*heartbeatpb.RouteTableAdmission{
+							{
+								SourceSchemaName: "db2",
+								SourceTableName:  "t",
+								TargetSchemaName: "target",
+								TargetTableName:  "t",
+								Action:           heartbeatpb.RouteTableAdmissionAction_ADMIT,
+							},
+						},
+						Stage: heartbeatpb.BlockStage_DONE,
+					},
+					Mode: common.DefaultMode,
+				},
+			},
+		},
+	}, common.DefaultMode, routeAdmin)
+
+	_ = barrier.Resend()
+	require.NoError(t, reportedErr)
+
+	ready, err := routeAdmin.Precheck(30, []routing.Admission{{
+		Action:  routing.Admit,
+		Binding: routing.NewRouteBinding("db3", "t", "target", "t"),
+	}})
+	require.Error(t, err)
+	require.False(t, ready)
+	require.Contains(t, err.Error(), "db2")
+}
+
 func TestBarrierRouteConflictPrecheckPreventsWriteAction(t *testing.T) {
 	barrier, routeAdmin, cfID, tableTriggerEventDispatcherID, tableDispatcherID, blockTables := newBarrierRoutePrecheckTestFixture(
 		t, routeAllTo("target", "t"))
