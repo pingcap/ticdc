@@ -1453,7 +1453,7 @@ func TestFinishBootstrapReturnsErrorWhenCheckpointMissing(t *testing.T) {
 		}, "node1", false)
 	refresher := replica.NewRegionCountRefresher(cfID, time.Minute)
 	controller := NewController(cfID, 1, &mockThreadPool{},
-		config.GetDefaultReplicaConfig(), ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false)
+		config.GetDefaultReplicaConfig(), ddlSpan, nil, 1000, 0, refresher, common.DefaultKeyspace, false, testBalanceMoveBatchSize)
 
 	postBootstrapRequest, err := controller.FinishBootstrap(map[node.ID]*heartbeatpb.MaintainerBootstrapResponse{
 		"node1": {
