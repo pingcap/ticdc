@@ -50,7 +50,7 @@ var (
 	MinTiKVVersion = semver.New("7.5.0-alpha")
 	// maxTiKVVersion is the version of the maximum compatible TiKV.
 	// Compatible versions are in [MinTiKVVersion, maxTiKVVersion)
-	maxTiKVVersion = semver.New("15.0.0")
+	maxTiKVVersion = semver.New("26.4.0")
 
 	// New Arch Starts From 9.0.0,
 	// we use the minimal release version as default.
