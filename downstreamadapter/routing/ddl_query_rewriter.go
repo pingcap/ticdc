@@ -22,6 +22,7 @@ import (
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/format"
+	"github.com/pingcap/tidb/pkg/parser/model"
 )
 
 // rewriteParserBackedDDLQuery rewrites a parser-supported DDL query by applying routing rules.
@@ -184,8 +185,8 @@ func (v *tableRenameVisitor) Enter(in ast.Node) (ast.Node, bool) {
 			v.hasErr = true
 			return in, true
 		}
-		t.Schema = ast.NewCIStr(v.targetNames[v.i].SchemaName)
-		t.Name = ast.NewCIStr(v.targetNames[v.i].TableName)
+		t.Schema = model.NewCIStr(v.targetNames[v.i].SchemaName)
+		t.Name = model.NewCIStr(v.targetNames[v.i].TableName)
 		v.i++
 		return in, true
 	}
@@ -214,19 +215,19 @@ func rewriteDDLStmtTables(stmt ast.StmtNode, targetTables []commonEvent.SchemaTa
 			return "", errors.ErrTableRoutingFailed.GenWithStack(
 				"rewrite ddl query got unexpected target table count: expected 1, got %d", len(targetTables))
 		}
-		v.Name = ast.NewCIStr(targetTables[0].SchemaName)
+		v.Name = model.NewCIStr(targetTables[0].SchemaName)
 	case *ast.CreateDatabaseStmt:
 		if len(targetTables) != 1 {
 			return "", errors.ErrTableRoutingFailed.GenWithStack(
 				"rewrite ddl query got unexpected target table count: expected 1, got %d", len(targetTables))
 		}
-		v.Name = ast.NewCIStr(targetTables[0].SchemaName)
+		v.Name = model.NewCIStr(targetTables[0].SchemaName)
 	case *ast.DropDatabaseStmt:
 		if len(targetTables) != 1 {
 			return "", errors.ErrTableRoutingFailed.GenWithStack(
 				"rewrite ddl query got unexpected target table count: expected 1, got %d", len(targetTables))
 		}
-		v.Name = ast.NewCIStr(targetTables[0].SchemaName)
+		v.Name = model.NewCIStr(targetTables[0].SchemaName)
 	default:
 		visitor := &tableRenameVisitor{
 			targetNames: targetTables,

@@ -242,8 +242,6 @@ func TestRewriteDDLQueryWithRoutingSupportsParserBackedDDLTypes(t *testing.T) {
 		forbiddenFragments: []string{"`source_recover_table`.`t_recover`"},
 	})
 
-	helper.Tk().MockGCSavePoint()
-
 	cases = append(cases, supportedDDLRewriteCase{
 		name:               "setup drop table source_recover_table.t_recover",
 		action:             timodel.ActionDropTable,
