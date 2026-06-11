@@ -27,9 +27,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-<<<<<<< HEAD
-func TestPendingMessageQueue_TryEnqueueDropsDuplicatesUntilDone(t *testing.T) {
-=======
 func TestOrchestratorShard_CloseWaitsForRunningHandler(t *testing.T) {
 	t.Parallel()
 
@@ -204,8 +201,7 @@ func newTestChangefeedID(seed int) common.ChangeFeedID {
 	}
 }
 
-func TestPendingMessageQueue_TryEnqueueDropsDuplicatesOnlyWhileQueued(t *testing.T) {
->>>>>>> d9e2eee5c (downstreamadapter: shard dispatcher orchestrator queue (#5052))
+func TestPendingMessageQueue_TryEnqueueDropsDuplicatesUntilDone(t *testing.T) {
 	t.Parallel()
 
 	q := newPendingMessageQueue()

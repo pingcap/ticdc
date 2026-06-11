@@ -136,40 +136,6 @@ func getPendingMessageKey(msg *messaging.TargetMessage) (pendingMessageKey, bool
 	}, true
 }
 
-<<<<<<< HEAD
-// handleMessages processes messages from the queue
-func (m *DispatcherOrchestrator) handleMessages() {
-	for {
-		key, ok := m.msgQueue.Pop()
-		if !ok {
-			log.Info("dispatcher orchestrator is shutting down, exit handleMessages")
-			return
-		}
-		msg := m.msgQueue.Get(key)
-
-		// Process the message
-		switch req := msg.Message[0].(type) {
-		case *heartbeatpb.MaintainerBootstrapRequest:
-			if err := m.handleBootstrapRequest(msg.From, req); err != nil {
-				log.Error("failed to handle bootstrap request", zap.Error(err))
-			}
-		case *heartbeatpb.MaintainerPostBootstrapRequest:
-			// Only the event dispatcher manager with table trigger event dispatcher will receive the post bootstrap request
-			if err := m.handlePostBootstrapRequest(msg.From, req); err != nil {
-				log.Error("failed to handle post bootstrap request", zap.Error(err))
-			}
-		case *heartbeatpb.MaintainerCloseRequest:
-			if err := m.handleCloseRequest(msg.From, req); err != nil {
-				log.Error("failed to handle close request", zap.Error(err))
-			}
-		default:
-			log.Warn("unknown message type, ignore it",
-				zap.String("type", msg.Type.String()),
-				zap.Any("message", msg.Message))
-		}
-
-		m.msgQueue.Done(key)
-=======
 // processMessage dispatches a queued control message to the existing handler
 // implementation. Shards only change concurrency, not per-message behavior.
 func (m *DispatcherOrchestrator) processMessage(msg *messaging.TargetMessage) {
@@ -191,7 +157,6 @@ func (m *DispatcherOrchestrator) processMessage(msg *messaging.TargetMessage) {
 		log.Warn("unknown message type, ignore it",
 			zap.String("type", msg.Type.String()),
 			zap.Any("message", msg.Message))
->>>>>>> d9e2eee5c (downstreamadapter: shard dispatcher orchestrator queue (#5052))
 	}
 }
 
