@@ -1523,8 +1523,6 @@ func TestRegisterTo(t *testing.T) {
 		}
 	})
 }
-<<<<<<< HEAD
-=======
 
 func TestHandleDDLEventTableInfoUpdate(t *testing.T) {
 	t.Parallel()
@@ -1581,4 +1579,3 @@ func TestHandleDDLEventTableInfoUpdate(t *testing.T) {
 		require.Same(t, ddlEvent, capturedEvent)
 	})
 }
->>>>>>> f8396e398 (eventcollector: introduce dispatcher session to separate connection lifecycle management (#4991))

@@ -257,7 +257,7 @@ func TestNewCongestionControlMessagesSendZeroAvailable(t *testing.T) {
 
 	stat := c.getDispatcherStatByID(dispatcherID)
 	require.NotNil(t, stat)
-	stat.connState.setEventServiceID(remoteID)
+	stat.session.connState.setEventServiceID(remoteID)
 
 	handshake := commonEvent.NewHandshakeEvent(dispatcherID, 99, 0, nil)
 	from := remoteID

@@ -272,18 +272,7 @@ func (c *EventCollector) PrepareAddDispatcher(
 	cfStat.dispatcherCount.Add(1)
 
 	ds := c.getDynamicStream(target.GetMode())
-<<<<<<< HEAD
 	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSize(memoryQuota, dynstream.MemoryControlForEventCollector, "eventCollector")
-=======
-	batchCount, batchBytes := target.GetEventCollectorBatchConfig()
-	areaSetting := dynstream.NewAreaSettingsWithMaxPendingSizeAndBatchConfig(
-		memoryQuota,
-		dynstream.MemoryControlForEventCollector,
-		"eventCollector",
-		batchCount,
-		batchBytes,
-	)
->>>>>>> f8396e398 (eventcollector: introduce dispatcher session to separate connection lifecycle management (#4991))
 	err := ds.AddPath(target.GetId(), stat, areaSetting)
 	if err != nil {
 		log.Warn("add dispatcher to dynamic stream failed", zap.Error(err))
