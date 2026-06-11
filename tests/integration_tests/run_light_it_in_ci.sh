@@ -47,9 +47,9 @@ mysql_groups=(
 	# NOTE: same_upstream_downstream is temporarily disabled on release-8.5 CI because TiDB 8.5.x
 	# does not write `cluster_id` into `mysql.tidb` (tidb#59511 not cherry-picked). Re-enable it
 	# after TiDB release-8.5 has `mysql.tidb.cluster_id`.
-	'http_api http_api_compatibility http_api_tls http_api_tls_old_arch fail_over_ddl_G synced_status'
+	'http_api http_api_compatibility http_api_tls_old_arch fail_over_ddl_G synced_status'
 	# G07
-	'http_api_tls_with_user_auth fail_over_ddl_H changefeed_update_config synced_status_with_redo'
+	'fail_over_ddl_H changefeed_update_config synced_status_with_redo'
 	# G08
 	'capture_session_done_during_task changefeed_dup_error_restart mysql_sink_retry fail_over_ddl_I'
 	# G09
