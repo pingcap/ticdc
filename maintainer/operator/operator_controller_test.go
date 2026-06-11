@@ -18,6 +18,7 @@ import (
 	"sync"
 	syncatomic "sync/atomic"
 	"testing"
+	"time"
 	"unsafe"
 
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -162,6 +163,7 @@ func (o *countingOperator) PostFinish()      {}
 func (o *countingOperator) Check(node.ID, *heartbeatpb.TableSpanStatus) {
 	o.checkCount.Add(1)
 }
+
 func (o *countingOperator) OnNodeRemove(node.ID) {
 	o.nodeRemovedCount.Add(1)
 }
@@ -169,6 +171,87 @@ func (o *countingOperator) AffectedNodes() []node.ID { return []node.ID{o.target
 func (o *countingOperator) OnTaskRemoved()           {}
 func (o *countingOperator) String() string           { return "counting-operator" }
 func (o *countingOperator) BlockTsForward() bool     { return o.blockTsForward }
+
+type blockingScheduleOperator struct {
+	id         common.DispatcherID
+	targetNode node.ID
+
+	scheduleEntered chan struct{}
+	releaseSchedule chan struct{}
+	scheduleOnce    sync.Once
+	scheduleCount   syncatomic.Int32
+}
+
+func newBlockingScheduleOperator(id common.DispatcherID, targetNode node.ID) *blockingScheduleOperator {
+	return &blockingScheduleOperator{
+		id:              id,
+		targetNode:      targetNode,
+		scheduleEntered: make(chan struct{}),
+		releaseSchedule: make(chan struct{}),
+	}
+}
+
+func (o *blockingScheduleOperator) ID() common.DispatcherID { return o.id }
+func (o *blockingScheduleOperator) Type() string            { return "add" }
+func (o *blockingScheduleOperator) Start()                  {}
+func (o *blockingScheduleOperator) Schedule() *messaging.TargetMessage {
+	o.scheduleCount.Add(1)
+	o.scheduleOnce.Do(func() { close(o.scheduleEntered) })
+	<-o.releaseSchedule
+	return messaging.NewSingleTargetMessage(o.targetNode, messaging.MaintainerManagerTopic, &heartbeatpb.RemoveMaintainerRequest{})
+}
+
+func (o *blockingScheduleOperator) IsFinished() bool { return false }
+func (o *blockingScheduleOperator) PostFinish()      {}
+func (o *blockingScheduleOperator) Check(node.ID, *heartbeatpb.TableSpanStatus) {
+}
+
+func (o *blockingScheduleOperator) OnNodeRemove(node.ID) {
+}
+func (o *blockingScheduleOperator) AffectedNodes() []node.ID { return []node.ID{o.targetNode} }
+func (o *blockingScheduleOperator) OnTaskRemoved()           {}
+func (o *blockingScheduleOperator) String() string           { return "blocking-schedule" }
+func (o *blockingScheduleOperator) BlockTsForward() bool     { return false }
+
+type blockingStartOperator struct {
+	id         common.DispatcherID
+	targetNode node.ID
+
+	startEntered chan struct{}
+	releaseStart chan struct{}
+	startOnce    sync.Once
+	startCount   syncatomic.Int32
+}
+
+func newBlockingStartOperator(id common.DispatcherID, targetNode node.ID) *blockingStartOperator {
+	return &blockingStartOperator{
+		id:           id,
+		targetNode:   targetNode,
+		startEntered: make(chan struct{}),
+		releaseStart: make(chan struct{}),
+	}
+}
+
+func (o *blockingStartOperator) ID() common.DispatcherID { return o.id }
+func (o *blockingStartOperator) Type() string            { return "add" }
+func (o *blockingStartOperator) Start() {
+	o.startCount.Add(1)
+	o.startOnce.Do(func() { close(o.startEntered) })
+	<-o.releaseStart
+}
+
+func (o *blockingStartOperator) Schedule() *messaging.TargetMessage { return nil }
+func (o *blockingStartOperator) IsFinished() bool                   { return false }
+func (o *blockingStartOperator) PostFinish()                        {}
+func (o *blockingStartOperator) Check(node.ID, *heartbeatpb.TableSpanStatus) {
+}
+
+func (o *blockingStartOperator) OnNodeRemove(node.ID) {
+}
+func (o *blockingStartOperator) AffectedNodes() []node.ID { return []node.ID{o.targetNode} }
+func (o *blockingStartOperator) OnTaskRemoved()           {}
+func (o *blockingStartOperator) String() string           { return "blocking-start" }
+func (o *blockingStartOperator) BlockTsForward() bool     { return false }
 
 func setAliveNodes(nodeManager *watcher.NodeManager, alive map[node.ID]*node.Info) {
 	type nodeMap = map[node.ID]*node.Info
@@ -363,6 +446,129 @@ func TestController_QuiesceExceptDropsBlockedOnlyQueueFromExecution(t *testing.T
 	require.Nil(t, op)
 	require.False(t, next)
 	require.Equal(t, int32(0), blockedOp.scheduleCount.Load())
+}
+
+func TestController_QuiesceExceptWaitsForInFlightSchedule(t *testing.T) {
+	// Scenario: Execute has already passed the queue poll and is inside a normal operator's Schedule.
+	// Steps: block Schedule with a channel, start QuiesceExcept, verify quiesce cannot return until
+	// Schedule/SendCommand leaves the admission boundary, then verify later Execute calls do not reschedule it.
+	messageCenter := messaging.NewMockMessageCenter()
+	appcontext.SetService(appcontext.MessageCenter, messageCenter)
+
+	spanController, changefeedID, replicaSet, nodeA, _ := setupTestEnvironment(t)
+	spanController.AddReplicatingSpan(replicaSet)
+
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+	setAliveNodes(nodeManager, map[node.ID]*node.Info{nodeA: {ID: nodeA}})
+
+	oc := NewOperatorController(changefeedID, spanController, 10, common.DefaultMode)
+	op := newBlockingScheduleOperator(replicaSet.ID, nodeA)
+	require.True(t, oc.AddOperator(op))
+
+	executeDone := make(chan struct{})
+	go func() {
+		defer close(executeDone)
+		oc.Execute()
+	}()
+	<-op.scheduleEntered
+
+	quiesceDone := make(chan struct{})
+	go func() {
+		defer close(quiesceDone)
+		oc.QuiesceExcept(common.NewDispatcherID())
+	}()
+
+	require.Never(t, func() bool {
+		select {
+		case <-quiesceDone:
+			return true
+		default:
+			return false
+		}
+	}, 100*time.Millisecond, 10*time.Millisecond)
+
+	close(op.releaseSchedule)
+	require.Eventually(t, func() bool {
+		select {
+		case <-executeDone:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool {
+		select {
+		case <-quiesceDone:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
+
+	require.Equal(t, int32(1), op.scheduleCount.Load())
+	require.Len(t, messageCenter.GetMessageChannel(), 1)
+
+	oc.Execute()
+	require.Equal(t, int32(1), op.scheduleCount.Load())
+	require.Len(t, messageCenter.GetMessageChannel(), 1)
+}
+
+func TestController_QuiesceExceptWaitsForInFlightPush(t *testing.T) {
+	// Scenario: a normal operator has passed admission and is inside Start while removing mode begins.
+	// Steps: block Start with a channel, start QuiesceExcept, verify quiesce cannot return until Start
+	// finishes, then verify a later ordinary operator is rejected without being started.
+	messageCenter := messaging.NewMockMessageCenter()
+	appcontext.SetService(appcontext.MessageCenter, messageCenter)
+
+	spanController, changefeedID, replicaSet, nodeA, _ := setupTestEnvironment(t)
+	spanController.AddReplicatingSpan(replicaSet)
+
+	nodeManager := appcontext.GetService[*watcher.NodeManager](watcher.NodeManagerName)
+	setAliveNodes(nodeManager, map[node.ID]*node.Info{nodeA: {ID: nodeA}})
+
+	oc := NewOperatorController(changefeedID, spanController, 10, common.DefaultMode)
+	op := newBlockingStartOperator(replicaSet.ID, nodeA)
+
+	addResult := make(chan bool, 1)
+	go func() {
+		addResult <- oc.AddOperator(op)
+	}()
+	<-op.startEntered
+
+	quiesceDone := make(chan struct{})
+	go func() {
+		defer close(quiesceDone)
+		oc.QuiesceExcept(common.NewDispatcherID())
+	}()
+
+	require.Never(t, func() bool {
+		select {
+		case <-quiesceDone:
+			return true
+		default:
+			return false
+		}
+	}, 100*time.Millisecond, 10*time.Millisecond)
+
+	close(op.releaseStart)
+	require.Eventually(t, func() bool { return len(addResult) == 1 }, time.Second, 10*time.Millisecond)
+	require.True(t, <-addResult)
+	require.Eventually(t, func() bool {
+		select {
+		case <-quiesceDone:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
+	require.Equal(t, int32(1), op.startCount.Load())
+
+	blockedID := common.NewDispatcherID()
+	blockedReplica := setupReplicaSetWithID(t, changefeedID, blockedID, nodeA)
+	spanController.AddReplicatingSpan(blockedReplica)
+	blockedOp := newBlockingStartOperator(blockedID, nodeA)
+	require.False(t, oc.AddOperator(blockedOp))
+	require.Equal(t, int32(0), blockedOp.startCount.Load())
 }
 
 func setupReplicaSetWithID(

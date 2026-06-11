@@ -53,6 +53,11 @@ type Controller struct {
 	nodeManager    *watcher.NodeManager
 	splitter       *split.Splitter
 
+	// admissionMu serializes removing-mode quiesce with normal operator side effects.
+	// A normal operator must hold the read side from its final allow check through
+	// Start or Schedule/SendCommand so it cannot cross the handoff boundary after
+	// QuiesceExcept has made the controller quiescing.
+	admissionMu  sync.RWMutex
 	mu           sync.RWMutex // protect the following fields
 	operators    map[common.DispatcherID]*operator.OperatorWithTime[common.DispatcherID, *heartbeatpb.TableSpanStatus]
 	runningQueue operator.OperatorQueue[common.DispatcherID, *heartbeatpb.TableSpanStatus]
@@ -95,6 +100,9 @@ func NewOperatorController(
 // issuing or advancing ordinary table operators, but the DDL trigger dispatcher close
 // operator still needs to complete.
 func (oc *Controller) QuiesceExcept(ids ...common.DispatcherID) {
+	oc.admissionMu.Lock()
+	defer oc.admissionMu.Unlock()
+
 	oc.mu.Lock()
 	defer oc.mu.Unlock()
 
@@ -141,21 +149,33 @@ func (oc *Controller) Execute() time.Time {
 			continue
 		}
 
-		msg := op.Schedule()
-
-		if msg != nil {
-			_ = oc.messageCenter.SendCommand(msg)
-			log.Debug("send command to dispatcher",
-				zap.String("role", oc.role),
-				zap.Stringer("changefeedID", oc.changefeedID),
-				zap.String("operator", op.String()),
-				zap.Any("msg", msg.Message))
-		}
+		oc.scheduleOperator(op)
 		executedCounter++
 		if executedCounter >= oc.batchSize {
 			return time.Now().Add(nextPollInterval)
 		}
 	}
+}
+
+func (oc *Controller) scheduleOperator(op operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus]) {
+	oc.admissionMu.RLock()
+	defer oc.admissionMu.RUnlock()
+
+	if !oc.isOperatorAllowed(op.ID()) {
+		return
+	}
+
+	msg := op.Schedule()
+	if msg == nil {
+		return
+	}
+
+	_ = oc.messageCenter.SendCommand(msg)
+	log.Debug("send command to dispatcher",
+		zap.String("role", oc.role),
+		zap.Stringer("changefeedID", oc.changefeedID),
+		zap.String("operator", op.String()),
+		zap.Any("msg", msg.Message))
 }
 
 // RemoveTasksBySchemaID remove all tasks by schema id.
@@ -188,6 +208,9 @@ func (oc *Controller) RemoveTasksByTableIDs(tables ...int64) {
 
 // AddOperator adds an operator to the controller, if the operator already exists, return false.
 func (oc *Controller) AddOperator(op operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus]) bool {
+	oc.admissionMu.RLock()
+	defer oc.admissionMu.RUnlock()
+
 	oc.mu.RLock()
 	if !oc.isOperatorAllowedLocked(op.ID()) {
 		oc.mu.RUnlock()
@@ -216,10 +239,13 @@ func (oc *Controller) AddOperator(op operator.Operator[common.DispatcherID, *hea
 			zap.String("operator", op.String()))
 		return false
 	}
-	return oc.pushOperator(op)
+	return oc.pushOperatorWithAdmission(op)
 }
 
 func (oc *Controller) UpdateOperatorStatus(id common.DispatcherID, from node.ID, status *heartbeatpb.TableSpanStatus) {
+	oc.admissionMu.RLock()
+	defer oc.admissionMu.RUnlock()
+
 	if !oc.isOperatorAllowed(id) {
 		return
 	}
@@ -236,6 +262,9 @@ func (oc *Controller) UpdateOperatorStatus(id common.DispatcherID, from node.ID,
 // the controller will mark all spans on the node as absent if no operator is handling it,
 // then the controller will notify all operators.
 func (oc *Controller) OnNodeRemoved(n node.ID) {
+	oc.admissionMu.RLock()
+	defer oc.admissionMu.RUnlock()
+
 	if oc.isQuiescing() {
 		return
 	}
@@ -416,6 +445,9 @@ func (oc *Controller) cancelOperator(opID common.DispatcherID) {
 }
 
 func (oc *Controller) removeReplicaSet(op *removeDispatcherOperator) {
+	oc.admissionMu.RLock()
+	defer oc.admissionMu.RUnlock()
+
 	if !oc.isOperatorAllowed(op.ID()) {
 		log.Info("skip remove operator while controller is quiescing",
 			zap.String("role", oc.role),
@@ -436,11 +468,14 @@ func (oc *Controller) removeReplicaSet(op *removeDispatcherOperator) {
 		old.OP.OnTaskRemoved()
 		oc.finalizeOperator(old, op.ID())
 	}
-	oc.pushOperator(op)
+	oc.pushOperatorWithAdmission(op)
 }
 
 // pushOperator add an operator to the controller queue.
 func (oc *Controller) pushOperator(op operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus]) bool {
+	oc.admissionMu.RLock()
+	defer oc.admissionMu.RUnlock()
+
 	if !oc.isOperatorAllowed(op.ID()) {
 		log.Info("skip operator while controller is quiescing",
 			zap.String("role", oc.role),
@@ -449,6 +484,10 @@ func (oc *Controller) pushOperator(op operator.Operator[common.DispatcherID, *he
 			zap.String("operator", op.String()))
 		return false
 	}
+	return oc.pushOperatorWithAdmission(op)
+}
+
+func (oc *Controller) pushOperatorWithAdmission(op operator.Operator[common.DispatcherID, *heartbeatpb.TableSpanStatus]) bool {
 	log.Info("add operator to running queue",
 		zap.String("role", oc.role),
 		zap.Stringer("changefeedID", oc.changefeedID),
