@@ -45,13 +45,11 @@ func (s *orchestratorShard) Run() {
 		go func() {
 			defer s.wg.Done()
 			for {
-				key, ok := s.queue.Pop()
+				msg, ok := s.queue.Pop()
 				if !ok {
 					return
 				}
-				msg := s.queue.Get(key)
 				s.handle(msg)
-				s.queue.Done(key)
 			}
 		}()
 	})
