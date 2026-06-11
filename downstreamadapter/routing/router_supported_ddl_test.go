@@ -15,12 +15,14 @@ package routing
 
 import (
 	"testing"
+	"time"
 
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	ddlutil "github.com/pingcap/tidb/pkg/ddl/util"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/stretchr/testify/require"
+	tikvutil "github.com/tikv/client-go/v2/util"
 )
 
 type supportedDDLRewriteCase struct {
@@ -48,6 +50,12 @@ func TestRewriteDDLQueryWithRoutingSupportsParserBackedDDLTypes(t *testing.T) {
 
 	helper := event.NewEventTestHelper(t)
 	defer helper.Close()
+	safePoint := time.Now().Add(-48 * time.Hour).Format(tikvutil.GCTimeFormat)
+	helper.Tk().MustExec(
+		"INSERT HIGH_PRIORITY INTO mysql.tidb VALUES ('tikv_gc_safe_point', ?, '') ON DUPLICATE KEY UPDATE variable_value = ?",
+		safePoint,
+		safePoint,
+	)
 	cases := make([]supportedDDLRewriteCase, 0, 117)
 
 	cases = append(cases, supportedDDLRewriteCase{
