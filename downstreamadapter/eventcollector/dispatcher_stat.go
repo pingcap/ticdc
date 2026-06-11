@@ -20,6 +20,7 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/logger"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -181,19 +182,22 @@ func (d *dispatcherStat) verifyEventSequence(event dispatcher.DispatcherEvent, s
 		return false
 	}
 
+	debugEnabled := logger.IsDebugEnabled()
 	switch event.GetType() {
 	case commonEvent.TypeDMLEvent,
 		commonEvent.TypeDDLEvent,
 		commonEvent.TypeHandshakeEvent,
 		commonEvent.TypeSyncPointEvent,
 		commonEvent.TypeResolvedEvent:
-		log.Debug("check event sequence",
-			zap.Stringer("changefeedID", d.target.GetChangefeedID()),
-			zap.Stringer("dispatcher", d.getDispatcherID()),
-			zap.String("eventType", commonEvent.TypeToString(event.GetType())),
-			zap.Uint64("receivedSeq", event.GetSeq()),
-			zap.Uint64("lastEventSeq", state.lastEventSeq.Load()),
-			zap.Uint64("commitTs", event.GetCommitTs()))
+		if debugEnabled {
+			log.Debug("check event sequence",
+				zap.Stringer("changefeedID", d.target.GetChangefeedID()),
+				zap.Stringer("dispatcher", d.getDispatcherID()),
+				zap.String("eventType", commonEvent.TypeToString(event.GetType())),
+				zap.Uint64("receivedSeq", event.GetSeq()),
+				zap.Uint64("lastEventSeq", state.lastEventSeq.Load()),
+				zap.Uint64("commitTs", event.GetCommitTs()))
+		}
 
 		lastEventSeq := state.lastEventSeq.Load()
 		expectedSeq := uint64(0)
@@ -220,12 +224,14 @@ func (d *dispatcherStat) verifyEventSequence(event dispatcher.DispatcherEvent, s
 		}
 	case commonEvent.TypeBatchDMLEvent:
 		for _, e := range event.Event.(*commonEvent.BatchDMLEvent).DMLEvents {
-			log.Debug("check batch DML event sequence",
-				zap.Stringer("changefeedID", d.target.GetChangefeedID()),
-				zap.Stringer("dispatcher", d.getDispatcherID()),
-				zap.Uint64("receivedSeq", e.Seq),
-				zap.Uint64("lastEventSeq", state.lastEventSeq.Load()),
-				zap.Uint64("commitTs", e.CommitTs))
+			if debugEnabled {
+				log.Debug("check batch DML event sequence",
+					zap.Stringer("changefeedID", d.target.GetChangefeedID()),
+					zap.Stringer("dispatcher", d.getDispatcherID()),
+					zap.Uint64("receivedSeq", e.Seq),
+					zap.Uint64("lastEventSeq", state.lastEventSeq.Load()),
+					zap.Uint64("commitTs", e.CommitTs))
+			}
 
 			expectedSeq := state.lastEventSeq.Add(1)
 			if e.Seq != expectedSeq {
@@ -344,11 +350,13 @@ func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEve
 	state := d.loadCurrentEpochState()
 	for _, event := range events {
 		if !d.isFromCurrentEpoch(event, state) {
-			log.Debug("receive DML/Resolved event from a stale epoch, ignore it",
-				zap.Stringer("changefeedID", d.target.GetChangefeedID()),
-				zap.Stringer("dispatcher", d.getDispatcherID()),
-				zap.String("eventType", commonEvent.TypeToString(event.GetType())),
-				zap.Any("event", event.Event))
+			if logger.IsDebugEnabled() {
+				log.Debug("receive DML/Resolved event from a stale epoch, ignore it",
+					zap.Stringer("changefeedID", d.target.GetChangefeedID()),
+					zap.Stringer("dispatcher", d.getDispatcherID()),
+					zap.String("eventType", commonEvent.TypeToString(event.GetType())),
+					zap.Any("event", event.Event))
+			}
 			continue
 		}
 		if !d.verifyEventSequence(event, state) {
@@ -432,6 +440,18 @@ func (d *dispatcherStat) handleSingleDataEvents(events []dispatcher.DispatcherEv
 	}
 	if events[0].GetType() == commonEvent.TypeDDLEvent {
 		ddl := events[0].Event.(*commonEvent.DDLEvent)
+		ddl, err := d.target.GetRouter().ApplyToDDLEvent(ddl)
+		if err != nil {
+			log.Error("failed to apply routing to DDL event",
+				zap.Stringer("changefeedID", d.target.GetChangefeedID()),
+				zap.Stringer("dispatcher", d.getDispatcherID()),
+				zap.Error(err))
+			if target, ok := d.target.(dispatcher.Dispatcher); ok {
+				target.HandleError(err)
+			}
+			return false
+		}
+		events[0].Event = ddl
 		d.updateTableInfoByDDL(ddl)
 	}
 	d.updateCommitTsStateByEvents(state, events)
@@ -495,10 +515,12 @@ func (d *dispatcherStat) handleDropEvent(event dispatcher.DispatcherEvent) {
 
 	state := d.loadCurrentEpochState()
 	if !d.isFromCurrentEpoch(event, state) {
-		log.Debug("receive a drop event from a stale epoch, ignore it",
-			zap.Stringer("changefeedID", d.target.GetChangefeedID()),
-			zap.Stringer("dispatcher", d.getDispatcherID()),
-			zap.Any("event", event.Event))
+		if logger.IsDebugEnabled() {
+			log.Debug("receive a drop event from a stale epoch, ignore it",
+				zap.Stringer("changefeedID", d.target.GetChangefeedID()),
+				zap.Stringer("dispatcher", d.getDispatcherID()),
+				zap.Any("event", event.Event))
+		}
 		return
 	}
 
@@ -539,6 +561,17 @@ func (d *dispatcherStat) handleHandshakeEvent(event dispatcher.DispatcherEvent) 
 	}
 	tableInfo := handshakeEvent.TableInfo
 	if tableInfo != nil {
+		tableInfo, err := d.target.GetRouter().ApplyToTableInfo(tableInfo)
+		if err != nil {
+			log.Error("failed to apply routing to handshake table info",
+				zap.Stringer("changefeedID", d.target.GetChangefeedID()),
+				zap.Stringer("dispatcher", d.getDispatcherID()),
+				zap.Error(err))
+			if target, ok := d.target.(dispatcher.Dispatcher); ok {
+				target.HandleError(err)
+			}
+			return
+		}
 		d.tableInfo.Store(tableInfo)
 	}
 	state.lastEventSeq.Store(handshakeEvent.Seq)

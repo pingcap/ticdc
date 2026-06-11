@@ -21,6 +21,7 @@ import (
 
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
+	"github.com/pingcap/ticdc/downstreamadapter/routing"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -28,6 +29,7 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/logger"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -41,6 +43,7 @@ type DispatcherService interface {
 	GetBDRMode() bool
 	GetChangefeedID() common.ChangeFeedID
 	GetTableSpan() *heartbeatpb.TableSpan
+	GetRouter() routing.Router
 	GetTimezone() string
 	GetIntegrityConfig() *eventpb.IntegrityConfig
 	GetFilterConfig() *eventpb.FilterConfig
@@ -597,11 +600,13 @@ func (d *BasicDispatcher) handleEvents(dispatcherEvents []DispatcherEvent, wakeC
 // and return await=true.
 // The status path will be woken up after the action finishes.
 func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.DispatcherStatus) (await bool) {
-	log.Debug("dispatcher handle dispatcher status",
-		zap.Any("dispatcherStatus", dispatcherStatus),
-		zap.Stringer("dispatcher", d.id),
-		zap.Any("action", dispatcherStatus.GetAction()),
-		zap.Any("ack", dispatcherStatus.GetAck()))
+	if logger.IsDebugEnabled() {
+		log.Debug("dispatcher handle dispatcher status",
+			zap.String("dispatcherStatus", common.FormatDispatcherStatus(dispatcherStatus)),
+			zap.Stringer("dispatcher", d.id),
+			zap.Any("action", dispatcherStatus.GetAction()),
+			zap.Any("ack", dispatcherStatus.GetAck()))
+	}
 
 	// Step1: deal with the ack info
 	ack := dispatcherStatus.GetAck()

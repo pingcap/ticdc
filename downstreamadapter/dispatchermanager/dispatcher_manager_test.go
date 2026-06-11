@@ -22,6 +22,7 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/downstreamadapter/eventcollector"
+	"github.com/pingcap/ticdc/downstreamadapter/routing"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/mock"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql"
@@ -62,6 +63,8 @@ func newDispatcherManagerTestSink(t *testing.T, sinkType common.SinkType) sink.S
 
 // createTestDispatcher creates a test dispatcher with given parameters
 func createTestDispatcher(t *testing.T, manager *DispatcherManager, id common.DispatcherID, tableID int64, startKey, endKey []byte) *dispatcher.EventDispatcher {
+	t.Helper()
+
 	span := &heartbeatpb.TableSpan{
 		TableID:  tableID,
 		StartKey: startKey,
@@ -69,21 +72,7 @@ func createTestDispatcher(t *testing.T, manager *DispatcherManager, id common.Di
 	}
 	var redoTs atomic.Uint64
 	redoTs.Store(math.MaxUint64)
-	defaultAtomicity := config.DefaultAtomicityLevel()
-	sharedInfo := dispatcher.NewSharedInfo(
-		manager.changefeedID,
-		"system",
-		false,
-		false,
-		nil,
-		nil,
-		nil,
-		&defaultAtomicity,
-		false,
-		make(chan dispatcher.TableSpanStatusWithSeq, 1),
-		1,
-		make(chan error, 1),
-	)
+	require.NotNil(t, manager.sharedInfo)
 	d := dispatcher.NewEventDispatcher(
 		id,
 		span,
@@ -94,7 +83,7 @@ func createTestDispatcher(t *testing.T, manager *DispatcherManager, id common.Di
 		false, // skipDMLAsStartTs
 		0,     // currentPDTs
 		manager.sink,
-		sharedInfo,
+		manager.sharedInfo,
 		false,
 		&redoTs,
 	)
@@ -141,6 +130,7 @@ func createTestManager(t *testing.T) *DispatcherManager {
 		nil,   // syncPointConfig
 		&defaultAtomicity,
 		false,
+		routing.Router{},
 		make(chan dispatcher.TableSpanStatusWithSeq, 8192),
 		blockStatusBufferSize,
 		make(chan error, 1),
