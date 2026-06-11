@@ -699,20 +699,7 @@ func (d *BasicDispatcher) HandleDispatcherStatus(dispatcherStatus *heartbeatpb.D
 		}
 
 		// Step4: whether the outdate message or not, we need to return message show we have finished the event.
-<<<<<<< HEAD
-		d.sharedInfo.blockStatusesChan <- &heartbeatpb.TableSpanBlockStatus{
-			ID: d.id.ToPB(),
-			State: &heartbeatpb.State{
-				IsBlocked:   true,
-				BlockTs:     dispatcherStatus.GetAction().CommitTs,
-				IsSyncPoint: dispatcherStatus.GetAction().IsSyncPoint,
-				Stage:       heartbeatpb.BlockStage_DONE,
-			},
-			Mode: d.GetMode(),
-		}
-=======
 		d.offerDoneBlockStatus(action.CommitTs, action.IsSyncPoint)
->>>>>>> 99f48594f (dispatcher,dispatchermanager: deduplicate pending block statuses (#5028))
 	}
 	return false
 }

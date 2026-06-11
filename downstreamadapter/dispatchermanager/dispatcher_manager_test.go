@@ -79,7 +79,7 @@ func createTestDispatcher(t *testing.T, manager *DispatcherManager, id common.Di
 		&defaultAtomicity,
 		false,
 		make(chan dispatcher.TableSpanStatusWithSeq, 1),
-		make(chan *heartbeatpb.TableSpanBlockStatus, 1),
+		1,
 		make(chan error, 1),
 	)
 	d := dispatcher.NewEventDispatcher(

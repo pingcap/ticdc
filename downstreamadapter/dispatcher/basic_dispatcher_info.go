@@ -91,7 +91,6 @@ func NewSharedInfo(
 	errCh chan error,
 ) *SharedInfo {
 	sharedInfo := &SharedInfo{
-<<<<<<< HEAD
 		changefeedID:          changefeedID,
 		timezone:              timezone,
 		bdrMode:               bdrMode,
@@ -101,29 +100,10 @@ func NewSharedInfo(
 		syncPointConfig:       syncPointConfig,
 		enableSplittableCheck: enableSplittableCheck,
 		statusesChan:          statusesChan,
-		blockStatusesChan:     blockStatusesChan,
+		blockStatusBuffer:     NewBlockStatusBuffer(blockStatusBufferSize),
 		blockExecutor:         newBlockEventExecutor(),
 		errCh:                 errCh,
 		metricHandleDDLHis:    metrics.HandleDDLHistogram.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
-=======
-		changefeedID:             changefeedID,
-		timezone:                 timezone,
-		bdrMode:                  bdrMode,
-		enableActiveActive:       enableActiveActive,
-		outputRawChangeEvent:     outputRawChangeEvent,
-		integrityConfig:          integrityConfig,
-		filterConfig:             filterConfig,
-		syncPointConfig:          syncPointConfig,
-		enableSplittableCheck:    enableSplittableCheck,
-		router:                   router,
-		eventCollectorBatchCount: eventCollectorBatchCount,
-		eventCollectorBatchBytes: eventCollectorBatchBytes,
-		statusesChan:             statusesChan,
-		blockStatusBuffer:        NewBlockStatusBuffer(blockStatusBufferSize),
-		blockExecutor:            newBlockEventExecutor(),
-		errCh:                    errCh,
-		metricHandleDDLHis:       metrics.HandleDDLHistogram.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
->>>>>>> 99f48594f (dispatcher,dispatchermanager: deduplicate pending block statuses (#5028))
 	}
 
 	if txnAtomicity != nil {
@@ -276,14 +256,6 @@ func (s *SharedInfo) GetStatusesChan() chan TableSpanStatusWithSeq {
 	return s.statusesChan
 }
 
-<<<<<<< HEAD
-func (s *SharedInfo) GetBlockStatusesChan() chan *heartbeatpb.TableSpanBlockStatus {
-	return s.blockStatusesChan
-=======
-func (s *SharedInfo) EnableActiveActive() bool {
-	return s.enableActiveActive
-}
-
 // OfferBlockStatus appends a protobuf block status to the dispatcher-local
 // buffer. WAITING keeps a single pending protobuf object while NONE preserves
 // original ordering without deduplication.
@@ -316,7 +288,6 @@ func (s *SharedInfo) TryTakeBlockStatus() (*heartbeatpb.TableSpanBlockStatus, bo
 
 func (s *SharedInfo) BlockStatusLen() int {
 	return s.blockStatusBuffer.Len()
->>>>>>> 99f48594f (dispatcher,dispatchermanager: deduplicate pending block statuses (#5028))
 }
 
 func (s *SharedInfo) GetErrCh() chan error {

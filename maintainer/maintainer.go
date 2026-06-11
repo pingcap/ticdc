@@ -312,14 +312,10 @@ func (m *Maintainer) HandleEvent(event *Event) bool {
 					zap.Stringer("changefeedID", m.changefeedID),
 					zap.Int("eventType", event.eventType),
 					zap.Duration("duration", duration),
-<<<<<<< HEAD
-					zap.Any("Message", event.message),
-=======
 					zap.String("from", event.message.From.String()),
 					zap.String("to", event.message.To.String()),
 					zap.String("type", event.message.Type.String()),
 					zap.String("topic", event.message.Topic),
->>>>>>> 99f48594f (dispatcher,dispatchermanager: deduplicate pending block statuses (#5028))
 				)
 			} else {
 				log.Info("maintainer is too slow",

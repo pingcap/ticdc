@@ -36,8 +36,6 @@ import (
 
 var defaultAtomicity = config.DefaultAtomicityLevel()
 
-<<<<<<< HEAD
-=======
 func takeBlockStatusWithTimeout(
 	t *testing.T,
 	dispatcher *EventDispatcher,
@@ -62,7 +60,6 @@ func newTestSyncPointConfig() *syncpoint.SyncPointConfig {
 }
 
 func newTestSharedInfo(
-	enableActiveActive bool,
 	enableSplittableCheck bool,
 	syncPointConfig *syncpoint.SyncPointConfig,
 ) *SharedInfo {
@@ -70,23 +67,18 @@ func newTestSharedInfo(
 		common.NewChangefeedID(common.DefaultKeyspaceName),
 		"system",
 		false,
-		enableActiveActive,
 		false,
 		nil,
 		nil,
 		syncPointConfig,
 		&defaultAtomicity,
 		enableSplittableCheck,
-		routing.Router{},
-		0,
-		0,
 		make(chan TableSpanStatusWithSeq, 128),
 		128,
 		make(chan error, 1),
 	)
 }
 
->>>>>>> 99f48594f (dispatcher,dispatchermanager: deduplicate pending block statuses (#5028))
 func getCompleteTableSpanWithTableID(keyspaceID uint32, tableID int64) (*heartbeatpb.TableSpan, error) {
 	tableSpan := &heartbeatpb.TableSpan{
 		KeyspaceID: keyspaceID,
@@ -135,7 +127,7 @@ func newDispatcherForTest(sink sink.Sink, tableSpan *heartbeatpb.TableSpan) *Eve
 		&defaultAtomicity,
 		false, // enableSplittableCheck
 		make(chan TableSpanStatusWithSeq, 128),
-		make(chan *heartbeatpb.TableSpanBlockStatus, 128),
+		128,
 		make(chan error, 1),
 	)
 	return NewEventDispatcher(
@@ -481,60 +473,6 @@ func TestDispatcherHandleEvents(t *testing.T) {
 	t.Run("cloud storage wake callback after batch enqueue", verifyDMLWakeCallbackStorageAfterBatchEnqueue)
 }
 
-<<<<<<< HEAD
-=======
-func TestDispatcherIgnoresStaleIgnoredBlockStatus(t *testing.T) {
-	tableSpan := getUncompleteTableSpan()
-	tableSpan.KeyspaceID = getTestingKeyspaceID()
-	dispatcher := newDispatcherForTest(newDispatcherTestSink(t, common.MysqlSinkType).Sink(), tableSpan)
-
-	previousScheduler := GetDispatcherTaskScheduler()
-	taskScheduler := threadpool.NewThreadPool(1)
-	SetDispatcherTaskScheduler(taskScheduler)
-	defer func() {
-		SetDispatcherTaskScheduler(previousScheduler)
-		taskScheduler.Stop()
-	}()
-
-	ddlEvent := &commonEvent.DDLEvent{
-		FinishedTs: 30,
-		BlockedTables: &commonEvent.InfluencedTables{
-			InfluenceType: commonEvent.InfluenceTypeNormal,
-			TableIDs:      []int64{1},
-		},
-	}
-	dispatcher.blockEventStatus.setBlockEvent(ddlEvent, heartbeatpb.BlockStage_WRITING)
-	identifier := BlockEventIdentifier{CommitTs: ddlEvent.FinishedTs}
-	dispatcher.resendTaskMap.Set(identifier, newResendTask(
-		dispatcher,
-		&heartbeatpb.TableSpanBlockStatus{
-			ID: dispatcher.id.ToPB(),
-			State: &heartbeatpb.State{
-				IsBlocked:   true,
-				BlockTs:     ddlEvent.GetCommitTs(),
-				BlockTables: cloneInfluencedTablesPB(ddlEvent.GetBlockedTables()),
-				IsSyncPoint: false,
-				Stage:       heartbeatpb.BlockStage_WAITING,
-			},
-			Mode: dispatcher.GetMode(),
-		},
-		nil,
-	))
-	defer dispatcher.cancelResendTask(identifier)
-
-	await := dispatcher.HandleDispatcherStatus(&heartbeatpb.DispatcherStatus{
-		IgnoredBlockStatus: &heartbeatpb.IgnoredBlockStatus{
-			CommitTs: ddlEvent.FinishedTs,
-		},
-	})
-	require.False(t, await)
-
-	if msg, ok := takeBlockStatusWithTimeout(t, dispatcher, 200*time.Millisecond); ok {
-		require.FailNow(t, "unexpected fast retry for stale ignored block status", "msg=%v", msg)
-	}
-}
-
->>>>>>> 99f48594f (dispatcher,dispatchermanager: deduplicate pending block statuses (#5028))
 func TestBlockingDDLFlushBeforeWaitingAndWriteDoesNotFlushAgain(t *testing.T) {
 	keyspaceID := getTestingKeyspaceID()
 	tableSpan := getUncompleteTableSpan()
@@ -642,19 +580,21 @@ func TestDispatcherIgnoresStaleIgnoredBlockStatus(t *testing.T) {
 	}
 	dispatcher.blockEventStatus.setBlockEvent(ddlEvent, heartbeatpb.BlockStage_WRITING)
 	identifier := BlockEventIdentifier{CommitTs: ddlEvent.FinishedTs}
-	dispatcher.resendTaskMap.Set(identifier, newResendTask(&heartbeatpb.TableSpanBlockStatus{
-		ID: dispatcher.GetId().ToPB(),
-		State: &heartbeatpb.State{
-			IsBlocked: true,
-			BlockTs:   ddlEvent.FinishedTs,
-			BlockTables: &heartbeatpb.InfluencedTables{
-				InfluenceType: heartbeatpb.InfluenceType_Normal,
-				TableIDs:      []int64{1},
+	dispatcher.resendTaskMap.Set(identifier, newResendTask(
+		dispatcher,
+		&heartbeatpb.TableSpanBlockStatus{
+			ID: dispatcher.id.ToPB(),
+			State: &heartbeatpb.State{
+				IsBlocked:   true,
+				BlockTs:     ddlEvent.GetCommitTs(),
+				BlockTables: cloneInfluencedTablesPB(ddlEvent.GetBlockedTables()),
+				IsSyncPoint: false,
+				Stage:       heartbeatpb.BlockStage_WAITING,
 			},
-			Stage: heartbeatpb.BlockStage_WAITING,
+			Mode: dispatcher.GetMode(),
 		},
-		Mode: dispatcher.GetMode(),
-	}, dispatcher, nil))
+		nil,
+	))
 	defer dispatcher.cancelResendTask(identifier)
 
 	await := dispatcher.HandleDispatcherStatus(&heartbeatpb.DispatcherStatus{
@@ -664,10 +604,8 @@ func TestDispatcherIgnoresStaleIgnoredBlockStatus(t *testing.T) {
 	})
 	require.False(t, await)
 
-	select {
-	case msg := <-dispatcher.GetBlockStatusesChan():
+	if msg, ok := takeBlockStatusWithTimeout(t, dispatcher, 200*time.Millisecond); ok {
 		require.FailNow(t, "unexpected fast retry for stale ignored block status", "msg=%v", msg)
-	case <-time.After(200 * time.Millisecond):
 	}
 }
 
@@ -1151,7 +1089,7 @@ func TestDispatcherSplittableCheck(t *testing.T) {
 		&defaultAtomicity,
 		true, // enableSplittableCheck = true
 		make(chan TableSpanStatusWithSeq, 128),
-		make(chan *heartbeatpb.TableSpanBlockStatus, 128),
+		128,
 		make(chan error, 1),
 	)
 
@@ -1260,7 +1198,7 @@ func TestDispatcher_SkipDMLAsStartTs_FilterCorrectly(t *testing.T) {
 		&defaultAtomicity,
 		false,
 		make(chan TableSpanStatusWithSeq, 128),
-		make(chan *heartbeatpb.TableSpanBlockStatus, 128),
+		128,
 		make(chan error, 1),
 	)
 
@@ -1339,7 +1277,7 @@ func TestDispatcher_SkipDMLAsStartTs_Disabled(t *testing.T) {
 		&defaultAtomicity,
 		false,
 		make(chan TableSpanStatusWithSeq, 128),
-		make(chan *heartbeatpb.TableSpanBlockStatus, 128),
+		128,
 		make(chan error, 1),
 	)
 
