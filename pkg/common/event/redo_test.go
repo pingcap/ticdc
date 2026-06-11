@@ -25,8 +25,6 @@ import (
 )
 
 func TestRedoUsesRoutedTableNames(t *testing.T) {
-	t.Parallel()
-
 	helper := NewEventTestHelper(t)
 	defer helper.Close()
 
