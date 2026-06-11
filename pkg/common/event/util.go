@@ -105,8 +105,14 @@ func (s *EventTestHelper) ApplyJob(job *timodel.Job) {
 		}
 	}
 
-	info := common.WrapTableInfo(job.SchemaName, tableInfo)
-	info.InitPrivateFields()
+	s.storeTableInfo(job.SchemaName, tableInfo)
+}
+
+func (s *EventTestHelper) storeTableInfo(schemaName string, tableInfo *timodel.TableInfo) {
+	info := common.WrapTableInfo(schemaName, tableInfo)
+	if info == nil {
+		return
+	}
 	key := toTableInfosKey(info.GetSchemaName(), info.GetTableName())
 	if tableInfo.Partition != nil {
 		if _, ok := s.partitionIDs[key]; !ok {
@@ -116,7 +122,6 @@ func (s *EventTestHelper) ApplyJob(job *timodel.Job) {
 			s.partitionIDs[key][partition.Name.O] = partition.ID
 		}
 	}
-	log.Info("apply job", zap.String("jobKey", key), zap.Any("job", job))
 	s.tableInfos[key] = info
 }
 

@@ -17,28 +17,100 @@ import (
 	"testing"
 
 	commonType "github.com/pingcap/ticdc/pkg/common"
-	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/meta/model"
 	parser_model "github.com/pingcap/tidb/pkg/parser/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/stretchr/testify/require"
 )
 
+func TestRedoUsesRoutedTableNames(t *testing.T) {
+	t.Parallel()
+
+	helper := NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	job := helper.DDL2Job(`create table test.t(id int primary key, name varchar(32))`)
+	require.NotNil(t, job)
+
+	sourceTableInfo := helper.GetTableInfo(job)
+	routedTableInfo := sourceTableInfo.CloneWithRouting("target_db", "target_table")
+
+	redoDDLEvent := (&DDLEvent{
+		Query:      "ALTER TABLE `target_db`.`target_table` ADD COLUMN age INT",
+		Type:       byte(model.ActionAddColumn),
+		SchemaName: "test",
+		TableName:  "t",
+		TableInfo:  routedTableInfo,
+		FinishedTs: 200,
+		StartTs:    100,
+	}).ToRedoLog().RedoDDL
+
+	require.Equal(t, "target_db", redoDDLEvent.TableName.Schema)
+	require.Equal(t, "target_table", redoDDLEvent.TableName.Table)
+	require.Empty(t, redoDDLEvent.TableName.TargetSchema)
+	require.Empty(t, redoDDLEvent.TableName.TargetTable)
+
+	ddlEvent := redoDDLEvent.ToDDLEvent()
+	require.Equal(t, "target_db", ddlEvent.SchemaName)
+	require.Equal(t, "target_table", ddlEvent.TableName)
+	require.Empty(t, ddlEvent.targetSchemaName)
+	require.Empty(t, ddlEvent.targetTableName)
+	require.Equal(t, "target_db", ddlEvent.GetTargetSchemaName())
+	require.Equal(t, "target_table", ddlEvent.GetTargetTableName())
+	require.Equal(t, "target_db", ddlEvent.TableInfo.GetSchemaName())
+	require.Equal(t, "target_table", ddlEvent.TableInfo.GetTableName())
+	require.Empty(t, ddlEvent.TableInfo.TableName.TargetSchema)
+	require.Empty(t, ddlEvent.TableInfo.TableName.TargetTable)
+	require.Equal(t, "target_db", ddlEvent.TableInfo.GetTargetSchemaName())
+	require.Equal(t, "target_table", ddlEvent.TableInfo.GetTargetTableName())
+	require.Equal(t, []SchemaTableName{{
+		SchemaName: "target_db",
+		TableName:  "target_table",
+	}}, ddlEvent.BlockedTableNames)
+
+	dmlEvent := helper.DML2Event("test", "t", `insert into test.t values (1, 'alice')`)
+	dmlEvent.TableInfo = routedTableInfo
+
+	row, ok := dmlEvent.GetNextRow()
+	require.True(t, ok)
+
+	redoRow := (&RedoRowEvent{
+		StartTs:         dmlEvent.StartTs,
+		CommitTs:        dmlEvent.CommitTs,
+		PhysicalTableID: dmlEvent.PhysicalTableID,
+		TableInfo:       routedTableInfo,
+		Event:           row,
+	}).ToRedoLog().RedoRow
+
+	require.Equal(t, "target_db", redoRow.Row.Table.Schema)
+	require.Equal(t, "target_table", redoRow.Row.Table.Table)
+	require.Empty(t, redoRow.Row.Table.TargetSchema)
+	require.Empty(t, redoRow.Row.Table.TargetTable)
+
+	decoded := redoRow.ToDMLEvent()
+	require.Equal(t, "target_db", decoded.TableInfo.GetSchemaName())
+	require.Equal(t, "target_table", decoded.TableInfo.GetTableName())
+	require.Equal(t, "target_db", decoded.TableInfo.GetTargetSchemaName())
+	require.Equal(t, "target_table", decoded.TableInfo.GetTargetTableName())
+}
+
 func TestRedoDDLEventRoundTripPreservesColumnMetadata(t *testing.T) {
-	originalTableInfo := commonType.NewTableInfo4Decoder("test", &timodel.TableInfo{
+	originalTableInfo := commonType.NewTableInfo4Decoder("test", &model.TableInfo{
 		ID:   1001,
 		Name: parser_model.NewCIStr("t_redo"),
-		Columns: []*timodel.ColumnInfo{
-			newRedoDDLTestColumn(t, 1, "id", mysql.TypeLonglong, nil, timodel.CurrLatestColumnInfoVersion),
-			newRedoDDLTestColumn(t, 2, "status", mysql.TypeVarchar, "ready", timodel.CurrLatestColumnInfoVersion),
-			newRedoDDLTestColumn(t, 3, "created_at", mysql.TypeTimestamp, "2024-01-02 03:04:05", timodel.ColumnInfoVersion0),
-			newRedoDDLTestColumn(t, 4, "flags", mysql.TypeBit, "1", timodel.CurrLatestColumnInfoVersion),
+		Columns: []*model.ColumnInfo{
+			newRedoDDLTestColumn(t, 1, "id", mysql.TypeLonglong, nil, model.CurrLatestColumnInfoVersion),
+			newRedoDDLTestColumn(t, 2, "status", mysql.TypeVarchar, "ready", model.CurrLatestColumnInfoVersion),
+			newRedoDDLTestColumn(t, 3, "created_at", mysql.TypeTimestamp, "2024-01-02 03:04:05", model.ColumnInfoVersion0),
+			newRedoDDLTestColumn(t, 4, "flags", mysql.TypeBit, "1", model.CurrLatestColumnInfoVersion),
 		},
 	})
 	originalTableInfo.TableName.IsPartition = true
 
 	ddlEvent := &DDLEvent{
-		Type:              byte(timodel.ActionCreateTable),
+		Type:              byte(model.ActionCreateTable),
 		Query:             "create table test.t_redo(id bigint, status varchar(16) default 'ready')",
 		TableInfo:         originalTableInfo,
 		StartTs:           11,
@@ -76,7 +148,7 @@ func TestRedoDDLEventRoundTripPreservesColumnMetadata(t *testing.T) {
 
 func TestDDLEventToRedoLogHandlesNilTableInfo(t *testing.T) {
 	ddlEvent := &DDLEvent{
-		Type:       byte(timodel.ActionCreateSchema),
+		Type:       byte(model.ActionCreateSchema),
 		Query:      "create database test_redo",
 		StartTs:    33,
 		FinishedTs: 44,
@@ -93,7 +165,7 @@ func TestDDLEventToRedoLogHandlesNilTableInfo(t *testing.T) {
 
 func TestDDLEventToRedoLogHandlesUninitializedTableInfo(t *testing.T) {
 	ddlEvent := &DDLEvent{
-		Type:       byte(timodel.ActionAddColumn),
+		Type:       byte(model.ActionAddColumn),
 		Query:      "alter table test_redo.t add column c int",
 		StartTs:    55,
 		FinishedTs: 66,
@@ -114,15 +186,15 @@ func newRedoDDLTestColumn(
 	tp byte,
 	originDefaultValue any,
 	version uint64,
-) *timodel.ColumnInfo {
+) *model.ColumnInfo {
 	t.Helper()
 
 	fieldType := types.NewFieldType(tp)
-	column := &timodel.ColumnInfo{
+	column := &model.ColumnInfo{
 		ID:        id,
 		Offset:    int(id - 1),
 		Name:      parser_model.NewCIStr(name),
-		State:     timodel.StatePublic,
+		State:     model.StatePublic,
 		FieldType: *fieldType,
 		Version:   version,
 	}
