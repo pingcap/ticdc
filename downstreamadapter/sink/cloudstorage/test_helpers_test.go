@@ -29,6 +29,11 @@ const (
 	testEventuallyTick    = 10 * time.Millisecond
 )
 
+func TestMain(m *testing.M) {
+	appcontext.SetService(appcontext.DefaultPDClock, pdutil.NewClock4Test())
+	os.Exit(m.Run())
+}
+
 func setPDClockForTest(t *testing.T, clock pdutil.Clock) func(pdutil.Clock) {
 	t.Helper()
 

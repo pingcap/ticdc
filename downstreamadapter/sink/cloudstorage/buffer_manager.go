@@ -18,7 +18,6 @@ import (
 	"context"
 	"time"
 
-	"github.com/pingcap/failpoint"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/cloudstorage/spool"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -71,10 +70,6 @@ func (c *bufferManager) run(ctx context.Context) error {
 	defer ticker.Stop()
 
 	for {
-		failpoint.Inject("passTickerOnce", func() {
-			<-ticker.C
-		})
-
 		select {
 		case <-ctx.Done():
 			return errors.Trace(context.Cause(ctx))

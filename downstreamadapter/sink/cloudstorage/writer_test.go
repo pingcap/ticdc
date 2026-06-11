@@ -60,7 +60,6 @@ func testWriter(ctx context.Context, t *testing.T, dir string) *writer {
 
 	changefeedID := commonType.NewChangefeedID4Test("test", t.Name())
 	statistics := metrics.NewStatistics(changefeedID, t.Name())
-	setPDClockForTest(t, pdutil.NewClock4Test())
 	spoolBuffer := newTestSpool(t, changefeedID, cfg)
 	d := newWriter(1, changefeedID, storage,
 		cfg, ".json", statistics, spoolBuffer)
@@ -96,6 +95,8 @@ func hasSpoolLogFile(spoolDir string) bool {
 }
 
 func TestWriterRun(t *testing.T) {
+	t.Parallel()
+
 	ctx, cancel := context.WithCancel(context.Background())
 	parentDir := t.TempDir()
 	d := testWriter(ctx, t, parentDir)
@@ -159,6 +160,8 @@ func TestWriterRun(t *testing.T) {
 }
 
 func TestWriterFlushMarker(t *testing.T) {
+	t.Parallel()
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	parentDir := t.TempDir()
@@ -221,6 +224,8 @@ func TestWriterFlushMarker(t *testing.T) {
 }
 
 func TestWriterFlushMarkerOnlyFlushesTargetDispatcher(t *testing.T) {
+	t.Parallel()
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	parentDir := t.TempDir()
@@ -316,6 +321,8 @@ func TestWriterFlushMarkerOnlyFlushesTargetDispatcher(t *testing.T) {
 }
 
 func TestWriterPostEnqueueAfterConsume(t *testing.T) {
+	t.Parallel()
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	parentDir := t.TempDir()
@@ -564,6 +571,8 @@ func TestDiscardEntriesDoesNotLoadSpilledPayload(t *testing.T) {
 }
 
 func TestWriterRunExitAfterContextCancel(t *testing.T) {
+	t.Parallel()
+
 	ctx, cancel := context.WithCancelCause(context.Background())
 	parentDir := t.TempDir()
 	d := testWriter(ctx, t, parentDir)
@@ -619,6 +628,8 @@ func (w *failOnCloseWriter) Close(ctx context.Context) error {
 }
 
 func TestWriterIndexWriteError(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 	parentDir := t.TempDir()
 	uri := fmt.Sprintf("file:///%s?flush-interval=2s", parentDir)
@@ -681,6 +692,8 @@ func TestWriterIndexWriteError(t *testing.T) {
 }
 
 func TestWriterDataFileCloseError(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 	parentDir := t.TempDir()
 	uri := fmt.Sprintf("file:///%s?flush-interval=2s", parentDir)

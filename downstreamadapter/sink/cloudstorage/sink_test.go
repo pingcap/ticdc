@@ -36,6 +36,7 @@ import (
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
+	"github.com/pingcap/tidb/pkg/util/chunk"
 	"github.com/stretchr/testify/require"
 )
 
@@ -74,21 +75,30 @@ func TestBasicFunctionality(t *testing.T) {
 
 	var count atomic.Int64
 
-	helper := commonEvent.NewEventTestHelper(t)
-	defer helper.Close()
-
-	helper.Tk().MustExec("use test")
 	createTableSQL := "create table t (id int primary key, name varchar(2048));"
-	job := helper.DDL2Job(createTableSQL)
-	require.NotNil(t, job)
-	helper.ApplyJob(job)
-
-	tableInfo := helper.GetTableInfo(job)
+	tableInfo := common.WrapTableInfo("test", &timodel.TableInfo{
+		ID:   1,
+		Name: ast.NewCIStr("t"),
+		Columns: []*timodel.ColumnInfo{
+			{
+				ID:        1,
+				Name:      ast.NewCIStr("id"),
+				FieldType: *types.NewFieldType(mysql.TypeLong),
+				State:     timodel.StatePublic,
+			},
+			{
+				ID:        2,
+				Name:      ast.NewCIStr("name"),
+				FieldType: *types.NewFieldType(mysql.TypeVarchar),
+				State:     timodel.StatePublic,
+			},
+		},
+	})
 
 	ddlEvent := &commonEvent.DDLEvent{
-		Query:      job.Query,
-		SchemaName: job.SchemaName,
-		TableName:  job.TableName,
+		Query:      createTableSQL,
+		SchemaName: "test",
+		TableName:  "t",
 		FinishedTs: 1,
 		BlockedTables: &commonEvent.InfluencedTables{
 			InfluenceType: commonEvent.InfluenceTypeNormal,
@@ -102,9 +112,9 @@ func TestBasicFunctionality(t *testing.T) {
 	}
 
 	ddlEvent2 := &commonEvent.DDLEvent{
-		Query:      job.Query,
-		SchemaName: job.SchemaName,
-		TableName:  job.TableName,
+		Query:      createTableSQL,
+		SchemaName: "test",
+		TableName:  "t",
 		FinishedTs: 4,
 		BlockedTables: &commonEvent.InfluencedTables{
 			InfluenceType: commonEvent.InfluenceTypeNormal,
@@ -117,13 +127,17 @@ func TestBasicFunctionality(t *testing.T) {
 		},
 	}
 
-	dmlEvent := helper.DML2Event(
-		"test",
-		"t",
-		fmt.Sprintf("insert into t values (1, '%s')", strings.Repeat("x", 1024)),
-		fmt.Sprintf("insert into t values (2, '%s')", strings.Repeat("y", 1024)),
-	)
-	dmlEvent.TableInfoVersion = job.BinlogInfo.FinishedTS
+	rows := chunk.NewChunkWithCapacity(tableInfo.GetFieldSlice(), 2)
+	rows.AppendInt64(0, 1)
+	rows.AppendString(1, strings.Repeat("x", 1024))
+	rows.AppendInt64(0, 2)
+	rows.AppendString(1, strings.Repeat("y", 1024))
+	dmlEvent := commonEvent.NewDMLEvent(common.NewDispatcherID(), tableInfo.TableName.TableID, 2, 3, tableInfo)
+	dmlEvent.TableInfoVersion = ddlEvent.FinishedTs
+	dmlEvent.SetRows(rows)
+	dmlEvent.RowTypes = []common.RowType{common.RowTypeInsert, common.RowTypeInsert}
+	dmlEvent.Length = 2
+	dmlEvent.ApproximateSize = 2
 	dmlEvent.PostTxnFlushed = []func(){
 		func() {
 			count.Add(1)
@@ -703,23 +717,28 @@ func TestCleanupExpiredFiles(t *testing.T) {
 		},
 	}
 	require.NoError(t, cloudStorageSink.initCron(ctx, sinkURI, cleanupJobs))
+
+	require.Len(t, cloudStorageSink.cron.Entries(), len(cleanupJobs))
+	cleanupJobs[0]()
+	require.Equal(t, int64(1), count.Load())
+
 	cleanupDoneCh := make(chan struct{}, 1)
 	go func() {
 		cloudStorageSink.bgCleanup(ctx)
 		cleanupDoneCh <- struct{}{}
 	}()
 
-	select {
-	case <-cleanupDone:
-	case <-time.After(testEventuallyTimeout):
-		t.Fatal("cleanup job did not run")
-	}
-	require.LessOrEqual(t, int64(1), count.Load())
 	cancel()
 	select {
 	case <-cleanupDoneCh:
 	case <-time.After(testEventuallyTimeout):
 		t.Fatal("background cleanup did not exit after context cancel")
+	}
+
+	select {
+	case <-cleanupDone:
+	default:
+		t.Fatal("cleanup job did not run")
 	}
 }
 
