@@ -453,11 +453,6 @@ func (d *dispatcherStat) handleSingleDataEvents(events []dispatcher.DispatcherEv
 			return false
 		}
 		events[0].Event = ddl
-		d.tableInfoVersion.Store(ddl.FinishedTs)
-		if ddl.TableInfo != nil {
-			d.tableInfo.Store(ddl.TableInfo)
-		}
-		events[0].Event = ddl
 		d.updateTableInfoByDDL(ddl)
 	}
 	d.updateCommitTsStateByEvents(state, events)
