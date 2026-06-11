@@ -42,6 +42,11 @@ message ACK {
     bool IsSyncPoint = 2;  // sync point Event and ddl Event could have the same CommitTs, so we need to distinguish them.
 }
 
+message IgnoredBlockStatus {
+    uint64 CommitTs = 1;
+    bool IsSyncPoint = 2;
+}
+
 message InfluencedDispatchers {
     InfluenceType InfluenceType = 1;
     // only exist when type is normal
@@ -56,6 +61,7 @@ message DispatcherStatus {
     InfluencedDispatchers influencedDispatchers = 1;
     DispatcherAction action = 2;
     ACK ack = 3;
+    IgnoredBlockStatus ignoredBlockStatus = 4;
 }
 
 message HeartBeatResponse {
@@ -69,7 +75,7 @@ message CheckpointTsMessage {
     uint64 checkpointTs = 2;
 }
 
-// RedoMetaMessage used to send unflushed ts to update redo meta 
+// RedoMetaMessage used to send unflushed ts to update redo meta
 // from maintainer to dispatcher manager
 message RedoMetaMessage {
     ChangefeedID changefeedID = 1;
@@ -77,14 +83,14 @@ message RedoMetaMessage {
     uint64 checkpointTs = 3;
 }
 
-// RedoResolvedTsProgressMessage used to send redo meta flushed resolvedTs 
+// RedoResolvedTsProgressMessage used to send redo meta flushed resolvedTs
 // from dispatcher manager to maintainer
 message RedoResolvedTsProgressMessage {
     ChangefeedID changefeedID = 1;
     uint64 resolvedTs = 2;
 }
 
-// RedoResolvedTsForwardMessage used to send redoGlobalTs (redo meta flushed resolvedTs) 
+// RedoResolvedTsForwardMessage used to send redoGlobalTs (redo meta flushed resolvedTs)
 // from maintainer to dispatcher manager
 message RedoResolvedTsForwardMessage {
     ChangefeedID changefeedID = 1;
@@ -143,6 +149,39 @@ message MaintainerStatus {
     repeated RunningError err = 5;
     bool bootstrap_done = 6;
     uint64 lastSyncedTs = 7;  // last synced ts of all tables in the changefeed, used in /:changefeed_id/synced API
+}
+
+// NodeLiveness is node-reported liveness.
+// Coordinator uses it for destination filtering and safe rolling-restart handoff
+// without persisting a separate intent in etcd.
+// It is monotonic and only allows: ALIVE -> DRAINING -> STOPPING.
+enum NodeLiveness {
+    // ALIVE accepts new destination placement, maintainer creation, and leader campaign/service.
+    ALIVE = 0;
+    // DRAINING is excluded from destination selection and is being drained.
+    // In-flight operations may still complete, but no new leader campaign is allowed.
+    DRAINING = 1;
+    // STOPPING keeps destination exclusion and enforces shutdown safety.
+    // It rejects new maintainer creation, allows cleanup/remove
+    STOPPING = 2;
+}
+
+// NodeHeartbeat is sent periodically from a node to the coordinator.
+message NodeHeartbeat {
+    NodeLiveness liveness = 1;
+    uint64 node_epoch = 2;
+}
+
+// SetNodeLivenessRequest asks a node to transition its local liveness.
+message SetNodeLivenessRequest {
+    NodeLiveness target = 1;
+    uint64 node_epoch = 2;
+}
+
+// SetNodeLivenessResponse reports the liveness state applied by the node.
+message SetNodeLivenessResponse {
+    NodeLiveness applied = 1;
+    uint64 node_epoch = 2;
 }
 
 message CoordinatorBootstrapRequest {
@@ -356,7 +395,7 @@ enum ChecksumState {
 
 message ChecksumMeta {
     ChecksumState state = 1;
-    // checksumStateSeq is a monotonic version for checksumState, 
+    // checksumStateSeq is a monotonic version for checksumState,
     // used to discard out-of-order meta info.
     uint64 checksumStateSeq = 2;
 }

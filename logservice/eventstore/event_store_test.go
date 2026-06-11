@@ -466,6 +466,40 @@ func TestEventStoreRegisterDispatcherWithoutDataSharing(t *testing.T) {
 	mockSubClient.mu.Unlock()
 }
 
+func TestGetIteratorPanicWhenStartLessThanCheckpoint(t *testing.T) {
+	dir := t.TempDir()
+	_, storeInterface := newEventStoreForTest(dir)
+	store := storeInterface.(*eventStore)
+	defer func() {
+		require.NoError(t, store.Close(context.Background()))
+	}()
+
+	cfID := common.NewChangefeedID4Test("default", "test")
+	dispatcherID := common.NewDispatcherID()
+	span := &heartbeatpb.TableSpan{
+		TableID:  1,
+		StartKey: []byte("a"),
+		EndKey:   []byte("z"),
+	}
+
+	require.True(t, store.RegisterDispatcher(cfID, dispatcherID, span, 100, func(uint64, uint64) {}, false, false))
+
+	stat := store.dispatcherMeta.dispatcherStats[dispatcherID]
+	require.NotNil(t, stat)
+	require.NotNil(t, stat.subStat)
+	stat.subStat.resolvedTs.Store(200)
+
+	store.UpdateDispatcherCheckpointTs(dispatcherID, 120)
+
+	require.Panics(t, func() {
+		store.GetIterator(dispatcherID, common.DataRange{
+			Span:          span,
+			CommitTsStart: 110,
+			CommitTsEnd:   150,
+		})
+	})
+}
+
 func TestEventStoreUnregisterDispatcherWithoutDataSharingRemovesSubscription(t *testing.T) {
 	restoreCfg := setDataSharingForTest(t, false)
 	defer restoreCfg()

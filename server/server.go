@@ -29,7 +29,6 @@ import (
 	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/logservice/txnutil"
 	"github.com/pingcap/ticdc/maintainer"
-	"github.com/pingcap/ticdc/pkg/api"
 	"github.com/pingcap/ticdc/pkg/common"
 	appctx "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -37,6 +36,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/etcd"
 	"github.com/pingcap/ticdc/pkg/eventservice"
 	"github.com/pingcap/ticdc/pkg/keyspace"
+	"github.com/pingcap/ticdc/pkg/liveness"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
@@ -85,7 +85,7 @@ type server struct {
 
 	info *node.Info
 
-	liveness api.Liveness
+	liveness liveness.Liveness
 
 	pdClient      pd.Client
 	pdAPIClient   pdutil.PDAPIClient
@@ -161,6 +161,8 @@ func New(conf *config.ServerConfig, pdEndpoints []string) (tiserver.Server, erro
 		pdEndpoints: pdEndpoints,
 		tcpServer:   tcpServer,
 		security:    conf.Security,
+		// Initialize liveness explicitly to make the default node state obvious.
+		liveness:    liveness.CaptureAlive,
 		preServices: make([]common.Closeable, 0),
 	}
 	return s, nil
@@ -219,7 +221,7 @@ func (c *server) initialize(ctx context.Context) error {
 		subscriptionClient,
 		schemaStore,
 		eventStore,
-		maintainer.NewMaintainerManager(c.info, conf.Debug.Scheduler),
+		maintainer.NewMaintainerManager(c.info, conf.Debug.Scheduler, &c.liveness),
 		eventService,
 	}
 	// register it into global var
@@ -415,7 +417,7 @@ func (c *server) GetCoordinator() (tiserver.Coordinator, error) {
 // Close closes the server by deregister it from etcd,
 // it also closes the coordinator and processorManager
 // Note: this function should be reentrant
-func (c *server) Close(ctx context.Context) {
+func (c *server) Close() {
 	if !c.closed.CompareAndSwap(false, true) {
 		return
 	}
@@ -435,11 +437,14 @@ func (c *server) Close(ctx context.Context) {
 		c.closePreServices()
 	}()
 
+	closeCtx, closeCancel := context.WithTimeout(context.Background(), GracefulShutdownTimeout)
+	defer closeCancel()
+
 	// There are also some dependencies inside subModules,
 	// so we close subModules in reverse order of their startup.
 	for i := len(c.subModules) - 1; i >= 0; i-- {
 		m := c.subModules[i]
-		if err := m.Close(ctx); err != nil {
+		if err := m.Close(closeCtx); err != nil {
 			log.Warn("failed to close sub module",
 				zap.String("module", m.Name()),
 				zap.Error(err))
@@ -448,7 +453,7 @@ func (c *server) Close(ctx context.Context) {
 	}
 
 	for _, m := range c.nodeModules {
-		if err := m.Close(ctx); err != nil {
+		if err := m.Close(closeCtx); err != nil {
 			log.Warn("failed to close sub common module",
 				zap.String("module", m.Name()),
 				zap.Error(err))
@@ -457,7 +462,7 @@ func (c *server) Close(ctx context.Context) {
 	}
 
 	for _, nm := range c.networkModules {
-		if err := nm.Close(ctx); err != nil {
+		if err := nm.Close(closeCtx); err != nil {
 			log.Warn("failed to close sub base module",
 				zap.String("module", nm.Name()),
 				zap.Error(err))
@@ -466,8 +471,8 @@ func (c *server) Close(ctx context.Context) {
 	}
 
 	// delete server info from etcd
-	timeoutCtx, cancel := context.WithTimeout(context.Background(), cleanMetaDuration)
-	defer cancel()
+	timeoutCtx, timeoutCancel := context.WithTimeout(closeCtx, cleanMetaDuration)
+	defer timeoutCancel()
 	if err := c.EtcdClient.DeleteCaptureInfo(timeoutCtx, string(c.info.ID)); err != nil {
 		log.Warn("failed to delete server info when server exited",
 			zap.String("captureID", string(c.info.ID)),
@@ -499,7 +504,7 @@ func (c *server) closePreServices() {
 }
 
 // Liveness returns liveness of the server.
-func (c *server) Liveness() api.Liveness {
+func (c *server) Liveness() liveness.Liveness {
 	return c.liveness.Load()
 }
 

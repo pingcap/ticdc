@@ -145,7 +145,10 @@ func generateDataFileName(enableTableAcrossNodes bool, dispatcherID string, inde
 }
 
 type indexWithDate struct {
-	index              uint64
+	// index is the current max data file sequence in one date bucket.
+	index uint64
+	// currDate is the latest date bucket requested by GenerateDataFilePath.
+	// prevDate is the previously used bucket to detect rollover and reset index.
 	currDate, prevDate string
 }
 
@@ -155,11 +158,20 @@ type VersionedTableName struct {
 	// tables, we need to use the physical table ID instead of the
 	// logical table ID.(Especially when the table is a partitioned table).
 	TableNameWithPhysicTableID commonType.TableName
-	// TableInfoVersion is consistent with the version of TableInfo recorded in
-	// schema storage. It can either be finished ts of a DDL event,
-	// or be the checkpoint ts when processor is restarted.
+	// TableInfoVersion is the table schema version carried with incoming DML.
+	// Source:
+	// 1. DDL finishedTs for schema-changing DDLs.
+	// 2. Checkpoint/startTs during dispatcher recover/move.
+	// Usage:
+	// 1. CheckOrWriteSchema uses it to detect whether incoming DML is older than
+	//    the latest schema version already stored.
+	// 2. If no exact schema file exists but an equivalent schema checksum exists,
+	//    storage sink may reuse an older/newer existing schema version as the
+	//    output directory version via versionMap.
 	TableInfoVersion uint64
-	DispatcherID     commonType.DispatcherID
+	// DispatcherID identifies the dispatcher producing this table stream.
+	// It participates in index/data file names when table-across-nodes is enabled.
+	DispatcherID commonType.DispatcherID
 }
 
 // FilePathGenerator is used to generate data file path and index file path.
@@ -169,9 +181,16 @@ type FilePathGenerator struct {
 	config       *Config
 	pdClock      pdutil.Clock
 	storage      storage.ExternalStorage
-	fileIndex    map[VersionedTableName]*indexWithDate
+	// fileIndex caches the last emitted data file index for one
+	// VersionedTableName and date bucket.
+	fileIndex map[VersionedTableName]*indexWithDate
 
-	hasher     *hash.PositionInertia
+	hasher *hash.PositionInertia
+	// versionMap maps an input VersionedTableName to the effective table version
+	// used in output directory:
+	// <schema>/<table>/<effectiveTableVersion>/...
+	// This can differ from TableInfoVersion when reusing an existing schema file
+	// with the same checksum.
 	versionMap map[VersionedTableName]uint64
 }
 
@@ -207,13 +226,16 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 		return false, nil
 	}
 
+	keyspace := f.changefeedID.Keyspace()
+	changefeed := f.changefeedID.Name()
+
 	var def TableDefinition
 	def.FromTableInfo(tableInfo.GetSchemaName(), tableInfo.GetTableName(), tableInfo, table.TableInfoVersion, f.config.OutputColumnID)
 	if !def.IsTableSchema() {
 		// only check schema for table
 		log.Error("invalid table schema",
-			zap.String("keyspace", f.changefeedID.Keyspace()),
-			zap.Stringer("changefeedID", f.changefeedID.ID()),
+			zap.String("keyspace", keyspace),
+			zap.String("changefeedID", changefeed),
 			zap.Any("versionedTableName", table),
 			zap.Any("tableInfo", tableInfo))
 		return false, errors.ErrInternalCheckFailed.GenWithStackByArgs("invalid table schema in FilePathGenerator")
@@ -259,8 +281,8 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 		version, parsedChecksum := mustParseSchemaName(path)
 		if parsedChecksum != checksum {
 			log.Error("invalid schema file name",
-				zap.String("keyspace", f.changefeedID.Keyspace()),
-				zap.Stringer("changefeedID", f.changefeedID.ID()),
+				zap.String("keyspace", keyspace),
+				zap.String("changefeedID", changefeed),
 				zap.String("path", path), zap.Any("checksum", checksum))
 			errMsg := fmt.Sprintf("invalid schema filename in storage sink, "+
 				"expected checksum: %d, actual checksum: %d", checksum, parsedChecksum)
@@ -284,8 +306,8 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 	// Case 2: the table meta path is not empty.
 	if schemaFileCnt != 0 && lastVersion != 0 {
 		log.Info("table schema file with exact version not found, using latest available",
-			zap.String("keyspace", f.changefeedID.Keyspace()),
-			zap.Stringer("changefeedID", f.changefeedID.ID()),
+			zap.String("keyspace", keyspace),
+			zap.String("changefeedID", changefeed),
 			zap.Any("versionedTableName", table),
 			zap.Uint64("tableVersion", lastVersion),
 			zap.Uint32("checksum", checksum))
@@ -300,8 +322,8 @@ func (f *FilePathGenerator) CheckOrWriteSchema(
 	//  b. the schema file is deleted by the consumer. We write schema file to external storage too.
 	if schemaFileCnt != 0 && lastVersion == 0 {
 		log.Warn("no table schema file found in an non-empty meta path",
-			zap.String("keyspace", f.changefeedID.Keyspace()),
-			zap.Stringer("changefeedID", f.changefeedID.ID()),
+			zap.String("keyspace", keyspace),
+			zap.String("changefeedID", changefeed),
 			zap.Any("versionedTableName", table),
 			zap.Uint32("checksum", checksum))
 	}
@@ -359,7 +381,7 @@ func (f *FilePathGenerator) GenerateDataFilePath(
 	if err != nil {
 		return "", err
 	}
-	newIndexFile := false
+	loadedIndexFile := false
 	if idx, ok := f.fileIndex[tbl]; !ok {
 		fileIdx, err := f.getFileIdxFromIndexFile(ctx, tbl, date)
 		if err != nil {
@@ -370,7 +392,7 @@ func (f *FilePathGenerator) GenerateDataFilePath(
 			currDate: date,
 			index:    fileIdx,
 		}
-		newIndexFile = true
+		loadedIndexFile = true
 	} else {
 		idx.currDate = date
 	}
@@ -379,27 +401,42 @@ func (f *FilePathGenerator) GenerateDataFilePath(
 		f.fileIndex[tbl].prevDate = f.fileIndex[tbl].currDate
 		f.fileIndex[tbl].index = 0
 	}
-	f.fileIndex[tbl].index++
-	name := generateDataFileName(f.config.EnableTableAcrossNodes, tbl.DispatcherID.String(), f.fileIndex[tbl].index, f.extension, f.config.FileIndexWidth)
-	dataFile := path.Join(dir, name)
-	exist, err := f.storage.FileExists(ctx, dataFile)
-	if err != nil {
-		return "", err
+	triedIndexResync := loadedIndexFile
+	// A local file index can lag behind existing data files after sink restart or
+	// dispatcher ownership transfer. If the local cache collides with an existing
+	// data file, reload the index file once before falling back to consecutive
+	// probes for the index-stale recovery path.
+	for {
+		f.fileIndex[tbl].index++
+		name := generateDataFileName(f.config.EnableTableAcrossNodes, tbl.DispatcherID.String(), f.fileIndex[tbl].index, f.extension, f.config.FileIndexWidth)
+		dataFile := path.Join(dir, name)
+		exist, err := f.storage.FileExists(ctx, dataFile)
+		if err != nil {
+			return "", err
+		}
+		if !exist {
+			return dataFile, nil
+		}
+		if !triedIndexResync {
+			fileIdx, err := f.getFileIdxFromIndexFile(ctx, tbl, date)
+			if err != nil {
+				return "", err
+			}
+			triedIndexResync = true
+			if fileIdx >= f.fileIndex[tbl].index {
+				f.fileIndex[tbl].index = fileIdx
+				continue
+			}
+		}
+		if loadedIndexFile {
+			log.Warn("the data file exists and the index file is stale",
+				zap.String("keyspace", f.changefeedID.Keyspace()),
+				zap.String("changefeedID", f.changefeedID.Name()),
+				zap.Any("versionedTableName", tbl),
+				zap.String("dataFile", dataFile))
+			loadedIndexFile = false
+		}
 	}
-	if !exist {
-		return dataFile, nil
-	}
-	if newIndexFile {
-		log.Warn("the data file exists and the index file is stale",
-			zap.String("keyspace", f.changefeedID.Keyspace()),
-			zap.Stringer("changefeedID", f.changefeedID.ID()),
-			zap.Any("versionedTableName", tbl),
-			zap.String("dataFile", dataFile))
-	}
-	// if the file already exists, which means the fileIndex is stale,
-	// we need to delete the file index in memory and re-generate the file path with the updated file index until we find a non-existing file path.
-	delete(f.fileIndex, tbl)
-	return f.GenerateDataFilePath(ctx, tbl, date)
 }
 
 func (f *FilePathGenerator) generateDataDirPath(tbl VersionedTableName, date string) (string, error) {
@@ -547,7 +584,7 @@ func RemoveEmptyDirs(
 			if err == nil && len(files) == 0 {
 				log.Debug("Deleting empty directory",
 					zap.String("keyspace", id.Keyspace()),
-					zap.Stringer("changeFeedID", id.ID()),
+					zap.String("changeFeedID", id.Name()),
 					zap.String("path", path))
 				os.Remove(path)
 				cnt++

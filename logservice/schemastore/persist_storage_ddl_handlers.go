@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/ast"
+	"github.com/pingcap/tidb/pkg/parser/format"
 	parser_model "github.com/pingcap/tidb/pkg/parser/model"
 	"go.uber.org/zap"
 )
@@ -591,6 +592,7 @@ func buildPersistedDDLEventForCreateView(args buildPersistedDDLEventFuncArgs) Pe
 	event := buildPersistedDDLEventCommon(args)
 	event.SchemaName = getSchemaName(args.databaseMap, event.SchemaID)
 	event.TableName = args.job.TableName
+	normalizeCreateViewQueryWithStoredSelect(&event)
 	return event
 }
 
@@ -604,12 +606,78 @@ func buildPersistedDDLEventForDropView(args buildPersistedDDLEventFuncArgs) Pers
 	return event
 }
 
+// TiDB persists the normalized SELECT body of a view in
+// event.TableInfo.View.SelectStmt when executing CREATE VIEW, so this field can
+// carry fully resolved source-table references even if job.Query keeps the
+// original session-level text.
+// Field definition:
+// https://github.com/pingcap/tidb/blob/8f2630e53d5d/pkg/meta/model/table.go#L762-L770
+// Value assignment in CREATE VIEW:
+// https://github.com/pingcap/tidb/blob/8f2630e53d5d/pkg/ddl/create_table.go#L1668-L1678
+func normalizeCreateViewQueryWithStoredSelect(event *PersistedDDLEvent) {
+	if event.Query == "" || event.TableInfo == nil || event.TableInfo.View == nil || event.TableInfo.View.SelectStmt == "" {
+		return
+	}
+
+	stmt, err := parser.New().ParseOneStmt(event.Query, "", "")
+	if err != nil {
+		log.Warn("parse create view query failed when normalizing select statement",
+			zap.String("query", event.Query),
+			zap.Error(err))
+		return
+	}
+	createViewStmt, ok := stmt.(*ast.CreateViewStmt)
+	if !ok {
+		return
+	}
+
+	selectStmt, err := parser.New().ParseOneStmt(event.TableInfo.View.SelectStmt, "", "")
+	if err != nil {
+		log.Warn("parse stored create view select statement failed",
+			zap.String("selectStmt", event.TableInfo.View.SelectStmt),
+			zap.String("query", event.Query),
+			zap.Error(err))
+		return
+	}
+	// Keep the original CREATE VIEW text when the stored SELECT only qualifies tables in the view's own schema.
+	if createViewSelectUsesCurrentSchemaOnly(selectStmt, event.SchemaName) {
+		return
+	}
+
+	createViewStmt.Select = selectStmt
+	normalizedQuery, err := restoreDDLStmt(createViewStmt)
+	if err != nil {
+		log.Warn("restore normalized create view query failed",
+			zap.String("query", event.Query),
+			zap.String("selectStmt", event.TableInfo.View.SelectStmt),
+			zap.Error(err))
+		return
+	}
+	event.Query = normalizedQuery
+}
+
+func createViewSelectUsesCurrentSchemaOnly(selectStmt ast.StmtNode, currentSchema string) bool {
+	for _, schema := range extractTableSchemas(selectStmt) {
+		if schema != "" && !strings.EqualFold(schema, currentSchema) {
+			return false
+		}
+	}
+	return true
+}
+
 func buildPersistedDDLEventForCreateTable(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
 	event := buildPersistedDDLEventCommon(args)
 	event.SchemaName = getSchemaName(args.databaseMap, event.SchemaID)
 	event.TableName = event.TableInfo.Name.O
 	setReferTableForCreateTableLike(&event, args)
 	return event
+}
+
+type createTableLikeReferSchemaInfo struct {
+	schemaName string
+	schemaID   int64
+	// true when the source schema was inferred and should be written back to query.
+	qualifyQuery bool
 }
 
 func setReferTableForCreateTableLike(event *PersistedDDLEvent, args buildPersistedDDLEventFuncArgs) {
@@ -628,22 +696,33 @@ func setReferTableForCreateTableLike(event *PersistedDDLEvent, args buildPersist
 		return
 	}
 	refTable := createStmt.ReferTable.Name.O
-	refSchema := createStmt.ReferTable.Schema.O
-	if refSchema == "" {
-		refSchema = event.SchemaName
-	}
-	refSchemaID, ok := findSchemaIDByName(args.databaseMap, refSchema)
+	// refSchema is the schema name of the table referenced by
+	// CREATE TABLE ... LIKE. It can be absent in the original query.
+	refSchemaInQuery := createStmt.ReferTable.Schema.O
+	referSchemaInfo, ok := resolveCreateTableLikeReferSchema(args, refSchemaInQuery, refTable)
 	if !ok {
 		log.Warn("refer schema not found for create table like",
-			zap.String("schema", refSchema),
+			zap.String("schema", referSchemaInfo.schemaName),
 			zap.String("table", refTable),
 			zap.String("query", event.Query))
 		return
 	}
-	refTableID, ok := findTableIDByName(args.tableMap, refSchemaID, refTable)
+	if referSchemaInfo.qualifyQuery {
+		createStmt.ReferTable.Schema = parser_model.NewCIStr(referSchemaInfo.schemaName)
+		query, err := restoreCreateTableLikeDDL(createStmt)
+		if err != nil {
+			log.Warn("restore create table like ddl failed",
+				zap.String("schema", referSchemaInfo.schemaName),
+				zap.String("query", event.Query),
+				zap.Error(err))
+			return
+		}
+		event.Query = query
+	}
+	refTableID, ok := findTableIDByName(args.tableMap, referSchemaInfo.schemaID, refTable)
 	if !ok {
 		log.Warn("refer table not found for create table like",
-			zap.String("schema", refSchema),
+			zap.String("schema", referSchemaInfo.schemaName),
 			zap.String("table", refTable),
 			zap.String("query", event.Query))
 		return
@@ -655,6 +734,64 @@ func setReferTableForCreateTableLike(event *PersistedDDLEvent, args buildPersist
 			event.ReferTablePartitionIDs = append(event.ReferTablePartitionIDs, id)
 		}
 	}
+}
+
+func restoreCreateTableLikeDDL(stmt *ast.CreateTableStmt) (string, error) {
+	var sb strings.Builder
+	restoreFlags := format.RestoreTiDBSpecialComment
+	restoreFlags |= format.RestoreNameBackQuotes
+	restoreFlags |= format.RestoreKeyWordUppercase
+	restoreFlags |= format.RestoreStringSingleQuotes
+	restoreFlags |= format.SkipPlacementRuleForRestore
+	restoreFlags |= format.RestoreWithTTLEnableOff
+	if err := stmt.Restore(format.NewRestoreCtx(restoreFlags, &sb)); err != nil {
+		return "", cerror.Trace(err)
+	}
+	return sb.String(), nil
+}
+
+func resolveCreateTableLikeReferSchema(
+	args buildPersistedDDLEventFuncArgs,
+	refSchemaInQuery string,
+	refTable string,
+) (createTableLikeReferSchemaInfo, bool) {
+	if refSchemaInQuery != "" {
+		schemaID, ok := findSchemaIDByName(args.databaseMap, refSchemaInQuery)
+		return createTableLikeReferSchemaInfo{
+			schemaName: refSchemaInQuery,
+			schemaID:   schemaID,
+		}, ok
+	}
+
+	for _, info := range args.job.InvolvingSchemaInfo {
+		// TiDB records the LIKE source table as a shared involving table.
+		// For CREATE TABLE db2.t LIKE db1.t, the target db2.t is also in
+		// InvolvingSchemaInfo, but it is exclusive. Without this mode check,
+		// the target table may be mistaken as the referenced table.
+		// https://github.com/pingcap/tidb/blob/8f2630e53d5d/pkg/ddl/executor.go#L1009-L1023
+		if info.Mode != model.SharedInvolving ||
+			info.Database == "" ||
+			!strings.EqualFold(info.Table, refTable) {
+			continue
+		}
+		schemaID, ok := findSchemaIDByName(args.databaseMap, info.Database)
+		if !ok {
+			continue
+		}
+		refSchema := getSchemaName(args.databaseMap, schemaID)
+		return createTableLikeReferSchemaInfo{
+			schemaName:   refSchema,
+			schemaID:     schemaID,
+			qualifyQuery: !strings.EqualFold(refSchema, getSchemaName(args.databaseMap, args.job.SchemaID)),
+		}, true
+	}
+
+	// If TiDB does not provide the referenced schema, fall back to the schema
+	// that the CREATE TABLE event belongs to, matching MySQL/TiDB resolution.
+	return createTableLikeReferSchemaInfo{
+		schemaName: getSchemaName(args.databaseMap, args.job.SchemaID),
+		schemaID:   args.job.SchemaID,
+	}, true
 }
 
 func buildPersistedDDLEventForDropTable(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
@@ -699,56 +836,77 @@ func buildPersistedDDLEventForRenameTable(args buildPersistedDDLEventFuncArgs) P
 	event.SchemaName = getSchemaName(args.databaseMap, event.SchemaID)
 	// get the table's current table name from the ddl job
 	event.TableName = event.TableInfo.Name.O
+
+	// The old schema/table names cannot rely on ExtraSchemaName/ExtraTableName,
+	// because the snapshot used by schema store may already reflect the post-rename state.
+	// Example (after https://github.com/pingcap/tidb/pull/43341):
+	//   table `test.t`, DDL `rename table t to test2.t;`, commit ts = 100
+	//   snapshot at ts = 99 already shows `t` under `test2`
+	//   => event.ExtraSchemaName becomes `test2`, which is wrong for the old name
+	// SchemaStore can still use ExtraSchemaID to update internal state,
+	// but the emitted event.Query must carry the correct old names.
+	// Rebuild them with the following precedence:
+	// 1. InvolvingSchemaInfo provides a fallback old schema/table pair, but names may be normalized.
+	// 2. RenameTableArgs.OldSchemaName overrides the fallback when available.
+	//    It is reliable in TiDB >= v8.5, but can be missing in older versions.
+	// 3. The original query (if it specifies old schema) has the highest priority for identifier case.
+	// 4. If the query omits old schema and ExtraSchemaID differs from SchemaID, use ExtraSchemaID to
+	//    recover the old schema name from the schema store.
+	oldSchemaName := ""
+	oldTableName := ""
+	oldSchemaSource := "unknown"
 	if len(args.job.InvolvingSchemaInfo) > 0 {
-		log.Info("buildPersistedDDLEvent for rename table",
+		oldSchemaName = args.job.InvolvingSchemaInfo[0].Database
+		oldTableName = args.job.InvolvingSchemaInfo[0].Table
+		if oldSchemaName != "" {
+			oldSchemaSource = "involving_schema_info"
+		}
+	}
+	if args.job.Version == model.JobVersion1 || args.job.Version == model.JobVersion2 {
+		if renameArgs, err := model.GetRenameTableArgs(args.job); err == nil {
+			if renameArgs.OldSchemaName.O != "" {
+				oldSchemaName = renameArgs.OldSchemaName.O
+				oldSchemaSource = "rename_table_args"
+			}
+		} else {
+			log.Warn("failed to get rename table args from ddl job",
+				zap.Int64("jobID", args.job.ID),
+				zap.String("query", event.Query),
+				zap.Error(err))
+		}
+	}
+	queryProvidedOldSchema := false
+	if queryInfo, parsed := parseRenameTableQueryInfo(args.job.Query); parsed {
+		if queryInfo.oldTableName != "" {
+			oldTableName = queryInfo.oldTableName
+		}
+		if queryInfo.oldSchemaName != "" {
+			oldSchemaName = queryInfo.oldSchemaName
+			queryProvidedOldSchema = true
+			oldSchemaSource = "query"
+		}
+	}
+	// ExtraSchemaID can be incorrect due to snapshot timing, so only use it if the query
+	// does not specify the old schema.
+	if !queryProvidedOldSchema && event.ExtraSchemaID != 0 && event.ExtraSchemaID != event.SchemaID {
+		if extraName := getSchemaName(args.databaseMap, event.ExtraSchemaID); extraName != "" {
+			oldSchemaName = extraName
+			oldSchemaSource = "extra_schema_id"
+		}
+	}
+	if oldSchemaName != "" && oldTableName != "" {
+		log.Info("rebuild rename table query",
+			zap.Int64("jobID", event.ID),
 			zap.String("query", event.Query),
 			zap.Int64("schemaID", event.SchemaID),
-			zap.String("SchemaName", event.SchemaName),
+			zap.String("schemaName", event.SchemaName),
 			zap.String("tableName", event.TableName),
-			zap.Int64("ExtraSchemaID", event.ExtraSchemaID),
-			zap.String("ExtraSchemaName", event.ExtraSchemaName),
-			zap.String("ExtraTableName", event.ExtraTableName),
-			zap.Any("involvingSchemaInfo", args.job.InvolvingSchemaInfo))
-		// The query in job maybe "RENAME TABLE table1 to test2.table2", we need rebuild it here.
-		//
-		// Note: Why use args.job.InvolvingSchemaInfo to build query?
-		// because event.ExtraSchemaID may not be accurate for rename table in some case.
-		// after pr: https://github.com/pingcap/tidb/pull/43341,
-		// assume there is a table `test.t` and a ddl: `rename table t to test2.t;`, and its commit ts is `100`.
-		// if you get a ddl snapshot at ts `99`, table `t` is already in `test2`.
-		// so event.ExtraSchemaName will also be `test2`.
-		// And because SchemaStore is the source of truth inside cdc,
-		// we can use event.ExtraSchemaID(even it is wrong) to update the internal state of the cdc.
-		// But event.Query will be emit to downstream(out of cdc), we must make it correct.
-		//
-		// InvolvingSchemaInfo returns the schema info involved in the job.
-		// The value should be stored in lower case.
-		//
-		// InvolvingSchemaInfo may store normalized lower-case names,
-		// while the original query can keep user-provided identifier case.
-		// Prefer names parsed from the original query whenever possible.
-		// See https://github.com/pingcap/ticdc/pull/2218 for background.
-		oldSchemaName := args.job.InvolvingSchemaInfo[0].Database
-		oldTableName := args.job.InvolvingSchemaInfo[0].Table
-		stmt, err := parser.New().ParseOneStmt(args.job.Query, "", "")
-		if err != nil {
-			log.Error("parse statement failed for build persisted DDL event", zap.Any("DDL", args.job.Query), zap.Error(err))
-		} else {
-			switch s := stmt.(type) {
-			case *ast.AlterTableStmt:
-				oldTableName = s.Table.Name.O
-				if schemaName := s.Table.Schema.O; schemaName != "" {
-					oldSchemaName = schemaName
-				}
-			case *ast.RenameTableStmt:
-				oldTableName = s.TableToTables[0].OldTable.Name.O
-				if schemaName := s.TableToTables[0].OldTable.Schema.O; schemaName != "" {
-					oldSchemaName = schemaName
-				}
-			default:
-				log.Error("unknown stmt type", zap.String("query", args.job.Query), zap.Any("stmt", stmt))
-			}
-		}
+			zap.Int64("extraSchemaID", event.ExtraSchemaID),
+			zap.String("extraSchemaName", event.ExtraSchemaName),
+			zap.String("extraTableName", event.ExtraTableName),
+			zap.String("oldSchemaName", oldSchemaName),
+			zap.String("oldTableName", oldTableName),
+			zap.String("oldSchemaSource", oldSchemaSource))
 		event.Query = fmt.Sprintf("RENAME TABLE %s TO %s",
 			common.QuoteSchema(oldSchemaName, oldTableName),
 			common.QuoteSchema(event.SchemaName, event.TableName))
@@ -791,7 +949,7 @@ func buildPersistedDDLEventForExchangePartition(args buildPersistedDDLEventFuncA
 
 		// Note that partition name should be parsed from original query, not the upperQuery.
 		partName := strings.TrimSpace(event.Query[idx1:idx2])
-		partName = strings.Replace(partName, "`", "", -1)
+		partName = common.UnquoteName(partName)
 		event.Query = fmt.Sprintf("ALTER TABLE %s EXCHANGE PARTITION %s WITH TABLE %s",
 			common.QuoteSchema(event.ExtraSchemaName, event.ExtraTableName),
 			common.QuoteName(partName),
@@ -812,6 +970,39 @@ type renameTableQueryInfo struct {
 	oldTableName  string
 	newSchemaName string
 	newTableName  string
+}
+
+func parseRenameTableQueryInfo(query string) (renameTableQueryInfo, bool) {
+	if query == "" {
+		return renameTableQueryInfo{}, false
+	}
+	stmt, err := parser.New().ParseOneStmt(query, "", "")
+	if err != nil {
+		log.Warn("parse rename table query failed",
+			zap.String("query", query),
+			zap.Error(err))
+		return renameTableQueryInfo{}, false
+	}
+
+	switch s := stmt.(type) {
+	case *ast.AlterTableStmt:
+		return renameTableQueryInfo{
+			oldSchemaName: s.Table.Schema.O,
+			oldTableName:  s.Table.Name.O,
+		}, true
+	case *ast.RenameTableStmt:
+		if len(s.TableToTables) == 0 {
+			return renameTableQueryInfo{}, false
+		}
+		return renameTableQueryInfo{
+			oldSchemaName: s.TableToTables[0].OldTable.Schema.O,
+			oldTableName:  s.TableToTables[0].OldTable.Name.O,
+			newSchemaName: s.TableToTables[0].NewTable.Schema.O,
+			newTableName:  s.TableToTables[0].NewTable.Name.O,
+		}, true
+	default:
+		return renameTableQueryInfo{}, false
+	}
 }
 
 func parseRenameTablesQueryInfos(query string) ([]renameTableQueryInfo, bool) {

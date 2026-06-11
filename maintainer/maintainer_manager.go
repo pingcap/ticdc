@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/liveness"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/utils/threadpool"
@@ -38,6 +39,8 @@ import (
 type Manager struct {
 	mc   messaging.MessageCenter
 	conf *config.SchedulerConfig
+
+	node *managerNodeState
 
 	// changefeedID -> maintainer
 	maintainers sync.Map
@@ -58,11 +61,13 @@ type Manager struct {
 func NewMaintainerManager(
 	nodeInfo *node.Info,
 	conf *config.SchedulerConfig,
+	nodeLiveness *liveness.Liveness,
 ) *Manager {
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 	m := &Manager{
 		mc:            mc,
 		conf:          conf,
+		node:          newManagerNodeState(nodeLiveness),
 		maintainers:   sync.Map{},
 		nodeInfo:      nodeInfo,
 		msgCh:         make(chan *messaging.TargetMessage, 1024),
@@ -84,7 +89,8 @@ func (m *Manager) recvMessages(ctx context.Context, msg *messaging.TargetMessage
 	// Coordinator related messages
 	case messaging.TypeAddMaintainerRequest,
 		messaging.TypeRemoveMaintainerRequest,
-		messaging.TypeCoordinatorBootstrapRequest:
+		messaging.TypeCoordinatorBootstrapRequest,
+		messaging.TypeSetNodeLivenessRequest:
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -135,6 +141,7 @@ func (m *Manager) Run(ctx context.Context) error {
 		case <-ticker.C:
 			// 1.  try to send heartbeat to coordinator
 			m.sendHeartbeat()
+			m.sendNodeHeartbeat(false)
 			// 2. cleanup removed maintainers
 			m.maintainers.Range(func(key, value interface{}) bool {
 				cf := value.(*Maintainer)
@@ -214,9 +221,22 @@ func (m *Manager) onCoordinatorBootstrapRequest(msg *messaging.TargetMessage) {
 	log.Info("new coordinator online, bootstrap response already sent",
 		zap.Stringer("coordinatorID", m.coordinatorID),
 		zap.Int64("version", m.coordinatorVersion))
+
+	m.sendNodeHeartbeat(true)
 }
 
 func (m *Manager) onAddMaintainerRequest(req *heartbeatpb.AddMaintainerRequest) *heartbeatpb.MaintainerStatus {
+	// Note: We intentionally allow maintainer placement while the node is draining.
+	// Draining is used to stop NEW scheduling decisions targeting this node, but in-flight
+	// scheduling requests decided before draining should still be able to complete.
+	// We only hard-block new maintainers when the node is stopping.
+	if m.node.liveness != nil && m.node.liveness.Load() == liveness.CaptureStopping {
+		log.Info("ignore add maintainer request, node is stopping",
+			zap.Stringer("changefeedID", common.NewChangefeedIDFromPB(req.Id)),
+			zap.Stringer("nodeID", m.nodeInfo.ID))
+		return nil
+	}
+
 	changefeedID := common.NewChangefeedIDFromPB(req.Id)
 	_, ok := m.maintainers.Load(changefeedID)
 	if ok {
@@ -329,6 +349,10 @@ func (m *Manager) handleMessage(msg *messaging.TargetMessage) {
 				Statuses: []*heartbeatpb.MaintainerStatus{status},
 			}
 			m.sendMessages(response)
+		}
+	case messaging.TypeSetNodeLivenessRequest:
+		if m.isBootstrap() {
+			m.onSetNodeLivenessRequest(msg)
 		}
 	default:
 	}

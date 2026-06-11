@@ -142,6 +142,23 @@ func (b *BlockEventStatus) actionMatchs(action *heartbeatpb.DispatcherAction) bo
 	return b.blockCommitTs == action.CommitTs
 }
 
+// ignoredStatusMatches checks whether the ignored status is for the current pending ddl/sync point event.
+func (b *BlockEventStatus) ignoredStatusMatches(ignored *heartbeatpb.IgnoredBlockStatus) bool {
+	b.mutex.Lock()
+	defer b.mutex.Unlock()
+
+	if b.blockPendingEvent == nil {
+		return false
+	}
+
+	if b.blockStage != heartbeatpb.BlockStage_WAITING {
+		return false
+	}
+
+	pendingIsSyncPoint := b.blockPendingEvent.GetType() == commonEvent.TypeSyncPointEvent
+	return b.blockCommitTs == ignored.CommitTs && pendingIsSyncPoint == ignored.IsSyncPoint
+}
+
 func (b *BlockEventStatus) getEventCommitTs() (uint64, bool) {
 	b.mutex.Lock()
 	defer b.mutex.Unlock()
@@ -346,9 +363,10 @@ func (d *DispatcherStatusWithID) GetDispatcherID() common.DispatcherID {
 // If so, we can cancel the resend task.
 // If we get a dispatcher action, we need to check whether the action is for the current pending ddl event.
 // If so, we can deal the ddl event based on the action.
-// 1. If the action is a write, we need to add the ddl event to the sink for writing to downstream(async).
-// 2. If the action is a pass, we just need to pass the event in tableProgress(for correct calculation) and
-// wake the dispatcherEventsHandler to handle the event.
+// 1. If the action is a write, write the block event to sink(async).
+// 2. If the action is a pass, pass the event in tableProgress(async).
+// Prior DML has already been flushed before the dispatcher reports the block
+// event as waiting.
 type DispatcherStatusHandler struct{}
 
 func (h *DispatcherStatusHandler) Path(event DispatcherStatusWithID) common.DispatcherID {
@@ -382,7 +400,7 @@ func (h *DispatcherStatusHandler) GetTimestamp(event DispatcherStatusWithID) dyn
 }
 
 func (h *DispatcherStatusHandler) GetType(event DispatcherStatusWithID) dynstream.EventType {
-	// DispatcherStatus may trigger downstream IO (e.g. executing DDL) when handling Action_Write.
+	// DispatcherStatus may trigger downstream IO when handling action write/pass.
 	// Make it non-batchable to ensure we can safely return await=true for a single event.
 	return dynstream.EventType{DataGroup: 0, Property: dynstream.NonBatchable}
 }

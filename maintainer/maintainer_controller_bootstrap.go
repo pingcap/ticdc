@@ -238,7 +238,7 @@ func (c *Controller) processTableSpans(
 	tableSpans, isTableWorking := workingTaskMap[table.TableID]
 	spanController := c.getSpanController(mode)
 	replicaSets := spanController.GetTasksByTableID(table.TableID)
-	isTableSpanExists := replicaSets != nil && len(replicaSets) > 0
+	isTableSpanExists := len(replicaSets) > 0
 	splitEnabled := spanController.ShouldEnableSplit(table.Splitable)
 	// During bootstrap we have two sources of "table already exists" information:
 	//   - workingTaskMap: dispatchers reported by dispatcher managers (bootstrap snapshots resp.Spans).

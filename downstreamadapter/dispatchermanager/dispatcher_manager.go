@@ -32,7 +32,6 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
-	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
@@ -118,9 +117,13 @@ type DispatcherManager struct {
 
 	// sink is used to send all the events to the downstream.
 	sink sink.Sink
+
 	// redo related
-	RedoEnable bool
-	redoSink   *redo.Sink
+	// redoEnabled is immutable and set to true if enabled.
+	redoEnabled bool
+	// redoReady set to true after the redo components are fully initialized and safe for concurrent access.
+	redoReady atomic.Bool
+	redoSink  *redo.Sink
 	// redoGlobalTs stores the resolved-ts of the redo metadata and blocks events in the common dispatcher where the commit-ts is greater than the resolved-ts.
 	redoGlobalTs atomic.Uint64
 
@@ -192,10 +195,11 @@ func NewDispatcherManager(
 		pdClock:               pdClock,
 		cancel:                cancel,
 		config:                cfConfig,
-		latestWatermark:       NewWatermark(0),
-		latestRedoWatermark:   NewWatermark(0),
+		latestWatermark:       NewWatermark(startTs),
+		latestRedoWatermark:   NewWatermark(startTs),
 		schemaIDToDispatchers: dispatcher.NewSchemaIDToDispatchers(),
 		sinkQuota:             cfConfig.MemoryQuota,
+		redoEnabled:           isRedoConfigEnabled(cfConfig),
 
 		metricTableTriggerEventDispatcherCount: metrics.TableTriggerEventDispatcherGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "eventDispatcher"),
 		metricEventDispatcherCount:             metrics.EventDispatcherGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "eventDispatcher"),
@@ -309,7 +313,7 @@ func NewDispatcherManager(
 		zap.Uint64("startTs", startTs),
 		zap.Uint64("sinkQuota", manager.sinkQuota),
 		zap.Uint64("redoQuota", manager.redoQuota),
-		zap.Bool("redoEnable", manager.RedoEnable),
+		zap.Bool("redoEnable", manager.IsRedoEnabled()),
 		zap.Bool("outputRawChangeEvent", manager.sharedInfo.IsOutputRawChangeEvent()),
 		zap.String("filterConfig", filterCfg.String()),
 	)
@@ -318,7 +322,7 @@ func NewDispatcherManager(
 
 func (e *DispatcherManager) NewTableTriggerEventDispatcher(id *heartbeatpb.DispatcherID, startTs uint64, newChangefeed bool) error {
 	if e.GetTableTriggerEventDispatcher() != nil {
-		log.Error("table trigger event dispatcher existed!")
+		return errors.ErrChangefeedInitTableTriggerDispatcherFailed.FastGenByArgs("table trigger event dispatcher existed!")
 	}
 	infos := map[common.DispatcherID]dispatcherCreateInfo{}
 	dispatcherID := common.NewDispatcherIDFromPB(id)
@@ -453,7 +457,7 @@ func (e *DispatcherManager) newEventDispatchers(infos map[common.DispatcherID]di
 			currentPdTs,
 			e.sink,
 			e.sharedInfo,
-			e.RedoEnable,
+			e.IsRedoEnabled(),
 			&e.redoGlobalTs,
 		)
 		if e.heartBeatTask == nil {
@@ -707,23 +711,10 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 		RedoWatermark:   heartbeatpb.NewMaxWatermark(),
 	}
 
-	eventServiceDispatcherHeartbeat := &event.DispatcherHeartbeat{}
-	// Collect dispatchers without watermarks so we can fill them with the
-	// final aggregated watermark after both loops are done.
-	eventDispatchersWithoutWatermark := make([]common.DispatcherID, 0)
-	redoDispatchersWithoutWatermark := make([]common.DispatcherID, 0)
-	if needCompleteStatus {
-		eventServiceDispatcherHeartbeat = &event.DispatcherHeartbeat{
-			Version:              event.DispatcherHeartbeatVersion1,
-			DispatcherCount:      0,
-			DispatcherProgresses: make([]event.DispatcherProgress, 0),
-		}
-	}
-
 	toCleanMap := make([]*cleanMap, 0)
 	dispatcherCount := 0
 
-	if e.RedoEnable {
+	if e.IsRedoReady() {
 		redoSeq := e.redoDispatcherMap.ForEach(func(id common.DispatcherID, dispatcherItem *dispatcher.RedoDispatcher) {
 			dispatcherCount++
 			status, cleanMap, watermark := getDispatcherStatus(id, dispatcherItem, needCompleteStatus)
@@ -735,14 +726,6 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 			}
 			if watermark != nil {
 				message.RedoWatermark.UpdateMin(*watermark)
-			}
-
-			if needCompleteStatus {
-				if watermark != nil {
-					eventServiceDispatcherHeartbeat.Append(event.NewDispatcherProgress(id, watermark.CheckpointTs))
-				} else {
-					redoDispatchersWithoutWatermark = append(redoDispatchersWithoutWatermark, id)
-				}
 			}
 		})
 		message.RedoWatermark.Seq = redoSeq
@@ -760,15 +743,6 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 		}
 		if watermark != nil {
 			message.Watermark.Update(*watermark)
-		}
-
-		if needCompleteStatus {
-			if watermark != nil {
-				eventServiceDispatcherHeartbeat.Append(event.NewDispatcherProgress(id, watermark.CheckpointTs))
-			} else {
-				// Use the min checkpointTs of all dispatchers to report to the event service as a keepalive heartbeat.
-				eventDispatchersWithoutWatermark = append(eventDispatchersWithoutWatermark, id)
-			}
 		}
 	})
 
@@ -791,20 +765,6 @@ func (e *DispatcherManager) aggregateDispatcherHeartbeats(needCompleteStatus boo
 				e.cleanEventDispatcher(m.id, m.schemaID)
 			}
 		}
-	}
-
-	// If needCompleteStatus is true, we need to send the dispatcher heartbeat to the event service.
-	if needCompleteStatus {
-		// Fill the missing watermarks with the final aggregated values to avoid
-		// reporting an uninitialized checkpoint.
-		for _, id := range redoDispatchersWithoutWatermark {
-			eventServiceDispatcherHeartbeat.Append(event.NewDispatcherProgress(id, message.RedoWatermark.CheckpointTs))
-		}
-		for _, id := range eventDispatchersWithoutWatermark {
-			eventServiceDispatcherHeartbeat.Append(event.NewDispatcherProgress(id, message.Watermark.CheckpointTs))
-		}
-
-		appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).SendDispatcherHeartbeat(eventServiceDispatcherHeartbeat)
 	}
 
 	e.metricCheckpointTs.Set(float64(message.Watermark.CheckpointTs))
@@ -857,7 +817,7 @@ func (e *DispatcherManager) mergeEventDispatcher(dispatcherIDs []common.Dispatch
 		0,     // currentPDTs will be calculated later.
 		e.sink,
 		e.sharedInfo,
-		e.RedoEnable,
+		e.IsRedoEnabled(),
 		&e.redoGlobalTs,
 	)
 
@@ -890,7 +850,7 @@ func (e *DispatcherManager) close(removeChangefeed bool) {
 		zap.Stringer("changefeedID", e.changefeedID))
 
 	defer e.closing.Store(false)
-	if e.RedoEnable {
+	if e.IsRedoEnabled() && e.redoSink != nil {
 		closeAllDispatchers(e.changefeedID, e.redoDispatcherMap, e.redoSink.SinkType())
 		log.Info("closed all redo dispatchers",
 			zap.Stringer("changefeedID", e.changefeedID))
@@ -936,7 +896,7 @@ func (e *DispatcherManager) close(removeChangefeed bool) {
 
 	log.Info("shared info closed", zap.Stringer("changefeedID", e.changefeedID))
 
-	if e.RedoEnable {
+	if e.IsRedoEnabled() && e.redoSink != nil {
 		e.redoSink.Close(removeChangefeed)
 		// FIXME: cleanup redo log when remove the changefeed
 		e.closeRedoMeta(removeChangefeed)
