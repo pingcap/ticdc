@@ -113,10 +113,10 @@ type ChangefeedCommonInfo struct {
 // SyncedStatusConfig represents synced check interval config for a changefeed
 type SyncedStatusConfig struct {
 	// The minimum interval between the latest synced ts and now required to reach synced state
-	SyncedCheckInterval *int64 `json:"synced_check_interval"`
+	SyncedCheckInterval *int64 `json:"synced_check_interval" toml:"synced-check-interval"`
 	// The maximum interval between latest checkpoint ts and now or
 	// between latest sink's checkpoint ts and puller's checkpoint ts required to reach synced state
-	CheckpointInterval *int64 `json:"checkpoint_interval"`
+	CheckpointInterval *int64 `json:"checkpoint_interval" toml:"checkpoint-interval"`
 }
 
 // MarshalJSON marshal changefeed common info to json
@@ -190,44 +190,62 @@ func (d *JSONDuration) UnmarshalJSON(b []byte) error {
 	}
 }
 
+// MarshalText implements encoding.TextMarshaler so that TOML (and other
+// text-based encoders) serialize JSONDuration as a human-readable string
+// like "10m0s" or "24h0m0s", instead of raw nanoseconds.
+//
+// JSON serialization is unaffected — MarshalJSON still produces nanoseconds.
+func (d JSONDuration) MarshalText() ([]byte, error) {
+	return []byte(d.duration.String()), nil
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler so that TOML (and other
+// text-based decoders) can parse duration strings like "5m0s" or "1h30m".
+// This enables round-trip: MarshalText → UnmarshalText preserves the value.
+func (d *JSONDuration) UnmarshalText(text []byte) error {
+	var err error
+	d.duration, err = time.ParseDuration(string(text))
+	return err
+}
+
 // ReplicaConfig is a duplicate of  config.ReplicaConfig
 type ReplicaConfig struct {
-	MemoryQuota              *uint64 `json:"memory_quota,omitempty"`
-	EventCollectorBatchCount *int    `json:"event_collector_batch_count,omitempty"`
-	EventCollectorBatchBytes *int    `json:"event_collector_batch_bytes,omitempty"`
-	CaseSensitive            *bool   `json:"case_sensitive,omitempty"`
-	ForceReplicate           *bool   `json:"force_replicate,omitempty"`
-	IgnoreIneligibleTable    *bool   `json:"ignore_ineligible_table,omitempty"`
-	CheckGCSafePoint         *bool   `json:"check_gc_safe_point,omitempty"`
-	EnableSyncPoint          *bool   `json:"enable_sync_point,omitempty"`
-	EnableTableMonitor       *bool   `json:"enable_table_monitor,omitempty"`
-	BDRMode                  *bool   `json:"bdr_mode,omitempty"`
+	MemoryQuota              *uint64 `json:"memory_quota,omitempty" toml:"memory-quota,omitempty"`
+	EventCollectorBatchCount *int    `json:"event_collector_batch_count,omitempty" toml:"event-collector-batch-count,omitempty"`
+	EventCollectorBatchBytes *int    `json:"event_collector_batch_bytes,omitempty" toml:"event-collector-batch-bytes,omitempty"`
+	CaseSensitive            *bool   `json:"case_sensitive,omitempty" toml:"case-sensitive,omitempty"`
+	ForceReplicate           *bool   `json:"force_replicate,omitempty" toml:"force-replicate,omitempty"`
+	IgnoreIneligibleTable    *bool   `json:"ignore_ineligible_table,omitempty" toml:"ignore-ineligible-table,omitempty"`
+	CheckGCSafePoint         *bool   `json:"check_gc_safe_point,omitempty" toml:"check-gc-safe-point,omitempty"`
+	EnableSyncPoint          *bool   `json:"enable_sync_point,omitempty" toml:"enable-sync-point,omitempty"`
+	EnableTableMonitor       *bool   `json:"enable_table_monitor,omitempty" toml:"enable-table-monitor,omitempty"`
+	BDRMode                  *bool   `json:"bdr_mode,omitempty" toml:"bdr-mode,omitempty"`
 	// EnableActiveActive enables active-active replication mode on top of BDR.
 	// It requires BDRMode to be true and is only supported by TiDB and storage sinks.
-	EnableActiveActive *bool `json:"enable_active_active,omitempty"`
+	EnableActiveActive *bool `json:"enable_active_active,omitempty" toml:"enable-active-active,omitempty"`
 	// ActiveActiveProgressInterval controls how often the MySQL/TiDB sink updates the
 	// active-active progress table in EnableActiveActive mode (for hard delete safety checks).
-	ActiveActiveProgressInterval *JSONDuration `json:"active_active_progress_interval,omitempty"`
+	ActiveActiveProgressInterval *JSONDuration `json:"active_active_progress_interval,omitempty" toml:"active-active-progress-interval,omitempty"`
 	// ActiveActiveSyncStatsInterval controls how often the MySQL/TiDB sink queries
 	// the TiDB session variable @@tidb_cdc_active_active_sync_stats for conflict statistics.
 	// Set it to 0 to disable metric collection.
 	// This option only takes effect when EnableActiveActive is true and the downstream is TiDB.
-	ActiveActiveSyncStatsInterval *JSONDuration `json:"active_active_sync_stats_interval,omitempty"`
+	ActiveActiveSyncStatsInterval *JSONDuration `json:"active_active_sync_stats_interval,omitempty" toml:"active-active-sync-stats-interval,omitempty"`
 
-	SyncPointInterval  *JSONDuration `json:"sync_point_interval,omitempty"`
-	SyncPointRetention *JSONDuration `json:"sync_point_retention,omitempty"`
+	SyncPointInterval  *JSONDuration `json:"sync_point_interval,omitempty" toml:"sync-point-interval,omitempty"`
+	SyncPointRetention *JSONDuration `json:"sync_point_retention,omitempty" toml:"sync-point-retention,omitempty"`
 
-	Filter                       *FilterConfig              `json:"filter,omitempty"`
-	Mounter                      *MounterConfig             `json:"mounter,omitempty"`
-	Sink                         *SinkConfig                `json:"sink,omitempty"`
-	Consistent                   *ConsistentConfig          `json:"consistent,omitempty"`
-	Scheduler                    *ChangefeedSchedulerConfig `json:"scheduler,omitempty"`
-	Integrity                    *IntegrityConfig           `json:"integrity,omitempty"`
-	ChangefeedErrorStuckDuration *JSONDuration              `json:"changefeed_error_stuck_duration,omitempty"`
-	SyncedStatus                 *SyncedStatusConfig        `json:"synced_status,omitempty"`
+	Filter                       *FilterConfig              `json:"filter,omitempty" toml:"filter,omitempty"`
+	Mounter                      *MounterConfig             `json:"mounter,omitempty" toml:"mounter,omitempty"`
+	Sink                         *SinkConfig                `json:"sink,omitempty" toml:"sink,omitempty"`
+	Consistent                   *ConsistentConfig          `json:"consistent,omitempty" toml:"consistent,omitempty"`
+	Scheduler                    *ChangefeedSchedulerConfig `json:"scheduler,omitempty" toml:"scheduler,omitempty"`
+	Integrity                    *IntegrityConfig           `json:"integrity,omitempty" toml:"integrity,omitempty"`
+	ChangefeedErrorStuckDuration *JSONDuration              `json:"changefeed_error_stuck_duration,omitempty" toml:"changefeed-error-stuck-duration,omitempty"`
+	SyncedStatus                 *SyncedStatusConfig        `json:"synced_status,omitempty" toml:"synced-status,omitempty"`
 
 	// Deprecated: we don't use this field since v8.0.0.
-	SQLMode *string `json:"sql_mode,omitempty"`
+	SQLMode *string `json:"sql_mode,omitempty" toml:"sql-mode,omitempty"`
 }
 
 // ToInternalReplicaConfig coverts *v2.ReplicaConfig into *config.ReplicaConfig
@@ -1069,27 +1087,27 @@ func GetDefaultReplicaConfig() *ReplicaConfig {
 // FilterConfig represents filter config for a changefeed
 // This is a duplicate of config.FilterConfig
 type FilterConfig struct {
-	Rules            []string          `json:"rules,omitempty"`
-	IgnoreTxnStartTs []uint64          `json:"ignore_txn_start_ts,omitempty"`
-	EventFilters     []EventFilterRule `json:"event_filters,omitempty"`
+	Rules            []string          `json:"rules,omitempty" toml:"rules,omitempty"`
+	IgnoreTxnStartTs []uint64          `json:"ignore_txn_start_ts,omitempty" toml:"ignore-txn-start-ts,omitempty"`
+	EventFilters     []EventFilterRule `json:"event_filters,omitempty" toml:"event-filters,omitempty"`
 }
 
 // MounterConfig represents mounter config for a changefeed
 type MounterConfig struct {
-	WorkerNum *int `json:"worker_num,omitempty"`
+	WorkerNum *int `json:"worker_num,omitempty" toml:"worker-num,omitempty"`
 }
 
 // EventFilterRule is used by sql event filter and expression filter
 type EventFilterRule struct {
-	Matcher     []string `json:"matcher"`
-	IgnoreEvent []string `json:"ignore_event"`
+	Matcher     []string `json:"matcher" toml:"matcher"`
+	IgnoreEvent []string `json:"ignore_event" toml:"ignore-event"`
 	// regular expression
 	IgnoreSQL []string `toml:"ignore_sql" json:"ignore_sql"`
 	// sql expression
-	IgnoreInsertValueExpr    string `json:"ignore_insert_value_expr"`
-	IgnoreUpdateNewValueExpr string `json:"ignore_update_new_value_expr"`
-	IgnoreUpdateOldValueExpr string `json:"ignore_update_old_value_expr"`
-	IgnoreDeleteValueExpr    string `json:"ignore_delete_value_expr"`
+	IgnoreInsertValueExpr    string `json:"ignore_insert_value_expr" toml:"ignore-insert-value-expr"`
+	IgnoreUpdateNewValueExpr string `json:"ignore_update_new_value_expr" toml:"ignore-update-new-value-expr"`
+	IgnoreUpdateOldValueExpr string `json:"ignore_update_old_value_expr" toml:"ignore-update-old-value-expr"`
+	IgnoreDeleteValueExpr    string `json:"ignore_delete_value_expr" toml:"ignore-delete-value-expr"`
 }
 
 // ToInternalEventFilterRule converts EventFilterRule to *config.EventFilterRule
@@ -1147,67 +1165,67 @@ type Table struct {
 // SinkConfig represents sink config for a changefeed
 // This is a duplicate of config.SinkConfig
 type SinkConfig struct {
-	Protocol                 *string           `json:"protocol,omitempty"`
-	SchemaRegistry           *string           `json:"schema_registry,omitempty"`
-	CSVConfig                *CSVConfig        `json:"csv,omitempty"`
-	DispatchRules            []*DispatchRule   `json:"dispatchers,omitempty"`
-	ColumnSelectors          []*ColumnSelector `json:"column_selectors,omitempty"`
-	TxnAtomicity             *string           `json:"transaction_atomicity,omitempty"`
-	EncoderConcurrency       *int              `json:"encoder_concurrency,omitempty"`
-	Terminator               *string           `json:"terminator,omitempty"`
-	DateSeparator            *string           `json:"date_separator,omitempty"`
-	EnablePartitionSeparator *bool             `json:"enable_partition_separator,omitempty"`
-	FileIndexWidth           *int              `json:"file_index_width,omitempty"`
+	Protocol                 *string           `json:"protocol,omitempty" toml:"protocol,omitempty"`
+	SchemaRegistry           *string           `json:"schema_registry,omitempty" toml:"schema-registry,omitempty"`
+	CSVConfig                *CSVConfig        `json:"csv,omitempty" toml:"csv,omitempty"`
+	DispatchRules            []*DispatchRule   `json:"dispatchers,omitempty" toml:"dispatchers,omitempty"`
+	ColumnSelectors          []*ColumnSelector `json:"column_selectors,omitempty" toml:"column-selectors,omitempty"`
+	TxnAtomicity             *string           `json:"transaction_atomicity,omitempty" toml:"transaction-atomicity,omitempty"`
+	EncoderConcurrency       *int              `json:"encoder_concurrency,omitempty" toml:"encoder-concurrency,omitempty"`
+	Terminator               *string           `json:"terminator,omitempty" toml:"terminator,omitempty"`
+	DateSeparator            *string           `json:"date_separator,omitempty" toml:"date-separator,omitempty"`
+	EnablePartitionSeparator *bool             `json:"enable_partition_separator,omitempty" toml:"enable-partition-separator,omitempty"`
+	FileIndexWidth           *int              `json:"file_index_width,omitempty" toml:"file-index-digit,omitempty"`
 	// deprecated: it's become useless since v9.0.0
-	EnableKafkaSinkV2                *bool               `json:"enable_kafka_sink_v2,omitempty"`
-	OnlyOutputUpdatedColumns         *bool               `json:"only_output_updated_columns,omitempty"`
-	DeleteOnlyOutputHandleKeyColumns *bool               `json:"delete_only_output_handle_key_columns"`
-	ContentCompatible                *bool               `json:"content_compatible"`
-	SafeMode                         *bool               `json:"safe_mode,omitempty"`
-	KafkaConfig                      *KafkaConfig        `json:"kafka_config,omitempty"`
-	PulsarConfig                     *PulsarConfig       `json:"pulsar_config,omitempty"`
-	MySQLConfig                      *MySQLConfig        `json:"mysql_config,omitempty"`
-	CloudStorageConfig               *CloudStorageConfig `json:"cloud_storage_config,omitempty"`
-	AdvanceTimeoutInSec              *uint               `json:"advance_timeout,omitempty"`
-	SendBootstrapIntervalInSec       *int64              `json:"send_bootstrap_interval_in_sec,omitempty"`
-	SendBootstrapInMsgCount          *int32              `json:"send_bootstrap_in_msg_count,omitempty"`
-	SendBootstrapToAllPartition      *bool               `json:"send_bootstrap_to_all_partition,omitempty"`
-	SendAllBootstrapAtStart          *bool               `json:"send-all-bootstrap-at-start,omitempty"`
-	DebeziumDisableSchema            *bool               `json:"debezium_disable_schema,omitempty"`
-	DebeziumConfig                   *DebeziumConfig     `json:"debezium,omitempty"`
-	OpenProtocolConfig               *OpenProtocolConfig `json:"open,omitempty"`
+	EnableKafkaSinkV2                *bool               `json:"enable_kafka_sink_v2,omitempty" toml:"enable-kafka-sink-v2,omitempty"`
+	OnlyOutputUpdatedColumns         *bool               `json:"only_output_updated_columns,omitempty" toml:"only-output-updated-columns,omitempty"`
+	DeleteOnlyOutputHandleKeyColumns *bool               `json:"delete_only_output_handle_key_columns" toml:"delete-only-output-handle-key-columns"`
+	ContentCompatible                *bool               `json:"content_compatible" toml:"content-compatible"`
+	SafeMode                         *bool               `json:"safe_mode,omitempty" toml:"safe-mode,omitempty"`
+	KafkaConfig                      *KafkaConfig        `json:"kafka_config,omitempty" toml:"kafka-config,omitempty"`
+	PulsarConfig                     *PulsarConfig       `json:"pulsar_config,omitempty" toml:"pulsar-config,omitempty"`
+	MySQLConfig                      *MySQLConfig        `json:"mysql_config,omitempty" toml:"mysql-config,omitempty"`
+	CloudStorageConfig               *CloudStorageConfig `json:"cloud_storage_config,omitempty" toml:"cloud-storage-config,omitempty"`
+	AdvanceTimeoutInSec              *uint               `json:"advance_timeout_in_sec,omitempty" toml:"advance-timeout-in-sec,omitempty"`
+	SendBootstrapIntervalInSec       *int64              `json:"send_bootstrap_interval_in_sec,omitempty" toml:"send-bootstrap-interval-in-sec,omitempty"`
+	SendBootstrapInMsgCount          *int32              `json:"send_bootstrap_in_msg_count,omitempty" toml:"send-bootstrap-in-msg-count,omitempty"`
+	SendBootstrapToAllPartition      *bool               `json:"send_bootstrap_to_all_partition,omitempty" toml:"send-bootstrap-to-all-partition,omitempty"`
+	SendAllBootstrapAtStart          *bool               `json:"send_all_bootstrap_at_start,omitempty" toml:"send-all-bootstrap-at-start,omitempty"`
+	DebeziumDisableSchema            *bool               `json:"debezium_disable_schema,omitempty" toml:"debezium-disable-schema,omitempty"`
+	DebeziumConfig                   *DebeziumConfig     `json:"debezium,omitempty" toml:"debezium,omitempty"`
+	OpenProtocolConfig               *OpenProtocolConfig `json:"open,omitempty" toml:"open,omitempty"`
 }
 
 // CSVConfig denotes the csv config
 // This is the same as config.CSVConfig
 type CSVConfig struct {
-	Delimiter            string `json:"delimiter"`
-	Quote                string `json:"quote"`
-	NullString           string `json:"null"`
-	IncludeCommitTs      bool   `json:"include_commit_ts"`
-	BinaryEncodingMethod string `json:"binary_encoding_method"`
-	OutputOldValue       bool   `json:"output_old_value"`
-	OutputHandleKey      bool   `json:"output_handle_key"`
-	OutputFieldHeader    bool   `json:"output_field_header"`
+	Delimiter            string `json:"delimiter" toml:"delimiter"`
+	Quote                string `json:"quote" toml:"quote"`
+	NullString           string `json:"null" toml:"null"`
+	IncludeCommitTs      bool   `json:"include_commit_ts" toml:"include-commit-ts"`
+	BinaryEncodingMethod string `json:"binary_encoding_method" toml:"binary-encoding-method"`
+	OutputOldValue       bool   `json:"output_old_value" toml:"output-old-value"`
+	OutputHandleKey      bool   `json:"output_handle_key" toml:"output-handle-key"`
+	OutputFieldHeader    bool   `json:"output_field_header" toml:"output-field-header"`
 }
 
 // LargeMessageHandleConfig denotes the large message handling config
 // This is the same as config.LargeMessageHandleConfig
 type LargeMessageHandleConfig struct {
-	LargeMessageHandleOption      string `json:"large_message_handle_option"`
-	LargeMessageHandleCompression string `json:"large_message_handle_compression"`
-	ClaimCheckStorageURI          string `json:"claim_check_storage_uri"`
-	ClaimCheckRawValue            bool   `json:"claim_check_raw_value"`
+	LargeMessageHandleOption      string `json:"large_message_handle_option" toml:"large-message-handle-option"`
+	LargeMessageHandleCompression string `json:"large_message_handle_compression" toml:"large-message-handle-compression"`
+	ClaimCheckStorageURI          string `json:"claim_check_storage_uri" toml:"claim-check-storage-uri"`
+	ClaimCheckRawValue            bool   `json:"claim_check_raw_value" toml:"claim-check-raw-value"`
 }
 
 // DispatchRule represents partition rule for a table
 // This is a duplicate of config.DispatchRule
 type DispatchRule struct {
-	Matcher       []string `json:"matcher,omitempty"`
-	PartitionRule string   `json:"partition,omitempty"`
-	IndexName     string   `json:"index,omitempty"`
-	Columns       []string `json:"columns,omitempty"`
-	TopicRule     string   `json:"topic,omitempty"`
+	Matcher       []string `json:"matcher,omitempty" toml:"matcher,omitempty"`
+	PartitionRule string   `json:"partition,omitempty" toml:"partition,omitempty"`
+	IndexName     string   `json:"index,omitempty" toml:"index,omitempty"`
+	Columns       []string `json:"columns,omitempty" toml:"columns,omitempty"`
+	TopicRule     string   `json:"topic,omitempty" toml:"topic,omitempty"`
 
 	// TargetSchema sets the routed downstream schema name.
 	// Leave it empty to keep the source schema name.
@@ -1215,44 +1233,44 @@ type DispatchRule struct {
 	// writes to `sales_bak`.`orders`.
 	// You can also use placeholders. For example, `target-schema = "{schema}_bak"`
 	// the target schema becomes `sales_bak`.
-	TargetSchema string `json:"target-schema,omitempty"`
+	TargetSchema string `json:"target-schema,omitempty" toml:"target-schema,omitempty"`
 	// TargetTable sets the routed downstream table name.
 	// Leave it empty to keep the source table name.
 	// For example, if the source table is `sales`.`orders`, `target-table = "orders_bak"`
 	// writes to `sales`.`orders_bak`.
 	// You can also use placeholders. For example, `target-table = "{schema}_{table}"`
 	// becomes `sales_orders`.
-	TargetTable string `json:"target-table,omitempty"`
+	TargetTable string `json:"target-table,omitempty" toml:"target-table,omitempty"`
 }
 
 // ColumnSelector represents a column selector for a table.
 // This is a duplicate of config.ColumnSelector
 type ColumnSelector struct {
-	Matcher []string `json:"matcher,omitempty"`
-	Columns []string `json:"columns,omitempty"`
+	Matcher []string `json:"matcher,omitempty" toml:"matcher,omitempty"`
+	Columns []string `json:"columns,omitempty" toml:"columns,omitempty"`
 }
 
 // ConsistentConfig represents replication consistency config for a changefeed
 // This is a duplicate of config.ConsistentConfig
 type ConsistentConfig struct {
-	Level                 *string                `json:"level,omitempty"`
-	MaxLogSize            *int64                 `json:"max_log_size,omitempty"`
-	FlushIntervalInMs     *int64                 `json:"flush_interval,omitempty"`
-	MetaFlushIntervalInMs *int64                 `json:"meta_flush_interval,omitempty"`
-	EncodingWorkerNum     *int                   `json:"encoding_worker_num,omitempty"`
-	FlushWorkerNum        *int                   `json:"flush_worker_num,omitempty"`
-	Storage               *string                `json:"storage,omitempty"`
-	UseFileBackend        *bool                  `json:"use_file_backend,omitempty"`
-	Compression           *string                `json:"compression,omitempty"`
-	FlushConcurrency      *int                   `json:"flush_concurrency,omitempty"`
-	MemoryUsage           *ConsistentMemoryUsage `json:"memory_usage,omitempty"`
+	Level                 *string                `json:"level,omitempty" toml:"level,omitempty"`
+	MaxLogSize            *int64                 `json:"max_log_size,omitempty" toml:"max-log-size,omitempty"`
+	FlushIntervalInMs     *int64                 `json:"flush_interval,omitempty" toml:"flush-interval,omitempty"`
+	MetaFlushIntervalInMs *int64                 `json:"meta_flush_interval,omitempty" toml:"meta-flush-interval,omitempty"`
+	EncodingWorkerNum     *int                   `json:"encoding_worker_num,omitempty" toml:"encoding-worker-num,omitempty"`
+	FlushWorkerNum        *int                   `json:"flush_worker_num,omitempty" toml:"flush-worker-num,omitempty"`
+	Storage               *string                `json:"storage,omitempty" toml:"storage,omitempty"`
+	UseFileBackend        *bool                  `json:"use_file_backend,omitempty" toml:"use-file-backend,omitempty"`
+	Compression           *string                `json:"compression,omitempty" toml:"compression,omitempty"`
+	FlushConcurrency      *int                   `json:"flush_concurrency,omitempty" toml:"flush-concurrency,omitempty"`
+	MemoryUsage           *ConsistentMemoryUsage `json:"memory_usage,omitempty" toml:"memory-usage,omitempty"`
 
-	EventCollectorBatchCount *int `json:"event_collector_batch_count,omitempty"`
+	EventCollectorBatchCount *int `json:"event_collector_batch_count,omitempty" toml:"event-collector-batch-count,omitempty"`
 }
 
 // ConsistentMemoryUsage represents memory usage of Consistent module.
 type ConsistentMemoryUsage struct {
-	MemoryQuotaPercentage uint64 `json:"memory_quota_percentage"`
+	MemoryQuotaPercentage uint64 `json:"memory_quota_percentage" toml:"memory-quota-percentage"`
 }
 
 // ChangefeedSchedulerConfig is per changefeed scheduler settings.
@@ -1260,46 +1278,46 @@ type ConsistentMemoryUsage struct {
 type ChangefeedSchedulerConfig struct {
 	// EnableTableAcrossNodes set true to split one table to multiple spans and
 	// distribute to multiple TiCDC nodes.
-	EnableTableAcrossNodes *bool `json:"enable_table_across_nodes,omitempty"`
+	EnableTableAcrossNodes *bool `json:"enable_table_across_nodes,omitempty" toml:"enable-table-across-nodes,omitempty"`
 	// RegionThreshold is the region count threshold of splitting a table.
-	RegionThreshold *int `json:"region_threshold,omitempty"`
+	RegionThreshold *int `json:"region_threshold,omitempty" toml:"region-threshold,omitempty"`
 	// RegionCountPerSpan is the maximax region count for each span when first splitted by RegionCountSpliiter
-	RegionCountPerSpan *int `json:"region_count_per_span,omitempty"`
+	RegionCountPerSpan *int `json:"region_count_per_span,omitempty" toml:"region-count-per-span,omitempty"`
 	// RegionCountRefreshInterval controls how often we refresh span region count with PD.
-	RegionCountRefreshInterval *time.Duration `json:"region_count_refresh_interval,omitempty"`
+	RegionCountRefreshInterval *time.Duration `json:"region_count_refresh_interval,omitempty" toml:"region-count-refresh-interval,omitempty"`
 	// WriteKeyThreshold is the written keys threshold of splitting a table.
-	WriteKeyThreshold *int `json:"write_key_threshold,omitempty"`
+	WriteKeyThreshold *int `json:"write_key_threshold,omitempty" toml:"write-key-threshold,omitempty"`
 	// SchedulingTaskCountPerNode is the upper limit for scheduling tasks each node.
-	SchedulingTaskCountPerNode *int `json:"scheduling_task_count_per_node,omitempty"`
+	SchedulingTaskCountPerNode *int `json:"scheduling_task_count_per_node,omitempty" toml:"scheduling-task-count-per-node,omitempty"`
 	// EnableSplittableCheck controls whether to check if a table is splittable before splitting.
 	// If true, only tables with primary key and no unique key can be split.
 	// If false, all tables can be split without checking.
 	// For MySQL downstream, this is always set to true for data consistency.
-	EnableSplittableCheck *bool `json:"enable_splittable_check,omitempty"`
+	EnableSplittableCheck *bool `json:"enable_splittable_check,omitempty" toml:"enable-splittable-check,omitempty"`
 	// ForceSplit controls whether to skip the splittable table check for MySQL downstream.
 	// If true, the splittable table check will be skipped even if the downstream is MySQL.
 	// This is useful for advanced users who are aware of the risks of splitting unsplittable tables.
 	// Default value is false.
-	ForceSplit *bool `json:"force_split,omitempty"`
+	ForceSplit *bool `json:"force_split,omitempty" toml:"force-split,omitempty"`
 	// These config is used for adjust the frequency of balancing traffic.
 	// BalanceScoreThreshold is the score threshold for balancing traffic. Larger value means less frequent balancing.
-	BalanceScoreThreshold *int `json:"balance_score_threshold,omitempty"`
+	BalanceScoreThreshold *int `json:"balance_score_threshold,omitempty" toml:"balance-score-threshold,omitempty"`
 	// MinTrafficPercentage is the minimum traffic percentage for balancing traffic. Larger value means less frequent balancing.
-	MinTrafficPercentage *float64 `json:"min_traffic_percentage,omitempty"`
+	MinTrafficPercentage *float64 `json:"min_traffic_percentage,omitempty" toml:"min-traffic-percentage,omitempty"`
 	// MaxTrafficPercentage is the maximum traffic percentage for balancing traffic. Less value means less frequent balancing.
-	MaxTrafficPercentage *float64 `json:"max_traffic_percentage,omitempty"`
+	MaxTrafficPercentage *float64 `json:"max_traffic_percentage,omitempty" toml:"max-traffic-percentage,omitempty"`
 }
 
 // IntegrityConfig is the config for integrity check
 // This is a duplicate of Integrity.Config
 type IntegrityConfig struct {
-	IntegrityCheckLevel   *string `json:"integrity_check_level,omitempty"`
-	CorruptionHandleLevel *string `json:"corruption_handle_level,omitempty"`
+	IntegrityCheckLevel   *string `json:"integrity_check_level,omitempty" toml:"integrity-check-level,omitempty"`
+	CorruptionHandleLevel *string `json:"corruption_handle_level,omitempty" toml:"corruption-handle-level,omitempty"`
 }
 
 // EtcdData contains key/value pair of etcd data
 type EtcdData struct {
-	Key   string `json:"key,omitempty"`
+	Key   string `json:"key,omitempty" toml:"key,omitempty"`
 	Value string `json:"value,omitempty"`
 }
 
@@ -1312,29 +1330,32 @@ type ResolveLockReq struct {
 
 // ChangeFeedInfo describes the detail of a ChangeFeed
 type ChangeFeedInfo struct {
-	UpstreamID uint64    `json:"upstream_id,omitempty"`
-	ID         string    `json:"id"`
-	Keyspace   string    `json:"keyspace"`
-	SinkURI    string    `json:"sink_uri,omitempty"`
-	CreateTime time.Time `json:"create_time"`
+	UpstreamID uint64    `json:"upstream_id,omitempty" toml:"upstream-id,omitempty"`
+	ID         string    `json:"id" toml:"id"`
+	Keyspace   string    `json:"keyspace" toml:"keyspace"`
+	SinkURI    string    `json:"sink_uri,omitempty" toml:"sink-uri,omitempty"`
+	CreateTime time.Time `json:"create_time" toml:"create-time"`
 	// Start sync at this commit ts if `StartTs` is specify or using the CreateTime of changefeed.
-	StartTs uint64 `json:"start_ts,omitempty"`
+	StartTs uint64 `json:"start_ts,omitempty" toml:"start-ts,omitempty"`
 	// The ChangeFeed will exits until sync to timestamp TargetTs
-	TargetTs uint64 `json:"target_ts,omitempty"`
+	TargetTs uint64 `json:"target_ts,omitempty" toml:"target-ts,omitempty"`
 	// used for admin job notification, trigger watch event in capture
-	AdminJobType   config.AdminJobType  `json:"admin_job_type,omitempty"`
-	Config         *ReplicaConfig       `json:"config,omitempty"`
-	State          config.FeedState     `json:"state,omitempty"`
-	Error          *config.RunningError `json:"error,omitempty"`
-	CreatorVersion string               `json:"creator_version,omitempty"`
+	AdminJobType   config.AdminJobType  `json:"admin_job_type,omitempty" toml:"admin-job-type,omitempty"`
+	Config         *ReplicaConfig       `json:"config,omitempty" toml:"config,omitempty"`
+	State          config.FeedState     `json:"state,omitempty" toml:"state,omitempty"`
+	Error          *config.RunningError `json:"error,omitempty" toml:"error,omitempty"`
+	CreatorVersion string               `json:"creator_version,omitempty" toml:"creator-version,omitempty"`
 
-	ResolvedTs     uint64                     `json:"resolved_ts"`
-	CheckpointTs   uint64                     `json:"checkpoint_ts"`
-	CheckpointTime api.JSONTime               `json:"checkpoint_time"`
-	TaskStatus     []config.CaptureTaskStatus `json:"task_status,omitempty"`
+	ResolvedTs     uint64                     `json:"resolved_ts" toml:"resolved-ts"`
+	CheckpointTs   uint64                     `json:"checkpoint_ts" toml:"checkpoint-ts"`
+	CheckpointTime api.JSONTime               `json:"checkpoint_time" toml:"checkpoint-time"`
+	TaskStatus     []config.CaptureTaskStatus `json:"task_status,omitempty" toml:"task-status,omitempty"`
 
-	GID            common.GID `json:"gid"`
-	MaintainerAddr string     `json:"maintainer_addr,omitempty"`
+	// GID is omitted from TOML: its uint64 low/high can exceed TOML's signed
+	// int64 range (so the output would not parse back), and it is internal
+	// runtime metadata, not part of a changefeed's creatable config.
+	GID            common.GID `json:"gid" toml:"-"`
+	MaintainerAddr string     `json:"maintainer_addr,omitempty" toml:"maintainer-addr,omitempty"`
 }
 
 // SyncedStatus describes the detail of a changefeed's synced status
@@ -1409,119 +1430,119 @@ type Capture struct {
 
 // CodecConfig represents a MQ codec configuration
 type CodecConfig struct {
-	EnableTiDBExtension            *bool   `json:"enable_tidb_extension,omitempty"`
-	MaxBatchSize                   *int    `json:"max_batch_size,omitempty"`
-	AvroEnableWatermark            *bool   `json:"avro_enable_watermark,omitempty"`
-	AvroDecimalHandlingMode        *string `json:"avro_decimal_handling_mode,omitempty"`
-	AvroBigintUnsignedHandlingMode *string `json:"avro_bigint_unsigned_handling_mode,omitempty"`
-	EncodingFormat                 *string `json:"encoding_format,omitempty"`
+	EnableTiDBExtension            *bool   `json:"enable_tidb_extension,omitempty" toml:"enable-tidb-extension,omitempty"`
+	MaxBatchSize                   *int    `json:"max_batch_size,omitempty" toml:"max-batch-size,omitempty"`
+	AvroEnableWatermark            *bool   `json:"avro_enable_watermark,omitempty" toml:"avro-enable-watermark,omitempty"`
+	AvroDecimalHandlingMode        *string `json:"avro_decimal_handling_mode,omitempty" toml:"avro-decimal-handling-mode,omitempty"`
+	AvroBigintUnsignedHandlingMode *string `json:"avro_bigint_unsigned_handling_mode,omitempty" toml:"avro-bigint-unsigned-handling-mode,omitempty"`
+	EncodingFormat                 *string `json:"encoding_format,omitempty" toml:"encoding-format,omitempty"`
 }
 
 // PulsarConfig represents a pulsar sink configuration
 type PulsarConfig struct {
-	TLSKeyFilePath          *string       `json:"tls-certificate-path,omitempty"`
-	TLSCertificateFile      *string       `json:"tls-private-key-path,omitempty"`
-	TLSTrustCertsFilePath   *string       `json:"tls-trust-certs-file-path,omitempty"`
-	PulsarProducerCacheSize *int32        `json:"pulsar-producer-cache-size,omitempty"`
-	PulsarVersion           *string       `json:"pulsar-version,omitempty"`
-	CompressionType         *string       `json:"compression-type,omitempty"`
-	AuthenticationToken     *string       `json:"authentication-token,omitempty"`
-	ConnectionTimeout       *int          `json:"connection-timeout,omitempty"`
-	OperationTimeout        *int          `json:"operation-timeout,omitempty"`
-	BatchingMaxMessages     *uint         `json:"batching-max-messages,omitempty"`
-	BatchingMaxPublishDelay *int          `json:"batching-max-publish-delay,omitempty"`
-	SendTimeout             *int          `json:"send-timeout,omitempty"`
-	TokenFromFile           *string       `json:"token-from-file,omitempty"`
-	BasicUserName           *string       `json:"basic-user-name,omitempty"`
-	BasicPassword           *string       `json:"basic-password,omitempty"`
-	AuthTLSCertificatePath  *string       `json:"auth-tls-certificate-path,omitempty"`
-	AuthTLSPrivateKeyPath   *string       `json:"auth-tls-private-key-path,omitempty"`
-	OAuth2                  *PulsarOAuth2 `json:"oauth2,omitempty"`
-	OutputRawChangeEvent    *bool         `json:"output-raw-change-event,omitempty"`
+	TLSKeyFilePath          *string       `json:"tls-certificate-path,omitempty" toml:"tls-certificate-path,omitempty"`
+	TLSCertificateFile      *string       `json:"tls-private-key-path,omitempty" toml:"tls-private-key-path,omitempty"`
+	TLSTrustCertsFilePath   *string       `json:"tls-trust-certs-file-path,omitempty" toml:"tls-trust-certs-file-path,omitempty"`
+	PulsarProducerCacheSize *int32        `json:"pulsar-producer-cache-size,omitempty" toml:"pulsar-producer-cache-size,omitempty"`
+	PulsarVersion           *string       `json:"pulsar-version,omitempty" toml:"pulsar-version,omitempty"`
+	CompressionType         *string       `json:"compression-type,omitempty" toml:"compression-type,omitempty"`
+	AuthenticationToken     *string       `json:"authentication-token,omitempty" toml:"authentication-token,omitempty"`
+	ConnectionTimeout       *int          `json:"connection-timeout,omitempty" toml:"connection-timeout,omitempty"`
+	OperationTimeout        *int          `json:"operation-timeout,omitempty" toml:"operation-timeout,omitempty"`
+	BatchingMaxMessages     *uint         `json:"batching-max-messages,omitempty" toml:"batching-max-messages,omitempty"`
+	BatchingMaxPublishDelay *int          `json:"batching-max-publish-delay,omitempty" toml:"batching-max-publish-delay,omitempty"`
+	SendTimeout             *int          `json:"send-timeout,omitempty" toml:"send-timeout,omitempty"`
+	TokenFromFile           *string       `json:"token-from-file,omitempty" toml:"token-from-file,omitempty"`
+	BasicUserName           *string       `json:"basic-user-name,omitempty" toml:"basic-user-name,omitempty"`
+	BasicPassword           *string       `json:"basic-password,omitempty" toml:"basic-password,omitempty"`
+	AuthTLSCertificatePath  *string       `json:"auth-tls-certificate-path,omitempty" toml:"auth-tls-certificate-path,omitempty"`
+	AuthTLSPrivateKeyPath   *string       `json:"auth-tls-private-key-path,omitempty" toml:"auth-tls-private-key-path,omitempty"`
+	OAuth2                  *PulsarOAuth2 `json:"oauth2,omitempty" toml:"oauth2,omitempty"`
+	OutputRawChangeEvent    *bool         `json:"output-raw-change-event,omitempty" toml:"output-raw-change-event,omitempty"`
 }
 
 // PulsarOAuth2 is the configuration for OAuth2
 type PulsarOAuth2 struct {
-	OAuth2IssuerURL  string `json:"oauth2-issuer-url,omitempty"`
-	OAuth2Audience   string `json:"oauth2-audience,omitempty"`
-	OAuth2PrivateKey string `json:"oauth2-private-key,omitempty"`
-	OAuth2ClientID   string `json:"oauth2-client-id,omitempty"`
-	OAuth2Scope      string `json:"oauth2-scope,omitempty"`
+	OAuth2IssuerURL  string `json:"oauth2-issuer-url,omitempty" toml:"oauth2-issuer-url,omitempty"`
+	OAuth2Audience   string `json:"oauth2-audience,omitempty" toml:"oauth2-audience,omitempty"`
+	OAuth2PrivateKey string `json:"oauth2-private-key,omitempty" toml:"oauth2-private-key,omitempty"`
+	OAuth2ClientID   string `json:"oauth2-client-id,omitempty" toml:"oauth2-client-id,omitempty"`
+	OAuth2Scope      string `json:"oauth2-scope,omitempty" toml:"oauth2-scope,omitempty"`
 }
 
 // KafkaConfig represents a kafka sink configuration
 type KafkaConfig struct {
-	PartitionNum                 *int32                    `json:"partition_num,omitempty"`
-	ReplicationFactor            *int16                    `json:"replication_factor,omitempty"`
-	KafkaVersion                 *string                   `json:"kafka_version,omitempty"`
-	MaxMessageBytes              *int                      `json:"max_message_bytes,omitempty"`
-	Compression                  *string                   `json:"compression,omitempty"`
-	KafkaClientID                *string                   `json:"kafka_client_id,omitempty"`
-	AutoCreateTopic              *bool                     `json:"auto_create_topic,omitempty"`
-	DialTimeout                  *string                   `json:"dial_timeout,omitempty"`
-	WriteTimeout                 *string                   `json:"write_timeout,omitempty"`
-	ReadTimeout                  *string                   `json:"read_timeout,omitempty"`
-	RequiredAcks                 *int                      `json:"required_acks,omitempty"`
-	SASLUser                     *string                   `json:"sasl_user,omitempty"`
-	SASLPassword                 *string                   `json:"sasl_password,omitempty"`
-	SASLMechanism                *string                   `json:"sasl_mechanism,omitempty"`
-	SASLGssAPIAuthType           *string                   `json:"sasl_gssapi_auth_type,omitempty"`
-	SASLGssAPIKeytabPath         *string                   `json:"sasl_gssapi_keytab_path,omitempty"`
-	SASLGssAPIKerberosConfigPath *string                   `json:"sasl_gssapi_kerberos_config_path,omitempty"`
-	SASLGssAPIServiceName        *string                   `json:"sasl_gssapi_service_name,omitempty"`
-	SASLGssAPIUser               *string                   `json:"sasl_gssapi_user,omitempty"`
-	SASLGssAPIPassword           *string                   `json:"sasl_gssapi_password,omitempty"`
-	SASLGssAPIRealm              *string                   `json:"sasl_gssapi_realm,omitempty"`
-	SASLGssAPIDisablePafxfast    *bool                     `json:"sasl_gssapi_disable_pafxfast,omitempty"`
-	SASLOAuthClientID            *string                   `json:"sasl_oauth_client_id,omitempty"`
-	SASLOAuthClientSecret        *string                   `json:"sasl_oauth_client_secret,omitempty"`
-	SASLOAuthTokenURL            *string                   `json:"sasl_oauth_token_url,omitempty"`
-	SASLOAuthScopes              []string                  `json:"sasl_oauth_scopes,omitempty"`
-	SASLOAuthGrantType           *string                   `json:"sasl_oauth_grant_type,omitempty"`
-	SASLOAuthAudience            *string                   `json:"sasl_oauth_audience,omitempty"`
-	EnableTLS                    *bool                     `json:"enable_tls,omitempty"`
-	CA                           *string                   `json:"ca,omitempty"`
-	Cert                         *string                   `json:"cert,omitempty"`
-	Key                          *string                   `json:"key,omitempty"`
-	InsecureSkipVerify           *bool                     `json:"insecure_skip_verify,omitempty"`
-	CodecConfig                  *CodecConfig              `json:"codec_config,omitempty"`
-	LargeMessageHandle           *LargeMessageHandleConfig `json:"large_message_handle,omitempty"`
-	GlueSchemaRegistryConfig     *GlueSchemaRegistryConfig `json:"glue_schema_registry_config,omitempty"`
-	OutputRawChangeEvent         *bool                     `json:"output_raw_change_event,omitempty"`
+	PartitionNum                 *int32                    `json:"partition_num,omitempty" toml:"partition-num,omitempty"`
+	ReplicationFactor            *int16                    `json:"replication_factor,omitempty" toml:"replication-factor,omitempty"`
+	KafkaVersion                 *string                   `json:"kafka_version,omitempty" toml:"kafka-version,omitempty"`
+	MaxMessageBytes              *int                      `json:"max_message_bytes,omitempty" toml:"max-message-bytes,omitempty"`
+	Compression                  *string                   `json:"compression,omitempty" toml:"compression,omitempty"`
+	KafkaClientID                *string                   `json:"kafka_client_id,omitempty" toml:"kafka-client-id,omitempty"`
+	AutoCreateTopic              *bool                     `json:"auto_create_topic,omitempty" toml:"auto-create-topic,omitempty"`
+	DialTimeout                  *string                   `json:"dial_timeout,omitempty" toml:"dial-timeout,omitempty"`
+	WriteTimeout                 *string                   `json:"write_timeout,omitempty" toml:"write-timeout,omitempty"`
+	ReadTimeout                  *string                   `json:"read_timeout,omitempty" toml:"read-timeout,omitempty"`
+	RequiredAcks                 *int                      `json:"required_acks,omitempty" toml:"required-acks,omitempty"`
+	SASLUser                     *string                   `json:"sasl_user,omitempty" toml:"sasl-user,omitempty"`
+	SASLPassword                 *string                   `json:"sasl_password,omitempty" toml:"sasl-password,omitempty"`
+	SASLMechanism                *string                   `json:"sasl_mechanism,omitempty" toml:"sasl-mechanism,omitempty"`
+	SASLGssAPIAuthType           *string                   `json:"sasl_gssapi_auth_type,omitempty" toml:"sasl-gssapi-auth-type,omitempty"`
+	SASLGssAPIKeytabPath         *string                   `json:"sasl_gssapi_keytab_path,omitempty" toml:"sasl-gssapi-keytab-path,omitempty"`
+	SASLGssAPIKerberosConfigPath *string                   `json:"sasl_gssapi_kerberos_config_path,omitempty" toml:"sasl-gssapi-kerberos-config-path,omitempty"`
+	SASLGssAPIServiceName        *string                   `json:"sasl_gssapi_service_name,omitempty" toml:"sasl-gssapi-service-name,omitempty"`
+	SASLGssAPIUser               *string                   `json:"sasl_gssapi_user,omitempty" toml:"sasl-gssapi-user,omitempty"`
+	SASLGssAPIPassword           *string                   `json:"sasl_gssapi_password,omitempty" toml:"sasl-gssapi-password,omitempty"`
+	SASLGssAPIRealm              *string                   `json:"sasl_gssapi_realm,omitempty" toml:"sasl-gssapi-realm,omitempty"`
+	SASLGssAPIDisablePafxfast    *bool                     `json:"sasl_gssapi_disable_pafxfast,omitempty" toml:"sasl-gssapi-disable-pafxfast,omitempty"`
+	SASLOAuthClientID            *string                   `json:"sasl_oauth_client_id,omitempty" toml:"sasl-oauth-client-id,omitempty"`
+	SASLOAuthClientSecret        *string                   `json:"sasl_oauth_client_secret,omitempty" toml:"sasl-oauth-client-secret,omitempty"`
+	SASLOAuthTokenURL            *string                   `json:"sasl_oauth_token_url,omitempty" toml:"sasl-oauth-token-url,omitempty"`
+	SASLOAuthScopes              []string                  `json:"sasl_oauth_scopes,omitempty" toml:"sasl-oauth-scopes,omitempty"`
+	SASLOAuthGrantType           *string                   `json:"sasl_oauth_grant_type,omitempty" toml:"sasl-oauth-grant-type,omitempty"`
+	SASLOAuthAudience            *string                   `json:"sasl_oauth_audience,omitempty" toml:"sasl-oauth-audience,omitempty"`
+	EnableTLS                    *bool                     `json:"enable_tls,omitempty" toml:"enable-tls,omitempty"`
+	CA                           *string                   `json:"ca,omitempty" toml:"ca,omitempty"`
+	Cert                         *string                   `json:"cert,omitempty" toml:"cert,omitempty"`
+	Key                          *string                   `json:"key,omitempty" toml:"key,omitempty"`
+	InsecureSkipVerify           *bool                     `json:"insecure_skip_verify,omitempty" toml:"insecure-skip-verify,omitempty"`
+	CodecConfig                  *CodecConfig              `json:"codec_config,omitempty" toml:"codec-config,omitempty"`
+	LargeMessageHandle           *LargeMessageHandleConfig `json:"large_message_handle,omitempty" toml:"large-message-handle,omitempty"`
+	GlueSchemaRegistryConfig     *GlueSchemaRegistryConfig `json:"glue_schema_registry_config,omitempty" toml:"glue-schema-registry-config,omitempty"`
+	OutputRawChangeEvent         *bool                     `json:"output_raw_change_event,omitempty" toml:"output-raw-change-event,omitempty"`
 }
 
 // MySQLConfig represents a MySQL sink configuration
 type MySQLConfig struct {
-	WorkerCount                  *int    `json:"worker_count,omitempty"`
-	MaxTxnRow                    *int    `json:"max_txn_row,omitempty"`
-	MaxMultiUpdateRowSize        *int    `json:"max_multi_update_row_size,omitempty"`
-	MaxMultiUpdateRowCount       *int    `json:"max_multi_update_row_count,omitempty"`
-	TiDBTxnMode                  *string `json:"tidb_txn_mode,omitempty"`
-	SSLCa                        *string `json:"ssl_ca,omitempty"`
-	SSLCert                      *string `json:"ssl_cert,omitempty"`
-	SSLKey                       *string `json:"ssl_key,omitempty"`
-	TimeZone                     *string `json:"time_zone,omitempty"`
-	WriteTimeout                 *string `json:"write_timeout,omitempty"`
-	ReadTimeout                  *string `json:"read_timeout,omitempty"`
-	Timeout                      *string `json:"timeout,omitempty"`
-	EnableBatchDML               *bool   `json:"enable_batch_dml,omitempty"`
-	EnableMultiStatement         *bool   `json:"enable_multi_statement,omitempty"`
-	EnableCachePreparedStatement *bool   `json:"enable_cache_prepared_statement,omitempty"`
+	WorkerCount                  *int    `json:"worker_count,omitempty" toml:"worker-count,omitempty"`
+	MaxTxnRow                    *int    `json:"max_txn_row,omitempty" toml:"max-txn-row,omitempty"`
+	MaxMultiUpdateRowSize        *int    `json:"max_multi_update_row_size,omitempty" toml:"max-multi-update-row-size,omitempty"`
+	MaxMultiUpdateRowCount       *int    `json:"max_multi_update_row_count,omitempty" toml:"max-multi-update-row-count,omitempty"`
+	TiDBTxnMode                  *string `json:"tidb_txn_mode,omitempty" toml:"tidb-txn-mode,omitempty"`
+	SSLCa                        *string `json:"ssl_ca,omitempty" toml:"ssl-ca,omitempty"`
+	SSLCert                      *string `json:"ssl_cert,omitempty" toml:"ssl-cert,omitempty"`
+	SSLKey                       *string `json:"ssl_key,omitempty" toml:"ssl-key,omitempty"`
+	TimeZone                     *string `json:"time_zone,omitempty" toml:"time-zone,omitempty"`
+	WriteTimeout                 *string `json:"write_timeout,omitempty" toml:"write-timeout,omitempty"`
+	ReadTimeout                  *string `json:"read_timeout,omitempty" toml:"read-timeout,omitempty"`
+	Timeout                      *string `json:"timeout,omitempty" toml:"timeout,omitempty"`
+	EnableBatchDML               *bool   `json:"enable_batch_dml,omitempty" toml:"enable-batch-dml,omitempty"`
+	EnableMultiStatement         *bool   `json:"enable_multi_statement,omitempty" toml:"enable-multi-statement,omitempty"`
+	EnableCachePreparedStatement *bool   `json:"enable_cache_prepared_statement,omitempty" toml:"enable-cache-prepared-statement,omitempty"`
 }
 
 // CloudStorageConfig represents a cloud storage sink configuration
 type CloudStorageConfig struct {
-	WorkerCount          *int    `json:"worker_count,omitempty"`
-	FlushInterval        *string `json:"flush_interval,omitempty"`
-	FileSize             *int    `json:"file_size,omitempty"`
-	SpoolDiskQuota       *int64  `json:"spool_disk_quota,omitempty"`
-	SpoolBaseDir         *string `json:"spool_base_dir,omitempty"`
-	OutputColumnID       *bool   `json:"output_column_id,omitempty"`
-	FileExpirationDays   *int    `json:"file_expiration_days,omitempty"`
-	FileCleanupCronSpec  *string `json:"file_cleanup_cron_spec,omitempty"`
-	FlushConcurrency     *int    `json:"flush_concurrency,omitempty"`
-	OutputRawChangeEvent *bool   `json:"output_raw_change_event,omitempty"`
-	UseTableIDAsPath     *bool   `json:"use_table_id_as_path,omitempty"`
+	WorkerCount          *int    `json:"worker_count,omitempty" toml:"worker-count,omitempty"`
+	FlushInterval        *string `json:"flush_interval,omitempty" toml:"flush-interval,omitempty"`
+	FileSize             *int    `json:"file_size,omitempty" toml:"file-size,omitempty"`
+	SpoolDiskQuota       *int64  `json:"spool_disk_quota,omitempty" toml:"spool-disk-quota,omitempty"`
+	SpoolBaseDir         *string `json:"spool_base_dir,omitempty" toml:"spool-base-dir,omitempty"`
+	OutputColumnID       *bool   `json:"output_column_id,omitempty" toml:"output-column-id,omitempty"`
+	FileExpirationDays   *int    `json:"file_expiration_days,omitempty" toml:"file-expiration-days,omitempty"`
+	FileCleanupCronSpec  *string `json:"file_cleanup_cron_spec,omitempty" toml:"file-cleanup-cron-spec,omitempty"`
+	FlushConcurrency     *int    `json:"flush_concurrency,omitempty" toml:"flush-concurrency,omitempty"`
+	OutputRawChangeEvent *bool   `json:"output_raw_change_event,omitempty" toml:"output-raw-change-event,omitempty"`
+	UseTableIDAsPath     *bool   `json:"use_table_id_as_path,omitempty" toml:"use-table-id-as-path,omitempty"`
 }
 
 // ChangefeedStatus holds common information of a changefeed in cdc
@@ -1536,24 +1557,24 @@ type ChangefeedStatus struct {
 // GlueSchemaRegistryConfig represents a glue schema registry configuration
 type GlueSchemaRegistryConfig struct {
 	// Name of the schema registry
-	RegistryName string `json:"registry_name"`
+	RegistryName string `json:"registry_name" toml:"registry-name"`
 	// Region of the schema registry
-	Region string `json:"region"`
+	Region string `json:"region" toml:"region"`
 	// AccessKey of the schema registry
-	AccessKey string `json:"access_key,omitempty"`
+	AccessKey string `json:"access_key,omitempty" toml:"access-key,omitempty"`
 	// SecretAccessKey of the schema registry
-	SecretAccessKey string `json:"secret_access_key,omitempty"`
-	Token           string `json:"token,omitempty"`
+	SecretAccessKey string `json:"secret_access_key,omitempty" toml:"secret-access-key,omitempty"`
+	Token           string `json:"token,omitempty" toml:"token,omitempty"`
 }
 
 // OpenProtocolConfig represents the configurations for open protocol encoding
 type OpenProtocolConfig struct {
-	OutputOldValue bool `json:"output_old_value"`
+	OutputOldValue bool `json:"output_old_value" toml:"output-old-value"`
 }
 
 // DebeziumConfig represents the configurations for debezium protocol encoding
 type DebeziumConfig struct {
-	OutputOldValue bool `json:"output_old_value"`
+	OutputOldValue bool `json:"output_old_value" toml:"output-old-value"`
 }
 
 type DispatcherCount struct {
