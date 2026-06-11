@@ -29,6 +29,172 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func newControllerForCheckpointTsTrackerTest(t *testing.T) *Controller {
+	t.Helper()
+
+	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	ddlDispatcherID := common.NewDispatcherID()
+	ddlSpan := replica.NewWorkingSpanReplication(changefeedID, ddlDispatcherID,
+		common.DDLSpanSchemaID,
+		common.KeyspaceDDLSpan(common.DefaultKeyspaceID), &heartbeatpb.TableSpanStatus{
+			ID:              ddlDispatcherID.ToPB(),
+			ComponentStatus: heartbeatpb.ComponentState_Working,
+			CheckpointTs:    1,
+		}, "node1", false)
+	appcontext.SetService(watcher.NodeManagerName, watcher.NewNodeManager(nil, nil))
+	return NewController(changefeedID, ddlSpan, nil, nil, nil, common.DefaultKeyspaceID, common.DefaultMode)
+}
+
+func newSpanReplicationForCheckpointTsTrackerTest(
+	controller *Controller,
+	schemaID int64,
+	tableID int64,
+	checkpointTs uint64,
+) *replica.SpanReplication {
+	span := common.TableIDToComparableSpan(common.DefaultKeyspaceID, tableID)
+	tableSpan := &heartbeatpb.TableSpan{
+		TableID:    tableID,
+		StartKey:   span.StartKey,
+		EndKey:     span.EndKey,
+		KeyspaceID: common.DefaultKeyspaceID,
+	}
+	return replica.NewSpanReplication(
+		controller.changefeedID,
+		common.NewDispatcherID(),
+		schemaID,
+		tableSpan,
+		checkpointTs,
+		common.DefaultMode,
+		false,
+	)
+}
+
+func TestControllerGetMinCheckpointTsForNonReplicatingSpans(t *testing.T) {
+	controller := newControllerForCheckpointTsTrackerTest(t)
+	span1 := newSpanReplicationForCheckpointTsTrackerTest(controller, 1, 100, 100)
+	span2 := newSpanReplicationForCheckpointTsTrackerTest(controller, 1, 101, 80)
+	controller.AddAbsentReplicaSet(span1, span2)
+
+	require.Equal(t, uint64(80), controller.GetMinCheckpointTsForNonReplicatingSpans(1000))
+
+	controller.MarkSpanScheduling(span2)
+	controller.UpdateStatus(span2, &heartbeatpb.TableSpanStatus{
+		ID:              span2.ID.ToPB(),
+		ComponentStatus: heartbeatpb.ComponentState_Working,
+		CheckpointTs:    120,
+	})
+	require.Equal(t, uint64(100), controller.GetMinCheckpointTsForNonReplicatingSpans(1000))
+
+	controller.MarkSpanReplicating(span1)
+	require.Equal(t, uint64(120), controller.GetMinCheckpointTsForNonReplicatingSpans(1000))
+
+	controller.MarkSpanReplicating(span2)
+	require.Equal(t, uint64(1000), controller.GetMinCheckpointTsForNonReplicatingSpans(1000))
+}
+
+func TestControllerCheckpointTsTrackerBindSpanToNode(t *testing.T) {
+	controller := newControllerForCheckpointTsTrackerTest(t)
+	span1 := newSpanReplicationForCheckpointTsTrackerTest(controller, 1, 100, 100)
+	span2 := newSpanReplicationForCheckpointTsTrackerTest(controller, 1, 101, 80)
+	controller.AddAbsentReplicaSet(span1, span2)
+
+	controller.BindSpanToNode("", "node1", span2)
+	require.Equal(t, uint64(80), controller.GetMinCheckpointTsForNonReplicatingSpans(1000))
+
+	controller.UpdateStatus(span2, &heartbeatpb.TableSpanStatus{
+		ID:              span2.ID.ToPB(),
+		ComponentStatus: heartbeatpb.ComponentState_Working,
+		CheckpointTs:    120,
+	})
+	require.Equal(t, uint64(100), controller.GetMinCheckpointTsForNonReplicatingSpans(1000))
+
+	controller.MarkSpanReplicating(span2)
+	require.Equal(t, uint64(100), controller.GetMinCheckpointTsForNonReplicatingSpans(1000))
+
+	controller.MarkSpanReplicating(span1)
+	require.Equal(t, uint64(1000), controller.GetMinCheckpointTsForNonReplicatingSpans(1000))
+}
+
+func TestControllerCheckpointTsTrackerDirectScheduling(t *testing.T) {
+	controller := newControllerForCheckpointTsTrackerTest(t)
+	span := newSpanReplicationForCheckpointTsTrackerTest(controller, 1, 100, 90)
+	controller.AddSchedulingReplicaSet(span, "node1")
+
+	require.Equal(t, uint64(90), controller.GetMinCheckpointTsForNonReplicatingSpans(1000))
+
+	controller.UpdateStatus(span, &heartbeatpb.TableSpanStatus{
+		ID:              span.ID.ToPB(),
+		ComponentStatus: heartbeatpb.ComponentState_Working,
+		CheckpointTs:    80,
+	})
+	require.Equal(t, uint64(90), controller.GetMinCheckpointTsForNonReplicatingSpans(1000))
+
+	controller.UpdateStatus(controller.GetDDLDispatcher(), &heartbeatpb.TableSpanStatus{
+		ID:              controller.GetDDLDispatcherID().ToPB(),
+		ComponentStatus: heartbeatpb.ComponentState_Working,
+		CheckpointTs:    1,
+	})
+	require.Equal(t, uint64(90), controller.GetMinCheckpointTsForNonReplicatingSpans(1000))
+
+	controller.MarkSpanReplicating(span)
+	require.Equal(t, uint64(1000), controller.GetMinCheckpointTsForNonReplicatingSpans(1000))
+}
+
+func TestControllerCheckpointTsTrackerReplaceAndRemove(t *testing.T) {
+	controller := newControllerForCheckpointTsTrackerTest(t)
+	oldSpan := newSpanReplicationForCheckpointTsTrackerTest(controller, 1, 100, 50)
+	controller.AddAbsentReplicaSet(oldSpan)
+	newSpan := common.TableIDToComparableSpan(common.DefaultKeyspaceID, 101)
+	newTableSpan := &heartbeatpb.TableSpan{
+		TableID:    101,
+		StartKey:   newSpan.StartKey,
+		EndKey:     newSpan.EndKey,
+		KeyspaceID: common.DefaultKeyspaceID,
+	}
+
+	newSpans, inScheduling := controller.ReplaceReplicaSet(
+		[]*replica.SpanReplication{oldSpan},
+		[]*heartbeatpb.TableSpan{newTableSpan},
+		80,
+		nil,
+	)
+
+	require.False(t, inScheduling)
+	require.Len(t, newSpans, 1)
+	require.Nil(t, controller.GetTaskByID(oldSpan.ID))
+	require.Equal(t, uint64(50), controller.GetMinCheckpointTsForNonReplicatingSpans(1000))
+
+	controller.RemoveByTableIDs(101)
+	require.Equal(t, uint64(1000), controller.GetMinCheckpointTsForNonReplicatingSpans(1000))
+}
+
+func TestControllerCheckpointTsTrackerReplaceIntoScheduling(t *testing.T) {
+	controller := newControllerForCheckpointTsTrackerTest(t)
+	oldSpan := newSpanReplicationForCheckpointTsTrackerTest(controller, 1, 100, 50)
+	controller.AddAbsentReplicaSet(oldSpan)
+	newSpan := common.TableIDToComparableSpan(common.DefaultKeyspaceID, 101)
+	newTableSpan := &heartbeatpb.TableSpan{
+		TableID:    101,
+		StartKey:   newSpan.StartKey,
+		EndKey:     newSpan.EndKey,
+		KeyspaceID: common.DefaultKeyspaceID,
+	}
+
+	newSpans, inScheduling := controller.ReplaceReplicaSet(
+		[]*replica.SpanReplication{oldSpan},
+		[]*heartbeatpb.TableSpan{newTableSpan},
+		80,
+		[]node.ID{"node1"},
+	)
+
+	require.True(t, inScheduling)
+	require.Len(t, newSpans, 1)
+	require.Equal(t, uint64(50), controller.GetMinCheckpointTsForNonReplicatingSpans(1000))
+
+	controller.MarkSpanReplicating(newSpans[0])
+	require.Equal(t, uint64(1000), controller.GetMinCheckpointTsForNonReplicatingSpans(1000))
+}
+
 func TestNewController(t *testing.T) {
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	ddlDispatcherID := common.NewDispatcherID()
@@ -328,8 +494,6 @@ func TestController_BindCommittedCheckpointToManagedSpan(t *testing.T) {
 
 // TestBasicFunction tests the basic functionality of the controller
 func TestBasicFunction(t *testing.T) {
-	t.Parallel()
-
 	controller := newControllerWithCheckerForTest(t)
 	absent := replica.NewSpanReplication(controller.changefeedID, common.NewDispatcherID(), 1, testutil.GetTableSpanByID(4), 1, common.DefaultMode, false)
 	controller.AddAbsentReplicaSet(absent)
@@ -404,8 +568,6 @@ func TestBasicFunction(t *testing.T) {
 
 // TestReplaceReplicaSet tests the ReplaceReplicaSet functionality
 func TestReplaceReplicaSet(t *testing.T) {
-	t.Parallel()
-
 	controller := newControllerWithCheckerForTest(t)
 	// replicating and scheduling will be returned
 	replicaSpanID := common.NewDispatcherID()
@@ -432,8 +594,6 @@ func TestReplaceReplicaSet(t *testing.T) {
 
 // TestMarkSpanAbsent tests the MarkSpanAbsent functionality
 func TestMarkSpanAbsent(t *testing.T) {
-	t.Parallel()
-
 	controller := newControllerWithCheckerForTest(t)
 	// replicating and scheduling will be returned
 	replicaSpanID := common.NewDispatcherID()
@@ -451,7 +611,7 @@ func TestMarkSpanAbsent(t *testing.T) {
 }
 
 func newControllerWithCheckerForTest(t *testing.T) *Controller {
-	testutil.SetUpTestServices()
+	testutil.SetUpTestServices(t)
 	cfID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
 	tableTriggerEventDispatcherID := common.NewDispatcherID()
 	ddlSpan := replica.NewWorkingSpanReplication(cfID, tableTriggerEventDispatcherID,

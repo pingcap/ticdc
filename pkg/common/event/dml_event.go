@@ -279,14 +279,6 @@ func (b *BatchDMLEvent) encodeV1() ([]byte, error) {
 // AssembleRows assembles the Rows from the RawRows.
 // It also sets the TableInfo and clears the RawRows.
 func (b *BatchDMLEvent) AssembleRows(tableInfo *common.TableInfo) {
-	defer func() {
-		b.TableInfo.InitPrivateFields()
-	}()
-	// rows is already set, no need to assemble again
-	// When the event is passed from the same node, the Rows is already set.
-	if b.Rows != nil {
-		return
-	}
 	if tableInfo == nil {
 		log.Panic("DMLEvent: TableInfo is nil")
 	}
@@ -310,13 +302,14 @@ func (b *BatchDMLEvent) AssembleRows(tableInfo *common.TableInfo) {
 
 	if b.TableInfo != nil {
 		originVersion := b.TableInfo.GetUpdateTS()
-		version := tableInfo.GetUpdateTS()
-		if originVersion != version {
+		routedVersion := tableInfo.GetUpdateTS()
+		if originVersion != routedVersion {
 			log.Panic("table version mismatch when decode remote raw rows",
 				zap.Uint64("originTableVersion", originVersion),
-				zap.Uint64("tableVersion", version))
+				zap.Uint64("routedTableVersion", routedVersion))
 		}
 	}
+
 	decoder := chunk.NewCodec(tableInfo.GetFieldSlice())
 	b.Rows, _ = decoder.Decode(b.RawRows)
 	b.TableInfo = tableInfo

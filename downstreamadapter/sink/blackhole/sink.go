@@ -77,7 +77,7 @@ func (s *sink) AddCheckpointTs(ts uint64) {
 	log.Debug("BlackHoleSink: Checkpoint Ts Event", zap.Uint64("ts", ts))
 }
 
-func (s *sink) Close(_ bool) {}
+func (s *sink) Close() {}
 
 func (s *sink) Run(ctx context.Context) error {
 	for {

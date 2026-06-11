@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	"github.com/pingcap/ticdc/pkg/common"
+	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/stretchr/testify/require"
 )
 
@@ -106,7 +107,10 @@ func TestIsSplitable(t *testing.T) {
 	}
 }
 <<<<<<< HEAD
+<<<<<<< HEAD
 =======
+=======
+>>>>>>> release-8.5
 
 func TestDDL2EventFillsSingleTableMetadata(t *testing.T) {
 	helper := NewEventTestHelper(t)
@@ -149,6 +153,7 @@ func TestDDL2EventFillsCreateTableLikeMetadata(t *testing.T) {
 
 	require.Equal(t, []SchemaTableName{{SchemaName: "test_db", TableName: "src"}}, ddlEvent.BlockedTableNames)
 	require.Equal(t, []SchemaTableName{{SchemaName: "test_db", TableName: "dst"}}, ddlEvent.TableNameChange.AddName)
+<<<<<<< HEAD
 
 	helper.Tk().MustExec("CREATE DATABASE `extra_db`")
 	helper.Tk().MustExec("USE `test_db`")
@@ -170,6 +175,8 @@ func TestDDL2EventNormalizesCrossSchemaCreateView(t *testing.T) {
 	ddlEvent := helper.DDL2Event("CREATE VIEW `extra_db`.`v` AS SELECT `id` FROM `src`")
 
 	require.Contains(t, ddlEvent.Query, "FROM `test_db`.`src`")
+=======
+>>>>>>> release-8.5
 }
 
 func TestDDL2EventFillsRenameTableMetadata(t *testing.T) {
@@ -241,4 +248,7 @@ func TestBatchCreateTableDDLs2EventFillsMetadata(t *testing.T) {
 		{SchemaName: "test_db", TableName: "t2"},
 	}, ddlEvent.TableNameChange.AddName)
 }
+<<<<<<< HEAD
 >>>>>>> 21f52e04a (mysql,sqlmodel: support table route in mysql sink (#5006))
+=======
+>>>>>>> release-8.5

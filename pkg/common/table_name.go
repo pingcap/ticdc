@@ -19,16 +19,22 @@ import (
 
 //go:generate msgp
 
-// TableName represents name of a table, includes table name and schema name.
+// TableName represents name of a table, includes table name and schema name
 type TableName struct {
 	Schema string `toml:"db-name" msg:"db-name"`
 	Table  string `toml:"tbl-name" msg:"tbl-name"`
 	// TableID is the logic table ID
 	TableID     int64 `toml:"tbl-id" msg:"tbl-id"`
 	IsPartition bool  `toml:"is-partition" msg:"is-partition"`
+
+	// TargetSchema and TargetTable are used as an in-memory routing overlay.
+	// They are intentionally excluded from msgpack serialization because redo
+	// persists routed names canonically in Schema/Table.
+	TargetSchema string `toml:"target-db-name" msg:"-"`
+	TargetTable  string `toml:"target-tbl-name" msg:"-"`
 }
 
-// String implements fmt.Stringer interface.
+// String implements fmt.Stringer interface
 func (t TableName) String() string {
 	return fmt.Sprintf("%s.%s", t.Schema, t.Table)
 }

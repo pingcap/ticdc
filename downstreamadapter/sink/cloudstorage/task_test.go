@@ -16,9 +16,11 @@ package cloudstorage
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/stretchr/testify/require"
 )
 
@@ -47,4 +49,43 @@ func TestFlushMarkerWaitReturnsContextCause(t *testing.T) {
 	marker := newFlushMarker(100)
 	err := marker.wait(ctx)
 	require.ErrorIs(t, err, cause)
+}
+
+func TestReplacePostFlushCallbacksDetachesOriginalMessageCallbacks(t *testing.T) {
+	t.Parallel()
+
+	var originalCallbackCount atomic.Int32
+	var flushCallbackCount atomic.Int32
+	var enqueueCallbackCount atomic.Int32
+	task := &task{
+		callbacks: &txnCallbacks{
+			flushed: []func(){
+				func() {
+					flushCallbackCount.Add(1)
+				},
+			},
+			enqueued: []func(){
+				func() {
+					enqueueCallbackCount.Add(1)
+				},
+			},
+		},
+		encodedMsgs: []*common.Message{
+			{Callback: func() { originalCallbackCount.Add(1) }},
+			{Callback: func() { originalCallbackCount.Add(1) }},
+			{},
+		},
+	}
+
+	task.replacePostFlushCallbacks()
+
+	require.Nil(t, task.encodedMsgs[0].Callback)
+	require.Nil(t, task.encodedMsgs[1].Callback)
+	require.NotNil(t, task.encodedMsgs[2].Callback)
+
+	task.encodedMsgs[2].Callback()
+	task.encodedMsgs[2].Callback()
+	require.Equal(t, int32(0), originalCallbackCount.Load())
+	require.Equal(t, int32(1), flushCallbackCount.Load())
+	require.Equal(t, int32(1), enqueueCallbackCount.Load())
 }
