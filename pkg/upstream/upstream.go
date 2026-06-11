@@ -114,7 +114,7 @@ func CreateTiStore(ctx context.Context, urls string, credential *security.Creden
 
 	tiPath := fmt.Sprintf("tikv://%s?disableGC=true", urlv.HostString())
 	if kerneltype.IsNextGen() && keyspaceName != "" {
-		tiPath = "&keyspaceName=" + keyspaceName
+		tiPath += "&keyspaceName=" + keyspaceName
 	}
 	securityCfg := tikvconfig.Security{
 		ClusterSSLCA:    credential.CAPath,
