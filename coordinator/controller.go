@@ -505,6 +505,7 @@ func (c *Controller) handleBootstrapResponses(ctx context.Context, responses map
 	if recoveredStaleDrainTarget {
 		c.maybeBroadcastDispatcherDrainTarget(true)
 	}
+	c.bootstrapper.ClearBootstrapResponses()
 }
 
 // handleMaintainerStatus handle the status report from the maintainers
