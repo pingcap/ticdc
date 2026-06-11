@@ -23,7 +23,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/util"
-	"github.com/pingcap/tidb/br/pkg/storage"
+	"github.com/pingcap/tidb/pkg/objstore"
 )
 
 // Config is the config for redo log writer.
@@ -61,7 +61,7 @@ type Config struct {
 // NewConfig builds the runtime writer config from an adjusted ConsistentConfig.
 func NewConfig(changefeedID common.ChangeFeedID, consistentCfg *config.ConsistentConfig) (*Config, error) {
 	storageURI := util.GetOrZero(consistentCfg.Storage)
-	uri, err := storage.ParseRawURL(storageURI)
+	uri, err := objstore.ParseRawURL(storageURI)
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrStorageInitialize, err)
 	}

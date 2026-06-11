@@ -37,8 +37,9 @@ import (
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/util"
-	"github.com/pingcap/tidb/br/pkg/storage"
 	"github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/objstore/objectio"
+	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/parser/types"
@@ -386,6 +387,70 @@ func TestWriterPostEnqueueAfterConsume(t *testing.T) {
 	require.ErrorIs(t, <-done, context.Canceled)
 }
 
+func TestWriterPostFlushRunsPausedPostEnqueueBeforeLowWatermark(t *testing.T) {
+	t.Parallel()
+
+	changefeedID := commonType.NewChangefeedID4Test("test", t.Name())
+	spoolBuffer, err := spool.New(
+		changefeedID,
+		spool.WithDiskQuotaBytes(1000),
+		spool.WithRootDir(t.TempDir()),
+		spool.WithSegmentBytes(1<<20),
+		spool.WithMemoryRatio(0.99),
+		spool.WithHighWatermarkRatio(0.6),
+		spool.WithLowWatermarkRatio(0.3),
+	)
+	require.NoError(t, err)
+	defer spoolBuffer.Close()
+
+	var firstEnqueued atomic.Int64
+	firstMsg := common.NewMsg(nil, []byte(strings.Repeat("a", 500)))
+	firstEntry, err := spoolBuffer.Enqueue([]*common.Message{firstMsg}, func() {
+		firstEnqueued.Add(1)
+	})
+	require.NoError(t, err)
+	defer spoolBuffer.Release(firstEntry)
+	require.Equal(t, int64(1), firstEnqueued.Load())
+
+	var secondFlushed atomic.Int64
+	var secondEnqueued atomic.Int64
+	secondCallbacks := &txnCallbacks{
+		flushed: []func(){
+			func() {
+				secondFlushed.Add(1)
+			},
+		},
+		enqueued: []func(){
+			func() {
+				secondEnqueued.Add(1)
+			},
+		},
+	}
+	secondMsg := common.NewMsg(nil, []byte(strings.Repeat("b", 120)))
+	secondMsg.Callback = secondCallbacks.postFlush
+	secondEntry, err := spoolBuffer.Enqueue([]*common.Message{secondMsg}, secondCallbacks.postEnqueue)
+	require.NoError(t, err)
+	defer spoolBuffer.Release(secondEntry)
+	require.Equal(t, int64(0), secondEnqueued.Load())
+
+	payload, err := buildPayload(spoolBuffer, &tableBatch{entries: []*spool.Entry{secondEntry}})
+	require.NoError(t, err)
+	require.Len(t, payload.postFlushCallbacks, 1)
+
+	for _, postFlushCallback := range payload.postFlushCallbacks {
+		postFlushCallback()
+	}
+	for _, entry := range payload.entries {
+		spoolBuffer.Release(entry)
+	}
+
+	require.Equal(t, int64(1), secondFlushed.Load())
+	require.Equal(t, int64(1), secondEnqueued.Load())
+
+	spoolBuffer.Release(firstEntry)
+	require.Equal(t, int64(1), secondEnqueued.Load())
+}
+
 func TestWriterStoresPendingMessagesInSpoolBeforeFlush(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -479,7 +544,7 @@ func TestWriterStoresPendingMessagesInSpoolBeforeFlush(t *testing.T) {
 	require.ErrorIs(t, <-done, context.Canceled)
 }
 
-func TestDiscardPayloadDoesNotLoadSpilledPayload(t *testing.T) {
+func TestDiscardEntriesDoesNotLoadSpilledPayload(t *testing.T) {
 	ctx := context.Background()
 	dataDir := t.TempDir()
 
@@ -510,9 +575,7 @@ func TestDiscardPayloadDoesNotLoadSpilledPayload(t *testing.T) {
 
 	d.spool.Close()
 
-	d.discardPayload(&payload{
-		entries: []*spool.Entry{entry},
-	})
+	d.discardEntries([]*spool.Entry{entry})
 	require.Equal(t, int64(1), callbackCount.Load())
 }
 
@@ -540,36 +603,36 @@ func TestWriterRunExitAfterContextCancel(t *testing.T) {
 }
 
 type failOnIndexStorage struct {
-	storage.ExternalStorage
+	storeapi.Storage
 }
 
 type failOnCloseStorage struct {
-	storage.ExternalStorage
+	storeapi.Storage
 }
 
 type failOnCloseWriter struct {
-	storage.ExternalFileWriter
+	objectio.Writer
 }
 
 func (s *failOnIndexStorage) WriteFile(ctx context.Context, name string, data []byte) error {
 	if strings.HasSuffix(name, ".index") {
 		return errors.New("index write failed")
 	}
-	return s.ExternalStorage.WriteFile(ctx, name, data)
+	return s.Storage.WriteFile(ctx, name, data)
 }
 
 func (s *failOnCloseStorage) Create(
-	ctx context.Context, name string, option *storage.WriterOption,
-) (storage.ExternalFileWriter, error) {
-	writer, err := s.ExternalStorage.Create(ctx, name, option)
+	ctx context.Context, name string, option *storeapi.WriterOption,
+) (objectio.Writer, error) {
+	writer, err := s.Storage.Create(ctx, name, option)
 	if err != nil {
 		return nil, err
 	}
-	return &failOnCloseWriter{ExternalFileWriter: writer}, nil
+	return &failOnCloseWriter{Writer: writer}, nil
 }
 
 func (w *failOnCloseWriter) Close(ctx context.Context) error {
-	_ = w.ExternalFileWriter.Close(ctx)
+	_ = w.Writer.Close(ctx)
 	return errors.New("writer close failed")
 }
 
@@ -579,7 +642,7 @@ func TestWriterIndexWriteError(t *testing.T) {
 	uri := fmt.Sprintf("file:///%s?flush-interval=2s", parentDir)
 	baseStorage, err := util.GetExternalStorageWithDefaultTimeout(ctx, uri)
 	require.NoError(t, err)
-	storage := &failOnIndexStorage{ExternalStorage: baseStorage}
+	storage := &failOnIndexStorage{Storage: baseStorage}
 
 	sinkURI, err := url.Parse(uri)
 	require.NoError(t, err)
@@ -644,7 +707,7 @@ func TestWriterDataFileCloseError(t *testing.T) {
 	uri := fmt.Sprintf("file:///%s?flush-interval=2s", parentDir)
 	baseStorage, err := util.GetExternalStorageWithDefaultTimeout(ctx, uri)
 	require.NoError(t, err)
-	storage := &failOnCloseStorage{ExternalStorage: baseStorage}
+	storage := &failOnCloseStorage{Storage: baseStorage}
 
 	sinkURI, err := url.Parse(uri)
 	require.NoError(t, err)

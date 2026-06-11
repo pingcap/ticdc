@@ -29,8 +29,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/util"
-	"github.com/pingcap/tidb/br/pkg/storage"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/parser/types"
@@ -39,13 +39,13 @@ import (
 )
 
 type countFileExistsStorage struct {
-	storage.ExternalStorage
+	storeapi.Storage
 	fileExistsCount int
 }
 
 func (s *countFileExistsStorage) FileExists(ctx context.Context, name string) (bool, error) {
 	s.fileExistsCount++
-	return s.ExternalStorage.FileExists(ctx, name)
+	return s.Storage.FileExists(ctx, name)
 }
 
 func testFilePathGenerator(ctx context.Context, t *testing.T, dir string) *FilePathGenerator {
@@ -307,7 +307,7 @@ func TestGenerateDataFilePathResyncIndexFile(t *testing.T) {
 
 	// 3) f1 generates again after being scheduled back. It must reconcile with index file and
 	//    generate CDC_..._000006 instead of probing every existing data file one by one.
-	countStorage := &countFileExistsStorage{ExternalStorage: f1.storage}
+	countStorage := &countFileExistsStorage{Storage: f1.storage}
 	f1.storage = countStorage
 	dataFilePath, err = f1.GenerateDataFilePath(ctx, table, date)
 	require.NoError(t, err)

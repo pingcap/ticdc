@@ -24,7 +24,7 @@ import (
 
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/util"
-	"github.com/pingcap/tidb/br/pkg/storage"
+	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 )
 
 var (
@@ -191,7 +191,7 @@ func IsBlackholeStorage(scheme string) bool {
 }
 
 // InitExternalStorage init an external storage.
-var InitExternalStorage = func(ctx context.Context, uri url.URL) (storage.ExternalStorage, error) {
+var InitExternalStorage = func(ctx context.Context, uri url.URL) (storeapi.Storage, error) {
 	s, err := util.GetExternalStorageWithDefaultTimeout(ctx, uri.String())
 	if err != nil {
 		return nil, errors.WrapError(errors.ErrStorageInitialize, err,
@@ -200,7 +200,7 @@ var InitExternalStorage = func(ctx context.Context, uri url.URL) (storage.Extern
 	return s, nil
 }
 
-func initExternalStorageForTest(ctx context.Context, uri url.URL) (storage.ExternalStorage, error) {
+func initExternalStorageForTest(ctx context.Context, uri url.URL) (storeapi.Storage, error) {
 	if ConsistentStorage(uri.Scheme) == consistentStorageS3 && len(uri.Host) == 0 {
 		// TODO: this branch is compatible with previous s3 logic and will be removed
 		// in the future.
