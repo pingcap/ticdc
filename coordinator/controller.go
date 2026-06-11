@@ -502,13 +502,9 @@ func (c *Controller) handleBootstrapResponses(ctx context.Context, responses map
 	}
 	recoveredStaleDrainTarget := c.recoverStaleDispatcherDrainTargetFromBootstrap(responses)
 	c.finishBootstrap(ctx, runningCfs)
-<<<<<<< HEAD
-=======
 	if recoveredStaleDrainTarget {
 		c.maybeBroadcastDispatcherDrainTarget(true)
 	}
-	c.bootstrapper.ClearBootstrapResponses()
->>>>>>> e42d96d1c (api,coordinator: add drain API orchestration (#4762))
 }
 
 // handleMaintainerStatus handle the status report from the maintainers
