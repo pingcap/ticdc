@@ -27,6 +27,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/filter"
 	"github.com/pingcap/ticdc/pkg/integrity"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
@@ -63,6 +64,7 @@ type eventBroker struct {
 	eventStore  eventstore.EventStore
 	schemaStore schemastore.SchemaStore
 	mounter     event.Mounter
+	timezone    string
 	// msgSender is used to send the events to the dispatchers.
 	msgSender messaging.MessageSender
 	pdClock   pdutil.Clock
@@ -128,6 +130,7 @@ func newEventBroker(
 		eventStore:              eventStore,
 		pdClock:                 pdClock,
 		mounter:                 event.NewMounter(tz, integrity),
+		timezone:                tz.String(),
 		schemaStore:             schemaStore,
 		changefeedMap:           sync.Map{},
 		dispatchers:             sync.Map{},
@@ -925,7 +928,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 	span := info.GetTableSpan()
 	changefeedID := info.GetChangefeedID()
 
-	status := c.getOrSetChangefeedStatus(changefeedID)
+	status := c.getOrSetChangefeedStatus(info)
 	dispatcher := newDispatcherStat(info, uint64(len(c.taskChan)), uint64(len(c.messageCh)), nil, status)
 	dispatcherPtr := &atomic.Pointer[dispatcherStat]{}
 	dispatcherPtr.Store(dispatcher)
@@ -968,7 +971,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 		}
 		status.removeDispatcher(id)
 		if status.isEmpty() {
-			c.changefeedMap.Delete(changefeedID)
+			c.removeChangefeedStatus(status)
 		}
 		c.sendNotReusableEvent(node.ID(info.GetServerID()), dispatcher)
 		return nil
@@ -991,7 +994,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 		c.eventStore.UnregisterDispatcher(changefeedID, id)
 		status.removeDispatcher(id)
 		if status.isEmpty() {
-			c.changefeedMap.Delete(changefeedID)
+			c.removeChangefeedStatus(status)
 		}
 		return err
 	}
@@ -1040,8 +1043,7 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 		log.Info("All dispatchers for the changefeed are removed, remove the changefeed status",
 			zap.Stringer("changefeedID", changefeedID),
 		)
-		c.changefeedMap.Delete(changefeedID)
-		metrics.EventServiceAvailableMemoryQuotaGaugeVec.DeleteLabelValues(changefeedID.String())
+		c.removeChangefeedStatus(stat.changefeedStat)
 	}
 
 	c.eventStore.UnregisterDispatcher(changefeedID, id)
@@ -1058,6 +1060,19 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 		zap.Stringer("dispatcherID", id), zap.Int64("tableID", dispatcherInfo.GetTableSpan().GetTableID()),
 		zap.String("span", common.FormatTableSpan(dispatcherInfo.GetTableSpan())),
 	)
+}
+
+func (c *eventBroker) removeChangefeedStatus(status *changefeedStatus) {
+	changefeedID := status.changefeedID
+	// SharedFilterStorage is process-global. Only remove the cached filter after we
+	// successfully delete this exact changefeedStatus instance, otherwise a newer
+	// status for the same changefeed could still be using it.
+	if !c.changefeedMap.CompareAndDelete(changefeedID, status) {
+		return
+	}
+
+	filter.GetSharedFilterStorage().RemoveFilter(changefeedID)
+	metrics.EventServiceAvailableMemoryQuotaGaugeVec.DeleteLabelValues(changefeedID.String())
 }
 
 func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
@@ -1110,7 +1125,8 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 			return err
 		}
 	}
-	status := c.getOrSetChangefeedStatus(changefeedID)
+	status := c.getOrSetChangefeedStatus(dispatcherInfo)
+
 	newStat := newDispatcherStat(dispatcherInfo, uint64(len(c.taskChan)), uint64(len(c.messageCh)), tableInfo, status)
 	newStat.copyStatistics(oldStat)
 
@@ -1149,14 +1165,33 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 	return nil
 }
 
-func (c *eventBroker) getOrSetChangefeedStatus(changefeedID common.ChangeFeedID) *changefeedStatus {
-	stat, ok := c.changefeedMap.Load(changefeedID)
-	if !ok {
-		stat = newChangefeedStatus(changefeedID)
-		log.Info("new changefeed status", zap.Stringer("changefeedID", changefeedID))
-		c.changefeedMap.Store(changefeedID, stat)
+func (c *eventBroker) getOrSetChangefeedStatus(info DispatcherInfo) *changefeedStatus {
+	changefeedID := info.GetChangefeedID()
+	if stat, ok := c.changefeedMap.Load(changefeedID); ok {
+		return stat.(*changefeedStatus)
 	}
-	return stat.(*changefeedStatus)
+
+	// Filter config is changefeed scoped. In production, a config change must pause the
+	// changefeed first, which closes all related dispatchers and removes the old
+	// changefeedStatus before a new one is created. So within one changefeedStatus
+	// lifecycle we expect filter config and timezone to stay stable.
+	changefeedFilter, err := filter.GetSharedFilterStorage().GetOrSetFilter(
+		changefeedID, info.GetFilterConfig(), c.timezone)
+	if err != nil {
+		log.Panic("create filter failed",
+			zap.Stringer("changefeedID", changefeedID),
+			zap.Any("filterConfig", info.GetFilterConfig()),
+			zap.Error(err))
+	}
+
+	status := newChangefeedStatus(changefeedID)
+	status.filter = changefeedFilter
+	actual, loaded := c.changefeedMap.LoadOrStore(changefeedID, status)
+	if loaded {
+		return actual.(*changefeedStatus)
+	}
+	log.Info("new changefeed status", zap.Stringer("changefeedID", changefeedID))
+	return status
 }
 
 func (c *eventBroker) handleDispatcherHeartbeat(heartbeat *DispatcherHeartBeatWithServerID) {
