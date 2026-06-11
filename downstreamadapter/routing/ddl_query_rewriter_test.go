@@ -388,7 +388,7 @@ func TestResolveDDL(t *testing.T) {
 		require.NoError(t, err)
 
 		// Test rewriteDDLStmtTables
-		targetSQL, err := rewriteDDLStmtTables(stmts[0], ca.targetTableNames[0])
+		targetSQL, err := rewriteDDLStmtTables(stmts[0], ca.expectedTableNames[0], ca.targetTableNames[0])
 		require.NoError(t, err, "rewriteDDLStmtTables failed for: %s", ca.sql)
 		require.Equal(t, ca.targetSQLs[0], targetSQL, "rewriteDDLStmtTables failed for: %s", ca.sql)
 	}
@@ -415,28 +415,28 @@ func TestRewriteDDLStmtTablesError(t *testing.T) {
 	t.Run("non ddl statement", func(t *testing.T) {
 		stmts, _, err := p.Parse("SELECT 1", "", "")
 		require.NoError(t, err)
-		_, err = rewriteDDLStmtTables(stmts[0], []commonEvent.SchemaTableName{})
+		_, err = rewriteDDLStmtTables(stmts[0], nil, []commonEvent.SchemaTableName{})
 		require.True(t, errors.ErrTableRoutingFailed.Equal(err))
 	})
 
 	t.Run("unexpected target table count for alter database", func(t *testing.T) {
 		stmts, _, err := p.Parse("ALTER DATABASE `test` CHARACTER SET utf8mb4", "", "")
 		require.NoError(t, err)
-		_, err = rewriteDDLStmtTables(stmts[0], []commonEvent.SchemaTableName{{}, {}})
+		_, err = rewriteDDLStmtTables(stmts[0], extractTableNames(stmts[0]), []commonEvent.SchemaTableName{{}, {}})
 		require.True(t, errors.ErrTableRoutingFailed.Equal(err))
 	})
 
 	t.Run("too few target tables", func(t *testing.T) {
 		stmts, _, err := p.Parse("RENAME TABLE `db1`.`t1` TO `db2`.`t2`", "", "")
 		require.NoError(t, err)
-		_, err = rewriteDDLStmtTables(stmts[0], []commonEvent.SchemaTableName{{SchemaName: "db1", TableName: "t1"}})
+		_, err = rewriteDDLStmtTables(stmts[0], extractTableNames(stmts[0]), []commonEvent.SchemaTableName{{SchemaName: "db1", TableName: "t1"}})
 		require.True(t, errors.ErrTableRoutingFailed.Equal(err))
 	})
 
 	t.Run("too many target tables", func(t *testing.T) {
 		stmts, _, err := p.Parse("CREATE TABLE `t1` (id INT)", "", "")
 		require.NoError(t, err)
-		_, err = rewriteDDLStmtTables(stmts[0], []commonEvent.SchemaTableName{{}, {}, {}})
+		_, err = rewriteDDLStmtTables(stmts[0], extractTableNames(stmts[0]), []commonEvent.SchemaTableName{{}, {}, {}})
 		require.True(t, errors.ErrTableRoutingFailed.Equal(err))
 	})
 }
