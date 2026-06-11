@@ -206,6 +206,7 @@ func (c *Controller) AddNewTable(table commonEvent.Table, startTs uint64) {
 		tableSpans = c.splitter.Split(context.Background(), tableSpan, 0, split.SplitTypeRegionCount)
 	}
 	c.AddNewSpans(table.SchemaID, tableSpans, startTs, enableSplit)
+	log.Error("test")
 }
 
 // AddWorkingSpans adds working spans
