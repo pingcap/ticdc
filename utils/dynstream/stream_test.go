@@ -14,6 +14,7 @@
 package dynstream
 
 import (
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -205,4 +206,20 @@ func TestPathInfo(t *testing.T) {
 	require.Equal(t, 1, pi.area)
 	require.Equal(t, "test/path", pi.path)
 	require.Equal(t, int64(0), pi.pendingSize.Load())
+}
+
+func TestStreamEvictsOldestBatchMetricCacheEntry(t *testing.T) {
+	handler := mockHandler{}
+	stream := newStream(1, "test-batch-metric-cache-limit", &handler, Option{})
+
+	for i := range maxBatchMetricCacheEntries {
+		stream.getBatchMetricObservers(fmt.Sprintf("label-%d", i))
+	}
+	require.Len(t, stream.batchMetricCache, maxBatchMetricCacheEntries)
+	require.Contains(t, stream.batchMetricCache, "label-0")
+
+	stream.getBatchMetricObservers("new-label")
+	require.Len(t, stream.batchMetricCache, maxBatchMetricCacheEntries)
+	require.NotContains(t, stream.batchMetricCache, "label-0")
+	require.Contains(t, stream.batchMetricCache, "new-label")
 }

@@ -130,6 +130,7 @@ func downLoadAndSortFiles(ctx context.Context, cfg *readerConfig) ([]io.ReadClos
 	if err != nil {
 		return nil, err
 	}
+	defer extStorage.Close()
 	files, err := selectDownLoadFile(ctx, extStorage, cfg.fileType, cfg.startTs)
 	if err != nil {
 		return nil, err
@@ -243,11 +244,7 @@ func sortAndWriteFile(
 	fileName string, cfg *readerConfig,
 ) error {
 	sortedName := getSortedFileName(fileName)
-	writerCfg := &writer.LogWriterConfig{
-		Dir:               cfg.dir,
-		MaxLogSizeInBytes: math.MaxInt32,
-	}
-	w, err := file.NewFileWriter(egCtx, writerCfg, cfg.fileType, writer.WithLogFileName(func() string {
+	w, err := file.NewLocalFileWriter(cfg.dir, math.MaxInt32, cfg.fileType, writer.WithLogFileName(func() string {
 		return sortedName
 	}))
 	if err != nil {

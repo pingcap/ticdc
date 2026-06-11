@@ -113,8 +113,8 @@ type TableInfo struct {
 	} `json:"-"`
 }
 
-func (ti *TableInfo) InitPrivateFields() {
-	if ti == nil {
+func (ti *TableInfo) initPreSQLs() {
+	if ti == nil || ti.columnSchema == nil {
 		return
 	}
 
@@ -130,11 +130,52 @@ func (ti *TableInfo) InitPrivateFields() {
 		return
 	}
 
-	ti.preSQLs.m[preSQLInsert] = fmt.Sprintf(ti.columnSchema.PreSQLs[preSQLInsert], ti.TableName.QuoteString())
-	ti.preSQLs.m[preSQLReplace] = fmt.Sprintf(ti.columnSchema.PreSQLs[preSQLReplace], ti.TableName.QuoteString())
-	ti.preSQLs.m[preSQLUpdate] = fmt.Sprintf(ti.columnSchema.PreSQLs[preSQLUpdate], ti.TableName.QuoteString())
+	ti.preSQLs.m[preSQLInsert] = fmt.Sprintf(ti.columnSchema.PreSQLs[preSQLInsert], ti.TableName.QuoteTargetString())
+	ti.preSQLs.m[preSQLReplace] = fmt.Sprintf(ti.columnSchema.PreSQLs[preSQLReplace], ti.TableName.QuoteTargetString())
+	ti.preSQLs.m[preSQLUpdate] = fmt.Sprintf(ti.columnSchema.PreSQLs[preSQLUpdate], ti.TableName.QuoteTargetString())
 
 	ti.preSQLs.isInitialized.Store(true)
+}
+
+// CloneWithRouting creates a shallow copy of TableInfo with routing applied.
+// The new TableInfo shares the same columnSchema, View, Sequence pointers
+// but has its own TableName (with TargetSchema/TargetTable set) and uninitialized preSQLs.
+// This is safe because:
+// - columnSchema, View, Sequence are read-only after creation
+// - preSQLs will be initialized later via InitPrivateFields() using the new TableName
+// - TableName is a value type that gets copied
+func (ti *TableInfo) CloneWithRouting(targetSchema, targetTable string) *TableInfo {
+	if ti == nil {
+		return nil
+	}
+	// Create a new TableInfo with copied basic fields
+	cloned := &TableInfo{
+		TableName:        ti.TableName, // Value copy of TableName struct
+		Charset:          ti.Charset,
+		Collate:          ti.Collate,
+		Comment:          ti.Comment,
+		columnSchema:     ti.columnSchema, // Share the pointer (read-only)
+		HasPKOrNotNullUK: ti.HasPKOrNotNullUK,
+		View:             ti.View,     // Share the pointer (read-only)
+		Sequence:         ti.Sequence, // Share the pointer (read-only)
+		UpdateTS:         ti.UpdateTS,
+		// preSQLs is zero-initialized (uninitialized mutex/atomic, empty strings)
+	}
+	// Apply routing to the cloned TableName while keeping Schema/Table as source names.
+	cloned.TableName.TargetSchema = targetSchema
+	cloned.TableName.TargetTable = targetTable
+
+	// Increment refcount for the shared columnSchema and set finalizer to decrement
+	// when the clone is garbage collected. This prevents use-after-free if the
+	// original TableInfo is GC'd before the clone.
+	if ti.columnSchema != nil {
+		GetSharedColumnSchemaStorage().incColumnSchemaCount(ti.columnSchema)
+		runtime.SetFinalizer(cloned, func(ti *TableInfo) {
+			GetSharedColumnSchemaStorage().tryReleaseColumnSchema(ti.columnSchema)
+		})
+	}
+
+	return cloned
 }
 
 func (ti *TableInfo) Marshal() ([]byte, error) {
@@ -200,6 +241,9 @@ func (ti *TableInfo) ShadowCopyColumnSchema() *columnSchema {
 }
 
 func (ti *TableInfo) GetColumns() []*model.ColumnInfo {
+	if ti == nil || ti.columnSchema == nil {
+		return nil
+	}
 	return ti.columnSchema.Columns
 }
 
@@ -232,6 +276,7 @@ func (ti *TableInfo) GetUpdateTS() uint64 {
 }
 
 func (ti *TableInfo) GetPreInsertSQL() string {
+	ti.initPreSQLs()
 	if ti.preSQLs.m[preSQLInsert] == "" {
 		log.Panic("preSQLs[preSQLInsert] is not initialized")
 	}
@@ -239,6 +284,7 @@ func (ti *TableInfo) GetPreInsertSQL() string {
 }
 
 func (ti *TableInfo) GetPreReplaceSQL() string {
+	ti.initPreSQLs()
 	if ti.preSQLs.m[preSQLReplace] == "" {
 		log.Panic("preSQLs[preSQLReplace] is not initialized")
 	}
@@ -246,6 +292,7 @@ func (ti *TableInfo) GetPreReplaceSQL() string {
 }
 
 func (ti *TableInfo) GetPreUpdateSQL() string {
+	ti.initPreSQLs()
 	if ti.preSQLs.m[preSQLUpdate] == "" {
 		log.Panic("preSQLs[preSQLUpdate] is not initialized")
 	}
@@ -307,16 +354,16 @@ func (ti *TableInfo) MustGetColumnOffsetByID(id int64) int {
 
 // GetSchemaName returns the schema name of the table
 func (ti *TableInfo) GetSchemaName() string {
-	return ti.TableName.Schema
+	return ti.TableName.GetSchema()
 }
 
 // GetTableName returns the table name of the table
 func (ti *TableInfo) GetTableName() string {
-	return ti.TableName.Table
+	return ti.TableName.GetTable()
 }
 
 func (ti *TableInfo) GetTableNameCIStr() parser_model.CIStr {
-	return parser_model.NewCIStr(ti.TableName.Table)
+	return parser_model.NewCIStr(ti.GetTableName())
 }
 
 // GetSchemaNamePtr returns the pointer to the schema name of the table
@@ -332,6 +379,18 @@ func (ti *TableInfo) GetTableNamePtr() *string {
 // IsPartitionTable returns whether the table is partition table
 func (ti *TableInfo) IsPartitionTable() bool {
 	return ti.TableName.IsPartition
+}
+
+// GetTargetSchemaName returns the target schema name for routing.
+// If TargetSchema is empty, returns Schema.
+func (ti *TableInfo) GetTargetSchemaName() string {
+	return ti.TableName.GetTargetSchema()
+}
+
+// GetTargetTableName returns the target table name for routing.
+// If TargetTable is empty, returns Table.
+func (ti *TableInfo) GetTargetTableName() string {
+	return ti.TableName.GetTargetTable()
 }
 
 // IsView checks if TableInfo is a view.
@@ -599,7 +658,5 @@ func WrapTableInfo(schemaName string, info *model.TableInfo) *TableInfo {
 // do not call this method on the production code.
 func NewTableInfo4Decoder(schema string, tableInfo *model.TableInfo) *TableInfo {
 	cs := NewColumnSchema4Decoder(tableInfo)
-	result := newTableInfo(schema, tableInfo.Name.O, tableInfo.ID, tableInfo.GetPartitionInfo() != nil, cs, tableInfo)
-	result.InitPrivateFields()
-	return result
+	return newTableInfo(schema, tableInfo.Name.O, tableInfo.ID, tableInfo.GetPartitionInfo() != nil, cs, tableInfo)
 }

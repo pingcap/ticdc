@@ -302,6 +302,14 @@ func (s *SharedFilterStorage) GetOrSetFilter(
 	return f, nil
 }
 
+// RemoveFilter removes the cached filter for a changefeed from the shared storage.
+func (s *SharedFilterStorage) RemoveFilter(changeFeedID common.ChangeFeedID) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+
+	delete(s.m, changeFeedID)
+}
+
 // isFilterConfigEqual compares two FilterConfig for equality by content
 func isFilterConfigEqual(cfg1, cfg2 *eventpb.FilterConfig) bool {
 	// Fast path: if pointers are equal, configs are definitely equal

@@ -59,7 +59,7 @@ func (s *recordingSink) AddCheckpointTs(_ uint64) {
 func (s *recordingSink) SetTableSchemaStore(_ *commonEvent.TableSchemaStore) {
 }
 
-func (s *recordingSink) Close(_ bool) {
+func (s *recordingSink) Close() {
 }
 func (s *recordingSink) Run(_ context.Context) error { return nil }
 
