@@ -113,47 +113,6 @@ func isSplitable(tableInfo *model.TableInfo) bool {
 	return true
 }
 
-func getIndexIDs(job *model.Job) []int64 {
-	if job == nil {
-		return nil
-	}
-
-	// Anonymous index rewrite only needs IDs for ADD INDEX clauses, and it
-	// consumes them in SQL order. Other modify-index subjobs such as DROP INDEX,
-	// RENAME INDEX, or ADD PRIMARY KEY would shift that positional mapping and
-	// make the downstream rewrite pick the wrong upstream name.
-	if job.Type == model.ActionAddIndex {
-		return extractAddIndexIDs(job)
-	}
-
-	if job.MultiSchemaInfo == nil {
-		return nil
-	}
-
-	res := make([]int64, 0)
-	for idx, subJob := range job.MultiSchemaInfo.SubJobs {
-		if subJob.Type != model.ActionAddIndex {
-			continue
-		}
-		proxyJob := subJob.ToProxyJob(job, idx)
-		res = append(res, extractAddIndexIDs(&proxyJob)...)
-	}
-	return res
-}
-
-func extractAddIndexIDs(job *model.Job) []int64 {
-	idxArgs, err := model.GetModifyIndexArgs(job)
-	if idxArgs == nil || err != nil {
-		return nil
-	}
-
-	res := make([]int64, 0, len(idxArgs.IndexArgs))
-	for _, indexArg := range idxArgs.IndexArgs {
-		res = append(res, indexArg.IndexID)
-	}
-	return res
-}
-
 type tableSchemaExtractor struct {
 	schemas []string
 }
