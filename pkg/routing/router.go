@@ -214,12 +214,6 @@ func (r Router) ApplyToDDLEvent(ddl *commonEvent.DDLEvent) (*commonEvent.DDLEven
 		blockedTableNames = append([]commonEvent.SchemaTableName(nil), ddl.BlockedTableNames...)
 	}
 
-	log.Info("ddl query rewritten with routing",
-		zap.String("keyspace", r.changefeedID.Keyspace()),
-		zap.String("changefeed", r.changefeedID.Name()),
-		zap.String("originalQuery", ddl.Query),
-		zap.String("newQuery", newQuery))
-
 	return commonEvent.NewRoutedDDLEvent(
 		ddl,
 		newQuery,

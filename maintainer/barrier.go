@@ -485,11 +485,9 @@ func (b *Barrier) handleBlockState(changefeedID common.ChangeFeedID,
 			}
 		}
 
-		// Keep the blocked event when route precheck fails or waits. Some
-		// dispatchers may already have received ACKs for this WAITING phase.
-		// Deleting the event would lose that coverage; the unacked dispatcher
-		// will resend while route admission reports the error or waits for the
-		// earlier DDL transition that can make this event ready.
+		// Precheck as early as the table trigger dispatcher reports. If the route
+		// admission would conflict, we can fail fast without waiting for all
+		// dispatchers to reach this barrier.
 		if dispatcherID == b.spanController.GetDDLDispatcherID() {
 			ready, err := b.precheckRouteEvent(event)
 			if err != nil || !ready {
@@ -500,6 +498,9 @@ func (b *Barrier) handleBlockState(changefeedID common.ChangeFeedID,
 		// the block event, and check whether we need to send write action
 		event.markDispatcherEventDone(dispatcherID)
 		if event.allDispatcherReported() {
+			// Re-precheck when all dispatchers have reported. Between the DDL dispatcher's
+			// first report and now, an earlier route transition may have been applied
+			// (releasing the old owner), which can make this event pass a check it previously failed.
 			ready, err := b.precheckRouteEvent(event)
 			if err != nil || !ready {
 				return event, nil, "", false

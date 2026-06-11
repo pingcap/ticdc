@@ -129,10 +129,21 @@ func NewBlockEvent(cfID common.ChangeFeedID,
 
 	log.Info("new block event is created",
 		zap.String("changefeedID", cfID.Name()),
+		zap.String("dispatcher", dispatcherID.String()),
 		zap.Uint64("blockTs", event.commitTs),
 		zap.Bool("syncPoint", event.isSyncPoint),
-		zap.Any("detail", status),
-		zap.Int64("mode", event.mode))
+		zap.Bool("needSchedule", event.needSchedule),
+		zap.Int64("mode", event.mode),
+		zap.String("blockedType", status.BlockTables.GetInfluenceType().String()),
+		zap.Int("blockedTableCount", len(status.BlockTables.GetTableIDs())),
+		zap.Int64("blockedSchemaID", status.BlockTables.GetSchemaID()),
+		zap.String("dropType", status.NeedDroppedTables.GetInfluenceType().String()),
+		zap.Int("dropTableCount", len(status.NeedDroppedTables.GetTableIDs())),
+		zap.Int64("dropSchemaID", status.NeedDroppedTables.GetSchemaID()),
+		zap.Int("addTableCount", len(status.NeedAddedTables)),
+		zap.Int("schemaChangeCount", len(status.UpdatedSchemas)),
+		zap.Int("routeAdmissionCount", len(status.RouteTableAdmissions)),
+	)
 	return event
 }
 

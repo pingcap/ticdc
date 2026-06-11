@@ -207,11 +207,18 @@ func (InfluenceType) EnumDescriptor() ([]byte, []int) {
 	return fileDescriptor_6d584080fdadb670, []int{5}
 }
 
+// RouteTableAdmissionAction describes the name-level lifecycle change for one
+// source table under a table route rule. These actions are carried by the table
+// trigger dispatcher's block status so the maintainer can validate and apply
+// route ownership transitions in commit-ts order.
 type RouteTableAdmissionAction int32
 
 const (
-	RouteTableAdmissionAction_ADMIT          RouteTableAdmissionAction = 0
-	RouteTableAdmissionAction_RELEASE        RouteTableAdmissionAction = 1
+	// ADMIT claims a target name for this source name.
+	RouteTableAdmissionAction_ADMIT RouteTableAdmissionAction = 0
+	// RELEASE drops the claim for this exact source name.
+	RouteTableAdmissionAction_RELEASE RouteTableAdmissionAction = 1
+	// RELEASE_SCHEMA drops all source names under the given schema.
 	RouteTableAdmissionAction_RELEASE_SCHEMA RouteTableAdmissionAction = 2
 )
 
@@ -2799,6 +2806,7 @@ func (m *Table) GetSplitable() bool {
 	return false
 }
 
+// RouteTableAdmission describes one source route transition reported by dispatcher.
 type RouteTableAdmission struct {
 	SourceSchemaName string                    `protobuf:"bytes,1,opt,name=SourceSchemaName,proto3" json:"SourceSchemaName,omitempty"`
 	SourceTableName  string                    `protobuf:"bytes,2,opt,name=SourceTableName,proto3" json:"SourceTableName,omitempty"`
@@ -2936,14 +2944,17 @@ func (m *SchemaIDChange) GetNewSchemaID() int64 {
 }
 
 type State struct {
-	IsBlocked            bool                   `protobuf:"varint,1,opt,name=IsBlocked,proto3" json:"IsBlocked,omitempty"`
-	BlockTs              uint64                 `protobuf:"varint,2,opt,name=BlockTs,proto3" json:"BlockTs,omitempty"`
-	BlockTables          *InfluencedTables      `protobuf:"bytes,3,opt,name=BlockTables,proto3" json:"BlockTables,omitempty"`
-	NeedDroppedTables    *InfluencedTables      `protobuf:"bytes,4,opt,name=NeedDroppedTables,proto3" json:"NeedDroppedTables,omitempty"`
-	NeedAddedTables      []*Table               `protobuf:"bytes,5,rep,name=NeedAddedTables,proto3" json:"NeedAddedTables,omitempty"`
-	UpdatedSchemas       []*SchemaIDChange      `protobuf:"bytes,6,rep,name=UpdatedSchemas,proto3" json:"UpdatedSchemas,omitempty"`
-	IsSyncPoint          bool                   `protobuf:"varint,7,opt,name=IsSyncPoint,proto3" json:"IsSyncPoint,omitempty"`
-	Stage                BlockStage             `protobuf:"varint,8,opt,name=stage,proto3,enum=heartbeatpb.BlockStage" json:"stage,omitempty"`
+	IsBlocked         bool              `protobuf:"varint,1,opt,name=IsBlocked,proto3" json:"IsBlocked,omitempty"`
+	BlockTs           uint64            `protobuf:"varint,2,opt,name=BlockTs,proto3" json:"BlockTs,omitempty"`
+	BlockTables       *InfluencedTables `protobuf:"bytes,3,opt,name=BlockTables,proto3" json:"BlockTables,omitempty"`
+	NeedDroppedTables *InfluencedTables `protobuf:"bytes,4,opt,name=NeedDroppedTables,proto3" json:"NeedDroppedTables,omitempty"`
+	NeedAddedTables   []*Table          `protobuf:"bytes,5,rep,name=NeedAddedTables,proto3" json:"NeedAddedTables,omitempty"`
+	UpdatedSchemas    []*SchemaIDChange `protobuf:"bytes,6,rep,name=UpdatedSchemas,proto3" json:"UpdatedSchemas,omitempty"`
+	IsSyncPoint       bool              `protobuf:"varint,7,opt,name=IsSyncPoint,proto3" json:"IsSyncPoint,omitempty"`
+	Stage             BlockStage        `protobuf:"varint,8,opt,name=stage,proto3,enum=heartbeatpb.BlockStage" json:"stage,omitempty"`
+	// RouteTableAdmissions carries name-level source-to-target route transitions
+	// for this barrier event. Non-nil only when the table trigger dispatcher's
+	// DDL changes the upstream source name lifecycle (e.g. RENAME TABLE, DROP TABLE).
 	RouteTableAdmissions []*RouteTableAdmission `protobuf:"bytes,9,rep,name=RouteTableAdmissions,proto3" json:"RouteTableAdmissions,omitempty"`
 }
 

@@ -49,16 +49,13 @@ func (r *TargetTableRegistry) remove(source TableKey) {
 	delete(r.target2Source, target)
 }
 
-// ApplyTransition atomically applies source removals and source-to-target additions.
+// ApplyTransition validates and applies source removals and source-to-target
+// additions for one ordered table-info transition.
 //
-// The caller must describe one ordered table-info transition: every source name that
-// stops being replicated is listed in removes, and every source name that becomes
-// replicated is listed in adds. When a source name changes, the old source must be
-// removed before the new binding can claim its target.
-//
-// This method validates the transition before mutating the registry. Route
-// conflicts fail the whole transition. If mutate is false, this method only
-// validates the transition and leaves both indexes unchanged.
+// Validation is side-effect free: when mutate=false, only conflict checks run.
+// When mutate=true, both indexes are updated only after the full transition
+// passes validation, so partial failures never leave the registry in an
+// inconsistent state.
 func (r *TargetTableRegistry) ApplyTransition(removes []TableKey, adds []RouteBinding, mutate bool) error {
 	removeSet := make(map[TableKey]struct{}, len(removes))
 	for _, source := range removes {

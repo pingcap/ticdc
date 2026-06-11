@@ -14,9 +14,7 @@
 package routing
 
 import (
-	"cmp"
 	"slices"
-	"time"
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/common"
@@ -102,7 +100,6 @@ func NewAdmin(
 		return nil, err
 	}
 
-	start := time.Now()
 	activeRoutes := make(map[TableKey]RouteBinding, len(tables))
 	admin := &Admin{
 		changefeedID:       changefeedID,
@@ -127,13 +124,6 @@ func NewAdmin(
 		}
 		activeRoutes[binding.Source] = binding
 	}
-
-	// todo: this log may can be removed after test huge number of tables.
-	log.Info("route admin initialized",
-		zap.String("changefeed", changefeedID.Name()),
-		zap.Int("tableCount", len(tables)),
-		zap.Duration("duration", time.Since(start)))
-
 	return admin, nil
 }
 
@@ -148,26 +138,17 @@ func (a *Admin) Precheck(commitTs uint64, admissions []Admission) (bool, error) 
 		return true, nil
 	}
 	transition := a.getOrBuildPendingEvent(commitTs, admissions)
-	if !a.isPendingHead(commitTs) {
-		log.Info("route transition waits for earlier DDL",
-			zap.String("changefeed", a.changefeedID.Name()),
-			zap.Uint64("commitTs", commitTs))
+	if len(a.pendingQueue) == 0 || a.pendingQueue[0] != commitTs {
 		return false, nil
 	}
 	if transition.prechecked {
 		return true, nil
 	}
-	releases, admits, err := a.applyTransition(transition, false)
+	err := a.applyTransition(transition, false)
 	if err != nil {
 		return false, a.fail(err)
 	}
 	transition.prechecked = true
-	log.Info("route transition prechecked",
-		zap.String("changefeed", a.changefeedID.Name()),
-		zap.Uint64("commitTs", commitTs),
-		zap.Int("releases", len(releases)),
-		zap.Int("releaseSchemas", len(transition.releaseSchemas)),
-		zap.Int("admits", len(admits)))
 	return true, nil
 }
 
@@ -183,17 +164,18 @@ func (a *Admin) Apply(commitTs uint64, admissions []Admission) error {
 		}
 		transition = a.getOrBuildPendingEvent(commitTs, admissions)
 	}
-	releases, admits, err := a.applyTransition(transition, true)
+	if len(a.pendingQueue) == 0 || a.pendingQueue[0] != commitTs {
+		log.Panic("route pending queue head mismatch",
+			zap.String("changefeed", a.changefeedID.Name()),
+			zap.Uint64("expected", commitTs),
+			zap.Any("actual", a.pendingQueue))
+	}
+	err := a.applyTransition(transition, true)
 	if err != nil {
 		return a.fail(err)
 	}
-	a.popPendingHead(commitTs)
-	log.Info("route transition applied",
-		zap.String("changefeed", a.changefeedID.Name()),
-		zap.Uint64("commitTs", commitTs),
-		zap.Int("releases", len(releases)),
-		zap.Int("releaseSchemas", len(transition.releaseSchemas)),
-		zap.Int("admits", len(admits)))
+	a.pendingQueue = a.pendingQueue[1:]
+	delete(a.pendingTransitions, commitTs)
 	return nil
 }
 
@@ -215,21 +197,6 @@ func (a *Admin) getOrBuildPendingEvent(commitTs uint64, admissions []Admission) 
 	return transition
 }
 
-func (a *Admin) isPendingHead(commitTs uint64) bool {
-	return len(a.pendingQueue) > 0 && a.pendingQueue[0] == commitTs
-}
-
-func (a *Admin) popPendingHead(commitTs uint64) {
-	if len(a.pendingQueue) == 0 || a.pendingQueue[0] != commitTs {
-		log.Panic("route pending queue head mismatch",
-			zap.String("changefeed", a.changefeedID.Name()),
-			zap.Uint64("expected", commitTs),
-			zap.Any("actual", a.pendingQueue))
-	}
-	a.pendingQueue = a.pendingQueue[1:]
-	delete(a.pendingTransitions, commitTs)
-}
-
 func (a *Admin) buildTransition(admissions []Admission) *routeTransition {
 	transition := &routeTransition{}
 	for _, table := range admissions {
@@ -246,13 +213,13 @@ func (a *Admin) buildTransition(admissions []Admission) *routeTransition {
 	return transition
 }
 
-func (a *Admin) applyTransition(transition *routeTransition, mutate bool) ([]TableKey, []RouteBinding, error) {
+func (a *Admin) applyTransition(transition *routeTransition, mutate bool) error {
 	releases, admits := a.buildAdmissionChange(transition)
 	if err := a.registry.ApplyTransition(releases, admits, mutate); err != nil {
-		return nil, nil, err
+		return err
 	}
 	if !mutate {
-		return releases, admits, nil
+		return nil
 	}
 	for _, source := range releases {
 		delete(a.activeRoutes, source)
@@ -260,49 +227,23 @@ func (a *Admin) applyTransition(transition *routeTransition, mutate bool) ([]Tab
 	for _, admit := range admits {
 		a.activeRoutes[admit.Source] = admit
 	}
-	return releases, admits, nil
+	return nil
 }
 
+// buildAdmissionChange resolves the transition into release and admit slices ready
+// for registry validation. ReleaseSchema actions are expanded into
+// individual per-table releases for every active source under the given schema.
 func (a *Admin) buildAdmissionChange(transition *routeTransition) ([]TableKey, []RouteBinding) {
-	releases := make([]TableKey, 0, len(transition.releases))
+	releases := append([]TableKey(nil), transition.releases...)
 	admits := transition.admits
-	releaseSet := make(map[TableKey]struct{}, len(transition.releases))
-	for _, source := range transition.releases {
-		if _, ok := releaseSet[source]; ok {
-			continue
-		}
-		releaseSet[source] = struct{}{}
-		releases = append(releases, source)
-	}
 	for _, schema := range transition.releaseSchemas {
 		for source := range a.activeRoutes {
-			if source.Schema != schema {
-				continue
+			if source.Schema == schema {
+				releases = append(releases, source)
 			}
-			if _, ok := releaseSet[source]; ok {
-				continue
-			}
-			releaseSet[source] = struct{}{}
-			releases = append(releases, source)
 		}
 	}
-	slices.SortFunc(releases, compareTableKey)
-	slices.SortFunc(admits, compareRouteBinding)
 	return releases, admits
-}
-
-func compareTableKey(a, b TableKey) int {
-	if n := cmp.Compare(a.Schema, b.Schema); n != 0 {
-		return n
-	}
-	return cmp.Compare(a.Table, b.Table)
-}
-
-func compareRouteBinding(a, b RouteBinding) int {
-	if n := compareTableKey(a.Source, b.Source); n != 0 {
-		return n
-	}
-	return compareTableKey(a.Target, b.Target)
 }
 
 func (a *Admin) fail(err error) error {

@@ -920,14 +920,18 @@ func cloneInfluencedTablesPB(
 
 // routeTableAdmissionsForBlockState attaches name-level table route transitions
 // to a block state so maintainer routeAdmin can update its route registry.
+//
+// Only the table trigger dispatcher reports these admissions, because DDLs
+// with TableNameChange (populated by the event builder for RENAME TABLE,
+// DROP TABLE, etc.) are written to the table-trigger DDL history.
+// TableNameChange carries the AddName / DropName / DropDatabaseName that
+// describe the upstream name lifecycle change.
 func (d *BasicDispatcher) routeTableAdmissionsForBlockState(event commonEvent.BlockEvent) []*heartbeatpb.RouteTableAdmission {
 	router := d.sharedInfo.GetRouter()
 	if !router.HasTableRoute() {
 		return nil
 	}
 
-	// DDLs with TableNameChange are written to the table-trigger DDL history, so
-	// the table trigger dispatcher can be the single owner that reports route admissions.
 	if !d.IsTableTriggerDispatcher() {
 		return nil
 	}
