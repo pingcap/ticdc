@@ -84,9 +84,6 @@ func New(
 	if err != nil {
 		return nil, err
 	}
-<<<<<<< HEAD
-	return NewMySQLSink(ctx, changefeedID, cfg, db, config.BDRMode), nil
-=======
 
 	// Expose whether the MySQL-compatible downstream is confirmed to be TiDB, so
 	// dashboards can display "tidb" when we can prove it. Otherwise, the
@@ -99,8 +96,7 @@ func New(
 		metrics.ChangefeedDownstreamIsTiDBGauge.DeleteLabelValues(keyspace, name)
 	}
 
-	return NewMySQLSink(ctx, changefeedID, cfg, db, config.BDRMode, config.EnableActiveActive, config.ActiveActiveProgressInterval), nil
->>>>>>> 6cd60248a (metrics,grafana: show changefeed downstream type (#4251))
+	return NewMySQLSink(ctx, changefeedID, cfg, db, config.BDRMode), nil
 }
 
 func NewMySQLSink(
