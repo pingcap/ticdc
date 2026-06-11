@@ -592,6 +592,7 @@ func buildPersistedDDLEventForCreateView(args buildPersistedDDLEventFuncArgs) Pe
 	event := buildPersistedDDLEventCommon(args)
 	event.SchemaName = getSchemaName(args.databaseMap, event.SchemaID)
 	event.TableName = args.job.TableName
+	normalizeCreateViewQueryWithStoredSelect(&event)
 	return event
 }
 
@@ -603,6 +604,65 @@ func buildPersistedDDLEventForDropView(args buildPersistedDDLEventFuncArgs) Pers
 	// The query in job maybe "DROP VIEW test1.view1, test2.view2", we need rebuild it here.
 	event.Query = fmt.Sprintf("DROP VIEW %s", common.QuoteSchema(event.SchemaName, event.TableName))
 	return event
+}
+
+// TiDB persists the normalized SELECT body of a view in
+// event.TableInfo.View.SelectStmt when executing CREATE VIEW, so this field can
+// carry fully resolved source-table references even if job.Query keeps the
+// original session-level text.
+// Field definition:
+// https://github.com/pingcap/tidb/blob/8f2630e53d5d/pkg/meta/model/table.go#L762-L770
+// Value assignment in CREATE VIEW:
+// https://github.com/pingcap/tidb/blob/8f2630e53d5d/pkg/ddl/create_table.go#L1668-L1678
+func normalizeCreateViewQueryWithStoredSelect(event *PersistedDDLEvent) {
+	if event.Query == "" || event.TableInfo == nil || event.TableInfo.View == nil || event.TableInfo.View.SelectStmt == "" {
+		return
+	}
+
+	stmt, err := parser.New().ParseOneStmt(event.Query, "", "")
+	if err != nil {
+		log.Warn("parse create view query failed when normalizing select statement",
+			zap.String("query", event.Query),
+			zap.Error(err))
+		return
+	}
+	createViewStmt, ok := stmt.(*ast.CreateViewStmt)
+	if !ok {
+		return
+	}
+
+	selectStmt, err := parser.New().ParseOneStmt(event.TableInfo.View.SelectStmt, "", "")
+	if err != nil {
+		log.Warn("parse stored create view select statement failed",
+			zap.String("selectStmt", event.TableInfo.View.SelectStmt),
+			zap.String("query", event.Query),
+			zap.Error(err))
+		return
+	}
+	// Keep the original CREATE VIEW text when the stored SELECT only qualifies tables in the view's own schema.
+	if createViewSelectUsesCurrentSchemaOnly(selectStmt, event.SchemaName) {
+		return
+	}
+
+	createViewStmt.Select = selectStmt
+	normalizedQuery, err := restoreDDLStmt(createViewStmt)
+	if err != nil {
+		log.Warn("restore normalized create view query failed",
+			zap.String("query", event.Query),
+			zap.String("selectStmt", event.TableInfo.View.SelectStmt),
+			zap.Error(err))
+		return
+	}
+	event.Query = normalizedQuery
+}
+
+func createViewSelectUsesCurrentSchemaOnly(selectStmt ast.StmtNode, currentSchema string) bool {
+	for _, schema := range extractTableSchemas(selectStmt) {
+		if schema != "" && !strings.EqualFold(schema, currentSchema) {
+			return false
+		}
+	}
+	return true
 }
 
 func buildPersistedDDLEventForCreateTable(args buildPersistedDDLEventFuncArgs) PersistedDDLEvent {
