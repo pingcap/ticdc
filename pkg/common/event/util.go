@@ -34,6 +34,7 @@ import (
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/pingcap/tidb/pkg/parser/format"
 	parser_model "github.com/pingcap/tidb/pkg/parser/model"
+
 	// NOTE: Do not remove the `test_driver` import.
 	// For details, refer to: https://github.com/pingcap/parser/issues/43
 	_ "github.com/pingcap/tidb/pkg/parser/test_driver"
@@ -105,8 +106,14 @@ func (s *EventTestHelper) ApplyJob(job *timodel.Job) {
 		}
 	}
 
-	info := common.WrapTableInfo(job.SchemaName, tableInfo)
-	info.InitPrivateFields()
+	s.storeTableInfo(job.SchemaName, tableInfo)
+}
+
+func (s *EventTestHelper) storeTableInfo(schemaName string, tableInfo *timodel.TableInfo) {
+	info := common.WrapTableInfo(schemaName, tableInfo)
+	if info == nil {
+		return
+	}
 	key := toTableInfosKey(info.GetSchemaName(), info.GetTableName())
 	if tableInfo.Partition != nil {
 		if _, ok := s.partitionIDs[key]; !ok {
