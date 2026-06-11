@@ -207,12 +207,10 @@ func TestPathInfo(t *testing.T) {
 	require.Equal(t, "test/path", pi.path)
 	require.Equal(t, int64(0), pi.pendingSize.Load())
 }
-<<<<<<< HEAD
-=======
 
 func TestStreamEvictsOldestBatchMetricCacheEntry(t *testing.T) {
 	handler := mockHandler{}
-	stream := newStream(1, "test-batch-metric-cache-limit", &handler, Option{}, newTestBatchConfigRegistry())
+	stream := newStream(1, "test-batch-metric-cache-limit", &handler, Option{})
 
 	for i := range maxBatchMetricCacheEntries {
 		stream.getBatchMetricObservers(fmt.Sprintf("label-%d", i))
@@ -225,31 +223,3 @@ func TestStreamEvictsOldestBatchMetricCacheEntry(t *testing.T) {
 	require.NotContains(t, stream.batchMetricCache, "label-0")
 	require.Contains(t, stream.batchMetricCache, "new-label")
 }
-
-func TestStreamCleansBatcherBufferAfterHandle(t *testing.T) {
-	handler := mockHandler{}
-	stream := newStream(1, "test", &handler, Option{UseBuffer: false}, newTestBatchConfigRegistry())
-
-	stream.start()
-
-	path := newPathInfo[int, string, *mockEvent, any, *mockHandler](1, "test", "test/path", nil)
-	stream.addPath(path)
-
-	var wg sync.WaitGroup
-	stream.addEvent(eventWrap[int, string, *mockEvent, any, *mockHandler]{
-		pathInfo: path,
-		event:    newMockEvent(1, path.path, 0, nil, nil, &wg),
-	})
-
-	wg.Wait()
-	stream.close()
-
-	if cap(stream.batcher.buf) == 0 {
-		return
-	}
-	backing := stream.batcher.buf[:cap(stream.batcher.buf)]
-	for _, event := range backing {
-		require.Nil(t, event)
-	}
-}
->>>>>>> 70724ec69 ( *: reduce CPU overhead on hot paths (#5108))
