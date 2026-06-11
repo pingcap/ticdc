@@ -654,8 +654,6 @@ type maintainNode struct {
 	wg      sync.WaitGroup
 }
 
-<<<<<<< HEAD
-=======
 func (d *maintainNode) stop() {
 	d.cancel()
 	d.wg.Wait()
@@ -671,7 +669,6 @@ func newMaintainerNodeForTest(t *testing.T) (*node.Info, net.Listener) {
 	return node.NewInfo(lis.Addr().String(), ""), lis
 }
 
->>>>>>> 0bbe316c6 (orchestrator: clear stale capture tombstones on re-register (#4696))
 func startMaintainerNode(ctx context.Context,
 	node *node.Info, mc messaging.MessageCenter,
 	nodeManager *watcher.NodeManager,
