@@ -62,19 +62,8 @@ func (m *mockEventDispatcher) GetChangefeedID() common.ChangeFeedID {
 	return m.changefeedID
 }
 
-<<<<<<< HEAD
-=======
-func (m *mockEventDispatcher) GetEventCollectorBatchConfig() (batchCount int, batchBytes int) {
-	return m.eventCollectorBatchCount, m.eventCollectorBatchBytes
-}
-
->>>>>>> 6abbf2fca (eventcollector: clarify dispatcher session state transitions (#5022))
 func (m *mockEventDispatcher) GetTableSpan() *heartbeatpb.TableSpan {
 	return m.tableSpan
-}
-
-func (m *mockEventDispatcher) GetRouter() routing.Router {
-	return routing.Router{}
 }
 
 func (m *mockEventDispatcher) GetTimezone() string {
@@ -268,7 +257,7 @@ func TestNewCongestionControlMessagesSendZeroAvailable(t *testing.T) {
 
 	stat := c.getDispatcherStatByID(dispatcherID)
 	require.NotNil(t, stat)
-	stat.session.connState.setEventServiceID(remoteID)
+	markSessionReceiving(stat.session, remoteID)
 
 	handshake := commonEvent.NewHandshakeEvent(dispatcherID, 99, 0, nil)
 	from := remoteID

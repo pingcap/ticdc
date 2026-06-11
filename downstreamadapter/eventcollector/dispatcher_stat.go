@@ -432,13 +432,35 @@ func (d *dispatcherStat) handleSingleDataEvents(events []dispatcher.DispatcherEv
 	}
 	if events[0].GetType() == commonEvent.TypeDDLEvent {
 		ddl := events[0].Event.(*commonEvent.DDLEvent)
-		d.tableInfoVersion.Store(ddl.FinishedTs)
-		if ddl.TableInfo != nil {
-			d.tableInfo.Store(ddl.TableInfo)
-		}
+		d.updateTableInfoByDDL(ddl)
 	}
 	d.updateCommitTsStateByEvents(state, events)
 	return d.target.HandleEvents(events, func() { d.wake() })
+}
+
+// updateTableInfoByDDL advances the table schema version and refreshes cached
+// table info only when the DDL belongs to this dispatcher's table.
+func (d *dispatcherStat) updateTableInfoByDDL(ddl *commonEvent.DDLEvent) {
+	tableSpan := d.target.GetTableSpan()
+	if tableSpan == nil || tableSpan.TableID == common.DDLSpanTableID {
+		return
+	}
+
+	d.tableInfoVersion.Store(ddl.FinishedTs)
+	if ddl.TableInfo == nil {
+		return
+	}
+
+	expectedTableID := tableSpan.TableID
+	current := d.tableInfo.Load()
+	if current != nil {
+		expectedTableID = current.(*common.TableInfo).TableName.TableID
+	}
+	if ddl.TableInfo.TableName.TableID != expectedTableID {
+		return
+	}
+
+	d.tableInfo.Store(ddl.TableInfo)
 }
 
 func (d *dispatcherStat) handleDataEvents(events ...dispatcher.DispatcherEvent) bool {

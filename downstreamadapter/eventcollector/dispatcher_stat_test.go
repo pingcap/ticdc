@@ -44,6 +44,7 @@ type mockDispatcher struct {
 	handleEvents func(events []dispatcher.DispatcherEvent, wakeCallback func()) (block bool)
 	events       []dispatcher.DispatcherEvent
 	checkPointTs uint64
+	tableSpan    *heartbeatpb.TableSpan
 
 	skipSyncpointAtStartTs bool
 }
@@ -88,13 +89,12 @@ func (m *mockDispatcher) GetEventCollectorBatchConfig() (batchCount int, batchBy
 }
 
 func (m *mockDispatcher) GetTableSpan() *heartbeatpb.TableSpan {
+	if m.tableSpan != nil {
+		return m.tableSpan
+	}
 	return &heartbeatpb.TableSpan{
 		TableID: 1,
 	}
-}
-
-func (m *mockDispatcher) GetRouter() routing.Router {
-	return routing.Router{}
 }
 
 func (m *mockDispatcher) GetBDRMode() bool {
@@ -1671,8 +1671,6 @@ func TestRegisterTo(t *testing.T) {
 		}
 	})
 }
-<<<<<<< HEAD
-=======
 
 func TestRegisterAndRemoveRequestOrder(t *testing.T) {
 	localServerID := node.ID("local-server")
@@ -2010,4 +2008,3 @@ func readRemoveTargets(t *testing.T, collector *EventCollector, count int) []nod
 	}
 	return targets
 }
->>>>>>> 6abbf2fca (eventcollector: clarify dispatcher session state transitions (#5022))
