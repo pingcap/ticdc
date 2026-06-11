@@ -997,7 +997,6 @@ func TestRewriteDDLQueryWithRoutingSupportsParserBackedDDLTypes(t *testing.T) {
 	require.GreaterOrEqual(t, len(cases), 39)
 
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			require.Equal(t, byte(tc.action), tc.ddl.Type)
 
