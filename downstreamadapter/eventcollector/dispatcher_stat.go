@@ -493,12 +493,6 @@ func (d *dispatcherStat) handleSingleDataEvents(events []dispatcher.DispatcherEv
 	}
 	if events[0].GetType() == commonEvent.TypeDDLEvent {
 		ddl := events[0].Event.(*commonEvent.DDLEvent)
-<<<<<<< HEAD
-		d.tableInfoVersion.Store(ddl.FinishedTs)
-		if ddl.TableInfo != nil {
-			d.tableInfo.Store(ddl.TableInfo)
-		}
-=======
 		ddl, err := d.target.GetRouter().ApplyToDDLEvent(ddl)
 		if err != nil {
 			log.Error("failed to apply routing to DDL event",
@@ -512,7 +506,6 @@ func (d *dispatcherStat) handleSingleDataEvents(events []dispatcher.DispatcherEv
 		}
 		events[0].Event = ddl
 		d.updateTableInfoByDDL(ddl)
->>>>>>> 21f52e04a (mysql,sqlmodel: support table route in mysql sink (#5006))
 	}
 	d.updateCommitTsStateByEvents(events)
 	return d.target.HandleEvents(events, func() { d.wake() })

@@ -289,8 +289,6 @@ func (b *BatchDMLEvent) AssembleRows(tableInfo *common.TableInfo) {
 	}
 	if tableInfo == nil {
 		log.Panic("DMLEvent: TableInfo is nil")
-<<<<<<< HEAD
-=======
 	}
 
 	// For local events (same node), rows are already set.
@@ -302,7 +300,6 @@ func (b *BatchDMLEvent) AssembleRows(tableInfo *common.TableInfo) {
 		for _, dml := range b.DMLEvents {
 			dml.TableInfo = tableInfo
 		}
->>>>>>> 21f52e04a (mysql,sqlmodel: support table route in mysql sink (#5006))
 		return
 	}
 
@@ -311,11 +308,6 @@ func (b *BatchDMLEvent) AssembleRows(tableInfo *common.TableInfo) {
 		return
 	}
 
-<<<<<<< HEAD
-	if b.TableInfo != nil && b.TableInfo.GetUpdateTS() != tableInfo.GetUpdateTS() {
-		log.Panic("DMLEvent: TableInfoVersion mismatch", zap.Uint64("dmlEventTableInfoVersion", b.TableInfo.GetUpdateTS()), zap.Uint64("tableInfoVersion", tableInfo.GetUpdateTS()))
-		return
-=======
 	if b.TableInfo != nil {
 		originVersion := b.TableInfo.GetUpdateTS()
 		version := tableInfo.GetUpdateTS()
@@ -324,7 +316,6 @@ func (b *BatchDMLEvent) AssembleRows(tableInfo *common.TableInfo) {
 				zap.Uint64("originTableVersion", originVersion),
 				zap.Uint64("tableVersion", version))
 		}
->>>>>>> 21f52e04a (mysql,sqlmodel: support table route in mysql sink (#5006))
 	}
 	decoder := chunk.NewCodec(tableInfo.GetFieldSlice())
 	b.Rows, _ = decoder.Decode(b.RawRows)

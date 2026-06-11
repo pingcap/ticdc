@@ -1468,8 +1468,6 @@ func TestRegisterTo(t *testing.T) {
 		}
 	})
 }
-<<<<<<< HEAD
-=======
 
 func TestHandleDDLEventTableInfoUpdate(t *testing.T) {
 	helper := commonEvent.NewEventTestHelper(t)
@@ -1489,8 +1487,6 @@ func TestHandleDDLEventTableInfoUpdate(t *testing.T) {
 	}
 
 	stat := newDispatcherStat(mockDisp, newTestEventCollector(localServerID), nil)
-	stat.session.connState.setEventServiceID(remoteServerID)
-	stat.currentEpoch.Store(newDispatcherEpochState(10, 1, stat.target.GetStartTs()))
 	stat.lastEventCommitTs.Store(50)
 
 	tableDDL.Epoch = 10
@@ -1517,4 +1513,3 @@ func TestHandleDDLEventTableInfoUpdate(t *testing.T) {
 	require.Len(t, mockDisp.events, 2)
 	require.Same(t, viewDDL, mockDisp.events[1].Event)
 }
->>>>>>> 21f52e04a (mysql,sqlmodel: support table route in mysql sink (#5006))

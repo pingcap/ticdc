@@ -479,8 +479,6 @@ func (t *DDLEvent) IsPaused() bool {
 	return false
 }
 
-<<<<<<< HEAD
-=======
 // NewRoutedDDLEvent builds a routed DDL event from the origin event and final routed fields.
 func NewRoutedDDLEvent(
 	d *DDLEvent,
@@ -556,7 +554,6 @@ func clonePostTxnFlushed(postTxnFlushed []func()) []func() {
 	return cloned
 }
 
->>>>>>> 21f52e04a (mysql,sqlmodel: support table route in mysql sink (#5006))
 func (t *DDLEvent) Len() int32 {
 	return 1
 }

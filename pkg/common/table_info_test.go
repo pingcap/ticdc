@@ -24,8 +24,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-<<<<<<< HEAD
-=======
 func TestCloneWithRouting(t *testing.T) {
 	t.Parallel()
 
@@ -97,7 +95,6 @@ func TestCloneWithRouting(t *testing.T) {
 	})
 }
 
->>>>>>> 21f52e04a (mysql,sqlmodel: support table route in mysql sink (#5006))
 func TestUnmarshalJSONToTableInfoInvalidData(t *testing.T) {
 	t.Parallel()
 

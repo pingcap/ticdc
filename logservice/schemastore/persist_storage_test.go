@@ -3793,8 +3793,6 @@ func TestBuildPersistedDDLEventForCreateTableLikeSetsReferTableID(t *testing.T) 
 	require.Equal(t, int64(101), ddl.ExtraTableID)
 }
 
-<<<<<<< HEAD
-=======
 func TestBuildPersistedDDLEventForCreateTableLikeUsesInvolvingReferSchema(t *testing.T) {
 	job := buildCreateTableJobForTest(100, 200, "t", 1010)
 	job.Query = "CREATE TABLE `dst_db`.`t` LIKE `t`"
@@ -3858,7 +3856,6 @@ func TestBuildPersistedDDLEventForCreateTableLikeKeepsOriginalQueryInSameSchema(
 	}
 }
 
->>>>>>> 21f52e04a (mysql,sqlmodel: support table route in mysql sink (#5006))
 func TestBuildDDLEventForNewTableDDL_CreateTableLikeBlockedTables(t *testing.T) {
 	rawEvent := &PersistedDDLEvent{
 		Type:         byte(model.ActionCreateTable),

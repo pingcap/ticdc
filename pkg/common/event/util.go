@@ -33,6 +33,7 @@ import (
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/format"
 	parser_model "github.com/pingcap/tidb/pkg/parser/model"
+
 	// NOTE: Do not remove the `test_driver` import.
 	// For details, refer to: https://github.com/pingcap/parser/issues/43
 	_ "github.com/pingcap/tidb/pkg/parser/test_driver"
@@ -213,8 +214,6 @@ func (s *EventTestHelper) DDL2Event(ddl string) *DDLEvent {
 		StartTs:    job.StartTS,
 		FinishedTs: job.BinlogInfo.FinishedTS,
 	}
-<<<<<<< HEAD
-=======
 	s.fillDDLEventMetadata(ddlEvent, job)
 	return ddlEvent
 }
@@ -468,7 +467,6 @@ func wrapMultipleTableInfos(schemaName string, tableInfos []*timodel.TableInfo) 
 		wrapped = append(wrapped, common.WrapTableInfo(schemaName, tableInfo))
 	}
 	return wrapped
->>>>>>> 21f52e04a (mysql,sqlmodel: support table route in mysql sink (#5006))
 }
 
 func (s *EventTestHelper) DML2BatchEvent(schema, table string, dmls ...string) *BatchDMLEvent {
