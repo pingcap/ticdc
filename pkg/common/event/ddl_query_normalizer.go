@@ -19,6 +19,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/pingcap/tidb/pkg/parser/ast"
+	"github.com/pingcap/tidb/pkg/parser/model"
 )
 
 // NormalizeCreateViewQueryWithStoredSelect replaces the SELECT body in a
@@ -125,7 +126,7 @@ func (n *createViewSelectNormalizer) qualifyColumnName(c *ast.ColumnName) {
 	if !ok {
 		return
 	}
-	c.Schema = ast.NewCIStr(schema)
+	c.Schema = model.NewCIStr(schema)
 	n.changed = true
 }
 
