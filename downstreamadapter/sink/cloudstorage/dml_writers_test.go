@@ -268,7 +268,6 @@ func verifyCloudStorageWriteEventsWithoutDateSeparator(
 	require.Nil(t, err)
 	require.Equal(t, fmt.Sprintf("CDC_%s_000002.csv\n", dispatcherID.String()), string(content))
 	require.Equal(t, 2*uint64(batch), atomic.LoadUint64(&cnt))
-
 }
 
 func TestSubmitTaskToEncoderExitOnContextCancel(t *testing.T) {
