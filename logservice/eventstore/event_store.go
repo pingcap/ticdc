@@ -118,13 +118,7 @@ type dispatcherStat struct {
 
 	resolvedTs atomic.Uint64
 	// the max ts of events which is not needed by this dispatcher
-<<<<<<< HEAD
-	checkpointTs uint64
-=======
 	checkpointTs atomic.Uint64
-	// keyspaceID for encryption (0 means default/classic)
-	keyspaceID uint32
->>>>>>> 99b6a5236 (eventstore: fix checkpoint update race (#5019))
 	// the difference between `subStat`, `pendingSubStat` and `removingSubStat`:
 	//   1) if there is no existing subscriptions which can be reused,
 	//      or there is a existing subscription with exact span match,
@@ -507,11 +501,6 @@ func (e *eventStore) RegisterDispatcher(
 	stat := &dispatcherStat{
 		dispatcherID: dispatcherID,
 		tableSpan:    dispatcherSpan,
-<<<<<<< HEAD
-		checkpointTs: startTs,
-=======
-		keyspaceID:   dispatcherSpan.KeyspaceID,
->>>>>>> 99b6a5236 (eventstore: fix checkpoint update race (#5019))
 	}
 	stat.checkpointTs.Store(startTs)
 	stat.resolvedTs.Store(startTs)
