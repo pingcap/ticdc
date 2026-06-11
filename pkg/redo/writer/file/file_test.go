@@ -241,9 +241,6 @@ func TestNewWriter(t *testing.T) {
 
 	controller := gomock.NewController(t)
 	mockStorage := mockstorage.NewMockExternalStorage(controller)
-	mockStorage.EXPECT().WriteFile(gomock.Any(), "cp_abcd_test_ddl_0_const-uuid.log",
-		gomock.Any()).Return(nil).Times(1)
-	mockStorage.EXPECT().Close().Times(1)
 
 	changefeed := common.NewChangeFeedIDWithDisplayName(common.ChangeFeedDisplayName{
 		Keyspace: "abcd",
@@ -261,6 +258,7 @@ func TestNewWriter(t *testing.T) {
 		expectedLogFileName(ddlWriterCfg, redo.RedoDDLLogFileType, 0, "const-uuid"),
 		gomock.Any(),
 	).Return(nil).Times(1)
+	mockStorage.EXPECT().Close().Times(1)
 	w = &Writer{
 		logType:   redo.RedoDDLLogFileType,
 		cfg:       ddlWriterCfg,
@@ -312,12 +310,6 @@ func TestRotateFileWithFileAllocator(t *testing.T) {
 	controller := gomock.NewController(t)
 	mockStorage := mockstorage.NewMockExternalStorage(controller)
 
-	mockStorage.EXPECT().WriteFile(gomock.Any(), "cp_abcd_test_row_0_uuid-1.log",
-		gomock.Any()).Return(nil).Times(1)
-	mockStorage.EXPECT().WriteFile(gomock.Any(), "cp_abcd_test_row_100_uuid-2.log",
-		gomock.Any()).Return(nil).Times(1)
-	mockStorage.EXPECT().Close().Times(1)
-
 	dir := t.TempDir()
 	uuidGen := uuid.NewMock()
 	uuidGen.Push("uuid-1")
@@ -346,6 +338,7 @@ func TestRotateFileWithFileAllocator(t *testing.T) {
 		expectedLogFileName(rowWriterCfg, redo.RedoRowLogFileType, 100, "uuid-2"),
 		gomock.Any(),
 	).Return(nil).Times(1)
+	mockStorage.EXPECT().Close().Times(1)
 	w := &Writer{
 		logType:   redo.RedoRowLogFileType,
 		cfg:       rowWriterCfg,
@@ -384,12 +377,6 @@ func TestRotateFileWithoutFileAllocator(t *testing.T) {
 	controller := gomock.NewController(t)
 	mockStorage := mockstorage.NewMockExternalStorage(controller)
 
-	mockStorage.EXPECT().WriteFile(gomock.Any(), "cp_abcd_test_ddl_0_uuid-2.log",
-		gomock.Any()).Return(nil).Times(1)
-	mockStorage.EXPECT().WriteFile(gomock.Any(), "cp_abcd_test_ddl_100_uuid-4.log",
-		gomock.Any()).Return(nil).Times(1)
-	mockStorage.EXPECT().Close().Times(1)
-
 	dir := t.TempDir()
 	uuidGen := uuid.NewMock()
 	uuidGen.Push("uuid-1")
@@ -419,6 +406,7 @@ func TestRotateFileWithoutFileAllocator(t *testing.T) {
 		expectedLogFileName(ddlWriterCfg, redo.RedoDDLLogFileType, 100, "uuid-4"),
 		gomock.Any(),
 	).Return(nil).Times(1)
+	mockStorage.EXPECT().Close().Times(1)
 	w := &Writer{
 		logType:   redo.RedoDDLLogFileType,
 		cfg:       ddlWriterCfg,
