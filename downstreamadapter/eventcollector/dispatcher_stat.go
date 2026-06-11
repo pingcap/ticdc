@@ -20,6 +20,7 @@ import (
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/ticdc/pkg/logger"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -124,10 +125,6 @@ func (d *dispatcherStat) run() {
 	d.session.registerTo(d.eventCollector.getLocalServerID())
 }
 
-func (d *dispatcherStat) clear() {
-	d.session.clear()
-}
-
 // registerTo register the dispatcher to the specified event service.
 func (d *dispatcherStat) registerTo(serverID node.ID) {
 	d.session.registerTo(serverID)
@@ -138,8 +135,8 @@ func (d *dispatcherStat) commitReady(serverID node.ID) {
 	d.session.commitReady(serverID)
 }
 
-// reset is used to reset the dispatcher to the specified commitTs,
-// it will remove the dispatcher from the dynamic stream and add it back.
+// reset sends a RESET request to the specified EventService using the current
+// checkpoint ts, advancing the dispatcher epoch.
 func (d *dispatcherStat) reset(serverID node.ID) {
 	d.session.reset(serverID)
 }
@@ -161,11 +158,6 @@ func (d *dispatcherStat) advanceEpochForReset(resetTs uint64) uint64 {
 // remove is used to remove the dispatcher from the event service.
 func (d *dispatcherStat) remove() {
 	d.session.remove()
-}
-
-// removeFrom is used to remove the dispatcher from the specified event service.
-func (d *dispatcherStat) removeFrom(serverID node.ID) {
-	d.session.removeFrom(serverID)
 }
 
 func (d *dispatcherStat) wake() {
@@ -190,19 +182,22 @@ func (d *dispatcherStat) verifyEventSequence(event dispatcher.DispatcherEvent, s
 		return false
 	}
 
+	debugEnabled := logger.IsDebugEnabled()
 	switch event.GetType() {
 	case commonEvent.TypeDMLEvent,
 		commonEvent.TypeDDLEvent,
 		commonEvent.TypeHandshakeEvent,
 		commonEvent.TypeSyncPointEvent,
 		commonEvent.TypeResolvedEvent:
-		log.Debug("check event sequence",
-			zap.Stringer("changefeedID", d.target.GetChangefeedID()),
-			zap.Stringer("dispatcher", d.getDispatcherID()),
-			zap.String("eventType", commonEvent.TypeToString(event.GetType())),
-			zap.Uint64("receivedSeq", event.GetSeq()),
-			zap.Uint64("lastEventSeq", state.lastEventSeq.Load()),
-			zap.Uint64("commitTs", event.GetCommitTs()))
+		if debugEnabled {
+			log.Debug("check event sequence",
+				zap.Stringer("changefeedID", d.target.GetChangefeedID()),
+				zap.Stringer("dispatcher", d.getDispatcherID()),
+				zap.String("eventType", commonEvent.TypeToString(event.GetType())),
+				zap.Uint64("receivedSeq", event.GetSeq()),
+				zap.Uint64("lastEventSeq", state.lastEventSeq.Load()),
+				zap.Uint64("commitTs", event.GetCommitTs()))
+		}
 
 		lastEventSeq := state.lastEventSeq.Load()
 		expectedSeq := uint64(0)
@@ -229,12 +224,14 @@ func (d *dispatcherStat) verifyEventSequence(event dispatcher.DispatcherEvent, s
 		}
 	case commonEvent.TypeBatchDMLEvent:
 		for _, e := range event.Event.(*commonEvent.BatchDMLEvent).DMLEvents {
-			log.Debug("check batch DML event sequence",
-				zap.Stringer("changefeedID", d.target.GetChangefeedID()),
-				zap.Stringer("dispatcher", d.getDispatcherID()),
-				zap.Uint64("receivedSeq", e.Seq),
-				zap.Uint64("lastEventSeq", state.lastEventSeq.Load()),
-				zap.Uint64("commitTs", e.CommitTs))
+			if debugEnabled {
+				log.Debug("check batch DML event sequence",
+					zap.Stringer("changefeedID", d.target.GetChangefeedID()),
+					zap.Stringer("dispatcher", d.getDispatcherID()),
+					zap.Uint64("receivedSeq", e.Seq),
+					zap.Uint64("lastEventSeq", state.lastEventSeq.Load()),
+					zap.Uint64("commitTs", e.CommitTs))
+			}
 
 			expectedSeq := state.lastEventSeq.Add(1)
 			if e.Seq != expectedSeq {
@@ -282,6 +279,7 @@ func (d *dispatcherStat) shouldForwardEventByCommitTs(event dispatcher.Dispatche
 			zap.Uint64("sentCommitTs", d.lastEventCommitTs.Load()))
 		return false
 	}
+
 	return true
 }
 
@@ -352,11 +350,13 @@ func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEve
 	state := d.loadCurrentEpochState()
 	for _, event := range events {
 		if !d.isFromCurrentEpoch(event, state) {
-			log.Debug("receive DML/Resolved event from a stale epoch, ignore it",
-				zap.Stringer("changefeedID", d.target.GetChangefeedID()),
-				zap.Stringer("dispatcher", d.getDispatcherID()),
-				zap.String("eventType", commonEvent.TypeToString(event.GetType())),
-				zap.Any("event", event.Event))
+			if logger.IsDebugEnabled() {
+				log.Debug("receive DML/Resolved event from a stale epoch, ignore it",
+					zap.Stringer("changefeedID", d.target.GetChangefeedID()),
+					zap.Stringer("dispatcher", d.getDispatcherID()),
+					zap.String("eventType", commonEvent.TypeToString(event.GetType())),
+					zap.Any("event", event.Event))
+			}
 			continue
 		}
 		if !d.verifyEventSequence(event, state) {
@@ -404,12 +404,11 @@ func (d *dispatcherStat) handleBatchDataEvents(events []dispatcher.DispatcherEve
 	return d.target.HandleEvents(validEvents, func() { d.wake() })
 }
 
-// handleSingleDataEvents processes single DDL, SyncPoint or BatchDML events with the following algorithm:
+// handleSingleDataEvents processes a single DDL or SyncPoint event with the following algorithm:
 // 1. Validate event count (must be exactly 1)
 // 2. Check if event comes from current epoch
 // 3. Verify event sequence number
 // 4. Process event based on type:
-//   - BatchDML: Split into individual DML events
 //   - DDL: Update table info if present
 //   - SyncPoint: Forward directly
 //
@@ -532,10 +531,12 @@ func (d *dispatcherStat) handleDropEvent(event dispatcher.DispatcherEvent) {
 
 	state := d.loadCurrentEpochState()
 	if !d.isFromCurrentEpoch(event, state) {
-		log.Debug("receive a drop event from a stale epoch, ignore it",
-			zap.Stringer("changefeedID", d.target.GetChangefeedID()),
-			zap.Stringer("dispatcher", d.getDispatcherID()),
-			zap.Any("event", event.Event))
+		if logger.IsDebugEnabled() {
+			log.Debug("receive a drop event from a stale epoch, ignore it",
+				zap.Stringer("changefeedID", d.target.GetChangefeedID()),
+				zap.Stringer("dispatcher", d.getDispatcherID()),
+				zap.Any("event", event.Event))
+		}
 		return
 	}
 
@@ -613,16 +614,4 @@ func (d *dispatcherStat) isCurrentEventService(serverID node.ID) bool {
 
 func (d *dispatcherStat) isReceivingDataEvent() bool {
 	return d.session.isReceivingDataEvent()
-}
-
-func (d *dispatcherStat) newDispatcherRegisterRequest(serverId string, onlyReuse bool) *messaging.DispatcherRequest {
-	return d.session.newDispatcherRegisterRequest(serverId, onlyReuse)
-}
-
-func (d *dispatcherStat) newDispatcherResetRequest(serverId string, resetTs uint64, epoch uint64) *messaging.DispatcherRequest {
-	return d.session.newDispatcherResetRequest(serverId, resetTs, epoch)
-}
-
-func (d *dispatcherStat) newDispatcherRemoveRequest(serverId string) *messaging.DispatcherRequest {
-	return d.session.newDispatcherRemoveRequest(serverId)
 }

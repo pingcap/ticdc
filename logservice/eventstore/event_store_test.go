@@ -104,6 +104,15 @@ func newEventStoreForTest(path string) (logpuller.SubscriptionClient, EventStore
 	return subClient, store
 }
 
+func requireEventIterator(
+	t testing.TB, store EventStore, dispatcherID common.DispatcherID, dataRange common.DataRange,
+) EventIterator {
+	t.Helper()
+	iter, err := store.GetIterator(dispatcherID, dataRange)
+	require.NoError(t, err)
+	return iter
+}
+
 func setDataSharingForTest(t *testing.T, enable bool) func() {
 	t.Helper()
 	originalCfg := config.GetGlobalServerConfig().Clone()
@@ -669,6 +678,65 @@ func TestEventStoreUpdateCheckpointTs(t *testing.T) {
 	}
 }
 
+func TestEventStoreUpdateCheckpointTsConcurrentStaleUpdates(t *testing.T) {
+	restoreCfg := setDataSharingForTest(t, true)
+	defer restoreCfg()
+
+	_, store := newEventStoreForTest(t.TempDir())
+	es := store.(*eventStore)
+	defer func() {
+		require.NoError(t, es.Close(context.Background()))
+	}()
+
+	dispatcherID1 := common.NewDispatcherID()
+	dispatcherID2 := common.NewDispatcherID()
+	tableID := int64(1)
+	cfID := common.NewChangefeedID4Test("default", "test-cf")
+	span := &heartbeatpb.TableSpan{
+		TableID:  tableID,
+		StartKey: []byte("a"),
+		EndKey:   []byte("h"),
+	}
+
+	require.True(t, store.RegisterDispatcher(cfID, dispatcherID1, span, 100, func(uint64, uint64) {}, false, false))
+	require.True(t, store.RegisterDispatcher(cfID, dispatcherID2, span, 100, func(uint64, uint64) {}, false, false))
+
+	es.dispatcherMeta.RLock()
+	stat1 := es.dispatcherMeta.dispatcherStats[dispatcherID1]
+	stat2 := es.dispatcherMeta.dispatcherStats[dispatcherID2]
+	require.NotNil(t, stat1)
+	require.NotNil(t, stat2)
+	subStat := stat1.subStat
+	require.NotNil(t, subStat)
+	require.True(t, subStat == stat2.subStat)
+	es.dispatcherMeta.RUnlock()
+
+	store.UpdateDispatcherCheckpointTs(dispatcherID1, 900)
+	store.UpdateDispatcherCheckpointTs(dispatcherID2, 900)
+	require.Equal(t, uint64(100), subStat.checkpointTs.Load())
+
+	const staleUpdateCount = 64
+	startCh := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(staleUpdateCount)
+	for i := range staleUpdateCount {
+		staleCheckpointTs := uint64(150 + i)
+		go func(checkpointTs uint64) {
+			defer wg.Done()
+			<-startCh
+			store.UpdateDispatcherCheckpointTs(dispatcherID1, checkpointTs)
+		}(staleCheckpointTs)
+	}
+	close(startCh)
+	wg.Wait()
+
+	require.Equal(t, uint64(900), stat1.checkpointTs.Load())
+
+	subStat.resolvedTs.Store(900)
+	store.UpdateDispatcherCheckpointTs(dispatcherID2, 900)
+	require.Equal(t, uint64(900), subStat.checkpointTs.Load())
+}
+
 func TestEventStoreSwitchSubStat(t *testing.T) {
 	restoreCfg := setDataSharingForTest(t, true)
 	defer restoreCfg()
@@ -685,6 +753,22 @@ func TestEventStoreSwitchSubStat(t *testing.T) {
 		subStat := subStats[subID]
 		require.NotNil(t, subStat)
 		subStat.resolvedTs.Store(ts)
+	}
+	getIterator := func() {
+		iter, err := store.GetIterator(dispatcherID2, common.DataRange{
+			Span: &heartbeatpb.TableSpan{
+				TableID:  tableID,
+				StartKey: []byte("b"),
+				EndKey:   []byte("h"),
+			},
+			CommitTsStart: 100,
+			CommitTsEnd:   150,
+		})
+		require.NoError(t, err)
+		if iter != nil {
+			_, err = iter.Close()
+			require.NoError(t, err)
+		}
 	}
 	// ============ prepare two subscriptions ============
 	// add a dispatcher to create an subscription
@@ -718,33 +802,23 @@ func TestEventStoreSwitchSubStat(t *testing.T) {
 	// case 1: dispatcher 2 use data from subStat 1
 	updateSubStatResolvedTs(1, 200)
 	{
-		iter := store.GetIterator(dispatcherID2, common.DataRange{
-			Span: &heartbeatpb.TableSpan{
-				TableID:  tableID,
-				StartKey: []byte("b"),
-				EndKey:   []byte("h"),
-			},
-			CommitTsStart: 100,
-			CommitTsEnd:   150,
-		})
-		iterImpl := iter.(*eventStoreIter)
-		require.True(t, iterImpl.needCheckSpan)
+		getIterator()
+		dispatcherStat := store.(*eventStore).dispatcherMeta.dispatcherStats[dispatcherID2]
+		require.NotNil(t, dispatcherStat)
+		require.Equal(t, logpuller.SubscriptionID(1), dispatcherStat.subStat.subID)
+		require.Equal(t, logpuller.SubscriptionID(2), dispatcherStat.pendingSubStat.subID)
+		require.Nil(t, dispatcherStat.removingSubStat)
 	}
 
 	// case 2: subStat 2 is ready, dispatcher 2 read data from subStat 2 and stop listen subStat 1
 	updateSubStatResolvedTs(2, 200)
 	{
-		iter := store.GetIterator(dispatcherID2, common.DataRange{
-			Span: &heartbeatpb.TableSpan{
-				TableID:  tableID,
-				StartKey: []byte("b"),
-				EndKey:   []byte("h"),
-			},
-			CommitTsStart: 100,
-			CommitTsEnd:   150,
-		})
-		iterImpl := iter.(*eventStoreIter)
-		require.False(t, iterImpl.needCheckSpan)
+		getIterator()
+		dispatcherStat := store.(*eventStore).dispatcherMeta.dispatcherStats[dispatcherID2]
+		require.NotNil(t, dispatcherStat)
+		require.Equal(t, logpuller.SubscriptionID(2), dispatcherStat.subStat.subID)
+		require.Nil(t, dispatcherStat.pendingSubStat)
+		require.Equal(t, logpuller.SubscriptionID(1), dispatcherStat.removingSubStat.subID)
 	}
 	// check dispatcher 2 is no longer receive event from subStat 1
 	{
@@ -762,7 +836,7 @@ func TestEventStoreSwitchSubStat(t *testing.T) {
 	// case 3: subStat 1 advance quicker than subStat 2, dispatcher 2 can still read data from subStat 1
 	updateSubStatResolvedTs(1, 220)
 	{
-		iter := store.GetIterator(dispatcherID2, common.DataRange{
+		iter, err := store.GetIterator(dispatcherID2, common.DataRange{
 			Span: &heartbeatpb.TableSpan{
 				TableID:  tableID,
 				StartKey: []byte("b"),
@@ -771,8 +845,11 @@ func TestEventStoreSwitchSubStat(t *testing.T) {
 			CommitTsStart: 100,
 			CommitTsEnd:   220,
 		})
-		iterImpl := iter.(*eventStoreIter)
-		require.True(t, iterImpl.needCheckSpan)
+		require.NoError(t, err)
+		if iter != nil {
+			_, err = iter.Close()
+			require.NoError(t, err)
+		}
 	}
 	{
 		subStats := store.(*eventStore).dispatcherMeta.tableStats[tableID]
@@ -796,7 +873,7 @@ func TestEventStoreSwitchSubStat(t *testing.T) {
 	// dispatcher 2 read data from subStat 2 and totally remove itself from the subsriber list of subStat 1
 	updateSubStatResolvedTs(2, 220)
 	{
-		iter := store.GetIterator(dispatcherID2, common.DataRange{
+		iter, err := store.GetIterator(dispatcherID2, common.DataRange{
 			Span: &heartbeatpb.TableSpan{
 				TableID:  tableID,
 				StartKey: []byte("b"),
@@ -805,8 +882,11 @@ func TestEventStoreSwitchSubStat(t *testing.T) {
 			CommitTsStart: 100,
 			CommitTsEnd:   220,
 		})
-		iterImpl := iter.(*eventStoreIter)
-		require.False(t, iterImpl.needCheckSpan)
+		require.NoError(t, err)
+		if iter != nil {
+			_, err = iter.Close()
+			require.NoError(t, err)
+		}
 	}
 	{
 		subStats := store.(*eventStore).dispatcherMeta.tableStats[tableID]
@@ -1135,7 +1215,7 @@ func TestEventStoreGetIteratorConcurrently(t *testing.T) {
 					CommitTsStart: startTs,
 					CommitTsEnd:   lastCommitTs + 1,
 				}
-				iter := store.GetIterator(dispatcherID, dataRange)
+				iter := requireEventIterator(t, store, dispatcherID, dataRange)
 				require.NotNil(t, iter, "iterator should not be nil")
 
 				var receivedEvents []*common.RawKVEntry
@@ -1227,8 +1307,8 @@ func TestEventStoreIter_NextWithFiltering(t *testing.T) {
 	var tableID int64 = 42
 	iteratorSpan := &heartbeatpb.TableSpan{
 		TableID:  tableID,
-		StartKey: []byte("keyB"),
-		EndKey:   []byte("keyD"),
+		StartKey: common.ToComparableKey([]byte("keyB")),
+		EndKey:   common.ToComparableKey([]byte("keyD")),
 	}
 
 	// This test now focuses on a single, more comprehensive scenario.

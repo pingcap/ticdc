@@ -35,7 +35,6 @@ import (
 )
 
 const (
-	// defaultConflictDetectorSlots indicates the default slot count of conflict detector. TODO:check this
 	defaultConflictDetectorSlots uint64 = 16 * 1024
 )
 

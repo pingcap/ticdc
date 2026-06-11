@@ -27,6 +27,7 @@ import (
 
 	"github.com/cockroachdb/pebble"
 	"github.com/klauspost/compress/zstd"
+	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/logservice/logpuller"
@@ -34,6 +35,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/logger"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -87,8 +89,8 @@ type EventStore interface {
 
 	UpdateDispatcherCheckpointTs(dispatcherID common.DispatcherID, checkpointTs uint64)
 
-	// GetIterator return an iterator which scan the data in ts range (dataRange.CommitTsStart, dataRange.CommitTsEnd]
-	GetIterator(dispatcherID common.DispatcherID, dataRange common.DataRange) EventIterator
+	// GetIterator returns an iterator which scans data in ts range (dataRange.CommitTsStart, dataRange.CommitTsEnd].
+	GetIterator(dispatcherID common.DispatcherID, dataRange common.DataRange) (EventIterator, error)
 
 	GetLogCoordinatorNodeID() node.ID
 }
@@ -104,7 +106,8 @@ type EventIterator interface {
 	Next() (*common.RawKVEntry, bool)
 
 	// Close closes the iterator.
-	// It returns the number of events that are read from the iterator.
+	// It returns the number of events that are read from the iterator and any
+	// accumulated iterator error.
 	Close() (eventCnt int64, err error)
 }
 
@@ -115,7 +118,7 @@ type dispatcherStat struct {
 
 	resolvedTs atomic.Uint64
 	// the max ts of events which is not needed by this dispatcher
-	checkpointTs uint64
+	checkpointTs atomic.Uint64
 	// the difference between `subStat`, `pendingSubStat` and `removingSubStat`:
 	//   1) if there is no existing subscriptions which can be reused,
 	//      or there is a existing subscription with exact span match,
@@ -498,8 +501,8 @@ func (e *eventStore) RegisterDispatcher(
 	stat := &dispatcherStat{
 		dispatcherID: dispatcherID,
 		tableSpan:    dispatcherSpan,
-		checkpointTs: startTs,
 	}
+	stat.checkpointTs.Store(startTs)
 	stat.resolvedTs.Store(startTs)
 
 	wrappedNotifier := func(resolvedTs uint64, latestCommitTs uint64) {
@@ -710,7 +713,9 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 	if !ok {
 		return
 	}
-	dispatcherStat.checkpointTs = checkpointTs
+	if !util.CompareAndIncrease(&dispatcherStat.checkpointTs, checkpointTs) {
+		return
+	}
 
 	updateSubStatCheckpoint := func(subStat *subscriptionStat) {
 		if subStat == nil {
@@ -730,8 +735,9 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 				continue
 			}
 
-			if newCheckpointTs == 0 || dispatcherStat.checkpointTs < newCheckpointTs {
-				newCheckpointTs = dispatcherStat.checkpointTs
+			dispatcherCheckpointTs := dispatcherStat.checkpointTs.Load()
+			if newCheckpointTs == 0 || dispatcherCheckpointTs < newCheckpointTs {
+				newCheckpointTs = dispatcherCheckpointTs
 			}
 		}
 
@@ -744,21 +750,21 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 		if newCheckpointTs == 0 {
 			return
 		}
-		oldCheckpointTs := subStat.checkpointTs.Load()
-		if newCheckpointTs == oldCheckpointTs {
-			return
-		}
-		if newCheckpointTs < oldCheckpointTs {
-			log.Panic("should not happen",
-				zap.Uint64("newCheckpointTs", newCheckpointTs),
-				zap.Uint64("oldCheckpointTs", oldCheckpointTs))
-		}
-		// If there is no dml event after old checkpoint ts, then there is no data to be deleted.
-		// So we can skip adding gc item.
-		lastReceiveDMLTime := subStat.lastReceiveDMLTime.Load()
-		if lastReceiveDMLTime > 0 {
-			oldCheckpointPhysicalTime := oracle.GetTimeFromTS(oldCheckpointTs)
-			if lastReceiveDMLTime >= oldCheckpointPhysicalTime.UnixMilli() {
+		for {
+			oldCheckpointTs := subStat.checkpointTs.Load()
+			if newCheckpointTs == oldCheckpointTs {
+				return
+			}
+			if newCheckpointTs < oldCheckpointTs {
+				return
+			}
+			if !subStat.checkpointTs.CompareAndSwap(oldCheckpointTs, newCheckpointTs) {
+				continue
+			}
+			// If there is no dml event after old checkpoint ts, then there is no data to be deleted.
+			// So we can skip adding gc item.
+			maxEventCommitTs := subStat.maxEventCommitTs.Load()
+			if maxEventCommitTs != 0 && maxEventCommitTs >= oldCheckpointTs {
 				e.gcManager.addGCItem(
 					subStat.dbIndex,
 					uint64(subStat.subID),
@@ -767,21 +773,21 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 					newCheckpointTs,
 				)
 			}
-		}
-		e.subscriptionChangeCh.In() <- SubscriptionChange{
-			ChangeType:   SubscriptionChangeTypeUpdate,
-			SubID:        uint64(subStat.subID),
-			Span:         subStat.tableSpan,
-			CheckpointTs: newCheckpointTs,
-			ResolvedTs:   subStat.resolvedTs.Load(),
-		}
-		subStat.checkpointTs.Store(newCheckpointTs)
-		if log.GetLevel() <= zap.DebugLevel {
-			log.Debug("update checkpoint ts",
-				zap.Any("dispatcherID", dispatcherID),
-				zap.Uint64("subscriptionID", uint64(subStat.subID)),
-				zap.Uint64("newCheckpointTs", newCheckpointTs),
-				zap.Uint64("oldCheckpointTs", oldCheckpointTs))
+			e.subscriptionChangeCh.In() <- SubscriptionChange{
+				ChangeType:   SubscriptionChangeTypeUpdate,
+				SubID:        uint64(subStat.subID),
+				Span:         subStat.tableSpan,
+				CheckpointTs: newCheckpointTs,
+				ResolvedTs:   subStat.resolvedTs.Load(),
+			}
+			if logger.IsDebugEnabled() {
+				log.Debug("update checkpoint ts",
+					zap.Stringer("dispatcherID", dispatcherID),
+					zap.Uint64("subscriptionID", uint64(subStat.subID)),
+					zap.Uint64("newCheckpointTs", newCheckpointTs),
+					zap.Uint64("oldCheckpointTs", oldCheckpointTs))
+			}
+			return
 		}
 	}
 	updateSubStatCheckpoint(dispatcherStat.subStat)
@@ -789,9 +795,9 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 	updateSubStatCheckpoint(dispatcherStat.removingSubStat)
 }
 
-func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange common.DataRange) EventIterator {
+func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange common.DataRange) (EventIterator, error) {
 	if e.closed.Load() {
-		return nil
+		return nil, nil
 	}
 
 	e.dispatcherMeta.RLock()
@@ -799,7 +805,7 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 	if !ok {
 		log.Warn("fail to find dispatcher", zap.Stringer("dispatcherID", dispatcherID))
 		e.dispatcherMeta.RUnlock()
-		return nil
+		return nil, nil
 	}
 
 	tryGetDB := func(subStat *subscriptionStat, force bool) *pebble.DB {
@@ -917,17 +923,31 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 		start = encodeTxnCommitTsBoundaryKey(uint64(subStat.subID), stat.tableSpan.TableID, dataRange.CommitTsStart+1)
 	}
 	end := encodeTxnCommitTsBoundaryKey(uint64(subStat.subID), stat.tableSpan.TableID, dataRange.CommitTsEnd+1)
-	// it's impossible return error here
-	iter, _ := db.NewIter(&pebble.IterOptions{
+	iter, err := db.NewIter(&pebble.IterOptions{
 		LowerBound: start,
 		UpperBound: end,
 	})
-	decoder := e.decoderPool.Get().(*zstd.Decoder)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+
 	startTime := time.Now()
-	// todo: what happens if iter.First() returns false?
-	_ = iter.First()
+	hasFirstEvent := iter.First()
 	metricEventStoreFirstReadDurationHistogram.Observe(time.Since(startTime).Seconds())
 	metrics.EventStoreScanRequestsCount.Inc()
+	if !hasFirstEvent {
+		// Empty range or first-read error. Close returns any accumulated
+		// iterator error while also releasing Pebble resources.
+		closeStartTime := time.Now()
+		err := iter.Close()
+		metricEventStoreCloseReadDurationHistogram.Observe(time.Since(closeStartTime).Seconds())
+		if err != nil {
+			return nil, errors.Trace(err)
+		}
+		return nil, nil
+	}
+
+	decoder := e.decoderPool.Get().(*zstd.Decoder)
 
 	needCheckSpan := true
 	if stat.tableSpan.Equal(subStat.tableSpan) {
@@ -945,7 +965,7 @@ func (e *eventStore) GetIterator(dispatcherID common.DispatcherID, dataRange com
 		rowCount:      0,
 		decoder:       decoder,
 		decoderPool:   e.decoderPool,
-	}
+	}, nil
 }
 
 func (e *eventStore) GetLogCoordinatorNodeID() node.ID {
@@ -1490,7 +1510,7 @@ func (iter *eventStoreIter) Next() (*common.RawKVEntry, bool) {
 		}
 		comparableKey := common.ToComparableKey(rawKV.Key)
 		if bytes.Compare(comparableKey, iter.tableSpan.StartKey) >= 0 &&
-			bytes.Compare(comparableKey, iter.tableSpan.EndKey) <= 0 {
+			bytes.Compare(comparableKey, iter.tableSpan.EndKey) < 0 {
 			break
 		}
 		log.Debug("event store iter skip kv not in table span",
@@ -1535,7 +1555,7 @@ func (iter *eventStoreIter) Close() (int64, error) {
 	iter.decoderPool.Put(iter.decoder)
 	iter.innerIter = nil
 	metricEventStoreCloseReadDurationHistogram.Observe(time.Since(startTime).Seconds())
-	return iter.rowCount, err
+	return iter.rowCount, errors.Trace(err)
 }
 
 func (e *eventStore) handleMessage(_ context.Context, targetMessage *messaging.TargetMessage) error {
@@ -1634,17 +1654,18 @@ func (e *eventStore) uploadStatePeriodically(ctx context.Context) error {
 					log.Warn("cannot find subscription state", zap.Uint64("subscriptionID", change.SubID))
 					continue
 				}
-				if change.CheckpointTs < tableState.Subscriptions[targetIndex].CheckpointTs ||
-					change.ResolvedTs < tableState.Subscriptions[targetIndex].ResolvedTs {
-					log.Panic("should not happen",
+				subState := tableState.Subscriptions[targetIndex]
+				if change.CheckpointTs < subState.CheckpointTs || change.ResolvedTs < subState.ResolvedTs {
+					log.Warn("ignore stale subscription state update",
 						zap.Uint64("subscriptionID", change.SubID),
-						zap.Uint64("oldCheckpointTs", tableState.Subscriptions[targetIndex].CheckpointTs),
-						zap.Uint64("oldResolvedTs", tableState.Subscriptions[targetIndex].ResolvedTs),
+						zap.Uint64("oldCheckpointTs", subState.CheckpointTs),
+						zap.Uint64("oldResolvedTs", subState.ResolvedTs),
 						zap.Uint64("newCheckpointTs", change.CheckpointTs),
 						zap.Uint64("newResolvedTs", change.ResolvedTs))
+					continue
 				}
-				tableState.Subscriptions[targetIndex].CheckpointTs = change.CheckpointTs
-				tableState.Subscriptions[targetIndex].ResolvedTs = change.ResolvedTs
+				subState.CheckpointTs = change.CheckpointTs
+				subState.ResolvedTs = change.ResolvedTs
 			default:
 				log.Panic("invalid subscription change type", zap.Int("changeType", int(change.ChangeType)))
 			}
