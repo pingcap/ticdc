@@ -121,7 +121,7 @@ function resume_changefeed_in_failed_state() {
 		result=$(cdc_cli_changefeed resume --changefeed-id=$changefeed_id --pd=$pd_addr --overwrite-checkpoint-ts=$gc_safepoint --no-confirm=true 2>&1 || true)
 		if [[ $result != *"ErrStartTsBeforeGC"* ]]; then
 			echo "changefeeed resume result is expected to contain 'ErrStartTsBeforeGC', \
-			    but actually got $resulservice-gc-safepointt"
+				but actually got $result"
 			exit 1
 		fi
 	fi

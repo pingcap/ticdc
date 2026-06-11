@@ -36,8 +36,9 @@ const (
 	EnsureGCServiceInitializing = "-initializing-"
 )
 
-// EnsureChangefeedStartTsSafety checks if the startTs less than the minimum of
-// service GC safepoint and this function will update the service GC to startTs
+// EnsureChangefeedStartTsSafety checks if the startTs is earlier than the
+// minimum service GC safepoint. It keeps startTs from being collected by
+// pinning the changefeed-level service GC safepoint to startTs - 1.
 func EnsureChangefeedStartTsSafety(
 	ctx context.Context, pdCli GCServiceClient,
 	gcServiceIDPrefix string,
@@ -52,22 +53,28 @@ func EnsureChangefeedStartTsSafety(
 	return ensureChangefeedStartTsSafetyNextGen(ctx, pdCli, gcServiceID, keyspaceID, TTL, startTs)
 }
 
+func getGCSafepointUpperBound(startTs uint64) uint64 {
+	if startTs == 0 {
+		return 0
+	}
+	return startTs - 1
+}
+
 func ensureChangefeedStartTsSafetyClassic(ctx context.Context, pdCli GCServiceClient, gcServiceID string, ttl int64, startTs uint64) error {
 	// set gc safepoint for the changefeed gc service
-	minServiceGCTs, err := SetServiceGCSafepoint(ctx, pdCli, gcServiceID, ttl, startTs)
+	gcSafepointUpperBound := getGCSafepointUpperBound(startTs)
+	minServiceGCTs, err := SetServiceGCSafepoint(ctx, pdCli, gcServiceID, ttl, gcSafepointUpperBound)
 	if err != nil {
 		return errors.Trace(err)
 	}
 	log.Info("set gc safepoint for changefeed",
 		zap.String("gcServiceID", gcServiceID),
-		zap.Uint64("expectedGCSafepoint", startTs),
+		zap.Uint64("startTs", startTs),
+		zap.Uint64("expectedGCSafepoint", gcSafepointUpperBound),
 		zap.Uint64("actualGCSafepoint", minServiceGCTs),
 		zap.Int64("ttl", ttl))
 
-	// startTs should be greater than or equal to minServiceGCTs + 1, otherwise gcManager
-	// would return a ErrSnapshotLostByGC even though the changefeed would appear to be successfully
-	// created/resumed. See issue #6350 for more detail.
-	if startTs > 0 && startTs < minServiceGCTs+1 {
+	if startTs > 0 && gcSafepointUpperBound < minServiceGCTs {
 		return errors.ErrStartTsBeforeGC.GenWithStackByArgs(startTs, minServiceGCTs)
 	}
 	return nil
@@ -75,9 +82,19 @@ func ensureChangefeedStartTsSafetyClassic(ctx context.Context, pdCli GCServiceCl
 
 func ensureChangefeedStartTsSafetyNextGen(ctx context.Context, pdCli GCServiceClient, gcServiceID string, keyspaceID uint32, ttl int64, startTs uint64) error {
 	gcCli := pdCli.GetGCStatesClient(keyspaceID)
-	_, err := SetGCBarrier(ctx, gcCli, gcServiceID, startTs, time.Duration(ttl)*time.Second)
+	gcSafepointUpperBound := getGCSafepointUpperBound(startTs)
+	_, err := SetGCBarrier(ctx, gcCli, gcServiceID, gcSafepointUpperBound, time.Duration(ttl)*time.Second)
 	if err != nil {
-		return errors.ErrStartTsBeforeGC.GenWithStackByArgs(startTs)
+		if !errors.IsGCBarrierTSBehindTxnSafePointError(err) {
+			return errors.ErrStartTsBeforeGC.GenWithStackByArgs(startTs, gcSafepointUpperBound)
+		}
+		gcSafepoint, getErr := UnifyGetServiceGCSafepoint(ctx, pdCli, keyspaceID, gcServiceID)
+		if getErr != nil {
+			return getErr
+		}
+		if startTs > 0 && gcSafepointUpperBound < gcSafepoint {
+			return errors.ErrStartTsBeforeGC.GenWithStackByArgs(startTs, gcSafepoint)
+		}
 	}
 	return nil
 }

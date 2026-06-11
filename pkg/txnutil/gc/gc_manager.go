@@ -159,8 +159,9 @@ func checkStaleCheckpointTs(
 				)
 		}
 	} else {
-		// if `isTiCDCBlockGC` is false, it means there is another service gc
-		// point less than the min checkpoint ts.
+		// If `isTiCDCBlockGC` is false, another service GC safepoint is at or
+		// below the min checkpoint ts. Since CDC reads from checkpointTs - 1,
+		// that upper bound must not be earlier than the actual GC safepoint.
 		if gcSafepointUpperBound < lastSafePointTs {
 			return errors.ErrSnapshotLostByGC.
 				GenWithStackByArgs(

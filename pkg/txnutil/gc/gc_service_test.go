@@ -51,6 +51,13 @@ func TestCheckSafetyOfStartTs(t *testing.T) {
 		require.Equal(t,
 			"[CDC:ErrStartTsBeforeGC]fail to create or maintain changefeed "+
 				"because start-ts 50 is earlier than or equal to GC safepoint at 60", err.Error())
+		err = EnsureChangefeedStartTsSafety(ctx, pdCli,
+			"ticdc-creating-",
+			0,
+			common.NewChangeFeedIDWithName("changefeed-boundary", "default"), TTL, 60)
+		require.Equal(t,
+			"[CDC:ErrStartTsBeforeGC]fail to create or maintain changefeed "+
+				"because start-ts 60 is earlier than or equal to GC safepoint at 60", err.Error())
 		pdCli.UpdateServiceGCSafePoint(ctx, "service2", 10, 80) //nolint:errcheck
 		pdCli.UpdateServiceGCSafePoint(ctx, "service3", 10, 70) //nolint:errcheck
 		err = EnsureChangefeedStartTsSafety(ctx, pdCli,
@@ -62,7 +69,7 @@ func TestCheckSafetyOfStartTs(t *testing.T) {
 			"service1":                           60,
 			"service2":                           80,
 			"service3":                           70,
-			"ticdc-creating-default_changefeed2": 65,
+			"ticdc-creating-default_changefeed2": 64,
 		})
 		err = UndoEnsureChangefeedStartTsSafety(ctx, pdCli,
 			0,
@@ -117,9 +124,15 @@ func TestCheckSafetyOfStartTs(t *testing.T) {
 	err = EnsureChangefeedStartTsSafety(ctx, pdCli,
 		"ticdc-creating-",
 		0,
+		common.NewChangeFeedIDWithName("changefeed-boundary", "default"), TTL, 60)
+	require.True(t, cerror.ErrStartTsBeforeGC.Equal(errors.Cause(err)))
+
+	err = EnsureChangefeedStartTsSafety(ctx, pdCli,
+		"ticdc-creating-",
+		0,
 		common.NewChangeFeedIDWithName("changefeed2", "default"), TTL, 65)
 	require.NoError(t, err)
-	require.Equal(t, uint64(65), pdCli.gcBarriers["ticdc-creating-default_changefeed2"])
+	require.Equal(t, uint64(64), pdCli.gcBarriers["ticdc-creating-default_changefeed2"])
 
 	err = UndoEnsureChangefeedStartTsSafety(ctx, pdCli,
 		0,
