@@ -49,6 +49,20 @@ func (mr *MockManagerMockRecorder) CheckStaleCheckpointTs(changefeedID, checkpoi
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CheckStaleCheckpointTs", reflect.TypeOf((*MockManager)(nil).CheckStaleCheckpointTs), changefeedID, checkpointTs)
 }
 
+// TryDeleteServiceGCSafepoint mocks base method.
+func (m *MockManager) TryDeleteServiceGCSafepoint(ctx context.Context) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "TryDeleteServiceGCSafepoint", ctx)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// TryDeleteServiceGCSafepoint indicates an expected call of TryDeleteServiceGCSafepoint.
+func (mr *MockManagerMockRecorder) TryDeleteServiceGCSafepoint(ctx interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "TryDeleteServiceGCSafepoint", reflect.TypeOf((*MockManager)(nil).TryDeleteServiceGCSafepoint), ctx)
+}
+
 // TryUpdateServiceGCSafepoint mocks base method.
 func (m *MockManager) TryUpdateServiceGCSafepoint(ctx context.Context, checkpointTs common.Ts) error {
 	m.ctrl.T.Helper()

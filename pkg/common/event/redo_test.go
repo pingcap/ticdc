@@ -18,7 +18,6 @@ import (
 
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/tidb/pkg/meta/model"
-	timodel "github.com/pingcap/tidb/pkg/meta/model"
 	parser_model "github.com/pingcap/tidb/pkg/parser/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
@@ -98,20 +97,20 @@ func TestRedoUsesRoutedTableNames(t *testing.T) {
 }
 
 func TestRedoDDLEventRoundTripPreservesColumnMetadata(t *testing.T) {
-	originalTableInfo := commonType.NewTableInfo4Decoder("test", &timodel.TableInfo{
+	originalTableInfo := commonType.NewTableInfo4Decoder("test", &model.TableInfo{
 		ID:   1001,
 		Name: parser_model.NewCIStr("t_redo"),
-		Columns: []*timodel.ColumnInfo{
-			newRedoDDLTestColumn(t, 1, "id", mysql.TypeLonglong, nil, timodel.CurrLatestColumnInfoVersion),
-			newRedoDDLTestColumn(t, 2, "status", mysql.TypeVarchar, "ready", timodel.CurrLatestColumnInfoVersion),
-			newRedoDDLTestColumn(t, 3, "created_at", mysql.TypeTimestamp, "2024-01-02 03:04:05", timodel.ColumnInfoVersion0),
-			newRedoDDLTestColumn(t, 4, "flags", mysql.TypeBit, "1", timodel.CurrLatestColumnInfoVersion),
+		Columns: []*model.ColumnInfo{
+			newRedoDDLTestColumn(t, 1, "id", mysql.TypeLonglong, nil, model.CurrLatestColumnInfoVersion),
+			newRedoDDLTestColumn(t, 2, "status", mysql.TypeVarchar, "ready", model.CurrLatestColumnInfoVersion),
+			newRedoDDLTestColumn(t, 3, "created_at", mysql.TypeTimestamp, "2024-01-02 03:04:05", model.ColumnInfoVersion0),
+			newRedoDDLTestColumn(t, 4, "flags", mysql.TypeBit, "1", model.CurrLatestColumnInfoVersion),
 		},
 	})
 	originalTableInfo.TableName.IsPartition = true
 
 	ddlEvent := &DDLEvent{
-		Type:              byte(timodel.ActionCreateTable),
+		Type:              byte(model.ActionCreateTable),
 		Query:             "create table test.t_redo(id bigint, status varchar(16) default 'ready')",
 		TableInfo:         originalTableInfo,
 		StartTs:           11,
@@ -149,7 +148,7 @@ func TestRedoDDLEventRoundTripPreservesColumnMetadata(t *testing.T) {
 
 func TestDDLEventToRedoLogHandlesNilTableInfo(t *testing.T) {
 	ddlEvent := &DDLEvent{
-		Type:       byte(timodel.ActionCreateSchema),
+		Type:       byte(model.ActionCreateSchema),
 		Query:      "create database test_redo",
 		StartTs:    33,
 		FinishedTs: 44,
@@ -160,12 +159,13 @@ func TestDDLEventToRedoLogHandlesNilTableInfo(t *testing.T) {
 		require.Equal(t, ddlEvent.Query, redoLog.RedoDDL.DDL.Query)
 		require.Equal(t, ddlEvent.StartTs, redoLog.RedoDDL.DDL.StartTs)
 		require.Equal(t, ddlEvent.FinishedTs, redoLog.RedoDDL.DDL.CommitTs)
+		require.Nil(t, redoLog.RedoDDL.DDL.Columns)
 	})
 }
 
 func TestDDLEventToRedoLogHandlesUninitializedTableInfo(t *testing.T) {
 	ddlEvent := &DDLEvent{
-		Type:       byte(timodel.ActionAddColumn),
+		Type:       byte(model.ActionAddColumn),
 		Query:      "alter table test_redo.t add column c int",
 		StartTs:    55,
 		FinishedTs: 66,
@@ -176,6 +176,7 @@ func TestDDLEventToRedoLogHandlesUninitializedTableInfo(t *testing.T) {
 	require.Equal(t, ddlEvent.Query, redoLog.RedoDDL.DDL.Query)
 	require.Equal(t, ddlEvent.StartTs, redoLog.RedoDDL.DDL.StartTs)
 	require.Equal(t, ddlEvent.FinishedTs, redoLog.RedoDDL.DDL.CommitTs)
+	require.Empty(t, redoLog.RedoDDL.DDL.Columns)
 }
 
 func newRedoDDLTestColumn(
@@ -185,15 +186,15 @@ func newRedoDDLTestColumn(
 	tp byte,
 	originDefaultValue any,
 	version uint64,
-) *timodel.ColumnInfo {
+) *model.ColumnInfo {
 	t.Helper()
 
 	fieldType := types.NewFieldType(tp)
-	column := &timodel.ColumnInfo{
+	column := &model.ColumnInfo{
 		ID:        id,
 		Offset:    int(id - 1),
 		Name:      parser_model.NewCIStr(name),
-		State:     timodel.StatePublic,
+		State:     model.StatePublic,
 		FieldType: *fieldType,
 		Version:   version,
 	}

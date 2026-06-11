@@ -267,6 +267,7 @@ func (l *LogReader) initMeta(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	defer extStorage.Close()
 	metas := make([]*misc.LogMeta, 0, 64)
 	err = extStorage.WalkDir(ctx, nil, func(path string, size int64) error {
 		if !strings.HasSuffix(path, redo.MetaEXT) {
