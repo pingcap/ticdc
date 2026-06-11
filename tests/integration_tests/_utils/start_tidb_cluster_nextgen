@@ -358,13 +358,10 @@ check_port_available "$DOWN_TIKV_WORKER_HOST" "$DOWN_TIKV_WORKER_PORT" "Downstre
 echo "Waiting for next-gen keyspace pre-allocation to settle..."
 sleep 30
 
-<<<<<<< HEAD
-=======
 # NOTE: TiDB config keys are section-sensitive. Keep `socket` and
 # `max-server-connections` at root level, and keep tuning knobs like
 # `run-auto-analyze` / `server-memory-quota` under `[performance]`. Otherwise
 # TiDB will report "invalid configuration options" and silently ignore them.
->>>>>>> bef9fba03 (tests: fix next gen integration TiDB startup flakiness (#4278))
 touch "$OUT_DIR/upstream-tidb-system.toml"
 if [ -f "$tidb_config" ]; then
 	cat "$tidb_config" >>"$OUT_DIR/upstream-tidb-system.toml"
