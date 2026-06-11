@@ -44,14 +44,10 @@ mysql_groups=(
 	# G05
 	'vector simple partition_table fail_over_ddl_F conflict_key_generated_column wide_table'
 	# G06
-<<<<<<< HEAD
 	# NOTE: same_upstream_downstream is temporarily disabled on release-8.5 CI because TiDB 8.5.x
 	# does not write `cluster_id` into `mysql.tidb` (tidb#59511 not cherry-picked). Re-enable it
 	# after TiDB release-8.5 has `mysql.tidb.cluster_id`.
-	'http_api http_api_compatibility http_api_tls http_api_tls_old_arch fail_over_ddl_G synced_status'
-=======
-	'http_api http_api_compatibility http_api_tls_old_arch fail_over_ddl_G synced_status same_upstream_downstream'
->>>>>>> 56c6d3b08 (eventstore: refine event store key range format and cache handling (#4953))
+	'http_api http_api_compatibility http_api_tls_old_arch fail_over_ddl_G synced_status'
 	# G07
 	'fail_over_ddl_H changefeed_update_config synced_status_with_redo'
 	# G08

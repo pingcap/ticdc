@@ -54,11 +54,7 @@ mysql_groups=(
 	# G11
 	'multi_changefeeds ddl_wait ddl_reentrant force_replicate_table multi_source'
 	# G12
-<<<<<<< HEAD
-	'ddl_with_random_move_table cli_tls_with_auth'
-=======
-	'ddl_with_random_move_table http_api_tls'
->>>>>>> 56c6d3b08 (eventstore: refine event store key range format and cache handling (#4953))
+	'ddl_with_random_move_table cli_tls_with_auth http_api_tls'
 	# G13
 	# 'tidb_mysql_test fail_over region_merge fail_over_ddl_mix_random_delay'
 	'fail_over region_merge fail_over_ddl_mix_random_delay'
