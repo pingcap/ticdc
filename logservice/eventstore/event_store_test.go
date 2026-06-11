@@ -827,11 +827,9 @@ func TestEventStoreSwitchSubStat(t *testing.T) {
 }
 
 func TestWriteToEventStore(t *testing.T) {
-	mockPDClock := pdutil.NewClock4Test()
-	appcontext.SetService(appcontext.DefaultPDClock, mockPDClock)
-
 	dir := t.TempDir()
-	store := New(dir, nil).(*eventStore)
+	_, storeInt := newEventStoreForTest(dir)
+	store := storeInt.(*eventStore)
 	defer store.Close(context.Background())
 
 	smallEntryKey := []byte("small-key")
@@ -875,7 +873,8 @@ func TestWriteToEventStore(t *testing.T) {
 	defer encoder.Close()
 
 	var compressionBuf []byte
-	err = store.writeEvents(store.dbs[0], events, encoder, &compressionBuf)
+	var rawValueBuf []byte
+	err = store.writeEvents(store.dbs[0], events, encoder, &compressionBuf, &rawValueBuf)
 	require.NoError(t, err)
 
 	// Read events back and verify.
@@ -956,7 +955,8 @@ func TestWriteToEventStoreZstdCompressionDisabled(t *testing.T) {
 	defer encoder.Close()
 
 	var compressionBuf []byte
-	err = store.writeEvents(store.dbs[0], events, encoder, &compressionBuf)
+	var rawValueBuf []byte
+	err = store.writeEvents(store.dbs[0], events, encoder, &compressionBuf, &rawValueBuf)
 	require.NoError(t, err)
 
 	iter, err := store.dbs[0].NewIter(&pebble.IterOptions{})
@@ -1015,7 +1015,8 @@ func TestEventStoreCompressionAndIterDecodeBufferReuse(t *testing.T) {
 	require.NoError(t, err)
 	defer encoder.Close()
 	var compressionBuf []byte
-	err = store.writeEvents(store.dbs[0], events, encoder, &compressionBuf)
+	var rawValueBuf []byte
+	err = store.writeEvents(store.dbs[0], events, encoder, &compressionBuf, &rawValueBuf)
 	require.NoError(t, err)
 	afterMetric := testutil.ToFloat64(metrics.EventStoreCompressedRowsCount)
 	require.InDelta(t, float64(len(expectedValues)), afterMetric-beforeMetric, 1e-9)
@@ -1108,7 +1109,8 @@ func TestEventStoreGetIteratorConcurrently(t *testing.T) {
 	require.NoError(t, err)
 	defer encoder.Close()
 	var compressionBuf []byte
-	err = store.(*eventStore).writeEvents(store.(*eventStore).dbs[0], events, encoder, &compressionBuf)
+	var rawValueBuf []byte
+	err = store.(*eventStore).writeEvents(store.(*eventStore).dbs[0], events, encoder, &compressionBuf, &rawValueBuf)
 	require.NoError(t, err)
 
 	// 3. Advance resolved ts for the subscription.
@@ -1151,6 +1153,21 @@ func TestEventStoreGetIteratorConcurrently(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+func TestEventWithCallbackSizerUsesCurrentKVBytes(t *testing.T) {
+	event := eventWithCallback{
+		kvs: []common.RawKVEntry{{
+			Key:         []byte("key"),
+			Value:       []byte("value"),
+			OldValue:    []byte("old"),
+			KeyLen:      1,
+			ValueLen:    1,
+			OldValueLen: 1,
+		}},
+	}
+
+	require.Equal(t, len("key")+len("value")+len("old"), eventWithCallbackSizer(event))
 }
 
 func TestEventStoreIter_NextWithFiltering(t *testing.T) {
