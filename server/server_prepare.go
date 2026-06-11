@@ -71,6 +71,7 @@ func (c *server) prepare(ctx context.Context) error {
 				MinConnectTimeout: 3 * time.Second,
 			}),
 		),
+		pdopt.WithEnableRouterClient(false),
 		pdopt.WithForwardingOption(config.EnablePDForwarding))
 	if err != nil {
 		return errors.Trace(err)

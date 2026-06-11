@@ -22,6 +22,11 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/pkg/redo"
+<<<<<<< HEAD
+=======
+	"github.com/pingcap/tidb/pkg/objstore/mockobjstore"
+	"github.com/pingcap/tidb/pkg/objstore/storeapi"
+>>>>>>> 6b8fdc0d3 (gc: support keyspace for old safepoint (#5195))
 	"github.com/stretchr/testify/require"
 )
 
@@ -77,3 +82,37 @@ func TestFileReaderRead(t *testing.T) {
 		require.NoError(t, r.Close())
 	}
 }
+<<<<<<< HEAD
+=======
+
+func TestDownLoadAndSortFilesClosesExternalStorage(t *testing.T) {
+	controller := gomock.NewController(t)
+	mockStorage := mockobjstore.NewMockStorage(controller)
+	mockStorage.EXPECT().WalkDir(gomock.Any(), gomock.Any(), gomock.Any()).
+		DoAndReturn(func(ctx context.Context, opt *storeapi.WalkOption, fn func(string, int64) error) error {
+			return nil
+		})
+	mockStorage.EXPECT().Close().Times(1)
+
+	oldInitExternalStorage := redo.InitExternalStorage
+	defer func() {
+		redo.InitExternalStorage = oldInitExternalStorage
+	}()
+	redo.InitExternalStorage = func(context.Context, url.URL) (storeapi.Storage, error) {
+		return mockStorage, nil
+	}
+
+	uri, err := url.Parse("file:///tmp/redo-test")
+	require.NoError(t, err)
+
+	files, err := downLoadAndSortFiles(context.Background(), &readerConfig{
+		dir:        t.TempDir(),
+		startTs:    10,
+		fileType:   redo.RedoRowLogFileType,
+		uri:        *uri,
+		workerNums: 1,
+	})
+	require.NoError(t, err)
+	require.Empty(t, files)
+}
+>>>>>>> 6b8fdc0d3 (gc: support keyspace for old safepoint (#5195))

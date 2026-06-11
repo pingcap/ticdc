@@ -23,8 +23,12 @@ import (
 	"time"
 
 	"github.com/IBM/sarama"
+<<<<<<< HEAD
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/pingcap/errors"
+=======
+	"github.com/aws/aws-sdk-go-v2/aws"
+>>>>>>> 6b8fdc0d3 (gc: support keyspace for old safepoint (#5195))
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
 	cerror "github.com/pingcap/ticdc/pkg/errors"

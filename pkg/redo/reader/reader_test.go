@@ -33,6 +33,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/redo/writer/file"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/tidb/pkg/meta/model"
+	"github.com/pingcap/tidb/pkg/objstore/mockobjstore"
+	"github.com/pingcap/tidb/pkg/objstore/storeapi"
 	"github.com/pingcap/tidb/pkg/parser/ast"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
@@ -252,6 +254,46 @@ func TestNewLogReaderAndReadMeta(t *testing.T) {
 	}
 }
 
+<<<<<<< HEAD
+=======
+func TestInitMetaClosesExternalStorage(t *testing.T) {
+	controller := gomock.NewController(t)
+	mockStorage := mockobjstore.NewMockStorage(controller)
+	meta := misc.NewMeta(11, 22)
+	data, err := meta.MarshalMsg(nil)
+	require.NoError(t, err)
+
+	metaPath := fmt.Sprintf(redo.RedoMetaFileFormat, "capture", "default", "changefeed", redo.RedoMetaFileType, "uuid", redo.MetaEXT)
+	mockStorage.EXPECT().WalkDir(gomock.Any(), gomock.Any(), gomock.Any()).
+		DoAndReturn(func(ctx context.Context, opt *storeapi.WalkOption, fn func(string, int64) error) error {
+			return fn(metaPath, int64(len(data)))
+		})
+	mockStorage.EXPECT().ReadFile(gomock.Any(), metaPath).Return(data, nil)
+	mockStorage.EXPECT().Close().Times(1)
+
+	oldInitExternalStorage := redo.InitExternalStorage
+	defer func() {
+		redo.InitExternalStorage = oldInitExternalStorage
+	}()
+	uri, err := url.Parse("file:///tmp/redo-test")
+	require.NoError(t, err)
+	redo.InitExternalStorage = func(context.Context, url.URL) (storeapi.Storage, error) {
+		return mockStorage, nil
+	}
+
+	reader := &LogReader{
+		cfg: &LogReaderConfig{
+			Dir:                t.TempDir(),
+			URI:                *uri,
+			UseExternalStorage: true,
+		},
+	}
+	require.NoError(t, reader.initMeta(context.Background()))
+	require.Equal(t, uint64(11), reader.meta.CheckpointTs)
+	require.Equal(t, uint64(22), reader.meta.ResolvedTs)
+}
+
+>>>>>>> 6b8fdc0d3 (gc: support keyspace for old safepoint (#5195))
 func genMetaFile(t *testing.T, dir string, meta *misc.LogMeta) {
 	fileName := fmt.Sprintf(redo.RedoMetaFileFormat, "capture", "default",
 		"changefeed", redo.RedoMetaFileType, uuid.NewString(), redo.MetaEXT)

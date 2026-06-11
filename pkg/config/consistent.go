@@ -20,7 +20,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/util"
-	"github.com/pingcap/tidb/br/pkg/storage"
+	"github.com/pingcap/tidb/pkg/objstore"
 )
 
 // ConsistentConfig represents replication consistency config for a changefeed.
@@ -125,7 +125,7 @@ func (c *ConsistentConfig) validateAndAdjust(enableIOCheck bool) error {
 		c.FlushWorkerNum = util.AddressOf(redo.DefaultFlushWorkerNum)
 	}
 
-	uri, err := storage.ParseRawURL(util.GetOrZero(c.Storage))
+	uri, err := objstore.ParseRawURL(util.GetOrZero(c.Storage))
 	if err != nil {
 		return errors.ErrInvalidReplicaConfig.GenWithStackByArgs(
 			fmt.Sprintf("invalid storage uri: %s", util.GetOrZero(c.Storage)))
