@@ -134,6 +134,14 @@ func NewController(
 				batchSize,
 				oc,
 				changefeedDB,
+				drainController,
+			),
+			scheduler.DrainScheduler: coscheduler.NewDrainScheduler(
+				selfNode.ID.String(),
+				batchSize,
+				oc,
+				changefeedDB,
+				drainController,
 			),
 			scheduler.BalanceScheduler: coscheduler.NewBalanceScheduler(
 				selfNode.ID.String(),
@@ -141,6 +149,7 @@ func NewController(
 				oc,
 				changefeedDB,
 				balanceInterval,
+				drainController,
 			),
 		}),
 		eventCh:            eventCh,
