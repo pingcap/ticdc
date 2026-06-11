@@ -16,6 +16,7 @@ package coordinator
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/coordinator/changefeed"
@@ -25,6 +26,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/config/kerneltype"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
@@ -133,8 +135,6 @@ func TestUpdateGCSafepointCallsGCManagerUpdate(t *testing.T) {
 	require.Equal(t, config.StateNormal, cf.GetInfo().State)
 	require.Nil(t, cf.GetInfo().Error)
 }
-<<<<<<< HEAD
-=======
 
 func TestUpdateGCSafepointDeletesServiceSafepointWhenNoChangefeed(t *testing.T) {
 	if !kerneltype.IsClassic() {
@@ -276,4 +276,3 @@ func TestConcurrentDeleteLastChangefeedAndCreateNewOneKeepsExpectedGCSafepoint(t
 		require.NoError(t, co.updateGCSafepoint(context.Background()))
 	}
 }
->>>>>>> b7ca76818 (maintainer: avoid panic when maintainer bootstrap (#4518))

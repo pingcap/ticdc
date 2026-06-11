@@ -16,12 +16,12 @@ package file
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
-	backuppb "github.com/pingcap/kvproto/pkg/brpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	pevent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
@@ -29,18 +29,29 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
+	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/uuid"
 	mockstorage "github.com/pingcap/tidb/br/pkg/mock/storage"
-	"github.com/pingcap/tidb/br/pkg/storage"
 	"github.com/stretchr/testify/require"
 	"github.com/uber-go/atomic"
 	"go.uber.org/mock/gomock"
 )
 
+func expectedLogFileName(cfg fileWriterConfig, logType string, commitTs uint64, uid string) string {
+	if cfg.ChangeFeedID().Keyspace() == common.DefaultKeyspaceName {
+		return fmt.Sprintf(redo.RedoLogFileFormatV1,
+			cfg.CaptureID(), cfg.ChangeFeedID().Name(), logType, commitTs, uid, redo.LogEXT)
+	}
+	return fmt.Sprintf(redo.RedoLogFileFormatV2,
+		cfg.CaptureID(), cfg.ChangeFeedID().Keyspace(), cfg.ChangeFeedID().Name(),
+		logType, commitTs, uid, redo.LogEXT)
+}
+
 func TestWriterWrite(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
+	extStorage := newTestLocalExternalStorage(t, dir)
 	cfs := []common.ChangeFeedID{
 		common.NewChangeFeedIDWithName("test-cf", common.DefaultKeyspaceName),
 		common.NewChangeFeedIDWithDisplayName(common.ChangeFeedDisplayName{
@@ -58,15 +69,19 @@ func TestWriterWrite(t *testing.T) {
 	}
 
 	for idx, cf := range cfs {
+		largePayload := make([]byte, redo.Megabyte)
 		uuidGen := uuid.NewConstGenerator("const-uuid")
-		w := &Writer{
-			logType: redo.RedoRowLogFileType,
-			cfg: &writer.LogWriterConfig{
-				MaxLogSizeInBytes: 10,
-				Dir:               dir,
-				ChangeFeedID:      cf,
-				CaptureID:         "cp",
+		writerCfg := newTestWriterConfig(
+			t,
+			cf,
+			&config.ConsistentConfig{
+				MaxLogSize: util.AddressOf(int64(1)),
+				Storage:    util.AddressOf("file://" + dir),
 			},
+		)
+		w := &Writer{
+			logType:   redo.RedoRowLogFileType,
+			cfg:       writerCfg,
 			uint64buf: make([]byte, 8),
 			running:   *atomic.NewBool(true),
 			metricWriteBytes: metrics.RedoWriteBytesGauge.
@@ -75,24 +90,25 @@ func TestWriterWrite(t *testing.T) {
 				WithLabelValues("default", "test-cf", redo.RedoRowLogFileType),
 			metricFlushAllDuration: metrics.RedoFlushAllDurationHistogram.
 				WithLabelValues("default", "test-cf", redo.RedoRowLogFileType),
+			storage:       extStorage,
 			uuidGenerator: uuidGen,
 		}
 
 		w.eventCommitTS.Store(1)
-		_, err := w.Write([]byte("tes1t11111"))
+		_, err := w.Write(largePayload)
 		require.Nil(t, err)
 		var fileName string
 		// create a .tmp file
-		if w.cfg.ChangeFeedID.Keyspace() == common.DefaultKeyspaceName {
-			fileName = fmt.Sprintf(redo.RedoLogFileFormatV1, w.cfg.CaptureID,
-				w.cfg.ChangeFeedID.Name(),
+		if w.cfg.ChangeFeedID().Keyspace() == common.DefaultKeyspaceName {
+			fileName = fmt.Sprintf(redo.RedoLogFileFormatV1, w.cfg.CaptureID(),
+				w.cfg.ChangeFeedID().Name(),
 				w.logType, 1, uuidGen.NewString(), redo.LogEXT) + redo.TmpEXT
 		} else {
-			fileName = fmt.Sprintf(redo.RedoLogFileFormatV2, w.cfg.CaptureID,
-				w.cfg.ChangeFeedID.Keyspace(), w.cfg.ChangeFeedID.Name(),
+			fileName = fmt.Sprintf(redo.RedoLogFileFormatV2, w.cfg.CaptureID(),
+				w.cfg.ChangeFeedID().Keyspace(), w.cfg.ChangeFeedID().Name(),
 				w.logType, 1, uuidGen.NewString(), redo.LogEXT) + redo.TmpEXT
 		}
-		path := filepath.Join(w.cfg.Dir, fileName)
+		path := filepath.Join(w.cfg.Dir(), fileName)
 		info, err := os.Stat(path)
 		require.Nil(t, err)
 		require.Equal(t, fileName, info.Name())
@@ -105,30 +121,30 @@ func TestWriterWrite(t *testing.T) {
 		require.Nil(t, err)
 
 		// after rotate, rename to .log
-		if w.cfg.ChangeFeedID.Keyspace() == common.DefaultKeyspaceName {
-			fileName = fmt.Sprintf(redo.RedoLogFileFormatV1, w.cfg.CaptureID,
-				w.cfg.ChangeFeedID.Name(),
+		if w.cfg.ChangeFeedID().Keyspace() == common.DefaultKeyspaceName {
+			fileName = fmt.Sprintf(redo.RedoLogFileFormatV1, w.cfg.CaptureID(),
+				w.cfg.ChangeFeedID().Name(),
 				w.logType, 1, uuidGen.NewString(), redo.LogEXT)
 		} else {
-			fileName = fmt.Sprintf(redo.RedoLogFileFormatV2, w.cfg.CaptureID,
-				w.cfg.ChangeFeedID.Keyspace(), w.cfg.ChangeFeedID.Name(),
+			fileName = fmt.Sprintf(redo.RedoLogFileFormatV2, w.cfg.CaptureID(),
+				w.cfg.ChangeFeedID().Keyspace(), w.cfg.ChangeFeedID().Name(),
 				w.logType, 1, uuidGen.NewString(), redo.LogEXT)
 		}
-		path = filepath.Join(w.cfg.Dir, fileName)
+		path = filepath.Join(w.cfg.Dir(), fileName)
 		info, err = os.Stat(path)
 		require.Nil(t, err)
 		require.Equal(t, fileName, info.Name())
 		// create a .tmp file with first eventCommitTS as name
-		if w.cfg.ChangeFeedID.Keyspace() == common.DefaultKeyspaceName {
-			fileName = fmt.Sprintf(redo.RedoLogFileFormatV1, w.cfg.CaptureID,
-				w.cfg.ChangeFeedID.Name(),
+		if w.cfg.ChangeFeedID().Keyspace() == common.DefaultKeyspaceName {
+			fileName = fmt.Sprintf(redo.RedoLogFileFormatV1, w.cfg.CaptureID(),
+				w.cfg.ChangeFeedID().Name(),
 				w.logType, 12, uuidGen.NewString(), redo.LogEXT) + redo.TmpEXT
 		} else {
-			fileName = fmt.Sprintf(redo.RedoLogFileFormatV2, w.cfg.CaptureID,
-				w.cfg.ChangeFeedID.Keyspace(), w.cfg.ChangeFeedID.Name(),
+			fileName = fmt.Sprintf(redo.RedoLogFileFormatV2, w.cfg.CaptureID(),
+				w.cfg.ChangeFeedID().Keyspace(), w.cfg.ChangeFeedID().Name(),
 				w.logType, 12, uuidGen.NewString(), redo.LogEXT) + redo.TmpEXT
 		}
-		path = filepath.Join(w.cfg.Dir, fileName)
+		path = filepath.Join(w.cfg.Dir(), fileName)
 		info, err = os.Stat(path)
 		require.Nil(t, err)
 		require.Equal(t, fileName, info.Name())
@@ -136,28 +152,31 @@ func TestWriterWrite(t *testing.T) {
 		require.Nil(t, err)
 		require.False(t, w.IsRunning())
 		// safe close, rename to .log with max eventCommitTS as name
-		if w.cfg.ChangeFeedID.Keyspace() == common.DefaultKeyspaceName {
-			fileName = fmt.Sprintf(redo.RedoLogFileFormatV1, w.cfg.CaptureID,
-				w.cfg.ChangeFeedID.Name(),
+		if w.cfg.ChangeFeedID().Keyspace() == common.DefaultKeyspaceName {
+			fileName = fmt.Sprintf(redo.RedoLogFileFormatV1, w.cfg.CaptureID(),
+				w.cfg.ChangeFeedID().Name(),
 				w.logType, 22, uuidGen.NewString(), redo.LogEXT)
 		} else {
-			fileName = fmt.Sprintf(redo.RedoLogFileFormatV2, w.cfg.CaptureID,
-				w.cfg.ChangeFeedID.Keyspace(), w.cfg.ChangeFeedID.Name(),
+			fileName = fmt.Sprintf(redo.RedoLogFileFormatV2, w.cfg.CaptureID(),
+				w.cfg.ChangeFeedID().Keyspace(), w.cfg.ChangeFeedID().Name(),
 				w.logType, 22, uuidGen.NewString(), redo.LogEXT)
 		}
-		path = filepath.Join(w.cfg.Dir, fileName)
+		path = filepath.Join(w.cfg.Dir(), fileName)
 		info, err = os.Stat(path)
 		require.Nil(t, err)
 		require.Equal(t, fileName, info.Name())
 
-		w1 := &Writer{
-			logType: redo.RedoRowLogFileType,
-			cfg: &writer.LogWriterConfig{
-				MaxLogSizeInBytes: 10,
-				Dir:               dir,
-				ChangeFeedID:      cf11s[idx],
-				CaptureID:         "cp",
+		writerCfg11 := newTestWriterConfig(
+			t,
+			cf11s[idx],
+			&config.ConsistentConfig{
+				MaxLogSize: util.AddressOf(int64(1)),
+				Storage:    util.AddressOf("file://" + dir),
 			},
+		)
+		w1 := &Writer{
+			logType:   redo.RedoRowLogFileType,
+			cfg:       writerCfg11,
 			uint64buf: make([]byte, 8),
 			running:   *atomic.NewBool(true),
 			metricWriteBytes: metrics.RedoWriteBytesGauge.
@@ -166,23 +185,24 @@ func TestWriterWrite(t *testing.T) {
 				WithLabelValues("default", "test-cf11", redo.RedoRowLogFileType),
 			metricFlushAllDuration: metrics.RedoFlushAllDurationHistogram.
 				WithLabelValues("default", "test-cf11", redo.RedoRowLogFileType),
+			storage:       extStorage,
 			uuidGenerator: uuidGen,
 		}
 
 		w1.eventCommitTS.Store(1)
-		_, err = w1.Write([]byte("tes1t11111"))
+		_, err = w1.Write(largePayload)
 		require.Nil(t, err)
 		// create a .tmp file
-		if w1.cfg.ChangeFeedID.Keyspace() == common.DefaultKeyspaceName {
-			fileName = fmt.Sprintf(redo.RedoLogFileFormatV1, w1.cfg.CaptureID,
-				w1.cfg.ChangeFeedID.Name(),
+		if w1.cfg.ChangeFeedID().Keyspace() == common.DefaultKeyspaceName {
+			fileName = fmt.Sprintf(redo.RedoLogFileFormatV1, w1.cfg.CaptureID(),
+				w1.cfg.ChangeFeedID().Name(),
 				w1.logType, 1, uuidGen.NewString(), redo.LogEXT) + redo.TmpEXT
 		} else {
-			fileName = fmt.Sprintf(redo.RedoLogFileFormatV2, w1.cfg.CaptureID,
-				w1.cfg.ChangeFeedID.Keyspace(), w1.cfg.ChangeFeedID.Name(),
+			fileName = fmt.Sprintf(redo.RedoLogFileFormatV2, w1.cfg.CaptureID(),
+				w1.cfg.ChangeFeedID().Keyspace(), w1.cfg.ChangeFeedID().Name(),
 				w1.logType, 1, uuidGen.NewString(), redo.LogEXT) + redo.TmpEXT
 		}
-		path = filepath.Join(w1.cfg.Dir, fileName)
+		path = filepath.Join(w1.cfg.Dir(), fileName)
 		info, err = os.Stat(path)
 		require.Nil(t, err)
 		require.Equal(t, fileName, info.Name())
@@ -196,64 +216,52 @@ func TestWriterWrite(t *testing.T) {
 	}
 }
 
-func TestAdvanceTs(t *testing.T) {
-	t.Parallel()
-
-	w := &Writer{}
-	w.AdvanceTs(111)
-	require.EqualValues(t, 111, w.eventCommitTS.Load())
-}
-
 func TestNewWriter(t *testing.T) {
 	t.Parallel()
-
-	_, err := NewFileWriter(context.Background(), nil, redo.RedoRowLogFileType)
-	require.NotNil(t, err)
 
 	storageDir := t.TempDir()
 	dir := t.TempDir()
 
 	uuidGen := uuid.NewConstGenerator("const-uuid")
-	w, err := NewFileWriter(context.Background(), &writer.LogWriterConfig{
-		Dir:                "sdfsf",
-		UseExternalStorage: false,
-	},
-		redo.RedoRowLogFileType,
+	writerCfg := newTestWriterConfig(
+		t,
+		common.NewChangeFeedIDWithName("test-row-writer", common.DefaultKeyspaceName),
+		&config.ConsistentConfig{
+			Storage: util.AddressOf("file://" + storageDir),
+		},
+	)
+	w, err := NewFileWriter(context.Background(), writerCfg, redo.RedoRowLogFileType,
 		writer.WithUUIDGenerator(func() uuid.Generator { return uuidGen }),
 	)
 	require.Nil(t, err)
-	backend := &backuppb.StorageBackend{
-		Backend: &backuppb.StorageBackend_Local{Local: &backuppb.Local{Path: storageDir}},
-	}
-	localStorage, err := storage.New(context.Background(), backend, &storage.ExternalStorageOptions{
-		SendCredentials: false,
-		HTTPClient:      nil,
-	})
-	w.storage = localStorage
-	require.Nil(t, err)
+	require.NotNil(t, w.allocator)
 	err = w.Close()
 	require.Nil(t, err)
 	require.False(t, w.IsRunning())
 
 	controller := gomock.NewController(t)
 	mockStorage := mockstorage.NewMockExternalStorage(controller)
-	mockStorage.EXPECT().WriteFile(gomock.Any(), "cp_abcd_test_ddl_0_const-uuid.log",
-		gomock.Any()).Return(nil).Times(1)
 
 	changefeed := common.NewChangeFeedIDWithDisplayName(common.ChangeFeedDisplayName{
 		Keyspace: "abcd",
 		Name:     "test",
 	})
-	w = &Writer{
-		logType: redo.RedoDDLLogFileType,
-		cfg: &writer.LogWriterConfig{
-			Dir:          dir,
-			CaptureID:    "cp",
-			ChangeFeedID: changefeed,
-
-			UseExternalStorage: true,
-			MaxLogSizeInBytes:  redo.DefaultMaxLogSize * redo.Megabyte,
+	ddlWriterCfg := newTestWriterConfig(
+		t,
+		changefeed,
+		&config.ConsistentConfig{
+			Storage: util.AddressOf("file://" + dir),
 		},
+	)
+	mockStorage.EXPECT().WriteFile(
+		gomock.Any(),
+		expectedLogFileName(ddlWriterCfg, redo.RedoDDLLogFileType, 0, "const-uuid"),
+		gomock.Any(),
+	).Return(nil).Times(1)
+	mockStorage.EXPECT().Close().Times(1)
+	w = &Writer{
+		logType:   redo.RedoDDLLogFileType,
+		cfg:       ddlWriterCfg,
 		uint64buf: make([]byte, 8),
 		storage:   mockStorage,
 		metricWriteBytes: metrics.RedoWriteBytesGauge.
@@ -275,21 +283,32 @@ func TestNewWriter(t *testing.T) {
 	require.Equal(t, w.running.Load(), false)
 }
 
+func TestNewLocalFileWriterKeepsLocalOnlySemantics(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	fileName := "reader-sort.log"
+
+	w, err := NewLocalFileWriter(dir, math.MaxInt32, redo.RedoRowLogFileType, writer.WithLogFileName(func() string {
+		return fileName
+	}))
+	require.NoError(t, err)
+	require.Nil(t, w.storage)
+	require.Nil(t, w.allocator)
+	require.Equal(t, dir, w.cfg.Dir())
+	require.False(t, w.cfg.UseExternalStorage())
+	_, err = w.Write([]byte("test"))
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+	_, err = os.Stat(filepath.Join(dir, fileName))
+	require.NoError(t, err)
+}
+
 func TestRotateFileWithFileAllocator(t *testing.T) {
 	t.Parallel()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	_, err := NewFileWriter(ctx, nil, redo.RedoRowLogFileType)
-	require.NotNil(t, err)
-
 	controller := gomock.NewController(t)
 	mockStorage := mockstorage.NewMockExternalStorage(controller)
-
-	mockStorage.EXPECT().WriteFile(gomock.Any(), "cp_abcd_test_row_0_uuid-1.log",
-		gomock.Any()).Return(nil).Times(1)
-	mockStorage.EXPECT().WriteFile(gomock.Any(), "cp_abcd_test_row_100_uuid-2.log",
-		gomock.Any()).Return(nil).Times(1)
 
 	dir := t.TempDir()
 	uuidGen := uuid.NewMock()
@@ -302,16 +321,27 @@ func TestRotateFileWithFileAllocator(t *testing.T) {
 		Keyspace: "abcd",
 		Name:     "test",
 	})
-	w := &Writer{
-		logType: redo.RedoRowLogFileType,
-		cfg: &writer.LogWriterConfig{
-			Dir:          dir,
-			CaptureID:    "cp",
-			ChangeFeedID: changefeed,
-
-			UseExternalStorage: true,
-			MaxLogSizeInBytes:  redo.DefaultMaxLogSize * redo.Megabyte,
+	rowWriterCfg := newTestWriterConfig(
+		t,
+		changefeed,
+		&config.ConsistentConfig{
+			Storage: util.AddressOf("file://" + dir),
 		},
+	)
+	mockStorage.EXPECT().WriteFile(
+		gomock.Any(),
+		expectedLogFileName(rowWriterCfg, redo.RedoRowLogFileType, 0, "uuid-1"),
+		gomock.Any(),
+	).Return(nil).Times(1)
+	mockStorage.EXPECT().WriteFile(
+		gomock.Any(),
+		expectedLogFileName(rowWriterCfg, redo.RedoRowLogFileType, 100, "uuid-2"),
+		gomock.Any(),
+	).Return(nil).Times(1)
+	mockStorage.EXPECT().Close().Times(1)
+	w := &Writer{
+		logType:   redo.RedoRowLogFileType,
+		cfg:       rowWriterCfg,
 		uint64buf: make([]byte, 8),
 		metricWriteBytes: metrics.RedoWriteBytesGauge.
 			WithLabelValues("default", "test", redo.RedoRowLogFileType),
@@ -323,10 +353,10 @@ func TestRotateFileWithFileAllocator(t *testing.T) {
 		uuidGenerator: uuidGen,
 	}
 	w.allocator = fsutil.NewFileAllocator(
-		w.cfg.Dir, redo.RedoRowLogFileType, redo.DefaultMaxLogSize*redo.Megabyte)
+		w.cfg.Dir(), redo.RedoRowLogFileType, redo.DefaultMaxLogSize*redo.Megabyte)
 
 	w.running.Store(true)
-	_, err = w.Write([]byte("test"))
+	_, err := w.Write([]byte("test"))
 	require.Nil(t, err)
 
 	err = w.rotate()
@@ -344,18 +374,8 @@ func TestRotateFileWithFileAllocator(t *testing.T) {
 func TestRotateFileWithoutFileAllocator(t *testing.T) {
 	t.Parallel()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	_, err := NewFileWriter(ctx, nil, redo.RedoRowLogFileType)
-	require.NotNil(t, err)
-
 	controller := gomock.NewController(t)
 	mockStorage := mockstorage.NewMockExternalStorage(controller)
-
-	mockStorage.EXPECT().WriteFile(gomock.Any(), "cp_abcd_test_ddl_0_uuid-2.log",
-		gomock.Any()).Return(nil).Times(1)
-	mockStorage.EXPECT().WriteFile(gomock.Any(), "cp_abcd_test_ddl_100_uuid-4.log",
-		gomock.Any()).Return(nil).Times(1)
 
 	dir := t.TempDir()
 	uuidGen := uuid.NewMock()
@@ -369,16 +389,27 @@ func TestRotateFileWithoutFileAllocator(t *testing.T) {
 		Keyspace: "abcd",
 		Name:     "test",
 	})
-	w := &Writer{
-		logType: redo.RedoDDLLogFileType,
-		cfg: &writer.LogWriterConfig{
-			Dir:          dir,
-			CaptureID:    "cp",
-			ChangeFeedID: changefeed,
-
-			UseExternalStorage: true,
-			MaxLogSizeInBytes:  redo.DefaultMaxLogSize * redo.Megabyte,
+	ddlWriterCfg := newTestWriterConfig(
+		t,
+		changefeed,
+		&config.ConsistentConfig{
+			Storage: util.AddressOf("file://" + dir),
 		},
+	)
+	mockStorage.EXPECT().WriteFile(
+		gomock.Any(),
+		expectedLogFileName(ddlWriterCfg, redo.RedoDDLLogFileType, 0, "uuid-2"),
+		gomock.Any(),
+	).Return(nil).Times(1)
+	mockStorage.EXPECT().WriteFile(
+		gomock.Any(),
+		expectedLogFileName(ddlWriterCfg, redo.RedoDDLLogFileType, 100, "uuid-4"),
+		gomock.Any(),
+	).Return(nil).Times(1)
+	mockStorage.EXPECT().Close().Times(1)
+	w := &Writer{
+		logType:   redo.RedoDDLLogFileType,
+		cfg:       ddlWriterCfg,
 		uint64buf: make([]byte, 8),
 		metricWriteBytes: metrics.RedoWriteBytesGauge.
 			WithLabelValues("default", "test", redo.RedoDDLLogFileType),
@@ -390,7 +421,7 @@ func TestRotateFileWithoutFileAllocator(t *testing.T) {
 		uuidGenerator: uuidGen,
 	}
 	w.running.Store(true)
-	_, err = w.Write([]byte("test"))
+	_, err := w.Write([]byte("test"))
 	require.Nil(t, err)
 
 	err = w.rotate()
@@ -411,16 +442,16 @@ func TestRunFlushesOnBatchBoundaryAndExecutesPostFlush(t *testing.T) {
 	dir := t.TempDir()
 	flushIntervalInMs := int64(60 * 1000)
 	flushWorkerNum := 9
-	w, err := NewFileWriter(context.Background(), &writer.LogWriterConfig{
-		ConsistentConfig: config.ConsistentConfig{
+	batchWriterCfg := newTestWriterConfig(
+		t,
+		common.NewChangeFeedIDWithName("test-run-batch", common.DefaultKeyspaceName),
+		&config.ConsistentConfig{
 			FlushIntervalInMs: &flushIntervalInMs,
 			FlushWorkerNum:    &flushWorkerNum,
+			Storage:           util.AddressOf("file://" + dir),
 		},
-		Dir:               dir,
-		CaptureID:         "cp",
-		ChangeFeedID:      common.NewChangeFeedIDWithName("test-run-batch", common.DefaultKeyspaceName),
-		MaxLogSizeInBytes: redo.DefaultMaxLogSize * redo.Megabyte,
-	}, redo.RedoRowLogFileType)
+	)
+	w, err := NewFileWriter(context.Background(), batchWriterCfg, redo.RedoRowLogFileType)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())

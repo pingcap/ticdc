@@ -22,8 +22,10 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/pingcap/ticdc/downstreamadapter/dispatcher"
 	"github.com/pingcap/ticdc/downstreamadapter/eventcollector"
+	"github.com/pingcap/ticdc/downstreamadapter/routing"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/mock"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/mysql"
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
@@ -33,6 +35,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/pdutil"
+	mysqlcfg "github.com/pingcap/ticdc/pkg/sink/mysql"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/threadpool"
 	"github.com/stretchr/testify/require"
@@ -53,13 +56,15 @@ func newDispatcherManagerTestSink(t *testing.T, sinkType common.SinkType) sink.S
 	}).AnyTimes()
 	mockSink.EXPECT().AddCheckpointTs(gomock.Any()).AnyTimes()
 	mockSink.EXPECT().SetTableSchemaStore(gomock.Any()).AnyTimes()
-	mockSink.EXPECT().Close(gomock.Any()).AnyTimes()
+	mockSink.EXPECT().Close().AnyTimes()
 	mockSink.EXPECT().Run(gomock.Any()).Return(nil).AnyTimes()
 	return mockSink
 }
 
 // createTestDispatcher creates a test dispatcher with given parameters
 func createTestDispatcher(t *testing.T, manager *DispatcherManager, id common.DispatcherID, tableID int64, startKey, endKey []byte) *dispatcher.EventDispatcher {
+	t.Helper()
+
 	span := &heartbeatpb.TableSpan{
 		TableID:  tableID,
 		StartKey: startKey,
@@ -67,21 +72,7 @@ func createTestDispatcher(t *testing.T, manager *DispatcherManager, id common.Di
 	}
 	var redoTs atomic.Uint64
 	redoTs.Store(math.MaxUint64)
-	defaultAtomicity := config.DefaultAtomicityLevel()
-	sharedInfo := dispatcher.NewSharedInfo(
-		manager.changefeedID,
-		"system",
-		false,
-		false,
-		nil,
-		nil,
-		nil,
-		&defaultAtomicity,
-		false,
-		make(chan dispatcher.TableSpanStatusWithSeq, 1),
-		make(chan *heartbeatpb.TableSpanBlockStatus, 1),
-		make(chan error, 1),
-	)
+	require.NotNil(t, manager.sharedInfo)
 	d := dispatcher.NewEventDispatcher(
 		id,
 		span,
@@ -92,7 +83,7 @@ func createTestDispatcher(t *testing.T, manager *DispatcherManager, id common.Di
 		false, // skipDMLAsStartTs
 		0,     // currentPDTs
 		manager.sink,
-		sharedInfo,
+		manager.sharedInfo,
 		false,
 		&redoTs,
 	)
@@ -124,6 +115,7 @@ func createTestManager(t *testing.T) *DispatcherManager {
 		metricResolvedTs:           metrics.DispatcherManagerResolvedTsGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
 		metricCheckpointTsLag:      metrics.DispatcherManagerCheckpointTsLagGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
 		metricResolvedTsLag:        metrics.DispatcherManagerResolvedTsLagGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
+		metricBlockStatusesChanLen: metrics.DispatcherManagerBlockStatusesChanLenGauge.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name()),
 	}
 
 	// Create shared info for the test manager
@@ -138,8 +130,9 @@ func createTestManager(t *testing.T) *DispatcherManager {
 		nil,   // syncPointConfig
 		&defaultAtomicity,
 		false,
+		routing.Router{},
 		make(chan dispatcher.TableSpanStatusWithSeq, 8192),
-		make(chan *heartbeatpb.TableSpanBlockStatus, 1024*1024),
+		blockStatusBufferSize,
 		make(chan error, 1),
 	)
 	nodeID := node.NewID()
@@ -215,6 +208,113 @@ func TestCollectComponentStatusWhenChangedWatermarkSeqNoFallback(t *testing.T) {
 	require.Equal(t, uint64(200), req.Request.RedoWatermark.Seq)
 }
 
+func TestCollectBlockStatusRequestSplitsOversizedMessages(t *testing.T) {
+	manager := createTestManager(t)
+
+	for i := 0; i < maxBlockStatusesPerRequest+2; i++ {
+		manager.sharedInfo.OfferBlockStatus(newWaitingBlockStatus(common.DefaultMode, uint64(i+1)))
+	}
+	for i := 0; i < maxBlockStatusesPerRequest+1; i++ {
+		manager.sharedInfo.OfferBlockStatus(newWaitingBlockStatus(common.RedoMode, uint64(i+10000)))
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		manager.collectBlockStatusRequest(ctx)
+		close(done)
+	}()
+	defer func() {
+		cancel()
+		<-done
+	}()
+
+	dequeueRequest := func() *BlockStatusRequestWithTargetID {
+		t.Helper()
+		dequeueCtx, cancelDequeue := context.WithTimeout(context.Background(), time.Second)
+		defer cancelDequeue()
+		req := manager.blockStatusRequestQueue.Dequeue(dequeueCtx)
+		require.NotNil(t, req)
+		require.NotNil(t, req.Request)
+		return req
+	}
+
+	defaultFirst := dequeueRequest()
+	defaultSecond := dequeueRequest()
+	redoFirst := dequeueRequest()
+	redoSecond := dequeueRequest()
+
+	require.Equal(t, common.DefaultMode, defaultFirst.Request.Mode)
+	require.Len(t, defaultFirst.Request.BlockStatuses, maxBlockStatusesPerRequest)
+	require.Equal(t, uint64(1), defaultFirst.Request.BlockStatuses[0].State.BlockTs)
+	require.Equal(t, uint64(maxBlockStatusesPerRequest), defaultFirst.Request.BlockStatuses[maxBlockStatusesPerRequest-1].State.BlockTs)
+
+	require.Equal(t, common.DefaultMode, defaultSecond.Request.Mode)
+	require.Len(t, defaultSecond.Request.BlockStatuses, 2)
+	require.Equal(t, uint64(maxBlockStatusesPerRequest+1), defaultSecond.Request.BlockStatuses[0].State.BlockTs)
+	require.Equal(t, uint64(maxBlockStatusesPerRequest+2), defaultSecond.Request.BlockStatuses[1].State.BlockTs)
+
+	require.Equal(t, common.RedoMode, redoFirst.Request.Mode)
+	require.Len(t, redoFirst.Request.BlockStatuses, maxBlockStatusesPerRequest)
+	require.Equal(t, uint64(10000), redoFirst.Request.BlockStatuses[0].State.BlockTs)
+	require.Equal(t, uint64(10000+maxBlockStatusesPerRequest-1), redoFirst.Request.BlockStatuses[maxBlockStatusesPerRequest-1].State.BlockTs)
+
+	require.Equal(t, common.RedoMode, redoSecond.Request.Mode)
+	require.Len(t, redoSecond.Request.BlockStatuses, 1)
+	require.Equal(t, uint64(10000+maxBlockStatusesPerRequest), redoSecond.Request.BlockStatuses[0].State.BlockTs)
+
+	shortCtx, shortCancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer shortCancel()
+	require.Nil(t, manager.blockStatusRequestQueue.Dequeue(shortCtx))
+}
+
+func TestCollectBlockStatusRequestKeepsLateArrivalInSameBatch(t *testing.T) {
+	manager := createTestManager(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		manager.collectBlockStatusRequest(ctx)
+		close(done)
+	}()
+	defer func() {
+		cancel()
+		<-done
+	}()
+
+	manager.sharedInfo.OfferBlockStatus(newWaitingBlockStatus(common.DefaultMode, 1))
+	require.Eventually(t, func() bool {
+		return manager.sharedInfo.BlockStatusLen() == 0
+	}, time.Second, time.Millisecond)
+	manager.sharedInfo.OfferBlockStatus(newWaitingBlockStatus(common.DefaultMode, 2))
+
+	dequeueCtx, cancelDequeue := context.WithTimeout(context.Background(), time.Second)
+	defer cancelDequeue()
+	req := manager.blockStatusRequestQueue.Dequeue(dequeueCtx)
+	require.NotNil(t, req)
+	require.NotNil(t, req.Request)
+	require.Equal(t, common.DefaultMode, req.Request.Mode)
+	require.Len(t, req.Request.BlockStatuses, 2)
+	require.Equal(t, uint64(1), req.Request.BlockStatuses[0].State.BlockTs)
+	require.Equal(t, uint64(2), req.Request.BlockStatuses[1].State.BlockTs)
+
+	shortCtx, shortCancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer shortCancel()
+	require.Nil(t, manager.blockStatusRequestQueue.Dequeue(shortCtx))
+}
+
+func newWaitingBlockStatus(mode int64, blockTs uint64) *heartbeatpb.TableSpanBlockStatus {
+	return &heartbeatpb.TableSpanBlockStatus{
+		ID: common.NewDispatcherID().ToPB(),
+		State: &heartbeatpb.State{
+			IsBlocked: true,
+			BlockTs:   blockTs,
+			Stage:     heartbeatpb.BlockStage_WAITING,
+		},
+		Mode: mode,
+	}
+}
+
 func TestMergeDispatcherNormal(t *testing.T) {
 	manager := createTestManager(t)
 
@@ -266,6 +366,34 @@ func TestMergeDispatcherInvalidIDs(t *testing.T) {
 	// Verify no new dispatcher is created
 	_, exists := manager.dispatcherMap.Get(mergedID)
 	require.False(t, exists)
+}
+
+func TestTryCloseRemovedRequestAfterClosedReturnsImmediatelyAndTriggersCleanup(t *testing.T) {
+	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	mysqlConfig := mysqlcfg.New()
+	mysqlConfig.EnableDDLTs = false
+	mysqlSink := mysql.NewMySQLSink(
+		context.Background(),
+		changefeedID,
+		mysqlConfig,
+		nil,
+		false,
+	)
+	manager := &DispatcherManager{
+		changefeedID: changefeedID,
+		sink:         mysqlSink,
+	}
+	manager.closed.Store(true)
+
+	// Preserve the historical close contract: once the manager is already closed,
+	// late remove requests should not delay TryClose success.
+	closed := manager.TryClose(true)
+	require.True(t, closed)
+	require.True(t, manager.removeChangefeedRequested.Load())
+	require.Eventually(t, func() bool {
+		return manager.removeChangefeedCleaned.Load()
+	}, time.Second, 10*time.Millisecond)
+	require.True(t, manager.TryClose(true))
 }
 
 func TestMergeDispatcherExistingID(t *testing.T) {

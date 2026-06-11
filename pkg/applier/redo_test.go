@@ -605,6 +605,25 @@ func TestApplyMeetSinkError(t *testing.T) {
 	require.Regexp(t, "CDC:ErrMySQLConnectionError", err)
 }
 
+func TestApplyWithSinkTimezone(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	port, err := freeport.GetFreePort()
+	require.Nil(t, err)
+	cfg := &RedoApplierConfig{
+		Storage: "blackhole://",
+		SinkURI: fmt.Sprintf(
+			"mysql://127.0.0.1:%d/?time-zone=Asia%%2FShanghai&read-timeout=1s&timeout=1s",
+			port,
+		),
+	}
+	ap := NewRedoApplier(cfg)
+	err = ap.Apply(ctx)
+	require.Regexp(t, "CDC:ErrMySQLConnectionError", err)
+	require.NotContains(t, err.Error(), "TiCDC server timezone")
+}
+
 func getMockDB(t *testing.T) *sql.DB {
 	// normal db
 	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))

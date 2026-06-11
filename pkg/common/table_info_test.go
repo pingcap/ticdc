@@ -24,6 +24,78 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestCloneWithRouting(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil TableInfo", func(t *testing.T) {
+		var ti *TableInfo
+		cloned := ti.CloneWithRouting("target_schema", "target_table")
+		require.Nil(t, cloned)
+	})
+
+	t.Run("basic cloning with routing", func(t *testing.T) {
+		original := &TableInfo{
+			TableName: TableName{
+				Schema:  "source_db",
+				Table:   "source_table",
+				TableID: 123,
+			},
+			Charset:          "utf8mb4",
+			Collate:          "utf8mb4_bin",
+			Comment:          "test table",
+			HasPKOrNotNullUK: true,
+			UpdateTS:         1000,
+		}
+
+		cloned := original.CloneWithRouting("target_db", "target_table")
+
+		// Verify cloned has routing applied
+		require.Equal(t, "source_db", cloned.TableName.Schema)
+		require.Equal(t, "source_table", cloned.TableName.Table)
+		require.Equal(t, "target_db", cloned.TableName.TargetSchema)
+		require.Equal(t, "target_table", cloned.TableName.TargetTable)
+		require.Equal(t, int64(123), cloned.TableName.TableID)
+		require.Equal(t, "source_db", cloned.GetSchemaName())
+		require.Equal(t, "source_table", cloned.GetTableName())
+		require.Equal(t, "target_db", cloned.GetTargetSchemaName())
+		require.Equal(t, "target_table", cloned.GetTargetTableName())
+		require.Equal(t, "source_db.source_table", cloned.TableName.String())
+		require.Equal(t, "`source_db`.`source_table`", cloned.TableName.QuoteString())
+		require.Equal(t, "`target_db`.`target_table`", cloned.TableName.QuoteTargetString())
+		require.True(t, cloned.TableName.IsRouted())
+		require.Same(t, &cloned.TableName.Schema, cloned.GetSchemaNamePtr())
+		require.Same(t, &cloned.TableName.Table, cloned.GetTableNamePtr())
+
+		// Verify other fields are copied
+		require.Equal(t, "utf8mb4", cloned.Charset)
+		require.Equal(t, "utf8mb4_bin", cloned.Collate)
+		require.Equal(t, "test table", cloned.Comment)
+		require.Equal(t, true, cloned.HasPKOrNotNullUK)
+		require.Equal(t, uint64(1000), cloned.UpdateTS)
+
+		// Verify original is NOT modified
+		require.Equal(t, "", original.TableName.TargetSchema)
+		require.Equal(t, "", original.TableName.TargetTable)
+	})
+
+	t.Run("target getters remain available without changing source fields", func(t *testing.T) {
+		original := &TableInfo{
+			TableName: TableName{
+				Schema:  "source_db",
+				Table:   "source_table",
+				TableID: 123,
+			},
+		}
+
+		cloned := original.CloneWithRouting("target_db", "target_table")
+
+		require.Equal(t, "source_db", cloned.GetSchemaName())
+		require.Equal(t, "source_table", cloned.GetTableName())
+		require.Equal(t, "target_db", cloned.GetTargetSchemaName())
+		require.Equal(t, "target_table", cloned.GetTargetTableName())
+	})
+}
+
 func TestUnmarshalJSONToTableInfoInvalidData(t *testing.T) {
 	t.Parallel()
 
@@ -64,6 +136,57 @@ func TestUnmarshalJSONToTableInfoInvalidData(t *testing.T) {
 func TestUnmarshalJSONToTableInfoRoundTrip(t *testing.T) {
 	t.Parallel()
 
+	source := WrapTableInfo("test", newPreSQLTestModelTableInfo("t_roundtrip"))
+	require.NotNil(t, source)
+	require.Contains(t, source.GetPreInsertSQL(), QuoteSchema("test", "t_roundtrip"))
+
+	routed := source.CloneWithRouting("target_db", "target_table")
+	require.Contains(t, routed.GetPreInsertSQL(), QuoteSchema("target_db", "target_table"))
+
+	data, err := source.Marshal()
+	require.NoError(t, err)
+
+	decoded, err := UnmarshalJSONToTableInfo(data)
+	require.NoError(t, err)
+	require.NotNil(t, decoded)
+
+	require.Equal(t, source.TableName.Schema, decoded.TableName.Schema)
+	require.Equal(t, source.TableName.Table, decoded.TableName.Table)
+	require.Equal(t, source.TableName.TableID, decoded.TableName.TableID)
+	require.Equal(t, len(source.GetColumns()), len(decoded.GetColumns()))
+	require.Equal(t, source.GetColumns()[0].Name.O, decoded.GetColumns()[0].Name.O)
+	require.Equal(t, source.GetColumns()[1].Name.O, decoded.GetColumns()[1].Name.O)
+	require.Contains(t, decoded.GetPreInsertSQL(), QuoteSchema("test", "t_roundtrip"))
+}
+
+func TestPreSQLsAreInitializedLazily(t *testing.T) {
+	t.Parallel()
+
+	source := WrapTableInfo("source_db", newPreSQLTestModelTableInfo("source_table"))
+	require.NotNil(t, source)
+	require.False(t, source.preSQLs.isInitialized.Load())
+
+	routed := source.CloneWithRouting("target_db", "target_table")
+	require.False(t, source.preSQLs.isInitialized.Load())
+	require.False(t, routed.preSQLs.isInitialized.Load())
+
+	require.Contains(t, routed.GetPreInsertSQL(), QuoteSchema("target_db", "target_table"))
+	require.True(t, routed.preSQLs.isInitialized.Load())
+	require.False(t, source.preSQLs.isInitialized.Load())
+
+	data, err := source.Marshal()
+	require.NoError(t, err)
+	require.False(t, source.preSQLs.isInitialized.Load())
+
+	decoded, err := UnmarshalJSONToTableInfo(data)
+	require.NoError(t, err)
+	require.False(t, decoded.preSQLs.isInitialized.Load())
+
+	require.Contains(t, decoded.GetPreUpdateSQL(), QuoteSchema("source_db", "source_table"))
+	require.True(t, decoded.preSQLs.isInitialized.Load())
+}
+
+func newPreSQLTestModelTableInfo(table string) *model.TableInfo {
 	idCol := &model.ColumnInfo{
 		ID:      1,
 		Name:    parser_model.NewCIStr("id"),
@@ -83,27 +206,12 @@ func TestUnmarshalJSONToTableInfoRoundTrip(t *testing.T) {
 	}
 	nameCol.FieldType = *types.NewFieldType(mysql.TypeVarchar)
 
-	source := WrapTableInfo("test", &model.TableInfo{
+	return &model.TableInfo{
 		ID:         1001,
-		Name:       parser_model.NewCIStr("t_roundtrip"),
+		Name:       parser_model.NewCIStr(table),
 		PKIsHandle: true,
 		Columns:    []*model.ColumnInfo{idCol, nameCol},
-	})
-	require.NotNil(t, source)
-
-	data, err := source.Marshal()
-	require.NoError(t, err)
-
-	decoded, err := UnmarshalJSONToTableInfo(data)
-	require.NoError(t, err)
-	require.NotNil(t, decoded)
-
-	require.Equal(t, source.TableName.Schema, decoded.TableName.Schema)
-	require.Equal(t, source.TableName.Table, decoded.TableName.Table)
-	require.Equal(t, source.TableName.TableID, decoded.TableName.TableID)
-	require.Equal(t, len(source.GetColumns()), len(decoded.GetColumns()))
-	require.Equal(t, source.GetColumns()[0].Name.O, decoded.GetColumns()[0].Name.O)
-	require.Equal(t, source.GetColumns()[1].Name.O, decoded.GetColumns()[1].Name.O)
+	}
 }
 
 func TestUnquoteName(t *testing.T) {

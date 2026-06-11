@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
+	"github.com/pingcap/tidb/pkg/parser"
 	"github.com/stretchr/testify/require"
 )
 
@@ -59,4 +60,39 @@ func TestIsSplitable(t *testing.T) {
 	job = helper.DDL2Job(createTableSQLWithUK)
 	tableInfo = helper.GetModelTableInfo(job)
 	require.False(t, isSplitable(tableInfo))
+}
+
+func TestExtractTableSchemas(t *testing.T) {
+	cases := []struct {
+		name     string
+		query    string
+		expected []string
+	}{
+		{
+			name:     "unqualified table",
+			query:    "SELECT * FROM `t`",
+			expected: []string{""},
+		},
+		{
+			name:     "mixed qualified tables",
+			query:    "SELECT * FROM `db1`.`t1` JOIN `t2` ON `db1`.`t1`.`id` = `t2`.`id`",
+			expected: []string{"db1", ""},
+		},
+		{
+			name:     "subquery preserves visit order",
+			query:    "SELECT * FROM `db1`.`t1` WHERE EXISTS (SELECT 1 FROM `db2`.`t2`)",
+			expected: []string{"db1", "db2"},
+		},
+	}
+
+	p := parser.New()
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := p.ParseOneStmt(tc.query, "", "")
+			require.NoError(t, err)
+			require.Equal(t, tc.expected, extractTableSchemas(stmt))
+		})
+	}
+
+	require.Nil(t, extractTableSchemas(nil))
 }
