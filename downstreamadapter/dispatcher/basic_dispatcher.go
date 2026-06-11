@@ -925,6 +925,12 @@ func (d *BasicDispatcher) routeTableAdmissionsForBlockState(event commonEvent.Bl
 	if !router.HasTableRoute() {
 		return nil
 	}
+
+	// DDLs with TableNameChange are written to the table-trigger DDL history, so
+	// the table trigger dispatcher can be the single owner that reports route admissions.
+	if !d.IsTableTriggerDispatcher() {
+		return nil
+	}
 	ddlEvent, ok := event.(*commonEvent.DDLEvent)
 	if !ok {
 		return nil

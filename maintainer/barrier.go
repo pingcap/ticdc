@@ -432,6 +432,13 @@ func (b *Barrier) handleBlockState(changefeedID common.ChangeFeedID,
 		// insert an event, or get the old one event check if the event is already tracked
 		event := b.getOrInsertNewEvent(changefeedID, dispatcherID, key, blockState)
 		if dispatcherID == b.spanController.GetDDLDispatcherID() {
+			// A table dispatcher may create the BarrierEvent before the table
+			// trigger dispatcher reports the same DDL. Route admissions are only
+			// carried by the table trigger dispatcher, so refresh them here when
+			// that authoritative status arrives.
+			if len(event.routeAdmissions) == 0 && len(blockState.RouteTableAdmissions) > 0 {
+				event.routeAdmissions = routeTableAdmissionsFromPB(blockState.RouteTableAdmissions)
+			}
 			log.Info("the block event is sent by ddl dispatcher",
 				zap.String("changefeed", changefeedID.Name()),
 				zap.String("dispatcher", dispatcherID.String()),

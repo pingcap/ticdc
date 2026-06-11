@@ -169,7 +169,7 @@ func TestBlockStatusBufferKeepsDistinctDoneKeys(t *testing.T) {
 
 func TestWaitingBlockStatusClonesMutableMetadata(t *testing.T) {
 	dispatcherID := common.NewDispatcherID()
-	dispatcher := newRouteAdmissionTestDispatcher(t)
+	dispatcher := newRouteAdmissionTestDispatcher(t, true)
 	event := &commonEvent.DDLEvent{
 		FinishedTs: 100,
 		Type:       byte(model.ActionCreateTable),
@@ -177,7 +177,7 @@ func TestWaitingBlockStatusClonesMutableMetadata(t *testing.T) {
 		TableName:  "t",
 		BlockedTables: &commonEvent.InfluencedTables{
 			InfluenceType: commonEvent.InfluenceTypeNormal,
-			TableIDs:      []int64{1, 2},
+			TableIDs:      []int64{common.DDLSpanTableID, 1, 2},
 		},
 		NeedDroppedTables: &commonEvent.InfluencedTables{
 			InfluenceType: commonEvent.InfluenceTypeNormal,
@@ -222,7 +222,7 @@ func TestWaitingBlockStatusClonesMutableMetadata(t *testing.T) {
 		},
 		Mode: common.DefaultMode,
 	}
-	require.Equal(t, []int64{1, 2}, status.State.BlockTables.TableIDs)
+	require.Equal(t, []int64{common.DDLSpanTableID, 1, 2}, status.State.BlockTables.TableIDs)
 	require.Equal(t, []int64{3, 4}, status.State.NeedDroppedTables.TableIDs)
 	require.Equal(t, int64(11), status.State.NeedAddedTables[0].TableID)
 	require.Equal(t, "db", status.State.RouteTableAdmissions[0].SourceSchemaName)
@@ -309,7 +309,7 @@ func TestWaitingBlockStatusClonesMutableMetadata(t *testing.T) {
 	event.TableNameChange.AddName[0].TableName = "changed"
 	event.UpdatedSchemas[0].NewSchemaID = 104
 
-	require.Equal(t, []int64{1, 2}, status.State.BlockTables.TableIDs)
+	require.Equal(t, []int64{common.DDLSpanTableID, 1, 2}, status.State.BlockTables.TableIDs)
 	require.Equal(t, []int64{3, 4}, status.State.NeedDroppedTables.TableIDs)
 	require.Equal(t, int64(11), status.State.NeedAddedTables[0].TableID)
 	require.Equal(t, "db", status.State.RouteTableAdmissions[0].SourceSchemaName)
@@ -321,7 +321,7 @@ func TestWaitingBlockStatusClonesMutableMetadata(t *testing.T) {
 }
 
 func TestRouteTableAdmissionsForNameLevelDDLs(t *testing.T) {
-	dispatcher := newRouteAdmissionTestDispatcher(t)
+	dispatcher := newRouteAdmissionTestDispatcher(t, true)
 
 	createEvent := commonEvent.NewRoutedDDLEvent(
 		&commonEvent.DDLEvent{
@@ -510,7 +510,25 @@ func TestRouteTableAdmissionsForNameLevelDDLs(t *testing.T) {
 	require.Nil(t, admissions)
 }
 
-func newRouteAdmissionTestDispatcher(t *testing.T) *BasicDispatcher {
+func TestRouteTableAdmissionsOnlyReportedByTableTrigger(t *testing.T) {
+	tableTriggerDispatcher := newRouteAdmissionTestDispatcher(t, true)
+	tableDispatcher := newRouteAdmissionTestDispatcher(t, false)
+	event := &commonEvent.DDLEvent{
+		Type: byte(model.ActionRenameTable),
+		BlockedTables: &commonEvent.InfluencedTables{
+			InfluenceType: commonEvent.InfluenceTypeNormal,
+			TableIDs:      []int64{common.DDLSpanTableID, 1},
+		},
+		TableNameChange: &commonEvent.TableNameChange{
+			AddName: []commonEvent.SchemaTableName{{SchemaName: "db", TableName: "t"}},
+		},
+	}
+
+	require.NotEmpty(t, tableTriggerDispatcher.routeTableAdmissionsForBlockState(event))
+	require.Nil(t, tableDispatcher.routeTableAdmissionsForBlockState(event))
+}
+
+func newRouteAdmissionTestDispatcher(t *testing.T, tableTrigger bool) *BasicDispatcher {
 	t.Helper()
 
 	router, err := routing.NewRouter(
@@ -522,8 +540,14 @@ func newRouteAdmissionTestDispatcher(t *testing.T) *BasicDispatcher {
 	)
 	require.NoError(t, err)
 
+	tableSpan := common.KeyspaceDDLSpan(common.DefaultKeyspaceID)
+	if !tableTrigger {
+		span := common.TableIDToComparableSpan(common.DefaultKeyspaceID, 1)
+		tableSpan = &span
+	}
 	return &BasicDispatcher{
 		sharedInfo: &SharedInfo{router: router},
+		tableSpan:  tableSpan,
 	}
 }
 

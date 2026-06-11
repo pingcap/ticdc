@@ -621,14 +621,6 @@ func TestBarrierRouteConflictPrecheckPreventsWriteAction(t *testing.T) {
 					NeedAddedTables: []*heartbeatpb.Table{
 						{SchemaID: 2, TableID: 2},
 					},
-					RouteTableAdmissions: []*heartbeatpb.RouteTableAdmission{
-						{
-							SourceSchemaName: "db2",
-							SourceTableName:  "t",
-							TargetSchemaName: "target",
-							TargetTableName:  "t",
-						},
-					},
 				},
 			},
 			{
