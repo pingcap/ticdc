@@ -1211,12 +1211,21 @@ func (c *eventBroker) handleDispatcherHeartbeat(heartbeat *DispatcherHeartBeatWi
 		}
 		dispatcher := dispatcherPtr.Load()
 		if checkEpoch && heartbeatEpoch != dispatcher.epoch {
-			log.Warn("ignore dispatcher heartbeat from stale epoch",
+			fields := []zap.Field{
 				zap.Stringer("changefeedID", dispatcher.changefeedStat.changefeedID),
 				zap.Stringer("dispatcherID", dispatcher.id),
 				zap.Uint64("heartbeatEpoch", heartbeatEpoch),
 				zap.Uint64("dispatcherEpoch", dispatcher.epoch),
-				zap.Uint64("checkpointTs", checkpointTs))
+				zap.Uint64("checkpointTs", checkpointTs),
+			}
+			if heartbeatEpoch < dispatcher.epoch {
+				log.Warn("ignore dispatcher heartbeat from stale epoch", fields...)
+			} else {
+				// Dispatcher reset requests and heartbeat messages are routed through
+				// different EventService queues, so a heartbeat from the next epoch can
+				// be handled before the corresponding reset request is applied.
+				log.Debug("ignore dispatcher heartbeat before reset is applied", fields...)
+			}
 			return
 		}
 		// TODO: Should we check if the dispatcher's serverID is the same as the heartbeat's serverID?
