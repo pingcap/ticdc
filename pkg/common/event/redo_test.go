@@ -18,7 +18,7 @@ import (
 
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	timodel "github.com/pingcap/tidb/pkg/meta/model"
-	"github.com/pingcap/tidb/pkg/parser/ast"
+	parser_model "github.com/pingcap/tidb/pkg/parser/model"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	"github.com/pingcap/tidb/pkg/types"
 	"github.com/stretchr/testify/require"
@@ -27,7 +27,7 @@ import (
 func TestRedoDDLEventRoundTripPreservesColumnMetadata(t *testing.T) {
 	originalTableInfo := commonType.NewTableInfo4Decoder("test", &timodel.TableInfo{
 		ID:   1001,
-		Name: ast.NewCIStr("t_redo"),
+		Name: parser_model.NewCIStr("t_redo"),
 		Columns: []*timodel.ColumnInfo{
 			newRedoDDLTestColumn(t, 1, "id", mysql.TypeLonglong, nil, timodel.CurrLatestColumnInfoVersion),
 			newRedoDDLTestColumn(t, 2, "status", mysql.TypeVarchar, "ready", timodel.CurrLatestColumnInfoVersion),
@@ -121,7 +121,7 @@ func newRedoDDLTestColumn(
 	column := &timodel.ColumnInfo{
 		ID:        id,
 		Offset:    int(id - 1),
-		Name:      ast.NewCIStr(name),
+		Name:      parser_model.NewCIStr(name),
 		State:     timodel.StatePublic,
 		FieldType: *fieldType,
 		Version:   version,
