@@ -26,7 +26,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/version"
 	"github.com/stretchr/testify/require"
 	pdClient "github.com/tikv/pd/client"
-	pdopt "github.com/tikv/pd/client"
+	pdopt "github.com/tikv/pd/client/opt"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/keepalive"

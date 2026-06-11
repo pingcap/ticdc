@@ -30,6 +30,7 @@ import (
 	"github.com/pingcap/tidb/pkg/util/codec"
 	"github.com/stretchr/testify/require"
 	pd "github.com/tikv/pd/client"
+	"github.com/tikv/pd/client/servicediscovery"
 )
 
 type mockPDClient struct {
@@ -42,8 +43,8 @@ func (m *mockPDClient) GetLeaderURL() string {
 	return m.url
 }
 
-func (m *mockPDClient) GetServiceDiscovery() pd.ServiceDiscovery {
-	return pd.NewMockPDServiceDiscovery([]string{}, nil)
+func (m *mockPDClient) GetServiceDiscovery() servicediscovery.ServiceDiscovery {
+	return servicediscovery.NewMockPDServiceDiscovery([]string{}, nil)
 }
 
 func newMockPDClient(normal bool) *mockPDClient {
