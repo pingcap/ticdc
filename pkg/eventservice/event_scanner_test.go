@@ -61,11 +61,7 @@ func TestEventScanner(t *testing.T) {
 
 	disInfo := newMockDispatcherInfoForTest(t)
 	disInfo.startTs = uint64(100)
-<<<<<<< HEAD
-	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo.GetChangefeedID())
-=======
 	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo)
->>>>>>> 32e1ab58b (eventservice: event service use server level tz to avoid unncessary call and verbose log (#4836))
 	tableID := disInfo.GetTableSpan().TableID
 	dispatcherID := disInfo.GetID()
 
@@ -375,11 +371,7 @@ func TestEventScannerWithDeleteTable(t *testing.T) {
 
 	disInfo := newMockDispatcherInfoForTest(t)
 	disInfo.startTs = uint64(100)
-<<<<<<< HEAD
-	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo.GetChangefeedID())
-=======
 	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo)
->>>>>>> 32e1ab58b (eventservice: event service use server level tz to avoid unncessary call and verbose log (#4836))
 	tableID := disInfo.GetTableSpan().TableID
 	dispatcherID := disInfo.GetID()
 
@@ -457,11 +449,7 @@ func TestEventScannerWithDDL(t *testing.T) {
 
 	disInfo := newMockDispatcherInfoForTest(t)
 	disInfo.startTs = uint64(100)
-<<<<<<< HEAD
-	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo.GetChangefeedID())
-=======
 	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo)
->>>>>>> 32e1ab58b (eventservice: event service use server level tz to avoid unncessary call and verbose log (#4836))
 	tableID := disInfo.GetTableSpan().TableID
 	dispatcherID := disInfo.GetID()
 
@@ -1549,11 +1537,7 @@ func TestGetTableInfo4Txn(t *testing.T) {
 
 	disInfo := newMockDispatcherInfoForTest(t)
 	disInfo.startTs = uint64(100)
-<<<<<<< HEAD
-	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo.GetChangefeedID())
-=======
 	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo)
->>>>>>> 32e1ab58b (eventservice: event service use server level tz to avoid unncessary call and verbose log (#4836))
 	tableID := disInfo.GetTableSpan().TableID
 
 	disp := newDispatcherStat(disInfo, 1, 1, nil, changefeedStatus)

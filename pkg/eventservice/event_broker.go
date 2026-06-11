@@ -928,11 +928,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 	span := info.GetTableSpan()
 	changefeedID := info.GetChangefeedID()
 
-<<<<<<< HEAD
-	status := c.getOrSetChangefeedStatus(changefeedID)
-=======
 	status := c.getOrSetChangefeedStatus(info)
->>>>>>> 32e1ab58b (eventservice: event service use server level tz to avoid unncessary call and verbose log (#4836))
 	dispatcher := newDispatcherStat(info, uint64(len(c.taskChan)), uint64(len(c.messageCh)), nil, status)
 	dispatcherPtr := &atomic.Pointer[dispatcherStat]{}
 	dispatcherPtr.Store(dispatcher)
@@ -975,11 +971,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 		}
 		status.removeDispatcher(id)
 		if status.isEmpty() {
-<<<<<<< HEAD
-			c.changefeedMap.Delete(changefeedID)
-=======
 			c.removeChangefeedStatus(status)
->>>>>>> 32e1ab58b (eventservice: event service use server level tz to avoid unncessary call and verbose log (#4836))
 		}
 		c.sendNotReusableEvent(node.ID(info.GetServerID()), dispatcher)
 		return nil
@@ -1002,11 +994,7 @@ func (c *eventBroker) addDispatcher(info DispatcherInfo) error {
 		c.eventStore.UnregisterDispatcher(changefeedID, id)
 		status.removeDispatcher(id)
 		if status.isEmpty() {
-<<<<<<< HEAD
-			c.changefeedMap.Delete(changefeedID)
-=======
 			c.removeChangefeedStatus(status)
->>>>>>> 32e1ab58b (eventservice: event service use server level tz to avoid unncessary call and verbose log (#4836))
 		}
 		return err
 	}
@@ -1055,12 +1043,7 @@ func (c *eventBroker) removeDispatcher(dispatcherInfo DispatcherInfo) {
 		log.Info("All dispatchers for the changefeed are removed, remove the changefeed status",
 			zap.Stringer("changefeedID", changefeedID),
 		)
-<<<<<<< HEAD
-		c.changefeedMap.Delete(changefeedID)
-		metrics.EventServiceAvailableMemoryQuotaGaugeVec.DeleteLabelValues(changefeedID.String())
-=======
 		c.removeChangefeedStatus(stat.changefeedStat)
->>>>>>> 32e1ab58b (eventservice: event service use server level tz to avoid unncessary call and verbose log (#4836))
 	}
 
 	c.eventStore.UnregisterDispatcher(changefeedID, id)
@@ -1090,8 +1073,6 @@ func (c *eventBroker) removeChangefeedStatus(status *changefeedStatus) {
 
 	filter.GetSharedFilterStorage().RemoveFilter(changefeedID)
 	metrics.EventServiceAvailableMemoryQuotaGaugeVec.DeleteLabelValues(changefeedID.String())
-	metrics.EventServiceScanWindowBaseTsGaugeVec.DeleteLabelValues(changefeedID.String())
-	metrics.EventServiceScanWindowIntervalGaugeVec.DeleteLabelValues(changefeedID.String())
 }
 
 func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
@@ -1144,12 +1125,8 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 			return err
 		}
 	}
-<<<<<<< HEAD
-	status := c.getOrSetChangefeedStatus(changefeedID)
-=======
 	status := c.getOrSetChangefeedStatus(dispatcherInfo)
 
->>>>>>> 32e1ab58b (eventservice: event service use server level tz to avoid unncessary call and verbose log (#4836))
 	newStat := newDispatcherStat(dispatcherInfo, uint64(len(c.taskChan)), uint64(len(c.messageCh)), tableInfo, status)
 	newStat.copyStatistics(oldStat)
 
@@ -1188,19 +1165,10 @@ func (c *eventBroker) resetDispatcher(dispatcherInfo DispatcherInfo) error {
 	return nil
 }
 
-<<<<<<< HEAD
-func (c *eventBroker) getOrSetChangefeedStatus(changefeedID common.ChangeFeedID) *changefeedStatus {
-	stat, ok := c.changefeedMap.Load(changefeedID)
-	if !ok {
-		stat = newChangefeedStatus(changefeedID)
-		log.Info("new changefeed status", zap.Stringer("changefeedID", changefeedID))
-		c.changefeedMap.Store(changefeedID, stat)
-=======
 func (c *eventBroker) getOrSetChangefeedStatus(info DispatcherInfo) *changefeedStatus {
 	changefeedID := info.GetChangefeedID()
 	if stat, ok := c.changefeedMap.Load(changefeedID); ok {
 		return stat.(*changefeedStatus)
->>>>>>> 32e1ab58b (eventservice: event service use server level tz to avoid unncessary call and verbose log (#4836))
 	}
 
 	// Filter config is changefeed scoped. In production, a config change must pause the
@@ -1216,15 +1184,13 @@ func (c *eventBroker) getOrSetChangefeedStatus(info DispatcherInfo) *changefeedS
 			zap.Error(err))
 	}
 
-	status := newChangefeedStatus(changefeedID, info.GetSyncPointInterval())
+	status := newChangefeedStatus(changefeedID)
 	status.filter = changefeedFilter
 	actual, loaded := c.changefeedMap.LoadOrStore(changefeedID, status)
 	if loaded {
 		return actual.(*changefeedStatus)
 	}
 	log.Info("new changefeed status", zap.Stringer("changefeedID", changefeedID))
-	metrics.EventServiceScanWindowBaseTsGaugeVec.WithLabelValues(changefeedID.String()).Set(0)
-	metrics.EventServiceScanWindowIntervalGaugeVec.WithLabelValues(changefeedID.String()).Set(defaultScanInterval.Seconds())
 	return status
 }
 
