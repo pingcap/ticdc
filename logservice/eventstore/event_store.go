@@ -35,6 +35,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/common"
 	appcontext "github.com/pingcap/ticdc/pkg/common/context"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/logger"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/node"
@@ -778,7 +779,7 @@ func (e *eventStore) UpdateDispatcherCheckpointTs(
 			ResolvedTs:   subStat.resolvedTs.Load(),
 		}
 		subStat.checkpointTs.Store(newCheckpointTs)
-		if log.GetLevel() <= zap.DebugLevel {
+		if logger.IsDebugEnabled() {
 			log.Debug("update checkpoint ts",
 				zap.Any("dispatcherID", dispatcherID),
 				zap.Uint64("subscriptionID", uint64(subStat.subID)),
