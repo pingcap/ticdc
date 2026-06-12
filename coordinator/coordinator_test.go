@@ -561,7 +561,7 @@ func TestScaleNode(t *testing.T) {
 		},
 	})
 	requireBootstrapNodeRemoved(t, co, waitTime, info3.ID)
-	
+
 	require.Eventually(t, func() bool {
 		return co.controller.changefeedDB.GetReplicatingSize() == changefeedNumber
 	}, waitTime, time.Millisecond*5)
