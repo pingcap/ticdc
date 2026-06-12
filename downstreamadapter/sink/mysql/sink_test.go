@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
-	"github.com/pingcap/failpoint"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/sink/mysql"
@@ -265,14 +264,6 @@ func TestMysqlSinkFlushDMLBeforeBlockReturnsOnDMLError(t *testing.T) {
 }
 
 func TestMysqlSinkFlushDMLBeforeBlockWaitsForDMLPostFlush(t *testing.T) {
-	require.NoError(t, failpoint.Enable("github.com/pingcap/ticdc/pkg/sink/mysql/MySQLSinkDelayDMLPostFlush", `pause`))
-	failpointEnabled := true
-	defer func() {
-		if failpointEnabled {
-			require.NoError(t, failpoint.Disable("github.com/pingcap/ticdc/pkg/sink/mysql/MySQLSinkDelayDMLPostFlush"))
-		}
-	}()
-
 	sink, mock := MysqlSinkForTest()
 
 	helper := commonEvent.NewEventTestHelper(t)
@@ -283,10 +274,14 @@ func TestMysqlSinkFlushDMLBeforeBlockWaitsForDMLPostFlush(t *testing.T) {
 	job := helper.DDL2Job(createTableSQL)
 	require.NotNil(t, job)
 
+	postFlushEntered := make(chan struct{})
+	releasePostFlush := make(chan struct{})
 	var dmlFlushed atomic.Bool
 	dmlEvent := helper.DML2Event("test", "t", "insert into t values (1, 'test')")
 	dmlEvent.CommitTs = 100
 	dmlEvent.AddPostFlushFunc(func() {
+		close(postFlushEntered)
+		<-releasePostFlush
 		dmlFlushed.Store(true)
 	})
 
@@ -297,6 +292,14 @@ func TestMysqlSinkFlushDMLBeforeBlockWaitsForDMLPostFlush(t *testing.T) {
 	sink.AddDMLEvent(dmlEvent)
 	require.Eventually(t, func() bool {
 		return mock.ExpectationsWereMet() == nil
+	}, time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool {
+		select {
+		case <-postFlushEntered:
+			return true
+		default:
+			return false
+		}
 	}, time.Second, 10*time.Millisecond)
 	require.False(t, dmlFlushed.Load())
 
@@ -316,8 +319,7 @@ func TestMysqlSinkFlushDMLBeforeBlockWaitsForDMLPostFlush(t *testing.T) {
 		}
 	}, 200*time.Millisecond, 10*time.Millisecond)
 
-	require.NoError(t, failpoint.Disable("github.com/pingcap/ticdc/pkg/sink/mysql/MySQLSinkDelayDMLPostFlush"))
-	failpointEnabled = false
+	close(releasePostFlush)
 
 	require.Eventually(t, func() bool {
 		select {
@@ -329,6 +331,56 @@ func TestMysqlSinkFlushDMLBeforeBlockWaitsForDMLPostFlush(t *testing.T) {
 		}
 	}, time.Second, 10*time.Millisecond)
 	require.True(t, dmlFlushed.Load())
+}
+
+func TestDMLBarrierAckFailAndDoneAreIdempotent(t *testing.T) {
+	barrier := newDMLBarrier(2)
+	doneCount := atomic.Int64{}
+	barrier.OnDone(func() { doneCount.Add(1) })
+
+	barrier.Ack(0)
+	barrier.Ack(0)
+	require.Never(t, func() bool {
+		select {
+		case <-barrier.done:
+			return true
+		default:
+			return false
+		}
+	}, 50*time.Millisecond, 10*time.Millisecond)
+
+	barrier.Ack(1)
+	require.NoError(t, barrier.Wait())
+	barrier.Fail(errors.New("late failure"))
+	barrier.Ack(1)
+	require.Equal(t, int64(1), doneCount.Load())
+
+	lateDone := atomic.Bool{}
+	barrier.OnDone(func() { lateDone.Store(true) })
+	require.True(t, lateDone.Load())
+}
+
+func TestMysqlSinkCloseUnblocksWaitingBarrier(t *testing.T) {
+	_, sink, mock := getMysqlSink()
+	barrier := newDMLBarrier(1)
+	sink.registerBarrier(barrier)
+	mock.ExpectClose()
+
+	flushDone := make(chan error, 1)
+	go func() { flushDone <- barrier.Wait() }()
+
+	sink.Close()
+
+	require.Eventually(t, func() bool {
+		select {
+		case err := <-flushDone:
+			require.Error(t, err)
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 // test the situation meets error when executing DDL

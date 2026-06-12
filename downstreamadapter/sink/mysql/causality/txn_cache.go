@@ -21,6 +21,30 @@ import (
 	"github.com/pingcap/ticdc/utils/chann"
 )
 
+// Barrier is an in-band DML writer control marker. It is acknowledged by each
+// writer only after all earlier DMLs in that writer queue have flushed.
+type Barrier interface {
+	Ack(writerID int)
+	Fail(err error)
+	OnDone(func())
+}
+
+// WriterItem is the value carried by MySQL DML writer queues.
+type WriterItem struct {
+	DML     *commonEvent.DMLEvent
+	Barrier Barrier
+}
+
+// NewDMLItem creates a writer queue item for a DML event.
+func NewDMLItem(event *commonEvent.DMLEvent) WriterItem {
+	return WriterItem{DML: event}
+}
+
+// NewBarrierItem creates a writer queue item for a barrier token.
+func NewBarrierItem(barrier Barrier) WriterItem {
+	return WriterItem{Barrier: barrier}
+}
+
 const (
 	// BlockStrategyWaitAvailable means the cache will block until there is an available slot.
 	BlockStrategyWaitAvailable BlockStrategy = "waitAvailable"
@@ -45,9 +69,12 @@ type TxnCacheOption struct {
 // In current implementation, the conflict detector will push txn to the txnCache.
 type txnCache interface {
 	// add adds a event to the Cache.
-	add(txn *commonEvent.DMLEvent) bool
+	add(item WriterItem) bool
+	// forceAdd appends a control item even when the cache is blocked, but fails
+	// if the underlying channel has already been closed.
+	forceAdd(item WriterItem) bool
 	// out returns a unlimited channel to receive events which are ready to be executed.
-	out() *chann.UnlimitedChannel[*commonEvent.DMLEvent, any]
+	out() *chann.UnlimitedChannel[WriterItem, any]
 }
 
 func newTxnCache(opt TxnCacheOption) txnCache {
@@ -57,9 +84,9 @@ func newTxnCache(opt TxnCacheOption) txnCache {
 
 	switch opt.BlockStrategy {
 	case BlockStrategyWaitAvailable:
-		return &boundedTxnCache{ch: chann.NewUnlimitedChannel[*commonEvent.DMLEvent, any](nil, nil), upperSize: opt.Size}
+		return &boundedTxnCache{ch: chann.NewUnlimitedChannel[WriterItem, any](nil, nil), upperSize: opt.Size}
 	case BlockStrategyWaitEmpty:
-		return &boundedTxnCacheWithBlock{ch: chann.NewUnlimitedChannel[*commonEvent.DMLEvent, any](nil, nil), upperSize: opt.Size}
+		return &boundedTxnCacheWithBlock{ch: chann.NewUnlimitedChannel[WriterItem, any](nil, nil), upperSize: opt.Size}
 	default:
 		return nil
 	}
@@ -69,35 +96,39 @@ func newTxnCache(opt TxnCacheOption) txnCache {
 //
 //nolint:unused
 type boundedTxnCache struct {
-	ch        *chann.UnlimitedChannel[*commonEvent.DMLEvent, any]
+	ch        *chann.UnlimitedChannel[WriterItem, any]
 	upperSize int
 }
 
 //nolint:unused
-func (w *boundedTxnCache) add(txn *commonEvent.DMLEvent) bool {
+func (w *boundedTxnCache) add(item WriterItem) bool {
 	if w.ch.Len() > w.upperSize {
 		return false
 	}
-	w.ch.Push(txn)
-	return true
+	return w.ch.PushIfNotClosed(item)
 }
 
 //nolint:unused
-func (w *boundedTxnCache) out() *chann.UnlimitedChannel[*commonEvent.DMLEvent, any] {
+func (w *boundedTxnCache) forceAdd(item WriterItem) bool {
+	return w.ch.PushIfNotClosed(item)
+}
+
+//nolint:unused
+func (w *boundedTxnCache) out() *chann.UnlimitedChannel[WriterItem, any] {
 	return w.ch
 }
 
 // boundedTxnCacheWithBlock is a special boundedWorker. Once the cache
 // is full, it will block until all cached txns are consumed.
 type boundedTxnCacheWithBlock struct {
-	ch *chann.UnlimitedChannel[*commonEvent.DMLEvent, any]
+	ch *chann.UnlimitedChannel[WriterItem, any]
 	//nolint:unused
 	isBlocked atomic.Bool
 	upperSize int
 }
 
 //nolint:unused
-func (w *boundedTxnCacheWithBlock) add(txn *commonEvent.DMLEvent) bool {
+func (w *boundedTxnCacheWithBlock) add(item WriterItem) bool {
 	if w.isBlocked.Load() && w.ch.Len() <= 0 {
 		w.isBlocked.Store(false)
 	}
@@ -107,13 +138,17 @@ func (w *boundedTxnCacheWithBlock) add(txn *commonEvent.DMLEvent) bool {
 			w.isBlocked.CompareAndSwap(false, true)
 			return false
 		}
-		w.ch.Push(txn)
-		return true
+		return w.ch.PushIfNotClosed(item)
 	}
 	return false
 }
 
 //nolint:unused
-func (w *boundedTxnCacheWithBlock) out() *chann.UnlimitedChannel[*commonEvent.DMLEvent, any] {
+func (w *boundedTxnCacheWithBlock) forceAdd(item WriterItem) bool {
+	return w.ch.PushIfNotClosed(item)
+}
+
+//nolint:unused
+func (w *boundedTxnCacheWithBlock) out() *chann.UnlimitedChannel[WriterItem, any] {
 	return w.ch
 }

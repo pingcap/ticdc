@@ -15,6 +15,7 @@ package causality
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/pingcap/log"
@@ -51,6 +52,9 @@ type ConflictDetector struct {
 
 	changefeedID                 common.ChangeFeedID
 	metricConflictDetectDuration prometheus.Observer
+
+	admissionMu sync.Mutex
+	activeFence *Node
 }
 
 // New creates a new ConflictDetector.
@@ -99,6 +103,9 @@ func (d *ConflictDetector) Run(ctx context.Context) error {
 // NOTE: if multiple threads access this concurrently,
 // ConflictKeys must be sorted by the slot index.
 func (d *ConflictDetector) Add(event *commonEvent.DMLEvent) {
+	d.admissionMu.Lock()
+	defer d.admissionMu.Unlock()
+
 	start := time.Now()
 	hashes := ConflictKeys(event)
 	node := d.slots.AllocNode(hashes)
@@ -118,27 +125,88 @@ func (d *ConflictDetector) Add(event *commonEvent.DMLEvent) {
 	node.RandCacheID = func() int64 {
 		return d.nextCacheID.Add(1) % int64(len(d.resolvedTxnCaches))
 	}
-	node.OnNotified = func(callback func()) {
-		if !d.notifyGuardWaitGroup.AddIf(func() bool { return !d.notifyClosed.Load() }) {
-			return
-		}
-		defer d.notifyGuardWaitGroup.Done()
-
-		d.notifiedNodes.Push(callback)
-	}
-	d.slots.Add(node)
+	node.OnNotified = d.onNodeNotified
+	extraDependencies := d.activeFenceDependency()
+	d.slots.AddWithDependencies(node, extraDependencies)
 }
 
 // sendToCache should not call txn.Callback if it returns an error.
 func (d *ConflictDetector) sendToCache(event *commonEvent.DMLEvent, id int64) bool {
 	cache := d.resolvedTxnCaches[id]
-	ok := cache.add(event)
+	ok := cache.add(NewDMLItem(event))
 	return ok
+}
+
+// BroadcastBarrier installs a removal-only fence after all DMLs admitted so far
+// and broadcasts one barrier token to every writer queue after that fence resolves.
+func (d *ConflictDetector) BroadcastBarrier(barrier Barrier) error {
+	if d.notifyClosed.Load() {
+		return errors.ErrMySQLTxnError.GenWithStackByArgs("broadcast barrier on closed conflict detector")
+	}
+
+	d.admissionMu.Lock()
+
+	dependencyNodes := make(map[int64]*Node)
+	for _, node := range d.slots.SnapshotTailNodes() {
+		dependencyNodes[node.nodeID()] = node
+	}
+	for id, node := range d.activeFenceDependency() {
+		dependencyNodes[id] = node
+	}
+
+	fence := &Node{
+		id:                   genNextNodeID(),
+		assignedTo:           unassigned,
+		resolveByRemovalOnly: true,
+	}
+	fence.TrySendToTxnCache = func(cacheID) bool {
+		item := NewBarrierItem(barrier)
+		for _, cache := range d.resolvedTxnCaches {
+			if !cache.forceAdd(item) {
+				err := errors.ErrMySQLTxnError.GenWithStackByArgs("broadcast barrier to closed DML writer queue")
+				go barrier.Fail(err)
+				return true
+			}
+		}
+		return true
+	}
+	fence.RandCacheID = func() cacheID { return 0 }
+	fence.OnNotified = d.onNodeNotified
+
+	d.activeFence = fence
+	fence.dependOn(dependencyNodes)
+	d.admissionMu.Unlock()
+
+	barrier.OnDone(func() {
+		d.admissionMu.Lock()
+		if d.activeFence == fence {
+			d.activeFence = nil
+		}
+		d.admissionMu.Unlock()
+		fence.remove()
+	})
+	return nil
+}
+
+func (d *ConflictDetector) activeFenceDependency() map[int64]*Node {
+	if d.activeFence == nil {
+		return nil
+	}
+	return map[int64]*Node{d.activeFence.nodeID(): d.activeFence}
+}
+
+func (d *ConflictDetector) onNodeNotified(callback func()) {
+	if !d.notifyGuardWaitGroup.AddIf(func() bool { return !d.notifyClosed.Load() }) {
+		return
+	}
+	defer d.notifyGuardWaitGroup.Done()
+
+	d.notifiedNodes.Push(callback)
 }
 
 // GetOutChByCacheID returns the output channel by cacheID.
 // Note txns in single cache should be executed sequentially.
-func (d *ConflictDetector) GetOutChByCacheID(id int) *chann.UnlimitedChannel[*commonEvent.DMLEvent, any] {
+func (d *ConflictDetector) GetOutChByCacheID(id int) *chann.UnlimitedChannel[WriterItem, any] {
 	return d.resolvedTxnCaches[id].out()
 }
 
