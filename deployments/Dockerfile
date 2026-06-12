@@ -4,7 +4,7 @@ WORKDIR /go/src/github.com/pingcap/ticdc
 COPY . .
 ENV CDC_ENABLE_VENDOR=0
 ARG NEXT_GEN
-RUN if [ -n "${NEXT_GEN}" ]; then NEXT_GEN=1 make cdc; else make cdc; fi
+RUN if [ -n "${NEXT_GEN}" ]; then NEXT_GEN=1 LEGACY_SAFEPOINT=1 make cdc; else make cdc; fi
 
 FROM alpine:3.15
 RUN apk add --no-cache tzdata bash curl socat

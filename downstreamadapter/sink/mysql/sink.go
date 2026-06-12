@@ -18,6 +18,7 @@ import (
 	"database/sql"
 	"net/url"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/pingcap/log"
@@ -67,6 +68,34 @@ type Sink struct {
 	// variable @@tidb_cdc_active_active_sync_stats and is shared by all DML writers.
 	// It is nil when disabled or unsupported by downstream.
 	activeActiveSyncStatsCollector *mysql.ActiveActiveSyncStatsCollector
+
+	pendingDMLMu     sync.Mutex
+	nextPendingDMLID uint64
+	pendingDMLs      map[uint64]*pendingDML
+}
+
+type pendingDML struct {
+	mu   sync.Mutex
+	err  error
+	done chan struct{}
+}
+
+func newPendingDML() *pendingDML {
+	return &pendingDML{done: make(chan struct{})}
+}
+
+func (p *pendingDML) complete(err error) {
+	p.mu.Lock()
+	p.err = err
+	close(p.done)
+	p.mu.Unlock()
+}
+
+func (p *pendingDML) wait() error {
+	<-p.done
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.err
 }
 
 // Verify is used to verify the sink uri and config is valid
@@ -156,6 +185,7 @@ func NewMySQLSink(
 		bdrMode:                        bdrMode,
 		enableActiveActive:             enableActiveActive,
 		activeActiveSyncStatsCollector: activeActiveSyncStatsCollector,
+		pendingDMLs:                    make(map[uint64]*pendingDML),
 	}
 	for i := 0; i < len(result.dmlWriter); i++ {
 		result.dmlWriter[i] = mysql.NewWriter(ctx, i, db, cfg, changefeedID, stat, activeActiveSyncStatsCollector)
@@ -209,11 +239,15 @@ func (s *Sink) runDMLWriter(ctx context.Context, idx int) error {
 	for {
 		select {
 		case <-ctx.Done():
-			return errors.Trace(ctx.Err())
+			err := errors.Trace(ctx.Err())
+			s.failPendingDMLs(err)
+			return err
 		default:
 			txnEvents, ok := inputCh.GetMultipleNoGroup(buffer)
 			if !ok {
-				return errors.Trace(ctx.Err())
+				err := errors.Trace(ctx.Err())
+				s.failPendingDMLs(err)
+				return err
 			}
 
 			if len(txnEvents) == 0 {
@@ -240,7 +274,9 @@ func (s *Sink) runDMLWriter(ctx context.Context, idx int) error {
 				workerEventRowCount.Observe(float64(txnEvents[i].Len()))
 				if rowCount+txnEvents[i].Len() > int32(s.maxTxnRows) {
 					if err := flushEvent(beginIndex, i, rowCount); err != nil {
-						return errors.Trace(err)
+						err = errors.Trace(err)
+						s.failPendingDMLs(err)
+						return err
 					}
 					beginIndex, rowCount = i, txnEvents[i].Len()
 				} else {
@@ -249,7 +285,9 @@ func (s *Sink) runDMLWriter(ctx context.Context, idx int) error {
 			}
 			// flush last batch
 			if err := flushEvent(beginIndex, len(txnEvents), rowCount); err != nil {
-				return errors.Trace(err)
+				err = errors.Trace(err)
+				s.failPendingDMLs(err)
+				return err
 			}
 			workerBatchFlushDuration.Observe(time.Since(start).Seconds())
 
@@ -280,11 +318,56 @@ func (s *Sink) SetTableSchemaStore(tableSchemaStore *commonEvent.TableSchemaStor
 }
 
 func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
+	pending := newPendingDML()
+	s.pendingDMLMu.Lock()
+	s.nextPendingDMLID++
+	pendingID := s.nextPendingDMLID
+	s.pendingDMLs[pendingID] = pending
+	s.pendingDMLMu.Unlock()
+
+	event.AddPostFlushFunc(func() {
+		s.completePendingDML(pendingID, nil)
+	})
 	s.conflictDetector.Add(event)
 }
 
 func (s *Sink) FlushDMLBeforeBlock(_ commonEvent.BlockEvent) error {
+	s.pendingDMLMu.Lock()
+	pendingDMLs := make([]*pendingDML, 0, len(s.pendingDMLs))
+	for _, pending := range s.pendingDMLs {
+		pendingDMLs = append(pendingDMLs, pending)
+	}
+	s.pendingDMLMu.Unlock()
+
+	for _, pending := range pendingDMLs {
+		if err := pending.wait(); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+func (s *Sink) completePendingDML(pendingID uint64, err error) {
+	s.pendingDMLMu.Lock()
+	pending, ok := s.pendingDMLs[pendingID]
+	if ok {
+		delete(s.pendingDMLs, pendingID)
+	}
+	s.pendingDMLMu.Unlock()
+	if ok {
+		pending.complete(err)
+	}
+}
+
+func (s *Sink) failPendingDMLs(err error) {
+	s.pendingDMLMu.Lock()
+	pendingDMLs := s.pendingDMLs
+	s.pendingDMLs = make(map[uint64]*pendingDML)
+	s.pendingDMLMu.Unlock()
+
+	for _, pending := range pendingDMLs {
+		pending.complete(err)
+	}
 }
 
 func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
@@ -403,6 +486,7 @@ func (s *Sink) GetTableRecoveryInfo(
 }
 
 func (s *Sink) Close() {
+	s.failPendingDMLs(context.Canceled)
 	s.conflictDetector.CloseNotifiedNodes()
 	s.ddlWriter.Close()
 	for _, w := range s.dmlWriter {

@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/pingcap/failpoint"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/sink/mysql"
@@ -221,6 +222,113 @@ func TestMysqlSinkMeetsDMLError(t *testing.T) {
 
 	require.Equal(t, count.Load(), int64(0))
 	require.False(t, sink.IsNormal())
+}
+
+func TestMysqlSinkFlushDMLBeforeBlockReturnsOnDMLError(t *testing.T) {
+	sink, mock := MysqlSinkForTest()
+
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	createTableSQL := "create table t (id int primary key, name varchar(32));"
+	job := helper.DDL2Job(createTableSQL)
+	require.NotNil(t, job)
+
+	dmlEvent := helper.DML2Event("test", "t", "insert into t values (1, 'test')")
+	dmlEvent.CommitTs = 100
+
+	mock.ExpectExec("BEGIN;INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?);COMMIT;").
+		WithArgs(1, "test").
+		WillDelayFor(100 * time.Millisecond).
+		WillReturnError(errors.New("connect: connection refused"))
+
+	sink.AddDMLEvent(dmlEvent)
+
+	syncPointEvent := commonEvent.NewSyncPointEvent(common.NewDispatcherID(), 200, 0, 0)
+	flushDone := make(chan error, 1)
+	go func() {
+		flushDone <- sink.FlushDMLBeforeBlock(syncPointEvent)
+	}()
+
+	require.Eventually(t, func() bool {
+		select {
+		case err := <-flushDone:
+			require.Error(t, err)
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
+	require.False(t, sink.IsNormal())
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestMysqlSinkFlushDMLBeforeBlockWaitsForDMLPostFlush(t *testing.T) {
+	require.NoError(t, failpoint.Enable("github.com/pingcap/ticdc/pkg/sink/mysql/MySQLSinkDelayDMLPostFlush", `pause`))
+	failpointEnabled := true
+	defer func() {
+		if failpointEnabled {
+			require.NoError(t, failpoint.Disable("github.com/pingcap/ticdc/pkg/sink/mysql/MySQLSinkDelayDMLPostFlush"))
+		}
+	}()
+
+	sink, mock := MysqlSinkForTest()
+
+	helper := commonEvent.NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	createTableSQL := "create table t (id int primary key, name varchar(32));"
+	job := helper.DDL2Job(createTableSQL)
+	require.NotNil(t, job)
+
+	var dmlFlushed atomic.Bool
+	dmlEvent := helper.DML2Event("test", "t", "insert into t values (1, 'test')")
+	dmlEvent.CommitTs = 100
+	dmlEvent.AddPostFlushFunc(func() {
+		dmlFlushed.Store(true)
+	})
+
+	mock.ExpectExec("BEGIN;INSERT INTO `test`.`t` (`id`,`name`) VALUES (?,?);COMMIT;").
+		WithArgs(1, "test").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	sink.AddDMLEvent(dmlEvent)
+	require.Eventually(t, func() bool {
+		return mock.ExpectationsWereMet() == nil
+	}, time.Second, 10*time.Millisecond)
+	require.False(t, dmlFlushed.Load())
+
+	syncPointEvent := commonEvent.NewSyncPointEvent(common.NewDispatcherID(), 200, 0, 0)
+	flushDone := make(chan error, 1)
+	go func() {
+		flushDone <- sink.FlushDMLBeforeBlock(syncPointEvent)
+	}()
+
+	require.Never(t, func() bool {
+		select {
+		case err := <-flushDone:
+			require.NoError(t, err)
+			return true
+		default:
+			return false
+		}
+	}, 200*time.Millisecond, 10*time.Millisecond)
+
+	require.NoError(t, failpoint.Disable("github.com/pingcap/ticdc/pkg/sink/mysql/MySQLSinkDelayDMLPostFlush"))
+	failpointEnabled = false
+
+	require.Eventually(t, func() bool {
+		select {
+		case err := <-flushDone:
+			require.NoError(t, err)
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
+	require.True(t, dmlFlushed.Load())
 }
 
 // test the situation meets error when executing DDL
