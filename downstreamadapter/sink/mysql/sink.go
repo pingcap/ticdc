@@ -18,6 +18,7 @@ import (
 	"database/sql"
 	"net/url"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/pingcap/log"
@@ -67,6 +68,91 @@ type Sink struct {
 	// variable @@tidb_cdc_active_active_sync_stats and is shared by all DML writers.
 	// It is nil when disabled or unsupported by downstream.
 	activeActiveSyncStatsCollector *mysql.ActiveActiveSyncStatsCollector
+
+	barrierMu           sync.Mutex
+	outstandingBarriers map[*dmlBarrier]struct{}
+}
+
+type dmlBarrier struct {
+	mu        sync.Mutex
+	done      chan struct{}
+	err       error
+	remaining int
+	acked     []bool
+	doneFuncs []func()
+}
+
+func newDMLBarrier(workerCount int) *dmlBarrier {
+	barrier := &dmlBarrier{
+		done:      make(chan struct{}),
+		remaining: workerCount,
+		acked:     make([]bool, workerCount),
+	}
+	if workerCount == 0 {
+		barrier.Fail(errors.ErrMySQLTxnError.GenWithStackByArgs("mysql DML barrier has no writers"))
+	}
+	return barrier
+}
+
+func (b *dmlBarrier) Ack(writerID int) {
+	b.mu.Lock()
+	if b.err != nil || b.remaining == 0 || writerID < 0 || writerID >= len(b.acked) || b.acked[writerID] {
+		b.mu.Unlock()
+		return
+	}
+	b.acked[writerID] = true
+	b.remaining--
+	if b.remaining > 0 {
+		b.mu.Unlock()
+		return
+	}
+	doneFuncs := b.doneFuncs
+	b.doneFuncs = nil
+	close(b.done)
+	b.mu.Unlock()
+	runBarrierDoneFuncs(doneFuncs)
+}
+
+func (b *dmlBarrier) Fail(err error) {
+	if err == nil {
+		err = errors.ErrMySQLTxnError.GenWithStackByArgs("mysql DML barrier failed")
+	}
+	b.mu.Lock()
+	if b.err != nil || b.remaining == 0 {
+		b.mu.Unlock()
+		return
+	}
+	b.err = err
+	b.remaining = 0
+	doneFuncs := b.doneFuncs
+	b.doneFuncs = nil
+	close(b.done)
+	b.mu.Unlock()
+	runBarrierDoneFuncs(doneFuncs)
+}
+
+func (b *dmlBarrier) Wait() error {
+	<-b.done
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.err
+}
+
+func (b *dmlBarrier) OnDone(f func()) {
+	b.mu.Lock()
+	if b.remaining == 0 {
+		b.mu.Unlock()
+		f()
+		return
+	}
+	b.doneFuncs = append(b.doneFuncs, f)
+	b.mu.Unlock()
+}
+
+func runBarrierDoneFuncs(funcs []func()) {
+	for _, f := range funcs {
+		f()
+	}
 }
 
 // Verify is used to verify the sink uri and config is valid
@@ -156,6 +242,7 @@ func NewMySQLSink(
 		bdrMode:                        bdrMode,
 		enableActiveActive:             enableActiveActive,
 		activeActiveSyncStatsCollector: activeActiveSyncStatsCollector,
+		outstandingBarriers:            make(map[*dmlBarrier]struct{}),
 	}
 	for i := 0; i < len(result.dmlWriter); i++ {
 		result.dmlWriter[i] = mysql.NewWriter(ctx, i, db, cfg, changefeedID, stat, activeActiveSyncStatsCollector)
@@ -205,27 +292,35 @@ func (s *Sink) runDMLWriter(ctx context.Context, idx int) error {
 	writer := s.dmlWriter[idx]
 
 	totalStart := time.Now()
-	buffer := make([]*commonEvent.DMLEvent, 0, s.maxTxnRows)
+	itemBuffer := make([]causality.WriterItem, 0, s.maxTxnRows)
+	dmlBuffer := make([]*commonEvent.DMLEvent, 0, s.maxTxnRows)
 	for {
 		select {
 		case <-ctx.Done():
-			return errors.Trace(ctx.Err())
+			err := errors.Trace(ctx.Err())
+			s.failOutstandingBarriers(err)
+			return err
 		default:
-			txnEvents, ok := inputCh.GetMultipleNoGroup(buffer)
+			items, ok := inputCh.GetMultipleNoGroup(itemBuffer)
 			if !ok {
-				return errors.Trace(ctx.Err())
+				err := errors.Trace(ctx.Err())
+				s.failOutstandingBarriers(err)
+				return err
 			}
 
-			if len(txnEvents) == 0 {
-				buffer = buffer[:0]
+			if len(items) == 0 {
+				itemBuffer = itemBuffer[:0]
 				continue
 			}
 			start := time.Now()
 			singleFlushStart := time.Now()
 
-			flushEvent := func(beginIndex, endIndex int, rowCount int32) error {
+			flushDMLs := func(events []*commonEvent.DMLEvent, rowCount int32) error {
+				if len(events) == 0 {
+					return nil
+				}
 				workerHandledRows.Add(float64(rowCount))
-				err := writer.Flush(txnEvents[beginIndex:endIndex])
+				err := writer.Flush(events)
 				if err != nil {
 					return errors.Trace(err)
 				}
@@ -234,23 +329,40 @@ func (s *Sink) runDMLWriter(ctx context.Context, idx int) error {
 				return nil
 			}
 
-			beginIndex, rowCount := 0, txnEvents[0].Len()
-			workerEventRowCount.Observe(float64(rowCount))
-			for i := 1; i < len(txnEvents); i++ {
-				workerEventRowCount.Observe(float64(txnEvents[i].Len()))
-				if rowCount+txnEvents[i].Len() > int32(s.maxTxnRows) {
-					if err := flushEvent(beginIndex, i, rowCount); err != nil {
-						return errors.Trace(err)
+			rowCount := int32(0)
+			for _, item := range items {
+				if item.DML != nil {
+					workerEventRowCount.Observe(float64(item.DML.Len()))
+					if rowCount+item.DML.Len() > int32(s.maxTxnRows) {
+						if err := flushDMLs(dmlBuffer, rowCount); err != nil {
+							s.failOutstandingBarriers(err)
+							return err
+						}
+						dmlBuffer = dmlBuffer[:0]
+						rowCount = 0
 					}
-					beginIndex, rowCount = i, txnEvents[i].Len()
-				} else {
-					rowCount += txnEvents[i].Len()
+					dmlBuffer = append(dmlBuffer, item.DML)
+					rowCount += item.DML.Len()
+					continue
+				}
+
+				if item.Barrier != nil {
+					if err := flushDMLs(dmlBuffer, rowCount); err != nil {
+						item.Barrier.Fail(err)
+						s.failOutstandingBarriers(err)
+						return err
+					}
+					dmlBuffer = dmlBuffer[:0]
+					rowCount = 0
+					item.Barrier.Ack(idx)
 				}
 			}
 			// flush last batch
-			if err := flushEvent(beginIndex, len(txnEvents), rowCount); err != nil {
-				return errors.Trace(err)
+			if err := flushDMLs(dmlBuffer, rowCount); err != nil {
+				s.failOutstandingBarriers(err)
+				return err
 			}
+			dmlBuffer = dmlBuffer[:0]
 			workerBatchFlushDuration.Observe(time.Since(start).Seconds())
 
 			// we record total time to calculate the worker busy ratio.
@@ -258,7 +370,7 @@ func (s *Sink) runDMLWriter(ctx context.Context, idx int) error {
 			// flush time and total time
 			workerTotalDuration.Observe(time.Since(totalStart).Seconds())
 			totalStart = time.Now()
-			buffer = buffer[:0]
+			itemBuffer = itemBuffer[:0]
 		}
 	}
 }
@@ -284,7 +396,40 @@ func (s *Sink) AddDMLEvent(event *commonEvent.DMLEvent) {
 }
 
 func (s *Sink) FlushDMLBeforeBlock(_ commonEvent.BlockEvent) error {
-	return nil
+	barrier := newDMLBarrier(len(s.dmlWriter))
+	s.registerBarrier(barrier)
+	defer s.unregisterBarrier(barrier)
+
+	if err := s.conflictDetector.BroadcastBarrier(barrier); err != nil {
+		barrier.Fail(err)
+		return err
+	}
+	return barrier.Wait()
+}
+
+func (s *Sink) registerBarrier(barrier *dmlBarrier) {
+	s.barrierMu.Lock()
+	s.outstandingBarriers[barrier] = struct{}{}
+	s.barrierMu.Unlock()
+}
+
+func (s *Sink) unregisterBarrier(barrier *dmlBarrier) {
+	s.barrierMu.Lock()
+	delete(s.outstandingBarriers, barrier)
+	s.barrierMu.Unlock()
+}
+
+func (s *Sink) failOutstandingBarriers(err error) {
+	s.barrierMu.Lock()
+	barriers := make([]*dmlBarrier, 0, len(s.outstandingBarriers))
+	for barrier := range s.outstandingBarriers {
+		barriers = append(barriers, barrier)
+	}
+	s.barrierMu.Unlock()
+
+	for _, barrier := range barriers {
+		barrier.Fail(err)
+	}
 }
 
 func (s *Sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
@@ -403,6 +548,7 @@ func (s *Sink) GetTableRecoveryInfo(
 }
 
 func (s *Sink) Close() {
+	s.failOutstandingBarriers(context.Canceled)
 	s.conflictDetector.CloseNotifiedNodes()
 	s.ddlWriter.Close()
 	for _, w := range s.dmlWriter {
