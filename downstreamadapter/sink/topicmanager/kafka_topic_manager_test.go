@@ -39,24 +39,24 @@ func TestCreateTopic(t *testing.T) {
 
 	changefeedID := common.NewChangefeedID4Test("test", "test")
 	ctx := context.Background()
+	var gotNewTopicDetail *kafka.TopicDetail
+	var gotNewTopicValidateOnly bool
+	var gotFailedTopicDetail *kafka.TopicDetail
+	var gotFailedTopicValidateOnly bool
 	gomock.InOrder(
 		adminClient.EXPECT().GetTopicsMeta([]string{kafkaTopicManagerTestTopic}, true).Return(
 			map[string]kafka.TopicDetail{
 				kafkaTopicManagerTestTopic: {
 					Name:          kafkaTopicManagerTestTopic,
-					NumPartitions: 3,
+					NumPartitions: 2,
 				},
 			}, nil),
 		adminClient.EXPECT().GetTopicsMeta([]string{"new-topic"}, true).Return(
 			map[string]kafka.TopicDetail{}, nil),
 		adminClient.EXPECT().CreateTopic(gomock.Any(), false).DoAndReturn(
 			func(detail *kafka.TopicDetail, validateOnly bool) error {
-				require.Equal(t, &kafka.TopicDetail{
-					Name:              "new-topic",
-					NumPartitions:     2,
-					ReplicationFactor: 1,
-				}, detail)
-				require.False(t, validateOnly)
+				gotNewTopicDetail = detail
+				gotNewTopicValidateOnly = validateOnly
 				return nil
 			}),
 		adminClient.EXPECT().GetTopicsMeta([]string{"new-topic"}, false).Return(
@@ -72,8 +72,8 @@ func TestCreateTopic(t *testing.T) {
 			map[string]kafka.TopicDetail{}, nil),
 		adminClient.EXPECT().CreateTopic(gomock.Any(), false).DoAndReturn(
 			func(detail *kafka.TopicDetail, validateOnly bool) error {
-				require.Equal(t, "new-topic-failed", detail.Name)
-				require.False(t, validateOnly)
+				gotFailedTopicDetail = detail
+				gotFailedTopicValidateOnly = validateOnly
 				return sarama.ErrInvalidReplicationFactor
 			}),
 	)
@@ -87,6 +87,12 @@ func TestCreateTopic(t *testing.T) {
 	partitionNum, err = manager.CreateTopicAndWaitUntilVisible(ctx, "new-topic")
 	require.NoError(t, err)
 	require.Equal(t, int32(2), partitionNum)
+	require.Equal(t, &kafka.TopicDetail{
+		Name:              "new-topic",
+		NumPartitions:     2,
+		ReplicationFactor: 1,
+	}, gotNewTopicDetail)
+	require.False(t, gotNewTopicValidateOnly)
 	partitionsNum, err := manager.GetPartitionNum(ctx, "new-topic")
 	require.NoError(t, err)
 	require.Equal(t, int32(2), partitionsNum)
@@ -118,4 +124,7 @@ func TestCreateTopic(t *testing.T) {
 		"kafka create topic failed: kafka server: Replication-factor is invalid",
 		err,
 	)
+	require.NotNil(t, gotFailedTopicDetail)
+	require.Equal(t, "new-topic-failed", gotFailedTopicDetail.Name)
+	require.False(t, gotFailedTopicValidateOnly)
 }

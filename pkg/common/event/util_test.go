@@ -21,6 +21,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestCloneRowKeysPreservesNil(t *testing.T) {
+	require.Nil(t, cloneRowKeys(nil))
+}
+
 func TestIsSplitable(t *testing.T) {
 	helper := NewEventTestHelper(t)
 	defer helper.Close()

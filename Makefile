@@ -141,6 +141,11 @@ FAILPOINT_DIR := $$(for p in $(PACKAGES); do echo $${p\#"github.com/pingcap/$(PR
 FAILPOINT := tools/bin/failpoint-ctl
 FAILPOINT_ENABLE  := $$(echo $(FAILPOINT_DIR) | xargs $(FAILPOINT) enable >/dev/null)
 FAILPOINT_DISABLE := $$(echo $(FAILPOINT_DIR) | xargs $(FAILPOINT) disable >/dev/null)
+
+# ENABLE_FAILPOINT controls whether unit_test_pkg* targets run failpoint
+# enable/disable steps. Set it to 0 for faster test iteration when failpoint
+# injection is not needed; the UNIT_TEST_FAILPOINT_* variables below derive
+# the related prerequisites and commands.
 ENABLE_FAILPOINT ?= 1
 ifeq ($(ENABLE_FAILPOINT),1)
 UNIT_TEST_FAILPOINT_DEPS := check_failpoint_ctl

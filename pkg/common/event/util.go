@@ -212,6 +212,9 @@ func (f *SinkTestEventFixture) NewDMLEvent(postFlush ...func()) *DMLEvent {
 }
 
 func cloneRowKeys(rowKeys [][]byte) [][]byte {
+	if rowKeys == nil {
+		return nil
+	}
 	cloned := make([][]byte, 0, len(rowKeys))
 	for _, key := range rowKeys {
 		cloned = append(cloned, append([]byte(nil), key...))

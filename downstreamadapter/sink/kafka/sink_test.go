@@ -17,7 +17,6 @@ import (
 	"context"
 	"fmt"
 	"net/url"
-	"sync"
 	"testing"
 	"time"
 
@@ -153,24 +152,9 @@ func newKafkaSinkForTestWithProducers(ctx context.Context,
 	return s, nil
 }
 
-var kafkaSinkEvents struct {
-	once    sync.Once
-	fixture *commonEvent.SinkTestEventFixture
-}
-
-func getKafkaSinkEventFixture(t *testing.T) *commonEvent.SinkTestEventFixture {
-	t.Helper()
-
-	kafkaSinkEvents.once.Do(func() {
-		kafkaSinkEvents.fixture = commonEvent.NewBasicSinkTestEventFixture(t)
-	})
-
-	return kafkaSinkEvents.fixture
-}
-
 func TestKafkaSinkBasicFunctionality(t *testing.T) {
 	var count atomic.Int64
-	fixture := getKafkaSinkEventFixture(t)
+	fixture := commonEvent.NewBasicSinkTestEventFixture(t)
 	postFlush := func() { count.Add(1) }
 	ddlEvent := fixture.NewDDLEvent(1, postFlush)
 	dmlEvent := fixture.NewDMLEvent(postFlush)
