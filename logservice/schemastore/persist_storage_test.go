@@ -3651,24 +3651,164 @@ func TestParseRenameTablesQueryInfos(t *testing.T) {
 	}
 }
 
-func TestBuildDDLEventForNewTableDDL_CreateTableLikeBlockedTableNames(t *testing.T) {
+func TestBuildPersistedDDLEventForCreateViewUsesStoredSelectStmt(t *testing.T) {
+	job := buildCreateViewJobForTest(101, 100)
+	job.TableName = "v"
+	job.Query = "CREATE ALGORITHM = UNDEFINED DEFINER = CURRENT_USER SQL SECURITY DEFINER VIEW `target_db`.`v` AS SELECT `id` FROM `users`"
+	job.BinlogInfo.TableInfo = &model.TableInfo{
+		Name: parser_model.NewCIStr("v"),
+		View: &model.ViewInfo{
+			SelectStmt: "SELECT `id` FROM `source_db`.`users`",
+		},
+	}
+
+	ddl := buildPersistedDDLEventForCreateView(buildPersistedDDLEventFuncArgs{
+		job: job,
+		databaseMap: map[int64]*BasicDatabaseInfo{
+			101: {Name: "target_db", Tables: map[int64]bool{}},
+		},
+	})
+
+	require.Equal(t,
+		"CREATE ALGORITHM = UNDEFINED DEFINER = CURRENT_USER SQL SECURITY DEFINER VIEW `target_db`.`v` AS SELECT `id` FROM `source_db`.`users`",
+		ddl.Query)
+	require.Equal(t, "target_db", ddl.SchemaName)
+	require.Equal(t, "v", ddl.TableName)
+}
+
+func TestBuildPersistedDDLEventForCreateViewKeepsOriginalQueryForSameSchemaSelect(t *testing.T) {
+	job := buildCreateViewJobForTest(101, 100)
+	job.TableName = "v"
+	job.Query = "CREATE ALGORITHM = UNDEFINED DEFINER = CURRENT_USER SQL SECURITY DEFINER VIEW `target_db`.`v` AS SELECT `id` FROM `users`"
+	job.BinlogInfo.TableInfo = &model.TableInfo{
+		Name: parser_model.NewCIStr("v"),
+		View: &model.ViewInfo{
+			SelectStmt: "SELECT `id` FROM `target_db`.`users`",
+		},
+	}
+
+	ddl := buildPersistedDDLEventForCreateView(buildPersistedDDLEventFuncArgs{
+		job: job,
+		databaseMap: map[int64]*BasicDatabaseInfo{
+			101: {Name: "target_db", Tables: map[int64]bool{}},
+		},
+	})
+
+	require.Equal(t,
+		"CREATE ALGORITHM = UNDEFINED DEFINER = CURRENT_USER SQL SECURITY DEFINER VIEW `target_db`.`v` AS SELECT `id` FROM `users`",
+		ddl.Query)
+	require.Equal(t, "target_db", ddl.SchemaName)
+	require.Equal(t, "v", ddl.TableName)
+}
+
+func TestBuildPersistedDDLEventForCreateViewQualifiesTableColumnReferences(t *testing.T) {
 	cases := []struct {
-		name     string
-		query    string
-		expected []commonEvent.SchemaTableName
+		name       string
+		query      string
+		selectStmt string
+		expected   string
 	}{
 		{
-			name:  "default schema",
-			query: "CREATE TABLE `b` LIKE `a`",
+			name:       "cross schema unaliased table qualifier",
+			query:      "CREATE ALGORITHM = UNDEFINED DEFINER = CURRENT_USER SQL SECURITY DEFINER VIEW `target_db`.`v` AS SELECT `orders`.`id` FROM `orders`",
+			selectStmt: "SELECT `orders`.`id` AS `id` FROM `source_db`.`orders`",
+			expected:   "CREATE ALGORITHM = UNDEFINED DEFINER = CURRENT_USER SQL SECURITY DEFINER VIEW `target_db`.`v` AS SELECT `source_db`.`orders`.`id` AS `id` FROM `source_db`.`orders`",
+		},
+		{
+			name:       "same schema unaliased table qualifier",
+			query:      "CREATE ALGORITHM = UNDEFINED DEFINER = CURRENT_USER SQL SECURITY DEFINER VIEW `target_db`.`v` AS SELECT `users`.`id` FROM `users`",
+			selectStmt: "SELECT `users`.`id` AS `id` FROM `target_db`.`users`",
+			expected:   "CREATE ALGORITHM = UNDEFINED DEFINER = CURRENT_USER SQL SECURITY DEFINER VIEW `target_db`.`v` AS SELECT `target_db`.`users`.`id` AS `id` FROM `target_db`.`users`",
+		},
+		{
+			name:       "alias is preserved",
+			query:      "CREATE ALGORITHM = UNDEFINED DEFINER = CURRENT_USER SQL SECURITY DEFINER VIEW `target_db`.`v` AS SELECT `orders`.`id` FROM `orders` AS `orders`",
+			selectStmt: "SELECT `orders`.`id` AS `id` FROM `source_db`.`orders` AS `orders`",
+			expected:   "CREATE ALGORITHM = UNDEFINED DEFINER = CURRENT_USER SQL SECURITY DEFINER VIEW `target_db`.`v` AS SELECT `orders`.`id` AS `id` FROM `source_db`.`orders` AS `orders`",
+		},
+		{
+			name:       "ambiguous table qualifier is preserved",
+			query:      "CREATE ALGORITHM = UNDEFINED DEFINER = CURRENT_USER SQL SECURITY DEFINER VIEW `target_db`.`v` AS SELECT `t`.`id` FROM `t`",
+			selectStmt: "SELECT `t`.`id` AS `id` FROM `db1`.`t`, `db2`.`t`",
+			expected:   "CREATE ALGORITHM = UNDEFINED DEFINER = CURRENT_USER SQL SECURITY DEFINER VIEW `target_db`.`v` AS SELECT `t`.`id` AS `id` FROM (`db1`.`t`) JOIN `db2`.`t`",
+		},
+		{
+			name:       "subquery scopes are independent",
+			query:      "CREATE ALGORITHM = UNDEFINED DEFINER = CURRENT_USER SQL SECURITY DEFINER VIEW `target_db`.`v` AS SELECT `q`.`id` FROM (SELECT `t`.`id` FROM `t`) AS `q`",
+			selectStmt: "SELECT `q`.`id` AS `id` FROM (SELECT `t`.`id` AS `id` FROM `source_db`.`t`) AS `q`",
+			expected:   "CREATE ALGORITHM = UNDEFINED DEFINER = CURRENT_USER SQL SECURITY DEFINER VIEW `target_db`.`v` AS SELECT `q`.`id` AS `id` FROM (SELECT `source_db`.`t`.`id` AS `id` FROM `source_db`.`t`) AS `q`",
+		},
+		{
+			name:       "join table qualifier",
+			query:      "CREATE ALGORITHM = UNDEFINED DEFINER = CURRENT_USER SQL SECURITY DEFINER VIEW `target_db`.`v` AS SELECT `orders`.`id`, `customers`.`name` FROM `orders` JOIN `customers` ON `orders`.`customer_id` = `customers`.`id`",
+			selectStmt: "SELECT `orders`.`id` AS `id`, `customers`.`name` AS `name` FROM `source_db`.`orders` JOIN `crm_db`.`customers` ON `orders`.`customer_id` = `customers`.`id`",
+			expected:   "CREATE ALGORITHM = UNDEFINED DEFINER = CURRENT_USER SQL SECURITY DEFINER VIEW `target_db`.`v` AS SELECT `source_db`.`orders`.`id` AS `id`,`crm_db`.`customers`.`name` AS `name` FROM `source_db`.`orders` JOIN `crm_db`.`customers` ON `source_db`.`orders`.`customer_id`=`crm_db`.`customers`.`id`",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			job := buildCreateViewJobForTest(101, 100)
+			job.TableName = "v"
+			job.Query = tc.query
+			job.BinlogInfo.TableInfo = &model.TableInfo{
+				Name: parser_model.NewCIStr("v"),
+				View: &model.ViewInfo{
+					SelectStmt: tc.selectStmt,
+				},
+			}
+
+			ddl := buildPersistedDDLEventForCreateView(buildPersistedDDLEventFuncArgs{
+				job: job,
+				databaseMap: map[int64]*BasicDatabaseInfo{
+					101: {Name: "target_db", Tables: map[int64]bool{}},
+				},
+			})
+
+			require.Equal(t, tc.expected, ddl.Query)
+			require.Equal(t, "target_db", ddl.SchemaName)
+			require.Equal(t, "v", ddl.TableName)
+		})
+	}
+}
+
+func TestBuildDDLEventForNewTableDDL_CreateTableLikeBlockedTableNames(t *testing.T) {
+	cases := []struct {
+		name       string
+		query      string
+		schemaName string
+		expected   []commonEvent.SchemaTableName
+	}{
+		{
+			name:       "default schema",
+			query:      "CREATE TABLE `b` LIKE `a`",
+			schemaName: "test",
 			expected: []commonEvent.SchemaTableName{
 				{SchemaName: "test", TableName: "a"},
 			},
 		},
 		{
-			name:  "explicit schema",
-			query: "CREATE TABLE `b` LIKE `other`.`a`",
+			name:       "explicit schema",
+			query:      "CREATE TABLE `b` LIKE `other`.`a`",
+			schemaName: "test",
 			expected: []commonEvent.SchemaTableName{
 				{SchemaName: "other", TableName: "a"},
+			},
+		},
+		{
+			name:       "explicit target schema with persisted refer table",
+			query:      "CREATE TABLE `extra`.`b` LIKE `test`.`a`",
+			schemaName: "extra",
+			expected: []commonEvent.SchemaTableName{
+				{SchemaName: "test", TableName: "a"},
+			},
+		},
+		{
+			name:       "explicit target schema in same schema",
+			query:      "CREATE TABLE `test`.`b` LIKE `a`",
+			schemaName: "test",
+			expected: []commonEvent.SchemaTableName{
+				{SchemaName: "test", TableName: "a"},
 			},
 		},
 	}
@@ -3678,7 +3818,7 @@ func TestBuildDDLEventForNewTableDDL_CreateTableLikeBlockedTableNames(t *testing
 			Type:       byte(model.ActionCreateTable),
 			SchemaID:   1,
 			TableID:    2,
-			SchemaName: "test",
+			SchemaName: tc.schemaName,
 			TableName:  "b",
 			Query:      tc.query,
 			TableInfo:  &model.TableInfo{},
@@ -3697,6 +3837,7 @@ func TestBuildPersistedDDLEventForCreateTableLikeSetsReferTableID(t *testing.T) 
 		query           string
 		partitionIDs    []int64
 		expectedReferID int64
+		expectedQuery   string
 	}{
 		{
 			name:            "non partition refer table",
@@ -3721,6 +3862,7 @@ func TestBuildPersistedDDLEventForCreateTableLikeSetsReferTableID(t *testing.T) 
 			query:           "CREATE TABLE `b` LIKE `TeSt`.`A`",
 			partitionIDs:    nil,
 			expectedReferID: 101,
+			expectedQuery:   "CREATE TABLE `b` LIKE `TeSt`.`A`",
 		},
 	}
 
@@ -3747,11 +3889,96 @@ func TestBuildPersistedDDLEventForCreateTableLikeSetsReferTableID(t *testing.T) 
 			partitionMap: partitionMap,
 		})
 		require.Equal(t, tc.expectedReferID, ddl.ExtraTableID, tc.name)
+		if tc.expectedQuery != "" {
+			require.Equal(t, tc.expectedQuery, ddl.Query, tc.name)
+		}
 		if len(tc.partitionIDs) > 0 {
 			require.ElementsMatch(t, tc.partitionIDs, ddl.ReferTablePartitionIDs, tc.name)
 		} else {
 			require.Empty(t, ddl.ReferTablePartitionIDs, tc.name)
 		}
+	}
+
+	job := buildCreateTableJobForTest(200, 300, "b", 1010)
+	job.Query = "CREATE TABLE `extra`.`b` LIKE `a`"
+	job.InvolvingSchemaInfo = []model.InvolvingSchemaInfo{
+		{Database: "extra", Table: "b"},
+		{Database: "test", Table: "a", Mode: model.SharedInvolving},
+	}
+	ddl := buildPersistedDDLEventForCreateTable(buildPersistedDDLEventFuncArgs{
+		job: job,
+		databaseMap: map[int64]*BasicDatabaseInfo{
+			100: {Name: "test", Tables: map[int64]bool{101: true}},
+			200: {Name: "extra", Tables: map[int64]bool{300: true}},
+		},
+		tableMap: map[int64]*BasicTableInfo{
+			101: {SchemaID: 100, Name: "a"},
+			300: {SchemaID: 200, Name: "b"},
+		},
+	})
+	require.Equal(t, int64(101), ddl.ExtraTableID)
+}
+
+func TestBuildPersistedDDLEventForCreateTableLikeUsesInvolvingReferSchema(t *testing.T) {
+	job := buildCreateTableJobForTest(100, 200, "t", 1010)
+	job.Query = "CREATE TABLE `dst_db`.`t` LIKE `t`"
+	job.InvolvingSchemaInfo = []model.InvolvingSchemaInfo{
+		{Database: "dst_db", Table: "t"},
+		{Database: "src_db", Table: "t", Mode: model.SharedInvolving},
+	}
+
+	ddl := buildPersistedDDLEventForCreateTable(buildPersistedDDLEventFuncArgs{
+		job: job,
+		databaseMap: map[int64]*BasicDatabaseInfo{
+			100: {Name: "dst_db", Tables: map[int64]bool{200: true}},
+			101: {Name: "src_db", Tables: map[int64]bool{201: true}},
+		},
+		tableMap: map[int64]*BasicTableInfo{
+			200: {SchemaID: 100, Name: "t"},
+			201: {SchemaID: 101, Name: "t"},
+		},
+	})
+
+	require.Equal(t, int64(201), ddl.ExtraTableID)
+	require.Equal(t, "CREATE TABLE `dst_db`.`t` LIKE `src_db`.`t`", ddl.Query)
+}
+
+func TestBuildPersistedDDLEventForCreateTableLikeKeepsOriginalQueryInSameSchema(t *testing.T) {
+	cases := []struct {
+		name  string
+		query string
+	}{
+		{
+			name:  "unqualified target table",
+			query: "CREATE TABLE `dst` LIKE `src`",
+		},
+		{
+			name:  "explicit target schema",
+			query: "CREATE TABLE `test`.`dst` LIKE `src`",
+		},
+	}
+
+	for _, tc := range cases {
+		job := buildCreateTableJobForTest(100, 200, "dst", 1010)
+		job.Query = tc.query
+		job.InvolvingSchemaInfo = []model.InvolvingSchemaInfo{
+			{Database: "test", Table: "dst"},
+			{Database: "test", Table: "src", Mode: model.SharedInvolving},
+		}
+
+		ddl := buildPersistedDDLEventForCreateTable(buildPersistedDDLEventFuncArgs{
+			job: job,
+			databaseMap: map[int64]*BasicDatabaseInfo{
+				100: {Name: "test", Tables: map[int64]bool{101: true, 200: true}},
+			},
+			tableMap: map[int64]*BasicTableInfo{
+				101: {SchemaID: 100, Name: "src"},
+				200: {SchemaID: 100, Name: "dst"},
+			},
+		})
+
+		require.Equal(t, int64(101), ddl.ExtraTableID, tc.name)
+		require.Equal(t, tc.query, ddl.Query, tc.name)
 	}
 }
 

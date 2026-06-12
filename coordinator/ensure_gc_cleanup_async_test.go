@@ -36,6 +36,10 @@ func (noopGCManager) TryUpdateServiceGCSafepoint(ctx context.Context, checkpoint
 	return nil
 }
 
+func (noopGCManager) TryDeleteServiceGCSafepoint(ctx context.Context) error {
+	return nil
+}
+
 func (noopGCManager) CheckStaleCheckpointTs(changefeedID common.ChangeFeedID, checkpointTs common.Ts) error {
 	return nil
 }

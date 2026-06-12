@@ -30,6 +30,30 @@ const (
 	// syncPointMetaTableID is a reserved table_id in ddl_ts_v1 used to record syncpoint state.
 	// It is negative to avoid conflicting with any real table_id (including DDLSpanTableID=0).
 	syncPointMetaTableID int64 = -1
+
+	// ddlTsTableExistsQuery checks only TiCDC's own ddl_ts metadata table.
+	// It is used after a failed ddl_ts operation when the downstream does not
+	// return standard MySQL/TiDB missing table error codes.
+	ddlTsTableExistsQuery = "SELECT COUNT(1) FROM information_schema.tables WHERE table_schema = '" +
+		filter.TiCDCSystemSchema + "' AND table_name = '" + filter.DDLTsTable + "'"
+)
+
+// ddlTsTableErrorAction tells the caller how to proceed after a failed
+// ddl_ts metadata query or cleanup operation.
+type ddlTsTableErrorAction int
+
+const (
+	// ddlTsTableErrorReport means the ddl_ts table exists or could not be
+	// prepared, so the caller should return an error to its own caller.
+	ddlTsTableErrorReport ddlTsTableErrorAction = iota
+	// ddlTsTableErrorIgnore means the ddl_ts table is absent. This is expected
+	// before the first DDL or syncpoint, so the caller can treat it as empty
+	// recovery metadata.
+	ddlTsTableErrorIgnore
+	// ddlTsTableErrorRetry means the metadata lookup was unavailable, but
+	// TiCDC has successfully created ddl_ts_v1 and the caller should retry the
+	// original operation once.
+	ddlTsTableErrorRetry
 )
 
 // FlushDDLTsPre is used to flush ddl ts before the ddl event is sent to downstream.
@@ -325,9 +349,13 @@ func (w *Writer) GetTableRecoveryInfo(tableIDs []int64) ([]int64, []bool, []bool
 
 	query := selectDDLTsQuery(tableIDs, ticdcClusterID, changefeedID)
 	log.Info("query ddl ts table", zap.String("query", query))
-	rows, err := w.db.Query(query)
+	rows, err := w.db.QueryContext(w.ctx, query)
 	if err != nil {
-		if errors.IsTableNotExistsErr(err) {
+		action, handleErr := w.handleDDLTsTableQueryError(err)
+		if handleErr != nil {
+			return retStartTsList, skipSyncpointAtStartTs, skipDMLAsStartTsList, handleErr
+		}
+		if action == ddlTsTableErrorIgnore {
 			// If this table is not existed, this means the table is first being synced
 			log.Info("ddl ts table is not found",
 				zap.String("keyspace", w.ChangefeedID.Keyspace()),
@@ -335,7 +363,12 @@ func (w *Writer) GetTableRecoveryInfo(tableIDs []int64) ([]int64, []bool, []bool
 				zap.Error(err))
 			return retStartTsList, skipSyncpointAtStartTs, skipDMLAsStartTsList, nil
 		}
-		return retStartTsList, skipSyncpointAtStartTs, skipDMLAsStartTsList, errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to check ddl ts table; Query is %s", query)))
+		if action == ddlTsTableErrorRetry {
+			rows, err = w.db.QueryContext(w.ctx, query)
+		}
+		if err != nil {
+			return retStartTsList, skipSyncpointAtStartTs, skipDMLAsStartTsList, errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to check ddl ts table; Query is %s", query)))
+		}
 	}
 
 	defer rows.Close()
@@ -478,10 +511,14 @@ func (w *Writer) RemoveDDLTsItem() error {
 
 	_, err = tx.Exec(query)
 	if err != nil {
-		if errors.IsTableNotExistsErr(err) {
-			if rbErr := tx.Rollback(); rbErr != nil {
-				log.Error("failed to rollback", zap.Error(rbErr))
-			}
+		if rbErr := tx.Rollback(); rbErr != nil {
+			log.Warn("failed to rollback ddl ts cleanup transaction", zap.Error(rbErr))
+		}
+		action, handleErr := w.handleDDLTsTableQueryError(err)
+		if handleErr != nil {
+			return handleErr
+		}
+		if action == ddlTsTableErrorIgnore {
 			// If this table is not existed, this means the changefeed has not table, so we just return nil.
 			log.Info("ddl ts table is not found when RemoveDDLTsItem",
 				zap.String("keyspace", w.ChangefeedID.Keyspace()),
@@ -489,16 +526,86 @@ func (w *Writer) RemoveDDLTsItem() error {
 				zap.Error(err))
 			return nil
 		}
-		log.Error("failed to delete ddl ts item ", zap.Error(err))
-		err2 := tx.Rollback()
-		if err2 != nil {
-			log.Error("failed to delete ddl ts item", zap.Error(err2))
+		if action == ddlTsTableErrorRetry {
+			return w.removeDDLTsItemWithQuery(query)
 		}
 		return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to delete ddl ts item; Query is %s", query)))
 	}
 
-	err = tx.Commit()
-	return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to delete ddl ts item; Query is %s", query)))
+	if err = tx.Commit(); err != nil {
+		return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to delete ddl ts item; Query is %s", query)))
+	}
+	return nil
+}
+
+func (w *Writer) removeDDLTsItemWithQuery(query string) error {
+	tx, err := w.db.BeginTx(w.ctx, nil)
+	if err != nil {
+		return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, "select ddl ts table: begin Tx fail;"))
+	}
+
+	_, err = tx.Exec(query)
+	if err != nil {
+		err2 := tx.Rollback()
+		if err2 != nil {
+			log.Warn("failed to rollback ddl ts cleanup transaction", zap.Error(err2))
+		}
+		return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to delete ddl ts item; Query is %s", query)))
+	}
+
+	if err = tx.Commit(); err != nil {
+		return errors.WrapError(errors.ErrMySQLTxnError, errors.WithMessage(err, fmt.Sprintf("failed to delete ddl ts item; Query is %s", query)))
+	}
+	return nil
+}
+
+// handleDDLTsTableQueryError classifies a failed ddl_ts table operation.
+//
+// The ddl_ts table is created lazily, so missing tidb_cdc.ddl_ts_v1 is a valid
+// first-sync state. Standard MySQL/TiDB missing table errors are accepted
+// directly. For MySQL-compatible downstreams that use nonstandard error codes,
+// the function verifies table existence through information_schema.tables. If
+// that metadata check is unavailable, it creates the ddl_ts table and asks the
+// caller to retry the original operation exactly once.
+func (w *Writer) handleDDLTsTableQueryError(queryErr error) (ddlTsTableErrorAction, error) {
+	if errors.IsTableNotExistsErr(queryErr) {
+		return ddlTsTableErrorIgnore, nil
+	}
+
+	exists, err := w.ddlTsTableExists()
+	if err == nil {
+		if !exists {
+			return ddlTsTableErrorIgnore, nil
+		}
+		return ddlTsTableErrorReport, nil
+	}
+
+	log.Warn("failed to check ddl ts table metadata, create table and retry",
+		zap.String("keyspace", w.ChangefeedID.Keyspace()),
+		zap.String("changefeedID", w.ChangefeedID.Name()),
+		zap.Error(err),
+		zap.NamedError("queryError", queryErr))
+	if err := w.createDDLTsTable(); err != nil {
+		return ddlTsTableErrorReport, err
+	}
+
+	// createDDLTsTable bypasses the lazy-init cache on purpose. Mark the table
+	// initialized only after the forced create succeeds.
+	w.ddlTsTableInitMutex.Lock()
+	w.ddlTsTableInit = true
+	w.ddlTsTableInitMutex.Unlock()
+	return ddlTsTableErrorRetry, nil
+}
+
+// ddlTsTableExists returns whether tidb_cdc.ddl_ts_v1 is visible in the
+// downstream metadata tables.
+func (w *Writer) ddlTsTableExists() (bool, error) {
+	row := w.db.QueryRowContext(w.ctx, ddlTsTableExistsQuery)
+	var count int
+	if err := row.Scan(&count); err != nil {
+		return false, errors.Trace(err)
+	}
+	return count > 0, nil
 }
 
 func (w *Writer) isDDLExecuted(tableID int64, ddlTs uint64) (bool, error) {

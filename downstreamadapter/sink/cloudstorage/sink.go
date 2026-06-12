@@ -37,10 +37,16 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// It will send the events to cloud storage systems.
-// Messages are encoded in the specific protocol and routed by dispatcher to shard pipelines.
-// The data flow is as follows: **data** -> encoding pipeline -> dispatcher routers -> writer shards -> external storage.
-// The writer shards write encoded messages to external storage in parallel between different tables.
+// sink is the top-level runtime object of the cloud storage sink.
+// It coordinates three paths that run at the same time:
+//  1. DML events enter through AddDMLEvent, it's encoded into messages, and buffered
+//     in the spool before it's flushed to external storage as data and index files.
+//  2. Block events is only DDL event. FlushDMLBeforeBlock is called first, it make sure
+//     all dml events belongs to the specified dispatcher is flushed to the downstream.
+//     After that, WriteBlockEvent is called, it writes the DDL events directly to external storage.
+//  3. Checkpoint ts updates periodically.
+//  4. Background cleanup runs periodically, cleanup only removes expired files according
+//     to persisted storage state.
 type sink struct {
 	changefeedID common.ChangeFeedID
 	cfg          *cloudstorage.Config
@@ -51,6 +57,8 @@ type sink struct {
 
 	dmlWriters *dmlWriters
 
+	// checkpointChan is a bounded best-effort queue. It is not closed
+	// explicitly; both senders and the background checkpoint worker stop on ctx.
 	checkpointChan           chan uint64
 	lastCheckpointTs         atomic.Uint64
 	lastSendCheckpointTsTime time.Time
@@ -65,6 +73,7 @@ type sink struct {
 	// some method lack of the context parameter,
 	// we have to use the context from the struct to perceive the context done from the upper layer
 	// To perceive the context done from the upper layer
+	// it's the same as the context passed into the Run method.
 	ctx context.Context
 }
 
@@ -90,6 +99,7 @@ func Verify(ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.
 	return nil
 }
 
+//nolint:revive // Keep the constructor shape consistent with other sink implementations.
 func New(
 	ctx context.Context, changefeedID common.ChangeFeedID, sinkURI *url.URL, sinkConfig *config.SinkConfig, enableTableAcrossNodes bool,
 	cleanupJobs []func(), /* only for test */
@@ -103,7 +113,7 @@ func New(
 	// fetch protocol from replicaConfig defined by changefeed config file.
 	protocol, err := helper.GetProtocol(util.GetOrZero(sinkConfig.Protocol))
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, err
 	}
 	// get cloud storage file extension according to the specific protocol.
 	ext := helper.GetFileExtension(protocol)
@@ -111,14 +121,23 @@ func New(
 	// batch protocols in mq scenario. In cloud storage sink, we just set it to max int.
 	encoderConfig, err := helper.GetEncoderConfig(changefeedID, sinkURI, protocol, sinkConfig, math.MaxInt)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, err
 	}
 	storage, err := util.GetExternalStorageWithDefaultTimeout(ctx, sinkURI.String())
 	if err != nil {
 		return nil, err
 	}
 	statistics := metrics.NewStatistics(changefeedID, "cloudstorage")
-	dmlWriters := newDMLWriters(changefeedID, storage, cfg, encoderConfig, ext, statistics)
+	defer func() {
+		if err != nil {
+			statistics.Close()
+			storage.Close()
+		}
+	}()
+	dmlWriters, err := newDMLWriters(changefeedID, storage, cfg, encoderConfig, ext, statistics)
+	if err != nil {
+		return nil, err
+	}
 	return &sink{
 		changefeedID:             changefeedID,
 		sinkURI:                  sinkURI,
@@ -142,6 +161,10 @@ func (s *sink) SinkType() common.SinkType {
 
 // Run the sink, the ctx is the same as the ctx in the New function.
 func (s *sink) Run(ctx context.Context) error {
+	defer func() {
+		s.isNormal.Store(false)
+	}()
+
 	g, ctx := errgroup.WithContext(ctx)
 
 	g.Go(func() error {
@@ -167,10 +190,20 @@ func (s *sink) IsNormal() bool {
 }
 
 func (s *sink) AddDMLEvent(event *commonEvent.DMLEvent) {
+	if !s.IsNormal() {
+		log.Warn("ignore dml event because sink is not normal",
+			zap.String("keyspace", s.changefeedID.Keyspace()),
+			zap.String("changefeed", s.changefeedID.Name()),
+			zap.String("dispatcher", event.GetDispatcherID().String()))
+		return
+	}
 	s.dmlWriters.addDMLEvent(event)
 }
 
 func (s *sink) FlushDMLBeforeBlock(event commonEvent.BlockEvent) error {
+	if !s.IsNormal() {
+		return errors.ErrInternalCheckFailed.GenWithStack("cloudstorage sink is not normal")
+	}
 	if err := s.dmlWriters.flushDMLBeforeBlock(s.ctx, event); err != nil {
 		s.isNormal.Store(false)
 		return err
@@ -179,6 +212,9 @@ func (s *sink) FlushDMLBeforeBlock(event commonEvent.BlockEvent) error {
 }
 
 func (s *sink) WriteBlockEvent(event commonEvent.BlockEvent) error {
+	if !s.IsNormal() {
+		return errors.ErrInternalCheckFailed.GenWithStack("cloudstorage sink is not normal")
+	}
 	var err error
 	switch e := event.(type) {
 	case *commonEvent.DDLEvent:
@@ -209,14 +245,26 @@ func (s *sink) writeDDLEvent(event *commonEvent.DDLEvent) error {
 		sourceTableInfo := event.MultipleTableInfos[1]
 
 		var def cloudstorage.TableDefinition
-		def.FromTableInfo(event.ExtraSchemaName, event.ExtraTableName, event.TableInfo, event.FinishedTs, s.cfg.OutputColumnID)
+		def.FromTableInfo(
+			event.GetTargetExtraSchemaName(),
+			event.GetTargetExtraTableName(),
+			event.TableInfo,
+			event.FinishedTs,
+			s.cfg.OutputColumnID,
+		)
 		def.Query = event.Query
 		def.Type = event.Type
 		if err := s.writeFile(event, def); err != nil {
 			return err
 		}
 		var sourceTableDef cloudstorage.TableDefinition
-		sourceTableDef.FromTableInfo(event.SchemaName, event.TableName, sourceTableInfo, event.FinishedTs, s.cfg.OutputColumnID)
+		sourceTableDef.FromTableInfo(
+			event.GetTargetSchemaName(),
+			event.GetTargetTableName(),
+			sourceTableInfo,
+			event.FinishedTs,
+			s.cfg.OutputColumnID,
+		)
 		sourceEvent := *event
 		sourceEvent.TableInfo = sourceTableInfo
 		if err := s.writeFile(&sourceEvent, sourceTableDef); err != nil {
@@ -233,9 +281,9 @@ func (s *sink) writeDDLEvent(event *commonEvent.DDLEvent) error {
 	}
 	log.Info("storage sink executed ddl event",
 		zap.String("keyspace", s.changefeedID.Keyspace()),
-		zap.String("changefeed", s.changefeedID.ID().String()),
-		zap.String("schema", event.GetSchemaName()),
-		zap.String("table", event.GetTableName()),
+		zap.String("changefeed", s.changefeedID.Name()),
+		zap.String("schema", event.GetTargetSchemaName()),
+		zap.String("table", event.GetTargetTableName()),
 		zap.String("dispatcher", event.GetDispatcherID().String()),
 		zap.String("query", event.GetDDLQuery()),
 		zap.Uint64("finishedTs", event.GetCommitTs()),
@@ -246,22 +294,17 @@ func (s *sink) writeDDLEvent(event *commonEvent.DDLEvent) error {
 func (s *sink) writeFile(v *commonEvent.DDLEvent, def cloudstorage.TableDefinition) error {
 	// skip write database-level event for 'use-table-id-as-path' mode
 	if s.cfg.UseTableIDAsPath && def.Table == "" {
-		log.Debug("skip database schema for table id path",
-			zap.String("schema", def.Schema),
-			zap.String("query", def.Query))
 		return nil
 	}
 	encodedDef, err := def.MarshalWithQuery()
 	if err != nil {
-		return errors.Trace(err)
+		return err
 	}
 
 	path, err := def.GenerateSchemaFilePath(s.cfg.UseTableIDAsPath, v.GetTableID())
 	if err != nil {
-		return errors.Trace(err)
+		return err
 	}
-	log.Debug("write ddl event to external storage",
-		zap.String("path", path), zap.Any("ddl", v))
 	return s.statistics.RecordDDLExecution(func() (string, error) {
 		err = s.storage.WriteFile(s.ctx, path, encodedDef)
 		if err != nil {
@@ -272,6 +315,9 @@ func (s *sink) writeFile(v *commonEvent.DDLEvent, def cloudstorage.TableDefiniti
 }
 
 func (s *sink) AddCheckpointTs(ts uint64) {
+	if !s.IsNormal() {
+		return
+	}
 	select {
 	case s.checkpointChan <- ts:
 	case <-s.ctx.Done():
@@ -282,28 +328,23 @@ func (s *sink) AddCheckpointTs(ts uint64) {
 }
 
 func (s *sink) sendCheckpointTs(ctx context.Context) error {
-	checkpointTsMessageDuration := metrics.CheckpointTsMessageDuration.WithLabelValues(s.changefeedID.Keyspace(), s.changefeedID.Name())
-	checkpointTsMessageCount := metrics.CheckpointTsMessageCount.WithLabelValues(s.changefeedID.Keyspace(), s.changefeedID.Name())
+	var (
+		keyspace   = s.changefeedID.Keyspace()
+		changefeed = s.changefeedID.Name()
+	)
+	checkpointTsMessageDuration := metrics.CheckpointTsMessageDuration.WithLabelValues(keyspace, changefeed)
+	checkpointTsMessageCount := metrics.CheckpointTsMessageCount.WithLabelValues(keyspace, changefeed)
 	defer func() {
-		metrics.CheckpointTsMessageDuration.DeleteLabelValues(s.changefeedID.Keyspace(), s.changefeedID.Name())
-		metrics.CheckpointTsMessageCount.DeleteLabelValues(s.changefeedID.Keyspace(), s.changefeedID.Name())
+		metrics.CheckpointTsMessageDuration.DeleteLabelValues(keyspace, changefeed)
+		metrics.CheckpointTsMessageCount.DeleteLabelValues(keyspace, changefeed)
 	}()
 
-	var (
-		checkpoint uint64
-		ok         bool
-	)
+	var checkpoint uint64
 	for {
 		select {
 		case <-ctx.Done():
-			return errors.Trace(context.Cause(ctx))
-		case checkpoint, ok = <-s.checkpointChan:
-			if !ok {
-				log.Warn("cloud storage sink checkpoint channel closed",
-					zap.String("keyspace", s.changefeedID.Keyspace()),
-					zap.String("changefeed", s.changefeedID.Name()))
-				return nil
-			}
+			return context.Cause(ctx)
+		case checkpoint = <-s.checkpointChan:
 		}
 
 		if checkpoint < s.lastCheckpointTs.Load() {
@@ -318,8 +359,8 @@ func (s *sink) sendCheckpointTs(ctx context.Context) error {
 		message, err := json.Marshal(map[string]uint64{"checkpoint-ts": checkpoint})
 		if err != nil {
 			log.Panic("cloud storage sink marshal checkpoint failed, this should never happen",
-				zap.String("keyspace", s.changefeedID.Keyspace()),
-				zap.String("changefeed", s.changefeedID.Name()),
+				zap.String("keyspace", keyspace),
+				zap.String("changefeed", changefeed),
 				zap.Uint64("checkpoint", checkpoint),
 				zap.Duration("duration", time.Since(start)),
 				zap.Error(err))
@@ -327,11 +368,11 @@ func (s *sink) sendCheckpointTs(ctx context.Context) error {
 		err = s.storage.WriteFile(ctx, "metadata", message)
 		if err != nil {
 			log.Error("cloud storage sink write file failed",
-				zap.String("keyspace", s.changefeedID.Keyspace()),
-				zap.String("changefeed", s.changefeedID.Name()),
+				zap.String("keyspace", keyspace),
+				zap.String("changefeed", changefeed),
 				zap.Duration("duration", time.Since(start)),
 				zap.Error(err))
-			return errors.Trace(err)
+			return err
 		}
 		s.lastSendCheckpointTsTime = time.Now()
 		s.lastCheckpointTs.Store(checkpoint)
@@ -356,7 +397,7 @@ func (s *sink) initCron(
 	for _, job := range cleanupJobs {
 		err = s.cron.AddFunc(s.cfg.FileCleanupCronSpec, job)
 		if err != nil {
-			return errors.Trace(err)
+			return errors.WrapError(errors.ErrStorageSinkInvalidConfig, err, "add cloud storage cleanup job")
 		}
 	}
 	return nil
@@ -366,7 +407,7 @@ func (s *sink) bgCleanup(ctx context.Context) {
 	if s.cfg.DateSeparator != config.DateSeparatorDay.String() || s.cfg.FileExpirationDays <= 0 {
 		log.Info("skip cleanup expired files for storage sink",
 			zap.String("keyspace", s.changefeedID.Keyspace()),
-			zap.Stringer("changefeedID", s.changefeedID.ID()),
+			zap.String("changefeedID", s.changefeedID.Name()),
 			zap.String("dateSeparator", s.cfg.DateSeparator),
 			zap.Int("expiredFileTTL", s.cfg.FileExpirationDays))
 		return
@@ -376,7 +417,7 @@ func (s *sink) bgCleanup(ctx context.Context) {
 	defer s.cron.Stop()
 	log.Info("start schedule cleanup expired files for storage sink",
 		zap.String("keyspace", s.changefeedID.Keyspace()),
-		zap.Stringer("changefeedID", s.changefeedID.ID()),
+		zap.String("changefeedID", s.changefeedID.Name()),
 		zap.String("dateSeparator", s.cfg.DateSeparator),
 		zap.Int("expiredFileTTL", s.cfg.FileExpirationDays))
 
@@ -384,7 +425,7 @@ func (s *sink) bgCleanup(ctx context.Context) {
 	<-ctx.Done()
 	log.Info("stop schedule cleanup expired files for storage sink",
 		zap.String("keyspace", s.changefeedID.Keyspace()),
-		zap.Stringer("changefeedID", s.changefeedID.ID()),
+		zap.String("changefeedID", s.changefeedID.Name()),
 		zap.Error(ctx.Err()))
 }
 
@@ -398,17 +439,18 @@ func (s *sink) genCleanupJob(ctx context.Context, uri *url.URL) []func() {
 			if !isRemoveEmptyDirsRunning.CompareAndSwap(false, true) {
 				log.Warn("remove empty dirs is already running, skip this round",
 					zap.String("keyspace", s.changefeedID.Keyspace()),
-					zap.Stringer("changefeedID", s.changefeedID.ID()))
+					zap.String("changefeedID", s.changefeedID.Name()))
 				return
 			}
+			defer isRemoveEmptyDirsRunning.Store(false)
 
 			checkpointTs := s.lastCheckpointTs.Load()
 			start := time.Now()
-			cnt, err := cloudstorage.RemoveEmptyDirs(ctx, s.changefeedID, uri.Path)
+			err := cloudstorage.RemoveEmptyDirs(ctx, s.changefeedID, uri.Path)
 			if err != nil {
 				log.Error("failed to remove empty dirs",
 					zap.String("keyspace", s.changefeedID.Keyspace()),
-					zap.Stringer("changefeedID", s.changefeedID.ID()),
+					zap.String("changefeedID", s.changefeedID.Name()),
 					zap.Uint64("checkpointTs", checkpointTs),
 					zap.Duration("cost", time.Since(start)),
 					zap.Error(err),
@@ -417,9 +459,8 @@ func (s *sink) genCleanupJob(ctx context.Context, uri *url.URL) []func() {
 			}
 			log.Info("remove empty dirs",
 				zap.String("keyspace", s.changefeedID.Keyspace()),
-				zap.Stringer("changefeedID", s.changefeedID.ID()),
+				zap.String("changefeedID", s.changefeedID.Name()),
 				zap.Uint64("checkpointTs", checkpointTs),
-				zap.Uint64("count", cnt),
 				zap.Duration("cost", time.Since(start)))
 		})
 	}
@@ -429,18 +470,18 @@ func (s *sink) genCleanupJob(ctx context.Context, uri *url.URL) []func() {
 		if !isCleanupRunning.CompareAndSwap(false, true) {
 			log.Warn("cleanup expired files is already running, skip this round",
 				zap.String("keyspace", s.changefeedID.Keyspace()),
-				zap.Stringer("changefeedID", s.changefeedID.ID()))
+				zap.String("changefeedID", s.changefeedID.Name()))
 			return
 		}
 
 		defer isCleanupRunning.Store(false)
 		start := time.Now()
 		checkpointTs := s.lastCheckpointTs.Load()
-		cnt, err := cloudstorage.RemoveExpiredFiles(ctx, s.changefeedID, s.storage, s.cfg, checkpointTs)
+		err := cloudstorage.RemoveExpiredFiles(ctx, s.changefeedID, s.storage, s.cfg, checkpointTs)
 		if err != nil {
 			log.Error("failed to remove expired files",
 				zap.String("keyspace", s.changefeedID.Keyspace()),
-				zap.Stringer("changefeedID", s.changefeedID.ID()),
+				zap.String("changefeedID", s.changefeedID.Name()),
 				zap.Uint64("checkpointTs", checkpointTs),
 				zap.Duration("cost", time.Since(start)),
 				zap.Error(err),
@@ -449,19 +490,24 @@ func (s *sink) genCleanupJob(ctx context.Context, uri *url.URL) []func() {
 		}
 		log.Info("remove expired files",
 			zap.String("keyspace", s.changefeedID.Keyspace()),
-			zap.Stringer("changefeedID", s.changefeedID.ID()),
+			zap.String("changefeedID", s.changefeedID.Name()),
 			zap.Uint64("checkpointTs", checkpointTs),
-			zap.Uint64("count", cnt),
 			zap.Duration("cost", time.Since(start)))
 	})
 	return ret
 }
 
-func (s *sink) Close(_ bool) {
-	s.dmlWriters.close()
-	s.cron.Stop()
+func (s *sink) Close() {
+	if s.dmlWriters != nil {
+		s.dmlWriters.close()
+	}
+	if s.cron != nil {
+		s.cron.Stop()
+	}
 	if s.statistics != nil {
 		s.statistics.Close()
 	}
-	s.storage.Close()
+	if s.storage != nil {
+		s.storage.Close()
+	}
 }

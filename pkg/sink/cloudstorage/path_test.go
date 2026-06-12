@@ -17,6 +17,8 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -26,9 +28,24 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/ticdc/pkg/util"
+	"github.com/pingcap/tidb/br/pkg/storage"
+	timodel "github.com/pingcap/tidb/pkg/meta/model"
+	parser_model "github.com/pingcap/tidb/pkg/parser/model"
+	"github.com/pingcap/tidb/pkg/parser/mysql"
+	"github.com/pingcap/tidb/pkg/types"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
 )
+
+type countFileExistsStorage struct {
+	storage.ExternalStorage
+	fileExistsCount int
+}
+
+func (s *countFileExistsStorage) FileExists(ctx context.Context, name string) (bool, error) {
+	s.fileExistsCount++
+	return s.ExternalStorage.FileExists(ctx, name)
+}
 
 func testFilePathGenerator(ctx context.Context, t *testing.T, dir string) *FilePathGenerator {
 	uri := fmt.Sprintf("file:///%s?flush-interval=2s", dir)
@@ -243,8 +260,7 @@ func TestGenerateDataFilePathWithIndexFile(t *testing.T) {
 func TestGenerateDataFilePathResyncIndexFile(t *testing.T) {
 	t.Parallel()
 
-	ctx, cancel := context.WithCancel(context.TODO())
-	defer cancel()
+	ctx := t.Context()
 
 	dir := t.TempDir()
 	f1 := testFilePathGenerator(ctx, t, dir)
@@ -273,21 +289,60 @@ func TestGenerateDataFilePathResyncIndexFile(t *testing.T) {
 	require.Equal(t, fmt.Sprintf("test/table1/5/CDC_%s_000001.json", dispatcherID.String()), dataFilePath)
 	err = f1.storage.WriteFile(ctx, dataFilePath, []byte("test1"))
 	require.NoError(t, err)
-	err = f1.storage.WriteFile(ctx, indexFilePath, []byte(fmt.Sprintf("CDC_%s_000001.json\n", dispatcherID.String())))
+	err = f1.storage.WriteFile(ctx, indexFilePath, fmt.Appendf(nil, "CDC_%s_000001.json\n", dispatcherID.String()))
 	require.NoError(t, err)
 
-	// 2) f2 continues from index file and generates CDC_..._000002, then updates index file.
-	dataFilePath, err = f2.GenerateDataFilePath(ctx, table, date)
-	require.NoError(t, err)
-	err = f2.storage.WriteFile(ctx, dataFilePath, []byte("test2"))
-	require.NoError(t, err)
-	require.Equal(t, fmt.Sprintf("test/table1/5/CDC_%s_000002.json", dispatcherID.String()), dataFilePath)
-	err = f2.storage.WriteFile(ctx, indexFilePath, []byte(fmt.Sprintf("CDC_%s_000002.json\n", dispatcherID.String())))
-	require.NoError(t, err)
+	// 2) f2 continues from index file and generates CDC_..._000002 to CDC_..._000005,
+	// then updates index file.
+	for i := 2; i <= 5; i++ {
+		dataFilePath, err = f2.GenerateDataFilePath(ctx, table, date)
+		require.NoError(t, err)
+		require.Equal(t, fmt.Sprintf("test/table1/5/CDC_%s_%06d.json", dispatcherID.String(), i), dataFilePath)
+		err = f2.storage.WriteFile(ctx, dataFilePath, []byte("test"))
+		require.NoError(t, err)
+		err = f2.storage.WriteFile(ctx, indexFilePath, fmt.Appendf(nil, "CDC_%s_%06d.json\n", dispatcherID.String(), i))
+		require.NoError(t, err)
+	}
 
 	// 3) f1 generates again after being scheduled back. It must reconcile with index file and
-	//    generate CDC_..._000003 instead of overwriting CDC_..._000002.
+	//    generate CDC_..._000006 instead of probing every existing data file one by one.
+	countStorage := &countFileExistsStorage{ExternalStorage: f1.storage}
+	f1.storage = countStorage
 	dataFilePath, err = f1.GenerateDataFilePath(ctx, table, date)
+	require.NoError(t, err)
+	require.Equal(t, fmt.Sprintf("test/table1/5/CDC_%s_000006.json", dispatcherID.String()), dataFilePath)
+	require.LessOrEqual(t, countStorage.fileExistsCount, 3)
+}
+
+func TestGenerateDataFilePathReconcilesStaleIndexFile(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+
+	dir := t.TempDir()
+	f := testFilePathGenerator(ctx, t, dir)
+
+	dispatcherID := commonType.NewDispatcherID()
+	table := VersionedTableName{
+		TableNameWithPhysicTableID: commonType.TableName{
+			Schema: "test",
+			Table:  "table1",
+		},
+		TableInfoVersion: 5,
+		DispatcherID:     dispatcherID,
+	}
+	f.versionMap[table] = table.TableInfoVersion
+
+	date := ""
+	firstDataFile := fmt.Sprintf("test/table1/5/CDC_%s_000001.json", dispatcherID.String())
+	secondDataFile := fmt.Sprintf("test/table1/5/CDC_%s_000002.json", dispatcherID.String())
+	indexFilePath, err := f.GenerateIndexFilePath(table, date)
+	require.NoError(t, err)
+	require.NoError(t, f.storage.WriteFile(ctx, firstDataFile, []byte("test1")))
+	require.NoError(t, f.storage.WriteFile(ctx, secondDataFile, []byte("test2")))
+	require.NoError(t, f.storage.WriteFile(ctx, indexFilePath, fmt.Appendf(nil, "CDC_%s_000001.json\n", dispatcherID.String())))
+
+	dataFilePath, err := f.GenerateDataFilePath(ctx, table, date)
 	require.NoError(t, err)
 	require.Equal(t, fmt.Sprintf("test/table1/5/CDC_%s_000003.json", dispatcherID.String()), dataFilePath)
 }
@@ -399,6 +454,48 @@ func TestIsSchemaFile(t *testing.T) {
 // 	require.Equal(t, 2, len(files))
 // }
 
+func TestCheckOrWriteSchemaUsesRoutedTargetNames(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	dir := t.TempDir()
+	f := testFilePathGenerator(ctx, t, dir)
+
+	tableInfo := commonType.WrapTableInfo("source_db", &timodel.TableInfo{
+		ID:   20,
+		Name: parser_model.NewCIStr("source_table"),
+		Columns: []*timodel.ColumnInfo{
+			{
+				Name:      parser_model.NewCIStr("id"),
+				FieldType: *types.NewFieldType(mysql.TypeLong),
+				State:     timodel.StatePublic,
+			},
+		},
+		Version: 100,
+	}).CloneWithRouting("target_db", "target_table")
+
+	table := VersionedTableName{
+		TableNameWithPhysicTableID: commonType.TableName{
+			Schema:  tableInfo.GetSchemaName(),
+			Table:   tableInfo.GetTableName(),
+			TableID: tableInfo.TableName.TableID,
+		},
+		TableInfoVersion: 100,
+	}
+
+	hasNewerSchemaVersion, err := f.CheckOrWriteSchema(ctx, table, tableInfo)
+	require.NoError(t, err)
+	require.False(t, hasNewerSchemaVersion)
+
+	files, err := os.ReadDir(filepath.Join(dir, "target_db", "target_table", "meta"))
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+
+	_, err = os.Stat(filepath.Join(dir, "source_db"))
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
 func TestRemoveExpiredFilesWithoutPartition(t *testing.T) {
 	t.Parallel()
 
@@ -480,7 +577,6 @@ func TestRemoveExpiredFilesWithoutPartition(t *testing.T) {
 
 	currTime := time.Date(2021, 1, 3, 0, 0, 0, 0, time.Local)
 	checkpointTs := oracle.GoTimeToTS(currTime)
-	cnt, err := RemoveExpiredFiles(ctx, commonType.ChangeFeedID{}, storage, cfg, checkpointTs)
+	err = RemoveExpiredFiles(ctx, commonType.ChangeFeedID{}, storage, cfg, checkpointTs)
 	require.NoError(t, err)
-	require.Equal(t, uint64(16), cnt)
 }

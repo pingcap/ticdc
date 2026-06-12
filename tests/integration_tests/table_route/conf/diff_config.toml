@@ -1,0 +1,144 @@
+# diff Configuration.
+
+check-thread-count = 4
+
+export-fix-sql = true
+
+check-struct-only = false
+
+[task]
+    output-dir = "/tmp/tidb_cdc_test/table_route/sync_diff/output"
+
+    source-instances = ["tidb0"]
+
+    target-instance = "mysql1"
+
+    target-check-tables = [
+        "target_db.users_routed",
+        "target_db.orders_routed",
+        "target_db.products_routed",
+        "target_db.products_backup_routed",
+        "target_db.renamed_table_routed",
+        "target_db.multi_rename_a_new_routed",
+        "target_db.multi_rename_b_new_routed",
+        "target_db.partitioned_events_routed",
+        "target_db.truncate_test_routed",
+        "target_db.finish_mark_routed",
+        "target_extra_db.external_users_routed",
+        "target_extra_db.external_users_from_default_routed",
+        "target_extra_db.cross_move_target_routed",
+        "target_extra_db.partitioned_events_like_from_default_routed",
+    ]
+
+[data-sources]
+[data-sources.tidb0]
+    host = "127.0.0.1"
+    port = 4000
+    user = "root"
+    password = ""
+    route-rules = [
+        "users",
+        "orders",
+        "products",
+        "products_backup",
+        "renamed_table",
+        "multi_rename_a_new",
+        "multi_rename_b_new",
+        "partitioned_events",
+        "truncate_test",
+        "finish_mark",
+        "external_users",
+        "external_users_from_default",
+        "cross_move_target",
+        "partitioned_events_like_from_default",
+    ]
+
+[data-sources.mysql1]
+    host = "127.0.0.1"
+    port = 3306
+    user = "root"
+    password = ""
+
+[routes.users]
+schema-pattern = "source_db"
+table-pattern = "users"
+target-schema = "target_db"
+target-table = "users_routed"
+
+[routes.orders]
+schema-pattern = "source_db"
+table-pattern = "orders"
+target-schema = "target_db"
+target-table = "orders_routed"
+
+[routes.products]
+schema-pattern = "source_db"
+table-pattern = "products"
+target-schema = "target_db"
+target-table = "products_routed"
+
+[routes.products_backup]
+schema-pattern = "source_db"
+table-pattern = "products_backup"
+target-schema = "target_db"
+target-table = "products_backup_routed"
+
+[routes.renamed_table]
+schema-pattern = "source_db"
+table-pattern = "renamed_table"
+target-schema = "target_db"
+target-table = "renamed_table_routed"
+
+[routes.multi_rename_a_new]
+schema-pattern = "source_db"
+table-pattern = "multi_rename_a_new"
+target-schema = "target_db"
+target-table = "multi_rename_a_new_routed"
+
+[routes.multi_rename_b_new]
+schema-pattern = "source_db"
+table-pattern = "multi_rename_b_new"
+target-schema = "target_db"
+target-table = "multi_rename_b_new_routed"
+
+[routes.partitioned_events]
+schema-pattern = "source_db"
+table-pattern = "partitioned_events"
+target-schema = "target_db"
+target-table = "partitioned_events_routed"
+
+[routes.truncate_test]
+schema-pattern = "source_db"
+table-pattern = "truncate_test"
+target-schema = "target_db"
+target-table = "truncate_test_routed"
+
+[routes.finish_mark]
+schema-pattern = "source_db"
+table-pattern = "finish_mark"
+target-schema = "target_db"
+target-table = "finish_mark_routed"
+
+[routes.external_users]
+schema-pattern = "source_extra_db"
+table-pattern = "external_users"
+target-schema = "target_extra_db"
+target-table = "external_users_routed"
+
+[routes.external_users_from_default]
+schema-pattern = "source_extra_db"
+table-pattern = "external_users_from_default"
+target-schema = "target_extra_db"
+target-table = "external_users_from_default_routed"
+
+[routes.cross_move_target]
+schema-pattern = "source_extra_db"
+table-pattern = "cross_move_target"
+target-schema = "target_extra_db"
+target-table = "cross_move_target_routed"
+
+[routes.partitioned_events_like_from_default]
+schema-pattern = "source_extra_db"
+table-pattern = "partitioned_events_like_from_default"
+target-schema = "target_extra_db"
+target-table = "partitioned_events_like_from_default_routed"

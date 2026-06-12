@@ -21,6 +21,7 @@ import (
 
 	"github.com/pingcap/log"
 	"github.com/pingcap/ticdc/heartbeatpb"
+	"github.com/pingcap/ticdc/logservice/eventstore"
 	"github.com/pingcap/ticdc/logservice/schemastore"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/common/event"
@@ -34,6 +35,17 @@ type mockMounter struct {
 	event.Mounter
 }
 
+type stubEventGetter struct {
+	iter eventstore.EventIterator
+	err  error
+}
+
+func (g *stubEventGetter) GetIterator(
+	dispatcherID common.DispatcherID, dataRange common.DataRange,
+) (eventstore.EventIterator, error) {
+	return g.iter, g.err
+}
+
 func makeDispatcherReady(disp *dispatcherStat) {
 	disp.setHandshaked()
 }
@@ -44,6 +56,43 @@ func (m *mockMounter) DecodeToChunk(rawKV *common.RawKVEntry, tableInfo *common.
 	} else {
 		return 1, nil, nil
 	}
+}
+
+func TestEventScannerReturnsIteratorErrors(t *testing.T) {
+	disInfo := newMockDispatcherInfoForTest(t)
+	changefeedStatus := newChangefeedStatus(disInfo.GetChangefeedID())
+	disp := newDispatcherStat(disInfo, 1, 1, nil, changefeedStatus)
+	makeDispatcherReady(disp)
+
+	dataRange := common.DataRange{
+		Span:          disInfo.GetTableSpan(),
+		CommitTsStart: disInfo.GetStartTs(),
+		CommitTsEnd:   disInfo.GetStartTs() + 1,
+	}
+
+	getIterErr := errors.New("get iterator failed")
+	scanner := newEventScanner(
+		&stubEventGetter{err: getIterErr},
+		NewMockSchemaStore(),
+		&mockMounter{},
+		0,
+	)
+	_, events, interrupted, err := scanner.scan(context.Background(), disp, dataRange, scanLimit{})
+	require.ErrorIs(t, err, getIterErr)
+	require.Nil(t, events)
+	require.False(t, interrupted)
+
+	closeErr := errors.New("close iterator failed")
+	scanner = newEventScanner(
+		&stubEventGetter{iter: &mockEventIterator{closeErr: closeErr}},
+		NewMockSchemaStore(),
+		&mockMounter{},
+		0,
+	)
+	_, events, interrupted, err = scanner.scan(context.Background(), disp, dataRange, scanLimit{})
+	require.ErrorIs(t, err, closeErr)
+	require.Nil(t, events)
+	require.False(t, interrupted)
 }
 
 func TestEventScanner(t *testing.T) {
@@ -61,7 +110,7 @@ func TestEventScanner(t *testing.T) {
 
 	disInfo := newMockDispatcherInfoForTest(t)
 	disInfo.startTs = uint64(100)
-	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo.GetChangefeedID())
+	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo)
 	tableID := disInfo.GetTableSpan().TableID
 	dispatcherID := disInfo.GetID()
 
@@ -371,7 +420,7 @@ func TestEventScannerWithDeleteTable(t *testing.T) {
 
 	disInfo := newMockDispatcherInfoForTest(t)
 	disInfo.startTs = uint64(100)
-	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo.GetChangefeedID())
+	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo)
 	tableID := disInfo.GetTableSpan().TableID
 	dispatcherID := disInfo.GetID()
 
@@ -449,7 +498,7 @@ func TestEventScannerWithDDL(t *testing.T) {
 
 	disInfo := newMockDispatcherInfoForTest(t)
 	disInfo.startTs = uint64(100)
-	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo.GetChangefeedID())
+	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo)
 	tableID := disInfo.GetTableSpan().TableID
 	dispatcherID := disInfo.GetID()
 
@@ -1537,7 +1586,7 @@ func TestGetTableInfo4Txn(t *testing.T) {
 
 	disInfo := newMockDispatcherInfoForTest(t)
 	disInfo.startTs = uint64(100)
-	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo.GetChangefeedID())
+	changefeedStatus := broker.getOrSetChangefeedStatus(disInfo)
 	tableID := disInfo.GetTableSpan().TableID
 
 	disp := newDispatcherStat(disInfo, 1, 1, nil, changefeedStatus)
