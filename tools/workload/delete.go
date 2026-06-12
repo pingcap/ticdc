@@ -77,7 +77,7 @@ func (app *WorkloadApp) executeDeleteWorkers(deleteConcurrency int, wg *sync.Wai
 
 			plog.Info("start delete worker", zap.Int("worker", workerID))
 
-			for {
+			for !app.shouldStop() {
 				flushedRows, err := app.runTransaction(conn, func() (uint64, error) {
 					return app.doDeleteOnce(conn, deleteTaskCh)
 				})
@@ -108,6 +108,7 @@ func (app *WorkloadApp) executeDeleteWorkers(deleteConcurrency int, wg *sync.Wai
 				if flushedRows != 0 {
 					app.Stats.FlushedRowCount.Add(flushedRows)
 				}
+				app.throttleRows(uint64(max(1, app.Config.BatchSize)))
 			}
 		}(i)
 	}
@@ -115,7 +116,11 @@ func (app *WorkloadApp) executeDeleteWorkers(deleteConcurrency int, wg *sync.Wai
 
 // genDeleteTask generates delete tasks
 func (app *WorkloadApp) genDeleteTask(output chan deleteTask) {
+	defer close(output)
 	for {
+		if app.shouldStop() {
+			return
+		}
 		tableIndex := rand.Intn(app.Config.TableCount) + app.Config.TableStartIndex
 		task := deleteTask{
 			DeleteOption: schema.DeleteOption{
@@ -124,12 +129,18 @@ func (app *WorkloadApp) genDeleteTask(output chan deleteTask) {
 				RangeNum:   app.Config.RangeNum,
 			},
 		}
-		output <- task
+		select {
+		case output <- task:
+		case <-time.After(100 * time.Millisecond):
+		}
 	}
 }
 
 func (app *WorkloadApp) doDeleteOnce(conn *sql.Conn, input chan deleteTask) (uint64, error) {
-	task := <-input
+	task, ok := <-input
+	if !ok {
+		return 0, nil
+	}
 	return app.processDeleteTask(conn, &task)
 }
 
@@ -155,6 +166,15 @@ func (app *WorkloadApp) processDeleteTask(conn *sql.Conn, task *deleteTask) (uin
 
 // executeDelete performs the actual delete operation
 func (app *WorkloadApp) executeDelete(conn *sql.Conn, task *deleteTask) (sql.Result, error) {
+	if valueWorkload, ok := app.Workload.(schema.DeleteValuesWorkload); ok {
+		deleteSQL, values := valueWorkload.BuildDeleteSqlWithValues(task.DeleteOption)
+		if deleteSQL == "" {
+			return nil, nil
+		}
+		task.generatedSQL = deleteSQL
+		return app.executeWithValues(conn, deleteSQL, task.TableIndex, values)
+	}
+
 	deleteSQL := app.Workload.BuildDeleteSql(task.DeleteOption)
 	if deleteSQL == "" {
 		return nil, nil
