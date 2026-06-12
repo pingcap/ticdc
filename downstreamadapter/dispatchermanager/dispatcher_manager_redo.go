@@ -52,10 +52,11 @@ func initRedoComponet(
 	if !manager.IsRedoEnabled() {
 		return nil
 	}
+	var err error
 	manager.redoDispatcherMap = newDispatcherMap[*dispatcher.RedoDispatcher]()
-	manager.redoSink = redo.New(ctx, changefeedID, manager.config.Consistent)
-	if manager.redoSink == nil {
-		return errors.WrapError(errors.ErrStorageInitialize, errors.New("redo sink initialization returned nil"))
+	manager.redoSink, err = redo.New(ctx, changefeedID, manager.config.Consistent)
+	if err != nil {
+		return err
 	}
 	manager.redoSchemaIDToDispatchers = dispatcher.NewSchemaIDToDispatchers()
 
@@ -256,16 +257,19 @@ func (e *DispatcherManager) cleanRedoDispatcher(id common.DispatcherID, schemaID
 	)
 }
 
-func (e *DispatcherManager) closeRedoMeta(removeChangefeed bool) {
+func (e *DispatcherManager) closeRedoMeta(removeChangefeed bool) error {
 	if d := e.GetTableTriggerRedoDispatcher(); d != nil {
 		redoMeta := d.GetRedoMeta()
 		if redoMeta != nil {
 			redoMeta.CleanupMetrics()
 			if removeChangefeed {
-				redoMeta.Cleanup(context.Background())
+				if err := redoMeta.Cleanup(context.Background()); err != nil {
+					return errors.Trace(err)
+				}
 			}
 		}
 	}
+	return nil
 }
 
 func (e *DispatcherManager) InitalizeTableTriggerRedoDispatcher(schemaInfo []*heartbeatpb.SchemaInfo) error {

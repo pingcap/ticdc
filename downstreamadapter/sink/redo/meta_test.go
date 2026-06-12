@@ -16,6 +16,7 @@ package redo
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 	"testing"
@@ -26,11 +27,15 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/redo"
 	misc "github.com/pingcap/ticdc/pkg/redo/common"
+	"github.com/pingcap/ticdc/pkg/redo/testutil"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/uuid"
-	"github.com/prometheus/client_golang/prometheus/testutil"
+	mockstorage "github.com/pingcap/tidb/br/pkg/mock/storage"
+	"github.com/pingcap/tidb/br/pkg/storage"
+	promtestutil "github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 	"github.com/tikv/client-go/v2/oracle"
+	"go.uber.org/mock/gomock"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -74,22 +79,12 @@ func TestInitAndWriteMeta(t *testing.T) {
 	}
 
 	startTs := uint64(10)
-	cfg := &config.ConsistentConfig{
-		Level:                 util.AddressOf(string(redo.ConsistentLevelEventual)),
-		MaxLogSize:            util.AddressOf(redo.DefaultMaxLogSize),
-		Storage:               util.AddressOf(uri.String()),
-		FlushIntervalInMs:     util.AddressOf(int64(redo.MinFlushIntervalInMs)),
-		MetaFlushIntervalInMs: util.AddressOf(int64(redo.MinFlushIntervalInMs)),
-		EncodingWorkerNum:     util.AddressOf(redo.DefaultEncodingWorkerNum),
-		FlushWorkerNum:        util.AddressOf(redo.DefaultFlushWorkerNum),
-	}
+	cfg := testutil.NewConsistentConfig(uri.String())
 	m := NewRedoMeta(changefeedID, startTs, cfg)
+	require.NoError(t, m.PreStart(ctx))
 
 	var eg errgroup.Group
 	eg.Go(func() error {
-		if err := m.PreStart(ctx); err != nil {
-			return err
-		}
 		return m.Run(ctx)
 	})
 
@@ -158,22 +153,12 @@ func TestPreCleanupAndWriteMeta(t *testing.T) {
 	}
 
 	startTs := uint64(10)
-	cfg := &config.ConsistentConfig{
-		Level:                 util.AddressOf(string(redo.ConsistentLevelEventual)),
-		MaxLogSize:            util.AddressOf(redo.DefaultMaxLogSize),
-		Storage:               util.AddressOf(uri.String()),
-		FlushIntervalInMs:     util.AddressOf(int64(redo.MinFlushIntervalInMs)),
-		MetaFlushIntervalInMs: util.AddressOf(int64(redo.MinFlushIntervalInMs)),
-		EncodingWorkerNum:     util.AddressOf(redo.DefaultEncodingWorkerNum),
-		FlushWorkerNum:        util.AddressOf(redo.DefaultFlushWorkerNum),
-	}
+	cfg := testutil.NewConsistentConfig(uri.String())
 	m := NewRedoMeta(changefeedID, startTs, cfg)
+	require.NoError(t, m.PreStart(ctx))
 
 	var eg errgroup.Group
 	eg.Go(func() error {
-		if err := m.PreStart(ctx); err != nil {
-			return err
-		}
 		return m.Run(ctx)
 	})
 
@@ -295,15 +280,7 @@ func TestGCAndCleanup(t *testing.T) {
 	}
 
 	startTs := uint64(3)
-	cfg := &config.ConsistentConfig{
-		Level:                 util.AddressOf(string(redo.ConsistentLevelEventual)),
-		MaxLogSize:            util.AddressOf(redo.DefaultMaxLogSize),
-		Storage:               util.AddressOf(uri.String()),
-		FlushIntervalInMs:     util.AddressOf(int64(redo.MinFlushIntervalInMs)),
-		MetaFlushIntervalInMs: util.AddressOf(int64(redo.MinFlushIntervalInMs)),
-		EncodingWorkerNum:     util.AddressOf(redo.DefaultEncodingWorkerNum),
-		FlushWorkerNum:        util.AddressOf(redo.DefaultFlushWorkerNum),
-	}
+	cfg := testutil.NewConsistentConfig(uri.String())
 
 	m := NewRedoMeta(changefeedID, startTs, cfg)
 
@@ -363,15 +340,7 @@ func TestRedoMetaMetrics(t *testing.T) {
 	require.NoError(t, err)
 
 	startTs := oracle.ComposeTS(10_000, 0)
-	cfg := &config.ConsistentConfig{
-		Level:                 util.AddressOf(string(redo.ConsistentLevelEventual)),
-		MaxLogSize:            util.AddressOf(redo.DefaultMaxLogSize),
-		Storage:               util.AddressOf(uri.String()),
-		FlushIntervalInMs:     util.AddressOf(int64(redo.MinFlushIntervalInMs)),
-		MetaFlushIntervalInMs: util.AddressOf(int64(redo.MinFlushIntervalInMs)),
-		EncodingWorkerNum:     util.AddressOf(redo.DefaultEncodingWorkerNum),
-		FlushWorkerNum:        util.AddressOf(redo.DefaultFlushWorkerNum),
-	}
+	cfg := testutil.NewConsistentConfig(uri.String())
 
 	m := NewRedoMeta(changefeedID, startTs, cfg)
 	require.NoError(t, m.PreStart(ctx))
@@ -382,18 +351,45 @@ func TestRedoMetaMetrics(t *testing.T) {
 	})
 
 	require.Eventually(t, func() bool {
-		checkpointTs := testutil.ToFloat64(metrics.RedoCheckpointTsGauge.WithLabelValues(keyspace, changefeed))
-		resolvedTs := testutil.ToFloat64(metrics.RedoResolvedTsGauge.WithLabelValues(keyspace, changefeed))
+		checkpointTs := promtestutil.ToFloat64(metrics.RedoCheckpointTsGauge.WithLabelValues(keyspace, changefeed))
+		resolvedTs := promtestutil.ToFloat64(metrics.RedoResolvedTsGauge.WithLabelValues(keyspace, changefeed))
 		return checkpointTs == float64(10_000) && resolvedTs == float64(10_000)
 	}, time.Second, 50*time.Millisecond)
 
 	m.UpdateMeta(oracle.ComposeTS(20_000, 0), oracle.ComposeTS(21_000, 0))
 	require.Eventually(t, func() bool {
-		checkpointTs := testutil.ToFloat64(metrics.RedoCheckpointTsGauge.WithLabelValues(keyspace, changefeed))
-		resolvedTs := testutil.ToFloat64(metrics.RedoResolvedTsGauge.WithLabelValues(keyspace, changefeed))
+		checkpointTs := promtestutil.ToFloat64(metrics.RedoCheckpointTsGauge.WithLabelValues(keyspace, changefeed))
+		resolvedTs := promtestutil.ToFloat64(metrics.RedoResolvedTsGauge.WithLabelValues(keyspace, changefeed))
 		return checkpointTs == 20_000 && resolvedTs == 21_000
 	}, time.Second, 50*time.Millisecond)
 
 	cancel()
 	require.ErrorIs(t, eg.Wait(), context.Canceled)
+}
+
+func TestPreStartClosesExternalStorageOnFailure(t *testing.T) {
+	controller := gomock.NewController(t)
+	mockStorage := mockstorage.NewMockExternalStorage(controller)
+	mockStorage.EXPECT().FileExists(gomock.Any(), gomock.Any()).Return(false, context.DeadlineExceeded)
+	mockStorage.EXPECT().Close().Times(1)
+
+	oldInitExternalStorage := redo.InitExternalStorage
+	defer func() {
+		redo.InitExternalStorage = oldInitExternalStorage
+	}()
+	redo.InitExternalStorage = func(context.Context, url.URL) (storage.ExternalStorage, error) {
+		return mockStorage, nil
+	}
+
+	storageURI, err := url.Parse("file:///tmp/redo-meta-test")
+	require.NoError(t, err)
+
+	cfg := &config.ConsistentConfig{
+		Storage:               util.AddressOf(storageURI.String()),
+		MetaFlushIntervalInMs: util.AddressOf(int64(redo.MinFlushIntervalInMs)),
+	}
+	m := NewRedoMeta(common.NewChangeFeedIDWithName("test-changefeed", common.DefaultKeyspaceName), 1, cfg)
+	err = m.PreStart(context.Background())
+	require.Error(t, err)
+	require.Nil(t, m.extStorage)
 }
