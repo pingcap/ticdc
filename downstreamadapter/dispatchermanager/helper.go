@@ -25,6 +25,7 @@ import (
 	"github.com/pingcap/ticdc/heartbeatpb"
 	"github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
+	"github.com/pingcap/ticdc/pkg/node"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/utils/dynstream"
 	"go.uber.org/zap"
@@ -41,22 +42,22 @@ type DispatcherMap[T dispatcher.Dispatcher] struct {
 	// When some new dispatcher(table) is being added, the maintainer will block the forward of changefeed's checkpointTs
 	// until the maintainer receive the message that the new dispatcher's component status change to working.
 	//
-	// Besides, there is no strict order of the heartbeat message and the table status messages, which is means
-	// it can happen that when dispatcher A is created, event dispatcher manager may first send a table status message
-	// to show the new dispatcher is working, and then send a heartbeat message of the current watermark,
-	// which is calculated without the new disaptcher.
-	// When the checkpointTs of the watermark is large than the startTs of the new dispatcher,
-	// the watermark of next heartbeat, which calculated with the new dispatcher can be less than the previous watermark.
-	// Then it can cause the fallback of changefeed's checkpointTs.
-	// To avoid fallback, we add a seq number in each heartbeat message(both collect from collectComponentStatusWhenChanged and aggregateDispatcherHeartbeats)
-	// When a table is added the seq number will be increase,
-	// and when the maintainer receive the outdate seq, it will know the heartbeat message is outdate and ignore it.
+	// Besides, heartbeat messages and table status messages have no strict order.
+	// After dispatcher A is created, the event dispatcher manager may first send
+	// a table status message showing the new dispatcher is working, and then send
+	// a heartbeat with the current watermark calculated without the new dispatcher.
+	// If that watermark checkpointTs is larger than the new dispatcher's startTs,
+	// the next heartbeat calculated with the new dispatcher can be lower and cause
+	// the changefeed checkpointTs to fall back.
+	// To avoid fallback, each heartbeat carries a seq number collected from
+	// collectComponentStatusWhenChanged and aggregateDispatcherHeartbeats. When a
+	// table is added, the seq number increases, so the maintainer can ignore
+	// outdated heartbeat messages.
 	// In this way, even the above case happens, the changefeed's checkpointTs will not fallback.
 	//
-	// Here we don't need to make seq changes always atmoic with the m changed.
-	// Our target is just :
-	// The seq get from ForEach should be smaller than the seq get from Set
-	// when ForEach is not access the new dispatcher just Set.
+	// Here we don't need to make seq changes always atomic with the map changes.
+	// Our target is only that the seq from ForEach is smaller than the seq from
+	// Set when ForEach does not access the newly added dispatcher.
 	// So we add seq after the dispatcher is add in the m for Set, and get the seq before do range for ForRange.
 	seq atomic.Uint64
 }
@@ -178,11 +179,14 @@ func newSchedulerDispatcherRequestDynamicStream() dynstream.DynamicStream[int, c
 }
 
 type SchedulerDispatcherRequest struct {
+	From node.ID
 	*heartbeatpb.ScheduleDispatcherRequest
 }
 
-func NewSchedulerDispatcherRequest(req *heartbeatpb.ScheduleDispatcherRequest) SchedulerDispatcherRequest {
-	return SchedulerDispatcherRequest{req}
+// NewSchedulerDispatcherRequest carries the sender node with the schedule
+// request so dispatcher-manager admission can fence stale maintainers.
+func NewSchedulerDispatcherRequest(from node.ID, req *heartbeatpb.ScheduleDispatcherRequest) SchedulerDispatcherRequest {
+	return SchedulerDispatcherRequest{From: from, ScheduleDispatcherRequest: req}
 }
 
 type SchedulerDispatcherRequestHandler struct{}
@@ -204,10 +208,8 @@ func (h *SchedulerDispatcherRequestHandler) Path(scheduleDispatcherRequest Sched
 // Some requests are intentionally dropped (see preCheckForSchedulerHandler / handleScheduleRemove) to avoid
 // leaking operator entries in cases where we have no cleanup callback (e.g. remove a non-existent dispatcher).
 func (h *SchedulerDispatcherRequestHandler) Handle(dispatcherManager *DispatcherManager, reqs ...SchedulerDispatcherRequest) bool {
-	if len(reqs) == 0 {
-		// dynstream guarantees len(events)>0, but guard defensively to avoid panics if that contract changes.
-		return false
-	}
+	dispatcherManager.MaintainerFenceMu.Lock()
+	defer dispatcherManager.MaintainerFenceMu.Unlock()
 
 	// `dynstream` guarantees per-path serialization: for a given changefeed (Path),
 	// SchedulerDispatcherRequestHandler.Handle will not be executed concurrently. This matters for reasoning:
@@ -219,14 +221,14 @@ func (h *SchedulerDispatcherRequestHandler) Handle(dispatcherManager *Dispatcher
 	infos := map[common.DispatcherID]dispatcherCreateInfo{}
 	redoInfos := map[common.DispatcherID]dispatcherCreateInfo{}
 	for _, req := range reqs {
-		operatorKey, ok := preCheckForSchedulerHandler(req, dispatcherManager)
+		dispatcherID, ok := preCheckForSchedulerHandler(req, dispatcherManager)
 		if !ok {
 			continue
 		}
 		switch req.ScheduleAction {
 		case heartbeatpb.ScheduleAction_Create:
 			// Store the add operator and create an info for later create dispatcher.
-			handleScheduleCreate(dispatcherManager, req, operatorKey, infos, redoInfos)
+			handleScheduleCreate(dispatcherManager, req, dispatcherID, infos, redoInfos)
 		case heartbeatpb.ScheduleAction_Remove:
 			// Remove is non-batchable (see GetType), so reqs should contain exactly one request.
 			if len(reqs) != 1 {
@@ -234,7 +236,7 @@ func (h *SchedulerDispatcherRequestHandler) Handle(dispatcherManager *Dispatcher
 			}
 			// Store the remove operator (when applicable) and remove the dispatcher directly.
 			// The remove operator will be deleted after the dispatcher is removed from dispatcherMap.
-			handleScheduleRemove(dispatcherManager, req, operatorKey)
+			handleScheduleRemove(dispatcherManager, req, dispatcherID)
 		default:
 			log.Panic("unknown schedule action", zap.Int("action", int(req.ScheduleAction)))
 		}
@@ -251,11 +253,10 @@ func (h *SchedulerDispatcherRequestHandler) Handle(dispatcherManager *Dispatcher
 
 // preCheckForSchedulerHandler validates a scheduling request and decides whether it should be applied.
 //
-// It returns the stable key used in currentOperatorMap (dispatcherID), and a boolean indicating whether the
-// request should proceed. The precheck filters out:
+// It returns the dispatcherID used as currentOperatorMap key. The precheck filters out:
 //   - invalid requests (nil request/config/dispatcherID),
 //   - redo requests when redo is disabled,
-//   - duplicate Create requests for the same dispatcherID while another operator is in-flight,
+//   - stale maintainer requests and duplicate Create requests,
 //   - Create requests for an already-existing dispatcher (idempotent no-op).
 //
 // Note: Remove requests are allowed to proceed even if the dispatcher doesn't exist (we still want to emit a
@@ -270,32 +271,46 @@ func preCheckForSchedulerHandler(req SchedulerDispatcherRequest, dispatcherManag
 		log.Warn("scheduleDispatcherRequest config is nil, skip")
 		return common.DispatcherID{}, false
 	}
-	operatorKey := common.NewDispatcherIDFromPB(req.Config.DispatcherID)
-	if operatorKey.IsZero() {
+	dispatcherID := common.NewDispatcherIDFromPB(req.Config.DispatcherID)
+	if dispatcherID.IsZero() {
 		log.Warn("scheduleDispatcherRequest has no valid operator key, skip")
 		return common.DispatcherID{}, false
 	}
-
+	if !dispatcherManager.IsMaintainerRequestAllowed(req.From, req.MaintainerEpoch) {
+		log.Warn("drop stale schedule dispatcher request",
+			zap.String("changefeedID", req.ChangefeedID.String()),
+			zap.String("dispatcherID", dispatcherID.String()),
+			zap.String("from", req.From.String()),
+			zap.Uint64("requestMaintainerEpoch", req.MaintainerEpoch),
+			zap.Uint64("currentMaintainerEpoch", dispatcherManager.GetMaintainerEpoch()),
+			zap.String("currentMaintainer", dispatcherManager.GetMaintainerID().String()))
+		return common.DispatcherID{}, false
+	}
 	isRedo := common.IsRedoMode(req.Config.Mode)
 	if isRedo && !dispatcherManager.IsRedoReady() {
 		return common.DispatcherID{}, false
 	}
-	if _, operatorExists := dispatcherManager.currentOperatorMap.Load(operatorKey); operatorExists {
-		// Create requests must be serialized per dispatcherID; otherwise we can end up creating multiple
-		// dispatchers for the same span/dispatcherID.
-		if req.ScheduleAction == heartbeatpb.ScheduleAction_Create {
-			return common.DispatcherID{}, false
+	if existing, operatorExists := dispatcherManager.currentOperatorMap.Load(dispatcherID); operatorExists {
+		existingReq := existing.(SchedulerDispatcherRequest)
+		if !dispatcherManager.IsMaintainerRequestAllowed(existingReq.From, existingReq.MaintainerEpoch) {
+			dispatcherManager.currentOperatorMap.Delete(dispatcherID)
+		} else {
+			// Create requests must be serialized per dispatcherID; otherwise we can end up creating multiple
+			// dispatchers for the same span/dispatcherID.
+			if req.ScheduleAction == heartbeatpb.ScheduleAction_Create {
+				return common.DispatcherID{}, false
+			}
+			// Remove requests are allowed to proceed: removeDispatcher is idempotent and the incoming request
+			// may carry a newer OperatorType for maintainer bootstrap/failover reconstruction.
 		}
-		// Remove requests are allowed to proceed: removeDispatcher is idempotent and the incoming request
-		// may carry a newer OperatorType for maintainer bootstrap/failover reconstruction.
 	}
 
 	// Check whether the dispatcher exists locally. This is used to treat Create as idempotent.
 	var dispatcherExists bool
 	if isRedo {
-		_, dispatcherExists = dispatcherManager.redoDispatcherMap.Get(operatorKey)
+		_, dispatcherExists = dispatcherManager.redoDispatcherMap.Get(dispatcherID)
 	} else {
-		_, dispatcherExists = dispatcherManager.dispatcherMap.Get(operatorKey)
+		_, dispatcherExists = dispatcherManager.dispatcherMap.Get(dispatcherID)
 	}
 
 	// Action-aware precheck:
@@ -309,27 +324,26 @@ func preCheckForSchedulerHandler(req SchedulerDispatcherRequest, dispatcherManag
 	case heartbeatpb.ScheduleAction_Remove:
 	}
 
-	return operatorKey, true
+	return dispatcherID, true
 }
 
 func handleScheduleCreate(
 	dispatcherManager *DispatcherManager,
 	req SchedulerDispatcherRequest,
-	operatorKey common.DispatcherID,
+	dispatcherID common.DispatcherID,
 	infos map[common.DispatcherID]dispatcherCreateInfo,
 	redoInfos map[common.DispatcherID]dispatcherCreateInfo,
 ) {
 	config := req.Config
-	dispatcherID := common.NewDispatcherIDFromPB(config.DispatcherID)
 	info := dispatcherCreateInfo{
-		Id:               dispatcherID,
+		ID:               dispatcherID,
 		TableSpan:        config.Span,
 		StartTs:          config.StartTs,
 		SchemaID:         config.SchemaID,
 		SkipDMLAsStartTs: config.SkipDMLAsStartTs,
 	}
 	if common.IsRedoMode(config.Mode) {
-		dispatcherManager.currentOperatorMap.Store(operatorKey, req)
+		dispatcherManager.currentOperatorMap.Store(dispatcherID, req)
 		log.Debug("store current working add operator for redo dispatcher",
 			zap.String("changefeedID", req.ChangefeedID.String()),
 			zap.String("dispatcherID", dispatcherID.String()),
@@ -337,7 +351,7 @@ func handleScheduleCreate(
 		)
 		redoInfos[dispatcherID] = info
 	} else {
-		dispatcherManager.currentOperatorMap.Store(operatorKey, req)
+		dispatcherManager.currentOperatorMap.Store(dispatcherID, req)
 		log.Debug("store current working add operator",
 			zap.String("changefeedID", req.ChangefeedID.String()),
 			zap.String("dispatcherID", dispatcherID.String()),
@@ -350,10 +364,9 @@ func handleScheduleCreate(
 func handleScheduleRemove(
 	dispatcherManager *DispatcherManager,
 	req SchedulerDispatcherRequest,
-	operatorKey common.DispatcherID,
+	dispatcherID common.DispatcherID,
 ) {
 	config := req.Config
-	dispatcherID := common.NewDispatcherIDFromPB(config.DispatcherID)
 	if common.IsRedoMode(config.Mode) {
 		// If redo is disabled or the dispatcher does not exist, do not store the remove operator.
 		// Otherwise, the operator may never be cleaned up because cleanRedoDispatcher won't be called.
@@ -361,7 +374,7 @@ func handleScheduleRemove(
 			return
 		}
 		if _, exists := dispatcherManager.redoDispatcherMap.Get(dispatcherID); exists {
-			dispatcherManager.currentOperatorMap.Store(operatorKey, req)
+			dispatcherManager.currentOperatorMap.Store(dispatcherID, req)
 			log.Debug("store current working remove operator for redo dispatcher",
 				zap.String("changefeedID", req.ChangefeedID.String()),
 				zap.String("dispatcherID", dispatcherID.String()),
@@ -381,7 +394,7 @@ func handleScheduleRemove(
 		// If the dispatcher does not exist, do not store the remove operator.
 		// Otherwise, the operator may never be cleaned up because cleanEventDispatcher won't be called.
 		if _, exists := dispatcherManager.dispatcherMap.Get(dispatcherID); exists {
-			dispatcherManager.currentOperatorMap.Store(operatorKey, req)
+			dispatcherManager.currentOperatorMap.Store(dispatcherID, req)
 			log.Debug("store current working remove operator",
 				zap.String("changefeedID", req.ChangefeedID.String()),
 				zap.String("dispatcherID", dispatcherID.String()),
@@ -412,15 +425,15 @@ func createDispatcherByInfo(
 		}
 		for _, info := range redoInfos {
 			// Create requests are stored in currentOperatorMap before creation and should be deleted once the dispatcher is created.
-			if v, ok := dispatcherManager.currentOperatorMap.Load(info.Id); ok {
+			if v, ok := dispatcherManager.currentOperatorMap.Load(info.ID); ok {
 				req := v.(SchedulerDispatcherRequest)
 				if req.ScheduleAction == heartbeatpb.ScheduleAction_Create {
 					log.Debug("delete current working add operator for redo dispatcher",
 						zap.String("changefeedID", dispatcherManager.changefeedID.String()),
-						zap.String("dispatcherID", info.Id.String()),
+						zap.String("dispatcherID", info.ID.String()),
 						zap.Any("operator", req),
 					)
-					dispatcherManager.currentOperatorMap.Delete(info.Id)
+					dispatcherManager.currentOperatorMap.Delete(info.ID)
 				}
 			}
 		}
@@ -432,15 +445,15 @@ func createDispatcherByInfo(
 		}
 		for _, info := range infos {
 			// Create requests are stored in currentOperatorMap before creation and should be deleted once the dispatcher is created.
-			if v, ok := dispatcherManager.currentOperatorMap.Load(info.Id); ok {
+			if v, ok := dispatcherManager.currentOperatorMap.Load(info.ID); ok {
 				req := v.(SchedulerDispatcherRequest)
 				if req.ScheduleAction == heartbeatpb.ScheduleAction_Create {
 					log.Debug("delete current working add operator",
 						zap.String("changefeedID", dispatcherManager.changefeedID.String()),
-						zap.String("dispatcherID", info.Id.String()),
+						zap.String("dispatcherID", info.ID.String()),
 						zap.Any("operator", req),
 					)
-					dispatcherManager.currentOperatorMap.Delete(info.Id)
+					dispatcherManager.currentOperatorMap.Delete(info.ID)
 				}
 			}
 		}
@@ -489,11 +502,14 @@ func newHeartBeatResponseDynamicStream(dds dynstream.DynamicStream[common.GID, c
 }
 
 type HeartBeatResponse struct {
+	From node.ID
 	*heartbeatpb.HeartBeatResponse
 }
 
-func NewHeartBeatResponse(resp *heartbeatpb.HeartBeatResponse) HeartBeatResponse {
-	return HeartBeatResponse{resp}
+// NewHeartBeatResponse carries the sender node with the heartbeat so stale
+// maintainer responses cannot update dispatcher state.
+func NewHeartBeatResponse(from node.ID, resp *heartbeatpb.HeartBeatResponse) HeartBeatResponse {
+	return HeartBeatResponse{From: from, HeartBeatResponse: resp}
 }
 
 type HeartBeatResponseHandler struct {
@@ -514,6 +530,11 @@ func (h *HeartBeatResponseHandler) Handle(dispatcherManager *DispatcherManager, 
 		panic("invalid response count")
 	}
 	heartbeatResponse := resps[0]
+	dispatcherManager.MaintainerFenceMu.Lock()
+	defer dispatcherManager.MaintainerFenceMu.Unlock()
+	if !isHeartBeatResponseAllowed(dispatcherManager, heartbeatResponse) {
+		return false
+	}
 	dispatcherStatuses := heartbeatResponse.GetDispatcherStatuses()
 	for _, dispatcherStatus := range dispatcherStatuses {
 		influencedDispatchersType := dispatcherStatus.InfluencedDispatchers.InfluenceType
@@ -548,6 +569,21 @@ func (h *HeartBeatResponseHandler) Handle(dispatcherManager *DispatcherManager, 
 			}
 		}
 	}
+	return false
+}
+
+// isHeartBeatResponseAllowed drops dispatcher heartbeats from stale maintainers
+// before they can update table state or complete scheduler operators.
+func isHeartBeatResponseAllowed(dispatcherManager *DispatcherManager, heartbeatResponse HeartBeatResponse) bool {
+	if dispatcherManager.IsMaintainerRequestAllowed(heartbeatResponse.From, heartbeatResponse.MaintainerEpoch) {
+		return true
+	}
+	log.Warn("drop stale heartbeat response",
+		zap.String("changefeedID", heartbeatResponse.ChangefeedID.String()),
+		zap.String("from", heartbeatResponse.From.String()),
+		zap.Uint64("responseMaintainerEpoch", heartbeatResponse.MaintainerEpoch),
+		zap.Uint64("currentMaintainerEpoch", dispatcherManager.GetMaintainerEpoch()),
+		zap.String("currentMaintainer", dispatcherManager.GetMaintainerID().String()))
 	return false
 }
 
@@ -766,11 +802,14 @@ func newMergeDispatcherRequestDynamicStream() dynstream.DynamicStream[int, commo
 }
 
 type MergeDispatcherRequest struct {
+	From node.ID
 	*heartbeatpb.MergeDispatcherRequest
 }
 
-func NewMergeDispatcherRequest(req *heartbeatpb.MergeDispatcherRequest) MergeDispatcherRequest {
-	return MergeDispatcherRequest{req}
+// NewMergeDispatcherRequest carries the sender node together with the request
+// so the handler can apply the dispatcher-manager maintainer fence.
+func NewMergeDispatcherRequest(from node.ID, req *heartbeatpb.MergeDispatcherRequest) MergeDispatcherRequest {
+	return MergeDispatcherRequest{From: from, MergeDispatcherRequest: req}
 }
 
 type MergeDispatcherRequestHandler struct{}
@@ -785,6 +824,17 @@ func (h *MergeDispatcherRequestHandler) Handle(dispatcherManager *DispatcherMana
 	}
 
 	mergeDispatcherRequest := reqs[0]
+	dispatcherManager.MaintainerFenceMu.Lock()
+	defer dispatcherManager.MaintainerFenceMu.Unlock()
+	if !dispatcherManager.IsMaintainerRequestAllowed(mergeDispatcherRequest.From, mergeDispatcherRequest.MaintainerEpoch) {
+		log.Warn("drop stale merge dispatcher request",
+			zap.String("changefeedID", mergeDispatcherRequest.ChangefeedID.String()),
+			zap.String("from", mergeDispatcherRequest.From.String()),
+			zap.Uint64("requestMaintainerEpoch", mergeDispatcherRequest.MaintainerEpoch),
+			zap.Uint64("currentMaintainerEpoch", dispatcherManager.GetMaintainerEpoch()),
+			zap.String("currentMaintainer", dispatcherManager.GetMaintainerID().String()))
+		return false
+	}
 	dispatcherIDs := make([]common.DispatcherID, 0, len(mergeDispatcherRequest.DispatcherIDs))
 	for _, id := range mergeDispatcherRequest.DispatcherIDs {
 		dispatcherIDs = append(dispatcherIDs, common.NewDispatcherIDFromPB(id))

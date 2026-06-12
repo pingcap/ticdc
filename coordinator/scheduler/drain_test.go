@@ -73,7 +73,7 @@ func TestDrainSchedulerCreatesMoveOperators(t *testing.T) {
 	db.AddReplicatingMaintainer(changefeed.NewChangefeed(loadInfo2.ChangefeedID, &loadInfo2, 1, false), destHot)
 
 	selfNode := &node.Info{ID: node.ID("coordinator")}
-	oc := operator.NewOperatorController(selfNode, db, nil, 10)
+	oc := operator.NewOperatorController(selfNode, db, nil, nil, 10)
 
 	s := NewDrainScheduler("test", 10, oc, db, drainController)
 	_ = s.Execute()
@@ -123,7 +123,7 @@ func TestDrainSchedulerSkipsChangefeedWithInflightOperator(t *testing.T) {
 	db.AddReplicatingMaintainer(cf2, origin)
 
 	selfNode := &node.Info{ID: node.ID("coordinator")}
-	oc := operator.NewOperatorController(selfNode, db, nil, 10)
+	oc := operator.NewOperatorController(selfNode, db, nil, nil, 10)
 
 	require.True(t, oc.AddOperator(operator.NewMoveMaintainerOperator(db, cf1, origin, dest)))
 	require.Equal(t, 1, oc.OperatorSize())
@@ -161,7 +161,7 @@ func TestDrainSchedulerIgnoresUnrelatedOperatorCapacity(t *testing.T) {
 	otherCF := db.GetByID(otherID)
 
 	selfNode := &node.Info{ID: node.ID("coordinator")}
-	oc := operator.NewOperatorController(selfNode, db, nil, 10)
+	oc := operator.NewOperatorController(selfNode, db, nil, nil, 10)
 	require.True(t, oc.AddOperator(operator.NewMoveMaintainerOperator(db, otherCF, other, dest)))
 
 	s := NewDrainScheduler("test", 1, oc, db, drainController)
@@ -200,7 +200,7 @@ func TestDrainSchedulerRotatesAcrossDrainingNodes(t *testing.T) {
 	cfB := addReplicatingMaintainer(t, db, "cf-b", originB)
 
 	selfNode := &node.Info{ID: node.ID("coordinator")}
-	oc := operator.NewOperatorController(selfNode, db, nil, 10)
+	oc := operator.NewOperatorController(selfNode, db, nil, nil, 10)
 	s := NewDrainScheduler("test", 1, oc, db, drainController)
 
 	_ = s.Execute()
@@ -252,7 +252,7 @@ func TestDrainSchedulerRequiresTargetAckBeforeUsingDestination(t *testing.T) {
 	cfID := addReplicatingMaintainer(t, db, "cf-drain", origin)
 
 	selfNode := &node.Info{ID: node.ID("coordinator")}
-	oc := operator.NewOperatorController(selfNode, db, nil, 10)
+	oc := operator.NewOperatorController(selfNode, db, nil, nil, 10)
 
 	s := NewDrainScheduler("test", 10, oc, db, drainController)
 	_ = s.Execute()
@@ -283,7 +283,7 @@ func TestDrainSchedulerSkipsWhenSchedulingFrozen(t *testing.T) {
 	cfID := addReplicatingMaintainer(t, db, "cf-frozen-drain", origin)
 
 	selfNode := &node.Info{ID: node.ID("coordinator")}
-	oc := operator.NewOperatorController(selfNode, db, nil, 10)
+	oc := operator.NewOperatorController(selfNode, db, nil, nil, 10)
 
 	s := NewDrainScheduler("test", 10, oc, db, drainController)
 	_ = s.Execute()

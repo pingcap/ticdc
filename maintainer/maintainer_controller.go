@@ -15,6 +15,7 @@ package maintainer
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pingcap/log"
@@ -57,8 +58,9 @@ type Controller struct {
 
 	splitter *split.Splitter
 
-	replicaConfig *config.ReplicaConfig
-	changefeedID  common.ChangeFeedID
+	replicaConfig   *config.ReplicaConfig
+	changefeedID    common.ChangeFeedID
+	maintainerEpoch atomic.Uint64
 
 	taskPool threadpool.ThreadPool
 
@@ -88,6 +90,7 @@ func NewController(changefeedID common.ChangeFeedID,
 	keyspaceMeta common.KeyspaceMeta,
 	enableRedo bool,
 	balanceMoveBatchSize int,
+	maintainerEpoch uint64,
 ) *Controller {
 	mc := appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter)
 
@@ -154,7 +157,22 @@ func NewController(changefeedID common.ChangeFeedID,
 		controller.drainState,
 		balanceMoveBatchSize,
 	)
+	controller.SetMaintainerEpoch(maintainerEpoch)
 	return controller
+}
+
+// SetMaintainerEpoch propagates the changefeed epoch used to fence
+// dispatcher-manager control requests from stale maintainers.
+func (c *Controller) SetMaintainerEpoch(maintainerEpoch uint64) {
+	c.maintainerEpoch.Store(maintainerEpoch)
+	c.operatorController.SetMaintainerEpoch(maintainerEpoch)
+	if c.redoOperatorController != nil {
+		c.redoOperatorController.SetMaintainerEpoch(maintainerEpoch)
+	}
+}
+
+func (c *Controller) currentMaintainerEpoch() uint64 {
+	return c.maintainerEpoch.Load()
 }
 
 // HandleStatus handle the status report from the node
@@ -193,7 +211,16 @@ func (c *Controller) HandleStatus(from node.ID, statusList []*heartbeatpb.TableS
 					zap.Any("status", status),
 					zap.String("dispatcherID", dispatcherID.String()))
 				// If the span is not found but status is Working, we need to remove it from dispatcher.
-				_ = c.messageCenter.SendCommand(replica.NewRemoveDispatcherMessage(from, c.changefeedID, status.ID, nil, status.Mode, heartbeatpb.OperatorType_O_Remove))
+				msg := replica.NewRemoveDispatcherMessage(
+					from,
+					c.changefeedID,
+					status.ID,
+					nil,
+					status.Mode,
+					heartbeatpb.OperatorType_O_Remove,
+					c.currentMaintainerEpoch(),
+				)
+				_ = c.messageCenter.SendCommand(msg)
 			}
 			continue
 		}
