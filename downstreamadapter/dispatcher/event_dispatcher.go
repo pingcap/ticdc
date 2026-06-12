@@ -207,13 +207,13 @@ func (d *EventDispatcher) EmitBootstrap(shouldStop func() bool) bool {
 		if table.IsView() {
 			continue
 		}
-		if shouldStop != nil && shouldStop() {
+		if shouldStop() {
 			return false
 		}
 		ddlEvent := codec.NewBootstrapDDLEvent(table)
 		err := d.sink.WriteBlockEvent(ddlEvent)
 		if err != nil {
-			if shouldStop != nil && shouldStop() {
+			if shouldStop() {
 				return false
 			}
 			log.Error("send bootstrap message failed",
@@ -225,7 +225,7 @@ func (d *EventDispatcher) EmitBootstrap(shouldStop func() bool) bool {
 			d.HandleError(errors.ErrExecDDLFailed.GenWithStackByArgs())
 			return true
 		}
-		if shouldStop != nil && shouldStop() {
+		if shouldStop() {
 			return false
 		}
 	}
