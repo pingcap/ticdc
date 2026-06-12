@@ -798,6 +798,10 @@ var (
 		"failed to init table trigger dispatcher",
 		errors.RFCCodeText("CDC:ErrChangefeedInitTableTriggerDispatcherFailed"),
 	)
+	ErrDispatcherManagerWritePathClosed = errors.Normalize(
+		"dispatcher manager write path is closed",
+		errors.RFCCodeText("CDC:ErrDispatcherManagerWritePathClosed"),
+	)
 	ErrDDLEventError = errors.Normalize(
 		"ddl event meets error",
 		errors.RFCCodeText("CDC:ErrDDLEventError"),
