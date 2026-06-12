@@ -4716,12 +4716,12 @@
                   "__name__": true
                 },
                 "indexByName": {
-                  "changefeed": 1,
-                  "code": 4,
-                  "error_time": 3,
-                  "message": 5,
                   "keyspace_name": 0,
-                  "state": 2
+                  "changefeed": 1,
+                  "state": 2,
+                  "error_time": 3,
+                  "code": 4,
+                  "message": 5
                 },
                 "renameByName": {}
               }
