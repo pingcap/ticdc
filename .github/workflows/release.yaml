@@ -20,7 +20,7 @@ jobs:
         id: check
         run: |
           VERSION="${{ steps.tag.outputs.version }}"
-          if [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-release\.[0-9]+)?$ ]]; then
+          if [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-release\.[0-9]+)?$ && "$VERSION" != v26* ]]; then
             echo "is_release=true" >> $GITHUB_OUTPUT
           else
             echo "is_release=false" >> $GITHUB_OUTPUT
