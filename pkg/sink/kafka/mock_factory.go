@@ -107,7 +107,6 @@ func (m *MockSaramaSyncProducer) Close() {
 	_ = m.SyncProducer.Close()
 }
 
-
 // MockSaramaAsyncProducer is a mock implementation of AsyncProducer interface.
 type MockSaramaAsyncProducer struct {
 	AsyncProducer *mocks.AsyncProducer
@@ -171,7 +170,7 @@ func (p *MockSaramaAsyncProducer) AsyncSend(ctx context.Context, topic string, p
 	case p.AsyncProducer.Input() <- msg:
 	}
 	return nil
-
+}
 
 // Close implement the AsyncProducer interface.
 func (p *MockSaramaAsyncProducer) Close() {

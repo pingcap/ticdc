@@ -17,7 +17,6 @@ import (
 	"context"
 	"fmt"
 	"net/url"
-	"sync"
 	"testing"
 	"time"
 
@@ -101,18 +100,6 @@ func newKafkaSinkForTestWithProducers(ctx context.Context,
 
 func newKafkaSinkForTest(ctx context.Context) (*sink, error) {
 	return newKafkaSinkForTestWithProducers(ctx, nil, nil)
-}
-
-// mockSyncProducer is used to count the calls to Heartbeat.
-type mockSyncProducer struct {
-	kafka.MockSaramaSyncProducer
-	mu sync.Mutex
-}
-
-// mockSyncProducer is used to count the calls to Heartbeat.
-type mockAsyncProducer struct {
-	kafka.MockSaramaAsyncProducer
-	mu sync.Mutex
 }
 
 func TestKafkaSinkBasicFunctionality(t *testing.T) {
