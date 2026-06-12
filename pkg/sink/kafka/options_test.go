@@ -51,6 +51,7 @@ func TestCompleteOptions(t *testing.T) {
 	require.Equal(t, "2.6.0", options.Version)
 	require.Equal(t, 4096, options.MaxMessageBytes)
 	require.Equal(t, WaitForLocal, options.RequiredAcks)
+	require.Equal(t, defaultMaxRetry, options.MaxRetry)
 
 	// multiple kafka broker endpoints
 	uri = "kafka://127.0.0.1:9092,127.0.0.1:9091,127.0.0.1:9090/kafka-test?"
@@ -72,6 +73,14 @@ func TestCompleteOptions(t *testing.T) {
 
 	// Illegal max-message-bytes.
 	uri = "kafka://127.0.0.1:9092/abc?kafka-version=2.6.0&max-message-bytes=a"
+	sinkURI, err = url.Parse(uri)
+	require.NoError(t, err)
+	options = NewOptions()
+	err = options.Apply(commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "test"), sinkURI, config.GetDefaultReplicaConfig().Sink)
+	require.Regexp(t, ".*invalid syntax.*", errors.Cause(err))
+
+	// Illegal max-retry.
+	uri = "kafka://127.0.0.1:9092/abc?kafka-version=2.6.0&max-retry=a"
 	sinkURI, err = url.Parse(uri)
 	require.NoError(t, err)
 	options = NewOptions()
@@ -108,7 +117,37 @@ func TestCompleteOptions(t *testing.T) {
 	require.NoError(t, err)
 	options = NewOptions()
 	err = options.Apply(commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "test"), sinkURI, config.GetDefaultReplicaConfig().Sink)
+<<<<<<< HEAD
 	require.True(t, cerror.ErrKafkaInvalidClientID.Equal(err))
+=======
+	require.True(t, errors.ErrKafkaInvalidClientID.Equal(err))
+
+	// max-retry accepts non-negative sink-uri values.
+	uri = "kafka://127.0.0.1:9092/abc?max-retry=7"
+	sinkURI, err = url.Parse(uri)
+	require.NoError(t, err)
+	options = NewOptions()
+	err = options.Apply(commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "test"), sinkURI, config.GetDefaultReplicaConfig().Sink)
+	require.NoError(t, err)
+	require.Equal(t, 7, options.MaxRetry)
+
+	uri = "kafka://127.0.0.1:9092/abc?max-retry=0"
+	sinkURI, err = url.Parse(uri)
+	require.NoError(t, err)
+	options = NewOptions()
+	err = options.Apply(commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "test"), sinkURI, config.GetDefaultReplicaConfig().Sink)
+	require.NoError(t, err)
+	require.Equal(t, 0, options.MaxRetry)
+
+	// Negative max-retry values are ignored.
+	uri = "kafka://127.0.0.1:9092/abc?max-retry=-1"
+	sinkURI, err = url.Parse(uri)
+	require.NoError(t, err)
+	options = NewOptions()
+	err = options.Apply(commonType.NewChangefeedID4Test(commonType.DefaultKeyspaceName, "test"), sinkURI, config.GetDefaultReplicaConfig().Sink)
+	require.NoError(t, err)
+	require.Equal(t, defaultMaxRetry, options.MaxRetry)
+>>>>>>> 15a87036f (kafka: bump sarama version and enable the retry to fix the broken pipe and out of order (#5359))
 }
 
 func TestSetPartitionNum(t *testing.T) {
@@ -783,6 +822,7 @@ func TestMerge(t *testing.T) {
 	require.Equal(t, "cert.pem", c.Credential.CertPath)
 	require.Equal(t, "key.pem", c.Credential.KeyPath)
 }
+<<<<<<< HEAD
 
 // mockAdminClientForAdjust mocks the ClusterAdminClient to test adjustOptions.
 type mockAdminClientForAdjust struct {
@@ -855,3 +895,5 @@ func TestAdjustOptionsKeepAlive(t *testing.T) {
 		}
 	})
 }
+=======
+>>>>>>> 15a87036f (kafka: bump sarama version and enable the retry to fix the broken pipe and out of order (#5359))
