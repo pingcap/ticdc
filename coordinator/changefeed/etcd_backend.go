@@ -263,6 +263,7 @@ func (b *EtcdBackend) DeleteChangefeed(ctx context.Context,
 	return nil
 }
 
+// ResumeChangefeed persists a resumed changefeed and returns the metadata used by the caller.
 func (b *EtcdBackend) ResumeChangefeed(ctx context.Context,
 	id common.ChangeFeedID, newCheckpointTs uint64,
 ) (*config.ChangeFeedInfo, error) {
@@ -270,6 +271,13 @@ func (b *EtcdBackend) ResumeChangefeed(ctx context.Context,
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
+	// Legacy stopped changefeeds can contain sparse metadata that was completed
+	// during coordinator bootstrap. Complete it again before persisting the
+	// resumed state so backend-loaded metadata does not drop compatibility defaults.
+	if info.Config == nil {
+		info.Config = config.GetDefaultReplicaConfig()
+	}
+	info.VerifyAndComplete()
 	info.State = config.StateNormal
 	newStr, err := info.Marshal()
 	if err != nil {
