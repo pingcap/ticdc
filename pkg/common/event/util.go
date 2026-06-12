@@ -111,6 +111,114 @@ func NewEventTestHelper(t testing.TB) *EventTestHelper {
 	return NewEventTestHelperWithTimeZone(t, time.Local)
 }
 
+// SinkTestEventFixture contains reusable, EventTestHelper-generated events for
+// sink tests.
+type SinkTestEventFixture struct {
+	CreateTableSQL string
+	SchemaName     string
+	TableName      string
+	TableInfo      *common.TableInfo
+	DDLFinishedTs  uint64
+	DMLCount       int
+
+	ddlType     timodel.ActionType
+	dmlTemplate *DMLEvent
+}
+
+// NewSinkTestEventFixture creates a create-table plus DML fixture using
+// EventTestHelper, so the produced events match TiDB test event semantics.
+func NewSinkTestEventFixture(t testing.TB, createTableSQL string, dmls ...string) *SinkTestEventFixture {
+	helper := NewEventTestHelper(t)
+	defer helper.Close()
+
+	helper.Tk().MustExec("use test")
+	job := helper.DDL2Job(createTableSQL)
+	require.NotNil(t, job)
+
+	var dmlEvent *DMLEvent
+	if len(dmls) != 0 {
+		dmlEvent = helper.DML2Event(job.SchemaName, job.TableName, dmls...)
+		dmlEvent.TableInfoVersion = job.BinlogInfo.FinishedTS
+	}
+
+	return &SinkTestEventFixture{
+		CreateTableSQL: job.Query,
+		SchemaName:     job.SchemaName,
+		TableName:      job.TableName,
+		TableInfo:      common.WrapTableInfo(job.SchemaName, job.BinlogInfo.TableInfo),
+		DDLFinishedTs:  job.BinlogInfo.FinishedTS,
+		DMLCount:       len(dmls),
+		ddlType:        job.Type,
+		dmlTemplate:    dmlEvent,
+	}
+}
+
+// NewBasicSinkTestEventFixture creates a basic create-table plus two-row insert
+// fixture using EventTestHelper.
+func NewBasicSinkTestEventFixture(t testing.TB) *SinkTestEventFixture {
+	return NewSinkTestEventFixture(t,
+		"create table t (id int primary key, name varchar(32));",
+		"insert into t values (1, 'test')",
+		"insert into t values (2, 'test2');")
+}
+
+// NewDDLEvent returns a fresh DDL event from the fixture.
+func (f *SinkTestEventFixture) NewDDLEvent(
+	finishedTs uint64,
+	postFlush ...func(),
+) *DDLEvent {
+	return &DDLEvent{
+		Version:    DDLEventVersion1,
+		Type:       byte(f.ddlType),
+		Query:      f.CreateTableSQL,
+		SchemaName: f.SchemaName,
+		TableName:  f.TableName,
+		TableInfo:  f.TableInfo,
+		FinishedTs: finishedTs,
+		BlockedTables: &InfluencedTables{
+			InfluenceType: InfluenceTypeNormal,
+			TableIDs:      []int64{0},
+		},
+		NeedAddedTables: []Table{{TableID: f.TableInfo.TableName.TableID, SchemaID: 1}},
+		PostTxnFlushed:  append([]func(){}, postFlush...),
+	}
+}
+
+// NewDMLEvent returns a fresh DML event from the fixture. The event shares the
+// immutable row chunk with the fixture but owns cursor and callback state.
+func (f *SinkTestEventFixture) NewDMLEvent(postFlush ...func()) *DMLEvent {
+	template := f.dmlTemplate
+	if template == nil {
+		return nil
+	}
+	event := NewDMLEvent(
+		template.DispatcherID,
+		template.PhysicalTableID,
+		template.StartTs,
+		template.CommitTs,
+		f.TableInfo,
+	)
+	event.Seq = template.Seq
+	event.Epoch = template.Epoch
+	event.TableInfoVersion = template.TableInfoVersion
+	event.SetRows(template.Rows)
+	event.RowTypes = append([]common.RowType(nil), template.RowTypes...)
+	event.RowKeys = cloneRowKeys(template.RowKeys)
+	event.Length = template.Length
+	event.ApproximateSize = template.ApproximateSize
+	event.Checksum = append(event.Checksum, template.Checksum...)
+	event.PostTxnFlushed = append([]func(){}, postFlush...)
+	return event
+}
+
+func cloneRowKeys(rowKeys [][]byte) [][]byte {
+	cloned := make([][]byte, 0, len(rowKeys))
+	for _, key := range rowKeys {
+		cloned = append(cloned, append([]byte(nil), key...))
+	}
+	return cloned
+}
+
 func (s *EventTestHelper) ApplyJob(job *timodel.Job) {
 	if job.BinlogInfo != nil && len(job.BinlogInfo.MultipleTableInfos) > 0 {
 		for _, tableInfo := range job.BinlogInfo.MultipleTableInfos {

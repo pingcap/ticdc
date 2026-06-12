@@ -17,41 +17,124 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"sync"
 	"testing"
 	"time"
 
-	"github.com/pingcap/errors"
+	"github.com/golang/mock/gomock"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/columnselector"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/eventrouter"
 	"github.com/pingcap/ticdc/downstreamadapter/sink/helper"
+	"github.com/pingcap/ticdc/downstreamadapter/sink/topicmanager"
 	"github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/ticdc/pkg/config"
-	"github.com/pingcap/ticdc/pkg/metrics"
+	"github.com/pingcap/ticdc/pkg/sink/codec"
+	codeccommon "github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/pingcap/ticdc/pkg/sink/kafka"
-	"github.com/pingcap/ticdc/utils/chann"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/atomic"
 )
 
+const kafkaSinkTestTopic = "mock_topic"
+
 func newKafkaSinkForTestWithProducers(ctx context.Context,
+	t *testing.T,
+	ctrl *gomock.Controller,
 	asyncProducer kafka.AsyncProducer,
 	syncProducer kafka.SyncProducer,
 ) (*sink, error) {
+	t.Helper()
+
 	changefeedID := common.NewChangefeedID4Test("test", "test")
 	openProtocol := "open-protocol"
 	sinkConfig := &config.SinkConfig{Protocol: &openProtocol}
 	uriTemplate := "kafka://%s/%s?kafka-version=0.9.0.0&max-batch-size=1" +
 		"&max-message-bytes=1048576&partition-num=1" +
 		"&kafka-client-id=unit-test&auto-create-topic=false&compression=gzip&protocol=open-protocol"
-	uri := fmt.Sprintf(uriTemplate, "127.0.0.1:9092", kafka.DefaultMockTopicName)
+	uri := fmt.Sprintf(uriTemplate, "127.0.0.1:9092", kafkaSinkTestTopic)
 
 	sinkURI, err := url.Parse(uri)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, err
 	}
-	statistics := metrics.NewStatistics(changefeedID, "sink")
-	comp, protocol, err := newKafkaSinkComponentForTest(ctx, changefeedID, sinkURI, sinkConfig)
+	protocol, err := helper.GetProtocol(openProtocol)
 	if err != nil {
-		return nil, errors.Trace(err)
+		return nil, err
+	}
+	topic, err := helper.GetTopic(sinkURI)
+	if err != nil {
+		return nil, err
+	}
+	options := kafka.NewOptions()
+	if err = options.Apply(changefeedID, sinkURI, sinkConfig); err != nil {
+		return nil, err
+	}
+	options.Topic = topic
+
+	adminClient := kafka.NewMockClusterAdminClient(ctrl)
+	adminClient.EXPECT().GetTopicsMeta([]string{kafkaSinkTestTopic}, true).Return(
+		map[string]kafka.TopicDetail{
+			kafkaSinkTestTopic: {
+				Name:          kafkaSinkTestTopic,
+				NumPartitions: 1,
+			},
+		}, nil)
+	adminClient.EXPECT().Close().AnyTimes()
+
+	if asyncProducer == nil {
+		asyncProducer = kafka.NewMockAsyncProducer(ctrl)
+	}
+	if syncProducer == nil {
+		syncProducer = kafka.NewMockSyncProducer(ctrl)
+	}
+	metricsCollector := kafka.NewMockMetricsCollector(ctrl)
+	metricsCollector.EXPECT().Run(gomock.Any()).AnyTimes()
+
+	factory := kafka.NewMockFactory(ctrl)
+	factory.EXPECT().AsyncProducer(gomock.Any()).Return(asyncProducer, nil)
+	factory.EXPECT().SyncProducer(gomock.Any()).Return(syncProducer, nil)
+	factory.EXPECT().MetricsCollector(adminClient).Return(metricsCollector)
+
+	eventRouter, err := eventrouter.NewEventRouter(sinkConfig, topic, false, false)
+	if err != nil {
+		return nil, err
+	}
+	columnSelector, err := columnselector.New(sinkConfig)
+	if err != nil {
+		return nil, err
+	}
+	encoderConfig, err := helper.GetEncoderConfig(changefeedID, sinkURI, protocol, sinkConfig, options.MaxMessageBytes)
+	if err != nil {
+		return nil, err
+	}
+	encoderGroup, err := codec.NewEncoderGroup(ctx, sinkConfig, encoderConfig, changefeedID)
+	if err != nil {
+		return nil, err
+	}
+	encoder, err := codec.NewEventEncoder(ctx, encoderConfig)
+	if err != nil {
+		return nil, err
+	}
+	topicManager, err := topicmanager.GetTopicManagerAndTryCreateTopic(
+		ctx,
+		changefeedID,
+		topic,
+		options.DeriveTopicConfig(),
+		adminClient,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	comp := components{
+		encoderGroup:   encoderGroup,
+		encoder:        encoder,
+		columnSelector: columnSelector,
+		eventRouter:    eventRouter,
+		topicManager:   topicManager,
+		adminClient:    adminClient,
+		factory:        factory,
 	}
 
 	// We must close adminClient when this func return cause by an error
@@ -62,115 +145,70 @@ func newKafkaSinkForTestWithProducers(ctx context.Context,
 		}
 	}()
 
-	if asyncProducer == nil {
-		asyncProducer, err = comp.factory.AsyncProducer(ctx)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	if syncProducer == nil {
-		syncProducer, err = comp.factory.SyncProducer(ctx)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	s := &sink{
-		changefeedID:     changefeedID,
-		dmlProducer:      asyncProducer,
-		ddlProducer:      syncProducer,
-		metricsCollector: comp.factory.MetricsCollector(comp.adminClient),
-
-		partitionRule: helper.GetDDLDispatchRule(protocol),
-		protocol:      protocol,
-		comp:          comp,
-		statistics:    statistics,
-
-		checkpointChan: make(chan uint64, 16),
-		eventChan:      chann.NewUnlimitedChannelDefault[*commonEvent.DMLEvent](),
-		rowChan:        chann.NewUnlimitedChannelDefault[*commonEvent.MQRowEvent](),
-
-		isNormal: atomic.NewBool(true),
-		ctx:      ctx,
+	s, err := newWithComponents(ctx, changefeedID, protocol, comp)
+	if err != nil {
+		return nil, err
 	}
 	go s.Run(ctx)
 	return s, nil
 }
 
-func newKafkaSinkForTest(ctx context.Context) (*sink, error) {
-	return newKafkaSinkForTestWithProducers(ctx, nil, nil)
+var kafkaSinkEvents struct {
+	once    sync.Once
+	fixture *commonEvent.SinkTestEventFixture
+}
+
+func getKafkaSinkEventFixture(t *testing.T) *commonEvent.SinkTestEventFixture {
+	t.Helper()
+
+	kafkaSinkEvents.once.Do(func() {
+		kafkaSinkEvents.fixture = commonEvent.NewBasicSinkTestEventFixture(t)
+	})
+
+	return kafkaSinkEvents.fixture
 }
 
 func TestKafkaSinkBasicFunctionality(t *testing.T) {
-	helper := commonEvent.NewEventTestHelper(t)
-	defer helper.Close()
-
-	helper.Tk().MustExec("use test")
-	createTableSQL := "create table t (id int primary key, name varchar(32));"
-	job := helper.DDL2Job(createTableSQL)
-	require.NotNil(t, job)
-
 	var count atomic.Int64
-	ddlEvent := &commonEvent.DDLEvent{
-		Query:      job.Query,
-		SchemaName: job.SchemaName,
-		TableName:  job.TableName,
-		TableInfo:  common.WrapTableInfo(job.SchemaName, job.BinlogInfo.TableInfo),
-		FinishedTs: 1,
-		BlockedTables: &commonEvent.InfluencedTables{
-			InfluenceType: commonEvent.InfluenceTypeNormal,
-			TableIDs:      []int64{0},
-		},
-		NeedAddedTables: []commonEvent.Table{{TableID: 1, SchemaID: 1}},
-		PostTxnFlushed: []func(){
-			func() { count.Add(1) },
-		},
-	}
-
-	ddlEvent2 := &commonEvent.DDLEvent{
-		Query:      job.Query,
-		SchemaName: job.SchemaName,
-		TableName:  job.TableName,
-		TableInfo:  common.WrapTableInfo(job.SchemaName, job.BinlogInfo.TableInfo),
-		FinishedTs: 4,
-		BlockedTables: &commonEvent.InfluencedTables{
-			InfluenceType: commonEvent.InfluenceTypeNormal,
-			TableIDs:      []int64{0},
-		},
-		NeedAddedTables: []commonEvent.Table{{TableID: 1, SchemaID: 1}},
-		PostTxnFlushed: []func(){
-			func() { count.Add(1) },
-		},
-	}
-
-	dmlEvent := helper.DML2Event("test", "t",
-		"insert into t values (1, 'test')",
-		"insert into t values (2, 'test2');")
-	dmlEvent.PostTxnFlushed = []func(){
-		func() { count.Add(1) },
-	}
-	dmlEvent.CommitTs = 2
+	fixture := getKafkaSinkEventFixture(t)
+	postFlush := func() { count.Add(1) }
+	ddlEvent := fixture.NewDDLEvent(1, postFlush)
+	dmlEvent := fixture.NewDMLEvent(postFlush)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	kafkaSink, err := newKafkaSinkForTest(ctx)
+	ctrl := gomock.NewController(t)
+	asyncProducer := kafka.NewMockAsyncProducer(ctrl)
+	syncProducer := kafka.NewMockSyncProducer(ctrl)
+	asyncProducer.EXPECT().AsyncRunCallback(gomock.Any()).Return(nil).AnyTimes()
+	asyncProducer.EXPECT().AsyncSend(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
+		DoAndReturn(func(
+			_ context.Context,
+			_ string,
+			_ int32,
+			message *codeccommon.Message,
+		) error {
+			if message.Callback != nil {
+				message.Callback()
+			}
+			return nil
+		}).Times(fixture.DMLCount)
+	asyncProducer.EXPECT().Close().AnyTimes()
+	syncProducer.EXPECT().SendMessages(gomock.Any(), int32(1), gomock.Any()).Return(nil)
+	syncProducer.EXPECT().Close().AnyTimes()
+
+	kafkaSink, err := newKafkaSinkForTestWithProducers(ctx, t, ctrl, asyncProducer, syncProducer)
 	require.NoError(t, err)
 	defer cancel()
 
-	kafkaSink.ddlProducer.(*kafka.MockSaramaSyncProducer).SyncProducer.ExpectSendMessageAndSucceed()
 	err = kafkaSink.WriteBlockEvent(ddlEvent)
 	require.NoError(t, err)
 
-	kafkaSink.dmlProducer.(*kafka.MockSaramaAsyncProducer).AsyncProducer.ExpectInputAndSucceed()
-	kafkaSink.dmlProducer.(*kafka.MockSaramaAsyncProducer).AsyncProducer.ExpectInputAndSucceed()
 	kafkaSink.AddDMLEvent(dmlEvent)
-
-	ddlEvent2.PostFlush()
 
 	require.Eventually(t,
 		func() bool {
-			return count.Load() == int64(3)
-		}, 5*time.Second, time.Second)
+			return count.Load() == int64(2)
+		}, 5*time.Second, 10*time.Millisecond)
 
 	// case 2: add checkpoint ts when sink is closed and it will not block
 	kafkaSink.Close()
