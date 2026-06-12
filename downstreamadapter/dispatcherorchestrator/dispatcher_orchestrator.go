@@ -41,6 +41,9 @@ type DispatcherOrchestrator struct {
 	mc                 messaging.MessageCenter
 	mutex              sync.Mutex // protect dispatcherManagers
 	dispatcherManagers map[common.ChangeFeedID]*dispatchermanager.DispatcherManager
+	// initializingDispatcherManagers tracks managers that have been allocated
+	// but are not yet visible in dispatcherManagers.
+	initializingDispatcherManagers map[common.ChangeFeedID]*dispatchermanager.DispatcherManager
 
 	// Fields for asynchronous message processing
 	msgQueue *pendingMessageQueue
@@ -48,15 +51,28 @@ type DispatcherOrchestrator struct {
 
 	// closed indicates Close has been invoked and no more messages should be enqueued.
 	closed atomic.Bool
+	// fenced indicates this capture has lost local liveness and must stop local
+	// downstream writes without waiting for graceful dispatcher draining.
+	fenced atomic.Bool
 	// msgGuardWaitGroup waits for in-flight RecvMaintainerRequest handlers before shutdown.
 	msgGuardWaitGroup util.GuardedWaitGroup
 }
 
 func New() *DispatcherOrchestrator {
 	m := &DispatcherOrchestrator{
+<<<<<<< HEAD
 		mc:                 appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
 		dispatcherManagers: make(map[common.ChangeFeedID]*dispatchermanager.DispatcherManager),
 		msgQueue:           newPendingMessageQueue(),
+=======
+		mc:                             appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
+		dispatcherManagers:             make(map[common.ChangeFeedID]*dispatchermanager.DispatcherManager),
+		initializingDispatcherManagers: make(map[common.ChangeFeedID]*dispatchermanager.DispatcherManager),
+		shards:                         make([]*orchestratorShard, dispatcherOrchestratorShardCount),
+	}
+	for i := range m.shards {
+		m.shards[i] = newOrchestratorShard(m.processMessage)
+>>>>>>> f73e8dba2 (server, dispatcher: improve node liveness self fence (#5106))
 	}
 	m.mc.RegisterHandler(messaging.DispatcherManagerManagerTopic, m.RecvMaintainerRequest)
 	return m
@@ -79,7 +95,7 @@ func (m *DispatcherOrchestrator) RecvMaintainerRequest(
 	_ context.Context,
 	msg *messaging.TargetMessage,
 ) error {
-	if !m.msgGuardWaitGroup.AddIf(func() bool { return !m.closed.Load() }) {
+	if !m.msgGuardWaitGroup.AddIf(func() bool { return !m.closed.Load() && !m.fenced.Load() }) {
 		log.Debug("dispatcher orchestrator already closed, drop message", zap.Any("message", msg.Message))
 		return nil
 	}
@@ -116,6 +132,7 @@ func getPendingMessageKey(msg *messaging.TargetMessage) (pendingMessageKey, bool
 	}, true
 }
 
+<<<<<<< HEAD
 // handleMessages processes messages from the queue
 func (m *DispatcherOrchestrator) handleMessages() {
 	for {
@@ -123,6 +140,21 @@ func (m *DispatcherOrchestrator) handleMessages() {
 		if !ok {
 			log.Info("dispatcher orchestrator is shutting down, exit handleMessages")
 			return
+=======
+// processMessage dispatches a queued control message to the existing handler
+// implementation. Shards only change concurrency, not per-message behavior.
+func (m *DispatcherOrchestrator) processMessage(msg *messaging.TargetMessage) {
+	if m.fenced.Load() {
+		log.Info("dispatcher orchestrator is fenced, drop pending message",
+			zap.String("type", msg.Type.String()))
+		return
+	}
+
+	switch req := msg.Message[0].(type) {
+	case *heartbeatpb.MaintainerBootstrapRequest:
+		if err := m.handleBootstrapRequest(msg.From, req); err != nil {
+			log.Error("failed to handle bootstrap request", zap.Error(err))
+>>>>>>> f73e8dba2 (server, dispatcher: improve node liveness self fence (#5106))
 		}
 		msg := m.msgQueue.Get(key)
 
@@ -155,6 +187,9 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 	from node.ID,
 	req *heartbeatpb.MaintainerBootstrapRequest,
 ) error {
+	if m.fenced.Load() {
+		return nil
+	}
 	cfId := common.NewChangefeedIDFromPB(req.ChangefeedID)
 
 	cfConfig := &config.ChangefeedConfig{}
@@ -170,6 +205,7 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 	var err error
 	if !exists {
 		start := time.Now()
+		var initializingManager *dispatchermanager.DispatcherManager
 		manager, err = dispatchermanager.NewDispatcherManager(
 			req.KeyspaceId,
 			cfId,
@@ -179,9 +215,21 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 			req.StartTs,
 			from,
 			req.IsNewChangefeed,
+			func(manager *dispatchermanager.DispatcherManager) bool {
+				initializingManager = manager
+				return m.registerInitializingDispatcherManager(cfId, manager)
+			},
 		)
+		if initializingManager != nil {
+			m.removeInitializingDispatcherManager(cfId, initializingManager)
+		}
 		// Fast return the error to maintainer.
 		if err != nil {
+			if dispatchermanager.IsWritePathClosedError(err) || m.fenced.Load() || m.closed.Load() {
+				log.Info("dispatcher manager write path closed while creating dispatcher manager",
+					zap.Stringer("changefeedID", cfId), zap.Duration("duration", time.Since(start)), zap.Error(err))
+				return nil
+			}
 			log.Error("failed to create new dispatcher manager",
 				zap.Any("changefeedID", cfId.Name()), zap.Duration("duration", time.Since(start)), zap.Error(err))
 
@@ -202,10 +250,18 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 			return m.sendResponse(from, messaging.MaintainerManagerTopic, response)
 		}
 		m.mutex.Lock()
+		if m.fenced.Load() || m.closed.Load() {
+			m.mutex.Unlock()
+			manager.LocalFence()
+			return nil
+		}
 		m.dispatcherManagers[cfId] = manager
 		m.mutex.Unlock()
 		metrics.DispatcherManagerGauge.WithLabelValues(cfId.Keyspace(), cfId.Name()).Inc()
 	} else {
+		if m.fenced.Load() {
+			return nil
+		}
 		// Check and potentially add a table trigger event dispatcher.
 		// This is necessary during maintainer node migration, as the existing
 		// dispatcher manager on the new node may not have a table trigger
@@ -219,6 +275,11 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 					false,
 				)
 				if err != nil {
+					if dispatchermanager.IsWritePathClosedError(err) {
+						log.Info("dispatcher manager write path closed while creating table trigger event dispatcher",
+							zap.Stringer("changefeedID", cfId), zap.Error(err))
+						return nil
+					}
 					log.Error("failed to create new table trigger event dispatcher",
 						zap.Stringer("changefeedID", cfId), zap.Error(err))
 					return m.handleDispatcherError(from, req.ChangefeedID, err)
@@ -234,6 +295,11 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 					false,
 				)
 				if err != nil {
+					if dispatchermanager.IsWritePathClosedError(err) {
+						log.Info("dispatcher manager write path closed while creating table trigger redo dispatcher",
+							zap.Stringer("changefeedID", cfId), zap.Error(err))
+						return nil
+					}
 					log.Error("failed to create new table trigger redo dispatcher",
 						zap.Stringer("changefeedID", cfId), zap.Error(err))
 					return m.handleDispatcherError(from, req.ChangefeedID, err)
@@ -253,6 +319,11 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 	if manager.GetMaintainerEpoch() != cfConfig.Epoch {
 		log.Error("maintainer epoch changed, this should not happen, please report this issue",
 			zap.String("changefeed", cfId.Name()), zap.Uint64("epoch", cfConfig.Epoch))
+	}
+
+	if m.fenced.Load() {
+		manager.LocalFence()
+		return nil
 	}
 
 	var (
@@ -279,6 +350,9 @@ func (m *DispatcherOrchestrator) handlePostBootstrapRequest(
 	from node.ID,
 	req *heartbeatpb.MaintainerPostBootstrapRequest,
 ) error {
+	if m.fenced.Load() {
+		return nil
+	}
 	cfId := common.NewChangefeedIDFromPB(req.ChangefeedID)
 
 	m.mutex.Lock()
@@ -318,6 +392,11 @@ func (m *DispatcherOrchestrator) handlePostBootstrapRequest(
 	// init table schema store
 	err := manager.InitalizeTableTriggerEventDispatcher(req.Schemas)
 	if err != nil {
+		if dispatchermanager.IsWritePathClosedError(err) {
+			log.Info("dispatcher manager write path closed while initializing table trigger event dispatcher",
+				zap.Any("changefeedID", cfId.Name()), zap.Error(err))
+			return nil
+		}
 		log.Error("failed to initialize table trigger event dispatcher",
 			zap.Any("changefeedID", cfId.Name()), zap.Error(err))
 		return m.handleDispatcherError(from, req.ChangefeedID, err)
@@ -325,10 +404,20 @@ func (m *DispatcherOrchestrator) handlePostBootstrapRequest(
 	if manager.IsRedoReady() {
 		err := manager.InitalizeTableTriggerRedoDispatcher(req.RedoSchemas)
 		if err != nil {
+			if dispatchermanager.IsWritePathClosedError(err) {
+				log.Info("dispatcher manager write path closed while initializing table trigger redo dispatcher",
+					zap.Any("changefeedID", cfId.Name()), zap.Error(err))
+				return nil
+			}
 			log.Error("failed to initialize table trigger redo dispatcher",
 				zap.Any("changefeedID", cfId.Name()), zap.Error(err))
 			return m.handleDispatcherError(from, req.ChangefeedID, err)
 		}
+	}
+
+	if m.fenced.Load() {
+		manager.LocalFence()
+		return nil
 	}
 
 	response := &heartbeatpb.MaintainerPostBootstrapResponse{
@@ -363,6 +452,70 @@ func (m *DispatcherOrchestrator) handleCloseRequest(
 	log.Info("try close dispatcher manager",
 		zap.String("changefeed", cfId.String()), zap.Bool("success", response.Success))
 	return m.sendResponse(from, messaging.MaintainerTopic, response)
+}
+
+// LocalFence stops all local dispatcher managers from writing downstream without
+// waiting for dispatcher drain. Full resource cleanup is still handled by Close.
+func (m *DispatcherOrchestrator) LocalFence() {
+	if !m.fenced.CompareAndSwap(false, true) {
+		m.localFenceManagers()
+		return
+	}
+	log.Warn("dispatcher orchestrator local fence triggered")
+
+	m.mc.DeRegisterHandler(messaging.DispatcherManagerManagerTopic)
+	m.localFenceManagers()
+	m.msgGuardWaitGroup.Wait()
+	for _, shard := range m.shards {
+		shard.CloseAsync()
+	}
+	m.localFenceManagers()
+}
+
+func (m *DispatcherOrchestrator) localFenceManagers() {
+	m.mutex.Lock()
+	managers := make([]*dispatchermanager.DispatcherManager, 0,
+		len(m.dispatcherManagers)+len(m.initializingDispatcherManagers))
+	for _, manager := range m.dispatcherManagers {
+		managers = append(managers, manager)
+	}
+	for _, manager := range m.initializingDispatcherManagers {
+		managers = append(managers, manager)
+	}
+	m.mutex.Unlock()
+
+	for _, manager := range managers {
+		manager.LocalFence()
+	}
+}
+
+func (m *DispatcherOrchestrator) registerInitializingDispatcherManager(
+	cfID common.ChangeFeedID,
+	manager *dispatchermanager.DispatcherManager,
+) bool {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
+	if m.fenced.Load() || m.closed.Load() {
+		return false
+	}
+	if m.initializingDispatcherManagers == nil {
+		m.initializingDispatcherManagers = make(map[common.ChangeFeedID]*dispatchermanager.DispatcherManager)
+	}
+	m.initializingDispatcherManagers[cfID] = manager
+	return true
+}
+
+func (m *DispatcherOrchestrator) removeInitializingDispatcherManager(
+	cfID common.ChangeFeedID,
+	manager *dispatchermanager.DispatcherManager,
+) {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
+	if m.initializingDispatcherManagers[cfID] == manager {
+		delete(m.initializingDispatcherManagers, cfID)
+	}
 }
 
 func createBootstrapResponse(
