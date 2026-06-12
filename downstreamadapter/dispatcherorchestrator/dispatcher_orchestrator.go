@@ -41,6 +41,9 @@ type DispatcherOrchestrator struct {
 	mc                 messaging.MessageCenter
 	mutex              sync.Mutex // protect dispatcherManagers
 	dispatcherManagers map[common.ChangeFeedID]*dispatchermanager.DispatcherManager
+	// initializingDispatcherManagers tracks managers that have been allocated
+	// but are not yet visible in dispatcherManagers.
+	initializingDispatcherManagers map[common.ChangeFeedID]*dispatchermanager.DispatcherManager
 
 	// shards partition changefeed control messages by changefeed ID. Each shard keeps
 	// the existing FIFO queue semantics, while different shards can process messages
@@ -65,9 +68,10 @@ const (
 
 func New() *DispatcherOrchestrator {
 	m := &DispatcherOrchestrator{
-		mc:                 appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
-		dispatcherManagers: make(map[common.ChangeFeedID]*dispatchermanager.DispatcherManager),
-		shards:             make([]*orchestratorShard, dispatcherOrchestratorShardCount),
+		mc:                             appcontext.GetService[messaging.MessageCenter](appcontext.MessageCenter),
+		dispatcherManagers:             make(map[common.ChangeFeedID]*dispatchermanager.DispatcherManager),
+		initializingDispatcherManagers: make(map[common.ChangeFeedID]*dispatchermanager.DispatcherManager),
+		shards:                         make([]*orchestratorShard, dispatcherOrchestratorShardCount),
 	}
 	for i := range m.shards {
 		m.shards[i] = newOrchestratorShard(m.processMessage)
@@ -194,6 +198,7 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 	var err error
 	if !exists {
 		start := time.Now()
+		var initializingManager *dispatchermanager.DispatcherManager
 		manager, err = dispatchermanager.NewDispatcherManager(
 			req.KeyspaceId,
 			cfId,
@@ -203,9 +208,21 @@ func (m *DispatcherOrchestrator) handleBootstrapRequest(
 			req.StartTs,
 			from,
 			req.IsNewChangefeed,
+			func(manager *dispatchermanager.DispatcherManager) bool {
+				initializingManager = manager
+				return m.registerInitializingDispatcherManager(cfId, manager)
+			},
 		)
+		if initializingManager != nil {
+			m.removeInitializingDispatcherManager(cfId, initializingManager)
+		}
 		// Fast return the error to maintainer.
 		if err != nil {
+			if dispatchermanager.IsWritePathClosedError(err) || m.fenced.Load() || m.closed.Load() {
+				log.Info("dispatcher manager write path closed while creating dispatcher manager",
+					zap.Stringer("changefeedID", cfId), zap.Duration("duration", time.Since(start)), zap.Error(err))
+				return nil
+			}
 			log.Error("failed to create new dispatcher manager",
 				zap.Any("changefeedID", cfId.Name()), zap.Duration("duration", time.Since(start)), zap.Error(err))
 
@@ -450,14 +467,47 @@ func (m *DispatcherOrchestrator) LocalFence() {
 
 func (m *DispatcherOrchestrator) localFenceManagers() {
 	m.mutex.Lock()
-	managers := make([]*dispatchermanager.DispatcherManager, 0, len(m.dispatcherManagers))
+	managers := make([]*dispatchermanager.DispatcherManager, 0,
+		len(m.dispatcherManagers)+len(m.initializingDispatcherManagers))
 	for _, manager := range m.dispatcherManagers {
+		managers = append(managers, manager)
+	}
+	for _, manager := range m.initializingDispatcherManagers {
 		managers = append(managers, manager)
 	}
 	m.mutex.Unlock()
 
 	for _, manager := range managers {
 		manager.LocalFence()
+	}
+}
+
+func (m *DispatcherOrchestrator) registerInitializingDispatcherManager(
+	cfID common.ChangeFeedID,
+	manager *dispatchermanager.DispatcherManager,
+) bool {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
+	if m.fenced.Load() || m.closed.Load() {
+		return false
+	}
+	if m.initializingDispatcherManagers == nil {
+		m.initializingDispatcherManagers = make(map[common.ChangeFeedID]*dispatchermanager.DispatcherManager)
+	}
+	m.initializingDispatcherManagers[cfID] = manager
+	return true
+}
+
+func (m *DispatcherOrchestrator) removeInitializingDispatcherManager(
+	cfID common.ChangeFeedID,
+	manager *dispatchermanager.DispatcherManager,
+) {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
+	if m.initializingDispatcherManagers[cfID] == manager {
+		delete(m.initializingDispatcherManagers, cfID)
 	}
 }
 

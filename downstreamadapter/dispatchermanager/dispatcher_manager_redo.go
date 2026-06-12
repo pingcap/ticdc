@@ -52,21 +52,36 @@ func initRedoComponet(
 	if !manager.IsRedoEnabled() {
 		return nil
 	}
+	if manager.writePathClosed.Load() {
+		return newWritePathClosedError()
+	}
 	var err error
-	manager.redoDispatcherMap = newDispatcherMap[*dispatcher.RedoDispatcher]()
-	manager.redoSink, err = redo.New(ctx, changefeedID, manager.config.Consistent)
+	redoDispatcherMap := newDispatcherMap[*dispatcher.RedoDispatcher]()
+	redoSink, err := redo.New(ctx, changefeedID, manager.config.Consistent)
 	if err != nil {
 		return err
 	}
-	manager.redoSchemaIDToDispatchers = dispatcher.NewSchemaIDToDispatchers()
+	redoSchemaIDToDispatchers := dispatcher.NewSchemaIDToDispatchers()
 
 	totalQuota := manager.sinkQuota
 	consistentMemoryUsage := manager.config.Consistent.MemoryUsage
 	if consistentMemoryUsage == nil {
 		consistentMemoryUsage = config.GetDefaultReplicaConfig().Consistent.MemoryUsage
 	}
-	manager.redoQuota = totalQuota * consistentMemoryUsage.MemoryQuotaPercentage / 100
-	manager.sinkQuota = totalQuota - manager.redoQuota
+	redoQuota := totalQuota * consistentMemoryUsage.MemoryQuotaPercentage / 100
+
+	manager.writePathMu.Lock()
+	if manager.writePathClosed.Load() {
+		manager.writePathMu.Unlock()
+		redoSink.Close()
+		return newWritePathClosedError()
+	}
+	manager.redoDispatcherMap = redoDispatcherMap
+	manager.redoSink = redoSink
+	manager.redoSchemaIDToDispatchers = redoSchemaIDToDispatchers
+	manager.redoQuota = redoQuota
+	manager.sinkQuota = totalQuota - redoQuota
+	manager.writePathMu.Unlock()
 
 	// init table trigger redo dispatcher when tableTriggerRedoDispatcherID is not nil
 	if tableTriggerRedoDispatcherID != nil {
@@ -81,7 +96,16 @@ func initRedoComponet(
 	manager.metricRedoCreateDispatcherDuration = metrics.CreateDispatcherDuration.WithLabelValues(changefeedID.Keyspace(), changefeedID.Name(), "redoDispatcher")
 
 	// RedoMessageDs need register on every node
+	manager.writePathMu.Lock()
+	if manager.writePathClosed.Load() {
+		manager.writePathMu.Unlock()
+		return newWritePathClosedError()
+	}
 	appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RegisterRedoMessageDs(manager)
+	manager.writePathMu.Unlock()
+	if manager.writePathClosed.Load() {
+		return newWritePathClosedError()
+	}
 	manager.wg.Add(1)
 	go func() {
 		defer manager.wg.Done()

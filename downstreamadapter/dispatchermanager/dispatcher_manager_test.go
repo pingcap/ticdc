@@ -595,6 +595,48 @@ func TestLocalFenceDoesNotWaitForBootstrapWriteBlockEvent(t *testing.T) {
 	require.False(t, appcontext.GetService[*eventcollector.EventCollector](appcontext.EventCollector).HasDispatcher(dispatcherID))
 }
 
+func TestNewDispatcherManagerReturnsFenceErrorWhenInitializingRegistrationRejected(t *testing.T) {
+	appcontext.SetService(appcontext.DefaultPDClock, pdutil.NewClock4Test())
+
+	replicaConfig := config.GetDefaultReplicaConfig()
+	cfConfig := &config.ChangefeedConfig{
+		SinkURI:     "blackhole://",
+		SinkConfig:  replicaConfig.Sink,
+		Filter:      replicaConfig.Filter,
+		MemoryQuota: util.GetOrZero(replicaConfig.MemoryQuota),
+		TimeZone:    "system",
+		Consistent:  replicaConfig.Consistent,
+	}
+	changefeedID := common.NewChangeFeedIDWithName("test", common.DefaultKeyspaceName)
+	var hookCalled atomic.Bool
+	var initializingManager *DispatcherManager
+
+	manager, err := NewDispatcherManager(
+		common.DefaultKeyspaceID,
+		changefeedID,
+		cfConfig,
+		nil,
+		nil,
+		1,
+		node.ID("maintainer"),
+		true,
+		func(manager *DispatcherManager) bool {
+			hookCalled.Store(true)
+			initializingManager = manager
+			return false
+		},
+	)
+
+	require.Nil(t, manager)
+	require.True(t, hookCalled.Load())
+	require.NotNil(t, initializingManager)
+	require.True(t, IsWritePathClosedError(err))
+	require.True(t, initializingManager.writePathClosed.Load())
+	require.Eventually(t, func() bool {
+		return initializingManager.TryClose(false)
+	}, time.Second, 10*time.Millisecond)
+}
+
 func TestCheckpointTsMessageHandlerSkipsWriteAfterLocalFence(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()

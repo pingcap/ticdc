@@ -209,7 +209,8 @@ func NewDispatcherManager(
 	startTs uint64,
 	maintainerID node.ID,
 	newChangefeed bool,
-) (*DispatcherManager, error) {
+	registerInitializing func(*DispatcherManager) bool,
+) (manager *DispatcherManager, err error) {
 	failpoint.Inject("NewDispatcherManagerDelay", nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -225,7 +226,7 @@ func NewDispatcherManager(
 		integrityCfg = cfConfig.SinkConfig.Integrity.ToPB()
 	}
 
-	manager := &DispatcherManager{
+	manager = &DispatcherManager{
 		ctx:                   ctx,
 		dispatcherMap:         newDispatcherMap[*dispatcher.EventDispatcher](),
 		currentOperatorMap:    sync.Map{},
@@ -257,6 +258,17 @@ func NewDispatcherManager(
 	// Set the epoch and maintainerID of the event dispatcher manager
 	manager.meta.maintainerEpoch = cfConfig.Epoch
 	manager.meta.maintainerID = maintainerID
+	cleanupManager := manager
+	defer func() {
+		if err != nil && cleanupManager != nil {
+			cleanupManager.LocalFence()
+			manager = nil
+		}
+	}()
+	// The manager must be fenceable before any write-capable resource is initialized.
+	if registerInitializing != nil && !registerInitializing(manager) {
+		return nil, newWritePathClosedError()
+	}
 
 	// Set Sync Point Config
 	var syncPointConfig *syncpoint.SyncPointConfig
@@ -268,11 +280,18 @@ func NewDispatcherManager(
 		}
 	}
 
-	var err error
-	manager.sink, err = sink.New(ctx, manager.config, manager.changefeedID)
+	createdSink, err := sink.New(ctx, manager.config, manager.changefeedID)
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
+	manager.writePathMu.Lock()
+	if manager.writePathClosed.Load() {
+		manager.writePathMu.Unlock()
+		createdSink.Close()
+		return nil, newWritePathClosedError()
+	}
+	manager.sink = createdSink
+	manager.writePathMu.Unlock()
 
 	// Determine outputRawChangeEvent based on sink type
 	var outputRawChangeEvent bool
@@ -294,7 +313,7 @@ func NewDispatcherManager(
 
 	batchCounts, batchBytes := manager.getEventCollectorBatchCountAndBytes(manager.sink)
 	// Create shared info for all dispatchers
-	manager.sharedInfo = dispatcher.NewSharedInfo(
+	sharedInfo := dispatcher.NewSharedInfo(
 		manager.changefeedID,
 		manager.config.TimeZone,
 		manager.config.BDRMode,
@@ -312,10 +331,24 @@ func NewDispatcherManager(
 		blockStatusBufferSize,
 		make(chan error, 1),
 	)
+	manager.writePathMu.Lock()
+	if manager.writePathClosed.Load() {
+		manager.writePathMu.Unlock()
+		sharedInfo.Close()
+		return nil, newWritePathClosedError()
+	}
+	manager.sharedInfo = sharedInfo
+	manager.writePathMu.Unlock()
 
 	// Register Event Dispatcher Manager in HeartBeatCollector,
 	// which is responsible for communication with the maintainer.
+	manager.writePathMu.Lock()
+	if manager.writePathClosed.Load() {
+		manager.writePathMu.Unlock()
+		return nil, newWritePathClosedError()
+	}
 	err = appcontext.GetService[*HeartBeatCollector](appcontext.HeartbeatCollector).RegisterDispatcherManager(manager)
+	manager.writePathMu.Unlock()
 	if err != nil {
 		return nil, errors.Trace(err)
 	}

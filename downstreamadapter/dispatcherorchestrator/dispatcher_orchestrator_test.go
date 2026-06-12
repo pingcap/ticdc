@@ -171,8 +171,9 @@ func newTestDispatcherOrchestrator() *DispatcherOrchestrator {
 	// This test only exercises local routing through RecvMaintainerRequest, so it
 	// needs shard state and the dispatcher manager map but not a message center.
 	orchestrator := &DispatcherOrchestrator{
-		dispatcherManagers: make(map[common.ChangeFeedID]*dispatchermanager.DispatcherManager),
-		shards:             make([]*orchestratorShard, dispatcherOrchestratorShardCount),
+		dispatcherManagers:             make(map[common.ChangeFeedID]*dispatchermanager.DispatcherManager),
+		initializingDispatcherManagers: make(map[common.ChangeFeedID]*dispatchermanager.DispatcherManager),
+		shards:                         make([]*orchestratorShard, dispatcherOrchestratorShardCount),
 	}
 	for i := range orchestrator.shards {
 		orchestrator.shards[i] = newOrchestratorShard(func(msg *messaging.TargetMessage) {})
@@ -474,6 +475,33 @@ func TestDispatcherOrchestratorLocalFenceFencesManagersImmediately(t *testing.T)
 			cfID: manager,
 		},
 		shards: make([]*orchestratorShard, dispatcherOrchestratorShardCount),
+	}
+	for i := range orchestrator.shards {
+		orchestrator.shards[i] = newOrchestratorShard(func(msg *messaging.TargetMessage) {})
+		orchestrator.shards[i].Run()
+	}
+	orchestrator.LocalFence()
+	for _, shard := range orchestrator.shards {
+		shard.Wait()
+	}
+
+	err := manager.InitalizeTableTriggerEventDispatcher(nil)
+	require.True(t, dispatchermanager.IsWritePathClosedError(err))
+}
+
+func TestDispatcherOrchestratorLocalFenceFencesInitializingManagersImmediately(t *testing.T) {
+	mc, _, stop := messaging.NewMessageCenterForTest(t)
+	defer stop()
+
+	cfID := common.NewChangeFeedIDWithName("cf", "default")
+	manager := &dispatchermanager.DispatcherManager{}
+	orchestrator := &DispatcherOrchestrator{
+		mc: mc,
+		initializingDispatcherManagers: map[common.ChangeFeedID]*dispatchermanager.DispatcherManager{
+			cfID: manager,
+		},
+		dispatcherManagers: make(map[common.ChangeFeedID]*dispatchermanager.DispatcherManager),
+		shards:             make([]*orchestratorShard, dispatcherOrchestratorShardCount),
 	}
 	for i := range orchestrator.shards {
 		orchestrator.shards[i] = newOrchestratorShard(func(msg *messaging.TargetMessage) {})
