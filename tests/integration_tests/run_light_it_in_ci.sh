@@ -47,11 +47,11 @@ mysql_groups=(
 	# NOTE: same_upstream_downstream is temporarily disabled on release-8.5 CI because TiDB 8.5.x
 	# does not write `cluster_id` into `mysql.tidb` (tidb#59511 not cherry-picked). Re-enable it
 	# after TiDB release-8.5 has `mysql.tidb.cluster_id`.
-	'http_api http_api_compatibility http_api_tls http_api_tls_old_arch fail_over_ddl_G synced_status'
+	'http_api http_api_compatibility http_api_tls_old_arch fail_over_ddl_G synced_status'
 	# G07
-	'http_api_tls_with_user_auth fail_over_ddl_H changefeed_update_config synced_status_with_redo'
+	'fail_over_ddl_H changefeed_update_config synced_status_with_redo redo_apply_table_route'
 	# G08
-	'capture_session_done_during_task changefeed_dup_error_restart mysql_sink_retry fail_over_ddl_I'
+	'capture_session_done_during_task changefeed_dup_error_restart mysql_sink_retry fail_over_ddl_I table_route'
 	# G09
 	'sequence cdc_server_tips ddl_sequence server_config_compatibility log_redaction fail_over_ddl_J'
 	# G10
@@ -59,15 +59,15 @@ mysql_groups=(
 	# G11
 	'kill_owner_with_ddl multi_tables_ddl ddl_attributes multi_cdc_cluster fail_over_ddl_L'
 	# G12
-	'row_format tiflash multi_rocks fail_over_ddl_M correctness_for_shared_column_schema'
+	'row_format tiflash multi_rocks fail_over_ddl_M correctness_for_shared_column_schema partial_index'
 	# G13
 	# maintainer_failover_when_operator is temporarily excluded from release-8.5 CI because this branch
 	# disables the no-operator terminal-status fallback; the case depends on that rescheduling path.
-	'cli_tls_with_auth cli_with_auth fail_over_ddl_N'
+	'cli_with_auth fail_over_ddl_N'
 	# G14
 	'batch_add_table batch_update_to_no_batch fail_over_ddl_O update_changefeed_check_config pause_changefeed_with_long_time_ddl'
 	# G15
-	'split_region changefeed_resume_with_checkpoint_ts autorandom gc_safepoint foreign_key_check old_arch_compatibility'
+	'split_region changefeed_resume_with_checkpoint_ts autorandom gc_safepoint foreign_key_check old_arch_compatibility bootstrap_retry_after_error'
 )
 
 # Resource allocation for kafka light integration tests in CI pipelines:
@@ -91,7 +91,7 @@ kafka_groups=(
 	# G07
 	'kafka_messages kafka_big_messages kafka_compression fail_over_ddl_H changefeed_update_config'
 	# G08
-	'capture_session_done_during_task fail_over_ddl_I'
+	'capture_session_done_during_task fail_over_ddl_I table_route'
 	# G09
 	'cdc_server_tips ddl_sequence log_redaction fail_over_ddl_J'
 	# G10
@@ -99,11 +99,11 @@ kafka_groups=(
 	# G11
 	'ddl_attributes multi_tables_ddl fail_over_ddl_L'
 	# G12
-	'row_format tiflash multi_rocks fail_over_ddl_M correctness_for_shared_column_schema'
+	'row_format tiflash multi_rocks fail_over_ddl_M correctness_for_shared_column_schema partial_index'
 	# G13
 	# maintainer_failover_when_operator is temporarily excluded from release-8.5 CI because this branch
 	# disables the no-operator terminal-status fallback; the case depends on that rescheduling path.
-	'cli_tls_with_auth cli_with_auth fail_over_ddl_N'
+	'cli_with_auth fail_over_ddl_N'
 	# G14
 	'kafka_simple_basic avro_basic debezium_basic fail_over_ddl_O update_changefeed_check_config'
 	# G15
@@ -139,11 +139,11 @@ pulsar_groups=(
 	# G11
 	'ddl_attributes multi_tables_ddl fail_over_ddl_L'
 	# G12
-	'row_format tiflash multi_rocks fail_over_ddl_M correctness_for_shared_column_schema'
+	'row_format tiflash multi_rocks fail_over_ddl_M correctness_for_shared_column_schema partial_index'
 	# G13
 	# maintainer_failover_when_operator is temporarily excluded from release-8.5 CI because this branch
 	# disables the no-operator terminal-status fallback; the case depends on that rescheduling path.
-	'cli_tls_with_auth cli_with_auth fail_over_ddl_N'
+	'cli_with_auth fail_over_ddl_N'
 	# G14
 	'avro_basic debezium_basic fail_over_ddl_O update_changefeed_check_config'
 	# G15
@@ -179,13 +179,13 @@ storage_groups=(
 	# G11
 	'ddl_attributes multi_tables_ddl fail_over_ddl_L'
 	# G12
-	'row_format tiflash multi_rocks fail_over_ddl_M correctness_for_shared_column_schema'
+	'row_format tiflash multi_rocks fail_over_ddl_M correctness_for_shared_column_schema partial_index'
 	# G13
 	# maintainer_failover_when_operator is temporarily excluded from release-8.5 CI because this branch
 	# disables the no-operator terminal-status fallback; the case depends on that rescheduling path.
-	'cli_tls_with_auth cli_with_auth fail_over_ddl_N'
+	'cli_with_auth fail_over_ddl_N'
 	# G14
-	'csv_storage_partition_table csv_storage_multi_tables_ddl fail_over_ddl_O'
+	'csv_storage_partition_table csv_storage_multi_tables_ddl table_route fail_over_ddl_O'
 	# G15
 	'split_region autorandom gc_safepoint'
 )

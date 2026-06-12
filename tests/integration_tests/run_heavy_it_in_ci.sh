@@ -38,7 +38,7 @@ mysql_groups=(
 	# G03
 	'cdc move_table in_flight_ddl_during_scheduling checkpoint_race_ddl_crash'
 	# G04
-	'complex_transaction'
+	'complex_transaction http_api_tls_with_user_auth'
 	# G05
 	'ddl_for_split_tables_with_merge_and_split syncpoint in_flight_syncpoint_during_scheduling syncpoint_check_ts random_drop_message'
 	# G06
@@ -54,7 +54,7 @@ mysql_groups=(
 	# G11
 	'multi_changefeeds ddl_wait ddl_reentrant force_replicate_table multi_source'
 	# G12
-	'ddl_with_random_move_table'
+	'ddl_with_random_move_table cli_tls_with_auth http_api_tls'
 	# G13
 	# 'tidb_mysql_test fail_over region_merge fail_over_ddl_mix_random_delay'
 	'fail_over region_merge fail_over_ddl_mix_random_delay'
@@ -93,7 +93,7 @@ kafka_groups=(
 	# G11
 	'fail_over region_merge multi_changefeeds'
 	# G12
-	'ddl_for_split_tables_random_schedule'
+	'ddl_for_split_tables_random_schedule cli_tls_with_auth'
 	# G13
 	'debezium01 fail_over_ddl_mix'
 	# G14
@@ -128,7 +128,7 @@ pulsar_groups=(
 	# G10
 	'ddl_for_split_tables_random_schedule'
 	# G11
-	'ddl_with_random_move_table'
+	'ddl_with_random_move_table cli_tls_with_auth'
 	# G12
 	'fail_over region_merge multi_changefeeds'
 	# G13
@@ -166,7 +166,7 @@ storage_groups=(
 	# G11
 	'ddl_for_split_tables_random_schedule'
 	# G12
-	'ddl_with_random_move_table'
+	'ddl_with_random_move_table cli_tls_with_auth'
 	# G13
 	'fail_over region_merge multi_changefeeds'
 	# G14

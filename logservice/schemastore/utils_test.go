@@ -64,7 +64,6 @@ func TestIsSplitable(t *testing.T) {
 
 func TestBuildPersistedDDLEventForMultiSchemaChangeContainsIndexIDs(t *testing.T) {
 	helper := commonEvent.NewEventTestHelper(t)
-	defer helper.Close()
 
 	helper.Tk().MustExec("use test")
 	helper.DDL2Event("create table t (id int primary key, c1 int)")

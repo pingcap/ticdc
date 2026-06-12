@@ -63,7 +63,7 @@ func (l *LogCoordinatorClient) MessageCenterHandler(_ context.Context, targetMes
 			dispatcherID := common.NewDispatcherIDFromPB(msg.ID)
 			dispatcher := l.eventCollector.getDispatcherStatByID(dispatcherID)
 			if dispatcher != nil && l.enableRemoteEventService {
-				dispatcher.setRemoteCandidates(msg.Nodes)
+				dispatcher.startRemoteProbing(msg.Nodes)
 			}
 		default:
 			log.Warn("unknown message type, ignore it",

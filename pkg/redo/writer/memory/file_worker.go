@@ -29,7 +29,6 @@ import (
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/redo"
 	"github.com/pingcap/ticdc/pkg/redo/writer"
-	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/pkg/uuid"
 	"github.com/pingcap/tidb/br/pkg/storage"
 	"github.com/prometheus/client_golang/prometheus"
@@ -85,8 +84,7 @@ func (f *fileCache) markFlushed() {
 }
 
 type fileWorkerGroup struct {
-	cfg           *writer.LogWriterConfig
-	logType       string
+	cfg           *writer.Config
 	op            *writer.LogWriterOptions
 	workerNum     int
 	inputCh       chan *polymorphicRedoEvent
@@ -101,16 +99,16 @@ type fileWorkerGroup struct {
 	metricFlushAllDuration prometheus.Observer
 }
 
-// newFileWorkerGroup create a fileWorkerGroup
+// newFileWorkerGroup creates a DML fileWorkerGroup.
 // fileWorkerGroup receives encoded redo events and writes them to cache, with
 // background goroutines handling file flush.
 func newFileWorkerGroup(
-	cfg *writer.LogWriterConfig, workerNum int,
-	logType string,
+	cfg *writer.Config,
 	inputCh chan *polymorphicRedoEvent,
 	extStorage storage.ExternalStorage,
 	opts ...writer.Option,
 ) *fileWorkerGroup {
+	workerNum := cfg.FlushWorkerNum()
 	if workerNum <= 0 {
 		workerNum = redo.DefaultFlushWorkerNum
 	}
@@ -126,7 +124,6 @@ func newFileWorkerGroup(
 
 	return &fileWorkerGroup{
 		cfg:           cfg,
-		logType:       logType,
 		op:            op,
 		workerNum:     workerNum,
 		inputCh:       inputCh,
@@ -136,15 +133,15 @@ func newFileWorkerGroup(
 			New: func() interface{} {
 				// Use pointer here to prevent static checkers from reporting errors.
 				// Ref: https://github.com/dominikh/go-tools/issues/1336.
-				buf := make([]byte, 0, cfg.MaxLogSizeInBytes)
+				buf := make([]byte, 0, cfg.MaxLogSizeInBytes())
 				return &buf
 			},
 		},
 		flushCh: make(chan *fileCache, 32),
 		metricWriteBytes: metrics.RedoWriteBytesGauge.
-			WithLabelValues(cfg.ChangeFeedID.Keyspace(), cfg.ChangeFeedID.Name(), logType),
+			WithLabelValues(cfg.ChangeFeedID().Keyspace(), cfg.ChangeFeedID().Name(), redo.RedoRowLogFileType),
 		metricFlushAllDuration: metrics.RedoFlushAllDurationHistogram.
-			WithLabelValues(cfg.ChangeFeedID.Keyspace(), cfg.ChangeFeedID.Name(), logType),
+			WithLabelValues(cfg.ChangeFeedID().Keyspace(), cfg.ChangeFeedID().Name(), redo.RedoRowLogFileType),
 	}
 }
 
@@ -154,8 +151,8 @@ func (f *fileWorkerGroup) Run(
 	defer func() {
 		f.close()
 		log.Warn("redo file workers closed",
-			zap.String("keyspace", f.cfg.ChangeFeedID.Keyspace()),
-			zap.String("changefeed", f.cfg.ChangeFeedID.Name()),
+			zap.String("keyspace", f.cfg.ChangeFeedID().Keyspace()),
+			zap.String("changefeed", f.cfg.ChangeFeedID().Name()),
 			zap.Error(err))
 	}()
 
@@ -169,17 +166,17 @@ func (f *fileWorkerGroup) Run(
 		})
 	}
 	log.Info("redo file workers started",
-		zap.String("keyspace", f.cfg.ChangeFeedID.Keyspace()),
-		zap.String("changefeed", f.cfg.ChangeFeedID.Name()),
+		zap.String("keyspace", f.cfg.ChangeFeedID().Keyspace()),
+		zap.String("changefeed", f.cfg.ChangeFeedID().Name()),
 		zap.Int("workerNum", f.workerNum))
 	return eg.Wait()
 }
 
 func (f *fileWorkerGroup) close() {
 	metrics.RedoFlushAllDurationHistogram.
-		DeleteLabelValues(f.cfg.ChangeFeedID.Keyspace(), f.cfg.ChangeFeedID.Name(), f.logType)
+		DeleteLabelValues(f.cfg.ChangeFeedID().Keyspace(), f.cfg.ChangeFeedID().Name(), redo.RedoRowLogFileType)
 	metrics.RedoWriteBytesGauge.
-		DeleteLabelValues(f.cfg.ChangeFeedID.Keyspace(), f.cfg.ChangeFeedID.Name(), f.logType)
+		DeleteLabelValues(f.cfg.ChangeFeedID().Keyspace(), f.cfg.ChangeFeedID().Name(), redo.RedoRowLogFileType)
 }
 
 func (f *fileWorkerGroup) bgFlushFileCache(egCtx context.Context) error {
@@ -198,7 +195,7 @@ func (f *fileWorkerGroup) bgFlushFileCache(egCtx context.Context) error {
 
 func (f *fileWorkerGroup) multiPartUpload(ctx context.Context, file *fileCache) error {
 	multipartWrite, err := f.extStorage.Create(ctx, file.filename, &storage.WriterOption{
-		Concurrency: util.GetOrZero(f.cfg.FlushConcurrency),
+		Concurrency: f.cfg.FlushConcurrency(),
 	})
 	if err != nil {
 		return errors.Trace(err)
@@ -212,7 +209,7 @@ func (f *fileWorkerGroup) multiPartUpload(ctx context.Context, file *fileCache) 
 func (f *fileWorkerGroup) bgWriteLogs(
 	egCtx context.Context, inputCh <-chan *polymorphicRedoEvent,
 ) (err error) {
-	d := time.Duration(util.GetOrZero(f.cfg.FlushIntervalInMs)) * time.Millisecond
+	d := time.Duration(f.cfg.FlushIntervalInMs()) * time.Millisecond
 	ticker := time.NewTicker(d)
 	defer ticker.Stop()
 	num := 0
@@ -261,20 +258,6 @@ func (f *fileWorkerGroup) bgWriteLogs(
 	}
 }
 
-func (f *fileWorkerGroup) syncWrite(egCtx context.Context, event *polymorphicRedoEvent) error {
-	data := event.data
-	file := f.newFileCache(data, event.commitTs)
-	if file == nil {
-		return errors.ErrRedoWriterStopped.FastGenByArgs("failed to create file cache")
-	}
-	if err := f.syncWriteFile(egCtx, file); err != nil {
-		return err
-	}
-	// flush
-	event.PostFlush()
-	return nil
-}
-
 func (f *fileWorkerGroup) syncWriteFile(egCtx context.Context, file *fileCache) error {
 	var err error
 	start := time.Now()
@@ -282,7 +265,7 @@ func (f *fileWorkerGroup) syncWriteFile(egCtx context.Context, file *fileCache) 
 	if err = file.writer.Close(); err != nil {
 		return err
 	}
-	if util.GetOrZero(f.cfg.FlushConcurrency) <= 1 {
+	if f.cfg.FlushConcurrency() <= 1 {
 		err = f.extStorage.WriteFile(egCtx, file.filename, file.writer.buf.Bytes())
 	} else {
 		err = f.multiPartUpload(egCtx, file)
@@ -310,7 +293,7 @@ func (f *fileWorkerGroup) newFileCache(data []byte, commitTs common.Ts) *fileCac
 	)
 	bufferWriter := bytes.NewBuffer(buf)
 	wr = bufferWriter
-	if util.GetOrZero(f.cfg.Compression) == compression.LZ4 {
+	if f.cfg.Compression() == compression.LZ4 {
 		wr = lz4.NewWriter(bufferWriter)
 		closer = wr.(io.Closer)
 	}
@@ -344,9 +327,9 @@ func (f *fileWorkerGroup) writeToCache(
 		return errors.ErrUnexpected.FastGenByArgs("encoded redo event data is empty")
 	}
 	writeLen := int64(len(data))
-	if writeLen > f.cfg.MaxLogSizeInBytes {
+	if writeLen > f.cfg.MaxLogSizeInBytes() {
 		// TODO: maybe we need to deal with the oversized commonEvent.
-		return errors.ErrRedoFileSizeExceed.GenWithStackByArgs(writeLen, f.cfg.MaxLogSizeInBytes)
+		return errors.ErrRedoFileSizeExceed.GenWithStackByArgs(writeLen, f.cfg.MaxLogSizeInBytes())
 	}
 	defer f.metricWriteBytes.Add(float64(writeLen))
 
@@ -360,7 +343,7 @@ func (f *fileWorkerGroup) writeToCache(
 	}
 
 	file := f.files[len(f.files)-1]
-	if file.fileSize+writeLen > f.cfg.MaxLogSizeInBytes {
+	if file.fileSize+writeLen > f.cfg.MaxLogSizeInBytes() {
 		select {
 		case <-egCtx.Done():
 			return errors.Trace(egCtx.Err())
@@ -417,12 +400,12 @@ func (f *fileWorkerGroup) getLogFileName(maxCommitTS common.Ts) string {
 		return f.op.GetLogFileName()
 	}
 	uid := f.uuidGenerator.NewString()
-	if common.DefaultKeyspaceName == f.cfg.ChangeFeedID.Keyspace() {
+	if common.DefaultKeyspaceName == f.cfg.ChangeFeedID().Keyspace() {
 		return fmt.Sprintf(redo.RedoLogFileFormatV1,
-			f.cfg.CaptureID, f.cfg.ChangeFeedID.Name(), f.logType,
+			f.cfg.CaptureID(), f.cfg.ChangeFeedID().Name(), redo.RedoRowLogFileType,
 			maxCommitTS, uid, redo.LogEXT)
 	}
 	return fmt.Sprintf(redo.RedoLogFileFormatV2,
-		f.cfg.CaptureID, f.cfg.ChangeFeedID.Keyspace(), f.cfg.ChangeFeedID.Name(),
-		f.logType, maxCommitTS, uid, redo.LogEXT)
+		f.cfg.CaptureID(), f.cfg.ChangeFeedID().Keyspace(), f.cfg.ChangeFeedID().Name(),
+		redo.RedoRowLogFileType, maxCommitTS, uid, redo.LogEXT)
 }

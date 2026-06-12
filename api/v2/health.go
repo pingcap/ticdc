@@ -17,8 +17,8 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
-	"github.com/pingcap/ticdc/pkg/api"
 	"github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/liveness"
 )
 
 // @Summary Check the health status of a TiCDC cluster
@@ -29,8 +29,8 @@ import (
 // @Failure 500,400 {object} model.HTTPError
 // @Router	/api/v2/health [get]
 func (h *OpenAPIV2) ServerHealth(c *gin.Context) {
-	liveness := h.server.Liveness()
-	if liveness != api.LivenessCaptureAlive {
+	currentLiveness := h.server.Liveness()
+	if currentLiveness != liveness.CaptureAlive {
 		err := errors.ErrClusterIsUnhealthy.FastGenByArgs()
 		_ = c.Error(err)
 		return

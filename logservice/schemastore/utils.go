@@ -21,6 +21,8 @@ import (
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
 	"github.com/pingcap/tidb/pkg/meta/model"
 	"github.com/pingcap/tidb/pkg/parser"
+	"github.com/pingcap/tidb/pkg/parser/ast"
+	"github.com/pingcap/tidb/pkg/parser/format"
 	"go.uber.org/zap"
 )
 
@@ -59,6 +61,20 @@ func transformDDLJobQuery(job *model.Job) (string, error) {
 	log.Info("transform ddl query to result", zap.String("charset", job.Charset),
 		zap.String("collate", job.Collate), zap.String("result", result))
 	return result, nil
+}
+
+func restoreDDLStmt(stmt ast.StmtNode) (string, error) {
+	var sb strings.Builder
+	restoreFlags := format.RestoreTiDBSpecialComment
+	restoreFlags |= format.RestoreNameBackQuotes
+	restoreFlags |= format.RestoreKeyWordUppercase
+	restoreFlags |= format.RestoreStringSingleQuotes
+	restoreFlags |= format.SkipPlacementRuleForRestore
+	restoreFlags |= format.RestoreWithTTLEnableOff
+	if err := stmt.Restore(format.NewRestoreCtx(restoreFlags, &sb)); err != nil {
+		return "", errors.Trace(err)
+	}
+	return sb.String(), nil
 }
 
 // isSplitable returns whether the table is eligible for split in all sinks
@@ -119,4 +135,20 @@ func extractAddIndexIDs(job *model.Job) []int64 {
 		res = append(res, indexArg.IndexID)
 	}
 	return res
+}
+
+type tableSchemaExtractor struct {
+	schemas []string
+}
+
+func (e *tableSchemaExtractor) Enter(in ast.Node) (ast.Node, bool) {
+	if t, ok := in.(*ast.TableName); ok {
+		e.schemas = append(e.schemas, t.Schema.O)
+		return in, true
+	}
+	return in, false
+}
+
+func (e *tableSchemaExtractor) Leave(in ast.Node) (ast.Node, bool) {
+	return in, true
 }

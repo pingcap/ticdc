@@ -37,8 +37,9 @@ import (
 )
 
 const (
-	receiveChanSize     = 1024 * 8
-	commonMsgRetryQuota = 3 // The number of retries for most droppable dispatcher requests.
+	receiveChanSize               = 1024 * 8
+	commonMsgRetryQuota           = 3 // The number of retries for most droppable dispatcher requests.
+	eventServiceHeartbeatInterval = 10 * time.Second
 )
 
 // DispatcherMessage is the message send to EventService.
@@ -217,6 +218,10 @@ func (c *EventCollector) Run(ctx context.Context) {
 	})
 
 	g.Go(func() error {
+		return c.sendEventServiceHeartbeats(ctx)
+	})
+
+	g.Go(func() error {
 		return c.updateMetrics(ctx)
 	})
 
@@ -288,7 +293,7 @@ func (c *EventCollector) CommitAddDispatcher(target dispatcher.DispatcherService
 		return
 	}
 	stat := value.(*dispatcherStat)
-	stat.commitReady(c.getLocalServerID())
+	stat.session.commitLocalRegistration()
 }
 
 func (c *EventCollector) RemoveDispatcher(target dispatcher.DispatcherService) {
@@ -375,39 +380,53 @@ func (c *EventCollector) getDispatcherStatByID(dispatcherID common.DispatcherID)
 	return value.(*dispatcherStat)
 }
 
-func (c *EventCollector) SendDispatcherHeartbeat(heartbeat *event.DispatcherHeartbeat) {
-	groupedHeartbeats := c.groupHeartbeat(heartbeat)
+func (c *EventCollector) sendEventServiceHeartbeats(ctx context.Context) error {
+	ticker := time.NewTicker(eventServiceHeartbeatInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		case <-ticker.C:
+			c.sendDispatcherHeartbeat()
+		}
+	}
+}
+
+func (c *EventCollector) sendDispatcherHeartbeat() {
+	groupedHeartbeats := c.groupHeartbeat()
 	for serverID, heartbeat := range groupedHeartbeats {
 		msg := messaging.NewSingleTargetMessage(serverID, messaging.EventServiceTopic, heartbeat)
 		c.enqueueMessageForSend(msg)
 	}
 }
 
-// TODO(dongmen): add unit test for this function.
 // groupHeartbeat groups the heartbeat by the dispatcherStat's serverID.
-func (c *EventCollector) groupHeartbeat(heartbeat *event.DispatcherHeartbeat) map[node.ID]*event.DispatcherHeartbeat {
+func (c *EventCollector) groupHeartbeat() map[node.ID]*event.DispatcherHeartbeat {
 	groupedHeartbeats := make(map[node.ID]*event.DispatcherHeartbeat)
-	group := func(target node.ID, dp event.DispatcherProgress) {
+	group := func(target node.ID, dispatcherID common.DispatcherID, checkpointTs uint64, epoch uint64) {
 		heartbeat, ok := groupedHeartbeats[target]
 		if !ok {
-			heartbeat = &event.DispatcherHeartbeat{
-				Version:              event.DispatcherHeartbeatVersion1,
-				DispatcherProgresses: make([]event.DispatcherProgress, 0, 32),
-			}
+			heartbeat = event.NewDispatcherHeartbeat()
 			groupedHeartbeats[target] = heartbeat
 		}
-		heartbeat.Append(dp)
+		heartbeat.AddDispatcherProgress(dispatcherID, checkpointTs, epoch)
 	}
 
-	for _, dp := range heartbeat.DispatcherProgresses {
-		stat, ok := c.dispatcherMap.Load(dp.DispatcherID)
+	c.dispatcherMap.Range(func(_, value interface{}) bool {
+		stat := value.(*dispatcherStat)
+		eventServiceID, checkpointTs, epoch, ok := stat.getHeartbeatReport()
 		if !ok {
-			continue
+			return true
 		}
-		if stat.(*dispatcherStat).connState.isReceivingDataEvent() {
-			group(stat.(*dispatcherStat).connState.getEventServiceID(), dp)
-		}
-	}
+		group(
+			eventServiceID,
+			stat.getDispatcherID(),
+			checkpointTs,
+			epoch,
+		)
+		return true
+	})
 
 	return groupedHeartbeats
 }
@@ -479,14 +498,7 @@ func (c *EventCollector) handleDispatcherHeartbeatResponse(targetMessage *messag
 				continue
 			}
 			stat := v.(*dispatcherStat)
-			// If the serverID not match, it means the dispatcher is not registered on this server now, just ignore it the response.
-			if stat.connState.isCurrentEventService(targetMessage.From) {
-				log.Info("dispatcher removed in event service",
-					zap.Stringer("dispatcherID", ds.DispatcherID),
-					zap.Stringer("eventServiceID", targetMessage.From))
-				// register the dispatcher again
-				stat.registerTo(targetMessage.From)
-			}
+			stat.session.retryCurrentRegistrationIfRemovedFrom(targetMessage.From)
 		}
 	}
 }
@@ -662,8 +674,8 @@ func (c *EventCollector) newCongestionControlMessages() map[node.ID]*event.Conge
 
 	c.dispatcherMap.Range(func(k, v interface{}) bool {
 		stat := v.(*dispatcherStat)
-		eventServiceID := stat.connState.getEventServiceID()
-		if eventServiceID == "" {
+		eventServiceID := stat.session.getEventServiceID()
+		if eventServiceID.IsEmpty() {
 			return true
 		}
 

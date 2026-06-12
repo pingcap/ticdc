@@ -17,10 +17,10 @@ import (
 	"context"
 	"time"
 
+	"github.com/pingcap/ticdc/downstreamadapter/sink/cloudstorage/spool"
 	sinkmetrics "github.com/pingcap/ticdc/downstreamadapter/sink/metrics"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	commonEvent "github.com/pingcap/ticdc/pkg/common/event"
-	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/metrics"
 	"github.com/pingcap/ticdc/pkg/sink/cloudstorage"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
@@ -35,12 +35,13 @@ type dmlWriters struct {
 	changefeedID commonType.ChangeFeedID
 	statistics   *metrics.Statistics
 
-	// msgCh is a channel to hold task.
-	// The caller of WriteEvents will write tasks to msgCh and
-	// encoding pipelines will read tasks from msgCh to encode events.
+	// msgCh is the only unbounded queue in the storage sink pipeline.
+	// External callers push tasks into it, addTasks consumes it, and
+	// dmlWriters.close is the only place allowed to close it.
 	msgCh *chann.UnlimitedChannel[*task, any]
 
 	encodeGroup *encoderGroup
+	spool       *spool.Spool
 
 	writers []*writer
 	closed  atomic.Bool
@@ -53,17 +54,25 @@ func newDMLWriters(
 	encoderConfig *common.Config,
 	extension string,
 	statistics *metrics.Statistics,
-) *dmlWriters {
+) (*dmlWriters, error) {
 	messageCh := chann.NewUnlimitedChannelDefault[*task]()
 	encoderGroup := newEncoderGroup(
 		encoderConfig,
 		defaultEncodingConcurrency,
 		config.WorkerCount,
 	)
+	spool, err := spool.New(
+		changefeedID,
+		spool.WithRootDir(config.SpoolBaseDir),
+		spool.WithDiskQuotaBytes(config.SpoolDiskQuota),
+	)
+	if err != nil {
+		return nil, err
+	}
 
 	writers := make([]*writer, config.WorkerCount)
 	for i := 0; i < config.WorkerCount; i++ {
-		writers[i] = newWriter(i, changefeedID, storage, config, extension, statistics)
+		writers[i] = newWriter(i, changefeedID, storage, config, extension, statistics, spool)
 	}
 
 	return &dmlWriters{
@@ -71,8 +80,9 @@ func newDMLWriters(
 		statistics:   statistics,
 		msgCh:        messageCh,
 		encodeGroup:  encoderGroup,
+		spool:        spool,
 		writers:      writers,
-	}
+	}, nil
 }
 
 func (d *dmlWriters) run(ctx context.Context) error {
@@ -112,6 +122,19 @@ func (d *dmlWriters) run(ctx context.Context) error {
 	return g.Wait()
 }
 
+func (d *dmlWriters) deleteMetrics() {
+	keyspace := d.changefeedID.Keyspace()
+	changefeed := d.changefeedID.Name()
+	sinkmetrics.CloudStorageFlushBytesHist.DeleteLabelValues(keyspace, changefeed)
+	sinkmetrics.CloudStorageFlushDurationHistogram.DeleteLabelValues(keyspace, changefeed)
+	sinkmetrics.CloudStorageDDLFlushDMLDurationHistogram.DeleteLabelValues(keyspace, changefeed)
+	sinkmetrics.CloudStorageFlushReasonCounter.DeleteLabelValues(keyspace, changefeed, flushReasonSize)
+	sinkmetrics.CloudStorageFlushReasonCounter.DeleteLabelValues(keyspace, changefeed, flushReasonInterval)
+	sinkmetrics.CloudStorageFlushReasonCounter.DeleteLabelValues(keyspace, changefeed, flushReasonBarrier)
+	sinkmetrics.CloudStorageFlushReasonCounter.DeleteLabelValues(keyspace, changefeed, flushReasonQuota)
+	sinkmetrics.CloudStorageFlushReasonCounter.DeleteLabelValues(keyspace, changefeed, flushReasonOversize)
+}
+
 func (d *dmlWriters) addTasks(ctx context.Context) error {
 	for {
 		select {
@@ -122,7 +145,7 @@ func (d *dmlWriters) addTasks(ctx context.Context) error {
 
 		task, ok, err := d.msgCh.GetWithContext(ctx)
 		if err != nil {
-			return errors.Trace(err)
+			return err
 		}
 		if !ok {
 			return nil
@@ -134,12 +157,13 @@ func (d *dmlWriters) addTasks(ctx context.Context) error {
 }
 
 func (d *dmlWriters) addDMLEvent(event *commonEvent.DMLEvent) {
+	tableInfo := event.TableInfo
 	table := cloudstorage.VersionedTableName{
 		TableNameWithPhysicTableID: commonType.TableName{
-			Schema:      event.TableInfo.GetSchemaName(),
-			Table:       event.TableInfo.GetTableName(),
+			Schema:      tableInfo.GetTargetSchemaName(),
+			Table:       tableInfo.GetTargetTableName(),
 			TableID:     event.PhysicalTableID,
-			IsPartition: event.TableInfo.IsPartitionTable(),
+			IsPartition: tableInfo.IsPartitionTable(),
 		},
 		TableInfoVersion: event.TableInfoVersion,
 		DispatcherID:     event.GetDispatcherID(),
@@ -153,11 +177,11 @@ func (d *dmlWriters) flushDMLBeforeBlock(ctx context.Context, event commonEvent.
 	}
 
 	start := time.Now()
+	keyspace := d.changefeedID.Keyspace()
+	changefeed := d.changefeedID.Name()
 	defer func() {
-		sinkmetrics.CloudStorageDDLFlushDurationHistogram.WithLabelValues(
-			d.changefeedID.Keyspace(),
-			d.changefeedID.ID().String(),
-		).Observe(time.Since(start).Seconds())
+		sinkmetrics.CloudStorageDDLFlushDMLDurationHistogram.WithLabelValues(keyspace, changefeed).
+			Observe(time.Since(start).Seconds())
 	}()
 
 	// Invariant for DDL ordering:
@@ -173,4 +197,8 @@ func (d *dmlWriters) close() {
 		return
 	}
 	d.msgCh.Close()
+	if d.spool != nil {
+		d.spool.Close()
+	}
+	d.deleteMetrics()
 }
