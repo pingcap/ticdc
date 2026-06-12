@@ -24,10 +24,9 @@ import (
 
 	"github.com/IBM/sarama"
 	"github.com/aws/aws-sdk-go/aws"
-	"github.com/pingcap/errors"
 	commonType "github.com/pingcap/ticdc/pkg/common"
 	"github.com/pingcap/ticdc/pkg/config"
-	cerror "github.com/pingcap/ticdc/pkg/errors"
+	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/sink/codec/common"
 	"github.com/stretchr/testify/require"
 )
@@ -159,7 +158,7 @@ func TestSetPartitionNum(t *testing.T) {
 
 	options.PartitionNum = 3
 	err = options.setPartitionNum(2)
-	require.True(t, cerror.ErrKafkaInvalidPartitionNum.Equal(err))
+	require.True(t, errors.ErrKafkaInvalidPartitionNum.Equal(err))
 }
 
 func TestClientID(t *testing.T) {
