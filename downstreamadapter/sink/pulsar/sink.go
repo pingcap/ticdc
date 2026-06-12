@@ -446,9 +446,6 @@ func (s *sink) calculateKeyPartitions(ctx context.Context) error {
 const (
 	// batchSize is the maximum size of the number of messages in a batch.
 	batchSize = 2048
-	// batchInterval is the interval of the worker to collect a batch of messages.
-	// It shouldn't be too large, otherwise it will lead to a high latency.
-	batchInterval = 15 * time.Millisecond
 )
 
 // batchEncodeRun collect messages into batch and add them to the encoder group.
