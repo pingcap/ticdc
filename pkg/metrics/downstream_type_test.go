@@ -51,7 +51,6 @@ func TestDownstreamTypeFromSinkURI(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		tc := tc
 		testName := tc.sinkURI
 		if testName == "" {
 			testName = "<empty>"

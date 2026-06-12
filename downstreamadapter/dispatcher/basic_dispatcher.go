@@ -21,7 +21,6 @@ import (
 
 	"github.com/pingcap/failpoint"
 	"github.com/pingcap/log"
-	"github.com/pingcap/ticdc/downstreamadapter/routing"
 	"github.com/pingcap/ticdc/downstreamadapter/sink"
 	"github.com/pingcap/ticdc/eventpb"
 	"github.com/pingcap/ticdc/heartbeatpb"
@@ -30,6 +29,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/errors"
 	"github.com/pingcap/ticdc/pkg/logger"
+	"github.com/pingcap/ticdc/pkg/routing"
 	"github.com/pingcap/tidb/pkg/parser/mysql"
 	tidbTypes "github.com/pingcap/tidb/pkg/types"
 	"go.uber.org/atomic"
@@ -918,6 +918,66 @@ func cloneInfluencedTablesPB(
 	return status
 }
 
+// routeTableAdmissionsForBlockState attaches name-level table route transitions
+// to a block state so maintainer routeAdmin can update its route registry.
+//
+// Only the table trigger dispatcher reports these admissions, because DDLs
+// with TableNameChange (populated by the event builder for RENAME TABLE,
+// DROP TABLE, etc.) are written to the table-trigger DDL history.
+// TableNameChange carries the AddName / DropName / DropDatabaseName that
+// describe the upstream name lifecycle change.
+func (d *BasicDispatcher) routeTableAdmissionsForBlockState(event commonEvent.BlockEvent) []*heartbeatpb.RouteTableAdmission {
+	router := d.sharedInfo.GetRouter()
+	if !router.HasTableRoute() {
+		return nil
+	}
+
+	if !d.IsTableTriggerDispatcher() {
+		return nil
+	}
+	ddlEvent, ok := event.(*commonEvent.DDLEvent)
+	if !ok {
+		return nil
+	}
+	nameChange := ddlEvent.TableNameChange
+	if nameChange == nil {
+		return nil
+	}
+
+	capacity := len(nameChange.AddName) + len(nameChange.DropName) + 1
+	admissions := make([]*heartbeatpb.RouteTableAdmission, 0, capacity)
+	if nameChange.DropDatabaseName != "" {
+		admissions = append(admissions, &heartbeatpb.RouteTableAdmission{
+			SourceSchemaName: nameChange.DropDatabaseName,
+			Action:           heartbeatpb.RouteTableAdmissionAction_RELEASE_SCHEMA,
+		})
+	}
+	for _, name := range nameChange.DropName {
+		admissions = append(admissions, &heartbeatpb.RouteTableAdmission{
+			SourceSchemaName: name.SchemaName,
+			SourceTableName:  name.TableName,
+			Action:           heartbeatpb.RouteTableAdmissionAction_RELEASE,
+		})
+	}
+	for _, name := range nameChange.AddName {
+		binding := router.RouteTable(name.SchemaName, name.TableName)
+		if binding.Source.Schema == "" || binding.Source.Table == "" {
+			return nil
+		}
+		admissions = append(admissions, &heartbeatpb.RouteTableAdmission{
+			SourceSchemaName: binding.Source.Schema,
+			SourceTableName:  binding.Source.Table,
+			TargetSchemaName: binding.Target.Schema,
+			TargetTableName:  binding.Target.Table,
+			Action:           heartbeatpb.RouteTableAdmissionAction_ADMIT,
+		})
+	}
+	if len(admissions) == 0 {
+		return nil
+	}
+	return admissions
+}
+
 // shouldBlock check whether the event should be blocked(to wait maintainer response)
 // For the ddl event with more than one blockedTable, it should block.
 // For the ddl event with only one blockedTable, it should block only if the table is not complete span.
@@ -926,19 +986,17 @@ func (d *BasicDispatcher) shouldBlock(event commonEvent.BlockEvent) bool {
 	switch event.GetType() {
 	case commonEvent.TypeDDLEvent:
 		ddlEvent := event.(*commonEvent.DDLEvent)
-		if ddlEvent.BlockedTables == nil {
+		blockTables := ddlEvent.GetBlockedTables()
+		if blockTables == nil {
 			return false
 		}
-		switch ddlEvent.GetBlockedTables().InfluenceType {
+		switch blockTables.InfluenceType {
 		case commonEvent.InfluenceTypeNormal:
-			if len(ddlEvent.GetBlockedTables().TableIDs) > 1 {
-				return true
-			}
 			if !d.isCompleteTable {
 				// if the table is split, even the blockTable only itself, it should block
 				return true
 			}
-			return false
+			return len(blockTables.TableIDs) > 1
 		case commonEvent.InfluenceTypeDB, commonEvent.InfluenceTypeAll:
 			return true
 		}
@@ -991,11 +1049,24 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 	// Writing a block event may involve downstream IO (e.g. executing DDL), so it must not block
 	// the dynamic stream goroutine.
 	d.sharedInfo.GetBlockEventExecutor().Submit(d, func() {
+		// Non-blocking DDLs have already been written downstream, but the
+		// table-trigger dispatcher still waits for maintainer ACK when the DDL
+		// changes maintainer-side metadata.
+		//
+		// NeedAddedTables/NeedDroppedTables covers physical table dispatcher
+		// scheduling. routeAdmissions covers name-only route ownership changes,
+		// for example RENAME TABLE where the table ID stays alive but the upstream
+		// source name owning a routed target must be released/admitted in routeAdmin.
 		noNeedAddAndDrop := event.GetNeedAddedTables() == nil && event.GetNeedDroppedTables() == nil
-		needsScheduleACKTracking := !shouldBlock && d.IsTableTriggerDispatcher() && !noNeedAddAndDrop
-		if needsScheduleACKTracking {
-			// If this is a table trigger dispatcher, and the DDL leads to add/drop tables,
-			// we track it as a pending schedule-related event until the maintainer ACKs it.
+		var routeAdmissions []*heartbeatpb.RouteTableAdmission
+		if !shouldBlock {
+			routeAdmissions = d.routeTableAdmissionsForBlockState(event)
+		}
+		needsMaintainerACK := !shouldBlock && d.IsTableTriggerDispatcher() &&
+			(!noNeedAddAndDrop || len(routeAdmissions) > 0)
+		if needsMaintainerACK {
+			// If this is a table trigger dispatcher, and the DDL leads to add/drop tables
+			// or route admissions, track it until the maintainer ACKs it.
 			d.pendingACKCount.Add(1)
 		}
 		if shouldBlock {
@@ -1005,7 +1076,7 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 		// For storage sink this waits all previous enqueued DML events flushed.
 		// For non-storage sinks it is usually a no-op.
 		if err := d.sink.FlushDMLBeforeBlock(event); err != nil {
-			if needsScheduleACKTracking {
+			if needsMaintainerACK {
 				d.pendingACKCount.Add(-1)
 			}
 			d.HandleError(err)
@@ -1018,13 +1089,13 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 		}
 		err := d.AddBlockEventToSink(event)
 		if err != nil {
-			if needsScheduleACKTracking {
+			if needsMaintainerACK {
 				d.pendingACKCount.Add(-1)
 			}
 			d.HandleError(err)
 			return
 		}
-		if noNeedAddAndDrop {
+		if noNeedAddAndDrop && len(routeAdmissions) == 0 {
 			return
 		}
 
@@ -1033,10 +1104,11 @@ func (d *BasicDispatcher) DealWithBlockEvent(event commonEvent.BlockEvent) {
 		status := &heartbeatpb.TableSpanBlockStatus{
 			ID: d.id.ToPB(),
 			State: &heartbeatpb.State{
-				BlockTs:           event.GetCommitTs(),
-				NeedDroppedTables: cloneInfluencedTablesPB(event.GetNeedDroppedTables()),
-				NeedAddedTables:   commonEvent.ToTablesPB(event.GetNeedAddedTables()),
-				Stage:             heartbeatpb.BlockStage_NONE,
+				BlockTs:              event.GetCommitTs(),
+				NeedDroppedTables:    cloneInfluencedTablesPB(event.GetNeedDroppedTables()),
+				NeedAddedTables:      commonEvent.ToTablesPB(event.GetNeedAddedTables()),
+				RouteTableAdmissions: routeAdmissions,
+				Stage:                heartbeatpb.BlockStage_NONE,
 			},
 			Mode: d.GetMode(),
 		}
@@ -1180,14 +1252,15 @@ func (d *BasicDispatcher) reportBlockedEventToMaintainer(event commonEvent.Block
 	status := &heartbeatpb.TableSpanBlockStatus{
 		ID: d.id.ToPB(),
 		State: &heartbeatpb.State{
-			IsBlocked:         true,
-			BlockTs:           event.GetCommitTs(),
-			BlockTables:       cloneInfluencedTablesPB(event.GetBlockedTables()),
-			NeedDroppedTables: cloneInfluencedTablesPB(event.GetNeedDroppedTables()),
-			NeedAddedTables:   commonEvent.ToTablesPB(event.GetNeedAddedTables()),
-			UpdatedSchemas:    commonEvent.ToSchemaIDChangePB(event.GetUpdatedSchemas()),
-			IsSyncPoint:       event.GetType() == commonEvent.TypeSyncPointEvent,
-			Stage:             heartbeatpb.BlockStage_WAITING,
+			IsBlocked:            true,
+			BlockTs:              event.GetCommitTs(),
+			BlockTables:          cloneInfluencedTablesPB(event.GetBlockedTables()),
+			NeedDroppedTables:    cloneInfluencedTablesPB(event.GetNeedDroppedTables()),
+			NeedAddedTables:      commonEvent.ToTablesPB(event.GetNeedAddedTables()),
+			RouteTableAdmissions: d.routeTableAdmissionsForBlockState(event),
+			UpdatedSchemas:       commonEvent.ToSchemaIDChangePB(event.GetUpdatedSchemas()),
+			IsSyncPoint:          event.GetType() == commonEvent.TypeSyncPointEvent,
+			Stage:                heartbeatpb.BlockStage_WAITING,
 		},
 		Mode: d.GetMode(),
 	}
@@ -1226,16 +1299,16 @@ func (d *BasicDispatcher) GetBlockEventStatus() *heartbeatpb.State {
 	// 1. the ddl not block other dispatchers
 	// 2. maintainer can get current available tables based on table trigger event dispatcher's startTs,
 	//    so don't need to do extra add and drop actions.
-
 	return &heartbeatpb.State{
-		IsBlocked:         true,
-		BlockTs:           pendingEvent.GetCommitTs(),
-		BlockTables:       pendingEvent.GetBlockedTables().ToPB(),
-		NeedDroppedTables: pendingEvent.GetNeedDroppedTables().ToPB(),
-		NeedAddedTables:   commonEvent.ToTablesPB(pendingEvent.GetNeedAddedTables()),
-		UpdatedSchemas:    commonEvent.ToSchemaIDChangePB(pendingEvent.GetUpdatedSchemas()), // only exists for rename table and rename tables
-		IsSyncPoint:       pendingEvent.GetType() == commonEvent.TypeSyncPointEvent,         // sync point event must should block
-		Stage:             blockStage,
+		IsBlocked:            true,
+		BlockTs:              pendingEvent.GetCommitTs(),
+		BlockTables:          pendingEvent.GetBlockedTables().ToPB(),
+		NeedDroppedTables:    pendingEvent.GetNeedDroppedTables().ToPB(),
+		NeedAddedTables:      commonEvent.ToTablesPB(pendingEvent.GetNeedAddedTables()),
+		RouteTableAdmissions: d.routeTableAdmissionsForBlockState(pendingEvent),
+		UpdatedSchemas:       commonEvent.ToSchemaIDChangePB(pendingEvent.GetUpdatedSchemas()), // only exists for rename table and rename tables
+		IsSyncPoint:          pendingEvent.GetType() == commonEvent.TypeSyncPointEvent,         // sync point event must should block
+		Stage:                blockStage,
 	}
 }
 

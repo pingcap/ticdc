@@ -29,6 +29,7 @@ import (
 	"github.com/pingcap/ticdc/pkg/config"
 	"github.com/pingcap/ticdc/pkg/messaging"
 	"github.com/pingcap/ticdc/pkg/node"
+	"github.com/pingcap/ticdc/pkg/routing"
 	pkgscheduler "github.com/pingcap/ticdc/pkg/scheduler"
 	"github.com/pingcap/ticdc/pkg/util"
 	"github.com/pingcap/ticdc/server/watcher"
@@ -76,6 +77,10 @@ type Controller struct {
 	// maintainer and is shared by drain-aware schedulers so each tick reads a
 	// consistent host/target snapshot.
 	drainState *mscheduler.DrainState
+
+	// Table route admission is owned by the maintainer controller.
+	routeAdmin  *routing.Admin
+	reportError func(error)
 }
 
 func NewController(changefeedID common.ChangeFeedID,
@@ -155,6 +160,13 @@ func NewController(changefeedID common.ChangeFeedID,
 		balanceMoveBatchSize,
 	)
 	return controller
+}
+
+func (c *Controller) SetErrorReporter(reportError func(error)) {
+	c.reportError = reportError
+	if c.routeAdmin != nil {
+		c.routeAdmin.SetErrorReporter(reportError)
+	}
 }
 
 // HandleStatus handle the status report from the node

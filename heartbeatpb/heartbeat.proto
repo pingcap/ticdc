@@ -79,7 +79,7 @@ message CheckpointTsMessage {
     uint64 checkpointTs = 2;
 }
 
-// RedoMetaMessage used to send unflushed ts to update redo meta 
+// RedoMetaMessage used to send unflushed ts to update redo meta
 // from maintainer to dispatcher manager
 message RedoMetaMessage {
     ChangefeedID changefeedID = 1;
@@ -87,14 +87,14 @@ message RedoMetaMessage {
     uint64 checkpointTs = 3;
 }
 
-// RedoResolvedTsProgressMessage used to send redo meta flushed resolvedTs 
+// RedoResolvedTsProgressMessage used to send redo meta flushed resolvedTs
 // from dispatcher manager to maintainer
 message RedoResolvedTsProgressMessage {
     ChangefeedID changefeedID = 1;
     uint64 resolvedTs = 2;
 }
 
-// RedoResolvedTsForwardMessage used to send redoGlobalTs (redo meta flushed resolvedTs) 
+// RedoResolvedTsForwardMessage used to send redoGlobalTs (redo meta flushed resolvedTs)
 // from maintainer to dispatcher manager
 message RedoResolvedTsForwardMessage {
     ChangefeedID changefeedID = 1;
@@ -353,6 +353,28 @@ message Table {
     bool Splitable = 3;
 }
 
+// RouteTableAdmissionAction describes the name-level lifecycle change for one
+// source table under a table route rule. These actions are carried by the table
+// trigger dispatcher's block status so the maintainer can validate and apply
+// route ownership transitions in commit-ts order.
+enum RouteTableAdmissionAction {
+    // ADMIT claims a target name for this source name.
+    ADMIT = 0;
+    // RELEASE drops the claim for this exact source name.
+    RELEASE = 1;
+    // RELEASE_SCHEMA drops all source names under the given schema.
+    RELEASE_SCHEMA = 2;
+}
+
+// RouteTableAdmission describes one source route transition reported by dispatcher.
+message RouteTableAdmission {
+    string SourceSchemaName = 1;
+    string SourceTableName = 2;
+    string TargetSchemaName = 3;
+    string TargetTableName = 4;
+    RouteTableAdmissionAction Action = 5;
+}
+
 message SchemaIDChange {
     int64 TableID = 1;
     int64 OldSchemaID = 2;
@@ -368,6 +390,10 @@ message State {
     repeated SchemaIDChange UpdatedSchemas = 6;
     bool IsSyncPoint = 7;
     BlockStage stage = 8;  // means whether the block is waiting / writing / done
+    // RouteTableAdmissions carries name-level source-to-target route transitions
+    // for this barrier event. Non-nil only when the table trigger dispatcher's
+    // DDL changes the upstream source name lifecycle (e.g. RENAME TABLE, DROP TABLE).
+    repeated RouteTableAdmission RouteTableAdmissions = 9;
 }
 
 message TableSpanBlockStatus {
@@ -440,7 +466,7 @@ enum ChecksumState {
 
 message ChecksumMeta {
     ChecksumState state = 1;
-    // checksumStateSeq is a monotonic version for checksumState, 
+    // checksumStateSeq is a monotonic version for checksumState,
     // used to discard out-of-order meta info.
     uint64 checksumStateSeq = 2;
 }
