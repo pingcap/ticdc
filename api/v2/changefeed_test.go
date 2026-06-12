@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"testing"
 
+	perrors "github.com/pingcap/errors"
 	"github.com/stretchr/testify/require"
 )
 
@@ -35,6 +36,12 @@ func TestMaskSinkURIForError(t *testing.T) {
 	require.Equal(t, "<invalid uri>", maskSinkURIForError(invalidURI))
 
 	err := genSinkURIInvalidError(invalidURI, mustParseURLError(t, invalidURI))
+	require.NotContains(t, err.Error(), "verysecure")
+	require.Contains(t, err.Error(), "<invalid uri>")
+	require.Contains(t, err.Error(), `parse "<invalid uri>"`)
+	require.Contains(t, err.Error(), "invalid URL escape")
+
+	err = genSinkURIInvalidError(invalidURI, perrors.Trace(mustParseURLError(t, invalidURI)))
 	require.NotContains(t, err.Error(), "verysecure")
 	require.Contains(t, err.Error(), "<invalid uri>")
 	require.Contains(t, err.Error(), `parse "<invalid uri>"`)

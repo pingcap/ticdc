@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"testing"
 
+	perrors "github.com/pingcap/errors"
 	"github.com/stretchr/testify/require"
 )
 
@@ -35,6 +36,15 @@ func TestMaskSensitiveDataInURLError(t *testing.T) {
 	require.Error(t, err)
 
 	maskedErr := MaskSensitiveDataInURLError(err)
+	require.NotContains(t, maskedErr.Error(), "verysecure")
+	require.Contains(t, maskedErr.Error(), `parse "<invalid uri>"`)
+	require.Contains(t, maskedErr.Error(), "invalid URL escape")
+
+	_, wrappedErr := url.Parse(rawURL)
+	require.Error(t, wrappedErr)
+	wrappedErr = perrors.Trace(wrappedErr)
+
+	maskedErr = MaskSensitiveDataInURLError(wrappedErr)
 	require.NotContains(t, maskedErr.Error(), "verysecure")
 	require.Contains(t, maskedErr.Error(), `parse "<invalid uri>"`)
 	require.Contains(t, maskedErr.Error(), "invalid URL escape")

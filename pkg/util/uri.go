@@ -14,6 +14,7 @@
 package util
 
 import (
+	stderrors "errors"
 	"net"
 	"net/url"
 	"strings"
@@ -124,13 +125,10 @@ func MaskSensitiveDataInURLError(err error) error {
 	if err == nil {
 		return nil
 	}
-	urlErr, ok := err.(*url.Error)
-	if !ok {
+	var urlErr *url.Error
+	if !stderrors.As(err, &urlErr) {
 		return err
 	}
-	return &url.Error{
-		Op:  urlErr.Op,
-		URL: MaskSensitiveDataInURIForError(urlErr.URL),
-		Err: urlErr.Err,
-	}
+	urlErr.URL = MaskSensitiveDataInURIForError(urlErr.URL)
+	return err
 }
