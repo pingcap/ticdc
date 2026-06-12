@@ -8,9 +8,9 @@ WORK_DIR=$OUT_DIR/$TEST_NAME
 CDC_BINARY=cdc.test
 SINK_TYPE=$1
 
-# use kafka-consumer with debezium decoder to sync data from kafka to mysql
+# use the mq consumer with debezium decoder to sync data from kafka/pulsar to mysql
 function run() {
-	if [ "$SINK_TYPE" != "kafka" ]; then
+	if [ "$SINK_TYPE" != "kafka" ] && [ "$SINK_TYPE" != "pulsar" ]; then
 		return
 	fi
 
@@ -24,12 +24,25 @@ function run() {
 
 	run_cdc_server --workdir $WORK_DIR --binary $CDC_BINARY
 
-	SINK_URI="kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=debezium&enable-tidb-extension=true"
+	if [ "$SINK_TYPE" == "kafka" ]; then
+		SINK_URI="kafka://127.0.0.1:9092/$TOPIC_NAME?protocol=debezium&enable-tidb-extension=true"
+	fi
+
+	if [ "$SINK_TYPE" == "pulsar" ]; then
+		run_pulsar_cluster $WORK_DIR normal
+		SINK_URI="pulsar://127.0.0.1:6650/$TOPIC_NAME?protocol=debezium&enable-tidb-extension=true"
+	fi
 
 	cdc_cli_changefeed create --sink-uri="$SINK_URI" --config=$CUR/conf/changefeed.toml
 	sleep 5 # wait for changefeed to start
 	# determine the sink uri and run corresponding consumer
-	run_kafka_consumer $WORK_DIR $SINK_URI $CUR/conf/changefeed.toml
+	if [ "$SINK_TYPE" == "kafka" ]; then
+		run_kafka_consumer $WORK_DIR $SINK_URI $CUR/conf/changefeed.toml
+	fi
+
+	if [ "$SINK_TYPE" == "pulsar" ]; then
+		run_pulsar_consumer --upstream-uri $SINK_URI --config $CUR/conf/changefeed.toml
+	fi
 
 	run_sql_file $CUR/data/data.sql ${UP_TIDB_HOST} ${UP_TIDB_PORT}
 	run_sql "CREATE TABLE test.finish_mark1 (a int primary key);" ${UP_TIDB_HOST} ${UP_TIDB_PORT}

@@ -88,7 +88,7 @@ func newPulsarSinkComponentWithFactory(ctx context.Context,
 	if !config.IsPulsarSupportedProtocols(protocol) {
 		return pulsarComponent, protocol, errors.ErrSinkURIInvalid.
 			GenWithStackByArgs("unsupported protocol, " +
-				"pulsar sink currently only support these protocols: [canal-json]")
+				"pulsar sink currently only support these protocols: [canal-json, debezium]")
 	}
 
 	pulsarComponent.config, err = pulsar.NewPulsarConfig(sinkURI, sinkConfig.PulsarConfig)
@@ -111,8 +111,7 @@ func newPulsarSinkComponentWithFactory(ctx context.Context,
 		return pulsarComponent, protocol, errors.Trace(err)
 	}
 
-	// pulsar only support canal-json, so we don't need to check the protocol
-	pulsarComponent.eventRouter, err = eventrouter.NewEventRouter(sinkConfig, topic, true, false)
+	pulsarComponent.eventRouter, err = eventrouter.NewEventRouter(sinkConfig, topic, true, protocol == config.ProtocolAvro)
 	if err != nil {
 		return pulsarComponent, protocol, errors.Trace(err)
 	}

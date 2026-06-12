@@ -180,5 +180,5 @@ func GetScheme(url *url.URL) string {
 
 // IsPulsarSupportedProtocols returns whether the protocol is supported by pulsar.
 func IsPulsarSupportedProtocols(p Protocol) bool {
-	return p == ProtocolCanalJSON
+	return p == ProtocolCanalJSON || p == ProtocolDebezium
 }

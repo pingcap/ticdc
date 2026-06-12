@@ -62,6 +62,14 @@ func TestParseSinkProtocolFromString(t *testing.T) {
 			protocol:             "open-protocol",
 			expectedProtocolEnum: ProtocolOpen,
 		},
+		{
+			protocol:             "debezium",
+			expectedProtocolEnum: ProtocolDebezium,
+		},
+		{
+			protocol:             "simple",
+			expectedProtocolEnum: ProtocolSimple,
+		},
 	}
 
 	for _, tc := range testCases {
@@ -109,10 +117,38 @@ func TestString(t *testing.T) {
 			protocolEnum:     ProtocolOpen,
 			expectedProtocol: "open-protocol",
 		},
+		{
+			protocolEnum:     ProtocolDebezium,
+			expectedProtocol: "debezium",
+		},
+		{
+			protocolEnum:     ProtocolSimple,
+			expectedProtocol: "simple",
+		},
 	}
 
 	for _, tc := range testCases {
 		require.Equal(t, tc.expectedProtocol, tc.protocolEnum.String())
+	}
+}
+
+func TestIsPulsarSupportedProtocols(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		protocol Protocol
+		expect   bool
+	}{
+		{ProtocolCanalJSON, true},
+		{ProtocolDebezium, true},
+		{ProtocolAvro, false},
+		{ProtocolOpen, false},
+		{ProtocolSimple, false},
+		{ProtocolCanal, false},
+	}
+
+	for _, tc := range testCases {
+		require.Equal(t, tc.expect, IsPulsarSupportedProtocols(tc.protocol))
 	}
 }
 
