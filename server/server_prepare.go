@@ -32,7 +32,8 @@ import (
 	"github.com/pingcap/ticdc/pkg/pdutil"
 	"github.com/pingcap/tidb/pkg/util/memory"
 	"github.com/tikv/client-go/v2/tikv"
-	pdopt "github.com/tikv/pd/client"
+	pd "github.com/tikv/pd/client"
+	pdopt "github.com/tikv/pd/client/opt"
 	"go.etcd.io/etcd/client/v3/concurrency"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
@@ -52,7 +53,7 @@ func (c *server) prepare(ctx context.Context) (err error) {
 		return errors.Trace(err)
 	}
 	log.Info("create pd client", zap.Strings("endpoints", c.pdEndpoints))
-	c.pdClient, err = pdopt.NewClientWithContext(
+	c.pdClient, err = pd.NewClientWithContext(
 		ctx, c.pdEndpoints, conf.Security.PDSecurityOption(),
 		// the default `timeout` is 3s, maybe too small if the pd is busy,
 		// set to 10s to avoid frequent timeout.
